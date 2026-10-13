@@ -218,6 +218,10 @@ export interface RPGProject {
    */
   // 型は game/battleAtb.ts の BattleAtbConfig と同形（types 層は game 層を import しない）
   battleAtb?: { mode: 'wait' | 'active' }
+  /** 戦闘コマンド窓の配置 (#204)。frontmatter `battle_command_layout:` 由来。未指定は `'grid'`（2x2・現行どおり） */
+  battleCommandLayout?: 'grid' | 'cross'
+  /** 戦闘コマンドの表示名の上書き (#204)。frontmatter `battle_command_labels:` 由来。id は変えず label だけ差し替える。未指定は undefined（既定の日本語） */
+  battleCommandLabels?: Partial<Record<'attack' | 'spell' | 'item' | 'escape', string>>
 }
 
 /**

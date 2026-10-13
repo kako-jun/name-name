@@ -63,6 +63,7 @@ import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 import type { BattleAtbConfig } from './battleAtb'
+import type { CommandLabels, CommandLayout } from './battleCommands'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -152,6 +153,9 @@ export class RaycastRenderer {
   private pixelArt = false
   /** 戦闘の ATB 方式 (#205)。frontmatter `battle_atb` / `battle_atb_mode` 由来。undefined = 従来ターン制 */
   private battleAtb: BattleAtbConfig | undefined = undefined
+  /** 戦闘コマンド窓の配置・表示名 (#204)。frontmatter `battle_command_layout` / `battle_command_labels` 由来 */
+  private battleCommandLayout: CommandLayout = 'grid'
+  private battleCommandLabels: CommandLabels | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -401,6 +405,8 @@ export class RaycastRenderer {
     this.battleForeground = gameData.battleForeground
     this.pixelArt = gameData.pixelArt === true
     this.battleAtb = gameData.battleAtb
+    this.battleCommandLayout = gameData.battleCommandLayout ?? 'grid'
+    this.battleCommandLabels = gameData.battleCommandLabels
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -834,6 +840,8 @@ export class RaycastRenderer {
       depth: this.battleDepth,
       foreground: this.battleForeground,
       pixelArt: this.pixelArt,
+      commandLayout: this.battleCommandLayout,
+      commandLabels: this.battleCommandLabels,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)

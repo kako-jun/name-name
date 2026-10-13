@@ -19,6 +19,7 @@
  */
 
 import type { BattleRow } from './spellDsl'
+import type { CommandLayout } from './battleCommands'
 
 export interface Rect {
   x: number
@@ -63,6 +64,11 @@ export interface SideBattleLayoutInput {
   enemyCount: number
   /** コマンドボタンの数（既定 4: たたかう/じゅもん/どうぐ/にげる） */
   commandCount?: number
+  /**
+   * コマンド窓の配置 (#204)。`grid`（既定・2 列グリッド）/ `cross`（十字: 上・左・右・下）。
+   * `cross` はコマンドが 4 つのときだけ有効（それ以外は `grid`）
+   */
+  commandLayout?: CommandLayout
   /** 味方ごとの隊列 (#747)。味方の index 順。未指定・足りない分は前衛。`back` は右（敵から遠い側）へ半歩下げる */
   partyRows?: readonly (BattleRow | undefined)[]
   /** 味方ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は `SIDE_DEFAULT_SPRITE_ASPECT` */
@@ -86,7 +92,7 @@ export interface SideBattleLayout {
   party: SpriteSlot[]
   /** 下パネル左: コマンド全体 */
   command: Rect
-  /** コマンドの各セル（2 列グリッド） */
+  /** コマンドの各セル（`grid`: 2 列グリッド / `cross`: 上・左・右・下の順 = コマンドの並びの順） */
   commandCells: Rect[]
   /** 下パネル右: 味方 HP/MP パネル全体 */
   status: Rect
@@ -113,6 +119,10 @@ const SIDE_COMMAND_COLUMNS = 2
 const SIDE_COMMAND_MIN_WIDTH = 144
 const SIDE_COMMAND_MAX_WIDTH = 240
 const SIDE_COMMAND_WIDTH_RATIO = 0.4
+/** `cross` はコマンドがちょうどこの数のときだけ有効（上・左・右・下に 1 つずつ） */
+const SIDE_COMMAND_CROSS_COUNT = 4
+/** `cross` のセルの段数（上 / 左右 / 下） */
+const SIDE_COMMAND_CROSS_ROWS = 3
 /** 味方 1 人ぶんの status 行の標準高さ */
 export const SIDE_STATUS_ROW_HEIGHT = 26
 const SIDE_STATUS_VERTICAL_PADDING = 12
@@ -563,6 +573,61 @@ export function partyRegionWidth(
   return Math.min(halfWidth, Math.max(0, wanted))
 }
 
+/** 実際に使うコマンド窓の配置。`cross` はコマンドが 4 つのときだけ有効で、他は `grid` */
+export function effectiveCommandLayout(
+  layout: CommandLayout | undefined,
+  commandCount: number
+): CommandLayout {
+  return layout === 'cross' && commandCount === SIDE_COMMAND_CROSS_COUNT ? 'cross' : 'grid'
+}
+
+/** コマンド窓の段数。`grid` は 2 列で折り返した行数、`cross` は 3 段（上 / 左右 / 下） */
+export function commandRowCount(layout: CommandLayout, commandCount: number): number {
+  return layout === 'cross'
+    ? SIDE_COMMAND_CROSS_ROWS
+    : Math.ceil(commandCount / SIDE_COMMAND_COLUMNS)
+}
+
+/**
+ * コマンド窓 `command` の中のセル座標 (#204)。`commandCount` 個を `command` からはみ出さず重ならないように並べる。
+ *
+ * - `grid`: 2 列で左上から右下へ（0 1 / 2 3）
+ * - `cross`（4 つのみ）: 幅の半分のセルを、上=0（中央）/ 左=1 / 右=2 / 下=3（中央）に置く。
+ *   上・下は窓の幅の中央（左右の 1/4 ずつ空く）、左・右は窓の左半分・右半分。段は 3 等分。
+ *   セルの幅は `grid` と同じなので、ラベルのフォントサイズは `grid` と同じ計算で収まる
+ */
+export function computeCommandCells(
+  command: Rect,
+  commandCount: number,
+  layout: CommandLayout = 'grid'
+): Rect[] {
+  const count = Math.max(0, Math.floor(commandCount))
+  const kind = effectiveCommandLayout(layout, count)
+  const rows = commandRowCount(kind, count)
+  const cellW = command.w / SIDE_COMMAND_COLUMNS
+  const cellH = rows > 0 ? command.h / rows : 0
+  const cells: Rect[] = []
+  if (kind === 'cross') {
+    const at = (col: number, row: number): Rect => ({
+      x: command.x + col * cellW,
+      y: command.y + row * cellH,
+      w: cellW,
+      h: cellH,
+    })
+    // 上・左・右・下（col は半セル単位: 0.5 = 中央）
+    return [at(0.5, 0), at(0, 1), at(1, 1), at(0.5, 2)]
+  }
+  for (let i = 0; i < count; i++) {
+    cells.push({
+      x: command.x + (i % SIDE_COMMAND_COLUMNS) * cellW,
+      y: command.y + Math.floor(i / SIDE_COMMAND_COLUMNS) * cellH,
+      w: cellW,
+      h: cellH,
+    })
+  }
+  return cells
+}
+
 /**
  * サイドビュー戦闘画面の全座標を算出する。
  *
@@ -579,7 +644,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const innerW = Math.max(0, W - SIDE_PADDING * 2)
 
   // 下: コマンド（左）+ status（右）
-  const commandRows = Math.ceil(commandCount / SIDE_COMMAND_COLUMNS)
+  const commandLayout = effectiveCommandLayout(input.commandLayout, commandCount)
+  const commandRows = commandRowCount(commandLayout, commandCount)
   const commandNeeded = commandRows * SIDE_COMMAND_CELL_HEIGHT
   const statusNeeded = partyCount * SIDE_STATUS_ROW_HEIGHT + SIDE_STATUS_VERTICAL_PADDING
   const bottomH = Math.max(commandNeeded, statusNeeded)
@@ -598,17 +664,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     h: bottomH,
   }
 
-  const cellW = commandW / SIDE_COMMAND_COLUMNS
-  const cellH = commandRows > 0 ? bottomH / commandRows : 0
-  const commandCells: Rect[] = []
-  for (let i = 0; i < commandCount; i++) {
-    commandCells.push({
-      x: command.x + (i % SIDE_COMMAND_COLUMNS) * cellW,
-      y: command.y + Math.floor(i / SIDE_COMMAND_COLUMNS) * cellH,
-      w: cellW,
-      h: cellH,
-    })
-  }
+  const commandCells = computeCommandCells(command, commandCount, commandLayout)
 
   const rowH =
     partyCount > 0
