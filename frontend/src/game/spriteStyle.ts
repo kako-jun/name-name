@@ -196,3 +196,32 @@ export function computeAcrylicGeometry(
   }
   return { sprite, marginPx, linePx, base, highlight, shadow }
 }
+
+/** 1 ピクセルあたりのサンプル数（タップ）の上限。`AcrylicEdgeFilter` の性能予算 */
+export const EDGE_MAX_TAPS = 48
+
+export interface EdgeSampling {
+  /** 余白の縁の円まで、内側を刻む段数（1〜2。割り合いで `margin*k/n`） */
+  innerRings: number
+  /** 余白の縁から余白+線の縁までを刻む段数（1〜2） */
+  outerRings: number
+  /** 方向数（8〜16）。`(innerRings + outerRings) * directions` が `EDGE_MAX_TAPS` 以下 */
+  directions: number
+}
+
+/**
+ * 枠線フィルタの周囲サンプリング数を、余白と線の半径（フィルタテクスチャ上の px）から決める。
+ * 半径が大きいほど段数・方向数を増やし、総タップは `EDGE_MAX_TAPS` 以下に収める。
+ * 方向数は外周の隣接サンプル間隔がおよそ 2.5px 以下になる数（下限 8、上限 16 かつ予算内）。
+ * 非数・負値は 0 として扱う。
+ */
+export function computeEdgeSampling(marginTexPx: number, lineTexPx: number): EdgeSampling {
+  const m = Number.isFinite(marginTexPx) && marginTexPx > 0 ? marginTexPx : 0
+  const l = Number.isFinite(lineTexPx) && lineTexPx > 0 ? lineTexPx : 0
+  const innerRings = clamp(Math.ceil(m / 3), 1, 2)
+  const outerRings = clamp(Math.ceil(l / 2), 1, 2)
+  const rings = innerRings + outerRings
+  const cap = Math.min(16, Math.floor(EDGE_MAX_TAPS / rings))
+  const wanted = Math.ceil((2 * Math.PI * (m + l)) / 2.5)
+  return { innerRings, outerRings, directions: clamp(wanted, 8, cap) }
+}
