@@ -23,6 +23,7 @@ const playerProps: Array<Record<string, unknown>> = []
 let parsed: EventDocument = makeDoc(['hub', 'S1'])
 // #778: markdown 文字列 → パース結果（無ければ parsed）。他文書の取得元（下書き/サーバ版）の判別に使う。
 const parsedByMarkdown = new Map<string, EventDocument>()
+const parsedInputs: string[] = []
 const getContentsMock = vi.hoisted(() => vi.fn())
 const listScriptsMock = vi.hoisted(() => vi.fn())
 
@@ -45,7 +46,10 @@ vi.mock('../components/NPCEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/RPGPlayer', () => ({ default: () => <div /> }))
 vi.mock('../components/VideoExportModal', () => ({ default: () => <div /> }))
 vi.mock('../wasm/parser', () => ({
-  parseMarkdown: async (md: string) => parsedByMarkdown.get(md) ?? parsed,
+  parseMarkdown: async (md: string) => {
+    parsedInputs.push(md)
+    return parsedByMarkdown.get(md) ?? parsed
+  },
   emitMarkdown: async () => emitted,
 }))
 vi.mock('../api/client', () => ({
@@ -254,6 +258,67 @@ describe('EditorScreen: 他文書のシーンへの遅延ロード (#778)', () =
     await waitFor(() =>
       expect(localStorage.getItem('name-name:editor-draft:p:script.md')).toBe('# edited-hub')
     )
+  })
+})
+
+describe('EditorScreen: 遅延ロードの探索対象と継承 (#778)', () => {
+  const script = (path: string, hidden = false) => ({
+    path,
+    sha: 's',
+    size: 1,
+    title: null,
+    hidden,
+  })
+  beforeEach(() => {
+    playerProps.length = 0
+    parsedInputs.length = 0
+    parsedByMarkdown.clear()
+    localStorage.clear()
+    getContentsMock.mockReset()
+    getContentsMock.mockImplementation(async (_p: string, path: string) => ({
+      content:
+        path === 'script.md'
+          ? '---\nengine: name-name\n---\n# hub'
+          : `---\nengine: name-name\n---\n# ${path}`,
+      sha: 'sha',
+    }))
+  })
+  async function openResolver() {
+    renderEditor()
+    await waitFor(() => expect(listScriptsMock).toHaveBeenCalled())
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    await waitFor(() => expect(playerProps.length).toBeGreaterThan(0))
+    return playerProps[playerProps.length - 1].onResolveMissingScene as (
+      id: string
+    ) => Promise<EventScene[] | null>
+  }
+
+  it('hidden の .md は探索対象にしない', async () => {
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [script('data.md', true), script('script.md')])
+    parsedByMarkdown.set('---\nengine: name-name\n---\n# data.md', makeDoc(['D1']))
+    parsed = makeDoc(['hub'])
+    const resolve = await openResolver()
+    let r: EventScene[] | null = [] as EventScene[]
+    await act(async () => {
+      r = await resolve('D1')
+    })
+    expect(r).toBeNull()
+  })
+
+  it('script.md 以外の他文書は script.md の event_image_transition を継承してパースする', async () => {
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [script('other.md'), script('script.md')])
+    parsed = { ...makeDoc(['hub']), event_image_transition: 'Pixelate' }
+    const resolve = await openResolver()
+    await act(async () => {
+      await resolve('nowhere')
+    })
+    expect(
+      parsedInputs.some(
+        (m) => m.includes('# other.md') && m.includes('event_image_transition: "pixelate"')
+      )
+    ).toBe(true)
   })
 })
 
