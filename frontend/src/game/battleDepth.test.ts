@@ -336,10 +336,7 @@ describe('computeFormation 隊列の境界 (#747)', () => {
   })
   it('前衛と後衛の x 差は斜め位置の差 + ちょうど 0.5 × 幅 (#760)', () => {
     const slots = party(3, ['front', 'front', 'back'])
-    const front = party(
-      3,
-      ['front', 'front', 'back'].map(() => 'front')
-    )
+    const front = party(3)
     const dx = front[2].x - front[0].x
     expect(slots[2].x - slots[0].x).toBeCloseTo(dx + slots[0].width * 0.5, 9)
   })

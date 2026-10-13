@@ -711,24 +711,6 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
 }
 
 /**
- * テクスチャを正方形の枠 `box` に収める（contain・縦横比維持・中央寄せ・枠からはみ出さない）。
- * 戻り値の `x,y` は枠の左上を原点とした画像の左上座標。テクスチャ寸法が不正（0 以下）なら枠いっぱい。
- */
-export function computeContainFit(
-  textureWidth: number,
-  textureHeight: number,
-  box: number
-): { x: number; y: number; width: number; height: number } {
-  if (!(textureWidth > 0) || !(textureHeight > 0) || !(box > 0)) {
-    return { x: 0, y: 0, width: Math.max(0, box), height: Math.max(0, box) }
-  }
-  const scale = Math.min(box / textureWidth, box / textureHeight)
-  const width = textureWidth * scale
-  const height = textureHeight * scale
-  return { x: (box - width) / 2, y: (box - height) / 2, width, height }
-}
-
-/**
  * テクスチャを長方形の枠 `boxW x boxH` に収める（contain・縦横比維持・中央寄せ）。#760 の縦長の味方枠用。
  * 寸法が不正（0 以下）なら枠いっぱい。
  */

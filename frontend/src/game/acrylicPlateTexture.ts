@@ -1,5 +1,8 @@
 /**
- * アクリル板テクスチャの生成 (#760)。画像読み込み時に 1 回だけ、元画像の解像度でオフスクリーン canvas から作る。
+ * アクリル板テクスチャの生成 (#760)。画像読み込み時に 1 回だけ、長辺 `PLATE_WORK_MAX_SIDE`(192px) の作業解像度でオフスクリーン canvas から作る
+ * （板は輪郭のぼかしなので、これ以上高くしても見た目は変わらず時間だけかかる。描画側は mipmap で拡縮する）。
+ * 前提: テクスチャは resolution=1 で、アトラスの一部ではなく画像全体（`source.pixelWidth` = 論理幅、frame は全体）。
+ * BattleScreen の配置（`placeAcrylic`）も論理幅 `texture.width` と板の縮尺を同じ前提で結ぶ。
  * 形・質感の計算は純粋関数 `renderAcrylicPlate`（acrylicPlate.ts）。ここは canvas ↔ Texture の橋渡しだけ。
  * canvas が使えない環境（jsdom 等）・画像が読み出せない（CORS で汚染された canvas など）ときは null（板なしで描く）。
  */

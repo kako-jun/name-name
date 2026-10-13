@@ -205,6 +205,10 @@ interface CommandButton {
  * 既定は mipmap 生成＋linear で縮小をなめらかにする。`pixelArt`（frontmatter `pixel_art`・#466）なら nearest のまま
  * （ドット絵を保つ。mipmap も作らない）。GPU へ初回アップロードされる前（Assets.load 直後）に呼ぶこと。
  * フィールドのレイキャストのテクスチャには触れない。
+ *
+ * 注意: テクスチャが既に GPU へアップロード済み（他の画面・先に描画された）なら、`autoGenerateMipmaps` を後から立てても
+ * mipmap は作られない（効くのは初回アップロード前）。また `Assets` のキャッシュは画面をまたいで共有されるので、
+ * ここで書いた scaleMode / mipmap の設定は同じ画像を使う他の画面にも波及する。
  */
 export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void {
   const source = tex.source
@@ -736,7 +740,7 @@ export class BattleScreen extends Container {
       const sprite = new Sprite(tex)
       view.sprite = sprite
       if (view.acrylicBack) {
-        // アクリル板 (#760): 元画像の解像度で 1 回だけ作り、スプライトの直下に敷く。作れない環境では板なし
+        // アクリル板 (#760): 長辺 192px の作業解像度で 1 回だけ作り（同じ画像は共有）、mipmap で拡縮してスプライトの直下に敷く。作れない環境では板なし
         let idx = 2
         const base = this.makeAcrylicBase()
         if (base) {
@@ -1208,9 +1212,15 @@ export class BattleScreen extends Container {
   }
 
   /**
-   * acrylic のスプライト 1 体を配置する (#737)。幾何は純粋関数 computeAcrylicGeometry が正本で、
-   * ここは結果を Graphics とフィルタの太さに反映するだけ（フィルタは再生成せず幅を更新）。
-   * 配置は slot 枠の内側に収まるので battleLayout の座標・ラベルとは重ならない。
+   * acrylic のスプライト 1 体を配置する (#737・#760)。幾何は純粋関数 computeAcrylicGeometry が正本で、
+   * ここは結果を各パーツへ反映するだけ。
+   * - スプライト: 幾何どおりの位置・大きさ。
+   * - 台座・影: 共有テクスチャ（無ければ acrylicBack の Graphics）。台座の側面の厚みは幾何が下に予約済み。
+   * - 板: スプライトと同じ倍率（作業解像度ぶんを掛けて）で、pad ぶん外へ広げて敷く。台座のスリットの高さ
+   *   （computeSlitY）で水平に切る mask（板の兄弟 Graphics）を更新する。
+   * - 地面の影: shadowLayer（画面基準）に、足元を基点とした変形（computeShadowTransform）で敷く。
+   * スプライト本体と台座・影は slot 枠の内側に収まる。板は余白+線ぶん（pad）だけ枠の外へ広がる。
+   * `size` は正方形の一辺（横長の敵は枠の長辺）。
    */
   private placeAcrylic(view: EntityView, size: number): void {
     const params = this.acrylicParams

@@ -20,7 +20,7 @@ import {
   SIDE_STAGGER_RATIO,
   SIDE_STATUS_COMPACT_WIDTH,
   SIDE_STATUS_ROW_HEIGHT,
-  computeContainFit,
+  computeContainFitRect,
   computeFallbackRect,
   computeFormation,
   computePartyDiagonal,
@@ -82,13 +82,13 @@ describe('normalizeBattleLayout', () => {
   })
 })
 
-describe('computeContainFit', () => {
+describe('computeContainFitRect（正方形の枠は旧 computeContainFit と同じ結果）', () => {
   it('正方形テクスチャは枠いっぱい (x=y=0)', () => {
-    expect(computeContainFit(64, 64, 100)).toEqual({ x: 0, y: 0, width: 100, height: 100 })
+    expect(computeContainFitRect(64, 64, 100, 100)).toEqual({ x: 0, y: 0, width: 100, height: 100 })
   })
 
   it('縦長は高さ=box・幅<box・水平中央寄せ', () => {
-    const f = computeContainFit(50, 100, 120)
+    const f = computeContainFitRect(50, 100, 120, 120)
     expect(f.height).toBeCloseTo(120)
     expect(f.width).toBeLessThan(120)
     expect(f.x).toBeCloseTo((120 - f.width) / 2)
@@ -96,7 +96,7 @@ describe('computeContainFit', () => {
   })
 
   it('横長は幅=box・高さ<box・垂直中央寄せ', () => {
-    const f = computeContainFit(200, 100, 120)
+    const f = computeContainFitRect(200, 100, 120, 120)
     expect(f.width).toBeCloseTo(120)
     expect(f.height).toBeLessThan(120)
     expect(f.y).toBeCloseTo((120 - f.height) / 2)
@@ -109,7 +109,7 @@ describe('computeContainFit', () => {
     [123, 457, 99],
     [640, 480, 33],
   ])('縦横比維持・枠からはみ出さない (%d x %d, box %d)', (tw, th, box) => {
-    const f = computeContainFit(tw, th, box)
+    const f = computeContainFitRect(tw, th, box, box)
     expect(f.width / f.height).toBeCloseTo(tw / th)
     expect(f.x).toBeGreaterThanOrEqual(-EPS)
     expect(f.y).toBeGreaterThanOrEqual(-EPS)
@@ -119,15 +119,15 @@ describe('computeContainFit', () => {
 
   it('テクスチャ幅 0 / 高さ負 / NaN 寸法 は枠いっぱい', () => {
     const full = { x: 0, y: 0, width: 50, height: 50 }
-    expect(computeContainFit(0, 10, 50)).toEqual(full)
-    expect(computeContainFit(10, -5, 50)).toEqual(full)
-    expect(computeContainFit(NaN, 10, 50)).toEqual(full)
-    expect(computeContainFit(10, NaN, 50)).toEqual(full)
+    expect(computeContainFitRect(0, 10, 50, 50)).toEqual(full)
+    expect(computeContainFitRect(10, -5, 50, 50)).toEqual(full)
+    expect(computeContainFitRect(NaN, 10, 50, 50)).toEqual(full)
+    expect(computeContainFitRect(10, NaN, 50, 50)).toEqual(full)
   })
 
   it('box=0 は全て 0、box 負は 0 にクランプ', () => {
-    expect(computeContainFit(10, 20, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 })
-    expect(computeContainFit(10, 20, -30)).toEqual({ x: 0, y: 0, width: 0, height: 0 })
+    expect(computeContainFitRect(10, 20, 0, 0)).toEqual({ x: 0, y: 0, width: 0, height: 0 })
+    expect(computeContainFitRect(10, 20, -30, -30)).toEqual({ x: 0, y: 0, width: 0, height: 0 })
   })
 })
 
