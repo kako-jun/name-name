@@ -269,6 +269,7 @@ export function fitCommandFontSize(
  *   ラベルだけを省いてスプライトを残す（`slot.label` なし）
  * - `rows`（味方側・#747）: index 順の隊列。`back` の体は右（敵から遠い側）へ `SIDE_BACK_ROW_SHIFT_RATIO * size`
  *   下げる。後衛が 1 体でもいれば、各列の右に下げ幅ぶんを予約する（隣の列に食い込まない・領域から出ない）。
+ *   そのため後衛が 1 人でもいると**全員の size が縮む**（前衛だけの場合より小さくなる）。これは仕様
  *   後衛がいなければ従来と完全に同じ座標
  */
 export function computeFormation(
@@ -356,7 +357,7 @@ export function computeFormation(
  *   幾何の縮尺 = (floor - 地平線y) / (最前列の floor - 地平線y)   … 地平線から遠い（手前）ほど大きい
  *   縮尺 = 1 - perspective * (1 - 幾何の縮尺)                       … perspective 0 で平面、1 で幾何どおり
  *
- * 範囲は `DEPTH_MIN_SCALE`〜1。地平線が最前列より下（幾何が成り立たない）なら 1。
+ * 範囲は `DEPTH_MIN_SCALE`〜1。地平線が最前列より下（幾何が成り立たない）なら 1。入力のどれかが非有限なら 1。
  */
 export function computeDepthScale(
   floor: number,
@@ -364,6 +365,8 @@ export function computeDepthScale(
   horizonY: number,
   perspective: number
 ): number {
+  // 非有限の入力（NaN / Infinity）は平面（1）に倒し、NaN を座標へ伝播させない
+  if (![floor, frontFloor, horizonY, perspective].every(Number.isFinite)) return 1
   const p = Math.min(1, Math.max(0, perspective))
   const span = frontFloor - horizonY
   if (!(span > 0) || p <= 0) return 1
