@@ -469,7 +469,7 @@ interface NovelGameState {
 横断的な機能を足したり変えたりするときは、先にこの表の全マスを埋める。
 入場を「進行」「新規開始」「復元」の3種に分ける設計と、その移行計画は [ADR 0003](./adr/0003-scene-entry-kinds.md) にある。表の「あるべき挙動」は、ADR 0003 §2 の種類別の表から導いたもの。
 
-- 現状の欄は 2026-10-13 時点（main `dae752b`）。関数名と行番号で示す
+- 現状の欄は、関数名と行番号で示す。行番号は 2026-10-13 時点（main `dae752b`）の目安で、±数行ずれることがある
 - 略号: `NR` = `frontend/src/game/NovelRenderer.ts`、`NP` = `frontend/src/components/NovelPlayer.tsx`、`PS` = `frontend/src/screens/PlayerScreen.tsx`、`VE` = `frontend/src/game/VideoExporter.ts`、`PB` = `tui/src/playback.rs`
 - ✓ はあるべき挙動と一致。⚠ は不一致で、`→` の後にあるべき挙動を書く。`[n]` は ADR 0003 の「不整合」の番号
 - 「背景等」は背景・背景板・大道具・幕・紙人形輪郭を指す。「立ち絵」は、進行では `clearForSceneTransition`（遷移用の退場）、それ以外では `clear`
@@ -503,8 +503,8 @@ interface NovelGameState {
 |---|---|---|---|---|---|
 | G1 | `resolveMissingSceneAndJump`（L1530）✓ | 持ち越す（`carryBgm`）✓ | 持ち越す（`preserveBackgroundForTransition`）✓ | 保持 ✓ | 判定する（L1380）✓ |
 | G2 | 同上 ✓ | 持ち越す ✓ | 持ち越す ✓ | 保持 ✓ | 判定する ✓ |
-| G3 | ⚠ `startFrom` は解決しない（L6257、no-op）。`PS` が事前解決する [1] → `startFrom` 自身が共通の解決口を通る。`PS` の事前解決は confinement の算出だけに使う | 止める ✓ | ⚠ 持ち越す（`startScene` が `preserveBackgroundForTransition: true` 固定）。直前の `setEvents` が実行したハブ冒頭の背景等が漏れる [7] → クリア | 置換（空）✓ | ⚠ 入場とは別に `setConfinedSceneIds`（`NP` L591）で事前に設定している → 入場の属性として、成功時に確定する |
-| G4 | ⚠ G3 と同じ（`PS` L652 の事前解決、#726）[1] → 共通の解決口 | 止める ✓ | ⚠ G3 と同じ [7] → クリア | `debug_flags` で置換 ✓ | ⚠ `PS` が解決結果を見て null にする（L671） → `startFrom` の `confinedSceneIds: null`。失敗時は G3 の設定が残る |
+| G3 | ⚠ `startFrom` は解決しない（L6257、no-op）。`PS` が事前解決する [1] → `startFrom` 自身が共通の解決口を通る。`PS` の事前解決は confinement の算出だけに使う | 止める ✓ | ⚠ 持ち越す（`startScene` が `preserveBackgroundForTransition: true` 固定）[7]。ハブ背景のテクスチャがロード中なら `bgLoadToken++` で破棄されて描かれないが、`currentBackgroundPath` の状態（再マウントのスナップショット・`getSnapshot`・HUD）が漏れる。ハブと同じパスの背景はフェードせずに即時表示され、ハブの話者は退場演出をする → クリア | 置換（空）✓ | ⚠ 入場とは別に `setConfinedSceneIds`（`NP` L591）で事前に設定している → 入場の属性として、成功時に確定する |
+| G4 | ⚠ G3 と同じ（`PS` L652 の事前解決、#726）[1] → 共通の解決口 | 止める ✓ | ⚠ G3 と同じ [7] → クリア | `debug_flags` で置換 ✓ | ⚠ `PS` が解決結果を見て null にする（L671） → `startFrom` の `confinedSceneIds: null`。失敗時は G3 の設定が残る。タイトル画面を出すかどうかは解決結果ではなく `PS` の `hasDebugStart`（L277、URL に指定があるか）で決まる |
 | G5 | ⚠ G4 と同じ [1] | 止める（空 state）✓ | クリア（空 state を `applyState`）✓ | 置換 ✓ | G4 と同じ |
 | G6 | ⚠ choice は解決を待たない。`drainPendingJump` が `jumpState` しか見ない（#729）[2] → 入場の Promise を await する。advance 後の `[ジャンプ:]` は、`pending` の間 0ms ポーリングで待つ → 入場の Promise を待つ | 持ち越す ✓ | 持ち越す ✓ | 保持 ✓ | ⚠ `?scene=` と併用すると confinement が残り、別ファイルへの choice が終劇になる [3] → debug 系は confinement なし |
 | G7 | `loadFromSaveDataMissingScene`（L6035）✓（後処理は重複 [13]） | 状態どおり ✓ | 状態どおり ✓ | 置換 ✓ | 判定しない ✓（confinement 中のロードは未整理。ADR 0003 の保留事項） |
@@ -530,17 +530,17 @@ interface NovelGameState {
 | G4 | G3 と同じ ✓ | G3 と同じ | ⚠ G3 と同じ。加えて `?scene=` と併用すると `startFrom` を2回呼ぶ。debug_scene 単独でも自動クイックロード（`NP` L753-L799）が先に走る [8] → 初期入場を1回にし、debug 指定時はクイックロードしない | 付けない ✓ | G3 と同じ ✓ | false ✓。⚠ リセットしない [11] |
 | G5 | `applyState` で進める ✓ | 位置が Jump なら再予約（#733）✓ | G4 と同じ ⚠ | 付けない（Jump 位置だけ到達扱い）✓ | `[snapshot]` ✓ | false ✓。0 ✓ |
 | G6 | choice は G1 と同じ ⚠ [6] | ⚠ choice は G1 と同じ [4] | ⚠ 警告を出して次のステップへ続行 → 打ち切って警告する | G1/G2 と同じ ✓ | ⚠ 自動クイックロードと競合する（`willAutoQuickLoad` が debug_script を見ない）[8] → debug 指定時はクイックロードしない。⚠ fluid 再マウントでスクリプトを再実行し、引き継いだ位置を上書きする [14] → スナップショットがあれば debug 起点は再実行しない | G1/G2 と同じ ✓ |
-| G7 | `beginRestoreTransition` で進める ✓ | `jumpState` は据え置き（#759）✓。`pending` 中は `quickLoad` 自体を弾く ✓。ロード中の `advance` は Jump 以外では通る ⚠ → 入場中ゲート | flags だけ反映し、`resumeAutoAdvanceIfPending`・`rearmPendingJumpAfterFailedRestore` ✓（打ち消し系は PR2 で廃止） | 付けない ✓ | `[snapshot]` ✓。`pendingAutoAdvance` をクリア ✓。⚠ F8 のトーストは遅延ロードの結果を待たずに成功と出す → 結果を待って出す | 状態どおり ✓。0 ✓ |
+| G7 | `beginRestoreTransition` で進める ✓ | `jumpState` は据え置き（#759）✓。`pending` 中は `quickLoad` 自体を弾く ✓。ロード中の `advance` は Jump 以外では通る ⚠ [4] → 入場中ゲート（ADR 0003 の PR1） | flags だけ反映し、`resumeAutoAdvanceIfPending`・`rearmPendingJumpAfterFailedRestore` ✓（打ち消し系は PR2 で廃止） | 付けない ✓ | `[snapshot]` ✓。`pendingAutoAdvance` をクリア ✓。⚠ F8 のトーストは遅延ロードの結果を待たずに成功と出す → 結果を待って出す | 状態どおり ✓。0 ✓ |
 | G8 | G7 と同じ ✓ | 開いた時と確定時に `pending` を弾く（#759）✓ | G7 と同じ ✓ | 付けない ✓ | `[snapshot]` ✓ | 状態どおり ✓。0 ✓ |
 | G9 | G7 と同じ ✓。⚠ G1 の要求が同じ世代を捕捉して競合する [6] | G7 と同じ | G7 と同じ ✓ | 付けない ✓ | `[snapshot]` ✓。⚠ 直前の `setEvents` がエントリ冒頭を実行済み [8] | 事前に `storyEnded` をセットして重複発火を防ぐ ✓。0 ✓ |
 | G10 | `applyState` で進める ✓ | `pending` 中は弾き、`stalled` 中は復元し直す ✓ | 該当なし | 付けない ✓ | 切り詰める（`seekTo`）✓ | 状態どおり ✓。0 ✓ |
 | G11 | 進行と同じ ⚠ [6] | ⚠ 進行と同じ [4] | ⚠ 警告だけ出し、プレビューの内容のまま録画が始まる [9] → reject する | 付けない ✓ | `onSceneChange` を書き出しが占有して終端検知に使う ✓ | false ✓。⚠ 継続 [9] → 0 |
-| G12 | `resetAndStartEvents` で進める ✓ | `idle` に戻す ✓ | 該当なし | 付けない ✓ | 空から積む ✓。`onSceneChange` は発火しない（`PS` が明示的に `clearQuickSave`）✓ | ⚠ `storyEnded` を戻さない [10] → false。⚠ リセットしない [11] → 0 |
-| G13 | 同上 ✓ | 同上 ✓ | 該当なし | 付けない ✓ | 空から積む ✓。⚠ `skipAutoAdvance`→`pendingAutoAdvance`→`resumeAutoAdvanceIfPending` で後から来る入場の分を打ち消している [10] → 開始しない `loadEvents` と明示的な入場に分ける | ⚠ G12 と同じ [10][11]。`currentSceneId` も更新しない ⚠ |
+| G12 | `resetAndStartEvents` で進める ✓ | `idle` に戻す ✓ | 該当なし | 付けない ✓ | 空から積む ✓。⚠ `onSceneChange` を発火しない（`PS` が明示的に `clearQuickSave`）→ 新規開始として発火する（自動セーブの配線は初期入場の確定後なので、初期入場の分は保存されない） | ⚠ `storyEnded` を戻さない [10] → false。⚠ リセットしない [11] → 0 |
+| G13 | 同上 ✓ | 同上 ✓ | 該当なし | 付けない ✓ | 空から積む ✓。⚠ `onSceneChange` を発火しない → G12 と同じ。⚠ `skipAutoAdvance`→`pendingAutoAdvance`→`resumeAutoAdvanceIfPending` で後から来る入場の分を打ち消している [10] → 開始しない `loadEvents` と明示的な入場に分ける。⚠ events 変化 effect（`NP` L1160-1167）がマウント時にも1回走り、`init()` 解決前の renderer に `setEvents` する（コード上の読み、要実機確認）[8] → 初回は実行せず、`rendererReady` 後の変化にだけ反応する | ⚠ G12 と同じ [10][11]。`currentSceneId` も更新しない ⚠ |
 | T1 | 同期のため不要 | 同期 ✓ | `false` を返し、選択肢に留まる ✓ | 表示位置単位（`main.rs` の `read_positions`）。経路による差は無い ✓ | 自動クイックセーブはシーン切り替えの検知で行う ✓ | 中継の上限 `RELAY_HOP_LIMIT` = 100 ✓ |
 | T2 | 不要 | `pending_jump` は位置から再導出 ✓ | 位置を変えず `false`（停止）✓ | T1 と同じ ✓ | T1 と同じ ✓ | 上限 100 ✓ |
 | T3 | 不要 | 構築・復元時に `pending_jump` を再導出 ✓ | `has_scene_id` で事前に確認し、無ければ何もしない ✓ | `read_positions` は復元が成功したときだけ戻す ✓ | — | — |
-| T4 | 不要 | ✓ | 不在なら no-op ✓ | — | ⚠ 自動クイックロードの後に上書きする [12] → `--debug-scene` 指定時はクイックロードしない | — |
+| T4 | 不要 | ✓ | 不在なら no-op ✓ | — | ⚠ 自動クイックロードの後に上書きする [12] → `--debug-scene` 指定時はクイックロードしない（`read_positions` も復元されない）。⚠ シーン切替ごとの自動クイックセーブ（`main.rs` L1302-1304 `save_quick`）が `--debug-scene` 中も走る [12] → 行わない（GUI の #664 と対称） | — |
 | T5 | 不要 | ✓ | — | — | `--new-game` はクイックセーブを削除する ✓ | — |
 
 ## レンダリングパイプライン
