@@ -77,9 +77,11 @@ import {
   type Deferred,
   type GatedOperation,
   type LoadOrigin,
+  type FreshPosition,
   type PendingEntry,
   type SceneEntryRequest,
   type SceneEntryResult,
+  findRestorePositionError,
   type TransitionGateState,
 } from './sceneEntry'
 import {
@@ -185,7 +187,12 @@ const NOVEL_CANVAS_TOUCH_ACTION: CanvasTouchAction = 'pan-y'
 /** シーンを引いた結果: 引けたか、引けなかった理由と警告用の文言。 */
 type SceneLookup =
   | { status: 'found'; scene: EventScene }
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error'; detail: string; error?: unknown }
+  | {
+      status: 'failed'
+      reason: 'not-found' | 'resolver-error' | 'out-of-range'
+      detail: string
+      error?: unknown
+    }
 
 /**
  * `resolveScene` の結果。遅延ロードで取得できたシーン群（loaded）は、世代の判定を通るまで
@@ -1772,6 +1779,8 @@ export class NovelRenderer {
         detail: 'エントリ文書が読み込まれていないため、sceneId が null の位置を復元できません',
       })
     }
+    const rangeError = this.checkRestorePosition(this.entryRawEvents, req.state)
+    if (rangeError) return this.failEntry(req, rangeError)
     try {
       if (req.source === 'snapshot') this.storyEnded = req.state.storyEnded
       const entryId = this.entrySceneId
@@ -1898,7 +1907,9 @@ export class NovelRenderer {
     if (req.kind === 'fresh') {
       return this.applyFresh(req, resolution.scene.id, resolution.scene.events, resolution.scene)
     }
-    // 復元: 状態どおりに宣言的に組み立てる。
+    // 復元: 状態どおりに宣言的に組み立てる。位置が範囲外なら適用の前に失敗にする (#789)。
+    const rangeError = this.checkRestorePosition(resolution.scene.events, req.state)
+    if (rangeError) return this.failEntry(req, rangeError)
     if (req.source === 'snapshot') {
       // storyEnded 重複発火防止 (#460 セルフレビュー must M2): このメソッドは新規 construct された
       // renderer インスタンス（this.storyEnded は常にデフォルト false）に対して呼ばれる。下の
@@ -1933,42 +1944,27 @@ export class NovelRenderer {
     events: readonly Event[],
     scene?: EventScene
   ): SceneEntryResult {
+    // 位置指定は適用の前に範囲を判定する (#789)。範囲外なら flags・confinement とも変えずに失敗にする。
+    const positioned =
+      req.position && scene
+        ? { scene, state: this.buildFreshPositionState(scene, req.position, req.flags) }
+        : null
+    if (positioned) {
+      const rangeError = this.checkRestorePosition(positioned.scene.events, positioned.state)
+      if (rangeError) return this.failEntry(req, rangeError)
+    }
+
     this.gameState.fromJSON(req.flags ?? {})
     this.confinedSceneIds = req.confinedSceneIds ?? null
     this.clearStoryEnded()
     this.consecutiveJumps = 0
 
-    if (req.position && scene) {
-      // 途中局面からの起動（`?debug_scene=` の index 指定）: 最小 NovelGameState を構築して共通コアで
-      // 宣言的復元する。冒頭からのディレクティブ実行ではなく、位置の指定方法が違うだけで文脈を捨てる意味論は同じ。
-      const state: NovelGameState = {
-        sceneId: scene.id,
-        eventIndex: req.position.eventIndex,
-        textIndex: req.position.textIndex ?? 0,
-        sentenceIndex: req.position.sentenceIndex ?? 0,
-        flags: req.flags ?? {},
-        backgroundPath: null,
-        backgroundColor: null,
-        backgroundFade: normalizeBackgroundFade(undefined),
-        backgroundBrightness: null,
-        video: null,
-        eventImage: null,
-        backgroundBoards: [],
-        props: [],
-        spotlight: null,
-        curtain: null,
-        isBlackout: false,
-        characters: [],
-        currentBgmPath: null,
-        cameraMode: 'Novel',
-        cameraOrientation: 'Audience',
-        cameraElevation: null,
-        paperDollOutline: null,
-        storyEnded: false,
-      }
-      this.restoreToScene(scene, state)
-      this.onSceneChangeCallback?.(scene.id)
-      return { status: 'entered', sceneId: scene.id }
+    if (positioned) {
+      // 途中局面からの起動（`?debug_scene=` の index 指定）: 最小 NovelGameState を共通コアで宣言的復元する。
+      // 冒頭からのディレクティブ実行ではなく、位置の指定方法が違うだけで文脈を捨てる意味論は同じ。
+      this.restoreToScene(positioned.scene, positioned.state)
+      this.onSceneChangeCallback?.(positioned.scene.id)
+      return { status: 'entered', sceneId: positioned.scene.id }
     }
 
     // エントリ（sceneId なし）は警告しない: エディタのプレビュー等で毎回出てしまう。
@@ -1980,6 +1976,65 @@ export class NovelRenderer {
     // 先頭から: 通常入場と同じ経路（冒頭の [背景:]/[BGM:] 等を最初のテキストまで実行し、立ち絵も出す #399）。
     this.startScene(sceneId, events, carryPolicyFor('fresh'))
     return { status: 'entered', sceneId }
+  }
+
+  /** 新規開始の位置指定から、共通コアに渡す最小の NovelGameState を組み立てる。 */
+  private buildFreshPositionState(
+    scene: EventScene,
+    position: FreshPosition,
+    flags: Record<string, FlagValue> | undefined
+  ): NovelGameState {
+    return {
+      sceneId: scene.id,
+      eventIndex: position.eventIndex,
+      textIndex: position.textIndex ?? 0,
+      sentenceIndex: position.sentenceIndex ?? 0,
+      flags: flags ?? {},
+      backgroundPath: null,
+      backgroundColor: null,
+      backgroundFade: normalizeBackgroundFade(undefined),
+      backgroundBrightness: null,
+      video: null,
+      eventImage: null,
+      backgroundBoards: [],
+      props: [],
+      spotlight: null,
+      curtain: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+      cameraMode: 'Novel',
+      cameraOrientation: 'Audience',
+      cameraElevation: null,
+      paperDollOutline: null,
+      storyEnded: false,
+    }
+  }
+
+  /**
+   * 復元位置を、復元先のイベント列を復元する flags で展開した後の長さに照らして検証する (#789)。
+   * 範囲内なら null、範囲外なら `failEntry` に渡す失敗（out-of-range）を返す。何も変更しない。
+   * 展開後で判定するのは、`[条件:]` の真偽で長さが変わり、`eventIndex` は展開後の列を指すため
+   * （`restoreToScene` が `resolveEvents` した列に `applyState` が eventIndex を当てる）。
+   */
+  private checkRestorePosition(
+    events: readonly Event[],
+    state: NovelGameState
+  ): Extract<SceneLookup, { status: 'failed' }> | null {
+    const flagsState = new GameState()
+    flagsState.fromJSON(state.flags)
+    const detail = findRestorePositionError(
+      resolveEvents(events, flagsState),
+      { eventIndex: state.eventIndex, textIndex: state.textIndex },
+      (event) => {
+        const textEvt = getTextEvent(event)
+        if (!textEvt) return 1
+        // ノベルの改頁数・文単位ページは表示幅や文分割に依存する。ここでは上限を見ない。
+        if (this.isNovelStyle() || this.sentencePerPage) return null
+        return Math.max(1, textEvt.text.length)
+      }
+    )
+    return detail === null ? null : { status: 'failed', reason: 'out-of-range', detail }
   }
 
   private warnEntryFailure(
@@ -3011,8 +3066,28 @@ export class NovelRenderer {
     this.sentencePerPage = enabled === true
     this.novelPagesCache = null
     this.advSentencePagesCache = null
+    this.clampTextIndexToPageCount()
     if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
       this.render()
+    }
+  }
+
+  /**
+   * ページ構成が変わった（`setDialogStyle` / `setSentencePerPage` のライブ切り替え）後、textIndex が
+   * 現在のイベントのページ数以上なら最終ページへ寄せる (#789)。#663 の `applyState` の寄せと同じ。
+   * 寄せないと範囲外の textIndex が残り（adv は空ページ表示）、そのスナップショットが次の再マウントで
+   * 範囲外の復元失敗になる。ページが変わるので sentenceIndex は 0 に戻す。
+   */
+  private clampTextIndexToPageCount(): void {
+    if (this.eventIndex >= this.resolvedEvents.length) return
+    // ノベルの改頁数は DialogBox の計測（初期化後）が要る。adv の行数・文単位ページは初期化前でも数えられる。
+    if (this.isNovelStyle() && !this.initialized) return
+    const textEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    if (!textEvt) return
+    const pageCount = this.currentPageCount(textEvt)
+    if (pageCount > 0 && this.textIndex >= pageCount) {
+      this.textIndex = pageCount - 1
+      this.sentenceIndex = 0
     }
   }
 
@@ -3351,6 +3426,7 @@ export class NovelRenderer {
     this.novelPagesCache = null
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
     this.advSentencePagesCache = null
+    this.clampTextIndexToPageCount()
     // 既にテキスト表示中なら新スタイルで描き直す（adv↔novel 切替が即反映される）。
     if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
       this.render()
@@ -6606,7 +6682,9 @@ export class NovelRenderer {
    *   解除）、`storyEnded` と `consecutiveJumps` をリセットする。背景・背景板・大道具・幕・立ち絵・BGM は
    *   持ち越さない。history は空から積む（位置を指定したときは `[snapshot]`）。
    * - 解決できなかったとき（不在・resolver 失敗）は状態を一切変えず `failed` を返す。
-   * - `eventIndex` / `textIndex` / `sentenceIndex` の指定は範囲チェックしない（呼び出し側責任）。
+   * - 位置（`eventIndex` / `textIndex`）の指定は、適用の前に解決したシーンの展開後イベント列に照らして
+   *   範囲チェックする。範囲外は状態を変えず `failed`（`out-of-range`）を返す (#789)。`sentenceIndex` は
+   *   範囲チェックしない（描画側が現ページの範囲へ寄せる）。
    * - playScript 実行中の呼び出しは想定外（デバッグ API 同士の同時使用は非対応）。
    */
   startFrom(opts: StartFromOptions = {}): Promise<SceneEntryResult> {

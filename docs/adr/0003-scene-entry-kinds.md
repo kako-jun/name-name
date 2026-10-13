@@ -108,7 +108,7 @@ type SceneEntryRequest =
 type SceneEntryResult =
   | { status: 'entered'; sceneId: string | null }
   | { status: 'ended' }        // 進行のみ: confinement の圏外で終劇した
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' }  // apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' }  // out-of-range: 復元位置が範囲外 (#789)。apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
   | { status: 'superseded' }   // 待っている間に、より新しい入場要求が来た
 ```
 
@@ -328,6 +328,15 @@ PR3 の実装で、上の記述から次のとおり変えた。挙動の方針�
 ## 判断を保留している点
 
 - confinement 中の復元: `?scene=` で埋め込んでいるときに F8 を押すと、圏外シーンのセーブも復元できる。本件では扱わない（記録のみ）
+
+## #789 での追記（2026-10-14）
+
+- **復元位置が範囲外なら復元失敗にする。** 文書の編集後は、セーブの `eventIndex` / `textIndex` が解決したイベント列の外を指しうる。全ての復元経路（`restore` の通常シーン・sceneId が null のエントリ・`fresh` の位置指定）で、適用の前に範囲を判定し、範囲外は `failed`（`out-of-range`）にする。位置・flags とも変えず、クランプはしない。通知は §2 の「失敗」列のとおり（ロード系はトースト、`restoreSnapshot` は警告ログのみ）
+- **判定する長さは、復元する flags で `[条件:]` を展開した後の列。** `eventIndex` は展開後の列を指す（`restoreToScene` が展開してから `applyState` が当てる）ため。終端（イベント数と等しい値）は終劇かどうかに関わらず有効（`textIndex` は 0 のみ）。最後の本文の後ろに命令だけが続くと、進めたときに命令を消化して終端で止まり（終劇ではなくクリック待ち）、その位置はセーブできるため。展開後の長さが 0 のシーンも同じ
+- **`out-of-range` を `not-found` と別の理由にした。** どちらも再試行しても直らず、初期入場の自動セーブは配線する（§5 のとおり配線しないのは `resolver-error` だけ）ので挙動は同じだが、原因（シーンが無い／位置が無い）を診断で区別できるようにするため
+- **`textIndex` の上限はレイアウト非依存の場合だけ見る。** テキスト以外のイベントは 0 のみ、adv の本文は行数未満。ノベルの改頁数は表示幅で変わり、fluid 再マウントの復元は最終ページへ寄せる設計（#663）なので上限を見ない
+- **ライブ切り替えで textIndex を範囲内に戻す。** `setDialogStyle` / `setSentencePerPage` はページ構成を変えるので、`textIndex` が現在のページ数以上なら最終ページへ寄せ `sentenceIndex` を 0 にする（#663 の寄せと同じ）。寄せないと範囲外のスナップショットが次の再マウントで復元失敗になる
+- **範囲内で脚本が変わったこと（ハッシュ等による検知）は扱わない。**
 
 ## 関連
 

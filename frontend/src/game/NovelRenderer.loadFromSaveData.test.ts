@@ -502,7 +502,10 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
 
   it('10: allScenes に無い sceneId でも missingSceneResolver 経由で非同期再解決され、正しいシーン位置へ復元される（マルチMD遅延ロード再現）', async () => {
     const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
-    const routeScene = scene('r01-01', [narration('route-line-a', 'route-line-b')])
+    const routeScene = scene('r01-01', [
+      narration('route-line-0'),
+      narration('route-line-a', 'route-line-b'),
+    ])
     const resolver = vi.fn(async () => [...entryScenes, routeScene])
 
     const r = new NovelRenderer()
@@ -653,7 +656,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
   })
 
   it('M2-2: 非同期成功は解決前にトーストを出さず、解決後に1回だけ出す', async () => {
-    const routeScene = scene('r01-01', [narration('a', 'b')])
+    const routeScene = scene('r01-01', [narration('z'), narration('a', 'b')])
     let release!: () => void
     const gate = new Promise<void>((res) => {
       release = res

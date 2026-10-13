@@ -418,7 +418,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
   it('K1: allScenes に無い sceneId でも missingSceneResolver 経由でロードされ復元できる（マルチMD再現）', async () => {
     const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
-    const routeScene = scene('r01-01', [narration('route-line-a', 'route-line-b')])
+    const routeScene = scene('r01-01', [
+      narration('route-line-0'),
+      narration('route-line-a', 'route-line-b'),
+    ])
     const resolver = vi.fn(async () => [...entryScenes, routeScene])
 
     const r = new NovelRenderer()
@@ -671,19 +674,19 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(s.eventIndex).toBe(1)
   })
 
-  it('T-B2: textIndex===pageCount（境界）は pageCount-1 にクランプされる（`>=`取り違え検出の本丸）', () => {
+  // adv の textIndex は text 行数で上限が決まる（幅非依存）ので、行数以上は丸めずに範囲外として復元失敗 (#789)。
+  // 幅依存のクランプ（#663）は novel だけが対象（下の F 系）。
+  it.each([
+    ['T-B2: textIndex===pageCount（境界）', 3],
+    ['T-B3: textIndex===pageCount+1（境界外）', 4],
+  ])('%s は out-of-range で復元失敗・位置は不変 (#789)', async (_label, textIndex) => {
     const r = makeRenderer(B_SCENES)
-    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 3 }))
-    const s = r.getSnapshot()
-    expect(s.textIndex).toBe(2)
-    // クランプは textIndex だけに作用する（eventIndex は無変更・#461 との独立性）
-    expect(s.eventIndex).toBe(1)
-  })
-
-  it('T-B3: textIndex===pageCount+1（境界外）も同じく pageCount-1 にクランプされる', () => {
-    const r = makeRenderer(B_SCENES)
-    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 4 }))
-    expect(r.getSnapshot().textIndex).toBe(2)
+    const result = await r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex })
+    )
+    expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
+    expect(r.getSnapshot().eventIndex).toBe(0)
+    expect(r.getSnapshot().textIndex).toBe(0)
   })
 
   // F系: novel（sentence_per_page:false）は改頁がテキスト領域の高さに依存する。#663 の実バグ
@@ -812,20 +815,24 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(r.getSnapshot().textIndex).toBe(0)
   })
 
-  it('T-Z2: 非テキストイベント（BackgroundColor）は外側ガードにより textIndex が無変更', () => {
+  it('T-Z2: 非テキストイベント（BackgroundColor）に textIndex がある位置は範囲外として復元失敗（位置は不変） (#789)', async () => {
     const r = makeRenderer([
       scene('z2', [narration('l1'), { BackgroundColor: { color: '#000000' } }]),
     ])
-    r.restoreSnapshot(craftSnapshot({ sceneId: 'z2', eventIndex: 1, textIndex: 5 }))
-    expect(r.getSnapshot().textIndex).toBe(5)
+    const result = await r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'z2', eventIndex: 1, textIndex: 5 })
+    )
+    expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
+    expect(r.getSnapshot().textIndex).toBe(0)
   })
 
-  it('T-Z3: eventIndex が resolvedEvents.length 以上でも例外を投げず textIndex は無変更', () => {
+  it('T-Z3: eventIndex が resolvedEvents.length 以上は例外を投げず復元失敗（位置は不変） (#789)', async () => {
     const r = makeRenderer([scene('z3', [narration('only')])])
-    expect(() =>
-      r.restoreSnapshot(craftSnapshot({ sceneId: 'z3', eventIndex: 99, textIndex: 5 }))
-    ).not.toThrow()
-    expect(r.getSnapshot().textIndex).toBe(5)
+    const result = await r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'z3', eventIndex: 99, textIndex: 5 })
+    )
+    expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
+    expect(r.getSnapshot().textIndex).toBe(0)
   })
 
   it('T-L1: クランプ発火（T-F2と同じ fluid remount 経路）でも console.warn/console.error は呼ばれない', () => {
