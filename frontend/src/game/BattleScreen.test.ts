@@ -159,6 +159,31 @@ describe('BattleScreen: front（従来）', () => {
 })
 
 describe('BattleScreen: 背景画像', () => {
+  it('assetBaseUrl があれば背景・前景・スプライトの相対パスを images 配下に解決して読む (#746)', async () => {
+    const load = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const base = 'https://api.example.com/assets/raw'
+    track(
+      make(
+        [entity('hero', { sprite: 'battle/hero.png' })],
+        [entity('slime', { sprite: 'https://cdn.example.com/slime.png' })],
+        { background: 'bg/a.webp', foreground: 'fg/b.png', layout: 'side', assetBaseUrl: base }
+      )
+    )
+    await flushPromises()
+    const urls = load.mock.calls.map((c) => c[0])
+    expect(urls).toContain(`${base}/images/bg/a.webp`)
+    expect(urls).toContain(`${base}/images/fg/b.png`)
+    expect(urls).toContain(`${base}/images/battle/hero.png`)
+    expect(urls).toContain('https://cdn.example.com/slime.png')
+  })
+
+  it('assetBaseUrl 未指定なら従来どおりパスをそのまま読む (#746)', async () => {
+    const load = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    track(make([entity('hero')], [entity('slime')], { background: 'bg/a.webp' }))
+    await flushPromises()
+    expect(load.mock.calls.map((c) => c[0])).toEqual(['bg/a.webp'])
+  })
+
   it('background 未指定なら Assets.load を呼ばない', () => {
     const load = vi.spyOn(Assets, 'load')
     track(make([entity('hero')], [entity('slime')]))
