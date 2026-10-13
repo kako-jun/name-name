@@ -414,9 +414,9 @@ export function resolveSize(id: ScreenSizeId): { width: number; height: number }
 export function applyFormation(party: BattleEntity[], mode: FormationMode): BattleEntity[] {
   const backFrom = Math.ceil(party.length / 2)
   return party.map((p, i) => {
+    if (mode === 'config') return { ...p }
     const { row: _row, ...rest } = p
     void _row
-    if (mode === 'config') return { ...p }
     if (mode === 'backHalf' && i >= backFrom) return { ...rest, row: 'back' as const }
     return rest
   })
