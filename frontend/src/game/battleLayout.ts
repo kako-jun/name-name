@@ -845,3 +845,109 @@ export function normalizeBattleRow(raw: string | null | undefined): BattleRow {
   const v = raw?.trim().toLowerCase()
   return v === 'back' || v === '後衛' || v === '後列' ? 'back' : 'front'
 }
+
+// ---- status 欄の列 (#745) ----
+
+/** status 行の文字サイズ */
+export const SIDE_STATUS_FONT_SIZE = 14
+/** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
+export const SIDE_STATUS_TEXT_PADDING = 12
+/** 列と列の間 */
+export const SIDE_STATUS_COLUMN_GAP = 8
+/** 名前列に最低限確保する全角文字数。これに届かないときは MP → 「HP」「MP」の見出しの順に削る */
+export const SIDE_STATUS_MIN_NAME_CHARS = 3
+/** ATB ゲージ（行の右端に置く短い棒）の幅。半角 4 文字ぶん */
+export const SIDE_STATUS_GAUGE_WIDTH = Math.round(estimateTextWidth('0000', SIDE_STATUS_FONT_SIZE))
+/** ATB ゲージの高さ */
+export const SIDE_STATUS_GAUGE_HEIGHT = 3
+
+export interface StatusColumn {
+  /** 列の左端（画面絶対） */
+  x: number
+  w: number
+}
+
+export interface StatusColumns {
+  name: StatusColumn
+  /** 数値は列の右端（x + w）に右寄せする */
+  hp: StatusColumn
+  mp: StatusColumn | null
+  gauge: StatusColumn | null
+  /** HP / MP の数値の前に「HP 」「MP 」を付けるか */
+  showLabels: boolean
+  /** HP を「現在値/最大値」で出すか（false は現在値だけ。極端に狭い画面の最終手段） */
+  showMaxHp: boolean
+}
+
+export interface StatusColumnsInput {
+  /** status パネルの左端と幅 */
+  x: number
+  width: number
+  /** 味方全員のうち最大の maxHp / maxMp（列幅を最長の数値に合わせる） */
+  maxHp: number
+  maxMp: number
+  /** 幅が狭く MP を最初から出さない（`SideBattleLayout.statusCompact`） */
+  compact: boolean
+  /** ATB ゲージの列を付けるか */
+  atb: boolean
+  fontPx?: number
+}
+
+/** 極端に狭い画面でゲージを縮めてよい下限 */
+export const SIDE_STATUS_GAUGE_MIN_WIDTH = 16
+
+/**
+ * status 欄の列（名前 / HP / MP / ATB ゲージ）の x と幅を求める。4 人とも同じ列を使うので、
+ * 名前の長さで HP の位置がずれない。右端からゲージ → MP → HP と詰め、残りがすべて名前列になる。
+ * 名前列が `SIDE_STATUS_MIN_NAME_CHARS` 文字ぶんに届かなければ、MP → 見出し → HP の最大値 → ゲージ幅の順に削って名前を残す。
+ */
+export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
+  const font = input.fontPx ?? SIDE_STATUS_FONT_SIZE
+  const left = input.x + SIDE_STATUS_TEXT_PADDING
+  const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
+  const minName = SIDE_STATUS_MIN_NAME_CHARS * font
+  const build = (
+    withMp: boolean,
+    labels: boolean,
+    maxHpShown: boolean,
+    gaugeW: number
+  ): StatusColumns => {
+    let edge = right
+    let gauge: StatusColumn | null = null
+    if (input.atb) {
+      gauge = { x: edge - gaugeW, w: gaugeW }
+      edge = gauge.x - SIDE_STATUS_COLUMN_GAP
+    }
+    let mp: StatusColumn | null = null
+    if (withMp) {
+      const nums = `${input.maxMp}/${input.maxMp}`
+      const w = estimateTextWidth(labels ? `MP ${nums}` : nums, font)
+      mp = { x: edge - w, w }
+      edge = mp.x - SIDE_STATUS_COLUMN_GAP
+    }
+    const hpNums = maxHpShown ? `${input.maxHp}/${input.maxHp}` : `${input.maxHp}`
+    const hpW = estimateTextWidth(labels ? `HP ${hpNums}` : hpNums, font)
+    const hp = { x: edge - hpW, w: hpW }
+    const nameW = Math.max(0, hp.x - SIDE_STATUS_COLUMN_GAP - left)
+    return {
+      name: { x: left, w: nameW },
+      hp,
+      mp,
+      gauge,
+      showLabels: labels,
+      showMaxHp: maxHpShown,
+    }
+  }
+  const G = SIDE_STATUS_GAUGE_WIDTH
+  const tries: Array<[boolean, boolean, boolean, number]> = [
+    ...(input.compact ? [] : [[true, true, true, G] as [boolean, boolean, boolean, number]]),
+    [false, true, true, G],
+    [false, false, true, G],
+    [false, false, false, G],
+  ]
+  for (const [withMp, labels, maxHpShown, gaugeW] of tries) {
+    const c = build(withMp, labels, maxHpShown, gaugeW)
+    if (c.name.w >= minName) return c
+  }
+  return build(false, false, false, SIDE_STATUS_GAUGE_MIN_WIDTH)
+}

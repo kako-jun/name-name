@@ -29,6 +29,12 @@ import {
   computePartyDiagonal,
   computeSideBattleLayout,
   computeSideLogHeight,
+  computeStatusColumns,
+  SIDE_STATUS_COLUMN_GAP,
+  SIDE_STATUS_FONT_SIZE,
+  SIDE_STATUS_GAUGE_WIDTH,
+  SIDE_STATUS_MIN_NAME_CHARS,
+  SIDE_STATUS_TEXT_PADDING,
   desiredSideLogLines,
   effectiveCommandLayout,
   fitCommandFontSize,
@@ -1778,5 +1784,83 @@ describe('コマンド窓の十字配置 (#204)', () => {
     })
     expect(L.command.y + L.command.h).toBeLessThanOrEqual(640 + EPS)
     for (const r of L.commandCells) expect(inside(r, L.command)).toBe(true)
+  })
+})
+
+describe('computeStatusColumns (#745)', () => {
+  const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
+
+  it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
+    const c = computeStatusColumns({ ...base, atb: true })
+    const inner = {
+      l: base.x + SIDE_STATUS_TEXT_PADDING,
+      r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
+    }
+    expect(c.name.x).toBe(inner.l)
+    expect(c.name.x + c.name.w).toBeLessThanOrEqual(c.hp.x)
+    expect(c.hp.x + c.hp.w).toBeLessThanOrEqual(c.mp!.x)
+    expect(c.mp!.x + c.mp!.w).toBeLessThanOrEqual(c.gauge!.x)
+    expect(c.gauge!.x + c.gauge!.w).toBeCloseTo(inner.r, 6)
+    expect(c.gauge!.w).toBe(SIDE_STATUS_GAUGE_WIDTH)
+    expect(c.mp!.x - (c.hp.x + c.hp.w)).toBeGreaterThanOrEqual(SIDE_STATUS_COLUMN_GAP - 1e-9)
+  })
+
+  it('ATB off ではゲージ列がなく、HP/MP は ATB on より右へ寄る', () => {
+    const off = computeStatusColumns(base)
+    const on = computeStatusColumns({ ...base, atb: true })
+    expect(off.gauge).toBeNull()
+    expect(off.hp.x).toBeGreaterThan(on.hp.x)
+    expect(off.name.w).toBeGreaterThan(on.name.w)
+  })
+
+  it('列幅は最長の数値に合わせる（桁数の多い maxHp ほど HP 列が広い）', () => {
+    const a = computeStatusColumns({ ...base, maxHp: 9 })
+    const b = computeStatusColumns({ ...base, maxHp: 9999 })
+    expect(b.hp.w).toBeGreaterThan(a.hp.w)
+    expect(b.name.w).toBeLessThan(a.name.w)
+  })
+
+  it('compact では MP を出さない', () => {
+    expect(computeStatusColumns({ ...base, compact: true }).mp).toBeNull()
+  })
+
+  it.each([
+    [360, true],
+    [320, true],
+    [360, false],
+    [320, false],
+  ])(
+    '狭い画面（status 幅から導出, 幅 %d, atb=%s）でも名前列が最低文字数ぶん残る',
+    (screenW, atb) => {
+      const L = computeSideBattleLayout({
+        width: screenW,
+        height: 640,
+        partyCount: 4,
+        enemyCount: 1,
+      })
+      const c = computeStatusColumns({
+        x: L.status.x,
+        width: L.status.w,
+        maxHp: 9999,
+        maxMp: 999,
+        compact: L.statusCompact,
+        atb,
+      })
+      expect(c.name.w).toBeGreaterThanOrEqual(SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE)
+      expect(c.hp.x + c.hp.w).toBeLessThanOrEqual(
+        L.status.x + L.status.w - SIDE_STATUS_TEXT_PADDING + 1e-9
+      )
+    }
+  )
+
+  it('名前列が足りないときは MP → 見出しの順に削る', () => {
+    const wide = computeStatusColumns({ ...base, width: 400 })
+    expect(wide.mp).not.toBeNull()
+    expect(wide.showLabels).toBe(true)
+    const mid = computeStatusColumns({ ...base, width: 250, atb: true })
+    expect(mid.mp).toBeNull()
+    const tight = computeStatusColumns({ ...base, width: 170, atb: true })
+    expect(tight.mp).toBeNull()
+    expect(tight.showLabels).toBe(false)
   })
 })
