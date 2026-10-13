@@ -28,7 +28,7 @@ import {
 } from 'pixi.js'
 import { computeEdgeSampling } from './spriteStyle'
 
-const FRAGMENT = `
+export const ACRYLIC_EDGE_FRAGMENT = `
 precision highp float;
 in vec2 vTextureCoord;
 out vec4 finalColor;
@@ -103,7 +103,7 @@ export class AcrylicEdgeFilter extends Filter {
   constructor(options: AcrylicEdgeFilterOptions) {
     const glProgram = GlProgram.from({
       vertex: defaultFilterVert,
-      fragment: FRAGMENT,
+      fragment: ACRYLIC_EDGE_FRAGMENT,
       name: 'acrylic-edge-filter',
     })
     super({
