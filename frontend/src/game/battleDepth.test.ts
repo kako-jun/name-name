@@ -446,10 +446,23 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
     expect(L.party[1].scale).toBe(1)
     expect(L.party[1].size).toBe(97)
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.56158（リテラル）', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.44（リテラル・幾何が下限 0.3 に張り付く）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.enemies[0].scale).toBeCloseTo(0.56158, 5)
-    expect(L.enemies[0].size).toBeCloseTo(36.5028, 3)
+    expect(L.enemies[0].scale).toBeCloseTo(0.44, 5)
+    expect(L.enemies[0].size).toBeCloseTo(28.6, 3)
+  })
+  it('味方 1 敵 1: 足元が同じ高さか味方のほうが下なら、味方の縮尺は敵以上（基準は足元 y+size）', () => {
+    const L = computeSideBattleLayout({
+      ...base,
+      partyCount: 1,
+      enemyCount: 1,
+      partyRows: [],
+      depth: { horizon: 0.3, perspective: 0.8 },
+    })
+    const party = L.party[0]
+    const enemy = L.enemies[0]
+    expect(party.floor).toBeGreaterThanOrEqual(enemy.floor)
+    expect(party.scale).toBeGreaterThanOrEqual(enemy.scale)
   })
   it('未指定: depthActive false・座標は従来どおり（800x450・4 対 4）', () => {
     const L = computeSideBattleLayout(base)

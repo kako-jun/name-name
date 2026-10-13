@@ -35,7 +35,7 @@ export interface SpriteSlot {
   /** 敵のみ: 名前 + HP ラベルの矩形（スプライトの直下・画面絶対座標）。味方・潰れて置けない枠・幅が狭く文字が読めない枠では undefined */
   label?: Rect
   /**
-   * 床に接する基準 y（予約領域＝スプライト＋ラベルの下端）。奥行き (#747) の縮尺と描画順（奥→手前）の基準。
+   * 床に接する基準 y（スプライトの足元 `y + size`。ラベルの予約領域は含めない）。奥行き (#747) の縮尺と描画順（奥→手前）の基準。
    * 奥行きオフでも常に返す（値が大きいほど手前）
    */
   floor: number
@@ -333,7 +333,7 @@ export function computeFormation(
     const back = anyBack && rows?.[i] === 'back' ? size * SIDE_BACK_ROW_SHIFT_RATIO : 0
     const x = originX + col * colPitch + dx + back
     const y = originY + row * (size + extra)
-    const slot: SpriteSlot = { x, y, size, floor: y + size + extra, scale: 1 }
+    const slot: SpriteSlot = { x, y, size, floor: y + size, scale: 1 }
     if (withLabel && !labelDropped && size > 0) {
       // 1 列は横に何も並ばないので領域幅（上限あり）まで広げ、多列は隣の列と重ならない列ピッチ(=size)まで
       const w = columns === 1 ? Math.min(regionW, size * SIDE_LABEL_MAX_WIDTH_RATIO) : size
