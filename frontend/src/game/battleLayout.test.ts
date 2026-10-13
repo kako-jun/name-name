@@ -20,6 +20,8 @@ import {
   SIDE_STAGGER_RATIO,
   SIDE_STATUS_COMPACT_WIDTH,
   SIDE_STATUS_ROW_HEIGHT,
+  commandRowCount,
+  computeCommandCells,
   computeContainFitRect,
   computeFallbackRect,
   computeFormation,
@@ -27,6 +29,7 @@ import {
   computeSideBattleLayout,
   computeSideLogHeight,
   desiredSideLogLines,
+  effectiveCommandLayout,
   fitCommandFontSize,
   fitHpLabel,
   isLabelWidthReadable,
@@ -1633,5 +1636,111 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
       partyAspects: [1.2, 0.4, 0.4, 0.4],
     })
     expect(c.party[0].size).toBeCloseTo(123.2, 1)
+  })
+})
+
+describe('コマンド窓の十字配置 (#204)', () => {
+  const box: Rect = { x: 16, y: 100, w: 144, h: 120 }
+
+  it.each([
+    ['cross', 4, 'cross'],
+    ['cross', 3, 'grid'],
+    ['cross', 5, 'grid'],
+    ['cross', 0, 'grid'],
+    ['grid', 4, 'grid'],
+    [undefined, 4, 'grid'],
+  ] as const)('effectiveCommandLayout(%j, %i) は %s', (layout, count, expected) => {
+    expect(effectiveCommandLayout(layout, count)).toBe(expected)
+  })
+
+  it.each([
+    [1, 1],
+    [2, 1],
+    [3, 2],
+    [4, 2],
+    [5, 3],
+  ])('commandRowCount: grid の %i 個は %i 行', (count, rows) => {
+    expect(commandRowCount('grid', count)).toBe(rows)
+  })
+
+  it.each([1, 3, 4, 5])('commandRowCount: cross は個数(%i)によらず常に同じ段数', (count) => {
+    expect(commandRowCount('cross', count)).toBe(commandRowCount('cross', 4))
+    expect(commandRowCount('cross', count)).toBeGreaterThan(commandRowCount('grid', 4))
+  })
+
+  it('computeCommandCells: grid の 4 個は従来の公式（2 列・左上から右下）と一致', () => {
+    const cells = computeCommandCells(box, 4, 'grid')
+    const cellW = box.w / 2
+    const cellH = box.h / 2
+    expect(cells).toEqual([
+      { x: box.x, y: box.y, w: cellW, h: cellH },
+      { x: box.x + cellW, y: box.y, w: cellW, h: cellH },
+      { x: box.x, y: box.y + cellH, w: cellW, h: cellH },
+      { x: box.x + cellW, y: box.y + cellH, w: cellW, h: cellH },
+    ])
+    expect(computeCommandCells(box, 4)).toEqual(cells) // 既定は grid
+  })
+
+  it.each([
+    [0, 0],
+    [-3, 0],
+    [4.9, 4],
+  ])('computeCommandCells: count=%s は例外なく %i 個', (count, expected) => {
+    expect(() => computeCommandCells(box, count, 'grid')).not.toThrow()
+    expect(computeCommandCells(box, count, 'grid')).toHaveLength(expected)
+    expect(() => computeCommandCells(box, count, 'cross')).not.toThrow()
+  })
+
+  it('computeCommandCells: cross の上下は窓幅の中央、左右は窓の左半分・右半分（座標厳密）', () => {
+    const [up, left, right, down] = computeCommandCells(box, 4, 'cross')
+    const half = box.w / 2
+    const rowH = box.h / commandRowCount('cross', 4)
+    // 上・下: セル幅は半分で、窓の幅の中央に置く（左右 1/4 ずつ空く）
+    for (const r of [up, down]) {
+      expect(r.w).toBeCloseTo(half)
+      expect(r.x).toBeCloseTo(box.x + box.w / 4)
+      expect(r.x + r.w / 2).toBeCloseTo(box.x + box.w / 2)
+    }
+    // 左・右: 窓の左半分・右半分
+    expect(left.x).toBeCloseTo(box.x)
+    expect(left.w).toBeCloseTo(half)
+    expect(right.x).toBeCloseTo(box.x + half)
+    expect(right.w).toBeCloseTo(half)
+    // 段は上→左右→下
+    expect(up.y).toBeCloseTo(box.y)
+    expect(left.y).toBeCloseTo(box.y + rowH)
+    expect(right.y).toBeCloseTo(box.y + rowH)
+    expect(down.y).toBeCloseTo(box.y + rowH * 2)
+    for (const r of [up, left, right, down]) expect(r.h).toBeCloseTo(rowH)
+  })
+
+  it('computeSideBattleLayout: commandLayout 未指定と grid は完全に同じ', () => {
+    const input = { width: 800, height: 450, partyCount: 4, enemyCount: 4 }
+    expect(computeSideBattleLayout({ ...input, commandLayout: 'grid' })).toEqual(
+      computeSideBattleLayout(input)
+    )
+  })
+
+  it('computeSideBattleLayout: cross の command 高さは 3 段ぶん以上', () => {
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 1,
+      enemyCount: 1,
+      commandLayout: 'cross',
+    })
+    expect(L.command.h).toBeGreaterThanOrEqual(3 * SIDE_COMMAND_CELL_HEIGHT - EPS)
+  })
+
+  it.each([1, 8])('360x640・味方 %i 人でも cross の command が下端を超えない', (partyCount) => {
+    const L = computeSideBattleLayout({
+      width: 360,
+      height: 640,
+      partyCount,
+      enemyCount: 4,
+      commandLayout: 'cross',
+    })
+    expect(L.command.y + L.command.h).toBeLessThanOrEqual(640 + EPS)
+    for (const r of L.commandCells) expect(inside(r, L.command)).toBe(true)
   })
 })

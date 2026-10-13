@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COMMAND_DEFAULTS,
   crossKeyToCommandId,
   normalizeCommandLayout,
   parseCommandLabels,
@@ -71,5 +72,42 @@ describe('battleCommands (#204)', () => {
       expect(r.y + r.h).toBeLessThanOrEqual(L.command.y + L.command.h + 1e-9)
     }
     expect(L.command.y + L.command.h).toBeLessThanOrEqual(height)
+  })
+})
+
+describe('battleCommands: 追加の観点 (#204)', () => {
+  it('parseCommandLabels: 全角カンマ・全角＝・前後空白を許す', () => {
+    expect(parseCommandLabels(' attack ＝ 斬る ， spell = 魔石 ')).toEqual({
+      attack: '斬る',
+      spell: '魔石',
+    })
+  })
+
+  it('parseCommandLabels: id は大文字でも受ける(ATTACK=x → attack)', () => {
+    expect(parseCommandLabels('ATTACK=x')).toEqual({ attack: 'x' })
+  })
+
+  it('parseCommandLabels: 同一 id が重複したら後勝ち', () => {
+    expect(parseCommandLabels('attack=a, attack=b')).toEqual({ attack: 'b' })
+  })
+
+  it('parseCommandLabels: 値に = を含んでもそのまま保つ(attack=a=b → a=b)', () => {
+    expect(parseCommandLabels('attack=a=b')).toEqual({ attack: 'a=b' })
+  })
+
+  it.each(['', '   ', ',,,', ' , '])('parseCommandLabels: %j は undefined', (raw) => {
+    expect(parseCommandLabels(raw)).toBeUndefined()
+  })
+
+  it('resolveCommandSpecs: 空白のみ・null・空オブジェクトは既定のまま', () => {
+    const defaults = COMMAND_DEFAULTS.map((c) => c.label)
+    expect(resolveCommandSpecs({ attack: '   ' }).map((s) => s.label)).toEqual(defaults)
+    expect(resolveCommandSpecs(null).map((s) => s.label)).toEqual(defaults)
+    expect(resolveCommandSpecs({}).map((s) => s.label)).toEqual(defaults)
+    expect(resolveCommandSpecs().map((s) => s.label)).toEqual(defaults)
+  })
+
+  it.each(['arrowup', 'Up', '', 'W'])('crossKeyToCommandId: %j は undefined', (key) => {
+    expect(crossKeyToCommandId(key)).toBeUndefined()
   })
 })

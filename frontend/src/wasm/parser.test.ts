@@ -2426,4 +2426,13 @@ describe('parseMarkdown + normalizeDocument: battle_command_layout / battle_comm
     expect(none.battle_command_layout).toBeNull()
     expect(none.battle_command_labels).toBeNull()
   })
+
+  it('labels だけ指定したとき layout は null（逆も同様）', async () => {
+    const labelsOnly = await parseMarkdown(docWith(['battle_command_labels: "attack=斬る"']))
+    expect(labelsOnly.battle_command_labels).toBe('attack=斬る')
+    expect(labelsOnly.battle_command_layout).toBeNull()
+    const layoutOnly = await parseMarkdown(docWith(['battle_command_layout: cross']))
+    expect(layoutOnly.battle_command_layout).toBe('cross')
+    expect(layoutOnly.battle_command_labels).toBeNull()
+  })
 })

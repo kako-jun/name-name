@@ -1383,3 +1383,68 @@ describe('assetsToUnload: pixelArt が変わったときだけ画像を解放す
     expect(assetsToUnload('off', view({ pixelArt: 'on' }), defaultConfig())).toEqual([])
   })
 })
+
+describe('commandLayout / commandLabels (#204)', () => {
+  it.each(['cross', 'grid'] as const)('commandLayout %j は通る', (v) => {
+    expect(parseOk({ commandLayout: v }).commandLayout).toBe(v)
+  })
+
+  it('commandLayout 未指定は grid', () => {
+    expect(parseOk({}).commandLayout).toBe('grid')
+  })
+
+  it.each(['diag', 1, null, ''])('commandLayout %j は ok:false でエラーに値が出る', (v) => {
+    const err = parseErr({ commandLayout: v })
+    expect(err).toContain('commandLayout')
+    expect(err).toContain(JSON.stringify(v))
+  })
+
+  it('commandLabels 未指定は {}、部分指定はそのまま通る', () => {
+    expect(parseOk({}).commandLabels).toEqual({})
+    expect(parseOk({ commandLabels: { attack: '斬る' } }).commandLabels).toEqual({ attack: '斬る' })
+  })
+
+  it.each([[['attack']], ['attack=x'], [null]])(
+    'commandLabels がオブジェクトでない(%j)と ok:false',
+    (v) => {
+      expect(parseErr({ commandLabels: v })).toContain('commandLabels')
+    }
+  )
+
+  it.each([
+    ['未知キー', { foo: 'x' }],
+    ['空文字', { attack: '' }],
+    ['空白のみ', { attack: '   ' }],
+    ['数値', { attack: 1 }],
+  ])('commandLabels の %s は ok:false', (_n, labels) => {
+    expect(parseConfig({ commandLabels: labels }, BASE).ok).toBe(false)
+  })
+
+  it('buildBattleSetup は view.commandLayout と config.commandLabels を options に伝える', () => {
+    const cfg = parseOk({ commandLabels: { item: '道具袋' } })
+    const o = buildBattleSetup(cfg, view({ commandLayout: 'cross' })).options
+    expect(o.commandLayout).toBe('cross')
+    expect(o.commandLabels).toEqual({ item: '道具袋' })
+    expect(buildBattleSetup(cfg, view()).options.commandLayout).toBe('grid')
+  })
+
+  it('viewsEqual: commandLayout だけ違う view は不一致', () => {
+    expect(viewsEqual(view({ commandLayout: 'grid' }), view({ commandLayout: 'cross' }))).toBe(
+      false
+    )
+    expect(viewsEqual(view({ commandLayout: 'cross' }), view({ commandLayout: 'cross' }))).toBe(
+      true
+    )
+  })
+
+  it('describeView: cross のときだけ commandLayout=cross を出す', () => {
+    const size = { width: 800, height: 450 }
+    expect(describeView(view({ commandLayout: 'cross' }), 1, size)).toContain('commandLayout=cross')
+    expect(describeView(view({ commandLayout: 'grid' }), 1, size)).not.toContain('commandLayout')
+  })
+
+  it('initialView は config.commandLayout を引き継ぐ', () => {
+    expect(initialView(parseOk({ commandLayout: 'cross' })).commandLayout).toBe('cross')
+    expect(initialView(parseOk({})).commandLayout).toBe('grid')
+  })
+})

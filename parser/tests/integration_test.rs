@@ -11848,3 +11848,49 @@ fn test_battle_command_keys_parse_default_none_and_roundtrip() {
     assert_eq!(doc2.battle_command_layout, doc.battle_command_layout);
     assert_eq!(doc2.battle_command_labels, doc.battle_command_labels);
 }
+
+#[test]
+fn test_battle_command_labels_mixed_commas_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_command_labels: \"attack=斬る，spell=魔石, item=道具\"\n",
+    ));
+    assert_eq!(
+        doc.battle_command_labels.as_deref(),
+        Some("attack=斬る，spell=魔石, item=道具")
+    );
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.battle_command_labels, doc.battle_command_labels);
+}
+
+#[test]
+fn test_battle_command_labels_inner_quote_is_stripped_on_emit() {
+    // emit は内側の `"` を除去して往復を守る (他の battle_* と同じ流儀)。その挙動を固定する
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.battle_command_labels = Some("attack=\"斬る\"".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_command_labels: \"attack=斬る\"\n"),
+        "{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_command_labels.as_deref(), Some("attack=斬る"));
+}
+
+#[test]
+fn test_battle_command_emit_only_set_fields() {
+    let only_layout = parser::parse(&battle_doc("battle_command_layout: cross\n"));
+    let emitted = emitter::emit(&only_layout);
+    assert!(
+        emitted.contains("battle_command_layout: \"cross\"\n"),
+        "{emitted}"
+    );
+    assert!(!emitted.contains("battle_command_labels"), "{emitted}");
+
+    let only_labels = parser::parse(&battle_doc("battle_command_labels: \"attack=斬る\"\n"));
+    let emitted = emitter::emit(&only_labels);
+    assert!(
+        emitted.contains("battle_command_labels: \"attack=斬る\"\n"),
+        "{emitted}"
+    );
+    assert!(!emitted.contains("battle_command_layout"), "{emitted}");
+}
