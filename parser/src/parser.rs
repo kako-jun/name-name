@@ -48,6 +48,9 @@ pub fn parse(input: &str) -> Document {
     let mut battle_background_tone: Option<String> = None;
     let mut battle_background_dof: Option<String> = None;
     let mut battle_log_typewriter: Option<String> = None;
+    let mut battle_horizon: Option<String> = None;
+    let mut battle_perspective: Option<String> = None;
+    let mut battle_foreground: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -268,6 +271,24 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_log_typewriter = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_horizon:") {
+                // RPG 戦闘画面の地平線の高さ (#747)。画面高さに対する比。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_horizon = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_perspective:") {
+                // RPG 戦闘画面の遠近の強さ (#747)。0.0〜1.0。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_perspective = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_foreground:") {
+                // RPG 戦闘画面の前景レイヤー画像パス (#747)。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_foreground = Some(v);
                 }
             }
             pos += 1;
@@ -1099,6 +1120,9 @@ pub fn parse(input: &str) -> Document {
         battle_background_tone,
         battle_background_dof,
         battle_log_typewriter,
+        battle_horizon,
+        battle_perspective,
+        battle_foreground,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

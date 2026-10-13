@@ -5333,6 +5333,9 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_background_tone: None,
         battle_background_dof: None,
         battle_log_typewriter: None,
+        battle_horizon: None,
+        battle_perspective: None,
+        battle_foreground: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10510,6 +10513,9 @@ fn telop_test_doc_base() -> Document {
         battle_background_tone: None,
         battle_background_dof: None,
         battle_log_typewriter: None,
+        battle_horizon: None,
+        battle_perspective: None,
+        battle_foreground: None,
         chapters: vec![],
     }
 }
@@ -11538,4 +11544,47 @@ fn test_battle_log_typewriter_in_body_is_not_parsed() {
     let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nbattle_log_typewriter: on\n";
     let doc = parser::parse(input);
     assert_eq!(doc.battle_log_typewriter, None);
+}
+
+// ---- #747: battle_horizon / battle_perspective / battle_foreground / パーティ row ----
+
+#[test]
+fn test_battle_depth_keys_parse_and_round_trip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_horizon: \"0.3\"\nbattle_perspective: 0.8\nbattle_foreground: bg/fg.png\n",
+    ));
+    assert_eq!(doc.battle_horizon.as_deref(), Some("0.3"));
+    assert_eq!(doc.battle_perspective.as_deref(), Some("0.8"));
+    assert_eq!(doc.battle_foreground.as_deref(), Some("bg/fg.png"));
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.battle_horizon, doc.battle_horizon);
+    assert_eq!(doc2.battle_perspective, doc.battle_perspective);
+    assert_eq!(doc2.battle_foreground, doc.battle_foreground);
+}
+
+#[test]
+fn test_battle_depth_keys_unset_or_empty_is_none() {
+    let doc = parser::parse(&battle_doc("battle_horizon: \"\"\nbattle_perspective:\n"));
+    assert_eq!(doc.battle_horizon, None);
+    assert_eq!(doc.battle_perspective, None);
+    assert_eq!(doc.battle_foreground, None);
+}
+
+#[test]
+fn test_party_member_row_parses_and_round_trips() {
+    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[パーティ hero]\n名前: ゆうしゃ\nHP: 20\nATK: 5\nDEF: 3\nAGI: 4\n隊列: back\n[/パーティ]\n";
+    let doc = parser::parse(src);
+    let row = doc
+        .chapters
+        .iter()
+        .flat_map(|c| c.scenes.iter())
+        .flat_map(|s| s.events.iter())
+        .find_map(|e| match e {
+            Event::PartyMember(p) => Some(p.row.clone()),
+            _ => None,
+        })
+        .expect("PartyMember が見つかる");
+    assert_eq!(row.as_deref(), Some("back"));
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("隊列: back"), "{emitted}");
 }
