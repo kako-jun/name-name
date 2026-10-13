@@ -69,6 +69,7 @@ interface RendererInternals {
   initialized: boolean
   waitingForChoice: boolean
   waitingForWait: boolean
+  jumpState: string
   pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
 }
 
@@ -545,6 +546,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
     expect(warnSpy).toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledTimes(1)
     expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
   })
 
@@ -621,6 +623,133 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(warnSpy).toHaveBeenCalled()
     expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
+  })
+
+  // ===== M2. ロード結果トーストの一本化 (#765) =====
+  //
+  // 成功・失敗・弾かれた理由のトーストはすべて renderer が出す（NovelPlayer の F8 は quickLoad() を呼ぶだけ）。
+
+  function makeLazyRenderer(resolver: (id: string) => Promise<EventScene[] | null>): NovelRenderer {
+    const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
+    const r = new NovelRenderer()
+    muteAudio(r)
+    r.setEvents(flatten(entryScenes))
+    r.setJumpSceneIndex(entryScenes)
+    r.setMissingSceneResolver(resolver)
+    markInitialized(r)
+    r.startFrom({ sceneId: 'entry-hub' })
+    return r
+  }
+
+  it('M2-1: 同期成功の F8 は「クイックロードしました」を1回だけ出す', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
+
+    expect(r.quickLoad()).toBe(true)
+
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith('クイックロードしました')
+  })
+
+  it('M2-2: 非同期成功は解決前にトーストを出さず、解決後に1回だけ出す', async () => {
+    const routeScene = scene('r01-01', [narration('a', 'b')])
+    let release!: () => void
+    const gate = new Promise<void>((res) => {
+      release = res
+    })
+    const r = makeLazyRenderer(async () => {
+      await gate
+      return [scene('entry-hub', [narration('hub-line')]), routeScene]
+    })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'r01-01', eventIndex: 1 }))
+
+    expect(r.quickLoad()).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(toast).not.toHaveBeenCalled()
+
+    release()
+    await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith('クイックロードしました')
+  })
+
+  it('M2-3: 同期失敗でも非同期失敗でも失敗トーストのみ（成功トーストは出ない）', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const sync = makeRenderer(SCENES)
+    const syncToast = vi.spyOn(sync, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'ghost' }))
+    sync.quickLoad()
+    expect(syncToast.mock.calls).toEqual([['ロードに失敗しました']])
+
+    const lazy = makeLazyRenderer(async () => null)
+    const lazyToast = vi.spyOn(lazy, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'ghost-route' }))
+    lazy.quickLoad()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(lazyToast.mock.calls).toEqual([['ロードに失敗しました']])
+  })
+
+  it("M2-4: origin 'auto' の成功は成功トーストを出さず、失敗は通知する", () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const ok = makeRenderer(SCENES)
+    const okToast = vi.spyOn(ok, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
+    expect(ok.quickLoad('auto')).toBe(true)
+    expect(okToast).not.toHaveBeenCalled()
+
+    const ng = makeRenderer(SCENES)
+    const ngToast = vi.spyOn(ng, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'ghost' }))
+    expect(ng.quickLoad('auto')).toBe(true)
+    expect(ngToast.mock.calls).toEqual([['ロードに失敗しました']])
+  })
+
+  it('M2-5: F8 が弾かれたときは理由に合った文言（Jump 中・選択肢/待機中・データ無し）。auto は無言', () => {
+    const r = makeRenderer(SCENES)
+    r.startFrom({ sceneId: 'a' })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'a' }))
+
+    internals(r).jumpState = 'pending'
+    expect(r.quickLoad()).toBe(false)
+    expect(toast).toHaveBeenLastCalledWith('場面転換中のためロードできません')
+    internals(r).jumpState = 'idle'
+
+    internals(r).waitingForChoice = true
+    expect(r.quickLoad()).toBe(false)
+    expect(toast).toHaveBeenLastCalledWith('この場面ではロードできません')
+    toast.mockClear()
+    expect(r.quickLoad('auto')).toBe(false)
+    expect(toast).not.toHaveBeenCalled()
+    internals(r).waitingForChoice = false
+
+    localStorage.clear()
+    expect(r.quickLoad()).toBe(false)
+    expect(toast).toHaveBeenLastCalledWith('クイックセーブデータがありません')
+  })
+
+  it('M2-6: destroy 後（世代が進まない）に resolver が reject しても showToast は呼ばれない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let fail!: (e: Error) => void
+    const r = makeLazyRenderer(
+      () =>
+        new Promise<EventScene[] | null>((_, rej) => {
+          fail = rej
+        })
+    )
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    seedQuickSave(craftSave({ sceneId: 'ghost-route' }))
+    r.quickLoad()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    internals(r).initialized = false // destroy() 相当
+    fail(new Error('late'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(toast).not.toHaveBeenCalled()
   })
 
   // ===== N. 選択肢/Wait 待機中の quickSave/quickLoad ガード (#578) =====

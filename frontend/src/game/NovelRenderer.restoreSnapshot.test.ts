@@ -240,8 +240,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.startFrom({ sceneId: 'a', flags: { prev: boolFlag(true) } })
     const sceneBefore = r.getCurrentSceneId()
     const historyLenBefore = internals(r).history.length
+    const toast = vi.spyOn(r, 'showToast')
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'ghost', flags: { restored: boolFlag(true) } }))
+    expect(toast).not.toHaveBeenCalled()
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
@@ -481,9 +483,11 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setMissingSceneResolver(resolver)
     markInitialized(r)
     r.startFrom({ sceneId: 'entry-hub', flags: { prev: boolFlag(true) } })
+    const toast = vi.spyOn(r, 'showToast')
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'target-route', flags: { x: boolFlag(true) } }))
     await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(toast).not.toHaveBeenCalled()
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(warnSpy).toHaveBeenCalled()
@@ -503,11 +507,13 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.setMissingSceneResolver(resolver)
     markInitialized(r)
     r.startFrom({ sceneId: 'entry-hub', flags: { prev: boolFlag(true) } })
+    const toast = vi.spyOn(r, 'showToast')
 
     expect(() =>
       r.restoreSnapshot(craftSnapshot({ sceneId: 'target-route', flags: { y: boolFlag(true) } }))
     ).not.toThrow()
     await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(toast).not.toHaveBeenCalled()
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(warnSpy).toHaveBeenCalled()
