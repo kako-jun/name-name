@@ -549,7 +549,8 @@ export class BattleScreen extends Container {
       if (!e) continue
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
       if (view.label) {
-        // 2 列配置などでラベル幅(=スプライト一辺)を越える名前は省略して隣と重ねない
+        // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
+        // 多列は列ピッチ=スプライト一辺）を越える名前は省略して隣と重ねない
         // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く
         const w = Math.max(0, (this.sideLabelWidths[i] ?? 0) - SIDE_LABEL_STROKE_WIDTH * 2)
         view.label.text =
