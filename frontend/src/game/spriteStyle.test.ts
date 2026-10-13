@@ -5,12 +5,17 @@
  * 定数参照は導出式のテストにだけ使う。PixiJS の実描画・GLSL コンパイルは対象外（jsdom に WebGL が無い）。
  */
 import { describe, expect, it } from 'vitest'
-import { ACRYLIC_EDGE_FRAGMENT } from './acrylicEdgeFilter'
 import {
   DEFAULT_ACRYLIC_PARAMS,
+  EDGE_INNER_SPACING_PX,
+  EDGE_MAX_INNER_TAPS,
+  EDGE_MAX_LINE_PX,
+  EDGE_MAX_MARGIN_PX,
+  EDGE_MAX_OUTER_TAPS,
   EDGE_MAX_TAPS,
+  EDGE_OUTER_SPACING_PX,
   computeAcrylicGeometry,
-  computeEdgeSampling,
+  computeEdgeOffsets,
   normalizeSpriteStyle,
   resolveAcrylicParams,
   type AcrylicParams,
@@ -41,6 +46,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       minMarginPx: 2,
       lineWidthRatio: 0.02,
       minLinePx: 1.5,
+      maxMarginPx: 6,
+      maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
       hasBase: true,
@@ -58,6 +65,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       minMarginPx: 2,
       lineWidthRatio: 0.02,
       minLinePx: 1.5,
+      maxMarginPx: 6,
+      maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
       hasBase: true,
@@ -88,6 +97,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         minMarginPx: bad,
         lineWidthRatio: bad,
         minLinePx: bad,
+        maxMarginPx: bad,
+        maxLinePx: bad,
         lineColor: bad,
         lineAlpha: bad,
         baseWidthRatio: bad,
@@ -101,6 +112,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         minMarginPx: 2,
         lineWidthRatio: 0.02,
         minLinePx: 1.5,
+        maxMarginPx: 6,
+        maxLinePx: 4,
         lineColor: 0xe6f3ff,
         lineAlpha: 0.85,
         hasBase: true,
@@ -127,6 +140,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
     ['minMarginPx', 0, 32],
     ['lineWidthRatio', 0, 0.1],
     ['minLinePx', 0, 16],
+    ['maxMarginPx', 0, 6],
+    ['maxLinePx', 0, 4],
     ['lineColor', 0, 0xffffff],
     ['lineAlpha', 0, 1],
     ['highlightAlpha', 0, 1],
@@ -148,6 +163,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
     expect(resolveAcrylicParams({ minMarginPx: 33 }).minMarginPx).toBe(32)
     expect(resolveAcrylicParams({ lineWidthRatio: 0.11 }).lineWidthRatio).toBe(0.1)
     expect(resolveAcrylicParams({ minLinePx: 17 }).minLinePx).toBe(16)
+    expect(resolveAcrylicParams({ maxMarginPx: 6.1 }).maxMarginPx).toBe(6)
+    expect(resolveAcrylicParams({ maxLinePx: 4.1 }).maxLinePx).toBe(4)
     expect(resolveAcrylicParams({ baseWidthRatio: 0.09 }).baseWidthRatio).toBe(0.1)
     expect(resolveAcrylicParams({ baseHeightRatio: 0.04 }).baseHeightRatio).toBe(0.05)
     expect(resolveAcrylicParams({ shadowScale: 0.99 }).shadowScale).toBe(1)
@@ -432,130 +449,173 @@ describe('computeAcrylicGeometry: スイープ不変条件', () => {
   })
 })
 
-describe('computeEdgeSampling', () => {
-  const MARGINS = [-1, 0, 0.5, 1, 2, 3, 4, 6, 10, 32, 100, 1e6, NaN, Infinity, -Infinity]
-  const RES = [1, 1.5, 2, 3]
-
-  it('仕様値: タップ上限 EDGE_MAX_TAPS は 48', () => {
-    expect(EDGE_MAX_TAPS).toBe(48)
+describe('computeAcrylicGeometry: 余白・線の上限', () => {
+  it('仕様値: 大きな枠でも余白は 6px・線は 4px で頭打ち（比率×size が上限を超えても）', () => {
+    const g = computeAcrylicGeometry(100, 100, 1000)
+    expect(g.marginPx).toBe(6) // 0.03*1000 = 30 → 6
+    expect(g.linePx).toBe(4) // 0.02*1000 = 20 → 4
   })
 
-  it('スイープ: 総タップ ≤ 48・段数 1〜2・方向数 8〜16・整数', () => {
-    for (const m of MARGINS)
-      for (const l of MARGINS)
-        for (const res of RES) {
-          const s = computeEdgeSampling(m * res, l * res)
-          const tag = `m=${m} l=${l} res=${res}`
-          expect((s.innerRings + s.outerRings) * s.directions, tag).toBeLessThanOrEqual(48)
-          expect([1, 2], tag).toContain(s.innerRings)
-          expect([1, 2], tag).toContain(s.outerRings)
-          expect(s.directions, tag).toBeGreaterThanOrEqual(8)
-          expect(s.directions, tag).toBeLessThanOrEqual(16)
-          for (const v of [s.innerRings, s.outerRings, s.directions]) {
-            expect(Number.isInteger(v), tag).toBe(true)
-          }
-        }
+  it('上限の手前は比率のまま（上限 clamp が小さな値を潰さない）', () => {
+    const g = computeAcrylicGeometry(100, 100, 100)
+    expect(g.marginPx).toBe(3) // 0.03*100
+    expect(g.linePx).toBe(2) // 0.02*100
   })
 
-  it.each([[NaN], [-1], [-Infinity], [Infinity]])(
-    '半径 %s は 0 と同じ扱い（Infinity は非有限なので 0 扱い）',
-    (bad) => {
-      const zero = computeEdgeSampling(0, 0)
-      expect(computeEdgeSampling(bad, 0)).toEqual(zero)
-      expect(computeEdgeSampling(0, bad)).toEqual(zero)
-      expect(computeEdgeSampling(bad, bad)).toEqual(zero)
-    }
-  )
-
-  it('仕様値: 半径 0 は 1 段・1 段・方向 8', () => {
-    expect(computeEdgeSampling(0, 0)).toEqual({ innerRings: 1, outerRings: 1, directions: 8 })
+  it('maxMarginPx / maxLinePx を下げて上書きできる', () => {
+    const g = computeAcrylicGeometry(
+      100,
+      100,
+      1000,
+      resolveAcrylicParams({ maxMarginPx: 3, maxLinePx: 1 })
+    )
+    expect(g.marginPx).toBe(3)
+    expect(g.linePx).toBe(1)
   })
 
-  it('rings 切替境界: 内側は m=3 で 1 段・3.0001 で 2 段', () => {
-    expect(computeEdgeSampling(3, 0).innerRings).toBe(1)
-    expect(computeEdgeSampling(3.0001, 0).innerRings).toBe(2)
-  })
-
-  it('rings 切替境界: 外側は l=2 で 1 段・2.0001 で 2 段', () => {
-    expect(computeEdgeSampling(0, 2).outerRings).toBe(1)
-    expect(computeEdgeSampling(0, 2.0001).outerRings).toBe(2)
-  })
-
-  it('rings は内側と外側で取り違えない（m と l は別の閾値）', () => {
-    // m=2.5: 内側 ceil(2.5/3)=1, l=2.5: 外側 ceil(2.5/2)=2
-    expect(computeEdgeSampling(2.5, 0).innerRings).toBe(1)
-    expect(computeEdgeSampling(0, 2.5).outerRings).toBe(2)
-  })
-
-  it('方向数の上限: rings=4 で 12・rings=3 で 16・rings=2 で 16 に頭打ち', () => {
-    expect(computeEdgeSampling(1e6, 1e6)).toEqual({ innerRings: 2, outerRings: 2, directions: 12 })
-    expect(computeEdgeSampling(1e6, 1)).toEqual({ innerRings: 2, outerRings: 1, directions: 16 })
-    expect(computeEdgeSampling(1, 1e6)).toEqual({ innerRings: 1, outerRings: 2, directions: 16 })
-    expect(computeEdgeSampling(3, 2).directions).toBe(13) // rings=2 は cap 16 に届かず ceil(2π·5/2.5)=13
-  })
-
-  it('最大入力で総タップがちょうど 48（<= と < の取り違えを検知）', () => {
-    const s = computeEdgeSampling(1e6, 1e6)
-    expect((s.innerRings + s.outerRings) * s.directions).toBe(48)
-  })
-
-  it('方向数は 2π(m+l)/2.5 を切り上げ、下限 8（m=l=0 と小半径）', () => {
-    expect(computeEdgeSampling(0.5, 0.5).directions).toBe(8)
-    // m=l=1.5: ceil(2π·3/2.5)=ceil(7.54)=8 / m=l=2: ceil(10.05)=11（rings 2 つずつ→cap 12）
-    expect(computeEdgeSampling(2, 2).directions).toBe(11)
-  })
-
-  it('段数が同じ範囲では、半径が大きいほど方向数は単調非減少', () => {
-    // m=3・l≤2 なら rings は常に 1+1 固定。l を 0→2 で振る
-    let prev = 0
-    for (let l = 0; l <= 2; l += 0.05) {
-      const s = computeEdgeSampling(3, l)
-      expect(s.innerRings + s.outerRings).toBe(2)
-      expect(s.directions).toBeGreaterThanOrEqual(prev)
-      prev = s.directions
-    }
-  })
-
-  it('半径全体では総タップ数が単調非減少（rings が増える境目で方向数は下がってよい）', () => {
-    let prev = 0
-    for (let r = 0; r <= 60; r += 0.25) {
-      const s = computeEdgeSampling(r, r / 2)
-      const taps = (s.innerRings + s.outerRings) * s.directions
-      expect(taps).toBeGreaterThanOrEqual(prev)
-      prev = taps
-    }
+  it('maxMarginPx にハード上限（6）を超える値を渡しても 6', () => {
+    const g = computeAcrylicGeometry(100, 100, 1000, {
+      ...DEFAULT_ACRYLIC_PARAMS,
+      maxMarginPx: 99,
+      maxLinePx: 99,
+    })
+    expect(g.marginPx).toBe(6)
+    expect(g.linePx).toBe(4)
   })
 })
 
-describe('GLSL 整合（ACRYLIC_EDGE_FRAGMENT の定数と computeEdgeSampling）', () => {
-  const constInt = (name: string): number => {
-    const m = new RegExp(`const int ${name} = (\\d+);`).exec(ACRYLIC_EDGE_FRAGMENT)
-    expect(m, `${name} が見つからない`).not.toBeNull()
-    return Number(m![1])
-  }
+describe('computeEdgeOffsets', () => {
+  const radius = (o: readonly [number, number]): number => Math.hypot(o[0], o[1])
+  const approxEq = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6
 
-  it('MAX_DIRS / MAX_IN / MAX_OUT は computeEdgeSampling のスイープ最大値以上', () => {
-    const values = [0, 0.5, 1, 2, 3, 4, 6, 10, 32, 100, 1e6]
-    let maxD = 0
-    let maxI = 0
-    let maxO = 0
-    for (const m of values)
-      for (const l of values) {
-        const s = computeEdgeSampling(m, l)
-        maxD = Math.max(maxD, s.directions)
-        maxI = Math.max(maxI, s.innerRings)
-        maxO = Math.max(maxO, s.outerRings)
-      }
-    expect(constInt('MAX_DIRS')).toBeGreaterThanOrEqual(maxD)
-    expect(constInt('MAX_IN')).toBeGreaterThanOrEqual(maxI)
-    expect(constInt('MAX_OUT')).toBeGreaterThanOrEqual(maxO)
+  it('仕様値: 上限・間隔・タップ予算の定数', () => {
+    expect(EDGE_MAX_MARGIN_PX).toBe(6)
+    expect(EDGE_MAX_LINE_PX).toBe(4)
+    expect(EDGE_INNER_SPACING_PX).toBe(2)
+    expect(EDGE_OUTER_SPACING_PX).toBe(3)
+    expect(EDGE_MAX_TAPS).toBe(64)
+    expect(EDGE_MAX_INNER_TAPS).toBe(40)
+    expect(EDGE_MAX_OUTER_TAPS).toBe(24)
   })
 
-  it('MAX_DIRS / MAX_IN / MAX_OUT は最大入力の戻り値と等しい（余裕が過剰でない）', () => {
-    const s = computeEdgeSampling(1e6, 1e6)
-    // 方向数の最大は rings が少ないときの 16。MAX_DIRS は rings=2/3 の上限 16 と一致
-    expect(constInt('MAX_DIRS')).toBe(16)
-    expect(constInt('MAX_IN')).toBe(s.innerRings)
-    expect(constInt('MAX_OUT')).toBe(s.outerRings)
+  it('余白 0 なら内側は空・線 0 なら外側は空', () => {
+    expect(computeEdgeOffsets(0, 3).inner).toEqual([])
+    expect(computeEdgeOffsets(3, 0).outer).toEqual([])
+    expect(computeEdgeOffsets(0, 0)).toEqual({ inner: [], outer: [] })
+  })
+
+  it.each([[NaN], [-1], [Infinity], [-Infinity]])(
+    '余白・線に %s を渡すと 0 と同じ（空）',
+    (bad) => {
+      expect(computeEdgeOffsets(bad, bad)).toEqual({ inner: [], outer: [] })
+      expect(computeEdgeOffsets(bad, 3).inner).toEqual([])
+      expect(computeEdgeOffsets(3, bad).outer).toEqual([])
+    }
+  )
+
+  it('外側は半径 余白+線 の円上だけ（内側とは別の半径）', () => {
+    const { outer } = computeEdgeOffsets(3, 2)
+    expect(outer.length).toBeGreaterThan(0)
+    for (const o of outer) expect(approxEq(radius(o), 5)).toBe(true)
+  })
+
+  it('内側は最外の円が半径=余白で、全サンプルが余白以内', () => {
+    for (const m of [0.5, 1, 2, 3, 4.5, 6]) {
+      const { inner } = computeEdgeOffsets(m, 1)
+      const rs = inner.map(radius)
+      expect(Math.max(...rs)).toBeCloseTo(m, 6)
+      for (const r of rs) expect(r).toBeLessThanOrEqual(m + 1e-6)
+    }
+  })
+
+  it('内側の円の半径間隔が EDGE_INNER_SPACING_PX 以下（細い部分の取りこぼし防止）', () => {
+    for (let m = 0.25; m <= 6; m += 0.25) {
+      const radii = [
+        ...new Set(computeEdgeOffsets(m, 1).inner.map((o) => Math.round(radius(o) * 1e6) / 1e6)),
+      ].sort((a, b) => a - b)
+      let prev = 0
+      for (const r of radii) {
+        expect(r - prev, `m=${m}`).toBeLessThanOrEqual(2 + 1e-5)
+        prev = r
+      }
+    }
+  })
+
+  it('円周上の隣接サンプル間隔が内側 2px 以下・外側 3px 以下', () => {
+    const gap = (pts: readonly (readonly [number, number])[], r: number): number => {
+      const angles = pts.map((p) => Math.atan2(p[1], p[0])).sort((a, b) => a - b)
+      let max = angles[0] + 2 * Math.PI - angles[angles.length - 1]
+      for (let i = 1; i < angles.length; i++) max = Math.max(max, angles[i] - angles[i - 1])
+      return max * r
+    }
+    for (const m of [2, 4, 6]) {
+      const { inner, outer } = computeEdgeOffsets(m, 4)
+      const rings = new Map<number, [number, number][]>()
+      for (const o of inner) {
+        const k = Math.round(radius(o) * 1e4)
+        rings.set(k, [...(rings.get(k) ?? []), [o[0], o[1]]])
+      }
+      for (const [k, pts] of rings)
+        expect(gap(pts, k / 1e4), `m=${m}`).toBeLessThanOrEqual(2 + 1e-6)
+      expect(gap(outer, m + 4), `m=${m}`).toBeLessThanOrEqual(3 + 1e-6)
+    }
+  })
+
+  it('円ごとに角度の位相がずれる（隣り合う円の同じ方向に並ばない）', () => {
+    const { inner } = computeEdgeOffsets(6, 1) // 半径 2,4,6 の 3 円
+    const angleSet = new Set(inner.map((o) => Math.round(Math.atan2(o[1], o[0]) * 1e4)))
+    expect(angleSet.size).toBe(inner.length) // どの 2 点も同じ角度を共有しない（放射状の星形にならない）
+  })
+
+  it('スイープ: 総タップ ≤ 64・内側 ≤ 40・外側 ≤ 24', () => {
+    let maxTotal = 0
+    for (let m = 0; m <= 8; m += 0.1)
+      for (let l = 0; l <= 6; l += 0.1) {
+        const { inner, outer } = computeEdgeOffsets(m, l, 1)
+        expect(inner.length).toBeLessThanOrEqual(40)
+        expect(outer.length).toBeLessThanOrEqual(24)
+        expect(inner.length + outer.length).toBeLessThanOrEqual(64)
+        maxTotal = Math.max(maxTotal, inner.length + outer.length)
+      }
+    // 最悪（余白 6・線 4）は 39 + 21 = 60。64 の予算に余裕がある
+    expect(maxTotal).toBe(60)
+  })
+
+  it('余白・線は上限（6 / 4 論理 px）に切り詰められる', () => {
+    const big = computeEdgeOffsets(100, 100)
+    const cap = computeEdgeOffsets(6, 4)
+    expect(big).toEqual(cap)
+    expect(Math.max(...big.outer.map(radius))).toBeCloseTo(10, 6)
+  })
+
+  it('変位は実 px = 論理配置 × resolution（個数・配置は resolution に依存しない）', () => {
+    const base = computeEdgeOffsets(5, 3, 1)
+    for (const res of [1.5, 2, 3]) {
+      const hi = computeEdgeOffsets(5, 3, res)
+      expect(hi.inner.length).toBe(base.inner.length)
+      expect(hi.outer.length).toBe(base.outer.length)
+      hi.inner.forEach((o, i) => {
+        expect(o[0] / res).toBeCloseTo(base.inner[i][0], 6)
+        expect(o[1] / res).toBeCloseTo(base.inner[i][1], 6)
+      })
+      hi.outer.forEach((o, i) => {
+        expect(o[0] / res).toBeCloseTo(base.outer[i][0], 6)
+        expect(o[1] / res).toBeCloseTo(base.outer[i][1], 6)
+      })
+    }
+  })
+
+  it.each([[0], [-2], [NaN]])('resolution %s は 1 として扱う', (bad) => {
+    expect(computeEdgeOffsets(4, 2, bad)).toEqual(computeEdgeOffsets(4, 2, 1))
+  })
+
+  it('仕様値: 余白 2 → 内側 1 円（半径 2・7 方向）、線 1.5 → 外側 半径 3.5・8 方向', () => {
+    const { inner, outer } = computeEdgeOffsets(2, 1.5)
+    expect(inner.length).toBe(7) // ceil(2π·2/2)=7
+    expect(outer.length).toBe(8) // ceil(2π·3.5/3)=8（下限 6 を上回る）
+  })
+
+  it('方向数の下限は 6（小さな円でも）', () => {
+    expect(computeEdgeOffsets(0.2, 0).inner.length).toBe(6)
   })
 })

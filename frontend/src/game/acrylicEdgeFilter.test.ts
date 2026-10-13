@@ -2,17 +2,18 @@
  * AcrylicEdgeFilter (#737) の単体テスト。
  *
  * GLSL のコンパイルと実描画は対象外（jsdom に WebGL が無い）。コンストラクタ・setWidths・apply の
- * 「論理 px → フィルタテクスチャ px」換算と uniform の組み立てだけを、`filterManager.applyFilter` をスタブして検証する。
+ * 「論理 px → 実 px の変位」換算と uniform の組み立てだけを、`filterManager.applyFilter` をスタブして検証する。
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { FilterSystem, RenderSurface, Texture } from 'pixi.js'
 import { ACRYLIC_EDGE_FRAGMENT, AcrylicEdgeFilter } from './acrylicEdgeFilter'
-import { computeEdgeSampling } from './spriteStyle'
+import { computeEdgeOffsets } from './spriteStyle'
 
 interface Uniforms {
   uTexel: Float32Array
-  uRadii: Float32Array
-  uRings: Float32Array
+  uCounts: Float32Array
+  uInner: Float32Array
+  uOuter: Float32Array
   uColor: Float32Array
   uAlpha: number
 }
@@ -25,7 +26,13 @@ function make(margin = 0, line = 0, alpha = 0.85, color: number | string = 0xe6f
 
 function applyWith(
   f: AcrylicEdgeFilter,
-  source: { width: number; height: number; resolution?: number }
+  source: {
+    width: number
+    height: number
+    pixelWidth?: number
+    pixelHeight?: number
+    resolution?: number
+  }
 ): ReturnType<typeof vi.fn> {
   const applyFilter = vi.fn()
   const fm = { applyFilter } as unknown as FilterSystem
@@ -55,7 +62,9 @@ describe('AcrylicEdgeFilter: コンストラクタ', () => {
   })
 
   it('シェーダの uniform 名と TS 側の uniform キーが一致する（uTexture / uInputClamp は pixi 供給）', () => {
-    const declared = [...ACRYLIC_EDGE_FRAGMENT.matchAll(/^uniform \w+ (\w+);/gm)].map((m) => m[1])
+    const declared = [...ACRYLIC_EDGE_FRAGMENT.matchAll(/^uniform \w+ (\w+)(?:\[\d+\])?;/gm)].map(
+      (m) => m[1]
+    )
     const pixiProvided = ['uTexture', 'uInputClamp']
     const mine = declared.filter((n) => !pixiProvided.includes(n)).sort()
     expect(mine).toEqual(Object.keys(uniformsOf(make())).sort())
@@ -86,80 +95,178 @@ describe('AcrylicEdgeFilter: setWidths', () => {
   })
 })
 
-describe('AcrylicEdgeFilter: apply', () => {
-  it('uRadii = [margin×res, (margin+line)×res]、uTexel = 1/source の幅・高さ', () => {
+describe('AcrylicEdgeFilter: apply（DPR 換算）', () => {
+  // pixi.js 8: source.width は論理幅、source.pixelWidth = 論理幅 × resolution（実ピクセル幅）
+  const source = (w: number, h: number, res: number) => ({
+    width: w,
+    height: h,
+    pixelWidth: w * res,
+    pixelHeight: h * res,
+    resolution: res,
+  })
+  const pairs = (a: Float32Array, n: number): [number, number][] =>
+    Array.from({ length: n }, (_, i) => [a[i * 2], a[i * 2 + 1]])
+
+  it('uTexel = 1/pixelWidth, 1/pixelHeight（論理幅ではなく実ピクセル幅で割る）', () => {
     const f = make()
     f.setWidths(6, 4)
-    applyWith(f, { width: 200, height: 100, resolution: 2 })
+    applyWith(f, source(200, 100, 2))
     const u = uniformsOf(f)
-    expect(u.uRadii[0]).toBe(12)
-    expect(u.uRadii[1]).toBe(20)
-    expect(u.uTexel[0]).toBeCloseTo(1 / 200, 9)
-    expect(u.uTexel[1]).toBeCloseTo(1 / 100, 9)
+    expect(u.uTexel[0]).toBeCloseTo(1 / 400, 9)
+    expect(u.uTexel[1]).toBeCloseTo(1 / 200, 9)
   })
 
-  it('余白と線を取り違えない（uRadii[1] は 余白+線）', () => {
-    const f = make()
-    f.setWidths(3, 1)
-    applyWith(f, { width: 10, height: 10, resolution: 1 })
-    expect(Array.from(uniformsOf(f).uRadii)).toEqual([3, 4])
-  })
-
-  it('uRings は換算後の半径から computeEdgeSampling と一致して決まる', () => {
+  it('uCounts と uInner / uOuter は computeEdgeOffsets(margin, line, resolution) と一致する', () => {
     const f = make()
     for (const [m, l, res] of [
       [6, 4, 1],
       [6, 4, 2],
-      [0, 0, 1],
-      [30, 20, 3],
+      [2, 1.5, 2],
+      [3, 2, 1.5],
+      [5, 3, 3],
     ]) {
       f.setWidths(m, l)
-      applyWith(f, { width: 64, height: 64, resolution: res })
-      const s = computeEdgeSampling(m * res, l * res)
-      expect(Array.from(uniformsOf(f).uRings)).toEqual([s.innerRings, s.outerRings, s.directions])
+      applyWith(f, source(64, 64, res))
+      const u = uniformsOf(f)
+      const o = computeEdgeOffsets(m, l, res)
+      const tag = `m=${m} l=${l} res=${res}`
+      expect(u.uCounts[0], tag).toBe(o.inner.length)
+      expect(u.uCounts[1], tag).toBe(o.outer.length)
+      expect(pairs(u.uInner, o.inner.length), tag).toEqual(
+        o.inner.map((p) => [Math.fround(p[0]), Math.fround(p[1])])
+      )
+      expect(pairs(u.uOuter, o.outer.length), tag).toEqual(
+        o.outer.map((p) => [Math.fround(p[0]), Math.fround(p[1])])
+      )
     }
   })
 
-  it('仕様値: margin=6, line=4, res=2 → rings [2,2] で方向 12（換算後の余白 12px・線 8px）', () => {
+  it('余白と線を取り違えない（外側の半径は 余白+線、内側の最大半径は余白）', () => {
     const f = make()
-    f.setWidths(6, 4)
-    applyWith(f, { width: 64, height: 64, resolution: 2 })
-    expect(Array.from(uniformsOf(f).uRings)).toEqual([2, 2, 12])
+    f.setWidths(3, 1)
+    applyWith(f, source(10, 10, 1))
+    const u = uniformsOf(f)
+    const r = (a: Float32Array, i: number): number => Math.hypot(a[i * 2], a[i * 2 + 1])
+    for (let i = 0; i < u.uCounts[1]; i++) expect(r(u.uOuter, i)).toBeCloseTo(4, 5)
+    let maxInner = 0
+    for (let i = 0; i < u.uCounts[0]; i++) maxInner = Math.max(maxInner, r(u.uInner, i))
+    expect(maxInner).toBeCloseTo(3, 5)
   })
 
-  it('仕様値: 既定の最小幅 margin=2, line=1.5, res=1 → rings [1,1] で方向 9（線の幅を第 2 引数に渡す）', () => {
-    // computeEdgeSampling の第 2 引数は「線の幅」。余白+線の半径を渡すと outer が 2 段・方向 14 に膨らむ
+  // resolution=1 / 1.5 / 2 / 3 のどれでも、UV 上の変位を論理 px に直すと同じ＝DPR で二重にかからない
+  it.each([[1], [1.5], [2], [3]])(
+    'resolution=%s: UV 変位の論理 px が resolution に依存せず、padding がリングを囲む',
+    (res) => {
+      const margin = 6
+      const line = 4
+      const f = make()
+      f.setWidths(margin, line)
+      const logicalW = 80
+      const logicalH = 60
+      applyWith(f, source(logicalW, logicalH, res))
+      const u = uniformsOf(f)
+      let maxLogical = 0
+      let minOuterLogical = Infinity
+      let maxOuterLogical = 0
+      for (let i = 0; i < u.uCounts[1]; i++) {
+        // 実 px の変位 × uTexel = UV 変位。論理 px = UV 変位 × 論理幅/高さ
+        const lx = u.uOuter[i * 2] * u.uTexel[0] * logicalW
+        const ly = u.uOuter[i * 2 + 1] * u.uTexel[1] * logicalH
+        const d = Math.hypot(lx, ly)
+        minOuterLogical = Math.min(minOuterLogical, d)
+        maxOuterLogical = Math.max(maxOuterLogical, d)
+        maxLogical = Math.max(maxLogical, Math.abs(lx), Math.abs(ly))
+      }
+      expect(minOuterLogical).toBeCloseTo(margin + line, 4)
+      expect(maxOuterLogical).toBeCloseTo(margin + line, 4)
+      // 論理 px の padding が到達距離（余白+線）以上＝リングはフィルタ矩形の内側に収まる
+      expect(f.padding).toBeGreaterThanOrEqual(Math.ceil(margin + line))
+      expect(maxOuterLogical).toBeLessThanOrEqual(f.padding)
+      // 内側サンプルも同様に余白以内
+      for (let i = 0; i < u.uCounts[0]; i++) {
+        const lx = u.uInner[i * 2] * u.uTexel[0] * logicalW
+        const ly = u.uInner[i * 2 + 1] * u.uTexel[1] * logicalH
+        expect(Math.hypot(lx, ly)).toBeLessThanOrEqual(margin + 1e-4)
+      }
+    }
+  )
+
+  it('仕様値: margin=2, line=1.5, res=2 は 内側 7・外側 8 サンプル（res を落とす変異で変位が半分になる）', () => {
     const f = make()
     f.setWidths(2, 1.5)
-    applyWith(f, { width: 64, height: 64, resolution: 1 })
-    expect(Array.from(uniformsOf(f).uRings)).toEqual([1, 1, 9])
+    applyWith(f, source(64, 64, 2))
+    const u = uniformsOf(f)
+    expect([u.uCounts[0], u.uCounts[1]]).toEqual([7, 8])
+    // 外側の半径は (2+1.5)×2 = 7 実 px
+    expect(Math.hypot(u.uOuter[0], u.uOuter[1])).toBeCloseTo(7, 4)
   })
 
   it.each([[0], [undefined]])('source.resolution=%s のとき res=1 として扱う', (resolution) => {
     const f = make()
     f.setWidths(6, 4)
-    applyWith(f, { width: 64, height: 64, resolution })
-    expect(Array.from(uniformsOf(f).uRadii)).toEqual([6, 10])
+    applyWith(f, { width: 64, height: 64, pixelWidth: 64, pixelHeight: 64, resolution })
+    const o = computeEdgeOffsets(6, 4, 1)
+    expect(uniformsOf(f).uCounts[0]).toBe(o.inner.length)
+    expect(Math.hypot(uniformsOf(f).uOuter[0], uniformsOf(f).uOuter[1])).toBeCloseTo(10, 4)
+  })
+
+  it('幅が変わらない間は配列を作り直さず、setWidths / 解像度の変更で更新される', () => {
+    const f = make()
+    f.setWidths(6, 4)
+    applyWith(f, source(64, 64, 1))
+    const u = uniformsOf(f)
+    u.uInner[0] = 123 // 改ざんしても、同条件の apply では上書きされない（再計算しない）
+    applyWith(f, source(64, 64, 1))
+    expect(u.uInner[0]).toBe(123)
+    f.setWidths(3, 2) // 幅の変更で更新
+    applyWith(f, source(64, 64, 1))
+    expect(u.uCounts[0]).toBe(computeEdgeOffsets(3, 2, 1).inner.length)
+    expect(u.uInner[0]).not.toBe(123)
+    applyWith(f, source(64, 64, 2)) // 解像度の変更で更新
+    expect(Math.hypot(u.uOuter[0], u.uOuter[1])).toBeCloseTo(10, 4) // (3+2)×2
+  })
+
+  it('使わない末尾は 0 に戻る（幅を小さくしたとき古いサンプルが残らない）', () => {
+    const f = make()
+    f.setWidths(6, 4)
+    applyWith(f, source(64, 64, 1))
+    f.setWidths(1, 0)
+    applyWith(f, source(64, 64, 1))
+    const u = uniformsOf(f)
+    expect(u.uCounts[1]).toBe(0)
+    expect(Array.from(u.uOuter).every((v) => v === 0)).toBe(true)
+    const n = u.uCounts[0] * 2
+    expect(Array.from(u.uInner.subarray(n)).every((v) => v === 0)).toBe(true)
   })
 
   it('applyFilter を this / input / output / clearMode で 1 回呼ぶ', () => {
     const f = make(2, 1)
     const applyFilter = vi.fn()
-    const input = { source: { width: 8, height: 8, resolution: 1 } } as unknown as Texture
+    const input = { source: source(8, 8, 1) } as unknown as Texture
     const output = {} as RenderSurface
     f.apply({ applyFilter } as unknown as FilterSystem, input, output, false)
     expect(applyFilter).toHaveBeenCalledTimes(1)
     expect(applyFilter).toHaveBeenCalledWith(f, input, output, false)
   })
+})
 
-  it('apply を解像度違いで呼び直すと uniform が追従する（古い値が残らない）', () => {
-    const f = make()
-    f.setWidths(6, 4)
-    applyWith(f, { width: 100, height: 100, resolution: 3 })
-    expect(uniformsOf(f).uRadii[0]).toBe(18)
-    applyWith(f, { width: 50, height: 40, resolution: 1 })
-    expect(Array.from(uniformsOf(f).uRadii)).toEqual([6, 10])
-    expect(uniformsOf(f).uTexel[0]).toBeCloseTo(1 / 50, 9)
-    expect(uniformsOf(f).uTexel[1]).toBeCloseTo(1 / 40, 9)
+describe('AcrylicEdgeFilter: GLSL 整合', () => {
+  it('配列 uniform のサイズと MAX_* 定数が spriteStyle の上限と一致する', () => {
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('uniform vec2 uInner[40];')
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('uniform vec2 uOuter[24];')
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('const int MAX_INNER = 40;')
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('const int MAX_OUTER = 24;')
+  })
+
+  it('uniform 配列の Float32Array 長は 2×サイズ', () => {
+    const u = uniformsOf(make())
+    expect(u.uInner.length).toBe(80)
+    expect(u.uOuter.length).toBe(48)
+  })
+
+  it('合成式がシェーダに残っている（ring = clamp(outerMax - innerMax)、本体を上書きしない (1 - src.a)）', () => {
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('clamp(outerMax - innerMax, 0.0, 1.0)')
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('uAlpha * ring * (1.0 - src.a)')
+    expect(ACRYLIC_EDGE_FRAGMENT).toContain('outerMax = max(outerMax, innerMax);')
   })
 })
