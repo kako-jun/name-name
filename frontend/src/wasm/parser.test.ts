@@ -2109,3 +2109,59 @@ describe('parseMarkdown / emitMarkdown: [ジャンプ: ID] (#725)', () => {
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+describe('parseMarkdown + normalizeDocument: sprite_style が normalize を生き残る (#737)', () => {
+  // battle_layout (#736) と同じ流儀。normalizeDocument の列挙に書き忘れると Rust 側は正しく parse
+  // しているのに wasm 経由で undefined になり、戦闘スプライトの表示スタイル指定が runtime に届かない。
+  function docWith(...lines: string[]): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('sprite_style: acrylic → doc.sprite_style === "acrylic"', async () => {
+    const doc = await parseMarkdown(docWith('sprite_style: acrylic'))
+    expect(doc.sprite_style).toBe('acrylic')
+  })
+
+  it('未指定 → null（undefined ではない）', async () => {
+    const doc = await parseMarkdown(docWith())
+    expect(doc.sprite_style).toBeNull()
+  })
+
+  it('空文字指定 → null に倒れる', async () => {
+    const doc = await parseMarkdown(docWith('sprite_style: ""'))
+    expect(doc.sprite_style).toBeNull()
+  })
+
+  it('3 つの戦闘フィールドを同時指定しても値が混ざらない', async () => {
+    const doc = await parseMarkdown(
+      docWith('battle_layout: side', 'battle_background: bg/cave.webp', 'sprite_style: acrylic')
+    )
+    expect(doc.battle_layout).toBe('side')
+    expect(doc.battle_background).toBe('bg/cave.webp')
+    expect(doc.sprite_style).toBe('acrylic')
+  })
+
+  it('複数章の doc でも doc 直下に保持され、emit → 再 parse で往復する（実 wasm）', async () => {
+    const doc = await parseMarkdown(docWith('sprite_style: acrylic'))
+    const doc2 = { ...doc, chapters: [doc.chapters[0], { ...doc.chapters[0], number: 2 }] }
+    expect(doc2.sprite_style).toBe('acrylic')
+    const emitted = await emitMarkdown(doc2)
+    const reparsed = await parseMarkdown(emitted)
+    // 章ごとの frontmatter に同じ値が出力され、再 parse（先頭章）でも保持される
+    expect(emitted.match(/^sprite_style: "acrylic"$/gm)).toHaveLength(2)
+    expect(reparsed.sprite_style).toBe('acrylic')
+  })
+})
