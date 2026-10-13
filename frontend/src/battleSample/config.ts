@@ -14,6 +14,8 @@ import type { WindowStyle } from '../game/windowStyle'
 import type { BackgroundTone } from '../game/backgroundTone'
 import type { BackgroundDof } from '../game/depthOfField'
 import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
+import type { AtbMode } from '../game/battleEngine'
+import type { BattleAtbConfig } from '../game/battleAtb'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -56,6 +58,10 @@ export interface BattleSampleConfig {
   backgroundDof: BackgroundDof
   /** 戦闘ログの 1 文字ずつ表示 (#755)。既定 off */
   logTypewriter: BattleLogTypewriterMode
+  /** ATB 方式 (#205)。既定 off（従来ターン制） */
+  atb: 'on' | 'off'
+  /** ATB の進行方式 (#205)。既定 wait（コマンド選択中は時間停止） */
+  atbMode: AtbMode
   /** 絶対 URL。なしは null */
   background: string | null
   /** 奥行きの地平線の高さ（画面比 0〜1）(#747)。奥行きオン時に使う。既定 DEPTH_DEFAULT_HORIZON */
@@ -76,6 +82,10 @@ export interface BattleSampleView {
   backgroundTone: BackgroundTone
   backgroundDof: BackgroundDof
   logTypewriter: BattleLogTypewriterMode
+  /** ATB 方式 (#205)。既定 off（従来ターン制） */
+  atb: 'on' | 'off'
+  /** ATB の進行方式 (#205)。atb が on のときだけ効く */
+  atbMode: AtbMode
   backgroundOn: boolean
   /** 奥行き (#747)。on のとき config の horizon / perspective で行ごとの縮尺をつける。既定 off（平面） */
   depth: 'on' | 'off'
@@ -133,6 +143,8 @@ export function defaultConfig(): BattleSampleConfig {
     backgroundTone: 'on',
     backgroundDof: 'off',
     logTypewriter: 'off',
+    atb: 'off',
+    atbMode: 'wait',
     background: null,
     horizon: DEPTH_DEFAULT_HORIZON,
     perspective: SAMPLE_DEFAULT_PERSPECTIVE,
@@ -294,6 +306,23 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     logTypewriter = raw.logTypewriter
   }
+  let atb = def.atb
+  if (raw.atb !== undefined) {
+    if (raw.atb !== 'on' && raw.atb !== 'off') {
+      return { ok: false, error: `atb は "on" か "off": ${JSON.stringify(raw.atb)}` }
+    }
+    atb = raw.atb
+  }
+  let atbMode = def.atbMode
+  if (raw.atbMode !== undefined) {
+    if (raw.atbMode !== 'wait' && raw.atbMode !== 'active') {
+      return {
+        ok: false,
+        error: `atbMode は "wait" か "active": ${JSON.stringify(raw.atbMode)}`,
+      }
+    }
+    atbMode = raw.atbMode
+  }
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -343,6 +372,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       backgroundTone,
       backgroundDof,
       logTypewriter,
+      atb,
+      atbMode,
       background,
       horizon: horizon.value,
       perspective: perspective.value,
@@ -376,6 +407,8 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     backgroundTone: config.backgroundTone,
     backgroundDof: config.backgroundDof,
     logTypewriter: config.logTypewriter,
+    atb: config.atb,
+    atbMode: config.atbMode,
     backgroundOn: config.background !== null,
     depth: 'off',
     foregroundOn: config.foreground !== null,
@@ -440,6 +473,8 @@ export function buildBattleSetup(
     depth: BattleDepth | null
     foreground?: string
   }
+  /** BattleEngine に渡す ATB 設定 (#205)。undefined = 従来ターン制 */
+  atb?: BattleAtbConfig
   width: number
   height: number
 } {
@@ -456,6 +491,7 @@ export function buildBattleSetup(
   const { width, height } = resolveSize(view.sizeId)
   const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
   return {
+    ...(view.atb === 'on' ? { atb: { mode: view.atbMode } } : {}),
     // front 配置は本編と同じく隊列を使わない（RaycastRenderer.partyDefToBattleEntity と同じ）
     party: applyFormation(party, view.layout === 'front' ? 'front' : view.formation),
     enemies: fill(
@@ -489,6 +525,8 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.backgroundTone === b.backgroundTone &&
     a.backgroundDof === b.backgroundDof &&
     a.logTypewriter === b.logTypewriter &&
+    a.atb === b.atb &&
+    a.atbMode === b.atbMode &&
     a.backgroundOn === b.backgroundOn &&
     a.depth === b.depth &&
     a.foregroundOn === b.foregroundOn &&
@@ -533,6 +571,7 @@ export function describeView(
     `backgroundTone=${view.backgroundTone}`,
     `backgroundDof=${view.backgroundDof}`,
     `logTypewriter=${view.logTypewriter}`,
+    ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),
     `background=${view.backgroundOn ? 'on' : 'off'}`,
     `depth=${view.depth}`,
     `foreground=${view.foregroundOn ? 'on' : 'off'}`,

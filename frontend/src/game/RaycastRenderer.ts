@@ -62,6 +62,7 @@ import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
+import type { BattleAtbConfig } from './battleAtb'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -147,6 +148,8 @@ export class RaycastRenderer {
   /** 戦闘画面の奥行き / 前景レイヤー (#747)。frontmatter `battle_horizon` `battle_perspective` / `battle_foreground` 由来 */
   private battleDepth: BattleDepth | null = null
   private battleForeground: string | undefined = undefined
+  /** 戦闘の ATB 方式 (#205)。frontmatter `battle_atb` / `battle_atb_mode` 由来。undefined = 従来ターン制 */
+  private battleAtb: BattleAtbConfig | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -394,6 +397,7 @@ export class RaycastRenderer {
     this.battleLogTypewriter = gameData.battleLogTypewriter ?? 'off'
     this.battleDepth = gameData.battleDepth ?? null
     this.battleForeground = gameData.battleForeground
+    this.battleAtb = gameData.battleAtb
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -810,12 +814,12 @@ export class RaycastRenderer {
     if (enemies.length === 0) return
     // front は従来どおり先頭 1 人だけをエンジンに渡す（全員を渡すと、画面に出ない仲間が
     // 敵の標的・敗北判定に関与して挙動が変わるため）。side は全員を渡して全員を描く (#736)。
-    // 行動するのは引き続き先頭の生存者のみ（全員行動は別 Issue #205）。
+    // 従来ターン制では行動するのは先頭の生存者のみ。ATB (#205) は side なら全員がゲージ満タンの順に行動する。
     const party =
       this.battleLayout === 'side'
         ? this.buildPartyBattleEntities()
         : [this.buildHeroBattleEntity()]
-    const engine = new BattleEngine(party, enemies)
+    const engine = new BattleEngine(party, enemies, this.battleAtb ? { atb: this.battleAtb } : {})
     this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
       layout: this.battleLayout,
       background: this.battleBackground,
@@ -1117,6 +1121,9 @@ export class RaycastRenderer {
     const now = performance.now()
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
+
+    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない
+    this.battleScreen?.tick(dt * 1000)
 
     // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
     // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。

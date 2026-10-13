@@ -41,6 +41,8 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     backgroundTone: 'on',
     backgroundDof: 'off',
     logTypewriter: 'off',
+    atb: 'off',
+    atbMode: 'wait',
     backgroundOn: false,
     depth: 'off',
     foregroundOn: false,
@@ -1284,5 +1286,29 @@ describe('viewsEqual / initialView: 奥行き・前景・隊列 (#747)', () => {
       initialView({ ...defaultConfig(), foreground: 'https://example.com/f.png' }).foregroundOn
     ).toBe(true)
     expect(initialView(defaultConfig()).foregroundOn).toBe(false)
+  })
+})
+
+describe('ATB (#205)', () => {
+  it('設定 JSON の atb / atbMode を検証して取り込む（既定は off / wait）', () => {
+    const def = parseConfig({}, BASE)
+    expect(def.ok && [def.value.atb, def.value.atbMode]).toEqual(['off', 'wait'])
+    const on = parseConfig({ atb: 'on', atbMode: 'active' }, BASE)
+    expect(on.ok && [on.value.atb, on.value.atbMode]).toEqual(['on', 'active'])
+    expect(parseConfig({ atb: 'yes' }, BASE).ok).toBe(false)
+    expect(parseConfig({ atbMode: 'x' }, BASE).ok).toBe(false)
+  })
+
+  it('buildBattleSetup は atb が on のときだけ atb 設定を返す', () => {
+    const cfg = defaultConfig()
+    expect(buildBattleSetup(cfg, view()).atb).toBeUndefined()
+    expect(buildBattleSetup(cfg, view({ atb: 'on', atbMode: 'active' })).atb).toEqual({
+      mode: 'active',
+    })
+  })
+
+  it('atb / atbMode の違いはブリンク比較の別状態になる', () => {
+    expect(viewsEqual(view(), view({ atb: 'on' }))).toBe(false)
+    expect(viewsEqual(view(), view({ atbMode: 'active' }))).toBe(false)
   })
 })

@@ -51,6 +51,8 @@ pub fn parse(input: &str) -> Document {
     let mut battle_horizon: Option<String> = None;
     let mut battle_perspective: Option<String> = None;
     let mut battle_foreground: Option<String> = None;
+    let mut battle_atb: Option<String> = None;
+    let mut battle_atb_mode: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -283,6 +285,18 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_perspective = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_atb_mode:") {
+                // RPG 戦闘の ATB 進行方式 (#205)。wait / active。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_atb_mode = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_atb:") {
+                // RPG 戦闘の ATB 方式の有効化 (#205)。on / off。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_atb = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_foreground:") {
                 // RPG 戦闘画面の前景レイヤー画像パス (#747)。
@@ -1123,6 +1137,8 @@ pub fn parse(input: &str) -> Document {
         battle_horizon,
         battle_perspective,
         battle_foreground,
+        battle_atb,
+        battle_atb_mode,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

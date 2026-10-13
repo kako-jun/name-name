@@ -210,6 +210,12 @@ export interface RPGProject {
   battleDepth?: { horizon: number; perspective: number }
   /** 戦闘画面の前景レイヤー画像パス (#747)。frontmatter `battle_foreground:` 由来。未指定は無し */
   battleForeground?: string
+  /**
+   * 戦闘の ATB 方式 (#205)。frontmatter `battle_atb: on` のときだけ値を持つ（`mode` は `battle_atb_mode:` 由来、既定 `'wait'`）。
+   * 未指定は undefined＝従来ターン制。
+   */
+  // 型は game/battleAtb.ts の BattleAtbConfig と同形（types 層は game 層を import しない）
+  battleAtb?: { mode: 'wait' | 'active' }
 }
 
 /**
