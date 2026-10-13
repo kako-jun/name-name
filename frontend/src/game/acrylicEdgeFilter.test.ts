@@ -226,6 +226,20 @@ describe('AcrylicEdgeFilter: apply（DPR 換算）', () => {
     expect(Math.hypot(u.uOuter[0], u.uOuter[1])).toBeCloseTo(10, 4) // (3+2)×2
   })
 
+  it.each([
+    [6, 4, 6, 2],
+    [6, 4, 3, 4],
+  ])('余白だけ・線だけが変わったときも変位列を作り直す（%s,%s → %s,%s）', (m0, l0, m1, l1) => {
+    const f = make()
+    f.setWidths(m0, l0)
+    applyWith(f, source(64, 64, 1))
+    f.setWidths(m1, l1)
+    applyWith(f, source(64, 64, 1))
+    const o = computeEdgeOffsets(m1, l1, 1)
+    const u = uniformsOf(f)
+    expect([u.uCounts[0], u.uCounts[1]]).toEqual([o.inner.length, o.outer.length])
+  })
+
   it('使わない末尾は 0 に戻る（幅を小さくしたとき古いサンプルが残らない）', () => {
     const f = make()
     f.setWidths(6, 4)
@@ -268,5 +282,12 @@ describe('AcrylicEdgeFilter: GLSL 整合', () => {
     expect(ACRYLIC_EDGE_FRAGMENT).toContain('clamp(outerMax - innerMax, 0.0, 1.0)')
     expect(ACRYLIC_EDGE_FRAGMENT).toContain('uAlpha * ring * (1.0 - src.a)')
     expect(ACRYLIC_EDGE_FRAGMENT).toContain('outerMax = max(outerMax, innerMax);')
+    // 内側ループは uCounts.x、外側ループは uCounts.y で打ち切る（取り違えない）
+    expect(ACRYLIC_EDGE_FRAGMENT).toMatch(
+      /uCounts\.x\) break;\s+innerMax = max\(innerMax, alphaAt\(uInner\[i\]\)\)/
+    )
+    expect(ACRYLIC_EDGE_FRAGMENT).toMatch(
+      /uCounts\.y\) break;\s+outerMax = max\(outerMax, alphaAt\(uOuter\[i\]\)\)/
+    )
   })
 })
