@@ -123,13 +123,13 @@ export function computeDofLevels(
 /** マスク領域内の縦位置 t（0 = 上端、1 = 下端）でのアルファ。ramp までは 0 → 1 の線形、以降は 1 */
 export function dofAlphaAt(t: number, rampFraction: number): number {
   if (Number.isNaN(t)) return 0
-  const r = Math.min(1, Math.max(1e-3, rampFraction))
+  const r = Number.isNaN(rampFraction) ? 1 : Math.min(1, Math.max(1e-3, rampFraction))
   return clamp01(t / r)
 }
 
 /** canvas グラデーションの色止め（offset 0〜1、alpha 0〜1）。`dofAlphaAt` と一致する */
 export function dofMaskStops(rampFraction: number): { offset: number; alpha: number }[] {
-  const r = Math.min(1, Math.max(1e-3, rampFraction))
+  const r = Number.isNaN(rampFraction) ? 1 : Math.min(1, Math.max(1e-3, rampFraction))
   return r >= 1
     ? [
         { offset: 0, alpha: 0 },
