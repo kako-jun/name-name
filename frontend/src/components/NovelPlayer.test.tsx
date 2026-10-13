@@ -747,6 +747,18 @@ describe('NovelPlayer events/jumpSceneIndex 同期 effect の分離 (#671 M1)', 
     expect(r.setEvents).not.toHaveBeenCalled()
   })
 
+  it('H3: jumpSceneIndex が空配列になっても反映する（古い索引を残さない #734）', async () => {
+    const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.setJumpSceneIndex.mockClear()
+
+    rerender(<NovelPlayer events={fixedEvents} jumpSceneIndex={[]} />)
+    await flushAsync()
+
+    expect(r.setJumpSceneIndex).toHaveBeenCalledWith([])
+  })
+
   it('H2: events 自体が変わった場合は従来どおり setEvents が呼ばれる（分離後も正当な用途は維持する対照ケース）', async () => {
     const otherEvents: Event[] = []
     const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
