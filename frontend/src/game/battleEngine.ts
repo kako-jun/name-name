@@ -35,6 +35,11 @@ export interface BattleState {
   phase: BattlePhase
   /** 戦闘ログ（直近 30 行を保持） */
   log: string[]
+  /**
+   * 戦闘開始からの累計ログ行数。`appendLog` のたびに 1 増え、上限（LOG_MAX）で先頭を捨てても減らない。
+   * `log` は絶対インデックスを失うので、「前回から何行積まれたか」は前回の値との差で数える (#755)
+   */
+  logTotal: number
   /** 入手経験値（victory 到達時のみ集計） */
   earnedExp: number
   /** 入手ゴールド（victory 到達時のみ集計） */
@@ -58,6 +63,7 @@ export class BattleEngine {
       enemies,
       phase: 'party-input',
       log: [],
+      logTotal: 0,
       earnedExp: 0,
       earnedGold: 0,
     }
@@ -256,6 +262,7 @@ export class BattleEngine {
 
   private appendLog(line: string): void {
     this.state.log.push(line)
+    this.state.logTotal++
     if (this.state.log.length > LOG_MAX) this.state.log.shift()
   }
 

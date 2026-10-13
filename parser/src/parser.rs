@@ -47,6 +47,7 @@ pub fn parse(input: &str) -> Document {
     let mut window_style: Option<String> = None;
     let mut battle_background_tone: Option<String> = None;
     let mut battle_background_dof: Option<String> = None;
+    let mut battle_log_typewriter: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -260,6 +261,13 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_background_dof = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_log_typewriter:") {
+                // RPG 戦闘ログの 1 文字ずつ表示 (#755)。`on` / `off` の2択想定。値は parser では
+                // バリデーションせず生文字列で透過し、runtime 側で未知値・空文字は off にフォールバックする。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_log_typewriter = Some(v);
                 }
             }
             pos += 1;
@@ -1090,6 +1098,7 @@ pub fn parse(input: &str) -> Document {
         window_style,
         battle_background_tone,
         battle_background_dof,
+        battle_log_typewriter,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

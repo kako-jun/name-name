@@ -60,6 +60,7 @@ import type { SpriteStyle } from './spriteStyle'
 import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
+import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -140,6 +141,8 @@ export class RaycastRenderer {
   private battleBackgroundTone: BackgroundTone = 'on'
   /** 戦闘背景の被写界深度風ぼかし (#753)。frontmatter `battle_background_dof` 由来 */
   private battleBackgroundDof: BackgroundDof = 'off'
+  /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter` 由来 */
+  private battleLogTypewriter: BattleLogTypewriterMode = 'off'
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -384,6 +387,7 @@ export class RaycastRenderer {
     this.windowStyle = gameData.windowStyle ?? 'dark'
     this.battleBackgroundTone = gameData.battleBackgroundTone ?? 'on'
     this.battleBackgroundDof = gameData.battleBackgroundDof ?? 'off'
+    this.battleLogTypewriter = gameData.battleLogTypewriter ?? 'off'
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -813,6 +817,7 @@ export class RaycastRenderer {
       windowStyle: this.windowStyle,
       backgroundTone: this.battleBackgroundTone,
       backgroundDof: this.battleBackgroundDof,
+      logTypewriter: this.battleLogTypewriter,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)

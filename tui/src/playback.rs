@@ -2320,6 +2320,7 @@ mod tests {
             window_style: None,
             battle_background_tone: None,
             battle_background_dof: None,
+            battle_log_typewriter: None,
             chapters,
         }
     }

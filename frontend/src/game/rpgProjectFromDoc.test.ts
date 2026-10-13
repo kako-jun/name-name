@@ -1634,3 +1634,59 @@ describe('rpgProjectFromDoc: battle_background_tone (#753)', () => {
     expect(q.battleBackgroundTone).toBe('on')
   })
 })
+
+describe('rpgProjectFromDoc: battle_log_typewriter (#755)', () => {
+  const withTw = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it("'on' → 'on'。未指定・null・空・未知値は 'off'", () => {
+    expect(rpgProjectFromDoc(withTw({ battle_log_typewriter: 'on' }))!.battleLogTypewriter).toBe(
+      'on'
+    )
+    expect(rpgProjectFromDoc(makeDoc())!.battleLogTypewriter).toBe('off')
+    for (const v of [null, '', 'foo']) {
+      expect(rpgProjectFromDoc(withTw({ battle_log_typewriter: v }))!.battleLogTypewriter).toBe(
+        'off'
+      )
+    }
+  })
+})
+
+describe('rpgProjectFromDoc: battle_log_typewriter の追加観点 (#755 QA)', () => {
+  const tw = (v: string | null | undefined): string | undefined =>
+    rpgProjectFromDoc({ ...makeDoc(), battle_log_typewriter: v })!.battleLogTypewriter
+
+  it("'off' は 'off'", () => {
+    expect(tw('off')).toBe('off')
+  })
+
+  it('undefined（キー自体なし）は off（既定）', () => {
+    expect(tw(undefined)).toBe('off')
+  })
+
+  it("大文字・前後空白つきの 'ON' / ' on ' も 'on'", () => {
+    expect(tw('ON')).toBe('on')
+    expect(tw(' on ')).toBe('on')
+  })
+
+  it("'true' や '1' など on に似た未知値は off", () => {
+    expect(tw('true')).toBe('off')
+    expect(tw('1')).toBe('off')
+    expect(tw('yes')).toBe('off')
+  })
+
+  it('他の戦闘フィールドと独立に解決される', () => {
+    const p = rpgProjectFromDoc({
+      ...makeDoc(),
+      battle_background_dof: 'on',
+      battle_background_tone: 'off',
+      window_style: 'ff-blue',
+      battle_log_typewriter: 'on',
+    })!
+    expect(p.battleLogTypewriter).toBe('on')
+    expect(p.battleBackgroundDof).toBe('on')
+    expect(p.battleBackgroundTone).toBe('off')
+    expect(p.windowStyle).toBe('ff-blue')
+    const q = rpgProjectFromDoc({ ...makeDoc(), battle_background_dof: 'on' })!
+    expect(q.battleLogTypewriter).toBe('off')
+  })
+})

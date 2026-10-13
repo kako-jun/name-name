@@ -200,6 +200,8 @@ export interface RPGProject {
   battleBackgroundTone?: 'on' | 'off'
   /** 戦闘背景の被写界深度風の手前ぼかし (#753)。frontmatter `battle_background_dof:` 由来。未指定は `'off'` */
   battleBackgroundDof?: 'on' | 'off'
+  /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter:` 由来。未指定は `'off'` */
+  battleLogTypewriter?: 'on' | 'off'
 }
 
 /**

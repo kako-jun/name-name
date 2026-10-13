@@ -1583,6 +1583,12 @@ pub struct Document {
     /// frontmatter `battle_background_dof:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_background_dof: Option<String>,
+    /// RPG 戦闘ログ（メッセージ）の 1 文字ずつ表示 (#755)。`"on"` / `"off"`（既定）の2択。
+    /// 値は parser でバリデーションせず生文字列で透過する（`battle_background_dof` と同じ流儀）。未知値・空文字は
+    /// None 扱いとし、runtime 側で `"off"` にフォールバックする。GUI 専用（TUI は読まない）。
+    /// frontmatter `battle_log_typewriter:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_log_typewriter: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 
