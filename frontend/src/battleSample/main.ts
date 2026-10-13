@@ -159,7 +159,11 @@ async function main(): Promise<void> {
     const s = document.createElement('select')
     s.id = id
     for (const o of options) s.add(new Option(labels[o] ?? o, o))
-    s.addEventListener('change', () => on(s.value as T))
+    s.addEventListener('change', () => {
+      on(s.value as T)
+      // select にフォーカスが残ると cross の矢印キーがフォーム操作として扱われ効かないので、変更後は全 select で外す
+      s.blur()
+    })
     l.appendChild(s)
     tb.appendChild(l)
     return s
@@ -171,11 +175,7 @@ async function main(): Promise<void> {
     'commandLayout',
     'tb-command-layout',
     ['grid', 'cross'] as const,
-    (v) => {
-      // select にフォーカスが残ると cross の矢印キーがフォーム操作として扱われ効かないので外す
-      ;(document.activeElement as HTMLElement | null)?.blur?.()
-      change({ commandLayout: v })
-    },
+    (v) => change({ commandLayout: v }),
     { grid: 'grid（2x2）', cross: 'cross（十字・矢印キー）' }
   )
   const styleSel = select('spriteStyle', 'tb-style', ['none', 'acrylic'] as const, (v) =>
