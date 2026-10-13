@@ -46,7 +46,11 @@ export type BattleHitKind = 'damage' | 'heal' | 'miss'
 export interface BattleHit {
   target: BattleActorRef
   kind: BattleHitKind
-  /** 変化量の絶対値（miss は 0） */
+  /**
+   * 計算上のダメージ・回復量（miss は 0）。**HP が実際に変わった量ではない**: HP 3 の敵に 50 のダメージならオーバーキルでも 50、
+   * HP が満タン近くへの回復も上限で切らない量。FF 式のダメージ数字はこれを出す。実際の変化は hpBefore - hpAfter。
+   * builtin など計算量を通知しない効果は HP の前後差で代用する。
+   */
   amount: number
   hpBefore: number
   hpAfter: number
@@ -181,7 +185,7 @@ export class BattleEngine {
     const dmg = this.computeAttackDamage(hero, target)
     const hpBefore = target.hp
     target.hp = Math.max(0, target.hp - dmg)
-    this.recordAttack(hero, target, hpBefore)
+    this.recordAttack(hero, target, hpBefore, dmg)
     this.appendLog(`${hero.name} の こうげき！`)
     this.appendLog(`${target.name} に ${dmg} の ダメージ！`)
     if (target.hp === 0) {
@@ -274,7 +278,13 @@ export class BattleEngine {
     this.appendLog(`${caster.name} は ${spell.name} を となえた！`)
 
     const targets = this.resolveSpellTargets(spell, targetId)
-    const ctx: EffectContext = { caster, targets, rng: this.rng }
+    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const ctx: EffectContext = {
+      caster,
+      targets,
+      rng: this.rng,
+      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+    }
     const hpSnapshot = this.snapshotHp()
     const lines = spell.builtin
       ? invokeBuiltinSpell(spell.builtin, ctx)
@@ -282,7 +292,7 @@ export class BattleEngine {
         ? this.evalEffectDsl(spell.effect, ctx)
         : ['(呪文に効果定義なし)']
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('spell', caster, spell.name, targets, hpSnapshot)
+    this.recordEffect('spell', caster, spell.name, targets, hpSnapshot, amounts)
 
     this.advanceAfterPartyAction()
   }
@@ -295,7 +305,13 @@ export class BattleEngine {
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
 
     const targets = this.resolveItemTargets(item, targetId)
-    const ctx: EffectContext = { caster: user, targets, rng: this.rng }
+    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const ctx: EffectContext = {
+      caster: user,
+      targets,
+      rng: this.rng,
+      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+    }
     const hpSnapshot = this.snapshotHp()
     const lines = item.builtin
       ? invokeBuiltinItem(item.builtin, ctx)
@@ -303,7 +319,7 @@ export class BattleEngine {
         ? this.evalEffectDsl(item.effect, ctx)
         : ['(アイテムに効果定義なし)']
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('item', user, item.name, targets, hpSnapshot)
+    this.recordEffect('item', user, item.name, targets, hpSnapshot, amounts)
 
     this.advanceAfterPartyAction()
   }
@@ -497,7 +513,7 @@ export class BattleEngine {
     const dmg = this.computeAttackDamage(enemy, target)
     const hpBefore = target.hp
     target.hp = Math.max(0, target.hp - dmg)
-    this.recordAttack(enemy, target, hpBefore)
+    this.recordAttack(enemy, target, hpBefore, dmg)
     this.appendLog(`${enemy.name} の こうげき！`)
     this.appendLog(`${target.name} は ${dmg} の ダメージを うけた！`)
     if (target.hp === 0) {
@@ -532,7 +548,7 @@ export class BattleEngine {
       const dmg = this.computeAttackDamage(enemy, hero)
       const hpBefore = hero.hp
       hero.hp = Math.max(0, hero.hp - dmg)
-      this.recordAttack(enemy, hero, hpBefore)
+      this.recordAttack(enemy, hero, hpBefore, dmg)
       this.appendLog(`${enemy.name} の こうげき！`)
       this.appendLog(`${hero.name} は ${dmg} の ダメージを うけた！`)
       if (hero.hp === 0) {
@@ -604,8 +620,13 @@ export class BattleEngine {
     return m
   }
 
-  /** 通常攻撃 1 回を記録する (#745)。HP は呼び出し側が減らした後 */
-  private recordAttack(actor: BattleEntity, target: BattleEntity, hpBefore: number): void {
+  /** 通常攻撃 1 回を記録する (#745)。`damage` は計算上のダメージ（HP が実際に減った量ではない。オーバーキルでもそのまま） */
+  private recordAttack(
+    actor: BattleEntity,
+    target: BattleEntity,
+    hpBefore: number,
+    damage: number
+  ): void {
     const actorRef = this.refOf(actor)
     const targetRef = this.refOf(target)
     if (!actorRef || !targetRef) return
@@ -616,7 +637,7 @@ export class BattleEngine {
         {
           target: targetRef,
           kind: 'damage',
-          amount: hpBefore - target.hp,
+          amount: damage,
           hpBefore,
           hpAfter: target.hp,
         },
@@ -633,7 +654,8 @@ export class BattleEngine {
     actor: BattleEntity,
     label: string,
     targets: BattleEntity[],
-    before: Map<BattleEntity, number>
+    before: Map<BattleEntity, number>,
+    amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
@@ -642,7 +664,27 @@ export class BattleEngine {
       const hpBefore = before.get(e) ?? e.hp
       const ref = this.refOf(e)
       if (!ref) continue
-      if (e.hp < hpBefore) {
+      // 計算上の量（オーバーキル・回復の上限切りを含む）が通知されていればそれを数字にする。無ければ HP の前後差
+      const computed = amounts.get(e)
+      if (computed && e.hp !== hpBefore) {
+        const k = e.hp < hpBefore ? 'damage' : 'heal'
+        hits.push({
+          target: ref,
+          kind: k,
+          amount: computed.kind === k ? computed.amount : Math.abs(e.hp - hpBefore),
+          hpBefore,
+          hpAfter: e.hp,
+        })
+      } else if (computed?.kind === 'heal' && computed.amount > 0 && targets.includes(e)) {
+        // HP が変わらなかったが量はある（満タンへの回復）。数字は計算上の量
+        hits.push({
+          target: ref,
+          kind: 'heal',
+          amount: computed.amount,
+          hpBefore,
+          hpAfter: e.hp,
+        })
+      } else if (e.hp < hpBefore) {
         hits.push({ target: ref, kind: 'damage', amount: hpBefore - e.hp, hpBefore, hpAfter: e.hp })
       } else if (e.hp > hpBefore) {
         hits.push({ target: ref, kind: 'heal', amount: e.hp - hpBefore, hpBefore, hpAfter: e.hp })

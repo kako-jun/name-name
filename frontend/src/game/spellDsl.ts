@@ -183,6 +183,12 @@ export interface EffectContext {
   caster: BattleEntity
   targets: BattleEntity[]
   rng: () => number
+  /**
+   * 計算上のダメージ・回復量の通知 (#745)。FF 式のダメージ数字は、HP が実際に減った・増えた量ではなく
+   * 計算した量（オーバーキル・回復の上限切りを含む）を出すので、効果の評価側が 1 対象ごとに知らせる。
+   * 通知しない効果（builtin など）は呼び出し側が HP の前後差で代用する。
+   */
+  onAmount?: (target: BattleEntity, kind: 'damage' | 'heal', amount: number) => void
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
@@ -250,6 +256,8 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
         const before = t.hp
         t.hp = Math.min(t.maxHp, t.hp + amount)
         const healed = t.hp - before
+        // 計算上の回復量（上限で切らない）。完全回復は回復した分
+        ctx.onAmount?.(t, 'heal', Number.isFinite(amount) ? amount : healed)
         log.push(`${t.name} は ${healed} 回復した！`)
       }
       return log
@@ -271,6 +279,7 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
             : 1.0
         const dealt = effect.kind === 'damage_full' ? t.hp : Math.floor(base * resist)
         t.hp = Math.max(0, t.hp - dealt)
+        ctx.onAmount?.(t, 'damage', dealt)
         log.push(`${t.name} に ${dealt} のダメージ！`)
         if (t.hp === 0) log.push(`${t.name} は たおれた！`)
       }

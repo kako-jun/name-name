@@ -76,14 +76,40 @@ describe('行動種別 x 結果', () => {
     ])
   })
 
-  it('呪文が敵を倒したとき hpAfter は 0、amount は実際に減った量（オーバーキルを含めない）', () => {
+  it('呪文が敵を倒したとき hpAfter は 0、amount は計算上のダメージ（オーバーキルでも 50）', () => {
     const e = new BattleEngine([ent({ id: 'hero' })], [ent({ hp: 3, maxHp: 3 })], { rng })
     e.selectSpell({ name: 'ファイア', mp: 1, target: '敵単体', effect: 'damage 50..50' })
     const hit = e.getState().events[0].hits[0]
     expect(hit.kind).toBe('damage')
     expect(hit.hpAfter).toBe(0)
-    expect(hit.amount).toBe(hit.hpBefore - hit.hpAfter)
-    expect(hit.amount).toBe(3)
+    expect(hit.hpBefore - hit.hpAfter).toBe(3)
+    expect(hit.amount).toBe(50)
+  })
+
+  it('通常攻撃のオーバーキル: amount はログと同じ計算上のダメージ', () => {
+    const e = new BattleEngine([ent({ id: 'hero', atk: 50 })], [ent({ hp: 3, maxHp: 3, def: 0 })], {
+      rng: () => 0,
+    })
+    e.selectAttack()
+    const hit = e.getState().events[0].hits[0]
+    expect(hit.hpAfter).toBe(0)
+    expect(hit.hpBefore - hit.hpAfter).toBe(3)
+    expect(hit.amount).toBe(50)
+    expect(e.getState().log).toContain(
+      'ENT に 50 の ダメージ！'.replace('ENT', e.getState().enemies[0].name)
+    )
+  })
+
+  it('回復は計算上の回復量（上限で切らない）。満タンへの回復も数字は出る', () => {
+    const e = new BattleEngine([ent({ id: 'hero', hp: 48, maxHp: 50 })], [ent()], { rng })
+    e.selectSpell({ name: 'ケア', mp: 1, target: '味方単体', effect: 'heal 20..20' })
+    const hit = e.getState().events[0].hits[0]
+    expect(hit.kind).toBe('heal')
+    expect(hit.hpAfter - hit.hpBefore).toBe(2)
+    expect(hit.amount).toBe(20)
+    const full = new BattleEngine([ent({ id: 'hero', hp: 50, maxHp: 50 })], [ent()], { rng })
+    full.selectSpell({ name: 'ケア', mp: 1, target: '味方単体', effect: 'heal 20..20' })
+    expect(full.getState().events[0].hits[0]).toMatchObject({ kind: 'heal', amount: 20 })
   })
 
   it('全体呪文: 対象ごとに 1 hit、順序は 味方→敵 の index 順', () => {
@@ -145,13 +171,13 @@ describe('記録されない行動・不変条件', () => {
     expect(e.getState().eventTotal).toBe(total)
   })
 
-  it('全 hit で hpBefore - hpAfter の符号と kind が一致し、amount は差の絶対値', () => {
+  it('全 hit で hpBefore - hpAfter の符号と kind が一致し、amount は差の絶対値以上（計算上の量）', () => {
     const e = new BattleEngine([ent({ id: 'hero', hp: 10, maxHp: 50 })], [ent()], { rng })
     e.selectAttack()
     e.selectSpell({ name: 'ケア', mp: 1, target: '味方単体', effect: 'heal 4..4' })
     for (const ev of e.getState().events)
       for (const h of ev.hits) {
-        expect(h.amount).toBe(Math.abs(h.hpAfter - h.hpBefore))
+        expect(h.amount).toBeGreaterThanOrEqual(Math.abs(h.hpAfter - h.hpBefore))
         if (h.kind === 'damage') expect(h.hpAfter).toBeLessThanOrEqual(h.hpBefore)
         if (h.kind === 'heal') expect(h.hpAfter).toBeGreaterThan(h.hpBefore)
         if (h.kind === 'miss') expect(h.hpAfter).toBe(h.hpBefore)
