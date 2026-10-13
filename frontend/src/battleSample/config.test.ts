@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import {
+  DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
   MAX_ENEMIES,
   MAX_PARTY,
@@ -10,11 +11,13 @@ import {
   defaultEnemies,
   defaultParty,
   describeView,
+  effectivePartyCount,
   extractConfigUrl,
   initialView,
   parseConfig,
   parseConfigText,
   pushView,
+  resolveResolution,
   resolveSize,
   resolveUrl,
   swapView,
@@ -35,6 +38,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     partyCount: 4,
     enemyCount: 4,
     sizeId: '800x450',
+    resolutionMode: 'main',
     ...over,
   }
 }
@@ -701,6 +705,7 @@ describe('viewsEqual', () => {
     ['partyCount', { partyCount: 3 }],
     ['enemyCount', { enemyCount: 3 }],
     ['sizeId', { sizeId: '360x640' }],
+    ['resolutionMode', { resolutionMode: 'dpr' }],
   ] as [string, Partial<BattleSampleView>][])('%s だけ違えば false', (_k, over) => {
     expect(viewsEqual(view(), view(over))).toBe(false)
   })
@@ -789,5 +794,63 @@ describe('describeView', () => {
     const s = describeView(view(), 1, { width: 1280, height: 720 })
     expect(s).toContain('logical=1280x720')
     expect(s).toContain('physical=1280x720')
+  })
+})
+
+describe('解像度モード (S2)', () => {
+  it('既定は本編相当 (main)', () => {
+    expect(DEFAULT_RESOLUTION_MODE).toBe('main')
+    expect(initialView(defaultConfig()).resolutionMode).toBe('main')
+  })
+
+  it.each([
+    ['main', 2, 1],
+    ['main', 1.5, 1],
+    ['dpr', 2, 2],
+    ['dpr', 1.5, 1.5],
+    ['dpr', 0, 1],
+    ['dpr', NaN, 1],
+  ] as const)('mode=%s DPR=%s は resolution=%s', (mode, dpr, exp) => {
+    expect(resolveResolution(mode, dpr)).toBe(exp)
+  })
+
+  it('describeView は DPR と renderer.resolution を併記し、physical は resolution 基準', () => {
+    const s = describeView(view({ resolutionMode: 'main' }), 2, { width: 360, height: 640 }, 1)
+    expect(s).toContain('DPR=2')
+    expect(s).toContain('resolution=main(renderer.resolution=1)')
+    expect(s).toContain('physical=360x640')
+  })
+
+  it('describeView dpr モードは physical が DPR 倍', () => {
+    const s = describeView(view({ resolutionMode: 'dpr' }), 2, { width: 360, height: 640 }, 2)
+    expect(s).toContain('resolution=dpr(renderer.resolution=2)')
+    expect(s).toContain('physical=720x1280')
+  })
+})
+
+describe('front は味方 1 人 (N2)', () => {
+  it.each([1, 2, 3, 4])('layout=front は partyCount=%s でも 1', (n) => {
+    expect(effectivePartyCount(view({ layout: 'front', partyCount: n }))).toBe(1)
+    expect(
+      buildBattleSetup(defaultConfig(), view({ layout: 'front', partyCount: n })).party
+    ).toHaveLength(1)
+  })
+
+  it('front の味方は設定の先頭 1 人', () => {
+    const c = parseConfig({ party: [{ id: 'hero1' }, { id: 'x2' }] }, BASE)
+    if (!c.ok) throw new Error(c.error)
+    const s = buildBattleSetup(c.value, view({ layout: 'front', partyCount: 2 }))
+    expect(s.party.map((e) => e.id)).toEqual(['hero1'])
+  })
+
+  it('side は選択どおり', () => {
+    expect(effectivePartyCount(view({ layout: 'side', partyCount: 3 }))).toBe(3)
+    expect(effectivePartyCount(view({ layout: 'side', partyCount: 9 }))).toBe(4)
+  })
+
+  it('describeView の party= は実効人数', () => {
+    expect(
+      describeView(view({ layout: 'front', partyCount: 4 }), 1, { width: 1, height: 1 })
+    ).toContain('party=1 ')
   })
 })

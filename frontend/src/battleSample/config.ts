@@ -14,6 +14,14 @@ export const SCREEN_SIZES = [
 ] as const
 export type ScreenSizeId = (typeof SCREEN_SIZES)[number]['id']
 
+/**
+ * 描画解像度。main = 本編相当（本編の app.init は resolution 未指定 = 1）、dpr = 実 DPR。
+ * 既定は main（本編と同じ見た目を確認するため）。
+ */
+export const RESOLUTION_MODES = ['main', 'dpr'] as const
+export type ResolutionMode = (typeof RESOLUTION_MODES)[number]
+export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
+
 export const DEFAULT_SIZE_ID: ScreenSizeId = '800x450'
 export const MAX_PARTY = 4
 export const MAX_ENEMIES = 4
@@ -36,6 +44,7 @@ export interface BattleSampleView {
   partyCount: number
   enemyCount: number
   sizeId: ScreenSizeId
+  resolutionMode: ResolutionMode
 }
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -235,7 +244,23 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     partyCount: config.party.length,
     enemyCount: config.enemies.length,
     sizeId: DEFAULT_SIZE_ID,
+    resolutionMode: DEFAULT_RESOLUTION_MODE,
   }
+}
+
+/** 解像度モードから renderer.resolution の値を決める（dpr は呼び出し側が毎回読んだ window.devicePixelRatio） */
+export function resolveResolution(mode: ResolutionMode, devicePixelRatio: number): number {
+  if (mode === 'main') return 1
+  return Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
+}
+
+/**
+ * 実際にエンジンへ渡す味方人数。front は本編（RaycastRenderer.startBattle）と同じく
+ * hero 1 人だけを渡すので、ツールバーの味方人数に関わらず 1。side は選択どおり（1〜MAX_PARTY）。
+ */
+export function effectivePartyCount(view: BattleSampleView): number {
+  if (view.layout === 'front') return 1
+  return Math.max(1, Math.min(view.partyCount, MAX_PARTY))
 }
 
 export function resolveSize(id: ScreenSizeId): { width: number; height: number } {
@@ -266,7 +291,7 @@ export function buildBattleSetup(
   }
   const { width, height } = resolveSize(view.sizeId)
   return {
-    party: fill(config.party, defaultParty(), Math.min(view.partyCount, MAX_PARTY), 'party'),
+    party: fill(config.party, defaultParty(), effectivePartyCount(view), 'party'),
     enemies: fill(
       config.enemies,
       defaultEnemies(),
@@ -290,7 +315,8 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.backgroundOn === b.backgroundOn &&
     a.partyCount === b.partyCount &&
     a.enemyCount === b.enemyCount &&
-    a.sizeId === b.sizeId
+    a.sizeId === b.sizeId &&
+    a.resolutionMode === b.resolutionMode
   )
 }
 
@@ -315,17 +341,23 @@ export function swapView(h: BlinkHistory): BlinkHistory {
 export function describeView(
   view: BattleSampleView,
   dpr: number,
-  size: { width: number; height: number }
+  size: { width: number; height: number },
+  /** 実際に適用中の app.renderer.resolution。渡すと DPR と別項目で併記し、physical はこちらで計算する */
+  rendererResolution?: number
 ): string {
+  const physRes = rendererResolution ?? dpr
   return [
     `layout=${view.layout}`,
     `spriteStyle=${view.spriteStyle}`,
     `background=${view.backgroundOn ? 'on' : 'off'}`,
-    `party=${view.partyCount}`,
+    `party=${effectivePartyCount(view)}`,
     `enemies=${view.enemyCount}`,
     `size=${view.sizeId}`,
     `logical=${size.width}x${size.height}`,
     `DPR=${dpr}`,
-    `physical=${Math.round(size.width * dpr)}x${Math.round(size.height * dpr)}`,
+    ...(rendererResolution === undefined
+      ? []
+      : [`resolution=${view.resolutionMode}(renderer.resolution=${rendererResolution})`]),
+    `physical=${Math.round(size.width * physRes)}x${Math.round(size.height * physRes)}`,
   ].join('  ')
 }
