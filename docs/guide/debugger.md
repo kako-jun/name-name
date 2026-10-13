@@ -214,7 +214,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 
 切り替えるたびに `BattleScreen` を作り直す（戦闘の進行はリセットされる）。**スペースキー**（またはボタン）で、現在の設定とひとつ前の設定を即座に入れ替える。「1秒ごとに自動交互」をオンにすると 1 秒間隔で交互に表示する。見た目が変わる変更をライブ A/B で判定するための機能。ひとつ前の設定が無い間（起動直後）は、切替ボタンと自動交互は無効で、画面にその旨を案内する。表示中の設定・論理サイズ・`window.devicePixelRatio`・`renderer.resolution`・物理ピクセル数は画面上に表示される。
 
-**解像度の差**: 本編の `app.init`（`RaycastRenderer`）は `resolution` を指定しない（= 1）。サンプルの既定も本編相当の 1 にしてあり、`実DPR` に切り替えると `devicePixelRatio` 倍の解像度で描く（高 DPI 端末でくっきり見えるが、本編の見た目とは異なる）。見た目を本編と比較するときは既定の `本編相当(1)` を使う。
+**解像度の差**: 本編の `app.init`（`RaycastRenderer`）は `resolution` を指定しない（= 1）。サンプルの既定も本編相当の 1 にしてあり、`実DPR` に切り替えると `devicePixelRatio` 倍の解像度で描く（高 DPI 端末でくっきり見えるが、本編の見た目とは異なる）。見た目を本編と比較するときは既定の `本編相当(1)` を使う。`実DPR` は描き直しのたびに `devicePixelRatio` を読み直すだけで、ブラウザのズームやモニター移動には、次に設定を変えるまで追従しない。
 
 **front の味方人数**: 本編は `layout=front` のとき先頭 1 人（hero）だけを戦闘エンジンに渡す（`RaycastRenderer.startBattle`）。サンプルも同じ条件にし、`layout=front` では味方人数の選択を無効にして常に 1 人で表示する。`side` は選択どおりの人数を渡す。
 
@@ -238,7 +238,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 ```
 
 - トップレベルの項目（`layout` / `spriteStyle` / `background` / `party` / `enemies`）と、各キャラのフィールドはすべて省略可。省略は内蔵既定で補う
-- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が文字列でない、URL を解決できない
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
 - `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
 - 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある

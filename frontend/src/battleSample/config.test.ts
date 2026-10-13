@@ -694,6 +694,18 @@ describe('buildBattleSetup', () => {
 })
 
 describe('viewsEqual', () => {
+  it('front では partyCount だけ違っても同一扱い', () => {
+    expect(
+      viewsEqual(view({ layout: 'front', partyCount: 1 }), view({ layout: 'front', partyCount: 3 }))
+    ).toBe(true)
+  })
+
+  it('side では partyCount が違えば別扱い', () => {
+    expect(
+      viewsEqual(view({ layout: 'side', partyCount: 1 }), view({ layout: 'side', partyCount: 3 }))
+    ).toBe(false)
+  })
+
   it('全フィールド同一なら true', () => {
     expect(viewsEqual(view(), view())).toBe(true)
   })

@@ -313,7 +313,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.layout === b.layout &&
     a.spriteStyle === b.spriteStyle &&
     a.backgroundOn === b.backgroundOn &&
-    a.partyCount === b.partyCount &&
+    effectivePartyCount(a) === effectivePartyCount(b) &&
     a.enemyCount === b.enemyCount &&
     a.sizeId === b.sizeId &&
     a.resolutionMode === b.resolutionMode

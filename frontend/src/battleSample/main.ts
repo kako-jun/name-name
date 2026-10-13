@@ -13,6 +13,7 @@ import {
   buildBattleSetup,
   defaultConfig,
   describeView,
+  effectivePartyCount,
   extractConfigUrl,
   initialView,
   parseConfigText,
@@ -202,7 +203,7 @@ async function main(): Promise<void> {
     layoutSel.value = v.layout
     styleSel.value = v.spriteStyle
     bgChk.checked = v.backgroundOn
-    partySel.value = String(v.partyCount)
+    partySel.value = String(effectivePartyCount(v))
     enemySel.value = String(v.enemyCount)
     sizeSel.value = v.sizeId
     resSel.value = v.resolutionMode
