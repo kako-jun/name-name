@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  DEPTH_DEFAULT_HORIZON,
+  DEPTH_MIN_SCALE,
   SIDE_BACK_ROW_SHIFT_RATIO,
   computeDepthScale,
   computeFormation,
@@ -178,5 +180,287 @@ describe('正規化 (#747)', () => {
     expect(normalizeBattleRow('front')).toBe('front')
     expect(normalizeBattleRow('foo')).toBe('front')
     expect(normalizeBattleRow(undefined)).toBe('front')
+  })
+})
+
+describe('定数のリテラル固定 (#747)', () => {
+  it('SIDE_BACK_ROW_SHIFT_RATIO は 0.5', () => {
+    expect(SIDE_BACK_ROW_SHIFT_RATIO).toBe(0.5)
+  })
+  it('DEPTH_MIN_SCALE は 0.3', () => {
+    expect(DEPTH_MIN_SCALE).toBe(0.3)
+  })
+  it('DEPTH_DEFAULT_HORIZON は 0.3', () => {
+    expect(DEPTH_DEFAULT_HORIZON).toBe(0.3)
+  })
+})
+
+describe('computeDepthScale 境界 (#747)', () => {
+  // 地平線 y=100・最前列 floor=400 → span 300。floor = 100 + 幾何 * 300
+  it('幾何 0.31 は下限に掛からず 0.31', () => {
+    expect(computeDepthScale(193, 400, 100, 1)).toBeCloseTo(0.31, 10)
+  })
+  it('幾何 0.30 はちょうど 0.3', () => {
+    expect(computeDepthScale(190, 400, 100, 1)).toBeCloseTo(0.3, 10)
+  })
+  it('幾何 0.29 は下限 0.3 に丸まる', () => {
+    expect(computeDepthScale(187, 400, 100, 1)).toBeCloseTo(0.3, 10)
+  })
+  it('span = 0（地平線 = 最前列）は 1', () => {
+    expect(computeDepthScale(250, 400, 400, 1)).toBe(1)
+  })
+  it('span < 0（地平線が最前列より下）は 1', () => {
+    expect(computeDepthScale(250, 400, 401, 1)).toBe(1)
+  })
+  it('perspective 2 は 1 に丸められ幾何どおり（0.5）', () => {
+    expect(computeDepthScale(250, 400, 100, 2)).toBeCloseTo(0.5, 10)
+  })
+  it('perspective 負は 0 扱いで平面（1）', () => {
+    expect(computeDepthScale(250, 400, 100, -1)).toBe(1)
+  })
+  it('perspective NaN は 1', () => {
+    expect(computeDepthScale(250, 400, 100, NaN)).toBe(1)
+  })
+  it('floor NaN は 1', () => {
+    expect(computeDepthScale(NaN, 400, 100, 1)).toBe(1)
+  })
+  it('frontFloor NaN は 1', () => {
+    expect(computeDepthScale(250, NaN, 100, 1)).toBe(1)
+  })
+  it('horizonY NaN は 1', () => {
+    expect(computeDepthScale(250, 400, NaN, 1)).toBe(1)
+  })
+  it('Infinity の入力も 1', () => {
+    expect(computeDepthScale(Infinity, 400, 100, 1)).toBe(1)
+    expect(computeDepthScale(250, 400, -Infinity, 1)).toBe(1)
+  })
+})
+
+describe('normalizeBattleDepth 境界 (#747)', () => {
+  it("horizon '0' は 0 を保持（既定 0.3 にならない）", () => {
+    expect(normalizeBattleDepth('0', '0.5')).toEqual({ horizon: 0, perspective: 0.5 })
+  })
+  it("horizon '-0.5' は 0 に丸める", () => {
+    expect(normalizeBattleDepth('-0.5', '0.5')).toEqual({ horizon: 0, perspective: 0.5 })
+  })
+  it("horizon '1.0001' は 1 に丸める", () => {
+    expect(normalizeBattleDepth('1.0001', '0.5')).toEqual({ horizon: 1, perspective: 0.5 })
+  })
+  it('horizon 空文字は既定 0.3', () => {
+    expect(normalizeBattleDepth('', '0.5')).toEqual({ horizon: 0.3, perspective: 0.5 })
+  })
+  it("perspective '-0.1' は null", () => {
+    expect(normalizeBattleDepth('0.4', '-0.1')).toBeNull()
+  })
+  it("perspective '0' は null", () => {
+    expect(normalizeBattleDepth('0.4', '0')).toBeNull()
+  })
+  it("perspective '0.001' は有効", () => {
+    expect(normalizeBattleDepth('0.4', '0.001')).toEqual({ horizon: 0.4, perspective: 0.001 })
+  })
+  it('perspective 空文字は null', () => {
+    expect(normalizeBattleDepth('0.4', '')).toBeNull()
+  })
+  it('perspective 空白のみは null', () => {
+    expect(normalizeBattleDepth('0.4', '   ')).toBeNull()
+  })
+  it("perspective 'Infinity' は null", () => {
+    expect(normalizeBattleDepth('0.4', 'Infinity')).toBeNull()
+  })
+  it("perspective 'NaN' は null", () => {
+    expect(normalizeBattleDepth('0.4', 'NaN')).toBeNull()
+  })
+  it("perspective '0.5abc' は null", () => {
+    expect(normalizeBattleDepth('0.4', '0.5abc')).toBeNull()
+  })
+  it('perspective null は null', () => {
+    expect(normalizeBattleDepth('0.4', null)).toBeNull()
+  })
+  it("horizon 'Infinity' は数値扱いされず既定 0.3", () => {
+    expect(normalizeBattleDepth('Infinity', '0.5')).toEqual({ horizon: 0.3, perspective: 0.5 })
+  })
+})
+
+describe('normalizeBattleRow 境界 (#747)', () => {
+  it("'後列' は back", () => {
+    expect(normalizeBattleRow('後列')).toBe('back')
+  })
+  it("'Back' は back", () => {
+    expect(normalizeBattleRow('Back')).toBe('back')
+  })
+  it("'  後衛  ' は back", () => {
+    expect(normalizeBattleRow('  後衛  ')).toBe('back')
+  })
+  it("'前衛' は front", () => {
+    expect(normalizeBattleRow('前衛')).toBe('front')
+  })
+  it("'rear' は front（別名は認めない）", () => {
+    expect(normalizeBattleRow('rear')).toBe('front')
+  })
+  it('空文字は front', () => {
+    expect(normalizeBattleRow('')).toBe('front')
+  })
+  it('null は front', () => {
+    expect(normalizeBattleRow(null)).toBe('front')
+  })
+})
+
+describe('computeFormation 隊列の境界 (#747)', () => {
+  const region: Rect = { x: 400, y: 50, w: 384, h: 250 }
+  const party = (n: number, rows?: readonly ('front' | 'back' | undefined)[]) =>
+    computeFormation(region, n, 'party', false, rows)
+
+  it('rows が count より短い: 足りない分は前衛', () => {
+    const slots = party(3, ['back'])
+    const full = party(3, ['back', undefined, undefined])
+    expect(slots).toEqual(full)
+    // 1 列 3 人: index 0 だけ size/2 右、1 と 2 は同じ x
+    expect(slots[0].x - slots[2].x).toBeCloseTo(slots[0].size * 0.5, 9)
+    expect(slots[1].x).toBeLessThan(slots[0].x)
+  })
+  it('rows が count より長い: はみ出し分は無視（後衛を含まないなら従来と同じ）', () => {
+    expect(party(1, ['front', 'back', 'back'])).toEqual(party(1))
+  })
+  it('rows が count より長い: 先頭 count 件だけ見て後衛がいれば size が縮む', () => {
+    expect(party(1, ['back', 'front'])).toEqual(party(1, ['back']))
+  })
+  it('敵側に rows を渡しても無視（全員後衛指定でも従来と同じ）', () => {
+    const back3 = ['back', 'back', 'back'] as const
+    expect(computeFormation(region, 3, 'enemy', true, back3)).toEqual(
+      computeFormation(region, 3, 'enemy', true)
+    )
+  })
+  it('同一列の前衛と後衛（同偶奇行）の x 差はちょうど 0.5 × size', () => {
+    const slots = party(3, ['front', 'front', 'back'])
+    expect(slots[2].x - slots[0].x).toBeCloseTo(slots[0].size * 0.5, 9)
+  })
+  it('1 人後衛で 4 人: 全員の size が 384/3.25 に縮む（前衛のみは 125）', () => {
+    const mixed = party(4, ['front', 'front', 'front', 'back'])
+    expect(party(4)[0].size).toBe(125)
+    for (const s of mixed) expect(s.size).toBeCloseTo(118.153846, 5)
+  })
+  it('全員後衛 4 人でも size は 384/3.25（1 人後衛と同じ）', () => {
+    const slots = party(4, ['back', 'back', 'back', 'back'])
+    for (const s of slots) expect(s.size).toBeCloseTo(118.153846, 5)
+  })
+  it('全員後衛 2 人: 高さ律速なので size は 125 のまま', () => {
+    for (const s of party(2, ['back', 'back'])) expect(s.size).toBe(125)
+  })
+  it('全員後衛 1 人: size は最大の 160', () => {
+    expect(party(1, ['back'])[0].size).toBe(160)
+  })
+  it('2 列＋後衛: 左列の最右端が右列の最左端を超えない', () => {
+    const slots = party(4, ['front', 'back', 'front', 'back'])
+    const col0Right = Math.max(slots[0].x + slots[0].size, slots[1].x + slots[1].size)
+    const col1Left = Math.min(slots[2].x, slots[3].x)
+    expect(col0Right).toBeLessThanOrEqual(col1Left + 1e-9)
+  })
+  it('2 列＋全員後衛でも列が食い込まず領域内', () => {
+    const slots = party(4, ['back', 'back', 'back', 'back'])
+    const col0Right = Math.max(slots[0].x + slots[0].size, slots[1].x + slots[1].size)
+    const col1Left = Math.min(slots[2].x, slots[3].x)
+    expect(col0Right).toBeLessThanOrEqual(col1Left + 1e-9)
+    slots.forEach((s) => expect(within(box(s), region)).toBe(true))
+  })
+})
+
+describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
+  const screens: [number, number][] = [
+    [800, 450],
+    [360, 640],
+    [1280, 720],
+    [640, 360],
+  ]
+  it('奥行き＋後衛同時: 画面内・非重複・非負（画面 4 種 × 人数 1〜4）', () => {
+    for (const [w, h] of screens) {
+      for (const n of [1, 2, 3, 4]) {
+        const partyRows = Array.from({ length: n }, (_, i) =>
+          i % 2 === 1 ? ('back' as const) : ('front' as const)
+        )
+        const L = computeSideBattleLayout({
+          width: w,
+          height: h,
+          partyCount: n,
+          enemyCount: n,
+          partyRows,
+          depth,
+        })
+        const all = [...L.enemies, ...L.party]
+        for (const s of all) {
+          expect(s.size).toBeGreaterThanOrEqual(0)
+          expect(s.x).toBeGreaterThanOrEqual(0)
+          expect(s.y).toBeGreaterThanOrEqual(0)
+          expect(within(box(s), { x: 0, y: 0, w, h })).toBe(true)
+        }
+        for (let i = 0; i < all.length; i++) {
+          for (let j = i + 1; j < all.length; j++) {
+            expect(overlap(box(all[i]), box(all[j]))).toBe(false)
+          }
+        }
+      }
+    }
+  })
+  it('全員後衛でも不変条件を満たす', () => {
+    for (const [w, h] of screens) {
+      for (const n of [1, 2, 3, 4]) {
+        const L = computeSideBattleLayout({
+          width: w,
+          height: h,
+          partyCount: n,
+          enemyCount: n,
+          partyRows: Array(n).fill('back'),
+          depth,
+        })
+        for (const s of L.party) expect(within(box(s), { x: 0, y: 0, w, h })).toBe(true)
+        for (let i = 0; i < L.party.length; i++) {
+          for (let j = i + 1; j < L.party.length; j++) {
+            expect(overlap(box(L.party[i]), box(L.party[j]))).toBe(false)
+          }
+        }
+      }
+    }
+  })
+  it('味方 0 体でも例外なく、敵だけの配置になる', () => {
+    const L = computeSideBattleLayout({ ...base, partyCount: 0, partyRows: [], depth })
+    expect(L.party).toEqual([])
+    expect(L.enemies.length).toBe(4)
+    expect(L.depthActive).toBe(true)
+  })
+  it('敵 0 体でも例外なく、味方だけの配置になる', () => {
+    const L = computeSideBattleLayout({ ...base, enemyCount: 0, partyRows: ['back'], depth })
+    expect(L.enemies).toEqual([])
+    expect(L.party.length).toBe(4)
+  })
+  it('両側 0 体でも例外なし', () => {
+    const L = computeSideBattleLayout({ ...base, partyCount: 0, enemyCount: 0, depth })
+    expect(L.party).toEqual([])
+    expect(L.enemies).toEqual([])
+  })
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の味方の scale は 0.56158（リテラル）', () => {
+    const L = computeSideBattleLayout({ ...base, depth })
+    expect(L.party[0].scale).toBeCloseTo(0.56158, 5)
+    expect(L.party[0].size).toBeCloseTo(54.4734, 3)
+  })
+  it('800x450・4 対 4・{0.3, 0.8}: 手前の味方は scale 1・size 97', () => {
+    const L = computeSideBattleLayout({ ...base, depth })
+    expect(L.party[1].scale).toBe(1)
+    expect(L.party[1].size).toBe(97)
+  })
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.56158（リテラル）', () => {
+    const L = computeSideBattleLayout({ ...base, depth })
+    expect(L.enemies[0].scale).toBeCloseTo(0.56158, 5)
+    expect(L.enemies[0].size).toBeCloseTo(36.5028, 3)
+  })
+  it('未指定: depthActive false・座標は従来どおり（800x450・4 対 4）', () => {
+    const L = computeSideBattleLayout(base)
+    expect(L.depthActive).toBe(false)
+    expect([L.party[0].x, L.party[0].y, L.party[0].size]).toEqual([507.125, 118, 97])
+    expect([L.party[1].x, L.party[1].y]).toEqual([482.875, 215])
+    expect([L.enemies[0].x, L.enemies[0].y, L.enemies[0].size]).toEqual([134.875, 118, 65])
+  })
+  it('partyRows に front のみ・depth なしなら従来と完全に同じ', () => {
+    expect(
+      computeSideBattleLayout({ ...base, partyRows: ['front', undefined, 'front', 'front'] })
+    ).toEqual(computeSideBattleLayout(base))
   })
 })
