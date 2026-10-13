@@ -1508,3 +1508,81 @@ describe('組み合わせスイープ: 縦長/横長 × 味方 1〜4 × 敵 1〜
     expect(cases).toBe(4 * 4 * 3 * 3 * 3 * 3)
   })
 })
+
+describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横比混在・先頭後衛)', () => {
+  const sizes: [number, number][] = [
+    [800, 450],
+    [360, 640],
+    [1280, 720],
+    [640, 360],
+  ]
+  const aspectSets: (number[] | undefined)[] = [
+    undefined,
+    [1.0, 0.5, 0.5, 0.5],
+    [1.2, 0.4, 0.4, 0.4],
+    [0.3, 1.0, 0.6, 0.45],
+  ]
+  const rowSets: (('front' | 'back')[] | undefined)[] = [
+    undefined,
+    ['back', 'front', 'front', 'front'],
+    ['front', 'back', 'front', 'back'],
+    ['back', 'back', 'back', 'back'],
+  ]
+  it('L.party の高さ = 右半分だけで求めた配置の高さ（全組み合わせ）', () => {
+    for (const [w, h] of sizes)
+      for (const n of [1, 2, 3, 4])
+        for (const aspects of aspectSets)
+          for (const rows of rowSets) {
+            const L = computeSideBattleLayout({
+              width: w,
+              height: h,
+              partyCount: n,
+              enemyCount: 2,
+              partyAspects: aspects?.slice(0, n),
+              partyRows: rows?.slice(0, n),
+            })
+            const half: Rect = {
+              x: L.stage.x + L.stage.w / 2,
+              y: L.stage.y,
+              w: L.stage.w / 2,
+              h: L.stage.h,
+            }
+            const ref = computeFormation(
+              half,
+              n,
+              'party',
+              false,
+              rows?.slice(0, n),
+              aspects?.slice(0, n)
+            )
+            for (const s of L.party) expect(s.size).toBeCloseTo(ref[0].size, 9)
+            for (const s of L.party) expect(inside(slotRect(s), L.stage)).toBe(true)
+          }
+  })
+  it('実測の退行例: 360x640・先頭後衛 / 縦横比 [1,0.5,0.5,0.5] / 800x450 [1.2,0.4,0.4,0.4] で縮まない（リテラル）', () => {
+    const a = computeSideBattleLayout({
+      width: 360,
+      height: 640,
+      partyCount: 4,
+      enemyCount: 1,
+      partyRows: ['back', 'front', 'front', 'front'],
+    })
+    expect(a.party[0].size).toBeCloseTo(99.4, 1)
+    const b = computeSideBattleLayout({
+      width: 360,
+      height: 640,
+      partyCount: 4,
+      enemyCount: 1,
+      partyAspects: [1, 0.5, 0.5, 0.5],
+    })
+    expect(b.party[0].size).toBeCloseTo(86.3, 1)
+    const c = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 4,
+      enemyCount: 1,
+      partyAspects: [1.2, 0.4, 0.4, 0.4],
+    })
+    expect(c.party[0].size).toBeCloseTo(123.2, 1)
+  })
+})

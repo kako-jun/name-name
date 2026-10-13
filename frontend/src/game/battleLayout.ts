@@ -301,7 +301,8 @@ export function computePartyDiagonal(
   region: Rect,
   count: number,
   rows?: readonly (BattleRow | undefined)[],
-  aspects?: readonly (number | undefined)[]
+  aspects?: readonly (number | undefined)[],
+  opts?: { height?: number }
 ): SpriteSlot[] {
   if (count <= 0) return []
   const regionW = Math.max(0, region.w)
@@ -316,14 +317,18 @@ export function computePartyDiagonal(
   const anyBack = !!rows && rows.slice(0, count).some((r) => r === 'back')
   const backShift = anyBack ? SIDE_BACK_ROW_SHIFT_RATIO : 0
   const steps = count - 1
-  const h = Math.max(
-    0,
-    Math.min(
-      SIDE_PARTY_MAX_HEIGHT,
-      regionH / (1 + steps * SIDE_PARTY_MIN_PITCH_RATIO),
-      regionW / (maxAspect * (1 + backShift) + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
-    )
-  )
+  // `opts.height`: 高さを固定する（別の領域で決めた大きさを、狭めた領域でもそのまま使う。領域に収まる前提）
+  const h =
+    opts?.height !== undefined && Number.isFinite(opts.height)
+      ? Math.max(0, opts.height)
+      : Math.max(
+          0,
+          Math.min(
+            SIDE_PARTY_MAX_HEIGHT,
+            regionH / (1 + steps * SIDE_PARTY_MIN_PITCH_RATIO),
+            regionW / (maxAspect * (1 + backShift) + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
+          )
+        )
   const pitch = steps > 0 ? Math.min((regionH - h) / steps, h * SIDE_PARTY_MAX_PITCH_RATIO) : 0
   const maxW = h * maxAspect
   const dx =
@@ -522,21 +527,30 @@ export function applyDepthToSlots(
 }
 
 /**
- * 味方の斜め一列 (#760) が実際に必要とする水平幅。右半分で求めた配置 `slots`（大きさはそれで決まる）から、
- * 斜めのずらしを高さの `SIDE_PARTY_COMFORT_SHIFT_RATIO` 倍まで詰めた幅を返す（半分を超えない。下限は最小ずらしの幅）。
- * 味方の大きさは変えず、右半分の残りを敵へ回すために使う。味方 0 人は 0。
+ * 味方の斜め一列 (#760) が実際に必要とする水平幅。右半分（幅 `halfWidth`）で求めた配置 `slots`（大きさはそれで決まる）から、
+ * 斜めのずらしを高さの `SIDE_PARTY_COMFORT_SHIFT_RATIO` 倍まで詰めた幅を返す（半分を超えない）。
+ * 幅は `computePartyDiagonal` の幅の式と同じ量（最大幅 × (1 + 後衛予約) + (人数 − 1) × ずらし）から求めるので、
+ * この幅の領域へ高さ固定（`opts.height`）で配置し直しても、右半分での配置と大きさ・ずらしが一致する。
+ * 味方の大きさは変えず、右半分の残りを敵へ回すために使う。味方 0 人は 0。`anyBack`: 後衛が 1 人でもいるか。
  */
-export function partyRegionWidth(slots: readonly SpriteSlot[], halfWidth: number): number {
+export function partyRegionWidth(
+  slots: readonly SpriteSlot[],
+  halfWidth: number,
+  anyBack = false
+): number {
   if (slots.length === 0) return 0
   const h = slots[0].size
-  const minX = Math.min(...slots.map((s) => s.x))
-  const rightmost = Math.max(...slots.map((s) => s.x + s.width))
-  const spanNow = rightmost - minX
-  // 現在の配置のずらし（slots[1].x - slots[0].x）を、快適なずらしへ置き換えたときの幅の差
+  const maxW = Math.max(...slots.map((s) => s.width))
   const steps = slots.length - 1
-  const curShift = steps > 0 ? (slots[steps].x - slots[0].x) / steps : 0
-  const wanted =
-    spanNow - steps * curShift + steps * Math.min(curShift, h * SIDE_PARTY_COMFORT_SHIFT_RATIO)
+  const base = maxW * (1 + (anyBack ? SIDE_BACK_ROW_SHIFT_RATIO : 0))
+  if (steps === 0 || !(h > 0)) return Math.min(halfWidth, base)
+  // 右半分での斜めのずらし（computePartyDiagonal の dx と同じ式）
+  const dxHalf =
+    Math.min(
+      SIDE_DIAGONAL_MAX_SHIFT_RATIO,
+      Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (halfWidth - base) / steps / h)
+    ) * h
+  const wanted = base + steps * Math.min(dxHalf, h * SIDE_PARTY_COMFORT_SHIFT_RATIO)
   return Math.min(halfWidth, Math.max(0, wanted))
 }
 
@@ -636,7 +650,9 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     input.partyRows,
     input.partyAspects
   )
-  const partyW = partyRegionWidth(halfSlots, partyHalf.w)
+  const anyBack =
+    !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')
+  const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack)
   const partyRegion: Rect = { x: stage.x + stage.w - partyW, y: stage.y, w: partyW, h: stage.h }
   const enemyRegion: Rect = { x: stage.x, y: stage.y, w: stage.w - partyW, h: stage.h }
   // 縦長の stage (#760): 敵のかたまりを下寄せにし、1 人目（左上）の頭・板とぶつかりにくくする。
@@ -664,14 +680,10 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     input.enemyAspects,
     { maxSize: SIDE_ENEMY_MAX_SIZE, minSize: partyHeight }
   )
-  let party = computeFormation(
-    partyRegion,
-    partyCount,
-    'party',
-    false,
-    input.partyRows,
-    input.partyAspects
-  )
+  // 大きさは右半分で決めたもの（halfSlots[0].size）に固定する。狭めた領域で計算し直すと幅の制約で縮むため
+  let party = computePartyDiagonal(partyRegion, partyCount, input.partyRows, input.partyAspects, {
+    height: partyHeight,
+  })
   if (depth) {
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
     const all = [...enemies, ...party]
