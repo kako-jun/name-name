@@ -21,12 +21,18 @@ export function normalizeSpriteStyle(raw: string | null | undefined): SpriteStyl
 
 /** アクリルスタンド風スタイルのパラメータ。長さはすべてスプライト枠一辺に対する比率 */
 export interface AcrylicParams {
-  /** 輪郭に沿った白フチの太さ */
-  outlineWidthRatio: number
-  /** 白フチの外側にある透明アクリル縁の太さ */
-  rimWidthRatio: number
-  /** 透明アクリル縁の不透明度（0〜1。ごく薄く） */
-  rimAlpha: number
+  /** 透明な余白の幅（スプライトの輪郭を外へ広げる幅。白で塗らず透明のまま）。枠一辺に対する比率 */
+  marginRatio: number
+  /** 余白の最小幅(px)。スプライトが小さくても余白が消えないようにする */
+  minMarginPx: number
+  /** 枠線の太さ（余白の外側に付くリング）。枠一辺に対する比率 */
+  lineWidthRatio: number
+  /** 枠線の最小太さ(px)。スプライトが小さくても線が潰れないようにする */
+  minLinePx: number
+  /** 枠線の色（0xRRGGBB。淡い白〜青白） */
+  lineColor: number
+  /** 枠線の不透明度（0〜1。やや不透明） */
+  lineAlpha: number
   /** 台座を持つか（false なら台座と床影を描かず、スプライトは枠いっぱいに収める） */
   hasBase: boolean
   /** 台座（黒い円形＝楕円）の幅 / 枠一辺 */
@@ -42,9 +48,12 @@ export interface AcrylicParams {
 }
 
 export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
-  outlineWidthRatio: 0.03,
-  rimWidthRatio: 0.02,
-  rimAlpha: 0.25,
+  marginRatio: 0.03,
+  minMarginPx: 2,
+  lineWidthRatio: 0.02,
+  minLinePx: 1.5,
+  lineColor: 0xe6f3ff,
+  lineAlpha: 0.85,
   hasBase: true,
   baseWidthRatio: 0.7,
   baseHeightRatio: 0.28,
@@ -67,9 +76,12 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
   const d = DEFAULT_ACRYLIC_PARAMS
   const o = overrides ?? {}
   return {
-    outlineWidthRatio: clamp(finiteOr(o.outlineWidthRatio, d.outlineWidthRatio), 0, 0.15),
-    rimWidthRatio: clamp(finiteOr(o.rimWidthRatio, d.rimWidthRatio), 0, 0.1),
-    rimAlpha: clamp(finiteOr(o.rimAlpha, d.rimAlpha), 0, 1),
+    marginRatio: clamp(finiteOr(o.marginRatio, d.marginRatio), 0, 0.15),
+    minMarginPx: clamp(finiteOr(o.minMarginPx, d.minMarginPx), 0, 32),
+    lineWidthRatio: clamp(finiteOr(o.lineWidthRatio, d.lineWidthRatio), 0, 0.1),
+    minLinePx: clamp(finiteOr(o.minLinePx, d.minLinePx), 0, 16),
+    lineColor: clamp(Math.floor(finiteOr(o.lineColor, d.lineColor)), 0, 0xffffff),
+    lineAlpha: clamp(finiteOr(o.lineAlpha, d.lineAlpha), 0, 1),
     hasBase: typeof o.hasBase === 'boolean' ? o.hasBase : d.hasBase,
     baseWidthRatio: clamp(finiteOr(o.baseWidthRatio, d.baseWidthRatio), 0.1, 1),
     baseHeightRatio: clamp(finiteOr(o.baseHeightRatio, d.baseHeightRatio), 0.05, 1),
@@ -98,10 +110,10 @@ export interface FitRect {
 export interface AcrylicGeometry {
   /** スプライト本体の配置（contain・縦横比維持・足元を台座の中心に合わせる）。枠の外へはみ出さない */
   sprite: FitRect
-  /** 白フチの太さ(px)。0 ならフチを付けない */
-  outlineWidth: number
-  /** 透明アクリル縁の「白フチの外側」の太さ(px)。0 なら縁を付けない */
-  rimWidth: number
+  /** 透明な余白の幅(px)。スプライトの輪郭からこの幅は透明のまま */
+  marginPx: number
+  /** 枠線の太さ(px)。余白の外側に付く。0 なら線を付けない */
+  linePx: number
   /** 黒い円形台座。`hasBase: false` のとき null */
   base: EllipseRect | null
   /** 台座上面の反射ハイライト（台座の上寄りの細い楕円）。台座が無いとき null */
@@ -115,7 +127,8 @@ export interface AcrylicGeometry {
  *
  * - 台座と影は枠の下端に置く（影の下端が枠の下端に接する）。影は台座より大きいので、影が枠に収まれば台座も収まる。
  * - スプライトは「枠の上端〜台座の中心」の領域に contain で収め、足元が台座の中心に乗る。
- *   白フチ・縁の太さ（片側 `outlineWidth + rimWidth`）ぶんだけ領域を内側に縮めるので、フチも枠からはみ出さない。
+ *   余白と枠線の幅（片側 `marginPx + linePx`）ぶんだけ領域を内側に縮めるので、枠線も枠からはみ出さない。
+ *   幅は比率から求めるが、`minMarginPx` / `minLinePx` を下回らない（小さいスプライトで線が 0px にならない）。
  * - 影が枠より大きくなる指定（幅比 × 影倍率 > 1）は枠幅に切り詰める。
  * - `size` が 0 以下・非数なら、スプライトは大きさ 0・台座・影・フチなしを返す。
  *   テクスチャ寸法が 0 以下なら、スプライトは上記の領域いっぱいに置く。
@@ -129,17 +142,17 @@ export function computeAcrylicGeometry(
   if (!(size > 0) || !Number.isFinite(size)) {
     return {
       sprite: { x: 0, y: 0, width: 0, height: 0 },
-      outlineWidth: 0,
-      rimWidth: 0,
+      marginPx: 0,
+      linePx: 0,
       base: null,
       highlight: null,
       shadow: null,
     }
   }
   const p = resolveAcrylicParams(params)
-  const outlineWidth = p.outlineWidthRatio * size
-  const rimWidth = p.rimWidthRatio * size
-  const margin = outlineWidth + rimWidth
+  const marginPx = Math.max(p.minMarginPx, p.marginRatio * size)
+  const linePx = Math.max(p.minLinePx, p.lineWidthRatio * size)
+  const margin = marginPx + linePx
 
   let base: EllipseRect | null = null
   let highlight: EllipseRect | null = null
@@ -181,5 +194,5 @@ export function computeAcrylicGeometry(
     // 横は中央、縦は領域の下端（足元）に揃える
     sprite = { x: (size - width) / 2, y: footY - height, width, height }
   }
-  return { sprite, outlineWidth, rimWidth, base, highlight, shadow }
+  return { sprite, marginPx, linePx, base, highlight, shadow }
 }

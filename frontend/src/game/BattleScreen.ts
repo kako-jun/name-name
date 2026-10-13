@@ -40,7 +40,6 @@ import {
   TextStyle,
   type Texture,
 } from 'pixi.js'
-import type { OutlineFilter } from 'pixi-filters'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
@@ -59,11 +58,7 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
-import {
-  DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
-  createAcrylicRimFilter,
-  createPaperDollOutlineFilter,
-} from './outlineFilter'
+import { AcrylicEdgeFilter } from './acrylicEdgeFilter'
 import {
   computeAcrylicGeometry,
   resolveAcrylicParams,
@@ -150,7 +145,7 @@ export interface BattleScreenOptions {
   background?: string
   /**
    * スプライト表示スタイル (#737)。`none`（既定）= 素材そのまま、`acrylic` = アクリルスタンド風
-   * （白フチ・透明アクリル縁・黒い円形台座・接地影）。画像のある枠（`side` のスプライト）にだけかけ、
+   * （透明な余白・その外周の枠線・黒い円形台座・接地影）。画像のある枠（`side` のスプライト）にだけかけ、
    * 色四角のフォールバックにはかけない。`front` は敵・味方の画像を描かないので影響しない。
    */
   spriteStyle?: SpriteStyle
@@ -166,7 +161,7 @@ interface EntityView {
   sprite: Sprite | null
   /** acrylic のとき: 台座・影を描く Graphics（fallback の直上・sprite の直下）と、sprite にかけるフィルタ。画像読み込み成功まで null/非表示 */
   acrylicBack: Graphics | null
-  acrylicFilters: { edge: OutlineFilter; rim: OutlineFilter } | null
+  acrylicFilter: AcrylicEdgeFilter | null
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
 }
@@ -248,9 +243,8 @@ export class BattleScreen extends Container {
     this.destroyedFlag = true
     // フィルタは Container.destroy の対象外なので自分で破棄する (#737)
     for (const v of [...this.enemyViews, ...this.partyViews]) {
-      v.acrylicFilters?.edge.destroy()
-      v.acrylicFilters?.rim.destroy()
-      v.acrylicFilters = null
+      v.acrylicFilter?.destroy()
+      v.acrylicFilter = null
     }
     super.destroy(options)
   }
@@ -337,7 +331,7 @@ export class BattleScreen extends Container {
       color,
       sprite: null,
       acrylicBack,
-      acrylicFilters: null,
+      acrylicFilter: null,
       label,
     }
     if (entity.sprite) void this.loadEntitySprite(view, entity.sprite)
@@ -352,14 +346,14 @@ export class BattleScreen extends Container {
       view.sprite = sprite
       view.container.addChildAt(sprite, view.acrylicBack ? 2 : 1)
       if (view.acrylicBack) {
-        // フィルタは texture ごとに 1 回だけ作る。太さは placeEntityView が枠の大きさに合わせて更新する
-        view.acrylicFilters = {
-          edge: createPaperDollOutlineFilter({
-            color: DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
-            thickness: 1,
-          }),
-          rim: createAcrylicRimFilter(1, this.acrylicParams?.rimAlpha ?? 0),
-        }
+        // フィルタは texture ごとに 1 回だけ作る。余白・線の幅は placeEntityView が枠の大きさに合わせて更新する
+        const p = this.acrylicParams
+        view.acrylicFilter = new AcrylicEdgeFilter({
+          marginPx: 0,
+          linePx: 0,
+          color: p?.lineColor ?? 0xffffff,
+          alpha: p?.lineAlpha ?? 0,
+        })
         view.acrylicBack.visible = true
       }
       this.layout()
@@ -587,8 +581,8 @@ export class BattleScreen extends Container {
     const fb = computeFallbackRect(size)
     view.fallback.clear().rect(fb.x, fb.y, fb.w, fb.h).fill(view.color)
     if (view.sprite) {
-      if (this.acrylicParams && view.acrylicBack && view.acrylicFilters) {
-        this.placeAcrylic(view.sprite, view.acrylicBack, view.acrylicFilters, size)
+      if (this.acrylicParams && view.acrylicBack && view.acrylicFilter) {
+        this.placeAcrylic(view.sprite, view.acrylicBack, view.acrylicFilter, size)
       } else {
         const fit = computeContainFit(view.sprite.texture.width, view.sprite.texture.height, size)
         view.sprite.position.set(fit.x, fit.y)
@@ -609,13 +603,13 @@ export class BattleScreen extends Container {
 
   /**
    * acrylic のスプライト 1 体を配置する (#737)。幾何は純粋関数 computeAcrylicGeometry が正本で、
-   * ここは結果を Graphics とフィルタの太さに反映するだけ（フィルタは再生成せず thickness を更新）。
+   * ここは結果を Graphics とフィルタの太さに反映するだけ（フィルタは再生成せず幅を更新）。
    * 配置は slot 枠の内側に収まるので battleLayout の座標・ラベルとは重ならない。
    */
   private placeAcrylic(
     sprite: Sprite,
     back: Graphics,
-    filters: { edge: OutlineFilter; rim: OutlineFilter },
+    filter: AcrylicEdgeFilter,
     size: number
   ): void {
     const params = this.acrylicParams
@@ -638,12 +632,8 @@ export class BattleScreen extends Container {
         .ellipse(g.highlight.cx, g.highlight.cy, g.highlight.rx, g.highlight.ry)
         .fill({ color: 0xffffff, alpha: params.highlightAlpha })
     }
-    filters.edge.thickness = g.outlineWidth
-    filters.rim.thickness = g.rimWidth
-    const active: OutlineFilter[] = []
-    if (g.outlineWidth > 0) active.push(filters.edge)
-    if (g.rimWidth > 0 && params.rimAlpha > 0) active.push(filters.rim)
-    sprite.filters = active.length > 0 ? active : null
+    filter.setWidths(g.marginPx, g.linePx)
+    sprite.filters = g.linePx > 0 && params.lineAlpha > 0 ? [filter] : null
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true
   }
