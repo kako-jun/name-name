@@ -825,13 +825,15 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // （constructor で作られる値オブジェクトの読み出しのみで this.app には触れない）が、
       // その状態では sceneId が null（＝setEvents/setScenes すら走っていない）ため意味のある
       // スナップショットにならない。
-      // #460 セルフレビュー should S1: sceneId が null のときは pendingSnapshotRef を上書きしない
+      // #460 セルフレビュー should S1: 再生が未開始のときは pendingSnapshotRef を上書きしない
       // （直前に有効な値が入っていればそれを保持し続ける）。pendingSnapshotRef は単一の共有 ref
       // なので、無条件上書きだと短時間の二重連続 remount（gen0→gen1(init 未完了)→gen2）で
       // gen1 の cleanup が「まだ何も進行していない空スナップショット」で gen0 の有効な
       // スナップショットを消してしまい、gen2 が結局位置ロストする事故になる。
+      // 「未開始」は sceneId でなく renderer の再生開始済みフラグで判定する (#768)。ジャンプ前の線形
+      // ストリームは sceneId が null のまま再生が進むので、sceneId で見ると位置が再マウントで失われる。
       const snapshot = renderer.getSnapshot()
-      if (snapshot.sceneId !== null) {
+      if (renderer.hasStartedPlayback()) {
         pendingSnapshotRef.current = snapshot
       }
       renderer.destroy()

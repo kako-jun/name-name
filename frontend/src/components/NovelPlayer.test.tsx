@@ -152,6 +152,9 @@ const {
       currentBgmPath: null,
       storyEnded: false,
     })
+    // #768: 再生開始済みか。既定は「スナップショットに sceneId がある」（既存テストの「意味のある位置」の作り方）。
+    // sceneId が null のままの開始済み（ジャンプ前の線形ストリーム）は個別に mockReturnValue(true) で作る。
+    hasStartedPlayback = vi.fn(() => this.getSnapshot().sceneId !== null)
     restoreSnapshot = vi.fn().mockResolvedValue({ status: 'entered', sceneId: null })
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
@@ -2082,6 +2085,22 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
 
     expect(rendererInstances.length).toBe(1)
     expect(r.restoreSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('P7b (#768): ジャンプ前（sceneId が null）でも再生開始済みなら fluid 再マウントで snapshot が restoreSnapshot に渡る', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    const snap: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: null, eventIndex: 3 }
+    first.getSnapshot.mockReturnValue(snap)
+    first.hasStartedPlayback.mockReturnValue(true)
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(rendererInstances[1].restoreSnapshot).toHaveBeenCalledWith(snap)
   })
 
   it('P7: 旧 renderer の init() が永久 pending でもカテゴリ変化リサイズは例外を投げず、cleanup の getSnapshot() が安全に呼ばれる（既定 null）ため restoreSnapshot は呼ばれない', async () => {

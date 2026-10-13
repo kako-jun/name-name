@@ -423,6 +423,13 @@ export class NovelRenderer {
    * 開始前に選択肢が出て skipMode が解除されるため）。
    */
   private playbackStarted = false
+  /**
+   * 再生が開始済みか (#768)。fluid 再マウントの引き継ぎ判定に使う。未開始のスナップショットは
+   * 意味のある位置ではないので引き継がない。sceneId が null でも（ジャンプ前の線形ストリーム）開始済みはあり得る。
+   */
+  hasStartedPlayback(): boolean {
+    return this.playbackStarted
+  }
   /** Condition 展開済みのフラットなイベント配列 */
   private resolvedEvents: Event[] = []
   private eventIndex = 0
