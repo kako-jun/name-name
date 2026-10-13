@@ -1483,8 +1483,12 @@ export class DialogBox extends Container {
     const baseUrl = this.indicatorAssetBaseUrl
     const urls = getIndicatorImageUrls(baseUrl, kind)
     this.pendingIndicatorKinds.add(kind)
-    Promise.all(urls.map((url) => Assets.load(url)))
-      .then((loaded) => {
+    // `.then(ok, err)` の2引数形: 表示処理（applyIndicatorFrame / positionIndicator）の例外を
+    // 読み込み失敗として誤報告しない (#774)。
+    Promise.all(urls.map((url) => Assets.load(url))).then(
+      (loaded) => {
+        // destroy 済み（親の destroy({ children: true }) 含む）なら何もしない (#774)。
+        if (this.destroyed) return
         // baseUrl が変わっていたら古い結果。pendingIndicatorKinds は新しい fetch の分をまだ
         // 表しているはずなので触らない（触ると新 fetch 完了前に一瞬 pending が外れてしまう）。
         if (this.indicatorAssetBaseUrl !== baseUrl) return
@@ -1500,14 +1504,16 @@ export class DialogBox extends Container {
           this.applyIndicatorFrame()
           this.positionIndicator()
         }
-      })
-      .catch((err: unknown) => {
+      },
+      (err: unknown) => {
+        if (this.destroyed) return
         if (this.indicatorAssetBaseUrl !== baseUrl) return
         this.pendingIndicatorKinds.delete(kind)
         this.failedIndicatorKinds.add(kind)
         console.warn(`[DialogBox] failed to load ${kind} indicator images:`, err)
         if (this.indicatorKind === kind) this.applyIndicatorFrame()
-      })
+      }
+    )
   }
 
   private tickIndicatorFrame(deltaMs: number): void {
@@ -1843,6 +1849,7 @@ export class DialogBox extends Container {
       },
       () => {
         if (token !== this.currentPortraitToken) return
+        if (this.destroyed) return
         if (this.portraitSprite) this.portraitSprite.visible = false
       }
     )
