@@ -384,7 +384,8 @@ describe('入場の失敗・割り込み (#734 PR2 レビュー対応)', () => {
     expect(internals(r).pendingEntry).toBeNull()
     d.resolve([HUB, ROUTE])
     await expect(loading).resolves.toEqual({ status: 'superseded' })
-    expect(r.getCurrentSceneId()).toBe('hub')
+    // loadEvents 構成のエントリはジャンプ前の線形ストリーム（sceneId は null。#768）
+    expect(r.getCurrentSceneId()).toBeNull()
     expect(r.getSnapshot().flags).not.toHaveProperty('stale')
   })
 })

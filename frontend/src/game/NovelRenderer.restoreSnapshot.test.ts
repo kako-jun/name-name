@@ -215,22 +215,36 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(r.getSnapshot().eventIndex).toBe(1)
   })
 
-  // ===== C. 異常系: sceneId null（restoreToScene を通さない分岐） =====
+  // ===== C. sceneId null（エントリ文書の線形ストリーム上の位置として復元 #768） =====
 
-  it('R6: sceneId: null → fromJSON(flags) のみ実行され currentSceneId/history は不変、console.warn は呼ばれない', () => {
+  it('R6: sceneId: null → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId はエントリのシーン、history は現在位置のみ、console.warn は呼ばれない (#768)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
-    r.startFrom({ sceneId: 'a', flags: { old: boolFlag(true) } })
+    r.startFrom({ sceneId: 'b', flags: { old: boolFlag(true) } })
     warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
-    const sceneBefore = r.getCurrentSceneId()
-    const historyLenBefore = internals(r).history.length
+
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: null, eventIndex: 1, flags: { fresh: boolFlag(true) } })
+    )
+
+    expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+    expect(r.getCurrentSceneId()).toBe('a')
+    expect(r.getSnapshot().eventIndex).toBe(1)
+    expect(internals(r).history.length).toBe(1)
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('R6b: sceneId: null の復元も cameraMode/cameraOrientation をスナップショットの値へ宣言的に復元する (#768)', async () => {
+    const r = makeRenderer(CAMERA_SCENES)
+    r.startFrom({ sceneId: 'cam' })
+    await r.playScript([{ type: 'advance' }]) // cam1 -> camera(directive処理) -> cam2
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
 
     r.restoreSnapshot(craftSnapshot({ sceneId: null, flags: { fresh: boolFlag(true) } }))
 
-    expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBe(sceneBefore)
-    expect(internals(r).history.length).toBe(historyLenBefore)
-    expect(warnSpy).not.toHaveBeenCalled()
+    expect(r.getSnapshot().cameraMode).toBe('Novel')
+    expect(r.getSnapshot().cameraOrientation).toBe('Audience')
   })
 
   // ===== D. 異常系: シーン未発見（フラグだけ復元 + warn） =====
@@ -253,23 +267,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
-  // 19: R6/R7 と同じ2分岐（sceneId: null / シーン未発見）は restoreToScene/applyState を
-  // 通らない（fromJSON(flags) のみ）ため、cameraMode/cameraOrientation も他の宣言的
-  // settled state（isBlackout 等）と同じく変化しないはず。CameraMode 固有のバグでは
-  // なく、この2分岐の一般的な性質であることをロックする (#681)。
-  it('R6b: sceneId: null 分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
-    const r = makeRenderer(CAMERA_SCENES)
-    r.startFrom({ sceneId: 'cam' })
-    await r.playScript([{ type: 'advance' }]) // cam1 -> camera(directive処理) -> cam2
-    expect(r.getSnapshot().cameraMode).toBe('Theater')
-    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
-
-    r.restoreSnapshot(craftSnapshot({ sceneId: null, flags: { fresh: boolFlag(true) } }))
-
-    expect(r.getSnapshot().cameraMode).toBe('Theater')
-    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
-  })
-
+  // 19: シーン未発見分岐は restoreToScene/applyState を通らない（位置・flags とも現状維持 #765）ため、
+  // cameraMode/cameraOrientation も他の宣言的 settled state（isBlackout 等）と同じく変化しない。
+  // CameraMode 固有のバグではなく、この分岐の一般的な性質であることをロックする (#681)。
+  // （sceneId: null は #768 でエントリ文書の復元になり、camera もスナップショットの値へ復元される。R6b）
   it('R7b: シーン未発見分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
     const r = makeRenderer(CAMERA_SCENES)
     r.startFrom({ sceneId: 'cam' })
@@ -290,17 +291,16 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(() => r.restoreSnapshot(craftSnapshot({ sceneId: 'a', flags: {} }))).not.toThrow()
   })
 
-  it('R12: sceneId: ""（空文字）は null と同じ分岐に落ちる（warn は呼ばれず、シーン未発見扱いにもならない）', () => {
+  it('R12: sceneId: ""（空文字）は null と同じ扱い（エントリ文書の線形ストリームへ復元。warn は呼ばれず、シーン未発見扱いにもならない） (#768)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a' })
     warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
-    const sceneBefore = r.getCurrentSceneId()
 
     r.restoreSnapshot(craftSnapshot({ sceneId: '', flags: { f: boolFlag(true) } }))
 
     expect(r.getSnapshot().flags).toEqual({ f: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(r.getCurrentSceneId()).toBe('a')
     expect(warnSpy).not.toHaveBeenCalled()
   })
 

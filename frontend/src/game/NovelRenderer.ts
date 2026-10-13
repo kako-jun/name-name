@@ -423,6 +423,13 @@ export class NovelRenderer {
    * 開始前に選択肢が出て skipMode が解除されるため）。
    */
   private playbackStarted = false
+  /**
+   * 再生が開始済みか (#768)。fluid 再マウントの引き継ぎ判定に使う。未開始のスナップショットは
+   * 意味のある位置ではないので引き継がない。sceneId が null でも（ジャンプ前の線形ストリーム）開始済みはあり得る。
+   */
+  hasStartedPlayback(): boolean {
+    return this.playbackStarted
+  }
   /** Condition 展開済みのフラットなイベント配列 */
   private resolvedEvents: Event[] = []
   private eventIndex = 0
@@ -741,6 +748,11 @@ export class NovelRenderer {
   private jumpState: 'idle' | 'pending' | 'stalled' = 'idle'
   /** Jump の遷移を発火する timer。`[待機]` の `waitTimer` とは別 (#733)。 */
   private jumpTimer: number | null = null
+  /**
+   * シーン入場後の自動セーブが保留中か (#768)。`requestAutoSave()` で立て、そのシーンで最初の本文が
+   * 表示されゲートが開いた時点（`flushAutoSave`）で1回保存して下ろす。新しい入場・復元で破棄する。
+   */
+  private autoSavePending = false
   /**
    * 遷移文脈の世代 (#733)。再生位置が別の文脈へ移る箇所（armJump・resetAndStartEvents・applyState）で
    * 進める。resolveMissingSceneAndJump は開始時に捕捉し、await 後に不一致なら（遅延ロード中に
@@ -1360,10 +1372,12 @@ export class NovelRenderer {
    * #637: `setScenes()` と対称に `gameState.clear()` / `currentSceneId` のリセットを行う。
    * 旧セーブ（GUI 起動時の #578 自動クイックロードが復元した flags/sceneId）を引きずったまま
    * 「はじめから」しても、Condition 分岐が旧フラグのまま解決されて「つづきから」相当の内容に
-   * なってしまっていた（#637 本体の症状）。`currentSceneId` は `allScenes[0]`（= エントリ doc の
-   * 最初のシーン。`PlayerScreen.buildSceneIndex()` が常にエントリ doc のシーンを先頭に積む前提）
-   * に戻す。単純に null にはしない（seekbar・シーンタイトル解決を restart 直後から正しく機能
-   * させるため）。
+   * なってしまっていた（#637 本体の症状）。`currentSceneId` は `entrySceneId`（`loadScenes`/`setScenes`
+   * ならエントリ doc の最初のシーン、`loadEvents` ならジャンプ前の線形ストリームを表す null）に戻す
+   * (#768)。再生するのは `entryRawEvents` なので、sceneId はそのイベント列の識別子と一致させる。
+   * 以前は `allScenes[0]` に戻していたが、線形ストリームの平坦なイベント列と `allScenes[0]` の
+   * events は別物で、その後のセーブが「sceneId=hub + 平坦ストリーム上の eventIndex」という不整合になった。
+   * マウント経路（`loadEvents`）も null で始まるので、restart 後だけ非 null にする理由は無い。
    *
    * #662: `rawEvents` ではなく `entryRawEvents` を再生する。マウント時の自動 quickLoad が
    * `restoreToScene()` 経由で `rawEvents` を直前ルート（例: 近視ルート）の scene.events に
@@ -1376,7 +1390,7 @@ export class NovelRenderer {
   restart(): void {
     if (this.entryRawEvents.length === 0) return
     this.gameState.clear()
-    this.currentSceneId = this.allScenes[0]?.id ?? null
+    this.currentSceneId = this.entrySceneId
     this.resetAndStartEvents([...this.entryRawEvents])
   }
 
@@ -1699,8 +1713,12 @@ export class NovelRenderer {
           ? (req.target as { sceneId: string }).sceneId
           : req.state.sceneId
     if (!sceneId) {
-      // 復元で sceneId が空: 復元先が無い正常な縮退。呼び出し側が事前に処理するので通常は来ない。
-      return Promise.resolve({ status: 'entered', sceneId: null })
+      // 復元で sceneId が null: エントリ文書の線形ストリーム（`loadEvents`。ジャンプ前はシーン ID を持たない）
+      // 上の位置。セーブは eventIndex でこの位置を指すので、エントリのイベント列へ宣言的に復元する (#768)。
+      // 進行・新規開始は sceneId を必ず持つ（'entry' の新規開始は上で処理済み）ので、ここへ来るのは復元だけ。
+      return Promise.resolve(
+        this.restoreEntryStream(req as Extract<SceneEntryRequest, { kind: 'restore' }>)
+      )
     }
 
     const resolution = this.resolveScene(sceneId)
@@ -1737,6 +1755,39 @@ export class NovelRenderer {
     })()
     this.pendingEntry = { generation, kind: req.kind, sceneId, promise }
     return promise
+  }
+
+  /**
+   * sceneId が null の復元 (#768)。エントリ文書の線形ストリーム（`entryRawEvents`）を復元先にする。
+   * エントリ文書が未読み込みなら復元先が無いので失敗（位置・flags とも変えない）。
+   * 同期の適用が throw しても failed（apply-error）で解決する。
+   */
+  private restoreEntryStream(
+    req: Extract<SceneEntryRequest, { kind: 'restore' }>
+  ): SceneEntryResult {
+    if (this.entryRawEvents.length === 0) {
+      return this.failEntry(req, {
+        status: 'failed',
+        reason: 'not-found',
+        detail: 'エントリ文書が読み込まれていないため、sceneId が null の位置を復元できません',
+      })
+    }
+    try {
+      if (req.source === 'snapshot') this.storyEnded = req.state.storyEnded
+      const entryId = this.entrySceneId
+      const entry: EventScene = {
+        id: entryId ?? '',
+        title: '',
+        view: 'TopDown',
+        events: this.entryRawEvents,
+      }
+      // sceneId はエントリの識別子に正規化する（loadEvents なら null。空文字のセーブも同じ扱い）。
+      this.restoreToScene(entry, { ...req.state, sceneId: entryId })
+      if (req.source === 'save' && req.origin) this.notifyLoadSuccess(req.origin)
+      return { status: 'entered', sceneId: entryId }
+    } catch (err) {
+      return this.failApply(req, err)
+    }
   }
 
   /** 入場の適用中の例外を失敗として扱い、結果を返す。ゲートも下ろす。 */
@@ -2452,6 +2503,7 @@ export class NovelRenderer {
     }
   ): void {
     this.playbackStarted = true
+    this.autoSavePending = false
     this.waitingForChoice = false
     this.waitingForWait = false
     this.jumpState = 'idle'
@@ -4200,6 +4252,7 @@ export class NovelRenderer {
       // 本文を描画した時点で、Jump だけが続く連鎖の回数をリセットする (#725)。
       this.consecutiveJumps = 0
       this.history.push(this.getSnapshot())
+      this.flushAutoSave()
     }
   }
 
@@ -4208,6 +4261,7 @@ export class NovelRenderer {
    */
   private applyState(state: NovelGameState): void {
     this.consecutiveJumps = 0
+    this.autoSavePending = false
     // Jump の遷移状態は GameState に載せず位置から導出する (#733)。復元は新しい到達として扱うので、
     // 予約中・停止中のどちらも持ち越さず idle へ戻し、末尾で位置が Jump なら再予約する。
     this.jumpState = 'idle'
@@ -6183,12 +6237,58 @@ export class NovelRenderer {
    * 「storyEnded=false なのに Choice イベント位置で止まっている」行き止まり（テキストも
    * 選択肢も "to be continued..." も出ない空白画面）になる。
    * 成功したら true、保存できない状態なら false を返す。
+   *
+   * sceneId が null の局面（シーン索引を使わない線形ストリーム〔`loadEvents`〕でジャンプ前）でも
+   * セーブできる。null は「エントリ文書の線形ストリーム上の位置」を意味し、ロード側が eventIndex で
+   * 復元する (#768)。
    */
   quickSave(): boolean {
-    if (this.storyEnded) return false
+    // 手動（F5）専用。自動セーブは requestAutoSave() → saveQuick('auto') だけが行う (#769, #768)。
+    return this.saveQuick('quick')
+  }
+
+  /**
+   * シーン入場の自動セーブを要求する (#768)。NovelPlayer の `onSceneChange` から呼ぶ。保存はこの時点では行わず、
+   * そのシーンの最初の本文が表示されゲートが開いた時点で1回行う。シーン冒頭が `[待機]`・Jump・選択肢でも
+   * 同じ仕組みで扱える（入場直後は待機中などでゲートが閉じているため、入場の瞬間に保存すると黙って弾かれる）。
+   * 保存位置は「その本文の位置」で、宣言的復元は待機を再実行しないので、ロードすると待機を挟まずその本文から
+   * 再開できる。冒頭が Jump だけの中継シーンは本文が無いので保存されず、遷移先の本文で保存される。
+   * 次の入場・復元・新規開始・はじめからで保留は破棄される。
+   */
+  requestAutoSave(): void {
+    this.autoSavePending = true
+    this.flushAutoSave()
+  }
+
+  /** 保留中の自動セーブを、現在位置が本文でゲートが開いていれば実行して下ろす (#768)。 */
+  private flushAutoSave(): void {
+    if (!this.autoSavePending) return
+    if (this.storyEnded || !getTextEvent(this.resolvedEvents[this.eventIndex])) return
+    if (gateReason('quickSave', this.gateState()) !== null) return
+    this.autoSavePending = false
+    this.saveQuick('auto')
+  }
+
+  private saveQuick(origin: 'quick' | 'auto'): boolean {
+    // 結果のトースト（成功・弾かれた理由）はここで出す (#769。ロードの #765 と対称)。手動（F5）のみ通知し、
+    // 自動セーブ（`onSceneChange` 経由の 'auto'）は無言。
+    if (this.storyEnded) {
+      if (origin === 'quick') this.showToast('この場面ではセーブできません')
+      return false
+    }
     // 選択肢・待機・Jump 待機中・停止中 (#725)・入場中 (#734): 遷移途中・停止位置をセーブに残さない
-    // （openSaveMenu と同じ理由）。
-    if (this.isTransitionGated('quickSave')) return false
+    // （openSaveMenu と同じ理由）。文言の振り分けはロード側（quickLoad）と同じ。
+    const blocked = gateReason('quickSave', this.gateState())
+    if (blocked) {
+      if (origin === 'quick') {
+        this.showToast(
+          blocked === 'jump' || blocked === 'entry'
+            ? '場面転換中のためセーブできません'
+            : 'この場面ではセーブできません'
+        )
+      }
+      return false
+    }
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
@@ -6223,6 +6323,7 @@ export class NovelRenderer {
       sceneName,
     }
     this.saveManager.quickSave(data)
+    if (origin === 'quick') this.showToast('クイックセーブしました')
     return true
   }
 
@@ -6432,14 +6533,6 @@ export class NovelRenderer {
   private loadFromSaveData(data: SaveSlotData, origin: LoadOrigin): Promise<SceneEntryResult> {
     this.audioManager.ensureContext()
 
-    if (!data.sceneId) {
-      // sceneId が無い空セーブはフラグだけ復元して終了（restoreToScene を通さない）
-      this.gameState.fromJSON(data.flags)
-      // 暫定: 空 sceneId は flags のみ反映して成功扱い。扱いは #768 で決める
-      this.notifyLoadSuccess(origin)
-      return Promise.resolve({ status: 'entered', sceneId: null })
-    }
-
     // SaveSlotData → NovelGameState のフィールド対応・後方互換フォールバックは
     // novelLayout.saveSlotToGameState に集約 (#260)。fade だけは PixiJS を間接参照する
     // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
@@ -6498,13 +6591,6 @@ export class NovelRenderer {
     // 注意: ブラウザの自動再生ポリシー上、ユーザー操作を経ていない状態での AudioContext.resume()
     // が実際に有効になるかはブラウザ依存の可能性がある。実機での動作確認が必要。
     this.audioManager.ensureContext()
-
-    if (!snapshot.sceneId) {
-      // sceneId が無いスナップショットはフラグだけ復元して終了（restoreToScene を通さない。
-      // loadFromSaveData の空セーブ分岐と同じ扱い）
-      this.gameState.fromJSON(snapshot.flags)
-      return Promise.resolve({ status: 'entered', sceneId: null })
-    }
 
     return this.enterScene({ kind: 'restore', state: snapshot, source: 'snapshot' })
   }

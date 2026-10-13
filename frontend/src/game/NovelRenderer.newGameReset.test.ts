@@ -110,14 +110,14 @@ describe('NovelRenderer.restart() の gameState/currentSceneId リセット (#63
     expect(r.getCurrentSceneId()).toBe(r.getAllSceneIds()[0])
   })
 
-  it('3: allScenes が空の状態で restart() すると currentSceneId が null になる（境界-1・防御）', () => {
+  it('3: allScenes が空の状態で restart() しても currentSceneId は entrySceneId（setScenes のエントリ）に戻る（境界-1・防御 #768）', () => {
     const r = makeRenderer(SCENES)
     r.jumpToScene('branch') // currentSceneId='branch' / rawEvents は空でない状態を作る
     r.setJumpSceneIndex([]) // ジャンプ索引（allScenes）だけを空にする
 
     r.restart()
 
-    expect(r.getCurrentSceneId()).toBeNull()
+    expect(r.getCurrentSceneId()).toBe(SCENES[0].id)
   })
 
   it('4: rawEvents が空の状態（未初期化 renderer）で restart() を呼んでも例外にならず gameState/currentSceneId は変化しない（早期 return）', () => {
