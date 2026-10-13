@@ -1030,7 +1030,7 @@ describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#75
 
     r.restoreSnapshot({ ...r.getSnapshot(), sceneId: 'ghost', flags: { x: { Bool: true } } })
     await flush()
-    // 復元は失敗（flags のみ反映）。位置は Jump のままなので遷移を位置から再導出する。
+    // 復元は失敗（flags も適用しない #765）。位置は Jump のままなので遷移を位置から再導出する。
     expect(internals(r).jumpState).toBe('pending')
     tick(r)
     far.resolve([...ENTRY, FAR])

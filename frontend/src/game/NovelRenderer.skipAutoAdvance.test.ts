@@ -243,7 +243,7 @@ describe('NovelRenderer skipAutoAdvance / pendingAutoAdvance / resumeAutoAdvance
     expect(r.getDebugState().waitingForWait).toBe(true)
   })
 
-  it('9: quickLoad() ケースB（sceneId が allScenes に無く missingSceneResolver も無い）→ フラグだけ復元されwarnが出るが pendingAutoAdvance が false になり自動進行が実行される（フリーズしない）', () => {
+  it('9: quickLoad() ケースB（sceneId が allScenes に無く missingSceneResolver も無い）→ flags は適用されずwarnが出る（#765）が pendingAutoAdvance が false になり自動進行が実行される（フリーズしない）', () => {
     vi.useFakeTimers()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     // allScenes には 'hub' しか無く、セーブ対象の 'ghost' は含まれない。resolver も設定しない。
