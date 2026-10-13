@@ -20,6 +20,7 @@ import { parseDebugQuery, parseDebugUnlockAll } from '../game/debugQuery'
 import {
   resolveInitialEntry,
   runInitialEntry,
+  shouldRunDebugScript,
   summarizeInitialEntry,
   type InitialEntryReport,
 } from '../game/initialEntry'
@@ -799,11 +800,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
           // 確定してから実行する（`?debug_scene=` は resolveInitialEntry の試行に含まれる）。
           // 本番ビルドでも常時有効（confinement は `?scene=` 単独埋め込み専用の別経路で、debug は
           // 常に confinement なしで遷移する）。onSceneChange は上で配線されていない（#664）。
-          if (
-            debugQueryResult &&
-            'script' in debugQueryResult &&
-            outcome.final.status !== 'superseded'
-          ) {
+          if (debugQueryResult && 'script' in debugQueryResult && shouldRunDebugScript(outcome)) {
             void renderer.playScript(debugQueryResult.script)
           }
         })

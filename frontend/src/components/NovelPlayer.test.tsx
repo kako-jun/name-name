@@ -733,7 +733,7 @@ describe('NovelPlayer events/jumpSceneIndex 同期 effect の分離 (#671 M1)', 
     const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
     await flushAsync()
     const r = lastRenderer()
-    // mount 直後（init 内の直接呼び出し + 反映用 effect の初回発火分）をクリアし、
+    // mount 直後の呼び出し（マウント時は loadEvents のみ。setEvents は呼ばれない）をクリアし、
     // 以降の差分だけを見る。
     r.setEvents.mockClear()
     r.setJumpSceneIndex.mockClear()
@@ -767,8 +767,8 @@ describe('NovelPlayer events/jumpSceneIndex 同期 effect の分離 (#671 M1)', 
 // PlayerScreen が解決した initialSceneId / confinedSceneIds をそのまま renderer に配線する
 // ことと、renderer.setOnStoryEndedChange 経由で届く終劇状態が "to be continued..." の
 // DOM 表示に反映されることを検証する。debug_scene（#220、#652で本番ビルドでも常時有効）との
-// 優先順位（initialSceneId → debug_scene の順に startFrom が呼ばれ、後勝ちで debug 側が効く）
-// も含む。
+// 優先順位（初期入場は debug_scene を先に試し、入場できれば ?scene= は試さない。入場できなければ
+// ?scene= に進む。#734）も含む。
 describe('NovelPlayer `?scene=` ディープリンク + confinement 配線 (#386)', () => {
   const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
 
@@ -3621,32 +3621,27 @@ describe('NovelPlayer fluid 再マウントと初期入場の補足 (#734 PR2)',
   })
 
   // ADR 0003 §5-1: fluid 再マウントでは debug 起点（?debug_scene= / ?debug_script=）を再実行しない。
-  // 実装は snapshot の試行の後でも ?debug_script= の playScript を実行してしまうため、復元した位置の上で
-  // スクリプトが再生される（不整合14 の ?debug_script= 側が残っている）。
-  it.fails(
-    'S4: fluid 再マウントでは ?debug_script= の playScript も再実行しない（復元した位置を上書きしない）',
-    async () => {
-      window.history.pushState({}, '', '?debug_script=advance')
-      try {
-        render(<NovelPlayer events={[]} aspectRatio="auto" />)
-        await flushAsync()
-        const first = rendererInstances[0]
-        first.getSnapshot.mockReturnValue({
-          ...first.getSnapshot(),
-          sceneId: 'scene-a',
-        })
-        act(() => {
-          triggerResize(400, 800)
-        })
-        await flushAsync()
-        const second = rendererInstances[1]
-        expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
-        expect(second.playScript).not.toHaveBeenCalled()
-      } finally {
-        window.history.pushState({}, '', '/')
-      }
+  it('S4: fluid 再マウントでは ?debug_script= の playScript も再実行しない（復元した位置を上書きしない）', async () => {
+    window.history.pushState({}, '', '?debug_script=advance')
+    try {
+      render(<NovelPlayer events={[]} aspectRatio="auto" />)
+      await flushAsync()
+      const first = rendererInstances[0]
+      first.getSnapshot.mockReturnValue({
+        ...first.getSnapshot(),
+        sceneId: 'scene-a',
+      })
+      act(() => {
+        triggerResize(400, 800)
+      })
+      await flushAsync()
+      const second = rendererInstances[1]
+      expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+      expect(second.playScript).not.toHaveBeenCalled()
+    } finally {
+      window.history.pushState({}, '', '/')
     }
-  )
+  })
 
   it('E3: スナップショットの復元が failed なら、スナップショットの flags を保ってエントリから始める', async () => {
     render(<NovelPlayer events={[]} aspectRatio="auto" />)

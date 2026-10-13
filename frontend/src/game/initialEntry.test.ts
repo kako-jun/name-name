@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   resolveInitialEntry,
   runInitialEntry,
+  shouldRunDebugScript,
   summarizeInitialEntry,
   type InitialEntryRenderer,
   type ResolveInitialEntryInput,
@@ -403,5 +404,27 @@ describe('summarizeInitialEntry', () => {
       resolveInitialEntry(input({ debugQuery: parseDebugQuery('?debug_script=advance') }))
     )
     expect(summarizeInitialEntry(out)).toEqual({ debugScene: null })
+  })
+})
+
+describe('shouldRunDebugScript', () => {
+  const entered: SceneEntryResult = { status: 'entered', sceneId: 'x' }
+  it('debug 起点またはエントリで入場できたときだけ実行する', async () => {
+    const { renderer } = fakeRenderer()
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input()))
+    expect(shouldRunDebugScript(out)).toBe(true)
+  })
+  it('スナップショットを試した（fluid 再マウント）ときは実行しない', async () => {
+    const { renderer } = fakeRenderer()
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input({ snapshot: SNAPSHOT })))
+    expect(out.final).toEqual(entered)
+    expect(shouldRunDebugScript(out)).toBe(false)
+  })
+  it('入場できなかった・置き換えられたときは実行しない', async () => {
+    const { renderer } = fakeRenderer({
+      startFrom: vi.fn(async () => ({ status: 'superseded' }) as const),
+    })
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input()))
+    expect(shouldRunDebugScript(out)).toBe(false)
   })
 })

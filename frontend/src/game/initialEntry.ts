@@ -153,3 +153,13 @@ export function summarizeInitialEntry(outcome: InitialEntryOutcome): InitialEntr
     },
   }
 }
+
+/**
+ * `?debug_script=` の `playScript` を実行してよいか。初期入場が debug 起点（またはエントリ）で入場
+ * できた（`entered`）ときだけ実行する。fluid 再マウントのスナップショットを試した場合は、復元した位置の上で
+ * スクリプトを再生しない（debug 起点を再実行しない。不整合14）。入場できなかった・置き換えられた場合も実行しない。
+ */
+export function shouldRunDebugScript(outcome: InitialEntryOutcome): boolean {
+  if (outcome.steps.some((s) => s.attempt.kind === 'snapshot')) return false
+  return outcome.final.status === 'entered'
+}
