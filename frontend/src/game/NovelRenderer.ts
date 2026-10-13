@@ -486,6 +486,8 @@ export class NovelRenderer {
   private bgLoadToken = 0
   /** 現在表示対象としてロード待ち中の背景 token。本文 reveal の背景待ち判定に使う。 */
   private pendingBackgroundLoadToken: number | null = null
+  /** 進行中の背景ロード（成功・失敗・破棄のどれでも解決する）。`waitForBackgroundLoad` が待つ (#734) */
+  private pendingBackgroundLoad: Promise<void> | null = null
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -1542,15 +1544,6 @@ export class NovelRenderer {
   }
 
   /**
-   * BGM を止めて持ち越し状態（currentBgmPath）も空にする (#724)。動画書き出しのように、
-   * ライブプレビューで鳴っていた曲を引き継がず「新規開始」したい呼び出し側が jumpToScene の前に使う。
-   */
-  stopBgmForFreshStart(): void {
-    this.audioManager.stopBgm(0)
-    this.currentBgmPath = null
-  }
-
-  /**
    * 終劇状態を解除する。進行・新規開始は適用の前に呼ぶ: 適用の中の `resetAndStartEvents` →
    * `processUntilNextTextEvent` で起きる先回り終劇（#398）の `endStory()` が二重発火ガード
    * （`storyEnded`）で潰れないようにするため (#734, ADR 0003 §3 の5)。
@@ -2376,6 +2369,15 @@ export class NovelRenderer {
     this.app.renderer.resize(this.screenWidth, this.screenHeight, resolution)
     this.choiceOverlay.setRenderResolution(resolution)
     this.titleScreenOverlay.setRenderResolution(resolution)
+  }
+
+  /**
+   * 進行中の背景画像ロードの完了を待つ (#734)。動画書き出しは新規開始で背景が地色から始まるため、
+   * 未キャッシュの背景が録画の先頭に間に合うよう、録画開始前に待つ。ロードが無ければ即解決。
+   * 失敗・破棄（より新しい背景要求）でも reject せず解決する。
+   */
+  async waitForBackgroundLoad(): Promise<void> {
+    await this.pendingBackgroundLoad
   }
 
   /**
@@ -5829,7 +5831,7 @@ export class NovelRenderer {
     }
 
     this.pendingBackgroundLoadToken = token
-    Assets.load(url)
+    const loading = Assets.load(url)
       .then((texture) => {
         if (token !== this.bgLoadToken) return
         if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
@@ -5845,6 +5847,10 @@ export class NovelRenderer {
         if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
         console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
       })
+      .finally(() => {
+        if (this.pendingBackgroundLoad === loading) this.pendingBackgroundLoad = null
+      })
+    this.pendingBackgroundLoad = loading
   }
 
   private showLoadedBackground(
