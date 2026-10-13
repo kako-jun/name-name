@@ -259,13 +259,13 @@ describe('computeAcrylicGeometry', () => {
     expect(g.shadow!.cx).toBeCloseTo(100, 9)
     expect(g.shadow!.rx).toBeCloseTo(84, 9)
     expect(g.shadow!.ry).toBeCloseTo(23.52, 9)
-    expect(g.shadow!.cy).toBeCloseTo(176.48, 9)
-    expect(g.shadow!.cy + g.shadow!.ry).toBeCloseTo(200, 9)
-    expect(g.base!.cy).toBeCloseTo(176.48, 9)
-    // 領域は x:[10,190] × y:[10,176.48] → 高さ 166.48 の正方形が中央に乗る
-    expect(g.sprite.width).toBeCloseTo(166.48, 9)
-    expect(g.sprite.height).toBeCloseTo(166.48, 9)
-    expect(g.sprite.x).toBeCloseTo(16.76, 9)
+    expect(g.shadow!.cy).toBeCloseTo(172.952, 9)
+    expect(g.shadow!.cy + g.shadow!.ry + g.base!.ry * 0.18).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
+    expect(g.base!.cy).toBeCloseTo(172.952, 9)
+    // 領域は x:[10,190] × y:[10,172.952] → 高さ 162.952 の正方形が中央に乗る
+    expect(g.sprite.width).toBeCloseTo(162.952, 9)
+    expect(g.sprite.height).toBeCloseTo(162.952, 9)
+    expect(g.sprite.x).toBeCloseTo(18.524, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
   })
 
@@ -274,7 +274,7 @@ describe('computeAcrylicGeometry', () => {
     expect(g.highlight!.cx).toBeCloseTo(100, 9)
     expect(g.highlight!.rx).toBeCloseTo(49, 9) // 70 * 0.7
     expect(g.highlight!.ry).toBeCloseTo(6.86, 9) // 19.6 * 0.35
-    expect(g.highlight!.cy).toBeCloseTo(169.62, 9) // 176.48 - 6.86
+    expect(g.highlight!.cy).toBeCloseTo(166.092, 9) // 172.952 - 6.86
   })
 
   it('縦長 400x100 は幅いっぱい・縦横比 4:1 を保つ（size と width の取り違えを検知）', () => {
@@ -287,9 +287,9 @@ describe('computeAcrylicGeometry', () => {
 
   it('横長 100x400 は高さいっぱい・縦横比 1:4 を保つ', () => {
     const g = computeAcrylicGeometry(100, 400, 200)
-    expect(g.sprite.height).toBeCloseTo(166.48, 9)
-    expect(g.sprite.width).toBeCloseTo(41.62, 9)
-    expect(g.sprite.x).toBeCloseTo((200 - 41.62) / 2, 9)
+    expect(g.sprite.height).toBeCloseTo(162.952, 9)
+    expect(g.sprite.width).toBeCloseTo(40.738, 9)
+    expect(g.sprite.x).toBeCloseTo((200 - 40.738) / 2, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
   })
 
@@ -304,7 +304,7 @@ describe('computeAcrylicGeometry', () => {
     expect(g.sprite.x).toBeCloseTo(10, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
     expect(g.sprite.width).toBeCloseTo(180, 9)
-    expect(g.sprite.height).toBeCloseTo(166.48, 9)
+    expect(g.sprite.height).toBeCloseTo(162.952, 9)
   })
 
   // minMarginPx(2) と marginRatio*size = 0.03*size の切替: size=66.67 で等しい。minLinePx(1.5) と 0.02*size は size=75 で等しい。
@@ -345,7 +345,8 @@ describe('computeAcrylicGeometry', () => {
     expect(g.base!.cy).toBe(g.shadow!.cy)
     expect(g.base!.rx).toBeLessThan(g.shadow!.rx)
     expect(g.base!.ry).toBeLessThan(g.shadow!.ry)
-    expect(g.shadow!.cy + g.shadow!.ry).toBeCloseTo(200, 9)
+    // 台座の側面の厚み（baseThicknessRatio 0.18 × 上面の縦半径）ぶんを下に予約して、足元の影が枠の下端に接する (#760)
+    expect(g.shadow!.cy + g.shadow!.ry + g.base!.ry * 0.18).toBeCloseTo(200, 9)
   })
 
   it('ハイライトは台座の内側（highlight ⊂ base）', () => {
@@ -375,7 +376,7 @@ describe('computeAcrylicGeometry', () => {
       expect(s.cx - s.rx).toBeGreaterThanOrEqual(-1e-9)
       expect(s.cx + s.rx).toBeLessThanOrEqual(200 + 1e-9)
       expect(b.rx).toBeLessThan(s.rx)
-      expect(s.cy + s.ry).toBeCloseTo(200, 9)
+      expect(s.cy + s.ry + g.base!.ry * 0.18).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
       if (clipped) expect(s.rx * 2).toBeCloseTo(200, 9)
       else expect(s.rx * 2).toBeCloseTo(shadowRaw, 9)
     }
@@ -456,7 +457,7 @@ describe('computeAcrylicGeometry: スイープ不変条件', () => {
               }
               if (hasBase) {
                 const { base, shadow, highlight } = g
-                expect(shadow!.cy + shadow!.ry, tag).toBeCloseTo(size, 9)
+                expect(shadow!.cy + shadow!.ry + base!.ry * 0.18, tag).toBeCloseTo(size, 9)
                 expect(shadow!.cx - shadow!.rx, tag).toBeGreaterThanOrEqual(-EPS)
                 expect(shadow!.cx + shadow!.rx, tag).toBeLessThanOrEqual(size + EPS)
                 expect(base!.cy - base!.ry, tag).toBeGreaterThanOrEqual(-EPS)
@@ -577,5 +578,19 @@ describe('resolveAcrylicParams: #760 の新パラメータ', () => {
   it('新パラメータの上書きは旧パラメータ（余白・線・台座）に影響しない', () => {
     const r = resolveAcrylicParams({ castAlpha: 0.1, baseThicknessRatio: 0.05 })
     expect(r).toEqual({ ...DEFAULT_ACRYLIC_PARAMS, castAlpha: 0.1, baseThicknessRatio: 0.05 })
+  })
+})
+
+describe('computeAcrylicGeometry: 台座の厚み分を枠内に収める (#760)', () => {
+  it('台座の足元（上面の中心 + 縦半径 + 厚み）も影も枠の下端を超えない（size・パラメータのスイープ）', () => {
+    for (const size of [40, 100, 200, 400])
+      for (const thick of [0, 0.1, 0.2])
+        for (const sc of [1, 1.2, 2]) {
+          const p = resolveAcrylicParams({ baseThicknessRatio: thick, shadowScale: sc })
+          const g = computeAcrylicGeometry(100, 200, size, p)
+          const t = g.base!.ry * thick
+          expect(g.base!.cy + g.base!.ry + t).toBeLessThanOrEqual(size + 1e-9)
+          expect(g.shadow!.cy + g.shadow!.ry + t).toBeLessThanOrEqual(size + 1e-9)
+        }
   })
 })

@@ -178,6 +178,7 @@ export interface AcrylicGeometry {
  * スプライト枠（一辺 `size`・原点は枠の左上）からアクリルスタンド風の各パーツの配置を求める。
  *
  * - 台座と影は枠の下端に置く（影の下端が枠の下端に接する）。影は台座より大きいので、影が枠に収まれば台座も収まる。
+ *   台座の側面の厚み（`baseThicknessRatio` × 上面の縦半径）ぶんは下に予約し、足元の楕円（上面の中心から厚みだけ下）の影が枠の下端に接する。
  * - スプライトは「枠の上端〜台座の中心」の領域に contain で収め、足元が台座の中心に乗る。
  *   余白と枠線の幅（片側 `marginPx + linePx`）ぶんだけ領域を内側に縮めるので、枠線も枠からはみ出さない。
  *   幅は比率から求めるが、`minMarginPx` / `minLinePx` を下回らない（小さいスプライトで線が 0px にならない）
@@ -221,7 +222,9 @@ export function computeAcrylicGeometry(
     const baseWc = baseW * k
     const baseH = baseWc * p.baseHeightRatio
     const shadowH = baseH * p.shadowScale
-    const cy = size - shadowH / 2
+    // 台座の側面の厚み（透明アクリルの台座は上面の下へ押し出される）ぶんを下に予約して、枠の下端に実際に収める (#760)
+    const thickness = (baseH / 2) * p.baseThicknessRatio
+    const cy = size - shadowH / 2 - thickness
     const cx = size / 2
     shadow = { cx, cy, rx: shadowW / 2, ry: shadowH / 2 }
     base = { cx, cy, rx: baseWc / 2, ry: baseH / 2 }
