@@ -18,6 +18,12 @@ function narration(...lines: string[]): Event {
 function condition(flag: string, events: Event[]): Event {
   return { Condition: { flag, events } }
 }
+function wait(ms: number): Event {
+  return { Wait: { ms } } as Event
+}
+function choice(...targets: string[]): Event {
+  return { Choice: { options: targets.map((t) => ({ text: `to ${t}`, jump: t })) } } as Event
+}
 function jump(target: string): Event {
   return { Jump: { target } }
 }
@@ -268,5 +274,104 @@ describe('sceneId が null のセーブとロード (#768)', () => {
 
     expect(internals(r).eventIndex).toBe(pos)
     expect(internals(r).rawEvents).toEqual(flat)
+  })
+})
+
+describe('シーン入場後の自動セーブは最初の本文の表示時に1回行う (#768)', () => {
+  const flush = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  const A = scene('a', [narration('a1'), jump('b')])
+
+  /** 自動セーブを NovelPlayer と同じ配線にした renderer。A の本文から始めて advance で Jump に到達する。 */
+  async function wired(others: EventScene[]): Promise<NovelRenderer> {
+    const r = prepare(new NovelRenderer())
+    r.setJumpSceneIndex([A, ...others])
+    r.loadEvents(A.events)
+    await r.startFrom({})
+    r.setOnSceneChange(() => r.requestAutoSave())
+    r.advance() // Jump に到達し予約
+    return r
+  }
+
+  it('冒頭が [待機] のシーンへ Jump で入った後、待機明けの最初の本文で保存される（位置はその本文）', async () => {
+    const B = scene('b', [wait(100), narration('b1'), narration('b2')])
+    const r = await wired([B])
+    r.getTimeController().tick(1)
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('b')
+    expect(new SaveManager().hasQuickSave()).toBe(false) // 待機中は保存しない
+
+    r.getTimeController().tick(100)
+    await flush()
+
+    const saved = new SaveManager().quickLoad()
+    expect(saved?.sceneId).toBe('b')
+    expect(saved?.eventIndex).toBe(1) // 待機の次の本文
+
+    // ロードすると待機を挟まずその本文から再開できる
+    const r2 = prepare(new NovelRenderer())
+    r2.setJumpSceneIndex([A, B])
+    r2.loadEvents(A.events)
+    await r2.startFrom({})
+    await expect(r2.quickLoad()).resolves.toEqual({ status: 'entered', sceneId: 'b' })
+    expect(internals(r2).eventIndex).toBe(1)
+    expect((r2 as unknown as { waitingForWait: boolean }).waitingForWait).toBe(false)
+  })
+
+  it('冒頭が Jump だけの中継シーンでは保存されず、遷移先の本文で保存される', async () => {
+    const B = scene('b', [jump('c')])
+    const C = scene('c', [narration('c1')])
+    const r = await wired([B, C])
+    const quickSave = vi.spyOn(
+      (r as unknown as { saveManager: { quickSave: (d: { sceneId: string | null }) => void } })
+        .saveManager,
+      'quickSave'
+    )
+    r.getTimeController().tick(1) // b（中継）→ c と連続して入場
+    await flush()
+    r.getTimeController().tick(1)
+    await flush()
+
+    expect(r.getCurrentSceneId()).toBe('c')
+    // 中継の b では保存されず、遷移先 c の本文で1回だけ保存される
+    expect(quickSave).toHaveBeenCalledTimes(1)
+    expect(quickSave.mock.calls[0][0].sceneId).toBe('c')
+  })
+
+  it('冒頭が選択肢のシーンでは入場時に保存せず、選択肢確定後の遷移先の本文で保存される', async () => {
+    const B = scene('b', [choice('c')])
+    const C = scene('c', [narration('c1')])
+    const r = await wired([B, C])
+    let confirm!: (jump: string) => void
+    vi.spyOn(
+      (r as unknown as { choiceOverlay: { show: (...a: unknown[]) => void } }).choiceOverlay,
+      'show'
+    ).mockImplementation((...a: unknown[]) => {
+      confirm = a[1] as (jump: string) => void
+    })
+    r.getTimeController().tick(1)
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('b')
+    expect(new SaveManager().hasQuickSave()).toBe(false)
+
+    confirm('c')
+    await flush()
+
+    expect(new SaveManager().quickLoad()?.sceneId).toBe('c')
+  })
+
+  it('待機中に別の位置を復元すると、保留中の自動セーブは破棄される', async () => {
+    const B = scene('b', [wait(100), narration('b1')])
+    const r = await wired([B])
+    r.getTimeController().tick(1)
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('b')
+
+    await r.restoreSnapshot(craftSnapshot({ sceneId: 'a', eventIndex: 0 }))
+    r.getTimeController().tick(200)
+    await flush()
+
+    expect(new SaveManager().hasQuickSave()).toBe(false)
   })
 })

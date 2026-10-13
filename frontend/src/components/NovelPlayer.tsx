@@ -786,8 +786,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
           // 倒れたセッションは配線せず、一時的な失敗で正しいクイックセーブを上書きしない。
           if (docKey && !hasDeepLinkOrDebugStart) {
             if (outcome.autoSave) {
+              // 保存はここでは行わず、そのシーンの最初の本文が表示された時点で renderer が1回行う (#768)
               renderer.setOnSceneChange(() => {
-                renderer.quickSave('auto')
+                renderer.requestAutoSave()
               })
             } else {
               renderer.showToast(

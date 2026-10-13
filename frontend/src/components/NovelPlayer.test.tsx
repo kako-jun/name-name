@@ -88,6 +88,7 @@ const {
     setDocKey = vi.fn()
     // #578: シーン切り替えごとの自動クイックセーブ配線・起動時の自動クイックロード判定用。
     setOnSceneChange = vi.fn()
+    requestAutoSave = vi.fn()
     hasQuickSave = vi.fn().mockReturnValue(false)
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()
@@ -1604,7 +1605,7 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(r.quickLoad).not.toHaveBeenCalled()
   })
 
-  it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.quickSave() が実行される（docKey 有り）', async () => {
+  it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.requestAutoSave() が実行される（docKey 有り）', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     await flushAsync()
     const r = lastRenderer()
@@ -1613,9 +1614,9 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     const cb = r.setOnSceneChange.mock.calls[0][0] as () => void
     cb()
 
-    expect(r.quickSave).toHaveBeenCalledTimes(1)
-    // 自動セーブは起点 'auto' で呼ぶ（renderer は 'auto' のとき結果のトーストを出さない #769）
-    expect(r.quickSave.mock.calls[0]).toEqual(['auto'])
+    // 保存そのものは renderer が最初の本文の表示時に行う (#768)。NovelPlayer は要求を出すだけ。
+    expect(r.requestAutoSave).toHaveBeenCalledTimes(1)
+    expect(r.quickSave).not.toHaveBeenCalled()
   })
 
   it('21 (最重要): docKey が異なる2つの NovelPlayer マウント（別プロジェクト相当）で、それぞれの setDocKey/自動クイックセーブ配線が独立し互いを呼ばない', async () => {
@@ -1632,13 +1633,13 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     // 各インスタンスのシーン変化コールバックは自分自身の quickSave しか呼ばない（相手を呼ばない）。
     const cbA = rendererA.setOnSceneChange.mock.calls[0][0] as () => void
     cbA()
-    expect(rendererA.quickSave).toHaveBeenCalledTimes(1)
-    expect(rendererB.quickSave).not.toHaveBeenCalled()
+    expect(rendererA.requestAutoSave).toHaveBeenCalledTimes(1)
+    expect(rendererB.requestAutoSave).not.toHaveBeenCalled()
 
     const cbB = rendererB.setOnSceneChange.mock.calls[0][0] as () => void
     cbB()
-    expect(rendererB.quickSave).toHaveBeenCalledTimes(1)
-    expect(rendererA.quickSave).toHaveBeenCalledTimes(1) // A 側は変化しない
+    expect(rendererB.requestAutoSave).toHaveBeenCalledTimes(1)
+    expect(rendererA.requestAutoSave).toHaveBeenCalledTimes(1) // A 側は変化しない
   })
 
   it('22: docKey 未指定でマウントした場合（EditorScreen相当）、renderer.setOnSceneChange が呼ばれず、自動クイックロードも実行されずエントリから始まる', async () => {
@@ -3660,18 +3661,18 @@ describe('NovelPlayer 初期入場の補足 (#734 PR2)', () => {
       expect(calls()).toBe(before)
     })
 
-    it('E2: 初期入場中の onSceneChange では quickSave されない（配線は確定後。確定後に配線されたコールバックだけが quickSave を呼ぶ）', async () => {
+    it('E2: 初期入場中の onSceneChange では 自動セーブ要求されない（配線は確定後。確定後に配線されたコールバックだけが requestAutoSave を呼ぶ）', async () => {
       render(<NovelPlayer events={[]} docKey="proj-a" />)
       const r = lastRenderer()
       const settle = holdStartFrom(r)
       await flushAsync()
       expect(r.setOnSceneChange).not.toHaveBeenCalled()
-      expect(r.quickSave).not.toHaveBeenCalled()
+      expect(r.requestAutoSave).not.toHaveBeenCalled()
       settle({ status: 'entered', sceneId: null })
       await flushAsync()
       const wired = r.setOnSceneChange.mock.calls[0][0] as () => void
       wired()
-      expect(r.quickSave).toHaveBeenCalledTimes(1)
+      expect(r.requestAutoSave).toHaveBeenCalledTimes(1)
     })
   })
 })
