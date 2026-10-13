@@ -145,14 +145,25 @@ export interface ActionTimeline {
   hitAt: number
 }
 
-export function buildActionTimeline(kind: ActionKind): ActionTimeline {
-  if (kind === 'attack') {
-    return {
-      duration: ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS + ACTION_GAP_MS,
-      hitAt: ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS,
-    }
-  }
-  return { duration: CAST_MS + ACTION_GAP_MS, hitAt: CAST_HIT_MS }
+export function buildActionTimeline(
+  kind: ActionKind,
+  opts: { damages?: boolean; downs?: boolean } = {}
+): ActionTimeline {
+  const motionEnd =
+    kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS : CAST_MS
+  const hitAt = kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS : CAST_HIT_MS
+  // のけぞり・倒れが途中で切れないよう、受ける側の動きが終わるまで次の行動を待つ
+  let end = motionEnd
+  if (opts.damages) end = Math.max(end, hitAt + RECOIL_MS)
+  if (opts.downs) end = Math.max(end, hitAt + RECOIL_MS + DOWN_MS)
+  return { duration: end + ACTION_GAP_MS, hitAt }
+}
+
+/** 行動の記録から時間割を作る。HP が減る対象がいればのけぞり、HP 0 になる対象がいれば倒れ切るまで含める */
+export function eventTimeline(event: BattleActionEvent): ActionTimeline {
+  const damages = event.hits.some((h) => h.kind === 'damage')
+  const downs = event.hits.some((h) => h.kind === 'damage' && h.hpAfter <= 0)
+  return buildActionTimeline(event.kind, { damages, downs })
 }
 
 export interface ActorSample {
@@ -282,7 +293,7 @@ export function advancePlayback(
       queue = queue.slice(1)
       active = { event: next, elapsed: 0, hitFired: false }
     }
-    const tl = buildActionTimeline(active.event.kind)
+    const tl = eventTimeline(active.event)
     const step = Math.min(rest, tl.duration - active.elapsed)
     active.elapsed += step
     rest -= step

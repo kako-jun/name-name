@@ -139,9 +139,12 @@ describe('sampleTarget', () => {
 
 describe('advancePlayback', () => {
   it('命中の瞬間に 1 度だけ fires に出て、行動の終わりで active が空く', () => {
-    const tl = buildActionTimeline('attack')
+    const tl = buildActionTimeline('attack', { damages: true })
     expect(tl.hitAt).toBe(ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS)
     expect(tl.duration).toBe(ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS + ACTION_GAP_MS)
+    // 倒れる行動は倒れ切るまで次を待つ
+    const down = buildActionTimeline('attack', { damages: true, downs: true })
+    expect(down.duration).toBe(tl.hitAt + RECOIL_MS + DOWN_MS + ACTION_GAP_MS)
     let pb = enqueueEvents(emptyPlayback(), [attackEvent(0)])
     expect(isPlaybackBusy(pb)).toBe(true)
     let r = advancePlayback(pb, tl.hitAt - 1)
