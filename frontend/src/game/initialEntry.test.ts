@@ -67,6 +67,17 @@ describe('resolveInitialEntry: 決定表', () => {
     expect(attempts[1]).toMatchObject({ confinedSceneIds: ['s'] })
   })
 
+  it('?scene= と ?debug_script= の併用 → ?scene= の confinement を外す（#729）', () => {
+    const debugQuery = parseDebugQuery('?debug_script=advance')
+    const attempts = resolveInitialEntry(
+      input({ debugQuery, initialSceneId: 's', confinedSceneIds: ['s'], hasQuickSave: true })
+    )
+    expect(attempts).toEqual([
+      { kind: 'scene-param', sceneId: 's', confinedSceneIds: null },
+      { kind: 'entry' },
+    ])
+  })
+
   it('スナップショット（fluid 再マウント）→ 復元のみ。debug 起点・?scene=・自動クイックロードは再実行しない（不整合14）', () => {
     const debugQuery = parseDebugQuery('?debug_scene=x')
     expect(
@@ -183,13 +194,6 @@ describe('runInitialEntry: 打ち切り規則', () => {
 })
 
 describe('resolveInitialEntry: 決定表の補足', () => {
-  it('?debug_script= と ?scene= の併用 → ?scene= の入場 → エントリ（debug_script は入場の試行に含まれない）', () => {
-    const debugQuery = parseDebugQuery('?debug_script=advance')
-    expect(
-      kinds(input({ debugQuery, initialSceneId: 's', confinedSceneIds: ['s'], hasQuickSave: true }))
-    ).toEqual(['scene-param', 'entry'])
-  })
-
   it('confinedSceneIds が undefined / null の ?scene= は confinement なし（null）で渡す', () => {
     for (const confinedSceneIds of [undefined, null]) {
       expect(resolveInitialEntry(input({ initialSceneId: 's', confinedSceneIds }))[0]).toEqual({

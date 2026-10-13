@@ -664,6 +664,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         // （NovelPlayer の `resolveInitialEntry`）が `?debug_scene=` を先に試し、解決できればその入場が
         // confinement なしで始まる。解決できなければ `?scene=` の入場がこの一覧で始まる (#734, #726)。
         // `?debug_scene=` 自体の遅延ロードも `startFrom` が解決するので、ここでの事前解決は要らない。
+        // `?debug_script=` を併用するときも、初期入場が confinement を外す（`resolveInitialEntry`、#729）。
         const confinedIds = resolvedStartSceneId
           ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
           : null

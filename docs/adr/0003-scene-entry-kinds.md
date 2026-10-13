@@ -314,6 +314,17 @@ PR2 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **DEV 警告は、冒頭に `[条件:]` を持つシーンでは出さない。** 条件の中に `[背景:]` があるかもしれず、断定できないため（警告が出ないだけで安全側）。テキストの無い原稿でも出さない
 - **既存テストの `setConfinedSceneIds` は、テスト専用ヘルパー `confineForTest`（`src/test/confinement.ts`）に置き換えた。** 「開始位置を変えずに一覧だけを仕込む」テスト用で、公開の setter は無い。入場属性としての確定は `startFrom` 経由のテストで検証する
 
+## PR3 実装時の差分（2026-10-14）
+
+PR3 の実装で、上の記述から次のとおり変えた。挙動の方針は変えていない。
+
+- **`--debug-scene` + `--new-game` は、セーブ削除を行う。** `--new-game` は明示指示なので、`--debug-scene` を指定していても従来どおりクイックセーブを削除する。自動クイックセーブも止まるので、この組み合わせで起動すると、起動後はクイックセーブが1つも残らない
+- **自動クイックセーブの停止は、`autosave: bool` で明示的に渡す。** TUI の `run` / `run_screens` / `event_loop` に `StartupEntry { playback_restored, autosave }` を渡し、`--debug-scene` では `autosave = false`、`playback_restored = false`（`read_positions` も復元しない）にする。`config.quicksave_path` は保存先の意味だけを持ち、`None` にして停止を兼ねることはしない。GUI の `InitialEntryOutcome.autoSave` と対称
+- **起動時の入場を `apply_startup_entry(cli, config, playback) -> StartupEntry` に切り出した。** `main()` は生ターミナルを扱って直接呼べないため、`main()` レベルの統合テスト（クイックセーブがある状態で `--debug-scene` を指定しても、flags・BGM が持ち越されず、シーンを切り替えてもセーブファイルの内容と更新日時が変わらない）をここで行う
+- **`--debug-scene` の ID が存在しないときは、`start_fresh_at` が何も変えず `false` を返し、alternate screen に入る前に stderr へ警告を出してエントリから始める**
+- **`playScript` の choice は、打ち切るとき `console.warn` で通知する。** `[ジャンプ:]` の遅延ロード失敗では `playScript` を打ち切らない（Jump はその位置で停止し、以降の `advance` が無視される。打ち切りの対象は ADR どおり choice だけ）
+- **`advance` 側の待機（`awaitPendingEntry`）は PR1 の時点で入っていたため、PR3 では変更していない**
+
 ## 判断を保留している点
 
 - confinement 中の復元: `?scene=` で埋め込んでいるときに F8 を押すと、圏外シーンのセーブも復元できる。本件では扱わない（記録のみ）

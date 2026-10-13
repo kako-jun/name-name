@@ -4030,10 +4030,10 @@ export class NovelRenderer {
    * 完了時・例外時とも元の msPerChar に必ず復元する（try/finally）。
    * 完了は Promise で通知し、その後は通常操作に戻る。
    *
-   * choice の jump 先が存在しない場合は jumpToScene の既存挙動に従い console.warn して
-   * no-op となる（例外は投げない）。
-   * 既知の制限: 不正な jump を指定した choice ステップでは、表示中の Choice オーバーレイが
-   * 残る場合がある（デバッグ用途のため許容）。
+   * choice は `jumpToScene` の入場結果を await する（未ロードのシーンは遅延ロードの完了まで待つ、#729）。
+   * 結果が `entered` 以外（遷移先が無い・resolver 失敗・適用例外・より新しい入場に置き換えられた・
+   * 終劇）なら、後続のステップを消化せず `playScript` を打ち切る（例外は投げない）。
+   * 不正な jump を指定した choice ステップでは、選択肢が再表示される（PR1 の契約）。
    *
    * 同時実行は非対応。実行中（wait 待機中など）の再呼び出しは throw する。
    *
@@ -4048,7 +4048,7 @@ export class NovelRenderer {
     const savedMsPerChar = this.dialogBox.getMsPerChar()
     this.dialogBox.setMsPerChar(0)
     try {
-      for (const step of steps) {
+      for (const [stepIndex, step] of steps.entries()) {
         switch (step.type) {
           case 'advance':
             this.advance()
@@ -4064,7 +4064,17 @@ export class NovelRenderer {
             // jump 成功時は resetAndStartEvents が false にするが、jump 失敗（存在しない
             // シーン）時は resetAndStartEvents が呼ばれないため、ここで明示的にリセットする。
             this.waitingForChoice = false
-            void this.jumpToScene(step.jump)
+            {
+              // 遅延ロードの完了まで待ち、入場できなかったら（不在・resolver 失敗・適用例外・
+              // より新しい入場に置き換えられた・終劇）後続のステップを消化せず打ち切る (#729, #734 PR3)。
+              const result = await this.jumpToScene(step.jump)
+              if (result.status !== 'entered') {
+                console.warn(
+                  `[name-name] playScript: choice:${step.jump} → ${result.status}、残り ${steps.length - stepIndex - 1} ステップを打ち切り`
+                )
+                return
+              }
+            }
             while (await this.awaitPendingEntry()) {
               if (!this.initialized) return
             }
