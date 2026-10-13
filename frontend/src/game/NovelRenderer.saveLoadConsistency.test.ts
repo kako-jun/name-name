@@ -374,4 +374,30 @@ describe('シーン入場後の自動セーブは最初の本文の表示時に1
 
     expect(new SaveManager().hasQuickSave()).toBe(false)
   })
+
+  it('冒頭が本文のシーンへ入場後、スキップで複数本文を進めても保存は1回・位置は最初の本文・トーストなし', async () => {
+    const B = scene('b', [narration('b1'), narration('b2'), narration('b3'), narration('b4')])
+    const r = await wired([B])
+    const quickSave = vi.spyOn(
+      (r as unknown as { saveManager: { quickSave: (d: { eventIndex: number }) => void } })
+        .saveManager,
+      'quickSave'
+    )
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    r.getTimeController().tick(1)
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('b')
+
+    r.setSkipMode(true)
+    r.advance()
+    r.advance()
+    r.advance()
+    r.getTimeController().tick(1000)
+    await flush()
+
+    expect(internals(r).eventIndex).toBeGreaterThan(0)
+    expect(quickSave).toHaveBeenCalledTimes(1)
+    expect(quickSave.mock.calls[0][0].eventIndex).toBe(0)
+    expect(toast).not.toHaveBeenCalled()
+  })
 })

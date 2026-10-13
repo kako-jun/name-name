@@ -153,9 +153,8 @@ const {
       currentBgmPath: null,
       storyEnded: false,
     })
-    // #768: 再生開始済みか。既定は「スナップショットに sceneId がある」（既存テストの「意味のある位置」の作り方）。
-    // sceneId が null のままの開始済み（ジャンプ前の線形ストリーム）は個別に mockReturnValue(true) で作る。
-    hasStartedPlayback = vi.fn(() => this.getSnapshot().sceneId !== null)
+    // #768: 再生開始済みか。既定は開始済み。未開始（init 未完了など）を作るテストだけ mockReturnValue(false) にする。
+    hasStartedPlayback = vi.fn().mockReturnValue(true)
     restoreSnapshot = vi.fn().mockResolvedValue({ status: 'entered', sceneId: null })
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
@@ -2014,7 +2013,8 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
   it('P3: 旧 renderer の getSnapshot が既定の sceneId: null のままリサイズすると restoreSnapshot は呼ばれず、initialSceneId 指定時は従来どおり新 renderer で startFrom が呼ばれる', async () => {
     render(<NovelPlayer events={[]} aspectRatio="auto" initialSceneId="scene-x" />)
     await flushAsync()
-    // getSnapshot は既定のまま（sceneId: null）上書きしない
+    // 再生は未開始（init 未完了相当）
+    rendererInstances[0].hasStartedPlayback.mockReturnValue(false)
 
     act(() => {
       triggerResize(400, 800)
@@ -2109,6 +2109,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     render(<NovelPlayer events={[]} aspectRatio="auto" />)
     await flushAsync()
     const first = rendererInstances[0]
+    first.hasStartedPlayback.mockReturnValue(false)
 
     // cleanup の getSnapshot() 呼び出しは init().then(...) の外（同期コード）なので、
     // 旧 renderer の init() が未解決のままでも安全に走ることを確認する。
@@ -2174,6 +2175,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     })
     expect(rendererInstances.length).toBe(2)
     const gen1 = rendererInstances[1]
+    gen1.hasStartedPlayback.mockReturnValue(false) // gen1 は再生未開始
     // gen1.getSnapshot は既定のまま上書きしない（sceneId: null の空スナップショット）
 
     // gen1 の init() が未解決のまま、さらにカテゴリが変わるリサイズが来て gen1 が destroy される。

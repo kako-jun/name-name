@@ -70,7 +70,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
   it('成功: 手動で「クイックセーブしました」、自動は無言', () => {
     const r = scenesRenderer([HUB])
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
-    expect(r.quickSave('auto')).toBe(true)
+    expect((r as unknown as { saveQuick(o: 'auto'): boolean }).saveQuick('auto')).toBe(true)
     expect(toast).not.toHaveBeenCalled()
     expect(r.quickSave()).toBe(true)
     expect(toast).toHaveBeenCalledTimes(1)
@@ -82,7 +82,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
     vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
     r.advance()
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
-    expect(r.quickSave('auto')).toBe(false)
+    expect((r as unknown as { saveQuick(o: 'auto'): boolean }).saveQuick('auto')).toBe(false)
     expect(toast).not.toHaveBeenCalled()
     expect(r.quickSave()).toBe(false)
     expect(toast).toHaveBeenCalledWith('この場面ではセーブできません')
@@ -110,7 +110,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
     r.advance() // Jump に到達し予約
     expect(internals(r).jumpState).toBe('pending')
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
-    expect(r.quickSave('auto')).toBe(false)
+    expect((r as unknown as { saveQuick(o: 'auto'): boolean }).saveQuick('auto')).toBe(false)
     expect(toast).not.toHaveBeenCalled()
     expect(r.quickSave()).toBe(false)
     expect(toast).toHaveBeenCalledWith('場面転換中のためセーブできません')

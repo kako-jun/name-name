@@ -6242,8 +6242,9 @@ export class NovelRenderer {
    * セーブできる。null は「エントリ文書の線形ストリーム上の位置」を意味し、ロード側が eventIndex で
    * 復元する (#768)。
    */
-  quickSave(origin: 'quick' | 'auto' = 'quick'): boolean {
-    return this.saveQuick(origin)
+  quickSave(): boolean {
+    // 手動（F5）専用。自動セーブは requestAutoSave() → saveQuick('auto') だけが行う (#769, #768)。
+    return this.saveQuick('quick')
   }
 
   /**
