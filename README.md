@@ -65,7 +65,7 @@ cd parser
 wasm-pack build --target web
 ```
 
-コミット済み wasm の再現性のため、ビルド条件は rustc 1.97.1（リポ直下の `rust-toolchain.toml` が正本）・wasm-pack 0.14.0 に揃えます。
+コミット済み wasm の再現性のため、ビルド条件は rustc 1.97.1（リポ直下の `rust-toolchain.toml` が正本）・wasm-pack 0.14.0 に揃えます。wasm は OS/アーキテクチャで byte 一致しないため CI では再現検査せず、生成した OS を問わず frontend のテストで検証します。
 
 **フロントエンド:**
 ```bash

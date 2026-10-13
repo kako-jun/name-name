@@ -70,7 +70,7 @@ Cloudflare ダッシュボード → Workers & Pages → Create application → 
 
 WASM (`parser/pkg/`) はリポにコミット済（`parser/pkg/.gitignore` で `*` だが `git add -f` 済み）なので、CF Pages 側で `wasm-pack` を回す必要はない。
 
-再生成時のビルド条件は rustc 1.97.1（リポ直下の `rust-toolchain.toml` が正本）・wasm-pack 0.14.0。CI の `wasm-reproducible` ジョブが、コミット済み wasm が現ソースから同条件で再ビルドできる（`git diff --exit-code parser/pkg/`）ことを検査する。
+再生成時のビルド条件は rustc 1.97.1（リポ直下の `rust-toolchain.toml` が正本）・wasm-pack 0.14.0。wasm は OS/アーキテクチャで byte 一致しないため CI では再現検査しない。生成した OS を問わず frontend のテストで検証する。
 
 ### Environment variables
 
