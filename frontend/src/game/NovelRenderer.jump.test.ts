@@ -790,61 +790,53 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     expect(r.getCurrentSceneId()).toBe('b')
   })
 
-  // 既知の実装バグ (#733 テスト担当報告): 遅延ロード往復に世代ガードが無く、await 中に別位置へ
-  // 移っても古い解決が startScene してしまう。修正されたら it.fails を it に戻すこと。
-  it.fails(
-    '14b: 遅延ロード中に startFrom で別位置へ移ったあと、古い解決が成功しても遷移しない（世代ガード）',
-    async () => {
-      vi.spyOn(console, 'warn').mockImplementation(() => {})
-      let resolve!: (s: EventScene[]) => void
-      const entry = [scene('a', [narration('a1'), jump('far')]), scene('b', [narration('b1')])]
-      const far = scene('far', [narration('far1')])
-      const r = makeRenderer(entry)
-      r.setMissingSceneResolver(
-        () =>
-          new Promise<EventScene[]>((res) => {
-            resolve = res
-          })
-      )
-      r.advance()
-      tick(r)
-      r.startFrom({ sceneId: 'b', eventIndex: 0 })
-      resolve([...entry, far])
-      await new Promise((res) => setTimeout(res, 0))
-      expect(r.getCurrentSceneId()).toBe('b')
-    }
-  )
+  // 遅延ロード往復の世代ガード (#733): await 中に別位置へ移ったら、古い解決は成功・失敗とも破棄される。
+  it('14b: 遅延ロード中に startFrom で別位置へ移ったあと、古い解決が成功しても遷移しない（世代ガード）', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let resolve!: (s: EventScene[]) => void
+    const entry = [scene('a', [narration('a1'), jump('far')]), scene('b', [narration('b1')])]
+    const far = scene('far', [narration('far1')])
+    const r = makeRenderer(entry)
+    r.setMissingSceneResolver(
+      () =>
+        new Promise<EventScene[]>((res) => {
+          resolve = res
+        })
+    )
+    r.advance()
+    tick(r)
+    r.startFrom({ sceneId: 'b', eventIndex: 0 })
+    resolve([...entry, far])
+    await new Promise((res) => setTimeout(res, 0))
+    expect(r.getCurrentSceneId()).toBe('b')
+  })
 
-  // 既知の実装バグ: 古い失敗の stallJump が新しい pending 予約まで stalled にしてしまう
-  // （jumpState の pending 判定だけでは世代を区別できない）。修正されたら it に戻す。
-  it.fails(
-    '14c: 遅延ロード中に startFrom → 新しい Jump が pending のとき、古い失敗が新しい予約を stalled にしない',
-    async () => {
-      vi.spyOn(console, 'warn').mockImplementation(() => {})
-      let resolve!: (s: EventScene[] | null) => void
-      const entry = [
-        scene('a', [narration('a1'), jump('far')]),
-        scene('b', [narration('b1'), jump('c')]),
-        scene('c', [narration('c1')]),
-      ]
-      const r = makeRenderer(entry)
-      r.setMissingSceneResolver(
-        () =>
-          new Promise<EventScene[] | null>((res) => {
-            resolve = res
-          })
-      )
-      r.advance()
-      tick(r)
-      r.startFrom({ sceneId: 'b', eventIndex: 1 }) // 新しい Jump(c) を pending で予約
-      expect(internals(r).jumpState).toBe('pending')
-      resolve(null) // 古い解決が失敗
-      await new Promise((res) => setTimeout(res, 0))
-      expect(internals(r).jumpState).toBe('pending')
-      tick(r)
-      expect(r.getCurrentSceneId()).toBe('c')
-    }
-  )
+  // 世代ガード (#733): jumpState の pending 判定だけでは世代を区別できないので、失敗側も破棄する。
+  it('14c: 遅延ロード中に startFrom → 新しい Jump が pending のとき、古い失敗が新しい予約を stalled にしない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let resolve!: (s: EventScene[] | null) => void
+    const entry = [
+      scene('a', [narration('a1'), jump('far')]),
+      scene('b', [narration('b1'), jump('c')]),
+      scene('c', [narration('c1')]),
+    ]
+    const r = makeRenderer(entry)
+    r.setMissingSceneResolver(
+      () =>
+        new Promise<EventScene[] | null>((res) => {
+          resolve = res
+        })
+    )
+    r.advance()
+    tick(r)
+    r.startFrom({ sceneId: 'b', eventIndex: 1 }) // 新しい Jump(c) を pending で予約
+    expect(internals(r).jumpState).toBe('pending')
+    resolve(null) // 古い解決が失敗
+    await new Promise((res) => setTimeout(res, 0))
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+  })
 
   it('15: playScript で startFrom 直後に advance しても、復元で予約された遷移を消化する', async () => {
     const r = new NovelRenderer()

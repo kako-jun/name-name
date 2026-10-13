@@ -692,6 +692,12 @@ export class NovelRenderer {
   /** Jump の遷移を発火する timer。`[待機]` の `waitTimer` とは別 (#733)。 */
   private jumpTimer: number | null = null
   /**
+   * 遷移文脈の世代 (#733)。再生位置が別の文脈へ移る箇所（armJump・resetAndStartEvents・applyState）で
+   * 進める。resolveMissingSceneAndJump は開始時に捕捉し、await 後に不一致なら（遅延ロード中に
+   * startFrom/復元/再遷移が入った）古い解決を破棄して何もしない。
+   */
+  private transitionGeneration = 0
+  /**
    * 本文を描画しないまま連続して実行した `[ジャンプ:]` の回数 (#725)。Jump のみのシーン同士の
    * 循環（a → b → a …）が macrotask ごとに永久に回らないよう、`JUMP_CHAIN_LIMIT` で打ち切る
    * （TUI の `RELAY_HOP_LIMIT` と同じ 100）。本文の描画（pushSnapshot）・ユーザー操作（advance）・
@@ -1436,6 +1442,7 @@ export class NovelRenderer {
    */
   private armJump(target: string): void {
     this.clearJumpTimer()
+    this.transitionGeneration++
     this.jumpState = 'pending'
     this.jumpTimer = this.time.setTimeout(() => {
       this.jumpTimer = null
@@ -1494,8 +1501,12 @@ export class NovelRenderer {
   private async resolveMissingSceneAndJump(sceneId: string): Promise<void> {
     if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) return
     this.pendingMissingScenes.add(sceneId)
+    const generation = this.transitionGeneration
     try {
       const scenes = await this.missingSceneResolver(sceneId)
+      // 遷移文脈が変わった（遅延ロード中に startFrom・復元・再遷移が入った）古い解決は破棄する (#733)。
+      // 成功時の startScene も失敗時の stallJump も、新しい文脈を壊さないよう何もしない。
+      if (generation !== this.transitionGeneration) return
       // #463: resolveMissingSceneAndRestore の S1 (#460) と同型のリスク。await 中に renderer
       // が destroy() されると this.initialized が false になり、destroy 後は startScene が
       // 破棄済みの this.app.stage を触るため、初期化チェック無しで先に進むと例外を投げうる。
@@ -1516,6 +1527,7 @@ export class NovelRenderer {
       }
       this.startScene(sceneId, scene, true)
     } catch (err) {
+      if (generation !== this.transitionGeneration) return
       console.warn(`[name-name] シーンの追加読み込みに失敗しました: ${sceneId}`, err)
       if (this.initialized) this.stallJump()
     } finally {
@@ -1964,6 +1976,7 @@ export class NovelRenderer {
     this.waitingForChoice = false
     this.waitingForWait = false
     this.jumpState = 'idle'
+    this.transitionGeneration++
     this.clearJumpTimer()
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
@@ -3740,6 +3753,7 @@ export class NovelRenderer {
     // Jump の遷移状態は GameState に載せず位置から導出する (#733)。復元は新しい到達として扱うので、
     // 予約中・停止中のどちらも持ち越さず idle へ戻し、末尾で位置が Jump なら再予約する。
     this.jumpState = 'idle'
+    this.transitionGeneration++
     this.clearJumpTimer()
     // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。goBack/seekTo でフェード中の
     // 終劇が巻き戻された後、古いタイマーが発火して復元済みの画面をタブローで上書きしてしまう事故を防ぐ。
