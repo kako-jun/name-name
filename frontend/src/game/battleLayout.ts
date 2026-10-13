@@ -130,6 +130,11 @@ const FALLBACK_H = 0.8
 export const SIDE_STAGGER_RATIO = 0.25
 /** 後衛 (#747) を右（敵から遠い側）へ下げる水平ずれ。スプライト一辺に対する比（半歩） */
 export const SIDE_BACK_ROW_SHIFT_RATIO = 0.5
+/** 味方の斜め一列 (#760): 斜めのずらし量（1 人ぶんの x 送り）の下限・上限。スプライト一辺に対する比 */
+export const SIDE_DIAGONAL_MIN_SHIFT_RATIO = 0.25
+export const SIDE_DIAGONAL_MAX_SHIFT_RATIO = 0.75
+/** 味方の斜め一列 (#760): 行間隔（y 送り）の上限。スプライト一辺に対する比（これ以上は隙間を空けない） */
+export const SIDE_DIAGONAL_MAX_PITCH_RATIO = 1.2
 /** 奥行き (#747) の縮尺の下限（地平線に近い・地平線より上でも潰れない） */
 export const DEPTH_MIN_SCALE = 0.3
 /** `battle_perspective` だけ指定されたときの地平線の高さ（画面比）の既定 */
@@ -256,7 +261,59 @@ export function fitCommandFontSize(
 }
 
 /**
- * ある側（敵 or 味方）の複数体を、領域内に千鳥で並べた枠を返す。
+ * 味方 (#760): FF6 式に左上から右下へ斜め一列に並べる純粋関数。`party[0]` が左上・以降 x,y とも単調増加
+ * （ステータス欄の行順と一致）。縮尺は掛けない。
+ *
+ * - 一辺 size = min(SIDE_MAX_SPRITE_SIZE, 高さ / 人数, 幅 / (1 + 後衛予約 + (人数-1) * 下限ずらし比))
+ * - 行間隔 pitch = min((高さ - size) / (人数 - 1), size * SIDE_DIAGONAL_MAX_PITCH_RATIO)  （size 以上＝縦に重ならない）
+ * - 斜めのずらし dx = clamp((幅 - size * (1 + 後衛予約)) / (人数 - 1), 下限比, 上限比) * size
+ * - 後衛 (#747): 斜めの位置から右へ `SIDE_BACK_ROW_SHIFT_RATIO * size`。後衛が 1 人でもいれば全員ぶん右余白
+ *   (`size * SIDE_BACK_ROW_SHIFT_RATIO`) を予約するので領域から出ない
+ * - 配置全体は領域内で水平・垂直とも中央寄せ
+ */
+export function computePartyDiagonal(
+  region: Rect,
+  count: number,
+  rows?: readonly (BattleRow | undefined)[]
+): SpriteSlot[] {
+  if (count <= 0) return []
+  const regionW = Math.max(0, region.w)
+  const regionH = Math.max(0, region.h)
+  const anyBack = !!rows && rows.slice(0, count).some((r) => r === 'back')
+  const backShift = anyBack ? SIDE_BACK_ROW_SHIFT_RATIO : 0
+  const steps = count - 1
+  const size = Math.max(
+    0,
+    Math.min(
+      SIDE_MAX_SPRITE_SIZE,
+      regionH / count,
+      regionW / (1 + backShift + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
+    )
+  )
+  const pitch =
+    steps > 0 ? Math.min((regionH - size) / steps, size * SIDE_DIAGONAL_MAX_PITCH_RATIO) : 0
+  const dx =
+    steps > 0 && size > 0
+      ? Math.min(
+          SIDE_DIAGONAL_MAX_SHIFT_RATIO,
+          Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (regionW - size * (1 + backShift)) / steps / size)
+        ) * size
+      : 0
+  const totalW = size * (1 + backShift) + steps * dx
+  const totalH = size + steps * pitch
+  const originX = region.x + (regionW - totalW) / 2
+  const originY = region.y + (regionH - totalH) / 2
+  const slots: SpriteSlot[] = []
+  for (let i = 0; i < count; i++) {
+    const back = rows?.[i] === 'back' ? size * SIDE_BACK_ROW_SHIFT_RATIO : 0
+    const y = originY + i * pitch
+    slots.push({ x: originX + i * dx + back, y, size, floor: y + size, scale: 1 })
+  }
+  return slots
+}
+
+/**
+ * 敵側（`side: 'party'` は `computePartyDiagonal` へ委譲）の複数体を、領域内に千鳥で並べた枠を返す。
  *
  * - 列数は「3 体まで 1 列・4 体以上は 2 列」を下限に、スプライトが `SIDE_READABLE_SPRITE_SIZE` に届く
  *   **最小の列数**を採る（列優先で埋める）。どの列数でも届かないときだけ最大サイズになる列数（同率は少ない方）
@@ -267,10 +324,7 @@ export function fitCommandFontSize(
  * - `withLabel`（敵側）: 各行の高さを `size + SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT` にして、スプライトの直下に
  *   ラベル矩形（`slot.label`）を返す。ラベルを入れるとスプライトが 0 に潰れるほど低い領域では、
  *   ラベルだけを省いてスプライトを残す（`slot.label` なし）
- * - `rows`（味方側・#747）: index 順の隊列。`back` の体は右（敵から遠い側）へ `SIDE_BACK_ROW_SHIFT_RATIO * size`
- *   下げる。後衛が 1 体でもいれば、各列の右に下げ幅ぶんを予約する（隣の列に食い込まない・領域から出ない）。
- *   そのため後衛が 1 人でもいると**全員の size が縮む**（前衛だけの場合より小さくなる）。これは仕様
- *   後衛がいなければ従来と完全に同じ座標
+ * - 味方（`rows`）は `computePartyDiagonal` が扱う
  */
 export function computeFormation(
   region: Rect,
@@ -280,22 +334,17 @@ export function computeFormation(
   rows?: readonly (BattleRow | undefined)[]
 ): SpriteSlot[] {
   if (count <= 0) return []
+  if (side === 'party') return computePartyDiagonal(region, count, rows)
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
   // 敵側だけ各行にラベル（隙間 + 名前/HP の 2 行）ぶんを予約する
   let extra = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
-  const anyBack = side === 'party' && !!rows && rows.slice(0, count).some((r) => r === 'back')
-  const backShift = anyBack ? SIDE_BACK_ROW_SHIFT_RATIO : 0
   const sizeFor = (columns: number): number => {
     const rowCount = Math.ceil(count / columns)
     const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
     return Math.max(
       0,
-      Math.min(
-        regionW / (columns * (1 + backShift) + stagger),
-        regionH / rowCount - extra,
-        SIDE_MAX_SPRITE_SIZE
-      )
+      Math.min(regionW / (columns + stagger), regionH / rowCount - extra, SIDE_MAX_SPRITE_SIZE)
     )
   }
   const baseColumns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
@@ -317,7 +366,7 @@ export function computeFormation(
   }
   const rowCount = Math.ceil(count / columns)
   const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
-  const colPitch = size * (1 + backShift)
+  const colPitch = size
   const totalW = colPitch * columns + size * stagger
   const totalH = (size + extra) * rowCount
   const originX = region.x + (regionW - totalW) / 2
@@ -327,11 +376,9 @@ export function computeFormation(
     const col = Math.floor(i / rowCount)
     const row = i % rowCount
     const odd = row % 2 === 1
-    // 敵: 奇数行を右へ / 味方: 偶数行を右へ（= 奇数行が相対的に左＝敵側へ寄る）
-    const shifted = side === 'enemy' ? odd : !odd
-    const dx = stagger > 0 && shifted ? size * stagger : 0
-    const back = anyBack && rows?.[i] === 'back' ? size * SIDE_BACK_ROW_SHIFT_RATIO : 0
-    const x = originX + col * colPitch + dx + back
+    // 敵: 奇数行を右へ（味方側へ）ずらして千鳥にする
+    const dx = stagger > 0 && odd ? size * stagger : 0
+    const x = originX + col * colPitch + dx
     const y = originY + row * (size + extra)
     const slot: SpriteSlot = { x, y, size, floor: y + size, scale: 1 }
     if (withLabel && !labelDropped && size > 0) {

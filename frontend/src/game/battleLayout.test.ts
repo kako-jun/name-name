@@ -157,7 +157,7 @@ describe('computeFormation', () => {
   })
 
   it('4 体は 2 列（列優先: 先頭 rows 体が左列）', () => {
-    const slots = computeFormation(region, 4, 'party')
+    const slots = computeFormation(region, 4, 'enemy')
     // rows=2 → i=0,1 が列 0、i=2,3 が列 1
     const col0 = [slots[0], slots[1]]
     const col1 = [slots[2], slots[3]]
@@ -238,15 +238,16 @@ describe('computeFormation', () => {
     expect(slots[2].x).toBeCloseTo(slots[0].x)
   })
 
-  it('味方は偶数行が右にずれ、敵と向きが逆になる', () => {
+  it('味方は左上から右下への斜め一列（x,y とも単調増加）、敵は千鳥のまま (#760)', () => {
     const party = computeFormation(region, 3, 'party')
     const enemy = computeFormation(region, 3, 'enemy')
-    const size = party[0].size
-    expect(party[0].x - party[1].x).toBeCloseTo(size * SIDE_STAGGER_RATIO)
-    expect(party[2].x).toBeCloseTo(party[0].x)
-    // 向きが逆: 敵は row1 が右、味方は row1 が左
+    for (let i = 1; i < party.length; i++) {
+      expect(party[i].x).toBeGreaterThan(party[i - 1].x)
+      expect(party[i].y).toBeGreaterThan(party[i - 1].y)
+    }
+    // 敵は従来どおり千鳥: row1 が右、row2 は row0 と同じ x
     expect(Math.sign(enemy[1].x - enemy[0].x)).toBe(1)
-    expect(Math.sign(party[1].x - party[0].x)).toBe(-1)
+    expect(enemy[2].x).toBeCloseTo(enemy[0].x)
   })
 
   it('count=1 は千鳥なし（敵・味方で x が同じ）', () => {

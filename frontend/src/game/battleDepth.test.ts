@@ -314,9 +314,10 @@ describe('computeFormation 隊列の境界 (#747)', () => {
     const slots = party(3, ['back'])
     const full = party(3, ['back', undefined, undefined])
     expect(slots).toEqual(full)
-    // 1 列 3 人: index 0 だけ size/2 右、1 と 2 は同じ x
-    expect(slots[0].x - slots[2].x).toBeCloseTo(slots[0].size * 0.5, 9)
-    expect(slots[1].x).toBeLessThan(slots[0].x)
+    // 斜め一列: index 0 だけ size/2 右へ下がる（基準の斜め位置との差）
+    const front = party(3, ['front', 'front', 'front'])
+    expect(slots[0].x - slots[2].x).toBeCloseTo(front[0].x - front[2].x + slots[0].size * 0.5, 9)
+    expect(slots[1].x).toBeGreaterThan(slots[0].x - slots[0].size)
   })
   it('rows が count より長い: はみ出し分は無視（後衛を含まないなら従来と同じ）', () => {
     expect(party(1, ['front', 'back', 'back'])).toEqual(party(1))
@@ -330,18 +331,24 @@ describe('computeFormation 隊列の境界 (#747)', () => {
       computeFormation(region, 3, 'enemy', true)
     )
   })
-  it('同一列の前衛と後衛（同偶奇行）の x 差はちょうど 0.5 × size', () => {
+  it('前衛と後衛の x 差は斜め位置の差 + ちょうど 0.5 × size (#760)', () => {
     const slots = party(3, ['front', 'front', 'back'])
-    expect(slots[2].x - slots[0].x).toBeCloseTo(slots[0].size * 0.5, 9)
+    const front = party(
+      3,
+      ['front', 'front', 'back'].map(() => 'front')
+    )
+    const dx = front[2].x - front[0].x
+    expect(slots[2].x - slots[0].x).toBeCloseTo(dx + slots[0].size * 0.5, 9)
   })
-  it('1 人後衛で 4 人: 全員の size が 384/3.25 に縮む（前衛のみは 125）', () => {
+  it('1 人後衛で 4 人: 全員の size が後衛ぶんの右余白で縮む（前衛のみは 62.5=高さ律速）(#760)', () => {
     const mixed = party(4, ['front', 'front', 'front', 'back'])
-    expect(party(4)[0].size).toBe(125)
-    for (const s of mixed) expect(s.size).toBeCloseTo(118.153846, 5)
+    expect(party(4)[0].size).toBe(62.5)
+    // 幅律速: 384 / (1 + 0.5 + 3 * 0.25) = 170.67 は高さ律速 62.5 より大きいので縮まない
+    for (const s of mixed) expect(s.size).toBe(62.5)
   })
-  it('全員後衛 4 人でも size は 384/3.25（1 人後衛と同じ）', () => {
+  it('全員後衛 4 人でも size は 1 人後衛と同じ (#760)', () => {
     const slots = party(4, ['back', 'back', 'back', 'back'])
-    for (const s of slots) expect(s.size).toBeCloseTo(118.153846, 5)
+    for (const s of slots) expect(s.size).toBe(62.5)
   })
   it('全員後衛 2 人: 高さ律速なので size は 125 のまま', () => {
     for (const s of party(2, ['back', 'back'])) expect(s.size).toBe(125)
@@ -349,18 +356,17 @@ describe('computeFormation 隊列の境界 (#747)', () => {
   it('全員後衛 1 人: size は最大の 160', () => {
     expect(party(1, ['back'])[0].size).toBe(160)
   })
-  it('2 列＋後衛: 左列の最右端が右列の最左端を超えない', () => {
-    const slots = party(4, ['front', 'back', 'front', 'back'])
-    const col0Right = Math.max(slots[0].x + slots[0].size, slots[1].x + slots[1].size)
-    const col1Left = Math.min(slots[2].x, slots[3].x)
-    expect(col0Right).toBeLessThanOrEqual(col1Left + 1e-9)
-  })
-  it('2 列＋全員後衛でも列が食い込まず領域内', () => {
-    const slots = party(4, ['back', 'back', 'back', 'back'])
-    const col0Right = Math.max(slots[0].x + slots[0].size, slots[1].x + slots[1].size)
-    const col1Left = Math.min(slots[2].x, slots[3].x)
-    expect(col0Right).toBeLessThanOrEqual(col1Left + 1e-9)
-    slots.forEach((s) => expect(within(box(s), region)).toBe(true))
+  it('斜め一列＋後衛: 領域内で縦に重ならない (#760)', () => {
+    for (const rows of [
+      ['front', 'back', 'front', 'back'],
+      ['back', 'back', 'back', 'back'],
+    ] as const) {
+      const slots = party(4, rows)
+      slots.forEach((s) => expect(within(box(s), region)).toBe(true))
+      for (let i = 1; i < slots.length; i++) {
+        expect(slots[i].y).toBeGreaterThanOrEqual(slots[i - 1].y + slots[i - 1].size - 1e-9)
+      }
+    }
   })
 })
 
@@ -436,15 +442,15 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
     expect(L.party).toEqual([])
     expect(L.enemies).toEqual([])
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 奥の味方の scale は 0.56158（リテラル）', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の味方の scale は 0.44（リテラル・斜め一列 #760）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.party[0].scale).toBeCloseTo(0.56158, 5)
-    expect(L.party[0].size).toBeCloseTo(54.4734, 3)
+    expect(L.party[0].scale).toBeCloseTo(0.44, 5)
+    expect(L.party[0].size).toBeCloseTo(21.34, 3)
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 手前の味方は scale 1・size 97', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 最前列（4 人目）の味方は scale 1・size 48.5（斜め一列 #760）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.party[1].scale).toBe(1)
-    expect(L.party[1].size).toBe(97)
+    expect(L.party[3].scale).toBe(1)
+    expect(L.party[3].size).toBe(48.5)
   })
   it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.44（リテラル・幾何が下限 0.3 に張り付く）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
@@ -467,8 +473,9 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
   it('未指定: depthActive false・座標は従来どおり（800x450・4 対 4）', () => {
     const L = computeSideBattleLayout(base)
     expect(L.depthActive).toBe(false)
-    expect([L.party[0].x, L.party[0].y, L.party[0].size]).toEqual([507.125, 118, 97])
-    expect([L.party[1].x, L.party[1].y]).toEqual([482.875, 215])
+    expect([L.party[0].x, L.party[0].y, L.party[0].size]).toEqual([513.1875, 118, 48.5])
+    expect(L.party[1].x).toBeCloseTo(549.5625, 3)
+    expect(L.party[1].y).toBe(166.5)
     expect([L.enemies[0].x, L.enemies[0].y, L.enemies[0].size]).toEqual([134.875, 118, 65])
   })
   it('partyRows に front のみ・depth なしなら従来と完全に同じ', () => {
