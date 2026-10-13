@@ -2085,6 +2085,7 @@ export class NovelRenderer {
     this.currentBackgroundBrightness = null
     this.bgLoadToken++
     this.pendingBackgroundLoadToken = null
+    this.pendingBackgroundLoad = null
     this.clearBackgroundColor()
     this.videoLayer.remove()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
@@ -2496,6 +2497,7 @@ export class NovelRenderer {
     if (options?.preserveBackgroundForTransition) {
       this.bgLoadToken++
       this.pendingBackgroundLoadToken = null
+      this.pendingBackgroundLoad = null
       this.finishBackgroundCrossfadeInstant()
       this.videoLayer.remove()
     } else {
@@ -5818,6 +5820,7 @@ export class NovelRenderer {
     // 古い sprite+fade を addChild してしまう。
     const token = ++this.bgLoadToken
     this.pendingBackgroundLoadToken = null
+    this.pendingBackgroundLoad = null
 
     // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
@@ -6045,6 +6048,7 @@ export class NovelRenderer {
     this.currentBackgroundBrightness = null
     this.bgLoadToken++
     this.pendingBackgroundLoadToken = null
+    this.pendingBackgroundLoad = null
     this.clearBackgroundEntries()
     // 動画レイヤも背景と同じ扱いでクリアする (#252)
     this.videoLayer.remove()
