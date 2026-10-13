@@ -127,6 +127,8 @@ export const SIDE_LABEL_LINE_HEIGHT = 15
 export const SIDE_LABEL_LINES = 2
 export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
 export const SIDE_LABEL_GAP = 2
+/** 縦長の stage で敵を下寄せにするとき、領域の上端を下げてよい上限（stage の高さに対する比）(#760) */
+export const SIDE_PORTRAIT_ENEMY_MAX_DROP = 0.4
 /** 敵の立ち絵の縦横比の丸め範囲 (#760) */
 export const SIDE_ENEMY_ASPECT_MIN = 0.2
 export const SIDE_ENEMY_ASPECT_MAX = 3
@@ -637,6 +639,20 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const partyW = partyRegionWidth(halfSlots, partyHalf.w)
   const partyRegion: Rect = { x: stage.x + stage.w - partyW, y: stage.y, w: partyW, h: stage.h }
   const enemyRegion: Rect = { x: stage.x, y: stage.y, w: stage.w - partyW, h: stage.h }
+  // 縦長の stage (#760): 敵のかたまりを下寄せにし、1 人目（左上）の頭・板とぶつかりにくくする。
+  // 領域の下端は固定したまま上端を下げ、領域の縦中心を味方 party[1]〜party[2] の足元の中ほどに合わせる
+  // （上端の下げ幅は stage 高さの `SIDE_PORTRAIT_ENEMY_MAX_DROP` 倍まで）。横長はそのまま
+  if (stage.h > stage.w && halfSlots.length > 0) {
+    const footA = halfSlots[Math.min(1, halfSlots.length - 1)].floor
+    const footB = halfSlots[Math.min(2, halfSlots.length - 1)].floor
+    const bottom = stage.y + stage.h
+    const top = Math.min(
+      Math.max(stage.y, ((footA + footB) / 2) * 2 - bottom),
+      stage.y + stage.h * SIDE_PORTRAIT_ENEMY_MAX_DROP
+    )
+    enemyRegion.y = top
+    enemyRegion.h = Math.max(0, bottom - top)
+  }
   const partyHeight = halfSlots[0]?.size ?? 0
 
   let enemies = computeFormation(

@@ -1022,3 +1022,48 @@ describe('敵の大きさと縦横比 (#760)', () => {
     }
   })
 })
+
+describe('縦長の stage は敵を下寄せにする (#760)', () => {
+  it.each([1, 4])(
+    '360x640・味方 4 人・敵 %d 体: 敵は味方 1 人目の足元より下から始まる',
+    (e) => {
+      const L = computeSideBattleLayout({
+        width: 360,
+        height: 640,
+        partyCount: 4,
+        enemyCount: e,
+        enemyAspects: Array(e).fill(1.6),
+      })
+      for (const s of L.enemies) expect(s.y).toBeGreaterThanOrEqual(L.party[0].floor - EPS)
+      for (const s of L.enemies) expect(inside(slotRect(s), L.stage)).toBe(true)
+    }
+  )
+  it('360x640 の仕様値（リテラル）: 敵 1 体（縦横比 1.6）は (16, 281.3) から幅 164・高さ 102.5', () => {
+    const L = computeSideBattleLayout({
+      width: 360,
+      height: 640,
+      partyCount: 4,
+      enemyCount: 1,
+      enemyAspects: [1.6],
+    })
+    expect(L.enemies[0].x).toBeCloseTo(16, 3)
+    expect(L.enemies[0].y).toBeCloseTo(281.3, 1)
+    expect(L.enemies[0].width).toBeCloseTo(164, 3)
+    expect(L.enemies[0].size).toBeCloseTo(102.5, 1)
+  })
+  it('横長（800x450・1280x720）は従来の位置のまま（敵 1 体は stage の上端から）', () => {
+    for (const [w, h] of [
+      [800, 450],
+      [1280, 720],
+    ]) {
+      const L = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyAspects: [1],
+      })
+      expect(L.enemies[0].y).toBeCloseTo(L.stage.y, 3)
+    }
+  })
+})
