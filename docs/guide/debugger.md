@@ -43,7 +43,7 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 |---|---|---|
 | `debug_scene` | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移） | `?debug_scene=1-2` |
 | `debug_flags` | 開始時に立てるフラグ（`key:val` をカンマ区切り） | `&debug_flags=saw_characters:true,gold:100` |
-| `debug_eventIndex` | 開始イベント index（省略時 0） | `&debug_eventIndex=3` |
+| `debug_eventIndex` | 開始イベント index（省略時 0）。`[ジャンプ:]` を指すと、そこから遷移を再予約して先へ進む（遷移先不在なら警告して停止、#733） | `&debug_eventIndex=3` |
 | `debug_textIndex` | 開始テキスト index（省略時 0） | `&debug_textIndex=2` |
 | `debug_script` | クリック操作列を自動再生（カンマ区切り） | `?debug_script=advance,advance,choice:2-1` |
 | `debug_unlock_all` | `1` で全選択肢の `[条件: flag]` ロックを強制解放（#652） | `?debug_unlock_all=1` |
@@ -189,7 +189,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 
 ## 設計背景
 
-- `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ fresh-start 経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。
+- `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。復元後の `eventIndex` が `[ジャンプ:]` を指す場合は、`applyState` が Jump の遷移を再予約する（#733）。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ fresh-start 経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。
 - 「任意の state から起動・再開できる」ことは、状態と描画が分離できている**機械的な証明**でもある。新しいレンダラ／モードを足すときは、この API で任意局面を再現できることを完了条件にする。
 - 詳しい設計判断は [ADR 0002 — 決定論的状態とデバッグ容易性](../adr/0002-deterministic-state-and-debuggability.md) を参照。
 
