@@ -10,12 +10,15 @@ interface VideoExportModalProps {
   startSceneId: string
   endSceneId: string
   fps: number
+  /** true なら録画開始時の flags をプレビュー中のものから引き継ぐ。false（既定）は空 flags で決定論 */
+  inheritFlags: boolean
   status: string | null
   /** 録画進行中なら true。録画開始ボタンを disable する */
   isRunning: boolean
   onChangeStart: (id: string) => void
   onChangeEnd: (id: string) => void
   onChangeFps: (fps: number) => void
+  onChangeInheritFlags: (inherit: boolean) => void
   onStart: () => void
   onClose: () => void
 }
@@ -26,11 +29,13 @@ function VideoExportModal({
   startSceneId,
   endSceneId,
   fps,
+  inheritFlags,
   status,
   isRunning,
   onChangeStart,
   onChangeEnd,
   onChangeFps,
+  onChangeInheritFlags,
   onStart,
   onClose,
 }: VideoExportModalProps) {
@@ -106,6 +111,20 @@ function VideoExportModal({
             <option value={30}>30 fps</option>
             <option value={60}>60 fps</option>
           </select>
+        </label>
+        <label className="flex items-start gap-2 text-sm mb-3">
+          <input
+            type="checkbox"
+            checked={inheritFlags}
+            onChange={(e) => onChangeInheritFlags(e.target.checked)}
+            className="mt-1"
+          />
+          <span>
+            プレビューの flags を引き継ぐ
+            <span className="block text-xs opacity-70">
+              OFF（既定）は flags を空にして録画します。毎回同じ映像になります。
+            </span>
+          </span>
         </label>
         {status && <div className="text-xs mb-3 opacity-80 break-all">{status}</div>}
         <div className="flex gap-2 justify-end">

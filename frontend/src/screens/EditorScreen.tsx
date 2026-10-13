@@ -18,6 +18,7 @@ import { createApiClient, type ScriptInfo } from '../api/client'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
+  resolveExportFlags,
   downloadBlob,
   pickSupportedMimeType,
   sanitizeFilename,
@@ -91,6 +92,7 @@ function EditorScreen({
   const [exportStartSceneId, setExportStartSceneId] = useState('')
   const [exportEndSceneId, setExportEndSceneId] = useState('')
   const [exportFps, setExportFps] = useState(30)
+  const [exportInheritFlags, setExportInheritFlags] = useState(false)
   const [exportRunning, setExportRunning] = useState(false)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
@@ -186,6 +188,7 @@ function EditorScreen({
       startSceneId: exportStartSceneId,
       endSceneId: exportEndSceneId,
       fps: exportFps,
+      flags: resolveExportFlags(renderer, exportInheritFlags),
       mimeType: mime,
       onProgress: (s) => setExportStatus(s),
     }
@@ -205,7 +208,14 @@ function EditorScreen({
     } finally {
       setExportRunning(false)
     }
-  }, [projectName, exportStartSceneId, exportEndSceneId, exportFps, exportRunning])
+  }, [
+    projectName,
+    exportStartSceneId,
+    exportEndSceneId,
+    exportFps,
+    exportInheritFlags,
+    exportRunning,
+  ])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -805,11 +815,13 @@ function EditorScreen({
                   startSceneId={exportStartSceneId}
                   endSceneId={exportEndSceneId}
                   fps={exportFps}
+                  inheritFlags={exportInheritFlags}
                   status={exportStatus}
                   isRunning={exportRunning}
                   onChangeStart={setExportStartSceneId}
                   onChangeEnd={setExportEndSceneId}
                   onChangeFps={setExportFps}
+                  onChangeInheritFlags={setExportInheritFlags}
                   onStart={handleStartVideoExport}
                   onClose={() => setExportOpen(false)}
                 />
