@@ -64,6 +64,7 @@ interface EntityViewLike {
   acrylicBack: Graphics | null
   acrylicPlate: Sprite | null
   acrylicPlatePad: number
+  acrylicBase: Sprite | null
   label: Text | null
 }
 interface Internals {
@@ -1004,6 +1005,49 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.acrylicBack!.visible).toBe(true)
       expect(v.container.children).toHaveLength(3)
       expect(v.container.children[2]).toBe(v.sprite)
+    })
+
+    it('台座: canvas が無い環境では Graphics の台座（acrylicBase なし）(#760)', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBase).toBeNull()
+      expect(fillsOf(v.acrylicBack!).length).toBeGreaterThan(0)
+    })
+
+    it('台座: 共有テクスチャがあれば Sprite で敷き、Graphics は描かない・影の幅が幾何と一致 (#760)', async () => {
+      okLoad()
+      const layout = {
+        width: 512,
+        height: 160,
+        cx: 256,
+        cyTop: 70,
+        rx: 211,
+        ry: 59,
+        shadowRx: 254,
+        thickness: 10,
+      }
+      const baseTex = sizedTexture(512, 160)
+      vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicBase').mockImplementation((() => ({
+        texture: baseTex,
+        layout,
+      })) as never)
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBase).not.toBeNull()
+      expect(v.container.children[2]).toBe(v.acrylicBase)
+      expect(v.container.children[3]).toBe(v.acrylicPlate)
+      expect(fillsOf(v.acrylicBack!)).toHaveLength(0)
+      const g = defaultGeometry(slotSize())
+      const k = g.shadow!.rx / layout.shadowRx
+      expect(v.acrylicBase!.scale.x).toBeCloseTo(k, 9)
+      expect(v.acrylicBase!.x).toBeCloseTo(g.base!.cx - layout.cx * k, 9)
+      expect(v.acrylicBase!.y).toBeCloseTo(g.base!.cy - layout.cyTop * k, 9)
+      // 共有テクスチャは view の破棄で壊さない
+      s.destroy({ children: true })
+      expect(baseTex.destroyed).toBe(false)
     })
 
     it('成功: 板は sprite と同じ倍率で、pad ぶん左上へ広がって敷かれる (#760)', async () => {

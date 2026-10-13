@@ -43,6 +43,14 @@ export interface AcrylicParams {
   specularAlpha: number
   /** 板の縁の内側の影（光と反対側）の不透明度（0〜1）(#760) */
   innerShadowAlpha: number
+  /** 台座の側面の厚み / 上面の楕円の半径 ry (#760)。0 で厚みなし */
+  baseThicknessRatio: number
+  /** 台座の上面（透明アクリル）の面の不透明度（0〜1）(#760) */
+  baseFillAlpha: number
+  /** 台座の側面の帯の不透明度（0〜1。上面より少し濃い透明）(#760) */
+  baseSideAlpha: number
+  /** 台座の板の差し込み口（スリット）の暗さ（0〜1）(#760) */
+  slitAlpha: number
   /** 台座を持つか（false なら台座と床影を描かず、スプライトは枠いっぱいに収める） */
   hasBase: boolean
   /** 台座（黒い円形＝楕円）の幅 / 枠一辺 */
@@ -69,6 +77,10 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   plateFillAlpha: 0.07,
   specularAlpha: 0.2,
   innerShadowAlpha: 0.12,
+  baseThicknessRatio: 0.18,
+  baseFillAlpha: 0.14,
+  baseSideAlpha: 0.26,
+  slitAlpha: 0.3,
   hasBase: true,
   baseWidthRatio: 0.7,
   baseHeightRatio: 0.28,
@@ -102,6 +114,10 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
     plateFillAlpha: clamp(finiteOr(o.plateFillAlpha, d.plateFillAlpha), 0, 1),
     specularAlpha: clamp(finiteOr(o.specularAlpha, d.specularAlpha), 0, 1),
     innerShadowAlpha: clamp(finiteOr(o.innerShadowAlpha, d.innerShadowAlpha), 0, 1),
+    baseThicknessRatio: clamp(finiteOr(o.baseThicknessRatio, d.baseThicknessRatio), 0, 0.2),
+    baseFillAlpha: clamp(finiteOr(o.baseFillAlpha, d.baseFillAlpha), 0, 1),
+    baseSideAlpha: clamp(finiteOr(o.baseSideAlpha, d.baseSideAlpha), 0, 1),
+    slitAlpha: clamp(finiteOr(o.slitAlpha, d.slitAlpha), 0, 1),
     hasBase: typeof o.hasBase === 'boolean' ? o.hasBase : d.hasBase,
     baseWidthRatio: clamp(finiteOr(o.baseWidthRatio, d.baseWidthRatio), 0.1, 1),
     baseHeightRatio: clamp(finiteOr(o.baseHeightRatio, d.baseHeightRatio), 0.05, 1),

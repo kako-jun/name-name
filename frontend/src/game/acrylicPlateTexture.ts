@@ -9,9 +9,14 @@ import type { AcrylicParams } from './spriteStyle'
 
 export interface AcrylicPlate {
   texture: Texture
-  /** 板テクスチャ上で元画像の左上がある位置(px)。配置時にこのぶん左上へずらす */
+  /** 板テクスチャ上で元画像の左上がある位置(px・板テクスチャの px)。配置時にこのぶん左上へずらす */
   pad: number
+  /** 板テクスチャの 1px が元画像の何 px か（板は縮小した解像度で作る。生成時間を抑えるため）。省略は 1 */
+  scale?: number
 }
+
+/** 板を作る作業解像度の長辺(px)。板は輪郭のぼかしなので、これ以上高くしても見た目は変わらず時間だけかかる */
+export const PLATE_WORK_MAX_SIDE = 192
 
 export function createAcrylicPlateTexture(
   tex: Texture,
@@ -23,16 +28,20 @@ export function createAcrylicPlateTexture(
     const w = source?.pixelWidth ?? 0
     const h = source?.pixelHeight ?? 0
     if (!resource || !(w > 0) || !(h > 0) || typeof document === 'undefined') return null
+    // 作業解像度へ縮小して alpha を取る（ブラウザの縮小描画は速い）
+    const ws = Math.min(1, PLATE_WORK_MAX_SIDE / Math.max(w, h))
+    const ww = Math.max(1, Math.round(w * ws))
+    const wh = Math.max(1, Math.round(h * ws))
     const src = document.createElement('canvas')
-    src.width = w
-    src.height = h
+    src.width = ww
+    src.height = wh
     const sctx = src.getContext('2d', { willReadFrequently: true })
     if (!sctx) return null
-    sctx.drawImage(resource, 0, 0, w, h)
-    const data = sctx.getImageData(0, 0, w, h).data
-    const alpha = new Uint8Array(w * h)
+    sctx.drawImage(resource, 0, 0, ww, wh)
+    const data = sctx.getImageData(0, 0, ww, wh).data
+    const alpha = new Uint8Array(ww * wh)
     for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3]
-    const raster = renderAcrylicPlate(alpha, w, h, params)
+    const raster = renderAcrylicPlate(alpha, ww, wh, params)
     const dst = document.createElement('canvas')
     dst.width = raster.width
     dst.height = raster.height
@@ -47,7 +56,7 @@ export function createAcrylicPlateTexture(
     // 縮小描画でなめらかにする（初回アップロード前に設定）
     texture.source.autoGenerateMipmaps = true
     texture.source.scaleMode = 'linear'
-    return { texture, pad: raster.pad }
+    return { texture, pad: raster.pad, scale: w / ww }
   } catch {
     return null
   }
