@@ -12,6 +12,8 @@ type RendererLike = {
   load(gameData: RPGProject): void
   destroy(): void
   applySettings?(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void
+  /** 設定オーバーレイの開閉を伝える。開いている間は入力（移動・戦闘のキー）を止める (#204) */
+  setInputSuspended?(suspended: boolean): void
 }
 
 interface RPGPlayerProps {
@@ -111,6 +113,11 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
     rendererRef.current?.applySettings?.(settings)
     debouncedSave.save(settings)
   }, [settings, debouncedSave])
+
+  // 設定オーバーレイが開いている間は renderer の入力を止める (#204)
+  useEffect(() => {
+    rendererRef.current?.setInputSuspended?.(settingsOpen)
+  }, [settingsOpen])
 
   // unmount 時に debounce 中の保存を flush
   useEffect(() => {

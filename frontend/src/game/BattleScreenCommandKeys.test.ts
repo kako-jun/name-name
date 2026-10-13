@@ -379,19 +379,38 @@ describe('十字キー: 戦闘開始時に押されていたキー (#204)', () =
   })
 })
 
-describe('十字キー: 設定オーバーレイが開いている間 (#204)', () => {
-  it('設定ダイアログが開いている間は無視し、閉じると再び効く', () => {
-    const { handle } = build()
-    const d = document.createElement('div')
-    d.setAttribute('role', 'dialog')
-    d.setAttribute('aria-label', '設定')
-    document.body.appendChild(d)
+describe('十字キー: 外側の UI が入力を止めている間 (#204)', () => {
+  it('isInputSuspended が true の間は無視（既定動作も止めない）、false に戻ると再び効く', () => {
+    let suspended = true
+    const { handle } = build({
+      layout: 'side',
+      commandLayout: 'cross',
+      isInputSuspended: () => suspended,
+    })
     const e = press('ArrowUp')
     expect(handle).not.toHaveBeenCalled()
     expect(e.defaultPrevented).toBe(false)
-    d.remove()
+    suspended = false
     press('ArrowUp')
     expect(handle).toHaveBeenCalledWith('attack')
+  })
+})
+
+describe('十字キー: ウィンドウの blur (#204)', () => {
+  it('blur で開始時押下中のキーの記録を捨てる。destroy で blur リスナーも外れる', () => {
+    const remove = vi.spyOn(globalThis, 'removeEventListener')
+    const { s, handle } = build({
+      layout: 'side',
+      commandLayout: 'cross',
+      initialHeldKeys: ['ArrowUp'],
+    })
+    press('ArrowUp')
+    expect(handle).not.toHaveBeenCalled()
+    globalThis.dispatchEvent(new Event('blur'))
+    press('ArrowUp')
+    expect(handle).toHaveBeenCalledWith('attack')
+    s.destroy({ children: true })
+    expect(remove.mock.calls.filter((c) => c[0] === 'blur')).toHaveLength(1)
   })
 })
 

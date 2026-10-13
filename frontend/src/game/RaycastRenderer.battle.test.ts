@@ -572,6 +572,9 @@ describe('RaycastRenderer: 戦闘中のキー入力とフィールド移動 (#20
     lastTickMs: number
     handleKeyDown(e: KeyboardEvent): void
     handleKeyUp(e: KeyboardEvent): void
+    handleBlur(): void
+    heldArrowKeys: Set<string>
+    setInputSuspended(v: boolean): void
     onTick(): void
     advanceTurnAnim(dt: number): void
     updateNpcAnimations(now: number): void
@@ -655,5 +658,53 @@ describe('RaycastRenderer: 戦闘中のキー入力とフィールド移動 (#20
     t.handleKeyUp(key('keyup', 'ArrowLeft'))
     t.startBattle([enemy()])
     expect(t.battleScreen!.opts.initialHeldKeys).toEqual(['ArrowUp'])
+  })
+
+  it('戦闘終了時に押しっぱなしだった矢印キーは repeat の keydown でも動かず、keyup 後の新しい押下では動く', () => {
+    const t = field({ battleLayout: 'side' })
+    t.handleKeyDown(key('keydown', 'ArrowDown'))
+    t.startBattle([enemy()])
+    ;(t.battleScreen!.opts as { onClose(o: string): void }).onClose('escaped')
+    const before = pose(t)
+    t.handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown', repeat: true }))
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+    t.handleKeyUp(key('keyup', 'ArrowDown'))
+    t.handleKeyDown(key('keydown', 'ArrowDown'))
+    tick(t, 80)
+    expect(pose(t)).not.toEqual(before)
+  })
+
+  it('setInputSuspended(true) の間はフィールドも動かず、押下キーは捨てられ、解除で再び動く', () => {
+    const t = field()
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    t.setInputSuspended(true)
+    expect(t.keys.size).toBe(0)
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    const before = pose(t)
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+    t.setInputSuspended(false)
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    tick(t, 80)
+    expect(pose(t)).not.toEqual(before)
+  })
+
+  it('戦闘の isInputSuspended は setInputSuspended の状態を返す', () => {
+    const t = field({ battleLayout: 'side' })
+    t.startBattle([enemy()])
+    const f = t.battleScreen!.opts.isInputSuspended as () => boolean
+    expect(f()).toBe(false)
+    t.setInputSuspended(true)
+    expect(f()).toBe(true)
+  })
+
+  it('window の blur で keys・押下記録が捨てられる', () => {
+    const t = field()
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    expect(t.keys.size).toBe(1)
+    t.handleBlur()
+    expect(t.keys.size).toBe(0)
+    expect(t.heldArrowKeys.size).toBe(0)
   })
 })

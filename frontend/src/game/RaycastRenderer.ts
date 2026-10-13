@@ -288,6 +288,10 @@ export class RaycastRenderer {
   private keys = new Set<string>()
   /** 今押されている矢印キー（KeyboardEvent.key）。戦闘開始時に BattleScreen へ渡し、押しっぱなしの誤爆を防ぐ (#204) */
   private heldArrowKeys = new Set<string>()
+  /** 戦闘終了時に押されていた矢印キー。keyup されるまでフィールド移動に使わない（repeat の keydown で戻さない）(#204) */
+  private releaseGateKeys = new Set<string>()
+  /** 外側の UI（設定オーバーレイ）が入力を止めているか (#204) */
+  private inputSuspended = false
   private lastTickMs = 0
 
   private resizeRaf: number | null = null
@@ -354,6 +358,7 @@ export class RaycastRenderer {
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('keyup', this.handleKeyUp)
     window.addEventListener('resize', this.handleResize)
+    window.addEventListener('blur', this.handleBlur)
     this.app.ticker.add(this.onTick)
 
     // スワイプ移動 + シングルタップでメニュー開閉 (#178)
@@ -544,10 +549,20 @@ export class RaycastRenderer {
     void settings.seVolume
   }
 
+  /**
+   * 設定オーバーレイなど外側の UI が開いている間、入力を止める (#204)。true の間はフィールドの移動キーも
+   * 戦闘のキー操作（BattleScreen の isInputSuspended 経由）も受け付けない。
+   */
+  setInputSuspended(suspended: boolean): void {
+    this.inputSuspended = suspended
+    if (suspended) this.keys.clear()
+  }
+
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
+    window.removeEventListener('blur', this.handleBlur)
     if (this.detachTouchInput) {
       this.detachTouchInput()
       this.detachTouchInput = null
@@ -605,6 +620,9 @@ export class RaycastRenderer {
     if (e.key.startsWith('Arrow')) this.heldArrowKeys.add(e.key)
     // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#204)
     if (this.battleScreen) return
+    if (this.inputSuspended) return
+    // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
+    if (this.releaseGateKeys.has(e.key)) return
     if (this.isEditableFocused()) return
 
     if (this.dialogBox?.isShowing) {
@@ -654,9 +672,17 @@ export class RaycastRenderer {
     }
   }
 
+  /** ウィンドウがフォーカスを失うと keyup が届かないので、押下状態を捨てる (#204) */
+  private handleBlur = (): void => {
+    this.keys.clear()
+    this.heldArrowKeys.clear()
+    this.releaseGateKeys.clear()
+  }
+
   private handleKeyUp = (e: KeyboardEvent): void => {
     if (!this.initialized) return
     this.heldArrowKeys.delete(e.key)
+    this.releaseGateKeys.delete(e.key)
     const k = normalizeKey(e.key)
     this.keys.delete(k)
   }
@@ -848,8 +874,10 @@ export class RaycastRenderer {
       commandLayout: this.battleCommandLayout,
       commandLabels: this.battleCommandLabels,
       initialHeldKeys: [...this.heldArrowKeys],
+      isInputSuspended: () => this.inputSuspended,
       onClose: () => {
         this.keys.clear()
+        this.releaseGateKeys = new Set(this.heldArrowKeys)
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)
           this.battleScreen.destroy({ children: true })
@@ -1160,7 +1188,7 @@ export class RaycastRenderer {
     // プレイヤー位置の更新だけが dialog 中スキップ対象。
     this.advanceTurnAnim(dt)
 
-    if (!this.dialogBox?.isShowing && !this.battleScreen) {
+    if (!this.dialogBox?.isShowing && !this.battleScreen && !this.inputSuspended) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)

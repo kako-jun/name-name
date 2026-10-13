@@ -1,5 +1,5 @@
 /**
- * キー入力の共通ガード (#204)。純粋関数のみ（PixiJS に触れない）。
+ * キー入力の共通ガード (#204)。PixiJS には触れない。`isEditableTarget` / `isHeldKeyBlocked` は純粋関数。
  * フィールド（RaycastRenderer）と戦闘画面（BattleScreen）が同じ判定を使う。
  */
 
@@ -13,12 +13,6 @@ export function isEditableTarget(el: EventTarget | Element | null | undefined): 
   // jsdom など isContentEditable を持たない環境のための属性判定
   const attr = typeof e.getAttribute === 'function' ? e.getAttribute('contenteditable') : null
   return attr === '' || attr === 'true' || attr === 'plaintext-only'
-}
-
-/** 設定オーバーレイ（SettingsOverlay、Ctrl+,）が開いているか。開いている間は戦闘のキー操作を無視する */
-export function isSettingsOverlayOpen(doc: Document | undefined = globalThis.document): boolean {
-  if (!doc || typeof doc.querySelector !== 'function') return false
-  return doc.querySelector('[role="dialog"][aria-label="設定"]') !== null
 }
 
 /**

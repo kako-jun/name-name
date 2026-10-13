@@ -25,14 +25,18 @@ vi.mock('../game/TopDownRenderer', () => ({
     }
   }),
 }))
+const raycastInstances: Array<{ setInputSuspended: ReturnType<typeof vi.fn> }> = []
 vi.mock('../game/RaycastRenderer', () => ({
   RaycastRenderer: vi.fn().mockImplementation(function () {
-    return {
+    const inst = {
       init: vi.fn().mockResolvedValue(undefined),
       load: vi.fn(),
       destroy: vi.fn(),
       applySettings: vi.fn(),
+      setInputSuspended: vi.fn(),
     }
+    raycastInstances.push(inst)
+    return inst
   }),
 }))
 
@@ -63,5 +67,17 @@ describe('RPGPlayer focus-visible クラス付与 (#639)', () => {
   it('FV1: 設定ボタンに focus-visible: クラスが付与されている', () => {
     render(<RPGPlayer />)
     expect(screen.getByRole('button', { name: '設定を開く' }).className).toContain('focus-visible:')
+  })
+})
+
+describe('RPGPlayer: 設定の開閉を renderer に伝える (#204)', () => {
+  it('Ctrl+, で開くと setInputSuspended(true)、もう一度で false', () => {
+    raycastInstances.length = 0
+    render(<RPGPlayer view="raycast" />)
+    const r = raycastInstances[0]
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    expect(r.setInputSuspended).toHaveBeenLastCalledWith(true)
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    expect(r.setInputSuspended).toHaveBeenLastCalledWith(false)
   })
 })

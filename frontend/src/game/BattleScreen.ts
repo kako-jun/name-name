@@ -83,7 +83,7 @@ import {
   type SpriteStyle,
 } from './spriteStyle'
 import { computeCoverFit } from './novelLayout'
-import { isEditableTarget, isHeldKeyBlocked, isSettingsOverlayOpen } from './inputGuards'
+import { isEditableTarget, isHeldKeyBlocked } from './inputGuards'
 import {
   computeBands,
   FF_BLUE_PANEL_ALPHA,
@@ -294,6 +294,8 @@ export interface BattleScreenOptions {
    * （エンカウント直後に歩行で押しっぱなしだった矢印キーで、いきなりコマンドが決定されるのを防ぐ）(#204)
    */
   initialHeldKeys?: readonly string[]
+  /** true を返している間（設定オーバーレイが開いているなど）は、戦闘のキー操作を無視する (#204) */
+  isInputSuspended?: () => boolean
   /** コマンドの表示名の上書き (#204)。id（attack / spell / item / escape）は変えず label だけ差し替える。部分指定可 */
   commandLabels?: CommandLabels
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
@@ -402,6 +404,7 @@ export class BattleScreen extends Container {
   /** 開始時に押されていて、まだ離されていないキー (#204)。keyup で外れる */
   private heldKeys = new Set<string>()
   private keyUpListener: ((e: KeyboardEvent) => void) | null = null
+  private blurListener: (() => void) | null = null
 
   constructor(
     engine: BattleEngine,
@@ -954,8 +957,8 @@ export class BattleScreen extends Container {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
       // フォーム部品の矢印キー操作（select の選択変更・入力のカーソル移動など）は奪わない
       if (isEditableTarget(e.target)) return
-      // 設定オーバーレイが開いている間は戦闘のキー操作を無視する
-      if (isSettingsOverlayOpen()) return
+      // 設定オーバーレイなど外側の UI が入力を止めている間は戦闘のキー操作を無視する
+      if (this.opts.isInputSuspended?.()) return
       const id = crossKeyToCommandId(e.key)
       if (!id) return
       // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
@@ -971,13 +974,18 @@ export class BattleScreen extends Container {
     }
     globalThis.addEventListener('keydown', this.keyListener)
     globalThis.addEventListener('keyup', this.keyUpListener)
+    // ウィンドウがフォーカスを失うと keyup が届かないので、押下状態を捨てる
+    this.blurListener = () => this.heldKeys.clear()
+    globalThis.addEventListener('blur', this.blurListener)
   }
 
   private detachCrossKeys(): void {
     if (this.keyListener) globalThis.removeEventListener('keydown', this.keyListener)
     if (this.keyUpListener) globalThis.removeEventListener('keyup', this.keyUpListener)
+    if (this.blurListener) globalThis.removeEventListener('blur', this.blurListener)
     this.keyListener = null
     this.keyUpListener = null
+    this.blurListener = null
   }
 
   private buildLogLines(): void {
