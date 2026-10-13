@@ -5,6 +5,7 @@
 import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
+import type { WindowStyle } from '../game/windowStyle'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -30,6 +31,7 @@ export const MAX_ENEMIES = 4
 export interface BattleSampleConfig {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
+  windowStyle: WindowStyle
   /** 絶対 URL。なしは null */
   background: string | null
   party: BattleEntity[]
@@ -40,6 +42,7 @@ export interface BattleSampleConfig {
 export interface BattleSampleView {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
+  windowStyle: WindowStyle
   backgroundOn: boolean
   partyCount: number
   enemyCount: number
@@ -87,6 +90,7 @@ export function defaultConfig(): BattleSampleConfig {
   return {
     layout: 'side',
     spriteStyle: 'none',
+    windowStyle: 'dark',
     background: null,
     party: defaultParty(),
     enemies: defaultEnemies(),
@@ -199,6 +203,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     spriteStyle = raw.spriteStyle
   }
+  let windowStyle = def.windowStyle
+  if (raw.windowStyle !== undefined) {
+    if (raw.windowStyle !== 'dark' && raw.windowStyle !== 'ff-blue') {
+      return {
+        ok: false,
+        error: `windowStyle は "dark" か "ff-blue": ${JSON.stringify(raw.windowStyle)}`,
+      }
+    }
+    windowStyle = raw.windowStyle
+  }
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -217,7 +231,14 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!enemies.ok) return enemies
   return {
     ok: true,
-    value: { layout, spriteStyle, background, party: party.value, enemies: enemies.value },
+    value: {
+      layout,
+      spriteStyle,
+      windowStyle,
+      background,
+      party: party.value,
+      enemies: enemies.value,
+    },
   }
 }
 
@@ -240,6 +261,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
   return {
     layout: config.layout,
     spriteStyle: config.spriteStyle,
+    windowStyle: config.windowStyle,
     backgroundOn: config.background !== null,
     partyCount: config.party.length,
     enemyCount: config.enemies.length,
@@ -275,7 +297,12 @@ export function buildBattleSetup(
 ): {
   party: BattleEntity[]
   enemies: BattleEntity[]
-  options: { layout: BattleLayoutMode; spriteStyle: SpriteStyle; background?: string }
+  options: {
+    layout: BattleLayoutMode
+    spriteStyle: SpriteStyle
+    windowStyle: WindowStyle
+    background?: string
+  }
   width: number
   height: number
 } {
@@ -301,6 +328,7 @@ export function buildBattleSetup(
     options: {
       layout: view.layout,
       spriteStyle: view.spriteStyle,
+      windowStyle: view.windowStyle,
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
     },
     width,
@@ -312,6 +340,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
   return (
     a.layout === b.layout &&
     a.spriteStyle === b.spriteStyle &&
+    a.windowStyle === b.windowStyle &&
     a.backgroundOn === b.backgroundOn &&
     effectivePartyCount(a) === effectivePartyCount(b) &&
     a.enemyCount === b.enemyCount &&
@@ -349,6 +378,7 @@ export function describeView(
   return [
     `layout=${view.layout}`,
     `spriteStyle=${view.spriteStyle}`,
+    `windowStyle=${view.windowStyle}`,
     `background=${view.backgroundOn ? 'on' : 'off'}`,
     `party=${effectivePartyCount(view)}`,
     `enemies=${view.enemyCount}`,

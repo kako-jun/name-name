@@ -34,6 +34,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
   return {
     layout: 'side',
     spriteStyle: 'none',
+    windowStyle: 'dark',
     backgroundOn: false,
     partyCount: 4,
     enemyCount: 4,
@@ -780,7 +781,7 @@ describe('pushView / swapView', () => {
 describe('describeView', () => {
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
