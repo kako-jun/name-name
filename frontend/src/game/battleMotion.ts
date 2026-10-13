@@ -30,7 +30,17 @@ export function normalizeBattlePresentation(raw: string | null | undefined): Bat
 // ポーズ（差し替え用スプライトの組）
 // ---------------------------------------------------------------------------
 
-export const BATTLE_POSES = ['idle', 'ready', 'step', 'slash', 'hurt', 'down', 'victory'] as const
+// special（必殺技）は必殺技の配線時に足す。今はポーズ名として受け付けない
+export const BATTLE_POSES = [
+  'idle',
+  'ready',
+  'step',
+  'slash',
+  'cast',
+  'hurt',
+  'down',
+  'victory',
+] as const
 export type BattlePose = (typeof BATTLE_POSES)[number]
 
 /** ポーズ名 → 画像パス（部分指定可） */
@@ -68,6 +78,7 @@ const POSE_FALLBACK: Record<BattlePose, readonly BattlePose[]> = {
   ready: ['ready', 'idle'],
   step: ['step', 'ready', 'idle'],
   slash: ['slash', 'step', 'ready', 'idle'],
+  cast: ['cast', 'ready', 'idle'],
   hurt: ['hurt', 'idle'],
   down: ['down'],
   victory: ['victory', 'idle'],
@@ -101,6 +112,8 @@ export const ATTACK_SLASH_HIT_MS = 70
 /** 呪文・アイテム: 構え（ready）の長さと、その開始から命中までの ms */
 export const CAST_MS = 560
 export const CAST_HIT_MS = 400
+/** 知らせ（行動が成立しなかった）の窓を出しておく長さ（ms）。絵は動かない */
+export const NOTICE_MS = 700
 /** 1 つの行動が終わってから次の行動を始めるまでの間（ms） */
 export const ACTION_GAP_MS = 120
 /** 被ダメージ: のけぞって戻る時間 / 倒れ切るまでの時間（のけぞりの終わりから）（ms） */
@@ -149,6 +162,7 @@ export function buildActionTimeline(
   kind: ActionKind,
   opts: { damages?: boolean; downs?: boolean } = {}
 ): ActionTimeline {
+  if (kind === 'notice') return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0 }
   const motionEnd =
     kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS : CAST_MS
   const hitAt = kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS : CAST_HIT_MS
@@ -175,8 +189,10 @@ export interface ActorSample {
 /** 行動する側の、開始から t ms 時点の位置とポーズ */
 export function sampleActor(kind: ActionKind, t: number): ActorSample {
   const time = Number.isFinite(t) ? Math.max(0, t) : 0
+  if (kind === 'notice') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
-    return { forward: 0, pose: time < CAST_MS ? 'ready' : 'idle' }
+    // 呪文の構えは cast、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
+    return { forward: 0, pose: time < CAST_MS ? (kind === 'spell' ? 'cast' : 'ready') : 'idle' }
   }
   if (time < ATTACK_STEP_MS) {
     return { forward: ATTACK_STEP_DISTANCE * easeOutQuad(time / ATTACK_STEP_MS), pose: 'step' }

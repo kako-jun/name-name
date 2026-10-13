@@ -57,7 +57,7 @@ import {
 import type { BattleEntity } from './spellDsl'
 import {
   POPUP_COLORS,
-  buildActionTimeline,
+  eventTimeline,
   SINK_DISTANCE,
   advancePlayback,
   emptyPlayback,
@@ -360,6 +360,9 @@ interface EntityView {
   /** 演出 (#745): ダメージ数字の出る位置（画面絶対。枠の中央・上半身の高さ） */
   anchorX: number
   anchorY: number
+  /** 演出 (#745): 敵ラベルの基準位置（中央 x と上端 y。モーションのずれを足す前） */
+  labelBaseX: number
+  labelBaseY: number
   /** 演出 (#745): 地面の影の基準位置（モーションのずれを足す前。shadowLayer 基準＝画面絶対） */
   shadowBaseX: number
   shadowBaseY: number
@@ -379,6 +382,9 @@ interface PoseVisual {
 interface DamagePopup {
   text: PixiText
   elapsed: number
+  /** 対象。画面の作り直し（redraw）で枠が動いても追従するよう、位置は毎回この枠から読む */
+  side: 'party' | 'enemy'
+  index: number
   x: number
   y: number
   unit: number
@@ -863,6 +869,8 @@ export class BattleScreen extends Container {
       unit: 0,
       anchorX: 0,
       anchorY: 0,
+      labelBaseX: 0,
+      labelBaseY: 0,
       shadowBaseX: 0,
       shadowBaseY: 0,
       baseVisual: null,
@@ -1424,8 +1432,10 @@ export class BattleScreen extends Container {
       // ラベル位置は純粋関数が返す矩形（画面絶対）。縮尺・位置の追従は slot に含まれる。置けない枠では隠す
       view.label.visible = !!slot.label
       if (slot.label) {
-        view.label.x = slot.label.x + slot.label.w / 2
-        view.label.y = slot.label.y
+        view.labelBaseX = slot.label.x + slot.label.w / 2
+        view.labelBaseY = slot.label.y
+        view.label.x = view.labelBaseX
+        view.label.y = view.labelBaseY
       }
     }
   }
@@ -1532,7 +1542,8 @@ export class BattleScreen extends Container {
         if (view.acrylicShadow) view.acrylicShadow.alpha = view.container.alpha
       }
       if (view.label) {
-        view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
+        // ff では applyMotionFrame が本体と同じ薄れを当てる
+        if (!ff) view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
         // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
         // 多列は列ピッチ=スプライト一辺）を越える名前は省略して隣と重ねない
         // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く
@@ -1739,6 +1750,8 @@ export class BattleScreen extends Container {
     this.popups.push({
       text,
       elapsed: Math.max(0, sinceHit),
+      side: hit.target.side,
+      index: hit.target.index,
       x: view.anchorX,
       y: view.anchorY,
       unit: view.unit,
@@ -1748,6 +1761,13 @@ export class BattleScreen extends Container {
 
   private updatePopup(p: DamagePopup): boolean {
     const s = sampleDamagePopup(p.elapsed)
+    // redraw で枠が動いたら新しい座標へ移す
+    const view = this.viewOf(p.side, p.index)
+    if (view && view.unit > 0) {
+      p.x = view.anchorX
+      p.y = view.anchorY
+      p.unit = view.unit
+    }
     p.text.position.set(p.x, p.y + s.dy * p.unit)
     p.text.alpha = s.alpha
     return s.done
@@ -1757,7 +1777,7 @@ export class BattleScreen extends Container {
     this.popups = this.popups.filter((p) => {
       p.elapsed += dt
       const done = this.updatePopup(p)
-      if (done) p.text.destroy()
+      if (done) p.text.destroy({ style: true })
       return !done
     })
   }
@@ -1781,7 +1801,10 @@ export class BattleScreen extends Container {
     const ent = (side === 'party' ? s.party : s.enemies)[index]
     const hp = this.shownHp(side, index, ent?.hp ?? 0)
     // 戦闘が終わったとき、勝った側の生き残りは victory ポーズ（味方の勝ち=victory / 敵の勝ち=defeat）
-    const won = side === 'party' ? s.phase === 'victory' : s.phase === 'defeat'
+    // とどめの演出が終わってから（再生中は他の味方が先に勝ちポーズにならない）
+    const won =
+      !isPlaybackBusy(this.playback) &&
+      (side === 'party' ? s.phase === 'victory' : s.phase === 'defeat')
     let out: TargetSample & { forward: number } = {
       ...restingSample({ down: hp <= 0, victory: won && hp > 0 }),
       forward: 0,
@@ -1795,16 +1818,12 @@ export class BattleScreen extends Container {
     }
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
-      const sinceHit = active.elapsed - this.hitAt(ev.kind)
+      const sinceHit = active.elapsed - eventTimeline(ev).hitAt
       if (sinceHit < 0) continue
       const t = sampleTarget('damage', sinceHit, hit.hpAfter <= 0)
       out = { ...out, recoil: t.recoil, pose: t.pose, downProgress: t.downProgress }
     }
     return out
-  }
-
-  private hitAt(kind: 'attack' | 'spell' | 'item'): number {
-    return buildActionTimeline(kind).hitAt
   }
 
   /**
@@ -1830,6 +1849,11 @@ export class BattleScreen extends Container {
         // 倒れた絵があるなら味方は不透明のまま（敵は他と同じく薄くする）。無ければ沈みながら薄くする
         const fade = side === 'party' && hasDownVisual ? 0 : m.downProgress
         view.container.alpha = 1 - (1 - DEAD_ALPHA) * fade
+        // 敵の名前・HP ラベルも本体の横ずれと薄れに追従させる (#745)
+        if (view.label) {
+          view.label.position.set(view.labelBaseX + dx, view.labelBaseY)
+          view.label.alpha = view.container.alpha
+        }
         const sh = view.acrylicShadow
         if (sh) {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
@@ -1864,17 +1888,21 @@ export class BattleScreen extends Container {
     view: EntityView,
     poses: NonNullable<BattleEntity['poses']>
   ): Promise<void> {
-    for (const [key, path] of Object.entries(poses) as [BattlePose, string][]) {
-      try {
-        const tex = (await Assets.load(path)) as Texture
-        applyBattleTextureFilter(tex, !!this.opts.pixelArt)
-        if (this.destroyedFlag || view.container.destroyed) return
-        const plate = view.acrylicBack ? this.getAcrylicPlate(tex) : null
-        view.poseVisuals[key] = { texture: tex, plate }
-      } catch (e) {
-        console.warn(`[BattleScreen] failed to load pose "${key}" "${path}":`, e)
-      }
-    }
+    // ポーズの画像は並列に読む。読めなかったポーズは無いものとして扱う
+    await Promise.allSettled(
+      (Object.entries(poses) as [BattlePose, string][]).map(async ([key, path]) => {
+        try {
+          const tex = (await Assets.load(path)) as Texture
+          applyBattleTextureFilter(tex, !!this.opts.pixelArt)
+          if (this.destroyedFlag || view.container.destroyed) return
+          const plate = view.acrylicBack ? this.getAcrylicPlate(tex) : null
+          view.poseVisuals[key] = { texture: tex, plate }
+        } catch (e) {
+          console.warn(`[BattleScreen] failed to load pose "${key}" "${path}":`, e)
+        }
+      })
+    )
+    if (this.destroyedFlag || view.container.destroyed) return
     if (!this.destroyedFlag) this.applyMotionFrame()
   }
 }

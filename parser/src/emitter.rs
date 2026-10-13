@@ -1661,8 +1661,6 @@ fn format_number(n: f64) -> String {
     }
 }
 
-/// 高さブロックを emit する。各値は `1.0 → "1"`, `0.25 → "0.25"` で書く。
-/// 行頭で空行を一つ挟み、ブロック終端の後は改行のみ残す（他ブロックのスタイルに合わせる）。
 /// 戦闘ポーズ別スプライト (#745) を `ポーズ: idle=a.png, step=b.png` の 1 行で出す。空・None は何も出さない。
 fn emit_poses(out: &mut String, poses: &Option<std::collections::BTreeMap<String, String>>) {
     if let Some(map) = poses {
@@ -1673,6 +1671,8 @@ fn emit_poses(out: &mut String, poses: &Option<std::collections::BTreeMap<String
     }
 }
 
+/// 高さブロックを emit する。各値は `1.0 → "1"`, `0.25 → "0.25"` で書く。
+/// 行頭で空行を一つ挟み、ブロック終端の後は改行のみ残す（他ブロックのスタイルに合わせる）。
 fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
     out.push('\n');
     writeln!(out, "[{tag}]").unwrap();

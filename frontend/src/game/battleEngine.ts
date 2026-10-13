@@ -64,8 +64,11 @@ export interface BattleActionEvent {
   /** 戦闘開始からの通し番号（0 始まり） */
   seq: number
   actor: BattleActorRef
-  kind: 'attack' | 'spell' | 'item'
-  /** FF 式メッセージ窓に出す短い言葉（呪文・アイテムの名前）。通常攻撃は undefined */
+  kind: 'attack' | 'spell' | 'item' | 'notice'
+  /**
+   * FF 式メッセージ窓に出す短い言葉。呪文・アイテムの名前、または `notice`（行動が成立しなかったことの知らせ。
+   * 「にげられない！」「MPが たりない！」）の文言。通常攻撃は undefined
+   */
   label?: string
   hits: BattleHit[]
 }
@@ -217,9 +220,11 @@ export class BattleEngine {
     if (atb) {
       const cur = this.currentActorIndex()
       const idx = cur !== -1 ? cur : this.fullestAliveIndex(atb)
+      this.recordNotice(this.state.party[idx !== -1 ? idx : 0], 'にげられない！')
       if (idx !== -1) this.finishAtbAction(idx)
       this.settleAtbPhase()
     } else {
+      this.recordNotice(this.currentActor() ?? this.state.party[0], 'にげられない！')
       this.runEnemyTurn()
     }
   }
@@ -272,6 +277,7 @@ export class BattleEngine {
     if (!caster) return
     if (caster.mp < spell.mp) {
       this.appendLog('MP が たりない！')
+      this.recordNotice(caster, 'MPが たりない！')
       return
     }
     caster.mp -= spell.mp
@@ -684,6 +690,9 @@ export class BattleEngine {
           hpBefore,
           hpAfter: e.hp,
         })
+      } else if (computed?.kind === 'damage' && computed.amount === 0 && hpBefore > 0) {
+        // 計算上のダメージが 0（防御が上回るなど）は MISS でなく「0」。MISS は回避・無効（耐性 0）のときだけ
+        hits.push({ target: ref, kind: 'damage', amount: 0, hpBefore, hpAfter: e.hp })
       } else if (e.hp < hpBefore) {
         hits.push({ target: ref, kind: 'damage', amount: hpBefore - e.hp, hpBefore, hpAfter: e.hp })
       } else if (e.hp > hpBefore) {
@@ -693,6 +702,12 @@ export class BattleEngine {
       }
     }
     this.pushEvent({ actor: actorRef, kind, label, hits })
+  }
+
+  /** 行動が成立しなかったことの知らせ (#745)。FF 式の窓に短い言葉だけを出す。対象はなく、絵は動かない */
+  private recordNotice(actor: BattleEntity | undefined, label: string): void {
+    const ref = actor ? this.refOf(actor) : null
+    this.pushEvent({ actor: ref ?? { side: 'party', index: 0 }, kind: 'notice', label, hits: [] })
   }
 
   private pushEvent(e: Omit<BattleActionEvent, 'seq'>): void {

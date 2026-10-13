@@ -279,7 +279,8 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
             : 1.0
         const dealt = effect.kind === 'damage_full' ? t.hp : Math.floor(base * resist)
         t.hp = Math.max(0, t.hp - dealt)
-        ctx.onAmount?.(t, 'damage', dealt)
+        // 耐性 0（無効）は通知しない＝呼び出し側で MISS になる。それ以外は 0 でも計算上のダメージとして知らせる (#745)
+        if (resist !== 0) ctx.onAmount?.(t, 'damage', dealt)
         log.push(`${t.name} に ${dealt} のダメージ！`)
         if (t.hp === 0) log.push(`${t.name} は たおれた！`)
       }

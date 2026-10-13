@@ -1176,7 +1176,8 @@ export class RaycastRenderer {
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
 
-    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない
+    // 戦闘中の時間を進める。ATB (#205) はゲージ、`battle_presentation: ff` (#745) は演出（モーション・ダメージ数字）。
+    // 従来ターン制かつ dq の BattleScreen.tick だけが何もしない
     this.battleScreen?.tick(dt * 1000)
 
     // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。

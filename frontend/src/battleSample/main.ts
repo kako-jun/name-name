@@ -325,6 +325,9 @@ async function main(): Promise<void> {
     pixelChk.checked = v.pixelArt === 'on'
     logTwChk.checked = v.logTypewriter === 'on'
     presentationSel.value = v.presentation
+    // ff は 1 文字ずつ表示を使わない（ff のとき無効）。ff は side のときだけ効く（front では選べない） (#745)
+    logTwChk.disabled = v.presentation === 'ff' && v.layout === 'side'
+    presentationSel.disabled = v.layout === 'front'
     atbChk.checked = v.atb === 'on'
     atbModeSel.value = v.atbMode
     atbModeSel.disabled = v.atb !== 'on'
