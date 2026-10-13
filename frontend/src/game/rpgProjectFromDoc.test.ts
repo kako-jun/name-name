@@ -1724,4 +1724,9 @@ describe('rpgProjectFromDoc: battle_horizon / battle_perspective / battle_foregr
       rpgProjectFromDoc(withDepth({ battle_foreground: null }))!.battleForeground
     ).toBeUndefined()
   })
+  it('battle_foreground が空文字なら battleForeground undefined（空パスを Assets.load に渡さない）', () => {
+    expect(
+      rpgProjectFromDoc(withDepth({ battle_foreground: '' }))!.battleForeground
+    ).toBeUndefined()
+  })
 })

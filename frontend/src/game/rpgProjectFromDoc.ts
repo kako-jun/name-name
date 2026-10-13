@@ -250,7 +250,7 @@ export function rpgProjectFromDoc(
     battleBackgroundDof: normalizeBackgroundDof(doc.battle_background_dof),
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
     battleDepth: normalizeBattleDepth(doc.battle_horizon, doc.battle_perspective) ?? undefined,
-    battleForeground: doc.battle_foreground ?? undefined,
+    battleForeground: doc.battle_foreground || undefined,
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }
