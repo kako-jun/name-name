@@ -1536,60 +1536,65 @@ describe('組み合わせスイープ: 縦長/横長 × 味方 1〜4 × 敵 1〜
     [1280, 720],
     [568, 320],
   ]
-  it.each(SIZES)('%dx%d: 全矩形が画面内・stage 内・非負で、敵と味方が重ならない', (w, h) => {
-    const screen: Rect = { x: 0, y: 0, w, h }
-    let cases = 0
-    for (let p = 1; p <= 4; p++)
-      for (let e = 1; e <= 4; e++)
-        for (const partyAspects of partyAspectSets)
-          for (const enemyAspects of enemyAspectSets)
-            for (const partyRows of rowSets)
-              for (const depth of depths) {
-                const L = computeSideBattleLayout({
-                  width: w,
-                  height: h,
-                  partyCount: p,
-                  enemyCount: e,
-                  partyAspects,
-                  enemyAspects,
-                  partyRows,
-                  depth,
-                })
-                const tag = `${w}x${h} p${p} e${e} depth=${depth ? 1 : 0}`
-                const enemyRects = L.enemies.map(slotRect)
-                const labels = L.enemies.flatMap((s) => (s.label ? [s.label] : []))
-                const partyRects = L.party.map(slotRect)
-                for (const r of [...enemyRects, ...labels, ...partyRects]) {
-                  expect(Number.isFinite(r.x + r.y + r.w + r.h), tag).toBe(true)
-                  expect(r.x, tag).toBeGreaterThanOrEqual(-EPS)
-                  expect(r.y, tag).toBeGreaterThanOrEqual(-EPS)
-                  expect(r.w, tag).toBeGreaterThanOrEqual(0)
-                  expect(r.h, tag).toBeGreaterThanOrEqual(0)
-                  expect(inside(r, screen), tag).toBe(true)
-                  expect(inside(r, L.stage), tag).toBe(true)
-                  for (const panel of [L.log, L.command, L.status])
-                    expect(overlaps(r, panel), tag).toBe(false)
+  it.each(SIZES)(
+    '%dx%d: 全矩形が画面内・stage 内・非負で、敵と味方が重ならない',
+    (w, h) => {
+      const screen: Rect = { x: 0, y: 0, w, h }
+      let cases = 0
+      for (let p = 1; p <= 4; p++)
+        for (let e = 1; e <= 4; e++)
+          for (const partyAspects of partyAspectSets)
+            for (const enemyAspects of enemyAspectSets)
+              for (const partyRows of rowSets)
+                for (const depth of depths) {
+                  const L = computeSideBattleLayout({
+                    width: w,
+                    height: h,
+                    partyCount: p,
+                    enemyCount: e,
+                    partyAspects,
+                    enemyAspects,
+                    partyRows,
+                    depth,
+                  })
+                  const tag = `${w}x${h} p${p} e${e} depth=${depth ? 1 : 0}`
+                  const enemyRects = L.enemies.map(slotRect)
+                  const labels = L.enemies.flatMap((s) => (s.label ? [s.label] : []))
+                  const partyRects = L.party.map(slotRect)
+                  for (const r of [...enemyRects, ...labels, ...partyRects]) {
+                    expect(Number.isFinite(r.x + r.y + r.w + r.h), tag).toBe(true)
+                    expect(r.x, tag).toBeGreaterThanOrEqual(-EPS)
+                    expect(r.y, tag).toBeGreaterThanOrEqual(-EPS)
+                    expect(r.w, tag).toBeGreaterThanOrEqual(0)
+                    expect(r.h, tag).toBeGreaterThanOrEqual(0)
+                    expect(inside(r, screen), tag).toBe(true)
+                    expect(inside(r, L.stage), tag).toBe(true)
+                    for (const panel of [L.log, L.command, L.status])
+                      expect(overlaps(r, panel), tag).toBe(false)
+                  }
+                  const nonEmpty = [...enemyRects, ...labels].filter((r) => r.w > EPS && r.h > EPS)
+                  for (let i = 0; i < nonEmpty.length; i++)
+                    for (let j = i + 1; j < nonEmpty.length; j++)
+                      expect(overlaps(nonEmpty[i], nonEmpty[j]), tag).toBe(false)
+                  for (const pr of partyRects.filter((r) => r.w > EPS && r.h > EPS))
+                    for (const o of nonEmpty) expect(overlaps(pr, o), tag).toBe(false)
+                  for (const s of L.enemies) expect(s.size, tag).toBeLessThanOrEqual(480 + EPS)
+                  for (const s of L.party) expect(s.size, tag).toBeLessThanOrEqual(320 + EPS)
+                  for (let i = 0; i + 1 < L.party.length; i++) {
+                    expect(L.party[i + 1].y, tag).toBeGreaterThan(L.party[i].y)
+                    expect(L.party[i + 1].floor, tag).toBeGreaterThan(L.party[i].floor)
+                    // 上の人の顔（上 30%）が隠れない（縮尺後の size でも y は縮まないので成り立つ）
+                    expect(L.party[i + 1].y, tag).toBeGreaterThanOrEqual(
+                      L.party[i].y + L.party[i].size * 0.3 - EPS
+                    )
+                  }
+                  cases++
                 }
-                const nonEmpty = [...enemyRects, ...labels].filter((r) => r.w > EPS && r.h > EPS)
-                for (let i = 0; i < nonEmpty.length; i++)
-                  for (let j = i + 1; j < nonEmpty.length; j++)
-                    expect(overlaps(nonEmpty[i], nonEmpty[j]), tag).toBe(false)
-                for (const pr of partyRects.filter((r) => r.w > EPS && r.h > EPS))
-                  for (const o of nonEmpty) expect(overlaps(pr, o), tag).toBe(false)
-                for (const s of L.enemies) expect(s.size, tag).toBeLessThanOrEqual(480 + EPS)
-                for (const s of L.party) expect(s.size, tag).toBeLessThanOrEqual(320 + EPS)
-                for (let i = 0; i + 1 < L.party.length; i++) {
-                  expect(L.party[i + 1].y, tag).toBeGreaterThan(L.party[i].y)
-                  expect(L.party[i + 1].floor, tag).toBeGreaterThan(L.party[i].floor)
-                  // 上の人の顔（上 30%）が隠れない（縮尺後の size でも y は縮まないので成り立つ）
-                  expect(L.party[i + 1].y, tag).toBeGreaterThanOrEqual(
-                    L.party[i].y + L.party[i].size * 0.3 - EPS
-                  )
-                }
-                cases++
-              }
-    expect(cases).toBe(4 * 4 * 3 * 3 * 3 * 3)
-  })
+      expect(cases).toBe(4 * 4 * 3 * 3 * 3 * 3)
+    },
+    // 全体実行時の並列負荷で既定の 5s を超えうるため明示（単体では 0.5〜0.6s）
+    20_000
+  )
 })
 
 describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横比混在・先頭後衛)', () => {
