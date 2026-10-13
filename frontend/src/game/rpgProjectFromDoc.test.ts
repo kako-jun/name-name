@@ -1510,3 +1510,56 @@ describe('rpgProjectFromDoc: sprite_style (#737)', () => {
     expect(rpgProjectFromDoc(updated)!.spriteStyle).toBe('acrylic')
   })
 })
+
+describe('rpgProjectFromDoc: window_style (#744)', () => {
+  const withStyle = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+  const styleOf = (extra: Partial<EventDocument>) =>
+    rpgProjectFromDoc(withStyle(extra))!.windowStyle
+
+  it("window_style: 'ff-blue' → 'ff-blue'", () => {
+    expect(styleOf({ window_style: 'ff-blue' })).toBe('ff-blue')
+  })
+
+  it("window_style: 'dark' → 'dark'", () => {
+    expect(styleOf({ window_style: 'dark' })).toBe('dark')
+  })
+
+  it("未指定・null・undefined → 'dark'", () => {
+    expect(rpgProjectFromDoc(makeDoc())!.windowStyle).toBe('dark')
+    expect(styleOf({ window_style: null })).toBe('dark')
+    expect(styleOf({ window_style: undefined })).toBe('dark')
+  })
+
+  it("未知値・空文字 → 'dark'", () => {
+    expect(styleOf({ window_style: 'foo' })).toBe('dark')
+    expect(styleOf({ window_style: '' })).toBe('dark')
+  })
+
+  it("大文字・前後空白 ' FF-Blue ' は正規化されて 'ff-blue'", () => {
+    expect(styleOf({ window_style: ' FF-Blue ' })).toBe('ff-blue')
+  })
+
+  it('sprite_style と独立に解決される', () => {
+    const a = rpgProjectFromDoc(withStyle({ window_style: 'ff-blue', sprite_style: 'acrylic' }))!
+    expect(a.windowStyle).toBe('ff-blue')
+    expect(a.spriteStyle).toBe('acrylic')
+    const b = rpgProjectFromDoc(withStyle({ window_style: 'ff-blue' }))!
+    expect(b.windowStyle).toBe('ff-blue')
+    expect(b.spriteStyle).toBe('none')
+    const c = rpgProjectFromDoc(withStyle({ sprite_style: 'acrylic' }))!
+    expect(c.windowStyle).toBe('dark')
+    expect(c.spriteStyle).toBe('acrylic')
+  })
+
+  it("battle_layout に 'ff-blue' を入れても windowStyle は dark（取り違え防止）", () => {
+    const p = rpgProjectFromDoc(withStyle({ battle_layout: 'ff-blue' }))!
+    expect(p.windowStyle).toBe('dark')
+    expect(p.battleLayout).toBe('front')
+  })
+
+  it("window_style: 'acrylic' でも spriteStyle は none（逆方向の取り違え防止）", () => {
+    const p = rpgProjectFromDoc(withStyle({ window_style: 'acrylic' }))!
+    expect(p.spriteStyle).toBe('none')
+    expect(p.windowStyle).toBe('dark')
+  })
+})
