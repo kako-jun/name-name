@@ -78,6 +78,8 @@ interface Internals {
   enemyViews: EntityViewLike[]
   partyViews: EntityViewLike[]
   statusTexts: Text[]
+  statusHpTexts: Text[]
+  statusMpTexts: Text[]
   logLines: Text[]
   backgroundSprite: Sprite | null
   foregroundSprite: Sprite | null
@@ -570,9 +572,10 @@ describe('BattleScreen: side', () => {
   it('statusText は 320 幅では MP なし・800 幅では MP あり', () => {
     const narrow = track(make([entity('hero')], [entity('slime')], side, 320, 568))
     const wide = track(make([entity('hero')], [entity('slime')], side, 800, 450))
-    expect(internals(narrow).statusTexts[0].text).toContain('HP 10/10')
-    expect(internals(narrow).statusTexts[0].text).not.toContain('MP')
-    expect(internals(wide).statusTexts[0].text).toContain('MP 4/4')
+    expect(internals(narrow).statusHpTexts[0].text).toContain('10/10')
+    expect(internals(narrow).statusMpTexts[0].text).toBe('')
+    expect(internals(wide).statusHpTexts[0].text).toBe('HP 10/10')
+    expect(internals(wide).statusMpTexts[0].text).toBe('MP 4/4')
   })
 
   it('味方 hp=0 の statusText は灰色 fill', () => {
@@ -652,11 +655,11 @@ describe('BattleScreen: side', () => {
 
   it('redraw で幅 800 → 360 にすると compact へ切り替わり statusText が短縮される', () => {
     const s = track(make([entity('hero')], [entity('slime')], side, 800, 450))
-    expect(internals(s).statusTexts[0].text).toContain('MP')
+    expect(internals(s).statusMpTexts[0].text).toContain('MP')
     s.redraw(360, 640)
-    expect(internals(s).statusTexts[0].text).not.toContain('MP')
+    expect(internals(s).statusMpTexts[0].text).not.toContain('MP')
     s.redraw(800, 450)
-    expect(internals(s).statusTexts[0].text).toContain('MP')
+    expect(internals(s).statusMpTexts[0].text).toContain('MP')
   })
 
   it('compact 閾値の定数が MP 表記の切替に使われている（幅スイープで MP 有無が一度だけ切り替わる）', () => {
@@ -665,7 +668,7 @@ describe('BattleScreen: side', () => {
     let flips = 0
     for (let w = 300; w <= 900; w += 10) {
       s.redraw(w, 640)
-      const hasMp = internals(s).statusTexts[0].text.includes('MP')
+      const hasMp = internals(s).statusMpTexts[0].text.includes('MP')
       if (hasMp !== prev) flips++
       prev = hasMp
     }
@@ -759,19 +762,25 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
   })
 
   it.each([
-    ['ながいなまえのゆうしゃ', 20, true],
-    ['ながいなまえのゆうしゃ', 120, false],
+    ['ながいなまえのゆうしゃ', 20],
+    ['ながいなまえのゆうしゃ', 120],
   ])(
-    '320 幅でも status テキストは概算幅でパネル内に収まる（%s, HP %d）',
-    (name, hp, hasEllipsis) => {
+    '320 幅でも status の名前と HP は概算幅でパネル内に収まり、名前が残る（%s, HP %d）',
+    (name, hp) => {
       const s = track(
         make([entity('hero', { name, hp, maxHp: hp })], [entity('slime')], sideOpts, 320, 568)
       )
       const L = computeSideBattleLayout({ width: 320, height: 568, partyCount: 1, enemyCount: 1 })
-      const text = internals(s).statusTexts[0].text
-      expect(text.endsWith(`HP ${hp}/${hp}`)).toBe(true)
-      expect(text.includes('…')).toBe(hasEllipsis)
-      expect(estimateTextWidth(text, 14)).toBeLessThanOrEqual(L.status.w - 24 + 0.001)
+      const nameT = internals(s).statusTexts[0]
+      const hpT = internals(s).statusHpTexts[0]
+      expect(hpT.text.endsWith(`${hp}/${hp}`)).toBe(true)
+      expect(nameT.text.length).toBeGreaterThan(0)
+      expect(nameT.text.startsWith(name.slice(0, 1))).toBe(true)
+      // 名前の右端 <= HP の左端、HP の右端 <= パネル内側の右端
+      const hpLeft = hpT.x - estimateTextWidth(hpT.text, 14)
+      expect(nameT.x + estimateTextWidth(nameT.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
+      expect(hpT.x).toBeLessThanOrEqual(L.status.x + L.status.w - 12 + 0.001)
+      expect(nameT.x).toBeGreaterThanOrEqual(L.status.x)
     }
   )
 })

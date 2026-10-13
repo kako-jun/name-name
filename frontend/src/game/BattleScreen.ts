@@ -67,7 +67,10 @@ import {
   SIDE_LABEL_STROKE_WIDTH,
   fitHpLabel,
   fitLabel,
-  fitNameWithSuffix,
+  computeStatusColumns,
+  SIDE_STATUS_FONT_SIZE,
+  SIDE_STATUS_GAUGE_HEIGHT,
+  type StatusColumns,
   type BattleDepth,
   type BattleLayoutMode,
   type SpriteSlot,
@@ -131,10 +134,7 @@ const ACTOR_COLOR = 0xffee66
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
-/**
- * ATB ゲージ（各ステータス行の下端に行幅いっぱいで引く細い横棒）の高さ (#205)。FF らしい仕上げは #745。
- * 文字の横には置かない（文字幅を削らない・文字と重ならない）
- */
+/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
 /** 番の味方の印 ▶ の文字サイズと、行の左端からの余白（左余白 SIDE_STATUS_TEXT_PADDING の中に収まる） */
 const ATB_MARKER_FONT_SIZE = 10
@@ -154,9 +154,6 @@ const FALLBACK_PARTY_COLOR = 0x5588cc
 /** acrylic の台座の色 (#737)。黒に近い円形台座 */
 const ACRYLIC_BASE_COLOR = 0x111111
 const DEAD_ALPHA = 0.3
-const SIDE_STATUS_FONT_SIZE = 14
-/** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
-const SIDE_STATUS_TEXT_PADDING = 12
 /** 敵ラベルの縁取り。写真背景（dim なし）でも読めるよう、背景指定の有無にかかわらず付ける (#736) */
 export const SIDE_LABEL_STROKE_COLOR = 0x000000
 
@@ -363,7 +360,10 @@ export class BattleScreen extends Container {
   private foregroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
   private partyViews: EntityView[] = []
+  /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
+  private statusHpTexts: PixiText[] = []
+  private statusMpTexts: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
   /** 番の味方の印 ▶ (#205)。名前の文字列には混ぜず、行の左余白に別の Text で置く。bars と同じ index */
@@ -375,10 +375,8 @@ export class BattleScreen extends Container {
   /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
   private atbSignature = ''
   private visibleLogLines = LOG_VISIBLE_LINES
-  /** side: status が狭く MP 表記を省いているか（layoutSide が更新） */
-  private sideCompact = false
-  /** side: status テキストに使える幅(px)（layoutSide が更新） */
-  private sideStatusTextWidth = Infinity
+  /** side: status 欄の列（layoutSide が更新）。null は未計算 */
+  private sideStatusColumns: StatusColumns | null = null
   /** side: 敵ラベルに使える幅(px)（layoutSide が更新。enemyViews と同じ index） */
   private sideLabelWidths: number[] = []
 
@@ -714,6 +712,22 @@ export class BattleScreen extends Container {
       })
       this.statusTexts.push(t)
       this.addChild(t)
+      for (const list of [this.statusHpTexts, this.statusMpTexts]) {
+        const n = new PixiText({
+          text: '',
+          style: this.themedStyle(
+            new TextStyle({
+              fontFamily: "'Noto Sans JP', sans-serif",
+              fontSize: SIDE_STATUS_FONT_SIZE,
+              fill: TEXT_COLOR,
+            })
+          ),
+        })
+        // 数値は列の右端に右寄せ（桁数が違っても右端がそろう）
+        n.anchor.set(1, 0)
+        list.push(n)
+        this.addChild(n)
+      }
     }
   }
 
@@ -1222,19 +1236,35 @@ export class BattleScreen extends Container {
 
     // 下パネル: 味方 HP/MP（右）
     panel(L.status, this.statsPanel)
+    // 列（名前 / HP / MP / ゲージ）は味方全員で共通。列の左端（数値は右端）がそろう (#745)
+    const party = this.engine.getState().party
+    const cols = computeStatusColumns({
+      x: L.status.x,
+      width: L.status.w,
+      maxHp: party.reduce((m, p) => Math.max(m, p.maxHp), 0),
+      maxMp: party.reduce((m, p) => Math.max(m, p.maxMp), 0),
+      compact: L.statusCompact,
+      atb: this.atbBars.length > 0,
+    })
+    this.sideStatusColumns = cols
     for (let i = 0; i < this.statusTexts.length; i++) {
       const row = L.statusRows[i]
-      this.statusTexts[i].x = row.x + SIDE_STATUS_TEXT_PADDING
-      this.statusTexts[i].y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
+      const y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
+      this.statusTexts[i].x = cols.name.x
+      this.statusTexts[i].y = y
+      this.statusHpTexts[i].x = cols.hp.x + cols.hp.w
+      this.statusHpTexts[i].y = y
+      this.statusMpTexts[i].x = cols.mp ? cols.mp.x + cols.mp.w : 0
+      this.statusMpTexts[i].y = y
     }
-    this.sideCompact = L.statusCompact
-    if (this.atbBars.length > 0) {
-      // ATB ゲージ棒は各行の下端に行幅いっぱいで引く。文字幅は ATB off と同じ（削らない）
+    if (this.atbBars.length > 0 && cols.gauge) {
+      // ATB ゲージは行の右端に短く置く（数文字ぶんの幅）。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
+      const g = cols.gauge
       this.atbBarRects = L.statusRows.map((row) => ({
-        x: row.x + SIDE_STATUS_TEXT_PADDING,
-        y: row.y + row.h - ATB_BAR_HEIGHT,
-        w: Math.max(0, row.w - SIDE_STATUS_TEXT_PADDING * 2),
-        h: ATB_BAR_HEIGHT,
+        x: g.x,
+        y: row.y + (row.h - SIDE_STATUS_GAUGE_HEIGHT) / 2,
+        w: g.w,
+        h: SIDE_STATUS_GAUGE_HEIGHT,
       }))
       L.statusRows.forEach((row, i) => {
         const m = this.atbMarkers[i]
@@ -1244,7 +1274,6 @@ export class BattleScreen extends Container {
       })
       this.drawAtbBars()
     }
-    this.sideStatusTextWidth = Math.max(0, L.status.w - SIDE_STATUS_TEXT_PADDING * 2)
     this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
   }
 
@@ -1407,15 +1436,22 @@ export class BattleScreen extends Container {
       const p = s.party[i]
       if (!p) continue
       const t = this.statusTexts[i]
-      // 名前だけ省略して HP/MP は必ず見せる（パネル端を越えない）
-      const suffix = this.sideCompact
-        ? `  HP ${p.hp}/${p.maxHp}`
-        : `  HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`
+      const cols = this.sideStatusColumns
+      const hpT = this.statusHpTexts[i]
+      const mpT = this.statusMpTexts[i]
       // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない） (#205)
       const isActor = p.hp > 0 && i === this.actorIndex()
       if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
-      t.text = fitNameWithSuffix(p.name, suffix, this.sideStatusTextWidth, SIDE_STATUS_FONT_SIZE)
-      t.style.fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
+      // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
+      t.text = fitLabel(p.name, cols?.name.w ?? Infinity, SIDE_STATUS_FONT_SIZE)
+      const lbl = cols?.showLabels ?? true
+      const hpNums = cols && !cols.showMaxHp ? `${p.hp}` : `${p.hp}/${p.maxHp}`
+      hpT.text = lbl ? `HP ${hpNums}` : hpNums
+      mpT.text = cols?.mp ? `MP ${p.mp}/${p.maxMp}` : ''
+      const fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
+      hpT.style.fill = fill
+      mpT.style.fill = fill
+      t.style.fill = fill
     }
   }
 
