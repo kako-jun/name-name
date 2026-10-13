@@ -5332,6 +5332,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         window_style: None,
         battle_background_tone: None,
         battle_background_dof: None,
+        battle_log_typewriter: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10508,6 +10509,7 @@ fn telop_test_doc_base() -> Document {
         window_style: None,
         battle_background_tone: None,
         battle_background_dof: None,
+        battle_log_typewriter: None,
         chapters: vec![],
     }
 }
@@ -11421,4 +11423,19 @@ fn test_battle_background_tone_dof_in_body_are_not_parsed() {
     let doc = parser::parse(src);
     assert_eq!(doc.battle_background_tone, None);
     assert_eq!(doc.battle_background_dof, None);
+}
+
+// ---- #755: battle_log_typewriter ----
+
+#[test]
+fn test_battle_log_typewriter_on_parses() {
+    let doc = parser::parse(&battle_doc("battle_log_typewriter: \"on\"\n"));
+    assert_eq!(doc.battle_log_typewriter.as_deref(), Some("on"));
+}
+
+#[test]
+fn test_battle_log_typewriter_unset_or_empty_is_none() {
+    assert_eq!(parser::parse(&battle_doc("")).battle_log_typewriter, None);
+    let doc = parser::parse(&battle_doc("battle_log_typewriter: \"\"\n"));
+    assert_eq!(doc.battle_log_typewriter, None);
 }
