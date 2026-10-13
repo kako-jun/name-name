@@ -8,6 +8,7 @@ import type { SpriteStyle } from '../game/spriteStyle'
 import type { WindowStyle } from '../game/windowStyle'
 import type { BackgroundTone } from '../game/backgroundTone'
 import type { BackgroundDof } from '../game/depthOfField'
+import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -38,6 +39,8 @@ export interface BattleSampleConfig {
   backgroundTone: BackgroundTone
   /** 背景の被写界深度風の手前ぼかし (#753)。既定 off */
   backgroundDof: BackgroundDof
+  /** 戦闘ログの 1 文字ずつ表示 (#755)。既定 off */
+  logTypewriter: BattleLogTypewriterMode
   /** 絶対 URL。なしは null */
   background: string | null
   party: BattleEntity[]
@@ -51,6 +54,7 @@ export interface BattleSampleView {
   windowStyle: WindowStyle
   backgroundTone: BackgroundTone
   backgroundDof: BackgroundDof
+  logTypewriter: BattleLogTypewriterMode
   backgroundOn: boolean
   partyCount: number
   enemyCount: number
@@ -101,6 +105,7 @@ export function defaultConfig(): BattleSampleConfig {
     windowStyle: 'dark',
     backgroundTone: 'on',
     backgroundDof: 'off',
+    logTypewriter: 'off',
     background: null,
     party: defaultParty(),
     enemies: defaultEnemies(),
@@ -243,6 +248,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     backgroundDof = raw.backgroundDof
   }
+  let logTypewriter = def.logTypewriter
+  if (raw.logTypewriter !== undefined) {
+    if (raw.logTypewriter !== 'on' && raw.logTypewriter !== 'off') {
+      return {
+        ok: false,
+        error: `logTypewriter は "on" か "off": ${JSON.stringify(raw.logTypewriter)}`,
+      }
+    }
+    logTypewriter = raw.logTypewriter
+  }
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -267,6 +282,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       windowStyle,
       backgroundTone,
       backgroundDof,
+      logTypewriter,
       background,
       party: party.value,
       enemies: enemies.value,
@@ -296,6 +312,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     windowStyle: config.windowStyle,
     backgroundTone: config.backgroundTone,
     backgroundDof: config.backgroundDof,
+    logTypewriter: config.logTypewriter,
     backgroundOn: config.background !== null,
     partyCount: config.party.length,
     enemyCount: config.enemies.length,
@@ -337,6 +354,7 @@ export function buildBattleSetup(
     windowStyle: WindowStyle
     backgroundTone: BackgroundTone
     backgroundDof: BackgroundDof
+    logTypewriter: BattleLogTypewriterMode
     background?: string
   }
   width: number
@@ -367,6 +385,7 @@ export function buildBattleSetup(
       windowStyle: view.windowStyle,
       backgroundTone: view.backgroundTone,
       backgroundDof: view.backgroundDof,
+      logTypewriter: view.logTypewriter,
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
     },
     width,
@@ -381,6 +400,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.windowStyle === b.windowStyle &&
     a.backgroundTone === b.backgroundTone &&
     a.backgroundDof === b.backgroundDof &&
+    a.logTypewriter === b.logTypewriter &&
     a.backgroundOn === b.backgroundOn &&
     effectivePartyCount(a) === effectivePartyCount(b) &&
     a.enemyCount === b.enemyCount &&
@@ -421,6 +441,7 @@ export function describeView(
     `windowStyle=${view.windowStyle}`,
     `backgroundTone=${view.backgroundTone}`,
     `backgroundDof=${view.backgroundDof}`,
+    `logTypewriter=${view.logTypewriter}`,
     `background=${view.backgroundOn ? 'on' : 'off'}`,
     `party=${effectivePartyCount(view)}`,
     `enemies=${view.enemyCount}`,

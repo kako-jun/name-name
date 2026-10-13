@@ -37,6 +37,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     windowStyle: 'dark',
     backgroundTone: 'on',
     backgroundDof: 'off',
+    logTypewriter: 'off',
     backgroundOn: false,
     partyCount: 4,
     enemyCount: 4,
@@ -860,13 +861,13 @@ describe('describeView', () => {
         height: 640,
       })
     ).toBe(
-      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
@@ -1018,4 +1019,22 @@ describe('backgroundTone / backgroundDof: 追加の観点 (#753)', () => {
       expect(s.options.backgroundDof).toBe(dof)
     }
   )
+})
+
+describe('logTypewriter (#755)', () => {
+  it('既定 off。on/off を受け付け、他はエラー', () => {
+    expect(defaultConfig().logTypewriter).toBe('off')
+    for (const v of ['on', 'off'] as const) {
+      const r = parseConfig({ logTypewriter: v }, BASE)
+      expect(r.ok && r.value.logTypewriter).toBe(v)
+    }
+    expect(parseConfig({ logTypewriter: 'x' }, BASE).ok).toBe(false)
+  })
+
+  it('view / setup / viewsEqual / describeView に反映される', () => {
+    const on = { ...view(), logTypewriter: 'on' as const }
+    expect(buildBattleSetup(defaultConfig(), on).options.logTypewriter).toBe('on')
+    expect(viewsEqual(view(), on)).toBe(false)
+    expect(describeView(on, 1, { width: 800, height: 450 })).toContain('logTypewriter=on')
+  })
 })

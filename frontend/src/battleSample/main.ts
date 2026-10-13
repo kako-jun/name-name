@@ -179,6 +179,15 @@ async function main(): Promise<void> {
   dofChk.addEventListener('change', () => change({ backgroundDof: dofChk.checked ? 'on' : 'off' }))
   dofLabel.append(dofChk, '被写界深度（手前ぼかし）')
   tb.appendChild(dofLabel)
+  const logTwLabel = document.createElement('label')
+  const logTwChk = document.createElement('input')
+  logTwChk.type = 'checkbox'
+  logTwChk.id = 'tb-log-typewriter'
+  logTwChk.addEventListener('change', () =>
+    change({ logTypewriter: logTwChk.checked ? 'on' : 'off' })
+  )
+  logTwLabel.append(logTwChk, 'ログを1文字ずつ表示')
+  tb.appendChild(logTwLabel)
   const nums = ['1', '2', '3', '4']
   const partySel = select('味方', 'tb-party', nums.slice(0, MAX_PARTY), (v) =>
     change({ partyCount: Number(v) })
@@ -225,6 +234,7 @@ async function main(): Promise<void> {
     bgChk.checked = v.backgroundOn
     toneChk.checked = v.backgroundTone === 'on'
     dofChk.checked = v.backgroundDof === 'on'
+    logTwChk.checked = v.logTypewriter === 'on'
     partySel.value = String(effectivePartyCount(v))
     enemySel.value = String(v.enemyCount)
     sizeSel.value = v.sizeId
