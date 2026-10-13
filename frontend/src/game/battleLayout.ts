@@ -88,15 +88,15 @@ const SIDE_STATUS_VERTICAL_PADDING = 12
 export const SIDE_STATUS_COMPACT_WIDTH = 260
 /** スプライト 1 体の最大一辺 */
 export const SIDE_MAX_SPRITE_SIZE = 160
-/** 同じ側の体数がこれを超えたら 2 列に並べる */
+/** 同じ側の体数がこれを超えたら最低 2 列に並べる */
 const SIDE_MAX_ROWS_PER_COLUMN = 3
 /** 敵ラベル（名前 + HP の 2 行）の行高さ・行数・高さ・スプライトとの隙間 */
 export const SIDE_LABEL_LINE_HEIGHT = 15
 export const SIDE_LABEL_LINES = 2
 export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
 export const SIDE_LABEL_GAP = 2
-/** スプライトがこの一辺を下回るとき、列数を増やして大きくなる配置を探す */
-export const SIDE_MIN_SPRITE_SIZE = 48
+/** スプライトの一辺がこれに届く最小の列数を選ぶ（届く列数が無ければ最大サイズの列数） */
+export const SIDE_MIN_SPRITE_SIZE = 36
 /** フォールバック四角（画像が無いとき）の枠内比率 */
 const FALLBACK_X = 0.15
 const FALLBACK_Y = 0.1
@@ -169,16 +169,37 @@ export function fitNameWithSuffix(
   return fitLabel(name, room, fontPx) + suffix
 }
 
+/** コマンドセルの文字の左右余白（パネルの 2px 枠に触れないぶんを含む） */
+export const SIDE_COMMAND_TEXT_PADDING = 8
+
+/**
+ * セル幅 `cellWidth` に、左右 `padding` を残して `texts` のどれも収まる最大のフォントサイズ（整数 px）を返す。
+ * `maxFont` を上限とし、1 未満にはならない。幅は `estimateTextWidth` の概算。
+ */
+export function fitCommandFontSize(
+  cellWidth: number,
+  texts: string[],
+  maxFont: number,
+  padding: number
+): number {
+  const room = cellWidth - padding * 2
+  let font = Math.floor(maxFont)
+  while (font > 1 && texts.some((t) => estimateTextWidth(t, font) > room)) font--
+  return Math.max(1, font)
+}
+
 /**
  * ある側（敵 or 味方）の複数体を、領域内に千鳥で並べた枠を返す。
  *
- * - 3 体まで 1 列、4 体以上は 2 列（列優先で埋める）
+ * - 列数は「3 体まで 1 列・4 体以上は 2 列」を下限に、スプライトが `SIDE_MIN_SPRITE_SIZE` に届く
+ *   **最小の列数**を採る（列優先で埋める）。どの列数でも届かないときだけ最大サイズになる列数（同率は少ない方）
  * - 一辺は「領域幅」「領域高さ」「SIDE_MAX_SPRITE_SIZE」の最小。領域が潰れていても 0 以上
  * - 2 行以上のとき奇数行を `SIDE_STAGGER_RATIO * size` だけずらして奥行きを出す。
  *   ずらす向きは「敵は右（味方側）へ・味方は左（敵側）へ」で、向かい合う陣形になる
  * - 配置全体は領域内で水平・垂直とも中央寄せ
  * - `withLabel`（敵側）: 各行の高さを `size + SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT` にして、スプライトの直下に
- *   ラベル矩形（`slot.label`）を返す。小さすぎれば列を増やして行数を減らす
+ *   ラベル矩形（`slot.label`）を返す。ラベルを入れるとスプライトが 0 に潰れるほど低い領域では、
+ *   ラベルだけを省いてスプライトを残す（`slot.label` なし）
  */
 export function computeFormation(
   region: Rect,
@@ -190,7 +211,7 @@ export function computeFormation(
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
   // 敵側だけ各行にラベル（隙間 + 名前/HP の 2 行）ぶんを予約する
-  const extra = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+  let extra = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
   const sizeFor = (columns: number): number => {
     const rows = Math.ceil(count / columns)
     const stagger = rows > 1 ? SIDE_STAGGER_RATIO : 0
@@ -199,17 +220,22 @@ export function computeFormation(
       Math.min(regionW / (columns + stagger), regionH / rows - extra, SIDE_MAX_SPRITE_SIZE)
     )
   }
-  let columns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
-  let size = sizeFor(columns)
-  // 小さくなりすぎるときは、列数を増やして最も大きくなる配置（同率なら列の少ない方）を採る
-  if (size < SIDE_MIN_SPRITE_SIZE) {
-    for (let c = columns + 1; c <= count; c++) {
-      const next = sizeFor(c)
-      if (next > size) {
-        columns = c
-        size = next
-      }
+  const baseColumns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
+  const pick = (): { columns: number; size: number } => {
+    let best = { columns: baseColumns, size: sizeFor(baseColumns) }
+    for (let c = baseColumns; c <= count; c++) {
+      const size = sizeFor(c)
+      if (size >= SIDE_MIN_SPRITE_SIZE) return { columns: c, size }
+      if (size > best.size) best = { columns: c, size }
     }
+    return best
+  }
+  let { columns, size } = pick()
+  // ラベルを入れると潰れてしまう低い領域では、ラベルだけ省いてスプライトを残す
+  const labelDropped = withLabel && size <= 0
+  if (labelDropped) {
+    extra = 0
+    ;({ columns, size } = pick())
   }
   const rows = Math.ceil(count / columns)
   const stagger = rows > 1 ? SIDE_STAGGER_RATIO : 0
@@ -228,8 +254,7 @@ export function computeFormation(
     const x = originX + col * size + dx
     const y = originY + row * (size + extra)
     const slot: SpriteSlot = { x, y, size }
-    // 高さが足りずスプライトが 0 に潰れた枠にはラベルも置かない（stage からはみ出させない）
-    if (withLabel && size > 0) {
+    if (withLabel && !labelDropped && size > 0) {
       slot.label = { x, y: y + size + SIDE_LABEL_GAP, w: size, h: SIDE_LABEL_HEIGHT }
     }
     slots.push(slot)

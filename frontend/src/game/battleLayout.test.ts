@@ -7,7 +7,9 @@ import {
   SIDE_LABEL_LINES,
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_MIN_LINES,
+  SIDE_MIN_SPRITE_SIZE,
   SIDE_MIN_STAGE_HEIGHT,
+  SIDE_COMMAND_TEXT_PADDING,
   SIDE_MAX_SPRITE_SIZE,
   SIDE_PADDING,
   SIDE_STAGGER_RATIO,
@@ -19,6 +21,7 @@ import {
   computeSideBattleLayout,
   computeSideLogHeight,
   desiredSideLogLines,
+  fitCommandFontSize,
   estimateTextWidth,
   fitLabel,
   fitNameWithSuffix,
@@ -469,6 +472,7 @@ const SWEEP_SIZES: Array<[number, number]> = [
   [1280, 720],
   [640, 360],
   [568, 320],
+  [320, 240],
 ]
 
 describe('computeFormation: 敵ラベル予約', () => {
@@ -568,12 +572,12 @@ describe('ログ行数', () => {
   })
 })
 
-describe('スイープ不変条件 (6 サイズ x party1-4 x enemy1-6)', () => {
+describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6)', () => {
   const cases: Array<[number, number, number, number]> = []
   for (const [w, h] of SWEEP_SIZES)
     for (let p = 1; p <= 4; p++) for (let e = 1; e <= 6; e++) cases.push([w, h, p, e])
 
-  it('件数', () => expect(cases).toHaveLength(144))
+  it('件数', () => expect(cases).toHaveLength(168))
 
   it.each(cases)('%dx%d party%d enemy%d', (w, h, p, e) => {
     const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: e })
@@ -599,8 +603,11 @@ describe('スイープ不変条件 (6 サイズ x party1-4 x enemy1-6)', () => {
     for (let i = 0; i < nonEmpty.length; i++)
       for (let j = i + 1; j < nonEmpty.length; j++)
         expect(overlaps(nonEmpty[i], nonEmpty[j])).toBe(false)
-    // 敵のラベルは潰れていない限り全員ぶん存在する
-    for (const s of L.enemies) if (s.size > 0) expect(s.label).toBeDefined()
+    // ステージが十分あればラベルは全員ぶん存在する（低すぎるときはラベルだけ省かれ、スプライトは残る）
+    for (const s of L.enemies) {
+      expect(s.size).toBeGreaterThan(0)
+      if (L.stage.h >= 60) expect(s.label).toBeDefined()
+    }
   })
 })
 
@@ -629,5 +636,95 @@ describe('fitLabel / fitNameWithSuffix', () => {
     expect(fitNameWithSuffix('あ', ' HP 1/1', 200, 14)).toBe('あ HP 1/1')
     const r = fitNameWithSuffix('あ', ' HP 1000/1000', 40, 14)
     expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(40)
+  })
+})
+
+// ---- #736 2 巡目レビュー対応: 列数選択・ラベル省略・コマンドフォント ----
+
+function rowsOf(slots: SpriteSlot[]): number {
+  return new Set(slots.map((s) => Math.round(s.y * 1000))).size
+}
+
+describe('computeFormation: 列数は SIDE_MIN_SPRITE_SIZE に届く最小の列数', () => {
+  it.each([
+    [800, 450],
+    [640, 360],
+  ])('%dx%d・敵 3 体は 2 行以上で千鳥（dx が 0 でない）', (w, h) => {
+    const L = computeSideBattleLayout({ width: w, height: h, partyCount: 1, enemyCount: 3 })
+    expect(rowsOf(L.enemies)).toBeGreaterThanOrEqual(2)
+    expect(L.enemies[0].size).toBeGreaterThanOrEqual(SIDE_MIN_SPRITE_SIZE)
+    // 同じ列の 1 行目と 2 行目で x がずれている（千鳥）
+    expect(L.enemies[1].x - L.enemies[0].x).not.toBe(0)
+  })
+
+  it('640x360・敵 3〜6 体はすべて 2 行以上（千鳥あり）', () => {
+    for (let e = 3; e <= 6; e++) {
+      const L = computeSideBattleLayout({ width: 640, height: 360, partyCount: 1, enemyCount: e })
+      expect(rowsOf(L.enemies)).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  it('届く列数が複数あるとき最小の列数が選ばれる（4 体・広い領域 → 2 列 2 行）', () => {
+    const slots = computeFormation({ x: 0, y: 0, w: 600, h: 400 }, 4, 'enemy', true)
+    expect(rowsOf(slots)).toBe(2)
+    expect(slots[0].size).toBeGreaterThanOrEqual(SIDE_MIN_SPRITE_SIZE)
+  })
+
+  it('どの列数でも届かないときは最大サイズになる列数（6 体・低い領域 → 1 行）', () => {
+    const slots = computeFormation({ x: 0, y: 0, w: 300, h: 60 }, 6, 'enemy', true)
+    expect(rowsOf(slots)).toBe(1)
+    expect(slots[0].size).toBeLessThan(SIDE_MIN_SPRITE_SIZE)
+    expect(slots[0].size).toBeCloseTo(60 - SIDE_LABEL_GAP - SIDE_LABEL_HEIGHT)
+  })
+})
+
+describe('最小画面 320x240: ラベルだけを省いてスプライトは残す', () => {
+  it.each([1, 2, 3, 4, 5, 6])('party4・enemy%d', (e) => {
+    const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: 4, enemyCount: e })
+    expect(L.enemies).toHaveLength(e)
+    for (const s of L.enemies) {
+      expect(s.size).toBeGreaterThan(0)
+      expect(inside(slotRect(s), L.stage)).toBe(true)
+    }
+    // ステージが低くラベルを置けない枠は label なし
+    expect(L.enemies.some((s) => s.label === undefined)).toBe(true)
+  })
+
+  it('ラベルが置ける画面では全員にラベルがある（回帰）', () => {
+    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 1, enemyCount: 6 })
+    for (const s of L.enemies) expect(s.label).toBeDefined()
+  })
+})
+
+describe('fitCommandFontSize', () => {
+  const labels = ['たたかう', 'じゅもん', 'どうぐ', 'にげる']
+
+  it('広いセルでは上限のまま', () => {
+    expect(fitCommandFontSize(200, labels, 18, 8)).toBe(18)
+  })
+
+  it('72px セルでは文字幅 + 2*padding がセル幅に収まる', () => {
+    const f = fitCommandFontSize(72, labels, 18, SIDE_COMMAND_TEXT_PADDING)
+    expect(f).toBeLessThan(18)
+    for (const t of labels)
+      expect(estimateTextWidth(t, f) + SIDE_COMMAND_TEXT_PADDING * 2).toBeLessThanOrEqual(72)
+  })
+
+  it('極端に狭くても 1 以上', () => {
+    expect(fitCommandFontSize(0, labels, 18, 8)).toBe(1)
+  })
+
+  it('不変条件: 6 サイズ x party1-4 の全 commandCells で収まる', () => {
+    for (const [w, h] of [...SWEEP_SIZES, [320, 240] as [number, number]])
+      for (let p = 1; p <= 4; p++) {
+        const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: 1 })
+        const minW = Math.min(...L.commandCells.map((c) => c.w))
+        const f = fitCommandFontSize(minW, labels, 18, SIDE_COMMAND_TEXT_PADDING)
+        for (const c of L.commandCells)
+          for (const t of labels)
+            expect(estimateTextWidth(t, f) + SIDE_COMMAND_TEXT_PADDING * 2).toBeLessThanOrEqual(
+              c.w + EPS
+            )
+      }
   })
 })
