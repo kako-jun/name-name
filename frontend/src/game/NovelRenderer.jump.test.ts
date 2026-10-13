@@ -1004,12 +1004,15 @@ describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#75
   function deferred(): {
     promise: Promise<EventScene[] | null>
     resolve: (v: EventScene[] | null) => void
+    reject: (e: unknown) => void
   } {
     let resolve!: (v: EventScene[] | null) => void
-    const promise = new Promise<EventScene[] | null>((res) => {
+    let reject!: (e: unknown) => void
+    const promise = new Promise<EventScene[] | null>((res, rej) => {
       resolve = res
+      reject = rej
     })
-    return { promise, resolve }
+    return { promise, resolve, reject }
   }
 
   const ENTRY = [scene('a', [narration('a1'), jump('far')]), scene('b', [narration('b1')])]
@@ -1103,5 +1106,101 @@ describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#75
     far.resolve([...ENTRY, FAR])
     await flush()
     expect(r.getCurrentSceneId()).toBe('ghost')
+  })
+
+  // ロード中（遅延ロード往復中）も Jump のゲートは保たれ、失敗しても Jump が消えない (#759 N1/N2)
+  describe.each([
+    ['quickLoad', 'stalled'],
+    ['restoreSnapshot', 'pending'],
+    ['restoreSnapshot', 'stalled'],
+  ] as const)('%s 中（開始時 %s）', (via, initial) => {
+    it.each(['null', 'missing', 'reject'] as const)(
+      '解決が %s で失敗 → ロード中は advance/セーブ拒否・jumpState と位置は不変・pending なら Jump を再試行',
+      async (outcome) => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        new SaveManager().deleteQuickSave()
+        const ghost = deferred()
+        const farCalls: string[] = []
+        const r = makeRenderer(ENTRY)
+        r.setMissingSceneResolver((id) => {
+          if (id === 'far') {
+            farCalls.push(id)
+            return Promise.resolve(null)
+          }
+          return id === 'ghost' ? ghost.promise : Promise.resolve(null)
+        })
+        r.advance() // a1 → Jump 到達（pending）
+        if (initial === 'stalled') {
+          tick(r)
+          await flush()
+          expect(internals(r).jumpState).toBe('stalled')
+          farCalls.length = 0
+        }
+        const at = r.getSnapshot()
+        if (via === 'quickLoad') {
+          new SaveManager().quickSave({
+            ...(at as unknown as SaveSlotData),
+            slot: -1,
+            sceneId: 'ghost',
+            eventIndex: 0,
+            savedAt: '2026-01-01T00:00:00.000Z',
+            sceneName: null,
+          })
+          expect(r.quickLoad()).toBe(true)
+        } else {
+          r.restoreSnapshot({ ...at, sceneId: 'ghost', eventIndex: 0 })
+        }
+
+        // ロード中: ゲートは外れない（Jump を飛び越せず、Jump 位置でセーブもできない）
+        expect(internals(r).jumpState).toBe(initial)
+        r.advance()
+        expect(r.getSnapshot().eventIndex).toBe(at.eventIndex)
+        expect(r.quickSave()).toBe(false)
+
+        if (outcome === 'null') ghost.resolve(null)
+        else if (outcome === 'missing') ghost.resolve([...ENTRY])
+        else ghost.reject(new Error('boom'))
+        await flush()
+
+        expect(r.getCurrentSceneId()).toBe('a')
+        expect(r.getSnapshot().eventIndex).toBe(at.eventIndex)
+        expect(internals(r).jumpState).toBe(initial)
+        tick(r)
+        await flush()
+        if (initial === 'pending') {
+          // 再予約された Jump が遷移を試み（遷移先不在）停止する
+          expect(farCalls).toEqual(['far'])
+          expect(internals(r).jumpState).toBe('stalled')
+        } else {
+          expect(farCalls).toEqual([])
+          expect(internals(r).jumpState).toBe('stalled')
+        }
+        new SaveManager().deleteQuickSave()
+      }
+    )
+  })
+
+  it('N3: 予約中のロード/セーブ確定の拒否はトーストで通知される', () => {
+    const r = makeRenderer(ENTRY, { docKey: 'doc-759-toast' })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    let onLoad!: (d: SaveSlotData) => void
+    let onSave!: (slot: number) => void
+    vi.spyOn(internals(r).saveLoadOverlay, 'showLoad').mockImplementation(((
+      cb: (d: SaveSlotData) => void
+    ) => {
+      onLoad = cb
+    }) as never)
+    vi.spyOn(internals(r).saveLoadOverlay, 'showSave').mockImplementation(((
+      cb: (slot: number) => void
+    ) => {
+      onSave = cb
+    }) as never)
+    internals(r).openLoadMenu()
+    internals(r).openSaveMenu()
+    r.advance()
+    onSave(1)
+    expect(toast).toHaveBeenLastCalledWith('場面転換中のためセーブできません')
+    onLoad({} as SaveSlotData)
+    expect(toast).toHaveBeenLastCalledWith('場面転換中のためロードできません')
   })
 })
