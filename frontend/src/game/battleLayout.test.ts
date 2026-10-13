@@ -5,6 +5,7 @@ import {
   SIDE_LABEL_FONT_SIZE,
   SIDE_LABEL_GAP,
   SIDE_LABEL_MAX_WIDTH_RATIO,
+  SIDE_LABEL_MIN_WIDTH,
   SIDE_LABEL_STROKE_WIDTH,
   SIDE_LABEL_HEIGHT,
   SIDE_LABEL_LINES,
@@ -26,6 +27,7 @@ import {
   desiredSideLogLines,
   fitCommandFontSize,
   fitHpLabel,
+  isLabelWidthReadable,
   estimateTextWidth,
   fitLabel,
   fitNameWithSuffix,
@@ -611,7 +613,7 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6)', () => {
     // ステージが十分あればラベルは全員ぶん存在する（低すぎるときはラベルだけ省かれ、スプライトは残る）
     for (const s of L.enemies) {
       expect(s.size).toBeGreaterThan(0)
-      if (L.stage.h >= 60) expect(s.label).toBeDefined()
+      if (L.stage.h >= 60 && s.size >= SIDE_LABEL_MIN_WIDTH) expect(s.label).toBeDefined()
     }
   })
 })
@@ -826,5 +828,46 @@ describe('fitHpLabel', () => {
   })
   it('… すら入らなければ空文字', () => {
     expect(fitHpLabel(1, 1, 2, 12)).toBe('')
+  })
+})
+
+describe('読めない幅のラベルは省く (#736)', () => {
+  it('SIDE_LABEL_MIN_WIDTH は「12/12」の概算幅 + 縁取り両側から導出される', () => {
+    expect(SIDE_LABEL_MIN_WIDTH).toBe(
+      Math.ceil(estimateTextWidth('12/12', SIDE_LABEL_FONT_SIZE) + SIDE_LABEL_STROKE_WIDTH * 2)
+    )
+    expect(isLabelWidthReadable(SIDE_LABEL_MIN_WIDTH)).toBe(true)
+    expect(isLabelWidthReadable(SIDE_LABEL_MIN_WIDTH - 1)).toBe(false)
+  })
+
+  it.each([1, 2, 3])(
+    '320x240 party%d・敵 1〜6 体: ラベルが出るなら HP 数値が読め、出ないなら省かれスプライトは残る',
+    (p) => {
+      for (let e = 1; e <= 6; e++) {
+        const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: p, enemyCount: e })
+        for (const s of L.enemies) {
+          expect(s.size).toBeGreaterThan(0)
+          if (s.label) {
+            const room = s.label.w - SIDE_LABEL_STROKE_WIDTH * 2
+            expect(fitHpLabel(12, 12, room, SIDE_LABEL_FONT_SIZE)).toMatch(/12\/12$/)
+            expect(fitLabel('てき', room, SIDE_LABEL_FONT_SIZE)).not.toBe('…')
+          }
+        }
+      }
+    }
+  )
+
+  it('320x240 party1・敵 2 体（28px の 2 列）はラベルが省かれる', () => {
+    const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: 1, enemyCount: 2 })
+    for (const s of L.enemies) expect(s.label).toBeUndefined()
+  })
+
+  it('全スイープ: ラベルがあれば必ず読める幅（isLabelWidthReadable）', () => {
+    for (const [w, h] of SWEEP_SIZES)
+      for (let p = 1; p <= 4; p++)
+        for (let e = 1; e <= 6; e++) {
+          const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: e })
+          for (const s of L.enemies) if (s.label) expect(isLabelWidthReadable(s.label.w)).toBe(true)
+        }
   })
 })

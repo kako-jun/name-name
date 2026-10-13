@@ -30,7 +30,7 @@ export interface SpriteSlot {
   x: number
   y: number
   size: number
-  /** 敵のみ: 名前 + HP ラベルの矩形（スプライトの直下・画面絶対座標）。味方・潰れて置けない枠では undefined */
+  /** 敵のみ: 名前 + HP ラベルの矩形（スプライトの直下・画面絶対座標）。味方・潰れて置けない枠・幅が狭く文字が読めない枠では undefined */
   label?: Rect
 }
 
@@ -138,6 +138,18 @@ export const SIDE_LABEL_FONT_SIZE = 12
 export const SIDE_LABEL_STROKE_WIDTH = 3
 /** 1 列配置のラベル幅の上限（スプライト一辺に対する倍率。領域幅でも頭打ち） */
 export const SIDE_LABEL_MAX_WIDTH_RATIO = 3
+/**
+ * ラベル矩形の幅がこれ未満だと、縁取りを引いた文字幅が HP 数値（「12/12」）の概算幅に届かず
+ * 名前も HP も「…」程度しか入らない。その幅のラベルは置かない（スプライトは残す）。
+ */
+export const SIDE_LABEL_MIN_WIDTH = Math.ceil(
+  estimateTextWidth('12/12', SIDE_LABEL_FONT_SIZE) + SIDE_LABEL_STROKE_WIDTH * 2
+)
+/** ラベルの幅が読める文字を入れられるか（純粋関数。入らない幅ならラベルごと省く） */
+export function isLabelWidthReadable(labelWidth: number): boolean {
+  return labelWidth >= SIDE_LABEL_MIN_WIDTH
+}
+
 /**
  * 敵ラベルの HP 行（「HP 12/12」）が省略されず読める、スプライト一辺の最小値。
  * 決め打ちでなく、HP 行の概算幅 + 縁取り両側分から導出する（約 64px）。
@@ -284,7 +296,10 @@ export function computeFormation(
         columns === 1
           ? Math.min(Math.max(x + size / 2 - w / 2, region.x), region.x + regionW - w)
           : x
-      slot.label = { x: lx, y: y + size + SIDE_LABEL_GAP, w, h: SIDE_LABEL_HEIGHT }
+      // 名前も HP も読めない狭さ（「…」だけになる幅）ならラベルごと省く
+      if (isLabelWidthReadable(w)) {
+        slot.label = { x: lx, y: y + size + SIDE_LABEL_GAP, w, h: SIDE_LABEL_HEIGHT }
+      }
     }
     slots.push(slot)
   }
