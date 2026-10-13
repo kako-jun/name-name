@@ -83,10 +83,10 @@ const LOG_VISIBLE_LINES = 4
 const PANEL_GAP = 6
 
 /** 画像が無い（未指定・読み込み失敗）ときの色四角 (#736)。敵=赤系 / 味方=青系 */
-/** acrylic の台座の色 (#737)。黒に近い円形台座 */
-const ACRYLIC_BASE_COLOR = 0x111111
 const FALLBACK_ENEMY_COLOR = 0xcc5555
 const FALLBACK_PARTY_COLOR = 0x5588cc
+/** acrylic の台座の色 (#737)。黒に近い円形台座 */
+const ACRYLIC_BASE_COLOR = 0x111111
 const DEAD_ALPHA = 0.3
 const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
