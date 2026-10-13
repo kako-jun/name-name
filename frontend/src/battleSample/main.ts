@@ -224,6 +224,13 @@ async function main(): Promise<void> {
   )
   logTwLabel.append(logTwChk, 'ログを1文字ずつ表示')
   tb.appendChild(logTwLabel)
+  const presentationSel = select(
+    '演出',
+    'tb-presentation',
+    ['dq', 'ff'] as const,
+    (v) => change({ presentation: v }),
+    { dq: 'dq（ログ・動かない）', ff: 'ff（モーション・ダメージ数字）' }
+  )
   const atbLabel = document.createElement('label')
   const atbChk = document.createElement('input')
   atbChk.type = 'checkbox'
@@ -317,6 +324,7 @@ async function main(): Promise<void> {
     dofChk.checked = v.backgroundDof === 'on'
     pixelChk.checked = v.pixelArt === 'on'
     logTwChk.checked = v.logTypewriter === 'on'
+    presentationSel.value = v.presentation
     atbChk.checked = v.atb === 'on'
     atbModeSel.value = v.atbMode
     atbModeSel.disabled = v.atb !== 'on'
