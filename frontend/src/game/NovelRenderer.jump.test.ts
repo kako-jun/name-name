@@ -528,3 +528,85 @@ describe('NovelRenderer Jump × intermission.md (#725)', () => {
     expect(r.getSnapshot().storyEnded).toBe(true)
   })
 })
+
+describe('NovelRenderer Jump 位置からの復元・任意局面起動 (#733)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    defaultTimeController.setMode('live')
+    localStorage.clear()
+  })
+
+  it('1: startFrom の eventIndex が Jump を指しても、遷移が再予約されて先へ進む', () => {
+    const r = makeRenderer([
+      scene('a', [narration('a1'), jump('c')]),
+      scene('c', [narration('c1')]),
+    ])
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    expect(r.getCurrentSceneId()).toBe('a')
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(text(r)).toContain('c1')
+    expect(internals(r).jumpState).toBe('idle')
+  })
+
+  it('2: 遷移先不在の Jump へ startFrom すると警告して停止し、goBack / advance で行き止まりにならない', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])])
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    tick(r)
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('nowhere'))).toBe(true)
+    expect(r.getSnapshot().storyEnded).toBe(false)
+    r.advance()
+    expect(r.getSnapshot().storyEnded).toBe(false)
+    // 停止状態は復元をまたいで持ち越さない: 再度 startFrom すれば再試行して再び停止する
+    warnSpy.mockClear()
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('3: stalled からの復元（goBack）で idle に戻り、本文位置では再予約しない', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('only'), jump('nowhere')])])
+    r.advance()
+    tick(r)
+    expect(internals(r).jumpState).toBe('stalled')
+    r.goBack()
+    expect(internals(r).jumpState).toBe('idle')
+    expect(text(r)).toContain('only')
+  })
+
+  it('4: [条件:] 内の Jump は、復元後のフラグが真のときだけ再予約される', () => {
+    const scenes = [
+      scene('a', [narration('a1'), condition('f', [jump('c')]), narration('a2')]),
+      scene('c', [narration('c1')]),
+    ]
+    const t = makeRenderer(scenes)
+    t.startFrom({ sceneId: 'a', eventIndex: 1, flags: { f: { Bool: true } } })
+    expect(internals(t).jumpState).toBe('pending')
+    tick(t)
+    expect(t.getCurrentSceneId()).toBe('c')
+
+    const f = makeRenderer(scenes)
+    f.startFrom({ sceneId: 'a', eventIndex: 1, flags: { f: { Bool: false } } })
+    expect(internals(f).jumpState).toBe('idle')
+    tick(f)
+    expect(f.getCurrentSceneId()).toBe('a')
+    expect(text(f)).toContain('a2')
+  })
+
+  it('5: Jump 予約中は [待機] 用の waitingForWait を立てない（2 役の分離）', () => {
+    const r = makeRenderer([
+      scene('a', [narration('a1'), jump('c')]),
+      scene('c', [narration('c1')]),
+    ])
+    r.advance()
+    expect(internals(r).jumpState).toBe('pending')
+    expect(internals(r).waitingForWait).toBe(false)
+    expect(r.getDebugState().jumpState).toBe('pending')
+  })
+})

@@ -3950,6 +3950,17 @@ export class NovelRenderer {
       this.audioManager.stopBgm(0)
       this.currentBgmPath = null
     }
+
+    // Jump 位置への復元 (#733): 宣言的復元は現在位置のディレクティブを再実行しないため、
+    // eventIndex が Jump を指していると遷移の予約が無く行き止まりになる（startFrom の eventIndex 指定・
+    // 古いセーブ等）。到達時と同じ経路で再予約する。[条件:] 内の Jump は resolvedEvents（復元後のフラグで
+    // 展開済み）の現在イベントで判定するので、条件が偽なら Jump はここに現れず再予約もしない。
+    // 遷移先不在なら通常到達時と同じく warn して stalled に戻る。
+    const restoredJump = this.resolvedEvents[this.eventIndex]
+    if (typeof restoredJump === 'object' && restoredJump !== null && 'Jump' in restoredJump) {
+      this.markCurrentSceneRead()
+      this.armJump(restoredJump.Jump.target)
+    }
   }
 
   /**
