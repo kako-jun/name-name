@@ -603,6 +603,19 @@ describe('ATB: initialGauges（任意局面）', () => {
 })
 
 describe('ATB: にげる', () => {
+  it('行動者の導出は一本化: たたかう / にげる失敗とも、キュー先頭の人だけがゲージ 0 になり次の人が番になる', () => {
+    const init = { initialGauges: { party: [1000, 1000] } }
+    const atk = mk([hero('a'), hero('b')], [foe('s')], init, () => 0)
+    atk.selectAttack()
+    expect(atbOf(atk).partyGauge).toEqual([0, 1000])
+    expect(atbOf(atk).queue).toEqual([1])
+
+    const esc = mk([hero('a'), hero('b')], [foe('s')], init, () => 0.9)
+    esc.selectEscape()
+    expect(atbOf(esc).partyGauge).toEqual([0, 1000])
+    expect(atbOf(esc).queue).toEqual([1])
+  })
+
   it('atb-running 中でも選べる。rng<0.5 で成功（0.49 成功 / 0.5 失敗）', () => {
     const ok = mk([hero('a')], [foe('s')], {}, () => 0.49)
     expect(ok.getState().phase).toBe('atb-running')

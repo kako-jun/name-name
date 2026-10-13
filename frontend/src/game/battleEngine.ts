@@ -59,7 +59,7 @@ export type AtbMode = 'wait' | 'active'
 
 /** ゲージ満タンの値 */
 export const ATB_GAUGE_MAX = 1000
-/** AGI 1 あたり 1ms で溜まるゲージ量。AGI に比例（AGI 5 で 5 秒、AGI 10 で 2.5 秒で満タン）。目視で調整する値 */
+/** AGI 1 あたり、1ms ごとに溜まるゲージ量。AGI に比例（AGI 5 で 5 秒、AGI 10 で 2.5 秒で満タン）。目視で調整する値 */
 export const ATB_FILL_PER_AGI_MS = 0.04
 /** `tick(ms)` 1 回で進める時間の上限（ms）。タブ復帰などで巨大な値が来ても暴走しないための安全弁 */
 export const ATB_MAX_TICK_MS = 10_000
@@ -164,7 +164,8 @@ export class BattleEngine {
     }
     this.appendLog('しかし まわりこまれてしまった！')
     if (atb) {
-      const idx = atb.queue.length > 0 ? atb.queue[0] : this.fullestAliveIndex(atb)
+      const cur = this.currentActorIndex()
+      const idx = cur !== -1 ? cur : this.fullestAliveIndex(atb)
       if (idx !== -1) this.finishAtbAction(idx)
       this.settleAtbPhase()
     } else {
@@ -268,7 +269,8 @@ export class BattleEngine {
     const atb = this.state.atb
     if (atb) {
       // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）
-      if (atb.queue.length > 0) this.finishAtbAction(atb.queue[0])
+      const idx = this.currentActorIndex()
+      if (idx !== -1) this.finishAtbAction(idx)
       if (this.state.enemies.every((e) => e.hp === 0)) {
         this.handleVictory()
         return
@@ -310,15 +312,21 @@ export class BattleEngine {
     this.state.phase = atb.queue.length > 0 ? 'party-input' : 'atb-running'
   }
 
-  /** 今コマンドを出す味方。ATB はキュー先頭（生存者のみ）、従来ターン制は先頭の生存者 */
-  private currentActor(): BattleEntity | null {
+  /** 今コマンドを出す味方の party index。ATB はキュー先頭の生存者、従来ターン制は先頭の生存者。いなければ -1 */
+  private currentActorIndex(): number {
     const atb = this.state.atb
-    if (!atb) return this.firstAlive(this.state.party)
+    if (!atb) return this.state.party.findIndex((p) => p.hp > 0)
     for (const idx of atb.queue) {
       const m = this.state.party[idx]
-      if (m && m.hp > 0) return m
+      if (m && m.hp > 0) return idx
     }
-    return null
+    return -1
+  }
+
+  /** 今コマンドを出す味方。導出は currentActorIndex に一本化 */
+  private currentActor(): BattleEntity | null {
+    const idx = this.currentActorIndex()
+    return idx === -1 ? null : this.state.party[idx]
   }
 
   /** 行動を終えた味方のゲージを 0 に戻し、キューから外す */
