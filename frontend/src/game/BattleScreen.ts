@@ -32,6 +32,7 @@
 
 import {
   Assets,
+  ColorMatrixFilter,
   Container,
   Graphics,
   Rectangle,
@@ -72,6 +73,12 @@ import {
   FF_BLUE_TEXT_SHADOW,
   type WindowStyle,
 } from './windowStyle'
+import {
+  BACKGROUND_TONE_BRIGHTNESS,
+  BACKGROUND_TONE_SATURATION,
+  saturationToPixiAmount,
+  type BackgroundTone,
+} from './backgroundTone'
 
 const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
@@ -162,6 +169,11 @@ export interface BattleScreenOptions {
    * （白枠は維持）＋文字に黒い影。色だけがテーマで、寸法は変えない。
    */
   windowStyle?: WindowStyle
+  /**
+   * 背景画像の彩度・明度を表示時のフィルタで落とすか (#753)。`on`（既定）= 落とす、`off` = 素材そのまま。
+   * 背景スプライトにだけかかり、キャラ・敵・パネル・テキストには影響しない。背景なしのときは無関係。
+   */
+  backgroundTone?: BackgroundTone
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -190,6 +202,10 @@ export class BattleScreen extends Container {
   private spriteStyle: SpriteStyle
   /** ウィンドウ配色テーマ (#744) */
   private windowStyle: WindowStyle
+  /** 背景トーン調整 (#753) */
+  private backgroundTone: BackgroundTone
+  /** 背景スプライトにかけるフィルタ（1 個を使い回す。destroy で解放） */
+  private backgroundToneFilter: ColorMatrixFilter | null = null
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   private backgroundSprite: Sprite | null = null
@@ -234,6 +250,7 @@ export class BattleScreen extends Container {
     this.layoutMode = opts.layout === 'side' ? 'side' : 'front'
     this.spriteStyle = opts.spriteStyle === 'acrylic' ? 'acrylic' : 'none'
     this.windowStyle = opts.windowStyle === 'ff-blue' ? 'ff-blue' : 'dark'
+    this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
@@ -268,6 +285,8 @@ export class BattleScreen extends Container {
       v.acrylicFilter?.destroy()
       v.acrylicFilter = null
     }
+    this.backgroundToneFilter?.destroy()
+    this.backgroundToneFilter = null
     super.destroy(options)
   }
 
@@ -278,11 +297,27 @@ export class BattleScreen extends Container {
       if (this.destroyedFlag) return
       const sprite = new Sprite(tex)
       this.backgroundSprite = sprite
+      this.applyBackgroundTone(sprite)
       this.addChildAt(sprite, 0)
       this.layout()
     } catch (e) {
       console.warn(`[BattleScreen] failed to load background "${path}":`, e)
     }
+  }
+
+  /** 背景スプライトにだけ彩度・明度を落とすフィルタをかける (#753)。`off` のときはフィルタ無し。フィルタは 1 個を使い回す */
+  private applyBackgroundTone(sprite: Sprite): void {
+    if (this.backgroundTone === 'off') {
+      sprite.filters = null
+      return
+    }
+    if (!this.backgroundToneFilter) {
+      const f = new ColorMatrixFilter()
+      f.saturate(saturationToPixiAmount(BACKGROUND_TONE_SATURATION), false)
+      f.brightness(BACKGROUND_TONE_BRIGHTNESS, true)
+      this.backgroundToneFilter = f
+    }
+    sprite.filters = [this.backgroundToneFilter]
   }
 
   /** サイドビュー用の敵・味方スプライトとステータス行を作る (#736) */
