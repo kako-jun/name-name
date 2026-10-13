@@ -50,7 +50,7 @@ import type { BattleEntity } from './spellDsl'
 import {
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
-  computeContainFit,
+  computeContainFitRect,
   computeFallbackRect,
   computeSideBattleLayout,
   SIDE_COMMAND_TEXT_PADDING,
@@ -956,6 +956,12 @@ export class BattleScreen extends Container {
       enemyCount: s.enemies.length,
       commandCount: this.commands.length,
       partyRows: s.party.map((p) => p.row),
+      // 立ち絵の縦横比（未読み込み・色四角は undefined → 既定 0.5）。読み込み完了で layout し直される
+      partyAspects: this.partyViews.map((v) =>
+        v.sprite && v.sprite.texture.height > 0
+          ? v.sprite.texture.width / v.sprite.texture.height
+          : undefined
+      ),
       depth: this.opts.depth,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
@@ -1046,15 +1052,24 @@ export class BattleScreen extends Container {
 
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
-    view.container.position.set(slot.x, slot.y)
     const size = slot.size
+    // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
+    const acrylic = !!(this.acrylicParams && view.acrylicBack && view.acrylicFilter && view.sprite)
+    view.container.position.set(acrylic ? slot.x - (size - slot.width) / 2 : slot.x, slot.y)
     const fb = computeFallbackRect(size)
-    view.fallback.clear().rect(fb.x, fb.y, fb.w, fb.h).fill(view.color)
+    const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
+    const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
+    view.fallback.clear().rect(fbX, fb.y, fbW, fb.h).fill(view.color)
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack && view.acrylicFilter) {
         this.placeAcrylic(view.sprite, view.acrylicBack, view.acrylicFilter, size)
       } else {
-        const fit = computeContainFit(view.sprite.texture.width, view.sprite.texture.height, size)
+        const fit = computeContainFitRect(
+          view.sprite.texture.width,
+          view.sprite.texture.height,
+          slot.width,
+          size
+        )
         view.sprite.position.set(fit.x, fit.y)
         view.sprite.width = fit.width
         view.sprite.height = fit.height

@@ -32,6 +32,8 @@ export interface SpriteSlot {
   x: number
   y: number
   size: number
+  /** 枠の幅。敵は `size`（正方形）、味方 (#760) は縦長で `size * 縦横比`（`size` は高さ） */
+  width: number
   /** 敵のみ: 名前 + HP ラベルの矩形（スプライトの直下・画面絶対座標）。味方・潰れて置けない枠・幅が狭く文字が読めない枠では undefined */
   label?: Rect
   /**
@@ -63,6 +65,8 @@ export interface SideBattleLayoutInput {
   commandCount?: number
   /** 味方ごとの隊列 (#747)。味方の index 順。未指定・足りない分は前衛。`back` は右（敵から遠い側）へ半歩下げる */
   partyRows?: readonly (BattleRow | undefined)[]
+  /** 味方ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は `SIDE_DEFAULT_SPRITE_ASPECT` */
+  partyAspects?: readonly (number | undefined)[]
   /** 奥行き (#747)。未指定・perspective が 0 以下は平面（現行どおり） */
   depth?: BattleDepth | null
 }
@@ -131,10 +135,17 @@ export const SIDE_STAGGER_RATIO = 0.25
 /** 後衛 (#747) を右（敵から遠い側）へ下げる水平ずれ。スプライト一辺に対する比（半歩） */
 export const SIDE_BACK_ROW_SHIFT_RATIO = 0.5
 /** 味方の斜め一列 (#760): 斜めのずらし量（1 人ぶんの x 送り）の下限・上限。スプライト一辺に対する比 */
-export const SIDE_DIAGONAL_MIN_SHIFT_RATIO = 0.25
+export const SIDE_DIAGONAL_MIN_SHIFT_RATIO = 0.3
 export const SIDE_DIAGONAL_MAX_SHIFT_RATIO = 0.75
-/** 味方の斜め一列 (#760): 行間隔（y 送り）の上限。スプライト一辺に対する比（これ以上は隙間を空けない） */
-export const SIDE_DIAGONAL_MAX_PITCH_RATIO = 1.2
+/** 味方の斜め一列 (#760): 行間隔（y 送り）の下限・上限。立ち絵の高さに対する比。下限 0.3 = 上の人の顔（上 30%）が隠れない */
+export const SIDE_PARTY_MIN_PITCH_RATIO = 0.3
+export const SIDE_PARTY_MAX_PITCH_RATIO = 0.6
+/** 味方の立ち絵の高さの上限 */
+export const SIDE_PARTY_MAX_HEIGHT = 320
+/** 立ち絵の縦横比（幅/高さ）の既定（未読み込み・色四角）と丸め範囲 */
+export const SIDE_DEFAULT_SPRITE_ASPECT = 0.5
+export const SIDE_PARTY_ASPECT_MIN = 0.2
+export const SIDE_PARTY_ASPECT_MAX = 1.5
 /** 奥行き (#747) の縮尺の下限（地平線に近い・地平線より上でも潰れない） */
 export const DEPTH_MIN_SCALE = 0.3
 /** `battle_perspective` だけ指定されたときの地平線の高さ（画面比）の既定 */
@@ -261,53 +272,66 @@ export function fitCommandFontSize(
 }
 
 /**
- * 味方 (#760): FF6 式に左上から右下へ斜め一列に並べる純粋関数。`party[0]` が左上・以降 x,y とも単調増加
- * （ステータス欄の行順と一致）。縮尺は掛けない。
+ * 味方 (#760): FF6 式に左上から右下へ斜め一列に並べる純粋関数。`party[0]` が左上・以降 y は単調増加
+ * （ステータス欄の行順と一致）。縮尺は掛けない。立ち絵は縦長なので枠を縦長（幅 = 高さ × 縦横比）にし、
+ * 味方どうしは**上下に重ねてよい**（下の人ほど手前＝後から描く）。
  *
- * - 一辺 size = min(SIDE_MAX_SPRITE_SIZE, 高さ / 人数, 幅 / (1 + 後衛予約 + (人数-1) * 下限ずらし比))
- * - 行間隔 pitch = min((高さ - size) / (人数 - 1), size * SIDE_DIAGONAL_MAX_PITCH_RATIO)  （size 以上＝縦に重ならない）
- * - 斜めのずらし dx = clamp((幅 - size * (1 + 後衛予約)) / (人数 - 1), 下限比, 上限比) * size
- * - 後衛 (#747): 斜めの位置から右へ `SIDE_BACK_ROW_SHIFT_RATIO * size`。後衛が 1 人でもいれば全員ぶん右余白
- *   (`size * SIDE_BACK_ROW_SHIFT_RATIO`) を予約するので領域から出ない
+ * - `aspects[i]`: 立ち絵の幅/高さ（読み込んだテクスチャ。未読み込み・不正は `SIDE_DEFAULT_SPRITE_ASPECT`=0.5、
+ *   `SIDE_PARTY_ASPECT_MIN`〜`MAX` に丸める）。`slot.size` は高さ、`slot.width` は幅
+ * - 高さ h = min(SIDE_PARTY_MAX_HEIGHT, 領域高さ / (1 + (人数-1) * 行間隔下限比 0.3),
+ *   領域幅 / (最大幅比 * (1 + 後衛予約) + (人数-1) * ずらし下限比 0.3))
+ * - 行間隔 pitch = min((領域高さ - h) / (人数-1), 0.6 * h)。下限 0.3h なので上の人の顔（上 30%）は下の人に隠れない
+ * - 斜めのずらし dx = clamp((領域幅 - 最大幅 * (1 + 後衛予約)) / (人数-1), 0.3h, 0.75h)
+ * - 後衛 (#747): 斜めの位置から右へ**その人の幅**の `SIDE_BACK_ROW_SHIFT_RATIO`(0.5) 倍。後衛が 1 人でもいれば
+ *   最大幅の 0.5 倍ぶんの右余白を全員で予約するので領域から出ない
  * - 配置全体は領域内で水平・垂直とも中央寄せ
  */
 export function computePartyDiagonal(
   region: Rect,
   count: number,
-  rows?: readonly (BattleRow | undefined)[]
+  rows?: readonly (BattleRow | undefined)[],
+  aspects?: readonly (number | undefined)[]
 ): SpriteSlot[] {
   if (count <= 0) return []
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
+  const aspect = (i: number): number => {
+    const a = aspects?.[i]
+    if (a === undefined || !Number.isFinite(a) || a <= 0) return SIDE_DEFAULT_SPRITE_ASPECT
+    return Math.min(SIDE_PARTY_ASPECT_MAX, Math.max(SIDE_PARTY_ASPECT_MIN, a))
+  }
+  let maxAspect = 0
+  for (let i = 0; i < count; i++) maxAspect = Math.max(maxAspect, aspect(i))
   const anyBack = !!rows && rows.slice(0, count).some((r) => r === 'back')
   const backShift = anyBack ? SIDE_BACK_ROW_SHIFT_RATIO : 0
   const steps = count - 1
-  const size = Math.max(
+  const h = Math.max(
     0,
     Math.min(
-      SIDE_MAX_SPRITE_SIZE,
-      regionH / count,
-      regionW / (1 + backShift + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
+      SIDE_PARTY_MAX_HEIGHT,
+      regionH / (1 + steps * SIDE_PARTY_MIN_PITCH_RATIO),
+      regionW / (maxAspect * (1 + backShift) + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
     )
   )
-  const pitch =
-    steps > 0 ? Math.min((regionH - size) / steps, size * SIDE_DIAGONAL_MAX_PITCH_RATIO) : 0
+  const pitch = steps > 0 ? Math.min((regionH - h) / steps, h * SIDE_PARTY_MAX_PITCH_RATIO) : 0
+  const maxW = h * maxAspect
   const dx =
-    steps > 0 && size > 0
+    steps > 0 && h > 0
       ? Math.min(
           SIDE_DIAGONAL_MAX_SHIFT_RATIO,
-          Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (regionW - size * (1 + backShift)) / steps / size)
-        ) * size
+          Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (regionW - maxW * (1 + backShift)) / steps / h)
+        ) * h
       : 0
-  const totalW = size * (1 + backShift) + steps * dx
-  const totalH = size + steps * pitch
+  const totalW = maxW * (1 + backShift) + steps * dx
+  const totalH = h + steps * pitch
   const originX = region.x + (regionW - totalW) / 2
   const originY = region.y + (regionH - totalH) / 2
   const slots: SpriteSlot[] = []
   for (let i = 0; i < count; i++) {
-    const back = rows?.[i] === 'back' ? size * SIDE_BACK_ROW_SHIFT_RATIO : 0
+    const width = h * aspect(i)
+    const back = rows?.[i] === 'back' ? width * SIDE_BACK_ROW_SHIFT_RATIO : 0
     const y = originY + i * pitch
-    slots.push({ x: originX + i * dx + back, y, size, floor: y + size, scale: 1 })
+    slots.push({ x: originX + i * dx + back, y, size: h, width, floor: y + h, scale: 1 })
   }
   return slots
 }
@@ -331,10 +355,11 @@ export function computeFormation(
   count: number,
   side: 'enemy' | 'party',
   withLabel = false,
-  rows?: readonly (BattleRow | undefined)[]
+  rows?: readonly (BattleRow | undefined)[],
+  aspects?: readonly (number | undefined)[]
 ): SpriteSlot[] {
   if (count <= 0) return []
-  if (side === 'party') return computePartyDiagonal(region, count, rows)
+  if (side === 'party') return computePartyDiagonal(region, count, rows, aspects)
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
   // 敵側だけ各行にラベル（隙間 + 名前/HP の 2 行）ぶんを予約する
@@ -380,7 +405,7 @@ export function computeFormation(
     const dx = stagger > 0 && odd ? size * stagger : 0
     const x = originX + col * colPitch + dx
     const y = originY + row * (size + extra)
-    const slot: SpriteSlot = { x, y, size, floor: y + size, scale: 1 }
+    const slot: SpriteSlot = { x, y, size, width: size, floor: y + size, scale: 1 }
     if (withLabel && !labelDropped && size > 0) {
       // 1 列は横に何も並ばないので領域幅（上限あり）まで広げ、多列は隣の列と重ならない列ピッチ(=size)まで
       const w = columns === 1 ? Math.min(regionW, size * SIDE_LABEL_MAX_WIDTH_RATIO) : size
@@ -437,10 +462,12 @@ export function applyDepthToSlots(
     const s = computeDepthScale(slot.floor, frontFloor, horizonY, perspective)
     if (s >= 1) return slot
     const size = slot.size * s
+    const width = slot.width * s
     const out: SpriteSlot = {
-      x: slot.x + (slot.size - size) / 2,
+      x: slot.x + (slot.width - width) / 2,
       y: slot.y,
       size,
+      width,
       floor: slot.floor,
       scale: s,
     }
@@ -549,7 +576,14 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const partyRegion: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
 
   let enemies = computeFormation(enemyRegion, enemyCount, 'enemy', true)
-  let party = computeFormation(partyRegion, partyCount, 'party', false, input.partyRows)
+  let party = computeFormation(
+    partyRegion,
+    partyCount,
+    'party',
+    false,
+    input.partyRows,
+    input.partyAspects
+  )
   if (depth) {
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
     const all = [...enemies, ...party]
@@ -592,6 +626,25 @@ export function computeContainFit(
   const width = textureWidth * scale
   const height = textureHeight * scale
   return { x: (box - width) / 2, y: (box - height) / 2, width, height }
+}
+
+/**
+ * テクスチャを長方形の枠 `boxW x boxH` に収める（contain・縦横比維持・中央寄せ）。#760 の縦長の味方枠用。
+ * 寸法が不正（0 以下）なら枠いっぱい。
+ */
+export function computeContainFitRect(
+  textureWidth: number,
+  textureHeight: number,
+  boxW: number,
+  boxH: number
+): { x: number; y: number; width: number; height: number } {
+  if (!(textureWidth > 0) || !(textureHeight > 0) || !(boxW > 0) || !(boxH > 0)) {
+    return { x: 0, y: 0, width: Math.max(0, boxW), height: Math.max(0, boxH) }
+  }
+  const scale = Math.min(boxW / textureWidth, boxH / textureHeight)
+  const width = textureWidth * scale
+  const height = textureHeight * scale
+  return { x: (boxW - width) / 2, y: (boxH - height) / 2, width, height }
 }
 
 /** frontmatter `battle_layout` の値を正規化する。`'side'` 以外（未指定・未知値含む）は `'front'` */

@@ -15,6 +15,7 @@ import {
   SIDE_MIN_STAGE_HEIGHT,
   SIDE_COMMAND_TEXT_PADDING,
   SIDE_MAX_SPRITE_SIZE,
+  SIDE_PARTY_MAX_HEIGHT,
   SIDE_PADDING,
   SIDE_STAGGER_RATIO,
   SIDE_STATUS_COMPACT_WIDTH,
@@ -48,7 +49,7 @@ function inside(inner: Rect, outer: Rect): boolean {
   )
 }
 function slotRect(s: SpriteSlot): Rect {
-  return { x: s.x, y: s.y, w: s.size, h: s.size }
+  return { x: s.x, y: s.y, w: s.width, h: s.size }
 }
 function overlaps(a: Rect, b: Rect): boolean {
   return (
@@ -196,22 +197,32 @@ describe('computeFormation', () => {
         expect(slots).toHaveLength(n)
         for (const s of slots) {
           expect(s.size).toBeGreaterThanOrEqual(0)
-          expect(s.size).toBeLessThanOrEqual(SIDE_MAX_SPRITE_SIZE)
+          expect(s.size).toBeLessThanOrEqual(
+            side === 'party' ? SIDE_PARTY_MAX_HEIGHT : SIDE_MAX_SPRITE_SIZE
+          )
           expect(inside(slotRect(s), r)).toBe(true)
         }
       }
     }
   })
 
-  it('同じ側の枠どうしは重ならない (1〜6 体)', () => {
-    for (const side of ['enemy', 'party'] as const) {
-      for (let n = 1; n <= 6; n++) {
-        const rects = computeFormation(region, n, side).map(slotRect)
-        for (let i = 0; i < rects.length; i++) {
-          for (let j = i + 1; j < rects.length; j++) {
-            expect(overlaps(rects[i], rects[j])).toBe(false)
-          }
+  it('敵どうしの枠は重ならない (1〜6 体)', () => {
+    for (let n = 1; n <= 6; n++) {
+      const rects = computeFormation(region, n, 'enemy').map(slotRect)
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          expect(overlaps(rects[i], rects[j])).toBe(false)
         }
+      }
+    }
+  })
+
+  // #760: 味方どうしは上下に重ねてよい（仕様変更）。代わりに上の人の顔（上 30%）が下の人に隠れないことを守る
+  it('味方どうしは重なってよいが、上の人の顔（上 30%）は下の人に隠れない (1〜6 体)', () => {
+    for (let n = 1; n <= 6; n++) {
+      const slots = computeFormation(region, n, 'party')
+      for (let i = 0; i + 1 < slots.length; i++) {
+        expect(slots[i + 1].y).toBeGreaterThanOrEqual(slots[i].y + slots[i].size * 0.3 - EPS)
       }
     }
   })
@@ -253,7 +264,8 @@ describe('computeFormation', () => {
   it('count=1 は千鳥なし（敵・味方で x が同じ）', () => {
     const e = computeFormation(region, 1, 'enemy')[0]
     const p = computeFormation(region, 1, 'party')[0]
-    expect(e.x).toBeCloseTo(p.x)
+    // 味方は縦長の枠なので、左端でなく水平中心が揃う
+    expect(e.x + e.width / 2).toBeCloseTo(p.x + p.width / 2)
   })
 })
 
@@ -598,8 +610,12 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6)', () => {
       items.push(slotRect(s))
       if (s.label) items.push(s.label)
     }
-    for (const s of L.party) items.push(slotRect(s))
-    for (const r of items) {
+    // #760: 味方どうしは上下に重ねてよいので、味方は敵・ラベルとの非重複だけを見る（下の sweep 比較に含めない）
+    const partyRects = L.party.map(slotRect)
+    for (let i = 0; i + 1 < L.party.length; i++) {
+      expect(L.party[i + 1].y).toBeGreaterThanOrEqual(L.party[i].y + L.party[i].size * 0.3 - EPS)
+    }
+    for (const r of [...items, ...partyRects]) {
       expect(r.x).toBeGreaterThanOrEqual(-EPS)
       expect(r.y).toBeGreaterThanOrEqual(-EPS)
       expect(inside(r, screen)).toBe(true)
@@ -611,6 +627,8 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6)', () => {
     for (let i = 0; i < nonEmpty.length; i++)
       for (let j = i + 1; j < nonEmpty.length; j++)
         expect(overlaps(nonEmpty[i], nonEmpty[j])).toBe(false)
+    for (const pr of partyRects.filter((r) => r.w > EPS && r.h > EPS))
+      for (const o of nonEmpty) expect(overlaps(pr, o)).toBe(false)
     // ステージが十分あればラベルは全員ぶん存在する（低すぎるときはラベルだけ省かれ、スプライトは残る）
     for (const s of L.enemies) {
       expect(s.size).toBeGreaterThan(0)
