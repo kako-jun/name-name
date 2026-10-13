@@ -10716,3 +10716,283 @@ fn test_battle_layout_inner_quote_is_stripped_on_emit() {
         Some("side")
     );
 }
+
+#[test]
+fn test_telop_bottom_left_japanese_token_alone() {
+    // 位置=左下 単独指定（他の位置トークンは既存テストで網羅済み）
+    let event = parse_single_telop("[テロップ: 左下確認, 位置=左下]").expect("Telop を期待");
+    match event {
+        Event::Telop { position, .. } => assert_eq!(position, TelopPosition::BottomLeft),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_seconds_boundary_1_30_31() {
+    // 境界値 -1/境界/+1 を1テストにまとめる（クランプ範囲 [1, 30] の下限・上限・超過）
+    let at_min = parse_single_telop("[テロップ: 下限, 秒=1]").expect("Telop を期待");
+    match at_min {
+        Event::Telop { seconds, .. } => assert_eq!(seconds, 1, "下限ちょうどはそのまま"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+
+    let at_max = parse_single_telop("[テロップ: 上限, 秒=30]").expect("Telop を期待");
+    match at_max {
+        Event::Telop { seconds, .. } => assert_eq!(seconds, 30, "上限ちょうどはそのまま"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+
+    let over_max = parse_single_telop("[テロップ: 上限超え, 秒=31]").expect("Telop を期待");
+    match over_max {
+        Event::Telop { seconds, .. } => assert_eq!(seconds, 30, "上限+1 は 30 にクランプされる"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_negative_seconds_falls_back_to_default() {
+    // 秒=-5 は u32::parse が Err になる経路（非数値 "abc" とは別の入力形で同経路を確認）
+    let event = parse_single_telop("[テロップ: 負の秒, 秒=-5]").expect("Telop を期待");
+    match event {
+        Event::Telop { seconds, .. } => {
+            assert_eq!(
+                seconds, 4,
+                "負値は u32 パース失敗経路で既定 4 にフォールバック"
+            )
+        }
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_empty_kind_value_is_none() {
+    let event = parse_single_telop("[テロップ: 本文, 種別=]").expect("Telop を期待");
+    match event {
+        Event::Telop { kind, .. } => assert_eq!(kind, None, "空文字の種別は None"),
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_unknown_key_absorbed_into_body() {
+    // 既知キー（位置/秒/種別）に一致しない断片は本文へ吸収されて再結合される
+    let event = parse_single_telop("[テロップ: 本文, foo=bar]").expect("Telop を期待");
+    match event {
+        Event::Telop { text, .. } => {
+            assert_eq!(text, "本文, foo=bar", "未知キーは本文へ吸収される")
+        }
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_body_fragment_matching_known_key_name_is_consumed_as_kv() {
+    // 本文断片が既知キー名（位置/秒/種別）と衝突する場合、値の妥当性に関わらずキーとして
+    // 消費される（本文としては戻らない）。models.rs の doc コメント
+    // 「既知キーと衝突しない限り本文として保持される」の裏側の挙動を固定する。
+
+    // 「位置=100」は 位置キーとして消費され、値 100 は未知トークンなので既定にフォールバック。
+    // 本文が残らないためディレクティブ自体が無視される。
+    assert_eq!(
+        parse_single_telop("[テロップ: 位置=100]"),
+        None,
+        "位置キーとして消費され本文が残らないため無視される"
+    );
+
+    // 「本文, 秒=abc」は 秒キーとして消費され、値 abc は非数値なので既定 4 にフォールバック。
+    // 本文は「本文」のみが残る。
+    let event = parse_single_telop("[テロップ: 本文, 秒=abc]").expect("Telop を期待");
+    match event {
+        Event::Telop { text, seconds, .. } => {
+            assert_eq!(text, "本文", "秒キーとして消費され本文側には残らない");
+            assert_eq!(seconds, 4, "非数値は既定 4 にフォールバック");
+        }
+        other => panic!("Telop を期待したが {other:?}"),
+    }
+}
+
+#[test]
+fn test_telop_kv_only_no_body_is_ignored() {
+    // 本文なし・kv のみの指定はディレクティブごと無視される（空本文の既存扱いと同じ結論）
+    assert_eq!(
+        parse_single_telop("[テロップ: 位置=右上]"),
+        None,
+        "本文がないディレクティブは無視される"
+    );
+}
+
+#[test]
+fn test_telop_after_dialog_emit_reparse_roundtrip() {
+    // Dialog 直後に Telop を置いた文書が emit→reparse で events を保持する
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "テスト"
+---
+
+## 1-1: シーン
+
+**カコ** (suppin_1, 左):
+やっほー。
+
+[テロップ: 到着, 位置=左上]
+"#;
+    let doc = parser::parse(input);
+    let emitted = emitter::emit(&doc);
+    let reparsed = parser::parse(&emitted);
+    assert_eq!(
+        reparsed.chapters[0].scenes[0].events, doc.chapters[0].scenes[0].events,
+        "Dialog 直後の Telop が emit→reparse で保持される: {emitted}"
+    );
+}
+
+#[test]
+fn test_telop_multiple_events_preserve_order_and_fields() {
+    // 同一シーンに複数の [テロップ:] を連続配置しても、events の順序と各フィールドが保たれる
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: テロップ複数\n\n[テロップ: 一つ目, 位置=左上, 秒=5]\n[テロップ: 二つ目, 位置=右下, 秒=3, 種別=note]\n";
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events.len(),
+        2,
+        "2件のテロップが両方 events に入る: {events:?}"
+    );
+    match (&events[0], &events[1]) {
+        (
+            Event::Telop {
+                text: t1,
+                position: p1,
+                seconds: s1,
+                kind: k1,
+            },
+            Event::Telop {
+                text: t2,
+                position: p2,
+                seconds: s2,
+                kind: k2,
+            },
+        ) => {
+            assert_eq!(t1, "一つ目");
+            assert_eq!(*p1, TelopPosition::TopLeft);
+            assert_eq!(*s1, 5);
+            assert_eq!(*k1, None);
+            assert_eq!(t2, "二つ目");
+            assert_eq!(*p2, TelopPosition::BottomRight);
+            assert_eq!(*s2, 3);
+            assert_eq!(*k2, Some("note".to_string()));
+        }
+        other => panic!("2件とも Telop を期待したが {other:?}"),
+    }
+}
+
+// ===== #725: 無条件ジャンプ [ジャンプ: シーンID] =====
+
+fn jump_doc(body: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"jump\"\n---\n\n## 1-1: a\n\n{body}\n\n## 1-2: b\n\n**B**:\nb\n"
+    )
+}
+
+#[test]
+fn test_jump_target_is_trimmed_and_colon_spacing_is_free() {
+    for line in [
+        "[ジャンプ: 2-1]",
+        "[ジャンプ:2-1]",
+        "[ジャンプ:   2-1   ]",
+        "[ジャンプ:\u{3000}2-1\u{3000}]",
+    ] {
+        let doc = parser::parse(&jump_doc(&format!("**A**:\nx\n\n{line}")));
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events.last(),
+            Some(&Event::Jump {
+                target: "2-1".to_string()
+            }),
+            "{line:?} は target=2-1 の Jump になる"
+        );
+    }
+}
+
+#[test]
+fn test_jump_with_empty_target_is_ignored_and_not_emitted_as_text() {
+    for line in ["[ジャンプ: ]", "[ジャンプ:]", "[ジャンプ:   ]"] {
+        let doc = parser::parse(&jump_doc(&format!("**A**:\nx\n\n{line}")));
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::Jump { .. })),
+            "{line:?} は Jump を生成しない: {events:?}"
+        );
+        let has_text_leak = events.iter().any(|e| match e {
+            Event::Dialog { text, .. } | Event::Narration { text, .. } => {
+                text.iter().any(|t| t.contains("ジャンプ"))
+            }
+            _ => false,
+        });
+        assert!(!has_text_leak, "{line:?} が本文に漏れない: {events:?}");
+        // 空 Jump を含んでいても emit -> parse が安定する
+        let emitted = emitter::emit(&doc);
+        assert!(!emitted.contains("[ジャンプ"), "emit に空 Jump は出ない");
+        assert_eq!(parser::parse(&emitted), doc);
+    }
+}
+
+#[test]
+fn test_jump_does_not_swallow_following_lines_and_keeps_order() {
+    let doc = parser::parse(&jump_doc(
+        "**A**:\nx\n\n[ジャンプ: 1-2]\n[BGM: a.ogg]\n\n**A**:\ny",
+    ));
+    let events = &doc.chapters[0].scenes[0].events;
+    let jump_idx = events
+        .iter()
+        .position(|e| matches!(e, Event::Jump { .. }))
+        .expect("Jump がある");
+    assert!(matches!(events[jump_idx + 1], Event::Bgm { .. }));
+    assert!(matches!(events[jump_idx + 2], Event::Dialog { .. }));
+}
+
+#[test]
+fn test_jump_target_is_not_canonicalized_and_survives_round_trip() {
+    // canonicalize は表示本文にだけ掛かる。ID（全角/半角混在・記号含む）は不変で往復する。
+    let doc = parser::parse(&jump_doc("**A**:\nx\n\n[ジャンプ: シーン_１-2.final]"));
+    let events = &doc.chapters[0].scenes[0].events;
+    assert_eq!(
+        events.last(),
+        Some(&Event::Jump {
+            target: "シーン_１-2.final".to_string()
+        })
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[ジャンプ: シーン_１-2.final]\n"));
+    assert_eq!(parser::parse(&emitted), doc);
+}
+
+#[test]
+fn test_jump_in_condition_with_following_dialog_round_trips_with_blank_line_rules() {
+    let input = jump_doc(
+        "[フラグ: seen = true]\n\n**A**:\nx\n\n[条件: seen]\n**A**:\n分岐内\n[ジャンプ: 1-2]\n[/条件]\n\n**A**:\n続き",
+    );
+    let doc1 = parser::parse(&input);
+    let events = &doc1.chapters[0].scenes[0].events;
+    let cond = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Condition { events, .. } => Some(events),
+            _ => None,
+        })
+        .expect("Condition がある");
+    assert!(matches!(cond.last(), Some(Event::Jump { target }) if target == "1-2"));
+    let emitted = emitter::emit(&doc1);
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc1, doc2, "emit: {emitted}");
+    // emit は冪等
+    assert_eq!(emitter::emit(&doc2), emitted);
+}
+
+#[test]
+fn test_jump_serializes_as_externally_tagged_json_for_wasm_consumers() {
+    // frontend の `{ Jump: { target } }` 型（types.ts）と serde 表現が一致していること。
+    let doc = parser::parse(&jump_doc("**A**:\nx\n\n[ジャンプ: 1-2]"));
+    let json = serde_json::to_value(&doc.chapters[0].scenes[0].events).unwrap();
+    let last = json.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last, serde_json::json!({ "Jump": { "target": "1-2" } }));
+}
