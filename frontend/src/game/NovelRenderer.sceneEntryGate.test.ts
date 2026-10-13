@@ -9,6 +9,7 @@
  * - confinement 圏外の進行、遅延ロード成功時の BGM・背景の持ち越し
  * 既存の流儀（render は no-op・時間は virtual）に倣う。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
@@ -210,7 +211,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
       i.openLoadMenu()
       expect(showLoad).not.toHaveBeenCalled()
       const loadSpy = vi.spyOn(i, 'loadFromSaveData').mockImplementation(() => {})
-      expect(r.quickLoad()).toBe(false)
+      expect(await r.quickLoad()).toBeNull()
       expect(toast).toHaveBeenCalledWith('場面転換中のためロードできません')
       expect(loadSpy).not.toHaveBeenCalled()
       // 履歴系
@@ -302,14 +303,14 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     const r = makeRenderer(() => d.promise, [HUB, FAR])
     expect(r.quickSave()).toBe(true)
     const loadSpy = vi.spyOn(internals(r), 'loadFromSaveData').mockImplementation(() => {})
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(loadSpy).toHaveBeenCalledTimes(1)
     loadSpy.mockClear()
 
     const pending = r.jumpToScene('missing')
     expect(internals(r).pendingEntry).not.toBeNull()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
     expect(loadSpy).not.toHaveBeenCalled()
 
     d.resolve(null)
@@ -614,7 +615,7 @@ describe('confinement と持ち越し (#734 PR1)', () => {
   it('confinement 圏外への進行は、遅延ロードを試みず ended で終劇する', async () => {
     const resolver = vi.fn(() => Promise.resolve<EventScene[] | null>([HUB, FAR]))
     const r = makeRenderer(resolver, [HUB])
-    r.setConfinedSceneIds(['hub'])
+    confineForTest(r, ['hub'])
 
     await expect(r.jumpToScene('far')).resolves.toEqual({ status: 'ended' })
     expect(resolver).not.toHaveBeenCalled()
@@ -624,7 +625,7 @@ describe('confinement と持ち越し (#734 PR1)', () => {
 
   it('confinement 圏内の遅延ロードは通常どおり entered になる', async () => {
     const r = makeRenderer(() => Promise.resolve([HUB, FAR]), [HUB])
-    r.setConfinedSceneIds(['hub', 'far'])
+    confineForTest(r, ['hub', 'far'])
     await expect(r.jumpToScene('far')).resolves.toEqual({ status: 'entered', sceneId: 'far' })
     expect(internals(r).storyEnded).toBe(false)
   })

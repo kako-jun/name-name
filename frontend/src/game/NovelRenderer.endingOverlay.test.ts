@@ -19,6 +19,7 @@
  *   `new NovelRenderer()` のみ（init() は呼ばない）。endingOverlay/characterLayer は constructor で
  *   同期生成されるため、init 不要で private フィールドへ直接到達できる。
  */
+import { confineForTest } from '../test/confinement'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
@@ -48,7 +49,7 @@ function internals(r: NovelRenderer): EndingOverlayInternals {
 function makeConfinedRenderer(): NovelRenderer {
   const r = new NovelRenderer()
   r.setScenes([scene('entry', [narration('本文')]), scene('out', [narration('圏外')])])
-  r.setConfinedSceneIds(['entry'])
+  confineForTest(r, ['entry'])
   return r
 }
 
@@ -119,7 +120,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
 
     const removeSpy = vi.spyOn(internals(r).characterLayer, 'remove')
     // 通常のシーン遷移に戻す（startScene() 経由の storyEnded=false 復帰、confinement 解除）。
-    r.setConfinedSceneIds(null)
+    confineForTest(r, null)
     r.jumpToScene('entry')
 
     expect(internals(r).endingOverlay.visible).toBe(false)
@@ -184,7 +185,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
     expect(internals(r).endingOverlay.visible).toBe(true)
 
     // 通常のシーン遷移で false に戻す。
-    r.setConfinedSceneIds(null)
+    confineForTest(r, null)
     r.jumpToScene('entry')
     expect(internals(r).endingOverlay.visible).toBe(false)
 
@@ -192,7 +193,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
     r.setIntermissionScene([narration('つづく')], {})
 
     // 2回目の true: 新しい intermission 値で再評価され、表示されない（PixiJS タブローに一本化）。
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out')
     expect(internals(r).endingOverlay.visible).toBe(false)
   })

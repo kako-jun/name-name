@@ -14,6 +14,7 @@
  *   #467 と同じく advance() は handleAdvance() を経由するため audioManager.ensureContext() を
  *   muteAudio() で no-op 化する。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
@@ -104,7 +105,7 @@ describe('NovelRenderer 選択肢なしシーンの終劇分岐 (#470)', () => {
       scene('entry', [narration('本文')]),
       scene('out-scene', [narration('圏外')]),
     ])
-    confinementJump.setConfinedSceneIds(['entry'])
+    confineForTest(confinementJump, ['entry'])
     confinementJump.jumpToScene('out-scene')
 
     const snapA = naturalExhaustion.getSnapshot()

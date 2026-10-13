@@ -5,6 +5,7 @@
  * 同一 startMs/durationMs の fromAlpha→toAlpha 補間で old 1→0 / new 0→1 を進める。
  * GameState には中間状態を持たないため、観測点は bgEntries / alpha / fadeAnimation のみ。
  */
+import { confineForTest } from '../test/confinement'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { BACKGROUND_CROSSFADE_MS, NovelRenderer } from './NovelRenderer'
@@ -524,7 +525,7 @@ describe('NovelRenderer 背景フェード時間 background_fade_ms (#407)', () 
   it('終劇（圏外ジャンプ）の背景フェードアウトと BGM 停止フェードも background_fade_ms を使う', () => {
     const r = makeRenderer()
     r.setScenes([scene('entry', [narration('start')]), scene('out', [narration('outside')])])
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     cacheTexture(r, 'bg.png')
     // #409: 1 枚目を instant で settle（alpha=1）させ、終劇の背景フェードアウトが「表示中の 1 枚」を
     // 1→0 で退場させるのを見る（初回背景の cold-start fade とは別経路）。

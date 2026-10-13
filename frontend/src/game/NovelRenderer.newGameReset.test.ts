@@ -176,7 +176,7 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
   // （clearQuickSave() → restart()、PlayerScreen.onNewGame と同じ呼び出し順）を実行すると、
   // 以後 quickLoad() は旧データを復元せず、フラグもクリアされ、events も entry シーン
   // （entryRawEvents）まで巻き戻ることを確認する（#662 修正後の期待挙動）。
-  it('14: milestone フラグを立てて route まで進行→はじめから相当実行後、quickLoad() は復元せず events は entry シーンまで巻き戻る（本丸）', () => {
+  it('14: milestone フラグを立てて route まで進行→はじめから相当実行後、quickLoad() は復元せず events は entry シーンまで巻き戻る（本丸）', async () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-637-14')
 
@@ -195,7 +195,7 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
     r.restart()
 
     // 旧クイックセーブはもう復元されない
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
     // フラグもクリアされている
     expect(r.getSnapshot().flags).toEqual({})
     // #662: restart() は rawEvents（branch まで進行した直前ルートの内容）ではなく
@@ -232,7 +232,7 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
   // 状態から restart() すると、resolvedEvents は route/branch の内容ではなく entry の
   // 'start' に戻る。既存テスト14は restart() より前に quickLoad() を呼んでおらず、この
   // 経路（自動 quickLoad 相当）は #662 修正前は完全にノーカバレッジだった。
-  it('16: route まで進行→quickSave→quickLoad実行（rawEventsがroute内容に上書き）→restart()後、resolvedEventsはroute/branchでなくentryの内容になる（本丸）', () => {
+  it('16: route まで進行→quickSave→quickLoad実行（rawEventsがroute内容に上書き）→restart()後、resolvedEventsはroute/branchでなくentryの内容になる（本丸）', async () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-662-16')
 
@@ -242,7 +242,7 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     expect(r.quickSave()).toBe(true)
     // #578/#620 の自動 quickLoad 相当: 実際に quickLoad() を呼び restoreToScene() 経由で
     // rawEvents が route の内容（'progressed'）に上書きされる状態を作る。
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
 
     r.restart()
@@ -255,7 +255,7 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
   // 17 (T3 補助アサーション): 16 と同じ手順で、quickLoad() 直後（restart() より前）の
   // 内部状態を確認する。rawEvents は route の内容に上書きされる一方、entryRawEvents は
   // setScenes() 時点のエントリ内容のまま無傷であることを直接検証する。
-  it('17: quickLoad() 実行直後、rawEventsはroute内容に上書きされるがentryRawEventsはentry内容のまま変化しない', () => {
+  it('17: quickLoad() 実行直後、rawEventsはroute内容に上書きされるがentryRawEventsはentry内容のまま変化しない', async () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-662-17')
 
@@ -265,7 +265,7 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     // quickLoad() 前: entryRawEvents は setScenes() 由来の entry 内容
     expect(narrationTexts(internals(r).entryRawEvents)).toEqual(['start'])
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     // quickLoad() 後: rawEvents は route の内容に上書きされている
     expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
@@ -292,7 +292,7 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
   // 19 (T4・T2+T3複合): 18 の手順の後、さらに route へ遷移して quickSave/quickLoad を行い
   // rawEvents が route 内容に上書きされても、restart() は（route 内容にも旧entry内容にも
   // 戻らず）最後に setEvents された SCENES_B 側のエントリ内容に戻る。
-  it('19: setEvents複数回呼び出し後にquickLoadでrawEventsが上書きされても、restart()は最後のsetEvents内容に戻る', () => {
+  it('19: setEvents複数回呼び出し後にquickLoadでrawEventsが上書きされても、restart()は最後のsetEvents内容に戻る', async () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-662-19')
 
@@ -303,7 +303,7 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     // 'route' への再遷移は可能。ここで quickSave→quickLoad し rawEvents を route 内容に上書きする。
     r.jumpToScene('route')
     expect(r.quickSave()).toBe(true)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
 
     r.restart()
@@ -336,11 +336,11 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
   // 21 (冪等性・補強): restart() を連続で2回呼んでも例外にならず、2回目の後も
   // entryRawEvents の内容（entry）のまま変化しない。restart() 自体が entryRawEvents を
   // 書き換えてしまう将来のリグレッションを防ぐ。
-  it('21: restart()を連続2回呼んでも例外にならず、2回目後も同じentry内容のまま（冪等性）', () => {
+  it('21: restart()を連続2回呼んでも例外にならず、2回目後も同じentry内容のまま（冪等性）', async () => {
     const r = makeRenderer(SCENES)
     r.jumpToScene('route')
     expect(r.quickSave()).toBe(true)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     r.restart()
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])

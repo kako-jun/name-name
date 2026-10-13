@@ -296,6 +296,24 @@ PR1 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **遷移先が確実に無い（解決手段も無い）選択肢は、閉じずにその場に留める。** 遅延ロードの失敗後は、閉じていた選択肢を `rederiveTransitionAtCurrentPosition` が再表示する
 - **入場を待つ間に弾かれたオート送り・スキップは、失敗後に再開する。** `[待機]` が明けても入場の決着を待ってから進める（待機明けの `armJump` が世代を進めてロードを破棄するのを防ぐ）
 
+## PR2 実装時の差分（2026-10-13）
+
+PR2 の実装で、上の記述から次のとおり変えた。挙動の方針は変えていない。
+
+- **入場 API の例外の扱いを統一した。** PR1 の非対称（同期で入場すると例外が呼び出し元へ伝播する）をやめ、全ての入場 API で適用中の例外を `failed`（`apply-error`）の結果にした
+- **`SceneEntryRequest` の fresh から `autoSave` を外した。** 自動セーブの配線は `NovelPlayer` が初期入場の確定後に行う（§5）ので、入場の要求に持たせる理由が無かった
+- **target `'entry'` の `currentSceneId`。** `loadScenes` は `scenes[0].id`、`loadEvents` は null（従来のマウント結果を保つ）。`restart()` は `allScenes[0]` を使うので、この食い違いは PR5（`restart` 廃止）で揃える
+- **`setEvents` / `setScenes` は「読み込み＋エントリ冒頭の実行」のまま。** `skipAutoAdvance` オプションだけを廃止した。`startFrom({})` への置き換え（flags のクリアと `storyEnded` の解除）は PR5
+- **スナップショットの復元が失敗したら、スナップショットの flags を保ってエントリへ倒す。** §5 の「`quickLoad` が失敗したら flags を保つ」と同じ扱い。この場合は debug 起点・自動クイックロードを挟まない（引き継いだ位置を上書きしない）
+- **`?debug_script=` と `?scene=` の併用時に confinement を外す処理は PR3 に残した。** 自動クイックロードを行わない条件には `?debug_script=` を含めた（`debug も ?scene= も無いとき` の「debug」に script を含む。不整合8）
+- **`quickLoad` の失敗時の flags 取得のため、`getQuickSaveFlags()` を足した。** 読むだけで状態を変えない
+- **適用中の例外（`apply-error`）で倒れた場合は、自動セーブを配線する。** 配線しないのは `resolver-error` だけ（§5 のとおり）
+- **位置指定の新規開始も `onSceneChange` を発火する。** 従来の index 指定の `startFrom` は発火しなかったが、§2 の「新規開始は発火する」に揃えた（初期入場は自動セーブ未配線なので影響しない）
+- **初期入場の結果を待たずに `rendererReady` を立てる。** 遅延ロードの往復が長いとタイトル画面の表示が遅れるのを避ける。遅延ロード中は入場中ゲートが入力を止める。`?debug_script=` の `playScript` は入場の確定後に実行する
+- **HUD の通知は `NovelPlayer` の `onInitialEntry` prop。** `PlayerScreen` が `debug_scene: … → resolved / not found (…)` の行を足す
+- **DEV 警告は、冒頭に `[条件:]` を持つシーンでは出さない。** 条件の中に `[背景:]` があるかもしれず、断定できないため（警告が出ないだけで安全側）。テキストの無い原稿でも出さない
+- **既存テストの `setConfinedSceneIds` は、テスト専用ヘルパー `confineForTest`（`src/test/confinement.ts`）に置き換えた。** 「開始位置を変えずに一覧だけを仕込む」テスト用で、公開の setter は無い。入場属性としての確定は `startFrom` 経由のテストで検証する
+
 ## 判断を保留している点
 
 - confinement 中の復元: `?scene=` で埋め込んでいるときに F8 を押すと、圏外シーンのセーブも復元できる。本件では扱わない（記録のみ）

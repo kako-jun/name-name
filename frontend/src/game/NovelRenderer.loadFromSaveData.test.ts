@@ -167,10 +167,10 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
 
   // ===== A. 正常系: フィールドの写し取り =====
 
-  it('1: 正常セーブ → sceneId/eventIndex/textIndex が復元される', () => {
+  it('1: 正常セーブ → sceneId/eventIndex/textIndex が復元される', async () => {
     seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1, textIndex: 0 }))
     const r = makeRenderer(SCENES)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     const s = r.getSnapshot()
     expect(s.sceneId).toBe('a')
     expect(s.eventIndex).toBe(1)
@@ -245,10 +245,10 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
 
   // ===== C. 異常系: sceneId 空（restoreToScene を通さない分岐） =====
 
-  it('10: sceneId="" の空セーブ → quickLoad は true（データは存在する）', () => {
+  it('10: sceneId="" の空セーブ → quickLoad は true（データは存在する）', async () => {
     seedQuickSave(craftSave({ sceneId: '', flags: { f: boolFlag(true) } }))
     const r = makeRenderer(SCENES)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
   })
 
   it('11: sceneId="" → フラグだけ復元され、currentSceneId は変化しない', () => {
@@ -380,10 +380,10 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
 
   // ===== G. 後方互換: 旧セーブの欠落フィールド =====
 
-  it('22: video キー欠如の旧セーブ → クラッシュせず video=null で復元', () => {
+  it('22: video キー欠如の旧セーブ → クラッシュせず video=null で復元', async () => {
     seedQuickSave(craftLegacy('video'))
     const r = makeRenderer(SCENES)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().video).toBeNull()
   })
 
@@ -490,12 +490,12 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
   // あれば restoreSnapshot と同じ非同期再解決パターンを踏んでから復元する。
   // NovelRenderer.restoreSnapshot.test.ts の K1/K2 と同形の構成で loadFromSaveData 版を検証する。
 
-  it('9: hasQuickSave() が真の状態で quickLoad() を呼び、対象 sceneId が allScenes に存在する場合は正しく該当シーン位置へ復元される', () => {
+  it('9: hasQuickSave() が真の状態で quickLoad() を呼び、対象 sceneId が allScenes に存在する場合は正しく該当シーン位置へ復元される', async () => {
     seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1, textIndex: 0 }))
     const r = makeRenderer(SCENES)
     expect(r.hasQuickSave()).toBe(true)
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     expect(r.getCurrentSceneId()).toBe('a')
     expect(r.getSnapshot().eventIndex).toBe(1)
@@ -518,7 +518,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     seedQuickSave(craftSave({ sceneId: 'r01-01', eventIndex: 1, flags: { seen: boolFlag(true) } }))
     expect(r.hasQuickSave()).toBe(true)
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     // loadFromSaveDataMissingScene は fire-and-forget（quickLoad 自体は同期 true を返す）なので
     // resolver の Promise 解決をマイクロタスクとして待つ（#460 K1 と同じ待ち方）。
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -540,7 +540,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     const sceneBefore = r.getCurrentSceneId()
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
@@ -566,7 +566,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
     seedQuickSave(craftSave({ sceneId: 'ghost-route', flags: { restored: boolFlag(true) } }))
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(resolver).toHaveBeenCalledWith('ghost-route')
@@ -592,7 +592,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
     seedQuickSave(craftSave({ sceneId: 'target-route', flags: { restored: boolFlag(true) } }))
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
@@ -641,13 +641,13 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     return r
   }
 
-  it('M2-1: 同期成功の F8 は「クイックロードしました」を1回だけ出す', () => {
+  it('M2-1: 同期成功の F8 は「クイックロードしました」を1回だけ出す', async () => {
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a' })
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     expect(toast).toHaveBeenCalledTimes(1)
     expect(toast).toHaveBeenCalledWith('クイックロードしました')
@@ -666,11 +666,12 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: 'r01-01', eventIndex: 1 }))
 
-    expect(r.quickLoad()).toBe(true)
+    const loading = r.quickLoad()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(toast).not.toHaveBeenCalled()
 
     release()
+    expect(await loading).toEqual({ status: 'entered', sceneId: 'r01-01' })
     await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
     expect(toast).toHaveBeenCalledTimes(1)
     expect(toast).toHaveBeenCalledWith('クイックロードしました')
@@ -692,42 +693,42 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(lazyToast.mock.calls).toEqual([['ロードに失敗しました']])
   })
 
-  it("M2-4: origin 'auto' の成功は成功トーストを出さず、失敗は通知する", () => {
+  it("M2-4: origin 'auto' の成功は成功トーストを出さず、失敗は通知する", async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const ok = makeRenderer(SCENES)
     const okToast = vi.spyOn(ok, 'showToast').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
-    expect(ok.quickLoad('auto')).toBe(true)
+    expect(await ok.quickLoad('auto')).not.toBeNull()
     expect(okToast).not.toHaveBeenCalled()
 
     const ng = makeRenderer(SCENES)
     const ngToast = vi.spyOn(ng, 'showToast').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: 'ghost' }))
-    expect(ng.quickLoad('auto')).toBe(true)
+    expect(await ng.quickLoad('auto')).not.toBeNull()
     expect(ngToast.mock.calls).toEqual([['ロードに失敗しました']])
   })
 
-  it('M2-5: F8 が弾かれたときは理由に合った文言（Jump 中・選択肢/待機中・データ無し）。auto は無言', () => {
+  it('M2-5: F8 が弾かれたときは理由に合った文言（Jump 中・選択肢/待機中・データ無し）。auto は無言', async () => {
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a' })
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: 'a' }))
 
     internals(r).jumpState = 'pending'
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
     expect(toast).toHaveBeenLastCalledWith('場面転換中のためロードできません')
     internals(r).jumpState = 'idle'
 
     internals(r).waitingForChoice = true
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
     expect(toast).toHaveBeenLastCalledWith('この場面ではロードできません')
     toast.mockClear()
-    expect(r.quickLoad('auto')).toBe(false)
+    expect(await r.quickLoad('auto')).toBeNull()
     expect(toast).not.toHaveBeenCalled()
     internals(r).waitingForChoice = false
 
     localStorage.clear()
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
     expect(toast).toHaveBeenLastCalledWith('クイックセーブデータがありません')
   })
 
@@ -758,7 +759,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
   // false を返す（既存実装。#578 のテスト設計時に明示的に固定するリクエストがあったため追加）。
   // storyEnded 中の quickSave()=false は既存の 31 番が担保済みなのでここでは扱わない。
 
-  it('12a: waitingForChoice=true の間に quickLoad() を呼ぶと false を返し、状態を変更しない', () => {
+  it('12a: waitingForChoice=true の間に quickLoad() を呼ぶと false を返し、状態を変更しない', async () => {
     seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 1, flags: { later: boolFlag(true) } }))
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'b' })
@@ -766,18 +767,18 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     const flagsBefore = r.getSnapshot().flags
     internals(r).waitingForChoice = true
 
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
 
     expect(r.getCurrentSceneId()).toBe(sceneBefore)
     expect(r.getSnapshot().flags).toEqual(flagsBefore)
   })
 
-  it('12b: waitingForWait=true の間に quickLoad() を呼んでも false を返す（choice と同じガード）', () => {
+  it('12b: waitingForWait=true の間に quickLoad() を呼んでも false を返す（choice と同じガード）', async () => {
     seedQuickSave(craftSave({ sceneId: 'a' }))
     const r = makeRenderer(SCENES)
     internals(r).waitingForWait = true
 
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
   })
 
   it('13a: waitingForChoice=true の間に quickSave() を呼ぶと false を返し、保存されない', () => {
@@ -808,7 +809,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
   // （applyState 内 playBgm）が無音のまま早期 return し続ける（restoreSnapshot #460 M1 と同種の穴）。
   // loadFromSaveData（quickLoad の内部実装）が ensureContext() を呼ぶことを検証する。
 
-  it('M1: quickLoad() 呼び出し時に audioManager.ensureContext() が呼ばれる（正常系: シーンが即座に見つかる）', () => {
+  it('M1: quickLoad() 呼び出し時に audioManager.ensureContext() が呼ばれる（正常系: シーンが即座に見つかる）', async () => {
     seedQuickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
     const r = makeRenderer(SCENES)
     // makeRenderer 内の muteAudio() が既に ensureContext を no-op spy に差し替え済み
@@ -816,19 +817,19 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
     ensureContextMock.mockClear()
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     expect(ensureContextMock).toHaveBeenCalled()
   })
 
-  it('M1: sceneId が見つからない場合（resolver 無し）でも ensureContext() は呼ばれる（early return より前に呼ぶ設計）', () => {
+  it('M1: sceneId が見つからない場合（resolver 無し）でも ensureContext() は呼ばれる（early return より前に呼ぶ設計）', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: 'ghost' }))
     const r = makeRenderer(SCENES)
     const ensureContextMock = vi.mocked(r.getAudioManager().ensureContext)
     ensureContextMock.mockClear()
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     expect(ensureContextMock).toHaveBeenCalled()
   })
@@ -849,7 +850,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     ensureContextMock.mockClear()
 
     seedQuickSave(craftSave({ sceneId: 'r01-01', eventIndex: 0 }))
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     // resolver の Promise 解決（await）を待つ前、同期呼び出しの時点で既に呼ばれている
     // ことを確認する（loadFromSaveData 冒頭で呼ぶ設計のため、非同期再解決の成否に依存しない）。
@@ -901,11 +902,11 @@ describe('NovelRenderer.loadFromSaveDataMissingScene 遅延ロード中の遷移
     const d = deferred()
     const r = setup(() => d.promise)
     seedQuickSave(craftSave({ sceneId: 'r01-01', flags: { stale: boolFlag(true) } }))
-    expect(r.quickLoad()).toBe(true)
+    const loading = r.quickLoad()
 
-    r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
+    void r.startFrom({ sceneId: 'entry-hub', flags: { fresh: boolFlag(true) } })
     d.resolve([...ENTRY, ROUTE])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(await loading).toEqual({ status: 'superseded' })
 
     expect(r.getCurrentSceneId()).toBe('entry-hub')
     expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })

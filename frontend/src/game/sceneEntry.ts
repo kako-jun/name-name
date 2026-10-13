@@ -7,6 +7,7 @@
  * `this` / PixiJS / DOM / TimeController には一切依存しない。
  */
 import type { NovelGameState } from './GameState'
+import type { Event, FlagValue } from '../types'
 
 /** シーン入場の種類。進行 = 物語の流れの中の遷移、新規開始 = 文脈を捨てて始める、復元 = 保存状態へ戻す。 */
 export type EntryKind = 'progress' | 'fresh' | 'restore'
@@ -20,12 +21,27 @@ export type LoadOrigin = 'quick' | 'menu' | 'auto'
  */
 export type ProgressOrigin = 'choice' | 'jump'
 
+/** 新規開始で途中局面から始めるときの位置（`?debug_scene=` の index 指定）。 */
+export interface FreshPosition {
+  eventIndex: number
+  textIndex?: number
+  sentenceIndex?: number
+}
+
 /**
  * 入場の要求。`enterScene` に渡す。
- * 新規開始（fresh）は #734 の後続の変更で足す（`startFrom` が移るとき）。
  */
 export type SceneEntryRequest =
   | { kind: 'progress'; sceneId: string; origin: ProgressOrigin }
+  // 新規開始: 文脈を捨てて始める。target 'entry' はエントリ文書の線形ストリームの先頭から。
+  // flags は置換（省略時は空）、confinedSceneIds は解決できた時点で置き換える（省略時は解除）。
+  | {
+      kind: 'fresh'
+      target: { sceneId: string } | 'entry'
+      flags?: Record<string, FlagValue>
+      position?: FreshPosition
+      confinedSceneIds?: string[] | null
+    }
   // source: 失敗時の警告文言と、復元元に応じた後処理（save は失敗トースト・自動進行の再開、
   // snapshot は storyEnded の重複発火防止 #460）を分けるため。
   // origin はセーブ由来のロード元だけが持つ（成功トーストの出し分け #765）。
@@ -159,4 +175,24 @@ export function createDeferred<T>(): Deferred<T> {
     resolve = r
   })
   return { promise, resolve }
+}
+
+/**
+ * 新規開始の対象シーンが、最初のテキストまでに `[背景:]` を持たないか (#734, ADR 0003 §8)。
+ * 新規開始は背景を持ち越さずクリアする（地色から始まる）ため、冒頭に `[背景:]` が無い原稿は
+ * 背景が地色になる。DEV ビルドの警告に使う。最初のテキスト（Dialog / Narration）より前の
+ * トップレベルのイベントだけを見る（条件分岐の中までは追わない: 見落としは警告が出ないだけ）。
+ */
+export function lacksLeadingBackground(events: readonly Event[]): boolean {
+  for (const event of events) {
+    if (typeof event !== 'object' || event === null) continue
+    if ('Dialog' in event || 'Narration' in event) return true
+    // 背景・地色・動画・イベント絵のどれかで始まるなら、地色のままにはならない（警告しない側）。
+    if ('Background' in event || 'BackgroundColor' in event) return false
+    if ('Video' in event || 'EventImage' in event) return false
+    // 条件分岐の中に背景があるかもしれない場合は断定できないので、警告しない側に倒す。
+    if ('Condition' in event) return false
+  }
+  // テキストが無い（何も表示しない）原稿は、背景が無くても困らない。
+  return false
 }

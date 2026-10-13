@@ -10,6 +10,7 @@ import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { parseSceneQuery } from '../game/sceneQuery'
 import { parseThemeQuery } from '../game/themeQuery'
 import { parseDebugQuery } from '../game/debugQuery'
+import type { InitialEntryReport } from '../game/initialEntry'
 import { useVisualViewportHeight } from '../utils/useVisualViewportHeight'
 import { isEmbedded } from '../utils/isEmbedded'
 import {
@@ -192,7 +193,7 @@ function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] 
  * `?scene=` ディープリンク単独埋め込みでは、対象ファイル外（hub・他ファイル）への choice
  * ジャンプが埋め込みの外側の内容を漏らしてしまう（theo-hayami #20 の「他ファイルへは
  * HTML リンクで、埋め込み内の choice では遷移しない」という設計と矛盾する）。この一覧を
- * `NovelRenderer.setConfinedSceneIds` に渡し、圏外へのジャンプを終劇として扱わせる。
+ * `startFrom({ confinedSceneIds })` に渡し、圏外へのジャンプを終劇として扱わせる。
  *
  * entry doc（hub。`entryPath` が指すファイル）は候補から除外する (#386 修正2)。
  * `?scene=` が hub 自身の sceneId を指した場合、confinement を hub のシーン集合に
@@ -270,9 +271,10 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // 誤って表示され、「つづきから」（hasQuickSave()=false 時）/「はじめから」の
   // renderer.restart() が NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた
   // （#656 の実機報告: つづきからが常に10択のハブから始まる／読書中に突然 to be continued になる）。
-  // debug_scene/debug_script の値は startSceneId には混ぜない。debug_scene が解決できた場合のみ
-  // confinedSceneIds を null にする（#726、後勝ち。#652 の設計どおり debug は confinement なし）。ここでは
-  // 「タイトル画面を出すか」の判定だけを分離して拡張する。isEmbedded()/playerDark と同じく
+  // debug_scene/debug_script の値は startSceneId には混ぜない。`?debug_scene=` が解決できた場合に
+  // confinement が外れる（#726、後勝ち。#652 の設計どおり debug は confinement なし）のは、NovelPlayer の
+  // 初期入場（`resolveInitialEntry`）が `?debug_scene=` を `confinedSceneIds: null` で先に試すため (#734)。
+  // ここでは「タイトル画面を出すか」の判定だけを分離して拡張する。isEmbedded()/playerDark と同じく
   // マウント中は不変なのでレンダー時に一度評価する。
   const hasDebugStart = parseDebugQuery(window.location.search) !== null
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl])
@@ -305,6 +307,24 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // 制限なし＝通常のハブ経由フロー（listScripts 不能の単一ファイルフォールバックも、
   // 元々ファイルをまたげないため null のままでよい）。
   const [confinedSceneIds, setConfinedSceneIds] = useState<string[] | null>(null)
+  // 初期入場の結果を HUD に出す (#734)。`?debug_scene=` の解決は NovelPlayer の初期入場
+  // （`startFrom` の遅延ロード）が行うので、ここでは結果の通知を受けて1行足すだけ。
+  const handleInitialEntry = useCallback(
+    (report: InitialEntryReport) => {
+      const debugScene = report.debugScene
+      if (!debugScene) return
+      const outcome = debugScene.entered
+        ? 'resolved'
+        : startSceneId
+          ? 'not found (ignored)'
+          : 'not found (fallback to entry)'
+      setLoadDebugInfo((prev) => [
+        ...prev.filter((line) => !line.startsWith('debug_scene:')),
+        `debug_scene: ${debugScene.sceneId} → ${outcome}`,
+      ])
+    },
+    [startSceneId]
+  )
   const sortedPlayablePathsRef = useRef<string[]>([])
   const scriptInfoByPathRef = useRef<Map<string, ScriptInfo>>(new Map())
   const entryPathRef = useRef<string | null>(null)
@@ -572,11 +592,6 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           const resolvedStartSceneId =
             sceneParam && entryScenes.some((s) => s.id === sceneParam) ? sceneParam : null
           setStartSceneId(resolvedStartSceneId)
-          const fallbackDebugQuery = parseDebugQuery(window.location.search)
-          const fallbackDebugSceneId =
-            fallbackDebugQuery && 'scene' in fallbackDebugQuery
-              ? fallbackDebugQuery.scene.sceneId
-              : null
           setLoadDebugInfo([
             'mode: single script fallback',
             `entry: ${SCRIPT_BASENAME}`,
@@ -587,11 +602,6 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             ...(sceneParam
               ? [
                   `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
-                ]
-              : []),
-            ...(fallbackDebugSceneId
-              ? [
-                  `debug_scene: ${fallbackDebugSceneId} → ${entryScenes.some((s) => s.id === fallbackDebugSceneId) ? 'resolved' : resolvedStartSceneId ? 'not found (ignored)' : 'not found (fallback to entry)'}`,
                 ]
               : []),
           ])
@@ -644,34 +654,19 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         }
         setStartSceneId(resolvedStartSceneId)
 
-        // #726: `?debug_scene=<id>` もエントリ外（未ロード）のサブ MD にあるシーンを指し得るため、
-        // NovelPlayer マウント前に同じ resolveMissingScene で事前解決して allScenes に載せる。
-        // NovelRenderer.startFrom は missingSceneResolver で再挑戦しない（見つからなければ no-op）ため。
-        // startSceneId には混ぜないが、解決できたときは confinement を外す（#652/#656: debug は
-        // confinement なし。`?scene=` 併用でも debug 後勝ち）。
-        let debugSceneResolution: { id: string; found: boolean } | null = null
-        const debugQuery = parseDebugQuery(window.location.search)
-        const debugSceneId = debugQuery && 'scene' in debugQuery ? debugQuery.scene.sceneId : null
-        if (debugSceneId) {
-          const scenesWithDebug = await resolveMissingScene(debugSceneId)
-          if (cancelled) return
-          debugSceneResolution = {
-            id: debugSceneId,
-            // resolveMissingScene は見つかったときだけ非 null を返す
-            found: scenesWithDebug !== null,
-          }
-        }
-
         // confinement（在圏）一覧 (#386)。対象 sceneId が属する doc 自身の sceneId 一覧に
         // 限定する（entry/hub 自身は候補から除外・修正2）。これにより NovelRenderer.jumpToScene
         // がこの集合外（hub・他ファイル）への choice ジャンプを終劇として扱い、単独埋め込みに
         // hub の内容が漏れるのを防ぐ（theo-hayami #20: 他ファイルへは HTML リンクで、埋め込み
         // 内の choice では遷移しない）。`?scene=` が hub 自身の sceneId を指した場合は
         // findConfinedSceneIds が null を返す＝無制限フローにフォールバックする。
-        const confinedIds =
-          resolvedStartSceneId && !debugSceneResolution?.found
-            ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
-            : null
+        // `?debug_scene=` との併用で confinement を外すかどうかは、ここでは決めない。初期入場
+        // （NovelPlayer の `resolveInitialEntry`）が `?debug_scene=` を先に試し、解決できればその入場が
+        // confinement なしで始まる。解決できなければ `?scene=` の入場がこの一覧で始まる (#734, #726)。
+        // `?debug_scene=` 自体の遅延ロードも `startFrom` が解決するので、ここでの事前解決は要らない。
+        const confinedIds = resolvedStartSceneId
+          ? findConfinedSceneIds(resolvedStartSceneId, loadedDocsRef.current, entryPath)
+          : null
         setConfinedSceneIds(confinedIds)
 
         // 初期ジャンプ解決索引は entry のシーン + #386 で事前ロードした対象 script のシーン。
@@ -691,11 +686,6 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           ...(sceneParam
             ? [
                 `scene param: ${sceneParam} → ${resolvedStartSceneId ? 'resolved' : 'not found (fallback to entry)'}`,
-              ]
-            : []),
-          ...(debugSceneResolution
-            ? [
-                `debug_scene: ${debugSceneResolution.id} → ${debugSceneResolution.found ? 'resolved' : resolvedStartSceneId ? 'not found (ignored)' : 'not found (fallback to entry)'}`,
               ]
             : []),
           `events: ${flattenDocumentEvents(entryDoc).length}`,
@@ -1072,7 +1062,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             initialSceneId={startSceneId}
             // #386: 対象 script ファイル自身の sceneId 一覧。hub 等その集合外への choice
             // ジャンプは通常のシーン遷移ではなく終劇として扱われる（NovelPlayer 経由で
-            // NovelRenderer.setConfinedSceneIds に渡る）。null（未指定/未解決）は無制限。
+            // startFrom({ confinedSceneIds }) に渡る）。null（未指定/未解決）は無制限。
             confinedSceneIds={confinedSceneIds}
             assetBaseUrl={assetBaseUrl}
             aspectRatio={doc?.aspect_ratio}
@@ -1106,6 +1096,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             sentencePerPage={doc?.sentence_per_page ?? null}
             pixelArt={doc?.pixel_art ?? null}
             debugInfo={loadDebugInfo}
+            onInitialEntry={handleInitialEntry}
             docKey={projectName}
             initialSkipMode={startWithSkip}
           />

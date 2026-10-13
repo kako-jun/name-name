@@ -221,6 +221,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a', flags: { old: boolFlag(true) } })
+    warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
     const sceneBefore = r.getCurrentSceneId()
     const historyLenBefore = internals(r).history.length
 
@@ -238,6 +239,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a', flags: { prev: boolFlag(true) } })
+    warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
     const sceneBefore = r.getCurrentSceneId()
     const historyLenBefore = internals(r).history.length
     const toast = vi.spyOn(r, 'showToast')
@@ -292,6 +294,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a' })
+    warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
     const sceneBefore = r.getCurrentSceneId()
 
     r.restoreSnapshot(craftSnapshot({ sceneId: '', flags: { f: boolFlag(true) } }))
@@ -939,7 +942,10 @@ describe('NovelRenderer.restoreSnapshot 遅延ロード中の遷移世代ガー�
       expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
       expect(r.getCurrentSceneId()).toBe('entry-hub')
     }
-    expect(warnSpy).not.toHaveBeenCalled()
+    // 新規開始の DEV 警告（背景なしの原稿）は対象外
+    expect(
+      warnSpy.mock.calls.filter(([message]) => !String(message).includes('新規開始の対象シーン'))
+    ).toEqual([])
   })
 
   it('G3: 解決中に setEvents で別のイベント列に差し替わったら、古い復元は当たらない', async () => {

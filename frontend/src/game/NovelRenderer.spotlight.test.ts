@@ -191,8 +191,8 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
       scene('entry', [narration('one'), spotlight('alice', '#ffffff', 0.2), narration('two')]),
       scene('out-scene', [narration('outside')]),
     ])
-    r.setConfinedSceneIds(['entry'])
-    r.startFrom({ sceneId: 'entry' })
+    // confinement は新規開始の入場属性（startFrom が解決できた時点で置き換える）
+    void r.startFrom({ sceneId: 'entry', confinedSceneIds: ['entry'] })
 
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().spotlight).not.toBeNull()
@@ -228,11 +228,11 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
       scene('a', [narration('one'), spotlight('alice', '#123456', 0.5), narration('two')]),
     ])
     vi.spyOn(r2.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-    expect(r2.quickLoad()).toBe(true)
+    expect(await r2.quickLoad()).not.toBeNull()
     expect(r2.getSnapshot().spotlight).toEqual({ target: 'alice', color: '#123456', radius: 0.5 })
   })
 
-  it('9: 旧セーブ（spotlight キー欠如）は消灯（null）として復元される（後方互換）', () => {
+  it('9: 旧セーブ（spotlight キー欠如）は消灯（null）として復元される（後方互換）', async () => {
     const legacy = craftSave({ sceneId: 'a' }) as unknown as Record<string, unknown>
     delete legacy.spotlight
     seedQuickSave(legacy as unknown as SaveSlotData)
@@ -240,7 +240,7 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
     const r = makeRenderer([scene('a', [narration('one')])])
     vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().spotlight).toBeNull()
   })
 

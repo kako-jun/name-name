@@ -208,15 +208,15 @@ describe('NovelRenderer 背景明るさの永続・復元・tint', () => {
     const r2 = makeRenderer([scene('a', [narration('x'), bg('bg.png', 0.6), narration('y', 'z')])])
     r2.startFrom({ sceneId: 'a' })
     expect(r2.getSnapshot().backgroundBrightness).toBeNull()
-    expect(r2.quickLoad()).toBe(true)
+    expect(await r2.quickLoad()).not.toBeNull()
     expect(r2.getSnapshot().backgroundBrightness).toBe(0.6)
   })
 
   // BR7: 旧セーブ（backgroundBrightness キー欠落）→ 落ちず backgroundBrightness === null（後方互換 ?? null）。
-  it('BR7: backgroundBrightness キー欠落の旧セーブを quickLoad → 落ちず null', () => {
+  it('BR7: backgroundBrightness キー欠落の旧セーブを quickLoad → 落ちず null', async () => {
     seedQuickSave(craftLegacy('backgroundBrightness'))
     const r = makeRenderer([scene('a', [narration('x')])])
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().backgroundBrightness).toBeNull()
   })
 

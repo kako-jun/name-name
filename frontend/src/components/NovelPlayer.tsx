@@ -17,6 +17,13 @@ import { NovelRenderer } from '../game/NovelRenderer'
 import { INACTIVITY_MS } from '../game/SeekBar'
 import { type NovelGameState } from '../game/GameState'
 import { parseDebugQuery, parseDebugUnlockAll } from '../game/debugQuery'
+import {
+  resolveInitialEntry,
+  runInitialEntry,
+  shouldRunDebugScript,
+  summarizeInitialEntry,
+  type InitialEntryReport,
+} from '../game/initialEntry'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import {
   type AspectRatio,
@@ -95,8 +102,9 @@ interface NovelPlayerProps {
    * production でも有効な起点シーン指定 (#386)。`?scene=<sceneId>` の解決結果を
    * 呼び出し側（PlayerScreen）が渡す。渡す時点で対象 sceneId は `jumpSceneIndex` に
    * 含まれている前提（クロスファイルの事前ロードは呼び出し側の責務）。
-   * マウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ。
-   * 不正/未解決（jumpSceneIndex に無い）sceneId は startFrom 内で no-op になり、
+   * 初期入場（`resolveInitialEntry`）で一度だけ
+   * `renderer.startFrom({ sceneId: initialSceneId, confinedSceneIds })` を呼ぶ新規開始になる。
+   * 未ロードのシーンは `startFrom` が遅延ロードで解決する。解決できなければ
    * 通常のエントリ再生（events）にフォールバックする。null/undefined で指定なし。
    */
   initialSceneId?: string | null
@@ -106,6 +114,7 @@ interface NovelPlayerProps {
    * （PlayerScreen）が渡す。渡された場合、その集合の外への choice ジャンプ
    * （hub や他ファイルへの「別の問いを聞く」等）は通常のシーン遷移にならず、
    * 終劇（"to be continued..." 表示、PixiJS `endingOverlay` 側 #630）になる（NovelRenderer.jumpToScene 参照）。
+   * 新規開始の入場属性として `startFrom({ confinedSceneIds })` で渡し、解決できた時点で確定する。
    * null/undefined で制限なし（通常のハブ経由フロー、後方互換）。
    */
   confinedSceneIds?: string[] | null
@@ -253,6 +262,11 @@ interface NovelPlayerProps {
   /** renderer 準備完了時に呼ばれるコールバック (#228 動画エクスポート用)。
    *  destroy 直前に null で呼ばれる。 */
   onRendererReady?: (renderer: NovelRenderer | null) => void
+  /**
+   * 初期入場の結果の通知（HUD の `debug_scene: … → resolved / not found` 表示用）。
+   * マウント時の初期入場が確定した後に1回呼ばれる。
+   */
+  onInitialEntry?: (report: InitialEntryReport) => void
 }
 
 const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function NovelPlayer(
@@ -300,6 +314,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     docKey,
     initialSkipMode = false,
     onRendererReady,
+    onInitialEntry,
   }: NovelPlayerProps,
   ref
 ) {
@@ -330,6 +345,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   // 読み進め位置を引き継ぐ。初回マウント・非 fluid・向きカテゴリ不変（再マウント自体が
   // 起きない）では常に null のまま＝従来どおり initialSceneId ベースの起動になる。
   const pendingSnapshotRef = useRef<NovelGameState | null>(null)
+  // 初期入場の前にマウント時に読み込んだ文書 (#734)。events 変化 effect が、マウント時の初回実行や
+  // 読み込み済みと同じ参照で `setEvents`（エントリ冒頭の再実行）を呼ばないための比較用。
+  const loadedDocRef = useRef<{ events: Event[]; scenes: EventScene[] | undefined } | null>(null)
 
   // 設定 (Issue #138): localStorage と同期。スライダー drag による書き込み連打は
   // debounce で吸収する (review #155 should-2)
@@ -586,9 +604,6 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
         renderer.setAssetBaseUrl(assetBaseUrl)
       }
       renderer.setMissingSceneResolver?.(onResolveMissingScene ?? null)
-      // `?scene=` ディープリンク単独埋め込みの confinement (#386)。setEvents/setJumpSceneIndex/
-      // startFrom より前に設定し、以降のどの choice ジャンプも圏外判定の対象にする。
-      renderer.setConfinedSceneIds(confinedSceneIds ?? null)
       // #652: `?debug_unlock_all=1` は全ルート強制解放。debug_scene/debug_script の指定
       // 有無に関わらず独立して評価する（通常のハブ経由フローでも、条件付き選択肢のロックを
       // 全て解除したいデバッグ用途があるため）。setScenes/setEvents/restoreSnapshot/startFrom
@@ -630,10 +645,10 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       if (docKey) {
         renderer.setDocKey(docKey)
       }
-      // URL クエリによるデバッグ起点指定の事前判定 (#664)。実際の startFrom/playScript 発火は
-      // 下の「URL クエリによるデバッグ起点指定」ブロックで行うが、`?debug_scene=`/`?debug_script=`
-      // の有無自体は自動クイックセーブの抑制判定（すぐ下）でも必要なため、ここで一度だけ
-      // window.location.search をパースして両方で使い回す（重複パース回避）。
+      // URL クエリによるデバッグ起点指定。初期入場（下の `resolveInitialEntry`）と、自動クイックセーブの
+      // 抑制判定（#664）の両方で必要なため、ここで一度だけ window.location.search をパースして使い回す。
+      // `PlayerScreen` がタイトル画面の判定（`hasDebugStart`）に使うのと同じパース結果で、URL を2か所で
+      // 別々に解釈しない (#734)。
       const debugQueryResult = parseDebugQuery(window.location.search)
       // シーン切り替えごとの自動クイックセーブ (#578)。milestone 進行・複数ルートを持つ作品
       // （Gymnasia 等）では、フラグ（GameState.flags）が手動セーブ（3スロットメニュー / F5）
@@ -655,12 +670,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // インスタンスが生きている間、startFrom/playScript/choice ジャンプ起因のどのシーン
       // 変更でも quickSave() は一切自動発火しない）。手動セーブ（3スロットメニュー / F5）は
       // quickSave() を直接呼ぶ別経路なのでこのガードの影響を受けず、従来どおり機能する。
+      // #734: 配線は初期入場が確定した後に行う（下の `runInitialEntry` の完了後）。初期入場の
+      // `onSceneChange` が、有効なクイックセーブをエントリ冒頭の位置で上書きしないようにするため。
       const hasDeepLinkOrDebugStart = !!initialSceneId || debugQueryResult !== null
-      if (docKey && !hasDeepLinkOrDebugStart) {
-        renderer.setOnSceneChange(() => {
-          renderer.quickSave()
-        })
-      }
       // 選択肢スタイル (#146)
       renderer.setChoiceStyle(choiceStyle ?? null)
       // per-game フォント (#147)
@@ -736,88 +748,65 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // 色上書きは未実装のため、ここでは設定しない（renderer フィールド初期値が効く）。
       // init 完了直後に現在の settings を反映 (#138)
       renderer.applySettings(settings)
-      // 再生ストリームの確定 (#284):
-      //   - scenes 指定（後方互換）: setScenes で scenes[0] から再生 + allScenes 索引化
-      //   - それ以外: events を線形再生（多シーン自動進行を維持）。jumpSceneIndex が
-      //     あればジャンプ解決索引だけを別建てで設定する（再生ストリームは置換しない）。
-      // どちらの経路でも debug_scene/debug_script は allScenes が埋まった後に発火させる。
-      // 「続きから」自動クイックロード判定 (#620): setEvents/setScenes の直後に quickLoad() を
-      // 呼ぶ従来経路だと、entry シーン冒頭の自動進行（[待機: 表示完了] 等）が先に
-      // waitingForWait を立て、quickLoad() の入口ガードに弾かれて静かに失敗していた
-      // （後述 quickLoad 分岐のコメント参照）。ここで「この後どうせ quickLoad する」条件を
-      // 前もって判定し、真なら setEvents/setScenes 自体に skipAutoAdvance を渡して
-      // entry シーン冒頭の演出を経由させない。pendingSnapshot/initialSceneId が優先されるため
-      // 両方とも含めて判定する。pendingSnapshotRef.current はこの時点ではまだ消費前
-      // （下の分岐で読む値と同じ）。hasQuickSave() は setDocKey 済み（上の docKey ブロック）
-      // でないと正しい名前空間を見ないため、この判定はそれより後で行う。
-      const willAutoQuickLoad =
-        !pendingSnapshotRef.current && !initialSceneId && !!docKey && renderer.hasQuickSave()
+      // 再生ストリームの確定 (#284, #734): 文書を読み込むだけで開始はしない。
+      //   - scenes 指定（後方互換）: loadScenes で scenes[0] をエントリとし、allScenes を索引化
+      //   - それ以外: events をエントリの線形ストリームとして読み込む（多シーン自動進行を維持）。
+      //     jumpSceneIndex があればジャンプ解決索引だけを別建てで設定する（再生ストリームは置換しない）。
+      // 位置の確定は、下の初期入場（`resolveInitialEntry`）が1回で行う。`setEvents` がエントリ冒頭を
+      // 実行してから別の入場で上書きする二重実行（#734 不整合8）をしない。
+      loadedDocRef.current = { events, scenes }
       if (scenes && scenes.length > 0) {
-        renderer.setScenes(scenes, { skipAutoAdvance: willAutoQuickLoad })
+        renderer.loadScenes(scenes)
       } else {
-        // ジャンプ索引を先に設定してから線形再生を流す。
+        // ジャンプ索引を先に設定してから線形再生を読み込む。
         // （startFrom/playScript が allScenes を必要とするため events より前に置く）
         if (jumpSceneIndex && jumpSceneIndex.length > 0) {
           renderer.setJumpSceneIndex(jumpSceneIndex)
         }
-        renderer.setEvents(events, { skipAutoAdvance: willAutoQuickLoad })
+        renderer.loadEvents(events)
       }
-      // fluid 再マウント (#460): 直前 renderer から引き継いだスナップショットがあれば
-      // restoreSnapshot で読み進め位置（背景/立ち絵/BGM 込み）を復元する。setEvents/setScenes
-      // 直後（allScenes 構築済み）のこのタイミングでのみ呼べる。この経路を通った場合、下の
-      // initialSceneId ベースの startFrom は行わない（二重に位置決めしない）。
+      // 初期入場 (#734, ADR 0003 §5): 試行の順序（スナップショット → ?debug_scene= → ?scene= →
+      // 自動クイックロード → エントリ）と打ち切りは純粋関数 `resolveInitialEntry` / `runInitialEntry` が
+      // 決める。fluid 再マウント (#460) のスナップショットがあるときは、debug 起点・自動クイックロードを
+      // 再実行しない（読み進め位置を上書きしない）。シーンの遅延ロードは `startFrom` 自身が解決する
+      // （PlayerScreen の事前解決は不要）。結果を待たずに renderer を公開する（遅延ロード中はゲートが入力を止める）。
       const pendingSnapshot = pendingSnapshotRef.current
       pendingSnapshotRef.current = null
-      if (pendingSnapshot) {
-        void renderer.restoreSnapshot(pendingSnapshot)
-      } else if (initialSceneId) {
-        // production でも有効な起点シーン指定 (#386)。sceneId が属する script の事前ロードは
-        // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
-        // 既存の startFrom(#220) をそのまま呼ぶだけで、renderer 側に新規ロジックは持ち込まない。
-        // 不正/未解決 sceneId は startFrom 内で no-op（現行どおりエントリ再生にフォールバック）。
-        // #664: この分岐に入るのは hasDeepLinkOrDebugStart が真（initialSceneId 有り）の場合に
-        // 限られるため、上で setOnSceneChange 自体が配線されていない。startFrom 内部で
-        // onSceneChangeCallback が同期発火しても null であり、quickSave() は走らない
-        // （直前セッションのクイックセーブを黙って上書きしていた #578 テスト設計時の既知の
-        // 副作用はここで解消済み）。
-        renderer.startFrom({ sceneId: initialSceneId })
-      } else if (willAutoQuickLoad) {
-        // 起動時の自動クイックロード (#578, #620 再修正): pendingSnapshot（fluid 再マウント
-        // 引き継ぎ）も initialSceneId（?scene= 等の明示的 deep-link）も無い通常起動時に、
-        // 直前のシーン切り替えで自動保存されたクイックセーブがあれば復元する。
-        // 上で setEvents/setScenes に skipAutoAdvance: true を渡し済みなので、entry シーン
-        // 冒頭の自動進行はまだ実行されておらず waitingForWait 等は立っていない
-        // （= quickLoad() の入口ガードに弾かれない）。
-        const restored = renderer.quickLoad('auto')
-        if (!restored) {
-          // quickLoad が false（データ不整合等）を返した場合のフォールバック (#620):
-          // skipAutoAdvance で保留したままの entry シーン冒頭の自動進行を、
-          // ここで後追い実行して既存のエントリ再生に確実にフォールバックする
-          // （呼ばないと「イベント列はセットされたが冒頭も進んでいない」白画面になる）。
-          renderer.resumeAutoAdvanceIfPending()
-        }
-      }
-
-      // URL クエリによるデバッグ起点指定 (#220 Phase 3)。
-      // #652: gymnasia のようなルート実機デバッグ（1ルートが複数ファイルに分割されており
-      // confinement 付き `?scene=`（#386）では対象ファイル外へ遷移できない構成）のため、
-      // 本番ビルドでも常時有効にした（以前の `import.meta.env.DEV` ガードは撤去。設計意図は
-      // kako-jun確定: 「知らなければ踏まない URL パラメータ」自体が十分な隠蔽であり、追加の
-      // 有効化条件・認証は設けない）。confinement（`confinedSceneIds`）は `?scene=` 単独埋め込み
-      // 専用の別経路で、ここには一切関与しない（常にconfinementなしで遷移する）。
-      // debug_scene は sceneId 前提。scenes / jumpSceneIndex のどちらの索引でも解決する。
-      // initialSceneId(#386) より後に評価するため、debug_scene が指定時に優先される
-      // （デバッグ目的の上書きを production 経路より優先させる）。
-      // #664: パース結果は上の hasDeepLinkOrDebugStart 判定と同じ debugQueryResult を使い回す
-      // （window.location.search の再パースはしない）。debug_script/debug_scene のどちらでも
-      // 上で setOnSceneChange 自体が配線されていないため、この後の playScript（内部の choice
-      // ステップは jumpToScene 経由）/startFrom がどれだけシーンを切り替えても quickSave() は
-      // 自動発火しない。
-      if (debugQueryResult && 'script' in debugQueryResult) {
-        void renderer.playScript(debugQueryResult.script)
-      } else if (debugQueryResult && 'scene' in debugQueryResult) {
-        renderer.startFrom(debugQueryResult.scene)
-      }
+      const attempts = resolveInitialEntry({
+        snapshot: pendingSnapshot,
+        debugQuery: debugQueryResult,
+        initialSceneId,
+        confinedSceneIds,
+        hasQuickSave: !!docKey && renderer.hasQuickSave(),
+      })
+      void runInitialEntry(renderer, attempts)
+        .then((outcome) => {
+          if (destroyed) return
+          // 自動セーブの配線は初期入場の確定後 (#734)。自動クイックロードが通信失敗（resolver-error）で
+          // 倒れたセッションは配線せず、一時的な失敗で正しいクイックセーブを上書きしない。
+          if (docKey && !hasDeepLinkOrDebugStart) {
+            if (outcome.autoSave) {
+              renderer.setOnSceneChange(() => {
+                renderer.quickSave()
+              })
+            } else {
+              renderer.showToast(
+                'セーブの読み込みに失敗したため、このセッションは自動セーブしません'
+              )
+            }
+          }
+          onInitialEntry?.(summarizeInitialEntry(outcome))
+          // URL クエリによるデバッグ起点指定 (#220 Phase 3, #652)。`?debug_script=` は上の入場が
+          // 確定してから実行する（`?debug_scene=` は resolveInitialEntry の試行に含まれる）。
+          // 本番ビルドでも常時有効（confinement は `?scene=` 単独埋め込み専用の別経路で、debug は
+          // 常に confinement なしで遷移する）。onSceneChange は上で配線されていない（#664）。
+          if (debugQueryResult && 'script' in debugQueryResult && shouldRunDebugScript(outcome)) {
+            void renderer.playScript(debugQueryResult.script)
+          }
+        })
+        .catch((err) => {
+          console.error('NovelPlayer: 初期入場に失敗しました', err)
+        })
       onRendererReady?.(renderer)
       // タイトル画面 (#628 フェーズ2b): ここまで到達した時点で renderer は setAssetBaseUrl 済み
       // ＝ characterLayer.showImage() がロゴ画像を正しい URL で読める状態になった。
@@ -1155,14 +1144,22 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   // この effect が再実行され setEvents() が誤発火していた。setEvents() は無条件で
   // resetAndStartEvents() を呼ぶため、プレイ中のシーンが entry doc 冒頭まで巻き戻る回帰を
   // 起こしていた。jumpSceneIndex 単独の変化ではこの effect を再実行しない。
+  //
+  // #734: マウント時の初回実行では何もしない。マウント時の文書は init effect が `loadEvents` /
+  // `loadScenes` で読み込み済みで、初期入場が位置を確定する。ここで `setEvents` を呼ぶと、init() が解決する前の
+  // renderer に対してエントリ冒頭を実行してから上書きする二重実行になる。`rendererReady` の後に
+  // events / scenes が変わったとき（エディタのライブ再パース）にだけ反応する。
   useEffect(() => {
-    if (!rendererRef.current) return
+    if (!rendererRef.current || !rendererReady) return
+    const loaded = loadedDocRef.current
+    if (loaded && loaded.events === events && loaded.scenes === scenes) return
+    loadedDocRef.current = { events, scenes }
     if (scenes && scenes.length > 0) {
       rendererRef.current.setScenes(scenes)
     } else {
       rendererRef.current.setEvents(events)
     }
-  }, [events, scenes])
+  }, [events, scenes, rendererReady])
 
   useEffect(() => {
     rendererRef.current?.setMissingSceneResolver?.(onResolveMissingScene ?? null)

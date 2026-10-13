@@ -202,6 +202,14 @@ function lastNovelPlayerProps(): Record<string, unknown> {
   return lastCall[0] as Record<string, unknown>
 }
 
+/** NovelPlayer の初期入場の結果通知（HUD の debug_scene 行の元）を模して呼ぶ (#734)。 */
+function reportDebugSceneEntry(sceneId: string, entered: boolean): void {
+  const onInitialEntry = lastNovelPlayerProps().onInitialEntry as (report: {
+    debugScene: { sceneId: string; entered: boolean } | null
+  }) => void
+  act(() => onInitialEntry({ debugScene: { sceneId, entered } }))
+}
+
 async function resolveMissingScene(sceneId: string): Promise<EventScene[] | null> {
   const resolver = lastNovelPlayerProps().onResolveMissingScene
   expect(typeof resolver).toBe('function')
@@ -2274,7 +2282,7 @@ describe('PlayerScreen', () => {
       expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
     })
 
-    it('45b: 単一 script.md フォールバックでも ?debug_scene=<エントリ内 id> で HUD に debug_scene → resolved が出る', async () => {
+    it('45b: 単一 script.md フォールバックでも、NovelPlayer の初期入場の結果通知で HUD に debug_scene → resolved が出る', async () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       window.history.pushState({}, '', '?debug_scene=only-scene')
       listProjectsMock.mockResolvedValue([
@@ -2304,6 +2312,7 @@ describe('PlayerScreen', () => {
       await waitFor(() => {
         expect(screen.getByTestId('novel-player')).toBeInTheDocument()
       })
+      reportDebugSceneEntry('only-scene', true)
       expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
         'debug_scene: only-scene → resolved'
       )
@@ -2531,8 +2540,10 @@ describe('PlayerScreen', () => {
       })
     })
 
-    // --- #726: `?debug_scene=` もエントリ外（未ロード）のサブ MD シーンを事前解決する ---
-    describe('PlayerScreen `?debug_scene=` の遅延ロード事前解決 (#726)', () => {
+    // --- #726 → #734: `?debug_scene=` の遅延ロードは NovelPlayer の初期入場（startFrom）が解決する ---
+    // PlayerScreen は debug_scene を事前解決しない（`?scene=` の事前解決は confinement の算出と
+    // タイトル判定のために残る）。HUD の debug_scene 行は初期入場の結果通知（onInitialEntry）で出る。
+    describe('PlayerScreen `?debug_scene=` は事前解決せず、結果通知で HUD に出す (#734)', () => {
       const CELL_PATH = 'content/scripts/free/a.md'
       const CELL_B_PATH = 'content/scripts/free/b.md'
 
@@ -2578,52 +2589,53 @@ describe('PlayerScreen', () => {
         })
       }
 
-      it('62: エントリ外サブ MD のシーンを debug_scene 指定すると jumpSceneIndex に載り、タイトル非表示・initialSceneId/confinedSceneIds は null のまま', async () => {
+      it('62: エントリ外サブ MD のシーンを debug_scene 指定しても事前解決せず（サブ MD を fetch しない）、タイトル非表示・initialSceneId/confinedSceneIds は null のまま', async () => {
         window.history.pushState({}, '', '?debug_scene=cell-scene-1')
         await renderMultiDocProject()
-        expect(sceneIds()).toContain('cell-scene-1')
-        expect(cellFetchCount(CELL_PATH)).toBeGreaterThan(0)
+        expect(sceneIds()).not.toContain('cell-scene-1')
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
         expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
         expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
-        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
-          'debug_scene: cell-scene-1 → resolved'
-        )
+        expect(typeof lastNovelPlayerProps().onInitialEntry).toBe('function')
       })
 
-      it('63: 存在しない id を debug_scene 指定すると HUD に not found が出て、エントリ先頭のまま（全サブ MD を探索しても見つからず・クラッシュしない）', async () => {
+      it('63: 入場できなかった（不在 id）通知で HUD に not found が出る（エントリ先頭のまま・クラッシュしない）', async () => {
         window.history.pushState({}, '', '?debug_scene=no-such-scene')
         await renderMultiDocProject()
+        reportDebugSceneEntry('no-such-scene', false)
         expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
           'debug_scene: no-such-scene → not found (fallback to entry)'
         )
-        expect(sceneIds()).not.toContain('no-such-scene')
-        // resolveMissingScene のフォールバックで全サブ MD を探索した
-        expect(cellFetchCount(CELL_PATH)).toBe(1)
         expect(lastNovelPlayerProps().initialSceneId).toBeNull()
         expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
         expect(screen.queryByRole('alert')).toBeNull()
       })
 
-      it('64: エントリ内に既にある id（hub-scene）を debug_scene 指定しても追加 fetch せず resolved になる', async () => {
+      it('64: 入場できた通知で HUD に resolved が出る（エントリ内の id は追加 fetch もしない）', async () => {
         window.history.pushState({}, '', '?debug_scene=hub-scene')
         await renderMultiDocProject()
         expect(cellFetchCount(CELL_PATH)).toBe(0)
-        expect(sceneIds()).toContain('hub-scene')
+        reportDebugSceneEntry('hub-scene', true)
         expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
           'debug_scene: hub-scene → resolved'
         )
       })
 
-      it('65: ?scene= と debug_scene 併用（別ファイル）は両方解決され、debug が解決できたので confinement は null（b.md 内の遷移が終劇にならない）', async () => {
+      it('65: ?scene= と debug_scene 併用（別ファイル）は ?scene= だけ事前解決し、confinement は ?scene= の一覧のまま渡す（debug が入場できたときの解除は NovelPlayer の初期入場が行う）', async () => {
         window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-b-1')
         await renderTwoCellProject()
-        expect(sceneIds()).toEqual(expect.arrayContaining(['cell-scene-1', 'cell-b-1']))
+        expect(sceneIds()).toContain('cell-scene-1')
+        expect(sceneIds()).not.toContain('cell-b-1')
         expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
-        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
-        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
-        expect(debugInfo).toContain('scene param: cell-scene-1 → resolved')
-        expect(debugInfo).toContain('debug_scene: cell-b-1 → resolved')
+        expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'scene param: cell-scene-1 → resolved'
+        )
+        reportDebugSceneEntry('cell-b-1', true)
+        expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
+          'debug_scene: cell-b-1 → resolved'
+        )
       })
 
       it('66: debug_script のみ（scene キー無し）では debug_scene の事前解決を行わず、サブ MD も fetch しない', async () => {
@@ -2635,13 +2647,12 @@ describe('PlayerScreen', () => {
         expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
       })
 
-      it('67: 同一 sceneId を ?scene= と debug_scene 両方に指定しても冪等（索引に重複なし・サブ MD は 1 回だけ fetch・debug 解決済みなので confinement は null）', async () => {
+      it('67: 同一 sceneId を ?scene= と debug_scene 両方に指定しても冪等（索引に重複なし・サブ MD は 1 回だけ fetch）', async () => {
         window.history.pushState({}, '', '?scene=cell-scene-1&debug_scene=cell-scene-1')
         await renderMultiDocProject()
         const ids = sceneIds()
         expect(ids.filter((id) => id === 'cell-scene-1')).toHaveLength(1)
         expect(cellFetchCount(CELL_PATH)).toBe(1)
-        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
       })
 
       it('68: debug 系クエリが無い通常フローでは debug_scene 行が debugInfo に出ず、サブ MD も fetch しない（非回帰）', async () => {
@@ -2656,9 +2667,40 @@ describe('PlayerScreen', () => {
         await renderMultiDocProject()
         expect(lastNovelPlayerProps().initialSceneId).toBe('cell-scene-1')
         expect(lastNovelPlayerProps().confinedSceneIds).toEqual(['cell-scene-1', 'cell-scene-2'])
+        reportDebugSceneEntry('no-such-scene', false)
         expect(lastNovelPlayerProps().debugInfo as string[]).toContain(
           'debug_scene: no-such-scene → not found (ignored)'
         )
+      })
+
+      it('70: 初期入場の結果通知が再度来ても debug_scene 行は1行に置き換わる（重複しない）', async () => {
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        reportDebugSceneEntry('cell-scene-1', false)
+        reportDebugSceneEntry('cell-scene-1', true)
+        const lines = (lastNovelPlayerProps().debugInfo as string[]).filter((l) =>
+          l.startsWith('debug_scene:')
+        )
+        expect(lines).toEqual(['debug_scene: cell-scene-1 → resolved'])
+      })
+
+      it('71: debug_scene を試していない通知（debugScene: null）では HUD に debug_scene 行を足さない', async () => {
+        await renderMultiDocProject()
+        const onInitialEntry = lastNovelPlayerProps().onInitialEntry as (report: {
+          debugScene: null
+        }) => void
+        act(() => onInitialEntry({ debugScene: null }))
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+
+      it('72: ?debug_script= のみでもタイトル画面を出さず、?scene= の事前解決も confinement もしない（debug 起点は NovelPlayer の初期入場に任せる）', async () => {
+        window.history.pushState({}, '', '?debug_script=advance')
+        await renderMultiDocProject()
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
       })
     })
   })
