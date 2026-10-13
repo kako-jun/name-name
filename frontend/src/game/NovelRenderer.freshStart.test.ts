@@ -288,3 +288,103 @@ describe('loadEvents / loadScenes: 開始しない読み込み (#734 PR2)', () =
     expect(r.getQuickSaveFlags()).toEqual({ m: bool(true) })
   })
 })
+
+describe('入場の失敗・割り込み (#734 PR2 レビュー対応)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    new SaveManager().deleteQuickSave()
+  })
+
+  it('S1: 同期の適用が throw しても、startFrom は reject せず failed（apply-error）を返す（読み込み済み・エントリとも）', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([HUB, ROUTE])
+    vi.spyOn(r as unknown as { resetAndStartEvents: () => void }, 'resetAndStartEvents')
+      .mockImplementationOnce(() => {
+        throw new Error('boom')
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('boom')
+      })
+    await expect(r.startFrom({ sceneId: 'route' })).resolves.toEqual({
+      status: 'failed',
+      reason: 'apply-error',
+    })
+    await expect(r.startFrom({})).resolves.toEqual({ status: 'failed', reason: 'apply-error' })
+    expect(internals(r).pendingEntry).toBeNull()
+  })
+
+  it('S1b: quickLoad の同期の適用が throw しても failed で解決する', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = makeRenderer([HUB, ROUTE])
+    new SaveManager().quickSave({
+      slot: -1,
+      sceneId: 'route',
+      eventIndex: 0,
+      textIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+      savedAt: new Date().toISOString(),
+      sceneName: null,
+    })
+    vi.spyOn(r as unknown as { restoreToScene: () => void }, 'restoreToScene').mockImplementation(
+      () => {
+        throw new Error('boom')
+      }
+    )
+    await expect(r.quickLoad('auto')).resolves.toEqual({ status: 'failed', reason: 'apply-error' })
+  })
+
+  it('S2: 開始前（loadEvents 直後）の入場失敗では、先頭が Choice でも選択肢を出さず skipMode も解除しない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = new NovelRenderer()
+    r.loadEvents([{ Choice: { options: [{ text: 'a', jump: 'hub' }] } } as Event])
+    r.setSkipMode(true)
+    const show = vi.spyOn(
+      (r as unknown as { choiceOverlay: { show: () => void } }).choiceOverlay,
+      'show'
+    )
+    await expect(r.startFrom({ sceneId: 'ghost' })).resolves.toEqual({
+      status: 'failed',
+      reason: 'not-found',
+    })
+    expect(show).not.toHaveBeenCalled()
+    expect((r as unknown as { waitingForChoice: boolean }).waitingForChoice).toBe(false)
+    expect((r as unknown as { skipMode: boolean }).skipMode).toBe(true)
+  })
+
+  it('Q1: 自動クイックロードの遅延ロード中に restart（はじめから）しても、後から解決した復元は破棄され restart の状態が勝つ', async () => {
+    const r = new NovelRenderer()
+    vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
+    internals(r).initialized = true
+    r.setJumpSceneIndex([HUB])
+    r.loadEvents(HUB.events)
+    const d = deferred<EventScene[] | null>()
+    r.setMissingSceneResolver(() => d.promise)
+    new SaveManager().quickSave({
+      slot: -1,
+      sceneId: 'route',
+      eventIndex: 0,
+      textIndex: 0,
+      flags: { stale: bool(true) },
+      backgroundPath: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+      savedAt: new Date().toISOString(),
+      sceneName: null,
+    })
+    const loading = r.quickLoad('auto')
+    expect(internals(r).pendingEntry).not.toBeNull()
+
+    r.restart()
+    expect(internals(r).pendingEntry).toBeNull()
+    d.resolve([HUB, ROUTE])
+    await expect(loading).resolves.toEqual({ status: 'superseded' })
+    expect(r.getCurrentSceneId()).toBe('hub')
+    expect(r.getSnapshot().flags).not.toHaveProperty('stale')
+  })
+})

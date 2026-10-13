@@ -128,17 +128,14 @@ describe('startFrom: carryPolicyFor の表の全項目（進行は持ち越し�
     expect(s.video).toBeNull()
   })
 
-  // 現状の固定（バグ候補として報告）: `[背景色:]`（#273）の地色は独立スロットで、新規開始でもクリアされない
-  // （resetAndStartEvents の非 preserve 分岐が clearBackgroundColor を呼ばない。main の setEvents / restart も同じ）。
-  // spec 446 行の「文脈を捨てる」一覧に地色は無く、spec 270 行は「明示的に塗り直すまで残る」とある。
-  // 新規開始で地色も捨てる設計にするなら、この期待を null に反転する。
-  it('現状: 地色（[背景色:]）は新規開始でも残る（spec の「文脈を捨てる」一覧に無い）', async () => {
+  // 新規開始は文脈を捨てるので、地色（[背景色:]、#273）もクリアする (#734)。
+  it('地色（[背景色:]）も新規開始でクリアされる', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([loadedScene('loaded'), BARE])
     await r.startFrom({ sceneId: 'loaded' })
     expect(internals(r).currentBackgroundColor).toBe('#112233')
     await r.startFrom({ sceneId: 'bare' })
-    expect(r.getSnapshot().backgroundColor).toBe('#112233')
+    expect(r.getSnapshot().backgroundColor).toBeNull()
   })
 
   it('対比: 進行（jumpToScene）は背景・地色・背景板・大道具・幕・紙人形輪郭・BGM を持ち越し、スポットライトとカメラは持ち越さない', async () => {
@@ -213,13 +210,26 @@ describe('startFrom: DEV 警告の出る・出ない条件 (ADR 0003 §8)', () =
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
-  it('エントリ（sceneId 省略）の新規開始でも、冒頭に [背景:] が無ければ出す', async () => {
+  it('エントリ（sceneId 省略）の新規開始では出さない（エディタのプレビュー等で毎回出るため）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new NovelRenderer()
     r.loadEvents([narration('entry-line')])
     await r.startFrom({})
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toContain('エントリ')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('[背景色:]・[イベント絵:]・[動画:] で始まるシーンは出さない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const starts: Event[] = [
+      { BackgroundColor: { color: '#000000' } } as unknown as Event,
+      { EventImage: { path: 'a.png' } } as unknown as Event,
+      { Video: { path: 'a.mp4' } } as unknown as Event,
+    ]
+    for (const ev of starts) {
+      const r = makeRenderer([scene('s', [ev, narration('x')])])
+      await r.startFrom({ sceneId: 's' })
+    }
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('進行（jumpToScene）では出さない（持ち越すので背景が無くても問題ない）', async () => {

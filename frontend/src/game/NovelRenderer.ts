@@ -411,6 +411,13 @@ export class NovelRenderer {
    * `loadEvents` は null（線形ストリームは sceneId を持たない）。従来のマウント結果を保つ (#734)。
    */
   private entrySceneId: string | null = null
+  /**
+   * 再生が開始済みか。`loadEvents` / `loadScenes` の直後は false（文書だけ入って位置が未確定）で、
+   * 入場の適用（`resetAndStartEvents` / `restoreToScene`）で true になる。未開始の位置は index 0 の
+   * 仮置きにすぎないので、入場が失敗しても遷移状態を導出し直さない（先頭が Choice だと、
+   * 開始前に選択肢が出て skipMode が解除されるため）。
+   */
+  private playbackStarted = false
   /** Condition 展開済みのフラットなイベント配列 */
   private resolvedEvents: Event[] = []
   private eventIndex = 0
@@ -1297,6 +1304,7 @@ export class NovelRenderer {
     // 'entry' 対象は常にこのエントリ文書へ戻れる。
     this.entryRawEvents = [...events]
     this.entrySceneId = null
+    this.playbackStarted = false
     this.rawEvents = [...events]
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     this.eventIndex = 0
@@ -1391,6 +1399,7 @@ export class NovelRenderer {
    */
   loadScenes(scenes: EventScene[]): void {
     this.allScenes = scenes
+    this.playbackStarted = false
     if (scenes.length > 0) {
       this.loadEvents(scenes[0].events)
       this.entrySceneId = scenes[0].id
@@ -1678,7 +1687,11 @@ export class NovelRenderer {
 
     if (req.kind === 'fresh' && req.target === 'entry') {
       // エントリ文書の線形ストリームの先頭から。シーンの引き当て（遅延ロード）は要らない。
-      return Promise.resolve(this.applyFresh(req, this.entrySceneId, this.entryRawEvents))
+      try {
+        return Promise.resolve(this.applyFresh(req, this.entrySceneId, this.entryRawEvents))
+      } catch (err) {
+        return Promise.resolve(this.failApply(req, err))
+      }
     }
 
     const sceneId =
@@ -1694,7 +1707,13 @@ export class NovelRenderer {
 
     const resolution = this.resolveScene(sceneId)
     if (!('then' in resolution)) {
-      return Promise.resolve(this.finishEntry(req, resolution))
+      // 同期の適用が throw しても、呼び出し元へ伝播させず failed（apply-error）で解決する。
+      // await 後の適用と同じ扱い（初期入場の連鎖が reject で途切れない）。
+      try {
+        return Promise.resolve(this.finishEntry(req, resolution))
+      } catch (err) {
+        return Promise.resolve(this.failApply(req, err))
+      }
     }
     const promise: Promise<SceneEntryResult> = (async () => {
       const resolved = await resolution
@@ -1715,12 +1734,18 @@ export class NovelRenderer {
           resolved.status === 'loaded' ? this.indexLoaded(sceneId, resolved.scenes) : resolved
         )
       } catch (err) {
-        this.handleApplyError(req, err)
-        return { status: 'failed', reason: 'apply-error' } as const
+        return this.failApply(req, err)
       }
     })()
     this.pendingEntry = { generation, kind: req.kind, sceneId, promise }
     return promise
+  }
+
+  /** 入場の適用中の例外を失敗として扱い、結果を返す。ゲートも下ろす。 */
+  private failApply(req: SceneEntryRequest, err: unknown): SceneEntryResult {
+    this.pendingEntry = null
+    this.handleApplyError(req, err)
+    return { status: 'failed', reason: 'apply-error' }
   }
 
   /**
@@ -1731,9 +1756,7 @@ export class NovelRenderer {
     try {
       return this.enterScene(req)
     } catch (err) {
-      this.pendingEntry = null
-      this.handleApplyError(req, err)
-      return Promise.resolve({ status: 'failed', reason: 'apply-error' })
+      return Promise.resolve(this.failApply(req, err))
     }
   }
 
@@ -1898,9 +1921,10 @@ export class NovelRenderer {
       return { status: 'entered', sceneId: scene.id }
     }
 
-    if (import.meta.env.DEV && lacksLeadingBackground(events)) {
+    // エントリ（sceneId なし）は警告しない: エディタのプレビュー等で毎回出てしまう。
+    if (import.meta.env.DEV && sceneId !== null && lacksLeadingBackground(events)) {
       console.warn(
-        `[name-name] startFrom: 新規開始の対象シーン${sceneId ? ` "${sceneId}"` : '（エントリ）'} が最初のテキストまでに [背景:] を持ちません。新規開始は背景を持ち越さないので、背景は地色から始まります。`
+        `[name-name] startFrom: 新規開始の対象シーン "${sceneId}" が最初のテキストまでに [背景:] を持ちません。新規開始は背景を持ち越さないので、背景は地色から始まります。`
       )
     }
     // 先頭から: 通常入場と同じ経路（冒頭の [背景:]/[BGM:] 等を最初のテキストまで実行し、立ち絵も出す #399）。
@@ -1944,7 +1968,8 @@ export class NovelRenderer {
         // セーブ由来の復元失敗はプレイヤー操作起点の通知 (#765)。flags は適用しない。
         this.notifyLoadFailure()
       }
-      this.rederiveTransitionAtCurrentPosition()
+      // 未開始（loadEvents 直後）の index 0 は仮置きなので導出し直さない。
+      if (this.playbackStarted) this.rederiveTransitionAtCurrentPosition()
     }
     return { status: 'failed', reason: failure.reason }
   }
@@ -2417,6 +2442,7 @@ export class NovelRenderer {
       carryBgm?: boolean
     }
   ): void {
+    this.playbackStarted = true
     this.waitingForChoice = false
     this.waitingForWait = false
     this.jumpState = 'idle'
@@ -2476,6 +2502,8 @@ export class NovelRenderer {
       // （preserveBackgroundForTransition=true）では持ち越し、この非 preserve 分岐（新しい
       // イベント列の最初の開始・setEvents() 経由）と明示的な `[場面転換]` でのみクリアする。
       this.backgroundBoardLayer.clear()
+      // 地色（[背景色:]、#273）も新規開始では文脈として捨てる (#734)。進行（preserve）では持ち越す。
+      this.clearBackgroundColor()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
@@ -6312,6 +6340,7 @@ export class NovelRenderer {
    * @param state applyState に渡す完成済みの状態スナップショット
    */
   private restoreToScene(scene: EventScene, state: NovelGameState): void {
+    this.playbackStarted = true
     // フラグを設定（置換セマンティクス）。
     // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
     //

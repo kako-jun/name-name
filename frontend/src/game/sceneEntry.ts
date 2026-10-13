@@ -187,7 +187,9 @@ export function lacksLeadingBackground(events: readonly Event[]): boolean {
   for (const event of events) {
     if (typeof event !== 'object' || event === null) continue
     if ('Dialog' in event || 'Narration' in event) return true
-    if ('Background' in event) return false
+    // 背景・地色・動画・イベント絵のどれかで始まるなら、地色のままにはならない（警告しない側）。
+    if ('Background' in event || 'BackgroundColor' in event) return false
+    if ('Video' in event || 'EventImage' in event) return false
     // 条件分岐の中に背景があるかもしれない場合は断定できないので、警告しない側に倒す。
     if ('Condition' in event) return false
   }
