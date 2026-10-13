@@ -1389,8 +1389,14 @@ describe('rpgProjectFromDoc: battle_layout / battle_background (#736)', () => {
     const withB = rpgProjectFromDoc(
       withBattle({ battle_layout: 'side', battle_background: 'bg/a.webp' })
     )!
-    const { battleLayout: _l, battleBackground: _b, ...restBase } = base
-    const { battleLayout: _l2, battleBackground: _b2, ...restWith } = withB
+    const strip = (p: RPGProject): Omit<RPGProject, 'battleLayout' | 'battleBackground'> => {
+      const copy: Partial<RPGProject> = { ...p }
+      delete copy.battleLayout
+      delete copy.battleBackground
+      return copy as Omit<RPGProject, 'battleLayout' | 'battleBackground'>
+    }
+    const restBase = strip(base)
+    const restWith = strip(withB)
     expect(restWith).toEqual(restBase)
   })
 

@@ -8,7 +8,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Container } from 'pixi.js'
 import { RaycastRenderer } from './RaycastRenderer'
-import type { BattleScreen } from './BattleScreen'
 import type { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { PartyMemberDef } from '../types'
@@ -35,9 +34,7 @@ interface RendererInternals {
   masterParty: Record<string, PartyMemberDef>
   battleLayout: 'front' | 'side'
   battleBackground: string | undefined
-  battleScreen:
-    | (BattleScreen & { engine: BattleEngine; opts: Record<string, unknown>; layoutMode: string })
-    | null
+  battleScreen: { engine: BattleEngine; opts: Record<string, unknown> } | null
   startBattle(enemies: BattleEntity[]): void
   buildPartyBattleEntities(): BattleEntity[]
   partyDefToBattleEntity(def: PartyMemberDef): BattleEntity
