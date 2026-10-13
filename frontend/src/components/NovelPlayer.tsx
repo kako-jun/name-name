@@ -1115,12 +1115,15 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     }
   }, [])
 
-  // assetBaseUrl が変わったらレンダラーに反映
+  // assetBaseUrl が変わったらレンダラーに反映。init 完了前（rendererReady=false）の renderer には
+  // 流さない (#774): init 前に画像 fetch が始まると、StrictMode 二重マウント等で renderer が
+  // destroy された後に fetch が解決して破棄済みオブジェクトを触る。初期値は init 完了時に
+  // 適用済みで、ready 後に最新値をここで 1 回反映する。
   useEffect(() => {
-    if (rendererRef.current && assetBaseUrl) {
+    if (rendererRef.current && rendererReady && assetBaseUrl) {
       rendererRef.current.setAssetBaseUrl(assetBaseUrl)
     }
-  }, [assetBaseUrl])
+  }, [assetBaseUrl, rendererReady])
 
   // jumpSceneIndex が変わったらジャンプ解決索引だけをレンダラーに反映する (#284, #671 M1)。
   // setJumpSceneIndex() は `this.allScenes = scenes` の代入のみで再生ストリームに触れない
