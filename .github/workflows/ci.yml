@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # toolchain は repo 直下の rust-toolchain.toml が正本 (#732)。
+      # ここで別バージョンを強制せず、ファイルの channel / targets / components をそのままインストールする
+      - run: rustup toolchain install
 
       # rodio/cpal の Linux バックエンドが ALSA を使うため、alsa-sys のビルドに
       # libasound2-dev (alsa.pc) が必要。無いと pkg-config が alsa を見つけられず失敗する (#502)
@@ -27,9 +27,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      # コミット済み wasm が rust-toolchain.toml の rustc でビルドされたかを、wasm に埋まる
+      # `/rustc/<commit-hash>` で検査する (OS 非依存。wasm 自体の byte 一致は OS 間で取れないため見ない) (#732)
+      - name: Committed wasm is built with the pinned rustc
+        run: |
+          hash=$(rustc -vV | sed -n 's/^commit-hash: //p')
+          grep -aqF "/rustc/${hash}" parser/pkg/name_name_parser_bg.wasm
 
       # `--all` / `--workspace` を明示し、parser・tui 両クレートを対象にする
       # (working-directory を parser 単体に絞ると tui が素通りしてしまうため、

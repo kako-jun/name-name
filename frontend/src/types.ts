@@ -880,6 +880,10 @@ export interface EventDocument {
   battle_perspective?: string | null
   /** RPG 戦闘画面の前景レイヤー画像パス (#747)。frontmatter `battle_foreground:` から流す。 */
   battle_foreground?: string | null
+  /** RPG 戦闘の ATB 方式の有効化 (#205)。`"on"` / `"off"`（既定）。frontmatter `battle_atb:` から流す。GUI 専用（TUI は読まない）。 */
+  battle_atb?: string | null
+  /** RPG 戦闘の ATB の進行方式 (#205)。`"wait"`（既定）/ `"active"`。`battle_atb: on` のときだけ効く。frontmatter `battle_atb_mode:` から流す。 */
+  battle_atb_mode?: string | null
   chapters: EventChapter[]
 }
 

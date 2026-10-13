@@ -100,7 +100,11 @@ async function main(): Promise<void> {
       }
       const resolution = resolveResolution(view.resolutionMode, window.devicePixelRatio)
       app.renderer.resize(setup.width, setup.height, resolution)
-      const engine = new BattleEngine(setup.party, setup.enemies)
+      const engine = new BattleEngine(
+        setup.party,
+        setup.enemies,
+        setup.atb ? { atb: setup.atb } : {}
+      )
       screen = new BattleScreen(engine, setup.width, setup.height, setup.options)
       app.stage.addChild(screen)
       $('info').textContent = describeView(
@@ -190,6 +194,25 @@ async function main(): Promise<void> {
   )
   logTwLabel.append(logTwChk, 'ログを1文字ずつ表示')
   tb.appendChild(logTwLabel)
+  const atbLabel = document.createElement('label')
+  const atbChk = document.createElement('input')
+  atbChk.type = 'checkbox'
+  atbChk.id = 'tb-atb'
+  atbChk.addEventListener('change', () => change({ atb: atbChk.checked ? 'on' : 'off' }))
+  atbLabel.append(atbChk, 'ATB（ゲージ順に行動）')
+  tb.appendChild(atbLabel)
+  const atbModeSel = select(
+    'ATB 進行',
+    'tb-atb-mode',
+    ['wait', 'active'] as const,
+    (v) => change({ atbMode: v }),
+    { wait: '待機（コマンド選択中は停止）', active: 'アクティブ（止めない）' }
+  )
+  const restartBtn = document.createElement('button')
+  restartBtn.id = 'tb-restart'
+  restartBtn.textContent = '戦闘をやり直す'
+  restartBtn.addEventListener('click', () => render())
+  tb.appendChild(restartBtn)
   const depthLabel = document.createElement('label')
   const depthChk = document.createElement('input')
   depthChk.type = 'checkbox'
@@ -262,6 +285,9 @@ async function main(): Promise<void> {
     toneChk.checked = v.backgroundTone === 'on'
     dofChk.checked = v.backgroundDof === 'on'
     logTwChk.checked = v.logTypewriter === 'on'
+    atbChk.checked = v.atb === 'on'
+    atbModeSel.value = v.atbMode
+    atbModeSel.disabled = v.atb !== 'on'
     partySel.value = String(effectivePartyCount(v))
     enemySel.value = String(v.enemyCount)
     sizeSel.value = v.sizeId
@@ -292,6 +318,9 @@ async function main(): Promise<void> {
     ev.preventDefault()
     blink()
   })
+
+  // ATB (#205): 時間は ticker から tick で渡す（エンジンは時計を持たない）。従来ターン制では何もしない
+  app.ticker.add((ticker) => screen?.tick(ticker.deltaMS))
 
   render()
 }
