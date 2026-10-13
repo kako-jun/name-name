@@ -45,6 +45,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     logTypewriter: 'off',
     atb: 'off',
     atbMode: 'wait',
+    commandLayout: 'grid',
     backgroundOn: false,
     depth: 'off',
     foregroundOn: false,

@@ -167,6 +167,17 @@ async function main(): Promise<void> {
   const layoutSel = select('layout', 'tb-layout', ['front', 'side'] as const, (v) =>
     change({ layout: v })
   )
+  const cmdLayoutSel = select(
+    'commandLayout',
+    'tb-command-layout',
+    ['grid', 'cross'] as const,
+    (v) => {
+      // select にフォーカスが残ると cross の矢印キーがフォーム操作として扱われ効かないので外す
+      ;(document.activeElement as HTMLElement | null)?.blur?.()
+      change({ commandLayout: v })
+    },
+    { grid: 'grid（2x2）', cross: 'cross（十字・矢印キー）' }
+  )
   const styleSel = select('spriteStyle', 'tb-style', ['none', 'acrylic'] as const, (v) =>
     change({ spriteStyle: v })
   )
@@ -295,6 +306,7 @@ async function main(): Promise<void> {
   function syncToolbar(): void {
     const v = history.current
     layoutSel.value = v.layout
+    cmdLayoutSel.value = v.commandLayout
     styleSel.value = v.spriteStyle
     windowSel.value = v.windowStyle
     bgChk.checked = v.backgroundOn
