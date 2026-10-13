@@ -1563,3 +1563,23 @@ describe('rpgProjectFromDoc: window_style (#744)', () => {
     expect(p.windowStyle).toBe('dark')
   })
 })
+
+describe('rpgProjectFromDoc: battle_background_dof (#753)', () => {
+  const withDof = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it("'on' → 'on'。未指定・null・空・未知値は 'off'", () => {
+    expect(rpgProjectFromDoc(withDof({ battle_background_dof: 'on' }))!.battleBackgroundDof).toBe(
+      'on'
+    )
+    expect(rpgProjectFromDoc(makeDoc())!.battleBackgroundDof).toBe('off')
+    expect(rpgProjectFromDoc(withDof({ battle_background_dof: null }))!.battleBackgroundDof).toBe(
+      'off'
+    )
+    expect(rpgProjectFromDoc(withDof({ battle_background_dof: '' }))!.battleBackgroundDof).toBe(
+      'off'
+    )
+    expect(rpgProjectFromDoc(withDof({ battle_background_dof: 'foo' }))!.battleBackgroundDof).toBe(
+      'off'
+    )
+  })
+})

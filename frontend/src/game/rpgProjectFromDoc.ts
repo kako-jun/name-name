@@ -21,6 +21,7 @@ import { normalizeBattleLayout } from './battleLayout'
 import { normalizeSpriteStyle } from './spriteStyle'
 import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
+import { normalizeBackgroundDof } from './depthOfField'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -245,6 +246,7 @@ export function rpgProjectFromDoc(
     spriteStyle: normalizeSpriteStyle(doc.sprite_style),
     windowStyle: normalizeWindowStyle(doc.window_style),
     battleBackgroundTone: normalizeBackgroundTone(doc.battle_background_tone),
+    battleBackgroundDof: normalizeBackgroundDof(doc.battle_background_dof),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }

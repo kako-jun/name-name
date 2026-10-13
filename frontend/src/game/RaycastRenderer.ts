@@ -59,6 +59,7 @@ import type { BattleLayoutMode } from './battleLayout'
 import type { SpriteStyle } from './spriteStyle'
 import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
+import type { BackgroundDof } from './depthOfField'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -137,6 +138,8 @@ export class RaycastRenderer {
   private windowStyle: WindowStyle = 'dark'
   /** 戦闘背景のトーン調整 (#753)。frontmatter `battle_background_tone` 由来 */
   private battleBackgroundTone: BackgroundTone = 'on'
+  /** 戦闘背景の被写界深度風ぼかし (#753)。frontmatter `battle_background_dof` 由来 */
+  private battleBackgroundDof: BackgroundDof = 'off'
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -380,6 +383,7 @@ export class RaycastRenderer {
     this.spriteStyle = gameData.spriteStyle ?? 'none'
     this.windowStyle = gameData.windowStyle ?? 'dark'
     this.battleBackgroundTone = gameData.battleBackgroundTone ?? 'on'
+    this.battleBackgroundDof = gameData.battleBackgroundDof ?? 'off'
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -808,6 +812,7 @@ export class RaycastRenderer {
       spriteStyle: this.spriteStyle,
       windowStyle: this.windowStyle,
       backgroundTone: this.battleBackgroundTone,
+      backgroundDof: this.battleBackgroundDof,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)

@@ -862,6 +862,10 @@ export interface EventDocument {
    *  null/undefined・未知値は `"on"` にフォールバック。GUI 専用（TUI は読まない）。
    *  frontmatter `battle_background_tone:` から流す。 */
   battle_background_tone?: string | null
+  /** RPG 戦闘背景の被写界深度（DoF）風の手前ぼかし (#753)。`"on"` / `"off"`（既定）。
+   *  null/undefined・未知値は `"off"` にフォールバック。GUI 専用（TUI は読まない）。
+   *  frontmatter `battle_background_dof:` から流す。 */
+  battle_background_dof?: string | null
   chapters: EventChapter[]
 }
 
