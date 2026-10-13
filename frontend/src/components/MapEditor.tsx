@@ -17,6 +17,8 @@ interface MapEditorProps {
   rpgProject: RPGProject
   onChange: (mapData: MapData) => void
   isDark: boolean
+  /** プレビューの RPGPlayer に転送するアセットのベース URL (#746) */
+  assetBaseUrl?: string
 }
 
 const TILE_NAMES = {
@@ -57,7 +59,7 @@ const PREVIEW_BUTTONS: ReadonlyArray<{
   },
 ]
 
-function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
+function MapEditor({ mapData, rpgProject, onChange, isDark, assetBaseUrl }: MapEditorProps) {
   const [selectedTile, setSelectedTile] = useState<TileType>(TileType.GRASS)
   // tiles タブ専用のペイント状態。高さタブ側は HeightGrid 内部の isPainting を使う
   const [isTilePainting, setIsTilePainting] = useState(false)
@@ -381,7 +383,7 @@ function MapEditor({ mapData, rpgProject, onChange, isDark }: MapEditorProps) {
             >
               {previewView === 'raycast' ? 'Raycast プレビュー' : '見下ろし プレビュー'}
             </div>
-            <RPGPlayer gameData={rpgProject} view={previewView} />
+            <RPGPlayer gameData={rpgProject} view={previewView} assetBaseUrl={assetBaseUrl} />
           </div>
         </div>
       )}

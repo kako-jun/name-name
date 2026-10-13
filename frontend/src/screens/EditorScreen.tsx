@@ -959,6 +959,7 @@ function EditorScreen({
                       rpgProject={rpgProject}
                       onChange={handleMapChange}
                       isDark={isDark}
+                      assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
                     />
                   )}
                   {rpgSubTab === 'npc' && (
