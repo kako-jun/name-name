@@ -60,6 +60,7 @@ choice_style: "default"
 | `battle_background_tone` | string | No | RPG 戦闘背景（`battle_background`）の彩度・明度を**表示時のフィルタ**で落とし、キャラ・敵を浮き上がらせるか (#753)。`"on"`（既定）/ `"off"`（素材そのまま）の2択。背景スプライトにだけ効き、キャラ・敵・パネル・テキストには影響しない。画像ファイルは編集しない。背景なしのときは無関係（従来どおりの半透明黒のみ）。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"on"` にフォールバックする。彩度・明度の係数は `frontend/src/game/backgroundTone.ts` の定数が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_background_tone` を読まない |
 | `battle_background_dof` | string | No | RPG 戦闘背景（`battle_background`）の**被写界深度（DoF）風の手前ぼかし** (#753)。`"on"` / `"off"`（既定）の2択。画面の下側（手前）ほど強くぼかし、上（水平線側）はくっきりさせる縦グラデーション。背景スプライトにだけ効き、キャラ・敵・パネル・テキストはぼかさない。`battle_background_tone` とは独立（組み合わせ自由）。背景なしのときは無関係。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"off"` にフォールバックする。ぼかし開始位置・グラデーション幅・最大強さは `frontend/src/game/depthOfField.ts` の `DOF_*` 定数が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_background_dof` を読まない |
 | `battle_log_typewriter` | string | No | RPG 戦闘ログ（メッセージ）の**1 文字ずつ表示** (#755)。`"on"` / `"off"`（既定）の2択。`on` のとき、戦闘ログに新しく積まれた行だけを 1 文字ずつ表示する（表示済みの行は即時表示・複数行が一度に積まれたら上から順に）。タイプ中にコマンドまたはログ帯をタップすると全文を即時表示する（そのタップではコマンドは実行しない）。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"off"` にフォールバックする。速度は `frontend/src/game/battleLogTypewriter.ts` の `BATTLE_LOG_MS_PER_CHAR` が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_log_typewriter` を読まない |
+| `battle_presentation` | string | No | RPG 戦闘の**演出方式** (#745)。`"dq"`（既定）/ `"ff"` の2択。`dq` は現行の見た目と挙動（ログに「〇〇のこうげき！ △△に4のダメージ！」を文で出し、絵は動かない）。`ff`（FF 式）は **行動する側が踏み出して斬って戻る**（味方は左＝敵側へ、敵は右へ）・**対象が短くのけぞる**（点滅はしない）・**HP 0 で倒れる**（`down` ポーズがあれば差し替え、無ければ沈み込み）・**ダメージ数字が対象の位置で跳ねて消える**（ダメージ白・回復緑・ミスは `MISS`）。メッセージ窓には**呪文・アイテムなどの名前だけ**を一度に全文・中央寄せで出し（1 文字ずつにしない）、通常攻撃では窓ごと出さない。ダメージや「〇〇のこうげき！」は文で出さない。`ff` は `battle_layout: side` のときだけ効く（`front` は絵を動かさないので無視）。`ff` のとき `battle_log_typewriter` は使わない。**演出が終わるまで次の行動・コマンド入力は待たされ**、ATB（`battle_atb: on`）ではその間ゲージも止まる。勝敗が決まっても最後の演出（のけぞり・倒れ・数字）を見せ切ってから閉じる。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"dq"` にフォールバックする。時間定数は `frontend/src/game/battleMotion.ts` が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_presentation` を読まない |
 | `battle_horizon` | string | No | RPG 戦闘画面（`side`）の**地平線の高さ** (#747)。画面高さに対する比（`"0"`〜`"1"` の数値文字列。`0` = 画面の上端）。`battle_perspective` が 0 超のときだけ効く。数値でない・未指定は `"0.3"`、範囲外は 0〜1 に丸める。値は parser でバリデーションせず生文字列で透過する。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は読まない |
 | `battle_perspective` | string | No | RPG 戦闘画面（`side`）の**遠近の強さ** (#747)。`"0"`（既定・平面＝現行どおり）〜`"1"`（地平線の幾何どおり）の数値文字列。0 超にすると、奥の行ほど小さく・上に、手前ほど大きく・下に描く（縮尺 = `1 - perspective × (1 - 幾何の縮尺)`、幾何の縮尺 = 地平線からの距離の比。下限 0.3）。敵ラベル・acrylic の台座と影は縮尺に追従する。描画順は奥→手前。数値でない・0 以下・未指定は平面。値は parser でバリデーションせず生文字列で透過する。計算は `frontend/src/game/battleLayout.ts`（`computeDepthScale` / `applyDepthToSlots` / `normalizeBattleDepth`）が正本。**GUI（ブラウザ）専用** |
 | `battle_atb` | string | No | RPG 戦闘の **ATB 方式（FF5 風）の有効化** (#205)。`"on"` / `"off"`（既定）の2択。`on` のとき味方・敵ともゲージを持ち、AGI に比例した速さで溜まり、満タンの順に行動する（ゲージ満タンの全味方に順番にコマンドを出させる。敵は満タンで自動行動し、狙いは生存味方からランダム）。AGI 同値で同時に満タンになった者の順序は乱数。「にげる」はゲージが溜まっていなくてもいつでも選べる。未指定・`off`・不正値は従来ターン制（先頭の生存味方 1 人が行動 → 敵全員）で、数値・挙動は変わらない。値は parser でバリデーションせず生文字列で透過する。emit 時、値に含まれる `"` は除去される。時間はエンジンが持たず、呼び出し側が `BattleEngine.tick(ms)` で与える。ゲージ速度の定数は `battleEngine.ts` の `ATB_FILL_PER_AGI_MS`。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は読まない |
@@ -1664,6 +1665,7 @@ AGI: 2
 EXP: 2
 GOLD: 1
 スプライト: monsters/slime.png
+ポーズ: hurt=monsters/slime-hurt.png, down=monsters/slime-down.png
 [/モンスター]
 ```
 
@@ -1678,6 +1680,7 @@ GOLD: 1
 | `EXP` | `exp` / `経験値` | No | 倒したときに得られる経験値 |
 | `GOLD` | `gold` / `G` / `ゴールド` | No | 倒したときに落とすゴールド |
 | `スプライト` | `sprite` | No | スプライト画像への相対パス |
+| `ポーズ` | `poses` | No | 戦闘ポーズ別スプライト (#745)。カンマ区切りの `キー=パス`（例: `idle=a.png, slash=b.png`）。キーは `idle` / `ready` / `step` / `slash` / `hurt` / `down` / `victory`（部分指定可・大小無視）。`battle_presentation: ff` のときだけ、局面ごとに絵を差し替える（`dq` では読まない）。`=` が無い・キーかパスが空の要素は無視、同じキーは後勝ち。未知のキーは parser は透過し、runtime が無視する。指定の無いポーズは近い絵に落とす（`slash`→`step`→`ready`→`idle`、`step`→`ready`→`idle`、`ready`・`hurt`・`victory`→`idle`）。`down` は代替せず、無ければ沈み込みで表す。どれも無ければ従来の 1 枚の `スプライト` のまま動きだけ付く。`スプライト` が無く `idle` があれば（`ff` のとき）`idle` を基本の絵にする |
 | `builtin` | — | No | 専用関数 ID（特殊行動はここに委譲） |
 
 `名前` が無い場合はブロックが破棄される。
@@ -1722,6 +1725,7 @@ AGI: 4
 |---|---|---|---|
 | `名前` | `name` | Yes | パーティメンバー名 |
 | `スプライト` | `sprite` | No | 立ち絵 / 戦闘スプライトの相対パス |
+| `ポーズ` | `poses` | No | 戦闘ポーズ別スプライト (#745)。書式・意味は [モンスター](#モンスター) の `ポーズ` と同じ（例: `ポーズ: idle=hero-idle.png, step=hero-step.png, slash=hero-slash.png, hurt=hero-hurt.png, down=hero-down.png, victory=hero-victory.png`） |
 | `隊列` | `row` | No (default front) | 戦闘の隊列 (#747)。`front`（前衛・既定）/ `back`（後衛。`後衛` `後列` も可、大小無視。それ以外は前衛）。`battle_layout: side` のときだけ有効（`front` 配置は隊列を描かず補正もしない）。後衛は斜め一列の位置から画面の右寄り（敵から遠い側）に半歩（その人の幅の 0.5 倍）下げて描き、**受ける物理ダメージ・与える近接物理ダメージ（通常攻撃）が半分**（FF4〜6 準拠）。両方後衛なら 2 回半分。丸めは半分ごとに切り捨て・最低 1（`computeAttackDamage` の最低 1 に揃える）。呪文・アイテム（DSL / builtin）は隊列の影響を受けない。計算は `battleEngine.ts` の `applyRowToPhysicalDamage` / `computeRowAttackDamage`。戦闘中の入れ替えは未対応（#204）。従来ターン制の BattleEngine は攻撃側・被弾側とも `firstAlive(party)` の 1 人だけなので、後衛のダメージ半減は**先頭の生存者が後衛のときだけ**見える。ATB（`battle_atb: on`、#205）では全員がゲージ順に行動し、敵の狙いも生存味方からランダムなので、後衛の半減が常に見える。 |
 | `レベル` | `level` / `Lv` | No (default 1) | 初期レベル |
 | `HP` | `hp` | No (default 1) | 初期 HP（最低 1、`0` 即死扱いを避ける） |
