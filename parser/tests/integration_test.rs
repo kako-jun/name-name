@@ -5330,6 +5330,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_background: None,
         sprite_style: None,
         window_style: None,
+        battle_background_tone: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10504,6 +10505,7 @@ fn telop_test_doc_base() -> Document {
         battle_background: None,
         sprite_style: None,
         window_style: None,
+        battle_background_tone: None,
         chapters: vec![],
     }
 }
@@ -11255,4 +11257,18 @@ fn test_jump_serializes_as_externally_tagged_json_for_wasm_consumers() {
     let json = serde_json::to_value(&doc.chapters[0].scenes[0].events).unwrap();
     let last = json.as_array().unwrap().last().unwrap().clone();
     assert_eq!(last, serde_json::json!({ "Jump": { "target": "1-2" } }));
+}
+
+// ---- #753: battle_background_tone (frontmatter 透過。window_style と同じ流儀) ----
+
+#[test]
+fn test_battle_background_tone_off_parses() {
+    let doc = parser::parse(&battle_doc("battle_background_tone: \"off\"\n"));
+    assert_eq!(doc.battle_background_tone.as_deref(), Some("off"));
+}
+
+#[test]
+fn test_battle_background_tone_unset_is_none() {
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.battle_background_tone, None);
 }

@@ -1571,6 +1571,12 @@ pub struct Document {
     /// フォールバックする。GUI 専用（TUI は読まない）。frontmatter `window_style:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_style: Option<String>,
+    /// RPG 戦闘背景の彩度・明度を表示時のフィルタで落とすか (#753)。`"on"`（既定）/ `"off"` の2択。
+    /// 値は parser でバリデーションせず生文字列で透過する（`window_style` と同じ流儀）。未知値・空文字は
+    /// None 扱いとし、runtime 側で `"on"` にフォールバックする。GUI 専用（TUI は読まない）。
+    /// frontmatter `battle_background_tone:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_background_tone: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

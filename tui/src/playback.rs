@@ -2318,6 +2318,7 @@ mod tests {
             battle_background: None,
             sprite_style: None,
             window_style: None,
+            battle_background_tone: None,
             chapters,
         }
     }
