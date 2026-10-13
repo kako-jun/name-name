@@ -64,7 +64,7 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
-import { AcrylicEdgeFilter } from './acrylicEdgeFilter'
+import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import {
   computeAcrylicGeometry,
   resolveAcrylicParams,
@@ -279,9 +279,11 @@ interface EntityView {
   fallback: Graphics
   color: number
   sprite: Sprite | null
-  /** acrylic のとき: 台座・影を描く Graphics（fallback の直上・sprite の直下）と、sprite にかけるフィルタ。画像読み込み成功まで null/非表示 */
+  /** acrylic のとき: 台座・影を描く Graphics（fallback の直上）と、スプライトの直下に敷く板のスプライト (#760)。画像読み込み成功まで null/非表示。板は canvas が使えない環境では null */
   acrylicBack: Graphics | null
-  acrylicFilter: AcrylicEdgeFilter | null
+  acrylicPlate: Sprite | null
+  /** 板テクスチャ上で元画像の左上がある位置(px)。配置時にこのぶん左上へずらす */
+  acrylicPlatePad: number
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
 }
@@ -406,12 +408,17 @@ export class BattleScreen extends Container {
     this.refresh()
   }
 
+  /** アクリル板テクスチャを作る (#760)。canvas が使えない・読み出せないときは null（テストで差し替えられるよう分けてある） */
+  protected makeAcrylicPlate(tex: Texture): AcrylicPlate | null {
+    return this.acrylicParams ? createAcrylicPlateTexture(tex, this.acrylicParams) : null
+  }
+
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.destroyedFlag = true
-    // フィルタは Container.destroy の対象外なので自分で破棄する (#737)
+    // 板のテクスチャは自前で作ったものなので自分で破棄する (#760)
     for (const v of [...this.enemyViews, ...this.partyViews]) {
-      v.acrylicFilter?.destroy()
-      v.acrylicFilter = null
+      v.acrylicPlate?.destroy({ texture: true })
+      v.acrylicPlate = null
     }
     this.backgroundToneFilter?.destroy()
     this.backgroundToneFilter = null
@@ -659,7 +666,8 @@ export class BattleScreen extends Container {
       color,
       sprite: null,
       acrylicBack,
-      acrylicFilter: null,
+      acrylicPlate: null,
+      acrylicPlatePad: 0,
       label,
     }
     if (entity.sprite) void this.loadEntitySprite(view, entity.sprite)
@@ -673,17 +681,19 @@ export class BattleScreen extends Container {
       if (this.destroyedFlag || view.container.destroyed) return
       const sprite = new Sprite(tex)
       view.sprite = sprite
-      view.container.addChildAt(sprite, view.acrylicBack ? 2 : 1)
       if (view.acrylicBack) {
-        // フィルタは texture ごとに 1 回だけ作る。余白・線の幅は placeEntityView が枠の大きさに合わせて更新する
-        const p = this.acrylicParams
-        view.acrylicFilter = new AcrylicEdgeFilter({
-          marginPx: 0,
-          linePx: 0,
-          color: p?.lineColor ?? 0xffffff,
-          alpha: p?.lineAlpha ?? 0,
-        })
+        // アクリル板 (#760): 元画像の解像度で 1 回だけ作り、スプライトの直下に敷く。作れない環境では板なし
+        const plate = this.makeAcrylicPlate(tex)
+        if (plate) {
+          const plateSprite = new Sprite(plate.texture)
+          view.acrylicPlate = plateSprite
+          view.acrylicPlatePad = plate.pad
+          view.container.addChildAt(plateSprite, 2)
+        }
+        view.container.addChildAt(sprite, plate ? 3 : 2)
         view.acrylicBack.visible = true
+      } else {
+        view.container.addChildAt(sprite, 1)
       }
       this.layout()
       this.refresh()
@@ -1080,15 +1090,21 @@ export class BattleScreen extends Container {
     if (!slot) return
     const size = slot.size
     // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
-    const acrylic = !!(this.acrylicParams && view.acrylicBack && view.acrylicFilter && view.sprite)
+    const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
     view.container.position.set(acrylic ? slot.x - (size - slot.width) / 2 : slot.x, slot.y)
     const fb = computeFallbackRect(size)
     const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
     const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
     view.fallback.clear().rect(fbX, fb.y, fbW, fb.h).fill(view.color)
     if (view.sprite) {
-      if (this.acrylicParams && view.acrylicBack && view.acrylicFilter) {
-        this.placeAcrylic(view.sprite, view.acrylicBack, view.acrylicFilter, size)
+      if (this.acrylicParams && view.acrylicBack) {
+        this.placeAcrylic(
+          view.sprite,
+          view.acrylicBack,
+          view.acrylicPlate,
+          view.acrylicPlatePad,
+          size
+        )
       } else {
         const fit = computeContainFitRect(
           view.sprite.texture.width,
@@ -1120,7 +1136,8 @@ export class BattleScreen extends Container {
   private placeAcrylic(
     sprite: Sprite,
     back: Graphics,
-    filter: AcrylicEdgeFilter,
+    plate: Sprite | null,
+    platePad: number,
     size: number
   ): void {
     const params = this.acrylicParams
@@ -1143,8 +1160,13 @@ export class BattleScreen extends Container {
         .ellipse(g.highlight.cx, g.highlight.cy, g.highlight.rx, g.highlight.ry)
         .fill({ color: 0xffffff, alpha: params.highlightAlpha })
     }
-    filter.setWidths(g.marginPx, g.linePx)
-    sprite.filters = g.linePx > 0 && params.lineAlpha > 0 ? [filter] : null
+    if (plate) {
+      // 板はスプライトと同じ倍率で縮小する（元画像の解像度の板を mipmap 付きで縮める）。外へ pad ぶん広がる
+      const k = sprite.texture.width > 0 ? g.sprite.width / sprite.texture.width : 0
+      plate.scale.set(k)
+      plate.position.set(g.sprite.x - platePad * k, g.sprite.y - platePad * k)
+      plate.visible = k > 0 && g.linePx > 0 && params.lineAlpha > 0
+    }
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true
   }

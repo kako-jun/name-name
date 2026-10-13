@@ -38,7 +38,6 @@ import {
   estimateTextWidth,
 } from './battleLayout'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
-import type { AcrylicEdgeFilter } from './acrylicEdgeFilter'
 import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 
 const DEAD_ALPHA = 0.3
@@ -63,7 +62,8 @@ interface EntityViewLike {
   fallback: Graphics
   sprite: Sprite | null
   acrylicBack: Graphics | null
-  acrylicFilter: AcrylicEdgeFilter | null
+  acrylicPlate: Sprite | null
+  acrylicPlatePad: number
   label: Text | null
 }
 interface Internals {
@@ -873,15 +873,23 @@ describe('BattleScreen: acrylic (#737)', () => {
       .enemies[0].size
   const defaultGeometry = (size: number) =>
     computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams())
+  const PLATE_PAD = 8
+  /** jsdom には canvas が無いので、板テクスチャの生成だけ差し替える（形・質感の計算は acrylicPlate.test.ts） */
+  beforeEach(() => {
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+      texture: sizedTexture(TEX_W + PLATE_PAD * 2, TEX_H + PLATE_PAD * 2),
+      pad: PLATE_PAD,
+    })) as never)
+  })
 
   describe('none（回帰）', () => {
-    it('spriteStyle 未指定: acrylicBack / acrylicFilter は null・sprite.filters は空・子は fallback→sprite→label の 3 つ', async () => {
+    it('spriteStyle 未指定: acrylicBack / acrylicPlate は null・sprite.filters は空・子は fallback→sprite→label の 3 つ', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], sideNone))
       await flushPromises()
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack).toBeNull()
-      expect(v.acrylicFilter).toBeNull()
+      expect(v.acrylicPlate).toBeNull()
       expect(v.sprite!.filters ?? []).toHaveLength(0)
       // ラベルは container の外（labelLayer・#747）
       expect(v.container.children).toHaveLength(2)
@@ -912,7 +920,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const va = internals(a).enemyViews[0]
       const vb = internals(b).enemyViews[0]
       expect(vb.acrylicBack).toBeNull()
-      expect(vb.acrylicFilter).toBeNull()
+      expect(vb.acrylicPlate).toBeNull()
       expect(vb.container.children).toHaveLength(va.container.children.length)
       expect([vb.sprite!.x, vb.sprite!.y, vb.sprite!.width, vb.sprite!.height]).toEqual([
         va.sprite!.x,
@@ -933,7 +941,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       await flushPromises()
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack).toBeNull()
-      expect(v.acrylicFilter).toBeNull()
+      expect(v.acrylicPlate).toBeNull()
       expect(v.container.children).toHaveLength(2)
     })
   })
@@ -956,32 +964,58 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.acrylicBack).not.toBeNull()
       expect(v.acrylicBack!.visible).toBe(false)
       expect(v.fallback.visible).toBe(true)
-      expect(v.acrylicFilter).toBeNull()
+      expect(v.acrylicPlate).toBeNull()
       expect(v.sprite).toBeNull()
     })
 
-    it('成功: acrylicBack 表示・filter ちょうど 1 つ・fallback 非表示・sprite.filters は [filter]', async () => {
+    it('成功: acrylicBack 表示・板ちょうど 1 つ・fallback 非表示・sprite.filters は空 (#760)', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack!.visible).toBe(true)
-      expect(v.acrylicFilter).not.toBeNull()
+      expect(v.acrylicPlate).not.toBeNull()
       expect(v.fallback.visible).toBe(false)
-      expect(v.sprite!.filters).toHaveLength(1)
-      expect((v.sprite!.filters as unknown[])[0]).toBe(v.acrylicFilter)
+      expect(v.sprite!.filters ?? []).toHaveLength(0)
     })
 
-    it('成功: 子の順序は fallback → acrylicBack → sprite → label', async () => {
+    it('成功: 子の順序は fallback → acrylicBack → 板 → sprite（label は container の外）(#760)', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      expect(v.container.children).toHaveLength(3)
+      expect(v.container.children).toHaveLength(4)
       expect(v.container.children[0]).toBe(v.fallback)
       expect(v.container.children[1]).toBe(v.acrylicBack)
-      expect(v.container.children[2]).toBe(v.sprite)
+      expect(v.container.children[2]).toBe(v.acrylicPlate)
+      expect(v.container.children[3]).toBe(v.sprite)
       expect(v.label!.parent).toBe(internals(s).labelLayer)
+    })
+
+    it('板を作れない環境（canvas 無し）: 板なしで台座・sprite だけ描く (#760)', async () => {
+      okLoad()
+      vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation(
+        (() => null) as never
+      )
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicPlate).toBeNull()
+      expect(v.acrylicBack!.visible).toBe(true)
+      expect(v.container.children).toHaveLength(3)
+      expect(v.container.children[2]).toBe(v.sprite)
+    })
+
+    it('成功: 板は sprite と同じ倍率で、pad ぶん左上へ広がって敷かれる (#760)', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const k = v.sprite!.width / TEX_W
+      expect(v.acrylicPlate!.scale.x).toBeCloseTo(k, 9)
+      expect(v.acrylicPlate!.x).toBeCloseTo(v.sprite!.x - PLATE_PAD * k, 9)
+      expect(v.acrylicPlate!.y).toBeCloseTo(v.sprite!.y - PLATE_PAD * k, 9)
+      expect(v.acrylicPlate!.visible).toBe(true)
     })
 
     it('成功: sprite は slot 枠に収まり、足元が台座の中心に乗る（computeAcrylicGeometry と一致）', async () => {
@@ -1046,7 +1080,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.sprite).toBeNull()
       expect(v.fallback.visible).toBe(true)
       expect(v.acrylicBack!.visible).toBe(false)
-      expect(v.acrylicFilter).toBeNull()
+      expect(v.acrylicPlate).toBeNull()
     })
 
     it('味方側のスプライトにも適用される', async () => {
@@ -1054,14 +1088,13 @@ describe('BattleScreen: acrylic (#737)', () => {
       const s = track(make([withSprite('hero')], [entity('slime')], acrylic))
       await flushPromises()
       const v = internals(s).partyViews[0]
-      expect(v.acrylicFilter).not.toBeNull()
+      expect(v.acrylicPlate).not.toBeNull()
       expect(v.acrylicBack!.visible).toBe(true)
-      expect(v.sprite!.filters).toHaveLength(1)
-      expect(v.container.children).toHaveLength(3) // 味方にラベルはない: fallback → back → sprite
-      expect(v.container.children[2]).toBe(v.sprite)
+      expect(v.container.children).toHaveLength(4) // 味方にラベルはない: fallback → back → 板 → sprite
+      expect(v.container.children[3]).toBe(v.sprite)
     })
 
-    it('複数体（敵 3・味方 2）: 各 view が独立の filter を持つ（共有しない）', async () => {
+    it('複数体（敵 3・味方 2）: 各 view が独立の板を持つ（共有しない）', async () => {
       okLoad()
       const s = track(
         make(
@@ -1073,10 +1106,9 @@ describe('BattleScreen: acrylic (#737)', () => {
       await flushPromises()
       const views = [...internals(s).enemyViews, ...internals(s).partyViews]
       expect(views).toHaveLength(5)
-      const filters = views.map((v) => v.acrylicFilter)
-      for (const f of filters) expect(f).not.toBeNull()
-      expect(new Set(filters).size).toBe(5)
-      for (const v of views) expect(v.sprite!.filters).toHaveLength(1)
+      const plates = views.map((v) => v.acrylicPlate)
+      for (const f of plates) expect(f).not.toBeNull()
+      expect(new Set(plates).size).toBe(5)
     })
 
     it('成功経路で console.error / warn が呼ばれない', async () => {
@@ -1117,40 +1149,39 @@ describe('BattleScreen: acrylic (#737)', () => {
   })
 
   describe('acrylic: redraw / パラメータ', () => {
-    it('redraw を複数回呼んでも filter インスタンスは同一で filters.length は 1・setWidths が新 size で呼ばれる', async () => {
+    it('redraw を複数回呼んでも板インスタンスは同一で、sprite に追従して再配置される (#760)', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      const filter = v.acrylicFilter!
-      const setWidths = vi.spyOn(filter, 'setWidths')
-      s.redraw(400, 700)
-      s.redraw(800, 450)
-      s.redraw(400, 700)
-      expect(v.acrylicFilter).toBe(filter)
-      expect(v.sprite!.filters).toHaveLength(1)
-      expect(setWidths).toHaveBeenCalledTimes(3)
-      const g = defaultGeometry(slotSize(400, 700))
-      expect(setWidths).toHaveBeenLastCalledWith(g.marginPx, g.linePx)
-      const g2 = defaultGeometry(slotSize(800, 450))
-      expect(setWidths).toHaveBeenNthCalledWith(2, g2.marginPx, g2.linePx)
+      const plate = v.acrylicPlate!
+      for (const [w, h] of [
+        [400, 700],
+        [800, 450],
+        [400, 700],
+      ]) {
+        s.redraw(w, h)
+        expect(v.acrylicPlate).toBe(plate)
+        const k = v.sprite!.width / TEX_W
+        expect(plate.scale.x).toBeCloseTo(k, 9)
+        expect(plate.x).toBeCloseTo(v.sprite!.x - PLATE_PAD * k, 9)
+      }
     })
 
-    it('redraw で size が 0 になると filters は null・通常に戻すと再装着される', async () => {
+    it('redraw で size が 0 になると板は非表示・通常に戻すと再表示される', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      const filter = v.acrylicFilter!
+      const plate = v.acrylicPlate!
       s.redraw(0, 0)
       expect(slotSize(0, 0)).toBeLessThanOrEqual(0)
-      expect(v.sprite!.filters ?? []).toHaveLength(0)
+      expect(plate.visible).toBe(false)
       s.redraw(800, 450)
-      expect(v.sprite!.filters).toHaveLength(1)
-      expect((v.sprite!.filters as unknown[])[0]).toBe(filter)
+      expect(plate.visible).toBe(true)
     })
 
-    it('spriteStyleParams.lineAlpha=0 → filters は付かない・0.01 → 付く', async () => {
+    it('spriteStyleParams.lineAlpha=0 → 板は非表示・0.01 → 表示', async () => {
       okLoad()
       const off = track(
         make([entity('hero')], [withSprite('slime')], {
@@ -1165,8 +1196,8 @@ describe('BattleScreen: acrylic (#737)', () => {
         })
       )
       await flushPromises()
-      expect(internals(off).enemyViews[0].sprite!.filters ?? []).toHaveLength(0)
-      expect(internals(on).enemyViews[0].sprite!.filters).toHaveLength(1)
+      expect(internals(off).enemyViews[0].acrylicPlate!.visible).toBe(false)
+      expect(internals(on).enemyViews[0].acrylicPlate!.visible).toBe(true)
     })
 
     it('hasBase=false → 台座・影は描かれず、足元は枠の下端から余白+線ぶん上', async () => {
@@ -1232,7 +1263,7 @@ describe('BattleScreen: acrylic (#737)', () => {
         await flushPromises()
         for (const v of views) {
           expect(v.sprite).toBeNull()
-          expect(v.acrylicFilter).toBeNull()
+          expect(v.acrylicPlate).toBeNull()
         }
         expect(onRejection).not.toHaveBeenCalled()
       } finally {
@@ -1240,16 +1271,16 @@ describe('BattleScreen: acrylic (#737)', () => {
       }
     })
 
-    it('成功後の destroy で filter.destroy が 1 回呼ばれ、view の参照は null になる', async () => {
+    it('成功後の destroy で板（テクスチャごと）が破棄され、view の参照は null になる (#760)', async () => {
       okLoad()
       const s = make([entity('hero')], [withSprite('slime')], acrylic)
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      const filter = v.acrylicFilter!
-      const destroy = vi.spyOn(filter, 'destroy')
+      const plate = v.acrylicPlate!
+      const destroy = vi.spyOn(plate, 'destroy')
       s.destroy({ children: true })
-      expect(destroy).toHaveBeenCalledTimes(1)
-      expect(v.acrylicFilter).toBeNull()
+      expect(destroy).toHaveBeenCalledWith({ texture: true })
+      expect(v.acrylicPlate).toBeNull()
     })
   })
 })

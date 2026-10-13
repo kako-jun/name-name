@@ -2,20 +2,12 @@
  * spriteStyle (#737) の純粋関数テスト。
  *
  * 「仕様値」と書いたテストは、定数を参照せずリテラルで固定している（定数の値だけが変わる変異を捕まえるため）。
- * 定数参照は導出式のテストにだけ使う。PixiJS の実描画・GLSL コンパイルは対象外（jsdom に WebGL が無い）。
+ * 定数参照は導出式のテストにだけ使う。PixiJS の実描画は対象外。
  */
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_ACRYLIC_PARAMS,
-  EDGE_INNER_SPACING_PX,
-  EDGE_MAX_INNER_TAPS,
-  EDGE_MAX_LINE_PX,
-  EDGE_MAX_MARGIN_PX,
-  EDGE_MAX_OUTER_TAPS,
-  EDGE_MAX_TAPS,
-  EDGE_OUTER_SPACING_PX,
   computeAcrylicGeometry,
-  computeEdgeOffsets,
   normalizeSpriteStyle,
   resolveAcrylicParams,
   type AcrylicParams,
@@ -50,6 +42,9 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
+      plateFillAlpha: 0.07,
+      specularAlpha: 0.2,
+      innerShadowAlpha: 0.12,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -69,6 +64,9 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
+      plateFillAlpha: 0.07,
+      specularAlpha: 0.2,
+      innerShadowAlpha: 0.12,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -116,6 +114,9 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         maxLinePx: 4,
         lineColor: 0xe6f3ff,
         lineAlpha: 0.85,
+        plateFillAlpha: 0.07,
+        specularAlpha: 0.2,
+        innerShadowAlpha: 0.12,
         hasBase: true,
         baseWidthRatio: 0.7,
         baseHeightRatio: 0.28,
@@ -481,141 +482,5 @@ describe('computeAcrylicGeometry: 余白・線の上限', () => {
     })
     expect(g.marginPx).toBe(6)
     expect(g.linePx).toBe(4)
-  })
-})
-
-describe('computeEdgeOffsets', () => {
-  const radius = (o: readonly [number, number]): number => Math.hypot(o[0], o[1])
-  const approxEq = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6
-
-  it('仕様値: 上限・間隔・タップ予算の定数', () => {
-    expect(EDGE_MAX_MARGIN_PX).toBe(6)
-    expect(EDGE_MAX_LINE_PX).toBe(4)
-    expect(EDGE_INNER_SPACING_PX).toBe(2)
-    expect(EDGE_OUTER_SPACING_PX).toBe(3)
-    expect(EDGE_MAX_TAPS).toBe(64)
-    expect(EDGE_MAX_INNER_TAPS).toBe(40)
-    expect(EDGE_MAX_OUTER_TAPS).toBe(24)
-  })
-
-  it('余白 0 なら内側は空・線 0 なら外側は空', () => {
-    expect(computeEdgeOffsets(0, 3).inner).toEqual([])
-    expect(computeEdgeOffsets(3, 0).outer).toEqual([])
-    expect(computeEdgeOffsets(0, 0)).toEqual({ inner: [], outer: [] })
-  })
-
-  it.each([[NaN], [-1], [Infinity], [-Infinity]])(
-    '余白・線に %s を渡すと 0 と同じ（空）',
-    (bad) => {
-      expect(computeEdgeOffsets(bad, bad)).toEqual({ inner: [], outer: [] })
-      expect(computeEdgeOffsets(bad, 3).inner).toEqual([])
-      expect(computeEdgeOffsets(3, bad).outer).toEqual([])
-    }
-  )
-
-  it('外側は半径 余白+線 の円上だけ（内側とは別の半径）', () => {
-    const { outer } = computeEdgeOffsets(3, 2)
-    expect(outer.length).toBeGreaterThan(0)
-    for (const o of outer) expect(approxEq(radius(o), 5)).toBe(true)
-  })
-
-  it('内側は最外の円が半径=余白で、全サンプルが余白以内', () => {
-    for (const m of [0.5, 1, 2, 3, 4.5, 6]) {
-      const { inner } = computeEdgeOffsets(m, 1)
-      const rs = inner.map(radius)
-      expect(Math.max(...rs)).toBeCloseTo(m, 6)
-      for (const r of rs) expect(r).toBeLessThanOrEqual(m + 1e-6)
-    }
-  })
-
-  it('内側の円の半径間隔が EDGE_INNER_SPACING_PX 以下（細い部分の取りこぼし防止）', () => {
-    for (let m = 0.25; m <= 6; m += 0.25) {
-      const radii = [
-        ...new Set(computeEdgeOffsets(m, 1).inner.map((o) => Math.round(radius(o) * 1e6) / 1e6)),
-      ].sort((a, b) => a - b)
-      let prev = 0
-      for (const r of radii) {
-        expect(r - prev, `m=${m}`).toBeLessThanOrEqual(2 + 1e-5)
-        prev = r
-      }
-    }
-  })
-
-  it('円周上の隣接サンプル間隔が内側 2px 以下・外側 3px 以下', () => {
-    const gap = (pts: readonly (readonly [number, number])[], r: number): number => {
-      const angles = pts.map((p) => Math.atan2(p[1], p[0])).sort((a, b) => a - b)
-      let max = angles[0] + 2 * Math.PI - angles[angles.length - 1]
-      for (let i = 1; i < angles.length; i++) max = Math.max(max, angles[i] - angles[i - 1])
-      return max * r
-    }
-    for (const m of [2, 4, 6]) {
-      const { inner, outer } = computeEdgeOffsets(m, 4)
-      const rings = new Map<number, [number, number][]>()
-      for (const o of inner) {
-        const k = Math.round(radius(o) * 1e4)
-        rings.set(k, [...(rings.get(k) ?? []), [o[0], o[1]]])
-      }
-      for (const [k, pts] of rings)
-        expect(gap(pts, k / 1e4), `m=${m}`).toBeLessThanOrEqual(2 + 1e-6)
-      expect(gap(outer, m + 4), `m=${m}`).toBeLessThanOrEqual(3 + 1e-6)
-    }
-  })
-
-  it('円ごとに角度の位相がずれる（隣り合う円の同じ方向に並ばない）', () => {
-    const { inner } = computeEdgeOffsets(6, 1) // 半径 2,4,6 の 3 円
-    const angleSet = new Set(inner.map((o) => Math.round(Math.atan2(o[1], o[0]) * 1e4)))
-    expect(angleSet.size).toBe(inner.length) // どの 2 点も同じ角度を共有しない（放射状の星形にならない）
-  })
-
-  it('スイープ: 総タップ ≤ 64・内側 ≤ 40・外側 ≤ 24', () => {
-    let maxTotal = 0
-    for (let m = 0; m <= 8; m += 0.1)
-      for (let l = 0; l <= 6; l += 0.1) {
-        const { inner, outer } = computeEdgeOffsets(m, l, 1)
-        expect(inner.length).toBeLessThanOrEqual(40)
-        expect(outer.length).toBeLessThanOrEqual(24)
-        expect(inner.length + outer.length).toBeLessThanOrEqual(64)
-        maxTotal = Math.max(maxTotal, inner.length + outer.length)
-      }
-    // 最悪（余白 6・線 4）は 39 + 21 = 60。64 の予算に余裕がある
-    expect(maxTotal).toBe(60)
-  })
-
-  it('余白・線は上限（6 / 4 論理 px）に切り詰められる', () => {
-    const big = computeEdgeOffsets(100, 100)
-    const cap = computeEdgeOffsets(6, 4)
-    expect(big).toEqual(cap)
-    expect(Math.max(...big.outer.map(radius))).toBeCloseTo(10, 6)
-  })
-
-  it('変位は実 px = 論理配置 × resolution（個数・配置は resolution に依存しない）', () => {
-    const base = computeEdgeOffsets(5, 3, 1)
-    for (const res of [1.5, 2, 3]) {
-      const hi = computeEdgeOffsets(5, 3, res)
-      expect(hi.inner.length).toBe(base.inner.length)
-      expect(hi.outer.length).toBe(base.outer.length)
-      hi.inner.forEach((o, i) => {
-        expect(o[0] / res).toBeCloseTo(base.inner[i][0], 6)
-        expect(o[1] / res).toBeCloseTo(base.inner[i][1], 6)
-      })
-      hi.outer.forEach((o, i) => {
-        expect(o[0] / res).toBeCloseTo(base.outer[i][0], 6)
-        expect(o[1] / res).toBeCloseTo(base.outer[i][1], 6)
-      })
-    }
-  })
-
-  it.each([[0], [-2], [NaN]])('resolution %s は 1 として扱う', (bad) => {
-    expect(computeEdgeOffsets(4, 2, bad)).toEqual(computeEdgeOffsets(4, 2, 1))
-  })
-
-  it('仕様値: 余白 2 → 内側 1 円（半径 2・7 方向）、線 1.5 → 外側 半径 3.5・8 方向', () => {
-    const { inner, outer } = computeEdgeOffsets(2, 1.5)
-    expect(inner.length).toBe(7) // ceil(2π·2/2)=7
-    expect(outer.length).toBe(8) // ceil(2π·3.5/3)=8（下限 6 を上回る）
-  })
-
-  it('方向数の下限は 6（小さな円でも）', () => {
-    expect(computeEdgeOffsets(0.2, 0).inner.length).toBe(6)
   })
 })
