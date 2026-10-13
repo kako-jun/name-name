@@ -38,6 +38,7 @@ import {
   estimateTextWidth,
 } from './battleLayout'
 import { computeSlitY } from './acrylicBase'
+import { computeShadowTransform } from './acrylicShadow'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
 import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 
@@ -66,6 +67,7 @@ interface EntityViewLike {
   acrylicPlate: Sprite | null
   acrylicPlatePad: number
   acrylicBase: Sprite | null
+  acrylicShadow: Sprite | null
   label: Text | null
 }
 interface Internals {
@@ -1060,6 +1062,52 @@ describe('BattleScreen: acrylic (#737)', () => {
       // 共有テクスチャは view の破棄で壊さない
       s.destroy({ children: true })
       expect(baseTex.destroyed).toBe(false)
+    })
+
+    it('影: 板テクスチャに影があれば shadowLayer（全キャラの下）に Sprite で敷き、足元基点で変形する (#760)', async () => {
+      okLoad()
+      vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+        texture: sizedTexture(TEX_W + 16, TEX_H + 16),
+        pad: 8,
+        shadow: sizedTexture(TEX_W + 16, TEX_H + 16),
+        foot: { x: 8 + TEX_W / 2, y: 8 + TEX_H },
+      })) as never)
+      const s = track(make([withSprite('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const i = internals(s) as unknown as {
+        shadowLayer: Container
+        sideStage: Container
+        children: Container[]
+      }
+      expect(i.shadowLayer.children).toHaveLength(2) // 敵 1 + 味方 1
+      // 影の層は sideStage（全スプライトの親）より下
+      expect(i.children.indexOf(i.shadowLayer)).toBeLessThan(i.children.indexOf(i.sideStage))
+      const v = internals(s).enemyViews[0]
+      const sh = v.acrylicShadow!
+      expect(sh.parent).toBe(i.shadowLayer)
+      expect(sh.pivot.x).toBe(8 + TEX_W / 2)
+      expect(sh.pivot.y).toBe(8 + TEX_H)
+      const k = v.sprite!.width / TEX_W
+      const t = computeShadowTransform(resolveAcrylicParams(), k)
+      expect(sh.scale.x).toBeCloseTo(t.scaleX, 9)
+      expect(sh.scale.y).toBeCloseTo(t.scaleY, 9)
+      expect(sh.skew.x).toBeCloseTo(t.skewX, 9)
+      // 基点 = スプライト下端の中央（画面座標）
+      expect(sh.x).toBeCloseTo(v.container.x + v.sprite!.x + v.sprite!.width / 2, 6)
+      expect(sh.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height, 6)
+      // 破棄で影のテクスチャも破棄され、参照は null
+      s.destroy({ children: true })
+      expect(v.acrylicShadow).toBeNull()
+    })
+
+    it('影: none では shadowLayer を作らない・板のテクスチャに影が無ければ影なし (#760)', async () => {
+      okLoad()
+      const n = track(make([entity('hero')], [withSprite('slime')], sideNone))
+      await flushPromises()
+      expect((internals(n) as unknown as { shadowLayer: unknown }).shadowLayer ?? null).toBeNull()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      expect(internals(s).enemyViews[0].acrylicShadow).toBeNull()
     })
 
     it('板はスリットの高さで水平に切られる（スリットと同じ computeSlitY の値）・スプライトの足元は切らない (#760)', async () => {

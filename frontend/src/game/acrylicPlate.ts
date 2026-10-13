@@ -112,6 +112,8 @@ export interface PlateRaster {
   pad: number
   /** RGBA 非プリマルチ（0〜255） */
   rgba: Uint8ClampedArray
+  /** 板の形（0〜1・width x height）。地面の影 (acrylicShadow.ts) の元にする */
+  shape: Float32Array
 }
 
 type PlateParams = Pick<
@@ -140,7 +142,13 @@ export function renderAcrylicPlate(
   params: PlateParams
 ): PlateRaster {
   if (!(w > 0) || !(h > 0) || alpha.length < w * h) {
-    return { width: 1, height: 1, pad: 0, rgba: new Uint8ClampedArray(4) }
+    return {
+      width: 1,
+      height: 1,
+      pad: 0,
+      rgba: new Uint8ClampedArray(4),
+      shape: new Float32Array(1),
+    }
   }
   const { spread, rim, pad } = computePlateLayout(w, h, params)
   const W = w + pad * 2
@@ -214,5 +222,5 @@ export function renderAcrylicPlate(
       out[i * 4 + 3] = Math.round(clamp01(a) * 255)
     }
   }
-  return { width: W, height: H, pad, rgba: out }
+  return { width: W, height: H, pad, rgba: out, shape }
 }

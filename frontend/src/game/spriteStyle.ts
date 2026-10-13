@@ -51,6 +51,14 @@ export interface AcrylicParams {
   baseSideAlpha: number
   /** 台座の板の差し込み口（スリット）の暗さ（0〜1）(#760) */
   slitAlpha: number
+  /** 地面に落とすアクスタ本体の影の不透明度（0〜1）(#760) */
+  castAlpha: number
+  /** 影を縦につぶす率（0.1〜1。小さいほど地面に寝る）(#760) */
+  castSquash: number
+  /** 影を右へ傾ける量（つぶした高さ 1px あたりの右へのずれ px。-2〜2）(#760) */
+  castShear: number
+  /** 影のぼかし半径 / 画像の長辺（0〜0.1）(#760) */
+  castBlurRatio: number
   /** 台座を持つか（false なら台座と床影を描かず、スプライトは枠いっぱいに収める） */
   hasBase: boolean
   /** 台座（黒い円形＝楕円）の幅 / 枠一辺 */
@@ -81,6 +89,10 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   baseFillAlpha: 0.14,
   baseSideAlpha: 0.26,
   slitAlpha: 0.3,
+  castAlpha: 0.3,
+  castSquash: 0.35,
+  castShear: 0.8,
+  castBlurRatio: 0.02,
   hasBase: true,
   baseWidthRatio: 0.7,
   baseHeightRatio: 0.28,
@@ -118,6 +130,10 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
     baseFillAlpha: clamp(finiteOr(o.baseFillAlpha, d.baseFillAlpha), 0, 1),
     baseSideAlpha: clamp(finiteOr(o.baseSideAlpha, d.baseSideAlpha), 0, 1),
     slitAlpha: clamp(finiteOr(o.slitAlpha, d.slitAlpha), 0, 1),
+    castAlpha: clamp(finiteOr(o.castAlpha, d.castAlpha), 0, 1),
+    castSquash: clamp(finiteOr(o.castSquash, d.castSquash), 0.1, 1),
+    castShear: clamp(finiteOr(o.castShear, d.castShear), -2, 2),
+    castBlurRatio: clamp(finiteOr(o.castBlurRatio, d.castBlurRatio), 0, 0.1),
     hasBase: typeof o.hasBase === 'boolean' ? o.hasBase : d.hasBase,
     baseWidthRatio: clamp(finiteOr(o.baseWidthRatio, d.baseWidthRatio), 0.1, 1),
     baseHeightRatio: clamp(finiteOr(o.baseHeightRatio, d.baseHeightRatio), 0.05, 1),

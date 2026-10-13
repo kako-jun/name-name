@@ -5,6 +5,7 @@
  */
 import { Texture } from 'pixi.js'
 import { renderAcrylicPlate } from './acrylicPlate'
+import { renderGroundShadow } from './acrylicShadow'
 import type { AcrylicParams } from './spriteStyle'
 
 export interface AcrylicPlate {
@@ -13,6 +14,10 @@ export interface AcrylicPlate {
   pad: number
   /** 板テクスチャの 1px が元画像の何 px か（板は縮小した解像度で作る。生成時間を抑えるため）。省略は 1 */
   scale?: number
+  /** 地面の影 (#760) のテクスチャ（板と同じ寸法・pad）。作れなければ省略 */
+  shadow?: Texture
+  /** 足元（スプライト下端の中央）の板テクスチャ上の位置(px)。影の pivot */
+  foot?: { x: number; y: number }
 }
 
 /** 板を作る作業解像度の長辺(px)。板は輪郭のぼかしなので、これ以上高くしても見た目は変わらず時間だけかかる */
@@ -56,7 +61,36 @@ export function createAcrylicPlateTexture(
     // 縮小描画でなめらかにする（初回アップロード前に設定）
     texture.source.autoGenerateMipmaps = true
     texture.source.scaleMode = 'linear'
-    return { texture, pad: raster.pad, scale: w / ww }
+    // 地面の影: 板の形をぼかしたテクスチャ（板と同じ寸法・pad なので足元は同じ位置）
+    let shadow: Texture | undefined
+    const sh = renderGroundShadow(
+      raster.shape,
+      raster.width,
+      raster.height,
+      Math.max(ww, wh),
+      params
+    )
+    const sc = document.createElement('canvas')
+    sc.width = sh.width
+    sc.height = sh.height
+    const sctx2 = sc.getContext('2d')
+    if (sctx2) {
+      sctx2.putImageData(
+        new ImageData(sh.rgba as Uint8ClampedArray<ArrayBuffer>, sh.width, sh.height),
+        0,
+        0
+      )
+      shadow = Texture.from(sc)
+      shadow.source.autoGenerateMipmaps = true
+      shadow.source.scaleMode = 'linear'
+    }
+    return {
+      texture,
+      pad: raster.pad,
+      scale: w / ww,
+      shadow,
+      foot: { x: raster.pad + ww / 2, y: raster.pad + wh },
+    }
   } catch {
     return null
   }

@@ -66,6 +66,7 @@ import {
 } from './battleLayout'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import { computeSlitY } from './acrylicBase'
+import { computeShadowTransform } from './acrylicShadow'
 import { getAcrylicBaseTexture, type AcrylicBaseTexture } from './acrylicBaseTexture'
 import {
   computeAcrylicGeometry,
@@ -286,6 +287,9 @@ interface EntityView {
   acrylicPlate: Sprite | null
   /** 透明アクリルの台座・影のスプライト (#760)。canvas が使えない環境では null（acrylicBack の Graphics で描く） */
   acrylicBase: Sprite | null
+  /** 地面に落とす本体の影 (#760)。全キャラの下の層（shadowLayer）に置く。板を作れない環境では null */
+  acrylicShadow: Sprite | null
+  acrylicShadowFoot: { x: number; y: number }
   /** 板テクスチャの 1px が元画像の何 px か（板は縮小した解像度で作る） */
   acrylicPlateScale: number
   /** 板テクスチャ上で元画像の左上がある位置(px)。配置時にこのぶん左上へずらす */
@@ -323,6 +327,8 @@ export class BattleScreen extends Container {
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
+  /** acrylic のとき: 全キャラの影をまとめる層（sideStage の直下・全スプライトより下）(#760) */
+  private shadowLayer: Container | null = null
   /** side: 敵の名前・HP ラベルの親 (#747)。前景より手前・パネルより奥（spec どおり、文字（敵ラベル）は前景より手前に置く） */
   private labelLayer: Container | null = null
   /** 前景レイヤー (#747)。スプライトより手前・パネルより奥 */
@@ -430,6 +436,8 @@ export class BattleScreen extends Container {
     // 板のテクスチャは自前で作ったものなので自分で破棄する (#760)
     for (const v of [...this.enemyViews, ...this.partyViews]) {
       v.acrylicPlate?.destroy({ texture: true })
+      v.acrylicShadow?.destroy({ texture: true })
+      v.acrylicShadow = null
       v.acrylicPlate = null
     }
     this.backgroundToneFilter?.destroy()
@@ -612,6 +620,12 @@ export class BattleScreen extends Container {
     this.sideStage = stage
     // dim の直後（パネル・テキストより下）に差し込む
     this.addChildAt(stage, this.getChildIndex(this.dim) + 1)
+    if (this.acrylicParams) {
+      // 影は全キャラのスプライトより下の層にまとめる（手前のキャラの影が奥のキャラの上に乗らない）(#760)
+      const shadowLayer = new Container()
+      this.shadowLayer = shadowLayer
+      this.addChildAt(shadowLayer, this.getChildIndex(stage))
+    }
     // 敵ラベルは sideStage の直後（前景は loadForeground が sideStage の直後=ラベル層の手前に差し込む）
     const labelLayer = new Container()
     this.labelLayer = labelLayer
@@ -680,6 +694,8 @@ export class BattleScreen extends Container {
       acrylicBack,
       acrylicPlate: null,
       acrylicBase: null,
+      acrylicShadow: null,
+      acrylicShadowFoot: { x: 0, y: 0 },
       acrylicPlateScale: 1,
       acrylicPlatePad: 0,
       acrylicBaseLayout: null,
@@ -711,6 +727,13 @@ export class BattleScreen extends Container {
           view.acrylicPlate = plateSprite
           view.acrylicPlatePad = plate.pad
           view.acrylicPlateScale = plate.scale ?? 1
+          if (plate.shadow && this.shadowLayer) {
+            const sh = new Sprite(plate.shadow)
+            view.acrylicShadow = sh
+            view.acrylicShadowFoot = plate.foot ?? { x: 0, y: 0 }
+            sh.pivot.set(view.acrylicShadowFoot.x, view.acrylicShadowFoot.y)
+            this.shadowLayer.addChild(sh)
+          }
           const mask = new Graphics()
           plateSprite.addChild(mask)
           plateSprite.mask = mask
@@ -1223,6 +1246,19 @@ export class BattleScreen extends Container {
         mask.clear().rect(0, 0, texW, h).fill(0xffffff)
       }
     }
+    const shadow = view.acrylicShadow
+    if (shadow) {
+      // 本体の影 (#760): 足元（スプライト下端の中央）を基点に、縦につぶして右へ傾ける。座標は shadowLayer（= 画面）基準
+      const k = sprite.texture.width > 0 ? g.sprite.width / sprite.texture.width : 0
+      const t = computeShadowTransform(params, k * view.acrylicPlateScale)
+      shadow.scale.set(t.scaleX, t.scaleY)
+      shadow.skew.x = t.skewX
+      shadow.position.set(
+        view.container.x + g.sprite.x + g.sprite.width / 2,
+        view.container.y + g.sprite.y + g.sprite.height
+      )
+      shadow.visible = k > 0 && params.castAlpha > 0
+    }
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true
   }
@@ -1235,6 +1271,7 @@ export class BattleScreen extends Container {
       const view = this.enemyViews[i]
       if (!e) continue
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
+      if (view.acrylicShadow) view.acrylicShadow.alpha = view.container.alpha
       if (view.label) {
         view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
         // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
@@ -1250,6 +1287,8 @@ export class BattleScreen extends Container {
       const p = s.party[i]
       if (!p) continue
       this.partyViews[i].container.alpha = p.hp > 0 ? 1 : DEAD_ALPHA
+      const sh = this.partyViews[i].acrylicShadow
+      if (sh) sh.alpha = this.partyViews[i].container.alpha
     }
     for (let i = 0; i < this.statusTexts.length; i++) {
       const p = s.party[i]
