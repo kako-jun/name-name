@@ -2324,6 +2324,8 @@ mod tests {
             battle_horizon: None,
             battle_perspective: None,
             battle_foreground: None,
+            battle_atb: None,
+            battle_atb_mode: None,
             chapters,
         }
     }

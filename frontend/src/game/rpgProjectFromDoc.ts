@@ -23,6 +23,7 @@ import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
 import { normalizeBackgroundDof } from './depthOfField'
 import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
+import { normalizeBattleAtb } from './battleAtb'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -251,6 +252,7 @@ export function rpgProjectFromDoc(
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
     battleDepth: normalizeBattleDepth(doc.battle_horizon, doc.battle_perspective) ?? undefined,
     battleForeground: doc.battle_foreground || undefined,
+    battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }

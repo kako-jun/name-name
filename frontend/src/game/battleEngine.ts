@@ -5,16 +5,19 @@
  * 受けて state を進め、戦闘ログを蓄積する。UI（BattleScreen）はこの state を観測して
  * 描画するだけ。
  *
- * Phase 1 スコープ:
- * - 味方 1 体（ゆうしゃ）vs 敵 1〜複数のターン制
- * - コマンド: たたかう（attack） / にげる（escape）。じゅもん / どうぐは雛形のみ
- * - ダメージ式: DQ 式（atk - def/2 + rand(0..atk/4)）、最低 1
- * - 行動順は今は「味方→敵全員」固定。AGI ソートは Phase 2
+ * 進行方式は 2 つ（コンストラクタの `atb` オプションで選ぶ）:
+ * - 従来ターン制（`atb` 未指定・既定）: 先頭の生存味方 1 人が行動 →「敵全員」の固定順
+ * - ATB（#205、FF5 風）: 味方・敵ともゲージを持ち、AGI に比例した速さで溜まる。
+ *   満タンの順に行動する。時間は外から `tick(ms)` で与える（エンジンは時計を持たない＝決定論的）。
+ *   ゲージが満タンになった味方は「溜まった順のキュー」に並び、先頭から 1 人ずつコマンドを受ける。
+ *   敵は満タンで自動行動する（狙いは生存味方からランダム。注入された rng を使う）。
+ *   待機（wait、既定）= コマンド選択中は時間が止まる / アクティブ（active）= 止まらない。
+ *
+ * ダメージ式: DQ 式（atk - def/2 + rand(0..atk/4)）、最低 1
  *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
  * - 敵 AI（builtin: で挙動委譲）
- * - 行動順 AGI ソート
  * - ターン跨ぎ状態異常の減衰
  */
 
@@ -23,7 +26,8 @@ import { applyEffect, parseEffect } from './spellDsl'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
 
 export type BattlePhase =
-  | 'party-input' // 味方の入力待ち
+  | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
+  | 'atb-running' // ATB: 誰もコマンド待ちでなく、ゲージが溜まっていく最中 (#205)
   | 'enemy-turn' // 敵の行動中（同期処理だが UI のアニメ用に分離）
   | 'victory'
   | 'defeat'
@@ -44,13 +48,47 @@ export interface BattleState {
   earnedExp: number
   /** 入手ゴールド（victory 到達時のみ集計） */
   earnedGold: number
+  /** ATB のゲージ・キュー (#205)。従来ターン制では存在しない（undefined） */
+  atb?: AtbState
 }
 
 const LOG_MAX = 30
 
+/** ATB の進行方式 (#205)。`wait` = コマンド選択中は時間停止（既定）、`active` = 止めない */
+export type AtbMode = 'wait' | 'active'
+
+/** ゲージ満タンの値 */
+export const ATB_GAUGE_MAX = 1000
+/** AGI 1 あたり、1ms ごとに溜まるゲージ量。AGI に比例（AGI 5 で 5 秒、AGI 10 で 2.5 秒で満タン）。目視で調整する値 */
+export const ATB_FILL_PER_AGI_MS = 0.04
+/** `tick(ms)` 1 回で進める時間の上限（ms）。タブ復帰などで巨大な値が来ても暴走しないための安全弁 */
+export const ATB_MAX_TICK_MS = 10_000
+
+/**
+ * ATB のゲージとコマンド待ちキュー (#205)。味方・敵とも `party` / `enemies` と同じ index の配列。
+ * 画面演出の中間状態ではなくゲーム進行そのものなので、BattleState に持つ（ADR 0002 は演出の中間状態を持たせない原則）。
+ */
+export interface AtbState {
+  mode: AtbMode
+  /** 味方ゲージ（0〜ATB_GAUGE_MAX）。`party` と同じ index */
+  partyGauge: number[]
+  /** 敵ゲージ（0〜ATB_GAUGE_MAX）。`enemies` と同じ index */
+  enemyGauge: number[]
+  /** ゲージが満タンでコマンド待ちの味方の index（溜まった順。先頭が今コマンドを出す人） */
+  queue: number[]
+}
+
 export interface BattleEngineOptions {
   /** 0..1 の一様乱数を返す関数。テストで決定論的に差し替え可能 */
   rng?: () => number
+  /**
+   * ATB 方式にする (#205)。未指定は従来ターン制。
+   * `initialGauges` は任意局面から始めるための初期ゲージ（範囲外・非有限値は 0〜最大に丸める。省略は 0）。
+   */
+  atb?: {
+    mode?: AtbMode
+    initialGauges?: { party?: number[]; enemies?: number[] }
+  }
 }
 
 export class BattleEngine {
@@ -68,12 +106,18 @@ export class BattleEngine {
       earnedGold: 0,
     }
     this.rng = opts.rng ?? Math.random
+    if (opts.atb) this.initAtb(opts.atb)
     const enemyNames = enemies.map((e) => e.name).join(' と ')
     this.appendLog(`${enemyNames} が あらわれた！`)
   }
 
   getState(): Readonly<BattleState> {
     return this.state
+  }
+
+  /** 今コマンドを出す味方の party index（ATB はキュー先頭の生存者）。いなければ -1。表示側もこれを使う */
+  getCurrentActorIndex(): number {
+    return this.currentActorIndex()
   }
 
   isOver(): boolean {
@@ -87,7 +131,7 @@ export class BattleEngine {
   /** 「たたかう」: 指定敵に通常攻撃。ターゲット未指定なら最初に生きてる敵 */
   selectAttack(targetId?: string): void {
     if (this.state.phase !== 'party-input') return
-    const hero = this.firstAlive(this.state.party)
+    const hero = this.currentActor()
     if (!hero) return
     const target = targetId
       ? this.state.enemies.find((e) => e.id === targetId && e.hp > 0)
@@ -105,16 +149,68 @@ export class BattleEngine {
     this.advanceAfterPartyAction()
   }
 
-  /** 「にげる」: 50% で離脱、失敗で敵ターン */
+  /**
+   * 「にげる」: 50% で離脱、失敗で敵ターン。
+   * ATB (#205) ではいつでも選べる（ゲージが溜まっていなくてもよい）。失敗したときは行動した扱いで、
+   * コマンド待ちの味方がいればその人（先頭）、いなければゲージが最も溜まっている生存味方のゲージが 0 に戻る
+   * （失敗の連打で無償に試行できないようにする）。敵ターンは挟まない（敵は自分のゲージで動く）。
+   */
   selectEscape(): void {
-    if (this.state.phase !== 'party-input') return
+    const atb = this.state.atb
+    if (atb) {
+      if (this.state.phase !== 'party-input' && this.state.phase !== 'atb-running') return
+    } else if (this.state.phase !== 'party-input') {
+      return
+    }
     if (this.rng() < 0.5) {
       this.appendLog('にげだした！')
       this.state.phase = 'escaped'
+      return
+    }
+    this.appendLog('しかし まわりこまれてしまった！')
+    if (atb) {
+      const cur = this.currentActorIndex()
+      const idx = cur !== -1 ? cur : this.fullestAliveIndex(atb)
+      if (idx !== -1) this.finishAtbAction(idx)
+      this.settleAtbPhase()
     } else {
-      this.appendLog('しかし まわりこまれてしまった！')
       this.runEnemyTurn()
     }
+  }
+
+  /**
+   * 時間を ms 進める (#205)。ATB のときだけ意味を持つ（従来ターン制・終了後・不正な ms は何もしない）。
+   * 1 回で `ATB_MAX_TICK_MS` までに丸める。途中でゲージが満タンになる者がいればそこで区切って処理し直すので、
+   * 呼び方（細かい tick の連続 / 大きい tick 1 回）で結果は変わらない（同じ rng 列なら決定論的）。
+   * - 待機（wait）: コマンド待ちの味方がいる間は時間が止まる（残りの ms は捨てる）
+   * - 同時に満タンになった者の順序は rng で決める（AGI 同値など）
+   * - 味方が満タン → キューに並ぶ / 敵が満タン → その場で自動行動（狙いは生存味方からランダム）
+   */
+  tick(ms: number): void {
+    const atb = this.state.atb
+    if (!atb || this.isOver()) return
+    if (!Number.isFinite(ms) || ms <= 0) return
+    let remaining = Math.min(ms, ATB_MAX_TICK_MS)
+    // 無限ループ防止の安全弁（1 tick で全員が何周もするほどの時間は ATB_MAX_TICK_MS で丸め済み）
+    for (let guard = 0; guard < 1000 && remaining > 0 && !this.isOver(); guard++) {
+      if (this.checkEnd()) return
+      if (atb.mode === 'wait' && atb.queue.length > 0) break
+      const dt = this.timeToNextFill(atb, remaining)
+      if (dt === null) break // 進めるゲージが無い（全員コマンド待ち）
+      remaining -= dt
+      this.advanceGauges(atb, dt)
+      const ready = this.collectReady(atb)
+      for (const who of this.shuffled(ready)) {
+        if (this.isOver()) break
+        if (who.side === 'party') {
+          const m = this.state.party[who.index]
+          if (m && m.hp > 0 && !atb.queue.includes(who.index)) atb.queue.push(who.index)
+        } else {
+          this.runAtbEnemyAction(atb, who.index)
+        }
+      }
+    }
+    this.settleAtbPhase()
   }
 
   /**
@@ -126,7 +222,7 @@ export class BattleEngine {
    */
   selectSpell(spell: SpellExecution, targetId?: string): void {
     if (this.state.phase !== 'party-input') return
-    const caster = this.firstAlive(this.state.party)
+    const caster = this.currentActor()
     if (!caster) return
     if (caster.mp < spell.mp) {
       this.appendLog('MP が たりない！')
@@ -150,7 +246,7 @@ export class BattleEngine {
   /** 「どうぐ」: アイテムを使用 */
   selectItem(item: ItemExecution, targetId?: string): void {
     if (this.state.phase !== 'party-input') return
-    const user = this.firstAlive(this.state.party)
+    const user = this.currentActor()
     if (!user) return
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
 
@@ -175,11 +271,194 @@ export class BattleEngine {
   }
 
   private advanceAfterPartyAction(): void {
+    const atb = this.state.atb
+    if (atb) {
+      // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）
+      const idx = this.currentActorIndex()
+      if (idx !== -1) this.finishAtbAction(idx)
+      if (this.state.enemies.every((e) => e.hp === 0)) {
+        this.handleVictory()
+        return
+      }
+      this.settleAtbPhase()
+      return
+    }
     if (this.state.enemies.every((e) => e.hp === 0)) {
       this.handleVictory()
       return
     }
     this.runEnemyTurn()
+  }
+
+  // ===== ATB (#205) =====
+
+  private initAtb(cfg: NonNullable<BattleEngineOptions['atb']>): void {
+    const clamp = (v: unknown): number =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.min(ATB_GAUGE_MAX, Math.max(0, v)) : 0
+    const { party, enemies } = this.state
+    const atb: AtbState = {
+      mode: cfg.mode === 'active' ? 'active' : 'wait',
+      partyGauge: party.map((_, i) => clamp(cfg.initialGauges?.party?.[i])),
+      enemyGauge: enemies.map((_, i) => clamp(cfg.initialGauges?.enemies?.[i])),
+      queue: [],
+    }
+    // 倒れている者のゲージは 0（任意局面・復元で死亡者がいても溜まりっぱなしにしない）
+    party.forEach((p, i) => {
+      if (p.hp <= 0) atb.partyGauge[i] = 0
+    })
+    enemies.forEach((e, i) => {
+      if (e.hp <= 0) atb.enemyGauge[i] = 0
+    })
+    // すでに満タンの味方は index 順でコマンド待ちにする（初期ゲージで始めた場合）
+    party.forEach((p, i) => {
+      if (p.hp > 0 && atb.partyGauge[i] >= ATB_GAUGE_MAX) atb.queue.push(i)
+    })
+    this.state.atb = atb
+    this.state.phase = atb.queue.length > 0 ? 'party-input' : 'atb-running'
+  }
+
+  /** 今コマンドを出す味方の party index。ATB はキュー先頭の生存者、従来ターン制は先頭の生存者。いなければ -1 */
+  private currentActorIndex(): number {
+    const atb = this.state.atb
+    if (!atb) return this.state.party.findIndex((p) => p.hp > 0)
+    for (const idx of atb.queue) {
+      const m = this.state.party[idx]
+      if (m && m.hp > 0) return idx
+    }
+    return -1
+  }
+
+  /** 今コマンドを出す味方。導出は currentActorIndex に一本化 */
+  private currentActor(): BattleEntity | null {
+    const idx = this.currentActorIndex()
+    return idx === -1 ? null : this.state.party[idx]
+  }
+
+  /** 行動を終えた味方のゲージを 0 に戻し、キューから外す */
+  private finishAtbAction(partyIndex: number): void {
+    const atb = this.state.atb
+    if (!atb) return
+    atb.partyGauge[partyIndex] = 0
+    atb.queue = atb.queue.filter((i) => i !== partyIndex)
+  }
+
+  private fullestAliveIndex(atb: AtbState): number {
+    let best = -1
+    this.state.party.forEach((p, i) => {
+      if (p.hp > 0 && (best === -1 || atb.partyGauge[i] > atb.partyGauge[best])) best = i
+    })
+    return best
+  }
+
+  /** 倒れた味方をキューから除き、勝敗を判定し、フェーズ（コマンド待ち / ゲージ進行中）を整える */
+  private settleAtbPhase(): void {
+    const atb = this.state.atb
+    if (!atb || this.isOver()) return
+    atb.queue = atb.queue.filter((i) => (this.state.party[i]?.hp ?? 0) > 0)
+    this.state.party.forEach((p, i) => {
+      if (p.hp <= 0) atb.partyGauge[i] = 0
+    })
+    this.state.enemies.forEach((e, i) => {
+      if (e.hp <= 0) atb.enemyGauge[i] = 0
+    })
+    if (this.checkEnd()) return
+    this.state.phase = atb.queue.length > 0 ? 'party-input' : 'atb-running'
+  }
+
+  /** 全滅 / 殲滅していれば終了フェーズへ。終了したら true */
+  private checkEnd(): boolean {
+    if (this.isOver()) return true
+    if (this.state.enemies.every((e) => e.hp === 0)) {
+      this.handleVictory()
+      return true
+    }
+    if (this.state.party.every((p) => p.hp === 0)) {
+      this.state.phase = 'defeat'
+      this.appendLog('ぜんめつ してしまった……')
+      return true
+    }
+    return false
+  }
+
+  private atbRate(entity: BattleEntity): number {
+    // AGI に比例。0 以下・非有限でも最低 1 で進める（永久に溜まらないと戦闘が止まるため）
+    const agi = Number.isFinite(entity.agi) ? Math.max(1, entity.agi) : 1
+    return agi * ATB_FILL_PER_AGI_MS
+  }
+
+  /** 次にゲージが満タンになるまでの ms（remaining を上限とする）。進めるゲージが無ければ null */
+  private timeToNextFill(atb: AtbState, remaining: number): number | null {
+    let dt = remaining
+    let any = false
+    const consider = (e: BattleEntity, gauge: number, inQueue: boolean) => {
+      if (e.hp <= 0 || inQueue) return
+      any = true
+      dt = Math.min(dt, (ATB_GAUGE_MAX - gauge) / this.atbRate(e))
+    }
+    this.state.party.forEach((p, i) => consider(p, atb.partyGauge[i], atb.queue.includes(i)))
+    this.state.enemies.forEach((e, i) => consider(e, atb.enemyGauge[i], false))
+    return any ? Math.max(0, dt) : null
+  }
+
+  private advanceGauges(atb: AtbState, dt: number): void {
+    this.state.party.forEach((p, i) => {
+      if (p.hp <= 0 || atb.queue.includes(i)) return
+      atb.partyGauge[i] = Math.min(ATB_GAUGE_MAX, atb.partyGauge[i] + dt * this.atbRate(p))
+    })
+    this.state.enemies.forEach((e, i) => {
+      if (e.hp <= 0) return
+      atb.enemyGauge[i] = Math.min(ATB_GAUGE_MAX, atb.enemyGauge[i] + dt * this.atbRate(e))
+    })
+  }
+
+  /** 満タン（浮動小数の誤差を許す）で行動待ちの者を集める。キュー済みの味方は除く */
+  private collectReady(atb: AtbState): { side: 'party' | 'enemy'; index: number }[] {
+    const eps = 1e-6
+    const out: { side: 'party' | 'enemy'; index: number }[] = []
+    this.state.party.forEach((p, i) => {
+      if (p.hp > 0 && !atb.queue.includes(i) && atb.partyGauge[i] >= ATB_GAUGE_MAX - eps) {
+        atb.partyGauge[i] = ATB_GAUGE_MAX
+        out.push({ side: 'party', index: i })
+      }
+    })
+    this.state.enemies.forEach((e, i) => {
+      if (e.hp > 0 && atb.enemyGauge[i] >= ATB_GAUGE_MAX - eps) {
+        atb.enemyGauge[i] = ATB_GAUGE_MAX
+        out.push({ side: 'enemy', index: i })
+      }
+    })
+    return out
+  }
+
+  /** rng による Fisher-Yates（同時に満タンになった者の順序を乱数で決める）。1 人以下なら rng を消費しない */
+  private shuffled<T>(list: T[]): T[] {
+    const a = [...list]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(this.rng() * (i + 1))
+      ;[a[i], a[j]] = [a[j], a[i]]
+    }
+    return a
+  }
+
+  /** 敵 1 体の自動行動（通常攻撃。狙いは生存味方からランダム）。行動後ゲージは 0 */
+  private runAtbEnemyAction(atb: AtbState, enemyIndex: number): void {
+    const enemy = this.state.enemies[enemyIndex]
+    atb.enemyGauge[enemyIndex] = 0
+    if (!enemy || enemy.hp <= 0) return
+    const alive = this.state.party.filter((p) => p.hp > 0)
+    if (alive.length === 0) return
+    const target = alive[Math.min(alive.length - 1, Math.floor(this.rng() * alive.length))]
+    const dmg = this.computeAttackDamage(enemy, target)
+    target.hp = Math.max(0, target.hp - dmg)
+    this.appendLog(`${enemy.name} の こうげき！`)
+    this.appendLog(`${target.name} は ${dmg} の ダメージを うけた！`)
+    if (target.hp === 0) {
+      this.appendLog(`${target.name} は たおれた！`)
+      const idx = this.state.party.indexOf(target)
+      atb.queue = atb.queue.filter((i) => i !== idx)
+      atb.partyGauge[idx] = 0
+    }
+    this.checkEnd()
   }
 
   private handleVictory(): void {
@@ -224,7 +503,7 @@ export class BattleEngine {
         if (targetId) {
           return this.state.party.filter((p) => p.id === targetId)
         }
-        const alive = this.firstAlive(this.state.party)
+        const alive = this.currentActor()
         return alive ? [alive] : []
       }
       case '味方全体':
@@ -232,7 +511,7 @@ export class BattleEngine {
       case '敵全体':
         return this.state.enemies.filter((e) => e.hp > 0)
       case '自分':
-        return [this.firstAlive(this.state.party)].filter((x): x is BattleEntity => x !== null)
+        return [this.currentActor()].filter((x): x is BattleEntity => x !== null)
       case 'マップ':
         return [] // 戦闘内では効果対象なし。builtin が no-op で処理する想定
       case '敵単体':
@@ -252,7 +531,7 @@ export class BattleEngine {
       const t = this.state.party.find((p) => p.id === targetId)
       return t ? [t] : []
     }
-    const hero = this.firstAlive(this.state.party)
+    const hero = this.currentActor()
     return hero ? [hero] : []
   }
 

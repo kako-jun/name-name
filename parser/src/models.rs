@@ -1606,6 +1606,17 @@ pub struct Document {
     /// GUI 専用。frontmatter `battle_foreground:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_foreground: Option<String>,
+    /// RPG 戦闘の ATB 方式（FF5 風）の有効化 (#205)。`"on"` / `"off"`（既定）の2択。`on` のとき味方・敵ともゲージが
+    /// AGI に比例して溜まり、満タンの順に行動する（未指定・`off` は従来ターン制）。
+    /// 値は parser でバリデーションせず生文字列で透過する（`battle_log_typewriter` と同じ流儀）。GUI 専用（TUI は読まない）。
+    /// frontmatter `battle_atb:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_atb: Option<String>,
+    /// RPG 戦闘の ATB の進行方式 (#205)。`"wait"`（既定・コマンド選択中は時間停止）/ `"active"`（止めない）。
+    /// `battle_atb: on` のときだけ効く。値は生文字列で透過し、不正値・未指定は runtime 側で `"wait"` にフォールバックする。
+    /// GUI 専用。frontmatter `battle_atb_mode:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_atb_mode: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

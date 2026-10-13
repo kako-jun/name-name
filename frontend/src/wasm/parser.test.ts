@@ -2343,3 +2343,58 @@ describe('parseMarkdown + normalizeDocument: battle_log_typewriter の追加観�
     expect(doc.battle_log_typewriter).toBe('on')
   })
 })
+
+describe('parseMarkdown + normalizeDocument: battle_atb / battle_atb_mode が normalize を生き残る (#205)', () => {
+  // 過去事故（#310/#378/#436/#440/#442）＝新しい frontmatter が Rust parser か normalizeDocument の
+  // どちらかで黙って消える、の再発防止。実 parseMarkdown（WASM 同梱）を通して縛る。
+  function docWith(lines: string[]): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('battle_atb: on / battle_atb_mode: active が doc に残る', async () => {
+    const doc = await parseMarkdown(docWith(['battle_atb: on', 'battle_atb_mode: active']))
+    expect(doc.battle_atb).toBe('on')
+    expect(doc.battle_atb_mode).toBe('active')
+  })
+
+  it('引用符つき・大文字の値も生のまま透過する（正規化は rpgProjectFromDoc の責務）', async () => {
+    const doc = await parseMarkdown(docWith(['battle_atb: "ON"', 'battle_atb_mode: "Wait"']))
+    expect(doc.battle_atb).toBe('ON')
+    expect(doc.battle_atb_mode).toBe('Wait')
+  })
+
+  it('battle_atb_mode だけ指定しても mode は残り、battle_atb は null', async () => {
+    const doc = await parseMarkdown(docWith(['battle_atb_mode: active']))
+    expect(doc.battle_atb).toBeNull()
+    expect(doc.battle_atb_mode).toBe('active')
+  })
+
+  it('省略・空値は null（undefined にも空文字にもならない）', async () => {
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_atb).toBeNull()
+    expect(none.battle_atb_mode).toBeNull()
+    const empty = await parseMarkdown(docWith(['battle_atb:', 'battle_atb_mode: ""']))
+    expect(empty.battle_atb).toBeNull()
+    expect(empty.battle_atb_mode).toBeNull()
+  })
+
+  it('emit → parse の往復で値が保たれる', async () => {
+    const doc = await parseMarkdown(docWith(['battle_atb: on', 'battle_atb_mode: active']))
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.battle_atb).toBe('on')
+    expect(again.battle_atb_mode).toBe('active')
+  })
+})

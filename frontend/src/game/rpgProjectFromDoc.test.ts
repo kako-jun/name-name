@@ -1730,3 +1730,34 @@ describe('rpgProjectFromDoc: battle_horizon / battle_perspective / battle_foregr
     ).toBeUndefined()
   })
 })
+
+describe('rpgProjectFromDoc: battle_atb / battle_atb_mode (#205)', () => {
+  const withAtb = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it('battle_atb: on → battleAtb.mode は wait（既定）', () => {
+    expect(rpgProjectFromDoc(withAtb({ battle_atb: 'on' }))!.battleAtb).toEqual({ mode: 'wait' })
+  })
+
+  it('battle_atb: on + battle_atb_mode: active → mode active', () => {
+    expect(
+      rpgProjectFromDoc(withAtb({ battle_atb: 'on', battle_atb_mode: 'active' }))!.battleAtb
+    ).toEqual({ mode: 'active' })
+  })
+
+  it('mode の未知値・空・null は wait', () => {
+    for (const m of ['foo', '', null, undefined, 'wait']) {
+      expect(
+        rpgProjectFromDoc(withAtb({ battle_atb: 'on', battle_atb_mode: m }))!.battleAtb
+      ).toEqual({ mode: 'wait' })
+    }
+  })
+
+  it('battle_atb が off / 未指定 / null / 空 / 未知値 → battleAtb は undefined（従来ターン制）。mode があっても同じ', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleAtb).toBeUndefined()
+    for (const v of ['off', null, '', 'foo']) {
+      expect(
+        rpgProjectFromDoc(withAtb({ battle_atb: v, battle_atb_mode: 'active' }))!.battleAtb
+      ).toBeUndefined()
+    }
+  })
+})
