@@ -820,6 +820,9 @@ stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob 
 | `NovelRenderer.getCanvas()`                                                                         | `canvas.captureStream(fps)` の対象を取得                                           |
 | `NovelRenderer.getAudioManager()`                                                                   | AudioManager 経由で音声 MediaStream を分岐                                         |
 | `NovelRenderer.startFrom({ sceneId, flags })` | 新規開始。BGM・背景・flags・`consecutiveJumps` を持ち越さない。結果が `entered` 以外なら export を reject し、cleanup を通す |
+| `NovelRenderer.isAutoMode()` / `setAutoMode()` | 書き出し中だけオートモードを入れ、cleanup で書き出し前の値へ戻す |
+| `NovelRenderer.getSnapshot()` | `resolveExportFlags` がプレビューの flags を複製して取り出す（引き継ぎ ON のときだけ） |
+| `NovelRenderer.prepareVideosForExport()` | 録画開始前に動画レイヤを頭出しする |
 | `NovelRenderer.waitForBackgroundLoad()` | 開始シーンの背景ロード完了を録画開始前に待つ（新規開始は背景が地色から始まるため） |
 | `NovelRenderer.setOnSceneChange()` / `takeOnSceneChange()`                                          | 終端検出用のリスナ占有と退避復元                                                   |
 | `NovelRenderer.setOnEnd()` / `takeOnEnd()`                                                          | 全イベント完走の検出用、退避復元（VideoExporter は登録も復元も `setOnEnd` に統一） |
