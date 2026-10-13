@@ -161,26 +161,34 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 `PlayerScreen` が `?scene=` を読み、対象 sceneId が属する script を（上記の missing scene
 resolver 経由で）事前解決・ロードしてから `NovelPlayer` に `initialSceneId` として渡す。
 
-`?debug_scene=` も同じく `PlayerScreen` のロード effect で `resolveMissingScene` により事前解決する
-（#726）。`NovelRenderer.startFrom` は `missingSceneResolver` で再挑戦せず、未ロードの sceneId では
-no-op になるため。ただし解決結果は `allScenes` に載せるだけで、`startSceneId` には
-混ぜない。`debug_scene` が解決できたときは `?scene=` 併用でも confinement を外す（`debug_scene` は confinement なし・後勝ち）。解決失敗時は HUD（`loadDebugInfo`）に
-`debug_scene: <id> → not found (fallback to entry)` を出す（`?scene=` が解決済みなら `not found (ignored)`、その場合 confinement は `?scene=` のまま）。
-`NovelPlayer` はマウント時に一度だけ `renderer.startFrom({ sceneId: initialSceneId })` を呼ぶ
-（`debug_scene` ブロックより前に評価するため、両方指定されると `debug_scene` 側が後勝ちで
-優先される）。無効・未解決の sceneId は現行どおりエントリ（ハブ）から開始する。
-`?scene=` の startFrom は `eventIndex=0`（シーン先頭）固定なので、**通常入場と同じ fresh-start
-経路**（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の
+`?debug_scene=` の遅延ロードは `PlayerScreen` では事前解決しない（#734 PR2。#726 の事前解決は撤去した）。
+`NovelRenderer.startFrom` が新規開始専用の Promise 版になり、`jumpToScene` と同じ遅延ロードの解決口
+（`resolveScene` → `missingSceneResolver`）を通るため。`?scene=` の事前解決は、confinement の算出
+（`findConfinedSceneIds` は対象の doc を要する）とタイトル画面の判定（`startSceneId`）に必要なので残る。
+HUD（`loadDebugInfo`）の `debug_scene: <id> → resolved / not found (…)` の行は、`NovelPlayer` が初期入場の
+結果を `onInitialEntry` で通知し、`PlayerScreen` が足す。
+
+`NovelPlayer` のマウント時の入場は1回だけで、純粋関数 `resolveInitialEntry`（`game/initialEntry.ts`）が試行の順序
+（fluid 再マウントのスナップショット → `?debug_scene=` → `?scene=` → 自動クイックロード → エントリ）を決め、
+`runInitialEntry` が `entered` で打ち切り、`failed` / `null` のときだけ次へ進む（`superseded` でも打ち切る）。
+文書は先に `loadEvents` / `loadScenes`（開始しない読み込み）で入れ、エントリ冒頭の自動進行は初期入場が確定するまで実行されない。
+`?debug_scene=` は `startFrom({ …, confinedSceneIds: null })`（confinement なし）、`?scene=` は
+`startFrom({ sceneId, confinedSceneIds })` で、confinement は入場属性として解決できた時点で置き換わる。
+`?debug_scene=` が入場できなければ `?scene=` の confinement が保たれる（#726 の「後勝ち」を事前解決なしで再現）。
+`?debug_scene=` / `?debug_script=` / `?scene=` のいずれかがあるときは自動クイックロードをしない。
+`?scene=` の `startFrom` は `eventIndex=0`（シーン先頭）固定なので、**通常入場と同じ経路**
+（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の
 話者の立ち絵を出してから最初のテキストで止まる（#399）。従来は宣言的復元の `restoreToScene` に
 乗せていたため、冒頭ディレクティブが実行されず背景も立ち絵も出ないまま `eventIndex=0` で
 止まっていた。`debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
 にフォールバックする（詳細は [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) の §3）。
+どちらも入場の種類は新規開始で、背景・BGM・立ち絵は持ち越さない（`carryPolicyFor('fresh')`）。
 
 **confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
 choice で漏れてはいけない（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の
 HTML リンクで行う設計）。`PlayerScreen` の `findConfinedSceneIds(targetSceneId, docs, entryPath)`
 が対象 sceneId が属する script ファイル自身の sceneId 一覧を算出し（entry doc/hub 自身は候補から
-除外）、`NovelPlayer` → `NovelRenderer.setConfinedSceneIds` に渡す。集合外への遷移を検知すると
+除外）、`NovelPlayer` → `startFrom({ sceneId, confinedSceneIds })`（新規開始の入場属性）に渡す。集合外への遷移を検知すると
 通常のシーン遷移をせず `endStory()` を呼び、`NovelGameState.storyEnded` を true にする。
 
 `endStory()` の見た目は2段構え（#404）。**`assets/scripts/intermission.md` をプロジェクトが
@@ -456,8 +464,8 @@ interface NovelGameState {
 | `seekTo(historyIndex)`                                  | 履歴の指定位置にジャンプ                                                                                                                         |
 | `applyState(state)`                                     | スナップショットから画面を復元                                                                                                                   |
 | `playScript(steps)`                                     | 操作列（`advance`/`choice`/`wait`）を決定論的にリプレイ（#220 Phase 1、デバッグ/テスト用。再生中 msPerChar=0、完了・例外時に復元、再入は throw）。destroy 後ガード（#515）: `wait` ステップの `await` 中に `destroy()` されて `initialized=false` になった場合、wait 明け直後にそれを検知し、残りの step（後続の `advance`/`choice` 含む）を一切実行せず `playScript` を終了する（msPerChar 復元等の finally 後始末は通常どおり走る） |
-| `startFrom({sceneId, flags?, eventIndex?, textIndex?})` | 任意シーン+フラグ状態から開始（#220 Phase 2、デバッグ/テスト用。history リセット、flags 置換、不正 sceneId は完全 no-op）                        |
-| `setConfinedSceneIds(ids \| null)`                       | confinement（在圏）一覧を設定する（#386）。null（既定）なら制限なし。設定すると `jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()`（終劇）にする。呼び出し元は `PlayerScreen`（`?scene=` ディープリンク単独埋め込み時のみ） |
+| `startFrom({sceneId?, flags?, eventIndex?, textIndex?, sentenceIndex?, confinedSceneIds?}): Promise<SceneEntryResult>` | 新規開始（#220 Phase 2、#734 PR2）。`sceneId` 省略でエントリ文書の先頭から。未ロードのシーンは遅延ロードで解決する。解決できた後・描画の前に flags 置換・confinement（#386。`jumpToScene` はこの集合外への遷移を通常のシーン遷移にせず `endStory()` にする。省略・null は解除）の置き換え・`storyEnded` 解除・`consecutiveJumps` 0 を確定する。背景・BGM・立ち絵は持ち越さない。history リセット。不在は `failed` で状態を一切変えない |
+| `loadEvents(events)` / `loadScenes(scenes)`              | 文書を読み込むだけで開始しない（#734 PR2）。`NovelPlayer` のマウント時に使い、続く初期入場が位置を確定する。`setEvents` / `setScenes` は従来どおり「読み込み＋エントリ冒頭の実行」 |
 | `setOnStoryEndedChange(cb)`                              | 終劇状態の変化コールバックを登録する（#386）。`NovelPlayer` は iframe 埋め込み時の postMessage 通知（#395）とデバッグ HUD 等の一部 DOM ボタンの disabled 制御に使う（"to be continued..." 表示自体は #630 で PixiJS 側に内部化され、このコールバックには依存しない） |
 | `setIntermissionScene(events, {backgroundFadeMs?, characterFadeMs?, eventImageFadeMs?})` | intermission.md 専用シーンを設定する（#404）。`events` は `assets/scripts/intermission.md` を parse した Event 列。null/空配列は「未設定」として `endStory()` を従来どおりのフェード＋終劇オーバーレイ表示にフォールバックさせる。fade 値は intermission.md 自身の frontmatter 由来で物語本編の設定とは独立 |
 | `hasIntermissionScene()`                                | intermission.md 専用シーンが設定済みかを返す（#404）。`syncEndingOverlayVisibility()`（#630）が終劇オーバーレイと PixiJS タブローの排他判定に内部で使う |
@@ -469,7 +477,7 @@ interface NovelGameState {
 横断的な機能を足したり変えたりするときは、先にこの表の全マスを埋める。
 入場を「進行」「新規開始」「復元」の3種に分ける設計と、その移行計画は [ADR 0003](./adr/0003-scene-entry-kinds.md) にある。表の「あるべき挙動」は、ADR 0003 §2 の種類別の表から導いたもの。
 
-- 実装状況: PR1（#734）で進行と復元の入場を単一の入口 `enterScene` に通した。表の ⚠ のうち [4]（遷移中のゲート。復元中の `advance` を含む）・[5]（選択肢の遷移先不在）・[6]（要求時に世代を進めない）・[13]（遅延ロード後処理の重複）は解消済みで、表の該当セルの関数名・行番号（`resolveMissingSceneAndJump`・`loadFromSaveDataMissingScene`・`resolveMissingSceneAndRestore`・`beginRestoreTransition`・`drainPendingJump`）は PR1 以前のもの。新規開始の経路（G3〜G5・G11〜G13）は後続の PR で移す
+- 実装状況: PR1（#734）で進行と復元の入場を単一の入口 `enterScene` に通した。表の ⚠ のうち [4]（遷移中のゲート。復元中の `advance` を含む）・[5]（選択肢の遷移先不在）・[6]（要求時に世代を進めない）・[13]（遅延ロード後処理の重複）は解消済みで、表の該当セルの関数名・行番号（`resolveMissingSceneAndJump`・`loadFromSaveDataMissingScene`・`resolveMissingSceneAndRestore`・`beginRestoreTransition`・`drainPendingJump`）は PR1 以前のもの。新規開始の経路のうち `startFrom`（G3〜G5。`?scene=`・`?debug_scene=`）と初期入場は PR2（#734）で単一の入口へ移した: [1]（`startFrom` が遅延ロードを通らない）・[7]（新規開始が背景等を持ち越す）・[8]（初期入場が1回で済まない）・[14]（fluid 再マウントで debug 起点を再実行する）は解消済みで、G3・G4・G5・G9 の該当セル（`PS` の事前解決・`setConfinedSceneIds`・`skipAutoAdvance`・`setEvents` がエントリ冒頭を実行済み、など）は PR2 以前のもの。動画書き出し（G11）、「はじめから」（G12）、文書の(再)供給（G13）は後続の PR で移す
 
 - 現状の欄は、関数名と行番号で示す。行番号は 2026-10-13 時点（main `dae752b`）の目安で、±数行ずれることがある
 - 略号: `NR` = `frontend/src/game/NovelRenderer.ts`、`NP` = `frontend/src/components/NovelPlayer.tsx`、`PS` = `frontend/src/screens/PlayerScreen.tsx`、`VE` = `frontend/src/game/VideoExporter.ts`、`PB` = `tui/src/playback.rs`
@@ -647,13 +655,11 @@ interface SaveSlotData {
 - **真**（クイックセーブあり＝マウント時点で既に正確な位置まで復元済み）: `renderer.restart()` を呼ばずタイトルを閉じるだけにする。呼んでしまうと最初のシーンへ巻き戻り、復元済みの位置を握りつぶす（#620 で発見・修正したバグ）
 - **偽**（#578 以前のレガシーセーブ等、クイックセーブが存在しない）: 既存の「スキップモードで既読位置まで高速進行」（#140 `hasAnyReadProgress`/`readProgress` ベース）にフォールバックする
 
-**hub冒頭の自動進行スキップ（#620 再発修正）**: `NovelRenderer.setEvents()`/`setScenes()` は呼ばれると内部の `resetAndStartEvents()` が常に `processUntilNextTextEvent()` で最初のtext event（または `[待機:]` 等のディレクティブ）まで自動進行する。Gymnasia等、entry_script冒頭にイベント絵＋`[待機: 表示完了]`（ピクセレート遷移演出）を置く構成では、この自動進行が待機状態（`waitingForWait=true`）まで進んでしまい、その直後に呼ばれる `quickLoad()` の入口ガード（`if (this.waitingForChoice || this.waitingForWait) return false`）に引っかかって静かに失敗し、「つづきから」で保存位置に復元されずhub冒頭が表示され続けるバグが再発していた。
+**hub冒頭の自動進行スキップ（#620 再発修正 → #734 PR2 で根治）**: かつて `NovelRenderer.setEvents()`/`setScenes()` は呼ばれると内部の `resetAndStartEvents()` が常に `processUntilNextTextEvent()` で最初のtext event（または `[待機:]` 等のディレクティブ）まで自動進行した。Gymnasia等、entry_script冒頭にイベント絵＋`[待機: 表示完了]`（ピクセレート遷移演出）を置く構成では、この自動進行が待機状態（`waitingForWait=true`）まで進んでしまい、その直後に呼ばれる `quickLoad()` の入口ガードに引っかかって静かに失敗し、「つづきから」で保存位置に復元されずhub冒頭が表示され続けるバグがあった（#620）。その対策だった `skipAutoAdvance` オプション・`pendingAutoAdvance` フラグ・`resumeAutoAdvanceIfPending()` は #734 PR2 で廃止した。`NovelPlayer` のマウントは `loadEvents`/`loadScenes`（開始しない読み込み）で文書を入れ、続く初期入場（`resolveInitialEntry`。上記）が `quickLoad`／`startFrom` で位置を1回で確定するので、エントリ冒頭の自動進行が先に走って `quickLoad()` を弾くことも、走った演出を別の入場で上書きすることも起きない。
 
-修正として、`NovelPlayer` のマウントeffectは `setEvents`/`setScenes` を呼ぶ**前**に `willAutoQuickLoad`（`!pendingSnapshot && !initialSceneId && !!docKey && renderer.hasQuickSave()`）を判定し、真なら `{ skipAutoAdvance: true }` を渡して自動進行そのものを抑制する（`pendingAutoAdvance` フラグに保留状態を記録するだけ）。直後に呼ぶ `renderer.quickLoad()` はこの時点で `waitingForWait` がまだ `false` のためガードを通過し、`restoreToScene()` が実行されて `pendingAutoAdvance` を明示的にクリアする。
+`quickLoad(origin)` は `Promise<SceneEntryResult | null>` を返す（null はクイックセーブデータが無い・ゲートで弾かれた場合。入場を始めていない）。マウント時に失敗（`failed`）したときは、セーブの flags を `getQuickSaveFlags()` で読んで `startFrom({ flags })` に倒す（位置は失うが、進めたルートの入口が閉じない）。
 
-`quickLoad()` の戻り値（boolean）は「実際にシーン復元（`restoreToScene`）が起きたか」を正確に表さない（`loadFromSaveData` はセーブデータの `sceneId` が空なら「フラグだけ復元」、シーンが見つからなければ何も変えず（#765）トースト通知して、いずれも `true` を返すことがある）ため、`resumeAutoAdvanceIfPending()`（保留中の自動進行を一度だけ実行する冪等なメソッド）を `loadFromSaveData`（空 sceneId）と、入場の単一入口 `enterScene` の復元失敗（`failEntry`。マルチMD構成の非同期遅延ロード解決の失敗を含む）の `restoreToScene` を通らない全ての分岐で明示的に呼ぶ。これにより、`quickLoad()` が同期的に `true` を返しても実際にはシーン復元が起きなかったケースでも、スキップした自動進行が確実に再開され、ゲームが「イベントはセットされているが何も進行しない」フリーズ状態に陥らない。`NovelPlayer.tsx` 側の `if (!ok) resumeAutoAdvanceIfPending()` フォールバックは残しているが、`resumeAutoAdvanceIfPending()` 自体が冪等（`pendingAutoAdvance` を見て一度だけ実行）なため、`NovelRenderer` 内で既にクリア済みの場合は無害な no-op になる。
-
-復元（クイックロード・ロードメニュー・`restoreSnapshot`）は、進行（選択肢・`[ジャンプ:]`）と同じ単一の入口 `enterScene(request)`（#734 PR1、ADR 0003）を通る。入口は要求の時点で遷移世代（`transitionGeneration`）を進めて捕捉し、予約中の Jump タイマーを止める（`clearJumpTimer`。再マウント直後に冒頭 Jump のタイマーが await 中に発火して復元を潰すのを防ぐ。進行中の古い解決も後勝ちで無効化される。#759）。遅延ロードを待つ間は入場中ゲート `pendingEntry`（`{ generation, kind, sceneId, promise }`）を立て、`isTransitionGated()` が `waitingForChoice`・`waitingForWait`・`jumpState`・`pendingEntry` を合成して、`advance`・`goBack`・`seekTo`・セーブ／ロード・選択肢の確定を止める（読み込み済みのシーンへの同期の入場では立てない）。`jumpState` は変えない: ロード中も pending／stalled のゲートを保ち、`advance` で Jump を飛び越したり Jump 位置でセーブしたりさせない。シーンの引き当ては `resolveScene` の1か所（読み込み済みなら同期のまま、未ロードなら `requestMissingScene`〔同一 sceneId は Promise 共有〕を待つ）で、await 後の世代と `initialized` の判定も `enterScene` の1か所にある。世代が不一致なら、復元を成功・失敗とも破棄して `superseded` を返す（`allScenes` の更新も行わない）。世代を進める他の経路（`resetAndStartEvents`・`applyState`）は `pendingEntry` も下ろす（破棄された入場がゲートを残さない）。予約中の `[ジャンプ:]` は `armJump` の時点で deferred を作って `pendingEntry` に載せ、取り消す全経路（`clearJumpTimer`）が `superseded` で解決する（`playScript` が `pendingEntry.promise` を待って止まらない）。成功は `applyState` が `idle` 化して新位置が Jump なら再アームする。世代が一致したまま失敗（null／reject／ロード後も不在。resolver 未設定で解決できない場合も同じ）して位置が動かない場合は、フラグも適用せず位置・flags とも現状維持して（#765。選択したセーブの flags だけが現プレイに混ざるのを防ぐ。sceneId が空のセーブ・スナップショットは復元先が無い正常な縮退なので従来どおり flags のみ反映）、`rederiveTransitionAtCurrentPosition()` で現在位置から遷移状態を導出し直す。現在位置が Jump で、タイマーを止められていた pending のものは `rearmJumpAtCurrentPosition()`（`applyState` 末尾と共通）で再予約し（stalled は据え置き）、現在位置が Choice で閉じられていた選択肢は再表示する。`pending` が残って詰むことも、Jump や選択肢が消えることもない。ロード結果のトーストは NovelRenderer に一本化されている: `quickLoad(origin)`／`loadFromSaveData(data, origin)`（origin は `quick`=F8／`menu`=ロードメニュー／`auto`=マウント時の自動クイックロード）に起点を渡し、失敗は `notifyLoadFailure()` が同期・非同期とも即時にトースト「ロードに失敗しました」で通知し（auto も通知する）、成功は `restoreToScene` が実際に成功した時点（非同期は解決後）で `quick` のときだけ「クイックロードしました」を出す（menu は確定後にオーバーレイが閉じて結果が見えるため、auto は無言）。F8 が弾かれた場合も renderer が理由に合った文言を出す（Jump 予約中・入場中〔遅延ロードの往復を待っている間〕は「場面転換中のためロードできません」、選択肢／待機中は「この場面ではロードできません」、データ無しは「クイックセーブデータがありません」。auto は無言）。NovelPlayer の F8 ハンドラは `quickLoad()` を呼ぶだけ。非同期失敗は世代チェックの後に `initialized` も確認し（`enterScene` の1か所）、destroy 後の reject で破棄済みの overlay にトーストしない。`restoreSnapshot` 系は自動復元でプレイヤー操作起点でないためトーストを出さず警告ログのみ。破棄時の `pendingAutoAdvance` は、文脈を変えた側の `resetAndStartEvents`／`restoreToScene` が確定させる。ロード／セーブメニューのコールバックも、表示中に裏で遷移が始まった場合に備えて確定時に `isTransitionGated()` を再確認し、拒否時はトースト（「場面転換中のためセーブ／ロードできません」）で通知する（オーバーレイは確定後に必ず閉じるため、無通知だと保存・ロードされたと誤認する）。
+復元（クイックロード・ロードメニュー・`restoreSnapshot`）は、進行（選択肢・`[ジャンプ:]`）と同じ単一の入口 `enterScene(request)`（#734 PR1、ADR 0003）を通る。入口は要求の時点で遷移世代（`transitionGeneration`）を進めて捕捉し、予約中の Jump タイマーを止める（`clearJumpTimer`。再マウント直後に冒頭 Jump のタイマーが await 中に発火して復元を潰すのを防ぐ。進行中の古い解決も後勝ちで無効化される。#759）。遅延ロードを待つ間は入場中ゲート `pendingEntry`（`{ generation, kind, sceneId, promise }`）を立て、`isTransitionGated()` が `waitingForChoice`・`waitingForWait`・`jumpState`・`pendingEntry` を合成して、`advance`・`goBack`・`seekTo`・セーブ／ロード・選択肢の確定を止める（読み込み済みのシーンへの同期の入場では立てない）。`jumpState` は変えない: ロード中も pending／stalled のゲートを保ち、`advance` で Jump を飛び越したり Jump 位置でセーブしたりさせない。シーンの引き当ては `resolveScene` の1か所（読み込み済みなら同期のまま、未ロードなら `requestMissingScene`〔同一 sceneId は Promise 共有〕を待つ）で、await 後の世代と `initialized` の判定も `enterScene` の1か所にある。世代が不一致なら、復元を成功・失敗とも破棄して `superseded` を返す（`allScenes` の更新も行わない）。世代を進める他の経路（`resetAndStartEvents`・`applyState`）は `pendingEntry` も下ろす（破棄された入場がゲートを残さない）。予約中の `[ジャンプ:]` は `armJump` の時点で deferred を作って `pendingEntry` に載せ、取り消す全経路（`clearJumpTimer`）が `superseded` で解決する（`playScript` が `pendingEntry.promise` を待って止まらない）。成功は `applyState` が `idle` 化して新位置が Jump なら再アームする。世代が一致したまま失敗（null／reject／ロード後も不在。resolver 未設定で解決できない場合も同じ）して位置が動かない場合は、フラグも適用せず位置・flags とも現状維持して（#765。選択したセーブの flags だけが現プレイに混ざるのを防ぐ。sceneId が空のセーブ・スナップショットは復元先が無い正常な縮退なので従来どおり flags のみ反映）、`rederiveTransitionAtCurrentPosition()` で現在位置から遷移状態を導出し直す。現在位置が Jump で、タイマーを止められていた pending のものは `rearmJumpAtCurrentPosition()`（`applyState` 末尾と共通）で再予約し（stalled は据え置き）、現在位置が Choice で閉じられていた選択肢は再表示する。`pending` が残って詰むことも、Jump や選択肢が消えることもない。ロード結果のトーストは NovelRenderer に一本化されている: `quickLoad(origin)`／`loadFromSaveData(data, origin)`（origin は `quick`=F8／`menu`=ロードメニュー／`auto`=マウント時の自動クイックロード）に起点を渡し、失敗は `notifyLoadFailure()` が同期・非同期とも即時にトースト「ロードに失敗しました」で通知し（auto も通知する）、成功は `restoreToScene` が実際に成功した時点（非同期は解決後）で `quick` のときだけ「クイックロードしました」を出す（menu は確定後にオーバーレイが閉じて結果が見えるため、auto は無言）。F8 が弾かれた場合も renderer が理由に合った文言を出す（Jump 予約中・入場中〔遅延ロードの往復を待っている間〕は「場面転換中のためロードできません」、選択肢／待機中は「この場面ではロードできません」、データ無しは「クイックセーブデータがありません」。auto は無言）。NovelPlayer の F8 ハンドラは `quickLoad()` を呼ぶだけ。非同期失敗は世代チェックの後に `initialized` も確認し（`enterScene` の1か所）、destroy 後の reject で破棄済みの overlay にトーストしない。`restoreSnapshot` 系は自動復元でプレイヤー操作起点でないためトーストを出さず警告ログのみ。ロード／セーブメニューのコールバックも、表示中に裏で遷移が始まった場合に備えて確定時に `isTransitionGated()` を再確認し、拒否時はトースト（「場面転換中のためセーブ／ロードできません」）で通知する（オーバーレイは確定後に必ず閉じるため、無通知だと保存・ロードされたと誤認する）。
 
 「はじめから」ボタン（`onNewGame`）は常に `renderer.restart()` を呼ぶ（クイックセーブの有無に関わらず最初から始める仕様のため、この分岐は不要）。
 
@@ -665,7 +671,7 @@ interface SaveSlotData {
 
 **「設定」ボタンが実際に設定パネルを開くようになった（#643）**: 元々 `onOpenSettings` は `setTitleDismissed(true)` を呼ぶだけの暫定実装（#141由来のTODO）で、押すと設定パネルを開かずにタイトルを閉じてゲームが始まってしまっていた。`NovelPlayer` を `forwardRef` 化し `NovelPlayerHandle`（`openSettings()`）を公開、`PlayerScreen` の `titleScreen.onOpenSettings` から `novelPlayerRef.current?.openSettings()` を呼ぶように変更した。タイトル画面（PixiJS `TitleScreenOverlay`）は閉じずに表示したまま、その上にDOM `SettingsOverlay` を重ねて開く。閉じるとタイトルへ戻る。
 
-**deep-link/デバッグ起動時は自動クイックセーブの配線自体を行わない（#664）**: `?scene=`（`initialSceneId`）単独埋め込みは `PlayerScreen` がタイトル画面を出さず `NovelPlayer` の mount effect が `renderer.startFrom({ sceneId })` を同期的に呼ぶが、この呼び出しが `startScene()` 経由で `onSceneChangeCallback` を発火させ、`docKey` があれば即座に `quickSave()` が走っていた。つまり実プレイ中に kako-jun がデバッグ目的で `?scene=` URL を踏むと、その時点で直前セッションの正当なクイックセーブが黙って上書きされる footgun があった（`?debug_scene=`/`?debug_script=` 経由の `startFrom`/`playScript`→`jumpToScene` でも同様）。修正は `NovelPlayer.tsx` の mount effect 側: `parseDebugQuery(window.location.search)` を早めに1回だけ評価して `debugQueryResult` を変数化し、`hasDeepLinkOrDebugStart = !!initialSceneId || debugQueryResult !== null` を判定、真の間は `renderer.setOnSceneChange(...)` の配線自体をスキップする。`NovelRenderer` 側は無変更（`onSceneChangeCallback` が null のままなので `startScene`/`setScenes` からの発火は何も呼ばない）。手動セーブ（3スロットメニュー / F5）は `quickSave()` を直接呼ぶ別経路のため影響を受けない。通常プレイ（`?scene=`/`debug_scene`/`debug_script` 無し）の自動クイックセーブ挙動は不変。
+**deep-link/デバッグ起動時は自動クイックセーブの配線自体を行わない（#664）**: `?scene=`（`initialSceneId`）単独埋め込みは `PlayerScreen` がタイトル画面を出さず `NovelPlayer` の mount effect が `renderer.startFrom({ sceneId })` を同期的に呼ぶが、この呼び出しが `startScene()` 経由で `onSceneChangeCallback` を発火させ、`docKey` があれば即座に `quickSave()` が走っていた。つまり実プレイ中に kako-jun がデバッグ目的で `?scene=` URL を踏むと、その時点で直前セッションの正当なクイックセーブが黙って上書きされる footgun があった（`?debug_scene=`/`?debug_script=` 経由の `startFrom`/`playScript`→`jumpToScene` でも同様）。修正は `NovelPlayer.tsx` の mount effect 側: `parseDebugQuery(window.location.search)` を早めに1回だけ評価して `debugQueryResult` を変数化し、`hasDeepLinkOrDebugStart = !!initialSceneId || debugQueryResult !== null` を判定、真の間は `renderer.setOnSceneChange(...)` の配線自体をスキップする。`NovelRenderer` 側は無変更（`onSceneChangeCallback` が null のままなので `startScene`/`setScenes` からの発火は何も呼ばない）。#734 PR2 以降は、通常起動でも自動クイックセーブの配線は初期入場が確定した後に行う（初期入場の `onSceneChange` が、有効なクイックセーブをエントリ冒頭の位置で上書きしないため）。自動クイックロードが通信失敗（`resolver-error`）で倒れたセッションは配線せず、renderer の `showToast` でその旨を知らせる（一時的な失敗で正しいセーブを消さない。`not-found`＝原稿が変わってセーブのシーンが消えた場合は、もう戻れないセーブなので通常どおり配線する）。手動セーブ（3スロットメニュー / F5）は `quickSave()` を直接呼ぶ別経路のため影響を受けない。通常プレイ（`?scene=`/`debug_scene`/`debug_script` 無し）の自動クイックセーブ挙動は不変。
 
 **`header: hidden` プロジェクト、および embedded（iframe埋め込み）ではタイトル画面の「終了」ボタンを非表示にする（#643、embedded軸はセルフレビューshouldで#647にて追加）**: 「終了」は `onBack`（ヘッダのバックボタンと共有のハンドラ）経由で name-name トップページへ戻る。`header: hidden`（`PlayerScreen.tsx` の `normalizeHeaderMode`）で name-name 自身のブランディングを隠しているプロジェクト（Gymnasia等）では、タイトル画面から name-name トップへ戻れてしまうのは設計として矛盾するため、`TitleScreenOverlay.show()` に `showExitButton?: boolean`（既定 `true`）を追加し、`false` のときは「終了」を `disabled` ではなく `buttonSpecs` から除外（非描画）する。`PlayerScreen` のヘッダ描画ゲート（本ファイル上記、L762-771相当）は `!embedded && headerMode === 'visible'`（`embedded` は `isEmbedded()`、iframe埋め込み判定）で、embedded時はheaderModeに関係なく常にヘッダ非表示（name-nameトップへ戻る導線は埋め込み文脈で無意味・没入破壊のため）。「終了」ボタンの表示条件もこれに揃える必要があり、`PlayerScreen` は `showExitButton: headerMode !== 'hidden' && !embedded` を渡す（headerMode単体では、embedded かつ headerMode が visible/collapsed のプロジェクト＝theo-hayami等の埋め込みで、ヘッダは出ないのに終了ボタンだけ残り押すと埋め込み文脈から離脱してしまう不整合があった）。非表示時は #640 のキーボードフォーカス巡回（Tab/矢印）も残りのボタンだけを正しく循環する。
 

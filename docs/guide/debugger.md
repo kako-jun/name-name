@@ -30,14 +30,14 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 （`PlayerScreen.tsx` の `hasDebugStart` 判定、#656）。
 
 `debug_scene` が指すシーンがエントリ `script.md` に無く、`scriptsDir` 配下のサブ MD にある場合も
-動作する（#726）。`PlayerScreen` が `NovelPlayer` のマウント前に `?scene=` と同じ遅延ロード
-（`resolveMissingScene`）でそのシーンを含む MD を事前解決し、ジャンプ解決索引（`allScenes`）に
-載せる。`startSceneId` には混ぜず、confinement なしは変わらない。`?scene=` と併用しても、
-`debug_scene` が解決できれば confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の選択肢ジャンプが
-終劇にならない）。存在しない ID を指定すると全 MD を探索してから開始するため、起動が遅れる。
-解決できなかった場合（存在しない ID）はエントリ先頭から開始し、デバッグ HUD に
+動作する（#726）。`NovelPlayer` の初期入場が `startFrom` で入場し、その中でサブ MD を遅延ロード
+（`missingSceneResolver`）して解決する（`PlayerScreen` は `debug_scene` を事前解決しない、#734）。
+`debug_scene` は confinement なしで入場する。`?scene=` と併用しても、`debug_scene` に入場できれば
+confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の選択肢ジャンプが終劇にならない）。
+入場できなかった場合（存在しない ID）は `?scene=` の入場に進み、その confinement が保たれる。
+`?scene=` も無ければエントリ先頭から開始し、デバッグ HUD に
 `debug_scene: <id> → not found (fallback to entry)` と表示する（`?scene=` が解決済みなら
-`not found (ignored)`。開始位置・confinement は `?scene=` のまま）。
+`not found (ignored)`）。デバッグ指定がある起動では、クイックセーブの自動ロードは行わない。
 
 | クエリ | 意味 | 例 |
 |---|---|---|
@@ -128,31 +128,43 @@ type Step =
   | { type: 'wait'; ms: number }   // ms ミリ秒待つ
 ```
 
-### `startFrom(opts: StartFromOptions): void`
+### `startFrom(opts: StartFromOptions): Promise<SceneEntryResult>`
 
-任意のシーン・フラグ・インデックスから起動する。history をリセットし、flags は**置換**（省略時は空でクリア）。不正な `sceneId` は完全に no-op。
+**新規開始**の入口。文脈を捨てて、任意のシーン・フラグ・インデックスから起動する。URL の `?scene=` / `?debug_scene=` もこれを呼んでいる。
 
-> 現状の制限: `startFrom` は遅延ロード（`missingSceneResolver`）を通らない。そのため、まだ読み込まれていないサブ MD のシーンを直接指定すると、何もせずに終わる。URL の `?debug_scene=` は `PlayerScreen` が事前に読み込むので動く。入場 API を「進行」と「新規開始」に分けて解消する設計は [ADR 0003](../adr/0003-scene-entry-kinds.md)（#734）にある。
+- `sceneId` を**省略**すると、エントリ文書（ハブ）の先頭から始める。指定したシーンがまだ読み込まれていなければ、遅延ロード（`missingSceneResolver`）で解決してから入場する。サブ MD のシーンを直接指定してもよい
+- flags は**置換**（省略時は空でクリア）。`confinedSceneIds`（`?scene=` 埋め込みの在圏一覧）も置き換える（省略時は解除）。終劇中に呼べば終劇は解除される
+- 直前の文脈は持ち込まない。BGM・背景・背景板・大道具・幕・立ち絵・イベント絵・テロップはクリアされる。開始シーンの冒頭に `[背景:]` が無いと、背景は地色から始まる（開発ビルドでは警告が出る）
+- 結果は Promise で返る。`{ status: 'entered', sceneId }`（入場した）、`{ status: 'failed', reason }`（不在・遅延ロード失敗。この場合は flags・位置・confinement など状態が**一切変わらない**）、`{ status: 'superseded' }`（待っている間により新しい入場が始まった）。`await` すると入場が確定したあとの状態を読める
+- 遅延ロードの往復中は、`advance`・セーブ・ロード・`goBack` などが受け付けられない（入場中ゲート）
 
 ```ts
 import type { StartFromOptions } from '../game/GameState'
 
-renderer.startFrom({
+const result = await renderer.startFrom({
   sceneId: '1-2',
   flags: { saw_characters: { Bool: true } },
   eventIndex: 0,
   textIndex: 0,
 })
+if (result.status !== 'entered') console.warn('入場できなかった', result)
+
+// エントリ（ハブ）の先頭から。進めたルートの flags を保って始め直すなら flags を渡す
+await renderer.startFrom({ flags: savedFlags })
 ```
 
 ```ts
 interface StartFromOptions {
-  sceneId: string                          // 開始シーン ID
+  sceneId?: string                         // 開始シーン ID（省略するとエントリ文書の先頭から）
   flags?: Record<string, FlagValue>        // 置換セマンティクス（省略時クリア）
   eventIndex?: number                      // 省略時 0
   textIndex?: number                       // 省略時 0
+  sentenceIndex?: number                   // 省略時 0（novel の現ページ内の文）
+  confinedSceneIds?: string[] | null       // 在圏一覧（省略・null は解除）
 }
 ```
+
+URL からの初期入場は1回だけで、`?debug_scene=` → `?scene=` → クイックセーブの自動ロード（debug 指定も `?scene=` も無いときだけ）→ エントリの順に、入場できなかったときだけ次へ進む（詳細は仕様書の「初期入場」）。`?debug_scene=` が存在しない ID を指していても、`?scene=` の在圏はそのまま保たれる。
 
 ## TUI 版（`--debug-scene` / `--debug-unlock-all`）（#652）
 
@@ -191,7 +203,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 
 ## 設計背景
 
-- `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。復元後の `eventIndex` が `[ジャンプ:]` を指す場合は、`applyState` が Jump の遷移を再予約する（#733）。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ fresh-start 経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。
+- `startFrom`（途中局面指定・`eventIndex>0`）とセーブ復元は、共通コア `restoreToScene(scene, state)` を経由して状態を宣言的に組み立てる（[#256](https://github.com/kako-jun/name-name/issues/256)）。復元ロジックは 1 本に集約されている。復元後の `eventIndex` が `[ジャンプ:]` を指す場合は、`applyState` が Jump の遷移を再予約する（#733）。ただし `startFrom` の `eventIndex=0`（本番 `?scene=` 埋め込みの既定）だけは通常入場と同じ経路（`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出す（[#399](https://github.com/kako-jun/name-name/issues/399)）。どちらも入場の種類は「新規開始」で、持ち越しなし・遅延ロード・flags の置換は共通である（[ADR 0003](../adr/0003-scene-entry-kinds.md)、#734）。
 - 「任意の state から起動・再開できる」ことは、状態と描画が分離できている**機械的な証明**でもある。新しいレンダラ／モードを足すときは、この API で任意局面を再現できることを完了条件にする。
 - 詳しい設計判断は [ADR 0002 — 決定論的状態とデバッグ容易性](../adr/0002-deterministic-state-and-debuggability.md) を参照。
 
