@@ -108,7 +108,7 @@ type SceneEntryRequest =
 type SceneEntryResult =
   | { status: 'entered'; sceneId: string | null }
   | { status: 'ended' }        // 進行のみ: confinement の圏外で終劇した
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' }
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' }  // apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
   | { status: 'superseded' }   // 待っている間に、より新しい入場要求が来た
 ```
 
@@ -291,6 +291,7 @@ PR1 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **restore の `origin` を判別共用体にした。** `{ source: 'save'; origin: LoadOrigin } | { source: 'snapshot' }`。成功トーストの出し分けを、同期の成功時も同期で出すため入口の中で行う
 - **`isTransitionGated(op, state)` は操作名を引数に取る。** 述語は1つのまま、操作ごとの規則を表で持つ。既存の規則（停止中の Jump で `goBack`・シーク・クイックロードを通す、メニューは選択肢の表示中・待機中も開ける、など）を保つため。操作は `advance`・`quickSave`・`saveMenu`・`navigate`（`goBack`・`seekTo`・`quickLoad`）・`autoAdvance`（オート送り・スキップのタイマー）・`loadMenu`・`confirmChoice`。理由を返す `gateReason()` も同じ表を使う
 - **`playScript` の `pendingEntry` 待機を PR1 に前倒しした。** 予約中の `[ジャンプ:]` の deferred を `superseded` で解決するテスト観点の土台のため。ポーリングの `drainPendingJump` は PR1 で廃止した。choice の結果を見た打ち切りは PR3 のまま
+- **`SceneEntryResult` の `failed` に `reason: 'apply-error'` を足した。** 適用中の例外は、§5 の「`resolver-error` なら自動セーブを配線しない」の判定キーと混ざらないよう区別する。選択肢由来なら閉じていた選択肢を再表示し、Jump 由来なら停止する
 - **ゲートで弾かれた選択肢の確定は、確定音を鳴らさない。** `ChoiceOverlay` の確定コールバックが `false` を返すと音を出さない
 - **遷移先が確実に無い（解決手段も無い）選択肢は、閉じずにその場に留める。** 遅延ロードの失敗後は、閉じていた選択肢を `rederiveTransitionAtCurrentPosition` が再表示する
 - **入場を待つ間に弾かれたオート送り・スキップは、失敗後に再開する。** `[待機]` が明けても入場の決着を待ってから進める（待機明けの `armJump` が世代を進めてロードを破棄するのを防ぐ）
