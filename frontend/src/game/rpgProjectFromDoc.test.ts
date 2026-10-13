@@ -1424,3 +1424,33 @@ describe('rpgProjectFromDoc: battle_layout / battle_background (#736)', () => {
     expect(updated.battle_background).toBe('bg/a.webp')
   })
 })
+
+describe('partyOrder: パーティの定義順 (#736)', () => {
+  const pm = (id: string) => ({
+    PartyMember: { id, name: id, hp: 10, mp: 0, atk: 1, def: 1, agi: 1 },
+  })
+  function docOf(ids: string[]): EventDocument {
+    return {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: 's', title: 's', view: 'TopDown', events: ids.map(pm) }],
+        },
+      ],
+    } as unknown as EventDocument
+  }
+
+  it('整数風 ID でもドキュメント上の出現順を保つ（重複は初出位置）', () => {
+    const m = collectMasterData(docOf(['b', '2', 'a', '1', 'b']))
+    expect(m.partyOrder).toEqual(['b', '2', 'a', '1'])
+  })
+
+  it('複数 doc の統合では doc の順に連結し重複は初出位置', () => {
+    const m = mergeMasterDataFromDocs([docOf(['b', '2']), docOf(['1', 'b', 'a'])])
+    expect(m.partyOrder).toEqual(['b', '2', '1', 'a'])
+  })
+})

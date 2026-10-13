@@ -32,6 +32,7 @@ const enemy = (): BattleEntity => ({
 interface RendererInternals {
   app: { stage: Container }
   masterParty: Record<string, PartyMemberDef>
+  masterPartyOrder: string[]
   battleLayout: 'front' | 'side'
   battleBackground: string | undefined
   battleScreen: { engine: BattleEngine; opts: Record<string, unknown> } | null
@@ -100,13 +101,28 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     ])
   })
 
-  it('side・hero 定義なし → ハードコード hero が先頭、その後に定義済み仲間', () => {
+  it('side・hero 定義なし → 定義にない「ゆうしゃ」を混ぜず、定義順の先頭から', () => {
     const { i } = makeRenderer()
-    i.masterParty = { mage: member('mage') }
+    i.masterParty = { mage: member('mage'), priest: member('priest') }
     i.battleLayout = 'side'
     const party = i.buildPartyBattleEntities()
-    expect(party.map((p) => p.id)).toEqual(['hero', 'mage'])
-    expect(party[0].hp).toBeGreaterThan(0)
+    expect(party.map((p) => p.id)).toEqual(['mage', 'priest'])
+  })
+
+  it('side・ID が整数風でも masterPartyOrder の定義順になる（Object.entries の並べ替えに負けない）', () => {
+    const { i } = makeRenderer()
+    i.masterParty = { b: member('b'), '2': member('2'), a: member('a'), '1': member('1') }
+    i.masterPartyOrder = ['b', '2', 'a', '1']
+    i.battleLayout = 'side'
+    expect(i.buildPartyBattleEntities().map((p) => p.id)).toEqual(['b', '2', 'a', '1'])
+  })
+
+  it('side・hero と整数風 ID → hero 先頭・残りは定義順', () => {
+    const { i } = makeRenderer()
+    i.masterParty = { '3': member('3'), hero: member('hero'), '1': member('1') }
+    i.masterPartyOrder = ['3', 'hero', '1']
+    i.battleLayout = 'side'
+    expect(i.buildPartyBattleEntities().map((p) => p.id)).toEqual(['hero', '3', '1'])
   })
 
   it('side・masterParty 空 → ハードコード hero 1 人', () => {
@@ -202,5 +218,75 @@ describe('RaycastRenderer.startBattle のガード (#736 で壊していない�
     const { i } = makeRenderer()
     i.startBattle([])
     expect(i.battleScreen).toBeNull()
+  })
+})
+
+describe('RaycastRenderer: partyOrder と resize の配線 (#736)', () => {
+  it('load() の partyOrder が side の味方順に使われる（整数風 ID）', () => {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(
+      project({
+        battleLayout: 'side',
+        party: { b: member('b'), '2': member('2'), a: member('a') },
+        partyOrder: ['b', '2', 'a'],
+      })
+    )
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.engine.getState().party.map((p) => p.id)).toEqual(['b', '2', 'a'])
+  })
+
+  it('戦闘中のリサイズで BattleScreen.redraw が新しい画面サイズで呼ばれる', () => {
+    const { i } = makeRenderer()
+    const ri = i as unknown as {
+      initialized: boolean
+      app: Record<string, unknown>
+      handleResize(): void
+      screenWidth: number
+      screenHeight: number
+    }
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      cb()
+      return 1
+    })
+    try {
+      ri.initialized = true
+      ri.app = {
+        stage: new Container(),
+        canvas: { parentElement: { getBoundingClientRect: () => ({ width: 640, height: 360 }) } },
+        renderer: { resize: vi.fn() },
+      }
+      i.startBattle([enemy()])
+      const redraw = vi.fn()
+      ;(i.battleScreen as unknown as { redraw: typeof redraw }).redraw = redraw
+      ri.handleResize()
+      expect(redraw).toHaveBeenCalledWith(640, 360)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('戦闘中でなければリサイズで例外にならない', () => {
+    const { i } = makeRenderer()
+    const ri = i as unknown as {
+      initialized: boolean
+      app: Record<string, unknown>
+      handleResize(): void
+    }
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      cb()
+      return 1
+    })
+    try {
+      ri.initialized = true
+      ri.app = {
+        stage: new Container(),
+        canvas: { parentElement: { getBoundingClientRect: () => ({ width: 640, height: 360 }) } },
+        renderer: { resize: vi.fn() },
+      }
+      expect(() => ri.handleResize()).not.toThrow()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

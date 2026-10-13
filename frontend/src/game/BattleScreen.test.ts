@@ -400,7 +400,7 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
 
   it('敵ラベルは縁取り(stroke)付き。背景指定の有無で変わらない', () => {
     for (const opts of [sideOpts, { ...sideOpts, background: 'bg/x.webp' }]) {
-      vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture())
+      vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
       const s = track(make([entity('hero')], [entity('slime')], opts))
       const stroke = internals(s).enemyViews[0].label!.style.stroke as {
         color: unknown
