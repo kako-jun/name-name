@@ -613,7 +613,12 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6)', () => {
     // ステージが十分あればラベルは全員ぶん存在する（低すぎるときはラベルだけ省かれ、スプライトは残る）
     for (const s of L.enemies) {
       expect(s.size).toBeGreaterThan(0)
-      if (L.stage.h >= 60 && s.size >= SIDE_LABEL_MIN_WIDTH) expect(s.label).toBeDefined()
+      // 期待ラベル幅: 1 列なら min(領域幅, 一辺×倍率)、多列なら一辺（列ピッチ）。読める幅ならラベルがある
+      const oneColumn = rowsOf(L.enemies) === L.enemies.length
+      const expectedW = oneColumn
+        ? Math.min(L.stage.w / 2, s.size * SIDE_LABEL_MAX_WIDTH_RATIO)
+        : s.size
+      if (L.stage.h >= 60 && isLabelWidthReadable(expectedW)) expect(s.label).toBeDefined()
     }
   })
 })
@@ -859,7 +864,25 @@ describe('読めない幅のラベルは省く (#736)', () => {
 
   it('320x240 party1・敵 2 体（28px の 2 列）はラベルが省かれる', () => {
     const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: 1, enemyCount: 2 })
-    for (const s of L.enemies) expect(s.label).toBeUndefined()
+    // 前提: 2 列（同じ行に並ぶ）で、一辺が読める最小ラベル幅に届かない
+    expect(rowsOf(L.enemies)).toBe(1)
+    expect(L.enemies).toHaveLength(2)
+    for (const s of L.enemies) {
+      expect(s.size).toBeGreaterThan(0)
+      expect(s.size).toBeLessThan(SIDE_LABEL_MIN_WIDTH)
+      expect(s.label).toBeUndefined()
+    }
+  })
+
+  it('320x240 party1・敵 1 体（1 列・スプライトは小さい）でもラベル幅が広がるのでラベルが残る', () => {
+    const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: 1, enemyCount: 1 })
+    const [s] = L.enemies
+    const expectedW = Math.min(L.stage.w / 2, s.size * SIDE_LABEL_MAX_WIDTH_RATIO)
+    expect(s.size).toBeGreaterThan(0)
+    expect(s.size).toBeLessThan(SIDE_LABEL_MIN_WIDTH)
+    expect(isLabelWidthReadable(expectedW)).toBe(true)
+    expect(s.label).toBeDefined()
+    expect(s.label!.w).toBeCloseTo(expectedW)
   })
 
   it('全スイープ: ラベルがあれば必ず読める幅（isLabelWidthReadable）', () => {
