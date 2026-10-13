@@ -6,7 +6,7 @@
  * 共通のまま、見た目だけを差し替える。
  *
  * このモジュールは純粋関数だけを持つ（dev-doctrine 規律4）。this / PixiJS に触れない。
- * 実際の描画（Container・Graphics・OutlineFilter）は BattleScreen 側が、ここで返した数値を使って行う。
+ * 実際の描画（Container・Graphics・AcrylicEdgeFilter）は BattleScreen 側が、ここで返した数値を使って行う。
  *
  * パラメータはすべて「スプライト枠（slot）一辺 `size` に対する比率」で持つ。画面サイズに依存しない。
  */
@@ -29,6 +29,10 @@ export interface AcrylicParams {
   lineWidthRatio: number
   /** 枠線の最小太さ(px)。スプライトが小さくても線が潰れないようにする */
   minLinePx: number
+  /** 余白の上限(論理 px)。これを超える指定は切り詰める（細い部分の隙間から線が余白に漏れるため。ハード上限 6） */
+  maxMarginPx: number
+  /** 枠線の太さの上限(論理 px)。ハード上限 4 */
+  maxLinePx: number
   /** 枠線の色（0xRRGGBB。淡い白〜青白） */
   lineColor: number
   /** 枠線の不透明度（0〜1。やや不透明） */
@@ -52,6 +56,8 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   minMarginPx: 2,
   lineWidthRatio: 0.02,
   minLinePx: 1.5,
+  maxMarginPx: 6,
+  maxLinePx: 4,
   lineColor: 0xe6f3ff,
   lineAlpha: 0.85,
   hasBase: true,
@@ -80,6 +86,8 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
     minMarginPx: clamp(finiteOr(o.minMarginPx, d.minMarginPx), 0, 32),
     lineWidthRatio: clamp(finiteOr(o.lineWidthRatio, d.lineWidthRatio), 0, 0.1),
     minLinePx: clamp(finiteOr(o.minLinePx, d.minLinePx), 0, 16),
+    maxMarginPx: clamp(finiteOr(o.maxMarginPx, d.maxMarginPx), 0, EDGE_MAX_MARGIN_PX),
+    maxLinePx: clamp(finiteOr(o.maxLinePx, d.maxLinePx), 0, EDGE_MAX_LINE_PX),
     lineColor: clamp(Math.floor(finiteOr(o.lineColor, d.lineColor)), 0, 0xffffff),
     lineAlpha: clamp(finiteOr(o.lineAlpha, d.lineAlpha), 0, 1),
     hasBase: typeof o.hasBase === 'boolean' ? o.hasBase : d.hasBase,
@@ -128,7 +136,8 @@ export interface AcrylicGeometry {
  * - 台座と影は枠の下端に置く（影の下端が枠の下端に接する）。影は台座より大きいので、影が枠に収まれば台座も収まる。
  * - スプライトは「枠の上端〜台座の中心」の領域に contain で収め、足元が台座の中心に乗る。
  *   余白と枠線の幅（片側 `marginPx + linePx`）ぶんだけ領域を内側に縮めるので、枠線も枠からはみ出さない。
- *   幅は比率から求めるが、`minMarginPx` / `minLinePx` を下回らない（小さいスプライトで線が 0px にならない）。
+ *   幅は比率から求めるが、`minMarginPx` / `minLinePx` を下回らない（小さいスプライトで線が 0px にならない）
+ *   かつ `maxMarginPx` / `maxLinePx` を超えない（大きな枠でも余白の内側に線が漏れない）。
  * - 影が枠より大きくなる指定（幅比 × 影倍率 > 1）は枠幅に切り詰める。
  * - `size` が 0 以下・非数なら、スプライトは大きさ 0・台座・影・フチなしを返す。
  *   テクスチャ寸法が 0 以下なら、スプライトは上記の領域いっぱいに置く。
@@ -150,8 +159,8 @@ export function computeAcrylicGeometry(
     }
   }
   const p = resolveAcrylicParams(params)
-  const marginPx = Math.max(p.minMarginPx, p.marginRatio * size)
-  const linePx = Math.max(p.minLinePx, p.lineWidthRatio * size)
+  const marginPx = Math.min(p.maxMarginPx, Math.max(p.minMarginPx, p.marginRatio * size))
+  const linePx = Math.min(p.maxLinePx, Math.max(p.minLinePx, p.lineWidthRatio * size))
   const margin = marginPx + linePx
 
   let base: EllipseRect | null = null
@@ -197,31 +206,73 @@ export function computeAcrylicGeometry(
   return { sprite, marginPx, linePx, base, highlight, shadow }
 }
 
-/** 1 ピクセルあたりのサンプル数（タップ）の上限。`AcrylicEdgeFilter` の性能予算 */
-export const EDGE_MAX_TAPS = 48
+/** 枠線フィルタの余白の上限(論理 px)。これを超えると細い部分の隙間から線が余白の内側に漏れる (#737) */
+export const EDGE_MAX_MARGIN_PX = 6
+/** 枠線フィルタの線の太さの上限(論理 px) */
+export const EDGE_MAX_LINE_PX = 4
+/**
+ * 内側（余白）サンプルの間隔の上限(論理 px。同心円の半径方向も、円周上の隣接サンプルも)。
+ * 2px 幅の細い部分が余白の内側で取りこぼされない最大間隔（3px だと 2px 幅の棒・角で線が漏れる）。
+ */
+export const EDGE_INNER_SPACING_PX = 2
+/** 外側（余白+線の縁の円）サンプルの円周方向の間隔の上限(論理 px)。線の輪郭の滑らかさにだけ効く */
+export const EDGE_OUTER_SPACING_PX = 3
+/** 1 ピクセルあたりのサンプル数（中心の 1 タップは除く）の上限。`AcrylicEdgeFilter` の性能予算 */
+export const EDGE_MAX_TAPS = 64
+/** 内側（余白の縁まで）サンプルの最大数。最悪（余白 6px）で 39 */
+export const EDGE_MAX_INNER_TAPS = 40
+/** 外側（余白+線の縁）サンプルの最大数。最悪（余白+線 10px）で 21 */
+export const EDGE_MAX_OUTER_TAPS = 24
 
-export interface EdgeSampling {
-  /** 余白の縁の円まで、内側を刻む段数（1〜2。割り合いで `margin*k/n`） */
-  innerRings: number
-  /** 余白の縁から余白+線の縁までを刻む段数（1〜2） */
-  outerRings: number
-  /** 方向数（8〜16）。`(innerRings + outerRings) * directions` が `EDGE_MAX_TAPS` 以下 */
-  directions: number
+/** 周囲サンプルの変位（フィルタテクスチャの実 px。x,y） */
+export type EdgeOffset = readonly [number, number]
+
+export interface EdgeOffsets {
+  /** 余白の内側を調べる変位。本体からの距離が余白未満なら、どれかが本体に当たる */
+  inner: EdgeOffset[]
+  /** 余白+線の縁の円を調べる変位 */
+  outer: EdgeOffset[]
+}
+
+const finiteNonNeg = (v: number): number => (Number.isFinite(v) && v > 0 ? v : 0)
+
+/** 半径 `r`(論理 px) の円周を、隣接サンプル間隔が `spacing` 以下になる方向数で刻む。`phase`(0〜1) は角度のずらし */
+function ringOffsets(r: number, phase: number, scale: number, spacing: number): EdgeOffset[] {
+  const n = Math.max(6, Math.ceil((2 * Math.PI * r) / spacing))
+  const out: EdgeOffset[] = []
+  for (let i = 0; i < n; i++) {
+    const a = ((i + phase) * 2 * Math.PI) / n
+    out.push([Math.cos(a) * r * scale, Math.sin(a) * r * scale])
+  }
+  return out
 }
 
 /**
- * 枠線フィルタの周囲サンプリング数を、余白と線の半径（フィルタテクスチャ上の px）から決める。
- * 半径が大きいほど段数・方向数を増やし、総タップは `EDGE_MAX_TAPS` 以下に収める。
- * 方向数は外周の隣接サンプル間隔がおよそ 2.5px 以下になる数（下限 8、上限 16 かつ予算内）。
- * 非数・負値は 0 として扱う。
+ * 枠線フィルタ（`AcrylicEdgeFilter`）が周囲の alpha を調べる変位の列を求める。シェーダは
+ * 「この列の alpha の最大値」を取るだけで、配置はすべてここ（テストできる側）が決める。
+ *
+ *   ring = clamp(max(outer 列) − max(inner 列), 0, 1)   （本体 alpha も両方に含める）
+ *
+ * - `marginPx` / `linePx` は論理 px。`EDGE_MAX_MARGIN_PX` / `EDGE_MAX_LINE_PX` に切り詰める（配列長の上限を守る）。
+ * - サンプルの**配置は論理 px で決める**（隙間の検出力が解像度に依存しない・タップ数も増えない）。
+ *   返す変位は実 px（論理 px × `resolution`）。フィルタテクスチャは実 px 単位なので、そのまま 1/pixelWidth を掛ければ UV になる。
+ * - inner: 半径 `margin*k/n`（n = ceil(margin / `EDGE_INNER_SPACING_PX`)、k=1..n）の同心円。最外の円が余白の縁。
+ *   円ごとに方向数（半径に比例、下限 6）と角度の位相をずらし、放射状の抜けを避ける。
+ * - outer: 半径 `margin + line` の円 1 つ。線が 0 なら空。
+ * - 非数・負値は 0、`resolution` は 0 以下・非数なら 1。
  */
-export function computeEdgeSampling(marginTexPx: number, lineTexPx: number): EdgeSampling {
-  const m = Number.isFinite(marginTexPx) && marginTexPx > 0 ? marginTexPx : 0
-  const l = Number.isFinite(lineTexPx) && lineTexPx > 0 ? lineTexPx : 0
-  const innerRings = clamp(Math.ceil(m / 3), 1, 2)
-  const outerRings = clamp(Math.ceil(l / 2), 1, 2)
-  const rings = innerRings + outerRings
-  const cap = Math.min(16, Math.floor(EDGE_MAX_TAPS / rings))
-  const wanted = Math.ceil((2 * Math.PI * (m + l)) / 2.5)
-  return { innerRings, outerRings, directions: clamp(wanted, 8, cap) }
+export function computeEdgeOffsets(marginPx: number, linePx: number, resolution = 1): EdgeOffsets {
+  const m = Math.min(EDGE_MAX_MARGIN_PX, finiteNonNeg(marginPx))
+  const l = Math.min(EDGE_MAX_LINE_PX, finiteNonNeg(linePx))
+  const res = finiteNonNeg(resolution) || 1
+  const inner: EdgeOffset[] = []
+  if (m > 0) {
+    const n = Math.ceil(m / EDGE_INNER_SPACING_PX)
+    for (let k = 1; k <= n; k++) {
+      // 黄金比の小数で円ごとに位相をずらす
+      inner.push(...ringOffsets((m * k) / n, (k * 0.381966) % 1, res, EDGE_INNER_SPACING_PX))
+    }
+  }
+  const outer: EdgeOffset[] = l > 0 ? ringOffsets(m + l, 0.5, res, EDGE_OUTER_SPACING_PX) : []
+  return { inner, outer }
 }
