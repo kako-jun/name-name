@@ -60,6 +60,20 @@ export interface VideoExportResult {
   durationMs: number
 }
 
+/** 開始シーンの背景ロード待ちの上限 ms。超えたら警告して録画を始める（書き出しを永久停止させない） */
+const BACKGROUND_LOAD_TIMEOUT_MS = 10_000
+
+/**
+ * 書き出しに使う flags を決める (#734, ADR 0003 §8)。既定（`inheritPreview` false）は空で、
+ * プレビューの状態に依らず決定論的に録れる。true ならプレビュー中の flags を複製して返す。
+ */
+export function resolveExportFlags(
+  renderer: Pick<NovelRenderer, 'getSnapshot'>,
+  inheritPreview: boolean
+): Record<string, FlagValue> {
+  return inheritPreview ? structuredClone(renderer.getSnapshot().flags) : {}
+}
+
 const CODEC_CANDIDATES = [
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
@@ -228,10 +242,14 @@ export async function exportVideo(
   let stopped = false
   let settled = false
   let visitedEndScene = false
+  const prevAutoMode = renderer.isAutoMode()
   let startedAt = 0
+  let finalizeTimer: ReturnType<typeof setTimeout> | null = null
 
   const cleanup = () => {
     try {
+      // 書き出し前の autoMode へ戻す（書き出しのために入れたオートモードをプレビューへ残さない）
+      renderer.setAutoMode(prevAutoMode)
       // 元値が null だったら null に戻す（advance の onEndCallback?.() 挙動を完全復元）(round-2 S4)
       renderer.setOnSceneChange(prevOnSceneChange)
       renderer.setOnEnd(prevOnEnd)
@@ -271,7 +289,7 @@ export async function exportVideo(
       cleanup()
       settleResolve(performance.now() - startedAt)
     }
-    setTimeout(() => {
+    finalizeTimer = setTimeout(() => {
       try {
         if (recorder.state !== 'inactive') {
           recorder.stop()
@@ -326,6 +344,10 @@ export async function exportVideo(
   // preRoll では間に合わず録画先頭の背景が欠ける）→ 1 frame (16ms @60Hz) 待って GPU 合成 flush →
   // recorder.start。「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
   // 新規開始は BGM・背景・flags・consecutiveJumps をプレビューから持ち越さない (#734, ADR 0003)。
+  // 録画開始前の待ち中に終端（onEnd / end から次シーン）が来たら、録画せず失敗にする。
+  const failIfStopped = () => {
+    if (stopped) throw new Error('ended before recording started')
+  }
   renderer.setAutoMode(true)
   onProgress?.(`録画準備中（flags: ${JSON.stringify(flags)}）`)
   try {
@@ -334,8 +356,9 @@ export async function exportVideo(
       const detail = entry.status === 'failed' ? `${entry.status}: ${entry.reason}` : entry.status
       throw new Error(`Could not start from scene "${startSceneId}" (${detail})`)
     }
+    failIfStopped()
     onProgress?.('背景読み込み中')
-    await renderer.waitForBackgroundLoad()
+    await waitForBackground(renderer)
 
     await new Promise((r) => setTimeout(r, preRollMs))
 
@@ -343,10 +366,14 @@ export async function exportVideo(
     // ready を待つ。これで録画の先頭から動画が正しく映る/鳴る。動画が無ければ即解決。
     onProgress?.('動画頭出し中')
     await renderer.prepareVideosForExport()
+    failIfStopped()
   } catch (e) {
     // 録画を始める前の失敗: 退避したリスナ・解像度・録画フラグ・isExporting を必ず戻す。
-    cleanup()
+    // 待ち中に終端検知で予約された finalize の timer は、後で cleanup を再実行して
+    // 次の export を壊さないようここで取り消す。
     stopped = true
+    if (finalizeTimer !== null) clearTimeout(finalizeTimer)
+    cleanup()
     throw e instanceof Error ? e : new Error(String(e))
   }
 
@@ -355,6 +382,27 @@ export async function exportVideo(
   onProgress?.('録画開始')
 
   return resultPromise
+}
+
+/** 背景ロード待ち。上限を超えたら警告して先へ進む（reject しない） */
+async function waitForBackground(renderer: NovelRenderer): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'timeout'>((res) => {
+    timer = setTimeout(() => res('timeout'), BACKGROUND_LOAD_TIMEOUT_MS)
+  })
+  try {
+    const r = await Promise.race([
+      renderer.waitForBackgroundLoad().then(() => 'done' as const),
+      timeout,
+    ])
+    if (r === 'timeout') {
+      console.warn(
+        `[VideoExporter] 開始シーンの背景ロードが ${BACKGROUND_LOAD_TIMEOUT_MS}ms で終わらないため、待たずに録画を始めます`
+      )
+    }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Blob をブラウザのダウンロード経由でファイル保存する */

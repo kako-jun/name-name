@@ -100,6 +100,7 @@ describe('exportVideo state machine (smoke)', () => {
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
 
@@ -145,6 +146,7 @@ describe('exportVideo resolution bump (#279)', () => {
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
   }
@@ -197,6 +199,7 @@ describe('exportVideo resolution bump (#279)', () => {
         takeOnSceneChange: () => null,
         startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
         waitForBackgroundLoad: async () => {},
+        isAutoMode: () => false,
         setAutoMode: () => {},
       } as unknown as Parameters<typeof exportVideo>[0]
     }
@@ -282,6 +285,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
       prepareVideosForExport: async () => {},
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
@@ -508,6 +512,159 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
     void onEnd
   })
 
+  it('#734 S2: 背景ロードが上限を超えて返らなくても警告して録画を始める', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    const { startedPromise } = recordableSetup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      let onEnd: (() => void) | null = null
+      const renderer = successRenderer([], (cb) => {
+        onEnd = cb
+      }) as unknown as Record<string, unknown>
+      renderer.waitForBackgroundLoad = () => new Promise<void>(() => {}) // 永久に返らない
+      const p = exportVideo(renderer as unknown as Exp, {
+        startSceneId: 'a',
+        endSceneId: 'b',
+        fps: 30,
+        preRollMs: 0,
+        postRollMs: 0,
+      })
+      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.advanceTimersByTimeAsync(10) // 上限後の preRoll
+      await startedPromise
+      expect(warn).toHaveBeenCalled()
+      onEnd!()
+      await vi.advanceTimersByTimeAsync(10)
+      await p
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  it('#734 S3: 背景待ち中に onEnd が来たら録画せず reject し、予約済み finalize が後で次の export を壊さない', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    let recorded = false
+    installRecordableMediaRecorder(() => {
+      recorded = true
+    })
+    const exportCalls: boolean[] = []
+    let onEnd: (() => void) | null = null
+    const renderer = successRenderer(exportCalls, (cb) => {
+      onEnd = cb
+    }) as unknown as Record<string, unknown>
+    let release!: () => void
+    renderer.waitForBackgroundLoad = () =>
+      new Promise<void>((res) => {
+        release = res
+      })
+    const p = exportVideo(renderer as unknown as Exp, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      fps: 30,
+      preRollMs: 0,
+      postRollMs: 30,
+    })
+    const assertion = expect(p).rejects.toThrow(/ended before recording started/)
+    await new Promise((r) => setTimeout(r, 10))
+    onEnd!() // 待ち中の終端検知 → finalize が postRoll timer を予約
+    release()
+    await assertion
+    expect(recorded).toBe(false)
+    expect(exportCalls).toEqual([true, false])
+    // 予約されていた timer が後で発火しても cleanup を再実行しない
+    await new Promise((r) => setTimeout(r, 60))
+    expect(exportCalls).toEqual([true, false])
+  })
+
+  it('#734 S3: startFrom 中に先回り終劇(onEnd)しても録画を始めず reject する', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    let recorded = false
+    installRecordableMediaRecorder(() => {
+      recorded = true
+    })
+    let onEnd: (() => void) | null = null
+    const renderer = successRenderer([], (cb) => {
+      onEnd = cb
+    }) as unknown as Record<string, unknown>
+    renderer.startFrom = async () => {
+      onEnd!()
+      return { status: 'entered', sceneId: 'a' }
+    }
+    await expect(
+      exportVideo(renderer as unknown as Exp, {
+        startSceneId: 'a',
+        endSceneId: 'b',
+        fps: 30,
+        preRollMs: 0,
+        postRollMs: 0,
+      })
+    ).rejects.toThrow(/ended before recording started/)
+    expect(recorded).toBe(false)
+  })
+
+  it('#734 S4: prepareVideosForExport が reject しても cleanup を通す', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    installRecordableMediaRecorder(() => {})
+    const exportCalls: boolean[] = []
+    const renderer = successRenderer(exportCalls, () => {}) as unknown as Record<string, unknown>
+    renderer.prepareVideosForExport = async () => {
+      throw new Error('video not ready')
+    }
+    await expect(
+      exportVideo(renderer as unknown as Exp, {
+        startSceneId: 'a',
+        endSceneId: 'b',
+        fps: 30,
+        preRollMs: 0,
+      })
+    ).rejects.toThrow('video not ready')
+    expect(exportCalls).toEqual([true, false])
+    // isExporting 解除: 続く export が "already running" にならない
+    const { startedPromise } = recordableSetup()
+    let onEnd: (() => void) | null = null
+    const ok = exportVideo(
+      successRenderer([], (cb) => {
+        onEnd = cb
+      }),
+      { startSceneId: 'a', endSceneId: 'b', fps: 30, preRollMs: 0, postRollMs: 0 }
+    )
+    await startedPromise
+    onEnd!()
+    await ok
+  })
+
+  it('#734 N2: autoMode を書き出し前の値へ戻す（成功・失敗とも）', async () => {
+    const { exportVideo } = await import('./VideoExporter')
+    for (const fail of [false, true]) {
+      const { startedPromise } = recordableSetup()
+      const modes: boolean[] = []
+      let onEnd: (() => void) | null = null
+      const renderer = successRenderer([], (cb) => {
+        onEnd = cb
+      }) as unknown as Record<string, unknown>
+      renderer.isAutoMode = () => false
+      renderer.setAutoMode = (on: boolean) => modes.push(on)
+      if (fail) renderer.startFrom = async () => ({ status: 'failed', reason: 'not-found' })
+      const p = exportVideo(renderer as unknown as Exp, {
+        startSceneId: 'a',
+        endSceneId: 'b',
+        fps: 30,
+        preRollMs: 0,
+        postRollMs: 0,
+      })
+      if (fail) {
+        await expect(p).rejects.toThrow()
+      } else {
+        await startedPromise
+        onEnd!()
+        await p
+      }
+      expect(modes).toEqual([true, false])
+    }
+  })
+
   // F-2: audioStream 取得失敗（enableCapture→null）でも throw 前に setExporting(false) を呼び最終 false。
   it('F-2: audioStream 失敗時も throw 前に setExporting(false) を呼び最終 false', async () => {
     const { exportVideo } = await import('./VideoExporter')
@@ -537,6 +694,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
 
@@ -578,6 +736,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
         takeOnSceneChange: () => null,
         startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
         waitForBackgroundLoad: async () => {},
+        isAutoMode: () => false,
         setAutoMode: () => {},
       } as unknown as Parameters<typeof exportVideo>[0]
     }
@@ -642,6 +801,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
       prepareVideosForExport: async () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
@@ -738,6 +898,7 @@ describe('exportVideo cleanup 解像度復元 (#455 resolveCleanupResolution)', 
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
   }
@@ -852,6 +1013,7 @@ describe('exportVideo cleanup 解像度復元 (#455 resolveCleanupResolution)', 
       takeOnSceneChange: () => null,
       startFrom: async () => ({ status: 'entered', sceneId: 'a' }),
       waitForBackgroundLoad: async () => {},
+      isAutoMode: () => false,
       setAutoMode: () => {},
     } as unknown as Parameters<typeof exportVideo>[0]
 
@@ -895,5 +1057,20 @@ describe('NovelRenderer#getScreenSize (#455)', () => {
     const second = renderer.getScreenSize()
     expect(first).toEqual({ width: 900, height: 450 })
     expect(second).toEqual({ width: 900, height: 450 })
+  })
+})
+
+describe('resolveExportFlags / VideoExportModal (#734 M1)', () => {
+  it('OFF（既定）は空、ON はプレビュー flags の複製（参照を共有しない）', async () => {
+    const { resolveExportFlags } = await import('./VideoExporter')
+    const live = { met: { Bool: true }, n: { Number: 2 } }
+    const renderer = { getSnapshot: () => ({ flags: live }) } as unknown as Parameters<
+      typeof resolveExportFlags
+    >[0]
+    expect(resolveExportFlags(renderer, false)).toEqual({})
+    const copied = resolveExportFlags(renderer, true)
+    expect(copied).toEqual(live)
+    expect(copied).not.toBe(live)
+    expect(copied.met).not.toBe(live.met)
   })
 })
