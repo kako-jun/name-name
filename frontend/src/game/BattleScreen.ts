@@ -278,6 +278,8 @@ export class BattleScreen extends Container {
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
+  /** side: 敵の名前・HP ラベルの親 (#747)。前景より手前・パネルより奥（spec「前景はパネル・文字より奥」だが敵ラベルは読ませる） */
+  private labelLayer: Container | null = null
   /** 前景レイヤー (#747)。スプライトより手前・パネルより奥 */
   private foregroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
@@ -542,6 +544,10 @@ export class BattleScreen extends Container {
     this.sideStage = stage
     // dim の直後（パネル・テキストより下）に差し込む
     this.addChildAt(stage, this.getChildIndex(this.dim) + 1)
+    // 敵ラベルは sideStage の直後（前景は loadForeground が sideStage の直後=ラベル層の手前に差し込む）
+    const labelLayer = new Container()
+    this.labelLayer = labelLayer
+    this.addChildAt(labelLayer, this.getChildIndex(stage) + 1)
     for (const e of s.enemies) {
       const view = this.createEntityView(e, FALLBACK_ENEMY_COLOR, true)
       stage.addChild(view.container)
@@ -595,7 +601,8 @@ export class BattleScreen extends Container {
       : null
     if (label) {
       label.anchor.set(0.5, 0)
-      container.addChild(label)
+      // sideStage の外（前景より上の層）へ置く。座標は画面絶対（placeEntityView が更新）
+      this.labelLayer?.addChild(label)
     }
     const view: EntityView = {
       container,
@@ -923,11 +930,11 @@ export class BattleScreen extends Container {
       view.fallback.visible = false
     }
     if (view.label) {
-      // ラベル位置は純粋関数が返す矩形（container 相対に直す）。置けない枠では隠す
+      // ラベル位置は純粋関数が返す矩形（画面絶対）。縮尺・位置の追従は slot に含まれる。置けない枠では隠す
       view.label.visible = !!slot.label
       if (slot.label) {
-        view.label.x = slot.label.x - slot.x + slot.label.w / 2
-        view.label.y = slot.label.y - slot.y
+        view.label.x = slot.label.x + slot.label.w / 2
+        view.label.y = slot.label.y
       }
     }
   }
@@ -978,6 +985,7 @@ export class BattleScreen extends Container {
       if (!e) continue
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
       if (view.label) {
+        view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
         // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
         // 多列は列ピッチ=スプライト一辺）を越える名前は省略して隣と重ねない
         // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く
