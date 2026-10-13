@@ -196,6 +196,15 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_atb_mode: \"{sanitized}\"\n"));
         }
+        // battle_command_layout / battle_command_labels (#204)。同じ流儀
+        if let Some(ref v) = doc.battle_command_layout {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_command_layout: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_command_labels {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_command_labels: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1711,6 +1720,8 @@ mod tests {
             battle_foreground: None,
             battle_atb: None,
             battle_atb_mode: None,
+            battle_command_layout: None,
+            battle_command_labels: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1982,6 +1993,8 @@ mod tests {
             battle_foreground: None,
             battle_atb: None,
             battle_atb_mode: None,
+            battle_command_layout: None,
+            battle_command_labels: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

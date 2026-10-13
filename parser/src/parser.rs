@@ -53,6 +53,8 @@ pub fn parse(input: &str) -> Document {
     let mut battle_foreground: Option<String> = None;
     let mut battle_atb: Option<String> = None;
     let mut battle_atb_mode: Option<String> = None;
+    let mut battle_command_layout: Option<String> = None;
+    let mut battle_command_labels: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -285,6 +287,18 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_perspective = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_command_layout:") {
+                // RPG 戦闘のコマンド窓の配置 (#204)。grid / cross。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_command_layout = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_command_labels:") {
+                // RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_command_labels = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_atb_mode:") {
                 // RPG 戦闘の ATB 進行方式 (#205)。wait / active。値は生文字列で透過する。
@@ -1139,6 +1153,8 @@ pub fn parse(input: &str) -> Document {
         battle_foreground,
         battle_atb,
         battle_atb_mode,
+        battle_command_layout,
+        battle_command_labels,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

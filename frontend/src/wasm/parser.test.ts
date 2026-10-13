@@ -2398,3 +2398,32 @@ describe('parseMarkdown + normalizeDocument: battle_atb / battle_atb_mode が no
     expect(again.battle_atb_mode).toBe('active')
   })
 })
+
+describe('parseMarkdown + normalizeDocument: battle_command_layout / battle_command_labels が生き残る (#204)', () => {
+  const docWith = (lines: string[]): string =>
+    [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+
+  it('実 WASM パーサ経由で doc に残り、未指定は null', async () => {
+    const doc = await parseMarkdown(
+      docWith(['battle_command_layout: cross', 'battle_command_labels: "attack=斬る, spell=魔石"'])
+    )
+    expect(doc.battle_command_layout).toBe('cross')
+    expect(doc.battle_command_labels).toBe('attack=斬る, spell=魔石')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_command_layout).toBeNull()
+    expect(none.battle_command_labels).toBeNull()
+  })
+})

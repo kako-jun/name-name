@@ -1617,6 +1617,16 @@ pub struct Document {
     /// GUI 専用。frontmatter `battle_atb_mode:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_atb_mode: Option<String>,
+    /// RPG 戦闘のコマンド窓の配置 (#204)。`"grid"`（既定・2x2）/ `"cross"`（FF6 の「短縮」風の十字）。
+    /// 値は生文字列で透過し、不正値・未指定は runtime 側で `"grid"` にフォールバックする。GUI 専用。
+    /// frontmatter `battle_command_layout:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_command_layout: Option<String>,
+    /// RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` のように `id=表示名` をカンマ区切りで並べる
+    /// （id は attack / spell / item / escape。部分指定可）。値は生文字列で透過し、runtime 側で解釈する。GUI 専用。
+    /// frontmatter `battle_command_labels:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_command_labels: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

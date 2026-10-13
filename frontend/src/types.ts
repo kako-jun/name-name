@@ -884,6 +884,10 @@ export interface EventDocument {
   battle_atb?: string | null
   /** RPG 戦闘の ATB の進行方式 (#205)。`"wait"`（既定）/ `"active"`。`battle_atb: on` のときだけ効く。frontmatter `battle_atb_mode:` から流す。 */
   battle_atb_mode?: string | null
+  /** RPG 戦闘のコマンド窓の配置 (#204)。`"grid"`（既定・2x2）/ `"cross"`（十字）。frontmatter `battle_command_layout:` から流す。GUI 専用。 */
+  battle_command_layout?: string | null
+  /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */
+  battle_command_labels?: string | null
   chapters: EventChapter[]
 }
 

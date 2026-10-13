@@ -5338,6 +5338,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_foreground: None,
         battle_atb: None,
         battle_atb_mode: None,
+        battle_command_layout: None,
+        battle_command_labels: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10520,6 +10522,8 @@ fn telop_test_doc_base() -> Document {
         battle_foreground: None,
         battle_atb: None,
         battle_atb_mode: None,
+        battle_command_layout: None,
+        battle_command_labels: None,
         chapters: vec![],
     }
 }
@@ -11816,4 +11820,31 @@ fn test_battle_atb_emit_only_set_fields() {
         "{emitted}"
     );
     assert!(!emitted.contains("battle_atb: "), "{emitted}");
+}
+
+// ---- #204: battle_command_layout / battle_command_labels ----
+
+#[test]
+fn test_battle_command_keys_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_command_layout: cross\nbattle_command_labels: \"attack=斬る, spell=魔石\"\n",
+    ));
+    assert_eq!(doc.battle_command_layout.as_deref(), Some("cross"));
+    assert_eq!(
+        doc.battle_command_labels.as_deref(),
+        Some("attack=斬る, spell=魔石")
+    );
+    let doc0 = parser::parse(&battle_doc(
+        "battle_command_layout:\nbattle_command_labels: \"\"\n",
+    ));
+    assert_eq!(doc0.battle_command_layout, None);
+    assert_eq!(doc0.battle_command_labels, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_command_layout: \"cross\"\n"),
+        "{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_command_layout, doc.battle_command_layout);
+    assert_eq!(doc2.battle_command_labels, doc.battle_command_labels);
 }
