@@ -1761,3 +1761,30 @@ describe('rpgProjectFromDoc: battle_atb / battle_atb_mode (#205)', () => {
     }
   })
 })
+
+describe('rpgProjectFromDoc: pixel_art (#760)', () => {
+  const withPixel = (v: boolean | null | undefined): EventDocument => ({
+    ...makeDoc(),
+    pixel_art: v,
+  })
+
+  it('pixel_art: true → pixelArt === true（戦闘テクスチャを nearest のまま使う）', () => {
+    expect(rpgProjectFromDoc(withPixel(true))!.pixelArt).toBe(true)
+  })
+
+  it.each([[false], [null], [undefined]])(
+    'pixel_art: %s → pixelArt は undefined（mipmap + linear）',
+    (v) => {
+      expect(rpgProjectFromDoc(withPixel(v))!.pixelArt).toBeUndefined()
+    }
+  )
+
+  it('pixel_art 未指定の doc も undefined', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.pixelArt).toBeUndefined()
+  })
+
+  it('真偽値以外（文字列 "true" など）は true 扱いにしない', () => {
+    expect(rpgProjectFromDoc(withPixel('true' as never))!.pixelArt).toBeUndefined()
+    expect(rpgProjectFromDoc(withPixel(1 as never))!.pixelArt).toBeUndefined()
+  })
+})

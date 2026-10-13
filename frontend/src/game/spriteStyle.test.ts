@@ -508,3 +508,74 @@ describe('computeAcrylicGeometry: 余白・線の上限', () => {
     expect(g.linePx).toBe(4)
   })
 })
+
+// ---------------------------------------------------------------------------
+// #760 追加: 新パラメータ（板・台座・地面の影）の clamp と不正値
+// ---------------------------------------------------------------------------
+describe('resolveAcrylicParams: #760 の新パラメータ', () => {
+  // [項目, 下限, 上限] — 仕様値（リテラル）
+  it.each<[keyof AcrylicParams, number, number]>([
+    ['plateFillAlpha', 0, 1],
+    ['specularAlpha', 0, 1],
+    ['innerShadowAlpha', 0, 1],
+    ['baseThicknessRatio', 0, 0.2],
+    ['baseFillAlpha', 0, 1],
+    ['baseSideAlpha', 0, 1],
+    ['slitAlpha', 0, 1],
+    ['castAlpha', 0, 1],
+    ['castSquash', 0.1, 1],
+    ['castShear', -2, 2],
+    ['castBlurRatio', 0, 0.1],
+  ])('仕様値: %s の clamp は下限 %s・上限 %s（境界-1/境界/境界+1）', (key, min, max) => {
+    const at = (v: number): number => resolveAcrylicParams({ [key]: v })[key] as number
+    expect(at(min - 0.01)).toBe(min)
+    expect(at(min)).toBe(min)
+    expect(at(min + 0.001)).toBeCloseTo(min + 0.001, 9)
+    expect(at(max - 0.001)).toBeCloseTo(max - 0.001, 9)
+    expect(at(max)).toBe(max)
+    expect(at(max + 0.01)).toBe(max)
+    expect(at(max * 100 + 100)).toBe(max)
+  })
+
+  it.each([[NaN], [Infinity], [-Infinity]])(
+    '新パラメータに %s を渡すと既定値（リテラル）',
+    (bad) => {
+      const r = resolveAcrylicParams({
+        plateFillAlpha: bad,
+        specularAlpha: bad,
+        innerShadowAlpha: bad,
+        baseThicknessRatio: bad,
+        baseFillAlpha: bad,
+        baseSideAlpha: bad,
+        slitAlpha: bad,
+        castAlpha: bad,
+        castSquash: bad,
+        castShear: bad,
+        castBlurRatio: bad,
+      })
+      expect(r.plateFillAlpha).toBe(0.07)
+      expect(r.specularAlpha).toBe(0.2)
+      expect(r.innerShadowAlpha).toBe(0.12)
+      expect(r.baseThicknessRatio).toBe(0.18)
+      expect(r.baseFillAlpha).toBe(0.14)
+      expect(r.baseSideAlpha).toBe(0.26)
+      expect(r.slitAlpha).toBe(0.3)
+      expect(r.castAlpha).toBe(0.55)
+      expect(r.castSquash).toBe(0.35)
+      expect(r.castShear).toBe(1.4)
+      expect(r.castBlurRatio).toBe(0.012)
+    }
+  )
+
+  it('castAlpha を 0 にできる（0 は falsy でも既定に戻らない）・castShear 0 / 負も通る', () => {
+    expect(resolveAcrylicParams({ castAlpha: 0 }).castAlpha).toBe(0)
+    expect(resolveAcrylicParams({ castShear: 0 }).castShear).toBe(0)
+    expect(resolveAcrylicParams({ castShear: -1.5 }).castShear).toBe(-1.5)
+    expect(resolveAcrylicParams({ baseThicknessRatio: 0 }).baseThicknessRatio).toBe(0)
+  })
+
+  it('新パラメータの上書きは旧パラメータ（余白・線・台座）に影響しない', () => {
+    const r = resolveAcrylicParams({ castAlpha: 0.1, baseThicknessRatio: 0.05 })
+    expect(r).toEqual({ ...DEFAULT_ACRYLIC_PARAMS, castAlpha: 0.1, baseThicknessRatio: 0.05 })
+  })
+})

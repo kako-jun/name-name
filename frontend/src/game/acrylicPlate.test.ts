@@ -104,3 +104,124 @@ describe('renderAcrylicPlate', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// #760 追加観点。旧 AcrylicEdgeFilter のテストが守っていた性質（色・不透明度の反映、lineAlpha=0 で枠が消える、
+// 解像度に依存しない幅、再実行で追従）を新方式（元画像解像度の板ラスタ）で守る。
+// ---------------------------------------------------------------------------
+describe('renderAcrylicPlate: パラメータの反映 (#760)', () => {
+  const n = 120
+  const alpha = square(n, 60)
+  const render = (over: Partial<typeof P>): ReturnType<typeof renderAcrylicPlate> =>
+    renderAcrylicPlate(alpha, n, n, { ...P, ...over })
+  const px = (r: ReturnType<typeof renderAcrylicPlate>, x: number, y: number): number[] => {
+    const i = ((y + r.pad) * r.width + x + r.pad) * 4
+    return [r.rgba[i], r.rgba[i + 1], r.rgba[i + 2], r.rgba[i + 3]]
+  }
+  /** 全ピクセルの alpha 合計 */
+  const total = (r: ReturnType<typeof renderAcrylicPlate>): number => {
+    let t = 0
+    for (let i = 3; i < r.rgba.length; i += 4) t += r.rgba[i]
+    return t
+  }
+
+  it('lineColor が縁の色に反映される（赤 0xff0000 は R が B より十分大きく、既定の水色 0xe6f3ff は B ≥ R）', () => {
+    const red = px(render({ lineColor: 0xff0000 }), 24, 60)
+    const def = px(render({}), 24, 60)
+    expect(red[0] - red[2]).toBeGreaterThan(60)
+    expect(def[2]).toBeGreaterThanOrEqual(def[0])
+  })
+
+  it('lineAlpha=0 で縁（リム）が消える: 縁の不透明度が内側の面程度まで落ちる', () => {
+    const off = render({ lineAlpha: 0 })
+    const on = render({})
+    expect(px(off, 24, 60)[3]).toBeLessThan(px(on, 24, 60)[3])
+    expect(px(off, 24, 60)[3] / 255).toBeLessThan(0.35)
+    // 左上・右下の差（リムの光側強調）も消える
+    const maxOf = (r: ReturnType<typeof renderAcrylicPlate>, xs: number[]): number =>
+      Math.max(...xs.map((x) => px(r, x, 60)[3]))
+    expect(maxOf(on, [20, 22, 24, 26])).toBeGreaterThan(maxOf(on, [93, 95, 97, 99]))
+  })
+
+  it('lineAlpha が大きいほど縁は濃い（単調）', () => {
+    const a = (v: number): number => px(render({ lineAlpha: v }), 24, 60)[3]
+    expect(a(0.2)).toBeLessThan(a(0.5))
+    expect(a(0.5)).toBeLessThan(a(0.9))
+  })
+
+  it('plateFillAlpha=0 / specularAlpha=0 / innerShadowAlpha=0 で奥の面が完全に透明、plateFillAlpha を上げると面が濃くなる', () => {
+    const none = render({ plateFillAlpha: 0, specularAlpha: 0, innerShadowAlpha: 0 })
+    expect(px(none, 60, 60)[3]).toBe(0)
+    const thin = render({ plateFillAlpha: 0.07, specularAlpha: 0, innerShadowAlpha: 0 })
+    const thick = render({ plateFillAlpha: 0.4, specularAlpha: 0, innerShadowAlpha: 0 })
+    expect(px(thin, 60, 60)[3]).toBeCloseTo(Math.round(0.07 * 255), -1)
+    expect(px(thick, 60, 60)[3]).toBeGreaterThan(px(thin, 60, 60)[3])
+  })
+
+  it('specularAlpha を上げると鏡面ハイライトの筋ぶん板全体の不透明度の合計が増える', () => {
+    const base = { plateFillAlpha: 0.07, innerShadowAlpha: 0 }
+    expect(total(render({ ...base, specularAlpha: 0.6 }))).toBeGreaterThan(
+      total(render({ ...base, specularAlpha: 0 }))
+    )
+  })
+
+  it('innerShadowAlpha は光と反対側（右の縁の内側）にだけ効き、光側（左の縁の内側）は変わらない', () => {
+    const off = render({ innerShadowAlpha: 0 })
+    const on = render({ innerShadowAlpha: 0.6 })
+    // 正方形は x 30〜89。右の縁のすぐ内側と、左の縁のすぐ内側
+    const right = (r: ReturnType<typeof renderAcrylicPlate>): number =>
+      Math.max(...[86, 87, 88, 89].map((x) => px(r, x, 60)[3]))
+    const left = (r: ReturnType<typeof renderAcrylicPlate>): number =>
+      Math.max(...[30, 31, 32, 33].map((x) => px(r, x, 60)[3]))
+    expect(right(on)).toBeGreaterThan(right(off))
+    expect(left(on)).toBe(left(off))
+  })
+
+  it('板の幅は画像の大きさに比例する（解像度に依らない: 2 倍の画像は 2 倍の広がり）', () => {
+    const small = computePlateLayout(100, 200, P)
+    const big = computePlateLayout(200, 400, P)
+    expect(big.spread / small.spread).toBeCloseTo(2, 9)
+    expect(big.rim / small.rim).toBeCloseTo(2, 9)
+  })
+
+  it('同じ入力なら同じラスタ（純粋・決定的）で、入力の alpha を壊さない', () => {
+    const a1 = square(n, 60)
+    const copy = Uint8Array.from(a1)
+    const r1 = renderAcrylicPlate(a1, n, n, P)
+    const r2 = renderAcrylicPlate(a1, n, n, P)
+    expect(Array.from(a1)).toEqual(Array.from(copy))
+    expect(Array.from(r1.rgba)).toEqual(Array.from(r2.rgba))
+    expect(Array.from(r1.shape)).toEqual(Array.from(r2.shape))
+  })
+
+  it('shape は 0〜1・寸法は rgba と一致し、元画像の不透明部分では 1、遠い外では 0（影の元になる）', () => {
+    const r = render({})
+    expect(r.shape).toHaveLength(r.width * r.height)
+    expect(r.shape.every((v) => v >= 0 && v <= 1)).toBe(true)
+    expect(r.shape[(60 + r.pad) * r.width + 60 + r.pad]).toBeCloseTo(1, 6)
+    expect(r.shape[0]).toBe(0)
+  })
+
+  it('縦長の画像（w≠h）でも寸法は (w+2pad)x(h+2pad)・縦横を取り違えない', () => {
+    const w = 40
+    const h = 100
+    const a = new Uint8Array(w * h).fill(255)
+    const r = renderAcrylicPlate(a, w, h, P)
+    expect(r.width).toBe(w + r.pad * 2)
+    expect(r.height).toBe(h + r.pad * 2)
+    expect(r.rgba).toHaveLength(r.width * r.height * 4)
+    expect(r.shape).toHaveLength(r.width * r.height)
+  })
+
+  it('全面不透明の画像でも板は画像の外へ広がる（pad ぶん）', () => {
+    const w = 40
+    const a = new Uint8Array(w * w).fill(255)
+    const r = renderAcrylicPlate(a, w, w, P)
+    expect(r.rgba[(r.pad - 2) * r.width * 4 + (r.pad + 20) * 4 + 3]).toBeGreaterThan(0)
+  })
+
+  it('lineColor の下位ビットと上位ビットを取り違えない（0x0000ff は B 優位・0xff0000 は R 優位）', () => {
+    const b = px(render({ lineColor: 0x0000ff }), 24, 60)
+    expect(b[2]).toBeGreaterThan(b[0] + 60)
+  })
+})
