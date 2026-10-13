@@ -50,7 +50,7 @@ export type SceneEntryRequest =
 
 /** 入場の結果。 */
 export type SceneEntryResult =
-  /** 入場できた。復元で sceneId が空の縮退のときだけ null。 */
+  /** 入場できた。sceneId が null なのは、エントリの線形ストリーム（新規開始のエントリ、または sceneId null の復元）へ入ったとき。 */
   | { status: 'entered'; sceneId: string | null }
   /** 進行のみ: confinement の圏外で終劇した。 */
   | { status: 'ended' }

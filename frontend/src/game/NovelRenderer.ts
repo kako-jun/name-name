@@ -1367,10 +1367,12 @@ export class NovelRenderer {
    * #637: `setScenes()` と対称に `gameState.clear()` / `currentSceneId` のリセットを行う。
    * 旧セーブ（GUI 起動時の #578 自動クイックロードが復元した flags/sceneId）を引きずったまま
    * 「はじめから」しても、Condition 分岐が旧フラグのまま解決されて「つづきから」相当の内容に
-   * なってしまっていた（#637 本体の症状）。`currentSceneId` は `allScenes[0]`（= エントリ doc の
-   * 最初のシーン。`PlayerScreen.buildSceneIndex()` が常にエントリ doc のシーンを先頭に積む前提）
-   * に戻す。単純に null にはしない（seekbar・シーンタイトル解決を restart 直後から正しく機能
-   * させるため）。
+   * なってしまっていた（#637 本体の症状）。`currentSceneId` は `entrySceneId`（`loadScenes`/`setScenes`
+   * ならエントリ doc の最初のシーン、`loadEvents` ならジャンプ前の線形ストリームを表す null）に戻す
+   * (#768)。再生するのは `entryRawEvents` なので、sceneId はそのイベント列の識別子と一致させる。
+   * 以前は `allScenes[0]` に戻していたが、線形ストリームの平坦なイベント列と `allScenes[0]` の
+   * events は別物で、その後のセーブが「sceneId=hub + 平坦ストリーム上の eventIndex」という不整合になった。
+   * マウント経路（`loadEvents`）も null で始まるので、restart 後だけ非 null にする理由は無い。
    *
    * #662: `rawEvents` ではなく `entryRawEvents` を再生する。マウント時の自動 quickLoad が
    * `restoreToScene()` 経由で `rawEvents` を直前ルート（例: 近視ルート）の scene.events に
@@ -1383,7 +1385,7 @@ export class NovelRenderer {
   restart(): void {
     if (this.entryRawEvents.length === 0) return
     this.gameState.clear()
-    this.currentSceneId = this.allScenes[0]?.id ?? null
+    this.currentSceneId = this.entrySceneId
     this.resetAndStartEvents([...this.entryRawEvents])
   }
 
@@ -1767,16 +1769,17 @@ export class NovelRenderer {
     }
     try {
       if (req.source === 'snapshot') this.storyEnded = req.state.storyEnded
+      const entryId = this.entrySceneId
       const entry: EventScene = {
-        id: '',
+        id: entryId ?? '',
         title: '',
         view: 'TopDown',
         events: this.entryRawEvents,
       }
-      // sceneId は null に正規化する（空文字のセーブも「ジャンプ前の線形ストリーム」を指す）。
-      this.restoreToScene(entry, { ...req.state, sceneId: null })
-      if (req.source === 'save') this.notifyLoadSuccess(req.origin)
-      return { status: 'entered', sceneId: null }
+      // sceneId はエントリの識別子に正規化する（loadEvents なら null。空文字のセーブも同じ扱い）。
+      this.restoreToScene(entry, { ...req.state, sceneId: entryId })
+      if (req.source === 'save' && req.origin) this.notifyLoadSuccess(req.origin)
+      return { status: 'entered', sceneId: entryId }
     } catch (err) {
       return this.failApply(req, err)
     }

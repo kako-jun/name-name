@@ -10,13 +10,34 @@ import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import { SaveManager } from './SaveManager'
 import type { NovelGameState } from './GameState'
-import type { Event, FlagValue } from '../types'
+import type { Event, EventScene, FlagValue } from '../types'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
 }
 function condition(flag: string, events: Event[]): Event {
   return { Condition: { flag, events } }
+}
+function jump(target: string): Event {
+  return { Jump: { target } }
+}
+function scene(id: string, events: Event[]): EventScene {
+  return { id, title: id, view: 'TopDown', events }
+}
+function seedNullSave(over: { eventIndex: number; flags?: Record<string, FlagValue> }): void {
+  new SaveManager().quickSave({
+    slot: -1,
+    sceneId: null,
+    eventIndex: over.eventIndex,
+    textIndex: 0,
+    flags: over.flags ?? {},
+    backgroundPath: null,
+    isBlackout: false,
+    characters: [],
+    currentBgmPath: null,
+    savedAt: new Date().toISOString(),
+    sceneName: null,
+  })
 }
 const boolFlag = (b: boolean): FlagValue => ({ Bool: b })
 
@@ -28,7 +49,7 @@ interface Internals {
   waitingForWait: boolean
   jumpState: 'idle' | 'pending' | 'stalled'
   pendingEntry: unknown
-  choiceOverlay: { show: (...args: unknown[]) => void }
+  rawEvents: Event[]
   render(): void
 }
 function internals(r: NovelRenderer): Internals {
@@ -186,5 +207,66 @@ describe('sceneId が null のセーブとロード (#768)', () => {
     ).resolves.toEqual({ status: 'entered', sceneId: null })
     expect(internals(r).eventIndex).toBe(2)
     expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+  })
+
+  it('別シーンへジャンプした後に null セーブをロードすると、イベント列はエントリ文書に戻り currentSceneId は null', async () => {
+    const OTHER = scene('other', [narration('o0'), narration('o1')])
+    const r = prepare(new NovelRenderer())
+    r.setJumpSceneIndex([OTHER])
+    r.loadEvents(LINEAR)
+    await r.startFrom({})
+    seedNullSave({ eventIndex: 1 })
+    await r.jumpToScene('other')
+    expect(r.getCurrentSceneId()).toBe('other')
+    expect(internals(r).rawEvents).toEqual(OTHER.events)
+
+    await expect(r.quickLoad()).resolves.toEqual({ status: 'entered', sceneId: null })
+
+    expect(r.getCurrentSceneId()).toBeNull()
+    expect(internals(r).rawEvents).toEqual(LINEAR)
+    expect(internals(r).eventIndex).toBe(1)
+    expect(internals(r).resolvedEvents[1]).toEqual(LINEAR[1])
+  })
+
+  it('null セーブの eventIndex が Jump を指す: 復元後に Jump が再アームされる', async () => {
+    const FAR = scene('far', [narration('far-1')])
+    const r = prepare(new NovelRenderer())
+    r.setJumpSceneIndex([FAR])
+    r.loadEvents([narration('l0'), jump('far')])
+    await r.startFrom({})
+    seedNullSave({ eventIndex: 1 })
+
+    await r.quickLoad()
+
+    expect(internals(r).eventIndex).toBe(1)
+    expect(internals(r).jumpState).toBe('pending')
+  })
+
+  it('複数シーンのエントリで restart（はじめから）した後にセーブ→ロードすると、同じ位置に戻る (M2)', async () => {
+    const S1 = scene('s1', [narration('a0'), narration('a1')])
+    const S2 = scene('s2', [narration('b0'), narration('b1'), narration('b2')])
+    const flat = [...S1.events, ...S2.events]
+    const r = prepare(new NovelRenderer())
+    r.setJumpSceneIndex([S1, S2])
+    r.loadEvents(flat)
+    await r.startFrom({})
+    r.advance()
+    r.advance()
+    r.advance()
+    r.restart()
+    expect(r.getCurrentSceneId()).toBeNull()
+    r.advance()
+    r.advance()
+    r.advance()
+    r.advance() // S1 の events 長（2）を超えた位置
+    const pos = internals(r).eventIndex
+    expect(pos).toBeGreaterThanOrEqual(S1.events.length)
+    expect(r.quickSave()).toBe(true)
+    r.advance()
+
+    await expect(r.quickLoad()).resolves.toMatchObject({ status: 'entered' })
+
+    expect(internals(r).eventIndex).toBe(pos)
+    expect(internals(r).rawEvents).toEqual(flat)
   })
 })

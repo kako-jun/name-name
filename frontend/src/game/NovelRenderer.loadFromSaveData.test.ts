@@ -7,8 +7,7 @@
  * このファイルは loadFromSaveData に固有の振る舞いに絞る:
  *
  *  - sceneId 空（エントリ文書の線形ストリームへ復元 #768） / シーン未発見 / 正常 の 3 分岐
- *  - 「シーンが無くてもフラグだけは復元する」という loadFromSaveData 固有の
- *    挙動（startFrom は完全 no-op なのと対照的）
+ *  - シーン未発見では位置・flags とも現状維持（#765）。sceneId 空はエントリ文書の線形ストリームへ復元（#768）
  *  - SaveSlotData の各フィールド（eventIndex/textIndex/flags/isBlackout/
  *    backgroundFade/video）が NovelGameState へ正しく写し取られること
  *  - 後方互換（video / isBlackout / characters 欠如の旧セーブ）
@@ -248,16 +247,17 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
   it('10: sceneId="" のセーブ → quickLoad は入場結果を返す（データは存在する）', async () => {
     seedQuickSave(craftSave({ sceneId: '', flags: { f: boolFlag(true) } }))
     const r = makeRenderer(SCENES)
-    expect(await r.quickLoad()).toEqual({ status: 'entered', sceneId: null })
+    // setScenes 構成のエントリは SCENES[0]（'a'）
+    expect(await r.quickLoad()).toEqual({ status: 'entered', sceneId: 'a' })
   })
 
-  it('11: sceneId="" → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId は null (#768)', async () => {
+  it('11: sceneId="" → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId はエントリのシーン (#768)', async () => {
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'b' })
     seedQuickSave(craftSave({ sceneId: '', eventIndex: 1, flags: { only: boolFlag(true) } }))
     await r.quickLoad()
     expect(r.getSnapshot().flags).toEqual({ only: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBeNull()
+    expect(r.getCurrentSceneId()).toBe('a')
     expect(r.getSnapshot().eventIndex).toBe(1)
   })
 

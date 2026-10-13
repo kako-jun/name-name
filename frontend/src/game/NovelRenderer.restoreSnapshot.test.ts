@@ -217,7 +217,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
   // ===== C. sceneId null（エントリ文書の線形ストリーム上の位置として復元 #768） =====
 
-  it('R6: sceneId: null → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId は null、history は現在位置のみ、console.warn は呼ばれない (#768)', () => {
+  it('R6: sceneId: null → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId はエントリのシーン、history は現在位置のみ、console.warn は呼ばれない (#768)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'b', flags: { old: boolFlag(true) } })
@@ -228,7 +228,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     )
 
     expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBeNull()
+    expect(r.getCurrentSceneId()).toBe('a')
     expect(r.getSnapshot().eventIndex).toBe(1)
     expect(internals(r).history.length).toBe(1)
     expect(warnSpy).not.toHaveBeenCalled()
@@ -267,10 +267,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
-  // 19: R6/R7 と同じ2分岐（sceneId: null / シーン未発見）は restoreToScene/applyState を
-  // 通らない（fromJSON(flags) のみ）ため、cameraMode/cameraOrientation も他の宣言的
-  // settled state（isBlackout 等）と同じく変化しないはず。CameraMode 固有のバグでは
-  // なく、この2分岐の一般的な性質であることをロックする (#681)。
+  // 19: シーン未発見分岐は restoreToScene/applyState を通らない（位置・flags とも現状維持 #765）ため、
+  // cameraMode/cameraOrientation も他の宣言的 settled state（isBlackout 等）と同じく変化しない。
+  // CameraMode 固有のバグではなく、この分岐の一般的な性質であることをロックする (#681)。
+  // （sceneId: null は #768 でエントリ文書の復元になり、camera もスナップショットの値へ復元される。R6b）
   it('R7b: シーン未発見分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
     const r = makeRenderer(CAMERA_SCENES)
     r.startFrom({ sceneId: 'cam' })
@@ -300,7 +300,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.restoreSnapshot(craftSnapshot({ sceneId: '', flags: { f: boolFlag(true) } }))
 
     expect(r.getSnapshot().flags).toEqual({ f: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBeNull()
+    expect(r.getCurrentSceneId()).toBe('a')
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
