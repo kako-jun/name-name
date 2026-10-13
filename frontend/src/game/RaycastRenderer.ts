@@ -55,7 +55,8 @@ import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { rollEncounter } from './encounter'
-import type { BattleLayoutMode } from './battleLayout'
+import type { BattleDepth, BattleLayoutMode } from './battleLayout'
+import { normalizeBattleRow } from './battleLayout'
 import type { SpriteStyle } from './spriteStyle'
 import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
@@ -143,6 +144,9 @@ export class RaycastRenderer {
   private battleBackgroundDof: BackgroundDof = 'off'
   /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter` 由来 */
   private battleLogTypewriter: BattleLogTypewriterMode = 'off'
+  /** 戦闘画面の奥行き / 前景レイヤー (#747)。frontmatter `battle_horizon` `battle_perspective` / `battle_foreground` 由来 */
+  private battleDepth: BattleDepth | null = null
+  private battleForeground: string | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -388,6 +392,8 @@ export class RaycastRenderer {
     this.battleBackgroundTone = gameData.battleBackgroundTone ?? 'on'
     this.battleBackgroundDof = gameData.battleBackgroundDof ?? 'off'
     this.battleLogTypewriter = gameData.battleLogTypewriter ?? 'off'
+    this.battleDepth = gameData.battleDepth ?? null
+    this.battleForeground = gameData.battleForeground
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -818,6 +824,8 @@ export class RaycastRenderer {
       backgroundTone: this.battleBackgroundTone,
       backgroundDof: this.battleBackgroundDof,
       logTypewriter: this.battleLogTypewriter,
+      depth: this.battleDepth,
+      foreground: this.battleForeground,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)
@@ -889,6 +897,10 @@ export class RaycastRenderer {
       def: def.def,
       agi: def.agi,
       sprite: def.sprite,
+      // 隊列 (#747)。front 配置は先頭 1 人だけを渡し隊列を描かないので、補正も side のときだけかける
+      ...(this.battleLayout === 'side' && normalizeBattleRow(def.row) === 'back'
+        ? { row: 'back' as const }
+        : {}),
     }
   }
 
