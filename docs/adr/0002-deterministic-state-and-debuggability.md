@@ -152,7 +152,7 @@ Phase 3 の `debug_scene` は開発環境限定のデバッグ起点だった（
 `?scene=` 単独埋め込みは対象ファイル外（hub・他ファイル）への choice ジャンプを許さない
 （theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の HTML リンクで行う設計）。
 `PlayerScreen` が対象ファイル自身の sceneId 一覧（entry doc/hub 自身は除く）を
-`NovelRenderer.setConfinedSceneIds` に渡す。圏外への遷移を検知すると通常のシーン遷移をせず
+`startFrom({ confinedSceneIds })`（#734 PR2 で `setConfinedSceneIds` を置き換えた入場属性）に渡す。圏外への遷移を検知すると通常のシーン遷移をせず
 `endStory()` を呼ぶ。終劇の判定箇所は 3 つある: **選んだ jump 先**が圏外なら `jumpToScene`
 （choice 確定後）が終劇する。加えて **全 option の jump 先が圏外の `[選択]` に到達した場合**は、
 選択肢を描画せず `processDirective` の Choice 分岐で先回りして終劇する（#398）。後者が無いと、
@@ -167,7 +167,7 @@ confinement とは無関係に、`onEndCallback`（VideoExporter 専用）が未
 する（`confinedSceneIds === null` では confinement 判定の 2 つとも短絡しない。hub → 各お題への
 通常 choice 遷移を壊さないため）。
 
-> 注記: `setConfinedSceneIds` は、#734 / [ADR 0003](./0003-scene-entry-kinds.md) で廃止する予定。confinement は `startFrom` の入場属性（`confinedSceneIds`）として、入場が成功した時点で確定させる。実装は PR1〜PR5 で入れる。
+> 注記: `setConfinedSceneIds` は、#734 PR2 で廃止した（[ADR 0003](./0003-scene-entry-kinds.md)）。confinement は `startFrom({ confinedSceneIds })` の入場属性として、入場が成功した時点で確定する。
 
 `endStory()` は `NovelGameState.storyEnded` という**宣言的フラグ**を true にする。この設計は
 本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の
@@ -181,7 +181,7 @@ confinement とは無関係に、`onEndCallback`（VideoExporter 専用）が未
 `quickLoad()`/`openLoadMenu()` は許可する（脱出手段として維持）。
 
 実装: `frontend/src/game/sceneQuery.ts`（`parseSceneQuery`）、`frontend/src/game/sceneConfinement.ts`
-（`isSceneIdConfined`）、`NovelRenderer.setConfinedSceneIds`/`endStory`/`setOnStoryEndedChange`、
+（`isSceneIdConfined`）、`startFrom({ confinedSceneIds })`（旧 `setConfinedSceneIds`、#734 PR2 で置き換え）/`endStory`/`setOnStoryEndedChange`、
 `PlayerScreen.findConfinedSceneIds`。
 
 **追記（#404、2026-07-16）**: `endStory()` の見た目は intermission.md 専用シーン（`assets/scripts/
