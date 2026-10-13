@@ -15,6 +15,7 @@
  * `initialized`（private, `init()` 完了フラグ）は他の NovelRenderer.*.test.ts と同じく
  * internals 直代入で立てる（PixiJS 実 init を経由しない既存の割り切り）。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
@@ -128,7 +129,7 @@ function setupWaitStaging(r: NovelRenderer, events: Event[]): void {
   r.getTimeController().setMode('virtual')
   internals(r).initialized = true
   r.setIntermissionScene(events, { backgroundFadeMs: 10, characterFadeMs: 10 })
-  r.setConfinedSceneIds(['entry'])
+  confineForTest(r, ['entry'])
   r.jumpToScene('out-scene')
   r.getTimeController().tick(10)
 }
@@ -186,7 +187,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     )
     const charSpy = vi.spyOn(internals(r).characterLayer, 'clearForSceneTransition')
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(bgSpy).toHaveBeenCalledWith(650)
@@ -204,7 +205,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     )
     const charSpy = vi.spyOn(internals(r).characterLayer, 'clearForSceneTransition')
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(bgSpy).toHaveBeenCalledWith(900)
@@ -239,7 +240,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       'fadeOutBackgroundEntries'
     )
     const charSpy = vi.spyOn(internals(r).characterLayer, 'clearForSceneTransition')
-    r.setConfinedSceneIds(['entry']) // hub / other は圏外
+    confineForTest(r, ['entry']) // hub / other は圏外
 
     await r.playScript([{ type: 'advance' }]) // narration → Choice 到達 → 全滅短絡 → endStory()
 
@@ -255,7 +256,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const cbWithout = vi.fn()
     const rWithout = makeRenderer(SCENES)
     rWithout.setOnStoryEndedChange(cbWithout)
-    rWithout.setConfinedSceneIds(['entry'])
+    confineForTest(rWithout, ['entry'])
     rWithout.jumpToScene('out-scene')
     expect(cbWithout).toHaveBeenCalledTimes(1)
     expect(cbWithout).toHaveBeenCalledWith(true)
@@ -264,7 +265,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const rWith = makeRenderer(SCENES)
     rWith.setIntermissionScene([narration('x')], { backgroundFadeMs: 10, characterFadeMs: 10 })
     rWith.setOnStoryEndedChange(cbWith)
-    rWith.setConfinedSceneIds(['entry'])
+    confineForTest(rWith, ['entry'])
     rWith.jumpToScene('out-scene')
     // tick を一切進めていない時点（タブロー未描画）で、既に true で1回発火している。
     expect(cbWith).toHaveBeenCalledTimes(1)
@@ -277,7 +278,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
 
     r.jumpToScene('out-scene')
     const timerId = internals(r).intermissionTimer
@@ -297,7 +298,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 100,
       characterFadeMs: 50,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     // endStory() 直後: 消去フェードで backgroundColor は null にクリアされ、タブローはまだ描かれない。
@@ -321,7 +322,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     r.getTimeController().tick(10)
@@ -340,7 +341,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     r.getTimeController().tick(10)
@@ -369,7 +370,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       ],
       { backgroundFadeMs: 10, characterFadeMs: 10 }
     )
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(() => r.getTimeController().tick(10)).not.toThrow()
@@ -394,7 +395,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     r.getTimeController().tick(10)
@@ -422,7 +423,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     r.getTimeController().tick(10)
@@ -438,7 +439,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
     })
-    r.setConfinedSceneIds(['entry']) // hub / other は圏外
+    confineForTest(r, ['entry']) // hub / other は圏外
     const skipCb = vi.fn()
     r.setOnSkipModeChange(skipCb)
     r.setSkipMode(true)
@@ -478,7 +479,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       'renderIntermissionTableau'
     )
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     expect(internals(r).intermissionTimer).not.toBeNull()
 
@@ -498,7 +499,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       'renderIntermissionTableau'
     )
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     expect(internals(r).intermissionTimer).not.toBeNull()
 
@@ -515,7 +516,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     r.getTimeController().setMode('virtual')
     internals(r).initialized = true
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     expect(internals(r).intermissionTimer).not.toBeNull()
 
@@ -561,7 +562,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       ],
       { backgroundFadeMs: 10, characterFadeMs: 10 }
     )
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     r.getTimeController().tick(10)
@@ -716,7 +717,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 0,
       characterFadeMs: 0,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     expect(internals(r).dialogBox.dialogText.text).toBe('') // tick 前はまだ
 
@@ -751,7 +752,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       backgroundFadeMs: 0,
       characterFadeMs: 0,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     expect(internals(r).dialogBox.dialogText.text).toBe('') // tick 前はまだ
 

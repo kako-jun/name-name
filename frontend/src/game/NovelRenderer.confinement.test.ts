@@ -1,7 +1,7 @@
 /**
  * NovelRenderer の confinement（在圏）判定 + 終劇（endStory）のテスト (#386)。
  *
- * `?scene=` ディープリンク単独埋め込みで `setConfinedSceneIds` が設定されているとき、
+ * `?scene=` ディープリンク単独埋め込みで confinement が設定されているとき、
  * `jumpToScene` がその集合の外への遷移を通常のシーン遷移ではなく終劇として扱う挙動を検証する。
  * `startFrom.test.ts` / `backgroundCrossfade.test.ts` と同じく
  * `new NovelRenderer()` → `setScenes(...)` の最小構成で行い、PixiJS 実描画は対象外
@@ -13,6 +13,7 @@
  * 「endStory 後は全部クリアされる」ことを検証する（video/characters は既定値のまま据え置き、
  * 純粋な状態遷移の検証として弱いが doctrine 通りの割り切り）。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { BACKGROUND_CROSSFADE_MS, NovelRenderer } from './NovelRenderer'
@@ -134,7 +135,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
 
   it('18: confinement 設定後、在圏 scene への jumpToScene は通常遷移する', () => {
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
     r.jumpToScene('in-scene')
     expect(r.getCurrentSceneId()).toBe('in-scene')
     expect(r.getSnapshot().storyEnded).toBe(false)
@@ -144,7 +145,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
 
   it('19: confinement 設定後、圏外（allScenes に実在）sceneId への jumpToScene は storyEnded=true にする', () => {
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
     r.jumpToScene('out-scene')
     expect(r.getSnapshot().storyEnded).toBe(true)
   })
@@ -152,7 +153,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
   it('20: 圏外ジャンプで console.warn は呼ばれない（シーン未発見扱いにしない）', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
     r.jumpToScene('out-scene')
     expect(warnSpy).not.toHaveBeenCalled()
   })
@@ -162,7 +163,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const resolver = vi.fn().mockResolvedValue(null)
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
     r.setMissingSceneResolver(resolver)
     r.jumpToScene('totally-unknown-scene')
     expect(r.getSnapshot().storyEnded).toBe(true)
@@ -172,7 +173,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
 
   it('24: 終劇後も currentSceneId は変化しない（endStory は startScene を経由しない）', () => {
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
     r.jumpToScene('out-scene')
     expect(r.getCurrentSceneId()).toBe('entry')
   })
@@ -181,7 +182,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
 
   it('22: 終劇後、advance() を呼んでも eventIndex/textIndex 等のスナップショットは変化しない', () => {
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     const before = r.getSnapshot()
     r.advance()
@@ -200,7 +201,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     expect(r.getSnapshot().backgroundPath).toBe('bg.png')
     expect(r.getSnapshot().backgroundColor).toBe('#112233')
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     const s = r.getSnapshot()
@@ -218,7 +219,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const cb = vi.fn()
     const r = makeRenderer(SCENES)
     r.setOnStoryEndedChange(cb)
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
     r.jumpToScene('out-scene') // 2回目（二重発火防止で早期 return するはず）
     expect(cb).toHaveBeenCalledTimes(1)
@@ -231,7 +232,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const cb = vi.fn()
     const r = makeRenderer(SCENES)
     r.setOnStoryEndedChange(cb)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
     r.jumpToScene('out-scene') // 圏外 → 終劇（storyEnded=true, cb(true)）
     expect(r.getSnapshot().storyEnded).toBe(true)
     cb.mockClear()
@@ -249,7 +250,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     r.setAssetBaseUrl('/assets')
     r.getTimeController().setMode('virtual')
     internals(r).initialized = true
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
 
     let resolveLoad!: (texture: Texture) => void
     vi.spyOn(Assets, 'load').mockReturnValue(
@@ -288,7 +289,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     await r.playScript([{ type: 'advance' }, { type: 'advance' }])
     expect(internals(r).history.length).toBeGreaterThan(1)
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外 → 終劇
     expect(r.getSnapshot().storyEnded).toBe(true)
     const historyLenAfterEnd = internals(r).history.length
@@ -304,7 +305,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     await r.playScript([{ type: 'advance' }, { type: 'advance' }])
     expect(internals(r).history.length).toBeGreaterThan(1)
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外 → 終劇
     expect(r.getSnapshot().storyEnded).toBe(true)
 
@@ -333,7 +334,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     }
     internals(r).bgEntries = [bgEntry]
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外 → endStory() → fadeOutBackgroundEntries(BACKGROUND_CROSSFADE_MS)
 
     // 消去フェード（1→0）が仕込まれていることを確認する（クロスフェードの 0→1 と混同しないよう明示）。
@@ -365,7 +366,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     internals(r).eventImageLayer.restore({ path: 'story/ending.webp', back: 'Hide' })
     const removeSpy = vi.spyOn(internals(r).eventImageLayer, 'remove')
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(r.getSnapshot().storyEnded).toBe(true)
@@ -406,7 +407,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     internals(r).currentBgmPath = 'bgm/loop.mp3'
     expect(r.getSnapshot().currentBgmPath).toBe('bgm/loop.mp3')
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(stopBgmSpy).toHaveBeenCalled()
@@ -431,7 +432,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     overlay.alpha = 0.6
     overlay.visible = true
 
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(internals(r).shakeTimer).toBeNull()
@@ -449,7 +450,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
   it('32: 圏外かつ allScenes にも存在しない sceneId は DEV で console.warn される（Q1: typo が正常な終劇に偽装されない）', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
-    r.setConfinedSceneIds(['entry', 'in-scene'])
+    confineForTest(r, ['entry', 'in-scene'])
 
     r.jumpToScene('typo-scene-id')
 
@@ -494,7 +495,7 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
     ])
     r.setDocKey('doc-398-all-out') // markCurrentSceneRead を実際に効かせる（既読集合を観測するため）
     r.setOnStoryEndedChange(cb)
-    r.setConfinedSceneIds(['entry']) // 圏内は entry のみ。hub / other は圏外
+    confineForTest(r, ['entry']) // 圏内は entry のみ。hub / other は圏外
     // choiceOverlay.show に到達しないことを spy で担保する（短絡なら呼ばれない）。
     const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show')
 
@@ -523,7 +524,7 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
       scene('inside', [narration('inside')]),
       scene('hub', [narration('hub')]),
     ])
-    r.setConfinedSceneIds(['entry', 'inside'])
+    confineForTest(r, ['entry', 'inside'])
     // 圏内 option があるので choice 表示に進む。show は AudioContext/PixiJS を触るので no-op に差し替える。
     const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
 
@@ -545,7 +546,7 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
       scene('hub', [narration('hub')]),
       scene('other', [narration('other')]),
     ])
-    // setConfinedSceneIds を呼ばない（confinedSceneIds は既定 null）。
+    // confineForTest を呼ばない（confinedSceneIds は既定 null）。
     const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
 
     await r.playScript([{ type: 'advance' }])
@@ -573,7 +574,7 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
       scene('hub', [narration('hub')]),
       scene('other', [narration('other')]),
     ])
-    r.setConfinedSceneIds(['entry']) // hub / other は圏外
+    confineForTest(r, ['entry']) // hub / other は圏外
     r.setSkipMode(true)
     expect(r.isSkipMode()).toBe(true)
     const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show')

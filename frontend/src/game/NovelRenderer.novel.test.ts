@@ -385,13 +385,13 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
 
   // 31a: save→load でページ index（textIndex）が復元される。
   //      novel ではページ index、quickSave/quickLoad が textIndex をそのまま保存・復元する。
-  it('31a: novel で save→load してもページ index（textIndex）が保持される', () => {
+  it('31a: novel で save→load してもページ index（textIndex）が保持される', async () => {
     // ページ 2（index=1）でセーブされた状態を直接 seed する。
     new SaveManager().quickSave(craftSave({ sceneId: 's', eventIndex: 0, textIndex: 1 }))
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     // ページ index がそのまま復元される
     expect(r.getSnapshot().textIndex).toBe(1)
   })
@@ -662,7 +662,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
 
   // S1-quickLoad: quickLoad（loadFromSaveData → restoreToScene → applyState）で seed したキャラが
   //   役割 x（主人公=左）へ再適用される。復元自体では nudge しない。
-  it('S1: quickLoad（applyState）で役割 x（主人公=左）が再適用され、復元では nudge しない', () => {
+  it('S1: quickLoad（applyState）で役割 x（主人公=左）が再適用され、復元では nudge しない', async () => {
     // event0 = せお（質問役）。せおを表示中の状態を seed（position は正本トークン「中央」）。
     new SaveManager().quickSave({
       slot: -1,
@@ -682,7 +682,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     r.setProtagonist('せお')
     r.setSpeakerNudge(true) // #382: nudge は opt-in。復元自体が nudge しないと縛るため nudge を有効化する。
     r.setScenes([scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a。')])])
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
 
     // 正本トークンは「中央」だが、novel + protagonist 一致なので役割 x（質問役=左）へ再適用される。
     expect(layerOf(r).getSpritePosition('せお')!.x).toBe(QUESTIONER_X)

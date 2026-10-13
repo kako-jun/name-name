@@ -14,6 +14,7 @@
  * fixture は confinement.test.ts / novel.test.ts と同じ narration/scene ヘルパー・
  * dialog_style 未指定（= adv 単線、各 narration は1行なので advance 1 回で次イベントへ進む）。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
@@ -59,7 +60,7 @@ describe('NovelRenderer.handleOutsideCanvasTap (#467)', () => {
     const r = new NovelRenderer()
     muteAudio(r)
     r.setScenes([scene('entry', [narration('本文')]), scene('out-scene', [narration('圏外')])])
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外ジャンプ → endStory() → storyEnded=true（#386）
     expect(r.getSnapshot().storyEnded).toBe(true)
     const before = r.getSnapshot()

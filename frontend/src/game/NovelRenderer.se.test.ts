@@ -14,6 +14,7 @@
  * 検証する。spy は `setScenes()`（Se directive を自動処理する）より前に仕込む必要がある
  * ため、共通の `makeRenderer` ヘルパーは使わず個別に構築する。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
@@ -149,7 +150,7 @@ describe('NovelRenderer: SEシーケンスのキャンセル配線 (#672 フォ�
   it('35: 終劇（endStory、圏外へのjumpToScene）でもSEシーケンスの待機中タイマーがキャンセルされる', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('entry', [narration('start')]), scene('out-scene', [narration('outside')])])
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     const cancelSpy = vi.spyOn(r.getAudioManager(), 'cancelSeSequence')
 
     r.jumpToScene('out-scene')

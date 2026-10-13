@@ -139,15 +139,15 @@ describe('NovelRenderer 背景色の永続・復元 (#273)', () => {
     const r2 = makeRenderer([scene('a', [narration('x'), bgColor('#f5f0e8'), narration('y', 'z')])])
     r2.startFrom({ sceneId: 'a' })
     expect(r2.getSnapshot().backgroundColor).toBeNull()
-    expect(r2.quickLoad()).toBe(true)
+    expect(await r2.quickLoad()).not.toBeNull()
     expect(r2.getSnapshot().backgroundColor).toBe('#f5f0e8')
   })
 
   // BG5: 旧セーブ（backgroundColor キー欠落）→ 落ちず backgroundColor === null（後方互換 ?? null）。
-  it('BG5: backgroundColor キー欠落の旧セーブを quickLoad → 落ちず backgroundColor === null', () => {
+  it('BG5: backgroundColor キー欠落の旧セーブを quickLoad → 落ちず backgroundColor === null', async () => {
     seedQuickSave(craftLegacy('backgroundColor'))
     const r = makeRenderer([scene('a', [narration('x')])])
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().backgroundColor).toBeNull()
   })
 

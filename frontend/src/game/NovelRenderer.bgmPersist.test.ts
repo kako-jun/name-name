@@ -9,6 +9,7 @@
  * 追跡フィールド（currentBgmPath, getSnapshot）で検証する。同一 URL 継続は AudioManager 単体で別途確認する。
  * 実音は CLAUDE.md ルール7 の実機 golden path に委ねる。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach, type MockInstance } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { AudioManager } from './AudioManager'
@@ -160,7 +161,7 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     r.jumpToScene('b')
     spies.stopBgm.mockClear()
 
-    r.setConfinedSceneIds(['a'])
+    confineForTest(r, ['a'])
     r.jumpToScene('b') // 実在するが圏外のシーン → 終劇
 
     expect(spies.stopBgm).toHaveBeenCalled()

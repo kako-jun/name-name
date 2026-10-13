@@ -111,8 +111,8 @@ describe('NovelRenderer 紙人形風輪郭配線 (#699)', () => {
       ]),
       scene('out-scene', [narration('outside')]),
     ])
-    r.setConfinedSceneIds(['entry'])
-    r.startFrom({ sceneId: 'entry' })
+    // confinement は新規開始の入場属性（startFrom が解決できた時点で置き換える）
+    void r.startFrom({ sceneId: 'entry', confinedSceneIds: ['entry'] })
 
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().spotlight).not.toBeNull()
@@ -166,7 +166,7 @@ describe('NovelRenderer 紙人形風輪郭配線 (#699)', () => {
       scene('a', [narration('one'), paperDollOutline(true, '#123456', 3), narration('two')]),
     ])
     vi.spyOn(r2.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-    expect(r2.quickLoad()).toBe(true)
+    expect(await r2.quickLoad()).not.toBeNull()
     expect(r2.getSnapshot().paperDollOutline).toEqual({ color: '#123456', thickness: 3 })
   })
 

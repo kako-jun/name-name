@@ -201,11 +201,11 @@ describe('NovelRenderer 幕: quickSave/quickLoad往復 (#697)', () => {
       scene('a', [narration('one'), curtain('a.png', true), narration('two')]),
     ])
     vi.spyOn(r2.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-    expect(r2.quickLoad()).toBe(true)
+    expect(await r2.quickLoad()).not.toBeNull()
     expect(r2.getSnapshot().curtain).toEqual({ path: 'a.png', charactersInFront: true })
   })
 
-  it('6: 旧セーブ（curtain キー欠如）は幕なし（null）として復元される（後方互換）', () => {
+  it('6: 旧セーブ（curtain キー欠如）は幕なし（null）として復元される（後方互換）', async () => {
     const legacy = craftSave({ sceneId: 'a' }) as unknown as Record<string, unknown>
     delete legacy.curtain
     seedQuickSave(legacy as unknown as SaveSlotData)
@@ -213,7 +213,7 @@ describe('NovelRenderer 幕: quickSave/quickLoad往復 (#697)', () => {
     const r = makeRenderer([scene('a', [narration('one')])])
     vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
 
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().curtain).toBeNull()
   })
 })

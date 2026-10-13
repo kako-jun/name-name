@@ -198,7 +198,7 @@ describe('NovelRenderer bubble display wiring (#698)', () => {
       scene('a', [dialog('古い吹き出し', '静か')]),
       scene('b', [narration('通常本文')]),
     ])
-    renderer.setEvents([], { skipAutoAdvance: true })
+    renderer.setEvents([])
     expect(internals(renderer).bubbleLayer.visible).toBe(false)
 
     renderer.setScenes([

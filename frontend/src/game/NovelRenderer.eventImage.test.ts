@@ -261,7 +261,7 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     const r2 = makeRenderer(scenes)
     r2.startFrom({ sceneId: 'a' })
     expect(r2.getSnapshot().eventImage).toBeNull()
-    expect(r2.quickLoad()).toBe(true)
+    expect(await r2.quickLoad()).not.toBeNull()
 
     expect(r2.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Keep' })
     expect(internals(r2).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Keep' })
@@ -274,10 +274,10 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
   })
 
   // EI6: eventImage キー欠落の旧セーブ → 落ちず eventImage===null（後方互換）。
-  it('EI6: eventImage キー欠落の旧セーブを quickLoad → 落ちず eventImage===null', () => {
+  it('EI6: eventImage キー欠落の旧セーブを quickLoad → 落ちず eventImage===null', async () => {
     seedQuickSave(craftLegacy('eventImage'))
     const r = makeRenderer([scene('a', [narration('x')])])
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().eventImage).toBeNull()
     expect(internals(r).eventImageLayer.getState()).toBeNull()
   })

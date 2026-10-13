@@ -7,6 +7,7 @@
  * 既存の流儀（confinement/linearAndJumpIndex/intermission/preload の各テスト）に倣い、
  * PixiJS 実描画は対象外にして `render` を no-op 化、TimeController は virtual で駆動する。
  */
+import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
@@ -188,7 +189,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     expect(internals(r).jumpState).toBe('stalled')
   })
 
-  it('6b: 遷移先不在で停止中でも goBack / quickLoad は使える（stalled で詰まない）', () => {
+  it('6b: 遷移先不在で停止中でも goBack / quickLoad は使える（stalled で詰まない）', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([scene('a', [narration('n1'), narration('n2'), jump('nowhere')])], {
       docKey: 'doc-725-stall',
@@ -209,7 +210,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     r.advance() // n2
     r.advance() // 再び Jump（停止）
     tick(r)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(text(r)).toContain('n1')
     expect(r.getSnapshot().storyEnded).toBe(false)
   })
@@ -314,7 +315,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
       scene('a', [narration('a1'), jump('out')]),
       scene('out', [narration('outside')]),
     ])
-    r.setConfinedSceneIds(['a'])
+    confineForTest(r, ['a'])
     r.advance()
     tick(r)
     expect(r.getSnapshot().storyEnded).toBe(true)
@@ -326,7 +327,7 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
       scene('a', [narration('a1'), jump('in')]),
       scene('in', [narration('inside')]),
     ])
-    r.setConfinedSceneIds(['a', 'in'])
+    confineForTest(r, ['a', 'in'])
     r.advance()
     tick(r)
     expect(r.getCurrentSceneId()).toBe('in')
@@ -521,7 +522,7 @@ describe('NovelRenderer Jump × intermission.md (#725)', () => {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
     })
-    r.setConfinedSceneIds(['entry'])
+    confineForTest(r, ['entry'])
     r.jumpToScene('out') // 圏外 → 終劇 → intermission タブロー
     expect(() => tick(r, 10)).not.toThrow()
 
@@ -660,11 +661,11 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     scene('c', [narration('c1')]),
   ]
 
-  it('6: quickLoad で Jump を指すセーブを復元 → 遷移が再予約され先へ進む', () => {
+  it('6: quickLoad で Jump を指すセーブを復元 → 遷移が再予約され先へ進む', async () => {
     new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
     const r = makeRenderer(TWO())
     muteAudio(r)
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(internals(r).jumpState).toBe('pending')
     expect(r.getCurrentSceneId()).toBe('a')
     tick(r)
@@ -721,7 +722,7 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     expect(warnSpy.mock.calls.filter((c) => String(c[0]).includes('循環')).length).toBe(1)
   })
 
-  it('10: pending 中は seekTo / goBack / quickLoad / quickSave / openSaveMenu を受け付けない', () => {
+  it('10: pending 中は seekTo / goBack / quickLoad / quickSave / openSaveMenu を受け付けない', async () => {
     new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
     const r = makeRenderer(TWO(), { docKey: 'doc-733-pending' })
     muteAudio(r)
@@ -731,7 +732,7 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     r.goBack()
     r.seekTo(0)
     expect(internals(r).jumpState).toBe('pending')
-    expect(r.quickLoad()).toBe(false)
+    expect(await r.quickLoad()).toBeNull()
     expect(r.quickSave()).toBe(false)
     internals(r).openSaveMenu()
     expect(showSave).not.toHaveBeenCalled()
@@ -740,7 +741,7 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     expect(r.getCurrentSceneId()).toBe('c')
   })
 
-  it('11: stalled 中は quickLoad / seekTo / goBack は使えて、セーブ・advance は不可', () => {
+  it('11: stalled 中は quickLoad / seekTo / goBack は使えて、セーブ・advance は不可', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
     const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])])
@@ -756,7 +757,7 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     expect(r.getSnapshot().storyEnded).toBe(false)
     expect(internals(r).jumpState).toBe('stalled')
     // quickLoad は使える: idle に戻り本文位置
-    expect(r.quickLoad()).toBe(true)
+    expect(await r.quickLoad()).not.toBeNull()
     expect(internals(r).jumpState).toBe('idle')
     expect(text(r)).toContain('a1')
     // seekTo も使える
@@ -964,14 +965,13 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     expect(internals(r).skipMode).toBe(false)
   })
 
-  it('17: 復元で idle に戻したあと resumeAutoAdvanceIfPending で二重予約されない', () => {
+  it('17: クイックロードで復元して idle に戻したあと、二重予約されない', () => {
     new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
     const r = makeRenderer(TWO())
     muteAudio(r)
     r.quickLoad()
     tick(r)
     expect(r.getCurrentSceneId()).toBe('c')
-    expect(() => r.resumeAutoAdvanceIfPending()).not.toThrow()
     tick(r, 1000)
     expect(r.getCurrentSceneId()).toBe('c')
     expect(internals(r).jumpState).toBe('idle')
@@ -1137,6 +1137,7 @@ describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#75
           farCalls.length = 0
         }
         const at = r.getSnapshot()
+        let loading: Promise<unknown>
         if (via === 'quickLoad') {
           new SaveManager().quickSave({
             ...(at as unknown as SaveSlotData),
@@ -1146,9 +1147,9 @@ describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#75
             savedAt: '2026-01-01T00:00:00.000Z',
             sceneName: null,
           })
-          expect(r.quickLoad()).toBe(true)
+          loading = r.quickLoad()
         } else {
-          r.restoreSnapshot({ ...at, sceneId: 'ghost', eventIndex: 0 })
+          loading = r.restoreSnapshot({ ...at, sceneId: 'ghost', eventIndex: 0 })
         }
 
         // ロード中: ゲートは外れない（Jump を飛び越せず、Jump 位置でセーブもできない）
@@ -1160,6 +1161,7 @@ describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#75
         if (outcome === 'null') ghost.resolve(null)
         else if (outcome === 'missing') ghost.resolve([...ENTRY])
         else ghost.reject(new Error('boom'))
+        await loading
         await flush()
 
         expect(r.getCurrentSceneId()).toBe('a')
