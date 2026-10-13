@@ -491,6 +491,8 @@ function EditorScreen({
         setRawMarkdown(startMarkdown)
         await parseAndSetDoc(startMarkdown)
         setDocPath(currentScriptPath)
+        // 既定パス(script.md)の先行ロード失敗で出た読み込みエラーは、再ロード成功で消す
+        setSaveError((prev) => (prev === LOAD_FAILED_MESSAGE ? null : prev))
         setHasUnsavedChanges(localDraft !== null && localDraft !== markdown)
       } catch (error) {
         console.error('Failed to load chapters:', error)

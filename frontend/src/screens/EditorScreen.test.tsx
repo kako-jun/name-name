@@ -256,3 +256,25 @@ describe('EditorScreen: 他文書のシーンへの遅延ロード (#778)', () =
     )
   })
 })
+
+describe('EditorScreen: 既定パスの先行ロード失敗トースト (#778 調査)', () => {
+  it('script.md が無いプロジェクトでも、一覧から切り替えた先のロードに成功すれば読み込みエラーを残さない', async () => {
+    localStorage.clear()
+    getContentsMock.mockReset()
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'script.md') throw new Error('404')
+      return { content: '# real', sha: 'sha' }
+    })
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [
+      { path: 'content/scripts/a.md', sha: 's', size: 1, title: null, hidden: false },
+    ])
+    renderEditor()
+    await waitFor(() =>
+      expect(getContentsMock).toHaveBeenCalledWith('p', 'content/scripts/a.md', 'develop')
+    )
+    // 成功ロードの完了（シーンの索引が出る = doc 確定）まで待ってから確認する
+    await new Promise((r) => setTimeout(r, 100))
+    expect(screen.queryByText(/読み込みに失敗/)).toBeNull()
+  })
+})
