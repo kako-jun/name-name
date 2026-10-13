@@ -1945,10 +1945,12 @@ export class NovelRenderer {
     scene?: EventScene
   ): SceneEntryResult {
     // 位置指定は適用の前に範囲を判定する (#789)。範囲外なら flags・confinement とも変えずに失敗にする。
-    const positionState =
-      req.position && scene ? this.buildFreshPositionState(scene, req.position, req.flags) : null
-    if (positionState && scene) {
-      const rangeError = this.checkRestorePosition(scene.events, positionState)
+    const positioned =
+      req.position && scene
+        ? { scene, state: this.buildFreshPositionState(scene, req.position, req.flags) }
+        : null
+    if (positioned) {
+      const rangeError = this.checkRestorePosition(positioned.scene.events, positioned.state)
       if (rangeError) return this.failEntry(req, rangeError)
     }
 
@@ -1957,13 +1959,12 @@ export class NovelRenderer {
     this.clearStoryEnded()
     this.consecutiveJumps = 0
 
-    if (positionState && scene) {
+    if (positioned) {
       // 途中局面からの起動（`?debug_scene=` の index 指定）: 最小 NovelGameState を共通コアで宣言的復元する。
       // 冒頭からのディレクティブ実行ではなく、位置の指定方法が違うだけで文脈を捨てる意味論は同じ。
-      const state = positionState
-      this.restoreToScene(scene, state)
-      this.onSceneChangeCallback?.(scene.id)
-      return { status: 'entered', sceneId: scene.id }
+      this.restoreToScene(positioned.scene, positioned.state)
+      this.onSceneChangeCallback?.(positioned.scene.id)
+      return { status: 'entered', sceneId: positioned.scene.id }
     }
 
     // エントリ（sceneId なし）は警告しない: エディタのプレビュー等で毎回出てしまう。
@@ -2024,7 +2025,7 @@ export class NovelRenderer {
     flagsState.fromJSON(state.flags)
     const detail = findRestorePositionError(
       resolveEvents(events, flagsState),
-      { eventIndex: state.eventIndex, textIndex: state.textIndex, storyEnded: state.storyEnded },
+      { eventIndex: state.eventIndex, textIndex: state.textIndex },
       (event) => {
         const textEvt = getTextEvent(event)
         if (!textEvt) return 1
@@ -3065,8 +3066,28 @@ export class NovelRenderer {
     this.sentencePerPage = enabled === true
     this.novelPagesCache = null
     this.advSentencePagesCache = null
+    this.clampTextIndexToPageCount()
     if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
       this.render()
+    }
+  }
+
+  /**
+   * ページ構成が変わった（`setDialogStyle` / `setSentencePerPage` のライブ切り替え）後、textIndex が
+   * 現在のイベントのページ数以上なら最終ページへ寄せる (#789)。#663 の `applyState` の寄せと同じ。
+   * 寄せないと範囲外の textIndex が残り（adv は空ページ表示）、そのスナップショットが次の再マウントで
+   * 範囲外の復元失敗になる。ページが変わるので sentenceIndex は 0 に戻す。
+   */
+  private clampTextIndexToPageCount(): void {
+    if (this.eventIndex >= this.resolvedEvents.length) return
+    // ノベルの改頁数は DialogBox の計測（初期化後）が要る。adv の行数・文単位ページは初期化前でも数えられる。
+    if (this.isNovelStyle() && !this.initialized) return
+    const textEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    if (!textEvt) return
+    const pageCount = this.currentPageCount(textEvt)
+    if (pageCount > 0 && this.textIndex >= pageCount) {
+      this.textIndex = pageCount - 1
+      this.sentenceIndex = 0
     }
   }
 
@@ -3405,6 +3426,7 @@ export class NovelRenderer {
     this.novelPagesCache = null
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
     this.advSentencePagesCache = null
+    this.clampTextIndexToPageCount()
     // 既にテキスト表示中なら新スタイルで描き直す（adv↔novel 切替が即反映される）。
     if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
       this.render()

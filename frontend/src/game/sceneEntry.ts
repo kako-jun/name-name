@@ -207,8 +207,6 @@ export function lacksLeadingBackground(events: readonly Event[]): boolean {
 export interface RestorePosition {
   eventIndex: number
   textIndex: number
-  /** 終劇済みの状態か。終劇では eventIndex がイベント列の長さ（終端）を指すことがある。 */
-  storyEnded: boolean
 }
 
 /**
@@ -216,8 +214,10 @@ export interface RestorePosition {
  * 範囲内なら null、範囲外なら失敗の詳細文言を返す。適用の前に呼び、範囲外なら何も変えずに失敗にする
  * （クランプはしない。文書が編集された後のセーブは、黙って別の位置へ寄せずに復元失敗として知らせる）。
  *
- * - eventIndex: 整数で `0 <= eventIndex < resolved.length`。終劇済み（storyEnded）の状態だけ
- *   `eventIndex === resolved.length`（終端）も許す
+ * - eventIndex: 整数で `0 <= eventIndex <= resolved.length`。終端（`eventIndex === resolved.length`）は
+ *   storyEnded に関わらず有効で、このとき textIndex は 0 のみ。最後の本文の後ろに命令（`[BGM停止]`・
+ *   `[暗転]` 等）だけが続くと、advance がそれらを消化して終端で止まる（終劇ではなくクリック待ちの空画面）
+ *   ので、エンジン自身が書いたセーブ・スナップショットが終端を指しうる。展開後の長さが 0 のシーンも同じ
  * - textIndex: 整数で 0 以上。上限は `textIndexBound` が返すイベントごとの排他的上限で判定する。
  *   null はレイアウト依存（ノベルの改頁数は表示幅で変わる）で、ここでは上限を見ない
  *   （fluid 再マウントで改頁数が変わる復元は `applyState` が最終ページへ寄せる設計のため）
@@ -231,14 +231,16 @@ export function findRestorePositionError(
   if (!Number.isInteger(eventIndex) || eventIndex < 0) {
     return `eventIndex が不正です: ${eventIndex}`
   }
-  const atEnd = pos.storyEnded && eventIndex === resolved.length
-  if (eventIndex >= resolved.length && !atEnd) {
+  const atEnd = eventIndex === resolved.length
+  if (eventIndex > resolved.length) {
     return `eventIndex が範囲外です: ${eventIndex}（イベント数 ${resolved.length}）`
   }
   if (!Number.isInteger(textIndex) || textIndex < 0) {
     return `textIndex が不正です: ${textIndex}`
   }
-  if (!atEnd) {
+  if (atEnd) {
+    if (textIndex !== 0) return `textIndex が範囲外です: ${textIndex}（終端では 0 のみ）`
+  } else {
     const bound = textIndexBound(resolved[eventIndex])
     if (bound !== null && textIndex >= bound) {
       return `textIndex が範囲外です: ${textIndex}（eventIndex ${eventIndex} の上限 ${bound}）`
