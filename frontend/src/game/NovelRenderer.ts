@@ -5986,20 +5986,20 @@ export class NovelRenderer {
   private async loadFromSaveDataMissingScene(data: SaveSlotData): Promise<void> {
     const sceneId = data.sceneId
     if (!sceneId) return
-    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) {
-      // resolveMissingSceneAndRestore の S2 と同じ配慮: 早期 return でも flags だけは
-      // 必ず反映する。pendingMissingScenes 側は同時実行中の解決に任せる正常系に近いため
-      // warn は出さない。この経路も他の「フラグのみ復元して return」経路と同じく
-      // resumeAutoAdvanceIfPending() を呼ぶ（#620 セルフレビュー指摘）: pendingMissingScenes
-      // が示す「別経路の解決」が resumeAutoAdvanceIfPending() を呼ばないメソッド
-      // （jumpToScene 等）経由だった場合、ここで呼ばないと pendingAutoAdvance が誰にも
-      // 解消されずフリーズが残る。resumeAutoAdvanceIfPending() は冪等なので重複呼び出しも安全。
+    if (!this.missingSceneResolver) {
       this.gameState.fromJSON(data.flags)
+      // #620: フラグのみ復元して終わる経路は resumeAutoAdvanceIfPending() で自動進行を再開する。
       this.resumeAutoAdvanceIfPending()
       return
     }
+    // resolveMissingSceneAndRestore と同型 (#759): 要求を遷移として世代を進めて捕捉し、await 後に
+    // 不一致なら破棄する。同一 sceneId の解決中は共有 Promise を待つ（flags だけで宙に浮かない）。
+    // 破棄された場合の pendingAutoAdvance は、文脈を変えた側（resetAndStartEvents / applyState）が
+    // 自分で確定させるので、ここでは触らない。
+    const generation = ++this.transitionGeneration
     try {
       const scenes = await this.requestMissingScene(sceneId)
+      if (generation !== this.transitionGeneration) return
       // await 中に renderer が destroy() され得る（resolveMissingSceneAndRestore の S1 と
       // 同じ懸念）。destroy 後は applyState が this.app.stage を触るため、initialized
       // チェック無しで先に進むと例外を投げうる。
@@ -6027,6 +6027,7 @@ export class NovelRenderer {
       const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
       this.restoreToScene(scene, state)
     } catch (err) {
+      if (generation !== this.transitionGeneration) return
       this.gameState.fromJSON(data.flags)
       console.warn(
         `[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`,
@@ -6135,16 +6136,19 @@ export class NovelRenderer {
   private async resolveMissingSceneAndRestore(snapshot: NovelGameState): Promise<void> {
     const sceneId = snapshot.sceneId
     if (!sceneId) return
-    if (!this.missingSceneResolver || this.pendingMissingScenes.has(sceneId)) {
-      // #460 セルフレビュー should S2: この早期 return だけ、他の全終端が必ず行っている
-      // flags 復元をスキップしていた。「最低でも flags だけは必ず反映する」という
-      // restoreSnapshot 全体の契約に合わせる。pendingMissingScenes 側は同時実行中の解決に
-      // 任せる正常系に近いため warn は出さない。
+    if (!this.missingSceneResolver) {
+      // resolver が無ければ解決できない。最低でも flags だけは反映する（restoreSnapshot 全体の契約）。
       this.gameState.fromJSON(snapshot.flags)
       return
     }
+    // 復元の要求自体を遷移として扱い、世代を進めて捕捉する (#759)。解決中に restart / startFrom /
+    // 別ロード / setEvents 等で文脈が変わったら古い復元は破棄し、さらに進行中の古い Jump 解決も
+    // この要求が後勝ちで無効化する。同一 sceneId が解決中なら requestMissingScene の共有 Promise を
+    // 待つので、flags だけ反映して復元を諦める（呼び出し側が宙に浮く）ことはない。
+    const generation = ++this.transitionGeneration
     try {
       const scenes = await this.requestMissingScene(sceneId)
+      if (generation !== this.transitionGeneration) return
       // #460 セルフレビュー should S1: await 中に renderer が destroy() され得る（連続remount
       // で新しい renderer に既に切り替わっているケース）。destroy 後は applyState が
       // this.app.stage を触るため、initialized チェック無しで先に進むと例外を投げうる。
@@ -6165,6 +6169,7 @@ export class NovelRenderer {
       }
       this.restoreSnapshotToScene(scene, snapshot)
     } catch (err) {
+      if (generation !== this.transitionGeneration) return
       this.gameState.fromJSON(snapshot.flags)
       console.warn(
         `[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`,
