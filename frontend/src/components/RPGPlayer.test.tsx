@@ -26,7 +26,11 @@ vi.mock('../game/TopDownRenderer', () => ({
     }
   }),
 }))
-const raycastInstances: Array<{ setInputSuspended: ReturnType<typeof vi.fn> }> = []
+const raycastInstances: Array<{
+  setInputSuspended: ReturnType<typeof vi.fn>
+  setAssetBaseUrl: ReturnType<typeof vi.fn>
+  load: ReturnType<typeof vi.fn>
+}> = []
 vi.mock('../game/RaycastRenderer', () => ({
   RaycastRenderer: vi.fn().mockImplementation(function () {
     const inst = {
@@ -35,6 +39,7 @@ vi.mock('../game/RaycastRenderer', () => ({
       destroy: vi.fn(),
       applySettings: vi.fn(),
       setInputSuspended: vi.fn(),
+      setAssetBaseUrl: vi.fn(),
     }
     raycastInstances.push(inst)
     return inst
@@ -93,5 +98,18 @@ describe('RPGPlayer: renderer の作り直しでも設定中の停止を引き�
     const next = raycastInstances[raycastInstances.length - 1]
     expect(next).not.toBe(raycastInstances[0])
     expect(next.setInputSuspended).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('RPGPlayer: アセットのベース URL を renderer に渡す (#746)', () => {
+  it('load() より前に setAssetBaseUrl(assetBaseUrl) が呼ばれる', async () => {
+    raycastInstances.length = 0
+    render(<RPGPlayer view="raycast" assetBaseUrl="/api/projects/g/assets/raw" />)
+    await new Promise((r) => setTimeout(r, 0))
+    const r = raycastInstances[0]
+    expect(r.setAssetBaseUrl).toHaveBeenCalledWith('/api/projects/g/assets/raw')
+    expect(r.setAssetBaseUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      r.load.mock.invocationCallOrder[0]
+    )
   })
 })
