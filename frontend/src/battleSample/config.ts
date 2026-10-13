@@ -532,6 +532,27 @@ export function buildBattleSetup(
   }
 }
 
+/**
+ * pixelArt (#760) が前回の描画から変わったときだけ、解放すべき画像の URL（背景・前景・味方・敵のスプライト）を返す。
+ * `Assets` のキャッシュは mipmap の有無・scaleMode ごと使い回されるので、nearest↔linear を切り替えたら
+ * unload してから読み直す必要がある（v8 は mipLevelCount をアップロード時に決める）。他のトグルでは何も返さない。
+ * `previous` が null（初回）なら空。重複は除く。
+ */
+export function assetsToUnload(
+  previous: 'on' | 'off' | null,
+  view: BattleSampleView,
+  config: BattleSampleConfig
+): string[] {
+  if (previous === null || previous === view.pixelArt) return []
+  const urls = [
+    config.background,
+    config.foreground,
+    ...config.party.map((e) => e.sprite),
+    ...config.enemies.map((e) => e.sprite),
+  ]
+  return [...new Set(urls.filter((u): u is string => typeof u === 'string' && u !== ''))]
+}
+
 export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
   return (
     a.layout === b.layout &&

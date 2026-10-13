@@ -2,7 +2,7 @@
  * 戦闘画面サンプルページ (#749) のブラウザ側エントリ。本編からはリンクしない開発用ページ。
  * 計算は config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
-import { Application } from 'pixi.js'
+import { Application, Assets } from 'pixi.js'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -11,6 +11,7 @@ import {
   MAX_ENEMIES,
   FORMATION_MODES,
   RESOLUTION_MODES,
+  assetsToUnload,
   buildBattleSetup,
   defaultConfig,
   describeView,
@@ -88,15 +89,26 @@ async function main(): Promise<void> {
   $('stage').appendChild(app.canvas as HTMLCanvasElement)
 
   let screen: BattleScreen | null = null
+  /** 前回描画した pixelArt。変わったときだけ Assets を unload する (#760) */
+  let lastPixelArt: 'on' | 'off' | null = null
+  let renderSeq = 0
 
-  const render = (): void => {
+  const render = async (): Promise<void> => {
     const view = history.current
+    const seq = ++renderSeq
     try {
       const setup = buildBattleSetup(config, view)
       if (screen) {
         app.stage.removeChild(screen)
         screen.destroy({ children: true })
         screen = null
+      }
+      const stale = assetsToUnload(lastPixelArt, view, config)
+      lastPixelArt = view.pixelArt
+      if (stale.length > 0) {
+        // nearest↔linear（mipmap の有無）を切り替えるので、キャッシュ済みのテクスチャを捨てて読み直させる
+        await Promise.all(stale.map((u) => Assets.unload(u).catch(() => undefined)))
+        if (seq !== renderSeq) return // 待っている間に別の描画が始まった
       }
       const resolution = resolveResolution(view.resolutionMode, window.devicePixelRatio)
       app.renderer.resize(setup.width, setup.height, resolution)
@@ -124,13 +136,13 @@ async function main(): Promise<void> {
 
   const change = (patch: Partial<BattleSampleView>): void => {
     history = pushView(history, { ...history.current, ...patch })
-    render()
+    void render()
   }
   const blink = (): void => {
     const next = swapView(history)
     if (next === history) return // ひとつ前が無い: 何も変わらないので再描画しない
     history = next
-    render()
+    void render()
   }
 
   // ---- ツールバー ----
@@ -218,7 +230,7 @@ async function main(): Promise<void> {
   const restartBtn = document.createElement('button')
   restartBtn.id = 'tb-restart'
   restartBtn.textContent = '戦闘をやり直す'
-  restartBtn.addEventListener('click', () => render())
+  restartBtn.addEventListener('click', () => void render())
   tb.appendChild(restartBtn)
   const depthLabel = document.createElement('label')
   const depthChk = document.createElement('input')
@@ -330,7 +342,7 @@ async function main(): Promise<void> {
   // ATB (#205): 時間は ticker から tick で渡す（エンジンは時計を持たない）。従来ターン制では何もしない
   app.ticker.add((ticker) => screen?.tick(ticker.deltaMS))
 
-  render()
+  void render()
 }
 
 main().catch((e) => {

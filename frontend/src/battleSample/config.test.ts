@@ -9,6 +9,7 @@ import {
   SAMPLE_DEFAULT_PERSPECTIVE,
   SCREEN_SIZES,
   applyFormation,
+  assetsToUnload,
   buildBattleSetup,
   defaultConfig,
   defaultEnemies,
@@ -1335,5 +1336,49 @@ describe('pixelArt (#760)', () => {
       'pixelArt=on'
     )
     expect(viewsEqual(view(), view({ pixelArt: 'on' }))).toBe(false)
+  })
+})
+
+describe('assetsToUnload: pixelArt が変わったときだけ画像を解放する (#760)', () => {
+  const cfg = (): BattleSampleConfig => {
+    const r = parseConfig(
+      {
+        background: 'bg.png',
+        foreground: 'fg.png',
+        party: [{ id: 'a', name: 'a', hp: 1, sprite: 'p.png' }],
+        enemies: [
+          { id: 'e', name: 'e', hp: 1, sprite: 'e.png' },
+          { id: 'f', name: 'f', hp: 1, sprite: 'e.png' },
+        ],
+      },
+      'http://x/s.json'
+    )
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  it('初回（previous=null）・変化なしは空', () => {
+    expect(assetsToUnload(null, view({ pixelArt: 'on' }), cfg())).toEqual([])
+    expect(assetsToUnload('off', view({ pixelArt: 'off' }), cfg())).toEqual([])
+    expect(assetsToUnload('on', view({ pixelArt: 'on' }), cfg())).toEqual([])
+  })
+  it('off→on・on→off では背景・前景・味方・敵の URL を重複なく返す', () => {
+    for (const [prev, now] of [
+      ['off', 'on'],
+      ['on', 'off'],
+    ] as const) {
+      const urls = assetsToUnload(prev, view({ pixelArt: now }), cfg())
+      expect(urls).toHaveLength(4)
+      expect(urls.some((u) => u.endsWith('bg.png'))).toBe(true)
+      expect(urls.some((u) => u.endsWith('fg.png'))).toBe(true)
+      expect(urls.some((u) => u.endsWith('p.png'))).toBe(true)
+      expect(urls.filter((u) => u.endsWith('e.png'))).toHaveLength(1)
+    }
+  })
+  it('他のトグル（spriteStyle など）だけの変化では返さない', () => {
+    const v = view({ pixelArt: 'on', spriteStyle: 'acrylic', depth: 'on' })
+    expect(assetsToUnload('on', v, cfg())).toEqual([])
+  })
+  it('画像のない設定（背景・前景・スプライトなし）は空', () => {
+    expect(assetsToUnload('off', view({ pixelArt: 'on' }), defaultConfig())).toEqual([])
   })
 })
