@@ -18,6 +18,8 @@
  * `front`（既定・Undertale 風正面配置）は従来どおり `BattleScreen` 側の固定レイアウトで、ここは使わない。
  */
 
+import type { BattleRow } from './spellDsl'
+
 export interface Rect {
   x: number
   y: number
@@ -32,6 +34,24 @@ export interface SpriteSlot {
   size: number
   /** 敵のみ: 名前 + HP ラベルの矩形（スプライトの直下・画面絶対座標）。味方・潰れて置けない枠・幅が狭く文字が読めない枠では undefined */
   label?: Rect
+  /**
+   * 床に接する基準 y（予約領域＝スプライト＋ラベルの下端）。奥行き (#747) の縮尺と描画順（奥→手前）の基準。
+   * 奥行きオフでも常に返す（値が大きいほど手前）
+   */
+  floor: number
+  /** 奥行き (#747) の縮尺（`size` は縮尺後の値。奥行きオフ・最前列は 1） */
+  scale: number
+}
+
+/**
+ * 戦闘画面の浅い擬似 3D (#747)。地平線と床の面から、行ごとの縮尺と y を求める。
+ * `perspective` が 0 のとき（または指定なし）は平面（現行どおり）。
+ */
+export interface BattleDepth {
+  /** 地平線の高さ（画面高さに対する比 0〜1。0 = 画面の上端） */
+  horizon: number
+  /** 遠近の強さ（0 = 平面 〜 1 = 地平線の幾何どおり） */
+  perspective: number
 }
 
 export interface SideBattleLayoutInput {
@@ -41,6 +61,10 @@ export interface SideBattleLayoutInput {
   enemyCount: number
   /** コマンドボタンの数（既定 4: たたかう/じゅもん/どうぐ/にげる） */
   commandCount?: number
+  /** 味方ごとの隊列 (#747)。味方の index 順。未指定・足りない分は前衛。`back` は右（敵から遠い側）へ半歩下げる */
+  partyRows?: readonly (BattleRow | undefined)[]
+  /** 奥行き (#747)。未指定・perspective が 0 以下は平面（現行どおり） */
+  depth?: BattleDepth | null
 }
 
 export interface SideBattleLayout {
@@ -64,6 +88,8 @@ export interface SideBattleLayout {
   statusRows: Rect[]
   /** status 幅が狭く MP 表記を省く必要があるか */
   statusCompact: boolean
+  /** 奥行きが有効か (#747)。有効なら敵・味方を `SpriteSlot.floor` の昇順（奥→手前）で描く */
+  depthActive: boolean
 }
 
 export const SIDE_PADDING = 16
@@ -102,6 +128,12 @@ const FALLBACK_W = 0.7
 const FALLBACK_H = 0.8
 /** 千鳥（奥行きのずらし）の水平ずれ。スプライト一辺に対する比 */
 export const SIDE_STAGGER_RATIO = 0.25
+/** 後衛 (#747) を右（敵から遠い側）へ下げる水平ずれ。スプライト一辺に対する比（半歩） */
+export const SIDE_BACK_ROW_SHIFT_RATIO = 0.5
+/** 奥行き (#747) の縮尺の下限（地平線に近い・地平線より上でも潰れない） */
+export const DEPTH_MIN_SCALE = 0.3
+/** `battle_perspective` だけ指定されたときの地平線の高さ（画面比）の既定 */
+export const DEPTH_DEFAULT_HORIZON = 0.3
 
 /** ログ帯の高さ */
 export function computeSideLogHeight(lines: number = SIDE_LOG_MIN_LINES): number {
@@ -235,24 +267,34 @@ export function fitCommandFontSize(
  * - `withLabel`（敵側）: 各行の高さを `size + SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT` にして、スプライトの直下に
  *   ラベル矩形（`slot.label`）を返す。ラベルを入れるとスプライトが 0 に潰れるほど低い領域では、
  *   ラベルだけを省いてスプライトを残す（`slot.label` なし）
+ * - `rows`（味方側・#747）: index 順の隊列。`back` の体は右（敵から遠い側）へ `SIDE_BACK_ROW_SHIFT_RATIO * size`
+ *   下げる。後衛が 1 体でもいれば、各列の右に下げ幅ぶんを予約する（隣の列に食い込まない・領域から出ない）。
+ *   後衛がいなければ従来と完全に同じ座標
  */
 export function computeFormation(
   region: Rect,
   count: number,
   side: 'enemy' | 'party',
-  withLabel = false
+  withLabel = false,
+  rows?: readonly (BattleRow | undefined)[]
 ): SpriteSlot[] {
   if (count <= 0) return []
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
   // 敵側だけ各行にラベル（隙間 + 名前/HP の 2 行）ぶんを予約する
   let extra = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+  const anyBack = side === 'party' && !!rows && rows.slice(0, count).some((r) => r === 'back')
+  const backShift = anyBack ? SIDE_BACK_ROW_SHIFT_RATIO : 0
   const sizeFor = (columns: number): number => {
-    const rows = Math.ceil(count / columns)
-    const stagger = rows > 1 ? SIDE_STAGGER_RATIO : 0
+    const rowCount = Math.ceil(count / columns)
+    const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
     return Math.max(
       0,
-      Math.min(regionW / (columns + stagger), regionH / rows - extra, SIDE_MAX_SPRITE_SIZE)
+      Math.min(
+        regionW / (columns * (1 + backShift) + stagger),
+        regionH / rowCount - extra,
+        SIDE_MAX_SPRITE_SIZE
+      )
     )
   }
   const baseColumns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
@@ -272,23 +314,25 @@ export function computeFormation(
     extra = 0
     ;({ columns, size } = pick())
   }
-  const rows = Math.ceil(count / columns)
-  const stagger = rows > 1 ? SIDE_STAGGER_RATIO : 0
-  const totalW = size * (columns + stagger)
-  const totalH = (size + extra) * rows
+  const rowCount = Math.ceil(count / columns)
+  const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
+  const colPitch = size * (1 + backShift)
+  const totalW = colPitch * columns + size * stagger
+  const totalH = (size + extra) * rowCount
   const originX = region.x + (regionW - totalW) / 2
   const originY = region.y + (regionH - totalH) / 2
   const slots: SpriteSlot[] = []
   for (let i = 0; i < count; i++) {
-    const col = Math.floor(i / rows)
-    const row = i % rows
+    const col = Math.floor(i / rowCount)
+    const row = i % rowCount
     const odd = row % 2 === 1
     // 敵: 奇数行を右へ / 味方: 偶数行を右へ（= 奇数行が相対的に左＝敵側へ寄る）
     const shifted = side === 'enemy' ? odd : !odd
     const dx = stagger > 0 && shifted ? size * stagger : 0
-    const x = originX + col * size + dx
+    const back = anyBack && rows?.[i] === 'back' ? size * SIDE_BACK_ROW_SHIFT_RATIO : 0
+    const x = originX + col * colPitch + dx + back
     const y = originY + row * (size + extra)
-    const slot: SpriteSlot = { x, y, size }
+    const slot: SpriteSlot = { x, y, size, floor: y + size + extra, scale: 1 }
     if (withLabel && !labelDropped && size > 0) {
       // 1 列は横に何も並ばないので領域幅（上限あり）まで広げ、多列は隣の列と重ならない列ピッチ(=size)まで
       const w = columns === 1 ? Math.min(regionW, size * SIDE_LABEL_MAX_WIDTH_RATIO) : size
@@ -307,6 +351,65 @@ export function computeFormation(
 }
 
 /**
+ * 奥行き (#747): 床の基準 y（`floor`）から縮尺を求める純粋関数。
+ *
+ *   幾何の縮尺 = (floor - 地平線y) / (最前列の floor - 地平線y)   … 地平線から遠い（手前）ほど大きい
+ *   縮尺 = 1 - perspective * (1 - 幾何の縮尺)                       … perspective 0 で平面、1 で幾何どおり
+ *
+ * 範囲は `DEPTH_MIN_SCALE`〜1。地平線が最前列より下（幾何が成り立たない）なら 1。
+ */
+export function computeDepthScale(
+  floor: number,
+  frontFloor: number,
+  horizonY: number,
+  perspective: number
+): number {
+  const p = Math.min(1, Math.max(0, perspective))
+  const span = frontFloor - horizonY
+  if (!(span > 0) || p <= 0) return 1
+  const geo = Math.min(1, Math.max(DEPTH_MIN_SCALE, (floor - horizonY) / span))
+  return Math.min(1, Math.max(DEPTH_MIN_SCALE, 1 - p * (1 - geo)))
+}
+
+/**
+ * 奥行き (#747) をスロット群に適用する。各スロットを縮尺 `s` で、**元の予約領域の上端・水平中央を保って**縮める。
+ * 縮んだ枠は元の予約領域（スプライト＋ラベル）の内側に収まるので、画面内・非重複・非負の不変条件は元のまま保たれる。
+ * 上端を保つので、縮んだ枠の足元は元より上＝奥の行ほど地平線側へ上がる。敵ラベルは縮んだ足元の直下で、
+ * 幅も縮尺に追従する（読めない幅になればラベルごと省く）。`floor` は元の値のまま（描画順の基準）。
+ */
+export function applyDepthToSlots(
+  slots: readonly SpriteSlot[],
+  frontFloor: number,
+  horizonY: number,
+  perspective: number
+): SpriteSlot[] {
+  return slots.map((slot) => {
+    const s = computeDepthScale(slot.floor, frontFloor, horizonY, perspective)
+    if (s >= 1) return slot
+    const size = slot.size * s
+    const out: SpriteSlot = {
+      x: slot.x + (slot.size - size) / 2,
+      y: slot.y,
+      size,
+      floor: slot.floor,
+      scale: s,
+    }
+    if (slot.label) {
+      const w = slot.label.w * s
+      if (isLabelWidthReadable(w)) {
+        out.label = {
+          x: slot.label.x + (slot.label.w - w) / 2,
+          y: slot.y + size + SIDE_LABEL_GAP,
+          w,
+          h: slot.label.h,
+        }
+      }
+    }
+    return out
+  })
+}
+
+/**
  * サイドビュー戦闘画面の全座標を算出する。
  *
  * 下パネルの高さは「コマンド 2x2 の高さ」と「味方全員ぶんの status 行」の大きい方。
@@ -318,6 +421,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const partyCount = Math.max(0, Math.floor(input.partyCount))
   const enemyCount = Math.max(0, Math.floor(input.enemyCount))
   const commandCount = Math.max(0, Math.floor(input.commandCount ?? 4))
+  const depth = input.depth && input.depth.perspective > 0 ? input.depth : null
   const innerW = Math.max(0, W - SIDE_PADDING * 2)
 
   // 下: コマンド（左）+ status（右）
@@ -394,17 +498,31 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const enemyRegion: Rect = { x: stage.x, y: stage.y, w: half, h: stage.h }
   const partyRegion: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
 
+  let enemies = computeFormation(enemyRegion, enemyCount, 'enemy', true)
+  let party = computeFormation(partyRegion, partyCount, 'party', false, input.partyRows)
+  if (depth) {
+    // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
+    const all = [...enemies, ...party]
+    if (all.length > 0) {
+      const frontFloor = Math.max(...all.map((sl) => sl.floor))
+      const horizonY = H * Math.min(1, Math.max(0, depth.horizon))
+      enemies = applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
+      party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)
+    }
+  }
+
   return {
     log,
     logLines,
     stage,
-    enemies: computeFormation(enemyRegion, enemyCount, 'enemy', true),
-    party: computeFormation(partyRegion, partyCount, 'party'),
+    enemies,
+    party,
     command,
     commandCells,
     status,
     statusRows,
     statusCompact: status.w < SIDE_STATUS_COMPACT_WIDTH,
+    depthActive: depth !== null,
   }
 }
 
@@ -430,4 +548,33 @@ export function computeContainFit(
 export type BattleLayoutMode = 'front' | 'side'
 export function normalizeBattleLayout(raw: string | null | undefined): BattleLayoutMode {
   return raw?.trim().toLowerCase() === 'side' ? 'side' : 'front'
+}
+
+/**
+ * frontmatter `battle_horizon` / `battle_perspective` を奥行き設定に正規化する (#747)。
+ * `battle_perspective` が数値でない・0 以下・未指定なら null（平面＝現行どおり）。0〜1 に丸める。
+ * `battle_horizon` が数値でない・未指定なら `DEPTH_DEFAULT_HORIZON`、0〜1 に丸める。
+ */
+export function normalizeBattleDepth(
+  horizonRaw: string | null | undefined,
+  perspectiveRaw: string | null | undefined
+): BattleDepth | null {
+  const num = (raw: string | null | undefined): number | null => {
+    if (raw === null || raw === undefined || raw.trim() === '') return null
+    const v = Number(raw.trim())
+    return Number.isFinite(v) ? v : null
+  }
+  const perspective = num(perspectiveRaw)
+  if (perspective === null || perspective <= 0) return null
+  const horizon = num(horizonRaw)
+  return {
+    horizon: Math.min(1, Math.max(0, horizon ?? DEPTH_DEFAULT_HORIZON)),
+    perspective: Math.min(1, perspective),
+  }
+}
+
+/** パーティ定義の隊列 (#747) を正規化する。`back` / `後衛` / `後列`（大小無視）だけ後衛、それ以外（未指定含む）は前衛 */
+export function normalizeBattleRow(raw: string | null | undefined): BattleRow {
+  const v = raw?.trim().toLowerCase()
+  return v === 'back' || v === '後衛' || v === '後列' ? 'back' : 'front'
 }
