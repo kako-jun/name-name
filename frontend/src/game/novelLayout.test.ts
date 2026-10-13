@@ -993,6 +993,10 @@ describe('resolveRpgImagePath (#746)', () => {
     expect(resolveRpgImagePath(base, undefined)).toBeUndefined()
   })
 
+  it('先頭が scheme:// でない `a:b.png` は相対パスとして解決する', () => {
+    expect(resolveRpgImagePath(base, 'a:b.png')).toBe(`${base}/images/a:b.png`)
+  })
+
   it('日本語・スペース・クエリ付きのファイル名もエンコードせずそのまま連結する', () => {
     expect(resolveRpgImagePath(base, 'npc/ひと 1.png')).toBe(`${base}/images/npc/ひと 1.png`)
     expect(resolveRpgImagePath(base, 'a.png?v=2')).toBe(`${base}/images/a.png?v=2`)
