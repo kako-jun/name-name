@@ -11,6 +11,15 @@ import topLevelAwait from 'vite-plugin-top-level-await'
 // これにより `@fs/` 経由を経路途中で書き換える corp proxy 環境でも動く。
 export default defineConfig({
   plugins: [react(), wasm(), topLevelAwait()],
+  // #749: 開発用の戦闘画面サンプルページを dist に含める（本編からはリンクしない）
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        'battle-sample': 'battle-sample.html',
+      },
+    },
+  },
   server: {
     port: 7374,
     open: true,
