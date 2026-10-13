@@ -19,6 +19,13 @@ import {
   putCachedParsedScriptDocument,
   putCachedScriptContent,
 } from '../game/scriptContentCache'
+import {
+  basename,
+  buildSceneIndex,
+  flattenDocumentScenes,
+  resolveMissingSceneAcrossDocs,
+  warnDuplicateSceneIds,
+} from '../game/crossFileScenes'
 
 // kako-jun/name-name#108: 一般ユーザー向けの再生専用画面。
 //   - 編集 UI / 保存 / アセット管理 / デバッグは一切表示しない
@@ -34,12 +41,6 @@ import {
 //   basename 一致が無ければ sort 済み先頭をエントリにする。
 const SCRIPT_BASENAME = 'script.md'
 const PUBLIC_BRANCH = 'main'
-
-/** path（'a/b/c.md'）の basename（'c.md'）を返す。空 path は '' */
-function basename(path: string): string {
-  const i = path.lastIndexOf('/')
-  return i >= 0 ? path.slice(i + 1) : path
-}
 
 /** standalone 再生時のプレイヤーヘッダの出し方 (#519)。iframe 埋め込み判定（isEmbedded()）とは
  *  独立の軸で、`!embedded` のときだけ意味を持つ（embedded は本設定に関係なく常にヘッダ非表示）。 */
@@ -84,107 +85,6 @@ function flattenDocumentEvents(doc: EventDocument): Event[] {
     }
   }
   return events
-}
-
-/**
- * EventDocument の全章の全シーンを 1 本の EventScene[] にフラット化する (#284)。
- * 章境界は捨てる（シーンジャンプは sceneId だけで解決されるため章の概念は不要）。
- */
-function flattenDocumentScenes(doc: EventDocument): EventScene[] {
-  const scenes: EventScene[] = []
-  for (const chapter of doc.chapters) {
-    for (const scene of chapter.scenes) {
-      scenes.push(scene)
-    }
-  }
-  return scenes
-}
-
-/**
- * 連結後のシーン ID 重複を検出して警告する (#284)。
- * シーン ID は全 MD でグローバル一意が前提。`findSceneById` は先勝ち
- * （novelLayout.ts）なので、重複があると後ろの同 ID シーンに到達できなくなる。
- * 挙動は壊さない（先勝ちのまま）が、原稿側のミスに気づけるよう warning を出す。
- */
-function warnDuplicateSceneIds(scenes: EventScene[]): void {
-  const seen = new Set<string>()
-  const dups = new Set<string>()
-  for (const s of scenes) {
-    if (seen.has(s.id)) dups.add(s.id)
-    else seen.add(s.id)
-  }
-  if (dups.size > 0) {
-    console.warn(
-      `[name-name] シーン ID が複数 MD で重複しています（先勝ちで解決。後ろの同 ID シーンには到達できません）: ${Array.from(
-        dups
-      ).join(', ')}`
-    )
-  }
-}
-
-function buildSceneIndex(
-  entryPath: string | null,
-  sortedPaths: string[],
-  docs: Map<string, EventDocument>
-) {
-  const scenes: EventScene[] = []
-  if (entryPath) {
-    const entryDoc = docs.get(entryPath)
-    if (entryDoc) scenes.push(...flattenDocumentScenes(entryDoc))
-  }
-  for (const path of sortedPaths) {
-    if (path === entryPath) continue
-    const doc = docs.get(path)
-    if (doc) scenes.push(...flattenDocumentScenes(doc))
-  }
-  return scenes
-}
-
-/**
- * #556: `routeNN/NN-slug.md` 命名規則（Gymnasia等）の候補パス suffix を返す。
- * sceneId が `r{route番号}-{slug}` 形式（例: `r09-01-eyes-in-the-dark`）のときだけ
- * `route{route番号}/{slug}.md`（例: `route09/01-eyes-in-the-dark.md`）を返す。
- *
- * basename だけでは判定できない: Gymnasia は `02-life.md` のような同名 slug が
- * 複数 route（route01/02/05/06）に存在するため、フォルダ名込みの suffix 一致で
- * route を区別する必要がある。
- *
- * この suffix はそのまま `path.endsWith(suffix)` で比較してはいけない:
- * `/` を挟まない文字列末尾一致だと `subroute02/02-life.md` のようなフォルダ名の
- * 部分一致まで拾ってしまう（ディレクトリ境界を認識しないため）。呼び出し側
- * （matchesRouteSuffix）で `/` 区切りの境界チェックを併用する。
- */
-function inferRouteSlugPathSuffix(sceneId: string): string | null {
-  const match = sceneId.match(/^r(\d+)-(.+)$/)
-  if (!match) return null
-  const [, routeNumber, slug] = match
-  // sceneId 側の route 番号の桁表記（ゼロ埋め有無等）はフォルダ名の桁表記と
-  // 一致している前提。ズレていてもクラッシュはせず、suffix 一致に失敗して
-  // 呼び出し側の basename ベースの brute-force フォールバックに落ちるだけ。
-  return `route${routeNumber}/${slug}.md`
-}
-
-/**
- * `routeSuffix` が `path` の末尾にディレクトリ境界を伴って一致するかを判定する。
- * 単純な `path.endsWith(routeSuffix)` は `subroute02/02-life.md` のような
- * フォルダ名末尾一致を誤検出するため、`/` 区切り（または完全一致）を必須にする。
- */
-function matchesRouteSuffix(path: string, routeSuffix: string | null): boolean {
-  return routeSuffix !== null && (path === routeSuffix || path.endsWith('/' + routeSuffix))
-}
-
-function inferScriptPathsForSceneId(sceneId: string, paths: string[]): string[] {
-  const basenames = new Set<string>([`${sceneId}.md`])
-  const parts = sceneId.split('-')
-  if (parts.length >= 2) {
-    const resident = parts[0]
-    const theme = parts.slice(1).join('-')
-    basenames.add(`${theme}__${resident}.md`)
-  }
-  const routeSuffix = inferRouteSlugPathSuffix(sceneId)
-  return paths.filter(
-    (path) => basenames.has(basename(path)) || matchesRouteSuffix(path, routeSuffix)
-  )
 }
 
 /**
@@ -456,48 +356,32 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   )
 
   const resolveMissingScene = useCallback(
-    async (sceneId: string): Promise<EventScene[] | null> => {
-      const entryPath = entryPathRef.current
-      const sortedPaths = sortedPlayablePathsRef.current
-      const currentScenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
-      if (currentScenes.some((s) => s.id === sceneId)) return currentScenes
-
-      const candidatePaths = inferScriptPathsForSceneId(sceneId, sortedPaths).filter(
-        (path) => !loadedDocsRef.current.has(path)
-      )
-      const fallbackPaths = sortedPaths.filter(
-        (path) => path !== entryPath && !loadedDocsRef.current.has(path)
-      )
-      const pathsToTry = [
-        ...candidatePaths,
-        ...fallbackPaths.filter((p) => !candidatePaths.includes(p)),
-      ]
-
-      for (const path of pathsToTry) {
-        const loaded = await loadScriptDoc(path)
-        if (!loaded) continue
-        const scenes = buildSceneIndex(entryPath, sortedPaths, loadedDocsRef.current)
-        warnDuplicateSceneIds(scenes)
-        // #667: loadedDocsRef が新しい遅延ロード済みルートで更新された直後、React state
-        // 側の allScenes もここで同時に更新する。allScenes は NovelPlayer へ
-        // jumpSceneIndex= として渡され、aspect_ratio:auto（fluid）プロジェクトで
-        // 画面幅リサイズが向きカテゴリ境界を跨ぐと NovelPlayer が再マウントされ、
-        // その時点の props（＝この state）でゼロから初期化される新 NovelRenderer に
-        // 渡る。ここを更新し忘れると、再マウント後の新レンダラーは遅延ロード済みの
-        // 現在ルートを知らないまま起動し、findSceneById がシーンを見失う。
-        // buildSceneIndex は毎回 loadedDocsRef.current から全件再構築するため、
-        // 複数呼び出しが並行してもここで setAllScenes する値は常に非減少（ref は
-        // ロード済み doc を削除しないため、後から解決したものほど同等以上に完全）。
-        setAllScenes(scenes)
-        const found = scenes.some((s) => s.id === sceneId)
-        setLoadDebugInfo((prev) => [
-          ...prev.filter((line) => !line.startsWith('lazy loaded docs:')),
-          `lazy loaded docs: ${loadedDocsRef.current.size}/${sortedPaths.length}`,
-        ])
-        if (found) return scenes
-      }
-      return null
-    },
+    (sceneId: string): Promise<EventScene[] | null> =>
+      // 遅延ロードの本体はエディタのプレビューと共通（game/crossFileScenes.ts, #778）。
+      resolveMissingSceneAcrossDocs({
+        sceneId,
+        entryPath: entryPathRef.current,
+        sortedPaths: sortedPlayablePathsRef.current,
+        docs: loadedDocsRef.current,
+        loadDoc: loadScriptDoc,
+        onIndexUpdated: (scenes) => {
+          // #667: loadedDocsRef が新しい遅延ロード済みルートで更新された直後、React state
+          // 側の allScenes もここで同時に更新する。allScenes は NovelPlayer へ
+          // jumpSceneIndex= として渡され、aspect_ratio:auto（fluid）プロジェクトで
+          // 画面幅リサイズが向きカテゴリ境界を跨ぐと NovelPlayer が再マウントされ、
+          // その時点の props（＝この state）でゼロから初期化される新 NovelRenderer に
+          // 渡る。ここを更新し忘れると、再マウント後の新レンダラーは遅延ロード済みの
+          // 現在ルートを知らないまま起動し、findSceneById がシーンを見失う。
+          // 索引は毎回 loadedDocsRef.current から全件再構築されるため、複数呼び出しが
+          // 並行してもここで setAllScenes する値は常に非減少（ref はロード済み doc を
+          // 削除しないため、後から解決したものほど同等以上に完全）。
+          setAllScenes(scenes)
+          setLoadDebugInfo((prev) => [
+            ...prev.filter((line) => !line.startsWith('lazy loaded docs:')),
+            `lazy loaded docs: ${loadedDocsRef.current.size}/${sortedPlayablePathsRef.current.length}`,
+          ])
+        },
+      }),
     [loadScriptDoc]
   )
 
