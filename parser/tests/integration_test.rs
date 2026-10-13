@@ -11588,3 +11588,156 @@ fn test_party_member_row_parses_and_round_trips() {
     let emitted = emitter::emit(&doc);
     assert!(emitted.contains("隊列: back"), "{emitted}");
 }
+
+fn party_row_of(src: &str) -> Option<String> {
+    let doc = parser::parse(src);
+    doc.chapters
+        .iter()
+        .flat_map(|c| c.scenes.iter())
+        .flat_map(|s| s.events.iter())
+        .find_map(|e| match e {
+            Event::PartyMember(p) => Some(p.row.clone()),
+            _ => None,
+        })
+        .expect("PartyMember が見つかる")
+}
+
+fn party_src(row_line: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[パーティ hero]\n名前: ゆうしゃ\nHP: 20\nATK: 5\nDEF: 3\nAGI: 4\n{row_line}[/パーティ]\n"
+    )
+}
+
+#[test]
+fn test_battle_horizon_in_body_is_not_parsed() {
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nbattle_horizon: 0.3\n";
+    assert_eq!(parser::parse(input).battle_horizon, None);
+}
+
+#[test]
+fn test_battle_perspective_in_body_is_not_parsed() {
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nbattle_perspective: 0.8\n";
+    assert_eq!(parser::parse(input).battle_perspective, None);
+}
+
+#[test]
+fn test_battle_foreground_in_body_is_not_parsed() {
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\nbattle_foreground: fg.png\n";
+    assert_eq!(parser::parse(input).battle_foreground, None);
+}
+
+#[test]
+fn test_battle_perspective_quote_styles_are_equivalent() {
+    let dq = parser::parse(&battle_doc("battle_perspective: \"0.8\"\n"));
+    let bare = parser::parse(&battle_doc("battle_perspective: 0.8\n"));
+    let sq = parser::parse(&battle_doc("battle_perspective: '0.8'\n"));
+    assert_eq!(dq.battle_perspective.as_deref(), Some("0.8"));
+    assert_eq!(bare.battle_perspective.as_deref(), Some("0.8"));
+    assert_eq!(sq.battle_perspective.as_deref(), Some("0.8"));
+}
+
+#[test]
+fn test_battle_horizon_quote_styles_are_equivalent() {
+    for fm in [
+        "battle_horizon: \"0.3\"\n",
+        "battle_horizon: 0.3\n",
+        "battle_horizon: '0.3'\n",
+    ] {
+        assert_eq!(
+            parser::parse(&battle_doc(fm)).battle_horizon.as_deref(),
+            Some("0.3"),
+            "{fm}"
+        );
+    }
+}
+
+#[test]
+fn test_battle_foreground_empty_is_none() {
+    assert_eq!(
+        parser::parse(&battle_doc("battle_foreground: \"\"\n")).battle_foreground,
+        None
+    );
+    assert_eq!(
+        parser::parse(&battle_doc("battle_foreground:\n")).battle_foreground,
+        None
+    );
+}
+
+#[test]
+fn test_battle_foreground_japanese_path_with_spaces_round_trips() {
+    let doc = parser::parse(&battle_doc("battle_foreground: \"背景/前景 草むら.png\"\n"));
+    assert_eq!(
+        doc.battle_foreground.as_deref(),
+        Some("背景/前景 草むら.png")
+    );
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(
+        doc2.battle_foreground.as_deref(),
+        Some("背景/前景 草むら.png")
+    );
+}
+
+#[test]
+fn test_battle_depth_keys_emit_quoted() {
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.battle_horizon = Some("0.3".to_string());
+    doc.battle_perspective = Some("0.8".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("battle_horizon: \"0.3\"\n"), "{emitted}");
+    assert!(
+        emitted.contains("battle_perspective: \"0.8\"\n"),
+        "{emitted}"
+    );
+}
+
+#[test]
+fn test_battle_depth_keys_not_emitted_when_unset() {
+    let emitted = emitter::emit(&parser::parse(&battle_doc("")));
+    assert!(!emitted.contains("battle_horizon"), "{emitted}");
+    assert!(!emitted.contains("battle_perspective"), "{emitted}");
+    assert!(!emitted.contains("battle_foreground"), "{emitted}");
+}
+
+#[test]
+fn test_party_row_english_key_is_passed_through() {
+    assert_eq!(
+        party_row_of(&party_src("row: back\n")).as_deref(),
+        Some("back")
+    );
+}
+
+#[test]
+fn test_party_row_japanese_value_is_passed_through_raw() {
+    assert_eq!(
+        party_row_of(&party_src("隊列: 後衛\n")).as_deref(),
+        Some("後衛")
+    );
+}
+
+#[test]
+fn test_party_row_unknown_value_is_passed_through_raw() {
+    assert_eq!(
+        party_row_of(&party_src("隊列: foo\n")).as_deref(),
+        Some("foo")
+    );
+}
+
+#[test]
+fn test_party_row_absent_is_none() {
+    assert_eq!(party_row_of(&party_src("")), None);
+}
+
+#[test]
+fn test_party_row_japanese_value_round_trips() {
+    let doc = parser::parse(&party_src("隊列: 後衛\n"));
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("隊列: 後衛"), "{emitted}");
+    assert_eq!(party_row_of(&emitted).as_deref(), Some("後衛"));
+}
+
+#[test]
+fn test_party_without_row_emit_has_no_row_line() {
+    let emitted = emitter::emit(&parser::parse(&party_src("")));
+    assert!(emitted.contains("[パーティ hero]"), "{emitted}");
+    assert!(!emitted.contains("隊列"), "{emitted}");
+}
