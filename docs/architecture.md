@@ -769,6 +769,7 @@ RPG プレイモードもノベルと同じく PixiJS で実装する（Phaser �
 - `PlayerData` — 初期グリッド座標と向き（`up` / `down` / `left` / `right`）
 - `UiNpcData` — UI / runtime 側の NPC 型（parser 側 `NpcData`（WASM 経由スキーマ、`frontend/src/types.ts`）から `rpgProjectFromDoc` 変換層で詰め替える）。フィールド追加時は parser / UI / 変換層の 3 箇所を揃える #103。グリッド座標・名前・会話メッセージ・表示色・オプション: `sprite`（スプライトシートパス）・`frames`（歩行アニメフレーム数 / 方向あたり、未指定なら 2）・`direction`（アイドル時の向き、未指定なら `down`）
 - `RPGProject` — 上記の集合（+ 将来の `EventData`）
+- `RPGProject.battleLayout` / `battleBackground` (#736) — 戦闘画面のレイアウト（`'front'` 既定 / `'side'`）と背景画像パス。frontmatter `battle_layout:` / `battle_background:` が parser（`Document`）→ `normalizeDocument` → `rpgProjectFromDoc` → `RaycastRenderer.load` → `BattleScreen` の `layout`/`background` オプションへ流れる。サイドビューの座標計算は純粋関数 `frontend/src/game/battleLayout.ts`（`computeSideBattleLayout`）が正本で、`BattleScreen` は描画だけを担う。`BattleEntity.sprite` は戦闘への組み立て時（`rollEncounter` / `RaycastRenderer.partyDefToBattleEntity`）に `MonsterDef`/`PartyMemberDef` の `sprite` から写す。`battleEngine.ts` は変更しない。`front` ではエンジンに先頭 1 人だけ渡す（従来どおり）が、`side` では `party` 全員を渡す
 
 `TILE_COLORS_HEX` がタイルの描画色（PixiJS `Graphics` で矩形塗りつぶしに使用）。
 
