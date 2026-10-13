@@ -787,7 +787,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
           if (docKey && !hasDeepLinkOrDebugStart) {
             if (outcome.autoSave) {
               renderer.setOnSceneChange(() => {
-                renderer.quickSave()
+                renderer.quickSave('auto')
               })
             } else {
               renderer.showToast(
@@ -1088,16 +1088,14 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     rendererRef.current?.handleOutsideCanvasTap()
   }, [])
 
-  // F5: クイックセーブ / F8: クイックロード (#142)。通知 toast の表示・タイマー管理は
-  // renderer.showToast() に内部化された (#630、PixiJS 版)。
+  // F5: クイックセーブ / F8: クイックロード (#142)。通知 toast は renderer が出す
+  // （表示・タイマー管理は renderer.showToast() に内部化 #630。結果の通知も renderer に一本化 #765/#769）。
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'F5') {
         e.preventDefault()
-        const ok = rendererRef.current?.quickSave() ?? false
-        rendererRef.current?.showToast(
-          ok ? 'クイックセーブしました' : 'この場面ではセーブできません'
-        )
+        // 結果のトースト（成功・弾かれた理由）は renderer が出す (#769)。
+        rendererRef.current?.quickSave()
       } else if (e.key === 'F8') {
         e.preventDefault()
         // 結果のトースト（成功・失敗・弾かれた理由）は renderer が出す (#765)。

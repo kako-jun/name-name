@@ -1611,6 +1611,8 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     cb()
 
     expect(r.quickSave).toHaveBeenCalledTimes(1)
+    // 自動セーブは起点 'auto' で呼ぶ（renderer は 'auto' のとき結果のトーストを出さない #769）
+    expect(r.quickSave.mock.calls[0]).toEqual(['auto'])
   })
 
   it('21 (最重要): docKey が異なる2つの NovelPlayer マウント（別プロジェクト相当）で、それぞれの setDocKey/自動クイックセーブ配線が独立し互いを呼ばない', async () => {
@@ -1786,6 +1788,22 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
     fireEvent.keyDown(window, { key: 'F5' })
 
     expect(r.quickSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('664-11 (#769): F5 は renderer.quickSave() を起点 quick（引数なし）で呼ぶだけで、NovelPlayer 自身は成功でも失敗でも showToast を呼ばない（結果のトーストは renderer が出す）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    r.quickSave.mockReturnValue(true)
+    fireEvent.keyDown(window, { key: 'F5' })
+    r.quickSave.mockReturnValue(false)
+    fireEvent.keyDown(window, { key: 'F5' })
+
+    expect(r.quickSave).toHaveBeenCalledTimes(2)
+    expect(r.quickSave.mock.calls[0]).toEqual([])
+    expect(r.quickSave.mock.calls[1]).toEqual([])
+    expect(r.showToast).not.toHaveBeenCalled()
   })
 
   it('664-10 (#765): F8 は renderer.quickLoad() を起点 quick（引数なし）で呼ぶだけで、NovelPlayer 自身は showToast を呼ばない（結果のトーストは renderer が出す）', async () => {

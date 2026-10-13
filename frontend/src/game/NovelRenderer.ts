@@ -6224,11 +6224,26 @@ export class NovelRenderer {
    * セーブできる。null は「エントリ文書の線形ストリーム上の位置」を意味し、ロード側が eventIndex で
    * 復元する (#768)。
    */
-  quickSave(): boolean {
-    if (this.storyEnded) return false
+  quickSave(origin: 'quick' | 'auto' = 'quick'): boolean {
+    // 結果のトースト（成功・弾かれた理由）はここで出す (#769。ロードの #765 と対称)。手動（F5）のみ通知し、
+    // 自動セーブ（`onSceneChange` 経由の 'auto'）は無言。
+    if (this.storyEnded) {
+      if (origin === 'quick') this.showToast('この場面ではセーブできません')
+      return false
+    }
     // 選択肢・待機・Jump 待機中・停止中 (#725)・入場中 (#734): 遷移途中・停止位置をセーブに残さない
-    // （openSaveMenu と同じ理由）。
-    if (this.isTransitionGated('quickSave')) return false
+    // （openSaveMenu と同じ理由）。文言の振り分けはロード側（quickLoad）と同じ。
+    const blocked = gateReason('quickSave', this.gateState())
+    if (blocked) {
+      if (origin === 'quick') {
+        this.showToast(
+          blocked === 'jump' || blocked === 'entry'
+            ? '場面転換中のためセーブできません'
+            : 'この場面ではセーブできません'
+        )
+      }
+      return false
+    }
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
@@ -6263,6 +6278,7 @@ export class NovelRenderer {
       sceneName,
     }
     this.saveManager.quickSave(data)
+    if (origin === 'quick') this.showToast('クイックセーブしました')
     return true
   }
 
