@@ -172,12 +172,12 @@ export class TopDownRenderer {
     this.initialized = true
   }
 
-  /** ゲームデータを読み込んで描画を開始する */
   /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
   setAssetBaseUrl(url: string | undefined): void {
     this.assetBaseUrl = url
   }
 
+  /** ゲームデータを読み込んで描画を開始する */
   load(gameData: RPGProject): void {
     // 状態リセット
     this.isMoving = false
