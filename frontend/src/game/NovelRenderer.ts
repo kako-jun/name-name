@@ -1399,7 +1399,6 @@ export class NovelRenderer {
    */
   loadScenes(scenes: EventScene[]): void {
     this.allScenes = scenes
-    this.playbackStarted = false
     if (scenes.length > 0) {
       this.loadEvents(scenes[0].events)
       this.entrySceneId = scenes[0].id
@@ -1441,8 +1440,8 @@ export class NovelRenderer {
    * 公開 API で、実体は単一の入口 `enterScene` に委譲する薄いラッパー。
    * 読み込み済みのシーンなら同期で入場し（戻り値は解決済みの Promise）、未ロードなら
    * `missingSceneResolver` の完了を待つ。結果は Promise で返る。
-   * 適用中の例外は非対称に扱う: 同期で入場する場合は呼び出し元へ伝播し、遅延ロード後の非同期の適用では
-   * `failed`（reason: 'apply-error'）で解決する（Promise は reject しない）。
+   * 適用中の例外は、同期で入場する場合も遅延ロード後の非同期の適用でも、`failed`（reason: 'apply-error'）で
+   * 解決する（Promise は reject しない。`startFrom` / `quickLoad` / `restoreSnapshot` も同じ）。
    */
   jumpToScene(sceneId: string): Promise<SceneEntryResult> {
     return this.enterScene({ kind: 'progress', sceneId, origin: 'choice' })
@@ -1749,8 +1748,9 @@ export class NovelRenderer {
   }
 
   /**
-   * 発火して忘れる呼び出し元（Jump のタイマー・選択肢の確定）用の入口。同期の適用が throw しても、
-   * 呼び出し元が待つ Promise を必ず解決し（失敗として）、未処理の rejection にしない。
+   * 発火して忘れる呼び出し元（Jump のタイマー・選択肢の確定）用の入口。`enterScene` は同期の適用の例外も
+   * 結果（failed）にして返すので、この try/catch は `enterScene` の前段（世代の更新など）で想定外に
+   * 投げた場合の保険としてだけ働く。呼び出し元が待つ Promise を必ず解決し、未処理の rejection にしない。
    */
   private runEntry(req: SceneEntryRequest): Promise<SceneEntryResult> {
     try {
@@ -6210,7 +6210,8 @@ export class NovelRenderer {
   quickLoad(origin: 'quick' | 'auto' = 'quick'): Promise<SceneEntryResult | null> {
     const blocked = gateReason('navigate', this.gateState())
     if (blocked) {
-      // 弾かれた理由に合った通知を出す（手動 F8 のみ。マウント時の自動ロードは無言）(#765)。
+      // 弾かれた理由に合った通知を出す（手動 F8 のみ。マウント時の自動ロード〔auto〕は
+      // 弾かれた理由のトーストを出さない。ロード自体が失敗したときの「ロードに失敗しました」は auto でも出す〔notifyLoadFailure〕）(#765)。
       if (origin === 'quick') {
         this.showToast(
           blocked === 'jump' || blocked === 'entry'

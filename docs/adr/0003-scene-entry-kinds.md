@@ -300,6 +300,7 @@ PR1 の実装で、上の記述から次のとおり変えた。挙動の方針�
 
 PR2 の実装で、上の記述から次のとおり変えた。挙動の方針は変えていない。
 
+- **入場 API の例外の扱いを統一した。** PR1 の非対称（同期で入場すると例外が呼び出し元へ伝播する）をやめ、全ての入場 API で適用中の例外を `failed`（`apply-error`）の結果にした
 - **`SceneEntryRequest` の fresh から `autoSave` を外した。** 自動セーブの配線は `NovelPlayer` が初期入場の確定後に行う（§5）ので、入場の要求に持たせる理由が無かった
 - **target `'entry'` の `currentSceneId`。** `loadScenes` は `scenes[0].id`、`loadEvents` は null（従来のマウント結果を保つ）。`restart()` は `allScenes[0]` を使うので、この食い違いは PR5（`restart` 廃止）で揃える
 - **`setEvents` / `setScenes` は「読み込み＋エントリ冒頭の実行」のまま。** `skipAutoAdvance` オプションだけを廃止した。`startFrom({})` への置き換え（flags のクリアと `storyEnded` の解除）は PR5
