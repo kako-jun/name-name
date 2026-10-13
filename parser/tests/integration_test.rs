@@ -11699,6 +11699,16 @@ fn test_battle_depth_keys_not_emitted_when_unset() {
 }
 
 #[test]
+fn test_party_row_empty_value_is_none_and_not_emitted() {
+    for line in ["隊列:\n", "隊列: \n", "row:\n"] {
+        let src = party_src(line);
+        assert_eq!(party_row_of(&src), None, "{line:?}");
+        let emitted = emitter::emit(&parser::parse(&src));
+        assert!(!emitted.contains("隊列"), "{line:?}: {emitted}");
+    }
+}
+
+#[test]
 fn test_party_row_english_key_is_passed_through() {
     assert_eq!(
         party_row_of(&party_src("row: back\n")).as_deref(),

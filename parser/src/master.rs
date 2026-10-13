@@ -166,7 +166,8 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         id,
         name,
         sprite: lookup_master_string(entries, &["スプライト", "sprite"]),
-        row: lookup_master_string(entries, &["隊列", "row"]),
+        // 空の `隊列:` は未指定（None）にする（emit で `隊列: ` だけの行が出ないように）
+        row: lookup_master_string(entries, &["隊列", "row"]).filter(|r| !r.trim().is_empty()),
         level: lookup_master_u32(entries, &["レベル", "level", "Lv"], 1).max(1),
         hp: lookup_master_u32(entries, &["HP", "hp"], 1),
         mp: lookup_master_u32(entries, &["MP", "mp"], 0),
