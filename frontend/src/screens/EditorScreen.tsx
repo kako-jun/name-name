@@ -5,7 +5,7 @@ import MapEditor from '../components/MapEditor'
 import NPCEditor from '../components/NPCEditor'
 import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
-import type { Mode, Event, EventDocument, EventRef } from '../types'
+import type { Mode, Event, EventDocument, EventRef, EventScene } from '../types'
 import { RPGProject, MapData, UiNpcData } from '../types/rpg'
 import { parseMarkdown, emitMarkdown } from '../wasm/parser'
 import {
@@ -18,6 +18,7 @@ import { createApiClient, type ScriptInfo } from '../api/client'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
+  buildVideoExportOptions,
   downloadBlob,
   pickSupportedMimeType,
   sanitizeFilename,
@@ -74,6 +75,15 @@ function flattenDocumentEvents(doc: EventDocument): Event[] {
   return events
 }
 
+/**
+ * EventDocument の全章の全シーンをフラット化する（NovelPlayer の `jumpSceneIndex` 用、PlayerScreen と同形）。
+ * 再生ストリーム（`events`）とは別建てのシーン索引で、これが無いと renderer.allScenes が空のままになり、
+ * 選択肢ジャンプも動画書き出しの `startFrom({ sceneId })` もシーンを引き当てられない (#734)。
+ */
+function flattenDocumentScenes(doc: EventDocument): EventScene[] {
+  return doc.chapters.flatMap((chapter) => chapter.scenes)
+}
+
 function EditorScreen({
   projectName,
   apiBaseUrl,
@@ -91,6 +101,7 @@ function EditorScreen({
   const [exportStartSceneId, setExportStartSceneId] = useState('')
   const [exportEndSceneId, setExportEndSceneId] = useState('')
   const [exportFps, setExportFps] = useState(30)
+  const [exportInheritFlags, setExportInheritFlags] = useState(false)
   const [exportRunning, setExportRunning] = useState(false)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
@@ -182,13 +193,14 @@ function EditorScreen({
     }
     setExportRunning(true)
     setExportStatus('準備中...')
-    const opts: VideoExportOptions = {
+    const opts: VideoExportOptions = buildVideoExportOptions(renderer, {
       startSceneId: exportStartSceneId,
       endSceneId: exportEndSceneId,
       fps: exportFps,
+      inheritFlags: exportInheritFlags,
       mimeType: mime,
       onProgress: (s) => setExportStatus(s),
-    }
+    })
     try {
       const result = await exportVideo(renderer, opts)
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
@@ -205,7 +217,14 @@ function EditorScreen({
     } finally {
       setExportRunning(false)
     }
-  }, [projectName, exportStartSceneId, exportEndSceneId, exportFps, exportRunning])
+  }, [
+    projectName,
+    exportStartSceneId,
+    exportEndSceneId,
+    exportFps,
+    exportInheritFlags,
+    exportRunning,
+  ])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -563,6 +582,8 @@ function EditorScreen({
 
   // プレイモード用のフラット Event[]
   const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
+  // シーン索引。doc が変わる（ライブ再パース）たびに作り直し、NovelPlayer の jumpSceneIndex 用 effect が反映する。
+  const novelScenes = useMemo(() => (doc ? flattenDocumentScenes(doc) : []), [doc])
 
   return (
     // #239: 漫画家の机テーマ。エディタ全体に desk-paper 紙テクスチャを敷く。
@@ -738,6 +759,7 @@ function EditorScreen({
             <div className="relative w-full h-full">
               <NovelPlayer
                 events={novelEvents}
+                jumpSceneIndex={novelScenes}
                 aspectRatio={doc?.aspect_ratio}
                 choiceStyle={doc?.choice_style ?? null}
                 fontFamily={doc?.font_family ?? null}
@@ -805,11 +827,13 @@ function EditorScreen({
                   startSceneId={exportStartSceneId}
                   endSceneId={exportEndSceneId}
                   fps={exportFps}
+                  inheritFlags={exportInheritFlags}
                   status={exportStatus}
                   isRunning={exportRunning}
                   onChangeStart={setExportStartSceneId}
                   onChangeEnd={setExportEndSceneId}
                   onChangeFps={setExportFps}
+                  onChangeInheritFlags={setExportInheritFlags}
                   onStart={handleStartVideoExport}
                   onClose={() => setExportOpen(false)}
                 />

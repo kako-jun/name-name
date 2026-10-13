@@ -477,7 +477,7 @@ interface NovelGameState {
 横断的な機能を足したり変えたりするときは、先にこの表の全マスを埋める。
 入場を「進行」「新規開始」「復元」の3種に分ける設計と、その移行計画は [ADR 0003](./adr/0003-scene-entry-kinds.md) にある。表の「あるべき挙動」は、ADR 0003 §2 の種類別の表から導いたもの。
 
-- 実装状況: PR1（#734）で進行と復元の入場を単一の入口 `enterScene` に通した。表の ⚠ のうち [4]（遷移中のゲート。復元中の `advance` を含む）・[5]（選択肢の遷移先不在）・[6]（要求時に世代を進めない）・[13]（遅延ロード後処理の重複）は解消済みで、表の該当セルの関数名・行番号（`resolveMissingSceneAndJump`・`loadFromSaveDataMissingScene`・`resolveMissingSceneAndRestore`・`beginRestoreTransition`・`drainPendingJump`）は PR1 以前のもの。新規開始の経路のうち `startFrom`（G3〜G5。`?scene=`・`?debug_scene=`）と初期入場は PR2（#734）で単一の入口へ移した: [1]（`startFrom` が遅延ロードを通らない）・[7]（新規開始が背景等を持ち越す）・[8]（初期入場が1回で済まない）・[14]（fluid 再マウントで debug 起点を再実行する）は解消済みで、G3・G4・G5・G9 の該当セル（`PS` の事前解決・`setConfinedSceneIds`・`skipAutoAdvance`・`setEvents` がエントリ冒頭を実行済み、など）は PR2 以前のもの。PR3（#734）で [2]（`playScript` の choice が遅延ロードを待たない）・[3]（`?scene=` と `debug_script` の併用で confinement が残る）・[12]（GUI/TUI の debug 起点の不一致）を解消した（G6・T4 の該当セルは PR3 以前のもの）。動画書き出し（G11）、「はじめから」（G12）、文書の(再)供給（G13）は後続の PR で移す
+- 実装状況: PR1（#734）で進行と復元の入場を単一の入口 `enterScene` に通した。表の ⚠ のうち [4]（遷移中のゲート。復元中の `advance` を含む）・[5]（選択肢の遷移先不在）・[6]（要求時に世代を進めない）・[13]（遅延ロード後処理の重複）は解消済みで、表の該当セルの関数名・行番号（`resolveMissingSceneAndJump`・`loadFromSaveDataMissingScene`・`resolveMissingSceneAndRestore`・`beginRestoreTransition`・`drainPendingJump`）は PR1 以前のもの。新規開始の経路のうち `startFrom`（G3〜G5。`?scene=`・`?debug_scene=`）と初期入場は PR2（#734）で単一の入口へ移した: [1]（`startFrom` が遅延ロードを通らない）・[7]（新規開始が背景等を持ち越す）・[8]（初期入場が1回で済まない）・[14]（fluid 再マウントで debug 起点を再実行する）は解消済みで、G3・G4・G5・G9 の該当セル（`PS` の事前解決・`setConfinedSceneIds`・`skipAutoAdvance`・`setEvents` がエントリ冒頭を実行済み、など）は PR2 以前のもの。PR3（#734）で [2]（`playScript` の choice が遅延ロードを待たない）・[3]（`?scene=` と `debug_script` の併用で confinement が残る）・[12]（GUI/TUI の debug 起点の不一致）を解消した（G6・T4 の該当セルは PR3 以前のもの）。動画書き出し（G11）は PR4（#734）で `startFrom` へ移し、[9] は解消済み。G11 行のセルは PR4 以前のもの。「はじめから」（G12）、文書の(再)供給（G13）は後続の PR で移す
 
 - 現状の欄は、関数名と行番号で示す。行番号は 2026-10-13 時点（main `dae752b`）の目安で、±数行ずれることがある
 - 略号: `NR` = `frontend/src/game/NovelRenderer.ts`、`NP` = `frontend/src/components/NovelPlayer.tsx`、`PS` = `frontend/src/screens/PlayerScreen.tsx`、`VE` = `frontend/src/game/VideoExporter.ts`、`PB` = `tui/src/playback.rs`
@@ -498,7 +498,7 @@ interface NovelGameState {
 | G8 | ロードメニュー | `openLoadMenu`（L5881）→ `loadFromSaveData` | 復元 |
 | G9 | fluid 再マウント | `NP` L772 `restoreSnapshot`（L6120） | 復元 |
 | G10 | `goBack`・`seekTo` | `goBack`（L3680）・`seekTo`（L3742）→ `applyState`（L3779） | 入場ではない（同じシーンの history 内） |
-| G11 | 動画書き出し | `VE` L322 `stopBgmForFreshStart`（L1480）＋ L323 `jumpToScene` | 新規開始 |
+| G11 | 動画書き出し | `VE` `startFrom`（PR4 で `stopBgmForFreshStart`＋`jumpToScene` から移行済み） | 新規開始 |
 | G12 | 「はじめから」・「つづきから」（クイックセーブなし） | `PS` L998・L1020 `restart`（L1305） | 新規開始（エントリ） |
 | G13 | 文書の(再)供給 | マウント（`NP` L756/L763）・events 変化 effect（`NP` L1165、エディタのライブ再パース）→ `setEvents`（L1257）/`setScenes`（L1321） | 新規開始（エントリ） |
 | T1 | 選択肢の確定（TUI） | `select_current_choice`（`PB` L1679）→ `jump_to_scene_id`（L1705）→ `jump_to_scene_idx`（L1762） | 進行 |
@@ -739,7 +739,7 @@ GUI版とは別実装。`tui/src/audio.rs` の `AudioPlayer` が rodio（cpalベ
 - ループ再生
 - 曲切り替え時はフェードアウト → 新曲開始
 - `[BGM停止]` でフェードアウト停止
-- **シーンジャンプでは持ち越す（#724）**: `NovelRenderer.resetAndStartEvents` は独立オプション `carryBgm`（背景持ち越しの `preserveBackgroundForTransition` とは別。進行の入場〔`enterScene`〕が `carryPolicyFor('progress')` から導出して渡す）のとき `audioManager.stopBgm(0)` と `currentBgmPath = null` を実行しない。次シーン冒頭の同一曲 `[BGM:]` は `AudioManager.playBgm` の同一 URL 継続分岐で頭出しされない。`setEvents` / `restart` / 終劇（`endStory`）、`startFrom`（`?scene=` / `?debug_scene=`）、動画書き出し（`stopBgmForFreshStart()`）の新規開始では従来どおり停止する。無音にしたいシーンは冒頭で `[BGM停止]`。`NovelGameState.currentBgmPath` はジャンプ後もそのまま整合し、snapshot / seek / save / load で復元される
+- **シーンジャンプでは持ち越す（#724）**: `NovelRenderer.resetAndStartEvents` は独立オプション `carryBgm`（背景持ち越しの `preserveBackgroundForTransition` とは別。進行の入場〔`enterScene`〕が `carryPolicyFor('progress')` から導出して渡す）のとき `audioManager.stopBgm(0)` と `currentBgmPath = null` を実行しない。次シーン冒頭の同一曲 `[BGM:]` は `AudioManager.playBgm` の同一 URL 継続分岐で頭出しされない。`setEvents` / `restart` / 終劇（`endStory`）、`startFrom`（`?scene=` / `?debug_scene=`）、動画書き出し（`startFrom`）の新規開始では従来どおり停止する。無音にしたいシーンは冒頭で `[BGM停止]`。`NovelGameState.currentBgmPath` はジャンプ後もそのまま整合し、snapshot / seek / save / load で復元される
 
 ### SE
 
@@ -811,7 +811,7 @@ AudioManager.enableCapture ─┘
 2. `renderer.onEnd` が発火（全イベント完走、`endSceneId` が最終シーンだったケース）
 
 stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob を確定する。BGM 既定フェード 1000ms を完全に録音するための値。
-録画開始前は `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
+新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間で効く。線形連結のシーンは開始シーンの末尾で終わる（#777）。末尾が選択肢のシーンは、オート再生が選択肢を選ばないため終端に達しない。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
 
 ### VideoExporter が依存する公開 API
 
@@ -819,6 +819,11 @@ stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob 
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `NovelRenderer.getCanvas()`                                                                         | `canvas.captureStream(fps)` の対象を取得                                           |
 | `NovelRenderer.getAudioManager()`                                                                   | AudioManager 経由で音声 MediaStream を分岐                                         |
+| `NovelRenderer.startFrom({ sceneId, flags })` | 新規開始。BGM・背景・flags・`consecutiveJumps` を持ち越さない。結果が `entered` 以外なら export を reject し、cleanup を通す |
+| `NovelRenderer.isAutoMode()` / `setAutoMode()` | 書き出し中だけオートモードを入れ、cleanup で書き出し前の値へ戻す |
+| `NovelRenderer.getSnapshot()` | `resolveExportFlags` がプレビューの flags を複製して取り出す（引き継ぎ ON のときだけ） |
+| `NovelRenderer.prepareVideosForExport()` | 録画開始前に動画レイヤを頭出しする |
+| `NovelRenderer.waitForBackgroundLoad()` | 開始シーンの背景ロード完了を録画開始前に待つ（新規開始は背景が地色から始まるため） |
 | `NovelRenderer.setOnSceneChange()` / `takeOnSceneChange()`                                          | 終端検出用のリスナ占有と退避復元                                                   |
 | `NovelRenderer.setOnEnd()` / `takeOnEnd()`                                                          | 全イベント完走の検出用、退避復元（VideoExporter は登録も復元も `setOnEnd` に統一） |
 | `AudioManager.enableCapture()` / `disableCapture()`                                                 | 音声 MediaStreamAudioDestinationNode の分岐管理                                    |

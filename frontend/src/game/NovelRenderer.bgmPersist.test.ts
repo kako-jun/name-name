@@ -222,7 +222,7 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     expect(bgmPath(r)).toBeNull()
   })
 
-  it('12: stopBgmForFreshStart（動画書き出し）の後は同曲ジャンプでも新規に鳴らす', () => {
+  it('12: 新規開始（動画書き出し）は同曲の [BGM:] でも新規に鳴らす', async () => {
     const { r, spies } = makeRenderer([
       scene('a', [bgm('a.ogg'), narration('A')]),
       scene('b', [bgm('a.ogg'), narration('B')]),
@@ -230,12 +230,9 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     spies.stopBgm.mockClear()
     spies.playBgm.mockClear()
 
-    r.stopBgmForFreshStart()
+    await r.startFrom({ sceneId: 'b' })
+
     expect(spies.stopBgm).toHaveBeenCalledWith(0)
-    expect(bgmPath(r)).toBeNull()
-
-    r.jumpToScene('b')
-
     expect(spies.playBgm).toHaveBeenCalledTimes(1)
     expect(String(spies.playBgm.mock.calls[0][0])).toContain('a.ogg')
     expect(bgmPath(r)).toBe('a.ogg')

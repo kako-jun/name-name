@@ -486,6 +486,8 @@ export class NovelRenderer {
   private bgLoadToken = 0
   /** 現在表示対象としてロード待ち中の背景 token。本文 reveal の背景待ち判定に使う。 */
   private pendingBackgroundLoadToken: number | null = null
+  /** 進行中の背景ロード（成功・失敗・破棄のどれでも解決する）。`waitForBackgroundLoad` が待つ (#734) */
+  private pendingBackgroundLoad: Promise<void> | null = null
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -1542,15 +1544,6 @@ export class NovelRenderer {
   }
 
   /**
-   * BGM を止めて持ち越し状態（currentBgmPath）も空にする (#724)。動画書き出しのように、
-   * ライブプレビューで鳴っていた曲を引き継がず「新規開始」したい呼び出し側が jumpToScene の前に使う。
-   */
-  stopBgmForFreshStart(): void {
-    this.audioManager.stopBgm(0)
-    this.currentBgmPath = null
-  }
-
-  /**
    * 終劇状態を解除する。進行・新規開始は適用の前に呼ぶ: 適用の中の `resetAndStartEvents` →
    * `processUntilNextTextEvent` で起きる先回り終劇（#398）の `endStory()` が二重発火ガード
    * （`storyEnded`）で潰れないようにするため (#734, ADR 0003 §3 の5)。
@@ -2092,6 +2085,7 @@ export class NovelRenderer {
     this.currentBackgroundBrightness = null
     this.bgLoadToken++
     this.pendingBackgroundLoadToken = null
+    this.pendingBackgroundLoad = null
     this.clearBackgroundColor()
     this.videoLayer.remove()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
@@ -2379,6 +2373,15 @@ export class NovelRenderer {
   }
 
   /**
+   * 進行中の背景画像ロードの完了を待つ (#734)。動画書き出しは新規開始で背景が地色から始まるため、
+   * 未キャッシュの背景が録画の先頭に間に合うよう、録画開始前に待つ。ロードが無ければ即解決。
+   * 失敗・破棄（より新しい背景要求）でも reject せず解決する。
+   */
+  async waitForBackgroundLoad(): Promise<void> {
+    await this.pendingBackgroundLoad
+  }
+
+  /**
    * 動画 export 用に動画レイヤを頭出しする (#252)。
    * 録画開始（recorder.start）の前に呼び、表示中の動画を currentTime=0 へ seek して
    * ready を待ってから再生し直す。これで録画の先頭から動画が正しく映る/鳴る。
@@ -2494,6 +2497,7 @@ export class NovelRenderer {
     if (options?.preserveBackgroundForTransition) {
       this.bgLoadToken++
       this.pendingBackgroundLoadToken = null
+      this.pendingBackgroundLoad = null
       this.finishBackgroundCrossfadeInstant()
       this.videoLayer.remove()
     } else {
@@ -5826,6 +5830,7 @@ export class NovelRenderer {
     // 古い sprite+fade を addChild してしまう。
     const token = ++this.bgLoadToken
     this.pendingBackgroundLoadToken = null
+    this.pendingBackgroundLoad = null
 
     // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
     const cached = this.textureCache.get(url)
@@ -5839,7 +5844,7 @@ export class NovelRenderer {
     }
 
     this.pendingBackgroundLoadToken = token
-    Assets.load(url)
+    const loading = Assets.load(url)
       .then((texture) => {
         if (token !== this.bgLoadToken) return
         if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
@@ -5855,6 +5860,10 @@ export class NovelRenderer {
         if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
         console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
       })
+      .finally(() => {
+        if (this.pendingBackgroundLoad === loading) this.pendingBackgroundLoad = null
+      })
+    this.pendingBackgroundLoad = loading
   }
 
   private showLoadedBackground(
@@ -6049,6 +6058,7 @@ export class NovelRenderer {
     this.currentBackgroundBrightness = null
     this.bgLoadToken++
     this.pendingBackgroundLoadToken = null
+    this.pendingBackgroundLoad = null
     this.clearBackgroundEntries()
     // 動画レイヤも背景と同じ扱いでクリアする (#252)
     this.videoLayer.remove()

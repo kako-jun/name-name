@@ -1132,7 +1132,8 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   useEffect(() => {
     if (!rendererRef.current) return
     if (scenes && scenes.length > 0) return
-    if (jumpSceneIndex && jumpSceneIndex.length > 0) {
+    // 空配列でも反映する（エディタで doc のシーンが 0 件になったとき、古い索引を残さない #734）。
+    if (jumpSceneIndex) {
       rendererRef.current.setJumpSceneIndex(jumpSceneIndex)
     }
   }, [jumpSceneIndex, scenes])
