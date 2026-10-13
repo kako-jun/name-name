@@ -908,6 +908,30 @@ export function resolveAssetUrl(baseUrl: string, kind: AssetKind, path: string):
 }
 
 /**
+ * RPG 側の画像パス（NPC スプライト・NPC 顔・戦闘スプライト・戦闘背景/前景）を、
+ * プロジェクトのアセットのベース URL で配信 URL に解決する純粋関数 (#746)。
+ *
+ * - `baseUrl` が未指定・空、または `path` が未指定・空: `path` をそのまま返す（従来どおり）
+ * - `path` が絶対指定（`https://` 等のスキーム付き・`data:`・`blob:`・先頭 `/`）、
+ *   または `__demo`（手続き生成の合図）: そのまま返す
+ * - それ以外の相対パス: `resolveAssetUrl(baseUrl, 'images', path)`（ノベル側と同じ規則）。
+ *   `baseUrl` 末尾の `/` は落としてから連結する
+ */
+export function resolveRpgImagePath(baseUrl: string | undefined, path: string): string
+export function resolveRpgImagePath(
+  baseUrl: string | undefined,
+  path: string | undefined
+): string | undefined
+export function resolveRpgImagePath(
+  baseUrl: string | undefined,
+  path: string | undefined
+): string | undefined {
+  if (!path || !baseUrl) return path
+  if (path === '__demo' || path.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(path)) return path
+  return resolveAssetUrl(baseUrl.replace(/\/+$/, ''), 'images', path)
+}
+
+/**
  * 立ち絵（拡張子を省略したキャラ画像）を配信 URL に解決する候補列を優先順で返す (#376)。
  *
  * エンジンは従来 `${base}/images/{path}/{expr}.png` と `.png` 固定で読み込んでいたが、

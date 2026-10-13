@@ -18,6 +18,7 @@ import {
   numberToHexColor,
   resolveActionButtonColor,
   resolveAssetUrl,
+  resolveRpgImagePath,
   resolveCharacterImageUrls,
   getIndicatorImageUrls,
   saveSlotToGameState,
@@ -958,6 +959,38 @@ describe('parseHexColor', () => {
     // 'a#b#c' → 最初の # だけ消えて 'ab#c' → parseInt('ab#c',16)='ab' まで → 0xab
     expect(parseHexColor('a#b#c')).toBe(0xab)
     expect(parseHexColor('a#b#c')).toBe(inlineParseHexColor('a#b#c'))
+  })
+})
+
+describe('resolveRpgImagePath (#746)', () => {
+  const base = 'https://api.example.com/api/projects/g/assets/raw'
+
+  it('相対パスは images 配下に解決する（ノベルの resolveAssetUrl と同じ規則）', () => {
+    expect(resolveRpgImagePath(base, 'battle/slime.png')).toBe(
+      resolveAssetUrl(base, 'images', 'battle/slime.png')
+    )
+    expect(resolveRpgImagePath(`${base}/`, 'a.png')).toBe(`${base}/images/a.png`)
+  })
+
+  it('ベース URL が未指定・空なら従来どおりそのまま', () => {
+    expect(resolveRpgImagePath(undefined, 'battle/slime.png')).toBe('battle/slime.png')
+    expect(resolveRpgImagePath('', 'battle/slime.png')).toBe('battle/slime.png')
+  })
+
+  it('絶対 URL・先頭スラッシュ・__demo・空・未指定は変えない', () => {
+    for (const p of [
+      'https://cdn.example.com/a.png',
+      'http://x/a.png',
+      '//cdn.example.com/a.png',
+      'data:image/png;base64,AAAA',
+      'blob:abc',
+      '/assets/a.png',
+      '__demo',
+      '',
+    ]) {
+      expect(resolveRpgImagePath(base, p)).toBe(p)
+    }
+    expect(resolveRpgImagePath(base, undefined)).toBeUndefined()
   })
 })
 
