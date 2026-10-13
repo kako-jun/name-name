@@ -14,7 +14,7 @@ export type WindowStyle = 'dark' | 'ff-blue'
 
 /** frontmatter `window_style` の値を正規化する。`'ff-blue'` 以外（未指定・空・未知値含む）は `'dark'` */
 export function normalizeWindowStyle(raw: string | null | undefined): WindowStyle {
-  return raw?.trim().toLowerCase() === 'ff-blue' ? 'ff-blue' : 'dark'
+  return typeof raw === 'string' && raw.trim().toLowerCase() === 'ff-blue' ? 'ff-blue' : 'dark'
 }
 
 /** ff-blue の帯の数（上から下へ段差を付けて塗り分ける横縞の本数） */
@@ -45,6 +45,7 @@ export interface Band {
 
 /** 2 色を t(0〜1) で線形補間する（チャンネルごとに丸める） */
 export function lerpColor(a: number, b: number, t: number): number {
+  t = Math.min(1, Math.max(0, t))
   const ch = (shift: number) => {
     const ca = (a >> shift) & 0xff
     const cb = (b >> shift) & 0xff
@@ -64,6 +65,7 @@ export function computeBands(
   top: number = FF_BLUE_TOP_COLOR,
   bottom: number = FF_BLUE_BOTTOM_COLOR
 ): Band[] {
+  if (!Number.isFinite(height) || !Number.isFinite(bandCount)) return []
   const h = Math.floor(height)
   if (h <= 0 || bandCount < 1) return []
   const n = Math.min(Math.floor(bandCount), h)
