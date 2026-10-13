@@ -545,6 +545,13 @@ export interface Document {
      * frontmatter `battle_background_tone:` から流す。
      */
     battle_background_tone?: string;
+    /**
+     * RPG 戦闘背景の被写界深度（DoF）風の手前ぼかし (#753)。`\"on\"` / `\"off\"`（既定）の2択。
+     * 値は parser でバリデーションせず生文字列で透過する（`battle_background_tone` と同じ流儀）。未知値・空文字は
+     * None 扱いとし、runtime 側で `\"off\"` にフォールバックする。GUI 専用（TUI は読まない）。
+     * frontmatter `battle_background_dof:` から流す。
+     */
+    battle_background_dof?: string;
     chapters: Chapter[];
 }
 
