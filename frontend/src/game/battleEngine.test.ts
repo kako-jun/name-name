@@ -268,7 +268,11 @@ describe('BattleEngine: 行動の記録 (#745)', () => {
     const e2 = new BattleEngine([hero()], [slime(), slime({ id: 's2' })], { rng })
     e2.selectSpell({ name: 'メラ', mp: 1, target: '敵全体', effect: 'damage 0..0' })
     const ev = e2.getState().events[0]
-    expect(ev.hits.map((h) => h.kind)).toEqual(['miss', 'miss'])
+    // 計算上のダメージ 0 は MISS でなく 0 のダメージ（MISS は耐性 0 の無効のとき）
+    expect(ev.hits.map((h) => [h.kind, h.amount])).toEqual([
+      ['damage', 0],
+      ['damage', 0],
+    ])
     expect(ev.hits.map((h) => h.target.index)).toEqual([0, 1])
   })
 

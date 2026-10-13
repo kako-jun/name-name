@@ -2881,3 +2881,119 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
     })
   })
 })
+
+describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#745)', () => {
+  const sized = (w: number, h: number): Texture =>
+    new Texture({ source: new TextureSource({ width: w, height: h }) })
+  /** 画像ごとの寸法（idle と slash で縦横比を変える） */
+  const SIZES: Record<string, [number, number]> = {
+    'img/hero.webp': [40, 80],
+    'img/idle.webp': [40, 80],
+    'img/slash.webp': [90, 60],
+    'img/down.webp': [90, 40],
+    'img/slime.webp': [60, 60],
+  }
+  const textures = new Map<string, Texture>()
+  beforeEach(() => {
+    textures.clear()
+    vi.spyOn(Assets, 'load').mockImplementation((async (path: string) => {
+      if (!textures.has(path)) textures.set(path, sized(...(SIZES[path] ?? [50, 50])))
+      return textures.get(path)
+    }) as never)
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation(((
+      tex: Texture
+    ) => ({
+      texture: sized(tex.width + 16, tex.height + 16),
+      pad: 8,
+      shadow: sized(64, 32),
+      foot: { x: 32, y: 16 },
+    })) as never)
+  })
+  interface PoseView {
+    container: Container
+    slotRef: unknown
+    baseX: number
+    baseY: number
+    shadowBaseX: number
+    acrylicShadow: Sprite | null
+    shownVisual: { texture: Texture } | null
+    poseVisuals: Record<string, { texture: Texture }>
+  }
+  const pv = (s: BattleScreen): PoseView =>
+    (s as unknown as { partyViews: PoseView[] }).partyViews[0]
+  const poses = { idle: 'img/idle.webp', slash: 'img/slash.webp', down: 'img/down.webp' }
+  async function setup(over: Partial<BattleEntity> = {}, enemyAtk = 1, withDown = true) {
+    const p = withDown ? poses : { idle: poses.idle, slash: poses.slash }
+    const hero = entity('hero', { sprite: 'img/hero.webp', poses: p, hp: 20, maxHp: 20, ...over })
+    const engine = new BattleEngine(
+      [hero],
+      [entity('slime', { atk: enemyAtk, hp: 999, maxHp: 999 })],
+      {
+        rng: () => 0.5,
+      }
+    )
+    const s = track(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        spriteStyle: 'acrylic',
+        presentation: 'ff',
+      })
+    )
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+    return { s, engine }
+  }
+  const run = (s: BattleScreen, ms: number) => {
+    for (let left = ms; left > 0; left -= 16) s.tick(Math.min(16, left))
+  }
+  const act = (s: BattleScreen, engine: BattleEngine) => {
+    engine.selectAttack()
+    s.redraw(800, 450)
+  }
+
+  it('ポーズが読み込まれ、縦横比の違う slash に替わっても枠（slotRef）と基準位置は動かない', async () => {
+    const { s, engine } = await setup()
+    const v = pv(s)
+    expect(Object.keys(v.poseVisuals).sort()).toEqual(['down', 'idle', 'slash'])
+    const slot = v.slotRef
+    const [bx, by] = [v.baseX, v.baseY]
+    act(s, engine)
+    run(s, 300) // 踏み出し 220 を過ぎて slash ポーズ
+    expect(v.shownVisual!.texture).toBe(v.poseVisuals.slash.texture)
+    expect(v.slotRef).toEqual(slot)
+    expect([v.baseX, v.baseY]).toEqual([bx, by])
+    run(s, 5000)
+    expect(v.slotRef).toEqual(slot)
+    expect([v.baseX, v.baseY]).toEqual([bx, by])
+  })
+
+  it('地面の影は本体と同じ横ずれで動き、置き去りにならない', async () => {
+    const { s, engine } = await setup()
+    const v = pv(s)
+    expect(v.acrylicShadow).not.toBeNull()
+    act(s, engine)
+    run(s, 150)
+    const dx = v.container.x - v.baseX
+    expect(Math.abs(dx)).toBeGreaterThan(1)
+    expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(dx, 6)
+    run(s, 300)
+    expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(v.container.x - v.baseX, 6)
+  })
+
+  it('down の絵がある味方は倒れても沈まず不透明、無ければ沈んで薄くなる', async () => {
+    const a = await setup({ hp: 1, maxHp: 1 }, 999, true)
+    const va = pv(a.s)
+    act(a.s, a.engine)
+    run(a.s, 5000)
+    expect(va.shownVisual!.texture).toBe(va.poseVisuals.down.texture)
+    expect(va.container.y).toBeCloseTo(va.baseY, 6)
+    expect(va.container.alpha).toBe(1)
+    const b = await setup({ hp: 1, maxHp: 1 }, 999, false)
+    const vb = pv(b.s)
+    act(b.s, b.engine)
+    run(b.s, 5000)
+    expect(vb.container.y).toBeGreaterThan(vb.baseY)
+    expect(vb.container.alpha).toBeLessThan(1)
+  })
+})

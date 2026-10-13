@@ -141,6 +141,16 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     expect(e.maxMp).toBe(9)
   })
 
+  it('partyDefToBattleEntity: poses を正規化して写す（未知キー・空値は捨て、無ければ poses なし） (#745)', () => {
+    const { i } = makeRenderer()
+    const e = i.partyDefToBattleEntity(
+      member('mage', { poses: { Idle: 'p/i.webp', cast: 'p/c.webp', bogus: 'x', hurt: ' ' } })
+    )
+    expect(e.poses).toEqual({ idle: 'p/i.webp', cast: 'p/c.webp' })
+    expect('poses' in i.partyDefToBattleEntity(member('x'))).toBe(false)
+    expect('poses' in i.partyDefToBattleEntity(member('y', { poses: { bogus: 'x' } }))).toBe(false)
+  })
+
   it('partyDefToBattleEntity: mp 未定義は 0、sprite 未指定は undefined', () => {
     const { i } = makeRenderer()
     const e = i.partyDefToBattleEntity({ ...member('x'), mp: undefined })

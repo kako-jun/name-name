@@ -159,8 +159,10 @@ describe('記録されない行動・不変条件', () => {
     const e = new BattleEngine([ent({ id: 'hero' })], [ent()], { rng: () => 0.9 })
     e.selectEscape()
     const s = e.getState()
-    expect(s.eventTotal).toBe(1)
-    expect(s.events[0].actor.side).toBe('enemy')
+    // 「にげられない！」の知らせ 1 件 + 敵の反撃 1 件
+    expect(s.eventTotal).toBe(2)
+    expect(s.events[0]).toMatchObject({ kind: 'notice', label: 'にげられない！', hits: [] })
+    expect(s.events[1].actor.side).toBe('enemy')
   })
 
   it('決着後の入力では増えない', () => {

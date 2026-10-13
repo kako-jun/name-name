@@ -132,7 +132,7 @@ describe('sampleActor: フェーズの切れ目', () => {
   })
   it('呪文・アイテムの構え終端: 1ms 前は ready、ちょうどで idle', () => {
     for (const kind of ['spell', 'item'] as const) {
-      expect(sampleActor(kind, CAST_MS - 1).pose).toBe('ready')
+      expect(sampleActor(kind, CAST_MS - 1).pose).toBe(kind === 'spell' ? 'cast' : 'ready')
       expect(sampleActor(kind, CAST_MS).pose).toBe('idle')
     }
   })
@@ -140,7 +140,7 @@ describe('sampleActor: フェーズの切れ目', () => {
     expect(sampleActor('attack', -100)).toEqual(sampleActor('attack', 0))
     expect(sampleActor('attack', NaN)).toEqual(sampleActor('attack', 0))
     expect(sampleActor('attack', Infinity)).toEqual(sampleActor('attack', 0))
-    expect(sampleActor('spell', -1).pose).toBe('ready')
+    expect(sampleActor('spell', -1).pose).toBe('cast')
   })
 })
 

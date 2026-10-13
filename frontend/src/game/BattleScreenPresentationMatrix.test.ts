@@ -132,11 +132,45 @@ describe('行動種別 x 結果', () => {
     expect(I(s).popups.map((p) => p.text.text)).toEqual(['6'])
   })
 
-  it('呪文 miss（HP が変わらない）: MISS が出る', () => {
-    const { s, engine } = setup()
-    cast(s, engine, { name: 'ミス', mp: 1, target: '敵単体', effect: 'damage 0..0' })
+  it('呪文 miss（耐性 0 の無効）: MISS が出る。計算上のダメージ 0 は 0 が出る', () => {
+    const { s, engine } = setup({}, {}, { resist: { fire: 0 } })
+    cast(s, engine, { name: 'ミス', mp: 1, target: '敵単体', effect: 'damage 5..5 type=fire' })
     run(s, buildActionTimeline('spell').hitAt + 16)
     expect(I(s).popups.map((p) => p.text.text)).toEqual(['MISS'])
+    const z = setup()
+    cast(z.s, z.engine, { name: 'ゼロ', mp: 1, target: '敵単体', effect: 'damage 0..0' })
+    run(z.s, buildActionTimeline('spell').hitAt + 16)
+    expect(I(z.s).popups.map((p) => p.text.text)).toEqual(['0'])
+  })
+
+  it('S1: とどめの演出中は、生き残りの味方が先に victory ポーズにならない', () => {
+    const engine = new BattleEngine(
+      [entity('a'), entity('b')],
+      [entity('slime', { hp: 1, maxHp: 1, atk: 1 })],
+      { rng: () => 0.5 }
+    )
+    const s = make(engine)
+    tap(s, 'attack')
+    expect(engine.getState().phase).toBe('victory')
+    run(s, 100)
+    // 演出が続いている間は idle 系。victory は再生が空になってから
+    const sample = s as unknown as { sampleEntity(side: string, i: number): { pose: string } }
+    expect(sample.sampleEntity('party', 1).pose).not.toBe('victory')
+    run(s, 5000)
+  })
+
+  it('S3: 逃走失敗の「にげられない！」は窓に出る。MP 不足の言葉も出る', () => {
+    const { s } = setup({}, {}, {}, () => 0.9)
+    tap(s, 'escape')
+    run(s, 16)
+    expect(I(s).messageText!.text).toBe('にげられない！')
+    expect(I(s).messageText!.visible).toBe(true)
+    run(s, 8000)
+    const m = setup({}, { mp: 0 })
+    m.engine.selectSpell({ name: 'ファイア', mp: 5, target: '敵単体', effect: 'damage 5..5' })
+    m.s.redraw(800, 450)
+    run(m.s, 16)
+    expect(I(m.s).messageText!.text).toBe('MPが たりない！')
   })
 
   it('アイテム: 窓に名前、数字が出る', () => {

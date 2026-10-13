@@ -99,7 +99,9 @@ describe('sampleActor（攻撃は踏み出し→斬り→戻り）', () => {
   })
 
   it('呪文・アイテムは動かず構え（ready）', () => {
-    expect(sampleActor('spell', 100)).toEqual({ forward: 0, pose: 'ready' })
+    expect(sampleActor('spell', 100)).toEqual({ forward: 0, pose: 'cast' })
+    expect(sampleActor('item', 100)).toEqual({ forward: 0, pose: 'ready' })
+    expect(sampleActor('notice', 100)).toEqual({ forward: 0, pose: 'idle' })
     expect(sampleActor('item', CAST_MS + 1)).toEqual({ forward: 0, pose: 'idle' })
   })
 })
@@ -217,5 +219,18 @@ describe('messageWindowText', () => {
     expect(messageWindowText('ファイア')).toBe('ファイア')
     expect(messageWindowText('  ')).toBeNull()
     expect(messageWindowText(undefined)).toBeNull()
+  })
+})
+
+describe('cast / special ポーズ (#745)', () => {
+  it('cast は受け付け、special は必殺技の配線時まで受け付けない', () => {
+    expect(normalizePoses({ cast: 'c.png', special: 's.png' })).toEqual({ cast: 'c.png' })
+  })
+  it('cast は ready → idle に落ちる', () => {
+    expect(resolvePose('cast', { ready: 1, idle: 2 })).toEqual({ pose: 'ready', value: 1 })
+    expect(resolvePose('cast', { idle: 2 })).toEqual({ pose: 'idle', value: 2 })
+  })
+  it('notice は動かず、窓の言葉だけ（命中は開始時点）', () => {
+    expect(buildActionTimeline('notice').hitAt).toBe(0)
   })
 })
