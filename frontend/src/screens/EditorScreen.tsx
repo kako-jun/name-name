@@ -5,7 +5,7 @@ import MapEditor from '../components/MapEditor'
 import NPCEditor from '../components/NPCEditor'
 import RPGPlayer from '../components/RPGPlayer'
 import SaveDiscardButtons from '../components/SaveDiscardButtons'
-import type { Mode, Event, EventDocument, EventRef } from '../types'
+import type { Mode, Event, EventDocument, EventRef, EventScene } from '../types'
 import { RPGProject, MapData, UiNpcData } from '../types/rpg'
 import { parseMarkdown, emitMarkdown } from '../wasm/parser'
 import {
@@ -73,6 +73,15 @@ function flattenDocumentEvents(doc: EventDocument): Event[] {
     }
   }
   return events
+}
+
+/**
+ * EventDocument の全章の全シーンをフラット化する（NovelPlayer の `jumpSceneIndex` 用、PlayerScreen と同形）。
+ * 再生ストリーム（`events`）とは別建てのシーン索引で、これが無いと renderer.allScenes が空のままになり、
+ * 選択肢ジャンプも動画書き出しの `startFrom({ sceneId })` もシーンを引き当てられない (#734)。
+ */
+function flattenDocumentScenes(doc: EventDocument): EventScene[] {
+  return doc.chapters.flatMap((chapter) => chapter.scenes)
 }
 
 function EditorScreen({
@@ -573,6 +582,8 @@ function EditorScreen({
 
   // プレイモード用のフラット Event[]
   const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
+  // シーン索引。doc が変わる（ライブ再パース）たびに作り直し、NovelPlayer の jumpSceneIndex 用 effect が反映する。
+  const novelScenes = useMemo(() => (doc ? flattenDocumentScenes(doc) : []), [doc])
 
   return (
     // #239: 漫画家の机テーマ。エディタ全体に desk-paper 紙テクスチャを敷く。
@@ -748,6 +759,7 @@ function EditorScreen({
             <div className="relative w-full h-full">
               <NovelPlayer
                 events={novelEvents}
+                jumpSceneIndex={novelScenes}
                 aspectRatio={doc?.aspect_ratio}
                 choiceStyle={doc?.choice_style ?? null}
                 fontFamily={doc?.font_family ?? null}
