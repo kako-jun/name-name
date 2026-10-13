@@ -220,11 +220,11 @@ export class BattleEngine {
     if (atb) {
       const cur = this.currentActorIndex()
       const idx = cur !== -1 ? cur : this.fullestAliveIndex(atb)
-      this.recordNotice(this.state.party[idx !== -1 ? idx : 0], 'にげられない！')
+      this.recordNotice(idx !== -1 ? this.state.party[idx] : undefined, 'にげられない！')
       if (idx !== -1) this.finishAtbAction(idx)
       this.settleAtbPhase()
     } else {
-      this.recordNotice(this.currentActor() ?? this.state.party[0], 'にげられない！')
+      this.recordNotice(this.currentActor() ?? undefined, 'にげられない！')
       this.runEnemyTurn()
     }
   }
@@ -706,8 +706,9 @@ export class BattleEngine {
 
   /** 行動が成立しなかったことの知らせ (#745)。FF 式の窓に短い言葉だけを出す。対象はなく、絵は動かない */
   private recordNotice(actor: BattleEntity | undefined, label: string): void {
-    const ref = actor ? this.refOf(actor) : null
-    this.pushEvent({ actor: ref ?? { side: 'party', index: 0 }, kind: 'notice', label, hits: [] })
+    // 主体が決まらないとき（全員戦闘不能など）は先頭の味方に倒す。フォールバックはここ 1 か所
+    const ref = (actor ? this.refOf(actor) : null) ?? { side: 'party' as const, index: 0 }
+    this.pushEvent({ actor: ref, kind: 'notice', label, hits: [] })
   }
 
   private pushEvent(e: Omit<BattleActionEvent, 'seq'>): void {

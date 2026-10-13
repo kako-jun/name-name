@@ -165,6 +165,23 @@ describe('記録されない行動・不変条件', () => {
     expect(s.events[1].actor.side).toBe('enemy')
   })
 
+  it('HP 0 の対象を単体で狙った呪文は MISS（追撃の数字は出さない）', () => {
+    const e = new BattleEngine(
+      [ent({ id: 'hero' }), ent({ id: 'dead', hp: 0, maxHp: 10 })],
+      [ent({ id: 's1' })],
+      { rng }
+    )
+    e.selectSpell({ name: 'ファイア', mp: 1, target: '味方単体', effect: 'damage 5..5' }, 'dead')
+    const hit = e.getState().events[0].hits[0]
+    expect(hit).toMatchObject({
+      target: { side: 'party', index: 1 },
+      kind: 'miss',
+      amount: 0,
+      hpBefore: 0,
+      hpAfter: 0,
+    })
+  })
+
   it('決着後の入力では増えない', () => {
     const e = new BattleEngine([ent({ id: 'hero' })], [ent({ hp: 1, maxHp: 1 })], { rng })
     e.selectAttack()

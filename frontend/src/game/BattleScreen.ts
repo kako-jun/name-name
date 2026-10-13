@@ -1903,6 +1903,6 @@ export class BattleScreen extends Container {
       })
     )
     if (this.destroyedFlag || view.container.destroyed) return
-    if (!this.destroyedFlag) this.applyMotionFrame()
+    this.applyMotionFrame()
   }
 }
