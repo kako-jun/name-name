@@ -138,25 +138,41 @@ fn main() -> anyhow::Result<()> {
     // 今回の新規開始が自然に続きになる体験にするため）。ファイルが存在しなくても
     // エラーにはしない。削除した場合は `restore_playback` の呼び出し自体を
     // スキップし、`playback_restored` は `false` のままにする。
-    let mut playback_restored = false;
-    if let Some(path) = &config.quicksave_path {
-        playback_restored = apply_new_game_or_restore(cli.new_game, &mut playback, path)?;
-    }
-    // #652: `--debug-scene <sceneId>` はデバッグ用シーンジャンプ。通常の解放条件・ファイル境界を
-    // 無視して、指定した sceneId から直接開始する。`apply_new_game_or_restore` より後に
-    // 置き、指定時は復元済みの位置を上書きする（明示的なデバッグ起点指定を優先する。
-    // GUI版 `NovelPlayer` が `?debug_scene=` を initialSceneId/自動クイックロードより
-    // 後に評価してデバッグ指定を優先させるのと対称）。存在しない sceneId は
-    // `jump_to_scene_id` が no-op で吸収する（位置を変えない、fail-soft）。
-    // `skip_leading_empty_scenes` より前に置くことで、ジャンプ先が Line/Choice を
-    // 持たない（flag 設定だけの）シーンでも #564 と同じ安全策で最初の表示可能な
-    // 位置まで自動的に進む。
-    if let Some(scene_id) = &cli.scene {
-        playback.jump_to_scene_id(scene_id);
-    }
-    skip_leading_empty_scenes(&mut playback);
+    let playback_restored = apply_startup_entry(&cli, &mut config, &mut playback)?;
 
     run(&config, &mut playback, playback_restored)
+}
+
+/// 起動時の入場を決める (#734 PR3、GUI の `resolveInitialEntry` と対称)。戻り値は `playback_restored`。
+///
+/// - `--debug-scene <id>` 指定時は**新規開始**: クイックロードを行わず（`--new-game` の
+///   ファイル削除だけは明示指示なので従来どおり行う）、`Playback::start_fresh_at(id, 空の flags)`
+///   で直前の flags・BGM・イベント絵を持ち込まずに始める。さらに `config.quicksave_path` を
+///   `None` にして、シーン切替ごとの自動クイックセーブも止める（GUI #664 と対称）。
+///   クイックロードを行わないので `read_positions`（既読位置）も復元されない。
+///   存在しない sceneId は何も変えない（fail-soft）。
+/// - 指定なしは従来どおり（`--new-game` ならセーブ削除、でなければ自動クイックロード）。
+fn apply_startup_entry(
+    cli: &Cli,
+    config: &mut Config,
+    playback: &mut Playback,
+) -> anyhow::Result<bool> {
+    let mut playback_restored = false;
+    if let Some(scene_id) = &cli.scene {
+        if cli.new_game {
+            if let Some(path) = &config.quicksave_path {
+                apply_new_game_or_restore(true, playback, path)?;
+            }
+        }
+        config.quicksave_path = None;
+        playback.start_fresh_at(scene_id, flags::GameFlags::new());
+    } else if let Some(path) = &config.quicksave_path {
+        playback_restored = apply_new_game_or_restore(cli.new_game, playback, path)?;
+    }
+    // `skip_leading_empty_scenes` より前に置くことで、ジャンプ先が Line/Choice を持たない
+    // （flag 設定だけの）シーンでも #564 と同じ安全策で最初の表示可能な位置まで進む。
+    skip_leading_empty_scenes(playback);
+    Ok(playback_restored)
 }
 
 /// #622: `--new-game`ならクイックセーブを削除してrestoreをスキップし、
@@ -2307,6 +2323,128 @@ mod tests {
              解放されて見えるはず（中継継続の素通り判定とは独立に、is_option_locked \
              経由でdebug_unlock_allの効果を受ける）"
         );
+    }
+
+    // ===== #734 PR3: --debug-scene は新規開始（クイックロードも自動クイックセーブもしない）=====
+
+    fn debug_scene_save_source() -> &'static str {
+        "---\nengine: name-name\n---\n\n\
+         ## 1-1: 開始\n\n[BGM: a.ogg]\n[フラグ: carried = true]\n\n**A**:\n最初のセリフ\n\n[選択]\n- 進む → 1-2\n[/選択]\n\n\
+         ## 1-2: 次\n\n**B**:\n次のセリフ\n\n[選択]\n- 進む → 1-3\n[/選択]\n\n\
+         ## 1-3: 先\n\n**C**:\n先のセリフ\n"
+    }
+
+    #[test]
+    fn main_level_debug_scene_with_existing_quicksave_starts_fresh_and_never_touches_the_save_file()
+    {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-debug-scene-fresh-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+
+        // 1-1 で BGM と flag を積み、1-2 へ進んだ状態のクイックセーブを作る。
+        let document = name_name_parser::parser::parse(debug_scene_save_source());
+        let mut source_pb = Playback::from_document(&document).with_sentence_per_page(false);
+        assert!(source_pb.advance());
+        assert!(source_pb.select_current_choice());
+        let mut positions = HashSet::new();
+        positions.insert(source_pb.stable_item_key(0).unwrap());
+        save::save_quick(&quicksave_path, &source_pb, &positions);
+        let saved_before = std::fs::read(&quicksave_path).unwrap();
+        let mtime_before = std::fs::metadata(&quicksave_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        let mut config = instant_config();
+        config.quicksave_path = Some(quicksave_path.clone());
+        let cli = cli_from(&["--debug-scene", "1-3"]);
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
+        let restored = apply_startup_entry(&cli, &mut config, &mut playback).unwrap();
+
+        assert!(
+            !restored,
+            "--debug-scene はクイックロードしない（read_positions も復元されない）"
+        );
+        assert_eq!(playback.current_scene_id(), "1-3");
+        assert_eq!(playback.current_bgm(), None, "BGM を持ち越さない");
+        assert!(!playback.flags().check("carried"), "flags を持ち込まない");
+        assert!(
+            config.quicksave_path.is_none(),
+            "自動クイックセーブを止める（quicksave_path を外す）"
+        );
+
+        // event_loop を通してシーンを切り替えても、セーブファイルは変わらない。
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
+        let mut config = instant_config();
+        config.quicksave_path = Some(quicksave_path.clone());
+        apply_startup_entry(
+            &cli_from(&["--debug-scene", "1-1"]),
+            &mut config,
+            &mut playback,
+        )
+        .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(
+            ui::REQUIRED_TOTAL_WIDTH,
+            ui::REQUIRED_TOTAL_HEIGHT,
+        ))
+        .unwrap();
+        // 台詞→Choice、確定で 1-2 へ（シーン切替）。
+        let (mut next_action, _remaining) =
+            action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
+        event_loop(
+            &mut terminal,
+            &config,
+            &mut playback,
+            &mut next_action,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(playback.current_scene_id(), "1-2", "シーンは切り替わった");
+
+        assert_eq!(
+            std::fs::read(&quicksave_path).unwrap(),
+            saved_before,
+            "--debug-scene 中はクイックセーブファイルの内容が変わらない"
+        );
+        assert_eq!(
+            std::fs::metadata(&quicksave_path)
+                .unwrap()
+                .modified()
+                .unwrap(),
+            mtime_before,
+            "--debug-scene 中はクイックセーブファイルの更新日時が変わらない"
+        );
+        let _ = std::fs::remove_file(&quicksave_path);
+    }
+
+    #[test]
+    fn main_level_without_debug_scene_still_quickloads_existing_save() {
+        let quicksave_path = std::env::temp_dir().join(format!(
+            "name-name-tui-no-debug-scene-quickload-test-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&quicksave_path);
+        let document = name_name_parser::parser::parse(debug_scene_save_source());
+        let mut source_pb = Playback::from_document(&document).with_sentence_per_page(false);
+        assert!(source_pb.advance());
+        assert!(source_pb.select_current_choice());
+        save::save_quick(&quicksave_path, &source_pb, &HashSet::new());
+
+        let mut config = instant_config();
+        config.quicksave_path = Some(quicksave_path.clone());
+        let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
+        let restored = apply_startup_entry(&cli_from(&[]), &mut config, &mut playback).unwrap();
+
+        assert!(restored);
+        assert_eq!(playback.current_scene_id(), "1-2");
+        assert_eq!(playback.current_bgm(), Some("a.ogg"));
+        assert!(config.quicksave_path.is_some());
+        let _ = std::fs::remove_file(&quicksave_path);
     }
 
     #[test]

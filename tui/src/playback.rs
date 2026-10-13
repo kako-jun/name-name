@@ -1741,6 +1741,45 @@ impl Playback {
         self.jump_to_scene_idx(target_scene_idx, Some(continuation))
     }
 
+    /// `scene_id` から「新規開始」する (#734 PR3)。進行のジャンプ（[`Playback::jump_to_scene_id`]）
+    /// と違い、直前までの状態を一切持ち込まない: flags は引数で置換し、`scan_state`
+    /// （BGM・イベント絵・暗転・pending SE・話者・本文）を初期化し、`[ジャンプ:]` 予約を破棄し、
+    /// そのシーンから items を作り直す。`--debug-scene`（GUI `?debug_scene=` の
+    /// `startFrom({ sceneId, flags })` と対称）が使う。`scene_id` が無いときは何も変えず `false`。
+    /// 中継シーンの遷移先不在などでジャンプが `false` で止まったときも、呼び出し前の状態へ戻す。
+    pub fn start_fresh_at(&mut self, scene_id: &str, flags: GameFlags) -> bool {
+        let Some(&target_scene_idx) = self.scene_index_by_id.get(scene_id) else {
+            return false;
+        };
+        let origin_flags = std::mem::replace(&mut self.flags, flags);
+        let origin_scan_state = std::mem::replace(
+            &mut self.scan_state,
+            SceneScanState {
+                current_event_image: None,
+                current_event_image_effects: AmbientEffects::default(),
+                current_event_image_transition: EventImageTransition::default(),
+                current_event_image_fade_ms: None,
+                current_speaker: None,
+                current_text: Vec::new(),
+                current_blackout: false,
+                current_bgm: None,
+                pending_se: Vec::new(),
+                pending_jump: None,
+            },
+        );
+        let origin_pending_jump = self.pending_jump.take();
+        let origin_total_cache = self.total_cache.replace(None);
+        if self.jump_to_scene_idx(target_scene_idx, None) {
+            true
+        } else {
+            self.flags = origin_flags;
+            self.scan_state = origin_scan_state;
+            self.pending_jump = origin_pending_jump;
+            self.total_cache.set(origin_total_cache);
+            false
+        }
+    }
+
     /// ファイル境界を越えるジャンプで、シーンを跨いで引き継ぐランニング状態
     /// （イベント絵/暗転/pending SE/話者・本文）をリセットする (#528/#540)。BGM は #724 で対象外
     /// （持ち越す）。
@@ -8807,6 +8846,79 @@ mod tests {
             line.event_image.as_deref(),
             Some("hub/open.webp"),
             "画像コマ自体はhub側の新しいイベント絵を表示するはず"
+        );
+    }
+
+    /// #734 PR3: `start_fresh_at` は直前の BGM・flags を持ち込まず、指定 flags で始まる。
+    /// 進行ジャンプ（`jump_to_scene_id`）は BGM を持ち越すので、その差も固定する。
+    #[test]
+    fn start_fresh_at_does_not_carry_bgm_or_flags_unlike_progress_jump() {
+        let build = || {
+            let ch = chapter(
+                1,
+                vec![
+                    scene(
+                        "1-1",
+                        vec![
+                            bgm_play("a.ogg"),
+                            flag_event("carried", true),
+                            dialog(Some("A"), vec!["最初"]),
+                        ],
+                    ),
+                    scene("1-2", vec![dialog(Some("B"), vec!["次"])]),
+                ],
+            );
+            Playback::from_document(&document_with_chapters(vec![ch]))
+        };
+
+        let mut progress = build();
+        assert!(progress.jump_to_scene_id("1-2"));
+        assert_eq!(
+            progress.current_bgm(),
+            Some("a.ogg"),
+            "進行ジャンプは BGM を持ち越す"
+        );
+        assert!(progress.flags().check("carried"));
+
+        let mut fresh = build();
+        let mut flags = GameFlags::new();
+        flags.set("given", FlagValue::Bool(true));
+        assert!(fresh.start_fresh_at("1-2", flags));
+        assert_eq!(fresh.current_scene_id(), "1-2");
+        assert_eq!(fresh.current_bgm(), None, "新規開始は BGM を持ち越さない");
+        assert!(
+            !fresh.flags().check("carried"),
+            "直前の flags を持ち込まない"
+        );
+        assert!(fresh.flags().check("given"), "引数の flags に置換される");
+        assert_eq!(
+            fresh
+                .current_line()
+                .and_then(|l| l.speaker.clone())
+                .as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn start_fresh_at_unknown_scene_changes_nothing_and_returns_false() {
+        let ch = chapter(
+            1,
+            vec![
+                scene(
+                    "1-1",
+                    vec![bgm_play("a.ogg"), dialog(Some("A"), vec!["最初"])],
+                ),
+                scene("1-2", vec![dialog(Some("B"), vec!["次"])]),
+            ],
+        );
+        let mut pb = Playback::from_document(&document_with_chapters(vec![ch]));
+        assert!(!pb.start_fresh_at("nope", GameFlags::new()));
+        assert_eq!(pb.current_scene_id(), "1-1");
+        assert_eq!(
+            pb.current_bgm(),
+            Some("a.ogg"),
+            "失敗時は状態を一切変えない"
         );
     }
 
