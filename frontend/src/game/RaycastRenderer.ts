@@ -9,6 +9,7 @@
 import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
 import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
+import { isEditableTarget } from './inputGuards'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
   NPC_ANIM_PERIOD_MS,
@@ -285,6 +286,8 @@ export class RaycastRenderer {
   private readonly maxStepsPerColumn = 3
 
   private keys = new Set<string>()
+  /** 今押されている矢印キー（KeyboardEvent.key）。戦闘開始時に BattleScreen へ渡し、押しっぱなしの誤爆を防ぐ (#204) */
+  private heldArrowKeys = new Set<string>()
   private lastTickMs = 0
 
   private resizeRaf: number | null = null
@@ -431,6 +434,7 @@ export class RaycastRenderer {
 
     this.lastTickMs = performance.now()
     this.keys.clear()
+    this.heldArrowKeys.clear()
 
     // ミニマップ (#149): マップ寸法をセット。NPC は rebuildNpcObjects 経由で同期済。
     // プレイヤー位置は onTick 毎に更新する。
@@ -592,17 +596,15 @@ export class RaycastRenderer {
   // --- 入力 ---
 
   private isEditableFocused(): boolean {
-    const active = document.activeElement
-    return !!(
-      active &&
-      (active.tagName === 'INPUT' ||
-        active.tagName === 'TEXTAREA' ||
-        (active as HTMLElement).isContentEditable)
-    )
+    return isEditableTarget(document.activeElement)
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (!this.initialized) return
+    // 押下中の矢印キーは戦闘開始時に BattleScreen へ渡す（戦闘中も追跡する）
+    if (e.key.startsWith('Arrow')) this.heldArrowKeys.add(e.key)
+    // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#204)
+    if (this.battleScreen) return
     if (this.isEditableFocused()) return
 
     if (this.dialogBox?.isShowing) {
@@ -654,6 +656,7 @@ export class RaycastRenderer {
 
   private handleKeyUp = (e: KeyboardEvent): void => {
     if (!this.initialized) return
+    this.heldArrowKeys.delete(e.key)
     const k = normalizeKey(e.key)
     this.keys.delete(k)
   }
@@ -821,6 +824,8 @@ export class RaycastRenderer {
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
+    // 押しっぱなしの移動キーが戦闘後に残らないよう、開始時に捨てる (#204)
+    this.keys.clear()
     // front は従来どおり先頭 1 人だけをエンジンに渡す（全員を渡すと、画面に出ない仲間が
     // 敵の標的・敗北判定に関与して挙動が変わるため）。side は全員を渡して全員を描く (#736)。
     // 従来ターン制では行動するのは先頭の生存者のみ。ATB (#205) は side なら全員がゲージ満タンの順に行動する。
@@ -842,7 +847,9 @@ export class RaycastRenderer {
       pixelArt: this.pixelArt,
       commandLayout: this.battleCommandLayout,
       commandLabels: this.battleCommandLabels,
+      initialHeldKeys: [...this.heldArrowKeys],
       onClose: () => {
+        this.keys.clear()
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)
           this.battleScreen.destroy({ children: true })
@@ -1153,7 +1160,7 @@ export class RaycastRenderer {
     // プレイヤー位置の更新だけが dialog 中スキップ対象。
     this.advanceTurnAnim(dt)
 
-    if (!this.dialogBox?.isShowing) {
+    if (!this.dialogBox?.isShowing && !this.battleScreen) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)
