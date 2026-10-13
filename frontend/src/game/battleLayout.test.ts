@@ -2,15 +2,26 @@ import { describe, it, expect } from 'vitest'
 import {
   SIDE_COMMAND_CELL_HEIGHT,
   SIDE_GAP,
+  SIDE_LABEL_GAP,
+  SIDE_LABEL_HEIGHT,
+  SIDE_LABEL_LINES,
+  SIDE_LABEL_LINE_HEIGHT,
+  SIDE_LOG_MIN_LINES,
+  SIDE_MIN_STAGE_HEIGHT,
   SIDE_MAX_SPRITE_SIZE,
   SIDE_PADDING,
   SIDE_STAGGER_RATIO,
   SIDE_STATUS_COMPACT_WIDTH,
   SIDE_STATUS_ROW_HEIGHT,
   computeContainFit,
+  computeFallbackRect,
   computeFormation,
   computeSideBattleLayout,
   computeSideLogHeight,
+  desiredSideLogLines,
+  estimateTextWidth,
+  fitLabel,
+  fitNameWithSuffix,
   normalizeBattleLayout,
   type Rect,
   type SideBattleLayout,
@@ -381,7 +392,7 @@ describe('computeSideBattleLayout', () => {
       const L = computeSideBattleLayout({ width, height, partyCount: 3, enemyCount: 3 })
       expect(L.log.y + L.log.h).toBeLessThanOrEqual(L.stage.y + EPS)
       expect(L.stage.y + L.stage.h).toBeLessThanOrEqual(L.command.y + EPS)
-      expect(L.log.h).toBeCloseTo(computeSideLogHeight())
+      expect(L.log.h).toBeCloseTo(computeSideLogHeight(L.logLines))
       expect(L.log.x).toBe(SIDE_PADDING)
     }
   })
@@ -446,5 +457,177 @@ describe('computeSideBattleLayout', () => {
     expect(F.commandCells).toHaveLength(3)
     const N = computeSideBattleLayout({ ...base, commandCount: -4 })
     expect(N.commandCells).toEqual([])
+  })
+})
+
+// ---- #736 レビュー指摘対応: ラベル予約・ログ行数・省略 ----
+
+const SWEEP_SIZES: Array<[number, number]> = [
+  [360, 640],
+  [320, 568],
+  [800, 450],
+  [1280, 720],
+  [640, 360],
+  [568, 320],
+]
+
+describe('computeFormation: 敵ラベル予約', () => {
+  const region: Rect = { x: 0, y: 0, w: 300, h: 300 }
+
+  it('withLabel なしは label を返さない（味方側）', () => {
+    for (const s of computeFormation(region, 3, 'party')) expect(s.label).toBeUndefined()
+  })
+
+  it('withLabel ありは枠の直下に名前+HP 2 行ぶんのラベル矩形を返す', () => {
+    const [s] = computeFormation(region, 1, 'enemy', true)
+    expect(s.label).toEqual({
+      x: s.x,
+      y: s.y + s.size + SIDE_LABEL_GAP,
+      w: s.size,
+      h: SIDE_LABEL_HEIGHT,
+    })
+    expect(SIDE_LABEL_HEIGHT).toBe(SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES)
+  })
+
+  it('スプライト+ラベルは領域内・互いに重ならない', () => {
+    for (let n = 1; n <= 6; n++) {
+      const slots = computeFormation(region, n, 'enemy', true)
+      const rects: Rect[] = []
+      for (const s of slots) {
+        expect(inside(slotRect(s), region)).toBe(true)
+        expect(inside(s.label!, region)).toBe(true)
+        rects.push(slotRect(s), s.label!)
+      }
+      for (let i = 0; i < rects.length; i++)
+        for (let j = i + 1; j < rects.length; j++) {
+          // 同一スロットの枠とラベルは接するだけ（重ならない）
+          expect(overlaps(rects[i], rects[j])).toBe(false)
+        }
+    }
+  })
+
+  it('縦が足りないときは列を増やして行数を減らす（6 体・低い領域）', () => {
+    const low: Rect = { x: 0, y: 0, w: 400, h: 120 }
+    const slots = computeFormation(low, 6, 'enemy', true)
+    expect(new Set(slots.map((s) => Math.round(s.y))).size).toBeLessThan(3)
+    expect(slots[0].size).toBeGreaterThan(0)
+  })
+
+  it('領域高さが 0 ならサイズ 0・ラベルなし（はみ出させない）', () => {
+    const slots = computeFormation({ x: 0, y: 0, w: 200, h: 0 }, 2, 'enemy', true)
+    for (const s of slots) {
+      expect(s.size).toBe(0)
+      expect(s.label).toBeUndefined()
+    }
+  })
+})
+
+describe('computeFallbackRect', () => {
+  it('枠比率 (0.15/0.1/0.7/0.8) の相対矩形', () => {
+    expect(computeFallbackRect(100)).toEqual({ x: 15, y: 10, w: 70, h: 80 })
+    expect(computeFallbackRect(0)).toEqual({ x: 0, y: 0, w: 0, h: 0 })
+  })
+})
+
+describe('ログ行数', () => {
+  it('desiredSideLogLines: 敵 1=2 / 2=3 / 3 以上=4、0 や負は下限', () => {
+    expect(desiredSideLogLines(1)).toBe(2)
+    expect(desiredSideLogLines(2)).toBe(3)
+    expect(desiredSideLogLines(3)).toBe(4)
+    expect(desiredSideLogLines(6)).toBe(4)
+    expect(desiredSideLogLines(0)).toBe(SIDE_LOG_MIN_LINES)
+    expect(desiredSideLogLines(-3)).toBe(SIDE_LOG_MIN_LINES)
+  })
+
+  it('十分高い画面では敵数に応じた行数・ログ帯高さが行数と一致', () => {
+    for (const [n, lines] of [
+      [1, 2],
+      [2, 3],
+      [3, 4],
+      [6, 4],
+    ] as const) {
+      const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: 1, enemyCount: n })
+      expect(L.logLines).toBe(lines)
+      expect(L.log.h).toBeCloseTo(computeSideLogHeight(lines))
+    }
+  })
+
+  it('低い画面ではステージ最小高さを優先して行数を下限まで減らす', () => {
+    const L = computeSideBattleLayout({ width: 568, height: 320, partyCount: 4, enemyCount: 6 })
+    expect(L.logLines).toBe(SIDE_LOG_MIN_LINES)
+    expect(L.stage.h).toBeGreaterThanOrEqual(0)
+  })
+
+  it('余裕があるときステージは SIDE_MIN_STAGE_HEIGHT 以上を保つ', () => {
+    for (const [w, h] of SWEEP_SIZES) {
+      const L = computeSideBattleLayout({ width: w, height: h, partyCount: 1, enemyCount: 6 })
+      if (L.logLines > SIDE_LOG_MIN_LINES) {
+        expect(L.stage.h).toBeGreaterThanOrEqual(SIDE_MIN_STAGE_HEIGHT)
+      }
+    }
+  })
+})
+
+describe('スイープ不変条件 (6 サイズ x party1-4 x enemy1-6)', () => {
+  const cases: Array<[number, number, number, number]> = []
+  for (const [w, h] of SWEEP_SIZES)
+    for (let p = 1; p <= 4; p++) for (let e = 1; e <= 6; e++) cases.push([w, h, p, e])
+
+  it('件数', () => expect(cases).toHaveLength(144))
+
+  it.each(cases)('%dx%d party%d enemy%d', (w, h, p, e) => {
+    const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: e })
+    expect(L.stage.h).toBeGreaterThanOrEqual(0)
+    const screen: Rect = { x: 0, y: 0, w, h }
+    const bottoms = [L.command, L.status]
+    const items: Rect[] = []
+    for (const s of L.enemies) {
+      expect(s.size).toBeGreaterThanOrEqual(0)
+      items.push(slotRect(s))
+      if (s.label) items.push(s.label)
+    }
+    for (const s of L.party) items.push(slotRect(s))
+    for (const r of items) {
+      expect(r.x).toBeGreaterThanOrEqual(-EPS)
+      expect(r.y).toBeGreaterThanOrEqual(-EPS)
+      expect(inside(r, screen)).toBe(true)
+      expect(inside(r, L.stage)).toBe(true)
+      for (const b of [...bottoms, L.log]) expect(overlaps(r, b)).toBe(false)
+    }
+    // スプライト・ラベル同士（ゼロ面積は除く）が重ならない
+    const nonEmpty = items.filter((r) => r.w > EPS && r.h > EPS)
+    for (let i = 0; i < nonEmpty.length; i++)
+      for (let j = i + 1; j < nonEmpty.length; j++)
+        expect(overlaps(nonEmpty[i], nonEmpty[j])).toBe(false)
+    // 敵のラベルは潰れていない限り全員ぶん存在する
+    for (const s of L.enemies) if (s.size > 0) expect(s.label).toBeDefined()
+  })
+})
+
+describe('fitLabel / fitNameWithSuffix', () => {
+  it('収まるならそのまま', () => {
+    expect(fitLabel('スライム', 100, 12)).toBe('スライム')
+    expect(fitLabel('HP 5/5', 100, 12)).toBe('HP 5/5')
+  })
+  it('全角=fontPx・半角=0.6*fontPx で概算し、収まらなければ末尾を … にする', () => {
+    expect(estimateTextWidth('あA', 10)).toBeCloseTo(16)
+    const r = fitLabel('とても長い名前のモンスター', 60, 12)
+    expect(r.endsWith('…')).toBe(true)
+    expect(estimateTextWidth(r, 12)).toBeLessThanOrEqual(60)
+  })
+  it('… すら入らない幅は空文字', () => {
+    expect(fitLabel('abc', 3, 12)).toBe('')
+    expect(fitLabel('abc', 0, 12)).toBe('')
+  })
+  it('fitNameWithSuffix: 名前側だけ省略して suffix は残す', () => {
+    const r = fitNameWithSuffix('ながいなまえのゆうしゃ', '  HP 120/120', 150, 14)
+    expect(r.endsWith('  HP 120/120')).toBe(true)
+    expect(r).toContain('…')
+    expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(150)
+  })
+  it('fitNameWithSuffix: 収まるなら無加工 / suffix が入らないときは全体を切る', () => {
+    expect(fitNameWithSuffix('あ', ' HP 1/1', 200, 14)).toBe('あ HP 1/1')
+    const r = fitNameWithSuffix('あ', ' HP 1000/1000', 40, 14)
+    expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(40)
   })
 })

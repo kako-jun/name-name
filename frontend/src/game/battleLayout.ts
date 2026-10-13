@@ -4,9 +4,10 @@
  * `BattleScreen` の `layout: 'side'`（FF 系サイドビュー）で使う座標を、画面サイズ・味方数・敵数から返す。
  *
  *   +------------------------------------------+
- *   | [ログ帯: 直近 SIDE_LOG_LINES 行]           |  ← log
+ *   | [ログ帯: 直近 logLines 行（敵の数で可変）]  |  ← log
  *   |                                          |
  *   |  [敵]                       [味方]        |  ← enemies（左）/ party（右）。複数体は千鳥配置
+ *   |  名前/HP                                  |  ← 敵だけ各スプライトの下にラベル（SpriteSlot.label）
  *   |     [敵]                  [味方]          |
  *   |                                          |
  *   +-----------+------------------------------+
@@ -29,6 +30,8 @@ export interface SpriteSlot {
   x: number
   y: number
   size: number
+  /** 敵のみ: 名前 + HP ラベルの矩形（スプライトの直下・画面絶対座標）。味方・潰れて置けない枠では undefined */
+  label?: Rect
 }
 
 export interface SideBattleLayoutInput {
@@ -43,6 +46,8 @@ export interface SideBattleLayoutInput {
 export interface SideBattleLayout {
   /** 画面上部のログ帯 */
   log: Rect
+  /** ログ帯に出す行数（敵の数で可変・SIDE_LOG_MIN_LINES〜SIDE_LOG_MAX_LINES） */
+  logLines: number
   /** 敵・味方スプライトを置くステージ領域（ログ帯と下パネルの間） */
   stage: Rect
   /** 敵スプライト枠（敵の並び順 = state.enemies の index 順） */
@@ -63,8 +68,11 @@ export interface SideBattleLayout {
 
 export const SIDE_PADDING = 16
 export const SIDE_GAP = 6
-/** ログ帯に出す行数 */
-export const SIDE_LOG_LINES = 2
+/** ログ帯の行数の下限・上限 */
+export const SIDE_LOG_MIN_LINES = 2
+export const SIDE_LOG_MAX_LINES = 4
+/** ステージ（スプライト領域）の最小高さ。ログ行数はこれを優先して減らす（下限 SIDE_LOG_MIN_LINES） */
+export const SIDE_MIN_STAGE_HEIGHT = 120
 export const SIDE_LOG_LINE_HEIGHT = 20
 export const SIDE_LOG_VERTICAL_PADDING = 16
 /** コマンドセル 1 つの高さ */
@@ -82,12 +90,83 @@ export const SIDE_STATUS_COMPACT_WIDTH = 260
 export const SIDE_MAX_SPRITE_SIZE = 160
 /** 同じ側の体数がこれを超えたら 2 列に並べる */
 const SIDE_MAX_ROWS_PER_COLUMN = 3
+/** 敵ラベル（名前 + HP の 2 行）の行高さ・行数・高さ・スプライトとの隙間 */
+export const SIDE_LABEL_LINE_HEIGHT = 15
+export const SIDE_LABEL_LINES = 2
+export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
+export const SIDE_LABEL_GAP = 2
+/** スプライトがこの一辺を下回るとき、列数を増やして大きくなる配置を探す */
+export const SIDE_MIN_SPRITE_SIZE = 48
+/** フォールバック四角（画像が無いとき）の枠内比率 */
+const FALLBACK_X = 0.15
+const FALLBACK_Y = 0.1
+const FALLBACK_W = 0.7
+const FALLBACK_H = 0.8
 /** 千鳥（奥行きのずらし）の水平ずれ。スプライト一辺に対する比 */
 export const SIDE_STAGGER_RATIO = 0.25
 
 /** ログ帯の高さ */
-export function computeSideLogHeight(): number {
-  return SIDE_LOG_LINES * SIDE_LOG_LINE_HEIGHT + SIDE_LOG_VERTICAL_PADDING
+export function computeSideLogHeight(lines: number = SIDE_LOG_MIN_LINES): number {
+  return lines * SIDE_LOG_LINE_HEIGHT + SIDE_LOG_VERTICAL_PADDING
+}
+
+/**
+ * 敵の数から欲しいログ行数を返す。1 ターンのログは「自分のこうげき（2 行）＋生きている敵 1 体あたり 2 行」
+ * なので、敵が多いほど直近の自分の結果が流れて消えないよう行数を増やす（1 体=2 / 2 体=3 / 3 体以上=4）。
+ */
+export function desiredSideLogLines(enemyCount: number): number {
+  const n = Math.max(0, Math.floor(enemyCount))
+  return Math.min(SIDE_LOG_MAX_LINES, Math.max(SIDE_LOG_MIN_LINES, n + 1))
+}
+
+/** フォールバック四角（スプライト枠 `size` の左上を原点とした相対矩形） */
+export function computeFallbackRect(size: number): Rect {
+  return { x: size * FALLBACK_X, y: size * FALLBACK_Y, w: size * FALLBACK_W, h: size * FALLBACK_H }
+}
+
+const ELLIPSIS = '…'
+/** 1 文字の描画幅の概算（全角=fontPx、半角=0.6*fontPx） */
+function charWidth(ch: string, fontPx: number): number {
+  return ch.charCodeAt(0) > 0xff ? fontPx : fontPx * 0.6
+}
+export function estimateTextWidth(text: string, fontPx: number): number {
+  let w = 0
+  for (const ch of text) w += charWidth(ch, fontPx)
+  return w
+}
+
+/**
+ * `maxWidthPx` に収まるよう末尾を「…」で省略する（幅は概算）。収まるならそのまま。
+ * 「…」すら入らないときは空文字。
+ */
+export function fitLabel(text: string, maxWidthPx: number, fontPx: number): string {
+  if (estimateTextWidth(text, fontPx) <= maxWidthPx) return text
+  const ell = charWidth(ELLIPSIS, fontPx)
+  if (maxWidthPx < ell) return ''
+  let out = ''
+  let w = ell
+  for (const ch of text) {
+    const cw = charWidth(ch, fontPx)
+    if (w + cw > maxWidthPx) break
+    out += ch
+    w += cw
+  }
+  return out + ELLIPSIS
+}
+
+/**
+ * `name` + `suffix`（HP など必ず見せたい部分）を `maxWidthPx` に収める。名前側だけ省略する。
+ * suffix 自体が収まらないときは全体を fitLabel する。
+ */
+export function fitNameWithSuffix(
+  name: string,
+  suffix: string,
+  maxWidthPx: number,
+  fontPx: number
+): string {
+  const room = maxWidthPx - estimateTextWidth(suffix, fontPx)
+  if (room <= 0) return fitLabel(name + suffix, maxWidthPx, fontPx)
+  return fitLabel(name, room, fontPx) + suffix
 }
 
 /**
@@ -98,24 +177,44 @@ export function computeSideLogHeight(): number {
  * - 2 行以上のとき奇数行を `SIDE_STAGGER_RATIO * size` だけずらして奥行きを出す。
  *   ずらす向きは「敵は右（味方側）へ・味方は左（敵側）へ」で、向かい合う陣形になる
  * - 配置全体は領域内で水平・垂直とも中央寄せ
+ * - `withLabel`（敵側）: 各行の高さを `size + SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT` にして、スプライトの直下に
+ *   ラベル矩形（`slot.label`）を返す。小さすぎれば列を増やして行数を減らす
  */
 export function computeFormation(
   region: Rect,
   count: number,
-  side: 'enemy' | 'party'
+  side: 'enemy' | 'party',
+  withLabel = false
 ): SpriteSlot[] {
   if (count <= 0) return []
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
-  const columns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
+  // 敵側だけ各行にラベル（隙間 + 名前/HP の 2 行）ぶんを予約する
+  const extra = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+  const sizeFor = (columns: number): number => {
+    const rows = Math.ceil(count / columns)
+    const stagger = rows > 1 ? SIDE_STAGGER_RATIO : 0
+    return Math.max(
+      0,
+      Math.min(regionW / (columns + stagger), regionH / rows - extra, SIDE_MAX_SPRITE_SIZE)
+    )
+  }
+  let columns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
+  let size = sizeFor(columns)
+  // 小さくなりすぎるときは、列数を増やして最も大きくなる配置（同率なら列の少ない方）を採る
+  if (size < SIDE_MIN_SPRITE_SIZE) {
+    for (let c = columns + 1; c <= count; c++) {
+      const next = sizeFor(c)
+      if (next > size) {
+        columns = c
+        size = next
+      }
+    }
+  }
   const rows = Math.ceil(count / columns)
   const stagger = rows > 1 ? SIDE_STAGGER_RATIO : 0
-  const size = Math.max(
-    0,
-    Math.min(regionW / (columns + stagger), regionH / rows, SIDE_MAX_SPRITE_SIZE)
-  )
   const totalW = size * (columns + stagger)
-  const totalH = size * rows
+  const totalH = (size + extra) * rows
   const originX = region.x + (regionW - totalW) / 2
   const originY = region.y + (regionH - totalH) / 2
   const slots: SpriteSlot[] = []
@@ -126,7 +225,14 @@ export function computeFormation(
     // 敵: 奇数行を右へ / 味方: 偶数行を右へ（= 奇数行が相対的に左＝敵側へ寄る）
     const shifted = side === 'enemy' ? odd : !odd
     const dx = stagger > 0 && shifted ? size * stagger : 0
-    slots.push({ x: originX + col * size + dx, y: originY + row * size, size })
+    const x = originX + col * size + dx
+    const y = originY + row * (size + extra)
+    const slot: SpriteSlot = { x, y, size }
+    // 高さが足りずスプライトが 0 に潰れた枠にはラベルも置かない（stage からはみ出させない）
+    if (withLabel && size > 0) {
+      slot.label = { x, y: y + size + SIDE_LABEL_GAP, w: size, h: SIDE_LABEL_HEIGHT }
+    }
+    slots.push(slot)
   }
   return slots
 }
@@ -144,14 +250,6 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const enemyCount = Math.max(0, Math.floor(input.enemyCount))
   const commandCount = Math.max(0, Math.floor(input.commandCount ?? 4))
   const innerW = Math.max(0, W - SIDE_PADDING * 2)
-
-  // 上: ログ帯
-  const log: Rect = {
-    x: SIDE_PADDING,
-    y: SIDE_PADDING,
-    w: innerW,
-    h: computeSideLogHeight(),
-  }
 
   // 下: コマンド（左）+ status（右）
   const commandRows = Math.ceil(commandCount / SIDE_COMMAND_COLUMNS)
@@ -199,9 +297,24 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     })
   }
 
+  // 上: ログ帯。行数は敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
+  const stageBottom = bottomY - SIDE_GAP
+  let logLines = desiredSideLogLines(enemyCount)
+  while (
+    logLines > SIDE_LOG_MIN_LINES &&
+    stageBottom - (SIDE_PADDING + computeSideLogHeight(logLines) + SIDE_GAP) < SIDE_MIN_STAGE_HEIGHT
+  ) {
+    logLines--
+  }
+  const log: Rect = {
+    x: SIDE_PADDING,
+    y: SIDE_PADDING,
+    w: innerW,
+    h: computeSideLogHeight(logLines),
+  }
+
   // 中: ステージ（左半分=敵 / 右半分=味方）
   const stageY = log.y + log.h + SIDE_GAP
-  const stageBottom = bottomY - SIDE_GAP
   const stage: Rect = {
     x: SIDE_PADDING,
     y: stageY,
@@ -214,8 +327,9 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
 
   return {
     log,
+    logLines,
     stage,
-    enemies: computeFormation(enemyRegion, enemyCount, 'enemy'),
+    enemies: computeFormation(enemyRegion, enemyCount, 'enemy', true),
     party: computeFormation(partyRegion, partyCount, 'party'),
     command,
     commandCells,
