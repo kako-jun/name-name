@@ -1788,3 +1788,34 @@ describe('rpgProjectFromDoc: pixel_art (#760)', () => {
     expect(rpgProjectFromDoc(withPixel(1 as never))!.pixelArt).toBeUndefined()
   })
 })
+
+describe('rpgProjectFromDoc: battle_command_layout / battle_command_labels (#204)', () => {
+  const withCmd = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it.each([
+    ['cross', 'cross'],
+    ['CROSS', 'cross'],
+    [null, 'grid'],
+    ['', 'grid'],
+    ['diag', 'grid'],
+  ])('battle_command_layout %j → battleCommandLayout %s', (raw, expected) => {
+    expect(rpgProjectFromDoc(withCmd({ battle_command_layout: raw }))!.battleCommandLayout).toBe(
+      expected
+    )
+  })
+
+  it('battle_command_labels: 全角カンマ・全角イコール・部分指定を解釈する', () => {
+    expect(
+      rpgProjectFromDoc(withCmd({ battle_command_labels: 'attack＝斬る，spell=魔石' }))!
+        .battleCommandLabels
+    ).toEqual({ attack: '斬る', spell: '魔石' })
+  })
+
+  it('battle_command_labels: 有効な指定が 1 つもなければ undefined', () => {
+    for (const v of ['foo=x, item=, escape', '', null]) {
+      expect(
+        rpgProjectFromDoc(withCmd({ battle_command_labels: v }))!.battleCommandLabels
+      ).toBeUndefined()
+    }
+  })
+})

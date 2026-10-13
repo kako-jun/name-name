@@ -9,6 +9,7 @@
 import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
 import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
+import { isEditableTarget } from './inputGuards'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
   NPC_ANIM_PERIOD_MS,
@@ -63,6 +64,7 @@ import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 import type { BattleAtbConfig } from './battleAtb'
+import type { CommandLabels, CommandLayout } from './battleCommands'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -152,6 +154,9 @@ export class RaycastRenderer {
   private pixelArt = false
   /** 戦闘の ATB 方式 (#205)。frontmatter `battle_atb` / `battle_atb_mode` 由来。undefined = 従来ターン制 */
   private battleAtb: BattleAtbConfig | undefined = undefined
+  /** 戦闘コマンド窓の配置・表示名 (#204)。frontmatter `battle_command_layout` / `battle_command_labels` 由来 */
+  private battleCommandLayout: CommandLayout = 'grid'
+  private battleCommandLabels: CommandLabels | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -281,6 +286,12 @@ export class RaycastRenderer {
   private readonly maxStepsPerColumn = 3
 
   private keys = new Set<string>()
+  /** 今押されている矢印キー（KeyboardEvent.key）。戦闘開始時に BattleScreen へ渡し、押しっぱなしの誤爆を防ぐ (#204) */
+  private heldArrowKeys = new Set<string>()
+  /** 戦闘終了時に押されていた矢印キー。keyup されるまでフィールド移動に使わない（repeat の keydown で戻さない）(#204) */
+  private releaseGateKeys = new Set<string>()
+  /** 外側の UI（設定オーバーレイ）が入力を止めているか (#204) */
+  private inputSuspended = false
   private lastTickMs = 0
 
   private resizeRaf: number | null = null
@@ -347,6 +358,7 @@ export class RaycastRenderer {
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('keyup', this.handleKeyUp)
     window.addEventListener('resize', this.handleResize)
+    window.addEventListener('blur', this.handleBlur)
     this.app.ticker.add(this.onTick)
 
     // スワイプ移動 + シングルタップでメニュー開閉 (#178)
@@ -401,6 +413,8 @@ export class RaycastRenderer {
     this.battleForeground = gameData.battleForeground
     this.pixelArt = gameData.pixelArt === true
     this.battleAtb = gameData.battleAtb
+    this.battleCommandLayout = gameData.battleCommandLayout ?? 'grid'
+    this.battleCommandLabels = gameData.battleCommandLabels
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -425,6 +439,7 @@ export class RaycastRenderer {
 
     this.lastTickMs = performance.now()
     this.keys.clear()
+    this.heldArrowKeys.clear()
 
     // ミニマップ (#149): マップ寸法をセット。NPC は rebuildNpcObjects 経由で同期済。
     // プレイヤー位置は onTick 毎に更新する。
@@ -534,10 +549,20 @@ export class RaycastRenderer {
     void settings.seVolume
   }
 
+  /**
+   * 設定オーバーレイなど外側の UI が開いている間、入力を止める (#204)。true の間はフィールドの移動キーも
+   * 戦闘のキー操作（BattleScreen の isInputSuspended 経由）も受け付けない。
+   */
+  setInputSuspended(suspended: boolean): void {
+    this.inputSuspended = suspended
+    if (suspended) this.keys.clear()
+  }
+
   destroy(): void {
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
+    window.removeEventListener('blur', this.handleBlur)
     if (this.detachTouchInput) {
       this.detachTouchInput()
       this.detachTouchInput = null
@@ -586,17 +611,18 @@ export class RaycastRenderer {
   // --- 入力 ---
 
   private isEditableFocused(): boolean {
-    const active = document.activeElement
-    return !!(
-      active &&
-      (active.tagName === 'INPUT' ||
-        active.tagName === 'TEXTAREA' ||
-        (active as HTMLElement).isContentEditable)
-    )
+    return isEditableTarget(document.activeElement)
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (!this.initialized) return
+    // 押下中の矢印キーは戦闘開始時に BattleScreen へ渡す（戦闘中も追跡する）
+    if (e.key.startsWith('Arrow')) this.heldArrowKeys.add(e.key)
+    // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#204)
+    if (this.battleScreen) return
+    if (this.inputSuspended) return
+    // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
+    if (this.releaseGateKeys.has(e.key)) return
     if (this.isEditableFocused()) return
 
     if (this.dialogBox?.isShowing) {
@@ -646,8 +672,17 @@ export class RaycastRenderer {
     }
   }
 
+  /** ウィンドウがフォーカスを失うと keyup が届かないので、押下状態を捨てる (#204) */
+  private handleBlur = (): void => {
+    this.keys.clear()
+    this.heldArrowKeys.clear()
+    this.releaseGateKeys.clear()
+  }
+
   private handleKeyUp = (e: KeyboardEvent): void => {
     if (!this.initialized) return
+    this.heldArrowKeys.delete(e.key)
+    this.releaseGateKeys.delete(e.key)
     const k = normalizeKey(e.key)
     this.keys.delete(k)
   }
@@ -815,6 +850,8 @@ export class RaycastRenderer {
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
+    // 押しっぱなしの移動キーが戦闘後に残らないよう、開始時に捨てる (#204)
+    this.keys.clear()
     // front は従来どおり先頭 1 人だけをエンジンに渡す（全員を渡すと、画面に出ない仲間が
     // 敵の標的・敗北判定に関与して挙動が変わるため）。side は全員を渡して全員を描く (#736)。
     // 従来ターン制では行動するのは先頭の生存者のみ。ATB (#205) は side なら全員がゲージ満タンの順に行動する。
@@ -834,7 +871,13 @@ export class RaycastRenderer {
       depth: this.battleDepth,
       foreground: this.battleForeground,
       pixelArt: this.pixelArt,
+      commandLayout: this.battleCommandLayout,
+      commandLabels: this.battleCommandLabels,
+      initialHeldKeys: [...this.heldArrowKeys],
+      isInputSuspended: () => this.inputSuspended,
       onClose: () => {
+        this.keys.clear()
+        this.releaseGateKeys = new Set(this.heldArrowKeys)
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)
           this.battleScreen.destroy({ children: true })
@@ -1145,7 +1188,7 @@ export class RaycastRenderer {
     // プレイヤー位置の更新だけが dialog 中スキップ対象。
     this.advanceTurnAnim(dt)
 
-    if (!this.dialogBox?.isShowing) {
+    if (!this.dialogBox?.isShowing && !this.battleScreen && !this.inputSuspended) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)

@@ -159,13 +159,24 @@ async function main(): Promise<void> {
     const s = document.createElement('select')
     s.id = id
     for (const o of options) s.add(new Option(labels[o] ?? o, o))
-    s.addEventListener('change', () => on(s.value as T))
+    s.addEventListener('change', () => {
+      on(s.value as T)
+      // select にフォーカスが残ると cross の矢印キーがフォーム操作として扱われ効かないので、変更後は全 select で外す
+      s.blur()
+    })
     l.appendChild(s)
     tb.appendChild(l)
     return s
   }
   const layoutSel = select('layout', 'tb-layout', ['front', 'side'] as const, (v) =>
     change({ layout: v })
+  )
+  const cmdLayoutSel = select(
+    'commandLayout',
+    'tb-command-layout',
+    ['grid', 'cross'] as const,
+    (v) => change({ commandLayout: v }),
+    { grid: 'grid（2x2）', cross: 'cross（十字・矢印キー）' }
   )
   const styleSel = select('spriteStyle', 'tb-style', ['none', 'acrylic'] as const, (v) =>
     change({ spriteStyle: v })
@@ -295,6 +306,7 @@ async function main(): Promise<void> {
   function syncToolbar(): void {
     const v = history.current
     layoutSel.value = v.layout
+    cmdLayoutSel.value = v.commandLayout
     styleSel.value = v.spriteStyle
     windowSel.value = v.windowStyle
     bgChk.checked = v.backgroundOn

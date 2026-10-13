@@ -528,3 +528,183 @@ describe('RaycastRenderer.load → pixelArt の流れ (#760)', () => {
     expect(i.battleScreen!.opts.pixelArt).toBe(true)
   })
 })
+
+describe('RaycastRenderer.load → commandLayout / commandLabels の流れ (#204)', () => {
+  function loaded(p: Partial<RPGProject>) {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(project(p))
+    return { r, i }
+  }
+
+  it('load() が battleCommandLayout / battleCommandLabels を保持し BattleScreen の opts に流す', () => {
+    const { i } = loaded({
+      battleLayout: 'side',
+      battleCommandLayout: 'cross',
+      battleCommandLabels: { attack: '斬る' },
+    })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.commandLayout).toBe('cross')
+    expect(i.battleScreen!.opts.commandLabels).toEqual({ attack: '斬る' })
+  })
+
+  it('キー未設定で再 load() すると grid / undefined に戻る', () => {
+    const { r, i } = loaded({
+      battleLayout: 'side',
+      battleCommandLayout: 'cross',
+      battleCommandLabels: { attack: '斬る' },
+    })
+    r.load(project({}))
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.commandLayout).toBe('grid')
+    expect(i.battleScreen!.opts.commandLabels).toBeUndefined()
+  })
+})
+
+describe('RaycastRenderer: 戦闘中のキー入力とフィールド移動 (#204)', () => {
+  interface KeyInternals extends RendererInternals {
+    initialized: boolean
+    playerX: number
+    playerY: number
+    playerAngle: number
+    stepCounter: number
+    keys: Set<string>
+    lastTickMs: number
+    handleKeyDown(e: KeyboardEvent): void
+    handleKeyUp(e: KeyboardEvent): void
+    handleBlur(): void
+    heldArrowKeys: Set<string>
+    setInputSuspended(v: boolean): void
+    onTick(): void
+    advanceTurnAnim(dt: number): void
+    updateNpcAnimations(now: number): void
+    renderFrame(): void
+  }
+  const key = (type: 'keydown' | 'keyup', k: string) =>
+    new KeyboardEvent(type, { key: k, bubbles: true, cancelable: true })
+
+  function field(over: Partial<RPGProject> = {}) {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    const map = {
+      width: 9,
+      height: 9,
+      tileSize: 32,
+      tiles: Array.from({ length: 9 }, () => Array(9).fill(0)),
+    }
+    r.load(project({ map, player: { x: 4, y: 4, direction: 'up' }, ...over }))
+    const t = i as unknown as KeyInternals
+    t.initialized = true
+    t.advanceTurnAnim = () => {}
+    t.updateNpcAnimations = () => {}
+    t.renderFrame = () => {}
+    return t
+  }
+  const tick = (t: KeyInternals, ms: number) => {
+    vi.spyOn(performance, 'now').mockReturnValue(t.lastTickMs + ms)
+    t.onTick()
+  }
+  const pose = (t: KeyInternals) => [t.playerX, t.playerY, t.playerAngle]
+
+  it('対照: 戦闘していなければ ArrowUp + tick でプレイヤーが動く', () => {
+    const t = field()
+    const before = pose(t)
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    tick(t, 80)
+    expect(pose(t)).not.toEqual(before)
+  })
+
+  it('戦闘中に矢印キーを押して tick しても、位置・角度・歩数が変わらない', () => {
+    const t = field({ battleLayout: 'side' })
+    t.startBattle([enemy()])
+    const before = pose(t)
+    const steps = t.stepCounter
+    for (const k of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
+      t.handleKeyDown(key('keydown', k))
+    }
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+    expect(t.stepCounter).toBe(steps)
+    expect(t.keys.size).toBe(0)
+  })
+
+  it('戦闘開始時に押しっぱなしだった移動キーは、戦闘終了後に残って動き続けない', () => {
+    const t = field({ battleLayout: 'side' })
+    t.handleKeyDown(key('keydown', 'ArrowDown'))
+    t.startBattle([enemy()])
+    expect(t.keys.size).toBe(0)
+    const opts = t.battleScreen!.opts as { onClose(o: string): void }
+    opts.onClose('escaped')
+    expect(t.battleScreen).toBeNull()
+    const before = pose(t)
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+  })
+
+  it('戦闘中に keydown した移動キーも、戦闘終了後に残らない', () => {
+    const t = field({ battleLayout: 'side' })
+    t.startBattle([enemy()])
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    ;(t.battleScreen!.opts as { onClose(o: string): void }).onClose('victory')
+    const before = pose(t)
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+  })
+
+  it('開始時に押されていた矢印キーが BattleScreen の initialHeldKeys に渡る（keyup 後は渡らない）', () => {
+    const t = field({ battleLayout: 'side' })
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    t.handleKeyDown(key('keydown', 'ArrowLeft'))
+    t.handleKeyUp(key('keyup', 'ArrowLeft'))
+    t.startBattle([enemy()])
+    expect(t.battleScreen!.opts.initialHeldKeys).toEqual(['ArrowUp'])
+  })
+
+  it('戦闘終了時に押しっぱなしだった矢印キーは repeat の keydown でも動かず、keyup 後の新しい押下では動く', () => {
+    const t = field({ battleLayout: 'side' })
+    t.handleKeyDown(key('keydown', 'ArrowDown'))
+    t.startBattle([enemy()])
+    ;(t.battleScreen!.opts as { onClose(o: string): void }).onClose('escaped')
+    const before = pose(t)
+    t.handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown', repeat: true }))
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+    t.handleKeyUp(key('keyup', 'ArrowDown'))
+    t.handleKeyDown(key('keydown', 'ArrowDown'))
+    tick(t, 80)
+    expect(pose(t)).not.toEqual(before)
+  })
+
+  it('setInputSuspended(true) の間はフィールドも動かず、押下キーは捨てられ、解除で再び動く', () => {
+    const t = field()
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    t.setInputSuspended(true)
+    expect(t.keys.size).toBe(0)
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    const before = pose(t)
+    tick(t, 80)
+    expect(pose(t)).toEqual(before)
+    t.setInputSuspended(false)
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    tick(t, 80)
+    expect(pose(t)).not.toEqual(before)
+  })
+
+  it('戦闘の isInputSuspended は setInputSuspended の状態を返す', () => {
+    const t = field({ battleLayout: 'side' })
+    t.startBattle([enemy()])
+    const f = t.battleScreen!.opts.isInputSuspended as () => boolean
+    expect(f()).toBe(false)
+    t.setInputSuspended(true)
+    expect(f()).toBe(true)
+  })
+
+  it('window の blur で keys・押下記録が捨てられる', () => {
+    const t = field()
+    t.handleKeyDown(key('keydown', 'ArrowUp'))
+    expect(t.keys.size).toBe(1)
+    t.handleBlur()
+    expect(t.keys.size).toBe(0)
+    expect(t.heldArrowKeys.size).toBe(0)
+  })
+})

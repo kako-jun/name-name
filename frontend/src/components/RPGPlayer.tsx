@@ -12,6 +12,8 @@ type RendererLike = {
   load(gameData: RPGProject): void
   destroy(): void
   applySettings?(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void
+  /** 設定オーバーレイの開閉を伝える。開いている間は入力（移動・戦闘のキー）を止める (#204) */
+  setInputSuspended?(suspended: boolean): void
 }
 
 interface RPGPlayerProps {
@@ -67,6 +69,8 @@ const RPG_SETTINGS_SLIDER_COLOR = '#53eafd'
 function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<RendererLike | null>(null)
+  // renderer が作り直されても設定オーバーレイの開閉状態を引き継ぐための ref (#204)
+  const settingsOpenRef = useRef(false)
 
   // 設定 (Issue #138) — slider drag による書き込み連打は debounce で吸収 (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
@@ -90,6 +94,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
           return
         }
         renderer.applySettings?.(settings)
+        renderer.setInputSuspended?.(settingsOpenRef.current)
         renderer.load(gameData ?? sampleRpgData)
       })
       .catch((err) => {
@@ -111,6 +116,12 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
     rendererRef.current?.applySettings?.(settings)
     debouncedSave.save(settings)
   }, [settings, debouncedSave])
+
+  // 設定オーバーレイが開いている間は renderer の入力を止める (#204)
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen
+    rendererRef.current?.setInputSuspended?.(settingsOpen)
+  }, [settingsOpen])
 
   // unmount 時に debounce 中の保存を flush
   useEffect(() => {

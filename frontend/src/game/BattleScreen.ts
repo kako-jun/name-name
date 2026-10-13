@@ -25,6 +25,7 @@
  *
  * BattleEngine（状態機械）を観測して描画する責務だけ持つ。コマンド入力は
  * 4 つのボタン (たたかう/じゅもん/どうぐ/にげる) を直接タップで決定。
+ * `side` で commandLayout が `cross` のときは十字配置（上・左・右・下）にし、矢印キー 1 押しでも決定できる (#204)。
  *
  * Phase 1 では呪文 / アイテムは「準備中」のログを出すだけ（パーティ #175 と
  * セットで Phase 2）。たたかう / にげる だけ動作する。
@@ -46,6 +47,13 @@ import {
   Ticker,
 } from 'pixi.js'
 import { ATB_GAUGE_MAX, BattleEngine } from './battleEngine'
+import {
+  crossKeyToCommandId,
+  resolveCommandSpecs,
+  type CommandId,
+  type CommandLabels,
+  type CommandLayout,
+} from './battleCommands'
 import type { BattleEntity } from './spellDsl'
 import {
   SIDE_LABEL_LINE_HEIGHT,
@@ -75,6 +83,7 @@ import {
   type SpriteStyle,
 } from './spriteStyle'
 import { computeCoverFit } from './novelLayout'
+import { isEditableTarget, isHeldKeyBlocked } from './inputGuards'
 import {
   computeBands,
   FF_BLUE_PANEL_ALPHA,
@@ -179,8 +188,6 @@ const TEXT_STYLE_HP = new TextStyle({
   fill: TEXT_COLOR,
 })
 
-type CommandId = 'attack' | 'spell' | 'item' | 'escape'
-
 /** 被写界深度の 1 段（ぼかしコピーとそのマスク）(#753) */
 interface DofLevelView {
   /** 背景を四方へ広げた矩形メッシュ（端ピクセルを繰り返す）。ぼかしが画面端で欠けないようにする */
@@ -276,6 +283,21 @@ export interface BattleScreenOptions {
    * 未指定・false は mipmap＋linear で縮小をなめらかにする。
    */
   pixelArt?: boolean
+  /**
+   * コマンド窓の配置 (#204)。`grid`（既定・2x2）/ `cross`（FF6「短縮」風の十字。上=たたかう・左=じゅもん・右=どうぐ・下=にげる）。
+   * `cross` は `side` のときだけ効き、矢印キー 1 押しでその方向のコマンドを決定する（タップも従来どおり）。
+   * `front` では無視する（キー操作も付けない）。
+   */
+  commandLayout?: CommandLayout
+  /**
+   * 戦闘開始の時点で押されていたキー（`KeyboardEvent.key`）。`cross` の矢印キーは、これらが一度 keyup されるまで無視する
+   * （エンカウント直後に歩行で押しっぱなしだった矢印キーで、いきなりコマンドが決定されるのを防ぐ）(#204)
+   */
+  initialHeldKeys?: readonly string[]
+  /** true を返している間（設定オーバーレイが開いているなど）は、戦闘のキー操作を無視する (#204) */
+  isInputSuspended?: () => boolean
+  /** コマンドの表示名の上書き (#204)。id（attack / spell / item / escape）は変えず label だけ差し替える。部分指定可 */
+  commandLabels?: CommandLabels
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -375,6 +397,14 @@ export class BattleScreen extends Container {
   >()
   private logLines: PixiText[] = []
   private commands: CommandButton[] = []
+  /** 実際に使うコマンド窓の配置 (#204)。`cross` は `side` のときだけ */
+  private commandLayout: CommandLayout
+  /** `cross` の矢印キーのリスナー (#204)。destroy で必ず外す */
+  private keyListener: ((e: KeyboardEvent) => void) | null = null
+  /** 開始時に押されていて、まだ離されていないキー (#204)。keyup で外れる */
+  private heldKeys = new Set<string>()
+  private keyUpListener: ((e: KeyboardEvent) => void) | null = null
+  private blurListener: (() => void) | null = null
 
   constructor(
     engine: BattleEngine,
@@ -393,6 +423,8 @@ export class BattleScreen extends Container {
     this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.logTypewriter = opts.logTypewriter === 'on' ? 'on' : 'off'
+    this.commandLayout =
+      opts.commandLayout === 'cross' && this.layoutMode === 'side' ? 'cross' : 'grid'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
@@ -417,6 +449,7 @@ export class BattleScreen extends Container {
       this.logPanel.on('pointertap', () => this.skipLogTyping())
     }
     this.buildCommandButtons()
+    this.attachCrossKeys()
     // front のログは固定 4 行。side は layoutSide が必要な行数だけ作る
     if (this.layoutMode === 'front') this.buildLogLines()
     else this.buildSideViews()
@@ -456,6 +489,7 @@ export class BattleScreen extends Container {
    */
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.destroyedFlag = true
+    this.detachCrossKeys()
     for (const v of [...this.enemyViews, ...this.partyViews]) {
       v.acrylicPlate?.destroy()
       v.acrylicShadow?.destroy()
@@ -893,13 +927,7 @@ export class BattleScreen extends Container {
   }
 
   private buildCommandButtons(): void {
-    const labels: Array<{ id: CommandId; label: string }> = [
-      { id: 'attack', label: 'たたかう' },
-      { id: 'spell', label: 'じゅもん' },
-      { id: 'item', label: 'どうぐ' },
-      { id: 'escape', label: 'にげる' },
-    ]
-    for (const item of labels) {
+    for (const item of resolveCommandSpecs(this.opts.commandLabels)) {
       const text = new PixiText({ text: item.label, style: this.themedStyle(TEXT_STYLE_COMMAND) })
       const hit = new Container()
       hit.eventMode = 'static'
@@ -909,6 +937,55 @@ export class BattleScreen extends Container {
       this.addChild(text)
       this.commands.push({ id: item.id, hit, text })
     }
+  }
+
+  /** そのコマンドを今選べるか。ATB (#205) ではにげるはゲージが溜まっていなくてもいつでも選べる */
+  private isCommandEnabled(id: CommandId): boolean {
+    const s = this.engine.getState()
+    if (id === 'escape' && s.atb && (s.phase === 'party-input' || s.phase === 'atb-running')) {
+      return true
+    }
+    return s.phase === 'party-input'
+  }
+
+  /** `cross` のとき、矢印キー 1 押しでその方向のコマンドを決定するリスナーを付ける (#204)。grid には付けない */
+  private attachCrossKeys(): void {
+    if (this.commandLayout !== 'cross' || typeof globalThis.addEventListener !== 'function') return
+    this.heldKeys = new Set(this.opts.initialHeldKeys ?? [])
+    this.keyListener = (e: KeyboardEvent) => {
+      if (this.destroyedFlag || this.closedFlag) return
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+      // フォーム部品の矢印キー操作（select の選択変更・入力のカーソル移動など）は奪わない
+      if (isEditableTarget(e.target)) return
+      // 設定オーバーレイなど外側の UI が入力を止めている間は戦闘のキー操作を無視する
+      if (this.opts.isInputSuspended?.()) return
+      const id = crossKeyToCommandId(e.key)
+      if (!id) return
+      // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
+      e.preventDefault()
+      if (e.repeat) return
+      // 戦闘開始時に押されていたキーは、一度離されるまで無視する
+      if (isHeldKeyBlocked(this.heldKeys, e.key)) return
+      if (!this.isCommandEnabled(id)) return
+      this.handleCommand(id)
+    }
+    this.keyUpListener = (e: KeyboardEvent) => {
+      this.heldKeys.delete(e.key)
+    }
+    globalThis.addEventListener('keydown', this.keyListener)
+    globalThis.addEventListener('keyup', this.keyUpListener)
+    // ウィンドウがフォーカスを失うと keyup が届かないので、押下状態を捨てる
+    this.blurListener = () => this.heldKeys.clear()
+    globalThis.addEventListener('blur', this.blurListener)
+  }
+
+  private detachCrossKeys(): void {
+    if (this.keyListener) globalThis.removeEventListener('keydown', this.keyListener)
+    if (this.keyUpListener) globalThis.removeEventListener('keyup', this.keyUpListener)
+    if (this.blurListener) globalThis.removeEventListener('blur', this.blurListener)
+    this.keyListener = null
+    this.keyUpListener = null
+    this.blurListener = null
   }
 
   private buildLogLines(): void {
@@ -1069,6 +1146,7 @@ export class BattleScreen extends Container {
       partyCount: s.party.length,
       enemyCount: s.enemies.length,
       commandCount: this.commands.length,
+      commandLayout: this.commandLayout,
       partyRows: s.party.map((p) => p.row),
       // 立ち絵の縦横比（未読み込み・色四角は undefined → 既定 0.5）。読み込み完了で layout し直される
       partyAspects: this.partyViews.map((v) =>
@@ -1412,10 +1490,8 @@ export class BattleScreen extends Container {
     }
     // 暫定: コマンド入力不可なら見た目で示す（alpha 半分）
     // ATB (#205): にげるはゲージが溜まっていなくても（誰もコマンド待ちでなくても）いつでも選べる
-    const inputEnabled = s.phase === 'party-input'
-    const escapeAnytime = !!s.atb && (s.phase === 'party-input' || s.phase === 'atb-running')
     for (const cmd of this.commands) {
-      const enabled = cmd.id === 'escape' && escapeAnytime ? true : inputEnabled
+      const enabled = this.isCommandEnabled(cmd.id)
       cmd.hit.alpha = enabled ? 1 : 0.4
       cmd.text.alpha = enabled ? 1 : 0.4
       cmd.hit.eventMode = enabled ? 'static' : 'none'

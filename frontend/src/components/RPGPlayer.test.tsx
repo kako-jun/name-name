@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import RPGPlayer from './RPGPlayer'
+import { sampleRpgData } from '../game/sampleRpgData'
 
 // RPGPlayer は PixiJS 依存の TopDownRenderer/RaycastRenderer を construct するため、
 // jsdom では実 init できない（NovelPlayer 系テストと同じ事情）。init/load/destroy/
@@ -25,14 +26,18 @@ vi.mock('../game/TopDownRenderer', () => ({
     }
   }),
 }))
+const raycastInstances: Array<{ setInputSuspended: ReturnType<typeof vi.fn> }> = []
 vi.mock('../game/RaycastRenderer', () => ({
   RaycastRenderer: vi.fn().mockImplementation(function () {
-    return {
+    const inst = {
       init: vi.fn().mockResolvedValue(undefined),
       load: vi.fn(),
       destroy: vi.fn(),
       applySettings: vi.fn(),
+      setInputSuspended: vi.fn(),
     }
+    raycastInstances.push(inst)
+    return inst
   }),
 }))
 
@@ -63,5 +68,30 @@ describe('RPGPlayer focus-visible クラス付与 (#639)', () => {
   it('FV1: 設定ボタンに focus-visible: クラスが付与されている', () => {
     render(<RPGPlayer />)
     expect(screen.getByRole('button', { name: '設定を開く' }).className).toContain('focus-visible:')
+  })
+})
+
+describe('RPGPlayer: 設定の開閉を renderer に伝える (#204)', () => {
+  it('Ctrl+, で開くと setInputSuspended(true)、もう一度で false', () => {
+    raycastInstances.length = 0
+    render(<RPGPlayer view="raycast" />)
+    const r = raycastInstances[0]
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    expect(r.setInputSuspended).toHaveBeenLastCalledWith(true)
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    expect(r.setInputSuspended).toHaveBeenLastCalledWith(false)
+  })
+})
+
+describe('RPGPlayer: renderer の作り直しでも設定中の停止を引き継ぐ (#204)', () => {
+  it('設定を開いたまま gameData が変わって renderer が作り直されると、init 後に setInputSuspended(true) が呼ばれる', async () => {
+    raycastInstances.length = 0
+    const { rerender } = render(<RPGPlayer view="raycast" />)
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    rerender(<RPGPlayer view="raycast" gameData={{ ...sampleRpgData }} />)
+    await new Promise((r) => setTimeout(r, 0))
+    const next = raycastInstances[raycastInstances.length - 1]
+    expect(next).not.toBe(raycastInstances[0])
+    expect(next.setInputSuspended).toHaveBeenCalledWith(true)
   })
 })

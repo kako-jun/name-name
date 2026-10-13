@@ -2365,6 +2365,8 @@ mod tests {
             battle_foreground: None,
             battle_atb: None,
             battle_atb_mode: None,
+            battle_command_layout: None,
+            battle_command_labels: None,
             chapters,
         }
     }

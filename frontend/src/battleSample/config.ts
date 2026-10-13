@@ -16,6 +16,7 @@ import type { BackgroundDof } from '../game/depthOfField'
 import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
 import type { AtbMode } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
+import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -64,6 +65,10 @@ export interface BattleSampleConfig {
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。既定 wait（コマンド選択中は時間停止） */
   atbMode: AtbMode
+  /** コマンド窓の配置 (#204)。既定 grid（2x2）。cross は side のとき十字配置＋矢印キー */
+  commandLayout: CommandLayout
+  /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
+  commandLabels: CommandLabels
   /** 絶対 URL。なしは null */
   background: string | null
   /** 奥行きの地平線の高さ（画面比 0〜1）(#747)。奥行きオン時に使う。既定 DEPTH_DEFAULT_HORIZON */
@@ -89,6 +94,8 @@ export interface BattleSampleView {
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。atb が on のときだけ効く */
   atbMode: AtbMode
+  /** コマンド窓の配置 (#204)。既定 grid */
+  commandLayout: CommandLayout
   backgroundOn: boolean
   /** 奥行き (#747)。on のとき config の horizon / perspective で行ごとの縮尺をつける。既定 off（平面） */
   depth: 'on' | 'off'
@@ -149,6 +156,8 @@ export function defaultConfig(): BattleSampleConfig {
     logTypewriter: 'off',
     atb: 'off',
     atbMode: 'wait',
+    commandLayout: 'grid',
+    commandLabels: {},
     background: null,
     horizon: DEPTH_DEFAULT_HORIZON,
     perspective: SAMPLE_DEFAULT_PERSPECTIVE,
@@ -248,6 +257,28 @@ function parseEntities(
   return { ok: true, value: out }
 }
 
+/** 設定 JSON の commandLabels (#204) を検証する。`{ attack?, spell?, item?, escape? }`（値は空でない文字列） */
+function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
+  if (raw === undefined) return { ok: true, value: {} }
+  if (!isRecord(raw))
+    return { ok: false, error: 'commandLabels はオブジェクトである必要があります' }
+  const ids: readonly string[] = COMMAND_DEFAULTS.map((c) => c.id)
+  const out: CommandLabels = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (!ids.includes(k)) {
+      return { ok: false, error: `commandLabels のキーは ${ids.join(' / ')}: ${JSON.stringify(k)}` }
+    }
+    if (typeof v !== 'string' || v.trim() === '') {
+      return {
+        ok: false,
+        error: `commandLabels.${k} は空でない文字列である必要があります: ${JSON.stringify(v)}`,
+      }
+    }
+    out[k as keyof CommandLabels] = v
+  }
+  return { ok: true, value: out }
+}
+
 /** 設定 JSON（パース済みの値）を検証し、既定値を補完し、URL を絶対化する */
 export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSampleConfig> {
   if (!isRecord(raw))
@@ -334,6 +365,18 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     atbMode = raw.atbMode
   }
+  let commandLayout = def.commandLayout
+  if (raw.commandLayout !== undefined) {
+    if (raw.commandLayout !== 'grid' && raw.commandLayout !== 'cross') {
+      return {
+        ok: false,
+        error: `commandLayout は "grid" か "cross": ${JSON.stringify(raw.commandLayout)}`,
+      }
+    }
+    commandLayout = raw.commandLayout
+  }
+  const commandLabels = parseCommandLabelsConfig(raw.commandLabels)
+  if (!commandLabels.ok) return commandLabels
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -386,6 +429,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       logTypewriter,
       atb,
       atbMode,
+      commandLayout,
+      commandLabels: commandLabels.value,
       background,
       horizon: horizon.value,
       perspective: perspective.value,
@@ -422,6 +467,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     logTypewriter: config.logTypewriter,
     atb: config.atb,
     atbMode: config.atbMode,
+    commandLayout: config.commandLayout,
     backgroundOn: config.background !== null,
     depth: 'off',
     foregroundOn: config.foreground !== null,
@@ -483,6 +529,8 @@ export function buildBattleSetup(
     backgroundDof: BackgroundDof
     pixelArt: boolean
     logTypewriter: BattleLogTypewriterMode
+    commandLayout: CommandLayout
+    commandLabels: CommandLabels
     background?: string
     depth: BattleDepth | null
     foreground?: string
@@ -522,6 +570,8 @@ export function buildBattleSetup(
       backgroundDof: view.backgroundDof,
       pixelArt: view.pixelArt === 'on',
       logTypewriter: view.logTypewriter,
+      commandLayout: view.commandLayout,
+      commandLabels: config.commandLabels,
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
       depth:
         view.depth === 'on' ? { horizon: config.horizon, perspective: config.perspective } : null,
@@ -564,6 +614,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.logTypewriter === b.logTypewriter &&
     a.atb === b.atb &&
     a.atbMode === b.atbMode &&
+    a.commandLayout === b.commandLayout &&
     a.backgroundOn === b.backgroundOn &&
     a.depth === b.depth &&
     a.foregroundOn === b.foregroundOn &&
@@ -609,6 +660,8 @@ export function describeView(
     `backgroundDof=${view.backgroundDof}`,
     `pixelArt=${view.pixelArt}`,
     `logTypewriter=${view.logTypewriter}`,
+    // cross は side のときだけ効く（front では無視される）ので、効く場合だけ出す
+    ...(view.commandLayout === 'cross' && view.layout === 'side' ? ['commandLayout=cross'] : []),
     ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),
     `background=${view.backgroundOn ? 'on' : 'off'}`,
     `depth=${view.depth}`,
