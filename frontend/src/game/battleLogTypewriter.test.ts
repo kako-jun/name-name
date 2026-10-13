@@ -17,7 +17,11 @@ const MS = BATTLE_LOG_MS_PER_CHAR
  * エンジン側の `logTotal` を模して syncBattleLog を呼ぶ。`appended` は前回から積まれた行数
  * （省略時は log の長さの増分＝先頭切り捨てなしの追記）。
  */
-function sync(t: BattleLogTracker, log: readonly string[], appended = log.length - t.seen.length) {
+function sync(
+  t: BattleLogTracker,
+  log: readonly string[],
+  appended = Math.max(0, log.length - t.seen.length)
+) {
   return syncBattleLog(t, log, t.total + appended)
 }
 

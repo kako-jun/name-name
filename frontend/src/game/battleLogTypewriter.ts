@@ -72,7 +72,7 @@ export function syncBattleLog(
 ): BattleLogTracker {
   const seen = log.slice()
   const appended = logTotal < t.total ? seen.length : Math.min(logTotal - t.total, seen.length)
-  if (appended === 0 && seen.length === t.seen.length) return { ...t, seen, total: logTotal }
+  if (appended === 0) return { ...t, seen, total: logTotal }
   // 待ち・タイプ中の行が先頭切り捨てで消えていたら、残っている分だけに丸める
   const hidden = Math.min(t.hidden + appended, seen.length)
   let typing = t.typing
