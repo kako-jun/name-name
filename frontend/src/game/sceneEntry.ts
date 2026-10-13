@@ -56,9 +56,11 @@ export type SceneEntryResult =
   | { status: 'ended' }
   /**
    * not-found: 遷移先が無い / resolver-error: 遅延ロードの通信失敗など（一時的）/
-   * apply-error: 適用中の例外（実装・データの不具合。一時的な通信失敗とは区別する）
+   * apply-error: 適用中の例外（実装・データの不具合。一時的な通信失敗とは区別する）/
+   * out-of-range: 位置（eventIndex / textIndex）が解決したイベント列の範囲外 (#789)。文書が編集されて
+   * セーブの位置が指す先が無くなった。不在（not-found）と同じく再試行しても直らないので区別して持つ
    */
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' }
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' }
   /** 待っている間に、より新しい入場要求が来た（後始末は新しい側が担う）。 */
   | { status: 'superseded' }
 
@@ -199,4 +201,48 @@ export function lacksLeadingBackground(events: readonly Event[]): boolean {
   }
   // テキストが無い（何も表示しない）原稿は、背景が無くても困らない。
   return false
+}
+
+/** 復元位置の検証入力。 */
+export interface RestorePosition {
+  eventIndex: number
+  textIndex: number
+  /** 終劇済みの状態か。終劇では eventIndex がイベント列の長さ（終端）を指すことがある。 */
+  storyEnded: boolean
+}
+
+/**
+ * 復元位置が、解決したイベント列（flags を当てて `[条件:]` を展開した後）の範囲内かを判定する (#789)。
+ * 範囲内なら null、範囲外なら失敗の詳細文言を返す。適用の前に呼び、範囲外なら何も変えずに失敗にする
+ * （クランプはしない。文書が編集された後のセーブは、黙って別の位置へ寄せずに復元失敗として知らせる）。
+ *
+ * - eventIndex: 整数で `0 <= eventIndex < resolved.length`。終劇済み（storyEnded）の状態だけ
+ *   `eventIndex === resolved.length`（終端）も許す
+ * - textIndex: 整数で 0 以上。上限は `textIndexBound` が返すイベントごとの排他的上限で判定する。
+ *   null はレイアウト依存（ノベルの改頁数は表示幅で変わる）で、ここでは上限を見ない
+ *   （fluid 再マウントで改頁数が変わる復元は `applyState` が最終ページへ寄せる設計のため）
+ */
+export function findRestorePositionError(
+  resolved: readonly Event[],
+  pos: RestorePosition,
+  textIndexBound: (event: Event) => number | null
+): string | null {
+  const { eventIndex, textIndex } = pos
+  if (!Number.isInteger(eventIndex) || eventIndex < 0) {
+    return `eventIndex が不正です: ${eventIndex}`
+  }
+  const atEnd = pos.storyEnded && eventIndex === resolved.length
+  if (eventIndex >= resolved.length && !atEnd) {
+    return `eventIndex が範囲外です: ${eventIndex}（イベント数 ${resolved.length}）`
+  }
+  if (!Number.isInteger(textIndex) || textIndex < 0) {
+    return `textIndex が不正です: ${textIndex}`
+  }
+  if (!atEnd) {
+    const bound = textIndexBound(resolved[eventIndex])
+    if (bound !== null && textIndex >= bound) {
+      return `textIndex が範囲外です: ${textIndex}（eventIndex ${eventIndex} の上限 ${bound}）`
+    }
+  }
+  return null
 }
