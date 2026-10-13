@@ -77,6 +77,8 @@ const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
 const PANEL_BG_ALPHA = 0.85
 const PANEL_STROKE = 0xffffff
+/** パネルの角丸半径（dark / ff-blue 共通） */
+const PANEL_RADIUS = 6
 const TEXT_COLOR = 0xffffff
 const HP_COLOR = 0x88ee88
 // MP_COLOR は HP/MP バー UI 実装時（戦闘 Phase 2、#175 と同時想定）に追加する
@@ -209,6 +211,11 @@ export class BattleScreen extends Container {
   private statsPanel: Graphics
   private commandPanel: Graphics
   private logPanel: Graphics
+  /** ff-blue パネルの子 Graphics（帯・mask・枠）。drawPanel が g ごとに 1 組だけ作って使い回す */
+  private ffBlueParts = new WeakMap<
+    Graphics,
+    { bands: Graphics; mask: Graphics; frame: Graphics }
+  >()
   private logLines: PixiText[] = []
   private commands: CommandButton[] = []
 
@@ -458,20 +465,45 @@ export class BattleScreen extends Container {
 
   /**
    * パネル 1 枚を描く (#744)。dark は従来の半透明黒の角丸矩形。ff-blue は帯状グラデーション（横縞の rect を
-   * 上から積む。パネルは矩形なので clip 不要）に白枠。枠線・寸法はどちらも同じ。
+   * 上から積む）を、同じ角丸矩形の mask で切り抜き、その上に同形の白枠を重ねる。寸法・半径・枠線はどちらも同じ。
+   * ff-blue の g は空の入れ物で、子 [帯, mask, 枠] を持つ（枠を mask の外に置くのは、枠の外側半分が切れないようにするため）。
+   * 子は g ごとに 1 組だけ作って使い回す（再描画で mask が積み増されない）。
    */
   private drawPanel(g: Graphics, x: number, y: number, w: number, h: number): void {
     g.clear()
     if (this.windowStyle === 'ff-blue') {
+      const parts = this.ffBluePanelParts(g)
+      parts.mask.clear().roundRect(x, y, w, h, PANEL_RADIUS).fill({ color: 0xffffff })
+      parts.bands.clear()
       for (const band of computeBands(h)) {
-        g.rect(x, y + band.y, w, band.h).fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
+        parts.bands
+          .rect(x, y + band.y, w, band.h)
+          .fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
       }
-      g.rect(x, y, w, h).stroke({ color: PANEL_STROKE, width: 2 })
+      parts.frame
+        .clear()
+        .roundRect(x, y, w, h, PANEL_RADIUS)
+        .stroke({ color: PANEL_STROKE, width: 2 })
       return
     }
-    g.roundRect(x, y, w, h, 6)
+    g.roundRect(x, y, w, h, PANEL_RADIUS)
       .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
       .stroke({ color: PANEL_STROKE, width: 2 })
+  }
+
+  /** ff-blue パネルの子 Graphics（帯・mask・枠）を g ごとに 1 組だけ作る。描画順は帯 → 枠（mask は描画されない） */
+  private ffBluePanelParts(g: Graphics): { bands: Graphics; mask: Graphics; frame: Graphics } {
+    let parts = this.ffBlueParts.get(g)
+    if (!parts) {
+      const bands = new Graphics()
+      const mask = new Graphics()
+      const frame = new Graphics()
+      bands.mask = mask
+      g.addChild(bands, mask, frame)
+      parts = { bands, mask, frame }
+      this.ffBlueParts.set(g, parts)
+    }
+    return parts
   }
 
   private layout(): void {

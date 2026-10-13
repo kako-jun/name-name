@@ -992,6 +992,10 @@ describe('BattleScreen: windowStyle (#744)', () => {
     }))
   const fillOps = (g: Graphics): PanelOp[] => opsOf(g).filter((o) => o.action === 'fill')
   const strokeOps = (g: Graphics): PanelOp[] => opsOf(g).filter((o) => o.action === 'stroke')
+  /** ff-blue パネルの子（帯 / mask / 枠）。drawPanel が g の子として [帯, mask, 枠] の順に持つ */
+  const bandsOf = (g: Graphics): Graphics => g.children[0] as Graphics
+  const maskOf = (g: Graphics): Graphics => g.children[1] as Graphics
+  const frameOf = (g: Graphics): Graphics => g.children[2] as Graphics
   const panelsOf = (s: BattleScreen): Graphics[] => [
     pi(s).statsPanel,
     pi(s).commandPanel,
@@ -1083,12 +1087,12 @@ describe('BattleScreen: windowStyle (#744)', () => {
     describe.each(modes)('%s', (_mode, opts) => {
       const darkOpts: BattleScreenOptions = { ...opts, windowStyle: 'dark' }
 
-      it('帯は rect で、帯数が computeBands と一致する', () => {
+      it('帯は rect で、帯数が computeBands と一致する（帯は g の子 Graphics に描く）', () => {
         const dark = build(darkOpts)
         const s = build(opts)
         panelsOf(s).forEach((g, i) => {
           const h = fillOps(panelsOf(dark)[i])[0].shape.height
-          const fills = fillOps(g)
+          const fills = fillOps(bandsOf(g))
           expect(fills.every((f) => f.shape.type === 'rectangle')).toBe(true)
           expect(fills).toHaveLength(computeBands(h).length)
           expect(fills.length).toBeGreaterThan(0)
@@ -1102,7 +1106,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
         panelsOf(s).forEach((g, i) => {
           const rect = fillOps(panelsOf(dark)[i])[0].shape
           let y = rect.y
-          for (const f of fillOps(g)) {
+          for (const f of fillOps(bandsOf(g))) {
             expect(f.shape.x).toBe(rect.x)
             expect(f.shape.width).toBe(rect.width)
             expect(f.shape.y).toBe(y)
@@ -1118,7 +1122,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
         const lum = (c: number): number =>
           0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff) + 0.114 * (c & 0xff)
         for (const g of panelsOf(s)) {
-          const fills = fillOps(g)
+          const fills = fillOps(bandsOf(g))
           expect(lum(fills[0].color)).toBeGreaterThan(lum(fills[fills.length - 1].color))
           for (let i = 1; i < fills.length; i++) {
             expect(lum(fills[i].color)).toBeLessThanOrEqual(lum(fills[i - 1].color))
@@ -1126,13 +1130,17 @@ describe('BattleScreen: windowStyle (#744)', () => {
         }
       })
 
-      it('白枠は dark と同じ（色・太さ・位置・寸法）で 1 つだけ', () => {
+      it('白枠は dark と同じ roundRect（半径 6・色・太さ・位置・寸法）で 1 つだけ', () => {
         const dark = build(darkOpts)
         const s = build(opts)
         panelsOf(s).forEach((g, i) => {
-          const strokes = strokeOps(g)
+          const strokes = strokeOps(frameOf(g))
           expect(strokes).toHaveLength(1)
           const ds = strokeOps(panelsOf(dark)[i])[0]
+          expect(strokes[0].shape.type).toBe('roundedRectangle')
+          expect((strokes[0].shape as unknown as { radius: number }).radius).toBe(6)
+          expect(strokes[0].width).toBe(2)
+          expect(strokes[0].color).toBe(0xffffff)
           expect(strokes[0].color).toBe(ds.color)
           expect(strokes[0].width).toBe(ds.width)
           expect(strokes[0].shape.x).toBe(ds.shape.x)
@@ -1155,7 +1163,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
           expect(t.text).toBe(a[i].text)
         })
         panelsOf(s).forEach((g, i) => {
-          const gb = g.getLocalBounds()
+          const gb = frameOf(g).getLocalBounds()
           const db = panelsOf(dark)[i].getLocalBounds()
           expect(gb.x).toBe(db.x)
           expect(gb.y).toBe(db.y)
@@ -1164,13 +1172,47 @@ describe('BattleScreen: windowStyle (#744)', () => {
         })
       })
 
-      it('redraw を繰り返しても帯が積み増されない', () => {
+      it('帯は mask 付きで、mask はパネル矩形と同じ roundRect（半径 6）。mask は帯を隙間なく覆う', () => {
+        const dark = build(darkOpts)
         const s = build(opts)
-        const before = panelsOf(s).map((g) => opsOf(g).length)
+        panelsOf(s).forEach((g, i) => {
+          const rect = fillOps(panelsOf(dark)[i])[0].shape
+          const masks = fillOps(maskOf(g))
+          expect(masks).toHaveLength(1)
+          expect(masks[0].shape.type).toBe('roundedRectangle')
+          expect((masks[0].shape as unknown as { radius: number }).radius).toBe(6)
+          expect(masks[0].shape.x).toBe(rect.x)
+          expect(masks[0].shape.y).toBe(rect.y)
+          expect(masks[0].shape.width).toBe(rect.width)
+          expect(masks[0].shape.height).toBe(rect.height)
+          expect(bandsOf(g).mask).toBe(maskOf(g))
+          // 帯（上端〜下端）が mask の矩形全体を覆っている
+          const fills = fillOps(bandsOf(g))
+          expect(fills[0].shape.y).toBe(rect.y)
+          const last = fills[fills.length - 1]
+          expect(last.shape.y + last.shape.height).toBe(rect.y + rect.height)
+        })
+      })
+
+      it('redraw を繰り返しても帯・mask・枠・子の数が積み増されない', () => {
+        const s = build(opts)
+        const snap = (): number[][] =>
+          panelsOf(s).map((g) => [
+            g.children.length,
+            opsOf(bandsOf(g)).length,
+            opsOf(maskOf(g)).length,
+            opsOf(frameOf(g)).length,
+            opsOf(g).length,
+          ])
+        const before = snap()
+        const bandsRefs = panelsOf(s).map((g) => bandsOf(g))
         s.redraw(800, 450)
         s.redraw(800, 450)
         s.redraw(800, 450)
-        expect(panelsOf(s).map((g) => opsOf(g).length)).toEqual(before)
+        expect(snap()).toEqual(before)
+        expect(before.every((r) => r[0] === 3)).toBe(true)
+        // 子 Graphics は使い回される
+        expect(panelsOf(s).map((g) => bandsOf(g))).toEqual(bandsRefs)
       })
 
       it('redraw で画面サイズが変わっても帯は新しい高さで描き直される', () => {
@@ -1179,7 +1221,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
         const dark = build(darkOpts, 1000, 600)
         panelsOf(s).forEach((g, i) => {
           const rect = fillOps(panelsOf(dark)[i])[0].shape
-          const fills = fillOps(g)
+          const fills = fillOps(bandsOf(g))
           expect(fills).toHaveLength(computeBands(rect.height).length)
           const last = fills[fills.length - 1]
           expect(last.shape.y + last.shape.height).toBe(rect.y + rect.height)
@@ -1287,7 +1329,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
       )
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack !== null).toBe(sprite === 'acrylic')
-      const fills = fillOps(pi(s).logPanel)
+      const fills = fillOps(win === 'ff-blue' ? bandsOf(pi(s).logPanel) : pi(s).logPanel)
       if (win === 'ff-blue') {
         expect(fills.every((f) => f.shape.type === 'rectangle')).toBe(true)
         expect(allTexts(s).every(hasShadow)).toBe(true)
