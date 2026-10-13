@@ -42,7 +42,6 @@ import {
   isLabelWidthReadable,
   estimateTextWidth,
   fitLabel,
-  fitNameWithSuffix,
   normalizeBattleLayout,
   type Rect,
   type SideBattleLayout,
@@ -685,7 +684,7 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6 x grid/cro
   })
 })
 
-describe('fitLabel / fitNameWithSuffix', () => {
+describe('fitLabel', () => {
   it('収まるならそのまま', () => {
     expect(fitLabel('スライム', 100, 12)).toBe('スライム')
     expect(fitLabel('HP 5/5', 100, 12)).toBe('HP 5/5')
@@ -699,17 +698,6 @@ describe('fitLabel / fitNameWithSuffix', () => {
   it('… すら入らない幅は空文字', () => {
     expect(fitLabel('abc', 3, 12)).toBe('')
     expect(fitLabel('abc', 0, 12)).toBe('')
-  })
-  it('fitNameWithSuffix: 名前側だけ省略して suffix は残す', () => {
-    const r = fitNameWithSuffix('ながいなまえのゆうしゃ', '  HP 120/120', 150, 14)
-    expect(r.endsWith('  HP 120/120')).toBe(true)
-    expect(r).toContain('…')
-    expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(150)
-  })
-  it('fitNameWithSuffix: 収まるなら無加工 / suffix が入らないときは全体を切る', () => {
-    expect(fitNameWithSuffix('あ', ' HP 1/1', 200, 14)).toBe('あ HP 1/1')
-    const r = fitNameWithSuffix('あ', ' HP 1000/1000', 40, 14)
-    expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(40)
   })
 })
 
@@ -1862,5 +1850,35 @@ describe('computeStatusColumns (#745)', () => {
     const tight = computeStatusColumns({ ...base, width: 170, atb: true })
     expect(tight.mp).toBeNull()
     expect(tight.showLabels).toBe(false)
+  })
+})
+
+describe('computeStatusColumns: 見出し・現在値・/最大値の 3 分割 (#745)', () => {
+  const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
+
+  it('現在値の右端（「/」の直前）は列の右端から「/最大値」の幅だけ左で、最大値は列の右端', () => {
+    const c = computeStatusColumns(base)
+    expect(c.hp.curRight).toBeCloseTo(
+      c.hp.x + c.hp.w - estimateTextWidth('/120', SIDE_STATUS_FONT_SIZE),
+      6
+    )
+    expect(c.mp!.curRight).toBeCloseTo(
+      c.mp!.x + c.mp!.w - estimateTextWidth('/99', SIDE_STATUS_FONT_SIZE),
+      6
+    )
+    // 見出し + 現在値の最大桁 + /最大値 = 従来の「HP 120/120」の幅
+    expect(c.hp.w).toBeCloseTo(estimateTextWidth('HP 120/120', SIDE_STATUS_FONT_SIZE), 6)
+  })
+
+  it('最大値を省く段階では現在値が列の右端に右寄せされる', () => {
+    const c = computeStatusColumns({ ...base, maxHp: 9999, width: 60 })
+    expect(c.showMaxHp).toBe(false)
+    expect(c.hp.curRight).toBeCloseTo(c.hp.x + c.hp.w, 6)
+  })
+
+  it('極端に狭くても HP 列は名前の左端（パネルの左余白）より左へ出ず、幅は負にならない', () => {
+    const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
+    expect(c.hp.x).toBeGreaterThanOrEqual(base.x + SIDE_STATUS_TEXT_PADDING - 1e-9)
+    expect(c.hp.w).toBeGreaterThanOrEqual(0)
   })
 })

@@ -80,6 +80,10 @@ interface Internals {
   statusTexts: Text[]
   statusHpTexts: Text[]
   statusMpTexts: Text[]
+  statusHpLabels: Text[]
+  statusMpLabels: Text[]
+  statusHpMaxes: Text[]
+  statusMpMaxes: Text[]
   logLines: Text[]
   backgroundSprite: Sprite | null
   foregroundSprite: Sprite | null
@@ -572,10 +576,18 @@ describe('BattleScreen: side', () => {
   it('statusText は 320 幅では MP なし・800 幅では MP あり', () => {
     const narrow = track(make([entity('hero')], [entity('slime')], side, 320, 568))
     const wide = track(make([entity('hero')], [entity('slime')], side, 800, 450))
-    expect(internals(narrow).statusHpTexts[0].text).toContain('10/10')
-    expect(internals(narrow).statusMpTexts[0].text).toBe('')
-    expect(internals(wide).statusHpTexts[0].text).toBe('HP 10/10')
-    expect(internals(wide).statusMpTexts[0].text).toBe('MP 4/4')
+    const row = (s: BattleScreen, k: 'Hp' | 'Mp'): string => {
+      const i = internals(s)
+      const g = (key: string) => (i as unknown as Record<string, Text[]>)[key][0]
+      return [g(`status${k}Labels`), g(`status${k}Texts`), g(`status${k}Maxes`)]
+        .map((t) => t.text)
+        .join('')
+    }
+    expect(row(narrow, 'Hp')).toContain('10/10')
+    expect(row(narrow, 'Mp')).toBe('')
+    expect(internals(narrow).statusMpTexts[0].visible).toBe(false)
+    expect(row(wide, 'Hp')).toBe('HP10/10')
+    expect(row(wide, 'Mp')).toBe('MP4/4')
   })
 
   it('味方 hp=0 の statusText は灰色 fill', () => {
@@ -655,11 +667,11 @@ describe('BattleScreen: side', () => {
 
   it('redraw で幅 800 → 360 にすると compact へ切り替わり statusText が短縮される', () => {
     const s = track(make([entity('hero')], [entity('slime')], side, 800, 450))
-    expect(internals(s).statusMpTexts[0].text).toContain('MP')
+    expect(internals(s).statusMpLabels[0].text).toContain('MP')
     s.redraw(360, 640)
-    expect(internals(s).statusMpTexts[0].text).not.toContain('MP')
+    expect(internals(s).statusMpLabels[0].text).not.toContain('MP')
     s.redraw(800, 450)
-    expect(internals(s).statusMpTexts[0].text).toContain('MP')
+    expect(internals(s).statusMpLabels[0].text).toContain('MP')
   })
 
   it('compact 閾値の定数が MP 表記の切替に使われている（幅スイープで MP 有無が一度だけ切り替わる）', () => {
@@ -668,7 +680,7 @@ describe('BattleScreen: side', () => {
     let flips = 0
     for (let w = 300; w <= 900; w += 10) {
       s.redraw(w, 640)
-      const hasMp = internals(s).statusMpTexts[0].text.includes('MP')
+      const hasMp = internals(s).statusMpLabels[0].text.includes('MP')
       if (hasMp !== prev) flips++
       prev = hasMp
     }
@@ -772,14 +784,16 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
       )
       const L = computeSideBattleLayout({ width: 320, height: 568, partyCount: 1, enemyCount: 1 })
       const nameT = internals(s).statusTexts[0]
-      const hpT = internals(s).statusHpTexts[0]
-      expect(hpT.text.endsWith(`${hp}/${hp}`)).toBe(true)
+      const i = internals(s)
+      const [lab, cur, max] = [i.statusHpLabels[0], i.statusHpTexts[0], i.statusHpMaxes[0]]
+      expect(`${cur.text}${max.text}`.endsWith(`${hp}/${hp}`)).toBe(true)
       expect(nameT.text.length).toBeGreaterThan(0)
       expect(nameT.text.startsWith(name.slice(0, 1))).toBe(true)
-      // 名前の右端 <= HP の左端、HP の右端 <= パネル内側の右端
-      const hpLeft = hpT.x - estimateTextWidth(hpT.text, 14)
+      // 名前の右端 <= HP 列の左端、HP 列の右端 <= パネル内側の右端
+      const hpLeft = lab.text ? lab.x : cur.x - estimateTextWidth(cur.text, 14)
+      const hpRight = max.text ? max.x : cur.x
       expect(nameT.x + estimateTextWidth(nameT.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
-      expect(hpT.x).toBeLessThanOrEqual(L.status.x + L.status.w - 12 + 0.001)
+      expect(hpRight).toBeLessThanOrEqual(L.status.x + L.status.w - 12 + 0.001)
       expect(nameT.x).toBeGreaterThanOrEqual(L.status.x)
     }
   )
@@ -2889,5 +2903,70 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         expect(v.acrylicBase).toBeNull()
       }
     })
+  })
+})
+
+describe('BattleScreen: side のステータス欄は HP がばらばらでも見出しと「/」がそろう (#745)', () => {
+  it.each([
+    [800, 450],
+    [1280, 720],
+  ])('%dx%d: 現在 HP が 5 / 50 / 120 / 0 でも HP・MP の見出しと / の x が全員同じ', (w, h) => {
+    const party = [
+      entity('a', { hp: 5, maxHp: 120, mp: 1, maxMp: 99 }),
+      entity('b', { hp: 50, maxHp: 120, mp: 12, maxMp: 99 }),
+      entity('c', { hp: 120, maxHp: 120, mp: 99, maxMp: 99 }),
+      entity('d', { hp: 0, maxHp: 120, mp: 0, maxMp: 99 }),
+    ]
+    const s = track(make(party, [entity('slime')], { layout: 'side' }, w, h))
+    const i = internals(s)
+    const same = (xs: number[]): void => xs.forEach((x) => expect(x).toBeCloseTo(xs[0], 6))
+    same(i.statusHpLabels.map((t) => t.x))
+    same(i.statusHpMaxes.map((t) => t.x))
+    same(i.statusHpTexts.map((t) => t.x))
+    same(i.statusMpLabels.map((t) => t.x))
+    same(i.statusMpMaxes.map((t) => t.x))
+    expect(i.statusHpLabels[0].text).toBe('HP')
+    expect(i.statusHpTexts.map((t) => t.text)).toEqual(['5', '50', '120', '0'])
+    // 「/最大値」は現在値の右端に接して続く（「/」の x = 現在値の右寄せ基準）
+    expect(i.statusHpMaxes[0].x).toBeCloseTo(i.statusHpTexts[0].x, 6)
+  })
+
+  it('MP 列がない狭い画面では MP の 3 つの Text が非表示で空', () => {
+    const s = track(make([entity('a')], [entity('slime')], { layout: 'side' }, 360, 640))
+    const i = internals(s)
+    for (const t of [i.statusMpLabels[0], i.statusMpTexts[0], i.statusMpMaxes[0]]) {
+      expect(t.visible).toBe(false)
+      expect(t.text).toBe('')
+    }
+  })
+})
+
+describe('BattleScreen: side の名前は実測幅でも列幅に収める (#745)', () => {
+  it('概算より実幅が広い名前（英字など）は、実測が列幅以下になるまで末尾を詰める', () => {
+    // jsdom は文字を実測できないので、Text.width を「1 文字 20px」に差し替える
+    Object.defineProperty(PixiText.prototype, 'width', {
+      configurable: true,
+      get(this: PixiText) {
+        return this.text.length * 20
+      },
+    })
+    try {
+      const s = track(
+        make(
+          [entity('a', { name: 'Abcdefghijklmnop' })],
+          [entity('slime')],
+          { layout: 'side' },
+          800,
+          450
+        )
+      )
+      const colW = (s as unknown as { sideStatusColumns: { name: { w: number } } })
+        .sideStatusColumns.name.w
+      const t = internals(s).statusTexts[0]
+      expect(t.text.length * 20).toBeLessThanOrEqual(colW + 0.5)
+      expect(t.text.length).toBeGreaterThan(0)
+    } finally {
+      delete (PixiText.prototype as unknown as Record<string, unknown>).width
+    }
   })
 })

@@ -32,6 +32,8 @@ interface Internals {
   statusTexts: Text[]
   statusHpTexts: Text[]
   statusMpTexts: Text[]
+  statusHpLabels: Text[]
+  statusHpMaxes: Text[]
   heroStatsText: Text
   commands: Array<{ id: string; hit: Container; text: Text }>
   destroyed: boolean
@@ -324,7 +326,8 @@ describe('BattleScreen ATB: 再描画の節約（署名）', () => {
     const spy = vi.spyOn(I(s), 'refresh')
     s.tick(2500)
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(I(s).statusHpTexts[0].text).toContain('90/100')
+    expect(I(s).statusHpTexts[0].text).toBe('90')
+    expect(I(s).statusHpMaxes[0].text).toBe('/100')
   })
 })
 
@@ -350,7 +353,9 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     expect(rects).toHaveLength(n)
     I(s).statusTexts.forEach((t, i) => {
       const r = rects[i]
-      const hp = I(s).statusHpTexts[i]
+      const hpL = I(s).statusHpLabels[i]
+      const hpC = I(s).statusHpTexts[i]
+      const hpLeft = hpL.text ? hpL.x : hpC.x - estimateTextWidth(hpC.text, 14)
       // ゲージは行の中に収まり、数文字ぶんの短さ（行幅いっぱいではない）
       expect(r.y).toBeGreaterThanOrEqual(L.statusRows[i].y - 0.001)
       expect(r.y + r.h).toBeLessThanOrEqual(L.statusRows[i].y + L.statusRows[i].h + 0.001)
@@ -358,10 +363,8 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
       expect(r.w).toBeLessThan(L.status.w / 3)
       expect(r.h).toBeLessThanOrEqual(3)
       // 文字の右端 <= HP の左端 <= HP の右端 <= ゲージの左端
-      expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(
-        hp.x - estimateTextWidth(hp.text, 14) + 0.001
-      )
-      expect(hp.x).toBeLessThanOrEqual(r.x + 0.001)
+      expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
+      expect(I(s).statusHpMaxes[i].x || hpC.x).toBeLessThanOrEqual(r.x + 0.001)
       // 名前が消えない
       expect(t.text.length).toBeGreaterThan(1)
     })
@@ -383,7 +386,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     on.s.tick(0)
     I(on.s).statusTexts.forEach((t, i) => {
       expect(t.text.startsWith('ゆ')).toBe(true)
-      expect(I(on.s).statusHpTexts[i].text).toContain('120/120')
+      expect(I(on.s).statusHpTexts[i].text + I(on.s).statusHpMaxes[i].text).toContain('120/120')
     })
     const m = I(on.s).atbMarkers[0]
     expect(m.visible).toBe(true)
@@ -396,7 +399,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     const mk = () => [ent('a', { name: 'ゆうしゃ' }), ent('b', { name: 'ゆうしゃ' })]
     const on = build(mk(), [ent('s')], ATB(), { layout: 'side' }, 800, 450)
     const off = build(mk(), [ent('s')], { rng: () => 0 }, { layout: 'side' }, 800, 450)
-    expect(I(on.s).statusHpTexts[0].x).toBeLessThan(I(off.s).statusHpTexts[0].x)
+    expect(I(on.s).statusHpLabels[0].x).toBeLessThan(I(off.s).statusHpLabels[0].x)
     expect(I(off.s).atbBarRects).toHaveLength(0)
   })
 

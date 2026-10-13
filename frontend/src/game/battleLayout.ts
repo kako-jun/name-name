@@ -260,21 +260,6 @@ export function fitHpLabel(hp: number, maxHp: number, maxWidthPx: number, fontPx
   return fitLabel(nums, maxWidthPx, fontPx)
 }
 
-/**
- * `name` + `suffix`（HP など必ず見せたい部分）を `maxWidthPx` に収める。名前側だけ省略する。
- * suffix 自体が収まらないときは全体を fitLabel する。
- */
-export function fitNameWithSuffix(
-  name: string,
-  suffix: string,
-  maxWidthPx: number,
-  fontPx: number
-): string {
-  const room = maxWidthPx - estimateTextWidth(suffix, fontPx)
-  if (room <= 0) return fitLabel(name + suffix, maxWidthPx, fontPx)
-  return fitLabel(name, room, fontPx) + suffix
-}
-
 /** コマンドセルの文字の左右余白（パネルの 2px 枠に触れないぶんを含む） */
 export const SIDE_COMMAND_TEXT_PADDING = 8
 
@@ -854,7 +839,7 @@ export const SIDE_STATUS_FONT_SIZE = 14
 export const SIDE_STATUS_TEXT_PADDING = 12
 /** 列と列の間 */
 export const SIDE_STATUS_COLUMN_GAP = 8
-/** 名前列に最低限確保する全角文字数。これに届かないときは MP → 「HP」「MP」の見出しの順に削る */
+/** 名前列に最低限確保する全角文字数。これに届かないときは MP → 見出し → HP の最大値 → ゲージ幅の順に削る */
 export const SIDE_STATUS_MIN_NAME_CHARS = 3
 /** ATB ゲージ（行の右端に置く短い棒）の幅。半角 4 文字ぶん */
 export const SIDE_STATUS_GAUGE_WIDTH = Math.round(estimateTextWidth('0000', SIDE_STATUS_FONT_SIZE))
@@ -867,11 +852,21 @@ export interface StatusColumn {
   w: number
 }
 
+/**
+ * HP / MP の列。内部は「見出し | 現在値 | /最大値」の 3 つに分かれ、見出しは `x` に左寄せ、
+ * 現在値は `curRight`（「/」の直前）に右寄せ、「/最大値」は `curRight` から左寄せで続ける（列の右端は `x + w`）。
+ * 現在値の桁数が行ごとに違っても、見出しと「/」の x が全員そろう（FF5/6 と同じ）。
+ * 最大値を省く段階（`showMaxHp` が false）では現在値が `x + w` に右寄せされる。
+ */
+export interface StatusValueColumn extends StatusColumn {
+  /** 現在値テキストの右端（右寄せの基準 x） */
+  curRight: number
+}
+
 export interface StatusColumns {
   name: StatusColumn
-  /** 数値は列の右端（x + w）に右寄せする */
-  hp: StatusColumn
-  mp: StatusColumn | null
+  hp: StatusValueColumn
+  mp: StatusValueColumn | null
   gauge: StatusColumn | null
   /** HP / MP の数値の前に「HP 」「MP 」を付けるか */
   showLabels: boolean
@@ -918,16 +913,24 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
       gauge = { x: edge - gaugeW, w: gaugeW }
       edge = gauge.x - SIDE_STATUS_COLUMN_GAP
     }
-    let mp: StatusColumn | null = null
+    // 値の列: 見出し（「MP 」） + 現在値の最大桁 + 「/最大値」。MP の最大値は常に出す
+    const valueColumn = (maxValue: number, showMax: boolean, rightEdge: number) => {
+      const label = labels ? estimateTextWidth('MP ', font) : 0
+      const maxPart = showMax ? estimateTextWidth(`/${maxValue}`, font) : 0
+      const w = label + estimateTextWidth(`${maxValue}`, font) + maxPart
+      return { x: rightEdge - w, w, curRight: rightEdge - maxPart }
+    }
+    let mp: StatusValueColumn | null = null
     if (withMp) {
-      const nums = `${input.maxMp}/${input.maxMp}`
-      const w = estimateTextWidth(labels ? `MP ${nums}` : nums, font)
-      mp = { x: edge - w, w }
+      mp = valueColumn(input.maxMp, true, edge)
       edge = mp.x - SIDE_STATUS_COLUMN_GAP
     }
-    const hpNums = maxHpShown ? `${input.maxHp}/${input.maxHp}` : `${input.maxHp}`
-    const hpW = estimateTextWidth(labels ? `HP ${hpNums}` : hpNums, font)
-    const hp = { x: edge - hpW, w: hpW }
+    const hp = valueColumn(input.maxHp, maxHpShown, edge)
+    // 極端に狭いときも、HP 列が名前の左端（パネルの左余白）より左へ出ない
+    if (hp.x < left) {
+      hp.w = Math.max(0, hp.x + hp.w - left)
+      hp.x = left
+    }
     const nameW = Math.max(0, hp.x - SIDE_STATUS_COLUMN_GAP - left)
     return {
       name: { x: left, w: nameW },

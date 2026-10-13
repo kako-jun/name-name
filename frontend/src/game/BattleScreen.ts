@@ -75,7 +75,7 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
-import { getSharedDofMask } from './dofMaskCache'
+import { getSharedDofMask, quantizeDofRamp } from './dofMaskCache'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import { computeSlitY } from './acrylicBase'
 import { computeShadowTransform } from './acrylicShadow'
@@ -363,8 +363,13 @@ export class BattleScreen extends Container {
   private partyViews: EntityView[] = []
   /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
+  /** HP・MP は「見出し | 現在値 | /最大値」の 3 つの Text。`*Texts` が現在値（右寄せ）、`*Labels` が見出し（左寄せ）、`*Maxes` が「/最大値」（「/」の x で左寄せ）。見出しと「/」の x が全員そろう */
   private statusHpTexts: PixiText[] = []
   private statusMpTexts: PixiText[] = []
+  private statusHpLabels: PixiText[] = []
+  private statusMpLabels: PixiText[] = []
+  private statusHpMaxes: PixiText[] = []
+  private statusMpMaxes: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
   /** 番の味方の印 ▶ (#205)。名前の文字列には混ぜず、行の左余白に別の Text で置く。bars と同じ index */
@@ -632,7 +637,7 @@ export class BattleScreen extends Container {
       } else {
         lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
       }
-      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
+      if (quantizeDofRamp(g.rampFraction) !== quantizeDofRamp(lv.maskRamp)) {
         const tex = this.createDofMaskTexture(g.rampFraction)
         if (tex) {
           lv.maskTexture = tex
@@ -715,7 +720,15 @@ export class BattleScreen extends Container {
       })
       this.statusTexts.push(t)
       this.addChild(t)
-      for (const list of [this.statusHpTexts, this.statusMpTexts]) {
+      const parts: Array<[PixiText[], boolean]> = [
+        [this.statusHpLabels, false],
+        [this.statusHpTexts, true],
+        [this.statusHpMaxes, false],
+        [this.statusMpLabels, false],
+        [this.statusMpTexts, true],
+        [this.statusMpMaxes, false],
+      ]
+      for (const [list, alignRight] of parts) {
         const n = new PixiText({
           text: '',
           style: this.themedStyle(
@@ -726,8 +739,8 @@ export class BattleScreen extends Container {
             })
           ),
         })
-        // 数値は列の右端に右寄せ（桁数が違っても右端がそろう）
-        n.anchor.set(1, 0)
+        // 数値は列の基準 x に右寄せ（桁数が違っても右端がそろう）。見出しと「/最大値」は左寄せ
+        n.anchor.set(alignRight ? 1 : 0, 0)
         list.push(n)
         this.addChild(n)
       }
@@ -1255,10 +1268,20 @@ export class BattleScreen extends Container {
       const y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
       this.statusTexts[i].x = cols.name.x
       this.statusTexts[i].y = y
-      this.statusHpTexts[i].x = cols.hp.x + cols.hp.w
-      this.statusHpTexts[i].y = y
-      this.statusMpTexts[i].x = cols.mp ? cols.mp.x + cols.mp.w : 0
-      this.statusMpTexts[i].y = y
+      const place = (
+        col: typeof cols.hp | null,
+        label: PixiText,
+        cur: PixiText,
+        max: PixiText
+      ): void => {
+        label.x = col?.x ?? 0
+        cur.x = col?.curRight ?? 0
+        // 「/最大値」は「/」を現在値の右端に接して左寄せ（実フォントの桁幅の誤差で隙間があかない）
+        max.x = col?.curRight ?? 0
+        label.y = cur.y = max.y = y
+      }
+      place(cols.hp, this.statusHpLabels[i], this.statusHpTexts[i], this.statusHpMaxes[i])
+      place(cols.mp, this.statusMpLabels[i], this.statusMpTexts[i], this.statusMpMaxes[i])
     }
     if (this.atbBars.length > 0 && cols.gauge) {
       // ATB ゲージは行の右端に短く置く（数文字ぶんの幅）。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
@@ -1446,15 +1469,44 @@ export class BattleScreen extends Container {
       const isActor = p.hp > 0 && i === this.actorIndex()
       if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
-      t.text = fitLabel(p.name, cols?.name.w ?? Infinity, SIDE_STATUS_FONT_SIZE)
+      this.fitStatusName(t, p.name, cols?.name.w ?? Infinity)
       const lbl = cols?.showLabels ?? true
-      const hpNums = cols && !cols.showMaxHp ? `${p.hp}` : `${p.hp}/${p.maxHp}`
-      hpT.text = lbl ? `HP ${hpNums}` : hpNums
-      mpT.text = cols?.mp ? `MP ${p.mp}/${p.maxMp}` : ''
+      const showMaxHp = cols?.showMaxHp ?? true
+      this.statusHpLabels[i].text = lbl ? 'HP' : ''
+      hpT.text = `${p.hp}`
+      this.statusHpMaxes[i].text = showMaxHp ? `/${p.maxHp}` : ''
+      // MP 列がない（狭い画面）ときは 3 つとも空にして隠す
+      const hasMp = !!cols?.mp
+      this.statusMpLabels[i].text = hasMp && lbl ? 'MP' : ''
+      mpT.text = hasMp ? `${p.mp}` : ''
+      this.statusMpMaxes[i].text = hasMp ? `/${p.maxMp}` : ''
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.visible = hasMp
       const fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
-      hpT.style.fill = fill
-      mpT.style.fill = fill
+      for (const n of [this.statusHpLabels[i], hpT, this.statusHpMaxes[i]]) n.style.fill = fill
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.style.fill = fill
       t.style.fill = fill
+    }
+  }
+
+  /**
+   * 名前を列幅に収める。まず概算幅で詰め、そのあと実測の幅（Text.width）が列幅を超えるなら
+   * 末尾をさらに詰め直す（英字など概算と実幅がずれる名前が HP 列に食い込まない）。
+   * 実測できない環境（jsdom など）や NaN のときは概算のまま。
+   */
+  private fitStatusName(t: PixiText, name: string, maxWidth: number): void {
+    let budget = maxWidth
+    t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
+    if (!Number.isFinite(maxWidth)) return
+    for (let n = 0; n < 40 && budget > 0; n++) {
+      let w = 0
+      try {
+        w = t.width
+      } catch {
+        return
+      }
+      if (!Number.isFinite(w) || w <= maxWidth + 0.5) return
+      budget = Math.max(0, budget - Math.max(1, w - maxWidth))
+      t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
     }
   }
 
