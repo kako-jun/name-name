@@ -494,3 +494,37 @@ describe('RaycastRenderer.onTick → BattleScreen.tick の配線 (#205)', () => 
     expect(() => t.onTick()).not.toThrow()
   })
 })
+
+describe('RaycastRenderer.load → pixelArt の流れ (#760)', () => {
+  function loaded(p: Partial<RPGProject>) {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(project(p))
+    return { r, i }
+  }
+
+  it('pixelArt: true → BattleScreen の opts.pixelArt === true', () => {
+    const { i } = loaded({ battleLayout: 'side', pixelArt: true })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.pixelArt).toBe(true)
+  })
+
+  it('pixelArt 未指定 → opts.pixelArt === false（mipmap + linear）', () => {
+    const { i } = loaded({ battleLayout: 'side' })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.pixelArt).toBe(false)
+  })
+
+  it('load() の再呼び出しで前回の pixelArt が残らない', () => {
+    const { r, i } = loaded({ pixelArt: true })
+    r.load(project({}))
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.pixelArt).toBe(false)
+  })
+
+  it('front でも pixelArt は opts に渡る（無効化は BattleScreen 側の責務）', () => {
+    const { i } = loaded({ battleLayout: 'front', pixelArt: true })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.pixelArt).toBe(true)
+  })
+})

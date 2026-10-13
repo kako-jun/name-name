@@ -24,7 +24,7 @@ function within(inner: Rect, outer: Rect): boolean {
     inner.y + inner.h <= outer.y + outer.h + e
   )
 }
-const box = (s: SpriteSlot): Rect => ({ x: s.x, y: s.y, w: s.size, h: s.size })
+const box = (s: SpriteSlot): Rect => ({ x: s.x, y: s.y, w: s.width, h: s.size })
 function overlap(a: Rect, b: Rect): boolean {
   return (
     a.x < b.x + b.w - 1e-6 &&
@@ -90,6 +90,8 @@ describe('奥行き (#747)', () => {
         }
         for (let i = 0; i < all.length; i++) {
           for (let j = i + 1; j < all.length; j++) {
+            // #760: 味方どうしは上下に重ねてよい（敵との非重複だけを見る）
+            if (i >= L.enemies.length) continue
             expect(overlap(box(all[i]), box(all[j]))).toBe(false)
           }
         }
@@ -135,12 +137,13 @@ describe('隊列の座標 (#747)', () => {
       const slots = computeFormation(region, n, 'party', false, rows)
       const noBack = computeFormation(region, n, 'party', false, [])
       slots.forEach((s) => expect(within(box(s), region)).toBe(true))
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) expect(overlap(box(slots[i]), box(slots[j]))).toBe(false)
+      // #760: 味方どうしは重ねてよいので、上の人の顔（上 30%）が隠れないことを見る
+      for (let i = 0; i + 1 < n; i++) {
+        expect(slots[i + 1].y).toBeGreaterThanOrEqual(slots[i].y + slots[i].size * 0.3 - 1e-9)
       }
       // 同じ人数で、後衛の右寄りは前衛に対して size * 半歩ぶん
-      const s = slots[0].size
-      expect(s).toBeLessThanOrEqual(noBack[0].size + 1e-9)
+      const s = slots[0].width
+      expect(slots[0].size).toBeLessThanOrEqual(noBack[0].size + 1e-9)
       if (n >= 2) {
         const backSlot = slots[1]
         const frontSlot = slots[0]
@@ -154,11 +157,11 @@ describe('隊列の座標 (#747)', () => {
     const front = computeFormation(region, 1, 'party', false, ['front'])[0]
     const back = computeFormation(region, 1, 'party', false, ['back'])[0]
     // 後衛分の予約で size が変わりうるので、同一スロット内の相対位置: 左端 = 領域中央寄せ + shift
-    const totalW = back.size * (1 + SIDE_BACK_ROW_SHIFT_RATIO)
+    const totalW = back.width * (1 + SIDE_BACK_ROW_SHIFT_RATIO)
     expect(back.x).toBeCloseTo(
-      region.x + (region.w - totalW) / 2 + back.size * SIDE_BACK_ROW_SHIFT_RATIO
+      region.x + (region.w - totalW) / 2 + back.width * SIDE_BACK_ROW_SHIFT_RATIO
     )
-    expect(back.x + back.size).toBeLessThanOrEqual(region.x + region.w + 1e-9)
+    expect(back.x + back.width).toBeLessThanOrEqual(region.x + region.w + 1e-9)
     expect(front.x).toBeLessThan(back.x)
   })
 })
@@ -314,9 +317,10 @@ describe('computeFormation 隊列の境界 (#747)', () => {
     const slots = party(3, ['back'])
     const full = party(3, ['back', undefined, undefined])
     expect(slots).toEqual(full)
-    // 1 列 3 人: index 0 だけ size/2 右、1 と 2 は同じ x
-    expect(slots[0].x - slots[2].x).toBeCloseTo(slots[0].size * 0.5, 9)
-    expect(slots[1].x).toBeLessThan(slots[0].x)
+    // 斜め一列: index 0 だけ size/2 右へ下がる（基準の斜め位置との差）
+    const front = party(3, ['front', 'front', 'front'])
+    expect(slots[0].x - slots[2].x).toBeCloseTo(front[0].x - front[2].x + slots[0].width * 0.5, 9)
+    expect(slots[1].x).toBeGreaterThan(slots[0].x - slots[0].width)
   })
   it('rows が count より長い: はみ出し分は無視（後衛を含まないなら従来と同じ）', () => {
     expect(party(1, ['front', 'back', 'back'])).toEqual(party(1))
@@ -330,37 +334,38 @@ describe('computeFormation 隊列の境界 (#747)', () => {
       computeFormation(region, 3, 'enemy', true)
     )
   })
-  it('同一列の前衛と後衛（同偶奇行）の x 差はちょうど 0.5 × size', () => {
+  it('前衛と後衛の x 差は斜め位置の差 + ちょうど 0.5 × 幅 (#760)', () => {
     const slots = party(3, ['front', 'front', 'back'])
-    expect(slots[2].x - slots[0].x).toBeCloseTo(slots[0].size * 0.5, 9)
+    const front = party(3)
+    const dx = front[2].x - front[0].x
+    expect(slots[2].x - slots[0].x).toBeCloseTo(dx + slots[0].width * 0.5, 9)
   })
-  it('1 人後衛で 4 人: 全員の size が 384/3.25 に縮む（前衛のみは 125）', () => {
+  it('4 人: 高さ律速（領域高さ 250 / (1 + 3 × 0.3)）で、後衛がいても幅に余裕があれば縮まない (#760)', () => {
     const mixed = party(4, ['front', 'front', 'front', 'back'])
-    expect(party(4)[0].size).toBe(125)
-    for (const s of mixed) expect(s.size).toBeCloseTo(118.153846, 5)
+    expect(party(4)[0].size).toBeCloseTo(250 / 1.9, 9)
+    for (const s of mixed) expect(s.size).toBeCloseTo(250 / 1.9, 9)
   })
-  it('全員後衛 4 人でも size は 384/3.25（1 人後衛と同じ）', () => {
+  it('全員後衛 4 人でも size は 1 人後衛と同じ (#760)', () => {
     const slots = party(4, ['back', 'back', 'back', 'back'])
-    for (const s of slots) expect(s.size).toBeCloseTo(118.153846, 5)
+    for (const s of slots) expect(s.size).toBeCloseTo(250 / 1.9, 9)
   })
-  it('全員後衛 2 人: 高さ律速なので size は 125 のまま', () => {
-    for (const s of party(2, ['back', 'back'])) expect(s.size).toBe(125)
+  it('全員後衛 2 人: 高さ律速で size は 250 / 1.3 (#760)', () => {
+    for (const s of party(2, ['back', 'back'])) expect(s.size).toBeCloseTo(250 / 1.3, 9)
   })
-  it('全員後衛 1 人: size は最大の 160', () => {
-    expect(party(1, ['back'])[0].size).toBe(160)
+  it('全員後衛 1 人: 領域の高さ 250 いっぱい（上限 SIDE_PARTY_MAX_HEIGHT 以内）(#760)', () => {
+    expect(party(1, ['back'])[0].size).toBe(250)
   })
-  it('2 列＋後衛: 左列の最右端が右列の最左端を超えない', () => {
-    const slots = party(4, ['front', 'back', 'front', 'back'])
-    const col0Right = Math.max(slots[0].x + slots[0].size, slots[1].x + slots[1].size)
-    const col1Left = Math.min(slots[2].x, slots[3].x)
-    expect(col0Right).toBeLessThanOrEqual(col1Left + 1e-9)
-  })
-  it('2 列＋全員後衛でも列が食い込まず領域内', () => {
-    const slots = party(4, ['back', 'back', 'back', 'back'])
-    const col0Right = Math.max(slots[0].x + slots[0].size, slots[1].x + slots[1].size)
-    const col1Left = Math.min(slots[2].x, slots[3].x)
-    expect(col0Right).toBeLessThanOrEqual(col1Left + 1e-9)
-    slots.forEach((s) => expect(within(box(s), region)).toBe(true))
+  it('斜め一列＋後衛: 領域内で、上の人の顔（上 30%）が隠れない (#760)', () => {
+    for (const rows of [
+      ['front', 'back', 'front', 'back'],
+      ['back', 'back', 'back', 'back'],
+    ] as const) {
+      const slots = party(4, rows)
+      slots.forEach((s) => expect(within(box(s), region)).toBe(true))
+      for (let i = 1; i < slots.length; i++) {
+        expect(slots[i].y).toBeGreaterThanOrEqual(slots[i - 1].y + slots[i - 1].size * 0.3 - 1e-9)
+      }
+    }
   })
 })
 
@@ -394,6 +399,8 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
         }
         for (let i = 0; i < all.length; i++) {
           for (let j = i + 1; j < all.length; j++) {
+            // #760: 味方どうしは上下に重ねてよい（敵との非重複だけを見る）
+            if (i >= L.enemies.length) continue
             expect(overlap(box(all[i]), box(all[j]))).toBe(false)
           }
         }
@@ -413,8 +420,11 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
         })
         for (const s of L.party) expect(within(box(s), { x: 0, y: 0, w, h })).toBe(true)
         for (let i = 0; i < L.party.length; i++) {
-          for (let j = i + 1; j < L.party.length; j++) {
-            expect(overlap(box(L.party[i]), box(L.party[j]))).toBe(false)
+          // #760: 味方どうしは重ねてよい。上の人の顔（上 30%）が隠れないことを見る
+          if (i + 1 < L.party.length) {
+            expect(L.party[i + 1].y).toBeGreaterThanOrEqual(
+              L.party[i].y + L.party[i].size * 0.3 - 1e-6
+            )
           }
         }
       }
@@ -436,20 +446,22 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
     expect(L.party).toEqual([])
     expect(L.enemies).toEqual([])
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 奥の味方の scale は 0.56158（リテラル）', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の味方の scale は 0.58466（リテラル・斜め一列 #760）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.party[0].scale).toBeCloseTo(0.56158, 5)
-    expect(L.party[0].size).toBeCloseTo(54.4734, 3)
+    expect(L.party[0].scale).toBeCloseTo(0.58466, 5)
+    expect(L.party[0].size).toBeCloseTo(59.6965, 3)
+    expect(L.party[0].width).toBeCloseTo(29.8483, 3)
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 手前の味方は scale 1・size 97', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 最前列（4 人目）の味方は scale 1・高さ 102.105 / 幅 51.05（斜め一列 #760）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.party[1].scale).toBe(1)
-    expect(L.party[1].size).toBe(97)
+    expect(L.party[3].scale).toBe(1)
+    expect(L.party[3].size).toBeCloseTo(102.10526, 4)
+    expect(L.party[3].width).toBeCloseTo(51.05263, 4)
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.44（リテラル・幾何が下限 0.3 に張り付く）', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.80779（リテラル・敵領域を広げて敵が大きくなった #760）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.enemies[0].scale).toBeCloseTo(0.44, 5)
-    expect(L.enemies[0].size).toBeCloseTo(28.6, 3)
+    expect(L.enemies[0].scale).toBeCloseTo(0.80779, 5)
+    expect(L.enemies[0].size).toBeCloseTo(113.856, 3)
   })
   it('味方 1 敵 1: 足元が同じ高さか味方のほうが下なら、味方の縮尺は敵以上（基準は足元 y+size）', () => {
     const L = computeSideBattleLayout({
@@ -467,9 +479,15 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
   it('未指定: depthActive false・座標は従来どおり（800x450・4 対 4）', () => {
     const L = computeSideBattleLayout(base)
     expect(L.depthActive).toBe(false)
-    expect([L.party[0].x, L.party[0].y, L.party[0].size]).toEqual([507.125, 118, 97])
-    expect([L.party[1].x, L.party[1].y]).toEqual([482.875, 215])
-    expect([L.enemies[0].x, L.enemies[0].y, L.enemies[0].size]).toEqual([134.875, 118, 65])
+    expect(L.party[0].x).toBeCloseTo(579.78947, 4)
+    expect(L.party[0].y).toBe(118)
+    expect(L.party[0].size).toBeCloseTo(102.10526, 4)
+    expect(L.party[0].width).toBeCloseTo(51.05263, 4)
+    expect(L.party[1].x).toBeCloseTo(630.84211, 4)
+    expect(L.party[1].y).toBeCloseTo(148.63158, 4)
+    expect(L.enemies[0].x).toBe(16)
+    expect(L.enemies[0].y).toBeCloseTo(128.52632, 4)
+    expect(L.enemies[0].size).toBeCloseTo(140.94737, 4)
   })
   it('partyRows に front のみ・depth なしなら従来と完全に同じ', () => {
     expect(

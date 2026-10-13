@@ -50,7 +50,7 @@ import type { BattleEntity } from './spellDsl'
 import {
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
-  computeContainFit,
+  computeContainFitRect,
   computeFallbackRect,
   computeSideBattleLayout,
   SIDE_COMMAND_TEXT_PADDING,
@@ -64,7 +64,10 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
-import { AcrylicEdgeFilter } from './acrylicEdgeFilter'
+import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
+import { computeSlitY } from './acrylicBase'
+import { computeShadowTransform } from './acrylicShadow'
+import { getAcrylicBaseTexture, type AcrylicBaseTexture } from './acrylicBaseTexture'
 import {
   computeAcrylicGeometry,
   resolveAcrylicParams,
@@ -196,6 +199,28 @@ interface CommandButton {
   text: PixiText
 }
 
+/**
+ * 戦闘で使うテクスチャの縮小・拡大フィルタを設定する (#760)。
+ * RPG の Pixi は antialias:false・resolution 1 で、400px 級の画像をミップマップ無しで小さく縮小するとギザギザになる。
+ * 既定は mipmap 生成＋linear で縮小をなめらかにする。`pixelArt`（frontmatter `pixel_art`・#466）なら nearest のまま
+ * （ドット絵を保つ。mipmap も作らない）。GPU へ初回アップロードされる前（Assets.load 直後）に呼ぶこと。
+ * フィールドのレイキャストのテクスチャには触れない。
+ *
+ * 注意: テクスチャが既に GPU へアップロード済み（他の画面・先に描画された）なら、`autoGenerateMipmaps` を後から立てても
+ * mipmap は作られない（効くのは初回アップロード前）。また `Assets` のキャッシュは画面をまたいで共有されるので、
+ * ここで書いた scaleMode / mipmap の設定は同じ画像を使う他の画面にも波及する。
+ */
+export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void {
+  const source = tex.source
+  if (!source) return
+  if (pixelArt) {
+    source.scaleMode = 'nearest'
+    return
+  }
+  source.autoGenerateMipmaps = true
+  source.scaleMode = 'linear'
+}
+
 export interface BattleScreenOptions {
   /** バトル終了（victory / defeat / escaped）時に呼ばれる */
   onClose?: (outcome: 'victory' | 'defeat' | 'escaped') => void
@@ -246,6 +271,11 @@ export interface BattleScreenOptions {
    * 透過 PNG を想定。未指定・読み込み失敗は何も描かない。
    */
   foreground?: string
+  /**
+   * ドット絵モード (#466 / #760)。`true` なら戦闘のテクスチャ（スプライト・敵・背景・前景）を nearest のまま使う。
+   * 未指定・false は mipmap＋linear で縮小をなめらかにする。
+   */
+  pixelArt?: boolean
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -256,9 +286,19 @@ interface EntityView {
   fallback: Graphics
   color: number
   sprite: Sprite | null
-  /** acrylic のとき: 台座・影を描く Graphics（fallback の直上・sprite の直下）と、sprite にかけるフィルタ。画像読み込み成功まで null/非表示 */
+  /** acrylic のとき: 台座・影を描く Graphics（fallback の直上）と、スプライトの直下に敷く板のスプライト (#760)。画像読み込み成功まで null/非表示。板は canvas が使えない環境では null */
   acrylicBack: Graphics | null
-  acrylicFilter: AcrylicEdgeFilter | null
+  acrylicPlate: Sprite | null
+  /** 透明アクリルの台座・影のスプライト (#760)。canvas が使えない環境では null（acrylicBack の Graphics で描く） */
+  acrylicBase: Sprite | null
+  /** 地面に落とす本体の影 (#760)。全キャラの下の層（shadowLayer）に置く。板を作れない環境では null */
+  acrylicShadow: Sprite | null
+  acrylicShadowFoot: { x: number; y: number }
+  /** 板テクスチャの 1px が元画像の何 px か（板は縮小した解像度で作る） */
+  acrylicPlateScale: number
+  /** 板テクスチャ上で元画像の左上がある位置(px)。配置時にこのぶん左上へずらす */
+  acrylicPlatePad: number
+  acrylicBaseLayout: AcrylicBaseTexture['layout'] | null
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
 }
@@ -284,6 +324,8 @@ export class BattleScreen extends Container {
   private dofLevels: DofLevelView[] = []
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
+  /** 板・影のテクスチャを tex.source ごとに共有するキャッシュ (#760)。destroy で解放 */
+  private plateCache = new Map<unknown, AcrylicPlate | null>()
   /** 戦闘ログのタイプ表示 (#755)。`off` のとき tracker / ticker は使わない */
   private logTypewriter: BattleLogTypewriterMode
   private logTracker: BattleLogTracker = makeBattleLogTracker()
@@ -291,6 +333,8 @@ export class BattleScreen extends Container {
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
+  /** acrylic のとき: 全キャラの影をまとめる層（sideStage の直下・全スプライトより下）(#760) */
+  private shadowLayer: Container | null = null
   /** side: 敵の名前・HP ラベルの親 (#747)。前景より手前・パネルより奥（spec どおり、文字（敵ラベル）は前景より手前に置く） */
   private labelLayer: Container | null = null
   /** 前景レイヤー (#747)。スプライトより手前・パネルより奥 */
@@ -383,13 +427,46 @@ export class BattleScreen extends Container {
     this.refresh()
   }
 
+  /** 透明アクリルの台座テクスチャ (#760)。共有キャッシュ。canvas が使えないときは null（Graphics へフォールバック） */
+  protected makeAcrylicBase(): AcrylicBaseTexture | null {
+    return this.acrylicParams ? getAcrylicBaseTexture(this.acrylicParams) : null
+  }
+
+  /** アクリル板テクスチャを作る (#760)。canvas が使えない・読み出せないときは null（テストで差し替えられるよう分けてある） */
+  protected makeAcrylicPlate(tex: Texture): AcrylicPlate | null {
+    return this.acrylicParams ? createAcrylicPlateTexture(tex, this.acrylicParams) : null
+  }
+
+  /**
+   * 同じ画像（tex.source 単位）の板・影は 1 回だけ作って共有する (#760)。同じ敵が複数いても生成と GPU メモリは 1 組。
+   * 作れなかった（null）結果も覚えて、同じ画像で作り直さない。解放は destroy でまとめて行う。
+   */
+  private getAcrylicPlate(tex: Texture): AcrylicPlate | null {
+    const key = tex.source
+    if (this.plateCache.has(key)) return this.plateCache.get(key) ?? null
+    const plate = this.makeAcrylicPlate(tex)
+    this.plateCache.set(key, plate)
+    return plate
+  }
+
+  /**
+   * 破棄する。板・影のテクスチャは画面が自前で作ったものなので、TextureSource ごと（GPU・canvas）ここで解放する
+   * （Sprite.destroy({texture:true}) は v8 で source を解放しない）。`options` に `texture` は付けないこと:
+   * 台座は全画面で共有するキャッシュ、スプライト・背景・前景は Assets のキャッシュのテクスチャで、壊すと他で使えなくなる。
+   */
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.destroyedFlag = true
-    // フィルタは Container.destroy の対象外なので自分で破棄する (#737)
     for (const v of [...this.enemyViews, ...this.partyViews]) {
-      v.acrylicFilter?.destroy()
-      v.acrylicFilter = null
+      v.acrylicPlate?.destroy()
+      v.acrylicShadow?.destroy()
+      v.acrylicShadow = null
+      v.acrylicPlate = null
     }
+    for (const plate of this.plateCache.values()) {
+      plate?.texture.destroy(true)
+      plate?.shadow?.destroy(true)
+    }
+    this.plateCache.clear()
     this.backgroundToneFilter?.destroy()
     this.backgroundToneFilter = null
     this.disposeBackgroundDof()
@@ -401,6 +478,7 @@ export class BattleScreen extends Container {
   private async loadForeground(path: string): Promise<void> {
     try {
       const tex = (await Assets.load(path)) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag || !this.sideStage) return
       const sprite = new Sprite(tex)
       this.foregroundSprite = sprite
@@ -415,6 +493,7 @@ export class BattleScreen extends Container {
   private async loadBackground(path: string): Promise<void> {
     try {
       const tex = (await Assets.load(path)) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag) return
       const sprite = new Sprite(tex)
       this.backgroundSprite = sprite
@@ -568,6 +647,12 @@ export class BattleScreen extends Container {
     this.sideStage = stage
     // dim の直後（パネル・テキストより下）に差し込む
     this.addChildAt(stage, this.getChildIndex(this.dim) + 1)
+    if (this.acrylicParams) {
+      // 影は全キャラのスプライトより下の層にまとめる（手前のキャラの影が奥のキャラの上に乗らない）(#760)
+      const shadowLayer = new Container()
+      this.shadowLayer = shadowLayer
+      this.addChildAt(shadowLayer, this.getChildIndex(stage))
+    }
     // 敵ラベルは sideStage の直後（前景は loadForeground が sideStage の直後=ラベル層の手前に差し込む）
     const labelLayer = new Container()
     this.labelLayer = labelLayer
@@ -634,7 +719,13 @@ export class BattleScreen extends Container {
       color,
       sprite: null,
       acrylicBack,
-      acrylicFilter: null,
+      acrylicPlate: null,
+      acrylicBase: null,
+      acrylicShadow: null,
+      acrylicShadowFoot: { x: 0, y: 0 },
+      acrylicPlateScale: 1,
+      acrylicPlatePad: 0,
+      acrylicBaseLayout: null,
       label,
     }
     if (entity.sprite) void this.loadEntitySprite(view, entity.sprite)
@@ -644,20 +735,43 @@ export class BattleScreen extends Container {
   private async loadEntitySprite(view: EntityView, path: string): Promise<void> {
     try {
       const tex = (await Assets.load(path)) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag || view.container.destroyed) return
       const sprite = new Sprite(tex)
       view.sprite = sprite
-      view.container.addChildAt(sprite, view.acrylicBack ? 2 : 1)
       if (view.acrylicBack) {
-        // フィルタは texture ごとに 1 回だけ作る。余白・線の幅は placeEntityView が枠の大きさに合わせて更新する
-        const p = this.acrylicParams
-        view.acrylicFilter = new AcrylicEdgeFilter({
-          marginPx: 0,
-          linePx: 0,
-          color: p?.lineColor ?? 0xffffff,
-          alpha: p?.lineAlpha ?? 0,
-        })
+        // アクリル板 (#760): 長辺 192px の作業解像度で 1 回だけ作り（同じ画像は共有）、mipmap で拡縮してスプライトの直下に敷く。作れない環境では板なし
+        let idx = 2
+        const base = this.makeAcrylicBase()
+        if (base) {
+          view.acrylicBase = new Sprite(base.texture)
+          view.acrylicBaseLayout = base.layout
+          view.container.addChildAt(view.acrylicBase, idx++)
+        }
+        const plate = this.getAcrylicPlate(tex)
+        if (plate) {
+          const plateSprite = new Sprite(plate.texture)
+          view.acrylicPlate = plateSprite
+          view.acrylicPlatePad = plate.pad
+          view.acrylicPlateScale = plate.scale ?? 1
+          if (plate.shadow && this.shadowLayer) {
+            const sh = new Sprite(plate.shadow)
+            view.acrylicShadow = sh
+            view.acrylicShadowFoot = plate.foot ?? { x: 0, y: 0 }
+            sh.pivot.set(view.acrylicShadowFoot.x, view.acrylicShadowFoot.y)
+            this.shadowLayer.addChild(sh)
+          }
+          // 板を台座のスリットの高さで水平に切る mask (#760)。v8 では Sprite に子を足せないので、
+          // 板の直後の兄弟として置く（座標は container と同じ）
+          const mask = new Graphics()
+          plateSprite.mask = mask
+          view.container.addChildAt(plateSprite, idx++)
+          view.container.addChildAt(mask, idx++)
+        }
+        view.container.addChildAt(sprite, idx)
         view.acrylicBack.visible = true
+      } else {
+        view.container.addChildAt(sprite, 1)
       }
       this.layout()
       this.refresh()
@@ -956,6 +1070,18 @@ export class BattleScreen extends Container {
       enemyCount: s.enemies.length,
       commandCount: this.commands.length,
       partyRows: s.party.map((p) => p.row),
+      // 立ち絵の縦横比（未読み込み・色四角は undefined → 既定 0.5）。読み込み完了で layout し直される
+      partyAspects: this.partyViews.map((v) =>
+        v.sprite && v.sprite.texture.height > 0
+          ? v.sprite.texture.width / v.sprite.texture.height
+          : undefined
+      ),
+      // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
+      enemyAspects: this.enemyViews.map((v) =>
+        v.sprite && v.sprite.texture.height > 0
+          ? v.sprite.texture.width / v.sprite.texture.height
+          : undefined
+      ),
       depth: this.opts.depth,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
@@ -1046,15 +1172,29 @@ export class BattleScreen extends Container {
 
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
-    view.container.position.set(slot.x, slot.y)
     const size = slot.size
-    const fb = computeFallbackRect(size)
-    view.fallback.clear().rect(fb.x, fb.y, fb.w, fb.h).fill(view.color)
+    // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
+    // 横長の敵 (#760) は枠の幅が高さより大きいので、正方形はその幅（長辺）にして下端を枠の下端に揃える
+    const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
+    const box = acrylic ? Math.max(size, slot.width) : size
+    view.container.position.set(
+      acrylic ? slot.x - (box - slot.width) / 2 : slot.x,
+      acrylic ? slot.y + size - box : slot.y
+    )
+    const fb = computeFallbackRect(box)
+    const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
+    const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
+    view.fallback.clear().rect(fbX, fb.y, fbW, fb.h).fill(view.color)
     if (view.sprite) {
-      if (this.acrylicParams && view.acrylicBack && view.acrylicFilter) {
-        this.placeAcrylic(view.sprite, view.acrylicBack, view.acrylicFilter, size)
+      if (this.acrylicParams && view.acrylicBack) {
+        this.placeAcrylic(view, box)
       } else {
-        const fit = computeContainFit(view.sprite.texture.width, view.sprite.texture.height, size)
+        const fit = computeContainFitRect(
+          view.sprite.texture.width,
+          view.sprite.texture.height,
+          slot.width,
+          size
+        )
         view.sprite.position.set(fit.x, fit.y)
         view.sprite.width = fit.width
         view.sprite.height = fit.height
@@ -1072,38 +1212,88 @@ export class BattleScreen extends Container {
   }
 
   /**
-   * acrylic のスプライト 1 体を配置する (#737)。幾何は純粋関数 computeAcrylicGeometry が正本で、
-   * ここは結果を Graphics とフィルタの太さに反映するだけ（フィルタは再生成せず幅を更新）。
-   * 配置は slot 枠の内側に収まるので battleLayout の座標・ラベルとは重ならない。
+   * acrylic のスプライト 1 体を配置する (#737・#760)。幾何は純粋関数 computeAcrylicGeometry が正本で、
+   * ここは結果を各パーツへ反映するだけ。
+   * - スプライト: 幾何どおりの位置・大きさ。
+   * - 台座・影: 共有テクスチャ（無ければ acrylicBack の Graphics）。台座の側面の厚みは幾何が下に予約済み。
+   * - 板: スプライトと同じ倍率（作業解像度ぶんを掛けて）で、pad ぶん外へ広げて敷く。台座のスリットの高さ
+   *   （computeSlitY）で水平に切る mask（板の兄弟 Graphics）を更新する。
+   * - 地面の影: shadowLayer（画面基準）に、足元を基点とした変形（computeShadowTransform）で敷く。
+   * スプライト本体と台座・影は slot 枠の内側に収まる。板は余白+線ぶん（pad）だけ枠の外へ広がる。
+   * `size` は正方形の一辺（横長の敵は枠の長辺）。
    */
-  private placeAcrylic(
-    sprite: Sprite,
-    back: Graphics,
-    filter: AcrylicEdgeFilter,
-    size: number
-  ): void {
+  private placeAcrylic(view: EntityView, size: number): void {
     const params = this.acrylicParams
-    if (!params) return
+    const sprite = view.sprite
+    const back = view.acrylicBack
+    if (!params || !sprite || !back) return
     const g = computeAcrylicGeometry(sprite.texture.width, sprite.texture.height, size, params)
     sprite.position.set(g.sprite.x, g.sprite.y)
     sprite.width = g.sprite.width
     sprite.height = g.sprite.height
     back.clear()
-    if (g.shadow) {
-      back
-        .ellipse(g.shadow.cx, g.shadow.cy, g.shadow.rx, g.shadow.ry)
-        .fill({ color: 0x000000, alpha: params.shadowAlpha })
+    const baseSprite = view.acrylicBase
+    if (baseSprite && view.acrylicBaseLayout) {
+      // 透明アクリルの台座と柔らかい影 (#760): 高解像度の共有テクスチャを縮小して敷く。影の幅が幾何の影に一致する
+      const L = view.acrylicBaseLayout
+      const ref = g.shadow
+      baseSprite.visible = !!(g.base && ref)
+      if (g.base && ref) {
+        const k = ref.rx / L.shadowRx
+        baseSprite.scale.set(k)
+        baseSprite.position.set(g.base.cx - L.cx * k, g.base.cy - L.cyTop * k)
+      }
+    } else {
+      if (g.shadow) {
+        back
+          .ellipse(g.shadow.cx, g.shadow.cy, g.shadow.rx, g.shadow.ry)
+          .fill({ color: 0x000000, alpha: params.shadowAlpha })
+      }
+      if (g.base) {
+        back.ellipse(g.base.cx, g.base.cy, g.base.rx, g.base.ry).fill(ACRYLIC_BASE_COLOR)
+      }
+      if (g.highlight) {
+        back
+          .ellipse(g.highlight.cx, g.highlight.cy, g.highlight.rx, g.highlight.ry)
+          .fill({ color: 0xffffff, alpha: params.highlightAlpha })
+      }
     }
-    if (g.base) {
-      back.ellipse(g.base.cx, g.base.cy, g.base.rx, g.base.ry).fill(ACRYLIC_BASE_COLOR)
+    const plate = view.acrylicPlate
+    if (plate) {
+      // 板はスプライトと同じ倍率で縮小する（縮小した解像度で作った板を mipmap 付きで拡縮）。外へ pad ぶん広がる
+      const k = sprite.texture.width > 0 ? g.sprite.width / sprite.texture.width : 0
+      const ks = k * view.acrylicPlateScale
+      plate.scale.set(ks)
+      plate.position.set(
+        g.sprite.x - view.acrylicPlatePad * ks,
+        g.sprite.y - view.acrylicPlatePad * ks
+      )
+      plate.visible = k > 0 && g.linePx > 0 && params.lineAlpha > 0
+      // 板は台座に差し込まれているので、スリットの高さより下は見えない。スリットと同じ純粋関数の値で水平に切る (#760)。
+      // スプライト本体の足元はクリップしない（mask は板だけ）
+      const mask = (plate.mask ?? null) as Graphics | null
+      if (mask) {
+        const w = plate.texture.width * ks
+        const fullH = plate.texture.height * ks
+        // 台座が無い（hasBase=false）・縮尺 0 のときは切らない。mask は container 座標
+        const clipY = g.base ? computeSlitY(g.base.cy, g.base.ry) : Infinity
+        const h = ks > 0 ? Math.min(fullH, Math.max(0, clipY - plate.y)) : fullH
+        mask.clear().rect(plate.x, plate.y, w, h).fill(0xffffff)
+      }
     }
-    if (g.highlight) {
-      back
-        .ellipse(g.highlight.cx, g.highlight.cy, g.highlight.rx, g.highlight.ry)
-        .fill({ color: 0xffffff, alpha: params.highlightAlpha })
+    const shadow = view.acrylicShadow
+    if (shadow) {
+      // 本体の影 (#760): 足元（スプライト下端の中央）を基点に、縦につぶして右へ傾ける。座標は shadowLayer（= 画面）基準
+      const k = sprite.texture.width > 0 ? g.sprite.width / sprite.texture.width : 0
+      const t = computeShadowTransform(params, k * view.acrylicPlateScale)
+      shadow.scale.set(t.scaleX, t.scaleY)
+      shadow.skew.x = t.skewX
+      shadow.position.set(
+        view.container.x + g.sprite.x + g.sprite.width / 2,
+        view.container.y + g.sprite.y + g.sprite.height
+      )
+      shadow.visible = k > 0 && params.castAlpha > 0
     }
-    filter.setWidths(g.marginPx, g.linePx)
-    sprite.filters = g.linePx > 0 && params.lineAlpha > 0 ? [filter] : null
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true
   }
@@ -1116,6 +1306,7 @@ export class BattleScreen extends Container {
       const view = this.enemyViews[i]
       if (!e) continue
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
+      if (view.acrylicShadow) view.acrylicShadow.alpha = view.container.alpha
       if (view.label) {
         view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
         // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
@@ -1131,6 +1322,8 @@ export class BattleScreen extends Container {
       const p = s.party[i]
       if (!p) continue
       this.partyViews[i].container.alpha = p.hp > 0 ? 1 : DEAD_ALPHA
+      const sh = this.partyViews[i].acrylicShadow
+      if (sh) sh.alpha = this.partyViews[i].container.alpha
     }
     for (let i = 0; i < this.statusTexts.length; i++) {
       const p = s.party[i]
