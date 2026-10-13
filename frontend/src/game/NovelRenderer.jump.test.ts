@@ -11,6 +11,7 @@ import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
+import * as bgPreload from './backgroundPreload'
 import { defaultTimeController } from './TimeController'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
@@ -494,7 +495,7 @@ describe('NovelRenderer Jump × 先読み preloadUpcomingAssets (#725)', () => {
   it('17: 先読みは Jump で打ち切る（Jump 以降の立ち絵は積まない）', () => {
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
     vi.spyOn(Assets, 'load').mockResolvedValue(Texture.WHITE as never)
-    const bgSpy = vi.spyOn(Assets, 'backgroundLoad').mockResolvedValue(undefined as never)
+    const bgSpy = vi.spyOn(bgPreload, 'backgroundPreload').mockImplementation(() => {})
     const r = new NovelRenderer()
     r.setAssetBaseUrl('/assets')
     vi.spyOn(internals(r), 'render').mockImplementation(() => {})
