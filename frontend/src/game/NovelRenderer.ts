@@ -1407,6 +1407,8 @@ export class NovelRenderer {
    * 公開 API で、実体は単一の入口 `enterScene` に委譲する薄いラッパー。
    * 読み込み済みのシーンなら同期で入場し（戻り値は解決済みの Promise）、未ロードなら
    * `missingSceneResolver` の完了を待つ。結果は Promise で返る。
+   * 適用中の例外は非対称に扱う: 同期で入場する場合は呼び出し元へ伝播し、遅延ロード後の非同期の適用では
+   * `failed`（reason: 'apply-error'）で解決する（Promise は reject しない）。
    */
   jumpToScene(sceneId: string): Promise<SceneEntryResult> {
     return this.enterScene({ kind: 'progress', sceneId, origin: 'choice' })
@@ -1668,9 +1670,8 @@ export class NovelRenderer {
           resolved.status === 'loaded' ? this.indexLoaded(sceneId, resolved.scenes) : resolved
         )
       } catch (err) {
-        console.error('[name-name] シーン入場の適用中に例外が発生しました', err)
-        this.stallJump()
-        return { status: 'failed', reason: 'resolver-error' } as const
+        this.handleApplyError(req, err)
+        return { status: 'failed', reason: 'apply-error' } as const
       }
     })()
     this.pendingEntry = { generation, kind: req.kind, sceneId, promise }
@@ -1685,11 +1686,30 @@ export class NovelRenderer {
     try {
       return this.enterScene(req)
     } catch (err) {
-      console.error('[name-name] シーン入場中に例外が発生しました', err)
       this.pendingEntry = null
-      this.stallJump()
-      return Promise.resolve({ status: 'failed', reason: 'resolver-error' })
+      this.handleApplyError(req, err)
+      return Promise.resolve({ status: 'failed', reason: 'apply-error' })
     }
+  }
+
+  /**
+   * 入場の適用中に例外が出たとき（通信失敗ではなく実装・データの不具合）。ログを残し、Jump 由来なら停止し、
+   * 選択肢由来なら閉じていた選択肢を再表示して、詰まらないようにする。
+   */
+  private handleApplyError(req: SceneEntryRequest, err: unknown): void {
+    console.error('[name-name] シーン入場の適用中に例外が発生しました', err)
+    if (req.kind === 'progress' && req.origin === 'jump') {
+      this.stallJump()
+    } else if (req.kind === 'progress') {
+      this.rederiveTransitionAtCurrentPosition()
+    } else {
+      this.stallJump()
+    }
+  }
+
+  /** 遷移先を引く手段が確実に無い（読み込み済みに無く、遅延ロードの resolver も無い）。 */
+  private isDefinitelyUnresolvable(sceneId: string): boolean {
+    return !findSceneById(this.allScenes, sceneId) && !this.missingSceneResolver
   }
 
   /**
@@ -1701,7 +1721,7 @@ export class NovelRenderer {
   private resolveScene(sceneId: string): SceneLookup | Promise<SceneResolution> {
     const scene = findSceneById(this.allScenes, sceneId)
     if (scene) return { status: 'found', scene }
-    if (!this.missingSceneResolver) {
+    if (this.isDefinitelyUnresolvable(sceneId)) {
       return {
         status: 'failed',
         reason: 'not-found',
@@ -5136,8 +5156,7 @@ export class NovelRenderer {
           // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
           if (
             isSceneIdConfined(jump, this.confinedSceneIds) &&
-            !this.missingSceneResolver &&
-            !findSceneById(this.allScenes, jump)
+            this.isDefinitelyUnresolvable(jump)
           ) {
             console.warn(`[name-name] シーンが見つからない: ${jump}`)
             return false
@@ -5402,20 +5421,22 @@ export class NovelRenderer {
         // 立ち絵 sprite を同期生成してからスナップショットを記録（afterShow）する。
         this.showCharacterThenRender(() => this.pushSnapshot())
       }
-      this.waitTimer = this.time.setTimeout(() => {
-        this.waitTimer = null
-        if (!this.initialized) return
-        // 入場（復元の遅延ロードなど）を待っている間に進めると、Jump の予約などで世代が進み、
-        // ユーザーのロードが黙って破棄される (#734)。決着を待ち、その間に別の文脈へ移っていたら
-        // （復元の成功で待機が解除された等）何もしない。
+      // 入場（復元の遅延ロードなど）を待っている間に進めると、Jump の予約などで世代が進み、
+      // ユーザーのロードが黙って破棄される (#734)。決着を待ち、その間に別の文脈へ移っていたら
+      // （復元の成功で待機が解除された等）何もしない。決着した時点でさらに別の入場が始まっていれば
+      // （待っていた入場が置き換えられた場合）、その決着も待つ。
+      const tryResume = (): void => {
+        if (!this.initialized || !this.waitingForWait || this.waitTimer !== null) return
         const entry = this.pendingEntry
         if (entry) {
-          void entry.promise.then(() => {
-            if (this.initialized && this.waitingForWait && this.waitTimer === null) resume()
-          })
+          void entry.promise.then(tryResume)
           return
         }
         resume()
+      }
+      this.waitTimer = this.time.setTimeout(() => {
+        this.waitTimer = null
+        tryResume()
       }, event.Wait.ms)
       return
     }

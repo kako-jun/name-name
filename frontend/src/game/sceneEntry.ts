@@ -9,10 +9,10 @@
 import type { NovelGameState } from './GameState'
 
 /** シーン入場の種類。進行 = 物語の流れの中の遷移、新規開始 = 文脈を捨てて始める、復元 = 保存状態へ戻す。 */
+export type EntryKind = 'progress' | 'fresh' | 'restore'
+
 /** ロードの起点 (#765): 成功トーストの要否が変わる。quick=F8、menu=ロードメニュー、auto=マウント時の自動クイックロード。 */
 export type LoadOrigin = 'quick' | 'menu' | 'auto'
-
-export type EntryKind = 'progress' | 'fresh' | 'restore'
 
 /**
  * 進行の由来。選択肢の確定（`playScript` の choice ステップを含む）と `[ジャンプ:]`。
@@ -38,7 +38,11 @@ export type SceneEntryResult =
   | { status: 'entered'; sceneId: string | null }
   /** 進行のみ: confinement の圏外で終劇した。 */
   | { status: 'ended' }
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' }
+  /**
+   * not-found: 遷移先が無い / resolver-error: 遅延ロードの通信失敗など（一時的）/
+   * apply-error: 適用中の例外（実装・データの不具合。一時的な通信失敗とは区別する）
+   */
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' }
   /** 待っている間に、より新しい入場要求が来た（後始末は新しい側が担う）。 */
   | { status: 'superseded' }
 

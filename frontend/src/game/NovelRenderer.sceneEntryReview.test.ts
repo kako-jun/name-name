@@ -31,6 +31,7 @@ function scene(id: string, events: Event[]): EventScene {
 interface Internals {
   initialized: boolean
   waitingForWait: boolean
+  waitingForChoice: boolean
   skipMode: boolean
   autoMode: boolean
   eventIndex: number
@@ -130,7 +131,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
 
     r.getTimeController().tick(1)
 
-    await expect(waiting).resolves.toEqual({ status: 'failed', reason: 'resolver-error' })
+    await expect(waiting).resolves.toEqual({ status: 'failed', reason: 'apply-error' })
     expect(errSpy).toHaveBeenCalled()
     expect(internals(r).jumpState).toBe('stalled')
     expect(internals(r).pendingEntry).toBeNull()
@@ -149,7 +150,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     const entering = r.jumpToScene('far')
     d.resolve([HUB, FAR])
 
-    await expect(entering).resolves.toEqual({ status: 'failed', reason: 'resolver-error' })
+    await expect(entering).resolves.toEqual({ status: 'failed', reason: 'apply-error' })
     expect(errSpy).toHaveBeenCalled()
     expect(internals(r).pendingEntry).toBeNull()
   })
@@ -173,6 +174,9 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     expect(() => confirm('far')).not.toThrow()
     await flush()
     expect(errSpy).toHaveBeenCalled()
+    // 閉じていた選択肢が再表示され、詰まらない
+    expect(calls.length).toBe(2)
+    expect(internals(r).waitingForChoice).toBe(true)
   })
 })
 
@@ -212,6 +216,38 @@ describe('S2: オート送り・スキップの再開 (#734)', () => {
   })
 })
 
+describe('成功側のオート再開 (#734)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    defaultTimeController.setMode('live')
+    localStorage.clear()
+  })
+
+  it('オート ON で非同期の復元が成功したあと、オート送りが再スケジュールされる', async () => {
+    const d = deferred<EventScene[] | null>()
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
+    internals(r).initialized = true
+    r.setScenes([HUB])
+    r.setMissingSceneResolver(() => d.promise)
+    r.setAutoMode(true)
+    const dialog = (r as unknown as { dialogBox: Record<string, unknown> }).dialogBox
+    const progressive = vi.spyOn(dialog as never, 'setNovelDialogProgressive')
+    const plain = vi.spyOn(dialog as never, 'setDialog')
+
+    const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'far' }))
+    d.resolve([HUB, FAR])
+    await expect(restoring).resolves.toEqual({ status: 'entered', sceneId: 'far' })
+
+    // 復元後の描画で、タイプ完了時のオート送りコールバックが張られている（オートが止まらない）
+    const calls = [...progressive.mock.calls, ...plain.mock.calls] as unknown[][]
+    expect(calls.length).toBeGreaterThan(0)
+    const last = calls[calls.length - 1]
+    expect(typeof last[last.length - 1]).toBe('function')
+  })
+})
+
 describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -236,6 +272,40 @@ describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
     await expect(restoring).resolves.toEqual({ status: 'entered', sceneId: 'far' })
     expect(r.getCurrentSceneId()).toBe('far')
     expect(internals(r).waitingForWait).toBe(false)
+  })
+
+  it('待っていた復元 A が別の復元 B に置き換えられて決着しても [待機] は明けず、B の決着後に明ける（B 成功時は明けない）', async () => {
+    const OTHER = scene('other', [narration('o1')])
+    for (const bSucceeds of [true, false]) {
+      const dA = deferred<EventScene[] | null>()
+      const dB = deferred<EventScene[] | null>()
+      const r = makeRenderer([WAITING], (id) => (id === 'far' ? dA.promise : dB.promise))
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      r.advance()
+      const indexAtWait = internals(r).eventIndex
+
+      void r.restoreSnapshot(craftSnapshot({ sceneId: 'far' })) // A
+      r.getTimeController().tick(60) // waitTimer 発火 → A の決着待ち
+      const restoringB = r.restoreSnapshot(craftSnapshot({ sceneId: 'other' })) // A を置換
+      dA.resolve([WAITING, FAR])
+      await flush()
+
+      // B の待機中に [待機] が明けてはいけない（明けると世代が進み B が破棄される）
+      expect(internals(r).waitingForWait).toBe(true)
+      expect(internals(r).eventIndex).toBe(indexAtWait)
+
+      dB.resolve(bSucceeds ? [WAITING, OTHER] : null)
+      await restoringB
+      await flush()
+      if (bSucceeds) {
+        expect(r.getCurrentSceneId()).toBe('other')
+        expect(internals(r).waitingForWait).toBe(false)
+        expect(internals(r).eventIndex).toBe(0) // 待機明けで進んでいない
+      } else {
+        expect(internals(r).waitingForWait).toBe(false)
+        expect(internals(r).eventIndex).toBeGreaterThan(indexAtWait)
+      }
+    }
   })
 
   it('復元が失敗したときは、保留していた [待機] 明けが再開される', async () => {
