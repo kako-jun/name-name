@@ -245,8 +245,8 @@ fn skip_leading_empty_scenes(playback: &mut Playback) {
 /// panic フックが呼ばれる前に端末状態を復元し、raw mode + alternate screen の
 /// まま固まってユーザーが `reset` を打つ羽目になるのを防ぐ。
 ///
-/// `playback_restored`は`main()`の`save::restore_playback`呼び出しの成否をそのまま
-/// `run_screens`/`event_loop`へ運ぶだけの値（#579 追加修正、詳細は`main()`のコメント参照）。
+/// `startup`（`StartupEntry`: `playback_restored` と `autosave`）は`apply_startup_entry`の結果を
+/// そのまま`run_screens`/`event_loop`へ運ぶだけの値（#579 追加修正・#734 PR3、詳細は`apply_startup_entry`参照）。
 fn run(config: &Config, playback: &mut Playback, startup: StartupEntry) -> anyhow::Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
