@@ -354,13 +354,24 @@ describe('BattleScreen: 被写界深度 (#753)', () => {
         // 幅は背景幅＋左右の拡張
         expect(fa.x).toBeCloseTo(-DOF_EDGE_EXTEND)
         expect(fa.width).toBeCloseTo(bg.width + 2 * DOF_EDGE_EXTEND)
-        // 上端はマスクの上端（画面座標 mask.y をローカルへ）以下、下端は広げた矩形の下端
-        expect(fa.y).toBeLessThanOrEqual(l.mask.y - bg.position.y + 1e-6)
+        // 上端はマスクの上端（画面座標 mask.y をローカルへ）に一致、下端は広げた矩形の下端
+        expect(fa.y).toBeCloseTo(l.mask.y - bg.position.y)
         expect(fa.y + fa.height).toBeCloseTo(bg.height + DOF_EDGE_EXTEND)
         expect(fa.y).toBeGreaterThanOrEqual(prevY)
         prevY = fa.y
       }
     }
+  })
+
+  it('実物の createDofMaskTexture は jsdom（canvas 不可）では null を返す', () => {
+    vi.restoreAllMocks()
+    const s = track(make([entity('hero')], [entity('slime')]))
+    const fn = (
+      BattleScreen.prototype as unknown as {
+        createDofMaskTexture: (this: BattleScreen, r: number) => unknown
+      }
+    ).createDofMaskTexture
+    expect(fn.call(s, 0.5)).toBeNull()
   })
 
   it('off なら段を作らない', async () => {

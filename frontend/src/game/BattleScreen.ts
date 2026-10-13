@@ -426,7 +426,15 @@ export class BattleScreen extends Container {
       lv.blur.strength = g.blurStrength
       // フィルタ領域をその段のマスクが見える帯に絞る（ローカル座標＝背景左上原点。マスクの上端は画面座標 startY）
       const fa = computeDofFilterArea(bg.width, bg.height, g.startY - bg.position.y)
-      lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
+      const area = lv.sprite.filterArea
+      if (area instanceof Rectangle) {
+        area.x = fa.x
+        area.y = fa.y
+        area.width = fa.width
+        area.height = fa.height
+      } else {
+        lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
+      }
       if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
         const tex = this.createDofMaskTexture(g.rampFraction)
         if (tex) {
