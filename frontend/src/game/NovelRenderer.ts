@@ -3998,11 +3998,32 @@ export class NovelRenderer {
     // 古いセーブ等）。到達時と同じ経路で再予約する。[条件:] 内の Jump は resolvedEvents（復元後のフラグで
     // 展開済み）の現在イベントで判定するので、条件が偽なら Jump はここに現れず再予約もしない。
     // 遷移先不在なら通常到達時と同じく warn して stalled に戻る。
+    this.rearmJumpAtCurrentPosition()
+  }
+
+  /**
+   * 現在位置が Jump を指していれば遷移を再予約する (#733)。applyState の末尾と、遅延ロード中の復元が
+   * 失敗して flags だけ反映する分岐（位置が動かない）の両方が通る。Jump の遷移状態は GameState に載せず
+   * 位置から導出する、という規則の実装。遷移先が不在でも stallJump は使わず、通常到達時と同じ経路
+   * （armJump → jumpToScene → 不在確定で stalled）に任せる。
+   */
+  private rearmJumpAtCurrentPosition(): void {
     const restoredJump = this.resolvedEvents[this.eventIndex]
     if (typeof restoredJump === 'object' && restoredJump !== null && 'Jump' in restoredJump) {
       this.markCurrentSceneRead()
       this.armJump(restoredJump.Jump.target)
     }
+  }
+
+  /**
+   * 遅延ロードを伴う非同期復元の開始 (#759)。復元の要求自体を遷移として扱い、予約中の Jump タイマーを
+   * 止めて idle へ戻し（再マウント直後に冒頭 Jump のタイマーが await 中に発火して復元を潰すのを防ぐ）、
+   * 世代を進めて返す。復元が失敗して位置が動かない場合は rearmJumpAtCurrentPosition で再導出する。
+   */
+  private beginRestoreTransition(): number {
+    this.clearJumpTimer()
+    this.jumpState = 'idle'
+    return ++this.transitionGeneration
   }
 
   /**
@@ -5796,6 +5817,9 @@ export class NovelRenderer {
     // 行き止まりにはならないが、保存する価値のある位置ではない）。
     if (this.jumpState !== 'idle') return
     this.saveLoadOverlay.showSave((slot: number) => {
+      // オーバーレイ表示中も autoTimer / skipTimer / [待機] は進み、裏で Jump が予約・停止し得る。
+      // 開く時だけでなく確定時にも再確認する (#759)。
+      if (this.jumpState !== 'idle') return
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
 
@@ -5838,6 +5862,8 @@ export class NovelRenderer {
     // Jump 遷移の予約中 (#733) は quickLoad と同じく開かない（遷移途中に別の位置へ復元させない）。
     if (this.jumpState === 'pending') return
     this.saveLoadOverlay.showLoad((data: SaveSlotData) => {
+      // 表示中に裏で Jump が予約された場合は復元させない（開く時だけでなく確定時にも再確認 #759）。
+      if (this.jumpState === 'pending') return
       this.loadFromSaveData(data)
     })
   }
@@ -5994,9 +6020,9 @@ export class NovelRenderer {
     }
     // resolveMissingSceneAndRestore と同型 (#759): 要求を遷移として世代を進めて捕捉し、await 後に
     // 不一致なら破棄する。同一 sceneId の解決中は共有 Promise を待つ（flags だけで宙に浮かない）。
-    // 破棄された場合の pendingAutoAdvance は、文脈を変えた側（resetAndStartEvents / applyState）が
-    // 自分で確定させるので、ここでは触らない。
-    const generation = ++this.transitionGeneration
+    // 破棄された場合の pendingAutoAdvance は触らない。責任を持つのは、文脈を変えた側のうち
+    // resetAndStartEvents（skipAutoAdvance の有無で毎回 true/false を確定）と restoreToScene（クリア）。
+    const generation = this.beginRestoreTransition()
     try {
       const scenes = await this.requestMissingScene(sceneId)
       if (generation !== this.transitionGeneration) return
@@ -6011,6 +6037,7 @@ export class NovelRenderer {
         // skipAutoAdvance でスキップした自動進行をここで確定的に再開しないと
         // フリーズしたままになる。
         this.resumeAutoAdvanceIfPending()
+        this.rearmJumpAtCurrentPosition()
         return
       }
       this.setJumpSceneIndex(scenes)
@@ -6022,6 +6049,7 @@ export class NovelRenderer {
         )
         // #620: 上と同じ理由。lazy load 後も見つからない失敗確定時点で再開する。
         this.resumeAutoAdvanceIfPending()
+        this.rearmJumpAtCurrentPosition()
         return
       }
       const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
@@ -6035,6 +6063,7 @@ export class NovelRenderer {
       )
       // #620: resolver が reject した失敗確定時点でも同様に再開する。
       this.resumeAutoAdvanceIfPending()
+      if (this.initialized) this.rearmJumpAtCurrentPosition()
     }
   }
 
@@ -6126,9 +6155,10 @@ export class NovelRenderer {
    *
    * `jumpToScene` → `resolveMissingSceneAndJump` と全く同じ「missingSceneResolver で該当 md
    * を非同期取得 → setJumpSceneIndex で allScenes 更新 → 再探索」のパターンをなぞる。
-   * `pendingMissingScenes` も共有し、同一 sceneId の解決が jumpToScene 側と重複しないように
-   * する（restoreSnapshot は新規 renderer に対して起動直後に1回だけ呼ばれる設計のため、実際に
-   * 衝突する場面は考えにくいが、念のため既存のガードをそのまま流用する）。
+   * 解決は `requestMissingScene` 経由で、同一 sceneId の解決中（jumpToScene 側など）はその Promise を
+   * 共有して待つ（flags だけ反映して復元を諦めない）。開始時に `beginRestoreTransition` で予約中の
+   * Jump を止めて世代を進め、await 後に世代が変わっていれば復元を成功・失敗とも破棄する (#759)。
+   * 失敗して位置が動かないときは Jump の遷移状態を位置から再導出する。
    *
    * 解決できてもシーンが見つからない/resolver が失敗した場合は、loadFromSaveData と同じ
    * 「フラグだけ復元して warn」のフォールバックに落ちる。
@@ -6145,7 +6175,7 @@ export class NovelRenderer {
     // 別ロード / setEvents 等で文脈が変わったら古い復元は破棄し、さらに進行中の古い Jump 解決も
     // この要求が後勝ちで無効化する。同一 sceneId が解決中なら requestMissingScene の共有 Promise を
     // 待つので、flags だけ反映して復元を諦める（呼び出し側が宙に浮く）ことはない。
-    const generation = ++this.transitionGeneration
+    const generation = this.beginRestoreTransition()
     try {
       const scenes = await this.requestMissingScene(sceneId)
       if (generation !== this.transitionGeneration) return
@@ -6156,6 +6186,7 @@ export class NovelRenderer {
       if (!scenes) {
         this.gameState.fromJSON(snapshot.flags)
         console.warn(`[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`)
+        this.rearmJumpAtCurrentPosition()
         return
       }
       this.setJumpSceneIndex(scenes)
@@ -6165,6 +6196,7 @@ export class NovelRenderer {
         console.warn(
           `[name-name] restoreSnapshot: lazy load 後もシーンが見つかりません: ${sceneId}`
         )
+        this.rearmJumpAtCurrentPosition()
         return
       }
       this.restoreSnapshotToScene(scene, snapshot)
@@ -6175,6 +6207,7 @@ export class NovelRenderer {
         `[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`,
         err
       )
+      if (this.initialized) this.rearmJumpAtCurrentPosition()
     }
   }
 
