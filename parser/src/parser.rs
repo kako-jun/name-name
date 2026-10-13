@@ -46,6 +46,7 @@ pub fn parse(input: &str) -> Document {
     let mut sprite_style: Option<String> = None;
     let mut window_style: Option<String> = None;
     let mut battle_background_tone: Option<String> = None;
+    let mut battle_background_dof: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -252,6 +253,13 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_background_tone = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_background_dof:") {
+                // RPG 戦闘背景の被写界深度風ぼかし (#753)。`on` / `off` の2択想定。値は parser では
+                // バリデーションせず生文字列で透過し、runtime 側で未知値・空文字は off にフォールバックする。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_background_dof = Some(v);
                 }
             }
             pos += 1;
@@ -1081,6 +1089,7 @@ pub fn parse(input: &str) -> Document {
         sprite_style,
         window_style,
         battle_background_tone,
+        battle_background_dof,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
