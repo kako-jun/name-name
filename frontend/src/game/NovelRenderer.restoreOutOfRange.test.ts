@@ -361,4 +361,22 @@ describe('ライブ切り替えで textIndex を範囲内に戻す (#789)', () =
     const r2 = makeRenderer([scene('p', [narration('一文目。二文目。三文目。')])])
     expect(await r2.restoreSnapshot(snap)).toEqual({ status: 'entered', sceneId: 'p' })
   })
+
+  it('ノベルで2ページ目にいる状態から setDialogStyle("adv") に切り替えると textIndex が範囲内（0）に戻り、スナップショットが復元できる', async () => {
+    const events = [scene('n', [narration('一行だけの本文。')])]
+    const r = makeRenderer(events)
+    r.setDialogStyle('novel')
+    r.startFrom({ sceneId: 'n' })
+    // ノベルの改頁は表示幅の計測（初期化後）が要るので、2ページ目にいる状態を直接作る。
+    ;(r as unknown as { textIndex: number }).textIndex = 1
+    expect(r.getSnapshot().textIndex).toBe(1)
+
+    r.setDialogStyle('adv') // adv では 1 行 = 1 ページなので 1 ページ目へ寄る
+    const snap = r.getSnapshot()
+    expect(snap.textIndex).toBe(0)
+    expect(snap.sentenceIndex).toBe(0)
+
+    const r2 = makeRenderer(events)
+    expect(await r2.restoreSnapshot(snap)).toEqual({ status: 'entered', sceneId: 'n' })
+  })
 })
