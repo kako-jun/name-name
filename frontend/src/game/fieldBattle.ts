@@ -100,7 +100,10 @@ export interface FieldBattleRoster {
 }
 
 /** PartyMemberDef → BattleEntity。隊列 (#747) は side のときだけ反映する（front は隊列を描かない） */
-export function partyDefToBattleEntity(def: PartyMemberDef, layout: BattleLayoutMode): BattleEntity {
+export function partyDefToBattleEntity(
+  def: PartyMemberDef,
+  layout: BattleLayoutMode
+): BattleEntity {
   return {
     id: def.id,
     name: def.name,

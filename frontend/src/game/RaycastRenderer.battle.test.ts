@@ -107,7 +107,10 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     const { i } = makeRenderer()
     i.masterParty = { mage: member('mage'), priest: member('priest') }
     i.battleSettings.layout = 'side'
-    const party = buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout)
+    const party = buildParty(
+      { party: i.masterParty, order: i.masterPartyOrder },
+      i.battleSettings.layout
+    )
     expect(party.map((p) => p.id)).toEqual(['mage', 'priest'])
   })
 
@@ -116,7 +119,11 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     i.masterParty = { b: member('b'), '2': member('2'), a: member('a'), '1': member('1') }
     i.masterPartyOrder = ['b', '2', 'a', '1']
     i.battleSettings.layout = 'side'
-    expect(buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map((p) => p.id)).toEqual(['b', '2', 'a', '1'])
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map(
+        (p) => p.id
+      )
+    ).toEqual(['b', '2', 'a', '1'])
   })
 
   it('side・hero と整数風 ID → hero 先頭・残りは定義順', () => {
@@ -124,18 +131,29 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     i.masterParty = { '3': member('3'), hero: member('hero'), '1': member('1') }
     i.masterPartyOrder = ['3', 'hero', '1']
     i.battleSettings.layout = 'side'
-    expect(buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map((p) => p.id)).toEqual(['hero', '3', '1'])
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map(
+        (p) => p.id
+      )
+    ).toEqual(['hero', '3', '1'])
   })
 
   it('side・masterParty 空 → ハードコード hero 1 人', () => {
     const { i } = makeRenderer()
     i.battleSettings.layout = 'side'
-    expect(buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map((p) => p.id)).toEqual(['hero'])
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map(
+        (p) => p.id
+      )
+    ).toEqual(['hero'])
   })
 
   it('partyDefToBattleEntity が sprite と ステータスを写す', () => {
     const { i } = makeRenderer()
-    const e = partyDefToEntity(member('mage', { sprite: 'p/mage.webp', mp: 9 }), i.battleSettings.layout)
+    const e = partyDefToEntity(
+      member('mage', { sprite: 'p/mage.webp', mp: 9 }),
+      i.battleSettings.layout
+    )
     expect(e.sprite).toBe('p/mage.webp')
     expect(e.maxHp).toBe(e.hp)
     expect(e.mp).toBe(9)
@@ -153,7 +171,10 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
   it('hero 定義の sprite も戦闘 entity に写る', () => {
     const { i } = makeRenderer()
     i.masterParty = { hero: member('hero', { sprite: 'p/hero.webp' }) }
-    expect(buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout)[0].sprite).toBe('p/hero.webp')
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout)[0]
+        .sprite
+    ).toBe('p/hero.webp')
   })
 })
 
@@ -371,13 +392,19 @@ describe('RaycastRenderer: 隊列・奥行き・前景の配線 (#747)', () => {
     const { i } = makeRenderer()
     i.battleSettings.layout = 'side'
     expect('row' in partyDefToEntity(member('a'), i.battleSettings.layout)).toBe(false)
-    expect('row' in partyDefToEntity(member('b', { row: 'front' }), i.battleSettings.layout)).toBe(false)
-    expect('row' in partyDefToEntity(member('c', { row: 'foo' }), i.battleSettings.layout)).toBe(false)
+    expect('row' in partyDefToEntity(member('b', { row: 'front' }), i.battleSettings.layout)).toBe(
+      false
+    )
+    expect('row' in partyDefToEntity(member('c', { row: 'foo' }), i.battleSettings.layout)).toBe(
+      false
+    )
   })
   it('front 配置では row: back でも row キーを載せない', () => {
     const { i } = makeRenderer()
     i.battleSettings.layout = 'front'
-    expect('row' in partyDefToEntity(member('a', { row: 'back' }), i.battleSettings.layout)).toBe(false)
+    expect('row' in partyDefToEntity(member('a', { row: 'back' }), i.battleSettings.layout)).toBe(
+      false
+    )
   })
   it('load() の battleDepth / battleForeground が BattleScreen の opts に流れる', () => {
     vi.spyOn(Assets, 'load').mockResolvedValue({ width: 1, height: 1 } as never)
