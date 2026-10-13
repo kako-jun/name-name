@@ -35,6 +35,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     layout: 'side',
     spriteStyle: 'none',
     windowStyle: 'dark',
+    backgroundTone: 'on',
     backgroundOn: false,
     partyCount: 4,
     enemyCount: 4,
@@ -858,13 +859,13 @@ describe('describeView', () => {
         height: 640,
       })
     ).toBe(
-      'layout=side  spriteStyle=none  windowStyle=ff-blue  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  windowStyle=dark  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
@@ -948,5 +949,25 @@ describe('front は味方 1 人 (N2)', () => {
     expect(
       describeView(view({ layout: 'front', partyCount: 4 }), 1, { width: 1, height: 1 })
     ).toContain('party=1 ')
+  })
+})
+
+describe('backgroundTone (#753)', () => {
+  const base = 'http://localhost/'
+  it("既定は 'on'。on/off を受理し、不正値はエラー", () => {
+    expect(defaultConfig().backgroundTone).toBe('on')
+    for (const v of ['on', 'off'] as const) {
+      const r = parseConfig({ backgroundTone: v }, base)
+      expect(r.ok && r.value.backgroundTone).toBe(v)
+    }
+    const bad = parseConfig({ backgroundTone: 'x' }, base)
+    expect(bad.ok).toBe(false)
+  })
+  it('view から options に反映され、viewsEqual / describeView に含まれる', () => {
+    const v = initialView(defaultConfig())
+    const off = { ...v, backgroundTone: 'off' as const }
+    expect(buildBattleSetup(defaultConfig(), off).options.backgroundTone).toBe('off')
+    expect(viewsEqual(v, off)).toBe(false)
+    expect(describeView(off, 1, { width: 800, height: 450 })).toContain('backgroundTone=off')
   })
 })

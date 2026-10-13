@@ -163,6 +163,15 @@ async function main(): Promise<void> {
   bgChk.addEventListener('change', () => change({ backgroundOn: bgChk.checked }))
   bgLabel.append(bgChk, '背景あり')
   tb.appendChild(bgLabel)
+  const toneLabel = document.createElement('label')
+  const toneChk = document.createElement('input')
+  toneChk.type = 'checkbox'
+  toneChk.id = 'tb-tone'
+  toneChk.addEventListener('change', () =>
+    change({ backgroundTone: toneChk.checked ? 'on' : 'off' })
+  )
+  toneLabel.append(toneChk, '背景を落とす')
+  tb.appendChild(toneLabel)
   const nums = ['1', '2', '3', '4']
   const partySel = select('味方', 'tb-party', nums.slice(0, MAX_PARTY), (v) =>
     change({ partyCount: Number(v) })
@@ -207,6 +216,7 @@ async function main(): Promise<void> {
     styleSel.value = v.spriteStyle
     windowSel.value = v.windowStyle
     bgChk.checked = v.backgroundOn
+    toneChk.checked = v.backgroundTone === 'on'
     partySel.value = String(effectivePartyCount(v))
     enemySel.value = String(v.enemyCount)
     sizeSel.value = v.sizeId
