@@ -1565,6 +1565,12 @@ pub struct Document {
     /// フォールバックする。GUI 専用（TUI は読まない）。frontmatter `sprite_style:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite_style: Option<String>,
+    /// RPG 戦闘画面のウィンドウ配色テーマ (#744)。`"dark"`（既定・後方互換＝現行の半透明黒）/ `"ff-blue"`
+    /// （FF 風の青い帯状グラデーション＋白文字に黒い影）の2択。値は parser でバリデーションせず生文字列で
+    /// 透過する（`sprite_style` と同じ流儀）。未知値・空文字は None 扱いとし、runtime 側で `"dark"` に
+    /// フォールバックする。GUI 専用（TUI は読まない）。frontmatter `window_style:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_style: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 
