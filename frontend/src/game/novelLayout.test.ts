@@ -992,6 +992,27 @@ describe('resolveRpgImagePath (#746)', () => {
     }
     expect(resolveRpgImagePath(base, undefined)).toBeUndefined()
   })
+
+  it('日本語・スペース・クエリ付きのファイル名もエンコードせずそのまま連結する', () => {
+    expect(resolveRpgImagePath(base, 'npc/ひと 1.png')).toBe(`${base}/images/npc/ひと 1.png`)
+    expect(resolveRpgImagePath(base, 'a.png?v=2')).toBe(`${base}/images/a.png?v=2`)
+  })
+
+  it('ベース URL 末尾の複数スラッシュも落とす（// にならない）', () => {
+    expect(resolveRpgImagePath(`${base}///`, 'a.png')).toBe(`${base}/images/a.png`)
+  })
+
+  it('スキーム判定は大文字小文字を区別せず、先頭以外のコロンは相対パスのまま', () => {
+    expect(resolveRpgImagePath(base, 'HTTPS://cdn.example.com/a.png')).toBe(
+      'HTTPS://cdn.example.com/a.png'
+    )
+    expect(resolveRpgImagePath(base, 'sub/a:b.png')).toBe(`${base}/images/sub/a:b.png`)
+  })
+
+  it('解決済みの URL を再度通しても二重にベースが付かない（冪等）', () => {
+    const once = resolveRpgImagePath(base, 'a.png')
+    expect(resolveRpgImagePath(base, once)).toBe(once)
+  })
 })
 
 describe('resolveAssetUrl', () => {
