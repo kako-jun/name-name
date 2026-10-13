@@ -8,26 +8,6 @@ import {
   normalizeWindowStyle,
 } from './windowStyle'
 
-describe('normalizeWindowStyle', () => {
-  it('ff-blue のみ ff-blue、それ以外は dark', () => {
-    expect(normalizeWindowStyle('ff-blue')).toBe('ff-blue')
-    expect(normalizeWindowStyle(' FF-Blue ')).toBe('ff-blue')
-    expect(normalizeWindowStyle('dark')).toBe('dark')
-    expect(normalizeWindowStyle('xxx')).toBe('dark')
-    expect(normalizeWindowStyle('')).toBe('dark')
-    expect(normalizeWindowStyle(null)).toBe('dark')
-    expect(normalizeWindowStyle(undefined)).toBe('dark')
-  })
-})
-
-describe('lerpColor', () => {
-  it('両端と中間', () => {
-    expect(lerpColor(0x000000, 0xffffff, 0)).toBe(0x000000)
-    expect(lerpColor(0x000000, 0xffffff, 1)).toBe(0xffffff)
-    expect(lerpColor(0x000000, 0xfefefe, 0.5)).toBe(0x7f7f7f)
-  })
-})
-
 describe('computeBands', () => {
   it('帯は隙間なく高さを覆い、上端色→下端色になる', () => {
     const bands = computeBands(100, 8, 0x4a5ad8, 0x000a50)
@@ -50,7 +30,7 @@ describe('computeBands', () => {
   })
 })
 
-describe('normalizeWindowStyle (追加観点)', () => {
+describe('normalizeWindowStyle', () => {
   it('ff-blue は ff-blue', () => {
     expect(normalizeWindowStyle('ff-blue')).toBe('ff-blue')
   })
@@ -70,7 +50,7 @@ describe('normalizeWindowStyle (追加観点)', () => {
     expect(normalizeWindowStyle('')).toBe('dark')
     expect(normalizeWindowStyle('   \t\n')).toBe('dark')
   })
-  it.each(['ff_blue', 'ffblue', 'ff-blue2', 'ff‐blue', 'ff−blue', 'ff-blu'])(
+  it.each(['xxx', 'ff_blue', 'ffblue', 'ff-blue2', 'ff‐blue', 'ff−blue', 'ff-blu'])(
     '似た綴り %s は dark',
     (v) => {
       expect(normalizeWindowStyle(v)).toBe('dark')
@@ -87,13 +67,17 @@ describe('normalizeWindowStyle (追加観点)', () => {
   })
 })
 
-describe('lerpColor (追加観点)', () => {
+describe('lerpColor', () => {
   it('t=0 は a、t=1 は b', () => {
     expect(lerpColor(0x123456, 0xabcdef, 0)).toBe(0x123456)
     expect(lerpColor(0x123456, 0xabcdef, 1)).toBe(0xabcdef)
   })
   it('t=0.5 は 127.5 を 128 に丸める', () => {
     expect(lerpColor(0x000000, 0xffffff, 0.5)).toBe(0x808080)
+    expect(lerpColor(0x000000, 0xfefefe, 0.5)).toBe(0x7f7f7f)
+  })
+  it('NaN の t は 0 扱い（a を返す）', () => {
+    expect(lerpColor(0x123456, 0xabcdef, NaN)).toBe(0x123456)
   })
   it('チャンネルは独立に補間される', () => {
     expect(lerpColor(0xff0000, 0x00ff00, 1)).toBe(0x00ff00)
@@ -117,7 +101,7 @@ describe('lerpColor (追加観点)', () => {
   })
 })
 
-describe('computeBands (追加観点)', () => {
+describe('computeBands', () => {
   it('高さ 1..60 総当たりで 連続・各 h>=1・合計=高さ・y 昇順', () => {
     for (let height = 1; height <= 60; height++) {
       const bands = computeBands(height)

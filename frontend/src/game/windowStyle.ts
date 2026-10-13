@@ -25,7 +25,10 @@ export const FF_BLUE_TOP_COLOR = 0x4a5ad8
 export const FF_BLUE_BOTTOM_COLOR = 0x000a50
 /** ff-blue パネルの不透明度（帯が背景に透けすぎないよう、dark よりやや高め） */
 export const FF_BLUE_PANEL_ALPHA = 0.95
-/** ff-blue の文字の影（黒）。距離は px、alpha は 0〜1 */
+/**
+ * ff-blue の文字の影（黒）。距離は px、alpha は 0〜1。
+ * distance は影のオフセットというサイズ値だが、文字の装飾でありパネル寸法には影響しないためテーマ側に置いて許容する。
+ */
 export const FF_BLUE_TEXT_SHADOW = {
   color: 0x000000,
   alpha: 1,
@@ -43,8 +46,9 @@ export interface Band {
   color: number
 }
 
-/** 2 色を t(0〜1) で線形補間する（チャンネルごとに丸める） */
+/** 2 色を t(0〜1) で線形補間する（チャンネルごとに丸める）。範囲外はクランプ、NaN は 0（= a） */
 export function lerpColor(a: number, b: number, t: number): number {
+  if (!Number.isFinite(t)) t = 0
   t = Math.min(1, Math.max(0, t))
   const ch = (shift: number) => {
     const ca = (a >> shift) & 0xff
@@ -57,6 +61,7 @@ export function lerpColor(a: number, b: number, t: number): number {
 /**
  * 高さ `height` のパネルを `bandCount` 本の横縞に分け、上=top → 下=bottom の色を段階的に割り当てて返す。
  * 帯の境界は整数 px に丸め、隙間・重なりが出ないよう最後の帯は下端まで埋める。
+ * `height` は整数 px 前提（小数は切り捨てる）。
  * `height <= 0` または `bandCount < 1` は空配列。高さより帯数が多いときは帯数を高さまで減らす（高さ 0 の帯を作らない）。
  */
 export function computeBands(
