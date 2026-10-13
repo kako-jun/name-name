@@ -66,12 +66,15 @@ import { isSceneIdConfined } from './sceneConfinement'
 import {
   carryPolicyFor,
   createDeferred,
+  gateReason,
   isTransitionGated,
   type Deferred,
   type GatedOperation,
+  type LoadOrigin,
   type PendingEntry,
   type SceneEntryRequest,
   type SceneEntryResult,
+  type TransitionGateState,
 } from './sceneEntry'
 import {
   CameraElevation,
@@ -169,9 +172,6 @@ const PRELOAD_MAX_TEXT_EVENTS = Infinity
 
 /** canvas.style.touchAction に実際に設定する値 (#434)。novel 型はこの2値しか使わない。 */
 export type CanvasTouchAction = 'none' | 'pan-y'
-
-/** ロードの起点 (#765): 成功トーストの要否が変わる。quick=F8、menu=ロードメニュー、auto=マウント時の自動クイックロード。 */
-type LoadOrigin = 'quick' | 'menu' | 'auto'
 
 const NOVEL_CANVAS_TOUCH_ACTION: CanvasTouchAction = 'pan-y'
 
@@ -1481,7 +1481,7 @@ export class NovelRenderer {
         deferred.resolve({ status: 'failed', reason: 'not-found' })
         return
       }
-      void this.enterScene({ kind: 'progress', sceneId: target, origin: 'jump' }).then(
+      void this.runEntry({ kind: 'progress', sceneId: target, origin: 'jump' }).then(
         deferred.resolve
       )
     }, 0)
@@ -1580,12 +1580,16 @@ export class NovelRenderer {
    * この述語だけを見る（#731 の再発防止: 状態の組み合わせ判定を各所に散らさない）。
    */
   private isTransitionGated(op: GatedOperation): boolean {
-    return isTransitionGated(op, {
+    return isTransitionGated(op, this.gateState())
+  }
+
+  private gateState(): TransitionGateState {
+    return {
       waitingForChoice: this.waitingForChoice,
       waitingForWait: this.waitingForWait,
       jumpState: this.jumpState,
       hasPendingEntry: this.pendingEntry !== null,
-    })
+    }
   }
 
   /**
@@ -1657,13 +1661,35 @@ export class NovelRenderer {
         return { status: 'superseded' } as const
       }
       if (this.pendingEntry?.generation === generation) this.pendingEntry = null
-      return this.finishEntry(
-        req,
-        resolved.status === 'loaded' ? this.indexLoaded(sceneId, resolved.scenes) : resolved
-      )
+      // 適用の例外で Promise を reject させない（待っている側が止まる・未処理 rejection になる）。
+      try {
+        return this.finishEntry(
+          req,
+          resolved.status === 'loaded' ? this.indexLoaded(sceneId, resolved.scenes) : resolved
+        )
+      } catch (err) {
+        console.error('[name-name] シーン入場の適用中に例外が発生しました', err)
+        this.stallJump()
+        return { status: 'failed', reason: 'resolver-error' } as const
+      }
     })()
     this.pendingEntry = { generation, kind: req.kind, sceneId, promise }
     return promise
+  }
+
+  /**
+   * 発火して忘れる呼び出し元（Jump のタイマー・選択肢の確定）用の入口。同期の適用が throw しても、
+   * 呼び出し元が待つ Promise を必ず解決し（失敗として）、未処理の rejection にしない。
+   */
+  private runEntry(req: SceneEntryRequest): Promise<SceneEntryResult> {
+    try {
+      return this.enterScene(req)
+    } catch (err) {
+      console.error('[name-name] シーン入場中に例外が発生しました', err)
+      this.pendingEntry = null
+      this.stallJump()
+      return Promise.resolve({ status: 'failed', reason: 'resolver-error' })
+    }
   }
 
   /**
@@ -1817,6 +1843,10 @@ export class NovelRenderer {
     }
     // 現在位置が Jump でなければ再予約できない。pending を残すと詰むので確定させる（防御）。
     if (this.jumpState === 'pending') this.jumpState = 'idle'
+    // 入場を待つ間はゲートでオート送り・スキップのタイマーが弾かれ、再予約されずに止まっていた。
+    // 本文表示中の位置なら、ON のままのモードを再開する (#734)。
+    if (this.autoMode) this.dialogBox.setOnTypingDone(() => this.scheduleAutoAdvance())
+    if (this.skipMode) this.scheduleSkipStep()
   }
 
   /**
@@ -3256,7 +3286,7 @@ export class NovelRenderer {
       this.dialogBox.setOnTypingDone(null)
       // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
       this.audioManager.stopVoice()
-    } else if (!this.isTransitionGated('navigate') && !this.isAtScriptEnd()) {
+    } else if (!this.isTransitionGated('autoAdvance') && !this.isAtScriptEnd()) {
       // 会話中にオート ON にした瞬間の即時反映 (#302)。
       // setOnTypingDone が「タイプ中なら完了時に発火・完了済みなら即発火」を一手に引き受ける。
       // choice/wait 待機中・スクリプト末尾は対象外（進める先がない）。
@@ -4615,7 +4645,8 @@ export class NovelRenderer {
     while (this.eventIndex < this.resolvedEvents.length) {
       if (getTextEvent(this.resolvedEvents[this.eventIndex])) break
       this.processDirective(this.resolvedEvents[this.eventIndex])
-      // Choice / Wait / Jump 予約中は進行を止める
+      // Choice / Wait / Jump 予約中は進行を止める。ユーザー操作のゲートではなく、この同期ループ自身が
+      // 今立てた状態を見るだけ（入場中は同期の適用中には立たない）ので isTransitionGated は使わない。
       if (this.waitingForChoice || this.waitingForWait || this.jumpState === 'pending') break
       this.eventIndex++
     }
@@ -5097,9 +5128,20 @@ export class NovelRenderer {
       )
       this.choiceOverlay.show(
         event.Choice.options,
-        (jump: string) => {
-          // 入場中（別の遷移・復元の遅延ロードを待っている間）は確定を受け付けない。選択肢は表示されたまま (#734)。
-          if (this.isTransitionGated('confirmChoice')) return
+        (jump: string): boolean => {
+          // 入場中（別の遷移・復元の遅延ロードを待っている間）は確定を受け付けない。選択肢は表示されたまま、
+          // 確定音も鳴らさない (#734。false を返すと ChoiceOverlay は確定音を出さない)。
+          if (this.isTransitionGated('confirmChoice')) return false
+          // 遷移先が確実に無い（解決手段も無い）なら、選択肢を閉じずその場に留める。閉じてから再表示すると
+          // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
+          if (
+            isSceneIdConfined(jump, this.confinedSceneIds) &&
+            !this.missingSceneResolver &&
+            !findSceneById(this.allScenes, jump)
+          ) {
+            console.warn(`[name-name] シーンが見つからない: ${jump}`)
+            return false
+          }
           // 同フレームの advance を抑制。enterScene が例外を投げても次の
           // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
           this.justSelectedChoice = true
@@ -5109,7 +5151,8 @@ export class NovelRenderer {
           this.waitingForChoice = false
           this.choiceOverlay.hide()
           // 進行として入場する。遷移先が見つからなければ、入口が選択肢を再表示する (#734)。
-          void this.enterScene({ kind: 'progress', sceneId: jump, origin: 'choice' })
+          void this.runEntry({ kind: 'progress', sceneId: jump, origin: 'choice' })
+          return true
         },
         this.choiceStyle,
         this.readSceneProgress,
@@ -5351,15 +5394,28 @@ export class NovelRenderer {
       // Wait 中もスキップを停止する（Wait を無視するのは仕様違反） (#140)
       this.setSkipMode(false)
       this.waitingForWait = true
-      this.waitTimer = this.time.setTimeout(() => {
-        this.waitTimer = null
-        if (!this.initialized) return
+      const resume = (): void => {
         this.waitingForWait = false
         this.eventIndex++
         this.processUntilNextTextEvent()
         // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
         // 立ち絵 sprite を同期生成してからスナップショットを記録（afterShow）する。
         this.showCharacterThenRender(() => this.pushSnapshot())
+      }
+      this.waitTimer = this.time.setTimeout(() => {
+        this.waitTimer = null
+        if (!this.initialized) return
+        // 入場（復元の遅延ロードなど）を待っている間に進めると、Jump の予約などで世代が進み、
+        // ユーザーのロードが黙って破棄される (#734)。決着を待ち、その間に別の文脈へ移っていたら
+        // （復元の成功で待機が解除された等）何もしない。
+        const entry = this.pendingEntry
+        if (entry) {
+          void entry.promise.then(() => {
+            if (this.initialized && this.waitingForWait && this.waitTimer === null) resume()
+          })
+          return
+        }
+        resume()
       }, event.Wait.ms)
       return
     }
@@ -6024,11 +6080,12 @@ export class NovelRenderer {
    * データがない・復元できない場合は false を返す。
    */
   quickLoad(origin: 'quick' | 'auto' = 'quick'): boolean {
-    if (this.isTransitionGated('navigate')) {
+    const blocked = gateReason('navigate', this.gateState())
+    if (blocked) {
       // 弾かれた理由に合った通知を出す（手動 F8 のみ。マウント時の自動ロードは無言）(#765)。
       if (origin === 'quick') {
         this.showToast(
-          this.jumpState === 'pending' || this.pendingEntry !== null
+          blocked === 'jump' || blocked === 'entry'
             ? '場面転換中のためロードできません'
             : 'この場面ではロードできません'
         )
@@ -6778,13 +6835,13 @@ export class NovelRenderer {
    */
   private scheduleAutoAdvance(): void {
     if (!this.autoMode) return
-    if (this.isTransitionGated('navigate')) return
+    if (this.isTransitionGated('autoAdvance')) return
     if (this.autoTimer) {
       this.time.clearTimeout(this.autoTimer)
     }
     this.autoTimer = this.time.setTimeout(() => {
       this.autoTimer = null
-      if (this.autoMode && !this.isTransitionGated('navigate')) {
+      if (this.autoMode && !this.isTransitionGated('autoAdvance')) {
         this.advance()
       }
     }, this.autoWaitMs)

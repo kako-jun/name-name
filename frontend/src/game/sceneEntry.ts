@@ -9,6 +9,9 @@
 import type { NovelGameState } from './GameState'
 
 /** シーン入場の種類。進行 = 物語の流れの中の遷移、新規開始 = 文脈を捨てて始める、復元 = 保存状態へ戻す。 */
+/** ロードの起点 (#765): 成功トーストの要否が変わる。quick=F8、menu=ロードメニュー、auto=マウント時の自動クイックロード。 */
+export type LoadOrigin = 'quick' | 'menu' | 'auto'
+
 export type EntryKind = 'progress' | 'fresh' | 'restore'
 
 /**
@@ -25,13 +28,9 @@ export type SceneEntryRequest =
   | { kind: 'progress'; sceneId: string; origin: ProgressOrigin }
   // source: 失敗時の警告文言と、復元元に応じた後処理（save は失敗トースト・自動進行の再開、
   // snapshot は storyEnded の重複発火防止 #460）を分けるため。
-  // origin: セーブ由来のロード元（成功トーストの出し分け #765）。snapshot では使わない。
-  | {
-      kind: 'restore'
-      state: NovelGameState
-      source: 'save' | 'snapshot'
-      origin?: 'quick' | 'auto' | 'menu'
-    }
+  // origin はセーブ由来のロード元だけが持つ（成功トーストの出し分け #765）。
+  | { kind: 'restore'; state: NovelGameState; source: 'save'; origin: LoadOrigin }
+  | { kind: 'restore'; state: NovelGameState; source: 'snapshot' }
 
 /** 入場の結果。 */
 export type SceneEntryResult =
@@ -82,6 +81,7 @@ export interface TransitionGateState {
  * - quickSave: クイックセーブ。停止中の Jump も止める
  * - saveMenu: セーブメニューを開く／確定する
  * - navigate: goBack・seekTo・クイックロード。停止中の Jump では使える
+ * - autoAdvance: オート送り・スキップのタイマー。規則は navigate と同じだが、用途を分けて名前を持つ
  * - loadMenu: ロードメニューを開く／確定する
  * - confirmChoice: 選択肢の確定（選択肢が出ていること自体は前提）
  */
@@ -90,6 +90,7 @@ export type GatedOperation =
   | 'quickSave'
   | 'saveMenu'
   | 'navigate'
+  | 'autoAdvance'
   | 'loadMenu'
   | 'confirmChoice'
 
@@ -106,22 +107,32 @@ const GATE_RULES: Record<GatedOperation, GateRule> = {
   quickSave: { choice: true, wait: true, jump: 'any' },
   saveMenu: { choice: false, wait: false, jump: 'any' },
   navigate: { choice: true, wait: true, jump: 'pending' },
+  autoAdvance: { choice: true, wait: true, jump: 'pending' },
   loadMenu: { choice: false, wait: false, jump: 'pending' },
   confirmChoice: { choice: false, wait: false, jump: 'pending' },
 }
 
+/** ゲートが操作を止めている理由。entry/jump は「場面転換中」、choice/wait は「この場面では不可」。 */
+export type GateReason = 'entry' | 'jump' | 'choice' | 'wait'
+
 /**
- * 遷移中のゲート: この操作を今は受け付けてはいけないか。
+ * 遷移中のゲート: この操作を今は受け付けてはいけない理由を返す（止めないなら null）。
  * `waitingForChoice`・`waitingForWait`・`jumpState`・入場中を合成する唯一の場所で、
- * 呼び出し側はこの述語だけを見る（状態の組み合わせ判定を各所に散らさない）。
+ * 呼び出し側はこの関数（または `isTransitionGated`）だけを見る
+ * （状態の組み合わせ判定を各所に散らさない）。
  */
-export function isTransitionGated(op: GatedOperation, s: TransitionGateState): boolean {
-  if (s.hasPendingEntry) return true
+export function gateReason(op: GatedOperation, s: TransitionGateState): GateReason | null {
+  if (s.hasPendingEntry) return 'entry'
   const rule = GATE_RULES[op]
-  if (rule.choice && s.waitingForChoice) return true
-  if (rule.wait && s.waitingForWait) return true
-  if (rule.jump === 'any' ? s.jumpState !== 'idle' : s.jumpState === 'pending') return true
-  return false
+  if (rule.jump === 'any' ? s.jumpState !== 'idle' : s.jumpState === 'pending') return 'jump'
+  if (rule.choice && s.waitingForChoice) return 'choice'
+  if (rule.wait && s.waitingForWait) return 'wait'
+  return null
+}
+
+/** 遷移中のゲート: この操作を今は受け付けてはいけないか。 */
+export function isTransitionGated(op: GatedOperation, s: TransitionGateState): boolean {
+  return gateReason(op, s) !== null
 }
 
 /** 入場中ゲート。進行中の入場の Promise を誰でも待てるように持つ。 */

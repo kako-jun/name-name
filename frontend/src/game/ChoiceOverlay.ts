@@ -396,7 +396,7 @@ interface FocusableChoiceEntry {
 }
 
 export class ChoiceOverlay extends Container {
-  private onSelect: ((jump: string) => void) | null = null
+  private onSelect: ((jump: string) => boolean | void) | null = null
   private onScrollableChange: ((scrollable: boolean) => void) | null = null
   private audioManager: AudioManager | null = null
   private renderResolution = 1
@@ -622,7 +622,7 @@ export class ChoiceOverlay extends Container {
    */
   show(
     options: ChoiceOption[],
-    onSelect: (jump: string) => void,
+    onSelect: (jump: string) => boolean | void,
     style?: string | null,
     readJumps?: ReadonlySet<string>,
     columns?: number | null,
@@ -1028,8 +1028,9 @@ export class ChoiceOverlay extends Container {
    */
   private confirmChoice(jump: string): void {
     this.audioManager?.ensureContext()
+    // コールバックが false を返したら確定は受け付けられていない（遷移中のゲート等）ので音を鳴らさない。
+    if (this.onSelect?.(jump) === false) return
     this.audioManager?.playSelectTone()
-    this.onSelect?.(jump)
   }
 
   /**

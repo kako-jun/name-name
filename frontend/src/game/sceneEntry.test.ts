@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   carryPolicyFor,
   createDeferred,
+  gateReason,
   isTransitionGated,
   type GatedOperation,
   type TransitionGateState,
@@ -45,6 +46,7 @@ describe('isTransitionGated (#734)', () => {
     'quickSave',
     'saveMenu',
     'navigate',
+    'autoAdvance',
     'loadMenu',
     'confirmChoice',
   ]
@@ -84,6 +86,44 @@ describe('isTransitionGated (#734)', () => {
       expect(isTransitionGated('saveMenu', s)).toBe(false)
       expect(isTransitionGated('loadMenu', s)).toBe(false)
       expect(isTransitionGated('confirmChoice', s)).toBe(false)
+    }
+  })
+})
+
+describe('gateReason (#734)', () => {
+  const idle: TransitionGateState = {
+    waitingForChoice: false,
+    waitingForWait: false,
+    jumpState: 'idle',
+    hasPendingEntry: false,
+  }
+
+  it('止めない場合は null、止める場合は理由を返す（入場中が最優先）', () => {
+    expect(gateReason('advance', idle)).toBeNull()
+    expect(gateReason('advance', { ...idle, waitingForChoice: true })).toBe('choice')
+    expect(gateReason('advance', { ...idle, waitingForWait: true })).toBe('wait')
+    expect(gateReason('advance', { ...idle, jumpState: 'stalled' })).toBe('jump')
+    expect(gateReason('navigate', { ...idle, jumpState: 'pending' })).toBe('jump')
+    expect(
+      gateReason('navigate', {
+        ...idle,
+        hasPendingEntry: true,
+        jumpState: 'pending',
+        waitingForWait: true,
+      })
+    ).toBe('entry')
+  })
+
+  it('autoAdvance は navigate と同じ規則', () => {
+    for (const s of [
+      idle,
+      { ...idle, waitingForChoice: true },
+      { ...idle, waitingForWait: true },
+      { ...idle, jumpState: 'pending' as const },
+      { ...idle, jumpState: 'stalled' as const },
+      { ...idle, hasPendingEntry: true },
+    ]) {
+      expect(isTransitionGated('autoAdvance', s)).toBe(isTransitionGated('navigate', s))
     }
   })
 })

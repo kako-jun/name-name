@@ -104,7 +104,7 @@ function makeRenderer(
 
 /** Choice に到達させ、overlay に渡された確定コールバックと、show の呼び出し回数を返す。 */
 function reachChoice(r: NovelRenderer): {
-  confirm: (jump: string) => void
+  confirm: (jump: string) => boolean | void
   showCount: () => number
 } {
   const calls: unknown[][] = []
@@ -113,7 +113,7 @@ function reachChoice(r: NovelRenderer): {
   })
   r.advance()
   expect(internals(r).waitingForChoice).toBe(true)
-  const confirm = calls[calls.length - 1][1] as (jump: string) => void
+  const confirm = calls[calls.length - 1][1] as (jump: string) => boolean | void
   return { confirm, showCount: () => calls.length }
 }
 
@@ -220,15 +220,19 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     expect(internals(r).waitingForChoice).toBe(true)
   })
 
-  it('resolver が無く遷移先が不在でも、選択肢が再表示される', () => {
+  it('resolver が無く遷移先が確実に無いときは、選択肢を閉じず（再表示もせず）その場に留める', () => {
     const r = makeRenderer(null)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hideSpy = vi.spyOn(internals(r).choiceOverlay, 'hide')
     const { confirm, showCount } = reachChoice(r)
 
-    confirm('nowhere')
+    expect(confirm('nowhere')).toBe(false)
 
-    expect(showCount()).toBe(2)
+    expect(showCount()).toBe(1)
+    expect(hideSpy).not.toHaveBeenCalled()
     expect(internals(r).waitingForChoice).toBe(true)
+    r.advance()
+    expect(r.getCurrentSceneId()).toBe('hub')
   })
 
   it('選択肢由来の進行の待機中にプログラム発の復元で置き換えられ、その復元も失敗しても、選択肢が再表示される', async () => {

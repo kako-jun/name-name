@@ -320,7 +320,7 @@ export async function exportVideo(
   renderer.setAutoMode(true)
   // 書き出しは新規開始: ライブプレビューで鳴っていた BGM を録画へ持ち込まない・同曲でも頭出しする (#724)
   renderer.stopBgmForFreshStart()
-  renderer.jumpToScene(startSceneId)
+  void renderer.jumpToScene(startSceneId)
   onProgress?.('録画準備中')
 
   await new Promise((r) => setTimeout(r, preRollMs))
