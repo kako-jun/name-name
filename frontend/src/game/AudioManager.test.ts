@@ -356,3 +356,59 @@ describe('AudioManager.playVoice spatial graph (#696)', () => {
     expect(secondGain.disconnect).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('AudioManager.stopBgm とロード中 playBgm の競合 (#730)', () => {
+  function setup() {
+    const manager = new AudioManager()
+    const audio = makeVoiceAudioContext()
+    const internals = manager as unknown as {
+      ctx: AudioContext
+      currentBgmUrl: string | null
+      loadAudio: (url: string) => Promise<AudioBuffer>
+    }
+    internals.ctx = audio.context as unknown as AudioContext
+    const loads = new Map<string, ReturnType<typeof deferred<AudioBuffer>>>()
+    vi.spyOn(internals, 'loadAudio').mockImplementation((url) => {
+      let d = loads.get(url)
+      if (!d) {
+        d = deferred<AudioBuffer>()
+        loads.set(url, d)
+      }
+      return d.promise
+    })
+    return { manager, audio, internals, loads }
+  }
+
+  it('ロード中に stopBgm すると、ロード完了後も再生されず currentBgmUrl は null のまま', async () => {
+    const { manager, audio, internals, loads } = setup()
+    const req = manager.playBgm('x.ogg')
+    manager.stopBgm(0)
+    loads.get('x.ogg')!.resolve({} as AudioBuffer)
+    await req
+    expect(audio.source.start).not.toHaveBeenCalled()
+    expect(internals.currentBgmUrl).toBeNull()
+  })
+
+  it('stopBgm 後の playBgm(y) は通常どおり再生される', async () => {
+    const { manager, audio, internals, loads } = setup()
+    const first = manager.playBgm('x.ogg')
+    manager.stopBgm(0)
+    const second = manager.playBgm('y.ogg')
+    loads.get('y.ogg')!.resolve({} as AudioBuffer)
+    await second
+    loads.get('x.ogg')!.resolve({} as AudioBuffer)
+    await first
+    expect(audio.source.start).toHaveBeenCalledTimes(1)
+    expect(internals.currentBgmUrl).toBe('y.ogg')
+  })
+
+  it('停止せず同一 URL を再指定した場合は従来どおり継続する', async () => {
+    const { manager, audio, internals, loads } = setup()
+    const first = manager.playBgm('x.ogg')
+    loads.get('x.ogg')!.resolve({} as AudioBuffer)
+    await first
+    await manager.playBgm('x.ogg')
+    expect(audio.source.start).toHaveBeenCalledTimes(1)
+    expect(internals.currentBgmUrl).toBe('x.ogg')
+  })
+})
