@@ -659,7 +659,7 @@ function EditorScreen({
         sceneId,
         entryPath,
         sortedPaths: sortedScriptPathsRef.current,
-        docs,
+        docs: () => docs,
         loadDoc: async (path) => {
           const loaded = await loadOtherDoc(path)
           if (loaded) docs.set(path, loaded)
