@@ -175,7 +175,7 @@ HUD（`loadDebugInfo`）の `debug_scene: <id> → resolved / not found (…)` �
 `?debug_scene=` は `startFrom({ …, confinedSceneIds: null })`（confinement なし）、`?scene=` は
 `startFrom({ sceneId, confinedSceneIds })` で、confinement は入場属性として解決できた時点で置き換わる。
 `?debug_scene=` が入場できなければ `?scene=` の confinement が保たれる（#726 の「後勝ち」を事前解決なしで再現）。
-`?debug_scene=` / `?debug_script=` / `?scene=` のいずれかがあるときは自動クイックロードをしない。
+`?debug_scene=` / `?debug_script=` / `?scene=` のいずれかがあるときは自動クイックロードをしない。`?scene=` と `?debug_script=` を併用するときは `?scene=` の confinement を外す（`confinedSceneIds: null`、#729）。
 `?scene=` の `startFrom` は `eventIndex=0`（シーン先頭）固定なので、**通常入場と同じ経路**
 （`startScene` → `resetAndStartEvents`）に乗り、冒頭の `[背景:]`/`[BGM:]` を実行し最初の
 話者の立ち絵を出してから最初のテキストで止まる（#399）。従来は宣言的復元の `restoreToScene` に
@@ -477,7 +477,7 @@ interface NovelGameState {
 横断的な機能を足したり変えたりするときは、先にこの表の全マスを埋める。
 入場を「進行」「新規開始」「復元」の3種に分ける設計と、その移行計画は [ADR 0003](./adr/0003-scene-entry-kinds.md) にある。表の「あるべき挙動」は、ADR 0003 §2 の種類別の表から導いたもの。
 
-- 実装状況: PR1（#734）で進行と復元の入場を単一の入口 `enterScene` に通した。表の ⚠ のうち [4]（遷移中のゲート。復元中の `advance` を含む）・[5]（選択肢の遷移先不在）・[6]（要求時に世代を進めない）・[13]（遅延ロード後処理の重複）は解消済みで、表の該当セルの関数名・行番号（`resolveMissingSceneAndJump`・`loadFromSaveDataMissingScene`・`resolveMissingSceneAndRestore`・`beginRestoreTransition`・`drainPendingJump`）は PR1 以前のもの。新規開始の経路のうち `startFrom`（G3〜G5。`?scene=`・`?debug_scene=`）と初期入場は PR2（#734）で単一の入口へ移した: [1]（`startFrom` が遅延ロードを通らない）・[7]（新規開始が背景等を持ち越す）・[8]（初期入場が1回で済まない）・[14]（fluid 再マウントで debug 起点を再実行する）は解消済みで、G3・G4・G5・G9 の該当セル（`PS` の事前解決・`setConfinedSceneIds`・`skipAutoAdvance`・`setEvents` がエントリ冒頭を実行済み、など）は PR2 以前のもの。動画書き出し（G11）は PR4（#734）で `startFrom` へ移し、[9] は解消済み。G11 行のセルは PR4 以前のもの。「はじめから」（G12）、文書の(再)供給（G13）は後続の PR で移す
+- 実装状況: PR1（#734）で進行と復元の入場を単一の入口 `enterScene` に通した。表の ⚠ のうち [4]（遷移中のゲート。復元中の `advance` を含む）・[5]（選択肢の遷移先不在）・[6]（要求時に世代を進めない）・[13]（遅延ロード後処理の重複）は解消済みで、表の該当セルの関数名・行番号（`resolveMissingSceneAndJump`・`loadFromSaveDataMissingScene`・`resolveMissingSceneAndRestore`・`beginRestoreTransition`・`drainPendingJump`）は PR1 以前のもの。新規開始の経路のうち `startFrom`（G3〜G5。`?scene=`・`?debug_scene=`）と初期入場は PR2（#734）で単一の入口へ移した: [1]（`startFrom` が遅延ロードを通らない）・[7]（新規開始が背景等を持ち越す）・[8]（初期入場が1回で済まない）・[14]（fluid 再マウントで debug 起点を再実行する）は解消済みで、G3・G4・G5・G9 の該当セル（`PS` の事前解決・`setConfinedSceneIds`・`skipAutoAdvance`・`setEvents` がエントリ冒頭を実行済み、など）は PR2 以前のもの。PR3（#734）で [2]（`playScript` の choice が遅延ロードを待たない）・[3]（`?scene=` と `debug_script` の併用で confinement が残る）・[12]（GUI/TUI の debug 起点の不一致）を解消した（G6・T4 の該当セルは PR3 以前のもの）。動画書き出し（G11）は PR4（#734）で `startFrom` へ移し、[9] は解消済み。G11 行のセルは PR4 以前のもの。「はじめから」（G12）、文書の(再)供給（G13）は後続の PR で移す
 
 - 現状の欄は、関数名と行番号で示す。行番号は 2026-10-13 時点（main `dae752b`）の目安で、±数行ずれることがある
 - 略号: `NR` = `frontend/src/game/NovelRenderer.ts`、`NP` = `frontend/src/components/NovelPlayer.tsx`、`PS` = `frontend/src/screens/PlayerScreen.tsx`、`VE` = `frontend/src/game/VideoExporter.ts`、`PB` = `tui/src/playback.rs`
@@ -493,7 +493,7 @@ interface NovelGameState {
 | G3 | `?scene=` | `PS` L638 で事前解決 → `NP` L783 `startFrom({sceneId})` → index 0 なので `startScene`（L1489） | 新規開始 |
 | G4 | `?debug_scene=`（index 0） | `PS` L652 で事前解決 → `NP` L819 `startFrom` → `startScene` | 新規開始 |
 | G5 | `?debug_scene=`（index 指定）・`startFrom` の index 指定 | `startFrom`（L6292）→ 最小 state で `restoreToScene`（L5908） | 新規開始（位置を指定） |
-| G6 | `?debug_script=` | `NP` L817 `playScript`（L3637）。advance は `advance`＋`drainPendingJump`、choice は `jumpToScene`（L3659） | 進行（choice）。土台は G3 または エントリ |
+| G6 | `?debug_script=` | `NP` L817 `playScript`（L3637）。advance は `advance`＋`awaitPendingEntry`、choice は `await jumpToScene`（`entered` 以外なら打ち切り、#734 PR3） | 進行（choice）。土台は G3 または エントリ |
 | G7 | クイックロード | F8（`NP` L1114）・マウント時の自動実行（`NP` L791）→ `quickLoad`（L5797）→ `loadFromSaveData`（L5979） | 復元 |
 | G8 | ロードメニュー | `openLoadMenu`（L5881）→ `loadFromSaveData` | 復元 |
 | G9 | fluid 再マウント | `NP` L772 `restoreSnapshot`（L6120） | 復元 |
@@ -504,7 +504,7 @@ interface NovelGameState {
 | T1 | 選択肢の確定（TUI） | `select_current_choice`（`PB` L1679）→ `jump_to_scene_id`（L1705）→ `jump_to_scene_idx`（L1762） | 進行 |
 | T2 | `[ジャンプ:]`（TUI） | `advance` の `pending_jump`（`PB` L1516）→ `jump_to_scene_id` | 進行 |
 | T3 | 自動クイックロード（TUI） | `save.rs` `restore_playback`（L121）→ `set_flags`＋`jump_to_scene_id_with_continuation`（`PB` L1733） | 復元（シーン先頭の粒度） |
-| T4 | `--debug-scene`（TUI） | `main.rs` L155 `jump_to_scene_id`（自動クイックロードの後） | 新規開始 |
+| T4 | `--debug-scene`（TUI） | `main.rs` `apply_startup_entry` → `start_fresh_at`（クイックロード・自動クイックセーブなし、#734 PR3） | 新規開始 |
 | T5 | 起動・`--new-game`（TUI） | `Playback::from_merged_document`／`from_document` | 新規開始（エントリ） |
 
 #### 遅延ロード・持ち越し・flags・confinement

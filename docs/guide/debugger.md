@@ -32,7 +32,7 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 `debug_scene` が指すシーンがエントリ `script.md` に無く、`scriptsDir` 配下のサブ MD にある場合も
 動作する（#726）。`NovelPlayer` の初期入場が `startFrom` で入場し、その中でサブ MD を遅延ロード
 （`missingSceneResolver`）して解決する（`PlayerScreen` は `debug_scene` を事前解決しない、#734）。
-`debug_scene` は confinement なしで入場する。`?scene=` と併用しても、`debug_scene` に入場できれば
+`debug_scene` は confinement なしで入場する。`debug_script` を指定した場合も、`?scene=` と併用したときの confinement は外れる（リプレイの選択肢が別ファイルへ移っても終劇にならない、#729）。`?scene=` と併用しても、`debug_scene` に入場できれば
 confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の選択肢ジャンプが終劇にならない）。
 入場できなかった場合（存在しない ID）は `?scene=` の入場に進み、その confinement が保たれる。
 `?scene=` も無ければエントリ先頭から開始し、デバッグ HUD に
@@ -78,7 +78,7 @@ http://localhost:5173/play/<id>?debug_unlock_all=1
 | トークン | 動作 |
 |---|---|
 | `advance` | 次のテキスト／次のイベントへ進む（クリック1回相当） |
-| `choice:<jump>` | 選択肢表示をスキップして `<jump>` 先シーンへ直接遷移 |
+| `choice:<jump>` | 選択肢表示をスキップして `<jump>` 先シーンへ直接遷移。未ロードのサブ MD のシーンなら、遅延ロードの完了を待ってから次のトークンへ進む。遷移できなかったら（不在・ロード失敗など）残りのトークンは実行せず打ち切る |
 | `wait:<ms>` | `<ms>` ミリ秒待つ（将来の非同期イベント用） |
 
 `[ジャンプ:]` (#725) に到達した `advance`／`choice` の直後は、遷移（次の macrotask）を、Jump のみの中継シーンを含めて自動で待ち切ってから次のトークンへ進むので、Jump の後に `wait` を挟む必要はない（遷移先が見つからず停止した場合は、以降の `advance` は無視される）。
@@ -181,10 +181,12 @@ Web 版の `debug_scene`/`debug_unlock_all` と対称の CLI フラグを TUI �
 cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 ```
 
-`--debug-scene` は `--new-game`/クイックロード復元より後に評価され、指定時はそれらの開始位置を
-上書きする（Web 版が `debug_scene` を `initialSceneId`/自動クイックロードより後に評価して
-デバッグ指定を優先させるのと対称）。存在しない sceneId は `Playback::jump_to_scene_id` が
-no-op で吸収する（位置を変えない、fail-soft）。
+`--debug-scene` は**新規開始**で、クイックセーブを読まず、書きもしない（Web 版の `debug_scene` と対称、#734）。
+`Playback::start_fresh_at(sceneId, 空の flags)` で、直前の flags・BGM・イベント絵を持ち込まずに指定シーンから
+始める。シーン切替ごとの自動クイックセーブも止まるので、デバッグ中にクイックセーブファイルが書き換わらない。
+クイックロードをしないため、既読位置（`read_positions`）も復元されない。`--new-game` のセーブ削除だけは
+従来どおり行うため、`--debug-scene` + `--new-game` で起動すると、起動後はクイックセーブが1つも残らない（自動セーブも止まるため）。存在しない sceneId は何も変えず、stderr に警告を出してエントリから始まる（fail-soft）。
+シーンの遅延ロードと confinement は Web 版だけの概念で、TUI にはない。
 
 `--debug-unlock-all` は `Playback::with_debug_unlock_all` で `Playback` 内部の
 `is_option_locked` を bypass する——`current_choice_locked()`（UI 描画）と
