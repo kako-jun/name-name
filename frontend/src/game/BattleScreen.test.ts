@@ -888,6 +888,8 @@ describe('BattleScreen: acrylic (#737)', () => {
   const defaultGeometry = (size: number) =>
     computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams())
   const PLATE_PAD = 8
+  const plateMask = (v: { acrylicPlate: Sprite | null }): Graphics =>
+    v.acrylicPlate!.mask as Graphics
   /** jsdom には canvas が無いので、板テクスチャの生成だけ差し替える（形・質感の計算は acrylicPlate.test.ts） */
   beforeEach(() => {
     vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
@@ -994,16 +996,17 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.sprite!.filters ?? []).toHaveLength(0)
     })
 
-    it('成功: 子の順序は fallback → acrylicBack → 板 → sprite（label は container の外）(#760)', async () => {
+    it('成功: 子の順序は fallback → acrylicBack → 板 → 板の mask → sprite（label は container の外）(#760)', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      expect(v.container.children).toHaveLength(4)
+      expect(v.container.children).toHaveLength(5)
       expect(v.container.children[0]).toBe(v.fallback)
       expect(v.container.children[1]).toBe(v.acrylicBack)
       expect(v.container.children[2]).toBe(v.acrylicPlate)
-      expect(v.container.children[3]).toBe(v.sprite)
+      expect(v.container.children[3]).toBe(plateMask(v))
+      expect(v.container.children[4]).toBe(v.sprite)
       expect(v.label!.parent).toBe(internals(s).labelLayer)
     })
 
@@ -1053,6 +1056,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.acrylicBase).not.toBeNull()
       expect(v.container.children[2]).toBe(v.acrylicBase)
       expect(v.container.children[3]).toBe(v.acrylicPlate)
+      expect(v.container.children[4]).toBe(plateMask(v))
       expect(fillsOf(v.acrylicBack!)).toHaveLength(0)
       const g = defaultGeometry(slotSize())
       const k = g.shadow!.rx / layout.shadowRx
@@ -1121,9 +1125,12 @@ describe('BattleScreen: acrylic (#737)', () => {
       const g = defaultGeometry(slotSize())
       const slitY = computeSlitY(g.base!.cy, g.base!.ry)
       const b = mask.getLocalBounds()
-      // 板のローカル座標（縮尺前）→ container 座標へ戻した mask の下端 = スリットの y
-      expect(plate.y + b.maxY * plate.scale.y).toBeCloseTo(slitY, 6)
-      expect(b.minY).toBe(0)
+      // mask は板の兄弟（container 座標）。下端 = スリットの y・上端 = 板の上端
+      expect(b.maxY).toBeCloseTo(slitY, 6)
+      expect(b.minY).toBeCloseTo(plate.y, 6)
+      // v8 では Sprite に子を足せない（mask を板の子にしない）
+      expect(plate.children).toHaveLength(0)
+      expect(mask.parent).toBe(v.container)
       // スプライトには mask をかけない（足は台座の上に立って見える）
       expect(v.sprite!.mask ?? null).toBeNull()
       // 切る位置は台座の上面の中心より奥側（足元 g.base.cy より上）
@@ -1141,7 +1148,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       await flushPromises()
       const plate = internals(s).enemyViews[0].acrylicPlate!
       const b = (plate.mask as Graphics).getLocalBounds()
-      expect(b.maxY).toBeCloseTo(plate.texture.height, 6)
+      expect(b.maxY - b.minY).toBeCloseTo(plate.texture.height * plate.scale.y, 6)
     })
 
     it('成功: 板は sprite と同じ倍率で、pad ぶん左上へ広がって敷かれる (#760)', async () => {
@@ -1228,8 +1235,8 @@ describe('BattleScreen: acrylic (#737)', () => {
       const v = internals(s).partyViews[0]
       expect(v.acrylicPlate).not.toBeNull()
       expect(v.acrylicBack!.visible).toBe(true)
-      expect(v.container.children).toHaveLength(4) // 味方にラベルはない: fallback → back → 板 → sprite
-      expect(v.container.children[3]).toBe(v.sprite)
+      expect(v.container.children).toHaveLength(5) // 味方にラベルはない: fallback → back → 板 → mask → sprite
+      expect(v.container.children[4]).toBe(v.sprite)
     })
 
     it('複数体（敵 3・味方 2）: 各 view が独立の板を持つ（共有しない）', async () => {

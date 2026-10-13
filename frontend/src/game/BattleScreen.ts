@@ -734,10 +734,12 @@ export class BattleScreen extends Container {
             sh.pivot.set(view.acrylicShadowFoot.x, view.acrylicShadowFoot.y)
             this.shadowLayer.addChild(sh)
           }
+          // 板を台座のスリットの高さで水平に切る mask (#760)。v8 では Sprite に子を足せないので、
+          // 板の直後の兄弟として置く（座標は container と同じ）
           const mask = new Graphics()
-          plateSprite.addChild(mask)
           plateSprite.mask = mask
           view.container.addChildAt(plateSprite, idx++)
+          view.container.addChildAt(mask, idx++)
         }
         view.container.addChildAt(sprite, idx)
         view.acrylicBack.visible = true
@@ -1238,12 +1240,12 @@ export class BattleScreen extends Container {
       // スプライト本体の足元はクリップしない（mask は板だけ）
       const mask = (plate.mask ?? null) as Graphics | null
       if (mask) {
-        const texW = plate.texture.width
-        const texH = plate.texture.height
-        // 台座が無い（hasBase=false）・縮尺 0 のときは切らない。mask は板の子（板のローカル座標・縮尺前）
+        const w = plate.texture.width * ks
+        const fullH = plate.texture.height * ks
+        // 台座が無い（hasBase=false）・縮尺 0 のときは切らない。mask は container 座標
         const clipY = g.base ? computeSlitY(g.base.cy, g.base.ry) : Infinity
-        const h = ks > 0 ? Math.min(texH, Math.max(0, (clipY - plate.y) / ks)) : texH
-        mask.clear().rect(0, 0, texW, h).fill(0xffffff)
+        const h = ks > 0 ? Math.min(fullH, Math.max(0, clipY - plate.y)) : fullH
+        mask.clear().rect(plate.x, plate.y, w, h).fill(0xffffff)
       }
     }
     const shadow = view.acrylicShadow

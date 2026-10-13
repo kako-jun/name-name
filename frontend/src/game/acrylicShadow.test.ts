@@ -5,10 +5,10 @@ import { resolveAcrylicParams } from './spriteStyle'
 const P = resolveAcrylicParams()
 
 describe('computeShadowTransform', () => {
-  it('既定: 縦に 0.35 倍つぶし、右へ傾ける（skewX は負）', () => {
+  it('既定: 縦に 0.35 倍つぶし、右へ 1.4 傾ける（skewX は負）', () => {
     const t = computeShadowTransform(P, 1)
     expect(t.scaleX).toBe(1)
-    expect(t.skewX).toBeCloseTo(-Math.atan(0.8), 9)
+    expect(t.skewX).toBeCloseTo(-Math.atan(1.4), 9)
     // 描画上の縦の縮み = cos(skew) × scaleY = ks × castSquash
     expect(Math.cos(t.skewX) * t.scaleY).toBeCloseTo(0.35, 9)
   })
@@ -39,7 +39,7 @@ describe('renderGroundShadow', () => {
       expect(r.rgba[i * 4]).toBe(0)
       expect(r.rgba[i * 4 + 1]).toBe(0)
       expect(r.rgba[i * 4 + 2]).toBe(0)
-      expect(r.rgba[i * 4 + 3]).toBeLessThanOrEqual(Math.round(0.3 * 255))
+      expect(r.rgba[i * 4 + 3]).toBeLessThanOrEqual(Math.round(0.55 * 255))
     }
   })
   it('形の内側は濃く、外は薄い。縁はぼけている（ぼかしで外へにじむ）', () => {
