@@ -278,7 +278,7 @@ export class BattleScreen extends Container {
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
-  /** side: 敵の名前・HP ラベルの親 (#747)。前景より手前・パネルより奥（spec「前景はパネル・文字より奥」だが敵ラベルは読ませる） */
+  /** side: 敵の名前・HP ラベルの親 (#747)。前景より手前・パネルより奥（spec どおり、文字（敵ラベル）は前景より手前に置く） */
   private labelLayer: Container | null = null
   /** 前景レイヤー (#747)。スプライトより手前・パネルより奥 */
   private foregroundSprite: Sprite | null = null
