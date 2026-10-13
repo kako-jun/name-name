@@ -1210,6 +1210,32 @@ describe('computePartyDiagonal: 仕様値 (#760)', () => {
     }
   })
 
+  it('後衛の右半歩は中央寄せに左右されない相対関係でも成り立つ: back[i].x − front[j].x = (前衛のみの i と j の x 差) + 0.5×width_i (#760)', () => {
+    // 幅に余裕のある領域（高さ律速・ずらしは上限で同じ）で、後衛の有無による大きさ・ずらしの違いを除く
+    const region = { x: 400, y: 100, w: 2000, h: 194 }
+    for (const aspects of [
+      [0.5, 0.5, 0.5, 0.5],
+      [1.2, 0.4, 0.4, 0.4],
+      [0.3, 1.0, 0.6, 0.45],
+    ]) {
+      const allFront = computePartyDiagonal(region, 4, undefined, aspects)
+      for (const backIdx of [0, 1, 2, 3]) {
+        const rows = ['front', 'front', 'front', 'front'].map((r, k) =>
+          k === backIdx ? 'back' : r
+        ) as ('front' | 'back')[]
+        const s = computePartyDiagonal(region, 4, rows, aspects)
+        expect(s[0].size).toBeCloseTo(allFront[0].size, 9)
+        for (let j = 0; j < 4; j++) {
+          if (j === backIdx) continue
+          expect(s[backIdx].x - s[j].x).toBeCloseTo(
+            allFront[backIdx].x - allFront[j].x + 0.5 * s[backIdx].width,
+            9
+          )
+        }
+      }
+    }
+  })
+
   it('水平の中央寄せは実際の左右端で行う: 縦横比の大きい人が先頭でも左右の空きが等しい (#760)', () => {
     for (const aspects of [
       [1.2, 0.4, 0.4, 0.4],
