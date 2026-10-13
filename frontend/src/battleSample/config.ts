@@ -56,6 +56,8 @@ export interface BattleSampleConfig {
   backgroundTone: BackgroundTone
   /** 背景の被写界深度風の手前ぼかし (#753)。既定 off */
   backgroundDof: BackgroundDof
+  /** ドット絵モード (#466・#760)。on なら戦闘のテクスチャを nearest のまま使う（既定 off＝mipmap+linear で縮小をなめらかに） */
+  pixelArt: 'on' | 'off'
   /** 戦闘ログの 1 文字ずつ表示 (#755)。既定 off */
   logTypewriter: BattleLogTypewriterMode
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
@@ -81,6 +83,7 @@ export interface BattleSampleView {
   windowStyle: WindowStyle
   backgroundTone: BackgroundTone
   backgroundDof: BackgroundDof
+  pixelArt: 'on' | 'off'
   logTypewriter: BattleLogTypewriterMode
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
@@ -142,6 +145,7 @@ export function defaultConfig(): BattleSampleConfig {
     windowStyle: 'dark',
     backgroundTone: 'on',
     backgroundDof: 'off',
+    pixelArt: 'off',
     logTypewriter: 'off',
     atb: 'off',
     atbMode: 'wait',
@@ -296,6 +300,13 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     backgroundDof = raw.backgroundDof
   }
+  let pixelArt = def.pixelArt
+  if (raw.pixelArt !== undefined) {
+    if (raw.pixelArt !== 'on' && raw.pixelArt !== 'off') {
+      return { ok: false, error: `pixelArt は "on" か "off": ${JSON.stringify(raw.pixelArt)}` }
+    }
+    pixelArt = raw.pixelArt
+  }
   let logTypewriter = def.logTypewriter
   if (raw.logTypewriter !== undefined) {
     if (raw.logTypewriter !== 'on' && raw.logTypewriter !== 'off') {
@@ -371,6 +382,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       windowStyle,
       backgroundTone,
       backgroundDof,
+      pixelArt,
       logTypewriter,
       atb,
       atbMode,
@@ -406,6 +418,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     windowStyle: config.windowStyle,
     backgroundTone: config.backgroundTone,
     backgroundDof: config.backgroundDof,
+    pixelArt: config.pixelArt,
     logTypewriter: config.logTypewriter,
     atb: config.atb,
     atbMode: config.atbMode,
@@ -468,6 +481,7 @@ export function buildBattleSetup(
     windowStyle: WindowStyle
     backgroundTone: BackgroundTone
     backgroundDof: BackgroundDof
+    pixelArt: boolean
     logTypewriter: BattleLogTypewriterMode
     background?: string
     depth: BattleDepth | null
@@ -506,6 +520,7 @@ export function buildBattleSetup(
       windowStyle: view.windowStyle,
       backgroundTone: view.backgroundTone,
       backgroundDof: view.backgroundDof,
+      pixelArt: view.pixelArt === 'on',
       logTypewriter: view.logTypewriter,
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
       depth:
@@ -517,6 +532,27 @@ export function buildBattleSetup(
   }
 }
 
+/**
+ * pixelArt (#760) が前回の描画から変わったときだけ、解放すべき画像の URL（背景・前景・味方・敵のスプライト）を返す。
+ * `Assets` のキャッシュは mipmap の有無・scaleMode ごと使い回されるので、nearest↔linear を切り替えたら
+ * unload してから読み直す必要がある（v8 は mipLevelCount をアップロード時に決める）。他のトグルでは何も返さない。
+ * `previous` が null（初回）なら空。重複は除く。
+ */
+export function assetsToUnload(
+  previous: 'on' | 'off' | null,
+  view: BattleSampleView,
+  config: BattleSampleConfig
+): string[] {
+  if (previous === null || previous === view.pixelArt) return []
+  const urls = [
+    config.background,
+    config.foreground,
+    ...config.party.map((e) => e.sprite),
+    ...config.enemies.map((e) => e.sprite),
+  ]
+  return [...new Set(urls.filter((u): u is string => typeof u === 'string' && u !== ''))]
+}
+
 export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
   return (
     a.layout === b.layout &&
@@ -524,6 +560,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.windowStyle === b.windowStyle &&
     a.backgroundTone === b.backgroundTone &&
     a.backgroundDof === b.backgroundDof &&
+    a.pixelArt === b.pixelArt &&
     a.logTypewriter === b.logTypewriter &&
     a.atb === b.atb &&
     a.atbMode === b.atbMode &&
@@ -570,6 +607,7 @@ export function describeView(
     `windowStyle=${view.windowStyle}`,
     `backgroundTone=${view.backgroundTone}`,
     `backgroundDof=${view.backgroundDof}`,
+    `pixelArt=${view.pixelArt}`,
     `logTypewriter=${view.logTypewriter}`,
     ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),
     `background=${view.backgroundOn ? 'on' : 'off'}`,

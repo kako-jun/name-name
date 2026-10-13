@@ -252,6 +252,7 @@ export function rpgProjectFromDoc(
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
     battleDepth: normalizeBattleDepth(doc.battle_horizon, doc.battle_perspective) ?? undefined,
     battleForeground: doc.battle_foreground || undefined,
+    pixelArt: doc.pixel_art === true ? true : undefined,
     battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,

@@ -2,7 +2,8 @@
  * 戦闘画面サンプルページ (#749) のブラウザ側エントリ。本編からはリンクしない開発用ページ。
  * 計算は config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
-import { Application } from 'pixi.js'
+import { Application, Assets } from 'pixi.js'
+import { createRenderGate } from './renderGate'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -11,6 +12,7 @@ import {
   MAX_ENEMIES,
   FORMATION_MODES,
   RESOLUTION_MODES,
+  assetsToUnload,
   buildBattleSetup,
   defaultConfig,
   describeView,
@@ -88,16 +90,26 @@ async function main(): Promise<void> {
   $('stage').appendChild(app.canvas as HTMLCanvasElement)
 
   let screen: BattleScreen | null = null
+  /** 前回描画した pixelArt。変わったときだけ Assets を unload する (#760) */
+  let lastPixelArt: 'on' | 'off' | null = null
+  // nearest↔linear（mipmap の有無）を切り替えるときは、キャッシュ済みのテクスチャを捨てて読み直させる。
+  // 待っている間に別の描画が始まっても、unload 前のテクスチャを受け取らないよう順序を揃える
+  const gate = createRenderGate((u) => Assets.unload(u))
 
-  const render = (): void => {
+  const render = async (): Promise<void> => {
     const view = history.current
+    // 旧画面は先に破棄する（unload でテクスチャが壊れる前に、描画から外す）
+    if (screen) {
+      app.stage.removeChild(screen)
+      screen.destroy({ children: true })
+      screen = null
+    }
+    const stale = assetsToUnload(lastPixelArt, view, config)
+    lastPixelArt = view.pixelArt
+    const seq = gate.begin(stale)
     try {
       const setup = buildBattleSetup(config, view)
-      if (screen) {
-        app.stage.removeChild(screen)
-        screen.destroy({ children: true })
-        screen = null
-      }
+      if (!(await gate.wait(seq))) return // 待っている間に別の描画が始まった
       const resolution = resolveResolution(view.resolutionMode, window.devicePixelRatio)
       app.renderer.resize(setup.width, setup.height, resolution)
       const engine = new BattleEngine(
@@ -124,13 +136,13 @@ async function main(): Promise<void> {
 
   const change = (patch: Partial<BattleSampleView>): void => {
     history = pushView(history, { ...history.current, ...patch })
-    render()
+    void render()
   }
   const blink = (): void => {
     const next = swapView(history)
     if (next === history) return // ひとつ前が無い: 何も変わらないので再描画しない
     history = next
-    render()
+    void render()
   }
 
   // ---- ツールバー ----
@@ -185,6 +197,13 @@ async function main(): Promise<void> {
   dofChk.addEventListener('change', () => change({ backgroundDof: dofChk.checked ? 'on' : 'off' }))
   dofLabel.append(dofChk, '被写界深度（手前ぼかし）')
   tb.appendChild(dofLabel)
+  const pixelLabel = document.createElement('label')
+  const pixelChk = document.createElement('input')
+  pixelChk.type = 'checkbox'
+  pixelChk.id = 'tb-pixel-art'
+  pixelChk.addEventListener('change', () => change({ pixelArt: pixelChk.checked ? 'on' : 'off' }))
+  pixelLabel.append(pixelChk, 'ドット絵（nearest）')
+  tb.appendChild(pixelLabel)
   const logTwLabel = document.createElement('label')
   const logTwChk = document.createElement('input')
   logTwChk.type = 'checkbox'
@@ -211,7 +230,7 @@ async function main(): Promise<void> {
   const restartBtn = document.createElement('button')
   restartBtn.id = 'tb-restart'
   restartBtn.textContent = '戦闘をやり直す'
-  restartBtn.addEventListener('click', () => render())
+  restartBtn.addEventListener('click', () => void render())
   tb.appendChild(restartBtn)
   const depthLabel = document.createElement('label')
   const depthChk = document.createElement('input')
@@ -284,6 +303,7 @@ async function main(): Promise<void> {
     formationSel.value = v.formation
     toneChk.checked = v.backgroundTone === 'on'
     dofChk.checked = v.backgroundDof === 'on'
+    pixelChk.checked = v.pixelArt === 'on'
     logTwChk.checked = v.logTypewriter === 'on'
     atbChk.checked = v.atb === 'on'
     atbModeSel.value = v.atbMode
@@ -322,7 +342,7 @@ async function main(): Promise<void> {
   // ATB (#205): 時間は ticker から tick で渡す（エンジンは時計を持たない）。従来ターン制では何もしない
   app.ticker.add((ticker) => screen?.tick(ticker.deltaMS))
 
-  render()
+  void render()
 }
 
 main().catch((e) => {

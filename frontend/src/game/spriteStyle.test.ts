@@ -2,20 +2,12 @@
  * spriteStyle (#737) の純粋関数テスト。
  *
  * 「仕様値」と書いたテストは、定数を参照せずリテラルで固定している（定数の値だけが変わる変異を捕まえるため）。
- * 定数参照は導出式のテストにだけ使う。PixiJS の実描画・GLSL コンパイルは対象外（jsdom に WebGL が無い）。
+ * 定数参照は導出式のテストにだけ使う。PixiJS の実描画は対象外。
  */
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_ACRYLIC_PARAMS,
-  EDGE_INNER_SPACING_PX,
-  EDGE_MAX_INNER_TAPS,
-  EDGE_MAX_LINE_PX,
-  EDGE_MAX_MARGIN_PX,
-  EDGE_MAX_OUTER_TAPS,
-  EDGE_MAX_TAPS,
-  EDGE_OUTER_SPACING_PX,
   computeAcrylicGeometry,
-  computeEdgeOffsets,
   normalizeSpriteStyle,
   resolveAcrylicParams,
   type AcrylicParams,
@@ -50,6 +42,17 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
+      plateFillAlpha: 0.07,
+      specularAlpha: 0.2,
+      innerShadowAlpha: 0.12,
+      baseThicknessRatio: 0.18,
+      baseFillAlpha: 0.14,
+      baseSideAlpha: 0.26,
+      slitAlpha: 0.3,
+      castAlpha: 0.55,
+      castSquash: 0.35,
+      castShear: 1.4,
+      castBlurRatio: 0.012,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -69,6 +72,17 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
+      plateFillAlpha: 0.07,
+      specularAlpha: 0.2,
+      innerShadowAlpha: 0.12,
+      baseThicknessRatio: 0.18,
+      baseFillAlpha: 0.14,
+      baseSideAlpha: 0.26,
+      slitAlpha: 0.3,
+      castAlpha: 0.55,
+      castSquash: 0.35,
+      castShear: 1.4,
+      castBlurRatio: 0.012,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -116,6 +130,17 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         maxLinePx: 4,
         lineColor: 0xe6f3ff,
         lineAlpha: 0.85,
+        plateFillAlpha: 0.07,
+        specularAlpha: 0.2,
+        innerShadowAlpha: 0.12,
+        baseThicknessRatio: 0.18,
+        baseFillAlpha: 0.14,
+        baseSideAlpha: 0.26,
+        slitAlpha: 0.3,
+        castAlpha: 0.55,
+        castSquash: 0.35,
+        castShear: 1.4,
+        castBlurRatio: 0.012,
         hasBase: true,
         baseWidthRatio: 0.7,
         baseHeightRatio: 0.28,
@@ -234,13 +259,15 @@ describe('computeAcrylicGeometry', () => {
     expect(g.shadow!.cx).toBeCloseTo(100, 9)
     expect(g.shadow!.rx).toBeCloseTo(84, 9)
     expect(g.shadow!.ry).toBeCloseTo(23.52, 9)
-    expect(g.shadow!.cy).toBeCloseTo(176.48, 9)
-    expect(g.shadow!.cy + g.shadow!.ry).toBeCloseTo(200, 9)
-    expect(g.base!.cy).toBeCloseTo(176.48, 9)
-    // 領域は x:[10,190] × y:[10,176.48] → 高さ 166.48 の正方形が中央に乗る
-    expect(g.sprite.width).toBeCloseTo(166.48, 9)
-    expect(g.sprite.height).toBeCloseTo(166.48, 9)
-    expect(g.sprite.x).toBeCloseTo(16.76, 9)
+    expect(g.shadow!.cy).toBeCloseTo(172.952, 9)
+    expect(
+      g.shadow!.cy + g.shadow!.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio
+    ).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
+    expect(g.base!.cy).toBeCloseTo(172.952, 9)
+    // 領域は x:[10,190] × y:[10,172.952] → 高さ 162.952 の正方形が中央に乗る
+    expect(g.sprite.width).toBeCloseTo(162.952, 9)
+    expect(g.sprite.height).toBeCloseTo(162.952, 9)
+    expect(g.sprite.x).toBeCloseTo(18.524, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
   })
 
@@ -249,7 +276,7 @@ describe('computeAcrylicGeometry', () => {
     expect(g.highlight!.cx).toBeCloseTo(100, 9)
     expect(g.highlight!.rx).toBeCloseTo(49, 9) // 70 * 0.7
     expect(g.highlight!.ry).toBeCloseTo(6.86, 9) // 19.6 * 0.35
-    expect(g.highlight!.cy).toBeCloseTo(169.62, 9) // 176.48 - 6.86
+    expect(g.highlight!.cy).toBeCloseTo(166.092, 9) // 172.952 - 6.86
   })
 
   it('縦長 400x100 は幅いっぱい・縦横比 4:1 を保つ（size と width の取り違えを検知）', () => {
@@ -262,9 +289,9 @@ describe('computeAcrylicGeometry', () => {
 
   it('横長 100x400 は高さいっぱい・縦横比 1:4 を保つ', () => {
     const g = computeAcrylicGeometry(100, 400, 200)
-    expect(g.sprite.height).toBeCloseTo(166.48, 9)
-    expect(g.sprite.width).toBeCloseTo(41.62, 9)
-    expect(g.sprite.x).toBeCloseTo((200 - 41.62) / 2, 9)
+    expect(g.sprite.height).toBeCloseTo(162.952, 9)
+    expect(g.sprite.width).toBeCloseTo(40.738, 9)
+    expect(g.sprite.x).toBeCloseTo((200 - 40.738) / 2, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
   })
 
@@ -279,7 +306,7 @@ describe('computeAcrylicGeometry', () => {
     expect(g.sprite.x).toBeCloseTo(10, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
     expect(g.sprite.width).toBeCloseTo(180, 9)
-    expect(g.sprite.height).toBeCloseTo(166.48, 9)
+    expect(g.sprite.height).toBeCloseTo(162.952, 9)
   })
 
   // minMarginPx(2) と marginRatio*size = 0.03*size の切替: size=66.67 で等しい。minLinePx(1.5) と 0.02*size は size=75 で等しい。
@@ -320,7 +347,10 @@ describe('computeAcrylicGeometry', () => {
     expect(g.base!.cy).toBe(g.shadow!.cy)
     expect(g.base!.rx).toBeLessThan(g.shadow!.rx)
     expect(g.base!.ry).toBeLessThan(g.shadow!.ry)
-    expect(g.shadow!.cy + g.shadow!.ry).toBeCloseTo(200, 9)
+    // 台座の側面の厚み（baseThicknessRatio 0.18 × 上面の縦半径）ぶんを下に予約して、足元の影が枠の下端に接する (#760)
+    expect(
+      g.shadow!.cy + g.shadow!.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio
+    ).toBeCloseTo(200, 9)
   })
 
   it('ハイライトは台座の内側（highlight ⊂ base）', () => {
@@ -350,7 +380,10 @@ describe('computeAcrylicGeometry', () => {
       expect(s.cx - s.rx).toBeGreaterThanOrEqual(-1e-9)
       expect(s.cx + s.rx).toBeLessThanOrEqual(200 + 1e-9)
       expect(b.rx).toBeLessThan(s.rx)
-      expect(s.cy + s.ry).toBeCloseTo(200, 9)
+      expect(s.cy + s.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio).toBeCloseTo(
+        200,
+        9
+      ) // 台座の厚み分は下に予約 (#760)
       if (clipped) expect(s.rx * 2).toBeCloseTo(200, 9)
       else expect(s.rx * 2).toBeCloseTo(shadowRaw, 9)
     }
@@ -431,7 +464,10 @@ describe('computeAcrylicGeometry: スイープ不変条件', () => {
               }
               if (hasBase) {
                 const { base, shadow, highlight } = g
-                expect(shadow!.cy + shadow!.ry, tag).toBeCloseTo(size, 9)
+                expect(
+                  shadow!.cy + shadow!.ry + base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio,
+                  tag
+                ).toBeCloseTo(size, 9)
                 expect(shadow!.cx - shadow!.rx, tag).toBeGreaterThanOrEqual(-EPS)
                 expect(shadow!.cx + shadow!.rx, tag).toBeLessThanOrEqual(size + EPS)
                 expect(base!.cy - base!.ry, tag).toBeGreaterThanOrEqual(-EPS)
@@ -484,138 +520,87 @@ describe('computeAcrylicGeometry: 余白・線の上限', () => {
   })
 })
 
-describe('computeEdgeOffsets', () => {
-  const radius = (o: readonly [number, number]): number => Math.hypot(o[0], o[1])
-  const approxEq = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6
-
-  it('仕様値: 上限・間隔・タップ予算の定数', () => {
-    expect(EDGE_MAX_MARGIN_PX).toBe(6)
-    expect(EDGE_MAX_LINE_PX).toBe(4)
-    expect(EDGE_INNER_SPACING_PX).toBe(2)
-    expect(EDGE_OUTER_SPACING_PX).toBe(3)
-    expect(EDGE_MAX_TAPS).toBe(64)
-    expect(EDGE_MAX_INNER_TAPS).toBe(40)
-    expect(EDGE_MAX_OUTER_TAPS).toBe(24)
+// ---------------------------------------------------------------------------
+// #760 追加: 新パラメータ（板・台座・地面の影）の clamp と不正値
+// ---------------------------------------------------------------------------
+describe('resolveAcrylicParams: #760 の新パラメータ', () => {
+  // [項目, 下限, 上限] — 仕様値（リテラル）
+  it.each<[keyof AcrylicParams, number, number]>([
+    ['plateFillAlpha', 0, 1],
+    ['specularAlpha', 0, 1],
+    ['innerShadowAlpha', 0, 1],
+    ['baseThicknessRatio', 0, 0.2],
+    ['baseFillAlpha', 0, 1],
+    ['baseSideAlpha', 0, 1],
+    ['slitAlpha', 0, 1],
+    ['castAlpha', 0, 1],
+    ['castSquash', 0.1, 1],
+    ['castShear', -2, 2],
+    ['castBlurRatio', 0, 0.1],
+  ])('仕様値: %s の clamp は下限 %s・上限 %s（境界-1/境界/境界+1）', (key, min, max) => {
+    const at = (v: number): number => resolveAcrylicParams({ [key]: v })[key] as number
+    expect(at(min - 0.01)).toBe(min)
+    expect(at(min)).toBe(min)
+    expect(at(min + 0.001)).toBeCloseTo(min + 0.001, 9)
+    expect(at(max - 0.001)).toBeCloseTo(max - 0.001, 9)
+    expect(at(max)).toBe(max)
+    expect(at(max + 0.01)).toBe(max)
+    expect(at(max * 100 + 100)).toBe(max)
   })
 
-  it('余白 0 なら内側は空・線 0 なら外側は空', () => {
-    expect(computeEdgeOffsets(0, 3).inner).toEqual([])
-    expect(computeEdgeOffsets(3, 0).outer).toEqual([])
-    expect(computeEdgeOffsets(0, 0)).toEqual({ inner: [], outer: [] })
-  })
-
-  it.each([[NaN], [-1], [Infinity], [-Infinity]])(
-    '余白・線に %s を渡すと 0 と同じ（空）',
+  it.each([[NaN], [Infinity], [-Infinity]])(
+    '新パラメータに %s を渡すと既定値（リテラル）',
     (bad) => {
-      expect(computeEdgeOffsets(bad, bad)).toEqual({ inner: [], outer: [] })
-      expect(computeEdgeOffsets(bad, 3).inner).toEqual([])
-      expect(computeEdgeOffsets(3, bad).outer).toEqual([])
+      const r = resolveAcrylicParams({
+        plateFillAlpha: bad,
+        specularAlpha: bad,
+        innerShadowAlpha: bad,
+        baseThicknessRatio: bad,
+        baseFillAlpha: bad,
+        baseSideAlpha: bad,
+        slitAlpha: bad,
+        castAlpha: bad,
+        castSquash: bad,
+        castShear: bad,
+        castBlurRatio: bad,
+      })
+      expect(r.plateFillAlpha).toBe(0.07)
+      expect(r.specularAlpha).toBe(0.2)
+      expect(r.innerShadowAlpha).toBe(0.12)
+      expect(r.baseThicknessRatio).toBe(0.18)
+      expect(r.baseFillAlpha).toBe(0.14)
+      expect(r.baseSideAlpha).toBe(0.26)
+      expect(r.slitAlpha).toBe(0.3)
+      expect(r.castAlpha).toBe(0.55)
+      expect(r.castSquash).toBe(0.35)
+      expect(r.castShear).toBe(1.4)
+      expect(r.castBlurRatio).toBe(0.012)
     }
   )
 
-  it('外側は半径 余白+線 の円上だけ（内側とは別の半径）', () => {
-    const { outer } = computeEdgeOffsets(3, 2)
-    expect(outer.length).toBeGreaterThan(0)
-    for (const o of outer) expect(approxEq(radius(o), 5)).toBe(true)
+  it('castAlpha を 0 にできる（0 は falsy でも既定に戻らない）・castShear 0 / 負も通る', () => {
+    expect(resolveAcrylicParams({ castAlpha: 0 }).castAlpha).toBe(0)
+    expect(resolveAcrylicParams({ castShear: 0 }).castShear).toBe(0)
+    expect(resolveAcrylicParams({ castShear: -1.5 }).castShear).toBe(-1.5)
+    expect(resolveAcrylicParams({ baseThicknessRatio: 0 }).baseThicknessRatio).toBe(0)
   })
 
-  it('内側は最外の円が半径=余白で、全サンプルが余白以内', () => {
-    for (const m of [0.5, 1, 2, 3, 4.5, 6]) {
-      const { inner } = computeEdgeOffsets(m, 1)
-      const rs = inner.map(radius)
-      expect(Math.max(...rs)).toBeCloseTo(m, 6)
-      for (const r of rs) expect(r).toBeLessThanOrEqual(m + 1e-6)
-    }
+  it('新パラメータの上書きは旧パラメータ（余白・線・台座）に影響しない', () => {
+    const r = resolveAcrylicParams({ castAlpha: 0.1, baseThicknessRatio: 0.05 })
+    expect(r).toEqual({ ...DEFAULT_ACRYLIC_PARAMS, castAlpha: 0.1, baseThicknessRatio: 0.05 })
   })
+})
 
-  it('内側の円の半径間隔が EDGE_INNER_SPACING_PX 以下（細い部分の取りこぼし防止）', () => {
-    for (let m = 0.25; m <= 6; m += 0.25) {
-      const radii = [
-        ...new Set(computeEdgeOffsets(m, 1).inner.map((o) => Math.round(radius(o) * 1e6) / 1e6)),
-      ].sort((a, b) => a - b)
-      let prev = 0
-      for (const r of radii) {
-        expect(r - prev, `m=${m}`).toBeLessThanOrEqual(2 + 1e-5)
-        prev = r
-      }
-    }
-  })
-
-  it('円周上の隣接サンプル間隔が内側 2px 以下・外側 3px 以下', () => {
-    const gap = (pts: readonly (readonly [number, number])[], r: number): number => {
-      const angles = pts.map((p) => Math.atan2(p[1], p[0])).sort((a, b) => a - b)
-      let max = angles[0] + 2 * Math.PI - angles[angles.length - 1]
-      for (let i = 1; i < angles.length; i++) max = Math.max(max, angles[i] - angles[i - 1])
-      return max * r
-    }
-    for (const m of [2, 4, 6]) {
-      const { inner, outer } = computeEdgeOffsets(m, 4)
-      const rings = new Map<number, [number, number][]>()
-      for (const o of inner) {
-        const k = Math.round(radius(o) * 1e4)
-        rings.set(k, [...(rings.get(k) ?? []), [o[0], o[1]]])
-      }
-      for (const [k, pts] of rings)
-        expect(gap(pts, k / 1e4), `m=${m}`).toBeLessThanOrEqual(2 + 1e-6)
-      expect(gap(outer, m + 4), `m=${m}`).toBeLessThanOrEqual(3 + 1e-6)
-    }
-  })
-
-  it('円ごとに角度の位相がずれる（隣り合う円の同じ方向に並ばない）', () => {
-    const { inner } = computeEdgeOffsets(6, 1) // 半径 2,4,6 の 3 円
-    const angleSet = new Set(inner.map((o) => Math.round(Math.atan2(o[1], o[0]) * 1e4)))
-    expect(angleSet.size).toBe(inner.length) // どの 2 点も同じ角度を共有しない（放射状の星形にならない）
-  })
-
-  it('スイープ: 総タップ ≤ 64・内側 ≤ 40・外側 ≤ 24', () => {
-    let maxTotal = 0
-    for (let m = 0; m <= 8; m += 0.1)
-      for (let l = 0; l <= 6; l += 0.1) {
-        const { inner, outer } = computeEdgeOffsets(m, l, 1)
-        expect(inner.length).toBeLessThanOrEqual(40)
-        expect(outer.length).toBeLessThanOrEqual(24)
-        expect(inner.length + outer.length).toBeLessThanOrEqual(64)
-        maxTotal = Math.max(maxTotal, inner.length + outer.length)
-      }
-    // 最悪（余白 6・線 4）は 39 + 21 = 60。64 の予算に余裕がある
-    expect(maxTotal).toBe(60)
-  })
-
-  it('余白・線は上限（6 / 4 論理 px）に切り詰められる', () => {
-    const big = computeEdgeOffsets(100, 100)
-    const cap = computeEdgeOffsets(6, 4)
-    expect(big).toEqual(cap)
-    expect(Math.max(...big.outer.map(radius))).toBeCloseTo(10, 6)
-  })
-
-  it('変位は実 px = 論理配置 × resolution（個数・配置は resolution に依存しない）', () => {
-    const base = computeEdgeOffsets(5, 3, 1)
-    for (const res of [1.5, 2, 3]) {
-      const hi = computeEdgeOffsets(5, 3, res)
-      expect(hi.inner.length).toBe(base.inner.length)
-      expect(hi.outer.length).toBe(base.outer.length)
-      hi.inner.forEach((o, i) => {
-        expect(o[0] / res).toBeCloseTo(base.inner[i][0], 6)
-        expect(o[1] / res).toBeCloseTo(base.inner[i][1], 6)
-      })
-      hi.outer.forEach((o, i) => {
-        expect(o[0] / res).toBeCloseTo(base.outer[i][0], 6)
-        expect(o[1] / res).toBeCloseTo(base.outer[i][1], 6)
-      })
-    }
-  })
-
-  it.each([[0], [-2], [NaN]])('resolution %s は 1 として扱う', (bad) => {
-    expect(computeEdgeOffsets(4, 2, bad)).toEqual(computeEdgeOffsets(4, 2, 1))
-  })
-
-  it('仕様値: 余白 2 → 内側 1 円（半径 2・7 方向）、線 1.5 → 外側 半径 3.5・8 方向', () => {
-    const { inner, outer } = computeEdgeOffsets(2, 1.5)
-    expect(inner.length).toBe(7) // ceil(2π·2/2)=7
-    expect(outer.length).toBe(8) // ceil(2π·3.5/3)=8（下限 6 を上回る）
-  })
-
-  it('方向数の下限は 6（小さな円でも）', () => {
-    expect(computeEdgeOffsets(0.2, 0).inner.length).toBe(6)
+describe('computeAcrylicGeometry: 台座の厚み分を枠内に収める (#760)', () => {
+  it('台座の足元（上面の中心 + 縦半径 + 厚み）も影も枠の下端を超えない（size・パラメータのスイープ）', () => {
+    for (const size of [40, 100, 200, 400])
+      for (const thick of [0, 0.1, 0.2])
+        for (const sc of [1, 1.2, 2]) {
+          const p = resolveAcrylicParams({ baseThicknessRatio: thick, shadowScale: sc })
+          const g = computeAcrylicGeometry(100, 200, size, p)
+          const t = g.base!.ry * thick
+          expect(g.base!.cy + g.base!.ry + t).toBeLessThanOrEqual(size + 1e-9)
+          expect(g.shadow!.cy + g.shadow!.ry + t).toBeLessThanOrEqual(size + 1e-9)
+        }
   })
 })
