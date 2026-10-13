@@ -260,7 +260,9 @@ describe('computeAcrylicGeometry', () => {
     expect(g.shadow!.rx).toBeCloseTo(84, 9)
     expect(g.shadow!.ry).toBeCloseTo(23.52, 9)
     expect(g.shadow!.cy).toBeCloseTo(172.952, 9)
-    expect(g.shadow!.cy + g.shadow!.ry + g.base!.ry * 0.18).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
+    expect(
+      g.shadow!.cy + g.shadow!.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio
+    ).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
     expect(g.base!.cy).toBeCloseTo(172.952, 9)
     // 領域は x:[10,190] × y:[10,172.952] → 高さ 162.952 の正方形が中央に乗る
     expect(g.sprite.width).toBeCloseTo(162.952, 9)
@@ -346,7 +348,9 @@ describe('computeAcrylicGeometry', () => {
     expect(g.base!.rx).toBeLessThan(g.shadow!.rx)
     expect(g.base!.ry).toBeLessThan(g.shadow!.ry)
     // 台座の側面の厚み（baseThicknessRatio 0.18 × 上面の縦半径）ぶんを下に予約して、足元の影が枠の下端に接する (#760)
-    expect(g.shadow!.cy + g.shadow!.ry + g.base!.ry * 0.18).toBeCloseTo(200, 9)
+    expect(
+      g.shadow!.cy + g.shadow!.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio
+    ).toBeCloseTo(200, 9)
   })
 
   it('ハイライトは台座の内側（highlight ⊂ base）', () => {
@@ -376,7 +380,10 @@ describe('computeAcrylicGeometry', () => {
       expect(s.cx - s.rx).toBeGreaterThanOrEqual(-1e-9)
       expect(s.cx + s.rx).toBeLessThanOrEqual(200 + 1e-9)
       expect(b.rx).toBeLessThan(s.rx)
-      expect(s.cy + s.ry + g.base!.ry * 0.18).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
+      expect(s.cy + s.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio).toBeCloseTo(
+        200,
+        9
+      ) // 台座の厚み分は下に予約 (#760)
       if (clipped) expect(s.rx * 2).toBeCloseTo(200, 9)
       else expect(s.rx * 2).toBeCloseTo(shadowRaw, 9)
     }
@@ -457,7 +464,10 @@ describe('computeAcrylicGeometry: スイープ不変条件', () => {
               }
               if (hasBase) {
                 const { base, shadow, highlight } = g
-                expect(shadow!.cy + shadow!.ry + base!.ry * 0.18, tag).toBeCloseTo(size, 9)
+                expect(
+                  shadow!.cy + shadow!.ry + base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio,
+                  tag
+                ).toBeCloseTo(size, 9)
                 expect(shadow!.cx - shadow!.rx, tag).toBeGreaterThanOrEqual(-EPS)
                 expect(shadow!.cx + shadow!.rx, tag).toBeLessThanOrEqual(size + EPS)
                 expect(base!.cy - base!.ry, tag).toBeGreaterThanOrEqual(-EPS)

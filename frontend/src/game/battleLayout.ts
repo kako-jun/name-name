@@ -338,17 +338,26 @@ export function computePartyDiagonal(
           Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (regionW - maxW * (1 + backShift)) / steps / h)
         ) * h
       : 0
-  const totalW = maxW * (1 + backShift) + steps * dx
   const totalH = h + steps * pitch
-  const originX = region.x + (regionW - totalW) / 2
   const originY = region.y + (regionH - totalH) / 2
   const slots: SpriteSlot[] = []
   for (let i = 0; i < count; i++) {
     const width = h * aspect(i)
     const back = rows?.[i] === 'back' ? width * SIDE_BACK_ROW_SHIFT_RATIO : 0
     const y = originY + i * pitch
-    slots.push({ x: originX + i * dx + back, y, size: h, width, floor: y + h, scale: 1 })
+    slots.push({ x: i * dx + back, y, size: h, width, floor: y + h, scale: 1 })
   }
+  // 水平は、実際の左右端（各 slot の x と x + width の最小・最大）で領域の中央に寄せる。
+  // 「最大幅 × 予約」で取ると、縦横比の大きい人が先頭のとき右側に空きが残って左へずれる (#760)。高さ・間隔は変えない
+  // 左端は後衛のずらしを除いた斜めの位置（後衛 1 人でも「斜めの位置から右へ半歩」が保たれる）、右端は後衛のずらしを含める
+  const left = Math.min(
+    ...slots.map((sl, i) =>
+      rows?.[i] === 'back' ? sl.x - sl.width * SIDE_BACK_ROW_SHIFT_RATIO : sl.x
+    )
+  )
+  const right = Math.max(...slots.map((sl) => sl.x + sl.width))
+  const shift = region.x + (regionW - (right - left)) / 2 - left
+  for (const sl of slots) sl.x += shift
   return slots
 }
 

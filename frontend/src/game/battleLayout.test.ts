@@ -1186,7 +1186,7 @@ describe('computePartyDiagonal: 仕様値 (#760)', () => {
     expect(s[1].width).toBeCloseTo((150 / 1.8) * 1.5, 9)
   })
 
-  it('後衛の右半歩は「その人自身の幅」の 0.5 倍（前衛との差 = 0.5×幅 − 右余白予約で全体が左へ寄る 0.25×最大幅）', () => {
+  it('後衛の右半歩は「その人自身の幅」の 0.5 倍（前衛との差 = 0.5×幅 + 実際の左右端での中央寄せの差）', () => {
     const region = { x: 0, y: 0, w: 1000, h: 300 }
     const aspects = [0.4, 0.8]
     const front = computePartyDiagonal(region, 2, ['front', 'front'], aspects)
@@ -1197,11 +1197,34 @@ describe('computePartyDiagonal: 仕様値 (#760)', () => {
       const back = computePartyDiagonal(region, 2, rows, aspects)
       // 高さは同じ（高さ律速）・ずらしは同じ（幅に余裕）
       expect(back[0].size).toBeCloseTo(front[0].size, 9)
-      const maxW = front[1].width
+      // #760: 中央寄せは実際の左右端で行う。左端は斜めの位置（後衛のずらしを除く）、右端は後衛のずらしを含む
+      const left = Math.min(...front.map((f) => f.x))
+      const extent = (backIdx: number): number =>
+        Math.max(...front.map((f, k) => f.x + f.width + (k === backIdx ? 0.5 * f.width : 0))) - left
+      const centerShift = (extent(-1) - extent(i)) / 2
       for (let k = 0; k < 2; k++) {
         const shift = k === i ? 0.5 * front[k].width : 0
-        expect(back[k].x - front[k].x).toBeCloseTo(shift - 0.25 * maxW, 9)
+        expect(back[k].x - front[k].x).toBeCloseTo(shift + centerShift, 9)
         expect(back[k].y).toBeCloseTo(front[k].y, 9)
+      }
+    }
+  })
+
+  it('水平の中央寄せは実際の左右端で行う: 縦横比の大きい人が先頭でも左右の空きが等しい (#760)', () => {
+    for (const aspects of [
+      [1.2, 0.4, 0.4, 0.4],
+      [0.4, 0.4, 0.4, 1.2],
+      [1.0, 0.5, 0.5, 0.5],
+    ]) {
+      for (const rows of [undefined, ['back', 'front', 'front', 'front'] as const]) {
+        const region = { x: 400, y: 100, w: 384, h: 194 }
+        const s = computePartyDiagonal(region, 4, rows, aspects)
+        const left = Math.min(...s.map((x) => x.x))
+        const right = Math.max(...s.map((x) => x.x + x.width))
+        // 後衛がいるときは左端が「後衛のずらしを除いた斜めの位置」なので、前衛のみのときだけ左右対称を見る
+        if (!rows) expect(left - region.x).toBeCloseTo(region.x + region.w - right, 6)
+        expect(left).toBeGreaterThanOrEqual(region.x - 1e-9)
+        expect(right).toBeLessThanOrEqual(region.x + region.w + 1e-9)
       }
     }
   })
