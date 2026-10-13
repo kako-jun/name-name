@@ -185,7 +185,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 `Playback::start_fresh_at(sceneId, 空の flags)` で、直前の flags・BGM・イベント絵を持ち込まずに指定シーンから
 始める。シーン切替ごとの自動クイックセーブも止まるので、デバッグ中にクイックセーブファイルが書き換わらない。
 クイックロードをしないため、既読位置（`read_positions`）も復元されない。`--new-game` のセーブ削除だけは
-従来どおり行う。存在しない sceneId は何も変えない（エントリから始まる、fail-soft）。
+従来どおり行うため、`--debug-scene` + `--new-game` で起動すると、起動後はクイックセーブが1つも残らない（自動セーブも止まるため）。存在しない sceneId は何も変えず、stderr に警告を出してエントリから始まる（fail-soft）。
 シーンの遅延ロードと confinement は Web 版だけの概念で、TUI にはない。
 
 `--debug-unlock-all` は `Playback::with_debug_unlock_all` で `Playback` 内部の
