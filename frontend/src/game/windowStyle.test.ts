@@ -79,6 +79,10 @@ describe('lerpColor', () => {
   it('NaN の t は 0 扱い（a を返す）', () => {
     expect(lerpColor(0x123456, 0xabcdef, NaN)).toBe(0x123456)
   })
+  it('±Infinity の t は範囲外としてクランプされる', () => {
+    expect(lerpColor(0x123456, 0xabcdef, Infinity)).toBe(0xabcdef)
+    expect(lerpColor(0x123456, 0xabcdef, -Infinity)).toBe(0x123456)
+  })
   it('チャンネルは独立に補間される', () => {
     expect(lerpColor(0xff0000, 0x00ff00, 1)).toBe(0x00ff00)
     expect(lerpColor(0x0000ff, 0xff0000, 0)).toBe(0x0000ff)

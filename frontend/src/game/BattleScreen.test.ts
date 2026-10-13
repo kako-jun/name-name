@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Assets,
   type Container,
-  type Graphics,
+  Graphics,
   type Sprite,
   Texture,
   TextureSource,
@@ -958,11 +958,11 @@ describe('BattleScreen: acrylic (#737)', () => {
 })
 
 describe('BattleScreen: windowStyle (#744)', () => {
-  /** 実体は dark = Graphics、ff-blue = 子 [帯, mask, 枠] を持つ Container。テストでは dark の描画命令読み取りと兼用するため Graphics と型付けする */
+  /** 実体は dark = Graphics、ff-blue = 子 [帯, mask, 枠] を持つ Container。dark の描画命令を読む側は instanceof で Graphics に絞る */
   interface PanelInternals {
-    statsPanel: Graphics
-    commandPanel: Graphics
-    logPanel: Graphics
+    statsPanel: Graphics | Container
+    commandPanel: Graphics | Container
+    logPanel: Graphics | Container
     commands: Array<{ text: Text }>
   }
   interface PanelOp {
@@ -994,14 +994,20 @@ describe('BattleScreen: windowStyle (#744)', () => {
   const fillOps = (g: Graphics): PanelOp[] => opsOf(g).filter((o) => o.action === 'fill')
   const strokeOps = (g: Graphics): PanelOp[] => opsOf(g).filter((o) => o.action === 'stroke')
   /** ff-blue パネルの子（帯 / mask / 枠）。drawPanel が g の子として [帯, mask, 枠] の順に持つ */
-  const bandsOf = (g: Graphics): Graphics => g.children[0] as Graphics
-  const maskOf = (g: Graphics): Graphics => g.children[1] as Graphics
-  const frameOf = (g: Graphics): Graphics => g.children[2] as Graphics
-  const panelsOf = (s: BattleScreen): Graphics[] => [
+  const bandsOf = (g: Container): Graphics => g.children[0] as Graphics
+  const maskOf = (g: Container): Graphics => g.children[1] as Graphics
+  const frameOf = (g: Container): Graphics => g.children[2] as Graphics
+  const rawPanelsOf = (s: BattleScreen): Array<Graphics | Container> => [
     pi(s).statsPanel,
     pi(s).commandPanel,
     pi(s).logPanel,
   ]
+  /** dark 用: 全パネルが Graphics であることを実行時に確かめて絞り込む */
+  const panelsOf = (s: BattleScreen): Graphics[] =>
+    rawPanelsOf(s).map((g) => {
+      if (!(g instanceof Graphics)) throw new Error('panel is not a Graphics')
+      return g
+    })
 
   /** 子孫を含む全 PixiText */
   function allTexts(root: Container): PixiText[] {
@@ -1107,10 +1113,15 @@ describe('BattleScreen: windowStyle (#744)', () => {
     describe.each(modes)('%s', (_mode, opts) => {
       const darkOpts: BattleScreenOptions = { ...opts, windowStyle: 'dark' }
 
+      it('パネルは Graphics ではなく Container（Pixi の Graphics 子持ち非推奨警告の回帰防止）', () => {
+        const s = build(opts)
+        for (const g of rawPanelsOf(s)) expect(g).not.toBeInstanceOf(Graphics)
+      })
+
       it('帯は rect で、帯数が computeBands と一致する（帯は g の子 Graphics に描く）', () => {
         const dark = build(darkOpts)
         const s = build(opts)
-        panelsOf(s).forEach((g, i) => {
+        rawPanelsOf(s).forEach((g, i) => {
           const h = fillOps(panelsOf(dark)[i])[0].shape.height
           const fills = fillOps(bandsOf(g))
           expect(fills.every((f) => f.shape.type === 'rectangle')).toBe(true)
@@ -1123,7 +1134,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
       it('帯はパネルを隙間・重なりなく覆い、x と幅が dark のパネルと一致する', () => {
         const dark = build(darkOpts)
         const s = build(opts)
-        panelsOf(s).forEach((g, i) => {
+        rawPanelsOf(s).forEach((g, i) => {
           const rect = fillOps(panelsOf(dark)[i])[0].shape
           let y = rect.y
           for (const f of fillOps(bandsOf(g))) {
@@ -1141,7 +1152,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
         const s = build(opts)
         const lum = (c: number): number =>
           0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff) + 0.114 * (c & 0xff)
-        for (const g of panelsOf(s)) {
+        for (const g of rawPanelsOf(s)) {
           const fills = fillOps(bandsOf(g))
           expect(lum(fills[0].color)).toBeGreaterThan(lum(fills[fills.length - 1].color))
           for (let i = 1; i < fills.length; i++) {
@@ -1153,7 +1164,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
       it('白枠は dark と同じ roundRect（半径 6・色・太さ・位置・寸法）で 1 つだけ', () => {
         const dark = build(darkOpts)
         const s = build(opts)
-        panelsOf(s).forEach((g, i) => {
+        rawPanelsOf(s).forEach((g, i) => {
           const strokes = strokeOps(frameOf(g))
           expect(strokes).toHaveLength(1)
           const ds = strokeOps(panelsOf(dark)[i])[0]
@@ -1182,7 +1193,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
           expect(t.y).toBe(a[i].y)
           expect(t.text).toBe(a[i].text)
         })
-        panelsOf(s).forEach((g, i) => {
+        rawPanelsOf(s).forEach((g, i) => {
           const gb = frameOf(g).getLocalBounds()
           const db = panelsOf(dark)[i].getLocalBounds()
           expect(gb.x).toBe(db.x)
@@ -1195,7 +1206,7 @@ describe('BattleScreen: windowStyle (#744)', () => {
       it('帯は mask 付きで、mask はパネル矩形と同じ roundRect（半径 6）。mask は帯を隙間なく覆う', () => {
         const dark = build(darkOpts)
         const s = build(opts)
-        panelsOf(s).forEach((g, i) => {
+        rawPanelsOf(s).forEach((g, i) => {
           const rect = fillOps(panelsOf(dark)[i])[0].shape
           const masks = fillOps(maskOf(g))
           expect(masks).toHaveLength(1)
@@ -1217,28 +1228,28 @@ describe('BattleScreen: windowStyle (#744)', () => {
       it('redraw を繰り返しても帯・mask・枠・子の数が積み増されない', () => {
         const s = build(opts)
         const snap = (): number[][] =>
-          panelsOf(s).map((g) => [
+          rawPanelsOf(s).map((g) => [
             g.children.length,
             opsOf(bandsOf(g)).length,
             opsOf(maskOf(g)).length,
             opsOf(frameOf(g)).length,
           ])
         const before = snap()
-        const bandsRefs = panelsOf(s).map((g) => bandsOf(g))
+        const bandsRefs = rawPanelsOf(s).map((g) => bandsOf(g))
         s.redraw(800, 450)
         s.redraw(800, 450)
         s.redraw(800, 450)
         expect(snap()).toEqual(before)
         expect(before.every((r) => r[0] === 3)).toBe(true)
         // 子 Graphics は使い回される
-        expect(panelsOf(s).map((g) => bandsOf(g))).toEqual(bandsRefs)
+        expect(rawPanelsOf(s).map((g) => bandsOf(g))).toEqual(bandsRefs)
       })
 
       it('redraw で画面サイズが変わっても帯は新しい高さで描き直される', () => {
         const s = build(opts)
         s.redraw(1000, 600)
         const dark = build(darkOpts, 1000, 600)
-        panelsOf(s).forEach((g, i) => {
+        rawPanelsOf(s).forEach((g, i) => {
           const rect = fillOps(panelsOf(dark)[i])[0].shape
           const fills = fillOps(bandsOf(g))
           expect(fills).toHaveLength(computeBands(rect.height).length)
@@ -1348,7 +1359,9 @@ describe('BattleScreen: windowStyle (#744)', () => {
       )
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack !== null).toBe(sprite === 'acrylic')
-      const fills = fillOps(win === 'ff-blue' ? bandsOf(pi(s).logPanel) : pi(s).logPanel)
+      const fills = fillOps(
+        win === 'ff-blue' ? bandsOf(pi(s).logPanel as Container) : (pi(s).logPanel as Graphics)
+      )
       if (win === 'ff-blue') {
         expect(fills.every((f) => f.shape.type === 'rectangle')).toBe(true)
         expect(allTexts(s).every(hasShadow)).toBe(true)

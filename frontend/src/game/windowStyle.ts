@@ -46,9 +46,9 @@ export interface Band {
   color: number
 }
 
-/** 2 色を t(0〜1) で線形補間する（チャンネルごとに丸める）。範囲外はクランプ、NaN は 0（= a） */
+/** 2 色を t(0〜1) で線形補間する（チャンネルごとに丸める）。範囲外（±Infinity 含む）はクランプ、NaN は 0（= a） */
 export function lerpColor(a: number, b: number, t: number): number {
-  if (!Number.isFinite(t)) t = 0
+  if (Number.isNaN(t)) t = 0
   t = Math.min(1, Math.max(0, t))
   const ch = (shift: number) => {
     const ca = (a >> shift) & 0xff
