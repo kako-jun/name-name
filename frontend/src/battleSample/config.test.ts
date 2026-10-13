@@ -765,6 +765,7 @@ describe('viewsEqual', () => {
     ['layout', { layout: 'front' }],
     ['spriteStyle', { spriteStyle: 'acrylic' }],
     ['windowStyle', { windowStyle: 'ff-blue' }],
+    ['logTypewriter', { logTypewriter: 'on' }],
     ['backgroundOn', { backgroundOn: true }],
     ['partyCount', { partyCount: 3 }],
     ['enemyCount', { enemyCount: 3 }],
@@ -1036,5 +1037,40 @@ describe('logTypewriter (#755)', () => {
     expect(buildBattleSetup(defaultConfig(), on).options.logTypewriter).toBe('on')
     expect(viewsEqual(view(), on)).toBe(false)
     expect(describeView(on, 1, { width: 800, height: 450 })).toContain('logTypewriter=on')
+  })
+})
+
+describe('logTypewriter: 追加の観点 (#755 QA)', () => {
+  it('不正値エラーにキー名が含まれる', () => {
+    const r = parseConfig({ logTypewriter: 'foo' }, BASE)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('logTypewriter')
+  })
+
+  it.each([null, '', 'ON', true, 1, 0])('不正値 %j はエラー（off に黙って倒さない）', (v) => {
+    expect(parseConfig({ logTypewriter: v }, BASE).ok).toBe(false)
+  })
+
+  it('未指定なら既定 off', () => {
+    const r = parseConfig({}, BASE)
+    expect(r.ok && r.value.logTypewriter).toBe('off')
+  })
+
+  it('initialView は config の値を引き継ぐ', () => {
+    const r = parseConfig({ logTypewriter: 'on' }, BASE)
+    expect(r.ok && initialView(r.value).logTypewriter).toBe('on')
+  })
+
+  it('背景なしでも buildBattleSetup は logTypewriter を options に素通しする（on / off）', () => {
+    for (const v of ['on', 'off'] as const) {
+      const s = buildBattleSetup(defaultConfig(), view({ backgroundOn: false, logTypewriter: v }))
+      expect(s.options.logTypewriter).toBe(v)
+    }
+  })
+
+  it('describeView は on / off を出し分ける', () => {
+    const size = { width: 800, height: 450 }
+    expect(describeView(view({ logTypewriter: 'on' }), 1, size)).toContain('logTypewriter=on')
+    expect(describeView(view({ logTypewriter: 'off' }), 1, size)).toContain('logTypewriter=off')
   })
 })

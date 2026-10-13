@@ -2289,3 +2289,57 @@ describe('parseMarkdown + normalizeDocument: battle_background_tone / dof が no
     expect(doc.battle_background_dof).toBe('on')
   })
 })
+
+describe('parseMarkdown + normalizeDocument: battle_log_typewriter の追加観点 (#755 QA)', () => {
+  function docWith(...lines: string[]): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('空文字指定 → null に倒れる', async () => {
+    expect(
+      (await parseMarkdown(docWith('battle_log_typewriter: ""'))).battle_log_typewriter
+    ).toBeNull()
+  })
+
+  it('値なし → null（undefined ではない）', async () => {
+    const doc = await parseMarkdown(docWith('battle_log_typewriter:'))
+    expect(doc.battle_log_typewriter).toBeNull()
+  })
+
+  it('未知値は parser では正規化されず素通しする', async () => {
+    const doc = await parseMarkdown(docWith('battle_log_typewriter: foo'))
+    expect(doc.battle_log_typewriter).toBe('foo')
+  })
+
+  it('他の戦闘キーと併用しても全て生存する', async () => {
+    const doc = await parseMarkdown(
+      docWith(
+        'battle_layout: side',
+        'sprite_style: acrylic',
+        'window_style: ff-blue',
+        'battle_background_tone: off',
+        'battle_background_dof: on',
+        'battle_log_typewriter: on'
+      )
+    )
+    expect(doc.battle_layout).toBe('side')
+    expect(doc.sprite_style).toBe('acrylic')
+    expect(doc.window_style).toBe('ff-blue')
+    expect(doc.battle_background_tone).toBe('off')
+    expect(doc.battle_background_dof).toBe('on')
+    expect(doc.battle_log_typewriter).toBe('on')
+  })
+})
