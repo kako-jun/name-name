@@ -14,6 +14,7 @@ import {
   Texture,
   TextureSource,
   type Text,
+  Text as PixiText,
 } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -29,6 +30,7 @@ import {
 } from './battleLayout'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
 import type { AcrylicEdgeFilter } from './acrylicEdgeFilter'
+import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 
 const DEAD_ALPHA = 0.3
 
@@ -951,6 +953,349 @@ describe('BattleScreen: acrylic (#737)', () => {
       s.destroy({ children: true })
       expect(destroy).toHaveBeenCalledTimes(1)
       expect(v.acrylicFilter).toBeNull()
+    })
+  })
+})
+
+describe('BattleScreen: windowStyle (#744)', () => {
+  interface PanelInternals {
+    statsPanel: Graphics
+    commandPanel: Graphics
+    logPanel: Graphics
+    commands: Array<{ text: Text }>
+  }
+  interface PanelOp {
+    action: string
+    color: number
+    alpha: number
+    width: number | undefined
+    shape: { type: string; x: number; y: number; width: number; height: number }
+  }
+  const pi = (s: BattleScreen): PanelInternals => s as unknown as PanelInternals
+
+  /** Graphics に積まれた fill / stroke 命令を、形状つきで描画順に取り出す */
+  const opsOf = (g: Graphics): PanelOp[] =>
+    (
+      g.context.instructions as unknown as Array<{
+        action: string
+        data: {
+          style: { color: number; alpha: number; width?: number }
+          path: { shapePath: { shapePrimitives: Array<{ shape: PanelOp['shape'] }> } }
+        }
+      }>
+    ).map((ins) => ({
+      action: ins.action,
+      color: ins.data.style.color,
+      alpha: ins.data.style.alpha,
+      width: ins.data.style.width,
+      shape: ins.data.path.shapePath.shapePrimitives[0].shape,
+    }))
+  const fillOps = (g: Graphics): PanelOp[] => opsOf(g).filter((o) => o.action === 'fill')
+  const strokeOps = (g: Graphics): PanelOp[] => opsOf(g).filter((o) => o.action === 'stroke')
+  const panelsOf = (s: BattleScreen): Graphics[] => [
+    pi(s).statsPanel,
+    pi(s).commandPanel,
+    pi(s).logPanel,
+  ]
+
+  /** 子孫を含む全 PixiText */
+  function allTexts(root: Container): PixiText[] {
+    const out: PixiText[] = []
+    const walk = (c: Container): void => {
+      if (c instanceof PixiText) out.push(c)
+      for (const ch of c.children) walk(ch as Container)
+    }
+    walk(root)
+    return out
+  }
+  const hasShadow = (t: PixiText): boolean => t.style.dropShadow != null
+  const fillColorOf = (t: PixiText): number => {
+    const f = t.style.fill as unknown
+    return typeof f === 'number' ? f : (f as { color: number }).color
+  }
+
+  const FRONT: BattleScreenOptions = {}
+  const SIDE: BattleScreenOptions = { layout: 'side' }
+  const build = (opts: BattleScreenOptions, w = 800, h = 450): BattleScreen =>
+    track(make([entity('hero')], [entity('slime')], opts, w, h))
+
+  describe('dark（既定・回帰）', () => {
+    const cases: Array<[string, BattleScreenOptions]> = [
+      ['windowStyle 未指定', {}],
+      ["'dark'", { windowStyle: 'dark' }],
+      ['未知値 xxx', { windowStyle: 'xxx' as never }],
+      [
+        '大文字 FF-BLUE（厳密比較。正規化は rpgProjectFromDoc の責務）',
+        { windowStyle: 'FF-BLUE' as never },
+      ],
+    ]
+    it.each(cases)('%s: 各パネルは roundRect 1 つ・黒 alpha 0.85・白枠 2px', (_name, extra) => {
+      const s = build({ ...SIDE, ...extra })
+      for (const g of panelsOf(s)) {
+        const fills = fillOps(g)
+        expect(fills).toHaveLength(1)
+        expect(fills[0].shape.type).toBe('roundedRectangle')
+        expect(fills[0].color).toBe(0x000000)
+        expect(fills[0].alpha).toBe(0.85)
+        const strokes = strokeOps(g)
+        expect(strokes).toHaveLength(1)
+        expect(strokes[0].color).toBe(0xffffff)
+        expect(strokes[0].width).toBe(2)
+      }
+    })
+
+    it('front でも roundRect 1 つ（未指定）', () => {
+      const s = build(FRONT)
+      for (const g of panelsOf(s)) {
+        expect(fillOps(g)).toHaveLength(1)
+        expect(fillOps(g)[0].shape.type).toBe('roundedRectangle')
+      }
+    })
+
+    it('windowStyle 未指定と dark 明示は同一の描画命令になる', () => {
+      const a = build(SIDE)
+      const b = build({ ...SIDE, windowStyle: 'dark' })
+      panelsOf(a).forEach((g, i) => {
+        expect(opsOf(panelsOf(b)[i])).toEqual(opsOf(g))
+      })
+    })
+
+    it('全 PixiText に影がない（front）', () => {
+      const s = build(FRONT)
+      const texts = allTexts(s)
+      expect(texts.length).toBeGreaterThan(0)
+      expect(texts.some(hasShadow)).toBe(false)
+    })
+
+    it('全 PixiText に影がない（side・敵ラベル含む）', () => {
+      const s = build(SIDE)
+      const texts = allTexts(s)
+      expect(texts.length).toBeGreaterThan(0)
+      expect(texts.some(hasShadow)).toBe(false)
+    })
+  })
+
+  describe('ff-blue: パネル', () => {
+    const modes: Array<[string, BattleScreenOptions]> = [
+      ['front', { windowStyle: 'ff-blue' }],
+      ['side', { layout: 'side', windowStyle: 'ff-blue' }],
+    ]
+    describe.each(modes)('%s', (_mode, opts) => {
+      const darkOpts: BattleScreenOptions = { ...opts, windowStyle: 'dark' }
+
+      it('帯は rect で、帯数が computeBands と一致する', () => {
+        const dark = build(darkOpts)
+        const s = build(opts)
+        panelsOf(s).forEach((g, i) => {
+          const h = fillOps(panelsOf(dark)[i])[0].shape.height
+          const fills = fillOps(g)
+          expect(fills.every((f) => f.shape.type === 'rectangle')).toBe(true)
+          expect(fills).toHaveLength(computeBands(h).length)
+          expect(fills.length).toBeGreaterThan(0)
+          expect(fills.length).toBeLessThanOrEqual(FF_BLUE_BAND_COUNT)
+        })
+      })
+
+      it('帯はパネルを隙間・重なりなく覆い、x と幅が dark のパネルと一致する', () => {
+        const dark = build(darkOpts)
+        const s = build(opts)
+        panelsOf(s).forEach((g, i) => {
+          const rect = fillOps(panelsOf(dark)[i])[0].shape
+          let y = rect.y
+          for (const f of fillOps(g)) {
+            expect(f.shape.x).toBe(rect.x)
+            expect(f.shape.width).toBe(rect.width)
+            expect(f.shape.y).toBe(y)
+            expect(f.shape.height).toBeGreaterThanOrEqual(1)
+            y += f.shape.height
+          }
+          expect(y).toBe(rect.y + rect.height)
+        })
+      })
+
+      it('上の帯ほど明るい（輝度が単調に下がる）', () => {
+        const s = build(opts)
+        const lum = (c: number): number =>
+          0.299 * ((c >> 16) & 0xff) + 0.587 * ((c >> 8) & 0xff) + 0.114 * (c & 0xff)
+        for (const g of panelsOf(s)) {
+          const fills = fillOps(g)
+          expect(lum(fills[0].color)).toBeGreaterThan(lum(fills[fills.length - 1].color))
+          for (let i = 1; i < fills.length; i++) {
+            expect(lum(fills[i].color)).toBeLessThanOrEqual(lum(fills[i - 1].color))
+          }
+        }
+      })
+
+      it('白枠は dark と同じ（色・太さ・位置・寸法）で 1 つだけ', () => {
+        const dark = build(darkOpts)
+        const s = build(opts)
+        panelsOf(s).forEach((g, i) => {
+          const strokes = strokeOps(g)
+          expect(strokes).toHaveLength(1)
+          const ds = strokeOps(panelsOf(dark)[i])[0]
+          expect(strokes[0].color).toBe(ds.color)
+          expect(strokes[0].width).toBe(ds.width)
+          expect(strokes[0].shape.x).toBe(ds.shape.x)
+          expect(strokes[0].shape.y).toBe(ds.shape.y)
+          expect(strokes[0].shape.width).toBe(ds.shape.width)
+          expect(strokes[0].shape.height).toBe(ds.shape.height)
+        })
+      })
+
+      it('画面寸法・テキスト座標・子の数が dark と同一', () => {
+        const dark = build(darkOpts)
+        const s = build(opts)
+        expect(s.children.length).toBe(dark.children.length)
+        const a = allTexts(dark)
+        const b = allTexts(s)
+        expect(b).toHaveLength(a.length)
+        b.forEach((t, i) => {
+          expect(t.x).toBe(a[i].x)
+          expect(t.y).toBe(a[i].y)
+          expect(t.text).toBe(a[i].text)
+        })
+        panelsOf(s).forEach((g, i) => {
+          const gb = g.getLocalBounds()
+          const db = panelsOf(dark)[i].getLocalBounds()
+          expect(gb.x).toBe(db.x)
+          expect(gb.y).toBe(db.y)
+          expect(gb.width).toBe(db.width)
+          expect(gb.height).toBe(db.height)
+        })
+      })
+
+      it('redraw を繰り返しても帯が積み増されない', () => {
+        const s = build(opts)
+        const before = panelsOf(s).map((g) => opsOf(g).length)
+        s.redraw(800, 450)
+        s.redraw(800, 450)
+        s.redraw(800, 450)
+        expect(panelsOf(s).map((g) => opsOf(g).length)).toEqual(before)
+      })
+
+      it('redraw で画面サイズが変わっても帯は新しい高さで描き直される', () => {
+        const s = build(opts)
+        s.redraw(1000, 600)
+        const dark = build(darkOpts, 1000, 600)
+        panelsOf(s).forEach((g, i) => {
+          const rect = fillOps(panelsOf(dark)[i])[0].shape
+          const fills = fillOps(g)
+          expect(fills).toHaveLength(computeBands(rect.height).length)
+          const last = fills[fills.length - 1]
+          expect(last.shape.y + last.shape.height).toBe(rect.y + rect.height)
+          expect(fills[0].shape.y).toBe(rect.y)
+        })
+      })
+    })
+  })
+
+  describe('テキスト影', () => {
+    it('ff-blue（front）: 敵名・HP・ヒーロー・コマンド・ログに影がある', () => {
+      const s = build({ windowStyle: 'ff-blue' })
+      const i = internals(s)
+      expect(hasShadow(i.enemyNameText as unknown as PixiText)).toBe(true)
+      expect(hasShadow(i.enemyHpText as unknown as PixiText)).toBe(true)
+      expect(hasShadow(i.heroStatsText as unknown as PixiText)).toBe(true)
+      expect(pi(s).commands.length).toBeGreaterThan(0)
+      for (const c of pi(s).commands) expect(hasShadow(c.text as unknown as PixiText)).toBe(true)
+      expect(i.logLines.length).toBeGreaterThan(0)
+      for (const t of i.logLines) expect(hasShadow(t as unknown as PixiText)).toBe(true)
+    })
+
+    it('ff-blue（side）: サイドステータス・敵ラベル・コマンド・ログに影がある', () => {
+      const s = build({ layout: 'side', windowStyle: 'ff-blue' })
+      const i = internals(s)
+      expect(i.statusTexts.length).toBeGreaterThan(0)
+      for (const t of i.statusTexts) expect(hasShadow(t as unknown as PixiText)).toBe(true)
+      expect(i.enemyViews[0].label).not.toBeNull()
+      expect(hasShadow(i.enemyViews[0].label as unknown as PixiText)).toBe(true)
+      for (const c of pi(s).commands) expect(hasShadow(c.text as unknown as PixiText)).toBe(true)
+      for (const t of i.logLines) expect(hasShadow(t as unknown as PixiText)).toBe(true)
+      expect(allTexts(s).every(hasShadow)).toBe(true)
+    })
+
+    it('影の内容は FF_BLUE_TEXT_SHADOW に従う', () => {
+      const s = build({ windowStyle: 'ff-blue' })
+      const sh = internals(s).enemyNameText.style.dropShadow as unknown as Record<string, number>
+      expect(sh).toMatchObject({
+        color: FF_BLUE_TEXT_SHADOW.color,
+        alpha: FF_BLUE_TEXT_SHADOW.alpha,
+        distance: FF_BLUE_TEXT_SHADOW.distance,
+      })
+    })
+
+    it('文字色は ff-blue でも dark と同一で、名前・コマンド・ログは白のまま', () => {
+      for (const layout of ['front', 'side'] as const) {
+        const dark = allTexts(build({ layout }))
+        const blue = build({ layout, windowStyle: 'ff-blue' })
+        expect(allTexts(blue).map(fillColorOf)).toEqual(dark.map(fillColorOf))
+        for (const c of pi(blue).commands)
+          expect(fillColorOf(c.text as unknown as PixiText)).toBe(0xffffff)
+        for (const t of internals(blue).logLines)
+          expect(fillColorOf(t as unknown as PixiText)).toBe(0xffffff)
+      }
+    })
+
+    it('ff-blue → dark の順に 2 画面を作っても共有スタイルが汚染されない', () => {
+      build({ windowStyle: 'ff-blue' })
+      build({ layout: 'side', windowStyle: 'ff-blue' })
+      const dark = build({ windowStyle: 'dark' })
+      const darkSide = build({ layout: 'side' })
+      expect(allTexts(dark).some(hasShadow)).toBe(false)
+      expect(allTexts(darkSide).some(hasShadow)).toBe(false)
+    })
+
+    it('dark → ff-blue の順でも dark 側に影が付かない', () => {
+      const dark = build({})
+      const blue = build({ windowStyle: 'ff-blue' })
+      expect(allTexts(blue).every(hasShadow)).toBe(true)
+      expect(allTexts(dark).some(hasShadow)).toBe(false)
+    })
+
+    it('影オブジェクトは Text 間・定数と共有されない', () => {
+      const s = build({ layout: 'side', windowStyle: 'ff-blue' })
+      const shadows = allTexts(s).map((t) => t.style.dropShadow)
+      expect(shadows.length).toBeGreaterThan(1)
+      expect(new Set(shadows).size).toBe(shadows.length)
+      for (const sh of shadows) expect(sh).not.toBe(FF_BLUE_TEXT_SHADOW)
+    })
+
+    it('ff-blue 画面の destroy 後も別の ff-blue 画面の影が残る', () => {
+      const a = build({ windowStyle: 'ff-blue' })
+      const b = build({ windowStyle: 'ff-blue' })
+      a.destroy({ children: true })
+      expect(allTexts(b).every(hasShadow)).toBe(true)
+    })
+  })
+
+  describe('acrylic との組み合わせ', () => {
+    const withSprite = (id: string): BattleEntity => entity(id, { sprite: `img/${id}.webp` })
+    const combos: Array<['none' | 'acrylic', 'dark' | 'ff-blue']> = [
+      ['none', 'dark'],
+      ['none', 'ff-blue'],
+      ['acrylic', 'dark'],
+      ['acrylic', 'ff-blue'],
+    ]
+    it.each(combos)('spriteStyle=%s × windowStyle=%s は独立に効く', (sprite, win) => {
+      vi.spyOn(Assets, 'load').mockReturnValue(new Promise(() => {}) as never)
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          layout: 'side',
+          spriteStyle: sprite,
+          windowStyle: win,
+        })
+      )
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicBack !== null).toBe(sprite === 'acrylic')
+      const fills = fillOps(pi(s).logPanel)
+      if (win === 'ff-blue') {
+        expect(fills.every((f) => f.shape.type === 'rectangle')).toBe(true)
+        expect(allTexts(s).every(hasShadow)).toBe(true)
+      } else {
+        expect(fills).toHaveLength(1)
+        expect(fills[0].shape.type).toBe('roundedRectangle')
+        expect(allTexts(s).some(hasShadow)).toBe(false)
+      }
     })
   })
 })
