@@ -69,6 +69,7 @@ const TEXT_X_WITH_PORTRAIT = PORTRAIT_X + PORTRAIT_SIZE + PORTRAIT_MARGIN
 
 // private フィールドにアクセスするための型
 interface DialogBoxInternals {
+  applyIndicatorFrame(): void
   portraitFrame: { visible: boolean } | null
   dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
   typewriter: { fullText: string; displayedCharCount: number; acc: number }
@@ -2470,6 +2471,94 @@ describe('DialogBox ▼グリフの縦スケール (#447 追加要望2)', () => 
     box.setIndicatorKind('pageturn')
     expect(si(box).indicatorGlyph.scale.y).toBe(before)
     expect(si(box).indicatorGlyph.scale.y).toBeLessThan(1)
+    box.dispose()
+  })
+})
+
+// =====================================================================================
+// #774: DialogBox が destroy された後に画像インジケータの fetch が解決/失敗しても何もしない
+//
+// 原因: init 前の renderer に setAssetBaseUrl が流れて画像 fetch が始まり（dev の StrictMode
+// 二重マウント・fluid 再マウント・読み込み中の画面離脱など）、init 完了後に renderer が destroy
+// （app.destroy children）される。その後に fetch が解決すると .then 内の applyIndicatorFrame /
+// positionIndicator が破棄済み Container（scale/indicator が null）で throw し、後ろの .catch が
+// 偽の「failed to load indicator images」warning を出して applyIndicatorFrame を再度呼び、
+// 2 回目の throw が unhandled になって pageerror になっていた。
+// =====================================================================================
+describe('DialogBox #774 destroy 後の画像インジケータ解決で何もしない', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function mockLoadQueue() {
+    const calls: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> = []
+    vi.spyOn(Assets, 'load').mockImplementation(
+      (() =>
+        new Promise((resolve, reject) => {
+          calls.push({ resolve, reject })
+        })) as unknown as typeof Assets.load
+    )
+    return calls
+  }
+
+  const makers: Array<[string, () => DialogBox]> = [
+    ['adv', () => makeRpgBox()],
+    [
+      'novel',
+      () => {
+        const b = makeRpgBox()
+        b.setNovelMode(true)
+        return b
+      },
+    ],
+  ]
+
+  describe.each(makers)('%s', (_name, make) => {
+    it('destroy 後に Assets.load が reject しても warn も failed 化も起きない', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const calls = mockLoadQueue()
+      const box = make()
+      box.setIndicatorAssetBaseUrl('/asset-base')
+      box.setIndicatorKind('next')
+      box.destroy({ children: true })
+
+      calls[0].reject(new Error('404'))
+      await flushPromises()
+      await flushPromises()
+
+      expect(warn).not.toHaveBeenCalled()
+      expect(asInternals(box).failedIndicatorKinds.size).toBe(0)
+    })
+
+    it('destroy 後に Assets.load が成功しても warn が呼ばれない', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const calls = mockLoadQueue()
+      const box = make()
+      box.setIndicatorAssetBaseUrl('/asset-base')
+      box.setIndicatorKind('next')
+      box.destroy({ children: true })
+
+      calls.forEach((c) => c.resolve(Texture.WHITE))
+      await flushPromises()
+      await flushPromises()
+
+      expect(warn).not.toHaveBeenCalled()
+      expect(() => asInternals(box).applyIndicatorFrame()).not.toThrow()
+    })
+  })
+
+  it('ロード成功時（destroy 前）は従来どおり寸法が設定され sprite が表示される', async () => {
+    const calls = mockLoadQueue()
+    const box = makeRpgBox()
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('next')
+    calls.forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    await flushPromises()
+    const i = asInternals(box)
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorSprite.width).toBeGreaterThan(0)
+    expect(i.indicatorGlyph.visible).toBe(false)
     box.dispose()
   })
 })

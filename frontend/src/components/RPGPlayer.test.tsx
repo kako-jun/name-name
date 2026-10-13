@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import RPGPlayer from './RPGPlayer'
+import { sampleRpgData } from '../game/sampleRpgData'
 
 // RPGPlayer は PixiJS 依存の TopDownRenderer/RaycastRenderer を construct するため、
 // jsdom では実 init できない（NovelPlayer 系テストと同じ事情）。init/load/destroy/
@@ -79,5 +80,18 @@ describe('RPGPlayer: 設定の開閉を renderer に伝える (#204)', () => {
     expect(r.setInputSuspended).toHaveBeenLastCalledWith(true)
     fireEvent.keyDown(window, { key: ',', ctrlKey: true })
     expect(r.setInputSuspended).toHaveBeenLastCalledWith(false)
+  })
+})
+
+describe('RPGPlayer: renderer の作り直しでも設定中の停止を引き継ぐ (#204)', () => {
+  it('設定を開いたまま gameData が変わって renderer が作り直されると、init 後に setInputSuspended(true) が呼ばれる', async () => {
+    raycastInstances.length = 0
+    const { rerender } = render(<RPGPlayer view="raycast" />)
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    rerender(<RPGPlayer view="raycast" gameData={{ ...sampleRpgData }} />)
+    await new Promise((r) => setTimeout(r, 0))
+    const next = raycastInstances[raycastInstances.length - 1]
+    expect(next).not.toBe(raycastInstances[0])
+    expect(next.setInputSuspended).toHaveBeenCalledWith(true)
   })
 })

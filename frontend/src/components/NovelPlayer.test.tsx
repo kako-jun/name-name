@@ -747,6 +747,18 @@ describe('NovelPlayer events/jumpSceneIndex 同期 effect の分離 (#671 M1)', 
     expect(r.setEvents).not.toHaveBeenCalled()
   })
 
+  it('H3: jumpSceneIndex が空配列になっても反映する（古い索引を残さない #734）', async () => {
+    const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.setJumpSceneIndex.mockClear()
+
+    rerender(<NovelPlayer events={fixedEvents} jumpSceneIndex={[]} />)
+    await flushAsync()
+
+    expect(r.setJumpSceneIndex).toHaveBeenCalledWith([])
+  })
+
   it('H2: events 自体が変わった場合は従来どおり setEvents が呼ばれる（分離後も正当な用途は維持する対照ケース）', async () => {
     const otherEvents: Event[] = []
     const { rerender } = render(<NovelPlayer events={fixedEvents} jumpSceneIndex={[sceneA]} />)
@@ -2708,6 +2720,26 @@ describe('NovelPlayer インジケータ画像先読み (#413)', () => {
     expect(load).toHaveBeenCalledTimes(8)
     const r = rendererInstances[rendererInstances.length - 1]
     expect(r.init).toHaveBeenCalled()
+  })
+
+  it('NP-9: init 完了前は effect から setAssetBaseUrl を流さず、ready 後に最新値を反映する (#774)', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(
+      Texture.WHITE as unknown as Awaited<ReturnType<typeof Assets.load>>
+    )
+    setInitDeferred(true)
+    const { rerender } = render(<NovelPlayer events={[]} assetBaseUrl="/a" />)
+    await flushAsync()
+    rerender(<NovelPlayer events={[]} assetBaseUrl="/b" />)
+    await flushAsync()
+    const r = rendererInstances[rendererInstances.length - 1]
+    expect(r.setAssetBaseUrl).not.toHaveBeenCalled()
+
+    resolvePendingInit()
+    await flushAsync()
+    const calls = r.setAssetBaseUrl.mock.calls.map((c) => c[0])
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls[calls.length - 1]).toBe('/b')
+    setInitDeferred(false)
   })
 
   it('NP-7: 8URL全てrejectしても例外を投げず console 出力もない', async () => {
