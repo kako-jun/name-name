@@ -358,3 +358,51 @@ describe('RaycastRenderer.load → windowStyle の流れ (#744)', () => {
     expect(i.battleScreen!.opts.windowStyle).toBe('dark')
   })
 })
+
+describe('RaycastRenderer: 隊列・奥行き・前景の配線 (#747)', () => {
+  it('side・row: back（別名 後衛 も）→ BattleEntity.row が back', () => {
+    const { i } = makeRenderer()
+    i.battleLayout = 'side'
+    expect(i.partyDefToBattleEntity(member('a', { row: 'back' })).row).toBe('back')
+    expect(i.partyDefToBattleEntity(member('b', { row: '後衛' })).row).toBe('back')
+  })
+  it('side・row 未指定・front・未知値 → row キーなし', () => {
+    const { i } = makeRenderer()
+    i.battleLayout = 'side'
+    expect('row' in i.partyDefToBattleEntity(member('a'))).toBe(false)
+    expect('row' in i.partyDefToBattleEntity(member('b', { row: 'front' }))).toBe(false)
+    expect('row' in i.partyDefToBattleEntity(member('c', { row: 'foo' }))).toBe(false)
+  })
+  it('front 配置では row: back でも row キーを載せない', () => {
+    const { i } = makeRenderer()
+    i.battleLayout = 'front'
+    expect('row' in i.partyDefToBattleEntity(member('a', { row: 'back' }))).toBe(false)
+  })
+  it('load() の battleDepth / battleForeground が BattleScreen の opts に流れる', () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 1, height: 1 } as never)
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(
+      project({
+        battleLayout: 'side',
+        battleDepth: { horizon: 0.3, perspective: 0.8 },
+        battleForeground: 'fg/a.png',
+      })
+    )
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.depth).toEqual({ horizon: 0.3, perspective: 0.8 })
+    expect(i.battleScreen!.opts.foreground).toBe('fg/a.png')
+  })
+  it('未指定: depth は null・foreground は undefined、再 load で前回値が残らない', () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({ width: 1, height: 1 } as never)
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(
+      project({ battleDepth: { horizon: 0.3, perspective: 0.8 }, battleForeground: 'fg/a.png' })
+    )
+    r.load(project({}))
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.depth).toBeNull()
+    expect(i.battleScreen!.opts.foreground).toBeUndefined()
+  })
+})
