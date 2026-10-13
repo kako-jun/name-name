@@ -451,14 +451,17 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
   it.each([
     ['ながいなまえのゆうしゃ', 20, true],
     ['ながいなまえのゆうしゃ', 120, false],
-  ])('320 幅でも status テキストは概算幅でパネル内に収まる（%s, HP %d）', (name, hp, hasEllipsis) => {
-    const s = track(
-      make([entity('hero', { name, hp, maxHp: hp })], [entity('slime')], sideOpts, 320, 568)
-    )
-    const L = computeSideBattleLayout({ width: 320, height: 568, partyCount: 1, enemyCount: 1 })
-    const text = internals(s).statusTexts[0].text
-    expect(text.endsWith(`HP ${hp}/${hp}`)).toBe(true)
-    expect(text.includes('…')).toBe(hasEllipsis)
-    expect(estimateTextWidth(text, 14)).toBeLessThanOrEqual(L.status.w - 24 + 0.001)
-  })
+  ])(
+    '320 幅でも status テキストは概算幅でパネル内に収まる（%s, HP %d）',
+    (name, hp, hasEllipsis) => {
+      const s = track(
+        make([entity('hero', { name, hp, maxHp: hp })], [entity('slime')], sideOpts, 320, 568)
+      )
+      const L = computeSideBattleLayout({ width: 320, height: 568, partyCount: 1, enemyCount: 1 })
+      const text = internals(s).statusTexts[0].text
+      expect(text.endsWith(`HP ${hp}/${hp}`)).toBe(true)
+      expect(text.includes('…')).toBe(hasEllipsis)
+      expect(estimateTextWidth(text, 14)).toBeLessThanOrEqual(L.status.w - 24 + 0.001)
+    }
+  )
 })
