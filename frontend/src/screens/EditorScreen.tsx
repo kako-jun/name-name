@@ -128,7 +128,12 @@ function EditorScreen({
   const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   const [availableScripts, setAvailableScripts] = useState<ScriptInfo[]>([])
   // listScripts の結果（成功・失敗とも）が出たか。最初に開く文書は一覧から決めるので、それまで初期ロードを待つ。
-  const [scriptListSettled, setScriptListSettled] = useState(false)
+  // 一覧取得が済んだプロジェクト名。現在の projectName と一致して初めて「済み」とみなす
+  // （プロジェクトが変わったら自動的に未済に戻る。古い一覧結果は反映しない）。
+  const [settledProject, setSettledProject] = useState<string | null>(null)
+  const scriptListSettled = settledProject === projectName
+  // listScripts が失敗したか（先行取得の失敗を再取得せず使い回すかの判定用）
+  const scriptListFailedRef = useRef(false)
   // #238: 編集中以外の .md (data.md 等) を解析した EventDocument。
   // RPG タブが master データ (モンスター / アイテム / 呪文 / パーティ) を data.md から
   // 参照できるよう、active doc とは別に並行ロードして保持する。
@@ -496,15 +501,35 @@ function EditorScreen({
   // 既定の script.md を listScripts と並列で先行して取りに行く。worker の listScripts は各 .md を
   // 順に fetch する（キャッシュ MISS 時）ので遅く、直列にすると起動が遅れる。一覧が「script.md あり」を
   // 確定したらこの結果を使い、一覧に無ければ捨てる（失敗は握りつぶす＝トーストを出さない）。
+  // 先行取得するのは「既定の script.md」。scriptsDir を持つプロジェクト（skirts-colour の
+  // content/scripts 等）は scriptsDir/script.md を取る（ルートの script.md は 404 になるため）。
+  // scriptsDir は listProjects（静的な JSON）で分かる。取れなければルート直下を試す。
   const defaultPrefetchRef = useRef<{
-    path: string
-    promise: Promise<ContentsResponse | null>
+    promise: Promise<{ path: string; data: ContentsResponse | null; error: unknown }>
   } | null>(null)
   useEffect(() => {
-    defaultPrefetchRef.current = {
-      path: DEFAULT_SCRIPT_PATH,
-      promise: api.getContents(projectName, DEFAULT_SCRIPT_PATH, DEFAULT_BRANCH).catch(() => null),
-    }
+    const promise = (async () => {
+      let path = DEFAULT_SCRIPT_PATH
+      try {
+        const projects = await api.listProjects()
+        const dir = projects
+          .find((pr) => pr.name === projectName)
+          ?.scriptsDir?.replace(/^\/+|\/+$/g, '')
+        if (dir) path = `${dir}/${DEFAULT_SCRIPT_PATH}`
+      } catch {
+        // 取れなければルート直下
+      }
+      try {
+        return {
+          path,
+          data: await api.getContents(projectName, path, DEFAULT_BRANCH),
+          error: null,
+        }
+      } catch (error) {
+        return { path, data: null, error }
+      }
+    })()
+    defaultPrefetchRef.current = { promise }
   }, [api, projectName])
 
   useEffect(() => {
@@ -521,12 +546,18 @@ function EditorScreen({
 
     const loadChapters = async () => {
       try {
-        // 先行取得済みの既定パスならその結果を使う（1 回限り。失敗していたら普通に取り直す）
+        // 先行取得済みの既定パスならその結果を使う（1 回限り）。取得に失敗していた場合は、
+        // 一覧が成功していれば（一時的な失敗かもしれないので）取り直し、一覧も失敗していたら
+        // 同じエラーを使い回す（同じ取得を2回しない。トーストは従来どおり1回）。
         let data: ContentsResponse | null = null
         const prefetch = defaultPrefetchRef.current
-        if (prefetch && prefetch.path === currentScriptPath) {
+        if (prefetch) {
+          const pre = await prefetch.promise
           defaultPrefetchRef.current = null
-          data = await prefetch.promise
+          if (pre.path === currentScriptPath) {
+            if (pre.data) data = pre.data
+            else if (scriptListFailedRef.current) throw pre.error
+          }
         }
         data ??= await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
         const markdown = data.content || ''
@@ -569,29 +600,49 @@ function EditorScreen({
     // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
   }, [api, projectName, currentScriptPath, scriptListSettled])
 
+  // プロジェクトが変わったら、開くファイル・一覧・doc の所属を初期状態に戻す（通常は App が
+  // key で再マウントするが、再マウントされなくても前のプロジェクトの状態を引きずらない）。
+  // 初回マウントでは同じ値の再設定になるだけ。
+  const projectRef = useRef(projectName)
+  useEffect(() => {
+    if (projectRef.current === projectName) return
+    projectRef.current = projectName
+    setCurrentScriptPath(DEFAULT_SCRIPT_PATH)
+    setAvailableScripts([])
+    setDocPath(null)
+  }, [projectName])
+
   // #237: プロジェクト直下の .md 一覧（engine: name-name のみ）を取得してタブを構築。
   // 失敗しても致命的でない（script.md 単体運用に degrade する）ためエラーはコンソールのみ。
   useEffect(() => {
+    let cancelled = false
+    scriptListFailedRef.current = false
     const loadList = async () => {
       try {
         const scripts = await api.listScripts(projectName, DEFAULT_BRANCH)
+        if (cancelled) return
         setAvailableScripts(scripts)
         // 最初に開く文書を一覧から決める。既定の script.md が一覧に無い場合（scriptsDir 構成等）は、
         // /play のエントリ選び（#284）と同じく basename が script.md のもの、無ければ先頭にする。
         // 一覧が空なら DEFAULT_SCRIPT_PATH のまま。
-        if (scripts.length > 0 && !scripts.some((s) => s.path === currentScriptPath)) {
+        if (scripts.length > 0 && !scripts.some((s) => s.path === DEFAULT_SCRIPT_PATH)) {
           const entry = scripts.find((s) => basename(s.path) === SCRIPT_BASENAME) ?? scripts[0]
           switchScript(entry.path)
         }
       } catch (err) {
+        if (cancelled) return
+        scriptListFailedRef.current = true
         console.warn('[EditorScreen] listScripts failed; falling back to single script.md', err)
         setAvailableScripts([])
       } finally {
         // 失敗時（単一 script.md の旧プロジェクト等）は従来どおり既定の script.md を試す
-        setScriptListSettled(true)
+        if (!cancelled) setSettledProject(projectName)
       }
     }
     loadList()
+    return () => {
+      cancelled = true
+    }
     // #237 review S1: listing 自体は repo 単位の情報なので projectName が変わったときだけ再取得する。
     // (listing 取得後の otherDocs ロードは別の useEffect が availableScripts を監視して行う)
     // currentScriptPath を依存に入れるとタブ切替の度に listing API が再叩きされて無駄。

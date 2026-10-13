@@ -30,6 +30,7 @@ let serverHasRootScript = true
 const getContentsMock = vi.hoisted(() => vi.fn())
 const listScriptsMock = vi.hoisted(() => vi.fn())
 const putContentsMock = vi.hoisted(() => vi.fn())
+const listProjectsMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]))
 
 vi.mock('../components/NovelPlayer', () => ({
   default: (props: Record<string, unknown>) => {
@@ -61,6 +62,7 @@ vi.mock('../api/client', () => ({
   createApiClient: () => ({
     getContents: (...args: unknown[]) => getContentsMock(...args),
     listScripts: (...args: unknown[]) => listScriptsMock(...args),
+    listProjects: () => listProjectsMock(),
     putContents: (...args: unknown[]) => putContentsMock(...args),
   }),
 }))
@@ -526,6 +528,78 @@ describe('EditorScreen: 最初に開く文書の決め方 (#778 調査)', () => 
     expect(await screen.findByText(/読み込みに失敗/)).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: /^script\.md/ }))
     await waitFor(() => expect(screen.queryByText(/読み込みに失敗/)).toBeNull())
+  })
+})
+
+describe('EditorScreen: 起動時の先行取得とプロジェクト切替 (#778)', () => {
+  const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+  beforeEach(() => {
+    localStorage.clear()
+    getContentsMock.mockReset()
+    getContentsMock.mockImplementation(async () => ({ content: '# real', sha: 'sha' }))
+    listScriptsMock.mockReset()
+    listProjectsMock.mockReset()
+    listProjectsMock.mockImplementation(async () => [])
+  })
+
+  it('scriptsDir を持つプロジェクトは、ルートの script.md ではなく scriptsDir/script.md を先行取得する', async () => {
+    listProjectsMock.mockImplementation(async () => [
+      { name: 'p', title: 'p', repo: 'o/p', scriptsDir: 'content/scripts/' },
+    ])
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'script.md') throw new Error('404')
+      return { content: '# real', sha: 'sha' }
+    })
+    listScriptsMock.mockImplementation(async () => [
+      info('content/scripts/a.md'),
+      info('content/scripts/script.md'),
+    ])
+    renderEditor()
+    await waitFor(() =>
+      expect(getContentsMock).toHaveBeenCalledWith('p', 'content/scripts/script.md', 'develop')
+    )
+    await new Promise((r) => setTimeout(r, 100))
+    expect(getContentsMock).not.toHaveBeenCalledWith('p', 'script.md', 'develop')
+    // 先行取得を採用するので、同じファイルを二重に取らない
+    expect(
+      getContentsMock.mock.calls.filter((c) => c[1] === 'content/scripts/script.md').length
+    ).toBe(1)
+    expect(screen.queryByText(/読み込みに失敗/)).toBeNull()
+  })
+
+  it('listScripts も失敗し先行取得も 404 のときは、同じ取得を2回せずトーストは1回', async () => {
+    getContentsMock.mockImplementation(async () => {
+      throw new Error('404')
+    })
+    listScriptsMock.mockImplementation(async () => {
+      throw new Error('boom')
+    })
+    renderEditor()
+    expect(await screen.findByText(/読み込みに失敗/)).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(getContentsMock.mock.calls.filter((c) => c[1] === 'script.md').length).toBe(1)
+    expect(screen.getAllByText(/読み込みに失敗/).length).toBe(1)
+  })
+
+  it('projectName が変わったら一覧を取り直し、新しいプロジェクトの文書を開く', async () => {
+    listScriptsMock.mockImplementation(async (name: string) => [
+      info(name === 'q' ? 'q-main.md' : 'script.md'),
+    ])
+    const view = renderEditor()
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('p', 'script.md', 'develop'))
+    view.rerender(
+      <EditorScreen
+        projectName="q"
+        apiBaseUrl="http://api"
+        isDark={false}
+        onBack={() => {}}
+        onToggleDark={() => {}}
+        onOpenSettings={() => {}}
+        onNavigateToAssets={() => {}}
+      />
+    )
+    await waitFor(() => expect(listScriptsMock).toHaveBeenCalledWith('q', 'develop'))
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('q', 'q-main.md', 'develop'))
   })
 })
 
