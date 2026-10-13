@@ -5336,6 +5336,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_horizon: None,
         battle_perspective: None,
         battle_foreground: None,
+        battle_atb: None,
+        battle_atb_mode: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10516,6 +10518,8 @@ fn telop_test_doc_base() -> Document {
         battle_horizon: None,
         battle_perspective: None,
         battle_foreground: None,
+        battle_atb: None,
+        battle_atb_mode: None,
         chapters: vec![],
     }
 }
@@ -11750,4 +11754,36 @@ fn test_party_without_row_emit_has_no_row_line() {
     let emitted = emitter::emit(&parser::parse(&party_src("")));
     assert!(emitted.contains("[パーティ hero]"), "{emitted}");
     assert!(!emitted.contains("隊列"), "{emitted}");
+}
+
+// ---- #205: battle_atb / battle_atb_mode ----
+
+#[test]
+fn test_battle_atb_parses_and_defaults_none() {
+    let doc = parser::parse(&battle_doc("battle_atb: \"on\"\nbattle_atb_mode: active\n"));
+    assert_eq!(doc.battle_atb.as_deref(), Some("on"));
+    assert_eq!(doc.battle_atb_mode.as_deref(), Some("active"));
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.battle_atb, None);
+    assert_eq!(doc.battle_atb_mode, None);
+    let doc = parser::parse(&battle_doc("battle_atb: \"\"\nbattle_atb_mode:\n"));
+    assert_eq!(doc.battle_atb, None);
+    assert_eq!(doc.battle_atb_mode, None);
+}
+
+#[test]
+fn test_battle_atb_emit_roundtrip_keeps_value() {
+    let doc = parser::parse(&battle_doc("battle_atb: on\nbattle_atb_mode: wait\n"));
+    let emitted1 = emitter::emit(&doc);
+    assert!(emitted1.contains("battle_atb: \"on\"\n"), "{emitted1}");
+    assert!(
+        emitted1.contains("battle_atb_mode: \"wait\"\n"),
+        "{emitted1}"
+    );
+    let doc2 = parser::parse(&emitted1);
+    assert_eq!(doc2.battle_atb.as_deref(), Some("on"));
+    assert_eq!(doc2.battle_atb_mode.as_deref(), Some("wait"));
+    assert_eq!(emitted1, emitter::emit(&doc2));
+    let none = emitter::emit(&parser::parse(&battle_doc("")));
+    assert!(!none.contains("battle_atb"), "{none}");
 }
