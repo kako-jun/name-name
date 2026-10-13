@@ -66,6 +66,12 @@ import {
   type SpriteStyle,
 } from './spriteStyle'
 import { computeCoverFit } from './novelLayout'
+import {
+  computeBands,
+  FF_BLUE_PANEL_ALPHA,
+  FF_BLUE_TEXT_SHADOW,
+  type WindowStyle,
+} from './windowStyle'
 
 const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
@@ -149,6 +155,11 @@ export interface BattleScreenOptions {
    * 色四角のフォールバックにはかけない。`front` は敵・味方の画像を描かないので影響しない。
    */
   spriteStyle?: SpriteStyle
+  /**
+   * ウィンドウ配色テーマ (#744)。`dark`（既定）= 現行の半透明黒、`ff-blue` = FF 風の青い帯状グラデーション
+   * （白枠は維持）＋文字に黒い影。色だけがテーマで、寸法は変えない。
+   */
+  windowStyle?: WindowStyle
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -175,6 +186,8 @@ export class BattleScreen extends Container {
   private layoutMode: BattleLayoutMode
   /** 表示スタイル (#737)。`acrylic` のときだけ params が入る */
   private spriteStyle: SpriteStyle
+  /** ウィンドウ配色テーマ (#744) */
+  private windowStyle: WindowStyle
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   private backgroundSprite: Sprite | null = null
@@ -212,6 +225,7 @@ export class BattleScreen extends Container {
     this.opts = opts
     this.layoutMode = opts.layout === 'side' ? 'side' : 'front'
     this.spriteStyle = opts.spriteStyle === 'acrylic' ? 'acrylic' : 'none'
+    this.windowStyle = opts.windowStyle === 'ff-blue' ? 'ff-blue' : 'dark'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
@@ -219,9 +233,9 @@ export class BattleScreen extends Container {
     this.statsPanel = new Graphics()
     this.commandPanel = new Graphics()
     this.logPanel = new Graphics()
-    this.enemyNameText = new PixiText({ text: '', style: TEXT_STYLE_NAME })
-    this.enemyHpText = new PixiText({ text: '', style: TEXT_STYLE_HP })
-    this.heroStatsText = new PixiText({ text: '', style: TEXT_STYLE_HP })
+    this.enemyNameText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_NAME) })
+    this.enemyHpText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_HP) })
+    this.heroStatsText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_HP) })
 
     this.addChild(this.dim)
     this.addChild(this.enemyNameText)
@@ -286,11 +300,13 @@ export class BattleScreen extends Container {
     for (let i = 0; i < s.party.length; i++) {
       const t = new PixiText({
         text: '',
-        style: new TextStyle({
-          fontFamily: "'Noto Sans JP', sans-serif",
-          fontSize: SIDE_STATUS_FONT_SIZE,
-          fill: TEXT_COLOR,
-        }),
+        style: this.themedStyle(
+          new TextStyle({
+            fontFamily: "'Noto Sans JP', sans-serif",
+            fontSize: SIDE_STATUS_FONT_SIZE,
+            fill: TEXT_COLOR,
+          })
+        ),
       })
       this.statusTexts.push(t)
       this.addChild(t)
@@ -318,6 +334,7 @@ export class BattleScreen extends Container {
             align: 'center',
             lineHeight: SIDE_LABEL_LINE_HEIGHT,
             stroke: { color: SIDE_LABEL_STROKE_COLOR, width: SIDE_LABEL_STROKE_WIDTH },
+            ...(this.windowStyle === 'ff-blue' ? { dropShadow: { ...FF_BLUE_TEXT_SHADOW } } : {}),
           }),
         })
       : null
@@ -404,7 +421,7 @@ export class BattleScreen extends Container {
       { id: 'escape', label: 'にげる' },
     ]
     for (const item of labels) {
-      const text = new PixiText({ text: item.label, style: TEXT_STYLE_COMMAND.clone() })
+      const text = new PixiText({ text: item.label, style: this.themedStyle(TEXT_STYLE_COMMAND) })
       const hit = new Container()
       hit.eventMode = 'static'
       hit.cursor = 'pointer'
@@ -422,7 +439,7 @@ export class BattleScreen extends Container {
   /** ログ行テキストの数を n に揃える（足りなければ作り、余れば破棄する） */
   private setLogLineCount(n: number): void {
     while (this.logLines.length < n) {
-      const text = new PixiText({ text: '', style: TEXT_STYLE_LOG })
+      const text = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_LOG) })
       this.logLines.push(text)
       this.addChild(text)
     }
@@ -430,6 +447,31 @@ export class BattleScreen extends Container {
       this.logLines.pop()?.destroy()
     }
     this.visibleLogLines = n
+  }
+
+  /** ff-blue のとき文字スタイルに黒い影を足す (#744)。dark は共有スタイルを壊さないよう clone だけ返す */
+  private themedStyle(base: TextStyle): TextStyle {
+    const style = base.clone()
+    if (this.windowStyle === 'ff-blue') style.dropShadow = { ...FF_BLUE_TEXT_SHADOW }
+    return style
+  }
+
+  /**
+   * パネル 1 枚を描く (#744)。dark は従来の半透明黒の角丸矩形。ff-blue は帯状グラデーション（横縞の rect を
+   * 上から積む。パネルは矩形なので clip 不要）に白枠。枠線・寸法はどちらも同じ。
+   */
+  private drawPanel(g: Graphics, x: number, y: number, w: number, h: number): void {
+    g.clear()
+    if (this.windowStyle === 'ff-blue') {
+      for (const band of computeBands(h)) {
+        g.rect(x, y + band.y, w, band.h).fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
+      }
+      g.rect(x, y, w, h).stroke({ color: PANEL_STROKE, width: 2 })
+      return
+    }
+    g.roundRect(x, y, w, h, 6)
+      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+      .stroke({ color: PANEL_STROKE, width: 2 })
   }
 
   private layout(): void {
@@ -470,20 +512,12 @@ export class BattleScreen extends Container {
     const statsY = commandY - PANEL_GAP - STATS_HEIGHT
 
     // HP/MP パネル
-    this.statsPanel
-      .clear()
-      .roundRect(STAGE_PADDING, statsY, panelW, STATS_HEIGHT, 6)
-      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
-      .stroke({ color: PANEL_STROKE, width: 2 })
+    this.drawPanel(this.statsPanel, STAGE_PADDING, statsY, panelW, STATS_HEIGHT)
     this.heroStatsText.x = STAGE_PADDING + 12
     this.heroStatsText.y = statsY + (STATS_HEIGHT - HP_FONT_SIZE) / 2
 
     // コマンドパネル（4 コマンドを画面幅で均等割）
-    this.commandPanel
-      .clear()
-      .roundRect(STAGE_PADDING, commandY, panelW, COMMAND_HEIGHT, 6)
-      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
-      .stroke({ color: PANEL_STROKE, width: 2 })
+    this.drawPanel(this.commandPanel, STAGE_PADDING, commandY, panelW, COMMAND_HEIGHT)
     // commands.length は固定 4。万一 0 になっても div by zero しないよう max(1) でガード
     const cmdW = panelW / Math.max(1, this.commands.length)
     for (let i = 0; i < this.commands.length; i++) {
@@ -496,11 +530,7 @@ export class BattleScreen extends Container {
     }
 
     // ログパネル（画面最下部）
-    this.logPanel
-      .clear()
-      .roundRect(STAGE_PADDING, logY, panelW, LOG_HEIGHT, 6)
-      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
-      .stroke({ color: PANEL_STROKE, width: 2 })
+    this.drawPanel(this.logPanel, STAGE_PADDING, logY, panelW, LOG_HEIGHT)
     for (let i = 0; i < this.logLines.length; i++) {
       const text = this.logLines[i]
       text.x = STAGE_PADDING + 12
@@ -519,11 +549,7 @@ export class BattleScreen extends Container {
       commandCount: this.commands.length,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Graphics) =>
-      g
-        .clear()
-        .roundRect(r.x, r.y, r.w, r.h, 6)
-        .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
-        .stroke({ color: PANEL_STROKE, width: 2 })
+      this.drawPanel(g, r.x, r.y, r.w, r.h)
 
     // ログ帯（上）
     panel(L.log, this.logPanel)

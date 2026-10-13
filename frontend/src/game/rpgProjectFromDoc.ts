@@ -19,6 +19,7 @@ import type {
 import { safeAssign, safeAssignAll } from './ownProperty'
 import { normalizeBattleLayout } from './battleLayout'
 import { normalizeSpriteStyle } from './spriteStyle'
+import { normalizeWindowStyle } from './windowStyle'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -241,6 +242,7 @@ export function rpgProjectFromDoc(
     battleLayout: normalizeBattleLayout(doc.battle_layout),
     battleBackground: doc.battle_background ?? undefined,
     spriteStyle: normalizeSpriteStyle(doc.sprite_style),
+    windowStyle: normalizeWindowStyle(doc.window_style),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }

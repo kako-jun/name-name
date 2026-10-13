@@ -57,6 +57,7 @@ import type { BattleEntity } from './spellDsl'
 import { rollEncounter } from './encounter'
 import type { BattleLayoutMode } from './battleLayout'
 import type { SpriteStyle } from './spriteStyle'
+import type { WindowStyle } from './windowStyle'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -131,6 +132,8 @@ export class RaycastRenderer {
   private battleBackground: string | undefined = undefined
   /** 戦闘スプライトの表示スタイル (#737)。frontmatter `sprite_style` 由来 */
   private spriteStyle: SpriteStyle = 'none'
+  /** 戦闘ウィンドウの配色テーマ (#744)。frontmatter `window_style` 由来 */
+  private windowStyle: WindowStyle = 'dark'
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -372,6 +375,7 @@ export class RaycastRenderer {
     this.battleLayout = gameData.battleLayout ?? 'front'
     this.battleBackground = gameData.battleBackground
     this.spriteStyle = gameData.spriteStyle ?? 'none'
+    this.windowStyle = gameData.windowStyle ?? 'dark'
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -798,6 +802,7 @@ export class RaycastRenderer {
       layout: this.battleLayout,
       background: this.battleBackground,
       spriteStyle: this.spriteStyle,
+      windowStyle: this.windowStyle,
       onClose: () => {
         if (this.battleScreen) {
           this.app.stage.removeChild(this.battleScreen)
