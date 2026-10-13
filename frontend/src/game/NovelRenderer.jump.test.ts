@@ -11,6 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
+import { SaveManager, SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
 
 function narration(...lines: string[]): Event {
@@ -608,5 +609,302 @@ describe('NovelRenderer Jump 位置からの復元・任意局面起動 (#733)',
     expect(internals(r).jumpState).toBe('pending')
     expect(internals(r).waitingForWait).toBe(false)
     expect(r.getDebugState().jumpState).toBe('pending')
+  })
+})
+
+// ===== #733 追加: startFrom 以外の復元経路・状態分離・世代 =====
+
+/** ensureContext の jsdom 制約回避（loadFromSaveData / restoreSnapshot が呼ぶ）。 */
+function muteAudio(r: NovelRenderer): void {
+  vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
+}
+
+function craftSave(over: Partial<SaveSlotData>): SaveSlotData {
+  return {
+    slot: -1,
+    sceneId: 'a',
+    eventIndex: 0,
+    textIndex: 0,
+    flags: {},
+    backgroundPath: null,
+    isBlackout: false,
+    characters: [],
+    currentBgmPath: null,
+    savedAt: new Date().toISOString(),
+    sceneName: null,
+    ...over,
+  }
+}
+
+describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
+  afterEach(() => {
+    new SaveManager().deleteQuickSave()
+    vi.restoreAllMocks()
+    defaultTimeController.setMode('live')
+    localStorage.clear()
+  })
+
+  const TWO = (): EventScene[] => [
+    scene('a', [narration('a1'), jump('c')]),
+    scene('c', [narration('c1')]),
+  ]
+
+  it('6: quickLoad で Jump を指すセーブを復元 → 遷移が再予約され先へ進む', () => {
+    new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
+    const r = makeRenderer(TWO())
+    muteAudio(r)
+    expect(r.quickLoad()).toBe(true)
+    expect(internals(r).jumpState).toBe('pending')
+    expect(r.getCurrentSceneId()).toBe('a')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(internals(r).jumpState).toBe('idle')
+  })
+
+  it('7: [条件:] 内 Jump の真偽が quickLoad 経由でも効く', () => {
+    const scenes = [
+      scene('a', [narration('a1'), condition('f', [jump('c')]), narration('a2')]),
+      scene('c', [narration('c1')]),
+    ]
+    new SaveManager().quickSave(craftSave({ eventIndex: 1, flags: { f: { Bool: true } } }))
+    const t = makeRenderer(scenes)
+    muteAudio(t)
+    t.quickLoad()
+    expect(internals(t).jumpState).toBe('pending')
+    tick(t)
+    expect(t.getCurrentSceneId()).toBe('c')
+
+    new SaveManager().quickSave(craftSave({ eventIndex: 1, flags: { f: { Bool: false } } }))
+    const f = makeRenderer(scenes)
+    muteAudio(f)
+    f.quickLoad()
+    expect(internals(f).jumpState).toBe('idle')
+    tick(f)
+    expect(f.getCurrentSceneId()).toBe('a')
+    expect(text(f)).toContain('a2')
+  })
+
+  it('8: restoreSnapshot で Jump を指す状態を復元 → 遷移する', () => {
+    const src = makeRenderer(TWO())
+    const snap = { ...src.getSnapshot(), sceneId: 'a', eventIndex: 1 }
+    const r = makeRenderer(TWO())
+    muteAudio(r)
+    r.restoreSnapshot(snap)
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+  })
+
+  it('10: 復元で Jump に着き循環していても consecutiveJumps 上限で止まる（復元で無限ループしない）', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [jump('b')]), scene('b', [jump('a')])])
+    tick(r, 1000)
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(warnSpy.mock.calls.filter((c) => String(c[0]).includes('循環')).length).toBe(1)
+    // 復元しても再び上限で止まる（新規 100 hop）
+    warnSpy.mockClear()
+    const cur = r.getCurrentSceneId()!
+    r.startFrom({ sceneId: cur, eventIndex: 0 })
+    tick(r, 1000)
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(warnSpy.mock.calls.filter((c) => String(c[0]).includes('循環')).length).toBe(1)
+  })
+
+  it('11: pending 中は seekTo / goBack / quickLoad / quickSave / openSaveMenu を受け付けない', () => {
+    new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
+    const r = makeRenderer(TWO(), { docKey: 'doc-733-pending' })
+    muteAudio(r)
+    const showSave = vi.spyOn(internals(r).saveLoadOverlay, 'showSave').mockImplementation(() => {})
+    r.advance()
+    expect(internals(r).jumpState).toBe('pending')
+    r.goBack()
+    r.seekTo(0)
+    expect(internals(r).jumpState).toBe('pending')
+    expect(r.quickLoad()).toBe(false)
+    expect(r.quickSave()).toBe(false)
+    internals(r).openSaveMenu()
+    expect(showSave).not.toHaveBeenCalled()
+    expect(r.getCurrentSceneId()).toBe('a')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+  })
+
+  it('12: stalled 中は quickLoad / seekTo / goBack は使えて、セーブ・advance は不可', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 0 }))
+    const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])])
+    muteAudio(r)
+    const showSave = vi.spyOn(internals(r).saveLoadOverlay, 'showSave').mockImplementation(() => {})
+    r.advance()
+    tick(r)
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(r.quickSave()).toBe(false)
+    internals(r).openSaveMenu()
+    expect(showSave).not.toHaveBeenCalled()
+    r.advance()
+    expect(r.getSnapshot().storyEnded).toBe(false)
+    expect(internals(r).jumpState).toBe('stalled')
+    // quickLoad は使える: idle に戻り本文位置
+    expect(r.quickLoad()).toBe(true)
+    expect(internals(r).jumpState).toBe('idle')
+    expect(text(r)).toContain('a1')
+    // seekTo も使える
+    r.advance()
+    tick(r)
+    expect(internals(r).jumpState).toBe('stalled')
+    r.seekTo(0)
+    expect(internals(r).jumpState).toBe('idle')
+  })
+
+  it('13: stalled の持ち越しなし: stalled 中に別の Jump 位置を復元しても再試行する', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer(TWO().concat([scene('d', [narration('d1'), jump('nowhere')])]))
+    r.startFrom({ sceneId: 'd', eventIndex: 1 })
+    tick(r)
+    expect(internals(r).jumpState).toBe('stalled')
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+  })
+
+  it('14: 遅延ロード中に startFrom で別位置へ移ると、古い失敗(null)で stallJump しない（no-op）', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let resolve!: (s: EventScene[] | null) => void
+    const entry = [scene('a', [narration('a1'), jump('far')]), scene('b', [narration('b1')])]
+    const r = makeRenderer(entry)
+    r.setMissingSceneResolver(
+      () =>
+        new Promise<EventScene[] | null>((res) => {
+          resolve = res
+        })
+    )
+    r.advance()
+    tick(r)
+    expect(internals(r).jumpState).toBe('pending')
+    r.startFrom({ sceneId: 'b', eventIndex: 0 })
+    expect(internals(r).jumpState).toBe('idle')
+    resolve(null)
+    await new Promise((res) => setTimeout(res, 0))
+    expect(internals(r).jumpState).toBe('idle')
+    expect(r.getCurrentSceneId()).toBe('b')
+  })
+
+  // 既知の実装バグ (#733 テスト担当報告): 遅延ロード往復に世代ガードが無く、await 中に別位置へ
+  // 移っても古い解決が startScene してしまう。修正されたら it.fails を it に戻すこと。
+  it.fails(
+    '14b: 遅延ロード中に startFrom で別位置へ移ったあと、古い解決が成功しても遷移しない（世代ガード）',
+    async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let resolve!: (s: EventScene[]) => void
+      const entry = [scene('a', [narration('a1'), jump('far')]), scene('b', [narration('b1')])]
+      const far = scene('far', [narration('far1')])
+      const r = makeRenderer(entry)
+      r.setMissingSceneResolver(
+        () =>
+          new Promise<EventScene[]>((res) => {
+            resolve = res
+          })
+      )
+      r.advance()
+      tick(r)
+      r.startFrom({ sceneId: 'b', eventIndex: 0 })
+      resolve([...entry, far])
+      await new Promise((res) => setTimeout(res, 0))
+      expect(r.getCurrentSceneId()).toBe('b')
+    }
+  )
+
+  // 既知の実装バグ: 古い失敗の stallJump が新しい pending 予約まで stalled にしてしまう
+  // （jumpState の pending 判定だけでは世代を区別できない）。修正されたら it に戻す。
+  it.fails(
+    '14c: 遅延ロード中に startFrom → 新しい Jump が pending のとき、古い失敗が新しい予約を stalled にしない',
+    async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let resolve!: (s: EventScene[] | null) => void
+      const entry = [
+        scene('a', [narration('a1'), jump('far')]),
+        scene('b', [narration('b1'), jump('c')]),
+        scene('c', [narration('c1')]),
+      ]
+      const r = makeRenderer(entry)
+      r.setMissingSceneResolver(
+        () =>
+          new Promise<EventScene[] | null>((res) => {
+            resolve = res
+          })
+      )
+      r.advance()
+      tick(r)
+      r.startFrom({ sceneId: 'b', eventIndex: 1 }) // 新しい Jump(c) を pending で予約
+      expect(internals(r).jumpState).toBe('pending')
+      resolve(null) // 古い解決が失敗
+      await new Promise((res) => setTimeout(res, 0))
+      expect(internals(r).jumpState).toBe('pending')
+      tick(r)
+      expect(r.getCurrentSceneId()).toBe('c')
+    }
+  )
+
+  it('15: playScript で startFrom 直後に advance しても、復元で予約された遷移を消化する', async () => {
+    const r = new NovelRenderer()
+    internals(r).initialized = true
+    vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+    r.setScenes([
+      scene('a', [narration('a1'), jump('c')]),
+      scene('c', [narration('c1'), narration('c2')]),
+    ])
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    await r.playScript([{ type: 'advance' }, { type: 'advance' }])
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(text(r)).toContain('c2')
+  })
+
+  it('16: auto モードで Jump 位置へ復元されても、pending 中は auto が advance せず遷移で進む', () => {
+    const r = makeRenderer(TWO())
+    r.setAutoMode(true)
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(r.getSnapshot().storyEnded).toBe(false)
+  })
+
+  it('17: skip 中に復元で着いた遷移先不在 Jump → stalled でスキップ解除', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer([scene('a', [narration('a1'), jump('nowhere')])])
+    r.setSkipMode(true)
+    r.startFrom({ sceneId: 'a', eventIndex: 1 })
+    tick(r, 100)
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(internals(r).skipMode).toBe(false)
+  })
+
+  it('18: 復元で idle に戻したあと resumeAutoAdvanceIfPending で二重予約されない', () => {
+    new SaveManager().quickSave(craftSave({ sceneId: 'a', eventIndex: 1 }))
+    const r = makeRenderer(TWO())
+    muteAudio(r)
+    r.quickLoad()
+    tick(r)
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(() => r.resumeAutoAdvanceIfPending()).not.toThrow()
+    tick(r, 1000)
+    expect(r.getCurrentSceneId()).toBe('c')
+    expect(internals(r).jumpState).toBe('idle')
+  })
+
+  it('19: [待機] 中は jumpState が変わらず、Jump pending 中は waitingForWait が false', () => {
+    const r = makeRenderer([
+      scene('a', [narration('a1'), { Wait: { ms: 500 } } as Event, narration('a2'), jump('c')]),
+      scene('c', [narration('c1')]),
+    ])
+    r.advance()
+    expect(internals(r).waitingForWait).toBe(true)
+    expect(internals(r).jumpState).toBe('idle')
+    tick(r, 600)
+    expect(internals(r).waitingForWait).toBe(false)
+    r.advance()
+    expect(internals(r).jumpState).toBe('pending')
+    expect(internals(r).waitingForWait).toBe(false)
   })
 })
