@@ -541,6 +541,12 @@ describe('BattleScreen: 敵ラベルの HP は数値を優先して残す (#736)
   })
 })
 
+/** Node の process の最小型（@types/node に依存しない） */
+interface NodeEmitter {
+  on(ev: string, fn: (...a: unknown[]) => void): void
+  off(ev: string, fn: (...a: unknown[]) => void): void
+}
+
 describe('BattleScreen: acrylic (#737)', () => {
   const sideNone: BattleScreenOptions = { layout: 'side' }
   const acrylic: BattleScreenOptions = { layout: 'side', spriteStyle: 'acrylic' }
@@ -882,7 +888,8 @@ describe('BattleScreen: acrylic (#737)', () => {
         (() => new Promise<Texture>((r) => resolvers.push(r))) as never
       )
       const onRejection = vi.fn()
-      process.on('unhandledRejection', onRejection)
+      const proc = (globalThis as unknown as { process: NodeEmitter }).process
+      proc.on('unhandledRejection', onRejection)
       try {
         const s = make([withSprite('hero')], [withSprite('slime')], acrylic)
         const views = [...internals(s).enemyViews, ...internals(s).partyViews]
@@ -895,7 +902,7 @@ describe('BattleScreen: acrylic (#737)', () => {
         }
         expect(onRejection).not.toHaveBeenCalled()
       } finally {
-        process.off('unhandledRejection', onRejection)
+        proc.off('unhandledRejection', onRejection)
       }
     })
 
