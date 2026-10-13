@@ -148,7 +148,7 @@ export class AcrylicEdgeFilter extends Filter {
     this.uniforms.uTexel[1] = 1 / input.source.height
     this.uniforms.uRadii[0] = this.marginPx * res
     this.uniforms.uRadii[1] = (this.marginPx + this.linePx) * res
-    const s = computeEdgeSampling(this.uniforms.uRadii[0], this.uniforms.uRadii[1])
+    const s = computeEdgeSampling(this.uniforms.uRadii[0], this.linePx * res)
     this.uniforms.uRings[0] = s.innerRings
     this.uniforms.uRings[1] = s.outerRings
     this.uniforms.uRings[2] = s.directions
