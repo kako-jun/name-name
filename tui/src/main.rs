@@ -138,41 +138,57 @@ fn main() -> anyhow::Result<()> {
     // 今回の新規開始が自然に続きになる体験にするため）。ファイルが存在しなくても
     // エラーにはしない。削除した場合は `restore_playback` の呼び出し自体を
     // スキップし、`playback_restored` は `false` のままにする。
-    let playback_restored = apply_startup_entry(&cli, &mut config, &mut playback)?;
+    let startup = apply_startup_entry(&cli, &config, &mut playback)?;
 
-    run(&config, &mut playback, playback_restored)
+    run(&config, &mut playback, startup)
 }
 
-/// 起動時の入場を決める (#734 PR3、GUI の `resolveInitialEntry` と対称)。戻り値は `playback_restored`。
+/// 起動時の入場の結果 (#734 PR3)。`event_loop` へ運ぶ2つの判断を、`quicksave_path`（保存先）とは
+/// 独立に明示する（GUI の `InitialEntryOutcome.autoSave` と対称）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartupEntry {
+    /// 自動クイックロードで復元できたか。`true` のときだけ `read_positions`（既読位置）を復元する。
+    playback_restored: bool,
+    /// シーン切替ごとの自動クイックセーブを行うか。`--debug-scene` では `false`（GUI #664 と対称）。
+    autosave: bool,
+}
+
+/// 起動時の入場を決める (#734 PR3、GUI の `resolveInitialEntry` と対称)。
 ///
 /// - `--debug-scene <id>` 指定時は**新規開始**: クイックロードを行わず（`--new-game` の
 ///   ファイル削除だけは明示指示なので従来どおり行う）、`Playback::start_fresh_at(id, 空の flags)`
-///   で直前の flags・BGM・イベント絵を持ち込まずに始める。さらに `config.quicksave_path` を
-///   `None` にして、シーン切替ごとの自動クイックセーブも止める（GUI #664 と対称）。
-///   クイックロードを行わないので `read_positions`（既読位置）も復元されない。
-///   存在しない sceneId は何も変えない（fail-soft）。
+///   で直前の flags・BGM・イベント絵を持ち込まずに始める。`autosave` を `false` にして、
+///   シーン切替ごとの自動クイックセーブも止める（GUI #664 と対称）。クイックロードを行わない
+///   ので `playback_restored` も `false` で、`read_positions`（既読位置）も復元されない。
+///   存在しない sceneId は何も変えず、警告を stderr に出してエントリから始める（fail-soft）。
 /// - 指定なしは従来どおり（`--new-game` ならセーブ削除、でなければ自動クイックロード）。
 fn apply_startup_entry(
     cli: &Cli,
-    config: &mut Config,
+    config: &Config,
     playback: &mut Playback,
-) -> anyhow::Result<bool> {
-    let mut playback_restored = false;
+) -> anyhow::Result<StartupEntry> {
+    let mut entry = StartupEntry {
+        playback_restored: false,
+        autosave: true,
+    };
     if let Some(scene_id) = &cli.scene {
+        entry.autosave = false;
         if cli.new_game {
             if let Some(path) = &config.quicksave_path {
                 apply_new_game_or_restore(true, playback, path)?;
             }
         }
-        config.quicksave_path = None;
-        playback.start_fresh_at(scene_id, flags::GameFlags::new());
+        if !playback.start_fresh_at(scene_id, flags::GameFlags::new()) {
+            // alternate screen に入る前なので、通常の stderr に出る。
+            eprintln!("警告: --debug-scene のシーン '{scene_id}' が見つからないため、エントリから開始します");
+        }
     } else if let Some(path) = &config.quicksave_path {
-        playback_restored = apply_new_game_or_restore(cli.new_game, playback, path)?;
+        entry.playback_restored = apply_new_game_or_restore(cli.new_game, playback, path)?;
     }
     // `skip_leading_empty_scenes` より前に置くことで、ジャンプ先が Line/Choice を持たない
     // （flag 設定だけの）シーンでも #564 と同じ安全策で最初の表示可能な位置まで進む。
     skip_leading_empty_scenes(playback);
-    Ok(playback_restored)
+    Ok(entry)
 }
 
 /// #622: `--new-game`ならクイックセーブを削除してrestoreをスキップし、
@@ -231,7 +247,7 @@ fn skip_leading_empty_scenes(playback: &mut Playback) {
 ///
 /// `playback_restored`は`main()`の`save::restore_playback`呼び出しの成否をそのまま
 /// `run_screens`/`event_loop`へ運ぶだけの値（#579 追加修正、詳細は`main()`のコメント参照）。
-fn run(config: &Config, playback: &mut Playback, playback_restored: bool) -> anyhow::Result<()> {
+fn run(config: &Config, playback: &mut Playback, startup: StartupEntry) -> anyhow::Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
@@ -274,7 +290,7 @@ fn run(config: &Config, playback: &mut Playback, playback_restored: bool) -> any
         playback,
         &mut || input::poll_action(REDRAW),
         audio_player.as_mut(),
-        playback_restored,
+        startup,
     );
 
     disable_raw_mode()?;
@@ -300,7 +316,7 @@ fn run_screens<B>(
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
     audio: Option<&mut audio::AudioPlayer>,
-    playback_restored: bool,
+    startup: StartupEntry,
 ) -> anyhow::Result<()>
 where
     B: Backend,
@@ -322,7 +338,7 @@ where
         playback,
         next_action,
         audio,
-        playback_restored,
+        startup,
         initial_clear_rect,
     )
 }
@@ -557,7 +573,10 @@ where
         playback,
         next_action,
         audio,
-        playback_restored,
+        StartupEntry {
+            playback_restored,
+            autosave: true,
+        },
         None,
     )
 }
@@ -568,7 +587,7 @@ fn event_loop_with_initial_clear<B>(
     playback: &mut Playback,
     next_action: &mut impl FnMut() -> anyhow::Result<Action>,
     mut audio: Option<&mut audio::AudioPlayer>,
-    playback_restored: bool,
+    startup: StartupEntry,
     initial_clear_rect: Option<ratatui::layout::Rect>,
 ) -> anyhow::Result<()>
 where
@@ -582,6 +601,10 @@ where
     // 下の `Overlay::Settings` 分岐（`Action::MoveLeft`/`Action::MoveRight` の文脈依存の再利用）
     // が書き換える。
     let mut config = config.clone();
+    let StartupEntry {
+        playback_restored,
+        autosave,
+    } = startup;
 
     let mut current_reveal: Option<reveal::RevealState> =
         build_reveal_for_current(playback, &config, Instant::now());
@@ -1315,8 +1338,12 @@ where
                     if let Some(a) = audio.as_deref() {
                         a.cancel_se_sequence();
                     }
-                    if let Some(path) = &config.quicksave_path {
-                        save::save_quick(path, playback, &read_positions);
+                    // `autosave` が false（`--debug-scene`、#734 PR3）の間は保存しない。
+                    // 保存先 `quicksave_path` の有無とは独立した判断。
+                    if autosave {
+                        if let Some(path) = &config.quicksave_path {
+                            save::save_quick(path, playback, &read_positions);
+                        }
                     }
                 }
             }
@@ -2362,30 +2389,31 @@ mod tests {
         config.quicksave_path = Some(quicksave_path.clone());
         let cli = cli_from(&["--debug-scene", "1-3"]);
         let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
-        let restored = apply_startup_entry(&cli, &mut config, &mut playback).unwrap();
+        let startup = apply_startup_entry(&cli, &config, &mut playback).unwrap();
 
         assert!(
-            !restored,
+            !startup.playback_restored,
             "--debug-scene はクイックロードしない（read_positions も復元されない）"
+        );
+        assert!(
+            !startup.autosave,
+            "--debug-scene は自動クイックセーブを止める"
         );
         assert_eq!(playback.current_scene_id(), "1-3");
         assert_eq!(playback.current_bgm(), None, "BGM を持ち越さない");
         assert!(!playback.flags().check("carried"), "flags を持ち込まない");
         assert!(
-            config.quicksave_path.is_none(),
-            "自動クイックセーブを止める（quicksave_path を外す）"
+            config.quicksave_path.is_some(),
+            "quicksave_path は保存先の意味のまま（autosave フラグとは独立）"
         );
 
         // event_loop を通してシーンを切り替えても、セーブファイルは変わらない。
         let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
         let mut config = instant_config();
         config.quicksave_path = Some(quicksave_path.clone());
-        apply_startup_entry(
-            &cli_from(&["--debug-scene", "1-1"]),
-            &mut config,
-            &mut playback,
-        )
-        .unwrap();
+        let startup =
+            apply_startup_entry(&cli_from(&["--debug-scene", "1-1"]), &config, &mut playback)
+                .unwrap();
         let mut terminal = Terminal::new(TestBackend::new(
             ui::REQUIRED_TOTAL_WIDTH,
             ui::REQUIRED_TOTAL_HEIGHT,
@@ -2394,13 +2422,14 @@ mod tests {
         // 台詞→Choice、確定で 1-2 へ（シーン切替）。
         let (mut next_action, _remaining) =
             action_queue(vec![Action::Advance, Action::Advance, Action::Quit]);
-        event_loop(
+        event_loop_with_initial_clear(
             &mut terminal,
             &config,
             &mut playback,
             &mut next_action,
             None,
-            false,
+            startup,
+            None,
         )
         .unwrap();
         assert_eq!(playback.current_scene_id(), "1-2", "シーンは切り替わった");
@@ -2438,12 +2467,12 @@ mod tests {
         let mut config = instant_config();
         config.quicksave_path = Some(quicksave_path.clone());
         let mut playback = Playback::from_document(&document).with_sentence_per_page(false);
-        let restored = apply_startup_entry(&cli_from(&[]), &mut config, &mut playback).unwrap();
+        let startup = apply_startup_entry(&cli_from(&[]), &config, &mut playback).unwrap();
 
-        assert!(restored);
+        assert!(startup.playback_restored);
+        assert!(startup.autosave);
         assert_eq!(playback.current_scene_id(), "1-2");
         assert_eq!(playback.current_bgm(), Some("a.ogg"));
-        assert!(config.quicksave_path.is_some());
         let _ = std::fs::remove_file(&quicksave_path);
     }
 
@@ -3535,7 +3564,10 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
-            false,
+            StartupEntry {
+                playback_restored: false,
+                autosave: true,
+            },
         )
         .unwrap();
 
@@ -3580,7 +3612,10 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
-            false,
+            StartupEntry {
+                playback_restored: false,
+                autosave: true,
+            },
         )
         .unwrap();
 
@@ -4122,7 +4157,10 @@ mod tests {
             &mut playback,
             &mut next_action,
             None,
-            false,
+            StartupEntry {
+                playback_restored: false,
+                autosave: true,
+            },
         )
         .unwrap();
 
