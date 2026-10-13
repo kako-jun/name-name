@@ -18,7 +18,7 @@
  * - ターン跨ぎ状態異常の減衰
  */
 
-import type { BattleEntity, EffectContext } from './spellDsl'
+import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
 import { applyEffect, parseEffect } from './spellDsl'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
 
@@ -267,7 +267,7 @@ export class BattleEngine {
   }
 
   private computeAttackDamage(attacker: BattleEntity, defender: BattleEntity): number {
-    return computeAttackDamage(attacker, defender, this.rng)
+    return computeRowAttackDamage(attacker, defender, this.rng)
   }
 }
 
@@ -288,6 +288,36 @@ export function computeAttackDamage(
   const variance = Math.floor(attacker.atk / 4)
   const r = Math.floor(rng() * (variance + 1))
   return base + r
+}
+
+/**
+ * 隊列 (#747) によるダメージ補正（FF4〜6 準拠）。通常攻撃（近接物理）にだけ使う。
+ * 後衛（`row: 'back'`）が攻撃側なら与えるダメージが半分、防御側なら受けるダメージが半分（両方なら 2 回半分）。
+ * 丸めは「半分ごとに切り捨て・最低 1」（`computeAttackDamage` の最低 1 に揃える）。
+ * 前衛・未指定はそのまま。呪文・アイテムの効果（DSL / builtin）はこの関数を通らず、隊列の影響を受けない。
+ */
+export function applyRowToPhysicalDamage(
+  damage: number,
+  attackerRow: BattleRow | undefined,
+  defenderRow: BattleRow | undefined
+): number {
+  let d = damage
+  if (attackerRow === 'back') d = Math.max(1, Math.floor(d / 2))
+  if (defenderRow === 'back') d = Math.max(1, Math.floor(d / 2))
+  return d
+}
+
+/** 通常攻撃のダメージ（`computeAttackDamage` + 隊列補正 (#747)）。乱数の消費は `computeAttackDamage` と同じ 1 回 */
+export function computeRowAttackDamage(
+  attacker: BattleEntity,
+  defender: BattleEntity,
+  rng: () => number
+): number {
+  return applyRowToPhysicalDamage(
+    computeAttackDamage(attacker, defender, rng),
+    attacker.row,
+    defender.row
+  )
 }
 
 /** 呪文発動の引数。マスターからの解決は呼び出し側で行う */
