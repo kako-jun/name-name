@@ -180,3 +180,228 @@ describe('runInitialEntry: 打ち切り規則', () => {
     expect(calls).toEqual([`startFrom:${JSON.stringify({ flags: SNAPSHOT.flags })}`])
   })
 })
+
+describe('resolveInitialEntry: 決定表の補足', () => {
+  it('?debug_script= と ?scene= の併用 → ?scene= の入場 → エントリ（debug_script は入場の試行に含まれない）', () => {
+    const debugQuery = parseDebugQuery('?debug_script=advance')
+    expect(
+      kinds(input({ debugQuery, initialSceneId: 's', confinedSceneIds: ['s'], hasQuickSave: true }))
+    ).toEqual(['scene-param', 'entry'])
+  })
+
+  it('confinedSceneIds が undefined / null の ?scene= は confinement なし（null）で渡す', () => {
+    for (const confinedSceneIds of [undefined, null]) {
+      expect(resolveInitialEntry(input({ initialSceneId: 's', confinedSceneIds }))[0]).toEqual({
+        kind: 'scene-param',
+        sceneId: 's',
+        confinedSceneIds: null,
+      })
+    }
+  })
+
+  it('空の initialSceneId（null / 空文字 / undefined）は ?scene= なしとして扱い、クイックセーブがあれば自動クイックロード', () => {
+    for (const initialSceneId of [null, '', undefined]) {
+      expect(kinds(input({ initialSceneId, hasQuickSave: true }))).toEqual(['quick-load', 'entry'])
+    }
+  })
+
+  it('スナップショットがあれば hasQuickSave の値に関わらず自動クイックロードは試さない', () => {
+    expect(kinds(input({ snapshot: SNAPSHOT, hasQuickSave: false }))).toEqual(['snapshot', 'entry'])
+    expect(kinds(input({ snapshot: SNAPSHOT, hasQuickSave: true }))).toEqual(['snapshot', 'entry'])
+  })
+
+  it('空文字の ?debug_scene= / ?debug_script=（パース結果 null）は debug なし扱いで、自動クイックロードを試す', () => {
+    for (const q of ['?debug_scene=', '?debug_script=']) {
+      expect(kinds(input({ debugQuery: parseDebugQuery(q), hasQuickSave: true }))).toEqual([
+        'quick-load',
+        'entry',
+      ])
+    }
+  })
+
+  it('debug 起点の位置指定（eventIndex など）は options にそのまま載る', () => {
+    const debugQuery = parseDebugQuery('?debug_scene=x&debug_eventIndex=3')
+    const [first] = resolveInitialEntry(input({ debugQuery }))
+    expect(first).toMatchObject({ kind: 'debug-scene', options: { sceneId: 'x', eventIndex: 3 } })
+  })
+})
+
+describe('runInitialEntry: 打ち切り規則の補足', () => {
+  const flags: Record<string, FlagValue> = { milestone: { Bool: true } }
+
+  it('スナップショットが entered ならエントリへ進まない（fluid 再マウントで位置を上書きしない）', async () => {
+    const { renderer, calls } = fakeRenderer()
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input({ snapshot: SNAPSHOT })))
+    expect(calls).toEqual(['snapshot'])
+    expect(out.final.status).toBe('entered')
+    expect(out.autoSave).toBe(true)
+  })
+
+  it('スナップショットが superseded でもエントリへ進まない', async () => {
+    const { renderer, calls } = fakeRenderer({
+      restoreSnapshot: vi.fn(async () => ({ status: 'superseded' }) as const),
+    })
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input({ snapshot: SNAPSHOT })))
+    expect(calls).toEqual([])
+    expect(out.final).toEqual({ status: 'superseded' })
+  })
+
+  it('スナップショット失敗 → エントリへ（flags 保持）。そのエントリが entered なら自動セーブは配線してよい', async () => {
+    const { renderer } = fakeRenderer({
+      restoreSnapshot: vi.fn(async () => ({ status: 'failed', reason: 'resolver-error' }) as const),
+    })
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input({ snapshot: SNAPSHOT })))
+    expect(out.autoSave).toBe(true)
+    expect(out.steps.map((s) => s.attempt.kind)).toEqual(['snapshot', 'entry'])
+  })
+
+  it('スナップショットが失敗しても debug 起点・自動クイックロードは挟まない', async () => {
+    const quickLoad = vi.fn(async () => null)
+    const { renderer, calls } = fakeRenderer({
+      restoreSnapshot: vi.fn(async () => ({ status: 'failed', reason: 'not-found' }) as const),
+      quickLoad,
+    })
+    await runInitialEntry(
+      renderer,
+      resolveInitialEntry(
+        input({
+          snapshot: SNAPSHOT,
+          debugQuery: parseDebugQuery('?debug_scene=x'),
+          hasQuickSave: true,
+        })
+      )
+    )
+    expect(quickLoad).not.toHaveBeenCalled()
+    expect(calls).toEqual([`startFrom:${JSON.stringify({ flags: SNAPSHOT.flags })}`])
+  })
+
+  it('quickLoad が apply-error で失敗 → flags を保ってエントリから始め、自動セーブは配線してよい', async () => {
+    const { renderer, calls } = fakeRenderer({
+      quickLoad: vi.fn(async () => ({ status: 'failed', reason: 'apply-error' }) as const),
+      getQuickSaveFlags: vi.fn(() => flags),
+    })
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input({ hasQuickSave: true })))
+    expect(calls).toEqual([`startFrom:${JSON.stringify({ flags })}`])
+    expect(out.autoSave).toBe(true)
+  })
+
+  it('quickLoad が null（ゲート）でもセーブの flags があればエントリへ引き継ぐ。flags が無ければ空の startFrom({})', async () => {
+    const a = fakeRenderer({
+      quickLoad: vi.fn(async () => null),
+      getQuickSaveFlags: vi.fn(() => flags),
+    })
+    await runInitialEntry(a.renderer, resolveInitialEntry(input({ hasQuickSave: true })))
+    expect(a.calls).toEqual([`startFrom:${JSON.stringify({ flags })}`])
+
+    const b = fakeRenderer({ quickLoad: vi.fn(async () => null) })
+    const out = await runInitialEntry(
+      b.renderer,
+      resolveInitialEntry(input({ hasQuickSave: true }))
+    )
+    expect(b.calls).toEqual(['startFrom:{}'])
+    expect(out.autoSave).toBe(true)
+  })
+
+  it('?scene= が失敗してもエントリには flags を持ち越さない（startFrom({})）', async () => {
+    const startFrom = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'failed', reason: 'not-found' })
+      .mockResolvedValueOnce({ status: 'entered', sceneId: null })
+    const { renderer } = fakeRenderer({ startFrom })
+    await runInitialEntry(
+      renderer,
+      resolveInitialEntry(input({ initialSceneId: 'ghost', confinedSceneIds: ['ghost'] }))
+    )
+    expect(startFrom).toHaveBeenNthCalledWith(2, {})
+  })
+
+  it('debug 起点が entered なら ?scene= もエントリも試さない。debug は confinement を外して呼ぶ', async () => {
+    const { renderer, calls } = fakeRenderer()
+    const out = await runInitialEntry(
+      renderer,
+      resolveInitialEntry(
+        input({
+          debugQuery: parseDebugQuery('?debug_scene=x&debug_eventIndex=2'),
+          initialSceneId: 's',
+          confinedSceneIds: ['s'],
+        })
+      )
+    )
+    expect(calls).toHaveLength(1)
+    const sent = JSON.parse(calls[0].replace('startFrom:', ''))
+    expect(sent).toMatchObject({ sceneId: 'x', eventIndex: 2, confinedSceneIds: null })
+    expect(out.steps).toHaveLength(1)
+  })
+
+  it('debug 起点が superseded なら ?scene= もエントリも試さない', async () => {
+    const startFrom = vi.fn().mockResolvedValue({ status: 'superseded' })
+    const { renderer } = fakeRenderer({ startFrom })
+    const out = await runInitialEntry(
+      renderer,
+      resolveInitialEntry(
+        input({
+          debugQuery: parseDebugQuery('?debug_scene=x'),
+          initialSceneId: 's',
+          confinedSceneIds: ['s'],
+        })
+      )
+    )
+    expect(startFrom).toHaveBeenCalledTimes(1)
+    expect(out.final).toEqual({ status: 'superseded' })
+  })
+
+  it('全試行が失敗したら最後（エントリ）の失敗が final。自動セーブは通信失敗でなければ true のまま', async () => {
+    const startFrom = vi.fn().mockResolvedValue({ status: 'failed', reason: 'not-found' })
+    const { renderer } = fakeRenderer({ startFrom })
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input()))
+    expect(out.final).toEqual({ status: 'failed', reason: 'not-found' })
+    expect(out.autoSave).toBe(true)
+  })
+
+  it('quickLoad の resolver-error の後、エントリが失敗しても自動セーブは配線しない（false を保つ）', async () => {
+    const startFrom = vi.fn().mockResolvedValue({ status: 'failed', reason: 'not-found' })
+    const { renderer } = fakeRenderer({
+      startFrom,
+      quickLoad: vi.fn(async () => ({ status: 'failed', reason: 'resolver-error' }) as const),
+    })
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input({ hasQuickSave: true })))
+    expect(out.autoSave).toBe(false)
+  })
+})
+
+describe('summarizeInitialEntry', () => {
+  it('debug 起点を試していなければ debugScene は null', async () => {
+    const { renderer } = fakeRenderer()
+    const out = await runInitialEntry(renderer, resolveInitialEntry(input()))
+    expect(summarizeInitialEntry(out)).toEqual({ debugScene: null })
+  })
+
+  it('debug 起点が入場できたら entered: true', async () => {
+    const { renderer } = fakeRenderer()
+    const out = await runInitialEntry(
+      renderer,
+      resolveInitialEntry(input({ debugQuery: parseDebugQuery('?debug_scene=x') }))
+    )
+    expect(summarizeInitialEntry(out)).toEqual({ debugScene: { sceneId: 'x', entered: true } })
+  })
+
+  it('debug 起点が superseded でも entered ではない', async () => {
+    const { renderer } = fakeRenderer({
+      startFrom: vi.fn().mockResolvedValue({ status: 'superseded' }),
+    })
+    const out = await runInitialEntry(
+      renderer,
+      resolveInitialEntry(input({ debugQuery: parseDebugQuery('?debug_scene=x') }))
+    )
+    expect(summarizeInitialEntry(out).debugScene).toEqual({ sceneId: 'x', entered: false })
+  })
+
+  it('?debug_script= だけなら debugScene は null（script は入場の試行でない）', async () => {
+    const { renderer } = fakeRenderer()
+    const out = await runInitialEntry(
+      renderer,
+      resolveInitialEntry(input({ debugQuery: parseDebugQuery('?debug_script=advance') }))
+    )
+    expect(summarizeInitialEntry(out)).toEqual({ debugScene: null })
+  })
+})

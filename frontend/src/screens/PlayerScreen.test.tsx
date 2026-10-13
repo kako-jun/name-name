@@ -2672,6 +2672,36 @@ describe('PlayerScreen', () => {
           'debug_scene: no-such-scene → not found (ignored)'
         )
       })
+
+      it('70: 初期入場の結果通知が再度来ても debug_scene 行は1行に置き換わる（重複しない）', async () => {
+        window.history.pushState({}, '', '?debug_scene=cell-scene-1')
+        await renderMultiDocProject()
+        reportDebugSceneEntry('cell-scene-1', false)
+        reportDebugSceneEntry('cell-scene-1', true)
+        const lines = (lastNovelPlayerProps().debugInfo as string[]).filter((l) =>
+          l.startsWith('debug_scene:')
+        )
+        expect(lines).toEqual(['debug_scene: cell-scene-1 → resolved'])
+      })
+
+      it('71: debug_scene を試していない通知（debugScene: null）では HUD に debug_scene 行を足さない', async () => {
+        await renderMultiDocProject()
+        const onInitialEntry = lastNovelPlayerProps().onInitialEntry as (report: {
+          debugScene: null
+        }) => void
+        act(() => onInitialEntry({ debugScene: null }))
+        const debugInfo = lastNovelPlayerProps().debugInfo as string[]
+        expect(debugInfo.some((l) => l.startsWith('debug_scene:'))).toBe(false)
+      })
+
+      it('72: ?debug_script= のみでもタイトル画面を出さず、?scene= の事前解決も confinement もしない（debug 起点は NovelPlayer の初期入場に任せる）', async () => {
+        window.history.pushState({}, '', '?debug_script=advance')
+        await renderMultiDocProject()
+        expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
+        expect(lastNovelPlayerProps().initialSceneId).toBeNull()
+        expect(lastNovelPlayerProps().confinedSceneIds).toBeNull()
+        expect(cellFetchCount(CELL_PATH)).toBe(0)
+      })
     })
   })
 

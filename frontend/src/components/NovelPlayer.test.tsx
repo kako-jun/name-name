@@ -3366,3 +3366,315 @@ describe('NovelPlayer ref API — forwardRef openSettings() (#643)', () => {
     errorSpy.mockRestore()
   })
 })
+
+// --- #734 PR2: 初期入場の一本化・events 変化 effect・onInitialEntry の補足 ---
+describe('NovelPlayer 初期入場の補足 (#734 PR2)', () => {
+  const lastRenderer = () => rendererInstances[rendererInstances.length - 1]
+  const evA: Event[] = []
+  const evB: Event[] = []
+  const sceneA: EventScene = { id: 'sa', title: 'sa', view: 'TopDown', events: [] }
+  const sceneB: EventScene = { id: 'sb', title: 'sb', view: 'TopDown', events: [] }
+
+  type Settle = (v: unknown) => void
+  /** startFrom を呼び出し側が決着させられる Promise にする（render 直後・flush 前に呼ぶ）。 */
+  function holdStartFrom(r: MockRenderer): Settle {
+    let settle!: Settle
+    r.startFrom.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      })
+    )
+    return settle
+  }
+
+  describe('events 変化 effect', () => {
+    it('N1: 同じ events / scenes 参照での再レンダーでは、rendererReady の後でも setEvents / setScenes を呼ばない', async () => {
+      const { rerender } = render(<NovelPlayer events={evA} />)
+      await flushAsync()
+      const r = lastRenderer()
+      rerender(<NovelPlayer events={evA} fontSize={20} />)
+      await flushAsync()
+      expect(r.setEvents).not.toHaveBeenCalled()
+      expect(r.setScenes).not.toHaveBeenCalled()
+    })
+
+    it('N2: rendererReady の後に events の参照が変わったときだけ setEvents を1回呼ぶ（同じ参照の再レンダーでは増えない）', async () => {
+      const { rerender } = render(<NovelPlayer events={evA} />)
+      await flushAsync()
+      const r = lastRenderer()
+      rerender(<NovelPlayer events={evB} />)
+      await flushAsync()
+      expect(r.setEvents).toHaveBeenCalledTimes(1)
+      expect(r.setEvents).toHaveBeenCalledWith(evB)
+      rerender(<NovelPlayer events={evB} fontSize={22} />)
+      await flushAsync()
+      expect(r.setEvents).toHaveBeenCalledTimes(1)
+    })
+
+    it('N3: scenes 指定のとき、scenes の参照が変わると setScenes が呼ばれる（setEvents ではない）', async () => {
+      const first = [sceneA]
+      const second = [sceneB]
+      const { rerender } = render(<NovelPlayer events={evA} scenes={first} />)
+      await flushAsync()
+      const r = lastRenderer()
+      expect(r.loadScenes).toHaveBeenCalledWith(first)
+      rerender(<NovelPlayer events={evA} scenes={second} />)
+      await flushAsync()
+      expect(r.setScenes).toHaveBeenCalledTimes(1)
+      expect(r.setScenes).toHaveBeenCalledWith(second)
+      expect(r.setEvents).not.toHaveBeenCalled()
+    })
+
+    it('N4: init() の完了前に events が変わっても、その場では setEvents を呼ばず、rendererReady の後に1回だけ反映する', async () => {
+      setInitDeferred(true)
+      const { rerender } = render(<NovelPlayer events={evA} />)
+      await flushAsync()
+      const r = lastRenderer()
+      rerender(<NovelPlayer events={evB} />)
+      await flushAsync()
+      expect(r.setEvents).not.toHaveBeenCalled()
+      expect(r.loadEvents).not.toHaveBeenCalled()
+
+      resolvePendingInit()
+      await flushAsync()
+      expect(r.loadEvents).toHaveBeenCalledTimes(1)
+      expect(r.setEvents).toHaveBeenCalledTimes(1)
+      expect(r.setEvents).toHaveBeenCalledWith(evB)
+    })
+
+    it('N5: マウント時の初回実行では events の参照が読み込み済みと同じなので setEvents を呼ばない（rendererReady 後の effect 再実行でも）', async () => {
+      setInitDeferred(true)
+      render(<NovelPlayer events={evA} />)
+      await flushAsync()
+      resolvePendingInit()
+      await flushAsync()
+      expect(lastRenderer().setEvents).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('debug_script は入場確定後', () => {
+    it('S1: ?debug_script= の playScript は初期入場が確定するまで実行されず、確定後に1回だけ実行される', async () => {
+      window.history.pushState({}, '', '?debug_script=advance')
+      try {
+        render(<NovelPlayer events={[]} />)
+        const r = lastRenderer()
+        const settle = holdStartFrom(r)
+        await flushAsync()
+        expect(r.playScript).not.toHaveBeenCalled()
+        settle({ status: 'entered', sceneId: null })
+        await flushAsync()
+        expect(r.playScript).toHaveBeenCalledTimes(1)
+        expect(r.playScript).toHaveBeenCalledWith([{ type: 'advance' }])
+      } finally {
+        window.history.pushState({}, '', '/')
+      }
+    })
+
+    it('S2: 初期入場が superseded で終わったら playScript は実行しない', async () => {
+      window.history.pushState({}, '', '?debug_script=advance')
+      try {
+        render(<NovelPlayer events={[]} />)
+        const r = lastRenderer()
+        r.startFrom.mockResolvedValue({ status: 'superseded' })
+        await flushAsync()
+        expect(r.playScript).not.toHaveBeenCalled()
+      } finally {
+        window.history.pushState({}, '', '/')
+      }
+    })
+
+    it('S3: ?debug_script= と ?scene= の併用は、?scene= の startFrom が確定してから playScript', async () => {
+      window.history.pushState({}, '', '?debug_script=advance')
+      try {
+        render(<NovelPlayer events={[]} initialSceneId="scene-x" confinedSceneIds={['scene-x']} />)
+        const r = lastRenderer()
+        const settle = holdStartFrom(r)
+        await flushAsync()
+        expect(r.startFrom).toHaveBeenCalledTimes(1)
+        expect(r.playScript).not.toHaveBeenCalled()
+        settle({ status: 'entered', sceneId: 'scene-x' })
+        await flushAsync()
+        expect(r.playScript).toHaveBeenCalledTimes(1)
+      } finally {
+        window.history.pushState({}, '', '/')
+      }
+    })
+  })
+
+  describe('onInitialEntry の HUD 通知', () => {
+    it('R1: debug 起点が無ければ、初期入場の確定後に debugScene: null で1回通知する（確定前は通知しない）', async () => {
+      const onInitialEntry = vi.fn()
+      render(<NovelPlayer events={[]} onInitialEntry={onInitialEntry} />)
+      const r = lastRenderer()
+      const settle = holdStartFrom(r)
+      await flushAsync()
+      expect(onInitialEntry).not.toHaveBeenCalled()
+      settle({ status: 'entered', sceneId: null })
+      await flushAsync()
+      expect(onInitialEntry).toHaveBeenCalledTimes(1)
+      expect(onInitialEntry).toHaveBeenCalledWith({ debugScene: null })
+    })
+
+    it('R2: ?debug_scene= が入場できたら debugScene: { sceneId, entered: true }', async () => {
+      window.history.pushState({}, '', '?debug_scene=dbg')
+      try {
+        const onInitialEntry = vi.fn()
+        render(<NovelPlayer events={[]} onInitialEntry={onInitialEntry} />)
+        await flushAsync()
+        expect(onInitialEntry).toHaveBeenCalledWith({
+          debugScene: { sceneId: 'dbg', entered: true },
+        })
+      } finally {
+        window.history.pushState({}, '', '/')
+      }
+    })
+
+    it('R3: ?debug_scene= が不在（failed）なら entered: false で通知し、エントリへ進む', async () => {
+      window.history.pushState({}, '', '?debug_scene=ghost')
+      try {
+        const onInitialEntry = vi.fn()
+        render(<NovelPlayer events={[]} onInitialEntry={onInitialEntry} />)
+        const r = lastRenderer()
+        r.startFrom
+          .mockResolvedValueOnce({ status: 'failed', reason: 'not-found' })
+          .mockResolvedValueOnce({ status: 'entered', sceneId: null })
+        await flushAsync()
+        expect(r.startFrom).toHaveBeenCalledTimes(2)
+        expect(r.startFrom).toHaveBeenNthCalledWith(2, {})
+        expect(onInitialEntry).toHaveBeenCalledTimes(1)
+        expect(onInitialEntry).toHaveBeenCalledWith({
+          debugScene: { sceneId: 'ghost', entered: false },
+        })
+      } finally {
+        window.history.pushState({}, '', '/')
+      }
+    })
+
+    it('R4: 確定前に unmount したら通知しない（自動セーブの配線もしない）', async () => {
+      const onInitialEntry = vi.fn()
+      const { unmount } = render(
+        <NovelPlayer events={[]} docKey="proj-a" onInitialEntry={onInitialEntry} />
+      )
+      const r = lastRenderer()
+      const settle = holdStartFrom(r)
+      await flushAsync()
+      unmount()
+      settle({ status: 'entered', sceneId: null })
+      await flushAsync()
+      expect(onInitialEntry).not.toHaveBeenCalled()
+      expect(r.setOnSceneChange).not.toHaveBeenCalled()
+    })
+
+    it('R5: 初期入場が reject しても未処理の rejection にならず、console.error に記録される', async () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      lastRenderer().startFrom.mockRejectedValue(new Error('boom'))
+      await flushAsync()
+      expect(err).toHaveBeenCalledTimes(1)
+      expect(String(err.mock.calls[0][0])).toContain('初期入場')
+    })
+  })
+
+  describe('初期入場の1回性と自動セーブの配線', () => {
+    it('E1: 初期入場は1回だけ。再レンダーで startFrom / quickLoad / restoreSnapshot が増えない', async () => {
+      const { rerender } = render(<NovelPlayer events={evA} docKey="proj-a" />)
+      await flushAsync()
+      const r = lastRenderer()
+      const calls = () =>
+        r.startFrom.mock.calls.length +
+        r.quickLoad.mock.calls.length +
+        r.restoreSnapshot.mock.calls.length
+      const before = calls()
+      expect(before).toBe(1)
+      rerender(<NovelPlayer events={evA} docKey="proj-a" fontSize={18} />)
+      await flushAsync()
+      expect(calls()).toBe(before)
+    })
+
+    it('E2: 初期入場中の onSceneChange では quickSave されない（配線は確定後。確定後に配線されたコールバックだけが quickSave を呼ぶ）', async () => {
+      render(<NovelPlayer events={[]} docKey="proj-a" />)
+      const r = lastRenderer()
+      const settle = holdStartFrom(r)
+      await flushAsync()
+      expect(r.setOnSceneChange).not.toHaveBeenCalled()
+      expect(r.quickSave).not.toHaveBeenCalled()
+      settle({ status: 'entered', sceneId: null })
+      await flushAsync()
+      const wired = r.setOnSceneChange.mock.calls[0][0] as () => void
+      wired()
+      expect(r.quickSave).toHaveBeenCalledTimes(1)
+    })
+  })
+})
+
+describe('NovelPlayer fluid 再マウントと初期入場の補足 (#734 PR2)', () => {
+  let originalResizeObserver: typeof ResizeObserver | undefined
+
+  beforeEach(() => {
+    originalResizeObserver = window.ResizeObserver
+    window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver
+    resetResizeObserverMock()
+  })
+
+  afterEach(() => {
+    window.ResizeObserver = originalResizeObserver as typeof ResizeObserver
+  })
+
+  // ADR 0003 §5-1: fluid 再マウントでは debug 起点（?debug_scene= / ?debug_script=）を再実行しない。
+  // 実装は snapshot の試行の後でも ?debug_script= の playScript を実行してしまうため、復元した位置の上で
+  // スクリプトが再生される（不整合14 の ?debug_script= 側が残っている）。
+  it.fails(
+    'S4: fluid 再マウントでは ?debug_script= の playScript も再実行しない（復元した位置を上書きしない）',
+    async () => {
+      window.history.pushState({}, '', '?debug_script=advance')
+      try {
+        render(<NovelPlayer events={[]} aspectRatio="auto" />)
+        await flushAsync()
+        const first = rendererInstances[0]
+        first.getSnapshot.mockReturnValue({
+          ...first.getSnapshot(),
+          sceneId: 'scene-a',
+        })
+        act(() => {
+          triggerResize(400, 800)
+        })
+        await flushAsync()
+        const second = rendererInstances[1]
+        expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+        expect(second.playScript).not.toHaveBeenCalled()
+      } finally {
+        window.history.pushState({}, '', '/')
+      }
+    }
+  )
+
+  it('E3: スナップショットの復元が failed なら、スナップショットの flags を保ってエントリから始める', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    const flags = { milestone: { Bool: true } }
+    first.getSnapshot.mockReturnValue({ ...first.getSnapshot(), sceneId: 'scene-a', flags })
+    // 次に構築される renderer の restoreSnapshot を失敗させる（コンストラクタ後・effect の init 前に差し込めないので、
+    // prototype 経由ではなく既定の resolved を上書きする代わりに、構築直後に mockResolvedValue する）。
+    const originalPush = rendererInstances.push.bind(rendererInstances)
+    rendererInstances.push = (...items: MockRenderer[]) => {
+      items.forEach((i) =>
+        i.restoreSnapshot.mockResolvedValue({ status: 'failed', reason: 'not-found' })
+      )
+      return originalPush(...items)
+    }
+    try {
+      act(() => {
+        triggerResize(400, 800)
+      })
+      await flushAsync()
+    } finally {
+      rendererInstances.push = originalPush
+    }
+    const second = rendererInstances[1]
+    expect(second.restoreSnapshot).toHaveBeenCalledTimes(1)
+    expect(second.startFrom).toHaveBeenCalledTimes(1)
+    expect(second.startFrom).toHaveBeenCalledWith({ flags })
+    expect(second.quickLoad).not.toHaveBeenCalled()
+  })
+})
