@@ -75,6 +75,7 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
+import { getSharedDofMask } from './dofMaskCache'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import { computeSlitY } from './acrylicBase'
 import { computeShadowTransform } from './acrylicShadow'
@@ -604,7 +605,7 @@ export class BattleScreen extends Container {
       geo.destroy()
       lv.mask.destroy()
       lv.blur.destroy()
-      lv.maskTexture?.destroy(true)
+      // マスクのテクスチャは共有キャッシュ（dofMaskCache.ts）のものなので壊さない
     }
     this.dofLevels = []
   }
@@ -634,11 +635,9 @@ export class BattleScreen extends Container {
       if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
         const tex = this.createDofMaskTexture(g.rampFraction)
         if (tex) {
-          const old = lv.maskTexture
           lv.maskTexture = tex
           lv.maskRamp = g.rampFraction
           lv.mask.texture = tex
-          old?.destroy(true)
         }
       }
       lv.mask.position.set(0, g.startY)
@@ -649,6 +648,10 @@ export class BattleScreen extends Container {
 
   /** 縦にアルファが 0 → 1 に立ち上がる 1 x N の canvas テクスチャを作る。canvas が使えない環境では null（ぼかし無しで続行） */
   private createDofMaskTexture(rampFraction: number): Texture | null {
+    return getSharedDofMask(rampFraction, (ramp) => this.buildDofMaskTexture(ramp))
+  }
+
+  private buildDofMaskTexture(rampFraction: number): Texture | null {
     try {
       const canvas = document.createElement('canvas')
       canvas.width = 1

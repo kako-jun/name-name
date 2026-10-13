@@ -2044,7 +2044,7 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
     }
   })
 
-  it('tone on + dof on の destroy は例外なく、tone/blur/maskTexture を破棄する', async () => {
+  it('tone on + dof on の destroy は例外なく、tone/blur を破棄し、共有のマスクテクスチャは壊さない (#745)', async () => {
     vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation((() => {
       const t = new Texture()
       vi.spyOn(t, 'destroy').mockImplementation(() => {})
@@ -2060,7 +2060,8 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
     expect(() => s.destroy({ children: true })).not.toThrow()
     expect(tfSpy).toHaveBeenCalledTimes(1)
     blurSpies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
-    texSpies.forEach((sp) => expect(sp).toHaveBeenCalled())
+    // マスクの source を壊すと、Pixi のプールにあるマスクフィルタの束縛が壊れて次の画面の描画が落ちる
+    texSpies.forEach((sp) => expect(sp).not.toHaveBeenCalled())
     expect(ti(s).dofLevels).toHaveLength(0)
     expect(ti(s).backgroundToneFilter).toBeNull()
   })
