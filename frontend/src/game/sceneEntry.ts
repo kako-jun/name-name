@@ -132,8 +132,11 @@ const GATE_RULES: Record<GatedOperation, GateRule> = {
   confirmChoice: { choice: false, wait: false, jump: 'pending' },
 }
 
-/** ゲートが操作を止めている理由。entry/jump は「場面転換中」、choice/wait は「この場面では不可」。 */
-export type GateReason = 'entry' | 'jump' | 'choice' | 'wait'
+/**
+ * ゲートが操作を止めている理由。entry/jump は「場面転換中」、choice/wait/stalled は「この場面では不可」。
+ * stalled は停止中の Jump（遷移先が無く Jump の位置で止まっている）で、遷移は進行していないので転換中ではない。
+ */
+export type GateReason = 'entry' | 'jump' | 'stalled' | 'choice' | 'wait'
 
 /**
  * 遷移中のゲート: この操作を今は受け付けてはいけない理由を返す（止めないなら null）。
@@ -144,7 +147,8 @@ export type GateReason = 'entry' | 'jump' | 'choice' | 'wait'
 export function gateReason(op: GatedOperation, s: TransitionGateState): GateReason | null {
   if (s.hasPendingEntry) return 'entry'
   const rule = GATE_RULES[op]
-  if (rule.jump === 'any' ? s.jumpState !== 'idle' : s.jumpState === 'pending') return 'jump'
+  if (s.jumpState === 'pending') return 'jump'
+  if (rule.jump === 'any' && s.jumpState === 'stalled') return 'stalled'
   if (rule.choice && s.waitingForChoice) return 'choice'
   if (rule.wait && s.waitingForWait) return 'wait'
   return null

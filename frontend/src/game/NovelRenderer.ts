@@ -748,6 +748,8 @@ export class NovelRenderer {
   private jumpState: 'idle' | 'pending' | 'stalled' = 'idle'
   /** Jump の遷移を発火する timer。`[待機]` の `waitTimer` とは別 (#733)。 */
   private jumpTimer: number | null = null
+  /** 遷移中に弾かれた自動セーブの再試行が予約済みか (#768)。 */
+  private autoSaveRetryScheduled = false
   /**
    * 遷移文脈の世代 (#733)。再生位置が別の文脈へ移る箇所（armJump・resetAndStartEvents・applyState）で
    * 進める。resolveMissingSceneAndJump は開始時に捕捉し、await 後に不一致なら（遅延ロード中に
@@ -6235,6 +6237,29 @@ export class NovelRenderer {
    * 復元する (#768)。
    */
   quickSave(origin: 'quick' | 'auto' = 'quick'): boolean {
+    return this.saveQuick(origin, false)
+  }
+
+  /**
+   * 自動セーブが遷移中（Jump 予約中・入場中）のゲートで弾かれたとき、遷移が確定してから1回だけ再試行する (#768)。
+   * `onSceneChange` は入場の適用の途中で発火するため、入場が確定する前（ゲートが下りる前）に
+   * 自動セーブが走ると、黙って弾かれて保存されない。入場中は入場の完了を待ち、Jump 予約中は次の tick で
+   * 状態を見直す。再試行でも弾かれたら諦める（連続する Jump の途中の位置は保存しない。次のシーン入場が保存する）。
+   */
+  private retryAutoSaveAfterSettle(): void {
+    if (this.autoSaveRetryScheduled) return
+    this.autoSaveRetryScheduled = true
+    const retry = (): void => {
+      this.autoSaveRetryScheduled = false
+      if (!this.initialized) return
+      this.saveQuick('auto', true)
+    }
+    const entry = this.pendingEntry
+    if (entry) void entry.promise.then(retry, retry)
+    else this.time.setTimeout(retry, 0)
+  }
+
+  private saveQuick(origin: 'quick' | 'auto', isRetry: boolean): boolean {
     // 結果のトースト（成功・弾かれた理由）はここで出す (#769。ロードの #765 と対称)。手動（F5）のみ通知し、
     // 自動セーブ（`onSceneChange` 経由の 'auto'）は無言。
     if (this.storyEnded) {
@@ -6251,6 +6276,8 @@ export class NovelRenderer {
             ? '場面転換中のためセーブできません'
             : 'この場面ではセーブできません'
         )
+      } else if (!isRetry && (blocked === 'jump' || blocked === 'entry')) {
+        this.retryAutoSaveAfterSettle()
       }
       return false
     }
