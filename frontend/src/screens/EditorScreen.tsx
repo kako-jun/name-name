@@ -576,6 +576,30 @@ function EditorScreen({
   // サーバへの保存は handleSave で明示的に行う。
   // PR #120 review S4: 初期ロード失敗時 (loadFailed) は draft を一切触らない。
   //   失敗状態で空 doc を設定しているので、autosave すると既存 draft を上書きする。
+  // 保留中の下書き書き込み。タイマー発火・タブ切替・アンマウントのいずれでも flushPendingDraft で確定する。
+  // （従来は rawMarkdown の cleanup でタイマーごと捨てていたため、切替前 1 秒以内の編集が
+  //  localStorage に残らなかった。#778 で他タブの下書きがプレビューの取得元になり表面化した）
+  const pendingDraftRef = useRef<{ key: string; markdown: string } | null>(null)
+  const flushPendingDraft = useCallback(() => {
+    if (draftSaveTimeoutRef.current !== null) {
+      clearTimeout(draftSaveTimeoutRef.current)
+      draftSaveTimeoutRef.current = null
+    }
+    const pending = pendingDraftRef.current
+    if (!pending) return
+    pendingDraftRef.current = null
+    try {
+      if (pending.markdown === initialMarkdownRef.current) {
+        // 変更が無ければ draft を消しておく
+        localStorage.removeItem(pending.key)
+      } else {
+        localStorage.setItem(pending.key, pending.markdown)
+      }
+    } catch (error) {
+      console.error('Failed to persist draft to localStorage:', error)
+    }
+  }, [])
+
   useEffect(() => {
     if (loadFailed) return
     if (!rawMarkdown && initialMarkdownRef.current === '') return
@@ -583,26 +607,24 @@ function EditorScreen({
     if (draftSaveTimeoutRef.current !== null) {
       clearTimeout(draftSaveTimeoutRef.current)
     }
-
-    draftSaveTimeoutRef.current = window.setTimeout(() => {
-      try {
-        if (rawMarkdown === initialMarkdownRef.current) {
-          // 変更が無ければ draft を消しておく
-          localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
-        } else {
-          localStorage.setItem(localStorageKey(projectName, currentScriptPath), rawMarkdown)
-        }
-      } catch (error) {
-        console.error('Failed to persist draft to localStorage:', error)
-      }
-    }, 1000)
+    pendingDraftRef.current = {
+      key: localStorageKey(projectName, currentScriptPath),
+      markdown: rawMarkdown,
+    }
+    draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
 
     return () => {
+      // タイマーだけ止める。保留分は次の effect で上書きされるか、下の切替/アンマウントで flush される
       if (draftSaveTimeoutRef.current !== null) {
         clearTimeout(draftSaveTimeoutRef.current)
+        draftSaveTimeoutRef.current = null
       }
     }
-  }, [rawMarkdown, projectName, loadFailed])
+  }, [rawMarkdown, projectName, loadFailed, flushPendingDraft])
+
+  // タブ（ファイル）切替・プロジェクト切替・アンマウントの直前に、保留中の下書きを即確定する。
+  // cleanup は同じ commit の全 effect 本体より先に走るため、initialMarkdownRef がまだ旧文書の値のうちに比較できる。
+  useEffect(() => flushPendingDraft, [projectName, currentScriptPath, flushPendingDraft])
 
   // 保存ボタン: Worker の PUT contents を直接叩く（保存 = 即 commit）。
   // Worker モデルでは独立した「commit」概念が無いので、PUT が成功した時点で

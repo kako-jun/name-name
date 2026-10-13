@@ -32,14 +32,21 @@ vi.mock('../components/NovelPlayer', () => ({
     return <div data-testid="novel-player" />
   },
 }))
-vi.mock('../components/CanvasEditor', () => ({ default: () => <div /> }))
+// #778: onDocChange を外から叩けるようにする（編集のシミュレーション）
+let editedDoc: EventDocument = makeDoc(['hub', 'S1'])
+let emitted = ''
+vi.mock('../components/CanvasEditor', () => ({
+  default: (props: { onDocChange: (d: EventDocument) => void }) => (
+    <button data-testid="edit-doc" onClick={() => props.onDocChange(editedDoc)} />
+  ),
+}))
 vi.mock('../components/MapEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/NPCEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/RPGPlayer', () => ({ default: () => <div /> }))
 vi.mock('../components/VideoExportModal', () => ({ default: () => <div /> }))
 vi.mock('../wasm/parser', () => ({
   parseMarkdown: async (md: string) => parsedByMarkdown.get(md) ?? parsed,
-  emitMarkdown: async () => '',
+  emitMarkdown: async () => emitted,
 }))
 vi.mock('../api/client', () => ({
   createApiClient: () => ({
@@ -106,6 +113,8 @@ describe('EditorScreen: 他文書のシーンへの遅延ロード (#778)', () =
     listScriptsMock.mockReset()
     listScriptsMock.mockImplementation(async () => [script('other.md'), script('script.md')])
     parsedByMarkdown.set('# hub', makeDoc(['hub', 'S1']))
+    editedDoc = makeDoc(['hub', 'S1'])
+    emitted = ''
   })
 
   async function openPreview(): Promise<Resolver> {
@@ -165,7 +174,8 @@ describe('EditorScreen: 他文書のシーンへの遅延ロード (#778)', () =
       scenes = await resolve('S1')
     })
     expect(scenes!.map((s: EventScene) => s.id)).toEqual(['hub', 'S1'])
-    expect(getContentsMock).not.toHaveBeenCalled()
+    // 編集中の文書(script.md)は取りに行かない（#238 の他文書の先行取得が遅れて走るため、対象パスで絞る）
+    expect(getContentsMock).not.toHaveBeenCalledWith('p', 'script.md', 'develop')
   })
 
   it('どの文書にも無いシーンは null（not-found）', async () => {
@@ -175,5 +185,74 @@ describe('EditorScreen: 他文書のシーンへの遅延ロード (#778)', () =
       scenes = await resolve('nowhere')
     })
     expect(scenes).toBeNull()
+  })
+
+  it('ライブ再パース（編集）後も取得済みの他文書の索引が残る', async () => {
+    parsedByMarkdown.set('# server-other', makeDoc(['O1']))
+    const resolve = await openPreview()
+    await act(async () => {
+      await resolve('O1')
+    })
+    // 編集モードへ戻って doc を編集 → 再びプレビュー
+    fireEvent.click(screen.getByRole('button', { name: /Edit Mode/i }))
+    editedDoc = makeDoc(['hub', 'S1', 'S2'])
+    emitted = '# edited'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(screen.getByRole('button', { name: /Play Mode/i }))
+    await waitFor(() => {
+      const index = playerProps[playerProps.length - 1].jumpSceneIndex as EventScene[]
+      expect(index.map((x) => x.id)).toEqual(['hub', 'S1', 'S2', 'O1'])
+    })
+  })
+
+  it('タブ切替をまたいだ古い取得結果は索引に入らず、解決は null になる', async () => {
+    let release: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'third.md') {
+        return new Promise((r) => {
+          release = r
+        })
+      }
+      return { content: path === 'other.md' ? '# server-other' : '# hub', sha: 'sha' }
+    })
+    listScriptsMock.mockImplementation(async () => [
+      script('other.md'),
+      script('script.md'),
+      script('third.md'),
+    ])
+    parsedByMarkdown.set('# server-other', makeDoc(['O1']))
+    parsedByMarkdown.set('# third', makeDoc(['T1']))
+    renderEditor()
+    await waitFor(() => expect(listScriptsMock).toHaveBeenCalled())
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    await waitFor(() => expect(playerProps.length).toBeGreaterThan(0))
+    const resolve = playerProps[playerProps.length - 1].onResolveMissingScene as Resolver
+    let result: EventScene[] | null = [] as EventScene[]
+    const pending = (async () => {
+      result = await resolve('T1')
+    })()
+    // third.md の取得が止まっている間に other.md のタブへ切り替える
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    await act(async () => {
+      release({ content: '# third', sha: 'sha' })
+      await pending
+    })
+    expect(result).toBeNull()
+    const index = playerProps[playerProps.length - 1].jumpSceneIndex as EventScene[]
+    expect(index.map((x) => x.id)).not.toContain('T1')
+  })
+
+  it('タブ切替の直前 1 秒以内の編集も下書きとして localStorage に残る', async () => {
+    renderEditor()
+    await waitFor(() => expect(listScriptsMock).toHaveBeenCalled())
+    editedDoc = makeDoc(['hub', 'S1', 'S9'])
+    emitted = '# edited-hub'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // デバウンス（1 秒）の満了を待たずに別タブへ切り替える
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    await waitFor(() =>
+      expect(localStorage.getItem('name-name:editor-draft:p:script.md')).toBe('# edited-hub')
+    )
   })
 })
