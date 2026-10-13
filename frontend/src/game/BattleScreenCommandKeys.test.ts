@@ -150,10 +150,24 @@ describe('十字キー: 無視する入力', () => {
     expect(handle).toHaveBeenCalledWith('escape')
   })
 
-  it('入力不可フェーズ(enemy-turn)では無反応で既定動作も止めない', () => {
+  it('入力不可フェーズ(enemy-turn)ではコマンドは無反応だが、ページのスクロールは止める', () => {
     const { handle, engine } = build()
     ;(engine.getState() as { phase: string }).phase = 'enemy-turn'
     const e = press('ArrowUp')
+    expect(handle).not.toHaveBeenCalled()
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('cross 有効中は repeat の矢印キーも既定動作（スクロール）を止める。決定はしない', () => {
+    const { handle } = build()
+    const e = press('ArrowDown', { repeat: true })
+    expect(handle).not.toHaveBeenCalled()
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('矢印以外のキーは既定動作を止めない', () => {
+    const { handle } = build()
+    const e = press('a')
     expect(handle).not.toHaveBeenCalled()
     expect(e.defaultPrevented).toBe(false)
   })
@@ -323,5 +337,79 @@ describe('キー処理の健全性', () => {
     for (const k of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) press(k)
     expect(err).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+function release(key: string): void {
+  globalThis.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }))
+}
+
+describe('十字キー: 戦闘開始時に押されていたキー (#204)', () => {
+  it('initialHeldKeys のキーは、一度 keyup されるまで無視する（既定動作は止める）', () => {
+    const { handle } = build({
+      layout: 'side',
+      commandLayout: 'cross',
+      initialHeldKeys: ['ArrowUp'],
+    })
+    const e = press('ArrowUp')
+    expect(handle).not.toHaveBeenCalled()
+    expect(e.defaultPrevented).toBe(true)
+    press('ArrowUp', { repeat: true })
+    expect(handle).not.toHaveBeenCalled()
+    release('ArrowUp')
+    press('ArrowUp')
+    expect(handle).toHaveBeenCalledWith('attack')
+  })
+
+  it('押されていなかった別のキーは最初から有効', () => {
+    const { handle } = build({
+      layout: 'side',
+      commandLayout: 'cross',
+      initialHeldKeys: ['ArrowUp'],
+    })
+    press('ArrowLeft')
+    expect(handle).toHaveBeenCalledWith('spell')
+  })
+
+  it('destroy で keyup リスナーも外れる', () => {
+    const remove = vi.spyOn(globalThis, 'removeEventListener')
+    const { s } = build()
+    s.destroy({ children: true })
+    expect(remove.mock.calls.filter((c) => c[0] === 'keyup')).toHaveLength(1)
+  })
+})
+
+describe('十字キー: 設定オーバーレイが開いている間 (#204)', () => {
+  it('設定ダイアログが開いている間は無視し、閉じると再び効く', () => {
+    const { handle } = build()
+    const d = document.createElement('div')
+    d.setAttribute('role', 'dialog')
+    d.setAttribute('aria-label', '設定')
+    document.body.appendChild(d)
+    const e = press('ArrowUp')
+    expect(handle).not.toHaveBeenCalled()
+    expect(e.defaultPrevented).toBe(false)
+    d.remove()
+    press('ArrowUp')
+    expect(handle).toHaveBeenCalledWith('attack')
+  })
+})
+
+describe('十字キー × ログのタイプ表示 (#755)', () => {
+  it('logTypewriter=on・ATB off: 1 回目の ArrowUp は全文表示だけ、2 回目で attack が実行される', () => {
+    const engine = new BattleEngine([ent('a')], [ent('s', { hp: 9999, maxHp: 9999 })], {
+      rng: () => 0.5,
+    })
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      commandLayout: 'cross',
+      logTypewriter: 'on',
+    })
+    created.push(s)
+    const before = engine.getState().log.length
+    press('ArrowUp')
+    expect(engine.getState().log.length).toBe(before)
+    press('ArrowUp')
+    expect(engine.getState().log.length).toBeGreaterThan(before)
   })
 })

@@ -83,6 +83,7 @@ import {
   type SpriteStyle,
 } from './spriteStyle'
 import { computeCoverFit } from './novelLayout'
+import { isEditableTarget, isHeldKeyBlocked, isSettingsOverlayOpen } from './inputGuards'
 import {
   computeBands,
   FF_BLUE_PANEL_ALPHA,
@@ -288,6 +289,11 @@ export interface BattleScreenOptions {
    * `front` では無視する（キー操作も付けない）。
    */
   commandLayout?: CommandLayout
+  /**
+   * 戦闘開始の時点で押されていたキー（`KeyboardEvent.key`）。`cross` の矢印キーは、これらが一度 keyup されるまで無視する
+   * （エンカウント直後に歩行で押しっぱなしだった矢印キーで、いきなりコマンドが決定されるのを防ぐ）(#204)
+   */
+  initialHeldKeys?: readonly string[]
   /** コマンドの表示名の上書き (#204)。id（attack / spell / item / escape）は変えず label だけ差し替える。部分指定可 */
   commandLabels?: CommandLabels
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
@@ -393,6 +399,9 @@ export class BattleScreen extends Container {
   private commandLayout: CommandLayout
   /** `cross` の矢印キーのリスナー (#204)。destroy で必ず外す */
   private keyListener: ((e: KeyboardEvent) => void) | null = null
+  /** 開始時に押されていて、まだ離されていないキー (#204)。keyup で外れる */
+  private heldKeys = new Set<string>()
+  private keyUpListener: ((e: KeyboardEvent) => void) | null = null
 
   constructor(
     engine: BattleEngine,
@@ -939,23 +948,36 @@ export class BattleScreen extends Container {
   /** `cross` のとき、矢印キー 1 押しでその方向のコマンドを決定するリスナーを付ける (#204)。grid には付けない */
   private attachCrossKeys(): void {
     if (this.commandLayout !== 'cross' || typeof globalThis.addEventListener !== 'function') return
+    this.heldKeys = new Set(this.opts.initialHeldKeys ?? [])
     this.keyListener = (e: KeyboardEvent) => {
-      if (this.destroyedFlag || this.closedFlag || e.repeat) return
+      if (this.destroyedFlag || this.closedFlag) return
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
-      const t = e.target as HTMLElement | null
       // フォーム部品の矢印キー操作（select の選択変更・入力のカーソル移動など）は奪わない
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName ?? ''))) return
+      if (isEditableTarget(e.target)) return
+      // 設定オーバーレイが開いている間は戦闘のキー操作を無視する
+      if (isSettingsOverlayOpen()) return
       const id = crossKeyToCommandId(e.key)
-      if (!id || !this.isCommandEnabled(id)) return
+      if (!id) return
+      // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
       e.preventDefault()
+      if (e.repeat) return
+      // 戦闘開始時に押されていたキーは、一度離されるまで無視する
+      if (isHeldKeyBlocked(this.heldKeys, e.key)) return
+      if (!this.isCommandEnabled(id)) return
       this.handleCommand(id)
     }
+    this.keyUpListener = (e: KeyboardEvent) => {
+      this.heldKeys.delete(e.key)
+    }
     globalThis.addEventListener('keydown', this.keyListener)
+    globalThis.addEventListener('keyup', this.keyUpListener)
   }
 
   private detachCrossKeys(): void {
     if (this.keyListener) globalThis.removeEventListener('keydown', this.keyListener)
+    if (this.keyUpListener) globalThis.removeEventListener('keyup', this.keyUpListener)
     this.keyListener = null
+    this.keyUpListener = null
   }
 
   private buildLogLines(): void {
