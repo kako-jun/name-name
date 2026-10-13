@@ -395,6 +395,40 @@ describe('EditorScreen: 遅延ロードの探索対象と継承 (#778)', () => {
     expect(after.length).toBeGreaterThan(0)
     expect(after.every((m) => m.includes('pixelate'))).toBe(true)
   })
+
+  it('継承値の変更で破棄された進行中のジャンプ解決は、新しい状態で1回やり直して成功する', async () => {
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [script('other.md'), script('script.md')])
+    parsed = { ...makeDoc(['hub']), event_image_transition: 'Pixelate' }
+    parsedContains.push(['# other.md', makeDoc(['O1'])])
+    let release: (v: { content: string; sha: string }) => void = () => {}
+    let first = true
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'other.md' && first) {
+        first = false
+        return new Promise((r) => {
+          release = r
+        })
+      }
+      return { content: `---\nengine: name-name\n---\n# ${path}`, sha: 'sha' }
+    })
+    const resolve = await openResolver()
+    let result: EventScene[] | null = null
+    const pending = (async () => {
+      result = await resolve('O1')
+    })()
+    // 取得待ちの間に script.md の継承値を編集で変える（他文書キャッシュの破棄）
+    fireEvent.click(screen.getByRole('button', { name: /Edit Mode/i }))
+    editedDoc = { ...makeDoc(['hub']), event_image_transition: 'Fade' }
+    emitted = '# e'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    await act(async () => {
+      release({ content: '---\nengine: name-name\n---\n# other.md', sha: 'sha' })
+      await pending
+    })
+    expect(result).not.toBeNull()
+    expect((result as unknown as EventScene[]).map((x) => x.id)).toContain('O1')
+  })
 })
 
 describe('EditorScreen: 最初に開く文書の決め方 (#778 調査)', () => {
@@ -540,5 +574,46 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     fireEvent.click(await screen.findByRole('button', { name: '破棄' }))
     await new Promise((r) => setTimeout(r, 1300))
     expect(localStorage.getItem(draftKey)).toBeNull()
+  })
+
+  it('保存中に別タブへ切り替えても、旧タブの下書きに別文書の本文が入らず、新タブの未保存判定も壊れない', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    getContentsMock.mockImplementation(async (_p: string, path: string) => ({
+      content: path === 'other.md' ? '# B-body' : '# hub',
+      sha: 'sha',
+    }))
+    let finishPut: (v: { sha: string }) => void = () => {}
+    putContentsMock.mockImplementation(
+      () =>
+        new Promise((r) => {
+          finishPut = r
+        })
+    )
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderEditor()
+    await screen.findByRole('tab', { name: /^other\.md/ })
+    emitted = '# A-edit'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Gitにコミット・プッシュ' }))
+    await waitFor(() => expect(putContentsMock).toHaveBeenCalled())
+    // PUT が返る前に other.md へ切り替え、そのロードを完了させる
+    fireEvent.click(screen.getByRole('tab', { name: /^other\.md/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /^other\.md/ }).getAttribute('aria-selected')).toBe(
+        'true'
+      )
+    )
+    await new Promise((r) => setTimeout(r, 150))
+    await act(async () => {
+      finishPut({ sha: 'sha-after' })
+    })
+    await new Promise((r) => setTimeout(r, 1300))
+    // 旧タブ(script.md)の下書きは、保存した内容と一致していたので消えている（B の本文にはならない）
+    expect(localStorage.getItem(draftKey)).not.toBe('# B-body')
+    expect(localStorage.getItem(draftKey)).toBeNull()
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBeNull()
+    // 新タブ(other.md)は未保存扱いになっていない
+    expect(screen.getByRole('button', { name: '保存済み' })).toBeTruthy()
   })
 })

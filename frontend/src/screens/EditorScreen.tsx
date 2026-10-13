@@ -371,6 +371,7 @@ function EditorScreen({
   const loadedOtherDocsRef = useRef<Map<string, EventDocument>>(new Map())
   const loadingOtherDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
   const otherDocsEpochRef = useRef(0)
+  const switchEpochRef = useRef(0)
   const [lazyOtherScenes, setLazyOtherScenes] = useState<EventScene[]>([])
   // 遅延ロード探索の対象。hidden（data.md 等のマスター）は /play と同じく除く（編集中のものは残す）。
   const sortedScriptPaths = useMemo(() => {
@@ -383,8 +384,11 @@ function EditorScreen({
   const sortedScriptPathsRef = useRef<string[]>([])
   sortedScriptPathsRef.current = sortedScriptPaths
 
-  const resetOtherDocsCache = useCallback(() => {
+  // switched: タブ・プロジェクトの切替による破棄か。継承値の変更による破棄（false）の場合は、
+  // 進行中の解決が打ち切られても同じ文書のまま取り直せる（resolveMissingScene が1回だけやり直す）。
+  const resetOtherDocsCache = useCallback((switched = true) => {
     otherDocsEpochRef.current++
+    if (switched) switchEpochRef.current++
     loadedOtherDocsRef.current = new Map()
     loadingOtherDocsRef.current = new Map()
     setLazyOtherScenes([])
@@ -415,7 +419,7 @@ function EditorScreen({
     const prev = prevScriptTransitionRef.current
     prevScriptTransitionRef.current = scriptTransition
     if (prev !== undefined && scriptTransition !== undefined && prev !== scriptTransition) {
-      resetOtherDocsCache()
+      resetOtherDocsCache(false)
     }
   }, [scriptTransition, resetOtherDocsCache])
 
@@ -423,7 +427,8 @@ function EditorScreen({
     function load(path: string): Promise<EventDocument | null> {
       // #607 の継承元（script.md）を編集中で、その doc がまだ確定していない（タブ切替直後）間は
       // 取得しない。継承なしの解析結果を作って共有・キャッシュしてしまうのを避ける
-      // （呼び出し側は doc 確定後に再度呼ぶ。otherDocs の effect は docPath を依存に持つ）。
+      // （再呼び出しされるのは otherDocs の effect だけ: docPath を依存に持ち、確定後に取り直す。
+      // resolver 側は docPath 未確定の間そもそも呼ばず not-found にする＝ジャンプは入り直しで解決）。
       const inheritFrom = sortedScriptPathsRef.current.find((p) => basename(p) === SCRIPT_BASENAME)
       if (
         inheritFrom &&
@@ -699,33 +704,46 @@ function EditorScreen({
     }
     setIsSaving(true)
     setSaveError(null)
+    const savedPath = currentScriptPath
     try {
       const sha = shaRef.current
-      const result = await api.putContents(projectName, currentScriptPath, {
+      const result = await api.putContents(projectName, savedPath, {
         content: rawMarkdown,
         sha: sha ?? undefined,
         branch: DEFAULT_BRANCH,
         message: '原稿保存',
       })
+      const savedContent = rawMarkdown
+      const savedKey = localStorageKey(projectName, savedPath)
+      // 保存中（PUT の await 中）に別タブへ切り替わっていたら、いまのエディタ状態（sha・基準内容・
+      // 未保存判定・保留中の下書き）は別文書のものなので触らない。旧タブの下書きキーだけ、
+      // 保存した内容と一致するときに限って消す。
+      if (currentScriptPathRef.current !== savedPath) {
+        try {
+          if (localStorage.getItem(savedKey) === savedContent) localStorage.removeItem(savedKey)
+        } catch {
+          // ignore
+        }
+        return
+      }
       if (result.sha) {
         shaRef.current = result.sha
         setHasSha(true)
       }
       // 保存中（PUT の await 中）に追記された場合、保存したのは古い内容。下書きを消さず、
       // 未保存扱いのまま残す（保留中の下書き書き込みはそのまま走り、最新の内容を退避する）。
-      const savedContent = rawMarkdown
       initialMarkdownRef.current = savedContent
       if (rawMarkdownRef.current === savedContent) {
         setHasUnsavedChanges(false)
         try {
-          localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
+          localStorage.removeItem(savedKey)
         } catch {
           // ignore
         }
       } else {
         setHasUnsavedChanges(true)
         pendingDraftRef.current = {
-          key: localStorageKey(projectName, currentScriptPath),
+          key: savedKey,
           markdown: rawMarkdownRef.current,
         }
         if (draftSaveTimeoutRef.current === null) {
@@ -796,41 +814,49 @@ function EditorScreen({
   // 他の MD のシーンへ飛ぶ [ジャンプ:]・選択肢をプレビューで効かせる遅延ロード (#778)。
   // 遅延ロードの規則は PlayerScreen と共通（game/crossFileScenes.ts）。取得元は上の loadOtherDoc。
   const resolveMissingScene = useCallback(
-    (sceneId: string): Promise<EventScene[] | null> => {
-      const entryPath = currentScriptPathRef.current
-      // タブ切替の直後は doc がまだ旧文書のまま（loadChapters 完了まで）。そのまま entry に
-      // すると別の文書を取り違えるので、doc が entryPath のものになるまでは解決しない（not-found）。
-      if (!docRef.current || docPathRef.current !== entryPath) return Promise.resolve(null)
-      const epoch = otherDocsEpochRef.current
-      // 編集中の文書は最新の doc state を差し込んだ作業用 Map で引く（キャッシュ本体には入れない）
-      const docs = new Map(loadedOtherDocsRef.current)
-      docs.set(entryPath, docRef.current)
-      const isStale = () => otherDocsEpochRef.current !== epoch
-      const syncLazyIndex = () => {
-        // 索引（jumpSceneIndex）にも反映する。編集中文書は含めない（currentDocScenes が別建て）。
-        if (isStale()) return
-        setLazyOtherScenes(
-          buildSceneIndex(null, sortedScriptPathsRef.current, loadedOtherDocsRef.current)
-        )
+    async (sceneId: string): Promise<EventScene[] | null> => {
+      // script.md の継承値変更でキャッシュが破棄され解決が打ち切られた場合だけ、新しい epoch で1回やり直す
+      // （タブ・プロジェクト切替による破棄は、もう不要な解決なのでやり直さない）
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const entryPath = currentScriptPathRef.current
+        // タブ切替の直後は doc がまだ旧文書のまま（loadChapters 完了まで）。そのまま entry に
+        // すると別の文書を取り違えるので、doc が entryPath のものになるまでは解決しない（not-found）。
+        if (!docRef.current || docPathRef.current !== entryPath) return null
+        const epoch = otherDocsEpochRef.current
+        const switchEpoch = switchEpochRef.current
+        // 編集中の文書は最新の doc state を差し込んだ作業用 Map で引く（キャッシュ本体には入れない）
+        const docs = new Map(loadedOtherDocsRef.current)
+        docs.set(entryPath, docRef.current)
+        const isStale = () => otherDocsEpochRef.current !== epoch
+        const syncLazyIndex = () => {
+          // 索引（jumpSceneIndex）にも反映する。編集中文書は含めない（currentDocScenes が別建て）。
+          if (isStale()) return
+          setLazyOtherScenes(
+            buildSceneIndex(null, sortedScriptPathsRef.current, loadedOtherDocsRef.current)
+          )
+        }
+        const result = await resolveMissingSceneAcrossDocs({
+          sceneId,
+          entryPath,
+          sortedPaths: sortedScriptPathsRef.current,
+          docs: () => docs,
+          isCancelled: isStale,
+          loadDoc: async (path) => {
+            const loaded = await loadOtherDoc(path)
+            if (loaded) docs.set(path, loaded)
+            return loaded
+          },
+          onIndexUpdated: syncLazyIndex,
+        })
+        if (result) {
+          // 他文書が（RPG マスター用の先行取得などで）既にキャッシュ済みで取得が走らなかった場合も、
+          // 索引に反映する（onIndexUpdated は取得が走ったときしか呼ばれない）
+          syncLazyIndex()
+          return result
+        }
+        if (!isStale() || switchEpochRef.current !== switchEpoch) return null
       }
-      return resolveMissingSceneAcrossDocs({
-        sceneId,
-        entryPath,
-        sortedPaths: sortedScriptPathsRef.current,
-        docs: () => docs,
-        isCancelled: isStale,
-        loadDoc: async (path) => {
-          const loaded = await loadOtherDoc(path)
-          if (loaded) docs.set(path, loaded)
-          return loaded
-        },
-        onIndexUpdated: syncLazyIndex,
-      }).then((result) => {
-        // 他文書が（RPG マスター用の先行取得などで）既にキャッシュ済みで取得が走らなかった場合も、
-        // 索引に反映する（onIndexUpdated は取得が走ったときしか呼ばれない）
-        if (result) syncLazyIndex()
-        return result
-      })
+      return null
     },
     [loadOtherDoc]
   )
