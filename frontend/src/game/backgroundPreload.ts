@@ -17,6 +17,9 @@ import { Assets } from 'pixi.js'
  * （preloadUpcomingAssets）が最も近い URL を配列末尾にして渡す前提 (#414)。
  */
 const queue: string[] = []
+// 先読みで失敗した URL。存在しない画像（片側だけ無い webp/png 候補など）を何度も再取得しない。
+// 表示経路の Assets.load と瞬断リトライ (#389) には影響させない（先読み側だけの記録）。
+const failed = new Set<string>()
 let running = false
 
 async function drain(): Promise<void> {
@@ -24,11 +27,14 @@ async function drain(): Promise<void> {
   running = true
   try {
     while (queue.length > 0) {
-      const url = queue.pop() as string
+      const url = queue.pop()
+      if (url === undefined) break
+      if (failed.has(url)) continue
       try {
         await Assets.load(url)
       } catch {
         // 先読み失敗は静かに次へ（途中候補の 404 は想定内）
+        failed.add(url)
       }
     }
   } finally {
@@ -37,6 +43,18 @@ async function drain(): Promise<void> {
 }
 
 export function backgroundPreload(urls: string[]): void {
-  for (const u of urls) queue.push(u)
+  for (const u of urls) {
+    if (!failed.has(u)) queue.push(u)
+  }
   void drain()
+}
+
+/**
+ * 未消化のキューと失敗済み記録を捨てる。文書の差し替え・破棄時に呼び、旧文書の URL を
+ * 読み続けないようにする。取得中の1件は完走させる。文書差し替えで資産が変わりうるため
+ * 失敗済み記録も消す。
+ */
+export function clearBackgroundPreload(): void {
+  queue.length = 0
+  failed.clear()
 }

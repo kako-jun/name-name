@@ -39,7 +39,7 @@ import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
 import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
-import { backgroundPreload } from './backgroundPreload'
+import { backgroundPreload, clearBackgroundPreload } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
 import { selectAndShuffleSeFiles } from './seSelection'
 import {
@@ -476,8 +476,7 @@ export class NovelRenderer {
   private textureCache: Map<string, Texture> = new Map()
   /**
    * 先読み済みアセット URL の集合 (#389)。`preloadUpcomingAssets` が同一 URL を
-   * `Assets.backgroundLoad` に二重に積まないための重複除去。backgroundLoad 自体は冪等だが
-   * 無駄呼び出しを避ける。イベント列を差し替える `resetAndStartEvents` でクリアする＝
+   * `backgroundPreload` に二重に積まないための重複除去（無駄呼び出しを避ける）。イベント列を差し替える `resetAndStartEvents` でクリアする＝
    * 新しいイベント列では先読み状態も作り直す。`setEvents` は表示済み背景を `Assets.unload`
    * するので、クリアしないと「積み済み」誤判定で先読みがスキップされコールドロードに戻る
    * （エディタのライブプレビュー等で再表示するケース）。`destroy` でもリーク予防にクリアする。
@@ -1317,6 +1316,7 @@ export class NovelRenderer {
     this.novelPagesCache = null
     this.advSentencePagesCache = null
     this.preloadedUrls.clear()
+    clearBackgroundPreload()
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
   }
 
@@ -2595,6 +2595,7 @@ export class NovelRenderer {
     // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
     // processUntilNextTextEvent → preloadUpcomingAssets が先頭から積み直す）。
     this.preloadedUrls.clear()
+    clearBackgroundPreload()
     // 話者交代追跡 (#286) をリセット（前シーン末尾の話者を引きずらない）。
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
@@ -3645,6 +3646,7 @@ export class NovelRenderer {
     this.textureCache.clear()
     // 先読み済み URL 集合もクリアする（リーク予防・#389）。
     this.preloadedUrls.clear()
+    clearBackgroundPreload()
     // canvas 由来マスクテクスチャを含む背景 entry を全て解放する (#250/#319)
     this.clearBackgroundEntries()
     this.app.destroy(true, { children: true })
@@ -4793,7 +4795,7 @@ export class NovelRenderer {
     }
     // 次に出る立ち絵・背景をバックグラウンドで先読みする (#389)。
     // advance / setScenes / jumpToScene は全てここを通るので、この 1 箇所で全トリガーを覆う。
-    // 走査は同期・実ダウンロードは backgroundLoad に投げっぱなし（await しない＝本編を待たせない）。
+    // 走査は同期・実ダウンロードは backgroundPreload に投げっぱなし（await しない＝本編を待たせない）。
     this.preloadUpcomingAssets()
   }
 
@@ -4804,7 +4806,7 @@ export class NovelRenderer {
    * ネット取得のコールドロード）で、遅延・瞬断すると #293 のフォールバック（ロード成否に
    * 関わらず onReady 発火でテキスト解禁）により「立ち絵なし・テキストあり」を招く。これを
    * 緩和するため、現在の `eventIndex` から `resolvedEvents` を前方走査し、次に出るアセット
-   * URL を PixiJS の `Assets.backgroundLoad` に積んで事前に温めておく。
+   * URL を `backgroundPreload` に積んで事前に温めておく。
    *
    * - 走査は**次の分岐に当たるまで**。分岐 = `Choice`（`{ Choice: {...} }`）または
    *   `Condition`（`{ Condition: {...} }`、フラグ依存分岐）。分岐先が確定するまで先読みは
@@ -4923,23 +4925,18 @@ export class NovelRenderer {
       return true
     })
 
-    // 未積みの URL だけを backgroundLoad に積む（同期は走査のみ・実 DL は投げっぱなし）
+    // 未積みの URL だけを backgroundPreload に積む（同期は走査のみ・実 DL は投げっぱなし）
     const fresh = dedupedUrls.filter((u) => !this.preloadedUrls.has(u))
     if (fresh.length === 0) return
     for (const u of fresh) this.preloadedUrls.add(u)
     // 先読み失敗で本編を止めない。#293 のフォールバックがテキストは従来どおり解禁する。
     //
-    // fresh は近い順（nearest→farthest）に組み立てているが、PixiJS v8 の BackgroundLoader
-    // （node_modules/pixi.js/lib/assets/BackgroundLoader.mjs）は add() で配列末尾へ push した
-    // アセットを _next() で Array.pop()（末尾取り出し＝LIFO）で消化する非公開の内部実装になっている。
-    // そのままだと最も遠い（優先度が低い）アセットから読まれ、直後に必要な立ち絵が最後回しになる
-    // (#414)。reverse() して [farthest, ..., nearest] にしてから渡すことで、末尾＝nearest が
-    // 最初に pop されるようにする。
-    // ⚠️ これは PixiJS の非公開内部実装（pop=LIFO）依存の脆い前提。将来の PixiJS バージョンアップで
-    // BackgroundLoader の消化順が変わったら、この reverse は無意味になるか逆効果になり得る
-    // （#414 が静かに再発し得る）。
+    // fresh は近い順（nearest→farthest）に組み立てている。backgroundPreload は積まれた配列を
+    // 末尾から pop（LIFO）して1件ずつ読むので、reverse() して [farthest, ..., nearest] にし、
+    // 末尾＝nearest が最初に読まれるようにする (#414)。消化順は自前の backgroundPreload が決めて
+    // いるため PixiJS の内部実装には依存しない。
     // Assets.backgroundLoad は内部で reject を握らず pageerror になる＋以降の先読みが止まるため
-    // 自前の backgroundPreload を使う (#782)。LIFO・並列度1の消化順は同じ。
+    // 使わない (#782)。
     backgroundPreload(fresh.reverse())
   }
 
