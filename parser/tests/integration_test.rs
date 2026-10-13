@@ -11787,3 +11787,33 @@ fn test_battle_atb_emit_roundtrip_keeps_value() {
     let none = emitter::emit(&parser::parse(&battle_doc("")));
     assert!(!none.contains("battle_atb"), "{none}");
 }
+
+#[test]
+fn test_battle_atb_value_variants_pass_through_raw() {
+    // 未知値・大文字・引用符つきも生のまま透過する（正規化は frontend の責務）
+    let doc = parser::parse(&battle_doc("battle_atb: 'ON'\nbattle_atb_mode: Maybe\n"));
+    assert_eq!(doc.battle_atb.as_deref(), Some("ON"));
+    assert_eq!(doc.battle_atb_mode.as_deref(), Some("Maybe"));
+}
+
+#[test]
+fn test_battle_atb_mode_alone_does_not_set_battle_atb() {
+    // battle_atb_mode: は battle_atb: の前方一致で誤って拾われない（逆も同様）
+    let doc = parser::parse(&battle_doc("battle_atb_mode: active\n"));
+    assert_eq!(doc.battle_atb, None);
+    assert_eq!(doc.battle_atb_mode.as_deref(), Some("active"));
+    let doc = parser::parse(&battle_doc("battle_atb: on\n"));
+    assert_eq!(doc.battle_atb.as_deref(), Some("on"));
+    assert_eq!(doc.battle_atb_mode, None);
+}
+
+#[test]
+fn test_battle_atb_emit_only_set_fields() {
+    let doc = parser::parse(&battle_doc("battle_atb_mode: active\n"));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_atb_mode: \"active\"\n"),
+        "{emitted}"
+    );
+    assert!(!emitted.contains("battle_atb: "), "{emitted}");
+}
