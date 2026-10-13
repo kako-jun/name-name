@@ -1,0 +1,561 @@
+/**
+ * spriteStyle (#737) の純粋関数テスト。
+ *
+ * 「仕様値」と書いたテストは、定数を参照せずリテラルで固定している（定数の値だけが変わる変異を捕まえるため）。
+ * 定数参照は導出式のテストにだけ使う。PixiJS の実描画・GLSL コンパイルは対象外（jsdom に WebGL が無い）。
+ */
+import { describe, expect, it } from 'vitest'
+import { ACRYLIC_EDGE_FRAGMENT } from './acrylicEdgeFilter'
+import {
+  DEFAULT_ACRYLIC_PARAMS,
+  EDGE_MAX_TAPS,
+  computeAcrylicGeometry,
+  computeEdgeSampling,
+  normalizeSpriteStyle,
+  resolveAcrylicParams,
+  type AcrylicParams,
+} from './spriteStyle'
+
+describe('normalizeSpriteStyle', () => {
+  it.each([
+    ['acrylic', 'acrylic'],
+    ['ACRYLIC', 'acrylic'],
+    [' Acrylic ', 'acrylic'],
+    ['none', 'none'],
+    ['', 'none'],
+    ['  ', 'none'],
+    [null, 'none'],
+    [undefined, 'none'],
+    ['acrylics', 'none'],
+    ['acryl', 'none'],
+    ['"acrylic"', 'none'],
+  ])('%j → %s（完全一致のみ acrylic。前後空白・大文字小文字は許容）', (raw, expected) => {
+    expect(normalizeSpriteStyle(raw)).toBe(expected)
+  })
+})
+
+describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
+  it('仕様値: 既定パラメータはリテラルで固定（定数参照にしない）', () => {
+    expect(DEFAULT_ACRYLIC_PARAMS).toEqual({
+      marginRatio: 0.03,
+      minMarginPx: 2,
+      lineWidthRatio: 0.02,
+      minLinePx: 1.5,
+      lineColor: 0xe6f3ff,
+      lineAlpha: 0.85,
+      hasBase: true,
+      baseWidthRatio: 0.7,
+      baseHeightRatio: 0.28,
+      highlightAlpha: 0.3,
+      shadowAlpha: 0.4,
+      shadowScale: 1.2,
+    })
+  })
+
+  it.each([[undefined], [{}]])('引数 %j は既定値と一致する（仕様値）', (arg) => {
+    expect(resolveAcrylicParams(arg as Partial<AcrylicParams> | undefined)).toEqual({
+      marginRatio: 0.03,
+      minMarginPx: 2,
+      lineWidthRatio: 0.02,
+      minLinePx: 1.5,
+      lineColor: 0xe6f3ff,
+      lineAlpha: 0.85,
+      hasBase: true,
+      baseWidthRatio: 0.7,
+      baseHeightRatio: 0.28,
+      highlightAlpha: 0.3,
+      shadowAlpha: 0.4,
+      shadowScale: 1.2,
+    })
+  })
+
+  it('1 項目だけの上書きは他の項目を既定のまま残す', () => {
+    const r = resolveAcrylicParams({ lineAlpha: 0.5 })
+    expect(r.lineAlpha).toBe(0.5)
+    expect(r).toEqual({ ...DEFAULT_ACRYLIC_PARAMS, lineAlpha: 0.5 })
+  })
+
+  it('冪等: resolve(resolve(x)) は resolve(x) と等しい', () => {
+    const x: Partial<AcrylicParams> = { marginRatio: 9, lineColor: 1.9, baseWidthRatio: -3 }
+    expect(resolveAcrylicParams(resolveAcrylicParams(x))).toEqual(resolveAcrylicParams(x))
+  })
+
+  it.each([[NaN], [Infinity], [-Infinity]])(
+    '数値項目に %s を渡すと既定値になる（仕様値）',
+    (bad) => {
+      const r = resolveAcrylicParams({
+        marginRatio: bad,
+        minMarginPx: bad,
+        lineWidthRatio: bad,
+        minLinePx: bad,
+        lineColor: bad,
+        lineAlpha: bad,
+        baseWidthRatio: bad,
+        baseHeightRatio: bad,
+        highlightAlpha: bad,
+        shadowAlpha: bad,
+        shadowScale: bad,
+      })
+      expect(r).toEqual({
+        marginRatio: 0.03,
+        minMarginPx: 2,
+        lineWidthRatio: 0.02,
+        minLinePx: 1.5,
+        lineColor: 0xe6f3ff,
+        lineAlpha: 0.85,
+        hasBase: true,
+        baseWidthRatio: 0.7,
+        baseHeightRatio: 0.28,
+        highlightAlpha: 0.3,
+        shadowAlpha: 0.4,
+        shadowScale: 1.2,
+      })
+    }
+  )
+
+  it('hasBase: false 指定は false、boolean 以外は既定 true', () => {
+    expect(resolveAcrylicParams({ hasBase: false }).hasBase).toBe(false)
+    expect(resolveAcrylicParams({ hasBase: true }).hasBase).toBe(true)
+    expect(resolveAcrylicParams({ hasBase: 0 as never }).hasBase).toBe(true)
+    expect(resolveAcrylicParams({ hasBase: 'false' as never }).hasBase).toBe(true)
+    expect(resolveAcrylicParams({ hasBase: null as never }).hasBase).toBe(true)
+  })
+
+  // [項目, 下限, 上限] — 仕様値の clamp 範囲。下限の手前・境界・上限の先をリテラルで固定する。
+  it.each<[keyof AcrylicParams, number, number]>([
+    ['marginRatio', 0, 0.15],
+    ['minMarginPx', 0, 32],
+    ['lineWidthRatio', 0, 0.1],
+    ['minLinePx', 0, 16],
+    ['lineColor', 0, 0xffffff],
+    ['lineAlpha', 0, 1],
+    ['highlightAlpha', 0, 1],
+    ['shadowAlpha', 0, 1],
+    ['baseWidthRatio', 0.1, 1],
+    ['baseHeightRatio', 0.05, 1],
+    ['shadowScale', 1, 2],
+  ])('仕様値: %s の clamp は下限 %s・上限 %s', (key, min, max) => {
+    const at = (v: number): number => resolveAcrylicParams({ [key]: v })[key] as number
+    expect(at(min - 1)).toBe(min)
+    expect(at(min)).toBe(min)
+    expect(at(max)).toBe(max)
+    expect(at(max + 1)).toBe(max)
+    expect(at(max * 100)).toBe(max)
+  })
+
+  it('仕様値: clamp 境界の直外（0.15→0.16 など）は境界へ倒す', () => {
+    expect(resolveAcrylicParams({ marginRatio: 0.16 }).marginRatio).toBe(0.15)
+    expect(resolveAcrylicParams({ minMarginPx: 33 }).minMarginPx).toBe(32)
+    expect(resolveAcrylicParams({ lineWidthRatio: 0.11 }).lineWidthRatio).toBe(0.1)
+    expect(resolveAcrylicParams({ minLinePx: 17 }).minLinePx).toBe(16)
+    expect(resolveAcrylicParams({ baseWidthRatio: 0.09 }).baseWidthRatio).toBe(0.1)
+    expect(resolveAcrylicParams({ baseHeightRatio: 0.04 }).baseHeightRatio).toBe(0.05)
+    expect(resolveAcrylicParams({ shadowScale: 0.99 }).shadowScale).toBe(1)
+    expect(resolveAcrylicParams({ shadowScale: 2.01 }).shadowScale).toBe(2)
+  })
+
+  it('範囲内の値はそのまま通す（clamp が値を潰さない）', () => {
+    const r = resolveAcrylicParams({ marginRatio: 0.1, baseWidthRatio: 0.5, shadowScale: 1.5 })
+    expect(r.marginRatio).toBe(0.1)
+    expect(r.baseWidthRatio).toBe(0.5)
+    expect(r.shadowScale).toBe(1.5)
+  })
+
+  it('lineColor の小数は切り捨てる', () => {
+    expect(resolveAcrylicParams({ lineColor: 0x123456 + 0.9 }).lineColor).toBe(0x123456)
+  })
+})
+
+describe('computeAcrylicGeometry', () => {
+  const empty = {
+    sprite: { x: 0, y: 0, width: 0, height: 0 },
+    marginPx: 0,
+    linePx: 0,
+    base: null,
+    highlight: null,
+    shadow: null,
+  }
+
+  it.each([[0], [-1], [-100], [NaN], [Infinity], [-Infinity]])(
+    'size=%s は空の幾何（大きさ 0・台座・影・フチなし）',
+    (size) => {
+      expect(computeAcrylicGeometry(100, 100, size)).toEqual(empty)
+    }
+  )
+
+  it('size=1 は通常の計算（NaN なし・空幾何ではない）', () => {
+    const g = computeAcrylicGeometry(100, 100, 1)
+    expect(g.base).not.toBeNull()
+    expect(g.marginPx).toBe(2)
+    expect(g.linePx).toBe(1.5)
+    for (const v of [g.sprite.x, g.sprite.y, g.sprite.width, g.sprite.height]) {
+      expect(Number.isNaN(v)).toBe(false)
+    }
+  })
+
+  it('hasBase=false で base / highlight / shadow が null', () => {
+    const g = computeAcrylicGeometry(100, 100, 200, resolveAcrylicParams({ hasBase: false }))
+    expect(g.base).toBeNull()
+    expect(g.highlight).toBeNull()
+    expect(g.shadow).toBeNull()
+    expect(g.sprite.width).toBeGreaterThan(0)
+  })
+
+  it('hasBase=false のスプライトは枠の下端から余白+線ぶん上に足元が来る（足元は台座中心ではない）', () => {
+    const g = computeAcrylicGeometry(100, 100, 200, resolveAcrylicParams({ hasBase: false }))
+    // size=200: margin=6, line=4 → 領域は [10, 190]²。足元 190
+    expect(g.sprite).toEqual({ x: 10, y: 10, width: 180, height: 180 })
+  })
+
+  it('仕様値: 正準寸法（size=200, texture 100x100）のスナップショット', () => {
+    const g = computeAcrylicGeometry(100, 100, 200)
+    expect(g.marginPx).toBeCloseTo(6, 9)
+    expect(g.linePx).toBeCloseTo(4, 9)
+    expect(g.base!.cx).toBeCloseTo(100, 9)
+    expect(g.base!.rx).toBeCloseTo(70, 9)
+    expect(g.base!.ry).toBeCloseTo(19.6, 9)
+    expect(g.shadow!.cx).toBeCloseTo(100, 9)
+    expect(g.shadow!.rx).toBeCloseTo(84, 9)
+    expect(g.shadow!.ry).toBeCloseTo(23.52, 9)
+    expect(g.shadow!.cy).toBeCloseTo(176.48, 9)
+    expect(g.shadow!.cy + g.shadow!.ry).toBeCloseTo(200, 9)
+    expect(g.base!.cy).toBeCloseTo(176.48, 9)
+    // 領域は x:[10,190] × y:[10,176.48] → 高さ 166.48 の正方形が中央に乗る
+    expect(g.sprite.width).toBeCloseTo(166.48, 9)
+    expect(g.sprite.height).toBeCloseTo(166.48, 9)
+    expect(g.sprite.x).toBeCloseTo(16.76, 9)
+    expect(g.sprite.y).toBeCloseTo(10, 9)
+  })
+
+  it('仕様値: ハイライトの係数（rx = base.rx*0.7, ry = base.ry*0.35, cy = base.cy - base.ry*0.35）', () => {
+    const g = computeAcrylicGeometry(100, 100, 200)
+    expect(g.highlight!.cx).toBeCloseTo(100, 9)
+    expect(g.highlight!.rx).toBeCloseTo(49, 9) // 70 * 0.7
+    expect(g.highlight!.ry).toBeCloseTo(6.86, 9) // 19.6 * 0.35
+    expect(g.highlight!.cy).toBeCloseTo(169.62, 9) // 176.48 - 6.86
+  })
+
+  it('縦長 400x100 は幅いっぱい・縦横比 4:1 を保つ（size と width の取り違えを検知）', () => {
+    const g = computeAcrylicGeometry(400, 100, 200)
+    expect(g.sprite.width).toBeCloseTo(180, 9)
+    expect(g.sprite.height).toBeCloseTo(45, 9)
+    expect(g.sprite.x).toBeCloseTo(10, 9)
+    expect(g.sprite.y + g.sprite.height).toBeCloseTo(g.base!.cy, 9)
+  })
+
+  it('横長 100x400 は高さいっぱい・縦横比 1:4 を保つ', () => {
+    const g = computeAcrylicGeometry(100, 400, 200)
+    expect(g.sprite.height).toBeCloseTo(166.48, 9)
+    expect(g.sprite.width).toBeCloseTo(41.62, 9)
+    expect(g.sprite.x).toBeCloseTo((200 - 41.62) / 2, 9)
+    expect(g.sprite.y).toBeCloseTo(10, 9)
+  })
+
+  it.each([
+    [0, 100],
+    [100, 0],
+    [-5, 100],
+    [100, -5],
+    [0, 0],
+  ])('テクスチャ寸法 %s x %s は領域いっぱいに置く', (w, h) => {
+    const g = computeAcrylicGeometry(w, h, 200)
+    expect(g.sprite.x).toBeCloseTo(10, 9)
+    expect(g.sprite.y).toBeCloseTo(10, 9)
+    expect(g.sprite.width).toBeCloseTo(180, 9)
+    expect(g.sprite.height).toBeCloseTo(166.48, 9)
+  })
+
+  // minMarginPx(2) と marginRatio*size = 0.03*size の切替: size=66.67 で等しい。minLinePx(1.5) と 0.02*size は size=75 で等しい。
+  it.each([
+    [50, 2, 1.5], // 比率 1.5 / 1.0 → 両方とも最小値が勝つ
+    [66, 2, 1.5],
+    [75, 2.25, 1.5], // 線は 0.02*75=1.5 ちょうど（最小値と同値）
+    [100, 3, 2], // 比率が勝つ
+  ])(
+    '仕様値: size=%s の余白は %s px・線は %s px（最小値と比率の切替境界）',
+    (size, margin, line) => {
+      const g = computeAcrylicGeometry(100, 100, size)
+      expect(g.marginPx).toBeCloseTo(margin, 9)
+      expect(g.linePx).toBeCloseTo(line, 9)
+    }
+  )
+
+  it('size=66 は余白が最小値 2（0.03*66=1.98）、size=67 は比率 2.01 が勝つ', () => {
+    expect(computeAcrylicGeometry(100, 100, 66).marginPx).toBeCloseTo(2, 9)
+    expect(computeAcrylicGeometry(100, 100, 67).marginPx).toBeCloseTo(2.01, 9)
+  })
+
+  it('size=75 の線は 1.5、size=76 は比率 1.52 が勝つ', () => {
+    expect(computeAcrylicGeometry(100, 100, 75).linePx).toBeCloseTo(1.5, 9)
+    expect(computeAcrylicGeometry(100, 100, 76).linePx).toBeCloseTo(1.52, 9)
+  })
+
+  it('余白と線を取り違えない（余白>線の既定で marginPx と linePx が別の値）', () => {
+    const g = computeAcrylicGeometry(100, 100, 200)
+    expect(g.marginPx).not.toBe(g.linePx)
+    // スプライトの内側余白は marginPx+linePx の合計: 上端 y = 6 + 4
+    expect(g.sprite.y).toBeCloseTo(g.marginPx + g.linePx, 9)
+  })
+
+  it('台座は影の内側（同一中心・base ⊂ shadow）で、影の下端は枠の下端', () => {
+    const g = computeAcrylicGeometry(100, 100, 200)
+    expect(g.base!.cx).toBe(g.shadow!.cx)
+    expect(g.base!.cy).toBe(g.shadow!.cy)
+    expect(g.base!.rx).toBeLessThan(g.shadow!.rx)
+    expect(g.base!.ry).toBeLessThan(g.shadow!.ry)
+    expect(g.shadow!.cy + g.shadow!.ry).toBeCloseTo(200, 9)
+  })
+
+  it('ハイライトは台座の内側（highlight ⊂ base）', () => {
+    const g = computeAcrylicGeometry(100, 100, 200)
+    const b = g.base!
+    const h = g.highlight!
+    expect(h.rx).toBeLessThan(b.rx)
+    expect(h.cy - h.ry).toBeGreaterThanOrEqual(b.cy - b.ry)
+    expect(h.cy + h.ry).toBeLessThanOrEqual(b.cy + b.ry)
+  })
+
+  // 影の枠幅頭打ち: baseW × shadowScale が size-1 / size / size+1 の3点
+  it.each([
+    [199, false],
+    [200, false],
+    [201, true],
+  ])(
+    '影の幅 baseW×scale=%s（size=200）: 頭打ち=%s でも base ⊂ shadow・影は枠内',
+    (shadowRaw, clipped) => {
+      // baseWidthRatio=1 → baseW=200。scale = shadowRaw/200 を 1〜2 の範囲で作る…が scale<1 は丸められるため
+      // baseWidthRatio を使って baseW×scale を作る: scale=1.5 固定で baseW = shadowRaw/1.5
+      const p = resolveAcrylicParams({ baseWidthRatio: shadowRaw / 1.5 / 200, shadowScale: 1.5 })
+      const g = computeAcrylicGeometry(100, 100, 200, p)
+      const s = g.shadow!
+      const b = g.base!
+      expect(s.rx * 2).toBeLessThanOrEqual(200 + 1e-9)
+      expect(s.cx - s.rx).toBeGreaterThanOrEqual(-1e-9)
+      expect(s.cx + s.rx).toBeLessThanOrEqual(200 + 1e-9)
+      expect(b.rx).toBeLessThan(s.rx)
+      expect(s.cy + s.ry).toBeCloseTo(200, 9)
+      if (clipped) expect(s.rx * 2).toBeCloseTo(200, 9)
+      else expect(s.rx * 2).toBeCloseTo(shadowRaw, 9)
+    }
+  )
+
+  it('baseWidthRatio=1・shadowScale=2 でも影は枠幅に切り詰められ、台座は同比率で縮んで影の内側に残る', () => {
+    const g = computeAcrylicGeometry(
+      100,
+      100,
+      200,
+      resolveAcrylicParams({ baseWidthRatio: 1, shadowScale: 2 })
+    )
+    expect(g.shadow!.rx).toBeCloseTo(100, 9)
+    expect(g.base!.rx).toBeCloseTo(50, 9) // 台座は影の 1/scale
+    expect(g.base!.rx * 2).toBeCloseTo(g.shadow!.rx, 9)
+  })
+
+  it.each([[4], [8]])('極小 size=%s: 領域が 0 に丸まっても幅・高さが負にならない', (size) => {
+    for (const hasBase of [true, false]) {
+      const g = computeAcrylicGeometry(100, 100, size, resolveAcrylicParams({ hasBase }))
+      expect(g.sprite.width).toBeGreaterThanOrEqual(0)
+      expect(g.sprite.height).toBeGreaterThanOrEqual(0)
+      expect(Number.isFinite(g.sprite.x)).toBe(true)
+      expect(Number.isFinite(g.sprite.y)).toBe(true)
+    }
+  })
+
+  it('size=4 は余白+線(3.5)が両側で枠を超えるので幅 0（領域が潰れる）', () => {
+    expect(computeAcrylicGeometry(100, 100, 4).sprite.width).toBe(0)
+  })
+})
+
+describe('computeAcrylicGeometry: スイープ不変条件', () => {
+  const EPS = 1e-9
+  const sizes = [1, 8, 24, 48, 64, 100, 200, 500]
+  const texes: Array<[number, number]> = [
+    [1, 1],
+    [100, 100],
+    [400, 100],
+    [100, 400],
+    [1, 1000],
+    [1000, 1],
+    [0, 0],
+  ]
+
+  it('全組合せで有限・非負・枠内・接地・縦横比維持が成り立つ', () => {
+    let cases = 0
+    for (const size of sizes)
+      for (const [tw, th] of texes)
+        for (const hasBase of [true, false])
+          for (const marginRatio of [0, 0.15])
+            for (const lineWidthRatio of [0, 0.1]) {
+              cases++
+              const tag = `size=${size} tex=${tw}x${th} base=${hasBase} m=${marginRatio} l=${lineWidthRatio}`
+              const p = resolveAcrylicParams({ hasBase, marginRatio, lineWidthRatio })
+              const g = computeAcrylicGeometry(tw, th, size, p)
+              const s = g.sprite
+              const m = g.marginPx + g.linePx
+              const nums = [s.x, s.y, s.width, s.height, g.marginPx, g.linePx]
+              for (const e of [g.base, g.highlight, g.shadow])
+                if (e) nums.push(e.cx, e.cy, e.rx, e.ry)
+              for (const v of nums) expect(Number.isFinite(v), tag).toBe(true)
+              expect(s.width, tag).toBeGreaterThanOrEqual(0)
+              expect(s.height, tag).toBeGreaterThanOrEqual(0)
+              if (s.height > 0) expect(s.y, tag).toBeGreaterThanOrEqual(-EPS)
+              expect(s.x, tag).toBeGreaterThanOrEqual(-EPS)
+
+              const hasArea = s.width > 0 && s.height > 0
+              if (hasArea) {
+                // 余白+線を外へ広げても枠に収まる。下端は台座の中心に足が乗る都合で、台座があるときは対象外
+                expect(s.x - m, tag).toBeGreaterThanOrEqual(-EPS)
+                expect(s.y - m, tag).toBeGreaterThanOrEqual(-EPS)
+                expect(s.x + s.width + m, tag).toBeLessThanOrEqual(size + EPS)
+                if (!hasBase) expect(s.y + s.height + m, tag).toBeLessThanOrEqual(size + EPS)
+              }
+              if (hasArea && tw > 0 && th > 0) {
+                expect(s.width / s.height, tag).toBeCloseTo(tw / th, 6)
+              }
+              if (hasBase) {
+                const { base, shadow, highlight } = g
+                expect(shadow!.cy + shadow!.ry, tag).toBeCloseTo(size, 9)
+                expect(shadow!.cx - shadow!.rx, tag).toBeGreaterThanOrEqual(-EPS)
+                expect(shadow!.cx + shadow!.rx, tag).toBeLessThanOrEqual(size + EPS)
+                expect(base!.cy - base!.ry, tag).toBeGreaterThanOrEqual(-EPS)
+                expect(base!.rx, tag).toBeLessThanOrEqual(shadow!.rx + EPS)
+                expect(highlight!.rx, tag).toBeLessThan(base!.rx)
+                // 足元は台座の中心（領域が潰れていないとき）
+                if (base!.cy - m > 0) expect(s.y + s.height, tag).toBeCloseTo(base!.cy, 9)
+              } else {
+                expect(g.base, tag).toBeNull()
+                expect(g.shadow, tag).toBeNull()
+                expect(g.highlight, tag).toBeNull()
+              }
+            }
+    expect(cases).toBe(8 * 7 * 2 * 2 * 2)
+  })
+})
+
+describe('computeEdgeSampling', () => {
+  const MARGINS = [-1, 0, 0.5, 1, 2, 3, 4, 6, 10, 32, 100, 1e6, NaN, Infinity, -Infinity]
+  const RES = [1, 1.5, 2, 3]
+
+  it('仕様値: タップ上限 EDGE_MAX_TAPS は 48', () => {
+    expect(EDGE_MAX_TAPS).toBe(48)
+  })
+
+  it('スイープ: 総タップ ≤ 48・段数 1〜2・方向数 8〜16・整数', () => {
+    for (const m of MARGINS)
+      for (const l of MARGINS)
+        for (const res of RES) {
+          const s = computeEdgeSampling(m * res, l * res)
+          const tag = `m=${m} l=${l} res=${res}`
+          expect((s.innerRings + s.outerRings) * s.directions, tag).toBeLessThanOrEqual(48)
+          expect([1, 2], tag).toContain(s.innerRings)
+          expect([1, 2], tag).toContain(s.outerRings)
+          expect(s.directions, tag).toBeGreaterThanOrEqual(8)
+          expect(s.directions, tag).toBeLessThanOrEqual(16)
+          for (const v of [s.innerRings, s.outerRings, s.directions]) {
+            expect(Number.isInteger(v), tag).toBe(true)
+          }
+        }
+  })
+
+  it.each([[NaN], [-1], [-Infinity], [Infinity]])(
+    '半径 %s は 0 と同じ扱い（Infinity は非有限なので 0 扱い）',
+    (bad) => {
+      const zero = computeEdgeSampling(0, 0)
+      expect(computeEdgeSampling(bad, 0)).toEqual(zero)
+      expect(computeEdgeSampling(0, bad)).toEqual(zero)
+      expect(computeEdgeSampling(bad, bad)).toEqual(zero)
+    }
+  )
+
+  it('仕様値: 半径 0 は 1 段・1 段・方向 8', () => {
+    expect(computeEdgeSampling(0, 0)).toEqual({ innerRings: 1, outerRings: 1, directions: 8 })
+  })
+
+  it('rings 切替境界: 内側は m=3 で 1 段・3.0001 で 2 段', () => {
+    expect(computeEdgeSampling(3, 0).innerRings).toBe(1)
+    expect(computeEdgeSampling(3.0001, 0).innerRings).toBe(2)
+  })
+
+  it('rings 切替境界: 外側は l=2 で 1 段・2.0001 で 2 段', () => {
+    expect(computeEdgeSampling(0, 2).outerRings).toBe(1)
+    expect(computeEdgeSampling(0, 2.0001).outerRings).toBe(2)
+  })
+
+  it('rings は内側と外側で取り違えない（m と l は別の閾値）', () => {
+    // m=2.5: 内側 ceil(2.5/3)=1, l=2.5: 外側 ceil(2.5/2)=2
+    expect(computeEdgeSampling(2.5, 0).innerRings).toBe(1)
+    expect(computeEdgeSampling(0, 2.5).outerRings).toBe(2)
+  })
+
+  it('方向数の上限: rings=4 で 12・rings=3 で 16・rings=2 で 16 に頭打ち', () => {
+    expect(computeEdgeSampling(1e6, 1e6)).toEqual({ innerRings: 2, outerRings: 2, directions: 12 })
+    expect(computeEdgeSampling(1e6, 1)).toEqual({ innerRings: 2, outerRings: 1, directions: 16 })
+    expect(computeEdgeSampling(1, 1e6)).toEqual({ innerRings: 1, outerRings: 2, directions: 16 })
+    expect(computeEdgeSampling(3, 2).directions).toBe(13) // rings=2 は cap 16 に届かず ceil(2π·5/2.5)=13
+  })
+
+  it('最大入力で総タップがちょうど 48（<= と < の取り違えを検知）', () => {
+    const s = computeEdgeSampling(1e6, 1e6)
+    expect((s.innerRings + s.outerRings) * s.directions).toBe(48)
+  })
+
+  it('方向数は 2π(m+l)/2.5 を切り上げ、下限 8（m=l=0 と小半径）', () => {
+    expect(computeEdgeSampling(0.5, 0.5).directions).toBe(8)
+    // m=l=1.5: ceil(2π·3/2.5)=ceil(7.54)=8 / m=l=2: ceil(10.05)=11（rings 2 つずつ→cap 12）
+    expect(computeEdgeSampling(2, 2).directions).toBe(11)
+  })
+
+  it('段数が同じ範囲では、半径が大きいほど方向数は単調非減少', () => {
+    // m=3・l≤2 なら rings は常に 1+1 固定。l を 0→2 で振る
+    let prev = 0
+    for (let l = 0; l <= 2; l += 0.05) {
+      const s = computeEdgeSampling(3, l)
+      expect(s.innerRings + s.outerRings).toBe(2)
+      expect(s.directions).toBeGreaterThanOrEqual(prev)
+      prev = s.directions
+    }
+  })
+
+  it('半径全体では総タップ数が単調非減少（rings が増える境目で方向数は下がってよい）', () => {
+    let prev = 0
+    for (let r = 0; r <= 60; r += 0.25) {
+      const s = computeEdgeSampling(r, r / 2)
+      const taps = (s.innerRings + s.outerRings) * s.directions
+      expect(taps).toBeGreaterThanOrEqual(prev)
+      prev = taps
+    }
+  })
+})
+
+describe('GLSL 整合（ACRYLIC_EDGE_FRAGMENT の定数と computeEdgeSampling）', () => {
+  const constInt = (name: string): number => {
+    const m = new RegExp(`const int ${name} = (\\d+);`).exec(ACRYLIC_EDGE_FRAGMENT)
+    expect(m, `${name} が見つからない`).not.toBeNull()
+    return Number(m![1])
+  }
+
+  it('MAX_DIRS / MAX_IN / MAX_OUT は computeEdgeSampling のスイープ最大値以上', () => {
+    const values = [0, 0.5, 1, 2, 3, 4, 6, 10, 32, 100, 1e6]
+    let maxD = 0
+    let maxI = 0
+    let maxO = 0
+    for (const m of values)
+      for (const l of values) {
+        const s = computeEdgeSampling(m, l)
+        maxD = Math.max(maxD, s.directions)
+        maxI = Math.max(maxI, s.innerRings)
+        maxO = Math.max(maxO, s.outerRings)
+      }
+    expect(constInt('MAX_DIRS')).toBeGreaterThanOrEqual(maxD)
+    expect(constInt('MAX_IN')).toBeGreaterThanOrEqual(maxI)
+    expect(constInt('MAX_OUT')).toBeGreaterThanOrEqual(maxO)
+  })
+
+  it('MAX_DIRS / MAX_IN / MAX_OUT は最大入力の戻り値と等しい（余裕が過剰でない）', () => {
+    const s = computeEdgeSampling(1e6, 1e6)
+    // 方向数の最大は rings が少ないときの 16。MAX_DIRS は rings=2/3 の上限 16 と一致
+    expect(constInt('MAX_DIRS')).toBe(16)
+    expect(constInt('MAX_IN')).toBe(s.innerRings)
+    expect(constInt('MAX_OUT')).toBe(s.outerRings)
+  })
+})
