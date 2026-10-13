@@ -87,6 +87,8 @@ Worker はパースしない。GitHub から Markdown を取得してそのま�
 `GET /api/projects/:name/scripts` が対象 `.md` を `[{ path, title, hidden, sha, size }]` で返す。
 `scriptsDir` 未指定プロジェクトでは、ルート直下の `.md` の本文を peek し、frontmatter
 `engine: name-name` を含むものだけを返す。
+エディタが最初に開く文書は、この一覧から決める（直下の `script.md` があればそれ、無ければ basename が `script.md` のもの、それも無ければ先頭。#778）。
+一覧の取得が済むまで初期ロードは待ち、一覧が失敗した環境では従来どおり直下の `script.md` を試す。
 プロジェクト設定に `scriptsDir`（例 `content/scripts`）を持たせると、列挙の起点を
 そのディレクトリに移し、**起点直下＋サブディレクトリ 1 段**の `.md` を列挙する（#284。
 theo-hayami がシナリオを `content/scripts/free` `content/scripts/main` に分割するため）。

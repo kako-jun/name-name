@@ -124,6 +124,8 @@ function EditorScreen({
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
   const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   const [availableScripts, setAvailableScripts] = useState<ScriptInfo[]>([])
+  // listScripts の結果（成功・失敗とも）が出たか。最初に開く文書は一覧から決めるので、それまで初期ロードを待つ。
+  const [scriptListSettled, setScriptListSettled] = useState(false)
   // #238: 編集中以外の .md (data.md 等) を解析した EventDocument。
   // RPG タブが master データ (モンスター / アイテム / 呪文 / パーティ) を data.md から
   // 参照できるよう、active doc とは別に並行ロードして保持する。
@@ -466,6 +468,8 @@ function EditorScreen({
     // 理由: 前ファイルの sha が shaRef に残ったまま loadChapters が catch に飛ぶと
     //   ユーザーが新パス向けに編集→保存 → 前ファイルの sha で別パス PUT → 409 か
     //   最悪のケースで意図しないファイルを上書きしうる。fetch 前に確実にクリアする。
+    // 一覧の取得が済むまで待つ（既定の script.md を無条件に取りに行って 404 にならないように）。
+    if (!scriptListSettled) return
     shaRef.current = null
     setHasSha(false)
     initialMarkdownRef.current = ''
@@ -511,7 +515,7 @@ function EditorScreen({
     loadChapters()
     // api は apiBaseUrl から派生する useMemo の値、projectName / currentScriptPath が
     // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
-  }, [api, projectName, currentScriptPath])
+  }, [api, projectName, currentScriptPath, scriptListSettled])
 
   // #237: プロジェクト直下の .md 一覧（engine: name-name のみ）を取得してタブを構築。
   // 失敗しても致命的でない（script.md 単体運用に degrade する）ためエラーはコンソールのみ。
@@ -520,14 +524,19 @@ function EditorScreen({
       try {
         const scripts = await api.listScripts(projectName, DEFAULT_BRANCH)
         setAvailableScripts(scripts)
-        // 現在開いているファイルが listing に存在しない場合（新規 repo 等）は、
-        // listing の先頭ファイルに切り替える。リストが空なら DEFAULT_SCRIPT_PATH のまま。
+        // 最初に開く文書を一覧から決める。既定の script.md が一覧に無い場合（scriptsDir 構成等）は、
+        // /play のエントリ選び（#284）と同じく basename が script.md のもの、無ければ先頭にする。
+        // 一覧が空なら DEFAULT_SCRIPT_PATH のまま。
         if (scripts.length > 0 && !scripts.some((s) => s.path === currentScriptPath)) {
-          switchScript(scripts[0].path)
+          const entry = scripts.find((s) => basename(s.path) === SCRIPT_BASENAME) ?? scripts[0]
+          switchScript(entry.path)
         }
       } catch (err) {
         console.warn('[EditorScreen] listScripts failed; falling back to single script.md', err)
         setAvailableScripts([])
+      } finally {
+        // 失敗時（単一 script.md の旧プロジェクト等）は従来どおり既定の script.md を試す
+        setScriptListSettled(true)
       }
     }
     loadList()

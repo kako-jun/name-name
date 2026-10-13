@@ -24,6 +24,7 @@ let parsed: EventDocument = makeDoc(['hub', 'S1'])
 // #778: markdown 文字列 → パース結果（無ければ parsed）。他文書の取得元（下書き/サーバ版）の判別に使う。
 const parsedByMarkdown = new Map<string, EventDocument>()
 const parsedInputs: string[] = []
+let serverHasRootScript = true
 const getContentsMock = vi.hoisted(() => vi.fn())
 const listScriptsMock = vi.hoisted(() => vi.fn())
 
@@ -322,24 +323,70 @@ describe('EditorScreen: 遅延ロードの探索対象と継承 (#778)', () => {
   })
 })
 
-describe('EditorScreen: 既定パスの先行ロード失敗トースト (#778 調査)', () => {
-  it('script.md が無いプロジェクトでも、一覧から切り替えた先のロードに成功すれば読み込みエラーを残さない', async () => {
+describe('EditorScreen: 最初に開く文書の決め方 (#778 調査)', () => {
+  const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+  beforeEach(() => {
     localStorage.clear()
     getContentsMock.mockReset()
     getContentsMock.mockImplementation(async (_p: string, path: string) => {
-      if (path === 'script.md') throw new Error('404')
+      if (path === 'script.md' && !serverHasRootScript) throw new Error('404')
       return { content: '# real', sha: 'sha' }
     })
     listScriptsMock.mockReset()
-    listScriptsMock.mockImplementation(async () => [
-      { path: 'content/scripts/a.md', sha: 's', size: 1, title: null, hidden: false },
-    ])
+    serverHasRootScript = true
+  })
+
+  it('script.md が無いプロジェクトでは 404 を出さず、一覧の先頭を開く（トーストも出ない）', async () => {
+    serverHasRootScript = false
+    listScriptsMock.mockImplementation(async () => [info('content/scripts/a.md')])
     renderEditor()
     await waitFor(() =>
       expect(getContentsMock).toHaveBeenCalledWith('p', 'content/scripts/a.md', 'develop')
     )
-    // 成功ロードの完了（シーンの索引が出る = doc 確定）まで待ってから確認する
     await new Promise((r) => setTimeout(r, 100))
+    expect(getContentsMock).not.toHaveBeenCalledWith('p', 'script.md', 'develop')
     expect(screen.queryByText(/読み込みに失敗/)).toBeNull()
+  })
+
+  it('一覧に直下 script.md が無くても basename が script.md のものを優先して開く', async () => {
+    serverHasRootScript = false
+    listScriptsMock.mockImplementation(async () => [
+      info('content/scripts/a.md'),
+      info('content/scripts/script.md'),
+    ])
+    renderEditor()
+    await waitFor(() =>
+      expect(getContentsMock).toHaveBeenCalledWith('p', 'content/scripts/script.md', 'develop')
+    )
+    // 最初の取得（編集対象）は script.md（他文書は RPG マスター用の先行取得）
+    expect(getContentsMock.mock.calls[0][1]).toBe('content/scripts/script.md')
+  })
+
+  it('script.md があればそれを開く', async () => {
+    listScriptsMock.mockImplementation(async () => [info('a.md'), info('script.md')])
+    renderEditor()
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('p', 'script.md', 'develop'))
+    expect(getContentsMock.mock.calls[0][1]).toBe('script.md')
+  })
+
+  it('listScripts が失敗したら従来どおり script.md を試す', async () => {
+    listScriptsMock.mockImplementation(async () => {
+      throw new Error('boom')
+    })
+    renderEditor()
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('p', 'script.md', 'develop'))
+  })
+
+  it('個別タブのロード失敗後に別タブへ切り替えて成功したら、読み込みエラーを消す', async () => {
+    listScriptsMock.mockImplementation(async () => [info('bad.md'), info('script.md')])
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'bad.md') throw new Error('404')
+      return { content: '# real', sha: 'sha' }
+    })
+    renderEditor()
+    fireEvent.click(await screen.findByRole('tab', { name: /^bad\.md/ }))
+    expect(await screen.findByText(/読み込みに失敗/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: /^script\.md/ }))
+    await waitFor(() => expect(screen.queryByText(/読み込みに失敗/)).toBeNull())
   })
 })
