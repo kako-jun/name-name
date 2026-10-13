@@ -850,6 +850,10 @@ export interface EventDocument {
   /** RPG 戦闘画面の背景画像パス (#736)。null/undefined は従来どおりフィールドを暗くして残す。
    *  frontmatter `battle_background:` から流す。 */
   battle_background?: string | null
+  /** RPG 戦闘スプライトの表示スタイル (#737)。`"none"`（既定・素材そのまま）/ `"acrylic"`（アクリルスタンド風）。
+   *  null/undefined・未知値は `"none"` にフォールバック。GUI 専用（TUI は読まない）。
+   *  frontmatter `sprite_style:` から流す。 */
+  sprite_style?: string | null
   chapters: EventChapter[]
 }
 
