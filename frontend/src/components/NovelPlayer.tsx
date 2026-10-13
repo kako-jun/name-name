@@ -769,7 +769,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       const pendingSnapshot = pendingSnapshotRef.current
       pendingSnapshotRef.current = null
       if (pendingSnapshot) {
-        renderer.restoreSnapshot(pendingSnapshot)
+        void renderer.restoreSnapshot(pendingSnapshot)
       } else if (initialSceneId) {
         // production でも有効な起点シーン指定 (#386)。sceneId が属する script の事前ロードは
         // PlayerScreen 側の責務（呼び出し時点で jumpSceneIndex に反映済みの前提）。ここでは
