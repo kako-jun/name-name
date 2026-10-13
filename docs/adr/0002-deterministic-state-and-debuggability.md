@@ -90,6 +90,8 @@ await renderer.playScript(steps: Step[]): Promise<void>
 
 ### 3. `startFrom(state)` API を提供する（#220 Phase 2）✅ 実装済み（2026-06-01）
 
+> 注記: この節の `startFrom` の契約（同期の `void` で、シーンの探索と未発見時の扱いは呼び出し側の責務）は、#734 / [ADR 0003](./0003-scene-entry-kinds.md) で置き換える予定（新規開始専用の Promise 版。遅延ロードも内部で通す）。実装は PR1〜PR5 で入れる。
+
 sceneId と flags を直接指定して任意の状態から開始する API。
 history はリセットされる（デバッグ用）。
 実装: `NovelRenderer.startFrom`、`StartFromOptions` 型は `GameState.ts`。`startFrom` は 2 経路に分岐する（#399）: **`eventIndex=textIndex=sentenceIndex=0`（本番の `?scene=` は常にこれ）は通常入場と同じ fresh-start 経路**（`gameState.fromJSON(flags)` → `startScene` → `resetAndStartEvents`）に乗せ、冒頭の `[背景:]`/`[BGM:]` を実行し最初の話者の立ち絵を出してから最初のテキストで止まる。**`eventIndex>0` 等の途中局面指定（DEV の `debug_scene`）だけ**、宣言的復元コア private `restoreToScene(scene, state)`（フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render）にフォールバックする。この `restoreToScene` は `loadFromSaveData`（セーブ復元＝完成 state を持つ）と共通化済み（#256）。従来は startFrom も常に restoreToScene を通していたため冒頭ディレクティブが実行されず、埋め込み開始時に背景も立ち絵も出ず `eventIndex=0` で止まっていた（#399 の症状）。fresh-start 経路は `resetAndStartEvents` が index を 0 にリセットしてしまうため途中局面を再現できず、そのため index 指定時だけ `restoreToScene` に倒す。シーン探索と「見つからない場合の挙動」は呼び出し側の責務で、`startFrom` は不正 sceneId で完全 no-op（フラグも復元しない）、`loadFromSaveData` はシーン欠落時もフラグだけ復元する。flags は置換セマンティクス、検証を flags 適用より先に行う、eventIndex/textIndex は範囲チェックなし（呼び出し側責任）。vitest 30 ケース（#399 の fresh-start 経路 3 ケースを追加）。
@@ -164,6 +166,8 @@ confinement とは無関係に、`onEndCallback`（VideoExporter 専用）が未
 `?scene=` が hub 自身の sceneId を指した場合は confinement を組まず無制限フローにフォールバック
 する（`confinedSceneIds === null` では confinement 判定の 2 つとも短絡しない。hub → 各お題への
 通常 choice 遷移を壊さないため）。
+
+> 注記: `setConfinedSceneIds` は、#734 / [ADR 0003](./0003-scene-entry-kinds.md) で廃止する予定。confinement は `startFrom` の入場属性（`confinedSceneIds`）として、入場が成功した時点で確定させる。実装は PR1〜PR5 で入れる。
 
 `endStory()` は `NovelGameState.storyEnded` という**宣言的フラグ**を true にする。この設計は
 本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の

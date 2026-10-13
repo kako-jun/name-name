@@ -1,9 +1,9 @@
 # ADR 0003: シーン入場を「進行」「新規開始」「復元」の3種に分け、遅延ロードを1か所で通す
 
 - 起票日: 2026-10-13
-- ステータス: Proposed
+- ステータス: Accepted（2026-10-13）
 - 関連 Issue: #734, #729, #724, #726, #733, #759, #220
-- 置き換える記述: [ADR 0002](./0002-deterministic-state-and-debuggability.md) の §3（`startFrom` は同期の `void` で、シーン探索は呼び出し側の責務とする部分）と、§「関連」の `setConfinedSceneIds`。本 ADR が Accepted になった時点で、0002 の該当箇所から本 ADR へリンクする
+- 置き換える記述: [ADR 0002](./0002-deterministic-state-and-debuggability.md) の §3（`startFrom` は同期の `void` で、シーン探索は呼び出し側の責務とする部分）と、`setConfinedSceneIds` の記述。0002 の該当箇所には、本 ADR への注記を付けた（実装は PR1〜PR5）
 
 ## Context（背景）
 
@@ -124,6 +124,8 @@ type SceneEntryResult =
 6. 種類ごとに適用する。進行は `resetAndStartEvents(carryPolicyFor('progress'))`。新規開始は、先頭からなら `resetAndStartEvents(carryPolicyFor('fresh'))`、位置指定なら最小 state で `restoreToScene` する。復元は `restoreToScene(state)`（`storyEnded` は state から入る）
 7. 後処理は、`pendingEntry` を下ろすことと、§2 に従って `onSceneChange` を発火することだけにする
 
+予約中の Jump のタイマーを取り消す経路はすべて、`armJump` の時点で作った deferred を `superseded` で解決する。該当するのは、新規開始・復元の手順1、`applyState`、`resetAndStartEvents` の `clearJumpTimer` など。こうしないと、`playScript` が二度と解決しない `pendingEntry.promise` を待ち続けて止まる。取り消しは `clearJumpTimer` の1か所に集め、deferred の解決もそこで行う。
+
 これで、遅延ロードの後処理3本（不整合13）は `resolveScene` 1本になる。要求の時点で世代を進め、待つ間はゲートで止めるので、不整合4・6も解消する。
 
 ### 4. 公開 API の写像（互換用のバイパスは作らず、呼び出し側を書き換える）
@@ -158,7 +160,7 @@ type SceneEntryResult =
 
 `?debug_script=` がある場合は、上の入場が確定（`entered`）してから `playScript` を実行する。debug_scene が見つからない場合は、2 が `failed` になって 3 へ進む。こうして「解決できなければ `?scene=` の confinement が残る」という #726 の挙動を、`PlayerScreen` の事前解決なしで再現する。
 
-**初期入場は自動セーブしない**。自動セーブ（`setOnSceneChange` → `quickSave`）の配線は、初期入場が確定した後に行う。そうしないと、新規開始の `onSceneChange` が、有効なクイックセーブをエントリ冒頭の位置で上書きする（4 から 5 へ倒れた場合が特に問題になる）。さらに、4 の失敗理由が `resolver-error`（通信失敗などの一時的な失敗）だった場合は、そのセッションでは自動セーブを配線せず、トーストでその旨を知らせる。一時的な失敗で正しいセーブを消さないためである。理由が `not-found`（原稿が変わってセーブのシーンが消えた）なら、そのセーブはもう戻れないので、通常どおり配線する。
+**初期入場は自動セーブしない**。自動セーブ（`setOnSceneChange` → `quickSave`）の配線は、初期入場が確定した後に行う。そうしないと、新規開始の `onSceneChange` が、有効なクイックセーブをエントリ冒頭の位置で上書きする（4 から 5 へ倒れた場合が特に問題になる）。さらに、4 の失敗理由が `resolver-error`（通信失敗などの一時的な失敗）だった場合は、そのセッションでは自動セーブを配線せず、トーストでその旨を知らせる。トーストは renderer の `showToast`（PixiJS 描画、#630）で出す。一時的な失敗で正しいセーブを消さないためである。理由が `not-found`（原稿が変わってセーブのシーンが消えた）なら、そのセーブはもう戻れないので、通常どおり配線する。
 
 `PlayerScreen` の事前解決のうち、`?debug_scene=`（#726）の分は不要になる。`?scene=` の分は、confinement の算出（`findConfinedSceneIds` は対象の doc を要する）と、タイトル画面を出すかどうかの判定（`startSceneId`）に必要なので残す。これは「`startFrom` を動かすための穴埋め」ではなく、confinement の算出だけに役割が絞られる。HUD の `debug_scene: … → resolved / not found` は、初期入場の結果を `NovelPlayer` から通知する形で出す。
 
@@ -215,6 +217,7 @@ TUI はすべての .md をマージして読むので、遅延ロードは無�
   - `restoreSnapshot` の遅延ロード中は、選択肢の確定がゲートで弾かれ、選択肢が表示されたままであること。同じく `advance` も弾くこと
   - 後勝ちは、プログラムから出す2つの要求で検証する。`restoreSnapshot`（遅延ロード）の後に `startFrom`、および解決順を入れ替えた復元→復元。どちらも後から要求した側が適用されること
   - 不在の遷移先で選択肢が再表示され、`advance` で Choice を素通りしないこと。選択肢由来の進行の待機中に、プログラム発の入場で置き換えられ、その入場も失敗した場合に、選択肢が再表示されること
+  - `[ジャンプ:]` の予約中に復元や新規開始が来ても、`playScript` が止まらないこと（deferred が `superseded` で解決されること）
   - `[ジャンプ:]`・復元の既存テスト（#725/#733/#759）が緑のままであること
   - `carryPolicyFor` の表と `isTransitionGated` の組み合わせを検証するテスト
 - 実ブラウザ確認: scriptsDir 構成のプロジェクトで、ハブから未ロードのサブ MD へ選択肢で遷移する。ネットワークを低速化し、ロード中にクリックを連打したり F5 を押したりしても先へ進まないこと、到着後の BGM と背景が持ち越されていることを確認する。不在 ID の選択肢を含む ad-hoc シナリオで選択肢が再表示されることを確認する
