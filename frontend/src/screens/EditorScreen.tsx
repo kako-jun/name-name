@@ -18,7 +18,7 @@ import { createApiClient, type ScriptInfo } from '../api/client'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
-  resolveExportFlags,
+  buildVideoExportOptions,
   downloadBlob,
   pickSupportedMimeType,
   sanitizeFilename,
@@ -184,14 +184,14 @@ function EditorScreen({
     }
     setExportRunning(true)
     setExportStatus('準備中...')
-    const opts: VideoExportOptions = {
+    const opts: VideoExportOptions = buildVideoExportOptions(renderer, {
       startSceneId: exportStartSceneId,
       endSceneId: exportEndSceneId,
       fps: exportFps,
-      flags: resolveExportFlags(renderer, exportInheritFlags),
+      inheritFlags: exportInheritFlags,
       mimeType: mime,
       onProgress: (s) => setExportStatus(s),
-    }
+    })
     try {
       const result = await exportVideo(renderer, opts)
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)

@@ -117,6 +117,7 @@ function VideoExportModal({
             type="checkbox"
             checked={inheritFlags}
             onChange={(e) => onChangeInheritFlags(e.target.checked)}
+            disabled={isRunning}
             className="mt-1"
           />
           <span>
