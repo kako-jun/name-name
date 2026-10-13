@@ -32,6 +32,7 @@
 
 import {
   Assets,
+  BlurFilter,
   ColorMatrixFilter,
   Container,
   Graphics,
@@ -39,7 +40,7 @@ import {
   Sprite,
   Text as PixiText,
   TextStyle,
-  type Texture,
+  Texture,
 } from 'pixi.js'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -79,6 +80,12 @@ import {
   saturationToPixiAmount,
   type BackgroundTone,
 } from './backgroundTone'
+import {
+  DOF_MASK_TEXTURE_HEIGHT,
+  computeDofGradient,
+  dofMaskStops,
+  type BackgroundDof,
+} from './depthOfField'
 
 const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
@@ -174,6 +181,11 @@ export interface BattleScreenOptions {
    * 背景スプライトにだけかかり、キャラ・敵・パネル・テキストには影響しない。背景なしのときは無関係。
    */
   backgroundTone?: BackgroundTone
+  /**
+   * 背景画像の被写界深度（DoF）風の手前ぼかし (#753)。`on` = 画面の下側ほど強くぼかす、`off`（既定）= ぼかさない。
+   * 背景スプライトにだけかかり、キャラ・敵・パネル・テキストには影響しない。背景なしのときは無関係。
+   */
+  backgroundDof?: BackgroundDof
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -206,6 +218,15 @@ export class BattleScreen extends Container {
   private backgroundTone: BackgroundTone
   /** 背景スプライトにかけるフィルタ（1 個を使い回す。destroy で解放） */
   private backgroundToneFilter: ColorMatrixFilter | null = null
+  /** 背景の被写界深度風ぼかし (#753) */
+  private backgroundDof: BackgroundDof
+  /** 背景と同じテクスチャのぼかしコピー（テクスチャは共有）と、その縦グラデーションアルファマスク */
+  private dofSprite: Sprite | null = null
+  private dofMask: Sprite | null = null
+  private dofBlur: BlurFilter | null = null
+  /** マスクのグラデーションテクスチャ（自前生成なので自分で破棄する）と、それを作ったときの立ち上がり割合 */
+  private dofMaskTexture: Texture | null = null
+  private dofMaskRamp = -1
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   private backgroundSprite: Sprite | null = null
@@ -251,6 +272,7 @@ export class BattleScreen extends Container {
     this.spriteStyle = opts.spriteStyle === 'acrylic' ? 'acrylic' : 'none'
     this.windowStyle = opts.windowStyle === 'ff-blue' ? 'ff-blue' : 'dark'
     this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
+    this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
@@ -287,6 +309,7 @@ export class BattleScreen extends Container {
     }
     this.backgroundToneFilter?.destroy()
     this.backgroundToneFilter = null
+    this.disposeBackgroundDof()
     super.destroy(options)
   }
 
@@ -299,6 +322,7 @@ export class BattleScreen extends Container {
       this.backgroundSprite = sprite
       this.applyBackgroundTone(sprite)
       this.addChildAt(sprite, 0)
+      this.applyBackgroundDof(sprite)
       this.layout()
     } catch (e) {
       console.warn(`[BattleScreen] failed to load background "${path}":`, e)
@@ -318,6 +342,90 @@ export class BattleScreen extends Container {
       this.backgroundToneFilter = f
     }
     sprite.filters = [this.backgroundToneFilter]
+  }
+
+  /**
+   * 背景の手前ぼかし (#753)。背景と同じテクスチャのコピー（BlurFilter）を背景の直上に置き、縦グラデーションの
+   * アルファマスクで下側だけ見せる。コピーは Sprite の mask（alpha チャンネル）で切るので、アルファの勾配がそのまま効く。
+   * 背景が差し替わっても積み増さないよう、先に前回分を破棄する。`off` のときは何も作らない。
+   */
+  private applyBackgroundDof(bg: Sprite): void {
+    this.disposeBackgroundDof()
+    if (this.backgroundDof === 'off') return
+    const copy = new Sprite(bg.texture)
+    const blur = new BlurFilter({ strength: 0 })
+    blur.repeatEdgePixels = true
+    copy.filters = this.backgroundToneFilter ? [this.backgroundToneFilter, blur] : [blur]
+    const mask = new Sprite()
+    this.dofSprite = copy
+    this.dofMask = mask
+    this.dofBlur = blur
+    this.addChildAt(copy, 1)
+    this.addChildAt(mask, 2)
+    copy.setMask({ mask, channel: 'alpha' })
+  }
+
+  /** ぼかしコピー・マスク・フィルタ・マスクのテクスチャを解放する（共有している背景テクスチャは壊さない） */
+  private disposeBackgroundDof(): void {
+    if (this.dofSprite) {
+      this.dofSprite.setMask({ mask: null })
+      this.dofSprite.filters = null
+      this.dofSprite.destroy()
+    }
+    this.dofMask?.destroy()
+    this.dofBlur?.destroy()
+    this.dofMaskTexture?.destroy(true)
+    this.dofSprite = null
+    this.dofMask = null
+    this.dofBlur = null
+    this.dofMaskTexture = null
+    this.dofMaskRamp = -1
+  }
+
+  /** 画面サイズに合わせてぼかしコピー・マスクの位置と強さを更新する。立ち上がり割合が変わったときだけマスクの絵を作り直す */
+  private layoutBackgroundDof(bg: Sprite, W: number, H: number): void {
+    const copy = this.dofSprite
+    const mask = this.dofMask
+    const blur = this.dofBlur
+    if (!copy || !mask || !blur) return
+    const g = computeDofGradient(H)
+    copy.position.copyFrom(bg.position)
+    copy.width = bg.width
+    copy.height = bg.height
+    blur.strength = g.blurStrength
+    if (Math.abs(g.rampFraction - this.dofMaskRamp) > 1e-4 || !this.dofMaskTexture) {
+      const tex = this.createDofMaskTexture(g.rampFraction)
+      if (tex) {
+        this.dofMaskTexture?.destroy(true)
+        this.dofMaskTexture = tex
+        this.dofMaskRamp = g.rampFraction
+        mask.texture = tex
+      }
+    }
+    mask.position.set(0, g.startY)
+    mask.width = W
+    mask.height = g.maskHeight
+  }
+
+  /** 縦にアルファが 0 → 1 に立ち上がる 1 x N の canvas テクスチャを作る。canvas が使えない環境では null（ぼかし無しで続行） */
+  private createDofMaskTexture(rampFraction: number): Texture | null {
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1
+      canvas.height = DOF_MASK_TEXTURE_HEIGHT
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      const grad = ctx.createLinearGradient(0, 0, 0, DOF_MASK_TEXTURE_HEIGHT)
+      for (const s of dofMaskStops(rampFraction)) {
+        grad.addColorStop(s.offset, `rgba(255,255,255,${s.alpha})`)
+      }
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, 1, DOF_MASK_TEXTURE_HEIGHT)
+      return Texture.from(canvas)
+    } catch (e) {
+      console.warn('[BattleScreen] failed to build DoF mask texture:', e)
+      return null
+    }
   }
 
   /** サイドビュー用の敵・味方スプライトとステータス行を作る (#736) */
@@ -556,6 +664,7 @@ export class BattleScreen extends Container {
       this.backgroundSprite.position.set(fit.x, fit.y)
       this.backgroundSprite.width = fit.width
       this.backgroundSprite.height = fit.height
+      this.layoutBackgroundDof(this.backgroundSprite, W, H)
       this.dim.clear()
     } else {
       // フィールド全体を暗くする半透明黒
