@@ -992,3 +992,215 @@ describe('NovelRenderer Jump 復元経路・状態分離 追加 (#733)', () => {
     expect(internals(r).waitingForWait).toBe(false)
   })
 })
+
+// 遅延ロード中の復元と Jump の遷移状態 (#759)
+describe('NovelRenderer 遅延ロード中の復元と Jump の遷移状態 (#759)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    defaultTimeController.setMode('live')
+    localStorage.clear()
+  })
+
+  function deferred(): {
+    promise: Promise<EventScene[] | null>
+    resolve: (v: EventScene[] | null) => void
+    reject: (e: unknown) => void
+  } {
+    let resolve!: (v: EventScene[] | null) => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<EventScene[] | null>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  const ENTRY = [scene('a', [narration('a1'), jump('far')]), scene('b', [narration('b1')])]
+  const FAR = scene('far', [narration('far1')])
+  const flush = (): Promise<void> => new Promise((res) => setTimeout(res, 0))
+
+  it('M1a: Jump の解決中に復元が失敗しても pending が残らず、Jump の遷移は最終的に完了する', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const far = deferred()
+    const r = makeRenderer(ENTRY)
+    r.setMissingSceneResolver((id) => (id === 'far' ? far.promise : Promise.resolve(null)))
+    r.advance()
+    tick(r)
+    expect(internals(r).jumpState).toBe('pending')
+
+    r.restoreSnapshot({ ...r.getSnapshot(), sceneId: 'ghost', flags: { x: { Bool: true } } })
+    await flush()
+    // 復元は失敗（flags のみ反映）。位置は Jump のままなので遷移を位置から再導出する。
+    expect(internals(r).jumpState).toBe('pending')
+    tick(r)
+    far.resolve([...ENTRY, FAR])
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('far')
+    expect(internals(r).jumpState).toBe('idle')
+  })
+
+  it('M1b: Jump 予約中にロードメニューのコールバックが呼ばれても復元しない（確定時の再確認）', () => {
+    const r = makeRenderer(ENTRY, { docKey: 'doc-759-load' })
+    let onLoad!: (d: SaveSlotData) => void
+    vi.spyOn(internals(r).saveLoadOverlay, 'showLoad').mockImplementation(((
+      cb: (d: SaveSlotData) => void
+    ) => {
+      onLoad = cb
+    }) as never)
+    internals(r).openLoadMenu() // idle のうちに開く
+    r.advance() // 裏で Jump が予約される
+    expect(internals(r).jumpState).toBe('pending')
+    const snap = r.getSnapshot()
+    onLoad({
+      slot: 1,
+      ...snap,
+      sceneId: 'b',
+      eventIndex: 0,
+      textIndex: 0,
+      sentenceIndex: 0,
+      savedAt: '2026-01-01T00:00:00.000Z',
+      sceneName: 'b',
+    } as SaveSlotData)
+    expect(r.getCurrentSceneId()).toBe('a')
+    expect(internals(r).jumpState).toBe('pending')
+  })
+
+  it('M1c: Jump 予約中にセーブメニューのコールバックが呼ばれても保存しない', () => {
+    const r = makeRenderer(ENTRY, { docKey: 'doc-759-save' })
+    let onSave!: (slot: number) => void
+    vi.spyOn(internals(r).saveLoadOverlay, 'showSave').mockImplementation(((
+      cb: (slot: number) => void
+    ) => {
+      onSave = cb
+    }) as never)
+    internals(r).openSaveMenu()
+    r.advance()
+    expect(internals(r).jumpState).toBe('pending')
+    onSave(1)
+    expect(Object.keys(localStorage).filter((k) => k.startsWith('name-name-save-'))).toEqual([])
+  })
+
+  it('M2: 冒頭が Jump のエントリへ未ロードシーンの restoreSnapshot をしても、Jump タイマーに潰されず snapshot が勝つ', async () => {
+    const far = deferred()
+    const r = makeRenderer([scene('entry', [jump('b')]), scene('b', [narration('b1')])])
+    r.setMissingSceneResolver(() => far.promise)
+    r.restoreSnapshot({ ...r.getSnapshot(), sceneId: 'far', eventIndex: 0, flags: {} })
+    tick(r) // 修正前: ここで冒頭 Jump が発火して b へ遷移し、復元が破棄される
+    far.resolve([scene('entry', [jump('b')]), scene('b', [narration('b1')]), FAR])
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('far')
+  })
+
+  it('M1d: Jump の解決中に成功する復元が入ると、古い Jump の解決は後から当たらない', async () => {
+    const far = deferred()
+    const ghost = scene('ghost', [narration('g1')])
+    const r = makeRenderer(ENTRY)
+    r.setMissingSceneResolver((id) =>
+      id === 'far' ? far.promise : Promise.resolve([...ENTRY, ghost])
+    )
+    r.advance()
+    tick(r)
+    r.restoreSnapshot({ ...r.getSnapshot(), sceneId: 'ghost', eventIndex: 0, flags: {} })
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('ghost')
+    far.resolve([...ENTRY, FAR])
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('ghost')
+  })
+
+  // ロード中（遅延ロード往復中）も Jump のゲートは保たれ、失敗しても Jump が消えない (#759 N1/N2)
+  describe.each([
+    ['quickLoad', 'stalled'],
+    ['restoreSnapshot', 'pending'],
+    ['restoreSnapshot', 'stalled'],
+  ] as const)('%s 中（開始時 %s）', (via, initial) => {
+    it.each(['null', 'missing', 'reject'] as const)(
+      '解決が %s で失敗 → ロード中は advance/セーブ拒否・jumpState と位置は不変・pending なら Jump を再試行',
+      async (outcome) => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        new SaveManager().deleteQuickSave()
+        const ghost = deferred()
+        const farCalls: string[] = []
+        const r = makeRenderer(ENTRY)
+        r.setMissingSceneResolver((id) => {
+          if (id === 'far') {
+            farCalls.push(id)
+            return Promise.resolve(null)
+          }
+          return id === 'ghost' ? ghost.promise : Promise.resolve(null)
+        })
+        r.advance() // a1 → Jump 到達（pending）
+        if (initial === 'stalled') {
+          tick(r)
+          await flush()
+          expect(internals(r).jumpState).toBe('stalled')
+          farCalls.length = 0
+        }
+        const at = r.getSnapshot()
+        if (via === 'quickLoad') {
+          new SaveManager().quickSave({
+            ...(at as unknown as SaveSlotData),
+            slot: -1,
+            sceneId: 'ghost',
+            eventIndex: 0,
+            savedAt: '2026-01-01T00:00:00.000Z',
+            sceneName: null,
+          })
+          expect(r.quickLoad()).toBe(true)
+        } else {
+          r.restoreSnapshot({ ...at, sceneId: 'ghost', eventIndex: 0 })
+        }
+
+        // ロード中: ゲートは外れない（Jump を飛び越せず、Jump 位置でセーブもできない）
+        expect(internals(r).jumpState).toBe(initial)
+        r.advance()
+        expect(r.getSnapshot().eventIndex).toBe(at.eventIndex)
+        expect(r.quickSave()).toBe(false)
+
+        if (outcome === 'null') ghost.resolve(null)
+        else if (outcome === 'missing') ghost.resolve([...ENTRY])
+        else ghost.reject(new Error('boom'))
+        await flush()
+
+        expect(r.getCurrentSceneId()).toBe('a')
+        expect(r.getSnapshot().eventIndex).toBe(at.eventIndex)
+        expect(internals(r).jumpState).toBe(initial)
+        tick(r)
+        await flush()
+        if (initial === 'pending') {
+          // 再予約された Jump が遷移を試み（遷移先不在）停止する
+          expect(farCalls).toEqual(['far'])
+          expect(internals(r).jumpState).toBe('stalled')
+        } else {
+          expect(farCalls).toEqual([])
+          expect(internals(r).jumpState).toBe('stalled')
+        }
+        new SaveManager().deleteQuickSave()
+      }
+    )
+  })
+
+  it('N3: 予約中のロード/セーブ確定の拒否はトーストで通知される', () => {
+    const r = makeRenderer(ENTRY, { docKey: 'doc-759-toast' })
+    const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
+    let onLoad!: (d: SaveSlotData) => void
+    let onSave!: (slot: number) => void
+    vi.spyOn(internals(r).saveLoadOverlay, 'showLoad').mockImplementation(((
+      cb: (d: SaveSlotData) => void
+    ) => {
+      onLoad = cb
+    }) as never)
+    vi.spyOn(internals(r).saveLoadOverlay, 'showSave').mockImplementation(((
+      cb: (slot: number) => void
+    ) => {
+      onSave = cb
+    }) as never)
+    internals(r).openLoadMenu()
+    internals(r).openSaveMenu()
+    r.advance()
+    onSave(1)
+    expect(toast).toHaveBeenLastCalledWith('場面転換中のためセーブできません')
+    onLoad({} as SaveSlotData)
+    expect(toast).toHaveBeenLastCalledWith('場面転換中のためロードできません')
+  })
+})
