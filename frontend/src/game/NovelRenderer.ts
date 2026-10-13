@@ -4048,7 +4048,7 @@ export class NovelRenderer {
     const savedMsPerChar = this.dialogBox.getMsPerChar()
     this.dialogBox.setMsPerChar(0)
     try {
-      for (const step of steps) {
+      for (const [stepIndex, step] of steps.entries()) {
         switch (step.type) {
           case 'advance':
             this.advance()
@@ -4068,7 +4068,12 @@ export class NovelRenderer {
               // 遅延ロードの完了まで待ち、入場できなかったら（不在・resolver 失敗・適用例外・
               // より新しい入場に置き換えられた・終劇）後続のステップを消化せず打ち切る (#729, #734 PR3)。
               const result = await this.jumpToScene(step.jump)
-              if (result.status !== 'entered') return
+              if (result.status !== 'entered') {
+                console.warn(
+                  `[name-name] playScript: choice:${step.jump} → ${result.status}、残り ${steps.length - stepIndex - 1} ステップを打ち切り`
+                )
+                return
+              }
             }
             while (await this.awaitPendingEntry()) {
               if (!this.initialized) return

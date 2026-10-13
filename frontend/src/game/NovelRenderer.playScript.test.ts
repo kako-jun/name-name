@@ -76,6 +76,29 @@ const SCENES_SINGLE: EventScene[] = [
   scene('start', [narration('行1', '行2', '行3'), dialog('A', 'せりふ1', 'せりふ2')]),
 ]
 
+/** 'start' が本文→Choice で終わり、'in' / 'out' へ分岐できる構成（打ち切り系のテスト用） */
+const SCENES_CHOICE: EventScene[] = [
+  scene('start', [
+    narration('intro'),
+    {
+      Choice: {
+        options: [
+          { text: '中へ', jump: 'in' },
+          { text: '外へ', jump: 'out' },
+        ],
+      },
+    } as Event,
+  ]),
+  scene('in', [narration('in1', 'in2')]),
+  scene('out', [narration('out1', 'out2')]),
+]
+
+function makeChoiceRenderer(): NovelRenderer {
+  const r = makeRenderer(SCENES_CHOICE)
+  internals(r).choiceOverlay.show = vi.fn()
+  return r
+}
+
 const SCENES_BRANCH: EventScene[] = [
   scene('start', [narration('intro')]),
   scene('left', [narration('左ルート')]),
@@ -490,28 +513,36 @@ describe('NovelRenderer.playScript (#220)', () => {
 
   it('12: 存在しない jump の choice は currentSceneId を変えず、後続 step を消化せず打ち切る（warn は出るが例外なし, #729）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const r = makeRenderer(SCENES_BRANCH)
+    const r = makeChoiceRenderer()
     const advanceSpy = vi.spyOn(internals(r), 'advance')
     expect(r.getCurrentSceneId()).toBe('start')
+    // 1つ目の advance で Choice に到達し、不在の choice で打ち切る。残りの advance は実行されない
     await expect(
-      r.playScript([{ type: 'choice', jump: 'nonexistent' }, { type: 'advance' }])
+      r.playScript([
+        { type: 'advance' },
+        { type: 'choice', jump: 'nonexistent' },
+        { type: 'advance' },
+      ])
     ).resolves.toBeUndefined()
     expect(r.getCurrentSceneId()).toBe('start')
-    expect(warnSpy).toHaveBeenCalled()
-    expect(advanceSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('残り 1 ステップを打ち切り'))
+    expect(advanceSpy).toHaveBeenCalledTimes(1)
+    // 閉じていた選択肢が再表示される（PR1 の契約）
+    expect(internals(r).waitingForChoice).toBe(true)
     // 打ち切っても再入ガードは解除される
     await expect(r.playScript([])).resolves.toBeUndefined()
   })
 
   it('12b: 遅延ロード（resolver 失敗）で入場できない choice も、後続 step を消化せず打ち切る (#729)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const r = makeRenderer(SCENES_BRANCH)
+    const r = makeChoiceRenderer()
     markInitialized(r)
     r.setMissingSceneResolver(vi.fn(async () => null))
     const advanceSpy = vi.spyOn(internals(r), 'advance')
-    await r.playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
+    await r.playScript([{ type: 'advance' }, { type: 'choice', jump: 'far' }, { type: 'advance' }])
     expect(r.getCurrentSceneId()).toBe('start')
-    expect(advanceSpy).not.toHaveBeenCalled()
+    expect(advanceSpy).toHaveBeenCalledTimes(1)
+    expect(internals(r).waitingForChoice).toBe(true)
   })
 
   it('12c: 未ロードのサブ MD への choice は遅延ロードの完了を待ち、後続の advance は遷移先で消化される (#729)', async () => {
@@ -544,6 +575,69 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(advanceSpy).toHaveBeenCalledTimes(1)
     // advance は遷移先 far の 2 行目を消化した（遷移前の start で空振りしていない）
     expect(r.getSnapshot().textIndex).toBe(1)
+  })
+
+  it('12d: confinement 圏外への choice は ended で終劇し、後続 step を消化せず打ち切る (#729)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeChoiceRenderer()
+    markInitialized(r)
+    await r.startFrom({ sceneId: 'start', confinedSceneIds: ['start', 'in'] })
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    await r.playScript([{ type: 'advance' }, { type: 'choice', jump: 'out' }, { type: 'advance' }])
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(advanceSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('→ ended'))
+  })
+
+  it('12e: 遅延ロード中により新しい入場に置き換えられた choice は superseded で打ち切る (#729)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeChoiceRenderer()
+    markInitialized(r)
+    let resolveLoad!: (s: EventScene[]) => void
+    r.setMissingSceneResolver(
+      vi.fn(
+        () =>
+          new Promise<EventScene[]>((res) => {
+            resolveLoad = res
+          })
+      )
+    )
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const done = r.playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
+    await new Promise((res) => setTimeout(res, 0))
+    // ロード中に別の新規開始が割り込む（世代が進み、往復は破棄される）
+    await r.startFrom({ sceneId: 'in' })
+    resolveLoad([...SCENES_CHOICE, scene('far', [narration('far1')])])
+    await done
+    expect(advanceSpy).not.toHaveBeenCalled()
+    expect(r.getCurrentSceneId()).toBe('in')
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('→ superseded'))
+  })
+
+  it('12f: startFrom で confinement なしにすれば、圏外への choice 後の advance が遷移先で消化される。confinement ありなら終劇で打ち切る (#729)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const free = makeChoiceRenderer()
+    markInitialized(free)
+    await free.startFrom({ sceneId: 'start', confinedSceneIds: null })
+    await free.playScript([
+      { type: 'advance' },
+      { type: 'choice', jump: 'out' },
+      { type: 'advance' },
+    ])
+    expect(free.getSnapshot().storyEnded).toBe(false)
+    expect(free.getCurrentSceneId()).toBe('out')
+    expect(free.getSnapshot().textIndex).toBe(1)
+
+    const confined = makeChoiceRenderer()
+    markInitialized(confined)
+    await confined.startFrom({ sceneId: 'start', confinedSceneIds: ['start'] })
+    await confined.playScript([
+      { type: 'advance' },
+      { type: 'choice', jump: 'out' },
+      { type: 'advance' },
+    ])
+    expect(confined.getSnapshot().storyEnded).toBe(true)
+    expect(confined.getCurrentSceneId()).toBe('start')
   })
 
   // ===== E. wait（fake timers） =====
