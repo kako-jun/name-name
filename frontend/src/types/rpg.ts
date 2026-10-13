@@ -196,6 +196,8 @@ export interface RPGProject {
   spriteStyle?: 'none' | 'acrylic'
   /** 戦闘ウィンドウの配色テーマ (#744)。frontmatter `window_style:` 由来。未指定は `'dark'`（現行の半透明黒・後方互換） */
   windowStyle?: 'dark' | 'ff-blue'
+  /** 戦闘背景の彩度・明度を落とすか (#753)。frontmatter `battle_background_tone:` 由来。未指定は `'on'`（背景ありなら落とす） */
+  battleBackgroundTone?: 'on' | 'off'
 }
 
 /**
