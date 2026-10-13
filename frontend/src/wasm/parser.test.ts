@@ -2165,3 +2165,52 @@ describe('parseMarkdown + normalizeDocument: sprite_style が normalize を生�
     expect(reparsed.sprite_style).toBe('acrylic')
   })
 })
+
+describe('parseMarkdown + normalizeDocument: window_style が normalize を生き残る (#744)', () => {
+  // sprite_style (#737) と同じ流儀。normalizeDocument の列挙に書き忘れると wasm 経由で undefined になる。
+  function docWith(...lines: string[]): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('window_style: ff-blue → doc.window_style === "ff-blue"', async () => {
+    const doc = await parseMarkdown(docWith('window_style: ff-blue'))
+    expect(doc.window_style).toBe('ff-blue')
+  })
+
+  it('未指定 → null（undefined ではない）', async () => {
+    const doc = await parseMarkdown(docWith())
+    expect(doc.window_style).toBeNull()
+  })
+
+  it('空文字指定 → null に倒れる', async () => {
+    const doc = await parseMarkdown(docWith('window_style: ""'))
+    expect(doc.window_style).toBeNull()
+  })
+
+  it('battle_layout / sprite_style / window_style を併用しても全て生存する', async () => {
+    const doc = await parseMarkdown(
+      docWith('battle_layout: side', 'sprite_style: acrylic', 'window_style: ff-blue')
+    )
+    expect(doc.battle_layout).toBe('side')
+    expect(doc.sprite_style).toBe('acrylic')
+    expect(doc.window_style).toBe('ff-blue')
+  })
+
+  it('未知値は parser では正規化されず素通しする', async () => {
+    const doc = await parseMarkdown(docWith('window_style: foo'))
+    expect(doc.window_style).toBe('foo')
+  })
+})

@@ -34,6 +34,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
   return {
     layout: 'side',
     spriteStyle: 'none',
+    windowStyle: 'dark',
     backgroundOn: false,
     partyCount: 4,
     enemyCount: 4,
@@ -143,6 +144,10 @@ describe('仕様固定値', () => {
     expect(c.party).toHaveLength(4)
     expect(c.enemies).toHaveLength(4)
   })
+
+  it("defaultConfig() の windowStyle は 'dark'", () => {
+    expect(defaultConfig().windowStyle).toBe('dark')
+  })
 })
 
 describe('resolveUrl', () => {
@@ -251,6 +256,29 @@ describe('parseConfig ルートと enum', () => {
     ['null', null, 'null'],
   ])('spriteStyle が不正（%s）ならエラーで、値が JSON 形式で文中に出る', (_l, v, shown) => {
     expect(parseErr({ spriteStyle: v })).toContain(`spriteStyle は "none" か "acrylic": ${shown}`)
+  })
+
+  it.each(['dark', 'ff-blue'])('windowStyle=%s を受理する', (windowStyle) => {
+    expect(parseOk({ windowStyle }).windowStyle).toBe(windowStyle)
+  })
+
+  it("windowStyle 未指定は 'dark'", () => {
+    expect(parseOk({}).windowStyle).toBe('dark')
+    expect(parseOk({ windowStyle: undefined }).windowStyle).toBe('dark')
+  })
+
+  it.each([
+    ['大文字違い Dark', 'Dark', '"Dark"'],
+    ['大文字違い FF-BLUE', 'FF-BLUE', '"FF-BLUE"'],
+    ['空文字', '', '""'],
+    ['未知値', 'xxx', '"xxx"'],
+    ['null', null, 'null'],
+    ['数値', 1, '1'],
+    ['真偽値', true, 'true'],
+    ['オブジェクト', {}, '{}'],
+    ['配列', [], '[]'],
+  ])('windowStyle が不正（%s）ならエラーで、値が JSON 形式で文中に出る', (_l, v, shown) => {
+    expect(parseErr({ windowStyle: v })).toContain(`windowStyle は "dark" か "ff-blue": ${shown}`)
   })
 })
 
@@ -570,6 +598,11 @@ describe('initialView / resolveSize', () => {
     expect(v.spriteStyle).toBe('acrylic')
   })
 
+  it('initialView の windowStyle は設定から（既定は dark）', () => {
+    expect(initialView(parseOk({ windowStyle: 'ff-blue' })).windowStyle).toBe('ff-blue')
+    expect(initialView(defaultConfig()).windowStyle).toBe('dark')
+  })
+
   it.each([
     ['360x640', 360, 640],
     ['800x450', 800, 450],
@@ -675,6 +708,15 @@ describe('buildBattleSetup', () => {
     expect(s.options.spriteStyle).toBe('acrylic')
   })
 
+  it('windowStyle は view から反映される（config ではなく）', () => {
+    const c = { ...defaultConfig(), windowStyle: 'dark' as const }
+    expect(buildBattleSetup(c, view({ windowStyle: 'ff-blue' })).options.windowStyle).toBe(
+      'ff-blue'
+    )
+    const c2 = { ...defaultConfig(), windowStyle: 'ff-blue' as const }
+    expect(buildBattleSetup(c2, view({ windowStyle: 'dark' })).options.windowStyle).toBe('dark')
+  })
+
   it.each([
     ['360x640', 360, 640],
     ['800x450', 800, 450],
@@ -710,9 +752,16 @@ describe('viewsEqual', () => {
     expect(viewsEqual(view(), view())).toBe(true)
   })
 
+  it('windowStyle も含めて同一なら true', () => {
+    expect(viewsEqual(view({ windowStyle: 'ff-blue' }), view({ windowStyle: 'ff-blue' }))).toBe(
+      true
+    )
+  })
+
   it.each([
     ['layout', { layout: 'front' }],
     ['spriteStyle', { spriteStyle: 'acrylic' }],
+    ['windowStyle', { windowStyle: 'ff-blue' }],
     ['backgroundOn', { backgroundOn: true }],
     ['partyCount', { partyCount: 3 }],
     ['enemyCount', { enemyCount: 3 }],
@@ -775,12 +824,47 @@ describe('pushView / swapView', () => {
     expect(() => swapView(h)).not.toThrow()
     expect(() => pushView(h, C)).not.toThrow()
   })
+
+  it('windowStyle だけ違う view を push すると履歴に積まれる', () => {
+    const dark = view()
+    const blue = view({ windowStyle: 'ff-blue' })
+    const h = pushView({ current: dark, previous: null }, blue)
+    expect(h.current).toBe(blue)
+    expect(h.previous).toBe(dark)
+  })
+
+  it('windowStyle が同じ view を push しても積まれない', () => {
+    const h: BlinkHistory = { current: view({ windowStyle: 'ff-blue' }), previous: null }
+    expect(pushView(h, view({ windowStyle: 'ff-blue' }))).toBe(h)
+  })
+
+  it('windowStyle の違う 2 view を swap で往復できる', () => {
+    const dark = view()
+    const blue = view({ windowStyle: 'ff-blue' })
+    const h1 = swapView({ current: blue, previous: dark })
+    expect(h1.current.windowStyle).toBe('dark')
+    expect(h1.previous?.windowStyle).toBe('ff-blue')
+    const h2 = swapView(h1)
+    expect(h2.current.windowStyle).toBe('ff-blue')
+    expect(h2.previous?.windowStyle).toBe('dark')
+  })
 })
 
 describe('describeView', () => {
+  it('ff-blue 版の完全一致文字列', () => {
+    expect(
+      describeView(view({ sizeId: '360x640', windowStyle: 'ff-blue' }), 2, {
+        width: 360,
+        height: 640,
+      })
+    ).toBe(
+      'layout=side  spriteStyle=none  windowStyle=ff-blue  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+    )
+  })
+
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 

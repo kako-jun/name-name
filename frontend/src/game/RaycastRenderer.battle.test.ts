@@ -330,3 +330,31 @@ describe('RaycastRenderer.load → spriteStyle の流れ (#737)', () => {
     expect(i.battleScreen!.opts.spriteStyle).toBe('none')
   })
 })
+
+describe('RaycastRenderer.load → windowStyle の流れ (#744)', () => {
+  function loaded(p: Partial<RPGProject>) {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(project(p))
+    return { r, i }
+  }
+
+  it("load() が windowStyle を保持し BattleScreen の opts に流す（'ff-blue' → opts.windowStyle === 'ff-blue'）", () => {
+    const { i } = loaded({ windowStyle: 'ff-blue' })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.windowStyle).toBe('ff-blue')
+  })
+
+  it("windowStyle 未指定 → 'dark' で opts にも 'dark' が渡る", () => {
+    const { i } = loaded({})
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.windowStyle).toBe('dark')
+  })
+
+  it('load() の再呼び出しで前回の ff-blue が残らない', () => {
+    const { r, i } = loaded({ windowStyle: 'ff-blue' })
+    r.load(project({}))
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.opts.windowStyle).toBe('dark')
+  })
+})

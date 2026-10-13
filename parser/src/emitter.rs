@@ -154,6 +154,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("sprite_style: \"{sanitized}\"\n"));
         }
+        // window_style (#744)。sprite_style と同じ流儀
+        if let Some(ref v) = doc.window_style {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("window_style: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1657,6 +1662,7 @@ mod tests {
             battle_layout: None,
             battle_background: None,
             sprite_style: None,
+            window_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1919,6 +1925,7 @@ mod tests {
             battle_layout: None,
             battle_background: None,
             sprite_style: None,
+            window_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

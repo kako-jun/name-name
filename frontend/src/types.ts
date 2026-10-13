@@ -854,6 +854,10 @@ export interface EventDocument {
    *  null/undefined・未知値は `"none"` にフォールバック。GUI 専用（TUI は読まない）。
    *  frontmatter `sprite_style:` から流す。 */
   sprite_style?: string | null
+  /** RPG 戦闘画面のウィンドウ配色テーマ (#744)。`"dark"`（既定・現行の半透明黒）/ `"ff-blue"`（FF 風の青い帯状グラデーション＋白文字に黒い影）。
+   *  null/undefined・未知値は `"dark"` にフォールバック。GUI 専用（TUI は読まない）。
+   *  frontmatter `window_style:` から流す。 */
+  window_style?: string | null
   chapters: EventChapter[]
 }
 

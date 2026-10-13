@@ -152,6 +152,9 @@ async function main(): Promise<void> {
   const styleSel = select('spriteStyle', 'tb-style', ['none', 'acrylic'] as const, (v) =>
     change({ spriteStyle: v })
   )
+  const windowSel = select('windowStyle', 'tb-window', ['dark', 'ff-blue'] as const, (v) =>
+    change({ windowStyle: v })
+  )
   const bgLabel = document.createElement('label')
   const bgChk = document.createElement('input')
   bgChk.type = 'checkbox'
@@ -202,6 +205,7 @@ async function main(): Promise<void> {
     const v = history.current
     layoutSel.value = v.layout
     styleSel.value = v.spriteStyle
+    windowSel.value = v.windowStyle
     bgChk.checked = v.backgroundOn
     partySel.value = String(effectivePartyCount(v))
     enemySel.value = String(v.enemyCount)

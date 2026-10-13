@@ -2317,6 +2317,7 @@ mod tests {
             battle_layout: None,
             battle_background: None,
             sprite_style: None,
+            window_style: None,
             chapters,
         }
     }
