@@ -1511,12 +1511,18 @@ export class NovelRenderer {
     const inflight = this.pendingMissingScenes.get(sceneId)
     if (inflight) return inflight
     const resolver = this.missingSceneResolver
-    const p = (async () => {
-      if (!resolver) return null
-      return await resolver(sceneId)
-    })().finally(() => {
-      this.pendingMissingScenes.delete(sceneId)
-    })
+    // resolver の Promise をそのまま共有する（余計な await 段を挟まず、従来と同じ解決タイミングを保つ）。
+    // 取り除きは副チェーンで行い、共有 Promise の settle を遅らせない。
+    let p: Promise<EventScene[] | null>
+    try {
+      p = resolver ? resolver(sceneId) : Promise.resolve(null)
+    } catch (err) {
+      p = Promise.reject(err)
+    }
+    const remove = (): void => {
+      if (this.pendingMissingScenes.get(sceneId) === p) this.pendingMissingScenes.delete(sceneId)
+    }
+    p.then(remove, remove)
     this.pendingMissingScenes.set(sceneId, p)
     return p
   }

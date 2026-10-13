@@ -76,7 +76,7 @@ interface RendererInternals {
   history: unknown[]
   justSelectedChoice: boolean
   initialized: boolean
-  pendingMissingScenes: Set<string>
+  pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
 }
 
 function internals(r: NovelRenderer): RendererInternals {
@@ -615,7 +615,7 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
     // jumpToScene 側の resolveMissingSceneAndJump が同一 sceneId を既に解決中、という状況を再現
     // （#460 セルフレビュー S2: この分岐にヒットするケースだけ flags すら復元されていなかった）
-    internals(r).pendingMissingScenes.add('r01-01')
+    internals(r).pendingMissingScenes.set('r01-01', new Promise(() => {}))
 
     r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { restored: boolFlag(true) } }))
 
