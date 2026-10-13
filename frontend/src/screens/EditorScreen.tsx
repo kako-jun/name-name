@@ -14,7 +14,7 @@ import {
   findRpgSceneIndex,
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
-import { createApiClient, type ScriptInfo } from '../api/client'
+import { createApiClient, type ContentsResponse, type ScriptInfo } from '../api/client'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
@@ -488,6 +488,20 @@ function EditorScreen({
   // ロード前に localStorage の draft を見て、復元できる場合は draft を表示する
   // （draft があるが ref と sha の世代が古い場合は #108 でマージ UI を入れる予定。
   //  暫定では「ロード後に draft で上書き」する素直な復元のみ）。
+  // 既定の script.md を listScripts と並列で先行して取りに行く。worker の listScripts は各 .md を
+  // 順に fetch する（キャッシュ MISS 時）ので遅く、直列にすると起動が遅れる。一覧が「script.md あり」を
+  // 確定したらこの結果を使い、一覧に無ければ捨てる（失敗は握りつぶす＝トーストを出さない）。
+  const defaultPrefetchRef = useRef<{
+    path: string
+    promise: Promise<ContentsResponse | null>
+  } | null>(null)
+  useEffect(() => {
+    defaultPrefetchRef.current = {
+      path: DEFAULT_SCRIPT_PATH,
+      promise: api.getContents(projectName, DEFAULT_SCRIPT_PATH, DEFAULT_BRANCH).catch(() => null),
+    }
+  }, [api, projectName])
+
   useEffect(() => {
     // #237 review M1: タブ切替で currentScriptPath が変わったとき、
     // 先に sha / 初期値を即座にリセットする。
@@ -502,7 +516,14 @@ function EditorScreen({
 
     const loadChapters = async () => {
       try {
-        const data = await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
+        // 先行取得済みの既定パスならその結果を使う（1 回限り。失敗していたら普通に取り直す）
+        let data: ContentsResponse | null = null
+        const prefetch = defaultPrefetchRef.current
+        if (prefetch && prefetch.path === currentScriptPath) {
+          defaultPrefetchRef.current = null
+          data = await prefetch.promise
+        }
+        data ??= await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
         const markdown = data.content || ''
         shaRef.current = data.sha
         setHasSha(Boolean(data.sha))

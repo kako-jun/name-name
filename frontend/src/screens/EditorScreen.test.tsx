@@ -418,7 +418,7 @@ describe('EditorScreen: 最初に開く文書の決め方 (#778 調査)', () => 
       expect(getContentsMock).toHaveBeenCalledWith('p', 'content/scripts/a.md', 'develop')
     )
     await new Promise((r) => setTimeout(r, 100))
-    expect(getContentsMock).not.toHaveBeenCalledWith('p', 'script.md', 'develop')
+    // 先行取得した script.md の 404 は捨てられ、トーストは出ない
     expect(screen.queryByText(/読み込みに失敗/)).toBeNull()
   })
 
@@ -432,15 +432,45 @@ describe('EditorScreen: 最初に開く文書の決め方 (#778 調査)', () => 
     await waitFor(() =>
       expect(getContentsMock).toHaveBeenCalledWith('p', 'content/scripts/script.md', 'develop')
     )
-    // 最初の取得（編集対象）は script.md（他文書は RPG マスター用の先行取得）
-    expect(getContentsMock.mock.calls[0][1]).toBe('content/scripts/script.md')
+    // 編集対象は basename 一致の script.md（タブの選択状態で見る）
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('tab', { name: /^content\/scripts\/script\.md/ })
+          .getAttribute('aria-selected')
+      ).toBe('true')
+    )
   })
 
   it('script.md があればそれを開く', async () => {
     listScriptsMock.mockImplementation(async () => [info('a.md'), info('script.md')])
     renderEditor()
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /^script\.md/ }).getAttribute('aria-selected')).toBe(
+        'true'
+      )
+    )
+    // 先行取得の結果を採用する（script.md を二重に取りに行かない）
+    const scriptCalls = getContentsMock.mock.calls.filter((c) => c[1] === 'script.md')
+    expect(scriptCalls.length).toBe(1)
+  })
+
+  it('既定の script.md は listScripts の完了を待たず並列で先行して取りに行く', async () => {
+    let finishList: (v: unknown[]) => void = () => {}
+    listScriptsMock.mockImplementation(
+      () =>
+        new Promise((r) => {
+          finishList = r
+        })
+    )
+    renderEditor()
+    // 一覧がまだ返っていない時点で、script.md の取得が始まっている
     await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('p', 'script.md', 'develop'))
-    expect(getContentsMock.mock.calls[0][1]).toBe('script.md')
+    await act(async () => {
+      finishList([info('a.md'), info('script.md')])
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(getContentsMock.mock.calls.filter((c) => c[1] === 'script.md').length).toBe(1)
   })
 
   it('listScripts が失敗したら従来どおり script.md を試す', async () => {
