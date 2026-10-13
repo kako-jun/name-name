@@ -65,6 +65,7 @@ import {
   type SpriteSlot,
 } from './battleLayout'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
+import { computeSlitY } from './acrylicBase'
 import { getAcrylicBaseTexture, type AcrylicBaseTexture } from './acrylicBaseTexture'
 import {
   computeAcrylicGeometry,
@@ -710,6 +711,9 @@ export class BattleScreen extends Container {
           view.acrylicPlate = plateSprite
           view.acrylicPlatePad = plate.pad
           view.acrylicPlateScale = plate.scale ?? 1
+          const mask = new Graphics()
+          plateSprite.addChild(mask)
+          plateSprite.mask = mask
           view.container.addChildAt(plateSprite, idx++)
         }
         view.container.addChildAt(sprite, idx)
@@ -1207,6 +1211,17 @@ export class BattleScreen extends Container {
         g.sprite.y - view.acrylicPlatePad * ks
       )
       plate.visible = k > 0 && g.linePx > 0 && params.lineAlpha > 0
+      // 板は台座に差し込まれているので、スリットの高さより下は見えない。スリットと同じ純粋関数の値で水平に切る (#760)。
+      // スプライト本体の足元はクリップしない（mask は板だけ）
+      const mask = (plate.mask ?? null) as Graphics | null
+      if (mask) {
+        const texW = plate.texture.width
+        const texH = plate.texture.height
+        // 台座が無い（hasBase=false）・縮尺 0 のときは切らない。mask は板の子（板のローカル座標・縮尺前）
+        const clipY = g.base ? computeSlitY(g.base.cy, g.base.ry) : Infinity
+        const h = ks > 0 ? Math.min(texH, Math.max(0, (clipY - plate.y) / ks)) : texH
+        mask.clear().rect(0, 0, texW, h).fill(0xffffff)
+      }
     }
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true

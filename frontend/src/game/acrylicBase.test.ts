@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { BASE_TEXTURE_WIDTH, computeBaseLayout, renderAcrylicBase } from './acrylicBase'
+import {
+  BASE_TEXTURE_WIDTH,
+  SLIT_CENTER_RATIO,
+  computeBaseLayout,
+  computeSlitY,
+  renderAcrylicBase,
+} from './acrylicBase'
 import { resolveAcrylicParams } from './spriteStyle'
 
 const P = resolveAcrylicParams()
@@ -83,5 +89,26 @@ describe('renderAcrylicBase', () => {
       baseThicknessRatio: 0,
     })
     expect(z.rgba.length).toBe(z.width * z.height * 4)
+  })
+})
+
+describe('computeSlitY (#760)', () => {
+  it('スリットの中心は上面の中心から奥側へ ry の 0.28 倍（仕様値）', () => {
+    expect(SLIT_CENTER_RATIO).toBe(0.28)
+    expect(computeSlitY(100, 50)).toBeCloseTo(86)
+  })
+  it('台座テクスチャの最も暗い行（スリット）が computeSlitY と一致する（描画と板のクリップ位置がずれない）', () => {
+    const r = renderAcrylicBase(BASE_TEXTURE_WIDTH, { ...P, shadowAlpha: 0 })
+    // スリットの帯（暗く不透明な行）の重心 y
+    let sum = 0
+    let wsum = 0
+    for (let y = 0; y < r.height; y++) {
+      const i = (y * r.width + Math.floor(r.cx)) * 4
+      const w = Math.max(0, r.rgba[i + 3] * (255 - r.rgba[i]) - 8000)
+      sum += w * (y + 0.5)
+      wsum += w
+    }
+    const best = sum / wsum - 0.5
+    expect(Math.abs(best + 0.5 - computeSlitY(r.cyTop, r.ry))).toBeLessThanOrEqual(2)
   })
 })

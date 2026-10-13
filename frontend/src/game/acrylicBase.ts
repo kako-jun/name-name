@@ -16,6 +16,17 @@ import type { AcrylicParams } from './spriteStyle'
 export const BASE_TEXTURE_WIDTH = 512
 const MARGIN = 2
 
+/** スリットの中心の高さ（上面の楕円の中心から奥側へ、上面の半径 ry の何倍か） */
+export const SLIT_CENTER_RATIO = 0.28
+
+/**
+ * 板の差し込み口（スリット）の中心の y。台座テクスチャの描画と、板をここで水平に切る位置（BattleScreen）が
+ * 同じ値を使い、ずれないようにする (#760)。`cyTop` は上面の楕円の中心の y、`ry` は上面の縦半径（同じ座標系・単位）。
+ */
+export function computeSlitY(cyTop: number, ry: number): number {
+  return cyTop - ry * SLIT_CENTER_RATIO
+}
+
 type BaseParams = Pick<
   AcrylicParams,
   | 'baseHeightRatio'
@@ -134,7 +145,7 @@ export function renderAcrylicBase(texW: number, params: BaseParams): BaseRaster 
         const ring = smooth(0.9, 0.99, qTop) * coverTop
         over(rimC, params.lineAlpha * ring * (0.25 + 0.75 * lit * lit))
         // 4) 板の差し込み口: 奥側の細いスリット（暗い透明 + 手前側の縁に明るい線）
-        const sy = cyTop - ry * 0.28
+        const sy = computeSlitY(cyTop, ry)
         const qSlit = Math.hypot(dx / (rx * 0.5), (py - sy) / (ry * 0.075))
         const slit = clamp01(0.5 - (qSlit - 1) / 0.25)
         over(SLIT, params.slitAlpha * slit * coverTop)

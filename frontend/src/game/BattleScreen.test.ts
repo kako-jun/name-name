@@ -37,6 +37,7 @@ import {
   computeSideBattleLayout,
   estimateTextWidth,
 } from './battleLayout'
+import { computeSlitY } from './acrylicBase'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
 import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 
@@ -1059,6 +1060,40 @@ describe('BattleScreen: acrylic (#737)', () => {
       // 共有テクスチャは view の破棄で壊さない
       s.destroy({ children: true })
       expect(baseTex.destroyed).toBe(false)
+    })
+
+    it('板はスリットの高さで水平に切られる（スリットと同じ computeSlitY の値）・スプライトの足元は切らない (#760)', async () => {
+      okLoad()
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const plate = v.acrylicPlate!
+      const mask = plate.mask as Graphics
+      expect(mask).toBeInstanceOf(Graphics)
+      const g = defaultGeometry(slotSize())
+      const slitY = computeSlitY(g.base!.cy, g.base!.ry)
+      const b = mask.getLocalBounds()
+      // 板のローカル座標（縮尺前）→ container 座標へ戻した mask の下端 = スリットの y
+      expect(plate.y + b.maxY * plate.scale.y).toBeCloseTo(slitY, 6)
+      expect(b.minY).toBe(0)
+      // スプライトには mask をかけない（足は台座の上に立って見える）
+      expect(v.sprite!.mask ?? null).toBeNull()
+      // 切る位置は台座の上面の中心より奥側（足元 g.base.cy より上）
+      expect(slitY).toBeLessThan(g.base!.cy)
+    })
+
+    it('hasBase=false の板は切られない（mask は板全体）(#760)', async () => {
+      okLoad()
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { hasBase: false },
+        })
+      )
+      await flushPromises()
+      const plate = internals(s).enemyViews[0].acrylicPlate!
+      const b = (plate.mask as Graphics).getLocalBounds()
+      expect(b.maxY).toBeCloseTo(plate.texture.height, 6)
     })
 
     it('成功: 板は sprite と同じ倍率で、pad ぶん左上へ広がって敷かれる (#760)', async () => {
