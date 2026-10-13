@@ -195,7 +195,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 
 ## 戦闘画面サンプルページ（開発用・#749）
 
-戦闘画面（`BattleScreen`）の見た目を、ゲーム本編を経由せずに確認・比較するための独立ページ。ビルド成果物の `battle-sample.html` として出力される（本編からはリンクしない）。本編と同じ `BattleEngine` + `BattleScreen` を載せるので、`layout` / `background` / `spriteStyle` の描画は本編と同じコードパス。
+戦闘画面（`BattleScreen`）の見た目を、ゲーム本編を経由せずに確認・比較するための独立ページ。ビルド成果物の `battle-sample.html` として出力される（本編からはリンクしない）。本編と同じ `BattleEngine` + `BattleScreen` を載せるので、`layout` / `background` / `spriteStyle` / `windowStyle` の描画は本編と同じコードパス。
 
 - 開発サーバー: `http://localhost:7374/battle-sample.html`。ビルド後は `dist/battle-sample.html` を静的配信して開く
 - 設定 JSON は `?config=<URL>` で渡す（絶対 URL、またはこのページからの相対 URL）。なければ内蔵既定（色四角のスプライト）で表示する
@@ -207,6 +207,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 |---|---|
 | layout | `front` / `side` |
 | spriteStyle | `none` / `acrylic` |
+| windowStyle | `dark` / `ff-blue`（パネルの配色テーマ。ブリンク比較の対象に含まれる） |
 | 背景あり | 設定 JSON に `background` があるときだけ切り替え可 |
 | 味方 / 敵 | 1〜4 人（設定の件数を超えたぶんは内蔵既定で補う）。`layout=front` のときは味方人数を選べない（下記） |
 | 画面サイズ | `360x640` / `800x450` / `1280x720` / `640x360`（論理サイズ） |
@@ -226,6 +227,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 {
   "layout": "side",
   "spriteStyle": "acrylic",
+  "windowStyle": "ff-blue",
   "background": "battle/background.png",
   "party": [
     { "id": "a", "name": "アリス", "hp": 30, "maxHp": 30, "mp": 8, "maxMp": 8, "atk": 8, "def": 4, "agi": 6, "sprite": "battle/party-a.png" },
@@ -237,8 +239,8 @@ no-op で吸収する（位置を変えない、fail-soft）。
 }
 ```
 
-- トップレベルの項目（`layout` / `spriteStyle` / `background` / `party` / `enemies`）と、各キャラのフィールドはすべて省略可。省略は内蔵既定で補う
-- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `background` / `party` / `enemies`）と、各キャラのフィールドはすべて省略可。省略は内蔵既定で補う
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
 - `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
 - 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある
