@@ -5328,6 +5328,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         telop_reserve: None,
         battle_layout: None,
         battle_background: None,
+        sprite_style: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10500,6 +10501,7 @@ fn telop_test_doc_base() -> Document {
         telop_reserve: None,
         battle_layout: None,
         battle_background: None,
+        sprite_style: None,
         chapters: vec![],
     }
 }

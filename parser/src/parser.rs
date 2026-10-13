@@ -43,6 +43,7 @@ pub fn parse(input: &str) -> Document {
     let mut telop_reserve: Option<bool> = None;
     let mut battle_layout: Option<String> = None;
     let mut battle_background: Option<String> = None;
+    let mut sprite_style: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -225,6 +226,14 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_background = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("sprite_style:") {
+                // RPG 戦闘スプライトの表示スタイル (#737)。`none` / `acrylic` の2択想定だが、値は parser では
+                // バリデーションせず生文字列で透過する（battle_layout と同じ流儀）。
+                // runtime 側で未知値・空文字は none にフォールバックする。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    sprite_style = Some(v);
                 }
             }
             pos += 1;
@@ -1051,6 +1060,7 @@ pub fn parse(input: &str) -> Document {
         telop_reserve,
         battle_layout,
         battle_background,
+        sprite_style,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
