@@ -210,6 +210,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
 | windowStyle | `dark` / `ff-blue`（パネルの配色テーマ。ブリンク比較の対象に含まれる） |
 | 背景を落とす | `on`（既定）/ `off`。背景スプライトにだけ彩度・明度を落とすフィルタ（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。ブリンク比較の対象に含まれる |
 | 被写界深度（手前ぼかし） | `on` / `off`（既定）。背景スプライトにだけ、画面の下側ほど強くぼかす縦グラデーション（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。「背景を落とす」とは独立。ブリンク比較の対象に含まれる |
+| ドット絵（nearest） | `on` / `off`（既定）。`on` で戦闘のテクスチャ（背景・前景・味方・敵）を nearest のまま使う（本編の frontmatter `pixel_art: true`・#466 と同じ）。`off` は mipmap＋linear で縮小をなめらかにする（#760）。ブリンク比較の対象に含まれる |
 | ログを1文字ずつ表示 | `on` / `off`（既定）。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない。ただし ATB が `on` のときはコマンドのタップで全文表示せずそのまま実行し、全文表示はログ帯のタップだけ）。ブリンク比較の対象に含まれる |
 | ATB（ゲージ順に行動） | `on` / `off`（既定）。`on` のとき味方・敵にゲージが付き、AGI に比例して溜まり、満タンの順に行動する（#205）。各ステータス行の下端の細い棒がゲージで、番の味方は名前の左に「▶」が付いて黄色になる。時間はこのページの ticker から `BattleScreen.tick` で渡す。切り替えると戦闘が最初からやり直しになる。ブリンク比較の対象に含まれる |
 | ATB 進行 | `待機（コマンド選択中は停止）`（既定）/ `アクティブ（止めない）`。ATB が `on` のときだけ選べる（#205）。ブリンク比較の対象に含まれる |
@@ -239,6 +240,7 @@ no-op で吸収する（位置を変えない、fail-soft）。
   "windowStyle": "ff-blue",
   "backgroundTone": "on",
   "backgroundDof": "off",
+  "pixelArt": "off",
   "logTypewriter": "off",
   "atb": "off",
   "atbMode": "wait",
@@ -256,8 +258,8 @@ no-op で吸収する（位置を変えない、fail-soft）。
 }
 ```
 
-- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `logTypewriter` / `atb` / `atbMode` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
-- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`atb` が `on`/`off` 以外、`atbMode` が `wait`/`active` 以外、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `pixelArt` / `logTypewriter` / `atb` / `atbMode` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`pixelArt` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`atb` が `on`/`off` 以外、`atbMode` が `wait`/`active` 以外、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
 - `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
 - 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある

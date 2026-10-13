@@ -185,6 +185,13 @@ async function main(): Promise<void> {
   dofChk.addEventListener('change', () => change({ backgroundDof: dofChk.checked ? 'on' : 'off' }))
   dofLabel.append(dofChk, '被写界深度（手前ぼかし）')
   tb.appendChild(dofLabel)
+  const pixelLabel = document.createElement('label')
+  const pixelChk = document.createElement('input')
+  pixelChk.type = 'checkbox'
+  pixelChk.id = 'tb-pixel-art'
+  pixelChk.addEventListener('change', () => change({ pixelArt: pixelChk.checked ? 'on' : 'off' }))
+  pixelLabel.append(pixelChk, 'ドット絵（nearest）')
+  tb.appendChild(pixelLabel)
   const logTwLabel = document.createElement('label')
   const logTwChk = document.createElement('input')
   logTwChk.type = 'checkbox'
@@ -284,6 +291,7 @@ async function main(): Promise<void> {
     formationSel.value = v.formation
     toneChk.checked = v.backgroundTone === 'on'
     dofChk.checked = v.backgroundDof === 'on'
+    pixelChk.checked = v.pixelArt === 'on'
     logTwChk.checked = v.logTypewriter === 'on'
     atbChk.checked = v.atb === 'on'
     atbModeSel.value = v.atbMode
