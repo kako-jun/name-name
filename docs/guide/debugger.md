@@ -132,6 +132,8 @@ type Step =
 
 任意のシーン・フラグ・インデックスから起動する。history をリセットし、flags は**置換**（省略時は空でクリア）。不正な `sceneId` は完全に no-op。
 
+> 現状の制限: `startFrom` は遅延ロード（`missingSceneResolver`）を通らない。そのため、まだ読み込まれていないサブ MD のシーンを直接指定すると、何もせずに終わる。URL の `?debug_scene=` は `PlayerScreen` が事前に読み込むので動く。入場 API を「進行」と「新規開始」に分けて解消する設計は [ADR 0003](../adr/0003-scene-entry-kinds.md)（#734）にある。
+
 ```ts
 import type { StartFromOptions } from '../game/GameState'
 
