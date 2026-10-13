@@ -183,6 +183,15 @@ export interface RPGProject {
   spells?: Record<string, import('../types').SpellDef>
   /** 同上、パーティメンバー (#175) */
   party?: Record<string, import('../types').PartyMemberDef>
+  /** `party` のキーのドキュメント上の出現順 (#736)。整数風 ID でも定義順を保つために別持ち */
+  partyOrder?: string[]
+  /**
+   * 戦闘画面のレイアウト (#736)。frontmatter `battle_layout:` 由来。`'front'`（Undertale 風正面配置）/
+   * `'side'`（FF 系サイドビュー）。未指定は `'front'` 扱い（後方互換）。
+   */
+  battleLayout?: 'front' | 'side'
+  /** 戦闘画面の背景画像パス (#736)。frontmatter `battle_background:` 由来。未指定はフィールドを暗くして残す */
+  battleBackground?: string
 }
 
 /**

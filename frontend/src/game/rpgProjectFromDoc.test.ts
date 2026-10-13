@@ -1355,3 +1355,102 @@ describe('mergeMasterDataFromDocs (#238)', () => {
     expect(project.monsters?.['__proto__']?.name).toBe('汚染モンスター')
   })
 })
+
+describe('rpgProjectFromDoc: battle_layout / battle_background (#736)', () => {
+  const withBattle = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it('battle_layout: "side" → battleLayout === "side"', () => {
+    expect(rpgProjectFromDoc(withBattle({ battle_layout: 'side' }))!.battleLayout).toBe('side')
+  })
+
+  it('battle_layout 未指定 / null → "front"', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleLayout).toBe('front')
+    expect(rpgProjectFromDoc(withBattle({ battle_layout: null }))!.battleLayout).toBe('front')
+  })
+
+  it('battle_layout が未知値 → "front"', () => {
+    expect(rpgProjectFromDoc(withBattle({ battle_layout: 'foo' }))!.battleLayout).toBe('front')
+  })
+
+  it('battle_background が battleBackground に通る', () => {
+    const p = rpgProjectFromDoc(withBattle({ battle_background: 'bg/forest.webp' }))
+    expect(p!.battleBackground).toBe('bg/forest.webp')
+  })
+
+  it('battle_background が null / 未指定 → undefined', () => {
+    expect(rpgProjectFromDoc(withBattle({ battle_background: null }))!.battleBackground).toBe(
+      undefined
+    )
+    expect(rpgProjectFromDoc(makeDoc())!.battleBackground).toBeUndefined()
+  })
+
+  it('既存フィールドは battle_* の有無で変化しない（回帰）', () => {
+    const base = rpgProjectFromDoc(makeDoc())!
+    const withB = rpgProjectFromDoc(
+      withBattle({ battle_layout: 'side', battle_background: 'bg/a.webp' })
+    )!
+    const strip = (p: RPGProject): Omit<RPGProject, 'battleLayout' | 'battleBackground'> => {
+      const copy: Partial<RPGProject> = { ...p }
+      delete copy.battleLayout
+      delete copy.battleBackground
+      return copy as Omit<RPGProject, 'battleLayout' | 'battleBackground'>
+    }
+    const restBase = strip(base)
+    const restWith = strip(withB)
+    expect(restWith).toEqual(restBase)
+  })
+
+  it('applyRpgProjectToDoc の往復で doc の battle_layout / battle_background が保持される', () => {
+    const doc = withBattle({ battle_layout: 'side', battle_background: 'bg/a.webp' })
+    const project = rpgProjectFromDoc(doc)!
+    const updated = applyRpgProjectToDoc(doc, project, 'map-village')
+    expect(updated.battle_layout).toBe('side')
+    expect(updated.battle_background).toBe('bg/a.webp')
+    const again = rpgProjectFromDoc(updated)!
+    expect(again.battleLayout).toBe('side')
+    expect(again.battleBackground).toBe('bg/a.webp')
+  })
+
+  it('applyRpgProjectToDoc: シーンが無く新規追加する経路でも battle_* が保持される', () => {
+    const doc: EventDocument = {
+      ...makeDoc(),
+      battle_layout: 'side',
+      battle_background: 'bg/a.webp',
+      chapters: [],
+    }
+    const project = rpgProjectFromDoc(makeDoc())!
+    const updated = applyRpgProjectToDoc(doc, project)
+    expect(updated.battle_layout).toBe('side')
+    expect(updated.battle_background).toBe('bg/a.webp')
+  })
+})
+
+describe('partyOrder: パーティの定義順 (#736)', () => {
+  const pm = (id: string) => ({
+    PartyMember: { id, name: id, hp: 10, mp: 0, atk: 1, def: 1, agi: 1 },
+  })
+  function docOf(ids: string[]): EventDocument {
+    return {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'c',
+          hidden: false,
+          default_bgm: null,
+          scenes: [{ id: 's', title: 's', view: 'TopDown', events: ids.map(pm) }],
+        },
+      ],
+    } as unknown as EventDocument
+  }
+
+  it('整数風 ID でもドキュメント上の出現順を保つ（重複は初出位置）', () => {
+    const m = collectMasterData(docOf(['b', '2', 'a', '1', 'b']))
+    expect(m.partyOrder).toEqual(['b', '2', 'a', '1'])
+  })
+
+  it('複数 doc の統合では doc の順に連結し重複は初出位置', () => {
+    const m = mergeMasterDataFromDocs([docOf(['b', '2']), docOf(['1', 'b', 'a'])])
+    expect(m.partyOrder).toEqual(['b', '2', '1', 'a'])
+  })
+})

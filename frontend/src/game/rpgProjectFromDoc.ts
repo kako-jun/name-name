@@ -17,6 +17,7 @@ import type {
   UiRpgTrigger,
 } from '../types/rpg'
 import { safeAssign, safeAssignAll } from './ownProperty'
+import { normalizeBattleLayout } from './battleLayout'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -78,11 +79,14 @@ export function collectMasterData(doc: EventDocument): {
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
   party: Record<string, PartyMemberDef>
+  /** party の ID を定義順（初出順・重複なし）で並べたもの (#736) */
+  partyOrder: string[]
 } {
   const monsters: Record<string, MonsterDef> = {}
   const items: Record<string, ItemDef> = {}
   const spells: Record<string, SpellDef> = {}
   const party: Record<string, PartyMemberDef> = {}
+  const partyOrder: string[] = []
   for (const chapter of doc.chapters) {
     for (const scene of chapter.scenes) {
       for (const ev of scene.events) {
@@ -91,11 +95,14 @@ export function collectMasterData(doc: EventDocument): {
         if ('Monster' in ev) safeAssign(monsters, ev.Monster.id, ev.Monster)
         else if ('Item' in ev) safeAssign(items, ev.Item.id, ev.Item)
         else if ('Spell' in ev) safeAssign(spells, ev.Spell.id, ev.Spell)
-        else if ('PartyMember' in ev) safeAssign(party, ev.PartyMember.id, ev.PartyMember)
+        else if ('PartyMember' in ev) {
+          safeAssign(party, ev.PartyMember.id, ev.PartyMember)
+          if (!partyOrder.includes(ev.PartyMember.id)) partyOrder.push(ev.PartyMember.id)
+        }
       }
     }
   }
-  return { monsters, items, spells, party }
+  return { monsters, items, spells, party, partyOrder }
 }
 
 /**
@@ -113,12 +120,14 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
   party: Record<string, PartyMemberDef>
+  partyOrder: string[]
 } {
   const merged = {
     monsters: {} as Record<string, MonsterDef>,
     items: {} as Record<string, ItemDef>,
     spells: {} as Record<string, SpellDef>,
     party: {} as Record<string, PartyMemberDef>,
+    partyOrder: [] as string[],
   }
   for (const doc of docs) {
     const m = collectMasterData(doc)
@@ -128,6 +137,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     safeAssignAll(merged.items, m.items)
     safeAssignAll(merged.spells, m.spells)
     safeAssignAll(merged.party, m.party)
+    for (const id of m.partyOrder) if (!merged.partyOrder.includes(id)) merged.partyOrder.push(id)
   }
   return merged
 }
@@ -226,6 +236,9 @@ export function rpgProjectFromDoc(
     items: master.items,
     spells: master.spells,
     party: master.party,
+    partyOrder: master.partyOrder,
+    battleLayout: normalizeBattleLayout(doc.battle_layout),
+    battleBackground: doc.battle_background ?? undefined,
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }

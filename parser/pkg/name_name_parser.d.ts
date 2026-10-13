@@ -510,6 +510,20 @@ export interface Document {
      * 未指定・非真偽値は None（既定 false 相当、後方互換）。frontmatter `telop_reserve:` から流す。
      */
     telop_reserve?: boolean;
+    /**
+     * RPG 戦闘画面のレイアウト (#736)。`\"front\"`（既定・後方互換＝Undertale 風の正面配置）/
+     * `\"side\"`（FF 系サイドビュー＝敵群が左・味方パーティが右・下にコマンドと HP パネル）の2択。
+     * 値は parser でバリデーションせず生文字列で透過する（`dialog_style` / `header` と同じ流儀）。
+     * 未知値・空文字は None 扱いとし、runtime 側で `\"front\"` にフォールバックする（後方互換）。
+     * frontmatter `battle_layout:` から流す。
+     */
+    battle_layout?: string;
+    /**
+     * RPG 戦闘画面の背景画像パス (#736)。assets 相対パスを生文字列で透過する。
+     * 未指定・空文字は None（従来どおりフィールドを半透明黒で暗くして残す、後方互換）。
+     * frontmatter `battle_background:` から流す。
+     */
+    battle_background?: string;
     chapters: Chapter[];
 }
 

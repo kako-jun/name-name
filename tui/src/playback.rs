@@ -2314,6 +2314,8 @@ mod tests {
             sentence_per_page: None,
             pixel_art: None,
             telop_reserve: None,
+            battle_layout: None,
+            battle_background: None,
             chapters,
         }
     }

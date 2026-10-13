@@ -224,3 +224,34 @@ describe('rollEncounter (Issue #172)', () => {
     expect(enemies![0].gold).toBe(slime.gold)
   })
 })
+
+describe('rollEncounter: sprite の写し (#736)', () => {
+  const roll = (groups: string[], masters: Record<string, MonsterDef>) =>
+    rollEncounter({ rate: 1, groups, masters, rng: () => 0 })
+
+  it('MonsterDef.sprite を指定すると BattleEntity.sprite に写る', () => {
+    const enemies = roll(['slime'], { slime: { ...slime, sprite: 'monsters/slime.webp' } })
+    expect(enemies![0].sprite).toBe('monsters/slime.webp')
+  })
+
+  it('MonsterDef.sprite 未指定なら BattleEntity.sprite は undefined', () => {
+    const enemies = roll(['slime'], { slime })
+    expect(enemies![0].sprite).toBeUndefined()
+  })
+
+  it('複数体の組では各体の sprite が個別に写る', () => {
+    const enemies = roll(['slime+ghost'], {
+      slime: { ...slime, sprite: 'm/slime.webp' },
+      ghost: { ...ghost, sprite: 'm/ghost.webp' },
+    })
+    expect(enemies!.map((e) => e.sprite)).toEqual(['m/slime.webp', 'm/ghost.webp'])
+  })
+
+  it('片方だけ sprite 指定の組でも取り違えない', () => {
+    const enemies = roll(['slime+ghost'], {
+      slime,
+      ghost: { ...ghost, sprite: 'm/ghost.webp' },
+    })
+    expect(enemies!.map((e) => e.sprite)).toEqual([undefined, 'm/ghost.webp'])
+  })
+})

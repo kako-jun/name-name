@@ -51,6 +51,7 @@ export function rollEncounter(input: {
       agi: def.agi,
       exp: def.exp,
       gold: def.gold,
+      sprite: def.sprite,
     })
   }
   return enemies.length > 0 ? enemies : null

@@ -1824,6 +1824,66 @@ describe('parseMarkdown + normalizeDocument: telop_reserve が normalize を生�
   })
 })
 
+describe('parseMarkdown + normalizeDocument: battle_layout / battle_background が normalize を生き残る (#736)', () => {
+  // telop_reserve (#674) と同じ流儀。normalizeDocument の列挙に書き忘れると Rust 側は正しく parse
+  // しているのに wasm 経由で undefined になり、戦闘画面のレイアウト指定が runtime に届かない。
+  function docWith(...lines: string[]): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+  }
+
+  it('battle_layout: side → doc.battle_layout === "side"', async () => {
+    const doc = await parseMarkdown(docWith('battle_layout: side'))
+    expect(doc.battle_layout).toBe('side')
+  })
+
+  it('battle_background → doc.battle_background にパスがそのまま届く', async () => {
+    const doc = await parseMarkdown(docWith('battle_background: "bg/forest.webp"'))
+    expect(doc.battle_background).toBe('bg/forest.webp')
+  })
+
+  it('両方省略 → どちらも null（未指定は下流で front・背景なし）', async () => {
+    const doc = await parseMarkdown(docWith())
+    expect(doc.battle_layout).toBeNull()
+    expect(doc.battle_background).toBeNull()
+  })
+
+  it('空文字指定 → null に倒れる', async () => {
+    const doc = await parseMarkdown(docWith('battle_layout: ""', 'battle_background: ""'))
+    expect(doc.battle_layout).toBeNull()
+    expect(doc.battle_background).toBeNull()
+  })
+
+  it('両方指定しても値が混ざらない', async () => {
+    const doc = await parseMarkdown(
+      docWith('battle_layout: side', 'battle_background: bg/cave.webp')
+    )
+    expect(doc.battle_layout).toBe('side')
+    expect(doc.battle_background).toBe('bg/cave.webp')
+  })
+
+  it('2 章に増やして emit → 再 parse しても値が保持される（実 wasm の往復）', async () => {
+    const doc = await parseMarkdown(docWith('battle_layout: side', 'battle_background: bg/a.webp'))
+    const doc2 = { ...doc, chapters: [doc.chapters[0], { ...doc.chapters[0], number: 2 }] }
+    const emitted = await emitMarkdown(doc2)
+    const reparsed = await parseMarkdown(emitted)
+    expect(reparsed.battle_layout).toBe('side')
+    expect(reparsed.battle_background).toBe('bg/a.webp')
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: 舞台構造の背景板が normalize を生き残る (#683)', () => {
   // 実 wasm 境界（Assets.load 等をモックしないユニットテストとは別に、tsify のシリアライズ・
   // normalizeEvents の undefined 正規化まで含めた実経路）で `[背景板:]` を検証する。

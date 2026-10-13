@@ -205,6 +205,12 @@ export interface BattleEntity {
   exp?: number
   /** 倒したときに落とすゴールド（敵側のみ） */
   gold?: number
+  /**
+   * 戦闘画面に描くスプライト画像のパス (#736)。`MonsterDef.sprite` / `PartyMemberDef.sprite` を
+   * 戦闘への組み立て時に写す。未指定・読み込み失敗時は色四角で描く（サイドビューのみ参照、
+   * 戦闘エンジンは読まない）。
+   */
+  sprite?: string
 }
 
 /**

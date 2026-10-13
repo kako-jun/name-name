@@ -5326,6 +5326,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         header: None,
         fullscreen_image: None,
         telop_reserve: None,
+        battle_layout: None,
+        battle_background: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10496,6 +10498,8 @@ fn telop_test_doc_base() -> Document {
         header: None,
         fullscreen_image: None,
         telop_reserve: None,
+        battle_layout: None,
+        battle_background: None,
         chapters: vec![],
     }
 }
@@ -10543,6 +10547,173 @@ title: "テスト"
     assert!(
         !emitted.contains("telop_reserve"),
         "未指定なら emit にキー自体が出ない: {emitted}"
+    );
+}
+
+// ---- #736: battle_layout / battle_background (frontmatter 透過) ----
+
+fn battle_doc(extra_frontmatter: &str) -> String {
+    format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n{extra_frontmatter}---\n\n## 1-1: シーン\n\nナレ。\n"
+    )
+}
+
+#[test]
+fn test_battle_layout_side_parses() {
+    let doc = parser::parse(&battle_doc("battle_layout: \"side\"\n"));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+}
+
+#[test]
+fn test_battle_layout_unquoted_value_parses() {
+    let doc = parser::parse(&battle_doc("battle_layout: side\n"));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+}
+
+#[test]
+fn test_battle_layout_unknown_value_passes_through_parser() {
+    // バリデーションは runtime 側 (normalizeBattleLayout) の責務。parser は素通し。
+    let doc = parser::parse(&battle_doc("battle_layout: foo\n"));
+    assert_eq!(doc.battle_layout.as_deref(), Some("foo"));
+}
+
+#[test]
+fn test_battle_layout_surrounding_whitespace_is_trimmed() {
+    let doc = parser::parse(&battle_doc("battle_layout:    side   \n"));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+    let doc = parser::parse(&battle_doc("battle_background:   \"bg/x.webp\"  \n"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/x.webp"));
+}
+
+#[test]
+fn test_battle_layout_empty_is_none() {
+    let doc = parser::parse(&battle_doc("battle_layout:\n"));
+    assert_eq!(doc.battle_layout, None);
+    let doc = parser::parse(&battle_doc("battle_layout: \"\"\n"));
+    assert_eq!(doc.battle_layout, None);
+}
+
+#[test]
+fn test_battle_background_empty_is_none() {
+    let doc = parser::parse(&battle_doc("battle_background:\n"));
+    assert_eq!(doc.battle_background, None);
+    let doc = parser::parse(&battle_doc("battle_background: \"\"\n"));
+    assert_eq!(doc.battle_background, None);
+}
+
+#[test]
+fn test_battle_layout_round_trips() {
+    let doc = parser::parse(&battle_doc("battle_layout: \"side\"\n"));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_layout: \"side\""),
+        "emit に battle_layout が含まれる: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_layout.as_deref(), Some("side"));
+}
+
+#[test]
+fn test_battle_background_round_trips() {
+    let doc = parser::parse(&battle_doc("battle_background: \"bg/forest.webp\"\n"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/forest.webp"));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_background: \"bg/forest.webp\""),
+        "emit に battle_background が含まれる: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_background.as_deref(), Some("bg/forest.webp"));
+}
+
+#[test]
+fn test_battle_fields_both_specified_do_not_mix() {
+    let doc = parser::parse(&battle_doc(
+        "battle_layout: side\nbattle_background: bg/cave.webp\n",
+    ));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/cave.webp"));
+}
+
+#[test]
+fn test_battle_fields_unspecified_are_none_and_omitted_from_emit() {
+    let doc = parser::parse(&battle_doc(""));
+    assert_eq!(doc.battle_layout, None);
+    assert_eq!(doc.battle_background, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        !emitted.contains("battle_layout") && !emitted.contains("battle_background"),
+        "未指定なら emit にキー自体が出ない: {emitted}"
+    );
+}
+
+#[test]
+fn test_battle_fields_coexist_with_header_without_interference() {
+    let doc = parser::parse(&battle_doc(
+        "header: \"none\"\nbattle_layout: side\nbattle_background: bg/a.webp\ntelop_reserve: true\n",
+    ));
+    assert_eq!(doc.header.as_deref(), Some("none"));
+    assert_eq!(doc.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc.battle_background.as_deref(), Some("bg/a.webp"));
+    assert_eq!(doc.telop_reserve, Some(true));
+    let doc2 = parser::parse(&emitter::emit(&doc));
+    assert_eq!(doc2.header, doc.header);
+    assert_eq!(doc2.battle_layout, doc.battle_layout);
+    assert_eq!(doc2.battle_background, doc.battle_background);
+    assert_eq!(doc2.telop_reserve, doc.telop_reserve);
+}
+
+#[test]
+fn test_battle_fields_survive_emit_with_multiple_chapters() {
+    // emit は章ごとに frontmatter を出す。各章の frontmatter から再 parse しても壊れず、値が保持される。
+    let mut doc = parser::parse(&battle_doc(
+        "battle_layout: side\nbattle_background: bg/a.webp\n",
+    ));
+    let mut ch2 = doc.chapters[0].clone();
+    ch2.number = 2;
+    ch2.title = "二章".to_string();
+    doc.chapters.push(ch2);
+    let emitted = emitter::emit(&doc);
+    assert_eq!(
+        emitted.matches("battle_layout: \"side\"").count(),
+        2,
+        "章ごとの frontmatter に出る: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc2.battle_background.as_deref(), Some("bg/a.webp"));
+    let emitted2 = emitter::emit(&doc2);
+    let doc3 = parser::parse(&emitted2);
+    assert_eq!(doc3.battle_layout.as_deref(), Some("side"));
+    assert_eq!(doc3.battle_background.as_deref(), Some("bg/a.webp"));
+}
+
+#[test]
+fn test_battle_background_path_with_inner_quote_is_stripped_on_emit() {
+    // emit は background_color と同じく値内の `"` を除去する（出力 frontmatter を壊さない）。
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.battle_background = Some("bg/a\"b.webp".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_background: \"bg/ab.webp\"\n"),
+        "`\"` が除去されて出力される: {emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.battle_background.as_deref(), Some("bg/ab.webp"));
+}
+
+#[test]
+fn test_battle_layout_inner_quote_is_stripped_on_emit() {
+    let mut doc = parser::parse(&battle_doc(""));
+    doc.battle_layout = Some("si\"de".to_string());
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_layout: \"side\"\n"),
+        "`\"` が除去されて出力される: {emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).battle_layout.as_deref(),
+        Some("side")
     );
 }
 

@@ -41,6 +41,8 @@ pub fn parse(input: &str) -> Document {
     let mut header: Option<String> = None;
     let mut fullscreen_image: Option<bool> = None;
     let mut telop_reserve: Option<bool> = None;
+    let mut battle_layout: Option<String> = None;
+    let mut battle_background: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -210,6 +212,20 @@ pub fn parse(input: &str) -> Document {
                 // テロップ帯の予約 (#674)。`true` / `false` のみ受ける。空・不正値は None
                 // （runtime 既定 false ＝本文の上にテロップが半透明で重なる、後方互換）。
                 telop_reserve = parse_bool_kv(&unquote(val.trim()));
+            } else if let Some(val) = line.strip_prefix("battle_layout:") {
+                // RPG 戦闘画面のレイアウト (#736)。`front` / `side` の2択想定だが、値は parser では
+                // バリデーションせず生文字列で透過する（header / dialog_style と同じ流儀）。
+                // runtime 側で未知値・空文字は front にフォールバックする。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_layout = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_background:") {
+                // RPG 戦闘画面の背景画像パス (#736)。空は None（従来どおり半透明黒で暗くする）。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_background = Some(v);
+                }
             }
             pos += 1;
         }
@@ -1033,6 +1049,8 @@ pub fn parse(input: &str) -> Document {
         header,
         fullscreen_image,
         telop_reserve,
+        battle_layout,
+        battle_background,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
