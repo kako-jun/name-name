@@ -69,6 +69,7 @@ const TEXT_X_WITH_PORTRAIT = PORTRAIT_X + PORTRAIT_SIZE + PORTRAIT_MARGIN
 
 // private フィールドにアクセスするための型
 interface DialogBoxInternals {
+  applyIndicatorFrame(): void
   portraitFrame: { visible: boolean } | null
   dialogText: { x: number; text: string; visible: boolean; style: { fill: unknown } }
   typewriter: { fullText: string; displayedCharCount: number; acc: number }
@@ -2470,6 +2471,78 @@ describe('DialogBox ▼グリフの縦スケール (#447 追加要望2)', () => 
     box.setIndicatorKind('pageturn')
     expect(si(box).indicatorGlyph.scale.y).toBe(before)
     expect(si(box).indicatorGlyph.scale.y).toBeLessThan(1)
+    box.dispose()
+  })
+})
+
+// =====================================================================================
+// #774: DialogBox が destroy された後に画像インジケータの fetch が解決/失敗しても例外を投げない
+//
+// 画像（text-next-*.webp 等）が 404 の作品では Assets.load の reject が遅れて届き、その時点で
+// 親（Application / Container）が destroy({ children: true }) 済みだと indicatorSprite の scale が
+// null になっており、applyIndicatorFrame の width 設定で
+// "Cannot read properties of null (reading 'x')" が pageerror として上がっていた。
+// =====================================================================================
+describe('DialogBox #774 destroy 後の画像インジケータ解決で例外を投げない', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function mockLoadQueue() {
+    const calls: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> = []
+    vi.spyOn(Assets, 'load').mockImplementation(
+      (() =>
+        new Promise((resolve, reject) => {
+          calls.push({ resolve, reject })
+        })) as unknown as typeof Assets.load
+    )
+    return calls
+  }
+
+  it('destroy 後に Assets.load が reject しても applyIndicatorFrame が例外を投げない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const calls = mockLoadQueue()
+    const box = makeRpgBox()
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('next')
+    box.destroy({ children: true })
+
+    calls[0].reject(new Error('404'))
+    await expect(
+      (async () => {
+        await flushPromises()
+        await flushPromises()
+      })()
+    ).resolves.toBeUndefined()
+    expect(() => asInternals(box).applyIndicatorFrame()).not.toThrow()
+  })
+
+  it('destroy 後に Assets.load が成功しても例外を投げない', async () => {
+    const calls = mockLoadQueue()
+    const box = makeRpgBox()
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('next')
+    box.destroy({ children: true })
+
+    // 失敗時は .then 内の例外が unhandled rejection になり vitest が run を落とす。
+    calls.forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    await flushPromises()
+    expect(() => asInternals(box).applyIndicatorFrame()).not.toThrow()
+  })
+
+  it('ロード成功時（destroy 前）は従来どおり寸法が設定され sprite が表示される', async () => {
+    const calls = mockLoadQueue()
+    const box = makeRpgBox()
+    box.setIndicatorAssetBaseUrl('/asset-base')
+    box.setIndicatorKind('next')
+    calls.forEach((c) => c.resolve(Texture.WHITE))
+    await flushPromises()
+    await flushPromises()
+    const i = asInternals(box)
+    expect(i.indicatorSprite.visible).toBe(true)
+    expect(i.indicatorSprite.width).toBeGreaterThan(0)
+    expect(i.indicatorGlyph.visible).toBe(false)
     box.dispose()
   })
 })
