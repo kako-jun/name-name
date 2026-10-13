@@ -843,6 +843,13 @@ export interface EventDocument {
    *  null/undefined・false は従来どおり（テロップは本文の上に半透明で重なる）。
    *  frontmatter `telop_reserve:` から流す。 */
   telop_reserve?: boolean | null
+  /** RPG 戦闘画面のレイアウト (#736)。`"front"`（既定・後方互換）/ `"side"`（FF 系サイドビュー）。
+   *  null/undefined・未知値は `"front"` にフォールバック（`header` と同じ後方互換パターン）。
+   *  frontmatter `battle_layout:` から流す。 */
+  battle_layout?: string | null
+  /** RPG 戦闘画面の背景画像パス (#736)。null/undefined は従来どおりフィールドを暗くして残す。
+   *  frontmatter `battle_background:` から流す。 */
+  battle_background?: string | null
   chapters: EventChapter[]
 }
 

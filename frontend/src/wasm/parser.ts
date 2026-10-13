@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -398,6 +398,11 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // ここを忘れると Rust 側は正しくパースされているのに wasm 経由で undefined になり、
     // テストは緑のまま本番だけ壊れる（#310/#378/#448/#466/#530 と同じ事故パターン）。
     telop_reserve: doc.telop_reserve ?? null,
+    // RPG 戦闘画面のレイアウト / 背景画像 (#736)。header と同じく空文字は null に倒す
+    // （未指定は runtime 既定 "front"・背景なし）。ここを忘れると Rust 側は正しくパースされているのに
+    // wasm 経由で undefined になり、テストは緑のまま本番だけ壊れる（#310/#378 と同じ事故パターン）。
+    battle_layout: nullIfEmpty(doc.battle_layout),
+    battle_background: nullIfEmpty(doc.battle_background),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

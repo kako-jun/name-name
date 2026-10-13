@@ -17,6 +17,7 @@ import type {
   UiRpgTrigger,
 } from '../types/rpg'
 import { safeAssign, safeAssignAll } from './ownProperty'
+import { normalizeBattleLayout } from './battleLayout'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -226,6 +227,8 @@ export function rpgProjectFromDoc(
     items: master.items,
     spells: master.spells,
     party: master.party,
+    battleLayout: normalizeBattleLayout(doc.battle_layout),
+    battleBackground: doc.battle_background ?? undefined,
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }
