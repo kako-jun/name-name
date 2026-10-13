@@ -111,8 +111,8 @@ afterEach(() => {
 
 describe('範囲外のセーブ復元は失敗扱い (#789)', () => {
   const outOfRange: Array<[string, Partial<SaveSlotData>]> = [
-    ['eventIndex がイベント数と等しい', { eventIndex: 2 }],
-    ['eventIndex がイベント数を超える', { eventIndex: 99 }],
+    ['eventIndex が終端を超える（イベント数 + 1）', { eventIndex: 3 }],
+    ['eventIndex がイベント数を大きく超える', { eventIndex: 99 }],
     ['eventIndex が負数', { eventIndex: -1 }],
     ['textIndex が本文の行数と等しい', { eventIndex: 1, textIndex: 2 }],
     ['textIndex が負数', { eventIndex: 0, textIndex: -1 }],
@@ -159,10 +159,10 @@ describe('範囲外のセーブ復元は失敗扱い (#789)', () => {
     expect(toast.mock.calls).toEqual([['クイックロードしました']])
   })
 
-  it('[条件:] の展開後の長さで判定する: flags が偽なら 2 イベントなので eventIndex 2 は範囲外', async () => {
+  it('[条件:] の展開後の長さで判定する: flags が偽なら 2 イベントなので eventIndex 3 は範囲外', async () => {
     const r = makeRenderer(SCENES_COND)
     r.startFrom({ sceneId: 'cond', flags: { old: boolFlag(true) } })
-    new SaveManager().quickSave(craftSave({ sceneId: 'cond', eventIndex: 2, flags: {} }))
+    new SaveManager().quickSave(craftSave({ sceneId: 'cond', eventIndex: 3, flags: {} }))
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
 
     expect(await r.quickLoad()).toEqual({ status: 'failed', reason: 'out-of-range' })
@@ -184,7 +184,7 @@ describe('範囲外のセーブ復元は失敗扱い (#789)', () => {
 
 describe('範囲外の restoreSnapshot は失敗扱い・トーストなし (#789)', () => {
   it.each([
-    ['eventIndex がイベント数と等しい', { eventIndex: 2 }],
+    ['eventIndex が終端を超える（イベント数 + 1）', { eventIndex: 3 }],
     ['eventIndex が負数', { eventIndex: -1 }],
     ['textIndex が負数', { textIndex: -1 }],
     ['textIndex が本文の行数以上', { eventIndex: 1, textIndex: 2 }],
@@ -218,10 +218,20 @@ describe('範囲外の restoreSnapshot は失敗扱い・トーストなし (#78
     expect(r.getSnapshot().eventIndex).toBe(1)
   })
 
-  it('終劇済みのスナップショットは eventIndex が終端（イベント数）でも成功する', async () => {
+  it('終端（eventIndex がイベント数と等しい）は storyEnded に関わらず有効、textIndex は 0 のみ', async () => {
     const r = makeRenderer(SCENES)
-    const result = await r.restoreSnapshot(craftSnapshot({ eventIndex: 2, storyEnded: true }))
-    expect(result).toEqual({ status: 'entered', sceneId: 'a' })
+    expect(await r.restoreSnapshot(craftSnapshot({ eventIndex: 2, storyEnded: true }))).toEqual({
+      status: 'entered',
+      sceneId: 'a',
+    })
+    expect(await r.restoreSnapshot(craftSnapshot({ eventIndex: 2 }))).toEqual({
+      status: 'entered',
+      sceneId: 'a',
+    })
+    expect(await r.restoreSnapshot(craftSnapshot({ eventIndex: 2, textIndex: 1 }))).toEqual({
+      status: 'failed',
+      reason: 'out-of-range',
+    })
   })
 })
 
@@ -232,7 +242,7 @@ describe('sceneId が null のエントリ復元の範囲外 (#789)', () => {
     const before = r.getSnapshot()
 
     const result = await r.restoreSnapshot(
-      craftSnapshot({ sceneId: null, eventIndex: 2, flags: { x: boolFlag(true) } })
+      craftSnapshot({ sceneId: null, eventIndex: 3, flags: { x: boolFlag(true) } })
     )
 
     expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
@@ -263,7 +273,7 @@ describe('sceneId が null のエントリ復元の範囲外 (#789)', () => {
 
 describe('startFrom の位置指定の範囲外 (#789)', () => {
   it.each([
-    ['eventIndex がイベント数と等しい', { eventIndex: 2 }],
+    ['eventIndex が終端を超える（イベント数 + 1）', { eventIndex: 3 }],
     ['eventIndex が負数', { eventIndex: -1 }],
     ['textIndex が本文の行数以上', { eventIndex: 1, textIndex: 2 }],
     ['textIndex が負数', { eventIndex: 1, textIndex: -1 }],
@@ -293,5 +303,62 @@ describe('startFrom の位置指定の範囲外 (#789)', () => {
       sceneId: 'a',
     })
     expect(r.getSnapshot().eventIndex).toBe(1)
+  })
+})
+
+// 最後の本文の後ろに命令だけが続くシーン。advance が命令を消化して終端（storyEnded=false のクリック待ち）で止まる。
+const TAIL_SCENES: EventScene[] = [
+  scene('tail', [narration('last'), { Blackout: { action: 'On' } } as Event]),
+]
+
+describe('末尾の命令を消化した終端の位置 (#789)', () => {
+  it('エンジン自身が書いたセーブ・スナップショットが復元できる', async () => {
+    const r = makeRenderer(TAIL_SCENES)
+    r.startFrom({ sceneId: 'tail' })
+    r.advance()
+    const snap = r.getSnapshot()
+    expect(snap.eventIndex).toBe(2)
+    expect(snap.storyEnded).toBe(false)
+
+    const r2 = makeRenderer(TAIL_SCENES)
+    expect(await r2.restoreSnapshot(snap)).toEqual({ status: 'entered', sceneId: 'tail' })
+    expect(r2.getSnapshot().eventIndex).toBe(2)
+
+    new SaveManager().quickSave(craftSave({ sceneId: 'tail', eventIndex: 2 }))
+    const r3 = makeRenderer(TAIL_SCENES)
+    expect(await r3.quickLoad()).toEqual({ status: 'entered', sceneId: 'tail' })
+    expect(r3.getSnapshot().eventIndex).toBe(2)
+  })
+
+  it('[条件:] が全て偽で長さ 0 のシーンは eventIndex 0 が終端として有効', async () => {
+    const scenes = [scene('empty', [condition('never', [narration('x')])])]
+    const r = makeRenderer(scenes)
+    expect(await r.restoreSnapshot(craftSnapshot({ sceneId: 'empty', eventIndex: 0 }))).toEqual({
+      status: 'entered',
+      sceneId: 'empty',
+    })
+    expect(await r.restoreSnapshot(craftSnapshot({ sceneId: 'empty', eventIndex: 1 }))).toEqual({
+      status: 'failed',
+      reason: 'out-of-range',
+    })
+  })
+})
+
+describe('ライブ切り替えで textIndex を範囲内に戻す (#789)', () => {
+  it('setSentencePerPage / setDialogStyle 後の textIndex は現在のページ数未満で、スナップショットが復元できる', async () => {
+    const r = makeRenderer([scene('p', [narration('一文目。二文目。三文目。')])])
+    r.setSentencePerPage(true)
+    r.startFrom({ sceneId: 'p' })
+    r.advance()
+    r.advance()
+    expect(r.getSnapshot().textIndex).toBe(2)
+
+    r.setSentencePerPage(false) // 1 ページ（text[] は 1 行）になる
+    const snap = r.getSnapshot()
+    expect(snap.textIndex).toBe(0)
+    expect(snap.sentenceIndex).toBe(0)
+
+    const r2 = makeRenderer([scene('p', [narration('一文目。二文目。三文目。')])])
+    expect(await r2.restoreSnapshot(snap)).toEqual({ status: 'entered', sceneId: 'p' })
   })
 })
