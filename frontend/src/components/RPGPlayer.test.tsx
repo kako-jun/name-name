@@ -16,6 +16,7 @@ import { sampleRpgData } from '../game/sampleRpgData'
 // jsdom では実 init できない（NovelPlayer 系テストと同じ事情）。init/load/destroy/
 // applySettings を持つ最小スタブに差し替える。
 // アロー関数は [[Construct]] を持たず `new` できないため、`function` 式で構築可能なモックにする。
+const topdownSetAssetBaseUrl = vi.fn()
 vi.mock('../game/TopDownRenderer', () => ({
   TopDownRenderer: vi.fn().mockImplementation(function () {
     return {
@@ -23,6 +24,7 @@ vi.mock('../game/TopDownRenderer', () => ({
       load: vi.fn(),
       destroy: vi.fn(),
       applySettings: vi.fn(),
+      setAssetBaseUrl: topdownSetAssetBaseUrl,
     }
   }),
 }))
@@ -134,5 +136,12 @@ describe('RPGPlayer: アセットのベース URL を renderer に渡す (#746)'
     expect(next.setAssetBaseUrl.mock.invocationCallOrder[0]).toBeLessThan(
       next.load.mock.invocationCallOrder[0]
     )
+  })
+
+  it('view=topdown でも setAssetBaseUrl が呼ばれる', async () => {
+    topdownSetAssetBaseUrl.mockClear()
+    render(<RPGPlayer assetBaseUrl="/api/projects/g/assets/raw" />)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(topdownSetAssetBaseUrl).toHaveBeenCalledWith('/api/projects/g/assets/raw')
   })
 })
