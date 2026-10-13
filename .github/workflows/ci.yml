@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # toolchain は repo 直下の rust-toolchain.toml が正本 (#732)。
+      # ここで別バージョンを強制せず、ファイルの channel / targets / components をそのままインストールする
+      - run: rustup toolchain install
 
       # rodio/cpal の Linux バックエンドが ALSA を使うため、alsa-sys のビルドに
       # libasound2-dev (alsa.pc) が必要。無いと pkg-config が alsa を見つけられず失敗する (#502)
@@ -39,6 +39,34 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
       - run: cargo test --workspace
+
+  # コミット済み wasm (parser/pkg) が現ソースから同条件で再現できるかの検査 (#732)。
+  # 条件: rustc は rust-toolchain.toml、wasm-pack は 0.14.0 固定。
+  wasm-reproducible:
+    name: WASM reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup toolchain install
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/wasm-pack
+            target
+          key: ${{ runner.os }}-wasm-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-
+
+      - run: command -v wasm-pack >/dev/null && wasm-pack --version | grep -qx 'wasm-pack 0.14.0' || cargo install wasm-pack --version 0.14.0 --locked --force
+
+      - run: cd parser && wasm-pack build --target web
+
+      # parser/pkg は .gitignore で * だが追跡済みファイルの差分は検出される
+      - run: git diff --exit-code -- parser/pkg/
 
   frontend:
     name: Frontend (TypeScript)

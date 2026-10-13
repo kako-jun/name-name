@@ -1,0 +1,7 @@
+# コミット済み wasm (parser/pkg) のビルド条件を揃えるための toolchain 固定 (#732)。
+# 更新する時は wasm を同条件で再生成してコミットし、CLAUDE.md のビルド条件も合わせる。
+[toolchain]
+channel = "1.97.1"
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]
+profile = "minimal"
