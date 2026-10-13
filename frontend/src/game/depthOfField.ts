@@ -14,9 +14,9 @@
 export type BackgroundDof = 'on' | 'off'
 
 /** ぼかしを始める位置（画面高さの割合。0 = 最上端、1 = 最下端）。これより上はくっきり。目視で調整する値 */
-export const DOF_START_RATIO = 0.45
+export const DOF_START_RATIO = 0.5
 /** ぼかしが最大に達するまでのグラデーション幅（画面高さの割合）。開始位置からこの幅で 0 → 最大へ。目視で調整する値 */
-export const DOF_GRADIENT_RATIO = 0.4
+export const DOF_GRADIENT_RATIO = 0.5
 /** 最大のぼかしの強さ（PixiJS BlurFilter の strength）。目視で調整する値 */
 export const DOF_MAX_BLUR_STRENGTH = 6
 

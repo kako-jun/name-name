@@ -20,11 +20,12 @@ describe('normalizeBackgroundDof', () => {
 })
 
 describe('computeDofGradient', () => {
-  it('既定: 開始 0.45・幅 0.4 → 立ち上がり割合は 0.4/0.55', () => {
+  it('既定: 定数どおりに配置される（目視調整値なのでリテラルでなく定数参照）', () => {
     const g = computeDofGradient(1000)
-    expect(g.startY).toBeCloseTo(450)
-    expect(g.maskHeight).toBeCloseTo(550)
-    expect(g.rampFraction).toBeCloseTo(0.4 / 0.55)
+    const { startRatio, gradientRatio } = DOF_DEFAULT_PARAMS
+    expect(g.startY).toBeCloseTo(1000 * startRatio)
+    expect(g.maskHeight).toBeCloseTo(1000 * (1 - startRatio))
+    expect(g.rampFraction).toBeCloseTo(Math.min(1, gradientRatio / (1 - startRatio)))
     expect(g.blurStrength).toBe(DOF_DEFAULT_PARAMS.maxBlurStrength)
   })
   it('幅が下端を越えるときは下端で切り詰める（割合 1）', () => {
@@ -48,6 +49,15 @@ describe('computeDofGradient', () => {
       rampFraction: 1,
       blurStrength: 0,
     })
+  })
+})
+
+describe('既定定数の仕様 (#753)', () => {
+  it('ぼけ始めは画面高さの 50%、勾配は下端でちょうど最大（割合 1）', () => {
+    expect(DOF_DEFAULT_PARAMS.startRatio).toBe(0.5)
+    const g = computeDofGradient(1000)
+    expect(g.startY).toBeCloseTo(500)
+    expect(g.rampFraction).toBeCloseTo(1)
   })
 })
 
