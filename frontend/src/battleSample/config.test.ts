@@ -1437,10 +1437,17 @@ describe('commandLayout / commandLabels (#204)', () => {
     )
   })
 
-  it('describeView: cross のときだけ commandLayout=cross を出す', () => {
+  it('describeView: side で cross のときだけ commandLayout=cross を出す（front では効かないので出さない）', () => {
     const size = { width: 800, height: 450 }
-    expect(describeView(view({ commandLayout: 'cross' }), 1, size)).toContain('commandLayout=cross')
-    expect(describeView(view({ commandLayout: 'grid' }), 1, size)).not.toContain('commandLayout')
+    expect(describeView(view({ layout: 'side', commandLayout: 'cross' }), 1, size)).toContain(
+      'commandLayout=cross'
+    )
+    expect(describeView(view({ layout: 'front', commandLayout: 'cross' }), 1, size)).not.toContain(
+      'commandLayout'
+    )
+    expect(describeView(view({ layout: 'side', commandLayout: 'grid' }), 1, size)).not.toContain(
+      'commandLayout'
+    )
   })
 
   it('initialView は config.commandLayout を引き継ぐ', () => {

@@ -660,7 +660,8 @@ export function describeView(
     `backgroundDof=${view.backgroundDof}`,
     `pixelArt=${view.pixelArt}`,
     `logTypewriter=${view.logTypewriter}`,
-    ...(view.commandLayout === 'cross' ? ['commandLayout=cross'] : []),
+    // cross は side のときだけ効く（front では無視される）ので、効く場合だけ出す
+    ...(view.commandLayout === 'cross' && view.layout === 'side' ? ['commandLayout=cross'] : []),
     ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),
     `background=${view.backgroundOn ? 'on' : 'off'}`,
     `depth=${view.depth}`,
