@@ -4,7 +4,11 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
-import { backgroundPreload, clearBackgroundPreload } from './backgroundPreload'
+import {
+  backgroundPreload,
+  clearBackgroundPreload,
+  clearBackgroundPreloadQueue,
+} from './backgroundPreload'
 
 // @types/node 非導入のため、使う面だけ宣言する（Node 実行時の unhandledRejection 検知用）
 declare const process: {
@@ -102,5 +106,20 @@ describe('backgroundPreload (#782)', () => {
     clearBackgroundPreload()
     backgroundPreload(['think.png'])
     await vi.waitFor(() => expect(loaded).toEqual(['think.png', 'think.png']))
+  })
+
+  it('キューだけの clear では失敗済み URL を再先読みしない', async () => {
+    const loaded: string[] = []
+    vi.spyOn(Assets, 'load').mockImplementation((async (url: string) => {
+      loaded.push(url)
+      throw new Error('404')
+    }) as never)
+    backgroundPreload(['think.png'])
+    await vi.waitFor(() => expect(loaded).toEqual(['think.png']))
+    await Promise.resolve()
+    clearBackgroundPreloadQueue()
+    backgroundPreload(['think.png'])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(loaded).toEqual(['think.png'])
   })
 })
