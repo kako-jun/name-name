@@ -195,9 +195,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     if (typeof raw.background !== 'string') {
       return { ok: false, error: 'background は URL 文字列である必要があります' }
     }
-    background = resolveUrl(raw.background.trim(), baseUrl)
-    if (!background)
-      return { ok: false, error: `background の URL を解決できません: ${raw.background}` }
+    const bg = raw.background.trim()
+    if (bg) {
+      background = resolveUrl(bg, baseUrl)
+      if (!background)
+        return { ok: false, error: `background の URL を解決できません: ${raw.background}` }
+    }
   }
   const party = parseEntities(raw.party, def.party, MAX_PARTY, baseUrl, 'party')
   if (!party.ok) return party
