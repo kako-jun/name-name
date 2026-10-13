@@ -591,12 +591,14 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       new Promise<void>((res) => {
         release = res
       })
+    const progress: string[] = []
     const p = exportVideo(renderer as unknown as Exp, {
       startSceneId: 'a',
       endSceneId: 'b',
       fps: 30,
       preRollMs: 0,
       postRollMs: 0,
+      onProgress: (s) => progress.push(s),
     })
     const assertion = expect(p).rejects.toThrow(/ended before recording started/)
     await new Promise((r) => setTimeout(r, 10))
@@ -606,6 +608,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
     release()
     await assertion
     expect(exportCalls).toEqual([true, false]) // cleanup は 1 回だけ
+    expect(progress.some((s) => s.includes('完走') || s.includes('終端到達'))).toBe(false)
   })
 
   it('#734 S3: startFrom 中に先回り終劇(onEnd)しても録画を始めず reject する', async () => {

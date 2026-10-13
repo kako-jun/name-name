@@ -308,10 +308,10 @@ export async function exportVideo(
   const finalize = (status: string) => {
     if (stopped) return
     stopped = true
-    onProgress?.(status)
     // 録画開始前の終端検知: timer は予約しない。本流の failIfStopped が唯一の後始末役になる
     // （timer が先に発火して cleanup が二重に走り、多重起動ガードが早く外れるのを防ぐ）。
     if (!recordingStarted) return
+    onProgress?.(status)
 
     // postRoll の余韻録音 → recorder.stop() → onstop で chunks 確定。
     // recorder.onstop は stop() 呼び出し後に発火するので、stop 前に仕掛けて OK。
