@@ -788,7 +788,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
         // 上で setEvents/setScenes に skipAutoAdvance: true を渡し済みなので、entry シーン
         // 冒頭の自動進行はまだ実行されておらず waitingForWait 等は立っていない
         // （= quickLoad() の入口ガードに弾かれない）。
-        const restored = renderer.quickLoad()
+        const restored = renderer.quickLoad('auto')
         if (!restored) {
           // quickLoad が false（データ不整合等）を返した場合のフォールバック (#620):
           // skipAutoAdvance で保留したままの entry シーン冒頭の自動進行を、
@@ -1111,10 +1111,8 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
         )
       } else if (e.key === 'F8') {
         e.preventDefault()
-        const ok = rendererRef.current?.quickLoad() ?? false
-        rendererRef.current?.showToast(
-          ok ? 'クイックロードしました' : 'クイックセーブデータがありません'
-        )
+        // 結果のトースト（成功・失敗・弾かれた理由）は renderer が出す (#765)。
+        rendererRef.current?.quickLoad()
       }
     }
     window.addEventListener('keydown', handleKey)
