@@ -14,11 +14,12 @@ import {
   type Text,
   type Texture,
 } from 'pixi.js'
-import { BattleScreen, SIDE_LABEL_STROKE_WIDTH, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
   SIDE_COMMAND_TEXT_PADDING,
+  SIDE_LABEL_STROKE_WIDTH,
   SIDE_LOG_MIN_LINES,
   SIDE_STATUS_COMPACT_WIDTH,
   computeSideBattleLayout,
@@ -511,7 +512,25 @@ describe('BattleScreen: side の文字はみ出し対策 2 巡目 (#736)', () =>
     const L = computeSideBattleLayout({ width: 360, height: 640, partyCount: 1, enemyCount: 3 })
     const nameLine = internals(s).enemyViews[0].label!.text.split('\n')[0]
     expect(estimateTextWidth(nameLine, 12)).toBeLessThanOrEqual(
-      L.enemies[0].size - SIDE_LABEL_STROKE_WIDTH * 2 + 0.001
+      L.enemies[0].label!.w - SIDE_LABEL_STROKE_WIDTH * 2 + 0.001
     )
+  })
+})
+
+describe('BattleScreen: 敵ラベルの HP は数値を優先して残す (#736)', () => {
+  it('640x360・敵 6 体: HP 行は「HP 」が落ちても 12/12 が見える', () => {
+    const foes = Array.from({ length: 6 }, (_, k) =>
+      entity(`e${k}`, { name: `てき${k}`, hp: 12, maxHp: 12 })
+    )
+    const s = track(make([entity('hero')], foes, { layout: 'side' }, 640, 360))
+    for (const v of internals(s).enemyViews) {
+      expect(v.label!.text.split('\n')[1]).toMatch(/12\/12$/)
+    }
+  })
+
+  it('800x450・敵 3 体（2 列 83px）は「HP 12/12」がそのまま出る', () => {
+    const foes = Array.from({ length: 3 }, (_, k) => entity(`e${k}`, { hp: 12, maxHp: 12 }))
+    const s = track(make([entity('hero')], foes, { layout: 'side' }, 800, 450))
+    for (const v of internals(s).enemyViews) expect(v.label!.text.split('\n')[1]).toBe('HP 12/12')
   })
 })

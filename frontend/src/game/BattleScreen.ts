@@ -50,6 +50,9 @@ import {
   computeSideBattleLayout,
   SIDE_COMMAND_TEXT_PADDING,
   fitCommandFontSize,
+  SIDE_LABEL_FONT_SIZE,
+  SIDE_LABEL_STROKE_WIDTH,
+  fitHpLabel,
   fitLabel,
   fitNameWithSuffix,
   type BattleLayoutMode,
@@ -76,13 +79,11 @@ const PANEL_GAP = 6
 const FALLBACK_ENEMY_COLOR = 0xcc5555
 const FALLBACK_PARTY_COLOR = 0x5588cc
 const DEAD_ALPHA = 0.3
-const SIDE_LABEL_FONT_SIZE = 12
 const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
 const SIDE_STATUS_TEXT_PADDING = 12
 /** 敵ラベルの縁取り。写真背景（dim なし）でも読めるよう、背景指定の有無にかかわらず付ける (#736) */
 export const SIDE_LABEL_STROKE_COLOR = 0x000000
-export const SIDE_LABEL_STROKE_WIDTH = 3
 
 const NAME_FONT_SIZE = 18
 const COMMAND_FONT_SIZE = 18
@@ -553,7 +554,7 @@ export class BattleScreen extends Container {
         const w = Math.max(0, (this.sideLabelWidths[i] ?? 0) - SIDE_LABEL_STROKE_WIDTH * 2)
         view.label.text =
           `${fitLabel(e.name, w, SIDE_LABEL_FONT_SIZE)}\n` +
-          fitLabel(`HP ${e.hp}/${e.maxHp}`, w, SIDE_LABEL_FONT_SIZE)
+          fitHpLabel(e.hp, e.maxHp, w, SIDE_LABEL_FONT_SIZE)
       }
     }
     for (let i = 0; i < this.partyViews.length; i++) {
