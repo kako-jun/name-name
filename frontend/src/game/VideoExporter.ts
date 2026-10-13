@@ -8,13 +8,20 @@
  * Phase 2 で virtual time + ffmpeg.wasm 経路に置き換える際は本モジュールごと差し替える想定。
  */
 import type { NovelRenderer } from './NovelRenderer'
+import type { FlagValue } from '../types'
 import { computeDynamicRenderResolution, resolveDevicePixelRatio } from './novelLayout'
 
 export interface VideoExportOptions {
-  /** 録画開始シーンID。jumpToScene でここから自動再生する */
+  /** 録画開始シーンID。新規開始（startFrom）でここから自動再生する */
   startSceneId: string
   /** 録画終了シーンID。このシーンの末尾イベント or 次シーンへの遷移で stop する */
   endSceneId: string
+  /**
+   * 録画開始時の flags（置換セマンティクス）。既定は空で、プレビューの状態に依らず決定論的に録れる (#734)。
+   * プレビュー中の flags を引き継ぎたい呼び出し側は、明示的にコピーして渡す。使った flags は
+   * `onProgress` に出る。
+   */
+  flags?: Record<string, FlagValue>
   /** フレームレート（24 / 30 を想定） */
   fps: number
   /** 出力 MIME。未指定なら最初にサポートされた候補を自動選択 */
@@ -22,9 +29,9 @@ export interface VideoExportOptions {
   /** 進捗ログ。状態文字列を都度通知（UI 表示用） */
   onProgress?: (status: string) => void
   /**
-   * jumpToScene 後、録画開始までの待機時間 ms。
-   * jumpToScene が canvas に新フレームを描画 + GPU 合成が flush されるまでの猶予。
-   * jumpToScene 同期描画 → preRoll 待機 → recorder.start の順で、
+   * 新規開始（startFrom）と開始背景のロード完了の後、録画開始までの待機時間 ms。
+   * 新規開始が canvas に新フレームを描画 + GPU 合成が flush されるまでの猶予。
+   * 新規開始 → 背景ロード待ち → preRoll 待機 → recorder.start の順で、
    * 「前回プレビューの最終フレーム」が録画先頭に乗るリスクと、
    * 「BGM 開始イベントが録画前に発火して頭が欠ける」リスクの両方を最小化する。
    * 50ms はパイント flush (~16ms) + AudioContext のバッファ遅延 (20-50ms) を吸収する目安。
@@ -126,6 +133,7 @@ export async function exportVideo(
   const {
     startSceneId,
     endSceneId,
+    flags = {},
     fps,
     mimeType: mimeTypeOpt,
     onProgress,
@@ -293,7 +301,7 @@ export async function exportVideo(
     )
   }
 
-  // startSceneId === endSceneId の単一シーン録画では、jumpToScene 直後の
+  // startSceneId === endSceneId の単一シーン録画では、startFrom 直後の
   // setOnSceneChange 発火で visitedEndScene = true まで進むが、まだ
   // 「別シーンへの遷移」は起きていないので finalize は呼ばれない。OK。
   renderer.setOnSceneChange((sceneId) => {
@@ -313,22 +321,34 @@ export async function exportVideo(
     finalize('全イベント完走')
   })
 
-  // 順序 (M1 修正): jumpToScene で synchronously 新フレーム描画 + BGM 開始 →
-  // 1 frame (16ms @60Hz) 待って GPU 合成 flush → recorder.start。
-  // この順序で「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
-  // jumpToScene 後すぐに recorder を立ち上げないと BGM の起点を取り逃す。
+  // 順序: 新規開始（startFrom）で synchronously 新フレーム描画 + BGM 開始 →
+  // 開始シーンの背景のロード完了を待つ（新規開始は背景が地色から始まるため、未キャッシュだと
+  // preRoll では間に合わず録画先頭の背景が欠ける）→ 1 frame (16ms @60Hz) 待って GPU 合成 flush →
+  // recorder.start。「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
+  // 新規開始は BGM・背景・flags・consecutiveJumps をプレビューから持ち越さない (#734, ADR 0003)。
   renderer.setAutoMode(true)
-  // 書き出しは新規開始: ライブプレビューで鳴っていた BGM を録画へ持ち込まない・同曲でも頭出しする (#724)
-  renderer.stopBgmForFreshStart()
-  void renderer.jumpToScene(startSceneId)
-  onProgress?.('録画準備中')
+  onProgress?.(`録画準備中（flags: ${JSON.stringify(flags)}）`)
+  try {
+    const entry = await renderer.startFrom({ sceneId: startSceneId, flags })
+    if (entry.status !== 'entered') {
+      const detail = entry.status === 'failed' ? `${entry.status}: ${entry.reason}` : entry.status
+      throw new Error(`Could not start from scene "${startSceneId}" (${detail})`)
+    }
+    onProgress?.('背景読み込み中')
+    await renderer.waitForBackgroundLoad()
 
-  await new Promise((r) => setTimeout(r, preRollMs))
+    await new Promise((r) => setTimeout(r, preRollMs))
 
-  // 動画入力レイヤ (#252): 録画開始前に表示中の動画を頭出し（currentTime=0）して
-  // ready を待つ。これで録画の先頭から動画が正しく映る/鳴る。動画が無ければ即解決。
-  onProgress?.('動画頭出し中')
-  await renderer.prepareVideosForExport()
+    // 動画入力レイヤ (#252): 録画開始前に表示中の動画を頭出し（currentTime=0）して
+    // ready を待つ。これで録画の先頭から動画が正しく映る/鳴る。動画が無ければ即解決。
+    onProgress?.('動画頭出し中')
+    await renderer.prepareVideosForExport()
+  } catch (e) {
+    // 録画を始める前の失敗: 退避したリスナ・解像度・録画フラグ・isExporting を必ず戻す。
+    cleanup()
+    stopped = true
+    throw e instanceof Error ? e : new Error(String(e))
+  }
 
   startedAt = performance.now()
   recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
