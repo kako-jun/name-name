@@ -3,6 +3,7 @@
  * 計算は config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Assets } from 'pixi.js'
+import { createRenderGate } from './renderGate'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -91,25 +92,24 @@ async function main(): Promise<void> {
   let screen: BattleScreen | null = null
   /** 前回描画した pixelArt。変わったときだけ Assets を unload する (#760) */
   let lastPixelArt: 'on' | 'off' | null = null
-  let renderSeq = 0
+  // nearest↔linear（mipmap の有無）を切り替えるときは、キャッシュ済みのテクスチャを捨てて読み直させる。
+  // 待っている間に別の描画が始まっても、unload 前のテクスチャを受け取らないよう順序を揃える
+  const gate = createRenderGate((u) => Assets.unload(u))
 
   const render = async (): Promise<void> => {
     const view = history.current
-    const seq = ++renderSeq
+    // 旧画面は先に破棄する（unload でテクスチャが壊れる前に、描画から外す）
+    if (screen) {
+      app.stage.removeChild(screen)
+      screen.destroy({ children: true })
+      screen = null
+    }
+    const stale = assetsToUnload(lastPixelArt, view, config)
+    lastPixelArt = view.pixelArt
+    const seq = gate.begin(stale)
     try {
       const setup = buildBattleSetup(config, view)
-      if (screen) {
-        app.stage.removeChild(screen)
-        screen.destroy({ children: true })
-        screen = null
-      }
-      const stale = assetsToUnload(lastPixelArt, view, config)
-      lastPixelArt = view.pixelArt
-      if (stale.length > 0) {
-        // nearest↔linear（mipmap の有無）を切り替えるので、キャッシュ済みのテクスチャを捨てて読み直させる
-        await Promise.all(stale.map((u) => Assets.unload(u).catch(() => undefined)))
-        if (seq !== renderSeq) return // 待っている間に別の描画が始まった
-      }
+      if (!(await gate.wait(seq))) return // 待っている間に別の描画が始まった
       const resolution = resolveResolution(view.resolutionMode, window.devicePixelRatio)
       app.renderer.resize(setup.width, setup.height, resolution)
       const engine = new BattleEngine(
