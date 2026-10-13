@@ -52,7 +52,7 @@ interface RendererInternals {
   eventIndex: number
   resolvedEvents: Event[]
   initialized: boolean
-  pendingMissingScenes: Set<string>
+  pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
   advance(): void
   characterLayer: {
     show(
