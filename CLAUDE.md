@@ -224,7 +224,7 @@ default_bgm: amehure.ogg
 パーサーは `parser/`（Rust）で実装。WASM経由でフロントエンドから使用する。
 
 > ⚠️ **Rust パーサ（`parser/src/*.rs`）を変えたら `cargo test`（native）だけでは本番に反映されない。** 本番で動くのは**コミット済みの `parser/pkg/name_name_parser_bg.wasm`**（`.gitignore` されているが `git add -f` 済み・deploy 対象。CF Pages は `npm run build` の `prebuild`=`frontend/scripts/sync-wasm.mjs` でこの wasm を `frontend/src/wasm/wasm-bytes.generated.ts`〈未追跡〉へ焼き込んで配信する）。よって Rust 変更時は必ず:
-> 1. `cd parser && wasm-pack build --target web`（**ビルド条件: rustc 1.97.1・wasm-pack 0.14.0**。rustc は repo 直下の `rust-toolchain.toml` が正本で、自動でその版が使われる。wasm-pack は 0.14.0 を使う。条件が違うと同じソースでも wasm が数十 KB 揺れる。wasm は OS/アーキテクチャで byte 一致しないため CI では再現検査しない。生成した OS を問わず frontend のテストで検証する #732）
+> 1. `cd parser && wasm-pack build --target web`（**ビルド条件: rustc 1.97.1・wasm-pack 0.14.0**。rustc は repo 直下の `rust-toolchain.toml` が正本で、自動でその版が使われる。wasm-pack は 0.14.0 を使う。rustc の版が違うと同じソースでも wasm が変わる（#731 の 1.88→1.97.1 で約 37KB、別版の再生成で約 427 バイト）。wasm は OS/アーキテクチャで byte 一致しないため CI では再現検査しない（rustc の版だけは wasm に埋まる `/rustc/<hash>` で検査する）。生成した OS を問わず frontend のテストで検証する #732）
 > 2. `git add -f parser/pkg/name_name_parser_bg.wasm parser/pkg/*.d.ts` してコミット
 > 3. 検証は**フロントの実パーサ経路**で（`parseMarkdown()` に frontmatter を渡して `Document` のフィールドを確認）。CharacterLayer 等の setter を直接呼ぶハーネスは**パーサを迂回するので偽陽性**になる。
 >
