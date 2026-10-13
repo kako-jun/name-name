@@ -28,6 +28,7 @@ function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 interface Internals {
   atbBars: Graphics[]
   atbBarRects: Array<{ x: number; y: number; w: number; h: number }>
+  atbMarkers: Text[]
   statusTexts: Text[]
   heroStatsText: Text
   commands: Array<{ id: string; hit: Container; text: Text }>
@@ -145,23 +146,28 @@ describe('BattleScreen ATB: 番の味方のマーカー（▶ + 黄色）', () =
   it('side: キュー先頭だけ ▶ が付いて黄色。他は付かず白', () => {
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [0, 1000] }))
     const [ta, tb] = I(s).statusTexts
-    expect(tb.text.startsWith('▶B')).toBe(true)
+    // ▶ は名前の文字列に混ぜず、別 Text（左余白）で出す
+    expect(tb.text.startsWith('B')).toBe(true)
+    expect(I(s).atbMarkers[1].visible).toBe(true)
     expect(tb.style.fill).toBe(0xffee66)
     expect(ta.text.includes('▶')).toBe(false)
+    expect(I(s).atbMarkers[0].visible).toBe(false)
     expect(ta.style.fill).toBe(0xffffff)
   })
 
   it('side: 行動後はマーカーが消える', () => {
     const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }))
-    expect(I(s).statusTexts[0].text.startsWith('▶')).toBe(true)
+    expect(I(s).atbMarkers[0].visible).toBe(true)
     I(s).commands[0].hit.emit('pointertap', {} as never)
+    expect(I(s).atbMarkers[0].visible).toBe(false)
     expect(I(s).statusTexts[0].text.includes('▶')).toBe(false)
     expect(I(s).statusTexts[0].style.fill).toBe(0xffffff)
   })
 
   it('front: 番なら heroStatsText に ▶ と黄色', () => {
     const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' })
-    expect(I(s).heroStatsText.text.startsWith('▶A')).toBe(true)
+    expect(I(s).heroStatsText.text.startsWith('A')).toBe(true)
+    expect(I(s).atbMarkers[0].visible).toBe(true)
     expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
   })
 
@@ -342,12 +348,58 @@ describe('BattleScreen ATB: モバイル幅（360x640）で棒と文字が重な
     expect(rects).toHaveLength(n)
     I(s).statusTexts.forEach((t, i) => {
       const r = rects[i]
-      expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(r.x + 0.001)
+      // 棒は文字の下（縦に重ならない）・行の下端・status 枠内・細い
+      expect(t.y + 14 * 1.2).toBeLessThanOrEqual(r.y + 0.001)
+      expect(r.y + r.h).toBeLessThanOrEqual(L.statusRows[i].y + L.statusRows[i].h + 0.001)
       expect(r.x).toBeGreaterThanOrEqual(L.status.x)
       expect(r.x + r.w).toBeLessThanOrEqual(L.status.x + L.status.w + 0.001)
-      expect(r.w).toBeGreaterThanOrEqual(28)
-      expect(r.w).toBeLessThanOrEqual(64)
+      expect(r.h).toBeLessThanOrEqual(3)
+      // 文字の右端は status 枠内（ATB off と同じ幅で収まる）
+      expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(
+        L.status.x + L.status.w - 12 + 0.001
+      )
     })
+  })
+
+  it('360x640・味方 4 人・HP 3 桁: ATB on の文字列が ATB off と同じで、名前の先頭と ▶ が見える', () => {
+    const mk = () =>
+      Array.from({ length: 4 }, (_, i) =>
+        ent(`p${i}`, { name: 'ゆうしゃ', hp: 120, maxHp: 120, mp: 99, maxMp: 99 })
+      )
+    const on = build(
+      mk(),
+      [ent('s')],
+      ATB({ party: [1000, 0, 0, 0] }),
+      { layout: 'side' },
+      360,
+      640
+    )
+    const off = build(mk(), [ent('s')], { rng: () => 0 }, { layout: 'side' }, 360, 640)
+    on.s.tick(0)
+    I(on.s).statusTexts.forEach((t, i) => {
+      expect(t.text).toBe(I(off.s).statusTexts[i].text)
+      expect(t.text.startsWith('ゆ')).toBe(true)
+      expect(t.text).toContain('HP 120/120')
+    })
+    const m = I(on.s).atbMarkers[0]
+    expect(m.visible).toBe(true)
+    expect(m.text).toBe('▶')
+    // ▶ は名前の左余白に収まり、名前の文字と重ならない
+    expect(m.x + estimateTextWidth('▶', 10)).toBeLessThanOrEqual(I(on.s).statusTexts[0].x + 0.001)
+  })
+
+  it('front 360x640: ATB の棒は文字の下で重ならない', () => {
+    const { s } = build(
+      [ent('a', { name: 'ゆうしゃ', hp: 120, maxHp: 120 })],
+      [ent('s')],
+      ATB({ party: [500] }),
+      { layout: 'front' },
+      360,
+      640
+    )
+    const r = I(s).atbBarRects[0]
+    expect(I(s).heroStatsText.y + 16 * 1.2).toBeLessThanOrEqual(r.y + 0.001)
+    expect(r.h).toBeLessThanOrEqual(3)
   })
 
   it('redraw でサイズが変わっても棒の矩形が追従する', () => {
@@ -357,6 +409,33 @@ describe('BattleScreen ATB: モバイル幅（360x640）で棒と文字が重な
     expect(I(s).atbBarRects[0].x).not.toBe(before)
     const [, width] = fills(I(s).atbBars[0])[0]
     expect(width).toBeCloseTo(I(s).atbBarRects[0].w * 0.5, 6)
+  })
+})
+
+describe('BattleScreen ATB: ログ 1 文字表示との併用 (#755)', () => {
+  it.each(['side', 'front'] as const)(
+    '%s: タイプ中でもコマンドのタップは skip に吸われず、そのまま実行される',
+    (layout) => {
+      const { s, engine } = build([ent('a', { atk: 5 })], [ent('s')], ATB({ party: [1000] }), {
+        layout,
+        logTypewriter: 'on',
+      })
+      const before = engine.getState().log.length
+      I(s).commands[0].hit.emit('pointertap', {} as never)
+      expect(engine.getState().log.length).toBeGreaterThan(before)
+    }
+  )
+
+  it('ログ帯のタップは ATB でも全文表示に使える', () => {
+    const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), {
+      layout: 'side',
+      logTypewriter: 'on',
+    })
+    const panel = (s as unknown as { logPanel: Container }).logPanel
+    expect(panel.eventMode).toBe('static')
+    panel.emit('pointertap', {} as never)
+    const lines = (s as unknown as { logLines: Text[] }).logLines.map((t) => t.text)
+    expect(lines.some((t) => t.includes('あらわれた'))).toBe(true)
   })
 })
 
