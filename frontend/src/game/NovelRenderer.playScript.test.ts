@@ -488,16 +488,62 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(r.getCurrentSceneId()).toBe('left')
   })
 
-  it('12: 存在しない jump の choice は currentSceneId を変えず後続 step を継続する（warn は出るが例外なし）', async () => {
+  it('12: 存在しない jump の choice は currentSceneId を変えず、後続 step を消化せず打ち切る（warn は出るが例外なし, #729）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES_BRANCH)
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
     expect(r.getCurrentSceneId()).toBe('start')
     await expect(
       r.playScript([{ type: 'choice', jump: 'nonexistent' }, { type: 'advance' }])
     ).resolves.toBeUndefined()
-    // jumpToScene の既存挙動: console.warn + no-op、currentSceneId は変わらない
     expect(r.getCurrentSceneId()).toBe('start')
     expect(warnSpy).toHaveBeenCalled()
+    expect(advanceSpy).not.toHaveBeenCalled()
+    // 打ち切っても再入ガードは解除される
+    await expect(r.playScript([])).resolves.toBeUndefined()
+  })
+
+  it('12b: 遅延ロード（resolver 失敗）で入場できない choice も、後続 step を消化せず打ち切る (#729)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = makeRenderer(SCENES_BRANCH)
+    markInitialized(r)
+    r.setMissingSceneResolver(vi.fn(async () => null))
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    await r.playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
+    expect(r.getCurrentSceneId()).toBe('start')
+    expect(advanceSpy).not.toHaveBeenCalled()
+  })
+
+  it('12c: 未ロードのサブ MD への choice は遅延ロードの完了を待ち、後続の advance は遷移先で消化される (#729)', async () => {
+    const r = makeRenderer(SCENES_BRANCH)
+    markInitialized(r) // 遅延ロードの後処理は init 済みの renderer だけが適用する
+    const far = scene('far', [narration('far1', 'far2')])
+    let resolveLoad!: (s: EventScene[]) => void
+    r.setMissingSceneResolver(
+      vi.fn(
+        () =>
+          new Promise<EventScene[]>((res) => {
+            resolveLoad = res
+          })
+      )
+    )
+    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    let done = false
+    const p = r
+      .playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
+      .then(() => (done = true))
+    await new Promise((res) => setTimeout(res, 0))
+    // ロード中は後続 step に進まず、位置も変わらない
+    expect(advanceSpy).not.toHaveBeenCalled()
+    expect(done).toBe(false)
+    expect(r.getCurrentSceneId()).toBe('start')
+
+    resolveLoad([...SCENES_BRANCH, far])
+    await p
+    expect(r.getCurrentSceneId()).toBe('far')
+    expect(advanceSpy).toHaveBeenCalledTimes(1)
+    // advance は遷移先 far の 2 行目を消化した（遷移前の start で空振りしていない）
+    expect(r.getSnapshot().textIndex).toBe(1)
   })
 
   // ===== E. wait（fake timers） =====

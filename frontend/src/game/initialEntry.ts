@@ -44,7 +44,7 @@ export interface ResolveInitialEntryInput {
  * 1. スナップショット（fluid 再マウント）→ 復元。debug 起点・自動クイックロードは行わない
  *    （位置を debug 起点が上書きしない。不整合14）。失敗したらエントリ（flags は保つ）。
  * 2. `?debug_scene=` → 新規開始（confinement なし）
- * 3. `?scene=` → 新規開始（confinement あり）
+ * 3. `?scene=` → 新規開始（confinement あり。`?debug_script=` を併用するときは confinement なし、#729）
  * 4. 自動クイックロード。`?debug_scene=` / `?debug_script=` / `?scene=` のどれも無いときだけ
  * 5. エントリ
  */
@@ -57,10 +57,14 @@ export function resolveInitialEntry(input: ResolveInitialEntryInput): InitialEnt
     attempts.push({ kind: 'debug-scene', options: input.debugQuery.scene })
   }
   if (input.initialSceneId) {
+    // `?debug_script=` を併用したら confinement を外す (#729, #734 PR3)。debug 系の起動は
+    // confinement なしという方針（`?debug_scene=` と同じ）に揃える。残すと、リプレイの choice が
+    // 圏外のシーンへ移った時点で終劇してしまう。
+    const debugScript = !!input.debugQuery && 'script' in input.debugQuery
     attempts.push({
       kind: 'scene-param',
       sceneId: input.initialSceneId,
-      confinedSceneIds: input.confinedSceneIds ?? null,
+      confinedSceneIds: debugScript ? null : (input.confinedSceneIds ?? null),
     })
   }
   if (input.debugQuery === null && !input.initialSceneId && input.hasQuickSave) {
