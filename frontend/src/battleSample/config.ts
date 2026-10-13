@@ -3,7 +3,12 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { BattleLayoutMode } from '../game/battleLayout'
+import {
+  DEPTH_DEFAULT_HORIZON,
+  normalizeBattleRow,
+  type BattleDepth,
+  type BattleLayoutMode,
+} from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
 import type { WindowStyle } from '../game/windowStyle'
 import type { BackgroundTone } from '../game/backgroundTone'
@@ -26,6 +31,16 @@ export const RESOLUTION_MODES = ['main', 'dpr'] as const
 export type ResolutionMode = (typeof RESOLUTION_MODES)[number]
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 
+/**
+ * 隊列の見せ方 (#747)。config = 設定 JSON の party[].row どおり、front = 全員前衛、
+ * backHalf = 後ろ半分（人数の半分、切り上げ）を後衛にする。ライブ比較用。
+ */
+export const FORMATION_MODES = ['config', 'front', 'backHalf'] as const
+export type FormationMode = (typeof FORMATION_MODES)[number]
+
+/** 設定 JSON に horizon / perspective が無いときの奥行きオン時の既定（サンプル用の見やすい値） */
+export const SAMPLE_DEFAULT_PERSPECTIVE = 0.8
+
 export const DEFAULT_SIZE_ID: ScreenSizeId = '800x450'
 export const MAX_PARTY = 4
 export const MAX_ENEMIES = 4
@@ -43,6 +58,12 @@ export interface BattleSampleConfig {
   logTypewriter: BattleLogTypewriterMode
   /** 絶対 URL。なしは null */
   background: string | null
+  /** 奥行きの地平線の高さ（画面比 0〜1）(#747)。奥行きオン時に使う。既定 DEPTH_DEFAULT_HORIZON */
+  horizon: number
+  /** 奥行きの遠近の強さ（0〜1）(#747)。奥行きオン時に使う。既定 SAMPLE_DEFAULT_PERSPECTIVE */
+  perspective: number
+  /** 前景レイヤー画像の絶対 URL (#747)。なしは null */
+  foreground: string | null
   party: BattleEntity[]
   enemies: BattleEntity[]
 }
@@ -56,6 +77,12 @@ export interface BattleSampleView {
   backgroundDof: BackgroundDof
   logTypewriter: BattleLogTypewriterMode
   backgroundOn: boolean
+  /** 奥行き (#747)。on のとき config の horizon / perspective で行ごとの縮尺をつける。既定 off（平面） */
+  depth: 'on' | 'off'
+  /** 前景レイヤー (#747) */
+  foregroundOn: boolean
+  /** 隊列 (#747) */
+  formation: FormationMode
   partyCount: number
   enemyCount: number
   sizeId: ScreenSizeId
@@ -107,6 +134,9 @@ export function defaultConfig(): BattleSampleConfig {
     backgroundDof: 'off',
     logTypewriter: 'off',
     background: null,
+    horizon: DEPTH_DEFAULT_HORIZON,
+    perspective: SAMPLE_DEFAULT_PERSPECTIVE,
+    foreground: null,
     party: defaultParty(),
     enemies: defaultEnemies(),
   }
@@ -166,6 +196,12 @@ function parseEntity(
     agi: num(raw.agi, fallback.agi),
     exp: fallback.exp,
     gold: fallback.gold,
+  }
+  if (raw.row !== undefined) {
+    if (typeof raw.row !== 'string') {
+      return { ok: false, error: `${path}.row は "front" か "back": ${JSON.stringify(raw.row)}` }
+    }
+    if (normalizeBattleRow(raw.row) === 'back') entity.row = 'back'
   }
   if (typeof raw.sprite === 'string' && raw.sprite.trim()) {
     const url = resolveUrl(raw.sprite.trim(), baseUrl)
@@ -270,6 +306,30 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
         return { ok: false, error: `background の URL を解決できません: ${raw.background}` }
     }
   }
+  const unit = (key: 'horizon' | 'perspective', fallback: number): ParseResult<number> => {
+    const v = raw[key]
+    if (v === undefined) return { ok: true, value: fallback }
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+      return { ok: false, error: `${key} は 0〜1 の数値: ${JSON.stringify(v)}` }
+    }
+    return { ok: true, value: v }
+  }
+  const horizon = unit('horizon', def.horizon)
+  if (!horizon.ok) return horizon
+  const perspective = unit('perspective', def.perspective)
+  if (!perspective.ok) return perspective
+  let foreground: string | null = null
+  if (raw.foreground !== undefined && raw.foreground !== null && raw.foreground !== '') {
+    if (typeof raw.foreground !== 'string') {
+      return { ok: false, error: 'foreground は URL 文字列である必要があります' }
+    }
+    const fg = raw.foreground.trim()
+    if (fg) {
+      foreground = resolveUrl(fg, baseUrl)
+      if (!foreground)
+        return { ok: false, error: `foreground の URL を解決できません: ${raw.foreground}` }
+    }
+  }
   const party = parseEntities(raw.party, def.party, MAX_PARTY, baseUrl, 'party')
   if (!party.ok) return party
   const enemies = parseEntities(raw.enemies, def.enemies, MAX_ENEMIES, baseUrl, 'enemies')
@@ -284,6 +344,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       backgroundDof,
       logTypewriter,
       background,
+      horizon: horizon.value,
+      perspective: perspective.value,
+      foreground,
       party: party.value,
       enemies: enemies.value,
     },
@@ -314,6 +377,9 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     backgroundDof: config.backgroundDof,
     logTypewriter: config.logTypewriter,
     backgroundOn: config.background !== null,
+    depth: 'off',
+    foregroundOn: config.foreground !== null,
+    formation: 'config',
     partyCount: config.party.length,
     enemyCount: config.enemies.length,
     sizeId: DEFAULT_SIZE_ID,
@@ -341,6 +407,21 @@ export function resolveSize(id: ScreenSizeId): { width: number; height: number }
   return { width: s.width, height: s.height }
 }
 
+/**
+ * 隊列の見せ方を味方へ適用する (#747)。config = 設定どおり、front = 全員前衛、
+ * backHalf = 後ろ半分（人数の半分、切り上げ）を後衛にする。入力は変更せず複製を返す
+ */
+export function applyFormation(party: BattleEntity[], mode: FormationMode): BattleEntity[] {
+  const backFrom = Math.ceil(party.length / 2)
+  return party.map((p, i) => {
+    const { row: _row, ...rest } = p
+    void _row
+    if (mode === 'config') return { ...p }
+    if (mode === 'backHalf' && i >= backFrom) return { ...rest, row: 'back' as const }
+    return rest
+  })
+}
+
 /** 表示状態 + 設定から、BattleScreen に渡す素材一式を作る（人数は先頭から切り出す。足りなければ既定で補う） */
 export function buildBattleSetup(
   config: BattleSampleConfig,
@@ -356,6 +437,8 @@ export function buildBattleSetup(
     backgroundDof: BackgroundDof
     logTypewriter: BattleLogTypewriterMode
     background?: string
+    depth: BattleDepth | null
+    foreground?: string
   }
   width: number
   height: number
@@ -371,8 +454,10 @@ export function buildBattleSetup(
     return out
   }
   const { width, height } = resolveSize(view.sizeId)
+  const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
   return {
-    party: fill(config.party, defaultParty(), effectivePartyCount(view), 'party'),
+    // front 配置は本編と同じく隊列を使わない（RaycastRenderer.partyDefToBattleEntity と同じ）
+    party: applyFormation(party, view.layout === 'front' ? 'front' : view.formation),
     enemies: fill(
       config.enemies,
       defaultEnemies(),
@@ -387,6 +472,9 @@ export function buildBattleSetup(
       backgroundDof: view.backgroundDof,
       logTypewriter: view.logTypewriter,
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
+      depth:
+        view.depth === 'on' ? { horizon: config.horizon, perspective: config.perspective } : null,
+      ...(view.foregroundOn && config.foreground ? { foreground: config.foreground } : {}),
     },
     width,
     height,
@@ -402,6 +490,9 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.backgroundDof === b.backgroundDof &&
     a.logTypewriter === b.logTypewriter &&
     a.backgroundOn === b.backgroundOn &&
+    a.depth === b.depth &&
+    a.foregroundOn === b.foregroundOn &&
+    a.formation === b.formation &&
     effectivePartyCount(a) === effectivePartyCount(b) &&
     a.enemyCount === b.enemyCount &&
     a.sizeId === b.sizeId &&
@@ -443,6 +534,9 @@ export function describeView(
     `backgroundDof=${view.backgroundDof}`,
     `logTypewriter=${view.logTypewriter}`,
     `background=${view.backgroundOn ? 'on' : 'off'}`,
+    `depth=${view.depth}`,
+    `foreground=${view.foregroundOn ? 'on' : 'off'}`,
+    `formation=${view.formation}`,
     `party=${effectivePartyCount(view)}`,
     `enemies=${view.enemyCount}`,
     `size=${view.sizeId}`,

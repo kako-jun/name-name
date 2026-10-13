@@ -39,6 +39,9 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     backgroundDof: 'off',
     logTypewriter: 'off',
     backgroundOn: false,
+    depth: 'off',
+    foregroundOn: false,
+    formation: 'config',
     partyCount: 4,
     enemyCount: 4,
     sizeId: '800x450',
@@ -862,13 +865,13 @@ describe('describeView', () => {
         height: 640,
       })
     ).toBe(
-      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  depth=off  foreground=off  formation=config  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  depth=off  foreground=off  formation=config  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
