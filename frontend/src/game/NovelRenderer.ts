@@ -4017,13 +4017,22 @@ export class NovelRenderer {
 
   /**
    * 遅延ロードを伴う非同期復元の開始 (#759)。復元の要求自体を遷移として扱い、予約中の Jump タイマーを
-   * 止めて idle へ戻し（再マウント直後に冒頭 Jump のタイマーが await 中に発火して復元を潰すのを防ぐ）、
-   * 世代を進めて返す。復元が失敗して位置が動かない場合は rearmJumpAtCurrentPosition で再導出する。
+   * 止めて（再マウント直後に冒頭 Jump のタイマーが await 中に発火して復元を潰すのを防ぐ）、世代を進めて返す。
+   * `jumpState` は意図的に変えない: ロード中も pending / stalled のゲートを保ち、`advance` で Jump を
+   * 飛び越したり Jump 位置でセーブしたりさせない。各結末で確定する——成功は applyState が idle 化
+   * （新位置が Jump なら再アーム）、失敗は rearmPendingJumpAfterFailedRestore、破棄は世代を進めた側。
    */
   private beginRestoreTransition(): number {
     this.clearJumpTimer()
-    this.jumpState = 'idle'
     return ++this.transitionGeneration
+  }
+
+  /**
+   * 復元が失敗して位置が動かないとき、タイマーを止められていた pending の Jump だけを再予約する。
+   * stalled は据え置く（遷移先不在で停止していた Jump を、失敗した復元のたびに再試行・再警告しない）。
+   */
+  private rearmPendingJumpAfterFailedRestore(): void {
+    if (this.jumpState === 'pending') this.rearmJumpAtCurrentPosition()
   }
 
   /**
@@ -5819,7 +5828,11 @@ export class NovelRenderer {
     this.saveLoadOverlay.showSave((slot: number) => {
       // オーバーレイ表示中も autoTimer / skipTimer / [待機] は進み、裏で Jump が予約・停止し得る。
       // 開く時だけでなく確定時にも再確認する (#759)。
-      if (this.jumpState !== 'idle') return
+      if (this.jumpState !== 'idle') {
+        // オーバーレイは確定後に必ず閉じるので、無通知だと保存されたと誤認する。
+        this.showToast('場面転換中のためセーブできません')
+        return
+      }
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
 
@@ -5863,7 +5876,10 @@ export class NovelRenderer {
     if (this.jumpState === 'pending') return
     this.saveLoadOverlay.showLoad((data: SaveSlotData) => {
       // 表示中に裏で Jump が予約された場合は復元させない（開く時だけでなく確定時にも再確認 #759）。
-      if (this.jumpState === 'pending') return
+      if (this.jumpState === 'pending') {
+        this.showToast('場面転換中のためロードできません')
+        return
+      }
       this.loadFromSaveData(data)
     })
   }
@@ -6037,7 +6053,7 @@ export class NovelRenderer {
         // skipAutoAdvance でスキップした自動進行をここで確定的に再開しないと
         // フリーズしたままになる。
         this.resumeAutoAdvanceIfPending()
-        this.rearmJumpAtCurrentPosition()
+        this.rearmPendingJumpAfterFailedRestore()
         return
       }
       this.setJumpSceneIndex(scenes)
@@ -6049,7 +6065,7 @@ export class NovelRenderer {
         )
         // #620: 上と同じ理由。lazy load 後も見つからない失敗確定時点で再開する。
         this.resumeAutoAdvanceIfPending()
-        this.rearmJumpAtCurrentPosition()
+        this.rearmPendingJumpAfterFailedRestore()
         return
       }
       const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
@@ -6063,7 +6079,7 @@ export class NovelRenderer {
       )
       // #620: resolver が reject した失敗確定時点でも同様に再開する。
       this.resumeAutoAdvanceIfPending()
-      if (this.initialized) this.rearmJumpAtCurrentPosition()
+      if (this.initialized) this.rearmPendingJumpAfterFailedRestore()
     }
   }
 
@@ -6186,7 +6202,7 @@ export class NovelRenderer {
       if (!scenes) {
         this.gameState.fromJSON(snapshot.flags)
         console.warn(`[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`)
-        this.rearmJumpAtCurrentPosition()
+        this.rearmPendingJumpAfterFailedRestore()
         return
       }
       this.setJumpSceneIndex(scenes)
@@ -6196,7 +6212,7 @@ export class NovelRenderer {
         console.warn(
           `[name-name] restoreSnapshot: lazy load 後もシーンが見つかりません: ${sceneId}`
         )
-        this.rearmJumpAtCurrentPosition()
+        this.rearmPendingJumpAfterFailedRestore()
         return
       }
       this.restoreSnapshotToScene(scene, snapshot)
@@ -6207,7 +6223,7 @@ export class NovelRenderer {
         `[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`,
         err
       )
-      if (this.initialized) this.rearmJumpAtCurrentPosition()
+      if (this.initialized) this.rearmPendingJumpAfterFailedRestore()
     }
   }
 
