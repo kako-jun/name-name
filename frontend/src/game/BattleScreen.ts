@@ -55,6 +55,7 @@ import {
   type CommandLayout,
 } from './battleCommands'
 import type { BattleEntity } from './spellDsl'
+import type { BattlePresentation } from './battleMotion'
 import {
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
@@ -268,6 +269,12 @@ export interface BattleScreenOptions {
    * （その 1 タップではコマンドは実行しない。DialogBox の「タップで全文表示→もう一度で進む」と同じ流儀）。
    */
   logTypewriter?: BattleLogTypewriterMode
+  /**
+   * 演出方式 (#745)。`dq`（既定）= 現行の見た目・挙動、`ff` = 攻撃モーション・被ダメージののけぞり・倒れ・ダメージ数字の
+   * ポップアップ・技名だけの中央寄せメッセージ窓。`ff` は `side` のときだけ効く（`front` は敵・味方の絵を動かさないので無視）。
+   * `ff` では `logTypewriter` は使わない。
+   */
+  presentation?: BattlePresentation
   /**
    * 奥行き (#747)。指定して perspective が 0 超なら、`side` で行ごとの縮尺・床の高さを付け、奥→手前の順に描く。
    * 未指定・null は平面（現行どおり）。`front` は敵・味方の画像を描かないので影響しない。

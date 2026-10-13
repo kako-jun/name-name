@@ -24,6 +24,7 @@
  */
 
 import { hasOwn, safeAssign } from './ownProperty'
+import type { BattlePoseSprites } from './battleMotion'
 
 export type EffectKind =
   | 'heal'
@@ -211,6 +212,11 @@ export interface BattleEntity {
    * 戦闘エンジンは読まない）。
    */
   sprite?: string
+  /**
+   * 戦闘ポーズ別スプライト (#745)。`MonsterDef.poses` / `PartyMemberDef.poses` を戦闘への組み立て時に正規化して写す。
+   * `battle_presentation: ff` のときだけ画面が局面ごとに差し替える（dq では読まない）。部分指定可、無いポーズは `sprite` のまま。
+   */
+  poses?: BattlePoseSprites
   /**
    * 戦闘の隊列 (#747)。`'back'` = 後衛（受ける物理ダメージ・与える近接物理ダメージが半分。魔法相当は影響なし）。
    * 未指定は前衛（現行どおり）。味方・敵のどちらに付けても補正は効く（汎用エンジンとして敵の後衛も認める。配置の描画は味方側のみ）。

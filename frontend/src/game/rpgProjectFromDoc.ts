@@ -23,6 +23,7 @@ import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
 import { normalizeBackgroundDof } from './depthOfField'
 import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
+import { normalizeBattlePresentation } from './battleMotion'
 import { normalizeBattleAtb } from './battleAtb'
 import { normalizeCommandLayout, parseCommandLabels } from './battleCommands'
 
@@ -251,6 +252,7 @@ export function rpgProjectFromDoc(
     battleBackgroundTone: normalizeBackgroundTone(doc.battle_background_tone),
     battleBackgroundDof: normalizeBackgroundDof(doc.battle_background_dof),
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
+    battlePresentation: normalizeBattlePresentation(doc.battle_presentation),
     battleDepth: normalizeBattleDepth(doc.battle_horizon, doc.battle_perspective) ?? undefined,
     battleForeground: doc.battle_foreground || undefined,
     pixelArt: doc.pixel_art === true ? true : undefined,

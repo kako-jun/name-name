@@ -63,6 +63,7 @@ import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
+import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { CommandLabels, CommandLayout } from './battleCommands'
 export { rollEncounter } from './encounter'
@@ -147,6 +148,8 @@ export class RaycastRenderer {
   private battleBackgroundDof: BackgroundDof = 'off'
   /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter` 由来 */
   private battleLogTypewriter: BattleLogTypewriterMode = 'off'
+  /** 戦闘の演出方式 (#745)。frontmatter `battle_presentation` 由来 */
+  private battlePresentation: BattlePresentation = 'dq'
   /** 戦闘画面の奥行き / 前景レイヤー (#747)。frontmatter `battle_horizon` `battle_perspective` / `battle_foreground` 由来 */
   private battleDepth: BattleDepth | null = null
   private battleForeground: string | undefined = undefined
@@ -409,6 +412,7 @@ export class RaycastRenderer {
     this.battleBackgroundTone = gameData.battleBackgroundTone ?? 'on'
     this.battleBackgroundDof = gameData.battleBackgroundDof ?? 'off'
     this.battleLogTypewriter = gameData.battleLogTypewriter ?? 'off'
+    this.battlePresentation = gameData.battlePresentation ?? 'dq'
     this.battleDepth = gameData.battleDepth ?? null
     this.battleForeground = gameData.battleForeground
     this.pixelArt = gameData.pixelArt === true
@@ -868,6 +872,7 @@ export class RaycastRenderer {
       backgroundTone: this.battleBackgroundTone,
       backgroundDof: this.battleBackgroundDof,
       logTypewriter: this.battleLogTypewriter,
+      presentation: this.battlePresentation,
       depth: this.battleDepth,
       foreground: this.battleForeground,
       pixelArt: this.pixelArt,
@@ -948,6 +953,7 @@ export class RaycastRenderer {
       def: def.def,
       agi: def.agi,
       sprite: def.sprite,
+      ...posesField(def.poses),
       // 隊列 (#747)。front 配置は先頭 1 人だけを渡し隊列を描かないので、補正も side のときだけかける
       ...(this.battleLayout === 'side' && normalizeBattleRow(def.row) === 'back'
         ? { row: 'back' as const }
@@ -975,6 +981,7 @@ export class RaycastRenderer {
           exp: def.exp,
           gold: def.gold,
           sprite: def.sprite,
+          ...posesField(def.poses),
         }
       : {
           id: 'slime',
