@@ -208,12 +208,13 @@ export class BattleScreen extends Container {
   private enemyNameText: PixiText
   private enemyHpText: PixiText
   private heroStatsText: PixiText
-  private statsPanel: Graphics
-  private commandPanel: Graphics
-  private logPanel: Graphics
-  /** ff-blue パネルの子 Graphics（帯・mask・枠）。drawPanel が g ごとに 1 組だけ作って使い回す */
+  /** dark = Graphics（従来どおり）、ff-blue = 子 [帯, mask, 枠] を持つ Container（Pixi 8 の Graphics は子を持てないため） */
+  private statsPanel: Container
+  private commandPanel: Container
+  private logPanel: Container
+  /** ff-blue パネルの子 Graphics（帯・mask・枠）。makePanel が 1 組だけ作り、drawPanel が使い回す */
   private ffBlueParts = new WeakMap<
-    Graphics,
+    Container,
     { bands: Graphics; mask: Graphics; frame: Graphics }
   >()
   private logLines: PixiText[] = []
@@ -237,9 +238,9 @@ export class BattleScreen extends Container {
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 
     this.dim = new Graphics()
-    this.statsPanel = new Graphics()
-    this.commandPanel = new Graphics()
-    this.logPanel = new Graphics()
+    this.statsPanel = this.makePanel()
+    this.commandPanel = this.makePanel()
+    this.logPanel = this.makePanel()
     this.enemyNameText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_NAME) })
     this.enemyHpText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_HP) })
     this.heroStatsText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_HP) })
@@ -456,7 +457,10 @@ export class BattleScreen extends Container {
     this.visibleLogLines = n
   }
 
-  /** ff-blue のとき文字スタイルに黒い影を足す (#744)。dark は共有スタイルを壊さないよう clone だけ返す */
+  /**
+   * ff-blue のとき文字スタイルに黒い影を足す (#744)。dark も含め常に clone する:
+   * 共有 TextStyle（モジュール定数）を直接使うと、fill の書き換えが他のテキストや次の BattleScreen に漏れる（汚染）ため。
+   */
   private themedStyle(base: TextStyle): TextStyle {
     const style = base.clone()
     if (this.windowStyle === 'ff-blue') style.dropShadow = { ...FF_BLUE_TEXT_SHADOW }
@@ -466,13 +470,12 @@ export class BattleScreen extends Container {
   /**
    * パネル 1 枚を描く (#744)。dark は従来の半透明黒の角丸矩形。ff-blue は帯状グラデーション（横縞の rect を
    * 上から積む）を、同じ角丸矩形の mask で切り抜き、その上に同形の白枠を重ねる。寸法・半径・枠線はどちらも同じ。
-   * ff-blue の g は空の入れ物で、子 [帯, mask, 枠] を持つ（枠を mask の外に置くのは、枠の外側半分が切れないようにするため）。
-   * 子は g ごとに 1 組だけ作って使い回す（再描画で mask が積み増されない）。
+   * ff-blue の g は Container で、子 [帯, mask, 枠] を持つ（枠を mask の外に置くのは、枠の外側半分が切れないようにするため）。
+   * 子は makePanel が 1 組だけ作って使い回す（再描画で mask が積み増されない）。
    */
-  private drawPanel(g: Graphics, x: number, y: number, w: number, h: number): void {
-    g.clear()
-    if (this.windowStyle === 'ff-blue') {
-      const parts = this.ffBluePanelParts(g)
+  private drawPanel(container: Container, x: number, y: number, w: number, h: number): void {
+    const parts = this.ffBlueParts.get(container)
+    if (parts) {
       parts.mask.clear().roundRect(x, y, w, h, PANEL_RADIUS).fill({ color: 0xffffff })
       parts.bands.clear()
       for (const band of computeBands(h)) {
@@ -486,24 +489,24 @@ export class BattleScreen extends Container {
         .stroke({ color: PANEL_STROKE, width: 2 })
       return
     }
+    const g = container as Graphics
+    g.clear()
     g.roundRect(x, y, w, h, PANEL_RADIUS)
       .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
       .stroke({ color: PANEL_STROKE, width: 2 })
   }
 
-  /** ff-blue パネルの子 Graphics（帯・mask・枠）を g ごとに 1 組だけ作る。描画順は帯 → 枠（mask は描画されない） */
-  private ffBluePanelParts(g: Graphics): { bands: Graphics; mask: Graphics; frame: Graphics } {
-    let parts = this.ffBlueParts.get(g)
-    if (!parts) {
-      const bands = new Graphics()
-      const mask = new Graphics()
-      const frame = new Graphics()
-      bands.mask = mask
-      g.addChild(bands, mask, frame)
-      parts = { bands, mask, frame }
-      this.ffBlueParts.set(g, parts)
-    }
-    return parts
+  /** パネルの入れ物を作る。dark は Graphics、ff-blue は描画順 帯 → 枠（mask は描画されない）の子を持つ Container */
+  private makePanel(): Container {
+    if (this.windowStyle !== 'ff-blue') return new Graphics()
+    const container = new Container()
+    const bands = new Graphics()
+    const mask = new Graphics()
+    const frame = new Graphics()
+    bands.mask = mask
+    container.addChild(bands, mask, frame)
+    this.ffBlueParts.set(container, { bands, mask, frame })
+    return container
   }
 
   private layout(): void {
@@ -580,7 +583,7 @@ export class BattleScreen extends Container {
       enemyCount: s.enemies.length,
       commandCount: this.commands.length,
     })
-    const panel = (r: { x: number; y: number; w: number; h: number }, g: Graphics) =>
+    const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)
 
     // ログ帯（上）

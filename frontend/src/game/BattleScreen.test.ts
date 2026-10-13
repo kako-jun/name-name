@@ -958,6 +958,7 @@ describe('BattleScreen: acrylic (#737)', () => {
 })
 
 describe('BattleScreen: windowStyle (#744)', () => {
+  /** 実体は dark = Graphics、ff-blue = 子 [帯, mask, 枠] を持つ Container。テストでは dark の描画命令読み取りと兼用するため Graphics と型付けする */
   interface PanelInternals {
     statsPanel: Graphics
     commandPanel: Graphics
@@ -1046,6 +1047,25 @@ describe('BattleScreen: windowStyle (#744)', () => {
         expect(strokes[0].color).toBe(0xffffff)
         expect(strokes[0].width).toBe(2)
       }
+    })
+
+    it('dark の front で敵 HP は緑・主人公ステータスは白になり、共有 TextStyle が汚染されない', () => {
+      const HP_COLOR = 0x88ee88
+      const TEXT_COLOR = 0xffffff
+      const a = build({ windowStyle: 'dark' })
+      const ia = internals(a)
+      expect(ia.enemyHpText.style.fill).toBe(HP_COLOR)
+      expect(ia.heroStatsText.style.fill).toBe(TEXT_COLOR)
+      // 2 画面目を作っても、1 画面目の更新が持ち越されない
+      const b = build({ windowStyle: 'dark' })
+      const ib = internals(b)
+      expect(ib.enemyHpText.style.fill).toBe(HP_COLOR)
+      expect(ib.heroStatsText.style.fill).toBe(TEXT_COLOR)
+      // 敵 HP とステータスは別インスタンス（共有していない）
+      expect(ia.enemyHpText.style).not.toBe(ia.heroStatsText.style)
+      // 3 画面目でも敵 HP は緑のまま（モジュール定数 TEXT_STYLE_HP が白に書き換わっていない）
+      const c = build({ windowStyle: 'dark' })
+      expect(internals(c).enemyHpText.style.fill).toBe(HP_COLOR)
     })
 
     it('front でも roundRect 1 つ（未指定）', () => {
@@ -1202,7 +1222,6 @@ describe('BattleScreen: windowStyle (#744)', () => {
             opsOf(bandsOf(g)).length,
             opsOf(maskOf(g)).length,
             opsOf(frameOf(g)).length,
-            opsOf(g).length,
           ])
         const before = snap()
         const bandsRefs = panelsOf(s).map((g) => bandsOf(g))
