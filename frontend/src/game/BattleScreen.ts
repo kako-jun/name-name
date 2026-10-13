@@ -60,6 +60,7 @@ import {
   fitHpLabel,
   fitLabel,
   fitNameWithSuffix,
+  type BattleDepth,
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
@@ -222,6 +223,16 @@ export interface BattleScreenOptions {
    * （その 1 タップではコマンドは実行しない。DialogBox の「タップで全文表示→もう一度で進む」と同じ流儀）。
    */
   logTypewriter?: BattleLogTypewriterMode
+  /**
+   * 奥行き (#747)。指定して perspective が 0 超なら、`side` で行ごとの縮尺・床の高さを付け、奥→手前の順に描く。
+   * 未指定・null は平面（現行どおり）。`front` は敵・味方の画像を描かないので影響しない。
+   */
+  depth?: BattleDepth | null
+  /**
+   * 前景レイヤー画像パス (#747)。`side` でスプライトより手前（パネル・テキストより奥）に cover で敷く。
+   * 透過 PNG を想定。未指定・読み込み失敗は何も描かない。
+   */
+  foreground?: string
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -265,6 +276,12 @@ export class BattleScreen extends Container {
   private logTracker: BattleLogTracker = makeBattleLogTracker()
   private logTicker: Ticker | null = null
   private backgroundSprite: Sprite | null = null
+  /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
+  private sideStage: Container | null = null
+  /** side: 敵の名前・HP ラベルの親 (#747)。前景より手前・パネルより奥（spec どおり、文字（敵ラベル）は前景より手前に置く） */
+  private labelLayer: Container | null = null
+  /** 前景レイヤー (#747)。スプライトより手前・パネルより奥 */
+  private foregroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
   private partyViews: EntityView[] = []
   private statusTexts: PixiText[] = []
@@ -337,6 +354,7 @@ export class BattleScreen extends Container {
     if (this.layoutMode === 'front') this.buildLogLines()
     else this.buildSideViews()
     if (opts.background) void this.loadBackground(opts.background)
+    if (opts.foreground && this.layoutMode === 'side') void this.loadForeground(opts.foreground)
     this.layout()
     this.refresh()
   }
@@ -353,6 +371,20 @@ export class BattleScreen extends Container {
     this.disposeBackgroundDof()
     this.disposeLogTicker()
     super.destroy(options)
+  }
+
+  /** 前景画像を読み込み、敵・味方スプライトの直上（パネルより奥）に cover で敷く (#747)。失敗時は何も描かない */
+  private async loadForeground(path: string): Promise<void> {
+    try {
+      const tex = (await Assets.load(path)) as Texture
+      if (this.destroyedFlag || !this.sideStage) return
+      const sprite = new Sprite(tex)
+      this.foregroundSprite = sprite
+      this.addChildAt(sprite, this.getChildIndex(this.sideStage) + 1)
+      this.layout()
+    } catch (e) {
+      console.warn(`[BattleScreen] failed to load foreground "${path}":`, e)
+    }
   }
 
   /** 背景画像を読み込んで cover で敷く (#736)。失敗時は半透明黒のまま */
@@ -509,8 +541,13 @@ export class BattleScreen extends Container {
     this.enemyHpText.visible = false
     this.heroStatsText.visible = false
     const stage = new Container()
+    this.sideStage = stage
     // dim の直後（パネル・テキストより下）に差し込む
     this.addChildAt(stage, this.getChildIndex(this.dim) + 1)
+    // 敵ラベルは sideStage の直後（前景は loadForeground が sideStage の直後=ラベル層の手前に差し込む）
+    const labelLayer = new Container()
+    this.labelLayer = labelLayer
+    this.addChildAt(labelLayer, this.getChildIndex(stage) + 1)
     for (const e of s.enemies) {
       const view = this.createEntityView(e, FALLBACK_ENEMY_COLOR, true)
       stage.addChild(view.container)
@@ -564,7 +601,8 @@ export class BattleScreen extends Container {
       : null
     if (label) {
       label.anchor.set(0.5, 0)
-      container.addChild(label)
+      // sideStage の外（前景より上の層）へ置く。座標は画面絶対（placeEntityView が更新）
+      this.labelLayer?.addChild(label)
     }
     const view: EntityView = {
       container,
@@ -801,6 +839,8 @@ export class BattleScreen extends Container {
       partyCount: s.party.length,
       enemyCount: s.enemies.length,
       commandCount: this.commands.length,
+      partyRows: s.party.map((p) => p.row),
+      depth: this.opts.depth,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)
@@ -820,6 +860,24 @@ export class BattleScreen extends Container {
     }
     for (let i = 0; i < this.partyViews.length; i++) {
       this.placeEntityView(this.partyViews[i], L.party[i])
+    }
+    // 奥行き (#747): 床の基準 y の昇順（奥→手前）で重ねる。平面のときは従来どおり挿入順
+    if (this.sideStage) {
+      this.sideStage.sortableChildren = L.depthActive
+      this.enemyViews.forEach((v, i) => {
+        v.container.zIndex = L.depthActive ? (L.enemies[i]?.floor ?? 0) : 0
+      })
+      this.partyViews.forEach((v, i) => {
+        v.container.zIndex = L.depthActive ? (L.party[i]?.floor ?? 0) : 0
+      })
+    }
+    // 前景レイヤー (#747)
+    if (this.foregroundSprite) {
+      const tex = this.foregroundSprite.texture
+      const fit = computeCoverFit(tex.width, tex.height, this.screenWidth, this.screenHeight)
+      this.foregroundSprite.position.set(fit.x, fit.y)
+      this.foregroundSprite.width = fit.width
+      this.foregroundSprite.height = fit.height
     }
 
     // 下パネル: コマンド（左）
@@ -872,11 +930,11 @@ export class BattleScreen extends Container {
       view.fallback.visible = false
     }
     if (view.label) {
-      // ラベル位置は純粋関数が返す矩形（container 相対に直す）。置けない枠では隠す
+      // ラベル位置は純粋関数が返す矩形（画面絶対）。縮尺・位置の追従は slot に含まれる。置けない枠では隠す
       view.label.visible = !!slot.label
       if (slot.label) {
-        view.label.x = slot.label.x - slot.x + slot.label.w / 2
-        view.label.y = slot.label.y - slot.y
+        view.label.x = slot.label.x + slot.label.w / 2
+        view.label.y = slot.label.y
       }
     }
   }
@@ -927,6 +985,7 @@ export class BattleScreen extends Container {
       if (!e) continue
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
       if (view.label) {
+        view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
         // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
         // 多列は列ピッチ=スプライト一辺）を越える名前は省略して隣と重ねない
         // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く

@@ -211,6 +211,9 @@ no-op で吸収する（位置を変えない、fail-soft）。
 | 背景を落とす | `on`（既定）/ `off`。背景スプライトにだけ彩度・明度を落とすフィルタ（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。ブリンク比較の対象に含まれる |
 | 被写界深度（手前ぼかし） | `on` / `off`（既定）。背景スプライトにだけ、画面の下側ほど強くぼかす縦グラデーション（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。「背景を落とす」とは独立。ブリンク比較の対象に含まれる |
 | ログを1文字ずつ表示 | `on` / `off`（既定）。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない）。ブリンク比較の対象に含まれる |
+| 奥行き（行ごとの縮尺） | `on` / `off`（既定）。`on` のとき設定 JSON の `horizon`（既定 0.3）と `perspective`（既定 0.8）で、奥の行ほど小さく・上に描く（#747）。`layout=side` のときだけ見た目が変わる。ブリンク比較の対象に含まれる |
+| 前景あり | 設定 JSON に `foreground` があるときだけ切り替え可（#747）。ブリンク比較の対象に含まれる |
+| 隊列 | `設定どおり`（既定。`party[].row`）/ `全員前衛` / `後ろ半分を後衛`（前衛が人数の半分（切り上げ）で、残りが後衛。1 人=後衛なし / 2 人=1 人 / 3 人=1 人 / 4 人=2 人）（#747）。後衛は右寄りに半歩下がり、たたかうのダメージが半分になる（今の BattleEngine は攻撃側・被弾側とも `firstAlive(party)` の 1 人だけなので、後衛のダメージ半減は**先頭の生存者が後衛のときだけ**見える（全員行動は #205 で対応予定）。）。`layout=front` では隊列を使わない。ブリンク比較の対象に含まれる |
 | 背景あり | 設定 JSON に `background` があるときだけ切り替え可 |
 | 味方 / 敵 | 1〜4 人（設定の件数を超えたぶんは内蔵既定で補う）。`layout=front` のときは味方人数を選べない（下記） |
 | 画面サイズ | `360x640` / `800x450` / `1280x720` / `640x360`（論理サイズ） |
@@ -234,6 +237,9 @@ no-op で吸収する（位置を変えない、fail-soft）。
   "backgroundTone": "on",
   "backgroundDof": "off",
   "logTypewriter": "off",
+  "horizon": 0.3,
+  "perspective": 0.8,
+  "foreground": "battle/foreground.png",
   "background": "battle/background.png",
   "party": [
     { "id": "a", "name": "アリス", "hp": 30, "maxHp": 30, "mp": 8, "maxMp": 8, "atk": 8, "def": 4, "agi": 6, "sprite": "battle/party-a.png" },
@@ -245,8 +251,8 @@ no-op で吸収する（位置を変えない、fail-soft）。
 }
 ```
 
-- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `logTypewriter` / `background` / `party` / `enemies`）と、各キャラのフィールドはすべて省略可。省略は内蔵既定で補う
-- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `logTypewriter` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
 - `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
 - 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある

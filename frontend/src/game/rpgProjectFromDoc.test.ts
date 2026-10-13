@@ -1690,3 +1690,43 @@ describe('rpgProjectFromDoc: battle_log_typewriter の追加観点 (#755 QA)', (
     expect(q.battleLogTypewriter).toBe('off')
   })
 })
+
+describe('rpgProjectFromDoc: battle_horizon / battle_perspective / battle_foreground (#747)', () => {
+  const withDepth = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it('perspective ありなら battleDepth に horizon・perspective が入る', () => {
+    const p = rpgProjectFromDoc(withDepth({ battle_horizon: '0.4', battle_perspective: '0.7' }))!
+    expect(p.battleDepth).toEqual({ horizon: 0.4, perspective: 0.7 })
+  })
+  it('perspective のみなら horizon は既定 0.3', () => {
+    const p = rpgProjectFromDoc(withDepth({ battle_perspective: '0.5' }))!
+    expect(p.battleDepth).toEqual({ horizon: 0.3, perspective: 0.5 })
+  })
+  it('perspective なしなら battleDepth は undefined', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleDepth).toBeUndefined()
+  })
+  it('horizon のみ（perspective なし）でも battleDepth は undefined', () => {
+    expect(rpgProjectFromDoc(withDepth({ battle_horizon: '0.4' }))!.battleDepth).toBeUndefined()
+  })
+  it("perspective '0' は battleDepth undefined", () => {
+    expect(
+      rpgProjectFromDoc(withDepth({ battle_horizon: '0.4', battle_perspective: '0' }))!.battleDepth
+    ).toBeUndefined()
+  })
+  it('battle_foreground はそのまま battleForeground に透過する', () => {
+    expect(
+      rpgProjectFromDoc(withDepth({ battle_foreground: 'fg/grass.png' }))!.battleForeground
+    ).toBe('fg/grass.png')
+  })
+  it('battle_foreground 未指定・null は battleForeground undefined', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleForeground).toBeUndefined()
+    expect(
+      rpgProjectFromDoc(withDepth({ battle_foreground: null }))!.battleForeground
+    ).toBeUndefined()
+  })
+  it('battle_foreground が空文字なら battleForeground undefined（空パスを Assets.load に渡さない）', () => {
+    expect(
+      rpgProjectFromDoc(withDepth({ battle_foreground: '' }))!.battleForeground
+    ).toBeUndefined()
+  })
+})

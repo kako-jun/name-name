@@ -9,6 +9,7 @@ import {
   SCREEN_SIZES,
   MAX_PARTY,
   MAX_ENEMIES,
+  FORMATION_MODES,
   RESOLUTION_MODES,
   buildBattleSetup,
   defaultConfig,
@@ -24,6 +25,7 @@ import {
   type BattleSampleConfig,
   type BlinkHistory,
   type BattleSampleView,
+  type FormationMode,
   type ResolutionMode,
   type ScreenSizeId,
 } from './config'
@@ -188,6 +190,28 @@ async function main(): Promise<void> {
   )
   logTwLabel.append(logTwChk, 'ログを1文字ずつ表示')
   tb.appendChild(logTwLabel)
+  const depthLabel = document.createElement('label')
+  const depthChk = document.createElement('input')
+  depthChk.type = 'checkbox'
+  depthChk.id = 'tb-depth'
+  depthChk.addEventListener('change', () => change({ depth: depthChk.checked ? 'on' : 'off' }))
+  depthLabel.append(depthChk, '奥行き（行ごとの縮尺）')
+  tb.appendChild(depthLabel)
+  const fgLabel = document.createElement('label')
+  const fgChk = document.createElement('input')
+  fgChk.type = 'checkbox'
+  fgChk.id = 'tb-fg'
+  fgChk.disabled = config.foreground === null
+  fgChk.addEventListener('change', () => change({ foregroundOn: fgChk.checked }))
+  fgLabel.append(fgChk, '前景あり')
+  tb.appendChild(fgLabel)
+  const formationSel = select(
+    '隊列',
+    'tb-formation',
+    FORMATION_MODES,
+    (v) => change({ formation: v as FormationMode }),
+    { config: '設定どおり', front: '全員前衛', backHalf: '後ろ半分を後衛' }
+  )
   const nums = ['1', '2', '3', '4']
   const partySel = select('味方', 'tb-party', nums.slice(0, MAX_PARTY), (v) =>
     change({ partyCount: Number(v) })
@@ -232,6 +256,9 @@ async function main(): Promise<void> {
     styleSel.value = v.spriteStyle
     windowSel.value = v.windowStyle
     bgChk.checked = v.backgroundOn
+    depthChk.checked = v.depth === 'on'
+    fgChk.checked = v.foregroundOn
+    formationSel.value = v.formation
     toneChk.checked = v.backgroundTone === 'on'
     dofChk.checked = v.backgroundDof === 'on'
     logTwChk.checked = v.logTypewriter === 'on'

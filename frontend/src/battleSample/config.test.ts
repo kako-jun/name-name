@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
+import type { BattleEntity } from '../game/spellDsl'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
   MAX_ENEMIES,
   MAX_PARTY,
+  SAMPLE_DEFAULT_PERSPECTIVE,
   SCREEN_SIZES,
+  applyFormation,
   buildBattleSetup,
   defaultConfig,
   defaultEnemies,
@@ -39,6 +42,9 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     backgroundDof: 'off',
     logTypewriter: 'off',
     backgroundOn: false,
+    depth: 'off',
+    foregroundOn: false,
+    formation: 'config',
     partyCount: 4,
     enemyCount: 4,
     sizeId: '800x450',
@@ -862,13 +868,13 @@ describe('describeView', () => {
         height: 640,
       })
     ).toBe(
-      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  depth=off  foreground=off  formation=config  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
   it('DPR=2・360x640 の完全一致文字列', () => {
     expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
+      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  logTypewriter=off  background=off  depth=off  foreground=off  formation=config  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
     )
   })
 
@@ -1072,5 +1078,211 @@ describe('logTypewriter: 追加の観点 (#755 QA)', () => {
     const size = { width: 800, height: 450 }
     expect(describeView(view({ logTypewriter: 'on' }), 1, size)).toContain('logTypewriter=on')
     expect(describeView(view({ logTypewriter: 'off' }), 1, size)).toContain('logTypewriter=off')
+  })
+})
+
+describe('parseConfig horizon / perspective (#747)', () => {
+  it('horizon / perspective 未指定は既定値（0.3 / 0.8）', () => {
+    const c = parseOk({})
+    expect(c.horizon).toBe(0.3)
+    expect(c.perspective).toBe(0.8)
+  })
+  it('SAMPLE_DEFAULT_PERSPECTIVE は 0.8', () => {
+    expect(SAMPLE_DEFAULT_PERSPECTIVE).toBe(0.8)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: -0.001 はエラー', (key) => {
+    expect(parseErr({ [key]: -0.001 })).toContain(`${key} は 0〜1 の数値`)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: 0 は有効', (key) => {
+    expect(parseOk({ [key]: 0 })[key]).toBe(0)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: 1 は有効', (key) => {
+    expect(parseOk({ [key]: 1 })[key]).toBe(1)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: 1.001 はエラー', (key) => {
+    expect(parseErr({ [key]: 1.001 })).toContain(`${key} は 0〜1 の数値`)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: 文字列 "0.5" はエラー', (key) => {
+    expect(parseErr({ [key]: '0.5' })).toContain(`${key} は 0〜1 の数値`)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: null はエラー', (key) => {
+    expect(parseErr({ [key]: null })).toContain(`${key} は 0〜1 の数値`)
+  })
+  it.each(['horizon', 'perspective'] as const)('%s: NaN / Infinity はエラー', (key) => {
+    expect(parseErr({ [key]: NaN })).toContain(key)
+    expect(parseErr({ [key]: Infinity })).toContain(key)
+  })
+})
+
+describe('parseConfig party[].row (#747)', () => {
+  it("'back' は row: back", () => {
+    expect(parseParty0({ row: 'back' }).row).toBe('back')
+  })
+  it("'後衛' は row: back", () => {
+    expect(parseParty0({ row: '後衛' }).row).toBe('back')
+  })
+  it("'front' は row キーなし", () => {
+    expect('row' in parseParty0({ row: 'front' })).toBe(false)
+  })
+  it("'foo' は row キーなし", () => {
+    expect('row' in parseParty0({ row: 'foo' })).toBe(false)
+  })
+  it('row 未指定は row キーなし', () => {
+    expect('row' in parseParty0({})).toBe(false)
+  })
+  it('row が数値ならエラー', () => {
+    expect(parseErr({ party: [{ row: 1 }] })).toContain('party[0].row は "front" か "back"')
+  })
+  it('row が null ならエラー', () => {
+    expect(parseErr({ party: [{ row: null }] })).toContain('party[0].row は "front" か "back"')
+  })
+  it('row が配列ならエラー', () => {
+    expect(parseErr({ party: [{ row: ['back'] }] })).toContain('party[0].row')
+  })
+})
+
+describe('parseConfig foreground (#747)', () => {
+  it.each([
+    ['未指定', undefined],
+    ['null', null],
+    ['空文字', ''],
+    ['空白のみ', '   '],
+  ])('foreground が %s なら前景なし', (_l, v) => {
+    expect(parseOk({ foreground: v }).foreground).toBeNull()
+  })
+  it('相対 URL は絶対化される', () => {
+    expect(parseOk({ foreground: 'fg.png' }).foreground).toBe('https://example.com/dir/fg.png')
+  })
+  it('数値ならエラー', () => {
+    expect(parseErr({ foreground: 1 })).toContain('foreground は URL 文字列')
+  })
+  it('解決できない URL はエラー', () => {
+    expect(parseErr({ foreground: 'fg.png' }, 'not a url')).toContain(
+      'foreground の URL を解決できません'
+    )
+  })
+})
+
+describe('applyFormation (#747)', () => {
+  const mk = (n: number, rowIdx: number[] = []): BattleEntity[] =>
+    defaultParty()
+      .slice(0, n)
+      .map((p, i) => (rowIdx.includes(i) ? { ...p, row: 'back' as const } : p))
+  const backIdx = (list: BattleEntity[]) => list.flatMap((p, i) => (p.row === 'back' ? [i] : []))
+
+  it('config: 設定の row をそのまま保つ', () => {
+    expect(backIdx(applyFormation(mk(4, [1, 3]), 'config'))).toEqual([1, 3])
+  })
+  it('front: 全員 row キーなし', () => {
+    const out = applyFormation(mk(4, [1, 3]), 'front')
+    expect(out.some((p) => 'row' in p)).toBe(false)
+  })
+  it.each([
+    [1, []],
+    [2, [1]],
+    [3, [2]],
+    [4, [2, 3]],
+  ])('backHalf: %s 人 → 後衛 index %j', (n, idx) => {
+    expect(backIdx(applyFormation(mk(n), 'backHalf'))).toEqual(idx)
+  })
+  it('backHalf: 設定の row は上書きされ、前衛側の back は消える', () => {
+    expect(backIdx(applyFormation(mk(4, [0]), 'backHalf'))).toEqual([2, 3])
+  })
+  it('入力を変更しない（要素も配列も）', () => {
+    const input = mk(4, [0])
+    const snapshot = JSON.parse(JSON.stringify(input))
+    applyFormation(input, 'backHalf')
+    applyFormation(input, 'front')
+    applyFormation(input, 'config')
+    expect(input).toEqual(snapshot)
+  })
+  it('config は複製を返す（同一参照ではない）', () => {
+    const input = mk(2)
+    const out = applyFormation(input, 'config')
+    expect(out[0]).not.toBe(input[0])
+  })
+})
+
+describe('buildBattleSetup: 奥行き・前景・隊列 (#747)', () => {
+  const FG = 'https://example.com/fg.png'
+  const cfg = (over: Partial<BattleSampleConfig> = {}): BattleSampleConfig => ({
+    ...defaultConfig(),
+    horizon: 0.25,
+    perspective: 0.6,
+    ...over,
+  })
+
+  it('depth on → config の horizon / perspective が options.depth に入る', () => {
+    const s = buildBattleSetup(cfg(), view({ depth: 'on' }))
+    expect(s.options.depth).toEqual({ horizon: 0.25, perspective: 0.6 })
+  })
+  it('depth off → options.depth は null', () => {
+    expect(buildBattleSetup(cfg(), view({ depth: 'off' })).options.depth).toBeNull()
+  })
+  it('foregroundOn かつ foreground あり → options.foreground', () => {
+    const s = buildBattleSetup(cfg({ foreground: FG }), view({ foregroundOn: true }))
+    expect(s.options.foreground).toBe(FG)
+  })
+  it('foregroundOn でも foreground なしなら foreground キーなし', () => {
+    const s = buildBattleSetup(cfg({ foreground: null }), view({ foregroundOn: true }))
+    expect('foreground' in s.options).toBe(false)
+  })
+  it('foregroundOn=false なら foreground ありでもキーなし', () => {
+    const s = buildBattleSetup(cfg({ foreground: FG }), view({ foregroundOn: false }))
+    expect('foreground' in s.options).toBe(false)
+  })
+  it('layout=side・formation=backHalf・4 人 → 後衛は index 2, 3', () => {
+    const s = buildBattleSetup(cfg(), view({ formation: 'backHalf', partyCount: 4 }))
+    expect(s.party.map((p) => p.row)).toEqual([undefined, undefined, 'back', 'back'])
+  })
+  it('layout=side・formation=front → 設定の row も消える', () => {
+    const party = defaultParty().map((p) => ({ ...p, row: 'back' as const }))
+    const s = buildBattleSetup(cfg({ party }), view({ formation: 'front', partyCount: 4 }))
+    expect(s.party.some((p) => 'row' in p)).toBe(false)
+  })
+  it('layout=front なら formation（config / backHalf）を無視して row を持たない', () => {
+    const party = defaultParty().map((p) => ({ ...p, row: 'back' as const }))
+    for (const formation of ['config', 'backHalf'] as const) {
+      const s = buildBattleSetup(cfg({ party }), view({ layout: 'front', formation }))
+      expect(s.party).toHaveLength(1)
+      expect('row' in s.party[0]).toBe(false)
+    }
+  })
+  it('config.party は変更されない', () => {
+    const c = cfg()
+    const snapshot = JSON.parse(JSON.stringify(c.party))
+    buildBattleSetup(c, view({ formation: 'backHalf', partyCount: 4 }))
+    expect(c.party).toEqual(snapshot)
+  })
+})
+
+describe('viewsEqual / initialView: 奥行き・前景・隊列 (#747)', () => {
+  it('depth の差で false', () => {
+    expect(viewsEqual(view({ depth: 'on' }), view({ depth: 'off' }))).toBe(false)
+  })
+  it('foregroundOn の差で false', () => {
+    expect(viewsEqual(view({ foregroundOn: true }), view({ foregroundOn: false }))).toBe(false)
+  })
+  it('formation の差で false', () => {
+    expect(viewsEqual(view({ formation: 'front' }), view({ formation: 'backHalf' }))).toBe(false)
+  })
+  it('同一 view は true', () => {
+    expect(
+      viewsEqual(
+        view({ depth: 'on', formation: 'front' }),
+        view({ depth: 'on', formation: 'front' })
+      )
+    ).toBe(true)
+  })
+  it('initialView の既定: depth off・formation config', () => {
+    const v = initialView(defaultConfig())
+    expect(v.depth).toBe('off')
+    expect(v.formation).toBe('config')
+  })
+  it('initialView: foreground ありなら foregroundOn、なしなら false', () => {
+    expect(
+      initialView({ ...defaultConfig(), foreground: 'https://example.com/f.png' }).foregroundOn
+    ).toBe(true)
+    expect(initialView(defaultConfig()).foregroundOn).toBe(false)
   })
 })

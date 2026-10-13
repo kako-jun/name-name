@@ -395,6 +395,10 @@ pub struct PartyMemberDef {
     /// 立ち絵 / 戦闘スプライト相対パス
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite: Option<String>,
+    /// 戦闘の隊列 (#747)。`"front"`（既定）/ `"back"`（後衛）。値は parser でバリデーションせず生文字列で透過し、
+    /// 解釈（`後衛` 等の別名・未知値は front）は runtime 側。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row: Option<String>,
     /// 初期レベル（既定 1）
     #[serde(default = "default_level")]
     pub level: u32,
@@ -1589,6 +1593,19 @@ pub struct Document {
     /// frontmatter `battle_log_typewriter:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_log_typewriter: Option<String>,
+    /// RPG 戦闘画面の地平線の高さ (#747)。画面高さに対する比（0.0〜1.0 の数値文字列。例 `"0.3"`）。
+    /// 値は parser でバリデーションせず生文字列で透過する。数値でない・範囲外は runtime 側で扱う。
+    /// `battle_perspective` が 0 超のときだけ効く。GUI 専用（TUI は読まない）。frontmatter `battle_horizon:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_horizon: Option<String>,
+    /// RPG 戦闘画面の遠近の強さ (#747)。0.0（既定・平面）〜1.0 の数値文字列。0 超で奥行き（行ごとの縮尺）が有効になる。
+    /// 値は parser でバリデーションせず生文字列で透過する。GUI 専用。frontmatter `battle_perspective:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_perspective: Option<String>,
+    /// RPG 戦闘画面の前景レイヤー画像パス (#747)。スプライトより手前（パネルより奥）に描く。
+    /// GUI 専用。frontmatter `battle_foreground:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_foreground: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

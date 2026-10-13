@@ -17,7 +17,7 @@ import type {
   UiRpgTrigger,
 } from '../types/rpg'
 import { safeAssign, safeAssignAll } from './ownProperty'
-import { normalizeBattleLayout } from './battleLayout'
+import { normalizeBattleDepth, normalizeBattleLayout } from './battleLayout'
 import { normalizeSpriteStyle } from './spriteStyle'
 import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
@@ -249,6 +249,8 @@ export function rpgProjectFromDoc(
     battleBackgroundTone: normalizeBackgroundTone(doc.battle_background_tone),
     battleBackgroundDof: normalizeBackgroundDof(doc.battle_background_dof),
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
+    battleDepth: normalizeBattleDepth(doc.battle_horizon, doc.battle_perspective) ?? undefined,
+    battleForeground: doc.battle_foreground || undefined,
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }

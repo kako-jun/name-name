@@ -173,6 +173,8 @@ export interface PartyMemberDef {
   id: string
   name: string
   sprite?: string
+  /** 戦闘の隊列 (#747)。`'front'`（既定）/ `'back'`（後衛）。生文字列で透過し、解釈は `normalizeBattleRow` */
+  row?: string
   /** 初期レベル（既定 1） */
   level?: number
   hp: number
@@ -870,6 +872,14 @@ export interface EventDocument {
    *  null/undefined・未知値は `"off"` にフォールバック。GUI 専用（TUI は読まない）。
    *  frontmatter `battle_log_typewriter:` から流す。 */
   battle_log_typewriter?: string | null
+  /** RPG 戦闘画面の地平線の高さ (#747)。画面高さに対する比（0〜1 の数値文字列）。`battle_perspective` が 0 超のときだけ効く。
+   *  GUI 専用（TUI は読まない）。frontmatter `battle_horizon:` から流す。 */
+  battle_horizon?: string | null
+  /** RPG 戦闘画面の遠近の強さ (#747)。0（既定・平面）〜1 の数値文字列。0 超で奥行きが有効。
+   *  frontmatter `battle_perspective:` から流す。 */
+  battle_perspective?: string | null
+  /** RPG 戦闘画面の前景レイヤー画像パス (#747)。frontmatter `battle_foreground:` から流す。 */
+  battle_foreground?: string | null
   chapters: EventChapter[]
 }
 

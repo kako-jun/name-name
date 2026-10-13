@@ -202,6 +202,14 @@ export interface RPGProject {
   battleBackgroundDof?: 'on' | 'off'
   /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter:` 由来。未指定は `'off'` */
   battleLogTypewriter?: 'on' | 'off'
+  /**
+   * 戦闘画面の奥行き (#747)。frontmatter `battle_horizon:`（地平線の高さ・画面比）/ `battle_perspective:`（遠近の強さ）由来。
+   * `battle_perspective` が 0 超のときだけ値を持つ。未指定は undefined（平面・現行どおり）
+   */
+  // 型は game/battleLayout.ts の BattleDepth と同形。types 層は game 層を import しないため構造だけ複製している
+  battleDepth?: { horizon: number; perspective: number }
+  /** 戦闘画面の前景レイヤー画像パス (#747)。frontmatter `battle_foreground:` 由来。未指定は無し */
+  battleForeground?: string
 }
 
 /**

@@ -174,6 +174,19 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_log_typewriter: \"{sanitized}\"\n"));
         }
+        // battle_horizon / battle_perspective / battle_foreground (#747)。同じ流儀
+        if let Some(ref v) = doc.battle_horizon {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_horizon: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_perspective {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_perspective: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_foreground {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_foreground: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -969,6 +982,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(s) = &p.sprite {
                     out.push_str(&format!("スプライト: {s}\n"));
                 }
+                if let Some(r) = &p.row {
+                    out.push_str(&format!("隊列: {r}\n"));
+                }
                 if p.level > 1 {
                     out.push_str(&format!("レベル: {}\n", p.level));
                 }
@@ -1681,6 +1697,9 @@ mod tests {
             battle_background_tone: None,
             battle_background_dof: None,
             battle_log_typewriter: None,
+            battle_horizon: None,
+            battle_perspective: None,
+            battle_foreground: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1947,6 +1966,9 @@ mod tests {
             battle_background_tone: None,
             battle_background_dof: None,
             battle_log_typewriter: None,
+            battle_horizon: None,
+            battle_perspective: None,
+            battle_foreground: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

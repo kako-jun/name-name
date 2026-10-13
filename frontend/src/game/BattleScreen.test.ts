@@ -76,6 +76,11 @@ interface Internals {
   statusTexts: Text[]
   logLines: Text[]
   backgroundSprite: Sprite | null
+  foregroundSprite: Sprite | null
+  sideStage: Container | null
+  labelLayer: Container | null
+  statsPanel: Container
+  commandPanel: Container
   layoutMode: 'front' | 'side'
   children: Container[]
   destroyed: boolean
@@ -201,6 +206,109 @@ describe('BattleScreen: 背景画像', () => {
     resolve(mockTexture())
     await flushPromises()
     expect(internals(s).backgroundSprite).toBeNull()
+  })
+})
+
+describe('BattleScreen: 前景レイヤー (#747)', () => {
+  const side: BattleScreenOptions = { layout: 'side', foreground: 'fg/a.png' }
+  const party = [entity('hero'), entity('mage')]
+  const foes = [entity('slime'), entity('bat')]
+
+  it('成功 → foregroundSprite が sideStage の直後（敵ラベル層の手前）・パネルより下', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(make(party, foes, side))
+    await flushPromises()
+    const i = internals(s)
+    expect(i.foregroundSprite).not.toBeNull()
+    const idx = i.children.indexOf(i.foregroundSprite as unknown as Container)
+    expect(idx).toBe(i.children.indexOf(i.sideStage as Container) + 1)
+    expect(idx).toBeLessThan(i.children.indexOf(i.commandPanel))
+    expect(idx).toBeLessThan(i.children.indexOf(i.statsPanel))
+  })
+
+  it('失敗 → warn 1 回・foregroundSprite なし・例外なし', async () => {
+    vi.spyOn(Assets, 'load').mockRejectedValue(new Error('404'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = track(make(party, foes, side))
+    await flushPromises()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(internals(s).foregroundSprite).toBeNull()
+  })
+
+  it('destroy 後に読み込みが完了しても追加せず例外なし', async () => {
+    let resolve!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockReturnValue(
+      new Promise<Texture>((r) => {
+        resolve = r
+      }) as never
+    )
+    const s = make(party, foes, side)
+    s.destroy({ children: true })
+    resolve(mockTexture())
+    await flushPromises()
+    expect(internals(s).foregroundSprite).toBeNull()
+  })
+
+  it("layout='front' では Assets.load を呼ばない", () => {
+    const load = vi.spyOn(Assets, 'load')
+    track(make(party, foes, { layout: 'front', foreground: 'fg/a.png' }))
+    expect(load).not.toHaveBeenCalled()
+  })
+
+  it('奥行き有効: sideStage.sortableChildren が立ち、各 view の zIndex は floor。無効なら 0', () => {
+    const on = track(
+      make(party, foes, { layout: 'side', depth: { horizon: 0.3, perspective: 0.8 } })
+    )
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 2,
+      enemyCount: 2,
+      depth: { horizon: 0.3, perspective: 0.8 },
+    })
+    const i = internals(on)
+    expect(i.sideStage!.sortableChildren).toBe(true)
+    i.enemyViews.forEach((v, k) => expect(v.container.zIndex).toBe(L.enemies[k].floor))
+    i.partyViews.forEach((v, k) => expect(v.container.zIndex).toBe(L.party[k].floor))
+    const off = internals(track(make(party, foes, { layout: 'side' })))
+    expect(off.sideStage!.sortableChildren).toBe(false)
+    for (const v of [...off.enemyViews, ...off.partyViews]) expect(v.container.zIndex).toBe(0)
+  })
+
+  it('背景の読み込みが前景より後に終わっても 背景 < sideStage < 前景 の順', async () => {
+    let resolveBg!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockImplementation(((path: string) =>
+      path === 'bg/a.webp'
+        ? new Promise<Texture>((r) => {
+            resolveBg = r
+          })
+        : Promise.resolve(mockTexture())) as never)
+    const s = track(make(party, foes, { ...side, background: 'bg/a.webp' }))
+    await flushPromises()
+    resolveBg(mockTexture())
+    await flushPromises()
+    const i = internals(s)
+    const bg = i.children.indexOf(i.backgroundSprite as unknown as Container)
+    const st = i.children.indexOf(i.sideStage as Container)
+    const fg = i.children.indexOf(i.foregroundSprite as unknown as Container)
+    expect(bg).toBe(0)
+    expect(bg).toBeLessThan(st)
+    expect(st).toBeLessThan(fg)
+  })
+
+  it('敵ラベル層は前景より上（かつパネルより下）。ラベルは sideStage の外にある', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const s = track(make(party, foes, side))
+    await flushPromises()
+    const i = internals(s)
+    const fg = i.children.indexOf(i.foregroundSprite as unknown as Container)
+    const lab = i.children.indexOf(i.labelLayer as Container)
+    expect(lab).toBeGreaterThan(fg)
+    expect(lab).toBeLessThan(i.children.indexOf(i.commandPanel))
+    for (const v of i.enemyViews) {
+      expect(v.label!.parent).toBe(i.labelLayer)
+      expect(i.sideStage!.children).not.toContain(v.label)
+    }
   })
 })
 
@@ -451,6 +559,7 @@ describe('BattleScreen: side', () => {
   ])('hp=%d の敵・味方 view の alpha は %d', (hp, alpha) => {
     const s = track(make([entity('hero', { hp })], [entity('slime', { hp })], side))
     expect(internals(s).enemyViews[0].container.alpha).toBe(alpha)
+    expect(internals(s).enemyViews[0].label!.alpha).toBe(alpha)
     expect(internals(s).partyViews[0].container.alpha).toBe(alpha)
   })
 
@@ -608,7 +717,7 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
     }
   })
 
-  it('敵ラベルは container 相対でスプライト直下（純粋関数のラベル矩形）に置かれる', () => {
+  it('敵ラベルは画面絶対（前景より上の層）でスプライト直下（純粋関数のラベル矩形）に置かれる', () => {
     const s = track(make([entity('hero')], enemies(3), sideOpts, 800, 720))
     const L = computeSideBattleLayout({
       width: 800,
@@ -618,8 +727,8 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
     })
     internals(s).enemyViews.forEach((v, k) => {
       const slot = L.enemies[k]
-      expect(v.label!.x).toBeCloseTo(slot.label!.x - slot.x + slot.label!.w / 2)
-      expect(v.label!.y).toBeCloseTo(slot.size + 2)
+      expect(v.label!.x).toBeCloseTo(slot.label!.x + slot.label!.w / 2)
+      expect(v.label!.y).toBeCloseTo(slot.y + slot.size + 2)
       expect(v.label!.visible).toBe(true)
     })
   })
@@ -774,10 +883,11 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.acrylicBack).toBeNull()
       expect(v.acrylicFilter).toBeNull()
       expect(v.sprite!.filters ?? []).toHaveLength(0)
-      expect(v.container.children).toHaveLength(3)
+      // ラベルは container の外（labelLayer・#747）
+      expect(v.container.children).toHaveLength(2)
       expect(v.container.children[0]).toBe(v.fallback)
       expect(v.container.children[1]).toBe(v.sprite)
-      expect(v.container.children[2]).toBe(v.label)
+      expect(v.label!.parent).toBe(internals(s).labelLayer)
     })
 
     it('spriteStyle 未指定のスプライト配置は #736 の contain と同一', async () => {
@@ -824,7 +934,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack).toBeNull()
       expect(v.acrylicFilter).toBeNull()
-      expect(v.container.children).toHaveLength(3)
+      expect(v.container.children).toHaveLength(2)
     })
   })
 
@@ -867,11 +977,11 @@ describe('BattleScreen: acrylic (#737)', () => {
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      expect(v.container.children).toHaveLength(4)
+      expect(v.container.children).toHaveLength(3)
       expect(v.container.children[0]).toBe(v.fallback)
       expect(v.container.children[1]).toBe(v.acrylicBack)
       expect(v.container.children[2]).toBe(v.sprite)
-      expect(v.container.children[3]).toBe(v.label)
+      expect(v.label!.parent).toBe(internals(s).labelLayer)
     })
 
     it('成功: sprite は slot 枠に収まり、足元が台座の中心に乗る（computeAcrylicGeometry と一致）', async () => {

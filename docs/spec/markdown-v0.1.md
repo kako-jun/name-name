@@ -60,6 +60,9 @@ choice_style: "default"
 | `battle_background_tone` | string | No | RPG 戦闘背景（`battle_background`）の彩度・明度を**表示時のフィルタ**で落とし、キャラ・敵を浮き上がらせるか (#753)。`"on"`（既定）/ `"off"`（素材そのまま）の2択。背景スプライトにだけ効き、キャラ・敵・パネル・テキストには影響しない。画像ファイルは編集しない。背景なしのときは無関係（従来どおりの半透明黒のみ）。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"on"` にフォールバックする。彩度・明度の係数は `frontend/src/game/backgroundTone.ts` の定数が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_background_tone` を読まない |
 | `battle_background_dof` | string | No | RPG 戦闘背景（`battle_background`）の**被写界深度（DoF）風の手前ぼかし** (#753)。`"on"` / `"off"`（既定）の2択。画面の下側（手前）ほど強くぼかし、上（水平線側）はくっきりさせる縦グラデーション。背景スプライトにだけ効き、キャラ・敵・パネル・テキストはぼかさない。`battle_background_tone` とは独立（組み合わせ自由）。背景なしのときは無関係。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"off"` にフォールバックする。ぼかし開始位置・グラデーション幅・最大強さは `frontend/src/game/depthOfField.ts` の `DOF_*` 定数が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_background_dof` を読まない |
 | `battle_log_typewriter` | string | No | RPG 戦闘ログ（メッセージ）の**1 文字ずつ表示** (#755)。`"on"` / `"off"`（既定）の2択。`on` のとき、戦闘ログに新しく積まれた行だけを 1 文字ずつ表示する（表示済みの行は即時表示・複数行が一度に積まれたら上から順に）。タイプ中にコマンドまたはログ帯をタップすると全文を即時表示する（そのタップではコマンドは実行しない）。値は parser でバリデーションせず生文字列で透過し、不正値・未指定は `"off"` にフォールバックする。速度は `frontend/src/game/battleLogTypewriter.ts` の `BATTLE_LOG_MS_PER_CHAR` が正本。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は `battle_log_typewriter` を読まない |
+| `battle_horizon` | string | No | RPG 戦闘画面（`side`）の**地平線の高さ** (#747)。画面高さに対する比（`"0"`〜`"1"` の数値文字列。`0` = 画面の上端）。`battle_perspective` が 0 超のときだけ効く。数値でない・未指定は `"0.3"`、範囲外は 0〜1 に丸める。値は parser でバリデーションせず生文字列で透過する。emit 時、値に含まれる `"` は除去される。**GUI（ブラウザ）専用**で、TUI 版（`tui/`）は読まない |
+| `battle_perspective` | string | No | RPG 戦闘画面（`side`）の**遠近の強さ** (#747)。`"0"`（既定・平面＝現行どおり）〜`"1"`（地平線の幾何どおり）の数値文字列。0 超にすると、奥の行ほど小さく・上に、手前ほど大きく・下に描く（縮尺 = `1 - perspective × (1 - 幾何の縮尺)`、幾何の縮尺 = 地平線からの距離の比。下限 0.3）。敵ラベル・acrylic の台座と影は縮尺に追従する。描画順は奥→手前。数値でない・0 以下・未指定は平面。値は parser でバリデーションせず生文字列で透過する。計算は `frontend/src/game/battleLayout.ts`（`computeDepthScale` / `applyDepthToSlots` / `normalizeBattleDepth`）が正本。**GUI（ブラウザ）専用** |
+| `battle_foreground` | string | No | RPG 戦闘画面（`side`）の**前景レイヤー**画像パス (#747)。敵・味方スプライトより手前、パネル・文字より奥に cover で敷く（透過 PNG 想定）。未指定・読み込み失敗は何も描かない。**GUI（ブラウザ）専用** |
 
 フロントマターは Event ではなく、parser の Chapter 構造体（Rust 側）のフィールドとしてパースされる。フロントエンド側の EventChapter 型とは別物なので注意する。
 
@@ -1626,6 +1629,7 @@ AGI: 4
 |---|---|---|---|
 | `名前` | `name` | Yes | パーティメンバー名 |
 | `スプライト` | `sprite` | No | 立ち絵 / 戦闘スプライトの相対パス |
+| `隊列` | `row` | No (default front) | 戦闘の隊列 (#747)。`front`（前衛・既定）/ `back`（後衛。`後衛` `後列` も可、大小無視。それ以外は前衛）。`battle_layout: side` のときだけ有効（`front` 配置は隊列を描かず補正もしない）。後衛は画面の右寄り（敵から遠い側）に半歩（スプライト一辺の 0.5 倍）下げて描き、**受ける物理ダメージ・与える近接物理ダメージ（通常攻撃）が半分**（FF4〜6 準拠）。両方後衛なら 2 回半分。丸めは半分ごとに切り捨て・最低 1（`computeAttackDamage` の最低 1 に揃える）。呪文・アイテム（DSL / builtin）は隊列の影響を受けない。計算は `battleEngine.ts` の `applyRowToPhysicalDamage` / `computeRowAttackDamage`。戦闘中の入れ替えは未対応（#204）。今の BattleEngine は攻撃側・被弾側とも `firstAlive(party)` の 1 人だけなので、後衛のダメージ半減は**先頭の生存者が後衛のときだけ**見える（全員行動は #205 で対応予定）。 |
 | `レベル` | `level` / `Lv` | No (default 1) | 初期レベル |
 | `HP` | `hp` | No (default 1) | 初期 HP（最低 1、`0` 即死扱いを避ける） |
 | `MP` | `mp` | No (default 0) | 初期 MP |
