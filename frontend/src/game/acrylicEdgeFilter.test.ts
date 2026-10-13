@@ -280,6 +280,8 @@ describe('AcrylicEdgeFilter: GLSL 整合', () => {
 
   it('合成式がシェーダに残っている（ring = clamp(outerMax - innerMax)、本体を上書きしない (1 - src.a)）', () => {
     expect(ACRYLIC_EDGE_FRAGMENT).toContain('clamp(outerMax - innerMax, 0.0, 1.0)')
+    // 変位（実 px）に uTexel を掛けて UV にする。DPR 修正の核心（外すと線が消えるか全面が塗られる）
+    expect(ACRYLIC_EDGE_FRAGMENT).toMatch(/vTextureCoord\s*\+\s*offsetPx\s*\*\s*uTexel/)
     expect(ACRYLIC_EDGE_FRAGMENT).toContain('uAlpha * ring * (1.0 - src.a)')
     expect(ACRYLIC_EDGE_FRAGMENT).toContain('outerMax = max(outerMax, innerMax);')
     // 内側ループは uCounts.x、外側ループは uCounts.y で打ち切る（取り違えない）

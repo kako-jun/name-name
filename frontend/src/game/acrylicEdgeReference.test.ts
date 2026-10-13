@@ -140,13 +140,4 @@ describe('枠線フィルタの参照実装（形状 × 余白/線）', () => {
     expect(expected).toBeGreaterThan(100)
     expect(covered / expected).toBeGreaterThan(0.95)
   })
-
-  it('半透明の本体 alpha では、本体の縁に線を重ねない（lineA = ring * (1 - src.a)）', () => {
-    // シェーダの合成式: src.a=0.5 のピクセルの lineA は ring*(0.5)。src.a=1 なら 0
-    const ring = 1
-    const lineA = (srcA: number): number => 0.85 * ring * (1 - srcA)
-    expect(lineA(1)).toBe(0)
-    expect(lineA(0.5)).toBeCloseTo(0.425, 6)
-    expect(lineA(0)).toBeCloseTo(0.85, 6)
-  })
 })
