@@ -2182,7 +2182,7 @@ export class NovelRenderer {
    * 実行後は即座にフラグを倒す。quickLoad() が実際にシーンを復元した場合は restoreToScene が
    * 自ら pendingAutoAdvance を false にクリアするため、その後に呼んでも no-op（#620）。
    * 逆に loadFromSaveData / loadFromSaveDataMissingScene が restoreToScene を通らず
-   * フラグだけの復元に縮退した場合（同期・非同期どちらの失敗パスも含む）は、各所が
+   * フラグだけの復元に縮退した場合・復元失敗（#765、同期・非同期どちらの失敗パスも含む）は、各所が
    * 自らここを呼んでフリーズを防ぐ。二重実行防止のため、既に実行済み/該当なしの場合は no-op。
    */
   resumeAutoAdvanceIfPending(): void {
@@ -6008,12 +6008,29 @@ export class NovelRenderer {
       return
     }
 
-    // resolver が無い（単一ファイル構成等）場合のみ、従来どおりフラグだけ復元して warn する。
-    this.gameState.fromJSON(data.flags)
+    // resolver が無い（単一ファイル構成等）: 復元できないので位置・flags とも現状維持（#765）。
+    // flags だけ適用すると選択したセーブの一部だけが現プレイに混ざるため適用しない。warn＋トーストで通知する。
     console.warn(`[name-name] セーブデータのシーンが見つからない: ${data.sceneId}`)
+    this.notifyLoadFailure(true)
     // #620: 上の空セーブ分岐と同じ理由で、restoreToScene を通らないパスは
     // ここで明示的に resumeAutoAdvanceIfPending() を呼んでフリーズを防ぐ。
     this.resumeAutoAdvanceIfPending()
+  }
+
+  /**
+   * ロード失敗（復元先シーンを解決できない）のプレイヤー通知 (#765)。
+   * `deferred` は同期経路用: F8 ハンドラ（NovelPlayer）が quickLoad() 直後に成功トーストを
+   * 出して上書きするため、次の macrotask に回して失敗通知を後勝ちにする。
+   */
+  private notifyLoadFailure(deferred: boolean): void {
+    const message = 'ロードに失敗しました'
+    if (deferred) {
+      this.time.setTimeout(() => {
+        if (this.initialized) this.showToast(message)
+      }, 0)
+    } else {
+      this.showToast(message)
+    }
   }
 
   /**
@@ -6029,16 +6046,17 @@ export class NovelRenderer {
    * メソッド内で改めて呼ぶ必要はない（#578 セルフレビュー must 対応、詳細は
    * loadFromSaveData の doc コメント参照）。
    *
-   * 解決できてもシーンが見つからない/resolver が失敗した場合は、loadFromSaveData と同じ
-   * 「フラグだけ復元して warn」のフォールバックに落ちる。
+   * 解決できてもシーンが見つからない/resolver が失敗した場合は、位置・flags とも変えずに
+   * warn とトースト「ロードに失敗しました」で通知する (#765)。
    */
   private async loadFromSaveDataMissingScene(data: SaveSlotData): Promise<void> {
     const sceneId = data.sceneId
     if (!sceneId) return
     if (!this.missingSceneResolver) {
-      this.gameState.fromJSON(data.flags)
-      // #620: フラグのみ復元して終わる経路は resumeAutoAdvanceIfPending() で自動進行を再開する。
+      // 解決できない＝復元失敗。flags は適用しない（#765）。
+      // #620: 復元せず終わる経路は resumeAutoAdvanceIfPending() で自動進行を再開する。
       this.resumeAutoAdvanceIfPending()
+      this.notifyLoadFailure(false)
       return
     }
     // resolveMissingSceneAndRestore と同型 (#759): 要求を遷移として世代を進めて捕捉し、await 後に
@@ -6054,8 +6072,8 @@ export class NovelRenderer {
       // チェック無しで先に進むと例外を投げうる。
       if (!this.initialized) return
       if (!scenes) {
-        this.gameState.fromJSON(data.flags)
         console.warn(`[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`)
+        this.notifyLoadFailure(false)
         // #620: 非同期解決が失敗し restoreToScene に到達しなかった（ケースC）。
         // skipAutoAdvance でスキップした自動進行をここで確定的に再開しないと
         // フリーズしたままになる。
@@ -6067,10 +6085,10 @@ export class NovelRenderer {
       this.setJumpSceneIndex(scenes)
       const scene = findSceneById(this.allScenes, sceneId)
       if (!scene) {
-        this.gameState.fromJSON(data.flags)
         console.warn(
           `[name-name] loadFromSaveData: lazy load 後もシーンが見つかりません: ${sceneId}`
         )
+        this.notifyLoadFailure(false)
         // #620: 上と同じ理由。lazy load 後も見つからない失敗確定時点で再開する。
         this.resumeAutoAdvanceIfPending()
         // quickLoad / ロードメニューが pending を弾き、ロード中に armJump されると世代不一致で破棄されるため到達しない。防御として残す。
@@ -6081,11 +6099,11 @@ export class NovelRenderer {
       this.restoreToScene(scene, state)
     } catch (err) {
       if (generation !== this.transitionGeneration) return
-      this.gameState.fromJSON(data.flags)
       console.warn(
         `[name-name] loadFromSaveData: シーンの追加読み込みに失敗しました: ${sceneId}`,
         err
       )
+      this.notifyLoadFailure(false)
       // #620: resolver が reject した失敗確定時点でも同様に再開する。
       this.resumeAutoAdvanceIfPending()
       // quickLoad / ロードメニューが pending を弾き、ロード中に armJump されると世代不一致で破棄されるため到達しない。防御として残す。
@@ -6101,7 +6119,7 @@ export class NovelRenderer {
    * 渡すことで、読み進め位置（背景/立ち絵/BGM 等の視覚状態込み）を引き継ぐために使う。
    *
    * loadFromSaveData と同じ薄いラッパー: sceneId でシーンを探し、見つかれば restoreToScene
-   * に委譲するだけ。見つからない場合はフラグだけ復元して warn する（loadFromSaveData の
+   * に委譲するだけ。見つからない場合は位置・flags とも変えず warn する（#765。loadFromSaveData の
    * 対応分岐と同じ挙動）。
    *
    * 呼び出し側の責務: `allScenes` が構築済み（setEvents/setScenes 呼び出し後）である
@@ -6149,9 +6167,8 @@ export class NovelRenderer {
       return
     }
 
-    // resolver が無い（単一ファイル構成等）場合のみ、従来どおりフラグだけ復元して warn する
-    // （loadFromSaveData と同じフォールバック）。
-    this.gameState.fromJSON(snapshot.flags)
+    // resolver が無い（単一ファイル構成等）: 復元できないので位置・flags とも現状維持して warn する
+    // （loadFromSaveData と同じ方針 #765。自動復元なのでトーストは出さない）。
     console.warn(`[name-name] restoreSnapshot: シーンが見つからない: ${snapshot.sceneId}`)
   }
 
@@ -6186,15 +6203,14 @@ export class NovelRenderer {
    * Jump を止めて世代を進め、await 後に世代が変わっていれば復元を成功・失敗とも破棄する (#759)。
    * 失敗して位置が動かないときは Jump の遷移状態を位置から再導出する。
    *
-   * 解決できてもシーンが見つからない/resolver が失敗した場合は、loadFromSaveData と同じ
-   * 「フラグだけ復元して warn」のフォールバックに落ちる。
+   * 解決できてもシーンが見つからない/resolver が失敗した場合は、位置・flags とも変えずに warn だけ
+   * 出す (#765)。再マウント時の自動復元でありプレイヤー操作起点ではないためトーストは出さない。
    */
   private async resolveMissingSceneAndRestore(snapshot: NovelGameState): Promise<void> {
     const sceneId = snapshot.sceneId
     if (!sceneId) return
     if (!this.missingSceneResolver) {
-      // resolver が無ければ解決できない。最低でも flags だけは反映する（restoreSnapshot 全体の契約）。
-      this.gameState.fromJSON(snapshot.flags)
+      // resolver が無ければ解決できない。復元失敗として位置・flags とも現状維持（#765）。
       return
     }
     // 復元の要求自体を遷移として扱い、世代を進めて捕捉する (#759)。解決中に restart / startFrom /
@@ -6210,7 +6226,6 @@ export class NovelRenderer {
       // this.app.stage を触るため、initialized チェック無しで先に進むと例外を投げうる。
       if (!this.initialized) return
       if (!scenes) {
-        this.gameState.fromJSON(snapshot.flags)
         console.warn(`[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`)
         this.rearmPendingJumpAfterFailedRestore()
         return
@@ -6218,7 +6233,6 @@ export class NovelRenderer {
       this.setJumpSceneIndex(scenes)
       const scene = findSceneById(this.allScenes, sceneId)
       if (!scene) {
-        this.gameState.fromJSON(snapshot.flags)
         console.warn(
           `[name-name] restoreSnapshot: lazy load 後もシーンが見つかりません: ${sceneId}`
         )
@@ -6228,7 +6242,6 @@ export class NovelRenderer {
       this.restoreSnapshotToScene(scene, snapshot)
     } catch (err) {
       if (generation !== this.transitionGeneration) return
-      this.gameState.fromJSON(snapshot.flags)
       console.warn(
         `[name-name] restoreSnapshot: シーンの追加読み込みに失敗しました: ${sceneId}`,
         err
