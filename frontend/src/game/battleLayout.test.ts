@@ -894,3 +894,16 @@ describe('読めない幅のラベルは省く (#736)', () => {
         }
   })
 })
+
+describe('spec の例: ラベル幅の上限は一辺の 3 倍 (#736)', () => {
+  // docs/spec/markdown-v0.1.md の「1280x720・敵 1 体で 480px」をそのまま固定する回帰テスト。
+  // 倍率定数を変えると spec とずれるため、この 1 テストに限り数値をリテラルで書く。
+  it.each([1, 2, 3, 4])(
+    '1280x720・party%d・敵 1 体: 一辺 160px・ラベル幅 480px (spec の例)',
+    (p) => {
+      const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: p, enemyCount: 1 })
+      expect(L.enemies[0].size).toBe(160)
+      expect(L.enemies[0].label!.w).toBe(480)
+    }
+  )
+})
