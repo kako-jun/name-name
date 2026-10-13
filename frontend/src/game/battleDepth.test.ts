@@ -461,10 +461,10 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
     expect(L.party[3].size).toBeCloseTo(102.10526, 4)
     expect(L.party[3].width).toBeCloseTo(51.05263, 4)
   })
-  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.44（リテラル・幾何が下限 0.3 に張り付く）', () => {
+  it('800x450・4 対 4・{0.3, 0.8}: 奥の敵の scale は 0.80779（リテラル・敵領域を広げて敵が大きくなった #760）', () => {
     const L = computeSideBattleLayout({ ...base, depth })
-    expect(L.enemies[0].scale).toBeCloseTo(0.44, 5)
-    expect(L.enemies[0].size).toBeCloseTo(28.6, 3)
+    expect(L.enemies[0].scale).toBeCloseTo(0.80779, 5)
+    expect(L.enemies[0].size).toBeCloseTo(113.856, 3)
   })
   it('味方 1 敵 1: 足元が同じ高さか味方のほうが下なら、味方の縮尺は敵以上（基準は足元 y+size）', () => {
     const L = computeSideBattleLayout({
@@ -482,13 +482,15 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
   it('未指定: depthActive false・座標は従来どおり（800x450・4 対 4）', () => {
     const L = computeSideBattleLayout(base)
     expect(L.depthActive).toBe(false)
-    expect(L.party[0].x).toBeCloseTo(451.60526, 4)
+    expect(L.party[0].x).toBeCloseTo(579.78947, 4)
     expect(L.party[0].y).toBe(118)
     expect(L.party[0].size).toBeCloseTo(102.10526, 4)
     expect(L.party[0].width).toBeCloseTo(51.05263, 4)
-    expect(L.party[1].x).toBeCloseTo(528.18421, 4)
+    expect(L.party[1].x).toBeCloseTo(630.84211, 4)
     expect(L.party[1].y).toBeCloseTo(148.63158, 4)
-    expect([L.enemies[0].x, L.enemies[0].y, L.enemies[0].size]).toEqual([134.875, 118, 65])
+    expect(L.enemies[0].x).toBe(16)
+    expect(L.enemies[0].y).toBeCloseTo(128.52632, 4)
+    expect(L.enemies[0].size).toBeCloseTo(140.94737, 4)
   })
   it('partyRows に front のみ・depth なしなら従来と完全に同じ', () => {
     expect(

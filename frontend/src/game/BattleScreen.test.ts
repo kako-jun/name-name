@@ -33,7 +33,7 @@ import {
   SIDE_LABEL_STROKE_WIDTH,
   SIDE_LOG_MIN_LINES,
   SIDE_STATUS_COMPACT_WIDTH,
-  computeContainFit,
+  computeContainFitRect,
   computeSideBattleLayout,
   estimateTextWidth,
 } from './battleLayout'
@@ -868,10 +868,20 @@ describe('BattleScreen: acrylic (#737)', () => {
   const okLoad = (): void => {
     vi.spyOn(Assets, 'load').mockResolvedValue(sizedTexture(TEX_W, TEX_H) as never)
   }
-  /** 800x450・敵1・味方1 の slot 一辺 */
-  const slotSize = (w = 800, h = 450, party = 1, enemies = 1): number =>
-    computeSideBattleLayout({ width: w, height: h, partyCount: party, enemyCount: enemies })
-      .enemies[0].size
+  /** 敵の slot（#760: 敵は立ち絵の縦横比 TEX_W/TEX_H の枠になる） */
+  const enemySlot = (w = 800, h = 450, party = 1, enemies = 1) =>
+    computeSideBattleLayout({
+      width: w,
+      height: h,
+      partyCount: party,
+      enemyCount: enemies,
+      enemyAspects: Array(enemies).fill(TEX_W / TEX_H),
+    }).enemies[0]
+  /** acrylic の正方形の一辺 = 敵の枠の長辺（横長の敵は幅。下端は枠の下端に揃う） */
+  const slotSize = (w = 800, h = 450, party = 1, enemies = 1): number => {
+    const e = enemySlot(w, h, party, enemies)
+    return Math.max(e.size, e.width)
+  }
   const defaultGeometry = (size: number) =>
     computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams())
   const PLATE_PAD = 8
@@ -904,7 +914,8 @@ describe('BattleScreen: acrylic (#737)', () => {
       const s = track(make([entity('hero')], [withSprite('slime')], sideNone))
       await flushPromises()
       const sp = internals(s).enemyViews[0].sprite!
-      const fit = computeContainFit(TEX_W, TEX_H, slotSize())
+      const e = enemySlot()
+      const fit = computeContainFitRect(TEX_W, TEX_H, e.width, e.size)
       expect(sp.x).toBeCloseTo(fit.x, 9)
       expect(sp.y).toBeCloseTo(fit.y, 9)
       expect(sp.width).toBeCloseTo(fit.width, 9)

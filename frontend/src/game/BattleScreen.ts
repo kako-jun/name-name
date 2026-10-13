@@ -1020,6 +1020,12 @@ export class BattleScreen extends Container {
           ? v.sprite.texture.width / v.sprite.texture.height
           : undefined
       ),
+      // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
+      enemyAspects: this.enemyViews.map((v) =>
+        v.sprite && v.sprite.texture.height > 0
+          ? v.sprite.texture.width / v.sprite.texture.height
+          : undefined
+      ),
       depth: this.opts.depth,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
@@ -1112,15 +1118,20 @@ export class BattleScreen extends Container {
     if (!slot) return
     const size = slot.size
     // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
+    // 横長の敵 (#760) は枠の幅が高さより大きいので、正方形はその幅（長辺）にして下端を枠の下端に揃える
     const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
-    view.container.position.set(acrylic ? slot.x - (size - slot.width) / 2 : slot.x, slot.y)
-    const fb = computeFallbackRect(size)
+    const box = acrylic ? Math.max(size, slot.width) : size
+    view.container.position.set(
+      acrylic ? slot.x - (box - slot.width) / 2 : slot.x,
+      acrylic ? slot.y + size - box : slot.y
+    )
+    const fb = computeFallbackRect(box)
     const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
     const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
     view.fallback.clear().rect(fbX, fb.y, fbW, fb.h).fill(view.color)
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack) {
-        this.placeAcrylic(view, size)
+        this.placeAcrylic(view, box)
       } else {
         const fit = computeContainFitRect(
           view.sprite.texture.width,

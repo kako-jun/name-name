@@ -441,14 +441,16 @@ describe('computeSideBattleLayout', () => {
     }
   })
 
-  it('敵は stage の左半分・味方は右半分に入る', () => {
+  it('敵は味方の左・味方は stage の右半分に入る (#760)', () => {
     for (const [width, height] of [
       [800, 450],
       [360, 640],
     ]) {
       const L = computeSideBattleLayout({ width, height, partyCount: 4, enemyCount: 5 })
       const half = L.stage.x + L.stage.w / 2
-      for (const s of L.enemies) expect(s.x + s.size).toBeLessThanOrEqual(half + EPS)
+      // #760: 敵は味方の斜め一列の左（味方に必要な幅以外すべて）・味方は右半分に入る
+      const partyLeft = Math.min(...L.party.map((s) => s.x))
+      for (const s of L.enemies) expect(s.x + s.width).toBeLessThanOrEqual(partyLeft + EPS)
       for (const s of L.party) expect(s.x).toBeGreaterThanOrEqual(half - EPS)
     }
   })
@@ -684,12 +686,18 @@ describe('computeFormation: 列数は SIDE_READABLE_SPRITE_SIZE に届く最小�
     expect(SIDE_READABLE_SPRITE_SIZE).toBe(64)
   })
 
-  it('800x450・敵 3 体は 2 列 2 行・千鳥あり・読める大きさ', () => {
-    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 1, enemyCount: 3 })
-    expect(rowsOf(L.enemies)).toBe(2)
-    expect(L.enemies[0].size).toBeGreaterThanOrEqual(SIDE_READABLE_SPRITE_SIZE)
-    // 同じ列の 1 行目と 2 行目で x がずれている（千鳥）
-    expect(L.enemies[1].x - L.enemies[0].x).not.toBe(0)
+  it('旧 800x450 の敵領域（左半分）・敵 3 体は 2 列 2 行・千鳥あり・読める大きさ（既定の配置規則は不変）', () => {
+    // #760: computeSideBattleLayout は敵領域を広げ味方の高さ以上を目標に列数を選ぶので、既定規則の確認は領域を直接渡す
+    const slots = computeFormation({ x: 16, y: 118, w: 384, h: 194 }, 3, 'enemy', true)
+    expect(rowsOf(slots)).toBe(2)
+    expect(slots[0].size).toBeGreaterThanOrEqual(SIDE_READABLE_SPRITE_SIZE)
+    expect(slots[1].x - slots[0].x).not.toBe(0)
+  })
+
+  it('800x450・味方 4 人・敵 3 体: 敵は味方の高さ以上になる最小の列数（1 行）で、各敵が味方の立ち絵以上 (#760)', () => {
+    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 4, enemyCount: 3 })
+    expect(rowsOf(L.enemies)).toBe(1)
+    for (const e of L.enemies) expect(e.size).toBeGreaterThanOrEqual(L.party[0].size - EPS)
   })
 
   it('640x360・敵 3〜4 体は 1 行（千鳥なし）でも HP 行が省略されない', () => {
@@ -914,15 +922,103 @@ describe('読めない幅のラベルは省く (#736)', () => {
   })
 })
 
-describe('spec の例: ラベル幅の上限は一辺の 3 倍 (#736)', () => {
+describe('spec の例: ラベル幅の上限は一辺の 3 倍 (#736・#760 で敵領域を拡大)', () => {
   // docs/spec/markdown-v0.1.md の「1280x720・敵 1 体で 480px」をそのまま固定する回帰テスト。
   // 倍率定数を変えると spec とずれるため、この 1 テストに限り数値をリテラルで書く。
-  it.each([1, 2, 3, 4])(
-    '1280x720・party%d・敵 1 体: 一辺 160px・ラベル幅 480px (spec の例)',
-    (p) => {
-      const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: p, enemyCount: 1 })
-      expect(L.enemies[0].size).toBe(160)
-      expect(L.enemies[0].label!.w).toBe(480)
+  // #760: 敵の領域を味方の斜め一列に必要な幅以外すべてにし、敵 1 体は領域いっぱい近く（上限 480）まで大きくなる。
+  // 一辺 160px・ラベル 480px だった旧仕様の数値を、新仕様の値（味方人数ごとの敵領域の幅で頭打ち）に更新
+  it.each([
+    [1, 480, 1088],
+    [2, 480, 928],
+    [3, 480, 768],
+    [4, 472, 717.4737],
+  ])('1280x720・party%d・敵 1 体: 一辺 %dpx・ラベル幅 %dpx (spec の例)', (p, size, labelW) => {
+    const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: p, enemyCount: 1 })
+    expect(L.enemies[0].size).toBeCloseTo(size, 3)
+    expect(L.enemies[0].label!.w).toBeCloseTo(labelW, 3)
+  })
+})
+
+describe('敵の大きさと縦横比 (#760)', () => {
+  // 仕様値（リテラル）: 800x450・味方 4 人。敵の領域 = stage の幅 − 味方の斜め一列に必要な幅
+  it('800x450・味方 4 人・敵 1 体（正方形）: 領域の高さいっぱい（ラベル 32px を残して 202px）で味方の高さ 123.2 を超える', () => {
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 4,
+      enemyCount: 1,
+      enemyAspects: [1],
+    })
+    expect(L.enemies[0].size).toBeCloseTo(202, 3)
+    expect(L.enemies[0].width).toBeCloseTo(202, 3)
+    expect(L.enemies[0].size).toBeGreaterThan(L.party[0].size)
+  })
+  it('横長の敵（縦横比 1.6・ドラゴン）は枠の幅が高さの 1.6 倍で、味方と重ならず stage 内', () => {
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 4,
+      enemyCount: 1,
+      enemyAspects: [1.6],
+    })
+    const e = L.enemies[0]
+    expect(e.size).toBeCloseTo(202, 3)
+    expect(e.width).toBeCloseTo(323.2, 3)
+    const partyLeft = Math.min(...L.party.map((s) => s.x))
+    expect(e.x + e.width).toBeLessThanOrEqual(partyLeft + EPS)
+    expect(e.x).toBeGreaterThanOrEqual(L.stage.x - EPS)
+  })
+  it('1280x720・味方 4 人・敵 1 体: 上限 480 に届かない 472 まで大きくなる', () => {
+    const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: 4, enemyCount: 1 })
+    expect(L.enemies[0].size).toBeCloseTo(472, 3)
+  })
+  it('味方の大きさは敵の領域拡大で変わらない（800x450・4 人・敵 1〜4 体で同じ）', () => {
+    const base = { width: 800, height: 450, partyCount: 4 }
+    const sizes = [1, 2, 3, 4].map(
+      (e) => computeSideBattleLayout({ ...base, enemyCount: e }).party[0].size
+    )
+    // 敵の数でログ行数 → stage の高さが変わるので高さが同じ敵数同士で比べる
+    expect(sizes[2]).toBeCloseTo(sizes[3], 9)
+  })
+  it('敵の縦横比は 0.2〜3 に丸められ、不正値は正方形', () => {
+    const slots = computeFormation({ x: 0, y: 0, w: 2000, h: 400 }, 3, 'enemy', true, undefined, [
+      100,
+      NaN,
+      0.01,
+    ])
+    expect(slots[0].width / slots[0].size).toBeCloseTo(3)
+    expect(slots[1].width / slots[1].size).toBeCloseTo(1)
+    expect(slots[2].width / slots[2].size).toBeCloseTo(0.2)
+  })
+  it('敵の枠はどれも画面内・非負・敵どうし非重複・ラベルは枠の直下（縦横比が混在でも）', () => {
+    for (const [w, h] of [
+      [800, 450],
+      [360, 640],
+      [1280, 720],
+    ]) {
+      for (const e of [1, 2, 3, 4]) {
+        const L = computeSideBattleLayout({
+          width: w,
+          height: h,
+          partyCount: 4,
+          enemyCount: e,
+          enemyAspects: [1.6, 0.6, 1, 2.2].slice(0, e),
+        })
+        const screen: Rect = { x: 0, y: 0, w, h }
+        const rects = L.enemies.map(slotRect)
+        for (const r of rects) {
+          expect(r.x).toBeGreaterThanOrEqual(-EPS)
+          expect(r.y).toBeGreaterThanOrEqual(-EPS)
+          expect(inside(r, screen)).toBe(true)
+        }
+        for (let i = 0; i < rects.length; i++)
+          for (let j = i + 1; j < rects.length; j++)
+            expect(overlaps(rects[i], rects[j])).toBe(false)
+        for (const s of L.enemies)
+          if (s.label) expect(s.label.y).toBeGreaterThanOrEqual(s.y + s.size - EPS)
+        for (const s of L.enemies)
+          for (const p of L.party) expect(overlaps(slotRect(s), slotRect(p))).toBe(false)
+      }
     }
-  )
+  })
 })

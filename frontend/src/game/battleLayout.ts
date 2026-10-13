@@ -67,6 +67,8 @@ export interface SideBattleLayoutInput {
   partyRows?: readonly (BattleRow | undefined)[]
   /** 味方ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は `SIDE_DEFAULT_SPRITE_ASPECT` */
   partyAspects?: readonly (number | undefined)[]
+  /** 敵ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は正方形（1） */
+  enemyAspects?: readonly (number | undefined)[]
   /** 奥行き (#747)。未指定・perspective が 0 以下は平面（現行どおり） */
   depth?: BattleDepth | null
 }
@@ -125,6 +127,11 @@ export const SIDE_LABEL_LINE_HEIGHT = 15
 export const SIDE_LABEL_LINES = 2
 export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
 export const SIDE_LABEL_GAP = 2
+/** 敵の立ち絵の縦横比の丸め範囲 (#760) */
+export const SIDE_ENEMY_ASPECT_MIN = 0.2
+export const SIDE_ENEMY_ASPECT_MAX = 3
+/** 敵 1 体の高さの上限 (#760)。味方より大きく見せるため従来の `SIDE_MAX_SPRITE_SIZE` より大きい */
+export const SIDE_ENEMY_MAX_SIZE = 480
 /** フォールバック四角（画像が無いとき）の枠内比率 */
 const FALLBACK_X = 0.15
 const FALLBACK_Y = 0.1
@@ -140,6 +147,8 @@ export const SIDE_DIAGONAL_MAX_SHIFT_RATIO = 0.75
 /** 味方の斜め一列 (#760): 行間隔（y 送り）の下限・上限。立ち絵の高さに対する比。下限 0.3 = 上の人の顔（上 30%）が隠れない */
 export const SIDE_PARTY_MIN_PITCH_RATIO = 0.3
 export const SIDE_PARTY_MAX_PITCH_RATIO = 0.6
+/** 敵へ領域を回すとき、味方の斜めのずらしをここまで詰める（高さに対する比。上限 0.75・下限 0.3 の間） */
+export const SIDE_PARTY_COMFORT_SHIFT_RATIO = 0.5
 /** 味方の立ち絵の高さの上限 */
 export const SIDE_PARTY_MAX_HEIGHT = 320
 /** 立ち絵の縦横比（幅/高さ）の既定（未読み込み・色四角）と丸め範囲 */
@@ -350,13 +359,22 @@ export function computePartyDiagonal(
  *   ラベルだけを省いてスプライトを残す（`slot.label` なし）
  * - 味方（`rows`）は `computePartyDiagonal` が扱う
  */
+/** 敵の配置の調整 (#760)。省略は従来どおり（上限 `SIDE_MAX_SPRITE_SIZE`・読める大きさだけを目安に列数を選ぶ） */
+export interface FormationOptions {
+  /** 一辺（高さ）の上限。既定 `SIDE_MAX_SPRITE_SIZE` */
+  maxSize?: number
+  /** この高さ以上に届く最小の列数を選ぶ（どの列数でも届かなければ最大になる列数）。味方の立ち絵の高さを渡す */
+  minSize?: number
+}
+
 export function computeFormation(
   region: Rect,
   count: number,
   side: 'enemy' | 'party',
   withLabel = false,
   rows?: readonly (BattleRow | undefined)[],
-  aspects?: readonly (number | undefined)[]
+  aspects?: readonly (number | undefined)[],
+  opts?: FormationOptions
 ): SpriteSlot[] {
   if (count <= 0) return []
   if (side === 'party') return computePartyDiagonal(region, count, rows, aspects)
@@ -364,12 +382,24 @@ export function computeFormation(
   const regionH = Math.max(0, region.h)
   // 敵側だけ各行にラベル（隙間 + 名前/HP の 2 行）ぶんを予約する
   let extra = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+  // 敵 (#760): 立ち絵の縦横比（幅/高さ）。size は高さ、枠の幅は size × 縦横比。全員が収まる列幅は最大の縦横比で決める。
+  // 縦横比が不明（未指定）の敵は正方形（1）
+  const enemyAspect = (i: number): number => {
+    const a = aspects?.[i]
+    return a !== undefined && Number.isFinite(a) && a > 0
+      ? Math.min(SIDE_ENEMY_ASPECT_MAX, Math.max(SIDE_ENEMY_ASPECT_MIN, a))
+      : 1
+  }
+  let maxAspect = 0
+  for (let i = 0; i < count; i++) maxAspect = Math.max(maxAspect, enemyAspect(i))
+  const maxSize = opts?.maxSize ?? SIDE_MAX_SPRITE_SIZE
+  const wantSize = Math.max(SIDE_READABLE_SPRITE_SIZE, opts?.minSize ?? 0)
   const sizeFor = (columns: number): number => {
     const rowCount = Math.ceil(count / columns)
     const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
     return Math.max(
       0,
-      Math.min(regionW / (columns + stagger), regionH / rowCount - extra, SIDE_MAX_SPRITE_SIZE)
+      Math.min(regionW / ((columns + stagger) * maxAspect), regionH / rowCount - extra, maxSize)
     )
   }
   const baseColumns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
@@ -377,7 +407,7 @@ export function computeFormation(
     let best = { columns: baseColumns, size: sizeFor(baseColumns) }
     for (let c = baseColumns; c <= count; c++) {
       const size = sizeFor(c)
-      if (size >= SIDE_READABLE_SPRITE_SIZE) return { columns: c, size }
+      if (size >= wantSize) return { columns: c, size }
       if (size > best.size) best = { columns: c, size }
     }
     return best
@@ -391,8 +421,9 @@ export function computeFormation(
   }
   const rowCount = Math.ceil(count / columns)
   const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
-  const colPitch = size
-  const totalW = colPitch * columns + size * stagger
+  const cellW = size * maxAspect
+  const colPitch = cellW
+  const totalW = colPitch * columns + cellW * stagger
   const totalH = (size + extra) * rowCount
   const originX = region.x + (regionW - totalW) / 2
   const originY = region.y + (regionH - totalH) / 2
@@ -402,17 +433,19 @@ export function computeFormation(
     const row = i % rowCount
     const odd = row % 2 === 1
     // 敵: 奇数行を右へ（味方側へ）ずらして千鳥にする
-    const dx = stagger > 0 && odd ? size * stagger : 0
-    const x = originX + col * colPitch + dx
+    const dx = stagger > 0 && odd ? cellW * stagger : 0
+    const width = size * enemyAspect(i)
+    // 列幅（cellW）の中で水平中央に置く
+    const x = originX + col * colPitch + dx + (cellW - width) / 2
     const y = originY + row * (size + extra)
-    const slot: SpriteSlot = { x, y, size, width: size, floor: y + size, scale: 1 }
+    const slot: SpriteSlot = { x, y, size, width, floor: y + size, scale: 1 }
     if (withLabel && !labelDropped && size > 0) {
       // 1 列は横に何も並ばないので領域幅（上限あり）まで広げ、多列は隣の列と重ならない列ピッチ(=size)まで
-      const w = columns === 1 ? Math.min(regionW, size * SIDE_LABEL_MAX_WIDTH_RATIO) : size
+      const w = columns === 1 ? Math.min(regionW, cellW * SIDE_LABEL_MAX_WIDTH_RATIO) : cellW
       const lx =
         columns === 1
-          ? Math.min(Math.max(x + size / 2 - w / 2, region.x), region.x + regionW - w)
-          : x
+          ? Math.min(Math.max(x + width / 2 - w / 2, region.x), region.x + regionW - w)
+          : x - (cellW - width) / 2
       // 名前も HP も読めない狭さ（「…」だけになる幅）ならラベルごと省く
       if (isLabelWidthReadable(w)) {
         slot.label = { x: lx, y: y + size + SIDE_LABEL_GAP, w, h: SIDE_LABEL_HEIGHT }
@@ -484,6 +517,25 @@ export function applyDepthToSlots(
     }
     return out
   })
+}
+
+/**
+ * 味方の斜め一列 (#760) が実際に必要とする水平幅。右半分で求めた配置 `slots`（大きさはそれで決まる）から、
+ * 斜めのずらしを高さの `SIDE_PARTY_COMFORT_SHIFT_RATIO` 倍まで詰めた幅を返す（半分を超えない。下限は最小ずらしの幅）。
+ * 味方の大きさは変えず、右半分の残りを敵へ回すために使う。味方 0 人は 0。
+ */
+export function partyRegionWidth(slots: readonly SpriteSlot[], halfWidth: number): number {
+  if (slots.length === 0) return 0
+  const h = slots[0].size
+  const minX = Math.min(...slots.map((s) => s.x))
+  const rightmost = Math.max(...slots.map((s) => s.x + s.width))
+  const spanNow = rightmost - minX
+  // 現在の配置のずらし（slots[1].x - slots[0].x）を、快適なずらしへ置き換えたときの幅の差
+  const steps = slots.length - 1
+  const curShift = steps > 0 ? (slots[steps].x - slots[0].x) / steps : 0
+  const wanted =
+    spanNow - steps * curShift + steps * Math.min(curShift, h * SIDE_PARTY_COMFORT_SHIFT_RATIO)
+  return Math.min(halfWidth, Math.max(0, wanted))
 }
 
 /**
@@ -571,11 +623,31 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     w: innerW,
     h: Math.max(0, stageBottom - stageY),
   }
+  // 味方 (#760): 大きさは従来どおり右半分を使うものとして決め、その斜め一列に必要な幅だけ右端に取る。残りはすべて敵へ回す
   const half = stage.w / 2
-  const enemyRegion: Rect = { x: stage.x, y: stage.y, w: half, h: stage.h }
-  const partyRegion: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
+  const partyHalf: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
+  const halfSlots = computeFormation(
+    partyHalf,
+    partyCount,
+    'party',
+    false,
+    input.partyRows,
+    input.partyAspects
+  )
+  const partyW = partyRegionWidth(halfSlots, partyHalf.w)
+  const partyRegion: Rect = { x: stage.x + stage.w - partyW, y: stage.y, w: partyW, h: stage.h }
+  const enemyRegion: Rect = { x: stage.x, y: stage.y, w: stage.w - partyW, h: stage.h }
+  const partyHeight = halfSlots[0]?.size ?? 0
 
-  let enemies = computeFormation(enemyRegion, enemyCount, 'enemy', true)
+  let enemies = computeFormation(
+    enemyRegion,
+    enemyCount,
+    'enemy',
+    true,
+    undefined,
+    input.enemyAspects,
+    { maxSize: SIDE_ENEMY_MAX_SIZE, minSize: partyHeight }
+  )
   let party = computeFormation(
     partyRegion,
     partyCount,
