@@ -399,8 +399,37 @@ function EditorScreen({
     [resetOtherDocsCache]
   )
 
+  // script.md を編集中に event_image_transition を変えたら、継承して解析済みの他文書を捨てる
+  // （古い継承値のまま残さない）。次の遅延ロードで新しい値を使って取り直す。
+  const scriptTransition =
+    doc && docPath === currentScriptPath && basename(currentScriptPath) === SCRIPT_BASENAME
+      ? (doc.event_image_transition ?? null)
+      : undefined
+  const prevScriptTransitionRef = useRef<
+    EventDocument['event_image_transition'] | null | undefined
+  >(undefined)
+  useEffect(() => {
+    const prev = prevScriptTransitionRef.current
+    prevScriptTransitionRef.current = scriptTransition
+    if (prev !== undefined && scriptTransition !== undefined && prev !== scriptTransition) {
+      resetOtherDocsCache()
+    }
+  }, [scriptTransition, resetOtherDocsCache])
+
   const loadOtherDoc = useCallback(
     function load(path: string): Promise<EventDocument | null> {
+      // #607 の継承元（script.md）を編集中で、その doc がまだ確定していない（タブ切替直後）間は
+      // 取得しない。継承なしの解析結果を作って共有・キャッシュしてしまうのを避ける
+      // （呼び出し側は doc 確定後に再度呼ぶ。otherDocs の effect は docPath を依存に持つ）。
+      const inheritFrom = sortedScriptPathsRef.current.find((p) => basename(p) === SCRIPT_BASENAME)
+      if (
+        inheritFrom &&
+        inheritFrom !== path &&
+        inheritFrom === currentScriptPathRef.current &&
+        docPathRef.current !== inheritFrom
+      ) {
+        return Promise.resolve(null)
+      }
       const cached = loadedOtherDocsRef.current.get(path)
       if (cached) return Promise.resolve(cached)
       const inFlight = loadingOtherDocsRef.current.get(path)
@@ -424,22 +453,16 @@ function EditorScreen({
         // #607: /play と同じく、script.md 以外は script.md の event_image_transition を継承してパースする
         // （プレビューは /play の再現が目的）。script.md が無い・読めない場合は継承なし。
         let inherited: EventDocument['event_image_transition'] | null = null
-        let cacheable = true
-        const scriptPath = sortedScriptPathsRef.current.find((p) => basename(p) === SCRIPT_BASENAME)
-        if (scriptPath && scriptPath !== path) {
-          if (scriptPath === currentScriptPathRef.current) {
-            if (docPathRef.current === scriptPath) {
-              inherited = docRef.current?.event_image_transition ?? null
-            } else {
-              cacheable = false // 切替直後で script.md の doc が未確定。継承なしの結果を残さない
-            }
+        if (inheritFrom && inheritFrom !== path) {
+          if (inheritFrom === currentScriptPathRef.current) {
+            inherited = docRef.current?.event_image_transition ?? null
           } else {
-            inherited = (await load(scriptPath))?.event_image_transition ?? null
+            inherited = (await load(inheritFrom))?.event_image_transition ?? null
           }
         }
         const parsed = await parseMarkdown(withInheritedEventImageTransition(markdown, inherited))
         // タブ切替・プロジェクト切替をまたいだ古い取得結果は捨てる
-        if (cacheable && otherDocsEpochRef.current === epoch) {
+        if (otherDocsEpochRef.current === epoch) {
           loadedOtherDocsRef.current.set(path, parsed)
         }
         return parsed
@@ -555,6 +578,8 @@ function EditorScreen({
   // 失敗した個別ファイルはスキップ（致命的でない）。
   useEffect(() => {
     let cancelled = false
+    // 編集中の文書が確定するまで待つ（#607 の継承元が未確定のまま解析しないため）
+    if (docPath !== currentScriptPath) return
     const loadOthers = async () => {
       const others = availableScripts.filter((s) => s.path !== currentScriptPath)
       if (others.length === 0) {
@@ -573,7 +598,7 @@ function EditorScreen({
     return () => {
       cancelled = true
     }
-  }, [loadOtherDoc, availableScripts, currentScriptPath])
+  }, [loadOtherDoc, availableScripts, currentScriptPath, docPath])
 
   // Markdown の変更を検出して未保存フラグを立てる。
   // Worker モデルでは status ポーリングは行わない（保存=即commit のためサーバに
@@ -737,6 +762,13 @@ function EditorScreen({
       const docs = new Map(loadedOtherDocsRef.current)
       docs.set(entryPath, docRef.current)
       const isStale = () => otherDocsEpochRef.current !== epoch
+      const syncLazyIndex = () => {
+        // 索引（jumpSceneIndex）にも反映する。編集中文書は含めない（currentDocScenes が別建て）。
+        if (isStale()) return
+        setLazyOtherScenes(
+          buildSceneIndex(null, sortedScriptPathsRef.current, loadedOtherDocsRef.current)
+        )
+      }
       return resolveMissingSceneAcrossDocs({
         sceneId,
         entryPath,
@@ -748,13 +780,12 @@ function EditorScreen({
           if (loaded) docs.set(path, loaded)
           return loaded
         },
-        onIndexUpdated: () => {
-          // 索引（jumpSceneIndex）にも反映する。編集中文書は含めない（currentDocScenes が別建て）。
-          if (isStale()) return
-          setLazyOtherScenes(
-            buildSceneIndex(null, sortedScriptPathsRef.current, loadedOtherDocsRef.current)
-          )
-        },
+        onIndexUpdated: syncLazyIndex,
+      }).then((result) => {
+        // 他文書が（RPG マスター用の先行取得などで）既にキャッシュ済みで取得が走らなかった場合も、
+        // 索引に反映する（onIndexUpdated は取得が走ったときしか呼ばれない）
+        if (result) syncLazyIndex()
+        return result
       })
     },
     [loadOtherDoc]

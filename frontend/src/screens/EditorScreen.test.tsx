@@ -24,6 +24,8 @@ let parsed: EventDocument = makeDoc(['hub', 'S1'])
 // #778: markdown 文字列 → パース結果（無ければ parsed）。他文書の取得元（下書き/サーバ版）の判別に使う。
 const parsedByMarkdown = new Map<string, EventDocument>()
 const parsedInputs: string[] = []
+// markdown に部分文字列を含むものを特定の doc にパースする（継承注入で本文が変わる場合用）
+const parsedContains: Array<[string, EventDocument]> = []
 let serverHasRootScript = true
 const getContentsMock = vi.hoisted(() => vi.fn())
 const listScriptsMock = vi.hoisted(() => vi.fn())
@@ -49,6 +51,7 @@ vi.mock('../components/VideoExportModal', () => ({ default: () => <div /> }))
 vi.mock('../wasm/parser', () => ({
   parseMarkdown: async (md: string) => {
     parsedInputs.push(md)
+    for (const [sub, d] of parsedContains) if (md.includes(sub)) return d
     return parsedByMarkdown.get(md) ?? parsed
   },
   emitMarkdown: async () => emitted,
@@ -172,13 +175,15 @@ describe('EditorScreen: 他文書のシーンへの遅延ロード (#778)', () =
   })
 
   it('編集中の文書のシーンは取得せずに解決する', async () => {
+    parsedByMarkdown.set('# server-other', makeDoc(['O1']))
     const resolve = await openPreview()
     getContentsMock.mockClear()
     let scenes: EventScene[] | null = null
     await act(async () => {
       scenes = await resolve('S1')
     })
-    expect(scenes!.map((s: EventScene) => s.id)).toEqual(['hub', 'S1'])
+    // 先頭は編集中の文書。他文書は（先行取得済みなら）後ろに続く
+    expect(scenes!.map((s: EventScene) => s.id).slice(0, 2)).toEqual(['hub', 'S1'])
     // 編集中の文書(script.md)は取りに行かない（#238 の他文書の先行取得が遅れて走るため、対象パスで絞る）
     expect(getContentsMock).not.toHaveBeenCalledWith('p', 'script.md', 'develop')
   })
@@ -273,6 +278,7 @@ describe('EditorScreen: 遅延ロードの探索対象と継承 (#778)', () => {
   beforeEach(() => {
     playerProps.length = 0
     parsedInputs.length = 0
+    parsedContains.length = 0
     parsedByMarkdown.clear()
     localStorage.clear()
     getContentsMock.mockReset()
@@ -320,6 +326,73 @@ describe('EditorScreen: 遅延ロードの探索対象と継承 (#778)', () => {
         (m) => m.includes('# other.md') && m.includes('event_image_transition: "pixelate"')
       )
     ).toBe(true)
+  })
+
+  it('script.md の event_image_transition を編集で変えたら、継承して解析済みの他文書を捨てて取り直す', async () => {
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [script('other.md'), script('script.md')])
+    parsed = { ...makeDoc(['hub']), event_image_transition: 'Pixelate' }
+    parsedContains.push(['# other.md', makeDoc(['O1'])])
+    const resolve = await openResolver()
+    await act(async () => {
+      await resolve('O1')
+    })
+    expect(parsedInputs.some((m) => m.includes('# other.md') && m.includes('pixelate'))).toBe(true)
+    // script.md を Fade に編集 → 他文書のキャッシュが捨てられ、継承なしで取り直される
+    fireEvent.click(screen.getByRole('button', { name: /Edit Mode/i }))
+    editedDoc = { ...makeDoc(['hub']), event_image_transition: 'Fade' }
+    emitted = '# e'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(screen.getByRole('button', { name: /Play Mode/i }))
+    await waitFor(() => expect(playerProps.length).toBeGreaterThan(0))
+    const resolve2 = playerProps[playerProps.length - 1].onResolveMissingScene as (
+      id: string
+    ) => Promise<EventScene[] | null>
+    parsedInputs.length = 0
+    await act(async () => {
+      await resolve2('O1')
+    })
+    const reparsed = parsedInputs.filter((m) => m.includes('# other.md'))
+    expect(reparsed.length).toBeGreaterThan(0)
+    expect(reparsed.every((m) => !m.includes('pixelate'))).toBe(true)
+  })
+
+  it('継承元の script.md を開き直している間は、他文書を継承なしで解析・共有しない', async () => {
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [script('other.md'), script('script.md')])
+    parsed = { ...makeDoc(['hub']), event_image_transition: 'Pixelate' }
+    renderEditor()
+    await waitFor(() => expect(listScriptsMock).toHaveBeenCalled())
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /^other\.md/ }).getAttribute('aria-selected')).toBe(
+        'true'
+      )
+    )
+    // script.md へ戻す。その取得を止めて「切替直後・doc 未確定」の状態を作る
+    let release: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'script.md') {
+        return new Promise((r) => {
+          release = r
+        })
+      }
+      return { content: `---\nengine: name-name\n---\n# ${path}`, sha: 'sha' }
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    parsedInputs.length = 0
+    fireEvent.click(screen.getByRole('tab', { name: /^script\.md/ }))
+    await new Promise((r) => setTimeout(r, 100))
+    // 未確定の間は other.md を（継承なしで）解析しない
+    expect(parsedInputs.filter((m) => m.includes('# other.md'))).toEqual([])
+    await act(async () => {
+      release({ content: '---\nengine: name-name\n---\n# hub', sha: 'sha' })
+      await new Promise((r) => setTimeout(r, 100))
+    })
+    const after = parsedInputs.filter((m) => m.includes('# other.md'))
+    expect(after.length).toBeGreaterThan(0)
+    expect(after.every((m) => m.includes('pixelate'))).toBe(true)
   })
 })
 
