@@ -58,6 +58,7 @@ import { rollEncounter } from './encounter'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
+  closeFieldBattle,
   openFieldBattle,
   readFieldBattleSettings,
   type FieldBattleSettings,
@@ -343,6 +344,8 @@ export class RaycastRenderer {
   }
 
   load(gameData: RPGProject): void {
+    // 戦闘中に再 load されたら戦闘画面を畳む（古い onClosed が新しいマップの状態を上書きしないよう強制終了）
+    this.closeBattle()
     this.dialogBox?.hide()
 
     this.mapTiles = gameData.map.tiles
@@ -519,6 +522,7 @@ export class RaycastRenderer {
   }
 
   destroy(): void {
+    this.closeBattle()
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
@@ -805,6 +809,13 @@ export class RaycastRenderer {
    * 「しらべる」テスト経路から）。戦闘終了で自動的に画面を畳み、エンカウント
    * クールダウン（連続エンカウント抑止）を 3 歩セットする。
    */
+  /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
+  private closeBattle(): void {
+    if (!this.battleScreen) return
+    closeFieldBattle(this.app.stage, this.battleScreen)
+    this.battleScreen = null
+  }
+
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
@@ -1042,8 +1053,9 @@ export class RaycastRenderer {
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
 
-    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない
-    this.battleScreen?.tick(dt * 1000)
+    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない。
+    // 設定オーバーレイ中は入力と同様に進行も止める (#784)
+    if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
 
     // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
     // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。

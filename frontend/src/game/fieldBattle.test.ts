@@ -2,13 +2,14 @@
  * fieldBattle.ts（フィールド共通の戦闘起動・終了・キー入力状態）の単体テスト (#784)。
  * RaycastRenderer / TopDownRenderer 経由の結合は各 *.battle.test.ts が担当し、ここは共通部品を直接検証する。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Container } from 'pixi.js'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
   buildHeroBattleEntity,
   buildPartyBattleEntities,
+  closeFieldBattle,
   openFieldBattle,
   orderedPartyKeys,
   partyDefToBattleEntity,
@@ -18,6 +19,7 @@ import {
 import type { PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import type { BattleEntity } from './spellDsl'
+import { DIALOG_JUST_SHOWN_GUARD_MS, attachTouchInput } from './touchInput'
 
 function member(id: string, over: Partial<PartyMemberDef> = {}): PartyMemberDef {
   return { id, name: id.toUpperCase(), hp: 20, mp: 5, atk: 4, def: 2, agi: 3, ...over }
@@ -327,5 +329,129 @@ describe('openFieldBattle', () => {
     const { gate, s } = open()
     s.handleCommand('attack')
     expect(gate.isReleaseGated('ArrowDown')).toBe(false)
+  })
+})
+
+describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド）との等価性 (#784)', () => {
+  it('未指定の既定値は旧実装のリテラルと一致する', () => {
+    expect(readFieldBattleSettings(minimalProject())).toEqual({
+      layout: 'front',
+      background: undefined,
+      spriteStyle: 'none',
+      windowStyle: 'dark',
+      backgroundTone: 'on',
+      backgroundDof: 'off',
+      logTypewriter: 'off',
+      depth: null,
+      foreground: undefined,
+      pixelArt: false,
+      atb: undefined,
+      commandLayout: 'grid',
+      commandLabels: undefined,
+    })
+  })
+
+  it('全項目を指定したときは RPGProject の各値がそのまま対応する項目に入る', () => {
+    const p = minimalProject({
+      battleLayout: 'side',
+      battleBackground: 'bg/a.webp',
+      spriteStyle: 'acrylic',
+      windowStyle: 'ff-blue',
+      battleBackgroundTone: 'off',
+      battleBackgroundDof: 'on',
+      battleLogTypewriter: 'on',
+      battleDepth: { horizon: 0.3, perspective: 0.8 },
+      battleForeground: 'fg/a.png',
+      pixelArt: true,
+      battleAtb: { mode: 'active' },
+      battleCommandLayout: 'cross',
+      battleCommandLabels: { attack: '斬る' },
+    })
+    expect(readFieldBattleSettings(p)).toEqual({
+      layout: 'side',
+      background: 'bg/a.webp',
+      spriteStyle: 'acrylic',
+      windowStyle: 'ff-blue',
+      backgroundTone: 'off',
+      backgroundDof: 'on',
+      logTypewriter: 'on',
+      depth: { horizon: 0.3, perspective: 0.8 },
+      foreground: 'fg/a.png',
+      pixelArt: true,
+      atb: { mode: 'active' },
+      commandLayout: 'cross',
+      commandLabels: { attack: '斬る' },
+    })
+  })
+})
+
+describe('openFieldBattle: 終了・強制終了・タップ抑止 (#784)', () => {
+  function open() {
+    const stage = new Container()
+    const onClosed = vi.fn()
+    const gate = new FieldInputGate()
+    const screen = openFieldBattle({
+      stage,
+      width: 800,
+      height: 600,
+      settings: { ...DEFAULT_FIELD_BATTLE_SETTINGS },
+      roster: roster(['hero']),
+      enemies: [enemy()],
+      gate,
+      onClosed,
+    })
+    const s = screen as unknown as {
+      opts: { onClose(o: string): void }
+      handleCommand(id: string): void
+    }
+    return { stage, screen, onClosed, s }
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('onClosed に戦闘の結果が渡る', () => {
+    const { s, onClosed } = open()
+    s.handleCommand('attack')
+    expect(onClosed).toHaveBeenCalledWith('victory')
+  })
+
+  it('closeFieldBattle は画面を外して破棄し、onClosed は呼ばず、多重呼び出しも無害', () => {
+    const { stage, screen, onClosed } = open()
+    closeFieldBattle(stage, screen)
+    expect(stage.children).not.toContain(screen)
+    expect(screen.destroyed).toBe(true)
+    expect(() => closeFieldBattle(stage, screen)).not.toThrow()
+    expect(onClosed).not.toHaveBeenCalled()
+  })
+
+  it('強制終了した画面の古い onClose は後始末（onClosed・gate）を走らせない', () => {
+    const { stage, screen, onClosed, s } = open()
+    closeFieldBattle(stage, screen)
+    s.opts.onClose('victory')
+    expect(onClosed).not.toHaveBeenCalled()
+  })
+
+  it('戦闘を終わらせたタップの直後（pointerup）は canvas の tap にならず、ガード時間が過ぎれば tap になる', () => {
+    let now = 10_000
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const el = document.createElement('div')
+    const onTap = vi.fn()
+    const detach = attachTouchInput(el, { onTap })
+    const ev = (type: string) =>
+      Object.assign(new Event(type), { isPrimary: true, clientX: 5, clientY: 5 })
+
+    const { s } = open()
+    el.dispatchEvent(ev('pointerdown'))
+    s.opts.onClose('escaped') // pointertap が先に走って画面が畳まれる
+    el.dispatchEvent(ev('pointerup'))
+    expect(onTap).not.toHaveBeenCalled()
+
+    now += DIALOG_JUST_SHOWN_GUARD_MS + 1
+    el.dispatchEvent(ev('pointerdown'))
+    el.dispatchEvent(ev('pointerup'))
+    expect(onTap).toHaveBeenCalledTimes(1)
+    detach()
   })
 })

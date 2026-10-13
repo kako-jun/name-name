@@ -125,15 +125,19 @@ describe('踏み込みトリガーの繰り延べ', () => {
     expect(i.eventRunner!.run).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['victory', 'escaped', 'defeat'])(
-    '戦闘の結果が %s でも繰り延べトリガーは発火する',
-    (o) => {
-      const i = triggerField()
-      i.tryMove('down')
-      close(i, o)
-      expect(i.eventRunner!.run).toHaveBeenCalledTimes(1)
-    }
-  )
+  it.each(['victory', 'escaped'])('戦闘の結果が %s なら繰り延べトリガーは発火する', (o) => {
+    const i = triggerField()
+    i.tryMove('down')
+    close(i, o)
+    expect(i.eventRunner!.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('全滅（defeat）では繰り延べトリガーは発火しない', () => {
+    const i = triggerField()
+    i.tryMove('down')
+    close(i, 'defeat')
+    expect(i.eventRunner!.run).not.toHaveBeenCalled()
+  })
 
   it('トリガーの無いタイルでエンカウントしても戦闘後に何も発火せず落ちない', () => {
     const i = triggerField()

@@ -8,7 +8,7 @@
 
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
-import type { MonsterDef } from '../types'
+import type { MonsterDef, PartyMemberDef } from '../types'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import {
@@ -33,6 +33,7 @@ import type { BattleEntity } from './spellDsl'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
+  closeFieldBattle,
   openFieldBattle,
   readFieldBattleSettings,
   type FieldBattleSettings,
@@ -106,7 +107,7 @@ export class TopDownRenderer {
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする */
   private encounterCooldown: number = 0
   /** パーティマスター。戦闘の味方に使う（RaycastRenderer と同じ） */
-  private masterParty: Record<string, import('../types').PartyMemberDef> = {}
+  private masterParty: Record<string, PartyMemberDef> = {}
   private masterPartyOrder: string[] = []
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
@@ -195,6 +196,8 @@ export class TopDownRenderer {
 
   /** ゲームデータを読み込んで描画を開始する */
   load(gameData: RPGProject): void {
+    // 戦闘中に再 load されたら戦闘画面を畳む（古い onClosed が新しいマップの状態を上書きしないよう強制終了）
+    this.closeBattle()
     // 状態リセット
     this.isMoving = false
     this.moveStart = 0
@@ -229,6 +232,7 @@ export class TopDownRenderer {
     this.encounterCooldown = 0
     this.deferredStepTrigger = null
     this.pendingSwipe = null
+    this.lastTickMs = performance.now()
     this.inputGate.resetHeld()
 
     this.drawMap()
@@ -266,6 +270,7 @@ export class TopDownRenderer {
 
   /** リソース解放 */
   destroy(): void {
+    this.closeBattle()
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
@@ -462,6 +467,7 @@ export class TopDownRenderer {
     // 設定オーバーレイなど外側の UI が入力を止めている間は受け付けない
     if (this.inputGate.isSuspended) return
     // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
+    // （TopDown は repeat を上で弾くので実質は保険。Raycast と規約を揃えて残す）
     if (this.inputGate.isReleaseGated(e.key)) return
 
     // input/textarea/contentEditable にフォーカスがあるときはキー奪取しない
@@ -653,17 +659,16 @@ export class TopDownRenderer {
       rng: Math.random,
     })
     if (!enemies || enemies.length === 0) return false
-    this.startBattle(enemies)
-    return this.battleScreen !== null
+    return this.startBattle(enemies)
   }
 
   /**
    * 戦闘画面を起動する (#784)。組み立て・キー規約・終了時の畳み方は RaycastRenderer と共通 (fieldBattle.ts)。
    * 終了（勝利・逃走・全滅）でフィールドに戻り、エンカウントのクールダウンを 3 歩セットする（RaycastRenderer と同方式）。
    */
-  private startBattle(enemies: BattleEntity[]): void {
-    if (this.battleScreen) return // 多重起動防止
-    if (enemies.length === 0) return
+  private startBattle(enemies: BattleEntity[]): boolean {
+    if (this.battleScreen) return false // 多重起動防止
+    if (enemies.length === 0) return false
     // キューされたスワイプは戦闘後に持ち越さない
     this.pendingSwipe = null
     this.battleScreen = openFieldBattle({
@@ -674,7 +679,7 @@ export class TopDownRenderer {
       roster: { party: this.masterParty, order: this.masterPartyOrder },
       enemies,
       gate: this.inputGate,
-      onClosed: () => {
+      onClosed: (outcome) => {
         this.battleScreen = null
         this.pendingSwipe = null
         // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）
@@ -682,9 +687,19 @@ export class TopDownRenderer {
         // 戦闘に入った歩の踏み込みトリガーを、戦闘が終わってから発火する
         const deferred = this.deferredStepTrigger
         this.deferredStepTrigger = null
-        if (deferred) this.checkStepTriggers(deferred.x, deferred.y)
+        // 全滅（defeat）では発火しない
+        if (deferred && outcome !== 'defeat') this.checkStepTriggers(deferred.x, deferred.y)
       },
     })
+    return true
+  }
+
+  /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
+  private closeBattle(): void {
+    if (!this.battleScreen) return
+    closeFieldBattle(this.app.stage, this.battleScreen)
+    this.battleScreen = null
+    this.deferredStepTrigger = null
   }
 
   private canMoveTo(x: number, y: number): boolean {
@@ -884,8 +899,9 @@ export class TopDownRenderer {
     const now = performance.now()
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
-    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない
-    this.battleScreen?.tick(dt * 1000)
+    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない。
+    // 設定オーバーレイ中は入力と同様に進行も止める (#784)
+    if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
     this.updateNpcAnimations(now)
     if (!this.isMoving) return
     const t = Math.min(1, (now - this.moveStart) / this.moveDuration)

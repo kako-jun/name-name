@@ -17,6 +17,7 @@ import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
 import { normalizeBattleRow } from './battleLayout'
+import { DIALOG_JUST_SHOWN_GUARD_MS, suppressNextTouchTap } from './touchInput'
 import type { SpriteStyle } from './spriteStyle'
 import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
@@ -238,8 +239,25 @@ export interface OpenFieldBattleArgs {
   roster: FieldBattleRoster
   enemies: BattleEntity[]
   gate: FieldInputGate
-  /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末） */
-  onClosed: () => void
+  /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
+  onClosed: (outcome: BattleOutcome) => void
+}
+
+/** 戦闘の結果（BattleScreen の onClose と同じ） */
+export type BattleOutcome = 'victory' | 'defeat' | 'escaped'
+
+/** 畳み済みの戦闘画面。強制終了（`closeFieldBattle`）後に古い onClose が走って二重に後始末しないための印 */
+const closedScreens = new WeakSet<BattleScreen>()
+
+/**
+ * 戦闘画面をステージから外して破棄する。多重呼び出しは無害。
+ * 戦闘中の `load()` / `destroy()` から使い、古い `onClosed` が新しい状態を上書きしないよう `onClosed` は呼ばない。
+ */
+export function closeFieldBattle(stage: Container, screen: BattleScreen): void {
+  if (closedScreens.has(screen)) return
+  closedScreens.add(screen)
+  stage.removeChild(screen)
+  screen.destroy({ children: true })
 }
 
 /**
@@ -269,11 +287,14 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     commandLabels: settings.commandLabels,
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
-    onClose: () => {
+    onClose: (outcome) => {
+      if (closedScreens.has(screen)) return
+      // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
+      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する
+      suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
       gate.armReleaseGate()
-      stage.removeChild(screen)
-      screen.destroy({ children: true })
-      onClosed()
+      closeFieldBattle(stage, screen)
+      onClosed(outcome)
     },
   })
   stage.addChild(screen)
