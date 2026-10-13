@@ -14,10 +14,15 @@ import {
   type Text,
   type Texture,
 } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, SIDE_LABEL_STROKE_WIDTH, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
-import { SIDE_LOG_LINES, SIDE_STATUS_COMPACT_WIDTH } from './battleLayout'
+import {
+  SIDE_LOG_MIN_LINES,
+  SIDE_STATUS_COMPACT_WIDTH,
+  computeSideBattleLayout,
+  estimateTextWidth,
+} from './battleLayout'
 
 const DEAD_ALPHA = 0.3
 
@@ -273,8 +278,8 @@ describe('BattleScreen: side', () => {
     expect(internals(s).partyViews[0].label).toBeNull()
   })
 
-  it.each([[SIDE_LOG_LINES - 1], [SIDE_LOG_LINES], [SIDE_LOG_LINES + 1]])(
-    'ログは直近 SIDE_LOG_LINES 行のみ（エンジンのログが %d 行のとき）',
+  it.each([[SIDE_LOG_MIN_LINES - 1], [SIDE_LOG_MIN_LINES], [SIDE_LOG_MIN_LINES + 1]])(
+    'ログは直近 SIDE_LOG_MIN_LINES 行のみ（敵 1 体）（エンジンのログが %d 行のとき）',
     (count) => {
       const engine = new BattleEngine([entity('hero')], [entity('slime')])
       const log = engine.getState().log as string[]
@@ -284,8 +289,8 @@ describe('BattleScreen: side', () => {
       const shown = internals(s)
         .logLines.map((t) => t.text)
         .filter((t) => t !== '')
-      expect(shown).toEqual(log.slice(-SIDE_LOG_LINES))
-      expect(shown.length).toBe(Math.min(count, SIDE_LOG_LINES))
+      expect(shown).toEqual(log.slice(-SIDE_LOG_MIN_LINES))
+      expect(shown.length).toBe(Math.min(count, SIDE_LOG_MIN_LINES))
     }
   )
 
@@ -356,5 +361,104 @@ describe('BattleScreen: side', () => {
     }
     expect(flips).toBe(1)
     expect(SIDE_STATUS_COMPACT_WIDTH).toBeGreaterThan(0)
+  })
+})
+
+describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
+  const sideOpts: BattleScreenOptions = { layout: 'side' }
+  const enemies = (n: number): BattleEntity[] =>
+    Array.from({ length: n }, (_, k) => entity(`e${k}`, { name: `てき${k}` }))
+
+  it.each([
+    [1, 2],
+    [2, 3],
+    [3, 4],
+    [6, 4],
+  ])('敵 %d 体 → ログ行テキストは %d 本だけ生成される（800x720）', (n, lines) => {
+    const s = track(make([entity('hero')], enemies(n), sideOpts, 800, 720))
+    expect(internals(s).logLines).toHaveLength(lines)
+  })
+
+  it('低い画面ではログ行テキストが減り、リサイズで増減に追従する', () => {
+    const party = [entity('p0'), entity('p1'), entity('p2'), entity('p3')]
+    const s = track(make(party, enemies(6), sideOpts, 800, 720))
+    expect(internals(s).logLines).toHaveLength(4)
+    s.redraw(568, 320)
+    expect(internals(s).logLines).toHaveLength(SIDE_LOG_MIN_LINES)
+    s.redraw(800, 720)
+    expect(internals(s).logLines).toHaveLength(4)
+  })
+
+  it('敵が複数いてもログの行数ぶんだけ直近ログを表示する', () => {
+    const engine = new BattleEngine([entity('hero')], enemies(3))
+    const log = engine.getState().log as string[]
+    log.length = 0
+    for (let n = 0; n < 9; n++) log.push(`line${n}`)
+    const s = track(new BattleScreen(engine, 800, 720, sideOpts))
+    expect(internals(s).logLines.map((t) => t.text)).toEqual(log.slice(-4))
+  })
+
+  it('敵ラベルは縁取り(stroke)付き。背景指定の有無で変わらない', () => {
+    for (const opts of [sideOpts, { ...sideOpts, background: 'bg/x.webp' }]) {
+      vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture())
+      const s = track(make([entity('hero')], [entity('slime')], opts))
+      const stroke = internals(s).enemyViews[0].label!.style.stroke as {
+        color: unknown
+        width: number
+      }
+      expect(stroke.width).toBe(SIDE_LABEL_STROKE_WIDTH)
+      expect(stroke.width).toBeGreaterThan(0)
+    }
+  })
+
+  it('敵ラベルは container 相対でスプライト直下（純粋関数のラベル矩形）に置かれる', () => {
+    const s = track(make([entity('hero')], enemies(3), sideOpts, 800, 720))
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 720,
+      partyCount: 1,
+      enemyCount: 3,
+    })
+    internals(s).enemyViews.forEach((v, k) => {
+      const slot = L.enemies[k]
+      expect(v.label!.x).toBeCloseTo(slot.label!.x - slot.x + slot.label!.w / 2)
+      expect(v.label!.y).toBeCloseTo(slot.size + 2)
+      expect(v.label!.visible).toBe(true)
+    })
+  })
+
+  it('長い敵名は省略され、ラベル幅(=スプライト一辺)を越えない', () => {
+    const s = track(
+      make(
+        [entity('hero')],
+        [
+          entity('a', { name: 'とてもとてもながいなまえのモンスターたち' }),
+          entity('b'),
+          entity('c'),
+          entity('d'),
+        ],
+        sideOpts,
+        360,
+        640
+      )
+    )
+    const nameLine = internals(s).enemyViews[0].label!.text.split('\n')[0]
+    expect(nameLine.endsWith('…')).toBe(true)
+    const L = computeSideBattleLayout({ width: 360, height: 640, partyCount: 1, enemyCount: 4 })
+    expect(estimateTextWidth(nameLine, 12)).toBeLessThanOrEqual(L.enemies[0].size + 0.001)
+  })
+
+  it.each([
+    ['ながいなまえのゆうしゃ', 20, true],
+    ['ながいなまえのゆうしゃ', 120, false],
+  ])('320 幅でも status テキストは概算幅でパネル内に収まる（%s, HP %d）', (name, hp, hasEllipsis) => {
+    const s = track(
+      make([entity('hero', { name, hp, maxHp: hp })], [entity('slime')], sideOpts, 320, 568)
+    )
+    const L = computeSideBattleLayout({ width: 320, height: 568, partyCount: 1, enemyCount: 1 })
+    const text = internals(s).statusTexts[0].text
+    expect(text.endsWith(`HP ${hp}/${hp}`)).toBe(true)
+    expect(text.includes('…')).toBe(hasEllipsis)
+    expect(estimateTextWidth(text, 14)).toBeLessThanOrEqual(L.status.w - 24 + 0.001)
   })
 })

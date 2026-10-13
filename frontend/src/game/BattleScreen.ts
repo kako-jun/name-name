@@ -14,6 +14,15 @@
  *   |  > ゆうしゃのこうげき！...          |
  *   +-----+-------+----------------------+
  *
+ * `layout: 'side'`（#736・FF 系サイドビュー）では配置が変わる。座標は battleLayout.ts が正本:
+ *
+ *   +-----------------------------------+
+ *   | ログ帯（敵の数で 2〜4 行）          |
+ *   |  [敵群 + 名前/HP ラベル]  [味方全員] |  ← 敵が左・味方が右。背景画像があれば cover で敷く
+ *   +----------+------------------------+
+ *   |たたかう … | ゆうしゃ HP 20/20 MP …  |  ← コマンド 2x2 / 味方全員分の HP パネル
+ *   +----------+------------------------+
+ *
  * BattleEngine（状態機械）を観測して描画する責務だけ持つ。コマンド入力は
  * 4 つのボタン (たたかう/じゅもん/どうぐ/にげる) を直接タップで決定。
  *
@@ -34,10 +43,13 @@ import {
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
-  SIDE_LOG_LINES,
+  SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
   computeContainFit,
+  computeFallbackRect,
   computeSideBattleLayout,
+  fitLabel,
+  fitNameWithSuffix,
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
@@ -64,6 +76,11 @@ const FALLBACK_PARTY_COLOR = 0x5588cc
 const DEAD_ALPHA = 0.3
 const SIDE_LABEL_FONT_SIZE = 12
 const SIDE_STATUS_FONT_SIZE = 14
+/** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
+const SIDE_STATUS_TEXT_PADDING = 12
+/** 敵ラベルの縁取り。写真背景（dim なし）でも読めるよう、背景指定の有無にかかわらず付ける (#736) */
+export const SIDE_LABEL_STROKE_COLOR = 0x000000
+export const SIDE_LABEL_STROKE_WIDTH = 3
 
 const NAME_FONT_SIZE = 18
 const COMMAND_FONT_SIZE = 18
@@ -139,6 +156,12 @@ export class BattleScreen extends Container {
   private partyViews: EntityView[] = []
   private statusTexts: PixiText[] = []
   private visibleLogLines = LOG_VISIBLE_LINES
+  /** side: status が狭く MP 表記を省いているか（layoutSide が更新） */
+  private sideCompact = false
+  /** side: status テキストに使える幅(px)（layoutSide が更新） */
+  private sideStatusTextWidth = Infinity
+  /** side: 敵ラベルに使える幅(px)（layoutSide が更新。enemyViews と同じ index） */
+  private sideLabelWidths: number[] = []
 
   private dim: Graphics // フィールドを暗くする半透明黒
   private enemyNameText: PixiText
@@ -179,8 +202,9 @@ export class BattleScreen extends Container {
     this.addChild(this.commandPanel)
     this.addChild(this.logPanel)
     this.buildCommandButtons()
-    this.buildLogLines()
-    if (this.layoutMode === 'side') this.buildSideViews()
+    // front のログは固定 4 行。side は layoutSide が必要な行数だけ作る
+    if (this.layoutMode === 'front') this.buildLogLines()
+    else this.buildSideViews()
     if (opts.background) void this.loadBackground(opts.background)
     this.layout()
     this.refresh()
@@ -208,7 +232,6 @@ export class BattleScreen extends Container {
   /** サイドビュー用の敵・味方スプライトとステータス行を作る (#736) */
   private buildSideViews(): void {
     const s = this.engine.getState()
-    this.visibleLogLines = SIDE_LOG_LINES
     // 前面用（正面配置）の表示物は使わない
     this.enemyNameText.visible = false
     this.enemyHpText.visible = false
@@ -252,6 +275,8 @@ export class BattleScreen extends Container {
             fontSize: SIDE_LABEL_FONT_SIZE,
             fill: TEXT_COLOR,
             align: 'center',
+            lineHeight: SIDE_LABEL_LINE_HEIGHT,
+            stroke: { color: SIDE_LABEL_STROKE_COLOR, width: SIDE_LABEL_STROKE_WIDTH },
           }),
         })
       : null
@@ -331,11 +356,20 @@ export class BattleScreen extends Container {
   }
 
   private buildLogLines(): void {
-    for (let i = 0; i < LOG_VISIBLE_LINES; i++) {
+    this.setLogLineCount(LOG_VISIBLE_LINES)
+  }
+
+  /** ログ行テキストの数を n に揃える（足りなければ作り、余れば破棄する） */
+  private setLogLineCount(n: number): void {
+    while (this.logLines.length < n) {
       const text = new PixiText({ text: '', style: TEXT_STYLE_LOG })
       this.logLines.push(text)
       this.addChild(text)
     }
+    while (this.logLines.length > n) {
+      this.logLines.pop()?.destroy()
+    }
+    this.visibleLogLines = n
   }
 
   private layout(): void {
@@ -433,6 +467,7 @@ export class BattleScreen extends Container {
 
     // ログ帯（上）
     panel(L.log, this.logPanel)
+    this.setLogLineCount(L.logLines)
     for (let i = 0; i < this.logLines.length; i++) {
       const text = this.logLines[i]
       text.x = L.log.x + 12
@@ -462,22 +497,20 @@ export class BattleScreen extends Container {
     panel(L.status, this.statsPanel)
     for (let i = 0; i < this.statusTexts.length; i++) {
       const row = L.statusRows[i]
-      this.statusTexts[i].x = row.x + 12
+      this.statusTexts[i].x = row.x + SIDE_STATUS_TEXT_PADDING
       this.statusTexts[i].y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
     }
     this.sideCompact = L.statusCompact
+    this.sideStatusTextWidth = Math.max(0, L.status.w - SIDE_STATUS_TEXT_PADDING * 2)
+    this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
   }
-
-  private sideCompact = false
 
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
     view.container.position.set(slot.x, slot.y)
     const size = slot.size
-    view.fallback
-      .clear()
-      .rect(size * 0.15, size * 0.1, size * 0.7, size * 0.8)
-      .fill(view.color)
+    const fb = computeFallbackRect(size)
+    view.fallback.clear().rect(fb.x, fb.y, fb.w, fb.h).fill(view.color)
     if (view.sprite) {
       const fit = computeContainFit(view.sprite.texture.width, view.sprite.texture.height, size)
       view.sprite.position.set(fit.x, fit.y)
@@ -486,8 +519,12 @@ export class BattleScreen extends Container {
       view.fallback.visible = false
     }
     if (view.label) {
-      view.label.x = size / 2
-      view.label.y = size + 2
+      // ラベル位置は純粋関数が返す矩形（container 相対に直す）。置けない枠では隠す
+      view.label.visible = !!slot.label
+      if (slot.label) {
+        view.label.x = slot.label.x - slot.x + slot.label.w / 2
+        view.label.y = slot.label.y - slot.y
+      }
     }
   }
 
@@ -499,7 +536,13 @@ export class BattleScreen extends Container {
       const view = this.enemyViews[i]
       if (!e) continue
       view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
-      if (view.label) view.label.text = `${e.name}\nHP ${e.hp}/${e.maxHp}`
+      if (view.label) {
+        // 2 列配置などでラベル幅(=スプライト一辺)を越える名前は省略して隣と重ねない
+        const w = this.sideLabelWidths[i] ?? 0
+        view.label.text =
+          `${fitLabel(e.name, w, SIDE_LABEL_FONT_SIZE)}\n` +
+          fitLabel(`HP ${e.hp}/${e.maxHp}`, w, SIDE_LABEL_FONT_SIZE)
+      }
     }
     for (let i = 0; i < this.partyViews.length; i++) {
       const p = s.party[i]
@@ -510,9 +553,11 @@ export class BattleScreen extends Container {
       const p = s.party[i]
       if (!p) continue
       const t = this.statusTexts[i]
-      t.text = this.sideCompact
-        ? `${p.name}  HP ${p.hp}/${p.maxHp}`
-        : `${p.name}  HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`
+      // 名前だけ省略して HP/MP は必ず見せる（パネル端を越えない）
+      const suffix = this.sideCompact
+        ? `  HP ${p.hp}/${p.maxHp}`
+        : `  HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`
+      t.text = fitNameWithSuffix(p.name, suffix, this.sideStatusTextWidth, SIDE_STATUS_FONT_SIZE)
       t.style.fill = p.hp > 0 ? TEXT_COLOR : 0x888888
     }
   }
@@ -532,7 +577,7 @@ export class BattleScreen extends Container {
       this.heroStatsText.text = `${hero.name}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp > 0 ? TEXT_COLOR : 0x888888
     }
-    // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は SIDE_LOG_LINES）
+    // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は layoutSide が決めた行数）
     const tail = s.log.slice(-this.visibleLogLines)
     for (let i = 0; i < this.logLines.length; i++) {
       this.logLines[i].text = tail[i] ?? ''
