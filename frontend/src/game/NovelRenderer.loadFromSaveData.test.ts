@@ -6,7 +6,7 @@
  * NovelRenderer.startFrom.test.ts が startFrom 経由で広く検証している。
  * このファイルは loadFromSaveData に固有の振る舞いに絞る:
  *
- *  - sceneId 空 / シーン未発見 / 正常 の 3 分岐
+ *  - sceneId 空（エントリ文書の線形ストリームへ復元 #768） / シーン未発見 / 正常 の 3 分岐
  *  - 「シーンが無くてもフラグだけは復元する」という loadFromSaveData 固有の
  *    挙動（startFrom は完全 no-op なのと対照的）
  *  - SaveSlotData の各フィールド（eventIndex/textIndex/flags/isBlackout/
@@ -243,39 +243,39 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(r.getSnapshot().flags).toEqual({})
   })
 
-  // ===== C. 異常系: sceneId 空（restoreToScene を通さない分岐） =====
+  // ===== C. sceneId 空（エントリ文書の線形ストリーム上の位置として復元 #768） =====
 
-  it('10: sceneId="" の空セーブ → quickLoad は true（データは存在する）', async () => {
+  it('10: sceneId="" のセーブ → quickLoad は入場結果を返す（データは存在する）', async () => {
     seedQuickSave(craftSave({ sceneId: '', flags: { f: boolFlag(true) } }))
     const r = makeRenderer(SCENES)
-    expect(await r.quickLoad()).not.toBeNull()
+    expect(await r.quickLoad()).toEqual({ status: 'entered', sceneId: null })
   })
 
-  it('11: sceneId="" → フラグだけ復元され、currentSceneId は変化しない', () => {
+  it('11: sceneId="" → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId は null (#768)', async () => {
     const r = makeRenderer(SCENES)
-    r.startFrom({ sceneId: 'a' })
-    const sceneBefore = r.getCurrentSceneId()
-    seedQuickSave(craftSave({ sceneId: '', flags: { only: boolFlag(true) } }))
-    r.quickLoad()
+    r.startFrom({ sceneId: 'b' })
+    seedQuickSave(craftSave({ sceneId: '', eventIndex: 1, flags: { only: boolFlag(true) } }))
+    await r.quickLoad()
     expect(r.getSnapshot().flags).toEqual({ only: boolFlag(true) })
-    // sceneId 空は restoreToScene を通さない → currentSceneId は据え置き
-    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(r.getCurrentSceneId()).toBeNull()
+    expect(r.getSnapshot().eventIndex).toBe(1)
   })
 
-  it('12: sceneId="" → history はリセットされない（restoreToScene 未通過）', () => {
+  it('12: sceneId="" → restoreToScene を通るので history は現在位置のみにリセットされる (#768)', async () => {
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a' })
-    const historyBefore = internals(r).history.length
+    internals(r).history.push(r.getSnapshot(), r.getSnapshot())
+    expect(internals(r).history.length).toBeGreaterThan(1)
     seedQuickSave(craftSave({ sceneId: '', flags: { f: boolFlag(true) } }))
-    r.quickLoad()
-    expect(internals(r).history.length).toBe(historyBefore)
+    await r.quickLoad()
+    expect(internals(r).history.length).toBe(1)
   })
 
-  it('13: sceneId="" → warn は呼ばない（空セーブは正常な早期 return）', () => {
+  it('13: sceneId="" → warn は呼ばない（復元先はエントリ文書で、シーン未発見ではない）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     seedQuickSave(craftSave({ sceneId: '', flags: {} }))
     const r = makeRenderer(SCENES)
-    r.quickLoad()
+    await r.quickLoad()
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
@@ -351,13 +351,12 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     expect(internals(r).justSelectedChoice).toBe(false)
   })
 
-  it('29: sceneId="" の空セーブは restoreToScene を通さないため justSelectedChoice を触らない', () => {
+  it('29: sceneId="" のセーブも restoreToScene を通るので justSelectedChoice がリセットされる (#768)', () => {
     const r = makeRenderer(SCENES)
     internals(r).justSelectedChoice = true
     seedQuickSave(craftSave({ sceneId: '', flags: { f: boolFlag(true) } }))
     r.quickLoad()
-    // 空セーブは早期 return（restoreToScene 未通過）なので据え置き
-    expect(internals(r).justSelectedChoice).toBe(true)
+    expect(internals(r).justSelectedChoice).toBe(false)
   })
 
   // ===== F. Condition 展開（flags がロード時点で resolveEvents に効く） =====
