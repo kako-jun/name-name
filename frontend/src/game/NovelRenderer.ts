@@ -39,6 +39,7 @@ import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
 import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
+import { backgroundPreload } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
 import { selectAndShuffleSeFiles } from './seSelection'
 import {
@@ -4937,7 +4938,9 @@ export class NovelRenderer {
     // ⚠️ これは PixiJS の非公開内部実装（pop=LIFO）依存の脆い前提。将来の PixiJS バージョンアップで
     // BackgroundLoader の消化順が変わったら、この reverse は無意味になるか逆効果になり得る
     // （#414 が静かに再発し得る）。
-    Assets.backgroundLoad(fresh.reverse()).catch(() => {})
+    // Assets.backgroundLoad は内部で reject を握らず pageerror になる＋以降の先読みが止まるため
+    // 自前の backgroundPreload を使う (#782)。LIFO・並列度1の消化順は同じ。
+    backgroundPreload(fresh.reverse())
   }
 
   /**
