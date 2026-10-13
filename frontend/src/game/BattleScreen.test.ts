@@ -559,6 +559,7 @@ describe('BattleScreen: side', () => {
   ])('hp=%d の敵・味方 view の alpha は %d', (hp, alpha) => {
     const s = track(make([entity('hero', { hp })], [entity('slime', { hp })], side))
     expect(internals(s).enemyViews[0].container.alpha).toBe(alpha)
+    expect(internals(s).enemyViews[0].label!.alpha).toBe(alpha)
     expect(internals(s).partyViews[0].container.alpha).toBe(alpha)
   })
 
