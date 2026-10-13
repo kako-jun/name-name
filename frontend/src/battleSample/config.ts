@@ -33,7 +33,7 @@ export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 
 /**
  * 隊列の見せ方 (#747)。config = 設定 JSON の party[].row どおり、front = 全員前衛、
- * backHalf = 後ろ半分（人数の半分、切り上げ）を後衛にする。ライブ比較用。
+ * backHalf = 前衛が人数の半分（切り上げ）、残りを後衛にする（1 人=後衛 0 / 2 人=1 / 3 人=1 / 4 人=2）。ライブ比較用。
  */
 export const FORMATION_MODES = ['config', 'front', 'backHalf'] as const
 export type FormationMode = (typeof FORMATION_MODES)[number]
@@ -409,7 +409,7 @@ export function resolveSize(id: ScreenSizeId): { width: number; height: number }
 
 /**
  * 隊列の見せ方を味方へ適用する (#747)。config = 設定どおり、front = 全員前衛、
- * backHalf = 後ろ半分（人数の半分、切り上げ）を後衛にする。入力は変更せず複製を返す
+ * backHalf = 先頭から人数の半分（切り上げ）が前衛、残りが後衛（1 人=後衛 0 / 2 人=1 / 3 人=1 / 4 人=2）。入力は変更せず複製を返す
  */
 export function applyFormation(party: BattleEntity[], mode: FormationMode): BattleEntity[] {
   const backFrom = Math.ceil(party.length / 2)
