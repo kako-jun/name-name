@@ -115,6 +115,11 @@ export class BattleEngine {
     return this.state
   }
 
+  /** 今コマンドを出す味方の party index（ATB はキュー先頭の生存者）。いなければ -1。表示側もこれを使う */
+  getCurrentActorIndex(): number {
+    return this.currentActorIndex()
+  }
+
   isOver(): boolean {
     return (
       this.state.phase === 'victory' ||

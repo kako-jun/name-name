@@ -774,8 +774,8 @@ export class BattleScreen extends Container {
 
   /** 今コマンドを出す味方の index（ATB のコマンド待ち先頭）。いなければ -1 */
   private actorIndex(): number {
-    const atb = this.engine.getState().atb
-    return atb && atb.queue.length > 0 ? atb.queue[0] : -1
+    // 導出はエンジンの getCurrentActorIndex に一本化（表示側で queue[0] を直接読まない）。ATB 以外では印を出さない
+    return this.engine.getState().atb ? this.engine.getCurrentActorIndex() : -1
   }
 
   private buildCommandButtons(): void {

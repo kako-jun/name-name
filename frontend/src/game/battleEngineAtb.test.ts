@@ -602,6 +602,19 @@ describe('ATB: initialGauges（任意局面）', () => {
   })
 })
 
+describe('ATB: getCurrentActorIndex', () => {
+  it('currentActor と一致し、倒れた人がキューに残っていても生存者を指す', () => {
+    const eng = mk([hero('a'), hero('b')], [foe('s')], { initialGauges: { party: [1000, 1000] } })
+    expect(eng.getCurrentActorIndex()).toBe(0)
+    // 先頭を倒れた状態にしてもキューには残る状況を作る
+    eng.getState().party[0].hp = 0
+    expect(atbOf(eng).queue[0]).toBe(0)
+    expect(eng.getCurrentActorIndex()).toBe(1)
+    eng.getState().party[1].hp = 0
+    expect(eng.getCurrentActorIndex()).toBe(-1)
+  })
+})
+
 describe('ATB: にげる', () => {
   it('行動者の導出は一本化: たたかう / にげる失敗とも、キュー先頭の人だけがゲージ 0 になり次の人が番になる', () => {
     const init = { initialGauges: { party: [1000, 1000] } }
