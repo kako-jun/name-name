@@ -45,7 +45,7 @@ import {
   Texture,
   Ticker,
 } from 'pixi.js'
-import { BattleEngine } from './battleEngine'
+import { ATB_GAUGE_MAX, BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
   SIDE_LABEL_LINE_HEIGHT,
@@ -114,6 +114,16 @@ const PANEL_STROKE = 0xffffff
 const PANEL_RADIUS = 6
 const TEXT_COLOR = 0xffffff
 const HP_COLOR = 0x88ee88
+/** ATB (#205): 行動する番の味方の名前色 / ゲージの色（溜まり中・満タン）/ ゲージの下地 */
+const ACTOR_COLOR = 0xffee66
+const ATB_BAR_FILLING_COLOR = 0x66aaff
+const ATB_BAR_READY_COLOR = 0xffdd55
+const ATB_BAR_BG_COLOR = 0x000000
+/** ATB ゲージ（味方ステータス欄の右端の小さな横棒）の寸法 (#205)。FF らしい仕上げは #745 */
+const ATB_BAR_HEIGHT = 6
+const ATB_BAR_MIN_WIDTH = 28
+const ATB_BAR_MAX_WIDTH = 64
+const ATB_BAR_GAP = 8
 // MP_COLOR は HP/MP バー UI 実装時（戦闘 Phase 2、#175 と同時想定）に追加する
 
 const STAGE_PADDING = 16
@@ -285,6 +295,14 @@ export class BattleScreen extends Container {
   private enemyViews: EntityView[] = []
   private partyViews: EntityView[] = []
   private statusTexts: PixiText[] = []
+  /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
+  private atbBars: Graphics[] = []
+  /** 各ゲージ棒の矩形（画面絶対）。layout が更新 */
+  private atbBarRects: Array<{ x: number; y: number; w: number; h: number }> = []
+  /** onClose を 1 回だけ呼ぶためのフラグ（ATB は tick でも戦闘が終わる） */
+  private closedFlag = false
+  /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
+  private atbSignature = ''
   private visibleLogLines = LOG_VISIBLE_LINES
   /** side: status が狭く MP 表記を省いているか（layoutSide が更新） */
   private sideCompact = false
@@ -353,6 +371,7 @@ export class BattleScreen extends Container {
     // front のログは固定 4 行。side は layoutSide が必要な行数だけ作る
     if (this.layoutMode === 'front') this.buildLogLines()
     else this.buildSideViews()
+    this.buildAtbBars()
     if (opts.background) void this.loadBackground(opts.background)
     if (opts.foreground && this.layoutMode === 'side') void this.loadForeground(opts.foreground)
     this.layout()
@@ -670,11 +689,74 @@ export class BattleScreen extends Container {
         break
     }
     this.refresh()
-    if (this.engine.isOver()) {
-      const outcome = this.engine.getState().phase
-      // outcome は victory / defeat / escaped のいずれか（isOver がガード）
-      this.opts.onClose?.(outcome as 'victory' | 'defeat' | 'escaped')
+    this.closeIfOver()
+  }
+
+  /** 戦闘が終わっていれば onClose を 1 回だけ呼ぶ */
+  private closeIfOver(): void {
+    if (this.closedFlag || !this.engine.isOver()) return
+    this.closedFlag = true
+    const outcome = this.engine.getState().phase
+    // outcome は victory / defeat / escaped のいずれか（isOver がガード）
+    this.opts.onClose?.(outcome as 'victory' | 'defeat' | 'escaped')
+  }
+
+  /**
+   * 時間を deltaMS 進める (#205)。ATB のときだけ働く（従来ターン制は何もしない）。
+   * 時計は持たず、呼び出し側（本編の ticker / サンプルの ticker）が経過時間を渡す。
+   * 状態が変わった（ログ・フェーズ・コマンド待ちの顔ぶれ）ときだけ全表示を更新し、毎回ゲージ棒だけ描き直す。
+   */
+  tick(deltaMS: number): void {
+    if (this.destroyedFlag || this.closedFlag) return
+    if (!this.engine.getState().atb) return
+    this.engine.tick(deltaMS)
+    const sig = this.computeAtbSignature()
+    if (sig !== this.atbSignature) this.refresh()
+    else this.drawAtbBars()
+    this.closeIfOver()
+  }
+
+  private computeAtbSignature(): string {
+    const s = this.engine.getState()
+    return `${s.logTotal}|${s.phase}|${s.atb?.queue.join(',') ?? ''}`
+  }
+
+  /** ATB ゲージ棒を作る（ATB のときだけ）。side は味方ごと、front は先頭 1 人ぶん */
+  private buildAtbBars(): void {
+    if (!this.engine.getState().atb) return
+    const n = this.layoutMode === 'side' ? this.engine.getState().party.length : 1
+    for (let i = 0; i < n; i++) {
+      const g = new Graphics()
+      this.atbBars.push(g)
+      this.addChild(g)
     }
+  }
+
+  /** ゲージ棒を描く。満タン（コマンド待ち）は色を変える。倒れた味方は空 */
+  private drawAtbBars(): void {
+    const atb = this.engine.getState().atb
+    if (!atb) return
+    const party = this.engine.getState().party
+    this.atbBars.forEach((g, i) => {
+      const r = this.atbBarRects[i]
+      g.clear()
+      if (!r) return
+      const alive = (party[i]?.hp ?? 0) > 0
+      const ratio = alive ? Math.min(1, Math.max(0, (atb.partyGauge[i] ?? 0) / ATB_GAUGE_MAX)) : 0
+      g.rect(r.x, r.y, r.w, r.h).fill({ color: ATB_BAR_BG_COLOR, alpha: 0.6 })
+      if (ratio > 0) {
+        g.rect(r.x, r.y, r.w * ratio, r.h).fill(
+          ratio >= 1 ? ATB_BAR_READY_COLOR : ATB_BAR_FILLING_COLOR
+        )
+      }
+      g.rect(r.x, r.y, r.w, r.h).stroke({ color: PANEL_STROKE, width: 1 })
+    })
+  }
+
+  /** 今コマンドを出す味方の index（ATB のコマンド待ち先頭）。いなければ -1 */
+  private actorIndex(): number {
+    const atb = this.engine.getState().atb
+    return atb && atb.queue.length > 0 ? atb.queue[0] : -1
   }
 
   private buildCommandButtons(): void {
@@ -807,6 +889,18 @@ export class BattleScreen extends Container {
     this.drawPanel(this.statsPanel, STAGE_PADDING, statsY, panelW, STATS_HEIGHT)
     this.heroStatsText.x = STAGE_PADDING + 12
     this.heroStatsText.y = statsY + (STATS_HEIGHT - HP_FONT_SIZE) / 2
+    if (this.atbBars.length > 0) {
+      const w = Math.min(ATB_BAR_MAX_WIDTH, Math.max(ATB_BAR_MIN_WIDTH, panelW * 0.18))
+      this.atbBarRects = [
+        {
+          x: STAGE_PADDING + panelW - 12 - w,
+          y: statsY + (STATS_HEIGHT - ATB_BAR_HEIGHT) / 2,
+          w,
+          h: ATB_BAR_HEIGHT,
+        },
+      ]
+      this.drawAtbBars()
+    }
 
     // コマンドパネル（4 コマンドを画面幅で均等割）
     this.drawPanel(this.commandPanel, STAGE_PADDING, commandY, panelW, COMMAND_HEIGHT)
@@ -908,7 +1002,23 @@ export class BattleScreen extends Container {
       this.statusTexts[i].y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
     }
     this.sideCompact = L.statusCompact
-    this.sideStatusTextWidth = Math.max(0, L.status.w - SIDE_STATUS_TEXT_PADDING * 2)
+    let reservedForBar = 0
+    if (this.atbBars.length > 0) {
+      // ATB ゲージ棒は各行の右端に置き、名前・HP の文字幅はそのぶん狭める（重ならない）
+      const barW = Math.min(ATB_BAR_MAX_WIDTH, Math.max(ATB_BAR_MIN_WIDTH, L.status.w * 0.18))
+      this.atbBarRects = L.statusRows.map((row) => ({
+        x: row.x + row.w - SIDE_STATUS_TEXT_PADDING - barW,
+        y: row.y + (row.h - ATB_BAR_HEIGHT) / 2,
+        w: barW,
+        h: ATB_BAR_HEIGHT,
+      }))
+      reservedForBar = barW + ATB_BAR_GAP
+      this.drawAtbBars()
+    }
+    this.sideStatusTextWidth = Math.max(
+      0,
+      L.status.w - SIDE_STATUS_TEXT_PADDING * 2 - reservedForBar
+    )
     this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
   }
 
@@ -1008,8 +1118,15 @@ export class BattleScreen extends Container {
       const suffix = this.sideCompact
         ? `  HP ${p.hp}/${p.maxHp}`
         : `  HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`
-      t.text = fitNameWithSuffix(p.name, suffix, this.sideStatusTextWidth, SIDE_STATUS_FONT_SIZE)
-      t.style.fill = p.hp > 0 ? TEXT_COLOR : 0x888888
+      // ATB: 今コマンドを出す番の味方は名前の前に ▶ を付け、色を変える (#205)
+      const isActor = p.hp > 0 && i === this.actorIndex()
+      t.text = fitNameWithSuffix(
+        isActor ? `▶${p.name}` : p.name,
+        suffix,
+        this.sideStatusTextWidth,
+        SIDE_STATUS_FONT_SIZE
+      )
+      t.style.fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
   }
 
@@ -1066,8 +1183,9 @@ export class BattleScreen extends Container {
     }
     const hero: BattleEntity | undefined = s.party[0]
     if (hero) {
-      this.heroStatsText.text = `${hero.name}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
-      this.heroStatsText.style.fill = hero.hp > 0 ? TEXT_COLOR : 0x888888
+      const isActor = hero.hp > 0 && this.actorIndex() === 0
+      this.heroStatsText.text = `${isActor ? '▶' : ''}${hero.name}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
+      this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
     // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は layoutSide が決めた行数）
     if (this.logTypewriter === 'on') {
@@ -1081,11 +1199,16 @@ export class BattleScreen extends Container {
       }
     }
     // 暫定: コマンド入力不可なら見た目で示す（alpha 半分）
+    // ATB (#205): にげるはゲージが溜まっていなくても（誰もコマンド待ちでなくても）いつでも選べる
     const inputEnabled = s.phase === 'party-input'
+    const escapeAnytime = !!s.atb && (s.phase === 'party-input' || s.phase === 'atb-running')
     for (const cmd of this.commands) {
-      cmd.hit.alpha = inputEnabled ? 1 : 0.4
-      cmd.text.alpha = inputEnabled ? 1 : 0.4
-      cmd.hit.eventMode = inputEnabled ? 'static' : 'none'
+      const enabled = cmd.id === 'escape' && escapeAnytime ? true : inputEnabled
+      cmd.hit.alpha = enabled ? 1 : 0.4
+      cmd.text.alpha = enabled ? 1 : 0.4
+      cmd.hit.eventMode = enabled ? 'static' : 'none'
     }
+    this.atbSignature = this.computeAtbSignature()
+    this.drawAtbBars()
   }
 }
