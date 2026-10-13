@@ -41,15 +41,3 @@ export function createPaperDollOutlineFilter(config: PaperDollOutlineConfig): Ou
     color: config.color,
   })
 }
-
-/** 透明アクリル縁の色（ごく薄い青みを帯びた白）(#737) */
-export const ACRYLIC_RIM_COLOR = '#dff2ff'
-
-/**
- * アクリルスタンド風の「透明アクリル縁」フィルタを生成する (#737)。
- * 紙人形輪郭（白フチ）の外側へ重ねる、半透明の淡い縁。太さと不透明度は呼び出し側が決める。
- * 白フチは `createPaperDollOutlineFilter` を再利用し、このフィルタをその後段に並べる。
- */
-export function createAcrylicRimFilter(thickness: number, alpha: number): OutlineFilter {
-  return new OutlineFilter({ thickness, color: ACRYLIC_RIM_COLOR, alpha })
-}
