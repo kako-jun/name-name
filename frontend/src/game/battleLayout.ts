@@ -123,6 +123,8 @@ const SIDE_COMMAND_WIDTH_RATIO = 0.4
 const SIDE_COMMAND_CROSS_COUNT = 4
 /** `cross` のセルの段数（上 / 左右 / 下） */
 const SIDE_COMMAND_CROSS_ROWS = 3
+/** `cross` の 1 段の最小高さ（ステージが潰れる小さい画面でだけ 1 段を縮める） */
+const SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT = 28
 /** 味方 1 人ぶんの status 行の標準高さ */
 export const SIDE_STATUS_ROW_HEIGHT = 26
 const SIDE_STATUS_VERTICAL_PADDING = 12
@@ -646,7 +648,22 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // 下: コマンド（左）+ status（右）
   const commandLayout = effectiveCommandLayout(input.commandLayout, commandCount)
   const commandRows = commandRowCount(commandLayout, commandCount)
-  const commandNeeded = commandRows * SIDE_COMMAND_CELL_HEIGHT
+  let commandCellH = SIDE_COMMAND_CELL_HEIGHT
+  if (commandLayout === 'cross') {
+    // cross は 3 段で窓が高くなるので、ログ最小行でもステージが最小高さを割る画面では 1 段を縮める（下限あり）。
+    // grid はもともと 2 段で、ログ行数の削減だけで足りるので縮めない
+    const maxBottom =
+      H -
+      SIDE_PADDING * 2 -
+      SIDE_GAP * 2 -
+      computeSideLogHeight(SIDE_LOG_MIN_LINES) -
+      SIDE_MIN_STAGE_HEIGHT
+    commandCellH = Math.min(
+      SIDE_COMMAND_CELL_HEIGHT,
+      Math.max(SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT, maxBottom / commandRows)
+    )
+  }
+  const commandNeeded = commandRows * commandCellH
   const statusNeeded = partyCount * SIDE_STATUS_ROW_HEIGHT + SIDE_STATUS_VERTICAL_PADDING
   const bottomH = Math.max(commandNeeded, statusNeeded)
   const bottomY = H - SIDE_PADDING - bottomH

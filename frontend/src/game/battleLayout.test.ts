@@ -598,15 +598,45 @@ describe('ログ行数', () => {
   })
 })
 
-describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6)', () => {
-  const cases: Array<[number, number, number, number]> = []
-  for (const [w, h] of SWEEP_SIZES)
-    for (let p = 1; p <= 4; p++) for (let e = 1; e <= 6; e++) cases.push([w, h, p, e])
+describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6 x grid/cross)', () => {
+  const cases: Array<[number, number, number, number, 'grid' | 'cross']> = []
+  for (const cl of ['grid', 'cross'] as const)
+    for (const [w, h] of SWEEP_SIZES)
+      for (let p = 1; p <= 4; p++) for (let e = 1; e <= 6; e++) cases.push([w, h, p, e, cl])
 
-  it('件数', () => expect(cases).toHaveLength(168))
+  it('件数', () => expect(cases).toHaveLength(336))
 
-  it.each(cases)('%dx%d party%d enemy%d', (w, h, p, e) => {
-    const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: e })
+  it('cross は小さい画面で 1 段を縮め（下限 28）、ステージを grid 近くまで確保する（320x240 party1）', () => {
+    const g = computeSideBattleLayout({ width: 320, height: 240, partyCount: 1, enemyCount: 3 })
+    const c = computeSideBattleLayout({
+      width: 320,
+      height: 240,
+      partyCount: 1,
+      enemyCount: 3,
+      commandLayout: 'cross',
+    })
+    expect(c.command.h).toBeLessThan(120)
+    expect(c.command.h).toBe(84)
+    expect(c.stage.h).toBeGreaterThan(g.stage.h - 10)
+    // 十分大きい画面では縮めない
+    const big = computeSideBattleLayout({
+      width: 1280,
+      height: 720,
+      partyCount: 1,
+      enemyCount: 3,
+      commandLayout: 'cross',
+    })
+    expect(big.command.h).toBe(120)
+  })
+
+  it.each(cases)('%dx%d party%d enemy%d %s', (w, h, p, e, cl) => {
+    const L = computeSideBattleLayout({
+      width: w,
+      height: h,
+      partyCount: p,
+      enemyCount: e,
+      commandLayout: cl,
+    })
     expect(L.stage.h).toBeGreaterThanOrEqual(0)
     const screen: Rect = { x: 0, y: 0, w, h }
     const bottoms = [L.command, L.status]
