@@ -5998,6 +5998,7 @@ export class NovelRenderer {
     if (!data.sceneId) {
       // sceneId が無い空セーブはフラグだけ復元して終了（restoreToScene を通さない）
       this.gameState.fromJSON(data.flags)
+      // 暫定: 空 sceneId は flags のみ反映して成功扱い。扱いは #768 で決める
       this.notifyLoadSuccess(origin)
       // #620: restoreToScene を通らないため pendingAutoAdvance は自動でクリアされない。
       // resetAndStartEvents({ skipAutoAdvance: true }) でスキップした自動進行を

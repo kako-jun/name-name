@@ -1465,6 +1465,8 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     await flushAsync()
 
     expect(r.quickLoad).toHaveBeenCalledTimes(1)
+    // マウント時の自動クイックロードは起点 'auto'（成功トーストを出さない）で呼ぶ (#765)
+    expect(r.quickLoad).toHaveBeenCalledWith('auto')
     expect(r.startFrom).not.toHaveBeenCalled()
   })
 
@@ -1710,6 +1712,18 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
     fireEvent.keyDown(window, { key: 'F5' })
 
     expect(r.quickSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('664-10 (#765): F8 は renderer.quickLoad() を起点 quick（引数なし）で呼ぶだけで、NovelPlayer 自身は showToast を呼ばない（結果のトーストは renderer が出す）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    fireEvent.keyDown(window, { key: 'F8' })
+
+    expect(r.quickLoad).toHaveBeenCalledTimes(1)
+    expect(r.quickLoad.mock.calls[0]).toEqual([])
+    expect(r.showToast).not.toHaveBeenCalled()
   })
 })
 
