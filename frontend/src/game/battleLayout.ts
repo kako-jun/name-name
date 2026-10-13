@@ -124,7 +124,7 @@ const SIDE_COMMAND_CROSS_COUNT = 4
 /** `cross` のセルの段数（上 / 左右 / 下） */
 const SIDE_COMMAND_CROSS_ROWS = 3
 /** `cross` の 1 段の最小高さ（ステージが潰れる小さい画面でだけ 1 段を縮める） */
-const SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT = 28
+export const SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT = 28
 /** 味方 1 人ぶんの status 行の標準高さ */
 export const SIDE_STATUS_ROW_HEIGHT = 26
 const SIDE_STATUS_VERTICAL_PADDING = 12

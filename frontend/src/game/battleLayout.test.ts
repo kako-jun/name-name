@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   SIDE_COMMAND_CELL_HEIGHT,
+  SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT,
   SIDE_GAP,
   SIDE_LABEL_FONT_SIZE,
   SIDE_LABEL_GAP,
@@ -616,7 +617,7 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6 x grid/cro
       commandLayout: 'cross',
     })
     expect(c.command.h).toBeLessThan(120)
-    expect(c.command.h).toBe(84)
+    expect(c.command.h).toBe(commandRowCount('cross', 4) * SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT)
     expect(c.stage.h).toBeGreaterThan(g.stage.h - 10)
     // 十分大きい画面では縮めない
     const big = computeSideBattleLayout({
@@ -626,7 +627,7 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6 x grid/cro
       enemyCount: 3,
       commandLayout: 'cross',
     })
-    expect(big.command.h).toBe(120)
+    expect(big.command.h).toBe(commandRowCount('cross', 4) * SIDE_COMMAND_CELL_HEIGHT)
   })
 
   it.each(cases)('%dx%d party%d enemy%d %s', (w, h, p, e, cl) => {
