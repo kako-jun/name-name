@@ -29,6 +29,7 @@ const parsedContains: Array<[string, EventDocument]> = []
 let serverHasRootScript = true
 const getContentsMock = vi.hoisted(() => vi.fn())
 const listScriptsMock = vi.hoisted(() => vi.fn())
+const putContentsMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../components/NovelPlayer', () => ({
   default: (props: Record<string, unknown>) => {
@@ -60,7 +61,7 @@ vi.mock('../api/client', () => ({
   createApiClient: () => ({
     getContents: (...args: unknown[]) => getContentsMock(...args),
     listScripts: (...args: unknown[]) => listScriptsMock(...args),
-    putContents: async () => ({}),
+    putContents: (...args: unknown[]) => putContentsMock(...args),
   }),
 }))
 
@@ -461,5 +462,53 @@ describe('EditorScreen: 最初に開く文書の決め方 (#778 調査)', () => 
     expect(await screen.findByText(/読み込みに失敗/)).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: /^script\.md/ }))
     await waitFor(() => expect(screen.queryByText(/読み込みに失敗/)).toBeNull())
+  })
+})
+
+describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    getContentsMock.mockReset()
+    getContentsMock.mockImplementation(async () => ({ content: '# hub', sha: 'sha' }))
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [])
+    putContentsMock.mockReset()
+    parsedByMarkdown.clear()
+    parsedContains.length = 0
+    parsed = makeDoc(['hub', 'S1'])
+    editedDoc = makeDoc(['hub', 'S1', 'S2'])
+  })
+  const draftKey = 'name-name:editor-draft:p:script.md'
+
+  it('保存中に追記された内容は、保存完了で下書きを消さず未保存のまま退避される', async () => {
+    let finishPut: (v: { sha: string }) => void = () => {}
+    putContentsMock.mockImplementation(
+      () =>
+        new Promise((r) => {
+          finishPut = r
+        })
+    )
+    renderEditor()
+    emitted = '# v1'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Gitにコミット・プッシュ' }))
+    await waitFor(() => expect(putContentsMock).toHaveBeenCalled())
+    // 保存の await 中にさらに編集
+    emitted = '# v2'
+    fireEvent.click(screen.getByTestId('edit-doc'))
+    await act(async () => {
+      finishPut({ sha: 'sha2' })
+    })
+    await waitFor(() => expect(localStorage.getItem(draftKey)).toBe('# v2'), { timeout: 3000 })
+  })
+
+  it('破棄の後に、保留中だった下書きが復活しない', async () => {
+    renderEditor()
+    emitted = '# edited'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(await screen.findByRole('button', { name: '変更を破棄' }))
+    fireEvent.click(await screen.findByRole('button', { name: '破棄' }))
+    await new Promise((r) => setTimeout(r, 1300))
+    expect(localStorage.getItem(draftKey)).toBeNull()
   })
 })

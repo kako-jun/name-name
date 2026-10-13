@@ -120,6 +120,9 @@ function EditorScreen({
   // ロード時に getContents() のレスポンスから設定し、PUT 成功時に新しい sha で更新する。
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
+  // 保存の await 中に編集が進んだかを判定するため、常に最新の内容を指す
+  const rawMarkdownRef = useRef('')
+  rawMarkdownRef.current = rawMarkdown
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
   const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
@@ -687,12 +690,26 @@ function EditorScreen({
         shaRef.current = result.sha
         setHasSha(true)
       }
-      initialMarkdownRef.current = rawMarkdown
-      setHasUnsavedChanges(false)
-      try {
-        localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
-      } catch {
-        // ignore
+      // 保存中（PUT の await 中）に追記された場合、保存したのは古い内容。下書きを消さず、
+      // 未保存扱いのまま残す（保留中の下書き書き込みはそのまま走り、最新の内容を退避する）。
+      const savedContent = rawMarkdown
+      initialMarkdownRef.current = savedContent
+      if (rawMarkdownRef.current === savedContent) {
+        setHasUnsavedChanges(false)
+        try {
+          localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
+        } catch {
+          // ignore
+        }
+      } else {
+        setHasUnsavedChanges(true)
+        pendingDraftRef.current = {
+          key: localStorageKey(projectName, currentScriptPath),
+          markdown: rawMarkdownRef.current,
+        }
+        if (draftSaveTimeoutRef.current === null) {
+          draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
+        }
       }
     } catch (error) {
       console.error('Failed to save:', error)
@@ -719,6 +736,12 @@ function EditorScreen({
       const markdown = data.content || ''
 
       // 2. 取得成功したら draft を消す（失敗時は draft を保持して再試行可能に）
+      // 保留中の書き込み（タイマー）も捨てる。残すと破棄の 1 秒後に下書きが復活する。
+      if (draftSaveTimeoutRef.current !== null) {
+        clearTimeout(draftSaveTimeoutRef.current)
+        draftSaveTimeoutRef.current = null
+      }
+      pendingDraftRef.current = null
       try {
         localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
       } catch {
