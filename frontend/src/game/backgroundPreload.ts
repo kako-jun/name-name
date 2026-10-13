@@ -50,11 +50,20 @@ export function backgroundPreload(urls: string[]): void {
 }
 
 /**
- * 未消化のキューと失敗済み記録を捨てる。文書の差し替え・破棄時に呼び、旧文書の URL を
- * 読み続けないようにする。取得中の1件は完走させる。文書差し替えで資産が変わりうるため
- * 失敗済み記録も消す。
+ * 未消化のキューだけを捨てる。シーン入場（resetAndStartEvents）で呼び、前シーンの URL を
+ * 読み続けないようにする。取得中の1件は完走させる。失敗済み記録は残す（同じ文書内で
+ * 存在しない画像を再取得しないため）。
+ */
+export function clearBackgroundPreloadQueue(): void {
+  queue.length = 0
+}
+
+/**
+ * 未消化のキューと失敗済み記録の両方を捨てる。文書差し替え（loadEvents）と破棄（destroy）で
+ * 呼ぶ。差し替えで資産が変わりうる（エディタで画像追加後は再試行させたい）ため失敗記録も消す。
+ * 取得中の1件は完走させる。
  */
 export function clearBackgroundPreload(): void {
-  queue.length = 0
+  clearBackgroundPreloadQueue()
   failed.clear()
 }

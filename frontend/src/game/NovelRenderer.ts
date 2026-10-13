@@ -39,7 +39,11 @@ import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
 import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
 import { ensureFontLoaded } from './FontLoader'
-import { backgroundPreload, clearBackgroundPreload } from './backgroundPreload'
+import {
+  backgroundPreload,
+  clearBackgroundPreload,
+  clearBackgroundPreloadQueue,
+} from './backgroundPreload'
 import { AudioManager } from './AudioManager'
 import { selectAndShuffleSeFiles } from './seSelection'
 import {
@@ -476,7 +480,8 @@ export class NovelRenderer {
   private textureCache: Map<string, Texture> = new Map()
   /**
    * 先読み済みアセット URL の集合 (#389)。`preloadUpcomingAssets` が同一 URL を
-   * `backgroundPreload` に二重に積まないための重複除去（無駄呼び出しを避ける）。イベント列を差し替える `resetAndStartEvents` でクリアする＝
+   * `backgroundPreload` に二重に積まないための重複除去（無駄呼び出しを避ける）。
+   * イベント列を差し替える `resetAndStartEvents` でクリアする＝
    * 新しいイベント列では先読み状態も作り直す。`setEvents` は表示済み背景を `Assets.unload`
    * するので、クリアしないと「積み済み」誤判定で先読みがスキップされコールドロードに戻る
    * （エディタのライブプレビュー等で再表示するケース）。`destroy` でもリーク予防にクリアする。
@@ -2595,7 +2600,7 @@ export class NovelRenderer {
     // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
     // processUntilNextTextEvent → preloadUpcomingAssets が先頭から積み直す）。
     this.preloadedUrls.clear()
-    clearBackgroundPreload()
+    clearBackgroundPreloadQueue()
     // 話者交代追跡 (#286) をリセット（前シーン末尾の話者を引きずらない）。
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
