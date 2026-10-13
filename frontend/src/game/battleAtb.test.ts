@@ -17,3 +17,39 @@ describe('normalizeBattleAtb (#205)', () => {
     expect(normalizeAtbMode('active')).toBe('active')
   })
 })
+
+describe('normalizeAtbMode / normalizeBattleAtb の追加観点 (#205 QA)', () => {
+  it("normalizeAtbMode: 'active' は大小・前後空白を無視して active、それ以外は wait", () => {
+    for (const v of ['active', 'ACTIVE', ' Active ', '\tactive\n']) {
+      expect(normalizeAtbMode(v)).toBe('active')
+    }
+    for (const v of [
+      undefined,
+      null,
+      '',
+      ' ',
+      'wait',
+      'WAIT',
+      'activ',
+      'actives',
+      'inactive',
+      'on',
+      '1',
+    ]) {
+      expect(normalizeAtbMode(v)).toBe('wait')
+    }
+  })
+
+  it('normalizeBattleAtb: on の完全一致のみ有効（部分一致・別語は無効）', () => {
+    for (const v of ['o', 'onn', 'true', '1', 'yes', 'enabled', 'off', 'of']) {
+      expect(normalizeBattleAtb(v, 'active')).toBeUndefined()
+    }
+  })
+
+  it('normalizeBattleAtb: 戻り値は mode だけのオブジェクトで、呼ぶたび別のオブジェクト', () => {
+    const a = normalizeBattleAtb('on', 'active')
+    const b = normalizeBattleAtb('on', 'active')
+    expect(a).toEqual({ mode: 'active' })
+    expect(a).not.toBe(b)
+  })
+})

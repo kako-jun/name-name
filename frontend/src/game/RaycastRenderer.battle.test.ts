@@ -406,3 +406,91 @@ describe('RaycastRenderer: 隊列・奥行き・前景の配線 (#747)', () => {
     expect(i.battleScreen!.opts.foreground).toBeUndefined()
   })
 })
+
+describe('RaycastRenderer.load → battleAtb の流れ (#205)', () => {
+  function loaded(p: Partial<RPGProject>) {
+    const { r, i } = makeRenderer()
+    i.ensureWallTextures = async () => {}
+    r.load(project(p))
+    return { r, i }
+  }
+
+  it("battleAtb: { mode: 'active' } → startBattle のエンジンは ATB（active・atb-running）", () => {
+    const { i } = loaded({ battleLayout: 'side', battleAtb: { mode: 'active' } })
+    i.startBattle([enemy()])
+    const s = i.battleScreen!.engine.getState()
+    expect(s.atb?.mode).toBe('active')
+    expect(s.phase).toBe('atb-running')
+  })
+
+  it('battleAtb 未指定 → 従来ターン制（state.atb なし・party-input）', () => {
+    const { i } = loaded({ battleLayout: 'side' })
+    i.startBattle([enemy()])
+    const s = i.battleScreen!.engine.getState()
+    expect(s.atb).toBeUndefined()
+    expect(s.phase).toBe('party-input')
+  })
+
+  it('front でも ATB が有効（先頭 1 人のゲージ）', () => {
+    const { i } = loaded({ battleLayout: 'front', battleAtb: { mode: 'wait' } })
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.engine.getState().atb?.partyGauge).toHaveLength(1)
+  })
+
+  it('load() の再呼び出しで前回の ATB 設定が残らない', () => {
+    const { r, i } = loaded({ battleAtb: { mode: 'active' } })
+    r.load(project({}))
+    i.startBattle([enemy()])
+    expect(i.battleScreen!.engine.getState().atb).toBeUndefined()
+  })
+})
+
+describe('RaycastRenderer.onTick → BattleScreen.tick の配線 (#205)', () => {
+  interface TickInternals extends RendererInternals {
+    lastTickMs: number
+    onTick(): void
+    advanceTurnAnim(dt: number): void
+    updateMovement(dt: number): void
+    updateNpcAnimations(now: number): void
+    renderFrame(): void
+  }
+  function ticking() {
+    const { r, i } = makeRenderer()
+    const t = i as unknown as TickInternals
+    t.advanceTurnAnim = () => {}
+    t.updateMovement = () => {}
+    t.updateNpcAnimations = () => {}
+    t.renderFrame = () => {}
+    return { r, t }
+  }
+
+  it('戦闘中は経過 ms が BattleScreen.tick に渡り、ATB のゲージが進む', () => {
+    const { t } = ticking()
+    ;(t as unknown as { battleAtb: unknown }).battleAtb = { mode: 'wait' }
+    t.startBattle([enemy()])
+    const screen = t.battleScreen as unknown as { tick(ms: number): void }
+    const spy = vi.spyOn(screen, 'tick')
+    vi.spyOn(performance, 'now').mockReturnValue(1050)
+    t.lastTickMs = 1000
+    t.onTick()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toBeCloseTo(50, 6)
+    expect(t.battleScreen!.engine.getState().atb!.partyGauge[0]).toBeGreaterThan(0)
+  })
+
+  it('1 フレームの経過は 100ms に丸められる（タブ復帰で巨大な dt が来ても暴走しない）', () => {
+    const { t } = ticking()
+    t.startBattle([enemy()])
+    const screen = t.battleScreen as unknown as { tick(ms: number): void }
+    const spy = vi.spyOn(screen, 'tick')
+    vi.spyOn(performance, 'now').mockReturnValue(100000)
+    t.lastTickMs = 0
+    t.onTick()
+    expect(spy.mock.calls[0][0]).toBeCloseTo(100, 6)
+  })
+
+  it('戦闘中でなければ例外にならない', () => {
+    const { t } = ticking()
+    expect(() => t.onTick()).not.toThrow()
+  })
+})
