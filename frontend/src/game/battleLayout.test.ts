@@ -2,12 +2,15 @@ import { describe, it, expect } from 'vitest'
 import {
   SIDE_COMMAND_CELL_HEIGHT,
   SIDE_GAP,
+  SIDE_LABEL_FONT_SIZE,
   SIDE_LABEL_GAP,
+  SIDE_LABEL_MAX_WIDTH_RATIO,
+  SIDE_LABEL_STROKE_WIDTH,
   SIDE_LABEL_HEIGHT,
   SIDE_LABEL_LINES,
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_MIN_LINES,
-  SIDE_MIN_SPRITE_SIZE,
+  SIDE_READABLE_SPRITE_SIZE,
   SIDE_MIN_STAGE_HEIGHT,
   SIDE_COMMAND_TEXT_PADDING,
   SIDE_MAX_SPRITE_SIZE,
@@ -22,6 +25,7 @@ import {
   computeSideLogHeight,
   desiredSideLogLines,
   fitCommandFontSize,
+  fitHpLabel,
   estimateTextWidth,
   fitLabel,
   fitNameWithSuffix,
@@ -484,10 +488,11 @@ describe('computeFormation: 敵ラベル予約', () => {
 
   it('withLabel ありは枠の直下に名前+HP 2 行ぶんのラベル矩形を返す', () => {
     const [s] = computeFormation(region, 1, 'enemy', true)
+    // 1 列は横に何も並ばないので、領域幅（上限 size*倍率）まで広がり、領域内に収まる
     expect(s.label).toEqual({
-      x: s.x,
+      x: region.x,
       y: s.y + s.size + SIDE_LABEL_GAP,
-      w: s.size,
+      w: Math.min(region.w, s.size * SIDE_LABEL_MAX_WIDTH_RATIO),
       h: SIDE_LABEL_HEIGHT,
     })
     expect(SIDE_LABEL_HEIGHT).toBe(SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES)
@@ -645,35 +650,74 @@ function rowsOf(slots: SpriteSlot[]): number {
   return new Set(slots.map((s) => Math.round(s.y * 1000))).size
 }
 
-describe('computeFormation: 列数は SIDE_MIN_SPRITE_SIZE に届く最小の列数', () => {
-  it.each([
-    [800, 450],
-    [640, 360],
-  ])('%dx%d・敵 3 体は 2 行以上で千鳥（dx が 0 でない）', (w, h) => {
-    const L = computeSideBattleLayout({ width: w, height: h, partyCount: 1, enemyCount: 3 })
-    expect(rowsOf(L.enemies)).toBeGreaterThanOrEqual(2)
-    expect(L.enemies[0].size).toBeGreaterThanOrEqual(SIDE_MIN_SPRITE_SIZE)
+describe('computeFormation: 列数は SIDE_READABLE_SPRITE_SIZE に届く最小の列数', () => {
+  it('SIDE_READABLE_SPRITE_SIZE は定数の直書きでなく HP 行の概算幅 + 縁取り両側から導出される', () => {
+    expect(SIDE_READABLE_SPRITE_SIZE).toBe(
+      Math.ceil(estimateTextWidth('HP 12/12', SIDE_LABEL_FONT_SIZE) + SIDE_LABEL_STROKE_WIDTH * 2)
+    )
+    expect(SIDE_READABLE_SPRITE_SIZE).toBe(64)
+  })
+
+  it('800x450・敵 3 体は 2 列 2 行・千鳥あり・読める大きさ', () => {
+    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 1, enemyCount: 3 })
+    expect(rowsOf(L.enemies)).toBe(2)
+    expect(L.enemies[0].size).toBeGreaterThanOrEqual(SIDE_READABLE_SPRITE_SIZE)
     // 同じ列の 1 行目と 2 行目で x がずれている（千鳥）
     expect(L.enemies[1].x - L.enemies[0].x).not.toBe(0)
   })
 
-  it('640x360・敵 3〜6 体はすべて 2 行以上（千鳥あり）', () => {
-    for (let e = 3; e <= 6; e++) {
+  it('640x360・敵 3〜4 体は 1 行（千鳥なし）でも HP 行が省略されない', () => {
+    for (let e = 3; e <= 4; e++) {
       const L = computeSideBattleLayout({ width: 640, height: 360, partyCount: 1, enemyCount: e })
-      expect(rowsOf(L.enemies)).toBeGreaterThanOrEqual(2)
+      expect(rowsOf(L.enemies)).toBe(1)
+      for (const s of L.enemies) {
+        const room = s.label!.w - SIDE_LABEL_STROKE_WIDTH * 2
+        expect(fitHpLabel(12, 12, room, SIDE_LABEL_FONT_SIZE)).toBe('HP 12/12')
+      }
     }
+  })
+
+  it('640x360・敵 5〜6 体は「HP 」を落として数値 12/12 は必ず読める', () => {
+    for (let e = 5; e <= 6; e++) {
+      const L = computeSideBattleLayout({ width: 640, height: 360, partyCount: 1, enemyCount: e })
+      for (const s of L.enemies) {
+        const room = s.label!.w - SIDE_LABEL_STROKE_WIDTH * 2
+        expect(fitHpLabel(12, 12, room, SIDE_LABEL_FONT_SIZE)).toMatch(/12\/12$/)
+      }
+    }
+  })
+
+  it('敵 N 体 → N+1 体でスプライトが読める大きさ未満へ縮むのは、届かない画面だけ（逆転の洗い出し）', () => {
+    // 読める大きさに届く間は「最小の列数」を選ぶ仕様上、N+1 体のほうが大きくなる逆転は起こりうる
+    // （例: 1280x720 で 3 体=3 行 135px → 4 体=2 列 160px）。それでも N 体が読める大きさなら N+1 体の
+    // 選択も読める大きさ以上、または最大サイズへのフォールバックになる。
+    for (const [w, h] of SWEEP_SIZES)
+      for (let p = 1; p <= 4; p++)
+        for (let e = 1; e < 6; e++) {
+          const a = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: e })
+          const b = computeSideBattleLayout({
+            width: w,
+            height: h,
+            partyCount: p,
+            enemyCount: e + 1,
+          })
+          if (a.enemies[0].size < SIDE_READABLE_SPRITE_SIZE) {
+            // 届いていない側は最大サイズ選択なので、体数が増えて大きくなることは無い
+            expect(b.enemies[0].size).toBeLessThanOrEqual(a.enemies[0].size + EPS)
+          }
+        }
   })
 
   it('届く列数が複数あるとき最小の列数が選ばれる（4 体・広い領域 → 2 列 2 行）', () => {
     const slots = computeFormation({ x: 0, y: 0, w: 600, h: 400 }, 4, 'enemy', true)
     expect(rowsOf(slots)).toBe(2)
-    expect(slots[0].size).toBeGreaterThanOrEqual(SIDE_MIN_SPRITE_SIZE)
+    expect(slots[0].size).toBeGreaterThanOrEqual(SIDE_READABLE_SPRITE_SIZE)
   })
 
   it('どの列数でも届かないときは最大サイズになる列数（6 体・低い領域 → 1 行）', () => {
     const slots = computeFormation({ x: 0, y: 0, w: 300, h: 60 }, 6, 'enemy', true)
     expect(rowsOf(slots)).toBe(1)
-    expect(slots[0].size).toBeLessThan(SIDE_MIN_SPRITE_SIZE)
+    expect(slots[0].size).toBeLessThan(SIDE_READABLE_SPRITE_SIZE)
     expect(slots[0].size).toBeCloseTo(60 - SIDE_LABEL_GAP - SIDE_LABEL_HEIGHT)
   })
 })
@@ -726,5 +770,61 @@ describe('fitCommandFontSize', () => {
               c.w + EPS
             )
       }
+  })
+})
+
+describe('敵ラベル幅: 1 列は領域幅まで・多列は列ピッチまで (#736)', () => {
+  it('800x450・敵 3 体（2 列）はラベル幅=列ピッチ(size)で隣と重ならない', () => {
+    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 1, enemyCount: 3 })
+    for (const s of L.enemies) expect(s.label!.w).toBeCloseTo(s.size)
+  })
+
+  it('1 列の敵はラベルがスプライトより広く、領域内に収まる（中央寄せ・端でクランプ）', () => {
+    const region: Rect = { x: 10, y: 0, w: 400, h: 500 }
+    for (const n of [1, 2, 3]) {
+      const slots = computeFormation(region, n, 'enemy', true)
+      for (const s of slots) {
+        expect(s.label!.w).toBeGreaterThan(s.size)
+        expect(s.label!.w).toBeLessThanOrEqual(region.w + EPS)
+        expect(s.label!.w).toBeLessThanOrEqual(s.size * SIDE_LABEL_MAX_WIDTH_RATIO + EPS)
+        expect(inside(s.label!, region)).toBe(true)
+      }
+    }
+  })
+
+  it('スイープ: 全ラベルが他のラベル・スプライトに重ならず stage 内（1 列/多列とも）', () => {
+    for (const [w, h] of SWEEP_SIZES)
+      for (let e = 1; e <= 6; e++) {
+        const L = computeSideBattleLayout({ width: w, height: h, partyCount: 2, enemyCount: e })
+        const rects: Rect[] = []
+        for (const s of L.enemies) {
+          if (s.size > 0) rects.push(slotRect(s))
+          if (s.label) {
+            expect(inside(s.label, L.stage)).toBe(true)
+            rects.push(s.label)
+          }
+        }
+        for (let i = 0; i < rects.length; i++)
+          for (let j = i + 1; j < rects.length; j++)
+            expect(overlaps(rects[i], rects[j])).toBe(false)
+      }
+  })
+})
+
+describe('fitHpLabel', () => {
+  it('収まるなら「HP a/b」', () => {
+    expect(fitHpLabel(12, 12, 100, 12)).toBe('HP 12/12')
+  })
+  it('収まらなければ「HP 」を落として数値だけ残す', () => {
+    const w = estimateTextWidth('12/12', 12) + 1
+    expect(fitHpLabel(12, 12, w, 12)).toBe('12/12')
+  })
+  it('数値も入らないときだけ … で省略', () => {
+    const r = fitHpLabel(120, 120, 30, 12)
+    expect(r.endsWith('…')).toBe(true)
+    expect(estimateTextWidth(r, 12)).toBeLessThanOrEqual(30)
+  })
+  it('… すら入らなければ空文字', () => {
+    expect(fitHpLabel(1, 1, 2, 12)).toBe('')
   })
 })

@@ -95,8 +95,6 @@ export const SIDE_LABEL_LINE_HEIGHT = 15
 export const SIDE_LABEL_LINES = 2
 export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
 export const SIDE_LABEL_GAP = 2
-/** スプライトの一辺がこれに届く最小の列数を選ぶ（届く列数が無ければ最大サイズの列数） */
-export const SIDE_MIN_SPRITE_SIZE = 36
 /** フォールバック四角（画像が無いとき）の枠内比率 */
 const FALLBACK_X = 0.15
 const FALLBACK_Y = 0.1
@@ -135,6 +133,20 @@ export function estimateTextWidth(text: string, fontPx: number): number {
   return w
 }
 
+/** 敵ラベルのフォントサイズと縁取りの太さ（BattleScreen の見た目と、読める幅の導出で共有） */
+export const SIDE_LABEL_FONT_SIZE = 12
+export const SIDE_LABEL_STROKE_WIDTH = 3
+/** 1 列配置のラベル幅の上限（スプライト一辺に対する倍率。領域幅でも頭打ち） */
+export const SIDE_LABEL_MAX_WIDTH_RATIO = 3
+/**
+ * 敵ラベルの HP 行（「HP 12/12」）が省略されず読める、スプライト一辺の最小値。
+ * 決め打ちでなく、HP 行の概算幅 + 縁取り両側分から導出する（約 64px）。
+ * 列数はスプライトがこれに届く最小の列数を選ぶ。
+ */
+export const SIDE_READABLE_SPRITE_SIZE = Math.ceil(
+  estimateTextWidth('HP 12/12', SIDE_LABEL_FONT_SIZE) + SIDE_LABEL_STROKE_WIDTH * 2
+)
+
 /**
  * `maxWidthPx` に収まるよう末尾を「…」で省略する（幅は概算）。収まるならそのまま。
  * 「…」すら入らないときは空文字。
@@ -152,6 +164,17 @@ export function fitLabel(text: string, maxWidthPx: number, fontPx: number): stri
     w += cw
   }
   return out + ELLIPSIS
+}
+
+/**
+ * HP 行を `maxWidthPx` に収める。「HP 12/12」が入らなければ「HP 」を落として「12/12」を残し、
+ * それでも入らないときだけ「…」で省略する（数値を優先して見せる）。
+ */
+export function fitHpLabel(hp: number, maxHp: number, maxWidthPx: number, fontPx: number): string {
+  const nums = `${hp}/${maxHp}`
+  const full = `HP ${nums}`
+  if (estimateTextWidth(full, fontPx) <= maxWidthPx) return full
+  return fitLabel(nums, maxWidthPx, fontPx)
 }
 
 /**
@@ -191,7 +214,7 @@ export function fitCommandFontSize(
 /**
  * ある側（敵 or 味方）の複数体を、領域内に千鳥で並べた枠を返す。
  *
- * - 列数は「3 体まで 1 列・4 体以上は 2 列」を下限に、スプライトが `SIDE_MIN_SPRITE_SIZE` に届く
+ * - 列数は「3 体まで 1 列・4 体以上は 2 列」を下限に、スプライトが `SIDE_READABLE_SPRITE_SIZE` に届く
  *   **最小の列数**を採る（列優先で埋める）。どの列数でも届かないときだけ最大サイズになる列数（同率は少ない方）
  * - 一辺は「領域幅」「領域高さ」「SIDE_MAX_SPRITE_SIZE」の最小。領域が潰れていても 0 以上
  * - 2 行以上のとき奇数行を `SIDE_STAGGER_RATIO * size` だけずらして奥行きを出す。
@@ -225,7 +248,7 @@ export function computeFormation(
     let best = { columns: baseColumns, size: sizeFor(baseColumns) }
     for (let c = baseColumns; c <= count; c++) {
       const size = sizeFor(c)
-      if (size >= SIDE_MIN_SPRITE_SIZE) return { columns: c, size }
+      if (size >= SIDE_READABLE_SPRITE_SIZE) return { columns: c, size }
       if (size > best.size) best = { columns: c, size }
     }
     return best
@@ -255,7 +278,13 @@ export function computeFormation(
     const y = originY + row * (size + extra)
     const slot: SpriteSlot = { x, y, size }
     if (withLabel && !labelDropped && size > 0) {
-      slot.label = { x, y: y + size + SIDE_LABEL_GAP, w: size, h: SIDE_LABEL_HEIGHT }
+      // 1 列は横に何も並ばないので領域幅（上限あり）まで広げ、多列は隣の列と重ならない列ピッチ(=size)まで
+      const w = columns === 1 ? Math.min(regionW, size * SIDE_LABEL_MAX_WIDTH_RATIO) : size
+      const lx =
+        columns === 1
+          ? Math.min(Math.max(x + size / 2 - w / 2, region.x), region.x + regionW - w)
+          : x
+      slot.label = { x: lx, y: y + size + SIDE_LABEL_GAP, w, h: SIDE_LABEL_HEIGHT }
     }
     slots.push(slot)
   }
