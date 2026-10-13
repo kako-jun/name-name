@@ -15,7 +15,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main: 'index.html',
+        index: 'index.html',
         'battle-sample': 'battle-sample.html',
       },
     },
