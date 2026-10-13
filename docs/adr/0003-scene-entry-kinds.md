@@ -86,7 +86,7 @@ TUI 版（`tui/src/playback.rs`）にも、選択肢・`[ジャンプ:]`・自�
 | 既読 | 出発元のシーンは、Choice か Jump に到達した時点で既読（現状どおり） | 付けない | 付けない（Jump 位置への復元だけ到達扱い） |
 | history | 空から積む | 空から積む（位置を指定したときは `[snapshot]`） | `[snapshot]` |
 | `onSceneChange` | 発火する | 発火する（ただし初期入場の分は自動セーブしない。§5） | 発火しない |
-| 失敗（遷移先不在・resolver 失敗） | 位置から遷移状態を再導出する。選択肢由来なら選択肢を再表示（TUI と同じ）、Jump 由来なら `stalled`（現状どおり） | 状態を変えない。位置が動かないので、遷移状態を位置から再導出する | flags だけ反映（現状どおり）し、遷移状態を位置から再導出する |
+| 失敗（遷移先不在・resolver 失敗） | 位置から遷移状態を再導出する。選択肢由来なら選択肢を再表示（TUI と同じ）、Jump 由来なら `stalled`（現状どおり） | 状態を変えない。位置が動かないので、遷移状態を位置から再導出する | 位置・flags とも現状維持する（flags を適用しない。#765）。遷移状態は位置から再導出する |
 
 持ち越しの方針は、`carryPolicyFor(kind)` のような純粋関数として1か所にまとめる。`resetAndStartEvents` が受け取る `preserveBackgroundForTransition`/`carryBgm` のような個別フラグは、この関数から導出する（規律4.5: 持ち越し対象ごとの独立性は保つが、どの種類で何を持ち越すかの決定は1か所に置く）。新しく持ち越す状態を足すときは、方針表に1列足すだけで済み、打ち消し用の API は要らない。
 
@@ -281,6 +281,19 @@ TUI はすべての .md をマージして読むので、遅延ロードは無�
 - 実ブラウザ確認: エディタで終劇まで進めてから原稿を編集し、プレビューが先頭から操作できること。タイトルの「はじめから」で直前のルートの内容が出ないこと（#662 の回帰確認）。「つづきから」がクイックセーブの有無の両方で正しい位置から始まること
 
 PR1 は他の PR の前提になる。PR2 は PR1 の後、PR3・PR4・PR5 は PR2 の後で、互いに独立している。
+
+## PR1 実装時の差分（2026-10-13）
+
+PR1 の実装で、上の記述から次のとおり変えた。挙動の方針は変えていない。
+
+- **`SceneEntryRequest` から fresh を外した。** `startFrom` が入口に移る PR2 で足す。`carryPolicyFor` の表には fresh 行を含めてある
+- **`ProgressOrigin` は `'choice' | 'jump'` の2値にした。** `playScript` の choice は選択肢と挙動が同じで、`'script'` を区別する理由が無かった。`playScript` は `jumpToScene` を呼ぶ
+- **restore の `origin` を判別共用体にした。** `{ source: 'save'; origin: LoadOrigin } | { source: 'snapshot' }`。成功トーストの出し分けを、同期の成功時も同期で出すため入口の中で行う
+- **`isTransitionGated(op, state)` は操作名を引数に取る。** 述語は1つのまま、操作ごとの規則を表で持つ。既存の規則（停止中の Jump で `goBack`・シーク・クイックロードを通す、メニューは選択肢の表示中・待機中も開ける、など）を保つため。操作は `advance`・`quickSave`・`saveMenu`・`navigate`（`goBack`・`seekTo`・`quickLoad`）・`autoAdvance`（オート送り・スキップのタイマー）・`loadMenu`・`confirmChoice`。理由を返す `gateReason()` も同じ表を使う
+- **`playScript` の `pendingEntry` 待機を PR1 に前倒しした。** 予約中の `[ジャンプ:]` の deferred を `superseded` で解決するテスト観点の土台のため。ポーリングの `drainPendingJump` は PR1 で廃止した。choice の結果を見た打ち切りは PR3 のまま
+- **ゲートで弾かれた選択肢の確定は、確定音を鳴らさない。** `ChoiceOverlay` の確定コールバックが `false` を返すと音を出さない
+- **遷移先が確実に無い（解決手段も無い）選択肢は、閉じずにその場に留める。** 遅延ロードの失敗後は、閉じていた選択肢を `rederiveTransitionAtCurrentPosition` が再表示する
+- **入場を待つ間に弾かれたオート送り・スキップは、失敗後に再開する。** `[待機]` が明けても入場の決着を待ってから進める（待機明けの `armJump` が世代を進めてロードを破棄するのを防ぐ）
 
 ## 判断を保留している点
 
