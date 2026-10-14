@@ -65,7 +65,7 @@
       ],
       "encounter": {
         "rate": 8,
-        "groups": ["slime", "slime+slime"]
+        "groups": ["dragon", "hornet", "hornet+hornet"]
       }
     },
     "connector": {
@@ -85,7 +85,7 @@
       ],
       "encounter": {
         "rate": 6,
-        "groups": ["dragon"]
+        "groups": ["hornet", "dragon+hornet"]
       }
     },
     "narrow-lane": {
@@ -100,7 +100,7 @@
       ],
       "encounter": {
         "rate": 3,
-        "groups": ["dragon", "slime+dragon"]
+        "groups": ["dragon", "hornet+hornet", "dragon+hornet"]
       }
     }
   },
@@ -109,15 +109,6 @@
     "minSteps": 3
   },
   "monsters": {
-    "slime": {
-      "name": "スライム",
-      "hp": 12,
-      "atk": 5,
-      "def": 2,
-      "agi": 4,
-      "exp": 3,
-      "gold": 2
-    },
     "dragon": {
       "name": "ドラゴン",
       "hp": 40,
@@ -127,6 +118,16 @@
       "exp": 20,
       "gold": 30,
       "sprite": "http://localhost:8765/sample/battle/enemy-dragon.png"
+    },
+    "hornet": {
+      "name": "スズメバチ",
+      "hp": 18,
+      "atk": 7,
+      "def": 2,
+      "agi": 8,
+      "exp": 8,
+      "gold": 10,
+      "sprite": "http://localhost:8765/assets/enemies/hornet.png"
     }
   },
   "party": [
@@ -138,6 +139,35 @@
       "def": 5,
       "agi": 6,
       "sprite": "http://localhost:8765/assets/characters/poses/nam-elementary-wheelchair-ready.png"
+    },
+    {
+      "name": "オトン",
+      "hp": 44,
+      "mp": 6,
+      "atk": 11,
+      "def": 6,
+      "agi": 7,
+      "sprite": "http://localhost:8765/assets/characters/poses/otton-elementary-ready.png"
+    },
+    {
+      "name": "シャー",
+      "hp": 46,
+      "mp": 4,
+      "atk": 12,
+      "def": 7,
+      "agi": 5,
+      "sprite": "http://localhost:8765/assets/characters/poses/shah-elementary-ready.png",
+      "row": "front"
+    },
+    {
+      "name": "ペー子",
+      "hp": 34,
+      "mp": 14,
+      "atk": 8,
+      "def": 4,
+      "agi": 8,
+      "sprite": "http://localhost:8765/assets/characters/poses/peiko-elementary-ready.png",
+      "row": "back"
     }
   ],
   "battle": {
