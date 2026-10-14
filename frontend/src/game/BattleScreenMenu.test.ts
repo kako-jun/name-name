@@ -306,23 +306,183 @@ describe('ATB の wait: 候補窓を開いている間だけ停止', () => {
     expect(engine.getState().atb!.enemyGauge[0]).toBe(0)
   })
 
-  it('行動を確定すると停止が解ける（窓を閉じたまま残さない）', () => {
-    const { s, engine } = build({}, ATB, [ent('a'), ent('b')])
+  it('行動を確定すると停止が解ける（次の味方がコマンド待ちでも時間は進む）', () => {
+    const two = {
+      atb: { mode: 'wait' as const, initialGauges: { party: [1000, 1000], enemies: [0, 0] } },
+      rng: () => 0,
+    }
+    const { s, engine } = build({}, two, [ent('a'), ent('b')])
     press('ArrowLeft')
     press('Enter')
     press('Enter')
     expect(types(s)).toEqual([])
+    expect(engine.getState().atb!.queue).toEqual([1]) // b がコマンド待ち
     const before = engine.getState().atb!.enemyGauge[0]
     s.tick(200)
-    // 次の味方 b はまだゲージが溜まり中で、コマンド待ちがいない = 時間が進む
-    expect(engine.getState().atb!.enemyGauge[0]).toBeGreaterThanOrEqual(before)
+    expect(engine.getState().atb!.enemyGauge[0]).toBeGreaterThan(before)
   })
 
-  it('destroy で停止を解く', () => {
+  it('destroy で停止範囲を従来（コマンド待ちの間ずっと停止）に戻す', () => {
     const { s, engine } = build({}, ATB)
     press('ArrowLeft')
     s.destroy({ children: true })
     engine.tick(500)
-    expect(engine.getState().atb!.enemyGauge[0]).toBeGreaterThan(0)
+    expect(engine.getState().atb!.enemyGauge[0]).toBe(0)
+  })
+
+  it('候補窓を使わない画面を同じエンジンに作り直しても、前の画面の menu 設定を持ち越さない', () => {
+    const engine = new BattleEngine([ent('a')], [ent('s1'), ent('s2')], ATB)
+    const first = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      commandLayout: 'cross',
+      menu: MENU,
+    })
+    created.push(first)
+    first.destroy({ children: true })
+    const grid = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      commandLayout: 'grid',
+      menu: MENU,
+    })
+    created.push(grid)
+    grid.tick(500)
+    expect(engine.getState().atb!.enemyGauge[0]).toBe(0)
+  })
+})
+
+describe('active: 窓を開いている間に前提が崩れたとき', () => {
+  const ACTIVE = {
+    atb: { mode: 'active' as const, initialGauges: { party: [1000, 0], enemies: [0, 0] } },
+    rng: () => 0,
+  }
+  const holding = (e: BattleEngine) => (e as unknown as { atbHold: boolean }).atbHold
+
+  it('敵の攻撃で使用者が倒れたら窓が閉じ、停止も解ける', () => {
+    const { s, engine } = build(
+      {},
+      ACTIVE,
+      [ent('a', { hp: 1 }), ent('b')],
+      [ent('s1', { atk: 50 }), ent('s2')]
+    )
+    press('ArrowLeft')
+    expect(types(s)).toEqual(['list'])
+    expect(holding(engine)).toBe(true)
+    engine.getState().atb!.enemyGauge[0] = 999
+    s.tick(1000) // active は窓を開いていても時間が進み、敵が a を倒す
+    expect(engine.getState().party[0].hp).toBe(0)
+    expect(types(s)).toEqual([])
+    expect(holding(engine)).toBe(false)
+  })
+
+  it.each(['dq', 'ff'] as const)(
+    '戦闘が終わったら窓が閉じ、停止も解ける（演出 %s。ff は演出を待って画面を畳む間も）',
+    (presentation) => {
+      const { s, engine } = build({ presentation }, ACTIVE)
+      press('ArrowLeft')
+      expect(types(s)).toEqual(['list'])
+      for (const e of engine.getState().enemies) e.hp = 0
+      s.tick(50)
+      expect(engine.isOver()).toBe(true)
+      expect(types(s)).toEqual([])
+      expect(holding(engine)).toBe(false)
+    }
+  )
+})
+
+describe('対象の側の固定とエンジンを通した結果 (#204 レビュー)', () => {
+  it('敵単体の呪文は左右キーで味方を指せず、確定で必ず敵に当たって MP とターンを正しく消費する', () => {
+    const { s, engine } = build()
+    press('ArrowLeft')
+    press('Enter') // ほのお（敵単体）
+    press('ArrowRight')
+    press('ArrowLeft')
+    expect(I(s).menuStack[1]).toMatchObject({ side: 'enemy', cursor: 0 })
+    press('Enter')
+    const st = engine.getState()
+    expect(st.party[0].mp).toBe(2)
+    expect(st.enemies[0].hp).toBeLessThan(100) // 空撃ちにならない
+  })
+
+  it('味方単体の呪文は味方に効く（倒れた味方は指せない）', () => {
+    const { engine } = build({}, { rng: () => 0 }, [ent('a', { hp: 30 }), ent('b', { hp: 0 })])
+    // a の覚える ヒール(味方単体)は 3 行目。開いたカーソルは最初に選べる行 = 0 なので 2 回下へ
+    press('ArrowLeft')
+    press('ArrowDown')
+    press('ArrowDown')
+    press('Enter')
+    press('ArrowDown') // 生存者は a だけ = 動かない
+    press('Enter')
+    expect(engine.getState().party[1].hp).toBe(0)
+    expect(engine.getState().party[0].mp).toBe(3)
+  })
+
+  it('対象なし（マップ）の呪文は MP が足りていてもグレーで、決定しても唱えない', () => {
+    const menu: BattleMenuData = {
+      spells: { a: [{ id: 'ruula', name: 'ルーラ', mp: 1, target: 'マップ', builtin: 'ruula' }] },
+    }
+    const { s, engine } = build({ menu })
+    press('ArrowLeft')
+    press('Enter')
+    expect(types(s)).toEqual(['list'])
+    expect(engine.getState().party[0].mp).toBe(5)
+    expect(engine.getState().log).toHaveLength(1)
+  })
+
+  it('前後に空白のある target でもエンジンと窓の解釈が一致する（全体）', () => {
+    const menu: BattleMenuData = {
+      spells: {
+        a: [{ id: 't', name: 'いなずま', mp: 1, target: ' 敵全体 ', effect: 'damage 5..5' }],
+      },
+    }
+    const { engine } = build({ menu })
+    press('ArrowLeft')
+    press('Enter')
+    press('Enter')
+    expect(engine.getState().enemies.every((e) => e.hp === 95)).toBe(true)
+  })
+})
+
+describe('タップによる一覧のスクロール', () => {
+  it('▼の帯のタップで先頭行が進み、見えなかった呪文に届く', () => {
+    const many: BattleMenuData = {
+      spells: {
+        a: Array.from({ length: 30 }, (_, i) => ({
+          id: `s${i}`,
+          name: `じゅもん${i}`,
+          mp: 1,
+          target: '敵単体',
+          effect: 'damage 1..1',
+        })),
+      },
+    }
+    const engine = new BattleEngine([ent('a')], [ent('s1')], { rng: () => 0 })
+    const s = new BattleScreen(engine, 320, 240, {
+      layout: 'side',
+      commandLayout: 'cross',
+      menu: many,
+    })
+    created.push(s)
+    press('ArrowLeft')
+    const strips = () => {
+      const out: Container[] = []
+      const walk = (c: Container) => {
+        for (const ch of c.children as Container[]) {
+          if (ch.eventMode === 'static' && ch.hitArea) out.push(ch)
+          walk(ch)
+        }
+      }
+      walk(I(s).menuLayer!)
+      return out
+    }
+    const top0 = (I(s).menuStack[0] as { top: number }).top
+    // 末尾の hit が下スクロール帯
+    for (let i = 0; i < 40; i++) {
+      const hits = strips()
+      hits[hits.length - 1].emit('pointertap', {} as never)
+    }
+    const w = I(s).menuStack[0] as { top: number; cursor: number }
+    expect(w.top).toBeGreaterThan(top0)
+    expect(w.cursor).toBeGreaterThanOrEqual(w.top)
+    expect(w.top + 1).toBeLessThanOrEqual(30)
   })
 })

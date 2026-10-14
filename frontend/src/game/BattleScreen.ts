@@ -64,6 +64,8 @@ import {
   menuKeyAction,
   moveCursor as moveMenuCursor,
   openList,
+  refitList,
+  scrollList,
   setListCursor,
   setTargetCursor,
   type BattleItemEntry,
@@ -621,6 +623,7 @@ export class BattleScreen extends Container {
     this.destroyedFlag = true
     this.detachCrossKeys()
     this.engine.setAtbHold(false)
+    if (this.menuEnabled) this.engine.setAtbWaitScope('command')
     for (const v of [...this.enemyViews, ...this.partyViews]) {
       v.acrylicPlate?.destroy()
       v.acrylicShadow?.destroy()
@@ -1851,7 +1854,11 @@ export class BattleScreen extends Container {
     const hasData =
       !!m && ((m.items?.length ?? 0) > 0 || Object.values(m.spells ?? {}).some((l) => l.length > 0))
     this.menuEnabled = this.commandLayout === 'cross' && hasData
-    if (!this.menuEnabled) return
+    if (!this.menuEnabled) {
+      // 同じエンジンを使い回す作り直しで、前の画面の設定を持ち越さない
+      this.engine.setAtbWaitScope('command')
+      return
+    }
     this.menuLayer = new BattleMenuLayer({
       makePanel: () => this.makePanel(),
       drawPanel: (c, x, y, w, h) => this.drawPanel(c, x, y, w, h),
@@ -1867,6 +1874,10 @@ export class BattleScreen extends Container {
         if (!ctx) return
         this.setMenuStack(setTargetCursor(this.menuStack, side, i, ctx))
         this.confirmMenu()
+      },
+      onScroll: (delta) => {
+        const ctx = this.menuContext()
+        if (ctx) this.setMenuStack(scrollList(this.menuStack, delta, ctx))
       },
       onCancelTap: () => this.cancelMenu(),
     })
@@ -1954,9 +1965,13 @@ export class BattleScreen extends Container {
       // グレーの行は選べない。MP 不足の呪文はエンジンの「MPが たりない！」（ログと吹き出し）で知らせる。窓は閉じない
       const w = this.menuStack[this.menuStack.length - 1]
       const entry = w?.type === 'list' ? ctx.entries[w.cursor] : undefined
-      if (w?.type === 'list' && w.kind === 'spell' && entry) {
-        this.engine.selectSpell(entry as BattleSpellEntry)
-        this.refresh()
+      // MP が足りないときだけ（対象なしの呪文などは、エンジンに渡すと唱えてしまうので何もしない）
+      const actor = this.engine.getState().party[ctx.actorIndex]
+      if (w?.type === 'list' && w.kind === 'spell' && entry && actor) {
+        if (actor.mp < (entry as BattleSpellEntry).mp) {
+          this.engine.selectSpell(entry as BattleSpellEntry)
+          this.refresh()
+        }
       }
       return
     }
@@ -1976,7 +1991,11 @@ export class BattleScreen extends Container {
     this.closeIfOver()
   }
 
-  /** 番が変わった・戦闘が終わったなど、窓を開いたままにできない局面では窓を閉じる */
+  /**
+   * 番が変わった・戦闘が終わったなど、窓を開いたままにできない局面では窓を閉じる。
+   * 判定はエンジンの確定した状態で行う。ff 演出中は画面の HP 表示が演出に追いつくまで古いことがあるが
+   * （hpOverride）、窓の開閉には影響せず、数字が遅れて更新されるだけ（既知の制約）
+   */
   private syncMenu(): void {
     if (this.menuStack.length > 0) {
       const s = this.engine.getState()
@@ -1998,6 +2017,8 @@ export class BattleScreen extends Container {
   private updateMenuLayer(): void {
     if (!this.menuLayer) return
     const ctx = this.menuStack.length > 0 ? this.menuContext() : null
+    // 画面サイズ変更で見える行数が変わったら、先頭行・カーソルを窓に収め直す
+    if (ctx) this.menuStack = refitList(this.menuStack, ctx)
     const view =
       ctx && this.menuGeometry ? buildMenuView(this.menuStack, ctx, this.menuGeometry) : []
     this.menuLayer.update(view, this.screenWidth, this.screenHeight)

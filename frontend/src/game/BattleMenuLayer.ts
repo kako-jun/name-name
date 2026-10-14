@@ -23,6 +23,8 @@ export interface BattleMenuHost {
   textStyle(): TextStyle
   /** 一覧の行がタップされた（index は候補全体での位置） */
   onRowTap(index: number): void
+  /** 一覧の上端・下端の▲▼がタップされた（delta = -1 で上、+1 で下へ 1 行スクロール） */
+  onScroll(delta: number): void
   /** 対象がタップされた */
   onTargetTap(side: TargetSide, index: number): void
   /** 窓の外（背景）がタップされた = キャンセル */
@@ -101,6 +103,18 @@ export class BattleMenuLayer extends Container {
         win.addChild(hit)
       }
     }
+    // 行より後に足して、窓の端では行よりスクロール帯を優先する
+    const strip = (r: { x: number; y: number; w: number; h: number } | null, delta: number) => {
+      if (!r || !v.active) return
+      const hit = new Container()
+      hit.eventMode = 'static'
+      hit.cursor = 'pointer'
+      hit.hitArea = new Rectangle(r.x, r.y, r.w, r.h)
+      hit.on('pointertap', () => this.host.onScroll(delta))
+      win.addChild(hit)
+    }
+    strip(v.scrollUp, -1)
+    strip(v.scrollDown, 1)
     if (v.moreAbove)
       win.addChild(this.moreMark('▲', v.rect.x + v.rect.w - MENU_PADDING_X, v.rect.y + 4, 0))
     if (v.moreBelow) {

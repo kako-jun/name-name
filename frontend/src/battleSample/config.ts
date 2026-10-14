@@ -348,6 +348,11 @@ function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
     if (typeof r.name !== 'string' || r.name.trim() === '') {
       return { ok: false, error: `${path}.name は空でない文字列である必要があります` }
     }
+    for (const f of ['mp', 'count'] as const) {
+      if (r[f] !== undefined && (typeof r[f] !== 'number' || !Number.isFinite(r[f]))) {
+        return { ok: false, error: `${path}.${f} は数値である必要があります` }
+      }
+    }
     for (const f of ['effect', 'builtin', 'id'] as const) {
       if (r[f] !== undefined && typeof r[f] !== 'string') {
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }

@@ -1542,6 +1542,9 @@ describe('候補窓の呪文・アイテム (#204)', () => {
     [{ spells: [{ name: 'a', target: 1 }] }],
     [{ items: [{ name: '' }] }],
     [{ items: [{ name: 'a', effect: 1 }] }],
+    [{ spells: [{ name: 'a', mp: '3' }] }],
+    [{ spells: [{ name: 'a', mp: null }] }],
+    [{ items: [{ name: 'a', count: '2' }] }],
   ])('不正な指定 %j は理由つきエラー', (raw) => {
     expect(parseConfig(raw, 'https://example.com/').ok).toBe(false)
   })

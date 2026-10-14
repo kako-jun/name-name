@@ -601,7 +601,8 @@ export class BattleEngine {
   }
 
   private resolveSpellTargets(spell: SpellExecution, targetId?: string): BattleEntity[] {
-    switch (spell.target) {
+    // 前後の空白は無視する（候補窓の parseSpellTarget と同じ）
+    switch (typeof spell.target === 'string' ? spell.target.trim() : spell.target) {
       case '味方単体': {
         if (targetId) {
           return this.state.party.filter((p) => p.id === targetId)

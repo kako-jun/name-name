@@ -853,3 +853,11 @@ describe('ATB wait の停止範囲 waitScope (#204)', () => {
     expect(() => plain.tick(500)).not.toThrow()
   })
 })
+
+describe('呪文の target の前後の空白 (#204)', () => {
+  it('エンジンは前後の空白を無視して解釈する（候補窓の parseSpellTarget と同じ）', () => {
+    const e = new BattleEngine([hero('a')], [foe('s1'), foe('s2')], { rng: () => 0 })
+    e.selectSpell({ name: 'いなずま', mp: 1, target: ' 敵全体 ', effect: 'damage 5..5' })
+    expect(e.getState().enemies.every((x) => x.hp === 995)).toBe(true)
+  })
+})

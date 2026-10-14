@@ -5,8 +5,8 @@ import {
   EMPTY_STACK,
   buildMenuRows,
   confirm,
-  moveCursor,
   openList,
+  scrollList,
   setListCursor,
   type BattleSpellEntry,
   type MenuContext,
@@ -158,8 +158,9 @@ describe('画面サイズ総当たり: 一覧窓・手・当たり判定が画�
             for (const idx of [1, 0]) {
               let t = setListCursor(openList(EMPTY_STACK, 'spell', ctx), idx, ctx)
               t = confirm(t, ctx).stack
-              t = moveCursor(t, 'right', ctx)
               const view = buildMenuView(t, ctx, g)
+              // 対象選択の間は一覧を隠す（敵・味方の絵を窓が覆わない）
+              expect(view.every((v) => v.type === 'target')).toBe(true)
               const tv = view[view.length - 1]
               if (tv.type !== 'target') throw new Error('target expected')
               expect(tv.hands.length).toBeGreaterThanOrEqual(1)
@@ -208,5 +209,52 @@ describe('computeListWindowRect', () => {
     v = buildMenuView(st, ctx, g)[0]
     if (v.type !== 'list') throw new Error()
     expect([v.moreAbove, v.moreBelow]).toEqual([true, false])
+  })
+})
+
+describe('スクロール帯（タップ）', () => {
+  it('320x240 でも、帯のスクロールだけで 40 件すべてに届く', () => {
+    const g = geometry(320, 240, 4, 3)
+    const spells = manySpells(40)
+    const members = [ent('a')]
+    const ctx: MenuContext = {
+      rows: buildMenuRows('spell', spells, members[0]),
+      maxRows: listMaxRows(g),
+      entries: spells,
+      party: members,
+      enemies: [ent('e')],
+      actorIndex: 0,
+    }
+    let st = openList(EMPTY_STACK, 'spell', ctx)
+    const reached = new Set<number>()
+    for (let i = 0; i < 60; i++) {
+      const v = buildMenuView(st, ctx, g)[0]
+      if (v.type !== 'list') throw new Error()
+      for (const r of v.rows) reached.add(r.index)
+      if (v.scrollDown) {
+        expect(inside(v.scrollDown, 320, 240)).toBe(true)
+        st = scrollList(st, 1, ctx)
+      } else break
+    }
+    expect(reached.size).toBe(40)
+    const top = buildMenuView(st, ctx, g)[0]
+    if (top.type !== 'list') throw new Error()
+    expect(top.scrollUp).not.toBeNull()
+    expect(top.scrollDown).toBeNull()
+  })
+
+  it('先頭では上、末尾では下の帯が無い', () => {
+    const g = geometry(640, 360, 2, 2)
+    const ctx: MenuContext = {
+      rows: buildMenuRows('spell', manySpells(30), ent('a')),
+      maxRows: listMaxRows(g),
+      entries: manySpells(30),
+      party: [ent('a')],
+      enemies: [ent('e')],
+      actorIndex: 0,
+    }
+    const v = buildMenuView(openList(EMPTY_STACK, 'spell', ctx), ctx, g)[0]
+    if (v.type !== 'list') throw new Error()
+    expect([v.scrollUp, v.scrollDown !== null]).toEqual([null, true])
   })
 })

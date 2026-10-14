@@ -19,6 +19,8 @@ export const MENU_HAND_SLOT = 30
 /** 名前と消費の間の最小の隙間 */
 export const MENU_COST_GAP = 16
 export const MENU_MIN_WIDTH = 140
+/** 窓の上端・下端のスクロール帯の高さ（タップで 1 行ずつ） */
+export const MENU_SCROLL_STRIP = 16
 
 /** 手のドット絵（右向き）。`X` が塗り。左向きは左右反転 */
 export const HAND_BITMAP: readonly string[] = [
@@ -132,6 +134,9 @@ export interface MenuListView {
   hand: HandPlacement | null
   moreAbove: boolean
   moreBelow: boolean
+  /** タップで一覧を 1 行ずつスクロールする帯（窓の上端・下端）。スクロールできないときは null */
+  scrollUp: Rect | null
+  scrollDown: Rect | null
   /** いちばん上の窓か（下に隠れた窓は暗く描く） */
   active: boolean
 }
@@ -151,6 +156,8 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
   stack.forEach((w, depthIndex) => {
     const active = depthIndex === stack.length - 1
     if (w.type === 'list') {
+      // 対象選択の間は下の一覧を隠す（敵・味方の絵を覆わない。FF5/6 と同じ）
+      if (!active) return
       const { rect, visibleRows } = computeListWindowRect(g, ctx.rows)
       const rows: MenuListView['rows'] = []
       for (let v = 0; v < visibleRows; v++) {
@@ -184,6 +191,11 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
           : null,
         moreAbove: w.top > 0,
         moreBelow: w.top + visibleRows < ctx.rows.length,
+        scrollUp: w.top > 0 ? { x: rect.x, y: rect.y, w: rect.w, h: MENU_SCROLL_STRIP } : null,
+        scrollDown:
+          w.top + visibleRows < ctx.rows.length
+            ? { x: rect.x, y: rect.y + rect.h - MENU_SCROLL_STRIP, w: rect.w, h: MENU_SCROLL_STRIP }
+            : null,
         active,
       })
       return
@@ -201,7 +213,9 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
         const r = slotOf(side, index)
         if (!r) return
         if (w.spec.scope === 'single') {
-          if (side === 'enemy' && e.hp <= 0) return
+          // target が示す側の、指せる者（生存者。蘇生は倒れた味方）だけ
+          if (side !== w.side) return
+          if (w.spec.revive ? e.hp > 0 : e.hp <= 0) return
           hits.push({ side, index, rect: r })
         } else if (w.spec.scope === 'all' && side === w.spec.side && e.hp > 0) {
           hits.push({ side, index, rect: r })

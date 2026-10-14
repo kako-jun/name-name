@@ -11,7 +11,7 @@
  * - 対象は呪文の `target` 文字列（味方単体 / 敵全体 など）から決まる。単体は手が 1 本、全体は対象の全員に同時に手が立つ
  */
 import type { ItemExecution, SpellExecution } from './battleEngine'
-import type { BattleEntity } from './spellDsl'
+import { parseEffect, type BattleEntity } from './spellDsl'
 
 export type MenuKind = 'spell' | 'item'
 export type TargetSide = 'enemy' | 'party'
@@ -21,6 +21,8 @@ export type TargetScope = 'single' | 'all' | 'self' | 'none'
 export interface TargetSpec {
   side: TargetSide
   scope: TargetScope
+  /** single のとき、指せるのが倒れた味方だけ（蘇生）か。それ以外は生きている者だけ。蘇生の呪文・アイテムだけ true */
+  revive?: boolean
 }
 
 /** 呪文の候補。`SpellExecution`（エンジンへ渡す形）に一覧用の id を足したもの */
@@ -50,6 +52,7 @@ export interface MenuRow {
 
 /** 呪文の `target` 文字列 → 対象。未指定・未知は敵単体（エンジンの既定と同じ） */
 export function parseSpellTarget(raw: string | undefined): TargetSpec {
+  // エンジンの resolveSpellTargets と同じく前後の空白は無視する
   switch (typeof raw === 'string' ? raw.trim() : '') {
     case '味方単体':
       return { side: 'party', scope: 'single' }
@@ -81,7 +84,11 @@ export function buildMenuRows(
       return {
         label: e.name,
         cost: `MP${mp}`,
-        disabled: !actor || actor.mp < mp,
+        // 対象なし（マップ用）の呪文は戦闘では使えない。MP 不足もグレー
+        disabled:
+          !actor ||
+          actor.mp < mp ||
+          parseSpellTarget((e as BattleSpellEntry).target).scope === 'none',
       }
     }
     const count = (e as BattleItemEntry).count
@@ -97,7 +104,14 @@ export function targetSpecOf(
   kind: MenuKind,
   entry: BattleSpellEntry | BattleItemEntry
 ): TargetSpec {
-  return kind === 'spell' ? parseSpellTarget((entry as BattleSpellEntry).target) : ITEM_TARGET
+  const spec = kind === 'spell' ? parseSpellTarget((entry as BattleSpellEntry).target) : ITEM_TARGET
+  return spec.scope === 'single' && isReviveEntry(entry) ? { ...spec, revive: true } : spec
+}
+
+/** 蘇生の呪文・アイテムか。効果 DSL が `revive`、または蘇生の builtin（ザオリク） */
+export function isReviveEntry(entry: { effect?: string; builtin?: string }): boolean {
+  if (entry.builtin === 'zaorik') return true
+  return typeof entry.effect === 'string' && parseEffect(entry.effect)?.kind === 'revive'
 }
 
 export interface ListWindow {
@@ -188,13 +202,21 @@ function aliveIndexes(list: readonly BattleEntity[]): number[] {
   return out
 }
 
-/** single で手が指せる index。敵は生きているもの、味方は全員（倒れた味方を起こす呪文があるため） */
+/** single で手が指せる index。生きている者だけ。蘇生（`revive`）のときは倒れた味方だけ */
 export function singleCandidates(
   side: TargetSide,
   party: readonly BattleEntity[],
-  enemies: readonly BattleEntity[]
+  enemies: readonly BattleEntity[],
+  revive = false
 ): number[] {
-  return side === 'enemy' ? aliveIndexes(enemies) : party.map((_, i) => i)
+  if (revive && side === 'party') {
+    const dead: number[] = []
+    party.forEach((e, i) => {
+      if (e.hp <= 0) dead.push(i)
+    })
+    return dead
+  }
+  return aliveIndexes(side === 'enemy' ? enemies : party)
 }
 
 /** 窓に手が立つ位置（描画用）。single = 1 本 / all = 側の生存者全員 / self = 使用者 */
@@ -213,7 +235,11 @@ export function targetHands(
   return []
 }
 
-/** カーソル移動。一覧は上下で循環、対象は single のとき上下で同じ側の中を、左右で敵↔味方を切り替える */
+/**
+ * カーソル移動。一覧は上下で循環、対象は single のとき上下で候補の中を巡回する。
+ * 側（敵 / 味方）は呪文・アイテムの target で決まっていて、左右キーでは切り替えない
+ * （エンジンは target と逆の側の targetId を解決できず、MP とターンだけを消費してしまうため）
+ */
 export function moveCursor(stack: MenuStack, dir: MenuDirection, ctx: MenuContext): MenuStack {
   const w = stack[stack.length - 1]
   if (!w) return stack
@@ -227,16 +253,8 @@ export function moveCursor(stack: MenuStack, dir: MenuDirection, ctx: MenuContex
     ]
   }
   if (w.spec.scope !== 'single') return stack
-  if (dir === 'left' || dir === 'right') {
-    // 敵は画面の左、味方は右
-    const side: TargetSide = dir === 'left' ? 'enemy' : 'party'
-    if (side === w.side) return stack
-    const cands = singleCandidates(side, ctx.party, ctx.enemies)
-    if (cands.length === 0) return stack
-    const keep = side === 'party' && cands.includes(ctx.actorIndex) ? ctx.actorIndex : cands[0]
-    return [...stack.slice(0, -1), { ...w, side, cursor: keep }]
-  }
-  const cands = singleCandidates(w.side, ctx.party, ctx.enemies)
+  if (dir === 'left' || dir === 'right') return stack
+  const cands = singleCandidates(w.side, ctx.party, ctx.enemies, w.spec.revive)
   if (cands.length === 0) return stack
   const at = cands.indexOf(w.cursor)
   const next =
@@ -254,7 +272,7 @@ export function setListCursor(stack: MenuStack, index: number, ctx: MenuContext)
   ]
 }
 
-/** 対象窓の手を指定の対象に置く（タップ用）。single のときだけ。指せない対象は今のまま */
+/** 対象窓の手を指定の対象に置く（タップ用）。single のときだけ。指せない対象・target と違う側は今のまま */
 export function setTargetCursor(
   stack: MenuStack,
   side: TargetSide,
@@ -262,9 +280,33 @@ export function setTargetCursor(
   ctx: MenuContext
 ): MenuStack {
   const w = stack[stack.length - 1]
-  if (!w || w.type !== 'target' || w.spec.scope !== 'single') return stack
-  if (!singleCandidates(side, ctx.party, ctx.enemies).includes(index)) return stack
-  return [...stack.slice(0, -1), { ...w, side, cursor: index }]
+  if (!w || w.type !== 'target' || w.spec.scope !== 'single' || side !== w.side) return stack
+  if (!singleCandidates(side, ctx.party, ctx.enemies, w.spec.revive).includes(index)) return stack
+  return [...stack.slice(0, -1), { ...w, cursor: index }]
+}
+
+/**
+ * 一覧窓を `delta` 行ぶんスクロールする（タップ用の▲▼）。カーソルは見えている範囲に収める。
+ * 一覧窓でないときは今のまま
+ */
+export function scrollList(stack: MenuStack, delta: number, ctx: MenuContext): MenuStack {
+  const w = stack[stack.length - 1]
+  if (!w || w.type !== 'list') return stack
+  const n = ctx.rows.length
+  const visible = Math.max(1, Math.floor(ctx.maxRows))
+  const maxTop = Math.max(0, n - visible)
+  const top = Math.max(0, Math.min(maxTop, w.top + delta))
+  const cursor = Math.max(top, Math.min(w.cursor, top + visible - 1, n - 1))
+  return [...stack.slice(0, -1), { ...w, top, cursor }]
+}
+
+/** 画面の大きさが変わって見える行数が変わったとき、先頭行とカーソルを窓に収め直す */
+export function refitList(stack: MenuStack, ctx: MenuContext): MenuStack {
+  const w = stack[0]
+  if (!w || w.type !== 'list') return stack
+  const top = scrollTopFor(w.cursor, w.top, ctx.rows.length, ctx.maxRows)
+  if (top === w.top) return stack
+  return [{ ...w, top }, ...stack.slice(1)]
 }
 
 /** 決定。一覧 → （対象が要れば）対象窓を重ねる / 対象窓 → 確定した操作を返す。窓は確定で全部閉じる */
@@ -282,7 +324,7 @@ export function confirm(stack: MenuStack, ctx: MenuContext): MenuResult {
     }
     let cursor = 0
     if (spec.scope === 'single') {
-      const cands = singleCandidates(spec.side, ctx.party, ctx.enemies)
+      const cands = singleCandidates(spec.side, ctx.party, ctx.enemies, spec.revive)
       if (cands.length === 0) return { stack, blocked: 'empty' }
       cursor = spec.side === 'party' && cands.includes(ctx.actorIndex) ? ctx.actorIndex : cands[0]
     } else if (
@@ -306,7 +348,13 @@ export function confirm(stack: MenuStack, ctx: MenuContext): MenuResult {
   if (w.spec.scope === 'single') {
     const list = w.side === 'enemy' ? ctx.enemies : ctx.party
     const target = list[w.cursor]
-    if (!target) return { stack, blocked: 'empty' }
+    // 手が指している対象がまだ指せるか（倒れた敵への空撃ち防止）
+    if (
+      !target ||
+      !singleCandidates(w.side, ctx.party, ctx.enemies, w.spec.revive).includes(w.cursor)
+    ) {
+      return { stack, blocked: 'empty' }
+    }
     action.targetId = target.id
   }
   return { stack: EMPTY_STACK, action }

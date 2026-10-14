@@ -5,7 +5,10 @@ import {
   buildMenuRows,
   cancel,
   confirm,
+  isReviveEntry,
   menuKeyAction,
+  refitList,
+  scrollList,
   moveCursor,
   openList,
   parseSpellTarget,
@@ -66,7 +69,7 @@ describe('parseSpellTarget', () => {
 describe('buildMenuRows', () => {
   it('MP が足りない呪文だけ disabled・消費を MPn で出す', () => {
     const rows = buildMenuRows('spell', spells, ent('a', { mp: 3 }))
-    expect(rows.map((r) => r.disabled)).toEqual([false, true, false, true, false, false])
+    expect(rows.map((r) => r.disabled)).toEqual([false, true, false, true, false, true])
     expect(rows[0]).toEqual({ label: 'ほのお', cost: 'MP3', disabled: false })
   })
 
@@ -180,22 +183,59 @@ describe('対象選択', () => {
     expect(r.stack).toEqual([])
   })
 
-  it('単体は左右で敵と味方を切り替えられる（味方は使用者から）', () => {
+  it('単体は左右キーで側を切り替えられない（target が示す側に固定）', () => {
     const { st, ctx } = toTarget(0)
-    const toParty = moveCursor(st, 'right', ctx)
-    expect(toParty[1]).toMatchObject({ side: 'party', cursor: 0 })
-    expect(moveCursor(toParty, 'right', ctx)).toBe(toParty)
-    expect(moveCursor(toParty, 'left', ctx)[1]).toMatchObject({ side: 'enemy', cursor: 0 })
+    expect(moveCursor(st, 'right', ctx)).toBe(st)
+    expect(moveCursor(st, 'left', ctx)).toBe(st)
+    expect(setTargetCursor(st, 'party', 0, ctx)).toBe(st)
+    const heal = toTarget(2).st
+    expect(moveCursor(heal, 'left', ctx)).toBe(heal)
+    expect(setTargetCursor(heal, 'enemy', 0, ctx)).toBe(heal)
   })
 
-  it('味方単体: 手は使用者から始まり、倒れた味方も指せる', () => {
+  it('味方単体: 手は使用者から始まり、生存者だけを巡る（倒れた味方は指せない）', () => {
     const ctx = ctxOf({ actorIndex: 1 })
     const { st } = toTarget(2, ctx)
     expect(st[1]).toMatchObject({ side: 'party', cursor: 1 })
-    const down = moveCursor(moveCursor(st, 'down', ctx), 'down', ctx)
+    const down = moveCursor(st, 'down', ctx) // c は倒れているので飛ばして a
     expect((down[1] as TargetWindow).cursor).toBe(0)
-    const dead = moveCursor(st, 'down', ctx)
-    expect(confirm(dead, ctx).action?.targetId).toBe('c')
+    expect(confirm(down, ctx).action?.targetId).toBe('a')
+    expect(setTargetCursor(st, 'party', 2, ctx)).toBe(st)
+  })
+
+  it('蘇生の呪文は倒れた味方だけを指せる（効果 revive / builtin zaorik）', () => {
+    const rev: BattleSpellEntry[] = [
+      { id: 'r', name: 'レイズ', mp: 1, target: '味方単体', effect: 'revive hp=half' },
+      { id: 'z', name: 'ザオリク', mp: 1, target: '味方単体', builtin: 'zaorik' },
+    ]
+    for (const idx of [0, 1]) {
+      const ctx = ctxOf({ rows: buildMenuRows('spell', rev, ent('a')), entries: rev })
+      const st = confirm(setListCursor(openList(EMPTY_STACK, 'spell', ctx), idx, ctx), ctx).stack
+      expect(st[1]).toMatchObject({ side: 'party', cursor: 2 })
+      expect(moveCursor(st, 'down', ctx)).toMatchObject([{}, { cursor: 2 }])
+      expect(setTargetCursor(st, 'party', 0, ctx)).toBe(st)
+      expect(confirm(st, ctx).action?.targetId).toBe('c')
+    }
+    // 倒れた味方がいなければ選べない
+    const alive = ctxOf({
+      rows: buildMenuRows('spell', rev, ent('a')),
+      entries: rev,
+      party: [ent('a'), ent('b')],
+    })
+    expect(confirm(openList(EMPTY_STACK, 'spell', alive), alive).blocked).toBe('empty')
+  })
+
+  it('isReviveEntry', () => {
+    expect(isReviveEntry({ effect: 'heal 10..10' })).toBe(false)
+    expect(isReviveEntry({ effect: 'revive' })).toBe(true)
+    expect(isReviveEntry({})).toBe(false)
+  })
+
+  it('手が指している対象が確定前に倒れていたら確定しない（空撃ち防止）', () => {
+    const ctx = ctxOf()
+    const st = confirm(openList(EMPTY_STACK, 'spell', ctx), ctx).stack
+    const dead = ctxOf({ enemies: [ent('s1', { hp: 0 }), ent('s2', { hp: 0 }), ent('s3')] })
+    expect(confirm(st, dead).blocked).toBe('empty')
   })
 
   it('全体: 手は対象側の生存者全員に同時に立ち、カーソルは動かず targetId は出ない', () => {
@@ -223,12 +263,13 @@ describe('対象選択', () => {
     expect(confirm(st, ctx).action).toEqual({ kind: 'spell', entryIndex: 4 })
   })
 
-  it('対象なし（マップ）は対象窓を挟まず即確定', () => {
+  it('対象なし（マップ）の呪文は戦闘ではグレーで、MP が足りていても確定できない', () => {
     const ctx = ctxOf()
+    expect(ctx.rows[5].disabled).toBe(true)
     const st = setListCursor(openList(EMPTY_STACK, 'spell', ctx), 5, ctx)
     const r = confirm(st, ctx)
-    expect(r.action).toEqual({ kind: 'spell', entryIndex: 5 })
-    expect(r.stack).toEqual([])
+    expect(r.blocked).toBe('disabled')
+    expect(r.action).toBeUndefined()
   })
 
   it('敵が全滅していて単体の敵を指せないときは blocked=empty', () => {
@@ -262,5 +303,38 @@ describe('menuKeyAction', () => {
     expect(menuKeyAction('x')).toEqual({ type: 'cancel' })
     expect(menuKeyAction(' ')).toBeUndefined()
     expect(menuKeyAction('a')).toBeUndefined()
+  })
+})
+
+describe('一覧のスクロール（タップの▲▼）', () => {
+  it('scrollList は先頭行を動かし、カーソルを見える範囲に収める。端で止まる', () => {
+    const ctx = ctxOf({ maxRows: 2 })
+    let st = openList(EMPTY_STACK, 'spell', ctx)
+    for (let i = 0; i < 10; i++) st = scrollList(st, 1, ctx)
+    expect(st[0]).toMatchObject({ top: 4, cursor: 4 })
+    st = scrollList(st, -1, ctx)
+    expect(st[0]).toMatchObject({ top: 3, cursor: 4 })
+    for (let i = 0; i < 10; i++) st = scrollList(st, -1, ctx)
+    expect(st[0]).toMatchObject({ top: 0, cursor: 1 })
+  })
+
+  it('スクロールだけで全行に届く', () => {
+    const ctx = ctxOf({ maxRows: 1 })
+    let st = openList(EMPTY_STACK, 'spell', ctx)
+    const seen = new Set<number>()
+    for (let i = 0; i < 6; i++) {
+      seen.add((st[0] as { top: number }).top)
+      st = scrollList(st, 1, ctx)
+    }
+    expect([...seen].sort()).toEqual([0, 1, 2, 3, 4, 5])
+  })
+
+  it('refitList: 見える行数が減ったらカーソルが見える位置へ先頭行を直す', () => {
+    const wide = ctxOf({ maxRows: 6 })
+    let st = setListCursor(openList(EMPTY_STACK, 'spell', wide), 5, wide)
+    expect(st[0]).toMatchObject({ top: 0, cursor: 5 })
+    st = refitList(st, ctxOf({ maxRows: 2 }))
+    expect(st[0]).toMatchObject({ top: 4, cursor: 5 })
+    expect(refitList(st, ctxOf({ maxRows: 2 }))).toBe(st)
   })
 })
