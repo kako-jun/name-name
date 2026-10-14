@@ -15,12 +15,12 @@
  *
  * ダメージ式: DQ 式（atk - def/2 + rand(0..atk/4)）、最低 1
  *
- * 敵の特技 (#834): `performSkill` は「ある者が特技を 1 回使う」内部 API。敵の行動選択（#835 以降）が呼ぶ。
- * この API 自体はターン・ATB ゲージ・勝敗判定を進めない（呼び出し側が行う）。
+ * 敵の特技 (#834): `performSkill` は「ある者が特技を 1 回使う」内部 API。敵の行動選択（`enemyAi.ts` の `chooseEnemyAction`、#835）の結果を
+ * 従来ターン制の `runEnemyTurn` と ATB の `runAtbEnemyAction` が実行するときに呼ぶ。この API 自体はターン・ATB ゲージ・勝敗判定を進めない（呼び出し側が行う）。
  *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
- * - 敵 AI（builtin: で挙動委譲）
+ * - 敵 AI の P2 以降（順番・予兆・カウンター。#836 #837）と builtin: での挙動委譲
  * - ターン跨ぎ状態異常の減衰
  */
 
@@ -28,6 +28,13 @@ import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
 import { applyEffect, parseEffect } from './spellDsl'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
 import { isReviveEntry } from './battleMenu'
+import {
+  chooseEnemyAction,
+  createEnemyMemory,
+  type ChosenAction,
+  type EnemyMemory,
+} from './enemyAi'
+import { hasOwn } from './ownProperty'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -102,9 +109,16 @@ export interface BattleState {
   earnedGold: number
   /** ATB のゲージ・キュー (#205)。従来ターン制では存在しない（undefined） */
   atb?: AtbState
+  /**
+   * 敵ごとの記憶 (#835)。`enemies` と同じ index。`行動:` を持つ敵がいる戦闘のときだけ作る
+   * （持たない戦闘では undefined で、敵の挙動・乱数の消費は従来のまま）。従来ターン制・ATB のどちらでも同じ意味
+   */
+  enemyMemory?: EnemyMemory[]
 }
 
 const LOG_MAX = 30
+/** 特技の対象の相対表現 (#834)。これ以外の値・省略は相手単体の扱い */
+const SKILL_TARGETS = ['相手単体', '相手全体', '自分', '仲間単体', '仲間全体']
 const EVENT_MAX = 30
 
 /** ATB の進行方式 (#205)。`wait` = コマンド選択中は時間停止（既定）、`active` = 止めない */
@@ -151,6 +165,11 @@ export interface BattleEngineOptions {
     waitScope?: AtbWaitScope
     initialGauges?: { party?: number[]; enemies?: number[] }
   }
+  /**
+   * 敵が使える特技 (#835)。`行動:` の候補の id → 特技の実行内容（マスターの `[特技]` から `toSkillExecutions` で作る）。
+   * 候補の id がここに無ければ、その行動は通常攻撃になる。エンジンはマスター参照を持たないので呼び出し側が渡す
+   */
+  skills?: Record<string, SkillExecution>
 }
 
 export class BattleEngine {
@@ -159,6 +178,9 @@ export class BattleEngine {
   /** wait / menu のとき、表示側が候補窓を開いている間 true（画面の一時的な状態なので BattleState には持たない） */
   private atbHold = false
   private atbWaitScope: AtbWaitScope = 'command'
+  private skills: Record<string, SkillExecution>
+  /** 見つからない特技 id の警告を出した印（1 戦闘に 1 度だけ） */
+  private warnedSkills = new Set<string>()
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -173,6 +195,9 @@ export class BattleEngine {
       earnedGold: 0,
     }
     this.rng = opts.rng ?? Math.random
+    this.skills = opts.skills ?? {}
+    const memory = createEnemyMemory(enemies)
+    if (memory) this.state.enemyMemory = memory
     if (opts.atb) {
       this.initAtb(opts.atb)
       this.atbWaitScope = opts.atb.waitScope === 'menu' ? 'menu' : 'command'
@@ -597,7 +622,21 @@ export class BattleEngine {
     if (!enemy || enemy.hp <= 0) return
     const alive = this.state.party.filter((p) => p.hp > 0)
     if (alive.length === 0) return
-    const target = alive[Math.min(alive.length - 1, Math.floor(this.rng() * alive.length))]
+    const choice = this.decideEnemyAction(enemyIndex)
+    if (choice.kind === 'skill' && this.useEnemySkill(enemyIndex, choice)) {
+      // 特技で倒れた味方は、通常攻撃で倒れたときと同じくコマンド待ち・ゲージから外す
+      this.state.party.forEach((p, i) => {
+        if (p.hp > 0) return
+        atb.queue = atb.queue.filter((q) => q !== i)
+        atb.partyGauge[i] = 0
+      })
+      this.countEnemyAction(enemyIndex)
+      this.checkEnd()
+      return
+    }
+    const picked = this.pickedParty(choice)
+    const target =
+      picked ?? alive[Math.min(alive.length - 1, Math.floor(this.rng() * alive.length))]
     const dmg = this.computeAttackDamage(enemy, target)
     const hpBefore = target.hp
     target.hp = Math.max(0, target.hp - dmg)
@@ -610,7 +649,61 @@ export class BattleEngine {
       atb.queue = atb.queue.filter((i) => i !== idx)
       atb.partyGauge[idx] = 0
     }
+    this.countEnemyAction(enemyIndex)
     this.checkEnd()
+  }
+
+  /**
+   * 敵の次の行動を決める (#835)。`行動:` を持つ敵がいる戦闘（`enemyMemory` あり）だけ `chooseEnemyAction` に任せる。
+   * 持たない戦闘は通常攻撃（rng は触らない）
+   */
+  private decideEnemyAction(enemyIndex: number): ChosenAction {
+    if (!this.state.enemyMemory) return { kind: 'attack' }
+    return chooseEnemyAction(this.state, enemyIndex, this.rng)
+  }
+
+  /** 選ばれた特技を使う。エンジンに無い id、使えない状況（戦闘終了など）なら false（呼び出し側が通常攻撃に落とす） */
+  private useEnemySkill(
+    enemyIndex: number,
+    choice: Extract<ChosenAction, { kind: 'skill' }>
+  ): boolean {
+    const skill = hasOwn(this.skills, choice.skillId) ? this.skills[choice.skillId] : undefined
+    if (!skill) {
+      // 同じ id は 1 戦闘に 1 度だけ警告する（敵の行動のたびに出さない）
+      if (!this.warnedSkills.has(choice.skillId)) {
+        this.warnedSkills.add(choice.skillId)
+        console.warn(
+          `[name-name] 行動: の特技 '${choice.skillId}' が見つからないため通常攻撃にします`
+        )
+      }
+      return false
+    }
+    // `対象=` の上書き: `仲間` / `自分`（→ 仲間単体 / 自分）はどの特技にも効く。ランダム / HP最小 / 全体（→ 相手側を向く）は
+    // 特技の対象が相手単体（省略・未知を含む）のときだけ。仲間単体・仲間全体・自分・相手全体の特技の向きは変えない
+    // （仲間向けの特技を相手側に向けて、敵がプレイヤーを回復するようなことを避ける）
+    const t = typeof skill.target === 'string' ? skill.target.trim() : ''
+    const isOpponentSingle = t === '相手単体' || !SKILL_TARGETS.includes(t)
+    const o = choice.targetOverride
+    const applies = o !== undefined && (o === '仲間単体' || o === '自分' || isOpponentSingle)
+    const exec = applies ? { ...skill, target: o } : skill
+    return this.performSkill(
+      { side: 'enemy', index: enemyIndex },
+      exec,
+      applies || o === undefined ? choice.target : undefined
+    )
+  }
+
+  /** 行動を終えた敵の行動回数を 1 増やす (#835)。記憶が無い戦闘では何もしない */
+  private countEnemyAction(enemyIndex: number): void {
+    const m = this.state.enemyMemory?.[enemyIndex]
+    if (m) m.acted++
+  }
+
+  /** `対象=ランダム` / `HP最小` で選ばれた生存味方。無ければ null（従来の狙い方） */
+  private pickedParty(choice: ChosenAction): BattleEntity | null {
+    if (!choice.target || choice.target.side !== 'party') return null
+    const t = this.state.party[choice.target.index]
+    return t && t.hp > 0 ? t : null
   }
 
   private handleVictory(): void {
@@ -629,10 +722,19 @@ export class BattleEngine {
 
   private runEnemyTurn(): void {
     this.state.phase = 'enemy-turn'
-    for (const enemy of this.state.enemies) {
+    let usedSkill = false
+    for (let i = 0; i < this.state.enemies.length; i++) {
+      const enemy = this.state.enemies[i]
       if (enemy.hp === 0) continue
-      const hero = this.firstAlive(this.state.party)
-      if (!hero) break
+      const firstHero = this.firstAlive(this.state.party)
+      if (!firstHero) break
+      const choice = this.decideEnemyAction(i)
+      if (choice.kind === 'skill' && this.useEnemySkill(i, choice)) {
+        usedSkill = true
+        this.countEnemyAction(i)
+        continue
+      }
+      const hero = this.pickedParty(choice) ?? firstHero
       const dmg = this.computeAttackDamage(enemy, hero)
       const hpBefore = hero.hp
       hero.hp = Math.max(0, hero.hp - dmg)
@@ -642,10 +744,16 @@ export class BattleEngine {
       if (hero.hp === 0) {
         this.appendLog(`${hero.name} は たおれた！`)
       }
+      this.countEnemyAction(i)
     }
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
       this.appendLog('ぜんめつ してしまった……')
+      return
+    }
+    // 特技（仲間への攻撃など）で敵が全滅しうるのは特技を使ったときだけ（通常攻撃では敵は減らない）
+    if (usedSkill && this.state.enemies.every((e) => e.hp === 0)) {
+      this.handleVictory()
       return
     }
     this.state.phase = 'party-input'

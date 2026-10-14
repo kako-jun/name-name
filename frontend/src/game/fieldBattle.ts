@@ -10,10 +10,11 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { PartyMemberDef, SpellDef } from '../types'
+import type { PartyMemberDef, SkillDef, SpellDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import { toSkillExecutions } from './enemyAi'
 import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
 import { normalizeBattleRow } from './battleLayout'
@@ -112,6 +113,8 @@ export interface FieldBattleRoster {
   order: string[]
   /** 呪文のマスター (#204)。あれば `learns`（レベル以下で覚えるもの）から候補窓の呪文を作る */
   spells?: Record<string, SpellDef>
+  /** 特技のマスター (#835)。敵の `行動:` の候補の id から引く。無ければ特技の候補は通常攻撃になる */
+  skills?: Record<string, SkillDef>
 }
 
 /**
@@ -335,7 +338,10 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     settings.layout === 'side'
       ? buildPartyBattleEntities(roster, settings.layout)
       : [buildHeroBattleEntity(roster, settings.layout)]
-  const engine = new BattleEngine(party, enemies, settings.atb ? { atb: settings.atb } : {})
+  const engine = new BattleEngine(party, enemies, {
+    ...(settings.atb ? { atb: settings.atb } : {}),
+    ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
+  })
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,
     background: settings.background,

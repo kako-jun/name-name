@@ -1,0 +1,53 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "skills": [
+    {
+      "id": "ink",
+      "name": "墨",
+      "target": "相手全体",
+      "effect": "damage 6..10",
+      "message": "{user}は 墨を はいた！"
+    },
+    {
+      "id": "tentacle",
+      "name": "触手",
+      "target": "相手単体",
+      "effect": "damage 12..18",
+      "message": "{user}の 触手が おそいかかる！"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 300, "mp": 20, "atk": 25, "def": 4, "agi": 6 },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 220,
+      "mp": 40,
+      "atk": 18,
+      "def": 2,
+      "agi": 5,
+      "row": "back"
+    }
+  ],
+  "enemies": [
+    {
+      "id": "kraken",
+      "name": "タコの化け物",
+      "hp": 120,
+      "atk": 12,
+      "def": 2,
+      "agi": 3,
+      "actions": ["条件=初手 候補=ink", "条件=HP<50% 候補=tentacle:2 | ink:1 対象=HP最小"]
+    },
+    {
+      "id": "kobun",
+      "name": "こぶん",
+      "hp": 40,
+      "atk": 10,
+      "def": 2,
+      "agi": 4,
+      "actions": ["条件=仲間<=0 候補=tentacle"]
+    }
+  ]
+}

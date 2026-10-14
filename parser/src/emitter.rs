@@ -977,6 +977,11 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     out.push_str(&format!("スプライト: {s}\n"));
                 }
                 emit_poses(out, &m.poses);
+                if let Some(actions) = &m.actions {
+                    for a in actions {
+                        out.push_str(&format!("行動: {a}\n"));
+                    }
+                }
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
@@ -1817,8 +1822,13 @@ mod tests {
                 "monsters/slime-hurt.png".to_string(),
             )])),
             builtin: None,
+            actions: Some(vec![
+                "条件=初手 候補=こうげき".to_string(),
+                "候補=こうげき:3 | 墨:1".to_string(),
+            ]),
         }));
         let out = emit(&doc);
+        assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
         assert!(out.contains("[モンスター slime]"));
         assert!(out.contains("名前: スライム"));

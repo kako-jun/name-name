@@ -220,6 +220,12 @@ export interface MonsterDef {
      * 専用関数 ID（\"darkness_breath\" 等）。指定時は通常攻撃以外の挙動が当該関数で完結する。
      */
     builtin?: string;
+    /**
+     * 敵の行動ルール (#835、敵の行動パターン P1 / 親 #832)。`行動: 条件=初手 候補=墨` の値部分を、書いた順の生文字列で持つ。
+     * parser は検証せず透過する（効果 DSL と同じ流儀）。解釈・不正な行の無視は runtime（`enemyAi.ts`）が行う。
+     * 1 行も無ければ None（`行動:` を書かない敵は従来どおり通常攻撃だけ）。
+     */
+    actions?: string[];
 }
 
 /**

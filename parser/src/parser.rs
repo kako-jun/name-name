@@ -4491,6 +4491,53 @@ GOLD: 1
     }
 
     #[test]
+    fn monster_block_collects_action_lines_as_raw_strings() {
+        // 行動: は書いた順の生文字列で透過する（検証しない。不正な行は runtime が無視する）。空の行動: は捨てる
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター kraken]
+名前: タコ
+HP: 120
+行動: 条件=初手 候補=墨
+行動: 条件=HP<30%, 仲間<=1 候補=触手:2 | 墨:1
+行動:
+action: 候補=こうげき
+行動: でたらめ ??
+[/モンスター]
+
+[モンスター plain]
+名前: ふつう
+HP: 5
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Monster(m) => assert_eq!(
+                m.actions.as_deref(),
+                Some(
+                    &[
+                        "条件=初手 候補=墨".to_string(),
+                        "条件=HP<30%, 仲間<=1 候補=触手:2 | 墨:1".to_string(),
+                        "候補=こうげき".to_string(),
+                        "でたらめ ??".to_string(),
+                    ][..]
+                )
+            ),
+            other => panic!("expected Monster, got {other:?}"),
+        }
+        match &events[1] {
+            Event::Monster(m) => assert_eq!(m.actions, None),
+            other => panic!("expected Monster, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn monster_block_without_name_is_dropped() {
         let input = r#"---
 engine: name-name

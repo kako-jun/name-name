@@ -156,6 +156,8 @@ export interface MonsterDef {
   poses?: Record<string, string>
   /** 専用関数 ID。指定時はランタイム実装に委譲（汎用 + 専用 builtin の二層設計、#176） */
   builtin?: string
+  /** 敵の行動ルール (#835)。`行動:` の値を書いた順の生文字列で透過し、解釈は `enemyAi.ts`。無ければ通常攻撃だけ */
+  actions?: string[]
 }
 
 /** アイテム定義 (#174) */

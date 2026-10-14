@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { BattleEntity } from '../game/spellDsl'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
+import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -1556,5 +1557,78 @@ describe('候補窓の呪文・アイテム (#204)', () => {
     expect(setup.options.menu.spells![setup.party[0].id]).toEqual(cfg.spells)
     expect(setup.options.menu.spells![setup.party[0].id]).not.toBe(cfg.spells)
     expect(setup.options.menu.items).toEqual(cfg.items)
+  })
+})
+
+describe('parseConfig 敵の行動: actions と skills (#835)', () => {
+  const base = 'https://example.com/cfg/'
+  it('enemies[].actions は文字列の配列（trim・空要素は捨てる）、skills は id から SkillExecution になる', () => {
+    const r = parseConfig(
+      {
+        skills: [
+          {
+            id: 'ink',
+            name: '墨',
+            target: '相手全体',
+            effect: 'damage 5..5',
+            message: '{user}は 墨',
+          },
+          { id: 'plain' },
+        ],
+        enemies: [{ name: 'タコ', actions: ['  条件=初手 候補=ink ', '', '候補=こうげき'] }],
+      },
+      base
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].actions).toEqual(['条件=初手 候補=ink', '候補=こうげき'])
+    expect(r.value.skills).toEqual({
+      ink: { name: '墨', target: '相手全体', effect: 'damage 5..5', message: '{user}は 墨' },
+      plain: { name: 'plain', target: '相手単体' },
+    })
+  })
+
+  it('actions 未指定・空配列は actions なし。skills 未指定は空', () => {
+    const r = parseConfig({ enemies: [{ actions: [] }, {}] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('actions' in r.value.enemies[0]).toBe(false)
+    expect(r.value.skills).toEqual({})
+    expect(defaultConfig().skills).toEqual({})
+  })
+
+  it.each([
+    [{ enemies: [{ actions: 'x' }] }, 'enemies[0].actions'],
+    [{ enemies: [{ actions: [1] }] }, 'enemies[0].actions'],
+    [{ skills: {} }, 'skills'],
+    [{ skills: [1] }, 'skills[0]'],
+    [{ skills: [{ name: 'x' }] }, 'skills[0].id'],
+    [{ skills: [{ id: 'a', effect: 3 }] }, 'skills[0].effect'],
+  ])('不正な指定 %j はエラー', (raw, where) => {
+    const r = parseConfig(raw, base)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain(where)
+  })
+
+  it('buildBattleSetup は skills を渡し、敵の actions を複製に引き継ぐ', () => {
+    const r = parseConfig({ skills: [{ id: 'ink' }], enemies: [{ actions: ['候補=ink'] }] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const setup = buildBattleSetup(r.value, initialView(r.value))
+    expect(setup.skills).toEqual(r.value.skills)
+    expect(setup.enemies[0].actions).toEqual(['候補=ink'])
+  })
+})
+
+describe('同梱の例 public/battle-sample/enemy-actions.json (#835)', () => {
+  it('parseConfigText で読め、行動: を持つ敵と特技が入っている', () => {
+    const r = parseConfigText(
+      enemyActionsSample,
+      'https://example.com/battle-sample/enemy-actions.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(Object.keys(r.value.skills)).toEqual(['ink', 'tentacle'])
+    expect(r.value.enemies.map((e) => e.actions?.length)).toEqual([2, 1])
   })
 })
