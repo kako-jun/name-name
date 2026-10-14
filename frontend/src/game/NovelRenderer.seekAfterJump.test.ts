@@ -178,6 +178,26 @@ describe('別ファイルのシーンへ入った後の seek / goBack（不変�
     }
   }
 
+  it('seekTo は非整数・範囲外の index では履歴・位置・スナップショットを変えない', async () => {
+    const { r } = await enterFar('events', HUB_TO_FAR_CHOICE, 'choice')
+    advanceToLastOfFar(r)
+    const snapshotBefore = JSON.stringify(r.getSnapshot())
+    const historyBefore = JSON.stringify(I(r).history)
+    const positionBefore = [I(r).eventIndex, I(r).textIndex, I(r).sentenceIndex]
+    // 1.5 は範囲内に見えるが整数でない（truncateHistory が弾く）。NaN / 範囲外は seekTo の入口で弾く。
+    for (const bad of [1.5, NaN, 3, 5, -1]) {
+      r.seekTo(bad)
+      expect(I(r).history.length, `index=${bad}`).toBe(3)
+      expect(JSON.stringify(I(r).history), `index=${bad}`).toBe(historyBefore)
+      expect([I(r).eventIndex, I(r).textIndex, I(r).sentenceIndex], `index=${bad}`).toEqual(
+        positionBefore
+      )
+      expect(JSON.stringify(r.getSnapshot()), `index=${bad}`).toBe(snapshotBefore)
+    }
+    expect(text(r)).toBe('f2')
+    expectStillInFar(r)
+  })
+
   it('シーク後に再び進めても far の続きを読め、終劇にならない', async () => {
     const { r } = await enterFar('events', HUB_TO_FAR_CHOICE, 'choice')
     advanceToLastOfFar(r)
