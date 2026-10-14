@@ -9,6 +9,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { ChoiceOption, Event, EventScene, FlagValue } from '../types'
+import { internals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -31,16 +32,6 @@ const bool = (b: boolean): FlagValue => ({ Bool: b })
 function choiceScene(id: string, options: ChoiceOption[]): EventScene {
   return scene(id, [{ Choice: { options } } as Event])
 }
-
-interface Internals {
-  waitingForWait: boolean
-  history: unknown[]
-  pendingEntry: unknown
-  consecutiveJumps: number
-  confinedSceneIds: string[] | null
-  initialized: boolean
-}
-const internals = (r: NovelRenderer): Internals => r as unknown as Internals
 
 function makeRenderer(scenes: EventScene[]): NovelRenderer {
   const r = new NovelRenderer()

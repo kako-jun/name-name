@@ -1,6 +1,6 @@
 import type { Event, EventScene } from '../types'
 import type { NovelGameState } from '../game/GameState'
-import type { SceneEntryResult } from '../game/sceneEntry'
+import type { Deferred, SceneEntryResult } from '../game/sceneEntry'
 import type { NovelRenderer } from '../game/NovelRenderer'
 
 /**
@@ -26,7 +26,7 @@ export interface RendererInternals {
   eventIndex: number
   textIndex: number
   sentenceIndex: number
-  history: unknown[]
+  history: NovelGameState[]
   currentSceneId: string | null
   allScenes: EventScene[]
   pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
@@ -38,7 +38,7 @@ export interface RendererInternals {
   justSelectedChoice: boolean
   jumpState: 'idle' | 'pending' | 'stalled'
   pendingEntry: { promise: Promise<SceneEntryResult>; sceneId: string | null } | null
-  jumpDeferred: unknown
+  jumpDeferred: Deferred<SceneEntryResult> | null
   consecutiveJumps: number
   storyEnded: boolean
   skipMode: boolean
