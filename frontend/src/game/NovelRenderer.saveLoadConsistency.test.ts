@@ -11,7 +11,7 @@ import { defaultTimeController } from './TimeController'
 import { SaveManager } from './SaveManager'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
-import { internals } from '../test/rendererInternals'
+import { internals, type SaveInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -309,11 +309,7 @@ describe('シーン入場後の自動セーブは最初の本文の表示時に1
     const B = scene('b', [jump('c')])
     const C = scene('c', [narration('c1')])
     const r = await wired([B, C])
-    const quickSave = vi.spyOn(
-      (r as unknown as { saveManager: { quickSave: (d: { sceneId: string | null }) => void } })
-        .saveManager,
-      'quickSave'
-    )
+    const quickSave = vi.spyOn(internals<SaveInternals>(r).saveManager, 'quickSave')
     r.getTimeController().tick(1) // b（中継）→ c と連続して入場
     await flush()
     r.getTimeController().tick(1)
@@ -364,11 +360,7 @@ describe('シーン入場後の自動セーブは最初の本文の表示時に1
   it('冒頭が本文のシーンへ入場後、スキップで複数本文を進めても保存は1回・位置は最初の本文・トーストなし', async () => {
     const B = scene('b', [narration('b1'), narration('b2'), narration('b3'), narration('b4')])
     const r = await wired([B])
-    const quickSave = vi.spyOn(
-      (r as unknown as { saveManager: { quickSave: (d: { eventIndex: number }) => void } })
-        .saveManager,
-      'quickSave'
-    )
+    const quickSave = vi.spyOn(internals<SaveInternals>(r).saveManager, 'quickSave')
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     r.getTimeController().tick(1)
     await flush()

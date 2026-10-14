@@ -10,7 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { findLinearSegments, resolveLinearSegments, segmentAt } from './sceneEntry'
 import type { Event, EventScene } from '../types'
-import { internalsOf } from '../test/rendererInternals'
+import { internalsOf, saveControllerOf } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -338,12 +338,10 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
   it('境界1つにつき requestAutoSave が1回で、保存は本文位置', async () => {
     const { r } = linearRenderer()
     const saved: string[] = []
-    vi.spyOn(r as unknown as { saveQuick(o: string): boolean }, 'saveQuick').mockImplementation(
-      () => {
-        saved.push(r.getDebugState().eventText ?? '')
-        return true
-      }
-    )
+    vi.spyOn(saveControllerOf(r), 'saveQuick').mockImplementation(() => {
+      saved.push(r.getDebugState().eventText ?? '')
+      return true
+    })
     const spy = vi.spyOn(r, 'requestAutoSave')
     r.setOnSceneChange(() => r.requestAutoSave())
     await r.startFrom({ sceneId: 'a', linear: true })
