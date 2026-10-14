@@ -157,16 +157,16 @@ describe('PlaybackCursor シーク（履歴）', () => {
     const c = new PlaybackCursor()
     for (let i = 0; i < 5; i++) c.pushHistory(snap(i, 0, 0))
     const got = c.truncateHistory(2)
-    expect(got.eventIndex).toBe(2)
+    expect(got?.eventIndex).toBe(2)
     expect(c.history.map((h) => h.eventIndex)).toEqual([0, 1, 2])
   })
 
   it('truncateHistory(末尾) は何も切らず、truncateHistory(0) は 1 件に切り詰める', () => {
     const c = new PlaybackCursor()
     for (let i = 0; i < 3; i++) c.pushHistory(snap(i, 0, 0))
-    expect(c.truncateHistory(2).eventIndex).toBe(2)
+    expect(c.truncateHistory(2)?.eventIndex).toBe(2)
     expect(c.history.length).toBe(3)
-    expect(c.truncateHistory(0).eventIndex).toBe(0)
+    expect(c.truncateHistory(0)?.eventIndex).toBe(0)
     expect(c.history.length).toBe(1)
   })
 
@@ -175,6 +175,15 @@ describe('PlaybackCursor シーク（履歴）', () => {
     for (let i = 0; i < 3; i++) c.pushHistory(snap(i, 0, 0))
     expect(c.truncateHistory(3 as number)).toBeUndefined()
     expect(c.truncateHistory(-1)).toBeUndefined()
+  })
+
+  it('範囲外では履歴が変わらない（-1 でも消えない）', () => {
+    const c = new PlaybackCursor()
+    for (let i = 0; i < 3; i++) c.pushHistory(snap(i, 0, 0))
+    c.truncateHistory(-1)
+    c.truncateHistory(3)
+    c.truncateHistory(1.5)
+    expect(c.history.map((h) => h.eventIndex)).toEqual([0, 1, 2])
   })
 
   it('resetHistory は空、またはスナップショット 1 件だけにする', () => {
@@ -577,7 +586,8 @@ function curGoBack(c: PlaybackCursor, flags: GameState): void {
 
 function curSeekTo(c: PlaybackCursor, i: number, flags: GameState): void {
   if (i < 0 || i >= c.history.length) return
-  c.restorePosition(c.truncateHistory(i), flags)
+  const target = c.truncateHistory(i)
+  if (target) c.restorePosition(target, flags)
 }
 
 function refOf(c: PlaybackCursor): Ref {

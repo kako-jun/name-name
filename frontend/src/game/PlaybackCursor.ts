@@ -83,11 +83,11 @@ export class PlaybackCursor {
     return this._playbackStarted
   }
 
-  get novelPagesCache(): { eventIndex: number; pages: NovelPage[] } | null {
+  get novelPagesCache(): Readonly<{ eventIndex: number; pages: NovelPage[] }> | null {
     return this._novelPagesCache
   }
 
-  get advSentencePagesCache(): { eventIndex: number; pages: string[] } | null {
+  get advSentencePagesCache(): Readonly<{ eventIndex: number; pages: string[] }> | null {
     return this._advSentencePagesCache
   }
 
@@ -255,8 +255,12 @@ export class PlaybackCursor {
     this._history.pop()
   }
 
-  /** 履歴を `index` 番目（含む）までに切り詰め、その要素を返す（アンドゥスタック方式のシーク）。 */
-  truncateHistory(index: number): NovelGameState {
+  /**
+   * 履歴を `index` 番目（含む）までに切り詰め、その要素を返す（アンドゥスタック方式のシーク）。
+   * 範囲外（`index < 0` / `index >= length`）では履歴に触れず undefined を返す。
+   */
+  truncateHistory(index: number): NovelGameState | undefined {
+    if (!Number.isInteger(index) || index < 0 || index >= this._history.length) return undefined
     this._history = this._history.slice(0, index + 1)
     return this._history[index]
   }
