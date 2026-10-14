@@ -186,9 +186,10 @@ describe('FieldBattleTransition 終了: 大きな dt・端のパラメータ (#8
     t.tick(P.exitFadeOutMs + 10_000)
     expect(t.active).toBe(true)
     expect(stage.children).toContain(extra)
-    expect(stage.children.indexOf(extra)).toBeGreaterThan(stage.children.length - 3) // 幕より手前
-    const overlayIdx = stage.children.findIndex((c) => c !== extra)
-    expect(stage.children.indexOf(extra)).toBeGreaterThan(overlayIdx)
+    // 幕（extra 以外の唯一の子）より手前、かつ最前面
+    const overlay = stage.children.find((c) => c !== extra)!
+    expect(stage.children.indexOf(extra)).toBeGreaterThan(stage.children.indexOf(overlay))
+    expect(stage.children[stage.children.length - 1]).toBe(extra)
     run(t, 500 + P.exitBlackMs + 40)
     expect(stage.children).not.toContain(extra)
     expect(t.active).toBe(true)
