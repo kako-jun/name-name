@@ -131,6 +131,10 @@ function exposeCursorFields(r: NovelRenderer): void {
     (r as unknown as { cursor: Record<string, unknown> }).cursor
   for (const name of CURSOR_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    // 実体のフィールド名が変わったとき、黙って undefined を読み書きしないよう即座に落とす。
+    if (!(`_${name}` in cursorOf())) {
+      throw new Error(`PlaybackCursor に _${name} が無い（rendererInternals の委譲先を直す）`)
+    }
     Object.defineProperty(r, name, {
       configurable: true,
       enumerable: true,
