@@ -1641,7 +1641,10 @@ export function describeEventForDebug(event: unknown): DebugEventDescriptor {
  * `===` による厳密一致で、先頭から最初に一致した 1 件を返す（重複 id は先勝ち）。
  * `this` / PixiJS / DOM / audio に一切触れない決定論的写像。
  */
-export function findSceneById(scenes: EventScene[], sceneId: string): EventScene | undefined {
+export function findSceneById(
+  scenes: readonly EventScene[],
+  sceneId: string
+): EventScene | undefined {
   return scenes.find((s) => s.id === sceneId)
 }
 
@@ -1664,7 +1667,7 @@ export function findSceneById(scenes: EventScene[], sceneId: string): EventScene
  * scene 本体の線形探索は `findSceneById` に委譲する（探索ロジックの一元化）。
  */
 export function resolveSceneTitle(
-  scenes: EventScene[],
+  scenes: readonly EventScene[],
   sceneId: string | null | undefined
 ): string | null {
   if (!sceneId) return null

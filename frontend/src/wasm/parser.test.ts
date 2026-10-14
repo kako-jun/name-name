@@ -2505,3 +2505,27 @@ describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が
     expect(again).toContain('ポーズ: down=d.png')
   })
 })
+
+describe('parseMarkdown + normalizeDocument: battle_transition が生き残る (#830)', () => {
+  const docWith = (lines: string[]): string =>
+    [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## s',
+      '',
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+
+  it('実 WASM パーサ経由で doc に残り、未指定・空は null', async () => {
+    expect((await parseMarkdown(docWith(['battle_transition: ff']))).battle_transition).toBe('ff')
+    expect((await parseMarkdown(docWith([]))).battle_transition).toBeNull()
+    expect((await parseMarkdown(docWith(['battle_transition:']))).battle_transition).toBeNull()
+  })
+})

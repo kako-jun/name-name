@@ -914,6 +914,8 @@ export interface EventDocument {
   battle_command_layout?: string | null
   /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */
   battle_command_labels?: string | null
+  /** RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、終了=黒を経由してフェードで戻る）。frontmatter `battle_transition:` から流す。GUI 専用（TUI は読まない）。 */
+  battle_transition?: string | null
   chapters: EventChapter[]
 }
 

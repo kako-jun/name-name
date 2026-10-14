@@ -25,6 +25,7 @@ import { normalizeBackgroundTone } from './backgroundTone'
 import { normalizeBackgroundDof } from './depthOfField'
 import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
 import { normalizeBattlePresentation } from './battleMotion'
+import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb } from './battleAtb'
 import { normalizeCommandLayout, parseCommandLabels } from './battleCommands'
 
@@ -267,6 +268,7 @@ export function rpgProjectFromDoc(
     battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
+    battleTransition: normalizeBattleTransition(doc.battle_transition),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
   }
