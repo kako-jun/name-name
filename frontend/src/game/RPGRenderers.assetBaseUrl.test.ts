@@ -264,3 +264,28 @@ describe('RaycastRenderer: 戦闘への配線 (#746)', () => {
     expect(bs.opts.assetBaseUrl).toBe(BASE)
   })
 })
+
+describe('TopDownRenderer: 戦闘への配線 (#746, #784)', () => {
+  const foe = { id: 's', name: 'S', hp: 1, maxHp: 1, mp: 0, maxMp: 0, atk: 1, def: 0, agi: 1 }
+  type Started = {
+    startBattle(e: unknown[]): void
+    battleScreen: { opts: { assetBaseUrl?: string } }
+  }
+
+  it('startBattle で BattleScreen の opts に assetBaseUrl が渡る', () => {
+    spyAssets()
+    const { r, i } = topdown()
+    r.setAssetBaseUrl(BASE)
+    r.load(project([], { view: 'topdown' }))
+    ;(i as unknown as Started).startBattle([foe])
+    expect((i as unknown as Started).battleScreen.opts.assetBaseUrl).toBe(BASE)
+  })
+
+  it('ベース未設定なら undefined のまま（従来どおり）', () => {
+    spyAssets()
+    const { r, i } = topdown()
+    r.load(project([], { view: 'topdown' }))
+    ;(i as unknown as Started).startBattle([foe])
+    expect((i as unknown as Started).battleScreen.opts.assetBaseUrl).toBeUndefined()
+  })
+})
