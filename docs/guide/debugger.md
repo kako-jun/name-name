@@ -231,7 +231,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 | ログを1文字ずつ表示 | `on` / `off`（既定）。演出が `ff`（`layout=side`）のときは使わないので無効になる。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない。ただし ATB が `on` のときはコマンドのタップで全文表示せずそのまま実行し、全文表示はログ帯のタップだけ）。ブリンク比較の対象に含まれる |
 | 演出 | `dq（ログ・動かない）`（既定）/ `ff（モーション・ダメージ数字）`。`ff` は `layout=side` のときだけ効く（#745。`layout=front` では選べない）。たたかう等で、行動する側が踏み出して斬って戻り、対象がのけぞり（HP 0 なら倒れ）、対象の位置にダメージ数字が跳ねて消える。上のログ帯には呪文・アイテムの名前だけが中央寄せで出て、通常攻撃では窓ごと出ない。従来ターン制では演出が終わるまで次の行動・コマンドは受けない。ATB が `on` なら演出中もゲージが進み、敵の行動は順に再生され、行動可能な味方は演出中でも入力できる。各キャラの `poses`（下記）があればポーズごとに絵が差し替わる。ブリンク比較の対象に含まれる。切り替えると戦闘が最初からやり直しになる |
 | ATB（ゲージ順に行動） | `on` / `off`（既定）。`on` のとき味方・敵にゲージが付き、AGI に比例して溜まり、満タンの順に行動する（#205）。各ステータス行の右端の短い棒（数文字ぶんの幅）がゲージで、番の味方は名前の左に「▶」が付いて黄色になる。時間はこのページの ticker から `BattleScreen.tick` で渡す。切り替えると戦闘が最初からやり直しになる。ブリンク比較の対象に含まれる |
-| commandLayout | `grid（2x2）`（既定）/ `cross（十字・矢印キー）`。`cross` は `side` のとき、コマンド窓を十字（上=たたかう・左=じゅもん・右=どうぐ・下=にげる）にし、矢印キー 1 押しでその方向を決定する（#204）。ブリンク比較の対象に含まれる。切替直後にフォーム部品へフォーカスが残らないよう自動で外す |
+| commandLayout | `grid（2x2）`（既定）/ `cross（十字・矢印キー）`。`cross` は `side` のとき、コマンド窓を十字（上=たたかう・左=じゅもん・右=どうぐ・下=にげる）にし、矢印キー 1 押しでその方向を決定する（#204）。`cross` では「じゅもん」「どうぐ」で設定 JSON の `spells` / `items`（省略は内蔵既定。メテオは MP 不足でグレーになる）の一覧が重なって開き（Enter / Z で決定・Escape / Backspace / X か窓の外のタップで一つ戻る）、決定すると手のカーソルで対象を選ぶ。ATB の待機はこの窓を開いている間だけ止まる。ブリンク比較の対象に含まれる。切替直後にフォーム部品へフォーカスが残らないよう自動で外す |
 | ATB 進行 | `待機（コマンド選択中は停止）`（既定）/ `アクティブ（止めない）`。ATB が `on` のときだけ選べる（#205）。ブリンク比較の対象に含まれる |
 | 戦闘をやり直す | 現在の設定のまま戦闘を最初からやり直す（ATB は決着がつくと進まなくなるため） |
 | 奥行き（行ごとの縮尺） | `on` / `off`（既定）。`on` のとき設定 JSON の `horizon`（既定 0.3）と `perspective`（既定 0.8）で、奥の行ほど小さく・上に描く（#747）。`layout=side` のときだけ見た目が変わる。ブリンク比較の対象に含まれる |
@@ -266,6 +266,11 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
   "atbMode": "wait",
   "commandLayout": "grid",
   "commandLabels": { "spell": "魔石" },
+  "spells": [
+    { "id": "fire", "name": "ほのお", "mp": 3, "target": "敵単体", "effect": "damage 8..14 type=fire" },
+    { "id": "heal", "name": "ヒール", "mp": 2, "target": "味方単体", "effect": "heal 15..25" }
+  ],
+  "items": [{ "id": "potion", "name": "ポーション", "effect": "heal 20..30", "count": 3 }],
   "horizon": 0.3,
   "perspective": 0.8,
   "foreground": "battle/foreground.png",
@@ -281,8 +286,9 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 }
 ```
 
-- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `pixelArt` / `logTypewriter` / `presentation` / `atb` / `atbMode` / `commandLayout` / `commandLabels` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
-- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`pixelArt` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`presentation` が `dq`/`ff` 以外、`atb` が `on`/`off` 以外、`atbMode` が `wait`/`active` 以外、`commandLayout` が `grid`/`cross` 以外、`commandLabels` がオブジェクトでない・キーが `attack`/`spell`/`item`/`escape` 以外・値が空でない文字列でない、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `pixelArt` / `logTypewriter` / `presentation` / `atb` / `atbMode` / `commandLayout` / `commandLabels` / `spells` / `items` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`pixelArt` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`presentation` が `dq`/`ff` 以外、`atb` が `on`/`off` 以外、`atbMode` が `wait`/`active` 以外、`commandLayout` が `grid`/`cross` 以外、`commandLabels` がオブジェクトでない・キーが `attack`/`spell`/`item`/`escape` 以外・値が空でない文字列でない、`spells` / `items` が配列でない・要素がオブジェクトでない・`name` が空でない文字列でない・`id` / `effect` / `builtin` / `target` が文字列でない、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- `spells`（#204）は `{ "id", "name", "mp", "target", "effect" | "builtin" }` の配列で、`target` は `敵単体`（省略時）/ `敵全体` / `味方単体` / `味方全体` / `自分` / `マップ`。味方全員が同じ一覧を使う。`items` は `{ "id", "name", "effect" | "builtin", "count" }` で、`count` は表示と 0 のときのグレーだけ（使っても減らない）。アイテムの対象は味方単体のみ
 - 各キャラの `poses`（#745）は `{ "idle": URL, "ready": URL, "step": URL, "slash": URL, "cast": URL, "hurt": URL, "down": URL, "victory": URL }`（部分指定可）。`presentation=ff` のときだけ使う。オブジェクトでない・値が文字列でない・URL を解決できないときはエラー。未知のキーは無視する。無いポーズは近い絵に落ち（`slash`→`step`→`ready`→`idle`、`cast`→`ready`→`idle` など。`special` は必殺技の配線時に対応するため今は未知のキーとして無視）、`down` が無ければ沈み込み、全部無ければ `sprite` の 1 枚のまま動きだけ付く。`pixelArt` の切り替えではポーズの画像も unload して読み直す
 - `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
