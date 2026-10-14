@@ -273,7 +273,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     )
     r.advance()
     const confirm = lastConfirm(calls)
-    const enter = vi.spyOn(entryControllerOf(r) as { enter(...a: unknown[]): unknown }, 'enter')
+    const enter = vi.spyOn(entryControllerOf(r), 'enter')
 
     const p = r.jumpToScene('far') // 進行入場を立てる（遅延ロード）
     confirm('other') // 古い選択肢の確定

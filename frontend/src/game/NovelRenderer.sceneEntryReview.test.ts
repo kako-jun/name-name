@@ -108,10 +108,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     r.advance()
     const waiting = internals<Internals>(r).pendingEntry!.promise
-    vi.spyOn(
-      entryControllerOf(r) as { startScene: () => void },
-      'startScene'
-    ).mockImplementationOnce(() => {
+    vi.spyOn(entryControllerOf(r), 'startScene').mockImplementationOnce(() => {
       throw new Error('boom')
     })
 
@@ -127,10 +124,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer([HUB], () => d.promise)
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.spyOn(
-      entryControllerOf(r) as { startScene: () => void },
-      'startScene'
-    ).mockImplementationOnce(() => {
+    vi.spyOn(entryControllerOf(r), 'startScene').mockImplementationOnce(() => {
       throw new Error('boom')
     })
 
@@ -154,10 +148,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     r.advance()
     r.advance()
     const confirm = calls[calls.length - 1][1] as (jump: string) => boolean
-    vi.spyOn(
-      entryControllerOf(r) as { startScene: () => void },
-      'startScene'
-    ).mockImplementationOnce(() => {
+    vi.spyOn(entryControllerOf(r), 'startScene').mockImplementationOnce(() => {
       throw new Error('boom')
     })
 

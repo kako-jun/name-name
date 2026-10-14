@@ -2,6 +2,7 @@ import type { Event, EventScene } from '../types'
 import type { NovelGameState } from '../game/GameState'
 import type { Deferred, SceneEntryResult } from '../game/sceneEntry'
 import type { NovelRenderer } from '../game/NovelRenderer'
+import type { SceneEntryController } from '../game/SceneEntryController'
 
 /**
  * テスト用: `NovelRenderer` の private フィールド・メソッドを読み書きするための型付きアクセサ (#735 1/8, #822)。
@@ -218,6 +219,12 @@ function exposeEntryFields(r: NovelRenderer): void {
  * `NovelRenderer` が持つ `SceneEntryController` (#826)。入場の内部メソッド（`enter` / `startScene` 等）を
  * `vi.spyOn` で差し替えるテスト用。旧実装ではレンダラ自身の private メソッドだった。
  */
-export function entryControllerOf(r: NovelRenderer): object {
-  return (r as unknown as { entry: object }).entry
+export function entryControllerOf(r: NovelRenderer): EntryControllerForTest {
+  return (r as unknown as { entry: EntryControllerForTest }).entry
 }
+
+/** `entryControllerOf` の戻り値。公開メソッドに、spy で差し替える private の `startScene` を足した型。 */
+export type EntryControllerForTest = Pick<
+  SceneEntryController,
+  'enter' | 'run' | 'jumpTo' | 'startFrom'
+> & { startScene(...args: unknown[]): void }
