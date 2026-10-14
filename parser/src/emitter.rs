@@ -174,6 +174,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_log_typewriter: \"{sanitized}\"\n"));
         }
+        // battle_presentation (#745)。同じ流儀
+        if let Some(ref v) = doc.battle_presentation {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_presentation: \"{sanitized}\"\n"));
+        }
         // battle_horizon / battle_perspective / battle_foreground (#747)。同じ流儀
         if let Some(ref v) = doc.battle_horizon {
             let sanitized = v.replace('"', "");
@@ -966,6 +971,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(s) = &m.sprite {
                     out.push_str(&format!("スプライト: {s}\n"));
                 }
+                emit_poses(out, &m.poses);
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
@@ -1000,6 +1006,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(s) = &p.sprite {
                     out.push_str(&format!("スプライト: {s}\n"));
                 }
+                emit_poses(out, &p.poses);
                 if let Some(r) = &p.row {
                     out.push_str(&format!("隊列: {r}\n"));
                 }
@@ -1654,6 +1661,16 @@ fn format_number(n: f64) -> String {
     }
 }
 
+/// 戦闘ポーズ別スプライト (#745) を `ポーズ: idle=a.png, step=b.png` の 1 行で出す。空・None は何も出さない。
+fn emit_poses(out: &mut String, poses: &Option<std::collections::BTreeMap<String, String>>) {
+    if let Some(map) = poses {
+        if !map.is_empty() {
+            let joined: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            out.push_str(&format!("ポーズ: {}\n", joined.join(", ")));
+        }
+    }
+}
+
 /// 高さブロックを emit する。各値は `1.0 → "1"`, `0.25 → "0.25"` で書く。
 /// 行頭で空行を一つ挟み、ブロック終端の後は改行のみ残す（他ブロックのスタイルに合わせる）。
 fn emit_height_block(out: &mut String, tag: &str, rows: &[Vec<f64>]) {
@@ -1715,6 +1732,7 @@ mod tests {
             battle_background_tone: None,
             battle_background_dof: None,
             battle_log_typewriter: None,
+            battle_presentation: None,
             battle_horizon: None,
             battle_perspective: None,
             battle_foreground: None,
@@ -1766,9 +1784,14 @@ mod tests {
             exp: 2,
             gold: 1,
             sprite: Some("monsters/slime.png".to_string()),
+            poses: Some(std::collections::BTreeMap::from([(
+                "hurt".to_string(),
+                "monsters/slime-hurt.png".to_string(),
+            )])),
             builtin: None,
         }));
         let out = emit(&doc);
+        assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
         assert!(out.contains("[モンスター slime]"));
         assert!(out.contains("名前: スライム"));
         assert!(out.contains("HP: 10"));
@@ -1988,6 +2011,7 @@ mod tests {
             battle_background_tone: None,
             battle_background_dof: None,
             battle_log_typewriter: None,
+            battle_presentation: None,
             battle_horizon: None,
             battle_perspective: None,
             battle_foreground: None,

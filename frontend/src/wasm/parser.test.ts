@@ -2436,3 +2436,72 @@ describe('parseMarkdown + normalizeDocument: battle_command_layout / battle_comm
     expect(layoutOnly.battle_command_labels).toBeNull()
   })
 })
+
+describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が生き残る (#745)', () => {
+  const docWith = (lines: string[], body: string[] = []): string =>
+    [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...lines,
+      '---',
+      '',
+      '## 1-1: シーン',
+      '',
+      ...body,
+      '**A**:',
+      'x',
+      '',
+    ].join('\n')
+
+  it('実 WASM パーサ経由で doc に残り、未指定は null', async () => {
+    const doc = await parseMarkdown(docWith(['battle_presentation: ff']))
+    expect(doc.battle_presentation).toBe('ff')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_presentation).toBeNull()
+  })
+
+  it('パーティ・モンスター定義の ポーズ: が poses として残る', async () => {
+    const doc = await parseMarkdown(
+      docWith(
+        [],
+        [
+          '[パーティ hero]',
+          '名前: ゆうしゃ',
+          'HP: 20',
+          'ATK: 5',
+          'DEF: 3',
+          'AGI: 4',
+          'ポーズ: idle=a.png, slash=b.png',
+          '[/パーティ]',
+          '',
+          '[モンスター slime]',
+          '名前: スライム',
+          'HP: 5',
+          'ATK: 1',
+          'DEF: 1',
+          'AGI: 1',
+          'EXP: 1',
+          'GOLD: 1',
+          'ポーズ: down=d.png',
+          '[/モンスター]',
+          '',
+        ]
+      )
+    )
+    const events = doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+    const party = events.find((e) => typeof e === 'object' && 'PartyMember' in e) as
+      | { PartyMember: { poses?: Record<string, string> } }
+      | undefined
+    expect(party?.PartyMember.poses).toEqual({ idle: 'a.png', slash: 'b.png' })
+    const mon = events.find((e) => typeof e === 'object' && 'Monster' in e) as
+      | { Monster: { poses?: Record<string, string> } }
+      | undefined
+    expect(mon?.Monster.poses).toEqual({ down: 'd.png' })
+    // emit に戻しても ポーズ: 行が出る（Record → BTreeMap の往復）
+    const again = await emitMarkdown(doc)
+    expect(again).toContain('ポーズ: idle=a.png, slash=b.png')
+    expect(again).toContain('ポーズ: down=d.png')
+  })
+})

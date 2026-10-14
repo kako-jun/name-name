@@ -33,6 +33,46 @@ export type BattlePhase =
   | 'defeat'
   | 'escaped'
 
+/** 行動の主体・対象の指し示し (#745)。`party` / `enemies` の index */
+export interface BattleActorRef {
+  side: 'party' | 'enemy'
+  index: number
+}
+
+/** 1 回の効果の結果の種類 (#745)。damage = HP 減少 / heal = HP 増加 / miss = 対象にしたが HP が変わらなかった */
+export type BattleHitKind = 'damage' | 'heal' | 'miss'
+
+/** 行動 1 回が対象 1 体に与えた結果 (#745)。演出（ダメージ数字・のけぞり・倒れ）が読む事実で、演出の途中状態ではない */
+export interface BattleHit {
+  target: BattleActorRef
+  kind: BattleHitKind
+  /**
+   * 計算上のダメージ・回復量（miss は 0）。**HP が実際に変わった量ではない**: HP 3 の敵に 50 のダメージならオーバーキルでも 50、
+   * HP が満タン近くへの回復も上限で切らない量。FF 式のダメージ数字はこれを出す。実際の変化は hpBefore - hpAfter。
+   * builtin など計算量を通知しない効果は HP の前後差で代用する。
+   */
+  amount: number
+  hpBefore: number
+  hpAfter: number
+}
+
+/**
+ * 行動 1 回の記録 (#745)。エンジンは同期処理で状態をすぐ確定させるので、画面の演出（FF 式）が
+ * 「いま誰が誰に何をしたか」を後から再生できるよう、事実だけを残す。画面は `eventTotal` の差で新規分を数える（ログと同じ流儀）。
+ */
+export interface BattleActionEvent {
+  /** 戦闘開始からの通し番号（0 始まり） */
+  seq: number
+  actor: BattleActorRef
+  kind: 'attack' | 'spell' | 'item' | 'notice'
+  /**
+   * FF 式メッセージ窓に出す短い言葉。呪文・アイテムの名前、または `notice`（行動が成立しなかったことの知らせ。
+   * 「にげられない！」「MPが たりない！」）の文言。通常攻撃は undefined
+   */
+  label?: string
+  hits: BattleHit[]
+}
+
 export interface BattleState {
   party: BattleEntity[]
   enemies: BattleEntity[]
@@ -44,6 +84,10 @@ export interface BattleState {
    * `log` は絶対インデックスを失うので、「前回から何行積まれたか」は前回の値との差で数える (#755)
    */
   logTotal: number
+  /** 行動の記録（直近 30 件）(#745)。演出が読む。`log` と同じく上限で先頭を捨てる */
+  events: BattleActionEvent[]
+  /** 戦闘開始からの累計行動数。`events` の絶対インデックスの代わりに「前回から何件増えたか」を数える (#745) */
+  eventTotal: number
   /** 入手経験値（victory 到達時のみ集計） */
   earnedExp: number
   /** 入手ゴールド（victory 到達時のみ集計） */
@@ -53,6 +97,7 @@ export interface BattleState {
 }
 
 const LOG_MAX = 30
+const EVENT_MAX = 30
 
 /** ATB の進行方式 (#205)。`wait` = コマンド選択中は時間停止（既定）、`active` = 止めない */
 export type AtbMode = 'wait' | 'active'
@@ -102,6 +147,8 @@ export class BattleEngine {
       phase: 'party-input',
       log: [],
       logTotal: 0,
+      events: [],
+      eventTotal: 0,
       earnedExp: 0,
       earnedGold: 0,
     }
@@ -139,7 +186,9 @@ export class BattleEngine {
     if (!target) return
 
     const dmg = this.computeAttackDamage(hero, target)
+    const hpBefore = target.hp
     target.hp = Math.max(0, target.hp - dmg)
+    this.recordAttack(hero, target, hpBefore, dmg)
     this.appendLog(`${hero.name} の こうげき！`)
     this.appendLog(`${target.name} に ${dmg} の ダメージ！`)
     if (target.hp === 0) {
@@ -171,9 +220,11 @@ export class BattleEngine {
     if (atb) {
       const cur = this.currentActorIndex()
       const idx = cur !== -1 ? cur : this.fullestAliveIndex(atb)
+      this.recordNotice(idx !== -1 ? this.state.party[idx] : undefined, 'にげられない！')
       if (idx !== -1) this.finishAtbAction(idx)
       this.settleAtbPhase()
     } else {
+      this.recordNotice(this.currentActor() ?? undefined, 'にげられない！')
       this.runEnemyTurn()
     }
   }
@@ -226,19 +277,28 @@ export class BattleEngine {
     if (!caster) return
     if (caster.mp < spell.mp) {
       this.appendLog('MP が たりない！')
+      this.recordNotice(caster, 'MPが たりない！')
       return
     }
     caster.mp -= spell.mp
     this.appendLog(`${caster.name} は ${spell.name} を となえた！`)
 
     const targets = this.resolveSpellTargets(spell, targetId)
-    const ctx: EffectContext = { caster, targets, rng: this.rng }
+    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const ctx: EffectContext = {
+      caster,
+      targets,
+      rng: this.rng,
+      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+    }
+    const hpSnapshot = this.snapshotHp()
     const lines = spell.builtin
       ? invokeBuiltinSpell(spell.builtin, ctx)
       : spell.effect
         ? this.evalEffectDsl(spell.effect, ctx)
         : ['(呪文に効果定義なし)']
     for (const line of lines) this.appendLog(line)
+    this.recordEffect('spell', caster, spell.name, targets, hpSnapshot, amounts)
 
     this.advanceAfterPartyAction()
   }
@@ -251,13 +311,21 @@ export class BattleEngine {
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
 
     const targets = this.resolveItemTargets(item, targetId)
-    const ctx: EffectContext = { caster: user, targets, rng: this.rng }
+    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const ctx: EffectContext = {
+      caster: user,
+      targets,
+      rng: this.rng,
+      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+    }
+    const hpSnapshot = this.snapshotHp()
     const lines = item.builtin
       ? invokeBuiltinItem(item.builtin, ctx)
       : item.effect
         ? this.evalEffectDsl(item.effect, ctx)
         : ['(アイテムに効果定義なし)']
     for (const line of lines) this.appendLog(line)
+    this.recordEffect('item', user, item.name, targets, hpSnapshot, amounts)
 
     this.advanceAfterPartyAction()
   }
@@ -449,7 +517,9 @@ export class BattleEngine {
     if (alive.length === 0) return
     const target = alive[Math.min(alive.length - 1, Math.floor(this.rng() * alive.length))]
     const dmg = this.computeAttackDamage(enemy, target)
+    const hpBefore = target.hp
     target.hp = Math.max(0, target.hp - dmg)
+    this.recordAttack(enemy, target, hpBefore, dmg)
     this.appendLog(`${enemy.name} の こうげき！`)
     this.appendLog(`${target.name} は ${dmg} の ダメージを うけた！`)
     if (target.hp === 0) {
@@ -482,7 +552,9 @@ export class BattleEngine {
       const hero = this.firstAlive(this.state.party)
       if (!hero) break
       const dmg = this.computeAttackDamage(enemy, hero)
+      const hpBefore = hero.hp
       hero.hp = Math.max(0, hero.hp - dmg)
+      this.recordAttack(enemy, hero, hpBefore, dmg)
       this.appendLog(`${enemy.name} の こうげき！`)
       this.appendLog(`${hero.name} は ${dmg} の ダメージを うけた！`)
       if (hero.hp === 0) {
@@ -537,6 +609,112 @@ export class BattleEngine {
 
   private firstAlive(list: BattleEntity[]): BattleEntity | null {
     return list.find((e) => e.hp > 0) ?? null
+  }
+
+  /** entity が味方・敵のどちらの何番目か。どちらにもいなければ null */
+  private refOf(entity: BattleEntity): BattleActorRef | null {
+    const pi = this.state.party.indexOf(entity)
+    if (pi !== -1) return { side: 'party', index: pi }
+    const ei = this.state.enemies.indexOf(entity)
+    return ei !== -1 ? { side: 'enemy', index: ei } : null
+  }
+
+  /** 全員の現在 HP を控える（呪文・アイテムの効果の前後差から結果を導く） */
+  private snapshotHp(): Map<BattleEntity, number> {
+    const m = new Map<BattleEntity, number>()
+    for (const e of [...this.state.party, ...this.state.enemies]) m.set(e, e.hp)
+    return m
+  }
+
+  /** 通常攻撃 1 回を記録する (#745)。`damage` は計算上のダメージ（HP が実際に減った量ではない。オーバーキルでもそのまま） */
+  private recordAttack(
+    actor: BattleEntity,
+    target: BattleEntity,
+    hpBefore: number,
+    damage: number
+  ): void {
+    const actorRef = this.refOf(actor)
+    const targetRef = this.refOf(target)
+    if (!actorRef || !targetRef) return
+    this.pushEvent({
+      actor: actorRef,
+      kind: 'attack',
+      hits: [
+        {
+          target: targetRef,
+          kind: 'damage',
+          amount: damage,
+          hpBefore,
+          hpAfter: target.hp,
+        },
+      ],
+    })
+  }
+
+  /**
+   * 呪文・アイテム 1 回を記録する (#745)。効果は DSL・builtin のどちらでも HP を直接書き換えるので、
+   * 効果の前後の HP 差で結果を導く（減った=damage / 増えた=heal）。対象にしたのに HP が変わらなかった者は miss。
+   */
+  private recordEffect(
+    kind: 'spell' | 'item',
+    actor: BattleEntity,
+    label: string,
+    targets: BattleEntity[],
+    before: Map<BattleEntity, number>,
+    amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>
+  ): void {
+    const actorRef = this.refOf(actor)
+    if (!actorRef) return
+    const hits: BattleHit[] = []
+    for (const e of [...this.state.party, ...this.state.enemies]) {
+      const hpBefore = before.get(e) ?? e.hp
+      const ref = this.refOf(e)
+      if (!ref) continue
+      // 計算上の量（オーバーキル・回復の上限切りを含む）が通知されていればそれを数字にする。無ければ HP の前後差
+      const computed = amounts.get(e)
+      if (computed && e.hp !== hpBefore) {
+        const k = e.hp < hpBefore ? 'damage' : 'heal'
+        hits.push({
+          target: ref,
+          kind: k,
+          amount: computed.kind === k ? computed.amount : Math.abs(e.hp - hpBefore),
+          hpBefore,
+          hpAfter: e.hp,
+        })
+      } else if (computed?.kind === 'heal' && computed.amount > 0 && targets.includes(e)) {
+        // HP が変わらなかったが量はある（満タンへの回復）。数字は計算上の量
+        hits.push({
+          target: ref,
+          kind: 'heal',
+          amount: computed.amount,
+          hpBefore,
+          hpAfter: e.hp,
+        })
+      } else if (computed?.kind === 'damage' && computed.amount === 0 && hpBefore > 0) {
+        // 計算上のダメージが 0（防御が上回るなど）は MISS でなく「0」。MISS は回避・無効（耐性 0）のときだけ
+        hits.push({ target: ref, kind: 'damage', amount: 0, hpBefore, hpAfter: e.hp })
+      } else if (e.hp < hpBefore) {
+        hits.push({ target: ref, kind: 'damage', amount: hpBefore - e.hp, hpBefore, hpAfter: e.hp })
+      } else if (e.hp > hpBefore) {
+        hits.push({ target: ref, kind: 'heal', amount: e.hp - hpBefore, hpBefore, hpAfter: e.hp })
+      } else if (targets.includes(e)) {
+        hits.push({ target: ref, kind: 'miss', amount: 0, hpBefore, hpAfter: e.hp })
+      }
+    }
+    this.pushEvent({ actor: actorRef, kind, label, hits })
+  }
+
+  /** 行動が成立しなかったことの知らせ (#745)。FF 式の窓に短い言葉だけを出す。対象はなく、絵は動かない */
+  private recordNotice(actor: BattleEntity | undefined, label: string): void {
+    // 主体が決まらないとき（全員戦闘不能など）は先頭の味方に倒す。フォールバックはここ 1 か所
+    const ref = (actor ? this.refOf(actor) : null) ?? { side: 'party' as const, index: 0 }
+    this.pushEvent({ actor: ref, kind: 'notice', label, hits: [] })
+  }
+
+  private pushEvent(e: Omit<BattleActionEvent, 'seq'>): void {
+    this.state.events.push({ seq: this.state.eventTotal, ...e })
+    this.state.eventTotal++
+    if (this.state.events.length > EVENT_MAX) this.state.events.shift()
   }
 
   private appendLog(line: string): void {

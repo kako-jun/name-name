@@ -5333,6 +5333,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_background_tone: None,
         battle_background_dof: None,
         battle_log_typewriter: None,
+        battle_presentation: None,
         battle_horizon: None,
         battle_perspective: None,
         battle_foreground: None,
@@ -10517,6 +10518,7 @@ fn telop_test_doc_base() -> Document {
         battle_background_tone: None,
         battle_background_dof: None,
         battle_log_typewriter: None,
+        battle_presentation: None,
         battle_horizon: None,
         battle_perspective: None,
         battle_foreground: None,
@@ -11893,4 +11895,68 @@ fn test_battle_command_emit_only_set_fields() {
         "{emitted}"
     );
     assert!(!emitted.contains("battle_command_layout"), "{emitted}");
+}
+
+// ---- #745: battle_presentation / ポーズ（戦闘ポーズ別スプライト）----
+
+#[test]
+fn test_battle_presentation_parses_default_none_and_roundtrips() {
+    let doc = parser::parse(&battle_doc("battle_presentation: ff\n"));
+    assert_eq!(doc.battle_presentation.as_deref(), Some("ff"));
+    assert_eq!(
+        parser::parse(&battle_doc("battle_presentation:\n")).battle_presentation,
+        None
+    );
+    assert_eq!(parser::parse(&battle_doc("")).battle_presentation, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_presentation: \"ff\"\n"),
+        "{emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).battle_presentation,
+        doc.battle_presentation
+    );
+    assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_presentation"));
+}
+
+#[test]
+fn test_party_and_monster_poses_parse_partial_and_roundtrip() {
+    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[パーティ hero]\n名前: ゆうしゃ\nHP: 20\nATK: 5\nDEF: 3\nAGI: 4\nポーズ: idle=a.png, step = b.png, bad, =x.png, hurt=\n[/パーティ]\n\n[モンスター slime]\n名前: スライム\nHP: 5\nATK: 1\nDEF: 1\nAGI: 1\nEXP: 1\nGOLD: 1\nposes: down=s-down.png\n[/モンスター]\n";
+    let doc = parser::parse(src);
+    let events: Vec<&Event> = doc
+        .chapters
+        .iter()
+        .flat_map(|c| c.scenes.iter())
+        .flat_map(|s| s.events.iter())
+        .collect();
+    let party_poses = events
+        .iter()
+        .find_map(|e| match e {
+            Event::PartyMember(p) => Some(p.poses.clone()),
+            _ => None,
+        })
+        .expect("PartyMember");
+    let pp = party_poses.expect("poses");
+    assert_eq!(pp.len(), 2, "{pp:?}");
+    assert_eq!(pp.get("idle").map(String::as_str), Some("a.png"));
+    assert_eq!(pp.get("step").map(String::as_str), Some("b.png"));
+    let mon = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Monster(m) => Some(m.poses.clone()),
+            _ => None,
+        })
+        .expect("Monster")
+        .expect("poses");
+    assert_eq!(mon.get("down").map(String::as_str), Some("s-down.png"));
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("ポーズ: idle=a.png, step=b.png\n"),
+        "{emitted}"
+    );
+    assert!(emitted.contains("ポーズ: down=s-down.png\n"), "{emitted}");
+    // ポーズ未指定なら行自体を出さない
+    let none = emitter::emit(&parser::parse(&party_src("")));
+    assert!(!none.contains("ポーズ"), "{none}");
 }

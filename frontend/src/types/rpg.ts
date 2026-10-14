@@ -202,6 +202,8 @@ export interface RPGProject {
   battleBackgroundDof?: 'on' | 'off'
   /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter:` 由来。未指定は `'off'` */
   battleLogTypewriter?: 'on' | 'off'
+  /** 戦闘の演出方式 (#745)。frontmatter `battle_presentation:` 由来。未指定は `'dq'`（現行の見た目・挙動のまま） */
+  battlePresentation?: 'dq' | 'ff'
   /**
    * 戦闘画面の奥行き (#747)。frontmatter `battle_horizon:`（地平線の高さ・画面比）/ `battle_perspective:`（遠近の強さ）由来。
    * `battle_perspective` が 0 超のときだけ値を持つ。未指定は undefined（平面・現行どおり）

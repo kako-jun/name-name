@@ -48,6 +48,7 @@ pub fn parse(input: &str) -> Document {
     let mut battle_background_tone: Option<String> = None;
     let mut battle_background_dof: Option<String> = None;
     let mut battle_log_typewriter: Option<String> = None;
+    let mut battle_presentation: Option<String> = None;
     let mut battle_horizon: Option<String> = None;
     let mut battle_perspective: Option<String> = None;
     let mut battle_foreground: Option<String> = None;
@@ -275,6 +276,13 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_log_typewriter = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_presentation:") {
+                // RPG 戦闘の演出方式 (#745)。`dq`（既定）/ `ff`。値は parser ではバリデーションせず生文字列で透過し、
+                // runtime 側で未知値・空文字は dq にフォールバックする。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_presentation = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_horizon:") {
                 // RPG 戦闘画面の地平線の高さ (#747)。画面高さに対する比。値は生文字列で透過する。
@@ -1148,6 +1156,7 @@ pub fn parse(input: &str) -> Document {
         battle_background_tone,
         battle_background_dof,
         battle_log_typewriter,
+        battle_presentation,
         battle_horizon,
         battle_perspective,
         battle_foreground,

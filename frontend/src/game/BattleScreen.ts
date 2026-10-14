@@ -56,6 +56,31 @@ import {
 } from './battleCommands'
 import type { BattleEntity } from './spellDsl'
 import {
+  MOTION_EXTENT_PAD,
+  MOTION_SCREEN_MARGIN,
+  clampMotionDx,
+  POPUP_COLORS,
+  eventTimeline,
+  SINK_DISTANCE,
+  advancePlayback,
+  emptyPlayback,
+  enqueueEvents,
+  isPlaybackBusy,
+  messageWindowText,
+  popupFontSize,
+  popupText,
+  resolvePose,
+  restingSample,
+  sampleActor,
+  sampleDamagePopup,
+  sampleTarget,
+  type BattlePose,
+  type BattlePresentation,
+  type PlaybackState,
+  type TargetSample,
+} from './battleMotion'
+import type { BattleHit } from './battleEngine'
+import {
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
   computeContainFitRect,
@@ -67,11 +92,15 @@ import {
   SIDE_LABEL_STROKE_WIDTH,
   fitHpLabel,
   fitLabel,
-  fitNameWithSuffix,
+  computeStatusColumns,
+  SIDE_STATUS_FONT_SIZE,
+  SIDE_STATUS_GAUGE_HEIGHT,
+  type StatusColumns,
   type BattleDepth,
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
+import { getSharedDofMask, quantizeDofRamp } from './dofMaskCache'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import { computeSlitY } from './acrylicBase'
 import { computeShadowTransform } from './acrylicShadow'
@@ -131,10 +160,7 @@ const ACTOR_COLOR = 0xffee66
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
-/**
- * ATB ゲージ（各ステータス行の下端に行幅いっぱいで引く細い横棒）の高さ (#205)。FF らしい仕上げは #745。
- * 文字の横には置かない（文字幅を削らない・文字と重ならない）
- */
+/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
 /** 番の味方の印 ▶ の文字サイズと、行の左端からの余白（左余白 SIDE_STATUS_TEXT_PADDING の中に収まる） */
 const ATB_MARKER_FONT_SIZE = 10
@@ -154,9 +180,6 @@ const FALLBACK_PARTY_COLOR = 0x5588cc
 /** acrylic の台座の色 (#737)。黒に近い円形台座 */
 const ACRYLIC_BASE_COLOR = 0x111111
 const DEAD_ALPHA = 0.3
-const SIDE_STATUS_FONT_SIZE = 14
-/** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
-const SIDE_STATUS_TEXT_PADDING = 12
 /** 敵ラベルの縁取り。写真背景（dim なし）でも読めるよう、背景指定の有無にかかわらず付ける (#736) */
 export const SIDE_LABEL_STROKE_COLOR = 0x000000
 
@@ -269,6 +292,12 @@ export interface BattleScreenOptions {
    */
   logTypewriter?: BattleLogTypewriterMode
   /**
+   * 演出方式 (#745)。`dq`（既定）= 現行の見た目・挙動、`ff` = 攻撃モーション・被ダメージののけぞり・倒れ・ダメージ数字の
+   * ポップアップ・技名だけの中央寄せメッセージ窓。`ff` は `side` のときだけ効く（`front` は敵・味方の絵を動かさないので無視）。
+   * `ff` では `logTypewriter` は使わない。
+   */
+  presentation?: BattlePresentation
+  /**
    * 奥行き (#747)。指定して perspective が 0 超なら、`side` で行ごとの縮尺・床の高さを付け、奥→手前の順に描く。
    * 未指定・null は平面（現行どおり）。`front` は敵・味方の画像を描かないので影響しない。
    */
@@ -328,6 +357,43 @@ interface EntityView {
   acrylicBaseLayout: AcrylicBaseTexture['layout'] | null
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
+  /** 演出 (#745): 最後に placeEntityView が置いた枠。ポーズ差し替え時の再配置に使う */
+  slotRef: SpriteSlot | null
+  /** 演出 (#745): placeEntityView が置いた container の基準位置（モーションのずれを足す前）と、枠の一辺（距離の単位） */
+  baseX: number
+  baseY: number
+  unit: number
+  /** 演出 (#745): ダメージ数字の出る位置（画面絶対。枠の中央・上半身の高さ） */
+  anchorX: number
+  anchorY: number
+  /** 演出 (#745): 敵ラベルの基準位置（中央 x と上端 y。モーションのずれを足す前） */
+  labelBaseX: number
+  labelBaseY: number
+  /** 演出 (#745): 地面の影の基準位置（モーションのずれを足す前。shadowLayer 基準＝画面絶対） */
+  shadowBaseX: number
+  shadowBaseY: number
+  /** 演出 (#745): 1 枚絵（entity.sprite）の見た目と、いま出している見た目、ポーズ別に読み込めた見た目 */
+  baseVisual: PoseVisual | null
+  shownVisual: PoseVisual | null
+  poseVisuals: Partial<Record<BattlePose, PoseVisual>>
+}
+
+/** ポーズ 1 つ分の見た目: スプライトのテクスチャと、acrylic のときの板・影 (#745) */
+interface PoseVisual {
+  texture: Texture
+  plate: AcrylicPlate | null
+}
+
+/** 浮いているダメージ数字 1 つ (#745)。画面が持つ演出の途中状態（GameState には持たない） */
+interface DamagePopup {
+  text: PixiText
+  elapsed: number
+  /** 対象。画面の作り直し（redraw）で枠が動いても追従するよう、位置は毎回この枠から読む */
+  side: 'party' | 'enemy'
+  index: number
+  x: number
+  y: number
+  unit: number
 }
 
 export class BattleScreen extends Container {
@@ -357,6 +423,19 @@ export class BattleScreen extends Container {
   private logTypewriter: BattleLogTypewriterMode
   private logTracker: BattleLogTracker = makeBattleLogTracker()
   private logTicker: Ticker | null = null
+  /** 演出方式 (#745)。`ff` は `side` のときだけ。ff の間の再生状態・浮いている数字・窓の言葉は画面が持つ（GameState には持たない） */
+  private presentation: BattlePresentation
+  private playback: PlaybackState = emptyPlayback()
+  /** 取り込み済みの行動の累計数（`BattleState.eventTotal`）。作り直した画面は過去の行動を再生しない */
+  private seenEventTotal = 0
+  /** 再生が追いつくまで画面に出す HP（key=`party:0` 等）。命中の瞬間に確定値へ進める。再生が空になれば捨てる */
+  private hpOverride = new Map<string, number>()
+  private popups: DamagePopup[] = []
+  /** ダメージ数字の層（敵ラベル層の手前・パネルの奥） */
+  private popupLayer: Container | null = null
+  /** FF 式メッセージ窓の言葉と、窓（ログ帯）の矩形。layoutSide が更新 */
+  private messageText: PixiText | null = null
+  private messageRect = { x: 0, y: 0, w: 0, h: 0 }
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
@@ -368,7 +447,15 @@ export class BattleScreen extends Container {
   private foregroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
   private partyViews: EntityView[] = []
+  /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
+  /** HP・MP は「見出し | 現在値 | /最大値」の 3 つの Text。`*Texts` が現在値（右寄せ）、`*Labels` が見出し（左寄せ）、`*Maxes` が「/最大値」（「/」の x で左寄せ）。見出しと「/」の x が全員そろう */
+  private statusHpTexts: PixiText[] = []
+  private statusMpTexts: PixiText[] = []
+  private statusHpLabels: PixiText[] = []
+  private statusMpLabels: PixiText[] = []
+  private statusHpMaxes: PixiText[] = []
+  private statusMpMaxes: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
   /** 番の味方の印 ▶ (#205)。名前の文字列には混ぜず、行の左余白に別の Text で置く。bars と同じ index */
@@ -380,10 +467,8 @@ export class BattleScreen extends Container {
   /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
   private atbSignature = ''
   private visibleLogLines = LOG_VISIBLE_LINES
-  /** side: status が狭く MP 表記を省いているか（layoutSide が更新） */
-  private sideCompact = false
-  /** side: status テキストに使える幅(px)（layoutSide が更新） */
-  private sideStatusTextWidth = Infinity
+  /** side: status 欄の列（layoutSide が更新）。null は未計算 */
+  private sideStatusColumns: StatusColumns | null = null
   /** side: 敵ラベルに使える幅(px)（layoutSide が更新。enemyViews と同じ index） */
   private sideLabelWidths: number[] = []
 
@@ -427,7 +512,9 @@ export class BattleScreen extends Container {
     this.windowStyle = opts.windowStyle === 'ff-blue' ? 'ff-blue' : 'dark'
     this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
-    this.logTypewriter = opts.logTypewriter === 'on' ? 'on' : 'off'
+    this.presentation = opts.presentation === 'ff' && this.layoutMode === 'side' ? 'ff' : 'dq'
+    // FF 式の窓は一度に全文を出す。1 文字ずつ表示 (#755) は DQ 式のログ用で、ff では使わない
+    this.logTypewriter = opts.logTypewriter === 'on' && this.presentation === 'dq' ? 'on' : 'off'
     this.commandLayout =
       opts.commandLayout === 'cross' && this.layoutMode === 'side' ? 'cross' : 'grid'
     this.acrylicParams =
@@ -459,6 +546,8 @@ export class BattleScreen extends Container {
     if (this.layoutMode === 'front') this.buildLogLines()
     else this.buildSideViews()
     this.buildAtbBars()
+    // 作り直した画面は過去の行動を再生しない（確定した状態から始める）
+    this.seenEventTotal = this.engine.getState().eventTotal
     if (opts.background) void this.loadBackground(opts.background)
     if (opts.foreground && this.layoutMode === 'side') void this.loadForeground(opts.foreground)
     this.layout()
@@ -510,6 +599,8 @@ export class BattleScreen extends Container {
     this.backgroundToneFilter = null
     this.disposeBackgroundDof()
     this.disposeLogTicker()
+    this.popups = []
+    this.playback = emptyPlayback()
     super.destroy(options)
   }
 
@@ -611,7 +702,7 @@ export class BattleScreen extends Container {
       geo.destroy()
       lv.mask.destroy()
       lv.blur.destroy()
-      lv.maskTexture?.destroy(true)
+      // マスクのテクスチャは共有キャッシュ（dofMaskCache.ts）のものなので壊さない
     }
     this.dofLevels = []
   }
@@ -638,14 +729,12 @@ export class BattleScreen extends Container {
       } else {
         lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
       }
-      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
+      if (quantizeDofRamp(g.rampFraction) !== quantizeDofRamp(lv.maskRamp)) {
         const tex = this.createDofMaskTexture(g.rampFraction)
         if (tex) {
-          const old = lv.maskTexture
           lv.maskTexture = tex
           lv.maskRamp = g.rampFraction
           lv.mask.texture = tex
-          old?.destroy(true)
         }
       }
       lv.mask.position.set(0, g.startY)
@@ -656,6 +745,10 @@ export class BattleScreen extends Container {
 
   /** 縦にアルファが 0 → 1 に立ち上がる 1 x N の canvas テクスチャを作る。canvas が使えない環境では null（ぼかし無しで続行） */
   private createDofMaskTexture(rampFraction: number): Texture | null {
+    return getSharedDofMask(rampFraction, (ramp) => this.buildDofMaskTexture(ramp))
+  }
+
+  private buildDofMaskTexture(rampFraction: number): Texture | null {
     try {
       const canvas = document.createElement('canvas')
       canvas.width = 1
@@ -696,6 +789,12 @@ export class BattleScreen extends Container {
     const labelLayer = new Container()
     this.labelLayer = labelLayer
     this.addChildAt(labelLayer, this.getChildIndex(stage) + 1)
+    if (this.presentation === 'ff') {
+      // ダメージ数字は敵ラベルの手前・パネルの奥 (#745)
+      const popupLayer = new Container()
+      this.popupLayer = popupLayer
+      this.addChildAt(popupLayer, this.getChildIndex(labelLayer) + 1)
+    }
     for (const e of s.enemies) {
       const view = this.createEntityView(e, FALLBACK_ENEMY_COLOR, true)
       stage.addChild(view.container)
@@ -719,6 +818,39 @@ export class BattleScreen extends Container {
       })
       this.statusTexts.push(t)
       this.addChild(t)
+      const parts: Array<[PixiText[], boolean]> = [
+        [this.statusHpLabels, false],
+        [this.statusHpTexts, true],
+        [this.statusHpMaxes, false],
+        [this.statusMpLabels, false],
+        [this.statusMpTexts, true],
+        [this.statusMpMaxes, false],
+      ]
+      for (const [list, alignRight] of parts) {
+        const n = new PixiText({
+          text: '',
+          style: this.themedStyle(
+            new TextStyle({
+              fontFamily: "'Noto Sans JP', sans-serif",
+              fontSize: SIDE_STATUS_FONT_SIZE,
+              fill: TEXT_COLOR,
+            })
+          ),
+        })
+        // 数値は列の基準 x に右寄せ（桁数が違っても右端がそろう）。見出しと「/最大値」は左寄せ
+        n.anchor.set(alignRight ? 1 : 0, 0)
+        list.push(n)
+        this.addChild(n)
+      }
+    }
+    if (this.presentation === 'ff') {
+      // FF 式メッセージ窓の言葉 (#745)。ログ帯の上に中央寄せで置く。ログ行は ff では使わない
+      const m = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_LOG) })
+      m.anchor.set(0.5, 0.5)
+      m.visible = false
+      this.messageText = m
+      this.addChild(m)
+      this.logPanel.visible = false
     }
   }
 
@@ -727,8 +859,11 @@ export class BattleScreen extends Container {
     const fallback = new Graphics()
     container.addChild(fallback)
     // acrylic: 台座・影は画像が読み込めるまで出さない（色四角にはかけない）
+    // ff では、1 枚絵が無くても idle のポーズがあればそれを基本の絵にする (#745)
+    const spritePath =
+      entity.sprite ?? (this.presentation === 'ff' ? entity.poses?.idle : undefined)
     let acrylicBack: Graphics | null = null
-    if (this.acrylicParams && entity.sprite) {
+    if (this.acrylicParams && spritePath) {
       acrylicBack = new Graphics()
       acrylicBack.visible = false
       container.addChild(acrylicBack)
@@ -766,8 +901,26 @@ export class BattleScreen extends Container {
       acrylicPlatePad: 0,
       acrylicBaseLayout: null,
       label,
+      slotRef: null,
+      baseX: 0,
+      baseY: 0,
+      unit: 0,
+      anchorX: 0,
+      anchorY: 0,
+      labelBaseX: 0,
+      labelBaseY: 0,
+      shadowBaseX: 0,
+      shadowBaseY: 0,
+      baseVisual: null,
+      shownVisual: null,
+      poseVisuals: {},
     }
-    if (entity.sprite) void this.loadEntitySprite(view, entity.sprite)
+    if (spritePath) {
+      void this.loadEntitySprite(view, spritePath).then(() => {
+        if (this.presentation === 'ff' && entity.poses)
+          void this.loadPoseVisuals(view, entity.poses)
+      })
+    }
     return view
   }
 
@@ -781,6 +934,7 @@ export class BattleScreen extends Container {
       if (view.acrylicBack) {
         // アクリル板 (#760): 長辺 192px の作業解像度で 1 回だけ作り（同じ画像は共有）、mipmap で拡縮してスプライトの直下に敷く。作れない環境では板なし
         let idx = 2
+        let basePlate: AcrylicPlate | null = null
         const base = this.makeAcrylicBase()
         if (base) {
           view.acrylicBase = new Sprite(base.texture)
@@ -788,6 +942,7 @@ export class BattleScreen extends Container {
           view.container.addChildAt(view.acrylicBase, idx++)
         }
         const plate = this.getAcrylicPlate(tex)
+        basePlate = plate
         if (plate) {
           const plateSprite = new Sprite(plate.texture)
           view.acrylicPlate = plateSprite
@@ -809,9 +964,12 @@ export class BattleScreen extends Container {
         }
         view.container.addChildAt(sprite, idx)
         view.acrylicBack.visible = true
+        view.baseVisual = { texture: tex, plate: basePlate }
       } else {
         view.container.addChildAt(sprite, 1)
+        view.baseVisual = { texture: tex, plate: null }
       }
+      view.shownVisual = view.baseVisual
       this.layout()
       this.refresh()
     } catch (e) {
@@ -829,6 +987,9 @@ export class BattleScreen extends Container {
 
   /** UI からコマンドが選ばれたとき呼ばれる。エンジン側を進めて refresh */
   private handleCommand(id: CommandId): void {
+    // ff（従来ターン制）: 演出が終わるまで次のコマンドは受けない。ATB は時間が流れ続けるので、演出中でも入力でき、
+    // 入力した行動は演出キューの末尾に積まれる (#745)
+    if (this.isInputBlockedByPresentation()) return
     // タイプ中の 1 タップ目は全文表示だけ（コマンドは実行しない）(#755)。
     // ATB (#205) ではコマンドのタップを skip に使わない（時間が流れていて空振りさせない）。全文表示はログ帯のタップだけ
     if (!this.engine.getState().atb && this.skipLogTyping()) return
@@ -854,6 +1015,8 @@ export class BattleScreen extends Container {
   /** 戦闘が終わっていれば onClose を 1 回だけ呼ぶ */
   private closeIfOver(): void {
     if (this.closedFlag || !this.engine.isOver()) return
+    // ff: 最後の一撃の演出（のけぞり・倒れ・ダメージ数字）を見せ切ってから閉じる (#745)
+    if (this.isPresenting() || this.popups.length > 0) return
     this.closedFlag = true
     const outcome = this.engine.getState().phase
     // outcome は victory / defeat / escaped のいずれか（isOver がガード）
@@ -867,17 +1030,24 @@ export class BattleScreen extends Container {
    */
   tick(deltaMS: number): void {
     if (this.destroyedFlag || this.closedFlag) return
-    if (!this.engine.getState().atb) return
-    this.engine.tick(deltaMS)
-    const sig = this.computeAtbSignature()
-    if (sig !== this.atbSignature) this.refresh()
-    else this.drawAtbBars()
+    const ff = this.presentation === 'ff'
+    const atb = !!this.engine.getState().atb
+    if (!ff && !atb) return
+    // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
+    if (ff) this.advancePresentation(deltaMS)
+    if (atb) {
+      // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される
+      this.engine.tick(deltaMS)
+      const sig = this.computeAtbSignature()
+      if (sig !== this.atbSignature) this.refresh()
+      else this.drawAtbBars()
+    }
     this.closeIfOver()
   }
 
   private computeAtbSignature(): string {
     const s = this.engine.getState()
-    return `${s.logTotal}|${s.phase}|${s.atb?.queue.join(',') ?? ''}`
+    return `${s.logTotal}|${s.eventTotal}|${s.phase}|${s.atb?.queue.join(',') ?? ''}`
   }
 
   /** ATB ゲージ棒を作る（ATB のときだけ）。side は味方ごと、front は先頭 1 人ぶん */
@@ -946,6 +1116,8 @@ export class BattleScreen extends Container {
 
   /** そのコマンドを今選べるか。ATB (#205) ではにげるはゲージが溜まっていなくてもいつでも選べる */
   private isCommandEnabled(id: CommandId): boolean {
+    // ff（従来ターン制）: 演出中は選べない (#745)
+    if (this.isInputBlockedByPresentation()) return false
     const s = this.engine.getState()
     if (id === 'escape' && s.atb && (s.phase === 'party-input' || s.phase === 'atb-running')) {
       return true
@@ -1154,17 +1326,9 @@ export class BattleScreen extends Container {
       commandLayout: this.commandLayout,
       partyRows: s.party.map((p) => p.row),
       // 立ち絵の縦横比（未読み込み・色四角は undefined → 既定 0.5）。読み込み完了で layout し直される
-      partyAspects: this.partyViews.map((v) =>
-        v.sprite && v.sprite.texture.height > 0
-          ? v.sprite.texture.width / v.sprite.texture.height
-          : undefined
-      ),
+      partyAspects: this.partyViews.map((v) => this.layoutAspect(v)),
       // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
-      enemyAspects: this.enemyViews.map((v) =>
-        v.sprite && v.sprite.texture.height > 0
-          ? v.sprite.texture.width / v.sprite.texture.height
-          : undefined
-      ),
+      enemyAspects: this.enemyViews.map((v) => this.layoutAspect(v)),
       depth: this.opts.depth,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
@@ -1177,7 +1341,10 @@ export class BattleScreen extends Container {
       const text = this.logLines[i]
       text.x = L.log.x + 12
       text.y = L.log.y + 8 + i * SIDE_LOG_LINE_HEIGHT
+      // ff（FF 式）ではログ行を使わない。窓には言葉だけを中央寄せで出す (#745)
+      if (this.presentation === 'ff') text.visible = false
     }
+    this.messageRect = { x: L.log.x, y: L.log.y, w: L.log.w, h: L.log.h }
 
     // 敵・味方スプライト
     for (let i = 0; i < this.enemyViews.length; i++) {
@@ -1227,19 +1394,45 @@ export class BattleScreen extends Container {
 
     // 下パネル: 味方 HP/MP（右）
     panel(L.status, this.statsPanel)
+    // 列（名前 / HP / MP / ゲージ）は味方全員で共通。列の左端（数値は右端）がそろう (#745)
+    const party = this.engine.getState().party
+    const cols = computeStatusColumns({
+      x: L.status.x,
+      width: L.status.w,
+      maxHp: party.reduce((m, p) => Math.max(m, p.maxHp), 0),
+      maxMp: party.reduce((m, p) => Math.max(m, p.maxMp), 0),
+      compact: L.statusCompact,
+      atb: this.atbBars.length > 0,
+    })
+    this.sideStatusColumns = cols
     for (let i = 0; i < this.statusTexts.length; i++) {
       const row = L.statusRows[i]
-      this.statusTexts[i].x = row.x + SIDE_STATUS_TEXT_PADDING
-      this.statusTexts[i].y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
+      const y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
+      this.statusTexts[i].x = cols.name.x
+      this.statusTexts[i].y = y
+      const place = (
+        col: typeof cols.hp | null,
+        label: PixiText,
+        cur: PixiText,
+        max: PixiText
+      ): void => {
+        label.x = col?.x ?? 0
+        cur.x = col?.curRight ?? 0
+        // 「/最大値」は「/」を現在値の右端に接して左寄せ（実フォントの桁幅の誤差で隙間があかない）
+        max.x = col?.curRight ?? 0
+        label.y = cur.y = max.y = y
+      }
+      place(cols.hp, this.statusHpLabels[i], this.statusHpTexts[i], this.statusHpMaxes[i])
+      place(cols.mp, this.statusMpLabels[i], this.statusMpTexts[i], this.statusMpMaxes[i])
     }
-    this.sideCompact = L.statusCompact
-    if (this.atbBars.length > 0) {
-      // ATB ゲージ棒は各行の下端に行幅いっぱいで引く。文字幅は ATB off と同じ（削らない）
+    if (this.atbBars.length > 0 && cols.gauge) {
+      // ATB ゲージは行の右端に短く置く（数文字ぶんの幅）。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
+      const g = cols.gauge
       this.atbBarRects = L.statusRows.map((row) => ({
-        x: row.x + SIDE_STATUS_TEXT_PADDING,
-        y: row.y + row.h - ATB_BAR_HEIGHT,
-        w: Math.max(0, row.w - SIDE_STATUS_TEXT_PADDING * 2),
-        h: ATB_BAR_HEIGHT,
+        x: g.x,
+        y: row.y + (row.h - SIDE_STATUS_GAUGE_HEIGHT) / 2,
+        w: g.w,
+        h: SIDE_STATUS_GAUGE_HEIGHT,
       }))
       L.statusRows.forEach((row, i) => {
         const m = this.atbMarkers[i]
@@ -1249,21 +1442,58 @@ export class BattleScreen extends Container {
       })
       this.drawAtbBars()
     }
-    this.sideStatusTextWidth = Math.max(0, L.status.w - SIDE_STATUS_TEXT_PADDING * 2)
     this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
+    if (this.presentation === 'ff') {
+      this.updateMessageWindow()
+      this.applyMotionFrame()
+    }
+  }
+
+  /**
+   * 枠の配置に使う立ち絵の縦横比。ポーズ差し替えで texture が変わっても枠の配置が動かないよう、
+   * 1 枚絵（基本の絵）の比で固定する (#745)。未読み込み・色四角は undefined
+   */
+  private layoutAspect(v: EntityView): number | undefined {
+    const tex = v.baseVisual?.texture ?? v.sprite?.texture
+    return tex && tex.height > 0 ? tex.width / tex.height : undefined
+  }
+
+  /**
+   * ポーズの絵の置き場所 (#745)。基本の絵を枠に収めた矩形 `baseRect` の縮尺（基本の絵 1px あたり何px か）を、
+   * どのポーズでも同じに使い、足元（下端中央）を基本の絵に揃える。幅が違うポーズ（横広の slash など）も
+   * 枠に収め直さず、はみ出しは許容する（クリップしない）。基本の絵そのものなら `baseRect` と同じ矩形を返す。
+   */
+  private poseRectOnBase(
+    baseRect: { x: number; y: number; width: number; height: number },
+    baseTex: Texture,
+    tex: Texture
+  ): { x: number; y: number; width: number; height: number } {
+    if (tex === baseTex || baseTex.width <= 0 || baseTex.height <= 0) return baseRect
+    const k = baseRect.width / baseTex.width
+    const width = tex.width * k
+    const height = tex.height * k
+    return {
+      x: baseRect.x + baseRect.width / 2 - width / 2,
+      y: baseRect.y + baseRect.height - height,
+      width,
+      height,
+    }
   }
 
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
+    view.slotRef = slot
     const size = slot.size
     // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
     // 横長の敵 (#760) は枠の幅が高さより大きいので、正方形はその幅（長辺）にして下端を枠の下端に揃える
     const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
     const box = acrylic ? Math.max(size, slot.width) : size
-    view.container.position.set(
-      acrylic ? slot.x - (box - slot.width) / 2 : slot.x,
-      acrylic ? slot.y + size - box : slot.y
-    )
+    view.baseX = acrylic ? slot.x - (box - slot.width) / 2 : slot.x
+    view.baseY = acrylic ? slot.y + size - box : slot.y
+    view.unit = size
+    view.anchorX = slot.x + slot.width / 2
+    view.anchorY = slot.y + size * 0.35
+    view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
     const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
     const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
@@ -1272,15 +1502,13 @@ export class BattleScreen extends Container {
       if (this.acrylicParams && view.acrylicBack) {
         this.placeAcrylic(view, box)
       } else {
-        const fit = computeContainFitRect(
-          view.sprite.texture.width,
-          view.sprite.texture.height,
-          slot.width,
-          size
-        )
-        view.sprite.position.set(fit.x, fit.y)
-        view.sprite.width = fit.width
-        view.sprite.height = fit.height
+        // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
+        const baseTex = view.baseVisual?.texture ?? view.sprite.texture
+        const fit = computeContainFitRect(baseTex.width, baseTex.height, slot.width, size)
+        const r = this.poseRectOnBase(fit, baseTex, view.sprite.texture)
+        view.sprite.position.set(r.x, r.y)
+        view.sprite.width = r.width
+        view.sprite.height = r.height
       }
       view.fallback.visible = false
     }
@@ -1288,8 +1516,10 @@ export class BattleScreen extends Container {
       // ラベル位置は純粋関数が返す矩形（画面絶対）。縮尺・位置の追従は slot に含まれる。置けない枠では隠す
       view.label.visible = !!slot.label
       if (slot.label) {
-        view.label.x = slot.label.x + slot.label.w / 2
-        view.label.y = slot.label.y
+        view.labelBaseX = slot.label.x + slot.label.w / 2
+        view.labelBaseY = slot.label.y
+        view.label.x = view.labelBaseX
+        view.label.y = view.labelBaseY
       }
     }
   }
@@ -1310,7 +1540,10 @@ export class BattleScreen extends Container {
     const sprite = view.sprite
     const back = view.acrylicBack
     if (!params || !sprite || !back) return
-    const g = computeAcrylicGeometry(sprite.texture.width, sprite.texture.height, size, params)
+    // 幾何（台座・影・縮尺）は基本の絵で決め、ポーズの絵は同じ縮尺で足元を揃えて置く (#745)
+    const baseTex = view.baseVisual?.texture ?? sprite.texture
+    const g0 = computeAcrylicGeometry(baseTex.width, baseTex.height, size, params)
+    const g = { ...g0, sprite: this.poseRectOnBase(g0.sprite, baseTex, sprite.texture) }
     sprite.position.set(g.sprite.x, g.sprite.y)
     sprite.width = g.sprite.width
     sprite.height = g.sprite.height
@@ -1371,10 +1604,10 @@ export class BattleScreen extends Container {
       const t = computeShadowTransform(params, k * view.acrylicPlateScale)
       shadow.scale.set(t.scaleX, t.scaleY)
       shadow.skew.x = t.skewX
-      shadow.position.set(
-        view.container.x + g.sprite.x + g.sprite.width / 2,
-        view.container.y + g.sprite.y + g.sprite.height + g.liftPx
-      )
+      // 基準位置はモーションのずれを足す前の値（container.x は動いていることがある）。ずれは applyMotionFrame が足す (#745)
+      view.shadowBaseX = view.baseX + g.sprite.x + g.sprite.width / 2
+      view.shadowBaseY = view.baseY + g.sprite.y + g.sprite.height + g.liftPx
+      shadow.position.set(view.shadowBaseX, view.shadowBaseY)
       shadow.visible = k > 0 && params.castAlpha > 0
     }
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
@@ -1384,14 +1617,20 @@ export class BattleScreen extends Container {
   /** サイドビューのテキスト・生死表示を更新する (#736) */
   private refreshSide(): void {
     const s = this.engine.getState()
+    const ff = this.presentation === 'ff'
     for (let i = 0; i < this.enemyViews.length; i++) {
-      const e = s.enemies[i]
+      const e0 = s.enemies[i]
       const view = this.enemyViews[i]
-      if (!e) continue
-      view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
-      if (view.acrylicShadow) view.acrylicShadow.alpha = view.container.alpha
+      if (!e0) continue
+      // ff では、演出が命中の瞬間まで進むまで古い HP を見せる (#745)。生死の見た目（alpha）は applyMotionFrame が決める
+      const e = ff ? { ...e0, hp: this.shownHp('enemy', i, e0.hp) } : e0
+      if (!ff) {
+        view.container.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
+        if (view.acrylicShadow) view.acrylicShadow.alpha = view.container.alpha
+      }
       if (view.label) {
-        view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
+        // ff では applyMotionFrame が本体と同じ薄れを当てる
+        if (!ff) view.label.alpha = e.hp > 0 ? 1 : DEAD_ALPHA
         // 純粋関数が返すラベル幅（1 列は領域幅まで・上限は一辺の SIDE_LABEL_MAX_WIDTH_RATIO 倍、
         // 多列は列ピッチ=スプライト一辺）を越える名前は省略して隣と重ねない
         // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く
@@ -1403,24 +1642,63 @@ export class BattleScreen extends Container {
     }
     for (let i = 0; i < this.partyViews.length; i++) {
       const p = s.party[i]
-      if (!p) continue
+      if (!p || ff) continue
       this.partyViews[i].container.alpha = p.hp > 0 ? 1 : DEAD_ALPHA
       const sh = this.partyViews[i].acrylicShadow
       if (sh) sh.alpha = this.partyViews[i].container.alpha
     }
     for (let i = 0; i < this.statusTexts.length; i++) {
-      const p = s.party[i]
-      if (!p) continue
+      const p0 = s.party[i]
+      if (!p0) continue
+      const p = ff ? { ...p0, hp: this.shownHp('party', i, p0.hp) } : p0
       const t = this.statusTexts[i]
-      // 名前だけ省略して HP/MP は必ず見せる（パネル端を越えない）
-      const suffix = this.sideCompact
-        ? `  HP ${p.hp}/${p.maxHp}`
-        : `  HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`
+      const cols = this.sideStatusColumns
+      const hpT = this.statusHpTexts[i]
+      const mpT = this.statusMpTexts[i]
       // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない） (#205)
       const isActor = p.hp > 0 && i === this.actorIndex()
       if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
-      t.text = fitNameWithSuffix(p.name, suffix, this.sideStatusTextWidth, SIDE_STATUS_FONT_SIZE)
-      t.style.fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
+      // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
+      this.fitStatusName(t, p.name, cols?.name.w ?? Infinity)
+      const lbl = cols?.showLabels ?? true
+      const showMaxHp = cols?.showMaxHp ?? true
+      this.statusHpLabels[i].text = lbl ? 'HP' : ''
+      hpT.text = `${p.hp}`
+      this.statusHpMaxes[i].text = showMaxHp ? `/${p.maxHp}` : ''
+      // MP 列がない（狭い画面）ときは 3 つとも空にして隠す
+      const hasMp = !!cols?.mp
+      this.statusMpLabels[i].text = hasMp && lbl ? 'MP' : ''
+      mpT.text = hasMp ? `${p.mp}` : ''
+      this.statusMpMaxes[i].text = hasMp ? `/${p.maxMp}` : ''
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.visible = hasMp
+      const fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
+      for (const n of [this.statusHpLabels[i], hpT, this.statusHpMaxes[i]]) n.style.fill = fill
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.style.fill = fill
+      t.style.fill = fill
+    }
+  }
+
+  /**
+   * 名前を列幅に収める。まず概算幅で詰め、そのあと実測の幅（Text.width）が列幅を超えるなら
+   * 末尾をさらに詰め直す（英字など概算と実幅がずれる名前が HP 列に食い込まない）。
+   * 実測できない環境（jsdom など）や NaN のときは概算のまま。
+   */
+  private fitStatusName(t: PixiText, name: string, maxWidth: number): void {
+    let budget = maxWidth
+    t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
+    if (!Number.isFinite(maxWidth)) return
+    // ff-blue の文字影（右下へずれる）ぶんも列に食い込ませない
+    const shadow = this.windowStyle === 'ff-blue' ? FF_BLUE_TEXT_SHADOW.distance : 0
+    for (let n = 0; n < 40 && budget > 0; n++) {
+      let w = 0
+      try {
+        w = t.width
+      } catch {
+        return
+      }
+      if (!Number.isFinite(w) || w <= maxWidth - shadow + 0.5) return
+      budget = Math.max(0, budget - Math.max(1, w - maxWidth + shadow))
+      t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
     }
   }
 
@@ -1468,6 +1746,7 @@ export class BattleScreen extends Container {
   /** エンジン状態を読み取り、テキストを更新する */
   private refresh(): void {
     const s = this.engine.getState()
+    if (this.presentation === 'ff') this.syncPresentation()
     if (this.layoutMode === 'side') this.refreshSide()
     const aliveEnemy: BattleEntity | undefined = s.enemies.find((e) => e.hp > 0) ?? s.enemies[0]
     if (aliveEnemy) {
@@ -1483,7 +1762,9 @@ export class BattleScreen extends Container {
       this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
     // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は layoutSide が決めた行数）
-    if (this.logTypewriter === 'on') {
+    if (this.presentation === 'ff') {
+      // FF 式: ログ行は使わない（ダメージや「〇〇のこうげき！」を文で出さない）。窓は updateMessageWindow が決める
+    } else if (this.logTypewriter === 'on') {
       this.logTracker = syncBattleLog(this.logTracker, s.log, s.logTotal)
       this.updateLogTexts()
       this.syncLogTicker()
@@ -1503,5 +1784,267 @@ export class BattleScreen extends Container {
     }
     this.atbSignature = this.computeAtbSignature()
     this.drawAtbBars()
+    if (this.presentation === 'ff') {
+      this.updateMessageWindow()
+      this.applyMotionFrame()
+    }
+  }
+
+  // ===== 演出 (#745) =====
+
+  private entityKey(side: 'party' | 'enemy', index: number): string {
+    return `${side}:${index}`
+  }
+
+  /** 演出が追いつくまで画面に出す HP。命中の瞬間より前は古い値（再生中でなければ確定値） */
+  private shownHp(side: 'party' | 'enemy', index: number, current: number): number {
+    return this.hpOverride.get(this.entityKey(side, index)) ?? current
+  }
+
+  /** ff の従来ターン制だけ、演出が終わるまで入力を塞ぐ。ATB は演出中も入力できる */
+  private isInputBlockedByPresentation(): boolean {
+    return this.isPresenting() && !this.engine.getState().atb
+  }
+
+  /** 再生すべきものが残っているか。従来ターン制では残っている間、次の行動・コマンド入力を待たせる（ATB は待たせない） */
+  private isPresenting(): boolean {
+    return this.presentation === 'ff' && isPlaybackBusy(this.playback)
+  }
+
+  /** エンジンが新しく積んだ行動を再生キューに取り込む。対象の HP は命中の瞬間まで古い値を見せる */
+  private syncPresentation(): void {
+    const s = this.engine.getState()
+    const added = s.eventTotal - this.seenEventTotal
+    if (added <= 0) return
+    this.seenEventTotal = s.eventTotal
+    const fresh = s.events.slice(Math.max(0, s.events.length - added))
+    for (const ev of fresh) {
+      for (const hit of ev.hits) {
+        const key = this.entityKey(hit.target.side, hit.target.index)
+        if (!this.hpOverride.has(key)) this.hpOverride.set(key, hit.hpBefore)
+      }
+    }
+    this.playback = enqueueEvents(this.playback, fresh)
+  }
+
+  /**
+   * 演出を dt ms 進める。命中の瞬間に HP 表示を確定値へ進め、ダメージ数字を出す。
+   * 再生が空になったら古い HP の控えを捨てる（以降はエンジンの確定値）。
+   */
+  private advancePresentation(dt: number): void {
+    const wasBusy = isPlaybackBusy(this.playback)
+    if (!wasBusy && this.popups.length === 0) return
+    const r = advancePlayback(this.playback, dt)
+    this.playback = r.state
+    let changed = false
+    for (const fire of r.fires) {
+      for (const hit of fire.event.hits) {
+        this.hpOverride.set(this.entityKey(hit.target.side, hit.target.index), hit.hpAfter)
+        this.spawnPopup(hit, fire.sinceHit)
+      }
+      changed = true
+    }
+    this.advancePopups(dt)
+    if (!isPlaybackBusy(this.playback)) {
+      if (this.hpOverride.size > 0) this.hpOverride.clear()
+      if (wasBusy) changed = true // コマンドの有効・無効、生死の見た目を確定値で整え直す
+    }
+    if (changed) this.refresh()
+    else {
+      this.updateMessageWindow()
+      this.applyMotionFrame()
+    }
+  }
+
+  private viewOf(side: 'party' | 'enemy', index: number): EntityView | undefined {
+    return (side === 'party' ? this.partyViews : this.enemyViews)[index]
+  }
+
+  /** 対象の位置にダメージ数字を出す（ダメージ白・回復緑・ミスは MISS）。命中から sinceHit ms 経っていたぶん進める */
+  private spawnPopup(hit: BattleHit, sinceHit: number): void {
+    const view = this.viewOf(hit.target.side, hit.target.index)
+    if (!view || !this.popupLayer) return
+    const text = new PixiText({
+      text: popupText(hit),
+      style: new TextStyle({
+        fontFamily: "'Noto Sans JP', sans-serif",
+        fontSize: popupFontSize(view.unit),
+        fontWeight: 'bold',
+        fill: POPUP_COLORS[hit.kind],
+        stroke: { color: 0x000000, width: 4 },
+      }),
+    })
+    text.anchor.set(0.5, 1)
+    text.position.set(view.anchorX, view.anchorY)
+    this.popupLayer.addChild(text)
+    this.popups.push({
+      text,
+      elapsed: Math.max(0, sinceHit),
+      side: hit.target.side,
+      index: hit.target.index,
+      x: view.anchorX,
+      y: view.anchorY,
+      unit: view.unit,
+    })
+    this.updatePopup(this.popups[this.popups.length - 1])
+  }
+
+  private updatePopup(p: DamagePopup): boolean {
+    const s = sampleDamagePopup(p.elapsed)
+    // redraw で枠が動いたら新しい座標へ移す
+    const view = this.viewOf(p.side, p.index)
+    if (view && view.unit > 0) {
+      p.x = view.anchorX
+      p.y = view.anchorY
+      p.unit = view.unit
+    }
+    p.text.position.set(p.x, p.y + s.dy * p.unit)
+    p.text.alpha = s.alpha
+    return s.done
+  }
+
+  private advancePopups(dt: number): void {
+    this.popups = this.popups.filter((p) => {
+      p.elapsed += dt
+      const done = this.updatePopup(p)
+      if (done) p.text.destroy({ style: true })
+      return !done
+    })
+  }
+
+  /** FF 式メッセージ窓: 再生中の行動に名前（呪文・アイテム）があるときだけ、窓の中央に一度に全文で出す。通常攻撃は窓ごと出さない */
+  private updateMessageWindow(): void {
+    const m = this.messageText
+    if (!m) return
+    const word = messageWindowText(this.playback.active?.event.label)
+    this.logPanel.visible = word !== null
+    m.visible = word !== null
+    if (word === null) return
+    const r = this.messageRect
+    m.text = fitLabel(word, Math.max(0, r.w - 24), LOG_FONT_SIZE)
+    m.position.set(r.x + r.w / 2, r.y + r.h / 2)
+  }
+
+  /** 1 体の、いまの演出上の姿（前後のずれ・ポーズ・倒れの進み具合）を導く */
+  private sampleEntity(side: 'party' | 'enemy', index: number): TargetSample & { forward: number } {
+    const s = this.engine.getState()
+    const ent = (side === 'party' ? s.party : s.enemies)[index]
+    const hp = this.shownHp(side, index, ent?.hp ?? 0)
+    // 戦闘が終わったとき、勝った側の生き残りは victory ポーズ（味方の勝ち=victory / 敵の勝ち=defeat）
+    // とどめの演出が終わってから（再生中は他の味方が先に勝ちポーズにならない）
+    const won =
+      !isPlaybackBusy(this.playback) &&
+      (side === 'party' ? s.phase === 'victory' : s.phase === 'defeat')
+    let out: TargetSample & { forward: number } = {
+      ...restingSample({ down: hp <= 0, victory: won && hp > 0 }),
+      forward: 0,
+    }
+    const active = this.playback.active
+    if (!active) return out
+    const ev = active.event
+    if (ev.actor.side === side && ev.actor.index === index) {
+      const a = sampleActor(ev.kind, active.elapsed)
+      out = { ...out, forward: a.forward, pose: out.downProgress > 0 ? out.pose : a.pose }
+    }
+    for (const hit of ev.hits) {
+      if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
+      const sinceHit = active.elapsed - eventTimeline(ev).hitAt
+      if (sinceHit < 0) continue
+      const t = sampleTarget('damage', sinceHit, hit.hpAfter <= 0)
+      out = { ...out, recoil: t.recoil, pose: t.pose, downProgress: t.downProgress }
+    }
+    return out
+  }
+
+  /**
+   * 全員のいまの姿を container・影・スプライトの絵に反映する。位置は placeEntityView が置いた基準位置にずれを足す
+   * （アクスタの板・台座は container の子なので一緒に動く。地面の影は別層なので同じ横ずれを足す）。
+   */
+  private applyMotionFrame(): void {
+    if (this.presentation !== 'ff') return
+    const apply = (side: 'party' | 'enemy', views: EntityView[]) => {
+      views.forEach((view, index) => {
+        if (!view.slotRef) return
+        const m = this.sampleEntity(side, index)
+        // ポーズの絵に差し替える。無ければ 1 枚絵のまま（down は無ければ沈み込みで表す）
+        const resolved = resolvePose(m.pose, view.poseVisuals)
+        const vis = resolved?.value ?? view.baseVisual
+        const hasDownVisual = m.pose === 'down' && resolved?.pose === 'down'
+        if (vis && vis !== view.shownVisual) this.showVisual(view, vis)
+        // 前（相手陣営）は味方が左・敵が右。のけぞりは逆向き
+        const dir = side === 'party' ? -1 : 1
+        // 横のずれは、動いた後の枠（板・台座のはみ出し込み）が画面端から余白を引いた範囲に収まるよう止める
+        const slot = view.slotRef
+        const pad = view.unit * MOTION_EXTENT_PAD
+        const rawDx = (m.forward * dir - m.recoil * dir) * view.unit
+        const dx = clampMotionDx(
+          rawDx,
+          slot.x - pad,
+          slot.x + slot.width + pad,
+          MOTION_SCREEN_MARGIN,
+          this.screenWidth - MOTION_SCREEN_MARGIN
+        )
+        const dy = hasDownVisual ? 0 : m.downProgress * SINK_DISTANCE * view.unit
+        view.container.position.set(view.baseX + dx, view.baseY + dy)
+        // 倒れた絵があるなら味方は不透明のまま（敵は他と同じく薄くする）。無ければ沈みながら薄くする
+        const fade = side === 'party' && hasDownVisual ? 0 : m.downProgress
+        view.container.alpha = 1 - (1 - DEAD_ALPHA) * fade
+        // 敵の名前・HP ラベルも本体の横ずれと薄れに追従させる (#745)
+        if (view.label) {
+          view.label.position.set(view.labelBaseX + dx, view.labelBaseY)
+          view.label.alpha = view.container.alpha
+        }
+        const sh = view.acrylicShadow
+        if (sh) {
+          sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
+          sh.alpha = view.container.alpha
+        }
+      })
+    }
+    apply('enemy', this.enemyViews)
+    apply('party', this.partyViews)
+  }
+
+  /** スプライトの絵（と acrylic の板・影）を差し替えて、その絵で置き直す */
+  private showVisual(view: EntityView, vis: PoseVisual): void {
+    if (!view.sprite) return
+    view.shownVisual = vis
+    view.sprite.texture = vis.texture
+    if (view.acrylicPlate && vis.plate) {
+      view.acrylicPlate.texture = vis.plate.texture
+      view.acrylicPlatePad = vis.plate.pad
+      view.acrylicPlateScale = vis.plate.scale ?? 1
+      if (view.acrylicShadow && vis.plate.shadow) {
+        view.acrylicShadow.texture = vis.plate.shadow
+        view.acrylicShadowFoot = vis.plate.foot ?? { x: 0, y: 0 }
+        view.acrylicShadow.pivot.set(view.acrylicShadowFoot.x, view.acrylicShadowFoot.y)
+      }
+    }
+    this.placeEntityView(view, view.slotRef ?? undefined)
+  }
+
+  /** ポーズ別の絵を読み込む。読めなかったポーズは無いものとして扱う（1 枚絵のまま） */
+  private async loadPoseVisuals(
+    view: EntityView,
+    poses: NonNullable<BattleEntity['poses']>
+  ): Promise<void> {
+    // ポーズの画像は並列に読む。読めなかったポーズは無いものとして扱う
+    await Promise.allSettled(
+      (Object.entries(poses) as [BattlePose, string][]).map(async ([key, path]) => {
+        try {
+          const tex = (await Assets.load(
+            resolveRpgImagePath(this.opts.assetBaseUrl, path)
+          )) as Texture
+          applyBattleTextureFilter(tex, !!this.opts.pixelArt)
+          if (this.destroyedFlag || view.container.destroyed) return
+          const plate = view.acrylicBack ? this.getAcrylicPlate(tex) : null
+          view.poseVisuals[key] = { texture: tex, plate }
+        } catch (e) {
+          console.warn(`[BattleScreen] failed to load pose "${key}" "${path}":`, e)
+        }
+      })
+    )
+    if (this.destroyedFlag || view.container.destroyed) return
+    this.applyMotionFrame()
   }
 }

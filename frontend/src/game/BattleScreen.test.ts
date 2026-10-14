@@ -78,6 +78,12 @@ interface Internals {
   enemyViews: EntityViewLike[]
   partyViews: EntityViewLike[]
   statusTexts: Text[]
+  statusHpTexts: Text[]
+  statusMpTexts: Text[]
+  statusHpLabels: Text[]
+  statusMpLabels: Text[]
+  statusHpMaxes: Text[]
+  statusMpMaxes: Text[]
   logLines: Text[]
   backgroundSprite: Sprite | null
   foregroundSprite: Sprite | null
@@ -175,6 +181,37 @@ describe('BattleScreen: 背景画像', () => {
     expect(urls).toContain(`${base}/images/fg/b.png`)
     expect(urls).toContain(`${base}/images/battle/hero.png`)
     expect(urls).toContain('https://cdn.example.com/slime.png')
+  })
+
+  it('assetBaseUrl があれば ff のポーズ画像と idle のフォールバックも images 配下に解決する (#745)', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(
+        new Texture({ source: new TextureSource({ width: 10, height: 10 }) }) as never
+      )
+    const base = 'https://api.example.com/assets/raw'
+    track(
+      make(
+        [
+          entity('hero', {
+            poses: {
+              idle: 'battle/idle.png',
+              slash: 'battle/slash.png',
+              down: 'https://cdn.example.com/d.png',
+            },
+          }),
+        ],
+        [entity('slime')],
+        { layout: 'side', presentation: 'ff', assetBaseUrl: base }
+      )
+    )
+    await flushPromises()
+    await flushPromises()
+    const urls = load.mock.calls.map((c) => c[0])
+    expect(urls).toContain(`${base}/images/battle/idle.png`)
+    expect(urls).toContain(`${base}/images/battle/slash.png`)
+    expect(urls).toContain('https://cdn.example.com/d.png')
+    expect(urls).not.toContain('battle/slash.png')
   })
 
   it('assetBaseUrl 未指定なら従来どおりパスをそのまま読む (#746)', async () => {
@@ -595,9 +632,18 @@ describe('BattleScreen: side', () => {
   it('statusText は 320 幅では MP なし・800 幅では MP あり', () => {
     const narrow = track(make([entity('hero')], [entity('slime')], side, 320, 568))
     const wide = track(make([entity('hero')], [entity('slime')], side, 800, 450))
-    expect(internals(narrow).statusTexts[0].text).toContain('HP 10/10')
-    expect(internals(narrow).statusTexts[0].text).not.toContain('MP')
-    expect(internals(wide).statusTexts[0].text).toContain('MP 4/4')
+    const row = (s: BattleScreen, k: 'Hp' | 'Mp'): string => {
+      const i = internals(s)
+      const g = (key: string) => (i as unknown as Record<string, Text[]>)[key][0]
+      return [g(`status${k}Labels`), g(`status${k}Texts`), g(`status${k}Maxes`)]
+        .map((t) => t.text)
+        .join('')
+    }
+    expect(row(narrow, 'Hp')).toContain('10/10')
+    expect(row(narrow, 'Mp')).toBe('')
+    expect(internals(narrow).statusMpTexts[0].visible).toBe(false)
+    expect(row(wide, 'Hp')).toBe('HP10/10')
+    expect(row(wide, 'Mp')).toBe('MP4/4')
   })
 
   it('味方 hp=0 の statusText は灰色 fill', () => {
@@ -677,11 +723,11 @@ describe('BattleScreen: side', () => {
 
   it('redraw で幅 800 → 360 にすると compact へ切り替わり statusText が短縮される', () => {
     const s = track(make([entity('hero')], [entity('slime')], side, 800, 450))
-    expect(internals(s).statusTexts[0].text).toContain('MP')
+    expect(internals(s).statusMpLabels[0].text).toContain('MP')
     s.redraw(360, 640)
-    expect(internals(s).statusTexts[0].text).not.toContain('MP')
+    expect(internals(s).statusMpLabels[0].text).not.toContain('MP')
     s.redraw(800, 450)
-    expect(internals(s).statusTexts[0].text).toContain('MP')
+    expect(internals(s).statusMpLabels[0].text).toContain('MP')
   })
 
   it('compact 閾値の定数が MP 表記の切替に使われている（幅スイープで MP 有無が一度だけ切り替わる）', () => {
@@ -690,7 +736,7 @@ describe('BattleScreen: side', () => {
     let flips = 0
     for (let w = 300; w <= 900; w += 10) {
       s.redraw(w, 640)
-      const hasMp = internals(s).statusTexts[0].text.includes('MP')
+      const hasMp = internals(s).statusMpLabels[0].text.includes('MP')
       if (hasMp !== prev) flips++
       prev = hasMp
     }
@@ -784,19 +830,27 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
   })
 
   it.each([
-    ['ながいなまえのゆうしゃ', 20, true],
-    ['ながいなまえのゆうしゃ', 120, false],
+    ['ながいなまえのゆうしゃ', 20],
+    ['ながいなまえのゆうしゃ', 120],
   ])(
-    '320 幅でも status テキストは概算幅でパネル内に収まる（%s, HP %d）',
-    (name, hp, hasEllipsis) => {
+    '320 幅でも status の名前と HP は概算幅でパネル内に収まり、名前が残る（%s, HP %d）',
+    (name, hp) => {
       const s = track(
         make([entity('hero', { name, hp, maxHp: hp })], [entity('slime')], sideOpts, 320, 568)
       )
       const L = computeSideBattleLayout({ width: 320, height: 568, partyCount: 1, enemyCount: 1 })
-      const text = internals(s).statusTexts[0].text
-      expect(text.endsWith(`HP ${hp}/${hp}`)).toBe(true)
-      expect(text.includes('…')).toBe(hasEllipsis)
-      expect(estimateTextWidth(text, 14)).toBeLessThanOrEqual(L.status.w - 24 + 0.001)
+      const nameT = internals(s).statusTexts[0]
+      const i = internals(s)
+      const [lab, cur, max] = [i.statusHpLabels[0], i.statusHpTexts[0], i.statusHpMaxes[0]]
+      expect(`${cur.text}${max.text}`.endsWith(`${hp}/${hp}`)).toBe(true)
+      expect(nameT.text.length).toBeGreaterThan(0)
+      expect(nameT.text.startsWith(name.slice(0, 1))).toBe(true)
+      // 名前の右端 <= HP 列の左端、HP 列の右端 <= パネル内側の右端
+      const hpLeft = lab.text ? lab.x : cur.x - estimateTextWidth(cur.text, 14)
+      const hpRight = max.text ? max.x : cur.x
+      expect(nameT.x + estimateTextWidth(nameT.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
+      expect(hpRight).toBeLessThanOrEqual(L.status.x + L.status.w - 12 + 0.001)
+      expect(nameT.x).toBeGreaterThanOrEqual(L.status.x)
     }
   )
 })
@@ -2062,7 +2116,7 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
     }
   })
 
-  it('tone on + dof on の destroy は例外なく、tone/blur/maskTexture を破棄する', async () => {
+  it('tone on + dof on の destroy は例外なく、tone/blur を破棄し、共有のマスクテクスチャは壊さない (#745)', async () => {
     vi.spyOn(BattleScreen.prototype as never, 'createDofMaskTexture').mockImplementation((() => {
       const t = new Texture()
       vi.spyOn(t, 'destroy').mockImplementation(() => {})
@@ -2078,7 +2132,8 @@ describe('BattleScreen: 背景トーン調整 (#753)', () => {
     expect(() => s.destroy({ children: true })).not.toThrow()
     expect(tfSpy).toHaveBeenCalledTimes(1)
     blurSpies.forEach((sp) => expect(sp).toHaveBeenCalledTimes(1))
-    texSpies.forEach((sp) => expect(sp).toHaveBeenCalled())
+    // マスクの source を壊すと、Pixi のプールにあるマスクフィルタの束縛が壊れて次の画面の描画が落ちる
+    texSpies.forEach((sp) => expect(sp).not.toHaveBeenCalled())
     expect(ti(s).dofLevels).toHaveLength(0)
     expect(ti(s).backgroundToneFilter).toBeNull()
   })
@@ -3014,5 +3069,242 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         expect(v.acrylicBase).toBeNull()
       }
     })
+  })
+})
+
+describe('BattleScreen: side のステータス欄は HP がばらばらでも見出しと「/」がそろう (#745)', () => {
+  it.each([
+    [800, 450],
+    [1280, 720],
+  ])('%dx%d: 現在 HP が 5 / 50 / 120 / 0 でも HP・MP の見出しと / の x が全員同じ', (w, h) => {
+    const party = [
+      entity('a', { hp: 5, maxHp: 120, mp: 1, maxMp: 99 }),
+      entity('b', { hp: 50, maxHp: 120, mp: 12, maxMp: 99 }),
+      entity('c', { hp: 120, maxHp: 120, mp: 99, maxMp: 99 }),
+      entity('d', { hp: 0, maxHp: 120, mp: 0, maxMp: 99 }),
+    ]
+    const s = track(make(party, [entity('slime')], { layout: 'side' }, w, h))
+    const i = internals(s)
+    const same = (xs: number[]): void => xs.forEach((x) => expect(x).toBeCloseTo(xs[0], 6))
+    same(i.statusHpLabels.map((t) => t.x))
+    same(i.statusHpMaxes.map((t) => t.x))
+    same(i.statusHpTexts.map((t) => t.x))
+    same(i.statusMpLabels.map((t) => t.x))
+    same(i.statusMpMaxes.map((t) => t.x))
+    expect(i.statusHpLabels[0].text).toBe('HP')
+    expect(i.statusHpTexts.map((t) => t.text)).toEqual(['5', '50', '120', '0'])
+    // 「/最大値」は現在値の右端に接して続く（「/」の x = 現在値の右寄せ基準）
+    expect(i.statusHpMaxes[0].x).toBeCloseTo(i.statusHpTexts[0].x, 6)
+  })
+
+  it('MP 列がない狭い画面では MP の 3 つの Text が非表示で空', () => {
+    const s = track(make([entity('a')], [entity('slime')], { layout: 'side' }, 360, 640))
+    const i = internals(s)
+    for (const t of [i.statusMpLabels[0], i.statusMpTexts[0], i.statusMpMaxes[0]]) {
+      expect(t.visible).toBe(false)
+      expect(t.text).toBe('')
+    }
+  })
+})
+
+describe('BattleScreen: side の名前は実測幅でも列幅に収める (#745)', () => {
+  it('概算より実幅が広い名前（英字など）は、実測が列幅以下になるまで末尾を詰める', () => {
+    // jsdom は文字を実測できないので、Text.width を「1 文字 20px」に差し替える
+    Object.defineProperty(PixiText.prototype, 'width', {
+      configurable: true,
+      get(this: PixiText) {
+        return this.text.length * 20
+      },
+    })
+    try {
+      const s = track(
+        make(
+          [entity('a', { name: 'Abcdefghijklmnop' })],
+          [entity('slime')],
+          { layout: 'side' },
+          800,
+          450
+        )
+      )
+      const colW = (s as unknown as { sideStatusColumns: { name: { w: number } } })
+        .sideStatusColumns.name.w
+      const t = internals(s).statusTexts[0]
+      expect(t.text.length * 20).toBeLessThanOrEqual(colW + 0.5)
+      expect(t.text.length).toBeGreaterThan(0)
+    } finally {
+      delete (PixiText.prototype as unknown as Record<string, unknown>).width
+    }
+  })
+})
+
+describe('BattleScreen: side の名前は ff-blue の文字影ぶんも列に食い込ませない (#745)', () => {
+  it('実測幅 + 影の距離が列幅以下になるまで詰める', () => {
+    Object.defineProperty(PixiText.prototype, 'width', {
+      configurable: true,
+      get(this: PixiText) {
+        return this.text.length * 20
+      },
+    })
+    try {
+      const s = track(
+        make(
+          [entity('a', { name: 'Abcdefghijklmnop' })],
+          [entity('slime')],
+          { layout: 'side', windowStyle: 'ff-blue' },
+          800,
+          450
+        )
+      )
+      const colW = (s as unknown as { sideStatusColumns: { name: { w: number } } })
+        .sideStatusColumns.name.w
+      const t = internals(s).statusTexts[0]
+      expect(t.text.length * 20 + FF_BLUE_TEXT_SHADOW.distance).toBeLessThanOrEqual(colW + 0.5)
+    } finally {
+      delete (PixiText.prototype as unknown as Record<string, unknown>).width
+    }
+  })
+})
+
+describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#745)', () => {
+  const sized = (w: number, h: number): Texture =>
+    new Texture({ source: new TextureSource({ width: w, height: h }) })
+  /** 画像ごとの寸法（idle と slash で縦横比を変える） */
+  const SIZES: Record<string, [number, number]> = {
+    'img/hero.webp': [40, 80],
+    'img/idle.webp': [40, 80],
+    'img/slash.webp': [90, 60],
+    'img/down.webp': [90, 40],
+    'img/slime.webp': [60, 60],
+  }
+  const textures = new Map<string, Texture>()
+  beforeEach(() => {
+    textures.clear()
+    vi.spyOn(Assets, 'load').mockImplementation((async (path: string) => {
+      if (!textures.has(path)) textures.set(path, sized(...(SIZES[path] ?? [50, 50])))
+      return textures.get(path)
+    }) as never)
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation(((
+      tex: Texture
+    ) => ({
+      texture: sized(tex.width + 16, tex.height + 16),
+      pad: 8,
+      shadow: sized(64, 32),
+      foot: { x: 32, y: 16 },
+    })) as never)
+  })
+  interface PoseView {
+    container: Container
+    sprite: Sprite
+    slotRef: unknown
+    baseX: number
+    baseY: number
+    shadowBaseX: number
+    shadowBaseY: number
+    acrylicShadow: Sprite | null
+    shownVisual: { texture: Texture } | null
+    poseVisuals: Record<string, { texture: Texture }>
+  }
+  const pv = (s: BattleScreen): PoseView =>
+    (s as unknown as { partyViews: PoseView[] }).partyViews[0]
+  const poses = { idle: 'img/idle.webp', slash: 'img/slash.webp', down: 'img/down.webp' }
+  async function setup(over: Partial<BattleEntity> = {}, enemyAtk = 1, withDown = true) {
+    const p = withDown ? poses : { idle: poses.idle, slash: poses.slash }
+    const hero = entity('hero', { sprite: 'img/hero.webp', poses: p, hp: 20, maxHp: 20, ...over })
+    const engine = new BattleEngine(
+      [hero],
+      [entity('slime', { atk: enemyAtk, hp: 999, maxHp: 999 })],
+      {
+        rng: () => 0.5,
+      }
+    )
+    const s = track(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        spriteStyle: 'acrylic',
+        presentation: 'ff',
+      })
+    )
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+    return { s, engine }
+  }
+  const run = (s: BattleScreen, ms: number) => {
+    for (let left = ms; left > 0; left -= 16) s.tick(Math.min(16, left))
+  }
+  const act = (s: BattleScreen, engine: BattleEngine) => {
+    engine.selectAttack()
+    s.redraw(800, 450)
+  }
+
+  it('ポーズが読み込まれ、縦横比の違う slash に替わっても枠（slotRef）と基準位置は動かない', async () => {
+    const { s, engine } = await setup()
+    const v = pv(s)
+    expect(Object.keys(v.poseVisuals).sort()).toEqual(['down', 'idle', 'slash'])
+    const slot = v.slotRef
+    const [bx, by] = [v.baseX, v.baseY]
+    // idle の立ち姿: 縮尺（1px あたり）と足元（下端中央）を控える
+    const idleTex = v.poseVisuals.idle.texture
+    expect(v.sprite.texture).toBe(idleTex)
+    const scale = v.sprite.height / idleTex.height
+    const foot = () => ({
+      cx: v.container.x + v.sprite.x + v.sprite.width / 2 - (v.container.x - v.baseX),
+      y: v.container.y + v.sprite.y + v.sprite.height - (v.container.y - v.baseY),
+    })
+    const idleFoot = foot()
+    const idleShadowY = v.shadowBaseY
+    // #802: スプライトの下端は台座の差し込み線（影の基準）より浮いている
+    expect(idleFoot.y).toBeLessThan(idleShadowY)
+    act(s, engine)
+    run(s, 300) // 踏み出し 220 を過ぎて slash ポーズ
+    expect(v.shownVisual!.texture).toBe(v.poseVisuals.slash.texture)
+    // 横広の slash も枠に収め直さず、同じ縮尺で描く（高さの比 = 元画像の高さの比）。足元は不変
+    const slashTex = v.poseVisuals.slash.texture
+    expect(v.sprite.height / slashTex.height).toBeCloseTo(scale, 6)
+    expect(v.sprite.height / v.sprite.width).toBeCloseTo(slashTex.height / slashTex.width, 6)
+    expect(v.sprite.height / idleTex.height).toBeCloseTo(
+      scale * (slashTex.height / idleTex.height),
+      6
+    )
+    const slashFoot = foot()
+    expect(slashFoot.y).toBeCloseTo(idleFoot.y, 6)
+    expect(slashFoot.cx).toBeCloseTo(idleFoot.cx, 6)
+    // 浮き量は基本の絵で決まり、ポーズ差し替えで二重に補正されない（影の基準も足元との差も不変）
+    expect(v.shadowBaseY).toBeCloseTo(idleShadowY, 6)
+    expect(v.shadowBaseY - slashFoot.y).toBeCloseTo(idleShadowY - idleFoot.y, 6)
+    expect(v.slotRef).toEqual(slot)
+    expect([v.baseX, v.baseY]).toEqual([bx, by])
+    run(s, 5000)
+    expect(v.slotRef).toEqual(slot)
+    expect([v.baseX, v.baseY]).toEqual([bx, by])
+  })
+
+  it('地面の影は本体と同じ横ずれで動き、置き去りにならない', async () => {
+    const { s, engine } = await setup()
+    const v = pv(s)
+    expect(v.acrylicShadow).not.toBeNull()
+    act(s, engine)
+    run(s, 150)
+    const dx = v.container.x - v.baseX
+    expect(Math.abs(dx)).toBeGreaterThan(1)
+    expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(dx, 6)
+    run(s, 300)
+    expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(v.container.x - v.baseX, 6)
+  })
+
+  it('down の絵がある味方は倒れても沈まず不透明、無ければ沈んで薄くなる', async () => {
+    const a = await setup({ hp: 1, maxHp: 1 }, 999, true)
+    const va = pv(a.s)
+    act(a.s, a.engine)
+    run(a.s, 5000)
+    expect(va.shownVisual!.texture).toBe(va.poseVisuals.down.texture)
+    expect(va.container.y).toBeCloseTo(va.baseY, 6)
+    expect(va.container.alpha).toBe(1)
+    const b = await setup({ hp: 1, maxHp: 1 }, 999, false)
+    const vb = pv(b.s)
+    act(b.s, b.engine)
+    run(b.s, 5000)
+    expect(vb.container.y).toBeGreaterThan(vb.baseY)
+    expect(vb.container.alpha).toBeLessThan(1)
   })
 })

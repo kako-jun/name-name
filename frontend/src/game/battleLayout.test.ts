@@ -29,6 +29,12 @@ import {
   computePartyDiagonal,
   computeSideBattleLayout,
   computeSideLogHeight,
+  computeStatusColumns,
+  SIDE_STATUS_COLUMN_GAP,
+  SIDE_STATUS_FONT_SIZE,
+  SIDE_STATUS_GAUGE_WIDTH,
+  SIDE_STATUS_MIN_NAME_CHARS,
+  SIDE_STATUS_TEXT_PADDING,
   desiredSideLogLines,
   effectiveCommandLayout,
   fitCommandFontSize,
@@ -36,7 +42,6 @@ import {
   isLabelWidthReadable,
   estimateTextWidth,
   fitLabel,
-  fitNameWithSuffix,
   normalizeBattleLayout,
   type Rect,
   type SideBattleLayout,
@@ -679,7 +684,7 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6 x grid/cro
   })
 })
 
-describe('fitLabel / fitNameWithSuffix', () => {
+describe('fitLabel', () => {
   it('収まるならそのまま', () => {
     expect(fitLabel('スライム', 100, 12)).toBe('スライム')
     expect(fitLabel('HP 5/5', 100, 12)).toBe('HP 5/5')
@@ -693,17 +698,6 @@ describe('fitLabel / fitNameWithSuffix', () => {
   it('… すら入らない幅は空文字', () => {
     expect(fitLabel('abc', 3, 12)).toBe('')
     expect(fitLabel('abc', 0, 12)).toBe('')
-  })
-  it('fitNameWithSuffix: 名前側だけ省略して suffix は残す', () => {
-    const r = fitNameWithSuffix('ながいなまえのゆうしゃ', '  HP 120/120', 150, 14)
-    expect(r.endsWith('  HP 120/120')).toBe(true)
-    expect(r).toContain('…')
-    expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(150)
-  })
-  it('fitNameWithSuffix: 収まるなら無加工 / suffix が入らないときは全体を切る', () => {
-    expect(fitNameWithSuffix('あ', ' HP 1/1', 200, 14)).toBe('あ HP 1/1')
-    const r = fitNameWithSuffix('あ', ' HP 1000/1000', 40, 14)
-    expect(estimateTextWidth(r, 14)).toBeLessThanOrEqual(40)
   })
 })
 
@@ -1778,5 +1772,141 @@ describe('コマンド窓の十字配置 (#204)', () => {
     })
     expect(L.command.y + L.command.h).toBeLessThanOrEqual(640 + EPS)
     for (const r of L.commandCells) expect(inside(r, L.command)).toBe(true)
+  })
+})
+
+describe('computeStatusColumns (#745)', () => {
+  const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
+
+  it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
+    const c = computeStatusColumns({ ...base, atb: true })
+    const inner = {
+      l: base.x + SIDE_STATUS_TEXT_PADDING,
+      r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
+    }
+    expect(c.name.x).toBe(inner.l)
+    expect(c.name.x + c.name.w).toBeLessThanOrEqual(c.hp.x)
+    expect(c.hp.x + c.hp.w).toBeLessThanOrEqual(c.mp!.x)
+    expect(c.mp!.x + c.mp!.w).toBeLessThanOrEqual(c.gauge!.x)
+    expect(c.gauge!.x + c.gauge!.w).toBeCloseTo(inner.r, 6)
+    expect(c.gauge!.w).toBe(SIDE_STATUS_GAUGE_WIDTH)
+    expect(c.mp!.x - (c.hp.x + c.hp.w)).toBeGreaterThanOrEqual(SIDE_STATUS_COLUMN_GAP - 1e-9)
+  })
+
+  it('ATB off ではゲージ列がなく、HP/MP は ATB on より右へ寄る', () => {
+    const off = computeStatusColumns(base)
+    const on = computeStatusColumns({ ...base, atb: true })
+    expect(off.gauge).toBeNull()
+    expect(off.hp.x).toBeGreaterThan(on.hp.x)
+    expect(off.name.w).toBeGreaterThan(on.name.w)
+  })
+
+  it('列幅は最長の数値に合わせる（桁数の多い maxHp ほど HP 列が広い）', () => {
+    const a = computeStatusColumns({ ...base, maxHp: 9 })
+    const b = computeStatusColumns({ ...base, maxHp: 9999 })
+    expect(b.hp.w).toBeGreaterThan(a.hp.w)
+    expect(b.name.w).toBeLessThan(a.name.w)
+  })
+
+  it('compact では MP を出さない', () => {
+    expect(computeStatusColumns({ ...base, compact: true }).mp).toBeNull()
+  })
+
+  it.each([
+    [360, true],
+    [320, true],
+    [360, false],
+    [320, false],
+  ])(
+    '狭い画面（status 幅から導出, 幅 %d, atb=%s）でも名前列が最低文字数ぶん残る',
+    (screenW, atb) => {
+      const L = computeSideBattleLayout({
+        width: screenW,
+        height: 640,
+        partyCount: 4,
+        enemyCount: 1,
+      })
+      const c = computeStatusColumns({
+        x: L.status.x,
+        width: L.status.w,
+        maxHp: 9999,
+        maxMp: 999,
+        compact: L.statusCompact,
+        atb,
+      })
+      expect(c.name.w).toBeGreaterThanOrEqual(SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE)
+      expect(c.hp.x + c.hp.w).toBeLessThanOrEqual(
+        L.status.x + L.status.w - SIDE_STATUS_TEXT_PADDING + 1e-9
+      )
+    }
+  )
+
+  it('名前列が足りないときは MP → 見出しの順に削る', () => {
+    const wide = computeStatusColumns({ ...base, width: 400 })
+    expect(wide.mp).not.toBeNull()
+    expect(wide.showLabels).toBe(true)
+    const mid = computeStatusColumns({ ...base, width: 250, atb: true })
+    expect(mid.mp).toBeNull()
+    const tight = computeStatusColumns({ ...base, width: 170, atb: true })
+    expect(tight.mp).toBeNull()
+    expect(tight.showLabels).toBe(false)
+  })
+})
+
+describe('computeStatusColumns: 見出し・現在値・/最大値の 3 分割 (#745)', () => {
+  const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
+
+  it('現在値の右端（「/」の直前）は列の右端から「/最大値」の幅だけ左で、最大値は列の右端', () => {
+    const c = computeStatusColumns(base)
+    expect(c.hp.curRight).toBeCloseTo(
+      c.hp.x + c.hp.w - estimateTextWidth('/120', SIDE_STATUS_FONT_SIZE),
+      6
+    )
+    expect(c.mp!.curRight).toBeCloseTo(
+      c.mp!.x + c.mp!.w - estimateTextWidth('/99', SIDE_STATUS_FONT_SIZE),
+      6
+    )
+    // 見出し + 見出しと数字のすき間（列間と同じ） + 現在値の最大桁 + /最大値
+    expect(c.hp.w).toBeCloseTo(
+      estimateTextWidth('HP120/120', SIDE_STATUS_FONT_SIZE) + SIDE_STATUS_COLUMN_GAP,
+      6
+    )
+  })
+
+  it('最大値を省く段階では現在値が列の右端に右寄せされる', () => {
+    const c = computeStatusColumns({ ...base, maxHp: 9999, width: 60 })
+    expect(c.showMaxHp).toBe(false)
+    expect(c.hp.curRight).toBeCloseTo(c.hp.x + c.hp.w, 6)
+  })
+
+  it('極端に狭くても HP 列は名前の左端（パネルの左余白）より左へ出ず、幅は負にならない', () => {
+    const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
+    expect(c.hp.x).toBeGreaterThanOrEqual(base.x + SIDE_STATUS_TEXT_PADDING - 1e-9)
+    expect(c.hp.w).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('computeStatusColumns: 見出しと数字のすき間・狭いときの重なり防止 (#745)', () => {
+  const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
+  const F = SIDE_STATUS_FONT_SIZE
+
+  it('見出しの右端と現在値の最大桁の左端の間に、列間と同じすき間（実フォントの「MP」は概算より広いので、これで実際に隙間が残る）がある', () => {
+    const c = computeStatusColumns(base)
+    for (const [col, label, max] of [
+      [c.hp, 'HP', 120],
+      [c.mp!, 'MP', 99],
+    ] as const) {
+      const labelRight = col.x + estimateTextWidth(label, F)
+      const curLeft = col.curRight - estimateTextWidth(`${max}`, F)
+      expect(curLeft - labelRight).toBeCloseTo(SIDE_STATUS_COLUMN_GAP, 6)
+    }
+  })
+
+  it('極端に狭く HP 列を左余白で止めても、現在値は見出しと重ならない位置までは右へ押し出される', () => {
+    const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
+    const left = base.x + SIDE_STATUS_TEXT_PADDING
+    const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
+    const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
+    expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)
   })
 })

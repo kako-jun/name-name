@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_command_layout`, `battle_command_labels`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_command_layout`, `battle_command_labels`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -159,6 +159,23 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
           text: canonicalizeBodyText(event.Label.text),
         },
       }
+    }
+    if ('PartyMember' in event || 'Monster' in event) {
+      // 戦闘ポーズ別スプライト (#745)。Rust の BTreeMap<String, String> は tsify 経由で Map になって返るため
+      // Record に変換する（npc.expressions と同じ罠。ここを忘れると wasm 経由で poses が黙って落ちる）。
+      // 未指定・空は poses キー自体を持たない（undefined）。
+      const toRecord = (m: unknown): Record<string, string> | undefined => {
+        const map = m as Map<string, string> | undefined
+        return map && map.size > 0 ? Object.fromEntries(map) : undefined
+      }
+      if ('PartyMember' in event) {
+        const { poses, ...rest } = event.PartyMember
+        const rec = toRecord(poses)
+        return { PartyMember: rec ? { ...rest, poses: rec } : rest }
+      }
+      const { poses, ...rest } = event.Monster
+      const rec = toRecord(poses)
+      return { Monster: rec ? { ...rest, poses: rec } : rest }
     }
     if ('RpgEvent' in event) {
       // RPG イベント（[イベント]）内の会話も表示テキストなので正準化する (#340)。
@@ -413,6 +430,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     battle_background_dof: nullIfEmpty(doc.battle_background_dof),
     // 戦闘ログの 1 文字ずつ表示 (#755)。同上。
     battle_log_typewriter: nullIfEmpty(doc.battle_log_typewriter),
+    battle_presentation: nullIfEmpty(doc.battle_presentation),
     // 戦闘の奥行き (#747)。同上。ここの列挙漏れで wasm 経由だけ undefined になる事故に注意。
     battle_horizon: nullIfEmpty(doc.battle_horizon),
     battle_perspective: nullIfEmpty(doc.battle_perspective),

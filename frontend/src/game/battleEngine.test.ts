@@ -213,3 +213,81 @@ describe('BattleEngine logTotal (#755)', () => {
     expect(sawCap).toBe(true)
   })
 })
+
+describe('BattleEngine: 行動の記録 (#745)', () => {
+  const rng = () => 0
+
+  it('通常攻撃: 味方→敵の attack が 1 件、続けて敵の反撃が 1 件記録される', () => {
+    const e = new BattleEngine([hero()], [slime({ hp: 30, maxHp: 30 })], { rng })
+    expect(e.getState().eventTotal).toBe(0)
+    e.selectAttack()
+    const s = e.getState()
+    expect(s.eventTotal).toBe(2)
+    const [mine, theirs] = s.events
+    expect(mine).toMatchObject({ seq: 0, actor: { side: 'party', index: 0 }, kind: 'attack' })
+    expect(mine.label).toBeUndefined()
+    const dmg = mine.hits[0].amount
+    expect(dmg).toBeGreaterThan(0)
+    expect(mine.hits).toEqual([
+      {
+        target: { side: 'enemy', index: 0 },
+        kind: 'damage',
+        amount: dmg,
+        hpBefore: 30,
+        hpAfter: 30 - dmg,
+      },
+    ])
+    expect(theirs.actor).toEqual({ side: 'enemy', index: 0 })
+    expect(theirs.hits[0].target).toEqual({ side: 'party', index: 0 })
+    expect(theirs.hits[0].hpBefore).toBe(20)
+  })
+
+  it('呪文: HP の増減から heal / damage / miss を導き、名前を label に残す', () => {
+    const e = new BattleEngine(
+      [hero({ hp: 10 })],
+      [slime({ hp: 20, maxHp: 20 }), slime({ id: 's2', hp: 20, maxHp: 20 })],
+      { rng }
+    )
+    e.selectSpell({ name: 'ホイミ', mp: 1, target: '味方単体', effect: 'heal 5..5' })
+    const heal = e.getState().events[0]
+    expect(heal).toMatchObject({
+      kind: 'spell',
+      label: 'ホイミ',
+      actor: { side: 'party', index: 0 },
+    })
+    expect(heal.hits).toEqual([
+      {
+        target: { side: 'party', index: 0 },
+        kind: 'heal',
+        amount: 5,
+        hpBefore: 10,
+        hpAfter: 15,
+      },
+    ])
+    // 敵全体に 0 ダメージ（無効）→ 対象にしたが変化なし = miss
+    const e2 = new BattleEngine([hero()], [slime(), slime({ id: 's2' })], { rng })
+    e2.selectSpell({ name: 'メラ', mp: 1, target: '敵全体', effect: 'damage 0..0' })
+    const ev = e2.getState().events[0]
+    // 計算上のダメージ 0 は MISS でなく 0 のダメージ（MISS は耐性 0 の無効のとき）
+    expect(ev.hits.map((h) => [h.kind, h.amount])).toEqual([
+      ['damage', 0],
+      ['damage', 0],
+    ])
+    expect(ev.hits.map((h) => h.target.index)).toEqual([0, 1])
+  })
+
+  it('記録は直近 30 件で頭を捨てるが、eventTotal は減らない', () => {
+    const e = new BattleEngine(
+      [hero({ hp: 9999, maxHp: 9999 })],
+      [slime({ hp: 9999, maxHp: 9999 })],
+      {
+        rng,
+      }
+    )
+    for (let i = 0; i < 20; i++) e.selectAttack()
+    const s = e.getState()
+    expect(s.eventTotal).toBe(40)
+    expect(s.events).toHaveLength(30)
+    expect(s.events[s.events.length - 1].seq).toBe(39)
+  })
+})

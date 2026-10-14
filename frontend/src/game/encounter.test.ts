@@ -26,6 +26,24 @@ const ghost: MonsterDef = {
   gold: 3,
 }
 
+describe('rollEncounter: poses を BattleEntity に写す (#745)', () => {
+  it('モンスター定義の poses を正規化して写す。未指定は poses なし', () => {
+    const withPoses: MonsterDef = {
+      ...slime,
+      poses: { idle: 'm/i.png', Down: 'm/d.png', bogus: 'x.png' },
+    }
+    const input = {
+      rate: 1,
+      groups: ['slime+ghost'],
+      masters: { slime: withPoses, ghost },
+      rng: () => 0,
+    }
+    const [a, b] = rollEncounter(input)!
+    expect(a.poses).toEqual({ idle: 'm/i.png', down: 'm/d.png' })
+    expect('poses' in b).toBe(false)
+  })
+})
+
 describe('rollEncounter (Issue #172)', () => {
   it('rate=0 で常に null（街・室内）', () => {
     expect(
