@@ -380,3 +380,14 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **再生中の配列は持たない。** `SceneIndex` は `rawEvents`（再生中の元イベント配列）を持たない。`entryRawEvents`（エントリ文書本来の events, #662）との兼務を避けるためで、再生中かどうかが要る判定（`isEntryStreamActive` / `resolveLinearSegmentsNow`）は、呼び出し側が `currentSceneId` と `rawEvents` を引数で渡す。
 - **`loadEvents` / `loadScenes` / `setJumpSceneIndex`** はレンダラに残り、索引部だけを `SceneIndex`（`setEntry(events, sceneId)` / `setJumpSceneIndex`。エントリ文書と新規開始の sceneId は一緒に入れ替える）へ委譲する。`currentSceneId` と `onSceneChange` に触れる処理はレンダラ側に残り、#734 PR5 の記述（`loadScenes` は `scenes[0].id`、`loadEvents` は null）のとおり。
 - 以後の #826（#735 5/8, `SceneEntryController`）は `SceneIndex` をコンストラクタ注入で使う。
+
+## #824 での追記（2026-10-15、#735 3/8）
+
+再生カーソルとイベント配列・履歴を、`NovelRenderer` から `frontend/src/game/PlaybackCursor.ts` に分けた。挙動は変えていない。
+
+- **書き手の一本化。** `rawEvents` / `resolvedEvents` / `displayEventCount` / `eventIndex` / `textIndex` / `sentenceIndex` / `novelPagesCache` / `advSentencePagesCache` / `history` / `currentSceneId` / `playbackStarted` への書き込みは `PlaybackCursor` のメソッドだけになった。レンダラは getter で読むだけで、setter は無い。`advance` / `goBack` / `seekTo` / `pushSnapshot` / `resetAndStartEvents` / `restoreToScene` / `applyState` / `reResolveEvents` / `loadEntry` / `startScene` の「カーソルを書く行」はメソッド呼び出しに置き換わり、それ以外の処理（演出・タイマー・描画・ゲート）はレンダラに残る。
+- **不変条件の保持（#777 追記の再掲）。** 展開後の列は `replaceEvents` / `restorePosition` / `reResolve` のどれを通っても `resolveEvents(rawEvents, flags)` の全体展開で作られ、履歴に依存しない。3点セット（`rawEvents` / `resolvedEvents` / `displayEventCount`）は内部の `expand` 1か所でしか更新されない。
+- **範囲外復元の拒否（#789）と `reResolve`。** 範囲外の判定は入場側（`checkRestorePosition`）の責務のまま。カーソルは受け取った位置を `restorePosition` でそのまま置き、ページ数超過だけを `clampToPageCount` で最終ページへ寄せる。Flag 後の再展開で `[条件:]` が偽になる境界は、従来どおり `remapEventIndexAfterReResolve` が `eventIndex` を写す（`reResolve` の中で呼ぶ）。
+- **`currentSceneId` / `onSceneChange`。** `currentSceneId` の書き込みは `setCurrentSceneId`（`startScene` と `restoreToScene` のみ）。`onSceneChange` の発火箇所と順序は変えていない。
+- 以後の #826（#735 5/8, `SceneEntryController`）は、カーソルの書き込みをメソッド越しにだけ行う。
+

@@ -28,7 +28,7 @@ import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
-import { internals, type RendererInternals } from '../test/rendererInternals'
+import { internals, type RendererInternals, internalsOf } from '../test/rendererInternals'
 
 /**
  * 役割配置の期待 x を定数から導出する (#286 follow-up S1)。
@@ -888,7 +888,7 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [dialog('カコ', 'A。'), 'PageBreak', dialog('カコ', 'B。')])])
-    const count = (r as unknown as { displayEventCount: number }).displayEventCount
+    const count = internalsOf<{ displayEventCount: number }>(r).displayEventCount
     expect(count).toBe(2)
   })
 

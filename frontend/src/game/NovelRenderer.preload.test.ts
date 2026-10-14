@@ -44,6 +44,7 @@ import { NovelRenderer } from './NovelRenderer'
 import * as bgPreload from './backgroundPreload'
 import { resolveAssetUrl, resolveCharacterImageUrls } from './novelLayout'
 import type { Event, EventScene } from '../types'
+import { internalsOf } from '../test/rendererInternals'
 
 const BASE = '/assets'
 
@@ -112,7 +113,7 @@ interface PreloadHooks {
   preloadedUrls: Set<string>
 }
 function hooks(r: NovelRenderer): PreloadHooks {
-  return r as unknown as PreloadHooks
+  return internalsOf<PreloadHooks>(r)
 }
 
 /**

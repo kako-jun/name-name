@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { findLinearSegments, resolveLinearSegments, segmentAt } from './sceneEntry'
 import type { Event, EventScene } from '../types'
+import { internalsOf } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -413,7 +414,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     const entered: string[] = []
     r.setOnSceneChange((id) => entered.push(id))
     // 境界の位置（eventIndex = 1）にあっても、タブローの命令列は本編のストリームではない
-    ;(r as unknown as { eventIndex: number }).eventIndex = 1
+    internalsOf<{ eventIndex: number }>(r).eventIndex = 1
     ;(r as unknown as { renderIntermissionTableau(e: Event[]): void }).renderIntermissionTableau([
       'SceneTransition',
     ])

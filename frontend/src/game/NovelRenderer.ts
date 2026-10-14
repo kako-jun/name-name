@@ -67,11 +67,12 @@ import { EndingOverlay } from './EndingOverlay'
 import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
-import { countDisplayEvents, getTextEvent, remapEventIndexAfterReResolve } from './eventCursor'
+import { getTextEvent } from './eventCursor'
 import { buildFreshPositionState } from './freshState'
 import { collectUpcomingAssetUrls } from './preloadPlan'
 import { buildDebugState, type DebugState } from './debugState'
 import { isSceneIdConfined } from './sceneConfinement'
+import { PlaybackCursor } from './PlaybackCursor'
 import { SceneIndex, type SceneLookup } from './SceneIndex'
 import {
   carryPolicyFor,
@@ -186,7 +187,7 @@ const NOVEL_CANVAS_TOUCH_ACTION: CanvasTouchAction = 'pan-y'
  * 平坦な resolvedEvents だけを走査する（NovelRenderer の復元と同じ列）。
  */
 export function resolveCharacterFit(
-  events: Event[],
+  events: readonly Event[],
   eventIndex: number,
   character: string
 ): boolean {
@@ -339,39 +340,25 @@ export class NovelRenderer {
    *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
   private novelScrim: Graphics | null = null
   private counterText: PixiText | null = null
-  private displayEventCount = 0
-
-  /** Condition 展開前の元イベント配列（Flag 変更時の再展開に使用）。
-   *  quickLoad/restoreToScene が直前ルートの scene.events で上書きするため、
-   *  「今どのルートを再生中か」を表す可変フィールド（entryRawEvents とは別物）。 */
-  private rawEvents: Event[] = []
   /**
-   * 再生が開始済みか。`loadEvents` / `loadScenes` の直後は false（文書だけ入って位置が未確定）で、
-   * 入場の適用（`resetAndStartEvents` / `restoreToScene`）で true になる。未開始の位置は index 0 の
-   * 仮置きにすぎないので、入場が失敗しても遷移状態を導出し直さない（先頭が Choice だと、
-   * 開始前に選択肢が出て skipMode が解除されるため）。
+   * 再生カーソルとイベント配列・履歴の唯一の書き手 (#824)。`rawEvents` / `resolvedEvents` / `eventIndex` /
+   * `textIndex` / `sentenceIndex` / `displayEventCount` / 派生ページキャッシュ / `history` /
+   * `currentSceneId` / `playbackStarted` は、ここから読み、書き込みは必ず `PlaybackCursor` のメソッド経由にする。
+   * `rawEvents` は「今どのルートを再生中か」を表す（エントリ文書本来の events を持つ `SceneIndex` とは別物）。
+   * ページ分割そのもの（`getNovelPages` / `getAdvSentencePages`）はスタイル設定に依存するのでレンダラに残す。
    */
-  private playbackStarted = false
+  private readonly cursor = new PlaybackCursor()
+
   /**
    * 再生が開始済みか (#768)。fluid 再マウントの引き継ぎ判定に使う。未開始のスナップショットは
    * 意味のある位置ではないので引き継がない。sceneId が null でも（ジャンプ前の線形ストリーム）開始済みはあり得る。
+   * `loadEvents` / `loadScenes` の直後は false（文書だけ入って位置が未確定）で、入場の適用
+   * （`resetAndStartEvents` / `restoreToScene`）で true になる。未開始の位置は index 0 の仮置きにすぎないので、
+   * 入場が失敗しても遷移状態を導出し直さない（先頭が Choice だと、開始前に選択肢が出て skipMode が解除されるため）。
    */
   hasStartedPlayback(): boolean {
-    return this.playbackStarted
+    return this.cursor.playbackStarted
   }
-  /** Condition 展開済みのフラットなイベント配列 */
-  private resolvedEvents: Event[] = []
-  private eventIndex = 0
-  private textIndex = 0
-  /**
-   * novel スタイル (#292) の「現ページ内で表示済みの最後の文 index」（0-based・息継ぎ送り）。
-   * adv では未使用（常に 0）。textIndex（ページ index）の下位に位置する進行位置＝ゲーム状態。
-   * snapshot / applyState / restoreToScene / セーブ復元で保存・復元する。
-   */
-  private sentenceIndex = 0
-
-  /** スナップショット履歴スタック（テキストイベント到達ごとに push） */
-  private history: NovelGameState[] = []
 
   private initialized = false
   private onEndCallback: (() => void) | null = null
@@ -620,18 +607,6 @@ export class NovelRenderer {
    *  DialogBox コンストラクタの既定 (40) と一致させる。 */
   private static readonly RUNTIME_DEFAULT_FONT_SIZE = 40
 
-  /**
-   * novel 改頁キャッシュ (#283)。現在の text イベントを文境界で改頁した結果。
-   * これは**派生**（純粋関数 paginateSentencesByLines で再計算可能）であり GameState には持たない。
-   * eventIndex が変わったら破棄して再計算する（cacheEventIndex で識別）。
-   */
-  private novelPagesCache: { eventIndex: number; pages: NovelPage[] } | null = null
-  /**
-   * adv 文単位ページキャッシュ (#448)。`sentence_per_page: true` のとき、現在の text イベントを
-   * `splitIntoSentences` で 1 文=1 ページに割った結果（`getAdvSentencePages`）。
-   * `novelPagesCache` と同じく**派生**（GameState には持たない）で、eventIndex が変わったら破棄する。
-   */
-  private advSentencePagesCache: { eventIndex: number; pages: string[] } | null = null
   /** #293: 立ち絵 ready 後に本文 reveal を遅延する描画トークン。古い rAF/setTimeout を無効化する。 */
   private deferredTextRenderToken = 0
 
@@ -709,7 +684,7 @@ export class NovelRenderer {
   private time: TimeController = defaultTimeController
 
   /** シーン索引・エントリ文書・遅延ロード・線形区間 (#823)。再生中の配列（rawEvents）は持たない */
-  private sceneIndex = new SceneIndex()
+  private readonly sceneIndex = new SceneIndex()
 
   /** セーブマネージャー */
   private saveManager: SaveManager = new SaveManager()
@@ -722,9 +697,6 @@ export class NovelRenderer {
 
   /** シークバー */
   private seekBar: SeekBar
-
-  /** 現在のシーンID */
-  private currentSceneId: string | null = null
 
   /** 現在の背景パス */
   private currentBackgroundPath: string | null = null
@@ -1178,8 +1150,8 @@ export class NovelRenderer {
   getDebugState(): DebugState {
     // 整形は純粋関数 `buildDebugState`（debugState.ts）。ここでは `this` の読み取りだけを行う。
     return buildDebugState({
-      resolvedEvents: this.resolvedEvents,
-      eventIndex: this.eventIndex,
+      resolvedEvents: this.cursor.resolvedEvents,
+      eventIndex: this.cursor.eventIndex,
       autoMode: this.autoMode,
       waitingForChoice: this.waitingForChoice,
       waitingForWait: this.waitingForWait,
@@ -1215,18 +1187,10 @@ export class NovelRenderer {
     // quickLoad/restoreToScene が rawEvents を直前ルートの events で上書きしても、新規開始の
     // 'entry' 対象は常にこのエントリ文書へ戻れる。
     this.sceneIndex.setEntry(events, entrySceneId)
-    this.playbackStarted = false
-    this.rawEvents = [...events]
-    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.eventIndex = 0
-    this.textIndex = 0
-    this.sentenceIndex = 0
-    this.history = []
-    this.novelPagesCache = null
-    this.advSentencePagesCache = null
+    this.cursor.markUnstarted()
+    this.cursor.load([...events], this.gameState)
     this.preloadedUrls.clear()
     clearBackgroundPreload()
-    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
   }
 
   /** 読み込み済みテクスチャを解放する（`setEvents` / `loadEvents` が文書を入れ替えるとき）。 */
@@ -1460,7 +1424,7 @@ export class NovelRenderer {
     // 通常はここに来る前に jumpToScene の confinement チェックで弾かれるため storyEnded は
     // 既に false のはずだが、デバッグ等から直接呼ばれた場合の保険として明示的に戻す）。
     this.clearStoryEnded()
-    this.currentSceneId = sceneId
+    this.cursor.setCurrentSceneId(sceneId)
     this.resetAndStartEvents([...events], {
       preserveBackgroundForTransition: carry.preserveBackgroundForTransition,
       carryBgm: carry.carryBgm,
@@ -1852,7 +1816,7 @@ export class NovelRenderer {
         this.notifyLoadFailure()
       }
       // 未開始（loadEvents 直後）の index 0 は仮置きなので導出し直さない。
-      if (this.playbackStarted) this.rederiveTransitionAtCurrentPosition()
+      if (this.cursor.playbackStarted) this.rederiveTransitionAtCurrentPosition()
     }
     return { status: 'failed', reason: failure.reason }
   }
@@ -1865,7 +1829,7 @@ export class NovelRenderer {
    *   閉じたまま残らない。TUI の選択肢が選択に失敗して留まるのと同じ）
    */
   private rederiveTransitionAtCurrentPosition(): void {
-    const current = this.resolvedEvents[this.eventIndex]
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     if (typeof current === 'object' && current !== null && 'Jump' in current) {
       if (this.jumpState === 'pending') this.rearmJumpAtCurrentPosition()
       return
@@ -2264,7 +2228,7 @@ export class NovelRenderer {
     options: Array<{ jump: string; locked: boolean }>
   } | null {
     if (!this.waitingForChoice) return null
-    const current = this.resolvedEvents[this.eventIndex]
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     if (typeof current !== 'object' || current === null || !('Choice' in current)) return null
     const locked = this.computeChoiceLocked(current.Choice.options)
     const sceneId = this.getPlayheadSceneId()
@@ -2305,7 +2269,7 @@ export class NovelRenderer {
     this.advanceGeneration()
     // 世代を進めるだけでは遷移状態が古いまま残る（遅延ロード待ちの [ジャンプ:] 予約など）ので、
     // 現在位置から導き直す。
-    if (this.playbackStarted) this.rederiveTransitionAtCurrentPosition()
+    if (this.cursor.playbackStarted) this.rederiveTransitionAtCurrentPosition()
   }
 
   /**
@@ -2334,16 +2298,16 @@ export class NovelRenderer {
     waitMs: number | null
     videoPlaying: boolean
   } {
-    const current = this.resolvedEvents[this.eventIndex]
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const waitMs =
       this.waitingForWait && typeof current === 'object' && current !== null && 'Wait' in current
         ? current.Wait.ms
         : null
     return {
-      sceneId: this.currentSceneId,
-      eventIndex: this.eventIndex,
-      textIndex: this.textIndex,
-      sentenceIndex: this.sentenceIndex,
+      sceneId: this.cursor.currentSceneId,
+      eventIndex: this.cursor.eventIndex,
+      textIndex: this.cursor.textIndex,
+      sentenceIndex: this.cursor.sentenceIndex,
       waitMs,
       videoPlaying: this.videoLayer.isPlayingToEnd(),
     }
@@ -2351,7 +2315,7 @@ export class NovelRenderer {
 
   /** 現在表示中のシーンID (#228 動画エクスポート用) */
   getCurrentSceneId(): string | null {
-    return this.currentSceneId
+    return this.cursor.currentSceneId
   }
 
   /**
@@ -2362,8 +2326,9 @@ export class NovelRenderer {
    */
   getPlayheadSceneId(): string | null {
     const resolved = this.resolveLinearSegmentsNow()
-    if (resolved) return segmentAt(resolved, this.eventIndex)?.sceneId ?? this.currentSceneId
-    return this.currentSceneId
+    if (resolved)
+      return segmentAt(resolved, this.cursor.eventIndex)?.sceneId ?? this.cursor.currentSceneId
+    return this.cursor.currentSceneId
   }
 
   /**
@@ -2373,7 +2338,7 @@ export class NovelRenderer {
   private notifyLinearSceneEntered(): boolean {
     const resolved = this.resolveLinearSegmentsNow()
     if (!resolved) return false
-    const entered = resolved.find((seg) => seg.separator === this.eventIndex)
+    const entered = resolved.find((seg) => seg.separator === this.cursor.eventIndex)
     if (!entered) return false
     // 抜けたシーンを既読にする（線形に読み終えたシーン。選択肢・Jump に到達しない通常再生でも付く）
     const exited = resolved[resolved.indexOf(entered) - 1]
@@ -2390,8 +2355,8 @@ export class NovelRenderer {
   /** 現在の flags で展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null (#777)。 */
   private resolveLinearSegmentsNow(): ResolvedSegment[] | null {
     return this.sceneIndex.resolveLinearSegmentsNow(
-      this.currentSceneId,
-      this.rawEvents,
+      this.cursor.currentSceneId,
+      this.cursor.rawEvents,
       (events) => resolveEvents(events, this.gameState).length
     )
   }
@@ -2517,7 +2482,7 @@ export class NovelRenderer {
       startIndex?: number
     }
   ): void {
-    this.playbackStarted = true
+    this.cursor.markStarted()
     this.autoSavePending = false
     this.waitingForChoice = false
     this.waitingForWait = false
@@ -2652,16 +2617,8 @@ export class NovelRenderer {
     this.dialogBox.setNovelMode(this.isNovelStyle())
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
-    this.rawEvents = events
-    this.resolvedEvents = resolveEvents(events, this.gameState)
-    this.eventIndex = options?.startIndex ?? 0
-    this.textIndex = 0
-    this.sentenceIndex = 0
-    this.history = []
-    // novel 改頁キャッシュ (#283) はイベント列に紐づくので破棄する。
-    this.novelPagesCache = null
-    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
-    this.advSentencePagesCache = null
+    // novel 改頁キャッシュ (#283)・adv 文単位ページキャッシュ (#448) などの派生データも load が破棄する。
+    this.cursor.load(events, this.gameState, options?.startIndex ?? 0)
     // 先読み済み URL 集合 (#389) もイベント列に紐づくので破棄する。setEvents は表示済み背景を
     // Assets.unload するため、ここでクリアしないと「積み済み」誤判定で先読みがスキップされ
     // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
@@ -2672,7 +2629,6 @@ export class NovelRenderer {
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
     this.lastSpeaker = null
-    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     this.processUntilNextTextEvent()
 
@@ -3024,10 +2980,9 @@ export class NovelRenderer {
    */
   setSentencePerPage(enabled: boolean | null | undefined): void {
     this.sentencePerPage = enabled === true
-    this.novelPagesCache = null
-    this.advSentencePagesCache = null
+    this.cursor.invalidatePages()
     this.clampTextIndexToPageCount()
-    if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
+    if (this.initialized && this.cursor.eventIndex < this.cursor.resolvedEvents.length) {
       this.render()
     }
   }
@@ -3039,16 +2994,13 @@ export class NovelRenderer {
    * 範囲外の復元失敗になる。ページが変わるので sentenceIndex は 0 に戻す。
    */
   private clampTextIndexToPageCount(): void {
-    if (this.eventIndex >= this.resolvedEvents.length) return
+    if (this.cursor.eventIndex >= this.cursor.resolvedEvents.length) return
     // ノベルの改頁数は DialogBox の計測（初期化後）が要る。adv の行数・文単位ページは初期化前でも数えられる。
     if (this.isNovelStyle() && !this.initialized) return
-    const textEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    const textEvt = getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])
     if (!textEvt) return
     const pageCount = this.currentPageCount(textEvt)
-    if (pageCount > 0 && this.textIndex >= pageCount) {
-      this.textIndex = pageCount - 1
-      this.sentenceIndex = 0
-    }
+    this.cursor.clampToPageCount(pageCount)
   }
 
   /**
@@ -3383,12 +3335,10 @@ export class NovelRenderer {
       this.setNovelScrimImmediate(false, 0)
     }
     // 改頁は幾何（boxH）依存なので、スタイル切替で派生キャッシュを破棄する (#283)。
-    this.novelPagesCache = null
-    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
-    this.advSentencePagesCache = null
+    this.cursor.invalidatePages()
     this.clampTextIndexToPageCount()
     // 既にテキスト表示中なら新スタイルで描き直す（adv↔novel 切替が即反映される）。
-    if (this.initialized && this.eventIndex < this.resolvedEvents.length) {
+    if (this.initialized && this.cursor.eventIndex < this.cursor.resolvedEvents.length) {
       this.render()
     }
   }
@@ -3533,22 +3483,22 @@ export class NovelRenderer {
    *  - text イベントなら「最後のページ かつ（novel は）ページ最後の文 かつ 最後のイベント」が末尾。
    */
   private isAtScriptEnd(): boolean {
-    if (this.resolvedEvents.length === 0) return true
-    if (this.eventIndex >= this.resolvedEvents.length) return true
-    const current = this.resolvedEvents[this.eventIndex]
+    if (this.cursor.resolvedEvents.length === 0) return true
+    if (this.cursor.eventIndex >= this.cursor.resolvedEvents.length) return true
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const textEvt = getTextEvent(current)
     if (!textEvt) return false
-    const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
+    const isLastEvent = this.cursor.eventIndex >= this.cursor.resolvedEvents.length - 1
     if (!isLastEvent) return false
     const pageCount = this.currentPageCount(textEvt)
-    const isLastPage = this.textIndex >= pageCount - 1
+    const isLastPage = this.cursor.textIndex >= pageCount - 1
     if (!isLastPage) return false
     if (this.isNovelStyle()) {
-      const page = this.getNovelPages(textEvt)[this.textIndex]
+      const page = this.getNovelPages(textEvt)[this.cursor.textIndex]
       const sentenceCount = page?.sentences.length ?? 0
       // render() の novelSentenceIndex のような clamp はせず raw sentenceIndex を使う。
       // over-range（復元等で範囲外）でも `>=` で "末尾扱い" に倒れ、即時オートを抑止する安全方向。
-      const isLastSentenceOnPage = this.sentenceIndex >= sentenceCount - 1
+      const isLastSentenceOnPage = this.cursor.sentenceIndex >= sentenceCount - 1
       return isLastSentenceOnPage
     }
     return true
@@ -3975,10 +3925,10 @@ export class NovelRenderer {
    */
   getSnapshot(): NovelGameState {
     return {
-      sceneId: this.currentSceneId,
-      eventIndex: this.eventIndex,
-      textIndex: this.textIndex,
-      sentenceIndex: this.sentenceIndex,
+      sceneId: this.cursor.currentSceneId,
+      eventIndex: this.cursor.eventIndex,
+      textIndex: this.cursor.textIndex,
+      sentenceIndex: this.cursor.sentenceIndex,
       flags: this.gameState.toJSON(),
       backgroundPath: this.currentBackgroundPath,
       backgroundColor: this.currentBackgroundColor,
@@ -4007,14 +3957,14 @@ export class NovelRenderer {
   advance(): void {
     // #386: 終劇後は入力を受け付けない（タップしても何も起きない状態を維持する）。
     if (this.storyEnded) return
-    if (this.resolvedEvents.length === 0) return
+    if (this.cursor.resolvedEvents.length === 0) return
     // 選択肢・待機・Jump の予約中／停止中・入場中 (#734)。Jump 停止中 (#725) は、遷移先不在・循環上限で
     // 止まっているとき、Jump を飛び越して後続へ（末尾なら終劇へ）進まないためにここで止める。
     // goBack/seekTo/quickLoad は stalled でも使える（'navigate'）。
     if (this.isTransitionGated('advance')) return
     this.consecutiveJumps = 0
 
-    const current = this.resolvedEvents[this.eventIndex]
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const textEvt = getTextEvent(current)
     const novel = this.isNovelStyle()
 
@@ -4022,13 +3972,13 @@ export class NovelRenderer {
       // --- novel 文単位送り (#292) ---
       // backlog は「ページを離れる時」だけ記録する（文ごとに記録して断片化させない）。
       const pages = this.getNovelPages(textEvt)
-      const page = pages[this.textIndex]
+      const page = pages[this.cursor.textIndex]
       const sentences = page?.sentences ?? []
       const character = textEvt.type === 'dialog' ? textEvt.character : null
 
       // 1) 同ページにまだ続く文がある → 次の文へ（既出は溜まる）。backlog はまだ記録しない。
-      if (this.sentenceIndex < sentences.length - 1) {
-        this.sentenceIndex++
+      if (this.cursor.sentenceIndex < sentences.length - 1) {
+        this.cursor.nextSentence()
         this.render()
         return
       }
@@ -4037,9 +3987,8 @@ export class NovelRenderer {
       this.backlogOverlay.addEntry(character, page?.text ?? '')
 
       // 2a) 同イベントに次ページがある → 新ページの先頭文へ（クリア表示）。
-      if (this.textIndex < pages.length - 1) {
-        this.textIndex++
-        this.sentenceIndex = 0
+      if (this.cursor.textIndex < pages.length - 1) {
+        this.cursor.nextPageStart()
         this.render()
         return
       }
@@ -4048,13 +3997,13 @@ export class NovelRenderer {
       // --- adv（従来どおり・#283 / sentence_per_page 有効時は文単位ページ #448） ---
       // 現在表示中のページ（text 行、または文単位ページ）をそのまま backlog に記録する。
       const advPages = this.sentencePerPage ? this.getAdvSentencePages(textEvt) : textEvt.text
-      const currentLine = advPages[this.textIndex] ?? ''
+      const currentLine = advPages[this.cursor.textIndex] ?? ''
       const character = textEvt.type === 'dialog' ? textEvt.character : null
       this.backlogOverlay.addEntry(character, currentLine)
 
-      this.textIndex++
+      this.cursor.nextTextLine()
       const pageCount = this.currentPageCount(textEvt)
-      if (this.textIndex < pageCount) {
+      if (this.cursor.textIndex < pageCount) {
         // まだページが残っている → クリック = 改頁（次ページをクリア表示）
         this.render()
         return
@@ -4071,16 +4020,11 @@ export class NovelRenderer {
       this.updateNovelScrim(false)
     }
 
-    this.eventIndex++
-    this.textIndex = 0
-    // novel 文 index もイベントを跨ぐのでページ先頭にリセットする (#292)。
-    this.sentenceIndex = 0
-    // novel 改頁キャッシュは eventIndex 単位。次イベントへ進むので破棄する (#283)。
-    this.novelPagesCache = null
-    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
-    this.advSentencePagesCache = null
+    // textIndex / novel 文 index (#292) はページ先頭へ戻り、eventIndex 単位の派生ページキャッシュ
+    // (#283, #448) は破棄される。
+    this.cursor.nextEvent()
 
-    if (this.eventIndex >= this.resolvedEvents.length) {
+    if (this.cursor.eventIndex >= this.cursor.resolvedEvents.length) {
       // 全イベント完了
       this.markCurrentSceneRead()
       this.dialogBox.setDialog(null, '')
@@ -4204,13 +4148,13 @@ export class NovelRenderer {
     // storyEnded を false に巻き戻し、"to be continued..." が消えて背景/立ち絵/BGM が
     // 直前の状態に戻ってしまう（終劇の無効化）。
     if (this.storyEnded) return
-    if (this.resolvedEvents.length === 0) return
+    if (this.cursor.resolvedEvents.length === 0) return
     if (this.isTransitionGated('navigate')) return
     // Jump 停止中 (#725): 画面は直前の本文のままなので、history 末尾（＝その本文）を pop せずに
     // 復元し直す（pop すると一つ前の行まで飛ばす／本文 1 行のシーンでは何も起きない）。
     // 復元後の advance で Jump が再発火する。
     if (this.jumpState === 'stalled') {
-      const last = this.history[this.history.length - 1]
+      const last = this.cursor.history[this.cursor.history.length - 1]
       if (last) {
         this.applyState(last)
         this.render()
@@ -4218,39 +4162,40 @@ export class NovelRenderer {
       return
     }
 
-    const current = this.resolvedEvents[this.eventIndex]
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const textEvt = getTextEvent(current)
     const novel = this.isNovelStyle()
 
     if (textEvt && novel) {
       // --- novel 文単位送り (#292) ---
       // 1) 同ページ内を 1 文戻る。
-      if (this.sentenceIndex > 0) {
-        this.sentenceIndex--
+      if (this.cursor.sentenceIndex > 0) {
+        this.cursor.prevSentence()
         this.render()
         return
       }
       // 2) ページ先頭の文で更に戻る → 前ページへ。前ページは全文見えている状態に復元する
       //    （sentenceIndex = 前ページ最後の文）＝戻った先は溜まりきった状態が自然。
-      if (this.textIndex > 0) {
-        this.textIndex--
-        const prevPage = this.getNovelPages(textEvt)[this.textIndex]
-        this.sentenceIndex = Math.max(0, (prevPage?.sentences.length ?? 1) - 1)
+      if (this.cursor.textIndex > 0) {
+        this.cursor.prevPage((prevTextIndex) => {
+          const prevPage = this.getNovelPages(textEvt)[prevTextIndex]
+          return Math.max(0, (prevPage?.sentences.length ?? 1) - 1)
+        })
         this.render()
         return
       }
       // 3) 先頭ページの先頭文 → スナップショット/イベント戻りへフォールスルー。
-    } else if (textEvt && this.textIndex > 0) {
+    } else if (textEvt && this.cursor.textIndex > 0) {
       // --- adv（従来どおり）: text 行を 1 つ戻る。 ---
-      this.textIndex--
+      this.cursor.prevTextLine()
       this.render()
       return
     }
 
     // 前のスナップショットへ（現在の分を pop して、その前に戻る）
-    if (this.history.length > 1) {
-      this.history.pop()
-      const prevState = this.history[this.history.length - 1]
+    if (this.cursor.history.length > 1) {
+      this.cursor.popHistory()
+      const prevState = this.cursor.history[this.cursor.history.length - 1]
       this.applyState(prevState)
       this.render()
     }
@@ -4262,7 +4207,7 @@ export class NovelRenderer {
   seekTo(historyIndex: number): void {
     // #386: goBack() と同じ理由で終劇後は無効化する（SeekBar ドラッグでの巻き戻し防止）。
     if (this.storyEnded) return
-    if (historyIndex < 0 || historyIndex >= this.history.length) return
+    if (historyIndex < 0 || historyIndex >= this.cursor.history.length) return
     if (this.isTransitionGated('navigate')) return
 
     // シーク操作時はスキップモードを解除する (#140): ユーザーが特定箇所を見たくてシークしているため
@@ -4271,8 +4216,8 @@ export class NovelRenderer {
     this.audioManager.stopVoice()
 
     // 履歴を指定位置まで切り詰める（アンドゥスタック方式: 戻った地点から再進行すると新しい履歴が積まれる）
-    this.history = this.history.slice(0, historyIndex + 1)
-    const targetState = this.history[historyIndex]
+    const targetState = this.cursor.truncateHistory(historyIndex)
+    if (!targetState) return
     this.applyState(targetState)
     this.render()
   }
@@ -4284,12 +4229,12 @@ export class NovelRenderer {
    */
   private pushSnapshot(): void {
     if (
-      this.eventIndex < this.resolvedEvents.length &&
-      getTextEvent(this.resolvedEvents[this.eventIndex])
+      this.cursor.eventIndex < this.cursor.resolvedEvents.length &&
+      getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])
     ) {
       // 本文を描画した時点で、Jump だけが続く連鎖の回数をリセットする (#725)。
       this.consecutiveJumps = 0
-      this.history.push(this.getSnapshot())
+      this.cursor.pushHistory(this.getSnapshot())
       this.flushAutoSave()
     }
   }
@@ -4344,19 +4289,10 @@ export class NovelRenderer {
     // 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できる状態に保つ (#777)。goBack/seekTo は
     // flags だけを過去の値に戻すので、Flag を越えて戻ると列（`[条件:]` の展開）と位置が食い違う。
     // restoreToScene 経由では同じ flags で展開済みなので、結果は同じ（冪等）。
-    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
-
-    // インデックス復元
-    this.eventIndex = state.eventIndex
-    this.textIndex = state.textIndex
-    // novel 文 index (#292)。古い snapshot/セーブには無い → ?? 0（ページ先頭の文）に倒す。
-    this.sentenceIndex = state.sentenceIndex ?? 0
-    // novel 改頁キャッシュは派生。任意局面復元で events / 幾何 / eventIndex が変わり得るので破棄し、
-    // render() 側で現在の eventIndex に対して再計算させる (#283)。
-    this.novelPagesCache = null
-    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
-    this.advSentencePagesCache = null
+    // 続けて位置（eventIndex / textIndex / sentenceIndex）を復元する。novel 文 index (#292) は古い
+    // snapshot/セーブには無い → ?? 0（ページ先頭の文）に倒す。novel 改頁キャッシュ (#283)・adv 文単位
+    // ページキャッシュ (#448) は派生データなので、任意局面復元で破棄し render() 側で再計算させる。
+    this.cursor.restorePosition(state, this.gameState)
 
     // fluid remount 対応 (#663): aspect_ratio:auto プロジェクトは画面幅リサイズで向きの
     // カテゴリ境界を跨ぐと新しい gameWidth/gameHeight で renderer が再構築され、この
@@ -4369,20 +4305,17 @@ export class NovelRenderer {
     // 既存の sentenceIndex クランプと同種の防御として、ここで最後の有効ページへクランプし、
     // 読んでいた位置になるべく近いページに留める。goBack/seekTo 等の通常復元では textIndex は
     // 既に有効範囲内なので no-op（advance() 自体の挙動には影響しない）。
-    const clampTextEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    const clampTextEvt = getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])
     if (clampTextEvt) {
       const pageCount = this.currentPageCount(clampTextEvt)
-      if (pageCount > 0 && this.textIndex >= pageCount) {
-        this.textIndex = pageCount - 1
-        // セルフレビュー must S1 (#666): textIndex を新ページへクランプしても、直前に代入済みの
-        // this.sentenceIndex（旧ページの文 index）はそのまま残ってしまう。render() の #283
-        // クランプは表示用ローカル変数だけを補正し this.sentenceIndex 自体は直さないため、
-        // goBack()（this.sentenceIndex > 0 を見る）が旧ページの生値を見て「新ページの先頭文
-        // まで見た目上変化しない goBack を複数回叩かないと前ページへ戻れない」というファントム
-        // 動作を起こす。クランプが発火した＝ページが変わったので、新ページの先頭文（0）から
-        // 表示し直すのが安全側の挙動として妥当。
-        this.sentenceIndex = 0
-      }
+      // セルフレビュー must S1 (#666): textIndex を新ページへクランプしても、直前に復元済みの
+      // sentenceIndex（旧ページの文 index）はそのまま残ってしまう。render() の #283 クランプは表示用
+      // ローカル変数だけを補正し sentenceIndex 自体は直さないため、goBack()（sentenceIndex > 0 を見る）が
+      // 旧ページの生値を見て「新ページの先頭文まで見た目上変化しない goBack を複数回叩かないと前ページへ
+      // 戻れない」というファントム動作を起こす。クランプが発火した＝ページが変わったので、
+      // `clampToPageCount` は textIndex を最終ページへ寄せるのと同時に sentenceIndex を 0（新ページの
+      // 先頭文）に戻す。
+      this.cursor.clampToPageCount(pageCount)
     }
 
     // 終劇状態の復元 (#386)。goBack/seekTo/セーブ復元はすべて即時反映（フェード演出はしない）。
@@ -4490,7 +4423,7 @@ export class NovelRenderer {
       const xRatio = this.resolveNovelRoleXRatio(ch.name)
       // 明示フィット (#294) は GameState に持たない脚本由来属性なので、復元時は
       // 現在イベント以前の最新 Dialog から引き当てて再現する（goBack/seekTo/セーブ復元）。
-      const fit = resolveCharacterFit(this.resolvedEvents, this.eventIndex, ch.name)
+      const fit = resolveCharacterFit(this.cursor.resolvedEvents, this.cursor.eventIndex, ch.name)
       this.characterLayer.show(ch.name, ch.expression, ch.position, this.assetBaseUrl, {
         instant: true,
         xRatio,
@@ -4503,7 +4436,7 @@ export class NovelRenderer {
     // 話者交代追跡 (#286) を復元位置の話者に合わせる。任意局面復元の直後に同じ話者で
     // 前進しても誤って nudge しないよう、現在イベントの Dialog 話者を lastSpeaker に据える。
     // 復元自体ではポーズ変化を起こさない（演出は GameState に持たない）。
-    const restoredEvt = getTextEvent(this.resolvedEvents[this.eventIndex])
+    const restoredEvt = getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])
     this.lastSpeaker = restoredEvt?.type === 'dialog' ? restoredEvt.character : null
 
     // 追うスポットライト復元 (#693)。対象キャラの座標問い合わせに使う characterLayer への
@@ -4536,7 +4469,7 @@ export class NovelRenderer {
    * （armJump → jumpToScene → 不在確定で stalled）に任せる。
    */
   private rearmJumpAtCurrentPosition(): void {
-    const restoredJump = this.resolvedEvents[this.eventIndex]
+    const restoredJump = this.cursor.resolvedEvents[this.cursor.eventIndex]
     if (typeof restoredJump === 'object' && restoredJump !== null && 'Jump' in restoredJump) {
       this.markCurrentSceneRead()
       this.armJump(restoredJump.Jump.target)
@@ -4549,27 +4482,14 @@ export class NovelRenderer {
    * Flag イベント処理後に呼ばれ、後続の Condition が新しいフラグ値で評価される。
    */
   private reResolveEvents(): void {
-    const current = this.resolvedEvents[this.eventIndex]
     // 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できる状態に保つ（セーブは eventIndex + 最新の
     // flags だけを持つので、再展開の結果が flags の履歴に依存してはならない。ADR 0002）。全体を展開し直し、
     // eventIndex を決定的に写像する (#777)。
-    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     // 写像は純粋関数 `remapEventIndexAfterReResolve`（eventCursor.ts）。現在の Flag が新しい列にも残れば
     // その位置、囲む `[条件:]` が偽で消えたら元イベント列上で次に残るイベントの直前（呼び出し元が続けて
     // eventIndex を進める。囲んでいたブロックの残りは、この版の GUI では消える。TUI はシーン構築時評価で
-    // 残りを流す。#799）。
-    this.eventIndex = remapEventIndexAfterReResolve(
-      this.rawEvents,
-      this.resolvedEvents,
-      current,
-      this.eventIndex,
-      this.gameState
-    )
-    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
-    // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
-    this.novelPagesCache = null
-    // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
-    this.advSentencePagesCache = null
+    // 残りを流す。#799）。展開後のイベント列に紐づくページキャッシュ (#283, #448) も破棄される。
+    this.cursor.reResolve(this.gameState)
   }
 
   /**
@@ -4896,9 +4816,9 @@ export class NovelRenderer {
    * 非テキストイベントを実行しながら次のテキストイベントまで進む
    */
   private processUntilNextTextEvent(): void {
-    while (this.eventIndex < this.resolvedEvents.length) {
-      if (getTextEvent(this.resolvedEvents[this.eventIndex])) break
-      const directive = this.resolvedEvents[this.eventIndex]
+    while (this.cursor.eventIndex < this.cursor.resolvedEvents.length) {
+      if (getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])) break
+      const directive = this.cursor.resolvedEvents[this.cursor.eventIndex]
       this.processDirective(directive)
       // エントリの線形ストリームのシーン境界なら、入ったシーンを知らせる (#777)。本編ストリームの処理だけで
       // 通知する（intermission のタブローは別のイベント列を processDirective に流すので通知しない）。
@@ -4907,7 +4827,7 @@ export class NovelRenderer {
       // Choice / Wait / Jump 予約中は進行を止める。ユーザー操作のゲートではなく、この同期ループ自身が
       // 今立てた状態を見るだけ（入場中は同期の適用中には立たない）ので isTransitionGated は使わない。
       if (this.waitingForChoice || this.waitingForWait || this.jumpState === 'pending') break
-      this.eventIndex++
+      this.cursor.skipDirective()
     }
     // 次に出る立ち絵・背景をバックグラウンドで先読みする (#389)。
     // advance / setScenes / jumpToScene は全てここを通るので、この 1 箇所で全トリガーを覆う。
@@ -4952,8 +4872,8 @@ export class NovelRenderer {
     // URL の収集（走査範囲・分岐での打ち切り・近い順・重複除去・assetBaseUrl が空なら空）は純粋関数
     // `collectUpcomingAssetUrls`（preloadPlan.ts）。ここには積み済み集合との差分と実ロードの投入だけを残す。
     const dedupedUrls = collectUpcomingAssetUrls(
-      this.resolvedEvents,
-      this.eventIndex,
+      this.cursor.resolvedEvents,
+      this.cursor.eventIndex,
       this.assetBaseUrl
     )
 
@@ -5539,7 +5459,7 @@ export class NovelRenderer {
       this.waitingForWait = true
       const resume = (): void => {
         this.waitingForWait = false
-        this.eventIndex++
+        this.cursor.skipDirective()
         this.processUntilNextTextEvent()
         // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
         // 立ち絵 sprite を同期生成してからスナップショットを記録（afterShow）する。
@@ -5587,7 +5507,7 @@ export class NovelRenderer {
   private finishWaitAndContinue(): void {
     if (!this.initialized) return
     this.waitingForWait = false
-    this.eventIndex++
+    this.cursor.skipDirective()
     this.processUntilNextTextEvent()
     // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
     // 立ち絵 sprite を同期生成してからスナップショットを記録（afterShow）する。
@@ -5698,13 +5618,13 @@ export class NovelRenderer {
    * @param afterShow 立ち絵 show 直後・render 前に同期実行するフック（スナップショット記録に使う）
    */
   private showCharacterThenRender(afterShow?: () => void): void {
-    if (this.eventIndex >= this.resolvedEvents.length) {
+    if (this.cursor.eventIndex >= this.cursor.resolvedEvents.length) {
       // 立ち絵対象が無い。afterShow（スナップショット）だけ走らせ、render は呼ばない
       // （render() 自体も範囲外では no-op だが、呼ばないことで意図を明確にする）。
       afterShow?.()
       return
     }
-    const event = this.resolvedEvents[this.eventIndex]
+    const event = this.cursor.resolvedEvents[this.cursor.eventIndex]
     // adv / skip は同期描画でよい（skip は instant 表示でラグが無く、adv は #293 の対象外＝非回帰）。
     if (!this.isNovelStyle() || this.skipMode) {
       this.showCharacterFromDialog(event)
@@ -5717,15 +5637,15 @@ export class NovelRenderer {
     // 設計判断 (Q2): タイムアウトで先に render しない（低速回線で先に出すと #293 で直した
     // 「文字先行→立ち絵後出し」が再発するため。load 失敗は CharacterLayer の `.finally` → onReady で
     // render され「永久に出ない」事故は防止済み）。
-    const expectedEventIndex = this.eventIndex
-    const expectedTextIndex = this.textIndex
-    const expectedSentenceIndex = this.sentenceIndex
+    const expectedEventIndex = this.cursor.eventIndex
+    const expectedTextIndex = this.cursor.textIndex
+    const expectedSentenceIndex = this.cursor.sentenceIndex
     const token = ++this.deferredTextRenderToken
     const isStillCurrent = () =>
       token === this.deferredTextRenderToken &&
-      this.eventIndex === expectedEventIndex &&
-      this.textIndex === expectedTextIndex &&
-      this.sentenceIndex === expectedSentenceIndex
+      this.cursor.eventIndex === expectedEventIndex &&
+      this.cursor.textIndex === expectedTextIndex &&
+      this.cursor.sentenceIndex === expectedSentenceIndex
     let rendered = false
     const renderOnce = () => {
       if (rendered) return
@@ -6208,7 +6128,7 @@ export class NovelRenderer {
   /** 保留中の自動セーブを、現在位置が本文でゲートが開いていれば実行して下ろす (#768)。 */
   private flushAutoSave(): void {
     if (!this.autoSavePending) return
-    if (this.storyEnded || !getTextEvent(this.resolvedEvents[this.eventIndex])) return
+    if (this.storyEnded || !getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])) return
     if (gateReason('quickSave', this.gateState()) !== null) return
     this.autoSavePending = false
     this.saveQuick('auto')
@@ -6373,7 +6293,7 @@ export class NovelRenderer {
    * @param state applyState に渡す完成済みの状態スナップショット
    */
   private restoreToScene(scene: EventScene, state: NovelGameState): void {
-    this.playbackStarted = true
+    this.cursor.markStarted()
     // フラグを設定（置換セマンティクス）。
     // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
     //
@@ -6386,7 +6306,7 @@ export class NovelRenderer {
     // resolveEvents の展開か直接 applyState 経路のどちらかが壊れるため残す。
     this.gameState.fromJSON(state.flags)
 
-    this.currentSceneId = state.sceneId
+    this.cursor.setCurrentSceneId(state.sceneId)
 
     // 選択肢/待機状態をリセット
     this.waitingForChoice = false
@@ -6402,15 +6322,13 @@ export class NovelRenderer {
     this.choiceOverlay.hide()
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
-    this.rawEvents = [...scene.events]
-    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
+    this.cursor.replaceEvents([...scene.events], this.gameState)
 
     // 完成済み NovelGameState を applyState で宣言的に復元
     this.applyState(state)
 
     // 履歴をリセット（復元後は現在位置のみ）
-    this.history = [this.getSnapshot()]
+    this.cursor.resetHistory(this.getSnapshot())
 
     this.render()
   }
@@ -6555,8 +6473,11 @@ export class NovelRenderer {
    * テキストが空（立ち絵だけの空ダイアログ等）なら 1 ページ（空文字）を返し、従来の空表示を保つ。
    */
   private getNovelPages(textEvt: { text: string[] }): NovelPage[] {
-    if (this.novelPagesCache && this.novelPagesCache.eventIndex === this.eventIndex) {
-      return this.novelPagesCache.pages
+    if (
+      this.cursor.novelPagesCache &&
+      this.cursor.novelPagesCache.eventIndex === this.cursor.eventIndex
+    ) {
+      return this.cursor.novelPagesCache.pages
     }
     // 複数 text 行はノベルでは 1 連続本文として扱い、文境界で改めて割る。
     // 改行は stripRubyMarkup 前に空白へ畳んでおく（splitIntoSentences は改行を文内改行として温存
@@ -6578,7 +6499,7 @@ export class NovelRenderer {
       )
       if (pages.length === 0) pages = [{ text: '', sentences: [], lineCount: 0 }]
     }
-    this.novelPagesCache = { eventIndex: this.eventIndex, pages }
+    this.cursor.cacheNovelPages(pages)
     return pages
   }
 
@@ -6609,8 +6530,11 @@ export class NovelRenderer {
    * グループの間に空文字 1 ページを挿入する。
    */
   private getAdvSentencePages(textEvt: { text: string[] }): string[] {
-    if (this.advSentencePagesCache && this.advSentencePagesCache.eventIndex === this.eventIndex) {
-      return this.advSentencePagesCache.pages
+    if (
+      this.cursor.advSentencePagesCache &&
+      this.cursor.advSentencePagesCache.eventIndex === this.cursor.eventIndex
+    ) {
+      return this.cursor.advSentencePagesCache.pages
     }
     const pages: string[] = []
     let group: string[] = []
@@ -6633,7 +6557,7 @@ export class NovelRenderer {
     }
     flushGroup()
     if (pages.length === 0) pages.push('')
-    this.advSentencePagesCache = { eventIndex: this.eventIndex, pages }
+    this.cursor.cacheAdvSentencePages(pages)
     return pages
   }
 
@@ -6650,14 +6574,14 @@ export class NovelRenderer {
    */
   private render(): void {
     if (!this.initialized) return
-    if (this.eventIndex >= this.resolvedEvents.length) {
+    if (this.cursor.eventIndex >= this.cursor.resolvedEvents.length) {
       // 空イベント列・終端へ切り替わった後に、直前の本文吹き出しだけが残るのを防ぐ。
       this.dialogBox.clearText()
       this.bubbleLayer.hide()
       return
     }
 
-    const current = this.resolvedEvents[this.eventIndex]
+    const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const textEvt = getTextEvent(current)
 
     if (!textEvt) {
@@ -6676,37 +6600,42 @@ export class NovelRenderer {
     let cumulativeText = ''
     let shownPlainLength = 0
     if (novel) {
-      const page = this.getNovelPages(textEvt)[this.textIndex]
+      const page = this.getNovelPages(textEvt)[this.cursor.textIndex]
       novelPageSentences = page?.sentences ?? []
       // 文 index を現ページの範囲にクランプ（復元で範囲外を渡されても落とさない・空ページは 0）。
       const maxSentence = Math.max(0, novelPageSentences.length - 1)
-      novelSentenceIndex = Math.min(Math.max(0, this.sentenceIndex), maxSentence)
+      novelSentenceIndex = Math.min(Math.max(0, this.cursor.sentenceIndex), maxSentence)
       cumulativeText = novelPageSentences.slice(0, novelSentenceIndex + 1).join('')
       shownPlainLength = novelPageSentences.slice(0, novelSentenceIndex).join('').length
     }
     // line は scrim 可視判定や（adv の）表示テキストに使う。novel は累積テキスト。
     // adv は sentence_per_page (#448) が有効なら文単位ページ、無効なら従来どおり text[] 行。
     const advLine = this.sentencePerPage
-      ? (this.getAdvSentencePages(textEvt)[this.textIndex] ?? '')
-      : (textEvt.text[this.textIndex] ?? '')
+      ? (this.getAdvSentencePages(textEvt)[this.cursor.textIndex] ?? '')
+      : (textEvt.text[this.cursor.textIndex] ?? '')
     const line = novel ? cumulativeText : advLine
-    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
-    const readLineKey = this.currentSceneId
-      ? makeReadLineKey(this.currentSceneId, displayIndex)
+    const displayIndex = computeDisplayIndex(this.cursor.eventIndex, this.cursor.resolvedEvents)
+    const readLineKey = this.cursor.currentSceneId
+      ? makeReadLineKey(this.cursor.currentSceneId, displayIndex)
       : null
-    if (this.docKey && this.currentSceneId) {
+    if (this.docKey && this.cursor.currentSceneId) {
       migrateLegacyReadProgressForScene(
         this.docKey,
         this.readProgress,
         this.readLineProgress,
-        this.currentSceneId
+        this.cursor.currentSceneId
       )
     }
 
     // スキップモード処理 (#140): 既読チェックはマーク前に行う
     if (this.skipMode && this.docKey) {
       const alreadyRead = readLineKey
-        ? isReadForLine(this.readProgress, this.readLineProgress, this.currentSceneId, displayIndex)
+        ? isReadForLine(
+            this.readProgress,
+            this.readLineProgress,
+            this.cursor.currentSceneId,
+            displayIndex
+          )
         : isRead(this.readProgress, displayIndex)
       if (!alreadyRead) {
         // 未読到達 → スキップ終了（現在の行は表示して待機）
@@ -6731,7 +6660,7 @@ export class NovelRenderer {
     // per-line voice 再生 (#144): イベント先頭でのみ再生。
     // novel (#292) は文単位送りで render が文ごとに走るため、ページ先頭（textIndex===0）かつ
     // 文先頭（sentenceIndex===0）に限る。adv は従来どおり textIndex===0（最初の text 行）。
-    const atEventStart = this.textIndex === 0 && (!novel || novelSentenceIndex === 0)
+    const atEventStart = this.cursor.textIndex === 0 && (!novel || novelSentenceIndex === 0)
     let voicePath: string | null = null
     let perLineFontFamily: string | null = null
     let bubbleStyle: BubbleStyle | null = null
@@ -6867,8 +6796,8 @@ export class NovelRenderer {
     //  - 可視: novel は「最後のページの最後の文」かつ最後のイベントで非表示（それ以上進めない）。
     //    adv は従来どおり「最後のページ（text 行）かつ最後のイベント」で非表示。
     const pageCount = this.currentPageCount(textEvt)
-    const isLastPage = this.textIndex >= pageCount - 1
-    const isLastEvent = this.eventIndex >= this.resolvedEvents.length - 1
+    const isLastPage = this.cursor.textIndex >= pageCount - 1
+    const isLastEvent = this.cursor.eventIndex >= this.cursor.resolvedEvents.length - 1
     if (novel) {
       const isLastSentenceOnPage = novelSentenceIndex >= novelPageSentences.length - 1
       this.dialogBox.setIndicatorKind(isLastSentenceOnPage ? 'pageturn' : 'next')
@@ -6941,9 +6870,9 @@ export class NovelRenderer {
 
   private updateCounter(): void {
     if (!this.counterText) return
-    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+    const displayIndex = computeDisplayIndex(this.cursor.eventIndex, this.cursor.resolvedEvents)
     // 表示文字列の整形は novelLayout.formatCounterText に集約 (#260)。
-    this.counterText.text = formatCounterText(displayIndex, this.displayEventCount)
+    this.counterText.text = formatCounterText(displayIndex, this.cursor.displayEventCount)
   }
 
   /**
@@ -6952,10 +6881,10 @@ export class NovelRenderer {
    *  満タンに張り付いていた #125)
    */
   private updateSeekBar(): void {
-    const displayIndex = computeDisplayIndex(this.eventIndex, this.resolvedEvents)
+    const displayIndex = computeDisplayIndex(this.cursor.eventIndex, this.cursor.resolvedEvents)
     // 0-based 変換 + クランプは novelLayout.computeSeekBarPosition に集約 (#260)。
     // SeekBar は ratio = current/(total-1) を計算する。
-    const { current, total } = computeSeekBarPosition(displayIndex, this.displayEventCount)
+    const { current, total } = computeSeekBarPosition(displayIndex, this.cursor.displayEventCount)
     this.seekBar.update(current, total)
   }
 
@@ -6971,8 +6900,8 @@ export class NovelRenderer {
   private seekToTextEventDisplayIndex(displayIndex: number): void {
     const historyIdx = findHistoryIndexForDisplayIndex(
       displayIndex,
-      this.resolvedEvents,
-      this.history
+      this.cursor.resolvedEvents,
+      this.cursor.history
     )
     if (historyIdx < 0) return
     this.seekTo(historyIdx)

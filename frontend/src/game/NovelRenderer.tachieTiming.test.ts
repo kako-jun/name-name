@@ -21,6 +21,7 @@ import { Assets, Texture } from 'pixi.js'
 import * as bgPreload from './backgroundPreload'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internalsOf } from '../test/rendererInternals'
 
 // 解決済み Promise の .then/.finally チェーンを 1 巡消化する。
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
@@ -92,7 +93,7 @@ interface RendererTestHooks {
   resolvedEvents: Event[]
 }
 function hooks(r: NovelRenderer): RendererTestHooks {
-  return r as unknown as RendererTestHooks
+  return internalsOf<RendererTestHooks>(r)
 }
 
 /** fake texture（loadTexture 内の texture.width/height を読む経路を満たす最小形）。 */

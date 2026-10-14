@@ -12,6 +12,7 @@ import { NovelRenderer } from './NovelRenderer'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
 import { SaveManager, type SaveSlotData } from './SaveManager'
+import { internalsOf } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -368,7 +369,7 @@ describe('ライブ切り替えで textIndex を範囲内に戻す (#789)', () =
     r.setDialogStyle('novel')
     r.startFrom({ sceneId: 'n' })
     // ノベルの改頁は表示幅の計測（初期化後）が要るので、2ページ目にいる状態を直接作る。
-    ;(r as unknown as { textIndex: number }).textIndex = 1
+    internalsOf<{ textIndex: number }>(r).textIndex = 1
     expect(r.getSnapshot().textIndex).toBe(1)
 
     r.setDialogStyle('adv') // adv では 1 行 = 1 ページなので 1 ページ目へ寄る

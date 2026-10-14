@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { confineForTest } from '../test/confinement'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene, FlagValue } from '../types'
-import { internals, type RendererInternals } from '../test/rendererInternals'
+import { internals, type RendererInternals, internalsOf } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -86,8 +86,10 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
 
     void r.setEvents(doc)
 
-    const texts = (r as unknown as { resolvedEvents: Event[] }).resolvedEvents
-      .filter((e): e is { Narration: { text: string[] } } => 'Narration' in (e as object))
+    const texts = internalsOf<{ resolvedEvents: Event[] }>(r)
+      .resolvedEvents.filter(
+        (e): e is { Narration: { text: string[] } } => 'Narration' in (e as object)
+      )
       .map((e) => e.Narration.text[0])
     expect(texts).toEqual(['base'])
   })
@@ -160,7 +162,7 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
     expect(r.getCurrentSceneId()).toBeNull()
     // 次の startFrom({}) でも旧文書は再生されない
     await r.startFrom({})
-    expect((r as unknown as { resolvedEvents: Event[] }).resolvedEvents).toEqual([])
+    expect(internalsOf<{ resolvedEvents: Event[] }>(r).resolvedEvents).toEqual([])
   })
 
   it('9: setEvents / setScenes は新規開始の結果（entered）を返す', async () => {
