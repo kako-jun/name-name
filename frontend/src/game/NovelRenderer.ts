@@ -72,6 +72,7 @@ import { buildFreshPositionState } from './freshState'
 import { collectUpcomingAssetUrls } from './preloadPlan'
 import { buildDebugState, type DebugState } from './debugState'
 import { isSceneIdConfined } from './sceneConfinement'
+import { SceneIndex, type SceneLookup } from './SceneIndex'
 import {
   carryPolicyFor,
   createDeferred,
@@ -85,10 +86,7 @@ import {
   type SceneEntryRequest,
   type SceneEntryResult,
   findRestorePositionError,
-  findLinearSegments,
-  resolveLinearSegments,
   segmentAt,
-  type LinearSegment,
   type ResolvedSegment,
   type TransitionGateState,
 } from './sceneEntry'
@@ -137,7 +135,6 @@ import {
   computeSeekBarPosition,
   PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
   PLAYER_BUTTON_ROW_HEIGHT_PX,
-  findSceneById,
   resolveSceneTitle,
   splitIntoSentences,
   paginateSentencesByLines,
@@ -178,22 +175,6 @@ import { resolveVoiceSpatialization } from './voiceSpatialization'
 export type CanvasTouchAction = 'none' | 'pan-y'
 
 const NOVEL_CANVAS_TOUCH_ACTION: CanvasTouchAction = 'pan-y'
-
-/** シーンを引いた結果: 引けたか、引けなかった理由と警告用の文言。 */
-type SceneLookup =
-  | { status: 'found'; scene: EventScene }
-  | {
-      status: 'failed'
-      reason: 'not-found' | 'resolver-error' | 'out-of-range'
-      detail: string
-      error?: unknown
-    }
-
-/**
- * `resolveScene` の結果。遅延ロードで取得できたシーン群（loaded）は、世代の判定を通るまで
- * `allScenes` に反映しない（破棄された入場は何も書き換えない）。
- */
-type SceneResolution = SceneLookup | { status: 'loaded'; scenes: EventScene[] }
 
 /**
  * 復元 (#294) 用: 指定キャラの立ち絵フィット指定を resolvedEvents から解決する純粋関数。
@@ -365,24 +346,6 @@ export class NovelRenderer {
    *  「今どのルートを再生中か」を表す可変フィールド（entryRawEvents とは別物）。 */
   private rawEvents: Event[] = []
   /**
-   * エントリ文書本来の events のスナップショット (#662)。`setEvents()` / `loadEvents()`
-   * （エントリ doc を供給する経路）でのみ更新し、quickLoad()/restoreToScene() 経由の
-   * `rawEvents` 上書き（ルート内シーンの events）では一切更新しない。
-   *
-   * 背景: マウント時の自動 quickLoad（#578/#620）は `restoreToScene()` を呼び、直前ルート
-   * （例: 近視ルート）の scene.events で `rawEvents` を上書きする。この状態で「はじめから」
-   * （`startFrom({})`）が `rawEvents` を再生すると、シーンID はリセットされていても実際に再生
-   * される events は前ルートのままになってしまう（#662）。新規開始の 'entry' は代わりにこの
-   * `entryRawEvents` を参照することで、quickLoad の有無に関係なく常にエントリ文書の
-   * 冒頭から再生する。
-   */
-  private entryRawEvents: Event[] = []
-  /**
-   * 新規開始（`startFrom({})`、target 'entry'）の `currentSceneId`。`loadScenes` は `scenes[0].id`、
-   * `loadEvents` は null（線形ストリームは sceneId を持たない）。従来のマウント結果を保つ (#734)。
-   */
-  private entrySceneId: string | null = null
-  /**
    * 再生が開始済みか。`loadEvents` / `loadScenes` の直後は false（文書だけ入って位置が未確定）で、
    * 入場の適用（`resetAndStartEvents` / `restoreToScene`）で true になる。未開始の位置は index 0 の
    * 仮置きにすぎないので、入場が失敗しても遷移状態を導出し直さない（先頭が Choice だと、
@@ -414,13 +377,6 @@ export class NovelRenderer {
   private onEndCallback: (() => void) | null = null
   /** 動画エクスポート用 (#228)。`jumpToScene` / `setScenes` でシーンが切り替わったときに呼ぶ */
   private onSceneChangeCallback: ((sceneId: string) => void) | null = null
-  private missingSceneResolver: ((sceneId: string) => Promise<EventScene[] | null>) | null = null
-  /**
-   * 遅延ロード中の resolver 呼び出し (#733)。同じ sceneId の解決は 1 本に束ね、後続の呼び出しも同じ
-   * Promise を待つ（Jump 経路は世代違いの再入でも自分の世代で後処理するため、黙って捨てると予約が
-   * 宙に浮く）。settle 時に `requestMissingScene` が取り除く。
-   */
-  private pendingMissingScenes = new Map<string, Promise<EventScene[] | null>>()
   /**
    * `?scene=` ディープリンク単独埋め込みの confinement（在圏）一覧 (#386)。
    * null なら制限なし（通常のハブ経由フロー）。非 null のときは `jumpToScene` がこの
@@ -752,8 +708,8 @@ export class NovelRenderer {
   /** タイマー抽象化レイヤー (#228 動画エクスポート対応の土台) */
   private time: TimeController = defaultTimeController
 
-  /** 全シーン情報（シーンジャンプ用） */
-  private allScenes: EventScene[] = []
+  /** シーン索引・エントリ文書・遅延ロード・線形区間 (#823)。再生中の配列（rawEvents）は持たない */
+  private sceneIndex = new SceneIndex()
 
   /** セーブマネージャー */
   private saveManager: SaveManager = new SaveManager()
@@ -1253,8 +1209,7 @@ export class NovelRenderer {
     // #662: エントリ文書の events を(再)供給する公開経路。ここでスナップショットしておけば、この後
     // quickLoad/restoreToScene が rawEvents を直前ルートの events で上書きしても、新規開始の
     // 'entry' 対象は常にこのエントリ文書へ戻れる。
-    this.entryRawEvents = [...events]
-    this.entrySceneId = null
+    this.sceneIndex.setEntry(events)
     this.playbackStarted = false
     this.rawEvents = [...events]
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
@@ -1325,10 +1280,10 @@ export class NovelRenderer {
    * `loadEvents` の `scenes` 版。続く初期入場が位置を確定する。
    */
   loadScenes(scenes: EventScene[]): void {
-    this.allScenes = scenes
+    this.sceneIndex.setJumpSceneIndex(scenes)
     // 0件は空の文書（`loadEvents([])`）。旧文書を entryRawEvents / entrySceneId に残さない。
     this.loadEvents(scenes.length > 0 ? scenes[0].events : [])
-    if (scenes.length > 0) this.entrySceneId = scenes[0].id
+    if (scenes.length > 0) this.sceneIndex.setEntrySceneId(scenes[0].id)
   }
 
   /**
@@ -1343,13 +1298,13 @@ export class NovelRenderer {
    * 従来の `setScenes` と同じ集合になる（＝挙動も従来どおり）。
    */
   setJumpSceneIndex(scenes: EventScene[]): void {
-    this.allScenes = scenes
+    this.sceneIndex.setJumpSceneIndex(scenes)
   }
 
   setMissingSceneResolver(
     resolver: ((sceneId: string) => Promise<EventScene[] | null>) | null
   ): void {
-    this.missingSceneResolver = resolver
+    this.sceneIndex.setMissingSceneResolver(resolver)
   }
 
   /**
@@ -1510,30 +1465,6 @@ export class NovelRenderer {
   }
 
   /**
-   * missingSceneResolver を呼ぶ。同じ sceneId が解決中ならその Promise を共有する (#733)。
-   * resolver の同期 throw も reject に畳む。呼び出しごとの後処理（世代・initialized 判定）は呼び出し側。
-   */
-  private requestMissingScene(sceneId: string): Promise<EventScene[] | null> {
-    const inflight = this.pendingMissingScenes.get(sceneId)
-    if (inflight) return inflight
-    const resolver = this.missingSceneResolver
-    // resolver の Promise をそのまま共有する（余計な await 段を挟まず、従来と同じ解決タイミングを保つ）。
-    // 取り除きは副チェーンで行い、共有 Promise の settle を遅らせない。
-    let p: Promise<EventScene[] | null>
-    try {
-      p = resolver ? resolver(sceneId) : Promise.resolve(null)
-    } catch (err) {
-      p = Promise.reject(err)
-    }
-    const remove = (): void => {
-      if (this.pendingMissingScenes.get(sceneId) === p) this.pendingMissingScenes.delete(sceneId)
-    }
-    p.then(remove, remove)
-    this.pendingMissingScenes.set(sceneId, p)
-    return p
-  }
-
-  /**
    * 再生位置が別の文脈へ移るとき（`resetAndStartEvents`・`applyState`）に世代を進める (#734)。
    * 待っていた入場は世代の不一致で破棄される（superseded）ので、入場中ゲートもここで下ろす。
    * 下ろさないと、破棄された入場が解決するまで（解決しなければ永久に）ゲートが残る。
@@ -1594,7 +1525,7 @@ export class NovelRenderer {
       // sceneId（正常な終劇に偽装された事故）」を区別できないと、typo が気づかれない
       // まま「正常な終劇」として素通りしてしまう。allScenes（entry + 圏内 script の
       // 全シーン）にも見つからない場合だけ、開発時に気づけるよう警告を残す。
-      if (import.meta.env.DEV && !findSceneById(this.allScenes, req.sceneId)) {
+      if (import.meta.env.DEV && !this.sceneIndex.findScene(req.sceneId)) {
         console.warn(
           `[name-name] confinement: sceneId "${req.sceneId}" は allScenes にも存在しません。終劇として扱いますが、原稿の typo の可能性があります（意図した圏外遷移なら無視してください）。`
         )
@@ -1611,7 +1542,9 @@ export class NovelRenderer {
     if (req.kind === 'fresh' && req.target === 'entry') {
       // エントリ文書の線形ストリームの先頭から。シーンの引き当て（遅延ロード）は要らない。
       try {
-        return Promise.resolve(this.applyFresh(req, this.entrySceneId, this.entryRawEvents))
+        return Promise.resolve(
+          this.applyFresh(req, this.sceneIndex.getEntrySceneId(), this.sceneIndex.getEntryEvents())
+        )
       } catch (err) {
         return Promise.resolve(this.failApply(req, err))
       }
@@ -1632,7 +1565,7 @@ export class NovelRenderer {
       )
     }
 
-    const resolution = this.resolveScene(sceneId)
+    const resolution = this.sceneIndex.resolve(sceneId)
     if (!('then' in resolution)) {
       // 同期の適用が throw しても、呼び出し元へ伝播させず failed（apply-error）で解決する。
       // await 後の適用と同じ扱い（初期入場の連鎖が reject で途切れない）。
@@ -1658,7 +1591,9 @@ export class NovelRenderer {
       try {
         return this.finishEntry(
           req,
-          resolved.status === 'loaded' ? this.indexLoaded(sceneId, resolved.scenes) : resolved
+          resolved.status === 'loaded'
+            ? this.sceneIndex.indexLoaded(sceneId, resolved.scenes)
+            : resolved
         )
       } catch (err) {
         return this.failApply(req, err)
@@ -1676,23 +1611,23 @@ export class NovelRenderer {
   private restoreEntryStream(
     req: Extract<SceneEntryRequest, { kind: 'restore' }>
   ): SceneEntryResult {
-    if (this.entryRawEvents.length === 0) {
+    if (this.sceneIndex.getEntryEvents().length === 0) {
       return this.failEntry(req, {
         status: 'failed',
         reason: 'not-found',
         detail: 'エントリ文書が読み込まれていないため、sceneId が null の位置を復元できません',
       })
     }
-    const rangeError = this.checkRestorePosition(this.entryRawEvents, req.state)
+    const rangeError = this.checkRestorePosition(this.sceneIndex.getEntryEvents(), req.state)
     if (rangeError) return this.failEntry(req, rangeError)
     try {
       if (req.source === 'snapshot') this.storyEnded = req.state.storyEnded
-      const entryId = this.entrySceneId
+      const entryId = this.sceneIndex.getEntrySceneId()
       const entry: EventScene = {
         id: entryId ?? '',
         title: '',
         view: 'TopDown',
-        events: this.entryRawEvents,
+        events: this.sceneIndex.getEntryEvents(),
       }
       // sceneId はエントリの識別子に正規化する（loadEvents なら null。空文字のセーブも同じ扱い）。
       this.restoreToScene(entry, { ...req.state, sceneId: entryId })
@@ -1736,66 +1671,6 @@ export class NovelRenderer {
     } else {
       this.stallJump()
     }
-  }
-
-  /** 遷移先を引く手段が確実に無い（読み込み済みに無く、遅延ロードの resolver も無い）。 */
-  private isDefinitelyUnresolvable(sceneId: string): boolean {
-    return !findSceneById(this.allScenes, sceneId) && !this.missingSceneResolver
-  }
-
-  /**
-   * 遅延ロードの解決口 (#734)。シーンの引き当てはここ1か所で行う。`allScenes` にあれば**同期のまま**返す
-   * （同期描画のタイミングを変えない。動画書き出しの preRoll と既存テストの前提）。無ければ
-   * `requestMissingScene`（同一 sceneId の解決は共有）を待って `allScenes` を更新し、引き直す。
-   * 世代と `initialized` の判定は呼び出し側（`enterScene`）が await の後に1か所で行う。
-   */
-  private resolveScene(sceneId: string): SceneLookup | Promise<SceneResolution> {
-    const scene = findSceneById(this.allScenes, sceneId)
-    if (scene) return { status: 'found', scene }
-    if (this.isDefinitelyUnresolvable(sceneId)) {
-      return {
-        status: 'failed',
-        reason: 'not-found',
-        detail: `シーンが見つからない: ${sceneId}`,
-      }
-    }
-    return (async (): Promise<SceneResolution> => {
-      try {
-        const scenes = await this.requestMissingScene(sceneId)
-        if (!scenes) {
-          return {
-            status: 'failed',
-            reason: 'not-found',
-            detail: `シーンが見つからない（resolver が null を返しました）: ${sceneId}`,
-          }
-        }
-        return { status: 'loaded', scenes }
-      } catch (error) {
-        return {
-          status: 'failed',
-          reason: 'resolver-error',
-          detail: `シーンの追加読み込みに失敗しました: ${sceneId}`,
-          error,
-        }
-      }
-    })()
-  }
-
-  /**
-   * 遅延ロードで取れたシーン群を `allScenes` に反映して、目的のシーンを引き直す。
-   * 世代の判定（破棄されないこと）を通った後にだけ呼ぶ（破棄された入場は何も書き換えない）。
-   */
-  private indexLoaded(sceneId: string, scenes: EventScene[]): SceneLookup {
-    this.setJumpSceneIndex(scenes)
-    const scene = findSceneById(this.allScenes, sceneId)
-    if (!scene) {
-      return {
-        status: 'failed',
-        reason: 'not-found',
-        detail: `lazy load 後もシーンが見つかりません: ${sceneId}`,
-      }
-    }
-    return { status: 'found', scene }
   }
 
   /** 解決が済んだ入場を、種類に応じて適用する（失敗なら失敗として扱う）。 */
@@ -1886,40 +1761,24 @@ export class NovelRenderer {
     // シーンなら、そのシーンの events だけでなく、ストリーム全体をシーン先頭から流す。シーン末尾で終わらず、
     // 続くシーンまで再生される。ストリームの持ち主はエントリのまま（セーブは sceneId = エントリ + eventIndex
     // で復元できる）。既定（`?scene=` / `?debug_scene=` を含む）は指定シーンの events だけを流して末尾で終劇する。
-    if (req.linear && sceneId !== null && sceneId !== this.entrySceneId) {
-      const linearStart = this.linearStartIndex(sceneId, req.flags)
+    if (req.linear && sceneId !== null && sceneId !== this.sceneIndex.getEntrySceneId()) {
+      const linearStart = this.sceneIndex.linearStartIndex(sceneId, req.flags)
       if (linearStart !== null) {
-        this.startScene(this.entrySceneId, this.entryRawEvents, carryPolicyFor('fresh'), {
-          startIndex: linearStart,
-          announcedSceneId: sceneId,
-        })
+        this.startScene(
+          this.sceneIndex.getEntrySceneId(),
+          this.sceneIndex.getEntryEvents(),
+          carryPolicyFor('fresh'),
+          {
+            startIndex: linearStart,
+            announcedSceneId: sceneId,
+          }
+        )
         return { status: 'entered', sceneId }
       }
     }
     // 先頭から: 通常入場と同じ経路（冒頭の [背景:]/[BGM:] 等を最初のテキストまで実行し、立ち絵も出す #399）。
     this.startScene(sceneId, events, carryPolicyFor('fresh'))
     return { status: 'entered', sceneId }
-  }
-
-  /**
-   * 新規開始の対象 `sceneId` がエントリの線形ストリーム上にあれば、そのシーン先頭の展開後の位置を返す (#777)。
-   * flags は新規開始で置き換えた後の値（`req.flags`）で展開する。線形ストリーム上になければ null。
-   */
-  private linearStartIndex(
-    sceneId: string,
-    flags: Record<string, FlagValue> | undefined
-  ): number | null {
-    const segments = this.getLinearSegments()
-    const at = segments.findIndex((seg) => seg.sceneId === sceneId)
-    if (at < 0) return null
-    const gs = new GameState()
-    gs.fromJSON(flags ?? {})
-    const resolved = resolveLinearSegments(
-      this.entryRawEvents,
-      segments,
-      (events) => resolveEvents(events, gs).length
-    )
-    return resolved.find((seg) => seg.sceneId === sceneId)?.start ?? null
   }
 
   /**
@@ -2366,7 +2225,10 @@ export class NovelRenderer {
     if (this.isTransitionGated('confirmChoice')) return false
     // 遷移先が確実に無い（解決手段も無い）なら、選択肢を閉じずその場に留める。閉じてから再表示すると
     // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
-    if (isSceneIdConfined(jump, this.confinedSceneIds) && this.isDefinitelyUnresolvable(jump)) {
+    if (
+      isSceneIdConfined(jump, this.confinedSceneIds) &&
+      this.sceneIndex.isDefinitelyUnresolvable(jump)
+    ) {
       console.warn(`[name-name] シーンが見つからない: ${jump}`)
       return false
     }
@@ -2517,50 +2379,18 @@ export class NovelRenderer {
     return false
   }
 
-  /** `findLinearSegments` の結果。エントリの元イベント列と `allScenes` が変わったときだけ引き直す (#777)。 */
-  private linearSegmentsCache: {
-    entry: readonly Event[]
-    scenes: readonly EventScene[]
-    segments: LinearSegment[]
-  } | null = null
-
-  private getLinearSegments(): LinearSegment[] {
-    const c = this.linearSegmentsCache
-    if (c && c.entry === this.entryRawEvents && c.scenes === this.allScenes) return c.segments
-    const segments = findLinearSegments(this.entryRawEvents, this.allScenes)
-    this.linearSegmentsCache = { entry: this.entryRawEvents, scenes: this.allScenes, segments }
-    return segments
-  }
-
-  /**
-   * いま再生しているストリームがエントリの線形ストリームか (#777)。ストリームの持ち主がエントリで、
-   * 元イベント列がエントリのものと一致するとき。選択肢・`[ジャンプ:]` で入ったシーンは、そのシーンの
-   * events だけが流れるので false（線形連結は効かない）。
-   */
-  private isEntryStreamActive(): boolean {
-    if (this.currentSceneId !== this.entrySceneId) return false
-    const raw = this.rawEvents
-    const entry = this.entryRawEvents
-    if (raw.length !== entry.length || entry.length === 0) return false
-    for (let i = 0; i < raw.length; i++) if (raw[i] !== entry[i]) return false
-    return true
-  }
-
-  /** 現在の flags で展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null。 */
+  /** 現在の flags で展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null (#777)。 */
   private resolveLinearSegmentsNow(): ResolvedSegment[] | null {
-    if (!this.isEntryStreamActive()) return null
-    const segments = this.getLinearSegments()
-    if (segments.length === 0) return null
-    return resolveLinearSegments(
-      this.entryRawEvents,
-      segments,
+    return this.sceneIndex.resolveLinearSegmentsNow(
+      this.currentSceneId,
+      this.rawEvents,
       (events) => resolveEvents(events, this.gameState).length
     )
   }
 
   /** 登録済みシーンIDの一覧（順序保持）(#228 動画エクスポート UI 用) */
   getAllSceneIds(): string[] {
-    return this.allScenes.map((s) => s.id)
+    return this.sceneIndex.getAllSceneIds()
   }
 
   /** 描画 canvas を取得する (#228 `captureStream` 用) */
@@ -6399,7 +6229,7 @@ export class NovelRenderer {
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
-    const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
+    const sceneName = resolveSceneTitle(this.sceneIndex.getScenes(), this.getPlayheadSceneId())
 
     const data = gameStateToSaveSlot(this.getSnapshot(), {
       slot: -1, // クイックセーブはスロット番号不使用
@@ -6493,7 +6323,7 @@ export class NovelRenderer {
         return
       }
       // quickSave と共通のシーンタイトル解決 (#260)。
-      const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
+      const sceneName = resolveSceneTitle(this.sceneIndex.getScenes(), this.getPlayheadSceneId())
 
       const data = gameStateToSaveSlot(this.getSnapshot(), {
         slot,
