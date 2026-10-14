@@ -808,7 +808,7 @@ TUI版も `[場面転換]` で暗転を解除する。ただしTUI版は背景�
 
 フラグの値に応じてイベントの表示/非表示を切り替える。`[条件: フラグ名]` ～ `[/条件]` の間に任意のイベントを記述できる。ネスト可能。
 
-パーサーは条件分岐を `Condition` イベントとしてパースし、実際にプレイヤーが辿った経路・その時点のフラグ状態で実行時に評価して展開する（遅延評価）。GUI版ランタイムは `resolveEvents`（`frontend/src/game/GameState.ts`）/`reResolveEvents`（`frontend/src/game/NovelRenderer.ts`）が、TUI版ランタイムは `build_scene_items`（`tui/src/playback.rs`、#509）が、それぞれ同じ意味論でこれを行う。
+パーサーは条件分岐を `Condition` イベントとしてパースし、実際にプレイヤーが辿った経路・その時点のフラグ状態で実行時に評価して展開する（遅延評価）。GUI版ランタイムは `resolveEvents`（`frontend/src/game/GameState.ts`）/`reResolveEvents`（`frontend/src/game/NovelRenderer.ts`）が、TUI版ランタイムは `build_scene_items`（`tui/src/playback.rs`、#509）が、それぞれ同じ意味論でこれを行う。ただし GUI 版の自己否定ブロック（`[条件: x]` の中で `x` を偽にする）は、フラグを変えた時点で全体を再展開するため、そのブロックの残りが消える（再展開の結果をセーブ〔eventIndex + 最新 flags〕から決定的に再現するため）。TUI 版はシーン構築時に評価するので残りを流す。ブロック入場時に評価する決定的な実現は #799 で扱う。
 
 ## ジャンプ (#725)
 
