@@ -45,7 +45,7 @@ export interface BattleMenuData {
 /** 一覧の 1 行 */
 export interface MenuRow {
   label: string
-  /** 右端に出す消費の表示（呪文は `MP3`、アイテムは `×2`、なければ空） */
+  /** 右端に出す消費の表示（呪文は MP の数字だけ `3`、アイテムは `×2`、なければ空） */
   cost: string
   disabled: boolean
 }
@@ -83,7 +83,7 @@ export function buildMenuRows(
       const mp = (e as BattleSpellEntry).mp
       return {
         label: e.name,
-        cost: `MP${mp}`,
+        cost: String(mp), // FF6 風に数字だけ（MP の消費であることは窓の文脈で分かる）
         // 対象なし（マップ用）の呪文は戦闘では使えない。MP 不足もグレー
         disabled:
           !actor ||

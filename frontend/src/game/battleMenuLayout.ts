@@ -22,8 +22,8 @@ export const MENU_COMMAND_OVERHANG = 4
 export const MENU_HAND_SLOT = 34
 /** 名前と消費の間の最小の隙間 */
 export const MENU_COST_GAP = 16
-/** 名前が全部見えるようにする全角の文字数（8 文字以下の名前は省略されない。9 文字以上は 7 文字 + 「…」）。窓の幅の下限を決める */
-export const MENU_NAME_MIN_CHARS = 8
+/** 名前が全部見えるようにする全角の文字数（7 文字以下の名前は省略されない。8 文字以上は 6 文字 + 「…」）。窓の幅の下限を決める */
+export const MENU_NAME_MIN_CHARS = 7
 /** 窓の上端・下端のスクロール帯の高さ（上下の余白に収める。行の決定領域には食い込まない。タップで 1 行ずつ） */
 export const MENU_SCROLL_STRIP = MENU_PADDING_Y
 
@@ -72,6 +72,11 @@ export interface MenuGeometry {
   command: Rect
   /** 一覧窓の上限（ログ帯の下端 + 隙間） */
   top: number
+  /**
+   * 窓の右端がこれを越えない（味方ステータス欄の HP 列の左。HP の数字を途中で切らない）。
+   * 未指定は制限なし。コマンド窓の外形は必ず覆うので、その幅が下限
+   */
+  avoidX?: number
   /** 敵・味方スプライトの枠（state.enemies / state.party と同じ index） */
   enemySlots: readonly Rect[]
   partySlots: readonly Rect[]
@@ -96,7 +101,7 @@ export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[])
   const maxW = Math.max(0, g.width - (SIDE_PADDING - MENU_COMMAND_OVERHANG) - x)
   // 幅はコマンド窓と同じを基本にする（狭いと窓の外にコマンドの文字がはみ出して見え、広いと味方のステータス欄や絵を覆う）。
   // ただし名前が最低 MENU_NAME_MIN_CHARS 文字ぶん読める幅を下限にする（縦長の画面ではコマンド窓が狭く、消費を引くと名前が残らない）。
-  // この場合はステータス欄に少し重なる。入りきらない名前は buildMenuView が省略する
+  // この場合は味方ステータス欄の名前列に少し重なるが、HP の数字は切らない（avoidX で HP 列の左に止める）。入りきらない名前は buildMenuView が省略する
   const costW = rows.reduce(
     (m, r) => Math.max(m, r.cost ? estimateTextWidth(r.cost, MENU_FONT_SIZE) : 0),
     0
@@ -107,7 +112,9 @@ export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[])
     costW +
     MENU_COST_GAP +
     MENU_NAME_MIN_CHARS * MENU_FONT_SIZE
-  const w = Math.min(Math.max(g.command.w + MENU_COMMAND_OVERHANG * 2, need), maxW)
+  const minW = Math.min(g.command.w + MENU_COMMAND_OVERHANG * 2, maxW)
+  const limit = g.avoidX === undefined ? maxW : Math.max(0, g.avoidX - x)
+  const w = Math.max(minW, Math.min(need, maxW, limit))
   // 行が少なくてもコマンド窓の枠の外形（枠線・余白ぶん上下左右に MENU_COMMAND_OVERHANG はみ出す）全体を覆う高さにする。
   // 窓の上にコマンドの文字や背景が顔を出さない。余白は下側
   const h = Math.max(

@@ -1,6 +1,11 @@
 /** 候補窓・手のカーソルの座標 (#204) の単体テスト。画面サイズ総当たりで、窓と手が画面内に収まることを見る */
 import { describe, expect, it } from 'vitest'
-import { computeSideBattleLayout, type Rect, type SpriteSlot } from './battleLayout'
+import {
+  computeSideBattleLayout,
+  computeStatusColumns,
+  type Rect,
+  type SpriteSlot,
+} from './battleLayout'
 import {
   EMPTY_STACK,
   buildMenuRows,
@@ -64,9 +69,19 @@ function geometry(w: number, h: number, party: number, enemies: number): MenuGeo
     commandLayout: 'cross',
   })
   const rect = (s: SpriteSlot): Rect => ({ x: s.x, y: s.y, w: s.width, h: s.size })
+  // BattleScreen.layoutSide と同じ入力で HP 列の位置を出し、窓の右端の上限にする
+  const cols = computeStatusColumns({
+    x: L.status.x,
+    width: L.status.w,
+    maxHp: 30,
+    maxMp: 12,
+    compact: L.statusCompact,
+    atb: false,
+  })
   return {
     width: w,
     height: h,
+    avoidX: cols.hp.x - 2,
     command: L.command,
     top: L.log.y + L.log.h + MENU_TOP_GAP,
     enemySlots: L.enemies.map(rect),
@@ -311,11 +326,12 @@ describe('名前の読みやすさ（画面サイズ総当たり）', () => {
     ['ブリザドラ', 12], // 消費が 2 桁
     ['はいぽーしょん', 5],
     ['えりくさー', 7],
-    ['しらさぎのおまもり', 9], // 9 文字は 7 文字 + …
+    ['しらさぎのおまもり', 9], // 9 文字は 6 文字 + …
+    ['ちゆのいのりよ', 123], // 消費が 3 桁
   ] as const
 
   for (const [w, h] of SIZES) {
-    it(`${w}x${h}: 名前は 8 文字以下なら全部、それより長くても 7 文字見え、互いに区別できる`, () => {
+    it(`${w}x${h}: 名前は 7 文字以下なら全部、それより長くても 6 文字見え、互いに区別できる`, () => {
       const g = geometry(w, h, 4, 3)
       const spells: BattleSpellEntry[] = NAMES.map(([name, mp], i) => ({
         id: `n${i}`,
@@ -345,8 +361,8 @@ describe('名前の読みやすさ（画面サイズ総当たり）', () => {
       const labels = [...seen.entries()].sort((x, y) => x[0] - y[0]).map(([, l]) => l)
       NAMES.forEach(([name], i) => {
         const shown = labels[i].replace('…', '')
-        expect(shown.length).toBeGreaterThanOrEqual(Math.min(name.length, 7))
-        if (name.length <= 8) expect(labels[i]).toBe(name) // 8 文字以下は省略されない
+        expect(shown.length).toBeGreaterThanOrEqual(Math.min(name.length, 6))
+        if (name.length <= 7) expect(labels[i]).toBe(name) // 7 文字以下は省略されない
         expect(name.startsWith(shown)).toBe(true)
       })
       expect(new Set(labels).size).toBe(NAMES.length)
@@ -373,4 +389,26 @@ describe('コマンド窓を覆う高さ', () => {
       }
     }
   })
+})
+
+describe('窓の右端が味方ステータス欄の HP 列の途中で終わらない', () => {
+  for (const [w, h] of SIZES) {
+    for (const party of [1, 2, 3, 4]) {
+      it(`${w}x${h} 味方${party}: 窓の右端は HP 列の左（消費 1〜3 桁）`, () => {
+        const g = geometry(w, h, party, 3)
+        for (const mp of [3, 20, 123]) {
+          const rows = buildMenuRows(
+            'spell',
+            [{ id: 'a', name: 'はいぽーしょん', mp, target: '敵単体' }],
+            ent('a')
+          )
+          const r = computeListWindowRect(g, rows).rect
+          // コマンド窓の外形ぶんは下限として必ず覆う。それを超えて広げるのは HP 列の左まで
+          const floor = g.command.x + g.command.w + MENU_COMMAND_OVERHANG
+          expect(r.x + r.w).toBeLessThanOrEqual(Math.max(g.avoidX!, floor) + EPS)
+          expect(floor).toBeLessThanOrEqual(g.avoidX! + EPS) // 下限そのものが HP 列にかからない
+        }
+      })
+    }
+  }
 })

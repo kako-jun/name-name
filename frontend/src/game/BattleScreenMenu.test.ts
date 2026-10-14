@@ -571,7 +571,7 @@ describe('手・スクロール記号の上のタップ (#204 レビュー B1 / 
     expect(topOf(s).top).toBe(before + 1)
   })
 
-  it('選んでいる行の手の上（x=20 付近）をタップしても、その行の決定になる。手の外（x=100）も同じ', async () => {
+  it('手と同じ x 座標でも、手の外でも、タップした行（別の行）が決定される', async () => {
     for (const dx of [20 - 16, 100 - 16]) {
       const { s } = build({ menu: many })
       press('ArrowLeft')
@@ -675,5 +675,25 @@ describe('勝敗の待機 (#820) との干渉', () => {
     expect(closed).toEqual([]) // 勝利を読ませる待機が始まっただけで、閉じていない
     press('Enter') // 猶予内の Enter も飛ばさない
     expect(closed).toEqual([])
+  })
+})
+
+describe('窓の右端と味方ステータス欄の HP 列 (#204 レビュー)', () => {
+  it('BattleScreen は HP 列の左を avoidX として渡し、窓の右端がそれを越えない（360x640）', async () => {
+    const { computeListWindowRect } = await import('./battleMenuLayout')
+    const engine = new BattleEngine([ent('a')], [ent('s1')], { rng: () => 0 })
+    const s = new BattleScreen(engine, 360, 640, {
+      layout: 'side',
+      commandLayout: 'cross',
+      menu: MENU,
+    })
+    created.push(s)
+    const geo = (s as unknown as { menuGeometry: import('./battleMenuLayout').MenuGeometry })
+      .menuGeometry
+    expect(geo.avoidX).toBeGreaterThan(geo.command.x + geo.command.w)
+    const r = computeListWindowRect(geo, [
+      { label: 'ながいなまえのじゅもん', cost: '123', disabled: false },
+    ]).rect
+    expect(r.x + r.w).toBeLessThanOrEqual(geo.avoidX! + 0.001)
   })
 })

@@ -1554,6 +1554,8 @@ export class BattleScreen extends Container {
       atb: this.atbBars.length > 0,
     })
     this.sideStatusColumns = cols
+    // 候補窓の右端は HP 列の左で止める（HP の数字を途中で切らない）
+    if (this.menuGeometry) this.menuGeometry = { ...this.menuGeometry, avoidX: cols.hp.x - 2 }
     for (let i = 0; i < this.statusTexts.length; i++) {
       const row = L.statusRows[i]
       const y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2

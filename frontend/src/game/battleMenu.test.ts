@@ -67,10 +67,10 @@ describe('parseSpellTarget', () => {
 })
 
 describe('buildMenuRows', () => {
-  it('MP が足りない呪文だけ disabled・消費を MPn で出す', () => {
+  it('MP が足りない呪文だけ disabled・消費を数字だけで出す', () => {
     const rows = buildMenuRows('spell', spells, ent('a', { mp: 3 }))
     expect(rows.map((r) => r.disabled)).toEqual([false, true, false, true, false, true])
-    expect(rows[0]).toEqual({ label: 'ほのお', cost: 'MP3', disabled: false })
+    expect(rows[0]).toEqual({ label: 'ほのお', cost: '3', disabled: false })
   })
 
   it('MP がちょうど足りれば選べる', () => {
