@@ -184,6 +184,10 @@ export function extendFootMask(
  */
 const STEM_ALPHA_MIN = 32
 /** ステムの上端を絵の中へ食い込ませる量（画像高さに対する比率）。絵と帯の継ぎ目に隙間を作らない */
+/** 接地判定: 画像下端からこの高さ（画像高さに対する比率）の帯を見る */
+const STEM_GROUND_BAND_RATIO = 0.02
+/** 接地判定: スリットの外でこの帯に不透明画素がある列が画像幅のこの割合以上なら接地とみなす（机上: loud-motorbike 0.198 は接地、propeller 0.141 は浮き） */
+const STEM_GROUND_CONTACT_RATIO = 0.17
 const STEM_OVERLAP_RATIO = 0.05
 
 /** 絵と台座をつなぐ帯（ステム）の矩形。画像の左上を原点とした px（下端 `bottom` は差し込み線の行の終端） */
@@ -220,7 +224,7 @@ export function computeStemSlitHalfWidth(
 }
 
 /** 帯の最小幅 / 枠一辺 (#848)。小さい画面でも帯が読める下限（スリットの全幅は枠の約 0.35 倍） */
-export const STEM_MIN_WIDTH_RATIO = 0.1
+export const STEM_MIN_WIDTH_RATIO = 0.14
 
 /** 元画像 px で見た、スリットの半幅と帯の最小幅 */
 export function computeStemScale(
@@ -288,6 +292,19 @@ export function computeStem(
   if (bottom < 0) return null
   const gap = h - 1 - bottom
   if (gap < params.stemMinGapRatio * h) return null
+  // 接地している絵（二輪の乗り物など、スリットの外で画像下端に広く接している）は台座から浮いていないので帯を出さない。
+  // 接地側の列の幅の割合で判定する（細い羽根の先が 1 点だけ下端に届く浮いた絵は、この割合に届かず帯が出る）
+  const contactRows = Math.max(1, Math.round(h * STEM_GROUND_BAND_RATIO))
+  let contact = 0
+  for (let x = 0; x < w; x++) {
+    if (x >= cx0 && x <= cx1) continue
+    for (let y = h - contactRows; y < h; y++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        contact++
+        break
+      }
+  }
+  if (contact >= STEM_GROUND_CONTACT_RATIO * w) return null
   const bandTop = Math.max(0, bottom - Math.max(1, Math.round(h * FOOT_BAND_RATIO)))
   let sum = 0
   let n = 0
@@ -297,6 +314,30 @@ export function computeStem(
         sum += x
         n++
       }
+  // 絵全体の最下端（スリットの外の羽根の先など）の帯の重心。帯の中心を、スリット列の重心とこの重心の中間に寄せて、
+  // 羽根の先と帯が視覚的につながるようにする（スリット内に収まる範囲）
+  let gBottom = -1
+  for (let y = h - 1; y >= 0 && gBottom < 0; y--)
+    for (let x = 0; x < w; x++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        gBottom = y
+        break
+      }
+  let gSum = 0
+  let gN = 0
+  for (
+    let y = Math.max(0, gBottom - Math.max(1, Math.round(h * FOOT_BAND_RATIO)));
+    y <= gBottom;
+    y++
+  )
+    for (let x = 0; x < w; x++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        gSum += x
+        gN++
+      }
+  const slitCenter = n > 0 ? (sum + 0.5 * n) / n : slitCx
+  const wholeCenter = gN > 0 ? (gSum + 0.5 * gN) / gN : slitCenter
+  const target = (slitCenter + wholeCenter) / 2
   const width = Math.min(
     w,
     slitHalf * 2,
@@ -306,10 +347,7 @@ export function computeStem(
   const reach = Math.max(0, slitHalf - halfWidth)
   const cx = Math.min(
     w - halfWidth,
-    Math.max(
-      halfWidth,
-      Math.min(slitCx + reach, Math.max(slitCx - reach, n > 0 ? (sum + 0.5 * n) / n : slitCx))
-    )
+    Math.max(halfWidth, Math.min(slitCx + reach, Math.max(slitCx - reach, target)))
   )
   const overlap = Math.max(1, Math.round(h * STEM_OVERLAP_RATIO))
   return {
@@ -405,6 +443,7 @@ export function renderAcrylicPlate(
   }
   // 帯だけの板の形（本体の板と同じ ぼかし+smoothstep）。帯の面とリムを本体より濃くする重みに使う (#848)
   let stemW: Float32Array | null = null
+  let stemDepth: Float32Array | null = null
   if (stemOnly) {
     stemW = gaussianBlur(stemOnly, W, H, sigma)
     for (let i = 0; i < stemW.length; i++) {
@@ -414,6 +453,8 @@ export function renderAcrylicPlate(
         stemW[i]
       )
     }
+    // 帯だけの縁からの深さ。本体の輪郭が近くても帯の縁（左右）が埋もれないよう、帯のリムは本体と独立に描く
+    stemDepth = gaussianBlur(stemW, W, H, rim)
   }
   // 縁からの深さの目安（縁で約 0.5、奥ほど 1）。リムと影の帯、法線に使う
   const depthRim = gaussianBlur(shape, W, H, rim)
@@ -462,6 +503,10 @@ export function renderAcrylicPlate(
       const rimLit = 0.3 + 0.7 * lit * lit
       const rimLitS = rimLit + Math.max(0, STEM_RIM_LIT_MIN - rimLit) * sw
       over(rimColor, params.lineAlpha * edge * rimLitS * s)
+      if (stemDepth) {
+        const edgeS = clamp01((0.98 - stemDepth[i]) / 0.5)
+        over(rimColor, params.lineAlpha * edgeS * STEM_RIM_LIT_MIN * sw)
+      }
       // 4) 左上寄りの斜めの鏡面ハイライトの筋（2 本・細い方は弱い）
       const u = (x + 0.5) / W + (y + 0.5) / H
       const streak =

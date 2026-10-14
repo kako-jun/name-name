@@ -374,7 +374,9 @@ describe('computeStem / stampStem: 浮く絵を台座へつなぐ帯 (#848)', ()
   it('下端が閾値以上離れていれば帯が出て、幅は不透明部分の幅 × 比率・中心は下端の重心', () => {
     const s = computeStem(blob(60), w, h, 3, sp)
     expect(s).not.toBeNull()
-    expect(s!.halfWidth * 2).toBeCloseTo(60 * 0.28, 6)
+    // 絵の幅 × 比率（16.8px）か最小幅（枠一辺の 0.14）の大きい方
+    const sc0 = computeStemScale(w, h, resolveAcrylicParams())
+    expect(s!.halfWidth * 2).toBeCloseTo(Math.max(60 * 0.28, sc0.minWidth), 6)
     expect(Math.abs(s!.cx - 50)).toBeLessThanOrEqual(1)
     expect(s!.bottom).toBe(h + 3)
     expect(s!.top).toBeLessThanOrEqual(60)
@@ -536,5 +538,40 @@ describe('帯の存在感: 最小幅と内側の濃さ (#848)', () => {
     const s = computeStem(thin(), w, h, 6, P2)!
     expect(s.top).toBeLessThan(50)
     expect(s.top).toBeGreaterThanOrEqual(50 - Math.round(h * 0.05) - 1)
+  })
+})
+
+describe('帯: 接地の抑制・独立したリム (#848)', () => {
+  const w = 120
+  const h = 120
+  const P3 = resolveAcrylicParams({ spriteLiftRatio: 0.05 })
+  /** 中央の胴（y=10..60）。slit 外の左右に、下端まで届く車輪（幅 wheel px）を置く */
+  const vehicle = (wheel: number): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 60; y++) for (let x = 45; x < 75; x++) a[y * w + x] = 255
+    for (let y = 100; y < h; y++)
+      for (let k = 0; k < wheel; k++) {
+        a[y * w + 2 + k] = 255
+        a[y * w + w - 3 - k] = 255
+      }
+    return a
+  }
+  it('スリットの外で画像下端に広く接している絵（接地した乗り物）は帯を出さない', () => {
+    const wide = Math.ceil(w * 0.1)
+    expect(computeStem(vehicle(wide), w, h, 6, P3)).toBeNull()
+  })
+  it('細い羽根の先が 1 点だけ下端に届く浮いた絵は帯が出る', () => {
+    expect(computeStem(vehicle(1), w, h, 6, P3)).not.toBeNull()
+  })
+  it('帯の縁（左右）には本体と独立にリムが描かれ、板の縁として読める濃さがある', () => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 50; x < 70; x++) a[y * w + x] = 255
+    const r = renderAcrylicPlate(a, w, h, P3)
+    const s = computeStem(a, w, h, r.extend, P3)!
+    const yy = Math.round((s.top + s.bottom) / 2)
+    let max = 0
+    for (let x = Math.floor(s.cx - s.halfWidth) - 14; x <= Math.floor(s.cx - s.halfWidth); x++)
+      max = Math.max(max, r.rgba[((yy + r.pad) * r.width + x + r.pad) * 4 + 3])
+    expect(max).toBeGreaterThanOrEqual(Math.round(P3.lineAlpha * 0.75 * 255 * 0.5))
   })
 })
