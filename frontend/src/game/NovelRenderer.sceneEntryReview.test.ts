@@ -10,7 +10,7 @@ import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
-import { internals, type RendererInternals } from '../test/rendererInternals'
+import { entryControllerOf, internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -108,11 +108,12 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     r.advance()
     const waiting = internals<Internals>(r).pendingEntry!.promise
-    vi.spyOn(r as unknown as { startScene: () => void }, 'startScene').mockImplementationOnce(
-      () => {
-        throw new Error('boom')
-      }
-    )
+    vi.spyOn(
+      entryControllerOf(r) as { startScene: () => void },
+      'startScene'
+    ).mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
 
     r.getTimeController().tick(1)
 
@@ -126,11 +127,12 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer([HUB], () => d.promise)
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.spyOn(r as unknown as { startScene: () => void }, 'startScene').mockImplementationOnce(
-      () => {
-        throw new Error('boom')
-      }
-    )
+    vi.spyOn(
+      entryControllerOf(r) as { startScene: () => void },
+      'startScene'
+    ).mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
 
     const entering = r.jumpToScene('far')
     d.resolve([HUB, FAR])
@@ -152,11 +154,12 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     r.advance()
     r.advance()
     const confirm = calls[calls.length - 1][1] as (jump: string) => boolean
-    vi.spyOn(r as unknown as { startScene: () => void }, 'startScene').mockImplementationOnce(
-      () => {
-        throw new Error('boom')
-      }
-    )
+    vi.spyOn(
+      entryControllerOf(r) as { startScene: () => void },
+      'startScene'
+    ).mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
 
     expect(() => confirm('far')).not.toThrow()
     await flush()
