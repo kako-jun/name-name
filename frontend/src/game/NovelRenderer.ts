@@ -53,7 +53,7 @@ import {
   StartFromOptions,
   Step,
   resolveEvents,
-  tailAfterEvent,
+  countSurvivingBefore,
 } from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
@@ -2547,20 +2547,11 @@ export class NovelRenderer {
     return true
   }
 
-  /**
-   * 再生中の Flag による部分的な再展開 (#777) の後の、シーン区間の位置。再展開は現在位置より後ろにだけ効く
-   * ので、全体を展開し直した位置とは一致しない。`resolvedEvents` の配列が入れ替わったら無効。
-   */
-  private linearLayoutOverride: { resolved: Event[]; layout: ResolvedSegment[] } | null = null
-
   /** 現在の flags で展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null。 */
   private resolveLinearSegmentsNow(): ResolvedSegment[] | null {
     if (!this.isEntryStreamActive()) return null
     const segments = this.getLinearSegments()
     if (segments.length === 0) return null
-    if (this.linearLayoutOverride?.resolved === this.resolvedEvents) {
-      return this.linearLayoutOverride.layout
-    }
     return resolveLinearSegments(
       this.entryRawEvents,
       segments,
@@ -4713,70 +4704,34 @@ export class NovelRenderer {
    * rawEvents を現在のフラグ状態で再展開し、eventIndex を維持する。
    * Flag イベント処理後に呼ばれ、後続の Condition が新しいフラグ値で評価される。
    */
-  private reResolveEvents(layoutBefore: ResolvedSegment[] | null = null): void {
-    const oldIndex = this.eventIndex
-    const current = this.resolvedEvents[oldIndex]
-    const prefix = this.resolvedEvents.slice(0, oldIndex + 1)
-    // 再展開は現在位置より後ろにだけ効かせる。現在位置までの展開済みの列はそのまま残す (#777)。
-    // Flag 自身を囲む `[条件:]` が新しい flags で偽になっても、実行中のブロックは潰れず（残りまで流れる）、
-    // 前にある `[条件:]` の展開が変わっても位置がずれない。TUI の意味論とも揃う。
-    const tailed =
+  private reResolveEvents(): void {
+    const current = this.resolvedEvents[this.eventIndex]
+    // 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できる状態に保つ（セーブは eventIndex + 最新の
+    // flags だけを持つので、再展開の結果が flags の履歴に依存してはならない。ADR 0002）。全体を展開し直し、
+    // eventIndex を決定的に写像する (#777)。
+    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
+    const before =
       typeof current === 'object' && current !== null
-        ? this.reResolveTail(prefix, current, layoutBefore)
+        ? countSurvivingBefore(this.rawEvents, current, this.gameState)
         : null
-    if (tailed) {
-      this.resolvedEvents = tailed
-    } else {
-      // 現在のイベントを元イベント列から見つけられない（想定外）。全体を展開し直し、位置を安全な範囲に収める。
-      this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-      if (oldIndex >= this.resolvedEvents.length) {
-        this.eventIndex = Math.max(0, this.resolvedEvents.length - 1)
+    if (before !== null) {
+      if (this.resolvedEvents[before] === current) {
+        // 現在の Flag が新しい列にも残っている: その位置
+        this.eventIndex = before
+      } else {
+        // Flag を囲む `[条件:]` が偽になって消えた: 元イベント列上で次に残っているイベントの直前に置く
+        // （呼び出し元が続けて eventIndex を進めるので、次に残っているイベントへ進む）。囲んでいた
+        // ブロックの残りは、この版の GUI では消える（TUI はシーン構築時評価で残りを流す。#799）。
+        this.eventIndex = before - 1
       }
+    } else if (this.eventIndex >= this.resolvedEvents.length) {
+      this.eventIndex = Math.max(0, this.resolvedEvents.length - 1)
     }
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
     this.novelPagesCache = null
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
     this.advSentencePagesCache = null
-  }
-
-  /**
-   * `prefix`（現在位置までの展開済みの列）に、現在のイベント `current` より後ろを現在の flags で展開して
-   * 繋げた列を返す。エントリの線形ストリームを再生中は、後ろのシーン境界の位置（`linearLayoutOverride`）も
-   * 同時に求める。`current` が元イベント列に無ければ null。
-   */
-  private reResolveTail(
-    prefix: Event[],
-    current: Event,
-    oldLayout: ResolvedSegment[] | null
-  ): Event[] | null {
-    const entryActive = this.isEntryStreamActive()
-    const segments = entryActive ? this.getLinearSegments() : []
-    if (!oldLayout || segments.length === 0) {
-      const tail = tailAfterEvent(this.rawEvents, current, this.gameState)
-      return tail ? [...prefix, ...tail] : null
-    }
-    const at = segmentAt(oldLayout, this.eventIndex)
-    const m = at ? oldLayout.indexOf(at) : -1
-    if (m < 0) return null
-    const own = this.entryRawEvents.slice(segments[m].start, segments[m].start + segments[m].length)
-    const ownTail = tailAfterEvent(own, current, this.gameState)
-    if (!ownTail) return null
-    const out = [...prefix, ...ownTail]
-    const layout = oldLayout.slice(0, m + 1)
-    for (let k = m + 1; k < segments.length; k++) {
-      const separator = out.length
-      out.push('SceneTransition')
-      layout.push({ sceneId: segments[k].sceneId, start: out.length, separator })
-      out.push(
-        ...resolveEvents(
-          this.entryRawEvents.slice(segments[k].start, segments[k].start + segments[k].length),
-          this.gameState
-        )
-      )
-    }
-    this.linearLayoutOverride = { resolved: out, layout }
-    return out
   }
 
   /**
@@ -5543,12 +5498,10 @@ export class NovelRenderer {
       return
     }
     if ('Flag' in event) {
-      // 線形ストリームのシーン区間の位置は、フラグを変える前の flags で展開した長さで求める (#777)
-      const layoutBefore = this.resolveLinearSegmentsNow()
       this.gameState.setFlag(event.Flag.name, event.Flag.value)
       // フラグ変更により後続の Condition の評価結果が変わる可能性がある。
-      // 現在位置より後ろの元イベントを現在の flags で展開し直す。
-      this.reResolveEvents(layoutBefore)
+      // 元イベント列全体を現在の flags で展開し直す。
+      this.reResolveEvents()
       return
     }
     if ('Choice' in event) {

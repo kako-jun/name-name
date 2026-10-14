@@ -343,24 +343,32 @@ export class GameState {
 }
 
 /**
- * `events`（`[条件:]` を含む元イベント列）の中の `target`（同一オブジェクト）より後ろを、`gameState` の
- * flags で展開した列にして返す。`target` が見つからなければ null (#777)。
+ * `events`（`[条件:]` を含む元イベント列）を `gameState` の flags で展開したとき、`target`（同一オブジェクト）
+ * より前に残るイベント（`[条件:]` 自体は数えない）の数を返す。`target` が見つからなければ null (#777)。
  *
- * `target` を囲む `[条件:]` ブロックの残りは、囲む条件の真偽に関わらず展開せずに残す（実行中のブロックは
- * 途中で潰さない）。ブロックの外の後続は現在の flags で展開する。
+ * `target` が展開後の列に残るなら、その数が展開後の位置。囲む `[条件:]` が偽で消えるなら、その数は
+ * 「元イベント列上で次に残っているイベント」の位置になる。結果は flags だけで決まる（展開の履歴に依存しない）。
  */
-export function tailAfterEvent(
+export function countSurvivingBefore(
   events: readonly Event[],
   target: Event,
   gameState: GameState
-): Event[] | null {
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i]
-    if (event === target) return resolveEvents(events.slice(i + 1), gameState)
-    if (typeof event === 'object' && event !== null && 'Condition' in event) {
-      const inner = tailAfterEvent(event.Condition.events, target, gameState)
-      if (inner) return [...inner, ...resolveEvents(events.slice(i + 1), gameState)]
+): number | null {
+  const state = { count: 0, found: false }
+  const walk = (list: readonly Event[], alive: boolean): void => {
+    for (const event of list) {
+      if (state.found) return
+      if (event === target) {
+        state.found = true
+        return
+      }
+      if (typeof event === 'object' && event !== null && 'Condition' in event) {
+        walk(event.Condition.events, alive && gameState.checkFlag(event.Condition.flag))
+      } else if (alive) {
+        state.count++
+      }
     }
   }
-  return null
+  walk(events, true)
+  return state.found ? state.count : null
 }

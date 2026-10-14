@@ -421,19 +421,115 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
   })
 })
 
-describe('再展開は現在位置より後ろにだけ効く・既読 (#777 再レビュー対応)', () => {
-  const flagOff = (name: string): Event => ({ Flag: { name, value: { Bool: false } } })
+function selfNegatingScenes(): EventScene[] {
+  const flagOff: Event = { Flag: { name: 'x', value: { Bool: false } } }
+  return [
+    scene('a', [
+      narration('a0'),
+      { Condition: { flag: 'x', events: [narration('A'), flagOff, narration('B')] } },
+      narration('C'),
+    ]),
+    scene('b', [narration('b1')]),
+  ]
+}
+
+describe('再展開後のセーブから同じ位置・同じ進行を再現できる (#777)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  const cond = (name: string, ...events: Event[]): Event => ({ Condition: { flag: name, events } })
+  const setFlag = (name: string, v: boolean): Event => ({ Flag: { name, value: { Bool: v } } })
+
+  /** 同じ文書の新しい renderer を作る。 */
+  function build(scenes: EventScene[]): NovelRenderer {
+    const r = new NovelRenderer()
+    r.setEvents(flatten(scenes))
+    r.setJumpSceneIndex(scenes)
+    r.setDocKey('t777-save')
+    return r
+  }
+
+  /** 各位置で保存 → 別インスタンスで復元（restoreSnapshot / quickLoad）→ 以降の本文と境界通知が一致する。 */
+  async function expectRoundTrip(scenes: EventScene[], flags: Record<string, { Bool: boolean }>) {
+    const text = (r: NovelRenderer) => (r.getDebugState().eventText ?? '').replace(/["\s]/g, '')
+    // 元の進行を記録する（どの本文位置で、どのシーンに入ったか）
+    const base = build(scenes)
+    const enteredAt: { at: number; id: string }[] = []
+    let trace: string[] = []
+    base.setOnSceneChange((id) => enteredAt.push({ at: trace.length, id }))
+    await base.startFrom({ sceneId: 'a', flags })
+    trace = [text(base)]
+    const snaps = [base.getSnapshot()]
+    for (let i = 0; i < 12; i++) {
+      advance(base)
+      const t = text(base)
+      if (t === '' || t === trace[trace.length - 1]) break
+      trace.push(t)
+      snaps.push(base.getSnapshot())
+    }
+    for (let k = 0; k < snaps.length; k++) {
+      // restoreSnapshot
+      const viaSnap = build(scenes)
+      expect((await viaSnap.restoreSnapshot(snaps[k])).status).toBe('entered')
+      expect(text(viaSnap)).toBe(trace[k])
+      // quickLoad（実際にクイックセーブした位置から）
+      localStorage.clear()
+      const saver = build(scenes)
+      await saver.restoreSnapshot(snaps[k])
+      expect(saver.quickSave()).toBe(true)
+      const viaLoad = build(scenes)
+      expect((await viaLoad.quickLoad())?.status).toBe('entered')
+      expect(text(viaLoad)).toBe(trace[k])
+      // 以降の進行と境界通知が元と一致する
+      for (const r of [viaSnap, viaLoad]) {
+        const entered: string[] = []
+        r.setOnSceneChange((id) => entered.push(id))
+        const rest: string[] = []
+        for (let j = k + 1; j < trace.length; j++) {
+          advance(r)
+          rest.push(text(r))
+        }
+        expect(rest).toEqual(trace.slice(k + 1))
+        expect(entered).toEqual(enteredAt.filter((e) => e.at > k).map((e) => e.id))
+      }
+    }
+    return trace
+  }
+
+  it('自己否定ブロック: Flag 直後〜ブロック外後続〜境界の各位置で、保存→復元が同じ本文と進行になる', async () => {
+    const trace = await expectRoundTrip(selfNegatingScenes(), { x: { Bool: true } })
+    expect(trace.slice(0, 4)).toEqual(['a0', 'A', 'C', 'b1'])
+  })
+
+  it('前方の [条件:] が Flag で変わっても、保存→復元で位置が重複・欠落しない', async () => {
+    const scenes = [
+      scene('a', [cond('x', narration('ax1'), narration('ax2')), narration('a1')]),
+      scene('b', [narration('b1'), setFlag('x', true), narration('b2')]),
+      scene('c', [narration('c1')]),
+    ]
+    const trace = await expectRoundTrip(scenes, {})
+    expect(trace).toContain('b2')
+    expect(trace.filter((t) => t === 'b1')).toHaveLength(1)
+  })
+
+  it('線形の境界をまたぐ進行（Flag で後続のシーンの展開が伸びる）も、保存→復元で一致する', async () => {
+    const scenes = [
+      scene('a', [narration('a1'), setFlag('x', true)]),
+      scene('b', [cond('x', narration('bx1')), narration('b1')]),
+      scene('c', [narration('c1')]),
+    ]
+    const trace = await expectRoundTrip(scenes, {})
+    expect(trace.slice(0, 4)).toEqual(['a1', 'bx1', 'b1', 'c1'])
+  })
+})
+
+describe('再展開は常に全体の展開と一致する・既読 (#777 再レビュー対応)', () => {
   const cond = (name: string, ...events: Event[]): Event => ({ Condition: { flag: name, events } })
 
-  it('Flag 自身を囲む [条件:] が偽になっても、実行中のブロックは最後まで流れ、境界の通知も出る', async () => {
-    const scenes = [
-      scene('a', [
-        narration('a0'),
-        cond('x', narration('A'), flagOff('x'), narration('B')),
-        narration('C'),
-      ]),
-      scene('b', [narration('b1')]),
-    ]
+  it('Flag 自身を囲む [条件:] が偽になると、ブロックの残りは消え（GUI 版の意味論）、外の後続と境界の通知は1回出る', async () => {
+    const scenes = selfNegatingScenes()
     const r = new NovelRenderer()
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
@@ -444,13 +540,7 @@ describe('再展開は現在位置より後ろにだけ効く・既読 (#777 再
       texts.push(r.getDebugState().eventText ?? '')
       advance(r)
     }
-    expect(texts.map((t) => t.replace(/.*?(a0|A|B|C|b1).*/s, '$1'))).toEqual([
-      'a0',
-      'A',
-      'B',
-      'C',
-      'b1',
-    ])
+    expect(texts.map((t) => t.replace(/.*?(a0|A|B|C|b1).*/s, '$1'))).toEqual(['a0', 'A', 'C', 'b1'])
     expect(rec.entered).toEqual(['a', 'b'])
   })
 
