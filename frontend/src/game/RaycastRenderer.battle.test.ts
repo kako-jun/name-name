@@ -160,6 +160,23 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     expect(e.maxMp).toBe(9)
   })
 
+  it('戦闘中のタップでフィールドのメニューを開かない（TopDownRenderer と対） (#784)', () => {
+    const { i } = makeRenderer()
+    const f = i as unknown as {
+      initialized: boolean
+      menuOverlay: unknown
+      handleTap(): void
+    }
+    f.initialized = true
+    const toggle = vi.fn()
+    f.menuOverlay = { isShowing: () => false, showMenu: toggle, hideMenu: toggle } as never
+    i.startBattle([
+      { id: 's', name: 'S', hp: 1, maxHp: 1, mp: 0, maxMp: 0, atk: 1, def: 0, agi: 1 },
+    ])
+    f.handleTap()
+    expect(toggle).not.toHaveBeenCalled()
+  })
+
   it('「しらべる」の暫定戦闘: モンスター定義の poses が敵の BattleEntity に写る (#745)', () => {
     const { i } = makeRenderer()
     const f = i as unknown as {

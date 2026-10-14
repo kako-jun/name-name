@@ -900,6 +900,7 @@ export class RaycastRenderer {
 
   private handleTap = (): void => {
     if (!this.initialized) return
+    if (this.battleScreen) return // 戦闘中はフィールドのメニューを開かない（TopDownRenderer と同じ）
     if (this.dialogBox?.isShowing) {
       // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は close 系操作を無視する。
       // PixiJS pointertap → tryTalk → dialog.show の連鎖直後に到達した canvas tap で

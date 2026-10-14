@@ -8,7 +8,7 @@ import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
-import { POPUP_TOTAL_MS, buildActionTimeline } from './battleMotion'
+import { POPUP_TOTAL_MS, buildActionTimeline, eventTimeline } from './battleMotion'
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -418,10 +418,10 @@ describe('ATB x ff: 演出キューに積まれる行動 (#745)', () => {
     tap(s, 'attack') // 演出中に b が入力
     expect(engine.getState().eventTotal).toBeGreaterThan(total)
     expect(I(s).playback.queue.length).toBeGreaterThan(0)
-    const lastQueued = I(s).playback.queue[I(s).playback.queue.length - 1] as {
-      actor: { index: number }
-    }
-    expect(lastQueued.actor.index === 1 || lastQueued.actor.index === 0).toBe(true)
+    const queued = (I(s).playback.queue as { actor: { side: string; index: number } }[]).filter(
+      (e) => e.actor.side === 'party'
+    )
+    expect(queued[queued.length - 1].actor).toEqual({ side: 'party', index: 1 })
   })
 
   it('複数行動が積まれても、命中のたびに HP 表示が段階的に変わる', () => {
@@ -441,9 +441,12 @@ describe('ATB x ff: 演出キューに積まれる行動 (#745)', () => {
     run(s, t1 + 16)
     expect(ov()).toBe(e1.hits[0].hpAfter)
     expect(e1.hits[0].hpAfter).toBe(e2.hits[0].hpBefore)
-    // 2 つ目の命中まで進める
-    for (let i = 0; i < 400 && ov() === e1.hits[0].hpAfter; i++) s.tick(16)
-    expect(ov() === undefined || ov() === e2.hits[0].hpAfter).toBe(true)
+    // 2 つ目の命中は、1 つ目の行動の長さ + 命中までの時間。その直前はまだ 1 つ目の結果のまま、直後に 2 つ目の結果になる
+    const d1 = eventTimeline(e1).duration
+    run(s, d1 - 32)
+    expect(ov()).toBe(e1.hits[0].hpAfter)
+    run(s, 32)
+    expect(ov()).toBe(e2.hits[0].hpAfter)
     run(s, 8000)
     expect((s as unknown as { hpOverride: Map<string, number> }).hpOverride.size).toBe(0)
   })

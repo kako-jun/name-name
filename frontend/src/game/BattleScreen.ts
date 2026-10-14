@@ -1682,12 +1682,12 @@ export class BattleScreen extends Container {
     return this.hpOverride.get(this.entityKey(side, index)) ?? current
   }
 
-  /** 再生すべきものが残っているか。従来ターン制では残っている間、次の行動・コマンド入力を待たせる（ATB は待たせない） */
   /** ff の従来ターン制だけ、演出が終わるまで入力を塞ぐ。ATB は演出中も入力できる */
   private isInputBlockedByPresentation(): boolean {
     return this.isPresenting() && !this.engine.getState().atb
   }
 
+  /** 再生すべきものが残っているか。従来ターン制では残っている間、次の行動・コマンド入力を待たせる（ATB は待たせない） */
   private isPresenting(): boolean {
     return this.presentation === 'ff' && isPlaybackBusy(this.playback)
   }

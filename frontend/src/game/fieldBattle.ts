@@ -300,7 +300,8 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     onClose: (outcome) => {
       if (closedScreens.has(screen)) return
       // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
-      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する
+      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する。
+      // ff では演出を見せ切ってから閉じるため、この抑止は閉じた直後 400ms の保険として働く (#745)
       suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
       gate.armReleaseGate()
       closeFieldBattle(stage, screen)
