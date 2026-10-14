@@ -53,7 +53,6 @@ import {
   StartFromOptions,
   Step,
   resolveEvents,
-  countSurvivingBefore,
 } from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
@@ -68,6 +67,7 @@ import { EndingOverlay } from './EndingOverlay'
 import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
+import { countDisplayEvents, remapEventIndexAfterReResolve } from './eventCursor'
 import { isSceneIdConfined } from './sceneConfinement'
 import {
   carryPolicyFor,
@@ -1348,7 +1348,7 @@ export class NovelRenderer {
     this.advSentencePagesCache = null
     this.preloadedUrls.clear()
     clearBackgroundPreload()
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
   }
 
   /** 読み込み済みテクスチャを解放する（`setEvents` / `loadEvents` が文書を入れ替えるとき）。 */
@@ -2949,7 +2949,7 @@ export class NovelRenderer {
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
     this.lastSpeaker = null
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     this.processUntilNextTextEvent()
 
@@ -4622,7 +4622,7 @@ export class NovelRenderer {
     // flags だけを過去の値に戻すので、Flag を越えて戻ると列（`[条件:]` の展開）と位置が食い違う。
     // restoreToScene 経由では同じ flags で展開済みなので、結果は同じ（冪等）。
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     // インデックス復元
     this.eventIndex = state.eventIndex
@@ -4831,24 +4831,18 @@ export class NovelRenderer {
     // flags だけを持つので、再展開の結果が flags の履歴に依存してはならない。ADR 0002）。全体を展開し直し、
     // eventIndex を決定的に写像する (#777)。
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    const before =
-      typeof current === 'object' && current !== null
-        ? countSurvivingBefore(this.rawEvents, current, this.gameState)
-        : null
-    if (before !== null) {
-      if (this.resolvedEvents[before] === current) {
-        // 現在の Flag が新しい列にも残っている: その位置
-        this.eventIndex = before
-      } else {
-        // Flag を囲む `[条件:]` が偽になって消えた: 元イベント列上で次に残っているイベントの直前に置く
-        // （呼び出し元が続けて eventIndex を進めるので、次に残っているイベントへ進む）。囲んでいた
-        // ブロックの残りは、この版の GUI では消える（TUI はシーン構築時評価で残りを流す。#799）。
-        this.eventIndex = before - 1
-      }
-    } else if (this.eventIndex >= this.resolvedEvents.length) {
-      this.eventIndex = Math.max(0, this.resolvedEvents.length - 1)
-    }
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    // 写像は純粋関数 `remapEventIndexAfterReResolve`（eventCursor.ts）。現在の Flag が新しい列にも残れば
+    // その位置、囲む `[条件:]` が偽で消えたら元イベント列上で次に残るイベントの直前（呼び出し元が続けて
+    // eventIndex を進める。囲んでいたブロックの残りは、この版の GUI では消える。TUI はシーン構築時評価で
+    // 残りを流す。#799）。
+    this.eventIndex = remapEventIndexAfterReResolve(
+      this.rawEvents,
+      this.resolvedEvents,
+      current,
+      this.eventIndex,
+      this.gameState
+    )
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
     // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
     this.novelPagesCache = null
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
@@ -6817,7 +6811,7 @@ export class NovelRenderer {
     // 元イベントを保持し、Condition をフラグに基づいて展開
     this.rawEvents = [...scene.events]
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     // 完成済み NovelGameState を applyState で宣言的に復元
     this.applyState(state)
