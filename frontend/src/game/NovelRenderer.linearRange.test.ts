@@ -150,6 +150,25 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
     expect(r.getPlayheadSceneId()).toBe('b')
   })
 
+  it('最後のシーンから始めた後のセーブ（sceneId = null）から復元できる', async () => {
+    const { r } = linearRenderer()
+    await r.startFrom({ sceneId: 'c' })
+    const snap = r.getSnapshot()
+    expect(snap.sceneId).toBeNull()
+    const other = new NovelRenderer()
+    const scenes = [
+      scene('a', [narration('a-line')]),
+      scene('b', [narration('b-line')]),
+      scene('c', [narration('c-line')]),
+    ]
+    other.setEvents(flatten(scenes))
+    other.setJumpSceneIndex(scenes)
+    const res = await other.restoreSnapshot(snap)
+    expect(res.status).toBe('entered')
+    expect(other.getDebugState().eventText).toContain('c-line')
+    expect(other.getPlayheadSceneId()).toBe('c')
+  })
+
   it('作者の [場面転換]（シーン内）はシーン境界ではなく、onSceneChange を発火しない', async () => {
     const scenes = [
       scene('a', [narration('a1'), 'SceneTransition', narration('a2')]),
@@ -338,9 +357,13 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
   it('閉じ込め（?scene=）の外のシーンに入る境界では終劇になり、通知も進行もしない', async () => {
     const { r } = linearRenderer()
     const rec = recordRange(r, 'b')
+    const ended = vi.fn()
+    r.setOnStoryEndedChange(ended)
     await r.startFrom({ sceneId: 'b', confinedSceneIds: ['b'] })
     advance(r) // b → c へ入る: 圏外なので終劇
     expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(true)
+    expect(ended).toHaveBeenCalledTimes(1)
+    expect(ended).toHaveBeenCalledWith(true)
     expect(rec.entered).toEqual(['b'])
     expect(r.getDebugState().eventText ?? '').not.toContain('c-line')
   })
@@ -371,6 +394,19 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     expect(entered).toEqual(['b'])
   })
 
+  it('seekTo で境界を越えても通知は発火しない', async () => {
+    const { r } = linearRenderer()
+    await r.startFrom({ sceneId: 'a' })
+    advance(r)
+    advance(r)
+    const entered: string[] = []
+    r.setOnSceneChange((id) => entered.push(id))
+    r.seekTo(0) // c から a へ（境界を2つ越えて戻る）
+    expect(r.getDebugState().eventText).toContain('a-line')
+    expect(r.getPlayheadSceneId()).toBe('a')
+    expect(entered).toEqual([])
+  })
+
   it('intermission のタブローの SceneTransition ではシーン通知しない', async () => {
     const { r } = linearRenderer()
     await r.startFrom({ sceneId: 'a' })
@@ -382,6 +418,72 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
       'SceneTransition',
     ])
     expect(entered).toEqual([])
+  })
+})
+
+describe('再展開は現在位置より後ろにだけ効く・既読 (#777 再レビュー対応)', () => {
+  const flagOff = (name: string): Event => ({ Flag: { name, value: { Bool: false } } })
+  const cond = (name: string, ...events: Event[]): Event => ({ Condition: { flag: name, events } })
+
+  it('Flag 自身を囲む [条件:] が偽になっても、実行中のブロックは最後まで流れ、境界の通知も出る', async () => {
+    const scenes = [
+      scene('a', [
+        narration('a0'),
+        cond('x', narration('A'), flagOff('x'), narration('B')),
+        narration('C'),
+      ]),
+      scene('b', [narration('b1')]),
+    ]
+    const r = new NovelRenderer()
+    r.setEvents(flatten(scenes))
+    r.setJumpSceneIndex(scenes)
+    const rec = recordRange(r, 'b')
+    await r.startFrom({ sceneId: 'a', flags: { x: { Bool: true } } })
+    const texts: string[] = []
+    for (let i = 0; i < 6 && !rec.stoppedBy(); i++) {
+      texts.push(r.getDebugState().eventText ?? '')
+      advance(r)
+    }
+    expect(texts.map((t) => t.replace(/.*?(a0|A|B|C|b1).*/s, '$1'))).toEqual([
+      'a0',
+      'A',
+      'B',
+      'C',
+      'b1',
+    ])
+    expect(rec.entered).toEqual(['a', 'b'])
+  })
+
+  it('既存の再展開: 後続の [条件:] は新しい flags で評価される', async () => {
+    const scenes = [
+      scene('a', [
+        narration('a0'),
+        { Flag: { name: 'y', value: { Bool: true } } },
+        cond('y', narration('Y')),
+        narration('a1'),
+      ]),
+      scene('b', [narration('b1')]),
+    ]
+    const r = new NovelRenderer()
+    r.setEvents(flatten(scenes))
+    r.setJumpSceneIndex(scenes)
+    await r.startFrom({ sceneId: 'a' })
+    advance(r)
+    expect(r.getDebugState().eventText).toContain('Y')
+  })
+
+  it('線形ストリームで、読み終えたシーンが境界で既読になる（持ち主 null でも）', async () => {
+    const { r } = linearRenderer()
+    r.setDocKey('t777-read')
+    await r.startFrom({ sceneId: 'a' })
+    const read = (r as unknown as { readSceneProgress: Set<string> }).readSceneProgress
+    expect(read.has('a')).toBe(false)
+    advance(r) // b に入る
+    expect(read.has('a')).toBe(true)
+    expect(read.has('b')).toBe(false)
+    advance(r) // c に入る
+    expect(read.has('b')).toBe(true)
+    localStorage.clear()
   })
 })
 

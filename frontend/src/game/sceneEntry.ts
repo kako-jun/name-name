@@ -274,6 +274,7 @@ export function findLinearSegments(
 ): LinearSegment[] {
   // 先頭に照合できるシーンが複数あり得る（文字列イベントだけのシーン同士など）ので、候補ごとに連鎖を作り、
   // 一番長く続くものを採る。
+  // 連鎖の長さが同じ候補は、`scenes` で先に並ぶものを採る（エントリ文書のシーンが先頭に並ぶ前提）。
   let best: LinearSegment[] = []
   for (let i = 0; i < scenes.length; i++) {
     if (!matchesAt(entryEvents, 0, scenes[i].events)) continue

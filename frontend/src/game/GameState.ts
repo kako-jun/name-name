@@ -341,3 +341,26 @@ export class GameState {
     }
   }
 }
+
+/**
+ * `events`（`[条件:]` を含む元イベント列）の中の `target`（同一オブジェクト）より後ろを、`gameState` の
+ * flags で展開した列にして返す。`target` が見つからなければ null (#777)。
+ *
+ * `target` を囲む `[条件:]` ブロックの残りは、囲む条件の真偽に関わらず展開せずに残す（実行中のブロックは
+ * 途中で潰さない）。ブロックの外の後続は現在の flags で展開する。
+ */
+export function tailAfterEvent(
+  events: readonly Event[],
+  target: Event,
+  gameState: GameState
+): Event[] | null {
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i]
+    if (event === target) return resolveEvents(events.slice(i + 1), gameState)
+    if (typeof event === 'object' && event !== null && 'Condition' in event) {
+      const inner = tailAfterEvent(event.Condition.events, target, gameState)
+      if (inner) return [...inner, ...resolveEvents(events.slice(i + 1), gameState)]
+    }
+  }
+  return null
+}
