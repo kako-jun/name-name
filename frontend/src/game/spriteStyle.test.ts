@@ -55,6 +55,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       castShear: 1.4,
       castBlurRatio: 0.012,
       spriteLiftRatio: 0.03,
+      stemWidthRatio: 0.28,
+      stemMinGapRatio: 0.08,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -86,6 +88,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       castShear: 1.4,
       castBlurRatio: 0.012,
       spriteLiftRatio: 0.03,
+      stemWidthRatio: 0.28,
+      stemMinGapRatio: 0.08,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -145,6 +149,8 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         castShear: 1.4,
         castBlurRatio: 0.012,
         spriteLiftRatio: 0.03,
+        stemWidthRatio: 0.28,
+        stemMinGapRatio: 0.08,
         hasBase: true,
         baseWidthRatio: 0.7,
         baseHeightRatio: 0.28,
@@ -728,5 +734,16 @@ describe('computeAcrylicGeometry: スプライトの浮き (#802)', () => {
           expect(s.x + s.width, tag).toBeLessThanOrEqual(size + 1e-9)
           expect(s.y + s.height, tag).toBeLessThanOrEqual(slitOf(g) + 1e-9)
         }
+  })
+})
+
+describe('resolveAcrylicParams: ステム (#848)', () => {
+  it('stemWidthRatio は 0〜0.5、stemMinGapRatio は 0.01〜1 に clamp・非数は既定', () => {
+    expect(resolveAcrylicParams({ stemWidthRatio: 9 }).stemWidthRatio).toBe(0.5)
+    expect(resolveAcrylicParams({ stemWidthRatio: -1 }).stemWidthRatio).toBe(0)
+    expect(resolveAcrylicParams({ stemWidthRatio: NaN }).stemWidthRatio).toBe(0.28)
+    expect(resolveAcrylicParams({ stemMinGapRatio: 0 }).stemMinGapRatio).toBe(0.01)
+    expect(resolveAcrylicParams({ stemMinGapRatio: 5 }).stemMinGapRatio).toBe(1)
+    expect(resolveAcrylicParams({ stemMinGapRatio: NaN }).stemMinGapRatio).toBe(0.08)
   })
 })

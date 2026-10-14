@@ -128,6 +128,8 @@ type PlateParams = Pick<
   | 'specularAlpha'
   | 'innerShadowAlpha'
   | 'spriteLiftRatio'
+  | 'stemWidthRatio'
+  | 'stemMinGapRatio'
 >
 
 /** 足元の帯の高さ（画像高さに対する比率）。この帯に触れる列だけを下へ伸ばす（腕など上の部位は伸ばさない） */
@@ -173,6 +175,101 @@ export function extendFootMask(
   return out
 }
 
+/** ステム判定で「不透明」とみなす alpha の下限（0〜255）。生成画像の縁にある薄いにじみで下端を誤検出しない (#848) */
+const STEM_ALPHA_MIN = 32
+/** ステムの上端を絵の中へ食い込ませる量（画像高さに対する比率）。絵と帯の継ぎ目に隙間を作らない */
+const STEM_OVERLAP_RATIO = 0.02
+
+/** 絵と台座をつなぐ帯（ステム）の矩形。画像の左上を原点とした px（下端 `bottom` は差し込み線の行の終端） */
+export interface StemRect {
+  /** 帯の中心 x */
+  cx: number
+  /** 帯の半幅 */
+  halfWidth: number
+  /** 帯の上端 y（絵の最下端より少し上） */
+  top: number
+  /** 帯の下端 y（画像下端 + extend） */
+  bottom: number
+  /** 角丸の半径 */
+  radius: number
+}
+
+/**
+ * 空に浮く絵（下端付近が透明）を台座とつなぐ帯の形を求める (#848)。純粋関数。
+ * 不透明な画素（alpha >= 32）の最下端から画像下端までの距離が `stemMinGapRatio` × 画像高さ未満・不透明画素が無い・
+ * `stemWidthRatio` が 0 のときは null（帯なし＝従来どおり）。
+ * 帯の幅は不透明部分の横幅 × `stemWidthRatio`（画像幅で頭打ち）、中心は最下端付近の帯（足元の帯と同じ高さ）の不透明画素の重心 x。
+ */
+export function computeStem(
+  alpha: ArrayLike<number>,
+  w: number,
+  h: number,
+  extend: number,
+  params: Pick<AcrylicParams, 'stemWidthRatio' | 'stemMinGapRatio'>
+): StemRect | null {
+  if (!(w > 0) || !(h > 0) || alpha.length < w * h) return null
+  if (!(params.stemWidthRatio > 0)) return null
+  let bottom = -1
+  let minX = w
+  let maxX = -1
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        bottom = y
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+      }
+  if (bottom < 0) return null
+  const gap = h - 1 - bottom
+  if (gap < params.stemMinGapRatio * h) return null
+  const bandTop = Math.max(0, bottom - Math.max(1, Math.round(h * FOOT_BAND_RATIO)))
+  let sum = 0
+  let n = 0
+  for (let y = bandTop; y <= bottom; y++)
+    for (let x = 0; x < w; x++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        sum += x
+        n++
+      }
+  const width = Math.min(w, Math.max(2, (maxX - minX + 1) * params.stemWidthRatio))
+  const halfWidth = width / 2
+  // 帯が画像の横幅からはみ出さないよう中心を寄せる
+  const cx = Math.min(w - halfWidth, Math.max(halfWidth, n > 0 ? (sum + 0.5 * n) / n : w / 2))
+  const overlap = Math.max(1, Math.round(h * STEM_OVERLAP_RATIO))
+  return {
+    cx,
+    halfWidth,
+    top: Math.max(0, bottom - overlap),
+    bottom: h + Math.max(0, extend),
+    radius: halfWidth * 0.5,
+  }
+}
+
+/** ステムの角丸矩形を mask（幅 `W`・画像の左上が (pad, pad)）へ書き込む。既存値より小さくならない (#848) */
+export function stampStem(mask: Float32Array, W: number, pad: number, stem: StemRect): void {
+  const H = Math.floor(mask.length / W)
+  const x0 = stem.cx - stem.halfWidth
+  const x1 = stem.cx + stem.halfWidth
+  const r = stem.radius
+  for (let y = Math.floor(stem.top); y < Math.ceil(stem.bottom); y++) {
+    const py = y + pad
+    if (py < 0 || py >= H) continue
+    const yc = y + 0.5
+    for (let x = Math.floor(x0); x < Math.ceil(x1); x++) {
+      const px = x + pad
+      if (px < 0 || px >= W) continue
+      const xc = x + 0.5
+      if (xc < x0 || xc > x1 || yc < stem.top || yc > stem.bottom) continue
+      // 上側の角だけ丸める（下は差し込み線で水平に切られる）
+      const dx = Math.max(x0 + r - xc, xc - (x1 - r), 0)
+      const dy = Math.max(stem.top + r - yc, 0)
+      if (dx * dx + dy * dy > r * r) continue
+      const i = py * W + px
+      if (mask[i] < 1) mask[i] = 1
+    }
+  }
+}
+
 const FILL_COLOR: readonly [number, number, number] = [0.9, 0.96, 1]
 const SHADOW_COLOR: readonly [number, number, number] = [0.2, 0.31, 0.42]
 const SPEC_COLOR: readonly [number, number, number] = [1, 1, 1]
@@ -207,6 +304,9 @@ export function renderAcrylicPlate(
   const ext = extendFootMask(alpha, w, h, extend)
   for (let e = 0; e < extend; e++)
     for (let x = 0; x < w; x++) mask[(h + e + pad) * W + x + pad] = ext[e * w + x]
+  // 絵の下端が台座から離れている（空を飛ぶ）ときは、帯状の透明プラスチックで台座までつなぐ (#848)
+  const stem = computeStem(alpha, w, h, extend, params)
+  if (stem) stampStem(mask, W, pad, stem)
 
   // 形: ぼかして smoothstep（σ から広がり距離が spread になるよう決める）
   const sigma = spread / SPREAD_PER_SIGMA

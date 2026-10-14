@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   computePlateExtend,
   computePlateLayout,
+  computeStem,
   extendFootMask,
   gaussianBlur,
   renderAcrylicPlate,
   smoothstep,
+  stampStem,
 } from './acrylicPlate'
 import { resolveAcrylicParams } from './spriteStyle'
 
@@ -348,5 +350,82 @@ describe('renderAcrylicPlate: 足元を差し込み線まで伸ばす (#802)', (
     const r = renderAcrylicPlate(new Uint8Array(w * h), w, h, lifted)
     expect(r.height).toBe(h + r.extend + r.pad * 2)
     expect(r.rgba).toHaveLength(r.width * r.height * 4)
+  })
+})
+
+describe('computeStem / stampStem: 浮く絵を台座へつなぐ帯 (#848)', () => {
+  const w = 100
+  const h = 100
+  const sp = { stemWidthRatio: 0.28, stemMinGapRatio: 0.08 }
+  /** x=20..79（幅 60）・y=10..(bottomY) の不透明な塊 */
+  const blob = (bottomY: number, x0 = 20, x1 = 79): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= bottomY; y++) for (let x = x0; x <= x1; x++) a[y * w + x] = 255
+    return a
+  }
+
+  it('下端が離れていなければ null（地面に立つキャラは帯なし）', () => {
+    expect(computeStem(blob(99), w, h, 3, sp)).toBeNull()
+    expect(computeStem(blob(95), w, h, 3, sp)).toBeNull() // gap 4 < 8
+  })
+  it('下端が閾値以上離れていれば帯が出て、幅は不透明部分の幅 × 比率・中心は下端の重心', () => {
+    const s = computeStem(blob(60), w, h, 3, sp)
+    expect(s).not.toBeNull()
+    expect(s!.halfWidth * 2).toBeCloseTo(60 * 0.28, 6)
+    expect(s!.cx).toBeCloseTo(50, 6)
+    expect(s!.bottom).toBe(h + 3)
+    expect(s!.top).toBeLessThanOrEqual(60)
+    expect(s!.top).toBeGreaterThan(50)
+  })
+  it('中心は最下端の帯の不透明画素に追従し、画像の横幅からはみ出さない', () => {
+    const s = computeStem(blob(60, 0, 19), w, h, 0, sp)!
+    expect(s.cx - s.halfWidth).toBeGreaterThanOrEqual(0)
+    expect(s.cx + s.halfWidth).toBeLessThanOrEqual(w)
+    expect(s.cx).toBeCloseTo(10, 0)
+  })
+  it('薄いにじみ（alpha < 32）は下端とみなさない', () => {
+    const a = blob(60)
+    for (let x = 0; x < w; x++) a[99 * w + x] = 20
+    expect(computeStem(a, w, h, 0, sp)).not.toBeNull()
+  })
+  it('stemWidthRatio=0・全透明・寸法不正は null', () => {
+    expect(computeStem(blob(60), w, h, 0, { ...sp, stemWidthRatio: 0 })).toBeNull()
+    expect(computeStem(new Uint8Array(w * h), w, h, 0, sp)).toBeNull()
+    expect(computeStem(new Uint8Array(4), w, h, 0, sp)).toBeNull()
+    expect(computeStem(blob(60), 0, h, 0, sp)).toBeNull()
+  })
+  it('stampStem は帯の内側を 1 にし、外側・上側の角は触らない', () => {
+    const pad = 4
+    const W = w + pad * 2
+    const mask = new Float32Array(W * (h + 3 + pad * 2))
+    const s = computeStem(blob(60), w, h, 3, sp)!
+    stampStem(mask, W, pad, s)
+    const at = (x: number, y: number): number => mask[(y + pad) * W + x + pad]
+    expect(at(50, 80)).toBe(1)
+    expect(at(50, h + 2)).toBe(1)
+    expect(at(10, 80)).toBe(0)
+    expect(at(Math.floor(s.cx - s.halfWidth), Math.ceil(s.top))).toBe(0) // 丸めた角
+  })
+  it('renderAcrylicPlate: 浮く絵は下端から差し込み線まで shape が連続し、無効化すると途切れる', () => {
+    const a = blob(40)
+    const on = renderAcrylicPlate(a, w, h, resolveAcrylicParams({ spriteLiftRatio: 0.1 }))
+    const off = renderAcrylicPlate(
+      a,
+      w,
+      h,
+      resolveAcrylicParams({ spriteLiftRatio: 0.1, stemWidthRatio: 0 })
+    )
+    for (let y = 40; y < h + on.extend; y++)
+      expect(on.shape[(y + on.pad) * on.width + 50 + on.pad]).toBeGreaterThan(0.9)
+    expect(off.shape[(80 + off.pad) * off.width + 50 + off.pad]).toBeLessThan(0.1)
+    // 帯は画像と extend の外へは広がらない（寸法は不変）
+    expect(on.width).toBe(off.width)
+    expect(on.height).toBe(off.height)
+  })
+  it('地面に立つ絵は帯の有無で rgba が変わらない（既定の見た目は不変）', () => {
+    const a = blob(99)
+    const on = renderAcrylicPlate(a, w, h, P)
+    const off = renderAcrylicPlate(a, w, h, resolveAcrylicParams({ stemWidthRatio: 0 }))
+    expect(Array.from(on.rgba)).toEqual(Array.from(off.rgba))
   })
 })
