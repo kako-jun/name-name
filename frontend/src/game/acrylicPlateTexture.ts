@@ -49,7 +49,9 @@ export function createAcrylicPlateTexture(
     const data = sctx.getImageData(0, 0, ww, wh).data
     const alpha = new Uint8Array(ww * wh)
     for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3]
-    const raster = renderAcrylicPlate(alpha, ww, wh, params)
+    // 台座が無いときは浮き量が効かない（幾何の liftPx=0 と揃え、板も伸ばさない）
+    const plateParams = { ...params, spriteLiftRatio: params.hasBase ? params.spriteLiftRatio : 0 }
+    const raster = renderAcrylicPlate(alpha, ww, wh, plateParams)
     const dst = document.createElement('canvas')
     dst.width = raster.width
     dst.height = raster.height

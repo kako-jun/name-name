@@ -136,10 +136,11 @@ const FOOT_BAND_RATIO = 0.06
 /**
  * スプライト下端から台座の差し込み線まで板を伸ばすための追加行数(px・この画像の解像度)。
  * 浮き量 = `spriteLiftRatio` × スプライト高さ (#802)。
+ * 丸めで差し込み線に届かない隙間が出ないよう切り上げる（余分に伸びた分は差し込み線の mask が水平に切る）。
  */
 export function computePlateExtend(h: number, liftRatio: number): number {
   const r = Number.isFinite(liftRatio) && liftRatio > 0 ? liftRatio : 0
-  return h > 0 ? Math.round(r * h) : 0
+  return h > 0 ? Math.ceil(r * h - 1e-9) : 0
 }
 
 /**
