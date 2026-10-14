@@ -419,8 +419,8 @@ export class NovelRenderer {
    *
    * 背景: マウント時の自動 quickLoad（#578/#620）は `restoreToScene()` を呼び、直前ルート
    * （例: 近視ルート）の scene.events で `rawEvents` を上書きする。この状態で「はじめから」
-   * （`restart()`）が `rawEvents` を再生すると、シーンID はリセットされていても実際に再生
-   * される events は前ルートのままになってしまう（#662）。`restart()` は代わりにこの
+   * （`startFrom({})`）が `rawEvents` を再生すると、シーンID はリセットされていても実際に再生
+   * される events は前ルートのままになってしまう（#662）。新規開始の 'entry' は代わりにこの
    * `entryRawEvents` を参照することで、quickLoad の有無に関係なく常にエントリ文書の
    * 冒頭から再生する。
    */
@@ -869,7 +869,7 @@ export class NovelRenderer {
    * （`NovelGameState.paperDollOutline`）だが、スコープはシーン単位ではなくシナリオ
    * （entryRawEvents）全体: `[紙人形輪郭: オン]` イベント処理で更新した後、`cameraMode` と違い
    * `resetAndStartEvents` の場面転換（preserveBackgroundForTransition）経路では自動クリア
-   * しない——非 preserve 経路（新しいエントリ文書の開始・`restart()`）でのみリセットする。
+   * しない——非 preserve 経路（新規開始。`setEvents` / `startFrom({})` を含む）でのみリセットする。
    * `characterLayer`/`propLayer` 両方に同じ設定を伝える。`null` = 通常表示（既定）。
    */
   private paperDollOutline: PaperDollOutlineConfig | null = null
@@ -1371,62 +1371,35 @@ export class NovelRenderer {
     this.curtainLayer.disposeTextures()
   }
 
-  setEvents(events: Event[]): void {
-    this.loadEvents(events)
-    this.resetAndStartEvents([...events])
-  }
-
   /**
-   * 同じ scenario を最初から再開する (texture cache は維持)。
-   * 動画モードの「はじめから」直後に AudioContext を起動してから冒頭の voice 付き event を
-   * 再走させる用途。setEvents() は texture を Assets.unload するため、render と並行すると
-   * Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる。restart() は
-   * texture を維持するため安全。
+   * エントリ文書の events を(再)供給して、先頭から新規開始する (#734, ADR 0003 §4)。
+   * 「`loadEvents` + `startFrom({})`」で、flags のクリア・終劇状態の解除・`consecutiveJumps` のリセット・
+   * `currentSceneId` のエントリへの揃え（線形ストリームなので null）は新規開始の入口が担う。
+   * エディタのライブ再パースでも、旧 flags や旧 `currentSceneId` が残らない。
+   * 開始しない読み込みだけが要るときは `loadEvents` を使う。
    *
-   * #637: `setScenes()` と対称に `gameState.clear()` / `currentSceneId` のリセットを行う。
-   * 旧セーブ（GUI 起動時の #578 自動クイックロードが復元した flags/sceneId）を引きずったまま
-   * 「はじめから」しても、Condition 分岐が旧フラグのまま解決されて「つづきから」相当の内容に
-   * なってしまっていた（#637 本体の症状）。`currentSceneId` は `entrySceneId`（`loadScenes`/`setScenes`
-   * ならエントリ doc の最初のシーン、`loadEvents` ならジャンプ前の線形ストリームを表す null）に戻す
-   * (#768)。再生するのは `entryRawEvents` なので、sceneId はそのイベント列の識別子と一致させる。
-   * 以前は `allScenes[0]` に戻していたが、線形ストリームの平坦なイベント列と `allScenes[0]` の
-   * events は別物で、その後のセーブが「sceneId=hub + 平坦ストリーム上の eventIndex」という不整合になった。
-   * マウント経路（`loadEvents`）も null で始まるので、restart 後だけ非 null にする理由は無い。
-   *
-   * #662: `rawEvents` ではなく `entryRawEvents` を再生する。マウント時の自動 quickLoad が
-   * `restoreToScene()` 経由で `rawEvents` を直前ルート（例: 近視ルート）の scene.events に
-   * 上書きしていた場合、`rawEvents` をそのまま再生すると `currentSceneId` だけリセットされて
-   * 実際の内容は前ルートのまま、という不整合再生になっていた（#662 本体の症状）。
-   * `entryRawEvents` は `setEvents()` でのみ更新されるため、quickLoad の有無に関わらず常に
-   * エントリ文書冒頭の events を指す。`resetAndStartEvents` が `this.rawEvents = events` を
-   * 行うため、この呼び出しで `rawEvents` 自体も entryRawEvents のコピーへ戻る。
+   * エントリの新規開始はシーンの引き当てを要さないので、適用は同期で行われる（返す Promise は
+   * 既に `entered` で解決済み。適用中の例外は `failed`（`apply-error`）になる）。
    */
-  restart(): void {
-    if (this.entryRawEvents.length === 0) return
-    this.gameState.clear()
-    this.currentSceneId = this.entrySceneId
-    this.resetAndStartEvents([...this.entryRawEvents])
+  setEvents(events: Event[]): Promise<SceneEntryResult> {
+    this.loadEvents(events)
+    return this.startFrom({})
   }
 
   /**
-   * 全シーンを設定して最初のシーンから開始する。
+   * 全シーンを設定して最初のシーンから開始する (「`loadScenes` + `startFrom({})`」)。
    *
    * 注意 (#284): これは `allScenes`（ジャンプ解決索引）の設定**と同時に**
    * 再生ストリームを `scenes[0].events` だけに差し替える。複数シーンを線形に
    * 連結して自動進行させたい場合は使わないこと（scene1 で停止する）。
    * 線形再生を維持したままジャンプ索引だけを差し替えたいときは
    * `setEvents(flattened)` ＋ `setJumpSceneIndex(scenes)` を使う。
+   *
+   * シーンが0件のときは、`setEvents([])` と同じく空の文書として新規開始する（旧文書を残さない）。
    */
-  setScenes(scenes: EventScene[]): void {
-    this.allScenes = scenes
-    this.gameState.clear()
-    this.consecutiveJumps = 0
-    if (scenes.length > 0) {
-      this.currentSceneId = scenes[0].id
-      this.setEvents(scenes[0].events)
-      this.entrySceneId = scenes[0].id
-      this.onSceneChangeCallback?.(scenes[0].id)
-    }
+  setScenes(scenes: EventScene[]): Promise<SceneEntryResult> {
+    this.loadScenes(scenes)
+    return this.startFrom({})
   }
 
   /**
@@ -1435,10 +1408,9 @@ export class NovelRenderer {
    */
   loadScenes(scenes: EventScene[]): void {
     this.allScenes = scenes
-    if (scenes.length > 0) {
-      this.loadEvents(scenes[0].events)
-      this.entrySceneId = scenes[0].id
-    }
+    // 0件は空の文書（`loadEvents([])`）。旧文書を entryRawEvents / entrySceneId に残さない。
+    this.loadEvents(scenes.length > 0 ? scenes[0].events : [])
+    if (scenes.length > 0) this.entrySceneId = scenes[0].id
   }
 
   /**
@@ -1501,7 +1473,7 @@ export class NovelRenderer {
    * Jump の遷移に失敗したとき（遷移先不在・resolver が null/例外・lazy load 後も不在・循環上限）、
    * 予約中（pending）から停止中（stalled）へ移して Jump の位置で止まる (#725)。予約中のままだと
    * goBack/seekTo/quickLoad 等まで塞がって詰むため。停止中は `advance`・セーブが弾く。
-   * 予約中でなければ（await 中に restart/復元で idle へ戻った等）何もしない (#733)。
+   * 予約中でなければ（await 中に新規開始・復元で idle へ戻った等）何もしない (#733)。
    */
   private stallJump(): void {
     if (this.jumpState === 'pending') {
@@ -1981,8 +1953,13 @@ export class NovelRenderer {
       return { status: 'entered', sceneId: positioned.scene.id }
     }
 
-    // エントリ（sceneId なし）は警告しない: エディタのプレビュー等で毎回出てしまう。
-    if (import.meta.env.DEV && sceneId !== null && lacksLeadingBackground(events)) {
+    // エントリ（target 'entry'。sceneId の有無によらず）は警告しない: エディタのライブ再パース等で毎回出てしまう。
+    if (
+      import.meta.env.DEV &&
+      req.target !== 'entry' &&
+      sceneId !== null &&
+      lacksLeadingBackground(events)
+    ) {
       console.warn(
         `[name-name] startFrom: 新規開始の対象シーン "${sceneId}" が最初のテキストまでに [背景:] を持ちません。新規開始は背景を持ち越さないので、背景は地色から始まります。`
       )
@@ -2828,7 +2805,7 @@ export class NovelRenderer {
       this.waitTimer = null
     }
     this.clearWaitDisplayCompleteTimer()
-    // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。restart()/jumpToScene で
+    // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。新規開始・jumpToScene で
     // 新しいシーンが始まった後、endStory() で仕込んだ古いタイマーが発火して上書きする事故を防ぐ。
     if (this.intermissionTimer) {
       this.time.clearTimeout(this.intermissionTimer)
@@ -2857,7 +2834,7 @@ export class NovelRenderer {
     this.choiceOverlay.hide()
     // BGM は「変えるまで鳴り続ける」(#724): 選択肢・物語進行によるジャンプ（carryBgm=true）では
     // 持ち越し、次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
-    // 新規開始（setEvents・restart・startFrom の ?scene= / ?debug_scene=）では従来どおり停止する。
+    // 新規開始（setEvents・startFrom の ?scene= / ?debug_scene=）では従来どおり停止する。
     // 背景等の持ち越し（preserveBackgroundForTransition）とは独立した別オプション。
     if (!options?.carryBgm) {
       this.audioManager.stopBgm(0)
@@ -2894,7 +2871,7 @@ export class NovelRenderer {
     // 紙人形輪郭 (#699) は cameraMode/spotlight と異なり、場面転換
     // （preserveBackgroundForTransition=true、同シナリオ内のシーン間ジャンプ）では自動クリア
     // しない——一度オンにしたら、そのシナリオ内で以降表示される全キャラクター/大道具に
-    // 持続させる設計（Issue #699 方針）。新しいエントリ文書の開始（setEvents()）・restart() の
+    // 持続させる設計（Issue #699 方針）。新しいエントリ文書の開始（setEvents()）・startFrom({}) の
     // ときだけ通常表示にリセットする（背景板/大道具と同じ非 preserve 条件、上記参照）。
     if (!options?.preserveBackgroundForTransition) {
       this.paperDollOutline = null
@@ -6705,11 +6682,18 @@ export class NovelRenderer {
   }
 
   /**
+   * AudioContext を起動する。ユーザー操作（タイトル画面のボタン等）の中で呼ぶ。
+   * `NovelPlayerHandle` 経由で `PlayerScreen` が使う（自動進行の動画モードでは他に起動の契機が無い）。
+   */
+  ensureAudioContext(): void {
+    this.audioManager.ensureContext()
+  }
+
+  /**
    * クイックセーブデータを消去する (#637)。
    * 「はじめから」（`PlayerScreen.onNewGame`）等、直前のセッションのクイックセーブを完全に
-   * 無効化したい場面で使う。`restart()` はシーン切り替え検知（`onSceneChangeCallback`）を
-   * 経由しないため、旧クイックセーブが自動上書きされるとは限らない（entry シーンから一度も
-   * シーン遷移していない状態でリロードすると、旧クイックセーブがそのまま復元されてしまう）。
+   * 無効化したい場面で使う。新規開始後は自動セーブが走るまで（loadEvents 構成では最初のシーン境界・ジャンプまで）旧セーブが残るため、
+   * それまでの間にリロードされると旧クイックセーブがそのまま復元されてしまう。
    * 呼び出し側が明示的にこれを呼び、リロード時に旧セーブが復活しないことを保証する。
    */
   clearQuickSave(): void {

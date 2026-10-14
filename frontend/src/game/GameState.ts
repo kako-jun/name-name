@@ -195,7 +195,7 @@ export interface NovelGameState {
    * そのシナリオ内で以降表示される全てのキャラクター（`CharacterLayer`）・大道具
    * （`PropLayer`）に輪郭が付く。`cameraMode`/`spotlight` と異なり、場面転換（シーン間
    * ジャンプ）や `endStory()` では自動クリアしない——別の .md（`setEvents()` でのエントリ
-   * 文書差し替え）や `restart()` では `NovelRenderer.resetAndStartEvents` の non-preserve
+   * 文書差し替え）や新規開始（`startFrom({})`）では `NovelRenderer.resetAndStartEvents` の non-preserve
    * 経路がリセットする。`null` = 通常表示（既定）。
    */
   paperDollOutline: PaperDollOutlineConfig | null

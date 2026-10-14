@@ -15,6 +15,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 // 実装で実際に使われるこの純粋関数で確認する（Pixi/NovelRenderer は jsdom で init 不可）。
 import { findSceneById } from '../game/novelLayout'
 import type { EventScene } from '../types'
+import type { NovelPlayerHandle } from '../components/NovelPlayer'
+import type { SceneEntryResult } from '../game/sceneEntry'
 
 // API クライアントをモック化
 const listProjectsMock = vi.fn()
@@ -78,6 +80,16 @@ const novelPlayerProps = vi.fn()
 // PlayerScreen 側の novelPlayerRef.current?.openSettings() 呼び出しをここで捕捉する
 // （実際の SettingsOverlay 開閉は PixiJS 依存で jsdom 検証不可、実体は NovelPlayer.test.tsx が担う）。
 const openSettingsMock = vi.fn()
+// #734 PR5: 「はじめから」「つづきから」は window.__renderer のダックタイプをやめ、NovelPlayerHandle
+// （型付き）経由で renderer を呼ぶ。NovelPlayer のモックは、ハンドルの全メソッドをこのスパイで公開する。
+// 型は実体の NovelPlayerHandle から取るので、ハンドルの API が変わるとこのモックが型検査で落ちる。
+const handleMocks = {
+  ensureAudioContext: vi.fn(),
+  setDocKey: vi.fn(),
+  hasQuickSave: vi.fn(() => false),
+  clearQuickSave: vi.fn(),
+  startFrom: vi.fn(() => Promise.resolve<SceneEntryResult>({ status: 'entered', sceneId: null })),
+} satisfies Omit<NovelPlayerHandle, 'openSettings'>
 // #643: novelPlayerRef.current が null の異常系（下記 15番）を再現するための切替フラグ。
 // 既定 true（NovelPlayer が正常に ref を公開する）。false のときはモック側の
 // useImperativeHandle の factory が null を返し、novelPlayerRef.current が null のまま維持される。
@@ -116,14 +128,14 @@ vi.mock('../components/NovelPlayer', () => ({
         showExitButton?: boolean
       } | null
     },
-    ref: Ref<{ openSettings: () => void }>
+    ref: Ref<NovelPlayerHandle>
   ) {
     useImperativeHandle(
       ref,
       () =>
         novelPlayerRefAttached
-          ? { openSettings: openSettingsMock }
-          : (null as unknown as { openSettings: () => void }),
+          ? { openSettings: openSettingsMock, ...handleMocks }
+          : (null as unknown as NovelPlayerHandle),
       []
     )
     novelPlayerProps(props)
@@ -253,6 +265,12 @@ beforeEach(() => {
   parseMarkdownMock.mockReset()
   novelPlayerProps.mockReset()
   openSettingsMock.mockReset()
+  handleMocks.ensureAudioContext.mockReset()
+  handleMocks.setDocKey.mockReset()
+  handleMocks.hasQuickSave.mockReset()
+  handleMocks.hasQuickSave.mockReturnValue(false)
+  handleMocks.clearQuickSave.mockReset()
+  handleMocks.startFrom.mockClear()
   setNovelPlayerRefAttached(true)
   rpgPlayerProps.mockReset()
   isEmbeddedMock.mockReset()
@@ -1984,34 +2002,18 @@ describe('PlayerScreen', () => {
     expect(lastNovelPlayerProps().speakerNudge).toBeNull()
   })
 
-  // --- #620: 「つづきから」は renderer.hasQuickSave() の真偽で restart() 呼び出しを分岐する ---
+  // --- #620: 「つづきから」は hasQuickSave() の真偽で startFrom({}) 呼び出しを分岐する ---
   //
   // #578 の自動 quickLoad により、renderer はマウント時点で既にクイックセーブの最終位置
-  // まで復元済み。hasQuickSave()=true なら restart() を呼んではいけない（呼ぶと最初の
+  // まで復元済み。hasQuickSave()=true なら startFrom({}) を呼んではいけない（呼ぶと最初の
   // シーンへ巻き戻り、復元済みの位置を握りつぶす）。タイトルを閉じるだけでよい。
   // hasQuickSave()=false（#578 以前のレガシーセーブ等）は従来どおり startWithSkip を立てて
-  // restart() する。renderer 未定義でも optional chaining で安全に動くことも確認する。
-  // onNewGame（変更なし）が常に restart() を呼ぶことも非退行として併せて確認する。
+  // startFrom({}) する。
+  // #734 PR5: renderer は window.__renderer のダックタイプではなく NovelPlayerHandle（型付き）経由で呼ぶ。
+  // NovelPlayer のモックがハンドルの各メソッドを handleMocks のスパイで公開しているので、それを検証する。
   describe('#620: 「つづきから」の hasQuickSave() 分岐', () => {
-    type MockRenderer = {
-      audioManager: { ensureContext: ReturnType<typeof vi.fn> }
-      restart: ReturnType<typeof vi.fn>
-      hasQuickSave: ReturnType<typeof vi.fn>
-      setDocKey: ReturnType<typeof vi.fn>
-      // #637: 「はじめから」が旧クイックセーブを明示的に消去するために呼ぶ。
-      clearQuickSave: ReturnType<typeof vi.fn>
-    }
-
-    function installMockRenderer(hasQuickSave: boolean): MockRenderer {
-      const renderer: MockRenderer = {
-        audioManager: { ensureContext: vi.fn() },
-        restart: vi.fn(),
-        hasQuickSave: vi.fn().mockReturnValue(hasQuickSave),
-        setDocKey: vi.fn(),
-        clearQuickSave: vi.fn(),
-      }
-      ;(window as unknown as { __renderer?: MockRenderer }).__renderer = renderer
-      return renderer
+    function setQuickSave(hasQuickSave: boolean): void {
+      handleMocks.hasQuickSave.mockReturnValue(hasQuickSave)
     }
 
     // renderWithFrontmatter は常に projectName="friday-1930" で render する（docKey もこれ）。
@@ -2022,12 +2024,11 @@ describe('PlayerScreen', () => {
 
     afterEach(() => {
       localStorage.removeItem(READ_PROGRESS_KEY)
-      delete (window as unknown as { __renderer?: unknown }).__renderer
     })
 
-    it('hasQuickSave()=true なら restart() を呼ばずタイトルを閉じるだけ（quickLoad 済み位置を保つ）', async () => {
+    it('hasQuickSave()=true なら startFrom({}) を呼ばずタイトルを閉じるだけ（quickLoad 済み位置を保つ）', async () => {
       localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
-      const renderer = installMockRenderer(true)
+      setQuickSave(true)
 
       await renderWithFrontmatter({})
 
@@ -2035,33 +2036,34 @@ describe('PlayerScreen', () => {
       expect(continueButton).toBeEnabled()
       fireEvent.click(continueButton)
 
-      expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
-      expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
-      expect(renderer.restart).not.toHaveBeenCalled()
+      expect(handleMocks.ensureAudioContext).toHaveBeenCalledTimes(1)
+      expect(handleMocks.hasQuickSave).toHaveBeenCalledTimes(1)
+      expect(handleMocks.startFrom).not.toHaveBeenCalled()
       // タイトルが閉じる（タイトル画面固有の「はじめから」ボタンが消える）
       expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       // 復元済み位置を保つため、既読スキップモードは立てない
       expect(lastNovelPlayerProps().initialSkipMode).toBe(false)
     })
 
-    it('hasQuickSave()=false なら従来どおり startWithSkip + restart() にフォールバックする', async () => {
+    it('hasQuickSave()=false なら従来どおり startWithSkip + startFrom({}) にフォールバックする', async () => {
       localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
-      const renderer = installMockRenderer(false)
+      setQuickSave(false)
 
       await renderWithFrontmatter({})
 
       const continueButton = screen.getByRole('button', { name: 'つづきから' })
       fireEvent.click(continueButton)
 
-      expect(renderer.hasQuickSave).toHaveBeenCalledTimes(1)
-      expect(renderer.restart).toHaveBeenCalledTimes(1)
+      expect(handleMocks.hasQuickSave).toHaveBeenCalledTimes(1)
+      expect(handleMocks.startFrom).toHaveBeenCalledTimes(1)
+      expect(handleMocks.startFrom).toHaveBeenCalledWith({})
       expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
     })
 
-    it('window.__renderer が未定義でも例外にならず、フォールバック分岐で安全にタイトルを閉じる（optional chaining）', async () => {
+    it('NovelPlayer のハンドルが無くても（ref が null）例外にならず、フォールバック分岐で安全にタイトルを閉じる（optional chaining）', async () => {
       localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
-      // installMockRenderer を呼ばない = window.__renderer は未設定のまま
+      setNovelPlayerRefAttached(false)
 
       await renderWithFrontmatter({})
 
@@ -2071,80 +2073,81 @@ describe('PlayerScreen', () => {
       expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
     })
 
-    it('onNewGame は今回の変更で非退行: 常に restart() を呼ぶ', async () => {
-      const renderer = installMockRenderer(true)
+    it('onNewGame は非退行: 常に startFrom({}) を呼ぶ（クイックセーブの有無に依らない）', async () => {
+      setQuickSave(true)
 
       await renderWithFrontmatter({})
 
       const newGameButton = screen.getByRole('button', { name: 'はじめから' })
       fireEvent.click(newGameButton)
 
-      expect(renderer.audioManager.ensureContext).toHaveBeenCalledTimes(1)
-      expect(renderer.restart).toHaveBeenCalledTimes(1)
+      expect(handleMocks.ensureAudioContext).toHaveBeenCalledTimes(1)
+      expect(handleMocks.startFrom).toHaveBeenCalledTimes(1)
+      expect(handleMocks.startFrom).toHaveBeenCalledWith({})
       expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
     })
 
-    // --- #637: 「はじめから」は renderer.clearQuickSave() を呼び、旧クイックセーブを消去する ---
+    it('onNewGame は docKey（projectName）を設定する', async () => {
+      await renderWithFrontmatter({})
+
+      fireEvent.click(screen.getByRole('button', { name: 'はじめから' }))
+
+      expect(handleMocks.setDocKey).toHaveBeenCalledWith('friday-1930')
+    })
+
+    // --- #637: 「はじめから」は clearQuickSave() を呼び、旧クイックセーブを消去する ---
     //
-    // restart() 自体は onSceneChangeCallback を経由しないため、旧クイックセーブが自動上書きされる
-    // とは限らない（entry から一度もシーン遷移していない状態でリロードすると旧クイックセーブが
-    // そのまま復元されてしまう）。onNewGame から明示的に clearQuickSave() を呼ぶことを検証する。
-    describe('#637: 「はじめから」は renderer.clearQuickSave() を呼ぶ', () => {
-      it('10: 「はじめから」押下で renderer.clearQuickSave() が呼ばれる', async () => {
-        const renderer = installMockRenderer(true)
+    // 新規開始の自動セーブは最初の本文が表示されてから行われる。entry から一度もシーン遷移して
+    // いない状態でリロードすると旧クイックセーブがそのまま復元されてしまうので、onNewGame から
+    // 明示的に clearQuickSave() を呼ぶことを検証する。
+    describe('#637: 「はじめから」は clearQuickSave() を呼ぶ', () => {
+      it('10: 「はじめから」押下で clearQuickSave() が呼ばれる', async () => {
+        setQuickSave(true)
 
         await renderWithFrontmatter({})
 
-        const newGameButton = screen.getByRole('button', { name: 'はじめから' })
-        fireEvent.click(newGameButton)
+        fireEvent.click(screen.getByRole('button', { name: 'はじめから' }))
 
-        expect(renderer.clearQuickSave).toHaveBeenCalledTimes(1)
+        expect(handleMocks.clearQuickSave).toHaveBeenCalledTimes(1)
       })
 
-      it('11: 「はじめから」押下で clearQuickSave() と restart() が両方呼ばれる（呼び出し順は問わない・片方欠落の回帰防止）', async () => {
-        const renderer = installMockRenderer(true)
+      it('11: 「はじめから」押下で clearQuickSave() と startFrom({}) が両方呼ばれる（片方欠落の回帰防止）', async () => {
+        setQuickSave(true)
 
         await renderWithFrontmatter({})
 
-        const newGameButton = screen.getByRole('button', { name: 'はじめから' })
-        fireEvent.click(newGameButton)
+        fireEvent.click(screen.getByRole('button', { name: 'はじめから' }))
 
-        expect(renderer.clearQuickSave).toHaveBeenCalledTimes(1)
-        expect(renderer.restart).toHaveBeenCalledTimes(1)
+        expect(handleMocks.clearQuickSave).toHaveBeenCalledTimes(1)
+        expect(handleMocks.startFrom).toHaveBeenCalledTimes(1)
+        // 消去してから新規開始する（新規開始が先に自動セーブを積んでも消さない順序）
+        expect(handleMocks.clearQuickSave.mock.invocationCallOrder[0]).toBeLessThan(
+          handleMocks.startFrom.mock.invocationCallOrder[0]
+        )
       })
 
-      it('12: window.__renderer.clearQuickSave が未定義でも「はじめから」押下は例外を投げない（optional chaining境界）', async () => {
-        // clearQuickSave を持たない renderer を意図的に用意する（旧バージョンの __renderer 相当）。
-        const renderer = {
-          audioManager: { ensureContext: vi.fn() },
-          restart: vi.fn(),
-          hasQuickSave: vi.fn().mockReturnValue(true),
-          setDocKey: vi.fn(),
-        }
-        ;(window as unknown as { __renderer?: typeof renderer }).__renderer = renderer
+      it('12: NovelPlayer のハンドルが無くても「はじめから」押下は例外を投げず、タイトルは閉じる', async () => {
+        setNovelPlayerRefAttached(false)
 
         await renderWithFrontmatter({})
 
         const newGameButton = screen.getByRole('button', { name: 'はじめから' })
         expect(() => fireEvent.click(newGameButton)).not.toThrow()
-        expect(renderer.restart).toHaveBeenCalledTimes(1)
         expect(screen.queryByRole('button', { name: 'はじめから' })).toBeNull()
       })
 
-      it('13: onContinue のレガシーフォールバック（hasQuickSave()=false）では clearQuickSave() は呼ばれず、restart() 経由のフォールバックは従来どおり動く（非退行）', async () => {
+      it('13: onContinue のレガシーフォールバック（hasQuickSave()=false）では clearQuickSave() は呼ばれず、startFrom({}) 経由のフォールバックは従来どおり動く（非退行）', async () => {
         localStorage.setItem(READ_PROGRESS_KEY, JSON.stringify([1]))
-        const renderer = installMockRenderer(false)
+        setQuickSave(false)
 
         await renderWithFrontmatter({})
 
-        const continueButton = screen.getByRole('button', { name: 'つづきから' })
-        fireEvent.click(continueButton)
+        fireEvent.click(screen.getByRole('button', { name: 'つづきから' }))
 
         // clearQuickSave() は onNewGame 専用。onContinue のレガシーフォールバックからは呼ばれない
-        // （restart() 自体が gameState/currentSceneId をリセットするようになっても、
-        // つづきからの skip 再生フローには影響しない）。
-        expect(renderer.clearQuickSave).not.toHaveBeenCalled()
-        expect(renderer.restart).toHaveBeenCalledTimes(1)
+        // （新規開始が flags/currentSceneId をリセットしても、つづきからの skip 再生フローには影響しない）。
+        expect(handleMocks.clearQuickSave).not.toHaveBeenCalled()
+        expect(handleMocks.startFrom).toHaveBeenCalledTimes(1)
         expect(lastNovelPlayerProps().initialSkipMode).toBe(true)
       })
     })
@@ -2488,7 +2491,7 @@ describe('PlayerScreen', () => {
     //
     // 従来は `startSceneId`（`?scene=` 専用の #386 解決結果）だけを タイトル画面ゲートに
     // 使っていたため、`?debug_scene=` 単独指定時にタイトル画面が誤って表示され、
-    // 「つづきから」（hasQuickSave()=false 時）/「はじめから」の renderer.restart() が
+    // 「つづきから」（hasQuickSave()=false 時）/「はじめから」の startFrom({}) が
     // NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた（実機報告:
     // つづきからが常に10択のハブから始まる／読書中に突然 to be continued になる）。
     // `?debug_scene=` の値自体は NovelPlayer 側の mount effect が独自に
@@ -2512,7 +2515,7 @@ describe('PlayerScreen', () => {
         // localStorage 読み取りでマウント時に一度だけ決まる（#620 節と同じ流儀）。
         // 実際の renderer.hasQuickSave()（PixiJS 内部状態）はこのテストではモック対象外だが、
         // タイトル画面自体が render されない（titleScreen=null）ため、onContinue の
-        // restart() 分岐に到達し得ないことが本質的な確認ポイント。
+        // startFrom({}) 分岐に到達し得ないことが本質的な確認ポイント。
         localStorage.setItem('name-name:read-progress:theo-hayami', JSON.stringify([1]))
         window.history.pushState({}, '', '?debug_scene=cell-scene-1')
         await renderMultiDocProject()

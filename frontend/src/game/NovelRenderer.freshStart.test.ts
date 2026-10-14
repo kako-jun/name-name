@@ -356,7 +356,7 @@ describe('入場の失敗・割り込み (#734 PR2 レビュー対応)', () => {
     expect((r as unknown as { skipMode: boolean }).skipMode).toBe(true)
   })
 
-  it('Q1: 自動クイックロードの遅延ロード中に restart（はじめから）しても、後から解決した復元は破棄され restart の状態が勝つ', async () => {
+  it('Q1: 自動クイックロードの遅延ロード中に startFrom({})（はじめから）しても、後から解決した復元は破棄され 新規開始の状態が勝つ', async () => {
     const r = new NovelRenderer()
     vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
     internals(r).initialized = true
@@ -380,7 +380,7 @@ describe('入場の失敗・割り込み (#734 PR2 レビュー対応)', () => {
     const loading = r.quickLoad('auto')
     expect(internals(r).pendingEntry).not.toBeNull()
 
-    r.restart()
+    void r.startFrom({})
     expect(internals(r).pendingEntry).toBeNull()
     d.resolve([HUB, ROUTE])
     await expect(loading).resolves.toEqual({ status: 'superseded' })

@@ -438,9 +438,9 @@ export class EventImageLayer extends Container {
    * `setPixelArt()` が呼ばれると、`currentTexture` は非 null（真の Texture インスタンス）だが
    * `currentTexture.source` は null という、旧ガード（`if (this.currentTexture)`）をすり抜ける
    * 組み合わせで `Cannot set properties of null (setting 'scaleMode')` に落ちる。
-   * `NovelRenderer.restart()` の JSDoc にある「setEvents() は texture を Assets.unload するため、
-   * render と並行すると Pixi が `Cannot read properties of null (reading 'alphaMode')` で落ちる」
-   * という既知コメントと同系統のレース。
+   * `setEvents()` は texture を Assets.unload するため、render と並行すると Pixi が
+   * `Cannot read properties of null (reading 'alphaMode')` で落ちる既知のレースと同系統。
+   * （「はじめから」の `startFrom({})` は texture を解放しないので、このレースを起こさない）
    */
   setPixelArt(enabled: boolean): void {
     this.pixelArt = enabled

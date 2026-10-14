@@ -6,7 +6,7 @@
  * `NovelRenderer.cameraMode.test.ts`/`NovelRenderer.spotlight.test.ts` と同じ
  * 「isBlackout と同種の宣言的 settled state」としての配線を検証するが、cameraMode/spotlight とは
  * 対照的に **場面転換（同一エントリ文書内のシーン間ジャンプ）では持続し、新しいエントリ文書の
- * 開始（setEvents() の再呼び出し）・restart() でだけ解除される**、という #699 固有のスコープを
+ * 開始（setEvents() の再呼び出し）・startFrom({}) でだけ解除される**、という #699 固有のスコープを
  * 縛るのが最重要（GameState.paperDollOutline / NovelRenderer.paperDollOutline の JSDoc 参照）。
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -85,7 +85,7 @@ describe('NovelRenderer 紙人形風輪郭配線 (#699)', () => {
     expect(r.getSnapshot().paperDollOutline).toBeNull()
   })
 
-  it('3: restart() 実行時も紙人形輪郭が解除される', async () => {
+  it('3: startFrom({}) 実行時も紙人形輪郭が解除される', async () => {
     const r = makeRenderer([
       scene('a', [narration('one'), paperDollOutline(true, '#ffffff', 2), narration('two')]),
     ])
@@ -94,7 +94,7 @@ describe('NovelRenderer 紙人形風輪郭配線 (#699)', () => {
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().paperDollOutline).not.toBeNull()
 
-    r.restart()
+    void r.startFrom({})
 
     expect(r.getSnapshot().paperDollOutline).toBeNull()
   })
