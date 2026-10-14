@@ -69,6 +69,7 @@ import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { countDisplayEvents, remapEventIndexAfterReResolve } from './eventCursor'
 import { buildFreshPositionState } from './freshState'
+import { collectUpcomingAssetUrls } from './preloadPlan'
 import { isSceneIdConfined } from './sceneConfinement'
 import {
   carryPolicyFor,
@@ -128,7 +129,6 @@ import {
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
-  resolveCharacterImageUrls,
   saveSlotToGameState,
   resolveFontFamily,
   formatCounterText,
@@ -149,19 +149,6 @@ import {
 } from './novelLayout'
 import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 import { resolveVoiceSpatialization } from './voiceSpatialization'
-
-/**
- * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
- * （1話あたり Dialog 平均 13.9 件・最大 19 件、`free/` 業×住人セル 296 話計測）が上回っており、
- * 十分な読み込み時間があるにもかかわらず先読みが途中で打ち切られ立ち絵切り替えが遅延する事故を
- * 招いたため撤廃した (#417)。先読みの実質的な境界は「次の分岐（Choice/Condition）または配列末尾
- * まで」のまま変わらない（このループ構造自体は変更していない）。
- *
- * ⚠️ 無制限に安全というわけではない: 現時点で実運用中のゲームは theo-hayami のみのため撤廃の
- * 影響範囲は限定的だが、将来「分岐なしで極端に長い区間」を持つゲームが出た場合は、その時点で
- * 個別に上限を再検討する必要がある。
- */
-const PRELOAD_MAX_TEXT_EVENTS = Infinity
 
 /**
  * novel 型 canvas の既定 touch-action (#434)。
@@ -5180,7 +5167,7 @@ export class NovelRenderer {
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
    * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
-   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS} 個ぶんに抑える。
+   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS}（preloadPlan.ts）個ぶんに抑える。
    *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
    *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
    *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。
@@ -5193,97 +5180,13 @@ export class NovelRenderer {
    *   未完でも従来どおりテキストは詰まらない（後方互換）。
    */
   private preloadUpcomingAssets(): void {
-    if (!this.assetBaseUrl) return
-
-    const urls: string[] = []
-    let textEventCount = 0
-
-    // 走査開始 i = this.eventIndex は「今表示するテキストイベント」を含む（未来だけでなく現在も
-    // 先読み対象）。PRELOAD_MAX_TEXT_EVENTS=Infinity のため、この予算チェック自体は常に false
-    // になり実質的な上限は「次の分岐（Choice/Condition）または配列末尾まで」に一本化される (#417)。
-    for (let i = this.eventIndex; i < this.resolvedEvents.length; i++) {
-      const event = this.resolvedEvents[i]
-      // 文字列 variant（'SceneTransition' / 'PageBreak' / 'VideoExit' 等）は分岐でも
-      // テキストでも先読み対象アセットでもないので読み飛ばす。
-      if (typeof event !== 'object' || event === null) continue
-
-      // 分岐に当たったら走査終了（分岐先が確定しないと先読みできない）
-      // Jump (#725) も分岐扱い: 遷移先は別シーンで、ここから先の同一配列は再生されない。
-      if ('Choice' in event || 'Condition' in event || 'Jump' in event) break
-
-      // テキストイベント数の緩い上限で打ち切る（Dialog も下でアセットを積むので判定を先に）
-      if (getTextEvent(event) !== null) {
-        if (textEventCount >= PRELOAD_MAX_TEXT_EVENTS) break
-        textEventCount++
-      }
-
-      if ('Dialog' in event) {
-        // 実表示ガード（showCharacterFromDialog: `!expression || !position || !speaker`）に
-        // 揃える＝立ち絵を実際に show する Dialog だけ先読みする。falsy チェックで空文字も弾き、
-        // position も要求する（空文字 expression の無効 URL 先読みを消す）。
-        const { character, expression, position } = event.Dialog
-        if (expression && character && position) {
-          for (const u of resolveCharacterImageUrls(
-            this.assetBaseUrl,
-            expression.replace(/^\//, '')
-          )) {
-            urls.push(u)
-          }
-        }
-      } else if ('ExpressionChange' in event) {
-        // ExpressionChange は position を持たない。expression / character の falsy チェックに
-        // 揃える（空文字を弾く）。
-        const { character, expression } = event.ExpressionChange
-        if (expression && character) {
-          for (const u of resolveCharacterImageUrls(
-            this.assetBaseUrl,
-            expression.replace(/^\//, '')
-          )) {
-            urls.push(u)
-          }
-        }
-      } else if ('Enter' in event) {
-        // 無言登場 (#401) の立ち絵も先読みする。Dialog の立ち絵と同じ実表示ガード
-        // （expression / position / character が全て truthy）に揃える。
-        const { character, expression, position } = event.Enter
-        if (expression && character && position) {
-          for (const u of resolveCharacterImageUrls(
-            this.assetBaseUrl,
-            expression.replace(/^\//, '')
-          )) {
-            urls.push(u)
-          }
-        }
-      } else if ('Background' in event) {
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Background.path))
-      } else if ('BackgroundBoard' in event) {
-        // 舞台構造の背景板 (#683) も背景と同じ Assets.load 遅延ロード経路（BackgroundBoardLayer.add）
-        // を通るため、同じく先読み対象にする。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.BackgroundBoard.path))
-      } else if ('Prop' in event) {
-        // 舞台構造の大道具 (#692) も背景板と同じ Assets.load 遅延ロード経路（PropLayer.add）
-        // を通るため、同じく先読み対象にする。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Prop.path))
-      } else if ('EventImage' in event) {
-        // イベント絵 (#351) の先読み (#621)。EventImageLayer.show() は表示の瞬間に初めて
-        // Assets.load するため、事前に温めておかないと切替時に初回コールドロード相当の
-        // 遅延が出る。URL 形は EventImageLayer.buildImageUrl と同じ resolveAssetUrl(images)。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.EventImage.path))
-      } else if ('Image' in event) {
-        // 単独画像 `[画像:]` (#274, renderOnly) も先読み対象に含める (#621)。除外する理由が
-        // なく、症状報告のイベント絵切替遅延と同じ Assets.load 遅延ロードを踏むため。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Image.path))
-      }
-    }
-
-    // スキャン内での重複URL（同じキャラの表情が2回以上登場する等）を先に除去する（#417）。
-    // 近い順の並びを保つため、初出（最も近い方）を残して後続の重複を落とす。
-    const seen = new Set<string>()
-    const dedupedUrls = urls.filter((u) => {
-      if (seen.has(u)) return false
-      seen.add(u)
-      return true
-    })
+    // URL の収集（走査範囲・分岐での打ち切り・近い順・重複除去・assetBaseUrl が空なら空）は純粋関数
+    // `collectUpcomingAssetUrls`（preloadPlan.ts）。ここには積み済み集合との差分と実ロードの投入だけを残す。
+    const dedupedUrls = collectUpcomingAssetUrls(
+      this.resolvedEvents,
+      this.eventIndex,
+      this.assetBaseUrl
+    )
 
     // 未積みの URL だけを backgroundPreload に積む（同期は走査のみ・実 DL は投げっぱなし）
     const fresh = dedupedUrls.filter((u) => !this.preloadedUrls.has(u))
