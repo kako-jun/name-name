@@ -441,7 +441,11 @@ export class BattleEngine {
     if (this.isOver()) return false
     // 倒れた者は行動できない。ただし死亡時の行動 (#837) は、倒れた本人が最後に 1 度だけ使う
     if (!caster || (caster.hp <= 0 && !opts.allowDowned)) return false
-    const targets = this.resolveSkillTargets(user.side, caster, skill, target)
+    // 倒れた使い手（死亡時の行動 #837）は自分を効果の対象にできない（自分向けの回復・蘇生で生き返る抜け道を塞ぐ）。
+    // 生きている仲間への回復・強化や、倒れた別の仲間の蘇生は使える
+    const targets = this.resolveSkillTargets(user.side, caster, skill, target).filter(
+      (t) => !(opts.allowDowned && t === caster && caster.hp <= 0)
+    )
     const message =
       typeof skill.message === 'string' && skill.message.trim() !== ''
         ? skill.message.split('{user}').join(caster.name)
@@ -853,6 +857,7 @@ export class BattleEngine {
     const hpBefore = hero.hp
     hero.hp = Math.max(0, hero.hp - dmg)
     this.recordAttack(enemy, hero, hpBefore, dmg)
+    // 既定の文言（仮。上書きの仕組みは未実装）。特技を使うときは特技の message / 既定の「つかった！」が出る
     this.appendLog(`${enemy.name} の ${attackLine}`)
     this.appendLog(`${hero.name} は ${dmg} の ダメージを うけた！`)
     if (hero.hp === 0) this.appendLog(`${hero.name} は たおれた！`)

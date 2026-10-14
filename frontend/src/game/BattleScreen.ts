@@ -2292,7 +2292,9 @@ export class BattleScreen extends Container {
     const ev = active.event
     if (ev.actor.side === side && ev.actor.index === index) {
       const a = sampleActor(ev.kind, active.elapsed)
-      out = { ...out, forward: a.forward, pose: out.downProgress > 0 ? out.pose : a.pose }
+      // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
+      const downed = out.downProgress > 0
+      out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
     }
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue

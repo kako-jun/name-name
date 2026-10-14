@@ -648,3 +648,33 @@ HP: 100
     ])
   })
 })
+
+describe('倒れた使い手は自分を効果の対象にできない (#837)', () => {
+  const HEAL_SELF: SkillExecution = { name: 'いやし', target: '自分', effect: 'heal 50..50' }
+  const HEAL_ALLY: SkillExecution = {
+    name: 'いやしの風',
+    target: '仲間全体',
+    effect: 'heal 30..30',
+  }
+  const skills = { ...SKILLS, heal_self: HEAL_SELF, heal_ally: HEAL_ALLY }
+
+  it('死亡時に自分向けの回復を書いても生き返らない。died は立ったまま、勝利は覆らない', () => {
+    const hero = ent({ id: 'hero', atk: 100, hp: 500, maxHp: 500 })
+    const imp = ent({ id: 'imp', hp: 5, onDeath: '候補=heal_self' })
+    const eng = new BattleEngine([hero], [imp], { rng: () => 0, skills })
+    eng.selectAttack()
+    expect(imp.hp).toBe(0)
+    expect(eng.getState().enemyMemory![0].died).toBe(true)
+    expect(eng.getState().phase).toBe('victory')
+  })
+
+  it('仲間全体の回復でも倒れた本人は戻らず、生きている仲間は回復する', () => {
+    const hero = ent({ id: 'hero', atk: 100, hp: 500, maxHp: 500 })
+    const imp = ent({ id: 'imp', hp: 5, onDeath: '候補=heal_ally' })
+    const other = ent({ id: 'other', hp: 50, maxHp: 100 })
+    const eng = new BattleEngine([hero], [imp, other], { rng: () => 0, skills })
+    eng.selectAttack()
+    expect(imp.hp).toBe(0)
+    expect(other.hp).toBe(80) // 敵の other は回復だけ受ける
+  })
+})

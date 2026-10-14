@@ -407,7 +407,11 @@ export function createEnemyMemory(enemies: readonly BattleEntity[]): EnemyMemory
  */
 export function tracksHits(enemy: BattleEntity): boolean {
   if ((enemy.counters?.length ?? 0) > 0 || hasOnDeath(enemy)) return true
-  return (enemy.actions ?? []).some((a) => /被弾|受けた\s*=|最後に攻撃した者/.test(a))
+  return parseActionRules(enemy.actions ?? []).some(
+    (r) =>
+      r.target === 'last-attacker' ||
+      r.conditions.some((c) => c.kind === 'hits' || c.kind === 'received')
+  )
 }
 
 function hasStatus(entity: BattleEntity, name: string): boolean {
