@@ -80,6 +80,7 @@ export function internals<T extends RendererInternals = RendererInternals>(r: No
 export function internalsOf<T>(r: NovelRenderer): T {
   exposeSceneIndexFields(r)
   exposeCursorFields(r)
+  exposeTransitionFields(r)
   return r as unknown as T
 }
 
@@ -141,6 +142,45 @@ function exposeCursorFields(r: NovelRenderer): void {
       get: () => cursorOf()[`_${name}`],
       set: (v: unknown) => {
         cursorOf()[`_${name}`] = v
+      },
+    })
+  }
+}
+
+/**
+ * 遷移ゲートと Jump 予約まわりのフィールド (#825) は `TransitionState` へ移った。テストが従来どおり
+ * `internals(r).jumpState` 等で読み書きできるよう、レンダラ上に `transition` の private フィールド
+ * （`_` 付きの実体）へ委譲するアクセサを足す。書き込みはメソッドを経由しない直接代入（タイマーや
+ * deferred の整合は取らない）で、従来の `r.jumpState = 'pending'` と同じ意味。
+ */
+const TRANSITION_FIELDS = [
+  'waitingForChoice',
+  'waitingForWait',
+  'justSelectedChoice',
+  'suppressNextAdvance',
+  'jumpState',
+  'jumpTimer',
+  'jumpDeferred',
+  'consecutiveJumps',
+  'pendingEntry',
+  'transitionGeneration',
+] as const
+
+function exposeTransitionFields(r: NovelRenderer): void {
+  const stateOf = (): Record<string, unknown> =>
+    (r as unknown as { transition: Record<string, unknown> }).transition
+  for (const name of TRANSITION_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    // 実体のフィールド名が変わったとき、黙って undefined を読み書きしないよう即座に落とす。
+    if (!(`_${name}` in stateOf())) {
+      throw new Error(`TransitionState に _${name} が無い（rendererInternals の委譲先を直す）`)
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => stateOf()[`_${name}`],
+      set: (v: unknown) => {
+        stateOf()[`_${name}`] = v
       },
     })
   }

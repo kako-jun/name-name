@@ -343,7 +343,7 @@ describe('入場の失敗・割り込み (#734 PR2 レビュー対応)', () => {
       reason: 'not-found',
     })
     expect(show).not.toHaveBeenCalled()
-    expect((r as unknown as { waitingForChoice: boolean }).waitingForChoice).toBe(false)
+    expect(internals(r).waitingForChoice).toBe(false)
     expect((r as unknown as { skipMode: boolean }).skipMode).toBe(true)
   })
 

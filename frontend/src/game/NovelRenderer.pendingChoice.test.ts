@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
+import { internalsOf } from '../test/rendererInternals'
 import type { Event, EventScene } from '../types'
 
 const narration = (...lines: string[]): Event => ({ Narration: { text: lines } })
@@ -33,7 +34,7 @@ function makeAtChoice(): NovelRenderer {
   const r = new NovelRenderer()
   r.getTimeController().setMode('virtual')
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-  const i = r as unknown as Internals
+  const i = internalsOf<Internals>(r)
   i.initialized = true
   vi.spyOn(i, 'render').mockImplementation(() => {})
   r.setScenes([
@@ -79,14 +80,14 @@ describe('NovelRenderer.getPendingChoice / selectPendingChoice (#780)', () => {
     r.advance()
     expect(r.selectPendingChoice('near')).toBe(false)
     expect(r.selectPendingChoice('nowhere')).toBe(false)
-    expect((r as unknown as Internals).waitingForChoice).toBe(true)
+    expect(internalsOf<Internals>(r).waitingForChoice).toBe(true)
   })
 
   it('ロックされていない遷移先を選ぶと、クリックと同じ経路で選択肢が閉じて入場する', async () => {
     const r = makeAtChoice()
     r.advance()
     expect(r.selectPendingChoice('far')).toBe(true)
-    expect((r as unknown as Internals).waitingForChoice).toBe(false)
+    expect(internalsOf<Internals>(r).waitingForChoice).toBe(false)
     expect(r.getPendingChoice()).toBeNull()
     await new Promise((res) => setTimeout(res, 0))
     expect(r.getCurrentSceneId()).toBe('far')
@@ -117,7 +118,7 @@ describe('NovelRenderer.getExportProgress (#780)', () => {
     const r = new NovelRenderer()
     r.getTimeController().setMode('virtual')
     vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-    const i = r as unknown as Internals
+    const i = internalsOf<Internals>(r)
     i.initialized = true
     vi.spyOn(i, 'render').mockImplementation(() => {})
     r.setScenes([wait])
@@ -186,7 +187,7 @@ describe('NovelRenderer.cancelPendingEntry / isReady (#780)', () => {
     const r = new NovelRenderer()
     r.getTimeController().setMode('virtual')
     vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-    const i = r as unknown as Internals & { jumpState: string; pendingEntry: unknown }
+    const i = internalsOf<Internals & { jumpState: string; pendingEntry: unknown }>(r)
     i.initialized = true
     vi.spyOn(i, 'render').mockImplementation(() => {})
     r.setScenes([scene('a', [narration('a1'), { Jump: { target: 'far' } } as Event])])
