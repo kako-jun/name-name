@@ -122,8 +122,6 @@ function EditorScreen({
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   // 保存の await 中に編集が進んだかを判定するため、常に最新の内容を指す
   const rawMarkdownRef = useRef('')
-  // 文書のロード開始ごとに進める世代。保存の PUT 中に再ロードが始まったかの判定に使う。
-  const loadGenRef = useRef(0)
   rawMarkdownRef.current = rawMarkdown
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
@@ -556,7 +554,6 @@ function EditorScreen({
     // タブ・プロジェクトが切り替わって effect が作り直されたら、この実行の結果は捨てる
     // （遅れて完了した古いロードが、新しい文書の state / ref / 下書きを上書きしない）。
     let cancelled = false
-    loadGenRef.current++
 
     const loadChapters = async () => {
       try {
@@ -594,9 +591,11 @@ function EditorScreen({
           localDraft = null
         }
         const startMarkdown = localDraft !== null && localDraft !== '' ? localDraft : markdown
-        setRawMarkdown(startMarkdown)
+        // rawMarkdown は parse 完了と中断判定の後に設定する（先に設定すると、設定からコミットまでの間に
+        // タブが切り替わったとき、下書き effect が {切替先のキー, 旧文書の本文} を積みうる）。
         await parseAndSetDoc(startMarkdown, () => cancelled)
         if (cancelled) return
+        setRawMarkdown(startMarkdown)
         setDocPath(currentScriptPath)
         // 既定パス(script.md)の先行ロード失敗で出た読み込みエラーは、再ロード成功で消す
         setSaveError((prev) => (prev === LOAD_FAILED_MESSAGE ? null : prev))
@@ -779,8 +778,8 @@ function EditorScreen({
     }
     setIsSaving(true)
     setSaveError(null)
+    // 保存中はタブ切替を無効にしている（下のタブ UI）ので、PUT の await 中に編集中の文書は変わらない。
     const savedPath = currentScriptPath
-    const savedGen = loadGenRef.current
     try {
       const sha = shaRef.current
       const result = await api.putContents(projectName, savedPath, {
@@ -791,17 +790,6 @@ function EditorScreen({
       })
       const savedContent = rawMarkdown
       const savedKey = localStorageKey(projectName, savedPath)
-      // 保存中（PUT の await 中）に別タブへ切り替わった・同じファイルでも再ロードが始まっていたら、いまのエディタ状態（sha・基準内容・
-      // 未保存判定・保留中の下書き）は別文書のものなので触らない。旧タブの下書きキーだけ、
-      // 保存した内容と一致するときに限って消す。
-      if (currentScriptPathRef.current !== savedPath || loadGenRef.current !== savedGen) {
-        try {
-          if (localStorage.getItem(savedKey) === savedContent) localStorage.removeItem(savedKey)
-        } catch {
-          // ignore
-        }
-        return
-      }
       if (result.sha) {
         shaRef.current = result.sha
         setHasSha(true)
@@ -1046,7 +1034,11 @@ function EditorScreen({
                   key={s.path}
                   role="tab"
                   aria-selected={isActive}
+                  // 保存・破棄の通信中は切り替えない（sha・基準内容・下書きが別文書のものと混ざるのを防ぐ）
+                  disabled={isSaving}
+                  aria-disabled={isSaving}
                   onClick={() => {
+                    if (isSaving) return
                     if (s.path === currentScriptPath) return
                     if (
                       hasUnsavedChanges &&
@@ -1060,6 +1052,7 @@ function EditorScreen({
                     // 切替後の load は currentScriptPath を依存に入れた useEffect が処理する
                   }}
                   className="desk-tab"
+                  style={isSaving ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
                   title={s.title ?? s.path}
                 >
                   {s.path}

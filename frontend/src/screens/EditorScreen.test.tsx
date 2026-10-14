@@ -749,7 +749,7 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     expect(localStorage.getItem(draftKey)).toBeNull()
   })
 
-  it('保存中に別タブへ切り替えても、旧タブの下書きに別文書の本文が入らず、新タブの未保存判定も壊れない', async () => {
+  it('保存中はタブを押しても切り替わらず、保存完了後は切り替えられる', async () => {
     const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
     listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
     getContentsMock.mockImplementation(async (_p: string, path: string) => ({
@@ -770,23 +770,58 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     fireEvent.click(await screen.findByTestId('edit-doc'))
     fireEvent.click(await screen.findByRole('button', { name: 'Gitにコミット・プッシュ' }))
     await waitFor(() => expect(putContentsMock).toHaveBeenCalled())
-    // PUT が返る前に other.md へ切り替え、そのロードを完了させる
+    const other = screen.getByRole('tab', { name: /^other\.md/ }) as HTMLButtonElement
+    expect(other.disabled).toBe(true)
+    fireEvent.click(other)
+    expect(screen.getByRole('tab', { name: /^script\.md/ }).getAttribute('aria-selected')).toBe(
+      'true'
+    )
+    await act(async () => {
+      finishPut({ sha: 'sha-after' })
+    })
+    await waitFor(() =>
+      expect((screen.getByRole('tab', { name: /^other\.md/ }) as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    )
     fireEvent.click(screen.getByRole('tab', { name: /^other\.md/ }))
     await waitFor(() =>
       expect(screen.getByRole('tab', { name: /^other\.md/ }).getAttribute('aria-selected')).toBe(
         'true'
       )
     )
-    await new Promise((r) => setTimeout(r, 150))
-    await act(async () => {
-      finishPut({ sha: 'sha-after' })
-    })
+  })
+
+  it('保存後の次の保存は、前回の保存で返った新しい sha で送られる', async () => {
+    getContentsMock.mockImplementation(async () => ({ content: '# hub', sha: 'sha-0' }))
+    putContentsMock.mockImplementation(async () => ({ sha: 'sha-1' }))
+    renderEditor()
+    emitted = '# v1'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Gitにコミット・プッシュ' }))
+    await waitFor(() => expect(putContentsMock).toHaveBeenCalledTimes(1))
+    expect(putContentsMock.mock.calls[0][2].sha).toBe('sha-0')
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存済み' })).toBeTruthy())
+    putContentsMock.mockImplementation(async () => ({ sha: 'sha-2' }))
+    emitted = '# v2'
+    fireEvent.click(screen.getByTestId('edit-doc'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Gitにコミット・プッシュ' }))
+    await waitFor(() => expect(putContentsMock).toHaveBeenCalledTimes(2))
+    expect(putContentsMock.mock.calls[1][2].sha).toBe('sha-1')
+  })
+
+  it('parse 中にタブが切り替わっても、旧文書の本文が切替先の下書きキーに積まれない', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    getContentsMock.mockImplementation(async (_p: string, path: string) => ({
+      content: path === 'other.md' ? '# B-server' : '# A-body',
+      sha: 'sha',
+    }))
+    localStorage.setItem('name-name:editor-draft:p:other.md', '# B-draft')
+    renderEditor()
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
     await new Promise((r) => setTimeout(r, 1300))
-    // 旧タブ(script.md)の下書きは、保存した内容と一致していたので消えている（B の本文にはならない）
-    expect(localStorage.getItem(draftKey)).not.toBe('# B-body')
-    expect(localStorage.getItem(draftKey)).toBeNull()
-    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBeNull()
-    // 新タブ(other.md)は未保存扱いになっていない
-    expect(screen.getByRole('button', { name: '保存済み' })).toBeTruthy()
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-draft')
+    expect(localStorage.getItem('name-name:editor-draft:p:script.md')).toBeNull()
   })
 })
