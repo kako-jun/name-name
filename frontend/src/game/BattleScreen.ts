@@ -1487,16 +1487,19 @@ export class BattleScreen extends Container {
     const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
     let box = acrylic ? Math.max(size, slot.width) : size
     // 味方の枠は固定の基準縦横比 (#813)。枠より横に広い絵は、アクリルの正方形ごと縮めて枠の幅に収める（足元中央は不変）
-    if (acrylic && slot.width < size && view.sprite) {
+    // 縦長の絵（a<=1）は箱の幅いっぱいまで使えるので縮めない。a>1 のとき箱の幅は a でなく 1 を基準にする
+    const isParty = this.partyViews.includes(view)
+    if (acrylic && isParty && view.sprite) {
       const tex = view.baseVisual?.texture ?? view.sprite.texture
       const a = tex.height > 0 ? tex.width / tex.height : 0
-      if (a > 0) box = Math.min(box, slot.width / a)
+      if (a > 0) box = Math.min(box, slot.width / Math.min(1, a))
     }
     view.baseX = acrylic ? slot.x - (box - slot.width) / 2 : slot.x
     view.baseY = acrylic ? slot.y + size - box : slot.y
     view.unit = size
     view.anchorX = slot.x + slot.width / 2
-    view.anchorY = slot.y + size * 0.35
+    // ダメージ数字の出る高さ: 絵の実際の上端から 35%。縮んだ横長の味方でも頭上の空中に出ない
+    view.anchorY = acrylic && isParty ? slot.y + size - box * 0.65 : slot.y + size * 0.35
     view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
     const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
@@ -1513,6 +1516,7 @@ export class BattleScreen extends Container {
         view.sprite.position.set(r.x, r.y)
         view.sprite.width = r.width
         view.sprite.height = r.height
+        if (isParty) view.anchorY = slot.y + fit.y + fit.height * 0.35
       }
       view.fallback.visible = false
     }

@@ -71,12 +71,6 @@ export interface SideBattleLayoutInput {
   commandLayout?: CommandLayout
   /** 味方ごとの隊列 (#747)。味方の index 順。未指定・足りない分は前衛。`back` は右（敵から遠い側）へ半歩下げる */
   partyRows?: readonly (BattleRow | undefined)[]
-  /**
-   * 【枠には使わない (#813)】味方の枠の幾何は誰がいるか・縦横比に依らず固定の基準縦横比
-   * `SIDE_PARTY_FRAME_ASPECT` で決める。各立ち絵は描画側で自分の枠に収める（contain）。
-   * `computeSideBattleLayout` は無視する
-   */
-  partyAspects?: readonly (number | undefined)[]
   /** 敵ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は正方形（1） */
   enemyAspects?: readonly (number | undefined)[]
   /** 奥行き (#747)。未指定・perspective が 0 以下は平面（現行どおり） */
