@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { computePlateLayout, gaussianBlur, renderAcrylicPlate, smoothstep } from './acrylicPlate'
+import {
+  computePlateExtend,
+  computePlateLayout,
+  extendFootMask,
+  gaussianBlur,
+  renderAcrylicPlate,
+  smoothstep,
+} from './acrylicPlate'
 import { resolveAcrylicParams } from './spriteStyle'
 
 const P = resolveAcrylicParams()
@@ -57,9 +64,12 @@ describe('renderAcrylicPlate', () => {
     return [r.rgba[i], r.rgba[i + 1], r.rgba[i + 2], r.rgba[i + 3]]
   }
 
-  it('寸法は (w + 2pad) x (h + 2pad)', () => {
+  it('寸法は (w + 2pad) x (h + extend + 2pad)（extend は computePlateExtend の値・#802）', () => {
+    const extend = computePlateExtend(n, P.spriteLiftRatio)
+    expect(extend).toBeGreaterThan(0)
+    expect(r.extend).toBe(extend)
     expect(r.width).toBe(n + r.pad * 2)
-    expect(r.height).toBe(n + r.pad * 2)
+    expect(r.height).toBe(n + extend + r.pad * 2)
     expect(r.rgba).toHaveLength(r.width * r.height * 4)
   })
   it('遠い外側は完全に透明、四隅も透明', () => {
@@ -202,13 +212,13 @@ describe('renderAcrylicPlate: パラメータの反映 (#760)', () => {
     expect(r.shape[0]).toBe(0)
   })
 
-  it('縦長の画像（w≠h）でも寸法は (w+2pad)x(h+2pad)・縦横を取り違えない', () => {
+  it('縦長の画像（w≠h）でも寸法は (w+2pad)x(h+extend+2pad)・縦横を取り違えない', () => {
     const w = 40
     const h = 100
     const a = new Uint8Array(w * h).fill(255)
     const r = renderAcrylicPlate(a, w, h, P)
     expect(r.width).toBe(w + r.pad * 2)
-    expect(r.height).toBe(h + r.pad * 2)
+    expect(r.height).toBe(h + computePlateExtend(h, P.spriteLiftRatio) + r.pad * 2)
     expect(r.rgba).toHaveLength(r.width * r.height * 4)
     expect(r.shape).toHaveLength(r.width * r.height)
   })
@@ -223,5 +233,120 @@ describe('renderAcrylicPlate: パラメータの反映 (#760)', () => {
   it('lineColor の下位ビットと上位ビットを取り違えない（0x0000ff は B 優位・0xff0000 は R 優位）', () => {
     const b = px(render({ lineColor: 0x0000ff }), 24, 60)
     expect(b[2]).toBeGreaterThan(b[0] + 60)
+  })
+})
+
+describe('computePlateExtend (#802)', () => {
+  it('h=0 は 0', () => {
+    expect(computePlateExtend(0, 0.03)).toBe(0)
+  })
+  it('ratio=0 は 0', () => {
+    expect(computePlateExtend(100, 0)).toBe(0)
+  })
+  it.each([[-0.1], [NaN], [Infinity], [-Infinity]])('ratio=%s は 0（伸ばさない）', (bad) => {
+    expect(computePlateExtend(100, bad)).toBe(0)
+  })
+  it('r×h が整数ちょうどなら切り上げで余計な 1 行が出ない（0.03*100 の浮動小数ノイズを吸収）', () => {
+    expect(0.07 * 100).toBeGreaterThan(7) // ノイズの前提（7.000000000000001）
+    expect(computePlateExtend(100, 0.07)).toBe(7)
+    expect(computePlateExtend(100, 0.03)).toBe(3)
+  })
+  it('r×h が整数を僅かに超えると 1 行増える（0.01 超）', () => {
+    expect(computePlateExtend(100, 0.0301)).toBe(4)
+  })
+  it('r×h = 0.99 は 1 行に切り上げる', () => {
+    expect(computePlateExtend(99, 0.01)).toBe(1)
+  })
+  it('ratio 0.15・h=192 は 29 行', () => {
+    expect(computePlateExtend(192, 0.15)).toBe(29)
+  })
+})
+
+describe('extendFootMask (#802)', () => {
+  it('extend=0 は長さ 0', () => {
+    expect(extendFootMask(new Uint8Array(20 * 20).fill(255), 20, 20, 0)).toHaveLength(0)
+  })
+  it('長さは w × extend', () => {
+    expect(extendFootMask(new Uint8Array(20 * 10).fill(255), 20, 10, 4)).toHaveLength(80)
+  })
+  it('全透明なら全て 0', () => {
+    const m = extendFootMask(new Uint8Array(20 * 20), 20, 20, 3)
+    expect(m.every((v) => v === 0)).toBe(true)
+  })
+  it('足元帯の列だけが伸び、帯より上にだけある突起（腕）の列は 0', () => {
+    const w = 20
+    const h = 100
+    const a = new Uint8Array(w * h)
+    // 足: x=8..11 が y=60..89（最下段 89）。腕: x=2 が y=20..30 だけ（帯の外）
+    for (let y = 60; y < 90; y++) for (let x = 8; x < 12; x++) a[y * w + x] = 255
+    for (let y = 20; y < 31; y++) a[y * w + 2] = 255
+    const m = extendFootMask(a, w, h, 3)
+    for (let e = 0; e < 3; e++) {
+      expect(m[e * w + 9]).toBe(1)
+      expect(m[e * w + 2]).toBe(0)
+      expect(m[e * w + 15]).toBe(0)
+    }
+  })
+  it('半透明の足の値は alpha/255 で伝播する', () => {
+    const w = 10
+    const a = new Uint8Array(w * 10)
+    a[9 * w + 4] = 128
+    const m = extendFootMask(a, w, 10, 2)
+    expect(m[4]).toBeCloseTo(128 / 255, 6)
+    expect(m[w + 4]).toBeCloseTo(128 / 255, 6)
+  })
+  it('帯の高さは最低 1 行（h が小さくても最下段の行は必ず拾う）', () => {
+    const w = 4
+    const a = new Uint8Array(w * 4)
+    a[3 * w + 1] = 255
+    const m = extendFootMask(a, w, 4, 1)
+    expect(m[1]).toBe(1)
+    expect(m[0]).toBe(0)
+  })
+})
+
+describe('renderAcrylicPlate: 足元を差し込み線まで伸ばす (#802)', () => {
+  const w = 60
+  const h = 100
+  /** 中央 x=20..39 の足が下端 y=89 まで。最下段より上に腕(x=5, y=30..40)がある */
+  const figure = (): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 40; y < 90; y++) for (let x = 20; x < 40; x++) a[y * w + x] = 255
+    for (let y = 30; y < 41; y++) a[y * w + 5] = 255
+    return a
+  }
+  const lifted = resolveAcrylicParams({ spriteLiftRatio: 0.1 })
+  const flat = resolveAcrylicParams({ spriteLiftRatio: 0 })
+
+  it('lift=0 は従来と同じ寸法・extend=0・同一 rgba（後方互換）', () => {
+    const r0 = renderAcrylicPlate(figure(), w, h, flat)
+    const r1 = renderAcrylicPlate(figure(), w, h, flat)
+    expect(r0.extend).toBe(0)
+    expect(r0.height).toBe(h + r0.pad * 2)
+    expect(Array.from(r0.rgba)).toEqual(Array.from(r1.rgba))
+  })
+  it('lift>0 は height = h + extend + 2pad で extend が返る', () => {
+    const r = renderAcrylicPlate(figure(), w, h, lifted)
+    expect(r.extend).toBe(computePlateExtend(h, 0.1))
+    expect(r.extend).toBe(10)
+    expect(r.height).toBe(h + r.extend + r.pad * 2)
+  })
+  it('伸ばした領域の足元の列で shape が 1（板が差し込み線まで届く）', () => {
+    const r = renderAcrylicPlate(figure(), w, h, lifted)
+    const y = h + r.extend - 1 + r.pad
+    expect(r.shape[y * r.width + 30 + r.pad]).toBeGreaterThan(0.9)
+  })
+  it('伸ばした領域の足元帯外の列（腕の下）では shape が 0 に近く、足元の列より小さい', () => {
+    const r = renderAcrylicPlate(figure(), w, h, lifted)
+    const y = h + r.extend - 1 + r.pad
+    const arm = r.shape[y * r.width + 5 + r.pad]
+    const foot = r.shape[y * r.width + 30 + r.pad]
+    expect(arm).toBeLessThan(foot)
+    expect(arm).toBeLessThan(0.5)
+  })
+  it('alpha が全透明でもクラッシュせず、寸法は extend を含む', () => {
+    const r = renderAcrylicPlate(new Uint8Array(w * h), w, h, lifted)
+    expect(r.height).toBe(h + r.extend + r.pad * 2)
+    expect(r.rgba).toHaveLength(r.width * r.height * 4)
   })
 })

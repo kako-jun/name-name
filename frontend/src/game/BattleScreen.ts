@@ -1373,7 +1373,7 @@ export class BattleScreen extends Container {
       shadow.skew.x = t.skewX
       shadow.position.set(
         view.container.x + g.sprite.x + g.sprite.width / 2,
-        view.container.y + g.sprite.y + g.sprite.height
+        view.container.y + g.sprite.y + g.sprite.height + g.liftPx
       )
       shadow.visible = k > 0 && params.castAlpha > 0
     }
