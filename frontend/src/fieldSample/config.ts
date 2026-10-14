@@ -310,13 +310,14 @@ function parseEntity(
 ): ParseResult<BattleEntity> {
   if (!isObj(raw)) return fail(`${path} はオブジェクトが必要です`)
   if (typeof raw.name !== 'string' || !raw.name.trim()) return fail(`${path}.name が必要です`)
-  const num = (k: string, def?: number): ParseResult<number> => {
+  const num = (k: string, def?: number, min = 0): ParseResult<number> => {
     const v = raw[k] === undefined ? def : raw[k]
-    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
-      return fail(`${path}.${k} は 0 以上の数値が必要です`)
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < min)
+      return fail(`${path}.${k} は ${min} 以上の数値が必要です`)
     return { ok: true, value: v }
   }
-  const hp = num('hp')
+  // hp 0 だと戦闘が即時終了して進行不能になるので 1 以上
+  const hp = num('hp', undefined, 1)
   if (!hp.ok) return hp
   const mp = num('mp', 0)
   if (!mp.ok) return mp

@@ -307,6 +307,7 @@ describe('parseConfig 異常系 (Issue #807/#809)', () => {
     ['monsters の name が空白', (c) => (c.monsters = { slime: { name: '  ', hp: 10 } })],
     ['monsters の hp が欠落', (c) => (c.monsters = { slime: { name: 's' } })],
     ['monsters の hp が負', (c) => (c.monsters = { slime: { name: 's', hp: -1 } })],
+    ['monsters の hp が 0', (c) => (c.monsters = { slime: { name: 's', hp: 0 } })],
     ['monsters の hp が NaN', (c) => (c.monsters = { slime: { name: 's', hp: NaN } })],
     [
       'monsters の sprite が空文字',

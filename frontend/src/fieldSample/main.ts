@@ -45,9 +45,20 @@ function showError(msg: string | null): void {
   el.hidden = !msg
 }
 
-/** CORS 付きで配信された画像を取得し、テクスチャと（必要なら）ピクセルの両方に使える ImageBitmap にする */
+/**
+ * CORS 付きで配信された画像を取得し、テクスチャと（必要なら）ピクセルの両方に使える ImageBitmap にする。
+ * fetch にタイムアウトは付けない（開発用サンプルなので許容）。ImageBitmap を close() しないのは、
+ * シーンの cache に永久保持する設計のため。
+ */
 async function loadBitmap(url: string): Promise<ImageBitmap> {
-  const res = await fetch(url)
+  let res: Response
+  try {
+    res = await fetch(url)
+  } catch (e) {
+    throw new Error(
+      `画像を取得できません: ${url}\nネットワーク失敗、または CORS（Access-Control-Allow-Origin）が無い可能性があります（${e instanceof Error ? e.message : String(e)}）`
+    )
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`)
   return createImageBitmap(await res.blob())
 }
@@ -70,7 +81,9 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
   const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
   const mask = maskFromRgba(canvas.width, canvas.height, img.data)
   if (bg.width !== mask.width || bg.height !== mask.height)
-    console.warn(`[field-sample] ${id}: 背景とマスクの大きさが違います`)
+    throw new Error(
+      `シーン ${id}: 背景（${bg.width}x${bg.height}）とマスク（${mask.width}x${mask.height}）の大きさが違います`
+    )
   // デバッグ用オーバーレイ: 歩ける所を半透明の緑に
   const ov = ctx.createImageData(mask.width, mask.height)
   for (let i = 0; i < mask.walkable.length; i++) {
@@ -153,7 +166,12 @@ async function main(): Promise<void> {
   world.addChild(bgSprite, overlaySprite, player, marker)
   app.stage.addChild(world, fade)
 
-  let pos: Vec = snapToWalkable(scene.mask, config.start, 80) ?? config.start
+  const startSnap = snapToWalkable(scene.mask, config.start, 80)
+  if (!startSnap)
+    showError(
+      `start (${config.start.x}, ${config.start.y}) の近くに歩ける点がありません。マスクか start を確認してください`
+    )
+  let pos: Vec = startSnap ?? config.start
   let facing: Facing = 'down'
   let movingMs = 0
   let disarmed: FieldLink | null = null
@@ -163,8 +181,11 @@ async function main(): Promise<void> {
   let battle: BattleScreen | null = null
   let lastOutcome = '-'
   const startBattle = (enemies: BattleEntity[]): void => {
-    // 入力を戦闘へ渡す: 歩きの入力を捨てる
+    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）。押しっぱなしの pointer capture も解放する
     keys.up = keys.down = keys.left = keys.right = false
+    if (activePointerId !== null && canvas.hasPointerCapture(activePointerId))
+      canvas.releasePointerCapture(activePointerId)
+    activePointerId = null
     pointer = null
     movingMs = 0
     const b = config.battle
@@ -234,14 +255,19 @@ async function main(): Promise<void> {
     ev.preventDefault()
     keys[k] = down
   }
-  window.addEventListener('keydown', onKey(true))
-  window.addEventListener('keyup', onKey(false))
-  window.addEventListener('blur', () => {
+  const onKeyDown = onKey(true)
+  const onKeyUp = onKey(false)
+  const onBlur = () => {
     keys.up = keys.down = keys.left = keys.right = false
     pointer = null
-  })
+    activePointerId = null
+  }
+  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keyup', onKeyUp)
+  window.addEventListener('blur', onBlur)
 
   let pointer: Vec | null = null
+  let activePointerId: number | null = null
   const canvas = app.canvas as HTMLCanvasElement
   const toScene = (ev: PointerEvent): Vec => {
     const r = canvas.getBoundingClientRect()
@@ -250,17 +276,21 @@ async function main(): Promise<void> {
       y: ((ev.clientY - r.top) / r.height) * scene.mask.height,
     }
   }
-  canvas.addEventListener('pointerdown', (ev) => {
+  const onPointerDown = (ev: PointerEvent) => {
     if (battle) return
     canvas.setPointerCapture(ev.pointerId)
+    activePointerId = ev.pointerId
     pointer = toScene(ev)
-  })
-  canvas.addEventListener('pointermove', (ev) => {
+  }
+  const onPointerMove = (ev: PointerEvent) => {
     if (pointer && !battle) pointer = toScene(ev)
-  })
+  }
   const endPointer = () => {
     pointer = null
+    activePointerId = null
   }
+  canvas.addEventListener('pointerdown', onPointerDown)
+  canvas.addEventListener('pointermove', onPointerMove)
   canvas.addEventListener('pointerup', endPointer)
   canvas.addEventListener('pointercancel', endPointer)
 
@@ -325,15 +355,28 @@ async function main(): Promise<void> {
                 { x: dst.mask.width / 2, y: dst.mask.height / 2 },
                 Math.max(dst.mask.width, dst.mask.height)
               )
+              const landing = arrived ?? fallback
+              if (!landing) {
+                // 新シーンに歩ける点が無い: 遷移を中止して元のシーンに留まる
+                disarmed = link
+                transition = null
+                fade.alpha = 0
+                showError(
+                  `遷移先 ${link.to} に歩ける点が見つかりません。遷移を中止しました（マスクを確認してください）`
+                )
+                return
+              }
               sceneId = link.to
               applyScene(dst)
-              pos = arrived ?? fallback ?? pos
+              pos = landing
               disarmed = back
               movingMs = 0
               transition = { phase: 'in', t: 0 }
               showError(null)
             })
             .catch((e) => {
+              // 入力が途切れるまで同じリンクを再試行しない（フェードの明滅防止）
+              disarmed = link
               transition = null
               fade.alpha = 0
               showError(
@@ -395,6 +438,21 @@ async function main(): Promise<void> {
     $('info').textContent =
       `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}`
   })
+
+  // HMR・ページ離脱での二重登録を防ぐ
+  const dispose = (): void => {
+    window.removeEventListener('keydown', onKeyDown)
+    window.removeEventListener('keyup', onKeyUp)
+    window.removeEventListener('blur', onBlur)
+    window.removeEventListener('pagehide', dispose)
+    canvas.removeEventListener('pointerdown', onPointerDown)
+    canvas.removeEventListener('pointermove', onPointerMove)
+    canvas.removeEventListener('pointerup', endPointer)
+    canvas.removeEventListener('pointercancel', endPointer)
+    app.destroy(true, { children: true })
+  }
+  window.addEventListener('pagehide', dispose)
+  import.meta.hot?.dispose(dispose)
 }
 
 main().catch((e) => {
