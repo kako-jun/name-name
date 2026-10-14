@@ -5,6 +5,7 @@ import type {
   MonsterDef,
   ItemDef,
   SpellDef,
+  SkillDef,
   PartyMemberDef,
   EventCommand,
 } from '../types'
@@ -86,6 +87,7 @@ export function collectMasterData(doc: EventDocument): {
   monsters: Record<string, MonsterDef>
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
+  skills: Record<string, SkillDef>
   party: Record<string, PartyMemberDef>
   /** party の ID を定義順（初出順・重複なし）で並べたもの (#736) */
   partyOrder: string[]
@@ -93,6 +95,7 @@ export function collectMasterData(doc: EventDocument): {
   const monsters: Record<string, MonsterDef> = {}
   const items: Record<string, ItemDef> = {}
   const spells: Record<string, SpellDef> = {}
+  const skills: Record<string, SkillDef> = {}
   const party: Record<string, PartyMemberDef> = {}
   const partyOrder: string[] = []
   for (const chapter of doc.chapters) {
@@ -103,6 +106,7 @@ export function collectMasterData(doc: EventDocument): {
         if ('Monster' in ev) safeAssign(monsters, ev.Monster.id, ev.Monster)
         else if ('Item' in ev) safeAssign(items, ev.Item.id, ev.Item)
         else if ('Spell' in ev) safeAssign(spells, ev.Spell.id, ev.Spell)
+        else if ('Skill' in ev) safeAssign(skills, ev.Skill.id, ev.Skill)
         else if ('PartyMember' in ev) {
           safeAssign(party, ev.PartyMember.id, ev.PartyMember)
           if (!partyOrder.includes(ev.PartyMember.id)) partyOrder.push(ev.PartyMember.id)
@@ -110,7 +114,7 @@ export function collectMasterData(doc: EventDocument): {
       }
     }
   }
-  return { monsters, items, spells, party, partyOrder }
+  return { monsters, items, spells, skills, party, partyOrder }
 }
 
 /**
@@ -127,6 +131,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   monsters: Record<string, MonsterDef>
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
+  skills: Record<string, SkillDef>
   party: Record<string, PartyMemberDef>
   partyOrder: string[]
 } {
@@ -134,6 +139,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     monsters: {} as Record<string, MonsterDef>,
     items: {} as Record<string, ItemDef>,
     spells: {} as Record<string, SpellDef>,
+    skills: {} as Record<string, SkillDef>,
     party: {} as Record<string, PartyMemberDef>,
     partyOrder: [] as string[],
   }
@@ -144,6 +150,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     safeAssignAll(merged.monsters, m.monsters)
     safeAssignAll(merged.items, m.items)
     safeAssignAll(merged.spells, m.spells)
+    safeAssignAll(merged.skills, m.skills)
     safeAssignAll(merged.party, m.party)
     for (const id of m.partyOrder) if (!merged.partyOrder.includes(id)) merged.partyOrder.push(id)
   }
@@ -243,6 +250,7 @@ export function rpgProjectFromDoc(
     monsters: master.monsters,
     items: master.items,
     spells: master.spells,
+    skills: master.skills,
     party: master.party,
     partyOrder: master.partyOrder,
     battleLayout: normalizeBattleLayout(doc.battle_layout),

@@ -133,6 +133,29 @@ describe('BattleScreen presentation', () => {
     expect(I(s).logPanel.visible).toBe(false)
   })
 
+  it('ff: 敵の特技 (#834) も名前を窓に出し、対象（味方）の位置に数字を出す。終われば窓を消す', () => {
+    const { s, engine } = setup()
+    const before = I(s).statusHpTexts[0].text
+    engine.performSkill(
+      { side: 'enemy', index: 0 },
+      {
+        name: 'すみはき',
+        target: '相手単体',
+        effect: 'damage 5..5',
+        message: '{user}は 墨を はいた！',
+      }
+    )
+    s.redraw(800, 450)
+    run(s, 16)
+    expect(I(s).messageText!.text).toBe('すみはき')
+    expect(I(s).messageText!.visible).toBe(true)
+    run(s, 700)
+    expect(I(s).popups[0].text.text).toBe('5')
+    run(s, 5000)
+    expect(I(s).messageText!.visible).toBe(false)
+    expect(I(s).statusHpTexts[0].text).not.toBe(before)
+  })
+
   it('ff: 勝敗が決まっても演出（と数字）を見せ切ってから閉じる', () => {
     const closed: string[] = []
     const { s } = setup({}, 1, closed)

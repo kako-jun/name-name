@@ -182,6 +182,15 @@ describe('EventDisplay', () => {
     expect(container.textContent).toContain('対象=味方単体')
   })
 
+  it('renders Skill master data (#834)', () => {
+    const { container } = renderEvent({
+      Skill: { id: 'ink', name: 'すみはき', target: '相手全体', effect: 'damage 3..5' },
+    })
+    expect(container.textContent).toContain('特技: すみはき')
+    expect(container.textContent).toContain('対象=相手全体')
+    expect(container.textContent).not.toContain('MP=')
+  })
+
   it('renders PartyMember with learns', () => {
     const { container } = renderEvent({
       PartyMember: {

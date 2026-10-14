@@ -268,6 +268,24 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('Skill' in event) {
+    const k = event.Skill
+    return (
+      <div className="space-y-0.5">
+        <div className={`text-sm font-semibold ml-2 ${head}`}>
+          ⚡ 特技: {k.name} <span className={`text-xs font-normal ${meta}`}>(id={k.id})</span>
+        </div>
+        <div className={`text-xs ml-4 font-mono ${accent}`}>
+          対象={k.target}
+          {k.effect ? ` 効果=${k.effect}` : ''}
+          {k.builtin ? ` builtin=${k.builtin}` : ''}
+          {k.message ? ` メッセージ=${k.message}` : ''}
+          {k.telegraph ? ` 予兆=${k.telegraph}` : ''}
+        </div>
+      </div>
+    )
+  }
+
   if ('PartyMember' in event) {
     const p = event.PartyMember
     const learns = p.learns?.map((l) => `Lv${l.level} ${l.spell}`).join(', ')

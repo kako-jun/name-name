@@ -458,6 +458,34 @@ pub struct SpellDef {
     pub school: Option<String>,
 }
 
+/// 特技定義 (#834、敵の行動パターン P0 / 親 #832)。
+///
+/// 敵の技のためのマスターデータで、`[呪文]` とは別のブロック・別の語彙にする。MP は持たない
+/// （消費しない）。効果の書式（`effect` の DSL / `builtin`）だけは呪文と同じ評価器を内部で共有する。
+/// `target` は「使う側から見た相対表現」（`相手単体` / `相手全体` / `自分` / `仲間単体` / `仲間全体`）で、
+/// 解釈は runtime が行う（parser は生文字列で透過する）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SkillDef {
+    pub id: String,
+    pub name: String,
+    /// 対象（使う側から見た相対表現。既定 `相手単体`）。
+    pub target: String,
+    /// 宣言的効果 DSL（`SpellDef.effect` と同書式）。`builtin` と排他。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    /// 専用関数 ID（`SpellDef.builtin` と同じレジストリ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
+    /// 使用時に出す演出文（`{user}` は使った側の名前に置き換わる）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// 予兆の文言（生文字列で透過。解釈は P2 #836）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegraph: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
@@ -856,6 +884,8 @@ pub enum Event {
     Item(ItemDef),
     /// 呪文定義 (#174)。`[呪文 <id>] ... [/呪文]` ブロックで書く。
     Spell(SpellDef),
+    /// 特技定義 (#834)。`[特技 <id>] ... [/特技]` ブロックで書く。敵が使う技で、`[呪文]` とは別のマスターデータ。
+    Skill(SkillDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
     PartyMember(PartyMemberDef),
     /// RPG イベント定義 (#187)。

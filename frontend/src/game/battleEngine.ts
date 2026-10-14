@@ -15,6 +15,9 @@
  *
  * ダメージ式: DQ 式（atk - def/2 + rand(0..atk/4)）、最低 1
  *
+ * 敵の特技 (#834): `performSkill` は「ある者が特技を 1 回使う」内部 API。敵の行動選択（#835 以降）が呼ぶ。
+ * この API 自体はターン・ATB ゲージ・勝敗判定を進めない（呼び出し側が行う）。
+ *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
  * - 敵 AI（builtin: で挙動委譲）
@@ -24,6 +27,7 @@
 import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
 import { applyEffect, parseEffect } from './spellDsl'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
+import { isReviveEntry } from './battleMenu'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -64,12 +68,16 @@ export interface BattleActionEvent {
   /** 戦闘開始からの通し番号（0 始まり） */
   seq: number
   actor: BattleActorRef
-  kind: 'attack' | 'spell' | 'item' | 'notice'
+  kind: 'attack' | 'spell' | 'item' | 'skill' | 'notice'
   /**
-   * FF 式メッセージ窓に出す短い言葉。呪文・アイテムの名前、または `notice`（行動が成立しなかったことの知らせ。
+   * FF 式メッセージ窓に出す短い言葉。呪文・アイテム・特技 (#834) の名前、または `notice`（行動が成立しなかったことの知らせ。
    * 「にげられない！」「MPが たりない！」）の文言。通常攻撃は undefined
    */
   label?: string
+  /**
+   * 特技 (#834) の使用時メッセージ（`{user}` を使った側の名前に置き換えた後の文）。現段階では記録だけで画面は読まない
+   * （設計書 §3.3 の `メッセージ`。表示は P1 #835 以降）。`メッセージ:` を書かない特技・他の kind は undefined */
+  message?: string
   hits: BattleHit[]
 }
 
@@ -361,6 +369,49 @@ export class BattleEngine {
     this.advanceAfterPartyAction()
   }
 
+  /**
+   * 特技 (#834) を 1 回使う（内部 API。敵の行動選択 #835 が呼ぶ。この PR 単体では敵は呼ばない）。
+   *
+   * - `user` は `party` / `enemies` の index。戦闘が終わっている・倒れている・存在しない者は何もせず false を返す
+   * - 対象は**使う側から見た相対表現**: `相手単体` / `相手全体` / `自分` / `仲間単体` / `仲間全体`
+   *   （敵が使えば「相手」は味方側）。未知の値・省略は `相手単体`。
+   *   単体の `target` は明示指定（側が合わなければ無視）。倒れている者を指せるのは蘇生の効果（`revive` / builtin `zaorik`）のときだけで、
+   *   それ以外は最初の生存者に落ちる。省略時は最初の生存者（蘇生の仲間単体だけは最初の倒れた仲間）
+   * - 効果は呪文と同じ評価器を内部で共有（`builtin` があればそれ、無ければ `effect` の DSL）。MP は持たず消費しない
+   * - ログに `message`（`{user}` を使った側の名前に置換）か「〇〇 は △△ を つかった！」、演出イベントに `kind: 'skill'` を残す
+   * - フェーズ・ATB ゲージ・勝敗判定は触らない（敵ターンの途中で呼ばれても二重に終了処理しないため、呼び出し側が checkEnd 相当を行う）
+   * - 乱数は効果の評価でだけ消費する（対象の解決は rng を使わない）
+   */
+  performSkill(user: BattleActorRef, skill: SkillExecution, target?: BattleActorRef): boolean {
+    const userList = user.side === 'party' ? this.state.party : this.state.enemies
+    const caster = userList[user.index]
+    if (this.isOver()) return false
+    if (!caster || caster.hp <= 0) return false
+    const targets = this.resolveSkillTargets(user.side, caster, skill, target)
+    const message =
+      typeof skill.message === 'string' && skill.message.trim() !== ''
+        ? skill.message.split('{user}').join(caster.name)
+        : undefined
+    this.appendLog(message ?? `${caster.name} は ${skill.name} を つかった！`)
+
+    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const ctx: EffectContext = {
+      caster,
+      targets,
+      rng: this.rng,
+      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+    }
+    const hpSnapshot = this.snapshotHp()
+    const lines = skill.builtin
+      ? invokeBuiltinSpell(skill.builtin, ctx)
+      : skill.effect
+        ? this.evalEffectDsl(skill.effect, ctx)
+        : ['(特技に効果定義なし)']
+    for (const line of lines) this.appendLog(line)
+    this.recordEffect('skill', caster, skill.name, targets, hpSnapshot, amounts, message)
+    return true
+  }
+
   // ===== 内部 =====
 
   private evalEffectDsl(effectStr: string, ctx: EffectContext): string[] {
@@ -628,6 +679,48 @@ export class BattleEngine {
     }
   }
 
+  /**
+   * 特技の対象を「使う側から見た相対表現」で解決する (#834)。rng は使わない。
+   * 明示指定 `target` は単体のときだけ効き、相手単体は生存者に限る。仲間単体は同じ側の者で、倒れている者を指せるのは
+   * 蘇生の効果（`revive` / builtin `zaorik`）のときだけ。それ以外は最初の生存者に落とす。蘇生の仲間単体で省略したときは最初の倒れた仲間。
+   */
+  private resolveSkillTargets(
+    side: 'party' | 'enemy',
+    user: BattleEntity,
+    skill: SkillExecution,
+    target?: BattleActorRef
+  ): BattleEntity[] {
+    const allies = side === 'party' ? this.state.party : this.state.enemies
+    const opponents = side === 'party' ? this.state.enemies : this.state.party
+    const explicit = (list: BattleEntity[], side0: 'party' | 'enemy'): BattleEntity | undefined =>
+      target && target.side === side0 ? list[target.index] : undefined
+    switch (typeof skill.target === 'string' ? skill.target.trim() : skill.target) {
+      case '相手全体':
+        return opponents.filter((e) => e.hp > 0)
+      case '自分':
+        return [user]
+      case '仲間全体':
+        return allies.filter((e) => e.hp > 0)
+      case '仲間単体': {
+        const revive = isReviveEntry('spell', skill)
+        const picked = explicit(allies, side)
+        const t =
+          picked && (picked.hp > 0 || revive)
+            ? picked
+            : revive
+              ? (allies.find((e) => e.hp <= 0) ?? this.firstAlive(allies))
+              : this.firstAlive(allies)
+        return t ? [t] : []
+      }
+      case '相手単体':
+      default: {
+        const picked = explicit(opponents, side === 'party' ? 'enemy' : 'party')
+        const t = picked && picked.hp > 0 ? picked : this.firstAlive(opponents)
+        return t ? [t] : []
+      }
+    }
+  }
+
   private resolveItemTargets(item: ItemExecution, targetId?: string): BattleEntity[] {
     // アイテムは「味方単体」既定で、明示的 target が無ければパーティ最初の生存者
     void item
@@ -684,16 +777,17 @@ export class BattleEngine {
   }
 
   /**
-   * 呪文・アイテム 1 回を記録する (#745)。効果は DSL・builtin のどちらでも HP を直接書き換えるので、
+   * 呪文・アイテム・特技 (#834) 1 回を記録する (#745)。効果は DSL・builtin のどちらでも HP を直接書き換えるので、
    * 効果の前後の HP 差で結果を導く（減った=damage / 増えた=heal）。対象にしたのに HP が変わらなかった者は miss。
    */
   private recordEffect(
-    kind: 'spell' | 'item',
+    kind: 'spell' | 'item' | 'skill',
     actor: BattleEntity,
     label: string,
     targets: BattleEntity[],
     before: Map<BattleEntity, number>,
-    amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>
+    amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>,
+    message?: string
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
@@ -733,7 +827,13 @@ export class BattleEngine {
         hits.push({ target: ref, kind: 'miss', amount: 0, hpBefore, hpAfter: e.hp })
       }
     }
-    this.pushEvent({ actor: actorRef, kind, label, hits })
+    this.pushEvent({
+      actor: actorRef,
+      kind,
+      label,
+      ...(message !== undefined ? { message } : {}),
+      hits,
+    })
   }
 
   /** 行動が成立しなかったことの知らせ (#745)。FF 式の窓に短い言葉だけを出す。対象はなく、絵は動かない */
@@ -816,6 +916,19 @@ export interface SpellExecution {
   target: string // "味方単体" / "敵全体" 等
   effect?: string
   builtin?: string
+}
+
+/**
+ * 特技 (#834) の引数。マスター（`[特技 id]`）からの解決は呼び出し側で行う。呪文と違って MP は持たない。
+ * `target` は使う側から見た相対表現（`相手単体` / `相手全体` / `自分` / `仲間単体` / `仲間全体`）
+ */
+export interface SkillExecution {
+  name: string
+  target: string
+  effect?: string
+  builtin?: string
+  /** 使用時の演出文。`{user}` は使った側の名前に置き換わる */
+  message?: string
 }
 
 /** アイテム使用の引数 */
