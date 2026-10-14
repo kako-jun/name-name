@@ -17,10 +17,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
-import type { NovelGameState } from './GameState'
 import { SaveManager, SaveSlotData } from './SaveManager'
 import { computeCoverFit, computeSplitLayoutRegions, type LayoutRect } from './novelLayout'
 import type { AspectRatio } from './constants'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（既存 NovelRenderer 系テストと同じスタイル）---
 
@@ -64,8 +64,7 @@ interface EventImageLayerForTest {
   // ではなく private フィールドへの直接キャストのため、Sprite が無ければ null。
   sprite: { x: number; y: number; width: number; height: number } | null
 }
-interface RendererInternals {
-  applyState(state: NovelGameState): void
+interface LocalInternals extends RendererInternals {
   eventImageLayer: EventImageLayerForTest
   bgGraphics: { visible: boolean }
   bgContainer: { visible: boolean }
@@ -77,26 +76,17 @@ interface RendererInternals {
     getSplitLayoutRegion(): LayoutRect | null
   }
   propLayer: { visible: boolean }
-  eventIndex: number
-  waitingForWait: boolean
-  initialized: boolean
-  appInitialized: boolean
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
   screenWidth: number
   screenHeight: number
-  render(): void
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /**
  * destroy() の appInitialized ガード（PixiJS 実 init 未完了時の early-return・React StrictMode
  * 対策）を満たすための最小スタブ（NovelRenderer.intermission.test.ts の stubDestroyableApp と
  * 同じ割り切り。jsdom には実 WebGL/canvas init が無いためここだけ最小限に差し替える）。
  */
 function stubDestroyableApp(r: NovelRenderer): void {
-  const appInternals = internals(r)
+  const appInternals = internals<LocalInternals>(r)
   appInternals.appInitialized = true
   Object.defineProperty(appInternals.app, 'canvas', {
     configurable: true,
@@ -152,11 +142,14 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
       scene('a', [narration('x'), eventImage('story/x.webp'), narration('y')]),
     ])
     r.startFrom({ sceneId: 'a' })
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
 
     await r.playScript([{ type: 'advance' }])
 
-    expect(internals(r).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Hide' })
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toEqual({
+      path: 'story/x.webp',
+      back: 'Hide',
+    })
     expect(r.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Hide' })
   })
 
@@ -168,12 +161,12 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
 
-    expect(internals(r).bgGraphics.visible).toBe(false)
-    expect(internals(r).bgContainer.visible).toBe(false)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
-    expect(internals(r).videoLayer.visible).toBe(false)
-    expect(internals(r).characterLayer.visible).toBe(false)
-    expect(internals(r).propLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgContainer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).videoLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(false)
   })
 
   it('EI2b: 既定700msフェードでは、イベント絵のフェードイン完了まで背面を隠さない', async () => {
@@ -185,21 +178,21 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
 
     await r.playScript([{ type: 'advance' }])
 
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).bgContainer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).videoLayer.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgContainer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).videoLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
 
     r.getTimeController().tick(700 + 16)
 
-    expect(internals(r).bgGraphics.visible).toBe(false)
-    expect(internals(r).bgContainer.visible).toBe(false)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
-    expect(internals(r).videoLayer.visible).toBe(false)
-    expect(internals(r).characterLayer.visible).toBe(false)
-    expect(internals(r).propLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgContainer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).videoLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(false)
   })
 
   // EI3: 背面=keep で処理すると全背面レイヤーは表示されたまま。
@@ -210,13 +203,16 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
 
-    expect(internals(r).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Keep' })
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).bgContainer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).videoLayer.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toEqual({
+      path: 'story/x.webp',
+      back: 'Keep',
+    })
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgContainer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).videoLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
   })
 
   // EI4: [イベント絵終了] で eventImageLayer がクリアされ、back=Hide で隠れていた全背面レイヤーが戻る。
@@ -232,18 +228,18 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     ])
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
-    expect(internals(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
 
     await r.playScript([{ type: 'advance' }])
 
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
     expect(r.getSnapshot().eventImage).toBeNull()
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).bgContainer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).videoLayer.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgContainer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).videoLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
   })
 
   // ===== save/load 往復 =====
@@ -264,13 +260,16 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     expect(await r2.quickLoad()).not.toBeNull()
 
     expect(r2.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Keep' })
-    expect(internals(r2).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Keep' })
+    expect(internals<LocalInternals>(r2).eventImageLayer.getState()).toEqual({
+      path: 'story/x.webp',
+      back: 'Keep',
+    })
     // back=Keep なので全背面レイヤーは隠れない。
-    expect(internals(r2).bgGraphics.visible).toBe(true)
-    expect(internals(r2).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r2).videoLayer.visible).toBe(true)
-    expect(internals(r2).characterLayer.visible).toBe(true)
-    expect(internals(r2).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r2).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r2).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r2).videoLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r2).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r2).propLayer.visible).toBe(true)
   })
 
   // EI6: eventImage キー欠落の旧セーブ → 落ちず eventImage===null（後方互換）。
@@ -279,7 +278,7 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     const r = makeRenderer([scene('a', [narration('x')])])
     expect(await r.quickLoad()).not.toBeNull()
     expect(r.getSnapshot().eventImage).toBeNull()
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
   })
 
   // EI7: スロットセーブ（slot≥0）でも eventImage が往復する。
@@ -295,13 +294,13 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     r.quickLoad()
     expect(r.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Hide' })
     // 復元ロード中は背面を残し、画像が実際に覆える状態になってから隠す。
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
     await flushPromises()
-    expect(internals(r).bgGraphics.visible).toBe(false)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
-    expect(internals(r).propLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(false)
   })
 
   // ===== seek 復元 =====
@@ -324,27 +323,30 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     // history[1]: p1 到達時点のスナップショット（eventImage セット済み = Hide）
     await r.playScript([{ type: 'advance' }])
     // 現在地は p2（イベント絵終了済み）
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
-    expect(internals(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
 
     // イベント絵表示中の履歴位置（1）へ戻る。
     r.seekTo(1)
-    expect(internals(r).eventImageLayer.getState()).toEqual({ path: 'story/x.webp', back: 'Hide' })
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toEqual({
+      path: 'story/x.webp',
+      back: 'Hide',
+    })
     // seek 復元でもロード完了前は背面を残す。
-    expect(internals(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
     await flushPromises()
-    expect(internals(r).bgGraphics.visible).toBe(false)
-    expect(internals(r).characterLayer.visible).toBe(false)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(false)
-    expect(internals(r).propLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(false)
 
     // イベント絵なしの履歴位置（0）へ戻る。
     r.seekTo(0)
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
   })
 
   // ===== シーン遷移・新シーン開始でのクリア =====
@@ -362,15 +364,15 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     ])
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
-    expect(internals(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
 
     await r.playScript([{ type: 'advance' }])
 
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
   })
 
   // EI10: 別シーンへの jumpToScene（新しいイベント列の開始）でも前シーンのイベント絵は引き継がれない。
@@ -381,16 +383,16 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     ])
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
-    expect(internals(r).eventImageLayer.getState()).not.toBeNull()
-    expect(internals(r).bgGraphics.visible).toBe(false)
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).not.toBeNull()
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(false)
 
     r.jumpToScene('b')
 
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
   })
 
   // ===== セルフレビュー指摘の統合テスト (#351) =====
@@ -402,14 +404,14 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     ])
     rHide.startFrom({ sceneId: 'a' })
     await rHide.playScript([{ type: 'advance' }])
-    expect(internals(rHide).videoLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(rHide).videoLayer.visible).toBe(false)
 
     const rKeep = makeRenderer([
       scene('a', [narration('x'), eventImage('story/x.webp', { back: 'Keep' }), narration('y')]),
     ])
     rKeep.startFrom({ sceneId: 'a' })
     await rKeep.playScript([{ type: 'advance' }])
-    expect(internals(rKeep).videoLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(rKeep).videoLayer.visible).toBe(true)
   })
 
   // EI12: 画像ロードが恒久的に失敗すると、隠していた全背面レイヤーが自動的に再表示される
@@ -424,17 +426,17 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     await r.playScript([{ type: 'advance' }])
 
     // ロード解決前は背面を残す。覆う画像が無い黒フラッシュを避けるため。
-    expect(internals(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
 
     await flushPromises()
 
     // ロード失敗が確定すると、覆う画像が無いので背面が自動的に戻る。
-    expect(internals(r).bgGraphics.visible).toBe(true)
-    expect(internals(r).bgContainer.visible).toBe(true)
-    expect(internals(r).videoLayer.visible).toBe(true)
-    expect(internals(r).characterLayer.visible).toBe(true)
-    expect(internals(r).backgroundBoardLayer.visible).toBe(true)
-    expect(internals(r).propLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgGraphics.visible).toBe(true)
+    expect(internals<LocalInternals>(r).bgContainer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).videoLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).characterLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).backgroundBoardLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(r).propLayer.visible).toBe(true)
     // settled state（snapshot.eventImage）自体は作者の意図として保持される（ADR-0002）。
     expect(r.getSnapshot().eventImage).toEqual({ path: 'story/x.webp', back: 'Hide' })
   })
@@ -447,7 +449,7 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     ])
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
-    const disposeSpy = vi.spyOn(internals(r).eventImageLayer, 'disposeTextures')
+    const disposeSpy = vi.spyOn(internals<LocalInternals>(r).eventImageLayer, 'disposeTextures')
 
     r.setEvents([narration('z')])
 
@@ -461,7 +463,7 @@ describe('NovelRenderer イベント絵ディレクティブ処理・可視性�
     ])
     r.startFrom({ sceneId: 'a' })
     await r.playScript([{ type: 'advance' }])
-    const disposeSpy = vi.spyOn(internals(r).eventImageLayer, 'disposeTextures')
+    const disposeSpy = vi.spyOn(internals<LocalInternals>(r).eventImageLayer, 'disposeTextures')
     stubDestroyableApp(r)
 
     r.destroy()
@@ -477,8 +479,8 @@ describe('NovelRenderer WaitDisplayComplete とイベント絵の統合 (#351)',
     r.setAssetBaseUrl('/assets')
     r.setCharacterFadeMs(0)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
-    vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+    internals<LocalInternals>(r).initialized = true
+    vi.spyOn(internals<LocalInternals>(r), 'render').mockImplementation(() => {})
     r.setScenes([scene('s', events)])
     return r
   }
@@ -494,7 +496,7 @@ describe('NovelRenderer WaitDisplayComplete とイベント絵の統合 (#351)',
       'WaitDisplayComplete',
       narration('after'),
     ])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
     let pending = true
     vi.spyOn(h.eventImageLayer, 'hasPendingVisualTransition').mockImplementation(() => pending)
 
@@ -529,22 +531,22 @@ describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 
 
   it('setSplitLayout(true)（landscape既定16:9）→ eventImageLayer.getSplitLayoutRegion() が computeSplitLayoutRegions(...).character と一致する', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
-    const { screenWidth, screenHeight } = internals(r)
+    const { screenWidth, screenHeight } = internals<LocalInternals>(r)
 
     r.setSplitLayout(true)
 
     const expected = computeSplitLayoutRegions(screenWidth, screenHeight).character
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(expected)
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).toEqual(expected)
   })
 
   it('setSplitLayout(true)（portrait 9:16）でも computeSplitLayoutRegions(...).character と一致する', () => {
     const r = makeRenderer([scene('a', [narration('x')])], '9:16')
-    const { screenWidth, screenHeight } = internals(r)
+    const { screenWidth, screenHeight } = internals<LocalInternals>(r)
 
     r.setSplitLayout(true)
 
     const expected = computeSplitLayoutRegions(screenWidth, screenHeight).character
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(expected)
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).toEqual(expected)
   })
 
   it('setSplitLayout(false)（既定）では eventImageLayer.getSplitLayoutRegion() が null のまま', () => {
@@ -552,17 +554,17 @@ describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 
 
     r.setSplitLayout(false)
 
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toBeNull()
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).toBeNull()
   })
 
   it('setSplitLayout(true) → setSplitLayout(false) で null に戻る', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
 
     r.setSplitLayout(true)
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).not.toBeNull()
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).not.toBeNull()
     r.setSplitLayout(false)
 
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toBeNull()
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).toBeNull()
   })
 
   // #464 の設計意図そのものの直接検証: CharacterLayer と EventImageLayer は常に同じ画像側領域を
@@ -571,25 +573,25 @@ describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 
     const r = makeRenderer([scene('a', [narration('x')])])
 
     r.setSplitLayout(true)
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(
-      internals(r).characterLayer.getSplitLayoutRegion()
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).toEqual(
+      internals<LocalInternals>(r).characterLayer.getSplitLayoutRegion()
     )
 
     r.setSplitLayout(false)
-    expect(internals(r).eventImageLayer.getSplitLayoutRegion()).toEqual(
-      internals(r).characterLayer.getSplitLayoutRegion()
+    expect(internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()).toEqual(
+      internals<LocalInternals>(r).characterLayer.getSplitLayoutRegion()
     )
   })
 
   // regions.text（テキスト側）を誤って渡す取り違えの回帰ガード。
   it('（優先度高）eventImageLayer.getSplitLayoutRegion() は regions.text ではなく regions.character である', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
-    const { screenWidth, screenHeight } = internals(r)
+    const { screenWidth, screenHeight } = internals<LocalInternals>(r)
 
     r.setSplitLayout(true)
 
     const regions = computeSplitLayoutRegions(screenWidth, screenHeight)
-    const actual = internals(r).eventImageLayer.getSplitLayoutRegion()
+    const actual = internals<LocalInternals>(r).eventImageLayer.getSplitLayoutRegion()
     expect(actual).toEqual(regions.character)
     expect(actual).not.toEqual(regions.text)
   })
@@ -600,7 +602,7 @@ describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 
     const r = makeRenderer([
       scene('a', [narration('x'), eventImage('story/x.webp'), narration('y')]),
     ])
-    const { screenWidth, screenHeight } = internals(r)
+    const { screenWidth, screenHeight } = internals<LocalInternals>(r)
     r.setSplitLayout(true)
     r.startFrom({ sceneId: 'a' })
 
@@ -614,7 +616,7 @@ describe('NovelRenderer split_layout (#442) と eventImageLayer の領域配線 
       region.width,
       region.height
     )
-    const sprite = internals(r).eventImageLayer.sprite
+    const sprite = internals<LocalInternals>(r).eventImageLayer.sprite
     expect(sprite).not.toBeNull()
     expect(sprite!.x).toBe(fit.x + region.x)
     expect(sprite!.y).toBe(fit.y + region.y)

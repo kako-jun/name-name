@@ -27,6 +27,7 @@ import type { Event, EventScene, TelopPosition } from '../types'
 import { computeTelopBottomReserveHeight } from './novelLayout'
 import { DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import * as FontLoader from './FontLoader'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 /** ensureFontLoaded の `.catch().then()` チェーンが解決しきるまで待つ（マクロタスク1つぶん）。 */
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
@@ -58,7 +59,7 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 
 /** destroy() の appInitialized ガードを満たすための最小スタブ（eventImage.test.ts と同じ割り切り）。*/
 function stubDestroyableApp(r: NovelRenderer): void {
-  const appInternals = internals(r)
+  const appInternals = internals<LocalInternals>(r)
   appInternals.appInitialized = true
   Object.defineProperty(appInternals.app, 'canvas', {
     configurable: true,
@@ -83,18 +84,12 @@ interface TelopLayerForTest {
 interface DialogBoxForTest {
   setNovelBottomReserve(px: number): void
 }
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   telopLayer: TelopLayerForTest
   dialogBox: DialogBoxForTest
-  appInitialized: boolean
-  initialized: boolean
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
   syncTelopBottomMarginToButtons: () => void
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /**
  * `init()` 完了後の状態を模す（`NovelRenderer.playScript.test.ts` の `markInitialized` と同じ
  * パターン）。`render()`（延いては telopLayer.show() の完了ガード、#679 レビューS3）は
@@ -102,7 +97,7 @@ function internals(r: NovelRenderer): RendererInternals {
  * ——telopLayer.show() が実際に呼ばれることを検証するテストではこれを呼んでおく必要がある。
  */
 function markInitialized(r: NovelRenderer): void {
-  internals(r).initialized = true
+  internals<LocalInternals>(r).initialized = true
 }
 
 describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
@@ -126,7 +121,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     ])
     r.setFontFamily('MyTestFont')
     r.setFontSize(28)
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
 
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // render()/telopLayer.show() の完了ガード (#679 レビューS3) を通す
@@ -147,7 +142,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   // 33: skipMode 中は telopLayer.show() が呼ばれない（ADR-0002: 演出の中間状態を作らない既存方針）。
   it('33: skipMode 中は [テロップ:] を処理しても telopLayer.show() が呼ばれない', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
 
     r.startFrom({ sceneId: 'a' })
     r.setSkipMode(true)
@@ -160,7 +155,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   it('34a: setEvents で telopLayer.clear() が呼ばれる', () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
     r.startFrom({ sceneId: 'a' })
-    const clearSpy = vi.spyOn(internals(r).telopLayer, 'clear')
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'clear')
 
     r.setEvents([narration('z')])
 
@@ -183,7 +178,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     await r.playScript([{ type: 'advance' }]) // x -> telop(show) -> y
     await flushPromises() // ensureFontLoaded() 完了を待つ (#679 レビューS3)
 
-    const clearSpy = vi.spyOn(internals(r).telopLayer, 'clear')
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'clear')
     await r.playScript([{ type: 'advance' }]) // y -> SceneTransition(clear) -> z
 
     expect(clearSpy).toHaveBeenCalled()
@@ -194,7 +189,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
     r.startFrom({ sceneId: 'a' })
     stubDestroyableApp(r)
-    const clearSpy = vi.spyOn(internals(r).telopLayer, 'clear')
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'clear')
 
     r.destroy()
 
@@ -207,13 +202,13 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     const r = makeRenderer([scene('a', [narration('one'), telop('通知'), narration('two')])])
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // render()/telopLayer.show() の完了ガード (#679 レビューS3) を通す
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
 
     await r.playScript([{ type: 'advance' }]) // one -> telop(show) -> two
     await flushPromises() // ensureFontLoaded() 完了を待つ (#679 レビューS3)
     expect(showSpy).toHaveBeenCalledTimes(1)
 
-    const clearSpy = vi.spyOn(internals(r).telopLayer, 'clear')
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'clear')
     r.goBack() // two -> one へ戻る（applyState 経由）
 
     expect(clearSpy).toHaveBeenCalled()
@@ -225,7 +220,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   it('36: setSeekBarColor("#1a4a7a") 後の show 引数の accentColor が SeekBar と同じ色解決 (0x1a4a7a) になる', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
     r.setSeekBarColor('#1a4a7a')
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
 
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // render()/telopLayer.show() の完了ガード (#679 レビューS3) を通す
@@ -237,7 +232,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
 
   it('36b: setSeekBarColor を呼ばない（既定）なら accentColor は SeekBar の既定色 DEFAULT_BAR_FILL_COLOR になる', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
 
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // render()/telopLayer.show() の完了ガード (#679 レビューS3) を通す
@@ -255,7 +250,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   it('37a: setTelopReserve(true) → dialogBox.setNovelBottomReserve(computeTelopBottomReserveHeight(fontSize))', () => {
     const r = new NovelRenderer()
     r.setFontSize(28)
-    const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
+    const spy = vi.spyOn(internals<LocalInternals>(r).dialogBox, 'setNovelBottomReserve')
 
     r.setTelopReserve(true)
 
@@ -264,7 +259,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
 
   it('37b: setTelopReserve(false) → dialogBox.setNovelBottomReserve(0)', () => {
     const r = new NovelRenderer()
-    const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
+    const spy = vi.spyOn(internals<LocalInternals>(r).dialogBox, 'setNovelBottomReserve')
 
     r.setTelopReserve(false)
 
@@ -273,7 +268,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
 
   it('37c: setTelopReserve(null) → dialogBox.setNovelBottomReserve(0)', () => {
     const r = new NovelRenderer()
-    const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
+    const spy = vi.spyOn(internals<LocalInternals>(r).dialogBox, 'setNovelBottomReserve')
 
     r.setTelopReserve(null)
 
@@ -282,7 +277,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
 
   it('37d: setTelopReserve(undefined) → dialogBox.setNovelBottomReserve(0)', () => {
     const r = new NovelRenderer()
-    const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
+    const spy = vi.spyOn(internals<LocalInternals>(r).dialogBox, 'setNovelBottomReserve')
 
     r.setTelopReserve(undefined)
 
@@ -298,7 +293,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
     await r.playScript([{ type: 'advance' }]) // x -> telop(show) -> y（表示中の段が1つある状態）
     await flushPromises() // ensureFontLoaded() 完了を待つ (#679 レビューS3)
 
-    const setAccentColorSpy = vi.spyOn(internals(r).telopLayer, 'setAccentColor')
+    const setAccentColorSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'setAccentColor')
 
     r.setSeekBarColor('#1a4a7a')
 
@@ -310,15 +305,15 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   // 呼ばれない（telopReserveEnabled が false のときは applyTelopReserve 自体を呼ばないガード、#678）。
   it('39: telop_reserve 無効時は ResizeObserver 同期で dialogBox.setNovelBottomReserve が呼ばれない', () => {
     const r = new NovelRenderer()
-    const spy = vi.spyOn(internals(r).dialogBox, 'setNovelBottomReserve')
+    const spy = vi.spyOn(internals<LocalInternals>(r).dialogBox, 'setNovelBottomReserve')
     // canvas.clientHeight を測定済みにして syncTelopBottomMarginToButtons の early return を回避する
     // （stubDestroyableApp と同じく Application.canvas は getter のみなので defineProperty で上書きする）。
-    Object.defineProperty(internals(r).app, 'canvas', {
+    Object.defineProperty(internals<LocalInternals>(r).app, 'canvas', {
       configurable: true,
       value: { clientHeight: 800 },
     })
 
-    internals(r).syncTelopBottomMarginToButtons()
+    internals<LocalInternals>(r).syncTelopBottomMarginToButtons()
 
     expect(spy).not.toHaveBeenCalled()
   })
@@ -336,7 +331,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   // 40(最重要): フォントロード待ち中は show されず、完了後に初めて show される。
   it('40: [テロップ:] はフォントロード完了まで telopLayer.show() を呼ばず、完了後に呼ばれる（同期には呼ばれない）', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // render()/telopLayer.show() の完了ガード (#679 レビューS3) を通す
 
@@ -358,7 +353,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   // 41: フォントロード待ち中に destroy() されたら show されない。
   it('41: フォントロード待ち中に destroy() されると telopLayer.show() は呼ばれない', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // destroy() が initialized を false に戻すことが show ブロックの原因だと示す
     stubDestroyableApp(r)
@@ -381,7 +376,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   // 42: フォントロード待ち中に scene 切替相当（setEvents、telopLayer.clear() 経由）が起きたら show されない。
   it('42: フォントロード待ち中に setEvents（新しいイベント列の開始）が呼ばれると telopLayer.show() は呼ばれない', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // setEvents(clearTelopLayer 経由)がブロック原因だと示す（initialized=false 起因ではない）
 
@@ -403,7 +398,7 @@ describe('NovelRenderer テロップディレクティブ処理 (#674)', () => {
   // 43: フォントロード待ち中にスキップモードへ入ったら show されない（ADR-0002 既存方針と同じ扱い）。
   it('43: フォントロード待ち中に setSkipMode(true) が呼ばれると telopLayer.show() は呼ばれない', async () => {
     const r = makeRenderer([scene('a', [narration('x'), telop('通知'), narration('y')])])
-    const showSpy = vi.spyOn(internals(r).telopLayer, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).telopLayer, 'show')
     r.startFrom({ sceneId: 'a' })
     markInitialized(r) // setSkipMode(true) がブロック原因だと示す（initialized=false 起因ではない）
 

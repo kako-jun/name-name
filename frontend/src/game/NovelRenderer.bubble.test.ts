@@ -119,6 +119,7 @@ vi.mock('./EventImageLayer', () => {
 
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 vi.mock('./FontLoader', () => ({ ensureFontLoaded: vi.fn(() => Promise.resolve()) }))
 
@@ -136,8 +137,7 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface RendererInternals {
-  initialized: boolean
+interface LocalInternals extends RendererInternals {
   dialogBox: {
     visible: boolean
     setDialog: (name: string, text: string) => void
@@ -146,15 +146,11 @@ interface RendererInternals {
   bubbleLayer: { visible: boolean; x: number; getVisibleText: () => string }
 }
 
-function internals(renderer: NovelRenderer): RendererInternals {
-  return renderer as unknown as RendererInternals
-}
-
 function makeRenderer(): {
   renderer: NovelRenderer
 } {
   const renderer = new NovelRenderer()
-  const inner = internals(renderer)
+  const inner = internals<LocalInternals>(renderer)
   inner.initialized = true
   // BubbleLayer は実体を使い、可視化・typewriter 同期・スタイル入力を回帰させる。
   return { renderer }
@@ -166,15 +162,15 @@ describe('NovelRenderer bubble display wiring (#698)', () => {
     renderer.setScenes([scene('a', [dialog('吹き出し', '叫び'), narration('従来本文')])])
     await Promise.resolve()
 
-    expect(internals(renderer).dialogBox.visible).toBe(false)
-    expect(internals(renderer).bubbleLayer.visible).toBe(true)
+    expect(internals<LocalInternals>(renderer).dialogBox.visible).toBe(false)
+    expect(internals<LocalInternals>(renderer).bubbleLayer.visible).toBe(true)
     // DialogBox が唯一の typewriter 所有者。skip により同じ全文が BubbleLayer に反映される。
-    internals(renderer).dialogBox.skipTypewriter()
-    expect(internals(renderer).bubbleLayer.getVisibleText()).toBe('吹き出し')
+    internals<LocalInternals>(renderer).dialogBox.skipTypewriter()
+    expect(internals<LocalInternals>(renderer).bubbleLayer.getVisibleText()).toBe('吹き出し')
 
     await renderer.playScript([{ type: 'advance' }])
-    expect(internals(renderer).dialogBox.visible).toBe(true)
-    expect(internals(renderer).bubbleLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(renderer).dialogBox.visible).toBe(true)
+    expect(internals<LocalInternals>(renderer).bubbleLayer.visible).toBe(false)
   })
 
   it('Dialog は話者位置、ナレーション指定は上方中央に描画する', async () => {
@@ -184,11 +180,11 @@ describe('NovelRenderer bubble display wiring (#698)', () => {
     ])
     // 既存 CHARACTER_X_RATIO の right（0.8125）をそのまま使い、吹き出し専用の座標表は持たない。
     await Promise.resolve()
-    expect(internals(renderer).bubbleLayer.x).toBeGreaterThan(700)
+    expect(internals<LocalInternals>(renderer).bubbleLayer.x).toBeGreaterThan(700)
 
     await renderer.playScript([{ type: 'advance' }])
     await Promise.resolve()
-    expect(internals(renderer).bubbleLayer.x).toBe(640)
+    expect(internals<LocalInternals>(renderer).bubbleLayer.x).toBe(640)
   })
 
   it('scene/reset/restore は古い吹き出しを残さず、復元先イベントから再導出する', () => {
@@ -199,7 +195,7 @@ describe('NovelRenderer bubble display wiring (#698)', () => {
       scene('b', [narration('通常本文')]),
     ])
     renderer.setEvents([])
-    expect(internals(renderer).bubbleLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(renderer).bubbleLayer.visible).toBe(false)
 
     renderer.setScenes([
       scene('a', [dialog('古い吹き出し', '静か')]),
@@ -211,7 +207,7 @@ describe('NovelRenderer bubble display wiring (#698)', () => {
       eventIndex: 0,
       textIndex: 0,
     })
-    expect(internals(renderer).bubbleLayer.visible).toBe(false)
-    expect(internals(renderer).dialogBox.visible).toBe(true)
+    expect(internals<LocalInternals>(renderer).bubbleLayer.visible).toBe(false)
+    expect(internals<LocalInternals>(renderer).dialogBox.visible).toBe(true)
   })
 })

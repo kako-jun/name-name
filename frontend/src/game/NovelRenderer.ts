@@ -53,7 +53,6 @@ import {
   StartFromOptions,
   Step,
   resolveEvents,
-  countSurvivingBefore,
 } from './GameState'
 import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { VideoLayer } from './VideoLayer'
@@ -68,6 +67,10 @@ import { EndingOverlay } from './EndingOverlay'
 import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
+import { countDisplayEvents, getTextEvent, remapEventIndexAfterReResolve } from './eventCursor'
+import { buildFreshPositionState } from './freshState'
+import { collectUpcomingAssetUrls } from './preloadPlan'
+import { buildDebugState, type DebugState } from './debugState'
 import { isSceneIdConfined } from './sceneConfinement'
 import {
   carryPolicyFor,
@@ -78,7 +81,6 @@ import {
   type Deferred,
   type GatedOperation,
   type LoadOrigin,
-  type FreshPosition,
   type PendingEntry,
   type SceneEntryRequest,
   type SceneEntryResult,
@@ -128,14 +130,13 @@ import {
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
-  resolveCharacterImageUrls,
   saveSlotToGameState,
+  gameStateToSaveSlot,
   resolveFontFamily,
   formatCounterText,
   computeSeekBarPosition,
   PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
   PLAYER_BUTTON_ROW_HEIGHT_PX,
-  describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
   splitIntoSentences,
@@ -149,19 +150,6 @@ import {
 } from './novelLayout'
 import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 import { resolveVoiceSpatialization } from './voiceSpatialization'
-
-/**
- * 立ち絵・背景先読み (#389) のテキストイベント数上限。旧仕様（8）は theo-hayami の実測値
- * （1話あたり Dialog 平均 13.9 件・最大 19 件、`free/` 業×住人セル 296 話計測）が上回っており、
- * 十分な読み込み時間があるにもかかわらず先読みが途中で打ち切られ立ち絵切り替えが遅延する事故を
- * 招いたため撤廃した (#417)。先読みの実質的な境界は「次の分岐（Choice/Condition）または配列末尾
- * まで」のまま変わらない（このループ構造自体は変更していない）。
- *
- * ⚠️ 無制限に安全というわけではない: 現時点で実運用中のゲームは theo-hayami のみのため撤廃の
- * 影響範囲は限定的だが、将来「分岐なしで極端に長い区間」を持つゲームが出た場合は、その時点で
- * 個別に上限を再検討する必要がある。
- */
-const PRELOAD_MAX_TEXT_EVENTS = Infinity
 
 /**
  * novel 型 canvas の既定 touch-action (#434)。
@@ -206,42 +194,6 @@ type SceneLookup =
  * `allScenes` に反映しない（破棄された入場は何も書き換えない）。
  */
 type SceneResolution = SceneLookup | { status: 'loaded'; scenes: EventScene[] }
-
-/** Dialog / Narration から text を取り出すヘルパー */
-export function getTextEvent(event: Event):
-  | {
-      type: 'dialog'
-      character: string | null
-      expression: string | null
-      position: string | null
-      text: string[]
-      /** 立ち絵の明示フィット指定 (#294)。true のとき loadTexture で旧 fit-down を適用する。 */
-      fit: boolean
-      /** シアターモードのキャラクター奥行き配置 (#694)。未指定/null は 0（最前面）。 */
-      depth: number
-    }
-  | { type: 'narration'; text: string[] }
-  | null {
-  if (typeof event === 'object' && event !== null) {
-    if ('Dialog' in event) {
-      return {
-        type: 'dialog',
-        character: event.Dialog.character,
-        expression: event.Dialog.expression,
-        position: event.Dialog.position,
-        text: event.Dialog.text,
-        // 未指定 / false は原寸（fit=false）。明示 boolean に倒す。
-        fit: event.Dialog.fit === true,
-        // 未指定/null は 0（最前面）に倒す (#694)。
-        depth: event.Dialog.depth ?? 0,
-      }
-    }
-    if ('Narration' in event) {
-      return { type: 'narration', text: event.Narration.text }
-    }
-  }
-  return null
-}
 
 /**
  * 復元 (#294) 用: 指定キャラの立ち絵フィット指定を resolvedEvents から解決する純粋関数。
@@ -1267,62 +1219,28 @@ export class NovelRenderer {
   /**
    * デバッグ用: 現在の実行状態を返す。開発時の HUD 表示に使う。
    */
-  getDebugState(): {
-    eventIndex: number
-    eventCount: number
-    eventKind: string
-    eventText?: string
-    autoMode: boolean
-    waitingForChoice: boolean
-    waitingForWait: boolean
-    jumpState: 'idle' | 'pending' | 'stalled'
-    currentResolvedFontFamily: string | null
-    sceneId: string | null
-    audioWarning: string | null
-    characters: Array<{
-      name: string
-      expression: string
-      position: string
-      depth: number
-      x: number
-      y: number
-      scale: number
-    }>
-  } {
-    const current = this.resolvedEvents[this.eventIndex]
-    // イベントから debug HUD 用の {kind, text} を取り出す純粋計算は
-    // novelLayout.describeEventForDebug に集約 (#260)。
-    const { kind, text } = describeEventForDebug(current)
-    const chars = this.characterLayer.getCharacterStates().map((s) => {
-      // 私的フィールドへの最小アクセス: x/y/scale をスナップショット
-      const inner = this.characterLayer as unknown as {
-        characters: Map<string, { sprite: { x: number; y: number; scale: { x: number } } }>
-      }
-      const st = inner.characters.get(s.name)
-      return {
-        name: s.name,
-        expression: s.expression,
-        position: s.position,
-        depth: s.depth,
-        x: st?.sprite.x ?? -1,
-        y: st?.sprite.y ?? -1,
-        scale: st?.sprite.scale.x ?? -1,
-      }
-    })
-    return {
+  getDebugState(): DebugState {
+    // 整形は純粋関数 `buildDebugState`（debugState.ts）。ここでは `this` の読み取りだけを行う。
+    return buildDebugState({
+      resolvedEvents: this.resolvedEvents,
       eventIndex: this.eventIndex,
-      eventCount: this.resolvedEvents.length,
-      eventKind: kind,
-      eventText: text,
       autoMode: this.autoMode,
       waitingForChoice: this.waitingForChoice,
       waitingForWait: this.waitingForWait,
       jumpState: this.jumpState,
       currentResolvedFontFamily: this.currentResolvedFontFamily,
-      sceneId: this.getPlayheadSceneId() ?? null,
+      sceneId: this.getPlayheadSceneId(),
       audioWarning: this.audioManager.getLastWarning(),
-      characters: chars,
-    }
+      characterStates: this.characterLayer.getCharacterStates(),
+      spriteGeometry: (name) => {
+        // 私的フィールドへの最小アクセス: x/y/scale をスナップショット
+        const inner = this.characterLayer as unknown as {
+          characters: Map<string, { sprite: { x: number; y: number; scale: { x: number } } }>
+        }
+        const st = inner.characters.get(name)
+        return st ? { x: st.sprite.x, y: st.sprite.y, scale: st.sprite.scale.x } : undefined
+      },
+    })
   }
 
   /**
@@ -1348,7 +1266,7 @@ export class NovelRenderer {
     this.advSentencePagesCache = null
     this.preloadedUrls.clear()
     clearBackgroundPreload()
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
   }
 
   /** 読み込み済みテクスチャを解放する（`setEvents` / `loadEvents` が文書を入れ替えるとき）。 */
@@ -1933,7 +1851,7 @@ export class NovelRenderer {
     // 位置指定は適用の前に範囲を判定する (#789)。範囲外なら flags・confinement とも変えずに失敗にする。
     const positioned =
       req.position && scene
-        ? { scene, state: this.buildFreshPositionState(scene, req.position, req.flags) }
+        ? { scene, state: buildFreshPositionState(scene.id, req.position, req.flags) }
         : null
     if (positioned) {
       const rangeError = this.checkRestorePosition(positioned.scene.events, positioned.state)
@@ -2002,39 +1920,6 @@ export class NovelRenderer {
       (events) => resolveEvents(events, gs).length
     )
     return resolved.find((seg) => seg.sceneId === sceneId)?.start ?? null
-  }
-
-  /** 新規開始の位置指定から、共通コアに渡す最小の NovelGameState を組み立てる。 */
-  private buildFreshPositionState(
-    scene: EventScene,
-    position: FreshPosition,
-    flags: Record<string, FlagValue> | undefined
-  ): NovelGameState {
-    return {
-      sceneId: scene.id,
-      eventIndex: position.eventIndex,
-      textIndex: position.textIndex ?? 0,
-      sentenceIndex: position.sentenceIndex ?? 0,
-      flags: flags ?? {},
-      backgroundPath: null,
-      backgroundColor: null,
-      backgroundFade: normalizeBackgroundFade(undefined),
-      backgroundBrightness: null,
-      video: null,
-      eventImage: null,
-      backgroundBoards: [],
-      props: [],
-      spotlight: null,
-      curtain: null,
-      isBlackout: false,
-      characters: [],
-      currentBgmPath: null,
-      cameraMode: 'Novel',
-      cameraOrientation: 'Audience',
-      cameraElevation: null,
-      paperDollOutline: null,
-      storyEnded: false,
-    }
   }
 
   /**
@@ -2949,7 +2834,7 @@ export class NovelRenderer {
     // resetAndStartEvents 直後の最初の Dialog で初めて話者がセットされ、初回は nudge しない
     // （何もないところから登場する初回は「交代」ではない）。
     this.lastSpeaker = null
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     this.processUntilNextTextEvent()
 
@@ -4622,7 +4507,7 @@ export class NovelRenderer {
     // flags だけを過去の値に戻すので、Flag を越えて戻ると列（`[条件:]` の展開）と位置が食い違う。
     // restoreToScene 経由では同じ flags で展開済みなので、結果は同じ（冪等）。
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     // インデックス復元
     this.eventIndex = state.eventIndex
@@ -4831,24 +4716,18 @@ export class NovelRenderer {
     // flags だけを持つので、再展開の結果が flags の履歴に依存してはならない。ADR 0002）。全体を展開し直し、
     // eventIndex を決定的に写像する (#777)。
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    const before =
-      typeof current === 'object' && current !== null
-        ? countSurvivingBefore(this.rawEvents, current, this.gameState)
-        : null
-    if (before !== null) {
-      if (this.resolvedEvents[before] === current) {
-        // 現在の Flag が新しい列にも残っている: その位置
-        this.eventIndex = before
-      } else {
-        // Flag を囲む `[条件:]` が偽になって消えた: 元イベント列上で次に残っているイベントの直前に置く
-        // （呼び出し元が続けて eventIndex を進めるので、次に残っているイベントへ進む）。囲んでいた
-        // ブロックの残りは、この版の GUI では消える（TUI はシーン構築時評価で残りを流す。#799）。
-        this.eventIndex = before - 1
-      }
-    } else if (this.eventIndex >= this.resolvedEvents.length) {
-      this.eventIndex = Math.max(0, this.resolvedEvents.length - 1)
-    }
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    // 写像は純粋関数 `remapEventIndexAfterReResolve`（eventCursor.ts）。現在の Flag が新しい列にも残れば
+    // その位置、囲む `[条件:]` が偽で消えたら元イベント列上で次に残るイベントの直前（呼び出し元が続けて
+    // eventIndex を進める。囲んでいたブロックの残りは、この版の GUI では消える。TUI はシーン構築時評価で
+    // 残りを流す。#799）。
+    this.eventIndex = remapEventIndexAfterReResolve(
+      this.rawEvents,
+      this.resolvedEvents,
+      current,
+      this.eventIndex,
+      this.gameState
+    )
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
     // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
     this.novelPagesCache = null
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
@@ -5219,7 +5098,7 @@ export class NovelRenderer {
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
    * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
-   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS} 個ぶんに抑える。
+   *   （`getTextEvent` 非 null）を最大 `PRELOAD_MAX_TEXT_EVENTS`（preloadPlan.ts）個ぶんに抑える。
    *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
    *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
    *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。
@@ -5232,97 +5111,13 @@ export class NovelRenderer {
    *   未完でも従来どおりテキストは詰まらない（後方互換）。
    */
   private preloadUpcomingAssets(): void {
-    if (!this.assetBaseUrl) return
-
-    const urls: string[] = []
-    let textEventCount = 0
-
-    // 走査開始 i = this.eventIndex は「今表示するテキストイベント」を含む（未来だけでなく現在も
-    // 先読み対象）。PRELOAD_MAX_TEXT_EVENTS=Infinity のため、この予算チェック自体は常に false
-    // になり実質的な上限は「次の分岐（Choice/Condition）または配列末尾まで」に一本化される (#417)。
-    for (let i = this.eventIndex; i < this.resolvedEvents.length; i++) {
-      const event = this.resolvedEvents[i]
-      // 文字列 variant（'SceneTransition' / 'PageBreak' / 'VideoExit' 等）は分岐でも
-      // テキストでも先読み対象アセットでもないので読み飛ばす。
-      if (typeof event !== 'object' || event === null) continue
-
-      // 分岐に当たったら走査終了（分岐先が確定しないと先読みできない）
-      // Jump (#725) も分岐扱い: 遷移先は別シーンで、ここから先の同一配列は再生されない。
-      if ('Choice' in event || 'Condition' in event || 'Jump' in event) break
-
-      // テキストイベント数の緩い上限で打ち切る（Dialog も下でアセットを積むので判定を先に）
-      if (getTextEvent(event) !== null) {
-        if (textEventCount >= PRELOAD_MAX_TEXT_EVENTS) break
-        textEventCount++
-      }
-
-      if ('Dialog' in event) {
-        // 実表示ガード（showCharacterFromDialog: `!expression || !position || !speaker`）に
-        // 揃える＝立ち絵を実際に show する Dialog だけ先読みする。falsy チェックで空文字も弾き、
-        // position も要求する（空文字 expression の無効 URL 先読みを消す）。
-        const { character, expression, position } = event.Dialog
-        if (expression && character && position) {
-          for (const u of resolveCharacterImageUrls(
-            this.assetBaseUrl,
-            expression.replace(/^\//, '')
-          )) {
-            urls.push(u)
-          }
-        }
-      } else if ('ExpressionChange' in event) {
-        // ExpressionChange は position を持たない。expression / character の falsy チェックに
-        // 揃える（空文字を弾く）。
-        const { character, expression } = event.ExpressionChange
-        if (expression && character) {
-          for (const u of resolveCharacterImageUrls(
-            this.assetBaseUrl,
-            expression.replace(/^\//, '')
-          )) {
-            urls.push(u)
-          }
-        }
-      } else if ('Enter' in event) {
-        // 無言登場 (#401) の立ち絵も先読みする。Dialog の立ち絵と同じ実表示ガード
-        // （expression / position / character が全て truthy）に揃える。
-        const { character, expression, position } = event.Enter
-        if (expression && character && position) {
-          for (const u of resolveCharacterImageUrls(
-            this.assetBaseUrl,
-            expression.replace(/^\//, '')
-          )) {
-            urls.push(u)
-          }
-        }
-      } else if ('Background' in event) {
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Background.path))
-      } else if ('BackgroundBoard' in event) {
-        // 舞台構造の背景板 (#683) も背景と同じ Assets.load 遅延ロード経路（BackgroundBoardLayer.add）
-        // を通るため、同じく先読み対象にする。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.BackgroundBoard.path))
-      } else if ('Prop' in event) {
-        // 舞台構造の大道具 (#692) も背景板と同じ Assets.load 遅延ロード経路（PropLayer.add）
-        // を通るため、同じく先読み対象にする。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Prop.path))
-      } else if ('EventImage' in event) {
-        // イベント絵 (#351) の先読み (#621)。EventImageLayer.show() は表示の瞬間に初めて
-        // Assets.load するため、事前に温めておかないと切替時に初回コールドロード相当の
-        // 遅延が出る。URL 形は EventImageLayer.buildImageUrl と同じ resolveAssetUrl(images)。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.EventImage.path))
-      } else if ('Image' in event) {
-        // 単独画像 `[画像:]` (#274, renderOnly) も先読み対象に含める (#621)。除外する理由が
-        // なく、症状報告のイベント絵切替遅延と同じ Assets.load 遅延ロードを踏むため。
-        urls.push(resolveAssetUrl(this.assetBaseUrl, 'images', event.Image.path))
-      }
-    }
-
-    // スキャン内での重複URL（同じキャラの表情が2回以上登場する等）を先に除去する（#417）。
-    // 近い順の並びを保つため、初出（最も近い方）を残して後続の重複を落とす。
-    const seen = new Set<string>()
-    const dedupedUrls = urls.filter((u) => {
-      if (seen.has(u)) return false
-      seen.add(u)
-      return true
-    })
+    // URL の収集（走査範囲・分岐での打ち切り・近い順・重複除去・assetBaseUrl が空なら空）は純粋関数
+    // `collectUpcomingAssetUrls`（preloadPlan.ts）。ここには積み済み集合との差分と実ロードの投入だけを残す。
+    const dedupedUrls = collectUpcomingAssetUrls(
+      this.resolvedEvents,
+      this.eventIndex,
+      this.assetBaseUrl
+    )
 
     // 未積みの URL だけを backgroundPreload に積む（同期は走査のみ・実 DL は投げっぱなし）
     const fresh = dedupedUrls.filter((u) => !this.preloadedUrls.has(u))
@@ -6606,34 +6401,11 @@ export class NovelRenderer {
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
     const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
 
-    const snapshot = this.getSnapshot()
-    const data: SaveSlotData = {
+    const data = gameStateToSaveSlot(this.getSnapshot(), {
       slot: -1, // クイックセーブはスロット番号不使用
-      sceneId: snapshot.sceneId,
-      eventIndex: snapshot.eventIndex,
-      textIndex: snapshot.textIndex,
-      sentenceIndex: snapshot.sentenceIndex,
-      flags: snapshot.flags,
-      backgroundPath: snapshot.backgroundPath,
-      backgroundColor: snapshot.backgroundColor,
-      backgroundFade: snapshot.backgroundFade,
-      backgroundBrightness: snapshot.backgroundBrightness,
-      video: snapshot.video,
-      eventImage: snapshot.eventImage,
-      backgroundBoards: snapshot.backgroundBoards,
-      props: snapshot.props,
-      spotlight: snapshot.spotlight,
-      curtain: snapshot.curtain,
-      isBlackout: snapshot.isBlackout,
-      characters: snapshot.characters,
-      currentBgmPath: snapshot.currentBgmPath,
-      cameraMode: snapshot.cameraMode,
-      cameraOrientation: snapshot.cameraOrientation,
-      cameraElevation: snapshot.cameraElevation,
-      paperDollOutline: snapshot.paperDollOutline,
       savedAt: new Date().toISOString(),
       sceneName,
-    }
+    })
     this.saveManager.quickSave(data)
     if (origin === 'quick') this.showToast('クイックセーブしました')
     return true
@@ -6723,34 +6495,11 @@ export class NovelRenderer {
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
 
-      const snapshot = this.getSnapshot()
-      const data: SaveSlotData = {
+      const data = gameStateToSaveSlot(this.getSnapshot(), {
         slot,
-        sceneId: snapshot.sceneId,
-        eventIndex: snapshot.eventIndex,
-        textIndex: snapshot.textIndex,
-        sentenceIndex: snapshot.sentenceIndex,
-        flags: snapshot.flags,
-        backgroundPath: snapshot.backgroundPath,
-        backgroundColor: snapshot.backgroundColor,
-        backgroundFade: snapshot.backgroundFade,
-        backgroundBrightness: snapshot.backgroundBrightness,
-        video: snapshot.video,
-        eventImage: snapshot.eventImage,
-        backgroundBoards: snapshot.backgroundBoards,
-        props: snapshot.props,
-        spotlight: snapshot.spotlight,
-        curtain: snapshot.curtain,
-        isBlackout: snapshot.isBlackout,
-        characters: snapshot.characters,
-        currentBgmPath: snapshot.currentBgmPath,
-        cameraMode: snapshot.cameraMode,
-        cameraOrientation: snapshot.cameraOrientation,
-        cameraElevation: snapshot.cameraElevation,
-        paperDollOutline: snapshot.paperDollOutline,
         savedAt: new Date().toISOString(),
         sceneName,
-      }
+      })
       this.saveManager.save(slot, data)
     })
   }
@@ -6817,7 +6566,7 @@ export class NovelRenderer {
     // 元イベントを保持し、Condition をフラグに基づいて展開
     this.rawEvents = [...scene.events]
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
-    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+    this.displayEventCount = countDisplayEvents(this.resolvedEvents)
 
     // 完成済み NovelGameState を applyState で宣言的に復元
     this.applyState(state)

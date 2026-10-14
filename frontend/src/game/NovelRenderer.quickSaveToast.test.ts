@@ -8,6 +8,7 @@ import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import { SaveManager } from './SaveManager'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -22,26 +23,14 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface Internals {
-  initialized: boolean
-  eventIndex: number
-  resolvedEvents: Event[]
-  storyEnded: boolean
-  waitingForWait: boolean
-  jumpState: 'idle' | 'pending' | 'stalled'
-  pendingEntry: unknown
+interface Internals extends RendererInternals {
   choiceOverlay: { show: (...args: unknown[]) => void }
-  render(): void
 }
-function internals(r: NovelRenderer): Internals {
-  return r as unknown as Internals
-}
-
 function prepare(r: NovelRenderer): NovelRenderer {
   r.getTimeController().setMode('virtual')
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-  internals(r).initialized = true
-  vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+  internals<Internals>(r).initialized = true
+  vi.spyOn(internals<Internals>(r), 'render').mockImplementation(() => {})
   return r
 }
 
@@ -79,7 +68,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
 
   it('選択肢表示中: 「この場面ではセーブできません」（自動は無言・保存しない）', () => {
     const r = scenesRenderer([HUB])
-    vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
+    vi.spyOn(internals<Internals>(r).choiceOverlay, 'show').mockImplementation(() => {})
     r.advance()
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     expect((r as unknown as { saveQuick(o: 'auto'): boolean }).saveQuick('auto')).toBe(false)
@@ -91,7 +80,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
 
   it('[待機] 中: 「この場面ではセーブできません」', () => {
     const r = scenesRenderer([HUB])
-    internals(r).waitingForWait = true
+    internals<Internals>(r).waitingForWait = true
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     expect(r.quickSave()).toBe(false)
     expect(toast).toHaveBeenCalledWith('この場面ではセーブできません')
@@ -99,7 +88,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
 
   it('終劇後: 「この場面ではセーブできません」', () => {
     const r = scenesRenderer([HUB])
-    internals(r).storyEnded = true
+    internals<Internals>(r).storyEnded = true
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     expect(r.quickSave()).toBe(false)
     expect(toast).toHaveBeenCalledWith('この場面ではセーブできません')
@@ -108,7 +97,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
   it('Jump 予約中: 「場面転換中のためセーブできません」（自動は無言）', () => {
     const r = scenesRenderer([JA, FAR])
     r.advance() // Jump に到達し予約
-    expect(internals(r).jumpState).toBe('pending')
+    expect(internals<Internals>(r).jumpState).toBe('pending')
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     expect((r as unknown as { saveQuick(o: 'auto'): boolean }).saveQuick('auto')).toBe(false)
     expect(toast).not.toHaveBeenCalled()
@@ -123,7 +112,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
     })
     const r = scenesRenderer([HUB], () => p)
     const entering = r.jumpToScene('far')
-    expect(internals(r).pendingEntry).not.toBeNull()
+    expect(internals<Internals>(r).pendingEntry).not.toBeNull()
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     expect(r.quickSave()).toBe(false)
     expect(toast).toHaveBeenCalledWith('場面転換中のためセーブできません')
@@ -133,7 +122,7 @@ describe('クイックセーブの結果トースト (#769)', () => {
 
   it('停止中（stalled）の Jump: 転換中ではないので「この場面ではセーブできません」', () => {
     const r = scenesRenderer([JA, FAR])
-    internals(r).jumpState = 'stalled'
+    internals<Internals>(r).jumpState = 'stalled'
     const toast = vi.spyOn(r, 'showToast').mockImplementation(() => {})
     expect(r.quickSave()).toBe(false)
     expect(toast).toHaveBeenCalledWith('この場面ではセーブできません')

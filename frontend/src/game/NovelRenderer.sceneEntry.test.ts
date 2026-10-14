@@ -11,7 +11,7 @@ import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
-import type { SceneEntryResult } from './sceneEntry'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -28,20 +28,10 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface Internals {
-  initialized: boolean
-  waitingForChoice: boolean
-  eventIndex: number
-  jumpState: 'idle' | 'pending' | 'stalled'
-  pendingEntry: { promise: Promise<SceneEntryResult> } | null
+interface Internals extends RendererInternals {
   choiceOverlay: { show: (...args: unknown[]) => void; hide: () => void }
   saveLoadOverlay: { showLoad: (...args: unknown[]) => void }
-  render(): void
 }
-function internals(r: NovelRenderer): Internals {
-  return r as unknown as Internals
-}
-
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void
   const promise = new Promise<T>((res) => {
@@ -95,8 +85,8 @@ function makeRenderer(
   const r = new NovelRenderer()
   r.getTimeController().setMode('virtual')
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-  internals(r).initialized = true
-  vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+  internals<Internals>(r).initialized = true
+  vi.spyOn(internals<Internals>(r), 'render').mockImplementation(() => {})
   r.setScenes(scenes)
   r.setMissingSceneResolver(resolver)
   return r
@@ -108,11 +98,13 @@ function reachChoice(r: NovelRenderer): {
   showCount: () => number
 } {
   const calls: unknown[][] = []
-  vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation((...args: unknown[]) => {
-    calls.push(args)
-  })
+  vi.spyOn(internals<Internals>(r).choiceOverlay, 'show').mockImplementation(
+    (...args: unknown[]) => {
+      calls.push(args)
+    }
+  )
   r.advance()
-  expect(internals(r).waitingForChoice).toBe(true)
+  expect(internals<Internals>(r).waitingForChoice).toBe(true)
   const confirm = calls[calls.length - 1][1] as (jump: string) => boolean | void
   return { confirm, showCount: () => calls.length }
 }
@@ -129,17 +121,17 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     const r = makeRenderer(() => d.promise)
     const { confirm } = reachChoice(r)
     const showLoadSpy = vi
-      .spyOn(internals(r).saveLoadOverlay, 'showLoad')
+      .spyOn(internals<Internals>(r).saveLoadOverlay, 'showLoad')
       .mockImplementation(() => {})
 
     confirm('far')
     // 選択肢は閉じたが、遷移先の到着までゲートが残る
-    expect(internals(r).waitingForChoice).toBe(false)
-    expect(internals(r).pendingEntry).not.toBeNull()
-    const indexBefore = internals(r).eventIndex
+    expect(internals<Internals>(r).waitingForChoice).toBe(false)
+    expect(internals<Internals>(r).pendingEntry).not.toBeNull()
+    const indexBefore = internals<Internals>(r).eventIndex
 
     r.advance()
-    expect(internals(r).eventIndex).toBe(indexBefore) // Choice を素通りしない
+    expect(internals<Internals>(r).eventIndex).toBe(indexBefore) // Choice を素通りしない
     expect(r.getCurrentSceneId()).toBe('hub')
     expect(r.quickSave()).toBe(false)
     r.goBack()
@@ -151,7 +143,7 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     await flush()
 
     expect(r.getCurrentSceneId()).toBe('far')
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
     expect(r.quickSave()).toBe(true)
   })
 
@@ -159,13 +151,13 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer(() => d.promise)
     const { confirm } = reachChoice(r)
-    const hideSpy = vi.spyOn(internals(r).choiceOverlay, 'hide')
+    const hideSpy = vi.spyOn(internals<Internals>(r).choiceOverlay, 'hide')
 
     const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'far' }))
     confirm('far')
     r.advance()
 
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
     expect(hideSpy).not.toHaveBeenCalled()
     expect(r.getCurrentSceneId()).toBe('hub')
 
@@ -188,7 +180,7 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     await expect(first).resolves.toEqual({ status: 'superseded' })
     await expect(second).resolves.toEqual({ status: 'entered', sceneId: 'other' })
     expect(r.getCurrentSceneId()).toBe('other')
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 
   it('後勝ち: 復元（遅延ロード）の後の startFrom で、古い復元は適用されず、ゲートも下りる', async () => {
@@ -196,9 +188,9 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     const r = makeRenderer(() => d.promise)
 
     const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'far' }))
-    expect(internals(r).pendingEntry).not.toBeNull()
+    expect(internals<Internals>(r).pendingEntry).not.toBeNull()
     r.startFrom({ sceneId: 'hub' })
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
 
     d.resolve([HUB, FAR])
     await expect(restoring).resolves.toEqual({ status: 'superseded' })
@@ -214,23 +206,23 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     await flush()
 
     expect(showCount()).toBe(2)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
     r.advance()
     expect(r.getCurrentSceneId()).toBe('hub')
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
   })
 
   it('resolver が無く遷移先が確実に無いときは、選択肢を閉じず（再表示もせず）その場に留める', () => {
     const r = makeRenderer(null)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const hideSpy = vi.spyOn(internals(r).choiceOverlay, 'hide')
+    const hideSpy = vi.spyOn(internals<Internals>(r).choiceOverlay, 'hide')
     const { confirm, showCount } = reachChoice(r)
 
     expect(confirm('nowhere')).toBe(false)
 
     expect(showCount()).toBe(1)
     expect(hideSpy).not.toHaveBeenCalled()
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
     r.advance()
     expect(r.getCurrentSceneId()).toBe('hub')
   })
@@ -248,7 +240,7 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
     await expect(restoring).resolves.toEqual({ status: 'failed', reason: 'not-found' })
 
     expect(showCount()).toBe(2)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
 
     dFar.resolve([HUB, FAR])
     await flush()
@@ -261,13 +253,13 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
       scene('b', [narration('b1')]),
     ])
     r.advance() // Jump に到達し、遷移を予約（タイマーは未発火）
-    expect(internals(r).jumpState).toBe('pending')
-    const waiting = internals(r).pendingEntry!.promise
+    expect(internals<Internals>(r).jumpState).toBe('pending')
+    const waiting = internals<Internals>(r).pendingEntry!.promise
 
     void r.restoreSnapshot(craftSnapshot({ sceneId: 'a' })) // 同期で復元（予約中の Jump を取り消す）
 
     await expect(waiting).resolves.toEqual({ status: 'superseded' })
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 
   it('予約中の [ジャンプ:] が発火して入場できたとき、待っている側の Promise は entered で解決される', async () => {
@@ -276,12 +268,12 @@ describe('NovelRenderer 入場中ゲートと単一入口 (#734 PR1)', () => {
       scene('b', [narration('b1')]),
     ])
     r.advance()
-    const waiting = internals(r).pendingEntry!.promise
+    const waiting = internals<Internals>(r).pendingEntry!.promise
 
     r.getTimeController().tick(1)
 
     await expect(waiting).resolves.toEqual({ status: 'entered', sceneId: 'b' })
     expect(r.getCurrentSceneId()).toBe('b')
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 })

@@ -10,7 +10,8 @@
  * ライブ blink に委ねる（CLAUDE.md ルール7）。
  */
 import { describe, it, expect } from 'vitest'
-import { getTextEvent, resolveCharacterFit } from './NovelRenderer'
+import { resolveCharacterFit } from './NovelRenderer'
+import { getTextEvent } from './eventCursor'
 import type { Event } from '../types'
 
 function dialog(character: string, fit?: boolean): Event {

@@ -22,16 +22,13 @@
  *     → これらは書かない。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import {
-  NovelRenderer,
-  NOVEL_SCRIM_ALPHA,
-  NOVEL_SCRIM_VISIBILITY_FADE_MS,
-  getTextEvent,
-} from './NovelRenderer'
+import { NovelRenderer, NOVEL_SCRIM_ALPHA, NOVEL_SCRIM_VISIBILITY_FADE_MS } from './NovelRenderer'
+import { getTextEvent } from './eventCursor'
 import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 /**
  * 役割配置の期待 x を定数から導出する (#286 follow-up S1)。
@@ -75,10 +72,7 @@ function layerOf(r: NovelRenderer): CharacterLayerObservable {
   return (r as unknown as { characterLayer: CharacterLayerObservable }).characterLayer
 }
 
-interface RendererInternals {
-  advance(): void
-  eventIndex: number
-  textIndex: number
+interface LocalInternals extends RendererInternals {
   dialogBox: {
     isNovelMode: boolean
     novelMaxLinesPerPage(): number
@@ -88,13 +82,8 @@ interface RendererInternals {
   novelPagesCache: { eventIndex: number; pages: unknown[] } | null
   getNovelPages(textEvt: { text: string[] }): Array<{ text: string; lineCount: number }>
   currentPageCount(textEvt: { text: string[] }): number
-  isNovelStyle(): boolean
   /** 本文色の決定論的導出 (#305)。話者 → 色 number（主人公=暖アイボリー / 住人=白）。 */
   resolveBodyTextColor(speaker: string | null): number
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 interface NovelScrimInternals {
@@ -147,8 +136,8 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   it('22: dialog_style 未指定は adv 相当（isNovelStyle=false・DialogBox も adv）', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('s', [narration('行1', '行2')])])
-    expect(internals(r).isNovelStyle()).toBe(false)
-    expect(internals(r).dialogBox.isNovelMode).toBe(false)
+    expect(internals<LocalInternals>(r).isNovelStyle()).toBe(false)
+    expect(internals<LocalInternals>(r).dialogBox.isNovelMode).toBe(false)
   })
 
   // 23: 未知値（'toheart' 等）は adv にフォールバックする（novel 判定は 'novel' 厳密一致）。
@@ -156,8 +145,8 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('toheart')
     r.setScenes([scene('s', [narration('行1')])])
-    expect(internals(r).isNovelStyle()).toBe(false)
-    expect(internals(r).dialogBox.isNovelMode).toBe(false)
+    expect(internals<LocalInternals>(r).isNovelStyle()).toBe(false)
+    expect(internals<LocalInternals>(r).dialogBox.isNovelMode).toBe(false)
   })
 
   // 24: novel 指定で DialogBox が novel モードになる。
@@ -165,8 +154,8 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration('行1')])])
-    expect(internals(r).isNovelStyle()).toBe(true)
-    expect(internals(r).dialogBox.isNovelMode).toBe(true)
+    expect(internals<LocalInternals>(r).isNovelStyle()).toBe(true)
+    expect(internals<LocalInternals>(r).dialogBox.isNovelMode).toBe(true)
   })
 
   // 25: novel 文単位送り (#292)。1 ページ内は sentenceIndex が 1 文ずつ前進し、ページ最後の文の
@@ -180,7 +169,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(pageOverflow), narration('次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     expect(i.dialogBox.novelMaxLinesPerPage()).toBe(cap) // 前提を固定（実測 cap）
     expect(i.currentPageCount({ text: [pageOverflow] })).toBe(2) // ページ [cap, 1]
 
@@ -206,7 +195,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     r.setDialogStyle('novel')
     // narration の text は parser 正準化後の姿（`--` → `──`）を直接与える。
     r.setScenes([scene('s', [narration('です。──それと、'), narration('次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const pages = i.getNovelPages({ text: ['です。──それと、'] }) as unknown as Array<{
       sentences: string[]
     }>
@@ -230,7 +219,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(line), narration('次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const pages = i.getNovelPages({ text: [line] }) as unknown as Array<{ sentences: string[] }>
     expect(pages).toHaveLength(1)
     expect(pages[0].sentences).toEqual(['「人がうらやましい」', '──この胸を、誰に聞こう。'])
@@ -247,7 +236,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     const textEvt = { text: [THREE_PAGE_TEXT] }
-    expect(internals(r).currentPageCount(textEvt)).toBe(3)
+    expect(internals<LocalInternals>(r).currentPageCount(textEvt)).toBe(3)
   })
 
   // 25c: setFontSize（per-game font_size #283 補遺）が DialogBox に伝播し、cap（1 ページ行数）が変わる。
@@ -256,7 +245,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration('行1')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const capDefault = i.dialogBox.novelMaxLinesPerPage()
     expect(capDefault).toBe(NOVEL_CAP) // 既定 40 の cap
 
@@ -274,7 +263,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     // dialog_style 未指定 = adv
     r.setScenes([scene('s', [narration('行1', '行2', '行3'), narration('次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // adv の総ページ数 = text 行数（改頁しない）
     expect(i.currentPageCount({ text: ['行1', '行2', '行3'] })).toBe(3)
 
@@ -291,10 +280,10 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
   it('27: 空 text は 1 つの空ページになる（pageCount=1・空文字）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    const pages = internals(r).getNovelPages({ text: [''] })
+    const pages = internals<LocalInternals>(r).getNovelPages({ text: [''] })
     expect(pages).toHaveLength(1)
     expect(pages[0].text).toBe('')
-    expect(internals(r).currentPageCount({ text: [''] })).toBe(1)
+    expect(internals<LocalInternals>(r).currentPageCount({ text: [''] })).toBe(1)
   })
 
   // 28: 改頁キャッシュは eventIndex 単位。スタイル切替（novel→adv）で派生キャッシュが破棄される。
@@ -302,7 +291,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // getNovelPages を一度呼んでキャッシュを温める
     i.getNovelPages({ text: [THREE_PAGE_TEXT] })
     expect(i.novelPagesCache).not.toBeNull()
@@ -317,7 +306,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const textEvt = { text: [THREE_PAGE_TEXT] }
     const first = i.getNovelPages(textEvt)
     const second = i.getNovelPages(textEvt)
@@ -331,7 +320,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     i.advance()
     i.advance()
     i.advance()
@@ -344,7 +333,7 @@ describe('NovelRenderer dialog_style: novel (#283)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
 
     r.setDialogStyle('adv')
     expect(i.dialogBox.isNovelMode).toBe(false)
@@ -402,7 +391,7 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(THREE_PAGE_TEXT)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     i.advance() // 文 index 1 へ（同一ページ・同一イベント）
     expect(r.getSnapshot()).toMatchObject({ textIndex: 0, sentenceIndex: 1 })
     r.goBack()
@@ -418,7 +407,7 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(pageOverflow)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // ページ 0 の cap 文を送り切ると（cap 回 advance）ページ 1 の先頭文へ。
     for (let k = 0; k < cap; k++) i.advance()
     expect(r.getSnapshot()).toMatchObject({ textIndex: 1, sentenceIndex: 0 })
@@ -435,7 +424,7 @@ describe('NovelRenderer novel ページ index の永続化跨ぎ保持 (#283)', 
     // 2 イベント: 1 つ目 2 文（cap=6 → 1 ページ・2 文）、2 つ目 1 文。
     // 文単位送り (#292) では 1 つ目イベントを次イベントへ抜けるのに 2 advance（文 0→1→次イベント）必要。
     r.setScenes([scene('s', [narration('甲。乙。'), narration('丙。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     i.advance() // 文 0 → 1（同一イベント・同一ページ）
     i.advance() // ページ最後の文 → 次イベントへ
     const afterFirst = r.getSnapshot()
@@ -466,7 +455,7 @@ describe('NovelRenderer novel 役割配置 (#286)', () => {
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     // 1 つ目の Dialog（せお = 質問役 = 左）
     expect(layerOf(r).getSpritePosition('せお')!.x).toBe(800 * 0.25)
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     // 2 つ目の Dialog（ひな = 住人 = 回答役 = 右）
     expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(800 * 0.75)
   })
@@ -486,7 +475,7 @@ describe('NovelRenderer novel 役割配置 (#286)', () => {
     r.setProtagonist('せお')
     r.setScenes([scene('s', [dialog('せお', 'やあ。'), dialog('ひな', 'どうも。')])])
     expect(layerOf(r).getSpritePosition('せお')!.x).toBe(800 * 0.5)
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(layerOf(r).getSpritePosition('ひな')!.x).toBe(800 * 0.5)
   })
 
@@ -515,7 +504,7 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
     // 初回（せお登場）は話者交代ではない → nudge なし
     expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     // せお → ひな の交代 → ひな に nudge
     expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
     expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
@@ -530,7 +519,7 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
     r.setProtagonist('せお')
     r.setSpeakerNudge(true) // #382: nudge は opt-in。同一話者が抑制要因だと縛るため nudge を有効化する。
     r.setScenes([scene('s', [dialog('せお', '一文目。'), dialog('せお', '二文目。')])])
-    internals(r).advance() // せお → せお（交代なし）
+    internals<LocalInternals>(r).advance() // せお → せお（交代なし）
     expect(layerOf(r).getPoseNudgeState('せお')).toBeNull()
   })
 
@@ -542,7 +531,7 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
     r.setProtagonist('せお')
     r.setSpeakerNudge(true) // #382: nudge を有効化しても adv の novel-only ゲートで非発火だと縛る。
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
   })
 
@@ -554,8 +543,8 @@ describe('NovelRenderer novel 話者交代ポーズ変化 (#286)', () => {
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setScenes([scene('s', [dialog('せお', 'a。'), dialog('ひな', 'b。'), dialog('せお', 'c。')])])
-    internals(r).advance()
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(warn).not.toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
   })
@@ -590,7 +579,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     r.setScenes([
       scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a1。'), dialog('ひな', 'a2。')]),
     ])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     i.advance() // event1 ひな（せお→ひな の交代 = nudge）
     i.advance() // event2 ひな（ひな→ひな 同一話者）
     expect(r.getSnapshot().eventIndex).toBe(2)
@@ -636,7 +625,7 @@ describe('NovelRenderer novel 復元経路の役割配置と誤 nudge 防止 (#2
     r.setScenes([
       scene('s', [dialog('せお', 'q1。'), dialog('ひな', 'a。'), dialog('せお', 'q2。')]),
     ])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     i.advance() // event1 ひな（せお→ひな の交代）
     i.advance() // event2 せお（ひな→せお の交代）。この時点で lastSpeaker=せお
     expect(r.getSnapshot().eventIndex).toBe(2)
@@ -707,7 +696,7 @@ describe('NovelRenderer novel skipMode の nudge 抑制 (#286 follow-up S2)', ()
     r.setScenes([scene('s', [dialog('せお', 'q。'), dialog('ひな', 'a。')])])
     // せお（質問役=左）が表示され、skip でも役割 x は当たる。
     expect(layerOf(r).getSpritePosition('せお')!.x).toBe(QUESTIONER_X)
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     // せお→ひな の話者交代だが skipMode 中なので nudge は発火しない。
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
     // 役割 x（住人=右）は skip でも当たる。
@@ -751,7 +740,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setProtagonist('せお')
     r.setSpeakerNudge(false)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     // せお→ひな の交代だが speaker_nudge=false なので nudge は発火しない。
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
     // nudge を抑制しても scrim 退避は独立に維持される（AND されるのは nudgePose だけ）。
@@ -767,7 +756,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setProtagonist('せお')
     // setSpeakerNudge を呼ばない = フィールド既定 false（非発火・opt-in）。
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     // せお→ひな の交代だが既定オフなので nudge は発火しない。
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
     // nudge を抑制しても scrim 退避は独立に維持される（AND されるのは nudgePose だけ）。
@@ -781,7 +770,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setProtagonist('せお')
     r.setSpeakerNudge(null)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
   })
 
@@ -797,7 +786,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setProtagonist('せお')
     r.setSpeakerNudge(true)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).not.toBeNull()
     expect(layerOf(r).getPoseNudgeState('ひな')!.active).toBe(true)
     expect(retreat).toHaveBeenCalled()
@@ -815,7 +804,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setSpeakerNudge(true)
     r.setSkipMode(true)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
   })
 
@@ -828,8 +817,8 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setProtagonist('せお')
     r.setSpeakerNudge(false)
     r.setScenes([scene('s', [dialog('せお', 'a。'), dialog('ひな', 'b。'), dialog('せお', 'c。')])])
-    internals(r).advance()
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(warn).not.toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
   })
@@ -843,7 +832,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
     r.setProtagonist('せお')
     r.setSpeakerNudge('false' as unknown as boolean)
     r.setScenes([scene('s', [dialog('せお', '質問。'), dialog('ひな', '回答。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(layerOf(r).getPoseNudgeState('ひな')).toBeNull()
   })
 })
@@ -881,7 +870,7 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     r.setScenes([
       scene('s', [dialog('カコ', '最初の文。'), 'PageBreak', dialog('カコ', '続きの文。')]),
     ])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     expect(i.isNovelStyle()).toBe(true)
     // 1 つ目 Dialog は 1 ページ・1 文。
     expect(i.currentPageCount({ text: ['最初の文。'] })).toBe(1)
@@ -910,7 +899,7 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [dialog('カコ', 'A。'), 'PageBreak', dialog('カコ', 'B。')])])
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(warn).not.toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
   })
@@ -923,7 +912,7 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     r.setDialogStyle('novel')
     // cap 内（NOVEL_CAP>=2 前提）に 2 文 → 1 ページ 2 文。
     r.setScenes([scene('s', [dialog('カコ', '最初の文。続きの文。'), dialog('トモ', '次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     expect(i.currentPageCount({ text: ['最初の文。続きの文。'] })).toBe(1) // 1 ページ
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
     // 同一ページ内を 1 文送る（PageBreak が無いので改頁・次イベントには行かない）。
@@ -938,7 +927,7 @@ describe('NovelRenderer 手動改頁 PageBreak (#292 Phase 2)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [dialog('カコ', '最初の文。'), dialog('トモ', '次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const clearText = vi.spyOn(i.dialogBox, 'clearText')
 
     i.advance()
@@ -1041,36 +1030,36 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
   })
 
   it('novel の住人（非主人公）は純白に解決する', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
-    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('ひな')).toBe(WHITE)
   })
 
   it('protagonist 未指定なら novel でも全員白（色差しない・後方互換）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
-    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('ひな')).toBe(WHITE)
   })
 
   it('adv では protagonist を設定しても色差しない（全員白・adv 非回帰）', () => {
     const r = new NovelRenderer()
     // dialog_style 未指定 = adv
     r.setProtagonist('せお')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
-    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('ひな')).toBe(WHITE)
   })
 
   it('話者不明（null = ナレ）は白に解決する', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
-    expect(internals(r).resolveBodyTextColor(null)).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor(null)).toBe(WHITE)
   })
 
   it('setProtagonistTextColor で主人公本文色を per-game 上書きできる', () => {
@@ -1078,9 +1067,9 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setProtagonistTextColor('#112233')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(0x112233)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(0x112233)
     // 住人は上書きの影響を受けず白のまま。
-    expect(internals(r).resolveBodyTextColor('ひな')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('ひな')).toBe(WHITE)
   })
 
   it('setProtagonistTextColor(null) は既定 #FFF0D8 に倒す', () => {
@@ -1089,7 +1078,7 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
     r.setProtagonist('せお')
     r.setProtagonistTextColor('#112233')
     r.setProtagonistTextColor(null)
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
   })
 
   it('不正な色指定は既定 #FFF0D8 にフォールバックする', () => {
@@ -1097,7 +1086,7 @@ describe('NovelRenderer 主人公本文色 (#305)', () => {
     r.setDialogStyle('novel')
     r.setProtagonist('せお')
     r.setProtagonistTextColor('not-a-color')
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
   })
 })
 
@@ -1121,35 +1110,35 @@ describe('NovelRenderer 2窓モード本文色解決 (#444)', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
     r.setSplitLayout(true)
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(WHITE)
   })
 
   it('NR-2: 同条件で不一致話者（住人）は水色 0x9ad4e8 に解決する', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
     r.setSplitLayout(true)
-    expect(internals(r).resolveBodyTextColor('ひな')).toBe(OPPONENT_COLOR)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('ひな')).toBe(OPPONENT_COLOR)
   })
 
   it('NR-3: 同条件で話者不明（null）は自分側に倒して白に解決する', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
     r.setSplitLayout(true)
-    expect(internals(r).resolveBodyTextColor(null)).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor(null)).toBe(WHITE)
   })
 
   it('NR-16: 空文字話者は null と異なり相手側に倒して水色に解決する', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
     r.setSplitLayout(true)
-    expect(internals(r).resolveBodyTextColor('')).toBe(OPPONENT_COLOR)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('')).toBe(OPPONENT_COLOR)
   })
 
   it('NR-5: 非破壊 — protagonist 未指定では split_layout:true でも2窓不成立、resolveBodyTextColor は #442 既存の白のまま', () => {
     const r = new NovelRenderer()
     r.setSplitLayout(true)
     expect(dualWindowInternals(r).isDualWindowMode()).toBe(false)
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(WHITE)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(WHITE)
   })
 
   it('NR-6: 非破壊 — split_layout:false では protagonist 指定でも2窓不成立、resolveBodyTextColor は #305 のまま変化しない（novel + 主人公一致 = 暖アイボリー）', () => {
@@ -1158,14 +1147,14 @@ describe('NovelRenderer 2窓モード本文色解決 (#444)', () => {
     r.setProtagonist('せお')
     r.setSplitLayout(false)
     expect(dualWindowInternals(r).isDualWindowMode()).toBe(false)
-    expect(internals(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せお')).toBe(FFF0D8)
   })
 
   it('NR-14: 話者名の部分一致（せお vs せおちゃん）は不一致（相手側）扱いになる厳密 === 比較', () => {
     const r = new NovelRenderer()
     r.setProtagonist('せお')
     r.setSplitLayout(true)
-    expect(internals(r).resolveBodyTextColor('せおちゃん')).toBe(OPPONENT_COLOR)
+    expect(internals<LocalInternals>(r).resolveBodyTextColor('せおちゃん')).toBe(OPPONENT_COLOR)
   })
 })
 
@@ -1289,7 +1278,7 @@ describe('NovelRenderer novel: 余韻横棒 `──` が文送り境界として
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(text), narration('次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // cap 大・各文 1 行（jsdom）→ 2 文が 1 ページに収まる。
     expect(i.currentPageCount({ text: [text] })).toBe(1)
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
@@ -1307,6 +1296,8 @@ describe('NovelRenderer novel: 余韻横棒 `──` が文送り境界として
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
     r.setScenes([scene('s', [narration(text)])])
-    expect(internals(r).currentPageCount({ text: [text] })).toBe(Math.ceil(n / NOVEL_CAP))
+    expect(internals<LocalInternals>(r).currentPageCount({ text: [text] })).toBe(
+      Math.ceil(n / NOVEL_CAP)
+    )
   })
 })
