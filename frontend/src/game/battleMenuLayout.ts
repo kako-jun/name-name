@@ -16,12 +16,14 @@ export const MENU_PADDING_X = 12
 export const MENU_PADDING_Y = 12
 /** 一覧窓の最大の見える行数。それ以上は▲▼でスクロールする（絵を覆う範囲を抑える） */
 export const MENU_MAX_ROWS = 4
+/** 一覧窓がコマンド窓の外形から四方にはみ出す量（枠線の太さ・角丸の余白。窓の縁にコマンド窓の背景が見えないように） */
+export const MENU_COMMAND_OVERHANG = 4
 /** 行の左に置く手のぶんの余白 */
 export const MENU_HAND_SLOT = 34
 /** 名前と消費の間の最小の隙間 */
 export const MENU_COST_GAP = 16
-/** 名前が最低でも見えるようにする全角の文字数（5 文字 + 省略の「…」）。窓の幅の下限を決める */
-export const MENU_NAME_MIN_CHARS = 6
+/** 名前が全部見えるようにする全角の文字数（8 文字以下の名前は省略されない。9 文字以上は 7 文字 + 「…」）。窓の幅の下限を決める */
+export const MENU_NAME_MIN_CHARS = 8
 /** 窓の上端・下端のスクロール帯の高さ（上下の余白に収める。行の決定領域には食い込まない。タップで 1 行ずつ） */
 export const MENU_SCROLL_STRIP = MENU_PADDING_Y
 
@@ -90,7 +92,8 @@ export interface ListWindowRect {
 /** 一覧窓の矩形。幅は最長の行に合わせ、画面の右端（余白を除く）を越えない */
 export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[]): ListWindowRect {
   const visibleRows = Math.max(1, Math.min(rows.length, listMaxRows(g)))
-  const maxW = Math.max(0, g.width - SIDE_PADDING - g.command.x)
+  const x = Math.max(0, g.command.x - MENU_COMMAND_OVERHANG)
+  const maxW = Math.max(0, g.width - (SIDE_PADDING - MENU_COMMAND_OVERHANG) - x)
   // 幅はコマンド窓と同じを基本にする（狭いと窓の外にコマンドの文字がはみ出して見え、広いと味方のステータス欄や絵を覆う）。
   // ただし名前が最低 MENU_NAME_MIN_CHARS 文字ぶん読める幅を下限にする（縦長の画面ではコマンド窓が狭く、消費を引くと名前が残らない）。
   // この場合はステータス欄に少し重なる。入りきらない名前は buildMenuView が省略する
@@ -104,12 +107,16 @@ export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[])
     costW +
     MENU_COST_GAP +
     MENU_NAME_MIN_CHARS * MENU_FONT_SIZE
-  const w = Math.min(Math.max(g.command.w, need), maxW)
-  // 行が少なくてもコマンド窓全体を覆う高さにする（窓の上にコマンドの文字が顔を出さない。余白は下側）
-  const h = Math.max(visibleRows * MENU_ROW_HEIGHT + MENU_PADDING_Y * 2, g.command.h)
-  const bottom = g.command.y + g.command.h
+  const w = Math.min(Math.max(g.command.w + MENU_COMMAND_OVERHANG * 2, need), maxW)
+  // 行が少なくてもコマンド窓の枠の外形（枠線・余白ぶん上下左右に MENU_COMMAND_OVERHANG はみ出す）全体を覆う高さにする。
+  // 窓の上にコマンドの文字や背景が顔を出さない。余白は下側
+  const h = Math.max(
+    visibleRows * MENU_ROW_HEIGHT + MENU_PADDING_Y * 2,
+    g.command.h + MENU_COMMAND_OVERHANG * 2
+  )
+  const bottom = Math.min(g.height, g.command.y + g.command.h + MENU_COMMAND_OVERHANG)
   return {
-    rect: { x: g.command.x, y: Math.max(0, bottom - h), w, h },
+    rect: { x, y: Math.max(0, bottom - h), w, h },
     visibleRows,
   }
 }

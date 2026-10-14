@@ -16,6 +16,7 @@ import {
   HAND_HEIGHT,
   HAND_PIXEL,
   HAND_WIDTH,
+  MENU_COMMAND_OVERHANG,
   MENU_MAX_ROWS,
   MENU_PADDING_Y,
   MENU_ROW_HEIGHT,
@@ -145,7 +146,9 @@ describe('画面サイズ総当たり: 一覧窓・手・当たり判定が画�
               const list = view[0]
               if (list.type !== 'list') throw new Error('list expected')
               expect(inside(list.rect, w, h)).toBe(true)
-              expect(list.rect.y + list.rect.h).toBeLessThanOrEqual(g.command.y + g.command.h + EPS)
+              expect(list.rect.y + list.rect.h).toBeLessThanOrEqual(
+                g.command.y + g.command.h + MENU_COMMAND_OVERHANG + EPS
+              )
               expect(list.rows.length).toBeGreaterThanOrEqual(1)
               expect(list.rows.length).toBeLessThanOrEqual(ctx.maxRows)
               expect(list.rows.some((r) => r.selected)).toBe(true)
@@ -187,7 +190,9 @@ describe('computeListWindowRect', () => {
     const rows = buildMenuRows('spell', manySpells(2), ent('a'))
     const small = computeListWindowRect(g, rows)
     expect(small.visibleRows).toBe(2)
-    expect(small.rect.h).toBe(Math.max(2 * MENU_ROW_HEIGHT + 2 * MENU_PADDING_Y, g.command.h))
+    expect(small.rect.h).toBe(
+      Math.max(2 * MENU_ROW_HEIGHT + 2 * MENU_PADDING_Y, g.command.h + 2 * MENU_COMMAND_OVERHANG)
+    )
     const big = computeListWindowRect(g, buildMenuRows('spell', manySpells(99), ent('a')))
     expect(big.visibleRows).toBe(listMaxRows(g))
   })
@@ -304,10 +309,13 @@ describe('名前の読みやすさ（画面サイズ総当たり）', () => {
     ['ちゆのいのり', 4],
     ['メテオ', 20],
     ['ブリザドラ', 12], // 消費が 2 桁
+    ['はいぽーしょん', 5],
+    ['えりくさー', 7],
+    ['しらさぎのおまもり', 9], // 9 文字は 7 文字 + …
   ] as const
 
   for (const [w, h] of SIZES) {
-    it(`${w}x${h}: 名前は最低 5 文字（短い名前は全部）見え、互いに区別できる`, () => {
+    it(`${w}x${h}: 名前は 8 文字以下なら全部、それより長くても 7 文字見え、互いに区別できる`, () => {
       const g = geometry(w, h, 4, 3)
       const spells: BattleSpellEntry[] = NAMES.map(([name, mp], i) => ({
         id: `n${i}`,
@@ -337,7 +345,8 @@ describe('名前の読みやすさ（画面サイズ総当たり）', () => {
       const labels = [...seen.entries()].sort((x, y) => x[0] - y[0]).map(([, l]) => l)
       NAMES.forEach(([name], i) => {
         const shown = labels[i].replace('…', '')
-        expect(shown.length).toBeGreaterThanOrEqual(Math.min(name.length, 5))
+        expect(shown.length).toBeGreaterThanOrEqual(Math.min(name.length, 7))
+        if (name.length <= 8) expect(labels[i]).toBe(name) // 8 文字以下は省略されない
         expect(name.startsWith(shown)).toBe(true)
       })
       expect(new Set(labels).size).toBe(NAMES.length)
@@ -351,8 +360,15 @@ describe('コマンド窓を覆う高さ', () => {
       const g = geometry(w, h, 4, 3)
       for (const n of [1, 3]) {
         const r = computeListWindowRect(g, buildMenuRows('item', manySpells(n), ent('a'))).rect
-        expect(r.y).toBeLessThanOrEqual(g.command.y + EPS)
-        expect(r.y + r.h).toBeGreaterThanOrEqual(g.command.y + g.command.h - EPS)
+        // コマンド窓の外形（枠線ぶんまで）を上下左右とも覆う
+        expect(r.y).toBeLessThanOrEqual(g.command.y - MENU_COMMAND_OVERHANG + EPS)
+        expect(r.y + r.h).toBeGreaterThanOrEqual(
+          g.command.y + g.command.h + MENU_COMMAND_OVERHANG - EPS
+        )
+        expect(r.x).toBeLessThanOrEqual(g.command.x - MENU_COMMAND_OVERHANG + EPS)
+        expect(r.x + r.w).toBeGreaterThanOrEqual(
+          g.command.x + g.command.w + MENU_COMMAND_OVERHANG - EPS
+        )
         expect(inside(r, w, h)).toBe(true)
       }
     }
