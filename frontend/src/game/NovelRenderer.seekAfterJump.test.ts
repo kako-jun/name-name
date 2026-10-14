@@ -33,6 +33,8 @@ interface Internals {
   waitingForChoice: boolean
   storyEnded: boolean
   eventIndex: number
+  textIndex: number
+  sentenceIndex: number
   history: Array<{ sceneId: string | null }>
   resolvedEvents: Event[]
   displayEventCount: number
