@@ -102,6 +102,7 @@ Worker はパースしない。GitHub から Markdown を取得してそのま�
 `emitMarkdown` の await 中にタブが切り替わった編集は、`rawMarkdown` には反映せず、編集した文書の下書きとして退避する。別文書の保留中の下書きが残ったまま新しい下書きを積むときは、その文書の基準内容が分からないので、常に下書きとして先に退避する。
 切替後に emit が失敗しても、切替先の表示を旧文書に戻さない（`setDoc(prev)` は編集した文書が表示中のときだけ）。
 動画書き出しのモーダルを開いている間は、保存中と同じくタブ切替を無効にする（モード・エディタタブを切り替えるとモーダルはアンマウントされるので、開いている扱いも閉じる。切替先のロード中の `inert` でモーダルが操作不能になるのを避けるため）。
+書き出しの**実行中**（録画中）は、`SaveDiscardButtons` のモード切替（`modeChangeDisabled`）と header のエディタタブ（ノベル／RPG）も無効にする（disabled・薄い表示・`onClick` の早期 return）。切り替えるとプレビューのレンダラが破棄されて録画が壊れるため (#797)。完了・失敗・中止・タイムアウトの後は戻る。
 プロジェクトの切替は App が `key={projectName}` で再マウントする前提で、エディタ内の初期化処理は保険。
 `rawMarkdown` は parse 完了と中断判定の後に設定する（設定からコミットまでの間のタブ切替で、切替先のキーに旧文書の本文を積まないため）。
 一覧も失敗した場合は、先行取得の失敗を使い回して同じ取得を繰り返さない（トーストは1回）。プロジェクトが変わったら一覧・開くファイル・doc の所属を初期化して取り直す。
@@ -857,7 +858,7 @@ AudioManager.enableCapture ─┘
 2. `renderer.onEnd` が発火（全イベント完走、`endSceneId` が最終シーンだったケース）
 
 stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob を確定する。BGM 既定フェード 1000ms を完全に録音するための値。
-新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間と、線形に連結したシーン間（エントリ文書でシーンが続く並び）の両方で効く。開始シーンがエントリの線形ストリーム上にあれば、`startFrom` はそのシーンの events だけでなくストリーム全体をシーン先頭から流し、シーン境界の `SceneTransition` を通過するたびに入ったシーンの ID で `onSceneChange` を発火する（#777、ADR 0003「#777 での追記」）。作者の `[場面転換]`（シーン内）は境界ではない。ジャンプ・選択肢で入ったシーンはそのシーンの events だけが流れるので、その先で線形に続くシーンへは進まない。末尾が選択肢のシーンは、オート再生が選択肢を選ばないため終端に達しない。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
+新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間と、線形に連結したシーン間（エントリ文書でシーンが続く並び）の両方で効く。開始シーンがエントリの線形ストリーム上にあれば、`startFrom` はそのシーンの events だけでなくストリーム全体をシーン先頭から流し、シーン境界の `SceneTransition` を通過するたびに入ったシーンの ID で `onSceneChange` を発火する（#777、ADR 0003「#777 での追記」）。作者の `[場面転換]`（シーン内）は境界ではない。ジャンプ・選択肢で入ったシーンはそのシーンの events だけが流れるので、その先で線形に続くシーンへは進まない。選択肢・中止・停滞は下記「書き出しの終わり方」で扱う。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
 
 ### VideoExporter が依存する公開 API
 
@@ -868,6 +869,8 @@ stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob 
 | `NovelRenderer.startFrom({ sceneId, flags })` | 新規開始。BGM・背景・flags・`consecutiveJumps` を持ち越さない。結果が `entered` 以外なら export を reject し、cleanup を通す |
 | `NovelRenderer.isAutoMode()` / `setAutoMode()` | 書き出し中だけオートモードを入れ、cleanup で書き出し前の値へ戻す |
 | `NovelRenderer.getSnapshot()` | `resolveExportFlags` がプレビューの flags を複製して取り出す（引き継ぎ ON のときだけ） |
+| `NovelRenderer.getExportProgress()` | 停滞検出用の軽量な進行状況（位置の署名・`[待機: N]` の N・終わりのある動画の再生中か）(#780) |
+| `NovelRenderer.getPendingChoice()` / `selectPendingChoice(jump)` | 選択肢待ちの遷移先とロック状態の取得、ロックされていない option の確定（`ChoiceOverlay.selectByJump` 経由で、クリックと同じ確定経路 `confirmChoiceJump` と確定音を通る）(#780) |
 | `NovelRenderer.prepareVideosForExport()` | 録画開始前に動画レイヤを頭出しする |
 | `NovelRenderer.waitForBackgroundLoad()` | 開始シーンの背景ロード完了を録画開始前に待つ（新規開始は背景が地色から始まるため） |
 | `NovelRenderer.setOnSceneChange()` / `takeOnSceneChange()`                                          | 終端検出用のリスナ占有と退避復元                                                   |
@@ -879,10 +882,30 @@ UI 側からは `NovelRenderer.getCurrentSceneId()` / `getAllSceneIds()` も使�
 
 `take*` 系は破壊的 getter（取り出し後 null クリア）。VideoExporter 内部で同 renderer に対する並行起動を防ぐため、モジュールスコープで `isExporting` フラグも持つ（HMR で再ロードされた場合のみリセットされる。録画中はソースコードを触らないこと）。
 
+### 書き出しの終わり方 (#780)
+
+録画開始後、`EXPORT_POLL_MS`（250ms）ごとに選択肢と進行位置を見張る。判定の計算は純粋関数 `videoExportPolicy.ts`（`isSceneInExportRange` / `pickAutoChoice`（`ExportChoiceMemory` で辺を記憶）/ `computeStallLimitMs` / `exportProgressSignature`）に置き、`exportVideo` が配線する。
+
+| 状況 | 動作 | `endReason` |
+| --- | --- | --- |
+| 終了シーンを抜けた／全イベント完走 | 余韻録音（`postRollMs`）のあと停止して保存 | `scene-end` / `story-end` |
+| 選択肢に到達し、範囲内で**まだ選んでいない辺**（選択肢〔元の Choice イベントの同一性。`[条件:]` の再展開や入場経路が変わっても同じ〕× 遷移先）のロックされていない遷移先がある | 選択肢を `EXPORT_AUTO_CHOICE_DISPLAY_MS`（1.5 秒）映してから、先頭のものを確定音つき（クリックと同じ経路）で自動選択して続行。辺が全部選び済みでも、その先（見た選択肢と、`[ジャンプ:]`・線形の続きなど選択肢を経由しない遷移をたどって）に未選択の範囲内の辺へ行けるものは選ぶので、ハブ→サブメニュー→各ルート→ハブの構成でもサブメニューの全ルートを回る（最大 `EXPORT_MAX_AUTO_CHOICES`=50 回は保険） | （続行） |
+| 選択肢に到達し、範囲内の遷移先が無い／辺がすべて選び済みで先にも未選択の辺が無い（または自動選択が上限） | 選択肢を `EXPORT_CHOICE_HOLD_MS`（3 秒）映してから終端扱いで停止・保存 | `choice-end` |
+| 本文・選択肢が `EXPORT_STALL_TIMEOUT_MS`（60 秒）進まない | タイムアウトで停止・保存。理由をモーダルに表示。`[待機: N]` 中は N ms を加えた長さ、終わりのある（loop でない）動画の再生中は停滞とみなさない。選択肢を受け付けられないまま固まった場合もここで終わる | `stalled` |
+| 中止（モーダルの「中止」） | `AbortSignal` で録画を止めて**破棄**（ファイルは保存しない）。`ExportAbortedError` で reject し、cleanup は通常どおり走る | — |
+
+終了理由は `VideoExportResult.endReason` / `endMessage` で返り、エディタがモーダルに表示する。中止は録画前（準備中。背景ロード・動画頭出しの待ちの途中を含む）でも効き、`EditorScreen` がアンマウントされる（戻る・プロジェクト切替・設定/アセット画面）と実行中の書き出しも自動で中止する（破棄済みのレンダラ〔`isReady()` が false〕には後始末で触らず、画面の state も更新しない）。録画前の中止では、遅延ロード中の `startFrom` を `cancelPendingEntry()` で取り消し（世代を進めたうえで、`[ジャンプ:]` の予約など遷移状態を現在位置から導き直す）、後から解決してプレビューを書き換えないようにする。
+
+選択肢を経由しない遷移（`[ジャンプ:]`・線形の続き）をたどる到達判定は経験則で、実際に起きた遷移（`onSceneChange`）を記録して使う。そのため、`[条件:]` に囲まれた `[ジャンプ:]` のように、flags 次第で起きなくなる遷移も「行ける」とみなし、選び済みの辺を選び直すことがある（自動選択の上限 `EXPORT_MAX_AUTO_CHOICES` で止まる）。
+
+書き出しはプレビューのレンダラを使うので、完了・中止・失敗のあともプレビューは書き出しの開始シーンの位置に移ったままで、書き出し前の位置には戻らない(現状の仕様。戻す実装は未対応)。選択肢に到達した時点を進行とみなすので、長い `[待機: N]` の直後でも停滞と誤判定しない。
+
+「範囲内」は**編集中の doc のシーンだけ**が対象で（他の .md のシーンは `sceneOrder` に無く、範囲外として扱う）、`[待機: 表示完了]` のように待ち時間が決まっていない待機は通常の停滞時間で判定する。
+
 ### Phase 1 の制約
 
 - **実時間がかかる**: シナリオ 3 分なら録画も 3 分。virtual time 化していないため
-- **キャンセル不能**: 録画開始後に途中で止める手段は今のところ無い（ページリロードで強制終了）。長尺録画は事前に範囲を確認すること
+- **中止は破棄**: 録画中の「中止」は録画を捨てる（途中までの保存はしない）。長尺録画は事前に範囲を確認すること
 - **WebM のみ**: mp4 変換は Phase 2 で ffmpeg.wasm を追加する
 - **タブ非アクティブで品質劣化**: ブラウザが rAF を間引くと PixiJS Ticker が薄まり、描画フレームが捨てられる。録画中はタブをアクティブに保つ必要がある
 - **コールバックの占有**: `setOnSceneChange` / `setOnEnd` を録画中に上書きするため、録画中の手動操作と競合する想定はしていない

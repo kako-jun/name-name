@@ -18,6 +18,7 @@ import { createApiClient, type ContentsResponse, type ScriptInfo } from '../api/
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
+  ExportAbortedError,
   buildVideoExportOptions,
   downloadBlob,
   pickSupportedMimeType,
@@ -104,6 +105,10 @@ function EditorScreen({
   const [exportFps, setExportFps] = useState(30)
   const [exportInheritFlags, setExportInheritFlags] = useState(false)
   const [exportRunning, setExportRunning] = useState(false)
+  // 書き出しの中止用 (#780)。実行中だけ非 null
+  const exportAbortRef = useRef<AbortController | null>(null)
+  // アンマウント後は書き出しの結果を state に反映しない (#780)
+  const mountedRef = useRef(true)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
@@ -211,6 +216,8 @@ function EditorScreen({
       setExportStatus('既に録画中です')
       return
     }
+    const abort = new AbortController()
+    exportAbortRef.current = abort
     setExportRunning(true)
     setExportStatus('準備中...')
     const opts: VideoExportOptions = buildVideoExportOptions(renderer, {
@@ -219,8 +226,12 @@ function EditorScreen({
       fps: exportFps,
       inheritFlags: exportInheritFlags,
       mimeType: mime,
-      onProgress: (s) => setExportStatus(s),
+      onProgress: (s) => {
+        if (mountedRef.current) setExportStatus(s)
+      },
     })
+    opts.sceneOrder = allSceneIds
+    opts.signal = abort.signal
     try {
       const result = await exportVideo(renderer, opts)
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
@@ -230,12 +241,21 @@ function EditorScreen({
       downloadBlob(result.blob, filename)
       const durSec = (result.durationMs / 1000).toFixed(1)
       const sizeMb = (result.blob.size / (1024 * 1024)).toFixed(2)
-      setExportStatus(`完了: ${filename} (${durSec}s, ${sizeMb} MB)`)
+      const label = result.endReason === 'stalled' ? 'タイムアウト' : '完了'
+      setExportStatus(
+        `${label}: ${filename} (${durSec}s, ${sizeMb} MB)\n終了理由: ${result.endMessage}`
+      )
     } catch (e) {
-      console.error('[VideoExport] failed', e)
-      setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+      if (!mountedRef.current) return
+      if (e instanceof ExportAbortedError) {
+        setExportStatus('中止しました（録画は破棄され、ファイルは保存されていません）')
+      } else {
+        console.error('[VideoExport] failed', e)
+        setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+      }
     } finally {
-      setExportRunning(false)
+      exportAbortRef.current = null
+      if (mountedRef.current) setExportRunning(false)
     }
   }, [
     projectName,
@@ -244,7 +264,22 @@ function EditorScreen({
     exportFps,
     exportInheritFlags,
     exportRunning,
+    allSceneIds,
   ])
+
+  // 画面を離れたら（戻る・プロジェクト切替・設定/アセット画面）実行中の書き出しを中止する。
+  // 残すと、別の画面で録画が完了してダウンロードが始まってしまう (#780)。
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      exportAbortRef.current?.abort()
+    }
+  }, [])
+
+  const handleAbortVideoExport = useCallback(() => {
+    exportAbortRef.current?.abort()
+  }, [])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -1135,9 +1170,17 @@ function EditorScreen({
           {(['novel', 'rpg'] as const).map((tab) => (
             <button
               key={tab}
-              onClick={() => setEditorTab(tab)}
+              onClick={() => {
+                // 動画書き出し中は切り替えない（タブを替えるとプレビューが消えて録画が壊れる）(#797)
+                if (exportRunning) return
+                setEditorTab(tab)
+              }}
               role="tab"
               aria-selected={editorTab === tab}
+              disabled={exportRunning}
+              aria-disabled={exportRunning}
+              title={exportRunning ? '動画書き出し中は切り替えできません' : undefined}
+              style={exportRunning ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
               className="desk-tab"
             >
               {tab === 'novel' ? 'ノベル' : 'RPG'}
@@ -1258,6 +1301,7 @@ function EditorScreen({
                   onChangeFps={setExportFps}
                   onChangeInheritFlags={setExportInheritFlags}
                   onStart={handleStartVideoExport}
+                  onAbort={handleAbortVideoExport}
                   onClose={() => setExportOpen(false)}
                 />
               )}
@@ -1476,6 +1520,9 @@ function EditorScreen({
         onDiscard={() => setShowDiscardConfirm(true)}
         mode={editorTab === 'novel' ? mode : undefined}
         onModeChange={editorTab === 'novel' ? setMode : undefined}
+        // 動画書き出し中はモードを切り替えない（プレビューが消えて録画が壊れる）(#797)
+        modeChangeDisabled={exportRunning}
+        modeChangeDisabledTitle="動画書き出し中は切り替えできません"
         // PR #120 review Q1: shaRef 未取得（loadFailed / 未ロード）時は保存不可。
         discardDisabled={switchingDoc}
         discardDisabledTitle="読み込み中…"

@@ -4,7 +4,7 @@
  * これが無いと renderer.allScenes が空で、動画書き出しの `startFrom({ sceneId })` が not-found になる。
  * 重い子コンポーネント・API・WASM パーサはモックし、NovelPlayer に渡る props だけを観測する。
  */
-import { StrictMode } from 'react'
+import { StrictMode, useEffect } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { EventDocument, EventScene } from '../types'
@@ -36,6 +36,11 @@ const listProjectsMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]))
 vi.mock('../components/NovelPlayer', () => ({
   default: (props: Record<string, unknown>) => {
     playerProps.push(props)
+    // 動画書き出しは renderer を要る (#780)。最小のフェークを渡す。
+    const ready = props.onRendererReady as ((r: unknown) => void) | undefined
+    useEffect(() => {
+      ready?.({ getSnapshot: () => ({ flags: {} }) })
+    }, [ready])
     return <div data-testid="novel-player" />
   },
 }))
@@ -55,7 +60,27 @@ vi.mock('../components/MapEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/NPCEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/RPGPlayer', () => ({ default: () => <div /> }))
 vi.mock('../components/VideoExportModal', () => ({
-  default: () => <div data-testid="video-export-modal" />,
+  default: (props: {
+    isRunning: boolean
+    status: string | null
+    onStart: () => void
+    onAbort: () => void
+  }) => (
+    <div data-testid="video-export-modal">
+      <span data-testid="export-running">{String(props.isRunning)}</span>
+      <span data-testid="export-status">{props.status}</span>
+      <button onClick={props.onStart}>テスト録画開始</button>
+      <button onClick={props.onAbort}>テスト中止</button>
+    </div>
+  ),
+}))
+// 実録画はしない (#780)。exportVideo をテストが握る
+const exportVideoMock = vi.hoisted(() => vi.fn())
+vi.mock('../game/VideoExporter', async (importActual) => ({
+  ...(await importActual<typeof import('../game/VideoExporter')>()),
+  pickSupportedMimeType: () => 'video/webm',
+  exportVideo: (...args: unknown[]) => exportVideoMock(...args),
+  downloadBlob: vi.fn(),
 }))
 vi.mock('../wasm/parser', () => ({
   parseMarkdown: async (md: string) => {
@@ -1059,5 +1084,131 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
       const index = playerProps[playerProps.length - 1].jumpSceneIndex as EventScene[]
       expect(index.map((x) => x.id)).toEqual(['B1'])
     })
+  })
+})
+
+describe('EditorScreen: 動画書き出し中の操作制限・中止 (#780, #797)', () => {
+  const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+  let finishExport: (v: unknown) => void
+  let failExport: (e: unknown) => void
+  let exportOpts: { signal?: AbortSignal; sceneOrder?: string[] } | undefined
+
+  beforeEach(() => {
+    playerProps.length = 0
+    parsed = makeDoc(['hub', 'S1'])
+    parsedByMarkdown.clear()
+    localStorage.clear()
+    getContentsMock.mockReset()
+    getContentsMock.mockImplementation(async () => ({ content: '# hub', sha: 'sha' }))
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [info('script.md')])
+    exportVideoMock.mockReset()
+    exportOpts = undefined
+    exportVideoMock.mockImplementation(
+      (_r: unknown, opts: { signal?: AbortSignal; sceneOrder?: string[] }) => {
+        exportOpts = opts
+        return new Promise((res, rej) => {
+          finishExport = res
+          failExport = rej
+        })
+      }
+    )
+  })
+
+  let unmountEditor: () => void = () => {}
+  function renderEditorForUnmount() {
+    unmountEditor = renderEditor().unmount
+  }
+
+  async function openModalAndStart() {
+    renderEditor()
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    fireEvent.click(await screen.findByRole('button', { name: '動画エクスポート' }))
+    await waitFor(() => expect(exportVideoMock).not.toHaveBeenCalled())
+    fireEvent.click(screen.getByText('テスト録画開始'))
+    await waitFor(() => expect(exportVideoMock).toHaveBeenCalled())
+  }
+  const modeBtn = (name: RegExp) => screen.getByRole('button', { name }) as HTMLButtonElement
+  const rpgTab = () => screen.getByRole('tab', { name: 'RPG' }) as HTMLButtonElement
+
+  it('書き出し中はモード切替と RPG タブが押せず、終了後は押せる', async () => {
+    await openModalAndStart()
+    expect(screen.getByTestId('export-running').textContent).toBe('true')
+    expect(modeBtn(/Edit Mode/i).disabled).toBe(true)
+    expect(rpgTab().disabled).toBe(true)
+    fireEvent.click(modeBtn(/Edit Mode/i))
+    fireEvent.click(rpgTab())
+    // 押しても切り替わらない（プレビューもモーダルも残る）
+    expect(screen.getByTestId('video-export-modal')).toBeTruthy()
+    expect(rpgTab().getAttribute('aria-selected')).toBe('false')
+
+    await act(async () => {
+      finishExport({
+        blob: new Blob(['x']),
+        mimeType: 'video/webm',
+        durationMs: 1000,
+        endReason: 'story-end',
+        endMessage: '全イベント完走',
+      })
+    })
+    await waitFor(() => expect(screen.getByTestId('export-running').textContent).toBe('false'))
+    expect(modeBtn(/Edit Mode/i).disabled).toBe(false)
+    expect(rpgTab().disabled).toBe(false)
+    expect(screen.getByTestId('export-status').textContent).toContain('終了理由: 全イベント完走')
+  })
+
+  it('書き出しが失敗したあとも、モード切替と RPG タブが押せる', async () => {
+    await openModalAndStart()
+    await act(async () => {
+      failExport(new Error('boom'))
+    })
+    await waitFor(() => expect(screen.getByTestId('export-running').textContent).toBe('false'))
+    expect(modeBtn(/Edit Mode/i).disabled).toBe(false)
+    expect(rpgTab().disabled).toBe(false)
+    expect(screen.getByTestId('export-status').textContent).toContain('失敗: boom')
+  })
+
+  it('中止すると exportVideo の signal が abort され、保存せず中止と表示し、操作が戻る', async () => {
+    await openModalAndStart()
+    expect(exportOpts?.sceneOrder).toEqual(['hub', 'S1'])
+    expect(exportOpts?.signal?.aborted).toBe(false)
+    fireEvent.click(screen.getByText('テスト中止'))
+    expect(exportOpts?.signal?.aborted).toBe(true)
+    const { ExportAbortedError } = await import('../game/VideoExporter')
+    await act(async () => {
+      failExport(new ExportAbortedError())
+    })
+    await waitFor(() => expect(screen.getByTestId('export-running').textContent).toBe('false'))
+    expect(screen.getByTestId('export-status').textContent).toContain('保存されていません')
+    expect(modeBtn(/Edit Mode/i).disabled).toBe(false)
+    expect(rpgTab().disabled).toBe(false)
+  })
+
+  it('書き出し中に画面を離れる（アンマウント）と、書き出しを中止する', async () => {
+    renderEditorForUnmount()
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    fireEvent.click(await screen.findByRole('button', { name: '動画エクスポート' }))
+    fireEvent.click(screen.getByText('テスト録画開始'))
+    await waitFor(() => expect(exportVideoMock).toHaveBeenCalled())
+    expect(exportOpts?.signal?.aborted).toBe(false)
+    unmountEditor()
+    expect(exportOpts?.signal?.aborted).toBe(true)
+  })
+
+  it('タイムアウトで終わったときは、その理由を表示する', async () => {
+    await openModalAndStart()
+    await act(async () => {
+      finishExport({
+        blob: new Blob(['x']),
+        mimeType: 'video/webm',
+        durationMs: 1000,
+        endReason: 'stalled',
+        endMessage: '60秒間進まなかったため終了',
+      })
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('export-status').textContent).toContain('タイムアウト')
+    )
+    expect(screen.getByTestId('export-status').textContent).toContain('60秒間進まなかった')
   })
 })
