@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   computePlateExtend,
   computePlateLayout,
+  computeStem,
+  computeStemScale,
+  computeStemSlitHalfWidth,
+  STEM_MIN_WIDTH_RATIO,
   extendFootMask,
   gaussianBlur,
   renderAcrylicPlate,
   smoothstep,
+  stampStem,
 } from './acrylicPlate'
 import { resolveAcrylicParams } from './spriteStyle'
 
@@ -348,5 +353,247 @@ describe('renderAcrylicPlate: 足元を差し込み線まで伸ばす (#802)', (
     const r = renderAcrylicPlate(new Uint8Array(w * h), w, h, lifted)
     expect(r.height).toBe(h + r.extend + r.pad * 2)
     expect(r.rgba).toHaveLength(r.width * r.height * 4)
+  })
+})
+
+describe('computeStem / stampStem: 浮く絵を台座へつなぐ帯 (#848)', () => {
+  const w = 100
+  const h = 100
+  const sp = { stemWidthRatio: 0.28, stemMinGapRatio: 0.08 }
+  /** x=20..79（幅 60）・y=10..(bottomY) の不透明な塊 */
+  const blob = (bottomY: number, x0 = 20, x1 = 79): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= bottomY; y++) for (let x = x0; x <= x1; x++) a[y * w + x] = 255
+    return a
+  }
+
+  it('下端が離れていなければ null（地面に立つキャラは帯なし）', () => {
+    expect(computeStem(blob(99), w, h, 3, sp)).toBeNull()
+    expect(computeStem(blob(95), w, h, 3, sp)).toBeNull() // gap 4 < 8
+  })
+  it('下端が閾値以上離れていれば帯が出て、幅は不透明部分の幅 × 比率・中心は下端の重心', () => {
+    const s = computeStem(blob(60), w, h, 3, sp)
+    expect(s).not.toBeNull()
+    // 絵の幅 × 比率（16.8px）か最小幅（枠一辺の 0.14）の大きい方
+    const sc0 = computeStemScale(w, h, resolveAcrylicParams())
+    expect(s!.halfWidth * 2).toBeCloseTo(Math.max(60 * 0.28, sc0.minWidth), 6)
+    expect(Math.abs(s!.cx - 50)).toBeLessThanOrEqual(1)
+    expect(s!.bottom).toBe(h + 3)
+    expect(s!.top).toBeLessThanOrEqual(60)
+    expect(s!.top).toBeGreaterThan(50)
+  })
+  it('スリットの列の外（左下の羽根の先）が下端に届いても、中央の列が空いていれば帯が出る', () => {
+    const a = blob(60)
+    for (let y = 60; y < h; y++) a[y * w + 2] = 255 // 左端の細い羽根の先が画像下端まで
+    expect(computeStem(a, w, h, 3, sp)).not.toBeNull()
+    // 中央の列が下端まで届いていれば出ない
+    const b = blob(60)
+    for (let y = 60; y < h; y++) b[y * w + 50] = 255
+    expect(computeStem(b, w, h, 3, sp)).toBeNull()
+  })
+  it('中央の列に不透明画素が無ければ null', () => {
+    expect(computeStem(blob(60, 0, 9), w, h, 0, sp)).toBeNull()
+  })
+  it('帯はスリットの幅からはみ出さない（片側に垂れた脚が最下端でも中心を寄せる）', () => {
+    const half = computeStemSlitHalfWidth(w, h)
+    expect(half).toBeGreaterThan(0)
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 0; x < w; x++) a[y * w + x] = 255
+    for (let y = 51; y <= 60; y++)
+      for (let x = Math.ceil(w / 2 + half) - 2; x < w / 2 + half; x++) a[y * w + x] = 255
+    const s = computeStem(a, w, h, 0, sp)!
+    expect(s.cx - s.halfWidth).toBeGreaterThanOrEqual(w / 2 - half - 1e-6)
+    expect(s.cx + s.halfWidth).toBeLessThanOrEqual(w / 2 + half + 1e-6)
+  })
+  it('幅の上下限: 極端に細い絵（w=1,2）でも NaN にならず画像幅・スリット幅を超えない', () => {
+    for (const tw of [1, 2, 3]) {
+      const a = new Uint8Array(tw * 50)
+      for (let y = 0; y < 10; y++) for (let x = 0; x < tw; x++) a[y * tw + x] = 255
+      const s = computeStem(a, tw, 50, 2, sp)
+      if (!s) continue
+      expect(Number.isFinite(s.cx) && Number.isFinite(s.halfWidth)).toBe(true)
+      expect(s.halfWidth * 2).toBeLessThanOrEqual(tw + 1e-9)
+      expect(s.cx - s.halfWidth).toBeGreaterThanOrEqual(-1e-9)
+      expect(s.cx + s.halfWidth).toBeLessThanOrEqual(tw + 1e-9)
+    }
+  })
+  it('薄いにじみ（alpha < 32）は下端とみなさない', () => {
+    const a = blob(60)
+    for (let x = 0; x < w; x++) a[99 * w + x] = 20
+    expect(computeStem(a, w, h, 0, sp)).not.toBeNull()
+  })
+  it('stemWidthRatio=0・全透明・寸法不正は null', () => {
+    expect(computeStem(blob(60), w, h, 0, { ...sp, stemWidthRatio: 0 })).toBeNull()
+    expect(computeStem(new Uint8Array(w * h), w, h, 0, sp)).toBeNull()
+    expect(computeStem(new Uint8Array(4), w, h, 0, sp)).toBeNull()
+    expect(computeStem(blob(60), 0, h, 0, sp)).toBeNull()
+  })
+  it('stampStem は帯の内側を 1 にし、外側・上側の角は触らない', () => {
+    const pad = 4
+    const W = w + pad * 2
+    const mask = new Float32Array(W * (h + 3 + pad * 2))
+    const s = computeStem(blob(60), w, h, 3, sp)!
+    stampStem(mask, W, pad, s)
+    const at = (x: number, y: number): number => mask[(y + pad) * W + x + pad]
+    expect(at(50, 80)).toBe(1)
+    expect(at(50, h + 2)).toBe(1)
+    expect(at(10, 80)).toBe(0)
+    expect(at(Math.floor(s.cx - s.halfWidth), Math.ceil(s.top))).toBe(0) // 丸めた角
+  })
+  it('renderAcrylicPlate: 浮く絵は下端から差し込み線まで shape が連続し、無効化すると途切れる', () => {
+    const a = blob(40)
+    const on = renderAcrylicPlate(a, w, h, resolveAcrylicParams({ spriteLiftRatio: 0.1 }))
+    const off = renderAcrylicPlate(
+      a,
+      w,
+      h,
+      resolveAcrylicParams({ spriteLiftRatio: 0.1, stemWidthRatio: 0 })
+    )
+    for (let y = 40; y < h + on.extend; y++)
+      expect(on.shape[(y + on.pad) * on.width + 50 + on.pad]).toBeGreaterThan(0.9)
+    expect(off.shape[(80 + off.pad) * off.width + 50 + off.pad]).toBeLessThan(0.1)
+    // 帯は画像と extend の外へは広がらない（寸法は不変）
+    expect(on.width).toBe(off.width)
+    expect(on.height).toBe(off.height)
+  })
+  it('地面に立つ絵は帯の有無で rgba が変わらない（既定の見た目は不変）', () => {
+    const a = blob(99)
+    const on = renderAcrylicPlate(a, w, h, P)
+    const off = renderAcrylicPlate(a, w, h, resolveAcrylicParams({ stemWidthRatio: 0 }))
+    expect(Array.from(on.rgba)).toEqual(Array.from(off.rgba))
+  })
+})
+
+describe('computeStem: 既定の閾値付近の回帰 (#848)', () => {
+  const w = 100
+  const h = 100
+  const P6 = resolveAcrylicParams()
+  /** 中央が bottomY（0 始まり）まで不透明な絵。gap = (h-1-bottomY)/h */
+  const withGap = (gap: number): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    const bottomY = h - 1 - Math.round(gap * h)
+    for (let y = 10; y <= bottomY; y++) for (let x = 20; x < 80; x++) a[y * w + x] = 255
+    return a
+  }
+  it('既定は 0.06', () => {
+    expect(P6.stemMinGapRatio).toBe(0.06)
+  })
+  it.each([
+    [0.05, false],
+    [0.06, true],
+    [0.07, true],
+    [0.09, true],
+  ])('gap=%s の帯の有無は %s', (gap, expected) => {
+    expect(computeStem(withGap(gap), w, h, 3, P6) !== null).toBe(expected)
+  })
+})
+
+describe('帯の存在感: 最小幅と内側の濃さ (#848)', () => {
+  const w = 120
+  const h = 120
+  const P2 = resolveAcrylicParams({ spriteLiftRatio: 0.05 })
+  /** 上の方にだけ細い（幅 6px）絵がある浮いた絵 */
+  const thin = (): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 57; x < 63; x++) a[y * w + x] = 255
+    return a
+  }
+  /** 太い本体（板の内側の濃さの比較用）+ 浮いた細い先 */
+  const bodyFigure = (): Uint8Array => {
+    const a = thin()
+    for (let y = 10; y <= 40; y++) for (let x = 20; x < 100; x++) a[y * w + x] = 255
+    return a
+  }
+
+  it('絵が細くても、帯の幅は枠一辺の STEM_MIN_WIDTH_RATIO 以上（360x640 相当の枠でも読める）', () => {
+    const s = computeStem(thin(), w, h, 6, P2)!
+    expect(s).not.toBeNull()
+    const sc = computeStemScale(w, h, P2)
+    expect(sc.minWidth).toBeGreaterThan(0)
+    expect(s.halfWidth * 2).toBeGreaterThanOrEqual(Math.min(sc.minWidth, sc.slitHalf * 2) - 1e-6)
+    // 枠 360 → 画像 px への換算でも比率は不変: 枠一辺に対する帯の幅
+    expect((s.halfWidth * 2) / (sc.minWidth / STEM_MIN_WIDTH_RATIO)).toBeGreaterThanOrEqual(
+      STEM_MIN_WIDTH_RATIO - 1e-9
+    )
+  })
+  it('帯の内側の alpha は板の本体（plateFillAlpha）より濃く、stemFillAlpha 相当', () => {
+    const r = renderAcrylicPlate(bodyFigure(), w, h, P2)
+    const al = (x: number, y: number): number => r.rgba[((y + r.pad) * r.width + x + r.pad) * 4 + 3]
+    const s = computeStem(bodyFigure(), w, h, r.extend, P2)!
+    const stemA = al(Math.round(s.cx), Math.round((s.top + s.bottom) / 2))
+    const bodyA = al(60, 20)
+    expect(stemA).toBeGreaterThanOrEqual(Math.round(P2.stemFillAlpha * 255 * 0.9))
+    expect(stemA).toBeGreaterThan(bodyA * 2)
+  })
+  it('stemFillAlpha=0 でも帯の内側は本体と同じ濃さ以上（下回らない）', () => {
+    const p = resolveAcrylicParams({ spriteLiftRatio: 0.05, stemFillAlpha: 0 })
+    const r = renderAcrylicPlate(bodyFigure(), w, h, p)
+    const s = computeStem(bodyFigure(), w, h, r.extend, p)!
+    const al = (x: number, y: number): number => r.rgba[((y + r.pad) * r.width + x + r.pad) * 4 + 3]
+    expect(al(Math.round(s.cx), Math.round((s.top + s.bottom) / 2))).toBeGreaterThanOrEqual(
+      Math.round(p.plateFillAlpha * 255 * 0.9)
+    )
+  })
+  it('帯の上端は絵の最下端より上（絵の内側）まで食い込む', () => {
+    const s = computeStem(thin(), w, h, 6, P2)!
+    expect(s.top).toBeLessThan(50)
+    expect(s.top).toBeGreaterThanOrEqual(50 - Math.round(h * 0.05) - 1)
+  })
+})
+
+describe('帯: 接地の抑制・独立したリム (#848)', () => {
+  const w = 120
+  const h = 120
+  const P3 = resolveAcrylicParams({ spriteLiftRatio: 0.05 })
+  /** 中央の胴（y=10..60）。slit 外の左右に、下端まで届く車輪（幅 wheel px）を置く */
+  const vehicle = (wheel: number): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 60; y++) for (let x = 45; x < 75; x++) a[y * w + x] = 255
+    for (let y = 100; y < h; y++)
+      for (let k = 0; k < wheel; k++) {
+        a[y * w + 2 + k] = 255
+        a[y * w + w - 3 - k] = 255
+      }
+    return a
+  }
+  it('スリットの外で画像下端に広く接している絵（接地した乗り物）は帯を出さない', () => {
+    const wide = Math.ceil(w * 0.1)
+    expect(computeStem(vehicle(wide), w, h, 6, P3)).toBeNull()
+  })
+  it('細い羽根の先が 1 点だけ下端に届く浮いた絵は帯が出る', () => {
+    expect(computeStem(vehicle(1), w, h, 6, P3)).not.toBeNull()
+  })
+  it('帯の縁（左右）には本体と独立にリムが描かれ、板の縁として読める濃さがある', () => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 50; x < 70; x++) a[y * w + x] = 255
+    const r = renderAcrylicPlate(a, w, h, P3)
+    const s = computeStem(a, w, h, r.extend, P3)!
+    const yy = Math.round((s.top + s.bottom) / 2)
+    let max = 0
+    for (let x = Math.floor(s.cx - s.halfWidth) - 14; x <= Math.floor(s.cx - s.halfWidth); x++)
+      max = Math.max(max, r.rgba[((yy + r.pad) * r.width + x + r.pad) * 4 + 3])
+    expect(max).toBeGreaterThanOrEqual(Math.round(P3.lineAlpha * 0.75 * 255 * 0.5))
+  })
+  it('帯の上端の丸い角には独立リムを付けない（中央の列の上端付近が左右の縁より弱い）', () => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 50; x < 70; x++) a[y * w + x] = 255
+    const r = renderAcrylicPlate(a, w, h, P3)
+    const s = computeStem(a, w, h, r.extend, P3)!
+    const al = (x: number, y: number): number => r.rgba[((y + r.pad) * r.width + x + r.pad) * 4 + 3]
+    const yy = Math.round((s.top + s.bottom) / 2)
+    let side = 0
+    for (let x = Math.floor(s.cx - s.halfWidth) - 14; x <= Math.floor(s.cx - s.halfWidth); x++)
+      side = Math.max(side, al(x, yy))
+    // 帯の上端を越えた先（絵の下の何も無い所）の中央の列
+    let top = 0
+    for (let y = Math.floor(s.top) - 2; y <= Math.floor(s.top) + 2; y++)
+      top = Math.max(top, al(Math.round(s.cx), y))
+    expect(side).toBeGreaterThan(top)
+  })
+  it('接地は左右の両側で判定する: 片側だけ広く接している絵は帯が出る', () => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 60; y++) for (let x = 45; x < 75; x++) a[y * w + x] = 255
+    for (let y = 100; y < h; y++) for (let x = 2; x < 20; x++) a[y * w + x] = 255
+    expect(computeStem(a, w, h, 6, P3)).not.toBeNull()
   })
 })

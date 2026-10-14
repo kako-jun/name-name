@@ -50,7 +50,12 @@ export function createAcrylicPlateTexture(
     const alpha = new Uint8Array(ww * wh)
     for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3]
     // 台座が無いときは浮き量が効かない（幾何の liftPx=0 と揃え、板も伸ばさない）
-    const plateParams = { ...params, spriteLiftRatio: params.hasBase ? params.spriteLiftRatio : 0 }
+    // 帯（ステム）も台座へつなぐものなので、台座が無いときは出さない (#848)
+    const plateParams = {
+      ...params,
+      spriteLiftRatio: params.hasBase ? params.spriteLiftRatio : 0,
+      stemWidthRatio: params.hasBase ? params.stemWidthRatio : 0,
+    }
     const raster = renderAcrylicPlate(alpha, ww, wh, plateParams)
     const dst = document.createElement('canvas')
     dst.width = raster.width
