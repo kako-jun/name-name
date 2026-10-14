@@ -302,7 +302,7 @@ describe('シーン入場後の自動セーブは最初の本文の表示時に1
     await r2.startFrom({})
     await expect(r2.quickLoad()).resolves.toEqual({ status: 'entered', sceneId: 'b' })
     expect(internals(r2).eventIndex).toBe(1)
-    expect((r2 as unknown as { waitingForWait: boolean }).waitingForWait).toBe(false)
+    expect(internals(r2).waitingForWait).toBe(false)
   })
 
   it('冒頭が Jump だけの中継シーンでは保存されず、遷移先の本文で保存される', async () => {
