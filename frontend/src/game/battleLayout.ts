@@ -621,8 +621,8 @@ export function computeCommandCells(
 /**
  * サイドビュー戦闘画面の全座標を算出する。
  *
- * 下パネルの高さは「コマンド 2x2 の高さ」と「味方全員ぶんの status 行」の大きい方。
- * 味方が増えると下パネルが伸び、ステージ領域が縮む（高さが足りなくても負にならない）。
+ * 下パネルの高さは「コマンド 2x2 の高さ」と「status 行（最低 4 行ぶん）」の大きい方。
+ * 味方が 5 人以上になると下パネルが伸び、ステージ領域が縮む（高さが足りなくても負にならない）。
  */
 export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattleLayout {
   const W = input.width
@@ -718,7 +718,22 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // #813: 4 人のときの斜め一列の枠で求め、味方は上の枠から順に入れる。空き枠は何も描かない（最後に切り捨てる）
   // 空き枠の隊列・縦横比は既定（前衛・既定の縦横比）にする。実在しない味方の値で枠が変わらないように
   const partyRows = input.partyRows?.slice(0, partyCount)
-  const partyAspects = input.partyAspects?.slice(0, partyCount)
+  // 空き枠の縦横比は実在メンバーの最大値で埋める（既定値が混ざって 4 人のときの枠とずれないように。0 人なら既定）
+  let partyAspects: (number | undefined)[] | undefined
+  if (input.partyAspects) {
+    partyAspects = []
+    let maxA = 0
+    for (let i = 0; i < partyCount; i++) {
+      const a = input.partyAspects[i]
+      const eff =
+        a === undefined || !Number.isFinite(a) || a <= 0
+          ? SIDE_DEFAULT_SPRITE_ASPECT
+          : Math.min(SIDE_PARTY_ASPECT_MAX, Math.max(SIDE_PARTY_ASPECT_MIN, a))
+      partyAspects.push(eff)
+      maxA = Math.max(maxA, eff)
+    }
+    for (let i = partyCount; i < slotCount; i++) partyAspects.push(maxA > 0 ? maxA : undefined)
+  }
   const halfSlots = computeFormation(partyHalf, slotCount, 'party', false, partyRows, partyAspects)
   const anyBack =
     !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')
