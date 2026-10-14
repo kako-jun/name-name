@@ -155,6 +155,19 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
     expect(r.getSnapshot().flags).toEqual({ kept: { Bool: true } })
   })
 
+  it('10: setScenes([]) も setEvents([]) と同じく空の文書として新規開始し、旧文書を残さない', async () => {
+    const r = new NovelRenderer()
+    await r.setScenes(SCENES)
+    internals(r).gameState.setFlag('kept', { Bool: true })
+
+    await expect(r.setScenes([])).resolves.toEqual({ status: 'entered', sceneId: null })
+    expect(r.getSnapshot().flags).toEqual({})
+    expect(r.getCurrentSceneId()).toBeNull()
+    // 次の startFrom({}) でも旧文書は再生されない
+    await r.startFrom({})
+    expect((r as unknown as { resolvedEvents: Event[] }).resolvedEvents).toEqual([])
+  })
+
   it('9: setEvents / setScenes は新規開始の結果（entered）を返す', async () => {
     const r = new NovelRenderer()
     await expect(r.setEvents([narration('x')])).resolves.toEqual({

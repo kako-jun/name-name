@@ -1395,16 +1395,10 @@ export class NovelRenderer {
    * 線形再生を維持したままジャンプ索引だけを差し替えたいときは
    * `setEvents(flattened)` ＋ `setJumpSceneIndex(scenes)` を使う。
    *
-   * シーンが0件のときは再生ストリームを差し替えず、索引を空にして flags と
-   * `consecutiveJumps` だけをリセットする（読み込む対象が無いので開始できない）。
+   * シーンが0件のときは、`setEvents([])` と同じく空の文書として新規開始する（旧文書を残さない）。
    */
   setScenes(scenes: EventScene[]): Promise<SceneEntryResult> {
     this.loadScenes(scenes)
-    if (scenes.length === 0) {
-      this.gameState.clear()
-      this.consecutiveJumps = 0
-      return Promise.resolve({ status: 'failed', reason: 'not-found' })
-    }
     return this.startFrom({})
   }
 
@@ -1414,10 +1408,9 @@ export class NovelRenderer {
    */
   loadScenes(scenes: EventScene[]): void {
     this.allScenes = scenes
-    if (scenes.length > 0) {
-      this.loadEvents(scenes[0].events)
-      this.entrySceneId = scenes[0].id
-    }
+    // 0件は空の文書（`loadEvents([])`）。旧文書を entryRawEvents / entrySceneId に残さない。
+    this.loadEvents(scenes.length > 0 ? scenes[0].events : [])
+    if (scenes.length > 0) this.entrySceneId = scenes[0].id
   }
 
   /**

@@ -143,6 +143,21 @@ describe('NovelRenderer.startFrom({}) の gameState/currentSceneId リセット 
   })
 })
 
+describe('「はじめから」の onSceneChange は文書の供給経路で異なる (#734 PR5)', () => {
+  it('5b: loadEvents 構成（PlayerScreen の events + jumpSceneIndex）では startFrom({}) は onSceneChange を発火しない', () => {
+    const r = new NovelRenderer()
+    r.loadEvents([narration('start')])
+    r.setJumpSceneIndex(SCENES)
+    const cb = vi.fn()
+    r.setOnSceneChange(cb)
+
+    void r.startFrom({})
+
+    expect(cb).not.toHaveBeenCalled()
+    expect(r.getCurrentSceneId()).toBeNull()
+  })
+})
+
 describe('NovelRenderer.clearQuickSave() (#637)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
