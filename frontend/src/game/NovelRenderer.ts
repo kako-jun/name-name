@@ -2542,7 +2542,37 @@ export class NovelRenderer {
     const pending = this.getPendingChoice()
     if (!pending) return false
     if (!pending.options.some((o) => o.jump === jump && !o.locked)) return false
-    return this.confirmChoiceJump(jump)
+    // ChoiceOverlay の確定経路（確定音を含む）を通す。クリックと同じ音が録音に乗る。
+    return this.choiceOverlay.selectByJump(jump)
+  }
+
+  /**
+   * 動画書き出しの停滞判定用の軽量な進行状況 (#780)。`getSnapshot()` のような全状態の複製をせず、
+   * 位置の署名に使う値と、「進行中として扱うべき待ち」だけを返す。
+   * - `waitMs`: `[待機: N]` で待っている間はその N ms。それ以外は null
+   * - `videoPlaying`: 終わりのある動画の再生中
+   */
+  getExportProgress(): {
+    sceneId: string | null
+    eventIndex: number
+    textIndex: number
+    sentenceIndex: number
+    waitMs: number | null
+    videoPlaying: boolean
+  } {
+    const current = this.resolvedEvents[this.eventIndex]
+    const waitMs =
+      this.waitingForWait && typeof current === 'object' && current !== null && 'Wait' in current
+        ? current.Wait.ms
+        : null
+    return {
+      sceneId: this.currentSceneId,
+      eventIndex: this.eventIndex,
+      textIndex: this.textIndex,
+      sentenceIndex: this.sentenceIndex,
+      waitMs,
+      videoPlaying: this.videoLayer.isPlayingToEnd(),
+    }
   }
 
   /** 現在表示中のシーンID (#228 動画エクスポート用) */

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { exportProgressSignature, isSceneInExportRange, pickAutoChoice } from './videoExportPolicy'
+import {
+  computeStallLimitMs,
+  exportProgressSignature,
+  isSceneInExportRange,
+  pickAutoChoice,
+} from './videoExportPolicy'
 
 const order = ['a', 'b', 'c', 'd', 'e']
 
@@ -55,5 +60,28 @@ describe('exportProgressSignature (#780)', () => {
     expect(exportProgressSignature(p)).toBe(exportProgressSignature({ ...p }))
     expect(exportProgressSignature({ ...p, sentenceIndex: 4 })).not.toBe(exportProgressSignature(p))
     expect(exportProgressSignature({ ...p, sceneId: null })).not.toBe(exportProgressSignature(p))
+  })
+})
+
+describe('pickAutoChoice: 訪問済み (#780)', () => {
+  it('訪問済みの遷移先は飛ばし、未訪問の範囲内の先頭を返す', () => {
+    const opts = [
+      { jump: 'b', locked: false },
+      { jump: 'c', locked: false },
+    ]
+    expect(pickAutoChoice(opts, 'a', 'c', order, new Set(['b']))).toBe('c')
+    expect(pickAutoChoice(opts, 'a', 'c', order, new Set())).toBe('b')
+  })
+  it('範囲内がすべて訪問済みなら null', () => {
+    const opts = [{ jump: 'b', locked: false }]
+    expect(pickAutoChoice(opts, 'a', 'c', order, new Set(['b']))).toBeNull()
+  })
+})
+
+describe('computeStallLimitMs (#780)', () => {
+  it('待機中は待機時間を加え、待機中でなければ基本の長さ', () => {
+    expect(computeStallLimitMs(60_000, null)).toBe(60_000)
+    expect(computeStallLimitMs(60_000, 80_000)).toBe(140_000)
+    expect(computeStallLimitMs(60_000, 0)).toBe(60_000)
   })
 })

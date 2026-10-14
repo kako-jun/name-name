@@ -7,6 +7,8 @@
 export const EXPORT_CHOICE_HOLD_MS = 3000
 /** 本文・選択肢が一切進まない状態がこの時間続いたら、録画を終える ms */
 export const EXPORT_STALL_TIMEOUT_MS = 60_000
+/** 範囲内へ自動で選ぶ選択肢を、選ぶ前に映しておく時間 ms（視聴者が選択肢を目にできるようにする） */
+export const EXPORT_AUTO_CHOICE_DISPLAY_MS = 1500
 /** 書き出し中に選択肢到達・停滞を見張る間隔 ms */
 export const EXPORT_POLL_MS = 250
 /** 1回の書き出しで自動選択する選択肢の上限（範囲内を行き来するループで録画が終わらなくなるのを防ぐ） */
@@ -41,20 +43,31 @@ export function isSceneInExportRange(
 }
 
 /**
- * 選択肢のうち自動で選ぶ遷移先を返す。ロックされていない option のうち、遷移先が書き出し範囲内の
- * 先頭のもの。無ければ null（＝終端扱い）。
+ * 選択肢のうち自動で選ぶ遷移先を返す。ロックされておらず、遷移先が書き出し範囲内で、
+ * まだ書き出し中に入っていない（`visited` に無い）先頭の option。無ければ null（＝終端扱い）。
+ * 「未訪問」を条件にするのは、ハブから各ルートが戻ってくる構成で毎回先頭を選び続けて
+ * 同じルートを延々録画するのを避け、範囲内のルートを一巡したら終わらせるため。
  */
 export function pickAutoChoice(
   options: ReadonlyArray<{ jump: string; locked: boolean }>,
   startSceneId: string,
   endSceneId: string,
-  orderedSceneIds: readonly string[]
+  orderedSceneIds: readonly string[],
+  visited: ReadonlySet<string> = new Set()
 ): string | null {
   for (const o of options) {
-    if (o.locked) continue
+    if (o.locked || visited.has(o.jump)) continue
     if (isSceneInExportRange(o.jump, startSceneId, endSceneId, orderedSceneIds)) return o.jump
   }
   return null
+}
+
+/**
+ * 停滞とみなすまでの時間 ms。`[待機: N]`（`waitMs`）中は、指定時間ぶんを加えた長さにする
+ * （長い待機を停滞と誤認しない）。
+ */
+export function computeStallLimitMs(stallTimeoutMs: number, waitMs: number | null): number {
+  return stallTimeoutMs + (waitMs !== null && waitMs > 0 ? waitMs : 0)
 }
 
 /** 進行位置の署名。前回と同じなら「進んでいない」。 */

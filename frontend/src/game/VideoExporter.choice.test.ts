@@ -5,12 +5,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ExportAbortedError, exportVideo } from './VideoExporter'
-import { EXPORT_CHOICE_HOLD_MS, EXPORT_MAX_AUTO_CHOICES, EXPORT_POLL_MS } from './videoExportPolicy'
+import {
+  EXPORT_AUTO_CHOICE_DISPLAY_MS,
+  EXPORT_CHOICE_HOLD_MS,
+  EXPORT_MAX_AUTO_CHOICES,
+  EXPORT_POLL_MS,
+} from './videoExportPolicy'
 
 type Exp = Parameters<typeof exportVideo>[0]
 type Option = { jump: string; locked: boolean }
 
+const recorders: Array<{ state: string; onstop: (() => void) | null }> = []
+
 function installMediaRecorder(stops: string[]) {
+  recorders.length = 0
   class FakeMediaRecorder {
     static isTypeSupported() {
       return true
@@ -19,7 +27,9 @@ function installMediaRecorder(stops: string[]) {
     ondataavailable: ((e: { data?: { size: number } }) => void) | null = null
     onstop: (() => void) | null = null
     onerror: ((e: Event) => void) | null = null
-    constructor(_s: unknown, _o: unknown) {}
+    constructor(_s: unknown, _o: unknown) {
+      recorders.push(this)
+    }
     start() {
       this.state = 'recording'
     }
@@ -40,6 +50,15 @@ function makeRenderer() {
     positionCounter: 0,
     /** true なら本文が進む（署名が毎回変わる） */
     advancing: false,
+    /** `[待機: N]` で待っている ms（待っていなければ null） */
+    waitMs: null as number | null,
+    /** 終わりのある動画の再生中 */
+    videoPlaying: false,
+    /** selectPendingChoice の結果（false なら受け付けない） */
+    acceptSelect: true,
+    /** 選択時に呼ぶ（シーン遷移のシミュレーション用） */
+    onSelect: null as ((jump: string) => void) | null,
+    backgroundGate: null as Promise<void> | null,
     /** 選択後に次の選択肢を出し続ける（ループ用） */
     reoffer: null as Option[] | null,
     onSceneChange: null as ((id: string) => void) | null,
@@ -68,22 +87,27 @@ function makeRenderer() {
       if (h.startFromGate) await h.startFromGate
       return { status: 'entered', sceneId: 'a' }
     },
-    waitForBackgroundLoad: async () => {},
+    waitForBackgroundLoad: async () => {
+      if (h.backgroundGate) await h.backgroundGate
+    },
     isAutoMode: () => false,
     setAutoMode: () => {},
     prepareVideosForExport: async () => {},
     getPendingChoice: () => h.pending,
     selectPendingChoice: (jump: string) => {
+      if (!h.acceptSelect) return false
       h.selected.push(jump)
       h.pending = h.reoffer ? { options: h.reoffer } : null
+      h.onSelect?.(jump)
       return true
     },
-    getSnapshot: () => ({
+    getExportProgress: () => ({
       sceneId: 'a',
       eventIndex: h.advancing ? h.positionCounter++ : 0,
       textIndex: 0,
       sentenceIndex: 0,
-      flags: {},
+      waitMs: h.waitMs,
+      videoPlaying: h.videoPlaying,
     }),
   }
   return { h, renderer: renderer as unknown as Exp }
@@ -96,7 +120,9 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
   let savedMS: unknown
   let stops: string[]
   beforeEach(() => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'],
+    })
     savedMR = (globalThis as unknown as { MediaRecorder?: unknown }).MediaRecorder
     savedMS = (globalThis as unknown as { MediaStream?: unknown }).MediaStream
     ;(globalThis as unknown as { MediaStream: unknown }).MediaStream = class {
@@ -172,7 +198,10 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
         { jump: 'c', locked: false }, // 採用
       ],
     }
-    await vi.advanceTimersByTimeAsync(EXPORT_POLL_MS * 2)
+    // 選ぶ前に選択肢を映す時間が経つまでは選ばない
+    await vi.advanceTimersByTimeAsync(EXPORT_AUTO_CHOICE_DISPLAY_MS - EXPORT_POLL_MS * 2)
+    expect(h.selected).toEqual([])
+    await vi.advanceTimersByTimeAsync(EXPORT_POLL_MS * 4)
     expect(h.selected).toEqual(['c'])
     // 後始末（多重起動ガードを残さない）
     h.pending = null
@@ -181,23 +210,81 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
     await run.p
   })
 
-  it('自動選択が上限に達したら、範囲内の遷移先があっても終端にする（ループで終わらなくなるのを防ぐ）', async () => {
+  it('ハブ型: 毎回先頭を選び続けず、未訪問のルートを順に回って終了シーンで終わる', async () => {
+    const { h, renderer } = makeRenderer()
+    const hubOptions = [
+      { jump: 'r1', locked: false },
+      { jump: 'r2', locked: false },
+      { jump: 'r3', locked: false },
+    ]
+    // 各ルートに入って（onSceneChange）ハブへ戻る。ハブは再び選択肢を出す。
+    h.onSelect = (jump) => {
+      h.onSceneChange?.(jump)
+      h.onSceneChange?.('h')
+      h.pending = { options: hubOptions }
+    }
+    const run = await startRecording(renderer, {
+      startSceneId: 'h',
+      endSceneId: 'r3',
+      sceneOrder: ['h', 'r1', 'r2', 'r3'],
+    })
+    h.pending = { options: hubOptions }
+    await vi.advanceTimersByTimeAsync((EXPORT_AUTO_CHOICE_DISPLAY_MS + EXPORT_POLL_MS * 2) * 6)
+    await run.p
+    expect(h.selected).toEqual(['r1', 'r2', 'r3'])
+    expect(run.result?.endReason).toBe('scene-end')
+  })
+
+  it('範囲内の遷移先がすべて訪問済みなら、選択肢を映して終端にする（開始シーンへ戻るだけの選択肢）', async () => {
     const { h, renderer } = makeRenderer()
     const run = await startRecording(renderer, {
       startSceneId: 'a',
       endSceneId: 'b',
       sceneOrder: ['a', 'b'],
+    })
+    h.pending = { options: [{ jump: 'a', locked: false }] }
+    await vi.advanceTimersByTimeAsync(EXPORT_CHOICE_HOLD_MS + EXPORT_POLL_MS * 2)
+    await run.p
+    expect(h.selected).toEqual([])
+    expect(run.result?.endReason).toBe('choice-end')
+  })
+
+  it('保険: シーン変更の通知が無くて訪問済みを判定できなくても、自動選択は上限で止まる', async () => {
+    const { h, renderer } = makeRenderer()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'c',
+      sceneOrder: ['a', 'b', 'c'],
       stallTimeoutMs: 10 ** 9,
     })
-    const loop = [{ jump: 'a', locked: false }]
+    const loop = [{ jump: 'b', locked: false }]
     h.reoffer = loop
     h.pending = { options: loop }
     await vi.advanceTimersByTimeAsync(
-      EXPORT_POLL_MS * (EXPORT_MAX_AUTO_CHOICES + 2) + EXPORT_CHOICE_HOLD_MS + EXPORT_POLL_MS * 2
+      (EXPORT_AUTO_CHOICE_DISPLAY_MS + EXPORT_POLL_MS * 2) * (EXPORT_MAX_AUTO_CHOICES + 2) +
+        EXPORT_CHOICE_HOLD_MS +
+        EXPORT_POLL_MS * 4
     )
     await run.p
     expect(h.selected.length).toBe(EXPORT_MAX_AUTO_CHOICES)
     expect(run.result?.endReason).toBe('choice-end')
+  })
+
+  it('選択肢が受け付けられず固まっても、停滞タイムアウトで終わる', async () => {
+    const { h, renderer } = makeRenderer()
+    h.acceptSelect = false
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'c',
+      sceneOrder: ['a', 'b', 'c'],
+      stallTimeoutMs: 5000,
+    })
+    h.pending = { options: [{ jump: 'b', locked: false }] }
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(run.result).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(3000)
+    await run.p
+    expect(run.result?.endReason).toBe('stalled')
   })
 
   it('中止すると録画を止めて破棄し、ExportAbortedError で reject する（後始末も走る）', async () => {
@@ -285,5 +372,95 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
     await vi.advanceTimersByTimeAsync(10)
     await run.p
     expect(run.result?.endReason).toBe('story-end')
+  })
+
+  it('[待機: N] で待っている間は、N ms を加えた長さまで停滞とみなさない', async () => {
+    const { h, renderer } = makeRenderer()
+    h.waitMs = 80_000
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      stallTimeoutMs: 60_000,
+    })
+    await vi.advanceTimersByTimeAsync(70_000)
+    expect(run.result).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(80_000)
+    await run.p
+    expect(run.result?.endReason).toBe('stalled')
+  })
+
+  it('終わりのある動画の再生中は停滞とみなさない', async () => {
+    const { h, renderer } = makeRenderer()
+    h.videoPlaying = true
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      stallTimeoutMs: 5000,
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(run.result).toBeUndefined()
+    h.videoPlaying = false
+    await vi.advanceTimersByTimeAsync(6000)
+    await run.p
+    expect(run.result?.endReason).toBe('stalled')
+  })
+
+  it('録画前の背景ロード待ちの途中でも、中止ですぐ reject する', async () => {
+    const { h, renderer } = makeRenderer()
+    h.backgroundGate = new Promise<void>(() => {}) // 永久に終わらない
+    const ac = new AbortController()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      signal: ac.signal,
+    })
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(1)
+    await run.p
+    expect(run.error).toBeInstanceOf(ExportAbortedError)
+    expect(stops).toEqual([])
+    expect(h.exportCalls).toEqual([true, false])
+  })
+
+  it('余韻録音（postRoll）の最中に中止しても、保存されず reject する（終了処理が二重に走らない）', async () => {
+    const { h, renderer } = makeRenderer()
+    const ac = new AbortController()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      signal: ac.signal,
+      postRollMs: 5000,
+    })
+    h.onEnd?.() // 終端検知 → 余韻録音に入る
+    await vi.advanceTimersByTimeAsync(1000)
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(10_000)
+    await run.p
+    expect(run.result).toBeUndefined()
+    expect(run.error).toBeInstanceOf(ExportAbortedError)
+    expect(stops).toEqual(['stop'])
+    expect(h.exportCalls).toEqual([true, false])
+  })
+
+  it('recorder が停止済み（onstop 前）の最中に中止しても、reject して後始末する', async () => {
+    const { h, renderer } = makeRenderer()
+    const ac = new AbortController()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      signal: ac.signal,
+    })
+    recorders[0].state = 'inactive' // stop 済みで onstop がまだ来ていない状態
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(10)
+    await run.p
+    expect(run.error).toBeInstanceOf(ExportAbortedError)
+    expect(stops).toEqual([])
+    expect(h.exportCalls).toEqual([true, false])
   })
 })

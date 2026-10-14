@@ -1115,6 +1115,11 @@ describe('EditorScreen: 動画書き出し中の操作制限・中止 (#780, #79
     )
   })
 
+  let unmountEditor: () => void = () => {}
+  function renderEditorForUnmount() {
+    unmountEditor = renderEditor().unmount
+  }
+
   async function openModalAndStart() {
     renderEditor()
     fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
@@ -1177,6 +1182,17 @@ describe('EditorScreen: 動画書き出し中の操作制限・中止 (#780, #79
     expect(screen.getByTestId('export-status').textContent).toContain('保存されていません')
     expect(modeBtn(/Edit Mode/i).disabled).toBe(false)
     expect(rpgTab().disabled).toBe(false)
+  })
+
+  it('書き出し中に画面を離れる（アンマウント）と、書き出しを中止する', async () => {
+    renderEditorForUnmount()
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    fireEvent.click(await screen.findByRole('button', { name: '動画エクスポート' }))
+    fireEvent.click(screen.getByText('テスト録画開始'))
+    await waitFor(() => expect(exportVideoMock).toHaveBeenCalled())
+    expect(exportOpts?.signal?.aborted).toBe(false)
+    unmountEditor()
+    expect(exportOpts?.signal?.aborted).toBe(true)
   })
 
   it('タイムアウトで終わったときは、その理由を表示する', async () => {

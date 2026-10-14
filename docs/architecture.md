@@ -868,8 +868,9 @@ stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob 
 | `NovelRenderer.getAudioManager()`                                                                   | AudioManager 経由で音声 MediaStream を分岐                                         |
 | `NovelRenderer.startFrom({ sceneId, flags })` | 新規開始。BGM・背景・flags・`consecutiveJumps` を持ち越さない。結果が `entered` 以外なら export を reject し、cleanup を通す |
 | `NovelRenderer.isAutoMode()` / `setAutoMode()` | 書き出し中だけオートモードを入れ、cleanup で書き出し前の値へ戻す |
-| `NovelRenderer.getSnapshot()` | `resolveExportFlags` がプレビューの flags を複製して取り出す（引き継ぎ ON のときだけ）。書き出し中は進行位置の署名（停滞検出）にも使う |
-| `NovelRenderer.getPendingChoice()` / `selectPendingChoice(jump)` | 選択肢待ちの遷移先とロック状態の取得、ロックされていない option の確定（ChoiceOverlay のクリックと同じ確定経路 `confirmChoiceJump`）(#780) |
+| `NovelRenderer.getSnapshot()` | `resolveExportFlags` がプレビューの flags を複製して取り出す（引き継ぎ ON のときだけ） |
+| `NovelRenderer.getExportProgress()` | 停滞検出用の軽量な進行状況（位置の署名・`[待機: N]` の N・終わりのある動画の再生中か）(#780) |
+| `NovelRenderer.getPendingChoice()` / `selectPendingChoice(jump)` | 選択肢待ちの遷移先とロック状態の取得、ロックされていない option の確定（`ChoiceOverlay.selectByJump` 経由で、クリックと同じ確定経路 `confirmChoiceJump` と確定音を通る）(#780) |
 | `NovelRenderer.prepareVideosForExport()` | 録画開始前に動画レイヤを頭出しする |
 | `NovelRenderer.waitForBackgroundLoad()` | 開始シーンの背景ロード完了を録画開始前に待つ（新規開始は背景が地色から始まるため） |
 | `NovelRenderer.setOnSceneChange()` / `takeOnSceneChange()`                                          | 終端検出用のリスナ占有と退避復元                                                   |
@@ -883,22 +884,24 @@ UI 側からは `NovelRenderer.getCurrentSceneId()` / `getAllSceneIds()` も使�
 
 ### 書き出しの終わり方 (#780)
 
-録画開始後、`EXPORT_POLL_MS`（250ms）ごとに選択肢と進行位置を見張る。判定の計算は純粋関数 `videoExportPolicy.ts`（`isSceneInExportRange` / `pickAutoChoice` / `exportProgressSignature`）に置き、`exportVideo` が配線する。
+録画開始後、`EXPORT_POLL_MS`（250ms）ごとに選択肢と進行位置を見張る。判定の計算は純粋関数 `videoExportPolicy.ts`（`isSceneInExportRange` / `pickAutoChoice` / `computeStallLimitMs` / `exportProgressSignature`）に置き、`exportVideo` が配線する。
 
 | 状況 | 動作 | `endReason` |
 | --- | --- | --- |
 | 終了シーンを抜けた／全イベント完走 | 余韻録音（`postRollMs`）のあと停止して保存 | `scene-end` / `story-end` |
-| 選択肢に到達し、範囲内（開始〜終了。`sceneOrder` の並びで両端を含む）に進むロックされていない遷移先がある | 先頭のものを自動で選んで続行（最大 `EXPORT_MAX_AUTO_CHOICES`=50 回） | （続行） |
-| 選択肢に到達し、範囲内の遷移先が無い（または自動選択が上限） | 選択肢を `EXPORT_CHOICE_HOLD_MS`（3 秒）映してから終端扱いで停止・保存 | `choice-end` |
-| 本文・選択肢が `EXPORT_STALL_TIMEOUT_MS`（60 秒）進まない | タイムアウトで停止・保存。理由をモーダルに表示 | `stalled` |
+| 選択肢に到達し、範囲内にあって**まだ書き出し中に入っていない**ロックされていない遷移先がある | 選択肢を `EXPORT_AUTO_CHOICE_DISPLAY_MS`（1.5 秒）映してから、先頭のものを確定音つき（クリックと同じ経路）で自動選択して続行。ハブから各ルートが戻る構成でも、未訪問のルートを順に回る（最大 `EXPORT_MAX_AUTO_CHOICES`=50 回は保険） | （続行） |
+| 選択肢に到達し、範囲内の遷移先が無い／すべて訪問済み（または自動選択が上限） | 選択肢を `EXPORT_CHOICE_HOLD_MS`（3 秒）映してから終端扱いで停止・保存 | `choice-end` |
+| 本文・選択肢が `EXPORT_STALL_TIMEOUT_MS`（60 秒）進まない | タイムアウトで停止・保存。理由をモーダルに表示。`[待機: N]` 中は N ms を加えた長さ、終わりのある（loop でない）動画の再生中は停滞とみなさない。選択肢を受け付けられないまま固まった場合もここで終わる | `stalled` |
 | 中止（モーダルの「中止」） | `AbortSignal` で録画を止めて**破棄**（ファイルは保存しない）。`ExportAbortedError` で reject し、cleanup は通常どおり走る | — |
 
-終了理由は `VideoExportResult.endReason` / `endMessage` で返り、エディタがモーダルに表示する。中止は録画前（準備中）でも効く。
+終了理由は `VideoExportResult.endReason` / `endMessage` で返り、エディタがモーダルに表示する。中止は録画前（準備中。背景ロード・動画頭出しの待ちの途中を含む）でも効き、`EditorScreen` がアンマウントされる（戻る・プロジェクト切替・設定/アセット画面）と実行中の書き出しも自動で中止する。
+
+「範囲内」は**編集中の doc のシーンだけ**が対象で（他の .md のシーンは `sceneOrder` に無く、範囲外として扱う）、`[待機: 表示完了]` のように待ち時間が決まっていない待機は通常の停滞時間で判定する。
 
 ### Phase 1 の制約
 
 - **実時間がかかる**: シナリオ 3 分なら録画も 3 分。virtual time 化していないため
-- **キャンセル不能**: 録画開始後に途中で止める手段は今のところ無い（ページリロードで強制終了）。長尺録画は事前に範囲を確認すること
+- **中止は破棄**: 録画中の「中止」は録画を捨てる（途中までの保存はしない）。長尺録画は事前に範囲を確認すること
 - **WebM のみ**: mp4 変換は Phase 2 で ffmpeg.wasm を追加する
 - **タブ非アクティブで品質劣化**: ブラウザが rAF を間引くと PixiJS Ticker が薄まり、描画フレームが捨てられる。録画中はタブをアクティブに保つ必要がある
 - **コールバックの占有**: `setOnSceneChange` / `setOnEnd` を録画中に上書きするため、録画中の手動操作と競合する想定はしていない

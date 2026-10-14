@@ -81,4 +81,37 @@ describe('NovelRenderer.getPendingChoice / selectPendingChoice (#780)', () => {
     await new Promise((res) => setTimeout(res, 0))
     expect(r.getCurrentSceneId()).toBe('far')
   })
+
+  it('自動選択もクリックと同じ確定音を鳴らし、受け付けられなかったときは鳴らさない', async () => {
+    const r = makeAtChoice()
+    const tone = vi.spyOn(r.getAudioManager(), 'playSelectTone').mockImplementation(() => {})
+    r.advance()
+    expect(r.selectPendingChoice('near')).toBe(false) // ロック中
+    expect(tone).not.toHaveBeenCalled()
+    expect(r.selectPendingChoice('far')).toBe(true)
+    expect(tone).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NovelRenderer.getExportProgress (#780)', () => {
+  it('位置を返し、待機中でなければ waitMs は null・動画も再生していない', () => {
+    const r = makeAtChoice()
+    const p = r.getExportProgress()
+    expect(p).toMatchObject({ eventIndex: 0, textIndex: 0, sentenceIndex: 0 })
+    expect(p.waitMs).toBeNull()
+    expect(p.videoPlaying).toBe(false)
+  })
+
+  it('[待機: N] の最中は waitMs に N を返す', () => {
+    const wait = scene('w', [{ Wait: { ms: 80000 } } as Event, narration('after')])
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
+    const i = r as unknown as Internals
+    i.initialized = true
+    vi.spyOn(i, 'render').mockImplementation(() => {})
+    r.setScenes([wait])
+    r.setEvents(wait.events)
+    expect(r.getExportProgress().waitMs).toBe(80000)
+  })
 })

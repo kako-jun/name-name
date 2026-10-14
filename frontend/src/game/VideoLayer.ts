@@ -318,6 +318,13 @@ export class VideoLayer extends Container {
     }
   }
 
+  /** 終わりのある動画（loop でない）が再生中か (#780 書き出しの停滞判定用) */
+  isPlayingToEnd(): boolean {
+    const el = this.videoEl
+    if (!el || !this.current || this.current.loop) return false
+    return !el.paused && !el.ended
+  }
+
   /**
    * 現在の表示状態を返す（スナップショット用）。なければ null。
    * playhead は現在の再生位置（秒）。

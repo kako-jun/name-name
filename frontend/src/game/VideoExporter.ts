@@ -11,10 +11,12 @@ import type { NovelRenderer } from './NovelRenderer'
 import type { FlagValue } from '../types'
 import { computeDynamicRenderResolution, resolveDevicePixelRatio } from './novelLayout'
 import {
+  EXPORT_AUTO_CHOICE_DISPLAY_MS,
   EXPORT_CHOICE_HOLD_MS,
   EXPORT_MAX_AUTO_CHOICES,
   EXPORT_POLL_MS,
   EXPORT_STALL_TIMEOUT_MS,
+  computeStallLimitMs,
   exportProgressSignature,
   pickAutoChoice,
   type ExportEndReason,
@@ -79,8 +81,11 @@ export interface VideoExportOptions {
   signal?: AbortSignal
   /** 自動で選ぶ遷移先が無い選択肢を映してから録画を終えるまで ms (#780)。既定 EXPORT_CHOICE_HOLD_MS */
   choiceHoldMs?: number
-  /** 本文が進まない状態がこの時間続いたら録画を終える ms (#780)。既定 EXPORT_STALL_TIMEOUT_MS */
+  /** 本文が進まない状態がこの時間続いたら録画を終える ms (#780)。既定 EXPORT_STALL_TIMEOUT_MS。
+   *  `[待機: N]` 中は N ms を加えた長さ、終わりのある動画の再生中は停滞とみなさない */
   stallTimeoutMs?: number
+  /** 自動で選ぶ選択肢を、選ぶ前に映しておく時間 ms (#780)。既定 EXPORT_AUTO_CHOICE_DISPLAY_MS */
+  autoChoiceDisplayMs?: number
 }
 
 export interface VideoExportResult {
@@ -214,6 +219,7 @@ export async function exportVideo(
     signal,
     choiceHoldMs = EXPORT_CHOICE_HOLD_MS,
     stallTimeoutMs = EXPORT_STALL_TIMEOUT_MS,
+    autoChoiceDisplayMs = EXPORT_AUTO_CHOICE_DISPLAY_MS,
   } = opts
 
   if (signal?.aborted) throw new ExportAbortedError()
@@ -438,8 +444,11 @@ export async function exportVideo(
   // startSceneId === endSceneId の単一シーン録画では、startFrom 直後の
   // setOnSceneChange 発火で visitedEndScene = true まで進むが、まだ
   // 「別シーンへの遷移」は起きていないので finalize は呼ばれない。OK。
+  // 書き出し中に入ったシーン。選択肢の自動選択は未訪問の範囲内遷移先を優先する (#780)。
+  const visitedScenes = new Set<string>([startSceneId])
   renderer.setOnSceneChange((sceneId) => {
     if (stopped) return
+    visitedScenes.add(sceneId)
     onProgress?.(`録画中: ${sceneId}`)
     if (sceneId === endSceneId) {
       visitedEndScene = true
@@ -461,6 +470,28 @@ export async function exportVideo(
   // recorder.start。「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
   // 新規開始は BGM・背景・flags・consecutiveJumps をプレビューから持ち越さない (#734, ADR 0003)。
   // 録画開始前の待ち中に終端（onEnd / end から次シーン）が来たら、録画せず失敗にする。
+  // 録画前の待ち（背景ロード・動画頭出しなど最大数十秒）の途中でも、中止ですぐ抜ける。
+  const raceAbort = <T>(p: Promise<T>): Promise<T> => {
+    if (!signal) return p
+    return new Promise<T>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new ExportAbortedError())
+        return
+      }
+      const onAbortRace = () => reject(new ExportAbortedError())
+      signal.addEventListener('abort', onAbortRace, { once: true })
+      p.then(
+        (v) => {
+          signal.removeEventListener('abort', onAbortRace)
+          resolve(v)
+        },
+        (e) => {
+          signal.removeEventListener('abort', onAbortRace)
+          reject(e)
+        }
+      )
+    })
+  }
   const failIfStopped = () => {
     if (signal?.aborted) throw new ExportAbortedError()
     if (stopped) throw new Error('ended before recording started')
@@ -468,21 +499,21 @@ export async function exportVideo(
   renderer.setAutoMode(true)
   onProgress?.(`録画準備中（flags: ${JSON.stringify(flags)}）`)
   try {
-    const entry = await renderer.startFrom({ sceneId: startSceneId, flags })
+    const entry = await raceAbort(renderer.startFrom({ sceneId: startSceneId, flags }))
     if (entry.status !== 'entered') {
       const detail = entry.status === 'failed' ? `${entry.status}: ${entry.reason}` : entry.status
       throw new Error(`Could not start from scene "${startSceneId}" (${detail})`)
     }
     failIfStopped()
     onProgress?.('背景読み込み中')
-    await waitForBackground(renderer)
+    await raceAbort(waitForBackground(renderer))
 
-    await new Promise((r) => setTimeout(r, preRollMs))
+    await raceAbort(new Promise((r) => setTimeout(r, preRollMs)))
 
     // 動画入力レイヤ (#252): 録画開始前に表示中の動画を頭出し（currentTime=0）して
     // ready を待つ。これで録画の先頭から動画が正しく映る/鳴る。動画が無ければ即解決。
     onProgress?.('動画頭出し中')
-    await renderer.prepareVideosForExport()
+    await raceAbort(renderer.prepareVideosForExport())
     failIfStopped()
   } catch (e) {
     // 録画を始める前の失敗: 退避したリスナ・解像度・録画フラグ・isExporting を必ず戻す。
@@ -496,48 +527,60 @@ export async function exportVideo(
   recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
   onProgress?.('録画開始')
 
-  // 選択肢への到達と停滞の見張り (#780)。録画開始後だけ回す。
+  // 選択肢への到達と停滞の見張り (#780)。録画開始後だけ回す。時計は performance.now。
   let autoChoices = 0
   let choiceSeenAt: number | null = null
   let lastSignature = ''
-  let lastProgressAt = Date.now()
+  let lastProgressAt = performance.now()
   monitorTimer = setInterval(() => {
     if (stopped) return
-    const now = Date.now()
+    const now = performance.now()
     const pending = renderer.getPendingChoice()
     if (pending) {
+      // 選択肢の待機中は停滞の時計に触れない。受け付けられない状態が続けば、停滞として終わる。
       choiceSeenAt ??= now
-      lastProgressAt = now // 選択肢の待機は停滞ではなく、下の保持時間で扱う
       const pick =
         autoChoices < EXPORT_MAX_AUTO_CHOICES
-          ? pickAutoChoice(pending.options, startSceneId, endSceneId, sceneOrder)
+          ? pickAutoChoice(pending.options, startSceneId, endSceneId, sceneOrder, visitedScenes)
           : null
       if (pick !== null) {
-        // 範囲内へ進む選択肢は先頭のものを自動で選ぶ。入場中などで受け付けられなければ次の tick で再試行。
-        if (renderer.selectPendingChoice(pick)) {
+        // 範囲内の未訪問の遷移先があれば、選択肢を映してから先頭のものを自動で選ぶ。
+        // 入場中などで受け付けられなければ次の tick で再試行（停滞の時計は進めない）。
+        if (now - choiceSeenAt >= autoChoiceDisplayMs && renderer.selectPendingChoice(pick)) {
           autoChoices++
           choiceSeenAt = null
+          lastProgressAt = now
           onProgress?.(`選択肢を自動選択: ${pick}`)
+          return
         }
-        return
-      }
-      // 範囲内の遷移先が無い（または自動選択の上限）: 選択肢を映してから終端にする。
-      if (now - choiceSeenAt >= choiceHoldMs) {
+      } else if (now - choiceSeenAt >= choiceHoldMs) {
+        // 範囲内の未訪問の遷移先が無い（または自動選択の上限）: 選択肢を映してから終端にする。
         finalize(
           autoChoices >= EXPORT_MAX_AUTO_CHOICES
             ? `選択肢の自動選択が上限(${EXPORT_MAX_AUTO_CHOICES}回)に達したため終了`
-            : '選択肢に範囲内の遷移先が無いため終了',
+            : '選択肢に範囲内の未訪問の遷移先が無いため終了',
           'choice-end'
         )
+        return
       }
-      return
+    } else {
+      choiceSeenAt = null
+      const progress = renderer.getExportProgress()
+      const signature = exportProgressSignature(progress)
+      if (signature !== lastSignature || progress.videoPlaying) {
+        // 位置が動いた、または終わりのある動画を再生中は進行中
+        lastSignature = signature
+        lastProgressAt = now
+        return
+      }
+      const limit = computeStallLimitMs(stallTimeoutMs, progress.waitMs)
+      if (now - lastProgressAt >= limit) {
+        finalize(`${Math.round(limit / 1000)}秒間進まなかったため終了`, 'stalled')
+        return
+      }
     }
-    choiceSeenAt = null
-    const signature = exportProgressSignature(renderer.getSnapshot())
-    if (signature !== lastSignature) {
-      lastSignature = signature
-      lastProgressAt = now
-    } else if (now - lastProgressAt >= stallTimeoutMs) {
+    // 選択肢を受け付けられないまま長く経った場合は、停滞として終える
+    if (pending && now - lastProgressAt >= stallTimeoutMs) {
       finalize(`${Math.round(stallTimeoutMs / 1000)}秒間進まなかったため終了`, 'stalled')
     }
   }, EXPORT_POLL_MS)

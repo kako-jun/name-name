@@ -262,6 +262,12 @@ function EditorScreen({
     allSceneIds,
   ])
 
+  // 画面を離れたら（戻る・プロジェクト切替・設定/アセット画面）実行中の書き出しを中止する。
+  // 残すと、別の画面で録画が完了してダウンロードが始まってしまう (#780)。
+  useEffect(() => {
+    return () => exportAbortRef.current?.abort()
+  }, [])
+
   const handleAbortVideoExport = useCallback(() => {
     exportAbortRef.current?.abort()
   }, [])

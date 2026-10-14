@@ -290,7 +290,14 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       prepareVideosForExport: async () => {},
       getPendingChoice: () => null,
       selectPendingChoice: () => false,
-      getSnapshot: () => ({ sceneId: null, eventIndex: 0, textIndex: 0, sentenceIndex: 0 }),
+      getExportProgress: () => ({
+        sceneId: null,
+        eventIndex: 0,
+        textIndex: 0,
+        sentenceIndex: 0,
+        waitMs: null,
+        videoPlaying: false,
+      }),
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
   }
 
