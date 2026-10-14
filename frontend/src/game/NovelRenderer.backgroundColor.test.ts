@@ -17,8 +17,8 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
-import type { NovelGameState } from './GameState'
 import { SaveManager, SaveSlotData } from './SaveManager'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（既存 NovelRenderer 系テストと同じスタイル）---
 
@@ -42,18 +42,12 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 }
 
 /** private メソッド / フィールドへ到達するための内部アクセサ（既存テストと同じ cast 流儀） */
-interface RendererInternals {
-  applyState(state: NovelGameState): void
+interface LocalInternals extends RendererInternals {
   setBackgroundColor(color: string): void
   clearBackgroundColor(): void
   clearBackground(): void
   currentBackgroundColor: string | null
-  currentBackgroundPath: string | null
   bgGraphics: { clear(): unknown }
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 /** jsdom セーフな SaveSlotData を作る（アセット系は null/空）。over で上書き可。 */
@@ -178,10 +172,10 @@ describe('NovelRenderer 背景色の永続・復元 (#273)', () => {
   it('BG3: applyState で別色を再設定すると bgGraphics.clear が呼ばれる（重ね塗り防止 / DT-A2）', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).setBackgroundColor('#f5f0e8') // 事前に色あり
+    internals<LocalInternals>(r).setBackgroundColor('#f5f0e8') // 事前に色あり
     const base = r.getSnapshot()
-    const clearSpy = vi.spyOn(internals(r).bgGraphics, 'clear')
-    internals(r).applyState({ ...base, backgroundColor: '#1a4a7a' })
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).bgGraphics, 'clear')
+    internals<LocalInternals>(r).applyState({ ...base, backgroundColor: '#1a4a7a' })
     // 別色適用は setBackgroundColor を通り、塗り直し前に必ず clear() する。
     expect(clearSpy).toHaveBeenCalled()
     expect(r.getSnapshot().backgroundColor).toBe('#1a4a7a')
@@ -191,13 +185,13 @@ describe('NovelRenderer 背景色の永続・復元 (#273)', () => {
   it('BG4: 事前に色あり → backgroundColor=null の state を applyState → null に戻り clear される（DT-A3）', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).setBackgroundColor('#f5f0e8')
+    internals<LocalInternals>(r).setBackgroundColor('#f5f0e8')
     const base = r.getSnapshot()
-    const clearSpy = vi.spyOn(internals(r).bgGraphics, 'clear')
-    internals(r).applyState({ ...base, backgroundColor: null })
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).bgGraphics, 'clear')
+    internals<LocalInternals>(r).applyState({ ...base, backgroundColor: null })
     // null は clearBackgroundColor 経由で黒復帰（clear → rect → fill(0x000000)）。
     expect(clearSpy).toHaveBeenCalled()
-    expect(internals(r).currentBackgroundColor).toBeNull()
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBeNull()
     expect(r.getSnapshot().backgroundColor).toBeNull()
   })
 
@@ -207,17 +201,17 @@ describe('NovelRenderer 背景色の永続・復元 (#273)', () => {
   it('BGX4: clearBackground() は currentBackgroundColor を変えない（スロット独立）', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).setBackgroundColor('#f5f0e8')
-    internals(r).clearBackground() // 背景画像スロットだけを初期化
-    expect(internals(r).currentBackgroundColor).toBe('#f5f0e8')
+    internals<LocalInternals>(r).setBackgroundColor('#f5f0e8')
+    internals<LocalInternals>(r).clearBackground() // 背景画像スロットだけを初期化
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBe('#f5f0e8')
   })
 
   it('BGX4: clearBackgroundColor() は currentBackgroundPath を変えない（スロット独立）', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).currentBackgroundPath = 'bg/room.png' // 背景画像ありを擬似的に立てる
-    internals(r).clearBackgroundColor() // 地色スロットだけを初期化
-    expect(internals(r).currentBackgroundPath).toBe('bg/room.png')
+    internals<LocalInternals>(r).currentBackgroundPath = 'bg/room.png' // 背景画像ありを擬似的に立てる
+    internals<LocalInternals>(r).clearBackgroundColor() // 地色スロットだけを初期化
+    expect(internals<LocalInternals>(r).currentBackgroundPath).toBe('bg/room.png')
   })
 
   // ===== 非対称の明文化（S1）=====

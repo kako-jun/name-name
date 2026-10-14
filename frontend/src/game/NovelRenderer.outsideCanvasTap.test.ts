@@ -18,6 +18,7 @@ import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -25,14 +26,6 @@ function narration(...lines: string[]): Event {
 
 function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
-}
-
-interface OutsideTapInternals {
-  waitingForChoice: boolean
-  resolvedEvents: Event[]
-}
-function internals(r: NovelRenderer): OutsideTapInternals {
-  return r as unknown as OutsideTapInternals
 }
 
 /** handleAdvance() 経由で叩かれる audioManager.ensureContext() を no-op にする（jsdom に AudioContext が無い）。 */

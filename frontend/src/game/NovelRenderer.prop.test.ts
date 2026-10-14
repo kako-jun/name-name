@@ -28,6 +28,7 @@ import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import { GAME_WIDTH } from './constants'
 import { THEATER_CAMERA_REFERENCE_DEPTH } from './cameraProjection'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -69,7 +70,7 @@ interface PropLayerForTest {
     sprite: { x: number; y: number; width: number; height: number } | null
   }[]
 }
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   backgroundBoardLayer: unknown
   videoLayer: unknown
   titleScreenOverlay: unknown
@@ -79,7 +80,6 @@ interface RendererInternals {
   curtainLayer: unknown
   eventImageLayer: unknown
   novelScrim: unknown
-  appInitialized: boolean
   app: {
     init: (...args: unknown[]) => Promise<void>
     stage: { children: unknown[] }
@@ -88,16 +88,12 @@ interface RendererInternals {
     destroy: (...args: unknown[]) => void
   }
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /**
  * destroy() の appInitialized ガード（PixiJS 実 init 未完了時の early-return）を満たすための
  * 最小スタブ（NovelRenderer.eventImage.test.ts の stubDestroyableApp と同じ割り切り）。
  */
 function stubDestroyableApp(r: NovelRenderer): void {
-  const appInternals = internals(r)
+  const appInternals = internals<LocalInternals>(r)
   appInternals.appInitialized = true
   Object.defineProperty(appInternals.app, 'canvas', {
     configurable: true,
@@ -109,7 +105,7 @@ function stubDestroyableApp(r: NovelRenderer): void {
 describe('NovelRenderer Prop 配線 (#692)', () => {
   it('init() 後の親レイヤー順は背景板 < 動画 < タイトル < キャラ < スポットライト < 大道具 < 幕 < イベント絵 < スクリムになる (#695, #693, #697)', async () => {
     const r = new NovelRenderer()
-    const renderer = internals(r)
+    const renderer = internals<LocalInternals>(r)
     const canvas = document.createElement('canvas')
     vi.spyOn(renderer.app, 'init').mockResolvedValue()
     Object.defineProperty(renderer.app, 'canvas', { configurable: true, value: canvas })
@@ -286,7 +282,7 @@ describe('NovelRenderer Prop の settled state / 破棄 / 復元経路 (#692)', 
   it('destroy() は propLayer.clear() と disposeTextures() の両方を呼ぶ', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('a', [prop('desk.png', 3), narration('one')])])
-    const layer = internals(r).propLayer
+    const layer = internals<LocalInternals>(r).propLayer
     const clearSpy = vi.spyOn(layer, 'clear')
     const disposeSpy = vi.spyOn(layer, 'disposeTextures')
     stubDestroyableApp(r)
@@ -302,7 +298,7 @@ describe('NovelRenderer Prop の settled state / 破棄 / 復元経路 (#692)', 
     r.setScenes([scene('a', [prop('desk.png', 3), narration('one'), narration('two')])])
     // setScenes の自動開始で [大道具:] directive が実行済み、'one' で停止。
     await r.playScript([{ type: 'advance' }]) // one -> two
-    const layer = internals(r).propLayer
+    const layer = internals<LocalInternals>(r).propLayer
     const addSpy = vi.spyOn(layer, 'add')
 
     r.goBack() // two -> one（props=[desk.png] のまま）
@@ -349,7 +345,7 @@ describe('NovelRenderer Prop カメラ状態のシーン遷移同期 (PR #690 �
     // スライドイン演出を完了させ、y と同様に interval に左右されない状態で幾何を確認する。
     r.getTimeController().tick(1000)
 
-    const layer = internals(r).propLayer
+    const layer = internals<LocalInternals>(r).propLayer
     const before = layer.entries.find((e) => e.path === 'desk.png')?.sprite
     expect(before?.width).toBeCloseTo(GAME_WIDTH * 0.5) // シーンA: Theater 射影で縮小
 
@@ -374,7 +370,7 @@ describe('NovelRenderer Prop カメラ状態のシーン遷移同期 (PR #690 �
     r.jumpToScene('b') // resetAndStartEvents 直後にシーンBの [大道具:] が実行される
     await flushPromises()
 
-    const layer = internals(r).propLayer
+    const layer = internals<LocalInternals>(r).propLayer
     const sprite = layer.entries.find((e) => e.path === 'chair.png')?.sprite
     expect(sprite?.width).toBe(GAME_WIDTH) // 古い Theater 射影を引きずらず Novel（原寸）で配置される
   })

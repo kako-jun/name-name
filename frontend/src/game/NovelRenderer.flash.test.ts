@@ -22,6 +22,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { TimeController } from './TimeController'
 import type { Event, FlashArea } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 interface EffectOverlayMock {
   alpha: number
@@ -31,16 +32,11 @@ interface EffectOverlayMock {
   fill: (...args: unknown[]) => void
 }
 
-interface RendererInternals {
-  processDirective(event: Event): void
+interface LocalInternals extends RendererInternals {
   effectOverlay: EffectOverlayMock | null
   screenWidth: number
   screenHeight: number
   time: TimeController
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 function installEffectOverlay(r: NovelRenderer): EffectOverlayMock {
@@ -51,7 +47,7 @@ function installEffectOverlay(r: NovelRenderer): EffectOverlayMock {
     rect: vi.fn(),
     fill: vi.fn(),
   }
-  internals(r).effectOverlay = overlay
+  internals<LocalInternals>(r).effectOverlay = overlay
   return overlay
 }
 
@@ -93,9 +89,11 @@ describe('NovelRenderer Flash area/strobe/interval 配線 (#693)', () => {
   it('後方互換: area 省略時は従来通り全画面 (0,0,screenWidth,screenHeight) にフラッシュする', () => {
     const r = new NovelRenderer()
     const overlay = installEffectOverlay(r)
-    const { screenWidth, screenHeight } = internals(r)
+    const { screenWidth, screenHeight } = internals<LocalInternals>(r)
 
-    internals(r).processDirective(flash({ color: '#ff0000', alpha: 0.9, duration_ms: 200 }))
+    internals<LocalInternals>(r).processDirective(
+      flash({ color: '#ff0000', alpha: 0.9, duration_ms: 200 })
+    )
 
     expect(overlay.rect).toHaveBeenCalledWith(0, 0, screenWidth, screenHeight)
     expect(overlay.alpha).toBeCloseTo(0.9, 5)
@@ -105,9 +103,11 @@ describe('NovelRenderer Flash area/strobe/interval 配線 (#693)', () => {
   it('area 指定時は computeFlashAreaRect で変換した px 矩形で effectOverlay.rect が呼ばれる', () => {
     const r = new NovelRenderer()
     const overlay = installEffectOverlay(r)
-    const { screenWidth, screenHeight } = internals(r)
+    const { screenWidth, screenHeight } = internals<LocalInternals>(r)
 
-    internals(r).processDirective(flash({ area: { x: 0.2, y: 0.3, w: 0.3, h: 0.4 } }))
+    internals<LocalInternals>(r).processDirective(
+      flash({ area: { x: 0.2, y: 0.3, w: 0.3, h: 0.4 } })
+    )
 
     expect(overlay.rect).toHaveBeenCalledWith(
       screenWidth * 0.2,
@@ -121,11 +121,11 @@ describe('NovelRenderer Flash area/strobe/interval 配線 (#693)', () => {
     vi.useFakeTimers()
     const r = new NovelRenderer()
     const overlay = installEffectOverlay(r)
-    internals(r).time.setMode('virtual')
-    const time = internals(r).time
+    internals<LocalInternals>(r).time.setMode('virtual')
+    const time = internals<LocalInternals>(r).time
 
     const peak = 0.8
-    internals(r).processDirective(
+    internals<LocalInternals>(r).processDirective(
       flash({ alpha: peak, duration_ms: 200, strobe: 3, interval_ms: 100 })
     )
     expect(overlay.alpha).toBeCloseTo(peak, 5) // 開始直後はピーク
@@ -154,17 +154,17 @@ describe('NovelRenderer Flash area/strobe/interval 配線 (#693)', () => {
     vi.useFakeTimers()
     const r = new NovelRenderer()
     const overlay = installEffectOverlay(r)
-    internals(r).time.setMode('virtual')
-    const time = internals(r).time
+    internals<LocalInternals>(r).time.setMode('virtual')
+    const time = internals<LocalInternals>(r).time
 
     // 1つ目: 長いストロボ（10連, interval=50ms, duration=300ms → 数百ms は続くはず）。
-    internals(r).processDirective(
+    internals<LocalInternals>(r).processDirective(
       flash({ color: '#ff0000', alpha: 0.8, duration_ms: 300, strobe: 10, interval_ms: 50 })
     )
     advanceBoth(time, 60) // 1回目パルスの途中まで進める（まだ完了していない）
 
     // 2つ目（単発）が割り込む。
-    internals(r).processDirective(
+    internals<LocalInternals>(r).processDirective(
       flash({ color: '#00ff00', alpha: 0.5, duration_ms: 80, strobe: 1 })
     )
     // 割り込み直後は新しい Flash のピークに即座に置き換わる。

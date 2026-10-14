@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers ---
 
@@ -48,12 +49,7 @@ function flatten(scenes: EventScene[]): Event[] {
   return events
 }
 
-interface RendererInternals {
-  eventIndex: number
-  resolvedEvents: Event[]
-  initialized: boolean
-  pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
-  advance(): void
+interface LocalInternals extends RendererInternals {
   characterLayer: {
     show(
       character: string,
@@ -73,10 +69,6 @@ interface RendererInternals {
     >
   }
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /**
  * `init()` 完了後の状態を模す (#460 セルフレビュー should S1 / #463 で resolveMissingSceneAndJump
  * にも同型ガードを追加した際の踏襲)。resolveMissingSceneAndJump は #463 で「resolver 解決後、
@@ -85,7 +77,7 @@ function internals(r: NovelRenderer): RendererInternals {
  * （NovelRenderer.restoreSnapshot.test.ts の markInitialized と同じパターン）。
  */
 function markInitialized(r: NovelRenderer): void {
-  internals(r).initialized = true
+  internals<LocalInternals>(r).initialized = true
 }
 
 describe('NovelRenderer 線形再生 (#284 M2)', () => {
@@ -113,17 +105,17 @@ describe('NovelRenderer 線形再生 (#284 M2)', () => {
     expect(r.getDebugState().eventText).toContain('s1-line')
 
     // scene1 を抜ける → SceneTransition を踏み越えて scene2 の本文に到達（= scene1 で停止しない）
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(r.getDebugState().eventText).toContain('s2-line')
     expect(onEnd).not.toHaveBeenCalled()
 
     // scene2 → scene3
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(r.getDebugState().eventText).toContain('s3-line')
     expect(onEnd).not.toHaveBeenCalled()
 
     // scene3 を抜けて初めて全イベント完了 = onEnd 1 回（途中で発火しない）
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(onEnd).toHaveBeenCalledTimes(1)
   })
 
@@ -141,7 +133,7 @@ describe('NovelRenderer 線形再生 (#284 M2)', () => {
 
     expect(r.getDebugState().eventText).toContain('朝の光')
     // 1 回の advance で次シーンへ（scene1 で止まらない）
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
     expect(r.getDebugState().eventText).toContain('村の朝')
     expect(onEnd).not.toHaveBeenCalled()
   })
@@ -180,11 +172,11 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     const r = new NovelRenderer()
     r.setEvents(flatten(entryScenes))
     r.setJumpSceneIndex(jumpIndex)
-    internals(r).characterLayer.show('せお', 'normal', '左', '', { instant: true })
+    internals<LocalInternals>(r).characterLayer.show('せお', 'normal', '左', '', { instant: true })
 
     r.jumpToScene('far-scene')
 
-    const seo = internals(r).characterLayer.characters.get('せお')
+    const seo = internals<LocalInternals>(r).characterLayer.characters.get('せお')
     expect(seo).toBeDefined()
     expect(seo!.fadeAnimation).toMatchObject({
       toAlpha: 0,
@@ -197,15 +189,15 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     const r = new NovelRenderer()
     r.setEvents(flatten(entryScenes))
     // setEvents 直後の再生ストリームを退避
-    const resolvedBefore = [...internals(r).resolvedEvents]
-    const indexBefore = internals(r).eventIndex
+    const resolvedBefore = [...internals<LocalInternals>(r).resolvedEvents]
+    const indexBefore = internals<LocalInternals>(r).eventIndex
     const textBefore = r.getDebugState().eventText
 
     // 別 MD を含む索引を後から差し替えても、再生中の events は変わらない
     r.setJumpSceneIndex([...entryScenes, scene('other', [narration('other-line')])])
 
-    expect(internals(r).resolvedEvents).toEqual(resolvedBefore)
-    expect(internals(r).eventIndex).toBe(indexBefore)
+    expect(internals<LocalInternals>(r).resolvedEvents).toEqual(resolvedBefore)
+    expect(internals<LocalInternals>(r).eventIndex).toBe(indexBefore)
     expect(r.getDebugState().eventText).toBe(textBefore)
     // 索引だけは別 MD のシーンを含むよう更新される
     expect(r.getAllSceneIds()).toContain('other')
@@ -261,7 +253,7 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     // そのため、実機で appInitialized 済みの場合に destroy() が行う「initialized = false」を
     // ここでは直接模して、ガードの分岐を実際に踏ませる。
     expect(() => r.destroy()).not.toThrow()
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
 
     // destroy 後に resolver が解決しても例外を投げない（ガードが無いと startScene 等が
     // 破棄済みの this.app.stage を触り得る）
@@ -346,7 +338,7 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
     expect(warnSpy).toHaveBeenCalled()
     // finally で pendingMissingScenes から削除されていなければ、以後同じ sceneId が
     // 永遠に「解決中」扱いのまま固着する（デッドロック）。削除済みであることを直接確認する。
-    expect(internals(r).pendingMissingScenes.has('target-route')).toBe(false)
+    expect(internals<LocalInternals>(r).pendingMissingScenes.has('target-route')).toBe(false)
   })
 
   it('J-K4-destroy: destroy 後に missingSceneResolver が reject しても例外を投げず、warn も安全に発火する', async () => {
@@ -371,7 +363,7 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
 
     // S1 と同じ想定: resolver 未解決中に destroy() される
     expect(() => r.destroy()).not.toThrow()
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
 
     // catch は await 直後の initialized チェックより前で reject を受け取るため、
     // destroy 後でも warn 自体は安全に発火する（例外は外に漏れない）
@@ -423,7 +415,7 @@ describe('NovelRenderer.setJumpSceneIndex クロスファイル解決 (#284 M2)'
 
     // S1 と同じ手順: resolver 未解決中に destroy() → initialized=false を模す
     expect(() => r.destroy()).not.toThrow()
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
     resolveScenes?.([...entryScenes, farScene])
     await new Promise((resolve) => setTimeout(resolve, 0))
 

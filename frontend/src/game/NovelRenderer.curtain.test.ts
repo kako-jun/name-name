@@ -10,6 +10,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（NovelRenderer.spotlight.test.ts と同じスタイル）---
 
@@ -53,8 +54,7 @@ interface CurtainLayerForTest {
     opts?: { instant?: boolean }
   ) => void
 }
-interface RendererInternals {
-  appInitialized: boolean
+interface LocalInternals extends RendererInternals {
   app: {
     init: (...args: unknown[]) => Promise<void>
     stage: { children: unknown[] }
@@ -66,15 +66,11 @@ interface RendererInternals {
   backgroundBoardLayer: object
   propLayer: object
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /** `Application.init` をスタブ化して `NovelRenderer.init()` 本体を実際に通す
  *  (NovelRenderer.prop.test.ts / NovelRenderer.curtainZOrder.test.ts と同形)。
  *  z-order（stage.children の並び）の検証にのみ使う。 */
 async function initRenderer(r: NovelRenderer): Promise<void> {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   vi.spyOn(ri.app, 'init').mockResolvedValue()
   Object.defineProperty(ri.app, 'canvas', {
     configurable: true,
@@ -88,7 +84,7 @@ async function initRenderer(r: NovelRenderer): Promise<void> {
 }
 
 function curtainRightAfter(r: NovelRenderer, referenceLayer: object): boolean {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   const children = ri.app.stage.children
   const refIndex = children.indexOf(referenceLayer)
   const curtainIndex = children.indexOf(ri.curtainLayer as unknown as object)
@@ -230,7 +226,7 @@ describe('NovelRenderer 幕: curtain値とz-orderの同時持ち越し (#697、#
       scene('b', [narration('two')]),
     ])
     expect(r.getSnapshot().curtain).toEqual({ path: 'a.png', charactersInFront: true })
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
     r.jumpToScene('b') // resetAndStartEvents(preserveBackgroundForTransition=true) 経由。
     // [場面転換] は経由しない — props/backgroundBoards と同じ「持ち越し」規律のシーン間ジャンプ。
@@ -239,9 +235,9 @@ describe('NovelRenderer 幕: curtain値とz-orderの同時持ち越し (#697、#
     expect(r.getSnapshot().curtain).toEqual({ path: 'a.png', charactersInFront: true })
     // (b) z-order の持ち越し（curtain 値だけ正しくて z-order が既定に戻ってしまう、
     //     あるいはその逆という #716 型の片側欠落が無いことを直接確認する）。
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
-    const ri = internals(r)
+    const ri = internals<LocalInternals>(r)
     ri.app.destroy = () => {}
     r.destroy()
   })
@@ -254,14 +250,14 @@ describe('NovelRenderer 幕: curtain値とz-orderの同時持ち越し (#697、#
       scene('b', [narration('two')]),
     ])
     expect(r.getSnapshot().curtain).toEqual({ path: 'a.png', charactersInFront: false })
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
 
     r.jumpToScene('b')
 
     expect(r.getSnapshot().curtain).toEqual({ path: 'a.png', charactersInFront: false })
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
 
-    const ri = internals(r)
+    const ri = internals<LocalInternals>(r)
     ri.app.destroy = () => {}
     r.destroy()
   })
@@ -296,7 +292,7 @@ describe('NovelRenderer 幕: goBack/seekToの宣言的復元 (#697)', () => {
     ])
     // setScenes の自動開始で [幕:] directive が実行済み、'one' で停止。
     await r.playScript([{ type: 'advance' }]) // one -> two
-    const layer = internals(r).curtainLayer
+    const layer = internals<LocalInternals>(r).curtainLayer
     const showSpy = vi.spyOn(layer, 'show')
 
     r.goBack() // two -> one（curtain={a.png,true} のまま）

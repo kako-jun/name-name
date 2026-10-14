@@ -23,6 +23,7 @@ import { Assets } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import type { LayoutRect } from './novelLayout'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -48,7 +49,7 @@ function makeTitleScreenOpts(overrides?: Partial<Parameters<NovelRenderer['showT
   }
 }
 
-interface TitleScreenInternals {
+interface TitleScreenInternals extends RendererInternals {
   dialogBox: { visible: boolean }
   seekBar: { visible: boolean; setTitleScreenHidden: (hidden: boolean) => void }
   eventImageLayer: { visible: boolean }
@@ -73,29 +74,15 @@ interface TitleScreenInternals {
     }) => void
     handleKeyDown: (key: string, shiftKey?: boolean) => boolean
   }
-  resolvedEvents: Event[]
   handleKeyDown: (e: KeyboardEvent) => void
   backlogOverlay: { visible: boolean; toggle: () => void }
-  // #633 フェーズB回帰用の追加フィールド。
-  waitingForChoice: boolean
   choiceOverlay: {
     handleKeyDown: (key: string, shiftKey?: boolean) => boolean
     show: (...args: unknown[]) => void
     hide: () => void
   }
-  advance: () => void
   saveLoadOverlay: { visible: boolean }
-  // #713 回帰用の追加フィールド。render() は private だが、init() を経由しない
-  // （initialized===false の）既存テストと違い、#713 の回帰テストは実際に render() を
-  // 走らせて dialogBox.visible の再代入を観測する必要があるため initialized も直接叩く。
-  initialized: boolean
-  render: () => void
-  waitingForWait: boolean
 }
-function internals(r: NovelRenderer): TitleScreenInternals {
-  return r as unknown as TitleScreenInternals
-}
-
 /** handleAdvance() 経由で叩かれる audioManager.ensureContext() を no-op にする（jsdom に AudioContext が無い）。 */
 function muteAudio(r: NovelRenderer) {
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
@@ -117,59 +104,64 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
   it('TC25: showTitleScreen() で dialogBox.visible が false になる（バグ#1 z-order の単体固定）', () => {
     const r = new NovelRenderer()
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
   })
 
   it('TC26: showTitleScreen() で seekBar.setTitleScreenHidden(true) 相当（seekBar.visible が false）になる', () => {
     const r = new NovelRenderer()
-    const setHiddenSpy = vi.spyOn(internals(r).seekBar, 'setTitleScreenHidden')
+    const setHiddenSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).seekBar,
+      'setTitleScreenHidden'
+    )
     r.showTitleScreen(makeTitleScreenOpts())
     expect(setHiddenSpy).toHaveBeenCalledWith(true)
-    expect(internals(r).seekBar.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).seekBar.visible).toBe(false)
   })
 
   it('TC27: showTitleScreen() で eventImageLayer.visible が false になる', () => {
     const r = new NovelRenderer()
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).eventImageLayer.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).eventImageLayer.visible).toBe(false)
   })
 
   it('TC28: hideTitleScreen() で dialogBox/seekBar/eventImageLayer の可視性が全て復元される', () => {
     const r = new NovelRenderer()
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).dialogBox.visible).toBe(false)
-    expect(internals(r).seekBar.visible).toBe(false)
-    expect(internals(r).eventImageLayer.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).seekBar.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).eventImageLayer.visible).toBe(false)
 
     r.hideTitleScreen()
 
-    expect(internals(r).dialogBox.visible).toBe(true)
-    expect(internals(r).seekBar.visible).toBe(true)
-    expect(internals(r).eventImageLayer.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).seekBar.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).eventImageLayer.visible).toBe(true)
   })
 
   it('TC29: split_layout:true の状態で showTitleScreen() を呼ぶと characterLayer.getSplitLayoutRegion() が null になる（バグ#3の単体固定）', () => {
     const r = new NovelRenderer()
     r.setSplitLayout(true)
-    expect(internals(r).characterLayer.getSplitLayoutRegion()).not.toBeNull()
+    expect(internals<TitleScreenInternals>(r).characterLayer.getSplitLayoutRegion()).not.toBeNull()
 
     r.showTitleScreen(makeTitleScreenOpts())
 
-    expect(internals(r).characterLayer.getSplitLayoutRegion()).toBeNull()
+    expect(internals<TitleScreenInternals>(r).characterLayer.getSplitLayoutRegion()).toBeNull()
   })
 
   it('TC30: 同上の状態で hideTitleScreen() を呼ぶと getSplitLayoutRegion() が元のregion値に復元される', () => {
     const r = new NovelRenderer()
     r.setSplitLayout(true)
-    const regionBefore = internals(r).characterLayer.getSplitLayoutRegion()
+    const regionBefore = internals<TitleScreenInternals>(r).characterLayer.getSplitLayoutRegion()
     expect(regionBefore).not.toBeNull()
 
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).characterLayer.getSplitLayoutRegion()).toBeNull()
+    expect(internals<TitleScreenInternals>(r).characterLayer.getSplitLayoutRegion()).toBeNull()
 
     r.hideTitleScreen()
 
-    expect(internals(r).characterLayer.getSplitLayoutRegion()).toEqual(regionBefore)
+    expect(internals<TitleScreenInternals>(r).characterLayer.getSplitLayoutRegion()).toEqual(
+      regionBefore
+    )
   })
 
   it('TC31: split_layout:false の場合、showTitleScreen()/hideTitleScreen() を呼んでも setSplitLayoutRegion は一切呼ばれない', () => {
@@ -177,7 +169,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     // split_layout 未指定＝既定 false。setSplitLayout 自体は初期化時に false で呼ばれうるので、
     // スパイは setSplitLayout(false) を明示してから張る。
     r.setSplitLayout(false)
-    const setRegionSpy = vi.spyOn(internals(r).characterLayer, 'setSplitLayoutRegion')
+    const setRegionSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).characterLayer,
+      'setSplitLayoutRegion'
+    )
 
     r.showTitleScreen(makeTitleScreenOpts())
     r.hideTitleScreen()
@@ -187,7 +182,7 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
 
   it('TC32: showTitleScreen() 後、characterLayer.showImage が id: __title_logo__, path: title.png, x: 0.5, transition未指定 で呼ばれる（タイトルは常にFade固定であることの回帰テスト）', () => {
     const r = new NovelRenderer()
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    const showImageSpy = vi.spyOn(internals<TitleScreenInternals>(r).characterLayer, 'showImage')
 
     r.showTitleScreen(makeTitleScreenOpts({ title: '固有のタイトル' }))
 
@@ -202,7 +197,7 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
   it('TC33: hideTitleScreen() で characterLayer.remove(__title_logo__, {instant:true}) が呼ばれる', () => {
     const r = new NovelRenderer()
     r.showTitleScreen(makeTitleScreenOpts())
-    const removeSpy = vi.spyOn(internals(r).characterLayer, 'remove')
+    const removeSpy = vi.spyOn(internals<TitleScreenInternals>(r).characterLayer, 'remove')
 
     r.hideTitleScreen()
 
@@ -211,7 +206,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
 
   it('TC34: showTitleScreen() → ロード成功相当 → titleScreenOverlay.hideFallbackText() が呼ばれる', async () => {
     const r = new NovelRenderer()
-    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+    const hideFallbackSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).titleScreenOverlay,
+      'hideFallbackText'
+    )
 
     r.showTitleScreen(makeTitleScreenOpts())
     await flushPromises()
@@ -223,7 +221,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     vi.spyOn(Assets, 'load').mockRejectedValue(new Error('404'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new NovelRenderer()
-    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+    const hideFallbackSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).titleScreenOverlay,
+      'hideFallbackText'
+    )
 
     r.showTitleScreen(makeTitleScreenOpts())
     await flushPromises()
@@ -239,7 +240,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     // （NovelPlayer の effect で title/hasSaveData が変わり再レンダーされた場合等）で、ロゴが
     // 既に表示済みなのにフォールバックテキストだけ再び見えてしまっていた。
     const r = new NovelRenderer()
-    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+    const hideFallbackSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).titleScreenOverlay,
+      'hideFallbackText'
+    )
 
     r.showTitleScreen(makeTitleScreenOpts())
     await flushPromises()
@@ -254,7 +258,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
 
   it('TC39: showTitleScreen() 初回呼び出し時、ロード完了前（flushPromises 前）は hasLoadedTexture が false のため hideFallbackText() は同期的には呼ばれない（新規ロード中の誤検知防止）', () => {
     const r = new NovelRenderer()
-    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+    const hideFallbackSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).titleScreenOverlay,
+      'hideFallbackText'
+    )
 
     r.showTitleScreen(makeTitleScreenOpts())
 
@@ -273,7 +280,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     loadSpy.mockRejectedValueOnce(new Error('empty base url'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new NovelRenderer()
-    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+    const hideFallbackSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).titleScreenOverlay,
+      'hideFallbackText'
+    )
 
     // 1回目: assetBaseUrl が未解決（既定 ''）のまま showTitleScreen() → ロード失敗。
     r.showTitleScreen(makeTitleScreenOpts())
@@ -301,7 +311,10 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     loadSpy.mockRejectedValueOnce(new Error('empty base url'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new NovelRenderer()
-    const hideFallbackSpy = vi.spyOn(internals(r).titleScreenOverlay, 'hideFallbackText')
+    const hideFallbackSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).titleScreenOverlay,
+      'hideFallbackText'
+    )
 
     r.showTitleScreen(makeTitleScreenOpts())
     await flushPromises()
@@ -325,7 +338,7 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     expect(r.getSnapshot().eventIndex).toBe(0)
 
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).titleScreenOverlay.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).titleScreenOverlay.visible).toBe(true)
 
     r.handleOutsideCanvasTap()
 
@@ -347,7 +360,7 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
       // titleScreenOverlay.show() に渡される「ラップ済み」コールバックを捕捉する
       // （NovelRenderer.showTitleScreen 内の suppressAdvanceThenRun は private なので、
       // 実際に TitleScreenOverlay へ渡された関数を spy 経由で取り出して呼ぶ）。
-      const showSpy = vi.spyOn(internals(r).titleScreenOverlay, 'show')
+      const showSpy = vi.spyOn(internals<TitleScreenInternals>(r).titleScreenOverlay, 'show')
       const onNewGame = vi.fn()
       r.showTitleScreen(makeTitleScreenOpts({ onNewGame }))
       const wrappedOnNewGame = showSpy.mock.calls[0][0].onNewGame
@@ -381,15 +394,15 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     const r = new NovelRenderer()
     muteAudio(r)
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).titleScreenOverlay.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).titleScreenOverlay.visible).toBe(true)
 
     const delegateSpy = vi
-      .spyOn(internals(r).titleScreenOverlay, 'handleKeyDown')
+      .spyOn(internals<TitleScreenInternals>(r).titleScreenOverlay, 'handleKeyDown')
       .mockReturnValue(true)
     const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true })
     const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
 
-    internals(r).handleKeyDown(event)
+    internals<TitleScreenInternals>(r).handleKeyDown(event)
 
     expect(delegateSpy).toHaveBeenCalledWith('Tab', true)
     expect(preventDefaultSpy).toHaveBeenCalledTimes(1)
@@ -399,11 +412,11 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     const r = new NovelRenderer()
     muteAudio(r)
     r.showTitleScreen(makeTitleScreenOpts())
-    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+    const toggleSpy = vi.spyOn(internals<TitleScreenInternals>(r).backlogOverlay, 'toggle')
 
     // TitleScreenOverlay が処理しないキー（'b'）を押しても、backlogOverlay.toggle() 等の
     // ゲーム内ショートカットには一切到達しない（titleScreenOverlay.visible ガードで即 return）。
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
 
     expect(toggleSpy).not.toHaveBeenCalled()
   })
@@ -413,9 +426,9 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     muteAudio(r)
     r.showTitleScreen(makeTitleScreenOpts())
     r.hideTitleScreen()
-    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+    const toggleSpy = vi.spyOn(internals<TitleScreenInternals>(r).backlogOverlay, 'toggle')
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
 
     expect(toggleSpy).toHaveBeenCalledTimes(1)
   })
@@ -425,7 +438,7 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
   // TitleScreenOverlay 自身の disabled/非描画の挙動は TitleScreenOverlay.test.ts の TC-C1〜C7 が担保する。
   it('TC-D9: showTitleScreen({showExitButton:false}) を呼ぶと titleScreenOverlay.show() に showExitButton:false がそのまま渡る', () => {
     const r = new NovelRenderer()
-    const showSpy = vi.spyOn(internals(r).titleScreenOverlay, 'show')
+    const showSpy = vi.spyOn(internals<TitleScreenInternals>(r).titleScreenOverlay, 'show')
 
     r.showTitleScreen(makeTitleScreenOpts({ showExitButton: false }))
 
@@ -435,7 +448,7 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
 
   it('TC-D10: showExitButton 未指定で showTitleScreen() を呼んでも titleScreenOverlay.show() に渡る showExitButton は undefined のまま（NovelRenderer 層で勝手に true/false へ変換していない）', () => {
     const r = new NovelRenderer()
-    const showSpy = vi.spyOn(internals(r).titleScreenOverlay, 'show')
+    const showSpy = vi.spyOn(internals<TitleScreenInternals>(r).titleScreenOverlay, 'show')
 
     r.showTitleScreen(makeTitleScreenOpts())
 
@@ -457,12 +470,14 @@ describe('NovelRenderer.handleKeyDown() waitingForChoiceガード (#633 フェ�
   it('TC-N1: waitingForChoice===trueのとき、window keydownはchoiceOverlay.handleKeyDown()に委譲され、戻り値trueならpreventDefault()が呼ばれる', () => {
     const r = new NovelRenderer()
     muteAudio(r)
-    internals(r).waitingForChoice = true
-    const delegateSpy = vi.spyOn(internals(r).choiceOverlay, 'handleKeyDown').mockReturnValue(true)
+    internals<TitleScreenInternals>(r).waitingForChoice = true
+    const delegateSpy = vi
+      .spyOn(internals<TitleScreenInternals>(r).choiceOverlay, 'handleKeyDown')
+      .mockReturnValue(true)
     const event = new KeyboardEvent('keydown', { key: 'ArrowDown' })
     const preventDefaultSpy = vi.spyOn(event, 'preventDefault')
 
-    internals(r).handleKeyDown(event)
+    internals<TitleScreenInternals>(r).handleKeyDown(event)
 
     expect(delegateSpy).toHaveBeenCalledWith('ArrowDown', false)
     expect(preventDefaultSpy).toHaveBeenCalledTimes(1)
@@ -471,28 +486,30 @@ describe('NovelRenderer.handleKeyDown() waitingForChoiceガード (#633 フェ�
   it('TC-N2: waitingForChoice===trueの間、bキー・sキー・lキーが一切発火しない（choiceOverlay.handleKeyDownがfalseを返すキーでも発火しないことを含む）', () => {
     const r = new NovelRenderer()
     muteAudio(r)
-    internals(r).waitingForChoice = true
+    internals<TitleScreenInternals>(r).waitingForChoice = true
     // ChoiceOverlay 側が未処理（縦一列時のArrowLeft/Right等）で false を返しても、
     // waitingForChoice ガード自体が早期 return するため後続のショートカット判定へ
     // フォールスルーしないはず。
-    vi.spyOn(internals(r).choiceOverlay, 'handleKeyDown').mockReturnValue(false)
-    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+    vi.spyOn(internals<TitleScreenInternals>(r).choiceOverlay, 'handleKeyDown').mockReturnValue(
+      false
+    )
+    const toggleSpy = vi.spyOn(internals<TitleScreenInternals>(r).backlogOverlay, 'toggle')
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' }))
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'l' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'l' }))
 
     expect(toggleSpy).not.toHaveBeenCalled()
-    expect(internals(r).saveLoadOverlay.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).saveLoadOverlay.visible).toBe(false)
   })
 
   it('TC-N3: waitingForChoice===false（通常時）は従来どおりbキーでbacklogOverlay.toggleが呼ばれる', () => {
     const r = new NovelRenderer()
     muteAudio(r)
-    expect(internals(r).waitingForChoice).toBe(false)
-    const toggleSpy = vi.spyOn(internals(r).backlogOverlay, 'toggle')
+    expect(internals<TitleScreenInternals>(r).waitingForChoice).toBe(false)
+    const toggleSpy = vi.spyOn(internals<TitleScreenInternals>(r).backlogOverlay, 'toggle')
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'b' }))
 
     expect(toggleSpy).toHaveBeenCalledTimes(1)
   })
@@ -561,26 +578,32 @@ describe('NovelRenderer キーボード操作でのChoice確定 E2E (#633 フェ
     const r = new NovelRenderer()
     muteAudio(r)
     r.setScenes(CHOICE_SCENES_2)
-    internals(r).advance() // narration → Choice に到達。実choiceOverlay.show()が呼ばれる。
-    expect(internals(r).waitingForChoice).toBe(true)
+    internals<TitleScreenInternals>(r).advance() // narration → Choice に到達。実choiceOverlay.show()が呼ばれる。
+    expect(internals<TitleScreenInternals>(r).waitingForChoice).toBe(true)
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' })) // index0→1
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(
+      new KeyboardEvent('keydown', { key: 'ArrowDown' })
+    ) // index0→1
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
 
     expect(r.getCurrentSceneId()).toBe('sceneB2')
-    expect(internals(r).waitingForChoice).toBe(false)
+    expect(internals<TitleScreenInternals>(r).waitingForChoice).toBe(false)
   })
 
   it('TC-N5: TC-N4と同じE2Eで、ArrowDown等でフォーカスを非先頭の選択肢に動かしてからEnterした場合、フォーカス中の選択肢のjumpが遷移先になる', () => {
     const r = new NovelRenderer()
     muteAudio(r)
     r.setScenes(CHOICE_SCENES_3)
-    internals(r).advance()
-    expect(internals(r).waitingForChoice).toBe(true)
+    internals<TitleScreenInternals>(r).advance()
+    expect(internals<TitleScreenInternals>(r).waitingForChoice).toBe(true)
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' })) // index0→1
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' })) // index1→2
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(
+      new KeyboardEvent('keydown', { key: 'ArrowDown' })
+    ) // index0→1
+    internals<TitleScreenInternals>(r).handleKeyDown(
+      new KeyboardEvent('keydown', { key: 'ArrowDown' })
+    ) // index1→2
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
 
     // フォーカスが動いていなければ sceneA3（先頭）へ遷移してしまうはずだが、
     // 実際にフォーカスした index2（選択肢C）の jump が遷移先になる。
@@ -591,31 +614,36 @@ describe('NovelRenderer キーボード操作でのChoice確定 E2E (#633 フェ
     const r = new NovelRenderer()
     muteAudio(r)
     r.setScenes(CHOICE_SCENES_ALL_LOCKED)
-    internals(r).advance()
-    expect(internals(r).waitingForChoice).toBe(true)
+    internals<TitleScreenInternals>(r).advance()
+    expect(internals<TitleScreenInternals>(r).waitingForChoice).toBe(true)
     const startSceneId = r.getCurrentSceneId()
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'ArrowDown' }))
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(
+      new KeyboardEvent('keydown', { key: 'ArrowDown' })
+    )
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
 
     expect(r.getCurrentSceneId()).toBe(startSceneId)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<TitleScreenInternals>(r).waitingForChoice).toBe(true)
   })
 
   it('TC-N7: titleScreenOverlay.visibleとwaitingForChoiceが同時にtrueになることは通常ないが、両ガードの優先順位（TitleScreen判定が先）が意図通りであることを確認する', () => {
     const r = new NovelRenderer()
     muteAudio(r)
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).titleScreenOverlay.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).titleScreenOverlay.visible).toBe(true)
     // 通常は起こらない状態（両方 true）を強制的に作り、handleKeyDown 冒頭のガード順を検証する。
-    internals(r).waitingForChoice = true
+    internals<TitleScreenInternals>(r).waitingForChoice = true
 
     const titleDelegateSpy = vi
-      .spyOn(internals(r).titleScreenOverlay, 'handleKeyDown')
+      .spyOn(internals<TitleScreenInternals>(r).titleScreenOverlay, 'handleKeyDown')
       .mockReturnValue(true)
-    const choiceDelegateSpy = vi.spyOn(internals(r).choiceOverlay, 'handleKeyDown')
+    const choiceDelegateSpy = vi.spyOn(
+      internals<TitleScreenInternals>(r).choiceOverlay,
+      'handleKeyDown'
+    )
 
-    internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
+    internals<TitleScreenInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }))
 
     expect(titleDelegateSpy).toHaveBeenCalledWith('Enter', false)
     expect(choiceDelegateSpy).not.toHaveBeenCalled()
@@ -652,111 +680,111 @@ describe('NovelRenderer.render() dialogBox visibility during title screen (#713)
 
   it('TC-713-1: titleScreenOverlay 非表示 × 通常本文（bubble_style 未指定）は dialogBox.visible=true になる（表#1、既存動作の非回帰）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.setScenes([scene('s713-1', [narration('通常本文')])])
 
-    expect(internals(r).titleScreenOverlay.visible).toBe(false)
-    expect(internals(r).dialogBox.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).titleScreenOverlay.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(true)
   })
 
   it('TC-713-2: titleScreenOverlay 非表示 × 吹き出し指定（bubble_style あり）は dialogBox.visible=false になる（表#2、既存動作の非回帰）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.setScenes([scene('s713-2', [narrationBubble('叫び台詞', '叫び')])])
 
-    expect(internals(r).titleScreenOverlay.visible).toBe(false)
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).titleScreenOverlay.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
   })
 
   it('TC-713-3(本命): テキスト付きシーン表示中に showTitleScreen() → advance() で render() が再実行されても dialogBox.visible=false のまま（表#3、#713 の直接再現・修正前は失敗する回帰テスト）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.setScenes([scene('s713-3', [narration('一行目', '二行目')])])
     // baseline: タイトル画面が無ければ通常どおり表示される。
-    expect(internals(r).dialogBox.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(true)
 
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
 
     // handleAdvance 等の DOM/canvas ガードを経由せず、内部の advance() を直接叩いて
     // render() を再実行させる（Issue #713 の実際の再現経路＝エントリスクリプトの自動進行）。
-    internals(r).advance()
+    internals<TitleScreenInternals>(r).advance()
 
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
   })
 
   it('TC-713-4: TC-713-3 の状態から hideTitleScreen() を呼ぶと dialogBox.visible=true に復帰する（状態遷移の対照確認、非回帰）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.setScenes([scene('s713-4', [narration('一行目', '二行目')])])
     r.showTitleScreen(makeTitleScreenOpts())
-    internals(r).advance()
-    expect(internals(r).dialogBox.visible).toBe(false)
+    internals<TitleScreenInternals>(r).advance()
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
 
     r.hideTitleScreen()
 
-    expect(internals(r).dialogBox.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(true)
   })
 
   it('TC-713-6: line が空文字（改頁等）でも、タイトル画面表示中に render() を再実行すると dialogBox.visible=false のまま（表#3 の境界: 空文字でも textDisplay は dialogBox 扱いになるケース）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.setScenes([scene('s713-6', [narration('')])])
     // baseline: 空文字でも bubble_style が無ければ従来どおり dialogBox 扱いで表示される。
-    expect(internals(r).dialogBox.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(true)
 
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
 
     // eventIndex/textIndex は動かさず render() だけを再実行させ、line='' のままガードが
     // 効くことを固定する。
-    internals(r).render()
+    internals<TitleScreenInternals>(r).render()
 
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
   })
 
   it('TC-713-7: タイトル画面表示中に render() を複数回連続で呼んでも dialogBox.visible が false のまま安定する（冪等性）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.setScenes([scene('s713-7', [narration('本文')])])
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
 
-    internals(r).render()
-    internals(r).render()
-    internals(r).render()
+    internals<TitleScreenInternals>(r).render()
+    internals<TitleScreenInternals>(r).render()
+    internals<TitleScreenInternals>(r).render()
 
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
   })
 
   it('TC-713-8(最も説得力の高い回帰テスト): [待機: 表示完了] の polling が仮想タイマーで完了し finishWaitAndContinue() 経由で render() が再実行されても、タイトル画面表示中は dialogBox.visible=true に戻らない（Issue本文の実再現シーケンス）', () => {
     const r = new NovelRenderer()
-    internals(r).initialized = true
+    internals<TitleScreenInternals>(r).initialized = true
     muteAudio(r)
     r.getTimeController().setMode('virtual')
     r.setScenes([
       scene('s713-8', [narration('一行目'), 'WaitDisplayComplete', narration('二行目')]),
     ])
-    expect(internals(r).dialogBox.visible).toBe(true)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(true)
 
     r.showTitleScreen(makeTitleScreenOpts())
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
 
     // 一行目 → [待機: 表示完了] directive に到達させる（waitingForWait=true・16ms interval 開始）。
-    internals(r).advance()
-    expect(internals(r).waitingForWait).toBe(true)
-    expect(internals(r).dialogBox.visible).toBe(false)
+    internals<TitleScreenInternals>(r).advance()
+    expect(internals<TitleScreenInternals>(r).waitingForWait).toBe(true)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
 
     // polling 完了 → finishWaitAndContinue() → 二行目の render() が同期的に走る。
     r.getTimeController().tick(16)
 
-    expect(internals(r).waitingForWait).toBe(false)
-    expect(internals(r).dialogBox.visible).toBe(false)
+    expect(internals<TitleScreenInternals>(r).waitingForWait).toBe(false)
+    expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
   })
 })

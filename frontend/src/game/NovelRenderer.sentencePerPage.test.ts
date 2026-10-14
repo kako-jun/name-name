@@ -24,6 +24,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -46,11 +47,7 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface RendererInternals {
-  render(): void
-  initialized: boolean
-  eventIndex: number
-  resolvedEvents: Event[]
+interface LocalInternals extends RendererInternals {
   dialogBox: {
     novelMaxLinesPerPage(): number
     measureLineCount(s: string): number
@@ -60,12 +57,7 @@ interface RendererInternals {
   getNovelPages(textEvt: { text: string[] }): Array<{ text: string; sentences: string[] }>
   getAdvSentencePages(textEvt: { text: string[] }): string[]
   currentPageCount(textEvt: { text: string[] }): number
-  isNovelStyle(): boolean
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -76,7 +68,7 @@ describe('NovelRenderer adv + sentence_per_page:true 本体機能 (#448)', () =>
     r.setDialogStyle('adv')
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [dialog('カコ', '一。二。三。')])])
-    expect(internals(r).currentPageCount({ text: ['一。二。三。'] })).toBe(3)
+    expect(internals<LocalInternals>(r).currentPageCount({ text: ['一。二。三。'] })).toBe(3)
   })
 
   it('dialog_style 未指定 + sentence_per_page:true でも adv 相当として sentence 分岐が効く', () => {
@@ -84,8 +76,8 @@ describe('NovelRenderer adv + sentence_per_page:true 本体機能 (#448)', () =>
     // setDialogStyle を呼ばない = 未指定（adv 相当）。
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [narration('甲。乙。')])])
-    expect(internals(r).isNovelStyle()).toBe(false)
-    expect(internals(r).currentPageCount({ text: ['甲。乙。'] })).toBe(2)
+    expect(internals<LocalInternals>(r).isNovelStyle()).toBe(false)
+    expect(internals<LocalInternals>(r).currentPageCount({ text: ['甲。乙。'] })).toBe(2)
   })
 
   it('adv + sentence_per_page:false（既定）は従来通り text[] 要素数 = ページ数（非回帰ロック）', () => {
@@ -93,9 +85,9 @@ describe('NovelRenderer adv + sentence_per_page:true 本体機能 (#448)', () =>
     r.setDialogStyle('adv')
     // setSentencePerPage を呼ばない = 既定 false。
     r.setScenes([scene('s', [dialog('カコ', '行1', '行2', '行3')])])
-    expect(internals(r).currentPageCount({ text: ['行1', '行2', '行3'] })).toBe(3)
+    expect(internals<LocalInternals>(r).currentPageCount({ text: ['行1', '行2', '行3'] })).toBe(3)
     // sentence 分岐（getAdvSentencePages）は一切呼ばれていない（派生キャッシュが温まらない）。
-    expect(internals(r).advSentencePagesCache).toBeNull()
+    expect(internals<LocalInternals>(r).advSentencePagesCache).toBeNull()
   })
 })
 
@@ -105,7 +97,7 @@ describe('NovelRenderer novel + sentence_per_page:true（既存の貪欲改頁�
     r.setDialogStyle('novel')
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [narration('一。二。三。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const cap = i.dialogBox.novelMaxLinesPerPage()
     expect(cap).toBeGreaterThanOrEqual(3) // 前提: 3 文が cap に収まる（対照テストの成立条件）
     expect(i.currentPageCount({ text: ['一。二。三。'] })).toBe(3)
@@ -116,7 +108,7 @@ describe('NovelRenderer novel + sentence_per_page:true（既存の貪欲改頁�
     r.setDialogStyle('novel')
     // setSentencePerPage を呼ばない = 既定 false。
     r.setScenes([scene('s', [narration('一。二。三。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const cap = i.dialogBox.novelMaxLinesPerPage()
     expect(cap).toBeGreaterThanOrEqual(3)
     // 貪欲改頁なら cap 内に収まる 3 文は 1 ページにまとまる（sentence_per_page:true の 3 ページと対照）。
@@ -128,7 +120,7 @@ describe('NovelRenderer novel + sentence_per_page:true（既存の貪欲改頁�
     r.setDialogStyle('novel')
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [narration('長い一文。'), narration('次。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     const cap = i.dialogBox.novelMaxLinesPerPage()
     // jsdom は wordwrap が常に 1 行を返すため、measureLineCount を spy して人工的に cap 超過を再現する。
     vi.spyOn(i.dialogBox, 'measureLineCount').mockReturnValue(cap + 5)
@@ -146,7 +138,7 @@ describe('NovelRenderer バグ1検証: adv + sentence_per_page:true でルビ記
     r.setSentencePerPage(true)
     const text = ['今日《きょう》は晴れ《はれ》。明日《あした》は雨《あめ》。']
     r.setScenes([scene('s', [dialog('カコ', ...text)])])
-    const pages = internals(r).getAdvSentencePages({ text })
+    const pages = internals<LocalInternals>(r).getAdvSentencePages({ text })
     expect(pages).toEqual(['今日《きょう》は晴れ《はれ》。', '明日《あした》は雨《あめ》。'])
   })
 
@@ -156,7 +148,7 @@ describe('NovelRenderer バグ1検証: adv + sentence_per_page:true でルビ記
     // setSentencePerPage を呼ばない = 既定 false。
     const text = ['今日《きょう》は晴れ《はれ》。']
     r.setScenes([scene('s', [dialog('カコ', ...text)])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     expect(i.currentPageCount({ text })).toBe(1)
     // getAdvSentencePages（ルビ剥がし+文分割の入口）は一切呼ばれない = 呼び出し元は text[] を
     // そのまま使うため、ルビ記法は当然に保持される（render() 側の分岐そのものの回帰ロック）。
@@ -174,7 +166,7 @@ describe('NovelRenderer バグ2検証: adv + sentence_per_page:true で Narratio
     r.setDialogStyle('adv')
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [narration(...narrationWithPause)])])
-    const pages = internals(r).getAdvSentencePages({ text: narrationWithPause })
+    const pages = internals<LocalInternals>(r).getAdvSentencePages({ text: narrationWithPause })
     expect(pages).toEqual(['一言目。', '', '二言目。'])
   })
 
@@ -197,7 +189,7 @@ describe('NovelRenderer バグ2検証: adv + sentence_per_page:true で Narratio
     r.setDialogStyle('adv')
     // setSentencePerPage を呼ばない = 既定 false。
     r.setScenes([scene('s', [narration(...narrationWithPause)])])
-    expect(internals(r).currentPageCount({ text: narrationWithPause })).toBe(3)
+    expect(internals<LocalInternals>(r).currentPageCount({ text: narrationWithPause })).toBe(3)
   })
 })
 
@@ -208,7 +200,11 @@ describe('NovelRenderer adv 文境界規則の回帰固定 (#448 ADV版)', () =>
     r.setSentencePerPage(true)
     const text = ['本当に？！はい。']
     r.setScenes([scene('s', [dialog('カコ', ...text)])])
-    expect(internals(r).getAdvSentencePages({ text })).toEqual(['本当に？', '！', 'はい。'])
+    expect(internals<LocalInternals>(r).getAdvSentencePages({ text })).toEqual([
+      '本当に？',
+      '！',
+      'はい。',
+    ])
 
     // 半角 `.` は文末記号に含まれないため割れない（1 ページのまま）。
     const r2 = new NovelRenderer()
@@ -216,7 +212,9 @@ describe('NovelRenderer adv 文境界規則の回帰固定 (#448 ADV版)', () =>
     r2.setSentencePerPage(true)
     const text2 = ['3.14は円周率です。']
     r2.setScenes([scene('s', [dialog('カコ', ...text2)])])
-    expect(internals(r2).getAdvSentencePages({ text: text2 })).toEqual(['3.14は円周率です。'])
+    expect(internals<LocalInternals>(r2).getAdvSentencePages({ text: text2 })).toEqual([
+      '3.14は円周率です。',
+    ])
   })
 
   it('余韻横棒 `──` は文末記号直後で切り、次ページの先頭に回る（先頭ダッシュ #374 の ADV 版）', () => {
@@ -225,7 +223,7 @@ describe('NovelRenderer adv 文境界規則の回帰固定 (#448 ADV版)', () =>
     r.setSentencePerPage(true)
     const text = ['A。──B']
     r.setScenes([scene('s', [dialog('カコ', ...text)])])
-    expect(internals(r).getAdvSentencePages({ text })).toEqual(['A。', '──B'])
+    expect(internals<LocalInternals>(r).getAdvSentencePages({ text })).toEqual(['A。', '──B'])
   })
 })
 
@@ -235,7 +233,7 @@ describe('NovelRenderer 空/空白テキストのフォールバック (#448)', 
     r.setDialogStyle('adv')
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [dialog('カコ', '   ')])])
-    const pages = internals(r).getAdvSentencePages({ text: ['   '] })
+    const pages = internals<LocalInternals>(r).getAdvSentencePages({ text: ['   '] })
     expect(pages).toEqual([''])
   })
 })
@@ -245,7 +243,7 @@ describe('NovelRenderer Part2: setSentencePerPage の即時再描画 (#448)', ()
     const r = new NovelRenderer()
     r.setDialogStyle('adv')
     r.setScenes([scene('s', [narration('こんにちは。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // renderOnce 相当のガード `if (!this.initialized) return` を通すため initialized を立てる
     // （NovelRenderer.tachieTiming.test.ts と同じ流儀）。render の実 body は PixiJS 依存なので
     // spy で no-op 化し、呼ばれたかどうかだけを観測する。
@@ -259,7 +257,7 @@ describe('NovelRenderer Part2: setSentencePerPage の即時再描画 (#448)', ()
     const r = new NovelRenderer()
     r.setDialogStyle('adv')
     r.setScenes([scene('s', [narration('こんにちは。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // initialized を立てない（= まだ実画面に表示されていない状態を模す）。
     const renderSpy = vi.spyOn(i, 'render').mockImplementation(() => {})
     r.setSentencePerPage(true)
@@ -273,7 +271,7 @@ describe('NovelRenderer adv + sentence_per_page:true の advance/goBack 往復 (
     r.setDialogStyle('adv')
     r.setSentencePerPage(true)
     r.setScenes([scene('s', [narration('一。二。三。')])])
-    expect(internals(r).currentPageCount({ text: ['一。二。三。'] })).toBe(3)
+    expect(internals<LocalInternals>(r).currentPageCount({ text: ['一。二。三。'] })).toBe(3)
 
     expect(r.getSnapshot()).toMatchObject({ eventIndex: 0, textIndex: 0 })
     r.advance()
@@ -293,7 +291,7 @@ describe('NovelRenderer adv→novel の setDialogStyle 切替 (#448 派生キャ
     const r = new NovelRenderer()
     r.setSentencePerPage(true) // dialog_style 未指定 = adv 相当
     r.setScenes([scene('s', [narration('一。二。三。')])])
-    const i = internals(r)
+    const i = internals<LocalInternals>(r)
     // adv 文単位ページキャッシュを温める。
     i.getAdvSentencePages({ text: ['一。二。三。'] })
     expect(i.advSentencePagesCache).not.toBeNull()

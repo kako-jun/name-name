@@ -19,8 +19,8 @@ import { confineForTest } from '../test/confinement'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
-import type { NovelGameState } from './GameState'
 import type { Event, EventScene, ChoiceOption } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（NovelRenderer.confinement.test.ts と同じスタイル） ---
 
@@ -88,12 +88,7 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 }
 
 /** intermission タブロー検証用の内部アクセサ */
-interface RendererInternals {
-  initialized: boolean
-  storyEnded: boolean
-  intermissionTimer: number | null
-  readSceneProgress: Set<string>
-  waitingForChoice: boolean
+interface LocalInternals extends RendererInternals {
   dialogBox: {
     dialogText: { text: string }
     setDialog: (name: string | null, text: string) => void
@@ -109,13 +104,7 @@ interface RendererInternals {
   }
   fadeOutBackgroundEntries: (durationMs: number) => void
   renderIntermissionTableau: (events: Event[], startIndex?: number) => void
-  applyState: (state: NovelGameState) => void
-  appInitialized: boolean
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 /**
@@ -127,7 +116,7 @@ function internals(r: NovelRenderer): RendererInternals {
  */
 function setupWaitStaging(r: NovelRenderer, events: Event[]): void {
   r.getTimeController().setMode('virtual')
-  internals(r).initialized = true
+  internals<LocalInternals>(r).initialized = true
   r.setIntermissionScene(events, { backgroundFadeMs: 10, characterFadeMs: 10 })
   confineForTest(r, ['entry'])
   r.jumpToScene('out-scene')
@@ -140,7 +129,7 @@ function setupWaitStaging(r: NovelRenderer, events: Event[]): void {
  * 最小スタブする。
  */
 function stubDestroyableApp(r: NovelRenderer): void {
-  const appInternals = internals(r)
+  const appInternals = internals<LocalInternals>(r)
   appInternals.appInitialized = true
   // app.canvas は PixiJS Application のゲッター専用プロパティ（代入不可）なので
   // defineProperty で instance 側に配置済みプロパティとして上書きする。
@@ -185,7 +174,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       r as unknown as { fadeOutBackgroundEntries: (ms: number) => void },
       'fadeOutBackgroundEntries'
     )
-    const charSpy = vi.spyOn(internals(r).characterLayer, 'clearForSceneTransition')
+    const charSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'clearForSceneTransition')
 
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
@@ -203,7 +192,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       r as unknown as { fadeOutBackgroundEntries: (ms: number) => void },
       'fadeOutBackgroundEntries'
     )
-    const charSpy = vi.spyOn(internals(r).characterLayer, 'clearForSceneTransition')
+    const charSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'clearForSceneTransition')
 
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
@@ -221,9 +210,11 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       characterFadeMs: 10,
       eventImageFadeMs: 1400,
     })
-    const showSpy = vi.spyOn(internals(r).eventImageLayer, 'show').mockImplementation(() => {})
+    const showSpy = vi
+      .spyOn(internals<LocalInternals>(r).eventImageLayer, 'show')
+      .mockImplementation(() => {})
 
-    internals(r).renderIntermissionTableau([eventImage('story/intermission.webp')])
+    internals<LocalInternals>(r).renderIntermissionTableau([eventImage('story/intermission.webp')])
 
     expect(showSpy).toHaveBeenCalledWith(
       'story/intermission.webp',
@@ -239,7 +230,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       r as unknown as { fadeOutBackgroundEntries: (ms: number) => void },
       'fadeOutBackgroundEntries'
     )
-    const charSpy = vi.spyOn(internals(r).characterLayer, 'clearForSceneTransition')
+    const charSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'clearForSceneTransition')
     confineForTest(r, ['entry']) // hub / other は圏外
 
     await r.playScript([{ type: 'advance' }]) // narration → Choice 到達 → 全滅短絡 → endStory()
@@ -247,7 +238,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(bgSpy).toHaveBeenCalledWith(900)
     expect(charSpy).toHaveBeenCalledWith(800)
-    expect(internals(r).readSceneProgress.has('entry')).toBe(true)
+    expect(internals<LocalInternals>(r).readSceneProgress.has('entry')).toBe(true)
   })
 
   // ===== C. onStoryEndedChangeCallback の発火位置・タイミング不変 =====
@@ -281,11 +272,11 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     confineForTest(r, ['entry'])
 
     r.jumpToScene('out-scene')
-    const timerId = internals(r).intermissionTimer
+    const timerId = internals<LocalInternals>(r).intermissionTimer
     expect(timerId).not.toBeNull()
 
     r.jumpToScene('out-scene') // 2回目（endStory 側の二重発火防止で早期 return するはず）
-    expect(internals(r).intermissionTimer).toBe(timerId) // 新しいタイマーに置き換わっていない
+    expect(internals<LocalInternals>(r).intermissionTimer).toBe(timerId) // 新しいタイマーに置き換わっていない
   })
 
   // ===== E. virtual time で delay 経過後にタブローが描画される =====
@@ -293,7 +284,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('8: virtual time を delayMs 分進めると、tableau の Background(色)/Dialog が反映される', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setIntermissionScene([backgroundColor('#224466'), dialog(null, 'ただいま')], {
       backgroundFadeMs: 100,
       characterFadeMs: 50,
@@ -303,13 +294,13 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     // endStory() 直後: 消去フェードで backgroundColor は null にクリアされ、タブローはまだ描かれない。
     expect(r.getSnapshot().backgroundColor).toBeNull()
-    expect(internals(r).dialogBox.dialogText.text).toBe('')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('')
 
     // delay = max(intermissionBackgroundFadeMs, intermissionCharacterFadeMs) = max(100, 50) = 100
     r.getTimeController().tick(100)
 
     expect(r.getSnapshot().backgroundColor).toBe('#224466')
-    expect(internals(r).dialogBox.dialogText.text).toBe('ただいま')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('ただいま')
   })
 
   // ===== F. events 件数による表示内容の境界値 =====
@@ -317,7 +308,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('9: events=1件（Narration のみ）→ そのテキストがそのまま表示される', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setIntermissionScene([narration('ひとことだけ')], {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
@@ -327,13 +318,13 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     r.getTimeController().tick(10)
 
-    expect(internals(r).dialogBox.dialogText.text).toBe('ひとことだけ')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('ひとことだけ')
   })
 
   it('10: events=複数件の Dialog/Narration → 最後の1件だけが最終的に表示される（上書き仕様の固定化）', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     // 話者名は null 固定（jsdom は canvas getContext を null スタブしており（src/test/setup.ts）、
     // borderless=false + 名前ありだと updateNameDisplay の nameText.width 計測が例外を投げる。
     // 実ブラウザでは無関係な jsdom 環境の制約なので、ここでは character=null で回避する）。
@@ -346,7 +337,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     r.getTimeController().tick(10)
 
-    expect(internals(r).dialogBox.dialogText.text).toBe('さん')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('さん')
   })
 
   // ===== G. Choice/WaitDisplayComplete は無視系（例外を投げず継続） =====
@@ -360,7 +351,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setIntermissionScene(
       [
         narration('前'),
@@ -380,7 +371,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       String(call[0]).includes('intermission.md')
     )
     expect(intermissionWarns.length).toBe(2)
-    expect(internals(r).dialogBox.dialogText.text).toBe('後')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('後')
   })
 
   // ===== H. 副作用の非漏出 =====
@@ -389,7 +380,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const skipCb = vi.fn()
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setOnSkipModeChange(skipCb)
     r.setIntermissionScene([backgroundColor('#111111'), narration('x')], {
       backgroundFadeMs: 10,
@@ -416,9 +407,9 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('31: 既定 skipMode=false では、タブロー内の Label/Image は instant: false で呼ばれる', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
-    const showLabelSpy = vi.spyOn(internals(r).characterLayer, 'showLabel')
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    internals<LocalInternals>(r).initialized = true
+    const showLabelSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'showLabel')
+    const showImageSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'showImage')
     r.setIntermissionScene([label('見出し'), image('avatar.png')], {
       backgroundFadeMs: 10,
       characterFadeMs: 10,
@@ -457,9 +448,9 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     expect(skipCb).toHaveBeenCalledWith(false)
 
     // タブロー描画（intermissionTimer の遅延発火）を通すため、endStory() 後に initialized を立てる。
-    internals(r).initialized = true
-    const showLabelSpy = vi.spyOn(internals(r).characterLayer, 'showLabel')
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    internals<LocalInternals>(r).initialized = true
+    const showLabelSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'showLabel')
+    const showImageSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'showImage')
     r.getTimeController().tick(10)
 
     // 修正前は skipMode=true のまま renderIntermissionTableau に入り、instant: true（瞬間表示）で
@@ -473,7 +464,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('13: endStory 後 delay 経過前に startFrom({}) を呼ぶと intermissionTimer がキャンセルされ、tableau は描画されない', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     const tableauSpy = vi.spyOn(
       r as unknown as { renderIntermissionTableau: (events: Event[]) => void },
       'renderIntermissionTableau'
@@ -481,10 +472,10 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     void r.startFrom({})
-    expect(internals(r).intermissionTimer).toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
 
     r.getTimeController().tick(200) // 元の delay を過ぎても描画されない
     expect(tableauSpy).not.toHaveBeenCalled()
@@ -493,7 +484,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('14: endStory 後 delay 経過前に applyState（restoreToScene 経由と同じ後始末）を叩くとタイマーがキャンセルされる', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     const tableauSpy = vi.spyOn(
       r as unknown as { renderIntermissionTableau: (events: Event[]) => void },
       'renderIntermissionTableau'
@@ -501,11 +492,11 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     // セーブロード / goBack / seekTo はすべて applyState を経由する（loadFromSaveData.test.ts と同じ直呼び流儀）。
-    internals(r).applyState({ ...r.getSnapshot(), storyEnded: false })
-    expect(internals(r).intermissionTimer).toBeNull()
+    internals<LocalInternals>(r).applyState({ ...r.getSnapshot(), storyEnded: false })
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
 
     r.getTimeController().tick(200)
     expect(tableauSpy).not.toHaveBeenCalled()
@@ -514,11 +505,11 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('15: destroy() 呼び出しで pending 中の intermissionTimer がリークしない', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 100, characterFadeMs: 100 })
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     // destroy() は appInitialized（init() 完了）ガード付きの early-return を持つ (React StrictMode 対策)。
     // PixiJS 実 init は jsdom 対象外のため、ガードを満たしつつ canvas/app.destroy をここだけ最小スタブする
@@ -537,7 +528,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     appInternals.app.destroy = () => {}
 
     expect(() => r.destroy()).not.toThrow()
-    expect(internals(r).intermissionTimer).toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
   })
 
   // ===== J. Flag ディレクティブは GameState を汚染しない (#404 セルフレビュー S2) =====
@@ -552,7 +543,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     const flagsBefore = r.getSnapshot().flags
     r.setIntermissionScene(
       [
@@ -572,7 +563,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       String(call[0]).includes('intermission.md')
     )
     expect(intermissionWarns.length).toBe(1)
-    expect(internals(r).dialogBox.dialogText.text).toBe('後')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('後')
     // Flag ディレクティブが GameState の flags を一切書き換えていない。
     expect(r.getSnapshot().flags).toEqual(flagsBefore)
     expect(r.getSnapshot().flags).toEqual({})
@@ -592,13 +583,13 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     // Wait 直前の BackgroundColor は既に反映されている一方、Wait 後の Dialog はまだ届いていない。
     expect(r.getSnapshot().backgroundColor).toBe('#111111')
-    expect(internals(r).dialogBox.dialogText.text).toBe('')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('')
 
     r.getTimeController().tick(499) // Wait 500ms のうち 499ms 経過（未満）
-    expect(internals(r).dialogBox.dialogText.text).toBe('')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('')
 
     r.getTimeController().tick(1) // 合計 500ms 経過 → 発火
-    expect(internals(r).dialogBox.dialogText.text).toBe('あと')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('あと')
   })
 
   it('18: Wait 発火後、後続に Wait が無ければ intermissionTimer は null に戻る', () => {
@@ -607,15 +598,15 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
 
     r.getTimeController().tick(200)
 
-    expect(internals(r).intermissionTimer).toBeNull()
-    expect(internals(r).dialogBox.dialogText.text).toBe('後')
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('後')
   })
 
   it('19: Wait 待機中（未発火）は intermissionTimer が非 null', () => {
     const r = makeRenderer(SCENES)
     setupWaitStaging(r, [wait(200), dialog(null, '後')])
 
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
   })
 
   // ===== M. Wait 複数連続ステージング (#424) =====
@@ -625,21 +616,21 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     setupWaitStaging(r, [wait(100), dialog(null, '一段目'), wait(100), dialog(null, '二段目')])
 
     r.getTimeController().tick(100) // 1個目の Wait 発火 → '一段目' が反映される
-    expect(internals(r).dialogBox.dialogText.text).toBe('一段目')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('一段目')
 
     r.getTimeController().tick(100) // 2個目の Wait 発火 → '二段目' で上書きされる
-    expect(internals(r).dialogBox.dialogText.text).toBe('二段目')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('二段目')
   })
 
   it('21: Wait が events の最後の要素でも、発火後に例外が出ず追加の変化もない（境界値）', () => {
     const r = makeRenderer(SCENES)
     setupWaitStaging(r, [dialog(null, '本文'), wait(50)])
-    expect(internals(r).dialogBox.dialogText.text).toBe('本文')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('本文')
 
     expect(() => r.getTimeController().tick(50)).not.toThrow()
 
-    expect(internals(r).dialogBox.dialogText.text).toBe('本文') // 変化なし
-    expect(internals(r).intermissionTimer).toBeNull() // 新しいタイマーはセットされない
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('本文') // 変化なし
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull() // 新しいタイマーはセットされない
   })
 
   // ===== N. Wait 待機中の中断 (#424) =====
@@ -647,47 +638,47 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('22: Wait 待機中に destroy() すると intermissionTimer が null になり、以後 tick を進めても Wait 後の内容が反映されない（デシジョンテーブル#6）', () => {
     const r = makeRenderer(SCENES)
     setupWaitStaging(r, [wait(200), dialog(null, '後')])
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     stubDestroyableApp(r)
     expect(() => r.destroy()).not.toThrow()
-    expect(internals(r).intermissionTimer).toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
 
     r.getTimeController().tick(200)
-    expect(internals(r).dialogBox.dialogText.text).toBe('') // Wait 後の内容は反映されない
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('') // Wait 後の内容は反映されない
   })
 
   it('23: Wait 待機中に startFrom({})（resetAndStartEvents 経由）すると intermissionTimer がキャンセルされ、新しいシーン側に正しく上書きされる（デシジョンテーブル#7）', () => {
     const r = makeRenderer(SCENES)
     setupWaitStaging(r, [wait(200), dialog(null, '後')])
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     void r.startFrom({}) // rawEvents は jumpToScene(圏外)/endStory では書き換わらないため entry の内容に戻る
-    expect(internals(r).intermissionTimer).toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
     // startFrom({}) 後の通常再生はタイプライター中（Pixi Ticker は jsdom で自動進行しないため
     // dialogText.text は空のまま）。renderIntermissionTableau と違い skipTypewriter を
     // 自動で挟まないので、DialogBox.test.ts と同じ流儀で msPerChar=0 にして即時 reveal させる。
-    internals(r).dialogBox.setMsPerChar(0)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(0)
 
     r.getTimeController().tick(200)
     // Wait 後の内容('後')が漏れ出さず、startFrom({}) が復元した entry シーン側の内容('start')に
     // 正しく上書きされている。
-    expect(internals(r).dialogBox.dialogText.text).toBe('start')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('start')
   })
 
   it('24: Wait 待機中に applyState（goBack/seekTo 相当）を叩くと intermissionTimer がキャンセルされ、storyEnded が復元値になる（デシジョンテーブル#8）', () => {
     const r = makeRenderer(SCENES)
     setupWaitStaging(r, [wait(200), dialog(null, '後')])
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     // セーブロード / goBack / seekTo はすべて applyState を経由する（loadFromSaveData.test.ts と同じ直呼び流儀）。
-    internals(r).applyState({ ...r.getSnapshot(), storyEnded: false })
-    expect(internals(r).intermissionTimer).toBeNull()
+    internals<LocalInternals>(r).applyState({ ...r.getSnapshot(), storyEnded: false })
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
     expect(r.getSnapshot().storyEnded).toBe(false)
 
     r.getTimeController().tick(200)
     // Wait 後の内容が、applyState で復元済みの画面を上書きしない。
-    expect(internals(r).dialogBox.dialogText.text).toBe('')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('')
   })
 
   it('25: 2つ目の Wait が pending 中に destroy() すると、1つ目の効果だけが反映されて凍結する（デシジョンテーブル#11）', () => {
@@ -695,15 +686,15 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     setupWaitStaging(r, [wait(100), dialog(null, '一段目'), wait(100), dialog(null, '二段目')])
 
     r.getTimeController().tick(100) // 1個目 Wait 発火 → '一段目' 反映、2個目 Wait が pending に
-    expect(internals(r).dialogBox.dialogText.text).toBe('一段目')
-    expect(internals(r).intermissionTimer).not.toBeNull()
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('一段目')
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBeNull()
 
     stubDestroyableApp(r)
     expect(() => r.destroy()).not.toThrow()
-    expect(internals(r).intermissionTimer).toBeNull()
+    expect(internals<LocalInternals>(r).intermissionTimer).toBeNull()
 
     r.getTimeController().tick(100) // 2個目の Wait 分の時間が経過しても…
-    expect(internals(r).dialogBox.dialogText.text).toBe('一段目') // …'二段目' には進まない
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('一段目') // …'二段目' には進まない
   })
 
   // ===== O. Wait ms 境界値・同値分割 (#424) =====
@@ -711,7 +702,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('26: Wait{ms:0} は TimeController.tick(0) だけで発火する（同値分割・下限）', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     // 外側の消去フェードも 0ms にして、Wait 自身の ms:0 だけを tick(0) で観測できるようにする。
     r.setIntermissionScene([wait(0), dialog(null, '即時')], {
       backgroundFadeMs: 0,
@@ -719,10 +710,10 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     })
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
-    expect(internals(r).dialogBox.dialogText.text).toBe('') // tick 前はまだ
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('') // tick 前はまだ
 
     r.getTimeController().tick(0)
-    expect(internals(r).dialogBox.dialogText.text).toBe('即時')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('即時')
   })
 
   it('27: 推奨3値相当（300ms/1400ms）を含め、クランプされず指定 ms ぴったりで発火する（同値分割）', () => {
@@ -730,14 +721,14 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     setupWaitStaging(r, [wait(300), dialog(null, '短め'), wait(1400), dialog(null, '長め')])
 
     r.getTimeController().tick(299)
-    expect(internals(r).dialogBox.dialogText.text).toBe('')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('')
     r.getTimeController().tick(1) // 合計 300ms → 1個目発火
-    expect(internals(r).dialogBox.dialogText.text).toBe('短め')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('短め')
 
     r.getTimeController().tick(1399)
-    expect(internals(r).dialogBox.dialogText.text).toBe('短め') // まだ
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('短め') // まだ
     r.getTimeController().tick(1) // 合計 1400ms → 2個目発火
-    expect(internals(r).dialogBox.dialogText.text).toBe('長め')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('長め')
   })
 
   it('28（防御的）: Wait{ms:-1} 相当は TimeController 側で 0 にクランプされ即時発火する（.md からは到達不能な型安全網の確認）', () => {
@@ -747,17 +738,17 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     // 直接構築で確認する（実データでは到達しない防御的テスト）。
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setIntermissionScene([wait(-1), dialog(null, '即時')], {
       backgroundFadeMs: 0,
       characterFadeMs: 0,
     })
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
-    expect(internals(r).dialogBox.dialogText.text).toBe('') // tick 前はまだ
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('') // tick 前はまだ
 
     r.getTimeController().tick(0) // 0 にクランプされているので tick(0) だけで発火する
-    expect(internals(r).dialogBox.dialogText.text).toBe('即時')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('即時')
   })
 
   // ===== P. ログ非汚染 (#424) =====
@@ -773,7 +764,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
       String(call[0]).includes('intermission.md')
     )
     expect(intermissionWarns.length).toBe(0)
-    expect(internals(r).dialogBox.dialogText.text).toBe('後')
+    expect(internals<LocalInternals>(r).dialogBox.dialogText.text).toBe('後')
   })
 
   // ===== Q. 再入・二重発火の防御的検証 (#424) =====
@@ -783,18 +774,18 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const events = [wait(100), dialog(null, '後')]
     setupWaitStaging(r, events)
     // setupWaitStaging 内の endStory 経由の1回目呼び出しで、既に Wait が pending 状態。
-    const firstTimerId = internals(r).intermissionTimer
+    const firstTimerId = internals<LocalInternals>(r).intermissionTimer
     expect(firstTimerId).not.toBeNull()
     expect(r.getTimeController().getPendingTimerCount()).toBe(1)
 
-    const setDialogSpy = vi.spyOn(internals(r).dialogBox, 'setDialog')
+    const setDialogSpy = vi.spyOn(internals<LocalInternals>(r).dialogBox, 'setDialog')
 
     // 2回目を同じ startIndex(0) から強制的に直接呼ぶ（本来この経路には来ないはずの再入を模擬）。
-    internals(r).renderIntermissionTableau(events, 0)
+    internals<LocalInternals>(r).renderIntermissionTableau(events, 0)
 
     // 二重に walk しても pending タイマーは1つだけ（古いタイマーが正しく clear されている）。
     expect(r.getTimeController().getPendingTimerCount()).toBe(1)
-    expect(internals(r).intermissionTimer).not.toBe(firstTimerId) // 新しいタイマーに置き換わっている
+    expect(internals<LocalInternals>(r).intermissionTimer).not.toBe(firstTimerId) // 新しいタイマーに置き換わっている
 
     r.getTimeController().tick(100)
     // 二重にコールバックが走っていれば setDialog も2回呼ばれるはずだが、1回だけで済んでいる。

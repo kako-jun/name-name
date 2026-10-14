@@ -12,14 +12,11 @@
  */
 import { describe, expect, it } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
-interface ToastInternals {
+interface ToastInternals extends RendererInternals {
   toastOverlay: { visible: boolean }
 }
-function internals(r: NovelRenderer): ToastInternals {
-  return r as unknown as ToastInternals
-}
-
 describe('NovelRenderer.showToast() (#630)', () => {
   it('1: showToast(message) を呼ぶと toastOverlay が表示される', () => {
     const r = new NovelRenderer()
@@ -27,7 +24,7 @@ describe('NovelRenderer.showToast() (#630)', () => {
 
     r.showToast('クイックセーブしました')
 
-    expect(internals(r).toastOverlay.visible).toBe(true)
+    expect(internals<ToastInternals>(r).toastOverlay.visible).toBe(true)
   })
 
   it('2: 2000ms 経過すると toastOverlay が自動的に非表示になる', () => {
@@ -37,7 +34,7 @@ describe('NovelRenderer.showToast() (#630)', () => {
     r.showToast('クイックセーブしました')
     r.getTimeController().tick(2000)
 
-    expect(internals(r).toastOverlay.visible).toBe(false)
+    expect(internals<ToastInternals>(r).toastOverlay.visible).toBe(false)
   })
 
   it('3: 2000ms 未満では非表示にならない（境界値）', () => {
@@ -47,7 +44,7 @@ describe('NovelRenderer.showToast() (#630)', () => {
     r.showToast('クイックセーブしました')
     r.getTimeController().tick(1999)
 
-    expect(internals(r).toastOverlay.visible).toBe(true)
+    expect(internals<ToastInternals>(r).toastOverlay.visible).toBe(true)
   })
 
   it('4: 連続呼び出しは既存タイマーをクリアして再スタートする（1回目のタイマーで消えない）', () => {
@@ -59,9 +56,9 @@ describe('NovelRenderer.showToast() (#630)', () => {
     r.showToast('クイックロードしました') // 再スタート: ここから改めて2000ms
 
     r.getTimeController().tick(1500) // 1回目起点からは3000ms経過だが、2回目起点からはまだ1500ms
-    expect(internals(r).toastOverlay.visible).toBe(true)
+    expect(internals<ToastInternals>(r).toastOverlay.visible).toBe(true)
 
     r.getTimeController().tick(500) // 2回目起点から2000ms経過
-    expect(internals(r).toastOverlay.visible).toBe(false)
+    expect(internals<ToastInternals>(r).toastOverlay.visible).toBe(false)
   })
 })
