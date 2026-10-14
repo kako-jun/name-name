@@ -85,12 +85,14 @@ export class BattleMenuLayer extends Container {
       const color = row.disabled ? ROW_DISABLED_COLOR : ROW_COLOR
       const label = new PixiText({ text: row.label, style: this.styled(color) })
       label.anchor.set(0, 0.5)
+      label.eventMode = 'none' // 文字はタップを受けない（行の判定へ通す）
       label.x = row.rect.x
       label.y = row.rect.y + row.rect.h / 2
       win.addChild(label)
       if (row.cost) {
         const cost = new PixiText({ text: row.cost, style: this.styled(color) })
         cost.anchor.set(1, 0.5)
+        cost.eventMode = 'none'
         cost.x = row.rect.x + row.rect.w
         cost.y = label.y
         win.addChild(cost)
@@ -161,6 +163,8 @@ export class BattleMenuLayer extends Container {
   /** 手のドット絵。黒い縁（1 ドットぶん外へ広げた塗り）の上に白を重ねる */
   private hand(p: HandPlacement): Graphics {
     const g = new Graphics()
+    // 手はタップを受けない（行・対象の判定へ通す。親が static だと手が当たり判定に参加して止めてしまう）
+    g.eventMode = 'none'
     const cells = handCells(p.facing)
     for (const c of cells) {
       g.rect(p.x + c.x - 1, p.y + c.y - 1, HAND_PIXEL + 2, HAND_PIXEL + 2).fill({

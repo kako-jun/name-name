@@ -3,10 +3,13 @@
  * 実のエンジンに対して、globalThis へ KeyboardEvent を dispatch して検証する。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Container } from 'pixi.js'
+// Container に eventMode / isInteractive を足す（実アプリでは Application がイベントシステムを登録する）
+import 'pixi.js/events'
+import { EventBoundary, type Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import type { BattleMenuData, MenuStack } from './battleMenu'
+import { RESULT_SKIP_GUARD_MS } from './battleResult'
 import type { BattleEntity } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -527,72 +530,75 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
   })
 })
 
-describe('スクロール記号のタップ (#204 レビュー B1)', () => {
-  it('▲▼の記号はタップを受けず、記号の位置のタップが下のスクロール帯に届く', async () => {
-    const { Text: PixiText } = await import('pixi.js')
-    const many: BattleMenuData = {
-      spells: {
-        a: Array.from({ length: 12 }, (_, i) => ({
-          id: `s${i}`,
-          name: `じゅもん${i}`,
-          mp: 1,
-          target: '敵単体',
-          effect: 'damage 1..1',
-        })),
-      },
-    }
+describe('手・スクロール記号の上のタップ (#204 レビュー B1 / S-1)', () => {
+  // 本物の PixiJS の当たり判定（EventBoundary）で、座標のタップがどの判定に届くかを見る
+  const many: BattleMenuData = {
+    spells: {
+      a: Array.from({ length: 12 }, (_, i) => ({
+        id: `s${i}`,
+        name: `じゅもん${i}`,
+        mp: 1,
+        target: '敵単体',
+        effect: 'damage 1..1',
+      })),
+    },
+  }
+  interface Geo {
+    menuGeometry: import('./battleMenuLayout').MenuGeometry
+    menuContext(): import('./battleMenu').MenuContext
+  }
+  async function listView(s: BattleScreen) {
+    const { buildMenuView } = await import('./battleMenuLayout')
+    const g = s as unknown as Geo
+    const v = buildMenuView(I(s).menuStack, g.menuContext(), g.menuGeometry)[0]
+    if (v.type !== 'list') throw new Error('list expected')
+    return v
+  }
+  const topOf = (s: BattleScreen) => I(s).menuStack[0] as { top: number; cursor: number }
+
+  it('▲▼の記号の上のタップは、下のスクロール帯に届く', async () => {
     const { s } = build({ menu: many })
     press('ArrowLeft')
-    const layer = I(s).menuLayer!
-    const texts: InstanceType<typeof PixiText>[] = []
-    const walk = (c: Container) => {
-      for (const ch of c.children as Container[]) {
-        if (ch instanceof PixiText) texts.push(ch)
-        walk(ch)
-      }
+    const v = await listView(s)
+    const before = topOf(s).top
+    // ▼ は下の帯の中（窓の右端寄り・帯の高さの範囲）に描かれる
+    const x = v.rect.x + v.rect.w - 12 - 3
+    const y = v.rect.y + v.rect.h - 4 - 3
+    const hit = new EventBoundary(I(s).menuLayer!).hitTest(x, y)
+    expect(hit).not.toBeNull()
+    expect(hit!.hitArea!.contains(x, y)).toBe(true)
+    hit!.emit('pointertap', {} as never)
+    expect(topOf(s).top).toBe(before + 1)
+  })
+
+  it('選んでいる行の手の上（x=20 付近）をタップしても、その行の決定になる。手の外（x=100）も同じ', async () => {
+    for (const dx of [20 - 16, 100 - 16]) {
+      const { s } = build({ menu: many })
+      press('ArrowLeft')
+      const v = await listView(s)
+      const row = v.rows[1]
+      const x = v.rect.x + dx
+      const y = row.rect.y + row.rect.h / 2
+      const hit = new EventBoundary(I(s).menuLayer!).hitTest(x, y)
+      expect(hit).not.toBeNull()
+      hit!.emit('pointertap', {} as never)
+      // 手は選択中の行（0 行目）にあるが、タップした行（1 行目）が決定されて対象選択に進む
+      expect(types(s)).toEqual(['list', 'target'])
+      expect(topOf(s).cursor).toBe(row.index)
+      s.destroy({ children: true })
     }
-    walk(layer)
-    const down = texts.find((t) => t.text === '▼')!
-    expect(down.eventMode).toBe('none')
-    const before = (I(s).menuStack[0] as { top: number }).top
-    // PixiJS の EventBoundary.hitTestRecursive と同じ規則で当たり判定する:
-    // none は素通し・後から足したものが前面・親が static なら子も判定に参加し（Text は containsPoint）、
-    // 自分が操作対象（static）でなくても当たれば探索を打ち切る（= 下の帯に届かない）
-    type Hit = Container[] | null
-    const interactive = (c: Container) => c.eventMode === 'static' || c.eventMode === 'dynamic'
-    const hitTest = (c: Container, mode: string, x: number, y: number): Hit => {
-      if (!c.visible || c.eventMode === 'none') return null
-      for (const ch of [...c.children].reverse()) {
-        const h = hitTest(
-          ch as Container,
-          mode === 'static' ? mode : ((ch as Container).eventMode ?? 'auto'),
-          x,
-          y
-        )
-        if (h) return interactive(c) || h.length > 0 ? [...h, c] : h
-      }
-      if (mode !== 'static') return null
-      const t = c as unknown as {
-        text?: string
-        width: number
-        height: number
-        x: number
-        y: number
-      }
-      const inside = c.hitArea
-        ? c.hitArea.contains(x, y)
-        : typeof t.text === 'string' &&
-          x >= t.x - t.width &&
-          x <= t.x &&
-          y >= t.y - t.height &&
-          y <= t.y + t.height
-      return inside ? (interactive(c) ? [c] : []) : null
-    }
-    const path = hitTest(layer, layer.eventMode ?? 'auto', down.x - 3, down.y - 3)
-    const hit = path && path.length > 0 ? path[0] : null
+  })
+
+  it('選択中の行そのものの手の上をタップしても、その行の決定になる', async () => {
+    const { s } = build({ menu: many })
+    press('ArrowLeft')
+    const v = await listView(s)
+    const hand = v.hand!
+    const hit = new EventBoundary(I(s).menuLayer!).hitTest(hand.x + 4, hand.y + 4)
     expect(hit).not.toBeNull()
     hit!.emit('pointertap', {} as never)
-    expect((I(s).menuStack[0] as { top: number }).top).toBe(before + 1)
+    expect(types(s)).toEqual(['list', 'target'])
+    expect(topOf(s).cursor).toBe(v.rows.find((r) => r.selected)!.index)
   })
 })
 
@@ -629,8 +635,9 @@ describe('勝敗の待機 (#820) との干渉', () => {
     expect(engine.isOver()).toBe(false)
   })
 
-  it('勝敗が確定したら窓が閉じて待機に入り、待機中は候補窓が開かず Enter / Z は待機のスキップだけに働く', () => {
-    const { s, engine } = build({}, ACTIVE)
+  it('勝敗が確定したら窓が閉じて待機に入り、待機中は候補窓が開かない。猶予を過ぎれば Enter / Z で待機が飛んで閉じる', () => {
+    const closed: string[] = []
+    const { s, engine } = build({ onClose: (o) => closed.push(o) }, ACTIVE)
     press('ArrowLeft')
     press('Enter') // 対象選択まで進めておく
     expect(types(s)).toEqual(['list', 'target'])
@@ -642,10 +649,31 @@ describe('勝敗の待機 (#820) との干渉', () => {
     expect(H(s).resultTapArmed).toBe(true)
     const mp = engine.getState().party[0].mp
     press('ArrowLeft') // 待機中はコマンドを受けず、窓も開かない
-    press('Enter')
-    press('z')
     expect(types(s)).toEqual([])
     expect(engine.getState().party[0].mp).toBe(mp)
     expect(I(s).menuLayer!.visible).toBe(false)
+    expect(closed).toEqual([]) // まだ待機の途中
+    s.tick(RESULT_SKIP_GUARD_MS + 10) // 猶予を過ぎる（待機の長さ RESULT_HOLD_DQ_MS よりは短い）
+    expect(closed).toEqual([])
+    press('Enter')
+    expect(closed).toEqual(['victory']) // 待機が飛んだ
+  })
+
+  it('窓の決定(Enter)で最後の敵を倒したとき、その同じ Enter では待機は飛ばない', () => {
+    const closed: string[] = []
+    const { s, engine } = build(
+      { onClose: (o) => closed.push(o) },
+      ACTIVE,
+      [ent('a'), ent('b')],
+      [ent('s1', { hp: 1, maxHp: 1 })]
+    )
+    press('ArrowLeft')
+    press('Enter') // ほのお → 対象選択
+    press('Enter') // 敵を倒す（同じ Enter キーの連打で待機に入る）
+    expect(engine.isOver()).toBe(true)
+    expect(H(s).resultElapsed).toBe(0)
+    expect(closed).toEqual([]) // 勝利を読ませる待機が始まっただけで、閉じていない
+    press('Enter') // 猶予内の Enter も飛ばさない
+    expect(closed).toEqual([])
   })
 })

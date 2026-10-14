@@ -187,7 +187,7 @@ describe('computeListWindowRect', () => {
     const rows = buildMenuRows('spell', manySpells(2), ent('a'))
     const small = computeListWindowRect(g, rows)
     expect(small.visibleRows).toBe(2)
-    expect(small.rect.h).toBe(2 * MENU_ROW_HEIGHT + 2 * MENU_PADDING_Y)
+    expect(small.rect.h).toBe(Math.max(2 * MENU_ROW_HEIGHT + 2 * MENU_PADDING_Y, g.command.h))
     const big = computeListWindowRect(g, buildMenuRows('spell', manySpells(99), ent('a')))
     expect(big.visibleRows).toBe(listMaxRows(g))
   })
@@ -284,13 +284,77 @@ describe('窓の寸法の取り決め (#204 レビュー)', () => {
     expect(v.scrollDown!.y).toBeGreaterThanOrEqual(last.y + last.h)
   })
 
-  it('一覧窓はコマンド窓より狭くならず（文字がはみ出して見えない）、見える行は MENU_MAX_ROWS まで', () => {
+  it('一覧窓はコマンド窓より狭くならず（文字がはみ出して見えない）・画面内に収まり、見える行は MENU_MAX_ROWS まで', () => {
     for (const [w, h] of SIZES) {
       const g = geometry(w, h, 4, 3)
       const r = computeListWindowRect(g, buildMenuRows('spell', manySpells(2), ent('a')))
       expect(r.rect.w).toBeGreaterThanOrEqual(g.command.w - EPS)
-      expect(r.rect.w).toBeLessThanOrEqual(g.command.w + EPS) // 味方のステータス欄を覆わない
+      expect(inside(r.rect, w, h)).toBe(true)
       expect(listMaxRows(g)).toBeLessThanOrEqual(MENU_MAX_ROWS)
+    }
+  })
+})
+
+describe('名前の読みやすさ（画面サイズ総当たり）', () => {
+  const NAMES = [
+    ['ほのお', 3],
+    ['いなずま', 6],
+    ['ヒール', 2],
+    ['ヒーリング', 8],
+    ['ちゆのいのり', 4],
+    ['メテオ', 20],
+    ['ブリザドラ', 12], // 消費が 2 桁
+  ] as const
+
+  for (const [w, h] of SIZES) {
+    it(`${w}x${h}: 名前は最低 5 文字（短い名前は全部）見え、互いに区別できる`, () => {
+      const g = geometry(w, h, 4, 3)
+      const spells: BattleSpellEntry[] = NAMES.map(([name, mp], i) => ({
+        id: `n${i}`,
+        name,
+        mp,
+        target: '敵単体',
+      }))
+      const members = [ent('a')]
+      const ctx: MenuContext = {
+        rows: buildMenuRows('spell', spells, members[0]),
+        maxRows: listMaxRows(g),
+        entries: spells,
+        party: members,
+        enemies: [ent('e')],
+        actorIndex: 0,
+      }
+      // 行数が窓に収まらないぶんはスクロールで見えるので、先頭を動かしながら全行を集める
+      const seen = new Map<number, string>()
+      let st = openList(EMPTY_STACK, 'spell', ctx)
+      for (let i = 0; i < NAMES.length; i++) {
+        const v = buildMenuView(st, ctx, g)[0]
+        if (v.type !== 'list') throw new Error()
+        for (const r of v.rows) seen.set(r.index, r.label)
+        st = scrollList(st, 1, ctx)
+      }
+      expect(seen.size).toBe(NAMES.length)
+      const labels = [...seen.entries()].sort((x, y) => x[0] - y[0]).map(([, l]) => l)
+      NAMES.forEach(([name], i) => {
+        const shown = labels[i].replace('…', '')
+        expect(shown.length).toBeGreaterThanOrEqual(Math.min(name.length, 5))
+        expect(name.startsWith(shown)).toBe(true)
+      })
+      expect(new Set(labels).size).toBe(NAMES.length)
+    })
+  }
+})
+
+describe('コマンド窓を覆う高さ', () => {
+  it('行が 1 行でも、窓はコマンド窓全体を覆う（コマンドの文字が窓の上に顔を出さない）', () => {
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 4, 3)
+      for (const n of [1, 3]) {
+        const r = computeListWindowRect(g, buildMenuRows('item', manySpells(n), ent('a'))).rect
+        expect(r.y).toBeLessThanOrEqual(g.command.y + EPS)
+        expect(r.y + r.h).toBeGreaterThanOrEqual(g.command.y + g.command.h - EPS)
+        expect(inside(r, w, h)).toBe(true)
+      }
     }
   })
 })
