@@ -68,6 +68,7 @@ import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { countDisplayEvents, remapEventIndexAfterReResolve } from './eventCursor'
+import { buildFreshPositionState } from './freshState'
 import { isSceneIdConfined } from './sceneConfinement'
 import {
   carryPolicyFor,
@@ -78,7 +79,6 @@ import {
   type Deferred,
   type GatedOperation,
   type LoadOrigin,
-  type FreshPosition,
   type PendingEntry,
   type SceneEntryRequest,
   type SceneEntryResult,
@@ -1933,7 +1933,7 @@ export class NovelRenderer {
     // 位置指定は適用の前に範囲を判定する (#789)。範囲外なら flags・confinement とも変えずに失敗にする。
     const positioned =
       req.position && scene
-        ? { scene, state: this.buildFreshPositionState(scene, req.position, req.flags) }
+        ? { scene, state: buildFreshPositionState(scene.id, req.position, req.flags) }
         : null
     if (positioned) {
       const rangeError = this.checkRestorePosition(positioned.scene.events, positioned.state)
@@ -2002,39 +2002,6 @@ export class NovelRenderer {
       (events) => resolveEvents(events, gs).length
     )
     return resolved.find((seg) => seg.sceneId === sceneId)?.start ?? null
-  }
-
-  /** 新規開始の位置指定から、共通コアに渡す最小の NovelGameState を組み立てる。 */
-  private buildFreshPositionState(
-    scene: EventScene,
-    position: FreshPosition,
-    flags: Record<string, FlagValue> | undefined
-  ): NovelGameState {
-    return {
-      sceneId: scene.id,
-      eventIndex: position.eventIndex,
-      textIndex: position.textIndex ?? 0,
-      sentenceIndex: position.sentenceIndex ?? 0,
-      flags: flags ?? {},
-      backgroundPath: null,
-      backgroundColor: null,
-      backgroundFade: normalizeBackgroundFade(undefined),
-      backgroundBrightness: null,
-      video: null,
-      eventImage: null,
-      backgroundBoards: [],
-      props: [],
-      spotlight: null,
-      curtain: null,
-      isBlackout: false,
-      characters: [],
-      currentBgmPath: null,
-      cameraMode: 'Novel',
-      cameraOrientation: 'Audience',
-      cameraElevation: null,
-      paperDollOutline: null,
-      storyEnded: false,
-    }
   }
 
   /**
