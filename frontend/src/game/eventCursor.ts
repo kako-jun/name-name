@@ -9,12 +9,47 @@
 import type { Event } from '../types'
 import { countSurvivingBefore, type GameState } from './GameState'
 
+/** Dialog / Narration から text を取り出すヘルパー */
+export function getTextEvent(event: Event):
+  | {
+      type: 'dialog'
+      character: string | null
+      expression: string | null
+      position: string | null
+      text: string[]
+      /** 立ち絵の明示フィット指定 (#294)。true のとき loadTexture で旧 fit-down を適用する。 */
+      fit: boolean
+      /** シアターモードのキャラクター奥行き配置 (#694)。未指定/null は 0（最前面）。 */
+      depth: number
+    }
+  | { type: 'narration'; text: string[] }
+  | null {
+  if (typeof event === 'object' && event !== null) {
+    if ('Dialog' in event) {
+      return {
+        type: 'dialog',
+        character: event.Dialog.character,
+        expression: event.Dialog.expression,
+        position: event.Dialog.position,
+        text: event.Dialog.text,
+        // 未指定 / false は原寸（fit=false）。明示 boolean に倒す。
+        fit: event.Dialog.fit === true,
+        // 未指定/null は 0（最前面）に倒す (#694)。
+        depth: event.Dialog.depth ?? 0,
+      }
+    }
+    if ('Narration' in event) {
+      return { type: 'narration', text: event.Narration.text }
+    }
+  }
+  return null
+}
+
 /**
- * 本文イベント（Dialog / Narration）か。`NovelRenderer.getTextEvent(event) !== null` と同値。
- * `getTextEvent` は NovelRenderer.ts にあり PixiJS を間接参照するため、述語だけをここに持つ。
+ * 本文イベント（Dialog / Narration）か。`getTextEvent(event) !== null` と同じ。
  */
 export function isTextEvent(event: Event): boolean {
-  return typeof event === 'object' && event !== null && ('Dialog' in event || 'Narration' in event)
+  return getTextEvent(event) !== null
 }
 
 /**

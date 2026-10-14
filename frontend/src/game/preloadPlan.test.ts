@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Event } from '../types'
 import { collectUpcomingAssetUrls, PRELOAD_MAX_TEXT_EVENTS } from './preloadPlan'
-import { getTextEvent } from './NovelRenderer'
+import { getTextEvent } from './eventCursor'
 import { resolveAssetUrl, resolveCharacterImageUrls } from './novelLayout'
 
 const BASE = 'http://h/assets'

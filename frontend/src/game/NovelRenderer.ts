@@ -67,7 +67,10 @@ import { EndingOverlay } from './EndingOverlay'
 import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
-import { countDisplayEvents, remapEventIndexAfterReResolve } from './eventCursor'
+import { countDisplayEvents, getTextEvent, remapEventIndexAfterReResolve } from './eventCursor'
+
+// 公開 API 互換: 既存の import 元（seekMapping・テスト）のため再エクスポートする。
+export { getTextEvent }
 import { buildFreshPositionState } from './freshState'
 import { collectUpcomingAssetUrls } from './preloadPlan'
 import { buildDebugState, type DebugState } from './debugState'
@@ -194,42 +197,6 @@ type SceneLookup =
  * `allScenes` に反映しない（破棄された入場は何も書き換えない）。
  */
 type SceneResolution = SceneLookup | { status: 'loaded'; scenes: EventScene[] }
-
-/** Dialog / Narration から text を取り出すヘルパー */
-export function getTextEvent(event: Event):
-  | {
-      type: 'dialog'
-      character: string | null
-      expression: string | null
-      position: string | null
-      text: string[]
-      /** 立ち絵の明示フィット指定 (#294)。true のとき loadTexture で旧 fit-down を適用する。 */
-      fit: boolean
-      /** シアターモードのキャラクター奥行き配置 (#694)。未指定/null は 0（最前面）。 */
-      depth: number
-    }
-  | { type: 'narration'; text: string[] }
-  | null {
-  if (typeof event === 'object' && event !== null) {
-    if ('Dialog' in event) {
-      return {
-        type: 'dialog',
-        character: event.Dialog.character,
-        expression: event.Dialog.expression,
-        position: event.Dialog.position,
-        text: event.Dialog.text,
-        // 未指定 / false は原寸（fit=false）。明示 boolean に倒す。
-        fit: event.Dialog.fit === true,
-        // 未指定/null は 0（最前面）に倒す (#694)。
-        depth: event.Dialog.depth ?? 0,
-      }
-    }
-    if ('Narration' in event) {
-      return { type: 'narration', text: event.Narration.text }
-    }
-  }
-  return null
-}
 
 /**
  * 復元 (#294) 用: 指定キャラの立ち絵フィット指定を resolvedEvents から解決する純粋関数。
@@ -5134,7 +5101,7 @@ export class NovelRenderer {
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
    * - **緩い上限**: 分岐までが極端に長い場合に備え、先読みするテキストイベント
-   *   （`getTextEvent` 非 null）を最大 {@link PRELOAD_MAX_TEXT_EVENTS}（preloadPlan.ts）個ぶんに抑える。
+   *   （`getTextEvent` 非 null）を最大 `PRELOAD_MAX_TEXT_EVENTS`（preloadPlan.ts）個ぶんに抑える。
    *   テキストイベント以外（Background / ExpressionChange 等）は予算に数えず、予算を使い切った
    *   後の**次のテキストイベントに達した時点で**走査を終了する（そこに至るまでの Background 等は
    *   積む＝test18 が固定する挙動。上限で即座に走査終了するわけではない）。

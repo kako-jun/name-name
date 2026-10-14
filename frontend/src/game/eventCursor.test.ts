@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import type { Event, FlagValue } from '../types'
 import { GameState, countSurvivingBefore, resolveEvents } from './GameState'
 import { countDisplayEvents, isTextEvent, remapEventIndexAfterReResolve } from './eventCursor'
-import { getTextEvent } from './NovelRenderer'
+import { getTextEvent } from './eventCursor'
 
 const t = (s: string): Event => ({ Narration: { text: [s] } })
 const dialog = (s: string): Event => ({
@@ -158,8 +158,13 @@ describe('isTextEvent / countDisplayEvents (#822)', () => {
     { ExpressionChange: { character: 'a', expression: 'x' } },
   ]
 
-  it('全 variant で旧実装(getTextEvent(e) !== null)と一致する', () => {
+  // getTextEvent と独立に書いた参照述語（Dialog / Narration キーを持つオブジェクトだけ true）。
+  const referenceIsText = (e: Event): boolean =>
+    typeof e === 'object' && e !== null && ('Dialog' in e || 'Narration' in e)
+
+  it('全 variant で参照述語と一致し、getTextEvent !== null とも一致する', () => {
     for (const e of variants) {
+      expect(isTextEvent(e), JSON.stringify(e)).toBe(referenceIsText(e))
       expect(isTextEvent(e), JSON.stringify(e)).toBe(getTextEvent(e) !== null)
     }
   })
@@ -168,10 +173,10 @@ describe('isTextEvent / countDisplayEvents (#822)', () => {
     expect(variants.filter(isTextEvent).length).toBe(2)
   })
 
-  it('countDisplayEvents は旧実装 filter(getTextEvent !== null).length と一致する(空・重複含む)', () => {
+  it('countDisplayEvents は参照述語 filter の件数 と一致する(空・重複含む)', () => {
     const lists: Event[][] = [[], variants, [...variants, ...variants], [t('a')], ['PageBreak']]
     for (const l of lists) {
-      expect(countDisplayEvents(l)).toBe(l.filter((e) => getTextEvent(e) !== null).length)
+      expect(countDisplayEvents(l)).toBe(l.filter(referenceIsText).length)
     }
     expect(countDisplayEvents([])).toBe(0)
     expect(countDisplayEvents([...variants, ...variants])).toBe(4)
