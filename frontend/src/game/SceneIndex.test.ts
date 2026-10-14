@@ -260,7 +260,7 @@ describe('SceneIndex.setEntry', () => {
     expect(idx.getEntryEvents()[0]).toBe(events[0])
   })
 
-  it('setEntry は entrySceneId を null に戻す', () => {
+  it('setEntry は sceneId を省略すると entrySceneId を null にする（前の sceneId を引き継がない）', () => {
     const idx = new SceneIndex()
     idx.setEntry([narration('a')], 's')
     expect(idx.getEntrySceneId()).toBe('s')
