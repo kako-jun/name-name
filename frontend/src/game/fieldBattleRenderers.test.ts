@@ -14,6 +14,7 @@ import { FieldInputGate, openFieldBattle, readFieldBattleSettings } from './fiel
 import { RaycastRenderer } from './RaycastRenderer'
 import { TopDownRenderer } from './TopDownRenderer'
 import type { BattleEntity } from './spellDsl'
+import type { FieldBattleTransition } from './fieldBattleTransition'
 import type { PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 
@@ -73,6 +74,8 @@ interface Field {
     tick(ms: number): void
   } | null
   startBattle(enemies: BattleEntity[]): unknown
+  transition: FieldBattleTransition
+  setBattleTransitionHooks(h: { onTransitionBeat?: (n: number) => void }): void
   setInputSuspended(v: boolean): void
   onTick(): void
   destroy(): void
@@ -176,5 +179,102 @@ describe.each([
     f.setInputSuspended(false)
     tickAt(2000, 2050)
     expect(spy).toHaveBeenCalledWith(50)
+  })
+})
+
+describe.each([
+  ['TopDownRenderer', topDown],
+  ['RaycastRenderer', raycast],
+])('%s の戦闘の画面遷移 battle_transition: ff (#830)', (_name, make) => {
+  const advance = (f: Field, ms: number): void => {
+    for (let e = 0; e < ms; e += 16) f.transition.tick(16)
+  }
+
+  it('既定（none）は演出なしで即座に戦闘画面が開く', () => {
+    const f = make()
+    f.startBattle([enemy()])
+    expect(f.transition.active).toBe(false)
+    expect(f.battleScreen).not.toBeNull()
+  })
+
+  it('ff: 開始は演出が先 → 真っ暗で戦闘画面が開き、演出中は多重起動しない。見た目は等倍に戻る', () => {
+    const f = make({ battleTransition: 'ff' })
+    const mock = vi.mocked(openFieldBattle)
+    mock.mockClear()
+    const beats: number[] = []
+    f.setBattleTransitionHooks({ onTransitionBeat: (n) => beats.push(n) })
+    f.startBattle([enemy()])
+    expect(f.battleScreen).toBeNull()
+    expect(mock).not.toHaveBeenCalled()
+    expect(f.transition.active).toBe(true)
+    advance(f, 500)
+    expect(f.app.stage.scale.x).toBeGreaterThan(1)
+    f.startBattle([enemy()]) // 演出中の再発火は無視
+    advance(f, 3000)
+    expect(mock).toHaveBeenCalledTimes(1)
+    expect(f.battleScreen).not.toBeNull()
+    expect(f.transition.active).toBe(false)
+    expect(f.app.stage.scale.x).toBe(1)
+    expect(beats).toEqual([1, 2])
+  })
+
+  it('ff: 終了は勝敗待機の後、黒を経由して畳まれる。畳むのは真っ暗の間で、戻った後のクールダウンも張られる', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    advance(f, 3000)
+    const screen = f.battleScreen!
+    ;(screen.opts.onClose as (o: string) => void)('victory')
+    // まだ畳まれていない（フェードアウト中）
+    expect(f.battleScreen).toBe(screen)
+    expect(screen.destroyed).toBe(false)
+    expect(f.transition.active).toBe(true)
+    advance(f, 400)
+    expect(screen.destroyed).toBe(true)
+    expect(f.battleScreen).toBeNull()
+    expect(f.encounterCooldown).toBe(3)
+    expect(f.transition.active).toBe(true) // フェードイン中もまだ入力は止まる
+    f.inputGate.trackKeyDown('ArrowUp')
+    advance(f, 3000)
+    expect(f.transition.active).toBe(false)
+    // フェードイン中に押された矢印キーは離すまで無視 (#779)
+    expect(f.inputGate.isReleaseGated('ArrowUp')).toBe(true)
+    expect(f.app.stage.children).not.toContain(screen)
+  })
+
+  it('ff: 開始の演出中に load() し直すと演出が捨てられ、戦闘は開かない', () => {
+    const f = make({ battleTransition: 'ff' })
+    const mock = vi.mocked(openFieldBattle)
+    mock.mockClear()
+    f.startBattle([enemy()])
+    advance(f, 300)
+    f.load(project('topdown', { battleTransition: 'ff' }))
+    expect(f.transition.active).toBe(false)
+    expect(f.app.stage.scale.x).toBe(1)
+    advance(f, 3000)
+    expect(mock).not.toHaveBeenCalled()
+  })
+
+  it('ff: 終了の演出中に destroy() しても演出が捨てられ、あとで戦闘が畳まれない', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    advance(f, 3000)
+    ;(f.battleScreen!.opts.onClose as (o: string) => void)('defeat')
+    f.initialized = false
+    f.destroy()
+    expect(f.transition.active).toBe(false)
+    expect(f.encounterCooldown).toBe(0)
+  })
+
+  it('ff: onTick が演出を進める', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    let now = 10_000
+    f.lastTickMs = now
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    for (let i = 0; i < 80; i++) {
+      now += 50
+      f.onTick()
+    }
+    expect(f.battleScreen).not.toBeNull()
   })
 })

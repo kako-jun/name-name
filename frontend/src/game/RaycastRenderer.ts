@@ -65,6 +65,7 @@ import {
   readFieldBattleSettings,
   type FieldBattleSettings,
 } from './fieldBattle'
+import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -125,6 +126,8 @@ export class RaycastRenderer {
   private menuOverlay: TouchMenuOverlay | null = null
   private minimap: MinimapOverlay | null = null
   private battleScreen: BattleScreen | null = null
+  /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` のときだけ使う。演出中の状態はここが private で持つ */
+  private transition: FieldBattleTransition
   private detachTouchInput: (() => void) | null = null
   /** 確率エンカウント (#172) */
   private encounterRate: number = 0
@@ -277,6 +280,7 @@ export class RaycastRenderer {
 
   constructor() {
     this.app = new Application()
+    this.transition = new FieldBattleTransition(() => this.app.stage)
     this.worldLayer = new Container()
     this.wallSpritesContainer = new Container()
     this.stepWallSpritesContainer = new Container()
@@ -532,6 +536,19 @@ export class RaycastRenderer {
     if (suspended) this.keys.clear()
   }
 
+  /**
+   * 戦闘の画面遷移 (#830) のフック。`onTransitionBeat(n)`＝開始のズーム各段の始まり（「ドゥン」の音のきっかけ）、
+   * `interlude(outcome)`＝終了の黒の間に挟む追加画面（戦利品の画面 #831 用。既定は何も挟まない）。
+   */
+  setBattleTransitionHooks(hooks: FieldBattleTransitionHooks): void {
+    this.transition.hooks = hooks
+  }
+
+  /** 戦闘の画面遷移の演出中（入力・移動・エンカウントを止める）か (#830) */
+  private get battleBusy(): boolean {
+    return this.battleScreen !== null || this.transition.active
+  }
+
   destroy(): void {
     this.closeBattle()
     window.removeEventListener('keydown', this.handleKeyDown)
@@ -594,7 +611,7 @@ export class RaycastRenderer {
     // 押下中の矢印キーは戦闘開始時に BattleScreen へ渡す（戦闘中も追跡する）
     this.inputGate.trackKeyDown(e.key)
     // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#204)
-    if (this.battleScreen) return
+    if (this.battleBusy) return
     if (this.inputGate.isSuspended) return
     // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
     if (this.inputGate.isReleaseGated(e.key)) return
@@ -797,7 +814,7 @@ export class RaycastRenderer {
    * - 抽選・敵解決は純関数 `rollEncounter` に分離してテスト可能にしてある
    */
   private maybeRollEncounter(): void {
-    if (this.battleScreen) return // 戦闘中
+    if (this.battleBusy) return // 戦闘中（開始・終了の演出中を含む）
     if (this.encounterCooldown > 0) {
       this.encounterCooldown -= 1
       return
@@ -813,6 +830,7 @@ export class RaycastRenderer {
 
   /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
   private closeBattle(): void {
+    this.transition.cancel()
     if (!this.battleScreen) return
     closeFieldBattle(this.app.stage, this.battleScreen)
     this.battleScreen = null
@@ -828,31 +846,45 @@ export class RaycastRenderer {
    * クールダウン（連続エンカウント抑止）を 3 歩セットする。
    */
   private startBattle(enemies: BattleEntity[]): void {
-    if (this.battleScreen) return // 多重起動防止
+    if (this.battleBusy) return // 多重起動防止
     if (enemies.length === 0) return
     // 押しっぱなしの移動キーが戦闘後に残らないよう、開始時に捨てる (#204)
     this.keys.clear()
-    // 組み立て・キー規約・終了時の畳み方は TopDownRenderer と共通 (fieldBattle.ts, #784)
-    this.battleScreen = openFieldBattle({
-      stage: this.app.stage,
-      width: this.screenWidth,
-      height: this.screenHeight,
-      settings: this.battleSettings,
-      roster: {
-        party: this.masterParty,
-        order: this.masterPartyOrder,
-        spells: this.masterSpells,
-      },
-      enemies,
-      gate: this.inputGate,
-      assetBaseUrl: this.assetBaseUrl,
-      onClosed: () => {
-        this.keys.clear()
-        this.battleScreen = null
-        // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）#172
-        this.encounterCooldown = 3
-      },
-    })
+    const open = (): void => {
+      // 組み立て・キー規約・終了時の畳み方は TopDownRenderer と共通 (fieldBattle.ts, #784)
+      this.battleScreen = openFieldBattle({
+        stage: this.app.stage,
+        width: this.screenWidth,
+        height: this.screenHeight,
+        settings: this.battleSettings,
+        roster: {
+          party: this.masterParty,
+          order: this.masterPartyOrder,
+          spells: this.masterSpells,
+        },
+        enemies,
+        gate: this.inputGate,
+        assetBaseUrl: this.assetBaseUrl,
+        transition: this.transition,
+        onClosed: () => {
+          this.keys.clear()
+          this.battleScreen = null
+          // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）#172
+          this.encounterCooldown = 3
+        },
+      })
+    }
+    if (this.battleSettings.transition === 'ff') {
+      // 開始の演出 (#830): 一人称は操作キャラ＝画面の中心付近へ 2 段ズームして暗転 → 戦闘画面
+      this.transition.playEnter(
+        this.screenWidth,
+        this.screenHeight,
+        () => ({ x: this.screenWidth / 2, y: this.screenHeight / 2 }),
+        open
+      )
+      return
+    }
+    open()
   }
 
   /**
@@ -906,7 +938,7 @@ export class RaycastRenderer {
 
   private handleTap = (): void => {
     if (!this.initialized) return
-    if (this.battleScreen) return // 戦闘中はフィールドのメニューを開かない（TopDownRenderer と同じ）
+    if (this.battleBusy) return // 戦闘中（演出中を含む）はフィールドのメニューを開かない（TopDownRenderer と同じ）
     if (this.dialogBox?.isShowing) {
       // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は close 系操作を無視する。
       // PixiJS pointertap → tryTalk → dialog.show の連鎖直後に到達した canvas tap で
@@ -991,6 +1023,7 @@ export class RaycastRenderer {
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
       // 戦闘中に画面サイズが変わったら戦闘画面も再配置する (#736)
       this.battleScreen?.redraw(this.screenWidth, this.screenHeight)
+      this.transition.resize(this.screenWidth, this.screenHeight)
       // ミニマップ位置を画面サイズに追従させる (#149)
       if (this.minimap) {
         this.minimap.resize(this.screenWidth, this.screenHeight)
@@ -1074,7 +1107,10 @@ export class RaycastRenderer {
     // 戦闘中の時間を進める。ATB (#205) はゲージ（演出中も進む）、`battle_presentation: ff` (#745) は演出（モーション・ダメージ数字）。
     // 勝利・全滅を読ませる待機 (#745 分割4) も tick で進むので、dq の従来ターン制でも毎フレーム呼ぶ（呼ばないと戦闘画面が閉じない）。
     // 設定オーバーレイ中は入力と同様に進行も止める (#784)
-    if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
+    if (!this.inputGate.isSuspended) {
+      this.battleScreen?.tick(dt * 1000)
+      this.transition.tick(dt * 1000) // 開始・終了の画面遷移 (#830)
+    }
 
     // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
     // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。
@@ -1092,7 +1128,7 @@ export class RaycastRenderer {
     // プレイヤー位置の更新だけが dialog 中スキップ対象。
     this.advanceTurnAnim(dt)
 
-    if (!this.dialogBox?.isShowing && !this.battleScreen && !this.inputGate.isSuspended) {
+    if (!this.dialogBox?.isShowing && !this.battleBusy && !this.inputGate.isSuspended) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)

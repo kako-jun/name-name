@@ -1837,3 +1837,17 @@ describe('rpgProjectFromDoc: battle_presentation (#745)', () => {
     expect(rpgProjectFromDoc(withPres(raw))!.battlePresentation).toBe(expected)
   })
 })
+
+describe('rpgProjectFromDoc: battle_transition (#830)', () => {
+  it.each([
+    ['ff', 'ff'],
+    ['FF', 'ff'],
+    [null, 'none'],
+    ['', 'none'],
+    ['zoom', 'none'],
+  ])('battle_transition %j → battleTransition %s', (raw, expected) => {
+    expect(rpgProjectFromDoc({ ...makeDoc(), battle_transition: raw })!.battleTransition).toBe(
+      expected
+    )
+  })
+})
