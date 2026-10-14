@@ -63,6 +63,8 @@ export interface AcrylicParams {
   castBlurRatio: number
   /** スプライト下端を台座の差し込み線より浮かせる量 / スプライト高さ (#802)。板は差し込み線まで下へ伸び、台座が無いときは効かない */
   spriteLiftRatio: number
+  /** 帯（ステム）の内側の面の不透明度（0〜1）(#848)。通常の板の面（`plateFillAlpha`＝ごく薄い）より濃くして、板で台座とつながっていると読めるようにする */
+  stemFillAlpha: number
   /** 絵の下端が台座から離れているとき、絵と台座をつなぐ帯状の透明プラスチック（ステム）の幅 / 絵の不透明部分の幅 (#848)。0 で無効（帯を出さない） */
   stemWidthRatio: number
   /** 絵の不透明な最下端から画像下端までの距離 / 画像高さ がこれ以上のときだけステムを出す (#848)。地面に立つキャラは通常この未満で帯が出ない */
@@ -102,6 +104,7 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   castShear: 1.4,
   castBlurRatio: 0.012,
   spriteLiftRatio: 0.03,
+  stemFillAlpha: 0.22,
   stemWidthRatio: 0.28,
   stemMinGapRatio: 0.06,
   hasBase: true,
@@ -146,6 +149,7 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
     castShear: clamp(finiteOr(o.castShear, d.castShear), -2, 2),
     castBlurRatio: clamp(finiteOr(o.castBlurRatio, d.castBlurRatio), 0, 0.1),
     spriteLiftRatio: clamp(finiteOr(o.spriteLiftRatio, d.spriteLiftRatio), 0, 0.15),
+    stemFillAlpha: clamp(finiteOr(o.stemFillAlpha, d.stemFillAlpha), 0, 1),
     stemWidthRatio: clamp(finiteOr(o.stemWidthRatio, d.stemWidthRatio), 0, 0.5),
     stemMinGapRatio: clamp(finiteOr(o.stemMinGapRatio, d.stemMinGapRatio), 0.01, 1),
     hasBase: typeof o.hasBase === 'boolean' ? o.hasBase : d.hasBase,

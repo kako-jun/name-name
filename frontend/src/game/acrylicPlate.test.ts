@@ -3,7 +3,9 @@ import {
   computePlateExtend,
   computePlateLayout,
   computeStem,
+  computeStemScale,
   computeStemSlitHalfWidth,
+  STEM_MIN_WIDTH_RATIO,
   extendFootMask,
   gaussianBlur,
   renderAcrylicPlate,
@@ -481,5 +483,58 @@ describe('computeStem: 既定の閾値付近の回帰 (#848)', () => {
     [0.09, true],
   ])('gap=%s の帯の有無は %s', (gap, expected) => {
     expect(computeStem(withGap(gap), w, h, 3, P6) !== null).toBe(expected)
+  })
+})
+
+describe('帯の存在感: 最小幅と内側の濃さ (#848)', () => {
+  const w = 120
+  const h = 120
+  const P2 = resolveAcrylicParams({ spriteLiftRatio: 0.05 })
+  /** 上の方にだけ細い（幅 6px）絵がある浮いた絵 */
+  const thin = (): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 57; x < 63; x++) a[y * w + x] = 255
+    return a
+  }
+  /** 太い本体（板の内側の濃さの比較用）+ 浮いた細い先 */
+  const bodyFigure = (): Uint8Array => {
+    const a = thin()
+    for (let y = 10; y <= 40; y++) for (let x = 20; x < 100; x++) a[y * w + x] = 255
+    return a
+  }
+
+  it('絵が細くても、帯の幅は枠一辺の STEM_MIN_WIDTH_RATIO 以上（360x640 相当の枠でも読める）', () => {
+    const s = computeStem(thin(), w, h, 6, P2)!
+    expect(s).not.toBeNull()
+    const sc = computeStemScale(w, h, P2)
+    expect(sc.minWidth).toBeGreaterThan(0)
+    expect(s.halfWidth * 2).toBeGreaterThanOrEqual(Math.min(sc.minWidth, sc.slitHalf * 2) - 1e-6)
+    // 枠 360 → 画像 px への換算でも比率は不変: 枠一辺に対する帯の幅
+    expect((s.halfWidth * 2) / (sc.minWidth / STEM_MIN_WIDTH_RATIO)).toBeGreaterThanOrEqual(
+      STEM_MIN_WIDTH_RATIO - 1e-9
+    )
+  })
+  it('帯の内側の alpha は板の本体（plateFillAlpha）より濃く、stemFillAlpha 相当', () => {
+    const r = renderAcrylicPlate(bodyFigure(), w, h, P2)
+    const al = (x: number, y: number): number => r.rgba[((y + r.pad) * r.width + x + r.pad) * 4 + 3]
+    const s = computeStem(bodyFigure(), w, h, r.extend, P2)!
+    const stemA = al(Math.round(s.cx), Math.round((s.top + s.bottom) / 2))
+    const bodyA = al(60, 20)
+    expect(stemA).toBeGreaterThanOrEqual(Math.round(P2.stemFillAlpha * 255 * 0.9))
+    expect(stemA).toBeGreaterThan(bodyA * 2)
+  })
+  it('stemFillAlpha=0 でも帯の内側は本体と同じ濃さ以上（下回らない）', () => {
+    const p = resolveAcrylicParams({ spriteLiftRatio: 0.05, stemFillAlpha: 0 })
+    const r = renderAcrylicPlate(bodyFigure(), w, h, p)
+    const s = computeStem(bodyFigure(), w, h, r.extend, p)!
+    const al = (x: number, y: number): number => r.rgba[((y + r.pad) * r.width + x + r.pad) * 4 + 3]
+    expect(al(Math.round(s.cx), Math.round((s.top + s.bottom) / 2))).toBeGreaterThanOrEqual(
+      Math.round(p.plateFillAlpha * 255 * 0.9)
+    )
+  })
+  it('帯の上端は絵の最下端より上（絵の内側）まで食い込む', () => {
+    const s = computeStem(thin(), w, h, 6, P2)!
+    expect(s.top).toBeLessThan(50)
+    expect(s.top).toBeGreaterThanOrEqual(50 - Math.round(h * 0.05) - 1)
   })
 })

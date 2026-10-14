@@ -129,6 +129,7 @@ type PlateParams = Pick<
   | 'innerShadowAlpha'
   | 'spriteLiftRatio'
   | 'stemWidthRatio'
+  | 'stemFillAlpha'
   | 'stemMinGapRatio'
 > &
   Partial<AcrylicParams>
@@ -183,7 +184,7 @@ export function extendFootMask(
  */
 const STEM_ALPHA_MIN = 32
 /** ステムの上端を絵の中へ食い込ませる量（画像高さに対する比率）。絵と帯の継ぎ目に隙間を作らない */
-const STEM_OVERLAP_RATIO = 0.02
+const STEM_OVERLAP_RATIO = 0.05
 
 /** 絵と台座をつなぐ帯（ステム）の矩形。画像の左上を原点とした px（下端 `bottom` は差し込み線の行の終端） */
 export interface StemRect {
@@ -215,14 +216,30 @@ export function computeStemSlitHalfWidth(
   h: number,
   params: Partial<AcrylicParams> = {}
 ): number {
+  return computeStemScale(w, h, params).slitHalf
+}
+
+/** 帯の最小幅 / 枠一辺 (#848)。小さい画面でも帯が読める下限（スリットの全幅は枠の約 0.35 倍） */
+export const STEM_MIN_WIDTH_RATIO = 0.1
+
+/** 元画像 px で見た、スリットの半幅と帯の最小幅 */
+export function computeStemScale(
+  w: number,
+  h: number,
+  params: Partial<AcrylicParams> = {}
+): { slitHalf: number; minWidth: number } {
   const g = computeAcrylicGeometry(
     w,
     h,
     STEM_REF_SIZE,
     resolveAcrylicParams({ ...params, hasBase: true })
   )
-  if (!g.base || !(g.sprite.width > 0)) return 0
-  return (g.base.rx * 0.5 * w) / g.sprite.width
+  if (!g.base || !(g.sprite.width > 0)) return { slitHalf: 0, minWidth: 0 }
+  const pxPerSize = w / g.sprite.width
+  return {
+    slitHalf: g.base.rx * 0.5 * pxPerSize,
+    minWidth: STEM_MIN_WIDTH_RATIO * STEM_REF_SIZE * pxPerSize,
+  }
 }
 
 /**
@@ -245,7 +262,7 @@ export function computeStem(
 ): StemRect | null {
   if (!(w > 0) || !(h > 0) || alpha.length < w * h) return null
   if (!(params.stemWidthRatio > 0)) return null
-  const slitHalf = computeStemSlitHalfWidth(w, h, params)
+  const { slitHalf, minWidth } = computeStemScale(w, h, params)
   if (!(slitHalf > 0)) return null
   const slitCx = w / 2
   const cx0 = Math.max(0, Math.ceil(slitCx - slitHalf))
@@ -280,7 +297,11 @@ export function computeStem(
         sum += x
         n++
       }
-  const width = Math.min(w, slitHalf * 2, Math.max(2, (maxX - minX + 1) * params.stemWidthRatio))
+  const width = Math.min(
+    w,
+    slitHalf * 2,
+    Math.max(2, minWidth, (maxX - minX + 1) * params.stemWidthRatio)
+  )
   const halfWidth = width / 2
   const reach = Math.max(0, slitHalf - halfWidth)
   const cx = Math.min(
@@ -325,6 +346,9 @@ export function stampStem(mask: Float32Array, W: number, pad: number, stem: Stem
   }
 }
 
+/** 帯のリムの明るさの下限（光と反対側の縁でも帯の輪郭が読めるように）(#848) */
+const STEM_RIM_LIT_MIN = 0.75
+
 const FILL_COLOR: readonly [number, number, number] = [0.9, 0.96, 1]
 const SHADOW_COLOR: readonly [number, number, number] = [0.2, 0.31, 0.42]
 const SPEC_COLOR: readonly [number, number, number] = [1, 1, 1]
@@ -361,7 +385,12 @@ export function renderAcrylicPlate(
     for (let x = 0; x < w; x++) mask[(h + e + pad) * W + x + pad] = ext[e * w + x]
   // 絵の下端が台座から離れている（空を飛ぶ）ときは、帯状の透明プラスチックで台座までつなぐ (#848)
   const stem = computeStem(alpha, w, h, extend, params)
-  if (stem) stampStem(mask, W, pad, stem)
+  let stemOnly: Float32Array | null = null
+  if (stem) {
+    stemOnly = new Float32Array(W * H)
+    stampStem(stemOnly, W, pad, stem)
+    for (let i = 0; i < mask.length; i++) if (stemOnly[i] > mask[i]) mask[i] = stemOnly[i]
+  }
 
   // 形: ぼかして smoothstep（σ から広がり距離が spread になるよう決める）
   const sigma = spread / SPREAD_PER_SIGMA
@@ -373,6 +402,18 @@ export function renderAcrylicPlate(
       PLATE_SHAPE_THRESHOLD + SHAPE_EDGE_SOFTNESS,
       blurred[i]
     )
+  }
+  // 帯だけの板の形（本体の板と同じ ぼかし+smoothstep）。帯の面とリムを本体より濃くする重みに使う (#848)
+  let stemW: Float32Array | null = null
+  if (stemOnly) {
+    stemW = gaussianBlur(stemOnly, W, H, sigma)
+    for (let i = 0; i < stemW.length; i++) {
+      stemW[i] = smoothstep(
+        PLATE_SHAPE_THRESHOLD - SHAPE_EDGE_SOFTNESS,
+        PLATE_SHAPE_THRESHOLD + SHAPE_EDGE_SOFTNESS,
+        stemW[i]
+      )
+    }
   }
   // 縁からの深さの目安（縁で約 0.5、奥ほど 1）。リムと影の帯、法線に使う
   const depthRim = gaussianBlur(shape, W, H, rim)
@@ -401,7 +442,10 @@ export function renderAcrylicPlate(
       let r = FILL_COLOR[0]
       let g = FILL_COLOR[1]
       let b = FILL_COLOR[2]
-      let a = params.plateFillAlpha * s
+      const sw = stemW ? stemW[i] : 0
+      const fillA =
+        params.plateFillAlpha + Math.max(0, params.stemFillAlpha - params.plateFillAlpha) * sw
+      let a = fillA * s
       const over = (c: readonly [number, number, number], ca: number): void => {
         if (ca <= 0) return
         const na = ca + a * (1 - ca)
@@ -415,7 +459,9 @@ export function renderAcrylicPlate(
       over(SHADOW_COLOR, params.innerShadowAlpha * wide * clamp01(-facing) * s)
       // 3) リム: 縁で 1・奥で 0。光側を強く、反対側を弱く
       const edge = clamp01((0.96 - depthRim[i]) / 0.46)
-      over(rimColor, params.lineAlpha * edge * (0.3 + 0.7 * lit * lit) * s)
+      const rimLit = 0.3 + 0.7 * lit * lit
+      const rimLitS = rimLit + Math.max(0, STEM_RIM_LIT_MIN - rimLit) * sw
+      over(rimColor, params.lineAlpha * edge * rimLitS * s)
       // 4) 左上寄りの斜めの鏡面ハイライトの筋（2 本・細い方は弱い）
       const u = (x + 0.5) / W + (y + 0.5) / H
       const streak =
