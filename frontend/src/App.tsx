@@ -325,6 +325,8 @@ function EditorScreenWrapper({
 
   return (
     <EditorScreen
+      // プロジェクトが変わったらエディタの state を引きずらないよう再マウントする (#795)
+      key={projectName}
       projectName={projectName}
       apiBaseUrl={apiBaseUrl}
       isDark={isDark}
