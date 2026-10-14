@@ -16,6 +16,8 @@ export const MENU_PADDING_X = 12
 export const MENU_PADDING_Y = 12
 /** 一覧窓の最大の見える行数。それ以上は▲▼でスクロールする（絵を覆う範囲を抑える） */
 export const MENU_MAX_ROWS = 4
+/** 名前の省略判定に足す許容（浮動小数の誤差で、ちょうど入る名前が省略されないように） */
+const LABEL_FIT_EPS = 0.01
 /** 一覧窓がコマンド窓の外形から四方にはみ出す量（枠線の太さ・角丸の余白。窓の縁にコマンド窓の背景が見えないように） */
 export const MENU_COMMAND_OVERHANG = 4
 /** 行の左に置く手のぶんの余白 */
@@ -106,12 +108,14 @@ export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[])
     (m, r) => Math.max(m, r.cost ? estimateTextWidth(r.cost, MENU_FONT_SIZE) : 0),
     0
   )
-  const need =
+  // 切り上げる（小数の誤差で、ちょうど MENU_NAME_MIN_CHARS 文字ぶんの幅に 1px 未満届かず省略されるのを防ぐ）
+  const need = Math.ceil(
     MENU_PADDING_X * 2 +
-    MENU_HAND_SLOT +
-    costW +
-    MENU_COST_GAP +
-    MENU_NAME_MIN_CHARS * MENU_FONT_SIZE
+      MENU_HAND_SLOT +
+      costW +
+      MENU_COST_GAP +
+      MENU_NAME_MIN_CHARS * MENU_FONT_SIZE
+  )
   const minW = Math.min(g.command.w + MENU_COMMAND_OVERHANG * 2, maxW)
   const limit = g.avoidX === undefined ? maxW : Math.max(0, g.avoidX - x)
   const w = Math.max(minW, Math.min(need, maxW, limit))
@@ -189,7 +193,7 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
         const costW = row.cost ? MENU_COST_GAP + estimateTextWidth(row.cost, MENU_FONT_SIZE) : 0
         rows.push({
           ...row,
-          label: fitLabel(row.label, Math.max(0, rowW - costW), MENU_FONT_SIZE),
+          label: fitLabel(row.label, Math.max(0, rowW - costW) + LABEL_FIT_EPS, MENU_FONT_SIZE),
           index,
           selected: index === w.cursor,
           rect: {

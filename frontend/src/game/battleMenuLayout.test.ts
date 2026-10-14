@@ -60,7 +60,13 @@ function manySpells(n: number): BattleSpellEntry[] {
   }))
 }
 
-function geometry(w: number, h: number, party: number, enemies: number): MenuGeometry {
+function geometry(
+  w: number,
+  h: number,
+  party: number,
+  enemies: number,
+  opts: { atb?: boolean; maxHp?: number } = {}
+): MenuGeometry {
   const L = computeSideBattleLayout({
     width: w,
     height: h,
@@ -73,10 +79,10 @@ function geometry(w: number, h: number, party: number, enemies: number): MenuGeo
   const cols = computeStatusColumns({
     x: L.status.x,
     width: L.status.w,
-    maxHp: 30,
+    maxHp: opts.maxHp ?? 30,
     maxMp: 12,
     compact: L.statusCompact,
-    atb: false,
+    atb: opts.atb ?? false,
   })
   return {
     width: w,
@@ -394,9 +400,16 @@ describe('コマンド窓を覆う高さ', () => {
 describe('窓の右端が味方ステータス欄の HP 列の途中で終わらない', () => {
   for (const [w, h] of SIZES) {
     for (const party of [1, 2, 3, 4]) {
-      it(`${w}x${h} 味方${party}: 窓の右端は HP 列の左（消費 1〜3 桁）`, () => {
-        const g = geometry(w, h, party, 3)
-        for (const mp of [3, 20, 123]) {
+      it(`${w}x${h} 味方${party}: 窓の右端は HP 列の左（消費 1〜3 桁・ATB・最大 HP）`, () => {
+        for (const [atb, maxHp, mp] of [
+          [false, 30, 3],
+          [true, 30, 20],
+          [false, 999, 123],
+          [true, 999, 20],
+          [true, 9999, 123],
+          [false, 9999, 3],
+        ] as const) {
+          const g = geometry(w, h, party, 3, { atb, maxHp })
           const rows = buildMenuRows(
             'spell',
             [{ id: 'a', name: 'はいぽーしょん', mp, target: '敵単体' }],
@@ -408,6 +421,35 @@ describe('窓の右端が味方ステータス欄の HP 列の途中で終わら
           expect(r.x + r.w).toBeLessThanOrEqual(Math.max(g.avoidX!, floor) + EPS)
           expect(floor).toBeLessThanOrEqual(g.avoidX! + EPS) // 下限そのものが HP 列にかからない
         }
+      })
+    }
+  }
+})
+
+describe('消費が 2 桁でも 7 文字の名前は省略されない（浮動小数の誤差）', () => {
+  for (const [w, h] of SIZES) {
+    for (const party of [1, 2, 3, 4]) {
+      it(`${w}x${h} 味方${party}`, () => {
+        const g = geometry(w, h, party, 3)
+        const names = ['ちゆのいのりだ', 'はいぽーしょん', 'ひーりんぐおん']
+        const spells: BattleSpellEntry[] = names.map((name, i) => ({
+          id: `n${i}`,
+          name,
+          mp: [10, 20, 99][i],
+          target: '敵単体',
+        }))
+        const members = [ent('a')]
+        const ctx: MenuContext = {
+          rows: buildMenuRows('spell', spells, members[0]),
+          maxRows: listMaxRows(g),
+          entries: spells,
+          party: members,
+          enemies: [ent('e')],
+          actorIndex: 0,
+        }
+        const v = buildMenuView(openList(EMPTY_STACK, 'spell', ctx), ctx, g)[0]
+        if (v.type !== 'list') throw new Error()
+        for (const r of v.rows) expect(r.label).toBe(names[r.index])
       })
     }
   }
