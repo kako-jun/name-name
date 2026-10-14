@@ -181,6 +181,8 @@ export interface RPGProject {
   items?: Record<string, import('../types').ItemDef>
   /** 同上、呪文 */
   spells?: Record<string, import('../types').SpellDef>
+  /** 同上、特技 (#834)。敵が使う技（呪文とは別のマスターデータ） */
+  skills?: Record<string, import('../types').SkillDef>
   /** 同上、パーティメンバー (#175) */
   party?: Record<string, import('../types').PartyMemberDef>
   /** `party` のキーのドキュメント上の出現順 (#736)。整数風 ID でも定義順を保つために別持ち */

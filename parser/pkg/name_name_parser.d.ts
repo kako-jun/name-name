@@ -248,6 +248,39 @@ export interface SpellDef {
 }
 
 /**
+ * 特技定義 (#834、敵の行動パターン P0 / 親 #832)。
+ *
+ * 敵の技のためのマスターデータで、`[呪文]` とは別のブロック・別の語彙にする。MP は持たない
+ * （消費しない）。効果の書式（`effect` の DSL / `builtin`）だけは呪文と同じ評価器を内部で共有する。
+ * `target` は「使う側から見た相対表現」（`相手単体` / `相手全体` / `自分` / `仲間単体` / `仲間全体`）で、
+ * 解釈は runtime が行う（parser は生文字列で透過する）。
+ */
+export interface SkillDef {
+    id: string;
+    name: string;
+    /**
+     * 対象（使う側から見た相対表現。既定 `相手単体`）。
+     */
+    target: string;
+    /**
+     * 宣言的効果 DSL（`SpellDef.effect` と同書式）。`builtin` と排他。
+     */
+    effect?: string;
+    /**
+     * 専用関数 ID（`SpellDef.builtin` と同じレジストリ）。
+     */
+    builtin?: string;
+    /**
+     * 使用時に出す演出文（`{user}` は使った側の名前に置き換わる）。
+     */
+    message?: string;
+    /**
+     * 予兆の文言（生文字列で透過。解釈は P2 #836）。
+     */
+    telegraph?: string;
+}
+
+/**
  * 舞台方向（上手/下手） (#684)。入場・退場モーションの向きを表す。
  * 客席から見て舞台向かって右側が「上手」、左側が「下手」（伝統的な演劇/歌舞伎の慣習語彙。
  * dev-doctrine 規律7「Markdown構文キーワードは汎用名にする」の対象外＝特定ゲームの世界観語彙ではない）。
@@ -742,7 +775,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { BackgroundBoard: { path: string; depth?: number } } | { Prop: { path: string; depth?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { BackgroundBoard: { path: string; depth?: number } } | { Prop: { path: string; depth?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
