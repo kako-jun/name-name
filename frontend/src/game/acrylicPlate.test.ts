@@ -238,13 +238,13 @@ describe('renderAcrylicPlate: パラメータの反映 (#760)', () => {
 
 describe('computePlateExtend (#802)', () => {
   it('h=0 は 0', () => {
-    expect(computePlateExtend(0, 0.03)).toBeCloseTo(0, 9)
+    expect(computePlateExtend(0, 0.03)).toBe(0)
   })
   it('ratio=0 は 0', () => {
-    expect(computePlateExtend(100, 0)).toBeCloseTo(0, 9)
+    expect(computePlateExtend(100, 0)).toBe(0)
   })
   it.each([[-0.1], [NaN], [Infinity], [-Infinity]])('ratio=%s は 0（伸ばさない）', (bad) => {
-    expect(computePlateExtend(100, bad)).toBeCloseTo(0, 9)
+    expect(computePlateExtend(100, bad)).toBe(0)
   })
   it('r×h が整数ちょうどなら切り上げで余計な 1 行が出ない（0.03*100 の浮動小数ノイズを吸収）', () => {
     expect(0.07 * 100).toBeGreaterThan(7) // ノイズの前提（7.000000000000001）
@@ -321,7 +321,7 @@ describe('renderAcrylicPlate: 足元を差し込み線まで伸ばす (#802)', (
   it('lift=0 は従来と同じ寸法・extend=0・同一 rgba（後方互換）', () => {
     const r0 = renderAcrylicPlate(figure(), w, h, flat)
     const r1 = renderAcrylicPlate(figure(), w, h, flat)
-    expect(r0.extend).toBeCloseTo(0, 9)
+    expect(r0.extend).toBe(0)
     expect(r0.height).toBe(h + r0.pad * 2)
     expect(Array.from(r0.rgba)).toEqual(Array.from(r1.rgba))
   })

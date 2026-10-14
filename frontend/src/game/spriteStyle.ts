@@ -245,6 +245,7 @@ export function computeAcrylicGeometry(
       ry: base.ry * 0.35,
     }
     // スプライトの下端は差し込み線より liftRatio ぶん上に浮かせる（本物のアクスタは絵が線より上、板の下の縁が台座に刺さる）(#802)
+    // spriteLiftRatio=0 でも足元は台座の中心でなく差し込み線に置く（#802 以前の「約 0.28×台座の縦半径だけ下」には戻らない。浮き量 0 ＝差し込み線に接する）
     footY = computeSlitY(cy, base.ry)
     liftRatio = p.spriteLiftRatio
   }

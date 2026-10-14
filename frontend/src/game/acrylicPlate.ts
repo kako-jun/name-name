@@ -140,7 +140,7 @@ const FOOT_BAND_RATIO = 0.06
  */
 export function computePlateExtend(h: number, liftRatio: number): number {
   const r = Number.isFinite(liftRatio) && liftRatio > 0 ? liftRatio : 0
-  return h > 0 ? Math.ceil(r * h - 1e-9) : 0
+  return h > 0 ? Math.max(0, Math.ceil(r * h - 1e-9)) : 0 // max で -0 を +0 に正規化
 }
 
 /**
