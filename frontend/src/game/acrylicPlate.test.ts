@@ -574,4 +574,26 @@ describe('帯: 接地の抑制・独立したリム (#848)', () => {
       max = Math.max(max, r.rgba[((yy + r.pad) * r.width + x + r.pad) * 4 + 3])
     expect(max).toBeGreaterThanOrEqual(Math.round(P3.lineAlpha * 0.75 * 255 * 0.5))
   })
+  it('帯の上端の丸い角には独立リムを付けない（中央の列の上端付近が左右の縁より弱い）', () => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 50; x < 70; x++) a[y * w + x] = 255
+    const r = renderAcrylicPlate(a, w, h, P3)
+    const s = computeStem(a, w, h, r.extend, P3)!
+    const al = (x: number, y: number): number => r.rgba[((y + r.pad) * r.width + x + r.pad) * 4 + 3]
+    const yy = Math.round((s.top + s.bottom) / 2)
+    let side = 0
+    for (let x = Math.floor(s.cx - s.halfWidth) - 14; x <= Math.floor(s.cx - s.halfWidth); x++)
+      side = Math.max(side, al(x, yy))
+    // 帯の上端を越えた先（絵の下の何も無い所）の中央の列
+    let top = 0
+    for (let y = Math.floor(s.top) - 2; y <= Math.floor(s.top) + 2; y++)
+      top = Math.max(top, al(Math.round(s.cx), y))
+    expect(side).toBeGreaterThan(top)
+  })
+  it('接地は左右の両側で判定する: 片側だけ広く接している絵は帯が出る', () => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 60; y++) for (let x = 45; x < 75; x++) a[y * w + x] = 255
+    for (let y = 100; y < h; y++) for (let x = 2; x < 20; x++) a[y * w + x] = 255
+    expect(computeStem(a, w, h, 6, P3)).not.toBeNull()
+  })
 })

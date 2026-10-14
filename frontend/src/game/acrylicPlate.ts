@@ -183,11 +183,15 @@ export function extendFootMask(
  * 「帯を出すか」の判定とは目的が違うので閾値を揃えない。
  */
 const STEM_ALPHA_MIN = 32
-/** ステムの上端を絵の中へ食い込ませる量（画像高さに対する比率）。絵と帯の継ぎ目に隙間を作らない */
 /** 接地判定: 画像下端からこの高さ（画像高さに対する比率）の帯を見る */
 const STEM_GROUND_BAND_RATIO = 0.02
-/** 接地判定: スリットの外でこの帯に不透明画素がある列が画像幅のこの割合以上なら接地とみなす（机上: loud-motorbike 0.198 は接地、propeller 0.141 は浮き） */
-const STEM_GROUND_CONTACT_RATIO = 0.17
+/**
+ * 接地判定: スリットの左右の外側それぞれで、この帯に不透明画素がある列が画像幅のこの割合以上あれば、その側で接地している。
+ * 両側で接地している絵は物理的に両側で支えられている（台座から浮いていない）ので帯を出さない。
+ * （机上: loud-motorbike は左右とも 3% 以上で接地。propeller・reckless-bicycle・dental-drill・wire-mesh は片側のみで帯が出る）
+ */
+const STEM_GROUND_SIDE_RATIO = 0.03
+/** ステムの上端を絵の中へ食い込ませる量（画像高さに対する比率）。絵と帯の継ぎ目に隙間を作らない */
 const STEM_OVERLAP_RATIO = 0.05
 
 /** 絵と台座をつなぐ帯（ステム）の矩形。画像の左上を原点とした px（下端 `bottom` は差し込み線の行の終端） */
@@ -292,19 +296,21 @@ export function computeStem(
   if (bottom < 0) return null
   const gap = h - 1 - bottom
   if (gap < params.stemMinGapRatio * h) return null
-  // 接地している絵（二輪の乗り物など、スリットの外で画像下端に広く接している）は台座から浮いていないので帯を出さない。
-  // 接地側の列の幅の割合で判定する（細い羽根の先が 1 点だけ下端に届く浮いた絵は、この割合に届かず帯が出る）
+  // 接地している絵（二輪の乗り物など）は、スリットの左右の外側の両方で画像下端に接している＝両側で支えられていて
+  // 台座から浮いていないので帯を出さない。細い羽根の先が片側だけ下端に届く浮いた絵は、片側だけなので帯が出る
   const contactRows = Math.max(1, Math.round(h * STEM_GROUND_BAND_RATIO))
-  let contact = 0
+  let left = 0
+  let right = 0
   for (let x = 0; x < w; x++) {
     if (x >= cx0 && x <= cx1) continue
     for (let y = h - contactRows; y < h; y++)
       if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
-        contact++
+        if (x < cx0) left++
+        else right++
         break
       }
   }
-  if (contact >= STEM_GROUND_CONTACT_RATIO * w) return null
+  if (left >= STEM_GROUND_SIDE_RATIO * w && right >= STEM_GROUND_SIDE_RATIO * w) return null
   const bandTop = Math.max(0, bottom - Math.max(1, Math.round(h * FOOT_BAND_RATIO)))
   let sum = 0
   let n = 0
@@ -505,7 +511,11 @@ export function renderAcrylicPlate(
       over(rimColor, params.lineAlpha * edge * rimLitS * s)
       if (stemDepth) {
         const edgeS = clamp01((0.98 - stemDepth[i]) / 0.5)
-        over(rimColor, params.lineAlpha * edgeS * STEM_RIM_LIT_MIN * sw)
+        // 帯の左右の縁だけ（法線の横成分で重み付け）。上端の丸い角には付けず、本体の板の内側に横向きの弧を出さない
+        const dx = stemDepth[y * W + Math.min(W - 1, x + 1)] - stemDepth[y * W + Math.max(0, x - 1)]
+        const dy = stemDepth[Math.min(H - 1, y + 1) * W + x] - stemDepth[Math.max(0, y - 1) * W + x]
+        const side = Math.abs(dx) / (Math.hypot(dx, dy) || 1)
+        over(rimColor, params.lineAlpha * edgeS * STEM_RIM_LIT_MIN * sw * side * side)
       }
       // 4) 左上寄りの斜めの鏡面ハイライトの筋（2 本・細い方は弱い）
       const u = (x + 0.5) / W + (y + 0.5) / H
