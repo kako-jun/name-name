@@ -8,30 +8,32 @@
  */
 import type { MenuRow, MenuStack, MenuContext, MenuKind, TargetSide } from './battleMenu'
 import { targetHands } from './battleMenu'
-import { estimateTextWidth, SIDE_GAP, SIDE_PADDING, type Rect } from './battleLayout'
+import { estimateTextWidth, fitLabel, SIDE_GAP, SIDE_PADDING, type Rect } from './battleLayout'
 
 export const MENU_ROW_HEIGHT = 28
 export const MENU_FONT_SIZE = 16
 export const MENU_PADDING_X = 12
-export const MENU_PADDING_Y = 8
+export const MENU_PADDING_Y = 12
+/** 一覧窓の最大の見える行数。それ以上は▲▼でスクロールする（絵を覆う範囲を抑える） */
+export const MENU_MAX_ROWS = 4
 /** 行の左に置く手のぶんの余白 */
-export const MENU_HAND_SLOT = 30
+export const MENU_HAND_SLOT = 34
 /** 名前と消費の間の最小の隙間 */
 export const MENU_COST_GAP = 16
 export const MENU_MIN_WIDTH = 140
-/** 窓の上端・下端のスクロール帯の高さ（タップで 1 行ずつ） */
-export const MENU_SCROLL_STRIP = 16
+/** 窓の上端・下端のスクロール帯の高さ（上下の余白に収める。行の決定領域には食い込まない。タップで 1 行ずつ） */
+export const MENU_SCROLL_STRIP = MENU_PADDING_Y
 
 /** 手のドット絵（右向き）。`X` が塗り。左向きは左右反転 */
 export const HAND_BITMAP: readonly string[] = [
-  '...XXX......',
-  '..XXXXX.....',
-  '.XXXXXXXXXXX',
-  'XXXXXXXXXXXX',
-  'XXXXXXXXXXXX',
-  '.XXXXXXXXXX.',
-  '..XXXXXXXX..',
-  '...XXXXXX...',
+  '....XX........',
+  '...XXXXXXXXXXX',
+  'XXXXXXXXXXXXXX',
+  'XXXXXXXXXXX...',
+  'XXXXXXXXXX....',
+  'XXXXXXXXXXX...',
+  'XXXXXXXXX.....',
+  '.XXXXXXX......',
 ]
 export const HAND_PIXEL = 2
 export const HAND_WIDTH = HAND_BITMAP[0].length * HAND_PIXEL
@@ -75,7 +77,7 @@ export interface MenuGeometry {
 /** 一覧窓に同時に見える行数（最低 1） */
 export function listMaxRows(g: MenuGeometry): number {
   const avail = g.command.y + g.command.h - g.top - MENU_PADDING_Y * 2
-  return Math.max(1, Math.floor(avail / MENU_ROW_HEIGHT))
+  return Math.max(1, Math.min(MENU_MAX_ROWS, Math.floor(avail / MENU_ROW_HEIGHT)))
 }
 
 export interface ListWindowRect {
@@ -87,18 +89,10 @@ export interface ListWindowRect {
 /** 一覧窓の矩形。幅は最長の行に合わせ、画面の右端（余白を除く）を越えない */
 export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[]): ListWindowRect {
   const visibleRows = Math.max(1, Math.min(rows.length, listMaxRows(g)))
-  const textW = rows.reduce(
-    (m, r) =>
-      Math.max(
-        m,
-        estimateTextWidth(r.label, MENU_FONT_SIZE) +
-          (r.cost ? MENU_COST_GAP + estimateTextWidth(r.cost, MENU_FONT_SIZE) : 0)
-      ),
-    0
-  )
-  const wanted = textW + MENU_PADDING_X * 2 + MENU_HAND_SLOT
   const maxW = Math.max(0, g.width - SIDE_PADDING - g.command.x)
-  const w = Math.min(Math.max(wanted, MENU_MIN_WIDTH), maxW)
+  // 幅はコマンド窓と同じ。狭いと窓の外にコマンドの文字がはみ出して見え、広いと味方のステータス欄や絵を覆う。
+  // 入りきらない名前は buildMenuView が省略する
+  const w = Math.min(g.command.w, maxW)
   const h = visibleRows * MENU_ROW_HEIGHT + MENU_PADDING_Y * 2
   const bottom = g.command.y + g.command.h
   return {
@@ -164,8 +158,11 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
         const index = w.top + v
         const row = ctx.rows[index]
         if (!row) break
+        const rowW = Math.max(0, rect.w - MENU_PADDING_X * 2 - MENU_HAND_SLOT)
+        const costW = row.cost ? MENU_COST_GAP + estimateTextWidth(row.cost, MENU_FONT_SIZE) : 0
         rows.push({
           ...row,
+          label: fitLabel(row.label, Math.max(0, rowW - costW), MENU_FONT_SIZE),
           index,
           selected: index === w.cursor,
           rect: {

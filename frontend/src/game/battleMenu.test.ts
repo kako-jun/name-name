@@ -225,10 +225,15 @@ describe('対象選択', () => {
     expect(confirm(openList(EMPTY_STACK, 'spell', alive), alive).blocked).toBe('empty')
   })
 
-  it('isReviveEntry', () => {
-    expect(isReviveEntry({ effect: 'heal 10..10' })).toBe(false)
-    expect(isReviveEntry({ effect: 'revive' })).toBe(true)
-    expect(isReviveEntry({})).toBe(false)
+  it('isReviveEntry: 呪文は zaorik、アイテムは world_tree_drop（取り違えない）', () => {
+    expect(isReviveEntry('spell', { effect: 'heal 10..10' })).toBe(false)
+    expect(isReviveEntry('spell', { effect: 'revive' })).toBe(true)
+    expect(isReviveEntry('item', { effect: 'revive hp=half' })).toBe(true)
+    expect(isReviveEntry('spell', { builtin: 'zaorik' })).toBe(true)
+    expect(isReviveEntry('item', { builtin: 'zaorik' })).toBe(false)
+    expect(isReviveEntry('item', { builtin: 'world_tree_drop' })).toBe(true)
+    expect(isReviveEntry('spell', { builtin: 'world_tree_drop' })).toBe(false)
+    expect(isReviveEntry('spell', {})).toBe(false)
   })
 
   it('手が指している対象が確定前に倒れていたら確定しない（空撃ち防止）', () => {

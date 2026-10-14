@@ -307,7 +307,7 @@ export class BattleEngine {
     const caster = this.currentActor()
     if (!caster) return
     if (caster.mp < spell.mp) {
-      this.appendLog('MP が たりない！')
+      this.appendLog('MPが たりない！')
       this.recordNotice(caster, 'MPが たりない！')
       return
     }

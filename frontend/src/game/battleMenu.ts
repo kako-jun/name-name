@@ -105,12 +105,20 @@ export function targetSpecOf(
   entry: BattleSpellEntry | BattleItemEntry
 ): TargetSpec {
   const spec = kind === 'spell' ? parseSpellTarget((entry as BattleSpellEntry).target) : ITEM_TARGET
-  return spec.scope === 'single' && isReviveEntry(entry) ? { ...spec, revive: true } : spec
+  return spec.scope === 'single' && isReviveEntry(kind, entry) ? { ...spec, revive: true } : spec
 }
 
-/** 蘇生の呪文・アイテムか。効果 DSL が `revive`、または蘇生の builtin（ザオリク） */
-export function isReviveEntry(entry: { effect?: string; builtin?: string }): boolean {
-  if (entry.builtin === 'zaorik') return true
+/**
+ * 蘇生の呪文・アイテムか。効果 DSL が `revive`、または蘇生の builtin（呪文は ザオリク `zaorik`、
+ * アイテムは せかいじゅのしずく `world_tree_drop`）。呪文の builtin はアイテムでは、逆もまた別の関数を指すので種別ごとに見る
+ */
+export function isReviveEntry(
+  kind: MenuKind,
+  entry: { effect?: string; builtin?: string }
+): boolean {
+  if (kind === 'spell' ? entry.builtin === 'zaorik' : entry.builtin === 'world_tree_drop') {
+    return true
+  }
   return typeof entry.effect === 'string' && parseEffect(entry.effect)?.kind === 'revive'
 }
 

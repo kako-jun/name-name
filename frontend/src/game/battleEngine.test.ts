@@ -146,7 +146,7 @@ describe('BattleEngine 呪文 / アイテム', () => {
       effect: 'damage 8..8',
     })
     expect(eng.getState().enemies[0].hp).toBe(10) // 変化なし
-    expect(eng.getState().log).toContain('MP が たりない！')
+    expect(eng.getState().log).toContain('MPが たりない！')
   })
 
   it('selectItem: builtin world_tree_drop で全員回復', () => {

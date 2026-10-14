@@ -179,7 +179,7 @@ describe('MP の消費とグレーアウト', () => {
     press('Enter')
     expect(types(s)).toEqual(['list'])
     expect(engine.getState().party[0].mp).toBe(2)
-    expect(engine.getState().log[engine.getState().log.length - 1]).toBe('MP が たりない！')
+    expect(engine.getState().log[engine.getState().log.length - 1]).toBe('MPが たりない！')
   })
 
   it('呪文を使うとターンが進む（従来ターン制では敵が反撃する）', () => {
@@ -484,5 +484,114 @@ describe('タップによる一覧のスクロール', () => {
     expect(w.top).toBeGreaterThan(top0)
     expect(w.cursor).toBeGreaterThanOrEqual(w.top)
     expect(w.top + 1).toBeLessThanOrEqual(30)
+  })
+})
+
+describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
+  const REVIVE: BattleMenuData = {
+    spells: {
+      a: [{ id: 'raise', name: 'レイズ', mp: 3, target: '味方単体', effect: 'revive hp=half' }],
+    },
+    items: [{ id: 'drop', name: 'しずく', effect: 'revive', count: 1 }],
+  }
+
+  it('倒れた味方に蘇生の呪文を使うと生き返り、MP を消費する（生きている味方は指せない）', () => {
+    const { engine } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    press('ArrowLeft')
+    press('Enter') // 対象は倒れた b のみ
+    press('ArrowDown') // 候補が 1 人なので動かない
+    press('Enter')
+    const st = engine.getState()
+    expect(st.party[1].hp).toBeGreaterThan(0)
+    expect(st.party[0].mp).toBe(2)
+  })
+
+  it('倒れた味方に蘇生のアイテムを使うと生き返る', () => {
+    const { engine } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    press('ArrowRight')
+    press('Enter')
+    press('Enter')
+    expect(engine.getState().party[1].hp).toBeGreaterThan(0)
+  })
+
+  it('蘇生できる相手がいないときは確定できず、窓は残り、MP は減らない', () => {
+    const { s, engine } = build({ menu: REVIVE })
+    press('ArrowLeft')
+    press('Enter')
+    expect(types(s)).toEqual(['list'])
+    expect(engine.getState().party[0].mp).toBe(5)
+    press('Escape')
+    press('ArrowRight')
+    press('Enter')
+    expect(types(s)).toEqual(['list'])
+  })
+})
+
+describe('スクロール記号のタップ (#204 レビュー B1)', () => {
+  it('▲▼の記号はタップを受けず、記号の位置のタップが下のスクロール帯に届く', async () => {
+    const { Text: PixiText } = await import('pixi.js')
+    const many: BattleMenuData = {
+      spells: {
+        a: Array.from({ length: 12 }, (_, i) => ({
+          id: `s${i}`,
+          name: `じゅもん${i}`,
+          mp: 1,
+          target: '敵単体',
+          effect: 'damage 1..1',
+        })),
+      },
+    }
+    const { s } = build({ menu: many })
+    press('ArrowLeft')
+    const layer = I(s).menuLayer!
+    const texts: InstanceType<typeof PixiText>[] = []
+    const walk = (c: Container) => {
+      for (const ch of c.children as Container[]) {
+        if (ch instanceof PixiText) texts.push(ch)
+        walk(ch)
+      }
+    }
+    walk(layer)
+    const down = texts.find((t) => t.text === '▼')!
+    expect(down.eventMode).toBe('none')
+    const before = (I(s).menuStack[0] as { top: number }).top
+    // PixiJS の EventBoundary.hitTestRecursive と同じ規則で当たり判定する:
+    // none は素通し・後から足したものが前面・親が static なら子も判定に参加し（Text は containsPoint）、
+    // 自分が操作対象（static）でなくても当たれば探索を打ち切る（= 下の帯に届かない）
+    type Hit = Container[] | null
+    const interactive = (c: Container) => c.eventMode === 'static' || c.eventMode === 'dynamic'
+    const hitTest = (c: Container, mode: string, x: number, y: number): Hit => {
+      if (!c.visible || c.eventMode === 'none') return null
+      for (const ch of [...c.children].reverse()) {
+        const h = hitTest(
+          ch as Container,
+          mode === 'static' ? mode : ((ch as Container).eventMode ?? 'auto'),
+          x,
+          y
+        )
+        if (h) return interactive(c) || h.length > 0 ? [...h, c] : h
+      }
+      if (mode !== 'static') return null
+      const t = c as unknown as {
+        text?: string
+        width: number
+        height: number
+        x: number
+        y: number
+      }
+      const inside = c.hitArea
+        ? c.hitArea.contains(x, y)
+        : typeof t.text === 'string' &&
+          x >= t.x - t.width &&
+          x <= t.x &&
+          y >= t.y - t.height &&
+          y <= t.y + t.height
+      return inside ? (interactive(c) ? [c] : []) : null
+    }
+    const path = hitTest(layer, layer.eventMode ?? 'auto', down.x - 3, down.y - 3)
+    const hit = path && path.length > 0 ? path[0] : null
+    expect(hit).not.toBeNull()
+    hit!.emit('pointertap', {} as never)
+    expect((I(s).menuStack[0] as { top: number }).top).toBe(before + 1)
   })
 })

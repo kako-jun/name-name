@@ -19,7 +19,8 @@ import type { TargetSide } from './battleMenu'
 /** BattleScreen が提供する、見た目の共通部品と入力の通知先 */
 export interface BattleMenuHost {
   makePanel(): Container
-  drawPanel(panel: Container, x: number, y: number, w: number, h: number): void
+  /** `opaque` なら背景を不透明にする（下のコマンド窓の文字が透けないように） */
+  drawPanel(panel: Container, x: number, y: number, w: number, h: number, opaque?: boolean): void
   textStyle(): TextStyle
   /** 一覧の行がタップされた（index は候補全体での位置） */
   onRowTap(index: number): void
@@ -79,7 +80,7 @@ export class BattleMenuLayer extends Container {
     win.eventMode = 'static'
     const panel = this.host.makePanel()
     win.addChild(panel)
-    this.host.drawPanel(panel, v.rect.x, v.rect.y, v.rect.w, v.rect.h)
+    this.host.drawPanel(panel, v.rect.x, v.rect.y, v.rect.w, v.rect.h, true)
     for (const row of v.rows) {
       const color = row.disabled ? ROW_DISABLED_COLOR : ROW_COLOR
       const label = new PixiText({ text: row.label, style: this.styled(color) })
@@ -143,6 +144,8 @@ export class BattleMenuLayer extends Container {
   private moreMark(mark: string, x: number, y: number, anchorY: number): PixiText {
     const t = new PixiText({ text: mark, style: this.styled(MORE_MARK_COLOR, 10) })
     t.anchor.set(1, anchorY)
+    // 記号はタップを受けない（下のスクロール帯へ通す）
+    t.eventMode = 'none'
     t.x = x
     t.y = y
     return t

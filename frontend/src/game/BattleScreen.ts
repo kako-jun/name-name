@@ -1244,7 +1244,14 @@ export class BattleScreen extends Container {
    * ff-blue の g は Container で、子 [帯, mask, 枠] を持つ（枠を mask の外に置くのは、枠の外側半分が切れないようにするため）。
    * 子は makePanel が 1 組だけ作って使い回す（再描画で mask が積み増されない）。
    */
-  private drawPanel(container: Container, x: number, y: number, w: number, h: number): void {
+  private drawPanel(
+    container: Container,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    opaque = false
+  ): void {
     const parts = this.ffBlueParts.get(container)
     if (parts) {
       parts.mask.clear().roundRect(x, y, w, h, PANEL_RADIUS).fill({ color: 0xffffff })
@@ -1252,7 +1259,7 @@ export class BattleScreen extends Container {
       for (const band of computeBands(h)) {
         parts.bands
           .rect(x, y + band.y, w, band.h)
-          .fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
+          .fill({ color: band.color, alpha: opaque ? 1 : FF_BLUE_PANEL_ALPHA })
       }
       parts.frame
         .clear()
@@ -1263,7 +1270,7 @@ export class BattleScreen extends Container {
     const g = container as Graphics
     g.clear()
     g.roundRect(x, y, w, h, PANEL_RADIUS)
-      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+      .fill({ color: PANEL_BG, alpha: opaque ? 1 : PANEL_BG_ALPHA })
       .stroke({ color: PANEL_STROKE, width: 2 })
   }
 
@@ -1870,7 +1877,7 @@ export class BattleScreen extends Container {
     }
     this.menuLayer = new BattleMenuLayer({
       makePanel: () => this.makePanel(),
-      drawPanel: (c, x, y, w, h) => this.drawPanel(c, x, y, w, h),
+      drawPanel: (c, x, y, w, h, opaque) => this.drawPanel(c, x, y, w, h, opaque),
       textStyle: () => this.themedStyle(TEXT_STYLE_COMMAND),
       onRowTap: (i) => {
         const ctx = this.menuContext()

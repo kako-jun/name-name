@@ -16,7 +16,10 @@ import {
   HAND_HEIGHT,
   HAND_PIXEL,
   HAND_WIDTH,
+  MENU_MAX_ROWS,
+  MENU_PADDING_Y,
   MENU_ROW_HEIGHT,
+  MENU_SCROLL_STRIP,
   MENU_TOP_GAP,
   buildMenuView,
   computeListWindowRect,
@@ -184,7 +187,7 @@ describe('computeListWindowRect', () => {
     const rows = buildMenuRows('spell', manySpells(2), ent('a'))
     const small = computeListWindowRect(g, rows)
     expect(small.visibleRows).toBe(2)
-    expect(small.rect.h).toBe(2 * MENU_ROW_HEIGHT + 16)
+    expect(small.rect.h).toBe(2 * MENU_ROW_HEIGHT + 2 * MENU_PADDING_Y)
     const big = computeListWindowRect(g, buildMenuRows('spell', manySpells(99), ent('a')))
     expect(big.visibleRows).toBe(listMaxRows(g))
   })
@@ -256,5 +259,38 @@ describe('スクロール帯（タップ）', () => {
     const v = buildMenuView(openList(EMPTY_STACK, 'spell', ctx), ctx, g)[0]
     if (v.type !== 'list') throw new Error()
     expect([v.scrollUp, v.scrollDown !== null]).toEqual([null, true])
+  })
+})
+
+describe('窓の寸法の取り決め (#204 レビュー)', () => {
+  it('スクロール帯は上下の余白に収まり、行の決定領域に食い込まない', () => {
+    expect(MENU_SCROLL_STRIP).toBeLessThanOrEqual(MENU_PADDING_Y)
+    const g = geometry(640, 360, 2, 2)
+    const spells = manySpells(30)
+    const ctx: MenuContext = {
+      rows: buildMenuRows('spell', spells, ent('a')),
+      maxRows: listMaxRows(g),
+      entries: spells,
+      party: [ent('a')],
+      enemies: [ent('e')],
+      actorIndex: 0,
+    }
+    const st = setListCursor(openList(EMPTY_STACK, 'spell', ctx), 10, ctx)
+    const v = buildMenuView(st, ctx, g)[0]
+    if (v.type !== 'list') throw new Error()
+    const first = v.rows[0].rect
+    const last = v.rows[v.rows.length - 1].rect
+    expect(v.scrollUp!.y + v.scrollUp!.h).toBeLessThanOrEqual(first.y)
+    expect(v.scrollDown!.y).toBeGreaterThanOrEqual(last.y + last.h)
+  })
+
+  it('一覧窓はコマンド窓より狭くならず（文字がはみ出して見えない）、見える行は MENU_MAX_ROWS まで', () => {
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 4, 3)
+      const r = computeListWindowRect(g, buildMenuRows('spell', manySpells(2), ent('a')))
+      expect(r.rect.w).toBeGreaterThanOrEqual(g.command.w - EPS)
+      expect(r.rect.w).toBeLessThanOrEqual(g.command.w + EPS) // 味方のステータス欄を覆わない
+      expect(listMaxRows(g)).toBeLessThanOrEqual(MENU_MAX_ROWS)
+    }
   })
 })
