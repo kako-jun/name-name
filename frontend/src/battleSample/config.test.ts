@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { BattleEntity } from '../game/spellDsl'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
+import enemyOrderOmenSample from '../../public/battle-sample/enemy-order-omen.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -1630,5 +1631,19 @@ describe('同梱の例 public/battle-sample/enemy-actions.json (#835)', () => {
     if (!r.ok) return
     expect(Object.keys(r.value.skills)).toEqual(['ink', 'tentacle'])
     expect(r.value.enemies.map((e) => e.actions?.length)).toEqual([2, 1])
+  })
+})
+
+describe('同梱の例 public/battle-sample/enemy-order-omen.json (#836)', () => {
+  it('parseConfigText で読め、順番・予兆つきの敵と特技の telegraph が入っている', () => {
+    const r = parseConfigText(
+      enemyOrderOmenSample,
+      'https://example.com/battle-sample/enemy-order-omen.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.skills.charge.telegraph).toBe('{user}の からだが ふるえている！')
+    expect(r.value.enemies[0].actions).toEqual(['順番=charge > smash'])
+    expect(r.value.enemies.length).toBe(2)
   })
 })

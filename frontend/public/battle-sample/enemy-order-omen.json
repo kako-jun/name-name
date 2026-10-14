@@ -1,0 +1,74 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "skills": [
+    {
+      "id": "charge",
+      "name": "ためる",
+      "target": "自分",
+      "effect": "heal 0..0",
+      "message": "{user}は 力を ためている",
+      "telegraph": "{user}の からだが ふるえている！"
+    },
+    {
+      "id": "smash",
+      "name": "大つなみ",
+      "target": "相手全体",
+      "effect": "damage 40..55",
+      "message": "{user}の 大つなみ！"
+    },
+    {
+      "id": "bite",
+      "name": "かみつき",
+      "target": "相手単体",
+      "effect": "damage 10..14",
+      "message": "{user}は かみついた！"
+    },
+    {
+      "id": "claw",
+      "name": "ひっかき",
+      "target": "相手単体",
+      "effect": "damage 8..12"
+    },
+    {
+      "id": "roar",
+      "name": "ほえる",
+      "target": "相手全体",
+      "effect": "damage 3..5",
+      "telegraph": "{user}は 大きく いきを すいこんだ！"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 600, "mp": 20, "atk": 25, "def": 4, "agi": 6 },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 400,
+      "mp": 40,
+      "atk": 18,
+      "def": 2,
+      "agi": 5,
+      "row": "back"
+    }
+  ],
+  "enemies": [
+    {
+      "id": "leviathan",
+      "name": "うみのぬし",
+      "hp": 600,
+      "atk": 12,
+      "def": 2,
+      "agi": 3,
+      "actions": ["順番=charge > smash"]
+    },
+    {
+      "id": "beast",
+      "name": "けもの",
+      "hp": 300,
+      "atk": 10,
+      "def": 2,
+      "agi": 4,
+      "actions": ["条件=HP<50% 候補=roar 上限=1", "順番=bite > claw > こうげき"]
+    }
+  ]
+}

@@ -20,7 +20,7 @@
  *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
- * - 敵 AI の P2 以降（順番・予兆・カウンター。#836 #837）と builtin: での挙動委譲
+ * - 敵 AI の P3（カウンター・死亡時。#837）と builtin: での挙動委譲
  * - ターン跨ぎ状態異常の減衰
  */
 
@@ -31,6 +31,7 @@ import { isReviveEntry } from './battleMenu'
 import {
   chooseEnemyAction,
   createEnemyMemory,
+  recordEnemyAction,
   type ChosenAction,
   type EnemyMemory,
 } from './enemyAi'
@@ -85,6 +86,11 @@ export interface BattleActionEvent {
    * 特技 (#834) の使用時メッセージ（`{user}` を使った側の名前に置き換えた後の文）。現段階では記録だけで画面は読まない
    * （設計書 §3.3 の `メッセージ`。表示は P1 #835 以降）。`メッセージ:` を書かない特技・他の kind は undefined */
   message?: string
+  /**
+   * 特技の予兆の文言（`{user}` 置き換え後。敵の行動パターン P2 #836）。FF 式は窓にラベルの代わりに出し、DQ 式は戦闘ログに積む。
+   * 予兆の無い特技・他の kind は undefined
+   */
+  omen?: string
   hits: BattleHit[]
 }
 
@@ -418,6 +424,11 @@ export class BattleEngine {
         ? skill.message.split('{user}').join(caster.name)
         : undefined
     this.appendLog(message ?? `${caster.name} は ${skill.name} を つかった！`)
+    const omen =
+      typeof skill.telegraph === 'string' && skill.telegraph.trim() !== ''
+        ? skill.telegraph.split('{user}').join(caster.name)
+        : undefined
+    if (omen !== undefined) this.appendLog(omen)
 
     const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
     const ctx: EffectContext = {
@@ -433,7 +444,7 @@ export class BattleEngine {
         ? this.evalEffectDsl(skill.effect, ctx)
         : ['(特技に効果定義なし)']
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('skill', caster, skill.name, targets, hpSnapshot, amounts, message)
+    this.recordEffect('skill', caster, skill.name, targets, hpSnapshot, amounts, message, omen)
     return true
   }
 
@@ -630,7 +641,7 @@ export class BattleEngine {
         atb.queue = atb.queue.filter((q) => q !== i)
         atb.partyGauge[i] = 0
       })
-      this.countEnemyAction(enemyIndex)
+      this.countEnemyAction(enemyIndex, choice)
       this.checkEnd()
       return
     }
@@ -649,7 +660,7 @@ export class BattleEngine {
       atb.queue = atb.queue.filter((i) => i !== idx)
       atb.partyGauge[idx] = 0
     }
-    this.countEnemyAction(enemyIndex)
+    this.countEnemyAction(enemyIndex, choice)
     this.checkEnd()
   }
 
@@ -685,7 +696,13 @@ export class BattleEngine {
     const isOpponentSingle = t === '相手単体' || !SKILL_TARGETS.includes(t)
     const o = choice.targetOverride
     const applies = o !== undefined && (o === '仲間単体' || o === '自分' || isOpponentSingle)
-    const exec = applies ? { ...skill, target: o } : skill
+    // 予兆: 行の `予兆=` が特技の `予兆` より優先（P2 #836）
+    const omen = choice.omen !== undefined ? choice.omen : skill.telegraph
+    const exec = {
+      ...skill,
+      ...(applies ? { target: o } : {}),
+      ...(omen !== undefined ? { telegraph: omen } : {}),
+    }
     return this.performSkill(
       { side: 'enemy', index: enemyIndex },
       exec,
@@ -693,10 +710,10 @@ export class BattleEngine {
     )
   }
 
-  /** 行動を終えた敵の行動回数を 1 増やす (#835)。記憶が無い戦闘では何もしない */
-  private countEnemyAction(enemyIndex: number): void {
+  /** 行動を終えた敵の記憶を進める (#835 行動回数、#836 順番の位置・使用回数)。記憶が無い戦闘では何もしない */
+  private countEnemyAction(enemyIndex: number, choice: ChosenAction): void {
     const m = this.state.enemyMemory?.[enemyIndex]
-    if (m) m.acted++
+    if (m) recordEnemyAction(m, choice)
   }
 
   /** `対象=ランダム` / `HP最小` で選ばれた生存味方。無ければ null（従来の狙い方） */
@@ -731,7 +748,7 @@ export class BattleEngine {
       const choice = this.decideEnemyAction(i)
       if (choice.kind === 'skill' && this.useEnemySkill(i, choice)) {
         usedSkill = true
-        this.countEnemyAction(i)
+        this.countEnemyAction(i, choice)
         continue
       }
       const hero = this.pickedParty(choice) ?? firstHero
@@ -744,7 +761,7 @@ export class BattleEngine {
       if (hero.hp === 0) {
         this.appendLog(`${hero.name} は たおれた！`)
       }
-      this.countEnemyAction(i)
+      this.countEnemyAction(i, choice)
     }
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
@@ -895,7 +912,8 @@ export class BattleEngine {
     targets: BattleEntity[],
     before: Map<BattleEntity, number>,
     amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>,
-    message?: string
+    message?: string,
+    omen?: string
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
@@ -940,6 +958,7 @@ export class BattleEngine {
       kind,
       label,
       ...(message !== undefined ? { message } : {}),
+      ...(omen !== undefined ? { omen } : {}),
       hits,
     })
   }
@@ -1037,6 +1056,8 @@ export interface SkillExecution {
   builtin?: string
   /** 使用時の演出文。`{user}` は使った側の名前に置き換わる */
   message?: string
+  /** 予兆の文言（P2 #836）。使用時に `message` のあとへ出す。`{user}` は使った側の名前に置き換わる */
+  telegraph?: string
 }
 
 /** アイテム使用の引数 */

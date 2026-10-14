@@ -343,7 +343,7 @@ function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
   return { ok: true, value: out }
 }
 
-/** 設定 JSON の skills (#835) を検証する。`[{ id, name?, target?, effect?, builtin?, message? }]`。`id` は必須（`actions` の候補から引く） */
+/** 設定 JSON の skills (#835) を検証する。`[{ id, name?, target?, effect?, builtin?, message?, telegraph? }]`。`id` は必須（`actions` の候補から引く） */
 function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> {
   if (raw === undefined) return { ok: true, value: {} }
   if (!Array.isArray(raw)) return { ok: false, error: 'skills は配列である必要があります' }
@@ -355,7 +355,7 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
     if (typeof r.id !== 'string' || r.id.trim() === '') {
       return { ok: false, error: `${path}.id は空でない文字列である必要があります` }
     }
-    for (const f of ['name', 'target', 'effect', 'builtin', 'message'] as const) {
+    for (const f of ['name', 'target', 'effect', 'builtin', 'message', 'telegraph'] as const) {
       if (r[f] !== undefined && typeof r[f] !== 'string') {
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }
       }
@@ -369,6 +369,7 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
         ...(typeof r.effect === 'string' ? { effect: r.effect } : {}),
         ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
         ...(typeof r.message === 'string' ? { message: r.message } : {}),
+        ...(typeof r.telegraph === 'string' ? { telegraph: r.telegraph } : {}),
       },
     ])
   }

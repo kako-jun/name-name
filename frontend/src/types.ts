@@ -225,7 +225,7 @@ export interface SkillDef {
   builtin?: string
   /** 使用時の演出文（`{user}` は使った側の名前） */
   message?: string
-  /** 予兆の文言（生文字列。解釈は後続の段階） */
+  /** 予兆の文言（使用時に表示。`{user}` は使った側の名前。敵の行動パターン P2 #836） */
   telegraph?: string
 }
 
