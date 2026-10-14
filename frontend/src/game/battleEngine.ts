@@ -102,6 +102,9 @@ const EVENT_MAX = 30
 /** ATB の進行方式 (#205)。`wait` = コマンド選択中は時間停止（既定）、`active` = 止めない */
 export type AtbMode = 'wait' | 'active'
 
+/** wait のときの停止範囲 (#204)。`command` = コマンド待ちの間ずっと / `menu` = 候補窓を開いている間だけ */
+export type AtbWaitScope = 'command' | 'menu'
+
 /** ゲージ満タンの値 */
 export const ATB_GAUGE_MAX = 1000
 /** AGI 1 あたり、1ms ごとに溜まるゲージ量。AGI に比例（AGI 5 で 5 秒、AGI 10 で 2.5 秒で満タン）。目視で調整する値 */
@@ -132,6 +135,12 @@ export interface BattleEngineOptions {
    */
   atb?: {
     mode?: AtbMode
+    /**
+     * wait のとき、どこで時間を止めるか (#204)。`command`（既定）= コマンド待ちの味方がいる間ずっと止める（従来）/
+     * `menu` = 候補窓（じゅもん・どうぐの一覧や対象選択）を開いている間だけ止める（FF5/6 の「ウェイト」）。
+     * 候補窓を開いているかは表示側が `setAtbHold` で教える（エンジンは窓を知らない）。active では無関係
+     */
+    waitScope?: AtbWaitScope
     initialGauges?: { party?: number[]; enemies?: number[] }
   }
 }
@@ -139,6 +148,9 @@ export interface BattleEngineOptions {
 export class BattleEngine {
   private state: BattleState
   private rng: () => number
+  /** wait / menu のとき、表示側が候補窓を開いている間 true（画面の一時的な状態なので BattleState には持たない） */
+  private atbHold = false
+  private atbWaitScope: AtbWaitScope = 'command'
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -153,13 +165,30 @@ export class BattleEngine {
       earnedGold: 0,
     }
     this.rng = opts.rng ?? Math.random
-    if (opts.atb) this.initAtb(opts.atb)
+    if (opts.atb) {
+      this.initAtb(opts.atb)
+      this.atbWaitScope = opts.atb.waitScope === 'menu' ? 'menu' : 'command'
+    }
     const enemyNames = enemies.map((e) => e.name).join(' と ')
     this.appendLog(`${enemyNames} が あらわれた！`)
   }
 
   getState(): Readonly<BattleState> {
     return this.state
+  }
+
+  /**
+   * wait の停止範囲を切り替える (#204)。ATB でなければ何もしない。
+   * `menu` にすると、`setAtbHold(true)` の間だけ時間が止まる（コマンド窓だけを出している間は進む）
+   */
+  setAtbWaitScope(scope: AtbWaitScope): void {
+    this.atbWaitScope = scope === 'menu' ? 'menu' : 'command'
+    if (this.atbWaitScope === 'command') this.atbHold = false
+  }
+
+  /** 候補窓を開いている間 true を渡す (#204)。`waitScope` が `menu` の wait のときだけ時間停止に効く */
+  setAtbHold(hold: boolean): void {
+    this.atbHold = hold
   }
 
   /** 今コマンドを出す味方の party index（ATB はキュー先頭の生存者）。いなければ -1。表示側もこれを使う */
@@ -233,7 +262,7 @@ export class BattleEngine {
    * 時間を ms 進める (#205)。ATB のときだけ意味を持つ（従来ターン制・終了後・不正な ms は何もしない）。
    * 1 回で `ATB_MAX_TICK_MS` までに丸める。途中でゲージが満タンになる者がいればそこで区切って処理し直すので、
    * 呼び方（細かい tick の連続 / 大きい tick 1 回）で結果は変わらない（同じ rng 列なら決定論的）。
-   * - 待機（wait）: コマンド待ちの味方がいる間は時間が止まる（残りの ms は捨てる）
+   * - 待機（wait）: コマンド待ちの味方がいる間は時間が止まる（残りの ms は捨てる）。`waitScope: 'menu'` (#204) のときは候補窓を開いている間（`setAtbHold`）だけ止まる
    * - 同時に満タンになった者の順序は rng で決める（AGI 同値など）
    * - 味方が満タン → キューに並ぶ / 敵が満タン → その場で自動行動（狙いは生存味方からランダム）
    */
@@ -245,7 +274,9 @@ export class BattleEngine {
     // 無限ループ防止の安全弁（1 tick で全員が何周もするほどの時間は ATB_MAX_TICK_MS で丸め済み）
     for (let guard = 0; guard < 1000 && remaining > 0 && !this.isOver(); guard++) {
       if (this.checkEnd()) return
-      if (atb.mode === 'wait' && atb.queue.length > 0) break
+      if (atb.mode === 'wait' && atb.queue.length > 0) {
+        if (this.atbWaitScope === 'command' || this.atbHold) break
+      }
       const dt = this.timeToNextFill(atb, remaining)
       if (dt === null) break // 進めるゲージが無い（全員コマンド待ち）
       remaining -= dt

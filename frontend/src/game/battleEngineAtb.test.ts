@@ -797,3 +797,59 @@ describe('ATB: console 汚染', () => {
     for (const s of spies) expect(s).not.toHaveBeenCalled()
   })
 })
+
+describe('ATB wait の停止範囲 waitScope (#204)', () => {
+  const make = (scope?: 'command' | 'menu') =>
+    new BattleEngine([hero('a')], [foe('s')], {
+      rng: () => 0,
+      atb: { mode: 'wait', waitScope: scope, initialGauges: { party: [1000], enemies: [0] } },
+    })
+
+  it('command（既定）: コマンド待ちの間は setAtbHold に関係なくずっと止まる', () => {
+    const e = make()
+    e.tick(1000)
+    expect(e.getState().atb!.enemyGauge[0]).toBe(0)
+    e.setAtbHold(true)
+    e.tick(1000)
+    expect(e.getState().atb!.enemyGauge[0]).toBe(0)
+  })
+
+  it('menu: hold の間だけ止まり、外すと進む', () => {
+    const e = make('menu')
+    e.tick(1000)
+    const g = e.getState().atb!.enemyGauge[0]
+    expect(g).toBeGreaterThan(0)
+    e.setAtbHold(true)
+    e.tick(1000)
+    expect(e.getState().atb!.enemyGauge[0]).toBe(g)
+    e.setAtbHold(false)
+    e.tick(1000)
+    expect(e.getState().atb!.enemyGauge[0]).toBeGreaterThan(g)
+  })
+
+  it('setAtbWaitScope で後から切り替えられ、command に戻すと hold も解く', () => {
+    const e = make()
+    e.setAtbWaitScope('menu')
+    e.tick(500)
+    expect(e.getState().atb!.enemyGauge[0]).toBeGreaterThan(0)
+    e.setAtbHold(true)
+    e.setAtbWaitScope('command')
+    const g = e.getState().atb!.enemyGauge[0]
+    e.tick(500)
+    expect(e.getState().atb!.enemyGauge[0]).toBe(g)
+  })
+
+  it('active には影響しない・従来ターン制では何もしない', () => {
+    const a = new BattleEngine([hero('a')], [foe('s')], {
+      rng: () => 0,
+      atb: { mode: 'active', waitScope: 'menu', initialGauges: { party: [1000], enemies: [0] } },
+    })
+    a.setAtbHold(true)
+    a.tick(500)
+    expect(a.getState().atb!.enemyGauge[0]).toBeGreaterThan(0)
+    const plain = new BattleEngine([hero('a')], [foe('s')], { rng: () => 0 })
+    plain.setAtbWaitScope('menu')
+    plain.setAtbHold(true)
+    expect(() => plain.tick(500)).not.toThrow()
+  })
+})
