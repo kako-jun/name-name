@@ -70,8 +70,8 @@ const tapScreen = (s: BattleScreen) => s.emit('pointertap', {} as never)
 const run = (s: BattleScreen, ms: number) => {
   for (let left = ms; left > 0; left -= 16) s.tick(Math.min(16, left))
 }
-const press = (key: string) => {
-  const e = new KeyboardEvent('keydown', { key, cancelable: true })
+const press = (key: string, init: KeyboardEventInit = {}) => {
+  const e = new KeyboardEvent('keydown', { key, cancelable: true, ...init })
   globalThis.dispatchEvent(e)
   return e
 }
@@ -104,16 +104,19 @@ describe('勝敗を読ませてから閉じる: dq', () => {
   })
 
   it('逃走成功は待たずにすぐ閉じる', () => {
-    const { s, engine, closed } = setup('victory', {})
+    const closed: string[] = []
     // 逃走が必ず成功する乱数
-    const e2 = new BattleEngine([entity('hero')], [entity('slime', { agi: 1 })], { rng: () => 0 })
-    const s2 = new BattleScreen(e2, 800, 450, { layout: 'side', onClose: (o) => closed.push(o) })
-    created.push(s2)
-    tap(s2, 'escape')
-    expect(e2.getState().phase).toBe('escaped')
+    const engine = new BattleEngine([entity('hero')], [entity('slime', { agi: 1 })], {
+      rng: () => 0,
+    })
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      onClose: (o) => closed.push(o),
+    })
+    created.push(s)
+    tap(s, 'escape')
+    expect(engine.getState().phase).toBe('escaped')
     expect(closed).toEqual(['escaped'])
-    expect(engine.getState().phase).not.toBe('escaped')
-    void s
   })
 
   it('決定を押した直後のタップでは飛ばない。猶予を過ぎたら画面タップで飛ばせる', () => {
@@ -144,12 +147,49 @@ describe('勝敗を読ませてから閉じる: dq', () => {
     c.s.tick(RESULT_SKIP_GUARD_MS)
     press('z')
     expect(c.closed).toEqual(['victory'])
-    // 待機の前・外では決定キーを奪わない
+    // 待機の前では決定キーを奪わない
     const d = setup('victory')
     expect(press('Enter').defaultPrevented).toBe(false)
-    d.s.destroy({ children: true })
+    // 待機中に destroy したらリスナーが外れる
     tap(d.s, 'attack')
+    d.s.destroy({ children: true })
     expect(press('Enter').defaultPrevented).toBe(false)
+    expect(d.closed).toEqual([])
+  })
+
+  it('決定キー: isInputSuspended・修飾キー・repeat のときは飛ばさない。戦闘外のタップも同様', () => {
+    let suspended = true
+    const { s, closed } = setup('victory', { isInputSuspended: () => suspended })
+    tap(s, 'attack')
+    s.tick(RESULT_SKIP_GUARD_MS)
+    press('Enter')
+    tapScreen(s)
+    expect(closed).toEqual([])
+    suspended = false
+    press('Enter', { ctrlKey: true })
+    press('Enter', { shiftKey: true })
+    press('Enter', { repeat: true })
+    expect(closed).toEqual([])
+    press('Enter')
+    expect(closed).toEqual(['victory'])
+  })
+
+  it('tick を呼ばないホストでは待機が終わらない（全ホストが毎フレーム tick を呼ぶ契約）', () => {
+    const { s, closed } = setup('victory')
+    tap(s, 'attack')
+    tapScreen(s) // 猶予は tick の総和なので、tick なしではタップでも抜けられない
+    expect(closed).toEqual([])
+    s.tick(16)
+    s.tick(RESULT_HOLD_DQ_MS)
+    expect(closed).toEqual(['victory'])
+  })
+
+  it('redraw で全画面のタップ領域が新しい画面サイズに追従する', () => {
+    const { s } = setup('victory')
+    const area = () => (s as unknown as { hitArea: { width: number; height: number } }).hitArea
+    expect([area().width, area().height]).toEqual([800, 450])
+    s.redraw(450, 800)
+    expect([area().width, area().height]).toEqual([450, 800])
   })
 
   it('待機中はコマンドを受けない', () => {
@@ -216,5 +256,67 @@ describe('勝敗を読ませてから閉じる: ff', () => {
     run(s, RESULT_SKIP_GUARD_MS)
     tapScreen(s)
     expect(closed).toEqual(['victory'])
+  })
+})
+
+describe('勝敗を読ませてから閉じる: ATB・ff 逃走', () => {
+  const atbOpts = { atb: { mode: 'wait' as const, initialGauges: { party: [1000] } }, rng: () => 0 }
+
+  it('ATB dq: 待機中はゲージが進まず（署名不変）、待機後に閉じる', () => {
+    const engine = new BattleEngine(
+      [entity('hero', { atk: 999 })],
+      [entity('slime', { hp: 1, maxHp: 1 })],
+      atbOpts
+    )
+    const closed: string[] = []
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', onClose: (o) => closed.push(o) })
+    created.push(s)
+    tap(s, 'attack')
+    expect(engine.getState().phase).toBe('victory')
+    const sig = () => JSON.stringify(engine.getState().atb)
+    const before = sig()
+    s.tick(RESULT_HOLD_DQ_MS - 1)
+    expect(sig()).toBe(before)
+    expect(closed).toEqual([])
+    s.tick(1)
+    expect(closed).toEqual(['victory'])
+  })
+
+  it('ff + ATB: 演出のあとメッセージを出し、待機後に閉じる', () => {
+    const engine = new BattleEngine(
+      [entity('hero', { atk: 999 })],
+      [entity('slime', { hp: 1, maxHp: 1 })],
+      atbOpts
+    )
+    const closed: string[] = []
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      onClose: (o) => closed.push(o),
+    })
+    created.push(s)
+    tap(s, 'attack')
+    let guard = 0
+    while (I(s).messageText!.text !== resultMessageText('victory') && guard++ < 400) run(s, 16)
+    expect(closed).toEqual([])
+    run(s, RESULT_HOLD_FF_MS)
+    expect(closed).toEqual(['victory'])
+  })
+
+  it('ff で逃走成功したときは、演出のあとすぐ閉じる（勝敗の待機なし）', () => {
+    const closed: string[] = []
+    const engine = new BattleEngine([entity('hero')], [entity('slime', { agi: 1 })], {
+      rng: () => 0,
+    })
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      onClose: (o) => closed.push(o),
+    })
+    created.push(s)
+    tap(s, 'escape')
+    run(s, 3000)
+    expect(closed).toEqual(['escaped'])
+    expect((s as unknown as { resultElapsed: number | null }).resultElapsed).toBeNull()
   })
 })

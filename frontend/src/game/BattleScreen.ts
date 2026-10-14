@@ -997,6 +997,7 @@ export class BattleScreen extends Container {
   redraw(screenWidth: number, screenHeight: number): void {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
+    this.hitArea = new Rectangle(0, 0, screenWidth, screenHeight)
     this.layout()
     this.refresh()
   }
@@ -1035,6 +1036,7 @@ export class BattleScreen extends Container {
   private skipResultHold(): void {
     if (this.closedFlag || this.resultElapsed === null || !canSkipResultHold(this.resultElapsed))
       return
+    if (this.opts.isInputSuspended?.()) return
     this.resultElapsed = resultHoldMs(this.presentation)
     this.closeIfOver()
   }
@@ -1082,8 +1084,10 @@ export class BattleScreen extends Container {
   }
 
   /**
-   * 時間を deltaMS 進める (#205)。ATB のときだけ働く（従来ターン制は何もしない）。
+   * 時間を deltaMS 進める (#205)。ATB のゲージ・ff の演出・勝敗を読ませる待機 (#745) を進める。
    * 時計は持たず、呼び出し側（本編の ticker / サンプルの ticker）が経過時間を渡す。
+   * **全ホストは戦闘中、毎フレーム tick を呼ぶこと**（呼ばないと勝利・全滅の待機が終わらず、画面が閉じない。
+   * スキップの猶予も tick の総和で数えるので、タップ・決定キーでも抜けられない）。
    * 状態が変わった（ログ・フェーズ・コマンド待ちの顔ぶれ）ときだけ全表示を更新し、毎回ゲージ棒だけ描き直す。
    */
   tick(deltaMS: number): void {
