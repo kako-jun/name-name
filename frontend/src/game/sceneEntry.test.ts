@@ -102,7 +102,7 @@ describe('gateReason (#734)', () => {
     expect(gateReason('advance', idle)).toBeNull()
     expect(gateReason('advance', { ...idle, waitingForChoice: true })).toBe('choice')
     expect(gateReason('advance', { ...idle, waitingForWait: true })).toBe('wait')
-    expect(gateReason('advance', { ...idle, jumpState: 'stalled' })).toBe('jump')
+    expect(gateReason('advance', { ...idle, jumpState: 'stalled' })).toBe('stalled')
     expect(gateReason('navigate', { ...idle, jumpState: 'pending' })).toBe('jump')
     expect(
       gateReason('navigate', {

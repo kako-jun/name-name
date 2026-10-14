@@ -251,6 +251,7 @@ describe('openFieldBattle', () => {
       ids?: string[]
       gate?: FieldInputGate
       enemies?: BattleEntity[]
+      assetBaseUrl?: string
     } = {}
   ) {
     const stage = new Container()
@@ -264,6 +265,7 @@ describe('openFieldBattle', () => {
       roster: roster(over.ids ?? ['hero', 'mage', 'priest']),
       enemies: over.enemies ?? [enemy()],
       gate,
+      assetBaseUrl: over.assetBaseUrl,
       onClosed,
     })
     const s = screen as unknown as {
@@ -273,6 +275,13 @@ describe('openFieldBattle', () => {
     }
     return { stage, onClosed, gate, screen, s }
   }
+
+  it('assetBaseUrl は BattleScreen の opts にそのまま転送される（未指定は undefined）', () => {
+    expect(open({ assetBaseUrl: 'https://x.example/raw' }).s.opts.assetBaseUrl).toBe(
+      'https://x.example/raw'
+    )
+    expect(open().s.opts.assetBaseUrl).toBeUndefined()
+  })
 
   it('ステージに戦闘画面が載る', () => {
     const { stage, screen } = open()

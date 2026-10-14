@@ -11,6 +11,7 @@ import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
 import { isEditableTarget } from './inputGuards'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
+import { resolveRpgImagePath } from './novelLayout'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -134,6 +135,8 @@ export class RaycastRenderer {
   private masterPartyOrder: string[] = []
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
+  /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔・戦闘の画像パス解決に使う。未設定ならパスをそのまま読む */
+  private assetBaseUrl: string | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -343,6 +346,11 @@ export class RaycastRenderer {
     this.initialized = true
   }
 
+  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
+  setAssetBaseUrl(url: string | undefined): void {
+    this.assetBaseUrl = url
+  }
+
   load(gameData: RPGProject): void {
     // 戦闘中に再 load されたら戦闘画面を畳む（古い onClosed が新しいマップの状態を上書きしないよう強制終了）
     this.closeBattle()
@@ -488,7 +496,7 @@ export class RaycastRenderer {
 
   private async loadNpcSprite(npc: NPCRuntime): Promise<void> {
     const sheet = await loadNpcSpriteSheet(
-      npc.data.sprite!,
+      resolveRpgImagePath(this.assetBaseUrl, npc.data.sprite!),
       clampFrames(npc.data.frames),
       this.tileSize,
       npc.data.color,
@@ -670,7 +678,7 @@ export class RaycastRenderer {
       this.dialogBox?.show(
         npc.data.name,
         stripExpressionDirectives(npc.data.message),
-        resolveNpcPortrait(npc.data)
+        resolveRpgImagePath(this.assetBaseUrl, resolveNpcPortrait(npc.data))
       )
       // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
       // （移動・回転・pitch）が残留する。閉じた瞬間に意図しない挙動にならないよう一括クリア。
@@ -800,6 +808,13 @@ export class RaycastRenderer {
     if (enemies) this.startBattle(enemies)
   }
 
+  /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
+  private closeBattle(): void {
+    if (!this.battleScreen) return
+    closeFieldBattle(this.app.stage, this.battleScreen)
+    this.battleScreen = null
+  }
+
   /**
    * 戦闘画面を起動する (#173 + #172 + #175)。
    *
@@ -809,13 +824,6 @@ export class RaycastRenderer {
    * 「しらべる」テスト経路から）。戦闘終了で自動的に画面を畳み、エンカウント
    * クールダウン（連続エンカウント抑止）を 3 歩セットする。
    */
-  /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
-  private closeBattle(): void {
-    if (!this.battleScreen) return
-    closeFieldBattle(this.app.stage, this.battleScreen)
-    this.battleScreen = null
-  }
-
   private startBattle(enemies: BattleEntity[]): void {
     if (this.battleScreen) return // 多重起動防止
     if (enemies.length === 0) return
@@ -830,6 +838,7 @@ export class RaycastRenderer {
       roster: { party: this.masterParty, order: this.masterPartyOrder },
       enemies,
       gate: this.inputGate,
+      assetBaseUrl: this.assetBaseUrl,
       onClosed: () => {
         this.keys.clear()
         this.battleScreen = null

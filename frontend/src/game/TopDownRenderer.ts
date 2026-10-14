@@ -11,6 +11,7 @@ import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '
 import type { MonsterDef, PartyMemberDef } from '../types'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
+import { resolveRpgImagePath } from './novelLayout'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -80,6 +81,8 @@ export class TopDownRenderer {
   private npcs: NPC[] = []
   private mapTiles: number[][] = []
   private tileSize = 32
+  /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔の画像パス解決に使う。未設定ならパスをそのまま読む */
+  private assetBaseUrl: string | undefined = undefined
   private mapWidth = 0
   private mapHeight = 0
 
@@ -192,6 +195,11 @@ export class TopDownRenderer {
     })
 
     this.initialized = true
+  }
+
+  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
+  setAssetBaseUrl(url: string | undefined): void {
+    this.assetBaseUrl = url
   }
 
   /** ゲームデータを読み込んで描画を開始する */
@@ -388,7 +396,7 @@ export class TopDownRenderer {
 
   private async loadNpcSprite(npc: NPC, placeholder: Graphics): Promise<void> {
     const sheet = await loadNpcSpriteSheet(
-      npc.data.sprite!,
+      resolveRpgImagePath(this.assetBaseUrl, npc.data.sprite!),
       clampFrames(npc.data.frames),
       this.tileSize,
       npc.data.color,
@@ -679,6 +687,7 @@ export class TopDownRenderer {
       roster: { party: this.masterParty, order: this.masterPartyOrder },
       enemies,
       gate: this.inputGate,
+      assetBaseUrl: this.assetBaseUrl,
       onClosed: (outcome) => {
         this.battleScreen = null
         this.pendingSwipe = null
@@ -754,7 +763,7 @@ export class TopDownRenderer {
       this.dialogBox?.show(
         npc.data.name,
         stripExpressionDirectives(npc.data.message),
-        resolveNpcPortrait(npc.data)
+        resolveRpgImagePath(this.assetBaseUrl, resolveNpcPortrait(npc.data))
       )
     }
   }

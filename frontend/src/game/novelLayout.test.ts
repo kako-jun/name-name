@@ -18,6 +18,7 @@ import {
   numberToHexColor,
   resolveActionButtonColor,
   resolveAssetUrl,
+  resolveRpgImagePath,
   resolveCharacterImageUrls,
   getIndicatorImageUrls,
   saveSlotToGameState,
@@ -958,6 +959,63 @@ describe('parseHexColor', () => {
     // 'a#b#c' → 最初の # だけ消えて 'ab#c' → parseInt('ab#c',16)='ab' まで → 0xab
     expect(parseHexColor('a#b#c')).toBe(0xab)
     expect(parseHexColor('a#b#c')).toBe(inlineParseHexColor('a#b#c'))
+  })
+})
+
+describe('resolveRpgImagePath (#746)', () => {
+  const base = 'https://api.example.com/api/projects/g/assets/raw'
+
+  it('相対パスは images 配下に解決する（ノベルの resolveAssetUrl と同じ規則）', () => {
+    expect(resolveRpgImagePath(base, 'battle/slime.png')).toBe(
+      resolveAssetUrl(base, 'images', 'battle/slime.png')
+    )
+    expect(resolveRpgImagePath(`${base}/`, 'a.png')).toBe(`${base}/images/a.png`)
+  })
+
+  it('ベース URL が未指定・空なら従来どおりそのまま', () => {
+    expect(resolveRpgImagePath(undefined, 'battle/slime.png')).toBe('battle/slime.png')
+    expect(resolveRpgImagePath('', 'battle/slime.png')).toBe('battle/slime.png')
+  })
+
+  it('絶対 URL・先頭スラッシュ・__demo・空・未指定は変えない', () => {
+    for (const p of [
+      'https://cdn.example.com/a.png',
+      'http://x/a.png',
+      '//cdn.example.com/a.png',
+      'data:image/png;base64,AAAA',
+      'blob:abc',
+      '/assets/a.png',
+      '__demo',
+      '',
+    ]) {
+      expect(resolveRpgImagePath(base, p)).toBe(p)
+    }
+    expect(resolveRpgImagePath(base, undefined)).toBeUndefined()
+  })
+
+  it('先頭が scheme:// でない `a:b.png` は相対パスとして解決する', () => {
+    expect(resolveRpgImagePath(base, 'a:b.png')).toBe(`${base}/images/a:b.png`)
+  })
+
+  it('日本語・スペース・クエリ付きのファイル名もエンコードせずそのまま連結する', () => {
+    expect(resolveRpgImagePath(base, 'npc/ひと 1.png')).toBe(`${base}/images/npc/ひと 1.png`)
+    expect(resolveRpgImagePath(base, 'a.png?v=2')).toBe(`${base}/images/a.png?v=2`)
+  })
+
+  it('ベース URL 末尾の複数スラッシュも落とす（// にならない）', () => {
+    expect(resolveRpgImagePath(`${base}///`, 'a.png')).toBe(`${base}/images/a.png`)
+  })
+
+  it('スキーム判定は大文字小文字を区別せず、先頭以外のコロンは相対パスのまま', () => {
+    expect(resolveRpgImagePath(base, 'HTTPS://cdn.example.com/a.png')).toBe(
+      'HTTPS://cdn.example.com/a.png'
+    )
+    expect(resolveRpgImagePath(base, 'sub/a:b.png')).toBe(`${base}/images/sub/a:b.png`)
+  })
+
+  it('解決済みの URL を再度通しても二重にベースが付かない（冪等）', () => {
+    const once = resolveRpgImagePath(base, 'a.png')
+    expect(resolveRpgImagePath(base, once)).toBe(once)
   })
 })
 

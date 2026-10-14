@@ -108,7 +108,7 @@ type SceneEntryRequest =
 type SceneEntryResult =
   | { status: 'entered'; sceneId: string | null }
   | { status: 'ended' }        // 進行のみ: confinement の圏外で終劇した
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' }  // apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' }  // out-of-range: 復元位置が範囲外 (#789)。apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
   | { status: 'superseded' }   // 待っている間に、より新しい入場要求が来た
 ```
 
@@ -160,7 +160,7 @@ type SceneEntryResult =
 
 `?debug_script=` がある場合は、上の入場が確定（`entered`）してから `playScript` を実行する。debug_scene が見つからない場合は、2 が `failed` になって 3 へ進む。こうして「解決できなければ `?scene=` の confinement が残る」という #726 の挙動を、`PlayerScreen` の事前解決なしで再現する。
 
-**初期入場は自動セーブしない**。自動セーブ（`setOnSceneChange` → `quickSave`）の配線は、初期入場が確定した後に行う。そうしないと、新規開始の `onSceneChange` が、有効なクイックセーブをエントリ冒頭の位置で上書きする（4 から 5 へ倒れた場合が特に問題になる）。さらに、4 の失敗理由が `resolver-error`（通信失敗などの一時的な失敗）だった場合は、そのセッションでは自動セーブを配線せず、トーストでその旨を知らせる。トーストは renderer の `showToast`（PixiJS 描画、#630）で出す。一時的な失敗で正しいセーブを消さないためである。理由が `not-found`（原稿が変わってセーブのシーンが消えた）なら、そのセーブはもう戻れないので、通常どおり配線する。
+**初期入場は自動セーブしない**。自動セーブ（`setOnSceneChange` → `requestAutoSave`）の配線は、初期入場が確定した後に行う。`onSceneChange` は入場の適用の途中で発火し、シーン冒頭の `[待機: 表示完了]` などでゲートが閉じていると保存が黙って弾かれる。そのため `onSceneChange` では保存を要求する（保留を立てる）だけにし、そのシーンで最初の本文が表示されゲートが開いた時点で renderer が1回保存する（#768。冒頭が Jump だけ・選択肢のシーンは保存されず、遷移先の本文で保存される。保留は次の入場・復元で破棄）。そうしないと、新規開始の `onSceneChange` が、有効なクイックセーブをエントリ冒頭の位置で上書きする（4 から 5 へ倒れた場合が特に問題になる）。さらに、4 の失敗理由が `resolver-error`（通信失敗などの一時的な失敗）だった場合は、そのセッションでは自動セーブを配線せず、トーストでその旨を知らせる。トーストは renderer の `showToast`（PixiJS 描画、#630）で出す。一時的な失敗で正しいセーブを消さないためである。理由が `not-found`（原稿が変わってセーブのシーンが消えた）なら、そのセーブはもう戻れないので、通常どおり配線する。
 
 `PlayerScreen` の事前解決のうち、`?debug_scene=`（#726）の分は不要になる。`?scene=` の分は、confinement の算出（`findConfinedSceneIds` は対象の doc を要する）と、タイトル画面を出すかどうかの判定（`startSceneId`）に必要なので残す。これは「`startFrom` を動かすための穴埋め」ではなく、confinement の算出だけに役割が絞られる。HUD の `debug_scene: … → resolved / not found` は、初期入場の結果を `NovelPlayer` から通知する形で出す。
 
@@ -328,6 +328,15 @@ PR3 の実装で、上の記述から次のとおり変えた。挙動の方針�
 ## 判断を保留している点
 
 - confinement 中の復元: `?scene=` で埋め込んでいるときに F8 を押すと、圏外シーンのセーブも復元できる。本件では扱わない（記録のみ）
+
+## #789 での追記（2026-10-14）
+
+- **復元位置が範囲外なら復元失敗にする。** 文書の編集後は、セーブの `eventIndex` / `textIndex` が解決したイベント列の外を指しうる。全ての復元経路（`restore` の通常シーン・sceneId が null のエントリ・`fresh` の位置指定）で、適用の前に範囲を判定し、範囲外は `failed`（`out-of-range`）にする。位置・flags とも変えず、クランプはしない。通知は §2 の「失敗」列のとおり（ロード系はトースト、`restoreSnapshot` は警告ログのみ）
+- **判定する長さは、復元する flags で `[条件:]` を展開した後の列。** `eventIndex` は展開後の列を指す（`restoreToScene` が展開してから `applyState` が当てる）ため。終端（イベント数と等しい値）は終劇かどうかに関わらず有効（`textIndex` は 0 のみ）。最後の本文の後ろに命令だけが続くと、進めたときに命令を消化して終端で止まり（終劇ではなくクリック待ち）、その位置はセーブできるため。展開後の長さが 0 のシーンも同じ
+- **`out-of-range` を `not-found` と別の理由にした。** どちらも再試行しても直らず、初期入場の自動セーブは配線する（§5 のとおり配線しないのは `resolver-error` だけ）ので挙動は同じだが、原因（シーンが無い／位置が無い）を診断で区別できるようにするため
+- **`textIndex` の上限はレイアウト非依存の場合だけ見る。** テキスト以外のイベントは 0 のみ、adv の本文は行数未満。ノベルの改頁数は表示幅で変わり、fluid 再マウントの復元は最終ページへ寄せる設計（#663）なので上限を見ない
+- **ライブ切り替えで textIndex を範囲内に戻す。** `setDialogStyle` / `setSentencePerPage` はページ構成を変えるので、`textIndex` が現在のページ数以上なら最終ページへ寄せ `sentenceIndex` を 0 にする（#663 の寄せと同じ）。寄せないと範囲外のスナップショットが次の再マウントで復元失敗になる
+- **範囲内で脚本が変わったこと（ハッシュ等による検知）は扱わない。**
 
 ## 関連
 

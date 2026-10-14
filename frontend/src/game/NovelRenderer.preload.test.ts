@@ -5,7 +5,7 @@
  * （初出は必ずコールドロード）で、遅延/瞬断すると #293 のフォールバック（ロード成否に関わらず
  * onReady 発火でテキスト解禁）により「立ち絵なし・テキストあり」に倒れる。これを緩和するため、
  * 現在の eventIndex から resolvedEvents を前方走査し、次に出る立ち絵/背景 URL を
- * `Assets.backgroundLoad` に積んで温めておく（`preloadUpcomingAssets`）。
+ * `backgroundPreload`（#782: Assets.backgroundLoad の代替）に積んで温めておく（`preloadUpcomingAssets`）。
  *
  * ここで縛る仕様（テスト設計エージェントの観点 1〜18、および #414 追加の 19〜25）:
  *   - 収集対象は Dialog / ExpressionChange の立ち絵（webp+png の 2 候補）、Background の背景画像、
@@ -41,6 +41,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
+import * as bgPreload from './backgroundPreload'
 import { resolveAssetUrl, resolveCharacterImageUrls } from './novelLayout'
 import type { Event, EventScene } from '../types'
 
@@ -115,13 +116,13 @@ function hooks(r: NovelRenderer): PreloadHooks {
 }
 
 /**
- * 立ち絵/背景の実表示ロード（Assets.load）と unload を握り潰し、先読みの Assets.backgroundLoad を
+ * 立ち絵/背景の実表示ロード（Assets.load）と unload を握り潰し、先読みの backgroundPreload を
  * spy する共通セットアップ。render は spy で no-op 化し initialized を立てる（tachieTiming と同流儀）。
  */
 function setup(assetBaseUrl: string = BASE) {
   vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
   vi.spyOn(Assets, 'load').mockResolvedValue(Texture.WHITE as never)
-  const bgSpy = vi.spyOn(Assets, 'backgroundLoad').mockResolvedValue(undefined as never)
+  const bgSpy = vi.spyOn(bgPreload, 'backgroundPreload').mockImplementation(() => {})
   const r = new NovelRenderer()
   r.setAssetBaseUrl(assetBaseUrl)
   const h = hooks(r)

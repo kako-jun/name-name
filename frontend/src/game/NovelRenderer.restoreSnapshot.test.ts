@@ -215,22 +215,36 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(r.getSnapshot().eventIndex).toBe(1)
   })
 
-  // ===== C. 異常系: sceneId null（restoreToScene を通さない分岐） =====
+  // ===== C. sceneId null（エントリ文書の線形ストリーム上の位置として復元 #768） =====
 
-  it('R6: sceneId: null → fromJSON(flags) のみ実行され currentSceneId/history は不変、console.warn は呼ばれない', () => {
+  it('R6: sceneId: null → エントリ文書の eventIndex へ flags と一緒に復元され、currentSceneId はエントリのシーン、history は現在位置のみ、console.warn は呼ばれない (#768)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
-    r.startFrom({ sceneId: 'a', flags: { old: boolFlag(true) } })
+    r.startFrom({ sceneId: 'b', flags: { old: boolFlag(true) } })
     warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
-    const sceneBefore = r.getCurrentSceneId()
-    const historyLenBefore = internals(r).history.length
+
+    r.restoreSnapshot(
+      craftSnapshot({ sceneId: null, eventIndex: 1, flags: { fresh: boolFlag(true) } })
+    )
+
+    expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
+    expect(r.getCurrentSceneId()).toBe('a')
+    expect(r.getSnapshot().eventIndex).toBe(1)
+    expect(internals(r).history.length).toBe(1)
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('R6b: sceneId: null の復元も cameraMode/cameraOrientation をスナップショットの値へ宣言的に復元する (#768)', async () => {
+    const r = makeRenderer(CAMERA_SCENES)
+    r.startFrom({ sceneId: 'cam' })
+    await r.playScript([{ type: 'advance' }]) // cam1 -> camera(directive処理) -> cam2
+    expect(r.getSnapshot().cameraMode).toBe('Theater')
+    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
 
     r.restoreSnapshot(craftSnapshot({ sceneId: null, flags: { fresh: boolFlag(true) } }))
 
-    expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBe(sceneBefore)
-    expect(internals(r).history.length).toBe(historyLenBefore)
-    expect(warnSpy).not.toHaveBeenCalled()
+    expect(r.getSnapshot().cameraMode).toBe('Novel')
+    expect(r.getSnapshot().cameraOrientation).toBe('Audience')
   })
 
   // ===== D. 異常系: シーン未発見（フラグだけ復元 + warn） =====
@@ -253,23 +267,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
-  // 19: R6/R7 と同じ2分岐（sceneId: null / シーン未発見）は restoreToScene/applyState を
-  // 通らない（fromJSON(flags) のみ）ため、cameraMode/cameraOrientation も他の宣言的
-  // settled state（isBlackout 等）と同じく変化しないはず。CameraMode 固有のバグでは
-  // なく、この2分岐の一般的な性質であることをロックする (#681)。
-  it('R6b: sceneId: null 分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
-    const r = makeRenderer(CAMERA_SCENES)
-    r.startFrom({ sceneId: 'cam' })
-    await r.playScript([{ type: 'advance' }]) // cam1 -> camera(directive処理) -> cam2
-    expect(r.getSnapshot().cameraMode).toBe('Theater')
-    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
-
-    r.restoreSnapshot(craftSnapshot({ sceneId: null, flags: { fresh: boolFlag(true) } }))
-
-    expect(r.getSnapshot().cameraMode).toBe('Theater')
-    expect(r.getSnapshot().cameraOrientation).toBe('Stage')
-  })
-
+  // 19: シーン未発見分岐は restoreToScene/applyState を通らない（位置・flags とも現状維持 #765）ため、
+  // cameraMode/cameraOrientation も他の宣言的 settled state（isBlackout 等）と同じく変化しない。
+  // CameraMode 固有のバグではなく、この分岐の一般的な性質であることをロックする (#681)。
+  // （sceneId: null は #768 でエントリ文書の復元になり、camera もスナップショットの値へ復元される。R6b）
   it('R7b: シーン未発見分岐は cameraMode/cameraOrientation を変化させない（CameraMode 固有バグでないことのロック）', async () => {
     const r = makeRenderer(CAMERA_SCENES)
     r.startFrom({ sceneId: 'cam' })
@@ -290,17 +291,16 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(() => r.restoreSnapshot(craftSnapshot({ sceneId: 'a', flags: {} }))).not.toThrow()
   })
 
-  it('R12: sceneId: ""（空文字）は null と同じ分岐に落ちる（warn は呼ばれず、シーン未発見扱いにもならない）', () => {
+  it('R12: sceneId: ""（空文字）は null と同じ扱い（エントリ文書の線形ストリームへ復元。warn は呼ばれず、シーン未発見扱いにもならない） (#768)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(SCENES)
     r.startFrom({ sceneId: 'a' })
     warnSpy.mockClear() // 新規開始の DEV 警告（背景なしの原稿）は対象外
-    const sceneBefore = r.getCurrentSceneId()
 
     r.restoreSnapshot(craftSnapshot({ sceneId: '', flags: { f: boolFlag(true) } }))
 
     expect(r.getSnapshot().flags).toEqual({ f: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBe(sceneBefore)
+    expect(r.getCurrentSceneId()).toBe('a')
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
@@ -418,7 +418,10 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
 
   it('K1: allScenes に無い sceneId でも missingSceneResolver 経由でロードされ復元できる（マルチMD再現）', async () => {
     const entryScenes: EventScene[] = [scene('entry-hub', [narration('hub-line')])]
-    const routeScene = scene('r01-01', [narration('route-line-a', 'route-line-b')])
+    const routeScene = scene('r01-01', [
+      narration('route-line-0'),
+      narration('route-line-a', 'route-line-b'),
+    ])
     const resolver = vi.fn(async () => [...entryScenes, routeScene])
 
     const r = new NovelRenderer()
@@ -671,19 +674,19 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(s.eventIndex).toBe(1)
   })
 
-  it('T-B2: textIndex===pageCount（境界）は pageCount-1 にクランプされる（`>=`取り違え検出の本丸）', () => {
+  // adv の textIndex は text 行数で上限が決まる（幅非依存）ので、行数以上は丸めずに範囲外として復元失敗 (#789)。
+  // 幅依存のクランプ（#663）は novel だけが対象（下の F 系）。
+  it.each([
+    ['T-B2: textIndex===pageCount（境界）', 3],
+    ['T-B3: textIndex===pageCount+1（境界外）', 4],
+  ])('%s は out-of-range で復元失敗・位置は不変 (#789)', async (_label, textIndex) => {
     const r = makeRenderer(B_SCENES)
-    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 3 }))
-    const s = r.getSnapshot()
-    expect(s.textIndex).toBe(2)
-    // クランプは textIndex だけに作用する（eventIndex は無変更・#461 との独立性）
-    expect(s.eventIndex).toBe(1)
-  })
-
-  it('T-B3: textIndex===pageCount+1（境界外）も同じく pageCount-1 にクランプされる', () => {
-    const r = makeRenderer(B_SCENES)
-    r.restoreSnapshot(craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex: 4 }))
-    expect(r.getSnapshot().textIndex).toBe(2)
+    const result = await r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'clamp', eventIndex: 1, textIndex })
+    )
+    expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
+    expect(r.getSnapshot().eventIndex).toBe(0)
+    expect(r.getSnapshot().textIndex).toBe(0)
   })
 
   // F系: novel（sentence_per_page:false）は改頁がテキスト領域の高さに依存する。#663 の実バグ
@@ -812,20 +815,24 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     expect(r.getSnapshot().textIndex).toBe(0)
   })
 
-  it('T-Z2: 非テキストイベント（BackgroundColor）は外側ガードにより textIndex が無変更', () => {
+  it('T-Z2: 非テキストイベント（BackgroundColor）に textIndex がある位置は範囲外として復元失敗（位置は不変） (#789)', async () => {
     const r = makeRenderer([
       scene('z2', [narration('l1'), { BackgroundColor: { color: '#000000' } }]),
     ])
-    r.restoreSnapshot(craftSnapshot({ sceneId: 'z2', eventIndex: 1, textIndex: 5 }))
-    expect(r.getSnapshot().textIndex).toBe(5)
+    const result = await r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'z2', eventIndex: 1, textIndex: 5 })
+    )
+    expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
+    expect(r.getSnapshot().textIndex).toBe(0)
   })
 
-  it('T-Z3: eventIndex が resolvedEvents.length 以上でも例外を投げず textIndex は無変更', () => {
+  it('T-Z3: eventIndex が resolvedEvents.length 以上は例外を投げず復元失敗（位置は不変） (#789)', async () => {
     const r = makeRenderer([scene('z3', [narration('only')])])
-    expect(() =>
-      r.restoreSnapshot(craftSnapshot({ sceneId: 'z3', eventIndex: 99, textIndex: 5 }))
-    ).not.toThrow()
-    expect(r.getSnapshot().textIndex).toBe(5)
+    const result = await r.restoreSnapshot(
+      craftSnapshot({ sceneId: 'z3', eventIndex: 99, textIndex: 5 })
+    )
+    expect(result).toEqual({ status: 'failed', reason: 'out-of-range' })
+    expect(r.getSnapshot().textIndex).toBe(0)
   })
 
   it('T-L1: クランプ発火（T-F2と同じ fluid remount 経路）でも console.warn/console.error は呼ばれない', () => {

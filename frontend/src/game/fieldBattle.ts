@@ -239,6 +239,8 @@ export interface OpenFieldBattleArgs {
   roster: FieldBattleRoster
   enemies: BattleEntity[]
   gate: FieldInputGate
+  /** プロジェクトのアセットのベース URL (#746)。レンダラーの状態なので設定ではなく引数で受ける。未設定ならパスをそのまま読む */
+  assetBaseUrl?: string
   /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
   onClosed: (outcome: BattleOutcome) => void
 }
@@ -266,7 +268,7 @@ export function closeFieldBattle(stage: Container, screen: BattleScreen): void {
  * 終了（勝利・逃走・全滅）で画面を畳み、その時点で押されていた矢印キーを離すまで無視する gate を張る。
  */
 export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
-  const { stage, width, height, settings, roster, enemies, gate, onClosed } = args
+  const { stage, width, height, settings, roster, enemies, gate, assetBaseUrl, onClosed } = args
   const party =
     settings.layout === 'side'
       ? buildPartyBattleEntities(roster, settings.layout)
@@ -275,6 +277,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,
     background: settings.background,
+    assetBaseUrl,
     spriteStyle: settings.spriteStyle,
     windowStyle: settings.windowStyle,
     backgroundTone: settings.backgroundTone,
