@@ -849,6 +849,27 @@ describe('旧実装との等価性（全組合せ）', () => {
     expect(rejected).toBe(2 * GATES.length * 2 * 4 - saved)
   })
 
+  it('private saveQuick(auto) を直接呼ぶ防御分岐: 終劇・ゲート別に保存の有無が一致し、常に無言（旧 quickSaveToast と同じ観点）', () => {
+    let saved = 0
+    let rejected = 0
+    for (const ended of [false, true])
+      for (const g of GATES) {
+        const label = JSON.stringify({ ended, g })
+        const s = setup()
+        s.state.storyEnded = ended
+        s.setGate(g)
+        const saveQuick = (s.ctrl as unknown as { saveQuick(o: 'quick' | 'auto'): boolean })
+          .saveQuick
+        expect(saveQuick.call(s.ctrl, 'auto'), label).toBe(refSaves(ended, g))
+        expect(s.toasts, label).toEqual([refSaveToast('auto', ended, g)].filter((x) => x !== null))
+        expect(s.store.hasQuickSave(), label).toBe(refSaves(ended, g))
+        if (refSaves(ended, g)) saved++
+        else rejected++
+      }
+    expect(saved).toBe(1)
+    expect(rejected).toBe(2 * GATES.length - 1)
+  })
+
   it('自動 requestAutoSave→flush: 保存の有無・無言・保存内容・保留の持ち越しが一致', () => {
     let saved = 0
     let pendingKept = 0
