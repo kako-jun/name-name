@@ -720,6 +720,7 @@ export class RaycastRenderer {
    */
   private handleSwipe = (direction: SwipeDirection): void => {
     if (!this.initialized) return
+    if (this.battleBusy) return // 戦闘中（演出中を含む）は一人称も動かさない (#830)
     if (this.dialogBox?.isShowing) return
     if (this.menuOverlay?.isShowing()) {
       this.menuOverlay.hideMenu()

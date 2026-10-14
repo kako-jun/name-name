@@ -43,6 +43,8 @@ type Run =
       elapsed: number
       blackFired: boolean
       interlude: BattleInterlude | undefined
+      /** 追加画面の長さ（外した後も黒の長さの計算に使う） */
+      interludeMs: number
       onBlack: () => void
       onDone: () => void
     }
@@ -102,11 +104,13 @@ export class FieldBattleTransition {
     this.width = width
     this.height = height
     this.ensureOverlay()
+    const interlude = this.hooks.interlude?.(outcome)
     this.run = {
       kind: 'exit',
       elapsed: 0,
       blackFired: false,
-      interlude: this.hooks.interlude?.(outcome),
+      interlude,
+      interludeMs: interlude?.durationMs ?? 0,
       onBlack,
       onDone,
     }
@@ -123,6 +127,7 @@ export class FieldBattleTransition {
   /** 演出を捨てて見た目を元に戻す（コールバックは呼ばない）。load() / destroy() 用 */
   cancel(): void {
     const run = this.run
+    if (!run && !this.overlay) return
     this.run = null
     this.resetStage()
     if (run?.kind === 'exit') this.removeInterlude(run.interlude)
@@ -158,23 +163,29 @@ export class FieldBattleTransition {
       this.setAlpha(s.alpha)
       return
     }
-    const interludeMs = run.interlude?.durationMs ?? 0
-    const s = sampleExit(run.elapsed, this.params, interludeMs)
-    if (s.done) {
-      this.finish()
-      run.onDone()
-      return
-    }
-    if (s.phase !== 'fadeOut' && !run.blackFired) {
+    let s = sampleExit(run.elapsed, this.params, run.interludeMs)
+    if (!run.blackFired && (s.phase !== 'fadeOut' || s.done)) {
+      // 1 tick が大きくフェードアウトを飛び越えても、戦闘画面を畳む onBlack は必ず 1 回呼ぶ
       run.blackFired = true
       run.onBlack()
       if (this.run !== run) return
       // 戦闘画面が畳まれた分、幕を最前面へ置き直し、その上に追加画面を載せる
       if (this.overlay) this.stage.addChild(this.overlay)
       if (run.interlude) this.stage.addChild(run.interlude.container)
+      // 飛び越えた分は黒の延長として扱い、黒（と追加画面）を省略せず見せる
+      run.elapsed = Math.min(run.elapsed, this.params.exitFadeOutMs)
+      s = sampleExit(run.elapsed, this.params, run.interludeMs)
+    }
+    if (s.done) {
+      this.finish()
+      run.onDone()
+      return
     }
     // 追加画面は黒の間だけ見せる（フェードインに入ったら外す）
-    if (s.phase === 'fadeIn') this.removeInterlude(run.interlude)
+    if (s.phase === 'fadeIn' && run.interlude) {
+      this.removeInterlude(run.interlude)
+      run.interlude = undefined
+    }
     this.setAlpha(s.alpha)
   }
 

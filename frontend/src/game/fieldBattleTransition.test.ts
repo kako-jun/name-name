@@ -140,3 +140,64 @@ describe('FieldBattleTransition 終了 (#830)', () => {
     expect(stage.children).toHaveLength(0)
   })
 })
+
+describe('FieldBattleTransition 終了: 大きな dt・端のパラメータ (#830)', () => {
+  const variants = [
+    ['既定', P],
+    ['黒・フェードイン 0', { ...P, exitBlackMs: 0, exitFadeInMs: 0 }],
+    ['全部 0', { ...P, exitFadeOutMs: 0, exitBlackMs: 0, exitFadeInMs: 0 }],
+  ] as const
+
+  it.each(variants)(
+    '%s: 1 tick で完了まで飛んでも onBlack は必ず 1 回、その後 onDone',
+    (_n, params) => {
+      const stage = new Container()
+      const t = new FieldBattleTransition(() => stage, params)
+      const order: string[] = []
+      t.playExit(
+        800,
+        600,
+        'victory',
+        () => order.push('black'),
+        () => order.push('done')
+      )
+      t.tick(100000)
+      t.tick(100000)
+      t.tick(100000)
+      expect(order.filter((o) => o === 'black')).toHaveLength(1)
+      expect(order[0]).toBe('black')
+      expect(order[order.length - 1]).toBe('done')
+      expect(t.active).toBe(false)
+    }
+  )
+
+  it('大きな dt でも追加画面は黒の間に最低でも載り、フェードインで外れる', () => {
+    const stage = new Container()
+    const t = new FieldBattleTransition(() => stage)
+    const extra = new Container()
+    t.hooks = { interlude: () => ({ container: extra, durationMs: 500 }) }
+    t.playExit(
+      800,
+      600,
+      'victory',
+      () => {},
+      () => {}
+    )
+    t.tick(P.exitFadeOutMs + 10_000)
+    expect(t.active).toBe(true)
+    expect(stage.children).toContain(extra)
+    expect(stage.children.indexOf(extra)).toBeGreaterThan(stage.children.length - 3) // 幕より手前
+    const overlayIdx = stage.children.findIndex((c) => c !== extra)
+    expect(stage.children.indexOf(extra)).toBeGreaterThan(overlayIdx)
+    run(t, 500 + P.exitBlackMs + 40)
+    expect(stage.children).not.toContain(extra)
+    expect(t.active).toBe(true)
+  })
+
+  it('演出が無いときの cancel は stage に触らない', () => {
+    const stage = new Container()
+    stage.scale.set(2)
+    new FieldBattleTransition(() => stage).cancel()
+    expect(stage.scale.x).toBe(2)
+  })
+})

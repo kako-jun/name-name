@@ -282,7 +282,6 @@ export class TopDownRenderer {
     this.inputGate.setSuspended(suspended)
   }
 
-  /** リソース解放 */
   /**
    * 戦闘の画面遷移 (#830) のフック。`onTransitionBeat(n)`＝開始のズーム各段の始まり（「ドゥン」の音のきっかけ）、
    * `interlude(outcome)`＝終了の黒の間に挟む追加画面（戦利品の画面 #831 用。既定は何も挟まない）。
@@ -296,6 +295,7 @@ export class TopDownRenderer {
     return this.battleScreen !== null || this.transition.active
   }
 
+  /** リソース解放 */
   destroy(): void {
     this.closeBattle()
     window.removeEventListener('keydown', this.handleKeyDown)

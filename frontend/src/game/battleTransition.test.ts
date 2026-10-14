@@ -51,17 +51,26 @@ describe('sampleEnter (#830)', () => {
     expect(sampleEnter(b.startMs, P).stage).toBe(2)
   })
 
-  it('ズームは単調に増え、暗さも単調に増える', () => {
-    let z = 0
-    let a = 0
-    for (let t = 0; t <= 1200; t += 10) {
-      const s = sampleEnter(t, P)
-      expect(s.zoom).toBeGreaterThanOrEqual(z - 1e-9)
-      expect(s.alpha).toBeGreaterThanOrEqual(a - 1e-9)
-      z = s.zoom
-      a = s.alpha
+  const monoVariants = [
+    P,
+    { ...P, enterStages: [{ startMs: 0, zoom: 2.5, dark: 0.1, easeMs: 0 }], enterFadeStartMs: 50 },
+    { ...P, enterFadeStartMs: 0, enterFadeMs: 0, enterBlackMs: 0 },
+    { ...P, enterStages: [...P.enterStages, { startMs: 700, zoom: 3, dark: 0.8, easeMs: 300 }] },
+  ]
+  it.each(monoVariants.map((p, i) => [i, p] as const))(
+    'ズームも暗さも単調に増える（パラメータ %i）',
+    (_i, params) => {
+      let z = 0
+      let a = 0
+      for (let t = 0; t <= 2000; t += 7) {
+        const s = sampleEnter(t, params)
+        expect(s.zoom).toBeGreaterThanOrEqual(z - 1e-9)
+        expect(s.alpha).toBeGreaterThanOrEqual(a - 1e-9)
+        z = s.zoom
+        a = s.alpha
+      }
     }
-  })
+  )
 
   it('暗転が終わると真っ黒、真っ黒の待ちが済むと done', () => {
     const blackAt = P.enterFadeStartMs + P.enterFadeMs
