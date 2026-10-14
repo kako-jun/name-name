@@ -1394,8 +1394,6 @@ export class BattleScreen extends Container {
       commandCount: this.commands.length,
       commandLayout: this.commandLayout,
       partyRows: s.party.map((p) => p.row),
-      // 立ち絵の縦横比（未読み込み・色四角は undefined → 既定 0.5）。読み込み完了で layout し直される
-      partyAspects: this.partyViews.map((v) => this.layoutAspect(v)),
       // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
       enemyAspects: this.enemyViews.map((v) => this.layoutAspect(v)),
       depth: this.opts.depth,
@@ -1556,11 +1554,20 @@ export class BattleScreen extends Container {
     // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
     // 横長の敵 (#760) は枠の幅が高さより大きいので、正方形はその幅（長辺）にして下端を枠の下端に揃える
     const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
-    const box = acrylic ? Math.max(size, slot.width) : size
+    let box = acrylic ? Math.max(size, slot.width) : size
+    // 味方の枠は固定の基準縦横比 (#813)。枠より横に広い絵は、アクリルの正方形ごと縮めて枠の幅に収める（足元中央は不変）
+    // 縦長の絵（a<=1）は箱の幅いっぱいまで使えるので縮めない。a>1 のとき箱の幅は a でなく 1 を基準にする
+    const isParty = this.partyViews.includes(view)
+    if (acrylic && isParty && view.sprite) {
+      const tex = view.baseVisual?.texture ?? view.sprite.texture
+      const a = tex.height > 0 ? tex.width / tex.height : 0
+      if (a > 0) box = Math.min(box, slot.width / Math.min(1, a))
+    }
     view.baseX = acrylic ? slot.x - (box - slot.width) / 2 : slot.x
     view.baseY = acrylic ? slot.y + size - box : slot.y
     view.unit = size
     view.anchorX = slot.x + slot.width / 2
+    // ダメージ数字の出る高さ: 既定は枠の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
     view.anchorY = slot.y + size * 0.35
     view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
@@ -1570,6 +1577,7 @@ export class BattleScreen extends Container {
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack) {
         this.placeAcrylic(view, box)
+        if (isParty) view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
       } else {
         // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
         const baseTex = view.baseVisual?.texture ?? view.sprite.texture
@@ -1578,6 +1586,7 @@ export class BattleScreen extends Container {
         view.sprite.position.set(r.x, r.y)
         view.sprite.width = r.width
         view.sprite.height = r.height
+        if (isParty) view.anchorY = slot.y + fit.y + fit.height * 0.35
       }
       view.fallback.visible = false
     }

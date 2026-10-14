@@ -442,10 +442,10 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
     expect(internals(r).allScenes.some((s) => s.id === 'far')).toBe(false)
   })
 
-  it('状態を作り直す経路（applyState・restart・setEvents）は pendingEntry を下ろし、古い進行を破棄する', async () => {
+  it('状態を作り直す経路（applyState・startFrom・setEvents）は pendingEntry を下ろし、古い進行を破棄する', async () => {
     const routes: Array<[string, (r: NovelRenderer) => void]> = [
       ['applyState', (r) => internals(r).applyState(craftSnapshot({ sceneId: 'hub' }))],
-      ['restart', (r) => r.restart()],
+      ['startFrom', (r) => r.startFrom({})],
       ['setEvents', (r) => r.setEvents([narration('fresh')])],
     ]
     for (const [name, act] of routes) {
@@ -515,8 +515,8 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
   const B = scene('b', [narration('b1')])
 
   const cancels: Array<[string, (r: NovelRenderer) => void]> = [
-    ['startFrom', (r) => r.startFrom({ sceneId: 'b' })],
-    ['restart', (r) => r.restart()],
+    ['startFrom(sceneId)', (r) => r.startFrom({ sceneId: 'b' })],
+    ['startFrom(entry)', (r) => r.startFrom({})],
     ['setEvents', (r) => r.setEvents([narration('x')])],
     ['applyState', (r) => internals(r).applyState(craftSnapshot({ sceneId: 'b' }))],
     ['別の進行', (r) => void r.jumpToScene('b')],

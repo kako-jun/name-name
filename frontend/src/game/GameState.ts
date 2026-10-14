@@ -195,7 +195,7 @@ export interface NovelGameState {
    * そのシナリオ内で以降表示される全てのキャラクター（`CharacterLayer`）・大道具
    * （`PropLayer`）に輪郭が付く。`cameraMode`/`spotlight` と異なり、場面転換（シーン間
    * ジャンプ）や `endStory()` では自動クリアしない——別の .md（`setEvents()` でのエントリ
-   * 文書差し替え）や `restart()` では `NovelRenderer.resetAndStartEvents` の non-preserve
+   * 文書差し替え）や新規開始（`startFrom({})`）では `NovelRenderer.resetAndStartEvents` の non-preserve
    * 経路がリセットする。`null` = 通常表示（既定）。
    */
   paperDollOutline: PaperDollOutlineConfig | null
@@ -248,6 +248,13 @@ export interface StartFromOptions {
    * 省略・null は解除（制限なし）。`?scene=` の埋め込みが渡す。
    */
   confinedSceneIds?: string[] | null
+  /**
+   * 線形ストリームを流す新規開始 (#777, #817)。`sceneId` がエントリ文書の線形ストリーム上のシーンのとき、
+   * そのシーン先頭からストリーム全体を流し、シーン末尾で終わらず後続のシーンまで再生する（動画書き出しの
+   * 範囲指定が選ぶ）。省略・false は指定シーンの events だけを流して末尾で終劇する（`?scene=` /
+   * `?debug_scene=` の従来挙動）。`sceneId` が無い・線形ストリーム上に無いときは効かない。
+   */
+  linear?: boolean
 }
 
 /**

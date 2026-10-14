@@ -37,6 +37,7 @@ import {
   computeSideBattleLayout,
   estimateTextWidth,
 } from './battleLayout'
+import type { SpriteSlot } from './battleLayout'
 import { computeSlitY } from './acrylicBase'
 import { computeShadowTransform } from './acrylicShadow'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
@@ -69,6 +70,7 @@ interface EntityViewLike {
   acrylicBase: Sprite | null
   acrylicShadow: Sprite | null
   label: Text | null
+  slotRef: SpriteSlot | null
 }
 interface Internals {
   dim: Graphics
@@ -975,6 +977,54 @@ describe('BattleScreen: acrylic (#737)', () => {
       texture: sizedTexture(TEX_W + PLATE_PAD * 2, TEX_H + PLATE_PAD * 2),
       pad: PLATE_PAD,
     })) as never)
+  })
+
+  describe('味方の枠への収め方 (#813・アクリル)', () => {
+    const partyWidths = async (dims: [number, number][]) => {
+      vi.spyOn(Assets, 'load').mockImplementation((async (p: string) => {
+        const i = Number(/p(\d)/.exec(p)![1])
+        return sizedTexture(...dims[i])
+      }) as never)
+      const ids = dims.map((_, i) => `p${i}`)
+      const s = track(make(ids.map(withSprite), [entity('e0')], acrylic))
+      await flushPromises()
+      const L = computeSideBattleLayout({
+        width: 800,
+        height: 450,
+        partyCount: dims.length,
+        enemyCount: 1,
+      })
+      return internals(s).partyViews.map((v, i) => ({
+        spriteW: v.sprite!.width,
+        slotW: L.party[i].width,
+        size: L.party[i].size,
+        slot: v.slotRef!,
+      }))
+    }
+    it('横長の絵（縦横比 2 と 1.5）は枠の幅に収まり、必要以上には縮まない（枠幅の 0.7 倍以上）', async () => {
+      const r = await partyWidths([
+        [100, 50],
+        [75, 50],
+      ])
+      for (const x of r) {
+        expect(x.spriteW).toBeLessThanOrEqual(x.slotW + 1e-6)
+        expect(x.spriteW).toBeGreaterThanOrEqual(x.slotW * 0.7)
+      }
+    })
+    it('縦長の絵（縦横比 0.4 と 0.8）は縮めない（正方形の箱 = 枠の高さのまま）', async () => {
+      const r = await partyWidths([
+        [40, 100],
+        [80, 100],
+      ])
+      const dims = [
+        [40, 100],
+        [80, 100],
+      ]
+      r.forEach((x, i) => {
+        const g = computeAcrylicGeometry(dims[i][0], dims[i][1], x.size, resolveAcrylicParams())
+        expect(x.spriteW).toBeCloseTo(g.sprite.width, 6)
+      })
+    })
   })
 
   describe('none（回帰）', () => {
@@ -2793,18 +2843,18 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
       vi.spyOn(Assets, 'load').mockImplementation((async (p: string) =>
         sized(...(dims[p] ?? [TEX_W, TEX_H]))) as never)
     }
-    it('読み込み前の味方の枠は縦横比 0.5・敵は 1（正方形）', () => {
+    it('読み込み前の味方の枠は基準縦横比 0.8・敵は 1（正方形）', () => {
       loadBy({})
       vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>(() => {}) as never)
       const s = track(make([withSprite('p0')], [withSprite('e0')], { layout: 'side' }))
       const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 1, enemyCount: 1 })
-      expect(L.party[0].width / L.party[0].size).toBeCloseTo(0.5, 9)
+      expect(L.party[0].width / L.party[0].size).toBeCloseTo(0.8, 9)
       expect(L.enemies[0].width / L.enemies[0].size).toBeCloseTo(1, 9)
       // 画面の色四角（fallback）は枠の幅に合わせた縦長
       const fb = internals(s).partyViews[0].fallback.getLocalBounds()
       expect(fb.width).toBeCloseTo(L.party[0].width * 0.7, 6)
     })
-    it('味方の立ち絵（40x100）を読み込むと枠が縦横比 0.4 になり、スプライトは枠いっぱい', async () => {
+    it('味方の立ち絵（40x100）を読み込んでも枠は基準縦横比 0.8 のまま、スプライトは高さいっぱいで枠の中央に収まる', async () => {
       loadBy({ 'img/p0.webp': [40, 100] })
       const s = track(make([withSprite('p0')], [entity('e0')], { layout: 'side' }))
       await flushPromises()
@@ -2813,13 +2863,12 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         height: 450,
         partyCount: 1,
         enemyCount: 1,
-        partyAspects: [0.4],
       })
       const sp = internals(s).partyViews[0].sprite!
       expect(sp.height).toBeCloseTo(L.party[0].size, 6)
       expect(sp.width).toBeCloseTo(L.party[0].size * 0.4, 6)
     })
-    it('味方の立ち絵が極端に横長（300x100）でも枠は縦横比 1.5 に丸められ、スプライトは枠に収まる', async () => {
+    it('味方の立ち絵が極端に横長（300x100）でも枠は基準縦横比 0.8 のまま、スプライトは枠に収まる', async () => {
       loadBy({ 'img/p0.webp': [300, 100] })
       const s = track(make([withSprite('p0')], [entity('e0')], { layout: 'side' }))
       await flushPromises()
@@ -2828,12 +2877,55 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         height: 450,
         partyCount: 1,
         enemyCount: 1,
-        partyAspects: [3],
       })
-      expect(L.party[0].width / L.party[0].size).toBeCloseTo(1.5, 9)
+      expect(L.party[0].width / L.party[0].size).toBeCloseTo(0.8, 9)
       const sp = internals(s).partyViews[0].sprite!
       expect(sp.width).toBeLessThanOrEqual(L.party[0].width + 1e-6)
       expect(sp.height).toBeLessThanOrEqual(L.party[0].size + 1e-6)
+    })
+    it('縦横比の違う味方（太い 100x100・細い 35x100）はどちらも自分の枠に収まり、枠は絵の読み込み前後で動かない (#813)', async () => {
+      loadBy({ 'img/p0.webp': [100, 100], 'img/p1.webp': [35, 100] })
+      const s = track(
+        make([withSprite('p0'), withSprite('p1')], [entity('e0')], { layout: 'side' })
+      )
+      const before = internals(s).partyViews.map((v) => ({ ...v.slotRef! }))
+      await flushPromises()
+      const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 2, enemyCount: 1 })
+      for (let i = 0; i < 2; i++) {
+        const v = internals(s).partyViews[i]
+        expect(v.slotRef!.x).toBeCloseTo(before[i].x, 9)
+        expect(v.slotRef!.width).toBeCloseTo(before[i].width, 9)
+        expect(v.slotRef!.x).toBeCloseTo(L.party[i].x, 6)
+        const sp = v.sprite!
+        const left = v.container.x + sp.x
+        expect(left).toBeGreaterThanOrEqual(L.party[i].x - 1e-6)
+        expect(left + sp.width).toBeLessThanOrEqual(L.party[i].x + L.party[i].width + 1e-6)
+        expect(sp.height).toBeLessThanOrEqual(L.party[i].size + 1e-6)
+      }
+    })
+    it('縦横比が違う4人でも、先頭2人の枠は2人編成のときと同じ (#813)', async () => {
+      loadBy({
+        'img/p0.webp': [35, 100],
+        'img/p1.webp': [100, 50],
+        'img/p2.webp': [60, 100],
+        'img/p3.webp': [90, 100],
+      })
+      const four = track(
+        make(
+          [...'0123'].map((i) => withSprite(`p${i}`)),
+          [entity('e0')],
+          { layout: 'side' }
+        )
+      )
+      const two = track(
+        make([withSprite('p0'), withSprite('p1')], [entity('e0')], { layout: 'side' })
+      )
+      await flushPromises()
+      for (let i = 0; i < 2; i++) {
+        const f = internals(four).partyViews[i].slotRef!
+        const t = internals(two).partyViews[i].slotRef!
+        expect([t.x, t.y, t.size, t.width]).toEqual([f.x, f.y, f.size, f.width])
+      }
     })
     it('敵の立ち絵（160x100）を読み込むと敵の枠の幅が高さの 1.6 倍になる', async () => {
       loadBy({ 'img/e0.webp': [160, 100] })

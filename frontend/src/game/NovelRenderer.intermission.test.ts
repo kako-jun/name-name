@@ -468,9 +468,9 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     expect(showImageSpy).toHaveBeenCalledWith(expect.objectContaining({ instant: false }))
   })
 
-  // ===== I. タイマーキャンセル経路（restart / applyState / destroy） =====
+  // ===== I. タイマーキャンセル経路（startFrom / applyState / destroy） =====
 
-  it('13: endStory 後 delay 経過前に restart() を呼ぶと intermissionTimer がキャンセルされ、tableau は描画されない', () => {
+  it('13: endStory 後 delay 経過前に startFrom({}) を呼ぶと intermissionTimer がキャンセルされ、tableau は描画されない', () => {
     const r = makeRenderer(SCENES)
     r.getTimeController().setMode('virtual')
     internals(r).initialized = true
@@ -483,7 +483,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     r.jumpToScene('out-scene')
     expect(internals(r).intermissionTimer).not.toBeNull()
 
-    r.restart()
+    void r.startFrom({})
     expect(internals(r).intermissionTimer).toBeNull()
 
     r.getTimeController().tick(200) // 元の delay を過ぎても描画されない
@@ -657,20 +657,20 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     expect(internals(r).dialogBox.dialogText.text).toBe('') // Wait 後の内容は反映されない
   })
 
-  it('23: Wait 待機中に restart()（resetAndStartEvents 経由）すると intermissionTimer がキャンセルされ、新しいシーン側に正しく上書きされる（デシジョンテーブル#7）', () => {
+  it('23: Wait 待機中に startFrom({})（resetAndStartEvents 経由）すると intermissionTimer がキャンセルされ、新しいシーン側に正しく上書きされる（デシジョンテーブル#7）', () => {
     const r = makeRenderer(SCENES)
     setupWaitStaging(r, [wait(200), dialog(null, '後')])
     expect(internals(r).intermissionTimer).not.toBeNull()
 
-    r.restart() // rawEvents は jumpToScene(圏外)/endStory では書き換わらないため entry の内容に戻る
+    void r.startFrom({}) // rawEvents は jumpToScene(圏外)/endStory では書き換わらないため entry の内容に戻る
     expect(internals(r).intermissionTimer).toBeNull()
-    // restart() 後の通常再生はタイプライター中（Pixi Ticker は jsdom で自動進行しないため
+    // startFrom({}) 後の通常再生はタイプライター中（Pixi Ticker は jsdom で自動進行しないため
     // dialogText.text は空のまま）。renderIntermissionTableau と違い skipTypewriter を
     // 自動で挟まないので、DialogBox.test.ts と同じ流儀で msPerChar=0 にして即時 reveal させる。
     internals(r).dialogBox.setMsPerChar(0)
 
     r.getTimeController().tick(200)
-    // Wait 後の内容('後')が漏れ出さず、restart() が復元した entry シーン側の内容('start')に
+    // Wait 後の内容('後')が漏れ出さず、startFrom({}) が復元した entry シーン側の内容('start')に
     // 正しく上書きされている。
     expect(internals(r).dialogBox.dialogText.text).toBe('start')
   })
