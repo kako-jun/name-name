@@ -120,6 +120,9 @@ function EditorScreen({
   // ロード時に getContents() のレスポンスから設定し、PUT 成功時に新しい sha で更新する。
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
+  // rawMarkdown がどのパスの文書の内容か。下書きキーは currentScriptPath でなくこちらから作る
+  // （タブ切替後、切替先のロード完了までに旧文書を編集しても、切替先のキーに旧文書を書かない #795）。
+  const [rawMarkdownPath, setRawMarkdownPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   // 保存の await 中に編集が進んだかを判定するため、常に最新の内容を指す
   const rawMarkdownRef = useRef('')
   rawMarkdownRef.current = rawMarkdown
@@ -182,6 +185,12 @@ function EditorScreen({
       setExportEndSceneId(allSceneIds[allSceneIds.length - 1])
     }
   }, [allSceneIds, exportStartSceneId, exportEndSceneId])
+
+  // モードやタブを切り替えると書き出しモーダルはアンマウントされるので、開いている扱いも閉じる
+  // （残るとファイルタブが理由不明のまま無効になる）。
+  useEffect(() => {
+    setExportOpen(false)
+  }, [mode, editorTab])
 
   const handleStartVideoExport = useCallback(async () => {
     const renderer = novelRendererRef.current
@@ -280,13 +289,31 @@ function EditorScreen({
   // rawMarkdown の更新は autosave useEffect 経由で Worker に PUT される。
   // emit が失敗した場合は rawMarkdown と doc の desync を避けるため、doc を元に戻す。
   const handleDocChange = async (newDoc: EventDocument) => {
+    // 切替先のロード中（表示中の doc が編集中パスの文書でない間）は編集を受け付けない。
+    // 受け付けると旧文書の内容が切替先のロードで黙って消える (#795)。UI 側も読み取り専用にしている。
+    if (docPathRef.current !== currentScriptPathRef.current) return
+    // 編集対象の文書のパスは呼び出し時点で控える（emit の await 中にタブが切り替わっても取り違えない）
+    const editedPath = docPathRef.current ?? currentScriptPathRef.current
     const prev = doc
     setDoc(newDoc)
     try {
       const md = await emitMarkdown(newDoc)
+      if (docPathRef.current !== editedPath) {
+        // emit の await 中に別の文書へ切り替わった。表示は切替先のものなので rawMarkdown には
+        // 反映せず、編集した文書の下書きとして退避だけする。
+        try {
+          localStorage.setItem(localStorageKey(projectName, editedPath), md)
+        } catch {
+          // ignore
+        }
+        return
+      }
       setRawMarkdown(md)
+      setRawMarkdownPath(editedPath)
     } catch (err) {
       console.error('emitMarkdown failed:', err)
+      // emit の await 中に別の文書へ切り替わっていたら、表示は切替先のものなので戻さない
+      if (docPathRef.current !== editedPath) return
       setDoc(prev)
       setSaveError('Markdown生成に失敗したため変更を破棄しました')
     }
@@ -373,6 +400,14 @@ function EditorScreen({
   const [docPath, setDocPath] = useState<string | null>(null)
   const docPathRef = useRef<string | null>(null)
   docPathRef.current = docPath
+  // 切替先のロード中か（表示中の doc が編集中パスの文書でない間）。この間は編集 UI を読み取り専用にする。
+  const switchingDoc = docPath !== currentScriptPath
+  // React 18 は inert 属性を型・値として扱えないため、DOM に直接付け外しする
+  // （フォーカス・キー入力・クリックをまとめて止める）。
+  const mainRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    mainRef.current?.toggleAttribute('inert', switchingDoc)
+  }, [switchingDoc])
   const currentScriptPathRef = useRef(currentScriptPath)
   currentScriptPathRef.current = currentScriptPath
   const loadedOtherDocsRef = useRef<Map<string, EventDocument>>(new Map())
@@ -400,7 +435,7 @@ function EditorScreen({
     loadingOtherDocsRef.current = new Map()
     setLazyOtherScenes([])
   }, [])
-  // プロジェクト切替でも捨てる（現状は App が key で再マウントするが、念のため）
+  // プロジェクト切替でも捨てる（App が key={projectName} で再マウントするので通常は再マウントで足りる。念のための保険）
   useEffect(() => {
     resetOtherDocsCache()
   }, [api, projectName, resetOtherDocsCache])
@@ -408,6 +443,8 @@ function EditorScreen({
   const switchScript = useCallback(
     (path: string) => {
       resetOtherDocsCache()
+      // 旧文書の未保存表示を引きずらない（切替先のロード完了で下書きの有無から再計算される）
+      setHasUnsavedChanges(false)
       setCurrentScriptPath(path)
     },
     [resetOtherDocsCache]
@@ -596,6 +633,7 @@ function EditorScreen({
         await parseAndSetDoc(startMarkdown, () => cancelled)
         if (cancelled) return
         setRawMarkdown(startMarkdown)
+        setRawMarkdownPath(currentScriptPath)
         setDocPath(currentScriptPath)
         // 既定パス(script.md)の先行ロード失敗で出た読み込みエラーは、再ロード成功で消す
         setSaveError((prev) => (prev === LOAD_FAILED_MESSAGE ? null : prev))
@@ -623,8 +661,9 @@ function EditorScreen({
     // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
   }, [api, projectName, currentScriptPath, scriptListSettled])
 
-  // プロジェクトが変わったら、開くファイル・一覧・doc の所属を初期状態に戻す（通常は App が
-  // key で再マウントするが、再マウントされなくても前のプロジェクトの状態を引きずらない）。
+  // プロジェクトが変わったら、開くファイル・一覧・doc の所属を初期状態に戻す（App が
+  // key={projectName} で再マウントするので通常は不要。再マウントされなくても前のプロジェクトの
+  // 状態を引きずらないための保険）。
   // 初回マウントでは同じ値の再設定になるだけ。
   const projectRef = useRef(projectName)
   useEffect(() => {
@@ -746,8 +785,19 @@ function EditorScreen({
     if (draftSaveTimeoutRef.current !== null) {
       clearTimeout(draftSaveTimeoutRef.current)
     }
+    const nextKey = localStorageKey(projectName, rawMarkdownPath)
+    const stale = pendingDraftRef.current
+    if (stale && stale.key !== nextKey) {
+      // 別文書の保留分が残っていたら（emit の await 中にタブが切り替わった等）、上書きで失う前に
+      // 下書きとして確定する（その文書の基準内容はここでは分からないので、常に退避する）
+      try {
+        localStorage.setItem(stale.key, stale.markdown)
+      } catch (error) {
+        console.error('Failed to persist draft to localStorage:', error)
+      }
+    }
     pendingDraftRef.current = {
-      key: localStorageKey(projectName, currentScriptPath),
+      key: nextKey,
       markdown: rawMarkdown,
     }
     draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
@@ -759,7 +809,7 @@ function EditorScreen({
         draftSaveTimeoutRef.current = null
       }
     }
-  }, [rawMarkdown, projectName, loadFailed, flushPendingDraft])
+  }, [rawMarkdown, rawMarkdownPath, projectName, loadFailed, flushPendingDraft])
 
   // タブ（ファイル）切替・プロジェクト切替・アンマウントの直前に、保留中の下書きを即確定する。
   // cleanup は同じ commit の全 effect 本体より先に走るため、initialMarkdownRef がまだ旧文書の値のうちに比較できる。
@@ -779,6 +829,7 @@ function EditorScreen({
     setIsSaving(true)
     setSaveError(null)
     // 保存中はタブ切替を無効にしている（下のタブ UI）ので、PUT の await 中に編集中の文書は変わらない。
+    // プロジェクトも App の key={projectName} 再マウントで変わらない前提（保存中に projectName は不変）。
     const savedPath = currentScriptPath
     try {
       const sha = shaRef.current
@@ -831,6 +882,9 @@ function EditorScreen({
   //   順序にする。
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
+    // 切替先のロード中は破棄しない（表示中の旧文書を捨てるつもりでも、取り直しと下書き削除は
+    // currentScriptPath＝切替先に対して走り、切替先の未保存の下書きを消してしまう）。
+    if (docPathRef.current !== currentScriptPathRef.current) return
     setIsSaving(true)
     setSaveError(null)
     try {
@@ -856,6 +910,7 @@ function EditorScreen({
       setLoadFailed(false)
       initialMarkdownRef.current = markdown
       setRawMarkdown(markdown)
+      setRawMarkdownPath(currentScriptPath)
       await parseAndSetDoc(markdown)
       // discard で doc が差し替わるため、選択状態・CanvasEditor 内部 state を完全リセット
       setSelectedEvent(null)
@@ -1034,11 +1089,12 @@ function EditorScreen({
                   key={s.path}
                   role="tab"
                   aria-selected={isActive}
-                  // 保存・破棄の通信中は切り替えない（sha・基準内容・下書きが別文書のものと混ざるのを防ぐ）
-                  disabled={isSaving}
-                  aria-disabled={isSaving}
+                  // 保存・破棄の通信中と、動画書き出しのモーダルを開いている間は切り替えない
+                  // （sha・基準内容・下書きが別文書のものと混ざるのを防ぐ／切替先のロード中の inert でモーダルが操作不能になるのを防ぐ）
+                  disabled={isSaving || exportOpen}
+                  aria-disabled={isSaving || exportOpen}
                   onClick={() => {
-                    if (isSaving) return
+                    if (isSaving || exportOpen) return
                     if (s.path === currentScriptPath) return
                     if (
                       hasUnsavedChanges &&
@@ -1052,7 +1108,9 @@ function EditorScreen({
                     // 切替後の load は currentScriptPath を依存に入れた useEffect が処理する
                   }}
                   className="desk-tab"
-                  style={isSaving ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                  style={
+                    isSaving || exportOpen ? { opacity: 0.5, cursor: 'not-allowed' } : undefined
+                  }
                   title={s.title ?? s.path}
                 >
                   {s.path}
@@ -1088,7 +1146,18 @@ function EditorScreen({
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main ref={mainRef} className="relative flex-1 overflow-hidden">
+        {switchingDoc && doc !== null && (
+          // 切替先のロード中: 旧文書が見えているが編集はできないことを示す
+          <div
+            data-testid="doc-switching-overlay"
+            className={`absolute inset-0 z-40 flex items-center justify-center ${
+              isDark ? 'bg-gray-900/60 text-gray-200' : 'bg-white/60 text-gray-700'
+            }`}
+          >
+            読み込み中...
+          </div>
+        )}
         {editorTab === 'novel' ? (
           mode === 'edit' ? (
             doc !== null ? (
@@ -1365,6 +1434,7 @@ function EditorScreen({
               </button>
               <button
                 onClick={handleDiscard}
+                disabled={isSaving}
                 className={`px-4 py-2 rounded font-medium transition-colors ${
                   isDark
                     ? 'bg-red-600 hover:bg-red-700 text-white'
@@ -1407,6 +1477,8 @@ function EditorScreen({
         mode={editorTab === 'novel' ? mode : undefined}
         onModeChange={editorTab === 'novel' ? setMode : undefined}
         // PR #120 review Q1: shaRef 未取得（loadFailed / 未ロード）時は保存不可。
+        discardDisabled={switchingDoc}
+        discardDisabledTitle="読み込み中…"
         saveDisabled={loadFailed || !hasSha}
         saveDisabledTitle={
           loadFailed ? '再読み込みしてから保存してください' : !hasSha ? '読み込み中…' : undefined

@@ -11,6 +11,9 @@ interface SaveDiscardButtonsProps {
   //   未指定なら従来挙動（hasUnsavedChanges のみで判断）。
   saveDisabled?: boolean
   saveDisabledTitle?: string
+  // 破棄ボタンを強制 disabled にする条件（切替先のロード中など）。title は discardDisabledTitle。
+  discardDisabled?: boolean
+  discardDisabledTitle?: string
 }
 
 function SaveDiscardButtons({
@@ -23,6 +26,8 @@ function SaveDiscardButtons({
   onModeChange,
   saveDisabled = false,
   saveDisabledTitle,
+  discardDisabled = false,
+  discardDisabledTitle,
 }: SaveDiscardButtonsProps) {
   const saveEnabled = hasUnsavedChanges && !isSaving && !saveDisabled
   const saveTitle = saveDisabled
@@ -82,7 +87,7 @@ function SaveDiscardButtons({
         {/* アンドゥボタン */}
         <button
           className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-            hasUnsavedChanges && !isSaving
+            hasUnsavedChanges && !isSaving && !discardDisabled
               ? isDark
                 ? 'bg-gray-700 text-white border-gray-600 hover:bg-gray-600'
                 : 'bg-gray-400 text-white border-gray-300 hover:bg-gray-500'
@@ -91,8 +96,14 @@ function SaveDiscardButtons({
                 : 'bg-gray-200 text-gray-400 border-gray-300 cursor-not-allowed'
           }`}
           onClick={onDiscard}
-          disabled={!hasUnsavedChanges || isSaving}
-          title={hasUnsavedChanges ? '変更を破棄' : '変更なし'}
+          disabled={!hasUnsavedChanges || isSaving || discardDisabled}
+          title={
+            discardDisabled
+              ? (discardDisabledTitle ?? '破棄できません')
+              : hasUnsavedChanges
+                ? '変更を破棄'
+                : '変更なし'
+          }
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
