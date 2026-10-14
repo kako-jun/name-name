@@ -103,7 +103,7 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   castBlurRatio: 0.012,
   spriteLiftRatio: 0.03,
   stemWidthRatio: 0.28,
-  stemMinGapRatio: 0.08,
+  stemMinGapRatio: 0.06,
   hasBase: true,
   baseWidthRatio: 0.7,
   baseHeightRatio: 0.28,

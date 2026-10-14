@@ -459,3 +459,27 @@ describe('computeStem / stampStem: 浮く絵を台座へつなぐ帯 (#848)', ()
     expect(Array.from(on.rgba)).toEqual(Array.from(off.rgba))
   })
 })
+
+describe('computeStem: 既定の閾値付近の回帰 (#848)', () => {
+  const w = 100
+  const h = 100
+  const P6 = resolveAcrylicParams()
+  /** 中央が bottomY（0 始まり）まで不透明な絵。gap = (h-1-bottomY)/h */
+  const withGap = (gap: number): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    const bottomY = h - 1 - Math.round(gap * h)
+    for (let y = 10; y <= bottomY; y++) for (let x = 20; x < 80; x++) a[y * w + x] = 255
+    return a
+  }
+  it('既定は 0.06', () => {
+    expect(P6.stemMinGapRatio).toBe(0.06)
+  })
+  it.each([
+    [0.05, false],
+    [0.06, true],
+    [0.07, true],
+    [0.09, true],
+  ])('gap=%s の帯の有無は %s', (gap, expected) => {
+    expect(computeStem(withGap(gap), w, h, 3, P6) !== null).toBe(expected)
+  })
+})

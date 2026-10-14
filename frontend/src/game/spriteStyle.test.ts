@@ -56,7 +56,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       castBlurRatio: 0.012,
       spriteLiftRatio: 0.03,
       stemWidthRatio: 0.28,
-      stemMinGapRatio: 0.08,
+      stemMinGapRatio: 0.06,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -89,7 +89,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       castBlurRatio: 0.012,
       spriteLiftRatio: 0.03,
       stemWidthRatio: 0.28,
-      stemMinGapRatio: 0.08,
+      stemMinGapRatio: 0.06,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -150,7 +150,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         castBlurRatio: 0.012,
         spriteLiftRatio: 0.03,
         stemWidthRatio: 0.28,
-        stemMinGapRatio: 0.08,
+        stemMinGapRatio: 0.06,
         hasBase: true,
         baseWidthRatio: 0.7,
         baseHeightRatio: 0.28,
@@ -744,6 +744,6 @@ describe('resolveAcrylicParams: ステム (#848)', () => {
     expect(resolveAcrylicParams({ stemWidthRatio: NaN }).stemWidthRatio).toBe(0.28)
     expect(resolveAcrylicParams({ stemMinGapRatio: 0 }).stemMinGapRatio).toBe(0.01)
     expect(resolveAcrylicParams({ stemMinGapRatio: 5 }).stemMinGapRatio).toBe(1)
-    expect(resolveAcrylicParams({ stemMinGapRatio: NaN }).stemMinGapRatio).toBe(0.08)
+    expect(resolveAcrylicParams({ stemMinGapRatio: NaN }).stemMinGapRatio).toBe(0.06)
   })
 })
