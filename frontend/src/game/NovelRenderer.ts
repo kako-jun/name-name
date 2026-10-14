@@ -1634,6 +1634,7 @@ export class NovelRenderer {
         id: entryId ?? '',
         title: '',
         view: 'TopDown',
+        // readonly を通すためのコピー。restoreToScene が再度コピーするので挙動は変わらない
         events: [...this.sceneIndex.getEntryEvents()],
       }
       // sceneId はエントリの識別子に正規化する（loadEvents なら null。空文字のセーブも同じ扱い）。
