@@ -74,22 +74,16 @@ import { buildDebugState, type DebugState } from './debugState'
 import { isSceneIdConfined } from './sceneConfinement'
 import { PlaybackCursor } from './PlaybackCursor'
 import { SceneIndex, type SceneLookup } from './SceneIndex'
+import { JUMP_CHAIN_LIMIT, TransitionState } from './TransitionState'
 import {
   carryPolicyFor,
-  createDeferred,
-  gateReason,
-  isTransitionGated,
   lacksLeadingBackground,
-  type Deferred,
-  type GatedOperation,
   type LoadOrigin,
-  type PendingEntry,
   type SceneEntryRequest,
   type SceneEntryResult,
   findRestorePositionError,
   segmentAt,
   type ResolvedSegment,
-  type TransitionGateState,
 } from './sceneEntry'
 import {
   CameraElevation,
@@ -615,64 +609,11 @@ export class NovelRenderer {
    *  別の Dialog に進んだ後に古い family が `setFontFamily` で上書きされる事故を防ぐ。 */
   private currentResolvedFontFamily: string | null = null
 
-  /** 選択肢表示中フラグ */
-  private waitingForChoice = false
-  /** 選択肢クリック直後の同フレーム advance を抑制するフラグ (#211) */
-  private justSelectedChoice = false
-
-  /**
-   * SeekBar 操作（タップ/クリックでシーク）直後の同フレーム advance を抑制するフラグ (#350)。
-   * SeekBar の clickRegion(Pixi federated) は canvas の DOM pointerdown(handleAdvance) より先に
-   * 発火する（Pixi の EventSystem が init() で先に canvas へ listener を張るため）。スライダを
-   * 常時タップ可能にした結果、下端帯タップが「シーク＋1つ進む」と二重発火するのを防ぐ
-   * （justSelectedChoice と同型の抑制）。 */
-  private suppressNextAdvance = false
-
-  /** 本文なしで連続できる `[ジャンプ:]` の上限 (#725)。TUI の `RELAY_HOP_LIMIT` と同値。 */
-  private static readonly JUMP_CHAIN_LIMIT = 100
-  /** Wait イベント実行中フラグ（`[待機]` 専用。Jump の遷移状態は `jumpState` が持つ、#733） */
-  private waitingForWait = false
-  /**
-   * `[ジャンプ:]` の遷移状態 (#733)。`[待機]` 用の `waitingForWait` とは独立した 1 役のフラグ。
-   * - `idle`: Jump を実行していない（通常）
-   * - `pending`: 遷移を予約済み（次の macrotask の発火待ち・遅延ロード往復中）。`[待機]` と同様に
-   *   進行・シーク・セーブ・ロードを受け付けない
-   * - `stalled`: 遷移先不在・循環上限で Jump 位置に停止中。`advance`・セーブは弾くが、
-   *   `goBack`・シーク・クイックロードは使える
-   * GameState には載せない。`applyState`（全復元経路）で `idle` に戻し、復元後の位置が Jump なら
-   * `armJump` で再予約する（位置から導出。停止状態は復元をまたいで持ち越さない）。
-   */
-  private jumpState: 'idle' | 'pending' | 'stalled' = 'idle'
-  /** Jump の遷移を発火する timer。`[待機]` の `waitTimer` とは別 (#733)。 */
-  private jumpTimer: number | null = null
   /**
    * シーン入場後の自動セーブが保留中か (#768)。`requestAutoSave()` で立て、そのシーンで最初の本文が
    * 表示されゲートが開いた時点（`flushAutoSave`）で1回保存して下ろす。新しい入場・復元で破棄する。
    */
   private autoSavePending = false
-  /**
-   * 遷移文脈の世代 (#733)。再生位置が別の文脈へ移る箇所（armJump・resetAndStartEvents・applyState）で
-   * 進める。resolveMissingSceneAndJump は開始時に捕捉し、await 後に不一致なら（遅延ロード中に
-   * startFrom/復元/再遷移が入った）古い解決を破棄して何もしない。
-   */
-  private transitionGeneration = 0
-  /**
-   * 入場中ゲート (#734)。遅延ロードの往復を待っている間だけ立つ（`jumpState` とは別の役）。
-   * 読み込み済みのシーンへの同期の入場では立てない（待つ間が無いので、ゲートの隙間も生まれない）。
-   * 予約中の `[ジャンプ:]` は、`armJump` の時点（タイマーが発火する前）で Promise 付きで立てる。
-   * `playScript` はこの Promise を待つ。
-   */
-  private pendingEntry: PendingEntry | null = null
-  /** 予約中の Jump の deferred (#734)。タイマーを取り消す経路はすべて `clearJumpTimer` で superseded 解決する。 */
-  private jumpDeferred: Deferred<SceneEntryResult> | null = null
-  /**
-   * 本文を描画しないまま連続して実行した `[ジャンプ:]` の回数 (#725)。Jump のみのシーン同士の
-   * 循環（a → b → a …）が macrotask ごとに永久に回らないよう、`JUMP_CHAIN_LIMIT` で打ち切る
-   * （TUI の `RELAY_HOP_LIMIT` と同じ 100）。本文の描画（pushSnapshot）・ユーザー操作（advance）・
-   * 状態復元（applyState）・setScenes でリセットする。
-   */
-  private consecutiveJumps = 0
-
   /** playScript 実行中フラグ（再入ガード用 #220） */
   private isReplaying = false
 
@@ -682,6 +623,12 @@ export class NovelRenderer {
   private waitDisplayCompleteTimer: number | null = null
   /** タイマー抽象化レイヤー (#228 動画エクスポート対応の土台) */
   private time: TimeController = defaultTimeController
+
+  /**
+   * 遷移ゲートと `[ジャンプ:]` 予約の状態機械 (#825)。`waitingForChoice` / `waitingForWait` / `jumpState` /
+   * `pendingEntry` / 世代 / 入力抑制フラグの唯一の書き手。レンダラは getter で読み、書き込みはメソッド経由。
+   */
+  private readonly transition = new TransitionState(this.time, () => this.setSkipMode(false))
 
   /** シーン索引・エントリ文書・遅延ロード・線形区間 (#823)。再生中の配列（rawEvents）は持たない */
   private readonly sceneIndex = new SceneIndex()
@@ -1042,7 +989,7 @@ export class NovelRenderer {
     // シークバー（シナリオスライダ）。つまみ中心は下部丸ボタンの中央を貫く高さ (#350)。
     this.seekBar.setOnSeek((displayIndex) => {
       // スライダ操作は「シーク」であって「1つ進む」ではない。同フレームの handleAdvance を抑止する (#350)。
-      this.suppressNextAdvance = true
+      this.transition.suppressNextAdvance()
       this.seekToTextEventDisplayIndex(displayIndex)
     })
     // active 変化を React 側へ伝え、丸ボタン行をフェード退避させる (#350)。
@@ -1050,7 +997,7 @@ export class NovelRenderer {
       // 起こすタップ（inactive→active）でも本文を送らないよう、この native pointerdown の後続
       // handleAdvance を 1 回抑止する (#350)。シーク無しの「操作可能化だけ」のタップでも、同フレームの
       // canvas pointerdown で dialogue が進むのを防ぐ（onSeek 経路と同じ suppressNextAdvance を使う）。
-      if (active) this.suppressNextAdvance = true
+      if (active) this.transition.suppressNextAdvance()
       this.onSeekActiveChange?.(active)
     })
     this.app.stage.addChild(this.seekBar)
@@ -1153,9 +1100,9 @@ export class NovelRenderer {
       resolvedEvents: this.cursor.resolvedEvents,
       eventIndex: this.cursor.eventIndex,
       autoMode: this.autoMode,
-      waitingForChoice: this.waitingForChoice,
-      waitingForWait: this.waitingForWait,
-      jumpState: this.jumpState,
+      waitingForChoice: this.transition.waitingForChoice,
+      waitingForWait: this.transition.waitingForWait,
+      jumpState: this.transition.jumpState,
       currentResolvedFontFamily: this.currentResolvedFontFamily,
       sceneId: this.getPlayheadSceneId(),
       audioWarning: this.audioManager.getLastWarning(),
@@ -1300,97 +1247,28 @@ export class NovelRenderer {
   }
 
   /**
-   * playScript 用 (#725/#734): 進行中の入場（予約中の `[ジャンプ:]`・遅延ロード中の遷移）があれば、
-   * その Promise が解決するまで待ってから次のステップへ進む。これが無いと、Jump 直後の
-   * `advance` ステップが遷移前に消化される。予約を取り消す経路は deferred を superseded で解決する
-   * ので、ここで待ち続けて止まることはない。待った場合は true を返す。
-   */
-  private async awaitPendingEntry(): Promise<boolean> {
-    const promise = this.pendingEntry?.promise
-    if (!promise) return false
-    await promise
-    // 解決したのに同じ入場が残っているなら（防御）、待ち直さない。
-    return this.pendingEntry?.promise !== promise
-  }
-
-  /**
    * Jump の遷移に失敗したとき（遷移先不在・resolver が null/例外・lazy load 後も不在・循環上限）、
-   * 予約中（pending）から停止中（stalled）へ移して Jump の位置で止まる (#725)。予約中のままだと
-   * goBack/seekTo/quickLoad 等まで塞がって詰むため。停止中は `advance`・セーブが弾く。
-   * 予約中でなければ（await 中に新規開始・復元で idle へ戻った等）何もしない (#733)。
+   * 予約中（pending）から停止中（stalled）へ移して Jump の位置で止まる (#725)。予約中でなければ何もしない (#733)。
+   * スキップの解除は TransitionState の onStall（`setSkipMode(false)`）が行う。
    */
   private stallJump(): void {
-    if (this.jumpState === 'pending') {
-      this.jumpState = 'stalled'
-      // スキップ中に停止した Jump へ着き続けて空回りしないよう解除する（TUI と同じ）。
-      this.setSkipMode(false)
-    }
+    this.transition.stall()
   }
 
   /**
    * Jump の遷移を予約する (#725/#733)。processDirective（到達時）と applyState（Jump 位置への復元後）
-   * の両方がここを通る。jumpToScene → startScene → resetAndStartEvents は processUntilNextTextEvent を
-   * 内包し描画までするため、呼び出し元ループの中で同期実行すると新シーンの eventIndex++ や二重 render に
-   * なる。そこで `jumpState = 'pending'` で呼び出し元を止め、次 tick に遷移する。成功すれば
-   * resetAndStartEvents が jumpState / jumpTimer をリセットする。遷移先不在（警告のみ）・遅延ロード中は
-   * pending のまま止まり、不在確定で stallJump が stalled にする（advance が Jump を飛び越して
-   * 終劇に落ちるのを防ぐ）。
+   * の両方がここを通る。状態の遷移・タイマー・循環上限の判定は TransitionState が持ち、ここは発火時に
+   * 必要な入場の実行と警告だけを渡す。
    */
   private armJump(target: string): void {
-    this.clearJumpTimer()
-    this.transitionGeneration++
-    this.jumpState = 'pending'
-    // 予約の時点（setTimeout(0) が発火する前）で待つ対象を作る。発火後は enterScene の Promise が引き継ぐ (#734)。
-    const deferred = createDeferred<SceneEntryResult>()
-    this.jumpDeferred = deferred
-    this.pendingEntry = {
-      generation: this.transitionGeneration,
-      kind: 'progress',
-      sceneId: target,
-      promise: deferred.promise,
-    }
-    this.jumpTimer = this.time.setTimeout(() => {
-      this.jumpTimer = null
-      // 発火したので、以後の取り消しでは解決しない（enterScene の結果で解決する）。
-      this.jumpDeferred = null
-      if (!this.initialized) {
-        deferred.resolve({ status: 'superseded' })
-        return
-      }
-      // 本文を描画しない Jump だけの連鎖（循環）は上限で止める。TUI の RELAY_HOP_LIMIT と同値。
-      this.consecutiveJumps++
-      if (this.consecutiveJumps > NovelRenderer.JUMP_CHAIN_LIMIT) {
+    this.transition.arm(target, {
+      isActive: () => this.initialized,
+      warnChainLimit: () =>
         console.warn(
-          `[name-name] [ジャンプ:] が本文なしで ${NovelRenderer.JUMP_CHAIN_LIMIT} 回を超えて連続したため停止します（循環の可能性）: ${target}`
-        )
-        if (this.pendingEntry?.promise === deferred.promise) this.pendingEntry = null
-        this.stallJump()
-        deferred.resolve({ status: 'failed', reason: 'not-found' })
-        return
-      }
-      void this.runEntry({ kind: 'progress', sceneId: target, origin: 'jump' }).then(
-        deferred.resolve
-      )
-    }, 0)
-  }
-
-  /**
-   * Jump の予約を取り消す (#734)。timer を止め、待っている側（`playScript` など）が止まらないよう
-   * deferred を superseded で解決する。取り消し経路（新規開始・復元・`applyState`・
-   * `resetAndStartEvents`・`destroy`・再予約）はすべてここを通る。遷移状態（`jumpState`）は触らない
-   * （呼び出し側が決める）。
-   */
-  private clearJumpTimer(): void {
-    if (this.jumpTimer) {
-      this.time.clearTimeout(this.jumpTimer)
-      this.jumpTimer = null
-    }
-    const deferred = this.jumpDeferred
-    if (deferred) {
-      this.jumpDeferred = null
-      if (this.pendingEntry?.promise === deferred.promise) this.pendingEntry = null
-      deferred.resolve({ status: 'superseded' })
-    }
+          `[name-name] [ジャンプ:] が本文なしで ${JUMP_CHAIN_LIMIT} 回を超えて連続したため停止します（循環の可能性）: ${target}`
+        ),
+      enter: () => this.runEntry({ kind: 'progress', sceneId: target, origin: 'jump' }),
+    })
   }
 
   /**
@@ -1436,34 +1314,6 @@ export class NovelRenderer {
   }
 
   /**
-   * 再生位置が別の文脈へ移るとき（`resetAndStartEvents`・`applyState`）に世代を進める (#734)。
-   * 待っていた入場は世代の不一致で破棄される（superseded）ので、入場中ゲートもここで下ろす。
-   * 下ろさないと、破棄された入場が解決するまで（解決しなければ永久に）ゲートが残る。
-   */
-  private advanceGeneration(): void {
-    this.transitionGeneration++
-    this.pendingEntry = null
-  }
-
-  /**
-   * 遷移中のゲート (#734)。`waitingForChoice`・`waitingForWait`・`jumpState`・入場中（`pendingEntry`）の
-   * 組み合わせ判定はここ1か所に置き、`advance`・`goBack`・`seekTo`・セーブ／ロード・選択肢の確定は
-   * この述語だけを見る（#731 の再発防止: 状態の組み合わせ判定を各所に散らさない）。
-   */
-  private isTransitionGated(op: GatedOperation): boolean {
-    return isTransitionGated(op, this.gateState())
-  }
-
-  private gateState(): TransitionGateState {
-    return {
-      waitingForChoice: this.waitingForChoice,
-      waitingForWait: this.waitingForWait,
-      jumpState: this.jumpState,
-      hasPendingEntry: this.pendingEntry !== null,
-    }
-  }
-
-  /**
    * シーン入場の単一入口 (#734, ADR 0003 §3)。進行（選択肢・`[ジャンプ:]`・`playScript` の choice）と
    * 復元（クイックロード・ロードメニュー・`restoreSnapshot`）は、公開 API がこの入口を通る。
    * 新規開始（`startFrom`）も同じ入口を通る。
@@ -1478,12 +1328,8 @@ export class NovelRenderer {
    * 5. 適用し、入場中ゲートを下ろす
    */
   private enterScene(req: SceneEntryRequest): Promise<SceneEntryResult> {
-    const generation = ++this.transitionGeneration
-    // 予約中の Jump のタイマーは、どの入場でも取り消す（発火済みの Jump 自身の入場では何もしない）。
-    // jumpState は触らない: ロード中も予約中・停止中のゲートを保ち、結末（成功は idle 化・失敗は
-    // 再導出・破棄は世代を進めた側）で確定する (#759)。
-    this.clearJumpTimer()
-    this.pendingEntry = null
+    // 世代を捕捉し、予約中の Jump のタイマーを取り消し、入場中ゲートを下ろす。jumpState は触らない (#759)。
+    const generation = this.transition.beginEntry()
 
     if (req.kind === 'progress' && !isSceneIdConfined(req.sceneId, this.confinedSceneIds)) {
       // #386: confinement（在圏）外への進行は通常のシーン遷移にせず終劇にする。
@@ -1551,13 +1397,13 @@ export class NovelRenderer {
       // 遷移文脈が変わった（遅延ロード中に新規開始・復元・再遷移が入った）古い解決は、成功・失敗とも
       // 破棄する (#733)。await 中に renderer が destroy() された場合も同様（#463: destroy 後は
       // 破棄済みの this.app.stage を触るため、初期化チェック無しで先に進むと例外を投げうる）。
-      if (generation !== this.transitionGeneration) return { status: 'superseded' } as const
+      if (this.transition.isStale(generation)) return { status: 'superseded' } as const
       if (!this.initialized) {
         // 破棄済みの renderer には何も適用しない。失敗の警告だけは残す（#463）。
         if (resolved.status === 'failed') this.warnEntryFailure(req, resolved)
         return { status: 'superseded' } as const
       }
-      if (this.pendingEntry?.generation === generation) this.pendingEntry = null
+      this.transition.settlePendingEntry(generation)
       // 適用の例外で Promise を reject させない（待っている側が止まる・未処理 rejection になる）。
       try {
         return this.finishEntry(
@@ -1570,7 +1416,7 @@ export class NovelRenderer {
         return this.failApply(req, err)
       }
     })()
-    this.pendingEntry = { generation, kind: req.kind, sceneId, promise }
+    this.transition.setPendingEntry({ generation, kind: req.kind, sceneId, promise })
     return promise
   }
 
@@ -1612,7 +1458,7 @@ export class NovelRenderer {
 
   /** 入場の適用中の例外を失敗として扱い、結果を返す。ゲートも下ろす。 */
   private failApply(req: SceneEntryRequest, err: unknown): SceneEntryResult {
-    this.pendingEntry = null
+    this.transition.clearPendingEntry()
     this.handleApplyError(req, err)
     return { status: 'failed', reason: 'apply-error' }
   }
@@ -1708,7 +1554,7 @@ export class NovelRenderer {
     this.gameState.fromJSON(req.flags ?? {})
     this.confinedSceneIds = req.confinedSceneIds ?? null
     this.clearStoryEnded()
-    this.consecutiveJumps = 0
+    this.transition.resetChain()
 
     if (positioned) {
       // 途中局面からの起動（`?debug_scene=` の index 指定）: 最小 NovelGameState を共通コアで宣言的復元する。
@@ -1831,21 +1677,21 @@ export class NovelRenderer {
   private rederiveTransitionAtCurrentPosition(): void {
     const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     if (typeof current === 'object' && current !== null && 'Jump' in current) {
-      if (this.jumpState === 'pending') this.rearmJumpAtCurrentPosition()
+      if (this.transition.isJumpPending()) this.rearmJumpAtCurrentPosition()
       return
     }
     if (
       typeof current === 'object' &&
       current !== null &&
       'Choice' in current &&
-      !this.waitingForChoice &&
+      !this.transition.waitingForChoice &&
       !this.storyEnded
     ) {
       this.processDirective(current)
       return
     }
     // 現在位置が Jump でなければ再予約できない。pending を残すと詰むので確定させる（防御）。
-    if (this.jumpState === 'pending') this.jumpState = 'idle'
+    this.transition.settleJumpIdle()
     // 入場を待つ間はゲートでオート送り・スキップのタイマーが弾かれ、再予約されずに止まっていた。
     // 本文表示中の位置なら、ON のままのモードを再開する (#734)。
     if (this.autoMode) this.dialogBox.setOnTypingDone(() => this.scheduleAutoAdvance())
@@ -1886,7 +1732,7 @@ export class NovelRenderer {
       this.skipMode = false
       this.onSkipModeChange?.(false)
     }
-    this.waitingForChoice = false
+    this.transition.leaveChoiceWait()
     this.choiceOverlay.hide()
     this.dialogBox.clearText()
 
@@ -2194,7 +2040,7 @@ export class NovelRenderer {
   private confirmChoiceJump(jump: string): boolean {
     // 入場中（別の遷移・復元の遅延ロードを待っている間）は確定を受け付けない。選択肢は表示されたまま、
     // 確定音も鳴らさない (#734)。
-    if (this.isTransitionGated('confirmChoice')) return false
+    if (this.transition.isGated('confirmChoice')) return false
     // 遷移先が確実に無い（解決手段も無い）なら、選択肢を閉じずその場に留める。閉じてから再表示すると
     // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
     if (
@@ -2206,11 +2052,8 @@ export class NovelRenderer {
     }
     // 同フレームの advance を抑制。enterScene が例外を投げても次の
     // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
-    this.justSelectedChoice = true
-    this.time.setTimeout(() => {
-      this.justSelectedChoice = false
-    }, 0)
-    this.waitingForChoice = false
+    this.transition.markChoiceJustSelected()
+    this.transition.leaveChoiceWait()
     this.choiceOverlay.hide()
     // 進行として入場する。遷移先が見つからなければ、入口が選択肢を再表示する (#734)。
     void this.runEntry({ kind: 'progress', sceneId: jump, origin: 'choice' })
@@ -2227,7 +2070,7 @@ export class NovelRenderer {
     sceneId: string | null
     options: Array<{ jump: string; locked: boolean }>
   } | null {
-    if (!this.waitingForChoice) return null
+    if (!this.transition.waitingForChoice) return null
     const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     if (typeof current !== 'object' || current === null || !('Choice' in current)) return null
     const locked = this.computeChoiceLocked(current.Choice.options)
@@ -2265,8 +2108,8 @@ export class NovelRenderer {
    * 書き換えるのを防ぐ。入場中でなければ何もしない。
    */
   cancelPendingEntry(): void {
-    if (!this.pendingEntry) return
-    this.advanceGeneration()
+    if (!this.transition.hasPendingEntry) return
+    this.transition.advanceGeneration()
     // 世代を進めるだけでは遷移状態が古いまま残る（遅延ロード待ちの [ジャンプ:] 予約など）ので、
     // 現在位置から導き直す。
     if (this.cursor.playbackStarted) this.rederiveTransitionAtCurrentPosition()
@@ -2300,7 +2143,10 @@ export class NovelRenderer {
   } {
     const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const waitMs =
-      this.waitingForWait && typeof current === 'object' && current !== null && 'Wait' in current
+      this.transition.waitingForWait &&
+      typeof current === 'object' &&
+      current !== null &&
+      'Wait' in current
         ? current.Wait.ms
         : null
     return {
@@ -2484,11 +2330,7 @@ export class NovelRenderer {
   ): void {
     this.cursor.markStarted()
     this.autoSavePending = false
-    this.waitingForChoice = false
-    this.waitingForWait = false
-    this.jumpState = 'idle'
-    this.advanceGeneration()
-    this.clearJumpTimer()
+    this.transition.resetForNewPosition()
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
@@ -2700,10 +2542,7 @@ export class NovelRenderer {
       this.characterLayer.setSplitLayoutRegion(null)
     }
     const suppressAdvanceThenRun = (fn: () => void) => () => {
-      this.justSelectedChoice = true
-      this.time.setTimeout(() => {
-        this.justSelectedChoice = false
-      }, 0)
+      this.transition.markChoiceJustSelected()
       fn()
     }
     this.titleScreenOverlay.show({
@@ -3461,7 +3300,7 @@ export class NovelRenderer {
       this.dialogBox.setOnTypingDone(null)
       // オートモード OFF 時はボイスを停止する（onEnded が誤発火しないよう）
       this.audioManager.stopVoice()
-    } else if (!this.isTransitionGated('autoAdvance') && !this.isAtScriptEnd()) {
+    } else if (!this.transition.isGated('autoAdvance') && !this.isAtScriptEnd()) {
       // 会話中にオート ON にした瞬間の即時反映 (#302)。
       // setOnTypingDone が「タイプ中なら完了時に発火・完了済みなら即発火」を一手に引き受ける。
       // choice/wait 待機中・スクリプト末尾は対象外（進める先がない）。
@@ -3620,8 +3459,7 @@ export class NovelRenderer {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
     }
-    this.clearJumpTimer()
-    this.pendingEntry = null
+    this.transition.dispose()
     this.clearWaitDisplayCompleteTimer()
     if (this.intermissionTimer) {
       this.time.clearTimeout(this.intermissionTimer)
@@ -3961,8 +3799,8 @@ export class NovelRenderer {
     // 選択肢・待機・Jump の予約中／停止中・入場中 (#734)。Jump 停止中 (#725) は、遷移先不在・循環上限で
     // 止まっているとき、Jump を飛び越して後続へ（末尾なら終劇へ）進まないためにここで止める。
     // goBack/seekTo/quickLoad は stalled でも使える（'navigate'）。
-    if (this.isTransitionGated('advance')) return
-    this.consecutiveJumps = 0
+    if (this.transition.isGated('advance')) return
+    this.transition.resetChain()
 
     const current = this.cursor.resolvedEvents[this.cursor.eventIndex]
     const textEvt = getTextEvent(current)
@@ -4098,7 +3936,7 @@ export class NovelRenderer {
         switch (step.type) {
           case 'advance':
             this.advance()
-            while (await this.awaitPendingEntry()) {
+            while (await this.transition.awaitPending()) {
               if (!this.initialized) return
             }
             break
@@ -4106,10 +3944,10 @@ export class NovelRenderer {
             // 選択肢確定パス（ChoiceOverlay のコールバック）と同じフラグ整合を保つ。
             // justSelectedChoice は同フレーム advance 抑制用だが、playScript は
             // 同期的に進むため即リセットしてよい。
-            this.justSelectedChoice = false
+            this.transition.clearJustSelectedChoice()
             // jump 成功時は resetAndStartEvents が false にするが、jump 失敗（存在しない
             // シーン）時は resetAndStartEvents が呼ばれないため、ここで明示的にリセットする。
-            this.waitingForChoice = false
+            this.transition.leaveChoiceWait()
             {
               // 遅延ロードの完了まで待ち、入場できなかったら（不在・resolver 失敗・適用例外・
               // より新しい入場に置き換えられた・終劇）後続のステップを消化せず打ち切る (#729, #734 PR3)。
@@ -4121,7 +3959,7 @@ export class NovelRenderer {
                 return
               }
             }
-            while (await this.awaitPendingEntry()) {
+            while (await this.transition.awaitPending()) {
               if (!this.initialized) return
             }
             break
@@ -4149,11 +3987,11 @@ export class NovelRenderer {
     // 直前の状態に戻ってしまう（終劇の無効化）。
     if (this.storyEnded) return
     if (this.cursor.resolvedEvents.length === 0) return
-    if (this.isTransitionGated('navigate')) return
+    if (this.transition.isGated('navigate')) return
     // Jump 停止中 (#725): 画面は直前の本文のままなので、history 末尾（＝その本文）を pop せずに
     // 復元し直す（pop すると一つ前の行まで飛ばす／本文 1 行のシーンでは何も起きない）。
     // 復元後の advance で Jump が再発火する。
-    if (this.jumpState === 'stalled') {
+    if (this.transition.isJumpStalled()) {
       const last = this.cursor.history[this.cursor.history.length - 1]
       if (last) {
         this.applyState(last)
@@ -4208,7 +4046,7 @@ export class NovelRenderer {
     // #386: goBack() と同じ理由で終劇後は無効化する（SeekBar ドラッグでの巻き戻し防止）。
     if (this.storyEnded) return
     if (historyIndex < 0 || historyIndex >= this.cursor.history.length) return
-    if (this.isTransitionGated('navigate')) return
+    if (this.transition.isGated('navigate')) return
 
     // シーク操作時はスキップモードを解除する (#140): ユーザーが特定箇所を見たくてシークしているため
     this.setSkipMode(false)
@@ -4233,7 +4071,7 @@ export class NovelRenderer {
       getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])
     ) {
       // 本文を描画した時点で、Jump だけが続く連鎖の回数をリセットする (#725)。
-      this.consecutiveJumps = 0
+      this.transition.resetChain()
       this.cursor.pushHistory(this.getSnapshot())
       this.flushAutoSave()
     }
@@ -4243,13 +4081,11 @@ export class NovelRenderer {
    * スナップショットから状態を宣言的に復元する
    */
   private applyState(state: NovelGameState): void {
-    this.consecutiveJumps = 0
+    this.transition.resetChain()
     this.autoSavePending = false
     // Jump の遷移状態は GameState に載せず位置から導出する (#733)。復元は新しい到達として扱うので、
     // 予約中・停止中のどちらも持ち越さず idle へ戻し、末尾で位置が Jump なら再予約する。
-    this.jumpState = 'idle'
-    this.advanceGeneration()
-    this.clearJumpTimer()
+    this.transition.resetJumpForRestore()
     // intermission タブロー描画の遅延タイマーをキャンセルする (#404)。goBack/seekTo でフェード中の
     // 終劇が巻き戻された後、古いタイマーが発火して復元済みの画面をタブローで上書きしてしまう事故を防ぐ。
     if (this.intermissionTimer) {
@@ -4649,19 +4485,17 @@ export class NovelRenderer {
   }
 
   private handleAdvance = (): void => {
-    if (this.justSelectedChoice) {
-      this.justSelectedChoice = false
+    if (this.transition.consumeJustSelectedChoice()) {
       // 「1 ポインタジェスチャで 1 回だけ」を守るため、このフレームで進めないと決まった時点で
       // suppressNextAdvance も一緒に消費する (#350)。choice 直後の同フレームに SeekBar 由来の
       // suppressNextAdvance が同居していても、固着させて後続の独立ポインタへ漏らさない。
-      this.suppressNextAdvance = false
+      this.transition.consumeSuppressNextAdvance()
       return
     }
     // SeekBar の clickRegion(Pixi) が同じ native pointerdown でこの DOM ハンドラより先に発火し
     // onSeek 内で suppressNextAdvance を立てる (#350)。スライダ下端帯タップが「シーク＋1つ進む」と
     // 二重発火するのを防ぐため、立っていれば 1 回だけ消費して早期 return する（justSelectedChoice と同型）。
-    if (this.suppressNextAdvance) {
-      this.suppressNextAdvance = false
+    if (this.transition.consumeSuppressNextAdvance()) {
       return
     }
     // ここに到達 = スライダ以外への通常タップ/送り。SeekBar が active なら即 inactive へ戻して
@@ -4683,7 +4517,7 @@ export class NovelRenderer {
   }
 
   private handleWheel = (e: WheelEvent): void => {
-    if (this.waitingForChoice && this.choiceOverlay.handleWheel(e.deltaY)) {
+    if (this.transition.waitingForChoice && this.choiceOverlay.handleWheel(e.deltaY)) {
       e.preventDefault()
       return
     }
@@ -4703,8 +4537,7 @@ export class NovelRenderer {
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (this.justSelectedChoice) {
-      this.justSelectedChoice = false
+    if (this.transition.consumeJustSelectedChoice()) {
       return
     }
     this.audioManager.ensureContext()
@@ -4730,7 +4563,7 @@ export class NovelRenderer {
     // でもここで return する — advance()/goBack() は自前で waitingForChoice ガードを持つため、
     // switch 文へフォールスルーさせなくても no-op のまま変わらない（handleKeyDown 全体の早期
     // return なので二重チェックにならない）。
-    if (this.waitingForChoice) {
+    if (this.transition.waitingForChoice) {
       const handled = this.choiceOverlay.handleKeyDown(e.key, e.shiftKey)
       if (handled) e.preventDefault()
       return
@@ -4793,19 +4626,19 @@ export class NovelRenderer {
         break
       case 's':
       case 'S':
-        if (!this.waitingForChoice) {
+        if (!this.transition.waitingForChoice) {
           this.openSaveMenu()
         }
         break
       case 'l':
       case 'L':
-        if (!this.waitingForChoice) {
+        if (!this.transition.waitingForChoice) {
           this.openLoadMenu()
         }
         break
       case 'b':
       case 'B':
-        if (!this.waitingForChoice) {
+        if (!this.transition.waitingForChoice) {
           this.backlogOverlay.toggle()
         }
         break
@@ -4826,7 +4659,12 @@ export class NovelRenderer {
       if (directive === 'SceneTransition' && this.notifyLinearSceneEntered()) break
       // Choice / Wait / Jump 予約中は進行を止める。ユーザー操作のゲートではなく、この同期ループ自身が
       // 今立てた状態を見るだけ（入場中は同期の適用中には立たない）ので isTransitionGated は使わない。
-      if (this.waitingForChoice || this.waitingForWait || this.jumpState === 'pending') break
+      if (
+        this.transition.waitingForChoice ||
+        this.transition.waitingForWait ||
+        this.transition.isJumpPending()
+      )
+        break
       this.cursor.skipDirective()
     }
     // 次に出る立ち絵・背景をバックグラウンドで先読みする (#389)。
@@ -5198,7 +5036,7 @@ export class NovelRenderer {
       this.setSkipMode(false)
       // 複数埋め込みで他インスタンスが読んだ scene を、選択肢表示直前に反映する (#366)。
       this.reloadReadProgress()
-      this.waitingForChoice = true
+      this.transition.enterChoiceWait()
       // 条件付きロック (#591)。`option.condition` が未定義なら常に false（ロックしない、
       // 既存動作）。指定されていれば `checkFlag` で判定する（未定義/false ならロック）。
       // `resolveEvents` の Condition 判定・GameFlags.check（TUI版）と同じ真偽規則。
@@ -5456,9 +5294,9 @@ export class NovelRenderer {
       // 進行を停止し、指定ミリ秒後に再開（eventIndex のインクリメントはコールバック内で行う）
       // Wait 中もスキップを停止する（Wait を無視するのは仕様違反） (#140)
       this.setSkipMode(false)
-      this.waitingForWait = true
+      this.transition.enterWait()
       const resume = (): void => {
-        this.waitingForWait = false
+        this.transition.leaveWait()
         this.cursor.skipDirective()
         this.processUntilNextTextEvent()
         // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
@@ -5470,8 +5308,8 @@ export class NovelRenderer {
       // （復元の成功で待機が解除された等）何もしない。決着した時点でさらに別の入場が始まっていれば
       // （待っていた入場が置き換えられた場合）、その決着も待つ。
       const tryResume = (): void => {
-        if (!this.initialized || !this.waitingForWait || this.waitTimer !== null) return
-        const entry = this.pendingEntry
+        if (!this.initialized || !this.transition.waitingForWait || this.waitTimer !== null) return
+        const entry = this.transition.pendingEntry
         if (entry) {
           void entry.promise.then(tryResume)
           return
@@ -5506,7 +5344,7 @@ export class NovelRenderer {
 
   private finishWaitAndContinue(): void {
     if (!this.initialized) return
-    this.waitingForWait = false
+    this.transition.leaveWait()
     this.cursor.skipDirective()
     this.processUntilNextTextEvent()
     // [待機] 明け後の表示も「立ち絵 →（同時/直後に）テキスト」の順序保証 (#293)。
@@ -5516,7 +5354,7 @@ export class NovelRenderer {
 
   private beginWaitDisplayComplete(): void {
     this.setSkipMode(false)
-    this.waitingForWait = true
+    this.transition.enterWait()
 
     const poll = () => {
       this.updateBackgroundFadeFrame()
@@ -6129,7 +5967,7 @@ export class NovelRenderer {
   private flushAutoSave(): void {
     if (!this.autoSavePending) return
     if (this.storyEnded || !getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])) return
-    if (gateReason('quickSave', this.gateState()) !== null) return
+    if (this.transition.gateReason('quickSave') !== null) return
     this.autoSavePending = false
     this.saveQuick('auto')
   }
@@ -6143,7 +5981,7 @@ export class NovelRenderer {
     }
     // 選択肢・待機・Jump 待機中・停止中 (#725)・入場中 (#734): 遷移途中・停止位置をセーブに残さない
     // （openSaveMenu と同じ理由）。文言の振り分けはロード側（quickLoad）と同じ。
-    const blocked = gateReason('quickSave', this.gateState())
+    const blocked = this.transition.gateReason('quickSave')
     if (blocked) {
       if (origin === 'quick') {
         this.showToast(
@@ -6176,7 +6014,7 @@ export class NovelRenderer {
    * 無いか、ゲートで弾かれた場合（入場を始めていない）。トーストは入場の結末（成功・失敗）で出る (#765)。
    */
   quickLoad(origin: 'quick' | 'auto' = 'quick'): Promise<SceneEntryResult | null> {
-    const blocked = gateReason('navigate', this.gateState())
+    const blocked = this.transition.gateReason('navigate')
     if (blocked) {
       // 弾かれた理由に合った通知を出す（手動 F8 のみ。マウント時の自動ロード〔auto〕は
       // 弾かれた理由のトーストを出さない。ロード自体が失敗したときの「ロードに失敗しました」は auto でも出す〔notifyLoadFailure〕）(#765)。
@@ -6241,11 +6079,11 @@ export class NovelRenderer {
     // Jump 待機中・停止中 (#725)・入場中 (#734) は開かない。遷移途中・停止位置をセーブに残さない
     // （ロードのたびに再予約・警告・停止を繰り返す状態を避ける。復元側は #733 で再予約するので
     // 行き止まりにはならないが、保存する価値のある位置ではない）。
-    if (this.isTransitionGated('saveMenu')) return
+    if (this.transition.isGated('saveMenu')) return
     this.saveLoadOverlay.showSave((slot: number) => {
       // オーバーレイ表示中も autoTimer / skipTimer / [待機] は進み、裏で Jump が予約・停止し得る。
       // 開く時だけでなく確定時にも再確認する (#759)。
-      if (this.isTransitionGated('saveMenu')) {
+      if (this.transition.isGated('saveMenu')) {
         // オーバーレイは確定後に必ず閉じるので、無通知だと保存されたと誤認する。
         this.showToast('場面転換中のためセーブできません')
         return
@@ -6267,10 +6105,10 @@ export class NovelRenderer {
    */
   private openLoadMenu(): void {
     // Jump 遷移の予約中 (#733)・入場中 (#734) は quickLoad と同じく開かない（遷移途中に別の位置へ復元させない）。
-    if (this.isTransitionGated('loadMenu')) return
+    if (this.transition.isGated('loadMenu')) return
     this.saveLoadOverlay.showLoad((data: SaveSlotData) => {
       // 表示中に裏で遷移が始まった場合は復元させない（開く時だけでなく確定時にも再確認 #759）。
-      if (this.isTransitionGated('loadMenu')) {
+      if (this.transition.isGated('loadMenu')) {
         this.showToast('場面転換中のためロードできません')
         return
       }
@@ -6309,11 +6147,11 @@ export class NovelRenderer {
     this.cursor.setCurrentSceneId(state.sceneId)
 
     // 選択肢/待機状態をリセット
-    this.waitingForChoice = false
-    this.waitingForWait = false
+    this.transition.leaveChoiceWait()
+    this.transition.leaveWait()
     // 直前の choice 確定による同フレーム advance 抑制フラグも消す
     // （完全リセットなので残留させない）
-    this.justSelectedChoice = false
+    this.transition.clearJustSelectedChoice()
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
       this.waitTimer = null
@@ -6856,13 +6694,13 @@ export class NovelRenderer {
    */
   private scheduleAutoAdvance(): void {
     if (!this.autoMode) return
-    if (this.isTransitionGated('autoAdvance')) return
+    if (this.transition.isGated('autoAdvance')) return
     if (this.autoTimer) {
       this.time.clearTimeout(this.autoTimer)
     }
     this.autoTimer = this.time.setTimeout(() => {
       this.autoTimer = null
-      if (this.autoMode && !this.isTransitionGated('autoAdvance')) {
+      if (this.autoMode && !this.transition.isGated('autoAdvance')) {
         this.advance()
       }
     }, this.autoWaitMs)
