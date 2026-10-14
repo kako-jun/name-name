@@ -7,7 +7,7 @@
  * `this` / PixiJS / DOM / TimeController には一切依存しない。
  */
 import type { NovelGameState } from './GameState'
-import type { Event, FlagValue } from '../types'
+import type { Event, EventScene, FlagValue } from '../types'
 
 /** シーン入場の種類。進行 = 物語の流れの中の遷移、新規開始 = 文脈を捨てて始める、復元 = 保存状態へ戻す。 */
 export type EntryKind = 'progress' | 'fresh' | 'restore'
@@ -50,15 +50,17 @@ export type SceneEntryRequest =
 
 /** 入場の結果。 */
 export type SceneEntryResult =
-  /** 入場できた。復元で sceneId が空の縮退のときだけ null。 */
+  /** 入場できた。sceneId が null なのは、エントリの線形ストリーム（新規開始のエントリ、または sceneId null の復元）へ入ったとき。 */
   | { status: 'entered'; sceneId: string | null }
   /** 進行のみ: confinement の圏外で終劇した。 */
   | { status: 'ended' }
   /**
    * not-found: 遷移先が無い / resolver-error: 遅延ロードの通信失敗など（一時的）/
-   * apply-error: 適用中の例外（実装・データの不具合。一時的な通信失敗とは区別する）
+   * apply-error: 適用中の例外（実装・データの不具合。一時的な通信失敗とは区別する）/
+   * out-of-range: 位置（eventIndex / textIndex）が解決したイベント列の範囲外 (#789)。文書が編集されて
+   * セーブの位置が指す先が無くなった。不在（not-found）と同じく再試行しても直らないので区別して持つ
    */
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' }
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' }
   /** 待っている間に、より新しい入場要求が来た（後始末は新しい側が担う）。 */
   | { status: 'superseded' }
 
@@ -132,8 +134,11 @@ const GATE_RULES: Record<GatedOperation, GateRule> = {
   confirmChoice: { choice: false, wait: false, jump: 'pending' },
 }
 
-/** ゲートが操作を止めている理由。entry/jump は「場面転換中」、choice/wait は「この場面では不可」。 */
-export type GateReason = 'entry' | 'jump' | 'choice' | 'wait'
+/**
+ * ゲートが操作を止めている理由。entry/jump は「場面転換中」、choice/wait/stalled は「この場面では不可」。
+ * stalled は停止中の Jump（遷移先が無く Jump の位置で止まっている）で、遷移は進行していないので転換中ではない。
+ */
+export type GateReason = 'entry' | 'jump' | 'stalled' | 'choice' | 'wait'
 
 /**
  * 遷移中のゲート: この操作を今は受け付けてはいけない理由を返す（止めないなら null）。
@@ -144,7 +149,8 @@ export type GateReason = 'entry' | 'jump' | 'choice' | 'wait'
 export function gateReason(op: GatedOperation, s: TransitionGateState): GateReason | null {
   if (s.hasPendingEntry) return 'entry'
   const rule = GATE_RULES[op]
-  if (rule.jump === 'any' ? s.jumpState !== 'idle' : s.jumpState === 'pending') return 'jump'
+  if (s.jumpState === 'pending') return 'jump'
+  if (rule.jump === 'any' && s.jumpState === 'stalled') return 'stalled'
   if (rule.choice && s.waitingForChoice) return 'choice'
   if (rule.wait && s.waitingForWait) return 'wait'
   return null
@@ -195,4 +201,160 @@ export function lacksLeadingBackground(events: readonly Event[]): boolean {
   }
   // テキストが無い（何も表示しない）原稿は、背景が無くても困らない。
   return false
+}
+
+/** 復元位置の検証入力。 */
+export interface RestorePosition {
+  eventIndex: number
+  textIndex: number
+}
+
+/**
+ * 復元位置が、解決したイベント列（flags を当てて `[条件:]` を展開した後）の範囲内かを判定する (#789)。
+ * 範囲内なら null、範囲外なら失敗の詳細文言を返す。適用の前に呼び、範囲外なら何も変えずに失敗にする
+ * （クランプはしない。文書が編集された後のセーブは、黙って別の位置へ寄せずに復元失敗として知らせる）。
+ *
+ * - eventIndex: 整数で `0 <= eventIndex <= resolved.length`。終端（`eventIndex === resolved.length`）は
+ *   storyEnded に関わらず有効で、このとき textIndex は 0 のみ。最後の本文の後ろに命令（`[BGM停止]`・
+ *   `[暗転]` 等）だけが続くと、advance がそれらを消化して終端で止まる（終劇ではなくクリック待ちの空画面）
+ *   ので、エンジン自身が書いたセーブ・スナップショットが終端を指しうる。展開後の長さが 0 のシーンも同じ
+ * - textIndex: 整数で 0 以上。上限は `textIndexBound` が返すイベントごとの排他的上限で判定する。
+ *   null はレイアウト依存（ノベルの改頁数は表示幅で変わる）で、ここでは上限を見ない
+ *   （fluid 再マウントで改頁数が変わる復元は `applyState` が最終ページへ寄せる設計のため）
+ */
+export function findRestorePositionError(
+  resolved: readonly Event[],
+  pos: RestorePosition,
+  textIndexBound: (event: Event) => number | null
+): string | null {
+  const { eventIndex, textIndex } = pos
+  if (!Number.isInteger(eventIndex) || eventIndex < 0) {
+    return `eventIndex が不正です: ${eventIndex}`
+  }
+  const atEnd = eventIndex === resolved.length
+  if (eventIndex > resolved.length) {
+    return `eventIndex が範囲外です: ${eventIndex}（イベント数 ${resolved.length}）`
+  }
+  if (!Number.isInteger(textIndex) || textIndex < 0) {
+    return `textIndex が不正です: ${textIndex}`
+  }
+  if (atEnd) {
+    if (textIndex !== 0) return `textIndex が範囲外です: ${textIndex}（終端では 0 のみ）`
+  } else {
+    const bound = textIndexBound(resolved[eventIndex])
+    if (bound !== null && textIndex >= bound) {
+      return `textIndex が範囲外です: ${textIndex}（eventIndex ${eventIndex} の上限 ${bound}）`
+    }
+  }
+  return null
+}
+
+/**
+ * エントリの線形ストリームを構成するシーン区間 (#777)。
+ * `start` / `length` はエントリの元イベント列（`[条件:]` 展開前）での位置。
+ */
+export interface LinearSegment {
+  sceneId: string
+  start: number
+  length: number
+}
+
+/**
+ * エントリの線形ストリーム（シーンの間に `SceneTransition` を挟んで flatten した元イベント列）を、
+ * 元のシーン区間に分解する (#777)。
+ *
+ * 作者の `[場面転換]` も同じ `'SceneTransition'` なので、イベントの種別では境界を区別できない。
+ * そこで `scenes` の各シーンの events が同一オブジェクト参照で並び、直後に `SceneTransition`（または終端）が
+ * 来るものだけを区間とする。照合できなくなったところで打ち切る（以降は線形ストリームの外）。照合は先頭のシーンを見つけたあと、`scenes` 上の次のシーンを順に行う（エントリ文書のシーンは `scenes` 上で連続・文書順）。
+ * events が空のシーンは長さ 0 の区間にする。
+ */
+export function findLinearSegments(
+  entryEvents: readonly Event[],
+  scenes: readonly EventScene[]
+): LinearSegment[] {
+  // 先頭に照合できるシーンが複数あり得る（文字列イベントだけのシーン同士など）ので、候補ごとに連鎖を作り、
+  // 一番長く続くものを採る。
+  // 連鎖の長さが同じ候補は、`scenes` で先に並ぶものを採る（エントリ文書のシーンが先頭に並ぶ前提）。
+  let best: LinearSegment[] = []
+  for (let i = 0; i < scenes.length; i++) {
+    if (!matchesAt(entryEvents, 0, scenes[i].events)) continue
+    const chain = chainFrom(entryEvents, scenes, i)
+    if (chain.length > best.length) best = chain
+  }
+  return best
+}
+
+/**
+ * `scenes[first]` が先頭に照合できたとして、以降は `scenes` 上の次のシーンを順に照合する。
+ * エントリ文書のシーンは `allScenes` 上で連続し文書順に並ぶ。events が空のシーンは長さ 0 の区間にする
+ * （直後の境界の `SceneTransition` を消費する）。
+ */
+function chainFrom(
+  entryEvents: readonly Event[],
+  scenes: readonly EventScene[],
+  first: number
+): LinearSegment[] {
+  const segments: LinearSegment[] = []
+  let pos = 0
+  for (let i = first; i < scenes.length; i++) {
+    const scene = scenes[i]
+    if (!matchesAt(entryEvents, pos, scene.events)) break
+    segments.push({ sceneId: scene.id, start: pos, length: scene.events.length })
+    pos += scene.events.length
+    if (pos >= entryEvents.length) break
+    // matchesAt が直後の境界を確認済み
+    pos += 1
+  }
+  return segments
+}
+
+function matchesAt(stream: readonly Event[], pos: number, events: readonly Event[]): boolean {
+  if (pos + events.length > stream.length) return false
+  for (let i = 0; i < events.length; i++) {
+    if (stream[pos + i] !== events[i]) return false
+  }
+  const next = pos + events.length
+  return next === stream.length || stream[next] === 'SceneTransition'
+}
+
+/**
+ * 区間を `[条件:]` 展開後の位置に直した境界 (#777)。
+ * `start`: 展開後のストリームでのシーン先頭、`separator`: 直前の境界の `SceneTransition` の位置
+ * （先頭の区間は null）。展開は現在の flags で行うので、flags が変わったら引き直す。
+ */
+export interface ResolvedSegment {
+  sceneId: string
+  start: number
+  separator: number | null
+}
+
+export function resolveLinearSegments(
+  entryEvents: readonly Event[],
+  segments: readonly LinearSegment[],
+  resolvedLength: (events: readonly Event[]) => number
+): ResolvedSegment[] {
+  const out: ResolvedSegment[] = []
+  let pos = 0
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    const separator = i === 0 ? null : pos
+    if (i > 0) pos += 1
+    out.push({ sceneId: seg.sceneId, start: pos, separator })
+    pos += resolvedLength(entryEvents.slice(seg.start, seg.start + seg.length))
+  }
+  return out
+}
+
+/** 展開後のイベント位置 `index` が属するシーン区間（境界の `SceneTransition` 自身は次のシーンに属す）。 */
+export function segmentAt(
+  resolved: readonly ResolvedSegment[],
+  index: number
+): ResolvedSegment | null {
+  let found: ResolvedSegment | null = null
+  for (const seg of resolved) {
+    const from = seg.separator ?? seg.start
+    if (index >= from) found = seg
+    else break
+  }
+  return found
 }

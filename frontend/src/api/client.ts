@@ -41,6 +41,8 @@ export interface ProjectInfo {
   title: string
   repo: string
   external_url?: string
+  /** シナリオ .md の置き場所（リポ直下からの相対パス。例 content/scripts）。未指定はリポ直下 */
+  scriptsDir?: string
 }
 
 export interface ContentsResponse {

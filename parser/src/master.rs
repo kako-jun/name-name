@@ -139,6 +139,7 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         exp: lookup_master_u32(entries, &["EXP", "exp", "経験値"], 0),
         gold: lookup_master_u32(entries, &["GOLD", "gold", "G", "ゴールド"], 0),
         sprite: lookup_master_string(entries, &["スプライト", "sprite"]),
+        poses: collect_poses(entries),
         builtin: lookup_master_string(entries, &["builtin"]),
     })
 }
@@ -166,6 +167,7 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         id,
         name,
         sprite: lookup_master_string(entries, &["スプライト", "sprite"]),
+        poses: collect_poses(entries),
         // 空の `隊列:` は未指定（None）にする（emit で `隊列: ` だけの行が出ないように）
         row: lookup_master_string(entries, &["隊列", "row"]).filter(|r| !r.trim().is_empty()),
         level: lookup_master_u32(entries, &["レベル", "level", "Lv"], 1).max(1),
@@ -177,6 +179,33 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         // 「習得」キーは複数行 OK で `Lv4 ホイミ` / `4 ホイミ` のような形式を受理する
         learns: collect_party_learns(entries),
     })
+}
+
+/// `ポーズ` / `poses` の値（`idle=a.png, step=b.png`）を集めて BTreeMap にする (#745)。
+/// カンマ区切りの `キー=パス`。`=` が無い・キーかパスが空の要素は無視する。同じキーは後勝ち。
+/// キー名（idle / step 等）の妥当性は検証せず透過する（解釈は runtime 側）。1 件も取れなければ None。
+fn collect_poses(
+    entries: &[(String, String)],
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    for (k, v) in entries {
+        if k != "ポーズ" && k != "poses" {
+            continue;
+        }
+        for part in v.split(',') {
+            if let Some((key, path)) = part.split_once('=') {
+                let (key, path) = (key.trim(), path.trim());
+                if !key.is_empty() && !path.is_empty() {
+                    out.insert(key.to_string(), path.to_string());
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// `習得` / `learns` のキー値ペアを複数集めて Vec<PartyLearns> にする。

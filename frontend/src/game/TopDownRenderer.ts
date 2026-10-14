@@ -8,9 +8,10 @@
 
 import { Application, Container, Graphics, Sprite } from 'pixi.js'
 import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
-import type { MonsterDef } from '../types'
+import type { MonsterDef, PartyMemberDef } from '../types'
 import { DialogBox } from './DialogBox'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
+import { resolveRpgImagePath } from './novelLayout'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -28,6 +29,16 @@ import {
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { rollEncounter } from './encounter'
 import { EventRunner, type NpcMover } from './eventRunner'
+import type { BattleScreen } from './BattleScreen'
+import type { BattleEntity } from './spellDsl'
+import {
+  DEFAULT_FIELD_BATTLE_SETTINGS,
+  FieldInputGate,
+  closeFieldBattle,
+  openFieldBattle,
+  readFieldBattleSettings,
+  type FieldBattleSettings,
+} from './fieldBattle'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -70,6 +81,8 @@ export class TopDownRenderer {
   private npcs: NPC[] = []
   private mapTiles: number[][] = []
   private tileSize = 32
+  /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔の画像パス解決に使う。未設定ならパスをそのまま読む */
+  private assetBaseUrl: string | undefined = undefined
   private mapWidth = 0
   private mapHeight = 0
 
@@ -96,6 +109,18 @@ export class TopDownRenderer {
   private masterMonsters: Record<string, MonsterDef> = {}
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする */
   private encounterCooldown: number = 0
+  /** パーティマスター。戦闘の味方に使う（RaycastRenderer と同じ） */
+  private masterParty: Record<string, PartyMemberDef> = {}
+  private masterPartyOrder: string[] = []
+  /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
+  private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
+  /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
+  private battleScreen: BattleScreen | null = null
+  /** 戦闘をまたぐキー入力状態（押下中の矢印キー・離すまで無視・設定中の停止）(#204 / #784) */
+  private inputGate = new FieldInputGate()
+  /** エンカウントで戦闘に入った歩の踏み込みトリガー。戦闘終了後に発火する */
+  private deferredStepTrigger: { x: number; y: number } | null = null
+  private lastTickMs = 0
 
   private initialized = false
   private gameData: RPGProject | null = null
@@ -157,7 +182,10 @@ export class TopDownRenderer {
     this.app.stage.addChild(this.menuOverlay)
 
     window.addEventListener('keydown', this.handleKeyDown)
+    window.addEventListener('keyup', this.handleKeyUp)
     window.addEventListener('resize', this.handleResize)
+    window.addEventListener('blur', this.handleBlur)
+    this.lastTickMs = performance.now()
     this.app.ticker.add(this.onTick)
 
     // スワイプ移動 + シングルタップでメニュー開閉 (#178)
@@ -169,8 +197,15 @@ export class TopDownRenderer {
     this.initialized = true
   }
 
+  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
+  setAssetBaseUrl(url: string | undefined): void {
+    this.assetBaseUrl = url
+  }
+
   /** ゲームデータを読み込んで描画を開始する */
   load(gameData: RPGProject): void {
+    // 戦闘中に再 load されたら戦闘画面を畳む（古い onClosed が新しいマップの状態を上書きしないよう強制終了）
+    this.closeBattle()
     // 状態リセット
     this.isMoving = false
     this.moveStart = 0
@@ -199,7 +234,14 @@ export class TopDownRenderer {
     this.encounterRate = gameData.map.encounterRate ?? 0
     this.encounterGroups = gameData.map.encounterGroups ?? []
     this.masterMonsters = gameData.monsters ?? {}
+    this.masterParty = gameData.party ?? {}
+    this.masterPartyOrder = gameData.partyOrder ?? []
+    this.battleSettings = readFieldBattleSettings(gameData)
     this.encounterCooldown = 0
+    this.deferredStepTrigger = null
+    this.pendingSwipe = null
+    this.lastTickMs = performance.now()
+    this.inputGate.resetHeld()
 
     this.drawMap()
     this.drawNPCs(gameData.npcs)
@@ -226,10 +268,21 @@ export class TopDownRenderer {
     void settings.seVolume
   }
 
+  /**
+   * 設定オーバーレイなど外側の UI が開いている間、入力を止める (#784)。true の間はフィールドの移動キーも
+   * 戦闘のキー操作（BattleScreen の isInputSuspended 経由）も受け付けない。
+   */
+  setInputSuspended(suspended: boolean): void {
+    this.inputGate.setSuspended(suspended)
+  }
+
   /** リソース解放 */
   destroy(): void {
+    this.closeBattle()
     window.removeEventListener('keydown', this.handleKeyDown)
+    window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
+    window.removeEventListener('blur', this.handleBlur)
     if (this.detachTouchInput) {
       this.detachTouchInput()
       this.detachTouchInput = null
@@ -251,6 +304,7 @@ export class TopDownRenderer {
       this.eventRunner = null
       this.dialogBox = null
       this.menuOverlay = null
+      this.battleScreen = null
       this.initialized = false
     }
   }
@@ -342,7 +396,7 @@ export class TopDownRenderer {
 
   private async loadNpcSprite(npc: NPC, placeholder: Graphics): Promise<void> {
     const sheet = await loadNpcSpriteSheet(
-      npc.data.sprite!,
+      resolveRpgImagePath(this.assetBaseUrl, npc.data.sprite!),
       clampFrames(npc.data.frames),
       this.tileSize,
       npc.data.color,
@@ -410,8 +464,19 @@ export class TopDownRenderer {
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (!this.initialized) return
 
+    // 押下中の矢印キーは戦闘開始時に BattleScreen へ渡す（戦闘中・停止中・repeat でも追跡する）(#784)
+    this.inputGate.trackKeyDown(e.key)
+
     // キーリピートはすべて無視（ダイアログちらつき・移動過剰対策）
     if (e.repeat) return
+
+    // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#784)
+    if (this.battleScreen) return
+    // 設定オーバーレイなど外側の UI が入力を止めている間は受け付けない
+    if (this.inputGate.isSuspended) return
+    // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
+    // （TopDown は repeat を上で弾くので実質は保険。Raycast と規約を揃えて残す）
+    if (this.inputGate.isReleaseGated(e.key)) return
 
     // input/textarea/contentEditable にフォーカスがあるときはキー奪取しない
     const active = document.activeElement
@@ -479,6 +544,16 @@ export class TopDownRenderer {
     }
   }
 
+  /** ウィンドウがフォーカスを失うと keyup が届かないので、押下状態を捨てる (#784) */
+  private handleBlur = (): void => {
+    this.inputGate.blur()
+  }
+
+  private handleKeyUp = (e: KeyboardEvent): void => {
+    if (!this.initialized) return
+    this.inputGate.trackKeyUp(e.key)
+  }
+
   private tryMove(direction: Direction): void {
     // inputLocked 中は移動を受け付けない。handleKeyDown / handleSwipe 側でもガードしているが、
     // 将来の呼び出し元追加時の安全網として tryMove 自体でも確認する (#198)
@@ -514,8 +589,11 @@ export class TopDownRenderer {
     this.playerGridY = ny
     this.isMoving = true
 
-    // 1 歩進んだので確率エンカウント抽選 (#191)
-    this.maybeRollEncounter()
+    // 1 歩進んだので確率エンカウント抽選 (#191)。戦闘に入ったら踏み込みトリガーは戦闘後に回す
+    if (this.maybeRollEncounter()) {
+      this.deferredStepTrigger = { x: nx, y: ny }
+      return
+    }
 
     // タイル踏み込みトリガー検出 (#198)
     this.checkStepTriggers(nx, ny)
@@ -575,10 +653,12 @@ export class TopDownRenderer {
     })
   }
 
-  private maybeRollEncounter(): void {
+  /** 1 歩ごとのエンカウント抽選。戦闘に入ったら true (#191 / #784) */
+  private maybeRollEncounter(): boolean {
+    if (this.battleScreen) return false // 戦闘中
     if (this.encounterCooldown > 0) {
       this.encounterCooldown -= 1
-      return
+      return false
     }
     const enemies = rollEncounter({
       rate: this.encounterRate,
@@ -586,17 +666,49 @@ export class TopDownRenderer {
       masters: this.masterMonsters,
       rng: Math.random,
     })
-    if (enemies && enemies.length > 0) {
-      // TopDown では戦闘画面を RaycastRenderer のように持っていないため、
-      // 現時点では console.info で記録するにとどめ、将来 BattleScreen 統合時に実装する。
-      // TODO: BattleScreen 統合時は「エンカウント検出時」ではなく「戦闘終了（onClose）時」に
-      //       encounterCooldown = 3 をセットするよう変更すること（RaycastRenderer と同方式にする）
-      console.info(
-        '[TopDownRenderer] encounter!',
-        enemies.map((e) => e.name)
-      )
-      this.encounterCooldown = 3
-    }
+    if (!enemies || enemies.length === 0) return false
+    return this.startBattle(enemies)
+  }
+
+  /**
+   * 戦闘画面を起動する (#784)。組み立て・キー規約・終了時の畳み方は RaycastRenderer と共通 (fieldBattle.ts)。
+   * 終了（勝利・逃走・全滅）でフィールドに戻り、エンカウントのクールダウンを 3 歩セットする（RaycastRenderer と同方式）。
+   */
+  private startBattle(enemies: BattleEntity[]): boolean {
+    if (this.battleScreen) return false // 多重起動防止
+    if (enemies.length === 0) return false
+    // キューされたスワイプは戦闘後に持ち越さない
+    this.pendingSwipe = null
+    this.battleScreen = openFieldBattle({
+      stage: this.app.stage,
+      width: this.screenWidth,
+      height: this.screenHeight,
+      settings: this.battleSettings,
+      roster: { party: this.masterParty, order: this.masterPartyOrder },
+      enemies,
+      gate: this.inputGate,
+      assetBaseUrl: this.assetBaseUrl,
+      onClosed: (outcome) => {
+        this.battleScreen = null
+        this.pendingSwipe = null
+        // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）
+        this.encounterCooldown = 3
+        // 戦闘に入った歩の踏み込みトリガーを、戦闘が終わってから発火する
+        const deferred = this.deferredStepTrigger
+        this.deferredStepTrigger = null
+        // 全滅（defeat）では発火しない
+        if (deferred && outcome !== 'defeat') this.checkStepTriggers(deferred.x, deferred.y)
+      },
+    })
+    return true
+  }
+
+  /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
+  private closeBattle(): void {
+    if (!this.battleScreen) return
+    closeFieldBattle(this.app.stage, this.battleScreen)
+    this.battleScreen = null
+    this.deferredStepTrigger = null
   }
 
   private canMoveTo(x: number, y: number): boolean {
@@ -651,7 +763,7 @@ export class TopDownRenderer {
       this.dialogBox?.show(
         npc.data.name,
         stripExpressionDirectives(npc.data.message),
-        resolveNpcPortrait(npc.data)
+        resolveRpgImagePath(this.assetBaseUrl, resolveNpcPortrait(npc.data))
       )
     }
   }
@@ -665,6 +777,7 @@ export class TopDownRenderer {
    */
   private handleSwipe = (direction: SwipeDirection): void => {
     if (!this.initialized) return
+    if (this.battleScreen) return // 戦闘中はフィールドを動かさない (#784)
     if (this.inputLocked && this.eventRunner?.isRunning) return
     if (this.dialogBox?.isShowing) {
       // ダイアログ中のスワイプはダイアログ操作と分離。誤爆防止のため何もしない。
@@ -693,6 +806,7 @@ export class TopDownRenderer {
    */
   private handleTap = (): void => {
     if (!this.initialized) return
+    if (this.battleScreen) return // 戦闘中はフィールドのメニューを開かない (#784)
     if (this.dialogBox?.isShowing) {
       // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は advance / skip / hide すべて
       // 無視する。メニュー → tryTalk → dialog.show 直後、または EventRunner の Dialog/Narration
@@ -782,6 +896,8 @@ export class TopDownRenderer {
       this.app.renderer.resize(this.screenWidth, this.screenHeight)
       this.dialogBox?.redraw(this.screenWidth, this.screenHeight)
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
+      // 戦闘中に画面サイズが変わったら戦闘画面も再配置する
+      this.battleScreen?.redraw(this.screenWidth, this.screenHeight)
       this.centerCamera()
     })
   }
@@ -790,6 +906,12 @@ export class TopDownRenderer {
 
   private onTick = (): void => {
     const now = performance.now()
+    const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
+    this.lastTickMs = now
+    // 戦闘中の時間を進める。ATB (#205) はゲージ（演出中も進む）、`battle_presentation: ff` (#745) は演出（モーション・ダメージ数字）。
+    // 従来ターン制かつ dq の BattleScreen.tick だけが何もしない。
+    // 設定オーバーレイ中は入力と同様に進行も止める (#784)
+    if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
     this.updateNpcAnimations(now)
     if (!this.isMoving) return
     const t = Math.min(1, (now - this.moveStart) / this.moveDuration)
@@ -803,6 +925,7 @@ export class TopDownRenderer {
       if (
         this.pendingSwipe &&
         !this.inputLocked &&
+        !this.battleScreen &&
         !this.dialogBox?.isShowing &&
         !this.menuOverlay?.isShowing()
       ) {

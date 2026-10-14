@@ -11,6 +11,12 @@ interface SaveDiscardButtonsProps {
   //   未指定なら従来挙動（hasUnsavedChanges のみで判断）。
   saveDisabled?: boolean
   saveDisabledTitle?: string
+  // 破棄ボタンを強制 disabled にする条件（切替先のロード中など）。title は discardDisabledTitle。
+  discardDisabled?: boolean
+  discardDisabledTitle?: string
+  // モード切替だけを無効にする（動画書き出し中など、プレビューを作り直すと録画が壊れる間）(#797)。
+  modeChangeDisabled?: boolean
+  modeChangeDisabledTitle?: string
 }
 
 function SaveDiscardButtons({
@@ -23,6 +29,10 @@ function SaveDiscardButtons({
   onModeChange,
   saveDisabled = false,
   saveDisabledTitle,
+  discardDisabled = false,
+  discardDisabledTitle,
+  modeChangeDisabled = false,
+  modeChangeDisabledTitle,
 }: SaveDiscardButtonsProps) {
   const saveEnabled = hasUnsavedChanges && !isSaving && !saveDisabled
   const saveTitle = saveDisabled
@@ -36,7 +46,7 @@ function SaveDiscardButtons({
       {mode && onModeChange && (
         <div className="flex gap-2">
           <button
-            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
+            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${modeChangeDisabled ? 'opacity-50 cursor-not-allowed' : ''} ${
               mode === 'edit'
                 ? isDark
                   ? 'bg-gray-700 text-white border-gray-600'
@@ -45,8 +55,16 @@ function SaveDiscardButtons({
                   ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
                   : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
             }`}
-            onClick={() => onModeChange('edit')}
-            title="Edit Mode"
+            onClick={() => {
+              if (modeChangeDisabled) return
+              onModeChange('edit')
+            }}
+            disabled={modeChangeDisabled}
+            aria-disabled={modeChangeDisabled}
+            aria-label="Edit Mode"
+            title={
+              modeChangeDisabled ? (modeChangeDisabledTitle ?? '切り替えできません') : 'Edit Mode'
+            }
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -58,7 +76,7 @@ function SaveDiscardButtons({
             </svg>
           </button>
           <button
-            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
+            className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${modeChangeDisabled ? 'opacity-50 cursor-not-allowed' : ''} ${
               mode === 'play'
                 ? isDark
                   ? 'bg-gray-700 text-white border-gray-600'
@@ -67,8 +85,16 @@ function SaveDiscardButtons({
                   ? 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
                   : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300'
             }`}
-            onClick={() => onModeChange('play')}
-            title="Play Mode"
+            onClick={() => {
+              if (modeChangeDisabled) return
+              onModeChange('play')
+            }}
+            disabled={modeChangeDisabled}
+            aria-disabled={modeChangeDisabled}
+            aria-label="Play Mode"
+            title={
+              modeChangeDisabled ? (modeChangeDisabledTitle ?? '切り替えできません') : 'Play Mode'
+            }
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
@@ -82,7 +108,7 @@ function SaveDiscardButtons({
         {/* アンドゥボタン */}
         <button
           className={`w-12 h-12 flex items-center justify-center transition-colors rounded-lg shadow-md border ${
-            hasUnsavedChanges && !isSaving
+            hasUnsavedChanges && !isSaving && !discardDisabled
               ? isDark
                 ? 'bg-gray-700 text-white border-gray-600 hover:bg-gray-600'
                 : 'bg-gray-400 text-white border-gray-300 hover:bg-gray-500'
@@ -91,8 +117,14 @@ function SaveDiscardButtons({
                 : 'bg-gray-200 text-gray-400 border-gray-300 cursor-not-allowed'
           }`}
           onClick={onDiscard}
-          disabled={!hasUnsavedChanges || isSaving}
-          title={hasUnsavedChanges ? '変更を破棄' : '変更なし'}
+          disabled={!hasUnsavedChanges || isSaving || discardDisabled}
+          title={
+            discardDisabled
+              ? (discardDisabledTitle ?? '破棄できません')
+              : hasUnsavedChanges
+                ? '変更を破棄'
+                : '変更なし'
+          }
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path

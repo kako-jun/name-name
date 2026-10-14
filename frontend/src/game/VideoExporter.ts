@@ -10,6 +10,31 @@
 import type { NovelRenderer } from './NovelRenderer'
 import type { FlagValue } from '../types'
 import { computeDynamicRenderResolution, resolveDevicePixelRatio } from './novelLayout'
+import {
+  EXPORT_AUTO_CHOICE_DISPLAY_MS,
+  EXPORT_CHOICE_HOLD_MS,
+  EXPORT_MAX_AUTO_CHOICES,
+  EXPORT_POLL_MS,
+  EXPORT_STALL_TIMEOUT_MS,
+  computeStallLimitMs,
+  exportProgressSignature,
+  createChoiceMemory,
+  markChoiceSelected,
+  pickAutoChoice,
+  recordChoice,
+  recordSceneTransition,
+  type ExportEndReason,
+} from './videoExportPolicy'
+
+export type { ExportEndReason } from './videoExportPolicy'
+
+/** 書き出しを中止したときに exportVideo が reject するエラー。録画は破棄され、結果は返らない。 */
+export class ExportAbortedError extends Error {
+  constructor() {
+    super('書き出しを中止しました')
+    this.name = 'ExportAbortedError'
+  }
+}
 
 export interface VideoExportOptions {
   /** 録画開始シーンID。新規開始（startFrom）でここから自動再生する */
@@ -51,6 +76,20 @@ export interface VideoExportOptions {
    * いずれも 1080×1920 以上）。録画後は元の解像度（device DPI）へ復元する。
    */
   exportResolution?: number
+  /**
+   * シーン一覧の順序 (#780)。選択肢の遷移先が書き出し範囲（開始〜終了）内かを判定する。
+   * 未指定（空）だと範囲内の遷移先が無いものとして扱い、選択肢に到達した時点で終端にする。
+   */
+  sceneOrder?: readonly string[]
+  /** 中止用シグナル (#780)。abort すると録画を止めて破棄し、`ExportAbortedError` で reject する */
+  signal?: AbortSignal
+  /** 自動で選ぶ遷移先が無い選択肢を映してから録画を終えるまで ms (#780)。既定 EXPORT_CHOICE_HOLD_MS */
+  choiceHoldMs?: number
+  /** 本文が進まない状態がこの時間続いたら録画を終える ms (#780)。既定 EXPORT_STALL_TIMEOUT_MS。
+   *  `[待機: N]` 中は N ms を加えた長さ、終わりのある動画の再生中は停滞とみなさない */
+  stallTimeoutMs?: number
+  /** 自動で選ぶ選択肢を、選ぶ前に映しておく時間 ms (#780)。既定 EXPORT_AUTO_CHOICE_DISPLAY_MS */
+  autoChoiceDisplayMs?: number
 }
 
 export interface VideoExportResult {
@@ -58,6 +97,10 @@ export interface VideoExportResult {
   mimeType: string
   /** 録画した実時間 ms */
   durationMs: number
+  /** 録画が終わった理由 (#780) */
+  endReason: ExportEndReason
+  /** 終わった理由の説明（UI 表示用）(#780) */
+  endMessage: string
 }
 
 /** 開始シーンの背景ロード待ちの上限 ms。超えたら警告して録画を始める（書き出しを永久停止させない） */
@@ -176,7 +219,14 @@ export async function exportVideo(
     preRollMs = 50,
     postRollMs = 1200,
     exportResolution: exportResolutionOpt,
+    sceneOrder = [],
+    signal,
+    choiceHoldMs = EXPORT_CHOICE_HOLD_MS,
+    stallTimeoutMs = EXPORT_STALL_TIMEOUT_MS,
+    autoChoiceDisplayMs = EXPORT_AUTO_CHOICE_DISPLAY_MS,
   } = opts
+
+  if (signal?.aborted) throw new ExportAbortedError()
 
   if (typeof MediaRecorder === 'undefined') {
     throw new Error('MediaRecorder is not supported in this browser')
@@ -229,8 +279,21 @@ export async function exportVideo(
   // recorder のコールバック経由でしか呼ばれないため）。ここで try/catch し、!audioStream
   // 経路と同じく副作用（capture / 解像度 / フラグ）を巻き戻してから rethrow する。
   let recorder!: MediaRecorder
+  // captureStream は canvas が再描画されたときだけフレームを出す。静止した画面（選択肢のハブなど）では
+  // 録画開始後しばらく最初のフレームが来ず、冒頭が黒になるため、録画開始の直後に1枚要求する。
+  let requestFirstFrame: () => void = () => {}
   try {
     const videoStream = canvas.captureStream(fps)
+    const videoTrack = videoStream.getVideoTracks()[0] as
+      | (MediaStreamTrack & { requestFrame?: () => void })
+      | undefined
+    requestFirstFrame = () => {
+      try {
+        videoTrack?.requestFrame?.()
+      } catch (e) {
+        console.warn('[VideoExporter] requestFrame failed', e)
+      }
+    }
     const combined = new MediaStream([
       ...videoStream.getVideoTracks(),
       ...audioStream.getAudioTracks(),
@@ -267,8 +330,27 @@ export async function exportVideo(
   const prevAutoMode = renderer.isAutoMode()
   let startedAt = 0
   let recordingStarted = false
+  let aborted = false
+  let cleanedUp = false
+  let monitorTimer: ReturnType<typeof setInterval> | undefined
 
+  const stopMonitor = () => {
+    if (monitorTimer !== undefined) clearInterval(monitorTimer)
+    monitorTimer = undefined
+  }
+
+  // cleanup は「録画が終わる経路」が複数（正常終了・中止・recorder エラー）重なっても一度だけ走らせる。
+  // 二重に走ると、次の書き出しが取った isExporting を先行の後始末が下ろしてしまう。
   const cleanup = () => {
+    if (cleanedUp) return
+    cleanedUp = true
+    stopMonitor()
+    signal?.removeEventListener('abort', onAbort)
+    // 画面を離れて破棄済みのレンダラには触らない（警告ログと二重破棄を避ける）
+    if (renderer.isReady?.() === false) {
+      isExporting = false
+      return
+    }
     try {
       // 元値が null だったら null に戻す（advance の onEndCallback?.() 挙動を完全復元）(round-2 S4)
       renderer.setOnSceneChange(prevOnSceneChange)
@@ -293,11 +375,13 @@ export async function exportVideo(
     isExporting = false
   }
 
+  let endReason: ExportEndReason = 'story-end'
+  let endMessage = ''
   const settleResolve = (durationMs: number) => {
     if (settled) return
     settled = true
     const blob = new Blob(chunks, { type: mimeType })
-    resolveResult({ blob, mimeType, durationMs })
+    resolveResult({ blob, mimeType, durationMs, endReason, endMessage })
   }
   const settleReject = (err: Error) => {
     if (settled) return
@@ -305,12 +389,15 @@ export async function exportVideo(
     rejectResult(err)
   }
 
-  const finalize = (status: string) => {
+  const finalize = (status: string, reason: ExportEndReason) => {
     if (stopped) return
     stopped = true
     // 録画開始前の終端検知: timer は予約しない。本流の failIfStopped が唯一の後始末役になる
     // （timer が先に発火して cleanup が二重に走り、多重起動ガードが早く外れるのを防ぐ）。
     if (!recordingStarted) return
+    stopMonitor()
+    endReason = reason
+    endMessage = status
     onProgress?.(status)
 
     // postRoll の余韻録音 → recorder.stop() → onstop で chunks 確定。
@@ -320,6 +407,7 @@ export async function exportVideo(
       settleResolve(performance.now() - startedAt)
     }
     setTimeout(() => {
+      if (aborted || settled) return
       try {
         if (recorder.state !== 'inactive') {
           recorder.stop()
@@ -337,6 +425,32 @@ export async function exportVideo(
     }, postRollMs)
   }
 
+  // 中止 (#780)。録画前なら本流の failIfStopped が ExportAbortedError で後始末する。
+  // 録画中・余韻録音中なら recorder を止めて破棄し、ExportAbortedError で reject する（保存しない）。
+  function onAbort() {
+    if (settled) return
+    stopped = true
+    stopMonitor()
+    if (!recordingStarted) return
+    aborted = true
+    const finish = () => {
+      cleanup()
+      settleReject(new ExportAbortedError())
+    }
+    try {
+      if (recorder.state !== 'inactive') {
+        recorder.onstop = finish
+        recorder.stop()
+      } else {
+        recorder.onstop = null
+        finish()
+      }
+    } catch {
+      finish()
+    }
+  }
+  signal?.addEventListener('abort', onAbort)
+
   recorder.onerror = (e: Event) => {
     // MediaRecorder の onerror は MediaRecorderErrorEvent を渡す。
     // e.error に DOMException が入っているので拾って原因究明に役立てる (round-2 S2)。
@@ -352,21 +466,26 @@ export async function exportVideo(
   // startSceneId === endSceneId の単一シーン録画では、startFrom 直後の
   // setOnSceneChange 発火で visitedEndScene = true まで進むが、まだ
   // 「別シーンへの遷移」は起きていないので finalize は呼ばれない。OK。
+  // 選択肢の辺（位置 × 遷移先）の記憶。自動選択は選んでいない辺を優先する (#780)。
+  const choiceMemory = createChoiceMemory()
+  let lastScene = startSceneId
   renderer.setOnSceneChange((sceneId) => {
     if (stopped) return
+    recordSceneTransition(choiceMemory, lastScene, sceneId)
+    lastScene = sceneId
     onProgress?.(`録画中: ${sceneId}`)
     if (sceneId === endSceneId) {
       visitedEndScene = true
       return
     }
     if (visitedEndScene) {
-      finalize(`終端到達: ${sceneId}`)
+      finalize(`終端到達: ${sceneId}`, 'scene-end')
     }
   })
 
   renderer.setOnEnd(() => {
     if (stopped) return
-    finalize('全イベント完走')
+    finalize('全イベント完走', 'story-end')
   })
 
   // 順序: 新規開始（startFrom）で synchronously 新フレーム描画 + BGM 開始 →
@@ -375,30 +494,57 @@ export async function exportVideo(
   // recorder.start。「前回プレビューの最終フレーム混入」と「BGM 頭欠け」の両方を最小化する。
   // 新規開始は BGM・背景・flags・consecutiveJumps をプレビューから持ち越さない (#734, ADR 0003)。
   // 録画開始前の待ち中に終端（onEnd / end から次シーン）が来たら、録画せず失敗にする。
+  // 録画前の待ち（背景ロード・動画頭出しなど最大数十秒）の途中でも、中止ですぐ抜ける。
+  const raceAbort = <T>(p: Promise<T>): Promise<T> => {
+    if (!signal) return p
+    return new Promise<T>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new ExportAbortedError())
+        return
+      }
+      const onAbortRace = () => reject(new ExportAbortedError())
+      signal.addEventListener('abort', onAbortRace, { once: true })
+      p.then(
+        (v) => {
+          signal.removeEventListener('abort', onAbortRace)
+          resolve(v)
+        },
+        (e) => {
+          signal.removeEventListener('abort', onAbortRace)
+          reject(e)
+        }
+      )
+    })
+  }
   const failIfStopped = () => {
+    if (signal?.aborted) throw new ExportAbortedError()
     if (stopped) throw new Error('ended before recording started')
   }
   renderer.setAutoMode(true)
   onProgress?.(`録画準備中（flags: ${JSON.stringify(flags)}）`)
   try {
-    const entry = await renderer.startFrom({ sceneId: startSceneId, flags })
+    const entry = await raceAbort(renderer.startFrom({ sceneId: startSceneId, flags }))
     if (entry.status !== 'entered') {
       const detail = entry.status === 'failed' ? `${entry.status}: ${entry.reason}` : entry.status
       throw new Error(`Could not start from scene "${startSceneId}" (${detail})`)
     }
     failIfStopped()
     onProgress?.('背景読み込み中')
-    await waitForBackground(renderer)
+    await raceAbort(waitForBackground(renderer))
 
-    await new Promise((r) => setTimeout(r, preRollMs))
+    await raceAbort(new Promise((r) => setTimeout(r, preRollMs)))
 
     // 動画入力レイヤ (#252): 録画開始前に表示中の動画を頭出し（currentTime=0）して
     // ready を待つ。これで録画の先頭から動画が正しく映る/鳴る。動画が無ければ即解決。
     onProgress?.('動画頭出し中')
-    await renderer.prepareVideosForExport()
+    await raceAbort(renderer.prepareVideosForExport())
     failIfStopped()
   } catch (e) {
     // 録画を始める前の失敗: 退避したリスナ・解像度・録画フラグ・isExporting を必ず戻す。
+    // 中止なら、遅延ロード中の startFrom がこの後に解決してプレビューを書き換えないよう取り消す。
+    if (e instanceof ExportAbortedError && renderer.isReady?.() !== false) {
+      renderer.cancelPendingEntry?.()
+    }
     stopped = true
     cleanup()
     throw e instanceof Error ? e : new Error(String(e))
@@ -407,7 +553,79 @@ export async function exportVideo(
   recordingStarted = true
   startedAt = performance.now()
   recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
+  requestFirstFrame()
   onProgress?.('録画開始')
+
+  // 選択肢への到達と停滞の見張り (#780)。録画開始後だけ回す。時計は performance.now。
+  let autoChoices = 0
+  let choiceSeenAt: number | null = null
+  let lastSignature = ''
+  let lastProgressAt = performance.now()
+  monitorTimer = setInterval(() => {
+    if (stopped) return
+    const now = performance.now()
+    const pending = renderer.getPendingChoice()
+    if (pending) {
+      // 選択肢の待機中は停滞の時計に触れない。受け付けられない状態が続けば、停滞として終わる。
+      if (choiceSeenAt === null) {
+        // 選択肢への到達は進行とみなす（長い [待機: N] の直後に停滞と誤判定しない）
+        choiceSeenAt = now
+        lastProgressAt = now
+      }
+      recordChoice(choiceMemory, pending.key, pending.sceneId, pending.options)
+      const pick =
+        autoChoices < EXPORT_MAX_AUTO_CHOICES
+          ? pickAutoChoice(
+              pending.options,
+              startSceneId,
+              endSceneId,
+              sceneOrder,
+              choiceMemory,
+              pending.key
+            )
+          : null
+      if (pick !== null) {
+        // 範囲内の未訪問の遷移先があれば、選択肢を映してから先頭のものを自動で選ぶ。
+        // 入場中などで受け付けられなければ次の tick で再試行（停滞の時計は進めない）。
+        if (now - choiceSeenAt >= autoChoiceDisplayMs && renderer.selectPendingChoice(pick)) {
+          autoChoices++
+          markChoiceSelected(choiceMemory, pending.key, pick)
+          choiceSeenAt = null
+          lastProgressAt = now
+          onProgress?.(`選択肢を自動選択: ${pick}`)
+          return
+        }
+      } else if (now - choiceSeenAt >= choiceHoldMs) {
+        // 範囲内の未訪問の遷移先が無い（または自動選択の上限）: 選択肢を映してから終端にする。
+        finalize(
+          autoChoices >= EXPORT_MAX_AUTO_CHOICES
+            ? `選択肢の自動選択が上限(${EXPORT_MAX_AUTO_CHOICES}回)に達したため終了`
+            : '選択肢に範囲内の未選択の遷移先が無いため終了',
+          'choice-end'
+        )
+        return
+      }
+    } else {
+      choiceSeenAt = null
+      const progress = renderer.getExportProgress()
+      const signature = exportProgressSignature(progress)
+      if (signature !== lastSignature || progress.videoPlaying) {
+        // 位置が動いた、または終わりのある動画を再生中は進行中
+        lastSignature = signature
+        lastProgressAt = now
+        return
+      }
+      const limit = computeStallLimitMs(stallTimeoutMs, progress.waitMs)
+      if (now - lastProgressAt >= limit) {
+        finalize(`${Math.round(limit / 1000)}秒間進まなかったため終了`, 'stalled')
+        return
+      }
+    }
+    // 選択肢を受け付けられないまま長く経った場合は、停滞として終える
+    if (pending && now - lastProgressAt >= stallTimeoutMs) {
+      finalize(`${Math.round(stallTimeoutMs / 1000)}秒間進まなかったため終了`, 'stalled')
+    }
+  }, EXPORT_POLL_MS)
 
   return resultPromise
 }

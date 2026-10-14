@@ -1,0 +1,179 @@
+{
+  "startScene": "overview",
+  "start": {
+    "x": 760,
+    "y": 600
+  },
+  "speed": 260,
+  "edgeThreshold": 6,
+  "player": {
+    "sprites": {
+      "up": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-3.png"
+      ],
+      "down": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-3.png"
+      ],
+      "left": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-3.png"
+      ],
+      "right": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-3.png"
+      ]
+    },
+    "height": 150,
+    "frameMs": 140
+  },
+  "scenes": {
+    "overview": {
+      "background": "http://localhost:8765/sample/field/teramachi-overview.png",
+      "mask": "http://localhost:8765/sample/field/masks/overview-mask.png",
+      "links": [
+        {
+          "edge": "left",
+          "range": [245, 335],
+          "to": "wide-road"
+        }
+      ],
+      "encounter": {
+        "rate": 0,
+        "groups": []
+      }
+    },
+    "wide-road": {
+      "background": "http://localhost:8765/sample/field/teramachi-wide-road.png",
+      "mask": "http://localhost:8765/sample/field/masks/wide-road-mask.png",
+      "links": [
+        {
+          "edge": "top",
+          "range": [1440, 1536],
+          "to": "overview"
+        },
+        {
+          "edge": "bottom",
+          "range": [0, 880],
+          "to": "connector"
+        }
+      ],
+      "encounter": {
+        "rate": 8,
+        "groups": ["dragon", "hornet", "hornet+hornet"]
+      }
+    },
+    "connector": {
+      "background": "http://localhost:8765/sample/field/teramachi-connector.png",
+      "mask": "http://localhost:8765/sample/field/masks/connector-mask.png",
+      "links": [
+        {
+          "edge": "bottom",
+          "range": [200, 1290],
+          "to": "wide-road"
+        },
+        {
+          "edge": "top",
+          "range": [200, 240],
+          "to": "narrow-lane"
+        }
+      ],
+      "encounter": {
+        "rate": 6,
+        "groups": ["hornet", "dragon+hornet"]
+      }
+    },
+    "narrow-lane": {
+      "background": "http://localhost:8765/sample/field/teramachi-narrow-lane.png",
+      "mask": "http://localhost:8765/sample/field/masks/narrow-lane-mask.png",
+      "links": [
+        {
+          "edge": "bottom",
+          "range": [120, 850],
+          "to": "connector"
+        }
+      ],
+      "encounter": {
+        "rate": 3,
+        "groups": ["dragon", "hornet+hornet", "dragon+hornet"]
+      }
+    }
+  },
+  "encounter": {
+    "stepDistance": 80,
+    "minSteps": 3
+  },
+  "monsters": {
+    "dragon": {
+      "name": "ドラゴン",
+      "hp": 40,
+      "atk": 9,
+      "def": 4,
+      "agi": 5,
+      "exp": 20,
+      "gold": 30,
+      "sprite": "http://localhost:8765/sample/battle/enemy-dragon.png"
+    },
+    "hornet": {
+      "name": "スズメバチ",
+      "hp": 18,
+      "atk": 7,
+      "def": 2,
+      "agi": 8,
+      "exp": 8,
+      "gold": 10,
+      "sprite": "http://localhost:8765/assets/enemies/hornet.png"
+    }
+  },
+  "party": [
+    {
+      "name": "ナム",
+      "hp": 40,
+      "mp": 10,
+      "atk": 10,
+      "def": 5,
+      "agi": 6,
+      "sprite": "http://localhost:8765/assets/characters/poses/nam-elementary-wheelchair-ready.png"
+    },
+    {
+      "name": "オトン",
+      "hp": 44,
+      "mp": 6,
+      "atk": 11,
+      "def": 6,
+      "agi": 7,
+      "sprite": "http://localhost:8765/assets/characters/poses/otton-elementary-ready.png"
+    },
+    {
+      "name": "シャー",
+      "hp": 46,
+      "mp": 4,
+      "atk": 12,
+      "def": 7,
+      "agi": 5,
+      "sprite": "http://localhost:8765/assets/characters/poses/shah-elementary-ready.png",
+      "row": "front"
+    },
+    {
+      "name": "ペー子",
+      "hp": 34,
+      "mp": 14,
+      "atk": 8,
+      "def": 4,
+      "agi": 8,
+      "sprite": "http://localhost:8765/assets/characters/poses/peiko-elementary-ready.png",
+      "row": "back"
+    }
+  ],
+  "battle": {
+    "layout": "side",
+    "width": 800,
+    "height": 450,
+    "background": "http://localhost:8765/sample/battle/backgrounds/bg-a.png"
+  }
+}

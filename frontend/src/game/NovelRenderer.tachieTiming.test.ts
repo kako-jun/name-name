@@ -16,8 +16,9 @@
  *   - `Assets.load` を遅延 Promise でモックし、立ち絵テクスチャの用意完了タイミングを手で制御する。
  *   - 立ち絵 show は `characterLayer.show` を spy して「テキスト（render）より先に呼ばれる」ことを確認する。
  */
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
+import * as bgPreload from './backgroundPreload'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 
@@ -121,6 +122,11 @@ function expectCharacterLoadCalls(loadSpy: { mock: { calls: unknown[][] } }, cou
 }
 
 describe('NovelRenderer 立ち絵→テキスト 表示順序の同期 (#293)', () => {
+  beforeEach(() => {
+    // 先読み (#782: backgroundPreload) は Assets.load を呼ぶため、立ち絵ロード回数の計測から外す。
+    vi.spyOn(bgPreload, 'backgroundPreload').mockImplementation(() => {})
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     // #389 の瞬断リトライ待機を fake timer で進めるテスト（6）があるので、必ず実タイマーへ戻す

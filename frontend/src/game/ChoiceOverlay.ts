@@ -1026,11 +1026,24 @@ export class ChoiceOverlay extends Container {
    * 両方から呼ぶ——ロジックの重複を避けるため、ロック判定は呼び出し側がそれぞれの流儀
    * （`entry.locked` / クロージャ内 `isLocked`）で先に行ってから呼ぶ契約とする。
    */
-  private confirmChoice(jump: string): void {
+  private confirmChoice(jump: string): boolean {
     this.audioManager?.ensureContext()
     // コールバックが false を返したら確定は受け付けられていない（遷移中のゲート等）ので音を鳴らさない。
-    if (this.onSelect?.(jump) === false) return
+    if (this.onSelect?.(jump) === false) return false
     this.audioManager?.playSelectTone()
+    return true
+  }
+
+  /**
+   * 遷移先が `jump` のロックされていない選択肢を、クリックと同じ確定経路（確定音を含む）で確定する (#780)。
+   * 動画書き出しの自動選択用。該当する選択肢が無い・ロック中・受け付けられなければ false。
+   */
+  selectByJump(jump: string): boolean {
+    const i = this.currentOptions.findIndex(
+      (o, idx) => o.jump === jump && !this.choiceEntries[idx]?.locked
+    )
+    if (i < 0) return false
+    return this.confirmChoice(jump)
   }
 
   /**

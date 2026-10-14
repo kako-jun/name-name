@@ -16,6 +16,7 @@ import { sampleRpgData } from '../game/sampleRpgData'
 // jsdom では実 init できない（NovelPlayer 系テストと同じ事情）。init/load/destroy/
 // applySettings を持つ最小スタブに差し替える。
 // アロー関数は [[Construct]] を持たず `new` できないため、`function` 式で構築可能なモックにする。
+const topdownSetAssetBaseUrl = vi.fn()
 vi.mock('../game/TopDownRenderer', () => ({
   TopDownRenderer: vi.fn().mockImplementation(function () {
     return {
@@ -23,10 +24,16 @@ vi.mock('../game/TopDownRenderer', () => ({
       load: vi.fn(),
       destroy: vi.fn(),
       applySettings: vi.fn(),
+      setAssetBaseUrl: topdownSetAssetBaseUrl,
     }
   }),
 }))
-const raycastInstances: Array<{ setInputSuspended: ReturnType<typeof vi.fn> }> = []
+const raycastInstances: Array<{
+  setInputSuspended: ReturnType<typeof vi.fn>
+  setAssetBaseUrl: ReturnType<typeof vi.fn>
+  load: ReturnType<typeof vi.fn>
+  destroy: ReturnType<typeof vi.fn>
+}> = []
 vi.mock('../game/RaycastRenderer', () => ({
   RaycastRenderer: vi.fn().mockImplementation(function () {
     const inst = {
@@ -35,6 +42,7 @@ vi.mock('../game/RaycastRenderer', () => ({
       destroy: vi.fn(),
       applySettings: vi.fn(),
       setInputSuspended: vi.fn(),
+      setAssetBaseUrl: vi.fn(),
     }
     raycastInstances.push(inst)
     return inst
@@ -93,5 +101,47 @@ describe('RPGPlayer: renderer の作り直しでも設定中の停止を引き�
     const next = raycastInstances[raycastInstances.length - 1]
     expect(next).not.toBe(raycastInstances[0])
     expect(next.setInputSuspended).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('RPGPlayer: アセットのベース URL を renderer に渡す (#746)', () => {
+  it('load() より前に setAssetBaseUrl(assetBaseUrl) が呼ばれる', async () => {
+    raycastInstances.length = 0
+    render(<RPGPlayer view="raycast" assetBaseUrl="/api/projects/g/assets/raw" />)
+    await new Promise((r) => setTimeout(r, 0))
+    const r = raycastInstances[0]
+    expect(r.setAssetBaseUrl).toHaveBeenCalledWith('/api/projects/g/assets/raw')
+    expect(r.setAssetBaseUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      r.load.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('assetBaseUrl 未指定なら setAssetBaseUrl(undefined) を渡す（従来どおり）', async () => {
+    raycastInstances.length = 0
+    render(<RPGPlayer view="raycast" />)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(raycastInstances[0].setAssetBaseUrl).toHaveBeenCalledWith(undefined)
+  })
+
+  it('assetBaseUrl が変わると renderer を作り直し、新しいベースを load 前に渡す', async () => {
+    raycastInstances.length = 0
+    const { rerender } = render(<RPGPlayer view="raycast" assetBaseUrl="/api/a/assets/raw" />)
+    await new Promise((r) => setTimeout(r, 0))
+    rerender(<RPGPlayer view="raycast" assetBaseUrl="/api/b/assets/raw" />)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(raycastInstances).toHaveLength(2)
+    expect(raycastInstances[0].destroy).toHaveBeenCalled()
+    const next = raycastInstances[1]
+    expect(next.setAssetBaseUrl).toHaveBeenCalledWith('/api/b/assets/raw')
+    expect(next.setAssetBaseUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      next.load.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('view=topdown でも setAssetBaseUrl が呼ばれる', async () => {
+    topdownSetAssetBaseUrl.mockClear()
+    render(<RPGPlayer assetBaseUrl="/api/projects/g/assets/raw" />)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(topdownSetAssetBaseUrl).toHaveBeenCalledWith('/api/projects/g/assets/raw')
   })
 })

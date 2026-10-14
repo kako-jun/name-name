@@ -14,10 +14,11 @@ import {
   findRpgSceneIndex,
   findAllRpgScenes,
 } from '../game/rpgProjectFromDoc'
-import { createApiClient, type ScriptInfo } from '../api/client'
+import { createApiClient, type ContentsResponse, type ScriptInfo } from '../api/client'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
+  ExportAbortedError,
   buildVideoExportOptions,
   downloadBlob,
   pickSupportedMimeType,
@@ -25,6 +26,13 @@ import {
   type VideoExportOptions,
 } from '../game/VideoExporter'
 import VideoExportModal from '../components/VideoExportModal'
+import {
+  flattenDocumentScenes,
+  buildSceneIndex,
+  resolveMissingSceneAcrossDocs,
+  basename,
+  withInheritedEventImageTransition,
+} from '../game/crossFileScenes'
 
 // kako-jun/name-name#107: 旧 FastAPI モデルでは autosave 1s debounce で
 // ワーキングディレクトリに PUT し、commit ボタンで Git push していた。
@@ -35,6 +43,9 @@ import VideoExportModal from '../components/VideoExportModal'
 // listScripts 経由で取れる .md があれば、UI のタブ操作で切り替えられる。
 const DEFAULT_SCRIPT_PATH = 'script.md'
 const DEFAULT_BRANCH = 'develop'
+// #778: プレビューの遅延ロードで #607 の event_image_transition 継承元にする再生時のエントリ（/play と同じ basename 規則）
+const SCRIPT_BASENAME = 'script.md'
+const LOAD_FAILED_MESSAGE = 'プロジェクトの読み込みに失敗しました。再読み込みしてください。'
 
 /**
  * draft の localStorage キー。#237 でファイル単位に分離（path を含む）。
@@ -75,15 +86,6 @@ function flattenDocumentEvents(doc: EventDocument): Event[] {
   return events
 }
 
-/**
- * EventDocument の全章の全シーンをフラット化する（NovelPlayer の `jumpSceneIndex` 用、PlayerScreen と同形）。
- * 再生ストリーム（`events`）とは別建てのシーン索引で、これが無いと renderer.allScenes が空のままになり、
- * 選択肢ジャンプも動画書き出しの `startFrom({ sceneId })` もシーンを引き当てられない (#734)。
- */
-function flattenDocumentScenes(doc: EventDocument): EventScene[] {
-  return doc.chapters.flatMap((chapter) => chapter.scenes)
-}
-
 function EditorScreen({
   projectName,
   apiBaseUrl,
@@ -103,6 +105,10 @@ function EditorScreen({
   const [exportFps, setExportFps] = useState(30)
   const [exportInheritFlags, setExportInheritFlags] = useState(false)
   const [exportRunning, setExportRunning] = useState(false)
+  // 書き出しの中止用 (#780)。実行中だけ非 null
+  const exportAbortRef = useRef<AbortController | null>(null)
+  // アンマウント後は書き出しの結果を state に反映しない (#780)
+  const mountedRef = useRef(true)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
@@ -119,10 +125,23 @@ function EditorScreen({
   // ロード時に getContents() のレスポンスから設定し、PUT 成功時に新しい sha で更新する。
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
+  // rawMarkdown がどのパスの文書の内容か。下書きキーは currentScriptPath でなくこちらから作る
+  // （タブ切替後、切替先のロード完了までに旧文書を編集しても、切替先のキーに旧文書を書かない #795）。
+  const [rawMarkdownPath, setRawMarkdownPath] = useState<string>(DEFAULT_SCRIPT_PATH)
+  // 保存の await 中に編集が進んだかを判定するため、常に最新の内容を指す
+  const rawMarkdownRef = useRef('')
+  rawMarkdownRef.current = rawMarkdown
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
   const [currentScriptPath, setCurrentScriptPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   const [availableScripts, setAvailableScripts] = useState<ScriptInfo[]>([])
+  // listScripts の結果（成功・失敗とも）が出たか。最初に開く文書は一覧から決めるので、それまで初期ロードを待つ。
+  // 一覧取得が済んだプロジェクト名。現在の projectName と一致して初めて「済み」とみなす
+  // （プロジェクトが変わったら自動的に未済に戻る。古い一覧結果は反映しない）。
+  const [settledProject, setSettledProject] = useState<string | null>(null)
+  const scriptListSettled = settledProject === projectName
+  // listScripts が失敗したか（先行取得の失敗を再取得せず使い回すかの判定用）
+  const scriptListFailedRef = useRef(false)
   // #238: 編集中以外の .md (data.md 等) を解析した EventDocument。
   // RPG タブが master データ (モンスター / アイテム / 呪文 / パーティ) を data.md から
   // 参照できるよう、active doc とは別に並行ロードして保持する。
@@ -172,6 +191,12 @@ function EditorScreen({
     }
   }, [allSceneIds, exportStartSceneId, exportEndSceneId])
 
+  // モードやタブを切り替えると書き出しモーダルはアンマウントされるので、開いている扱いも閉じる
+  // （残るとファイルタブが理由不明のまま無効になる）。
+  useEffect(() => {
+    setExportOpen(false)
+  }, [mode, editorTab])
+
   const handleStartVideoExport = useCallback(async () => {
     const renderer = novelRendererRef.current
     if (!renderer) {
@@ -191,6 +216,8 @@ function EditorScreen({
       setExportStatus('既に録画中です')
       return
     }
+    const abort = new AbortController()
+    exportAbortRef.current = abort
     setExportRunning(true)
     setExportStatus('準備中...')
     const opts: VideoExportOptions = buildVideoExportOptions(renderer, {
@@ -199,8 +226,12 @@ function EditorScreen({
       fps: exportFps,
       inheritFlags: exportInheritFlags,
       mimeType: mime,
-      onProgress: (s) => setExportStatus(s),
+      onProgress: (s) => {
+        if (mountedRef.current) setExportStatus(s)
+      },
     })
+    opts.sceneOrder = allSceneIds
+    opts.signal = abort.signal
     try {
       const result = await exportVideo(renderer, opts)
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
@@ -210,12 +241,21 @@ function EditorScreen({
       downloadBlob(result.blob, filename)
       const durSec = (result.durationMs / 1000).toFixed(1)
       const sizeMb = (result.blob.size / (1024 * 1024)).toFixed(2)
-      setExportStatus(`完了: ${filename} (${durSec}s, ${sizeMb} MB)`)
+      const label = result.endReason === 'stalled' ? 'タイムアウト' : '完了'
+      setExportStatus(
+        `${label}: ${filename} (${durSec}s, ${sizeMb} MB)\n終了理由: ${result.endMessage}`
+      )
     } catch (e) {
-      console.error('[VideoExport] failed', e)
-      setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+      if (!mountedRef.current) return
+      if (e instanceof ExportAbortedError) {
+        setExportStatus('中止しました（録画は破棄され、ファイルは保存されていません）')
+      } else {
+        console.error('[VideoExport] failed', e)
+        setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+      }
     } finally {
-      setExportRunning(false)
+      exportAbortRef.current = null
+      if (mountedRef.current) setExportRunning(false)
     }
   }, [
     projectName,
@@ -224,7 +264,22 @@ function EditorScreen({
     exportFps,
     exportInheritFlags,
     exportRunning,
+    allSceneIds,
   ])
+
+  // 画面を離れたら（戻る・プロジェクト切替・設定/アセット画面）実行中の書き出しを中止する。
+  // 残すと、別の画面で録画が完了してダウンロードが始まってしまう (#780)。
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      exportAbortRef.current?.abort()
+    }
+  }, [])
+
+  const handleAbortVideoExport = useCallback(() => {
+    exportAbortRef.current?.abort()
+  }, [])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -269,24 +324,44 @@ function EditorScreen({
   // rawMarkdown の更新は autosave useEffect 経由で Worker に PUT される。
   // emit が失敗した場合は rawMarkdown と doc の desync を避けるため、doc を元に戻す。
   const handleDocChange = async (newDoc: EventDocument) => {
+    // 切替先のロード中（表示中の doc が編集中パスの文書でない間）は編集を受け付けない。
+    // 受け付けると旧文書の内容が切替先のロードで黙って消える (#795)。UI 側も読み取り専用にしている。
+    if (docPathRef.current !== currentScriptPathRef.current) return
+    // 編集対象の文書のパスは呼び出し時点で控える（emit の await 中にタブが切り替わっても取り違えない）
+    const editedPath = docPathRef.current ?? currentScriptPathRef.current
     const prev = doc
     setDoc(newDoc)
     try {
       const md = await emitMarkdown(newDoc)
+      if (docPathRef.current !== editedPath) {
+        // emit の await 中に別の文書へ切り替わった。表示は切替先のものなので rawMarkdown には
+        // 反映せず、編集した文書の下書きとして退避だけする。
+        try {
+          localStorage.setItem(localStorageKey(projectName, editedPath), md)
+        } catch {
+          // ignore
+        }
+        return
+      }
       setRawMarkdown(md)
+      setRawMarkdownPath(editedPath)
     } catch (err) {
       console.error('emitMarkdown failed:', err)
+      // emit の await 中に別の文書へ切り替わっていたら、表示は切替先のものなので戻さない
+      if (docPathRef.current !== editedPath) return
       setDoc(prev)
       setSaveError('Markdown生成に失敗したため変更を破棄しました')
     }
   }
 
   // Markdown を WASM でパースして doc を更新
-  const parseAndSetDoc = async (markdown: string) => {
+  const parseAndSetDoc = async (markdown: string, isCancelled?: () => boolean) => {
     try {
       const parsed = await parseMarkdown(markdown)
+      if (isCancelled?.()) return
       setDoc(parsed)
     } catch (parseError) {
+      if (isCancelled?.()) return
       console.error('WASM parse failed:', parseError)
       setSaveError('Markdownのパースに失敗しました')
       // 空のドキュメントでフォールバック
@@ -349,24 +424,230 @@ function EditorScreen({
 
   // PR #120 review S2: projectRepo（repo 名解決）は Worker proxy 移行で不要になった。
 
+  // ---- 他の MD の取得（#238 RPG マスター参照 / #778 プレビューの遅延ロード 共通）----
+  // 取得元は1本: そのタブの未保存の下書き（localStorage）があればそれ、無ければ develop の内容。
+  // path をキーに結果と取得中 Promise を共有する（二重取得しない）。編集中の文書は含めない
+  // （最新は doc state）。タブ切替・プロジェクト切替で捨てる（古い下書き/サーバ版を残さない）。
+  const docRef = useRef<EventDocument | null>(null)
+  docRef.current = doc
+  // doc が「どのパスの文書か」。タブ切替直後は currentScriptPath が先に変わり、doc は
+  // loadChapters 完了まで旧文書のままなので、両者の食い違いを検出するために持つ。
+  const [docPath, setDocPath] = useState<string | null>(null)
+  const docPathRef = useRef<string | null>(null)
+  docPathRef.current = docPath
+  // 切替先のロード中か（表示中の doc が編集中パスの文書でない間）。この間は編集 UI を読み取り専用にする。
+  const switchingDoc = docPath !== currentScriptPath
+  // React 18 は inert 属性を型・値として扱えないため、DOM に直接付け外しする
+  // （フォーカス・キー入力・クリックをまとめて止める）。
+  const mainRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    mainRef.current?.toggleAttribute('inert', switchingDoc)
+  }, [switchingDoc])
+  const currentScriptPathRef = useRef(currentScriptPath)
+  currentScriptPathRef.current = currentScriptPath
+  const loadedOtherDocsRef = useRef<Map<string, EventDocument>>(new Map())
+  const loadingOtherDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
+  const otherDocsEpochRef = useRef(0)
+  const switchEpochRef = useRef(0)
+  const [lazyOtherScenes, setLazyOtherScenes] = useState<EventScene[]>([])
+  // 遅延ロード探索の対象。hidden（data.md 等のマスター）は /play と同じく除く（編集中のものは残す）。
+  const sortedScriptPaths = useMemo(() => {
+    const paths = availableScripts
+      .filter((s) => !s.hidden || s.path === currentScriptPath)
+      .map((s) => s.path)
+      .sort()
+    return paths.includes(currentScriptPath) ? paths : [currentScriptPath, ...paths]
+  }, [availableScripts, currentScriptPath])
+  const sortedScriptPathsRef = useRef<string[]>([])
+  sortedScriptPathsRef.current = sortedScriptPaths
+
+  // switched: タブ・プロジェクトの切替による破棄か。継承値の変更による破棄（false）の場合は、
+  // 進行中の解決が打ち切られても同じ文書のまま取り直せる（resolveMissingScene が1回だけやり直す）。
+  const resetOtherDocsCache = useCallback((switched = true) => {
+    otherDocsEpochRef.current++
+    if (switched) switchEpochRef.current++
+    loadedOtherDocsRef.current = new Map()
+    loadingOtherDocsRef.current = new Map()
+    setLazyOtherScenes([])
+  }, [])
+  // プロジェクト切替でも捨てる（App が key={projectName} で再マウントするので通常は再マウントで足りる。念のための保険）
+  useEffect(() => {
+    resetOtherDocsCache()
+  }, [api, projectName, resetOtherDocsCache])
+  // タブ切替は取得キャッシュの破棄と同期して行う（epoch を先に進め、旧タブ向けの取得を無効化する）
+  const switchScript = useCallback(
+    (path: string) => {
+      resetOtherDocsCache()
+      // 旧文書の未保存表示を引きずらない（切替先のロード完了で下書きの有無から再計算される）
+      setHasUnsavedChanges(false)
+      setCurrentScriptPath(path)
+    },
+    [resetOtherDocsCache]
+  )
+
+  // script.md を編集中に event_image_transition を変えたら、継承して解析済みの他文書を捨てる
+  // （古い継承値のまま残さない）。次の遅延ロードで新しい値を使って取り直す。
+  const scriptTransition =
+    doc && docPath === currentScriptPath && basename(currentScriptPath) === SCRIPT_BASENAME
+      ? (doc.event_image_transition ?? null)
+      : undefined
+  const prevScriptTransitionRef = useRef<
+    EventDocument['event_image_transition'] | null | undefined
+  >(undefined)
+  useEffect(() => {
+    const prev = prevScriptTransitionRef.current
+    prevScriptTransitionRef.current = scriptTransition
+    if (prev !== undefined && scriptTransition !== undefined && prev !== scriptTransition) {
+      resetOtherDocsCache(false)
+    }
+  }, [scriptTransition, resetOtherDocsCache])
+
+  const loadOtherDoc = useCallback(
+    function load(path: string): Promise<EventDocument | null> {
+      // #607 の継承元（script.md）を編集中で、その doc がまだ確定していない（タブ切替直後）間は
+      // 取得しない。継承なしの解析結果を作って共有・キャッシュしてしまうのを避ける
+      // （再呼び出しされるのは otherDocs の effect だけ: docPath を依存に持ち、確定後に取り直す。
+      // resolver 側は docPath 未確定の間そもそも呼ばず not-found にする＝ジャンプは入り直しで解決）。
+      const inheritFrom = sortedScriptPathsRef.current.find((p) => basename(p) === SCRIPT_BASENAME)
+      if (
+        inheritFrom &&
+        inheritFrom !== path &&
+        inheritFrom === currentScriptPathRef.current &&
+        docPathRef.current !== inheritFrom
+      ) {
+        return Promise.resolve(null)
+      }
+      const cached = loadedOtherDocsRef.current.get(path)
+      if (cached) return Promise.resolve(cached)
+      const inFlight = loadingOtherDocsRef.current.get(path)
+      if (inFlight) return inFlight
+      const epoch = otherDocsEpochRef.current
+      const loading = loadingOtherDocsRef.current
+      const promise = (async () => {
+        let draft: string | null = null
+        try {
+          draft = localStorage.getItem(localStorageKey(projectName, path))
+        } catch {
+          draft = null
+        }
+        let markdown: string
+        if (draft !== null && draft !== '') {
+          markdown = draft
+        } else {
+          const data = await api.getContents(projectName, path, DEFAULT_BRANCH)
+          markdown = data.content || ''
+        }
+        // #607: /play と同じく、script.md 以外は script.md の event_image_transition を継承してパースする
+        // （プレビューは /play の再現が目的）。script.md が無い・読めない場合は継承なし。
+        let inherited: EventDocument['event_image_transition'] | null = null
+        if (inheritFrom && inheritFrom !== path) {
+          if (inheritFrom === currentScriptPathRef.current) {
+            inherited = docRef.current?.event_image_transition ?? null
+          } else {
+            inherited = (await load(inheritFrom))?.event_image_transition ?? null
+          }
+        }
+        const parsed = await parseMarkdown(withInheritedEventImageTransition(markdown, inherited))
+        // タブ切替・プロジェクト切替をまたいだ古い取得結果は捨てる
+        if (otherDocsEpochRef.current === epoch) {
+          loadedOtherDocsRef.current.set(path, parsed)
+        }
+        return parsed
+      })()
+        .catch((err) => {
+          console.warn(`[EditorScreen] failed to load script ${path}:`, err)
+          return null
+        })
+        .finally(() => {
+          if (loading.get(path) === promise) loading.delete(path)
+        })
+      loading.set(path, promise)
+      return promise
+    },
+    [api, projectName]
+  )
+
   // 初回ロード: Worker (Contents API) から script.md を取得しWASMでパース。
   // 取得時の sha を shaRef に保持し、後続の PUT 時に楽観ロック用に渡す。
   // ロード前に localStorage の draft を見て、復元できる場合は draft を表示する
   // （draft があるが ref と sha の世代が古い場合は #108 でマージ UI を入れる予定。
   //  暫定では「ロード後に draft で上書き」する素直な復元のみ）。
+  // 既定の script.md を listScripts と並列で先行して取りに行く。worker の listScripts は各 .md を
+  // 順に fetch する（キャッシュ MISS 時）ので遅く、直列にすると起動が遅れる。一覧が「script.md あり」を
+  // 確定したらこの結果を使い、一覧に無ければ捨てる（失敗は握りつぶす＝トーストを出さない）。
+  // 先行取得するのは「既定の script.md」。scriptsDir を持つプロジェクト（skirts-colour の
+  // content/scripts 等）は scriptsDir/script.md を取る（ルートの script.md は 404 になるため）。
+  // scriptsDir は listProjects（静的な JSON）で分かる。取れなければルート直下を試す。
+  const defaultPrefetchRef = useRef<{
+    api: typeof api
+    projectName: string
+    promise: Promise<{ path: string; data: ContentsResponse | null; error: unknown }>
+  } | null>(null)
+  useEffect(() => {
+    // 同じ api / プロジェクトで未消費の先行取得があれば作り直さない（dev の StrictMode の
+    // 二重実行で同じファイルを2回取らないため。本番は effect が1回しか走らず影響なし）。
+    const existing = defaultPrefetchRef.current
+    if (existing && existing.api === api && existing.projectName === projectName) return
+    const promise = (async () => {
+      let path = DEFAULT_SCRIPT_PATH
+      try {
+        const projects = await api.listProjects()
+        const dir = projects
+          .find((pr) => pr.name === projectName)
+          ?.scriptsDir?.replace(/^\/+|\/+$/g, '')
+        if (dir) path = `${dir}/${DEFAULT_SCRIPT_PATH}`
+      } catch {
+        // 取れなければルート直下
+      }
+      try {
+        return {
+          path,
+          data: await api.getContents(projectName, path, DEFAULT_BRANCH),
+          error: null,
+        }
+      } catch (error) {
+        return { path, data: null, error }
+      }
+    })()
+    defaultPrefetchRef.current = { api, projectName, promise }
+  }, [api, projectName])
+
   useEffect(() => {
     // #237 review M1: タブ切替で currentScriptPath が変わったとき、
     // 先に sha / 初期値を即座にリセットする。
     // 理由: 前ファイルの sha が shaRef に残ったまま loadChapters が catch に飛ぶと
     //   ユーザーが新パス向けに編集→保存 → 前ファイルの sha で別パス PUT → 409 か
     //   最悪のケースで意図しないファイルを上書きしうる。fetch 前に確実にクリアする。
+    // 一覧の取得が済むまで待つ（既定の script.md を無条件に取りに行って 404 にならないように）。
+    if (!scriptListSettled) return
     shaRef.current = null
     setHasSha(false)
     initialMarkdownRef.current = ''
+    // タブ・プロジェクトが切り替わって effect が作り直されたら、この実行の結果は捨てる
+    // （遅れて完了した古いロードが、新しい文書の state / ref / 下書きを上書きしない）。
+    let cancelled = false
 
     const loadChapters = async () => {
       try {
-        const data = await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
+        // 先行取得済みの既定パスならその結果を使う（1 回限り）。取得に失敗していた場合は、
+        // 一覧が成功していれば（一時的な失敗かもしれないので）取り直し、一覧も失敗していたら
+        // 同じエラーを使い回す（同じ取得を2回しない。トーストは従来どおり1回）。
+        let data: ContentsResponse | null = null
+        // 先行取得の取得権は await の前に同期的に確保する（別の実行が新しい先行取得を潰さない）。
+        // なお先行取得のパスは listProjects（scriptsDir）の応答待ちで初めて分かるため、パスが
+        // 一致しない場合もその完了までは待つ（一覧確定後なので通常は取得済みで待ちは短い）。
+        const prefetch = defaultPrefetchRef.current
+        defaultPrefetchRef.current = null
+        if (prefetch) {
+          const pre = await prefetch.promise
+          if (cancelled) return
+          if (pre.path === currentScriptPath) {
+            if (pre.data) data = pre.data
+            else if (scriptListFailedRef.current) throw pre.error
+          }
+        }
+        data ??= await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
+        if (cancelled) return
         const markdown = data.content || ''
         shaRef.current = data.sha
         setHasSha(Boolean(data.sha))
@@ -382,10 +663,18 @@ function EditorScreen({
           localDraft = null
         }
         const startMarkdown = localDraft !== null && localDraft !== '' ? localDraft : markdown
+        // rawMarkdown は parse 完了と中断判定の後に設定する（先に設定すると、設定からコミットまでの間に
+        // タブが切り替わったとき、下書き effect が {切替先のキー, 旧文書の本文} を積みうる）。
+        await parseAndSetDoc(startMarkdown, () => cancelled)
+        if (cancelled) return
         setRawMarkdown(startMarkdown)
-        await parseAndSetDoc(startMarkdown)
+        setRawMarkdownPath(currentScriptPath)
+        setDocPath(currentScriptPath)
+        // 既定パス(script.md)の先行ロード失敗で出た読み込みエラーは、再ロード成功で消す
+        setSaveError((prev) => (prev === LOAD_FAILED_MESSAGE ? null : prev))
         setHasUnsavedChanges(localDraft !== null && localDraft !== markdown)
       } catch (error) {
+        if (cancelled) return
         console.error('Failed to load chapters:', error)
         // PR #120 review S4: 失敗時に setRawMarkdown('') すると autosave 経由で
         //   localStorage の draft が空文字で潰れる。loadFailed フラグを立てて
@@ -395,45 +684,79 @@ function EditorScreen({
         setHasSha(false)
         setLoadFailed(true)
         setDoc({ engine: 'name-name', chapters: [] })
-        setSaveError('プロジェクトの読み込みに失敗しました。再読み込みしてください。')
+        setDocPath(currentScriptPath)
+        setSaveError(LOAD_FAILED_MESSAGE)
       }
     }
     loadChapters()
+    return () => {
+      cancelled = true
+    }
     // api は apiBaseUrl から派生する useMemo の値、projectName / currentScriptPath が
     // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
-  }, [api, projectName, currentScriptPath])
+  }, [api, projectName, currentScriptPath, scriptListSettled])
+
+  // プロジェクトが変わったら、開くファイル・一覧・doc の所属を初期状態に戻す（App が
+  // key={projectName} で再マウントするので通常は不要。再マウントされなくても前のプロジェクトの
+  // 状態を引きずらないための保険）。
+  // 初回マウントでは同じ値の再設定になるだけ。
+  const projectRef = useRef(projectName)
+  useEffect(() => {
+    if (projectRef.current === projectName) return
+    projectRef.current = projectName
+    setCurrentScriptPath(DEFAULT_SCRIPT_PATH)
+    setAvailableScripts([])
+    setDocPath(null)
+  }, [projectName])
 
   // #237: プロジェクト直下の .md 一覧（engine: name-name のみ）を取得してタブを構築。
   // 失敗しても致命的でない（script.md 単体運用に degrade する）ためエラーはコンソールのみ。
   useEffect(() => {
+    let cancelled = false
+    scriptListFailedRef.current = false
     const loadList = async () => {
       try {
         const scripts = await api.listScripts(projectName, DEFAULT_BRANCH)
+        if (cancelled) return
         setAvailableScripts(scripts)
-        // 現在開いているファイルが listing に存在しない場合（新規 repo 等）は、
-        // listing の先頭ファイルに切り替える。リストが空なら DEFAULT_SCRIPT_PATH のまま。
-        if (scripts.length > 0 && !scripts.some((s) => s.path === currentScriptPath)) {
-          setCurrentScriptPath(scripts[0].path)
+        // 最初に開く文書を一覧から決める。既定の script.md が一覧に無い場合（scriptsDir 構成等）は、
+        // /play のエントリ選び（#284）と同じく basename が script.md のもの、無ければ先頭にする。
+        // 一覧が空なら DEFAULT_SCRIPT_PATH のまま。
+        if (scripts.length > 0 && !scripts.some((s) => s.path === DEFAULT_SCRIPT_PATH)) {
+          const entry = scripts.find((s) => basename(s.path) === SCRIPT_BASENAME) ?? scripts[0]
+          switchScript(entry.path)
         }
       } catch (err) {
+        if (cancelled) return
+        scriptListFailedRef.current = true
         console.warn('[EditorScreen] listScripts failed; falling back to single script.md', err)
         setAvailableScripts([])
+      } finally {
+        // 失敗時（単一 script.md の旧プロジェクト等）は従来どおり既定の script.md を試す
+        if (!cancelled) setSettledProject(projectName)
       }
     }
     loadList()
+    return () => {
+      cancelled = true
+    }
     // #237 review S1: listing 自体は repo 単位の情報なので projectName が変わったときだけ再取得する。
     // (listing 取得後の otherDocs ロードは別の useEffect が availableScripts を監視して行う)
     // currentScriptPath を依存に入れるとタブ切替の度に listing API が再叩きされて無駄。
     // 「現在 path が listing に無いなら先頭に切り替える」のは setCurrentScriptPath で
     //   currentScriptPath が変わる → このフックは再実行されない（次回 projectName 変更時のみ）が、
     //   listing は既に最新 (1 回前のフックで取得済み) なので問題なし。
-  }, [api, projectName])
+  }, [api, projectName, switchScript])
 
   // #238: availableScripts から currentScriptPath 以外の .md を fetch + parse して
   //   otherDocs に詰める。RPG タブが data.md 等のマスター定義を参照できるようにする。
+  //   取得は loadOtherDoc（#778 の遅延ロードと共有。下書き優先 → develop）。エディタでは
+  //   編集中・未保存の内容を見るのが自然なので、マスターも下書き優先で参照する。
   // 失敗した個別ファイルはスキップ（致命的でない）。
   useEffect(() => {
     let cancelled = false
+    // 編集中の文書が確定するまで待つ（#607 の継承元が未確定のまま解析しないため）
+    if (docPath !== currentScriptPath) return
     const loadOthers = async () => {
       const others = availableScripts.filter((s) => s.path !== currentScriptPath)
       if (others.length === 0) {
@@ -442,13 +765,9 @@ function EditorScreen({
       }
       const docs: EventDocument[] = []
       for (const s of others) {
-        try {
-          const data = await api.getContents(projectName, s.path, DEFAULT_BRANCH)
-          const parsed = await parseMarkdown(data.content || '')
-          docs.push(parsed)
-        } catch (err) {
-          console.warn(`[EditorScreen] failed to load other doc ${s.path}`, err)
-        }
+        // 失敗した個別ファイルは loadOtherDoc 内で warn され null になる（スキップ）
+        const parsed = await loadOtherDoc(s.path)
+        if (parsed) docs.push(parsed)
       }
       if (!cancelled) setOtherDocs(docs)
     }
@@ -456,7 +775,7 @@ function EditorScreen({
     return () => {
       cancelled = true
     }
-  }, [api, projectName, availableScripts, currentScriptPath])
+  }, [loadOtherDoc, availableScripts, currentScriptPath, docPath])
 
   // Markdown の変更を検出して未保存フラグを立てる。
   // Worker モデルでは status ポーリングは行わない（保存=即commit のためサーバに
@@ -470,6 +789,30 @@ function EditorScreen({
   // サーバへの保存は handleSave で明示的に行う。
   // PR #120 review S4: 初期ロード失敗時 (loadFailed) は draft を一切触らない。
   //   失敗状態で空 doc を設定しているので、autosave すると既存 draft を上書きする。
+  // 保留中の下書き書き込み。タイマー発火・タブ切替・アンマウントのいずれでも flushPendingDraft で確定する。
+  // （従来は rawMarkdown の cleanup でタイマーごと捨てていたため、切替前 1 秒以内の編集が
+  //  localStorage に残らなかった。#778 で他タブの下書きがプレビューの取得元になり表面化した）
+  const pendingDraftRef = useRef<{ key: string; markdown: string } | null>(null)
+  const flushPendingDraft = useCallback(() => {
+    if (draftSaveTimeoutRef.current !== null) {
+      clearTimeout(draftSaveTimeoutRef.current)
+      draftSaveTimeoutRef.current = null
+    }
+    const pending = pendingDraftRef.current
+    if (!pending) return
+    pendingDraftRef.current = null
+    try {
+      if (pending.markdown === initialMarkdownRef.current) {
+        // 変更が無ければ draft を消しておく
+        localStorage.removeItem(pending.key)
+      } else {
+        localStorage.setItem(pending.key, pending.markdown)
+      }
+    } catch (error) {
+      console.error('Failed to persist draft to localStorage:', error)
+    }
+  }, [])
+
   useEffect(() => {
     if (loadFailed) return
     if (!rawMarkdown && initialMarkdownRef.current === '') return
@@ -477,26 +820,35 @@ function EditorScreen({
     if (draftSaveTimeoutRef.current !== null) {
       clearTimeout(draftSaveTimeoutRef.current)
     }
-
-    draftSaveTimeoutRef.current = window.setTimeout(() => {
+    const nextKey = localStorageKey(projectName, rawMarkdownPath)
+    const stale = pendingDraftRef.current
+    if (stale && stale.key !== nextKey) {
+      // 別文書の保留分が残っていたら（emit の await 中にタブが切り替わった等）、上書きで失う前に
+      // 下書きとして確定する（その文書の基準内容はここでは分からないので、常に退避する）
       try {
-        if (rawMarkdown === initialMarkdownRef.current) {
-          // 変更が無ければ draft を消しておく
-          localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
-        } else {
-          localStorage.setItem(localStorageKey(projectName, currentScriptPath), rawMarkdown)
-        }
+        localStorage.setItem(stale.key, stale.markdown)
       } catch (error) {
         console.error('Failed to persist draft to localStorage:', error)
       }
-    }, 1000)
+    }
+    pendingDraftRef.current = {
+      key: nextKey,
+      markdown: rawMarkdown,
+    }
+    draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
 
     return () => {
+      // タイマーだけ止める。保留分は次の effect で上書きされるか、下の切替/アンマウントで flush される
       if (draftSaveTimeoutRef.current !== null) {
         clearTimeout(draftSaveTimeoutRef.current)
+        draftSaveTimeoutRef.current = null
       }
     }
-  }, [rawMarkdown, projectName, loadFailed])
+  }, [rawMarkdown, rawMarkdownPath, projectName, loadFailed, flushPendingDraft])
+
+  // タブ（ファイル）切替・プロジェクト切替・アンマウントの直前に、保留中の下書きを即確定する。
+  // cleanup は同じ commit の全 effect 本体より先に走るため、initialMarkdownRef がまだ旧文書の値のうちに比較できる。
+  useEffect(() => flushPendingDraft, [projectName, currentScriptPath, flushPendingDraft])
 
   // 保存ボタン: Worker の PUT contents を直接叩く（保存 = 即 commit）。
   // Worker モデルでは独立した「commit」概念が無いので、PUT が成功した時点で
@@ -511,24 +863,42 @@ function EditorScreen({
     }
     setIsSaving(true)
     setSaveError(null)
+    // 保存中はタブ切替を無効にしている（下のタブ UI）ので、PUT の await 中に編集中の文書は変わらない。
+    // プロジェクトも App の key={projectName} 再マウントで変わらない前提（保存中に projectName は不変）。
+    const savedPath = currentScriptPath
     try {
       const sha = shaRef.current
-      const result = await api.putContents(projectName, currentScriptPath, {
+      const result = await api.putContents(projectName, savedPath, {
         content: rawMarkdown,
         sha: sha ?? undefined,
         branch: DEFAULT_BRANCH,
         message: '原稿保存',
       })
+      const savedContent = rawMarkdown
+      const savedKey = localStorageKey(projectName, savedPath)
       if (result.sha) {
         shaRef.current = result.sha
         setHasSha(true)
       }
-      initialMarkdownRef.current = rawMarkdown
-      setHasUnsavedChanges(false)
-      try {
-        localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
-      } catch {
-        // ignore
+      // 保存中（PUT の await 中）に追記された場合、保存したのは古い内容。下書きを消さず、
+      // 未保存扱いのまま残す（保留中の下書き書き込みはそのまま走り、最新の内容を退避する）。
+      initialMarkdownRef.current = savedContent
+      if (rawMarkdownRef.current === savedContent) {
+        setHasUnsavedChanges(false)
+        try {
+          localStorage.removeItem(savedKey)
+        } catch {
+          // ignore
+        }
+      } else {
+        setHasUnsavedChanges(true)
+        pendingDraftRef.current = {
+          key: savedKey,
+          markdown: rawMarkdownRef.current,
+        }
+        if (draftSaveTimeoutRef.current === null) {
+          draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
+        }
       }
     } catch (error) {
       console.error('Failed to save:', error)
@@ -547,6 +917,9 @@ function EditorScreen({
   //   順序にする。
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
+    // 切替先のロード中は破棄しない（表示中の旧文書を捨てるつもりでも、取り直しと下書き削除は
+    // currentScriptPath＝切替先に対して走り、切替先の未保存の下書きを消してしまう）。
+    if (docPathRef.current !== currentScriptPathRef.current) return
     setIsSaving(true)
     setSaveError(null)
     try {
@@ -555,6 +928,12 @@ function EditorScreen({
       const markdown = data.content || ''
 
       // 2. 取得成功したら draft を消す（失敗時は draft を保持して再試行可能に）
+      // 保留中の書き込み（タイマー）も捨てる。残すと破棄の 1 秒後に下書きが復活する。
+      if (draftSaveTimeoutRef.current !== null) {
+        clearTimeout(draftSaveTimeoutRef.current)
+        draftSaveTimeoutRef.current = null
+      }
+      pendingDraftRef.current = null
       try {
         localStorage.removeItem(localStorageKey(projectName, currentScriptPath))
       } catch {
@@ -566,6 +945,7 @@ function EditorScreen({
       setLoadFailed(false)
       initialMarkdownRef.current = markdown
       setRawMarkdown(markdown)
+      setRawMarkdownPath(currentScriptPath)
       await parseAndSetDoc(markdown)
       // discard で doc が差し替わるため、選択状態・CanvasEditor 内部 state を完全リセット
       setSelectedEvent(null)
@@ -583,7 +963,65 @@ function EditorScreen({
   // プレイモード用のフラット Event[]
   const novelEvents = useMemo(() => (doc ? flattenDocumentEvents(doc) : []), [doc])
   // シーン索引。doc が変わる（ライブ再パース）たびに作り直し、NovelPlayer の jumpSceneIndex 用 effect が反映する。
-  const novelScenes = useMemo(() => (doc ? flattenDocumentScenes(doc) : []), [doc])
+  const currentDocScenes = useMemo(() => (doc ? flattenDocumentScenes(doc) : []), [doc])
+
+  // 他の MD のシーンへ飛ぶ [ジャンプ:]・選択肢をプレビューで効かせる遅延ロード (#778)。
+  // 遅延ロードの規則は PlayerScreen と共通（game/crossFileScenes.ts）。取得元は上の loadOtherDoc。
+  const resolveMissingScene = useCallback(
+    async (sceneId: string): Promise<EventScene[] | null> => {
+      // script.md の継承値変更でキャッシュが破棄され解決が打ち切られた場合だけ、新しい epoch で1回やり直す
+      // （タブ・プロジェクト切替による破棄は、もう不要な解決なのでやり直さない）
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const entryPath = currentScriptPathRef.current
+        // タブ切替の直後は doc がまだ旧文書のまま（loadChapters 完了まで）。そのまま entry に
+        // すると別の文書を取り違えるので、doc が entryPath のものになるまでは解決しない（not-found）。
+        if (!docRef.current || docPathRef.current !== entryPath) return null
+        const epoch = otherDocsEpochRef.current
+        const switchEpoch = switchEpochRef.current
+        // 編集中の文書は最新の doc state を差し込んだ作業用 Map で引く（キャッシュ本体には入れない）
+        const docs = new Map(loadedOtherDocsRef.current)
+        docs.set(entryPath, docRef.current)
+        const isStale = () => otherDocsEpochRef.current !== epoch
+        const syncLazyIndex = () => {
+          // 索引（jumpSceneIndex）にも反映する。編集中文書は含めない（currentDocScenes が別建て）。
+          if (isStale()) return
+          setLazyOtherScenes(
+            buildSceneIndex(null, sortedScriptPathsRef.current, loadedOtherDocsRef.current)
+          )
+        }
+        const result = await resolveMissingSceneAcrossDocs({
+          sceneId,
+          entryPath,
+          sortedPaths: sortedScriptPathsRef.current,
+          docs: () => docs,
+          isCancelled: isStale,
+          loadDoc: async (path) => {
+            const loaded = await loadOtherDoc(path)
+            if (loaded) docs.set(path, loaded)
+            return loaded
+          },
+          onIndexUpdated: syncLazyIndex,
+        })
+        if (result) {
+          // 他文書が（RPG マスター用の先行取得などで）既にキャッシュ済みで取得が走らなかった場合も、
+          // 索引に反映する（onIndexUpdated は取得が走ったときしか呼ばれない）
+          syncLazyIndex()
+          return result
+        }
+        if (!isStale() || switchEpochRef.current !== switchEpoch) return null
+      }
+      return null
+    },
+    [loadOtherDoc]
+  )
+
+  // jumpSceneIndex: 編集中の文書（ライブ再パース）+ 遅延ロード済みの他文書。
+  // doc の編集で currentDocScenes が変わっても、取得済みの他文書の索引は残る。
+  const novelScenes = useMemo(
+    () =>
+      lazyOtherScenes.length === 0 ? currentDocScenes : [...currentDocScenes, ...lazyOtherScenes],
+    [currentDocScenes, lazyOtherScenes]
+  )
 
   return (
     // #239: 漫画家の机テーマ。エディタ全体に desk-paper 紙テクスチャを敷く。
@@ -686,7 +1124,12 @@ function EditorScreen({
                   key={s.path}
                   role="tab"
                   aria-selected={isActive}
+                  // 保存・破棄の通信中と、動画書き出しのモーダルを開いている間は切り替えない
+                  // （sha・基準内容・下書きが別文書のものと混ざるのを防ぐ／切替先のロード中の inert でモーダルが操作不能になるのを防ぐ）
+                  disabled={isSaving || exportOpen}
+                  aria-disabled={isSaving || exportOpen}
                   onClick={() => {
+                    if (isSaving || exportOpen) return
                     if (s.path === currentScriptPath) return
                     if (
                       hasUnsavedChanges &&
@@ -696,10 +1139,13 @@ function EditorScreen({
                     ) {
                       return
                     }
-                    setCurrentScriptPath(s.path)
+                    switchScript(s.path)
                     // 切替後の load は currentScriptPath を依存に入れた useEffect が処理する
                   }}
                   className="desk-tab"
+                  style={
+                    isSaving || exportOpen ? { opacity: 0.5, cursor: 'not-allowed' } : undefined
+                  }
                   title={s.title ?? s.path}
                 >
                   {s.path}
@@ -724,9 +1170,17 @@ function EditorScreen({
           {(['novel', 'rpg'] as const).map((tab) => (
             <button
               key={tab}
-              onClick={() => setEditorTab(tab)}
+              onClick={() => {
+                // 動画書き出し中は切り替えない（タブを替えるとプレビューが消えて録画が壊れる）(#797)
+                if (exportRunning) return
+                setEditorTab(tab)
+              }}
               role="tab"
               aria-selected={editorTab === tab}
+              disabled={exportRunning}
+              aria-disabled={exportRunning}
+              title={exportRunning ? '動画書き出し中は切り替えできません' : undefined}
+              style={exportRunning ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
               className="desk-tab"
             >
               {tab === 'novel' ? 'ノベル' : 'RPG'}
@@ -735,7 +1189,18 @@ function EditorScreen({
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main ref={mainRef} className="relative flex-1 overflow-hidden">
+        {switchingDoc && doc !== null && (
+          // 切替先のロード中: 旧文書が見えているが編集はできないことを示す
+          <div
+            data-testid="doc-switching-overlay"
+            className={`absolute inset-0 z-40 flex items-center justify-center ${
+              isDark ? 'bg-gray-900/60 text-gray-200' : 'bg-white/60 text-gray-700'
+            }`}
+          >
+            読み込み中...
+          </div>
+        )}
         {editorTab === 'novel' ? (
           mode === 'edit' ? (
             doc !== null ? (
@@ -760,6 +1225,7 @@ function EditorScreen({
               <NovelPlayer
                 events={novelEvents}
                 jumpSceneIndex={novelScenes}
+                onResolveMissingScene={resolveMissingScene}
                 aspectRatio={doc?.aspect_ratio}
                 choiceStyle={doc?.choice_style ?? null}
                 fontFamily={doc?.font_family ?? null}
@@ -835,6 +1301,7 @@ function EditorScreen({
                   onChangeFps={setExportFps}
                   onChangeInheritFlags={setExportInheritFlags}
                   onStart={handleStartVideoExport}
+                  onAbort={handleAbortVideoExport}
                   onClose={() => setExportOpen(false)}
                 />
               )}
@@ -959,6 +1426,7 @@ function EditorScreen({
                       rpgProject={rpgProject}
                       onChange={handleMapChange}
                       isDark={isDark}
+                      assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
                     />
                   )}
                   {rpgSubTab === 'npc' && (
@@ -972,7 +1440,11 @@ function EditorScreen({
                     />
                   )}
                   {rpgSubTab === 'play' && (
-                    <RPGPlayer gameData={rpgProject ?? undefined} view={rpgProject?.view} />
+                    <RPGPlayer
+                      gameData={rpgProject ?? undefined}
+                      view={rpgProject?.view}
+                      assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
+                    />
                   )}
                 </>
               )}
@@ -1006,6 +1478,7 @@ function EditorScreen({
               </button>
               <button
                 onClick={handleDiscard}
+                disabled={isSaving}
                 className={`px-4 py-2 rounded font-medium transition-colors ${
                   isDark
                     ? 'bg-red-600 hover:bg-red-700 text-white'
@@ -1047,7 +1520,12 @@ function EditorScreen({
         onDiscard={() => setShowDiscardConfirm(true)}
         mode={editorTab === 'novel' ? mode : undefined}
         onModeChange={editorTab === 'novel' ? setMode : undefined}
+        // 動画書き出し中はモードを切り替えない（プレビューが消えて録画が壊れる）(#797)
+        modeChangeDisabled={exportRunning}
+        modeChangeDisabledTitle="動画書き出し中は切り替えできません"
         // PR #120 review Q1: shaRef 未取得（loadFailed / 未ロード）時は保存不可。
+        discardDisabled={switchingDoc}
+        discardDisabledTitle="読み込み中…"
         saveDisabled={loadFailed || !hasSha}
         saveDisabledTitle={
           loadFailed ? '再読み込みしてから保存してください' : !hasSha ? '読み込み中…' : undefined
