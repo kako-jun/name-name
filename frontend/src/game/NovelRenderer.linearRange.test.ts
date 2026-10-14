@@ -752,7 +752,9 @@ describe('findLinearSegments / resolveLinearSegments / segmentAt (#777)', () => 
       const { r } = linearRenderer()
       const ended = vi.fn()
       r.setOnStoryEndedChange(ended)
-      await r.startFrom({ sceneId: 'a', confinedSceneIds: ['a'] })
+      // 閉じ込めは文書の全シーン（防御の endStory で通らないようにする）
+      await r.startFrom({ sceneId: 'a', confinedSceneIds: ['a', 'b', 'c'] })
+      expect(r.getCurrentSceneId()).toBe('a') // 旧挙動（線形ストリーム）ではストリームの持ち主 null
       advance(r)
       expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(true)
       expect(ended).toHaveBeenCalledWith(true)
