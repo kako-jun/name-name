@@ -70,6 +70,7 @@ import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapp
 import { countDisplayEvents, remapEventIndexAfterReResolve } from './eventCursor'
 import { buildFreshPositionState } from './freshState'
 import { collectUpcomingAssetUrls } from './preloadPlan'
+import { buildDebugState, type DebugState } from './debugState'
 import { isSceneIdConfined } from './sceneConfinement'
 import {
   carryPolicyFor,
@@ -136,7 +137,6 @@ import {
   computeSeekBarPosition,
   PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
   PLAYER_BUTTON_ROW_HEIGHT_PX,
-  describeEventForDebug,
   findSceneById,
   resolveSceneTitle,
   splitIntoSentences,
@@ -1255,62 +1255,28 @@ export class NovelRenderer {
   /**
    * デバッグ用: 現在の実行状態を返す。開発時の HUD 表示に使う。
    */
-  getDebugState(): {
-    eventIndex: number
-    eventCount: number
-    eventKind: string
-    eventText?: string
-    autoMode: boolean
-    waitingForChoice: boolean
-    waitingForWait: boolean
-    jumpState: 'idle' | 'pending' | 'stalled'
-    currentResolvedFontFamily: string | null
-    sceneId: string | null
-    audioWarning: string | null
-    characters: Array<{
-      name: string
-      expression: string
-      position: string
-      depth: number
-      x: number
-      y: number
-      scale: number
-    }>
-  } {
-    const current = this.resolvedEvents[this.eventIndex]
-    // イベントから debug HUD 用の {kind, text} を取り出す純粋計算は
-    // novelLayout.describeEventForDebug に集約 (#260)。
-    const { kind, text } = describeEventForDebug(current)
-    const chars = this.characterLayer.getCharacterStates().map((s) => {
-      // 私的フィールドへの最小アクセス: x/y/scale をスナップショット
-      const inner = this.characterLayer as unknown as {
-        characters: Map<string, { sprite: { x: number; y: number; scale: { x: number } } }>
-      }
-      const st = inner.characters.get(s.name)
-      return {
-        name: s.name,
-        expression: s.expression,
-        position: s.position,
-        depth: s.depth,
-        x: st?.sprite.x ?? -1,
-        y: st?.sprite.y ?? -1,
-        scale: st?.sprite.scale.x ?? -1,
-      }
-    })
-    return {
+  getDebugState(): DebugState {
+    // 整形は純粋関数 `buildDebugState`（debugState.ts）。ここでは `this` の読み取りだけを行う。
+    return buildDebugState({
+      resolvedEvents: this.resolvedEvents,
       eventIndex: this.eventIndex,
-      eventCount: this.resolvedEvents.length,
-      eventKind: kind,
-      eventText: text,
       autoMode: this.autoMode,
       waitingForChoice: this.waitingForChoice,
       waitingForWait: this.waitingForWait,
       jumpState: this.jumpState,
       currentResolvedFontFamily: this.currentResolvedFontFamily,
-      sceneId: this.getPlayheadSceneId() ?? null,
+      sceneId: this.getPlayheadSceneId(),
       audioWarning: this.audioManager.getLastWarning(),
-      characters: chars,
-    }
+      characterStates: this.characterLayer.getCharacterStates(),
+      spriteGeometry: (name) => {
+        // 私的フィールドへの最小アクセス: x/y/scale をスナップショット
+        const inner = this.characterLayer as unknown as {
+          characters: Map<string, { sprite: { x: number; y: number; scale: { x: number } } }>
+        }
+        const st = inner.characters.get(name)
+        return st ? { x: st.sprite.x, y: st.sprite.y, scale: st.sprite.scale.x } : undefined
+      },
+    })
   }
 
   /**
