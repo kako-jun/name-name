@@ -1551,7 +1551,7 @@ export class BattleScreen extends Container {
       shadow.skew.x = t.skewX
       // 基準位置はモーションのずれを足す前の値（container.x は動いていることがある）。ずれは applyMotionFrame が足す (#745)
       view.shadowBaseX = view.baseX + g.sprite.x + g.sprite.width / 2
-      view.shadowBaseY = view.baseY + g.sprite.y + g.sprite.height
+      view.shadowBaseY = view.baseY + g.sprite.y + g.sprite.height + g.liftPx
       shadow.position.set(view.shadowBaseX, view.shadowBaseY)
       shadow.visible = k > 0 && params.castAlpha > 0
     }

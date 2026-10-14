@@ -7,7 +7,7 @@
  * `this` / PixiJS / DOM / TimeController には一切依存しない。
  */
 import type { NovelGameState } from './GameState'
-import type { Event, FlagValue } from '../types'
+import type { Event, EventScene, FlagValue } from '../types'
 
 /** シーン入場の種類。進行 = 物語の流れの中の遷移、新規開始 = 文脈を捨てて始める、復元 = 保存状態へ戻す。 */
 export type EntryKind = 'progress' | 'fresh' | 'restore'
@@ -247,4 +247,114 @@ export function findRestorePositionError(
     }
   }
   return null
+}
+
+/**
+ * エントリの線形ストリームを構成するシーン区間 (#777)。
+ * `start` / `length` はエントリの元イベント列（`[条件:]` 展開前）での位置。
+ */
+export interface LinearSegment {
+  sceneId: string
+  start: number
+  length: number
+}
+
+/**
+ * エントリの線形ストリーム（シーンの間に `SceneTransition` を挟んで flatten した元イベント列）を、
+ * 元のシーン区間に分解する (#777)。
+ *
+ * 作者の `[場面転換]` も同じ `'SceneTransition'` なので、イベントの種別では境界を区別できない。
+ * そこで `scenes` の各シーンの events が同一オブジェクト参照で並び、直後に `SceneTransition`（または終端）が
+ * 来るものだけを区間とする。照合できなくなったところで打ち切る（以降は線形ストリームの外）。照合は先頭のシーンを見つけたあと、`scenes` 上の次のシーンを順に行う（エントリ文書のシーンは `scenes` 上で連続・文書順）。
+ * events が空のシーンは長さ 0 の区間にする。
+ */
+export function findLinearSegments(
+  entryEvents: readonly Event[],
+  scenes: readonly EventScene[]
+): LinearSegment[] {
+  // 先頭に照合できるシーンが複数あり得る（文字列イベントだけのシーン同士など）ので、候補ごとに連鎖を作り、
+  // 一番長く続くものを採る。
+  // 連鎖の長さが同じ候補は、`scenes` で先に並ぶものを採る（エントリ文書のシーンが先頭に並ぶ前提）。
+  let best: LinearSegment[] = []
+  for (let i = 0; i < scenes.length; i++) {
+    if (!matchesAt(entryEvents, 0, scenes[i].events)) continue
+    const chain = chainFrom(entryEvents, scenes, i)
+    if (chain.length > best.length) best = chain
+  }
+  return best
+}
+
+/**
+ * `scenes[first]` が先頭に照合できたとして、以降は `scenes` 上の次のシーンを順に照合する。
+ * エントリ文書のシーンは `allScenes` 上で連続し文書順に並ぶ。events が空のシーンは長さ 0 の区間にする
+ * （直後の境界の `SceneTransition` を消費する）。
+ */
+function chainFrom(
+  entryEvents: readonly Event[],
+  scenes: readonly EventScene[],
+  first: number
+): LinearSegment[] {
+  const segments: LinearSegment[] = []
+  let pos = 0
+  for (let i = first; i < scenes.length; i++) {
+    const scene = scenes[i]
+    if (!matchesAt(entryEvents, pos, scene.events)) break
+    segments.push({ sceneId: scene.id, start: pos, length: scene.events.length })
+    pos += scene.events.length
+    if (pos >= entryEvents.length) break
+    // matchesAt が直後の境界を確認済み
+    pos += 1
+  }
+  return segments
+}
+
+function matchesAt(stream: readonly Event[], pos: number, events: readonly Event[]): boolean {
+  if (pos + events.length > stream.length) return false
+  for (let i = 0; i < events.length; i++) {
+    if (stream[pos + i] !== events[i]) return false
+  }
+  const next = pos + events.length
+  return next === stream.length || stream[next] === 'SceneTransition'
+}
+
+/**
+ * 区間を `[条件:]` 展開後の位置に直した境界 (#777)。
+ * `start`: 展開後のストリームでのシーン先頭、`separator`: 直前の境界の `SceneTransition` の位置
+ * （先頭の区間は null）。展開は現在の flags で行うので、flags が変わったら引き直す。
+ */
+export interface ResolvedSegment {
+  sceneId: string
+  start: number
+  separator: number | null
+}
+
+export function resolveLinearSegments(
+  entryEvents: readonly Event[],
+  segments: readonly LinearSegment[],
+  resolvedLength: (events: readonly Event[]) => number
+): ResolvedSegment[] {
+  const out: ResolvedSegment[] = []
+  let pos = 0
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    const separator = i === 0 ? null : pos
+    if (i > 0) pos += 1
+    out.push({ sceneId: seg.sceneId, start: pos, separator })
+    pos += resolvedLength(entryEvents.slice(seg.start, seg.start + seg.length))
+  }
+  return out
+}
+
+/** 展開後のイベント位置 `index` が属するシーン区間（境界の `SceneTransition` 自身は次のシーンに属す）。 */
+export function segmentAt(
+  resolved: readonly ResolvedSegment[],
+  index: number
+): ResolvedSegment | null {
+  let found: ResolvedSegment | null = null
+  for (const seg of resolved) {
+    const from = seg.separator ?? seg.start
+    if (index >= from) found = seg
+    else break
+  }
+  return found
 }

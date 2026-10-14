@@ -88,6 +88,23 @@ Worker はパースしない。GitHub から Markdown を取得してそのま�
 `GET /api/projects/:name/scripts` が対象 `.md` を `[{ path, title, hidden, sha, size }]` で返す。
 `scriptsDir` 未指定プロジェクトでは、ルート直下の `.md` の本文を peek し、frontmatter
 `engine: name-name` を含むものだけを返す。
+エディタが最初に開く文書は、この一覧から決める（直下の `script.md` があればそれ、無ければ basename が `script.md` のもの、それも無ければ先頭。#778）。
+一覧の取得が済むまで初期ロードは待ち、一覧が失敗した環境では従来どおり直下の `script.md` を試す。
+ただし worker の一覧取得は（キャッシュ MISS のとき）各 .md を順に fetch して遅いため、既定の直下 `script.md` の取得だけは一覧と並列で先に投げておく。
+先行取得するのは `scriptsDir` を持つプロジェクトでは `scriptsDir/script.md`（`GET /api/projects` の `scriptsDir`）、持たなければ直下の `script.md`。
+一覧が「その `script.md` あり」と確定したらその結果を採用し、一覧に無ければ捨てる（失敗してもトーストは出さない）。
+先行取得の取得権は await の前に同期的に確保し、同じプロジェクトで未消費の先行取得があれば作り直さない（dev の StrictMode の二重実行でも起動時の取得は1回）。
+文書のロードは、タブ・プロジェクトの切替で中断する（遅れて完了した古いロードは、state・sha・下書きに何も書かない）。
+保存（PUT）・破棄の通信中はタブ切替を無効にする（タブを disabled にする）。通信中に編集中の文書が変わらないので、保存完了が別文書の sha・基準内容・下書きに触れる経路が無い（#794）。
+下書きのキーは `currentScriptPath` ではなく、`rawMarkdown` がどのパスの文書の内容かを表す `rawMarkdownPath` から作る（タブ切替後、切替先のロード完了までに旧文書を編集しても、切替先のキーに旧文書の内容を書かない。#795）。
+切替先のロード中（表示中の `doc` が編集中パスの文書でない間）は、編集 UI を読み取り専用にする（`main` に `inert`・「読み込み中...」の覆い）。`handleDocChange` もこの間の編集を受け付けない（旧文書の編集がロード完了で黙って消えるのを防ぐ）。
+この間は破棄ボタンも無効（title「読み込み中…」）で、`handleDiscard` も何もしない（旧文書を捨てるつもりでも、取り直しと下書き削除は切替先に対して走り、切替先の未保存の下書きを消してしまうため）。タブ切替で旧文書の未保存表示は直ちに落とす。
+`emitMarkdown` の await 中にタブが切り替わった編集は、`rawMarkdown` には反映せず、編集した文書の下書きとして退避する。別文書の保留中の下書きが残ったまま新しい下書きを積むときは、その文書の基準内容が分からないので、常に下書きとして先に退避する。
+切替後に emit が失敗しても、切替先の表示を旧文書に戻さない（`setDoc(prev)` は編集した文書が表示中のときだけ）。
+動画書き出しのモーダルを開いている間は、保存中と同じくタブ切替を無効にする（モード・エディタタブを切り替えるとモーダルはアンマウントされるので、開いている扱いも閉じる。切替先のロード中の `inert` でモーダルが操作不能になるのを避けるため）。
+プロジェクトの切替は App が `key={projectName}` で再マウントする前提で、エディタ内の初期化処理は保険。
+`rawMarkdown` は parse 完了と中断判定の後に設定する（設定からコミットまでの間のタブ切替で、切替先のキーに旧文書の本文を積まないため）。
+一覧も失敗した場合は、先行取得の失敗を使い回して同じ取得を繰り返さない（トーストは1回）。プロジェクトが変わったら一覧・開くファイル・doc の所属を初期化して取り直す。
 プロジェクト設定に `scriptsDir`（例 `content/scripts`）を持たせると、列挙の起点を
 そのディレクトリに移し、**起点直下＋サブディレクトリ 1 段**の `.md` を列挙する（#284。
 theo-hayami がシナリオを `content/scripts/free` `content/scripts/main` に分割するため）。
@@ -149,6 +166,31 @@ basename が `script.md`** のもの（無ければ先頭）を選ぶ。
 重複は warn）。なおエントリ doc のみが RPG 判定・`aspect_ratio`/`choice_style`/`font_family`/
 `font_size`/`dialog_style`/`protagonist` の供給元（サブ MD の RPG シーンは未対応）。
 
+**エディタのプレビューでのファイル横断ジャンプ（#778）**: エディタ（`EditorScreen`）のプレビューも、他の .md のシーンへの
+`[ジャンプ:]`・選択肢を `PlayerScreen` と同じ遅延ロードで解決する。遅延ロードの規則（sceneId から候補 MD を推定 →
+未ロード MD を順に取得 → 索引を作り直す）は `frontend/src/game/crossFileScenes.ts` の
+`resolveMissingSceneAcrossDocs` に切り出して両画面で共有する。取得元だけがエディタ固有で、次のとおり:
+
+- **編集中の文書**: 常に最新の `doc` state（未保存の編集を含む）。キャッシュには入れず、呼び出しごとに作業用 `Map` へ差し込む。
+  タブ切替直後に `doc` がまだ旧文書の間（`doc` のパスと編集中パスが食い違う間）は解決せず not-found にする（エントリの取り違え防止）
+- **他タブの文書**: そのタブの未保存の下書き（`localStorage` の `name-name:editor-draft:{project}:{path}`）があればそれ、
+  無ければ **develop** ブランチの内容（エディタと同じ。`/play` は main）。この取得（`loadOtherDoc`）は path キーのキャッシュ・取得中 Promise と
+  ともに1本で、#238 の `otherDocs`（RPG タブのマスター参照）と共有する（二重取得しない）。そのためマスター参照も下書き優先になる
+  （エディタでは編集中・未保存の内容を見るのが自然なため）。キャッシュはタブ切替・プロジェクト切替で epoch を進めて捨て、
+  古い取得結果は反映せず、進行中の解決ループも打ち切る
+- **下書きの確定**: 下書き（localStorage）への書き込みは 1 秒デバウンスだが、タブ切替・アンマウントの直前に保留分を即確定する
+  （切替前 1 秒以内の編集が失われないように。他タブの下書きがプレビューの取得元になるため）
+- **探索対象**: `/play` と同じく hidden の .md（`data.md` 等のマスター）は遅延ロードの探索から除く（編集中のものは残す）
+- **`jumpSceneIndex`**: 編集中の文書のシーン（ライブ再パースで更新）に、取得済みの他文書のシーンを後ろへ足した配列。
+  ライブ再パースしても取得済みの他文書の索引は残る。反映は索引 effect だけ（#671）で、再生ストリームは触らない
+- **#607 の `event_image_transition` 継承**: `/play` と同じく、`script.md`（basename 一致）以外の他文書は `script.md` の値を継承してパースする
+  （プレビューの目的は `/play` の再現）。`script.md` が無い・読めない場合は継承なし。編集中の文書自身には適用しない（エディタが直接パースするため）
+  継承元の `script.md` を編集中でその文書が未確定の間（タブ切替直後）は他文書を解析しない。`script.md` の `event_image_transition` を編集で変えると、解析済みの他文書は捨てて取り直す（その破棄で打ち切られた進行中のジャンプ解決は、新しい状態で1回だけやり直す。タブ切替による破棄ではやり直さない）。
+  `doc` が未確定の間（タブ切替直後）に起きたジャンプは not-found になり、読み込み完了後に入り直すと解決する
+- エントリは「いま編集中の文書」（`/play` の `script.md` 固定とは異なる）
+- **動画書き出しの開始/終了シーン**（`VideoExportModal` の候補）は、今回は範囲外で自文書のシーンのみ（他文書から選べない）
+
+
 #### production 向けシーン直接ディープリンク `?scene=`（#386）
 
 `?scene=<sceneId>` は production ビルドでも常時有効な、特定シーンへの直接埋め込み用の入口。
@@ -184,6 +226,7 @@ HUD（`loadDebugInfo`）の `debug_scene: <id> → resolved / not found (…)` �
 止まっていた。`debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
 にフォールバックする（詳細は [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) の §3）。
 どちらも入場の種類は新規開始で、背景・BGM・立ち絵は持ち越さない（`carryPolicyFor('fresh')`）。
+対象がエントリ文書の線形ストリーム上のシーンなら、ストリーム全体をそのシーン先頭から流し、シーン境界で `onSceneChange` を発火する（#777）。`?scene=` は、エントリ以外のファイルのシーンを指すときだけ confinement が付くので線形連結の対象外（そのシーンの末尾で終劇）。エントリのシーンを指す `?scene=` は confinement なしで後続へ流れる。`?debug_scene=` も後続のシーンへ流れる。閉じ込め外のシーン境界に入ったら終劇にする処理は、防御として残してある。
 
 **confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
 choice で漏れてはいけない（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の
@@ -486,6 +529,8 @@ interface NovelGameState {
 - 「背景等」は背景・背景板・大道具・幕・紙人形輪郭を指す。「立ち絵」は、進行では `clearForSceneTransition`（遷移用の退場）、それ以外では `clear`
 
 #### 経路と入場の種類
+
+G1・G2 はエディタのプレビュー（`EditorScreen`）でも同じ入口を通り、遅延ロードも `PlayerScreen` と同じ規則で解決する（#778。取得元は編集中の doc・他タブの下書き・develop。詳細は「マルチMD再生と遅延ロード」）。
 
 | 記号 | 経路 | 入口（現状） | 種類（あるべき） |
 |---|---|---|---|
@@ -812,7 +857,7 @@ AudioManager.enableCapture ─┘
 2. `renderer.onEnd` が発火（全イベント完走、`endSceneId` が最終シーンだったケース）
 
 stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob を確定する。BGM 既定フェード 1000ms を完全に録音するための値。
-新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間で効く。線形連結のシーンは開始シーンの末尾で終わる（#777）。末尾が選択肢のシーンは、オート再生が選択肢を選ばないため終端に達しない。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
+新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間と、線形に連結したシーン間（エントリ文書でシーンが続く並び）の両方で効く。開始シーンがエントリの線形ストリーム上にあれば、`startFrom` はそのシーンの events だけでなくストリーム全体をシーン先頭から流し、シーン境界の `SceneTransition` を通過するたびに入ったシーンの ID で `onSceneChange` を発火する（#777、ADR 0003「#777 での追記」）。作者の `[場面転換]`（シーン内）は境界ではない。ジャンプ・選択肢で入ったシーンはそのシーンの events だけが流れるので、その先で線形に続くシーンへは進まない。末尾が選択肢のシーンは、オート再生が選択肢を選ばないため終端に達しない。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
 
 ### VideoExporter が依存する公開 API
 
@@ -868,7 +913,7 @@ RPG プレイモードもノベルと同じく PixiJS で実装する（Phaser �
 - `UiNpcData` — UI / runtime 側の NPC 型（parser 側 `NpcData`（WASM 経由スキーマ、`frontend/src/types.ts`）から `rpgProjectFromDoc` 変換層で詰め替える）。フィールド追加時は parser / UI / 変換層の 3 箇所を揃える #103。グリッド座標・名前・会話メッセージ・表示色・オプション: `sprite`（スプライトシートパス）・`frames`（歩行アニメフレーム数 / 方向あたり、未指定なら 2）・`direction`（アイドル時の向き、未指定なら `down`）
 - `RPGProject` — 上記の集合（+ 将来の `EventData`）
 - `RPGProject.battleLayout` / `battleBackground` (#736) — 戦闘画面のレイアウト（`'front'` 既定 / `'side'`）と背景画像パス。frontmatter `battle_layout:` / `battle_background:` が parser（`Document`）→ `normalizeDocument` → `rpgProjectFromDoc` → `fieldBattle.ts` の `readFieldBattleSettings`（各レンダラーの `battleSettings`）→ `openFieldBattle` → `BattleScreen` の `layout`/`background` オプションへ流れる。サイドビューの座標計算は純粋関数 `frontend/src/game/battleLayout.ts`（`computeSideBattleLayout`）が正本で、`BattleScreen` は描画だけを担う。`BattleEntity.sprite` は戦闘への組み立て時（`rollEncounter` / `fieldBattle.ts` の `partyDefToBattleEntity`）に `MonsterDef`/`PartyMemberDef` の `sprite` から写す。`battleEngine.ts` は変更しない。`front` ではエンジンに先頭 1 人だけ渡す（従来どおり）が、`side` では `party` 全員を渡す（hero 定義があれば先頭、無ければ定義順。`RPGProject.partyOrder` が定義順の正本で、整数風 ID でも `Object.keys` に並べ替えられない）。`battleLayout.ts` は敵ラベル矩形・ログ行数（敵数で 2〜4）・省略関数（`fitLabel`）・コマンドのフォントサイズ（`fitCommandFontSize`）・フォールバック矩形も純粋関数で返し（複数体の列数は「3 体まで 1 列・4 体以上は 2 列」を下限に `SIDE_READABLE_SPRITE_SIZE`〈HP 行の概算幅から導出した約 64px〉に届く最小の列数、届かなければ全体で最大サイズの列数。ラベル幅は 1 列なら領域幅まで（上限はスプライト一辺の `SIDE_LABEL_MAX_WIDTH_RATIO`=3 倍）・多列は列ピッチまで。幅が `SIDE_LABEL_MIN_WIDTH`（HP 数値「12/12」が入る幅）未満のラベルは置かない。`fitHpLabel` は HP 行を「HP 」より数値優先で省略。ラベルを置くとスプライトが潰れるほど低いときはラベルだけ省く）、`BattleScreen` は結果を使うだけ。戦闘中の画面リサイズは各レンダラーの `handleResize` が `BattleScreen.redraw` へ流す
-- `RPGProject.spriteStyle` (#737) — 戦闘スプライトの表示スタイル（`'none'` 既定 / `'acrylic'`）。frontmatter `sprite_style:` が parser（`Document`）→ `normalizeDocument`（`nullIfEmpty`）→ `rpgProjectFromDoc`（`normalizeSpriteStyle`）→ `fieldBattle.ts` の `readFieldBattleSettings`（各レンダラーの `battleSettings`）→ `openFieldBattle` → `BattleScreen` の `spriteStyle` オプションへ流れる（GUI 専用・TUI は読まない）。パラメータ（透明な余白の幅・枠線の太さ/色/不透明度・台座・影・ハイライト。長さは比率で持ち、小さいスプライトで線が潰れないよう px の下限も持つ）と、枠から台座/影/スプライトの配置を求める計算は純粋関数 `frontend/src/game/spriteStyle.ts`（`resolveAcrylicParams` / `computeAcrylicGeometry`）が正本。`BattleScreen` は結果を使うだけで、画像のある枠に限り Container 内を 台座（接地影込み・`acrylicBase.ts` の純粋関数 `renderAcrylicBase` が幅 512px で一度だけ作る共有テクスチャ。透明な上面・側面の厚み・縁のハイライト・差し込み口のスリット・柔らかい影。`acrylicBaseTexture.ts` がパラメータごとにキャッシュ。canvas が使えない環境では従来の Graphics の黒い台座・影）→ アクリル板（`acrylicPlate.ts` の純粋関数 `renderAcrylicPlate` が、長辺 192px（`PLATE_WORK_MAX_SIDE`）の作業解像度で 1 回だけ作る RGBA ラスタ（1 キャラ約 10ms）。同じ画像（tex.source）の板・影は共有する。スプライトの alpha を box blur 3 回（≒ガウス）でぼかし、しきい値の smoothstep で外へ余白+線ぶん膨らませて板の形にし、縁をアンチエイリアスする。質感は、内側はごく薄い白〜水色の透明面、縁は細い明るいリムで光が当たる左上を強く・反対側を弱く、縁の内側に光と反対側の薄い影、左上寄りの斜めの鏡面ハイライトの筋。canvas↔Texture の橋渡しは `acrylicPlateTexture.ts`。BattleScreen の `makeAcrylicPlate` が呼び、canvas が使えない環境では null＝板なし。テクスチャは mipmap＋linear で、スプライトと同じ倍率（作業解像度ぶんを掛けて）で拡縮して pad ぶん外へ広げて敷く。台座のスリットの高さ `computeSlitY` で水平に切る mask は板の兄弟 Graphics で、本体の足元は切らない）→ スプライトの順に積む（子の順は fallback → 台座 Graphics → 台座スプライト → 板 → 板の mask → スプライト。v8 では Sprite に子を足せない）。さらに本体（シルエット＋板の形）の地面の影は、板と同時に作るぼかしテクスチャ（`acrylicShadow.ts` の `renderGroundShadow`）を `shadowLayer`（sideStage の直下・全スプライトより下）へ敷き、足元を pivot に `computeShadowTransform`（縦に `castSquash` 倍つぶし `castShear` だけ右へ傾ける）で変形する（#760。acrylic のときだけ）（#760 で旧 `AcrylicEdgeFilter`＝描画解像度で alpha の段差をなぞる方式を廃止。縮小後のテクスチャ上で動くためジャギーが出た）。板は画像ごとに 1 回だけ作り、再配置では位置と倍率だけ更新する。`battleLayout.ts` の座標は変えず、台座・影・スプライトは slot 枠の下端に収める（台座の側面の厚みは `computeAcrylicGeometry` が下に予約。板だけは余白+線ぶん枠の外へ広がる）。パラメータ上書きは `BattleScreenOptions.spriteStyleParams`（コード側のみ）
+- `RPGProject.spriteStyle` (#737) — 戦闘スプライトの表示スタイル（`'none'` 既定 / `'acrylic'`）。frontmatter `sprite_style:` が parser（`Document`）→ `normalizeDocument`（`nullIfEmpty`）→ `rpgProjectFromDoc`（`normalizeSpriteStyle`）→ `fieldBattle.ts` の `readFieldBattleSettings`（各レンダラーの `battleSettings`）→ `openFieldBattle` → `BattleScreen` の `spriteStyle` オプションへ流れる（GUI 専用・TUI は読まない）。パラメータ（透明な余白の幅・枠線の太さ/色/不透明度・台座・影・ハイライト。長さは比率で持ち、小さいスプライトで線が潰れないよう px の下限も持つ）と、枠から台座/影/スプライトの配置を求める計算は純粋関数 `frontend/src/game/spriteStyle.ts`（`resolveAcrylicParams` / `computeAcrylicGeometry`）が正本。`BattleScreen` は結果を使うだけで、画像のある枠に限り Container 内を 台座（接地影込み・`acrylicBase.ts` の純粋関数 `renderAcrylicBase` が幅 512px で一度だけ作る共有テクスチャ。透明な上面・側面の厚み・縁のハイライト・差し込み口のスリット・柔らかい影。`acrylicBaseTexture.ts` がパラメータごとにキャッシュ。canvas が使えない環境では従来の Graphics の黒い台座・影）→ アクリル板（`acrylicPlate.ts` の純粋関数 `renderAcrylicPlate` が、長辺 192px（`PLATE_WORK_MAX_SIDE`）の作業解像度で 1 回だけ作る RGBA ラスタ（1 キャラ約 10ms）。同じ画像（tex.source）の板・影は共有する。スプライトの alpha を box blur 3 回（≒ガウス）でぼかし、しきい値の smoothstep で外へ余白+線ぶん膨らませて板の形にし、縁をアンチエイリアスする。膨らませる前に、足元の帯（高さの約 6%）に触れる列だけを画像下端から `computePlateExtend`（`spriteLiftRatio` × 高さ、切り上げ）行ぶん下へ伸ばす（`extendFootMask`。腕など上の部位は伸ばさない）ので、スプライトの足元が差し込み線より浮いても板の下の縁は差し込み線まで届く（#802）。質感は、内側はごく薄い白〜水色の透明面、縁は細い明るいリムで光が当たる左上を強く・反対側を弱く、縁の内側に光と反対側の薄い影、左上寄りの斜めの鏡面ハイライトの筋。canvas↔Texture の橋渡しは `acrylicPlateTexture.ts`。BattleScreen の `makeAcrylicPlate` が呼び、canvas が使えない環境では null＝板なし。テクスチャは mipmap＋linear で、スプライトと同じ倍率（作業解像度ぶんを掛けて）で拡縮して pad ぶん外へ広げて敷く。台座のスリットの高さ `computeSlitY` で水平に切る mask は板の兄弟 Graphics で、本体の足元は切らない）→ スプライトの順に積む（子の順は fallback → 台座 Graphics → 台座スプライト → 板 → 板の mask → スプライト。v8 では Sprite に子を足せない）。さらに本体（シルエット＋板の形）の地面の影は、板と同時に作るぼかしテクスチャ（`acrylicShadow.ts` の `renderGroundShadow`）を `shadowLayer`（sideStage の直下・全スプライトより下）へ敷き、足元を pivot に `computeShadowTransform`（縦に `castSquash` 倍つぶし `castShear` だけ右へ傾ける）で変形する（#760。acrylic のときだけ）（#760 で旧 `AcrylicEdgeFilter`＝描画解像度で alpha の段差をなぞる方式を廃止。縮小後のテクスチャ上で動くためジャギーが出た）。板は画像ごとに 1 回だけ作り、再配置では位置と倍率だけ更新する。`battleLayout.ts` の座標は変えず、台座・影・スプライトは slot 枠の下端に収める（台座の側面の厚みは `computeAcrylicGeometry` が下に予約。板だけは余白+線ぶん枠の外へ広がる）。スプライトの下端（靴の底）は差し込み線より `spriteLiftRatio`（スプライト高さに対する比率・既定 0.03・0〜0.15 に丸める・非有限は既定）ぶん上に浮かせ、`computeAcrylicGeometry` がその分スプライトを縮めて `liftPx` を返す（接地影は `liftPx` を足して差し込み線の高さに残す。台座が無い＝hasBase=false のときは効かない。style=none は変わらない。`spriteLiftRatio=0` でも足元は台座の中心でなく差し込み線に置かれるので、#802 以前の見た目＝約 0.28×台座の縦半径だけ下には戻らない。#802）。パラメータ上書きは `BattleScreenOptions.spriteStyleParams`（コード側のみ）
 - `RPGProject.windowStyle` (#744) — 戦闘ウィンドウの配色テーマ（`'dark'` 既定 / `'ff-blue'`）。frontmatter `window_style:` が parser（`Document.window_style`）→ `normalizeDocument`（`nullIfEmpty`）→ `rpgProjectFromDoc`（`normalizeWindowStyle`）→ `fieldBattle.ts` の `readFieldBattleSettings`（各レンダラーの `battleSettings`）→ `openFieldBattle` → `BattleScreen` の `windowStyle` オプションへ流れる（`spriteStyle` と同じ経路。GUI 専用・TUI は読まない）。色だけがテーマで寸法は持たない。帯の数・両端の色・不透明度・文字影の定数と、帯ごとの色導出は純粋関数 `frontend/src/game/windowStyle.ts`（`computeBands` / `lerpColor` / `normalizeWindowStyle`）が正本。`BattleScreen.drawPanel` は ff-blue のとき帯ごとの `rect` を上から積み、dark と同じ角丸（半径 `PANEL_RADIUS`=6）の mask で切り抜いて、同形の角丸白枠を重ねる（g の子 [帯, mask, 枠] を g ごとに 1 組だけ使い回し、枠は mask の外に置く）。dark は従来の角丸矩形のまま。文字は `themedStyle` が ff-blue のときだけ `dropShadow` を足した `TextStyle` を返す
 - `RPGProject.battleBackgroundTone` (#753) — 戦闘背景の彩度・明度を表示時に落とすか（`'on'` 既定 / `'off'`）。frontmatter `battle_background_tone:` が parser（`Document.battle_background_tone`）→ `normalizeDocument`（`nullIfEmpty`）→ `rpgProjectFromDoc`（`normalizeBackgroundTone`）→ `fieldBattle.ts` の `readFieldBattleSettings`（各レンダラーの `battleSettings`）→ `openFieldBattle` → `BattleScreen` の `backgroundTone` オプションへ流れる（`windowStyle` と同じ経路。GUI 専用・TUI は読まない）。係数（彩度・明度）と正規化は純粋関数 `frontend/src/game/backgroundTone.ts`（`BACKGROUND_TONE_SATURATION` / `BACKGROUND_TONE_BRIGHTNESS` / `normalizeBackgroundTone` / `saturationToPixiAmount`）が正本。`BattleScreen.applyBackgroundTone` が背景スプライトにだけ `ColorMatrixFilter`（1 個を使い回し、`destroy` で解放）をかける。`off` と背景なしはフィルタ無し
 - `RPGProject.battleBackgroundDof` (#753) — 戦闘背景の被写界深度風の手前ぼかし（`'off'` 既定 / `'on'`）。frontmatter `battle_background_dof:` が parser（`Document.battle_background_dof`）→ `normalizeDocument`（`nullIfEmpty`）→ `rpgProjectFromDoc`（`normalizeBackgroundDof`）→ `fieldBattle.ts` の `readFieldBattleSettings`（各レンダラーの `battleSettings`）→ `openFieldBattle` → `BattleScreen` の `backgroundDof` オプションへ流れる（`battleBackgroundTone` と同じ経路・独立。GUI 専用・TUI は読まない）。定数（仕様値の `DOF_START_RATIO`（画面高さ 50% から下へ）と、目視調整の `DOF_GRADIENT_RATIO` / `DOF_MAX_BLUR_STRENGTH` / `DOF_LEVEL_COUNT`、および最大ぼかしから導く `DOF_EDGE_EXTEND`）と、画面高さから各段のマスク領域・アルファの立ち上がり割合・ぼかし強さを求める計算は純粋関数 `frontend/src/game/depthOfField.ts`（`computeDofLevels` / `computeDofQuad` / `computeDofFilterArea` / `dofMaskStops` / `normalizeBackgroundDof`）が正本。`BattleScreen.applyBackgroundDof` は背景と**同じテクスチャを共有**するぼかしコピーを `DOF_LEVEL_COUNT`（4）段、強さを段階的に変えて背景の直上に弱→強の順で重ね（可変半径ガウスの近似）、各段は縦グラデーションの canvas テクスチャ（1 x 256、alpha が 0 → 1）を持つマスク Sprite を `setMask({ mask, channel: 'alpha' })` で掛けて受け持つ帯だけ見せる（Sprite マスクの既定チャンネルは red なので alpha 指定が必須）。各コピーは背景を四方へ `DOF_EDGE_EXTEND` だけ広げた `Mesh`（広げた部分は UV が 0〜1 の外側を指し clamp-to-edge で端ピクセルの繰り返し。単独画像テクスチャ・既定の addressMode が前提）で、画面端でもぼけ量が落ちない。フィルタは `BlurFilter`（`repeatEdgePixels` は padding を 0 にするだけなので使わず、`clipToViewport = false` で padding を残す）で、`filterArea`（コピーのローカル座標）を段ごとのマスクが見える帯に絞る。マスクの絵は立ち上がり割合が変わったときだけ作り直す。canvas が使えずマスクが作れない環境では 1 段も作らずぼかし無しで続行する。`destroy` でコピー・geometry（`Mesh.destroy` は破棄しない）・マスク・フィルタ・マスクのテクスチャを解放（共有している背景テクスチャは壊さない）。`off` と背景なしは何も作らない

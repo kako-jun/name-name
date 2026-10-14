@@ -641,7 +641,8 @@ describe('NovelRenderer.restoreSnapshot (#460)', () => {
     r.restoreSnapshot(craftSnapshot({ sceneId: 'r01-01', flags: { restored: boolFlag(true) } }))
     await new Promise((resolve) => setTimeout(resolve, 0))
     // 解決待ち中は復元されない
-    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getPlayheadSceneId()).toBe('entry-hub')
+    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
 
     resolveShared([...entryScenes, routeScene])
     await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
@@ -930,7 +931,8 @@ describe('NovelRenderer.restoreSnapshot 遅延ロード中の遷移世代ガー�
     d.resolve([...ENTRY, ROUTE])
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getPlayheadSceneId()).toBe('entry-hub')
+    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
     expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
     expect(r.getAllSceneIds()).toEqual(['entry-hub'])
   })
@@ -947,7 +949,8 @@ describe('NovelRenderer.restoreSnapshot 遅延ロード中の遷移世代ガー�
       await new Promise((resolve) => setTimeout(resolve, 0))
 
       expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
-      expect(r.getCurrentSceneId()).toBe('entry-hub')
+      expect(r.getPlayheadSceneId()).toBe('entry-hub')
+      expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
     }
     // 新規開始の DEV 警告（背景なしの原稿）は対象外
     expect(
