@@ -54,6 +54,7 @@ export function rollEncounter(input: {
       gold: def.gold,
       sprite: def.sprite,
       ...posesField(def.poses),
+      ...(def.actions && def.actions.length > 0 ? { actions: [...def.actions] } : {}),
     })
   }
   return enemies.length > 0 ? enemies : null
