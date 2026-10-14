@@ -167,3 +167,32 @@ describe('createAcrylicPlateTexture (#760)', () => {
     expect(plate.shadow).toBeUndefined()
   })
 })
+
+describe('createAcrylicPlateTexture: 帯（ステム）は台座があるときだけ (#848)', () => {
+  /** 上半分だけ不透明（下が透明＝浮いた絵）の alpha を返す getImageData で、最初に書かれた板の rgba を取る */
+  function plateRgba(params: ReturnType<typeof resolveAcrylicParams>): number[] {
+    const put = vi.fn()
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(((): unknown => ({
+      drawImage,
+      getImageData: (_x: number, _y: number, w: number, h: number) => {
+        const data = new Uint8ClampedArray(w * h * 4)
+        for (let y = 0; y < h / 3; y++) for (let x = 0; x < w; x++) data[(y * w + x) * 4 + 3] = 255
+        return { data }
+      },
+      putImageData: put,
+    })) as never)
+    expect(createAcrylicPlateTexture(srcTexture(100, 100), params)).not.toBeNull()
+    return Array.from((put.mock.calls[0][0] as FakeImageData).data)
+  }
+
+  it('hasBase=false の板の形は stemWidthRatio=0 と一致する（帯を出さない）', () => {
+    const noBase = plateRgba(resolveAcrylicParams({ hasBase: false }))
+    const noStem = plateRgba(resolveAcrylicParams({ hasBase: false, stemWidthRatio: 0 }))
+    expect(noBase).toEqual(noStem)
+  })
+  it('対照: hasBase=true なら浮いた絵に帯が足されて stemWidthRatio=0 と異なる', () => {
+    const on = plateRgba(resolveAcrylicParams({ hasBase: true }))
+    const off = plateRgba(resolveAcrylicParams({ hasBase: true, stemWidthRatio: 0 }))
+    expect(on).not.toEqual(off)
+  })
+})

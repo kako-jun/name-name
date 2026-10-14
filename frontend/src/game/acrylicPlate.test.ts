@@ -3,6 +3,7 @@ import {
   computePlateExtend,
   computePlateLayout,
   computeStem,
+  computeStemSlitHalfWidth,
   extendFootMask,
   gaussianBlur,
   renderAcrylicPlate,
@@ -377,11 +378,40 @@ describe('computeStem / stampStem: 浮く絵を台座へつなぐ帯 (#848)', ()
     expect(s!.top).toBeLessThanOrEqual(60)
     expect(s!.top).toBeGreaterThan(50)
   })
-  it('中心は最下端の帯の不透明画素に追従し、画像の横幅からはみ出さない', () => {
-    const s = computeStem(blob(60, 0, 19), w, h, 0, sp)!
-    expect(s.cx - s.halfWidth).toBeGreaterThanOrEqual(0)
-    expect(s.cx + s.halfWidth).toBeLessThanOrEqual(w)
-    expect(s.cx).toBeCloseTo(10, 0)
+  it('スリットの列の外（左下の羽根の先）が下端に届いても、中央の列が空いていれば帯が出る', () => {
+    const a = blob(60)
+    for (let y = 60; y < h; y++) a[y * w + 2] = 255 // 左端の細い羽根の先が画像下端まで
+    expect(computeStem(a, w, h, 3, sp)).not.toBeNull()
+    // 中央の列が下端まで届いていれば出ない
+    const b = blob(60)
+    for (let y = 60; y < h; y++) b[y * w + 50] = 255
+    expect(computeStem(b, w, h, 3, sp)).toBeNull()
+  })
+  it('中央の列に不透明画素が無ければ null', () => {
+    expect(computeStem(blob(60, 0, 9), w, h, 0, sp)).toBeNull()
+  })
+  it('帯はスリットの幅からはみ出さない（片側に垂れた脚が最下端でも中心を寄せる）', () => {
+    const half = computeStemSlitHalfWidth(w, h)
+    expect(half).toBeGreaterThan(0)
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 0; x < w; x++) a[y * w + x] = 255
+    for (let y = 51; y <= 60; y++)
+      for (let x = Math.ceil(w / 2 + half) - 2; x < w / 2 + half; x++) a[y * w + x] = 255
+    const s = computeStem(a, w, h, 0, sp)!
+    expect(s.cx - s.halfWidth).toBeGreaterThanOrEqual(w / 2 - half - 1e-6)
+    expect(s.cx + s.halfWidth).toBeLessThanOrEqual(w / 2 + half + 1e-6)
+  })
+  it('幅の上下限: 極端に細い絵（w=1,2）でも NaN にならず画像幅・スリット幅を超えない', () => {
+    for (const tw of [1, 2, 3]) {
+      const a = new Uint8Array(tw * 50)
+      for (let y = 0; y < 10; y++) for (let x = 0; x < tw; x++) a[y * tw + x] = 255
+      const s = computeStem(a, tw, 50, 2, sp)
+      if (!s) continue
+      expect(Number.isFinite(s.cx) && Number.isFinite(s.halfWidth)).toBe(true)
+      expect(s.halfWidth * 2).toBeLessThanOrEqual(tw + 1e-9)
+      expect(s.cx - s.halfWidth).toBeGreaterThanOrEqual(-1e-9)
+      expect(s.cx + s.halfWidth).toBeLessThanOrEqual(tw + 1e-9)
+    }
   })
   it('薄いにじみ（alpha < 32）は下端とみなさない', () => {
     const a = blob(60)

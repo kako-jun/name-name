@@ -12,7 +12,7 @@
  *
  * 出力は (w + 2*pad) x (h + 2*pad) の RGBA（非プリマルチ・0〜255）。pad だけスプライトの外へ広がる。
  */
-import type { AcrylicParams } from './spriteStyle'
+import { computeAcrylicGeometry, resolveAcrylicParams, type AcrylicParams } from './spriteStyle'
 
 /** 光の来る向き（左上）。単位ベクトル */
 export const PLATE_LIGHT_DIR: readonly [number, number] = [-Math.SQRT1_2, -Math.SQRT1_2]
@@ -130,7 +130,8 @@ type PlateParams = Pick<
   | 'spriteLiftRatio'
   | 'stemWidthRatio'
   | 'stemMinGapRatio'
->
+> &
+  Partial<AcrylicParams>
 
 /** 足元の帯の高さ（画像高さに対する比率）。この帯に触れる列だけを下へ伸ばす（腕など上の部位は伸ばさない） */
 const FOOT_BAND_RATIO = 0.06
@@ -175,7 +176,11 @@ export function extendFootMask(
   return out
 }
 
-/** ステム判定で「不透明」とみなす alpha の下限（0〜255）。生成画像の縁にある薄いにじみで下端を誤検出しない (#848) */
+/**
+ * ステム判定で「不透明」とみなす alpha の下限（0〜255）。生成画像の縁にある薄いにじみで下端を誤検出しない (#848)。
+ * 足元の延長（extendFootMask）が alpha > 0 を使うのは、薄い縁まで板を途切れさせずに伸ばすため（板は ぼかすので薄い値は無害）で、
+ * 「帯を出すか」の判定とは目的が違うので閾値を揃えない。
+ */
 const STEM_ALPHA_MIN = 32
 /** ステムの上端を絵の中へ食い込ませる量（画像高さに対する比率）。絵と帯の継ぎ目に隙間を作らない */
 const STEM_OVERLAP_RATIO = 0.02
@@ -194,30 +199,71 @@ export interface StemRect {
   radius: number
 }
 
+/** スリット幅の換算に使う仮の枠一辺(論理 px)。比率しか使わないので値は任意（最小余白・線の px 下限が効かない大きさ） */
+const STEM_REF_SIZE = 200
+
+/**
+ * 台座のスリット（板の差し込み口）の、元画像 `w x h` の px での半幅。スリットの半幅は台座の上面の横半径の 0.5 倍
+ * （acrylicBase.ts）。絵は枠に contain で収まるので、枠 → 画像 px の倍率は computeAcrylicGeometry の縮尺から求める (#848)。
+ * 台座が作れない（幾何が不正）ときは 0。
+ */
+export function computeStemSlitHalfWidth(
+  w: number,
+  h: number,
+  params: Partial<AcrylicParams> = {}
+): number {
+  const g = computeAcrylicGeometry(
+    w,
+    h,
+    STEM_REF_SIZE,
+    resolveAcrylicParams({ ...params, hasBase: true })
+  )
+  if (!g.base || !(g.sprite.width > 0)) return 0
+  return (g.base.rx * 0.5 * w) / g.sprite.width
+}
+
 /**
  * 空に浮く絵（下端付近が透明）を台座とつなぐ帯の形を求める (#848)。純粋関数。
- * 不透明な画素（alpha >= 32）の最下端から画像下端までの距離が `stemMinGapRatio` × 画像高さ未満・不透明画素が無い・
+ * 板が刺さるのは台座のスリットだけなので、「絵が台座から離れているか」は画像全体の最下端でなく、
+ * スリットの幅に当たる中央の列（画像中心 ± スリット半幅）の中の不透明（alpha >= 32）な最下端で判定する
+ * （左下の羽根の先だけが下端に届く絵でも、スリットの上は空いているので帯が出る）。
+ * その最下端から画像下端までの距離が `stemMinGapRatio` × 画像高さ未満・中央の列に不透明画素が無い・
  * `stemWidthRatio` が 0 のときは null（帯なし＝従来どおり）。
- * 帯の幅は不透明部分の横幅 × `stemWidthRatio`（画像幅で頭打ち）、中心は最下端付近の帯（足元の帯と同じ高さ）の不透明画素の重心 x。
+ * 帯の幅は絵全体の不透明部分の横幅 × `stemWidthRatio`（スリット幅で頭打ち）。中心は中央の列の最下端付近の帯
+ * （足元の帯と同じ高さ）の不透明画素の重心 x を、帯がスリットからはみ出さない範囲（スリット中心 ± (スリット半幅 − 帯の半幅)）
+ * に寄せたもの。
  */
 export function computeStem(
   alpha: ArrayLike<number>,
   w: number,
   h: number,
   extend: number,
-  params: Pick<AcrylicParams, 'stemWidthRatio' | 'stemMinGapRatio'>
+  params: Pick<AcrylicParams, 'stemWidthRatio' | 'stemMinGapRatio'> & Partial<AcrylicParams>
 ): StemRect | null {
   if (!(w > 0) || !(h > 0) || alpha.length < w * h) return null
   if (!(params.stemWidthRatio > 0)) return null
-  let bottom = -1
+  const slitHalf = computeStemSlitHalfWidth(w, h, params)
+  if (!(slitHalf > 0)) return null
+  const slitCx = w / 2
+  const cx0 = Math.max(0, Math.ceil(slitCx - slitHalf))
+  const cx1 = Math.min(w - 1, Math.floor(slitCx + slitHalf))
+  if (cx1 < cx0) return null
+  // 絵全体の不透明部分の横幅
   let minX = w
   let maxX = -1
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++)
       if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
-        bottom = y
         if (x < minX) minX = x
         if (x > maxX) maxX = x
+      }
+  // スリットの列の中の不透明な最下端
+  let bottom = -1
+  for (let y = h - 1; y >= 0 && bottom < 0; y--)
+    for (let x = cx0; x <= cx1; x++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        bottom = y
+        break
       }
   if (bottom < 0) return null
   const gap = h - 1 - bottom
@@ -226,15 +272,21 @@ export function computeStem(
   let sum = 0
   let n = 0
   for (let y = bandTop; y <= bottom; y++)
-    for (let x = 0; x < w; x++)
+    for (let x = cx0; x <= cx1; x++)
       if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
         sum += x
         n++
       }
-  const width = Math.min(w, Math.max(2, (maxX - minX + 1) * params.stemWidthRatio))
+  const width = Math.min(w, slitHalf * 2, Math.max(2, (maxX - minX + 1) * params.stemWidthRatio))
   const halfWidth = width / 2
-  // 帯が画像の横幅からはみ出さないよう中心を寄せる
-  const cx = Math.min(w - halfWidth, Math.max(halfWidth, n > 0 ? (sum + 0.5 * n) / n : w / 2))
+  const reach = Math.max(0, slitHalf - halfWidth)
+  const cx = Math.min(
+    w - halfWidth,
+    Math.max(
+      halfWidth,
+      Math.min(slitCx + reach, Math.max(slitCx - reach, n > 0 ? (sum + 0.5 * n) / n : slitCx))
+    )
+  )
   const overlap = Math.max(1, Math.round(h * STEM_OVERLAP_RATIO))
   return {
     cx,
