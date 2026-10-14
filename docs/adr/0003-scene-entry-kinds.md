@@ -134,7 +134,7 @@ type SceneEntryResult =
 |---|---|---|
 | `jumpToScene(sceneId): void` | `jumpToScene(sceneId): Promise<SceneEntryResult>`。**進行専用**にする | ChoiceOverlay のコールバック・`armJump`・`playScript` の choice。`VideoExporter` からは呼ばない |
 | `startFrom(opts): void` | `startFrom(opts): Promise<SceneEntryResult>`。**新規開始専用**にする。`sceneId` を省略するとエントリ文書の線形ストリームから始める。`confinedSceneIds` を受け取る | `NovelPlayer` の初期入場、`VideoExporter`、`PlayerScreen` の「はじめから」 |
-| `restart(): void` | 廃止。`startFrom({})` に置き換える | `PlayerScreen` の `onNewGame`/`onContinue`（セーブなし時）。`window.__renderer` のダックタイプをやめ、`NovelPlayerHandle` の型付きメソッド経由にする |
+| `restart(): void` | 廃止（PR5 で実施）。`startFrom({})` に置き換える | `PlayerScreen` の `onNewGame`/`onContinue`（セーブなし時）。`window.__renderer` のダックタイプをやめ、`NovelPlayerHandle` の型付きメソッド経由にする |
 | `setEvents(events, { skipAutoAdvance })` | `setEvents(events)` は、文書を読み込んでから `startFrom({})` する。開始しない読み込み用に `loadEvents(events)` を新設する | `NovelPlayer` のマウントでは `loadEvents` を使う。events 変化 effect（エディタのライブ再パース）は `setEvents` のまま。ただし初回（マウント時）は実行せず、`rendererReady` の後の変化にだけ反応する |
 | `setScenes(scenes, opts)` | 索引と `scenes[0]` を読み込んでから `startFrom({})`。開始しない読み込みとして `loadScenes(scenes)` を新設する | `setEvents` と同じ |
 | `pendingAutoAdvance` / `resumeAutoAdvanceIfPending()` | 廃止。開始しない読み込みと明示的な入場に分けたので不要になる | `NovelPlayer` のフォールバック |
@@ -358,3 +358,16 @@ PR3 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - [`architecture.md` のシーン入場経路の網羅表](../architecture.md#シーン入場経路の網羅表734)
 - [ADR 0002: 決定論的状態管理とデバッグ可能性](./0002-deterministic-state-and-debuggability.md)（§3 の `startFrom` の契約を本 ADR が置き換える）
 - [`docs/spec/markdown-v0.1.md`](../spec/markdown-v0.1.md) の「シーン遷移時の BGM（#724）」「ジャンプ（#725）」
+
+## PR5 実装時の差分（2026-10-14）
+
+PR5 の実装で、上の記述から次のとおり変えた。挙動の方針は変えていない。不整合10・11 は解消した。
+
+- **`NovelPlayerHandle` に公開したもの。** `ensureAudioContext()`・`setDocKey(docKey)`・`hasQuickSave()`・`clearQuickSave()`・`startFrom(opts?)`。`PlayerScreen` の「はじめから」「つづきから」は、`window.__renderer` のダックタイプをやめてこのハンドルを呼ぶ。ハンドルは renderer の薄い写しで、分岐（`hasQuickSave()` の真偽で `startFrom({})` を呼ぶか）は `PlayerScreen` に残した。renderer が未生成のときは no-op、`hasQuickSave()` は偽、`startFrom` は `failed`（`not-found`）を返す。`window.__renderer` への代入はデバッグ用に残したが、本番のロジックは読まない。`audioManager` は private なので、`NovelRenderer.ensureAudioContext()` を公開メソッドとして足した
+- **`restart()` を廃止した。** `startFrom({})` に置き換えた。バイパス・ラッパーは残していない。`entryRawEvents` が空（エントリ文書が未読み込み）のときの早期 return は無くなった。新規開始は空の文書も新規開始する（flags をクリアし `currentSceneId` は null になる）
+- **`setEvents(events)` / `setScenes(scenes)` は `Promise<SceneEntryResult>` を返す。** 「`loadEvents` / `loadScenes` + `startFrom({})`」で、エントリの新規開始は同期で適用される（Promise は既に `entered` で解決済み）。呼び出し元（`NovelPlayer` の events 変化 effect）は結果を待たない。`setScenes([])` は再生ストリームを差し替えず、索引を空にして flags と `consecutiveJumps` をリセットし、`failed`（`not-found`）を返す
+- **target `'entry'` の `currentSceneId` が揃った。** `loadScenes` / `setScenes` は `scenes[0].id`、`loadEvents` / `setEvents` は null。`setEvents` が旧 `currentSceneId` を残さなくなった
+- **「はじめから」は `onSceneChange` を発火する。** 旧 `restart()` は発火しなかったが、§2 の「新規開始は発火する」に揃えた。自動セーブが配線されたセッションでは、新規開始の最初の本文の表示時にクイックセーブが保存される。`PlayerScreen` は引き続き `startFrom({})` の前に `clearQuickSave()` を呼ぶ（リロードで旧セーブが復活する窓を、最初の本文の表示まで閉じておくため）
+- **DEV 警告（背景なしの開始シーン）は target `'entry'` では出さない。** `setScenes` が `scenes[0].id` を持って新規開始するようになったため。エディタのライブ再パースで毎回出てしまう
+- **`consecutiveJumps`** は新規開始（`startFrom` の全経路、`setEvents`、`setScenes`）でリセットする（不整合11）
+

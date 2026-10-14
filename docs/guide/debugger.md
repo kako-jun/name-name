@@ -20,7 +20,7 @@ Name×Name のノベルプレイヤーは、**任意のシーン・状態を URL
 
 ## URL クエリで起点を指定する（production ビルドでも常時有効）
 
-`scenes` を渡す経路（`setScenes`）でのみ動く（`NovelPlayer.tsx`）。#652 以前は
+`NovelPlayer` のマウント時の初期入場で解決される（`NovelPlayer.tsx`。#734 PR2 以降は `loadScenes`/`loadEvents` で文書を読み込んだ後の入場として動く）。#652 以前は
 `import.meta.env.DEV` ガード付きで dev ビルド限定だったが、gymnasia のような1ルートが複数
 ファイルに分割された構成の実機デバッグのため production ビルドでも常時有効化した。
 
