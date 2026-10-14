@@ -463,15 +463,15 @@ describe('computeSideBattleLayout 奥行き＋隊列 (#747)', () => {
     expect(L.enemies[0].scale).toBeCloseTo(0.80779, 5)
     expect(L.enemies[0].size).toBeCloseTo(113.856, 3)
   })
-  it('味方 1 敵 1: 足元が同じ高さか味方のほうが下なら、味方の縮尺は敵以上（基準は足元 y+size）', () => {
+  it('味方 4 敵 1: 足元が同じ高さか味方のほうが下なら、味方の縮尺は敵以上（基準は足元 y+size）', () => {
     const L = computeSideBattleLayout({
       ...base,
-      partyCount: 1,
+      partyCount: 4,
       enemyCount: 1,
       partyRows: [],
       depth: { horizon: 0.3, perspective: 0.8 },
     })
-    const party = L.party[0]
+    const party = L.party[3]
     const enemy = L.enemies[0]
     expect(party.floor).toBeGreaterThanOrEqual(enemy.floor)
     expect(party.scale).toBeGreaterThanOrEqual(enemy.scale)

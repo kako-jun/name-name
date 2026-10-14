@@ -279,6 +279,9 @@ export function fitCommandFontSize(
   return Math.max(1, font)
 }
 
+/** 味方の斜め一列の最低枠数 (#813)。パーティがこれより少なくても、この枠数ぶんの位置・大きさで配置する */
+export const SIDE_PARTY_MIN_SLOTS = 4
+
 /**
  * 味方 (#760): FF6 式に左上から右下へ斜め一列に並べる純粋関数。`party[0]` が左上・以降 y は単調増加
  * （ステータス欄の行順と一致）。縮尺は掛けない。立ち絵は縦長なので枠を縦長（幅 = 高さ × 縦横比）にし、
@@ -627,6 +630,9 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const partyCount = Math.max(0, Math.floor(input.partyCount))
   const enemyCount = Math.max(0, Math.floor(input.enemyCount))
   const commandCount = Math.max(0, Math.floor(input.commandCount ?? 4))
+  // #813: 味方が 1 人でもいれば、人数によらず最低 4 枠ぶんの位置・大きさ・下パネル高さで配置する（FF6 同様）。
+  // 味方 0 人は何も置かない。5 人以上なら従来どおり人数ぶん
+  const slotCount = partyCount > 0 ? Math.max(SIDE_PARTY_MIN_SLOTS, partyCount) : 0
   const depth = input.depth && input.depth.perspective > 0 ? input.depth : null
   const innerW = Math.max(0, W - SIDE_PADDING * 2)
 
@@ -649,7 +655,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     )
   }
   const commandNeeded = commandRows * commandCellH
-  const statusNeeded = partyCount * SIDE_STATUS_ROW_HEIGHT + SIDE_STATUS_VERTICAL_PADDING
+  const statusNeeded = slotCount * SIDE_STATUS_ROW_HEIGHT + SIDE_STATUS_VERTICAL_PADDING
   const bottomH = Math.max(commandNeeded, statusNeeded)
   const bottomY = H - SIDE_PADDING - bottomH
   const commandW = Math.min(
@@ -669,8 +675,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const commandCells = computeCommandCells(command, commandCount, commandLayout)
 
   const rowH =
-    partyCount > 0
-      ? Math.min(SIDE_STATUS_ROW_HEIGHT, (bottomH - SIDE_STATUS_VERTICAL_PADDING) / partyCount)
+    slotCount > 0
+      ? Math.min(SIDE_STATUS_ROW_HEIGHT, (bottomH - SIDE_STATUS_VERTICAL_PADDING) / slotCount)
       : 0
   const statusRows: Rect[] = []
   for (let i = 0; i < partyCount; i++) {
@@ -709,14 +715,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // 味方 (#760): 大きさは従来どおり右半分を使うものとして決め、その斜め一列に必要な幅だけ右端に取る。残りはすべて敵へ回す
   const half = stage.w / 2
   const partyHalf: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
-  const halfSlots = computeFormation(
-    partyHalf,
-    partyCount,
-    'party',
-    false,
-    input.partyRows,
-    input.partyAspects
-  )
+  // #813: 4 人のときの斜め一列の枠で求め、味方は上の枠から順に入れる。空き枠は何も描かない（最後に切り捨てる）
+  // 空き枠の隊列・縦横比は既定（前衛・既定の縦横比）にする。実在しない味方の値で枠が変わらないように
+  const partyRows = input.partyRows?.slice(0, partyCount)
+  const partyAspects = input.partyAspects?.slice(0, partyCount)
+  const halfSlots = computeFormation(partyHalf, slotCount, 'party', false, partyRows, partyAspects)
   const anyBack =
     !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')
   const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack)
@@ -748,11 +751,12 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     { maxSize: SIDE_ENEMY_MAX_SIZE, minSize: partyHeight }
   )
   // 大きさは右半分で決めたもの（halfSlots[0].size）に固定する。狭めた領域で計算し直すと幅の制約で縮むため
-  let party = computePartyDiagonal(partyRegion, partyCount, input.partyRows, input.partyAspects, {
+  let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
     height: partyHeight,
   })
   if (depth) {
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
+    // 空き枠も最前列の基準に含める（人数で縮尺が変わらないように）
     const all = [...enemies, ...party]
     if (all.length > 0) {
       const frontFloor = Math.max(...all.map((sl) => sl.floor))
@@ -761,6 +765,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)
     }
   }
+  // 空き枠（#813）は返さない。位置・大きさ・奥行きの縮尺は 4 枠ぶんで確定済み
+  party = party.slice(0, partyCount)
 
   return {
     log,
