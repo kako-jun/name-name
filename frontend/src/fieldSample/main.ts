@@ -268,6 +268,7 @@ async function main(): Promise<void> {
 
   let pointer: Vec | null = null
   let activePointerId: number | null = null
+  let disposed = false
   const canvas = app.canvas as HTMLCanvasElement
   const toScene = (ev: PointerEvent): Vec => {
     const r = canvas.getBoundingClientRect()
@@ -278,6 +279,8 @@ async function main(): Promise<void> {
   }
   const onPointerDown = (ev: PointerEvent) => {
     if (battle) return
+    // マルチタッチ: 最初の1本だけを歩きの入力にする
+    if (activePointerId !== null) return
     canvas.setPointerCapture(ev.pointerId)
     activePointerId = ev.pointerId
     pointer = toScene(ev)
@@ -340,6 +343,7 @@ async function main(): Promise<void> {
           transition.next = undefined // 二重実行を防ぐ
           next
             .then((dst) => {
+              if (disposed) return
               const back = findReturnLink(config, sceneId, link)
               const arrived = back
                 ? arrivalPosition(
@@ -375,6 +379,7 @@ async function main(): Promise<void> {
               showError(null)
             })
             .catch((e) => {
+              if (disposed) return
               // 入力が途切れるまで同じリンクを再試行しない（フェードの明滅防止）
               disarmed = link
               transition = null
@@ -439,19 +444,25 @@ async function main(): Promise<void> {
       `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}`
   })
 
+  // bfcache に入る場合（persisted）は破棄しない（pageshow で復帰したとき動かなくなるため）
+  const onPageHide = (ev: PageTransitionEvent): void => {
+    if (ev.persisted) return
+    dispose()
+  }
   // HMR・ページ離脱での二重登録を防ぐ
   const dispose = (): void => {
+    disposed = true
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
     window.removeEventListener('blur', onBlur)
-    window.removeEventListener('pagehide', dispose)
+    window.removeEventListener('pagehide', onPageHide)
     canvas.removeEventListener('pointerdown', onPointerDown)
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerup', endPointer)
     canvas.removeEventListener('pointercancel', endPointer)
     app.destroy(true, { children: true })
   }
-  window.addEventListener('pagehide', dispose)
+  window.addEventListener('pagehide', onPageHide)
   import.meta.hot?.dispose(dispose)
 }
 
