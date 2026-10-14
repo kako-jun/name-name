@@ -208,7 +208,7 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 ## 関連
 
 - `GameState.ts`: `NovelGameState` 定義
-- `NovelRenderer.ts`: `applyState`、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定 / `loadFromSaveData` 共通コア）、`seekTo`、`advance`（選択肢なし消化時の終劇、#470）、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`setConfinedSceneIds`、`endStory`
+- `NovelRenderer.ts`: `applyState`、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定 / `loadFromSaveData` 共通コア）（`loadFromSaveData` は #827 で `SaveController.ts` へ移り、`enter({ kind: 'restore' })` 経由で `restoreToScene` に至る）、`seekTo`、`advance`（選択肢なし消化時の終劇、#470）、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`setConfinedSceneIds`、`endStory`
 - `frontend/src/game/sceneQuery.ts` / `frontend/src/game/sceneConfinement.ts`: `?scene=` パーサ・confinement 判定（#386）
 - `docs/architecture.md`: 「状態管理: NovelGameState」セクション、「production 向けシーン直接ディープリンク `?scene=`」セクション
 - `docs/guide/debugger.md`: `debug_scene`（#652で production 常時有効化）の使い方ガイド
