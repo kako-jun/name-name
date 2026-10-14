@@ -192,7 +192,10 @@ export function sampleActor(kind: ActionKind, t: number): ActorSample {
   if (kind === 'notice') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
     // 呪文の構えは cast、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
-    return { forward: 0, pose: time < CAST_MS ? (kind === 'spell' ? 'cast' : 'ready') : 'idle' }
+    return {
+      forward: 0,
+      pose: time < CAST_MS ? (kind === 'spell' || kind === 'skill' ? 'cast' : 'ready') : 'idle',
+    }
   }
   if (time < ATTACK_STEP_MS) {
     return { forward: ATTACK_STEP_DISTANCE * easeOutQuad(time / ATTACK_STEP_MS), pose: 'step' }

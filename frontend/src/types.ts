@@ -210,6 +210,23 @@ export interface SpellDef {
   school?: string
 }
 
+/**
+ * 特技定義 (#834)。敵が使う技で、呪文とは別のマスターデータ。MP は持たない。
+ * `target` は使う側から見た相対表現（"相手単体"（既定）/ "相手全体" / "自分" / "仲間単体" / "仲間全体"）
+ */
+export interface SkillDef {
+  id: string
+  name: string
+  target: string
+  /** 効果 DSL（呪文と同書式）。`builtin` と排他 */
+  effect?: string
+  builtin?: string
+  /** 使用時の演出文（`{user}` は使った側の名前） */
+  message?: string
+  /** 予兆の文言（生文字列。解釈は後続の段階） */
+  telegraph?: string
+}
+
 export interface PlayerStartData {
   x: number
   y: number
@@ -463,6 +480,7 @@ export type Event =
   | { Monster: MonsterDef }
   | { Item: ItemDef }
   | { Spell: SpellDef }
+  | { Skill: SkillDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {

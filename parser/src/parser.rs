@@ -4592,6 +4592,57 @@ MP: 2
     }
 
     #[test]
+    fn parses_skill_block_separately_from_spell() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[特技 ink]
+名前: すみはき
+対象: 相手全体
+効果: damage 3..5
+メッセージ: {user}は 墨を はいた！
+予兆: 触手が ふるえている
+[/特技]
+
+[特技 mend]
+name: いやし
+builtin: some_builtin
+[/特技]
+
+[特技 noname]
+対象: 自分
+[/特技]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        // 名前の無いブロックは破棄される（[呪文] と同じ）
+        let skills: Vec<&SkillDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Skill(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(skills.len(), 2);
+        assert!(!events.iter().any(|e| matches!(e, Event::Spell(_))));
+        assert_eq!(skills[0].id, "ink");
+        assert_eq!(skills[0].name, "すみはき");
+        assert_eq!(skills[0].target, "相手全体");
+        assert_eq!(skills[0].effect.as_deref(), Some("damage 3..5"));
+        assert_eq!(skills[0].builtin, None);
+        assert_eq!(skills[0].message.as_deref(), Some("{user}は 墨を はいた！"));
+        assert_eq!(skills[0].telegraph.as_deref(), Some("触手が ふるえている"));
+        // 対象の既定は相手単体、英語キーも受理
+        assert_eq!(skills[1].target, "相手単体");
+        assert_eq!(skills[1].builtin.as_deref(), Some("some_builtin"));
+        assert_eq!(skills[1].message, None);
+    }
+
+    #[test]
     fn english_keys_are_accepted() {
         let input = r#"---
 engine: name-name
