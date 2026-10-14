@@ -92,11 +92,15 @@ import {
   SIDE_LABEL_STROKE_WIDTH,
   fitHpLabel,
   fitLabel,
-  fitNameWithSuffix,
+  computeStatusColumns,
+  SIDE_STATUS_FONT_SIZE,
+  SIDE_STATUS_GAUGE_HEIGHT,
+  type StatusColumns,
   type BattleDepth,
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
+import { getSharedDofMask, quantizeDofRamp } from './dofMaskCache'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import { computeSlitY } from './acrylicBase'
 import { computeShadowTransform } from './acrylicShadow'
@@ -156,10 +160,7 @@ const ACTOR_COLOR = 0xffee66
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
-/**
- * ATB ゲージ（各ステータス行の下端に行幅いっぱいで引く細い横棒）の高さ (#205)。FF らしい仕上げは #745。
- * 文字の横には置かない（文字幅を削らない・文字と重ならない）
- */
+/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
 /** 番の味方の印 ▶ の文字サイズと、行の左端からの余白（左余白 SIDE_STATUS_TEXT_PADDING の中に収まる） */
 const ATB_MARKER_FONT_SIZE = 10
@@ -179,9 +180,6 @@ const FALLBACK_PARTY_COLOR = 0x5588cc
 /** acrylic の台座の色 (#737)。黒に近い円形台座 */
 const ACRYLIC_BASE_COLOR = 0x111111
 const DEAD_ALPHA = 0.3
-const SIDE_STATUS_FONT_SIZE = 14
-/** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
-const SIDE_STATUS_TEXT_PADDING = 12
 /** 敵ラベルの縁取り。写真背景（dim なし）でも読めるよう、背景指定の有無にかかわらず付ける (#736) */
 export const SIDE_LABEL_STROKE_COLOR = 0x000000
 
@@ -449,7 +447,15 @@ export class BattleScreen extends Container {
   private foregroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
   private partyViews: EntityView[] = []
+  /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
+  /** HP・MP は「見出し | 現在値 | /最大値」の 3 つの Text。`*Texts` が現在値（右寄せ）、`*Labels` が見出し（左寄せ）、`*Maxes` が「/最大値」（「/」の x で左寄せ）。見出しと「/」の x が全員そろう */
+  private statusHpTexts: PixiText[] = []
+  private statusMpTexts: PixiText[] = []
+  private statusHpLabels: PixiText[] = []
+  private statusMpLabels: PixiText[] = []
+  private statusHpMaxes: PixiText[] = []
+  private statusMpMaxes: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
   /** 番の味方の印 ▶ (#205)。名前の文字列には混ぜず、行の左余白に別の Text で置く。bars と同じ index */
@@ -461,10 +467,8 @@ export class BattleScreen extends Container {
   /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
   private atbSignature = ''
   private visibleLogLines = LOG_VISIBLE_LINES
-  /** side: status が狭く MP 表記を省いているか（layoutSide が更新） */
-  private sideCompact = false
-  /** side: status テキストに使える幅(px)（layoutSide が更新） */
-  private sideStatusTextWidth = Infinity
+  /** side: status 欄の列（layoutSide が更新）。null は未計算 */
+  private sideStatusColumns: StatusColumns | null = null
   /** side: 敵ラベルに使える幅(px)（layoutSide が更新。enemyViews と同じ index） */
   private sideLabelWidths: number[] = []
 
@@ -698,7 +702,7 @@ export class BattleScreen extends Container {
       geo.destroy()
       lv.mask.destroy()
       lv.blur.destroy()
-      lv.maskTexture?.destroy(true)
+      // マスクのテクスチャは共有キャッシュ（dofMaskCache.ts）のものなので壊さない
     }
     this.dofLevels = []
   }
@@ -725,14 +729,12 @@ export class BattleScreen extends Container {
       } else {
         lv.sprite.filterArea = new Rectangle(fa.x, fa.y, fa.width, fa.height)
       }
-      if (Math.abs(g.rampFraction - lv.maskRamp) > 1e-4) {
+      if (quantizeDofRamp(g.rampFraction) !== quantizeDofRamp(lv.maskRamp)) {
         const tex = this.createDofMaskTexture(g.rampFraction)
         if (tex) {
-          const old = lv.maskTexture
           lv.maskTexture = tex
           lv.maskRamp = g.rampFraction
           lv.mask.texture = tex
-          old?.destroy(true)
         }
       }
       lv.mask.position.set(0, g.startY)
@@ -743,6 +745,10 @@ export class BattleScreen extends Container {
 
   /** 縦にアルファが 0 → 1 に立ち上がる 1 x N の canvas テクスチャを作る。canvas が使えない環境では null（ぼかし無しで続行） */
   private createDofMaskTexture(rampFraction: number): Texture | null {
+    return getSharedDofMask(rampFraction, (ramp) => this.buildDofMaskTexture(ramp))
+  }
+
+  private buildDofMaskTexture(rampFraction: number): Texture | null {
     try {
       const canvas = document.createElement('canvas')
       canvas.width = 1
@@ -812,6 +818,30 @@ export class BattleScreen extends Container {
       })
       this.statusTexts.push(t)
       this.addChild(t)
+      const parts: Array<[PixiText[], boolean]> = [
+        [this.statusHpLabels, false],
+        [this.statusHpTexts, true],
+        [this.statusHpMaxes, false],
+        [this.statusMpLabels, false],
+        [this.statusMpTexts, true],
+        [this.statusMpMaxes, false],
+      ]
+      for (const [list, alignRight] of parts) {
+        const n = new PixiText({
+          text: '',
+          style: this.themedStyle(
+            new TextStyle({
+              fontFamily: "'Noto Sans JP', sans-serif",
+              fontSize: SIDE_STATUS_FONT_SIZE,
+              fill: TEXT_COLOR,
+            })
+          ),
+        })
+        // 数値は列の基準 x に右寄せ（桁数が違っても右端がそろう）。見出しと「/最大値」は左寄せ
+        n.anchor.set(alignRight ? 1 : 0, 0)
+        list.push(n)
+        this.addChild(n)
+      }
     }
     if (this.presentation === 'ff') {
       // FF 式メッセージ窓の言葉 (#745)。ログ帯の上に中央寄せで置く。ログ行は ff では使わない
@@ -1364,19 +1394,45 @@ export class BattleScreen extends Container {
 
     // 下パネル: 味方 HP/MP（右）
     panel(L.status, this.statsPanel)
+    // 列（名前 / HP / MP / ゲージ）は味方全員で共通。列の左端（数値は右端）がそろう (#745)
+    const party = this.engine.getState().party
+    const cols = computeStatusColumns({
+      x: L.status.x,
+      width: L.status.w,
+      maxHp: party.reduce((m, p) => Math.max(m, p.maxHp), 0),
+      maxMp: party.reduce((m, p) => Math.max(m, p.maxMp), 0),
+      compact: L.statusCompact,
+      atb: this.atbBars.length > 0,
+    })
+    this.sideStatusColumns = cols
     for (let i = 0; i < this.statusTexts.length; i++) {
       const row = L.statusRows[i]
-      this.statusTexts[i].x = row.x + SIDE_STATUS_TEXT_PADDING
-      this.statusTexts[i].y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
+      const y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
+      this.statusTexts[i].x = cols.name.x
+      this.statusTexts[i].y = y
+      const place = (
+        col: typeof cols.hp | null,
+        label: PixiText,
+        cur: PixiText,
+        max: PixiText
+      ): void => {
+        label.x = col?.x ?? 0
+        cur.x = col?.curRight ?? 0
+        // 「/最大値」は「/」を現在値の右端に接して左寄せ（実フォントの桁幅の誤差で隙間があかない）
+        max.x = col?.curRight ?? 0
+        label.y = cur.y = max.y = y
+      }
+      place(cols.hp, this.statusHpLabels[i], this.statusHpTexts[i], this.statusHpMaxes[i])
+      place(cols.mp, this.statusMpLabels[i], this.statusMpTexts[i], this.statusMpMaxes[i])
     }
-    this.sideCompact = L.statusCompact
-    if (this.atbBars.length > 0) {
-      // ATB ゲージ棒は各行の下端に行幅いっぱいで引く。文字幅は ATB off と同じ（削らない）
+    if (this.atbBars.length > 0 && cols.gauge) {
+      // ATB ゲージは行の右端に短く置く（数文字ぶんの幅）。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
+      const g = cols.gauge
       this.atbBarRects = L.statusRows.map((row) => ({
-        x: row.x + SIDE_STATUS_TEXT_PADDING,
-        y: row.y + row.h - ATB_BAR_HEIGHT,
-        w: Math.max(0, row.w - SIDE_STATUS_TEXT_PADDING * 2),
-        h: ATB_BAR_HEIGHT,
+        x: g.x,
+        y: row.y + (row.h - SIDE_STATUS_GAUGE_HEIGHT) / 2,
+        w: g.w,
+        h: SIDE_STATUS_GAUGE_HEIGHT,
       }))
       L.statusRows.forEach((row, i) => {
         const m = this.atbMarkers[i]
@@ -1386,7 +1442,6 @@ export class BattleScreen extends Container {
       })
       this.drawAtbBars()
     }
-    this.sideStatusTextWidth = Math.max(0, L.status.w - SIDE_STATUS_TEXT_PADDING * 2)
     this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
     if (this.presentation === 'ff') {
       this.updateMessageWindow()
@@ -1597,15 +1652,53 @@ export class BattleScreen extends Container {
       if (!p0) continue
       const p = ff ? { ...p0, hp: this.shownHp('party', i, p0.hp) } : p0
       const t = this.statusTexts[i]
-      // 名前だけ省略して HP/MP は必ず見せる（パネル端を越えない）
-      const suffix = this.sideCompact
-        ? `  HP ${p.hp}/${p.maxHp}`
-        : `  HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`
+      const cols = this.sideStatusColumns
+      const hpT = this.statusHpTexts[i]
+      const mpT = this.statusMpTexts[i]
       // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない） (#205)
       const isActor = p.hp > 0 && i === this.actorIndex()
       if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
-      t.text = fitNameWithSuffix(p.name, suffix, this.sideStatusTextWidth, SIDE_STATUS_FONT_SIZE)
-      t.style.fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
+      // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
+      this.fitStatusName(t, p.name, cols?.name.w ?? Infinity)
+      const lbl = cols?.showLabels ?? true
+      const showMaxHp = cols?.showMaxHp ?? true
+      this.statusHpLabels[i].text = lbl ? 'HP' : ''
+      hpT.text = `${p.hp}`
+      this.statusHpMaxes[i].text = showMaxHp ? `/${p.maxHp}` : ''
+      // MP 列がない（狭い画面）ときは 3 つとも空にして隠す
+      const hasMp = !!cols?.mp
+      this.statusMpLabels[i].text = hasMp && lbl ? 'MP' : ''
+      mpT.text = hasMp ? `${p.mp}` : ''
+      this.statusMpMaxes[i].text = hasMp ? `/${p.maxMp}` : ''
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.visible = hasMp
+      const fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
+      for (const n of [this.statusHpLabels[i], hpT, this.statusHpMaxes[i]]) n.style.fill = fill
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.style.fill = fill
+      t.style.fill = fill
+    }
+  }
+
+  /**
+   * 名前を列幅に収める。まず概算幅で詰め、そのあと実測の幅（Text.width）が列幅を超えるなら
+   * 末尾をさらに詰め直す（英字など概算と実幅がずれる名前が HP 列に食い込まない）。
+   * 実測できない環境（jsdom など）や NaN のときは概算のまま。
+   */
+  private fitStatusName(t: PixiText, name: string, maxWidth: number): void {
+    let budget = maxWidth
+    t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
+    if (!Number.isFinite(maxWidth)) return
+    // ff-blue の文字影（右下へずれる）ぶんも列に食い込ませない
+    const shadow = this.windowStyle === 'ff-blue' ? FF_BLUE_TEXT_SHADOW.distance : 0
+    for (let n = 0; n < 40 && budget > 0; n++) {
+      let w = 0
+      try {
+        w = t.width
+      } catch {
+        return
+      }
+      if (!Number.isFinite(w) || w <= maxWidth - shadow + 0.5) return
+      budget = Math.max(0, budget - Math.max(1, w - maxWidth + shadow))
+      t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
     }
   }
 

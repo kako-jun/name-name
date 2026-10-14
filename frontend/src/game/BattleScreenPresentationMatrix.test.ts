@@ -42,6 +42,7 @@ interface Internals {
   logPanel: Container
   playback: { queue: unknown[]; active: unknown }
   statusTexts: Text[]
+  statusHpTexts: Text[]
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
 
@@ -292,7 +293,7 @@ describe('destroy・作り直し（GameState に演出の中間状態を持た�
     expect(I(s2).popups).toHaveLength(0)
     // 確定値（味方の反撃 HP 反映済み）が出ている
     const hp = engine.getState().party[0].hp
-    expect(I(s2).statusTexts.some((t) => t.text.includes(String(hp)))).toBe(true)
+    expect(I(s2).statusHpTexts.some((t) => t.text === String(hp))).toBe(true)
   })
 
   it('作り直した画面でも、その後の新しい行動は演出される', () => {

@@ -36,6 +36,8 @@ interface Internals {
   popupLayer: Container | null
   playback: { queue: unknown[]; active: unknown }
   statusTexts: Text[]
+  statusHpTexts: Text[]
+  statusHpMaxes: Text[]
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
 
@@ -110,12 +112,12 @@ describe('BattleScreen presentation', () => {
 
   it('ff: HP 表示は命中の瞬間まで古い値', () => {
     const { s } = setup()
-    const before = I(s).statusTexts[0].text
+    const before = I(s).statusHpTexts[0].text
     tap(s, 'attack')
     // 敵の反撃も同じ呼び出しで積まれるが、味方の HP は味方の命中まで変わらない
-    expect(I(s).statusTexts[0].text).toBe(before)
+    expect(I(s).statusHpTexts[0].text).toBe(before)
     run(s, 6000)
-    expect(I(s).statusTexts[0].text).not.toBe(before)
+    expect(I(s).statusHpTexts[0].text).not.toBe(before)
   })
 
   it('ff: 呪文の名前だけを窓の中央に一度に出し、行動が終われば窓を消す', () => {

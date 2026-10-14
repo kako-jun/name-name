@@ -30,6 +30,10 @@ interface Internals {
   atbBarRects: Array<{ x: number; y: number; w: number; h: number }>
   atbMarkers: Text[]
   statusTexts: Text[]
+  statusHpTexts: Text[]
+  statusMpTexts: Text[]
+  statusHpLabels: Text[]
+  statusHpMaxes: Text[]
   heroStatsText: Text
   commands: Array<{ id: string; hit: Container; text: Text }>
   destroyed: boolean
@@ -322,16 +326,17 @@ describe('BattleScreen ATB: 再描画の節約（署名）', () => {
     const spy = vi.spyOn(I(s), 'refresh')
     s.tick(2500)
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(I(s).statusTexts[0].text).toContain('HP 90/100')
+    expect(I(s).statusHpTexts[0].text).toBe('90')
+    expect(I(s).statusHpMaxes[0].text).toBe('/100')
   })
 })
 
-describe('BattleScreen ATB: モバイル幅（360x640）で棒と文字が重ならない', () => {
+describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右端に短く、文字と重ならない', () => {
   it.each([
     [360, 640, 4],
     [320, 568, 4],
     [360, 640, 1],
-  ])('%dx%d・味方 %d 人: 文字の右端 <= 棒の左端、棒は status 枠内', (w, h, n) => {
+  ])('%dx%d・味方 %d 人: 名前 < HP < ゲージの順に右へ並び、すべて status 枠内', (w, h, n) => {
     const party = Array.from({ length: n }, (_, i) =>
       ent(`p${i}`, { name: 'とてもながいなまえのゆうしゃ', hp: 120, maxHp: 120, mp: 99, maxMp: 99 })
     )
@@ -348,20 +353,27 @@ describe('BattleScreen ATB: モバイル幅（360x640）で棒と文字が重な
     expect(rects).toHaveLength(n)
     I(s).statusTexts.forEach((t, i) => {
       const r = rects[i]
-      // 棒は文字の下（縦に重ならない）・行の下端・status 枠内・細い
-      expect(t.y + 14 * 1.2).toBeLessThanOrEqual(r.y + 0.001)
+      const hpL = I(s).statusHpLabels[i]
+      const hpC = I(s).statusHpTexts[i]
+      const hpLeft = hpL.text ? hpL.x : hpC.x - estimateTextWidth(hpC.text, 14)
+      // ゲージは行の中に収まり、数文字ぶんの短さ（行幅いっぱいではない）
+      expect(r.y).toBeGreaterThanOrEqual(L.statusRows[i].y - 0.001)
       expect(r.y + r.h).toBeLessThanOrEqual(L.statusRows[i].y + L.statusRows[i].h + 0.001)
-      expect(r.x).toBeGreaterThanOrEqual(L.status.x)
       expect(r.x + r.w).toBeLessThanOrEqual(L.status.x + L.status.w + 0.001)
+      expect(r.w).toBeLessThan(L.status.w / 3)
       expect(r.h).toBeLessThanOrEqual(3)
-      // 文字の右端は status 枠内（ATB off と同じ幅で収まる）
-      expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(
-        L.status.x + L.status.w - 12 + 0.001
-      )
+      // 文字の右端 <= HP の左端 <= HP の右端 <= ゲージの左端
+      expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
+      // HP 列の右端: 「/最大値」があれば「/」の x + その概算幅、なければ現在値の右端
+      const hpMax = I(s).statusHpMaxes[i]
+      const hpRight = hpMax.text === '' ? hpC.x : hpMax.x + estimateTextWidth(hpMax.text, 14)
+      expect(hpRight).toBeLessThanOrEqual(r.x + 0.001)
+      // 名前が消えない
+      expect(t.text.length).toBeGreaterThan(1)
     })
   })
 
-  it('360x640・味方 4 人・HP 3 桁: ATB on の文字列が ATB off と同じで、名前の先頭と ▶ が見える', () => {
+  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見え、▶ は名前に重ならない', () => {
     const mk = () =>
       Array.from({ length: 4 }, (_, i) =>
         ent(`p${i}`, { name: 'ゆうしゃ', hp: 120, maxHp: 120, mp: 99, maxMp: 99 })
@@ -374,18 +386,24 @@ describe('BattleScreen ATB: モバイル幅（360x640）で棒と文字が重な
       360,
       640
     )
-    const off = build(mk(), [ent('s')], { rng: () => 0 }, { layout: 'side' }, 360, 640)
     on.s.tick(0)
     I(on.s).statusTexts.forEach((t, i) => {
-      expect(t.text).toBe(I(off.s).statusTexts[i].text)
       expect(t.text.startsWith('ゆ')).toBe(true)
-      expect(t.text).toContain('HP 120/120')
+      expect(I(on.s).statusHpTexts[i].text + I(on.s).statusHpMaxes[i].text).toContain('120/120')
     })
     const m = I(on.s).atbMarkers[0]
     expect(m.visible).toBe(true)
     expect(m.text).toBe('▶')
     // ▶ は名前の左余白に収まり、名前の文字と重ならない
     expect(m.x + estimateTextWidth('▶', 10)).toBeLessThanOrEqual(I(on.s).statusTexts[0].x + 0.001)
+  })
+
+  it('ATB on/off で HP の列位置は ATB のゲージぶんだけ左へ寄る（off は寄らない）', () => {
+    const mk = () => [ent('a', { name: 'ゆうしゃ' }), ent('b', { name: 'ゆうしゃ' })]
+    const on = build(mk(), [ent('s')], ATB(), { layout: 'side' }, 800, 450)
+    const off = build(mk(), [ent('s')], { rng: () => 0 }, { layout: 'side' }, 800, 450)
+    expect(I(on.s).statusHpLabels[0].x).toBeLessThan(I(off.s).statusHpLabels[0].x)
+    expect(I(off.s).atbBarRects).toHaveLength(0)
   })
 
   it('front 360x640: ATB の棒は文字の下で重ならない', () => {
