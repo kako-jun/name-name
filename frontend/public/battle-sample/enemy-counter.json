@@ -1,0 +1,56 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "skills": [
+    {
+      "id": "frost_lance",
+      "name": "こおりのやり",
+      "target": "相手単体",
+      "effect": "damage 25..30 type=ice",
+      "message": "{user}は ほのおに はんのうして こおりのやりを はなった！"
+    },
+    {
+      "id": "self_burst",
+      "name": "じばく",
+      "target": "相手全体",
+      "effect": "damage 20..25",
+      "message": "{user}は たおれながら じばくした！"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 400, "mp": 40, "atk": 25, "def": 4, "agi": 6 },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 300,
+      "mp": 40,
+      "atk": 18,
+      "def": 2,
+      "agi": 5,
+      "row": "back"
+    }
+  ],
+  "enemies": [
+    {
+      "id": "ice_warden",
+      "name": "こおりのばんにん",
+      "hp": 300,
+      "atk": 10,
+      "def": 2,
+      "agi": 3,
+      "counters": [
+        "条件=受けた=系統:fire 候補=frost_lance 対象=最後に攻撃した者",
+        "条件=被弾>=3, 受けた=物理 候補=こうげき"
+      ]
+    },
+    {
+      "id": "bomb_imp",
+      "name": "ばくだんこぞう",
+      "hp": 40,
+      "atk": 6,
+      "def": 0,
+      "agi": 4,
+      "onDeath": "候補=self_burst"
+    }
+  ]
+}

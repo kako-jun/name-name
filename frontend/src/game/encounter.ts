@@ -55,6 +55,8 @@ export function rollEncounter(input: {
       sprite: def.sprite,
       ...posesField(def.poses),
       ...(def.actions && def.actions.length > 0 ? { actions: [...def.actions] } : {}),
+      ...(def.counters && def.counters.length > 0 ? { counters: [...def.counters] } : {}),
+      ...(def.onDeath ? { onDeath: def.onDeath } : {}),
     })
   }
   return enemies.length > 0 ? enemies : null

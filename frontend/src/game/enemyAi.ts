@@ -17,7 +17,10 @@
  *   使うとき特技の `予兆` の代わりに出す）/ `上限=N`（その行を選べる回数。使い切った行は成立しない扱い）/
  *   条件 `回数>=N`（その敵の行動回数）・`周期=N` または `周期=N/R`（`acted % N == R`、R 省略は 0）・`使用<特技>>=N`（その行動の使用回数）・
  *   `状態=毒`（自分の状態異常）・`味方状態=眠り`（生存している味方のいずれかの状態異常）
- * - カウンター（`反撃:`）・死亡時・被弾の条件は P3 (#837) で、使った行は不正として無視する
+ * - P3 (#837): `被弾>=N`（その敵が被弾した回数）・`受けた=物理` / `魔法` / `アイテム` / `アイテム:名前` / `呪文:名前` / `系統:fire`
+ *   （直前の被弾の種類。系統は効果 DSL の `damage ... type=` の値）・対象 `最後に攻撃した者`。
+ *   `反撃:`（`MonsterDef.counters`）と `死亡時:`（`MonsterDef.onDeath`）は同じ書式の別の台本で、`parseReactionRules` / `chooseEnemyReaction` が扱う
+ *   （`順番=` `上限=` は使えない＝進行位置を持たない。毎回先頭から評価・抽選する）
  *
  * 乱数の消費（注入された rng を使う。同じ state・同じ rng 列なら必ず同じ結果）:
  * - 採用した行の候補が 2 つ以上ならちょうど 1 回（重みの抽選）。1 つなら消費しない。`順番=` の行は消費しない
@@ -51,6 +54,25 @@ export interface EnemyMemory {
   used?: Record<string, number>
   /** 行ごとの使用回数（キーは有効な行の通し番号。`上限=` の判定） */
   ruleUses?: Record<string, number>
+  /**
+   * 以下は P3 (#837)。`反撃:` `死亡時:` を持つ敵、または `行動:` に被弾の語彙（`被弾` `受けた=` `最後に攻撃した者`）を書いた敵だけが、
+   * 被弾したときから持つ（それ以外の敵の記憶は変わらない）。
+   * 被弾した回数（味方の行動でダメージを受けるたびに 1 増える。1 行動で何ヒットしても 1）
+   */
+  hits?: number
+  /** 直前の被弾の種類（`受けた=` の判定に使う） */
+  lastHit?: HitSource
+  /** 直前に攻撃してきた者（`対象=最後に攻撃した者` と、反撃・死亡時の既定の狙い） */
+  lastAttacker?: BattleActorRef
+  /** `死亡時:` を実行し終えた印（倒されたときに 1 度だけ） */
+  died?: boolean
+}
+
+/** 被弾の種類 (#837)。`受けた=` の判定に使う。`name` は呪文・アイテムの名前、`type` は効果 DSL の `damage ... type=` の値 */
+export interface HitSource {
+  category: 'physical' | 'magic' | 'item'
+  name?: string
+  type?: string
 }
 
 /** 行動を終えたあとに記憶へ書く内容 (#836)。`順番=` `上限=` `使用<>` を使う敵の選択にだけ付く */
@@ -96,8 +118,10 @@ type Condition =
   | { kind: 'cycle'; n: number; r: number }
   | { kind: 'used'; key: string; op: CompareOp; n: number }
   | { kind: 'status'; who: 'self' | 'party'; name: string }
+  | { kind: 'hits'; op: CompareOp; n: number }
+  | { kind: 'received'; category: HitSource['category']; name?: string; type?: string }
 
-type TargetSpec = 'random' | 'lowest-hp' | 'all' | 'ally' | 'self'
+type TargetSpec = 'random' | 'lowest-hp' | 'all' | 'ally' | 'self' | 'last-attacker'
 
 interface Candidate {
   /** 特技 id。null = 通常攻撃 */
@@ -105,7 +129,7 @@ interface Candidate {
   weight: number
 }
 
-interface ActionRule {
+export interface ActionRule {
   conditions: Condition[]
   candidates: Candidate[]
   /** `順番=`（P2）。あれば candidates は空で、この順に巡回する */
@@ -127,6 +151,7 @@ const TARGETS: Record<string, TargetSpec> = {
   全体: 'all',
   仲間: 'ally',
   自分: 'self',
+  最後に攻撃した者: 'last-attacker',
 }
 
 /**
@@ -139,6 +164,7 @@ const TARGET_OVERRIDE: Record<TargetSpec, string> = {
   all: '相手全体',
   ally: '仲間単体',
   self: '自分',
+  'last-attacker': '相手単体',
 }
 
 const OP_RE = '(<=|>=|<|>|==|=)'
@@ -149,6 +175,8 @@ const PARTY_RE = COUNT_RE('味方')
 const ACTED_RE = COUNT_RE('回数')
 const CYCLE_RE = /^周期\s*=\s*(\d+)(?:\s*\/\s*(\d+))?$/
 const USED_RE = new RegExp(`^使用\\s*<([^<>]+)>\\s*${OP_RE}\\s*(\\d+)$`)
+const HITS_RE = COUNT_RE('被弾')
+const RECEIVED_RE = /^受けた\s*=\s*(.+)$/
 const SELF_STATUS_RE = /^状態\s*=\s*(\S+)$/
 const PARTY_STATUS_RE = /^味方状態\s*=\s*(\S+)$/
 const ATTACK_KEY = 'こうげき'
@@ -206,7 +234,26 @@ function parseCondition(raw: string): Condition | string {
   if (selfStatus) return { kind: 'status', who: 'self', name: selfStatus[1] }
   const partyStatus = PARTY_STATUS_RE.exec(text)
   if (partyStatus) return { kind: 'status', who: 'party', name: partyStatus[1] }
+  const hits = HITS_RE.exec(text)
+  if (hits) return { kind: 'hits', op: toOp(hits[1]), n: Number(hits[2]) }
+  const received = RECEIVED_RE.exec(text)
+  if (received) return parseReceived(text, received[1].trim())
   return `条件 '${text}' は未対応です`
+}
+
+/** `受けた=` の値 (#837): 物理 / 魔法 / アイテム / アイテム:名前 / 呪文:名前 / 系統:x */
+function parseReceived(text: string, value: string): Condition | string {
+  if (value === '物理') return { kind: 'received', category: 'physical' }
+  if (value === '魔法') return { kind: 'received', category: 'magic' }
+  if (value === 'アイテム') return { kind: 'received', category: 'item' }
+  const m = /^(アイテム|呪文|系統)\s*[:：]\s*(.+)$/.exec(value)
+  if (m) {
+    const arg = m[2].trim()
+    if (m[1] === 'アイテム') return { kind: 'received', category: 'item', name: arg }
+    if (m[1] === '呪文') return { kind: 'received', category: 'magic', name: arg }
+    return { kind: 'received', category: 'magic', type: arg }
+  }
+  return `条件 '${text}' の受けた= は 物理 / 魔法 / アイテム / アイテム:名前 / 呪文:名前 / 系統:x のいずれかです`
 }
 
 function parseCandidate(raw: string): Candidate | string {
@@ -229,7 +276,10 @@ function parseCandidate(raw: string): Candidate | string {
 }
 
 /** 1 行を解釈する。解釈できなければ理由の文字列を返す */
-export function parseActionRule(line: string): ActionRule | string {
+export function parseActionRule(
+  line: string,
+  kind: 'action' | 'reaction' = 'action'
+): ActionRule | string {
   const text = line.trim()
   const parts: { key: string; start: number; valueStart: number }[] = []
   KEY_RE.lastIndex = 0
@@ -297,6 +347,9 @@ export function parseActionRule(line: string): ActionRule | string {
     if (!hasOwn(TARGETS, targetRaw)) return `対象 '${targetRaw}' は未対応です`
     target = TARGETS[targetRaw]
   }
+  if (kind === 'reaction' && (sequence !== undefined || cap !== undefined)) {
+    return '反撃・死亡時には 順番= と 上限= は使えません（進行位置を持たず、毎回先頭から評価します）'
+  }
   return {
     conditions,
     candidates,
@@ -331,9 +384,30 @@ export function hasEnemyActions(enemies: readonly BattleEntity[]): boolean {
   return enemies.some((e) => (e.actions?.length ?? 0) > 0)
 }
 
-/** `行動:` を持つ敵がいる戦闘だけ記憶を作る。持たない戦闘は undefined（既存の挙動・BattleState の形が変わらない） */
+/** `死亡時:` を持つ敵か (#837) */
+export function hasOnDeath(enemy: BattleEntity): boolean {
+  return typeof enemy.onDeath === 'string' && enemy.onDeath.trim() !== ''
+}
+
+/** `行動:` `反撃:` `死亡時:` のいずれかを持つ敵がいる戦闘か (#837) */
+export function hasEnemyScripts(enemies: readonly BattleEntity[]): boolean {
+  return enemies.some(
+    (e) => (e.actions?.length ?? 0) > 0 || (e.counters?.length ?? 0) > 0 || hasOnDeath(e)
+  )
+}
+
+/** `行動:` `反撃:` `死亡時:` を持つ敵がいる戦闘だけ記憶を作る。持たない戦闘は undefined（既存の挙動・BattleState の形が変わらない） */
 export function createEnemyMemory(enemies: readonly BattleEntity[]): EnemyMemory[] | undefined {
-  return hasEnemyActions(enemies) ? enemies.map(() => ({ acted: 0 })) : undefined
+  return hasEnemyScripts(enemies) ? enemies.map(() => ({ acted: 0 })) : undefined
+}
+
+/**
+ * 被弾の記憶（`hits` `lastHit` `lastAttacker`）を残す敵か (#837)。`反撃:` `死亡時:` を持つか、`行動:` に被弾の語彙
+ * （`被弾` `受けた=` `最後に攻撃した者`）を書いた敵だけ。それ以外の敵の記憶は P2 までのまま変わらない
+ */
+export function tracksHits(enemy: BattleEntity): boolean {
+  if ((enemy.counters?.length ?? 0) > 0 || hasOnDeath(enemy)) return true
+  return (enemy.actions ?? []).some((a) => /被弾|受けた\s*=|最後に攻撃した者/.test(a))
 }
 
 function hasStatus(entity: BattleEntity, name: string): boolean {
@@ -377,6 +451,14 @@ function conditionHolds(
       return acted % cond.n === cond.r
     case 'used':
       return compare(readCount(memory.used, cond.key), cond.op, cond.n)
+    case 'hits':
+      return compare(memory.hits ?? 0, cond.op, cond.n)
+    case 'received': {
+      const h = memory.lastHit
+      if (!h) return false
+      if (cond.type !== undefined) return h.type === cond.type
+      return h.category === cond.category && (cond.name === undefined || h.name === cond.name)
+    }
     case 'status':
       return cond.who === 'self'
         ? hasStatus(self, cond.name)
@@ -424,6 +506,15 @@ function pickCandidate(candidates: readonly Candidate[], rng: () => number): Can
   }
   // 浮動小数の端（r が total に極めて近い）では最後の正の重みに落とす
   return [...candidates].reverse().find((c) => c.weight > 0) ?? candidates[candidates.length - 1]
+}
+
+/** 直前に攻撃してきた者（生きている味方）。いなければ undefined (#837) */
+function aliveAttacker(
+  state: Readonly<BattleState>,
+  memory: Readonly<EnemyMemory>
+): BattleActorRef | undefined {
+  const a = memory.lastAttacker
+  return a && a.side === 'party' && (state.party[a.index]?.hp ?? 0) > 0 ? a : undefined
 }
 
 function pickOpponent(
@@ -487,7 +578,12 @@ export function chooseEnemyAction(
     ? { rule: ruleIndex, nextPos, key: chosen.skillId ?? ATTACK_KEY }
     : undefined
   const wantsPicked = rule.target === 'random' || rule.target === 'lowest-hp'
-  const target = wantsPicked && rule.target ? pickOpponent(state, rule.target, rng) : undefined
+  const target =
+    rule.target === 'last-attacker'
+      ? aliveAttacker(state, memory)
+      : wantsPicked && rule.target
+        ? pickOpponent(state, rule.target, rng)
+        : undefined
   if (chosen.skillId === null) {
     return target || track
       ? { kind: 'attack', ...(target ? { target } : {}), ...(track ? { track } : {}) }
@@ -519,4 +615,77 @@ export function toSkillExecutions(
     }
   }
   return out
+}
+
+/** `反撃:` / `死亡時:` の解釈結果。同じ配列・文字列には 1 度だけ warning を出す */
+const reactionCache = new WeakMap<readonly string[], ActionRule[]>()
+const deathCache = new Map<string, ActionRule[]>()
+
+function parseReactionLines(lines: readonly string[], label: string): ActionRule[] {
+  const rules: ActionRule[] = []
+  for (const line of lines) {
+    const rule = parseActionRule(line, 'reaction')
+    if (typeof rule === 'string') {
+      console.warn(`[name-name] ${label}: '${line}' を無視します（${rule}）`)
+      continue
+    }
+    rules.push(rule)
+  }
+  return rules
+}
+
+/** `反撃:` の行の解釈（書いた順。不正な行は warning を出して除く） (#837) */
+export function parseCounterRules(lines: readonly string[]): ActionRule[] {
+  const cached = reactionCache.get(lines)
+  if (cached) return cached
+  const rules = parseReactionLines(lines, '反撃')
+  reactionCache.set(lines, rules)
+  return rules
+}
+
+/** `死亡時:` の行の解釈（0 件か 1 件。不正なら warning を出して空） (#837) */
+export function parseDeathRules(line: string): ActionRule[] {
+  const cached = deathCache.get(line)
+  if (cached) return cached
+  const rules = parseReactionLines([line], '死亡時')
+  deathCache.set(line, rules)
+  return rules
+}
+
+/**
+ * 被弾後・死亡時の行動を決める (#837)。**純粋関数**（state を変えず、乱数は注入された `rng` だけ）。
+ * `行動:` の `chooseEnemyAction` と違い、成立する行が無ければ `null`（何もしない。通常攻撃に落とさない）。
+ * 進行位置・使用回数は持たず、毎回先頭の行から評価し、成立した最初の行の候補を重みで抽選する（候補が 1 つなら rng を消費しない）。
+ * 狙いは、`対象=` が無ければ直前の攻撃者（生きていれば）、`対象=ランダム` / `HP最小` は候補の相手から選ぶ
+ * （`ランダム` で相手が 2 人以上なら rng を 1 回消費）。`state.enemyMemory` が無ければ `null`。
+ */
+export function chooseEnemyReaction(
+  state: Readonly<BattleState>,
+  enemyIndex: number,
+  rules: readonly ActionRule[],
+  rng: () => number
+): ChosenAction | null {
+  const memory = state.enemyMemory?.[enemyIndex]
+  if (!memory || !state.enemies[enemyIndex]) return null
+  const rule = rules.find((r) =>
+    r.conditions.every((c) => conditionHolds(c, state, enemyIndex, memory))
+  )
+  if (!rule) return null
+  const chosen = pickCandidate(rule.candidates, rng)
+  const attacker = aliveAttacker(state, memory)
+  const picked =
+    rule.target === 'random' || rule.target === 'lowest-hp'
+      ? pickOpponent(state, rule.target, rng)
+      : undefined
+  const target = picked ?? attacker
+  if (chosen.skillId === null) {
+    return target ? { kind: 'attack', target } : { kind: 'attack' }
+  }
+  return {
+    kind: 'skill',
+    skillId: chosen.skillId,
+    ...(rule.target ? { targetOverride: TARGET_OVERRIDE[rule.target] } : {}),
+    ...(target ? { target } : {}),
+    ...(rule.omen !== undefined ? { omen: rule.omen } : {}),
+  }
 }

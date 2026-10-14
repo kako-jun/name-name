@@ -4538,6 +4538,57 @@ HP: 5
     }
 
     #[test]
+    fn monster_block_collects_counter_and_on_death_lines_as_raw_strings() {
+        // 反撃: は書いた順の生文字列、死亡時: は最初の 1 行だけ。どちらも検証しない・空は捨てる (#837)
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター boss]
+名前: ボス
+HP: 50
+反撃: 条件=受けた=系統:fire 候補=氷
+counter: 条件=被弾>=3 候補=こうげき
+反撃:
+死亡時: 候補=自爆
+onDeath: 候補=無視される
+[/モンスター]
+
+[モンスター plain]
+名前: ふつう
+HP: 5
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Monster(m) => {
+                assert_eq!(
+                    m.counters.as_deref(),
+                    Some(
+                        &[
+                            "条件=受けた=系統:fire 候補=氷".to_string(),
+                            "条件=被弾>=3 候補=こうげき".to_string(),
+                        ][..]
+                    )
+                );
+                assert_eq!(m.on_death.as_deref(), Some("候補=自爆"));
+            }
+            other => panic!("expected Monster, got {other:?}"),
+        }
+        match &events[1] {
+            Event::Monster(m) => {
+                assert_eq!(m.counters, None);
+                assert_eq!(m.on_death, None);
+            }
+            other => panic!("expected Monster, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn monster_block_without_name_is_dropped() {
         let input = r#"---
 engine: name-name

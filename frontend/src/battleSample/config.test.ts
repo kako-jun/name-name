@@ -3,6 +3,7 @@ import type { BattleEntity } from '../game/spellDsl'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
 import enemyOrderOmenSample from '../../public/battle-sample/enemy-order-omen.json?raw'
+import enemyCounterSample from '../../public/battle-sample/enemy-counter.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -1645,5 +1646,52 @@ describe('同梱の例 public/battle-sample/enemy-order-omen.json (#836)', () =>
     expect(r.value.skills.charge.telegraph).toBe('{user}の からだが ふるえている！')
     expect(r.value.enemies[0].actions).toEqual(['順番=charge > smash'])
     expect(r.value.enemies.length).toBe(2)
+  })
+})
+
+describe('parseConfig 敵の反撃・死亡時: counters と onDeath (#837)', () => {
+  const base = 'https://example.com/battle-sample/x.json'
+
+  it('enemies[].counters は文字列の配列（trim・空要素は捨てる）、onDeath は trim した文字列', () => {
+    const r = parseConfig(
+      { enemies: [{ counters: ['  候補=こうげき ', ''], onDeath: '  候補=bomb ' }] },
+      base
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].counters).toEqual(['候補=こうげき'])
+    expect(r.value.enemies[0].onDeath).toBe('候補=bomb')
+  })
+
+  it('未指定・空は付かない', () => {
+    const r = parseConfig({ enemies: [{ counters: [], onDeath: ' ' }, {}] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('counters' in r.value.enemies[0]).toBe(false)
+    expect('onDeath' in r.value.enemies[0]).toBe(false)
+  })
+
+  it.each([
+    [{ enemies: [{ counters: 'x' }] }, 'enemies[0].counters'],
+    [{ enemies: [{ counters: [1] }] }, 'enemies[0].counters'],
+    [{ enemies: [{ onDeath: 1 }] }, 'enemies[0].onDeath'],
+  ])('型が違うとエラー %j', (raw, path) => {
+    const r = parseConfig(raw, base)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain(path)
+  })
+})
+
+describe('同梱の例 public/battle-sample/enemy-counter.json (#837)', () => {
+  it('parseConfigText で読め、反撃を持つ敵と死亡時の行動を持つ敵が入っている', () => {
+    const r = parseConfigText(
+      enemyCounterSample,
+      'https://example.com/battle-sample/enemy-counter.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(Object.keys(r.value.skills)).toEqual(['frost_lance', 'self_burst'])
+    expect(r.value.enemies[0].counters?.length).toBe(2)
+    expect(r.value.enemies[1].onDeath).toBe('候補=self_burst')
   })
 })

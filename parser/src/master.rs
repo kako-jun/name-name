@@ -151,15 +151,23 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         poses: collect_poses(entries),
         builtin: lookup_master_string(entries, &["builtin"]),
         actions: collect_actions(entries),
+        counters: collect_values(entries, &["反撃", "counter"]),
+        on_death: collect_values(entries, &["死亡時", "onDeath", "on_death"])
+            .and_then(|v| v.into_iter().next()),
     })
 }
 
 /// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
 /// 書式の検証（条件・候補の構文）は runtime が行い、不正な行はそこで無視する。1 行も無ければ None。
 fn collect_actions(entries: &[(String, String)]) -> Option<Vec<String>> {
+    collect_values(entries, &["行動", "action"])
+}
+
+/// 指定したキー（別名を含む）の値を書いた順に集める (#835 / #837)。値は生文字列のまま透過し、空の行は捨てる。1 行も無ければ None。
+fn collect_values(entries: &[(String, String)], keys: &[&str]) -> Option<Vec<String>> {
     let out: Vec<String> = entries
         .iter()
-        .filter(|(k, v)| (k == "行動" || k == "action") && !v.trim().is_empty())
+        .filter(|(k, v)| keys.contains(&k.as_str()) && !v.trim().is_empty())
         .map(|(_, v)| v.trim().to_string())
         .collect();
     if out.is_empty() {

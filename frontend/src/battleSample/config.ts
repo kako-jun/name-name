@@ -297,6 +297,21 @@ function parseEntity(
     const actions = (raw.actions as string[]).map((a) => a.trim()).filter((a) => a !== '')
     if (actions.length > 0) entity.actions = actions
   }
+  if (raw.counters !== undefined) {
+    // 敵の反撃ルール (#837)。`反撃:` の値と同じ書式の文字列の配列（書いた順）
+    if (!Array.isArray(raw.counters) || raw.counters.some((a) => typeof a !== 'string')) {
+      return { ok: false, error: `${path}.counters は文字列の配列である必要があります` }
+    }
+    const counters = (raw.counters as string[]).map((a) => a.trim()).filter((a) => a !== '')
+    if (counters.length > 0) entity.counters = counters
+  }
+  if (raw.onDeath !== undefined) {
+    // 敵の死亡時の行動 (#837)。`死亡時:` の値と同じ書式の 1 行の文字列
+    if (typeof raw.onDeath !== 'string') {
+      return { ok: false, error: `${path}.onDeath は文字列である必要があります` }
+    }
+    if (raw.onDeath.trim() !== '') entity.onDeath = raw.onDeath.trim()
+  }
   return { ok: true, value: entity }
 }
 

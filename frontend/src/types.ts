@@ -158,6 +158,10 @@ export interface MonsterDef {
   builtin?: string
   /** 敵の行動ルール (#835)。`行動:` の値を書いた順の生文字列で透過し、解釈は `enemyAi.ts`。無ければ通常攻撃だけ */
   actions?: string[]
+  /** 敵の反撃ルール (#837)。`反撃:` の値を書いた順の生文字列で透過し、解釈は `enemyAi.ts`。無ければ反撃しない */
+  counters?: string[]
+  /** 敵の死亡時の行動 (#837)。`死亡時:` の値（最初の 1 行）の生文字列。解釈は `enemyAi.ts`。無ければ何もしない */
+  onDeath?: string
 }
 
 /** アイテム定義 (#174) */
