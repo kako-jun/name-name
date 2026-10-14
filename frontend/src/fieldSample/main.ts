@@ -3,6 +3,15 @@
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js'
+import { BattleEngine } from '../game/battleEngine'
+import { BattleScreen } from '../game/BattleScreen'
+import {
+  advanceEncounter,
+  afterBattleState,
+  initialEncounterState,
+  type EncounterWalkState,
+} from '../game/fieldEncounter'
+import type { BattleEntity } from '../game/spellDsl'
 import {
   arrivalPosition,
   detectEdgeLink,
@@ -149,6 +158,46 @@ async function main(): Promise<void> {
   let movingMs = 0
   let disarmed: FieldLink | null = null
   let debug = false
+  // ---- ランダムエンカウント・戦闘 (#809) ----
+  let encState: EncounterWalkState = initialEncounterState(config.encounter)
+  let battle: BattleScreen | null = null
+  let lastOutcome = '-'
+  const startBattle = (enemies: BattleEntity[]): void => {
+    // 入力を戦闘へ渡す: 歩きの入力を捨てる
+    keys.up = keys.down = keys.left = keys.right = false
+    pointer = null
+    movingMs = 0
+    const b = config.battle
+    const bg = config.scenes[sceneId].encounter?.background ?? b.background
+    const engine = new BattleEngine(
+      config.party.map((p) => ({ ...p })),
+      enemies.map((e) => ({ ...e }))
+    )
+    world.visible = false
+    fade.visible = false
+    app.renderer.resize(b.width, b.height)
+    battle = new BattleScreen(engine, b.width, b.height, {
+      layout: b.layout,
+      spriteStyle: b.spriteStyle,
+      ...(bg ? { background: bg } : {}),
+      onClose: (outcome) => {
+        lastOutcome = outcome
+        endBattle()
+      },
+    })
+    app.stage.addChild(battle)
+  }
+  const endBattle = (): void => {
+    if (!battle) return
+    app.stage.removeChild(battle)
+    battle.destroy({ children: true })
+    battle = null
+    // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
+    app.renderer.resize(scene.mask.width, scene.mask.height)
+    world.visible = true
+    fade.visible = true
+    encState = afterBattleState()
+  }
   let transition: {
     phase: 'out' | 'in'
     t: number
@@ -165,6 +214,7 @@ async function main(): Promise<void> {
     fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0x000000)
   }
   applyScene(scene)
+  fade.alpha = 0
 
   // ---- 入力 ----
   const keys: DirectionKeys = { up: false, down: false, left: false, right: false }
@@ -180,7 +230,7 @@ async function main(): Promise<void> {
   }
   const onKey = (down: boolean) => (ev: KeyboardEvent) => {
     const k = KEYMAP[ev.code]
-    if (!k || ev.ctrlKey || ev.altKey || ev.metaKey) return
+    if (battle || !k || ev.ctrlKey || ev.altKey || ev.metaKey) return
     ev.preventDefault()
     keys[k] = down
   }
@@ -201,11 +251,12 @@ async function main(): Promise<void> {
     }
   }
   canvas.addEventListener('pointerdown', (ev) => {
+    if (battle) return
     canvas.setPointerCapture(ev.pointerId)
     pointer = toScene(ev)
   })
   canvas.addEventListener('pointermove', (ev) => {
-    if (pointer) pointer = toScene(ev)
+    if (pointer && !battle) pointer = toScene(ev)
   })
   const endPointer = () => {
     pointer = null
@@ -217,6 +268,21 @@ async function main(): Promise<void> {
     debug = (ev.target as HTMLInputElement).checked
   })
 
+  $('tb-force-battle').addEventListener('click', () => {
+    if (battle || transition) return
+    const sc = config.scenes[sceneId].encounter
+    const groups = sc && sc.groups.length > 0 ? sc.groups : Object.keys(config.monsters)
+    const r = advanceEncounter(
+      initialEncounterState({ stepDistance: 1, minSteps: 0 }),
+      1,
+      { stepDistance: 1, minSteps: 0 },
+      { rate: 1, groups },
+      config.monsters,
+      Math.random
+    )
+    if (r.enemies) startBattle(r.enemies)
+  })
+
   const currentVector = (): Vec => {
     const kv = keysToVector(keys)
     if (kv.x !== 0 || kv.y !== 0) return kv
@@ -226,6 +292,11 @@ async function main(): Promise<void> {
   // ---- フレーム更新 ----
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS, 50)
+    if (battle) {
+      $('info').textContent =
+        `戦闘中  scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})`
+      return
+    }
     const w = scene.mask.width
     const h = scene.mask.height
 
@@ -290,6 +361,20 @@ async function main(): Promise<void> {
         vec,
         disarmed
       )
+      // 歩いた距離でエンカウント抽選（壁に押しつけて動けていないときは距離が進まない）
+      const enc = advanceEncounter(
+        encState,
+        r.distance,
+        config.encounter,
+        config.scenes[sceneId].encounter,
+        config.monsters,
+        Math.random
+      )
+      encState = enc.state
+      if (enc.enemies) {
+        startBattle(enc.enemies)
+        return
+      }
       if (link) {
         transition = { phase: 'out', t: 0, link, next: ensureScene(link.to) }
       }
@@ -308,7 +393,7 @@ async function main(): Promise<void> {
       marker.rect(0, 0, w, h).stroke({ width: 2, color: 0xffff00, alpha: 0.5 })
     }
     $('info').textContent =
-      `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}`
+      `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}`
   })
 }
 

@@ -6,6 +6,11 @@
 import { resolveRpgImagePath } from '../game/novelLayout'
 import { resolveUrl, type ParseResult } from '../battleSample/config'
 import type { Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
+import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
+import type { MonsterDef } from '../types'
+import type { BattleEntity } from '../game/spellDsl'
+import type { BattleLayoutMode } from '../game/battleLayout'
+import type { SpriteStyle } from '../game/spriteStyle'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
 export const FACINGS: readonly Facing[] = ['up', 'down', 'left', 'right']
@@ -17,6 +22,19 @@ export interface FieldSceneConfig {
   /** 歩行マスク画像の URL（白=歩ける・黒=歩けない。背景と同じ大きさ） */
   mask: string
   links: FieldLink[]
+  /** ランダムエンカウント (#809)。省略 = エンカウントなし */
+  encounter: (SceneEncounter & { background?: string }) | null
+}
+
+/** 戦闘画面の設定 (#809) */
+export interface FieldBattleConfig {
+  layout: BattleLayoutMode
+  spriteStyle: SpriteStyle
+  /** 戦闘の既定の背景 URL（シーンの encounter.background で上書き可） */
+  background?: string
+  /** 戦闘中の画面の大きさ（戦闘サンプルの 800x450 と同じ既定） */
+  width: number
+  height: number
 }
 
 export interface FieldSampleConfig {
@@ -36,9 +54,25 @@ export interface FieldSampleConfig {
     frameMs: number
   }
   scenes: Record<string, FieldSceneConfig>
+  /** 歩数の刻みと連続エンカウント抑制 (#809) */
+  encounter: EncounterStepConfig
+  /** エンカウントで使うモンスターのマスター (#809) */
+  monsters: Record<string, MonsterDef>
+  /** 戦闘に出す味方 (#809)。主人公のポーズ画像を sprite に指す */
+  party: BattleEntity[]
+  battle: FieldBattleConfig
 }
 
-export const DEFAULTS = { speed: 260, edgeThreshold: 6, height: 150, frameMs: 140 } as const
+export const DEFAULTS = {
+  speed: 260,
+  edgeThreshold: 6,
+  height: 150,
+  frameMs: 140,
+  stepDistance: 80,
+  minSteps: 3,
+  battleWidth: 800,
+  battleHeight: 450,
+} as const
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -139,7 +173,106 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         links.push({ edge: l.edge as Edge, range: [r[0], r[1]], to: l.to })
       }
     }
-    scenes[id] = { id, background: background.value, mask: mask.value, links }
+    let encounter: FieldSceneConfig['encounter'] = null
+    if (sc.encounter !== undefined) {
+      const e = sc.encounter
+      const p = `scenes.${id}.encounter`
+      if (!isObj(e)) return fail(`${p} はオブジェクトが必要です`)
+      if (typeof e.rate !== 'number' || !Number.isFinite(e.rate) || e.rate < 0)
+        return fail(`${p}.rate は 0 以上の数値（0=なし・N=1/N・1=毎回）: ${JSON.stringify(e.rate)}`)
+      if (!Array.isArray(e.groups) || !e.groups.every((g) => typeof g === 'string'))
+        return fail(`${p}.groups は文字列の配列が必要です`)
+      let bg: string | undefined
+      if (e.background !== undefined) {
+        const u = url(e.background, `${p}.background`)
+        if (!u.ok) return u
+        bg = u.value
+      }
+      encounter = { rate: e.rate, groups: e.groups as string[], ...(bg ? { background: bg } : {}) }
+    }
+    scenes[id] = { id, background: background.value, mask: mask.value, links, encounter }
+  }
+
+  // ---- ランダムエンカウント・戦闘 (#809) ----
+  const stepRaw = raw.encounter === undefined ? {} : raw.encounter
+  if (!isObj(stepRaw)) return fail('encounter はオブジェクトが必要です')
+  const stepDistance = positive(
+    stepRaw.stepDistance,
+    DEFAULTS.stepDistance,
+    'encounter.stepDistance'
+  )
+  if (!stepDistance.ok) return stepDistance
+  const minSteps = stepRaw.minSteps === undefined ? DEFAULTS.minSteps : stepRaw.minSteps
+  if (typeof minSteps !== 'number' || !Number.isInteger(minSteps) || minSteps < 0)
+    return fail(`encounter.minSteps は 0 以上の整数: ${JSON.stringify(minSteps)}`)
+
+  const monsters: Record<string, MonsterDef> = {}
+  if (raw.monsters !== undefined) {
+    if (!isObj(raw.monsters)) return fail('monsters はオブジェクトが必要です')
+    for (const [mid, m] of Object.entries(raw.monsters)) {
+      const e = parseEntity(m, mid, `monsters.${mid}`, url)
+      if (!e.ok) return e
+      monsters[mid] = {
+        id: mid,
+        name: e.value.name,
+        hp: e.value.hp,
+        mp: e.value.mp,
+        atk: e.value.atk,
+        def: e.value.def,
+        agi: e.value.agi,
+        exp: e.value.exp ?? 0,
+        gold: e.value.gold ?? 0,
+        ...(e.value.sprite ? { sprite: e.value.sprite } : {}),
+      }
+    }
+  }
+  for (const sc of Object.values(scenes)) {
+    for (const g of sc.encounter?.groups ?? []) {
+      for (const mid of g.split('+').map((t) => t.trim())) {
+        if (mid && !(mid in monsters))
+          return fail(`scenes.${sc.id}.encounter.groups の "${mid}" が monsters にありません`)
+      }
+    }
+  }
+
+  const party: BattleEntity[] = []
+  if (raw.party !== undefined) {
+    if (!Array.isArray(raw.party)) return fail('party は配列が必要です')
+    for (let i = 0; i < raw.party.length; i++) {
+      const e = parseEntity(raw.party[i], `party${i + 1}`, `party[${i}]`, url)
+      if (!e.ok) return e
+      party.push(e.value)
+    }
+  }
+  if (party.length === 0) {
+    party.push({
+      id: 'hero',
+      name: '主人公',
+      hp: 30,
+      maxHp: 30,
+      mp: 8,
+      maxMp: 8,
+      atk: 8,
+      def: 4,
+      agi: 5,
+    })
+  }
+
+  const b = raw.battle === undefined ? {} : raw.battle
+  if (!isObj(b)) return fail('battle はオブジェクトが必要です')
+  if (b.layout !== undefined && b.layout !== 'front' && b.layout !== 'side')
+    return fail(`battle.layout は "front" か "side": ${JSON.stringify(b.layout)}`)
+  if (b.spriteStyle !== undefined && b.spriteStyle !== 'none' && b.spriteStyle !== 'acrylic')
+    return fail(`battle.spriteStyle は "none" か "acrylic": ${JSON.stringify(b.spriteStyle)}`)
+  const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
+  if (!bw.ok) return bw
+  const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
+  if (!bh.ok) return bh
+  let battleBg: string | undefined
+  if (b.background !== undefined) {
+    const u = url(b.background, 'battle.background')
+    if (!u.ok) return u
+    battleBg = u.value
   }
 
   return {
@@ -151,8 +284,68 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       edgeThreshold: edgeThreshold.value,
       player: { sprites, height: height.value, frameMs: frameMs.value },
       scenes,
+      encounter: { stepDistance: stepDistance.value, minSteps },
+      monsters,
+      party,
+      battle: {
+        layout: b.layout ?? 'side',
+        spriteStyle: b.spriteStyle ?? 'none',
+        ...(battleBg ? { background: battleBg } : {}),
+        width: bw.value,
+        height: bh.value,
+      },
     },
   }
+}
+
+/** 味方・モンスターの 1 件分の検証（ステータスは数値、sprite は URL に解決） */
+function parseEntity(
+  raw: unknown,
+  id: string,
+  path: string,
+  url: (v: unknown, path: string) => ParseResult<string>
+): ParseResult<BattleEntity> {
+  if (!isObj(raw)) return fail(`${path} はオブジェクトが必要です`)
+  if (typeof raw.name !== 'string' || !raw.name.trim()) return fail(`${path}.name が必要です`)
+  const num = (k: string, def?: number): ParseResult<number> => {
+    const v = raw[k] === undefined ? def : raw[k]
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+      return fail(`${path}.${k} は 0 以上の数値が必要です`)
+    return { ok: true, value: v }
+  }
+  const hp = num('hp')
+  if (!hp.ok) return hp
+  const mp = num('mp', 0)
+  if (!mp.ok) return mp
+  const atk = num('atk', 5)
+  if (!atk.ok) return atk
+  const def = num('def', 3)
+  if (!def.ok) return def
+  const agi = num('agi', 5)
+  if (!agi.ok) return agi
+  const exp = num('exp', 0)
+  if (!exp.ok) return exp
+  const gold = num('gold', 0)
+  if (!gold.ok) return gold
+  const e: BattleEntity = {
+    id,
+    name: raw.name,
+    hp: hp.value,
+    maxHp: hp.value,
+    mp: mp.value,
+    maxMp: mp.value,
+    atk: atk.value,
+    def: def.value,
+    agi: agi.value,
+    exp: exp.value,
+    gold: gold.value,
+  }
+  if (raw.sprite !== undefined) {
+    const u = url(raw.sprite, `${path}.sprite`)
+    if (!u.ok) return u
+    e.sprite = u.value
+  }
+  return { ok: true, value: e }
 }
 
 /**
