@@ -265,29 +265,50 @@ export interface LinearSegment {
  *
  * 作者の `[場面転換]` も同じ `'SceneTransition'` なので、イベントの種別では境界を区別できない。
  * そこで `scenes` の各シーンの events が同一オブジェクト参照で並び、直後に `SceneTransition`（または終端）が
- * 来るものだけを区間とする。照合できなくなったところで打ち切る（以降は線形ストリームの外）。
- * events が空のシーンは照合できないので区間にしない。
+ * 来るものだけを区間とする。照合できなくなったところで打ち切る（以降は線形ストリームの外）。照合は先頭のシーンを見つけたあと、`scenes` 上の次のシーンを順に行う（エントリ文書のシーンは `scenes` 上で連続・文書順）。
+ * events が空のシーンは長さ 0 の区間にする。
  */
 export function findLinearSegments(
   entryEvents: readonly Event[],
   scenes: readonly EventScene[]
 ): LinearSegment[] {
+  // 先頭に照合できるシーンが複数あり得る（文字列イベントだけのシーン同士など）ので、候補ごとに連鎖を作り、
+  // 一番長く続くものを採る。
+  let best: LinearSegment[] = []
+  for (let i = 0; i < scenes.length; i++) {
+    if (!matchesAt(entryEvents, 0, scenes[i].events)) continue
+    const chain = chainFrom(entryEvents, scenes, i)
+    if (chain.length > best.length) best = chain
+  }
+  return best
+}
+
+/**
+ * `scenes[first]` が先頭に照合できたとして、以降は `scenes` 上の次のシーンを順に照合する。
+ * エントリ文書のシーンは `allScenes` 上で連続し文書順に並ぶ。events が空のシーンは長さ 0 の区間にする
+ * （直後の境界の `SceneTransition` を消費する）。
+ */
+function chainFrom(
+  entryEvents: readonly Event[],
+  scenes: readonly EventScene[],
+  first: number
+): LinearSegment[] {
   const segments: LinearSegment[] = []
   let pos = 0
-  while (pos < entryEvents.length) {
-    const scene = scenes.find((s) => matchesAt(entryEvents, pos, s.events))
-    if (!scene) break
+  for (let i = first; i < scenes.length; i++) {
+    const scene = scenes[i]
+    if (!matchesAt(entryEvents, pos, scene.events)) break
     segments.push({ sceneId: scene.id, start: pos, length: scene.events.length })
     pos += scene.events.length
     if (pos >= entryEvents.length) break
-    if (entryEvents[pos] !== 'SceneTransition') break
+    // matchesAt が直後の境界を確認済み
     pos += 1
   }
   return segments
 }
 
 function matchesAt(stream: readonly Event[], pos: number, events: readonly Event[]): boolean {
-  if (events.length === 0 || pos + events.length > stream.length) return false
+  if (pos + events.length > stream.length) return false
   for (let i = 0; i < events.length; i++) {
     if (stream[pos + i] !== events[i]) return false
   }

@@ -1317,7 +1317,7 @@ export class NovelRenderer {
       waitingForWait: this.waitingForWait,
       jumpState: this.jumpState,
       currentResolvedFontFamily: this.currentResolvedFontFamily,
-      sceneId: this.currentSceneId ?? null,
+      sceneId: this.getPlayheadSceneId() ?? null,
       audioWarning: this.audioManager.getLastWarning(),
       characters: chars,
     }
@@ -1590,8 +1590,11 @@ export class NovelRenderer {
 
   /**
    * @param carry 持ち越し方針 (#734)。種類ごとに `carryPolicyFor(kind)` を渡す。
-   * @param sceneId 開始するシーンの ID。新規開始の 'entry'（線形ストリームの先頭）で sceneId を持たない
-   *   ときは null（`onSceneChange` は発火しない）。
+   * @param sceneId ストリームの持ち主の ID（`currentSceneId` に入る）。新規開始の 'entry'（線形ストリームの
+   *   先頭）で sceneId を持たないときは null。
+   * @param linear 線形ストリームの途中のシーンから始めるとき (#777)。`startIndex` は展開後の位置、
+   *   `announcedSceneId` は入ったシーン（`onSceneChange` で知らせる ID。持ち主とは別）。
+   *   指定が無ければ `sceneId` を知らせる（null なら発火しない）。
    */
   private startScene(
     sceneId: string | null,
@@ -2001,7 +2004,7 @@ export class NovelRenderer {
   }
 
   /**
-   * 新規開始の対象 `sceneId` がエントリの線形ストリーム上にあり、続くシーンもあれば、そのシーン先頭の展開後の位置を返す (#777)。
+   * 新規開始の対象 `sceneId` がエントリの線形ストリーム上にあれば、そのシーン先頭の展開後の位置を返す (#777)。
    * flags は新規開始で置き換えた後の値（`req.flags`）で展開する。線形ストリーム上になければ null。
    */
   private linearStartIndex(
@@ -2010,9 +2013,7 @@ export class NovelRenderer {
   ): number | null {
     const segments = this.getLinearSegments()
     const at = segments.findIndex((seg) => seg.sceneId === sceneId)
-    // 続くシーンが無ければ、ストリーム全体を流してもそのシーンの events だけと同じ。従来の経路（そのシーンが
-    // ストリームの持ち主になる）のままにして、セーブの形を変えない。
-    if (at < 0 || at === segments.length - 1) return null
+    if (at < 0) return null
     const gs = new GameState()
     gs.fromJSON(flags ?? {})
     const resolved = resolveLinearSegments(
@@ -2499,11 +2500,18 @@ export class NovelRenderer {
    * 線形ストリームのシーン境界（シーンの間に挟んだ `SceneTransition`）を通過したとき、入ったシーンで
    * `onSceneChange` を発火する (#777)。作者の `[場面転換]`（シーン内）は境界ではないので何もしない。
    */
-  private notifyLinearSceneEntered(): void {
+  private notifyLinearSceneEntered(): boolean {
     const resolved = this.resolveLinearSegmentsNow()
-    if (!resolved) return
+    if (!resolved) return false
     const entered = resolved.find((seg) => seg.separator === this.eventIndex)
-    if (entered) this.onSceneChangeCallback?.(entered.sceneId)
+    if (!entered) return false
+    if (!isSceneIdConfined(entered.sceneId, this.confinedSceneIds)) {
+      // `?scene=` 埋め込みは、閉じ込め外のシーンへ入る進行を終劇にする (#386)。線形に続く次のシーンも同じ。
+      this.endStory()
+      return true
+    }
+    this.onSceneChangeCallback?.(entered.sceneId)
+    return false
   }
 
   /** `findLinearSegments` の結果。エントリの元イベント列と `allScenes` が変わったときだけ引き直す (#777)。 */
@@ -4692,6 +4700,7 @@ export class NovelRenderer {
    */
   private reResolveEvents(): void {
     const oldIndex = this.eventIndex
+    const current = this.resolvedEvents[oldIndex]
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
     this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
     // novel 改頁キャッシュは展開後のイベント列に紐づくので破棄する (#283)。
@@ -4699,12 +4708,21 @@ export class NovelRenderer {
     // adv 文単位ページキャッシュ (#448) も同じ派生データなので同じタイミングで破棄する。
     this.advSentencePagesCache = null
 
-    // 再展開で配列長が変わった場合、eventIndex を安全な範囲に収める
+    // eventIndex は展開後の列の位置なので、現在のイベント自身（元イベント列の同じオブジェクト）を引き直して
+    // 写像する。Flag より前の `[条件:]` が新しい flags で展開し直されて長さが変わっても、同じイベントを指す。
+    // 途中のシーンからの新規開始 (#777) では、ストリームの前にあるシーンの `[条件:]` が先に展開されている
+    // ので、位置を据え置くとずれる。
+    if (typeof current === 'object' && current !== null) {
+      const remapped = this.resolvedEvents.indexOf(current)
+      if (remapped >= 0) {
+        this.eventIndex = remapped
+        return
+      }
+    }
+    // 見つからない（展開で消えた）場合は、eventIndex を安全な範囲に収める
     if (oldIndex >= this.resolvedEvents.length) {
       this.eventIndex = Math.max(0, this.resolvedEvents.length - 1)
     }
-    // 再展開前と同じイベントを指しているか確認（Flag イベント自体は展開で位置が変わらない）
-    // Flag は Condition の外にあるため、Flag の位置は再展開で変動しない
   }
 
   /**
@@ -5033,7 +5051,12 @@ export class NovelRenderer {
   private processUntilNextTextEvent(): void {
     while (this.eventIndex < this.resolvedEvents.length) {
       if (getTextEvent(this.resolvedEvents[this.eventIndex])) break
-      this.processDirective(this.resolvedEvents[this.eventIndex])
+      const directive = this.resolvedEvents[this.eventIndex]
+      this.processDirective(directive)
+      // エントリの線形ストリームのシーン境界なら、入ったシーンを知らせる (#777)。本編ストリームの処理だけで
+      // 通知する（intermission のタブローは別のイベント列を processDirective に流すので通知しない）。
+      // 閉じ込め外のシーンに入るときは終劇にして、これ以上進めない。
+      if (directive === 'SceneTransition' && this.notifyLinearSceneEntered()) break
       // Choice / Wait / Jump 予約中は進行を止める。ユーザー操作のゲートではなく、この同期ループ自身が
       // 今立てた状態を見るだけ（入場中は同期の適用中には立たない）ので isTransitionGated は使わない。
       if (this.waitingForChoice || this.waitingForWait || this.jumpState === 'pending') break
@@ -5217,8 +5240,6 @@ export class NovelRenderer {
         this.setBlackout(false)
         // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
         this.retreatNovelScrim()
-        // エントリの線形ストリームのシーン境界なら、入ったシーンを知らせる (#777)
-        this.notifyLinearSceneEntered()
       }
       if (event === 'VideoExit') {
         // [動画退場] で動画レイヤをクリア (#252)
@@ -6481,7 +6502,7 @@ export class NovelRenderer {
 
     // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
-    const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
+    const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
 
     const snapshot = this.getSnapshot()
     const data: SaveSlotData = {
@@ -6591,7 +6612,7 @@ export class NovelRenderer {
         return
       }
       // quickSave と共通のシーンタイトル解決 (#260)。
-      const sceneName = resolveSceneTitle(this.allScenes, this.currentSceneId)
+      const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
 
       const snapshot = this.getSnapshot()
       const data: SaveSlotData = {
