@@ -13,6 +13,7 @@ import {
   openList,
   scrollList,
   setListCursor,
+  type BattleItemEntry,
   type BattleSpellEntry,
   type MenuContext,
 } from './battleMenu'
@@ -451,6 +452,40 @@ describe('消費が 2 桁でも 7 文字の名前は省略されない（浮動�
         if (v.type !== 'list') throw new Error()
         for (const r of v.rows) expect(r.label).toBe(names[r.index])
       })
+    }
+  }
+})
+
+describe('アイテム窓でも 7 文字の名前は省略されない（×1・×9・×99）', () => {
+  for (const counts of [
+    [1, 9, 5],
+    [99, 1, 9],
+  ]) {
+    for (const [w, h] of SIZES) {
+      for (const party of [1, 2, 3, 4]) {
+        it(`${w}x${h} 味方${party} ×${counts.join('/')}`, () => {
+          const g = geometry(w, h, party, 3)
+          const names = ['はいぽーしょん', 'ハイポーション', 'えりくさー']
+          const items: BattleItemEntry[] = names.map((name, i) => ({
+            id: `i${i}`,
+            name,
+            count: counts[i],
+          }))
+          const members = [ent('a')]
+          const ctx: MenuContext = {
+            rows: buildMenuRows('item', items, members[0]),
+            maxRows: listMaxRows(g),
+            entries: items,
+            party: members,
+            enemies: [ent('e')],
+            actorIndex: 0,
+          }
+          const v = buildMenuView(openList(EMPTY_STACK, 'item', ctx), ctx, g)[0]
+          if (v.type !== 'list') throw new Error()
+          expect(v.rows).toHaveLength(3)
+          for (const r of v.rows) expect(r.label).toBe(names[r.index])
+        })
+      }
     }
   }
 })
