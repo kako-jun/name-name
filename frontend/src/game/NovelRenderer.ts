@@ -622,7 +622,7 @@ export class NovelRenderer {
   /** `[待機: 表示完了]` の polling timer。通常 Wait と同じ waitingForWait gate を使う。 */
   private waitDisplayCompleteTimer: number | null = null
   /** タイマー抽象化レイヤー (#228 動画エクスポート対応の土台) */
-  private time: TimeController = defaultTimeController
+  private readonly time: TimeController = defaultTimeController
 
   /**
    * 遷移ゲートと `[ジャンプ:]` 予約の状態機械 (#825)。`waitingForChoice` / `waitingForWait` / `jumpState` /
