@@ -14,11 +14,15 @@ type RendererLike = {
   applySettings?(settings: { msPerChar: number; bgmVolume: number; seVolume: number }): void
   /** 設定オーバーレイの開閉を伝える。開いている間は入力（移動・戦闘のキー）を止める (#204) */
   setInputSuspended?(suspended: boolean): void
+  /** プロジェクトのアセットのベース URL。`load()` より前に渡す (#746) */
+  setAssetBaseUrl?(url: string | undefined): void
 }
 
 interface RPGPlayerProps {
   gameData?: RPGProject
   view?: 'topdown' | 'raycast'
+  /** プロジェクトのアセットのベース URL（例 `${apiBaseUrl}/api/projects/${name}/assets/raw`）。相対の画像パスを `${base}/images/...` に解決する (#746) */
+  assetBaseUrl?: string
 }
 
 /**
@@ -66,7 +70,7 @@ interface RPGPlayerProps {
  */
 const RPG_SETTINGS_SLIDER_COLOR = '#53eafd'
 
-function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
+function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl }: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<RendererLike | null>(null)
   // renderer が作り直されても設定オーバーレイの開閉状態を引き継ぐための ref (#204)
@@ -95,6 +99,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
         }
         renderer.applySettings?.(settings)
         renderer.setInputSuspended?.(settingsOpenRef.current)
+        renderer.setAssetBaseUrl?.(assetBaseUrl)
         renderer.load(gameData ?? sampleRpgData)
       })
       .catch((err) => {
@@ -109,7 +114,7 @@ function RPGPlayer({ gameData, view = 'topdown' }: RPGPlayerProps) {
       rendererRef.current = null
       renderer.destroy()
     }
-  }, [gameData, view])
+  }, [gameData, view, assetBaseUrl])
 
   // 設定変更を renderer に反映 + 永続化 (#138) — debounced
   useEffect(() => {

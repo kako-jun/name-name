@@ -5,8 +5,12 @@ import MapEditor from './MapEditor'
 import { MapData, RPGProject, TileType } from '../types/rpg'
 
 // RPGPlayer は重いので mock（プレビューは開かない前提）
+const rpgPlayerProps = vi.fn()
 vi.mock('./RPGPlayer', () => ({
-  default: () => null,
+  default: (props: unknown) => {
+    rpgPlayerProps(props)
+    return null
+  },
 }))
 
 function makeMap(width = 3, height = 2): MapData {
@@ -108,5 +112,24 @@ describe('MapEditor 高さ編集タブ', () => {
     // 既存値 0.5 は保持、拡大部分は fallback (1.0)
     expect(arg.wallHeights![0].slice(0, 3)).toEqual([0.5, 0.5, 0.5])
     expect(arg.wallHeights![0][3]).toBe(1)
+  })
+})
+
+describe('MapEditor プレビュー (#746)', () => {
+  it('assetBaseUrl をプレビューの RPGPlayer に転送する', () => {
+    const map = makeMap()
+    render(
+      <MapEditor
+        mapData={map}
+        rpgProject={makeProject(map)}
+        onChange={vi.fn()}
+        isDark={false}
+        assetBaseUrl="/api/projects/g/assets/raw"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Raycastでプレビュー/ }))
+    expect(rpgPlayerProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ assetBaseUrl: '/api/projects/g/assets/raw' })
+    )
   })
 })

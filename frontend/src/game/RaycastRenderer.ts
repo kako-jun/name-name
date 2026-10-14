@@ -11,6 +11,7 @@ import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
 import { isEditableTarget } from './inputGuards'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
+import { resolveRpgImagePath } from './novelLayout'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -137,6 +138,8 @@ export class RaycastRenderer {
   /** 戦闘画面のレイアウト / 背景画像 (#736)。frontmatter `battle_layout` / `battle_background` 由来 */
   private battleLayout: BattleLayoutMode = 'front'
   private battleBackground: string | undefined = undefined
+  /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔・戦闘の画像パス解決に使う。未設定ならパスをそのまま読む */
+  private assetBaseUrl: string | undefined = undefined
   /** 戦闘スプライトの表示スタイル (#737)。frontmatter `sprite_style` 由来 */
   private spriteStyle: SpriteStyle = 'none'
   /** 戦闘ウィンドウの配色テーマ (#744)。frontmatter `window_style` 由来 */
@@ -370,6 +373,11 @@ export class RaycastRenderer {
     this.initialized = true
   }
 
+  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
+  setAssetBaseUrl(url: string | undefined): void {
+    this.assetBaseUrl = url
+  }
+
   load(gameData: RPGProject): void {
     this.dialogBox?.hide()
 
@@ -525,7 +533,7 @@ export class RaycastRenderer {
 
   private async loadNpcSprite(npc: NPCRuntime): Promise<void> {
     const sheet = await loadNpcSpriteSheet(
-      npc.data.sprite!,
+      resolveRpgImagePath(this.assetBaseUrl, npc.data.sprite!),
       clampFrames(npc.data.frames),
       this.tileSize,
       npc.data.color,
@@ -708,7 +716,7 @@ export class RaycastRenderer {
       this.dialogBox?.show(
         npc.data.name,
         stripExpressionDirectives(npc.data.message),
-        resolveNpcPortrait(npc.data)
+        resolveRpgImagePath(this.assetBaseUrl, resolveNpcPortrait(npc.data))
       )
       // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
       // （移動・回転・pitch）が残留する。閉じた瞬間に意図しない挙動にならないよう一括クリア。
@@ -863,6 +871,7 @@ export class RaycastRenderer {
     this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
       layout: this.battleLayout,
       background: this.battleBackground,
+      assetBaseUrl: this.assetBaseUrl,
       spriteStyle: this.spriteStyle,
       windowStyle: this.windowStyle,
       backgroundTone: this.battleBackgroundTone,

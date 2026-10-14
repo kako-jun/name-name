@@ -856,6 +856,8 @@ RPG プレイモードもノベルと同じく PixiJS で実装する（Phaser �
 
 `RPGPlayer` は `view` prop（`'topdown' | 'raycast'`）でどちらを使うかを受け取り、シーンヘッダー `[view=...]` の値がそのまま伝わる。MapEditor は編集性を優先して常に TopDown を使う。
 
+**アセットのベース URL (#746)**: RPG の画像パス（NPC スプライト・NPC 顔・戦闘スプライト・戦闘背景/前景）は、`PlayerScreen` / `EditorScreen` / `MapEditor`（プレビュー）が `${apiBaseUrl}/api/projects/{name}/assets/raw` を `RPGPlayer` の `assetBaseUrl` prop に渡し、`RPGPlayer` が `renderer.load()` の直前に `setAssetBaseUrl()` で renderer に伝える。renderer 側は `RaycastRenderer`（NPC は `loadNpcSpriteSheet`、顔は `DialogBox.show`、戦闘は `BattleScreen` の `assetBaseUrl` オプション）と `TopDownRenderer`（NPC と顔のみ）。計算は純粋関数 `novelLayout.ts` の `resolveRpgImagePath` が正本（相対パスは `{base}/images/{path}`、絶対 URL・先頭 `/`・`__demo` は不変、ベース URL なしはパスそのまま）。
+
 ### RPGProject データモデル
 
 `frontend/src/types/rpg.ts` に定義：
