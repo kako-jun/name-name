@@ -304,6 +304,42 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
     expect(run.result?.endReason).toBe('scene-end')
   })
 
+  it('選択肢を経由しない遷移（[ジャンプ:]）を挟む構成で、a と b の両方を録る', async () => {
+    const { h, renderer } = makeRenderer()
+    const hubChoice = [{ jump: 'r', locked: false }]
+    const sChoice = [
+      { jump: 'a', locked: false },
+      { jump: 'b', locked: false },
+    ]
+    const show = (key: string, scene: string, options: Option[]) => {
+      h.pendingKey = key
+      h.pendingScene = scene
+      h.pending = { options }
+    }
+    h.onSelect = (jump) => {
+      h.onSceneChange?.(jump)
+      if (jump === 'r') {
+        // r に選択肢は無く、末尾 [ジャンプ: s]
+        h.onSceneChange?.('s')
+        show('c-s', 's', sChoice)
+      } else {
+        // a / b の末尾は [ジャンプ: h]。b が終了シーンなので、b を録り終えたら h に戻って終わる。
+        h.onSceneChange?.('h')
+        show('c-h', 'h', hubChoice)
+      }
+    }
+    const run = await startRecording(renderer, {
+      startSceneId: 'h',
+      endSceneId: 'b',
+      sceneOrder: ['h', 'r', 's', 'a', 'b'],
+    })
+    show('c-h', 'h', hubChoice)
+    await vi.advanceTimersByTimeAsync((EXPORT_AUTO_CHOICE_DISPLAY_MS + EXPORT_POLL_MS * 2) * 8)
+    await run.p
+    expect(h.selected).toEqual(['r', 'a', 'r', 'b'])
+    expect(run.result?.endReason).toBe('scene-end')
+  })
+
   it('長い [待機: N] の直後に選択肢が来ても、停滞と誤判定せず選択肢を映して自動選択する', async () => {
     const { h, renderer } = makeRenderer()
     h.waitMs = 70_000

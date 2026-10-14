@@ -36,7 +36,15 @@ function makeAtChoice(): NovelRenderer {
   const i = r as unknown as Internals
   i.initialized = true
   vi.spyOn(i, 'render').mockImplementation(() => {})
-  r.setScenes([hub, scene('near', [narration('n')]), scene('far', [narration('f')])])
+  r.setScenes([
+    hub,
+    scene('near', [narration('n')]),
+    scene('far', [narration('f')]),
+    scene('other', [
+      narration('o'),
+      { Choice: { options: [{ text: 'far', jump: 'far' }] } } as Event,
+    ]),
+  ])
   return r
 }
 
@@ -57,7 +65,7 @@ describe('NovelRenderer.getPendingChoice / selectPendingChoice (#780)', () => {
     const r = makeAtChoice()
     r.advance()
     expect(r.getPendingChoice()).toEqual({
-      key: 'hub:1',
+      key: expect.stringMatching(/^choice#\d+$/),
       sceneId: 'hub',
       options: [
         { jump: 'near', locked: true },
@@ -116,6 +124,38 @@ describe('NovelRenderer.getExportProgress (#780)', () => {
     r.setEvents(wait.events)
     expect(r.getExportProgress().waitMs).toBe(80000)
   })
+  it('選択肢のキーは、[条件:] の再展開（flags 変化）や入場経路が変わっても同じ選択肢なら同じ', async () => {
+    const r = makeAtChoice()
+    r.advance()
+    const k1 = r.getPendingChoice()?.key
+    expect(k1).toBeDefined()
+    // flags 変化による再展開
+    ;(r as unknown as { reResolveEvents(): void }).reResolveEvents()
+    expect(r.getPendingChoice()?.key).toBe(k1)
+    // 別のシーンへ進んでからジャンプで戻り、同じ選択肢に再到達する
+    expect(r.selectPendingChoice('far')).toBe(true)
+    await new Promise((res) => setTimeout(res, 0))
+    await r.jumpToScene('hub')
+    r.advance()
+    expect(r.getPendingChoice()?.key).toBe(k1)
+    // startFrom（新規開始）で同じシーンに入っても同じ
+    await r.startFrom({ sceneId: 'hub' })
+    r.advance()
+    expect(r.getPendingChoice()?.key).toBe(k1)
+  })
+
+  it('別の選択肢には別のキー', async () => {
+    const r = makeAtChoice()
+    r.advance()
+    const k1 = r.getPendingChoice()?.key
+    expect(r.selectPendingChoice('far')).toBe(true)
+    await new Promise((res) => setTimeout(res, 0))
+    await r.jumpToScene('other')
+    r.advance()
+    const k2 = r.getPendingChoice()?.key
+    expect(k2).toBeDefined()
+    expect(k2).not.toBe(k1)
+  })
 })
 
 describe('NovelRenderer.cancelPendingEntry / isReady (#780)', () => {
@@ -140,5 +180,33 @@ describe('NovelRenderer.cancelPendingEntry / isReady (#780)', () => {
     release([scene('lazy', [narration('x')])])
     expect((await entry).status).toBe('superseded')
     expect(r.getCurrentSceneId()).not.toBe('lazy')
+  })
+
+  it('遅延ロード待ちの [ジャンプ:] 予約は、取り消し後も導き直されて詰まらない', async () => {
+    const r = new NovelRenderer()
+    r.getTimeController().setMode('virtual')
+    vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
+    const i = r as unknown as Internals & { jumpState: string; pendingEntry: unknown }
+    i.initialized = true
+    vi.spyOn(i, 'render').mockImplementation(() => {})
+    r.setScenes([scene('a', [narration('a1'), { Jump: { target: 'far' } } as Event])])
+    let release!: (v: EventScene[]) => void
+    r.setMissingSceneResolver(
+      () =>
+        new Promise<EventScene[]>((res) => {
+          release = res
+        })
+    )
+    r.advance() // Jump に到達し予約
+    r.getTimeController().tick(1) // 発火 → 遅延ロード待ち
+    expect(i.pendingEntry).not.toBeNull()
+    const before = i.pendingEntry
+    r.cancelPendingEntry()
+    expect(i.pendingEntry).not.toBe(before) // 古い入場は取り消され、予約が導き直されている
+    expect(i.jumpState).toBe('pending')
+    r.getTimeController().tick(1) // 導き直した予約が発火し、同じ遅延ロードを待つ
+    release([scene('far', [narration('f')])])
+    await new Promise((res) => setTimeout(res, 0))
+    expect(r.getCurrentSceneId()).toBe('far') // 詰まらずジャンプが完了する
   })
 })

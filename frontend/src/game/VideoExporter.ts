@@ -22,6 +22,7 @@ import {
   markChoiceSelected,
   pickAutoChoice,
   recordChoice,
+  recordSceneTransition,
   type ExportEndReason,
 } from './videoExportPolicy'
 
@@ -467,8 +468,11 @@ export async function exportVideo(
   // 「別シーンへの遷移」は起きていないので finalize は呼ばれない。OK。
   // 選択肢の辺（位置 × 遷移先）の記憶。自動選択は選んでいない辺を優先する (#780)。
   const choiceMemory = createChoiceMemory()
+  let lastScene = startSceneId
   renderer.setOnSceneChange((sceneId) => {
     if (stopped) return
+    recordSceneTransition(choiceMemory, lastScene, sceneId)
+    lastScene = sceneId
     onProgress?.(`録画中: ${sceneId}`)
     if (sceneId === endSceneId) {
       visitedEndScene = true

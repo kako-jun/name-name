@@ -43,18 +43,21 @@ export function isSceneInExportRange(
 }
 
 /**
- * 選択肢の「辺」の記憶。辺は「選択肢の位置 × 遷移先」。位置は `sceneId:eventIndex`。
- * 自動選択がどの辺を選んだか（`selected`）と、これまでに見た選択肢（`observed`）を持つ。
+ * 選択肢の「辺」の記憶。辺は「選択肢 × 遷移先」。選択肢は元の Choice イベントごとのキー。
+ * 自動選択がどの辺を選んだか（`selected`）と、これまでに見た選択肢（`observed`）、
+ * 選択肢以外で起きたシーン遷移（`[ジャンプ:]`・線形の続き。`transitions`）を持つ。
  */
 export interface ExportChoiceMemory {
   /** 選んだ辺（`${choiceKey}→${jump}`） */
   selected: Set<string>
   /** 見た選択肢。キーは choiceKey。遷移先はロックされていないものだけ */
   observed: Map<string, { sceneId: string | null; jumps: string[] }>
+  /** シーン遷移（from → to の集合）。選択肢の確定も含めて、入ったシーンを全部記録する */
+  transitions: Map<string, Set<string>>
 }
 
 export function createChoiceMemory(): ExportChoiceMemory {
-  return { selected: new Set(), observed: new Map() }
+  return { selected: new Set(), observed: new Map(), transitions: new Map() }
 }
 
 const edgeKey = (choiceKey: string, jump: string): string => `${choiceKey}→${jump}`
@@ -70,6 +73,13 @@ export function recordChoice(
     sceneId,
     jumps: options.filter((o) => !o.locked).map((o) => o.jump),
   })
+}
+
+/** シーン遷移（直前のシーン → 入ったシーン）を記録する。選択肢を経由しない先も辿れるようにする。 */
+export function recordSceneTransition(memory: ExportChoiceMemory, from: string, to: string): void {
+  let set = memory.transitions.get(from)
+  if (!set) memory.transitions.set(from, (set = new Set()))
+  set.add(to)
 }
 
 /** 選んだ辺を記録する。 */
@@ -97,6 +107,10 @@ function hasUnexploredRoute(
       if (!memory.selected.has(edgeKey(key, jump))) return true
       if (hasUnexploredRoute(jump, memory, inRange, seen)) return true
     }
+  }
+  // 選択肢を経由しない遷移（[ジャンプ:]・線形の続き）の先も辿る
+  for (const next of memory.transitions.get(sceneId) ?? []) {
+    if (inRange(next) && hasUnexploredRoute(next, memory, inRange, seen)) return true
   }
   return false
 }

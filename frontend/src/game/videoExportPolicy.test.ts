@@ -4,6 +4,7 @@ import {
   createChoiceMemory,
   markChoiceSelected,
   recordChoice,
+  recordSceneTransition,
   exportProgressSignature,
   isSceneInExportRange,
   pickAutoChoice,
@@ -116,6 +117,40 @@ describe('pickAutoChoice: 選択済みの辺 (#780)', () => {
     markChoiceSelected(m, 'a:1', 'b')
     markChoiceSelected(m, 'b:1', 'a')
     expect(pickAutoChoice([{ jump: 'b', locked: false }], 'a', 'b', order, m, 'a:1')).toBeNull()
+  })
+})
+
+describe('pickAutoChoice: 選択肢を経由しない遷移 (#780)', () => {
+  const o = ['h', 'r', 's', 'a', 'b']
+  // h[r]、r 末尾 [ジャンプ: s]、s[a,b]、a 末尾 [ジャンプ: h]。2周目で h→r は選択済み
+  function build() {
+    const m = createChoiceMemory()
+    recordChoice(m, 'c-h', 'h', [{ jump: 'r', locked: false }])
+    recordChoice(m, 'c-s', 's', [
+      { jump: 'a', locked: false },
+      { jump: 'b', locked: false },
+    ])
+    recordSceneTransition(m, 'h', 'r')
+    recordSceneTransition(m, 'r', 's') // [ジャンプ: s]
+    recordSceneTransition(m, 's', 'a')
+    recordSceneTransition(m, 'a', 'h') // [ジャンプ: h]
+    markChoiceSelected(m, 'c-h', 'r')
+    markChoiceSelected(m, 'c-s', 'a')
+    return m
+  }
+  it('ジャンプ・線形の続きを経由した先の未選択の辺があれば、選び済みの辺でも選ぶ', () => {
+    const m = build()
+    expect(pickAutoChoice([{ jump: 'r', locked: false }], 'h', 'b', o, m, 'c-h')).toBe('r')
+    markChoiceSelected(m, 'c-s', 'b')
+    expect(pickAutoChoice([{ jump: 'r', locked: false }], 'h', 'b', o, m, 'c-h')).toBeNull()
+  })
+  it('遷移が循環していても止まる', () => {
+    const m = createChoiceMemory()
+    recordSceneTransition(m, 'h', 'r')
+    recordSceneTransition(m, 'r', 'h')
+    recordChoice(m, 'c-h', 'h', [{ jump: 'r', locked: false }])
+    markChoiceSelected(m, 'c-h', 'r')
+    expect(pickAutoChoice([{ jump: 'r', locked: false }], 'h', 'b', o, m, 'c-h')).toBeNull()
   })
 })
 

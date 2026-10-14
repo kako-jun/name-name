@@ -2525,7 +2525,7 @@ export class NovelRenderer {
    * 選択肢待ちでなければ null。
    */
   getPendingChoice(): {
-    /** 選択肢の位置（`シーンID:eventIndex`）。辺の記憶に使う */
+    /** 選択肢の同一性を表すキー（元の Choice イベントの参照ごとの連番）。辺の記憶に使う */
     key: string
     sceneId: string | null
     options: Array<{ jump: string; locked: boolean }>
@@ -2536,10 +2536,25 @@ export class NovelRenderer {
     const locked = this.computeChoiceLocked(current.Choice.options)
     const sceneId = this.getPlayheadSceneId()
     return {
-      key: `${sceneId ?? ''}:${this.eventIndex}`,
+      key: this.choiceIdentityKey(current),
       sceneId,
       options: current.Choice.options.map((o, i) => ({ jump: o.jump, locked: locked[i] ?? false })),
     }
+  }
+
+  /**
+   * 元の Choice イベント（`resolveEvents` は参照を保つ）ごとの連番。展開後の位置（eventIndex）は
+   * `[条件:]` の再展開や線形入場／ジャンプ入場で変わるので、同じ選択肢を同一視するキーには使えない (#780)。
+   */
+  private choiceIds = new WeakMap<object, number>()
+  private nextChoiceId = 1
+  private choiceIdentityKey(event: object): string {
+    let id = this.choiceIds.get(event)
+    if (id === undefined) {
+      id = this.nextChoiceId++
+      this.choiceIds.set(event, id)
+    }
+    return `choice#${id}`
   }
 
   /** レンダラが初期化済みで破棄されていないか (#780。書き出しの後始末が破棄済みレンダラに触らないため) */
@@ -2553,7 +2568,11 @@ export class NovelRenderer {
    * 書き換えるのを防ぐ。入場中でなければ何もしない。
    */
   cancelPendingEntry(): void {
-    if (this.pendingEntry) this.advanceGeneration()
+    if (!this.pendingEntry) return
+    this.advanceGeneration()
+    // 世代を進めるだけでは遷移状態が古いまま残る（遅延ロード待ちの [ジャンプ:] 予約など）ので、
+    // 現在位置から導き直す。
+    if (this.playbackStarted) this.rederiveTransitionAtCurrentPosition()
   }
 
   /**
