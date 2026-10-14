@@ -313,24 +313,15 @@ describe('ATB x ff（race）', () => {
     return { engine, s: make(engine) }
   }
 
-  it.each(['wait', 'active'] as const)('%s: 演出中は敵味方ともゲージが進まない', (mode) => {
+  it.each(['wait', 'active'] as const)('%s: 演出中もゲージは進む（本家 FF5/6 と同じ）', (mode) => {
     const { s, engine } = atbSetup(mode)
     tap(s, 'attack')
-    const a = engine.getState().atb!
-    const party = [...a.partyGauge]
-    const enemy = [...a.enemyGauge]
+    expect(I(s).playback.active ?? I(s).playback.queue.length).toBeTruthy()
+    const before = [...engine.getState().atb!.enemyGauge]
     run(s, 160)
-    expect(engine.getState().atb!.partyGauge).toEqual(party)
-    expect(engine.getState().atb!.enemyGauge).toEqual(enemy)
-  })
-
-  it('演出が終われば時間が流れる（ゲージが進む）', () => {
-    const { s, engine } = atbSetup('active')
-    tap(s, 'attack')
-    run(s, 5000)
-    const g = [...engine.getState().atb!.enemyGauge]
-    run(s, 200)
-    expect(engine.getState().atb!.enemyGauge).not.toEqual(g)
+    // 演出はまだ続いている
+    expect(I(s).playback.active).not.toBeNull()
+    expect(engine.getState().atb!.enemyGauge[0]).toBeGreaterThan(before[0])
   })
 
   it('演出中に tick を何度呼んでも、確定した eventTotal は増えない（二重実行しない）', () => {
@@ -387,5 +378,96 @@ describe('数字・窓・位置の不変条件', () => {
       tap(s, 'attack')
       run(s, 8000)
     }).not.toThrow()
+  })
+})
+
+describe('ATB x ff: 演出キューに積まれる行動 (#745)', () => {
+  const hero = (id: string) => entity(id, { agi: 25, hp: 99, maxHp: 99 })
+  function twoHeroes(enemy: Partial<BattleEntity> = {}, mode: 'wait' | 'active' = 'wait') {
+    const engine = new BattleEngine(
+      [hero('a'), hero('b')],
+      [entity('slime', { atk: 1, hp: 500, maxHp: 500, ...enemy })],
+      {
+        rng: () => 0.5,
+        atb: { mode, initialGauges: { party: [1000, 1000] } },
+      }
+    )
+    return { engine, s: make(engine) }
+  }
+
+  it('演出中に敵の行動が events に積まれ、キューで順に再生される（seq が単調に進む）', () => {
+    const { s, engine } = twoHeroes({ agi: 40 }, 'active')
+    tap(s, 'attack') // a の攻撃。b もコマンド待ち（active なので時間は止まらない）
+    const seen: number[] = []
+    for (let i = 0; i < 600; i++) {
+      s.tick(16)
+      const act = I(s).playback.active as { event: { seq: number } } | null
+      if (act && seen[seen.length - 1] !== act.event.seq) seen.push(act.event.seq)
+    }
+    expect(engine.getState().eventTotal).toBeGreaterThan(1)
+    expect(seen.length).toBeGreaterThan(1)
+    expect([...seen].sort((x, y) => x - y)).toEqual(seen)
+  })
+
+  it('演出中に、行動可能な別の味方のコマンドが受け付けられ、キューの末尾に積まれる', () => {
+    const { s, engine } = twoHeroes()
+    tap(s, 'attack') // a
+    run(s, 16)
+    const total = engine.getState().eventTotal
+    expect(I(s).playback.active).not.toBeNull()
+    tap(s, 'attack') // 演出中に b が入力
+    expect(engine.getState().eventTotal).toBeGreaterThan(total)
+    expect(I(s).playback.queue.length).toBeGreaterThan(0)
+    const lastQueued = I(s).playback.queue[I(s).playback.queue.length - 1] as {
+      actor: { index: number }
+    }
+    expect(lastQueued.actor.index === 1 || lastQueued.actor.index === 0).toBe(true)
+  })
+
+  it('複数行動が積まれても、命中のたびに HP 表示が段階的に変わる', () => {
+    const { s, engine } = twoHeroes()
+    tap(s, 'attack')
+    tap(s, 'attack')
+    const evs = engine
+      .getState()
+      .events.filter((e) => e.kind === 'attack' && e.actor.side === 'party')
+    expect(evs).toHaveLength(2)
+    const [e1, e2] = evs
+    const key = 'enemy:0'
+    const ov = () => (s as unknown as { hpOverride: Map<string, number> }).hpOverride.get(key)
+    // 積んだ直後は最初の行動の前の HP
+    expect(ov()).toBe(e1.hits[0].hpBefore)
+    const t1 = buildActionTimeline('attack', { damages: true }).hitAt
+    run(s, t1 + 16)
+    expect(ov()).toBe(e1.hits[0].hpAfter)
+    expect(e1.hits[0].hpAfter).toBe(e2.hits[0].hpBefore)
+    // 2 つ目の命中まで進める
+    for (let i = 0; i < 400 && ov() === e1.hits[0].hpAfter; i++) s.tick(16)
+    expect(ov() === undefined || ov() === e2.hits[0].hpAfter).toBe(true)
+    run(s, 8000)
+    expect((s as unknown as { hpOverride: Map<string, number> }).hpOverride.size).toBe(0)
+  })
+
+  it('決着: 積まれた演出を見せ切ってから閉じ、決着後に行動は積まれない', () => {
+    const closed: string[] = []
+    const engine = new BattleEngine(
+      [hero('a'), hero('b')],
+      [entity('slime', { hp: 1, maxHp: 1, atk: 1 })],
+      {
+        rng: () => 0.5,
+        atb: { mode: 'wait', initialGauges: { party: [1000, 1000] } },
+      }
+    )
+    const s = make(engine, { onClose: (o) => closed.push(o) })
+    tap(s, 'attack')
+    expect(engine.getState().phase).toBe('victory')
+    const total = engine.getState().eventTotal
+    tap(s, 'attack') // 決着後の入力は積まれない
+    run(s, 100)
+    expect(engine.getState().eventTotal).toBe(total)
+    expect(closed).toHaveLength(0)
+    run(s, 8000)
+    expect(closed).toEqual(['victory'])
+    expect(engine.getState().eventTotal).toBe(total)
   })
 })

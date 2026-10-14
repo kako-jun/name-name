@@ -143,7 +143,7 @@ describe('BattleScreen presentation', () => {
     expect(closed).toEqual(['victory'])
   })
 
-  it('ff + ATB: 演出中はゲージが進まず、演出が終われば進む', () => {
+  it('ff + ATB: 演出中もゲージは進む', () => {
     const engine = new BattleEngine([entity('hero', { agi: 25 })], [entity('slime', { agi: 1 })], {
       rng: () => 0.5,
       atb: { mode: 'wait', initialGauges: { party: [1000] } },
@@ -153,8 +153,6 @@ describe('BattleScreen presentation', () => {
     tap(s, 'attack')
     const g = engine.getState().atb!.partyGauge[0]
     run(s, 160)
-    expect(engine.getState().atb!.partyGauge[0]).toBe(g)
-    run(s, 5000)
     expect(engine.getState().atb!.partyGauge[0]).toBeGreaterThan(g)
   })
 })

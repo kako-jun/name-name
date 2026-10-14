@@ -949,8 +949,9 @@ export class BattleScreen extends Container {
 
   /** UI からコマンドが選ばれたとき呼ばれる。エンジン側を進めて refresh */
   private handleCommand(id: CommandId): void {
-    // ff: 演出が終わるまで次のコマンドは受けない (#745)
-    if (this.isPresenting()) return
+    // ff（従来ターン制）: 演出が終わるまで次のコマンドは受けない。ATB は時間が流れ続けるので、演出中でも入力でき、
+    // 入力した行動は演出キューの末尾に積まれる (#745)
+    if (this.isInputBlockedByPresentation()) return
     // タイプ中の 1 タップ目は全文表示だけ（コマンドは実行しない）(#755)。
     // ATB (#205) ではコマンドのタップを skip に使わない（時間が流れていて空振りさせない）。全文表示はログ帯のタップだけ
     if (!this.engine.getState().atb && this.skipLogTyping()) return
@@ -997,8 +998,8 @@ export class BattleScreen extends Container {
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
     if (ff) this.advancePresentation(deltaMS)
     if (atb) {
-      // 演出中は ATB のゲージも止める（演出キューが空になってから時間を進める）。dq は常に進める
-      if (!this.isPresenting()) this.engine.tick(deltaMS)
+      // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される
+      this.engine.tick(deltaMS)
       const sig = this.computeAtbSignature()
       if (sig !== this.atbSignature) this.refresh()
       else this.drawAtbBars()
@@ -1077,8 +1078,8 @@ export class BattleScreen extends Container {
 
   /** そのコマンドを今選べるか。ATB (#205) ではにげるはゲージが溜まっていなくてもいつでも選べる */
   private isCommandEnabled(id: CommandId): boolean {
-    // ff: 演出中は選べない (#745)
-    if (this.isPresenting()) return false
+    // ff（従来ターン制）: 演出中は選べない (#745)
+    if (this.isInputBlockedByPresentation()) return false
     const s = this.engine.getState()
     if (id === 'escape' && s.atb && (s.phase === 'party-input' || s.phase === 'atb-running')) {
       return true
@@ -1676,7 +1677,12 @@ export class BattleScreen extends Container {
     return this.hpOverride.get(this.entityKey(side, index)) ?? current
   }
 
-  /** 再生すべきものが残っているか。残っている間は次の行動・コマンド入力・ATB ゲージを待たせる */
+  /** 再生すべきものが残っているか。従来ターン制では残っている間、次の行動・コマンド入力を待たせる（ATB は待たせない） */
+  /** ff の従来ターン制だけ、演出が終わるまで入力を塞ぐ。ATB は演出中も入力できる */
+  private isInputBlockedByPresentation(): boolean {
+    return this.isPresenting() && !this.engine.getState().atb
+  }
+
   private isPresenting(): boolean {
     return this.presentation === 'ff' && isPlaybackBusy(this.playback)
   }
