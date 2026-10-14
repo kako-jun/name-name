@@ -12,6 +12,8 @@ import {
   assetsToUnload,
   buildBattleSetup,
   defaultConfig,
+  defaultItems,
+  defaultSpells,
   defaultEnemies,
   defaultParty,
   describeView,
@@ -1495,5 +1497,64 @@ describe('presentation / poses (#745)', () => {
     const cfg = parseOk({ party: [{ sprite: 's.png', poses: { idle: 'i.png' } }] })
     const urls = assetsToUnload('off', view({ pixelArt: 'on' }), cfg)
     expect(urls).toContain('https://example.com/dir/i.png')
+  })
+})
+
+describe('候補窓の呪文・アイテム (#204)', () => {
+  it('既定は内蔵の呪文・アイテム。メテオは既定の味方の MP では足りない', () => {
+    const c = defaultConfig()
+    expect(c.spells).toEqual(defaultSpells())
+    expect(c.items).toEqual(defaultItems())
+    const maxMp = Math.max(...defaultParty().map((p) => p.maxMp))
+    expect(c.spells.some((s) => s.mp > maxMp)).toBe(true)
+  })
+
+  it('JSON の spells / items を検証して取り込む（id 省略は連番・mp 未指定は 0・target 未指定は敵単体）', () => {
+    const r = parseConfig(
+      {
+        spells: [
+          { name: 'ファイア', mp: 3, target: '敵全体', effect: 'damage 1..2' },
+          { name: 'ぶき' },
+        ],
+        items: [
+          { id: 'p', name: 'ポーション', count: 2.7 },
+          { name: 'なぞ', count: -1 },
+        ],
+      },
+      'https://example.com/'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.spells).toEqual([
+      { id: 'spells-1', name: 'ファイア', mp: 3, target: '敵全体', effect: 'damage 1..2' },
+      { id: 'spells-2', name: 'ぶき', mp: 0, target: '敵単体' },
+    ])
+    expect(r.value.items).toEqual([
+      { id: 'p', name: 'ポーション', count: 2 },
+      { id: 'items-2', name: 'なぞ', count: 0 },
+    ])
+  })
+
+  it.each([
+    [{ spells: 3 }],
+    [{ spells: [3] }],
+    [{ spells: [{ mp: 1 }] }],
+    [{ spells: [{ name: 'a', target: 1 }] }],
+    [{ items: [{ name: '' }] }],
+    [{ items: [{ name: 'a', effect: 1 }] }],
+    [{ spells: [{ name: 'a', mp: '3' }] }],
+    [{ spells: [{ name: 'a', mp: null }] }],
+    [{ items: [{ name: 'a', count: '2' }] }],
+  ])('不正な指定 %j は理由つきエラー', (raw) => {
+    expect(parseConfig(raw, 'https://example.com/').ok).toBe(false)
+  })
+
+  it('buildBattleSetup は味方全員に同じ呪文を渡し（複製）、アイテムも渡す', () => {
+    const cfg = defaultConfig()
+    const setup = buildBattleSetup(cfg, initialView(cfg))
+    expect(Object.keys(setup.options.menu.spells!)).toEqual(setup.party.map((p) => p.id))
+    expect(setup.options.menu.spells![setup.party[0].id]).toEqual(cfg.spells)
+    expect(setup.options.menu.spells![setup.party[0].id]).not.toBe(cfg.spells)
+    expect(setup.options.menu.items).toEqual(cfg.items)
   })
 })

@@ -7,6 +7,7 @@ import { Container } from 'pixi.js'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
+  buildBattleMenuData,
   buildHeroBattleEntity,
   buildPartyBattleEntities,
   closeFieldBattle,
@@ -494,5 +495,102 @@ describe('openFieldBattle: 終了・強制終了・タップ抑止 (#784)', () =
     el.dispatchEvent(ev('pointerup'))
     expect(onTap).toHaveBeenCalledTimes(1)
     detach()
+  })
+})
+
+describe('buildBattleMenuData: 候補窓の呪文 (#204)', () => {
+  const spells = {
+    fire: { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' },
+    heal: { id: 'heal', name: 'ヒール', mp: 2, target: '味方単体', builtin: 'x' },
+    big: { id: 'big', name: 'だいまほう', mp: 9, target: '敵全体' },
+  }
+  const learns = [
+    { level: 1, spell: 'fire' },
+    { level: 3, spell: 'heal' },
+    { level: 1, spell: 'unknown' },
+    { level: 5, spell: 'big' },
+    { level: 1, spell: 'fire' },
+  ]
+
+  it('レベル以下で覚える・マスターにある呪文だけを、定義順・重複なしで味方ごとに作る', () => {
+    const r = {
+      ...roster(['a', 'b'], { a: { level: 3, learns }, b: { level: 1, learns } }),
+      spells,
+    }
+    const party = buildPartyBattleEntities(r, 'side')
+    const m = buildBattleMenuData(r, party)!
+    expect(m.spells!.a.map((e) => e.id)).toEqual(['fire', 'heal'])
+    expect(m.spells!.b.map((e) => e.id)).toEqual(['fire'])
+    expect(m.spells!.a[0]).toEqual({
+      id: 'fire',
+      name: 'ほのお',
+      mp: 3,
+      target: '敵単体',
+      effect: 'damage 8..14',
+    })
+    expect(m.spells!.a[1].builtin).toBe('x')
+  })
+
+  it('レベル未指定は 1 として扱う', () => {
+    const r = { ...roster(['a'], { a: { learns } }), spells }
+    expect(buildBattleMenuData(r, buildPartyBattleEntities(r, 'side'))!.spells!.a).toHaveLength(1)
+  })
+
+  it('呪文マスターがない・覚える呪文がない・Object.prototype のキーは undefined（従来どおり）', () => {
+    const r = roster(['a'], { a: { learns } })
+    expect(buildBattleMenuData(r, buildPartyBattleEntities(r, 'side'))).toBeUndefined()
+    const none = { ...roster(['a']), spells }
+    expect(buildBattleMenuData(none, buildPartyBattleEntities(none, 'side'))).toBeUndefined()
+    const proto = {
+      ...roster(['a'], { a: { learns: [{ level: 1, spell: 'toString' }] } }),
+      spells,
+    }
+    expect(buildBattleMenuData(proto, buildPartyBattleEntities(proto, 'side'))).toBeUndefined()
+  })
+})
+
+describe('openFieldBattle: 候補窓の呪文を BattleScreen へ渡す (#204)', () => {
+  function open(commandLayout: 'grid' | 'cross', withSpells: boolean) {
+    const stage = new Container()
+    const r = roster(['hero'], { hero: { learns: [{ level: 1, spell: 'fire' }] } })
+    const screen = openFieldBattle({
+      stage,
+      width: 800,
+      height: 450,
+      settings: { ...DEFAULT_FIELD_BATTLE_SETTINGS, layout: 'side', commandLayout },
+      roster: withSpells
+        ? {
+            ...r,
+            spells: {
+              fire: { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 1..1' },
+            },
+          }
+        : r,
+      enemies: [enemy()],
+      gate: new FieldInputGate(),
+      onClosed: vi.fn(),
+    })
+    return {
+      stage,
+      screen,
+      s: screen as unknown as { menuStack: unknown[]; handleCommand(id: string): void },
+    }
+  }
+
+  it('cross + 呪文マスターありで「じゅもん」が候補窓を開く', () => {
+    const { stage, screen, s } = open('cross', true)
+    s.handleCommand('spell')
+    expect(s.menuStack).toHaveLength(1)
+    closeFieldBattle(stage, screen)
+  })
+
+  it.each([
+    ['grid', true],
+    ['cross', false],
+  ] as const)('%s / 呪文マスター=%s では従来どおり何も起きない', (layout, withSpells) => {
+    const { stage, screen, s } = open(layout, withSpells)
+    s.handleCommand('spell')
+    expect(s.menuStack).toHaveLength(0)
+    closeFieldBattle(stage, screen)
   })
 })

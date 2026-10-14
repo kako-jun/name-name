@@ -10,7 +10,7 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { PartyMemberDef } from '../types'
+import type { PartyMemberDef, SpellDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -26,6 +26,7 @@ import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { CommandLabels, CommandLayout } from './battleCommands'
+import type { BattleMenuData, BattleSpellEntry } from './battleMenu'
 
 /** 戦闘画面の設定（frontmatter 由来）。未指定の既定値は `readFieldBattleSettings` が正本 */
 export interface FieldBattleSettings {
@@ -103,6 +104,42 @@ export interface FieldBattleRoster {
   party: Record<string, PartyMemberDef>
   /** 定義順。整数風 ID でも出現順を保つため別持ち */
   order: string[]
+  /** 呪文のマスター (#204)。あれば `learns`（レベル以下で覚えるもの）から候補窓の呪文を作る */
+  spells?: Record<string, SpellDef>
+}
+
+/**
+ * 戦闘の味方ごとの呪文の一覧（候補窓用 #204）。`PartyMemberDef.learns` のうち、そのメンバーのレベル（既定 1）以下で
+ * 覚えるもので、呪文マスターに定義があるものを定義順に並べる。1 つもなければ undefined（候補窓は開かない）。
+ * アイテムは所持品の仕組みが無いので渡さない（どうぐは従来どおり何も起きない）。
+ */
+export function buildBattleMenuData(
+  roster: FieldBattleRoster,
+  party: readonly BattleEntity[]
+): BattleMenuData | undefined {
+  const master = roster.spells
+  if (!master) return undefined
+  const spells: Record<string, BattleSpellEntry[]> = {}
+  for (const member of party) {
+    const def = roster.party[member.id]
+    if (!def?.learns) continue
+    const level = def.level ?? 1
+    const list: BattleSpellEntry[] = []
+    for (const l of def.learns) {
+      const sp = Object.prototype.hasOwnProperty.call(master, l.spell) ? master[l.spell] : undefined
+      if (!sp || l.level > level || list.some((e) => e.id === sp.id)) continue
+      list.push({
+        id: sp.id,
+        name: sp.name,
+        mp: sp.mp,
+        target: sp.target,
+        ...(sp.effect !== undefined ? { effect: sp.effect } : {}),
+        ...(sp.builtin !== undefined ? { builtin: sp.builtin } : {}),
+      })
+    }
+    if (list.length > 0) spells[member.id] = list
+  }
+  return Object.keys(spells).length > 0 ? { spells } : undefined
 }
 
 /** PartyMemberDef → BattleEntity。隊列 (#747) は side のときだけ反映する（front は隊列を描かない） */
@@ -295,6 +332,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     pixelArt: settings.pixelArt,
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
+    menu: buildBattleMenuData(roster, party),
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
     onClose: (outcome) => {
