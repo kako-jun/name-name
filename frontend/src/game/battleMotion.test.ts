@@ -23,6 +23,7 @@ import {
   normalizeBattlePresentation,
   normalizePoses,
   popupFontSize,
+  clampMotionDx,
   POPUP_FONT_MIN,
   POPUP_FONT_MAX,
   popupText,
@@ -221,6 +222,22 @@ describe('messageWindowText', () => {
     expect(messageWindowText('ファイア')).toBe('ファイア')
     expect(messageWindowText('  ')).toBeNull()
     expect(messageWindowText(undefined)).toBeNull()
+  })
+})
+
+describe('clampMotionDx（画面端での頭打ち）', () => {
+  it('範囲内はそのまま、右端を越える分・左端を越える分は止める', () => {
+    expect(clampMotionDx(10, 100, 200, 8, 792)).toBe(10)
+    expect(clampMotionDx(50, 700, 780, 8, 792)).toBe(12)
+    expect(clampMotionDx(-50, 20, 100, 8, 792)).toBe(-12)
+    expect(clampMotionDx(-30, 700, 780, 8, 792)).toBe(-30)
+  })
+  it('範囲より広い枠・非有限値は動かさない', () => {
+    expect(clampMotionDx(5, 0, 900, 8, 792)).toBe(0)
+    // 最初から端の外にある枠は引き戻さず、それ以上外へ動くのだけを止める
+    expect(clampMotionDx(10, 700, 800, 8, 792)).toBe(0)
+    expect(clampMotionDx(-10, 700, 800, 8, 792)).toBe(-10)
+    expect(clampMotionDx(NaN, 100, 200, 8, 792)).toBe(0)
   })
 })
 

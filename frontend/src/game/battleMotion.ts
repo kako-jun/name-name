@@ -386,3 +386,31 @@ export function messageWindowText(label: string | undefined): string | null {
   const t = typeof label === 'string' ? label.trim() : ''
   return t === '' ? null : t
 }
+
+// ---------------------------------------------------------------------------
+// 画面端での頭打ち
+// ---------------------------------------------------------------------------
+
+/** 動いても枠（板・台座を含む）を画面の端からこれ以上離す余白（px） */
+export const MOTION_SCREEN_MARGIN = 8
+/** 枠の左右に足す、板・台座のはみ出し分（枠の一辺に対する比） */
+export const MOTION_EXTENT_PAD = 0.1
+
+/**
+ * 横のずれ dx を、動いた後の枠が [minX, maxX]（画面端から余白を引いた範囲）に収まるように止める。
+ * left / right は動く前の枠の左右端（板・台座を含めた値）。動かさない状態（dx=0）は常に許す: 最初から範囲の外にある枠を
+ * 引き戻しはしない（それ以上外へ動くのだけを止める）。範囲より広い枠は動かさない。
+ * のけぞり・踏み出しの両方に使う（右端の味方が右へ、敵が左端を越えて見切れないように）。
+ */
+export function clampMotionDx(
+  dx: number,
+  left: number,
+  right: number,
+  minX: number,
+  maxX: number
+): number {
+  if (![dx, left, right, minX, maxX].every(Number.isFinite)) return 0
+  const lo = Math.min(0, minX - left)
+  const hi = Math.max(0, maxX - right)
+  return Math.min(hi, Math.max(lo, dx))
+}

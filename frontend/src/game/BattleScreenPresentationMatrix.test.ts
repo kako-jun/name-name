@@ -8,7 +8,13 @@ import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
-import { POPUP_TOTAL_MS, buildActionTimeline, eventTimeline } from './battleMotion'
+import {
+  MOTION_EXTENT_PAD,
+  MOTION_SCREEN_MARGIN,
+  POPUP_TOTAL_MS,
+  buildActionTimeline,
+  eventTimeline,
+} from './battleMotion'
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -330,6 +336,26 @@ describe('ATB x ff（race）', () => {
     const total = engine.getState().eventTotal
     run(s, 300)
     expect(engine.getState().eventTotal).toBe(total)
+  })
+})
+
+describe('画面端での頭打ち', () => {
+  it('のけぞり・踏み出しの全 tick で、味方も敵も枠が画面の端から出ない', () => {
+    const { s } = setup({}, {}, { hp: 999, maxHp: 999 })
+    tap(s, 'attack')
+    for (let i = 0; i < 300; i++) {
+      s.tick(16)
+      for (const v of [...I(s).partyViews, ...I(s).enemyViews]) {
+        const f = v as unknown as { slotRef: { x: number; width: number }; unit: number }
+        const dx = v.container.x - v.baseX
+        const pad = f.unit * MOTION_EXTENT_PAD
+        const left = f.slotRef.x - pad
+        const right = f.slotRef.x + f.slotRef.width + pad
+        // 端の外へ動かない（最初から外にある枠は、それ以上外へ出ないだけ）
+        expect(dx).toBeGreaterThanOrEqual(Math.min(0, MOTION_SCREEN_MARGIN - left) - 1e-6)
+        expect(dx).toBeLessThanOrEqual(Math.max(0, 800 - MOTION_SCREEN_MARGIN - right) + 1e-6)
+      }
+    }
   })
 })
 

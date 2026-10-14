@@ -56,6 +56,9 @@ import {
 } from './battleCommands'
 import type { BattleEntity } from './spellDsl'
 import {
+  MOTION_EXTENT_PAD,
+  MOTION_SCREEN_MARGIN,
+  clampMotionDx,
   POPUP_COLORS,
   eventTimeline,
   SINK_DISTANCE,
@@ -1877,7 +1880,17 @@ export class BattleScreen extends Container {
         if (vis && vis !== view.shownVisual) this.showVisual(view, vis)
         // 前（相手陣営）は味方が左・敵が右。のけぞりは逆向き
         const dir = side === 'party' ? -1 : 1
-        const dx = (m.forward * dir - m.recoil * dir) * view.unit
+        // 横のずれは、動いた後の枠（板・台座のはみ出し込み）が画面端から余白を引いた範囲に収まるよう止める
+        const slot = view.slotRef
+        const pad = view.unit * MOTION_EXTENT_PAD
+        const rawDx = (m.forward * dir - m.recoil * dir) * view.unit
+        const dx = clampMotionDx(
+          rawDx,
+          slot.x - pad,
+          slot.x + slot.width + pad,
+          MOTION_SCREEN_MARGIN,
+          this.screenWidth - MOTION_SCREEN_MARGIN
+        )
         const dy = hasDownVisual ? 0 : m.downProgress * SINK_DISTANCE * view.unit
         view.container.position.set(view.baseX + dx, view.baseY + dy)
         // 倒れた絵があるなら味方は不透明のまま（敵は他と同じく薄くする）。無ければ沈みながら薄くする
