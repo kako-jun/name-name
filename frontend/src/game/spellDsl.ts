@@ -192,6 +192,14 @@ export interface EffectContext {
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
+/** 状態異常の日本語名 → 効果 DSL の `status` が書く英語名（`BattleEntity.status` のキー）。敵 AI の `状態=` 条件がどちらの名前でも一致させるのに使う */
+export const STATUS_ALIASES: Readonly<Record<string, string>> = {
+  毒: 'poison',
+  麻痺: 'paralysis',
+  混乱: 'confusion',
+  眠り: 'sleep',
+}
+
 export interface BattleEntity {
   id: string
   name: string

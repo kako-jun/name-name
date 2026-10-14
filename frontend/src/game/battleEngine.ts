@@ -438,13 +438,24 @@ export class BattleEngine {
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
     }
     const hpSnapshot = this.snapshotHp()
+    // 効果も builtin も無い特技は、予兆・メッセージだけの演出用（ログの警告も、対象の MISS も出さない）
+    const noEffect = !skill.builtin && !skill.effect
     const lines = skill.builtin
       ? invokeBuiltinSpell(skill.builtin, ctx)
       : skill.effect
         ? this.evalEffectDsl(skill.effect, ctx)
-        : ['(特技に効果定義なし)']
+        : []
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('skill', caster, skill.name, targets, hpSnapshot, amounts, message, omen)
+    this.recordEffect(
+      'skill',
+      caster,
+      skill.name,
+      noEffect ? [] : targets,
+      hpSnapshot,
+      amounts,
+      message,
+      omen
+    )
     return true
   }
 
@@ -660,7 +671,7 @@ export class BattleEngine {
       atb.queue = atb.queue.filter((i) => i !== idx)
       atb.partyGauge[idx] = 0
     }
-    this.countEnemyAction(enemyIndex, choice)
+    this.countEnemyAction(enemyIndex, choice, true)
     this.checkEnd()
   }
 
@@ -711,9 +722,15 @@ export class BattleEngine {
   }
 
   /** 行動を終えた敵の記憶を進める (#835 行動回数、#836 順番の位置・使用回数)。記憶が無い戦闘では何もしない */
-  private countEnemyAction(enemyIndex: number, choice: ChosenAction): void {
+  private countEnemyAction(enemyIndex: number, choice: ChosenAction, usedAttack = false): void {
     const m = this.state.enemyMemory?.[enemyIndex]
-    if (m) recordEnemyAction(m, choice)
+    if (!m) return
+    // 特技が見つからず通常攻撃に落ちたときは、使用回数を特技 id でなく通常攻撃に数える
+    const c: ChosenAction =
+      usedAttack && choice.track
+        ? { ...choice, track: { ...choice.track, key: 'こうげき' } }
+        : choice
+    recordEnemyAction(m, c)
   }
 
   /** `対象=ランダム` / `HP最小` で選ばれた生存味方。無ければ null（従来の狙い方） */
@@ -761,7 +778,7 @@ export class BattleEngine {
       if (hero.hp === 0) {
         this.appendLog(`${hero.name} は たおれた！`)
       }
-      this.countEnemyAction(i, choice)
+      this.countEnemyAction(i, choice, true)
     }
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
@@ -949,7 +966,8 @@ export class BattleEngine {
         hits.push({ target: ref, kind: 'damage', amount: hpBefore - e.hp, hpBefore, hpAfter: e.hp })
       } else if (e.hp > hpBefore) {
         hits.push({ target: ref, kind: 'heal', amount: e.hp - hpBefore, hpBefore, hpAfter: e.hp })
-      } else if (targets.includes(e)) {
+      } else if (targets.includes(e) && !(computed?.kind === 'heal' && computed.amount === 0)) {
+        // 回復量 0 で HP も変わらない対象は MISS にしない（予兆だけの特技など）
         hits.push({ target: ref, kind: 'miss', amount: 0, hpBefore, hpAfter: e.hp })
       }
     }

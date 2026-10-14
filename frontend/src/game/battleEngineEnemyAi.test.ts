@@ -498,7 +498,6 @@ AGI: 2
 const CHARGE: SkillExecution = {
   name: 'ためる',
   target: '自分',
-  effect: 'heal 0..0',
   message: '{user}は 力を ためている',
   telegraph: '{user}の からだが ふるえている！',
 }
@@ -606,5 +605,39 @@ describe('P2: 上限・順番の巡回（回帰を含む）', () => {
     eng.selectAttack()
     expect(eng.getState().enemyMemory).toEqual([{ acted: 2 }])
     expect(eng.getState().events.every((e) => e.omen === undefined)).toBe(true)
+    // rng の呼び出し回数を固定する（P1 のときと同じ。P2 の記憶更新は rng を使わない）
+    expect(c.calls()).toBe(3)
+  })
+})
+
+describe('P2: 効果なしの予兆専用特技・特技が見つからない場合', () => {
+  it('効果の無い特技は予兆とメッセージだけを出し、MISS も「効果定義なし」のログも出さない', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', name: 'ボス', hp: 999, maxHp: 999, actions: ['順番=charge'] })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: P2_SKILLS })
+    eng.selectAttack()
+    expect(eng.getState().log.join('\n')).not.toContain('効果定義なし')
+    const ev = eng.getState().events.filter((e) => e.actor.side === 'enemy')
+    expect(ev[0].hits).toEqual([])
+  })
+
+  it('回復量 0 で HP が変わらない自分向けの特技も MISS を出さない', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', hp: 999, maxHp: 999, actions: ['順番=nap'] })
+    const eng = new BattleEngine([hero], [foe], {
+      rng: () => 0,
+      skills: { nap: { name: 'ねむる', target: '自分', effect: 'heal 0..0' } },
+    })
+    eng.selectAttack()
+    expect(eng.getState().events.filter((e) => e.actor.side === 'enemy')[0].hits).toEqual([])
+  })
+
+  it('特技が見つからず通常攻撃に落ちたとき、使用回数は特技 id でなく こうげき に数える', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', hp: 999, maxHp: 999, actions: ['順番=missing'] })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: {} })
+    eng.selectAttack()
+    expect(eng.getState().enemyMemory?.[0].used).toEqual({ こうげき: 1 })
   })
 })

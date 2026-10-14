@@ -27,7 +27,7 @@
 
 import type { SkillDef } from '../types'
 import type { BattleActorRef, BattleState, SkillExecution } from './battleEngine'
-import type { BattleEntity } from './spellDsl'
+import { STATUS_ALIASES, type BattleEntity } from './spellDsl'
 import { hasOwn, safeAssign } from './ownProperty'
 
 /**
@@ -120,14 +120,6 @@ interface ActionRule {
 const PLAIN_ATTACK: ChosenAction = { kind: 'attack' }
 
 const KEY_RE = /(?:^|\s)(条件|候補|対象|予兆|上限|順番)=/g
-
-/** 状態異常の日本語名 → 効果 DSL の `status` が書く英語名（`BattleEntity.status` のキー）。どちらで書いてあっても一致させる */
-const STATUS_ALIASES: Record<string, string> = {
-  毒: 'poison',
-  麻痺: 'paralysis',
-  混乱: 'confusion',
-  眠り: 'sleep',
-}
 
 const TARGETS: Record<string, TargetSpec> = {
   ランダム: 'random',
