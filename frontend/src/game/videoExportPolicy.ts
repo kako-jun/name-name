@@ -43,23 +43,87 @@ export function isSceneInExportRange(
 }
 
 /**
- * 選択肢のうち自動で選ぶ遷移先を返す。ロックされておらず、遷移先が書き出し範囲内で、
- * まだ書き出し中に入っていない（`visited` に無い）先頭の option。無ければ null（＝終端扱い）。
- * 「未訪問」を条件にするのは、ハブから各ルートが戻ってくる構成で毎回先頭を選び続けて
- * 同じルートを延々録画するのを避け、範囲内のルートを一巡したら終わらせるため。
+ * 選択肢の「辺」の記憶。辺は「選択肢の位置 × 遷移先」。位置は `sceneId:eventIndex`。
+ * 自動選択がどの辺を選んだか（`selected`）と、これまでに見た選択肢（`observed`）を持つ。
+ */
+export interface ExportChoiceMemory {
+  /** 選んだ辺（`${choiceKey}→${jump}`） */
+  selected: Set<string>
+  /** 見た選択肢。キーは choiceKey。遷移先はロックされていないものだけ */
+  observed: Map<string, { sceneId: string | null; jumps: string[] }>
+}
+
+export function createChoiceMemory(): ExportChoiceMemory {
+  return { selected: new Set(), observed: new Map() }
+}
+
+const edgeKey = (choiceKey: string, jump: string): string => `${choiceKey}→${jump}`
+
+/** 見た選択肢を記録する（同じ位置は上書き。何度呼んでもよい）。 */
+export function recordChoice(
+  memory: ExportChoiceMemory,
+  choiceKey: string,
+  sceneId: string | null,
+  options: ReadonlyArray<{ jump: string; locked: boolean }>
+): void {
+  memory.observed.set(choiceKey, {
+    sceneId,
+    jumps: options.filter((o) => !o.locked).map((o) => o.jump),
+  })
+}
+
+/** 選んだ辺を記録する。 */
+export function markChoiceSelected(
+  memory: ExportChoiceMemory,
+  choiceKey: string,
+  jump: string
+): void {
+  memory.selected.add(edgeKey(choiceKey, jump))
+}
+
+/** `sceneId` から先に、まだ選んでいない範囲内の辺へ辿り着ける（既に見た選択肢をたどって）か。 */
+function hasUnexploredRoute(
+  sceneId: string,
+  memory: ExportChoiceMemory,
+  inRange: (id: string) => boolean,
+  seen: Set<string>
+): boolean {
+  if (seen.has(sceneId)) return false
+  seen.add(sceneId)
+  for (const [key, choice] of memory.observed) {
+    if (choice.sceneId !== sceneId) continue
+    for (const jump of choice.jumps) {
+      if (!inRange(jump)) continue
+      if (!memory.selected.has(edgeKey(key, jump))) return true
+      if (hasUnexploredRoute(jump, memory, inRange, seen)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * 選択肢のうち自動で選ぶ遷移先を返す。無ければ null（＝終端扱い）。
+ * ロックされておらず遷移先が書き出し範囲内の option のうち、
+ * 1. まだ選んでいない辺（この選択肢の位置 × 遷移先）の先頭を優先する。
+ * 2. 無ければ、選び済みの辺でも、その先にまだ選んでいない範囲内の辺へ辿り着けるものを選ぶ。
+ * 辺単位にするのは、ハブ→サブメニュー→各ルート→ハブの構成で、サブメニューの2つ目以降のルートを
+ * 取りこぼさず、かつ同じ辺を延々選び続けないため。
  */
 export function pickAutoChoice(
   options: ReadonlyArray<{ jump: string; locked: boolean }>,
   startSceneId: string,
   endSceneId: string,
   orderedSceneIds: readonly string[],
-  visited: ReadonlySet<string> = new Set()
+  memory: ExportChoiceMemory,
+  choiceKey: string
 ): string | null {
-  for (const o of options) {
-    if (o.locked || visited.has(o.jump)) continue
-    if (isSceneInExportRange(o.jump, startSceneId, endSceneId, orderedSceneIds)) return o.jump
-  }
-  return null
+  const inRange = (id: string) =>
+    isSceneInExportRange(id, startSceneId, endSceneId, orderedSceneIds)
+  const candidates = options.filter((o) => !o.locked && inRange(o.jump))
+  const fresh = candidates.find((o) => !memory.selected.has(edgeKey(choiceKey, o.jump)))
+  if (fresh) return fresh.jump
+  const route = candidates.find((o) => hasUnexploredRoute(o.jump, memory, inRange, new Set()))
+  return route ? route.jump : null
 }
 
 /**

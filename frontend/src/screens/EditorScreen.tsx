@@ -107,6 +107,8 @@ function EditorScreen({
   const [exportRunning, setExportRunning] = useState(false)
   // 書き出しの中止用 (#780)。実行中だけ非 null
   const exportAbortRef = useRef<AbortController | null>(null)
+  // アンマウント後は書き出しの結果を state に反映しない (#780)
+  const mountedRef = useRef(true)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
@@ -224,7 +226,9 @@ function EditorScreen({
       fps: exportFps,
       inheritFlags: exportInheritFlags,
       mimeType: mime,
-      onProgress: (s) => setExportStatus(s),
+      onProgress: (s) => {
+        if (mountedRef.current) setExportStatus(s)
+      },
     })
     opts.sceneOrder = allSceneIds
     opts.signal = abort.signal
@@ -242,6 +246,7 @@ function EditorScreen({
         `${label}: ${filename} (${durSec}s, ${sizeMb} MB)\n終了理由: ${result.endMessage}`
       )
     } catch (e) {
+      if (!mountedRef.current) return
       if (e instanceof ExportAbortedError) {
         setExportStatus('中止しました（録画は破棄され、ファイルは保存されていません）')
       } else {
@@ -250,7 +255,7 @@ function EditorScreen({
       }
     } finally {
       exportAbortRef.current = null
-      setExportRunning(false)
+      if (mountedRef.current) setExportRunning(false)
     }
   }, [
     projectName,
@@ -265,7 +270,11 @@ function EditorScreen({
   // 画面を離れたら（戻る・プロジェクト切替・設定/アセット画面）実行中の書き出しを中止する。
   // 残すと、別の画面で録画が完了してダウンロードが始まってしまう (#780)。
   useEffect(() => {
-    return () => exportAbortRef.current?.abort()
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      exportAbortRef.current?.abort()
+    }
   }, [])
 
   const handleAbortVideoExport = useCallback(() => {

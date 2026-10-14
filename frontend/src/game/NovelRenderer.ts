@@ -2524,14 +2524,36 @@ export class NovelRenderer {
    * いま表示中の選択肢の遷移先とロック状態を返す (#780 動画書き出しの自動選択用)。
    * 選択肢待ちでなければ null。
    */
-  getPendingChoice(): { options: Array<{ jump: string; locked: boolean }> } | null {
+  getPendingChoice(): {
+    /** 選択肢の位置（`シーンID:eventIndex`）。辺の記憶に使う */
+    key: string
+    sceneId: string | null
+    options: Array<{ jump: string; locked: boolean }>
+  } | null {
     if (!this.waitingForChoice) return null
     const current = this.resolvedEvents[this.eventIndex]
     if (typeof current !== 'object' || current === null || !('Choice' in current)) return null
     const locked = this.computeChoiceLocked(current.Choice.options)
+    const sceneId = this.getPlayheadSceneId()
     return {
+      key: `${sceneId ?? ''}:${this.eventIndex}`,
+      sceneId,
       options: current.Choice.options.map((o, i) => ({ jump: o.jump, locked: locked[i] ?? false })),
     }
+  }
+
+  /** レンダラが初期化済みで破棄されていないか (#780。書き出しの後始末が破棄済みレンダラに触らないため) */
+  isReady(): boolean {
+    return this.initialized
+  }
+
+  /**
+   * 入場中（遅延ロード待ちなど）の進行を取り消し、解決しても何も適用させない (#780)。
+   * 書き出しを録画前に中止したとき、遅延ロード中の `startFrom` が後から解決してプレビューを
+   * 書き換えるのを防ぐ。入場中でなければ何もしない。
+   */
+  cancelPendingEntry(): void {
+    if (this.pendingEntry) this.advanceGeneration()
   }
 
   /**

@@ -18,7 +18,10 @@ import {
   EXPORT_STALL_TIMEOUT_MS,
   computeStallLimitMs,
   exportProgressSignature,
+  createChoiceMemory,
+  markChoiceSelected,
   pickAutoChoice,
+  recordChoice,
   type ExportEndReason,
 } from './videoExportPolicy'
 
@@ -342,6 +345,11 @@ export async function exportVideo(
     cleanedUp = true
     stopMonitor()
     signal?.removeEventListener('abort', onAbort)
+    // 画面を離れて破棄済みのレンダラには触らない（警告ログと二重破棄を避ける）
+    if (renderer.isReady?.() === false) {
+      isExporting = false
+      return
+    }
     try {
       // 元値が null だったら null に戻す（advance の onEndCallback?.() 挙動を完全復元）(round-2 S4)
       renderer.setOnSceneChange(prevOnSceneChange)
@@ -457,11 +465,10 @@ export async function exportVideo(
   // startSceneId === endSceneId の単一シーン録画では、startFrom 直後の
   // setOnSceneChange 発火で visitedEndScene = true まで進むが、まだ
   // 「別シーンへの遷移」は起きていないので finalize は呼ばれない。OK。
-  // 書き出し中に入ったシーン。選択肢の自動選択は未訪問の範囲内遷移先を優先する (#780)。
-  const visitedScenes = new Set<string>([startSceneId])
+  // 選択肢の辺（位置 × 遷移先）の記憶。自動選択は選んでいない辺を優先する (#780)。
+  const choiceMemory = createChoiceMemory()
   renderer.setOnSceneChange((sceneId) => {
     if (stopped) return
-    visitedScenes.add(sceneId)
     onProgress?.(`録画中: ${sceneId}`)
     if (sceneId === endSceneId) {
       visitedEndScene = true
@@ -530,6 +537,10 @@ export async function exportVideo(
     failIfStopped()
   } catch (e) {
     // 録画を始める前の失敗: 退避したリスナ・解像度・録画フラグ・isExporting を必ず戻す。
+    // 中止なら、遅延ロード中の startFrom がこの後に解決してプレビューを書き換えないよう取り消す。
+    if (e instanceof ExportAbortedError && renderer.isReady?.() !== false) {
+      renderer.cancelPendingEntry?.()
+    }
     stopped = true
     cleanup()
     throw e instanceof Error ? e : new Error(String(e))
@@ -552,16 +563,29 @@ export async function exportVideo(
     const pending = renderer.getPendingChoice()
     if (pending) {
       // 選択肢の待機中は停滞の時計に触れない。受け付けられない状態が続けば、停滞として終わる。
-      choiceSeenAt ??= now
+      if (choiceSeenAt === null) {
+        // 選択肢への到達は進行とみなす（長い [待機: N] の直後に停滞と誤判定しない）
+        choiceSeenAt = now
+        lastProgressAt = now
+      }
+      recordChoice(choiceMemory, pending.key, pending.sceneId, pending.options)
       const pick =
         autoChoices < EXPORT_MAX_AUTO_CHOICES
-          ? pickAutoChoice(pending.options, startSceneId, endSceneId, sceneOrder, visitedScenes)
+          ? pickAutoChoice(
+              pending.options,
+              startSceneId,
+              endSceneId,
+              sceneOrder,
+              choiceMemory,
+              pending.key
+            )
           : null
       if (pick !== null) {
         // 範囲内の未訪問の遷移先があれば、選択肢を映してから先頭のものを自動で選ぶ。
         // 入場中などで受け付けられなければ次の tick で再試行（停滞の時計は進めない）。
         if (now - choiceSeenAt >= autoChoiceDisplayMs && renderer.selectPendingChoice(pick)) {
           autoChoices++
+          markChoiceSelected(choiceMemory, pending.key, pick)
           choiceSeenAt = null
           lastProgressAt = now
           onProgress?.(`選択肢を自動選択: ${pick}`)
@@ -572,7 +596,7 @@ export async function exportVideo(
         finalize(
           autoChoices >= EXPORT_MAX_AUTO_CHOICES
             ? `選択肢の自動選択が上限(${EXPORT_MAX_AUTO_CHOICES}回)に達したため終了`
-            : '選択肢に範囲内の未訪問の遷移先が無いため終了',
+            : '選択肢に範囲内の未選択の遷移先が無いため終了',
           'choice-end'
         )
         return

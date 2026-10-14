@@ -57,6 +57,8 @@ describe('NovelRenderer.getPendingChoice / selectPendingChoice (#780)', () => {
     const r = makeAtChoice()
     r.advance()
     expect(r.getPendingChoice()).toEqual({
+      key: 'hub:1',
+      sceneId: 'hub',
       options: [
         { jump: 'near', locked: true },
         { jump: 'far', locked: false },
@@ -113,5 +115,30 @@ describe('NovelRenderer.getExportProgress (#780)', () => {
     r.setScenes([wait])
     r.setEvents(wait.events)
     expect(r.getExportProgress().waitMs).toBe(80000)
+  })
+})
+
+describe('NovelRenderer.cancelPendingEntry / isReady (#780)', () => {
+  it('入場中でなければ何もしない・初期化済みなら isReady', () => {
+    const r = makeAtChoice()
+    expect(r.isReady()).toBe(true)
+    r.cancelPendingEntry()
+    expect(r.isReady()).toBe(true)
+  })
+
+  it('遅延ロード中の入場を取り消すと、解決しても適用されず superseded になる', async () => {
+    let release!: (v: EventScene[]) => void
+    const r = makeAtChoice()
+    r.setMissingSceneResolver(
+      () =>
+        new Promise<EventScene[]>((res) => {
+          release = res
+        })
+    )
+    const entry = r.startFrom({ sceneId: 'lazy' })
+    r.cancelPendingEntry()
+    release([scene('lazy', [narration('x')])])
+    expect((await entry).status).toBe('superseded')
+    expect(r.getCurrentSceneId()).not.toBe('lazy')
   })
 })

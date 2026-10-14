@@ -46,6 +46,15 @@ function makeRenderer() {
   const h = {
     exportCalls: [] as boolean[],
     pending: null as { options: Option[] } | null,
+    /** 選択肢の位置とシーン（辺の記憶のキー） */
+    pendingKey: 'k:0',
+    pendingScene: 'a' as string | null,
+    /** true なら選択のたびに位置が変わる（毎回別の選択肢に見える） */
+    uniqueKeys: false,
+    keySeq: 0,
+    /** false を返すと、書き出し後始末がレンダラに触らない */
+    ready: true,
+    cancelPendingEntryCalls: 0,
     selected: [] as string[],
     positionCounter: 0,
     /** true なら本文が進む（署名が毎回変わる） */
@@ -96,11 +105,17 @@ function makeRenderer() {
     isAutoMode: () => false,
     setAutoMode: () => {},
     prepareVideosForExport: async () => {},
-    getPendingChoice: () => h.pending,
+    isReady: () => h.ready,
+    cancelPendingEntry: () => {
+      h.cancelPendingEntryCalls++
+    },
+    getPendingChoice: () =>
+      h.pending ? { key: h.pendingKey, sceneId: h.pendingScene, ...h.pending } : null,
     selectPendingChoice: (jump: string) => {
       if (!h.acceptSelect) return false
       h.selected.push(jump)
       h.pending = h.reoffer ? { options: h.reoffer } : null
+      if (h.uniqueKeys) h.pendingKey = `k:${++h.keySeq}`
       h.onSelect?.(jump)
       return true
     },
@@ -238,21 +253,97 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
     expect(run.result?.endReason).toBe('scene-end')
   })
 
-  it('範囲内の遷移先がすべて訪問済みなら、選択肢を映して終端にする（開始シーンへ戻るだけの選択肢）', async () => {
+  it('同じ位置の選択肢で範囲内の辺をすべて選び終えたら、選択肢を映して終端にする', async () => {
     const { h, renderer } = makeRenderer()
     const run = await startRecording(renderer, {
       startSceneId: 'a',
       endSceneId: 'b',
       sceneOrder: ['a', 'b'],
     })
-    h.pending = { options: [{ jump: 'a', locked: false }] }
-    await vi.advanceTimersByTimeAsync(EXPORT_CHOICE_HOLD_MS + EXPORT_POLL_MS * 2)
+    const back = [{ jump: 'a', locked: false }]
+    h.reoffer = back // 選んでも同じ選択肢（同じ位置）に戻ってくる
+    h.pending = { options: back }
+    await vi.advanceTimersByTimeAsync(
+      EXPORT_AUTO_CHOICE_DISPLAY_MS + EXPORT_CHOICE_HOLD_MS + EXPORT_POLL_MS * 6
+    )
     await run.p
-    expect(h.selected).toEqual([])
+    expect(h.selected).toEqual(['a'])
     expect(run.result?.endReason).toBe('choice-end')
   })
 
-  it('保険: シーン変更の通知が無くて訪問済みを判定できなくても、自動選択は上限で止まる', async () => {
+  it('サブメニュー構成（h[m] → m[x,y] → 各ルート末尾で h へ）で x と y の両方を録る', async () => {
+    const { h, renderer } = makeRenderer()
+    const hubChoice = [{ jump: 'm', locked: false }]
+    const menuChoice = [
+      { jump: 'x', locked: false },
+      { jump: 'y', locked: false },
+    ]
+    const show = (key: string, scene: string, options: Option[]) => {
+      h.pendingKey = key
+      h.pendingScene = scene
+      h.pending = { options }
+    }
+    h.onSelect = (jump) => {
+      h.onSceneChange?.(jump)
+      if (jump === 'm') show('m:1', 'm', menuChoice)
+      else {
+        // x / y の末尾は [ジャンプ: h]。y が終了シーンなので、y を録り終えたら h に戻って終わる。
+        h.onSceneChange?.('h')
+        show('h:1', 'h', hubChoice)
+      }
+    }
+    const run = await startRecording(renderer, {
+      startSceneId: 'h',
+      endSceneId: 'y',
+      sceneOrder: ['h', 'm', 'x', 'y'],
+    })
+    show('h:1', 'h', hubChoice)
+    await vi.advanceTimersByTimeAsync((EXPORT_AUTO_CHOICE_DISPLAY_MS + EXPORT_POLL_MS * 2) * 8)
+    await run.p
+    expect(h.selected).toEqual(['m', 'x', 'm', 'y'])
+    expect(run.result?.endReason).toBe('scene-end')
+  })
+
+  it('長い [待機: N] の直後に選択肢が来ても、停滞と誤判定せず選択肢を映して自動選択する', async () => {
+    const { h, renderer } = makeRenderer()
+    h.waitMs = 70_000
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'c',
+      sceneOrder: ['a', 'b', 'c'],
+      stallTimeoutMs: 60_000,
+    })
+    await vi.advanceTimersByTimeAsync(70_000)
+    expect(run.result).toBeUndefined()
+    h.waitMs = null
+    h.pending = { options: [{ jump: 'b', locked: false }] }
+    await vi.advanceTimersByTimeAsync(EXPORT_AUTO_CHOICE_DISPLAY_MS + EXPORT_POLL_MS * 2)
+    expect(run.result).toBeUndefined()
+    expect(h.selected).toEqual(['b'])
+    h.pending = null
+    h.onEnd?.()
+    await vi.advanceTimersByTimeAsync(10)
+    await run.p
+  })
+
+  it('長い [待機: N] の直後に自動選択できない選択肢が来たら、3 秒映して終端にする', async () => {
+    const { h, renderer } = makeRenderer()
+    h.waitMs = 70_000
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b', 'x'],
+      stallTimeoutMs: 60_000,
+    })
+    await vi.advanceTimersByTimeAsync(70_000)
+    h.waitMs = null
+    h.pending = { options: [{ jump: 'x', locked: false }] }
+    await vi.advanceTimersByTimeAsync(EXPORT_CHOICE_HOLD_MS + EXPORT_POLL_MS * 2)
+    await run.p
+    expect(run.result?.endReason).toBe('choice-end')
+  })
+
+  it('保険: 毎回別の選択肢が出続けても、自動選択は上限で止まる', async () => {
     const { h, renderer } = makeRenderer()
     const run = await startRecording(renderer, {
       startSceneId: 'a',
@@ -261,6 +352,7 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
       stallTimeoutMs: 10 ** 9,
     })
     const loop = [{ jump: 'b', locked: false }]
+    h.uniqueKeys = true
     h.reoffer = loop
     h.pending = { options: loop }
     await vi.advanceTimersByTimeAsync(
@@ -478,5 +570,49 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
     h.onEnd?.()
     await vi.advanceTimersByTimeAsync(10)
     await run.p
+  })
+
+  it('録画前の中止では、遅延ロード中の入場を取り消す', async () => {
+    const { h, renderer } = makeRenderer()
+    h.backgroundGate = new Promise<void>(() => {})
+    const ac = new AbortController()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      signal: ac.signal,
+    })
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(1)
+    await run.p
+    expect(h.cancelPendingEntryCalls).toBe(1)
+  })
+
+  it('破棄済みのレンダラには、中止の後始末で触らない（次の書き出しはできる）', async () => {
+    const { h, renderer } = makeRenderer()
+    const ac = new AbortController()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+      signal: ac.signal,
+    })
+    h.ready = false // 画面を離れてレンダラが破棄された
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(10)
+    await run.p
+    expect(run.error).toBeInstanceOf(ExportAbortedError)
+    expect(h.exportCalls).toEqual([true]) // setExporting(false) などを呼ばない
+    // 多重起動ガードは外れている
+    const second = makeRenderer()
+    const run2 = await startRecording(second.renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+    })
+    second.h.onEnd?.()
+    await vi.advanceTimersByTimeAsync(10)
+    await run2.p
+    expect(run2.result?.endReason).toBe('story-end')
   })
 })
