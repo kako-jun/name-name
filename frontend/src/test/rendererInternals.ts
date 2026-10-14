@@ -68,5 +68,27 @@ export interface RendererInternals {
  * `NovelRenderer` を private 込みの型で見る。型引数で、そのテストが追加で触る形を足せる。
  */
 export function internals<T extends RendererInternals = RendererInternals>(r: NovelRenderer): T {
+  exposeSceneIndexFields(r)
   return r as unknown as T
+}
+
+/**
+ * シーン索引まわりのフィールド (#823) は `SceneIndex` へ移った。テストが従来どおり
+ * `internals(r).allScenes` 等で読み書きできるよう、レンダラ上に `sceneIndex` の private フィールドへ
+ * 委譲するアクセサを足す。移管後のアクセス経路はこの1か所に集約する。
+ */
+const SCENE_INDEX_FIELDS = ['allScenes', 'entryRawEvents', 'pendingMissingScenes'] as const
+
+function exposeSceneIndexFields(r: NovelRenderer): void {
+  const index = (r as unknown as { sceneIndex: Record<string, unknown> }).sceneIndex
+  for (const name of SCENE_INDEX_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    Object.defineProperty(r, name, {
+      configurable: true,
+      get: () => index[name],
+      set: (v) => {
+        index[name] = v
+      },
+    })
+  }
 }
