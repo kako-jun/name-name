@@ -10,10 +10,8 @@
  */
 import type { BattlePresentation } from './battleMotion'
 
-/**
- * 以下の時間（RESULT_HOLD_* / RESULT_SKIP_GUARD_MS）はゲーム内時間（`BattleScreen.tick` に渡された deltaMS の総和）で、実時間ではない。
- * 設定オーバーレイで tick が止まっている間は進まない。
- */
+// 以下の時間（RESULT_HOLD_* / RESULT_SKIP_GUARD_MS）はゲーム内時間（`BattleScreen.tick` に渡された deltaMS の総和）で、実時間ではない。
+// 設定オーバーレイで tick が止まっている間は進まない。
 /** 勝敗が決まってから閉じるまで待つ時間（ms）。dq: 最後のログを読める程度 */
 export const RESULT_HOLD_DQ_MS = 800
 /** ff: 勝利メッセージと victory ポーズを見せる時間（ms） */

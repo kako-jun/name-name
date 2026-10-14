@@ -4,7 +4,9 @@
  * 決定操作・タップで飛ばせて、逃走はすぐ閉じることを確かめる。
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Container, Text } from 'pixi.js'
+// Container に eventMode / isInteractive を足す（実アプリでは Application がイベントシステムを登録する）
+import 'pixi.js/events'
+import { EventBoundary, type Container, type Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -184,12 +186,29 @@ describe('勝敗を読ませてから閉じる: dq', () => {
     expect(closed).toEqual(['victory'])
   })
 
-  it('redraw で全画面のタップ領域が新しい画面サイズに追従する', () => {
+  it('redraw で全画面のタップ領域が新しい画面サイズに追従する（待機中）', () => {
     const { s } = setup('victory')
+    tap(s, 'attack')
     const area = () => (s as unknown as { hitArea: { width: number; height: number } }).hitArea
     expect([area().width, area().height]).toEqual([800, 450])
     s.redraw(450, 800)
     expect([area().width, area().height]).toEqual([450, 800])
+  })
+
+  it('全画面のタップ受け口は待機中だけ。待機の前・閉じた後・destroy 後には残らない', () => {
+    const mode = (s: BattleScreen) => [s.eventMode === 'static', s.hitArea]
+    const a = setup('victory')
+    expect(mode(a.s)).toEqual([false, null])
+    tap(a.s, 'attack')
+    expect(a.s.eventMode).toBe('static')
+    expect(a.s.hitArea).not.toBeNull()
+    a.s.tick(RESULT_HOLD_DQ_MS)
+    expect(a.closed).toEqual(['victory'])
+    expect(mode(a.s)).toEqual([false, null])
+    const b = setup('victory')
+    tap(b.s, 'attack')
+    b.s.destroy({ children: true })
+    expect(mode(b.s)).toEqual([false, null])
   })
 
   it('待機中はコマンドを受けない', () => {
@@ -318,5 +337,44 @@ describe('勝敗を読ませてから閉じる: ATB・ff 逃走', () => {
     run(s, 3000)
     expect(closed).toEqual(['escaped'])
     expect((s as unknown as { resultElapsed: number | null }).resultElapsed).toBeNull()
+  })
+})
+
+describe('コマンドボタンが実際のイベント境界のヒットテストで届く（全画面の受け口に奪われない）', () => {
+  const atbOpts = { atb: { mode: 'wait' as const, initialGauges: { party: [1000] } }, rng: () => 0 }
+  // 各ボタンの中心を画面座標に直し、Pixi のイベント境界でヒットテストして、ボタン自身に当たることを見る
+  const hitsButtons = (s: BattleScreen) => {
+    const boundary = new EventBoundary(s)
+    const cmds = I(s).commands as unknown as {
+      id: string
+      hit: Container & { hitArea: { x: number; y: number; width: number; height: number } }
+    }[]
+    const attack = cmds.find((c) => c.id === 'attack')!
+    const ha = attack.hit.hitArea
+    const p = attack.hit.toGlobal({ x: ha.x + ha.width / 2, y: ha.y + ha.height / 2 })
+    return boundary.hitTest(p.x, p.y) === attack.hit
+  }
+  const cases: [string, BattleScreenOptions, boolean][] = [
+    ['dq', {}, false],
+    ['ff', { presentation: 'ff' }, false],
+    ['dq + ATB', {}, true],
+    ['ff + ATB', { presentation: 'ff' }, true],
+  ]
+  it.each(cases)('通常時: %s', (_n, opts, useAtb) => {
+    const engine = new BattleEngine(
+      [entity('hero', { atk: 999 })],
+      [entity('slime', { hp: 1, maxHp: 1 })],
+      useAtb ? atbOpts : { rng: () => 0.5 }
+    )
+    const closed: string[] = []
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      onClose: (o) => closed.push(o),
+      ...opts,
+    })
+    created.push(s)
+    expect(hitsButtons(s)).toBe(true)
+    tap(s, 'attack')
+    expect(engine.getState().phase).toBe('victory')
   })
 })

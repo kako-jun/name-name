@@ -474,6 +474,11 @@ export class BattleScreen extends Container {
   private closedFlag = false
   /** 勝敗が決まって演出・ダメージ数字・ログのタイプ表示が終わったあと、閉じるまでに読ませている経過時間 (ms)。null = まだ待機を始めていない (#745) */
   private resultElapsed: number | null = null
+  /** 勝敗の待機中だけ画面全体のタップを受けているか (#745) */
+  private resultTapArmed = false
+  /** 待機に入る前の eventMode（閉じる時に戻す） */
+  private eventModeBeforeResult: Container['eventMode'] | undefined
+  private resultTapHandler = (): void => this.skipResultHold()
   /** 勝敗の待機を決定キーで飛ばすリスナー (#745)。destroy で必ず外す */
   private resultKeyListener: ((e: KeyboardEvent) => void) | null = null
   /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
@@ -554,9 +559,6 @@ export class BattleScreen extends Container {
     }
     this.buildCommandButtons()
     this.attachCrossKeys()
-    this.eventMode = 'static'
-    this.hitArea = new Rectangle(0, 0, this.screenWidth, this.screenHeight)
-    this.on('pointertap', () => this.skipResultHold())
     // front のログは固定 4 行。side は layoutSide が必要な行数だけ作る
     if (this.layoutMode === 'front') this.buildLogLines()
     else this.buildSideViews()
@@ -997,7 +999,8 @@ export class BattleScreen extends Container {
   redraw(screenWidth: number, screenHeight: number): void {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
-    this.hitArea = new Rectangle(0, 0, screenWidth, screenHeight)
+    // 全画面のタップ領域は勝敗の待機中だけ（通常時に持つと子のコマンドボタンへのタップを奪う）
+    if (this.resultTapArmed) this.hitArea = new Rectangle(0, 0, screenWidth, screenHeight)
     this.layout()
     this.refresh()
   }
@@ -1041,8 +1044,19 @@ export class BattleScreen extends Container {
     this.closeIfOver()
   }
 
-  /** 勝敗の待機中だけ、決定キー（Enter / Space / Z）で待機を飛ばすリスナーを付ける (#745)。タップは画面全体の pointertap */
+  /**
+   * 勝敗の待機中だけ、画面全体のタップ受け口と決定キー（Enter / Space / Z）のリスナーを付ける (#745)。
+   * タップ受け口（eventMode static + 全画面 hitArea）は通常時には持たない: 持つと子のコマンドボタンへのタップが届かなくなる。
+   * 待機中はコマンドが無効（isOver）なので干渉しない。
+   */
   private attachResultSkip(): void {
+    if (!this.resultTapArmed) {
+      this.resultTapArmed = true
+      this.eventModeBeforeResult = this.eventMode
+      this.eventMode = 'static'
+      this.hitArea = new Rectangle(0, 0, this.screenWidth, this.screenHeight)
+      this.on('pointertap', this.resultTapHandler)
+    }
     if (this.resultKeyListener || typeof globalThis.addEventListener !== 'function') return
     this.resultKeyListener = (e: KeyboardEvent) => {
       if (this.destroyedFlag || this.closedFlag || this.resultElapsed === null) return
@@ -1057,6 +1071,12 @@ export class BattleScreen extends Container {
   }
 
   private detachResultSkip(): void {
+    if (this.resultTapArmed) {
+      this.resultTapArmed = false
+      this.off('pointertap', this.resultTapHandler)
+      this.eventMode = this.eventModeBeforeResult ?? 'passive'
+      this.hitArea = null
+    }
     if (this.resultKeyListener) globalThis.removeEventListener('keydown', this.resultKeyListener)
     this.resultKeyListener = null
   }
