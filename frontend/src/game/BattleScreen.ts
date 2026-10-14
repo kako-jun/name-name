@@ -2255,13 +2255,16 @@ export class BattleScreen extends Container {
     })
   }
 
-  /** FF 式メッセージ窓: 再生中の行動に名前（呪文・アイテム）があるときだけ、窓の中央に一度に全文で出す。通常攻撃は窓ごと出さない */
+  /** FF 式メッセージ窓: 再生中の行動に名前（呪文・アイテム）があるときだけ（特技に予兆があればその文言を名前の代わりに）、窓の中央に一度に全文で出す。通常攻撃は窓ごと出さない */
   private updateMessageWindow(): void {
     const m = this.messageText
     if (!m) return
     const resultOutcome =
       this.resultElapsed !== null ? resultOutcomeOf(this.engine.getState().phase) : null
-    const word = windowWord(messageWindowText(this.playback.active?.event.label), resultOutcome)
+    const word = windowWord(
+      messageWindowText(this.playback.active?.event.omen ?? this.playback.active?.event.label),
+      resultOutcome
+    )
     this.logPanel.visible = word !== null
     m.visible = word !== null
     if (word === null) return

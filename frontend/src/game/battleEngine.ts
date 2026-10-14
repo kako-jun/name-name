@@ -20,7 +20,7 @@
  *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
- * - 敵 AI の P2 以降（順番・予兆・カウンター。#836 #837）と builtin: での挙動委譲
+ * - 敵 AI の P3（カウンター・死亡時。#837）と builtin: での挙動委譲
  * - ターン跨ぎ状態異常の減衰
  */
 
@@ -31,6 +31,7 @@ import { isReviveEntry } from './battleMenu'
 import {
   chooseEnemyAction,
   createEnemyMemory,
+  recordEnemyAction,
   type ChosenAction,
   type EnemyMemory,
 } from './enemyAi'
@@ -85,6 +86,11 @@ export interface BattleActionEvent {
    * 特技 (#834) の使用時メッセージ（`{user}` を使った側の名前に置き換えた後の文）。現段階では記録だけで画面は読まない
    * （設計書 §3.3 の `メッセージ`。表示は P1 #835 以降）。`メッセージ:` を書かない特技・他の kind は undefined */
   message?: string
+  /**
+   * 特技の予兆の文言（`{user}` 置き換え後。敵の行動パターン P2 #836）。FF 式は窓にラベルの代わりに出し、DQ 式は戦闘ログに積む。
+   * 予兆の無い特技・他の kind は undefined
+   */
+  omen?: string
   hits: BattleHit[]
 }
 
@@ -418,6 +424,11 @@ export class BattleEngine {
         ? skill.message.split('{user}').join(caster.name)
         : undefined
     this.appendLog(message ?? `${caster.name} は ${skill.name} を つかった！`)
+    const omen =
+      typeof skill.telegraph === 'string' && skill.telegraph.trim() !== ''
+        ? skill.telegraph.split('{user}').join(caster.name)
+        : undefined
+    if (omen !== undefined) this.appendLog(omen)
 
     const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
     const ctx: EffectContext = {
@@ -427,13 +438,24 @@ export class BattleEngine {
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
     }
     const hpSnapshot = this.snapshotHp()
+    // 効果も builtin も無い特技は、予兆・メッセージだけの演出用（ログの警告も、対象の MISS も出さない）
+    const noEffect = !skill.builtin && !skill.effect
     const lines = skill.builtin
       ? invokeBuiltinSpell(skill.builtin, ctx)
       : skill.effect
         ? this.evalEffectDsl(skill.effect, ctx)
-        : ['(特技に効果定義なし)']
+        : []
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('skill', caster, skill.name, targets, hpSnapshot, amounts, message)
+    this.recordEffect(
+      'skill',
+      caster,
+      skill.name,
+      noEffect ? [] : targets,
+      hpSnapshot,
+      amounts,
+      message,
+      omen
+    )
     return true
   }
 
@@ -630,7 +652,7 @@ export class BattleEngine {
         atb.queue = atb.queue.filter((q) => q !== i)
         atb.partyGauge[i] = 0
       })
-      this.countEnemyAction(enemyIndex)
+      this.countEnemyAction(enemyIndex, choice)
       this.checkEnd()
       return
     }
@@ -649,7 +671,7 @@ export class BattleEngine {
       atb.queue = atb.queue.filter((i) => i !== idx)
       atb.partyGauge[idx] = 0
     }
-    this.countEnemyAction(enemyIndex)
+    this.countEnemyAction(enemyIndex, choice, true)
     this.checkEnd()
   }
 
@@ -685,7 +707,13 @@ export class BattleEngine {
     const isOpponentSingle = t === '相手単体' || !SKILL_TARGETS.includes(t)
     const o = choice.targetOverride
     const applies = o !== undefined && (o === '仲間単体' || o === '自分' || isOpponentSingle)
-    const exec = applies ? { ...skill, target: o } : skill
+    // 予兆: 行の `予兆=` が特技の `予兆` より優先（P2 #836）
+    const omen = choice.omen !== undefined ? choice.omen : skill.telegraph
+    const exec = {
+      ...skill,
+      ...(applies ? { target: o } : {}),
+      ...(omen !== undefined ? { telegraph: omen } : {}),
+    }
     return this.performSkill(
       { side: 'enemy', index: enemyIndex },
       exec,
@@ -693,10 +721,16 @@ export class BattleEngine {
     )
   }
 
-  /** 行動を終えた敵の行動回数を 1 増やす (#835)。記憶が無い戦闘では何もしない */
-  private countEnemyAction(enemyIndex: number): void {
+  /** 行動を終えた敵の記憶を進める (#835 行動回数、#836 順番の位置・使用回数)。記憶が無い戦闘では何もしない */
+  private countEnemyAction(enemyIndex: number, choice: ChosenAction, usedAttack = false): void {
     const m = this.state.enemyMemory?.[enemyIndex]
-    if (m) m.acted++
+    if (!m) return
+    // 特技が見つからず通常攻撃に落ちたときは、使用回数を特技 id でなく通常攻撃に数える
+    const c: ChosenAction =
+      usedAttack && choice.track
+        ? { ...choice, track: { ...choice.track, key: 'こうげき' } }
+        : choice
+    recordEnemyAction(m, c)
   }
 
   /** `対象=ランダム` / `HP最小` で選ばれた生存味方。無ければ null（従来の狙い方） */
@@ -731,7 +765,7 @@ export class BattleEngine {
       const choice = this.decideEnemyAction(i)
       if (choice.kind === 'skill' && this.useEnemySkill(i, choice)) {
         usedSkill = true
-        this.countEnemyAction(i)
+        this.countEnemyAction(i, choice)
         continue
       }
       const hero = this.pickedParty(choice) ?? firstHero
@@ -744,7 +778,7 @@ export class BattleEngine {
       if (hero.hp === 0) {
         this.appendLog(`${hero.name} は たおれた！`)
       }
-      this.countEnemyAction(i)
+      this.countEnemyAction(i, choice, true)
     }
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
@@ -895,7 +929,8 @@ export class BattleEngine {
     targets: BattleEntity[],
     before: Map<BattleEntity, number>,
     amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>,
-    message?: string
+    message?: string,
+    omen?: string
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
@@ -931,7 +966,8 @@ export class BattleEngine {
         hits.push({ target: ref, kind: 'damage', amount: hpBefore - e.hp, hpBefore, hpAfter: e.hp })
       } else if (e.hp > hpBefore) {
         hits.push({ target: ref, kind: 'heal', amount: e.hp - hpBefore, hpBefore, hpAfter: e.hp })
-      } else if (targets.includes(e)) {
+      } else if (targets.includes(e) && !(computed?.kind === 'heal' && computed.amount === 0)) {
+        // 回復量 0 で HP も変わらない対象は MISS にしない（予兆だけの特技など）
         hits.push({ target: ref, kind: 'miss', amount: 0, hpBefore, hpAfter: e.hp })
       }
     }
@@ -940,6 +976,7 @@ export class BattleEngine {
       kind,
       label,
       ...(message !== undefined ? { message } : {}),
+      ...(omen !== undefined ? { omen } : {}),
       hits,
     })
   }
@@ -1037,6 +1074,8 @@ export interface SkillExecution {
   builtin?: string
   /** 使用時の演出文。`{user}` は使った側の名前に置き換わる */
   message?: string
+  /** 予兆の文言（P2 #836）。使用時に `message` のあとへ出す。`{user}` は使った側の名前に置き換わる */
+  telegraph?: string
 }
 
 /** アイテム使用の引数 */

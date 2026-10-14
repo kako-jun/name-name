@@ -156,6 +156,22 @@ describe('BattleScreen presentation', () => {
     expect(I(s).statusHpTexts[0].text).not.toBe(before)
   })
 
+  it('ff: 予兆つきの特技は名前の代わりに予兆の文言を窓に出す (#836)。効果が無ければ MISS の数字は出ない', () => {
+    const { s, engine } = setup()
+    engine.performSkill(
+      { side: 'enemy', index: 0 },
+      { name: 'ためる', target: '自分', telegraph: '{user}の からだが ふるえている！' }
+    )
+    s.redraw(800, 450)
+    run(s, 16)
+    expect(I(s).messageText!.text).toContain('からだが ふるえている！')
+    expect(I(s).messageText!.visible).toBe(true)
+    run(s, 700)
+    expect(I(s).popups).toHaveLength(0)
+    run(s, 5000)
+    expect(I(s).messageText!.visible).toBe(false)
+  })
+
   it('ff: 勝敗が決まっても演出（と数字）を見せ切ってから閉じる', () => {
     const closed: string[] = []
     const { s } = setup({}, 1, closed)

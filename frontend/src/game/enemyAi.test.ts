@@ -7,6 +7,7 @@ import {
   createEnemyMemory,
   parseActionRule,
   parseActionRules,
+  recordEnemyAction,
   toSkillExecutions,
 } from './enemyAi'
 
@@ -100,10 +101,15 @@ describe('parseActionRule: 書式の解釈', () => {
     ['条件=初手 条件=初手 候補=墨', 'キー重複'],
     ['候補=墨 対象=最後に攻撃した者', 'P3 の対象'],
     ['候補=墨 対象=誰か', '未知の対象'],
-    ['候補=墨 予兆=ゴゴゴ', 'P2 のキー'],
-    ['候補=墨 上限=1', 'P2 のキー'],
-    ['順番=墨 > 触手', 'P2 のキー'],
-    ['条件=回数>=3 候補=墨', 'P2 の条件'],
+    ['候補=墨 予兆=', '予兆が空'],
+    ['候補=墨 上限=0', '上限が 0'],
+    ['候補=墨 上限=x', '上限が数でない'],
+    ['候補=墨 順番=墨 > 触手', '候補と順番の併記'],
+    ['順番=墨 > ', '順番に空の要素'],
+    ['順番=墨:2 > 触手', '順番に重み'],
+    ['条件=周期=0 候補=墨', '周期 N=0'],
+    ['条件=周期=3/3 候補=墨', '周期の余りが N 以上'],
+    ['条件=状態= 候補=墨', '状態名が空'],
   ])('不正な行 %j（%s）は理由の文字列を返す', (line) => {
     expect(typeof parseActionRule(line)).toBe('string')
   })
@@ -341,7 +347,7 @@ describe('chooseEnemyAction: 対象=', () => {
 })
 
 describe('toSkillExecutions', () => {
-  it('SkillDef を id キーのまま SkillExecution にする（telegraph は渡さない）', () => {
+  it('SkillDef を id キーのまま SkillExecution にする（予兆 telegraph も渡す。P2 #836）', () => {
     expect(
       toSkillExecutions({
         墨: {
@@ -354,7 +360,165 @@ describe('toSkillExecutions', () => {
         },
       })
     ).toEqual({
-      墨: { name: '墨', target: '相手全体', effect: 'damage 6..10', message: '{user}は墨' },
+      墨: {
+        name: '墨',
+        target: '相手全体',
+        effect: 'damage 6..10',
+        message: '{user}は墨',
+        telegraph: 'ゴゴゴ',
+      },
     })
+  })
+})
+
+// ===== P2 (#836): 順番・予兆・上限・回数・周期・使用・状態 =====
+
+describe('P2 の書式', () => {
+  it('順番・予兆・上限・P2 の条件を読む', () => {
+    const r = parseActionRule(
+      '条件=回数>=2, 周期=3/1, 使用<ink>>=1, 状態=毒, 味方状態=眠り 順番=ink > こうげき > tent 予兆=ゴゴゴ… 上限=4'
+    )
+    expect(typeof r).not.toBe('string')
+    if (typeof r === 'string') return
+    expect(r.conditions.map((c) => c.kind)).toEqual(['acted', 'cycle', 'used', 'status', 'status'])
+    expect(r.sequence?.map((c) => c.skillId)).toEqual(['ink', null, 'tent'])
+    expect(r.candidates).toEqual([])
+    expect(r.omen).toBe('ゴゴゴ…')
+    expect(r.cap).toBe(4)
+  })
+
+  it('周期=N は N/0 と同じ。使用<attack> は通常攻撃の回数', () => {
+    const a = parseActionRule('条件=周期=3 候補=ink')
+    const b = parseActionRule('条件=周期=3/0 候補=ink')
+    expect(a).toEqual(b)
+    const u = parseActionRule('条件=使用<attack><2 候補=ink')
+    expect(typeof u).not.toBe('string')
+    if (typeof u !== 'string')
+      expect(u.conditions[0]).toMatchObject({ kind: 'used', key: 'こうげき' })
+  })
+})
+
+/** chooseEnemyAction の結果で記憶を進める（エンジンの行動後処理と同じ） */
+function step(s: BattleState, i: number, rng: () => number) {
+  const c = chooseEnemyAction(s, i, rng)
+  recordEnemyAction(s.enemyMemory![i], c)
+  return c
+}
+
+const skillIds = (cs: ReturnType<typeof chooseEnemyAction>[]) =>
+  cs.map((c) => (c.kind === 'skill' ? c.skillId : 'attack'))
+
+describe('順番=: 巡回・リセット（決定論）', () => {
+  it('順番どおりに巡回し、終端で先頭に戻る。rng は消費しない', () => {
+    const s = stateOf([ent({ actions: ['順番=ink > こうげき > tent'] })])
+    const r = countingRng(0.9)
+    const out = Array.from({ length: 7 }, () => step(s, 0, r.rng))
+    expect(skillIds(out)).toEqual(['ink', 'attack', 'tent', 'ink', 'attack', 'tent', 'ink'])
+    expect(r.calls()).toBe(0)
+    expect(s.enemyMemory![0].acted).toBe(7)
+  })
+
+  it('選ばれる行が切り替わると位置は新しい行の先頭に戻る（行 A を 2 回進め、行 B に移り、A に戻ると先頭から）', () => {
+    const s = stateOf([ent({ actions: ['条件=HP>=50% 順番=ink > tent > sub', '順番=tent > ink'] })])
+    const r = () => 0
+    const a1 = step(s, 0, r)
+    const a2 = step(s, 0, r)
+    s.enemies[0].hp = 10
+    const b1 = step(s, 0, r)
+    const b2 = step(s, 0, r)
+    s.enemies[0].hp = 100
+    const a3 = step(s, 0, r) // A に戻る: 位置 2（sub）ではなく先頭 ink
+    expect(skillIds([a1, a2, b1, b2, a3])).toEqual(['ink', 'tent', 'tent', 'ink', 'ink'])
+    expect(s.enemyMemory![0].rule).toBe(0)
+    expect(s.enemyMemory![0].pos).toBe(1)
+  })
+
+  it('chooseEnemyAction は純粋: 同じ state から何度呼んでも同じ結果で、記憶を変えない', () => {
+    const s = stateOf([ent({ actions: ['順番=ink > tent'] })])
+    const before = JSON.stringify(s.enemyMemory)
+    const a = chooseEnemyAction(s, 0, () => 0)
+    const b = chooseEnemyAction(s, 0, () => 0)
+    expect(a).toEqual(b)
+    expect(JSON.stringify(s.enemyMemory)).toBe(before)
+  })
+
+  it('順番の敵の記憶は JSON で往復できる（スナップショット）', () => {
+    const s = stateOf([ent({ actions: ['順番=ink > tent > sub'] })])
+    step(s, 0, () => 0)
+    step(s, 0, () => 0)
+    const restored = JSON.parse(JSON.stringify(s)) as BattleState
+    expect(chooseEnemyAction(restored, 0, () => 0)).toMatchObject({ skillId: 'sub' })
+  })
+})
+
+describe('上限=・回数>=・周期・使用<>・状態', () => {
+  it('上限=N: 使い切った行は成立しない扱いで次の行へ落ちる', () => {
+    const s = stateOf([ent({ actions: ['候補=ink 上限=2', '候補=tent'] })])
+    const out = Array.from({ length: 4 }, () => step(s, 0, () => 0))
+    expect(skillIds(out)).toEqual(['ink', 'ink', 'tent', 'tent'])
+    expect(s.enemyMemory![0].ruleUses).toEqual({ '0': 2, '1': 2 })
+  })
+
+  it('回数>=N は行動回数（acted）で判定する', () => {
+    const s = stateOf([ent({ actions: ['条件=回数>=2 候補=ink'] })])
+    expect(chooseEnemyAction(s, 0, () => 0).kind).toBe('attack')
+    s.enemyMemory![0].acted = 2
+    expect(chooseEnemyAction(s, 0, () => 0)).toMatchObject({ skillId: 'ink' })
+  })
+
+  it('周期=3: acted が 0,3,6 のとき成立。周期=3/2 は 2,5,8', () => {
+    const a = stateOf([ent({ actions: ['条件=周期=3 候補=ink'] })])
+    const b = stateOf([ent({ actions: ['条件=周期=3/2 候補=ink'] })])
+    const hits = (s: BattleState) =>
+      Array.from({ length: 9 }, (_, n) => {
+        s.enemyMemory![0].acted = n
+        return chooseEnemyAction(s, 0, () => 0).kind === 'skill'
+      })
+        .map((v, n) => (v ? n : -1))
+        .filter((n) => n >= 0)
+    expect(hits(a)).toEqual([0, 3, 6])
+    expect(hits(b)).toEqual([2, 5, 8])
+  })
+
+  it('使用<ink>>=1: 使ったあとだけ成立（1 度きり技のあとの行動）', () => {
+    const s = stateOf([ent({ actions: ['条件=使用<ink>>=1 候補=tent', '候補=ink'] })])
+    expect(skillIds([step(s, 0, () => 0), step(s, 0, () => 0), step(s, 0, () => 0)])).toEqual([
+      'ink',
+      'tent',
+      'tent',
+    ])
+  })
+
+  it('状態=（自分）と 味方状態=（生存している味方のいずれか）。日本語名と英語名のどちらでも一致', () => {
+    const party = [ent({ id: 'a' }), ent({ id: 'b', status: { sleep: 2 } })]
+    const s = stateOf(
+      [ent({ actions: ['条件=味方状態=眠り 候補=ink', '条件=状態=毒 候補=tent'] })],
+      party
+    )
+    expect(chooseEnemyAction(s, 0, () => 0)).toMatchObject({ skillId: 'ink' })
+    party[1].hp = 0 // 倒れた味方は数えない
+    expect(chooseEnemyAction(s, 0, () => 0).kind).toBe('attack')
+    s.enemies[0].status = { 毒: 1 }
+    expect(chooseEnemyAction(s, 0, () => 0)).toMatchObject({ skillId: 'tent' })
+    s.enemies[0].status = { poison: 0 } // 残り 0 は無し
+    expect(chooseEnemyAction(s, 0, () => 0).kind).toBe('attack')
+  })
+
+  it('行の 予兆= は選択結果に載る', () => {
+    const s = stateOf([ent({ actions: ['順番=ink > tent 予兆=ふるえている'] })])
+    expect(chooseEnemyAction(s, 0, () => 0)).toMatchObject({ omen: 'ふるえている' })
+  })
+})
+
+describe('P1 までの敵は記憶の形も rng も不変', () => {
+  it('P2 の語彙を使わない敵は track を付けず、記憶は { acted } のまま', () => {
+    const s = stateOf([ent({ actions: ['条件=初手 候補=ink', '候補=tent:1 | ink:1'] })])
+    const r = countingRng(0.1)
+    const c = step(s, 0, r.rng)
+    expect(c).toEqual({ kind: 'skill', skillId: 'ink' })
+    expect(s.enemyMemory).toEqual([{ acted: 1 }])
+    step(s, 0, r.rng)
+    expect(s.enemyMemory).toEqual([{ acted: 2 }])
+    expect(r.calls()).toBe(1) // 2 行目の重み抽選 1 回だけ
   })
 })

@@ -12,18 +12,23 @@
  * - `候補` は `こうげき`（通常攻撃。`attack` でも可）か `[特技 id]` の id。重みを省くと 1（0 以上の数。合計が 0 の行は不正）
  * - `対象` は `ランダム` / `HP最小` / `全体` / `仲間` / `自分`。省略時は特技の `対象:`（通常攻撃は従来の狙い方）に従う。
  *   `最後に攻撃した者` は被弾の記憶（P3 #837）が要るので未対応（その行は不正として無視）
- * - P2 以降の語彙（`順番=` `予兆=` `上限=` と回数・周期・状態・被弾の条件）も未対応で、使った行は不正として無視する
+ * - P2 (#836): `順番=A > B > C`（`候補=` の代わりに書く。その行が選ばれるたびに順番どおり巡回し、終端で先頭に戻る。
+ *   選ばれる行が切り替わると位置は新しい行の先頭に戻る。重みは付けられず、抽選の rng は消費しない）/ `予兆=<文言>`（その行が特技を
+ *   使うとき特技の `予兆` の代わりに出す）/ `上限=N`（その行を選べる回数。使い切った行は成立しない扱い）/
+ *   条件 `回数>=N`（その敵の行動回数）・`周期=N` または `周期=N/R`（`acted % N == R`、R 省略は 0）・`使用<特技>>=N`（その行動の使用回数）・
+ *   `状態=毒`（自分の状態異常）・`味方状態=眠り`（生存している味方のいずれかの状態異常）
+ * - カウンター（`反撃:`）・死亡時・被弾の条件は P3 (#837) で、使った行は不正として無視する
  *
  * 乱数の消費（注入された rng を使う。同じ state・同じ rng 列なら必ず同じ結果）:
- * - 採用した行の候補が 2 つ以上ならちょうど 1 回（重みの抽選）。1 つなら消費しない
+ * - 採用した行の候補が 2 つ以上ならちょうど 1 回（重みの抽選）。1 つなら消費しない。`順番=` の行は消費しない
  * - 採用した行の `対象=ランダム` で候補の相手が 2 人以上いればちょうど 1 回（抽選のあと）。1 人なら消費しない
  * - **`行動:` を書かない敵（`state.enemyMemory` が無い戦闘を含む）は rng を消費せず、通常攻撃を返す**
  */
 
 import type { SkillDef } from '../types'
 import type { BattleActorRef, BattleState, SkillExecution } from './battleEngine'
-import type { BattleEntity } from './spellDsl'
-import { hasOwn } from './ownProperty'
+import { STATUS_ALIASES, type BattleEntity } from './spellDsl'
+import { hasOwn, safeAssign } from './ownProperty'
 
 /**
  * 敵ごとの記憶 (#835)。`BattleState.enemyMemory` は `enemies` と同じ index の配列。
@@ -34,6 +39,28 @@ import { hasOwn } from './ownProperty'
 export interface EnemyMemory {
   /** その敵が行動した回数（通常攻撃・特技のどちらも数える。`初手` は acted === 0） */
   acted: number
+  /**
+   * 以下は P2 (#836)。`順番=` `上限=` `使用<>` のいずれかを書いた敵だけが、最初の行動のあとから持つ
+   * （P1 までの敵の記憶は `{ acted }` のまま）。
+   * 直前に選ばれた `行動:` 行の番号（有効な行の通し番号。成立する行が無かったときは -1）。順番の位置のリセット判定に使う
+   */
+  rule?: number
+  /** `rule` の行の `順番=` の次の位置（終端で 0 に戻る） */
+  pos?: number
+  /** 行動ごとの使用回数（キーは特技 id、通常攻撃は 'こうげき'） */
+  used?: Record<string, number>
+  /** 行ごとの使用回数（キーは有効な行の通し番号。`上限=` の判定） */
+  ruleUses?: Record<string, number>
+}
+
+/** 行動を終えたあとに記憶へ書く内容 (#836)。`順番=` `上限=` `使用<>` を使う敵の選択にだけ付く */
+export interface ActionTrack {
+  /** 選ばれた行の番号。成立する行が無ければ -1 */
+  rule: number
+  /** 次に使う `順番=` の位置 */
+  nextPos: number
+  /** 使用回数のキー */
+  key: string
 }
 
 /** `chooseEnemyAction` の結果 */
@@ -42,6 +69,7 @@ export type ChosenAction =
       kind: 'attack'
       /** `対象=ランダム` / `HP最小` で選んだ味方。無ければ従来の狙い方（ターン制は先頭の生存者、ATB は rng） */
       target?: BattleActorRef
+      track?: ActionTrack
     }
   | {
       kind: 'skill'
@@ -51,6 +79,9 @@ export type ChosenAction =
       targetOverride?: string
       /** `対象=ランダム` / `HP最小` で選んだ相手（`相手単体` のとき） */
       target?: BattleActorRef
+      /** 行の `予兆=`（無ければ特技の `予兆`）。使用時に出す文言 */
+      omen?: string
+      track?: ActionTrack
     }
 
 type CompareOp = '<' | '<=' | '>' | '>=' | '='
@@ -61,6 +92,10 @@ type Condition =
   | { kind: 'hp'; op: CompareOp; percent: number }
   | { kind: 'allies'; op: CompareOp; n: number }
   | { kind: 'party'; op: CompareOp; n: number }
+  | { kind: 'acted'; op: CompareOp; n: number }
+  | { kind: 'cycle'; n: number; r: number }
+  | { kind: 'used'; key: string; op: CompareOp; n: number }
+  | { kind: 'status'; who: 'self' | 'party'; name: string }
 
 type TargetSpec = 'random' | 'lowest-hp' | 'all' | 'ally' | 'self'
 
@@ -73,13 +108,18 @@ interface Candidate {
 interface ActionRule {
   conditions: Condition[]
   candidates: Candidate[]
+  /** `順番=`（P2）。あれば candidates は空で、この順に巡回する */
+  sequence?: Candidate[]
+  /** `予兆=`（P2） */
+  omen?: string
+  /** `上限=`（P2） */
+  cap?: number
   target?: TargetSpec
 }
 
 const PLAIN_ATTACK: ChosenAction = { kind: 'attack' }
 
 const KEY_RE = /(?:^|\s)(条件|候補|対象|予兆|上限|順番)=/g
-const LATER_KEYS = new Set(['予兆', '上限', '順番'])
 
 const TARGETS: Record<string, TargetSpec> = {
   ランダム: 'random',
@@ -106,6 +146,12 @@ const HP_RE = new RegExp(`^HP\\s*${OP_RE}\\s*(\\d+(?:\\.\\d+)?)\\s*%$`, 'i')
 const COUNT_RE = (label: string): RegExp => new RegExp(`^${label}\\s*${OP_RE}\\s*(\\d+)$`)
 const ALLIES_RE = COUNT_RE('仲間')
 const PARTY_RE = COUNT_RE('味方')
+const ACTED_RE = COUNT_RE('回数')
+const CYCLE_RE = /^周期\s*=\s*(\d+)(?:\s*\/\s*(\d+))?$/
+const USED_RE = new RegExp(`^使用\\s*<([^<>]+)>\\s*${OP_RE}\\s*(\\d+)$`)
+const SELF_STATUS_RE = /^状態\s*=\s*(\S+)$/
+const PARTY_STATUS_RE = /^味方状態\s*=\s*(\S+)$/
+const ATTACK_KEY = 'こうげき'
 
 function toOp(raw: string): CompareOp {
   return raw === '==' ? '=' : (raw as CompareOp)
@@ -136,6 +182,30 @@ function parseCondition(raw: string): Condition | string {
   if (allies) return { kind: 'allies', op: toOp(allies[1]), n: Number(allies[2]) }
   const party = PARTY_RE.exec(text)
   if (party) return { kind: 'party', op: toOp(party[1]), n: Number(party[2]) }
+  const acted = ACTED_RE.exec(text)
+  if (acted) return { kind: 'acted', op: toOp(acted[1]), n: Number(acted[2]) }
+  const cycle = CYCLE_RE.exec(text)
+  if (cycle) {
+    const n = Number(cycle[1])
+    const r = cycle[2] === undefined ? 0 : Number(cycle[2])
+    if (n < 1) return `周期 '${text}' の N は 1 以上が必要です`
+    if (r >= n) return `周期 '${text}' の余りは N 未満が必要です`
+    return { kind: 'cycle', n, r }
+  }
+  const used = USED_RE.exec(text)
+  if (used) {
+    const name = used[1].trim()
+    return {
+      kind: 'used',
+      key: name === 'attack' ? ATTACK_KEY : name,
+      op: toOp(used[2]),
+      n: Number(used[3]),
+    }
+  }
+  const selfStatus = SELF_STATUS_RE.exec(text)
+  if (selfStatus) return { kind: 'status', who: 'self', name: selfStatus[1] }
+  const partyStatus = PARTY_STATUS_RE.exec(text)
+  if (partyStatus) return { kind: 'status', who: 'party', name: partyStatus[1] }
   return `条件 '${text}' は未対応です`
 }
 
@@ -154,7 +224,7 @@ function parseCandidate(raw: string): Candidate | string {
   if (name === '') return '候補の名前が空です'
   // 名前にスペースがあるのは、未知のキー（例: `墨 ほげ=1`）が候補に連結されたとき。特技 id にスペースは使えない
   if (/\s/.test(name)) return `候補 '${name}' にスペースが含まれています（未知のキーの可能性）`
-  const isAttack = name === 'こうげき' || name === 'attack'
+  const isAttack = name === ATTACK_KEY || name === 'attack'
   return { skillId: isAttack ? null : name, weight }
 }
 
@@ -167,12 +237,11 @@ export function parseActionRule(line: string): ActionRule | string {
     const start = m.index + (m[0].length - m[1].length - 1)
     parts.push({ key: m[1], start, valueStart: m.index + m[0].length })
   }
-  if (parts.length === 0) return 'キー（条件= / 候補= / 対象=）がありません'
+  if (parts.length === 0) return 'キー（条件= / 候補= / 順番= / 対象= など）がありません'
   if (text.slice(0, parts[0].start).trim() !== '') return 'キーの前に余計な文字があります'
   const values = new Map<string, string>()
   for (let i = 0; i < parts.length; i++) {
     const { key, valueStart } = parts[i]
-    if (LATER_KEYS.has(key)) return `${key}= は未対応です（P2 #836 以降）`
     if (values.has(key)) return `${key}= が重複しています`
     const end = i + 1 < parts.length ? parts[i + 1].start : text.length
     values.set(key, text.slice(valueStart, end).trim())
@@ -189,14 +258,38 @@ export function parseActionRule(line: string): ActionRule | string {
   }
 
   const candRaw = values.get('候補')
-  if (candRaw === undefined || candRaw === '') return '候補= がありません'
+  const orderRaw = values.get('順番')
+  if (candRaw !== undefined && orderRaw !== undefined) return '候補= と 順番= は同時に書けません'
   const candidates: Candidate[] = []
-  for (const piece of candRaw.split('|')) {
-    const c = parseCandidate(piece)
-    if (typeof c === 'string') return c
-    candidates.push(c)
+  let sequence: Candidate[] | undefined
+  if (orderRaw !== undefined) {
+    if (orderRaw === '') return '順番= が空です'
+    sequence = []
+    for (const piece of orderRaw.split('>')) {
+      const c = parseCandidate(piece)
+      if (typeof c === 'string') return c
+      if (/[:：]/.test(piece)) return '順番= に重みは付けられません'
+      sequence.push(c)
+    }
+  } else {
+    if (candRaw === undefined || candRaw === '') return '候補= がありません'
+    for (const piece of candRaw.split('|')) {
+      const c = parseCandidate(piece)
+      if (typeof c === 'string') return c
+      candidates.push(c)
+    }
+    if (!(candidates.reduce((sum, c) => sum + c.weight, 0) > 0)) return '重みの合計が 0 です'
   }
-  if (!(candidates.reduce((sum, c) => sum + c.weight, 0) > 0)) return '重みの合計が 0 です'
+
+  const omenRaw = values.get('予兆')
+  if (omenRaw !== undefined && omenRaw === '') return '予兆= が空です'
+  const capRaw = values.get('上限')
+  let cap: number | undefined
+  if (capRaw !== undefined) {
+    if (!/^\d+$/.test(capRaw) || Number(capRaw) < 1)
+      return `上限 '${capRaw}' は 1 以上の整数ではありません`
+    cap = Number(capRaw)
+  }
 
   const targetRaw = values.get('対象')
   let target: TargetSpec | undefined
@@ -204,7 +297,14 @@ export function parseActionRule(line: string): ActionRule | string {
     if (!hasOwn(TARGETS, targetRaw)) return `対象 '${targetRaw}' は未対応です`
     target = TARGETS[targetRaw]
   }
-  return { conditions, candidates, ...(target ? { target } : {}) }
+  return {
+    conditions,
+    candidates,
+    ...(sequence ? { sequence } : {}),
+    ...(omenRaw !== undefined ? { omen: omenRaw } : {}),
+    ...(cap !== undefined ? { cap } : {}),
+    ...(target ? { target } : {}),
+  }
 }
 
 /** `行動:` の行ごとの解釈結果（書いた順。不正な行は warning を出して除く）。同じ配列には 1 度だけ warning を出す */
@@ -236,13 +336,25 @@ export function createEnemyMemory(enemies: readonly BattleEntity[]): EnemyMemory
   return hasEnemyActions(enemies) ? enemies.map(() => ({ acted: 0 })) : undefined
 }
 
+function hasStatus(entity: BattleEntity, name: string): boolean {
+  const status = entity.status
+  if (!status) return false
+  const keys = hasOwn(STATUS_ALIASES, name) ? [name, STATUS_ALIASES[name]] : [name]
+  return keys.some((k) => hasOwn(status, k) && (status[k] ?? 0) > 0)
+}
+
+function readCount(record: Record<string, number> | undefined, key: string): number {
+  return record && hasOwn(record, key) ? record[key] : 0
+}
+
 function conditionHolds(
   cond: Condition,
   state: Readonly<BattleState>,
   enemyIndex: number,
-  acted: number
+  memory: Readonly<EnemyMemory>
 ): boolean {
   const self = state.enemies[enemyIndex]
+  const acted = memory.acted
   switch (cond.kind) {
     case 'always':
       return true
@@ -259,7 +371,45 @@ function conditionHolds(
       )
     case 'party':
       return compare(state.party.filter((p) => p.hp > 0).length, cond.op, cond.n)
+    case 'acted':
+      return compare(acted, cond.op, cond.n)
+    case 'cycle':
+      return acted % cond.n === cond.r
+    case 'used':
+      return compare(readCount(memory.used, cond.key), cond.op, cond.n)
+    case 'status':
+      return cond.who === 'self'
+        ? hasStatus(self, cond.name)
+        : state.party.some((p) => p.hp > 0 && hasStatus(p, cond.name))
   }
+}
+
+/** P2 の記憶（順番の位置・使用回数）を使う行か */
+function needsTracking(rule: ActionRule): boolean {
+  return (
+    rule.sequence !== undefined ||
+    rule.cap !== undefined ||
+    rule.conditions.some((c) => c.kind === 'used')
+  )
+}
+
+/**
+ * 行動を終えた敵の記憶を進める (#836)。`acted` は必ず増やし、`choice.track` があれば順番の位置と使用回数も更新する
+ * （呼び出し側＝エンジンが、通常攻撃・特技のどちらでも行動後に 1 回呼ぶ）
+ */
+export function recordEnemyAction(memory: EnemyMemory, choice: ChosenAction): void {
+  memory.acted++
+  const t = choice.track
+  if (!t) return
+  memory.used = memory.used ?? {}
+  safeAssign(memory.used, t.key, readCount(memory.used, t.key) + 1)
+  memory.ruleUses = memory.ruleUses ?? {}
+  if (t.rule >= 0) {
+    const k = String(t.rule)
+    safeAssign(memory.ruleUses, k, readCount(memory.ruleUses, k) + 1)
+  }
+  memory.rule = t.rule
+  memory.pos = t.nextPos
 }
 
 /** 重みで 1 つ選ぶ。候補が 1 つなら rng を消費しない */
@@ -311,21 +461,45 @@ export function chooseEnemyAction(
   const memory = state.enemyMemory?.[enemyIndex]
   if (!enemy || !memory || !enemy.actions || enemy.actions.length === 0) return PLAIN_ATTACK
   const rules = parseActionRules(enemy.actions)
-  const rule = rules.find((r) =>
-    r.conditions.every((c) => conditionHolds(c, state, enemyIndex, memory.acted))
+  const tracking = rules.some(needsTracking)
+  const ruleIndex = rules.findIndex(
+    (r) =>
+      (r.cap === undefined || readCount(memory.ruleUses, String(rules.indexOf(r))) < r.cap) &&
+      r.conditions.every((c) => conditionHolds(c, state, enemyIndex, memory))
   )
-  if (!rule) return PLAIN_ATTACK
-  const chosen = pickCandidate(rule.candidates, rng)
+  if (ruleIndex < 0) {
+    return tracking
+      ? { kind: 'attack', track: { rule: -1, nextPos: 0, key: ATTACK_KEY } }
+      : PLAIN_ATTACK
+  }
+  const rule = rules[ruleIndex]
+  let chosen: Candidate
+  let nextPos = 0
+  if (rule.sequence) {
+    // 選ばれる行が切り替わったら位置は先頭から（FF5 と同じ）
+    const pos = memory.rule === ruleIndex ? (memory.pos ?? 0) % rule.sequence.length : 0
+    chosen = rule.sequence[pos]
+    nextPos = (pos + 1) % rule.sequence.length
+  } else {
+    chosen = pickCandidate(rule.candidates, rng)
+  }
+  const track: ActionTrack | undefined = tracking
+    ? { rule: ruleIndex, nextPos, key: chosen.skillId ?? ATTACK_KEY }
+    : undefined
   const wantsPicked = rule.target === 'random' || rule.target === 'lowest-hp'
   const target = wantsPicked && rule.target ? pickOpponent(state, rule.target, rng) : undefined
   if (chosen.skillId === null) {
-    return target ? { kind: 'attack', target } : PLAIN_ATTACK
+    return target || track
+      ? { kind: 'attack', ...(target ? { target } : {}), ...(track ? { track } : {}) }
+      : PLAIN_ATTACK
   }
   return {
     kind: 'skill',
     skillId: chosen.skillId,
     ...(rule.target ? { targetOverride: TARGET_OVERRIDE[rule.target] } : {}),
     ...(target ? { target } : {}),
+    ...(rule.omen !== undefined ? { omen: rule.omen } : {}),
+    ...(track ? { track } : {}),
   }
 }
 
@@ -341,6 +515,7 @@ export function toSkillExecutions(
       ...(s.effect !== undefined ? { effect: s.effect } : {}),
       ...(s.builtin !== undefined ? { builtin: s.builtin } : {}),
       ...(s.message !== undefined ? { message: s.message } : {}),
+      ...(s.telegraph !== undefined ? { telegraph: s.telegraph } : {}),
     }
   }
   return out

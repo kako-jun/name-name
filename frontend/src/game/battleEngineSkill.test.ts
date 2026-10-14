@@ -142,12 +142,14 @@ describe('performSkill: 効果・MP・状態 (#834)', () => {
     expect(party.map((p) => p.hp)).toEqual([0, 0])
   })
 
-  it('効果定義がなければログだけ出して成立する', () => {
+  it('効果定義がなければ使用メッセージだけ出して成立する（MISS も警告ログも出さない）', () => {
     const { engine } = setup()
     expect(
       engine.performSkill({ side: 'enemy', index: 0 }, { name: 'にらむ', target: '相手単体' })
     ).toBe(true)
-    expect(engine.getState().log.slice(-1)[0]).toBe('(特技に効果定義なし)')
+    expect(engine.getState().log.slice(-1)[0]).toMatch('にらむ を つかった')
+    expect(engine.getState().log.join('')).not.toContain('効果定義なし')
+    expect(engine.getState().events.slice(-1)[0].hits).toEqual([])
   })
 
   it('使えない: 倒れている・存在しない使い手は何もせず false（ログ・イベントも増えない）', () => {

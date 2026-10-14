@@ -492,3 +492,152 @@ AGI: 2
     expect(eng.getState().enemyMemory).toEqual([{ acted: 1 }])
   })
 })
+
+// ===== P2 (#836): 順番・予兆・上限（エンジン統合） =====
+
+const CHARGE: SkillExecution = {
+  name: 'ためる',
+  target: '自分',
+  message: '{user}は 力を ためている',
+  telegraph: '{user}の からだが ふるえている！',
+}
+const BIG: SkillExecution = { name: '大技', target: '相手全体', effect: 'damage 40..40' }
+const P2_SKILLS = { charge: CHARGE, big: BIG, ink: INK, tent: TENT }
+
+describe('P2: 予兆 → 大技の 2 ターン構成', () => {
+  it('従来ターン制: 溜め（予兆をログと events に出す）→ 大技 → 先頭に戻る', () => {
+    const hero = ent({ id: 'hero', name: 'ゆうしゃ', hp: 900, maxHp: 900 })
+    const foe = ent({
+      id: 'foe',
+      name: 'ボス',
+      hp: 999,
+      maxHp: 999,
+      actions: ['順番=charge > big'],
+    })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: P2_SKILLS })
+    eng.selectAttack()
+    expect(eng.getState().log).toContain('ボスの からだが ふるえている！')
+    expect(hero.hp).toBe(900) // 溜めのターンはダメージなし
+    const ev1 = eng.getState().events.filter((e) => e.actor.side === 'enemy')
+    expect(ev1[0]).toMatchObject({
+      kind: 'skill',
+      label: 'ためる',
+      omen: 'ボスの からだが ふるえている！',
+    })
+    eng.selectAttack()
+    expect(hero.hp).toBe(860) // 大技 40
+    const ev2 = eng.getState().events.filter((e) => e.actor.side === 'enemy')
+    expect(ev2[1].omen).toBeUndefined()
+    eng.selectAttack() // 先頭の溜めに戻る
+    expect(hero.hp).toBe(860)
+    expect(eng.getState().enemyMemory).toEqual([
+      { acted: 3, rule: 0, pos: 1, used: { charge: 2, big: 1 }, ruleUses: { '0': 3 } },
+    ])
+  })
+
+  it('行の 予兆= は特技の予兆より優先する', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({
+      id: 'foe',
+      name: 'ボス',
+      hp: 999,
+      maxHp: 999,
+      actions: ['順番=charge 予兆=ゴゴゴ'],
+    })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: P2_SKILLS })
+    eng.selectAttack()
+    expect(eng.getState().log).toContain('ゴゴゴ')
+    expect(eng.getState().log).not.toContain('ボスの からだが ふるえている！')
+  })
+
+  it('ATB でも同じ順番になる（敵ごとの acted と位置で決まる）', () => {
+    const hero = ent({ id: 'hero', name: 'ゆうしゃ', hp: 900, maxHp: 900, agi: 1 })
+    const foe = ent({
+      id: 'foe',
+      name: 'ボス',
+      hp: 999,
+      maxHp: 999,
+      agi: 20,
+      actions: ['順番=charge > big'],
+    })
+    const eng = new BattleEngine([hero], [foe], {
+      rng: () => 0,
+      skills: P2_SKILLS,
+      atb: { mode: 'active' },
+    })
+    for (let n = 0; n < 40 && (eng.getState().enemyMemory?.[0].acted ?? 0) < 3; n++) eng.tick(100)
+    expect(eng.getState().enemyMemory?.[0].acted).toBeGreaterThanOrEqual(3)
+    const skills = eng
+      .getState()
+      .events.filter((e) => e.actor.side === 'enemy' && e.kind === 'skill')
+      .map((e) => e.label)
+      .slice(0, 3)
+    expect(skills).toEqual(['ためる', '大技', 'ためる'])
+  })
+})
+
+describe('P2: 上限・順番の巡回（回帰を含む）', () => {
+  it('上限=1 の墨は 1 回だけ。あとは次の行（通常攻撃）', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', name: 'タコ', hp: 999, maxHp: 999, actions: ['候補=ink 上限=1'] })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: P2_SKILLS })
+    eng.selectAttack()
+    eng.selectAttack()
+    eng.selectAttack()
+    const kinds = eng
+      .getState()
+      .events.filter((e) => e.actor.side === 'enemy')
+      .map((e) => e.kind)
+    expect(kinds).toEqual(['skill', 'attack', 'attack'])
+  })
+
+  it('順番= を書かない敵（P1 の行動:）は記憶が { acted } のまま、rng の消費も P1 と同じ', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({
+      id: 'foe',
+      hp: 999,
+      maxHp: 999,
+      actions: ['条件=初手 候補=ink', '候補=tent:1 | こうげき:1'],
+    })
+    const c = counting(0.1)
+    const eng = new BattleEngine([hero], [foe], { rng: c.rng, skills: P2_SKILLS })
+    eng.selectAttack()
+    eng.selectAttack()
+    expect(eng.getState().enemyMemory).toEqual([{ acted: 2 }])
+    expect(eng.getState().events.every((e) => e.omen === undefined)).toBe(true)
+    // rng の呼び出し回数を固定する（P1 のときと同じ。P2 の記憶更新は rng を使わない）
+    expect(c.calls()).toBe(3)
+  })
+})
+
+describe('P2: 効果なしの予兆専用特技・特技が見つからない場合', () => {
+  it('効果の無い特技は予兆とメッセージだけを出し、MISS も「効果定義なし」のログも出さない', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', name: 'ボス', hp: 999, maxHp: 999, actions: ['順番=charge'] })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: P2_SKILLS })
+    eng.selectAttack()
+    expect(eng.getState().log.join('\n')).not.toContain('効果定義なし')
+    const ev = eng.getState().events.filter((e) => e.actor.side === 'enemy')
+    expect(ev[0].hits).toEqual([])
+  })
+
+  it('回復量 0 で HP が変わらない自分向けの特技も MISS を出さない', () => {
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', hp: 999, maxHp: 999, actions: ['順番=nap'] })
+    const eng = new BattleEngine([hero], [foe], {
+      rng: () => 0,
+      skills: { nap: { name: 'ねむる', target: '自分', effect: 'heal 0..0' } },
+    })
+    eng.selectAttack()
+    expect(eng.getState().events.filter((e) => e.actor.side === 'enemy')[0].hits).toEqual([])
+  })
+
+  it('特技が見つからず通常攻撃に落ちたとき、使用回数は特技 id でなく こうげき に数える', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hero = ent({ id: 'hero', hp: 900, maxHp: 900 })
+    const foe = ent({ id: 'foe', hp: 999, maxHp: 999, actions: ['順番=missing'] })
+    const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: {} })
+    eng.selectAttack()
+    expect(eng.getState().enemyMemory?.[0].used).toEqual({ こうげき: 1 })
+  })
+})
