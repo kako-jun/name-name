@@ -120,6 +120,9 @@ function EditorScreen({
   // ロード時に getContents() のレスポンスから設定し、PUT 成功時に新しい sha で更新する。
   const shaRef = useRef<string | null>(null)
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
+  // rawMarkdown がどのパスの文書の内容か。下書きキーは currentScriptPath でなくこちらから作る
+  // （タブ切替後、切替先のロード完了までに旧文書を編集しても、切替先のキーに旧文書を書かない #795）。
+  const [rawMarkdownPath, setRawMarkdownPath] = useState<string>(DEFAULT_SCRIPT_PATH)
   // 保存の await 中に編集が進んだかを判定するため、常に最新の内容を指す
   const rawMarkdownRef = useRef('')
   rawMarkdownRef.current = rawMarkdown
@@ -280,11 +283,14 @@ function EditorScreen({
   // rawMarkdown の更新は autosave useEffect 経由で Worker に PUT される。
   // emit が失敗した場合は rawMarkdown と doc の desync を避けるため、doc を元に戻す。
   const handleDocChange = async (newDoc: EventDocument) => {
+    // 編集対象の文書のパスは呼び出し時点で控える（emit の await 中にタブが切り替わっても取り違えない）
+    const editedPath = docPathRef.current ?? currentScriptPathRef.current
     const prev = doc
     setDoc(newDoc)
     try {
       const md = await emitMarkdown(newDoc)
       setRawMarkdown(md)
+      setRawMarkdownPath(editedPath)
     } catch (err) {
       console.error('emitMarkdown failed:', err)
       setDoc(prev)
@@ -400,7 +406,7 @@ function EditorScreen({
     loadingOtherDocsRef.current = new Map()
     setLazyOtherScenes([])
   }, [])
-  // プロジェクト切替でも捨てる（現状は App が key で再マウントするが、念のため）
+  // プロジェクト切替でも捨てる（App が key={projectName} で再マウントするので通常は再マウントで足りる。念のための保険）
   useEffect(() => {
     resetOtherDocsCache()
   }, [api, projectName, resetOtherDocsCache])
@@ -596,6 +602,7 @@ function EditorScreen({
         await parseAndSetDoc(startMarkdown, () => cancelled)
         if (cancelled) return
         setRawMarkdown(startMarkdown)
+        setRawMarkdownPath(currentScriptPath)
         setDocPath(currentScriptPath)
         // 既定パス(script.md)の先行ロード失敗で出た読み込みエラーは、再ロード成功で消す
         setSaveError((prev) => (prev === LOAD_FAILED_MESSAGE ? null : prev))
@@ -623,8 +630,9 @@ function EditorScreen({
     // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
   }, [api, projectName, currentScriptPath, scriptListSettled])
 
-  // プロジェクトが変わったら、開くファイル・一覧・doc の所属を初期状態に戻す（通常は App が
-  // key で再マウントするが、再マウントされなくても前のプロジェクトの状態を引きずらない）。
+  // プロジェクトが変わったら、開くファイル・一覧・doc の所属を初期状態に戻す（App が
+  // key={projectName} で再マウントするので通常は不要。再マウントされなくても前のプロジェクトの
+  // 状態を引きずらないための保険）。
   // 初回マウントでは同じ値の再設定になるだけ。
   const projectRef = useRef(projectName)
   useEffect(() => {
@@ -747,7 +755,7 @@ function EditorScreen({
       clearTimeout(draftSaveTimeoutRef.current)
     }
     pendingDraftRef.current = {
-      key: localStorageKey(projectName, currentScriptPath),
+      key: localStorageKey(projectName, rawMarkdownPath),
       markdown: rawMarkdown,
     }
     draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
@@ -759,7 +767,7 @@ function EditorScreen({
         draftSaveTimeoutRef.current = null
       }
     }
-  }, [rawMarkdown, projectName, loadFailed, flushPendingDraft])
+  }, [rawMarkdown, rawMarkdownPath, projectName, loadFailed, flushPendingDraft])
 
   // タブ（ファイル）切替・プロジェクト切替・アンマウントの直前に、保留中の下書きを即確定する。
   // cleanup は同じ commit の全 effect 本体より先に走るため、initialMarkdownRef がまだ旧文書の値のうちに比較できる。
@@ -779,6 +787,7 @@ function EditorScreen({
     setIsSaving(true)
     setSaveError(null)
     // 保存中はタブ切替を無効にしている（下のタブ UI）ので、PUT の await 中に編集中の文書は変わらない。
+    // プロジェクトも App の key={projectName} 再マウントで変わらない前提（保存中に projectName は不変）。
     const savedPath = currentScriptPath
     try {
       const sha = shaRef.current
@@ -856,6 +865,7 @@ function EditorScreen({
       setLoadFailed(false)
       initialMarkdownRef.current = markdown
       setRawMarkdown(markdown)
+      setRawMarkdownPath(currentScriptPath)
       await parseAndSetDoc(markdown)
       // discard で doc が差し替わるため、選択状態・CanvasEditor 内部 state を完全リセット
       setSelectedEvent(null)
@@ -1365,6 +1375,7 @@ function EditorScreen({
               </button>
               <button
                 onClick={handleDiscard}
+                disabled={isSaving}
                 className={`px-4 py-2 rounded font-medium transition-colors ${
                   isDark
                     ? 'bg-red-600 hover:bg-red-700 text-white'

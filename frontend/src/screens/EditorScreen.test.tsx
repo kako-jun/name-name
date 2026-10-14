@@ -824,4 +824,33 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-draft')
     expect(localStorage.getItem('name-name:editor-draft:p:script.md')).toBeNull()
   })
+
+  it('切替先のロード中に旧文書を編集しても、切替先キーの下書きに旧文書の内容が入らない (#795)', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    let releaseB: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'other.md') {
+        return new Promise((r) => {
+          releaseB = r
+        })
+      }
+      return { content: '# A-body', sha: 'sha' }
+    })
+    localStorage.setItem('name-name:editor-draft:p:other.md', '# B-draft')
+    renderEditor()
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    // 切替先(other.md)のロードが終わる前に、まだ表示されている旧文書(script.md)を編集する
+    editedDoc = makeDoc(['hub', 'S1', 'EDITED'])
+    emitted = '# A-edited'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    // 下書きのデバウンス(1秒)を超えるまで切替先のロードを遅らせる
+    await new Promise((r) => setTimeout(r, 1300))
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-draft')
+    await act(async () => {
+      releaseB({ content: '# B-server', sha: 'shaB' })
+    })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-draft')
+  })
 })
