@@ -17,6 +17,7 @@ import {
   SIDE_COMMAND_TEXT_PADDING,
   SIDE_MAX_SPRITE_SIZE,
   SIDE_PARTY_MAX_HEIGHT,
+  SIDE_PARTY_FRAME_ASPECT,
   SIDE_PADDING,
   SIDE_STAGGER_RATIO,
   SIDE_STATUS_COMPACT_WIDTH,
@@ -282,6 +283,26 @@ describe('computeFormation', () => {
 describe('computeSideBattleLayout', () => {
   const base = { width: 800, height: 450, partyCount: 1, enemyCount: 1 }
 
+  it('#813: 味方1〜3人でも4人のときの枠（位置・大きさ）と一致し、上の枠から順に入る', () => {
+    for (const [w, h] of [
+      [800, 450],
+      [640, 360],
+      [360, 640],
+    ]) {
+      const full = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 2 })
+      for (const n of [1, 2, 3]) {
+        const L = computeSideBattleLayout({ width: w, height: h, partyCount: n, enemyCount: 2 })
+        expect(L.party).toHaveLength(n)
+        for (let i = 0; i < n; i++) {
+          expect(L.party[i].x).toBeCloseTo(full.party[i].x)
+          expect(L.party[i].y).toBeCloseTo(full.party[i].y)
+          expect(L.party[i].size).toBeCloseTo(full.party[i].size)
+          expect(L.party[i].width).toBeCloseTo(full.party[i].width)
+        }
+      }
+    }
+  })
+
   it('800x450・味方1・敵1 は statusCompact=false', () => {
     expect(computeSideBattleLayout(base).statusCompact).toBe(false)
   })
@@ -361,8 +382,12 @@ describe('computeSideBattleLayout', () => {
   it('味方が十分多いと bottom が status 側の必要高さに切り替わり、command と status は同じ高さ', () => {
     const rows = Math.ceil(4 / 2)
     const commandNeeded = rows * SIDE_COMMAND_CELL_HEIGHT
+    // #813: 味方 1〜4 人は 4 枠ぶんの高さで同じ（4 人のときの下パネル）。コマンドだけの高さより高い
     const small = computeSideBattleLayout({ ...base, partyCount: 1 })
-    expect(small.command.h).toBeCloseTo(commandNeeded)
+    const four = computeSideBattleLayout({ ...base, partyCount: 4 })
+    expect(small.command.h).toBeCloseTo(four.command.h)
+    expect(small.command.h).toBeGreaterThan(commandNeeded)
+    expect(small.command.h).toBeCloseTo(small.status.h)
     const big = computeSideBattleLayout({ ...base, partyCount: 6 })
     expect(big.command.h).toBeGreaterThan(commandNeeded)
     expect(big.command.h).toBeCloseTo(big.status.h)
@@ -622,7 +647,11 @@ describe('スイープ不変条件 (7 サイズ x party1-4 x enemy1-6 x grid/cro
       commandLayout: 'cross',
     })
     expect(c.command.h).toBeLessThan(120)
-    expect(c.command.h).toBe(commandRowCount('cross', 4) * SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT)
+    // #813: 下パネルは味方 4 枠ぶんの status 行で決まる（cross の 3 段が下限まで縮んでも窓の高さは status と同じ）
+    expect(c.command.h).toBe(c.status.h)
+    expect(c.command.h / commandRowCount('cross', 4)).toBeGreaterThanOrEqual(
+      SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT
+    )
     expect(c.stage.h).toBeGreaterThan(g.stage.h - 10)
     // 十分大きい画面では縮めない
     const big = computeSideBattleLayout({
@@ -930,8 +959,8 @@ describe('読めない幅のラベルは省く (#736)', () => {
     }
   })
 
-  it('320x240 party1・敵 1 体（1 列・スプライトは小さい）でもラベル幅が広がるのでラベルが残る', () => {
-    const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: 1, enemyCount: 1 })
+  it('320x280 party1・敵 1 体（1 列・スプライトは小さい）でもラベル幅が広がるのでラベルが残る（#813 で下パネルが 4 枠ぶんになり 320x240 から変更）', () => {
+    const L = computeSideBattleLayout({ width: 320, height: 280, partyCount: 1, enemyCount: 1 })
     const [s] = L.enemies
     const expectedW = Math.min(L.stage.w / 2, s.size * SIDE_LABEL_MAX_WIDTH_RATIO)
     expect(s.size).toBeGreaterThan(0)
@@ -957,10 +986,11 @@ describe('spec の例: ラベル幅の上限は一辺の 3 倍 (#736・#760 で�
   // #760: 敵の領域を味方の斜め一列に必要な幅以外すべてにし、敵 1 体は領域いっぱい近く（上限 480）まで大きくなる。
   // 一辺 160px・ラベル 480px だった旧仕様の数値を、新仕様の値（味方人数ごとの敵領域の幅で頭打ち）に更新
   it.each([
-    [1, 480, 1088],
-    [2, 480, 928],
-    [3, 480, 768],
-    [4, 472, 717.4737],
+    // #813: 味方 1〜3 人も 4 人のときと同じ枠（敵領域・下パネル）なので 4 人と同じ値
+    [1, 472, 637.89474],
+    [2, 472, 637.89474],
+    [3, 472, 637.89474],
+    [4, 472, 637.89474],
   ])('1280x720・party%d・敵 1 体: 一辺 %dpx・ラベル幅 %dpx (spec の例)', (p, size, labelW) => {
     const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: p, enemyCount: 1 })
     expect(L.enemies[0].size).toBeCloseTo(size, 3)
@@ -1064,7 +1094,7 @@ describe('縦長の stage は敵を下寄せにする (#760)', () => {
     for (const s of L.enemies) expect(s.y).toBeGreaterThanOrEqual(L.party[0].floor - EPS)
     for (const s of L.enemies) expect(inside(slotRect(s), L.stage)).toBe(true)
   })
-  it('360x640 の仕様値（リテラル）: 敵 1 体（縦横比 1.6）は (16, 281.3) から幅 164・高さ 102.5', () => {
+  it('360x640 の仕様値（リテラル）: 敵 1 体（縦横比 1.6）は (16, 270.985) から幅 164・高さ 102.5', () => {
     const L = computeSideBattleLayout({
       width: 360,
       height: 640,
@@ -1073,7 +1103,7 @@ describe('縦長の stage は敵を下寄せにする (#760)', () => {
       enemyAspects: [1.6],
     })
     expect(L.enemies[0].x).toBeCloseTo(16, 3)
-    expect(L.enemies[0].y).toBeCloseTo(281.3, 1)
+    expect(L.enemies[0].y).toBeCloseTo(270.985, 2)
     expect(L.enemies[0].width).toBeCloseTo(164, 3)
     expect(L.enemies[0].size).toBeCloseTo(102.5, 1)
   })
@@ -1403,15 +1433,15 @@ describe('敵の縦横比の丸め境界 (#760)', () => {
 })
 
 describe('SIDE_ENEMY_MAX_SIZE = 480 の境界 (#760)', () => {
-  // 敵 1・味方 1 のとき stage.h = H - 180（ログ 2 行 56・下パネル 80）、敵の高さ = stage.h - ラベル 32
+  // 敵 1・味方 1 のとき stage.h = H - 216（ログ 2 行 56・下パネル 116 = 味方 4 枠ぶん #813）、敵の高さ = stage.h - ラベル 32
   it.each([
-    [691, 479],
-    [692, 480],
-    [693, 480],
+    [727, 479],
+    [728, 480],
+    [729, 480],
     [3000, 480],
   ])('4000x%d・味方 1・敵 1: 敵の高さ %d（上限 480）', (h, size) => {
     const L = computeSideBattleLayout({ width: 4000, height: h, partyCount: 1, enemyCount: 1 })
-    expect(L.stage.h).toBe(h - 180)
+    expect(L.stage.h).toBe(h - 216)
     expect(L.enemies[0].size).toBeCloseTo(size, 9)
     expect(L.enemies[0].width).toBeCloseTo(size, 9)
   })
@@ -1452,9 +1482,9 @@ describe('縦長判定の境界と下げ幅の上限 (#760)', () => {
     expect(L.enemies[0].y).toBeCloseTo(y, 6)
   })
   it.each([
-    [360, 545, 203.0714286],
-    [400, 585, 220.2142857],
-    [500, 685, 263.0714286],
+    [360, 545, 192.73529],
+    [400, 585, 208.61765],
+    [500, 685, 248.32353],
   ])('%dx%d: 高さ+1（縦長）から敵は下寄せ（y=%f）', (w, h, y) => {
     const L = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 1 })
     expect(L.stage.h).toBe(L.stage.w + 1)
@@ -1463,14 +1493,14 @@ describe('縦長判定の境界と下げ幅の上限 (#760)', () => {
 
   // 下げ幅の上限: 領域の上端は stage.y + stage.h × 0.4 まで。仕様値（リテラル）
   it.each([
-    [360, 640, 1, 300],
-    [360, 640, 2, 302],
-    [360, 640, 3, 295],
-    [320, 568, 1, 261.6],
-    [400, 900, 1, 462],
+    // #813: 味方 1〜3 人は 4 人のときと同じ枠なので同じ y
+    [240, 640, 1, 252.58824],
+    [240, 800, 2, 332.58824],
+    [300, 900, 3, 376.41176],
+    [320, 900, 1, 374.35294],
   ])('%dx%d・味方 %d・敵 1: 上限が効く下寄せで y=%f', (w, h, p, y) => {
     const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: 1 })
-    expect(L.enemies[0].y).toBeCloseTo(y, 6)
+    expect(L.enemies[0].y).toBeCloseTo(y, 5)
     // 敵の領域の上端 = stage.y + 0.4 stage.h を超えて下げない（敵の枠は領域の中央寄せなので上端以上）
     expect(L.enemies[0].y).toBeGreaterThanOrEqual(L.stage.y + L.stage.h * 0.4 - EPS)
   })
@@ -1506,12 +1536,7 @@ describe('縦長判定の境界と下げ幅の上限 (#760)', () => {
   })
 })
 
-describe('組み合わせスイープ: 縦長/横長 × 味方 1〜4 × 敵 1〜4 × 縦横比 × 隊列 × 奥行き (#760)', () => {
-  const partyAspectSets: Array<readonly number[] | undefined> = [
-    undefined,
-    [0.2, 1.5, 0.2, 1.5],
-    [0.4, 0.5, 0.6, 0.45],
-  ]
+describe('組み合わせスイープ: 縦長/横長 × 味方 1〜4 × 敵 1〜4 × 敵の縦横比 × 隊列 × 奥行き (#760)', () => {
   const enemyAspectSets: Array<readonly number[] | undefined> = [
     undefined,
     [3, 0.2, 3, 0.2],
@@ -1537,54 +1562,52 @@ describe('組み合わせスイープ: 縦長/横長 × 味方 1〜4 × 敵 1〜
       let cases = 0
       for (let p = 1; p <= 4; p++)
         for (let e = 1; e <= 4; e++)
-          for (const partyAspects of partyAspectSets)
-            for (const enemyAspects of enemyAspectSets)
-              for (const partyRows of rowSets)
-                for (const depth of depths) {
-                  const L = computeSideBattleLayout({
-                    width: w,
-                    height: h,
-                    partyCount: p,
-                    enemyCount: e,
-                    partyAspects,
-                    enemyAspects,
-                    partyRows,
-                    depth,
-                  })
-                  const tag = `${w}x${h} p${p} e${e} depth=${depth ? 1 : 0}`
-                  const enemyRects = L.enemies.map(slotRect)
-                  const labels = L.enemies.flatMap((s) => (s.label ? [s.label] : []))
-                  const partyRects = L.party.map(slotRect)
-                  for (const r of [...enemyRects, ...labels, ...partyRects]) {
-                    expect(Number.isFinite(r.x + r.y + r.w + r.h), tag).toBe(true)
-                    expect(r.x, tag).toBeGreaterThanOrEqual(-EPS)
-                    expect(r.y, tag).toBeGreaterThanOrEqual(-EPS)
-                    expect(r.w, tag).toBeGreaterThanOrEqual(0)
-                    expect(r.h, tag).toBeGreaterThanOrEqual(0)
-                    expect(inside(r, screen), tag).toBe(true)
-                    expect(inside(r, L.stage), tag).toBe(true)
-                    for (const panel of [L.log, L.command, L.status])
-                      expect(overlaps(r, panel), tag).toBe(false)
-                  }
-                  const nonEmpty = [...enemyRects, ...labels].filter((r) => r.w > EPS && r.h > EPS)
-                  for (let i = 0; i < nonEmpty.length; i++)
-                    for (let j = i + 1; j < nonEmpty.length; j++)
-                      expect(overlaps(nonEmpty[i], nonEmpty[j]), tag).toBe(false)
-                  for (const pr of partyRects.filter((r) => r.w > EPS && r.h > EPS))
-                    for (const o of nonEmpty) expect(overlaps(pr, o), tag).toBe(false)
-                  for (const s of L.enemies) expect(s.size, tag).toBeLessThanOrEqual(480 + EPS)
-                  for (const s of L.party) expect(s.size, tag).toBeLessThanOrEqual(320 + EPS)
-                  for (let i = 0; i + 1 < L.party.length; i++) {
-                    expect(L.party[i + 1].y, tag).toBeGreaterThan(L.party[i].y)
-                    expect(L.party[i + 1].floor, tag).toBeGreaterThan(L.party[i].floor)
-                    // 上の人の顔（上 30%）が隠れない（縮尺後の size でも y は縮まないので成り立つ）
-                    expect(L.party[i + 1].y, tag).toBeGreaterThanOrEqual(
-                      L.party[i].y + L.party[i].size * 0.3 - EPS
-                    )
-                  }
-                  cases++
+          for (const enemyAspects of enemyAspectSets)
+            for (const partyRows of rowSets)
+              for (const depth of depths) {
+                const L = computeSideBattleLayout({
+                  width: w,
+                  height: h,
+                  partyCount: p,
+                  enemyCount: e,
+                  enemyAspects,
+                  partyRows,
+                  depth,
+                })
+                const tag = `${w}x${h} p${p} e${e} depth=${depth ? 1 : 0}`
+                const enemyRects = L.enemies.map(slotRect)
+                const labels = L.enemies.flatMap((s) => (s.label ? [s.label] : []))
+                const partyRects = L.party.map(slotRect)
+                for (const r of [...enemyRects, ...labels, ...partyRects]) {
+                  expect(Number.isFinite(r.x + r.y + r.w + r.h), tag).toBe(true)
+                  expect(r.x, tag).toBeGreaterThanOrEqual(-EPS)
+                  expect(r.y, tag).toBeGreaterThanOrEqual(-EPS)
+                  expect(r.w, tag).toBeGreaterThanOrEqual(0)
+                  expect(r.h, tag).toBeGreaterThanOrEqual(0)
+                  expect(inside(r, screen), tag).toBe(true)
+                  expect(inside(r, L.stage), tag).toBe(true)
+                  for (const panel of [L.log, L.command, L.status])
+                    expect(overlaps(r, panel), tag).toBe(false)
                 }
-      expect(cases).toBe(4 * 4 * 3 * 3 * 3 * 3)
+                const nonEmpty = [...enemyRects, ...labels].filter((r) => r.w > EPS && r.h > EPS)
+                for (let i = 0; i < nonEmpty.length; i++)
+                  for (let j = i + 1; j < nonEmpty.length; j++)
+                    expect(overlaps(nonEmpty[i], nonEmpty[j]), tag).toBe(false)
+                for (const pr of partyRects.filter((r) => r.w > EPS && r.h > EPS))
+                  for (const o of nonEmpty) expect(overlaps(pr, o), tag).toBe(false)
+                for (const s of L.enemies) expect(s.size, tag).toBeLessThanOrEqual(480 + EPS)
+                for (const s of L.party) expect(s.size, tag).toBeLessThanOrEqual(320 + EPS)
+                for (let i = 0; i + 1 < L.party.length; i++) {
+                  expect(L.party[i + 1].y, tag).toBeGreaterThan(L.party[i].y)
+                  expect(L.party[i + 1].floor, tag).toBeGreaterThan(L.party[i].floor)
+                  // 上の人の顔（上 30%）が隠れない（縮尺後の size でも y は縮まないので成り立つ）
+                  expect(L.party[i + 1].y, tag).toBeGreaterThanOrEqual(
+                    L.party[i].y + L.party[i].size * 0.3 - EPS
+                  )
+                }
+                cases++
+              }
+      expect(cases).toBe(4 * 4 * 3 * 3 * 3)
     },
     // 全体実行時の並列負荷で既定の 5s を超えうるため明示（単体では 0.5〜0.6s）
     20_000
@@ -1598,12 +1621,6 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
     [1280, 720],
     [640, 360],
   ]
-  const aspectSets: (number[] | undefined)[] = [
-    undefined,
-    [1.0, 0.5, 0.5, 0.5],
-    [1.2, 0.4, 0.4, 0.4],
-    [0.3, 1.0, 0.6, 0.45],
-  ]
   const rowSets: (('front' | 'back')[] | undefined)[] = [
     undefined,
     ['back', 'front', 'front', 'front'],
@@ -1613,35 +1630,35 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
   it('L.party の高さ = 右半分だけで求めた配置の高さ（全組み合わせ）', () => {
     for (const [w, h] of sizes)
       for (const n of [1, 2, 3, 4])
-        for (const aspects of aspectSets)
-          for (const rows of rowSets) {
-            const L = computeSideBattleLayout({
-              width: w,
-              height: h,
-              partyCount: n,
-              enemyCount: 2,
-              partyAspects: aspects?.slice(0, n),
-              partyRows: rows?.slice(0, n),
-            })
-            const half: Rect = {
-              x: L.stage.x + L.stage.w / 2,
-              y: L.stage.y,
-              w: L.stage.w / 2,
-              h: L.stage.h,
-            }
-            const ref = computeFormation(
-              half,
-              n,
-              'party',
-              false,
-              rows?.slice(0, n),
-              aspects?.slice(0, n)
-            )
-            for (const s of L.party) expect(s.size).toBeCloseTo(ref[0].size, 9)
-            for (const s of L.party) expect(inside(slotRect(s), L.stage)).toBe(true)
+        for (const rows of rowSets) {
+          const L = computeSideBattleLayout({
+            width: w,
+            height: h,
+            partyCount: n,
+            enemyCount: 2,
+            partyRows: rows?.slice(0, n),
+          })
+          const half: Rect = {
+            x: L.stage.x + L.stage.w / 2,
+            y: L.stage.y,
+            w: L.stage.w / 2,
+            h: L.stage.h,
           }
+          // #813: 枠は固定の基準縦横比で 4 枠ぶん決まる（空き枠の隊列は前衛・縦横比は誰にも依らない）
+          const padded = Array(Math.max(4, n)).fill(SIDE_PARTY_FRAME_ASPECT)
+          const ref = computeFormation(
+            half,
+            Math.max(4, n),
+            'party',
+            false,
+            rows?.slice(0, n),
+            padded
+          )
+          for (const s of L.party) expect(s.size).toBeCloseTo(ref[0].size, 9)
+          for (const s of L.party) expect(inside(slotRect(s), L.stage)).toBe(true)
+        }
   })
-  it('実測の退行例: 360x640・先頭後衛 / 縦横比 [1,0.5,0.5,0.5] / 800x450 [1.2,0.4,0.4,0.4] で縮まない（リテラル）', () => {
+  it('実測の退行例: 360x640・先頭後衛で縮まない（リテラル）', () => {
     const a = computeSideBattleLayout({
       width: 360,
       height: 640,
@@ -1649,23 +1666,7 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
       enemyCount: 1,
       partyRows: ['back', 'front', 'front', 'front'],
     })
-    expect(a.party[0].size).toBeCloseTo(99.4, 1)
-    const b = computeSideBattleLayout({
-      width: 360,
-      height: 640,
-      partyCount: 4,
-      enemyCount: 1,
-      partyAspects: [1, 0.5, 0.5, 0.5],
-    })
-    expect(b.party[0].size).toBeCloseTo(86.3, 1)
-    const c = computeSideBattleLayout({
-      width: 800,
-      height: 450,
-      partyCount: 4,
-      enemyCount: 1,
-      partyAspects: [1.2, 0.4, 0.4, 0.4],
-    })
-    expect(c.party[0].size).toBeCloseTo(123.2, 1)
+    expect(a.party[0].size).toBeCloseTo(78.095, 2)
   })
 })
 
@@ -1908,5 +1909,55 @@ describe('computeStatusColumns: 見出しと数字のすき間・狭いときの
     const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
     const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
     expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)
+  })
+})
+
+describe('味方の枠は人数によらず4人のときと同じ (#813・縦横比・奥行き・小画面)', () => {
+  const SIZES: [number, number][] = [
+    [360, 640],
+    [800, 450],
+    [1280, 720],
+  ]
+
+  it('N1: 奥行き有効時、1 人のときの縮尺・位置が 4 人のときの party[0] と一致する', () => {
+    const depth = { horizon: 0.3, perspective: 0.8 }
+    for (const [w, h] of SIZES) {
+      const full = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 2,
+        depth,
+      })
+      const one = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 1,
+        enemyCount: 2,
+        depth,
+      })
+      expect(one.depthActive).toBe(true)
+      expect(one.party[0].scale).toBeCloseTo(full.party[0].scale, 9)
+      expect(one.party[0].x).toBeCloseTo(full.party[0].x, 9)
+      expect(one.party[0].y).toBeCloseTo(full.party[0].y, 9)
+    }
+  })
+
+  it('S2: 320x240・味方 1 人はステージ高 24px に潰れ、敵ラベルは省かれスプライトは残る（仕様）', () => {
+    const L = computeSideBattleLayout({ width: 320, height: 240, partyCount: 1, enemyCount: 1 })
+    expect(L.stage.h).toBe(24)
+    expect(L.enemies).toHaveLength(1)
+    expect(L.enemies[0].size).toBeGreaterThan(0)
+    expect(L.enemies[0].label).toBeUndefined()
+  })
+
+  it('N2: 小さい縦長 (240x640) でも下寄せの上限 (stage.y + stage.h × 0.4) が効き、味方 1 人と 4 人で同じ位置', () => {
+    const four = computeSideBattleLayout({ width: 240, height: 640, partyCount: 4, enemyCount: 1 })
+    const one = computeSideBattleLayout({ width: 240, height: 640, partyCount: 1, enemyCount: 1 })
+    expect(four.stage.h).toBeGreaterThan(four.stage.w)
+    expect(four.enemies[0].y).toBeCloseTo(252.58824, 5)
+    expect(one.enemies[0].y).toBeCloseTo(four.enemies[0].y, 9)
+    // 上限を超える下げ幅は許されない: 敵の上端は上限より下がりすぎない（領域の上端 = 上限）
+    expect(four.enemies[0].y).toBeGreaterThanOrEqual(four.stage.y + four.stage.h * 0.4)
   })
 })

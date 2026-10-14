@@ -248,7 +248,7 @@ describe('sceneId が null のセーブとロード (#768)', () => {
     expect(internals(r).jumpState).toBe('pending')
   })
 
-  it('複数シーンのエントリで restart（はじめから）した後にセーブ→ロードすると、同じ位置に戻る (M2)', async () => {
+  it('複数シーンのエントリで startFrom({})（はじめから）した後にセーブ→ロードすると、同じ位置に戻る (M2)', async () => {
     const S1 = scene('s1', [narration('a0'), narration('a1')])
     const S2 = scene('s2', [narration('b0'), narration('b1'), narration('b2')])
     const flat = [...S1.events, ...S2.events]
@@ -259,7 +259,7 @@ describe('sceneId が null のセーブとロード (#768)', () => {
     r.advance()
     r.advance()
     r.advance()
-    r.restart()
+    void r.startFrom({})
     expect(r.getCurrentSceneId()).toBeNull()
     r.advance()
     r.advance()

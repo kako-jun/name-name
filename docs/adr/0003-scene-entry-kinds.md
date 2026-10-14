@@ -134,7 +134,7 @@ type SceneEntryResult =
 |---|---|---|
 | `jumpToScene(sceneId): void` | `jumpToScene(sceneId): Promise<SceneEntryResult>`。**進行専用**にする | ChoiceOverlay のコールバック・`armJump`・`playScript` の choice。`VideoExporter` からは呼ばない |
 | `startFrom(opts): void` | `startFrom(opts): Promise<SceneEntryResult>`。**新規開始専用**にする。`sceneId` を省略するとエントリ文書の線形ストリームから始める。`confinedSceneIds` を受け取る | `NovelPlayer` の初期入場、`VideoExporter`、`PlayerScreen` の「はじめから」 |
-| `restart(): void` | 廃止。`startFrom({})` に置き換える | `PlayerScreen` の `onNewGame`/`onContinue`（セーブなし時）。`window.__renderer` のダックタイプをやめ、`NovelPlayerHandle` の型付きメソッド経由にする |
+| `restart(): void` | 廃止（PR5 で実施）。`startFrom({})` に置き換える | `PlayerScreen` の `onNewGame`/`onContinue`（セーブなし時）。`window.__renderer` のダックタイプをやめ、`NovelPlayerHandle` の型付きメソッド経由にする |
 | `setEvents(events, { skipAutoAdvance })` | `setEvents(events)` は、文書を読み込んでから `startFrom({})` する。開始しない読み込み用に `loadEvents(events)` を新設する | `NovelPlayer` のマウントでは `loadEvents` を使う。events 変化 effect（エディタのライブ再パース）は `setEvents` のまま。ただし初回（マウント時）は実行せず、`rendererReady` の後の変化にだけ反応する |
 | `setScenes(scenes, opts)` | 索引と `scenes[0]` を読み込んでから `startFrom({})`。開始しない読み込みとして `loadScenes(scenes)` を新設する | `setEvents` と同じ |
 | `pendingAutoAdvance` / `resumeAutoAdvanceIfPending()` | 廃止。開始しない読み込みと明示的な入場に分けたので不要になる | `NovelPlayer` のフォールバック |
@@ -342,10 +342,10 @@ PR3 の実装で、上の記述から次のとおり変えた。挙動の方針�
 
 動画書き出しの範囲指定（開始 a・終了 c）が、線形に連結したシーンで a の末尾で終わっていた。エントリ文書は「シーンの間に `SceneTransition` を挟んで flatten した線形ストリーム」で再生するのに、新規開始が対象シーンの events だけをストリームにしていたため。
 
-- **新規開始の対象がエントリの線形ストリーム上のシーンなら、最後のシーンも含めてストリーム全体をそのシーン先頭から流す。** `startScene(X, X.events)` ではなく、エントリの元イベント列を展開後のシーン先頭位置（`startIndex`）から開始する。文脈を捨てる契約（§2: BGM・背景・立ち絵を持ち越さない、flags の置換、confinement の置き換え）は変えない。シーン冒頭の演出は先頭からの開始と同じく最初の本文まで実行する。従来どおりなのは、エントリ文書の外のシーン、`position` 付きの新規開始（シーン内の位置の意味）、エントリ自身が対象の場合（`sceneId` を省略した `'entry'`）だけ。開始位置は新規開始の flags で `[条件:]` を展開して求める
+- **線形ストリームを流す新規開始は、動画書き出しが明示的に選ぶオプション（`startFrom({ linear: true })`、既定 false。#817）。** 対象がエントリの線形ストリーム上のシーンなら、最後のシーンも含めてストリーム全体をそのシーン先頭から流す。`startScene(X, X.events)` ではなく、エントリの元イベント列を展開後のシーン先頭位置（`startIndex`）から開始する。文脈を捨てる契約（§2: BGM・背景・立ち絵を持ち越さない、flags の置換、confinement の置き換え）は変えない。シーン冒頭の演出は先頭からの開始と同じく最初の本文まで実行する。`linear` を渡さない新規開始（`?scene=`・`?debug_scene=`・`startFrom({ sceneId })` の既定）は、#777 より前と同じく指定シーンの events だけを流して末尾で終劇する。`linear: true` でも従来どおりなのは、エントリ文書の外のシーン、`position` 付きの新規開始（シーン内の位置の意味）、エントリ自身が対象の場合（`sceneId` を省略した `'entry'`）だけ。開始位置は新規開始の flags で `[条件:]` を展開して求める。当初（#777）は `linear` を持たず常に流していたため、エントリ内のシーンを指す `?scene=` 埋め込みが指定シーンの末尾で終劇せず `story-ended` が親ページに届かなくなった。それを #817 で是正した
 - **シーン境界の `SceneTransition` を通過したら `onSceneChange` を発火する。** 作者の `[場面転換]` も同じ文字列イベントなので、種別では区別できない。エントリの元イベント列の先頭に照合できるシーンを `allScenes` から見つけ、以降は `allScenes` 上の次のシーンを順に、同一オブジェクト参照で照合して区間に分解する（`findLinearSegments`。エントリ文書のシーンは `allScenes` 上で連続・文書順。先頭の候補が複数あれば一番長く続く連鎖を採る。events が空のシーンは長さ0の区間）。現在の flags で展開した境界の位置（`[条件:]` で長さが変わる）と一致するものだけを境界とする。パーサ・型は変えない。通知は本編ストリームの処理（`processUntilNextTextEvent`）だけで行い、intermission のタブローの `SceneTransition` では通知しない
 - **`currentSceneId`（ストリームの持ち主）は変えない。** セーブ・既読・履歴はストリームの持ち主と eventIndex の組で意味を持つ。線形ストリーム再生中の持ち主はエントリのままなので、セーブは従来どおり sceneId = エントリ（`loadEvents` なら null）+ eventIndex で、`restoreEntryStream` が復元できる。「いま再生位置があるシーン」は `getPlayheadSceneId()` が eventIndex から導出し（派生値として持たない）、`getCurrentSceneId()` はストリームの持ち主のまま。セーブ一覧のタイトル・クイックセーブのタイトル・`getDebugState().sceneId` は再生位置のシーンを使う（セーブデータの `sceneId` は持ち主のまま）
-- **`?scene=` 埋め込みは挙動を変えない。** confinement が付くのはエントリ以外のファイルのシーンを指すときだけなので、線形連結の対象外で、そのシーンの末尾で終劇になる（従来どおり）。エントリのシーンを指す `?scene=` は confinement なしで後続へ流れる。`?debug_scene=` も後続へ流れる。閉じ込め外のシーン境界に入ったら `endStory` で終劇にする処理は、防御として残す
+- **`?scene=` / `?debug_scene=` は挙動を変えない（`linear` を渡さない）。** エントリ内のシーンを指すときも、他のファイルのシーンを指すときも、指定シーンの末尾で終劇する（`story-ended` が親ページに届く）。閉じ込め外のシーン境界に入ったら `endStory` で終劇にする処理（線形ストリーム再生中の防御）は、`linear: true` の新規開始でも効くよう残す
 - **Flag による再展開は、常に全体を現在の flags で展開し直し、eventIndex を決定的に写像する。** 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できなければならない（Flag 処理後の再展開だけでなく、`applyState` が flags を戻す goBack・seekTo も、flags を戻したあとに全体を展開し直して成り立たせる。セーブは eventIndex + 最新の flags だけを持つので、展開が flags の履歴に依存すると、ロードで別の位置になる。ADR 0002 の完全シリアライズ）。現在の Flag が新しい列に残るならその位置。Flag を囲む `[条件:]` が偽になって消えたら、元イベント列上で次に残っているイベント（`[条件:]` の後ろ、なければ外側の後続）の位置へ進む（`countSurvivingBefore`）。前にある `[条件:]` の展開が変わっても位置はずれず、線形ストリームのシーン境界の位置は都度の全体展開から求める。**自己否定ブロック**（`[条件: x]` の中で `x` を偽にする）の残りは、GUI 版では消える。TUI はシーン構築時に評価するので残りを流す。ブロック入場時評価による決定的な実現は #799 で扱う
 - **既読は再生位置のシーンに付ける。** `markCurrentSceneRead` は `getPlayheadSceneId()` を使い、線形のシーン境界を越えるとき抜けたシーンにも既読を付ける（選択肢・Jump に到達しない通常再生で従来欠けていた既読も付く）
 - **autosave への影響。** `onSceneChange` は自動セーブの配線にも使われるので、線形ストリームのシーン境界でもシーン入場の自動セーブが1回走る（§5 の「新しいシーンの最初の本文で1回保存」と同じ扱い）
@@ -358,3 +358,16 @@ PR3 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - [`architecture.md` のシーン入場経路の網羅表](../architecture.md#シーン入場経路の網羅表734)
 - [ADR 0002: 決定論的状態管理とデバッグ可能性](./0002-deterministic-state-and-debuggability.md)（§3 の `startFrom` の契約を本 ADR が置き換える）
 - [`docs/spec/markdown-v0.1.md`](../spec/markdown-v0.1.md) の「シーン遷移時の BGM（#724）」「ジャンプ（#725）」
+
+## PR5 実装時の差分（2026-10-14）
+
+PR5 の実装で、上の記述から次のとおり変えた。挙動の方針は変えていない。不整合10・11 は解消した。
+
+- **`NovelPlayerHandle` に公開したもの。** `ensureAudioContext()`・`setDocKey(docKey)`・`hasQuickSave()`・`clearQuickSave()`・`startFrom(opts?)`。`PlayerScreen` の「はじめから」「つづきから」は、`window.__renderer` のダックタイプをやめてこのハンドルを呼ぶ。ハンドルは renderer の薄い写しで、分岐（`hasQuickSave()` の真偽で `startFrom({})` を呼ぶか）は `PlayerScreen` に残した。renderer が未生成のときは no-op、`hasQuickSave()` は偽、`startFrom` は `failed`（`not-found`）を返す。`window.__renderer` への代入はデバッグ用に残したが、本番のロジックは読まない。`audioManager` は private なので、`NovelRenderer.ensureAudioContext()` を公開メソッドとして足した
+- **`restart()` を廃止した。** `startFrom({})` に置き換えた。バイパス・ラッパーは残していない。`entryRawEvents` が空（エントリ文書が未読み込み）のときの早期 return は無くなった。新規開始は空の文書も新規開始する（flags をクリアし `currentSceneId` は null になる）
+- **`setEvents(events)` / `setScenes(scenes)` は `Promise<SceneEntryResult>` を返す。** 「`loadEvents` / `loadScenes` + `startFrom({})`」で、エントリの新規開始は同期で適用される（Promise は既に `entered` で解決済み）。呼び出し元（`NovelPlayer` の events 変化 effect）は結果を待たない。`setScenes([])` は `setEvents([])` と同じく空の文書として新規開始し（`loadScenes([])` が `entryRawEvents` / `entrySceneId` を空にする）、`entered` を返す。旧文書がエントリに残り、次の `startFrom({})` で再生されるのを避けるため
+- **target `'entry'` の `currentSceneId` が揃った。** `loadScenes` / `setScenes` は `scenes[0].id`、`loadEvents` / `setEvents` は null。`setEvents` が旧 `currentSceneId` を残さなくなった
+- **`onSceneChange` は scenes 経路（`loadScenes` / `setScenes`）の新規開始でだけ発火する。** `loadEvents` 経路（`PlayerScreen` の `events` + `jumpSceneIndex`）は `entrySceneId` が null で、線形ストリームは発火 ID を持たないので発火しない。したがって `PlayerScreen` の「はじめから」の直後には自動セーブは走らず、最初のシーン境界・ジャンプで走る。旧 `restart()` が発火しなかった点は、この経路では変わらない。`PlayerScreen` は引き続き `startFrom({})` の前に `clearQuickSave()` を呼ぶ（自動セーブが走るまでの間にリロードされても旧セーブが復活しないようにするため）
+- **DEV 警告（背景なしの開始シーン）は target `'entry'` では出さない。** `setScenes` が `scenes[0].id` を持って新規開始するようになったため。エディタのライブ再パースで毎回出てしまう
+- **`consecutiveJumps`** は新規開始（`startFrom` の全経路、`setEvents`、`setScenes`）でリセットする（不整合11）
+

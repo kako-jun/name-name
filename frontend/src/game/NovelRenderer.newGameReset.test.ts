@@ -3,10 +3,10 @@
  *
  * GUI 版の「はじめから」（`PlayerScreen.onNewGame`）は #578 の自動クイックロードが復元した
  * 旧セッションの flags/currentSceneId/クイックセーブを完全に切り離す必要がある。
- * - `restart()` は `setScenes()` と対称に `gameState.clear()` / `currentSceneId` を
- *   `allScenes[0]`（エントリ doc 先頭）にリセットするようになった。
- * - `clearQuickSave()` は `restart()` がシーン切り替え検知（`onSceneChangeCallback`）を
- *   経由しないため自動上書きされない旧クイックセーブを、呼び出し側が明示的に消去する新設メソッド。
+ * - `startFrom({})`（旧 `restart()`。#734 PR5 で廃止）は flags を置換し、`currentSceneId` を
+ *   エントリ doc 先頭（`entrySceneId`）に揃える。
+ * - `clearQuickSave()` は、新規開始の自動セーブが最初の本文の表示まで行われないため、その間に
+ *   リロードされても復活してしまう旧クイックセーブを、呼び出し側が明示的に消去するメソッド。
  *
  * `NovelRenderer.confinement.test.ts` / `NovelRenderer.intermission.test.ts` と同じ最小構成
  * （`new NovelRenderer()` → `setScenes(...)`）で行い、PixiJS 実描画は対象外
@@ -84,61 +84,77 @@ function narrationTexts(events: Event[]): string[] {
     .map((e) => e.Narration.text[0])
 }
 
-describe('NovelRenderer.restart() の gameState/currentSceneId リセット (#637)', () => {
+describe('NovelRenderer.startFrom({}) の gameState/currentSceneId リセット (#637)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('1: flags を設定した状態で restart() を呼ぶと gameState の flags が空になる（正常系）', () => {
+  it('1: flags を設定した状態で startFrom({}) を呼ぶと gameState の flags が空になる（正常系）', () => {
     const r = makeRenderer(SCENES)
     internals(r).gameState.setFlag('visited', { Bool: true })
     expect(r.getSnapshot().flags).toEqual({ visited: { Bool: true } })
 
-    r.restart()
+    void r.startFrom({})
 
     expect(r.getSnapshot().flags).toEqual({})
   })
 
-  it('2: 複数シーンで2番目以降のシーンに遷移後 restart() すると currentSceneId が allScenes[0].id（entry 先頭）に戻る（境界=1/+1）', () => {
+  it('2: 複数シーンで2番目以降のシーンに遷移後 startFrom({}) すると currentSceneId が allScenes[0].id（entry 先頭）に戻る（境界=1/+1）', () => {
     const r = makeRenderer(SCENES)
     r.jumpToScene('branch')
     expect(r.getCurrentSceneId()).toBe('branch')
 
-    r.restart()
+    void r.startFrom({})
 
     expect(r.getCurrentSceneId()).toBe('entry')
     expect(r.getCurrentSceneId()).toBe(r.getAllSceneIds()[0])
   })
 
-  it('3: allScenes が空の状態で restart() しても currentSceneId は entrySceneId（setScenes のエントリ）に戻る（境界-1・防御 #768）', () => {
+  it('3: allScenes が空の状態で startFrom({}) しても currentSceneId は entrySceneId（setScenes のエントリ）に戻る（境界-1・防御 #768）', () => {
     const r = makeRenderer(SCENES)
     r.jumpToScene('branch') // currentSceneId='branch' / rawEvents は空でない状態を作る
     r.setJumpSceneIndex([]) // ジャンプ索引（allScenes）だけを空にする
 
-    r.restart()
+    void r.startFrom({})
 
     expect(r.getCurrentSceneId()).toBe(SCENES[0].id)
   })
 
-  it('4: rawEvents が空の状態（未初期化 renderer）で restart() を呼んでも例外にならず gameState/currentSceneId は変化しない（早期 return）', () => {
-    const r = new NovelRenderer() // setScenes/setEvents を呼ばない = rawEvents は既定の空配列
+  it('4: エントリ文書が未読み込み（未初期化 renderer）でも startFrom({}) は例外にならず、空の文書からの新規開始として flags と currentSceneId をリセットする (#734 PR5)', async () => {
+    const r = new NovelRenderer() // setScenes/setEvents を呼ばない = entryRawEvents は既定の空配列
     internals(r).gameState.setFlag('pristine', { Bool: true })
     internals(r).currentSceneId = 'untouched-scene'
 
-    expect(() => r.restart()).not.toThrow()
+    await expect(r.startFrom({})).resolves.toEqual({ status: 'entered', sceneId: null })
 
-    expect(r.getSnapshot().flags).toEqual({ pristine: { Bool: true } })
-    expect(r.getCurrentSceneId()).toBe('untouched-scene')
+    expect(r.getSnapshot().flags).toEqual({})
+    expect(r.getCurrentSceneId()).toBeNull()
   })
 
-  it('5: restart() は onSceneChangeCallback を発火しない（#578 自動 quickSave 非発火の設計を固定化する回帰）', () => {
+  it('5: startFrom({}) は新規開始として onSceneChangeCallback をエントリのシーンIDで1回発火する（ADR 0003 §2。旧 restart() は発火しなかった）', () => {
     const r = makeRenderer(SCENES)
     const cb = vi.fn()
     r.setOnSceneChange(cb) // setScenes() 内での初回発火より後に付け替えるので、この時点では未発火
 
-    r.restart()
+    void r.startFrom({})
+
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(cb).toHaveBeenCalledWith('entry')
+  })
+})
+
+describe('「はじめから」の onSceneChange は文書の供給経路で異なる (#734 PR5)', () => {
+  it('5b: loadEvents 構成（PlayerScreen の events + jumpSceneIndex）では startFrom({}) は onSceneChange を発火しない', () => {
+    const r = new NovelRenderer()
+    r.loadEvents([narration('start')])
+    r.setJumpSceneIndex(SCENES)
+    const cb = vi.fn()
+    r.setOnSceneChange(cb)
+
+    void r.startFrom({})
 
     expect(cb).not.toHaveBeenCalled()
+    expect(r.getCurrentSceneId()).toBeNull()
   })
 })
 
@@ -173,7 +189,7 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
   })
 
   // 14: 本丸。旧セッションでフラグを立てたまま quickSave された状態から「はじめから」相当
-  // （clearQuickSave() → restart()、PlayerScreen.onNewGame と同じ呼び出し順）を実行すると、
+  // （clearQuickSave() → startFrom({})、PlayerScreen.onNewGame と同じ呼び出し順）を実行すると、
   // 以後 quickLoad() は旧データを復元せず、フラグもクリアされ、events も entry シーン
   // （entryRawEvents）まで巻き戻ることを確認する（#662 修正後の期待挙動）。
   it('14: milestone フラグを立てて route まで進行→はじめから相当実行後、quickLoad() は復元せず events は entry シーンまで巻き戻る（本丸）', async () => {
@@ -190,32 +206,32 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
     expect(r.quickSave()).toBe(true)
     expect(r.hasQuickSave()).toBe(true)
 
-    // 「はじめから」相当: PlayerScreen.onNewGame と同じ順序（clearQuickSave() → restart()）で呼ぶ
+    // 「はじめから」相当: PlayerScreen.onNewGame と同じ順序（clearQuickSave() → startFrom({})）で呼ぶ
     r.clearQuickSave()
-    r.restart()
+    void r.startFrom({})
 
     // 旧クイックセーブはもう復元されない
     expect(await r.quickLoad()).toBeNull()
     // フラグもクリアされている
     expect(r.getSnapshot().flags).toEqual({})
-    // #662: restart() は rawEvents（branch まで進行した直前ルートの内容）ではなく
+    // #662: startFrom({}) は rawEvents（branch まで進行した直前ルートの内容）ではなく
     // entryRawEvents（setScenes() 時点の entry シーン）を再生する。branch の
     // 'flagged-content'/'base-content' には戻らず、entry の 'start' になる。
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
   })
 
   // 15: #637 本体の症状そのものの再現テスト。一度もシーン遷移していない状態（entry のまま）でも
-  // hasQuickSave() が false のままであることを確認する。restart() 単体は onSceneChangeCallback を
+  // hasQuickSave() が false のままであることを確認する。startFrom({}) 単体は onSceneChangeCallback を
   // 発火しないため自動クイックセーブに頼れない（設計エージェントが確認した重要な事実）。
   // clearQuickSave() を明示していなければここは true のまま（旧クイックセーブ復活）になっていた。
-  it('15: 「はじめから」操作（clearQuickSave()+restart()）直後、一度もシーン遷移していなくても hasQuickSave() は false のまま（#637本体症状の再現・最重要）', () => {
+  it('15: 「はじめから」操作（clearQuickSave()+startFrom({})）直後、一度もシーン遷移していなくても hasQuickSave() は false のまま（#637本体症状の再現・最重要）', () => {
     const r = makeRenderer(SCENES) // entry のまま
     r.setDocKey('doc-637-15')
     expect(r.quickSave()).toBe(true) // 旧セッションのクイックセーブが存在する状態を作る
     expect(r.hasQuickSave()).toBe(true)
 
     r.clearQuickSave()
-    r.restart()
+    void r.startFrom({})
 
     // シーン遷移は一切していない（entry のまま）。それでも旧クイックセーブは復活しない。
     expect(r.hasQuickSave()).toBe(false)
@@ -223,16 +239,16 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
   })
 })
 
-describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoad 後も直前ルートに引きずられない', () => {
+describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quickLoad 後も直前ルートに引きずられない', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
   // 16 (T3・最重要): quickLoad() を実際に呼んで rawEvents が route の内容に上書きされた
-  // 状態から restart() すると、resolvedEvents は route/branch の内容ではなく entry の
-  // 'start' に戻る。既存テスト14は restart() より前に quickLoad() を呼んでおらず、この
+  // 状態から startFrom({}) すると、resolvedEvents は route/branch の内容ではなく entry の
+  // 'start' に戻る。既存テスト14は startFrom({}) より前に quickLoad() を呼んでおらず、この
   // 経路（自動 quickLoad 相当）は #662 修正前は完全にノーカバレッジだった。
-  it('16: route まで進行→quickSave→quickLoad実行（rawEventsがroute内容に上書き）→restart()後、resolvedEventsはroute/branchでなくentryの内容になる（本丸）', async () => {
+  it('16: route まで進行→quickSave→quickLoad実行（rawEventsがroute内容に上書き）→startFrom({})後、resolvedEventsはroute/branchでなくentryの内容になる（本丸）', async () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-662-16')
 
@@ -245,14 +261,14 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     expect(await r.quickLoad()).not.toBeNull()
     expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
 
-    r.restart()
+    void r.startFrom({})
 
     // #662 修正前は rawEvents（route内容）をそのまま再生し 'progressed' が残っていた。
     // 修正後は entryRawEvents を参照するため entry の 'start' に戻る。
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
   })
 
-  // 17 (T3 補助アサーション): 16 と同じ手順で、quickLoad() 直後（restart() より前）の
+  // 17 (T3 補助アサーション): 16 と同じ手順で、quickLoad() 直後（startFrom({}) より前）の
   // 内部状態を確認する。rawEvents は route の内容に上書きされる一方、entryRawEvents は
   // setScenes() 時点のエントリ内容のまま無傷であることを直接検証する。
   it('17: quickLoad() 実行直後、rawEventsはroute内容に上書きされるがentryRawEventsはentry内容のまま変化しない', async () => {
@@ -273,10 +289,10 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     expect(narrationTexts(internals(r).entryRawEvents)).toEqual(['start'])
   })
 
-  // 18 (T2): setEvents() が複数回呼ばれた場合、restart() は「最後に」setEvents された
+  // 18 (T2): setEvents() が複数回呼ばれた場合、startFrom({}) は「最後に」setEvents された
   // エントリ内容を再生する（NovelPlayer の events-prop 変化 effect が2回目の setEvents() を
   // 呼ぶケースを模す）。
-  it('18: setEvents()が複数回呼ばれた後にrestart()すると、最後にsetEventsされた内容(entryRawEvents)を再生する', () => {
+  it('18: setEvents()が複数回呼ばれた後にstartFrom({})すると、最後にsetEventsされた内容(entryRawEvents)を再生する', () => {
     const r = makeRenderer(SCENES) // 1回目の setEvents は setScenes() 内部から呼ばれる（entry内容）
     r.jumpToScene('route') // 何らかの操作（ルート遷移）
 
@@ -284,15 +300,15 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     // SCENES とは無関係な別のエントリ文書内容に差し替える。
     r.setEvents(ENTRY_B_EVENTS)
 
-    r.restart()
+    void r.startFrom({})
 
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['entry-b-start'])
   })
 
   // 19 (T4・T2+T3複合): 18 の手順の後、さらに route へ遷移して quickSave/quickLoad を行い
-  // rawEvents が route 内容に上書きされても、restart() は（route 内容にも旧entry内容にも
+  // rawEvents が route 内容に上書きされても、startFrom({}) は（route 内容にも旧entry内容にも
   // 戻らず）最後に setEvents された SCENES_B 側のエントリ内容に戻る。
-  it('19: setEvents複数回呼び出し後にquickLoadでrawEventsが上書きされても、restart()は最後のsetEvents内容に戻る', async () => {
+  it('19: setEvents複数回呼び出し後にquickLoadでrawEventsが上書きされても、startFrom({})は最後のsetEvents内容に戻る', async () => {
     const r = makeRenderer(SCENES)
     r.setDocKey('doc-662-19')
 
@@ -306,46 +322,43 @@ describe('NovelRenderer #662: restart() は entryRawEvents を再生し quickLoa
     expect(await r.quickLoad()).not.toBeNull()
     expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
 
-    r.restart()
+    void r.startFrom({})
 
     // route の内容にも SCENES の entry('start') にも戻らず、最後に setEvents された
     // ENTRY_B_EVENTS の内容に戻る。
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['entry-b-start'])
   })
 
-  // 20 (T7・既存テスト4の entryRawEvents 版): 既存テスト4は「setScenes/setEvents 未呼び出し」
-  // という entryRawEvents も rawEvents も両方空になる状態でしか早期 return を確認していない
-  // ため、restart() のガード条件が rawEvents ベースのままでも偶然テストは通ってしまう。
-  // ここでは setJumpSceneIndex() + jumpToScene() だけを使い、rawEvents は非空（branchの内容）
-  // だが entryRawEvents は空のまま、という区別可能な状態を作って検証する（branch シーンは
-  // Flag ディレクティブを含まないため gameState には影響しない）。
-  it('20: entryRawEventsが空だがrawEventsは空でない状態（setEvents未経由でのjumpToScene）でもrestart()は早期returnする（entryRawEvents版・#662）', () => {
+  // 20 (T7): エントリ文書を一度も供給していない（entryRawEvents が空）が rawEvents は非空（setEvents
+  // 未経由の jumpToScene）という状態から startFrom({}) すると、再生中の rawEvents（branch の内容）
+  // ではなく、エントリ文書（空）からの新規開始になる。#662 の「rawEvents を再生しない」契約の
+  // entryRawEvents 版（旧 restart() は空なら早期 return だったが、新規開始は空の文書も新規開始する）。
+  it('20: entryRawEventsが空でrawEventsは空でない状態（setEvents未経由のjumpToScene）でstartFrom({})すると、rawEventsではなくエントリ（空）を新規開始する（#662・#734 PR5）', () => {
     const r = new NovelRenderer() // setScenes/setEvents 未呼び出し = entryRawEvents は既定の空配列
     r.setJumpSceneIndex(SCENES) // allScenes（ジャンプ索引）だけ設定。setEvents は呼ばれない
     r.jumpToScene('branch') // rawEvents は branch の内容で非空になる。entryRawEvents は空のまま
+    expect(narrationTexts(internals(r).rawEvents)).toEqual(['base-content'])
 
-    internals(r).gameState.setFlag('pristine', { Bool: true })
-    internals(r).currentSceneId = 'untouched-scene'
+    expect(() => r.startFrom({})).not.toThrow()
 
-    expect(() => r.restart()).not.toThrow()
-
-    expect(r.getSnapshot().flags).toEqual({ pristine: { Bool: true } })
-    expect(r.getCurrentSceneId()).toBe('untouched-scene')
+    expect(internals(r).rawEvents).toEqual([])
+    expect(internals(r).resolvedEvents).toEqual([])
+    expect(r.getCurrentSceneId()).toBeNull()
   })
 
-  // 21 (冪等性・補強): restart() を連続で2回呼んでも例外にならず、2回目の後も
-  // entryRawEvents の内容（entry）のまま変化しない。restart() 自体が entryRawEvents を
+  // 21 (冪等性・補強): startFrom({}) を連続で2回呼んでも例外にならず、2回目の後も
+  // entryRawEvents の内容（entry）のまま変化しない。startFrom({}) 自体が entryRawEvents を
   // 書き換えてしまう将来のリグレッションを防ぐ。
-  it('21: restart()を連続2回呼んでも例外にならず、2回目後も同じentry内容のまま（冪等性）', async () => {
+  it('21: startFrom({})を連続2回呼んでも例外にならず、2回目後も同じentry内容のまま（冪等性）', async () => {
     const r = makeRenderer(SCENES)
     r.jumpToScene('route')
     expect(r.quickSave()).toBe(true)
     expect(await r.quickLoad()).not.toBeNull()
 
-    r.restart()
+    void r.startFrom({})
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
 
-    expect(() => r.restart()).not.toThrow()
+    expect(() => r.startFrom({})).not.toThrow()
     expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
   })
 })

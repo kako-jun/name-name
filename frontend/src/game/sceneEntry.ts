@@ -41,6 +41,8 @@ export type SceneEntryRequest =
       flags?: Record<string, FlagValue>
       position?: FreshPosition
       confinedSceneIds?: string[] | null
+      // 線形ストリームを流す (#817)。省略・false は指定シーンの events だけ。動画書き出しが明示的に選ぶ。
+      linear?: boolean
     }
   // source: 失敗時の警告文言と、復元元に応じた後処理（save は失敗トースト・自動進行の再開、
   // snapshot は storyEnded の重複発火防止 #460）を分けるため。
