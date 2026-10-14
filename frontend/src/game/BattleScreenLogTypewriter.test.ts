@@ -11,6 +11,7 @@ import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { BATTLE_LOG_MS_PER_CHAR } from './battleLogTypewriter'
+import { RESULT_HOLD_DQ_MS } from './battleResult'
 
 const MS = BATTLE_LOG_MS_PER_CHAR
 const ENCOUNTER = 'SLIME が あらわれた！'
@@ -243,7 +244,11 @@ describe('BattleScreen logTypewriter: on (#755)', () => {
     tapLog(s)
     expect(onClose).not.toHaveBeenCalled()
     settle(s)
-    tap(s, 'attack') // 勝利
+    tap(s, 'attack') // 勝利。最後のログのタイプ表示が終わり、待機を過ぎてから閉じる (#745)
+    expect(onClose).not.toHaveBeenCalled()
+    settle(s)
+    s.tick(16) // タイプ表示が終わった tick で待機が始まる
+    s.tick(RESULT_HOLD_DQ_MS)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 

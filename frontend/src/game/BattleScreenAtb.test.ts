@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Container, Graphics, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
 import type { BattleEntity } from './spellDsl'
 
@@ -246,6 +247,7 @@ describe('BattleScreen ATB: onClose は 1 回だけ', () => {
       { layout: 'side', onClose }
     )
     s.tick(2500)
+    s.tick(RESULT_HOLD_DQ_MS) // 全滅を読ませる待機 (#745)
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledWith('defeat')
     s.tick(2500)
