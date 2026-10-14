@@ -1498,8 +1498,8 @@ export class BattleScreen extends Container {
     view.baseY = acrylic ? slot.y + size - box : slot.y
     view.unit = size
     view.anchorX = slot.x + slot.width / 2
-    // ダメージ数字の出る高さ: 絵の実際の上端から 35%。縮んだ横長の味方でも頭上の空中に出ない
-    view.anchorY = acrylic && isParty ? slot.y + size - box * 0.65 : slot.y + size * 0.35
+    // ダメージ数字の出る高さ: 既定は枠の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
+    view.anchorY = slot.y + size * 0.35
     view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
     const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
@@ -1508,6 +1508,7 @@ export class BattleScreen extends Container {
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack) {
         this.placeAcrylic(view, box)
+        if (isParty) view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
       } else {
         // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
         const baseTex = view.baseVisual?.texture ?? view.sprite.texture

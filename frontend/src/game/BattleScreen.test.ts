@@ -37,6 +37,7 @@ import {
   computeSideBattleLayout,
   estimateTextWidth,
 } from './battleLayout'
+import type { SpriteSlot } from './battleLayout'
 import { computeSlitY } from './acrylicBase'
 import { computeShadowTransform } from './acrylicShadow'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
@@ -69,6 +70,7 @@ interface EntityViewLike {
   acrylicBase: Sprite | null
   acrylicShadow: Sprite | null
   label: Text | null
+  slotRef: SpriteSlot | null
 }
 interface Internals {
   dim: Graphics
