@@ -7,8 +7,8 @@
  * #368 参照）。ここでは回帰の最小確認として toJSON() のみを対象にする。
  */
 import { describe, it, expect } from 'vitest'
-import { GameState } from './GameState'
-import type { FlagValue } from '../types'
+import { GameState, countSurvivingBefore } from './GameState'
+import type { Event, FlagValue } from '../types'
 
 describe('GameState.toJSON', () => {
   it('通常のフラグを Record として書き出す', () => {
@@ -66,5 +66,56 @@ describe('GameState.toJSON', () => {
     expect(result['__proto__']).toEqual({ String: 'ゆうしゃ' })
     expect(result.saw_intro).toEqual({ Bool: true })
     expect(result).toEqual(data)
+  })
+})
+
+describe('countSurvivingBefore (#777)', () => {
+  const text = (t: string): Event => ({ Narration: { text: [t] } })
+  const cond = (flag: string, ...events: Event[]): Event => ({ Condition: { flag, events } })
+  const flagEv: Event = { Flag: { name: 'x', value: { Bool: false } } }
+  const withFlags = (flags: Record<string, boolean>): GameState => {
+    const gs = new GameState()
+    for (const [k, v] of Object.entries(flags)) gs.setFlag(k, { Bool: v })
+    return gs
+  }
+
+  it('Flag が条件の外: 手前の残るイベントの数', () => {
+    expect(
+      countSurvivingBefore(
+        [text('a'), cond('x', text('b')), flagEv, text('c')],
+        flagEv,
+        withFlags({ x: true })
+      )
+    ).toBe(2)
+    expect(
+      countSurvivingBefore(
+        [text('a'), cond('x', text('b')), flagEv, text('c')],
+        flagEv,
+        withFlags({ x: false })
+      )
+    ).toBe(1)
+  })
+
+  it('Flag が先頭・末尾', () => {
+    expect(countSurvivingBefore([flagEv, text('a')], flagEv, withFlags({}))).toBe(0)
+    expect(countSurvivingBefore([text('a'), text('b'), flagEv], flagEv, withFlags({}))).toBe(2)
+  })
+
+  it('入れ子（外側偽・内側真）: Flag 自身は消え、数は次に残るイベントの位置になる', () => {
+    const events = [
+      text('a'),
+      cond('o', text('b'), cond('i', text('c'), flagEv, text('d'))),
+      text('e'),
+    ]
+    // 外側偽: b, c は消える。数は a の 1 つ（次に残る e の位置 = 1）
+    expect(countSurvivingBefore(events, flagEv, withFlags({ o: false, i: true }))).toBe(1)
+    // 外側真・内側真: a, b, c が残る
+    expect(countSurvivingBefore(events, flagEv, withFlags({ o: true, i: true }))).toBe(3)
+    // 外側真・内側偽: a, b が残り、Flag は消える
+    expect(countSurvivingBefore(events, flagEv, withFlags({ o: true, i: false }))).toBe(2)
+  })
+
+  it('見つからなければ null', () => {
+    expect(countSurvivingBefore([text('a')], flagEv, withFlags({}))).toBeNull()
   })
 })

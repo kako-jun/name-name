@@ -4504,6 +4504,12 @@ export class NovelRenderer {
     // 冪等な fromJSON なので二重適用に副作用はない（詳細は restoreToScene のコメント #256）。
     this.gameState.fromJSON(state.flags)
 
+    // 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できる状態に保つ (#777)。goBack/seekTo は
+    // flags だけを過去の値に戻すので、Flag を越えて戻ると列（`[条件:]` の展開）と位置が食い違う。
+    // restoreToScene 経由では同じ flags で展開済みなので、結果は同じ（冪等）。
+    this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
+    this.displayEventCount = this.resolvedEvents.filter((e) => getTextEvent(e) !== null).length
+
     // インデックス復元
     this.eventIndex = state.eventIndex
     this.textIndex = state.textIndex
@@ -4701,7 +4707,8 @@ export class NovelRenderer {
   }
 
   /**
-   * rawEvents を現在のフラグ状態で再展開し、eventIndex を維持する。
+   * rawEvents を現在のフラグ状態で全体を再展開し、eventIndex を決定的に写像する（現在の Flag が新しい列に
+   * 残ればその位置、囲む `[条件:]` が偽で消えたら次に残るイベントへ。`countSurvivingBefore`）。
    * Flag イベント処理後に呼ばれ、後続の Condition が新しいフラグ値で評価される。
    */
   private reResolveEvents(): void {

@@ -525,6 +525,92 @@ describe('再展開後のセーブから同じ位置・同じ進行を再現で�
   })
 })
 
+describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復元が一致する (#777)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+  const cond = (name: string, ...events: Event[]): Event => ({ Condition: { flag: name, events } })
+  const setFlag = (name: string, v: boolean): Event => ({ Flag: { name, value: { Bool: v } } })
+  const text = (r: NovelRenderer) => (r.getDebugState().eventText ?? '').replace(/["\s]/g, '')
+
+  function forwardScenes(): EventScene[] {
+    return [
+      scene('a', [cond('x', narration('ax1'), narration('ax2')), narration('a1')]),
+      scene('b', [narration('b1'), setFlag('x', true), narration('b2')]),
+      scene('c', [narration('c1')]),
+    ]
+  }
+  function build(scenes: EventScene[]): NovelRenderer {
+    const r = new NovelRenderer()
+    r.setEvents(flatten(scenes))
+    r.setJumpSceneIndex(scenes)
+    return r
+  }
+
+  it('Flag を越えて goBack: 表示・playhead・別インスタンスへの復元が一致し、さらに戻っても未表示の本文に飛ばない', async () => {
+    const scenes = forwardScenes()
+    const r = build(scenes)
+    await r.startFrom({ sceneId: 'a' })
+    expect(text(r)).toBe('a1')
+    advance(r)
+    expect(text(r)).toBe('b1')
+    advance(r)
+    expect(text(r)).toBe('b2')
+    r.goBack()
+    expect(text(r)).toBe('b1')
+    expect(r.getPlayheadSceneId()).toBe('b')
+    const other = build(scenes)
+    await other.restoreSnapshot(r.getSnapshot())
+    expect(text(other)).toBe('b1')
+    expect(other.getPlayheadSceneId()).toBe('b')
+    r.goBack()
+    expect(text(r)).toBe('a1')
+    expect(r.getPlayheadSceneId()).toBe('a')
+    const again = build(scenes)
+    await again.restoreSnapshot(r.getSnapshot())
+    expect(text(again)).toBe('a1')
+  })
+
+  it('seekTo でも同様', async () => {
+    const scenes = forwardScenes()
+    const r = build(scenes)
+    await r.startFrom({ sceneId: 'a' })
+    advance(r)
+    advance(r)
+    expect(text(r)).toBe('b2')
+    r.seekTo(0)
+    expect(text(r)).toBe('a1')
+    expect(r.getPlayheadSceneId()).toBe('a')
+    const other = build(scenes)
+    await other.restoreSnapshot(r.getSnapshot())
+    expect(text(other)).toBe('a1')
+    expect(other.getPlayheadSceneId()).toBe('a')
+    advance(r)
+    advance(other)
+    expect(text(other)).toBe(text(r))
+  })
+
+  it('自己否定ブロックの中（Flag の前）まで goBack しても一致する', async () => {
+    const scenes = selfNegatingScenes()
+    const r = build(scenes)
+    await r.startFrom({ sceneId: 'a', flags: { x: { Bool: true } } })
+    expect(text(r)).toBe('a0')
+    advance(r)
+    expect(text(r)).toBe('A')
+    advance(r)
+    expect(text(r)).toBe('C')
+    r.goBack()
+    expect(text(r)).toBe('A')
+    const other = build(scenes)
+    await other.restoreSnapshot(r.getSnapshot())
+    expect(text(other)).toBe('A')
+    advance(r)
+    advance(other)
+    expect(text(r)).toBe('C')
+    expect(text(other)).toBe('C')
+  })
+})
+
 describe('再展開は常に全体の展開と一致する・既読 (#777 再レビュー対応)', () => {
   const cond = (name: string, ...events: Event[]): Event => ({ Condition: { flag: name, events } })
 
