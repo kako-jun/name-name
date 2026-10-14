@@ -137,7 +137,7 @@ describe('performSkill: 効果・MP・状態 (#834)', () => {
     // zaraki は rng < 0.5 で即死
     engine.performSkill(
       { side: 'enemy', index: 0 },
-      { name: 'いてつくまなざし', target: '相手全体', builtin: 'zaraki' }
+      { name: 'ぜんたいしんぱく', target: '相手全体', builtin: 'zaraki' }
     )
     expect(party.map((p) => p.hp)).toEqual([0, 0])
   })
@@ -189,6 +189,57 @@ describe('performSkill: 効果・MP・状態 (#834)', () => {
       { name: 'x', target: '相手全体', effect: 'damage 1..9' }
     )
     expect(calls).toBe(1) // 効果 1 回の評価で 1 回（対象の数に依らない）
+  })
+})
+
+describe('performSkill: 終了後・倒れた対象・蘇生 (#834)', () => {
+  it('戦闘が終わっていれば false で、HP・ログ・イベントは変わらない', () => {
+    for (const phase of ['victory', 'defeat', 'escaped'] as const) {
+      const { engine, party } = setup()
+      ;(engine.getState() as { phase: string }).phase = phase
+      const total = engine.getState().eventTotal
+      const logs = engine.getState().logTotal
+      expect(engine.performSkill({ side: 'enemy', index: 0 }, dmg('相手全体'))).toBe(false)
+      expect(party.map((p) => p.hp)).toEqual([100, 100])
+      expect(engine.getState().eventTotal).toBe(total)
+      expect(engine.getState().logTotal).toBe(logs)
+    }
+  })
+
+  it('仲間単体で明示した対象が倒れていても、蘇生でなければ最初の生存者に落ちる（死者は生き返らない）', () => {
+    const { engine, enemies } = setup()
+    enemies[1].hp = 0
+    engine.performSkill({ side: 'enemy', index: 0 }, dmg('仲間単体', 'heal 10..10'), {
+      side: 'enemy',
+      index: 1,
+    })
+    expect(enemies.map((e) => e.hp)).toEqual([60, 0])
+  })
+
+  it('蘇生の特技（効果 revive / builtin zaorik）は倒れた仲間を明示でき、省略時は最初の倒れた仲間', () => {
+    const { engine, enemies } = setup()
+    enemies[1].hp = 0
+    engine.performSkill({ side: 'enemy', index: 0 }, dmg('仲間単体', 'revive hp=half'), {
+      side: 'enemy',
+      index: 1,
+    })
+    expect(enemies[1].hp).toBeGreaterThan(0)
+    enemies[1].hp = 0
+    engine.performSkill({ side: 'enemy', index: 0 }, dmg('仲間単体', 'revive'))
+    expect(enemies[1].hp).toBeGreaterThan(0)
+    enemies[1].hp = 0
+    engine.performSkill(
+      { side: 'enemy', index: 0 },
+      { name: 'いのり', target: '仲間単体', builtin: 'zaorik' }
+    )
+    expect(enemies[1].hp).toBeGreaterThan(0)
+  })
+
+  it('蘇生でも倒れた仲間がいなければ最初の生存者が対象になる', () => {
+    const { engine, enemies } = setup()
+    engine.performSkill({ side: 'enemy', index: 1 }, dmg('仲間単体', 'revive'))
+    expect(enemies.map((e) => e.hp)).toEqual([50, 40])
+    expect(engine.getState().events[0].hits[0].target).toEqual({ side: 'enemy', index: 0 })
   })
 })
 
@@ -269,9 +320,11 @@ describe('performSkill: ログと演出イベント (#834)', () => {
         { side: 'enemy', index: 0 },
         { name: 'x', target: '相手単体', effect: 'damage 5..20' }
       )
-      return JSON.stringify(engine.getState())
+      return { json: JSON.stringify(engine.getState()), hp: party.map((p) => p.hp) }
     }
-    expect(run()).toBe(run())
+    expect(run().json).toBe(run().json)
+    // rng 列 0.1 → 6、0.9 → 19（5 + floor(r * 16)）。全体で 6、続く単体（先頭）で 19
+    expect(run().hp).toEqual([75, 94])
   })
 })
 

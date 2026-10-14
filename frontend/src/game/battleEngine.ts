@@ -73,7 +73,9 @@ export interface BattleActionEvent {
    * 「にげられない！」「MPが たりない！」）の文言。通常攻撃は undefined
    */
   label?: string
-  /** 特技 (#834) の使用時メッセージ（`{user}` を使った側の名前に置き換えた後の文）。`メッセージ:` を書かない特技・他の kind は undefined */
+  /**
+   * 特技 (#834) の使用時メッセージ（`{user}` を使った側の名前に置き換えた後の文）。現段階では記録だけで画面は読まない
+   * （設計書 §3.3 の `メッセージ`。表示は P1 #835 以降）。`メッセージ:` を書かない特技・他の kind は undefined */
   message?: string
   hits: BattleHit[]
 }
@@ -369,10 +371,11 @@ export class BattleEngine {
   /**
    * 特技 (#834) を 1 回使う（内部 API。敵の行動選択 #835 が呼ぶ。この PR 単体では敵は呼ばない）。
    *
-   * - `user` は `party` / `enemies` の index。倒れている・存在しない者は何もせず false を返す
+   * - `user` は `party` / `enemies` の index。戦闘が終わっている・倒れている・存在しない者は何もせず false を返す
    * - 対象は**使う側から見た相対表現**: `相手単体` / `相手全体` / `自分` / `仲間単体` / `仲間全体`
    *   （敵が使えば「相手」は味方側）。未知の値・省略は `相手単体`。
-   *   単体の `target` は明示指定（側が合わなければ無視）。省略時は相手単体・仲間単体とも最初の生存者
+   *   単体の `target` は明示指定（側が合わなければ無視）。倒れている者を指せるのは蘇生の効果（`revive` / builtin `zaorik`）のときだけで、
+   *   それ以外は最初の生存者に落ちる。省略時は最初の生存者（蘇生の仲間単体だけは最初の倒れた仲間）
    * - 効果は呪文と同じ評価器を内部で共有（`builtin` があればそれ、無ければ `effect` の DSL）。MP は持たず消費しない
    * - ログに `message`（`{user}` を使った側の名前に置換）か「〇〇は △△ を つかった！」、演出イベントに `kind: 'skill'` を残す
    * - フェーズ・ATB ゲージ・勝敗判定は触らない（敵ターンの途中で呼ばれても二重に終了処理しないため、呼び出し側が checkEnd 相当を行う）
@@ -381,6 +384,7 @@ export class BattleEngine {
   performSkill(user: BattleActorRef, skill: SkillExecution, target?: BattleActorRef): boolean {
     const userList = user.side === 'party' ? this.state.party : this.state.enemies
     const caster = userList[user.index]
+    if (this.isOver()) return false
     if (!caster || caster.hp <= 0) return false
     const targets = this.resolveSkillTargets(user.side, caster, skill, target)
     const message =
@@ -676,7 +680,8 @@ export class BattleEngine {
 
   /**
    * 特技の対象を「使う側から見た相対表現」で解決する (#834)。rng は使わない。
-   * 明示指定 `target` は単体のときだけ効き、相手単体は生存者・仲間単体は同じ側の者（倒れていても可＝蘇生の効果用）に限る。
+   * 明示指定 `target` は単体のときだけ効き、相手単体は生存者に限る。仲間単体は同じ側の者で、倒れている者を指せるのは
+   * 蘇生の効果（`revive` / builtin `zaorik`）のときだけ。それ以外は最初の生存者に落とす。蘇生の仲間単体で省略したときは最初の倒れた仲間。
    */
   private resolveSkillTargets(
     side: 'party' | 'enemy',
@@ -696,7 +701,14 @@ export class BattleEngine {
       case '仲間全体':
         return allies.filter((e) => e.hp > 0)
       case '仲間単体': {
-        const t = explicit(allies, side) ?? this.firstAlive(allies)
+        const revive = this.isReviveSkill(skill)
+        const picked = explicit(allies, side)
+        const t =
+          picked && (picked.hp > 0 || revive)
+            ? picked
+            : revive
+              ? (allies.find((e) => e.hp <= 0) ?? this.firstAlive(allies))
+              : this.firstAlive(allies)
         return t ? [t] : []
       }
       case '相手単体':
@@ -706,6 +718,12 @@ export class BattleEngine {
         return t ? [t] : []
       }
     }
+  }
+
+  /** 蘇生の特技か（効果 DSL が `revive`、または蘇生の builtin `zaorik`。候補窓の `isReviveEntry` の呪文側と同じ判定） */
+  private isReviveSkill(skill: SkillExecution): boolean {
+    if (skill.builtin) return skill.builtin === 'zaorik'
+    return typeof skill.effect === 'string' && parseEffect(skill.effect)?.kind === 'revive'
   }
 
   private resolveItemTargets(item: ItemExecution, targetId?: string): BattleEntity[] {
