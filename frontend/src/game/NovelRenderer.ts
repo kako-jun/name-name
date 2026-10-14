@@ -68,20 +68,16 @@ import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { getTextEvent } from './eventCursor'
-import { buildFreshPositionState } from './freshState'
 import { collectUpcomingAssetUrls } from './preloadPlan'
 import { buildDebugState, type DebugState } from './debugState'
 import { isSceneIdConfined } from './sceneConfinement'
 import { PlaybackCursor } from './PlaybackCursor'
-import { SceneIndex, type SceneLookup } from './SceneIndex'
+import { SceneIndex } from './SceneIndex'
 import { JUMP_CHAIN_LIMIT, TransitionState } from './TransitionState'
+import { SceneEntryController } from './SceneEntryController'
 import {
-  carryPolicyFor,
-  lacksLeadingBackground,
   type LoadOrigin,
-  type SceneEntryRequest,
   type SceneEntryResult,
-  findRestorePositionError,
   segmentAt,
   type ResolvedSegment,
 } from './sceneEntry'
@@ -359,14 +355,6 @@ export class NovelRenderer {
   /** 動画エクスポート用 (#228)。`jumpToScene` / `setScenes` でシーンが切り替わったときに呼ぶ */
   private onSceneChangeCallback: ((sceneId: string) => void) | null = null
   /**
-   * `?scene=` ディープリンク単独埋め込みの confinement（在圏）一覧 (#386)。
-   * null なら制限なし（通常のハブ経由フロー）。非 null のときは `jumpToScene` がこの
-   * 集合の外への遷移を検出し、通常のシーン遷移ではなく `endStory()`（終劇）にする。
-   * 新規開始の入場属性として `startFrom({ confinedSceneIds })` が、解決できた時点で置き換える
-   * （呼び出し側は `PlayerScreen` が算出した対象 script ファイル自身の sceneId 一覧を渡す）。
-   */
-  private confinedSceneIds: string[] | null = null
-  /**
    * デバッグ用の全選択肢ロック解除フラグ (#652)。false（既定）は従来どおり
    * `option.condition` を `checkFlag` で判定する。true のときは `option.condition` の
    * 有無に関わらず choice の `locked` 配列を全 false にする（全ルート強制解放）。
@@ -632,6 +620,56 @@ export class NovelRenderer {
 
   /** シーン索引・エントリ文書・遅延ロード・線形区間 (#823)。再生中の配列（rawEvents）は持たない */
   private readonly sceneIndex = new SceneIndex()
+
+  /**
+   * シーン入場の単一入口 (#826)。ADR 0003 の手続き（世代・confinement・解決・適用・失敗処理）と
+   * `confinedSceneIds` を持つ。適用の実体（演出リセット・宣言的復元・通知）は Host として渡す下のコールバック。
+   * メソッドをレンダラの公開 API にしないよう、`implements` ではなくオブジェクトで渡す。
+   */
+  private readonly entry = new SceneEntryController(
+    {
+      isActive: () => this.initialized,
+      endStory: () => this.endStory(),
+      applyFreshContext: (flags) => {
+        this.gameState.fromJSON(flags)
+        this.clearStoryEnded()
+      },
+      startEvents: (sceneId, events, opts) => {
+        // 終劇状態の解除は適用の前 (#398, ADR 0003 §3 の5)。#386: 通常のシーン遷移が成立する経路なので、
+        // 終劇状態は解除しておく（宣言的整合性の保険）。
+        this.clearStoryEnded()
+        this.cursor.setCurrentSceneId(sceneId)
+        this.resetAndStartEvents([...events], opts)
+      },
+      restoreToScene: (scene, state, presetStoryEnded) => {
+        if (presetStoryEnded) {
+          // storyEnded 重複発火防止 (#460 セルフレビュー must M2): このメソッドは新規 construct された
+          // renderer インスタンス（this.storyEnded は常にデフォルト false）に対して呼ばれる。下の
+          // applyState は「前回値と比較して変化した時だけ onStoryEndedChangeCallback を発火する」ガードを
+          // 持つが、新規インスタンスの初期値 false のままだと「true で復元＝変化あり」と誤判定され、
+          // fluid 再マウントのたびに終劇 postMessage（NovelPlayer 側）が再送されてしまう。ここで復元先の
+          // 値を先に直接セットしておき、applyState の比較を「変化なし」にして二重発火を防ぐ。
+          // ("to be continued..." 表示自体は callback の発火有無とは独立に、applyState() 内の
+          // syncEndingOverlayVisibility() が毎回呼ばれることで同期される (#630)。新規 renderer インスタンスの
+          // `endingOverlay` は必ず非表示から始まる——旧 DOM 版のように React state が再マウントを跨いで
+          // 保持される仕組みは無い——ため、この明示的な同期が無いと表示が消える regression になる。
+          // 詳細は applyState() 内 syncEndingOverlayVisibility() 呼び出し箇所のコメント参照。)
+          this.storyEnded = state.storyEnded
+        }
+        this.restoreToScene(scene, state)
+      },
+      notify: (notice) => {
+        if (notice.kind === 'sceneChange') this.onSceneChangeCallback?.(notice.sceneId)
+        else if (notice.kind === 'loadSuccess') this.notifyLoadSuccess(notice.origin)
+        else this.notifyLoadFailure()
+      },
+      rederiveTransition: () => this.rederiveTransitionAtCurrentPosition(),
+      isTextPaginated: () => this.isNovelStyle() || this.sentencePerPage,
+    },
+    this.sceneIndex,
+    this.transition,
+    this.cursor
+  )
 
   /** セーブマネージャー */
   private saveManager: SaveManager = new SaveManager()
@@ -1236,23 +1274,14 @@ export class NovelRenderer {
 
   /**
    * 指定シーンへ進行する (#734)。進行（選択肢の確定・`[ジャンプ:]`・`playScript` の choice）専用の
-   * 公開 API で、実体は単一の入口 `enterScene` に委譲する薄いラッパー。
+   * 公開 API で、実体は単一の入口（`SceneEntryController.enter`）に委譲する薄いラッパー。
    * 読み込み済みのシーンなら同期で入場し（戻り値は解決済みの Promise）、未ロードなら
    * `missingSceneResolver` の完了を待つ。結果は Promise で返る。
    * 適用中の例外は、同期で入場する場合も遅延ロード後の非同期の適用でも、`failed`（reason: 'apply-error'）で
    * 解決する（Promise は reject しない。`startFrom` / `quickLoad` / `restoreSnapshot` も同じ）。
    */
   jumpToScene(sceneId: string): Promise<SceneEntryResult> {
-    return this.enterScene({ kind: 'progress', sceneId, origin: 'choice' })
-  }
-
-  /**
-   * Jump の遷移に失敗したとき（遷移先不在・resolver が null/例外・lazy load 後も不在・循環上限）、
-   * 予約中（pending）から停止中（stalled）へ移して Jump の位置で止まる (#725)。予約中でなければ何もしない (#733)。
-   * スキップの解除は TransitionState の onStall（`setSkipMode(false)`）が行う。
-   */
-  private stallJump(): void {
-    this.transition.stall()
+    return this.entry.jumpTo(sceneId)
   }
 
   /**
@@ -1267,7 +1296,7 @@ export class NovelRenderer {
         console.warn(
           `[name-name] [ジャンプ:] が本文なしで ${JUMP_CHAIN_LIMIT} 回を超えて連続したため停止します（循環の可能性）: ${target}`
         ),
-      enter: () => this.runEntry({ kind: 'progress', sceneId: target, origin: 'jump' }),
+      enter: () => this.entry.run({ kind: 'progress', sceneId: target, origin: 'jump' }),
     })
   }
 
@@ -1282,389 +1311,6 @@ export class NovelRenderer {
       this.onStoryEndedChangeCallback?.(false)
       this.syncEndingOverlayVisibility()
     }
-  }
-
-  /**
-   * @param carry 持ち越し方針 (#734)。種類ごとに `carryPolicyFor(kind)` を渡す。
-   * @param sceneId ストリームの持ち主の ID（`currentSceneId` に入る）。新規開始の 'entry'（線形ストリームの
-   *   先頭）で sceneId を持たないときは null。
-   * @param linear 線形ストリームの途中のシーンから始めるとき (#777)。`startIndex` は展開後の位置、
-   *   `announcedSceneId` は入ったシーン（`onSceneChange` で知らせる ID。持ち主とは別）。
-   *   指定が無ければ `sceneId` を知らせる（null なら発火しない）。
-   */
-  private startScene(
-    sceneId: string | null,
-    events: readonly Event[],
-    carry: { preserveBackgroundForTransition: boolean; carryBgm: boolean },
-    linear?: { startIndex: number; announcedSceneId: string }
-  ): void {
-    // #386: 通常のシーン遷移が成立する経路なので、終劇状態は解除しておく（宣言的整合性の保険。
-    // 通常はここに来る前に jumpToScene の confinement チェックで弾かれるため storyEnded は
-    // 既に false のはずだが、デバッグ等から直接呼ばれた場合の保険として明示的に戻す）。
-    this.clearStoryEnded()
-    this.cursor.setCurrentSceneId(sceneId)
-    this.resetAndStartEvents([...events], {
-      preserveBackgroundForTransition: carry.preserveBackgroundForTransition,
-      carryBgm: carry.carryBgm,
-      startIndex: linear?.startIndex,
-    })
-    // 線形ストリームの途中のシーンから始めるときは、ストリームの持ち主ではなく入ったシーンを知らせる (#777)。
-    const announced = linear ? linear.announcedSceneId : sceneId
-    if (announced !== null) this.onSceneChangeCallback?.(announced)
-  }
-
-  /**
-   * シーン入場の単一入口 (#734, ADR 0003 §3)。進行（選択肢・`[ジャンプ:]`・`playScript` の choice）と
-   * 復元（クイックロード・ロードメニュー・`restoreSnapshot`）は、公開 API がこの入口を通る。
-   * 新規開始（`startFrom`）も同じ入口を通る。
-   *
-   * 処理の順序:
-   * 1. 要求の時点で遷移世代を進めて捕捉し、予約中の Jump を取り消す（後勝ち）
-   * 2. 進行のときだけ confinement を判定する（圏外は終劇）
-   * 3. `this.sceneIndex.resolve` でシーンを引く。読み込み済みなら同期のまま適用する。未ロードなら入場中ゲート
-   *    （`pendingEntry`）を立てて待ち、await の後に世代と `initialized` をこの1か所で判定する
-   *    （不一致は superseded。成功・失敗とも何もしない。後始末は世代を進めた新しい側が担う）
-   * 4. 見つからなければ種類に応じて失敗として扱い、位置から遷移状態を導出し直す
-   * 5. 適用し、入場中ゲートを下ろす
-   */
-  private enterScene(req: SceneEntryRequest): Promise<SceneEntryResult> {
-    // 世代を捕捉し、予約中の Jump のタイマーを取り消し、入場中ゲートを下ろす。jumpState は触らない (#759)。
-    const generation = this.transition.beginEntry()
-
-    if (req.kind === 'progress' && !isSceneIdConfined(req.sceneId, this.confinedSceneIds)) {
-      // #386: confinement（在圏）外への進行は通常のシーン遷移にせず終劇にする。
-      // theo-hayami の hub（別の問いを聞く → hub）等、埋め込み外の内容が漏れるのを防ぐ唯一の
-      // choke point。scene の存在チェックより前に判定する（allScenes に実在する hub 等でも
-      // 圏外なら即終劇＝lazy load すら試みない）。
-      // #386 レビュー Q1（dev 診断のみ・production の挙動/見た目は不変）:
-      // fail-closed（圏外は理由を問わず終劇）という設計は維持する。ただし「圏外だが
-      // 実在するシーン（例: hub。意図した終劇）」と「原稿の typo でどこにも存在しない
-      // sceneId（正常な終劇に偽装された事故）」を区別できないと、typo が気づかれない
-      // まま「正常な終劇」として素通りしてしまう。allScenes（entry + 圏内 script の
-      // 全シーン）にも見つからない場合だけ、開発時に気づけるよう警告を残す。
-      if (import.meta.env.DEV && !this.sceneIndex.findScene(req.sceneId)) {
-        console.warn(
-          `[name-name] confinement: sceneId "${req.sceneId}" は allScenes にも存在しません。終劇として扱いますが、原稿の typo の可能性があります（意図した圏外遷移なら無視してください）。`
-        )
-      }
-      // ここは onEndCallback の有無を見ずに常に endStory() を呼ぶ（#386 由来）。advance() の
-      // 自然消化パス（#470）は onEndCallback 登録時に完全委譲し endStory() を呼ばないのと非対称だが、
-      // confinedSceneIds（PlayerScreen の `?scene=` 埋め込み限定）と onEndCallback（EditorScreen の
-      // VideoExporter 限定）が同時に有効になる画面配線が現状存在しないため到達不可能で実害はない。
-      // 将来この2つが同一画面で両立する機能が来たら、この非対称性を再点検すること。
-      this.endStory()
-      return Promise.resolve({ status: 'ended' })
-    }
-
-    if (req.kind === 'fresh' && req.target === 'entry') {
-      // エントリ文書の線形ストリームの先頭から。シーンの引き当て（遅延ロード）は要らない。
-      try {
-        return Promise.resolve(
-          this.applyFresh(req, this.sceneIndex.getEntrySceneId(), this.sceneIndex.getEntryEvents())
-        )
-      } catch (err) {
-        return Promise.resolve(this.failApply(req, err))
-      }
-    }
-
-    const sceneId =
-      req.kind === 'progress'
-        ? req.sceneId
-        : req.kind === 'fresh'
-          ? (req.target as { sceneId: string }).sceneId
-          : req.state.sceneId
-    if (!sceneId) {
-      // 復元で sceneId が null: エントリ文書の線形ストリーム（`loadEvents`。ジャンプ前はシーン ID を持たない）
-      // 上の位置。セーブは eventIndex でこの位置を指すので、エントリのイベント列へ宣言的に復元する (#768)。
-      // 進行・新規開始は sceneId を必ず持つ（'entry' の新規開始は上で処理済み）ので、ここへ来るのは復元だけ。
-      return Promise.resolve(
-        this.restoreEntryStream(req as Extract<SceneEntryRequest, { kind: 'restore' }>)
-      )
-    }
-
-    const resolution = this.sceneIndex.resolve(sceneId)
-    if (!('then' in resolution)) {
-      // 同期の適用が throw しても、呼び出し元へ伝播させず failed（apply-error）で解決する。
-      // await 後の適用と同じ扱い（初期入場の連鎖が reject で途切れない）。
-      try {
-        return Promise.resolve(this.finishEntry(req, resolution))
-      } catch (err) {
-        return Promise.resolve(this.failApply(req, err))
-      }
-    }
-    const promise: Promise<SceneEntryResult> = (async () => {
-      const resolved = await resolution
-      // 遷移文脈が変わった（遅延ロード中に新規開始・復元・再遷移が入った）古い解決は、成功・失敗とも
-      // 破棄する (#733)。await 中に renderer が destroy() された場合も同様（#463: destroy 後は
-      // 破棄済みの this.app.stage を触るため、初期化チェック無しで先に進むと例外を投げうる）。
-      if (this.transition.isStale(generation)) return { status: 'superseded' } as const
-      if (!this.initialized) {
-        // 破棄済みの renderer には何も適用しない。失敗の警告だけは残す（#463）。
-        if (resolved.status === 'failed') this.warnEntryFailure(req, resolved)
-        return { status: 'superseded' } as const
-      }
-      this.transition.settlePendingEntry(generation)
-      // 適用の例外で Promise を reject させない（待っている側が止まる・未処理 rejection になる）。
-      try {
-        return this.finishEntry(
-          req,
-          resolved.status === 'loaded'
-            ? this.sceneIndex.indexLoaded(sceneId, resolved.scenes)
-            : resolved
-        )
-      } catch (err) {
-        return this.failApply(req, err)
-      }
-    })()
-    this.transition.setPendingEntry({ generation, kind: req.kind, sceneId, promise })
-    return promise
-  }
-
-  /**
-   * sceneId が null の復元 (#768)。エントリ文書の線形ストリーム（`entryRawEvents`）を復元先にする。
-   * エントリ文書が未読み込みなら復元先が無いので失敗（位置・flags とも変えない）。
-   * 同期の適用が throw しても failed（apply-error）で解決する。
-   */
-  private restoreEntryStream(
-    req: Extract<SceneEntryRequest, { kind: 'restore' }>
-  ): SceneEntryResult {
-    if (this.sceneIndex.getEntryEvents().length === 0) {
-      return this.failEntry(req, {
-        status: 'failed',
-        reason: 'not-found',
-        detail: 'エントリ文書が読み込まれていないため、sceneId が null の位置を復元できません',
-      })
-    }
-    const rangeError = this.checkRestorePosition(this.sceneIndex.getEntryEvents(), req.state)
-    if (rangeError) return this.failEntry(req, rangeError)
-    try {
-      if (req.source === 'snapshot') this.storyEnded = req.state.storyEnded
-      const entryId = this.sceneIndex.getEntrySceneId()
-      const entry: EventScene = {
-        id: entryId ?? '',
-        title: '',
-        view: 'TopDown',
-        // readonly を通すためのコピー。restoreToScene が再度コピーするので挙動は変わらない
-        events: [...this.sceneIndex.getEntryEvents()],
-      }
-      // sceneId はエントリの識別子に正規化する（loadEvents なら null。空文字のセーブも同じ扱い）。
-      this.restoreToScene(entry, { ...req.state, sceneId: entryId })
-      if (req.source === 'save' && req.origin) this.notifyLoadSuccess(req.origin)
-      return { status: 'entered', sceneId: entryId }
-    } catch (err) {
-      return this.failApply(req, err)
-    }
-  }
-
-  /** 入場の適用中の例外を失敗として扱い、結果を返す。ゲートも下ろす。 */
-  private failApply(req: SceneEntryRequest, err: unknown): SceneEntryResult {
-    this.transition.clearPendingEntry()
-    this.handleApplyError(req, err)
-    return { status: 'failed', reason: 'apply-error' }
-  }
-
-  /**
-   * 発火して忘れる呼び出し元（Jump のタイマー・選択肢の確定）用の入口。`enterScene` は同期の適用の例外も
-   * 結果（failed）にして返すので、この try/catch は `enterScene` の前段（世代の更新など）で想定外に
-   * 投げた場合の保険としてだけ働く。呼び出し元が待つ Promise を必ず解決し、未処理の rejection にしない。
-   */
-  private runEntry(req: SceneEntryRequest): Promise<SceneEntryResult> {
-    try {
-      return this.enterScene(req)
-    } catch (err) {
-      return Promise.resolve(this.failApply(req, err))
-    }
-  }
-
-  /**
-   * 入場の適用中に例外が出たとき（通信失敗ではなく実装・データの不具合）。ログを残し、Jump 由来なら停止し、
-   * 選択肢由来なら閉じていた選択肢を再表示して、詰まらないようにする。
-   */
-  private handleApplyError(req: SceneEntryRequest, err: unknown): void {
-    console.error('[name-name] シーン入場の適用中に例外が発生しました', err)
-    if (req.kind === 'progress' && req.origin === 'jump') {
-      this.stallJump()
-    } else if (req.kind === 'progress') {
-      this.rederiveTransitionAtCurrentPosition()
-    } else {
-      this.stallJump()
-    }
-  }
-
-  /** 解決が済んだ入場を、種類に応じて適用する（失敗なら失敗として扱う）。 */
-  private finishEntry(req: SceneEntryRequest, resolution: SceneLookup): SceneEntryResult {
-    if (resolution.status === 'failed') {
-      return this.failEntry(req, resolution)
-    }
-    if (req.kind === 'progress') {
-      // 進行: 背景等・BGM を持ち越す。storyEnded は startScene が解除する。
-      this.startScene(resolution.scene.id, resolution.scene.events, carryPolicyFor('progress'))
-      return { status: 'entered', sceneId: resolution.scene.id }
-    }
-    if (req.kind === 'fresh') {
-      return this.applyFresh(req, resolution.scene.id, resolution.scene.events, resolution.scene)
-    }
-    // 復元: 状態どおりに宣言的に組み立てる。位置が範囲外なら適用の前に失敗にする (#789)。
-    const rangeError = this.checkRestorePosition(resolution.scene.events, req.state)
-    if (rangeError) return this.failEntry(req, rangeError)
-    if (req.source === 'snapshot') {
-      // storyEnded 重複発火防止 (#460 セルフレビュー must M2): このメソッドは新規 construct された
-      // renderer インスタンス（this.storyEnded は常にデフォルト false）に対して呼ばれる。下の
-      // applyState は「前回値と比較して変化した時だけ onStoryEndedChangeCallback を発火する」ガードを
-      // 持つが、新規インスタンスの初期値 false のままだと「true で復元＝変化あり」と誤判定され、
-      // fluid 再マウントのたびに終劇 postMessage（NovelPlayer 側）が再送されてしまう。ここで復元先の
-      // 値を先に直接セットしておき、applyState の比較を「変化なし」にして二重発火を防ぐ。
-      // ("to be continued..." 表示自体は callback の発火有無とは独立に、applyState() 内の
-      // syncEndingOverlayVisibility() が毎回呼ばれることで同期される (#630)。新規 renderer インスタンスの
-      // `endingOverlay` は必ず非表示から始まる——旧 DOM 版のように React state が再マウントを跨いで
-      // 保持される仕組みは無い——ため、この明示的な同期が無いと表示が消える regression になる。
-      // 詳細は applyState() 内 syncEndingOverlayVisibility() 呼び出し箇所のコメント参照。)
-      this.storyEnded = req.state.storyEnded
-    }
-    this.restoreToScene(resolution.scene, req.state)
-    if (req.source === 'save' && req.origin) this.notifyLoadSuccess(req.origin)
-    return { status: 'entered', sceneId: resolution.scene.id }
-  }
-
-  /**
-   * 新規開始の適用 (#734, ADR 0003 §2・§3 の5・6)。解決できた後・描画の前に、文脈を確定してから組み立てる。
-   * flags の置換・confinement の置き換え・`storyEnded = false`・`consecutiveJumps = 0` は、適用の中で
-   * 同期に走る先回り終劇（#398）が `confinedSceneIds` を読み、`endStory()` の二重発火ガードが
-   * `storyEnded` を見るため、適用より前に済ませる。失敗（解決できなかった）では呼ばれないので、
-   * 失敗時は状態を一切変えない。背景等・BGM・立ち絵は持ち越さない（`carryPolicyFor('fresh')`）。
-   *
-   * @param scene 位置指定（途中局面からの起動）で宣言的復元するときの対象シーン。先頭からなら不要。
-   */
-  private applyFresh(
-    req: Extract<SceneEntryRequest, { kind: 'fresh' }>,
-    sceneId: string | null,
-    events: readonly Event[],
-    scene?: EventScene
-  ): SceneEntryResult {
-    // 位置指定は適用の前に範囲を判定する (#789)。範囲外なら flags・confinement とも変えずに失敗にする。
-    const positioned =
-      req.position && scene
-        ? { scene, state: buildFreshPositionState(scene.id, req.position, req.flags) }
-        : null
-    if (positioned) {
-      const rangeError = this.checkRestorePosition(positioned.scene.events, positioned.state)
-      if (rangeError) return this.failEntry(req, rangeError)
-    }
-
-    this.gameState.fromJSON(req.flags ?? {})
-    this.confinedSceneIds = req.confinedSceneIds ?? null
-    this.clearStoryEnded()
-    this.transition.resetChain()
-
-    if (positioned) {
-      // 途中局面からの起動（`?debug_scene=` の index 指定）: 最小 NovelGameState を共通コアで宣言的復元する。
-      // 冒頭からのディレクティブ実行ではなく、位置の指定方法が違うだけで文脈を捨てる意味論は同じ。
-      this.restoreToScene(positioned.scene, positioned.state)
-      this.onSceneChangeCallback?.(positioned.scene.id)
-      return { status: 'entered', sceneId: positioned.scene.id }
-    }
-
-    // エントリ（target 'entry'。sceneId の有無によらず）は警告しない: エディタのライブ再パース等で毎回出てしまう。
-    if (
-      import.meta.env.DEV &&
-      req.target !== 'entry' &&
-      sceneId !== null &&
-      lacksLeadingBackground(events)
-    ) {
-      console.warn(
-        `[name-name] startFrom: 新規開始の対象シーン "${sceneId}" が最初のテキストまでに [背景:] を持ちません。新規開始は背景を持ち越さないので、背景は地色から始まります。`
-      )
-    }
-    // `linear: true`（動画書き出しの範囲指定が明示的に選ぶ, #777/#817）で、対象がエントリの線形ストリーム上の
-    // シーンなら、そのシーンの events だけでなく、ストリーム全体をシーン先頭から流す。シーン末尾で終わらず、
-    // 続くシーンまで再生される。ストリームの持ち主はエントリのまま（セーブは sceneId = エントリ + eventIndex
-    // で復元できる）。既定（`?scene=` / `?debug_scene=` を含む）は指定シーンの events だけを流して末尾で終劇する。
-    if (req.linear && sceneId !== null && sceneId !== this.sceneIndex.getEntrySceneId()) {
-      const linearStart = this.sceneIndex.linearStartIndex(sceneId, req.flags)
-      if (linearStart !== null) {
-        this.startScene(
-          this.sceneIndex.getEntrySceneId(),
-          this.sceneIndex.getEntryEvents(),
-          carryPolicyFor('fresh'),
-          {
-            startIndex: linearStart,
-            announcedSceneId: sceneId,
-          }
-        )
-        return { status: 'entered', sceneId }
-      }
-    }
-    // 先頭から: 通常入場と同じ経路（冒頭の [背景:]/[BGM:] 等を最初のテキストまで実行し、立ち絵も出す #399）。
-    this.startScene(sceneId, events, carryPolicyFor('fresh'))
-    return { status: 'entered', sceneId }
-  }
-
-  /**
-   * 復元位置を、復元先のイベント列を復元する flags で展開した後の長さに照らして検証する (#789)。
-   * 範囲内なら null、範囲外なら `failEntry` に渡す失敗（out-of-range）を返す。何も変更しない。
-   * 展開後で判定するのは、`[条件:]` の真偽で長さが変わり、`eventIndex` は展開後の列を指すため
-   * （`restoreToScene` が `resolveEvents` した列に `applyState` が eventIndex を当てる）。
-   */
-  private checkRestorePosition(
-    events: readonly Event[],
-    state: NovelGameState
-  ): Extract<SceneLookup, { status: 'failed' }> | null {
-    const flagsState = new GameState()
-    flagsState.fromJSON(state.flags)
-    const detail = findRestorePositionError(
-      resolveEvents(events, flagsState),
-      { eventIndex: state.eventIndex, textIndex: state.textIndex },
-      (event) => {
-        const textEvt = getTextEvent(event)
-        if (!textEvt) return 1
-        // ノベルの改頁数・文単位ページは表示幅や文分割に依存する。ここでは上限を見ない。
-        if (this.isNovelStyle() || this.sentencePerPage) return null
-        return Math.max(1, textEvt.text.length)
-      }
-    )
-    return detail === null ? null : { status: 'failed', reason: 'out-of-range', detail }
-  }
-
-  private warnEntryFailure(
-    req: SceneEntryRequest,
-    failure: Extract<SceneLookup, { status: 'failed' }>
-  ): void {
-    const label =
-      req.kind === 'progress'
-        ? ''
-        : req.kind === 'fresh'
-          ? 'startFrom: '
-          : req.source === 'save'
-            ? 'loadFromSaveData: '
-            : 'restoreSnapshot: '
-    if (failure.error !== undefined) {
-      console.warn(`[name-name] ${label}${failure.detail}`, failure.error)
-    } else {
-      console.warn(`[name-name] ${label}${failure.detail}`)
-    }
-  }
-
-  /**
-   * 入場の失敗 (#734, ADR 0003 §2 の「失敗」列)。位置は動かないので、失敗の種類に応じた通知をしたうえで、
-   * 現在位置から遷移状態を導出し直す。
-   */
-  private failEntry(
-    req: SceneEntryRequest,
-    failure: Extract<SceneLookup, { status: 'failed' }>
-  ): SceneEntryResult {
-    this.warnEntryFailure(req, failure)
-    if (req.kind === 'progress' && req.origin === 'jump') {
-      // Jump 由来: Jump の位置で停止する（現状どおり）。再予約すると同じ失敗を繰り返すので導出し直さない。
-      this.stallJump()
-    } else {
-      if (req.kind === 'restore' && req.source === 'save') {
-        // セーブ由来の復元失敗はプレイヤー操作起点の通知 (#765)。flags は適用しない。
-        this.notifyLoadFailure()
-      }
-      // 未開始（loadEvents 直後）の index 0 は仮置きなので導出し直さない。
-      if (this.cursor.playbackStarted) this.rederiveTransitionAtCurrentPosition()
-    }
-    return { status: 'failed', reason: failure.reason }
   }
 
   /**
@@ -2044,19 +1690,19 @@ export class NovelRenderer {
     // 遷移先が確実に無い（解決手段も無い）なら、選択肢を閉じずその場に留める。閉じてから再表示すると
     // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
     if (
-      isSceneIdConfined(jump, this.confinedSceneIds) &&
+      isSceneIdConfined(jump, this.entry.confinedSceneIds) &&
       this.sceneIndex.isDefinitelyUnresolvable(jump)
     ) {
       console.warn(`[name-name] シーンが見つからない: ${jump}`)
       return false
     }
-    // 同フレームの advance を抑制。enterScene が例外を投げても次の
+    // 同フレームの advance を抑制。入場が例外を投げても次の
     // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
     this.transition.markChoiceJustSelected()
     this.transition.leaveChoiceWait()
     this.choiceOverlay.hide()
     // 進行として入場する。遷移先が見つからなければ、入口が選択肢を再表示する (#734)。
-    void this.runEntry({ kind: 'progress', sceneId: jump, origin: 'choice' })
+    void this.entry.run({ kind: 'progress', sceneId: jump, origin: 'choice' })
     return true
   }
 
@@ -2189,7 +1835,7 @@ export class NovelRenderer {
     // 抜けたシーンを既読にする（線形に読み終えたシーン。選択肢・Jump に到達しない通常再生でも付く）
     const exited = resolved[resolved.indexOf(entered) - 1]
     if (exited && this.docKey) markReadScene(this.docKey, this.readSceneProgress, exited.sceneId)
-    if (!isSceneIdConfined(entered.sceneId, this.confinedSceneIds)) {
+    if (!isSceneIdConfined(entered.sceneId, this.entry.confinedSceneIds)) {
       // `?scene=` 埋め込みは、閉じ込め外のシーンへ入る進行を終劇にする (#386)。線形に続く次のシーンも同じ。
       this.endStory()
       return true
@@ -5026,8 +4672,8 @@ export class NovelRenderer {
       // ここで先回りして終劇する＝選択肢を出さずに完読を通知できる。通常のハブ経由フロー
       // （confinedSceneIds === null）では isSceneIdConfined が常に true を返すため短絡しない。
       if (
-        this.confinedSceneIds !== null &&
-        event.Choice.options.every((o) => !isSceneIdConfined(o.jump, this.confinedSceneIds))
+        this.entry.confinedSceneIds !== null &&
+        event.Choice.options.every((o) => !isSceneIdConfined(o.jump, this.entry.confinedSceneIds))
       ) {
         this.endStory()
         return
@@ -6010,7 +5656,7 @@ export class NovelRenderer {
   /**
    * クイックセーブスロットからゲーム状態を復元する。
    * 選択肢・Wait 待機中はロードしない（不整合状態を避けるため）。
-   * 復元の入場（`enterScene` の restore）の結果を Promise で返す (#734)。null は、クイックセーブデータが
+   * 復元の入場（`SceneEntryController.enter` の restore）の結果を Promise で返す (#734)。null は、クイックセーブデータが
    * 無いか、ゲートで弾かれた場合（入場を始めていない）。トーストは入場の結末（成功・失敗）で出る (#765)。
    */
   quickLoad(origin: 'quick' | 'auto' = 'quick'): Promise<SceneEntryResult | null> {
@@ -6198,10 +5844,10 @@ export class NovelRenderer {
     // SaveSlotData → NovelGameState のフィールド対応・後方互換フォールバックは
     // novelLayout.saveSlotToGameState に集約 (#260)。fade だけは PixiJS を間接参照する
     // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
-    // シーンの引き当て・遅延ロード（マルチMD構成 #578）・失敗時の通知は、単一の入口 enterScene に任せる。
+    // シーンの引き当て・遅延ロード（マルチMD構成 #578）・失敗時の通知は、単一の入口（SceneEntryController.enter）に任せる。
     // 失敗（解決手段が無い・resolver が null/例外・ロード後も不在）は位置・flags とも現状維持（#765）。
     const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
-    return this.enterScene({ kind: 'restore', state, source: 'save', origin })
+    return this.entry.enter({ kind: 'restore', state, source: 'save', origin })
   }
 
   /**
@@ -6230,7 +5876,7 @@ export class NovelRenderer {
    * 再マウントする際 (#442)、旧 renderer の `getSnapshot()` をそのままこの新 renderer に
    * 渡すことで、読み進め位置（背景/立ち絵/BGM 等の視覚状態込み）を引き継ぐために使う。
    *
-   * 復元の入場（`enterScene` の restore）に委譲する薄いラッパー (#734)。シーンの引き当て・遅延ロード・
+   * 復元の入場（`SceneEntryController.enter` の restore）に委譲する薄いラッパー (#734)。シーンの引き当て・遅延ロード・
    * 世代による後勝ち・遷移中のゲート・失敗時の扱い（見つからなければ位置・flags とも変えず warn
    * #765）は入口が担う。結果は Promise で返る（`entered` / `failed` / `superseded`）。
    *
@@ -6254,11 +5900,11 @@ export class NovelRenderer {
     // が実際に有効になるかはブラウザ依存の可能性がある。実機での動作確認が必要。
     this.audioManager.ensureContext()
 
-    return this.enterScene({ kind: 'restore', state: snapshot, source: 'snapshot' })
+    return this.entry.enter({ kind: 'restore', state: snapshot, source: 'snapshot' })
   }
 
   /**
-   * 新規開始 (#734, ADR 0003)。文脈を捨てて、ある局面から始める。単一の入口 `enterScene`（fresh）に
+   * 新規開始 (#734, ADR 0003)。文脈を捨てて、ある局面から始める。単一の入口（`SceneEntryController.enter` の fresh）に
    * 委譲する薄いラッパー。`?scene=`・`?debug_scene=`・デバッガガイドの `startFrom` が使う。
    *
    * - `sceneId` を省略すると、エントリ文書の線形ストリームの先頭から始める。
@@ -6276,22 +5922,7 @@ export class NovelRenderer {
    * - playScript 実行中の呼び出しは想定外（デバッグ API 同士の同時使用は非対応）。
    */
   startFrom(opts: StartFromOptions = {}): Promise<SceneEntryResult> {
-    const eventIndex = opts.eventIndex ?? 0
-    const textIndex = opts.textIndex ?? 0
-    const sentenceIndex = opts.sentenceIndex ?? 0
-    // 位置の指定がある場合だけ宣言的復元（`?debug_scene=` の途中局面）。無ければ先頭からの通常入場 (#399)。
-    const position =
-      opts.sceneId && (eventIndex !== 0 || textIndex !== 0 || sentenceIndex !== 0)
-        ? { eventIndex, textIndex, sentenceIndex }
-        : undefined
-    return this.enterScene({
-      kind: 'fresh',
-      target: opts.sceneId ? { sceneId: opts.sceneId } : 'entry',
-      flags: opts.flags,
-      position,
-      confinedSceneIds: opts.confinedSceneIds,
-      linear: opts.linear,
-    })
+    return this.entry.startFrom(opts)
   }
 
   /**

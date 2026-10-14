@@ -16,7 +16,7 @@ import { defaultTimeController } from './TimeController'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
 import type { SceneEntryResult } from './sceneEntry'
-import { internals, type RendererInternals } from '../test/rendererInternals'
+import { entryControllerOf, internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -273,11 +273,11 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     )
     r.advance()
     const confirm = lastConfirm(calls)
-    const enter = vi.spyOn(r as unknown as { enterScene(...a: unknown[]): unknown }, 'enterScene')
+    const enter = vi.spyOn(entryControllerOf(r), 'enter')
 
     const p = r.jumpToScene('far') // 進行入場を立てる（遅延ロード）
     confirm('other') // 古い選択肢の確定
-    expect(enter).toHaveBeenCalledTimes(1) // 確定は enterScene まで届かない
+    expect(enter).toHaveBeenCalledTimes(1) // 確定は enter まで届かない
     expect(internals<Internals>(r).waitingForChoice).toBe(true)
 
     d.resolve([HUB, FAR])

@@ -2,6 +2,7 @@ import type { Event, EventScene } from '../types'
 import type { NovelGameState } from '../game/GameState'
 import type { Deferred, SceneEntryResult } from '../game/sceneEntry'
 import type { NovelRenderer } from '../game/NovelRenderer'
+import type { SceneEntryController } from '../game/SceneEntryController'
 
 /**
  * テスト用: `NovelRenderer` の private フィールド・メソッドを読み書きするための型付きアクセサ (#735 1/8, #822)。
@@ -81,6 +82,7 @@ export function internalsOf<T>(r: NovelRenderer): T {
   exposeSceneIndexFields(r)
   exposeCursorFields(r)
   exposeTransitionFields(r)
+  exposeEntryFields(r)
   return r as unknown as T
 }
 
@@ -185,3 +187,44 @@ function exposeTransitionFields(r: NovelRenderer): void {
     })
   }
 }
+
+/**
+ * シーン入場まわりのフィールド (#826) は `SceneEntryController` へ移った。テストが従来どおり
+ * `internals(r).confinedSceneIds` で読み書きできるよう、レンダラ上に `entry` の private フィールド
+ * （`_` 付きの実体）へ委譲するアクセサを足す。書き込みは直接代入で、従来の `r.confinedSceneIds = ids` と同じ意味。
+ */
+const ENTRY_FIELDS = ['confinedSceneIds'] as const
+
+function exposeEntryFields(r: NovelRenderer): void {
+  const entryOf = (): Record<string, unknown> =>
+    (r as unknown as { entry: Record<string, unknown> }).entry
+  for (const name of ENTRY_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    // 実体のフィールド名が変わったとき、黙って undefined を読み書きしないよう即座に落とす。
+    if (!(`_${name}` in entryOf())) {
+      throw new Error(`SceneEntryController に _${name} が無い（rendererInternals の委譲先を直す）`)
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => entryOf()[`_${name}`],
+      set: (v: unknown) => {
+        entryOf()[`_${name}`] = v
+      },
+    })
+  }
+}
+
+/**
+ * `NovelRenderer` が持つ `SceneEntryController` (#826)。入場の内部メソッド（`enter` / `startScene` 等）を
+ * `vi.spyOn` で差し替えるテスト用。旧実装ではレンダラ自身の private メソッドだった。
+ */
+export function entryControllerOf(r: NovelRenderer): EntryControllerForTest {
+  return (r as unknown as { entry: EntryControllerForTest }).entry
+}
+
+/** `entryControllerOf` の戻り値。公開メソッドに、spy で差し替える private の `startScene` を足した型。 */
+export type EntryControllerForTest = Pick<
+  SceneEntryController,
+  'enter' | 'run' | 'jumpTo' | 'startFrom'
+> & { startScene(...args: unknown[]): void }

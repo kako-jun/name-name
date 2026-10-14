@@ -379,4 +379,22 @@ describe('入場の失敗・割り込み (#734 PR2 レビュー対応)', () => {
     expect(r.getCurrentSceneId()).toBeNull()
     expect(r.getSnapshot().flags).not.toHaveProperty('stale')
   })
+
+  it('位置指定つきの新規開始: 終劇の解除（onStoryEndedChange(false)）は復元の適用より前に走る', async () => {
+    const r = makeRenderer([
+      choiceScene('gate', [{ text: 'a', jump: 'elsewhere' }]),
+      scene('pos', [narration('p0'), narration('p1')]),
+    ])
+    await r.startFrom({ sceneId: 'gate', confinedSceneIds: ['gate'] })
+    expect(r.getSnapshot().storyEnded).toBe(true)
+
+    // 発火した時点の再生位置を記録する。解除が適用の前なら、まだ旧シーン（gate）の上にいる。
+    // 解除が適用の中（applyState の比較）に遅れると、すでに新シーン（pos）に移っている。
+    const seen: Array<{ ended: boolean; sceneId: string | null }> = []
+    r.setOnStoryEndedChange((ended) => seen.push({ ended, sceneId: internals(r).currentSceneId }))
+    await r.startFrom({ sceneId: 'pos', eventIndex: 1, confinedSceneIds: null })
+
+    expect(seen).toEqual([{ ended: false, sceneId: 'gate' }])
+    expect(r.getSnapshot().storyEnded).toBe(false)
+  })
 })
