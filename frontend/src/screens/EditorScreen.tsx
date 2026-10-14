@@ -292,6 +292,16 @@ function EditorScreen({
     setDoc(newDoc)
     try {
       const md = await emitMarkdown(newDoc)
+      if (docPathRef.current !== editedPath) {
+        // emit の await 中に別の文書へ切り替わった。表示は切替先のものなので rawMarkdown には
+        // 反映せず、編集した文書の下書きとして退避だけする。
+        try {
+          localStorage.setItem(localStorageKey(projectName, editedPath), md)
+        } catch {
+          // ignore
+        }
+        return
+      }
       setRawMarkdown(md)
       setRawMarkdownPath(editedPath)
     } catch (err) {
@@ -425,6 +435,8 @@ function EditorScreen({
   const switchScript = useCallback(
     (path: string) => {
       resetOtherDocsCache()
+      // 旧文書の未保存表示を引きずらない（切替先のロード完了で下書きの有無から再計算される）
+      setHasUnsavedChanges(false)
       setCurrentScriptPath(path)
     },
     [resetOtherDocsCache]
@@ -737,7 +749,7 @@ function EditorScreen({
   // 保留中の下書き書き込み。タイマー発火・タブ切替・アンマウントのいずれでも flushPendingDraft で確定する。
   // （従来は rawMarkdown の cleanup でタイマーごと捨てていたため、切替前 1 秒以内の編集が
   //  localStorage に残らなかった。#778 で他タブの下書きがプレビューの取得元になり表面化した）
-  const pendingDraftRef = useRef<{ key: string; markdown: string } | null>(null)
+  const pendingDraftRef = useRef<{ key: string; markdown: string; initial: string } | null>(null)
   const flushPendingDraft = useCallback(() => {
     if (draftSaveTimeoutRef.current !== null) {
       clearTimeout(draftSaveTimeoutRef.current)
@@ -765,9 +777,22 @@ function EditorScreen({
     if (draftSaveTimeoutRef.current !== null) {
       clearTimeout(draftSaveTimeoutRef.current)
     }
+    const nextKey = localStorageKey(projectName, rawMarkdownPath)
+    const stale = pendingDraftRef.current
+    if (stale && stale.key !== nextKey) {
+      // 別文書の保留分が残っていたら（emit の await 中にタブが切り替わった等）、上書きで失う前に
+      // 積んだ時点の基準で確定する
+      try {
+        if (stale.markdown === stale.initial) localStorage.removeItem(stale.key)
+        else localStorage.setItem(stale.key, stale.markdown)
+      } catch (error) {
+        console.error('Failed to persist draft to localStorage:', error)
+      }
+    }
     pendingDraftRef.current = {
-      key: localStorageKey(projectName, rawMarkdownPath),
+      key: nextKey,
       markdown: rawMarkdown,
+      initial: initialMarkdownRef.current,
     }
     draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
 
@@ -829,6 +854,7 @@ function EditorScreen({
         pendingDraftRef.current = {
           key: savedKey,
           markdown: rawMarkdownRef.current,
+          initial: savedContent,
         }
         if (draftSaveTimeoutRef.current === null) {
           draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
@@ -851,6 +877,9 @@ function EditorScreen({
   //   順序にする。
   const handleDiscard = async () => {
     setShowDiscardConfirm(false)
+    // 切替先のロード中は破棄しない（表示中の旧文書を捨てるつもりでも、取り直しと下書き削除は
+    // currentScriptPath＝切替先に対して走り、切替先の未保存の下書きを消してしまう）。
+    if (docPathRef.current !== currentScriptPathRef.current) return
     setIsSaving(true)
     setSaveError(null)
     try {
@@ -1055,11 +1084,12 @@ function EditorScreen({
                   key={s.path}
                   role="tab"
                   aria-selected={isActive}
-                  // 保存・破棄の通信中は切り替えない（sha・基準内容・下書きが別文書のものと混ざるのを防ぐ）
-                  disabled={isSaving}
-                  aria-disabled={isSaving}
+                  // 保存・破棄の通信中と、動画書き出しのモーダルを開いている間は切り替えない
+                  // （sha・基準内容・下書きが別文書のものと混ざるのを防ぐ／切替先のロード中の inert でモーダルが操作不能になるのを防ぐ）
+                  disabled={isSaving || exportOpen}
+                  aria-disabled={isSaving || exportOpen}
                   onClick={() => {
-                    if (isSaving) return
+                    if (isSaving || exportOpen) return
                     if (s.path === currentScriptPath) return
                     if (
                       hasUnsavedChanges &&
@@ -1073,7 +1103,9 @@ function EditorScreen({
                     // 切替後の load は currentScriptPath を依存に入れた useEffect が処理する
                   }}
                   className="desk-tab"
-                  style={isSaving ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                  style={
+                    isSaving || exportOpen ? { opacity: 0.5, cursor: 'not-allowed' } : undefined
+                  }
                   title={s.title ?? s.path}
                 >
                   {s.path}
@@ -1440,6 +1472,8 @@ function EditorScreen({
         mode={editorTab === 'novel' ? mode : undefined}
         onModeChange={editorTab === 'novel' ? setMode : undefined}
         // PR #120 review Q1: shaRef 未取得（loadFailed / 未ロード）時は保存不可。
+        discardDisabled={switchingDoc}
+        discardDisabledTitle="読み込み中…"
         saveDisabled={loadFailed || !hasSha}
         saveDisabledTitle={
           loadFailed ? '再読み込みしてから保存してください' : !hasSha ? '読み込み中…' : undefined

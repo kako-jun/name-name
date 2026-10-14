@@ -42,6 +42,8 @@ vi.mock('../components/NovelPlayer', () => ({
 // #778: onDocChange を外から叩けるようにする（編集のシミュレーション）
 let editedDoc: EventDocument = makeDoc(['hub', 'S1'])
 let emitted = ''
+// emitMarkdown を遅延させたいとき用（null なら即時）
+let emitGate: Promise<void> | null = null
 vi.mock('../components/CanvasEditor', () => ({
   default: (props: { onDocChange: (d: EventDocument) => void }) => (
     <button data-testid="edit-doc" onClick={() => props.onDocChange(editedDoc)} />
@@ -57,7 +59,10 @@ vi.mock('../wasm/parser', () => ({
     for (const [sub, d] of parsedContains) if (md.includes(sub)) return d
     return parsedByMarkdown.get(md) ?? parsed
   },
-  emitMarkdown: async () => emitted,
+  emitMarkdown: async () => {
+    if (emitGate) await emitGate
+    return emitted
+  },
 }))
 vi.mock('../api/client', () => ({
   createApiClient: () => ({
@@ -714,6 +719,7 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     parsedContains.length = 0
     parsed = makeDoc(['hub', 'S1'])
     editedDoc = makeDoc(['hub', 'S1', 'S2'])
+    emitGate = null
   })
   const draftKey = 'name-name:editor-draft:p:script.md'
 
@@ -904,5 +910,90 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     await waitFor(() => expect(putContentsMock).toHaveBeenCalled())
     const discard = (await screen.findByRole('button', { name: '破棄' })) as HTMLButtonElement
     expect(discard.disabled).toBe(true)
+  })
+
+  it('切替先のロード中は破棄できず、切替先の未保存の下書きが残る (#795)', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    let releaseB: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'other.md') {
+        return new Promise((r) => {
+          releaseB = r
+        })
+      }
+      return { content: '# A-body', sha: 'sha' }
+    })
+    localStorage.setItem('name-name:editor-draft:p:other.md', '# B-draft')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderEditor()
+    emitted = '# A-edit'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    await screen.findByTestId('doc-switching-overlay')
+    // 切替先のロード中は破棄ボタン（と保存ボタン）が無効で、title は「読み込み中…」
+    const disabledButtons = screen.getAllByTitle('読み込み中…') as HTMLButtonElement[]
+    expect(disabledButtons.length).toBe(2)
+    for (const b of disabledButtons) {
+      expect(b.disabled).toBe(true)
+      fireEvent.click(b)
+    }
+    expect(screen.queryByText('変更を破棄しますか？')).toBeNull()
+    await act(async () => {
+      releaseB({ content: '# B-server', sha: 'shaB' })
+    })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-draft')
+  })
+
+  it('emit の await 中にタブが切り替わり、切替先が先に確定しても、旧文書の最後の編集が積み残されない', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    let releaseB: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'other.md') {
+        return new Promise((r) => {
+          releaseB = r
+        })
+      }
+      return { content: '# A-body', sha: 'sha' }
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderEditor()
+    await screen.findByRole('tab', { name: /^other\.md/ })
+    // 旧文書の編集を始めるが、emit はまだ返らない
+    let releaseEmit: () => void = () => {}
+    emitGate = new Promise<void>((r) => {
+      releaseEmit = r
+    })
+    emitted = '# A-last-edit'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    // その間にタブを切り替え、emit が返った後で切替先のロードが完了する（1 秒以内）
+    fireEvent.click(screen.getByRole('tab', { name: /^other\.md/ }))
+    await act(async () => {
+      releaseEmit()
+    })
+    await act(async () => {
+      releaseB({ content: '# B-server', sha: 'shaB' })
+    })
+    await new Promise((r) => setTimeout(r, 1300))
+    expect(localStorage.getItem('name-name:editor-draft:p:script.md')).toBe('# A-last-edit')
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBeNull()
+  })
+
+  it('動画書き出しのモーダルを開いている間はタブ切替が無効', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    getContentsMock.mockImplementation(async () => ({ content: '# hub', sha: 'sha' }))
+    renderEditor()
+    await screen.findByRole('tab', { name: /^other\.md/ })
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    fireEvent.click(await screen.findByRole('button', { name: '動画エクスポート' }))
+    const other = screen.getByRole('tab', { name: /^other\.md/ }) as HTMLButtonElement
+    expect(other.disabled).toBe(true)
+    fireEvent.click(other)
+    expect(screen.getByRole('tab', { name: /^script\.md/ }).getAttribute('aria-selected')).toBe(
+      'true'
+    )
   })
 })
