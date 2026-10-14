@@ -122,6 +122,8 @@ function EditorScreen({
   const [rawMarkdown, setRawMarkdown] = useState<string>('')
   // 保存の await 中に編集が進んだかを判定するため、常に最新の内容を指す
   const rawMarkdownRef = useRef('')
+  // 文書のロード開始ごとに進める世代。保存の PUT 中に再ロードが始まったかの判定に使う。
+  const loadGenRef = useRef(0)
   rawMarkdownRef.current = rawMarkdown
   const [rpgSubTab, setRpgSubTab] = useState<'map' | 'npc' | 'play'>('map')
   // #237: 編集中ファイルパス + 利用可能なファイル一覧。
@@ -293,11 +295,13 @@ function EditorScreen({
   }
 
   // Markdown を WASM でパースして doc を更新
-  const parseAndSetDoc = async (markdown: string) => {
+  const parseAndSetDoc = async (markdown: string, isCancelled?: () => boolean) => {
     try {
       const parsed = await parseMarkdown(markdown)
+      if (isCancelled?.()) return
       setDoc(parsed)
     } catch (parseError) {
+      if (isCancelled?.()) return
       console.error('WASM parse failed:', parseError)
       setSaveError('Markdownのパースに失敗しました')
       // 空のドキュメントでフォールバック
@@ -505,9 +509,15 @@ function EditorScreen({
   // content/scripts 等）は scriptsDir/script.md を取る（ルートの script.md は 404 になるため）。
   // scriptsDir は listProjects（静的な JSON）で分かる。取れなければルート直下を試す。
   const defaultPrefetchRef = useRef<{
+    api: typeof api
+    projectName: string
     promise: Promise<{ path: string; data: ContentsResponse | null; error: unknown }>
   } | null>(null)
   useEffect(() => {
+    // 同じ api / プロジェクトで未消費の先行取得があれば作り直さない（dev の StrictMode の
+    // 二重実行で同じファイルを2回取らないため。本番は effect が1回しか走らず影響なし）。
+    const existing = defaultPrefetchRef.current
+    if (existing && existing.api === api && existing.projectName === projectName) return
     const promise = (async () => {
       let path = DEFAULT_SCRIPT_PATH
       try {
@@ -529,7 +539,7 @@ function EditorScreen({
         return { path, data: null, error }
       }
     })()
-    defaultPrefetchRef.current = { promise }
+    defaultPrefetchRef.current = { api, projectName, promise }
   }, [api, projectName])
 
   useEffect(() => {
@@ -543,6 +553,10 @@ function EditorScreen({
     shaRef.current = null
     setHasSha(false)
     initialMarkdownRef.current = ''
+    // タブ・プロジェクトが切り替わって effect が作り直されたら、この実行の結果は捨てる
+    // （遅れて完了した古いロードが、新しい文書の state / ref / 下書きを上書きしない）。
+    let cancelled = false
+    loadGenRef.current++
 
     const loadChapters = async () => {
       try {
@@ -550,16 +564,21 @@ function EditorScreen({
         // 一覧が成功していれば（一時的な失敗かもしれないので）取り直し、一覧も失敗していたら
         // 同じエラーを使い回す（同じ取得を2回しない。トーストは従来どおり1回）。
         let data: ContentsResponse | null = null
+        // 先行取得の取得権は await の前に同期的に確保する（別の実行が新しい先行取得を潰さない）。
+        // なお先行取得のパスは listProjects（scriptsDir）の応答待ちで初めて分かるため、パスが
+        // 一致しない場合もその完了までは待つ（一覧確定後なので通常は取得済みで待ちは短い）。
         const prefetch = defaultPrefetchRef.current
+        defaultPrefetchRef.current = null
         if (prefetch) {
           const pre = await prefetch.promise
-          defaultPrefetchRef.current = null
+          if (cancelled) return
           if (pre.path === currentScriptPath) {
             if (pre.data) data = pre.data
             else if (scriptListFailedRef.current) throw pre.error
           }
         }
         data ??= await api.getContents(projectName, currentScriptPath, DEFAULT_BRANCH)
+        if (cancelled) return
         const markdown = data.content || ''
         shaRef.current = data.sha
         setHasSha(Boolean(data.sha))
@@ -576,12 +595,14 @@ function EditorScreen({
         }
         const startMarkdown = localDraft !== null && localDraft !== '' ? localDraft : markdown
         setRawMarkdown(startMarkdown)
-        await parseAndSetDoc(startMarkdown)
+        await parseAndSetDoc(startMarkdown, () => cancelled)
+        if (cancelled) return
         setDocPath(currentScriptPath)
         // 既定パス(script.md)の先行ロード失敗で出た読み込みエラーは、再ロード成功で消す
         setSaveError((prev) => (prev === LOAD_FAILED_MESSAGE ? null : prev))
         setHasUnsavedChanges(localDraft !== null && localDraft !== markdown)
       } catch (error) {
+        if (cancelled) return
         console.error('Failed to load chapters:', error)
         // PR #120 review S4: 失敗時に setRawMarkdown('') すると autosave 経由で
         //   localStorage の draft が空文字で潰れる。loadFailed フラグを立てて
@@ -596,6 +617,9 @@ function EditorScreen({
       }
     }
     loadChapters()
+    return () => {
+      cancelled = true
+    }
     // api は apiBaseUrl から派生する useMemo の値、projectName / currentScriptPath が
     // 変わったらもう一度ロード（#237: ファイルタブ切替で再ロード）。
   }, [api, projectName, currentScriptPath, scriptListSettled])
@@ -756,6 +780,7 @@ function EditorScreen({
     setIsSaving(true)
     setSaveError(null)
     const savedPath = currentScriptPath
+    const savedGen = loadGenRef.current
     try {
       const sha = shaRef.current
       const result = await api.putContents(projectName, savedPath, {
@@ -766,10 +791,10 @@ function EditorScreen({
       })
       const savedContent = rawMarkdown
       const savedKey = localStorageKey(projectName, savedPath)
-      // 保存中（PUT の await 中）に別タブへ切り替わっていたら、いまのエディタ状態（sha・基準内容・
+      // 保存中（PUT の await 中）に別タブへ切り替わった・同じファイルでも再ロードが始まっていたら、いまのエディタ状態（sha・基準内容・
       // 未保存判定・保留中の下書き）は別文書のものなので触らない。旧タブの下書きキーだけ、
       // 保存した内容と一致するときに限って消す。
-      if (currentScriptPathRef.current !== savedPath) {
+      if (currentScriptPathRef.current !== savedPath || loadGenRef.current !== savedGen) {
         try {
           if (localStorage.getItem(savedKey) === savedContent) localStorage.removeItem(savedKey)
         } catch {

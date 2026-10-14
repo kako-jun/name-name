@@ -4,6 +4,7 @@
  * これが無いと renderer.allScenes が空で、動画書き出しの `startFrom({ sceneId })` が not-found になる。
  * 重い子コンポーネント・API・WASM パーサはモックし、NovelPlayer に渡る props だけを観測する。
  */
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { EventDocument, EventScene } from '../types'
@@ -600,6 +601,104 @@ describe('EditorScreen: 起動時の先行取得とプロジェクト切替 (#77
     )
     await waitFor(() => expect(listScriptsMock).toHaveBeenCalledWith('q', 'develop'))
     await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('q', 'q-main.md', 'develop'))
+  })
+})
+
+describe('EditorScreen: 古いロードの中断 (#794)', () => {
+  const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+  const draftOther = 'name-name:editor-draft:p:other.md'
+  beforeEach(() => {
+    localStorage.clear()
+    getContentsMock.mockReset()
+    listScriptsMock.mockReset()
+    listProjectsMock.mockReset()
+    listProjectsMock.mockImplementation(async () => [])
+    parsedByMarkdown.clear()
+    parsedContains.length = 0
+    parsed = makeDoc(['hub', 'S1'])
+  })
+
+  it('先行取得の待ち中にタブを切り替え、古い取得が後で完了しても、切替先の下書きと表示が保たれる', async () => {
+    // script.md の取得は（先行取得・他文書としての取得を含め）全部止めておき、まとめて解放する
+    const releases: Array<(v: { content: string; sha: string }) => void> = []
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'script.md') {
+        return new Promise((r) => {
+          releases.push(r)
+        })
+      }
+      return { content: '# B-server', sha: 'sha' }
+    })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    localStorage.setItem(draftOther, '# B-draft')
+    renderEditor()
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('p', 'other.md', 'develop'))
+    await new Promise((r) => setTimeout(r, 100))
+    await act(async () => {
+      for (const r of releases) r({ content: '# A-body', sha: 'shaA' })
+    })
+    await new Promise((r) => setTimeout(r, 1300))
+    // 古い A のロードが B の下書きを消したり上書きしたりしない
+    expect(localStorage.getItem(draftOther)).toBe('# B-draft')
+    // B は下書き復元で未保存扱いのまま（A の基準で「保存済み」に戻されない）
+    expect(screen.getByRole('button', { name: 'Gitにコミット・プッシュ' })).toBeTruthy()
+  })
+
+  it('旧プロジェクトの進行中のロードが、新プロジェクトの文書を上書きしない', async () => {
+    let release: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (name: string, path: string) => {
+      if (name === 'p' && path === 'script.md') {
+        return new Promise((r) => {
+          release = r
+        })
+      }
+      return { content: '# Q-server', sha: 'sha' }
+    })
+    listScriptsMock.mockImplementation(async () => [info('script.md')])
+    localStorage.setItem('name-name:editor-draft:q:script.md', '# Q-draft')
+    const view = renderEditor()
+    await waitFor(() => expect(listScriptsMock).toHaveBeenCalledWith('p', 'develop'))
+    view.rerender(
+      <EditorScreen
+        projectName="q"
+        apiBaseUrl="http://api"
+        isDark={false}
+        onBack={() => {}}
+        onToggleDark={() => {}}
+        onOpenSettings={() => {}}
+        onNavigateToAssets={() => {}}
+      />
+    )
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('q', 'script.md', 'develop'))
+    await new Promise((r) => setTimeout(r, 100))
+    await act(async () => {
+      release({ content: '# P-body', sha: 'shaP' })
+    })
+    await new Promise((r) => setTimeout(r, 1300))
+    expect(localStorage.getItem('name-name:editor-draft:q:script.md')).toBe('# Q-draft')
+    expect(screen.getByRole('button', { name: 'Gitにコミット・プッシュ' })).toBeTruthy()
+  })
+
+  it('StrictMode（dev の二重実行）でも、起動時に既定の script.md を二重に取得しない', async () => {
+    getContentsMock.mockImplementation(async () => ({ content: '# real', sha: 'sha' }))
+    listScriptsMock.mockImplementation(async () => [info('script.md')])
+    render(
+      <StrictMode>
+        <EditorScreen
+          projectName="p"
+          apiBaseUrl="http://api"
+          isDark={false}
+          onBack={() => {}}
+          onToggleDark={() => {}}
+          onOpenSettings={() => {}}
+          onNavigateToAssets={() => {}}
+        />
+      </StrictMode>
+    )
+    await waitFor(() => expect(getContentsMock).toHaveBeenCalledWith('p', 'script.md', 'develop'))
+    await new Promise((r) => setTimeout(r, 150))
+    expect(getContentsMock.mock.calls.filter((c) => c[1] === 'script.md').length).toBe(1)
   })
 })
 
