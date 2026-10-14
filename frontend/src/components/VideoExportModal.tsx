@@ -20,6 +20,8 @@ interface VideoExportModalProps {
   onChangeFps: (fps: number) => void
   onChangeInheritFlags: (inherit: boolean) => void
   onStart: () => void
+  /** 録画を中止する (#780)。録画は破棄され、ファイルは保存されない */
+  onAbort: () => void
   onClose: () => void
 }
 
@@ -37,6 +39,7 @@ function VideoExportModal({
   onChangeFps,
   onChangeInheritFlags,
   onStart,
+  onAbort,
   onClose,
 }: VideoExportModalProps) {
   // Esc キーで閉じる（録画中は閉じれないようにする = 進捗の見失い防止）
@@ -127,7 +130,9 @@ function VideoExportModal({
             </span>
           </span>
         </label>
-        {status && <div className="text-xs mb-3 opacity-80 break-all">{status}</div>}
+        {status && (
+          <div className="text-xs mb-3 opacity-80 break-all whitespace-pre-wrap">{status}</div>
+        )}
         <div className="flex gap-2 justify-end">
           <button
             type="button"
@@ -137,6 +142,16 @@ function VideoExportModal({
           >
             閉じる
           </button>
+          {isRunning && (
+            <button
+              type="button"
+              onClick={onAbort}
+              title="録画を止めて破棄します（ファイルは保存されません）"
+              className={`px-3 py-1 rounded text-sm ${isDark ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-300 hover:bg-gray-400'}`}
+            >
+              中止
+            </button>
+          )}
           <button
             type="button"
             onClick={onStart}

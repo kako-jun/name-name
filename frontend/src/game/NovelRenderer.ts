@@ -93,6 +93,7 @@ import {
 import {
   CameraElevation,
   CameraMode,
+  ChoiceOption,
   CameraOrientation,
   Event,
   EventImageTransition,
@@ -2478,6 +2479,70 @@ export class NovelRenderer {
     this.beginFadeOutEntries(this.bgEntries, startMs, durationMs)
     this.updateBackgroundFadeFrame()
     this.ensureBackgroundCrossfadeTicker()
+  }
+
+  /**
+   * 選択肢の各 option がロックされているか (#591, #652)。`option.condition` が未定義なら false。
+   * `debugUnlockAllChoices` が true のときは全 false（全ルート強制解放）。
+   */
+  private computeChoiceLocked(options: ChoiceOption[]): boolean[] {
+    return this.debugUnlockAllChoices
+      ? options.map(() => false)
+      : options.map((option) =>
+          option.condition ? !this.gameState.checkFlag(option.condition) : false
+        )
+  }
+
+  /**
+   * 選択肢の確定（ChoiceOverlay のコールバックと `selectPendingChoice` の共通の実体）。
+   * 確定できたら true、受け付けなかったら false（false だと ChoiceOverlay は確定音を出さない）。
+   */
+  private confirmChoiceJump(jump: string): boolean {
+    // 入場中（別の遷移・復元の遅延ロードを待っている間）は確定を受け付けない。選択肢は表示されたまま、
+    // 確定音も鳴らさない (#734)。
+    if (this.isTransitionGated('confirmChoice')) return false
+    // 遷移先が確実に無い（解決手段も無い）なら、選択肢を閉じずその場に留める。閉じてから再表示すると
+    // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
+    if (isSceneIdConfined(jump, this.confinedSceneIds) && this.isDefinitelyUnresolvable(jump)) {
+      console.warn(`[name-name] シーンが見つからない: ${jump}`)
+      return false
+    }
+    // 同フレームの advance を抑制。enterScene が例外を投げても次の
+    // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
+    this.justSelectedChoice = true
+    this.time.setTimeout(() => {
+      this.justSelectedChoice = false
+    }, 0)
+    this.waitingForChoice = false
+    this.choiceOverlay.hide()
+    // 進行として入場する。遷移先が見つからなければ、入口が選択肢を再表示する (#734)。
+    void this.runEntry({ kind: 'progress', sceneId: jump, origin: 'choice' })
+    return true
+  }
+
+  /**
+   * いま表示中の選択肢の遷移先とロック状態を返す (#780 動画書き出しの自動選択用)。
+   * 選択肢待ちでなければ null。
+   */
+  getPendingChoice(): { options: Array<{ jump: string; locked: boolean }> } | null {
+    if (!this.waitingForChoice) return null
+    const current = this.resolvedEvents[this.eventIndex]
+    if (typeof current !== 'object' || current === null || !('Choice' in current)) return null
+    const locked = this.computeChoiceLocked(current.Choice.options)
+    return {
+      options: current.Choice.options.map((o, i) => ({ jump: o.jump, locked: locked[i] ?? false })),
+    }
+  }
+
+  /**
+   * 表示中の選択肢のうち、遷移先が `jump` のロックされていない option を確定する (#780)。
+   * クリックと同じ確定経路を通る。選択肢待ちでない・該当 option が無い・ロック中・入場中なら false。
+   */
+  selectPendingChoice(jump: string): boolean {
+    const pending = this.getPendingChoice()
+    if (!pending) return false
+    if (!pending.options.some((o) => o.jump === jump && !o.locked)) return false
+    return this.confirmChoiceJump(jump)
   }
 
   /** 現在表示中のシーンID (#228 動画エクスポート用) */
@@ -5537,11 +5602,7 @@ export class NovelRenderer {
       // `resolveEvents` の Condition 判定・GameFlags.check（TUI版）と同じ真偽規則。
       // #652: `debugUnlockAllChoices` が true のときは `option.condition` を見ずに
       // 全 false（全ルート強制解放。TUI版 `Playback.is_option_locked` と対称）。
-      const locked = this.debugUnlockAllChoices
-        ? event.Choice.options.map(() => false)
-        : event.Choice.options.map((option) =>
-            option.condition ? !this.gameState.checkFlag(option.condition) : false
-          )
+      const locked = this.computeChoiceLocked(event.Choice.options)
       // 完了(クリア済み)視覚状態 (#594、#596でキーワード改名)。`option.cleared` が未定義
       // なら常に false（完了しない、既存動作）。指定されていれば `checkFlag` で判定する
       // （`locked` と違い真がそのまま完了——真偽判定自体は `[条件:]` と同じ規則）。
@@ -5553,31 +5614,7 @@ export class NovelRenderer {
       )
       this.choiceOverlay.show(
         event.Choice.options,
-        (jump: string): boolean => {
-          // 入場中（別の遷移・復元の遅延ロードを待っている間）は確定を受け付けない。選択肢は表示されたまま、
-          // 確定音も鳴らさない (#734。false を返すと ChoiceOverlay は確定音を出さない)。
-          if (this.isTransitionGated('confirmChoice')) return false
-          // 遷移先が確実に無い（解決手段も無い）なら、選択肢を閉じずその場に留める。閉じてから再表示すると
-          // フェード再生・フォーカス初期化が起きるため (#734)。TUI の選択肢が選択に失敗して留まるのと同じ。
-          if (
-            isSceneIdConfined(jump, this.confinedSceneIds) &&
-            this.isDefinitelyUnresolvable(jump)
-          ) {
-            console.warn(`[name-name] シーンが見つからない: ${jump}`)
-            return false
-          }
-          // 同フレームの advance を抑制。enterScene が例外を投げても次の
-          // イベントループで確実にリセットされるよう setTimeout(0) を使う (#211)
-          this.justSelectedChoice = true
-          this.time.setTimeout(() => {
-            this.justSelectedChoice = false
-          }, 0)
-          this.waitingForChoice = false
-          this.choiceOverlay.hide()
-          // 進行として入場する。遷移先が見つからなければ、入口が選択肢を再表示する (#734)。
-          void this.runEntry({ kind: 'progress', sceneId: jump, origin: 'choice' })
-          return true
-        },
+        (jump: string): boolean => this.confirmChoiceJump(jump),
         this.choiceStyle,
         this.readSceneProgress,
         event.Choice.columns,

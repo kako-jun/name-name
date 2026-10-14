@@ -288,6 +288,9 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
       isAutoMode: () => false,
       setAutoMode: () => {},
       prepareVideosForExport: async () => {},
+      getPendingChoice: () => null,
+      selectPendingChoice: () => false,
+      getSnapshot: () => ({ sceneId: null, eventIndex: 0, textIndex: 0, sentenceIndex: 0 }),
     } as unknown as Parameters<typeof import('./VideoExporter').exportVideo>[0]
   }
 

@@ -18,6 +18,7 @@ import { createApiClient, type ContentsResponse, type ScriptInfo } from '../api/
 import type { NovelRenderer } from '../game/NovelRenderer'
 import {
   exportVideo,
+  ExportAbortedError,
   buildVideoExportOptions,
   downloadBlob,
   pickSupportedMimeType,
@@ -104,6 +105,8 @@ function EditorScreen({
   const [exportFps, setExportFps] = useState(30)
   const [exportInheritFlags, setExportInheritFlags] = useState(false)
   const [exportRunning, setExportRunning] = useState(false)
+  // 書き出しの中止用 (#780)。実行中だけ非 null
+  const exportAbortRef = useRef<AbortController | null>(null)
   const [editorTab, setEditorTab] = useState<'novel' | 'rpg'>('novel')
   const [doc, setDoc] = useState<EventDocument | null>(null)
   // CanvasEditor を再マウントしてエディタ内部 state を完全リセットするためのバージョン。
@@ -211,6 +214,8 @@ function EditorScreen({
       setExportStatus('既に録画中です')
       return
     }
+    const abort = new AbortController()
+    exportAbortRef.current = abort
     setExportRunning(true)
     setExportStatus('準備中...')
     const opts: VideoExportOptions = buildVideoExportOptions(renderer, {
@@ -221,6 +226,8 @@ function EditorScreen({
       mimeType: mime,
       onProgress: (s) => setExportStatus(s),
     })
+    opts.sceneOrder = allSceneIds
+    opts.signal = abort.signal
     try {
       const result = await exportVideo(renderer, opts)
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
@@ -230,11 +237,19 @@ function EditorScreen({
       downloadBlob(result.blob, filename)
       const durSec = (result.durationMs / 1000).toFixed(1)
       const sizeMb = (result.blob.size / (1024 * 1024)).toFixed(2)
-      setExportStatus(`完了: ${filename} (${durSec}s, ${sizeMb} MB)`)
+      const label = result.endReason === 'stalled' ? 'タイムアウト' : '完了'
+      setExportStatus(
+        `${label}: ${filename} (${durSec}s, ${sizeMb} MB)\n終了理由: ${result.endMessage}`
+      )
     } catch (e) {
-      console.error('[VideoExport] failed', e)
-      setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+      if (e instanceof ExportAbortedError) {
+        setExportStatus('中止しました（録画は破棄され、ファイルは保存されていません）')
+      } else {
+        console.error('[VideoExport] failed', e)
+        setExportStatus(`失敗: ${e instanceof Error ? e.message : String(e)}`)
+      }
     } finally {
+      exportAbortRef.current = null
       setExportRunning(false)
     }
   }, [
@@ -244,7 +259,12 @@ function EditorScreen({
     exportFps,
     exportInheritFlags,
     exportRunning,
+    allSceneIds,
   ])
+
+  const handleAbortVideoExport = useCallback(() => {
+    exportAbortRef.current?.abort()
+  }, [])
 
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
@@ -1258,6 +1278,7 @@ function EditorScreen({
                   onChangeFps={setExportFps}
                   onChangeInheritFlags={setExportInheritFlags}
                   onStart={handleStartVideoExport}
+                  onAbort={handleAbortVideoExport}
                   onClose={() => setExportOpen(false)}
                 />
               )}
