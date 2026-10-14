@@ -1681,7 +1681,7 @@ GOLD: 1
 | `EXP` | `exp` / `経験値` | No | 倒したときに得られる経験値 |
 | `GOLD` | `gold` / `G` / `ゴールド` | No | 倒したときに落とすゴールド |
 | `スプライト` | `sprite` | No | スプライト画像への相対パス |
-| `ポーズ` | `poses` | No | 戦闘ポーズ別スプライト (#745)。カンマ区切りの `キー=パス`（例: `idle=a.png, slash=b.png`）。キーは `idle` / `ready` / `step` / `slash` / `cast` / `hurt` / `down` / `victory`（部分指定可・大小無視。`cast` は呪文の構え、アイテムの構えは `ready`。`special`（必殺技）は必殺技の配線時に足すので、今は受け付けない）。`battle_presentation: ff` のときだけ、局面ごとに絵を差し替える（`dq` では読まない）。`=` が無い・キーかパスが空の要素は無視、同じキーは後勝ち。未知のキーは parser は透過し、runtime が無視する。指定の無いポーズは近い絵に落とす（`slash`→`step`→`ready`→`idle`、`cast`→`ready`→`idle`、`step`→`ready`→`idle`、`ready`・`hurt`・`victory`→`idle`）。`down` は代替せず、無ければ沈み込みで表す。どれも無ければ従来の 1 枚の `スプライト` のまま動きだけ付く。`スプライト` が無く `idle` があれば（`ff` のとき）`idle` を基本の絵にする |
+| `ポーズ` | `poses` | No | 戦闘ポーズ別スプライト (#745)。カンマ区切りの `キー=パス`（例: `idle=a.png, slash=b.png`）。キーは `idle` / `ready` / `step` / `slash` / `cast` / `hurt` / `down` / `victory`（部分指定可・大小無視。`cast` は呪文の構え、アイテムの構えは `ready`。`special`（必殺技）は必殺技の配線時に足すので、今は受け付けない）。`battle_presentation: ff` のときだけ、局面ごとに絵を差し替える（`dq` では読まない）。`=` が無い・キーかパスが空の要素は無視、同じキーは後勝ち。未知のキーは parser は透過し、runtime が無視する。ポーズの絵は、基本の絵（`スプライト`、無ければ `idle`）を枠に収めたときの縮尺のまま足元（下端中央）を揃えて描く（幅の違うポーズも枠に収め直さず、はみ出しは許容）。指定の無いポーズは近い絵に落とす（`slash`→`step`→`ready`→`idle`、`cast`→`ready`→`idle`、`step`→`ready`→`idle`、`ready`・`hurt`・`victory`→`idle`）。`down` は代替せず、無ければ沈み込みで表す。どれも無ければ従来の 1 枚の `スプライト` のまま動きだけ付く。`スプライト` が無く `idle` があれば（`ff` のとき）`idle` を基本の絵にする |
 | `builtin` | — | No | 専用関数 ID（特殊行動はここに委譲） |
 
 `名前` が無い場合はブロックが破棄される。

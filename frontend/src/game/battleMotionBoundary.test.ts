@@ -28,6 +28,9 @@ import {
   messageWindowText,
   normalizePoses,
   popupFontSize,
+  POPUP_FONT_MIN,
+  POPUP_FONT_MAX,
+  POPUP_FONT_RATIO,
   popupText,
   posesField,
   resolvePose,
@@ -306,11 +309,11 @@ describe('popupText / popupFontSize: 境界', () => {
     expect(popupText({ kind: 'miss', amount: 99 })).toBe('MISS')
   })
   it('フォントサイズ: 下限・上限の境目と中間値', () => {
-    expect(popupFontSize(0)).toBe(16)
-    expect(popupFontSize(Infinity)).toBe(16)
-    expect(popupFontSize(100)).toBe(24)
-    expect(popupFontSize(125)).toBe(30)
-    expect(popupFontSize(126)).toBe(30)
+    expect(popupFontSize(0)).toBe(POPUP_FONT_MIN)
+    expect(popupFontSize(Infinity)).toBe(POPUP_FONT_MIN)
+    expect(popupFontSize(100)).toBe(Math.round(100 * POPUP_FONT_RATIO))
+    expect(popupFontSize(POPUP_FONT_MAX / POPUP_FONT_RATIO)).toBe(POPUP_FONT_MAX)
+    expect(popupFontSize(10000)).toBe(POPUP_FONT_MAX)
   })
 })
 

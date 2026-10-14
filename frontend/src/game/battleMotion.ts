@@ -368,10 +368,13 @@ export function popupText(hit: Pick<BattleHit, 'kind' | 'amount'>): string {
   return hit.kind === 'miss' ? 'MISS' : String(Math.max(0, Math.round(hit.amount)))
 }
 
-/** 数字のフォントサイズ（px）。枠の一辺に比例させ、小さすぎ・大きすぎを抑える */
+/** 数字のフォントサイズ（px）。枠の一辺の 0.35 倍（FF らしく読みやすい大きさ）。小さすぎ・大きすぎは抑える */
+export const POPUP_FONT_RATIO = 0.35
+export const POPUP_FONT_MIN = 20
+export const POPUP_FONT_MAX = 56
 export function popupFontSize(unit: number): number {
-  const v = Number.isFinite(unit) ? Math.round(unit * 0.24) : 0
-  return Math.min(30, Math.max(16, v))
+  const v = Number.isFinite(unit) ? Math.round(unit * POPUP_FONT_RATIO) : 0
+  return Math.min(POPUP_FONT_MAX, Math.max(POPUP_FONT_MIN, v))
 }
 
 // ---------------------------------------------------------------------------

@@ -2967,6 +2967,7 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
   })
   interface PoseView {
     container: Container
+    sprite: Sprite
     slotRef: unknown
     baseX: number
     baseY: number
@@ -3014,9 +3015,29 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     expect(Object.keys(v.poseVisuals).sort()).toEqual(['down', 'idle', 'slash'])
     const slot = v.slotRef
     const [bx, by] = [v.baseX, v.baseY]
+    // idle の立ち姿: 縮尺（1px あたり）と足元（下端中央）を控える
+    const idleTex = v.poseVisuals.idle.texture
+    expect(v.sprite.texture).toBe(idleTex)
+    const scale = v.sprite.height / idleTex.height
+    const foot = () => ({
+      cx: v.container.x + v.sprite.x + v.sprite.width / 2 - (v.container.x - v.baseX),
+      y: v.container.y + v.sprite.y + v.sprite.height - (v.container.y - v.baseY),
+    })
+    const idleFoot = foot()
     act(s, engine)
     run(s, 300) // 踏み出し 220 を過ぎて slash ポーズ
     expect(v.shownVisual!.texture).toBe(v.poseVisuals.slash.texture)
+    // 横広の slash も枠に収め直さず、同じ縮尺で描く（高さの比 = 元画像の高さの比）。足元は不変
+    const slashTex = v.poseVisuals.slash.texture
+    expect(v.sprite.height / slashTex.height).toBeCloseTo(scale, 6)
+    expect(v.sprite.height / v.sprite.width).toBeCloseTo(slashTex.height / slashTex.width, 6)
+    expect(v.sprite.height / idleTex.height).toBeCloseTo(
+      scale * (slashTex.height / idleTex.height),
+      6
+    )
+    const slashFoot = foot()
+    expect(slashFoot.y).toBeCloseTo(idleFoot.y, 6)
+    expect(slashFoot.cx).toBeCloseTo(idleFoot.cx, 6)
     expect(v.slotRef).toEqual(slot)
     expect([v.baseX, v.baseY]).toEqual([bx, by])
     run(s, 5000)

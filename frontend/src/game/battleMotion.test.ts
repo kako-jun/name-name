@@ -23,6 +23,8 @@ import {
   normalizeBattlePresentation,
   normalizePoses,
   popupFontSize,
+  POPUP_FONT_MIN,
+  POPUP_FONT_MAX,
   popupText,
   resolvePose,
   restingSample,
@@ -208,9 +210,9 @@ describe('sampleDamagePopup / popupText', () => {
   })
 
   it('フォントサイズは上下限に収まる', () => {
-    expect(popupFontSize(10)).toBe(16)
-    expect(popupFontSize(1000)).toBe(30)
-    expect(popupFontSize(NaN)).toBe(16)
+    expect(popupFontSize(10)).toBe(POPUP_FONT_MIN)
+    expect(popupFontSize(1000)).toBe(POPUP_FONT_MAX)
+    expect(popupFontSize(NaN)).toBe(POPUP_FONT_MIN)
   })
 })
 

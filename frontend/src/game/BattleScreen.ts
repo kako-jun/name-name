@@ -1400,6 +1400,28 @@ export class BattleScreen extends Container {
     return tex && tex.height > 0 ? tex.width / tex.height : undefined
   }
 
+  /**
+   * ポーズの絵の置き場所 (#745)。基本の絵を枠に収めた矩形 `baseRect` の縮尺（基本の絵 1px あたり何px か）を、
+   * どのポーズでも同じに使い、足元（下端中央）を基本の絵に揃える。幅が違うポーズ（横広の slash など）も
+   * 枠に収め直さず、はみ出しは許容する（クリップしない）。基本の絵そのものなら `baseRect` と同じ矩形を返す。
+   */
+  private poseRectOnBase(
+    baseRect: { x: number; y: number; width: number; height: number },
+    baseTex: Texture,
+    tex: Texture
+  ): { x: number; y: number; width: number; height: number } {
+    if (tex === baseTex || baseTex.width <= 0 || baseTex.height <= 0) return baseRect
+    const k = baseRect.width / baseTex.width
+    const width = tex.width * k
+    const height = tex.height * k
+    return {
+      x: baseRect.x + baseRect.width / 2 - width / 2,
+      y: baseRect.y + baseRect.height - height,
+      width,
+      height,
+    }
+  }
+
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
     view.slotRef = slot
@@ -1422,15 +1444,13 @@ export class BattleScreen extends Container {
       if (this.acrylicParams && view.acrylicBack) {
         this.placeAcrylic(view, box)
       } else {
-        const fit = computeContainFitRect(
-          view.sprite.texture.width,
-          view.sprite.texture.height,
-          slot.width,
-          size
-        )
-        view.sprite.position.set(fit.x, fit.y)
-        view.sprite.width = fit.width
-        view.sprite.height = fit.height
+        // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
+        const baseTex = view.baseVisual?.texture ?? view.sprite.texture
+        const fit = computeContainFitRect(baseTex.width, baseTex.height, slot.width, size)
+        const r = this.poseRectOnBase(fit, baseTex, view.sprite.texture)
+        view.sprite.position.set(r.x, r.y)
+        view.sprite.width = r.width
+        view.sprite.height = r.height
       }
       view.fallback.visible = false
     }
@@ -1462,7 +1482,10 @@ export class BattleScreen extends Container {
     const sprite = view.sprite
     const back = view.acrylicBack
     if (!params || !sprite || !back) return
-    const g = computeAcrylicGeometry(sprite.texture.width, sprite.texture.height, size, params)
+    // 幾何（台座・影・縮尺）は基本の絵で決め、ポーズの絵は同じ縮尺で足元を揃えて置く (#745)
+    const baseTex = view.baseVisual?.texture ?? sprite.texture
+    const g0 = computeAcrylicGeometry(baseTex.width, baseTex.height, size, params)
+    const g = { ...g0, sprite: this.poseRectOnBase(g0.sprite, baseTex, sprite.texture) }
     sprite.position.set(g.sprite.x, g.sprite.y)
     sprite.width = g.sprite.width
     sprite.height = g.sprite.height
