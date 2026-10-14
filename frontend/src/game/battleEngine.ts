@@ -678,12 +678,19 @@ export class BattleEngine {
       }
       return false
     }
-    // `対象=` の上書きは特技の対象が単体のときだけ（全体・自分の特技はそのまま。未知・省略は相手単体の扱い）
+    // `対象=` の上書き: `仲間` / `自分`（→ 仲間単体 / 自分）はどの特技にも効く。ランダム / HP最小 / 全体（→ 相手側を向く）は
+    // 特技の対象が相手単体（省略・未知を含む）のときだけ。仲間単体・仲間全体・自分・相手全体の特技の向きは変えない
+    // （仲間向けの特技を相手側に向けて、敵がプレイヤーを回復するようなことを避ける）
     const t = typeof skill.target === 'string' ? skill.target.trim() : ''
-    const isSingle = t === '相手単体' || t === '仲間単体' || !SKILL_TARGETS.includes(t)
-    const exec =
-      choice.targetOverride && isSingle ? { ...skill, target: choice.targetOverride } : skill
-    return this.performSkill({ side: 'enemy', index: enemyIndex }, exec, choice.target)
+    const isOpponentSingle = t === '相手単体' || !SKILL_TARGETS.includes(t)
+    const o = choice.targetOverride
+    const applies = o !== undefined && (o === '仲間単体' || o === '自分' || isOpponentSingle)
+    const exec = applies ? { ...skill, target: o } : skill
+    return this.performSkill(
+      { side: 'enemy', index: enemyIndex },
+      exec,
+      applies || o === undefined ? choice.target : undefined
+    )
   }
 
   /** 行動を終えた敵の行動回数を 1 増やす (#835)。記憶が無い戦闘では何もしない */

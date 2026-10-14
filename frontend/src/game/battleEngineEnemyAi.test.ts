@@ -154,6 +154,41 @@ describe('対象= の上書きは単体の特技だけ', () => {
   })
 })
 
+describe('仲間向けの特技は ランダム / HP最小 / 全体 で相手側に向かない', () => {
+  it.each(['ランダム', 'HP最小', '全体'])(
+    '仲間単体の回復に 対象=%s を付けても敵がプレイヤーを回復しない',
+    (t) => {
+      const mend: SkillExecution = { name: '手当て', target: '仲間単体', effect: 'heal 20..20' }
+      const hero = ent({ id: 'hero', hp: 50, maxHp: 500 })
+      const foe = ent({
+        id: 'foe',
+        hp: 100,
+        maxHp: 500,
+        actions: [`候補=mend 対象=${t}`],
+      })
+      const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: { mend } })
+      eng.selectAttack()
+      expect(hero.hp).toBe(50) // プレイヤーは回復しない
+      expect(foe.hp).toBe(100 - 8 + 20) // 味方の攻撃 8 のあと、敵側の仲間（ここでは自分）が回復
+    }
+  )
+
+  it('仲間全体・自分の特技も同様。対象=仲間 / 自分 は上書きする', () => {
+    const mendAll: SkillExecution = { name: '手当て', target: '仲間全体', effect: 'heal 20..20' }
+    const hero = ent({ id: 'hero', hp: 50, maxHp: 500 })
+    const foe = ent({ id: 'foe', hp: 100, maxHp: 500, actions: ['候補=mendAll 対象=HP最小'] })
+    new BattleEngine([hero], [foe], { rng: () => 0, skills: { mendAll } }).selectAttack()
+    expect(hero.hp).toBe(50)
+    expect(foe.hp).toBe(112)
+    // 相手全体の特技に 対象=自分 を付けると自分に向く
+    const hero2 = ent({ id: 'hero2', hp: 500, maxHp: 500 })
+    const foe2 = ent({ id: 'foe2', hp: 100, maxHp: 500, actions: ['候補=ink 対象=自分'] })
+    new BattleEngine([hero2], [foe2], { rng: () => 0, skills: SKILLS }).selectAttack()
+    expect(hero2.hp).toBe(500)
+    expect(foe2.hp).toBe(100 - 8 - 5)
+  })
+})
+
 describe('同時全滅の判定（現状の挙動を固定）', () => {
   it('ターン制は敗北、ATB は勝利', () => {
     BUILTIN_SPELLS['test_mutual'] = (ctx) => {
