@@ -3,7 +3,7 @@
  *
  * BGM は「変えるまで鳴り続ける」: 選択肢・物語進行によるシーン遷移（jumpToScene）では
  * resetAndStartEvents（carryBgm=true）が stopBgm / currentBgmPath=null をスキップし、次シーン冒頭の同一曲 [BGM:] も
- * AudioManager.playBgm の同一 URL 継続で頭出ししない。setEvents / restart / endStory / startFrom では従来どおり停止する。
+ * AudioManager.playBgm の同一 URL 継続で頭出ししない。setEvents / endStory / startFrom では従来どおり停止する。
  *
  * playBgm / stopBgm は AudioContext を伴い jsdom 対象外のため spy で差し替え、呼び出しと
  * 追跡フィールド（currentBgmPath, getSnapshot）で検証する。同一 URL 継続は AudioManager 単体で別途確認する。
@@ -138,7 +138,7 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     expect(bgmPath(r)).toBeNull()
   })
 
-  it('7: restart では停止し currentBgmPath が null になる（回帰）', () => {
+  it('7: startFrom({}) では停止し currentBgmPath が null になる（回帰）', () => {
     const { r, spies } = makeRenderer([
       scene('a', [narration('A')]),
       scene('b', [bgm('b.ogg'), narration('B')]),
@@ -147,7 +147,7 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     expect(bgmPath(r)).toBe('b.ogg')
     spies.stopBgm.mockClear()
 
-    r.restart()
+    void r.startFrom({})
 
     expect(spies.stopBgm).toHaveBeenCalledWith(0)
     expect(bgmPath(r)).toBeNull()

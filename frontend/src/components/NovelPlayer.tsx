@@ -15,7 +15,8 @@ import { FiSettings } from 'react-icons/fi'
 import { Event, EventImageTransition, EventScene } from '../types'
 import { NovelRenderer } from '../game/NovelRenderer'
 import { INACTIVITY_MS } from '../game/SeekBar'
-import { type NovelGameState } from '../game/GameState'
+import { type NovelGameState, type StartFromOptions } from '../game/GameState'
+import { type SceneEntryResult } from '../game/sceneEntry'
 import { parseDebugQuery, parseDebugUnlockAll } from '../game/debugQuery'
 import {
   resolveInitialEntry,
@@ -80,6 +81,20 @@ function writeDebugOpen(open: boolean): void {
 export interface NovelPlayerHandle {
   /** ゲーム内 ⚙ ボタンと同じ設定パネルを開く。 */
   openSettings: () => void
+  // --- タイトル画面の「はじめから」「つづきから」用 (#734 PR5, ADR 0003) ---
+  // 以前は PlayerScreen が `window.__renderer` をダックタイプで読んでいた（型検査を通らず、API を変えても
+  // 検出できなかった）。renderer の API をここで型付きに写す。renderer 未初期化のときは no-op /
+  // 偽 / `failed` を返す。
+  /** AudioContext を起動する（ユーザー操作の中で呼ぶ）。 */
+  ensureAudioContext: () => void
+  /** 既読・セーブの名前空間（docKey）を設定する。 */
+  setDocKey: (docKey: string) => void
+  /** クイックセーブが存在するか。 */
+  hasQuickSave: () => boolean
+  /** クイックセーブを消去する。 */
+  clearQuickSave: () => void
+  /** 新規開始（文脈を捨てて始める）。`startFrom({})` はエントリ文書の先頭から。 */
+  startFrom: (opts?: StartFromOptions) => Promise<SceneEntryResult>
 }
 
 interface NovelPlayerProps {
@@ -358,6 +373,13 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   // （NovelPlayerHandle の JSDoc 参照）。
   useImperativeHandle(ref, () => ({
     openSettings: () => setSettingsOpen(true),
+    ensureAudioContext: () => rendererRef.current?.ensureAudioContext(),
+    setDocKey: (key: string) => rendererRef.current?.setDocKey(key),
+    hasQuickSave: () => rendererRef.current?.hasQuickSave() ?? false,
+    clearQuickSave: () => rendererRef.current?.clearQuickSave(),
+    startFrom: (opts?: StartFromOptions) =>
+      rendererRef.current?.startFrom(opts) ??
+      Promise.resolve<SceneEntryResult>({ status: 'failed', reason: 'not-found' }),
   }))
   // オートモード ON/OFF (#139)
   // 既定は OFF＝手送り (#436)。frontmatter `auto_play: true` で起動時から ON にできる
@@ -576,7 +598,8 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
 
     const renderer = new NovelRenderer({ aspectRatio })
     rendererRef.current = renderer
-    // デバッグ用に window へ露出 (production でも軽量なので残す)
+    // デバッグ用に window へ露出 (production でも軽量なので残す)。本番のロジックは読まない:
+    // PlayerScreen などは NovelPlayerHandle（型付き）経由で renderer を呼ぶ (#734 PR5)。
     ;(window as unknown as { __renderer?: NovelRenderer }).__renderer = renderer
 
     let destroyed = false
@@ -1160,9 +1183,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     if (loaded && loaded.events === events && loaded.scenes === scenes) return
     loadedDocRef.current = { events, scenes }
     if (scenes && scenes.length > 0) {
-      rendererRef.current.setScenes(scenes)
+      void rendererRef.current.setScenes(scenes)
     } else {
-      rendererRef.current.setEvents(events)
+      void rendererRef.current.setEvents(events)
     }
   }, [events, scenes, rendererReady])
 

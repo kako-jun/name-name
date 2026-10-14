@@ -1245,7 +1245,7 @@ pub enum Event {
     /// `NovelGameState.paperDollOutline` に settled state として持たせるが、`CameraMode`/
     /// `Spotlight` と異なり場面転換（シーン間ジャンプ）や終劇では自動クリアしない
     /// （runtime 側 `NovelRenderer.resetAndStartEvents` の non-preserve 経路——新しい
-    /// エントリ文書の開始・`restart()`——でのみリセットする）。
+    /// エントリ文書の開始・新規開始（`startFrom({})`）——でのみリセットする）。
     ///
     /// `color`/`thickness` は `enabled: true` のときだけ意味を持つ。`None` は runtime 側の
     /// 既定値（白 `#ffffff`・太さ `2`）にフォールバックする。`enabled: false` のときは

@@ -133,7 +133,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   // `playScript` する）が指定されている場合もタイトル画面を出さない。従来は `startSceneId`
   // （`?scene=` 専用・下記 #386）だけを見ていたため、`?debug_scene=` 単独指定時にタイトル画面が
   // 誤って表示され、「つづきから」（hasQuickSave()=false 時）/「はじめから」の
-  // renderer.restart() が NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた
+  // startFrom({}) が NovelPlayer 側で既に startFrom 済みのデバッグ位置を握りつぶしていた
   // （#656 の実機報告: つづきからが常に10択のハブから始まる／読書中に突然 to be continued になる）。
   // debug_scene/debug_script の値は startSceneId には混ぜない。`?debug_scene=` が解決できた場合に
   // confinement が外れる（#726、後勝ち。#652 の設計どおり debug は confinement なし）のは、NovelPlayer の
@@ -786,7 +786,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
             // loading=false になる最初のレンダー時点で startSceneId は確定済み。ここで
             // render gate として直接判定すれば effect 同期のような 1 フレームのタイトルちらつきが
             // 出ない。deep-link モードでは titleScreen 自体を渡さない（null）ので、onNewGame の
-            // 副作用（clearReadProgress / renderer.restart()）が発火することも構造的にあり得ず、
+            // 副作用（clearReadProgress / startFrom({})）が発火することも構造的にあり得ず、
             // startFrom(initialSceneId) の開始位置が保たれる。
             // 通常フロー（`?scene=` 無し＝startSceneId null）は従来どおりタイトルを出す（後方互換）。
             //
@@ -816,53 +816,37 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
                       // (これをしないと冒頭の voice 付き Narration/Dialog が AudioContext null のまま
                       // 発火済みで再生されない)。
                       // #637: 「はじめから」は gameState(flags)/currentSceneId を旧セーブから
-                      // 完全に切り離す必要がある。renderer.restart() 自体が gameState.clear() /
-                      // currentSceneId のリセットを行うようになった（#637）が、restart() は
-                      // シーン切り替え検知（onSceneChangeCallback）を経由しないため、旧
-                      // クイックセーブが自動上書きされるとは限らない。明示的に clearQuickSave()
-                      // を呼び、リロード時に旧セーブが復活しない（つづきから相当に戻らない）
-                      // ことを保証する。
-                      const renderer = (
-                        window as {
-                          __renderer?: {
-                            audioManager?: { ensureContext?: () => void }
-                            setDocKey?: (docKey: string) => void
-                            restart?: () => void
-                            clearQuickSave?: () => void
-                          }
-                        }
-                      ).__renderer
-                      renderer?.setDocKey?.(projectName)
-                      renderer?.audioManager?.ensureContext?.()
-                      renderer?.clearQuickSave?.()
-                      renderer?.restart?.()
+                      // 完全に切り離す必要がある。新規開始（startFrom({})）が flags の置換・
+                      // 終劇の解除・currentSceneId のエントリへの揃えを行う (#734 PR5, ADR 0003)。
+                      // 新規開始の自動セーブは最初の本文が表示されてから行われるので、それまでに
+                      // リロードされても旧クイックセーブが復活しないよう、明示的に
+                      // clearQuickSave() を呼ぶ。
+                      // 以前は window.__renderer をダックタイプで読んでいた。NovelPlayerHandle
+                      // 経由の型付き呼び出しにして、API の変更を型検査で検出する。
+                      const player = novelPlayerRef.current
+                      player?.setDocKey(projectName)
+                      player?.ensureAudioContext()
+                      player?.clearQuickSave()
+                      void player?.startFrom({})
                     },
                     onContinue: () => {
                       // つづきから (#620): #578 の自動クイックロードにより、renderer は
                       // マウント時点で既に直前セッションの正確な最終位置まで quickLoad() 済み。
-                      // hasQuickSave() が真の場合は renderer.restart() を呼んではいけない
+                      // hasQuickSave() が真の場合は startFrom({}) を呼んではいけない
                       // （最初のシーンへ巻き戻り、quickLoad 済みの位置を握りつぶしてしまう）。
                       // startWithSkip も立てない（正しい位置から不要な既読スキップが再開し、
                       // 未読内容を飛ばしかねないため）。タイトルを閉じるだけでよい。
                       // hasQuickSave() が偽の場合（#578 以前のセーブデータ等、quickSave が
                       // 存在しないレガシーケース）は、既存の「スキップモードで未読位置まで
                       // 高速進行」（#140 readProgress ベース）にフォールバックする。
-                      const renderer = (
-                        window as {
-                          __renderer?: {
-                            audioManager?: { ensureContext?: () => void }
-                            restart?: () => void
-                            hasQuickSave?: () => boolean
-                          }
-                        }
-                      ).__renderer
-                      renderer?.audioManager?.ensureContext?.()
-                      if (renderer?.hasQuickSave?.()) {
+                      const player = novelPlayerRef.current
+                      player?.ensureAudioContext()
+                      if (player?.hasQuickSave()) {
                         setTitleDismissed(true)
                       } else {
                         setStartWithSkip(true)
                         setTitleDismissed(true)
-                        renderer?.restart?.()
+                        void player?.startFrom({})
                       }
                     },
                     onOpenSettings: () => {

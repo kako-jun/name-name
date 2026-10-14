@@ -132,6 +132,9 @@ const {
     setSkipMode = vi.fn()
     // #734: 入場 API は結果の Promise を返す。既定は入場成功。
     startFrom = vi.fn().mockResolvedValue({ status: 'entered', sceneId: null })
+    // #734 PR5: NovelPlayerHandle が委譲する renderer の API。
+    ensureAudioContext = vi.fn()
+    clearQuickSave = vi.fn()
     // #460: fluid 再マウント cleanup が destroy() 直前に必ず呼ぶ。既定は sceneId: null
     // （setEvents/setScenes 未実行の「意味のないスナップショット」相当）を返し、NovelPlayer 側の
     // 「sceneId が null なら保持しない」ガードにより従来どおり initialSceneId ベースの起動になる
@@ -3426,6 +3429,40 @@ describe('NovelPlayer ref API — forwardRef openSettings() (#643)', () => {
       })
     }).not.toThrow()
     expect(screen.getByTestId('settings-overlay-open')).toBeInTheDocument()
+  })
+
+  // --- #734 PR5: 「はじめから」「つづきから」用の型付きハンドル（window.__renderer のダックタイプの置き換え） ---
+  it('TC-R6: ハンドルの ensureAudioContext / setDocKey / hasQuickSave / clearQuickSave / startFrom は renderer へ委譲する', async () => {
+    const ref = createRef<NovelPlayerHandle>()
+    render(<NovelPlayer ref={ref} events={[]} />)
+    await flushAsync()
+    const r = lastRenderer()
+    r.setDocKey.mockClear()
+    r.startFrom.mockClear()
+    r.hasQuickSave.mockReturnValue(true)
+
+    ref.current?.ensureAudioContext()
+    ref.current?.setDocKey('doc-x')
+    ref.current?.clearQuickSave()
+    const has = ref.current?.hasQuickSave()
+    const result = await ref.current?.startFrom({})
+
+    expect(r.ensureAudioContext).toHaveBeenCalledTimes(1)
+    expect(r.setDocKey).toHaveBeenCalledWith('doc-x')
+    expect(r.clearQuickSave).toHaveBeenCalledTimes(1)
+    expect(has).toBe(true)
+    expect(r.startFrom).toHaveBeenCalledTimes(1)
+    expect(r.startFrom).toHaveBeenCalledWith({})
+    expect(result).toEqual({ status: 'entered', sceneId: null })
+  })
+
+  it('TC-R7: renderer 生成前にハンドルを呼んでも例外にならず、hasQuickSave は偽・startFrom は failed を返す', async () => {
+    const ref = createRef<NovelPlayerHandle>()
+    render(<NovelPlayer ref={ref} events={[]} />)
+    // 初期化の完了を待たない。renderer は rendererRef に入るが、ハンドルは常に呼べる。
+    expect(() => ref.current?.ensureAudioContext()).not.toThrow()
+    await flushAsync()
+    expect(ref.current?.hasQuickSave()).toBe(false)
   })
 
   it('TC-R5: forwardRef化後、ref を渡さない通常の render では console.error（ref に関する警告）が発生しない', async () => {
