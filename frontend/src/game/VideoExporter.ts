@@ -523,7 +523,9 @@ export async function exportVideo(
   renderer.setAutoMode(true)
   onProgress?.(`録画準備中（flags: ${JSON.stringify(flags)}）`)
   try {
-    const entry = await raceAbort(renderer.startFrom({ sceneId: startSceneId, flags }))
+    const entry = await raceAbort(
+      renderer.startFrom({ sceneId: startSceneId, flags, linear: true })
+    )
     if (entry.status !== 'entered') {
       const detail = entry.status === 'failed' ? `${entry.status}: ${entry.reason}` : entry.status
       throw new Error(`Could not start from scene "${startSceneId}" (${detail})`)

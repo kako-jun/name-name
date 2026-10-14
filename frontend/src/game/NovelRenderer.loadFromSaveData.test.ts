@@ -599,7 +599,7 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
     expect(r.getPlayheadSceneId()).toBe('entry-hub')
-    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
     expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
   })
 
@@ -912,7 +912,7 @@ describe('NovelRenderer.loadFromSaveDataMissingScene 遅延ロード中の遷移
     expect(await loading).toEqual({ status: 'superseded' })
 
     expect(r.getPlayheadSceneId()).toBe('entry-hub')
-    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
     expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
   })
 
@@ -955,7 +955,7 @@ describe('NovelRenderer.loadFromSaveDataMissingScene 遅延ロード中の遷移
     r.quickLoad()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(r.getPlayheadSceneId()).toBe('entry-hub')
-    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
+    expect(r.getCurrentSceneId()).toBe('entry-hub')
 
     d.resolve([...ENTRY, ROUTE])
     await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))

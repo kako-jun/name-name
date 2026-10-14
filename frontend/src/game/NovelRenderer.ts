@@ -1964,10 +1964,11 @@ export class NovelRenderer {
         `[name-name] startFrom: 新規開始の対象シーン "${sceneId}" が最初のテキストまでに [背景:] を持ちません。新規開始は背景を持ち越さないので、背景は地色から始まります。`
       )
     }
-    // 対象がエントリの線形ストリーム上のシーンなら、そのシーンの events だけでなく、ストリーム全体を
-    // シーン先頭から流す (#777)。シーン末尾で終わらず、続くシーンまで再生される（動画書き出しの範囲指定）。
-    // ストリームの持ち主はエントリのまま（セーブは sceneId = エントリ + eventIndex で復元できる）。
-    if (sceneId !== null && sceneId !== this.entrySceneId) {
+    // `linear: true`（動画書き出しの範囲指定が明示的に選ぶ, #777/#817）で、対象がエントリの線形ストリーム上の
+    // シーンなら、そのシーンの events だけでなく、ストリーム全体をシーン先頭から流す。シーン末尾で終わらず、
+    // 続くシーンまで再生される。ストリームの持ち主はエントリのまま（セーブは sceneId = エントリ + eventIndex
+    // で復元できる）。既定（`?scene=` / `?debug_scene=` を含む）は指定シーンの events だけを流して末尾で終劇する。
+    if (req.linear && sceneId !== null && sceneId !== this.entrySceneId) {
       const linearStart = this.linearStartIndex(sceneId, req.flags)
       if (linearStart !== null) {
         this.startScene(this.entrySceneId, this.entryRawEvents, carryPolicyFor('fresh'), {
@@ -6918,6 +6919,8 @@ export class NovelRenderer {
    * 委譲する薄いラッパー。`?scene=`・`?debug_scene=`・デバッガガイドの `startFrom` が使う。
    *
    * - `sceneId` を省略すると、エントリ文書の線形ストリームの先頭から始める。
+   * - `sceneId` 指定は、そのシーンの events だけを流して末尾で終劇する。`linear: true` を渡したときだけ、
+   *   エントリの線形ストリーム上のシーンをストリーム全体で流す（動画書き出しの範囲指定。#817）。
    * - シーンの引き当ては `jumpToScene` と同じ遅延ロードの解決口（`missingSceneResolver`）を通る。
    *   読み込み済みなら同期のまま適用する。未ロードなら入場中ゲートで止めて待つ。
    * - 解決できた後、適用の前に flags を置換（省略時は空）し、`confinedSceneIds` を置き換え（省略時は
@@ -6944,6 +6947,7 @@ export class NovelRenderer {
       flags: opts.flags,
       position,
       confinedSceneIds: opts.confinedSceneIds,
+      linear: opts.linear,
     })
   }
 

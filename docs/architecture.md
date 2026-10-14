@@ -227,7 +227,7 @@ HUD（`loadDebugInfo`）の `debug_scene: <id> → resolved / not found (…)` �
 止まっていた。`debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
 にフォールバックする（詳細は [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) の §3）。
 どちらも入場の種類は新規開始で、背景・BGM・立ち絵は持ち越さない（`carryPolicyFor('fresh')`）。
-対象がエントリ文書の線形ストリーム上のシーンなら、ストリーム全体をそのシーン先頭から流し、シーン境界で `onSceneChange` を発火する（#777）。`?scene=` は、エントリ以外のファイルのシーンを指すときだけ confinement が付くので線形連結の対象外（そのシーンの末尾で終劇）。エントリのシーンを指す `?scene=` は confinement なしで後続へ流れる。`?debug_scene=` も後続のシーンへ流れる。閉じ込め外のシーン境界に入ったら終劇にする処理は、防御として残してある。
+`startFrom` の `linear: true`（動画書き出しの範囲指定が明示的に選ぶ。既定 false。#817）で、対象がエントリ文書の線形ストリーム上のシーンなら、ストリーム全体をそのシーン先頭から流し、シーン境界で `onSceneChange` を発火する（#777）。`?scene=` / `?debug_scene=` は `linear` を渡さないので、エントリのシーンでも他ファイルのシーンでも、指定シーンの events だけを流して末尾で終劇する（`story-ended` が親ページに届く）。閉じ込め外のシーン境界に入ったら終劇にする処理は、線形ストリーム再生中の防御として残してある。
 
 **confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
 choice で漏れてはいけない（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の
@@ -859,7 +859,7 @@ AudioManager.enableCapture ─┘
 2. `renderer.onEnd` が発火（全イベント完走、`endSceneId` が最終シーンだったケース）
 
 stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob を確定する。BGM 既定フェード 1000ms を完全に録音するための値。
-新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間と、線形に連結したシーン間（エントリ文書でシーンが続く並び）の両方で効く。開始シーンがエントリの線形ストリーム上にあれば、`startFrom` はそのシーンの events だけでなくストリーム全体をシーン先頭から流し、シーン境界の `SceneTransition` を通過するたびに入ったシーンの ID で `onSceneChange` を発火する（#777、ADR 0003「#777 での追記」）。作者の `[場面転換]`（シーン内）は境界ではない。ジャンプ・選択肢で入ったシーンはそのシーンの events だけが流れるので、その先で線形に続くシーンへは進まない。選択肢・中止・停滞は下記「書き出しの終わり方」で扱う。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
+新規開始（`startFrom`）の結果を await し、`entered` 以外（開始シーン不在・resolver 失敗・適用例外・`superseded`）なら録画を始めず reject する（isExporting・解像度・SeekBar 抑制・リスナ退避・autoMode は cleanup で必ず戻す）。`VideoExportOptions.flags`（既定は空＝決定論的）を `startFrom` に渡し、使った flags を `onProgress` に出す。エディタの書き出しダイアログの「プレビューの flags を引き継ぐ」（既定 OFF）が ON のときだけ、`resolveExportFlags` がプレビューの flags を複製して渡す。続けて開始シーンの背景のロード完了を待ち（上限 10 秒。超えたら `console.warn` して録画を始める）、録画開始前の待ち中に終端（`onEnd` など）を検知したら録画せず reject し、予約済みの停止 timer も取り消す。書き出す範囲（開始〜終了シーン）は、ジャンプ・選択肢でつながったシーン間と、線形に連結したシーン間（エントリ文書でシーンが続く並び）の両方で効く。書き出しは `startFrom` を `linear: true` で呼ぶ（#817）。`linear: true` の `startFrom` は、開始シーンがエントリの線形ストリーム上にあれば、そのシーンの events だけでなくストリーム全体をシーン先頭から流し、シーン境界の `SceneTransition` を通過するたびに入ったシーンの ID で `onSceneChange` を発火する（#777、ADR 0003「#777 での追記」）。作者の `[場面転換]`（シーン内）は境界ではない。ジャンプ・選択肢で入ったシーンはそのシーンの events だけが流れるので、その先で線形に続くシーンへは進まない。選択肢・中止・停滞は下記「書き出しの終わり方」で扱う。その後 `preRollMs` (デフォルト 50ms) の遅延を挟んで「前回プレビューの最終フレーム」と「BGM 頭欠け」を最小化する。AudioContext のバッファ遅延 20-50ms を吸収する目安。
 
 ### VideoExporter が依存する公開 API
 
@@ -867,7 +867,7 @@ stop 後に `postRollMs` (デフォルト 1200ms) の余韻録音を経て Blob 
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `NovelRenderer.getCanvas()`                                                                         | `canvas.captureStream(fps)` の対象を取得                                           |
 | `NovelRenderer.getAudioManager()`                                                                   | AudioManager 経由で音声 MediaStream を分岐                                         |
-| `NovelRenderer.startFrom({ sceneId, flags })` | 新規開始。BGM・背景・flags・`consecutiveJumps` を持ち越さない。結果が `entered` 以外なら export を reject し、cleanup を通す |
+| `NovelRenderer.startFrom({ sceneId, flags, linear: true })` | 新規開始。`linear: true` で、線形に続くシーンをストリーム全体で流す（範囲指定が終了シーンの末尾まで続く, #817）。BGM・背景・flags・`consecutiveJumps` を持ち越さない。結果が `entered` 以外なら export を reject し、cleanup を通す |
 | `NovelRenderer.isAutoMode()` / `setAutoMode()` | 書き出し中だけオートモードを入れ、cleanup で書き出し前の値へ戻す |
 | `NovelRenderer.getSnapshot()` | `resolveExportFlags` がプレビューの flags を複製して取り出す（引き継ぎ ON のときだけ） |
 | `NovelRenderer.getExportProgress()` | 停滞検出用の軽量な進行状況（位置の署名・`[待機: N]` の N・終わりのある動画の再生中か）(#780) |
