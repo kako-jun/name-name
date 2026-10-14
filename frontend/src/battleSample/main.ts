@@ -112,11 +112,10 @@ async function main(): Promise<void> {
       if (!(await gate.wait(seq))) return // 待っている間に別の描画が始まった
       const resolution = resolveResolution(view.resolutionMode, window.devicePixelRatio)
       app.renderer.resize(setup.width, setup.height, resolution)
-      const engine = new BattleEngine(
-        setup.party,
-        setup.enemies,
-        setup.atb ? { atb: setup.atb } : {}
-      )
+      const engine = new BattleEngine(setup.party, setup.enemies, {
+        ...(setup.atb ? { atb: setup.atb } : {}),
+        ...(Object.keys(setup.skills).length > 0 ? { skills: setup.skills } : {}),
+      })
       screen = new BattleScreen(engine, setup.width, setup.height, setup.options)
       app.stage.addChild(screen)
       $('info').textContent = describeView(

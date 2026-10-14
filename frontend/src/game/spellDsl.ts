@@ -228,6 +228,11 @@ export interface BattleEntity {
    * 未指定は前衛（現行どおり）。味方・敵のどちらに付けても補正は効く（汎用エンジンとして敵の後衛も認める。配置の描画は味方側のみ）。
    */
   row?: BattleRow
+  /**
+   * 敵の行動ルール (#835)。`MonsterDef.actions` を戦闘への組み立て時に写す生文字列（書いた順）。
+   * 解釈・選択は `enemyAi.ts` の `chooseEnemyAction`。無い（または空の）敵は従来どおり通常攻撃だけで、乱数の消費も変わらない
+   */
+  actions?: string[]
 }
 
 /** 戦闘の隊列 (#747) */

@@ -11,6 +11,7 @@ import { defaultTimeController } from './TimeController'
 import { SaveManager } from './SaveManager'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
+import { internals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -46,21 +47,6 @@ function seedNullSave(over: { eventIndex: number; flags?: Record<string, FlagVal
   })
 }
 const boolFlag = (b: boolean): FlagValue => ({ Bool: b })
-
-interface Internals {
-  initialized: boolean
-  eventIndex: number
-  resolvedEvents: Event[]
-  storyEnded: boolean
-  waitingForWait: boolean
-  jumpState: 'idle' | 'pending' | 'stalled'
-  pendingEntry: unknown
-  rawEvents: Event[]
-  render(): void
-}
-function internals(r: NovelRenderer): Internals {
-  return r as unknown as Internals
-}
 
 function prepare(r: NovelRenderer): NovelRenderer {
   r.getTimeController().setMode('virtual')

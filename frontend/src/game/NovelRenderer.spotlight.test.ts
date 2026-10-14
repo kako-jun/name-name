@@ -19,6 +19,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（NovelRenderer.cameraMode.test.ts と同じスタイル）---
 
@@ -54,21 +55,16 @@ function flatten(scenes: EventScene[]): Event[] {
   return events
 }
 
-interface RendererInternals {
-  appInitialized: boolean
+interface LocalInternals extends RendererInternals {
   app: {
     canvas: { removeEventListener: (...args: unknown[]) => void }
     destroy: (...args: unknown[]) => void
   }
   lightingLayer: { clear: () => void }
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /** destroy() の appInitialized ガードを満たす最小スタブ（NovelRenderer.prop.test.ts と同じ）。 */
 function stubDestroyableApp(r: NovelRenderer): void {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   ri.appInitialized = true
   Object.defineProperty(ri.app, 'canvas', {
     configurable: true,
@@ -206,7 +202,7 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
   it('7: destroy() は lightingLayer.clear() を呼ぶ（ticker/テクスチャの後始末）', () => {
     const r = makeRenderer([scene('a', [narration('one')])])
     stubDestroyableApp(r)
-    const clearSpy = vi.spyOn(internals(r).lightingLayer, 'clear')
+    const clearSpy = vi.spyOn(internals<LocalInternals>(r).lightingLayer, 'clear')
 
     r.destroy()
 

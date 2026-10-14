@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene, FlagValue } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -48,14 +49,9 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
   return r
 }
 
-interface Internals {
-  initialized: boolean
-  pendingEntry: unknown
+interface LocalInternals extends RendererInternals {
   currentBackgroundColor: string | null
-  consecutiveJumps: number
-  confinedSceneIds: string[] | null
 }
-const internals = (r: NovelRenderer): Internals => r as unknown as Internals
 
 function deferred<T>() {
   let resolve!: (v: T) => void
@@ -133,7 +129,7 @@ describe('startFrom: carryPolicyFor の表の全項目（進行は持ち越し�
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([loadedScene('loaded'), BARE])
     await r.startFrom({ sceneId: 'loaded' })
-    expect(internals(r).currentBackgroundColor).toBe('#112233')
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBe('#112233')
     await r.startFrom({ sceneId: 'bare' })
     expect(r.getSnapshot().backgroundColor).toBeNull()
   })
@@ -175,7 +171,7 @@ describe('startFrom: carryPolicyFor の表の全項目（進行は持ち越し�
     const s = r.getSnapshot()
     expect(s.storyEnded).toBe(false)
     expect(s.backgroundPath).toBeNull()
-    expect(internals(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
   })
 })
 
@@ -245,7 +241,7 @@ describe('startFrom: 遅延ロード（失敗系）', () => {
   it('resolver が reject → resolver-error で失敗し、状態を一切変えない（flags・confinement・位置）', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([loadedScene('loaded')])
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     await r.startFrom({
       sceneId: 'loaded',
       flags: { keep: bool(true) },
@@ -259,14 +255,14 @@ describe('startFrom: 遅延ロード（失敗系）', () => {
     ).resolves.toEqual({ status: 'failed', reason: 'resolver-error' })
 
     expect(r.getSnapshot()).toEqual(before)
-    expect(internals(r).confinedSceneIds).toEqual(['loaded'])
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toEqual(['loaded'])
+    expect(internals<LocalInternals>(r).pendingEntry).toBeNull()
   })
 
   it('resolver が同期 throw しても resolver-error として失敗する（Promise は reject しない）', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([BARE])
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     r.setMissingSceneResolver(() => {
       throw new Error('sync boom')
     })
@@ -279,7 +275,7 @@ describe('startFrom: 遅延ロード（失敗系）', () => {
   it('ロード後も対象シーンが不在（別のシーンしか返らない）なら not-found で失敗し、状態を変えない', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([loadedScene('loaded')])
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     await r.startFrom({ sceneId: 'loaded', flags: { keep: bool(true) } })
     const before = r.getSnapshot()
     r.setMissingSceneResolver(() => Promise.resolve([scene('other', [narration('o')])]))
@@ -289,26 +285,26 @@ describe('startFrom: 遅延ロード（失敗系）', () => {
     ).resolves.toEqual({ status: 'failed', reason: 'not-found' })
 
     expect(r.getSnapshot()).toEqual(before)
-    expect(internals(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
   })
 
   it('失敗後は入場中ゲートが下りる（pendingEntry が null に戻り、以後の進行を受け付ける）', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer([BARE, scene('next', [narration('n')])])
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     const d = deferred<EventScene[] | null>()
     r.setMissingSceneResolver(() => d.promise)
     const p = r.startFrom({ sceneId: 'ghost' })
-    expect(internals(r).pendingEntry).not.toBeNull()
+    expect(internals<LocalInternals>(r).pendingEntry).not.toBeNull()
     d.reject(new Error('x'))
     await p
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<LocalInternals>(r).pendingEntry).toBeNull()
     await expect(r.jumpToScene('next')).resolves.toEqual({ status: 'entered', sceneId: 'next' })
   })
 
   it('未ロードのシーンへの新規開始の待機中は confinement も flags もまだ置き換わらず、確定は解決後（適用の直前）', async () => {
     const r = makeRenderer([BARE])
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     const d = deferred<EventScene[] | null>()
     r.setMissingSceneResolver(() => d.promise)
     const p = r.startFrom({
@@ -316,11 +312,11 @@ describe('startFrom: 遅延ロード（失敗系）', () => {
       flags: { f: bool(true) },
       confinedSceneIds: ['route'],
     })
-    expect(internals(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
     expect(r.getSnapshot().flags).toEqual({})
     d.resolve([BARE, scene('route', [narration('r')])])
     await p
-    expect(internals(r).confinedSceneIds).toEqual(['route'])
+    expect(internals<LocalInternals>(r).confinedSceneIds).toEqual(['route'])
     expect(r.getSnapshot().flags).toEqual({ f: bool(true) })
   })
 })
@@ -328,7 +324,7 @@ describe('startFrom: 遅延ロード（失敗系）', () => {
 describe('startFrom: 後勝ち（遅延ロード中に別の入場が来る）', () => {
   function lazyRenderer() {
     const r = makeRenderer([BARE, scene('next', [narration('n')])])
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     const d = deferred<EventScene[] | null>()
     r.setMissingSceneResolver(() => d.promise)
     return { r, d }
@@ -349,7 +345,7 @@ describe('startFrom: 後勝ち（遅延ロード中に別の入場が来る）',
     await expect(first).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('next')
     expect(r.getSnapshot().flags).toEqual({})
-    expect(internals(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
   })
 
   it('startFrom vs 復元: 待っている新規開始は superseded。復元の結果が残る', async () => {
@@ -362,7 +358,7 @@ describe('startFrom: 後勝ち（遅延ロード中に別の入場が来る）',
     await expect(first).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('next')
     expect(r.getSnapshot().flags).toEqual({ s: bool(true) })
-    expect(internals(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
   })
 
   it('startFrom vs 別の startFrom: 先に来た待機中の新規開始は superseded、後の startFrom だけが適用される', async () => {
@@ -378,8 +374,8 @@ describe('startFrom: 後勝ち（遅延ロード中に別の入場が来る）',
     await expect(first).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('next')
     expect(r.getSnapshot().flags).toEqual({ b: bool(true) })
-    expect(internals(r).confinedSceneIds).toBeNull()
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).pendingEntry).toBeNull()
   })
 
   it('startFrom 待機中のクイックロードは入場中ゲートで弾かれ（null）、待機中の新規開始は影響を受けず入場する', async () => {
@@ -395,11 +391,11 @@ describe('startFrom: 後勝ち（遅延ロード中に別の入場が来る）',
   it('新規開始の待機中は入場中ゲートが立ち、クイックセーブを受け付けない（解決後に下りる）', async () => {
     const { r, d } = lazyRenderer()
     const p = r.startFrom({ sceneId: 'route' })
-    expect(internals(r).pendingEntry).not.toBeNull()
+    expect(internals<LocalInternals>(r).pendingEntry).not.toBeNull()
     expect(r.quickSave()).toBe(false)
     d.resolve([BARE, ROUTE])
     await p
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<LocalInternals>(r).pendingEntry).toBeNull()
   })
 
   it('destroy 後に解決した新規開始は何も適用せず superseded（flags・confinement を触らない）', async () => {
@@ -409,10 +405,10 @@ describe('startFrom: 後勝ち（遅延ロード中に別の入場が来る）',
       flags: { f: bool(true) },
       confinedSceneIds: ['route'],
     })
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
     d.resolve([BARE, ROUTE])
     await expect(p).resolves.toEqual({ status: 'superseded' })
     expect(r.getSnapshot().flags).toEqual({})
-    expect(internals(r).confinedSceneIds).toBeNull()
+    expect(internals<LocalInternals>(r).confinedSceneIds).toBeNull()
   })
 })

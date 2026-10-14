@@ -10,10 +10,11 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { PartyMemberDef } from '../types'
+import type { PartyMemberDef, SkillDef, SpellDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import { toSkillExecutions } from './enemyAi'
 import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
 import { normalizeBattleRow } from './battleLayout'
@@ -26,6 +27,9 @@ import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { CommandLabels, CommandLayout } from './battleCommands'
+import type { BattleMenuData, BattleSpellEntry } from './battleMenu'
+import type { BattleTransitionMode } from './battleTransition'
+import type { FieldBattleTransition } from './fieldBattleTransition'
 
 /** 戦闘画面の設定（frontmatter 由来）。未指定の既定値は `readFieldBattleSettings` が正本 */
 export interface FieldBattleSettings {
@@ -57,6 +61,8 @@ export interface FieldBattleSettings {
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
   commandLabels: CommandLabels | undefined
+  /** `battle_transition` (#830)。`none`（既定・現行の挙動）/ `ff`（開始=2段ズームして暗転、終了=黒を経由して戻る） */
+  transition: BattleTransitionMode
 }
 
 /** 未指定時の戦闘設定（既定値の正本） */
@@ -75,6 +81,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   atb: undefined,
   commandLayout: 'grid',
   commandLabels: undefined,
+  transition: 'none',
 }
 
 /** RPGProject から戦闘設定を読む。未指定は既定値に倒す */
@@ -95,6 +102,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     atb: gameData.battleAtb,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
+    transition: gameData.battleTransition ?? d.transition,
   }
 }
 
@@ -103,6 +111,44 @@ export interface FieldBattleRoster {
   party: Record<string, PartyMemberDef>
   /** 定義順。整数風 ID でも出現順を保つため別持ち */
   order: string[]
+  /** 呪文のマスター (#204)。あれば `learns`（レベル以下で覚えるもの）から候補窓の呪文を作る */
+  spells?: Record<string, SpellDef>
+  /** 特技のマスター (#835)。敵の `行動:` の候補の id から引く。無ければ特技の候補は通常攻撃になる */
+  skills?: Record<string, SkillDef>
+}
+
+/**
+ * 戦闘の味方ごとの呪文の一覧（候補窓用 #204）。`PartyMemberDef.learns` のうち、そのメンバーのレベル（既定 1）以下で
+ * 覚えるもので、呪文マスターに定義があるものを定義順に並べる。1 つもなければ undefined（候補窓は開かない）。
+ * アイテムは所持品の仕組みが無いので渡さない（どうぐは従来どおり何も起きない）。
+ */
+export function buildBattleMenuData(
+  roster: FieldBattleRoster,
+  party: readonly BattleEntity[]
+): BattleMenuData | undefined {
+  const master = roster.spells
+  if (!master) return undefined
+  const spells: Record<string, BattleSpellEntry[]> = {}
+  for (const member of party) {
+    const def = roster.party[member.id]
+    if (!def?.learns) continue
+    const level = def.level ?? 1
+    const list: BattleSpellEntry[] = []
+    for (const l of def.learns) {
+      const sp = Object.prototype.hasOwnProperty.call(master, l.spell) ? master[l.spell] : undefined
+      if (!sp || l.level > level || list.some((e) => e.id === sp.id)) continue
+      list.push({
+        id: sp.id,
+        name: sp.name,
+        mp: sp.mp,
+        target: sp.target,
+        ...(sp.effect !== undefined ? { effect: sp.effect } : {}),
+        ...(sp.builtin !== undefined ? { builtin: sp.builtin } : {}),
+      })
+    }
+    if (list.length > 0) spells[member.id] = list
+  }
+  return Object.keys(spells).length > 0 ? { spells } : undefined
 }
 
 /** PartyMemberDef → BattleEntity。隊列 (#747) は side のときだけ反映する（front は隊列を描かない） */
@@ -247,6 +293,8 @@ export interface OpenFieldBattleArgs {
   gate: FieldInputGate
   /** プロジェクトのアセットのベース URL (#746)。レンダラーの状態なので設定ではなく引数で受ける。未設定ならパスをそのまま読む */
   assetBaseUrl?: string
+  /** `battle_transition: ff` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
+  transition?: FieldBattleTransition
   /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
   onClosed: (outcome: BattleOutcome) => void
 }
@@ -274,12 +322,26 @@ export function closeFieldBattle(stage: Container, screen: BattleScreen): void {
  * 終了（勝利・逃走・全滅）で画面を畳み、その時点で押されていた矢印キーを離すまで無視する gate を張る。
  */
 export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
-  const { stage, width, height, settings, roster, enemies, gate, assetBaseUrl, onClosed } = args
+  const {
+    stage,
+    width,
+    height,
+    settings,
+    roster,
+    enemies,
+    gate,
+    assetBaseUrl,
+    transition,
+    onClosed,
+  } = args
   const party =
     settings.layout === 'side'
       ? buildPartyBattleEntities(roster, settings.layout)
       : [buildHeroBattleEntity(roster, settings.layout)]
-  const engine = new BattleEngine(party, enemies, settings.atb ? { atb: settings.atb } : {})
+  const engine = new BattleEngine(party, enemies, {
+    ...(settings.atb ? { atb: settings.atb } : {}),
+    ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
+  })
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,
     background: settings.background,
@@ -295,17 +357,30 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     pixelArt: settings.pixelArt,
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
+    menu: buildBattleMenuData(roster, party),
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
     onClose: (outcome) => {
       if (closedScreens.has(screen)) return
-      // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
-      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する。
-      // ff では演出を見せ切ってから閉じるため、この抑止は閉じた直後 400ms の保険として働く (#745)
-      suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
-      gate.armReleaseGate()
-      closeFieldBattle(stage, screen)
-      onClosed(outcome)
+      const finishClose = (): void => {
+        // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
+        // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する。
+        // ff では演出を見せ切ってから閉じるため、この抑止は閉じた直後 400ms の保険として働く (#745)
+        suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
+        gate.armReleaseGate()
+        closeFieldBattle(stage, screen)
+        onClosed(outcome)
+      }
+      if (settings.transition === 'ff' && transition) {
+        // 勝敗待機 (#745) のあと、黒を経由して畳む (#830)。畳むのは真っ暗になった瞬間。
+        // フェードイン中に押された矢印キーも、離すまで移動に使わない (#779)
+        transition.playExit(width, height, outcome, finishClose, () => {
+          gate.armReleaseGate()
+          suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
+        })
+        return
+      }
+      finishClose()
     },
   })
   stage.addChild(screen)

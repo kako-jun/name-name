@@ -210,6 +210,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_command_labels: \"{sanitized}\"\n"));
         }
+        // battle_transition (#830)。同じ流儀
+        if let Some(ref v) = doc.battle_transition {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_transition: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -972,6 +977,11 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     out.push_str(&format!("スプライト: {s}\n"));
                 }
                 emit_poses(out, &m.poses);
+                if let Some(actions) = &m.actions {
+                    for a in actions {
+                        out.push_str(&format!("行動: {a}\n"));
+                    }
+                }
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
@@ -1046,6 +1056,28 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     out.push_str(&format!("builtin: {b}\n"));
                 }
                 out.push_str("[/呪文]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Skill(sk) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[特技 {}]\n", sk.id));
+                out.push_str(&format!("名前: {}\n", sk.name));
+                out.push_str(&format!("対象: {}\n", sk.target));
+                if let Some(e) = &sk.effect {
+                    out.push_str(&format!("効果: {e}\n"));
+                }
+                if let Some(b) = &sk.builtin {
+                    out.push_str(&format!("builtin: {b}\n"));
+                }
+                if let Some(m) = &sk.message {
+                    out.push_str(&format!("メッセージ: {m}\n"));
+                }
+                if let Some(t) = &sk.telegraph {
+                    out.push_str(&format!("予兆: {t}\n"));
+                }
+                out.push_str("[/特技]\n");
                 prev_was_dialog_or_text = false;
             }
             Event::RpgEvent { name, commands } => {
@@ -1740,6 +1772,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_transition: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1789,8 +1822,13 @@ mod tests {
                 "monsters/slime-hurt.png".to_string(),
             )])),
             builtin: None,
+            actions: Some(vec![
+                "条件=初手 候補=こうげき".to_string(),
+                "候補=こうげき:3 | 墨:1".to_string(),
+            ]),
         }));
         let out = emit(&doc);
+        assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
         assert!(out.contains("[モンスター slime]"));
         assert!(out.contains("名前: スライム"));
@@ -1842,9 +1880,30 @@ mod tests {
     }
 
     #[test]
+    fn emits_skill_block() {
+        let doc = make_doc_with_event(Event::Skill(SkillDef {
+            id: "ink".to_string(),
+            name: "すみはき".to_string(),
+            target: "相手全体".to_string(),
+            effect: Some("damage 3..5".to_string()),
+            builtin: None,
+            message: Some("{user}は 墨を はいた！".to_string()),
+            telegraph: None,
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[特技 ink]"));
+        assert!(out.contains("名前: すみはき"));
+        assert!(out.contains("対象: 相手全体"));
+        assert!(out.contains("効果: damage 3..5"));
+        assert!(out.contains("メッセージ: {user}は 墨を はいた！"));
+        assert!(!out.contains("MP:"));
+        assert!(out.contains("[/特技]"));
+    }
+
+    #[test]
     fn round_trip_master_blocks() {
         // parse → emit → parse がフィールド一致で安定することを確認
-        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[モンスター slime]\n名前: スライム\nHP: 10\nATK: 3\nDEF: 1\nAGI: 2\nEXP: 2\nGOLD: 1\n[/モンスター]\n\n[呪文 ホイミ]\n名前: ホイミ\nMP: 4\n対象: 味方単体\n効果: heal 15..25\n[/呪文]\n\n[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n";
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[モンスター slime]\n名前: スライム\nHP: 10\nATK: 3\nDEF: 1\nAGI: 2\nEXP: 2\nGOLD: 1\n[/モンスター]\n\n[呪文 ホイミ]\n名前: ホイミ\nMP: 4\n対象: 味方単体\n効果: heal 15..25\n[/呪文]\n\n[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n\n[特技 ink]\n名前: すみはき\n対象: 相手全体\n効果: damage 3..5\nメッセージ: {user}は 墨を はいた！\n予兆: ふるえている\n[/特技]\n";
         let doc1 = crate::parser::parse(input);
         let emitted = emit(&doc1);
         let doc2 = crate::parser::parse(&emitted);
@@ -2019,6 +2078,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_transition: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

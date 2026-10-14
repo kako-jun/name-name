@@ -27,8 +27,9 @@
  * 4 つのボタン (たたかう/じゅもん/どうぐ/にげる) を直接タップで決定。
  * `side` で commandLayout が `cross` のときは十字配置（上・左・右・下）にし、矢印キー 1 押しでも決定できる (#204)。
  *
- * Phase 1 では呪文 / アイテムは「準備中」のログを出すだけ（パーティ #175 と
- * セットで Phase 2）。たたかう / にげる だけ動作する。
+ * 呪文 / アイテムは、`side` + `cross` で `menu`（候補）が渡されたときだけ、一覧の窓が重なって開く（窓のスタック・MP・
+ * 手のカーソルによる対象選択 #204。状態は battleMenu.ts、座標は battleMenuLayout.ts、描画は BattleMenuLayer.ts）。
+ * それ以外では何も起きない（従来どおり）。
  */
 
 import {
@@ -48,6 +49,14 @@ import {
 } from 'pixi.js'
 import { ATB_GAUGE_MAX, BattleEngine } from './battleEngine'
 import {
+  advanceResultElapsed,
+  canSkipResultHold,
+  isResultHoldDone,
+  resultHoldMs,
+  resultOutcomeOf,
+  windowWord,
+} from './battleResult'
+import {
   crossKeyToCommandId,
   resolveCommandSpecs,
   type CommandId,
@@ -55,6 +64,29 @@ import {
   type CommandLayout,
 } from './battleCommands'
 import type { BattleEntity } from './spellDsl'
+import {
+  EMPTY_STACK,
+  buildMenuRows,
+  cancel as cancelMenuWindow,
+  confirm as confirmMenuWindow,
+  menuKeyAction,
+  moveCursor as moveMenuCursor,
+  openList,
+  refitList,
+  scrollList,
+  setListCursor,
+  setTargetCursor,
+  type BattleItemEntry,
+  type BattleMenuData,
+  type BattleSpellEntry,
+  type MenuAction,
+  type MenuContext,
+  type MenuKind,
+  type MenuStack,
+  type TargetSide,
+} from './battleMenu'
+import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
+import { BattleMenuLayer } from './BattleMenuLayer'
 import {
   MOTION_EXTENT_PAD,
   MOTION_SCREEN_MARGIN,
@@ -81,6 +113,7 @@ import {
 } from './battleMotion'
 import type { BattleHit } from './battleEngine'
 import {
+  SIDE_GAP,
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
   computeContainFitRect,
@@ -252,7 +285,7 @@ export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void 
 }
 
 export interface BattleScreenOptions {
-  /** バトル終了（victory / defeat / escaped）時に呼ばれる */
+  /** バトル終了（victory / defeat / escaped）時に呼ばれる。victory / defeat は決着後に読ませる待機（battleResult.ts）を置いてから (#745) */
   onClose?: (outcome: 'victory' | 'defeat' | 'escaped') => void
   /**
    * 戦闘レイアウト (#736)。`front`（既定）= 従来の Undertale 風正面配置（先頭 1 人のみ表示）、
@@ -332,6 +365,12 @@ export interface BattleScreenOptions {
   isInputSuspended?: () => boolean
   /** コマンドの表示名の上書き (#204)。id（attack / spell / item / escape）は変えず label だけ差し替える。部分指定可 */
   commandLabels?: CommandLabels
+  /**
+   * 候補窓に出す呪文・アイテム (#204)。`commandLayout` が `cross` のとき（かつ 1 件以上あるとき）だけ有効で、
+   * 「じゅもん」「どうぐ」を選ぶと一覧の窓が重なって開く（FF5/6 風の窓の階層）。MP が足りない呪文はグレー。
+   * 未指定・空は従来どおり（じゅもん・どうぐは何も起きない）。有効なとき、ATB の wait は候補窓を開いている間だけ止まる
+   */
+  menu?: BattleMenuData
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -464,6 +503,15 @@ export class BattleScreen extends Container {
   private atbBarRects: Array<{ x: number; y: number; w: number; h: number }> = []
   /** onClose を 1 回だけ呼ぶためのフラグ（ATB は tick でも戦闘が終わる） */
   private closedFlag = false
+  /** 勝敗が決まって演出・ダメージ数字・ログのタイプ表示が終わったあと、閉じるまでに読ませている経過時間 (ms)。null = まだ待機を始めていない (#745) */
+  private resultElapsed: number | null = null
+  /** 勝敗の待機中だけ画面全体のタップを受けているか (#745) */
+  private resultTapArmed = false
+  /** 待機に入る前の eventMode（閉じる時に戻す） */
+  private eventModeBeforeResult: Container['eventMode'] | undefined
+  private resultTapHandler = (): void => this.skipResultHold()
+  /** 勝敗の待機を決定キーで飛ばすリスナー (#745)。destroy で必ず外す */
+  private resultKeyListener: ((e: KeyboardEvent) => void) | null = null
   /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
   private atbSignature = ''
   private visibleLogLines = LOG_VISIBLE_LINES
@@ -495,6 +543,12 @@ export class BattleScreen extends Container {
   private heldKeys = new Set<string>()
   private keyUpListener: ((e: KeyboardEvent) => void) | null = null
   private blurListener: (() => void) | null = null
+  /** 候補窓 (#204)。開いている窓のスタック・開いたときの味方・描画。画面の一時的な状態なので BattleState には持たない */
+  private menuEnabled = false
+  private menuStack: MenuStack = EMPTY_STACK
+  private menuActorIndex = -1
+  private menuLayer: BattleMenuLayer | null = null
+  private menuGeometry: MenuGeometry | null = null
 
   constructor(
     engine: BattleEngine,
@@ -546,6 +600,7 @@ export class BattleScreen extends Container {
     if (this.layoutMode === 'front') this.buildLogLines()
     else this.buildSideViews()
     this.buildAtbBars()
+    this.buildMenu()
     // 作り直した画面は過去の行動を再生しない（確定した状態から始める）
     this.seenEventTotal = this.engine.getState().eventTotal
     if (opts.background) void this.loadBackground(opts.background)
@@ -584,6 +639,9 @@ export class BattleScreen extends Container {
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
     this.destroyedFlag = true
     this.detachCrossKeys()
+    this.engine.setAtbHold(false)
+    if (this.menuEnabled) this.engine.setAtbWaitScope('command')
+    this.detachResultSkip()
     for (const v of [...this.enemyViews, ...this.partyViews]) {
       v.acrylicPlate?.destroy()
       v.acrylicShadow?.destroy()
@@ -981,6 +1039,8 @@ export class BattleScreen extends Container {
   redraw(screenWidth: number, screenHeight: number): void {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
+    // 全画面のタップ領域は勝敗の待機中だけ（通常時に持つと子のコマンドボタンへのタップを奪う）
+    if (this.resultTapArmed) this.hitArea = new Rectangle(0, 0, screenWidth, screenHeight)
     this.layout()
     this.refresh()
   }
@@ -1003,8 +1063,9 @@ export class BattleScreen extends Container {
         break
       case 'spell':
       case 'item':
-        // Phase 1: パーティ / マスターアクセスが #175 で揃ってから実装
-        // 現状は識別ログのみ（戦闘エンジン側の log には積まない）
+        // 候補窓 (#204): cross で呪文・アイテムが渡されているときだけ一覧の窓を開く。
+        // それ以外は従来どおり識別ログのみ（戦闘エンジン側の log には積まない）
+        if (this.openMenu(id)) return
         console.info(`[BattleScreen] command '${id}' は #175 で実装`)
         break
     }
@@ -1012,27 +1073,96 @@ export class BattleScreen extends Container {
     this.closeIfOver()
   }
 
+  /**
+   * 勝敗の待機（最後のログ・勝利メッセージ・victory ポーズを読ませる時間）を決定操作・タップで飛ばす (#745)。
+   * 待機を始めた直後は受けない（戦闘を決めたタップが同じ瞬間に届いて、読ませる前に閉じるのを防ぐ）。
+   */
+  private skipResultHold(): void {
+    if (this.closedFlag || this.resultElapsed === null || !canSkipResultHold(this.resultElapsed))
+      return
+    if (this.opts.isInputSuspended?.()) return
+    this.resultElapsed = resultHoldMs(this.presentation)
+    this.closeIfOver()
+  }
+
+  /**
+   * 勝敗の待機中だけ、画面全体のタップ受け口と決定キー（Enter / Space / Z）のリスナーを付ける (#745)。
+   * タップ受け口（eventMode static + 全画面 hitArea）は通常時には持たない: 持つと子のコマンドボタンへのタップが届かなくなる。
+   * 待機中はコマンドが無効（isOver）なので干渉しない。
+   */
+  private attachResultSkip(): void {
+    if (!this.resultTapArmed) {
+      this.resultTapArmed = true
+      this.eventModeBeforeResult = this.eventMode
+      this.eventMode = 'static'
+      this.hitArea = new Rectangle(0, 0, this.screenWidth, this.screenHeight)
+      this.on('pointertap', this.resultTapHandler)
+    }
+    if (this.resultKeyListener || typeof globalThis.addEventListener !== 'function') return
+    this.resultKeyListener = (e: KeyboardEvent) => {
+      if (this.destroyedFlag || this.closedFlag || this.resultElapsed === null) return
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return
+      if (isEditableTarget(e.target)) return
+      if (this.opts.isInputSuspended?.()) return
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'z' && e.key !== 'Z') return
+      e.preventDefault()
+      this.skipResultHold()
+    }
+    globalThis.addEventListener('keydown', this.resultKeyListener)
+  }
+
+  private detachResultSkip(): void {
+    if (this.resultTapArmed) {
+      this.resultTapArmed = false
+      this.off('pointertap', this.resultTapHandler)
+      this.eventMode = this.eventModeBeforeResult ?? 'passive'
+      this.hitArea = null
+    }
+    if (this.resultKeyListener) globalThis.removeEventListener('keydown', this.resultKeyListener)
+    this.resultKeyListener = null
+  }
+
   /** 戦闘が終わっていれば onClose を 1 回だけ呼ぶ */
   private closeIfOver(): void {
     if (this.closedFlag || !this.engine.isOver()) return
     // ff: 最後の一撃の演出（のけぞり・倒れ・ダメージ数字）を見せ切ってから閉じる (#745)
     if (this.isPresenting() || this.popups.length > 0) return
+    // 勝利・全滅は、最後のログ（タイプ表示が終わるまで）・勝利メッセージ・victory ポーズを読ませてから閉じる。逃走はすぐ閉じる (#745)
+    if (resultOutcomeOf(this.engine.getState().phase)) {
+      if (this.logTypewriter === 'on' && isBattleLogTyping(this.logTracker)) return
+      if (this.resultElapsed === null) {
+        this.resultElapsed = 0
+        this.attachResultSkip()
+        this.refresh() // メッセージ窓（ff）と victory ポーズを出す
+      }
+      if (!isResultHoldDone(this.resultElapsed, resultHoldMs(this.presentation))) return
+    }
     this.closedFlag = true
+    this.detachResultSkip()
     const outcome = this.engine.getState().phase
     // outcome は victory / defeat / escaped のいずれか（isOver がガード）
     this.opts.onClose?.(outcome as 'victory' | 'defeat' | 'escaped')
   }
 
   /**
-   * 時間を deltaMS 進める (#205)。ATB のときだけ働く（従来ターン制は何もしない）。
+   * 時間を deltaMS 進める (#205)。ATB のゲージ・ff の演出・勝敗を読ませる待機 (#745) を進める。
    * 時計は持たず、呼び出し側（本編の ticker / サンプルの ticker）が経過時間を渡す。
+   * **全ホストは戦闘中、毎フレーム tick を呼ぶこと**（呼ばないと勝利・全滅の待機が終わらず、画面が閉じない。
+   * スキップの猶予も tick の総和で数えるので、タップ・決定キーでも抜けられない）。
    * 状態が変わった（ログ・フェーズ・コマンド待ちの顔ぶれ）ときだけ全表示を更新し、毎回ゲージ棒だけ描き直す。
    */
   tick(deltaMS: number): void {
     if (this.destroyedFlag || this.closedFlag) return
+    // 勝敗の待機は演出方式・ATB に関わらず時間を進める (#745)
+    if (this.resultElapsed !== null) {
+      this.resultElapsed = advanceResultElapsed(this.resultElapsed, deltaMS)
+    }
     const ff = this.presentation === 'ff'
     const atb = !!this.engine.getState().atb
-    if (!ff && !atb) return
+    if (!ff && !atb) {
+      this.closeIfOver()
+      return
+    }
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
     if (ff) this.advancePresentation(deltaMS)
     if (atb) {
@@ -1136,6 +1266,11 @@ export class BattleScreen extends Container {
       if (isEditableTarget(e.target)) return
       // 設定オーバーレイなど外側の UI が入力を止めている間は戦闘のキー操作を無視する
       if (this.opts.isInputSuspended?.()) return
+      // 候補窓が開いている間は、キーを窓の操作に使う（コマンドの決定には使わない）
+      if (this.menuStack.length > 0) {
+        this.handleMenuKey(e)
+        return
+      }
       const id = crossKeyToCommandId(e.key)
       if (!id) return
       // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
@@ -1198,7 +1333,14 @@ export class BattleScreen extends Container {
    * ff-blue の g は Container で、子 [帯, mask, 枠] を持つ（枠を mask の外に置くのは、枠の外側半分が切れないようにするため）。
    * 子は makePanel が 1 組だけ作って使い回す（再描画で mask が積み増されない）。
    */
-  private drawPanel(container: Container, x: number, y: number, w: number, h: number): void {
+  private drawPanel(
+    container: Container,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    opaque = false
+  ): void {
     const parts = this.ffBlueParts.get(container)
     if (parts) {
       parts.mask.clear().roundRect(x, y, w, h, PANEL_RADIUS).fill({ color: 0xffffff })
@@ -1206,7 +1348,7 @@ export class BattleScreen extends Container {
       for (const band of computeBands(h)) {
         parts.bands
           .rect(x, y + band.y, w, band.h)
-          .fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
+          .fill({ color: band.color, alpha: opaque ? 1 : FF_BLUE_PANEL_ALPHA })
       }
       parts.frame
         .clear()
@@ -1217,7 +1359,7 @@ export class BattleScreen extends Container {
     const g = container as Graphics
     g.clear()
     g.roundRect(x, y, w, h, PANEL_RADIUS)
-      .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+      .fill({ color: PANEL_BG, alpha: opaque ? 1 : PANEL_BG_ALPHA })
       .stroke({ color: PANEL_STROKE, width: 2 })
   }
 
@@ -1331,6 +1473,15 @@ export class BattleScreen extends Container {
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)
+    const slotRect = (sl: SpriteSlot) => ({ x: sl.x, y: sl.y, w: sl.width, h: sl.size })
+    this.menuGeometry = {
+      width: this.screenWidth,
+      height: this.screenHeight,
+      command: L.command,
+      top: L.log.y + L.log.h + SIDE_GAP,
+      enemySlots: L.enemies.map(slotRect),
+      partySlots: L.party.map(slotRect),
+    }
 
     // ログ帯（上）
     panel(L.log, this.logPanel)
@@ -1403,6 +1554,8 @@ export class BattleScreen extends Container {
       atb: this.atbBars.length > 0,
     })
     this.sideStatusColumns = cols
+    // 候補窓の右端は HP 列の左で止める（HP の数字を途中で切らない）
+    if (this.menuGeometry) this.menuGeometry = { ...this.menuGeometry, avoidX: cols.hp.x - 2 }
     for (let i = 0; i < this.statusTexts.length; i++) {
       const row = L.statusRows[i]
       const y = row.y + (row.h - SIDE_STATUS_FONT_SIZE) / 2
@@ -1797,6 +1950,187 @@ export class BattleScreen extends Container {
       this.updateMessageWindow()
       this.applyMotionFrame()
     }
+    this.syncMenu()
+  }
+
+  // ===== 候補窓 (#204) =====
+
+  /** cross で呪文・アイテムが渡されているときだけ候補窓を有効にし、ATB の wait を「候補窓を開いている間だけ停止」にする */
+  private buildMenu(): void {
+    const m = this.opts.menu
+    const hasData =
+      !!m && ((m.items?.length ?? 0) > 0 || Object.values(m.spells ?? {}).some((l) => l.length > 0))
+    this.menuEnabled = this.commandLayout === 'cross' && hasData
+    if (!this.menuEnabled) {
+      // 同じエンジンを使い回す作り直しで、前の画面の設定を持ち越さない
+      this.engine.setAtbWaitScope('command')
+      return
+    }
+    this.menuLayer = new BattleMenuLayer({
+      makePanel: () => this.makePanel(),
+      drawPanel: (c, x, y, w, h, opaque) => this.drawPanel(c, x, y, w, h, opaque),
+      textStyle: () => this.themedStyle(TEXT_STYLE_COMMAND),
+      onRowTap: (i) => {
+        const ctx = this.menuContext()
+        if (!ctx) return
+        this.setMenuStack(setListCursor(this.menuStack, i, ctx))
+        this.confirmMenu()
+      },
+      onTargetTap: (side: TargetSide, i: number) => {
+        const ctx = this.menuContext()
+        if (!ctx) return
+        this.setMenuStack(setTargetCursor(this.menuStack, side, i, ctx))
+        this.confirmMenu()
+      },
+      onScroll: (delta) => {
+        const ctx = this.menuContext()
+        if (ctx) this.setMenuStack(scrollList(this.menuStack, delta, ctx))
+      },
+      onCancelTap: () => this.cancelMenu(),
+    })
+    this.addChild(this.menuLayer)
+    this.engine.setAtbWaitScope('menu')
+  }
+
+  private menuEntries(
+    kind: MenuKind,
+    actor: BattleEntity | undefined
+  ): ReadonlyArray<BattleSpellEntry | BattleItemEntry> {
+    if (kind === 'spell') return (actor && this.opts.menu?.spells?.[actor.id]) || []
+    return this.opts.menu?.items ?? []
+  }
+
+  /** 窓の操作に使う局面。開いたときの味方（スタックが空なら今の番の味方）の一覧を引く。窓を作れない局面は null */
+  private menuContext(kind?: MenuKind): MenuContext | null {
+    if (!this.menuEnabled) return null
+    const s = this.engine.getState()
+    const open = this.menuStack[0]
+    const k = open?.kind ?? kind
+    if (!k) return null
+    const actorIndex = open ? this.menuActorIndex : this.engine.getCurrentActorIndex()
+    const actor = s.party[actorIndex]
+    if (!actor) return null
+    const entries = this.menuEntries(k, actor)
+    return {
+      rows: buildMenuRows(k, entries, actor),
+      maxRows: this.menuGeometry ? listMaxRows(this.menuGeometry) : 1,
+      entries,
+      party: s.party,
+      enemies: s.enemies,
+      actorIndex,
+    }
+  }
+
+  /** 「じゅもん」「どうぐ」で一覧の窓を開く。開けたら true（候補がない・窓を出せないときは false） */
+  private openMenu(kind: MenuKind): boolean {
+    if (this.menuStack.length > 0) return true
+    const ctx = this.menuContext(kind)
+    if (!ctx) return false
+    const next = openList(this.menuStack, kind, ctx)
+    if (next === this.menuStack) return false
+    this.menuActorIndex = ctx.actorIndex
+    this.setMenuStack(next)
+    return true
+  }
+
+  private setMenuStack(stack: MenuStack): void {
+    this.menuStack = stack
+    // ATB の wait: 候補窓を開いている間だけ時間を止める（本家 FF5/6 どおり）
+    this.engine.setAtbHold(stack.length > 0)
+    this.updateMenuLayer()
+  }
+
+  private cancelMenu(): void {
+    this.setMenuStack(cancelMenuWindow(this.menuStack))
+  }
+
+  private handleMenuKey(e: KeyboardEvent): void {
+    const act = menuKeyAction(e.key)
+    if (!act) return
+    e.preventDefault()
+    if (act.type === 'move') {
+      const ctx = this.menuContext()
+      if (ctx) this.setMenuStack(moveMenuCursor(this.menuStack, act.dir, ctx))
+      return
+    }
+    if (e.repeat) return
+    if (act.type === 'confirm') this.confirmMenu()
+    else this.cancelMenu()
+  }
+
+  private confirmMenu(): void {
+    if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
+    const ctx = this.menuContext()
+    if (!ctx) return
+    const r = confirmMenuWindow(this.menuStack, ctx)
+    if (r.action) {
+      this.setMenuStack(r.stack)
+      this.executeMenuAction(r.action, ctx)
+      return
+    }
+    if (r.blocked === 'disabled') {
+      // グレーの行は選べない。MP 不足の呪文はエンジンの「MPが たりない！」（ログと吹き出し）で知らせる。窓は閉じない
+      const w = this.menuStack[this.menuStack.length - 1]
+      const entry = w?.type === 'list' ? ctx.entries[w.cursor] : undefined
+      // MP が足りないときだけ（対象なしの呪文などは、エンジンに渡すと唱えてしまうので何もしない）
+      const actor = this.engine.getState().party[ctx.actorIndex]
+      if (w?.type === 'list' && w.kind === 'spell' && entry && actor) {
+        if (actor.mp < (entry as BattleSpellEntry).mp) {
+          this.engine.selectSpell(entry as BattleSpellEntry)
+          this.refresh()
+        }
+      }
+      return
+    }
+    this.setMenuStack(r.stack)
+  }
+
+  private executeMenuAction(action: MenuAction, ctx: MenuContext): void {
+    const entry = ctx.entries[action.entryIndex]
+    if (entry) {
+      if (action.kind === 'spell') {
+        this.engine.selectSpell(entry as BattleSpellEntry, action.targetId)
+      } else {
+        this.engine.selectItem(entry as BattleItemEntry, action.targetId)
+      }
+    }
+    this.refresh()
+    this.closeIfOver()
+  }
+
+  /**
+   * 番が変わった・戦闘が終わったなど、窓を開いたままにできない局面では窓を閉じる。
+   * 判定はエンジンの確定した状態で行う。ff 演出中は画面の HP 表示が演出に追いつくまで古いことがあるが
+   * （hpOverride）、窓の開閉には影響せず、数字が遅れて更新されるだけ（既知の制約）
+   */
+  private syncMenu(): void {
+    if (this.menuStack.length > 0) {
+      const s = this.engine.getState()
+      const actor = s.party[this.menuActorIndex]
+      const valid =
+        !this.engine.isOver() &&
+        s.phase === 'party-input' &&
+        !!actor &&
+        actor.hp > 0 &&
+        this.engine.getCurrentActorIndex() === this.menuActorIndex
+      if (!valid) {
+        this.menuStack = EMPTY_STACK
+        this.engine.setAtbHold(false)
+      }
+    }
+    this.updateMenuLayer()
+  }
+
+  private updateMenuLayer(): void {
+    if (!this.menuLayer) return
+    const ctx = this.menuStack.length > 0 ? this.menuContext() : null
+    // 画面サイズ変更で見える行数が変わったら、先頭行・カーソルを窓に収め直す
+    if (ctx) this.menuStack = refitList(this.menuStack, ctx)
+    const view =
+      ctx && this.menuGeometry ? buildMenuView(this.menuStack, ctx, this.menuGeometry) : []
+    this.menuLayer.update(view, this.screenWidth, this.screenHeight)
+    // 他の表示物（ログ行など）が後から足されても、窓は常に最前面
+    this.addChild(this.menuLayer)
   }
 
   // ===== 演出 (#745) =====
@@ -1925,7 +2259,9 @@ export class BattleScreen extends Container {
   private updateMessageWindow(): void {
     const m = this.messageText
     if (!m) return
-    const word = messageWindowText(this.playback.active?.event.label)
+    const resultOutcome =
+      this.resultElapsed !== null ? resultOutcomeOf(this.engine.getState().phase) : null
+    const word = windowWord(messageWindowText(this.playback.active?.event.label), resultOutcome)
     this.logPanel.visible = word !== null
     m.visible = word !== null
     if (word === null) return

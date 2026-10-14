@@ -16,6 +16,7 @@ import { defaultTimeController } from './TimeController'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
 import type { SceneEntryResult } from './sceneEntry'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -35,33 +36,14 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface Internals {
-  initialized: boolean
-  waitingForChoice: boolean
-  eventIndex: number
-  jumpState: 'idle' | 'pending' | 'stalled'
-  storyEnded: boolean
-  currentBgmPath: string | null
-  currentBackgroundPath: string | null
-  allScenes: EventScene[]
-  pendingEntry: { promise: Promise<SceneEntryResult>; sceneId: string | null } | null
-  jumpDeferred: unknown
+interface Internals extends RendererInternals {
   choiceOverlay: { show: (...args: unknown[]) => void; hide: () => void }
   saveLoadOverlay: {
     showLoad: (...args: unknown[]) => void
     showSave: (...args: unknown[]) => void
   }
-  render(): void
-  applyState(state: NovelGameState): void
-  openSaveMenu(): void
-  openLoadMenu(): void
-  showToast(msg: string): void
   loadFromSaveData(...args: unknown[]): void
 }
-function internals(r: NovelRenderer): Internals {
-  return r as unknown as Internals
-}
-
 function deferred<T>(): {
   promise: Promise<T>
   resolve: (v: T) => void
@@ -121,8 +103,8 @@ function makeRenderer(resolver: Resolver | null, scenes: EventScene[] = [HUB]): 
   const r = new NovelRenderer()
   r.getTimeController().setMode('virtual')
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-  internals(r).initialized = true
-  vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+  internals<Internals>(r).initialized = true
+  vi.spyOn(internals<Internals>(r), 'render').mockImplementation(() => {})
   r.setScenes(scenes)
   r.setMissingSceneResolver(resolver)
   return r
@@ -133,11 +115,13 @@ function reachChoice(r: NovelRenderer): {
   showCount: () => number
 } {
   const calls: unknown[][] = []
-  vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation((...args: unknown[]) => {
-    calls.push(args)
-  })
+  vi.spyOn(internals<Internals>(r).choiceOverlay, 'show').mockImplementation(
+    (...args: unknown[]) => {
+      calls.push(args)
+    }
+  )
   r.advance()
-  expect(internals(r).waitingForChoice).toBe(true)
+  expect(internals<Internals>(r).waitingForChoice).toBe(true)
   return {
     confirm: calls.length ? (calls[calls.length - 1][1] as (j: string) => void) : () => {},
     showCount: () => calls.length,
@@ -153,7 +137,7 @@ function pendingByChoice(d: ReturnType<typeof deferred<EventScene[] | null>>): N
   const r = makeRenderer(() => d.promise)
   const { confirm } = reachChoice(r)
   confirm('far')
-  expect(internals(r).pendingEntry).not.toBeNull()
+  expect(internals<Internals>(r).pendingEntry).not.toBeNull()
   return r
 }
 
@@ -162,8 +146,8 @@ function pendingByJump(d: ReturnType<typeof deferred<EventScene[] | null>>): Nov
   const r = makeRenderer(() => d.promise, [JA])
   r.advance() // Jump に到達し予約
   r.getTimeController().tick(1) // 発火 → 遅延ロード待ち
-  expect(internals(r).jumpState).toBe('pending')
-  expect(internals(r).pendingEntry?.sceneId).toBe('far')
+  expect(internals<Internals>(r).jumpState).toBe('pending')
+  expect(internals<Internals>(r).pendingEntry?.sceneId).toBe('far')
   return r
 }
 
@@ -184,7 +168,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     async (_name, build, startScene) => {
       const d = deferred<EventScene[] | null>()
       const r = build(d)
-      const i = internals(r)
+      const i = internals<Internals>(r)
       const toast = vi.spyOn(i, 'showToast').mockImplementation(() => {})
       const showLoad = vi.spyOn(i.saveLoadOverlay, 'showLoad').mockImplementation(() => {})
       const showSave = vi.spyOn(i.saveLoadOverlay, 'showSave').mockImplementation(() => {})
@@ -241,7 +225,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     let loadCb: ((data: unknown) => void) | undefined
     const d2 = deferred<EventScene[] | null>()
     const r2 = makeRenderer(() => d2.promise, [HUB])
-    const i2 = internals(r2)
+    const i2 = internals<Internals>(r2)
     const showSave = vi.spyOn(i2.saveLoadOverlay, 'showSave').mockImplementation((...a) => {
       saveCb = a[0] as (slot: number) => void
     })
@@ -282,9 +266,11 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer(() => d.promise)
     const calls: unknown[][] = []
-    vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation((...a: unknown[]) => {
-      calls.push(a)
-    })
+    vi.spyOn(internals<Internals>(r).choiceOverlay, 'show').mockImplementation(
+      (...a: unknown[]) => {
+        calls.push(a)
+      }
+    )
     r.advance()
     const confirm = lastConfirm(calls)
     const enter = vi.spyOn(r as unknown as { enterScene(...a: unknown[]): unknown }, 'enterScene')
@@ -292,7 +278,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     const p = r.jumpToScene('far') // 進行入場を立てる（遅延ロード）
     confirm('other') // 古い選択肢の確定
     expect(enter).toHaveBeenCalledTimes(1) // 確定は enterScene まで届かない
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
 
     d.resolve([HUB, FAR])
     await expect(p).resolves.toEqual({ status: 'entered', sceneId: 'far' })
@@ -302,20 +288,22 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer(() => d.promise, [HUB, FAR])
     expect(r.quickSave()).toBe(true)
-    const loadSpy = vi.spyOn(internals(r), 'loadFromSaveData').mockImplementation(() => {})
+    const loadSpy = vi
+      .spyOn(internals<Internals>(r), 'loadFromSaveData')
+      .mockImplementation(() => {})
     expect(await r.quickLoad()).not.toBeNull()
     expect(loadSpy).toHaveBeenCalledTimes(1)
     loadSpy.mockClear()
 
     const pending = r.jumpToScene('missing')
-    expect(internals(r).pendingEntry).not.toBeNull()
+    expect(internals<Internals>(r).pendingEntry).not.toBeNull()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await r.quickLoad()).toBeNull()
     expect(loadSpy).not.toHaveBeenCalled()
 
     d.resolve(null)
     await pending
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 })
 
@@ -332,18 +320,18 @@ describe('失敗時の扱い (#734 PR1)', () => {
       const d = deferred<EventScene[] | null>()
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const r = pendingByJump(d)
-      const result = internals(r).pendingEntry!.promise
+      const result = internals<Internals>(r).pendingEntry!.promise
 
       fail(d)
       await expect(result).resolves.toMatchObject({ status: 'failed' })
 
       expect(warn).toHaveBeenCalled()
-      expect(internals(r).jumpState).toBe('stalled')
-      expect(internals(r).pendingEntry).toBeNull()
+      expect(internals<Internals>(r).jumpState).toBe('stalled')
+      expect(internals<Internals>(r).pendingEntry).toBeNull()
       expect(r.getCurrentSceneId()).toBe('a')
-      const idx = internals(r).eventIndex
+      const idx = internals<Internals>(r).eventIndex
       r.advance() // 停止中は Jump を飛び越さない
-      expect(internals(r).eventIndex).toBe(idx)
+      expect(internals<Internals>(r).eventIndex).toBe(idx)
       // 停止中でも goBack 等の navigate は通る（ゲートは入場中のみ全拒否）
       expect(r.quickSave()).toBe(false)
     }
@@ -353,11 +341,11 @@ describe('失敗時の扱い (#734 PR1)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeRenderer(null, [JA])
     r.advance()
-    const waiting = internals(r).pendingEntry!.promise
+    const waiting = internals<Internals>(r).pendingEntry!.promise
     r.getTimeController().tick(1)
     await expect(waiting).resolves.toEqual({ status: 'failed', reason: 'not-found' })
-    expect(internals(r).jumpState).toBe('stalled')
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).jumpState).toBe('stalled')
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 
   it.each(failures.slice(1))(
@@ -368,18 +356,18 @@ describe('失敗時の扱い (#734 PR1)', () => {
       const r = makeRenderer(() => d.promise)
       const { confirm, showCount } = reachChoice(r)
       confirm('far')
-      expect(internals(r).waitingForChoice).toBe(false)
+      expect(internals<Internals>(r).waitingForChoice).toBe(false)
 
       fail(d)
       await flush()
 
       expect(warn).toHaveBeenCalled()
       expect(showCount()).toBe(2)
-      expect(internals(r).waitingForChoice).toBe(true)
-      expect(internals(r).pendingEntry).toBeNull()
-      const idx = internals(r).eventIndex
+      expect(internals<Internals>(r).waitingForChoice).toBe(true)
+      expect(internals<Internals>(r).pendingEntry).toBeNull()
+      const idx = internals<Internals>(r).eventIndex
       r.advance()
-      expect(internals(r).eventIndex).toBe(idx)
+      expect(internals<Internals>(r).eventIndex).toBe(idx)
       expect(r.getCurrentSceneId()).toBe('hub')
     }
   )
@@ -392,12 +380,12 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
     const first = r.jumpToScene('far')
     const second = r.jumpToScene('other')
     await expect(second).resolves.toEqual({ status: 'entered', sceneId: 'other' })
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
 
     d.resolve([HUB, FAR])
     await expect(first).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('other')
-    expect(internals(r).allScenes.some((s) => s.id === 'far')).toBe(false)
+    expect(internals<Internals>(r).allScenes.some((s) => s.id === 'far')).toBe(false)
   })
 
   it('進行（遅延ロード）の後の復元（同期）は後の側が適用され、ゲートが下りる', async () => {
@@ -406,12 +394,12 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
     const first = r.jumpToScene('far')
     const second = r.restoreSnapshot(craftSnapshot({ sceneId: 'other' }))
     await expect(second).resolves.toEqual({ status: 'entered', sceneId: 'other' })
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
 
     d.resolve([HUB, FAR])
     await expect(first).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('other')
-    expect(internals(r).allScenes.some((s) => s.id === 'far')).toBe(false)
+    expect(internals<Internals>(r).allScenes.some((s) => s.id === 'far')).toBe(false)
   })
 
   it('復元（遅延ロード）の後の進行（同期）は後の側が適用され、古い復元の flags は適用されない', async () => {
@@ -434,17 +422,17 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
     const r = makeRenderer(() => d.promise, [HUB, OTHER])
     const first = r.jumpToScene('far')
     r.startFrom({ sceneId: 'other' })
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
 
     d.resolve([HUB, FAR])
     await expect(first).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('other')
-    expect(internals(r).allScenes.some((s) => s.id === 'far')).toBe(false)
+    expect(internals<Internals>(r).allScenes.some((s) => s.id === 'far')).toBe(false)
   })
 
   it('状態を作り直す経路（applyState・startFrom・setEvents）は pendingEntry を下ろし、古い進行を破棄する', async () => {
     const routes: Array<[string, (r: NovelRenderer) => void]> = [
-      ['applyState', (r) => internals(r).applyState(craftSnapshot({ sceneId: 'hub' }))],
+      ['applyState', (r) => internals<Internals>(r).applyState(craftSnapshot({ sceneId: 'hub' }))],
       ['startFrom', (r) => r.startFrom({})],
       ['setEvents', (r) => r.setEvents([narration('fresh')])],
     ]
@@ -452,17 +440,17 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
       const d = deferred<EventScene[] | null>()
       const r = makeRenderer(() => d.promise, [HUB])
       const p = r.jumpToScene('far')
-      expect(internals(r).pendingEntry, name).not.toBeNull()
+      expect(internals<Internals>(r).pendingEntry, name).not.toBeNull()
 
       act(r)
-      expect(internals(r).pendingEntry, name).toBeNull()
+      expect(internals<Internals>(r).pendingEntry, name).toBeNull()
 
       const before = r.getCurrentSceneId()
       d.resolve([HUB, FAR])
       await expect(p, name).resolves.toEqual({ status: 'superseded' })
       expect(r.getCurrentSceneId(), name).toBe(before)
       expect(
-        internals(r).allScenes.some((s) => s.id === 'far'),
+        internals<Internals>(r).allScenes.some((s) => s.id === 'far'),
         name
       ).toBe(false)
     }
@@ -486,12 +474,12 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer(() => d.promise)
     const p = r.jumpToScene('far')
-    internals(r).initialized = false
+    internals<Internals>(r).initialized = false
 
     d.resolve([HUB, FAR])
     await expect(p).resolves.toEqual({ status: 'superseded' })
     expect(r.getCurrentSceneId()).toBe('hub')
-    expect(internals(r).allScenes.some((s) => s.id === 'far')).toBe(false)
+    expect(internals<Internals>(r).allScenes.some((s) => s.id === 'far')).toBe(false)
   })
 
   it('destroy 後の失敗の解決は、警告だけ残して何も適用しない（選択肢も再表示しない）', async () => {
@@ -500,7 +488,7 @@ describe('後勝ちと破棄された入場 (#734 PR1)', () => {
     const r = makeRenderer(() => d.promise)
     const { confirm, showCount } = reachChoice(r)
     confirm('far')
-    internals(r).initialized = false
+    internals<Internals>(r).initialized = false
 
     d.resolve(null)
     await flush()
@@ -518,7 +506,7 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
     ['startFrom(sceneId)', (r) => r.startFrom({ sceneId: 'b' })],
     ['startFrom(entry)', (r) => r.startFrom({})],
     ['setEvents', (r) => r.setEvents([narration('x')])],
-    ['applyState', (r) => internals(r).applyState(craftSnapshot({ sceneId: 'b' }))],
+    ['applyState', (r) => internals<Internals>(r).applyState(craftSnapshot({ sceneId: 'b' }))],
     ['別の進行', (r) => void r.jumpToScene('b')],
     ['restoreSnapshot', (r) => void r.restoreSnapshot(craftSnapshot({ sceneId: 'b' }))],
   ]
@@ -528,8 +516,8 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
     async (_n, act) => {
       const r = makeRenderer(null, [A, B])
       r.advance()
-      expect(internals(r).jumpState).toBe('pending')
-      const waiting = internals(r).pendingEntry!.promise
+      expect(internals<Internals>(r).jumpState).toBe('pending')
+      const waiting = internals<Internals>(r).pendingEntry!.promise
       let settled: SceneEntryResult | null = null
       void waiting.then((v) => {
         settled = v
@@ -540,16 +528,16 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
 
       // 別の進行は同期で入場し、その結果は Jump の deferred ではなく superseded
       expect(settled).toEqual({ status: 'superseded' })
-      expect(internals(r).jumpDeferred).toBeNull()
+      expect(internals<Internals>(r).jumpDeferred).toBeNull()
     }
   )
 
   it('Jump の再予約（armJump の連続）でも、前の deferred は superseded で解決される', async () => {
     const r = makeRenderer(null, [A, B])
     r.advance()
-    const first = internals(r).pendingEntry!.promise
+    const first = internals<Internals>(r).pendingEntry!.promise
     ;(r as unknown as { armJump(t: string): void }).armJump('b')
-    const second = internals(r).pendingEntry!.promise
+    const second = internals<Internals>(r).pendingEntry!.promise
     expect(second).not.toBe(first)
     await expect(first).resolves.toEqual({ status: 'superseded' })
 
@@ -560,8 +548,8 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
   it('発火後に initialized=false だった場合、deferred は superseded で解決される', async () => {
     const r = makeRenderer(null, [A, B])
     r.advance()
-    const waiting = internals(r).pendingEntry!.promise
-    internals(r).initialized = false
+    const waiting = internals<Internals>(r).pendingEntry!.promise
+    internals<Internals>(r).initialized = false
     r.getTimeController().tick(1)
     await expect(waiting).resolves.toEqual({ status: 'superseded' })
   })
@@ -570,7 +558,7 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer(() => d.promise, [JA])
     r.advance()
-    const waiting = internals(r).pendingEntry!.promise
+    const waiting = internals<Internals>(r).pendingEntry!.promise
     r.getTimeController().tick(1)
     r.startFrom({ sceneId: 'a' })
     d.resolve([JA, FAR])
@@ -580,7 +568,7 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
   it('playScript: advance で Jump に到達した後に復元・新規開始が来ても止まらず、残りのステップを消化する', async () => {
     const r = makeRenderer(null, [A, B])
     const done = r.playScript([{ type: 'advance' }, { type: 'advance' }])
-    expect(internals(r).jumpState).toBe('pending') // 1 つ目の advance が Jump に到達
+    expect(internals<Internals>(r).jumpState).toBe('pending') // 1 つ目の advance が Jump に到達
 
     void r.restoreSnapshot(craftSnapshot({ sceneId: 'b' }))
     await expect(done).resolves.toBeUndefined()
@@ -592,7 +580,7 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
     const r = makeRenderer(() => d.promise, [HUB, OTHER])
     r.advance() // Choice へ
     const done = r.playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
-    expect(internals(r).pendingEntry).not.toBeNull()
+    expect(internals<Internals>(r).pendingEntry).not.toBeNull()
 
     r.startFrom({ sceneId: 'other' })
     // 遅延ロード中の入場の Promise は、ロード自体が決着してから superseded で解決される（取り消しは
@@ -607,7 +595,7 @@ describe('Jump 予約の取り消しと deferred (#734 PR1)', () => {
     const r = makeRenderer(() => Promise.resolve(null), [HUB])
     r.advance()
     await expect(r.playScript([{ type: 'choice', jump: 'far' }])).resolves.toBeUndefined()
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 })
 
@@ -619,15 +607,15 @@ describe('confinement と持ち越し (#734 PR1)', () => {
 
     await expect(r.jumpToScene('far')).resolves.toEqual({ status: 'ended' })
     expect(resolver).not.toHaveBeenCalled()
-    expect(internals(r).storyEnded).toBe(true)
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).storyEnded).toBe(true)
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 
   it('confinement 圏内の遅延ロードは通常どおり entered になる', async () => {
     const r = makeRenderer(() => Promise.resolve([HUB, FAR]), [HUB])
     confineForTest(r, ['hub', 'far'])
     await expect(r.jumpToScene('far')).resolves.toEqual({ status: 'entered', sceneId: 'far' })
-    expect(internals(r).storyEnded).toBe(false)
+    expect(internals<Internals>(r).storyEnded).toBe(false)
   })
 
   it('遅延ロード成功時、進行は BGM と背景を持ち越す（停止しない）', async () => {
@@ -637,8 +625,8 @@ describe('confinement と持ち越し (#734 PR1)', () => {
     const stopBgm = vi.spyOn(r.getAudioManager(), 'stopBgm').mockImplementation(() => {})
     vi.spyOn(r.getAudioManager(), 'playBgm').mockImplementation(async () => {})
     r.startFrom({ sceneId: 'hub' })
-    internals(r).currentBackgroundPath = 'bg.png'
-    expect(internals(r).currentBgmPath).toBe('hub.ogg')
+    internals<Internals>(r).currentBackgroundPath = 'bg.png'
+    expect(internals<Internals>(r).currentBgmPath).toBe('hub.ogg')
     stopBgm.mockClear()
     const { confirm } = reachChoice(r)
 
@@ -648,8 +636,8 @@ describe('confinement と持ち越し (#734 PR1)', () => {
 
     expect(r.getCurrentSceneId()).toBe('far')
     expect(stopBgm).not.toHaveBeenCalled()
-    expect(internals(r).currentBgmPath).toBe('hub.ogg')
-    expect(internals(r).currentBackgroundPath).toBe('bg.png')
+    expect(internals<Internals>(r).currentBgmPath).toBe('hub.ogg')
+    expect(internals<Internals>(r).currentBackgroundPath).toBe('bg.png')
   })
 
   it('遅延ロード成功時、[ジャンプ:] 由来の進行も BGM を持ち越す', async () => {
@@ -668,6 +656,6 @@ describe('confinement と持ち越し (#734 PR1)', () => {
 
     expect(r.getCurrentSceneId()).toBe('far')
     expect(stopBgm).not.toHaveBeenCalled()
-    expect(internals(r).currentBgmPath).toBe('a.ogg')
+    expect(internals<Internals>(r).currentBgmPath).toBe('a.ogg')
   })
 })

@@ -1186,6 +1186,40 @@ describe('mergeMasterDataFromDocs (#238)', () => {
     expect(multi.monsters.slime?.name).toBe('スライム')
   })
 
+  // #834: 特技 (Skill) も同じ経路で own-property として登録され、[[Prototype]] を汚染しない
+  it('id が "__proto__" の特技でも [[Prototype]] を汚染せず own-property として登録される (#834)', () => {
+    const doc: EventDocument = {
+      engine: 'name-name',
+      chapters: [
+        {
+          number: 1,
+          title: 'data',
+          hidden: true,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data-master',
+              title: 'マスター',
+              view: 'TopDown',
+              events: [
+                { Skill: { id: '__proto__', name: '汚染特技', target: '相手単体' } },
+                { Skill: { id: 'ink', name: 'すみはき', target: '相手全体' } },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const single = collectMasterData(doc)
+    expect(Object.getPrototypeOf(single.skills)).toBe(Object.prototype)
+    expect(single.skills['__proto__']?.name).toBe('汚染特技')
+    expect(single.skills.ink?.name).toBe('すみはき')
+    const multi = mergeMasterDataFromDocs([doc, masterDoc()])
+    expect(Object.getPrototypeOf(multi.skills)).toBe(Object.prototype)
+    expect(multi.skills['__proto__']?.name).toBe('汚染特技')
+    expect(multi.skills.ink?.name).toBe('すみはき')
+  })
+
   function protoMonsterDoc(name: string): EventDocument {
     return {
       engine: 'name-name',
@@ -1835,5 +1869,19 @@ describe('rpgProjectFromDoc: battle_presentation (#745)', () => {
     ['xx', 'dq'],
   ])('battle_presentation %j → battlePresentation %s', (raw, expected) => {
     expect(rpgProjectFromDoc(withPres(raw))!.battlePresentation).toBe(expected)
+  })
+})
+
+describe('rpgProjectFromDoc: battle_transition (#830)', () => {
+  it.each([
+    ['ff', 'ff'],
+    ['FF', 'ff'],
+    [null, 'none'],
+    ['', 'none'],
+    ['zoom', 'none'],
+  ])('battle_transition %j → battleTransition %s', (raw, expected) => {
+    expect(rpgProjectFromDoc({ ...makeDoc(), battle_transition: raw })!.battleTransition).toBe(
+      expected
+    )
   })
 })

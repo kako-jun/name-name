@@ -1,11 +1,11 @@
 //! マスターデータブロック (#174 / #175) のパース。
 //!
-//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[パーティ <id>]` の
-//! 4 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
+//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[パーティ <id>]` の
+//! 5 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
 //! 構造を持ち、ボディ部の解釈だけが kind ごとに違う。
 //!
 //! parser.rs の本体ループから 1 関数 `try_parse_master_data_block` を呼び出すことで
-//! 4 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
+//! 5 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
 
@@ -14,7 +14,7 @@ pub(crate) struct ParsedMasterBlock {
     pub next_pos: usize,
 }
 
-/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[パーティ <id>]` の
+/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[パーティ <id>]` の
 /// いずれかを検出して、ボディの key: value ペアからオブジェクトを組み立てる。
 /// 検出に失敗（ヘッダ形式不一致 / 必須項目欠落）した場合は `None` を返し、
 /// 呼び出し側は次の解釈ルートへ進む。
@@ -32,6 +32,7 @@ pub(crate) fn try_parse_master_data_block(
         MasterKind::Monster => Event::Monster(build_monster_def(id, &body.entries)?),
         MasterKind::Item => Event::Item(build_item_def(id, &body.entries)),
         MasterKind::Spell => Event::Spell(build_spell_def(id, &body.entries)?),
+        MasterKind::Skill => Event::Skill(build_skill_def(id, &body.entries)?),
         MasterKind::PartyMember => Event::PartyMember(build_party_member_def(id, &body.entries)?),
     };
 
@@ -43,6 +44,7 @@ enum MasterKind {
     Monster,
     Item,
     Spell,
+    Skill,
     PartyMember,
 }
 
@@ -67,6 +69,13 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
             return None;
         }
         return Some((MasterKind::Spell, id, "[/呪文]"));
+    }
+    if let Some(rest) = header.strip_prefix("[特技 ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            return None;
+        }
+        return Some((MasterKind::Skill, id, "[/特技]"));
     }
     if let Some(rest) = header.strip_prefix("[パーティ ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
@@ -141,7 +150,23 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         sprite: lookup_master_string(entries, &["スプライト", "sprite"]),
         poses: collect_poses(entries),
         builtin: lookup_master_string(entries, &["builtin"]),
+        actions: collect_actions(entries),
     })
+}
+
+/// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
+/// 書式の検証（条件・候補の構文）は runtime が行い、不正な行はそこで無視する。1 行も無ければ None。
+fn collect_actions(entries: &[(String, String)]) -> Option<Vec<String>> {
+    let out: Vec<String> = entries
+        .iter()
+        .filter(|(k, v)| (k == "行動" || k == "action") && !v.trim().is_empty())
+        .map(|(_, v)| v.trim().to_string())
+        .collect();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
@@ -284,5 +309,25 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
         effect: lookup_master_string(entries, &["効果", "effect"]),
         builtin: lookup_master_string(entries, &["builtin"]),
         school: lookup_master_string(entries, &["系統", "school"]),
+    })
+}
+
+/// `[特技 <id>]` (#834)。`名前` 必須。`対象` の既定は `相手単体`（使う側から見た相対表現）。
+/// MP は持たない。`効果` / `builtin` / `メッセージ` / `予兆` は生文字列で透過し、runtime が解釈する。
+fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef> {
+    let name = lookup_master_string(entries, &["名前", "name"])?;
+    if name.is_empty() {
+        return None;
+    }
+    let target = lookup_master_string(entries, &["対象", "target"])
+        .unwrap_or_else(|| "相手単体".to_string());
+    Some(SkillDef {
+        id,
+        name,
+        target,
+        effect: lookup_master_string(entries, &["効果", "effect"]),
+        builtin: lookup_master_string(entries, &["builtin"]),
+        message: lookup_master_string(entries, &["メッセージ", "message"]),
+        telegraph: lookup_master_string(entries, &["予兆", "telegraph"]),
     })
 }

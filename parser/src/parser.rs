@@ -56,6 +56,7 @@ pub fn parse(input: &str) -> Document {
     let mut battle_atb_mode: Option<String> = None;
     let mut battle_command_layout: Option<String> = None;
     let mut battle_command_labels: Option<String> = None;
+    let mut battle_transition: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -307,6 +308,12 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_command_labels = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_transition:") {
+                // RPG 戦闘の開始・終了の画面遷移 (#830)。none / ff。値は生文字列で透過し、runtime 側で未知値は none に倒す。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_transition = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_atb_mode:") {
                 // RPG 戦闘の ATB 進行方式 (#205)。wait / active。値は生文字列で透過する。
@@ -1164,6 +1171,7 @@ pub fn parse(input: &str) -> Document {
         battle_atb_mode,
         battle_command_layout,
         battle_command_labels,
+        battle_transition,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
@@ -4483,6 +4491,53 @@ GOLD: 1
     }
 
     #[test]
+    fn monster_block_collects_action_lines_as_raw_strings() {
+        // 行動: は書いた順の生文字列で透過する（検証しない。不正な行は runtime が無視する）。空の行動: は捨てる
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター kraken]
+名前: タコ
+HP: 120
+行動: 条件=初手 候補=墨
+行動: 条件=HP<30%, 仲間<=1 候補=触手:2 | 墨:1
+行動:
+action: 候補=こうげき
+行動: でたらめ ??
+[/モンスター]
+
+[モンスター plain]
+名前: ふつう
+HP: 5
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Monster(m) => assert_eq!(
+                m.actions.as_deref(),
+                Some(
+                    &[
+                        "条件=初手 候補=墨".to_string(),
+                        "条件=HP<30%, 仲間<=1 候補=触手:2 | 墨:1".to_string(),
+                        "候補=こうげき".to_string(),
+                        "でたらめ ??".to_string(),
+                    ][..]
+                )
+            ),
+            other => panic!("expected Monster, got {other:?}"),
+        }
+        match &events[1] {
+            Event::Monster(m) => assert_eq!(m.actions, None),
+            other => panic!("expected Monster, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn monster_block_without_name_is_dropped() {
         let input = r#"---
 engine: name-name
@@ -4589,6 +4644,57 @@ MP: 2
             }
             other => panic!("expected Spell, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_skill_block_separately_from_spell() {
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[特技 ink]
+名前: すみはき
+対象: 相手全体
+効果: damage 3..5
+メッセージ: {user}は 墨を はいた！
+予兆: 触手が ふるえている
+[/特技]
+
+[特技 mend]
+name: いやし
+builtin: some_builtin
+[/特技]
+
+[特技 noname]
+対象: 自分
+[/特技]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        // 名前の無いブロックは破棄される（[呪文] と同じ）
+        let skills: Vec<&SkillDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Skill(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(skills.len(), 2);
+        assert!(!events.iter().any(|e| matches!(e, Event::Spell(_))));
+        assert_eq!(skills[0].id, "ink");
+        assert_eq!(skills[0].name, "すみはき");
+        assert_eq!(skills[0].target, "相手全体");
+        assert_eq!(skills[0].effect.as_deref(), Some("damage 3..5"));
+        assert_eq!(skills[0].builtin, None);
+        assert_eq!(skills[0].message.as_deref(), Some("{user}は 墨を はいた！"));
+        assert_eq!(skills[0].telegraph.as_deref(), Some("触手が ふるえている"));
+        // 対象の既定は相手単体、英語キーも受理
+        assert_eq!(skills[1].target, "相手単体");
+        assert_eq!(skills[1].builtin.as_deref(), Some("some_builtin"));
+        assert_eq!(skills[1].message, None);
     }
 
     #[test]

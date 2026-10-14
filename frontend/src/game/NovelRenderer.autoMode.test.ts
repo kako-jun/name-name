@@ -24,6 +24,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -39,25 +40,16 @@ interface DialogBoxObservable {
   setOnTypingDone(cb: (() => void) | null): void
 }
 
-interface AutoModeInternals {
-  scheduleAutoAdvance(): void
+interface AutoModeInternals extends RendererInternals {
   dialogBox: DialogBoxObservable
-  waitingForChoice: boolean
-  waitingForWait: boolean
-  sentenceIndex: number
-  textIndex: number
-  eventIndex: number
   isAtScriptEnd(): boolean
-  isNovelStyle(): boolean
-}
-
-function internals(r: NovelRenderer): AutoModeInternals {
-  return r as unknown as AutoModeInternals
 }
 
 /** scheduleAutoAdvance を spy で差し替える（実タイマー/advance は走らせない）。 */
 function spyScheduler(r: NovelRenderer) {
-  return vi.spyOn(internals(r), 'scheduleAutoAdvance').mockImplementation(() => {})
+  return vi
+    .spyOn(internals<AutoModeInternals>(r), 'scheduleAutoAdvance')
+    .mockImplementation(() => {})
 }
 
 /**
@@ -69,7 +61,7 @@ function spyScheduler(r: NovelRenderer) {
 function spyOnTypingDone(r: NovelRenderer, typing: boolean) {
   let pending: (() => void) | null = null
   const spy = vi
-    .spyOn(internals(r).dialogBox, 'setOnTypingDone')
+    .spyOn(internals<AutoModeInternals>(r).dialogBox, 'setOnTypingDone')
     .mockImplementation((cb: (() => void) | null) => {
       pending = cb
       // 完了済み行に張り替えたら実装と同様その場で 1 回だけ消費する。
@@ -145,7 +137,7 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
     r.setScenes([scene('s', [narration('一行目。'), narration('二行目。')])])
     spyScheduler(r) // 先に ON する前に実タイマーを張らせない
     r.setAutoMode(true) // 先に ON（実 dialogBox に張り替わる）
-    const spy = vi.spyOn(internals(r).dialogBox, 'setOnTypingDone')
+    const spy = vi.spyOn(internals<AutoModeInternals>(r).dialogBox, 'setOnTypingDone')
     r.setAutoMode(false)
     expect(spy).toHaveBeenCalledWith(null)
     expect(r.isAutoMode()).toBe(false)
@@ -155,7 +147,7 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
   it('choice 待ち中に ON にしても setOnTypingDone/scheduleAutoAdvance を呼ばない', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('s', [narration('一行目。'), narration('二行目。')])])
-    internals(r).waitingForChoice = true
+    internals<AutoModeInternals>(r).waitingForChoice = true
     const sched = spyScheduler(r)
     const td = spyOnTypingDone(r, false)
     r.setAutoMode(true)
@@ -167,7 +159,7 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
   it('wait 待ち中に ON にしても setOnTypingDone/scheduleAutoAdvance を呼ばない', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('s', [narration('一行目。'), narration('二行目。')])])
-    internals(r).waitingForWait = true
+    internals<AutoModeInternals>(r).waitingForWait = true
     const sched = spyScheduler(r)
     const td = spyOnTypingDone(r, false)
     r.setAutoMode(true)
@@ -179,7 +171,7 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
   it('スクリプト末尾で ON にしても setOnTypingDone/scheduleAutoAdvance を呼ばない', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('s', [narration('唯一の行。')])]) // 単一イベント・1 行 → 末尾
-    expect(internals(r).isAtScriptEnd()).toBe(true) // 前提
+    expect(internals<AutoModeInternals>(r).isAtScriptEnd()).toBe(true) // 前提
     const sched = spyScheduler(r)
     const td = spyOnTypingDone(r, false)
     r.setAutoMode(true)
@@ -194,7 +186,7 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
     r.setScenes([scene('s', [narration('一行目。'), narration('二行目。')])])
     spyScheduler(r) // 1 回目の ON で実タイマーを張らせない
     r.setAutoMode(true) // 1 回目
-    const spy = vi.spyOn(internals(r).dialogBox, 'setOnTypingDone')
+    const spy = vi.spyOn(internals<AutoModeInternals>(r).dialogBox, 'setOnTypingDone')
     r.setAutoMode(true) // 同値 → 早期 return
     expect(spy).not.toHaveBeenCalled()
   })
@@ -203,7 +195,7 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
   it('adv（既定スタイル）でも末尾でない位置で ON すると即 scheduleAutoAdvance を呼ぶ', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('s', [narration('行1', '行2'), narration('行3')])])
-    expect(internals(r).isNovelStyle()).toBe(false)
+    expect(internals<AutoModeInternals>(r).isNovelStyle()).toBe(false)
     const sched = spyScheduler(r)
     spyOnTypingDone(r, false)
     r.setAutoMode(true)
@@ -214,12 +206,12 @@ describe('NovelRenderer setAutoMode 会話中トグル即時反映 (#302)', () =
   it('novel: ページ途中の文で ON すると即 scheduleAutoAdvance を呼ぶ（末尾でない）', () => {
     const r = new NovelRenderer()
     r.setDialogStyle('novel')
-    const cap = internals(r).dialogBox.novelMaxLinesPerPage()
+    const cap = internals<AutoModeInternals>(r).dialogBox.novelMaxLinesPerPage()
     const text = Array.from({ length: cap + 1 }, (_, k) => `${k + 1}。`).join('') // cap+1 文 → 2 ページ
     r.setScenes([scene('s', [narration(text)])])
-    internals(r).sentenceIndex = 0
-    internals(r).textIndex = 0
-    expect(internals(r).isAtScriptEnd()).toBe(false)
+    internals<AutoModeInternals>(r).sentenceIndex = 0
+    internals<AutoModeInternals>(r).textIndex = 0
+    expect(internals<AutoModeInternals>(r).isAtScriptEnd()).toBe(false)
     const sched = spyScheduler(r)
     spyOnTypingDone(r, false)
     r.setAutoMode(true)

@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene, FlagValue } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（confinement.test.ts / intermission.test.ts と同じスタイル） ---
 
@@ -60,19 +61,9 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 const ENTRY_B_EVENTS: Event[] = [narration('entry-b-start')]
 
 /** #637 検証用の内部アクセサ（他 NovelRenderer.*.test.ts と同じ internals 直代入の割り切り） */
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   gameState: { setFlag: (name: string, value: FlagValue) => void }
-  currentSceneId: string | null
-  resolvedEvents: Event[]
   saveManager: { deleteQuickSave: () => void }
-  // #662 検証用: rawEvents（quickLoad/restoreToScene で直前ルートの内容に上書きされうる
-  // 可変フィールド）と entryRawEvents（setEvents() でのみ更新されるエントリ文書スナップショット）
-  rawEvents: Event[]
-  entryRawEvents: Event[]
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 function narrationTexts(events: Event[]): string[] {
@@ -91,7 +82,7 @@ describe('NovelRenderer.startFrom({}) の gameState/currentSceneId リセット 
 
   it('1: flags を設定した状態で startFrom({}) を呼ぶと gameState の flags が空になる（正常系）', () => {
     const r = makeRenderer(SCENES)
-    internals(r).gameState.setFlag('visited', { Bool: true })
+    internals<LocalInternals>(r).gameState.setFlag('visited', { Bool: true })
     expect(r.getSnapshot().flags).toEqual({ visited: { Bool: true } })
 
     void r.startFrom({})
@@ -122,8 +113,8 @@ describe('NovelRenderer.startFrom({}) の gameState/currentSceneId リセット 
 
   it('4: エントリ文書が未読み込み（未初期化 renderer）でも startFrom({}) は例外にならず、空の文書からの新規開始として flags と currentSceneId をリセットする (#734 PR5)', async () => {
     const r = new NovelRenderer() // setScenes/setEvents を呼ばない = entryRawEvents は既定の空配列
-    internals(r).gameState.setFlag('pristine', { Bool: true })
-    internals(r).currentSceneId = 'untouched-scene'
+    internals<LocalInternals>(r).gameState.setFlag('pristine', { Bool: true })
+    internals<LocalInternals>(r).currentSceneId = 'untouched-scene'
 
     await expect(r.startFrom({})).resolves.toEqual({ status: 'entered', sceneId: null })
 
@@ -165,7 +156,7 @@ describe('NovelRenderer.clearQuickSave() (#637)', () => {
 
   it('6: clearQuickSave() は内部の saveManager.deleteQuickSave() を呼ぶ（spy検証）', () => {
     const r = makeRenderer(SCENES)
-    const spy = vi.spyOn(internals(r).saveManager, 'deleteQuickSave')
+    const spy = vi.spyOn(internals<LocalInternals>(r).saveManager, 'deleteQuickSave')
 
     r.clearQuickSave()
 
@@ -200,7 +191,10 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
     expect(r.getSnapshot().flags).toEqual({ route_milestone: { Bool: true } })
 
     r.jumpToScene('branch') // フラグが立っているので Condition 内の 'flagged-content' が展開される
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['flagged-content', 'base-content'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual([
+      'flagged-content',
+      'base-content',
+    ])
 
     // #578 自動クイックセーブ相当: 旧セッションのクイックセーブに flag=true / sceneId='branch' が残る
     expect(r.quickSave()).toBe(true)
@@ -217,7 +211,7 @@ describe('NovelRenderer #637 統合: 「はじめから」相当のフラグ/ク
     // #662: startFrom({}) は rawEvents（branch まで進行した直前ルートの内容）ではなく
     // entryRawEvents（setScenes() 時点の entry シーン）を再生する。branch の
     // 'flagged-content'/'base-content' には戻らず、entry の 'start' になる。
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual(['start'])
   })
 
   // 15: #637 本体の症状そのものの再現テスト。一度もシーン遷移していない状態（entry のまま）でも
@@ -259,13 +253,13 @@ describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quic
     // #578/#620 の自動 quickLoad 相当: 実際に quickLoad() を呼び restoreToScene() 経由で
     // rawEvents が route の内容（'progressed'）に上書きされる状態を作る。
     expect(await r.quickLoad()).not.toBeNull()
-    expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
+    expect(narrationTexts(internals<LocalInternals>(r).rawEvents)).toEqual(['progressed'])
 
     void r.startFrom({})
 
     // #662 修正前は rawEvents（route内容）をそのまま再生し 'progressed' が残っていた。
     // 修正後は entryRawEvents を参照するため entry の 'start' に戻る。
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual(['start'])
   })
 
   // 17 (T3 補助アサーション): 16 と同じ手順で、quickLoad() 直後（startFrom({}) より前）の
@@ -279,14 +273,14 @@ describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quic
     expect(r.quickSave()).toBe(true)
 
     // quickLoad() 前: entryRawEvents は setScenes() 由来の entry 内容
-    expect(narrationTexts(internals(r).entryRawEvents)).toEqual(['start'])
+    expect(narrationTexts(internals<LocalInternals>(r).entryRawEvents)).toEqual(['start'])
 
     expect(await r.quickLoad()).not.toBeNull()
 
     // quickLoad() 後: rawEvents は route の内容に上書きされている
-    expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
+    expect(narrationTexts(internals<LocalInternals>(r).rawEvents)).toEqual(['progressed'])
     // しかし entryRawEvents は無傷（setEvents() 経由でしか更新されないため）
-    expect(narrationTexts(internals(r).entryRawEvents)).toEqual(['start'])
+    expect(narrationTexts(internals<LocalInternals>(r).entryRawEvents)).toEqual(['start'])
   })
 
   // 18 (T2): setEvents() が複数回呼ばれた場合、startFrom({}) は「最後に」setEvents された
@@ -302,7 +296,7 @@ describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quic
 
     void r.startFrom({})
 
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['entry-b-start'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual(['entry-b-start'])
   })
 
   // 19 (T4・T2+T3複合): 18 の手順の後、さらに route へ遷移して quickSave/quickLoad を行い
@@ -320,13 +314,13 @@ describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quic
     r.jumpToScene('route')
     expect(r.quickSave()).toBe(true)
     expect(await r.quickLoad()).not.toBeNull()
-    expect(narrationTexts(internals(r).rawEvents)).toEqual(['progressed'])
+    expect(narrationTexts(internals<LocalInternals>(r).rawEvents)).toEqual(['progressed'])
 
     void r.startFrom({})
 
     // route の内容にも SCENES の entry('start') にも戻らず、最後に setEvents された
     // ENTRY_B_EVENTS の内容に戻る。
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['entry-b-start'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual(['entry-b-start'])
   })
 
   // 20 (T7): エントリ文書を一度も供給していない（entryRawEvents が空）が rawEvents は非空（setEvents
@@ -337,12 +331,12 @@ describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quic
     const r = new NovelRenderer() // setScenes/setEvents 未呼び出し = entryRawEvents は既定の空配列
     r.setJumpSceneIndex(SCENES) // allScenes（ジャンプ索引）だけ設定。setEvents は呼ばれない
     r.jumpToScene('branch') // rawEvents は branch の内容で非空になる。entryRawEvents は空のまま
-    expect(narrationTexts(internals(r).rawEvents)).toEqual(['base-content'])
+    expect(narrationTexts(internals<LocalInternals>(r).rawEvents)).toEqual(['base-content'])
 
     expect(() => r.startFrom({})).not.toThrow()
 
-    expect(internals(r).rawEvents).toEqual([])
-    expect(internals(r).resolvedEvents).toEqual([])
+    expect(internals<LocalInternals>(r).rawEvents).toEqual([])
+    expect(internals<LocalInternals>(r).resolvedEvents).toEqual([])
     expect(r.getCurrentSceneId()).toBeNull()
   })
 
@@ -356,9 +350,9 @@ describe('NovelRenderer #662: startFrom({}) は entryRawEvents を再生し quic
     expect(await r.quickLoad()).not.toBeNull()
 
     void r.startFrom({})
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual(['start'])
 
     expect(() => r.startFrom({})).not.toThrow()
-    expect(narrationTexts(internals(r).resolvedEvents)).toEqual(['start'])
+    expect(narrationTexts(internals<LocalInternals>(r).resolvedEvents)).toEqual(['start'])
   })
 })

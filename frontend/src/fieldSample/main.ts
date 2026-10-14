@@ -330,6 +330,9 @@ async function main(): Promise<void> {
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS, 50)
     if (battle) {
+      // 戦闘の時間を進める。勝敗の待機（#745）・ATB・ff の演出は tick に依存する。onClose で battle が null になりうる
+      battle.tick(dt)
+      if (!battle) return
       $('info').textContent =
         `戦闘中  scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})`
       return

@@ -156,6 +156,8 @@ export interface MonsterDef {
   poses?: Record<string, string>
   /** 専用関数 ID。指定時はランタイム実装に委譲（汎用 + 専用 builtin の二層設計、#176） */
   builtin?: string
+  /** 敵の行動ルール (#835)。`行動:` の値を書いた順の生文字列で透過し、解釈は `enemyAi.ts`。無ければ通常攻撃だけ */
+  actions?: string[]
 }
 
 /** アイテム定義 (#174) */
@@ -208,6 +210,23 @@ export interface SpellDef {
   builtin?: string
   /** 系統（"fire" / "ice" / "holy" / "breath" 等、耐性計算用） */
   school?: string
+}
+
+/**
+ * 特技定義 (#834)。敵が使う技で、呪文とは別のマスターデータ。MP は持たない。
+ * `target` は使う側から見た相対表現（"相手単体"（既定）/ "相手全体" / "自分" / "仲間単体" / "仲間全体"）
+ */
+export interface SkillDef {
+  id: string
+  name: string
+  target: string
+  /** 効果 DSL（呪文と同書式）。`builtin` と排他 */
+  effect?: string
+  builtin?: string
+  /** 使用時の演出文（`{user}` は使った側の名前） */
+  message?: string
+  /** 予兆の文言（生文字列。解釈は後続の段階） */
+  telegraph?: string
 }
 
 export interface PlayerStartData {
@@ -463,6 +482,7 @@ export type Event =
   | { Monster: MonsterDef }
   | { Item: ItemDef }
   | { Spell: SpellDef }
+  | { Skill: SkillDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {
@@ -894,6 +914,8 @@ export interface EventDocument {
   battle_command_layout?: string | null
   /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */
   battle_command_labels?: string | null
+  /** RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、終了=黒を経由してフェードで戻る）。frontmatter `battle_transition:` から流す。GUI 専用（TUI は読まない）。 */
+  battle_transition?: string | null
   chapters: EventChapter[]
 }
 

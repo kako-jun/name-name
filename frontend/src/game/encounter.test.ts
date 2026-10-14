@@ -273,3 +273,19 @@ describe('rollEncounter: sprite の写し (#736)', () => {
     expect(enemies!.map((e) => e.sprite)).toEqual([undefined, 'm/ghost.webp'])
   })
 })
+
+describe('rollEncounter: actions を BattleEntity に写す (#835)', () => {
+  it('モンスター定義の actions（生文字列）を複製して写す。未指定・空は actions なし', () => {
+    const actions = ['条件=初手 候補=墨', '候補=こうげき']
+    const input = {
+      rate: 1,
+      groups: ['slime+ghost+slime'],
+      masters: { slime: { ...slime, actions }, ghost: { ...ghost, actions: [] } },
+      rng: () => 0,
+    }
+    const [a, b] = rollEncounter(input)!
+    expect(a.actions).toEqual(actions)
+    expect(a.actions).not.toBe(actions)
+    expect('actions' in b).toBe(false)
+  })
+})

@@ -1085,6 +1085,53 @@ export function saveSlotToGameState(
   }
 }
 
+/** `gameStateToSaveSlot` に渡す、スナップショットに含まれない保存メタ。 */
+export interface SaveSlotMeta {
+  /** スロット番号。クイックセーブは -1（スロット番号不使用）。 */
+  slot: number
+  /** 保存時刻（ISO 8601）。時計の読み取りは呼び出し側が行い、ここは純粋に保つ。 */
+  savedAt: string
+  /** 表示用シーン名（`resolveSceneTitle`）。 */
+  sceneName: string | null
+}
+
+/**
+ * `NovelGameState`（`getSnapshot()` の結果）を `SaveSlotData` に写す純粋関数 (#735 1/8, #822)。
+ * `saveSlotToGameState` の逆向きで、クイックセーブ（`saveQuick`）とスロット保存（`openSaveMenu`）が共有する。
+ *
+ * スナップショットの各フィールドをそのまま写し（`storyEnded` は `SaveSlotData` に持たせない #386）、
+ * `meta` の slot / savedAt / sceneName を足す。フィールドの並び（= JSON のキー順）は元実装と同じ。
+ */
+export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta): SaveSlotData {
+  return {
+    slot: meta.slot,
+    sceneId: snapshot.sceneId,
+    eventIndex: snapshot.eventIndex,
+    textIndex: snapshot.textIndex,
+    sentenceIndex: snapshot.sentenceIndex,
+    flags: snapshot.flags,
+    backgroundPath: snapshot.backgroundPath,
+    backgroundColor: snapshot.backgroundColor,
+    backgroundFade: snapshot.backgroundFade,
+    backgroundBrightness: snapshot.backgroundBrightness,
+    video: snapshot.video,
+    eventImage: snapshot.eventImage,
+    backgroundBoards: snapshot.backgroundBoards,
+    props: snapshot.props,
+    spotlight: snapshot.spotlight,
+    curtain: snapshot.curtain,
+    isBlackout: snapshot.isBlackout,
+    characters: snapshot.characters,
+    currentBgmPath: snapshot.currentBgmPath,
+    cameraMode: snapshot.cameraMode,
+    cameraOrientation: snapshot.cameraOrientation,
+    cameraElevation: snapshot.cameraElevation,
+    paperDollOutline: snapshot.paperDollOutline,
+    savedAt: meta.savedAt,
+    sceneName: meta.sceneName,
+  }
+}
+
 /**
  * フォント解決の優先順チェーンを 1 箇所に集約する純粋関数 (#147 / #260)。
  *
@@ -1594,7 +1641,10 @@ export function describeEventForDebug(event: unknown): DebugEventDescriptor {
  * `===` による厳密一致で、先頭から最初に一致した 1 件を返す（重複 id は先勝ち）。
  * `this` / PixiJS / DOM / audio に一切触れない決定論的写像。
  */
-export function findSceneById(scenes: EventScene[], sceneId: string): EventScene | undefined {
+export function findSceneById(
+  scenes: readonly EventScene[],
+  sceneId: string
+): EventScene | undefined {
   return scenes.find((s) => s.id === sceneId)
 }
 
@@ -1617,7 +1667,7 @@ export function findSceneById(scenes: EventScene[], sceneId: string): EventScene
  * scene 本体の線形探索は `findSceneById` に委譲する（探索ロジックの一元化）。
  */
 export function resolveSceneTitle(
-  scenes: EventScene[],
+  scenes: readonly EventScene[],
   sceneId: string | null | undefined
 ): string | null {
   if (!sceneId) return null

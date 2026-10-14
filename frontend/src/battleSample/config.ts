@@ -15,9 +15,10 @@ import type { BackgroundTone } from '../game/backgroundTone'
 import type { BackgroundDof } from '../game/depthOfField'
 import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
 import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
-import type { AtbMode } from '../game/battleEngine'
+import type { AtbMode, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
+import type { BattleItemEntry, BattleMenuData, BattleSpellEntry } from '../game/battleMenu'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -72,6 +73,10 @@ export interface BattleSampleConfig {
   commandLayout: CommandLayout
   /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
   commandLabels: CommandLabels
+  /** 候補窓の呪文 (#204)。味方全員が使える（cross のときだけ「じゅもん」で開く）。MP が足りないものはグレー */
+  spells: BattleSpellEntry[]
+  /** 候補窓のアイテム (#204)。`count` は所持数（表示だけ。使っても減らない） */
+  items: BattleItemEntry[]
   /** 絶対 URL。なしは null */
   background: string | null
   /** 奥行きの地平線の高さ（画面比 0〜1）(#747)。奥行きオン時に使う。既定 DEPTH_DEFAULT_HORIZON */
@@ -80,6 +85,8 @@ export interface BattleSampleConfig {
   perspective: number
   /** 前景レイヤー画像の絶対 URL (#747)。なしは null */
   foreground: string | null
+  /** 敵が使える特技 (#835)。設定 JSON の `skills`。`enemies[].actions` の候補の id から引く。既定は空 */
+  skills: Record<string, SkillExecution>
   party: BattleEntity[]
   enemies: BattleEntity[]
 }
@@ -150,6 +157,27 @@ export function defaultEnemies(): BattleEntity[] {
   }))
 }
 
+/** 内蔵既定の呪文 (#204)。メテオは MP 20 で、既定の味方（MP 最大 12）には足りずグレーになる。一覧が長いときの確認用に 6 件 */
+export function defaultSpells(): BattleSpellEntry[] {
+  return [
+    { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14 type=fire' },
+    { id: 'thunder', name: 'いなずま', mp: 6, target: '敵全体', effect: 'damage 5..9' },
+    { id: 'heal', name: 'ヒール', mp: 2, target: '味方単体', effect: 'heal 15..25' },
+    { id: 'heal-all', name: 'ヒーリング', mp: 8, target: '味方全体', effect: 'heal 10..15' },
+    { id: 'self', name: 'ちゆのいのり', mp: 4, target: '自分', effect: 'heal 20..30' },
+    { id: 'meteor', name: 'メテオ', mp: 20, target: '敵全体', effect: 'damage 30..40' },
+  ]
+}
+
+/** 内蔵既定のアイテム (#204) */
+export function defaultItems(): BattleItemEntry[] {
+  return [
+    { id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 },
+    { id: 'hi-potion', name: 'ハイポーション', effect: 'heal 50..60', count: 1 },
+    { id: 'ether', name: 'エーテル', effect: 'heal 1..1', count: 0 },
+  ]
+}
+
 export function defaultConfig(): BattleSampleConfig {
   return {
     layout: 'side',
@@ -164,10 +192,13 @@ export function defaultConfig(): BattleSampleConfig {
     atbMode: 'wait',
     commandLayout: 'grid',
     commandLabels: {},
+    spells: defaultSpells(),
+    items: defaultItems(),
     background: null,
     horizon: DEPTH_DEFAULT_HORIZON,
     perspective: SAMPLE_DEFAULT_PERSPECTIVE,
     foreground: null,
+    skills: {},
     party: defaultParty(),
     enemies: defaultEnemies(),
   }
@@ -258,6 +289,14 @@ function parseEntity(
     const poses = normalizePoses(resolved)
     if (poses) entity.poses = poses
   }
+  if (raw.actions !== undefined) {
+    // 敵の行動ルール (#835)。`行動:` の値と同じ書式の文字列の配列（書いた順）。解釈は enemyAi.ts（不正な行は戦闘側で警告して無視）
+    if (!Array.isArray(raw.actions) || raw.actions.some((a) => typeof a !== 'string')) {
+      return { ok: false, error: `${path}.actions は文字列の配列である必要があります` }
+    }
+    const actions = (raw.actions as string[]).map((a) => a.trim()).filter((a) => a !== '')
+    if (actions.length > 0) entity.actions = actions
+  }
   return { ok: true, value: entity }
 }
 
@@ -300,6 +339,91 @@ function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
       }
     }
     out[k as keyof CommandLabels] = v
+  }
+  return { ok: true, value: out }
+}
+
+/** 設定 JSON の skills (#835) を検証する。`[{ id, name?, target?, effect?, builtin?, message? }]`。`id` は必須（`actions` の候補から引く） */
+function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> {
+  if (raw === undefined) return { ok: true, value: {} }
+  if (!Array.isArray(raw)) return { ok: false, error: 'skills は配列である必要があります' }
+  const entries: [string, SkillExecution][] = []
+  for (let i = 0; i < raw.length; i++) {
+    const r: unknown = raw[i]
+    const path = `skills[${i}]`
+    if (!isRecord(r)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+    if (typeof r.id !== 'string' || r.id.trim() === '') {
+      return { ok: false, error: `${path}.id は空でない文字列である必要があります` }
+    }
+    for (const f of ['name', 'target', 'effect', 'builtin', 'message'] as const) {
+      if (r[f] !== undefined && typeof r[f] !== 'string') {
+        return { ok: false, error: `${path}.${f} は文字列である必要があります` }
+      }
+    }
+    const id = r.id.trim()
+    entries.push([
+      id,
+      {
+        name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : id,
+        target: typeof r.target === 'string' && r.target.trim() ? r.target.trim() : '相手単体',
+        ...(typeof r.effect === 'string' ? { effect: r.effect } : {}),
+        ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
+        ...(typeof r.message === 'string' ? { message: r.message } : {}),
+      },
+    ])
+  }
+  return { ok: true, value: Object.fromEntries(entries) }
+}
+
+/** 設定 JSON の spells / items (#204) を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
+function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
+  raw: unknown,
+  fallback: T[],
+  key: 'spells' | 'items'
+): ParseResult<T[]> {
+  if (raw === undefined) return { ok: true, value: fallback }
+  if (!Array.isArray(raw)) return { ok: false, error: `${key} は配列である必要があります` }
+  const out: T[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const r: unknown = raw[i]
+    const path = `${key}[${i}]`
+    if (!isRecord(r)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+    if (typeof r.name !== 'string' || r.name.trim() === '') {
+      return { ok: false, error: `${path}.name は空でない文字列である必要があります` }
+    }
+    for (const f of ['mp', 'count'] as const) {
+      if (r[f] !== undefined && (typeof r[f] !== 'number' || !Number.isFinite(r[f]))) {
+        return { ok: false, error: `${path}.${f} は数値である必要があります` }
+      }
+    }
+    for (const f of ['effect', 'builtin', 'id'] as const) {
+      if (r[f] !== undefined && typeof r[f] !== 'string') {
+        return { ok: false, error: `${path}.${f} は文字列である必要があります` }
+      }
+    }
+    const base = {
+      id: typeof r.id === 'string' && r.id ? r.id : `${key}-${i + 1}`,
+      name: r.name.trim(),
+      ...(typeof r.effect === 'string' ? { effect: r.effect } : {}),
+      ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
+    }
+    if (key === 'spells') {
+      if (typeof r.target !== 'undefined' && typeof r.target !== 'string') {
+        return { ok: false, error: `${path}.target は文字列である必要があります` }
+      }
+      out.push({
+        ...base,
+        mp: num(r.mp, 0),
+        target: typeof r.target === 'string' ? r.target : '敵単体',
+      } as T)
+    } else {
+      out.push({
+        ...base,
+        ...(typeof r.count === 'number' && Number.isFinite(r.count)
+          ? { count: Math.max(0, Math.floor(r.count)) }
+          : {}),
+      } as T)
+    }
   }
   return { ok: true, value: out }
 }
@@ -412,6 +536,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   }
   const commandLabels = parseCommandLabelsConfig(raw.commandLabels)
   if (!commandLabels.ok) return commandLabels
+  const spells = parseMenuList<BattleSpellEntry>(raw.spells, def.spells, 'spells')
+  if (!spells.ok) return spells
+  const items = parseMenuList<BattleItemEntry>(raw.items, def.items, 'items')
+  if (!items.ok) return items
+  const skills = parseSkills(raw.skills)
+  if (!skills.ok) return skills
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -467,10 +597,13 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       atbMode,
       commandLayout,
       commandLabels: commandLabels.value,
+      spells: spells.value,
+      items: items.value,
       background,
       horizon: horizon.value,
       perspective: perspective.value,
       foreground,
+      skills: skills.value,
       party: party.value,
       enemies: enemies.value,
     },
@@ -569,12 +702,16 @@ export function buildBattleSetup(
     presentation: BattlePresentation
     commandLayout: CommandLayout
     commandLabels: CommandLabels
+    /** 候補窓の呪文・アイテム (#204)。commandLayout が cross のときだけ BattleScreen が使う */
+    menu: BattleMenuData
     background?: string
     depth: BattleDepth | null
     foreground?: string
   }
   /** BattleEngine に渡す ATB 設定 (#205)。undefined = 従来ターン制 */
   atb?: BattleAtbConfig
+  /** BattleEngine に渡す敵の特技 (#835) */
+  skills: Record<string, SkillExecution>
   width: number
   height: number
 } {
@@ -592,6 +729,7 @@ export function buildBattleSetup(
   const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
   return {
     ...(view.atb === 'on' ? { atb: { mode: view.atbMode } } : {}),
+    skills: config.skills,
     // front 配置は本編と同じく隊列を使わない（RaycastRenderer.partyDefToBattleEntity と同じ）
     party: applyFormation(party, view.layout === 'front' ? 'front' : view.formation),
     enemies: fill(
@@ -611,6 +749,11 @@ export function buildBattleSetup(
       presentation: view.presentation,
       commandLayout: view.commandLayout,
       commandLabels: config.commandLabels,
+      menu: {
+        // 呪文は味方全員が同じものを使える（複製して渡す。BattleScreen は読むだけだが、設定を共有しない）
+        spells: Object.fromEntries(party.map((p) => [p.id, config.spells.map((e) => ({ ...e }))])),
+        items: config.items.map((e) => ({ ...e })),
+      },
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
       depth:
         view.depth === 'on' ? { horizon: config.horizon, perspective: config.perspective } : null,

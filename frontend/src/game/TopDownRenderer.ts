@@ -39,6 +39,7 @@ import {
   readFieldBattleSettings,
   type FieldBattleSettings,
 } from './fieldBattle'
+import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
@@ -112,10 +113,14 @@ export class TopDownRenderer {
   /** パーティマスター。戦闘の味方に使う（RaycastRenderer と同じ） */
   private masterParty: Record<string, PartyMemberDef> = {}
   private masterPartyOrder: string[] = []
+  private masterSpells: Record<string, import('../types').SpellDef> | undefined
+  private masterSkills: Record<string, import('../types').SkillDef> | undefined
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
   private battleScreen: BattleScreen | null = null
+  /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` のときだけ使う。演出中の状態はここが private で持つ */
+  private transition: FieldBattleTransition
   /** 戦闘をまたぐキー入力状態（押下中の矢印キー・離すまで無視・設定中の停止）(#204 / #784) */
   private inputGate = new FieldInputGate()
   /** エンカウントで戦闘に入った歩の踏み込みトリガー。戦闘終了後に発火する */
@@ -127,6 +132,7 @@ export class TopDownRenderer {
 
   constructor() {
     this.app = new Application()
+    this.transition = new FieldBattleTransition(() => this.app.stage)
     this.world = new Container()
     this.mapLayer = new Container()
     this.npcLayer = new Container()
@@ -236,6 +242,8 @@ export class TopDownRenderer {
     this.masterMonsters = gameData.monsters ?? {}
     this.masterParty = gameData.party ?? {}
     this.masterPartyOrder = gameData.partyOrder ?? []
+    this.masterSpells = gameData.spells
+    this.masterSkills = gameData.skills
     this.battleSettings = readFieldBattleSettings(gameData)
     this.encounterCooldown = 0
     this.deferredStepTrigger = null
@@ -274,6 +282,19 @@ export class TopDownRenderer {
    */
   setInputSuspended(suspended: boolean): void {
     this.inputGate.setSuspended(suspended)
+  }
+
+  /**
+   * 戦闘の画面遷移 (#830) のフック。`onTransitionBeat(n)`＝開始のズーム各段の始まり（「ドゥン」の音のきっかけ）、
+   * `interlude(outcome)`＝終了の黒の間に挟む追加画面（戦利品の画面 #831 用。既定は何も挟まない）。
+   */
+  setBattleTransitionHooks(hooks: FieldBattleTransitionHooks): void {
+    this.transition.hooks = hooks
+  }
+
+  /** 戦闘の画面遷移の演出中（入力・移動・エンカウントを止める）か (#830) */
+  private get battleBusy(): boolean {
+    return this.battleScreen !== null || this.transition.active
   }
 
   /** リソース解放 */
@@ -471,7 +492,7 @@ export class TopDownRenderer {
     if (e.repeat) return
 
     // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#784)
-    if (this.battleScreen) return
+    if (this.battleBusy) return
     // 設定オーバーレイなど外側の UI が入力を止めている間は受け付けない
     if (this.inputGate.isSuspended) return
     // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
@@ -655,7 +676,7 @@ export class TopDownRenderer {
 
   /** 1 歩ごとのエンカウント抽選。戦闘に入ったら true (#191 / #784) */
   private maybeRollEncounter(): boolean {
-    if (this.battleScreen) return false // 戦闘中
+    if (this.battleBusy) return false // 戦闘中（開始・終了の演出中を含む）
     if (this.encounterCooldown > 0) {
       this.encounterCooldown -= 1
       return false
@@ -675,36 +696,56 @@ export class TopDownRenderer {
    * 終了（勝利・逃走・全滅）でフィールドに戻り、エンカウントのクールダウンを 3 歩セットする（RaycastRenderer と同方式）。
    */
   private startBattle(enemies: BattleEntity[]): boolean {
-    if (this.battleScreen) return false // 多重起動防止
+    if (this.battleBusy) return false // 多重起動防止
     if (enemies.length === 0) return false
     // キューされたスワイプは戦闘後に持ち越さない
     this.pendingSwipe = null
-    this.battleScreen = openFieldBattle({
-      stage: this.app.stage,
-      width: this.screenWidth,
-      height: this.screenHeight,
-      settings: this.battleSettings,
-      roster: { party: this.masterParty, order: this.masterPartyOrder },
-      enemies,
-      gate: this.inputGate,
-      assetBaseUrl: this.assetBaseUrl,
-      onClosed: (outcome) => {
-        this.battleScreen = null
-        this.pendingSwipe = null
-        // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）
-        this.encounterCooldown = 3
-        // 戦闘に入った歩の踏み込みトリガーを、戦闘が終わってから発火する
-        const deferred = this.deferredStepTrigger
-        this.deferredStepTrigger = null
-        // 全滅（defeat）では発火しない
-        if (deferred && outcome !== 'defeat') this.checkStepTriggers(deferred.x, deferred.y)
-      },
-    })
+    const open = (): void => {
+      this.battleScreen = openFieldBattle({
+        stage: this.app.stage,
+        width: this.screenWidth,
+        height: this.screenHeight,
+        settings: this.battleSettings,
+        roster: {
+          party: this.masterParty,
+          order: this.masterPartyOrder,
+          spells: this.masterSpells,
+          skills: this.masterSkills,
+        },
+        enemies,
+        gate: this.inputGate,
+        assetBaseUrl: this.assetBaseUrl,
+        transition: this.transition,
+        onClosed: (outcome) => {
+          this.battleScreen = null
+          this.pendingSwipe = null
+          // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）
+          this.encounterCooldown = 3
+          // 戦闘に入った歩の踏み込みトリガーを、戦闘が終わってから発火する
+          const deferred = this.deferredStepTrigger
+          this.deferredStepTrigger = null
+          // 全滅（defeat）では発火しない
+          if (deferred && outcome !== 'defeat') this.checkStepTriggers(deferred.x, deferred.y)
+        },
+      })
+    }
+    if (this.battleSettings.transition === 'ff') {
+      // 開始の演出 (#830): 操作キャラの画面上の位置を中心に 2 段ズームして暗転 → 戦闘画面
+      // 発火は歩き出しの瞬間なので、歩いている間も追従するよう毎フレーム計算する
+      const focus = (): { x: number; y: number } =>
+        this.playerContainer
+          ? { x: this.world.x + this.playerContainer.x, y: this.world.y + this.playerContainer.y }
+          : { x: this.screenWidth / 2, y: this.screenHeight / 2 }
+      this.transition.playEnter(this.screenWidth, this.screenHeight, focus, open)
+      return true
+    }
+    open()
     return true
   }
 
   /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
   private closeBattle(): void {
+    this.transition.cancel()
     if (!this.battleScreen) return
     closeFieldBattle(this.app.stage, this.battleScreen)
     this.battleScreen = null
@@ -777,7 +818,7 @@ export class TopDownRenderer {
    */
   private handleSwipe = (direction: SwipeDirection): void => {
     if (!this.initialized) return
-    if (this.battleScreen) return // 戦闘中はフィールドを動かさない (#784)
+    if (this.battleBusy) return // 戦闘中（演出中を含む）はフィールドを動かさない (#784)
     if (this.inputLocked && this.eventRunner?.isRunning) return
     if (this.dialogBox?.isShowing) {
       // ダイアログ中のスワイプはダイアログ操作と分離。誤爆防止のため何もしない。
@@ -806,7 +847,7 @@ export class TopDownRenderer {
    */
   private handleTap = (): void => {
     if (!this.initialized) return
-    if (this.battleScreen) return // 戦闘中はフィールドのメニューを開かない (#784)
+    if (this.battleBusy) return // 戦闘中（演出中を含む）はフィールドのメニューを開かない (#784)
     if (this.dialogBox?.isShowing) {
       // ダイアログを開いた直後 (< DIALOG_JUST_SHOWN_GUARD_MS) は advance / skip / hide すべて
       // 無視する。メニュー → tryTalk → dialog.show 直後、または EventRunner の Dialog/Narration
@@ -898,6 +939,7 @@ export class TopDownRenderer {
       this.menuOverlay?.redraw(this.screenWidth, this.screenHeight)
       // 戦闘中に画面サイズが変わったら戦闘画面も再配置する
       this.battleScreen?.redraw(this.screenWidth, this.screenHeight)
+      this.transition.resize(this.screenWidth, this.screenHeight)
       this.centerCamera()
     })
   }
@@ -909,9 +951,12 @@ export class TopDownRenderer {
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
     // 戦闘中の時間を進める。ATB (#205) はゲージ（演出中も進む）、`battle_presentation: ff` (#745) は演出（モーション・ダメージ数字）。
-    // 従来ターン制かつ dq の BattleScreen.tick だけが何もしない。
+    // 勝利・全滅を読ませる待機 (#745 分割4) も tick で進むので、dq の従来ターン制でも毎フレーム呼ぶ（呼ばないと戦闘画面が閉じない）。
     // 設定オーバーレイ中は入力と同様に進行も止める (#784)
-    if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
+    if (!this.inputGate.isSuspended) {
+      this.battleScreen?.tick(dt * 1000)
+      this.transition.tick(dt * 1000) // 開始・終了の画面遷移 (#830)
+    }
     this.updateNpcAnimations(now)
     if (!this.isMoving) return
     const t = Math.min(1, (now - this.moveStart) / this.moveDuration)
@@ -925,7 +970,7 @@ export class TopDownRenderer {
       if (
         this.pendingSwipe &&
         !this.inputLocked &&
-        !this.battleScreen &&
+        !this.battleBusy &&
         !this.dialogBox?.isShowing &&
         !this.menuOverlay?.isShowing()
       ) {

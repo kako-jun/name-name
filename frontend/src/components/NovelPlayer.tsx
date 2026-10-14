@@ -1150,7 +1150,7 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
   }, [assetBaseUrl, rendererReady])
 
   // jumpSceneIndex が変わったらジャンプ解決索引だけをレンダラーに反映する (#284, #671 M1)。
-  // setJumpSceneIndex() は `this.allScenes = scenes` の代入のみで再生ストリームに触れない
+  // setJumpSceneIndex() は SceneIndex の索引を置き換えるだけで再生ストリームに触れない
   // 副作用の無い操作なので、events 用の effect と切り離しても安全。この effect を
   // events/scenes 用の effect より前に置くことで、両方が同時に変化した場合も
   // 「ジャンプ索引を先に更新してから線形再生を流す」という mount 時の init と同じ順序を保つ。

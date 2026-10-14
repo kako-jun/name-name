@@ -2,23 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 interface CharacterLayerForTest {
   hasPendingVisualTransition: () => boolean
   show: (...args: unknown[]) => void
 }
 
-interface RendererInternals {
-  eventIndex: number
-  waitingForWait: boolean
-  waitDisplayCompleteTimer: number | null
-  initialized: boolean
+interface LocalInternals extends RendererInternals {
   characterLayer: CharacterLayerForTest
-  render(): void
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 function flushPromises(): Promise<void> {
@@ -42,9 +34,9 @@ function makeRenderer(events: Event[]): NovelRenderer {
   r.setAssetBaseUrl('/assets')
   r.setCharacterFadeMs(0)
   r.getTimeController().setMode('virtual')
-  internals(r).initialized = true
-  vi.spyOn(internals(r).characterLayer, 'show')
-  vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+  internals<LocalInternals>(r).initialized = true
+  vi.spyOn(internals<LocalInternals>(r).characterLayer, 'show')
+  vi.spyOn(internals<LocalInternals>(r), 'render').mockImplementation(() => {})
   r.setScenes([scene(events)])
   return r
 }
@@ -56,7 +48,7 @@ describe('NovelRenderer WaitDisplayComplete (#411)', () => {
 
   it('pending が無い場合も同期では進まず、timer tick 後に一度だけ進む', () => {
     const r = makeRenderer(['WaitDisplayComplete', narration('after')])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
 
     expect(h.eventIndex).toBe(0)
     expect(h.waitingForWait).toBe(true)
@@ -85,7 +77,7 @@ describe('NovelRenderer WaitDisplayComplete (#411)', () => {
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = makeRenderer([enter('A'), 'WaitDisplayComplete', narration('after')])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
 
     expect(h.eventIndex).toBe(1)
     r.getTimeController().tick(48)
@@ -106,7 +98,7 @@ describe('NovelRenderer WaitDisplayComplete (#411)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const r = makeRenderer([enter('A'), 'WaitDisplayComplete', narration('after')])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
 
     expect(h.eventIndex).toBe(1)
     await flushPromises()
@@ -127,7 +119,7 @@ describe('NovelRenderer WaitDisplayComplete (#411)', () => {
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = makeRenderer([enter('A'), 'WaitDisplayComplete', narration('after')])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
     let pending = true
     vi.spyOn(h.characterLayer, 'hasPendingVisualTransition').mockImplementation(() => pending)
 
@@ -147,7 +139,7 @@ describe('NovelRenderer WaitDisplayComplete (#411)', () => {
     vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
 
     const r = makeRenderer([enter('A'), enter('B'), 'WaitDisplayComplete', narration('after')])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
     let pending = true
     vi.spyOn(h.characterLayer, 'hasPendingVisualTransition').mockImplementation(() => pending)
 
@@ -165,7 +157,7 @@ describe('NovelRenderer WaitDisplayComplete (#411)', () => {
 
   it('wait 中に startFrom しても旧 interval は新しい位置を進めない', () => {
     const r = makeRenderer(['WaitDisplayComplete', narration('after')])
-    const h = internals(r)
+    const h = internals<LocalInternals>(r)
 
     expect(h.waitingForWait).toBe(true)
     r.startFrom({ sceneId: 's', eventIndex: 1 })

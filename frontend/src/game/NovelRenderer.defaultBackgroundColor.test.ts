@@ -18,6 +18,7 @@ import { BACKGROUND_CROSSFADE_MS, NovelRenderer } from './NovelRenderer'
 import { parseColorToNumber } from './novelLayout'
 import type { NovelGameState } from './GameState'
 import { defaultTimeController } from './TimeController'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 /** 既定色 未設定時の下地色。parseColorToNumber の黒フォールバックと同じ値（直書きしない）。 */
 const BLACK = parseColorToNumber('', 0x000000)
@@ -34,7 +35,7 @@ interface BackgroundEntryForTest {
   }
 }
 
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   setBackground(
     path: string,
     fade?: unknown,
@@ -43,30 +44,24 @@ interface RendererInternals {
   ): void
   setBackgroundColor(color: string): void
   clearBackgroundColor(): void
-  applyState(state: NovelGameState): void
   defaultBackgroundColorNum(): number
   currentBackgroundColor: string | null
   defaultBackgroundColor: string | null
   bgEntries: BackgroundEntryForTest[]
   bgGraphics: { clear(): unknown; rect(...a: number[]): unknown; fill(color: number): unknown }
   textureCache: Map<string, Texture>
-  initialized: boolean
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 function makeRenderer(): NovelRenderer {
   const r = new NovelRenderer()
   r.setAssetBaseUrl('/assets')
   r.getTimeController().setMode('virtual')
-  internals(r).initialized = true
+  internals<LocalInternals>(r).initialized = true
   return r
 }
 
 function cacheTexture(r: NovelRenderer, path: string): void {
-  internals(r).textureCache.set(`/assets/images/${path}`, Texture.WHITE)
+  internals<LocalInternals>(r).textureCache.set(`/assets/images/${path}`, Texture.WHITE)
 }
 
 function baseState(r: NovelRenderer): NovelGameState {
@@ -92,26 +87,26 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
 
   it('setDefaultBackgroundColor("#112233") は上書きが無いとき bgGraphics を既定色 0x112233 で塗る', () => {
     const r = makeRenderer()
-    const fillSpy = vi.spyOn(internals(r).bgGraphics, 'fill')
+    const fillSpy = vi.spyOn(internals<LocalInternals>(r).bgGraphics, 'fill')
     r.setDefaultBackgroundColor('#112233')
     // シーン上書き（[背景色:]）は無い状態。
-    expect(internals(r).currentBackgroundColor).toBeNull()
-    expect(internals(r).defaultBackgroundColor).toBe('#112233')
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBeNull()
+    expect(internals<LocalInternals>(r).defaultBackgroundColor).toBe('#112233')
     // 実塗り色が既定色になる（parseColorToNumber の解決値＝0x112233）。
     const expected = parseColorToNumber('#112233', BLACK)
     expect(expected).toBe(0x112233) // 参照値の自己確認
     expect(fillSpy).toHaveBeenLastCalledWith(expected)
-    expect(internals(r).defaultBackgroundColorNum()).toBe(0x112233)
+    expect(internals<LocalInternals>(r).defaultBackgroundColorNum()).toBe(0x112233)
   })
 
   it('既定色 未設定（null）は黒 0x000000（非回帰）', () => {
     const r = makeRenderer()
-    expect(internals(r).defaultBackgroundColor).toBeNull()
+    expect(internals<LocalInternals>(r).defaultBackgroundColor).toBeNull()
     // defaultBackgroundColorNum は未設定なら黒に倒す。
-    expect(internals(r).defaultBackgroundColorNum()).toBe(BLACK)
+    expect(internals<LocalInternals>(r).defaultBackgroundColorNum()).toBe(BLACK)
     expect(BLACK).toBe(0x000000)
     // 明示 null を渡しても黒で塗る（上書きが無いので即反映）。
-    const fillSpy = vi.spyOn(internals(r).bgGraphics, 'fill')
+    const fillSpy = vi.spyOn(internals<LocalInternals>(r).bgGraphics, 'fill')
     r.setDefaultBackgroundColor(null)
     expect(fillSpy).toHaveBeenLastCalledWith(BLACK)
   })
@@ -119,33 +114,33 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
   it('空文字の既定色は null 扱いで黒（後方互換）', () => {
     const r = makeRenderer()
     r.setDefaultBackgroundColor('')
-    expect(internals(r).defaultBackgroundColor).toBeNull()
-    expect(internals(r).defaultBackgroundColorNum()).toBe(BLACK)
+    expect(internals<LocalInternals>(r).defaultBackgroundColor).toBeNull()
+    expect(internals<LocalInternals>(r).defaultBackgroundColorNum()).toBe(BLACK)
   })
 
   // ===== [背景色:] 上書きとの優先関係 =====
 
   it('[背景色:] 上書きが有効な間は setDefaultBackgroundColor で地色を塗り替えない（上書きが勝つ）', () => {
     const r = makeRenderer()
-    internals(r).setBackgroundColor('#ff0000') // シーン上書きあり
-    expect(internals(r).currentBackgroundColor).toBe('#ff0000')
+    internals<LocalInternals>(r).setBackgroundColor('#ff0000') // シーン上書きあり
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBe('#ff0000')
 
-    const fillSpy = vi.spyOn(internals(r).bgGraphics, 'fill')
+    const fillSpy = vi.spyOn(internals<LocalInternals>(r).bgGraphics, 'fill')
     r.setDefaultBackgroundColor('#00ff00') // 既定色だけ差し替え
     // 既定色フィールドは更新されるが、上書き中は bgGraphics を塗り直さない（上書きを踏み潰さない）。
-    expect(internals(r).defaultBackgroundColor).toBe('#00ff00')
+    expect(internals<LocalInternals>(r).defaultBackgroundColor).toBe('#00ff00')
     expect(fillSpy).not.toHaveBeenCalled()
   })
 
   it('clearBackgroundColor は上書き解除で黒でなく既定色（#112233）に戻す', () => {
     const r = makeRenderer()
     r.setDefaultBackgroundColor('#112233') // 既定色 = #112233
-    internals(r).setBackgroundColor('#ff0000') // シーン上書き
-    expect(internals(r).currentBackgroundColor).toBe('#ff0000')
+    internals<LocalInternals>(r).setBackgroundColor('#ff0000') // シーン上書き
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBe('#ff0000')
 
-    const fillSpy = vi.spyOn(internals(r).bgGraphics, 'fill')
-    internals(r).clearBackgroundColor()
-    expect(internals(r).currentBackgroundColor).toBeNull()
+    const fillSpy = vi.spyOn(internals<LocalInternals>(r).bgGraphics, 'fill')
+    internals<LocalInternals>(r).clearBackgroundColor()
+    expect(internals<LocalInternals>(r).currentBackgroundColor).toBeNull()
     // 戻り先は黒 0x000000 ではなく設定した既定色 0x112233（#409 の要点）。
     expect(fillSpy).toHaveBeenLastCalledWith(parseColorToNumber('#112233', BLACK))
     expect(fillSpy).not.toHaveBeenLastCalledWith(BLACK)
@@ -156,8 +151,8 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
   it('コールドスタート初回背景は crossfade（alpha 0→1）で background_fade_ms フェードインする', () => {
     const r = makeRenderer()
     cacheTexture(r, 'first.png')
-    internals(r).setBackground('first.png') // 初回・previousPath なし＝コールドスタート
-    const entries = internals(r).bgEntries
+    internals<LocalInternals>(r).setBackground('first.png') // 初回・previousPath なし＝コールドスタート
+    const entries = internals<LocalInternals>(r).bgEntries
     expect(entries).toHaveLength(1)
     // 下地ベタ（bgGraphics）の上に alpha 0→1 で浮かび上がる（黒フラッシュにはならない）。
     expect(entries[0].fadeAnimation).toMatchObject({
@@ -173,15 +168,15 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
     r.getTimeController().tick(BACKGROUND_CROSSFADE_MS + 16)
     expect(entries[0].sprite.alpha).toBe(1)
     expect(entries[0].fadeAnimation).toBeNull()
-    expect(internals(r).bgEntries).toHaveLength(1)
+    expect(internals<LocalInternals>(r).bgEntries).toHaveLength(1)
   })
 
   it('setBackgroundFadeMs(2000) 後のコールドスタート初回背景は durationMs=2000 でフェードイン', () => {
     const r = makeRenderer()
     cacheTexture(r, 'first.png')
     r.setBackgroundFadeMs(2000)
-    internals(r).setBackground('first.png')
-    const fade = internals(r).bgEntries[0].fadeAnimation
+    internals<LocalInternals>(r).setBackground('first.png')
+    const fade = internals<LocalInternals>(r).bgEntries[0].fadeAnimation
     expect(fade?.durationMs).toBe(2000)
     expect(fade?.fromAlpha).toBe(0)
     expect(fade?.toAlpha).toBe(1)
@@ -192,13 +187,13 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
   it('復元（applyState の instant:true）はコールドスタート fade を踏まず即時 alpha1', () => {
     const r = makeRenderer()
     cacheTexture(r, 'restored.png')
-    internals(r).applyState({
+    internals<LocalInternals>(r).applyState({
       ...baseState(r),
       backgroundPath: 'restored.png',
       backgroundFade: null,
       backgroundBrightness: null,
     })
-    const entries = internals(r).bgEntries
+    const entries = internals<LocalInternals>(r).bgEntries
     expect(entries).toHaveLength(1)
     expect(entries[0].sprite.alpha).toBe(1)
     expect(entries[0].fadeAnimation).toBeNull()
@@ -208,8 +203,8 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
     const r = makeRenderer()
     cacheTexture(r, 'first.png')
     r.setSkipMode(true)
-    internals(r).setBackground('first.png')
-    const entries = internals(r).bgEntries
+    internals<LocalInternals>(r).setBackground('first.png')
+    const entries = internals<LocalInternals>(r).bgEntries
     expect(entries).toHaveLength(1)
     expect(entries[0].sprite.alpha).toBe(1)
     expect(entries[0].fadeAnimation).toBeNull()
@@ -219,10 +214,10 @@ describe('NovelRenderer 下地ベタの既定色 background_color (#409)', () =>
     const r = makeRenderer()
     cacheTexture(r, 'same.png')
     // 1 枚目を instant で settle（前景 alpha=1）。
-    internals(r).setBackground('same.png', undefined, undefined, { instant: true })
+    internals<LocalInternals>(r).setBackground('same.png', undefined, undefined, { instant: true })
     // 同一 path への再設定は previousPath === path で即時。
-    internals(r).setBackground('same.png')
-    const entries = internals(r).bgEntries
+    internals<LocalInternals>(r).setBackground('same.png')
+    const entries = internals<LocalInternals>(r).bgEntries
     expect(entries).toHaveLength(1)
     expect(entries[0].sprite.alpha).toBe(1)
     expect(entries[0].fadeAnimation).toBeNull()

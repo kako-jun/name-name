@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { BattleEntity } from '../game/spellDsl'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
+import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -12,6 +13,8 @@ import {
   assetsToUnload,
   buildBattleSetup,
   defaultConfig,
+  defaultItems,
+  defaultSpells,
   defaultEnemies,
   defaultParty,
   describeView,
@@ -1495,5 +1498,137 @@ describe('presentation / poses (#745)', () => {
     const cfg = parseOk({ party: [{ sprite: 's.png', poses: { idle: 'i.png' } }] })
     const urls = assetsToUnload('off', view({ pixelArt: 'on' }), cfg)
     expect(urls).toContain('https://example.com/dir/i.png')
+  })
+})
+
+describe('候補窓の呪文・アイテム (#204)', () => {
+  it('既定は内蔵の呪文・アイテム。メテオは既定の味方の MP では足りない', () => {
+    const c = defaultConfig()
+    expect(c.spells).toEqual(defaultSpells())
+    expect(c.items).toEqual(defaultItems())
+    const maxMp = Math.max(...defaultParty().map((p) => p.maxMp))
+    expect(c.spells.some((s) => s.mp > maxMp)).toBe(true)
+  })
+
+  it('JSON の spells / items を検証して取り込む（id 省略は連番・mp 未指定は 0・target 未指定は敵単体）', () => {
+    const r = parseConfig(
+      {
+        spells: [
+          { name: 'ファイア', mp: 3, target: '敵全体', effect: 'damage 1..2' },
+          { name: 'ぶき' },
+        ],
+        items: [
+          { id: 'p', name: 'ポーション', count: 2.7 },
+          { name: 'なぞ', count: -1 },
+        ],
+      },
+      'https://example.com/'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.spells).toEqual([
+      { id: 'spells-1', name: 'ファイア', mp: 3, target: '敵全体', effect: 'damage 1..2' },
+      { id: 'spells-2', name: 'ぶき', mp: 0, target: '敵単体' },
+    ])
+    expect(r.value.items).toEqual([
+      { id: 'p', name: 'ポーション', count: 2 },
+      { id: 'items-2', name: 'なぞ', count: 0 },
+    ])
+  })
+
+  it.each([
+    [{ spells: 3 }],
+    [{ spells: [3] }],
+    [{ spells: [{ mp: 1 }] }],
+    [{ spells: [{ name: 'a', target: 1 }] }],
+    [{ items: [{ name: '' }] }],
+    [{ items: [{ name: 'a', effect: 1 }] }],
+    [{ spells: [{ name: 'a', mp: '3' }] }],
+    [{ spells: [{ name: 'a', mp: null }] }],
+    [{ items: [{ name: 'a', count: '2' }] }],
+  ])('不正な指定 %j は理由つきエラー', (raw) => {
+    expect(parseConfig(raw, 'https://example.com/').ok).toBe(false)
+  })
+
+  it('buildBattleSetup は味方全員に同じ呪文を渡し（複製）、アイテムも渡す', () => {
+    const cfg = defaultConfig()
+    const setup = buildBattleSetup(cfg, initialView(cfg))
+    expect(Object.keys(setup.options.menu.spells!)).toEqual(setup.party.map((p) => p.id))
+    expect(setup.options.menu.spells![setup.party[0].id]).toEqual(cfg.spells)
+    expect(setup.options.menu.spells![setup.party[0].id]).not.toBe(cfg.spells)
+    expect(setup.options.menu.items).toEqual(cfg.items)
+  })
+})
+
+describe('parseConfig 敵の行動: actions と skills (#835)', () => {
+  const base = 'https://example.com/cfg/'
+  it('enemies[].actions は文字列の配列（trim・空要素は捨てる）、skills は id から SkillExecution になる', () => {
+    const r = parseConfig(
+      {
+        skills: [
+          {
+            id: 'ink',
+            name: '墨',
+            target: '相手全体',
+            effect: 'damage 5..5',
+            message: '{user}は 墨',
+          },
+          { id: 'plain' },
+        ],
+        enemies: [{ name: 'タコ', actions: ['  条件=初手 候補=ink ', '', '候補=こうげき'] }],
+      },
+      base
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].actions).toEqual(['条件=初手 候補=ink', '候補=こうげき'])
+    expect(r.value.skills).toEqual({
+      ink: { name: '墨', target: '相手全体', effect: 'damage 5..5', message: '{user}は 墨' },
+      plain: { name: 'plain', target: '相手単体' },
+    })
+  })
+
+  it('actions 未指定・空配列は actions なし。skills 未指定は空', () => {
+    const r = parseConfig({ enemies: [{ actions: [] }, {}] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('actions' in r.value.enemies[0]).toBe(false)
+    expect(r.value.skills).toEqual({})
+    expect(defaultConfig().skills).toEqual({})
+  })
+
+  it.each([
+    [{ enemies: [{ actions: 'x' }] }, 'enemies[0].actions'],
+    [{ enemies: [{ actions: [1] }] }, 'enemies[0].actions'],
+    [{ skills: {} }, 'skills'],
+    [{ skills: [1] }, 'skills[0]'],
+    [{ skills: [{ name: 'x' }] }, 'skills[0].id'],
+    [{ skills: [{ id: 'a', effect: 3 }] }, 'skills[0].effect'],
+  ])('不正な指定 %j はエラー', (raw, where) => {
+    const r = parseConfig(raw, base)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain(where)
+  })
+
+  it('buildBattleSetup は skills を渡し、敵の actions を複製に引き継ぐ', () => {
+    const r = parseConfig({ skills: [{ id: 'ink' }], enemies: [{ actions: ['候補=ink'] }] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const setup = buildBattleSetup(r.value, initialView(r.value))
+    expect(setup.skills).toEqual(r.value.skills)
+    expect(setup.enemies[0].actions).toEqual(['候補=ink'])
+  })
+})
+
+describe('同梱の例 public/battle-sample/enemy-actions.json (#835)', () => {
+  it('parseConfigText で読め、行動: を持つ敵と特技が入っている', () => {
+    const r = parseConfigText(
+      enemyActionsSample,
+      'https://example.com/battle-sample/enemy-actions.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(Object.keys(r.value.skills)).toEqual(['ink', 'tentacle'])
+    expect(r.value.enemies.map((e) => e.actions?.length)).toEqual([2, 1])
   })
 })

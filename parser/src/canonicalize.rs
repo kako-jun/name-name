@@ -8,8 +8,8 @@
 //! スコープ（`canonicalize_events`）: 読ませる表示テキストにだけ掛ける＝Dialog / Narration の
 //! 本文、Choice.options[].text、TitleShow.text、Label.text、RpgEvent（`[イベント]`）内会話
 //! （EventCommand の Dialog / Narration の text）。対象外＝話者名（Dialog.character / RpgEvent の
-//! 話者）、`NpcData.message` / `NpcData.name`、マスタ名（Monster / Item / Spell / PartyMember の
-//! name）、frontmatter の `---`、見出し `##`、ディレクティブ引数・ID・アセットパスには触れない。
+//! 話者）、`NpcData.message` / `NpcData.name`、マスタ名（Monster / Item / Spell / Skill / PartyMember の
+//! name）、特技の `メッセージ`・`予兆`、frontmatter の `---`、見出し `##`、ディレクティブ引数・ID・アセットパスには触れない。
 
 use crate::models::{Event, EventCommand};
 
@@ -71,7 +71,7 @@ pub fn canonicalize_body_line(line: &str) -> String {
 /// 対象外（不変）:
 ///  - **RpgEvent 内の Dialog.character（話者名）** は不変（top-level Dialog.character と同じ扱い）。
 ///  - **`NpcData.message`（NPC に話しかけた時の台詞）** は kako-jun が明示的に対象外と決定。
-///  - マスタ名（Monster/Item/Spell/PartyMember の name、`NpcData.name`）・ディレクティブ引数・
+///  - マスタ名（Monster/Item/Spell/Skill/PartyMember の name、特技の message / telegraph、`NpcData.name`）・ディレクティブ引数・
 ///    アセットパス・ID・frontmatter・見出し。
 ///
 /// これら対象外は以下の match で分岐を持たず（Npc は `_ => {}` に落ち、話者名は match 内で

@@ -22,6 +22,7 @@ import { NovelRenderer } from './NovelRenderer'
 import { clearReadProgress, loadReadSceneProgress } from './readProgress'
 import type { Step } from './GameState'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers ---
 
@@ -38,23 +39,15 @@ function scene(id: string, events: Event[]): EventScene {
 }
 
 /** dialogBox の private msPerChar アクセサ（getMsPerChar）に到達するための型 */
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   dialogBox: { getMsPerChar(): number; setMsPerChar(ms: number): void }
   jumpToScene(sceneId: string): void
-  advance(): void
   isReplaying: boolean
-  justSelectedChoice: boolean
-  waitingForChoice: boolean
   choiceOverlay: { show: ReturnType<typeof vi.fn> }
-  initialized: boolean
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 function getMsPerChar(r: NovelRenderer): number {
-  return internals(r).dialogBox.getMsPerChar()
+  return internals<LocalInternals>(r).dialogBox.getMsPerChar()
 }
 
 /**
@@ -62,7 +55,7 @@ function getMsPerChar(r: NovelRenderer): number {
  * wait → advance/choice の並びを検証するテストでのみ使う（#515、上記ファイル doc 参照）。
  */
 function markInitialized(r: NovelRenderer): void {
-  internals(r).initialized = true
+  internals<LocalInternals>(r).initialized = true
 }
 
 /** 単一シーン（ナレーション数行）を持つ renderer を作る */
@@ -95,7 +88,7 @@ const SCENES_CHOICE: EventScene[] = [
 
 function makeChoiceRenderer(): NovelRenderer {
   const r = makeRenderer(SCENES_CHOICE)
-  internals(r).choiceOverlay.show = vi.fn()
+  internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
   return r
 }
 
@@ -117,7 +110,7 @@ describe('NovelRenderer.playScript (#220)', () => {
 
   it('1: 正常完了後に msPerChar が元値へ復元される', async () => {
     const r = makeRenderer(SCENES_SINGLE)
-    internals(r).dialogBox.setMsPerChar(30)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(30)
     await r.playScript([{ type: 'advance' }])
     expect(getMsPerChar(r)).toBe(30)
   })
@@ -125,7 +118,7 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('2: 再生中（wait await 中）は msPerChar=0 になっている', async () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_SINGLE)
-    internals(r).dialogBox.setMsPerChar(50)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(50)
 
     const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'advance' }])
     // wait の await で停止している間: msPerChar は退避され 0 になっているはず
@@ -139,9 +132,9 @@ describe('NovelRenderer.playScript (#220)', () => {
 
   it('3: 例外発生時も finally で元 msPerChar へ復元される', async () => {
     const r = makeRenderer(SCENES_SINGLE)
-    internals(r).dialogBox.setMsPerChar(40)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(40)
     // advance を spy で throw させる
-    vi.spyOn(internals(r), 'advance').mockImplementation(() => {
+    vi.spyOn(internals<LocalInternals>(r), 'advance').mockImplementation(() => {
       throw new Error('boom')
     })
     await expect(r.playScript([{ type: 'advance' }])).rejects.toThrow('boom')
@@ -157,12 +150,12 @@ describe('NovelRenderer.playScript (#220)', () => {
       ]),
       scene('hub', [narration('hub')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
     r.setDocKey(docKey)
 
     expect(loadReadSceneProgress(docKey).has('cell')).toBe(false)
 
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
 
     expect(loadReadSceneProgress(docKey).has('cell')).toBe(true)
   })
@@ -190,11 +183,11 @@ describe('NovelRenderer.playScript (#220)', () => {
       scene('hub', [narration('hub')]),
       scene('route01', [narration('route01')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
 
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
 
-    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    const call = internals<LocalInternals>(r).choiceOverlay.show.mock.calls[0]
     expect(call?.[5]).toEqual([false, true])
   })
 
@@ -216,12 +209,12 @@ describe('NovelRenderer.playScript (#220)', () => {
       scene('hub', [narration('hub')]),
       scene('route01', [narration('route01')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
     r.setDebugUnlockAllChoices(true)
 
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
 
-    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    const call = internals<LocalInternals>(r).choiceOverlay.show.mock.calls[0]
     expect(call?.[5]).toEqual([false, false])
   })
 
@@ -247,21 +240,24 @@ describe('NovelRenderer.playScript (#220)', () => {
       scene('hub', [narration('hub')]),
       scene('route01', [narration('route01')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
 
     // 1回目: setDebugUnlockAllChoices を一度も呼んでいない（通常＝非デバッグ開始）状態で
     // Choice へ到達 → 通常どおり route01_cleared 未設定分だけロックされる
-    internals(r).advance()
-    expect(internals(r).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([false, true])
+    internals<LocalInternals>(r).advance()
+    expect(internals<LocalInternals>(r).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([
+      false,
+      true,
+    ])
 
     // プレイ中（Choice 表示済みの状態）で debug_unlock_all を後付けで付与する
     r.setDebugUnlockAllChoices(true)
 
     // 同じ Choice へ再訪（jumpToScene でシーン先頭の narration へ戻り、advance で再度 Choice へ）
     r.jumpToScene('gate')
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
 
-    const calls = internals(r).choiceOverlay.show.mock.calls
+    const calls = internals<LocalInternals>(r).choiceOverlay.show.mock.calls
     expect(calls[calls.length - 1]?.[5]).toEqual([false, false])
   })
 
@@ -295,13 +291,13 @@ describe('NovelRenderer.playScript (#220)', () => {
       scene('hub', [narration('hub')]),
       scene('route01', [narration('route01')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
 
     // NovelPlayer.tsx と同じ順序（修正後）: debug_unlock_all が先、debug_scene の startFrom は後
     r.setDebugUnlockAllChoices(true)
     r.startFrom({ sceneId: 'dbg-scene' })
 
-    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    const call = internals<LocalInternals>(r).choiceOverlay.show.mock.calls[0]
     expect(call?.[5]).toEqual([false, false])
   })
 
@@ -320,13 +316,13 @@ describe('NovelRenderer.playScript (#220)', () => {
       ]),
       scene('route01', [narration('route01')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
 
     // narration → Flag（フラグ設定、非表示イベント） → Choice まで processUntilNextTextEvent
     // が一気に処理するため、advance() は1回だけでよい。
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
 
-    const call = internals(r).choiceOverlay.show.mock.calls[0]
+    const call = internals<LocalInternals>(r).choiceOverlay.show.mock.calls[0]
     expect(call?.[5]).toEqual([false])
   })
 
@@ -351,19 +347,19 @@ describe('NovelRenderer.playScript (#220)', () => {
       ]),
       scene('reward', [narration('reward')]),
     ])
-    internals(r).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(r).choiceOverlay.show = vi.fn()
 
-    internals(r).advance() // gate: narration → Choice
-    const firstCall = internals(r).choiceOverlay.show.mock.calls[0]
+    internals<LocalInternals>(r).advance() // gate: narration → Choice
+    const firstCall = internals<LocalInternals>(r).choiceOverlay.show.mock.calls[0]
     // 1回目はflag_a未設定でロックされているはず
     expect(firstCall?.[5]).toEqual([true])
 
     r.jumpToScene('unlock') // unlock: narrationで停止（まだFlag/Choiceは未処理）
-    internals(r).advance() // unlock: Flag(flag_a=true)を通過してChoiceへ（無条件、gateへ戻す）
+    internals<LocalInternals>(r).advance() // unlock: Flag(flag_a=true)を通過してChoiceへ（無条件、gateへ戻す）
     r.jumpToScene('gate') // gateへ再訪（narrationで停止、まだChoiceは未処理）
-    internals(r).advance() // gate: Choiceへ再度到達（2回目のshow呼び出し）
+    internals<LocalInternals>(r).advance() // gate: Choiceへ再度到達（2回目のshow呼び出し）
 
-    const calls = internals(r).choiceOverlay.show.mock.calls
+    const calls = internals<LocalInternals>(r).choiceOverlay.show.mock.calls
     const secondGateCall = calls[calls.length - 1]
     // 2回目はflag_a設定済みでロック解除されているはず（show()が毎回flag状態から再計算する）
     expect(secondGateCall?.[5]).toEqual([false])
@@ -385,9 +381,12 @@ describe('NovelRenderer.playScript (#220)', () => {
         } as Event,
       ]),
     ])
-    internals(rBothLocked).choiceOverlay.show = vi.fn()
-    internals(rBothLocked).advance()
-    expect(internals(rBothLocked).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([true, true])
+    internals<LocalInternals>(rBothLocked).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(rBothLocked).advance()
+    expect(internals<LocalInternals>(rBothLocked).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([
+      true,
+      true,
+    ])
 
     const rBothUnlocked = makeRenderer([
       scene('branch', [
@@ -403,9 +402,12 @@ describe('NovelRenderer.playScript (#220)', () => {
         } as Event,
       ]),
     ])
-    internals(rBothUnlocked).choiceOverlay.show = vi.fn()
-    internals(rBothUnlocked).advance()
-    expect(internals(rBothUnlocked).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([false, false])
+    internals<LocalInternals>(rBothUnlocked).choiceOverlay.show = vi.fn()
+    internals<LocalInternals>(rBothUnlocked).advance()
+    expect(internals<LocalInternals>(rBothUnlocked).choiceOverlay.show.mock.calls[0]?.[5]).toEqual([
+      false,
+      false,
+    ])
   })
 
   it('#366: Choice が無い scene はスクリプト末尾到達時に既読になる', () => {
@@ -415,14 +417,14 @@ describe('NovelRenderer.playScript (#220)', () => {
 
     expect(loadReadSceneProgress(docKey).has('ending')).toBe(false)
 
-    internals(r).advance()
+    internals<LocalInternals>(r).advance()
 
     expect(loadReadSceneProgress(docKey).has('ending')).toBe(true)
   })
 
   it('4: 元 msPerChar が 0 のときも復元値 0（破壊しない）', async () => {
     const r = makeRenderer(SCENES_SINGLE)
-    internals(r).dialogBox.setMsPerChar(0)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(0)
     await r.playScript([{ type: 'advance' }])
     expect(getMsPerChar(r)).toBe(0)
   })
@@ -447,7 +449,7 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('6: 正常完了後は再度 playScript を呼べる（isReplaying が戻っている）', async () => {
     const r = makeRenderer(SCENES_SINGLE)
     await r.playScript([{ type: 'advance' }])
-    expect(internals(r).isReplaying).toBe(false)
+    expect(internals<LocalInternals>(r).isReplaying).toBe(false)
     // 2本目が throw せず完了する
     await expect(r.playScript([{ type: 'advance' }])).resolves.toBeUndefined()
   })
@@ -496,7 +498,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     const r = makeRenderer(SCENES_BRANCH)
     await r.playScript([{ type: 'choice', jump: 'left' }])
     expect(r.getCurrentSceneId()).toBe('left')
-    expect(internals(r).waitingForChoice).toBe(false)
+    expect(internals<LocalInternals>(r).waitingForChoice).toBe(false)
   })
 
   it('11: choice 直後に advance を続けても抑制されない（justSelectedChoice 残留なし, #211 退行ガード）', async () => {
@@ -505,7 +507,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     const onEnd = vi.fn()
     r.onEnd(onEnd)
     await r.playScript([{ type: 'choice', jump: 'left' }, { type: 'advance' }])
-    expect(internals(r).justSelectedChoice).toBe(false)
+    expect(internals<LocalInternals>(r).justSelectedChoice).toBe(false)
     // advance が抑制されていなければ末尾 narration を送り終え onEnd 発火
     expect(onEnd).toHaveBeenCalled()
     expect(r.getCurrentSceneId()).toBe('left')
@@ -514,7 +516,7 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('12: 存在しない jump の choice は currentSceneId を変えず、後続 step を消化せず打ち切る（warn は出るが例外なし, #729）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = makeChoiceRenderer()
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
     expect(r.getCurrentSceneId()).toBe('start')
     // 1つ目の advance で Choice に到達し、不在の choice で打ち切る。残りの advance は実行されない
     await expect(
@@ -528,7 +530,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('残り 1 ステップを打ち切り'))
     expect(advanceSpy).toHaveBeenCalledTimes(1)
     // 閉じていた選択肢が再表示される（PR1 の契約）
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<LocalInternals>(r).waitingForChoice).toBe(true)
     // 打ち切っても再入ガードは解除される
     await expect(r.playScript([])).resolves.toBeUndefined()
   })
@@ -538,11 +540,11 @@ describe('NovelRenderer.playScript (#220)', () => {
     const r = makeChoiceRenderer()
     markInitialized(r)
     r.setMissingSceneResolver(vi.fn(async () => null))
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
     await r.playScript([{ type: 'advance' }, { type: 'choice', jump: 'far' }, { type: 'advance' }])
     expect(r.getCurrentSceneId()).toBe('start')
     expect(advanceSpy).toHaveBeenCalledTimes(1)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<LocalInternals>(r).waitingForChoice).toBe(true)
   })
 
   it('12c: 未ロードのサブ MD への choice は遅延ロードの完了を待ち、後続の advance は遷移先で消化される (#729)', async () => {
@@ -558,7 +560,7 @@ describe('NovelRenderer.playScript (#220)', () => {
           })
       )
     )
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
     let done = false
     const p = r
       .playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
@@ -582,7 +584,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     const r = makeChoiceRenderer()
     markInitialized(r)
     await r.startFrom({ sceneId: 'start', confinedSceneIds: ['start', 'in'] })
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
     await r.playScript([{ type: 'advance' }, { type: 'choice', jump: 'out' }, { type: 'advance' }])
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(advanceSpy).toHaveBeenCalledTimes(1)
@@ -602,7 +604,7 @@ describe('NovelRenderer.playScript (#220)', () => {
           })
       )
     )
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
     const done = r.playScript([{ type: 'choice', jump: 'far' }, { type: 'advance' }])
     await new Promise((res) => setTimeout(res, 0))
     // ロード中に別の新規開始が割り込む（世代が進み、往復は破棄される）
@@ -646,7 +648,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_SINGLE)
     markInitialized(r) // #515: wait 明けの advance 続行には initialized=true が必要
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
 
     const p = r.playScript([{ type: 'wait', ms: 200 }, { type: 'advance' }])
     await Promise.resolve()
@@ -661,7 +663,7 @@ describe('NovelRenderer.playScript (#220)', () => {
   it('14: wait ms=0 でも解決して後続 step を実行する', async () => {
     const r = makeRenderer(SCENES_SINGLE)
     markInitialized(r) // #515: wait 明けの advance 続行には initialized=true が必要
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
     await r.playScript([{ type: 'wait', ms: 0 }, { type: 'advance' }])
     expect(advanceSpy).toHaveBeenCalledTimes(1)
   })
@@ -675,13 +677,13 @@ describe('NovelRenderer.playScript (#220)', () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_SINGLE)
     markInitialized(r) // init() 完了済み（実運用と同じ開始状態）を模す
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
 
     const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'advance' }])
     await Promise.resolve()
     // wait 待機中に destroy() が呼ばれた状態を模す（jsdom には実 destroy() を最後まで
     // 走らせる canvas が無いため、restoreSnapshot.test.ts S1 と同じく直接フラグ操作で模す）。
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
 
     await vi.advanceTimersByTimeAsync(100)
     await expect(p).resolves.toBeUndefined()
@@ -693,16 +695,16 @@ describe('NovelRenderer.playScript (#220)', () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_SINGLE)
     markInitialized(r)
-    internals(r).dialogBox.setMsPerChar(30)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(30)
 
     const p = r.playScript([{ type: 'wait', ms: 50 }, { type: 'advance' }])
     await Promise.resolve()
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
 
     await vi.advanceTimersByTimeAsync(50)
     await p
 
-    expect(internals(r).isReplaying).toBe(false)
+    expect(internals<LocalInternals>(r).isReplaying).toBe(false)
     expect(getMsPerChar(r)).toBe(30)
   })
 
@@ -712,7 +714,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = makeRenderer(SCENES_SINGLE)
-    internals(r).dialogBox.setMsPerChar(25)
+    internals<LocalInternals>(r).dialogBox.setMsPerChar(25)
     const before = r.getSnapshot()
 
     await r.playScript([])
@@ -775,7 +777,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_SINGLE)
     markInitialized(r)
-    const advanceSpy = vi.spyOn(internals(r), 'advance')
+    const advanceSpy = vi.spyOn(internals<LocalInternals>(r), 'advance')
 
     const p = r.playScript([
       { type: 'wait', ms: 50 },
@@ -789,7 +791,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     expect(advanceSpy).toHaveBeenCalledTimes(1)
 
     // 2回目の wait 待機中に destroy 相当（initialized=false）にする
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
     await vi.advanceTimersByTimeAsync(50)
     await expect(p).resolves.toBeUndefined()
 
@@ -801,14 +803,14 @@ describe('NovelRenderer.playScript (#220)', () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_BRANCH)
     markInitialized(r)
-    const jumpSpy = vi.spyOn(internals(r), 'jumpToScene')
+    const jumpSpy = vi.spyOn(internals<LocalInternals>(r), 'jumpToScene')
 
     const p = r.playScript([
       { type: 'wait', ms: 100 },
       { type: 'choice', jump: 'left' },
     ])
     await Promise.resolve()
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
 
     await vi.advanceTimersByTimeAsync(100)
     await expect(p).resolves.toBeUndefined()
@@ -826,7 +828,7 @@ describe('NovelRenderer.playScript (#220)', () => {
 
     const p = r.playScript([{ type: 'wait', ms: 100 }, { type: 'advance' }])
     await Promise.resolve()
-    internals(r).initialized = false
+    internals<LocalInternals>(r).initialized = false
 
     await vi.advanceTimersByTimeAsync(100)
     await expect(p).resolves.toBeUndefined()
@@ -839,7 +841,7 @@ describe('NovelRenderer.playScript (#220)', () => {
     vi.useFakeTimers()
     const r = makeRenderer(SCENES_BRANCH)
     markInitialized(r)
-    const jumpSpy = vi.spyOn(internals(r), 'jumpToScene')
+    const jumpSpy = vi.spyOn(internals<LocalInternals>(r), 'jumpToScene')
 
     const p = r.playScript([
       { type: 'wait', ms: 100 },
