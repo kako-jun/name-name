@@ -27,6 +27,7 @@
 import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
 import { applyEffect, parseEffect } from './spellDsl'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
+import { isReviveEntry } from './battleMenu'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -377,7 +378,7 @@ export class BattleEngine {
    *   単体の `target` は明示指定（側が合わなければ無視）。倒れている者を指せるのは蘇生の効果（`revive` / builtin `zaorik`）のときだけで、
    *   それ以外は最初の生存者に落ちる。省略時は最初の生存者（蘇生の仲間単体だけは最初の倒れた仲間）
    * - 効果は呪文と同じ評価器を内部で共有（`builtin` があればそれ、無ければ `effect` の DSL）。MP は持たず消費しない
-   * - ログに `message`（`{user}` を使った側の名前に置換）か「〇〇は △△ を つかった！」、演出イベントに `kind: 'skill'` を残す
+   * - ログに `message`（`{user}` を使った側の名前に置換）か「〇〇 は △△ を つかった！」、演出イベントに `kind: 'skill'` を残す
    * - フェーズ・ATB ゲージ・勝敗判定は触らない（敵ターンの途中で呼ばれても二重に終了処理しないため、呼び出し側が checkEnd 相当を行う）
    * - 乱数は効果の評価でだけ消費する（対象の解決は rng を使わない）
    */
@@ -701,7 +702,7 @@ export class BattleEngine {
       case '仲間全体':
         return allies.filter((e) => e.hp > 0)
       case '仲間単体': {
-        const revive = this.isReviveSkill(skill)
+        const revive = isReviveEntry('spell', skill)
         const picked = explicit(allies, side)
         const t =
           picked && (picked.hp > 0 || revive)
@@ -718,12 +719,6 @@ export class BattleEngine {
         return t ? [t] : []
       }
     }
-  }
-
-  /** 蘇生の特技か（効果 DSL が `revive`、または蘇生の builtin `zaorik`。候補窓の `isReviveEntry` の呪文側と同じ判定） */
-  private isReviveSkill(skill: SkillExecution): boolean {
-    if (skill.builtin) return skill.builtin === 'zaorik'
-    return typeof skill.effect === 'string' && parseEffect(skill.effect)?.kind === 'revive'
   }
 
   private resolveItemTargets(item: ItemExecution, targetId?: string): BattleEntity[] {
