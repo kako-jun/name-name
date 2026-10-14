@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import type { NovelGameState } from './GameState'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -35,17 +36,13 @@ function scene(id: string, events: Event[]): EventScene {
 
 const ENDING_LOGO_IMAGE_ID = '__ending_logo__'
 
-interface EndingOverlayInternals {
+interface EndingOverlayInternals extends RendererInternals {
   endingOverlay: { visible: boolean }
   characterLayer: {
     showImage: (...args: unknown[]) => void
     remove: (...args: unknown[]) => void
   }
 }
-function internals(r: NovelRenderer): EndingOverlayInternals {
-  return r as unknown as EndingOverlayInternals
-}
-
 function makeConfinedRenderer(): NovelRenderer {
   const r = new NovelRenderer()
   r.setScenes([scene('entry', [narration('本文')]), scene('out', [narration('圏外')])])
@@ -63,13 +60,13 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
 
     r.jumpToScene('out')
 
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
   })
 
   it('2: assetBaseUrl 設定済みなら characterLayer.showImage が id=__ending_logo__, path=title.png, transition未指定 で呼ばれる', () => {
     const r = makeConfinedRenderer()
     r.setAssetBaseUrl('/asset-base')
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    const showImageSpy = vi.spyOn(internals<EndingOverlayInternals>(r).characterLayer, 'showImage')
 
     r.jumpToScene('out')
 
@@ -83,12 +80,12 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
 
   it('3: assetBaseUrl 未設定なら characterLayer.showImage は呼ばれない（テキストのみ表示）', () => {
     const r = makeConfinedRenderer()
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    const showImageSpy = vi.spyOn(internals<EndingOverlayInternals>(r).characterLayer, 'showImage')
 
     r.jumpToScene('out')
 
     expect(showImageSpy).not.toHaveBeenCalled()
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
   })
 
   it('4: intermissionEvents 設定済みで storyEnded=true になっても endingOverlay は表示されない（PixiJS タブローに一本化）', () => {
@@ -97,40 +94,40 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
 
     r.jumpToScene('out')
 
-    expect(internals(r).endingOverlay.visible).toBe(false)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(false)
   })
 
   it('5 (race・NP-IM-3 移行先): endStory() 発火後に setIntermissionScene が呼ばれても、既に表示済みの endingOverlay は消えない（スナップショット固定）', () => {
     const r = makeConfinedRenderer()
 
     r.jumpToScene('out')
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
 
     // intermission が遅れて届く（PlayerScreen の非同期 fetch 解決）想定。
     r.setIntermissionScene([narration('つづく')], {})
 
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
   })
 
   it('6: storyEnded が false に戻ると endingOverlay は非表示になり、ロゴは即時破棄される', () => {
     const r = makeConfinedRenderer()
     r.setAssetBaseUrl('/asset-base')
     r.jumpToScene('out')
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
 
-    const removeSpy = vi.spyOn(internals(r).characterLayer, 'remove')
+    const removeSpy = vi.spyOn(internals<EndingOverlayInternals>(r).characterLayer, 'remove')
     // 通常のシーン遷移に戻す（startScene() 経由の storyEnded=false 復帰、confinement 解除）。
     confineForTest(r, null)
     r.jumpToScene('entry')
 
-    expect(internals(r).endingOverlay.visible).toBe(false)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(false)
     expect(removeSpy).toHaveBeenCalledWith(ENDING_LOGO_IMAGE_ID, { instant: true })
   })
 
   it('8 (M1): endStory() 経由の通常の物語進行では instant を渡さない（既定 Fade のまま、非回帰）', () => {
     const r = makeConfinedRenderer()
     r.setAssetBaseUrl('/asset-base')
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    const showImageSpy = vi.spyOn(internals<EndingOverlayInternals>(r).characterLayer, 'showImage')
 
     r.jumpToScene('out')
 
@@ -143,7 +140,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
     const r = new NovelRenderer()
     r.setAssetBaseUrl('/asset-base')
     r.setScenes([scene('a', [narration('本文')])])
-    const showImageSpy = vi.spyOn(internals(r).characterLayer, 'showImage')
+    const showImageSpy = vi.spyOn(internals<EndingOverlayInternals>(r).characterLayer, 'showImage')
 
     const snapshot: NovelGameState = {
       sceneId: 'a',
@@ -182,12 +179,12 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
 
     // 1回目の true: intermission 未設定なので表示される。
     r.jumpToScene('out')
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
 
     // 通常のシーン遷移で false に戻す。
     confineForTest(r, null)
     r.jumpToScene('entry')
-    expect(internals(r).endingOverlay.visible).toBe(false)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(false)
 
     // false の間に intermission を設定する。
     r.setIntermissionScene([narration('つづく')], {})
@@ -195,7 +192,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
     // 2回目の true: 新しい intermission 値で再評価され、表示されない（PixiJS タブローに一本化）。
     confineForTest(r, ['entry'])
     r.jumpToScene('out')
-    expect(internals(r).endingOverlay.visible).toBe(false)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(false)
   })
 
   it('7 (M2 対): restoreSnapshot で storyEnded:true のスナップショットを新規 renderer に復元すると、onStoryEndedChangeCallback は発火しないが endingOverlay は表示される', () => {
@@ -232,6 +229,6 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
     r.restoreSnapshot(snapshot)
 
     expect(cb).not.toHaveBeenCalled()
-    expect(internals(r).endingOverlay.visible).toBe(true)
+    expect(internals<EndingOverlayInternals>(r).endingOverlay.visible).toBe(true)
   })
 })

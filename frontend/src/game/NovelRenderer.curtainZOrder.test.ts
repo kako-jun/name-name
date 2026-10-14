@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -32,11 +33,10 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   backgroundBoardLayer: object
   propLayer: object
   curtainLayer: object
-  appInitialized: boolean
   app: {
     init: (...args: unknown[]) => Promise<void>
     stage: { children: unknown[] }
@@ -45,13 +45,9 @@ interface RendererInternals {
     destroy: (...args: unknown[]) => void
   }
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /** `Application.init` をスタブ化して `NovelRenderer.init()` 本体を実際に通す (NovelRenderer.prop.test.ts と同形)。 */
 async function initRenderer(r: NovelRenderer): Promise<void> {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   vi.spyOn(ri.app, 'init').mockResolvedValue()
   Object.defineProperty(ri.app, 'canvas', {
     configurable: true,
@@ -66,14 +62,14 @@ async function initRenderer(r: NovelRenderer): Promise<void> {
 
 /** destroy() の appInitialized ガードを満たす最小スタブ (NovelRenderer.prop.test.ts と同じ)。 */
 function cleanupRenderer(r: NovelRenderer): void {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   ri.app.destroy = () => {}
   r.destroy()
 }
 
 /** curtainLayer が referenceLayer の直後（index+1）に居るかどうか。 */
 function curtainRightAfter(r: NovelRenderer, referenceLayer: object): boolean {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   const children = ri.app.stage.children
   const refIndex = children.indexOf(referenceLayer)
   const curtainIndex = children.indexOf(ri.curtainLayer)
@@ -82,7 +78,7 @@ function curtainRightAfter(r: NovelRenderer, referenceLayer: object): boolean {
 
 /** stage 上に curtainLayer が重複して積まれていないか（addChildAt 差し替えの正しさ）。 */
 function curtainChildCount(r: NovelRenderer): number {
-  const ri = internals(r)
+  const ri = internals<LocalInternals>(r)
   return ri.app.stage.children.filter((c) => c === ri.curtainLayer).length
 }
 
@@ -129,7 +125,7 @@ describe('NovelRenderer 幕 z-order デシジョンテーブル (#697)', () => {
     await initRenderer(r)
     r.setScenes([scene('a', [curtain('a.png'), narration('one')])])
 
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
 
     cleanupRenderer(r)
@@ -140,7 +136,7 @@ describe('NovelRenderer 幕 z-order デシジョンテーブル (#697)', () => {
     await initRenderer(r)
     r.setScenes([scene('a', [curtain('a.png', true), narration('one')])])
 
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
 
     cleanupRenderer(r)
@@ -157,11 +153,11 @@ describe('NovelRenderer 幕 z-order デシジョンテーブル (#697)', () => {
         narration('two'),
       ]),
     ])
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
 
     await r.playScript([{ type: 'advance' }]) // one -> curtain(true)directive -> two
 
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
 
     cleanupRenderer(r)
@@ -178,11 +174,11 @@ describe('NovelRenderer 幕 z-order デシジョンテーブル (#697)', () => {
         narration('two'),
       ]),
     ])
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
     await r.playScript([{ type: 'advance' }]) // one -> curtain(false)directive -> two
 
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
 
     cleanupRenderer(r)
@@ -205,25 +201,25 @@ describe('NovelRenderer 幕 z-order の反復切り替え・冪等性 (#697)', (
         narration('four'),
       ]),
     ])
-    const stageLengthBefore = internals(r).app.stage.children.length
+    const stageLengthBefore = internals<LocalInternals>(r).app.stage.children.length
 
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true) // false
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true) // false
     expect(curtainChildCount(r)).toBe(1)
 
     await r.playScript([{ type: 'advance' }]) // one -> true -> two
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
-    expect(internals(r).app.stage.children.length).toBe(stageLengthBefore)
+    expect(internals<LocalInternals>(r).app.stage.children.length).toBe(stageLengthBefore)
 
     await r.playScript([{ type: 'advance' }]) // two -> false -> three
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
-    expect(internals(r).app.stage.children.length).toBe(stageLengthBefore)
+    expect(internals<LocalInternals>(r).app.stage.children.length).toBe(stageLengthBefore)
 
     await r.playScript([{ type: 'advance' }]) // three -> true -> four
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
-    expect(internals(r).app.stage.children.length).toBe(stageLengthBefore)
+    expect(internals<LocalInternals>(r).app.stage.children.length).toBe(stageLengthBefore)
 
     cleanupRenderer(r)
   })
@@ -239,14 +235,14 @@ describe('NovelRenderer 幕 z-order の反復切り替え・冪等性 (#697)', (
         narration('two'),
       ]),
     ])
-    const before = internals(r).app.stage.children.slice()
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    const before = internals<LocalInternals>(r).app.stage.children.slice()
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
 
     await r.playScript([{ type: 'advance' }]) // one -> curtain(b.png, false) -> two
 
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
-    expect(internals(r).app.stage.children).toEqual(before) // 並び自体が完全に不変
+    expect(internals<LocalInternals>(r).app.stage.children).toEqual(before) // 並び自体が完全に不変
 
     cleanupRenderer(r)
   })
@@ -262,14 +258,14 @@ describe('NovelRenderer 幕 z-order の反復切り替え・冪等性 (#697)', (
         narration('two'),
       ]),
     ])
-    const before = internals(r).app.stage.children.slice()
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    const before = internals<LocalInternals>(r).app.stage.children.slice()
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
     await r.playScript([{ type: 'advance' }]) // one -> curtain(b.png, true) -> two
 
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
-    expect(internals(r).app.stage.children).toEqual(before)
+    expect(internals<LocalInternals>(r).app.stage.children).toEqual(before)
 
     cleanupRenderer(r)
   })
@@ -281,11 +277,11 @@ describe('NovelRenderer 幕 z-order のリセット (#697)', () => {
     await initRenderer(r)
     r.setEvents([curtain('a.png', true), narration('one'), 'SceneTransition', narration('two')])
 
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
     await r.playScript([{ type: 'advance' }]) // one -> SceneTransition(clear+resetZOrder) -> two
 
-    expect(curtainRightAfter(r, internals(r).propLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).propLayer)).toBe(true)
     expect(curtainChildCount(r)).toBe(1)
     expect(r.getSnapshot().curtain).toBeNull()
 
@@ -298,13 +294,13 @@ describe('NovelRenderer 幕 z-order のリセット (#697)', () => {
     r.setScenes([
       scene('a', [curtain('a.png', true), narration('one'), CURTAIN_UP, narration('two')]),
     ])
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
     await r.playScript([{ type: 'advance' }]) // one -> CurtainUp -> two
 
     expect(r.getSnapshot().curtain).toBeNull()
     // z-order 自体は明示的にリセットされない仕様（コード上の設計コメント参照）。
-    expect(curtainRightAfter(r, internals(r).backgroundBoardLayer)).toBe(true)
+    expect(curtainRightAfter(r, internals<LocalInternals>(r).backgroundBoardLayer)).toBe(true)
 
     cleanupRenderer(r)
   })

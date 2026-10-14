@@ -15,27 +15,27 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
-interface SeekAdvanceInternals {
+interface SeekAdvanceInternals extends RendererInternals {
   suppressNextAdvance: boolean
-  justSelectedChoice: boolean
   handleAdvance: () => void
   advanceOrSkipTypewriter(): void
   audioManager: { ensureContext(): void }
   seekBar: { setExportSuppressed(suppressed: boolean): void }
 }
-function internals(r: NovelRenderer): SeekAdvanceInternals {
-  return r as unknown as SeekAdvanceInternals
-}
-
 /** suppress=false 経路で AudioContext 不在で落ちないよう ensureContext を no-op にする。 */
 function muteAudio(r: NovelRenderer) {
-  vi.spyOn(internals(r).audioManager, 'ensureContext').mockImplementation(() => {})
+  vi.spyOn(internals<SeekAdvanceInternals>(r).audioManager, 'ensureContext').mockImplementation(
+    () => {}
+  )
 }
 
 /** advanceOrSkipTypewriter を spy で差し替える（実 advance/skip は走らせない）。 */
 function spyAdvance(r: NovelRenderer) {
-  return vi.spyOn(internals(r), 'advanceOrSkipTypewriter').mockImplementation(() => {})
+  return vi
+    .spyOn(internals<SeekAdvanceInternals>(r), 'advanceOrSkipTypewriter')
+    .mockImplementation(() => {})
 }
 
 describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
@@ -48,20 +48,20 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
     const r = new NovelRenderer()
     muteAudio(r)
     const adv = spyAdvance(r)
-    expect(internals(r).suppressNextAdvance).toBe(false)
-    internals(r).handleAdvance()
+    expect(internals<SeekAdvanceInternals>(r).suppressNextAdvance).toBe(false)
+    internals<SeekAdvanceInternals>(r).handleAdvance()
     expect(adv).toHaveBeenCalledTimes(1)
-    expect(internals(r).suppressNextAdvance).toBe(false)
+    expect(internals<SeekAdvanceInternals>(r).suppressNextAdvance).toBe(false)
   })
 
   // D-2(核): 抑制フラグが立っていると advance せず、フラグを false に消費して早期 return する。
   it('D-2: suppressNextAdvance=true なら advance せずフラグを false に消費する', () => {
     const r = new NovelRenderer()
     const adv = spyAdvance(r)
-    internals(r).suppressNextAdvance = true
-    internals(r).handleAdvance()
+    internals<SeekAdvanceInternals>(r).suppressNextAdvance = true
+    internals<SeekAdvanceInternals>(r).handleAdvance()
     expect(adv).not.toHaveBeenCalled()
-    expect(internals(r).suppressNextAdvance).toBe(false)
+    expect(internals<SeekAdvanceInternals>(r).suppressNextAdvance).toBe(false)
   })
 
   // D-3: 抑制は 1 回限り。消費後すぐもう一度 handleAdvance すると今度は通常どおり進む。
@@ -69,10 +69,10 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
     const r = new NovelRenderer()
     muteAudio(r)
     const adv = spyAdvance(r)
-    internals(r).suppressNextAdvance = true
-    internals(r).handleAdvance() // 1 回目: 抑制を消費して return
+    internals<SeekAdvanceInternals>(r).suppressNextAdvance = true
+    internals<SeekAdvanceInternals>(r).handleAdvance() // 1 回目: 抑制を消費して return
     expect(adv).not.toHaveBeenCalled()
-    internals(r).handleAdvance() // 2 回目: 抑制は無いので進む
+    internals<SeekAdvanceInternals>(r).handleAdvance() // 2 回目: 抑制は無いので進む
     expect(adv).toHaveBeenCalledTimes(1)
   })
 
@@ -82,12 +82,12 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
   it('D-4: justSelectedChoice と suppress が両立すると choice ガードが先勝ちで両フラグとも消費される', () => {
     const r = new NovelRenderer()
     const adv = spyAdvance(r)
-    internals(r).justSelectedChoice = true
-    internals(r).suppressNextAdvance = true
-    internals(r).handleAdvance()
+    internals<SeekAdvanceInternals>(r).justSelectedChoice = true
+    internals<SeekAdvanceInternals>(r).suppressNextAdvance = true
+    internals<SeekAdvanceInternals>(r).handleAdvance()
     expect(adv).not.toHaveBeenCalled()
-    expect(internals(r).justSelectedChoice).toBe(false) // choice ガードが消費
-    expect(internals(r).suppressNextAdvance).toBe(false) // 同フレームで一緒に消費し残留させない
+    expect(internals<SeekAdvanceInternals>(r).justSelectedChoice).toBe(false) // choice ガードが消費
+    expect(internals<SeekAdvanceInternals>(r).suppressNextAdvance).toBe(false) // 同フレームで一緒に消費し残留させない
   })
 
   // D-4b: choice ガードで両フラグ消費後、次の独立 handleAdvance は通常どおり advance する
@@ -96,11 +96,11 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
     const r = new NovelRenderer()
     muteAudio(r)
     const adv = spyAdvance(r)
-    internals(r).justSelectedChoice = true
-    internals(r).suppressNextAdvance = true
-    internals(r).handleAdvance() // 1 回目: choice ガードで両フラグ消費
+    internals<SeekAdvanceInternals>(r).justSelectedChoice = true
+    internals<SeekAdvanceInternals>(r).suppressNextAdvance = true
+    internals<SeekAdvanceInternals>(r).handleAdvance() // 1 回目: choice ガードで両フラグ消費
     expect(adv).not.toHaveBeenCalled()
-    internals(r).handleAdvance() // 2 回目: 両フラグとも false なので進む
+    internals<SeekAdvanceInternals>(r).handleAdvance() // 2 回目: 両フラグとも false なので進む
     expect(adv).toHaveBeenCalledTimes(1)
   })
 
@@ -109,7 +109,7 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
   // 無修正のまま緑を維持する＝ seekBar.setExportSuppressed() への伝播が非破壊であることの回帰確認を兼ねる。
   it('D-5: setExporting(true/false) が seekBar.setExportSuppressed(true/false) へ伝播する', () => {
     const r = new NovelRenderer()
-    const spy = vi.spyOn(internals(r).seekBar, 'setExportSuppressed')
+    const spy = vi.spyOn(internals<SeekAdvanceInternals>(r).seekBar, 'setExportSuppressed')
     r.setExporting(true)
     expect(spy).toHaveBeenNthCalledWith(1, true)
     r.setExporting(false)

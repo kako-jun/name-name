@@ -16,6 +16,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
+import { internals } from '../test/rendererInternals'
 
 // --- fixture helpers（startFrom.test.ts / loadFromSaveData.test.ts と同じスタイル） ---
 
@@ -69,18 +70,6 @@ function flatten(scenes: EventScene[]): Event[] {
     events.push(...s.events)
   }
   return events
-}
-
-/** restoreSnapshot 検証用の内部アクセサ（startFrom.test.ts と同じ） */
-interface RendererInternals {
-  history: unknown[]
-  justSelectedChoice: boolean
-  initialized: boolean
-  pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 /**

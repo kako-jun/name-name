@@ -23,6 +23,7 @@ import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import { GAME_WIDTH } from './constants'
 import { THEATER_CAMERA_REFERENCE_DEPTH } from './cameraProjection'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -60,21 +61,16 @@ interface BackgroundBoardLayerForTest {
     sprite: { x: number; y: number; width: number; height: number } | null
   }[]
 }
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   backgroundBoardLayer: BackgroundBoardLayerForTest
-  appInitialized: boolean
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /**
  * destroy() の appInitialized ガード（PixiJS 実 init 未完了時の early-return）を満たすための
  * 最小スタブ（NovelRenderer.eventImage.test.ts の stubDestroyableApp と同じ割り切り）。
  */
 function stubDestroyableApp(r: NovelRenderer): void {
-  const appInternals = internals(r)
+  const appInternals = internals<LocalInternals>(r)
   appInternals.appInitialized = true
   Object.defineProperty(appInternals.app, 'canvas', {
     configurable: true,
@@ -220,7 +216,7 @@ describe('NovelRenderer BackgroundBoard の settled state / 破棄 / 復元経�
   it('17: destroy() は backgroundBoardLayer.clear() と disposeTextures() の両方を呼ぶ', () => {
     const r = new NovelRenderer()
     r.setScenes([scene('a', [backgroundBoard('sky.png', 10), narration('one')])])
-    const layer = internals(r).backgroundBoardLayer
+    const layer = internals<LocalInternals>(r).backgroundBoardLayer
     const clearSpy = vi.spyOn(layer, 'clear')
     const disposeSpy = vi.spyOn(layer, 'disposeTextures')
     stubDestroyableApp(r)
@@ -241,7 +237,7 @@ describe('NovelRenderer BackgroundBoard の settled state / 破棄 / 復元経�
     r.setScenes([scene('a', [backgroundBoard('sky.png', 10), narration('one'), narration('two')])])
     // setScenes の自動開始で [背景板:] directive が実行済み、'one' で停止。
     await r.playScript([{ type: 'advance' }]) // one -> two
-    const layer = internals(r).backgroundBoardLayer
+    const layer = internals<LocalInternals>(r).backgroundBoardLayer
     const addSpy = vi.spyOn(layer, 'add')
 
     r.goBack() // two -> one（backgroundBoards=[sky.png] のまま）
@@ -288,7 +284,7 @@ describe('NovelRenderer BackgroundBoard カメラ状態のシーン遷移同期 
     // スライドイン演出を完了させ、y と同様に interval に左右されない状態で幾何を確認する。
     r.getTimeController().tick(1000)
 
-    const layer = internals(r).backgroundBoardLayer
+    const layer = internals<LocalInternals>(r).backgroundBoardLayer
     const before = layer.entries.find((e) => e.path === 'sky.png')?.sprite
     expect(before?.width).toBeCloseTo(GAME_WIDTH * 0.5) // シーンA: Theater 射影で縮小
 
@@ -313,7 +309,7 @@ describe('NovelRenderer BackgroundBoard カメラ状態のシーン遷移同期 
     r.jumpToScene('b') // resetAndStartEvents 直後にシーンBの [背景板:] が実行される
     await flushPromises()
 
-    const layer = internals(r).backgroundBoardLayer
+    const layer = internals<LocalInternals>(r).backgroundBoardLayer
     const sprite = layer.entries.find((e) => e.path === 'tree.png')?.sprite
     expect(sprite?.width).toBe(GAME_WIDTH) // 古い Theater 射影を引きずらず Novel（原寸）で配置される
   })

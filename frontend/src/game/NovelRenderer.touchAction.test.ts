@@ -19,19 +19,18 @@
  */
 import { describe, it, expect } from 'vitest'
 import { NovelRenderer, type CanvasTouchAction } from './NovelRenderer'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
-interface TouchActionInternals {
+interface TouchActionInternals extends RendererInternals {
   setCanvasTouchAction(value: CanvasTouchAction): void
-}
-
-function internals(r: NovelRenderer): TouchActionInternals {
-  return r as unknown as TouchActionInternals
 }
 
 describe('NovelRenderer#setCanvasTouchAction', () => {
   it('init() 未実行の状態で呼んでも例外を投げない（修正後の回帰防止）', () => {
     const renderer = new NovelRenderer()
 
-    expect(() => internals(renderer).setCanvasTouchAction('none')).not.toThrow()
+    expect(() =>
+      internals<TouchActionInternals>(renderer).setCanvasTouchAction('none')
+    ).not.toThrow()
   })
 })

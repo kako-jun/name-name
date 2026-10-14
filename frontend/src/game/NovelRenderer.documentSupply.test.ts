@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { confineForTest } from '../test/confinement'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene, FlagValue } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -19,15 +20,9 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface Internals {
+interface Internals extends RendererInternals {
   gameState: { setFlag: (name: string, value: FlagValue) => void }
-  consecutiveJumps: number
-  currentSceneId: string | null
 }
-function internals(r: NovelRenderer): Internals {
-  return r as unknown as Internals
-}
-
 const SCENES: EventScene[] = [
   scene('entry', [narration('e1'), narration('e2')]),
   scene('out', [narration('圏外')]),
@@ -72,7 +67,7 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
   it('3: ライブ再パース（setEvents）で旧 flags が空になる（不整合10）', () => {
     const r = new NovelRenderer()
     void r.setEvents([narration('a')])
-    internals(r).gameState.setFlag('visited', { Bool: true })
+    internals<Internals>(r).gameState.setFlag('visited', { Bool: true })
     expect(r.getSnapshot().flags).toEqual({ visited: { Bool: true } })
 
     void r.setEvents([narration('a2')])
@@ -87,7 +82,7 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
       narration('base'),
     ]
     void r.setEvents(doc)
-    internals(r).gameState.setFlag('visited', { Bool: true })
+    internals<Internals>(r).gameState.setFlag('visited', { Bool: true })
 
     void r.setEvents(doc)
 
@@ -118,9 +113,9 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
       ['startFrom({ sceneId })', () => r.startFrom({ sceneId: 'out' })],
     ]
     for (const [name, start] of starts) {
-      internals(r).consecutiveJumps = 7
+      internals<Internals>(r).consecutiveJumps = 7
       void start()
-      expect(internals(r).consecutiveJumps, name).toBe(0)
+      expect(internals<Internals>(r).consecutiveJumps, name).toBe(0)
     }
   })
 
@@ -147,7 +142,7 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
   it('8: 開始しない読み込み（loadEvents / loadScenes）は flags も終劇も触らない', () => {
     const r = new NovelRenderer()
     r.setScenes(SCENES)
-    internals(r).gameState.setFlag('kept', { Bool: true })
+    internals<Internals>(r).gameState.setFlag('kept', { Bool: true })
 
     r.loadEvents([narration('x')])
     r.loadScenes(SCENES)
@@ -158,7 +153,7 @@ describe('setEvents / setScenes は読み込み＋新規開始 (#734 PR5)', () =
   it('10: setScenes([]) も setEvents([]) と同じく空の文書として新規開始し、旧文書を残さない', async () => {
     const r = new NovelRenderer()
     await r.setScenes(SCENES)
-    internals(r).gameState.setFlag('kept', { Bool: true })
+    internals<Internals>(r).gameState.setFlag('kept', { Bool: true })
 
     await expect(r.setScenes([])).resolves.toEqual({ status: 'entered', sceneId: null })
     expect(r.getSnapshot().flags).toEqual({})

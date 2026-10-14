@@ -18,8 +18,8 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer, brightnessToTint, normalizeBackgroundBrightness } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
-import type { NovelGameState } from './GameState'
 import { SaveManager, SaveSlotData } from './SaveManager'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（既存 NovelRenderer 系テストと同じスタイル）---
 
@@ -43,17 +43,11 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
 }
 
 /** private メソッド / フィールドへ到達するための内部アクセサ（既存テストと同じ cast 流儀） */
-interface RendererInternals {
-  applyState(state: NovelGameState): void
+interface LocalInternals extends RendererInternals {
   setBackground(path: string, fade?: unknown, brightness?: number | null): void
   clearBackground(): void
   applyBrightnessTint(sprite: { tint: number }): void
   currentBackgroundBrightness: number | null
-  currentBackgroundPath: string | null
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 /** jsdom セーフな SaveSlotData を作る（アセット系は null/空）。over で上書き可。 */
@@ -181,9 +175,9 @@ describe('NovelRenderer 背景明るさの永続・復元・tint', () => {
   it('BR4: 明るさ=0.6 の背景設定後 applyBrightnessTint → sprite.tint === 0x999999', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).setBackground('bg.png', null, 0.6)
+    internals<LocalInternals>(r).setBackground('bg.png', null, 0.6)
     const sprite = { tint: 0xffffff }
-    internals(r).applyBrightnessTint(sprite)
+    internals<LocalInternals>(r).applyBrightnessTint(sprite)
     expect(sprite.tint).toBe(0x999999)
   })
 
@@ -191,9 +185,9 @@ describe('NovelRenderer 背景明るさの永続・復元・tint', () => {
   it('BR5: 明るさ未指定の背景設定後 applyBrightnessTint → sprite.tint === 0xffffff（原画）', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).setBackground('bg.png', null, null)
+    internals<LocalInternals>(r).setBackground('bg.png', null, null)
     const sprite = { tint: 0x123456 } // 既存値が上書きされることも確認
-    internals(r).applyBrightnessTint(sprite)
+    internals<LocalInternals>(r).applyBrightnessTint(sprite)
     expect(sprite.tint).toBe(0xffffff)
   })
 
@@ -247,8 +241,12 @@ describe('NovelRenderer 背景明るさの永続・復元・tint', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
     const base = r.getSnapshot()
-    internals(r).applyState({ ...base, backgroundPath: 'bg.png', backgroundBrightness: 0.4 })
-    expect(internals(r).currentBackgroundBrightness).toBe(0.4)
+    internals<LocalInternals>(r).applyState({
+      ...base,
+      backgroundPath: 'bg.png',
+      backgroundBrightness: 0.4,
+    })
+    expect(internals<LocalInternals>(r).currentBackgroundBrightness).toBe(0.4)
     expect(r.getSnapshot().backgroundBrightness).toBe(0.4)
   })
 
@@ -256,10 +254,14 @@ describe('NovelRenderer 背景明るさの永続・復元・tint', () => {
   it('BR11: 事前に明るさあり → backgroundPath=null の state を applyState → null に戻る', () => {
     const r = makeRenderer([scene('a', [narration('x')])])
     r.startFrom({ sceneId: 'a' })
-    internals(r).setBackground('bg.png', null, 0.6) // 事前に明るさあり
+    internals<LocalInternals>(r).setBackground('bg.png', null, 0.6) // 事前に明るさあり
     const base = r.getSnapshot()
-    internals(r).applyState({ ...base, backgroundPath: null, backgroundBrightness: null })
-    expect(internals(r).currentBackgroundBrightness).toBeNull()
+    internals<LocalInternals>(r).applyState({
+      ...base,
+      backgroundPath: null,
+      backgroundBrightness: null,
+    })
+    expect(internals<LocalInternals>(r).currentBackgroundBrightness).toBeNull()
     expect(r.getSnapshot().backgroundBrightness).toBeNull()
   })
 

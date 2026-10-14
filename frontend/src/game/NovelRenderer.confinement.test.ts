@@ -19,6 +19,7 @@ import { Assets, Texture } from 'pixi.js'
 import { BACKGROUND_CROSSFADE_MS, NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { Event, EventScene, ChoiceOption } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（startFrom.test.ts と同じスタイル） ---
 
@@ -36,7 +37,7 @@ function choiceScene(id: string, options: ChoiceOption[]): EventScene {
 }
 
 /** confinement 検証用の内部アクセサ */
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   setBackground(
     path: string,
     fade?: unknown,
@@ -44,9 +45,6 @@ interface RendererInternals {
     opts?: { instant?: boolean }
   ): void
   setBackgroundColor(color: string): void
-  initialized: boolean
-  history: unknown[]
-  currentBgmPath: string | null
   shakeTimer: number | null
   effectTimer: number | null
   effectOverlay: {
@@ -61,8 +59,6 @@ interface RendererInternals {
     remove: (...args: unknown[]) => void
     getState: () => { path: string; back: 'Hide' | 'Keep' } | null
   }
-  waitingForChoice: boolean
-  readSceneProgress: Set<string>
   choiceOverlay: { show: (...args: unknown[]) => void; hide: () => void }
   bgEntries: Array<{
     sprite: { alpha: number; removeFromParent: () => void; destroy: () => void }
@@ -78,11 +74,7 @@ interface RendererInternals {
   updateBackgroundFadeFrame(): void
 }
 
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
-function installEffectOverlay(r: NovelRenderer): NonNullable<RendererInternals['effectOverlay']> {
+function installEffectOverlay(r: NovelRenderer): NonNullable<LocalInternals['effectOverlay']> {
   const overlay = {
     alpha: 0,
     visible: false,
@@ -90,7 +82,7 @@ function installEffectOverlay(r: NovelRenderer): NonNullable<RendererInternals['
     rect: vi.fn(),
     fill: vi.fn(),
   }
-  internals(r).effectOverlay = overlay
+  internals<LocalInternals>(r).effectOverlay = overlay
   return overlay
 }
 
@@ -196,8 +188,8 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const r = makeRenderer(SCENES)
     // アセット読込を経由しない同期フィールドだけを事前に非 null にしておく
     // （実際のテクスチャロードは jsdom 検証対象外・loadFromSaveData.test.ts と同じ割り切り）。
-    internals(r).setBackground('bg.png')
-    internals(r).setBackgroundColor('#112233')
+    internals<LocalInternals>(r).setBackground('bg.png')
+    internals<LocalInternals>(r).setBackgroundColor('#112233')
     expect(r.getSnapshot().backgroundPath).toBe('bg.png')
     expect(r.getSnapshot().backgroundColor).toBe('#112233')
 
@@ -249,7 +241,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const r = makeRenderer(SCENES)
     r.setAssetBaseUrl('/assets')
     r.getTimeController().setMode('virtual')
-    internals(r).initialized = true
+    internals<LocalInternals>(r).initialized = true
     confineForTest(r, ['entry'])
 
     let resolveLoad!: (texture: Texture) => void
@@ -260,7 +252,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     )
 
     // アセットキャッシュに無い背景 → Assets.load が pending のまま bgLoadToken を確保する。
-    internals(r).setBackground('pending.png')
+    internals<LocalInternals>(r).setBackground('pending.png')
     expect(r.getSnapshot().backgroundPath).toBe('pending.png')
 
     // 圏外ジャンプで endStory() が発火。bgLoadToken を進めて古いロードを無効化し、
@@ -287,23 +279,23 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const r = makeRenderer(SCENES_MULTI_EVENT)
     // entry (one/two/three の3イベント) を2回 advance して history を複数積む。
     await r.playScript([{ type: 'advance' }, { type: 'advance' }])
-    expect(internals(r).history.length).toBeGreaterThan(1)
+    expect(internals<LocalInternals>(r).history.length).toBeGreaterThan(1)
 
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外 → 終劇
     expect(r.getSnapshot().storyEnded).toBe(true)
-    const historyLenAfterEnd = internals(r).history.length
+    const historyLenAfterEnd = internals<LocalInternals>(r).history.length
 
     r.goBack()
     expect(r.getSnapshot().storyEnded).toBe(true)
     // 早期 return で history.pop() にも到達しない（history 自体も不変）。
-    expect(internals(r).history.length).toBe(historyLenAfterEnd)
+    expect(internals<LocalInternals>(r).history.length).toBe(historyLenAfterEnd)
   })
 
   it('29: 終劇後に seekTo() を呼んでも storyEnded は true のまま維持される（M1 回帰: SeekBar ドラッグでの巻き戻し防止）', async () => {
     const r = makeRenderer(SCENES_MULTI_EVENT)
     await r.playScript([{ type: 'advance' }, { type: 'advance' }])
-    expect(internals(r).history.length).toBeGreaterThan(1)
+    expect(internals<LocalInternals>(r).history.length).toBeGreaterThan(1)
 
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外 → 終劇
@@ -332,19 +324,19 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
       mask: null,
       fadeAnimation: null,
     }
-    internals(r).bgEntries = [bgEntry]
+    internals<LocalInternals>(r).bgEntries = [bgEntry]
 
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene') // 圏外 → endStory() → fadeOutBackgroundEntries(BACKGROUND_CROSSFADE_MS)
 
     // 消去フェード（1→0）が仕込まれていることを確認する（クロスフェードの 0→1 と混同しないよう明示）。
-    expect(internals(r).bgEntries).toEqual([bgEntry])
+    expect(internals<LocalInternals>(r).bgEntries).toEqual([bgEntry])
     expect(bgEntry.fadeAnimation).toMatchObject({ fromAlpha: 1, toAlpha: 0 })
 
     // フェードを1/3ほど進める（alpha が 1 でも 0 でもない中間状態を作る）。
     const partialMs = Math.round(BACKGROUND_CROSSFADE_MS / 3)
     r.getTimeController().tick(partialMs)
-    internals(r).updateBackgroundFadeFrame()
+    internals<LocalInternals>(r).updateBackgroundFadeFrame()
     const alphaBeforeSkip = bgEntry.sprite.alpha
     expect(alphaBeforeSkip).toBeGreaterThan(0)
     expect(alphaBeforeSkip).toBeLessThan(1)
@@ -363,33 +355,36 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     r.getTimeController().setMode('virtual')
     r.setBackgroundFadeMs(BACKGROUND_CROSSFADE_MS)
     installEffectOverlay(r)
-    internals(r).eventImageLayer.restore({ path: 'story/ending.webp', back: 'Hide' })
-    const removeSpy = vi.spyOn(internals(r).eventImageLayer, 'remove')
+    internals<LocalInternals>(r).eventImageLayer.restore({
+      path: 'story/ending.webp',
+      back: 'Hide',
+    })
+    const removeSpy = vi.spyOn(internals<LocalInternals>(r).eventImageLayer, 'remove')
 
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
     expect(r.getSnapshot().storyEnded).toBe(true)
     expect(removeSpy).not.toHaveBeenCalled()
-    expect(internals(r).eventImageLayer.getState()).toEqual({
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toEqual({
       path: 'story/ending.webp',
       back: 'Hide',
     })
-    expect(internals(r).effectOverlay).toMatchObject({ visible: true, alpha: 0 })
+    expect(internals<LocalInternals>(r).effectOverlay).toMatchObject({ visible: true, alpha: 0 })
 
     r.getTimeController().tick(Math.floor(BACKGROUND_CROSSFADE_MS / 2))
     expect(removeSpy).not.toHaveBeenCalled()
-    expect(internals(r).eventImageLayer.getState()).toEqual({
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toEqual({
       path: 'story/ending.webp',
       back: 'Hide',
     })
-    expect(internals(r).effectOverlay?.alpha ?? 0).toBeGreaterThan(0)
-    expect(internals(r).effectOverlay?.alpha ?? 0).toBeLessThan(1)
+    expect(internals<LocalInternals>(r).effectOverlay?.alpha ?? 0).toBeGreaterThan(0)
+    expect(internals<LocalInternals>(r).effectOverlay?.alpha ?? 0).toBeLessThan(1)
 
     r.getTimeController().tick(BACKGROUND_CROSSFADE_MS)
     expect(removeSpy).toHaveBeenCalledTimes(1)
-    expect(internals(r).eventImageLayer.getState()).toBeNull()
-    expect(internals(r).effectOverlay).toMatchObject({ visible: true, alpha: 1 })
+    expect(internals<LocalInternals>(r).eventImageLayer.getState()).toBeNull()
+    expect(internals<LocalInternals>(r).effectOverlay).toMatchObject({ visible: true, alpha: 1 })
   })
 
   // ===== J. 終劇後の BGM 停止 (#386 レビュー M2) =====
@@ -404,7 +399,7 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
   it('30: endStory() は BGM を停止し currentBgmPath を null にする（M2 回帰）', () => {
     const r = makeRenderer(SCENES)
     const stopBgmSpy = vi.spyOn(r.getAudioManager(), 'stopBgm').mockImplementation(() => {})
-    internals(r).currentBgmPath = 'bgm/loop.mp3'
+    internals<LocalInternals>(r).currentBgmPath = 'bgm/loop.mp3'
     expect(r.getSnapshot().currentBgmPath).toBe('bgm/loop.mp3')
 
     confineForTest(r, ['entry'])
@@ -426,8 +421,8 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     const r = makeRenderer(SCENES)
     // Shake/Flash/Fade の fire-and-forget な内部状態を直接仕込む（実際のトリガーは
     // processDirective 経由だが、ここでは endStory 側の後始末だけを対象にする）。
-    internals(r).shakeTimer = 12345
-    internals(r).effectTimer = 67890
+    internals<LocalInternals>(r).shakeTimer = 12345
+    internals<LocalInternals>(r).effectTimer = 67890
     const overlay = installEffectOverlay(r)
     overlay.alpha = 0.6
     overlay.visible = true
@@ -435,9 +430,9 @@ describe('NovelRenderer confinement / endStory (#386)', () => {
     confineForTest(r, ['entry'])
     r.jumpToScene('out-scene')
 
-    expect(internals(r).shakeTimer).toBeNull()
-    expect(internals(r).effectTimer).not.toBe(67890)
-    expect(internals(r).effectOverlay).toMatchObject({ alpha: 0, visible: true })
+    expect(internals<LocalInternals>(r).shakeTimer).toBeNull()
+    expect(internals<LocalInternals>(r).effectTimer).not.toBe(67890)
+    expect(internals<LocalInternals>(r).effectOverlay).toMatchObject({ alpha: 0, visible: true })
   })
 
   // ===== L. confinement 圏外 + 未知 sceneId の dev 診断 (#386 レビュー Q1) =====
@@ -497,20 +492,20 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
     r.setOnStoryEndedChange(cb)
     confineForTest(r, ['entry']) // 圏内は entry のみ。hub / other は圏外
     // choiceOverlay.show に到達しないことを spy で担保する（短絡なら呼ばれない）。
-    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).choiceOverlay, 'show')
 
     // narration('本文') → advance 1 回で Choice に到達（processDirective の Choice 分岐を再生経路で踏む）。
     await r.playScript([{ type: 'advance' }])
 
     expect(r.getSnapshot().storyEnded).toBe(true)
     // waitingForChoice は立たず、choiceOverlay も表示されない（短絡で choice UI に進まない）。
-    expect(internals(r).waitingForChoice).toBe(false)
+    expect(internals<LocalInternals>(r).waitingForChoice).toBe(false)
     expect(showSpy).not.toHaveBeenCalled()
     // onStoryEndedChange は true で 1 回だけ発火する。
     expect(cb).toHaveBeenCalledTimes(1)
     expect(cb).toHaveBeenCalledWith(true)
     // Choice 到達時の markCurrentSceneRead が短絡より前に走り、シーンが既読になっている。
-    expect(internals(r).readSceneProgress.has('entry')).toBe(true)
+    expect(internals<LocalInternals>(r).readSceneProgress.has('entry')).toBe(true)
   })
 
   // ===== 2. 一部 option が圏内 → 短絡せず choice 表示 =====
@@ -526,12 +521,14 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
     ])
     confineForTest(r, ['entry', 'inside'])
     // 圏内 option があるので choice 表示に進む。show は AudioContext/PixiJS を触るので no-op に差し替える。
-    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
+    const showSpy = vi
+      .spyOn(internals<LocalInternals>(r).choiceOverlay, 'show')
+      .mockImplementation(() => {})
 
     await r.playScript([{ type: 'advance' }])
 
     expect(r.getSnapshot().storyEnded).toBe(false)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<LocalInternals>(r).waitingForChoice).toBe(true)
     expect(showSpy).toHaveBeenCalledTimes(1)
   })
 
@@ -547,12 +544,14 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
       scene('other', [narration('other')]),
     ])
     // confineForTest を呼ばない（confinedSceneIds は既定 null）。
-    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
+    const showSpy = vi
+      .spyOn(internals<LocalInternals>(r).choiceOverlay, 'show')
+      .mockImplementation(() => {})
 
     await r.playScript([{ type: 'advance' }])
 
     expect(r.getSnapshot().storyEnded).toBe(false)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<LocalInternals>(r).waitingForChoice).toBe(true)
     expect(showSpy).toHaveBeenCalledTimes(1)
   })
 
@@ -577,7 +576,7 @@ describe('NovelRenderer confinement × Choice ディレクティブ短絡 (#398)
     confineForTest(r, ['entry']) // hub / other は圏外
     r.setSkipMode(true)
     expect(r.isSkipMode()).toBe(true)
-    const showSpy = vi.spyOn(internals(r).choiceOverlay, 'show')
+    const showSpy = vi.spyOn(internals<LocalInternals>(r).choiceOverlay, 'show')
 
     await r.playScript([{ type: 'advance' }]) // narration → Choice 到達 → 全滅短絡 → endStory()
 

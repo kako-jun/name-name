@@ -14,6 +14,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { NovelGameState, StartFromOptions } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
+import { internals } from '../test/rendererInternals'
 
 // --- fixture helpers（playScript.test.ts と同じスタイル） ---
 
@@ -57,23 +58,6 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
   const r = new NovelRenderer()
   r.setScenes(scenes)
   return r
-}
-
-/** startFrom 検証用に到達したい内部状態へのアクセサ */
-interface RendererInternals {
-  eventIndex: number
-  textIndex: number
-  resolvedEvents: Event[]
-  history: unknown[]
-  waitingForChoice: boolean
-  waitingForWait: boolean
-  waitTimer: number | null
-  advance(): void
-  applyState(state: NovelGameState): void
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 const SCENES: EventScene[] = [

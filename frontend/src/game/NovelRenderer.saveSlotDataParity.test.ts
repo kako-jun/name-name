@@ -21,12 +21,12 @@
  * （実際のレイヤー順自体は NovelRenderer.prop.test.ts の init() テストで担保済み）。
  *
  * 駆動方式: openSaveMenu()/openLoadMenu() は private のため、
- * `internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' | 'l' }))` で到達する
+ * `internals<LocalInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' | 'l' }))` で到達する
  * （NovelRenderer.titleScreen.test.ts と同形）。保存/ロードコールバックの捕捉は
  * `saveLoadOverlay.showSave`/`showLoad` を spy し、渡されたコールバック自体を呼び出す
  * （実UIの pointerdown ハンドラが行う `onSave?.(i)` / `onLoad?.(slotData)` を模す）。
  * `saveManager.save`/`quickSave` の spy は NovelRenderer.newGameReset.test.ts の
- * `vi.spyOn(internals(r).saveManager, 'deleteQuickSave')` と同型の internals キャストパターン。
+ * `vi.spyOn(internals<LocalInternals>(r).saveManager, 'deleteQuickSave')` と同型の internals キャストパターン。
  *
  * localStorage は実際に書き込まれる（SaveManager をモックしないため）ので、他テストファイルの
  * SaveManager.test.ts と同じく beforeEach で毎回クリアする。
@@ -35,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import type { SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -71,7 +72,7 @@ function muteAudio(r: NovelRenderer): void {
 }
 
 /** private フィールドへ到達するための内部アクセサ（他 NovelRenderer.*.test.ts と同じ流儀）。 */
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   handleKeyDown: (e: KeyboardEvent) => void
   saveLoadOverlay: {
     showSave: (onSave: (slot: number) => void) => void
@@ -84,17 +85,13 @@ interface RendererInternals {
     load: (slot: number) => SaveSlotData | null
   }
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 /**
  * 's' キーで openSaveMenu() を発火し、`saveLoadOverlay.showSave` に渡された保存コールバックを
  * 捕捉して返す。
  */
 function captureSaveCallback(r: NovelRenderer): (slot: number) => void {
-  const showSaveSpy = vi.spyOn(internals(r).saveLoadOverlay, 'showSave')
-  internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' }))
+  const showSaveSpy = vi.spyOn(internals<LocalInternals>(r).saveLoadOverlay, 'showSave')
+  internals<LocalInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 's' }))
   const onSave = showSaveSpy.mock.calls[0]?.[0]
   if (!onSave) throw new Error('showSave が呼ばれなかった（openSaveMenu が発火しなかった）')
   return onSave
@@ -105,8 +102,8 @@ function captureSaveCallback(r: NovelRenderer): (slot: number) => void {
  * 捕捉して返す。
  */
 function captureLoadCallback(r: NovelRenderer): (data: SaveSlotData) => void {
-  const showLoadSpy = vi.spyOn(internals(r).saveLoadOverlay, 'showLoad')
-  internals(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'l' }))
+  const showLoadSpy = vi.spyOn(internals<LocalInternals>(r).saveLoadOverlay, 'showLoad')
+  internals<LocalInternals>(r).handleKeyDown(new KeyboardEvent('keydown', { key: 'l' }))
   const onLoad = showLoadSpy.mock.calls[0]?.[0]
   if (!onLoad) throw new Error('showLoad が呼ばれなかった（openLoadMenu が発火しなかった）')
   return onLoad
@@ -127,7 +124,7 @@ describe('NovelRenderer openSaveMenu() の SaveSlotData 構築 (#716 正常系)'
     const expectedBoards = r.getSnapshot().backgroundBoards
     expect(expectedBoards.length).toBeGreaterThan(1) // 前提: 非空・複数要素
 
-    const saveSpy = vi.spyOn(internals(r).saveManager, 'save')
+    const saveSpy = vi.spyOn(internals<LocalInternals>(r).saveManager, 'save')
     const onSave = captureSaveCallback(r)
     onSave(0)
 
@@ -141,7 +138,7 @@ describe('NovelRenderer openSaveMenu() の SaveSlotData 構築 (#716 正常系)'
     const expectedProps = r.getSnapshot().props
     expect(expectedProps.length).toBeGreaterThan(1) // 前提: 非空・複数要素
 
-    const saveSpy = vi.spyOn(internals(r).saveManager, 'save')
+    const saveSpy = vi.spyOn(internals<LocalInternals>(r).saveManager, 'save')
     const onSave = captureSaveCallback(r)
     onSave(0)
 
@@ -160,13 +157,13 @@ describe('NovelRenderer openSaveMenu() → ロードの真のラウンドトリ�
 
     const onSave = captureSaveCallback(r)
     onSave(0)
-    internals(r).saveLoadOverlay.hide() // 実UIの pointerdown ハンドラ相当の後始末（visible ガード解除）
+    internals<LocalInternals>(r).saveLoadOverlay.hide() // 実UIの pointerdown ハンドラ相当の後始末（visible ガード解除）
 
     // [場面転換] を経由して現在状態を変化させ、ロードが実際に復元したことを区別可能にする。
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().backgroundBoards).toEqual([]) // 保存時とは異なる状態になっている
 
-    const savedData = internals(r).saveManager.load(0)
+    const savedData = internals<LocalInternals>(r).saveManager.load(0)
     if (!savedData) throw new Error('スロット0にセーブデータが無い')
     const onLoad = captureLoadCallback(r)
     onLoad(savedData)
@@ -183,12 +180,12 @@ describe('NovelRenderer openSaveMenu() → ロードの真のラウンドトリ�
 
     const onSave = captureSaveCallback(r)
     onSave(0)
-    internals(r).saveLoadOverlay.hide()
+    internals<LocalInternals>(r).saveLoadOverlay.hide()
 
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().props).toEqual([]) // 保存時とは異なる状態になっている
 
-    const savedData = internals(r).saveManager.load(0)
+    const savedData = internals<LocalInternals>(r).saveManager.load(0)
     if (!savedData) throw new Error('スロット0にセーブデータが無い')
     const onLoad = captureLoadCallback(r)
     onLoad(savedData)
@@ -204,7 +201,7 @@ describe('NovelRenderer openSaveMenu() の SaveSlotData 構築/復元 (#716 異�
     expect(r.getSnapshot().backgroundBoards).toEqual([])
     expect(r.getSnapshot().props).toEqual([])
 
-    const saveSpy = vi.spyOn(internals(r).saveManager, 'save')
+    const saveSpy = vi.spyOn(internals<LocalInternals>(r).saveManager, 'save')
 
     expect(() => {
       const onSave = captureSaveCallback(r)
@@ -233,14 +230,14 @@ describe('NovelRenderer openSaveMenu() の SaveSlotData 構築/復元 (#716 異�
 
     const onSave = captureSaveCallback(r)
     onSave(0)
-    internals(r).saveLoadOverlay.hide()
+    internals<LocalInternals>(r).saveLoadOverlay.hide()
 
     // ディレクティブを実行させ、現在状態を非空に変化させる（ロードが実際に復元したことの区別用）。
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().backgroundBoards).toEqual([{ path: 'sky.png', depth: 10 }])
     expect(r.getSnapshot().props).toEqual([{ path: 'desk.png', depth: 3 }])
 
-    const savedData = internals(r).saveManager.load(0)
+    const savedData = internals<LocalInternals>(r).saveManager.load(0)
     if (!savedData) throw new Error('スロット0にセーブデータが無い')
     const onLoad = captureLoadCallback(r)
     onLoad(savedData)
@@ -256,13 +253,13 @@ describe('NovelRenderer quickSave()/openSaveMenu() の SaveSlotData 構造的パ
     r.setScenes([sceneWithBoardsAndProps()])
 
     // quickSave() 側（public API、そのまま呼べる）。
-    const quickSaveSpy = vi.spyOn(internals(r).saveManager, 'quickSave')
+    const quickSaveSpy = vi.spyOn(internals<LocalInternals>(r).saveManager, 'quickSave')
     expect(r.quickSave()).toBe(true)
     expect(quickSaveSpy).toHaveBeenCalledTimes(1)
     const quickSaveData = quickSaveSpy.mock.calls[0][0]
 
     // openSaveMenu() 側（同一スナップショット状態、slot は quickSave と意味的に異なる値を選ぶ）。
-    const saveSpy = vi.spyOn(internals(r).saveManager, 'save')
+    const saveSpy = vi.spyOn(internals<LocalInternals>(r).saveManager, 'save')
     const onSave = captureSaveCallback(r)
     onSave(1)
     expect(saveSpy).toHaveBeenCalledTimes(1)

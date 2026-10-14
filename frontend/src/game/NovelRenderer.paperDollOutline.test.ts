@@ -16,6 +16,7 @@ import {
   DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
 } from './outlineFilter'
 import type { Event, EventScene } from '../types'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 // --- fixture helpers（NovelRenderer.cameraMode.test.ts / spotlight.test.ts と同じスタイル）---
 
@@ -41,15 +42,10 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
   return r
 }
 
-interface RendererInternals {
+interface LocalInternals extends RendererInternals {
   characterLayer: { setPaperDollOutline: (...args: unknown[]) => void }
   propLayer: { setPaperDollOutline: (...args: unknown[]) => void }
-  processDirective(event: Event): void
 }
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
-}
-
 describe('NovelRenderer 紙人形風輪郭配線 (#699)', () => {
   it('1: [紙人形輪郭: オン] 実行で getSnapshot().paperDollOutline に color/thickness が反映される', async () => {
     const r = makeRenderer([
@@ -141,10 +137,10 @@ describe('NovelRenderer 紙人形風輪郭配線 (#699)', () => {
 
   it('6: processDirective で enabled:false 受信時、characterLayer/propLayer 両方に null が伝播する', () => {
     const r = new NovelRenderer()
-    const clSpy = vi.spyOn(internals(r).characterLayer, 'setPaperDollOutline')
-    const plSpy = vi.spyOn(internals(r).propLayer, 'setPaperDollOutline')
+    const clSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'setPaperDollOutline')
+    const plSpy = vi.spyOn(internals<LocalInternals>(r).propLayer, 'setPaperDollOutline')
 
-    internals(r).processDirective(paperDollOutline(false))
+    internals<LocalInternals>(r).processDirective(paperDollOutline(false))
 
     expect(clSpy).toHaveBeenCalledWith(null)
     expect(plSpy).toHaveBeenCalledWith(null)

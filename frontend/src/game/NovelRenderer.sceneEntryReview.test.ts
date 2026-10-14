@@ -10,7 +10,7 @@ import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
-import type { SceneEntryResult } from './sceneEntry'
+import { internals, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -28,28 +28,13 @@ function scene(id: string, events: Event[]): EventScene {
   return { id, title: id, view: 'TopDown', events }
 }
 
-interface Internals {
-  initialized: boolean
-  waitingForWait: boolean
-  waitingForChoice: boolean
-  skipMode: boolean
-  autoMode: boolean
-  eventIndex: number
-  jumpState: 'idle' | 'pending' | 'stalled'
-  pendingEntry: { promise: Promise<SceneEntryResult> } | null
+interface Internals extends RendererInternals {
   choiceOverlay: {
     show: (...args: unknown[]) => void
     setAudioManager: (a: unknown) => void
     confirmChoice: (jump: string) => void
   }
-  render(): void
-  scheduleAutoAdvance(): void
-  scheduleSkipStep(): void
 }
-function internals(r: NovelRenderer): Internals {
-  return r as unknown as Internals
-}
-
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void
   const promise = new Promise<T>((res) => {
@@ -98,8 +83,8 @@ function makeRenderer(
   const r = new NovelRenderer()
   r.getTimeController().setMode('virtual')
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-  internals(r).initialized = true
-  vi.spyOn(internals(r), 'render').mockImplementation(() => {})
+  internals<Internals>(r).initialized = true
+  vi.spyOn(internals<Internals>(r), 'render').mockImplementation(() => {})
   r.setScenes(scenes)
   r.setMissingSceneResolver(resolver)
   return r
@@ -122,7 +107,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     ])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     r.advance()
-    const waiting = internals(r).pendingEntry!.promise
+    const waiting = internals<Internals>(r).pendingEntry!.promise
     vi.spyOn(r as unknown as { startScene: () => void }, 'startScene').mockImplementationOnce(
       () => {
         throw new Error('boom')
@@ -133,8 +118,8 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
 
     await expect(waiting).resolves.toEqual({ status: 'failed', reason: 'apply-error' })
     expect(errSpy).toHaveBeenCalled()
-    expect(internals(r).jumpState).toBe('stalled')
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).jumpState).toBe('stalled')
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 
   it('遅延ロード後の適用が throw しても、入場の Promise は reject せず failed で解決され、ゲートが下りる', async () => {
@@ -152,16 +137,18 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
 
     await expect(entering).resolves.toEqual({ status: 'failed', reason: 'apply-error' })
     expect(errSpy).toHaveBeenCalled()
-    expect(internals(r).pendingEntry).toBeNull()
+    expect(internals<Internals>(r).pendingEntry).toBeNull()
   })
 
   it('選択肢の確定で同期の適用が throw しても、未処理の rejection にならない', async () => {
     const r = makeRenderer([HUB, FAR])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const calls: unknown[][] = []
-    vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation((...a: unknown[]) => {
-      calls.push(a)
-    })
+    vi.spyOn(internals<Internals>(r).choiceOverlay, 'show').mockImplementation(
+      (...a: unknown[]) => {
+        calls.push(a)
+      }
+    )
     r.advance()
     r.advance()
     const confirm = calls[calls.length - 1][1] as (jump: string) => boolean
@@ -176,7 +163,7 @@ describe('S1: 入場の適用の例外でも Promise が解決される (#734)',
     expect(errSpy).toHaveBeenCalled()
     // 閉じていた選択肢が再表示され、詰まらない
     expect(calls.length).toBe(2)
-    expect(internals(r).waitingForChoice).toBe(true)
+    expect(internals<Internals>(r).waitingForChoice).toBe(true)
   })
 })
 
@@ -193,7 +180,7 @@ describe('S2: オート送り・スキップの再開 (#734)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     r.setAutoMode(true)
     const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'gone' }))
-    const autoSpy = vi.spyOn(internals(r), 'scheduleAutoAdvance')
+    const autoSpy = vi.spyOn(internals<Internals>(r), 'scheduleAutoAdvance')
 
     d.resolve(null)
     await restoring
@@ -205,9 +192,9 @@ describe('S2: オート送り・スキップの再開 (#734)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer([HUB], () => d.promise)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    internals(r).skipMode = true
+    internals<Internals>(r).skipMode = true
     const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'gone' }))
-    const skipSpy = vi.spyOn(internals(r), 'scheduleSkipStep')
+    const skipSpy = vi.spyOn(internals<Internals>(r), 'scheduleSkipStep')
 
     d.resolve(null)
     await restoring
@@ -228,7 +215,7 @@ describe('成功側のオート再開 (#734)', () => {
     const r = new NovelRenderer()
     r.getTimeController().setMode('virtual')
     vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-    internals(r).initialized = true
+    internals<Internals>(r).initialized = true
     r.setScenes([HUB])
     r.setMissingSceneResolver(() => d.promise)
     r.setAutoMode(true)
@@ -261,17 +248,17 @@ describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer([WAITING], () => d.promise)
     r.advance() // [待機] に到達
-    expect(internals(r).waitingForWait).toBe(true)
-    const indexAtWait = internals(r).eventIndex
+    expect(internals<Internals>(r).waitingForWait).toBe(true)
+    const indexAtWait = internals<Internals>(r).eventIndex
 
     const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'far' }))
     r.getTimeController().tick(60) // waitTimer 発火
-    expect(internals(r).eventIndex).toBe(indexAtWait)
+    expect(internals<Internals>(r).eventIndex).toBe(indexAtWait)
 
     d.resolve([WAITING, FAR])
     await expect(restoring).resolves.toEqual({ status: 'entered', sceneId: 'far' })
     expect(r.getCurrentSceneId()).toBe('far')
-    expect(internals(r).waitingForWait).toBe(false)
+    expect(internals<Internals>(r).waitingForWait).toBe(false)
   })
 
   it('待っていた復元 A が別の復元 B に置き換えられて決着しても [待機] は明けず、B の決着後に明ける（B 成功時は明けない）', async () => {
@@ -282,7 +269,7 @@ describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
       const r = makeRenderer([WAITING], (id) => (id === 'far' ? dA.promise : dB.promise))
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       r.advance()
-      const indexAtWait = internals(r).eventIndex
+      const indexAtWait = internals<Internals>(r).eventIndex
 
       void r.restoreSnapshot(craftSnapshot({ sceneId: 'far' })) // A
       r.getTimeController().tick(60) // waitTimer 発火 → A の決着待ち
@@ -291,19 +278,19 @@ describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
       await flush()
 
       // B の待機中に [待機] が明けてはいけない（明けると世代が進み B が破棄される）
-      expect(internals(r).waitingForWait).toBe(true)
-      expect(internals(r).eventIndex).toBe(indexAtWait)
+      expect(internals<Internals>(r).waitingForWait).toBe(true)
+      expect(internals<Internals>(r).eventIndex).toBe(indexAtWait)
 
       dB.resolve(bSucceeds ? [WAITING, OTHER] : null)
       await restoringB
       await flush()
       if (bSucceeds) {
         expect(r.getCurrentSceneId()).toBe('other')
-        expect(internals(r).waitingForWait).toBe(false)
-        expect(internals(r).eventIndex).toBe(0) // 待機明けで進んでいない
+        expect(internals<Internals>(r).waitingForWait).toBe(false)
+        expect(internals<Internals>(r).eventIndex).toBe(0) // 待機明けで進んでいない
       } else {
-        expect(internals(r).waitingForWait).toBe(false)
-        expect(internals(r).eventIndex).toBeGreaterThan(indexAtWait)
+        expect(internals<Internals>(r).waitingForWait).toBe(false)
+        expect(internals<Internals>(r).eventIndex).toBeGreaterThan(indexAtWait)
       }
     }
   })
@@ -313,7 +300,7 @@ describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
     const r = makeRenderer([WAITING], () => d.promise)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     r.advance()
-    const indexAtWait = internals(r).eventIndex
+    const indexAtWait = internals<Internals>(r).eventIndex
 
     const restoring = r.restoreSnapshot(craftSnapshot({ sceneId: 'gone' }))
     r.getTimeController().tick(60)
@@ -321,8 +308,8 @@ describe('S3: 復元の遅延ロード中の [待機] (#734)', () => {
     await restoring
     await flush()
 
-    expect(internals(r).waitingForWait).toBe(false)
-    expect(internals(r).eventIndex).toBeGreaterThan(indexAtWait)
+    expect(internals<Internals>(r).waitingForWait).toBe(false)
+    expect(internals<Internals>(r).eventIndex).toBeGreaterThan(indexAtWait)
   })
 })
 
@@ -336,7 +323,7 @@ describe('playScript と確定音 (#734)', () => {
   it('choice:<未ロード> の後の advance は、遷移先のシーンで消化される', async () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer([HUB], () => d.promise)
-    vi.spyOn(internals(r).choiceOverlay, 'show').mockImplementation(() => {})
+    vi.spyOn(internals<Internals>(r).choiceOverlay, 'show').mockImplementation(() => {})
     setTimeout(() => d.resolve([HUB, FAR]), 0)
 
     await r.playScript([
@@ -353,7 +340,7 @@ describe('playScript と確定音 (#734)', () => {
   it('ゲートで弾かれた選択肢の確定では確定音を鳴らさず、通常時は鳴らす', async () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer([HUB], () => d.promise)
-    const overlay = internals(r).choiceOverlay
+    const overlay = internals<Internals>(r).choiceOverlay
     overlay.setAudioManager(r.getAudioManager())
     const toneSpy = vi.spyOn(r.getAudioManager(), 'playSelectTone').mockImplementation(() => {})
     r.advance()

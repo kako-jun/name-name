@@ -23,9 +23,9 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
-import type { NovelGameState } from './GameState'
 import type { Event, EventScene, FlagValue } from '../types'
 import { SaveManager, SaveSlotData } from './SaveManager'
+import { internals } from '../test/rendererInternals'
 
 // --- fixture helpers（startFrom.test.ts と同じスタイル） ---
 
@@ -58,22 +58,6 @@ function makeRenderer(scenes: EventScene[]): NovelRenderer {
  */
 function muteAudio(r: NovelRenderer): void {
   vi.spyOn(r.getAudioManager(), 'ensureContext').mockImplementation(() => {})
-}
-
-/** loadFromSaveData 検証用の内部アクセサ（startFrom.test.ts と同じ） */
-interface RendererInternals {
-  history: unknown[]
-  justSelectedChoice: boolean
-  applyState(state: NovelGameState): void
-  initialized: boolean
-  waitingForChoice: boolean
-  waitingForWait: boolean
-  jumpState: string
-  pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
-}
-
-function internals(r: NovelRenderer): RendererInternals {
-  return r as unknown as RendererInternals
 }
 
 /**
