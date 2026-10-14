@@ -219,7 +219,7 @@ HUD（`loadDebugInfo`）の `debug_scene: <id> → resolved / not found (…)` �
 止まっていた。`debug_scene` で `eventIndex>0` を指定した途中局面起動だけ `restoreToScene`
 にフォールバックする（詳細は [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) の §3）。
 どちらも入場の種類は新規開始で、背景・BGM・立ち絵は持ち越さない（`carryPolicyFor('fresh')`）。
-対象がエントリ文書の線形ストリーム上のシーンなら、ストリーム全体をそのシーン先頭から流し、シーン境界で `onSceneChange` を発火する（#777）。`?scene=` は `confinedSceneIds` が閉じ込め外のシーンに入る境界で終劇にする（従来と同じ。`?scene=` の対象 script の全シーンは在圏なので、同一ファイル内の続きは流れる）。`?debug_scene=` は後続のシーンへ流れる。
+対象がエントリ文書の線形ストリーム上のシーンなら、ストリーム全体をそのシーン先頭から流し、シーン境界で `onSceneChange` を発火する（#777）。`?scene=` は、エントリ以外のファイルのシーンを指すときだけ confinement が付くので線形連結の対象外（そのシーンの末尾で終劇）。エントリのシーンを指す `?scene=` は confinement なしで後続へ流れる。`?debug_scene=` も後続のシーンへ流れる。閉じ込め外のシーン境界に入ったら終劇にする処理は、防御として残してある。
 
 **confinement（在圏）+ 終劇**: 単独埋め込みは対象 script ファイルの外（hub・他ファイル）へ
 choice で漏れてはいけない（theo-hayami #20: 他ファイルへの遷移は choice ではなく埋め込み外側の
