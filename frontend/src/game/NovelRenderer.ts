@@ -347,7 +347,7 @@ export class NovelRenderer {
    * `rawEvents` は「今どのルートを再生中か」を表す（エントリ文書本来の events を持つ `SceneIndex` とは別物）。
    * ページ分割そのもの（`getNovelPages` / `getAdvSentencePages`）はスタイル設定に依存するのでレンダラに残す。
    */
-  private cursor = new PlaybackCursor()
+  private readonly cursor = new PlaybackCursor()
 
   /**
    * 再生が開始済みか (#768)。fluid 再マウントの引き継ぎ判定に使う。未開始のスナップショットは
@@ -684,7 +684,7 @@ export class NovelRenderer {
   private time: TimeController = defaultTimeController
 
   /** シーン索引・エントリ文書・遅延ロード・線形区間 (#823)。再生中の配列（rawEvents）は持たない */
-  private sceneIndex = new SceneIndex()
+  private readonly sceneIndex = new SceneIndex()
 
   /** セーブマネージャー */
   private saveManager: SaveManager = new SaveManager()
@@ -4217,6 +4217,7 @@ export class NovelRenderer {
 
     // 履歴を指定位置まで切り詰める（アンドゥスタック方式: 戻った地点から再進行すると新しい履歴が積まれる）
     const targetState = this.cursor.truncateHistory(historyIndex)
+    if (!targetState) return
     this.applyState(targetState)
     this.render()
   }
