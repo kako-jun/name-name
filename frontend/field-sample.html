@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>一枚絵フィールドサンプル (dev)</title>
+    <style>
+      body {
+        margin: 0;
+        background: #1a1a1a;
+        color: #ddd;
+        font: 13px/1.5 sans-serif;
+      }
+      #toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        align-items: center;
+        padding: 8px 12px;
+        background: #2a2a2a;
+      }
+      #toolbar label {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+      }
+      #guide {
+        padding: 6px 12px;
+        color: #cc8;
+      }
+      #info {
+        padding: 4px 12px;
+        font-family: monospace;
+        color: #9c9;
+        white-space: pre-wrap;
+      }
+      #error {
+        padding: 6px 12px;
+        color: #fff;
+        background: #a22;
+        white-space: pre-wrap;
+      }
+      #error[hidden] {
+        display: none;
+      }
+      #stage {
+        padding: 8px 12px;
+      }
+      #stage canvas {
+        display: block;
+        max-width: 100%;
+        height: auto !important;
+        touch-action: none;
+        user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar">
+      <label><input type="checkbox" id="tb-debug" />歩行マスクと足元を表示</label>
+      <button id="tb-force-battle">今すぐエンカウント（確認用）</button>
+    </div>
+    <div id="guide">
+      操作: 矢印キー /
+      WASD（斜めも可）で歩く。スマホは画面を押し続ける（ドラッグ）と、指の方向へ歩く。絵の端の道に出ると隣の絵へ移る。歩いているとランダムに戦闘になり、終わると同じ位置に戻る。
+    </div>
+    <div id="error" hidden></div>
+    <div id="info"></div>
+    <div id="stage"></div>
+    <script type="module" src="/src/fieldSample/main.ts"></script>
+  </body>
+</html>
