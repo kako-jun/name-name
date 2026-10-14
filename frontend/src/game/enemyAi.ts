@@ -89,7 +89,10 @@ const TARGETS: Record<string, TargetSpec> = {
   自分: 'self',
 }
 
-/** `対象=` が特技の相対対象を上書きする先。`ランダム` / `HP最小` は `相手単体` で、相手は chooseEnemyAction が選ぶ */
+/**
+ * `対象=` が特技の相対対象を上書きする先。`ランダム` / `HP最小` は `相手単体` で、相手は chooseEnemyAction が選ぶ。
+ * 上書きするのは特技の対象が単体（`相手単体` / `仲間単体`）のときだけで、その判定はエンジン側（`相手全体` / `仲間全体` / `自分` の特技は上書きしない）
+ */
 const TARGET_OVERRIDE: Record<TargetSpec, string> = {
   random: '相手単体',
   'lowest-hp': '相手単体',
@@ -149,6 +152,8 @@ function parseCandidate(raw: string): Candidate | string {
     weight = Number(w)
   }
   if (name === '') return '候補の名前が空です'
+  // 名前にスペースがあるのは、未知のキー（例: `墨 ほげ=1`）が候補に連結されたとき。特技 id にスペースは使えない
+  if (/\s/.test(name)) return `候補 '${name}' にスペースが含まれています（未知のキーの可能性）`
   const isAttack = name === 'こうげき' || name === 'attack'
   return { skillId: isAttack ? null : name, weight }
 }

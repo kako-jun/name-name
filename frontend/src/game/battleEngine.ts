@@ -117,6 +117,8 @@ export interface BattleState {
 }
 
 const LOG_MAX = 30
+/** 特技の対象の相対表現 (#834)。これ以外の値・省略は相手単体の扱い */
+const SKILL_TARGETS = ['相手単体', '相手全体', '自分', '仲間単体', '仲間全体']
 const EVENT_MAX = 30
 
 /** ATB の進行方式 (#205)。`wait` = コマンド選択中は時間停止（既定）、`active` = 止めない */
@@ -177,6 +179,8 @@ export class BattleEngine {
   private atbHold = false
   private atbWaitScope: AtbWaitScope = 'command'
   private skills: Record<string, SkillExecution>
+  /** 見つからない特技 id の警告を出した印（1 戦闘に 1 度だけ） */
+  private warnedSkills = new Set<string>()
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -665,12 +669,20 @@ export class BattleEngine {
   ): boolean {
     const skill = hasOwn(this.skills, choice.skillId) ? this.skills[choice.skillId] : undefined
     if (!skill) {
-      console.warn(
-        `[name-name] 行動: の特技 '${choice.skillId}' が見つからないため通常攻撃にします`
-      )
+      // 同じ id は 1 戦闘に 1 度だけ警告する（敵の行動のたびに出さない）
+      if (!this.warnedSkills.has(choice.skillId)) {
+        this.warnedSkills.add(choice.skillId)
+        console.warn(
+          `[name-name] 行動: の特技 '${choice.skillId}' が見つからないため通常攻撃にします`
+        )
+      }
       return false
     }
-    const exec = choice.targetOverride ? { ...skill, target: choice.targetOverride } : skill
+    // `対象=` の上書きは特技の対象が単体のときだけ（全体・自分の特技はそのまま。未知・省略は相手単体の扱い）
+    const t = typeof skill.target === 'string' ? skill.target.trim() : ''
+    const isSingle = t === '相手単体' || t === '仲間単体' || !SKILL_TARGETS.includes(t)
+    const exec =
+      choice.targetOverride && isSingle ? { ...skill, target: choice.targetOverride } : skill
     return this.performSkill({ side: 'enemy', index: enemyIndex }, exec, choice.target)
   }
 

@@ -32,7 +32,7 @@
   ],
   "enemies": [
     {
-      "id": "ultros",
+      "id": "kraken",
       "name": "タコの化け物",
       "hp": 120,
       "atk": 12,

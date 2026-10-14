@@ -879,6 +879,7 @@ export class RaycastRenderer {
           gold: def.gold,
           sprite: def.sprite,
           ...posesField(def.poses),
+          ...(def.actions && def.actions.length > 0 ? { actions: [...def.actions] } : {}),
         }
       : {
           id: 'slime',
