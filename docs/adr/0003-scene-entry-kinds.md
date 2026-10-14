@@ -411,3 +411,23 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **依存。** `TransitionState` は DOM / Pixi / レンダラ / シーン内容を知らず、`NovelRenderer` を import しない。タイマーはコンストラクタで注入した `TimeController` を使う。`JUMP_CHAIN_LIMIT` は `TransitionState.ts` の export になった。
 - **テスト。** private への直接アクセスは `src/test/rendererInternals.ts` の `exposeTransitionFields`（実体の `_` 付きフィールドへ委譲、存在チェック付き）に集約した。状態機械の単体テスト（`TransitionState.test.ts`。旧 `armJump` 等のオラクルとの等価性照合を含む）と、レンダラとの結線テスト（`onStall` によるスキップ解除・選択肢確定直後の抑制）を同じ PR で追加した。
 - 以後の #826（#735 5/8, `SceneEntryController`）は `TransitionState` をコンストラクタ注入で使う。
+
+## #826 での追記（2026-10-15、#735 5/8）
+
+「単一入口 `enterScene`」とその適用・失敗処理を、`NovelRenderer` から `frontend/src/game/SceneEntryController.ts` に分けた。**実装の置き場は `SceneEntryController`** である。挙動と本 ADR の契約は変えていない。本文中の `enterScene` 等は、次のとおり読み替える。
+
+| 旧（レンダラの private） | 新 |
+| --- | --- |
+| `enterScene(req)` | `SceneEntryController.enter(req)`（手順 1〜5 とそれぞれの順序はそのまま） |
+| `runEntry(req)` | `SceneEntryController.run(req)`（発火して忘れる呼び出し元用） |
+| `jumpToScene(id)` / `startFrom(opts)` | 公開 API とシグネチャ・戻り値はレンダラに残り、`SceneEntryController.jumpTo(id)` / `startFrom(opts)`（オプションの整形）へ委譲する薄いラッパー |
+| `restoreSnapshot` / `loadFromSaveData` | レンダラに残る（`ensureContext()` と `SaveSlotData` の変換の後で `entry.enter({ kind: 'restore', ... })`） |
+| `restoreEntryStream` / `failApply` / `handleApplyError` / `finishEntry` / `applyFresh` / `checkRestorePosition` / `warnEntryFailure` / `failEntry` / `startScene` | `SceneEntryController` の private メソッド |
+| `confinedSceneIds` | `SceneEntryController` が唯一の書き手（getter `confinedSceneIds`。レンダラは読むだけ） |
+| `stallJump()` | 呼び出しが `SceneEntryController` の中だけになったため、レンダラのラッパーは削除し `transition.stall()` を直接呼ぶ |
+| `rederiveTransitionAtCurrentPosition()` | レンダラに残る（`processDirective` を呼ぶため）。Host の `rederiveTransition` 経由で呼ばれる |
+
+- **Host 越しの適用。** コントローラは `NovelRenderer` を import しない。「何を描くか」は、コントローラが定義する `EntryHost`（8 メソッド: `isActive` / `endStory` / `applyFreshContext` / `startEvents` / `restoreToScene` / `notify` / `rederiveTransition` / `isTextPaginated`）に委譲し、レンダラがオブジェクトとして渡す（`implements` にしないので、Host のメソッドはレンダラの公開 API にならない）。`SceneIndex`（引き当て）・`TransitionState`（世代・入場中ゲート・Jump 予約）・`PlaybackCursor`（`playbackStarted` の読み取りのみ）は、コンストラクタ注入された参照として使う。
+- **手順の順序と同期の契約は不変。** 世代捕捉（`beginEntry`）→ confinement 判定 → 解決 → 適用前の文脈確定 → 適用 → 後処理。読み込み済みのシーンへの入場は同期のまま適用する。`await` の後の `superseded` 判定（世代と `isActive`）は `enter` の1か所だけ。
+- **適用前の文脈確定の分担。** 新規開始では `confinedSceneIds` の置き換え（コントローラ）→ flags の置換と `storyEnded = false`（Host の `applyFreshContext`）→ `consecutiveJumps = 0`（`transition.resetChain()`）の順で、いずれも適用より前に済ませる。`storyEnded = false` は、通常の入場でも `startEvents` が適用の前に行う（先回り終劇 #398 の二重発火ガード）。スナップショットの復元は `restoreToScene` の `presetStoryEnded` で、適用の前に `storyEnded` を直接セットする（#460）。
+- **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（`confinedSceneIds` は `exposeEntryFields`、入場の内部メソッドを `vi.spyOn` する場合は `entryControllerOf`）。
