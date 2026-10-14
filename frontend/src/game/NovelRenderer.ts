@@ -130,6 +130,7 @@ import {
   parseColorToNumber,
   resolveAssetUrl,
   saveSlotToGameState,
+  gameStateToSaveSlot,
   resolveFontFamily,
   formatCounterText,
   computeSeekBarPosition,
@@ -6470,34 +6471,11 @@ export class NovelRenderer {
     // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
     const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
 
-    const snapshot = this.getSnapshot()
-    const data: SaveSlotData = {
+    const data = gameStateToSaveSlot(this.getSnapshot(), {
       slot: -1, // クイックセーブはスロット番号不使用
-      sceneId: snapshot.sceneId,
-      eventIndex: snapshot.eventIndex,
-      textIndex: snapshot.textIndex,
-      sentenceIndex: snapshot.sentenceIndex,
-      flags: snapshot.flags,
-      backgroundPath: snapshot.backgroundPath,
-      backgroundColor: snapshot.backgroundColor,
-      backgroundFade: snapshot.backgroundFade,
-      backgroundBrightness: snapshot.backgroundBrightness,
-      video: snapshot.video,
-      eventImage: snapshot.eventImage,
-      backgroundBoards: snapshot.backgroundBoards,
-      props: snapshot.props,
-      spotlight: snapshot.spotlight,
-      curtain: snapshot.curtain,
-      isBlackout: snapshot.isBlackout,
-      characters: snapshot.characters,
-      currentBgmPath: snapshot.currentBgmPath,
-      cameraMode: snapshot.cameraMode,
-      cameraOrientation: snapshot.cameraOrientation,
-      cameraElevation: snapshot.cameraElevation,
-      paperDollOutline: snapshot.paperDollOutline,
       savedAt: new Date().toISOString(),
       sceneName,
-    }
+    })
     this.saveManager.quickSave(data)
     if (origin === 'quick') this.showToast('クイックセーブしました')
     return true
@@ -6587,34 +6565,11 @@ export class NovelRenderer {
       // quickSave と共通のシーンタイトル解決 (#260)。
       const sceneName = resolveSceneTitle(this.allScenes, this.getPlayheadSceneId())
 
-      const snapshot = this.getSnapshot()
-      const data: SaveSlotData = {
+      const data = gameStateToSaveSlot(this.getSnapshot(), {
         slot,
-        sceneId: snapshot.sceneId,
-        eventIndex: snapshot.eventIndex,
-        textIndex: snapshot.textIndex,
-        sentenceIndex: snapshot.sentenceIndex,
-        flags: snapshot.flags,
-        backgroundPath: snapshot.backgroundPath,
-        backgroundColor: snapshot.backgroundColor,
-        backgroundFade: snapshot.backgroundFade,
-        backgroundBrightness: snapshot.backgroundBrightness,
-        video: snapshot.video,
-        eventImage: snapshot.eventImage,
-        backgroundBoards: snapshot.backgroundBoards,
-        props: snapshot.props,
-        spotlight: snapshot.spotlight,
-        curtain: snapshot.curtain,
-        isBlackout: snapshot.isBlackout,
-        characters: snapshot.characters,
-        currentBgmPath: snapshot.currentBgmPath,
-        cameraMode: snapshot.cameraMode,
-        cameraOrientation: snapshot.cameraOrientation,
-        cameraElevation: snapshot.cameraElevation,
-        paperDollOutline: snapshot.paperDollOutline,
         savedAt: new Date().toISOString(),
         sceneName,
-      }
+      })
       this.saveManager.save(slot, data)
     })
   }
