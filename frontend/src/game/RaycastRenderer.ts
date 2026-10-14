@@ -1072,7 +1072,7 @@ export class RaycastRenderer {
     this.lastTickMs = now
 
     // 戦闘中の時間を進める。ATB (#205) はゲージ（演出中も進む）、`battle_presentation: ff` (#745) は演出（モーション・ダメージ数字）。
-    // 従来ターン制かつ dq の BattleScreen.tick だけが何もしない。
+    // 勝利・全滅を読ませる待機 (#745 分割4) も tick で進むので、dq の従来ターン制でも毎フレーム呼ぶ（呼ばないと戦闘画面が閉じない）。
     // 設定オーバーレイ中は入力と同様に進行も止める (#784)
     if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
 

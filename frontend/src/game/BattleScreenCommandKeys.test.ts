@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { COMMAND_DEFAULTS, type CommandId } from './battleCommands'
 import type { BattleEntity } from './spellDsl'
 
@@ -183,7 +184,9 @@ describe('十字キー: 無視する入力', () => {
       onClose,
     })
     created.push(s)
-    press('ArrowUp') // 実際に たたかう が決定され勝利 → onClose
+    press('ArrowUp') // 実際に たたかう が決定され勝利 → 勝敗メッセージを読ませる待機のあと onClose (#745)
+    expect(onClose).not.toHaveBeenCalled()
+    s.tick(RESULT_HOLD_DQ_MS)
     expect(onClose).toHaveBeenCalledTimes(1)
     press('ArrowDown')
     press('ArrowUp')

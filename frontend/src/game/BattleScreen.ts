@@ -49,6 +49,14 @@ import {
 } from 'pixi.js'
 import { ATB_GAUGE_MAX, BattleEngine } from './battleEngine'
 import {
+  advanceResultElapsed,
+  canSkipResultHold,
+  isResultHoldDone,
+  resultHoldMs,
+  resultOutcomeOf,
+  windowWord,
+} from './battleResult'
+import {
   crossKeyToCommandId,
   resolveCommandSpecs,
   type CommandId,
@@ -277,7 +285,7 @@ export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void 
 }
 
 export interface BattleScreenOptions {
-  /** バトル終了（victory / defeat / escaped）時に呼ばれる */
+  /** バトル終了（victory / defeat / escaped）時に呼ばれる。victory / defeat は決着後に読ませる待機（battleResult.ts）を置いてから (#745) */
   onClose?: (outcome: 'victory' | 'defeat' | 'escaped') => void
   /**
    * 戦闘レイアウト (#736)。`front`（既定）= 従来の Undertale 風正面配置（先頭 1 人のみ表示）、
@@ -495,6 +503,15 @@ export class BattleScreen extends Container {
   private atbBarRects: Array<{ x: number; y: number; w: number; h: number }> = []
   /** onClose を 1 回だけ呼ぶためのフラグ（ATB は tick でも戦闘が終わる） */
   private closedFlag = false
+  /** 勝敗が決まって演出・ダメージ数字・ログのタイプ表示が終わったあと、閉じるまでに読ませている経過時間 (ms)。null = まだ待機を始めていない (#745) */
+  private resultElapsed: number | null = null
+  /** 勝敗の待機中だけ画面全体のタップを受けているか (#745) */
+  private resultTapArmed = false
+  /** 待機に入る前の eventMode（閉じる時に戻す） */
+  private eventModeBeforeResult: Container['eventMode'] | undefined
+  private resultTapHandler = (): void => this.skipResultHold()
+  /** 勝敗の待機を決定キーで飛ばすリスナー (#745)。destroy で必ず外す */
+  private resultKeyListener: ((e: KeyboardEvent) => void) | null = null
   /** tick で表示の全更新（refresh）が要るかを見る前回の署名 (#205) */
   private atbSignature = ''
   private visibleLogLines = LOG_VISIBLE_LINES
@@ -624,6 +641,7 @@ export class BattleScreen extends Container {
     this.detachCrossKeys()
     this.engine.setAtbHold(false)
     if (this.menuEnabled) this.engine.setAtbWaitScope('command')
+    this.detachResultSkip()
     for (const v of [...this.enemyViews, ...this.partyViews]) {
       v.acrylicPlate?.destroy()
       v.acrylicShadow?.destroy()
@@ -1021,6 +1039,8 @@ export class BattleScreen extends Container {
   redraw(screenWidth: number, screenHeight: number): void {
     this.screenWidth = screenWidth
     this.screenHeight = screenHeight
+    // 全画面のタップ領域は勝敗の待機中だけ（通常時に持つと子のコマンドボタンへのタップを奪う）
+    if (this.resultTapArmed) this.hitArea = new Rectangle(0, 0, screenWidth, screenHeight)
     this.layout()
     this.refresh()
   }
@@ -1053,27 +1073,96 @@ export class BattleScreen extends Container {
     this.closeIfOver()
   }
 
+  /**
+   * 勝敗の待機（最後のログ・勝利メッセージ・victory ポーズを読ませる時間）を決定操作・タップで飛ばす (#745)。
+   * 待機を始めた直後は受けない（戦闘を決めたタップが同じ瞬間に届いて、読ませる前に閉じるのを防ぐ）。
+   */
+  private skipResultHold(): void {
+    if (this.closedFlag || this.resultElapsed === null || !canSkipResultHold(this.resultElapsed))
+      return
+    if (this.opts.isInputSuspended?.()) return
+    this.resultElapsed = resultHoldMs(this.presentation)
+    this.closeIfOver()
+  }
+
+  /**
+   * 勝敗の待機中だけ、画面全体のタップ受け口と決定キー（Enter / Space / Z）のリスナーを付ける (#745)。
+   * タップ受け口（eventMode static + 全画面 hitArea）は通常時には持たない: 持つと子のコマンドボタンへのタップが届かなくなる。
+   * 待機中はコマンドが無効（isOver）なので干渉しない。
+   */
+  private attachResultSkip(): void {
+    if (!this.resultTapArmed) {
+      this.resultTapArmed = true
+      this.eventModeBeforeResult = this.eventMode
+      this.eventMode = 'static'
+      this.hitArea = new Rectangle(0, 0, this.screenWidth, this.screenHeight)
+      this.on('pointertap', this.resultTapHandler)
+    }
+    if (this.resultKeyListener || typeof globalThis.addEventListener !== 'function') return
+    this.resultKeyListener = (e: KeyboardEvent) => {
+      if (this.destroyedFlag || this.closedFlag || this.resultElapsed === null) return
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return
+      if (isEditableTarget(e.target)) return
+      if (this.opts.isInputSuspended?.()) return
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'z' && e.key !== 'Z') return
+      e.preventDefault()
+      this.skipResultHold()
+    }
+    globalThis.addEventListener('keydown', this.resultKeyListener)
+  }
+
+  private detachResultSkip(): void {
+    if (this.resultTapArmed) {
+      this.resultTapArmed = false
+      this.off('pointertap', this.resultTapHandler)
+      this.eventMode = this.eventModeBeforeResult ?? 'passive'
+      this.hitArea = null
+    }
+    if (this.resultKeyListener) globalThis.removeEventListener('keydown', this.resultKeyListener)
+    this.resultKeyListener = null
+  }
+
   /** 戦闘が終わっていれば onClose を 1 回だけ呼ぶ */
   private closeIfOver(): void {
     if (this.closedFlag || !this.engine.isOver()) return
     // ff: 最後の一撃の演出（のけぞり・倒れ・ダメージ数字）を見せ切ってから閉じる (#745)
     if (this.isPresenting() || this.popups.length > 0) return
+    // 勝利・全滅は、最後のログ（タイプ表示が終わるまで）・勝利メッセージ・victory ポーズを読ませてから閉じる。逃走はすぐ閉じる (#745)
+    if (resultOutcomeOf(this.engine.getState().phase)) {
+      if (this.logTypewriter === 'on' && isBattleLogTyping(this.logTracker)) return
+      if (this.resultElapsed === null) {
+        this.resultElapsed = 0
+        this.attachResultSkip()
+        this.refresh() // メッセージ窓（ff）と victory ポーズを出す
+      }
+      if (!isResultHoldDone(this.resultElapsed, resultHoldMs(this.presentation))) return
+    }
     this.closedFlag = true
+    this.detachResultSkip()
     const outcome = this.engine.getState().phase
     // outcome は victory / defeat / escaped のいずれか（isOver がガード）
     this.opts.onClose?.(outcome as 'victory' | 'defeat' | 'escaped')
   }
 
   /**
-   * 時間を deltaMS 進める (#205)。ATB のときだけ働く（従来ターン制は何もしない）。
+   * 時間を deltaMS 進める (#205)。ATB のゲージ・ff の演出・勝敗を読ませる待機 (#745) を進める。
    * 時計は持たず、呼び出し側（本編の ticker / サンプルの ticker）が経過時間を渡す。
+   * **全ホストは戦闘中、毎フレーム tick を呼ぶこと**（呼ばないと勝利・全滅の待機が終わらず、画面が閉じない。
+   * スキップの猶予も tick の総和で数えるので、タップ・決定キーでも抜けられない）。
    * 状態が変わった（ログ・フェーズ・コマンド待ちの顔ぶれ）ときだけ全表示を更新し、毎回ゲージ棒だけ描き直す。
    */
   tick(deltaMS: number): void {
     if (this.destroyedFlag || this.closedFlag) return
+    // 勝敗の待機は演出方式・ATB に関わらず時間を進める (#745)
+    if (this.resultElapsed !== null) {
+      this.resultElapsed = advanceResultElapsed(this.resultElapsed, deltaMS)
+    }
     const ff = this.presentation === 'ff'
     const atb = !!this.engine.getState().atb
-    if (!ff && !atb) return
+    if (!ff && !atb) {
+      this.closeIfOver()
+      return
+    }
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
     if (ff) this.advancePresentation(deltaMS)
     if (atb) {
@@ -2168,7 +2257,9 @@ export class BattleScreen extends Container {
   private updateMessageWindow(): void {
     const m = this.messageText
     if (!m) return
-    const word = messageWindowText(this.playback.active?.event.label)
+    const resultOutcome =
+      this.resultElapsed !== null ? resultOutcomeOf(this.engine.getState().phase) : null
+    const word = windowWord(messageWindowText(this.playback.active?.event.label), resultOutcome)
     this.logPanel.visible = word !== null
     m.visible = word !== null
     if (word === null) return

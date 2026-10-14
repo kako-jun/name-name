@@ -20,6 +20,7 @@ import {
 import type { PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import type { BattleEntity } from './spellDsl'
+import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { DIALOG_JUST_SHOWN_GUARD_MS, attachTouchInput } from './touchInput'
 
 function member(id: string, over: Partial<PartyMemberDef> = {}): PartyMemberDef {
@@ -287,6 +288,7 @@ describe('openFieldBattle', () => {
       engine: { getState(): { party: { id: string }[]; atb?: unknown } }
       opts: Record<string, unknown>
       handleCommand(id: string): void
+      tick(ms: number): void
     }
     return { stage, onClosed, gate, screen, s }
   }
@@ -344,6 +346,8 @@ describe('openFieldBattle', () => {
     gate.trackKeyDown('ArrowDown')
     const { stage, screen, onClosed, s } = open({ gate })
     s.handleCommand('attack') // hp1 の敵を 1 撃で倒して勝利
+    expect(stage.children).toContain(screen) // 勝利を読ませる待機中は畳まない (#745)
+    s.tick(RESULT_HOLD_DQ_MS)
     expect(stage.children).not.toContain(screen)
     expect(onClosed).toHaveBeenCalledTimes(1)
     expect(gate.isReleaseGated('ArrowDown')).toBe(true)
@@ -352,7 +356,9 @@ describe('openFieldBattle', () => {
   it('終了後にコマンドを再入力しても onClosed は 2 回目を呼ばない（二重終了なし）', () => {
     const { onClosed, s } = open()
     s.handleCommand('attack')
+    s.tick(RESULT_HOLD_DQ_MS)
     s.handleCommand('attack')
+    s.tick(RESULT_HOLD_DQ_MS)
     expect(onClosed).toHaveBeenCalledTimes(1)
   })
 
@@ -437,6 +443,7 @@ describe('openFieldBattle: 終了・強制終了・タップ抑止 (#784)', () =
     const s = screen as unknown as {
       opts: { onClose(o: string): void }
       handleCommand(id: string): void
+      tick(ms: number): void
     }
     return { stage, screen, onClosed, s }
   }
@@ -448,6 +455,7 @@ describe('openFieldBattle: 終了・強制終了・タップ抑止 (#784)', () =
   it('onClosed に戦闘の結果が渡る', () => {
     const { s, onClosed } = open()
     s.handleCommand('attack')
+    s.tick(RESULT_HOLD_DQ_MS)
     expect(onClosed).toHaveBeenCalledWith('victory')
   })
 

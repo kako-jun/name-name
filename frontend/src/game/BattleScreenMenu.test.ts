@@ -595,3 +595,57 @@ describe('スクロール記号のタップ (#204 レビュー B1)', () => {
     expect((I(s).menuStack[0] as { top: number }).top).toBe(before + 1)
   })
 })
+
+describe('勝敗の待機 (#820) との干渉', () => {
+  const ACTIVE = {
+    atb: { mode: 'active' as const, initialGauges: { party: [1000, 0], enemies: [0, 0] } },
+    rng: () => 0,
+  }
+  interface Hold {
+    resultElapsed: number | null
+    resultTapArmed: boolean
+    hitArea: unknown
+    eventMode: string
+  }
+  const H = (s: BattleScreen) => s as unknown as Hold
+
+  it('通常時はタップ受け口（全画面 hitArea）を持たず、候補窓のタップを妨げない', () => {
+    const { s, engine } = build({}, ACTIVE)
+    press('ArrowLeft')
+    expect(H(s).resultTapArmed).toBe(false)
+    expect(H(s).hitArea).toBeFalsy()
+    expect(H(s).eventMode).not.toBe('static')
+    // 行のタップがそのまま決定として届く
+    const rows: Container[] = []
+    const walk = (c: Container) => {
+      for (const ch of c.children as Container[]) {
+        if (ch.eventMode === 'static' && ch.hitArea && ch.cursor === 'pointer') rows.push(ch)
+        walk(ch)
+      }
+    }
+    walk(I(s).menuLayer!)
+    rows[0].emit('pointertap', {} as never)
+    expect(types(s)).toEqual(['list', 'target'])
+    expect(engine.isOver()).toBe(false)
+  })
+
+  it('勝敗が確定したら窓が閉じて待機に入り、待機中は候補窓が開かず Enter / Z は待機のスキップだけに働く', () => {
+    const { s, engine } = build({}, ACTIVE)
+    press('ArrowLeft')
+    press('Enter') // 対象選択まで進めておく
+    expect(types(s)).toEqual(['list', 'target'])
+    for (const e of engine.getState().enemies) e.hp = 0
+    s.tick(50)
+    expect(engine.isOver()).toBe(true)
+    expect(types(s)).toEqual([])
+    expect(H(s).resultElapsed).not.toBeNull() // 待機に入った
+    expect(H(s).resultTapArmed).toBe(true)
+    const mp = engine.getState().party[0].mp
+    press('ArrowLeft') // 待機中はコマンドを受けず、窓も開かない
+    press('Enter')
+    press('z')
+    expect(types(s)).toEqual([])
+    expect(engine.getState().party[0].mp).toBe(mp)
+    expect(I(s).menuLayer!.visible).toBe(false)
+  })
+})
