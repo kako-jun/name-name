@@ -286,9 +286,13 @@ async function main(): Promise<void> {
     pointer = toScene(ev)
   }
   const onPointerMove = (ev: PointerEvent) => {
+    // 歩きの入力に採用した指以外の move は無視する（activePointerId が null なら入力なし）
+    if (ev.pointerId !== activePointerId) return
     if (pointer && !battle) pointer = toScene(ev)
   }
-  const endPointer = () => {
+  const endPointer = (ev: PointerEvent) => {
+    // 採用していない指の up/cancel で歩きを止めない
+    if (ev.pointerId !== activePointerId) return
     pointer = null
     activePointerId = null
   }
