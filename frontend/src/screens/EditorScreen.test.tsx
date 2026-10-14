@@ -44,6 +44,8 @@ let editedDoc: EventDocument = makeDoc(['hub', 'S1'])
 let emitted = ''
 // emitMarkdown を遅延させたいとき用（null なら即時）
 let emitGate: Promise<void> | null = null
+// true の間、emitMarkdown が失敗する
+let emitFail = false
 vi.mock('../components/CanvasEditor', () => ({
   default: (props: { onDocChange: (d: EventDocument) => void }) => (
     <button data-testid="edit-doc" onClick={() => props.onDocChange(editedDoc)} />
@@ -52,7 +54,9 @@ vi.mock('../components/CanvasEditor', () => ({
 vi.mock('../components/MapEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/NPCEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/RPGPlayer', () => ({ default: () => <div /> }))
-vi.mock('../components/VideoExportModal', () => ({ default: () => <div /> }))
+vi.mock('../components/VideoExportModal', () => ({
+  default: () => <div data-testid="video-export-modal" />,
+}))
 vi.mock('../wasm/parser', () => ({
   parseMarkdown: async (md: string) => {
     parsedInputs.push(md)
@@ -61,6 +65,7 @@ vi.mock('../wasm/parser', () => ({
   },
   emitMarkdown: async () => {
     if (emitGate) await emitGate
+    if (emitFail) throw new Error('emit failed')
     return emitted
   },
 }))
@@ -720,6 +725,7 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     parsed = makeDoc(['hub', 'S1'])
     editedDoc = makeDoc(['hub', 'S1', 'S2'])
     emitGate = null
+    emitFail = false
   })
   const draftKey = 'name-name:editor-draft:p:script.md'
 
@@ -995,5 +1001,63 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     expect(screen.getByRole('tab', { name: /^script\.md/ }).getAttribute('aria-selected')).toBe(
       'true'
     )
+  })
+
+  it('書き出しモーダルを開いたままモードを切り替えると閉じ、タブが押せる。play に戻ってもモーダルは閉じている', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    getContentsMock.mockImplementation(async () => ({ content: '# hub', sha: 'sha' }))
+    renderEditor()
+    await screen.findByRole('tab', { name: /^other\.md/ })
+    fireEvent.click(await screen.findByRole('button', { name: /Play Mode/i }))
+    fireEvent.click(await screen.findByRole('button', { name: '動画エクスポート' }))
+    expect(screen.getByTestId('video-export-modal')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Edit Mode/i }))
+    await waitFor(() =>
+      expect((screen.getByRole('tab', { name: /^other\.md/ }) as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Play Mode/i }))
+    await screen.findByRole('button', { name: '動画エクスポート' })
+    expect(screen.queryByTestId('video-export-modal')).toBeNull()
+  })
+
+  it('切替後に emit が失敗しても、切替先の表示を旧文書に戻さない', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    getContentsMock.mockImplementation(async (_p: string, path: string) => ({
+      content: path === 'other.md' ? '# B-server' : '# A-body',
+      sha: 'sha',
+    }))
+    parsedByMarkdown.set('# B-server', makeDoc(['B1']))
+    parsedByMarkdown.set('# A-body', makeDoc(['A1']))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderEditor()
+    await screen.findByRole('tab', { name: /^other\.md/ })
+    let releaseEmit: () => void = () => {}
+    emitGate = new Promise<void>((r) => {
+      releaseEmit = r
+    })
+    emitFail = true
+    editedDoc = makeDoc(['A1', 'EDITED'])
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    fireEvent.click(screen.getByRole('tab', { name: /^other\.md/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /^other\.md/ }).getAttribute('aria-selected')).toBe(
+        'true'
+      )
+    )
+    await new Promise((r) => setTimeout(r, 150))
+    await act(async () => {
+      releaseEmit()
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    // 切替先(other.md)の表示のまま: プレビューの索引は B1 だけ（A1 に戻されていない）
+    fireEvent.click(screen.getByRole('button', { name: /Play Mode/i }))
+    await waitFor(() => {
+      const index = playerProps[playerProps.length - 1].jumpSceneIndex as EventScene[]
+      expect(index.map((x) => x.id)).toEqual(['B1'])
+    })
   })
 })

@@ -186,6 +186,12 @@ function EditorScreen({
     }
   }, [allSceneIds, exportStartSceneId, exportEndSceneId])
 
+  // モードやタブを切り替えると書き出しモーダルはアンマウントされるので、開いている扱いも閉じる
+  // （残るとファイルタブが理由不明のまま無効になる）。
+  useEffect(() => {
+    setExportOpen(false)
+  }, [mode, editorTab])
+
   const handleStartVideoExport = useCallback(async () => {
     const renderer = novelRendererRef.current
     if (!renderer) {
@@ -306,6 +312,8 @@ function EditorScreen({
       setRawMarkdownPath(editedPath)
     } catch (err) {
       console.error('emitMarkdown failed:', err)
+      // emit の await 中に別の文書へ切り替わっていたら、表示は切替先のものなので戻さない
+      if (docPathRef.current !== editedPath) return
       setDoc(prev)
       setSaveError('Markdown生成に失敗したため変更を破棄しました')
     }
@@ -749,7 +757,7 @@ function EditorScreen({
   // 保留中の下書き書き込み。タイマー発火・タブ切替・アンマウントのいずれでも flushPendingDraft で確定する。
   // （従来は rawMarkdown の cleanup でタイマーごと捨てていたため、切替前 1 秒以内の編集が
   //  localStorage に残らなかった。#778 で他タブの下書きがプレビューの取得元になり表面化した）
-  const pendingDraftRef = useRef<{ key: string; markdown: string; initial: string } | null>(null)
+  const pendingDraftRef = useRef<{ key: string; markdown: string } | null>(null)
   const flushPendingDraft = useCallback(() => {
     if (draftSaveTimeoutRef.current !== null) {
       clearTimeout(draftSaveTimeoutRef.current)
@@ -781,10 +789,9 @@ function EditorScreen({
     const stale = pendingDraftRef.current
     if (stale && stale.key !== nextKey) {
       // 別文書の保留分が残っていたら（emit の await 中にタブが切り替わった等）、上書きで失う前に
-      // 積んだ時点の基準で確定する
+      // 下書きとして確定する（その文書の基準内容はここでは分からないので、常に退避する）
       try {
-        if (stale.markdown === stale.initial) localStorage.removeItem(stale.key)
-        else localStorage.setItem(stale.key, stale.markdown)
+        localStorage.setItem(stale.key, stale.markdown)
       } catch (error) {
         console.error('Failed to persist draft to localStorage:', error)
       }
@@ -792,7 +799,6 @@ function EditorScreen({
     pendingDraftRef.current = {
       key: nextKey,
       markdown: rawMarkdown,
-      initial: initialMarkdownRef.current,
     }
     draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
 
@@ -854,7 +860,6 @@ function EditorScreen({
         pendingDraftRef.current = {
           key: savedKey,
           markdown: rawMarkdownRef.current,
-          initial: savedContent,
         }
         if (draftSaveTimeoutRef.current === null) {
           draftSaveTimeoutRef.current = window.setTimeout(flushPendingDraft, 1000)
