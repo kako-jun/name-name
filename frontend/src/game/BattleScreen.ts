@@ -1325,8 +1325,6 @@ export class BattleScreen extends Container {
       commandCount: this.commands.length,
       commandLayout: this.commandLayout,
       partyRows: s.party.map((p) => p.row),
-      // 立ち絵の縦横比（未読み込み・色四角は undefined → 既定 0.5）。読み込み完了で layout し直される
-      partyAspects: this.partyViews.map((v) => this.layoutAspect(v)),
       // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
       enemyAspects: this.enemyViews.map((v) => this.layoutAspect(v)),
       depth: this.opts.depth,
@@ -1487,7 +1485,13 @@ export class BattleScreen extends Container {
     // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
     // 横長の敵 (#760) は枠の幅が高さより大きいので、正方形はその幅（長辺）にして下端を枠の下端に揃える
     const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
-    const box = acrylic ? Math.max(size, slot.width) : size
+    let box = acrylic ? Math.max(size, slot.width) : size
+    // 味方の枠は固定の基準縦横比 (#813)。枠より横に広い絵は、アクリルの正方形ごと縮めて枠の幅に収める（足元中央は不変）
+    if (acrylic && slot.width < size && view.sprite) {
+      const tex = view.baseVisual?.texture ?? view.sprite.texture
+      const a = tex.height > 0 ? tex.width / tex.height : 0
+      if (a > 0) box = Math.min(box, slot.width / a)
+    }
     view.baseX = acrylic ? slot.x - (box - slot.width) / 2 : slot.x
     view.baseY = acrylic ? slot.y + size - box : slot.y
     view.unit = size

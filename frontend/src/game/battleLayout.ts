@@ -71,7 +71,11 @@ export interface SideBattleLayoutInput {
   commandLayout?: CommandLayout
   /** 味方ごとの隊列 (#747)。味方の index 順。未指定・足りない分は前衛。`back` は右（敵から遠い側）へ半歩下げる */
   partyRows?: readonly (BattleRow | undefined)[]
-  /** 味方ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は `SIDE_DEFAULT_SPRITE_ASPECT` */
+  /**
+   * 【枠には使わない (#813)】味方の枠の幾何は誰がいるか・縦横比に依らず固定の基準縦横比
+   * `SIDE_PARTY_FRAME_ASPECT` で決める。各立ち絵は描画側で自分の枠に収める（contain）。
+   * `computeSideBattleLayout` は無視する
+   */
   partyAspects?: readonly (number | undefined)[]
   /** 敵ごとの立ち絵の縦横比（幅/高さ・#760）。未指定・足りない分は正方形（1） */
   enemyAspects?: readonly (number | undefined)[]
@@ -167,6 +171,12 @@ export const SIDE_PARTY_COMFORT_SHIFT_RATIO = 0.5
 export const SIDE_PARTY_MAX_HEIGHT = 320
 /** 立ち絵の縦横比（幅/高さ）の既定（未読み込み・色四角）と丸め範囲 */
 export const SIDE_DEFAULT_SPRITE_ASPECT = 0.5
+/**
+ * 側面戦闘の味方の枠に使う固定の基準縦横比 (#813)。人数・メンバー・各自の縦横比によらず枠の位置と大きさを
+ * 同じにするための値。sit-by-me の基本ポーズ(ready)の縦横比 0.68〜1.00（中央値 約 0.86）を踏まえ、
+ * 広すぎて立ち絵が小さくならない 0.8 とした。これより横長の絵は枠に収めて少し縮む
+ */
+export const SIDE_PARTY_FRAME_ASPECT = 0.8
 export const SIDE_PARTY_ASPECT_MIN = 0.2
 export const SIDE_PARTY_ASPECT_MAX = 1.5
 /** 奥行き (#747) の縮尺の下限（地平線に近い・地平線より上でも潰れない） */
@@ -287,7 +297,8 @@ export const SIDE_PARTY_MIN_SLOTS = 4
  * （ステータス欄の行順と一致）。縮尺は掛けない。立ち絵は縦長なので枠を縦長（幅 = 高さ × 縦横比）にし、
  * 味方どうしは**上下に重ねてよい**（下の人ほど手前＝後から描く）。
  *
- * - `aspects[i]`: 立ち絵の幅/高さ（読み込んだテクスチャ。未読み込み・不正は `SIDE_DEFAULT_SPRITE_ASPECT`=0.5、
+ * - `aspects[i]`: 枠の幅/高さ（`computeSideBattleLayout` は誰がいても固定の `SIDE_PARTY_FRAME_ASPECT` を渡す #813。
+ *   単体で使うときは立ち絵の縦横比。未読み込み・不正は `SIDE_DEFAULT_SPRITE_ASPECT`=0.5、
  *   `SIDE_PARTY_ASPECT_MIN`〜`MAX` に丸める）。`slot.size` は高さ、`slot.width` は幅
  * - 高さ h = min(SIDE_PARTY_MAX_HEIGHT, 領域高さ / (1 + (人数-1) * 行間隔下限比 0.3),
  *   領域幅 / (最大幅比 * (1 + 後衛予約) + (人数-1) * ずらし下限比 0.3))
@@ -716,24 +727,10 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const half = stage.w / 2
   const partyHalf: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
   // #813: 4 人のときの斜め一列の枠で求め、味方は上の枠から順に入れる。空き枠は何も描かない（最後に切り捨てる）
-  // 空き枠の隊列・縦横比は既定（前衛・既定の縦横比）にする。実在しない味方の値で枠が変わらないように
+  // 枠の縦横比は固定の基準縦横比。空き枠の隊列は前衛。誰がいるか・各自の縦横比で枠が変わらないように
   const partyRows = input.partyRows?.slice(0, partyCount)
-  // 空き枠の縦横比は実在メンバーの最大値で埋める（既定値が混ざって 4 人のときの枠とずれないように。0 人なら既定）
-  let partyAspects: (number | undefined)[] | undefined
-  if (input.partyAspects) {
-    partyAspects = []
-    let maxA = 0
-    for (let i = 0; i < partyCount; i++) {
-      const a = input.partyAspects[i]
-      const eff =
-        a === undefined || !Number.isFinite(a) || a <= 0
-          ? SIDE_DEFAULT_SPRITE_ASPECT
-          : Math.min(SIDE_PARTY_ASPECT_MAX, Math.max(SIDE_PARTY_ASPECT_MIN, a))
-      partyAspects.push(eff)
-      maxA = Math.max(maxA, eff)
-    }
-    for (let i = partyCount; i < slotCount; i++) partyAspects.push(maxA > 0 ? maxA : undefined)
-  }
+  // 枠の幾何は固定の基準縦横比で求める（誰がいるか・各自の縦横比に依らない）
+  const partyAspects: number[] = Array(slotCount).fill(SIDE_PARTY_FRAME_ASPECT)
   const halfSlots = computeFormation(partyHalf, slotCount, 'party', false, partyRows, partyAspects)
   const anyBack =
     !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')

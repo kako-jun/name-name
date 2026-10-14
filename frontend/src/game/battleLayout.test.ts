@@ -17,6 +17,7 @@ import {
   SIDE_COMMAND_TEXT_PADDING,
   SIDE_MAX_SPRITE_SIZE,
   SIDE_PARTY_MAX_HEIGHT,
+  SIDE_PARTY_FRAME_ASPECT,
   SIDE_PADDING,
   SIDE_STAGGER_RATIO,
   SIDE_STATUS_COMPACT_WIDTH,
@@ -986,10 +987,10 @@ describe('spec の例: ラベル幅の上限は一辺の 3 倍 (#736・#760 で�
   // 一辺 160px・ラベル 480px だった旧仕様の数値を、新仕様の値（味方人数ごとの敵領域の幅で頭打ち）に更新
   it.each([
     // #813: 味方 1〜3 人も 4 人のときと同じ枠（敵領域・下パネル）なので 4 人と同じ値
-    [1, 472, 717.4737],
-    [2, 472, 717.4737],
-    [3, 472, 717.4737],
-    [4, 472, 717.4737],
+    [1, 472, 637.89474],
+    [2, 472, 637.89474],
+    [3, 472, 637.89474],
+    [4, 472, 637.89474],
   ])('1280x720・party%d・敵 1 体: 一辺 %dpx・ラベル幅 %dpx (spec の例)', (p, size, labelW) => {
     const L = computeSideBattleLayout({ width: 1280, height: 720, partyCount: p, enemyCount: 1 })
     expect(L.enemies[0].size).toBeCloseTo(size, 3)
@@ -1093,7 +1094,7 @@ describe('縦長の stage は敵を下寄せにする (#760)', () => {
     for (const s of L.enemies) expect(s.y).toBeGreaterThanOrEqual(L.party[0].floor - EPS)
     for (const s of L.enemies) expect(inside(slotRect(s), L.stage)).toBe(true)
   })
-  it('360x640 の仕様値（リテラル）: 敵 1 体（縦横比 1.6）は (16, 281.3) から幅 164・高さ 102.5', () => {
+  it('360x640 の仕様値（リテラル）: 敵 1 体（縦横比 1.6）は (16, 270.985) から幅 164・高さ 102.5', () => {
     const L = computeSideBattleLayout({
       width: 360,
       height: 640,
@@ -1102,7 +1103,7 @@ describe('縦長の stage は敵を下寄せにする (#760)', () => {
       enemyAspects: [1.6],
     })
     expect(L.enemies[0].x).toBeCloseTo(16, 3)
-    expect(L.enemies[0].y).toBeCloseTo(281.3, 1)
+    expect(L.enemies[0].y).toBeCloseTo(270.985, 2)
     expect(L.enemies[0].width).toBeCloseTo(164, 3)
     expect(L.enemies[0].size).toBeCloseTo(102.5, 1)
   })
@@ -1481,9 +1482,9 @@ describe('縦長判定の境界と下げ幅の上限 (#760)', () => {
     expect(L.enemies[0].y).toBeCloseTo(y, 6)
   })
   it.each([
-    [360, 545, 203.0714286],
-    [400, 585, 220.2142857],
-    [500, 685, 263.0714286],
+    [360, 545, 192.73529],
+    [400, 585, 208.61765],
+    [500, 685, 248.32353],
   ])('%dx%d: 高さ+1（縦長）から敵は下寄せ（y=%f）', (w, h, y) => {
     const L = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 1 })
     expect(L.stage.h).toBe(L.stage.w + 1)
@@ -1493,10 +1494,10 @@ describe('縦長判定の境界と下げ幅の上限 (#760)', () => {
   // 下げ幅の上限: 領域の上端は stage.y + stage.h × 0.4 まで。仕様値（リテラル）
   it.each([
     // #813: 味方 1〜3 人は 4 人のときと同じ枠なので同じ y
-    [360, 640, 1, 250.5714286],
-    [360, 640, 2, 250.5714286],
-    [360, 640, 3, 250.5714286],
-    [400, 900, 1, 377.7142857],
+    [240, 640, 1, 252.58824],
+    [240, 800, 2, 332.58824],
+    [300, 900, 3, 376.41176],
+    [320, 900, 1, 374.35294],
   ])('%dx%d・味方 %d・敵 1: 上限が効く下寄せで y=%f', (w, h, p, y) => {
     const L = computeSideBattleLayout({ width: w, height: h, partyCount: p, enemyCount: 1 })
     expect(L.enemies[0].y).toBeCloseTo(y, 5)
@@ -1658,10 +1659,8 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
               w: L.stage.w / 2,
               h: L.stage.h,
             }
-            // #813: 4 人未満でも 4 枠ぶんで決まる（空き枠の隊列は前衛、縦横比は実在メンバーの最大値）
-            const given = aspects?.slice(0, n)
-            const fillA = given ? Math.max(...given.map((a) => a ?? 0.5)) : undefined
-            const padded = given ? [...given, ...Array(Math.max(0, 4 - n)).fill(fillA)] : undefined
+            // #813: 枠は固定の基準縦横比で 4 枠ぶん決まる（空き枠の隊列は前衛・縦横比は誰にも依らない）
+            const padded = Array(Math.max(4, n)).fill(SIDE_PARTY_FRAME_ASPECT)
             const ref = computeFormation(
               half,
               Math.max(4, n),
@@ -1682,7 +1681,7 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
       enemyCount: 1,
       partyRows: ['back', 'front', 'front', 'front'],
     })
-    expect(a.party[0].size).toBeCloseTo(99.4, 1)
+    expect(a.party[0].size).toBeCloseTo(78.095, 2)
     const b = computeSideBattleLayout({
       width: 360,
       height: 640,
@@ -1690,7 +1689,9 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
       enemyCount: 1,
       partyAspects: [1, 0.5, 0.5, 0.5],
     })
-    expect(b.party[0].size).toBeCloseTo(86.3, 1)
+    // 縦横比は枠に影響しない (#813): 縦横比なしと完全に同じ
+    const b0 = computeSideBattleLayout({ width: 360, height: 640, partyCount: 4, enemyCount: 1 })
+    expect(b.party).toEqual(b0.party)
     const c = computeSideBattleLayout({
       width: 800,
       height: 450,
@@ -1698,7 +1699,8 @@ describe('味方の大きさは敵領域の拡大で縮まない (#760・縦横�
       enemyCount: 1,
       partyAspects: [1.2, 0.4, 0.4, 0.4],
     })
-    expect(c.party[0].size).toBeCloseTo(123.2, 1)
+    const c0 = computeSideBattleLayout({ width: 800, height: 450, partyCount: 4, enemyCount: 1 })
+    expect(c.party).toEqual(c0.party)
   })
 })
 
@@ -1985,25 +1987,6 @@ describe('味方の枠は人数によらず4人のときと同じ (#813・縦横
     }
   )
 
-  it('空き枠の縦横比は実在メンバーの最大値で埋める（混在: 先頭 0.35 のみ → 全員 0.35 の 4 人と一致）', () => {
-    const full = computeSideBattleLayout({
-      width: 800,
-      height: 450,
-      partyCount: 4,
-      enemyCount: 1,
-      partyAspects: [0.35, 0.35, 0.35, 0.35],
-    })
-    const one = computeSideBattleLayout({
-      width: 800,
-      height: 450,
-      partyCount: 1,
-      enemyCount: 1,
-      partyAspects: [0.35],
-    })
-    expect(one.party[0].x).toBeCloseTo(full.party[0].x, 9)
-    expect(one.party[0].width).toBeCloseTo(full.party[0].width, 9)
-  })
-
   it('N1: 奥行き有効時、1 人のときの縮尺・位置が 4 人のときの party[0] と一致する', () => {
     const depth = { horizon: 0.3, perspective: 0.8 }
     for (const [w, h] of SIZES) {
@@ -2040,9 +2023,63 @@ describe('味方の枠は人数によらず4人のときと同じ (#813・縦横
     const four = computeSideBattleLayout({ width: 240, height: 640, partyCount: 4, enemyCount: 1 })
     const one = computeSideBattleLayout({ width: 240, height: 640, partyCount: 1, enemyCount: 1 })
     expect(four.stage.h).toBeGreaterThan(four.stage.w)
-    expect(four.enemies[0].y).toBeCloseTo(259.142857, 5)
+    expect(four.enemies[0].y).toBeCloseTo(252.58824, 5)
     expect(one.enemies[0].y).toBeCloseTo(four.enemies[0].y, 9)
     // 上限を超える下げ幅は許されない: 敵の上端は上限より下がりすぎない（領域の上端 = 上限）
     expect(four.enemies[0].y).toBeGreaterThanOrEqual(four.stage.y + four.stage.h * 0.4)
+  })
+})
+
+describe('味方の枠は誰がいるか・縦横比に一切依らない (#813)', () => {
+  const SIZES: [number, number][] = [
+    [360, 640],
+    [800, 450],
+    [1280, 720],
+    [568, 320],
+  ]
+  const all = [0.35, 0.9, 0.6, 0.5]
+  const geom = (s: { x: number; y: number; size: number; width: number }) => [
+    s.x,
+    s.y,
+    s.size,
+    s.width,
+  ]
+
+  it('縦横比が混在 [0.35,0.9,0.6,0.5]: party 1〜4 すべてで先頭の枠が一致し、party2 の 2 人目も party4 の 2 人目と一致する', () => {
+    for (const [w, h] of SIZES) {
+      const L = (n: number) =>
+        computeSideBattleLayout({
+          width: w,
+          height: h,
+          partyCount: n,
+          enemyCount: 2,
+          partyAspects: all.slice(0, n),
+        })
+      const four = L(4)
+      for (const n of [1, 2, 3, 4])
+        for (let i = 0; i < n; i++) expect(geom(L(n).party[i])).toEqual(geom(four.party[i]))
+    }
+  })
+
+  it('実在メンバーの縦横比を変えても枠（味方・敵とも）は完全に不変', () => {
+    for (const [w, h] of SIZES)
+      for (const n of [1, 2, 3, 4]) {
+        const ref = computeSideBattleLayout({ width: w, height: h, partyCount: n, enemyCount: 3 })
+        for (const asp of [
+          [0.2, 0.2, 0.2, 0.2],
+          [1.5, 1.5, 1.5, 1.5],
+          [0.35, 0.9, 0.6, 0.5],
+        ]) {
+          const L = computeSideBattleLayout({
+            width: w,
+            height: h,
+            partyCount: n,
+            enemyCount: 3,
+            partyAspects: asp.slice(0, n),
+          })
+          expect(L.party).toEqual(ref.party)
+          expect(L.enemies).toEqual(ref.enemies)
+        }
+      }
   })
 })
