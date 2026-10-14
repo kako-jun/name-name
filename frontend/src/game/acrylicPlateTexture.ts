@@ -92,7 +92,8 @@ export function createAcrylicPlateTexture(
       pad: raster.pad,
       scale: w / ww,
       shadow,
-      foot: { x: raster.pad + ww / 2, y: raster.pad + wh },
+      // 足元は差し込み線の高さ（浮き量ぶん下）。接地影は台座側に残す (#802)
+      foot: { x: raster.pad + ww / 2, y: raster.pad + wh + raster.extend },
     }
   } catch {
     return null

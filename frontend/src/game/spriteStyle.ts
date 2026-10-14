@@ -11,6 +11,8 @@
  * パラメータはすべて「スプライト枠（slot）一辺 `size` に対する比率」で持つ。画面サイズに依存しない。
  */
 
+import { computeSlitY } from './acrylicBase'
+
 /** 表示スタイル。`none` は素材そのまま（既定・後方互換）、`acrylic` はアクリルスタンド風 */
 export type SpriteStyle = 'none' | 'acrylic'
 
@@ -59,6 +61,8 @@ export interface AcrylicParams {
   castShear: number
   /** 影のぼかし半径 / 画像の長辺（0〜0.1）(#760) */
   castBlurRatio: number
+  /** スプライト下端を台座の差し込み線より浮かせる量 / スプライト高さ (#802)。板は差し込み線まで下へ伸び、台座が無いときは効かない */
+  spriteLiftRatio: number
   /** 台座を持つか（false なら台座と床影を描かず、スプライトは枠いっぱいに収める） */
   hasBase: boolean
   /** 台座（黒い円形＝楕円）の幅 / 枠一辺 */
@@ -93,6 +97,7 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   castSquash: 0.35,
   castShear: 1.4,
   castBlurRatio: 0.012,
+  spriteLiftRatio: 0.03,
   hasBase: true,
   baseWidthRatio: 0.7,
   baseHeightRatio: 0.28,
@@ -134,6 +139,7 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
     castSquash: clamp(finiteOr(o.castSquash, d.castSquash), 0.1, 1),
     castShear: clamp(finiteOr(o.castShear, d.castShear), -2, 2),
     castBlurRatio: clamp(finiteOr(o.castBlurRatio, d.castBlurRatio), 0, 0.1),
+    spriteLiftRatio: clamp(finiteOr(o.spriteLiftRatio, d.spriteLiftRatio), 0, 0.15),
     hasBase: typeof o.hasBase === 'boolean' ? o.hasBase : d.hasBase,
     baseWidthRatio: clamp(finiteOr(o.baseWidthRatio, d.baseWidthRatio), 0.1, 1),
     baseHeightRatio: clamp(finiteOr(o.baseHeightRatio, d.baseHeightRatio), 0.05, 1),
@@ -172,6 +178,8 @@ export interface AcrylicGeometry {
   highlight: EllipseRect | null
   /** 床の接地影。台座が無いとき null */
   shadow: EllipseRect | null
+  /** スプライト下端から台座の差し込み線までの距離(px)。台座が無いとき 0 (#802) */
+  liftPx: number
 }
 
 /**
@@ -201,6 +209,7 @@ export function computeAcrylicGeometry(
       base: null,
       highlight: null,
       shadow: null,
+      liftPx: 0,
     }
   }
   const p = resolveAcrylicParams(params)
@@ -213,6 +222,7 @@ export function computeAcrylicGeometry(
   let shadow: EllipseRect | null = null
   // スプライトの足元（領域の下端）の y。台座が無ければ枠の下端（フチぶんの余白は別に引く）
   let footY = size - margin
+  let liftRatio = 0
   if (p.hasBase) {
     // 影は台座より大きいので、影の下端が枠の下端に接するように置く。幅は枠幅で頭打ち。
     const baseW = p.baseWidthRatio * size
@@ -234,7 +244,9 @@ export function computeAcrylicGeometry(
       rx: base.rx * 0.7,
       ry: base.ry * 0.35,
     }
-    footY = cy
+    // スプライトの下端は差し込み線より liftRatio ぶん上に浮かせる（本物のアクスタは絵が線より上、板の下の縁が台座に刺さる）(#802)
+    footY = computeSlitY(cy, base.ry)
+    liftRatio = p.spriteLiftRatio
   }
 
   const areaW = Math.max(0, size - margin * 2)
@@ -242,15 +254,17 @@ export function computeAcrylicGeometry(
   let sprite: FitRect
   if (!(textureWidth > 0) || !(textureHeight > 0)) {
     // テクスチャ寸法が不正: 領域いっぱい
-    sprite = { x: margin, y: margin, width: areaW, height: areaH }
+    sprite = { x: margin, y: margin, width: areaW, height: areaH / (1 + liftRatio) }
   } else {
-    const scale = Math.min(areaW / textureWidth, areaH / textureHeight)
+    // 浮かせる量はスプライト高さの比率なので、高さ + 浮き = 領域の高さ になるよう縮める
+    const scale = Math.min(areaW / textureWidth, areaH / (textureHeight * (1 + liftRatio)))
     const width = textureWidth * scale
     const height = textureHeight * scale
-    // 横は中央、縦は領域の下端（足元）に揃える
-    sprite = { x: (size - width) / 2, y: footY - height, width, height }
+    // 横は中央、縦は領域の下端（足元）から浮き量だけ上に揃える
+    sprite = { x: (size - width) / 2, y: footY - height * (1 + liftRatio), width, height }
   }
-  return { sprite, marginPx, linePx, base, highlight, shadow }
+  const liftPx = sprite.height * liftRatio
+  return { sprite, marginPx, linePx, base, highlight, shadow, liftPx }
 }
 
 /** 余白の上限(論理 px)。これを超えると細い部分の隙間から線が余白の内側に漏れる (#737) */

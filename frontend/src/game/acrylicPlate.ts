@@ -110,6 +110,8 @@ export interface PlateRaster {
   height: number
   /** 元画像の左上がこの raster 上のどこか（= 周囲の余白 px） */
   pad: number
+  /** 元画像の下端から下へ伸ばした行数(px・差し込み線まで) (#802) */
+  extend: number
   /** RGBA 非プリマルチ（0〜255） */
   rgba: Uint8ClampedArray
   /** 板の形（0〜1・width x height）。地面の影 (acrylicShadow.ts) の元にする */
@@ -125,7 +127,50 @@ type PlateParams = Pick<
   | 'plateFillAlpha'
   | 'specularAlpha'
   | 'innerShadowAlpha'
+  | 'spriteLiftRatio'
 >
+
+/** 足元の帯の高さ（画像高さに対する比率）。この帯に触れる列だけを下へ伸ばす（腕など上の部位は伸ばさない） */
+const FOOT_BAND_RATIO = 0.06
+
+/**
+ * スプライト下端から台座の差し込み線まで板を伸ばすための追加行数(px・この画像の解像度)。
+ * 浮き量 = `spriteLiftRatio` × スプライト高さ (#802)。
+ */
+export function computePlateExtend(h: number, liftRatio: number): number {
+  const r = Number.isFinite(liftRatio) && liftRatio > 0 ? liftRatio : 0
+  return h > 0 ? Math.round(r * h) : 0
+}
+
+/**
+ * alpha の最下段の不透明行を基準にした足元の帯に触れる列を、画像の下端から `extend` 行ぶん下へ伸ばした
+ * マスクの追加行（長さ `w * extend`）を返す。板の下の縁が台座の差し込み線まで届く (#802)。
+ */
+export function extendFootMask(
+  alpha: ArrayLike<number>,
+  w: number,
+  h: number,
+  extend: number
+): Float32Array {
+  const out = new Float32Array(Math.max(0, w * extend))
+  if (extend <= 0) return out
+  let bottom = -1
+  for (let y = h - 1; y >= 0 && bottom < 0; y--)
+    for (let x = 0; x < w; x++)
+      if (alpha[y * w + x] > 0) {
+        bottom = y
+        break
+      }
+  if (bottom < 0) return out
+  const top = Math.max(0, bottom - Math.max(1, Math.round(h * FOOT_BAND_RATIO)))
+  for (let x = 0; x < w; x++) {
+    let a = 0
+    for (let y = top; y <= bottom; y++) a = Math.max(a, alpha[y * w + x])
+    if (a <= 0) continue
+    for (let e = 0; e < extend; e++) out[e * w + x] = a / 255
+  }
+  return out
+}
 
 const FILL_COLOR: readonly [number, number, number] = [0.9, 0.96, 1]
 const SHADOW_COLOR: readonly [number, number, number] = [0.2, 0.31, 0.42]
@@ -146,16 +191,21 @@ export function renderAcrylicPlate(
       width: 1,
       height: 1,
       pad: 0,
+      extend: 0,
       rgba: new Uint8ClampedArray(4),
       shape: new Float32Array(1),
     }
   }
   const { spread, rim, pad } = computePlateLayout(w, h, params)
   const W = w + pad * 2
-  const H = h + pad * 2
+  const extend = computePlateExtend(h, params.spriteLiftRatio)
+  const H = h + extend + pad * 2
   const mask = new Float32Array(W * H)
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) mask[(y + pad) * W + x + pad] = alpha[y * w + x] / 255
+  const ext = extendFootMask(alpha, w, h, extend)
+  for (let e = 0; e < extend; e++)
+    for (let x = 0; x < w; x++) mask[(h + e + pad) * W + x + pad] = ext[e * w + x]
 
   // 形: ぼかして smoothstep（σ から広がり距離が spread になるよう決める）
   const sigma = spread / SPREAD_PER_SIGMA
@@ -222,5 +272,5 @@ export function renderAcrylicPlate(
       out[i * 4 + 3] = Math.round(clamp01(a) * 255)
     }
   }
-  return { width: W, height: H, pad, rgba: out, shape }
+  return { width: W, height: H, pad, extend, rgba: out, shape }
 }
