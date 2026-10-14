@@ -152,6 +152,8 @@ export interface MonsterDef {
   exp: number
   gold: number
   sprite?: string
+  /** 戦闘ポーズ別スプライト (#745)。キー idle / ready / step / slash / hurt / down / victory（部分指定可）、値は画像パス。生で透過し、解釈は `normalizePoses` */
+  poses?: Record<string, string>
   /** 専用関数 ID。指定時はランタイム実装に委譲（汎用 + 専用 builtin の二層設計、#176） */
   builtin?: string
 }
@@ -173,6 +175,8 @@ export interface PartyMemberDef {
   id: string
   name: string
   sprite?: string
+  /** 戦闘ポーズ別スプライト (#745)。`MonsterDef.poses` と同じ。生で透過し、解釈は `normalizePoses` */
+  poses?: Record<string, string>
   /** 戦闘の隊列 (#747)。`'front'`（既定）/ `'back'`（後衛）。生文字列で透過し、解釈は `normalizeBattleRow` */
   row?: string
   /** 初期レベル（既定 1） */
@@ -884,6 +888,8 @@ export interface EventDocument {
   battle_atb?: string | null
   /** RPG 戦闘の ATB の進行方式 (#205)。`"wait"`（既定）/ `"active"`。`battle_atb: on` のときだけ効く。frontmatter `battle_atb_mode:` から流す。 */
   battle_atb_mode?: string | null
+  /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
+  battle_presentation?: string | null
   /** RPG 戦闘のコマンド窓の配置 (#204)。`"grid"`（既定・2x2）/ `"cross"`（十字）。frontmatter `battle_command_layout:` から流す。GUI 専用。 */
   battle_command_layout?: string | null
   /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */

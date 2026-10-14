@@ -24,6 +24,7 @@
  */
 
 import { hasOwn, safeAssign } from './ownProperty'
+import type { BattlePoseSprites } from './battleMotion'
 
 export type EffectKind =
   | 'heal'
@@ -182,6 +183,12 @@ export interface EffectContext {
   caster: BattleEntity
   targets: BattleEntity[]
   rng: () => number
+  /**
+   * 計算上のダメージ・回復量の通知 (#745)。FF 式のダメージ数字は、HP が実際に減った・増えた量ではなく
+   * 計算した量（オーバーキル・回復の上限切りを含む）を出すので、効果の評価側が 1 対象ごとに知らせる。
+   * 通知しない効果（builtin など）は呼び出し側が HP の前後差で代用する。
+   */
+  onAmount?: (target: BattleEntity, kind: 'damage' | 'heal', amount: number) => void
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
@@ -211,6 +218,11 @@ export interface BattleEntity {
    * 戦闘エンジンは読まない）。
    */
   sprite?: string
+  /**
+   * 戦闘ポーズ別スプライト (#745)。`MonsterDef.poses` / `PartyMemberDef.poses` を戦闘への組み立て時に正規化して写す。
+   * `battle_presentation: ff` のときだけ画面が局面ごとに差し替える（dq では読まない）。部分指定可、無いポーズは `sprite` のまま。
+   */
+  poses?: BattlePoseSprites
   /**
    * 戦闘の隊列 (#747)。`'back'` = 後衛（受ける物理ダメージ・与える近接物理ダメージが半分。魔法相当は影響なし）。
    * 未指定は前衛（現行どおり）。味方・敵のどちらに付けても補正は効く（汎用エンジンとして敵の後衛も認める。配置の描画は味方側のみ）。
@@ -244,6 +256,8 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
         const before = t.hp
         t.hp = Math.min(t.maxHp, t.hp + amount)
         const healed = t.hp - before
+        // 計算上の回復量（上限で切らない）。完全回復は回復した分
+        ctx.onAmount?.(t, 'heal', Number.isFinite(amount) ? amount : healed)
         log.push(`${t.name} は ${healed} 回復した！`)
       }
       return log
@@ -265,6 +279,8 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
             : 1.0
         const dealt = effect.kind === 'damage_full' ? t.hp : Math.floor(base * resist)
         t.hp = Math.max(0, t.hp - dealt)
+        // 耐性 0（無効）は通知しない＝呼び出し側で MISS になる。それ以外は 0 でも計算上のダメージとして知らせる (#745)
+        if (resist !== 0) ctx.onAmount?.(t, 'damage', dealt)
         log.push(`${t.name} に ${dealt} のダメージ！`)
         if (t.hp === 0) log.push(`${t.name} は たおれた！`)
       }

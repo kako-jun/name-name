@@ -14,6 +14,7 @@ import type { WindowStyle } from '../game/windowStyle'
 import type { BackgroundTone } from '../game/backgroundTone'
 import type { BackgroundDof } from '../game/depthOfField'
 import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
+import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
 import type { AtbMode } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
@@ -61,6 +62,8 @@ export interface BattleSampleConfig {
   pixelArt: 'on' | 'off'
   /** 戦闘ログの 1 文字ずつ表示 (#755)。既定 off */
   logTypewriter: BattleLogTypewriterMode
+  /** 演出方式 (#745)。既定 dq（現行の見た目・挙動）。ff は side のときだけ効く */
+  presentation: BattlePresentation
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。既定 wait（コマンド選択中は時間停止） */
@@ -90,6 +93,8 @@ export interface BattleSampleView {
   backgroundDof: BackgroundDof
   pixelArt: 'on' | 'off'
   logTypewriter: BattleLogTypewriterMode
+  /** 演出方式 (#745)。既定 dq。ff（FF 式）は layout が side のときだけ効く */
+  presentation: BattlePresentation
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。atb が on のときだけ効く */
@@ -154,6 +159,7 @@ export function defaultConfig(): BattleSampleConfig {
     backgroundDof: 'off',
     pixelArt: 'off',
     logTypewriter: 'off',
+    presentation: 'dq',
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
@@ -232,6 +238,25 @@ function parseEntity(
     const url = resolveUrl(raw.sprite.trim(), baseUrl)
     if (!url) return { ok: false, error: `${path}.sprite の URL を解決できません: ${raw.sprite}` }
     entity.sprite = url
+  }
+  if (raw.poses !== undefined) {
+    // 戦闘ポーズ別スプライト (#745)。{ "idle": "...", "step": "...", ... }（部分指定可・値は URL 文字列）
+    if (!isRecord(raw.poses)) {
+      return { ok: false, error: `${path}.poses はオブジェクトである必要があります` }
+    }
+    const resolved: Record<string, string> = {}
+    for (const [k, v] of Object.entries(raw.poses)) {
+      if (typeof v !== 'string') {
+        return { ok: false, error: `${path}.poses.${k} は URL 文字列である必要があります` }
+      }
+      if (!v.trim()) continue
+      const url = resolveUrl(v.trim(), baseUrl)
+      if (!url) return { ok: false, error: `${path}.poses.${k} の URL を解決できません: ${v}` }
+      resolved[k] = url
+    }
+    // 未知のポーズ名は無視する（部分指定の typo で全体を落とさない）。1 つも残らなければ poses なし
+    const poses = normalizePoses(resolved)
+    if (poses) entity.poses = poses
   }
   return { ok: true, value: entity }
 }
@@ -348,6 +373,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     logTypewriter = raw.logTypewriter
   }
+  let presentation = def.presentation
+  if (raw.presentation !== undefined) {
+    if (raw.presentation !== 'dq' && raw.presentation !== 'ff') {
+      return {
+        ok: false,
+        error: `presentation は "dq" か "ff": ${JSON.stringify(raw.presentation)}`,
+      }
+    }
+    presentation = raw.presentation
+  }
   let atb = def.atb
   if (raw.atb !== undefined) {
     if (raw.atb !== 'on' && raw.atb !== 'off') {
@@ -427,6 +462,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       backgroundDof,
       pixelArt,
       logTypewriter,
+      presentation,
       atb,
       atbMode,
       commandLayout,
@@ -465,6 +501,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     backgroundDof: config.backgroundDof,
     pixelArt: config.pixelArt,
     logTypewriter: config.logTypewriter,
+    presentation: config.presentation,
     atb: config.atb,
     atbMode: config.atbMode,
     commandLayout: config.commandLayout,
@@ -529,6 +566,7 @@ export function buildBattleSetup(
     backgroundDof: BackgroundDof
     pixelArt: boolean
     logTypewriter: BattleLogTypewriterMode
+    presentation: BattlePresentation
     commandLayout: CommandLayout
     commandLabels: CommandLabels
     background?: string
@@ -570,6 +608,7 @@ export function buildBattleSetup(
       backgroundDof: view.backgroundDof,
       pixelArt: view.pixelArt === 'on',
       logTypewriter: view.logTypewriter,
+      presentation: view.presentation,
       commandLayout: view.commandLayout,
       commandLabels: config.commandLabels,
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
@@ -597,8 +636,8 @@ export function assetsToUnload(
   const urls = [
     config.background,
     config.foreground,
-    ...config.party.map((e) => e.sprite),
-    ...config.enemies.map((e) => e.sprite),
+    ...config.party.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
+    ...config.enemies.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
   ]
   return [...new Set(urls.filter((u): u is string => typeof u === 'string' && u !== ''))]
 }
@@ -612,6 +651,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.backgroundDof === b.backgroundDof &&
     a.pixelArt === b.pixelArt &&
     a.logTypewriter === b.logTypewriter &&
+    a.presentation === b.presentation &&
     a.atb === b.atb &&
     a.atbMode === b.atbMode &&
     a.commandLayout === b.commandLayout &&
@@ -660,6 +700,8 @@ export function describeView(
     `backgroundDof=${view.backgroundDof}`,
     `pixelArt=${view.pixelArt}`,
     `logTypewriter=${view.logTypewriter}`,
+    // ff は side のときだけ効く（front では無視される）ので、効く場合だけ出す
+    ...(view.presentation === 'ff' && view.layout === 'side' ? ['presentation=ff'] : []),
     // cross は side のときだけ効く（front では無視される）ので、効く場合だけ出す
     ...(view.commandLayout === 'cross' && view.layout === 'side' ? ['commandLayout=cross'] : []),
     ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),

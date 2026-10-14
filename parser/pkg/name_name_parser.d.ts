@@ -146,6 +146,10 @@ export interface PartyMemberDef {
      */
     sprite?: string;
     /**
+     * 戦闘ポーズ別スプライト (#745)。`MonsterDef.poses` と同じ書式・意味（`ポーズ: idle=a.png, step=b.png`）。
+     */
+    poses?: Map<string, string>;
+    /**
      * 戦闘の隊列 (#747)。`\"front\"`（既定）/ `\"back\"`（後衛）。値は parser でバリデーションせず生文字列で透過し、
      * 解釈（`後衛` 等の別名・未知値は front）は runtime 側。
      */
@@ -206,6 +210,12 @@ export interface MonsterDef {
      * スプライトシートへの相対パス（`monsters/slime.png` 等）。未指定なら色塗り四角。
      */
     sprite?: string;
+    /**
+     * 戦闘ポーズ別スプライト (#745)。キーは `idle` / `ready` / `step` / `slash` / `hurt` / `down` / `victory`（部分指定可）。
+     * 値は画像の相対パス。parser はキーも値も検証せず透過する（解釈は runtime 側）。未指定なら 1 枚の `sprite` のまま。
+     * Markdown は `ポーズ: idle=a.png, step=b.png` の 1 行（カンマ区切り `キー=パス`）。
+     */
+    poses?: Map<string, string>;
     /**
      * 専用関数 ID（\"darkness_breath\" 等）。指定時は通常攻撃以外の挙動が当該関数で完結する。
      */
@@ -564,6 +574,13 @@ export interface Document {
      * frontmatter `battle_log_typewriter:` から流す。
      */
     battle_log_typewriter?: string;
+    /**
+     * RPG 戦闘の演出方式 (#745)。`\"dq\"`（既定・現行の見た目と挙動）/ `\"ff\"`（FF 式: 攻撃モーション・ダメージ数字の
+     * ポップアップ・技名だけの中央寄せメッセージ窓）。値は parser でバリデーションせず生文字列で透過する
+     * （`battle_log_typewriter` と同じ流儀）。未知値・空文字は None 扱いとし、runtime 側で `\"dq\"` にフォールバックする。
+     * GUI 専用（TUI は読まない）。frontmatter `battle_presentation:` から流す。
+     */
+    battle_presentation?: string;
     /**
      * RPG 戦闘画面の地平線の高さ (#747)。画面高さに対する比（0.0〜1.0 の数値文字列。例 `\"0.3\"`）。
      * 値は parser でバリデーションせず生文字列で透過する。数値でない・範囲外は runtime 側で扱う。

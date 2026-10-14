@@ -75,6 +75,7 @@ describe('readFieldBattleSettings', () => {
         battleForeground: 'fg/a.webp',
         battleAtb: { mode: 'active' },
         battleCommandLayout: 'cross',
+        battlePresentation: 'ff',
       })
     )
     expect(s).toMatchObject({
@@ -88,6 +89,7 @@ describe('readFieldBattleSettings', () => {
       foreground: 'fg/a.webp',
       atb: { mode: 'active' },
       commandLayout: 'cross',
+      presentation: 'ff',
     })
   })
 
@@ -145,6 +147,18 @@ describe('partyDefToBattleEntity: 隊列は side のときだけ反映', () => {
     ['front', 'back', undefined],
   ] as const)('layout=%s・row=%s → row=%s', (layout, row, expected) => {
     expect(partyDefToBattleEntity(member('x', { row }), layout).row).toBe(expected)
+  })
+
+  it('poses は正規化して写す（未知キー・空値は捨て、無ければ poses なし） (#745)', () => {
+    const e = partyDefToBattleEntity(
+      member('mage', { poses: { Idle: 'p/i.webp', cast: 'p/c.webp', bogus: 'x', hurt: ' ' } }),
+      'side'
+    )
+    expect(e.poses).toEqual({ idle: 'p/i.webp', cast: 'p/c.webp' })
+    expect('poses' in partyDefToBattleEntity(member('x'), 'side')).toBe(false)
+    expect('poses' in partyDefToBattleEntity(member('y', { poses: { bogus: 'x' } }), 'side')).toBe(
+      false
+    )
   })
 
   it('hero 未定義の buildHeroBattleEntity はハードコード値（HP20 / MP4）', () => {
@@ -283,6 +297,13 @@ describe('openFieldBattle', () => {
     expect(open().s.opts.assetBaseUrl).toBeUndefined()
   })
 
+  it('presentation は BattleScreen の opts に転送される（既定は dq） (#745)', () => {
+    expect(open({ settings: { presentation: 'ff', layout: 'side' } }).s.opts.presentation).toBe(
+      'ff'
+    )
+    expect(open().s.opts.presentation).toBe('dq')
+  })
+
   it('ステージに戦闘画面が載る', () => {
     const { stage, screen } = open()
     expect(stage.children).toContain(screen)
@@ -351,6 +372,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       backgroundTone: 'on',
       backgroundDof: 'off',
       logTypewriter: 'off',
+      presentation: 'dq',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -375,6 +397,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       battleAtb: { mode: 'active' },
       battleCommandLayout: 'cross',
       battleCommandLabels: { attack: '斬る' },
+      battlePresentation: 'ff',
     })
     expect(readFieldBattleSettings(p)).toEqual({
       layout: 'side',
@@ -384,6 +407,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       backgroundTone: 'off',
       backgroundDof: 'on',
       logTypewriter: 'on',
+      presentation: 'ff',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,

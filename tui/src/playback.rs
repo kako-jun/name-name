@@ -2360,6 +2360,7 @@ mod tests {
             battle_background_tone: None,
             battle_background_dof: None,
             battle_log_typewriter: None,
+            battle_presentation: None,
             battle_horizon: None,
             battle_perspective: None,
             battle_foreground: None,

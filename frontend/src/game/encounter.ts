@@ -13,6 +13,7 @@
 import type { MonsterDef } from '../types'
 import type { BattleEntity } from './spellDsl'
 import { hasOwn } from './ownProperty'
+import { posesField } from './battleMotion'
 
 export function rollEncounter(input: {
   rate: number
@@ -52,6 +53,7 @@ export function rollEncounter(input: {
       exp: def.exp,
       gold: def.gold,
       sprite: def.sprite,
+      ...posesField(def.poses),
     })
   }
   return enemies.length > 0 ? enemies : null

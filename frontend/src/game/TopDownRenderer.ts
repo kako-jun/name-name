@@ -908,7 +908,8 @@ export class TopDownRenderer {
     const now = performance.now()
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
-    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない。
+    // 戦闘中の時間を進める。ATB (#205) はゲージ（演出中も進む）、`battle_presentation: ff` (#745) は演出（モーション・ダメージ数字）。
+    // 従来ターン制かつ dq の BattleScreen.tick だけが何もしない。
     // 設定オーバーレイ中は入力と同様に進行も止める (#784)
     if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
     this.updateNpcAnimations(now)

@@ -177,6 +177,37 @@ describe('BattleScreen: 背景画像', () => {
     expect(urls).toContain('https://cdn.example.com/slime.png')
   })
 
+  it('assetBaseUrl があれば ff のポーズ画像と idle のフォールバックも images 配下に解決する (#745)', async () => {
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockResolvedValue(
+        new Texture({ source: new TextureSource({ width: 10, height: 10 }) }) as never
+      )
+    const base = 'https://api.example.com/assets/raw'
+    track(
+      make(
+        [
+          entity('hero', {
+            poses: {
+              idle: 'battle/idle.png',
+              slash: 'battle/slash.png',
+              down: 'https://cdn.example.com/d.png',
+            },
+          }),
+        ],
+        [entity('slime')],
+        { layout: 'side', presentation: 'ff', assetBaseUrl: base }
+      )
+    )
+    await flushPromises()
+    await flushPromises()
+    const urls = load.mock.calls.map((c) => c[0])
+    expect(urls).toContain(`${base}/images/battle/idle.png`)
+    expect(urls).toContain(`${base}/images/battle/slash.png`)
+    expect(urls).toContain('https://cdn.example.com/d.png')
+    expect(urls).not.toContain('battle/slash.png')
+  })
+
   it('assetBaseUrl 未指定なら従来どおりパスをそのまま読む (#746)', async () => {
     const load = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
     track(make([entity('hero')], [entity('slime')], { background: 'bg/a.webp' }))
@@ -3014,5 +3045,149 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         expect(v.acrylicBase).toBeNull()
       }
     })
+  })
+})
+
+describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#745)', () => {
+  const sized = (w: number, h: number): Texture =>
+    new Texture({ source: new TextureSource({ width: w, height: h }) })
+  /** 画像ごとの寸法（idle と slash で縦横比を変える） */
+  const SIZES: Record<string, [number, number]> = {
+    'img/hero.webp': [40, 80],
+    'img/idle.webp': [40, 80],
+    'img/slash.webp': [90, 60],
+    'img/down.webp': [90, 40],
+    'img/slime.webp': [60, 60],
+  }
+  const textures = new Map<string, Texture>()
+  beforeEach(() => {
+    textures.clear()
+    vi.spyOn(Assets, 'load').mockImplementation((async (path: string) => {
+      if (!textures.has(path)) textures.set(path, sized(...(SIZES[path] ?? [50, 50])))
+      return textures.get(path)
+    }) as never)
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation(((
+      tex: Texture
+    ) => ({
+      texture: sized(tex.width + 16, tex.height + 16),
+      pad: 8,
+      shadow: sized(64, 32),
+      foot: { x: 32, y: 16 },
+    })) as never)
+  })
+  interface PoseView {
+    container: Container
+    sprite: Sprite
+    slotRef: unknown
+    baseX: number
+    baseY: number
+    shadowBaseX: number
+    shadowBaseY: number
+    acrylicShadow: Sprite | null
+    shownVisual: { texture: Texture } | null
+    poseVisuals: Record<string, { texture: Texture }>
+  }
+  const pv = (s: BattleScreen): PoseView =>
+    (s as unknown as { partyViews: PoseView[] }).partyViews[0]
+  const poses = { idle: 'img/idle.webp', slash: 'img/slash.webp', down: 'img/down.webp' }
+  async function setup(over: Partial<BattleEntity> = {}, enemyAtk = 1, withDown = true) {
+    const p = withDown ? poses : { idle: poses.idle, slash: poses.slash }
+    const hero = entity('hero', { sprite: 'img/hero.webp', poses: p, hp: 20, maxHp: 20, ...over })
+    const engine = new BattleEngine(
+      [hero],
+      [entity('slime', { atk: enemyAtk, hp: 999, maxHp: 999 })],
+      {
+        rng: () => 0.5,
+      }
+    )
+    const s = track(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        spriteStyle: 'acrylic',
+        presentation: 'ff',
+      })
+    )
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+    return { s, engine }
+  }
+  const run = (s: BattleScreen, ms: number) => {
+    for (let left = ms; left > 0; left -= 16) s.tick(Math.min(16, left))
+  }
+  const act = (s: BattleScreen, engine: BattleEngine) => {
+    engine.selectAttack()
+    s.redraw(800, 450)
+  }
+
+  it('ポーズが読み込まれ、縦横比の違う slash に替わっても枠（slotRef）と基準位置は動かない', async () => {
+    const { s, engine } = await setup()
+    const v = pv(s)
+    expect(Object.keys(v.poseVisuals).sort()).toEqual(['down', 'idle', 'slash'])
+    const slot = v.slotRef
+    const [bx, by] = [v.baseX, v.baseY]
+    // idle の立ち姿: 縮尺（1px あたり）と足元（下端中央）を控える
+    const idleTex = v.poseVisuals.idle.texture
+    expect(v.sprite.texture).toBe(idleTex)
+    const scale = v.sprite.height / idleTex.height
+    const foot = () => ({
+      cx: v.container.x + v.sprite.x + v.sprite.width / 2 - (v.container.x - v.baseX),
+      y: v.container.y + v.sprite.y + v.sprite.height - (v.container.y - v.baseY),
+    })
+    const idleFoot = foot()
+    const idleShadowY = v.shadowBaseY
+    // #802: スプライトの下端は台座の差し込み線（影の基準）より浮いている
+    expect(idleFoot.y).toBeLessThan(idleShadowY)
+    act(s, engine)
+    run(s, 300) // 踏み出し 220 を過ぎて slash ポーズ
+    expect(v.shownVisual!.texture).toBe(v.poseVisuals.slash.texture)
+    // 横広の slash も枠に収め直さず、同じ縮尺で描く（高さの比 = 元画像の高さの比）。足元は不変
+    const slashTex = v.poseVisuals.slash.texture
+    expect(v.sprite.height / slashTex.height).toBeCloseTo(scale, 6)
+    expect(v.sprite.height / v.sprite.width).toBeCloseTo(slashTex.height / slashTex.width, 6)
+    expect(v.sprite.height / idleTex.height).toBeCloseTo(
+      scale * (slashTex.height / idleTex.height),
+      6
+    )
+    const slashFoot = foot()
+    expect(slashFoot.y).toBeCloseTo(idleFoot.y, 6)
+    expect(slashFoot.cx).toBeCloseTo(idleFoot.cx, 6)
+    // 浮き量は基本の絵で決まり、ポーズ差し替えで二重に補正されない（影の基準も足元との差も不変）
+    expect(v.shadowBaseY).toBeCloseTo(idleShadowY, 6)
+    expect(v.shadowBaseY - slashFoot.y).toBeCloseTo(idleShadowY - idleFoot.y, 6)
+    expect(v.slotRef).toEqual(slot)
+    expect([v.baseX, v.baseY]).toEqual([bx, by])
+    run(s, 5000)
+    expect(v.slotRef).toEqual(slot)
+    expect([v.baseX, v.baseY]).toEqual([bx, by])
+  })
+
+  it('地面の影は本体と同じ横ずれで動き、置き去りにならない', async () => {
+    const { s, engine } = await setup()
+    const v = pv(s)
+    expect(v.acrylicShadow).not.toBeNull()
+    act(s, engine)
+    run(s, 150)
+    const dx = v.container.x - v.baseX
+    expect(Math.abs(dx)).toBeGreaterThan(1)
+    expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(dx, 6)
+    run(s, 300)
+    expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(v.container.x - v.baseX, 6)
+  })
+
+  it('down の絵がある味方は倒れても沈まず不透明、無ければ沈んで薄くなる', async () => {
+    const a = await setup({ hp: 1, maxHp: 1 }, 999, true)
+    const va = pv(a.s)
+    act(a.s, a.engine)
+    run(a.s, 5000)
+    expect(va.shownVisual!.texture).toBe(va.poseVisuals.down.texture)
+    expect(va.container.y).toBeCloseTo(va.baseY, 6)
+    expect(va.container.alpha).toBe(1)
+    const b = await setup({ hp: 1, maxHp: 1 }, 999, false)
+    const vb = pv(b.s)
+    act(b.s, b.engine)
+    run(b.s, 5000)
+    expect(vb.container.y).toBeGreaterThan(vb.baseY)
+    expect(vb.container.alpha).toBeLessThan(1)
   })
 })

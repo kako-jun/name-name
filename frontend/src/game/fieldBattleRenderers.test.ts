@@ -128,6 +128,15 @@ describe.each([
     expect(mock.mock.calls[1][0].gate).toBe(first.gate)
   })
 
+  it('battle_presentation が BattleScreen の opts に届く（未指定は dq） (#745)', () => {
+    const ff = make({ battlePresentation: 'ff' })
+    ff.startBattle([enemy()])
+    expect(ff.battleScreen!.opts.presentation).toBe('ff')
+    const dq = make()
+    dq.startBattle([enemy()])
+    expect(dq.battleScreen!.opts.presentation).toBe('dq')
+  })
+
   it('戦闘中に load() し直すと戦闘画面が畳まれ、古い onClose が新しいマップのクールダウンを上書きしない', () => {
     const f = make()
     f.startBattle([enemy()])

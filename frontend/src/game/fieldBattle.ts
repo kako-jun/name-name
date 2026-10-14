@@ -23,6 +23,7 @@ import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
+import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { CommandLabels, CommandLayout } from './battleCommands'
 
@@ -42,6 +43,8 @@ export interface FieldBattleSettings {
   backgroundDof: BackgroundDof
   /** `battle_log_typewriter` (#755) */
   logTypewriter: BattleLogTypewriterMode
+  /** `battle_presentation` (#745)。`dq`（既定）/ `ff` */
+  presentation: BattlePresentation
   /** `battle_horizon` / `battle_perspective` (#747) */
   depth: BattleDepth | null
   /** `battle_foreground` (#747) */
@@ -65,6 +68,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   backgroundTone: 'on',
   backgroundDof: 'off',
   logTypewriter: 'off',
+  presentation: 'dq',
   depth: null,
   foreground: undefined,
   pixelArt: false,
@@ -84,6 +88,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     backgroundTone: gameData.battleBackgroundTone ?? d.backgroundTone,
     backgroundDof: gameData.battleBackgroundDof ?? d.backgroundDof,
     logTypewriter: gameData.battleLogTypewriter ?? d.logTypewriter,
+    presentation: gameData.battlePresentation ?? d.presentation,
     depth: gameData.battleDepth ?? d.depth,
     foreground: gameData.battleForeground,
     pixelArt: gameData.pixelArt === true,
@@ -116,6 +121,7 @@ export function partyDefToBattleEntity(
     def: def.def,
     agi: def.agi,
     sprite: def.sprite,
+    ...posesField(def.poses),
     ...(layout === 'side' && normalizeBattleRow(def.row) === 'back'
       ? { row: 'back' as const }
       : {}),
@@ -283,6 +289,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     backgroundTone: settings.backgroundTone,
     backgroundDof: settings.backgroundDof,
     logTypewriter: settings.logTypewriter,
+    presentation: settings.presentation,
     depth: settings.depth,
     foreground: settings.foreground,
     pixelArt: settings.pixelArt,
@@ -293,7 +300,8 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     onClose: (outcome) => {
       if (closedScreens.has(screen)) return
       // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
-      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する
+      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する。
+      // ff では演出を見せ切ってから閉じるため、この抑止は閉じた直後 400ms の保険として働く (#745)
       suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
       gate.armReleaseGate()
       closeFieldBattle(stage, screen)

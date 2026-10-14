@@ -43,6 +43,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     backgroundDof: 'off',
     pixelArt: 'off',
     logTypewriter: 'off',
+    presentation: 'dq',
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
@@ -1453,5 +1454,46 @@ describe('commandLayout / commandLabels (#204)', () => {
   it('initialView は config.commandLayout を引き継ぐ', () => {
     expect(initialView(parseOk({ commandLayout: 'cross' })).commandLayout).toBe('cross')
     expect(initialView(parseOk({})).commandLayout).toBe('grid')
+  })
+})
+
+describe('presentation / poses (#745)', () => {
+  it('presentation は dq / ff だけ。既定 dq。不正値はエラー', () => {
+    expect(parseOk({}).presentation).toBe('dq')
+    expect(parseOk({ presentation: 'ff' }).presentation).toBe('ff')
+    expect(parseConfig({ presentation: 'x' }, BASE).ok).toBe(false)
+  })
+
+  it('initialView / viewsEqual / describeView に反映される。ff は side のときだけ表示', () => {
+    const cfg = parseOk({ presentation: 'ff' })
+    expect(initialView(cfg).presentation).toBe('ff')
+    expect(viewsEqual(view(), view({ presentation: 'ff' }))).toBe(false)
+    const size = { width: 800, height: 450 }
+    expect(describeView(view({ presentation: 'ff' }), 1, size)).toContain('presentation=ff')
+    expect(describeView(view({ presentation: 'ff', layout: 'front' }), 1, size)).not.toContain(
+      'presentation=ff'
+    )
+    expect(describeView(view(), 1, size)).not.toContain('presentation=')
+  })
+
+  it('poses: 部分指定を URL 解決して保持し、未知のキーは捨て、無ければ poses なし', () => {
+    const p = parseParty0({ poses: { idle: 'a.png', slash: '/b.png', bogus: 'c.png' } })
+    expect(p.poses).toEqual({
+      idle: 'https://example.com/dir/a.png',
+      slash: 'https://example.com/b.png',
+    })
+    expect(parseParty0({}).poses).toBeUndefined()
+    expect(parseParty0({ poses: {} }).poses).toBeUndefined()
+  })
+
+  it('poses が不正なら理由つきでエラー', () => {
+    expect(parseConfig({ party: [{ poses: [] }] }, BASE).ok).toBe(false)
+    expect(parseConfig({ party: [{ poses: { idle: 3 } }] }, BASE).ok).toBe(false)
+  })
+
+  it('assetsToUnload は pixelArt が変わったとき、ポーズの画像も解放対象に含める', () => {
+    const cfg = parseOk({ party: [{ sprite: 's.png', poses: { idle: 'i.png' } }] })
+    const urls = assetsToUnload('off', view({ pixelArt: 'on' }), cfg)
+    expect(urls).toContain('https://example.com/dir/i.png')
   })
 })

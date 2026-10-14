@@ -1819,3 +1819,21 @@ describe('rpgProjectFromDoc: battle_command_layout / battle_command_labels (#204
     }
   })
 })
+
+describe('rpgProjectFromDoc: battle_presentation (#745)', () => {
+  const withPres = (v: string | null): EventDocument => ({
+    ...makeDoc(),
+    battle_presentation: v,
+  })
+
+  it.each([
+    ['ff', 'ff'],
+    ['FF', 'ff'],
+    [null, 'dq'],
+    ['', 'dq'],
+    ['dq', 'dq'],
+    ['xx', 'dq'],
+  ])('battle_presentation %j → battlePresentation %s', (raw, expected) => {
+    expect(rpgProjectFromDoc(withPres(raw))!.battlePresentation).toBe(expected)
+  })
+})

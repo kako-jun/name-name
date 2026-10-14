@@ -212,7 +212,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 
 ## 戦闘画面サンプルページ（開発用・#749）
 
-戦闘画面（`BattleScreen`）の見た目を、ゲーム本編を経由せずに確認・比較するための独立ページ。ビルド成果物の `battle-sample.html` として出力される（本編からはリンクしない）。本編と同じ `BattleEngine` + `BattleScreen` を載せるので、`layout` / `background` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `logTypewriter` の描画は本編と同じコードパス（ATB の `tick` だけはこのページの ticker が渡す）。
+戦闘画面（`BattleScreen`）の見た目を、ゲーム本編を経由せずに確認・比較するための独立ページ。ビルド成果物の `battle-sample.html` として出力される（本編からはリンクしない）。本編と同じ `BattleEngine` + `BattleScreen` を載せるので、`layout` / `background` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `logTypewriter` / `presentation` の描画は本編と同じコードパス（ATB の `tick` だけはこのページの ticker が渡す）。
 
 - 開発サーバー: `http://localhost:7374/battle-sample.html`。ビルド後は `dist/battle-sample.html` を静的配信して開く
 - 設定 JSON は `?config=<URL>` で渡す（絶対 URL、またはこのページからの相対 URL）。なければ内蔵既定（色四角のスプライト）で表示する
@@ -228,7 +228,8 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 | 背景を落とす | `on`（既定）/ `off`。背景スプライトにだけ彩度・明度を落とすフィルタ（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。ブリンク比較の対象に含まれる |
 | 被写界深度（手前ぼかし） | `on` / `off`（既定）。背景スプライトにだけ、画面の下側ほど強くぼかす縦グラデーション（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。「背景を落とす」とは独立。ブリンク比較の対象に含まれる |
 | ドット絵（nearest） | `on` / `off`（既定）。`on` で戦闘のテクスチャ（背景・前景・味方・敵）を nearest のまま使う（本編の frontmatter `pixel_art: true`・#466 と同じ）。`off` は mipmap＋linear で縮小をなめらかにする（#760）。`Assets` のキャッシュは mipmap の有無ごと使い回されるため、**この値が前回から変わったときだけ**、背景・前景・味方・敵の画像を unload して読み直してから描き直す（他のトグルでは unload しない。ブリンク比較で切り替わるときも同様。本編と同じ「最初からその設定で読み込んだ」見た目になる）。ブリンク比較の対象に含まれる |
-| ログを1文字ずつ表示 | `on` / `off`（既定）。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない。ただし ATB が `on` のときはコマンドのタップで全文表示せずそのまま実行し、全文表示はログ帯のタップだけ）。ブリンク比較の対象に含まれる |
+| ログを1文字ずつ表示 | `on` / `off`（既定）。演出が `ff`（`layout=side`）のときは使わないので無効になる。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない。ただし ATB が `on` のときはコマンドのタップで全文表示せずそのまま実行し、全文表示はログ帯のタップだけ）。ブリンク比較の対象に含まれる |
+| 演出 | `dq（ログ・動かない）`（既定）/ `ff（モーション・ダメージ数字）`。`ff` は `layout=side` のときだけ効く（#745。`layout=front` では選べない）。たたかう等で、行動する側が踏み出して斬って戻り、対象がのけぞり（HP 0 なら倒れ）、対象の位置にダメージ数字が跳ねて消える。上のログ帯には呪文・アイテムの名前だけが中央寄せで出て、通常攻撃では窓ごと出ない。従来ターン制では演出が終わるまで次の行動・コマンドは受けない。ATB が `on` なら演出中もゲージが進み、敵の行動は順に再生され、行動可能な味方は演出中でも入力できる。各キャラの `poses`（下記）があればポーズごとに絵が差し替わる。ブリンク比較の対象に含まれる。切り替えると戦闘が最初からやり直しになる |
 | ATB（ゲージ順に行動） | `on` / `off`（既定）。`on` のとき味方・敵にゲージが付き、AGI に比例して溜まり、満タンの順に行動する（#205）。各ステータス行の下端の細い棒がゲージで、番の味方は名前の左に「▶」が付いて黄色になる。時間はこのページの ticker から `BattleScreen.tick` で渡す。切り替えると戦闘が最初からやり直しになる。ブリンク比較の対象に含まれる |
 | commandLayout | `grid（2x2）`（既定）/ `cross（十字・矢印キー）`。`cross` は `side` のとき、コマンド窓を十字（上=たたかう・左=じゅもん・右=どうぐ・下=にげる）にし、矢印キー 1 押しでその方向を決定する（#204）。ブリンク比較の対象に含まれる。切替直後にフォーム部品へフォーカスが残らないよう自動で外す |
 | ATB 進行 | `待機（コマンド選択中は停止）`（既定）/ `アクティブ（止めない）`。ATB が `on` のときだけ選べる（#205）。ブリンク比較の対象に含まれる |
@@ -260,6 +261,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
   "backgroundDof": "off",
   "pixelArt": "off",
   "logTypewriter": "off",
+  "presentation": "dq",
   "atb": "off",
   "atbMode": "wait",
   "commandLayout": "grid",
@@ -269,7 +271,8 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
   "foreground": "battle/foreground.png",
   "background": "battle/background.png",
   "party": [
-    { "id": "a", "name": "アリス", "hp": 30, "maxHp": 30, "mp": 8, "maxMp": 8, "atk": 8, "def": 4, "agi": 6, "sprite": "battle/party-a.png" },
+    { "id": "a", "name": "アリス", "hp": 30, "maxHp": 30, "mp": 8, "maxMp": 8, "atk": 8, "def": 4, "agi": 6, "sprite": "battle/party-a.png",
+      "poses": { "idle": "battle/a-idle.png", "step": "battle/a-step.png", "slash": "battle/a-slash.png", "hurt": "battle/a-hurt.png", "down": "battle/a-down.png", "victory": "battle/a-victory.png" } },
     { "id": "b", "name": "ボブ", "hp": 28, "maxHp": 28, "mp": 4, "maxMp": 4, "atk": 9, "def": 5, "agi": 4, "sprite": "battle/party-b.png" }
   ],
   "enemies": [
@@ -278,8 +281,9 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 }
 ```
 
-- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `pixelArt` / `logTypewriter` / `atb` / `atbMode` / `commandLayout` / `commandLabels` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
-- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`pixelArt` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`atb` が `on`/`off` 以外、`atbMode` が `wait`/`active` 以外、`commandLayout` が `grid`/`cross` 以外、`commandLabels` がオブジェクトでない・キーが `attack`/`spell`/`item`/`escape` 以外・値が空でない文字列でない、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- トップレベルの項目（`layout` / `spriteStyle` / `windowStyle` / `backgroundTone` / `backgroundDof` / `pixelArt` / `logTypewriter` / `presentation` / `atb` / `atbMode` / `commandLayout` / `commandLabels` / `horizon` / `perspective` / `foreground` / `background` / `party` / `enemies`）と、各キャラのフィールド（`row` は `front` / `back`）はすべて省略可。省略は内蔵既定で補う
+- 次はエラー（赤表示のうえ内蔵既定で表示する）: JSON として読めない・ルートがオブジェクトでない、`layout` が `front`/`side` 以外、`spriteStyle` が `none`/`acrylic` 以外、`windowStyle` が `dark`/`ff-blue` 以外、`backgroundTone` が `on`/`off` 以外、`backgroundDof` が `on`/`off` 以外、`pixelArt` が `on`/`off` 以外、`logTypewriter` が `on`/`off` 以外、`presentation` が `dq`/`ff` 以外、`atb` が `on`/`off` 以外、`atbMode` が `wait`/`active` 以外、`commandLayout` が `grid`/`cross` 以外、`commandLabels` がオブジェクトでない・キーが `attack`/`spell`/`item`/`escape` 以外・値が空でない文字列でない、`horizon` / `perspective` が 0〜1 の数値以外、`foreground` が null・空文字以外の非文字列、各キャラの `row` が文字列でない、`party` / `enemies` が配列でない、または空配列（`[]`）、要素がオブジェクトでない、各キャラの `name` / `sprite` が文字列でない、`background` が null・空文字以外の非文字列、URL を解決できない
+- 各キャラの `poses`（#745）は `{ "idle": URL, "ready": URL, "step": URL, "slash": URL, "cast": URL, "hurt": URL, "down": URL, "victory": URL }`（部分指定可）。`presentation=ff` のときだけ使う。オブジェクトでない・値が文字列でない・URL を解決できないときはエラー。未知のキーは無視する。無いポーズは近い絵に落ち（`slash`→`step`→`ready`→`idle`、`cast`→`ready`→`idle` など。`special` は必殺技の配線時に対応するため今は未知のキーとして無視）、`down` が無ければ沈み込み、全部無ければ `sprite` の 1 枚のまま動きだけ付く。`pixelArt` の切り替えではポーズの画像も unload して読み直す
 - `party` / `enemies` は最大 4 件（超えた分は無視）。`maxHp` 省略時は `hp` を最大値とする。`sprite` を省くとその枠は色四角
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
 - 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある
