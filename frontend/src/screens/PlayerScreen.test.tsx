@@ -1345,6 +1345,10 @@ describe('PlayerScreen', () => {
 
     // NovelPlayer は描画されないこと
     expect(screen.queryByTestId('novel-player')).toBeNull()
+    // #746: アセットのベース URL が RPGPlayer に渡る
+    expect(rpgPlayerProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ assetBaseUrl: 'http://api.test/api/projects/demo/assets/raw' })
+    )
   })
 
   it('#284: listScripts が 0 件のときは「準備中」案内を表示する', async () => {

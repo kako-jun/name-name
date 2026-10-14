@@ -786,8 +786,9 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
           // 倒れたセッションは配線せず、一時的な失敗で正しいクイックセーブを上書きしない。
           if (docKey && !hasDeepLinkOrDebugStart) {
             if (outcome.autoSave) {
+              // 保存はここでは行わず、そのシーンの最初の本文が表示された時点で renderer が1回行う (#768)
               renderer.setOnSceneChange(() => {
-                renderer.quickSave()
+                renderer.requestAutoSave()
               })
             } else {
               renderer.showToast(
@@ -825,13 +826,15 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
       // （constructor で作られる値オブジェクトの読み出しのみで this.app には触れない）が、
       // その状態では sceneId が null（＝setEvents/setScenes すら走っていない）ため意味のある
       // スナップショットにならない。
-      // #460 セルフレビュー should S1: sceneId が null のときは pendingSnapshotRef を上書きしない
+      // #460 セルフレビュー should S1: 再生が未開始のときは pendingSnapshotRef を上書きしない
       // （直前に有効な値が入っていればそれを保持し続ける）。pendingSnapshotRef は単一の共有 ref
       // なので、無条件上書きだと短時間の二重連続 remount（gen0→gen1(init 未完了)→gen2）で
       // gen1 の cleanup が「まだ何も進行していない空スナップショット」で gen0 の有効な
       // スナップショットを消してしまい、gen2 が結局位置ロストする事故になる。
+      // 「未開始」は sceneId でなく renderer の再生開始済みフラグで判定する (#768)。ジャンプ前の線形
+      // ストリームは sceneId が null のまま再生が進むので、sceneId で見ると位置が再マウントで失われる。
       const snapshot = renderer.getSnapshot()
-      if (snapshot.sceneId !== null) {
+      if (renderer.hasStartedPlayback()) {
         pendingSnapshotRef.current = snapshot
       }
       renderer.destroy()
@@ -1088,16 +1091,14 @@ const NovelPlayer = forwardRef<NovelPlayerHandle, NovelPlayerProps>(function Nov
     rendererRef.current?.handleOutsideCanvasTap()
   }, [])
 
-  // F5: クイックセーブ / F8: クイックロード (#142)。通知 toast の表示・タイマー管理は
-  // renderer.showToast() に内部化された (#630、PixiJS 版)。
+  // F5: クイックセーブ / F8: クイックロード (#142)。通知 toast は renderer が出す
+  // （表示・タイマー管理は renderer.showToast() に内部化 #630。結果の通知も renderer に一本化 #765/#769）。
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'F5') {
         e.preventDefault()
-        const ok = rendererRef.current?.quickSave() ?? false
-        rendererRef.current?.showToast(
-          ok ? 'クイックセーブしました' : 'この場面ではセーブできません'
-        )
+        // 結果のトースト（成功・弾かれた理由）は renderer が出す (#769)。
+        rendererRef.current?.quickSave()
       } else if (e.key === 'F8') {
         e.preventDefault()
         // 結果のトースト（成功・失敗・弾かれた理由）は renderer が出す (#765)。

@@ -88,6 +88,7 @@ const {
     setDocKey = vi.fn()
     // #578: シーン切り替えごとの自動クイックセーブ配線・起動時の自動クイックロード判定用。
     setOnSceneChange = vi.fn()
+    requestAutoSave = vi.fn()
     hasQuickSave = vi.fn().mockReturnValue(false)
     setChoiceStyle = vi.fn()
     setFontFamily = vi.fn()
@@ -152,6 +153,8 @@ const {
       currentBgmPath: null,
       storyEnded: false,
     })
+    // #768: 再生開始済みか。既定は開始済み。未開始（init 未完了など）を作るテストだけ mockReturnValue(false) にする。
+    hasStartedPlayback = vi.fn().mockReturnValue(true)
     restoreSnapshot = vi.fn().mockResolvedValue({ status: 'entered', sceneId: null })
     playScript = vi.fn().mockResolvedValue(undefined)
     quickSave = vi.fn().mockReturnValue(false)
@@ -1601,7 +1604,7 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     expect(r.quickLoad).not.toHaveBeenCalled()
   })
 
-  it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.quickSave() が実行される（docKey 有り）', async () => {
+  it('20: マウント時に renderer.setOnSceneChange が渡され、そのコールバックを呼ぶと renderer.requestAutoSave() が実行される（docKey 有り）', async () => {
     render(<NovelPlayer events={[]} docKey="proj-a" />)
     await flushAsync()
     const r = lastRenderer()
@@ -1610,7 +1613,9 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     const cb = r.setOnSceneChange.mock.calls[0][0] as () => void
     cb()
 
-    expect(r.quickSave).toHaveBeenCalledTimes(1)
+    // 保存そのものは renderer が最初の本文の表示時に行う (#768)。NovelPlayer は要求を出すだけ。
+    expect(r.requestAutoSave).toHaveBeenCalledTimes(1)
+    expect(r.quickSave).not.toHaveBeenCalled()
   })
 
   it('21 (最重要): docKey が異なる2つの NovelPlayer マウント（別プロジェクト相当）で、それぞれの setDocKey/自動クイックセーブ配線が独立し互いを呼ばない', async () => {
@@ -1627,13 +1632,13 @@ describe('NovelPlayer 自動クイックセーブ/クイックロード (#578)',
     // 各インスタンスのシーン変化コールバックは自分自身の quickSave しか呼ばない（相手を呼ばない）。
     const cbA = rendererA.setOnSceneChange.mock.calls[0][0] as () => void
     cbA()
-    expect(rendererA.quickSave).toHaveBeenCalledTimes(1)
-    expect(rendererB.quickSave).not.toHaveBeenCalled()
+    expect(rendererA.requestAutoSave).toHaveBeenCalledTimes(1)
+    expect(rendererB.requestAutoSave).not.toHaveBeenCalled()
 
     const cbB = rendererB.setOnSceneChange.mock.calls[0][0] as () => void
     cbB()
-    expect(rendererB.quickSave).toHaveBeenCalledTimes(1)
-    expect(rendererA.quickSave).toHaveBeenCalledTimes(1) // A 側は変化しない
+    expect(rendererB.requestAutoSave).toHaveBeenCalledTimes(1)
+    expect(rendererA.requestAutoSave).toHaveBeenCalledTimes(1) // A 側は変化しない
   })
 
   it('22: docKey 未指定でマウントした場合（EditorScreen相当）、renderer.setOnSceneChange が呼ばれず、自動クイックロードも実行されずエントリから始まる', async () => {
@@ -1786,6 +1791,22 @@ describe('NovelPlayer deep-link/デバッグ起動時の自動クイックセー
     fireEvent.keyDown(window, { key: 'F5' })
 
     expect(r.quickSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('664-11 (#769): F5 は renderer.quickSave() を起点 quick（引数なし）で呼ぶだけで、NovelPlayer 自身は成功でも失敗でも showToast を呼ばない（結果のトーストは renderer が出す）', async () => {
+    render(<NovelPlayer events={[]} docKey="proj-a" initialSceneId="scene-x" />)
+    await flushAsync()
+    const r = lastRenderer()
+
+    r.quickSave.mockReturnValue(true)
+    fireEvent.keyDown(window, { key: 'F5' })
+    r.quickSave.mockReturnValue(false)
+    fireEvent.keyDown(window, { key: 'F5' })
+
+    expect(r.quickSave).toHaveBeenCalledTimes(2)
+    expect(r.quickSave.mock.calls[0]).toEqual([])
+    expect(r.quickSave.mock.calls[1]).toEqual([])
+    expect(r.showToast).not.toHaveBeenCalled()
   })
 
   it('664-10 (#765): F8 は renderer.quickLoad() を起点 quick（引数なし）で呼ぶだけで、NovelPlayer 自身は showToast を呼ばない（結果のトーストは renderer が出す）', async () => {
@@ -1992,7 +2013,8 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
   it('P3: 旧 renderer の getSnapshot が既定の sceneId: null のままリサイズすると restoreSnapshot は呼ばれず、initialSceneId 指定時は従来どおり新 renderer で startFrom が呼ばれる', async () => {
     render(<NovelPlayer events={[]} aspectRatio="auto" initialSceneId="scene-x" />)
     await flushAsync()
-    // getSnapshot は既定のまま（sceneId: null）上書きしない
+    // 再生は未開始（init 未完了相当）
+    rendererInstances[0].hasStartedPlayback.mockReturnValue(false)
 
     act(() => {
       triggerResize(400, 800)
@@ -2066,11 +2088,28 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     expect(r.restoreSnapshot).not.toHaveBeenCalled()
   })
 
+  it('P7b (#768): ジャンプ前（sceneId が null）でも再生開始済みなら fluid 再マウントで snapshot が restoreSnapshot に渡る', async () => {
+    render(<NovelPlayer events={[]} aspectRatio="auto" />)
+    await flushAsync()
+    const first = rendererInstances[0]
+    const snap: NovelGameState = { ...NEUTRAL_SNAPSHOT, sceneId: null, eventIndex: 3 }
+    first.getSnapshot.mockReturnValue(snap)
+    first.hasStartedPlayback.mockReturnValue(true)
+
+    act(() => {
+      triggerResize(400, 800)
+    })
+    await flushAsync()
+
+    expect(rendererInstances[1].restoreSnapshot).toHaveBeenCalledWith(snap)
+  })
+
   it('P7: 旧 renderer の init() が永久 pending でもカテゴリ変化リサイズは例外を投げず、cleanup の getSnapshot() が安全に呼ばれる（既定 null）ため restoreSnapshot は呼ばれない', async () => {
     setInitNeverResolves(true)
     render(<NovelPlayer events={[]} aspectRatio="auto" />)
     await flushAsync()
     const first = rendererInstances[0]
+    first.hasStartedPlayback.mockReturnValue(false)
 
     // cleanup の getSnapshot() 呼び出しは init().then(...) の外（同期コード）なので、
     // 旧 renderer の init() が未解決のままでも安全に走ることを確認する。
@@ -2136,6 +2175,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     })
     expect(rendererInstances.length).toBe(2)
     const gen1 = rendererInstances[1]
+    gen1.hasStartedPlayback.mockReturnValue(false) // gen1 は再生未開始
     // gen1.getSnapshot は既定のまま上書きしない（sceneId: null の空スナップショット）
 
     // gen1 の init() が未解決のまま、さらにカテゴリが変わるリサイズが来て gen1 が destroy される。
@@ -3623,18 +3663,18 @@ describe('NovelPlayer 初期入場の補足 (#734 PR2)', () => {
       expect(calls()).toBe(before)
     })
 
-    it('E2: 初期入場中の onSceneChange では quickSave されない（配線は確定後。確定後に配線されたコールバックだけが quickSave を呼ぶ）', async () => {
+    it('E2: 初期入場中の onSceneChange では 自動セーブ要求されない（配線は確定後。確定後に配線されたコールバックだけが requestAutoSave を呼ぶ）', async () => {
       render(<NovelPlayer events={[]} docKey="proj-a" />)
       const r = lastRenderer()
       const settle = holdStartFrom(r)
       await flushAsync()
       expect(r.setOnSceneChange).not.toHaveBeenCalled()
-      expect(r.quickSave).not.toHaveBeenCalled()
+      expect(r.requestAutoSave).not.toHaveBeenCalled()
       settle({ status: 'entered', sceneId: null })
       await flushAsync()
       const wired = r.setOnSceneChange.mock.calls[0][0] as () => void
       wired()
-      expect(r.quickSave).toHaveBeenCalledTimes(1)
+      expect(r.requestAutoSave).toHaveBeenCalledTimes(1)
     })
   })
 })

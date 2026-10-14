@@ -104,7 +104,7 @@ import {
   type AcrylicParams,
   type SpriteStyle,
 } from './spriteStyle'
-import { computeCoverFit } from './novelLayout'
+import { computeCoverFit, resolveRpgImagePath } from './novelLayout'
 import { isEditableTarget, isHeldKeyBlocked } from './inputGuards'
 import {
   computeBands,
@@ -306,6 +306,11 @@ export interface BattleScreenOptions {
    * 透過 PNG を想定。未指定・読み込み失敗は何も描かない。
    */
   foreground?: string
+  /**
+   * 画像パス（スプライト・背景・前景）を解決するプロジェクトのアセットのベース URL (#746)。
+   * 相対パスは `resolveRpgImagePath` で `${base}/images/...` に解決する。未指定・絶対 URL は従来どおりそのまま読み込む。
+   */
+  assetBaseUrl?: string
   /**
    * ドット絵モード (#466 / #760)。`true` なら戦闘のテクスチャ（スプライト・敵・背景・前景）を nearest のまま使う。
    * 未指定・false は mipmap＋linear で縮小をなめらかにする。
@@ -595,7 +600,7 @@ export class BattleScreen extends Container {
   /** 前景画像を読み込み、敵・味方スプライトの直上（パネルより奥）に cover で敷く (#747)。失敗時は何も描かない */
   private async loadForeground(path: string): Promise<void> {
     try {
-      const tex = (await Assets.load(path)) as Texture
+      const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, path))) as Texture
       applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag || !this.sideStage) return
       const sprite = new Sprite(tex)
@@ -610,7 +615,7 @@ export class BattleScreen extends Container {
   /** 背景画像を読み込んで cover で敷く (#736)。失敗時は半透明黒のまま */
   private async loadBackground(path: string): Promise<void> {
     try {
-      const tex = (await Assets.load(path)) as Texture
+      const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, path))) as Texture
       applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag) return
       const sprite = new Sprite(tex)
@@ -888,7 +893,7 @@ export class BattleScreen extends Container {
 
   private async loadEntitySprite(view: EntityView, path: string): Promise<void> {
     try {
-      const tex = (await Assets.load(path)) as Texture
+      const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, path))) as Texture
       applyBattleTextureFilter(tex, !!this.opts.pixelArt)
       if (this.destroyedFlag || view.container.destroyed) return
       const sprite = new Sprite(tex)
@@ -1898,7 +1903,9 @@ export class BattleScreen extends Container {
     await Promise.allSettled(
       (Object.entries(poses) as [BattlePose, string][]).map(async ([key, path]) => {
         try {
-          const tex = (await Assets.load(path)) as Texture
+          const tex = (await Assets.load(
+            resolveRpgImagePath(this.opts.assetBaseUrl, path)
+          )) as Texture
           applyBattleTextureFilter(tex, !!this.opts.pixelArt)
           if (this.destroyedFlag || view.container.destroyed) return
           const plate = view.acrylicBack ? this.getAcrylicPlate(tex) : null
