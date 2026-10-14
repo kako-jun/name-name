@@ -1205,11 +1205,16 @@ export class NovelRenderer {
    * 1回で位置を確定する。`setEvents` と違い、エントリ冒頭の演出（SE・ボイス・`[待機]`）を実行しない。
    */
   loadEvents(events: Event[]): void {
+    this.loadEntry(events, null)
+  }
+
+  /** `loadEvents` / `loadScenes` の共通部。エントリ文書と新規開始の sceneId を一緒に入れ替える。 */
+  private loadEntry(events: Event[], entrySceneId: string | null): void {
     this.releaseTextures()
     // #662: エントリ文書の events を(再)供給する公開経路。ここでスナップショットしておけば、この後
     // quickLoad/restoreToScene が rawEvents を直前ルートの events で上書きしても、新規開始の
     // 'entry' 対象は常にこのエントリ文書へ戻れる。
-    this.sceneIndex.setEntry(events)
+    this.sceneIndex.setEntry(events, entrySceneId)
     this.playbackStarted = false
     this.rawEvents = [...events]
     this.resolvedEvents = resolveEvents(this.rawEvents, this.gameState)
@@ -1282,8 +1287,10 @@ export class NovelRenderer {
   loadScenes(scenes: EventScene[]): void {
     this.sceneIndex.setJumpSceneIndex(scenes)
     // 0件は空の文書（`loadEvents([])`）。旧文書を entryRawEvents / entrySceneId に残さない。
-    this.loadEvents(scenes.length > 0 ? scenes[0].events : [])
-    if (scenes.length > 0) this.sceneIndex.setEntrySceneId(scenes[0].id)
+    this.loadEntry(
+      scenes.length > 0 ? scenes[0].events : [],
+      scenes.length > 0 ? scenes[0].id : null
+    )
   }
 
   /**
@@ -1500,7 +1507,7 @@ export class NovelRenderer {
    * 処理の順序:
    * 1. 要求の時点で遷移世代を進めて捕捉し、予約中の Jump を取り消す（後勝ち）
    * 2. 進行のときだけ confinement を判定する（圏外は終劇）
-   * 3. `resolveScene` でシーンを引く。読み込み済みなら同期のまま適用する。未ロードなら入場中ゲート
+   * 3. `this.sceneIndex.resolve` でシーンを引く。読み込み済みなら同期のまま適用する。未ロードなら入場中ゲート
    *    （`pendingEntry`）を立てて待ち、await の後に世代と `initialized` をこの1か所で判定する
    *    （不一致は superseded。成功・失敗とも何もしない。後始末は世代を進めた新しい側が担う）
    * 4. 見つからなければ種類に応じて失敗として扱い、位置から遷移状態を導出し直す
@@ -1627,7 +1634,7 @@ export class NovelRenderer {
         id: entryId ?? '',
         title: '',
         view: 'TopDown',
-        events: this.sceneIndex.getEntryEvents(),
+        events: [...this.sceneIndex.getEntryEvents()],
       }
       // sceneId はエントリの識別子に正規化する（loadEvents なら null。空文字のセーブも同じ扱い）。
       this.restoreToScene(entry, { ...req.state, sceneId: entryId })

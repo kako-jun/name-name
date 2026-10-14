@@ -238,8 +238,7 @@ describe('SceneIndex.indexLoaded / setJumpSceneIndex', () => {
   it('setJumpSceneIndex はエントリ文書に触れない', () => {
     const idx = new SceneIndex()
     const events = [narration('e')]
-    idx.setEntry(events)
-    idx.setEntrySceneId('s')
+    idx.setEntry(events, 's')
     idx.setJumpSceneIndex([scene('a', [])])
     expect(idx.getEntryEvents()).toEqual(events)
     expect(idx.getEntrySceneId()).toBe('s')
@@ -247,9 +246,9 @@ describe('SceneIndex.indexLoaded / setJumpSceneIndex', () => {
 })
 
 // ---------------------------------------------------------------------------
-// setEntry / setEntrySceneId
+// setEntry
 // ---------------------------------------------------------------------------
-describe('SceneIndex.setEntry / setEntrySceneId', () => {
+describe('SceneIndex.setEntry', () => {
   it('setEntry は events をコピーする（渡した配列を後から変更しても影響しない）', () => {
     const idx = new SceneIndex()
     const events = [narration('a')]
@@ -263,7 +262,7 @@ describe('SceneIndex.setEntry / setEntrySceneId', () => {
 
   it('setEntry は entrySceneId を null に戻す', () => {
     const idx = new SceneIndex()
-    idx.setEntrySceneId('s')
+    idx.setEntry([narration('a')], 's')
     expect(idx.getEntrySceneId()).toBe('s')
     idx.setEntry([narration('a')])
     expect(idx.getEntrySceneId()).toBeNull()
@@ -271,10 +270,8 @@ describe('SceneIndex.setEntry / setEntrySceneId', () => {
 
   it('setEntry([]) で旧文書が残らない（0件 loadScenes 相当）', () => {
     const idx = new SceneIndex()
-    idx.setEntry([narration('a')])
-    idx.setEntrySceneId('s')
+    idx.setEntry([narration('a')], 's')
     idx.setEntry([])
-    idx.setEntrySceneId(null)
     expect(idx.getEntryEvents()).toEqual([])
     expect(idx.getEntrySceneId()).toBeNull()
   })
@@ -288,8 +285,7 @@ describe('SceneIndex.isEntryStreamActive', () => {
     const idx = new SceneIndex()
     const a = narration('a')
     const b = narration('b')
-    idx.setEntry([a, b])
-    if (sceneId !== null) idx.setEntrySceneId(sceneId)
+    idx.setEntry([a, b], sceneId)
     return { idx, a, b }
   }
 
@@ -350,8 +346,7 @@ describe('SceneIndex.isEntryStreamActive', () => {
     for (const entry of entries) {
       for (const entryId of ids) {
         const idx = new SceneIndex()
-        idx.setEntry(entry)
-        idx.setEntrySceneId(entryId)
+        idx.setEntry(entry, entryId)
         for (const raw of raws) {
           for (const cur of ids) {
             expect(
@@ -536,7 +531,7 @@ describe('SceneIndex.linearStartIndex', () => {
   it('旧実装（origin/main の linearStartIndex）と複数入力で一致する', () => {
     // origin/main の NovelRenderer.linearStartIndex を写したリファレンス
     function reference(
-      entryRawEvents: Event[],
+      entryRawEvents: readonly Event[],
       allScenes: EventScene[],
       sceneId: string,
       flags: Record<string, FlagValue> | undefined

@@ -63,7 +63,7 @@ export class SceneIndex {
   } | null = null
 
   /** エントリ文書の events（読み取り専用の参照。新規開始・復元の対象）。 */
-  getEntryEvents(): Event[] {
+  getEntryEvents(): readonly Event[] {
     return this.entryRawEvents
   }
 
@@ -72,7 +72,7 @@ export class SceneIndex {
   }
 
   /** 索引上のシーン群（`resolveSceneTitle` など、索引を引く純粋関数に渡す用）。 */
-  getScenes(): EventScene[] {
+  getScenes(): readonly EventScene[] {
     return this.allScenes
   }
 
@@ -81,14 +81,12 @@ export class SceneIndex {
     return findSceneById(this.allScenes, sceneId)
   }
 
-  /** エントリ文書を(再)供給する。events はコピーして保持し、entrySceneId は null に戻す。 */
-  setEntry(events: Event[]): void {
+  /**
+   * エントリ文書を(再)供給する。events はコピーして保持する。`sceneId` は新規開始の `currentSceneId`
+   * （シーン文書は `scenes[0].id`、線形ストリームは省略 = null）。文書と ID は常に一緒に入れ替える。
+   */
+  setEntry(events: readonly Event[], sceneId: string | null = null): void {
     this.entryRawEvents = [...events]
-    this.entrySceneId = null
-  }
-
-  /** 新規開始の `currentSceneId`（`loadScenes` が `scenes[0].id` を入れる）。 */
-  setEntrySceneId(sceneId: string | null): void {
     this.entrySceneId = sceneId
   }
 
