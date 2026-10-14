@@ -1155,9 +1155,17 @@ function EditorScreen({
           {(['novel', 'rpg'] as const).map((tab) => (
             <button
               key={tab}
-              onClick={() => setEditorTab(tab)}
+              onClick={() => {
+                // 動画書き出し中は切り替えない（タブを替えるとプレビューが消えて録画が壊れる）(#797)
+                if (exportRunning) return
+                setEditorTab(tab)
+              }}
               role="tab"
               aria-selected={editorTab === tab}
+              disabled={exportRunning}
+              aria-disabled={exportRunning}
+              title={exportRunning ? '動画書き出し中は切り替えできません' : undefined}
+              style={exportRunning ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
               className="desk-tab"
             >
               {tab === 'novel' ? 'ノベル' : 'RPG'}
@@ -1497,6 +1505,9 @@ function EditorScreen({
         onDiscard={() => setShowDiscardConfirm(true)}
         mode={editorTab === 'novel' ? mode : undefined}
         onModeChange={editorTab === 'novel' ? setMode : undefined}
+        // 動画書き出し中はモードを切り替えない（プレビューが消えて録画が壊れる）(#797)
+        modeChangeDisabled={exportRunning}
+        modeChangeDisabledTitle="動画書き出し中は切り替えできません"
         // PR #120 review Q1: shaRef 未取得（loadFailed / 未ロード）時は保存不可。
         discardDisabled={switchingDoc}
         discardDisabledTitle="読み込み中…"
