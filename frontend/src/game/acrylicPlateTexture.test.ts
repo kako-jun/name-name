@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Texture } from 'pixi.js'
+import { computePlateExtend } from './acrylicPlate'
 import { PLATE_WORK_MAX_SIDE, createAcrylicPlateTexture } from './acrylicPlateTexture'
 import { resolveAcrylicParams } from './spriteStyle'
 
@@ -46,9 +47,11 @@ describe('createAcrylicPlateTexture (#760)', () => {
     const plate = createAcrylicPlateTexture(srcTexture(400, 800), P)!
     expect(plate).not.toBeNull()
     expect(plate.scale).toBeCloseTo(800 / 192, 9)
-    // 192 に縮小した高さ 192・幅 96 + 両側 pad
+    // 192 に縮小した高さ 192・幅 96 + 両側 pad。高さには差し込み線まで伸ばす extend が加わる (#802)
     expect(plate.texture.width).toBe(96 + plate.pad * 2)
-    expect(plate.texture.height).toBe(192 + plate.pad * 2)
+    expect(plate.texture.height).toBe(
+      192 + computePlateExtend(192, P.spriteLiftRatio) + plate.pad * 2
+    )
     expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 96, 192)
   })
 
@@ -76,7 +79,35 @@ describe('createAcrylicPlateTexture (#760)', () => {
     const plate = createAcrylicPlateTexture(srcTexture(100, 50), P)!
     expect(plate.shadow!.width).toBe(plate.texture.width)
     expect(plate.shadow!.height).toBe(plate.texture.height)
+    const extend = computePlateExtend(50, P.spriteLiftRatio)
+    expect(plate.foot).toEqual({ x: plate.pad + 50, y: plate.pad + 50 + extend })
+  })
+
+  it('足元 foot.y = pad + 作業高さ + extend・foot.x は中央 (#802)', () => {
+    const plate = createAcrylicPlateTexture(srcTexture(100, 200), P)!
+    const extend = computePlateExtend(192, P.spriteLiftRatio)
+    expect(extend).toBeGreaterThan(0)
+    expect(plate.foot!.y).toBe(plate.pad + 192 + extend)
+    expect(plate.foot!.x).toBe(plate.pad + 48)
+  })
+
+  it('lift=0 は foot.y が従来と同じ（pad + 作業高さ）(#802)', () => {
+    const plate = createAcrylicPlateTexture(
+      srcTexture(100, 50),
+      resolveAcrylicParams({ spriteLiftRatio: 0 })
+    )!
     expect(plate.foot).toEqual({ x: plate.pad + 50, y: plate.pad + 50 })
+    expect(plate.texture.height).toBe(50 + plate.pad * 2)
+  })
+
+  it('hasBase=false は lift が既定でも板を伸ばさず foot.y が従来と同じ（台座が無いと浮き量は効かない・#802）', () => {
+    const plate = createAcrylicPlateTexture(
+      srcTexture(100, 50),
+      resolveAcrylicParams({ hasBase: false, spriteLiftRatio: 0.15 })
+    )!
+    expect(plate.foot).toEqual({ x: plate.pad + 50, y: plate.pad + 50 })
+    expect(plate.texture.height).toBe(50 + plate.pad * 2)
+    expect(plate.shadow!.height).toBe(plate.texture.height)
   })
 
   it('板と影は別のテクスチャ（破棄を別々にできる）', () => {

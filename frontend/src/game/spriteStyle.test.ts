@@ -5,6 +5,7 @@
  * 定数参照は導出式のテストにだけ使う。PixiJS の実描画は対象外。
  */
 import { describe, expect, it } from 'vitest'
+import { computeSlitY } from './acrylicBase'
 import {
   DEFAULT_ACRYLIC_PARAMS,
   computeAcrylicGeometry,
@@ -53,6 +54,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       castSquash: 0.35,
       castShear: 1.4,
       castBlurRatio: 0.012,
+      spriteLiftRatio: 0.03,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -83,6 +85,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       castSquash: 0.35,
       castShear: 1.4,
       castBlurRatio: 0.012,
+      spriteLiftRatio: 0.03,
       hasBase: true,
       baseWidthRatio: 0.7,
       baseHeightRatio: 0.28,
@@ -141,6 +144,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         castSquash: 0.35,
         castShear: 1.4,
         castBlurRatio: 0.012,
+        spriteLiftRatio: 0.03,
         hasBase: true,
         baseWidthRatio: 0.7,
         baseHeightRatio: 0.28,
@@ -216,6 +220,7 @@ describe('computeAcrylicGeometry', () => {
     base: null,
     highlight: null,
     shadow: null,
+    liftPx: 0,
   }
 
   it.each([[0], [-1], [-100], [NaN], [Infinity], [-Infinity]])(
@@ -264,11 +269,16 @@ describe('computeAcrylicGeometry', () => {
       g.shadow!.cy + g.shadow!.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio
     ).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
     expect(g.base!.cy).toBeCloseTo(172.952, 9)
-    // 領域は x:[10,190] × y:[10,172.952] → 高さ 162.952 の正方形が中央に乗る
-    expect(g.sprite.width).toBeCloseTo(162.952, 9)
-    expect(g.sprite.height).toBeCloseTo(162.952, 9)
-    expect(g.sprite.x).toBeCloseTo(18.524, 9)
+    // 下端は差し込み線 slitY = 172.952 - 19.6*0.28 = 167.464。領域は x:[10,190] × y:[10,167.464]（高さ 157.464）
+    // スプライト高さ + 浮き(0.03×高さ) = 領域の高さ → 高さ = 157.464 / 1.03
+    const slitY = 167.464
+    const h = 157.464 / 1.03
+    expect(g.sprite.width).toBeCloseTo(h, 9)
+    expect(g.sprite.height).toBeCloseTo(h, 9)
+    expect(g.sprite.x).toBeCloseTo((200 - h) / 2, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
+    expect(g.liftPx).toBeCloseTo(h * 0.03, 9)
+    expect(g.sprite.y + g.sprite.height).toBeCloseTo(slitY - g.liftPx, 9)
   })
 
   it('仕様値: ハイライトの係数（rx = base.rx*0.7, ry = base.ry*0.35, cy = base.cy - base.ry*0.35）', () => {
@@ -284,14 +294,16 @@ describe('computeAcrylicGeometry', () => {
     expect(g.sprite.width).toBeCloseTo(180, 9)
     expect(g.sprite.height).toBeCloseTo(45, 9)
     expect(g.sprite.x).toBeCloseTo(10, 9)
-    expect(g.sprite.y + g.sprite.height).toBeCloseTo(g.base!.cy, 9)
+    // 足元は差し込み線（167.464）から浮き量（45×0.03）だけ上
+    expect(g.sprite.y + g.sprite.height).toBeCloseTo(167.464 - 45 * 0.03, 9)
   })
 
   it('横長 100x400 は高さいっぱい・縦横比 1:4 を保つ', () => {
     const g = computeAcrylicGeometry(100, 400, 200)
-    expect(g.sprite.height).toBeCloseTo(162.952, 9)
-    expect(g.sprite.width).toBeCloseTo(40.738, 9)
-    expect(g.sprite.x).toBeCloseTo((200 - 40.738) / 2, 9)
+    const h = 157.464 / 1.03 // 高さ + 浮き = 領域の高さ
+    expect(g.sprite.height).toBeCloseTo(h, 9)
+    expect(g.sprite.width).toBeCloseTo(h / 4, 9) // 縦横比 1:4 を保つ
+    expect(g.sprite.x).toBeCloseTo((200 - h / 4) / 2, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
   })
 
@@ -306,7 +318,7 @@ describe('computeAcrylicGeometry', () => {
     expect(g.sprite.x).toBeCloseTo(10, 9)
     expect(g.sprite.y).toBeCloseTo(10, 9)
     expect(g.sprite.width).toBeCloseTo(180, 9)
-    expect(g.sprite.height).toBeCloseTo(162.952, 9)
+    expect(g.sprite.height).toBeCloseTo(157.464 / 1.03, 9) // 浮き量ぶん縮む
   })
 
   // minMarginPx(2) と marginRatio*size = 0.03*size の切替: size=66.67 で等しい。minLinePx(1.5) と 0.02*size は size=75 で等しい。
@@ -473,8 +485,9 @@ describe('computeAcrylicGeometry: スイープ不変条件', () => {
                 expect(base!.cy - base!.ry, tag).toBeGreaterThanOrEqual(-EPS)
                 expect(base!.rx, tag).toBeLessThanOrEqual(shadow!.rx + EPS)
                 expect(highlight!.rx, tag).toBeLessThan(base!.rx)
-                // 足元は台座の中心（領域が潰れていないとき）
-                if (base!.cy - m > 0) expect(s.y + s.height, tag).toBeCloseTo(base!.cy, 9)
+                // 足元は差し込み線より浮き量だけ上（領域が潰れていないとき）(#802)
+                const slitY = computeSlitY(base!.cy, base!.ry)
+                if (slitY - m > 0) expect(s.y + s.height, tag).toBeCloseTo(slitY - g.liftPx, 9)
               } else {
                 expect(g.base, tag).toBeNull()
                 expect(g.shadow, tag).toBeNull()
@@ -601,6 +614,119 @@ describe('computeAcrylicGeometry: 台座の厚み分を枠内に収める (#760)
           const t = g.base!.ry * thick
           expect(g.base!.cy + g.base!.ry + t).toBeLessThanOrEqual(size + 1e-9)
           expect(g.shadow!.cy + g.shadow!.ry + t).toBeLessThanOrEqual(size + 1e-9)
+        }
+  })
+})
+
+describe('resolveAcrylicParams: spriteLiftRatio (#802)', () => {
+  const lift = (v?: number): number =>
+    resolveAcrylicParams(v === undefined ? {} : { spriteLiftRatio: v }).spriteLiftRatio
+
+  it('仕様値: 未指定は 0.03', () => {
+    expect(lift()).toBe(0.03)
+  })
+
+  it.each([
+    [-0.01, 0],
+    [0, 0],
+    [0.01, 0.01],
+    [0.14, 0.14],
+    [0.15, 0.15],
+    [0.16, 0.15],
+  ])('仕様値: spriteLiftRatio=%s は %s（0〜0.15 に clamp）', (input, expected) => {
+    expect(lift(input)).toBe(expected)
+  })
+
+  it.each([[NaN], [Infinity], [-Infinity]])('非有限 %s は既定 0.03', (bad) => {
+    expect(lift(bad)).toBe(0.03)
+  })
+})
+
+describe('computeAcrylicGeometry: スプライトの浮き (#802)', () => {
+  const slitOf = (g: ReturnType<typeof computeAcrylicGeometry>): number =>
+    computeSlitY(g.base!.cy, g.base!.ry)
+
+  it('台座あり・lift=0 は下端が差し込み線（浮かない・旧挙動）', () => {
+    const g = computeAcrylicGeometry(100, 100, 200, resolveAcrylicParams({ spriteLiftRatio: 0 }))
+    expect(g.liftPx).toBe(0)
+    expect(g.sprite.y + g.sprite.height).toBeCloseTo(slitOf(g), 9)
+  })
+
+  it('台座あり・既定は下端が slitY - liftPx で、liftPx はスプライト高さ x 0.03', () => {
+    const g = computeAcrylicGeometry(100, 100, 200)
+    expect(g.liftPx).toBeCloseTo(g.sprite.height * 0.03, 9)
+    expect(g.sprite.y + g.sprite.height).toBeCloseTo(slitOf(g) - g.liftPx, 9)
+  })
+
+  it('lift=0.15 でも下端は slitY - liftPx で、スプライト全体が枠内', () => {
+    const g = computeAcrylicGeometry(100, 100, 200, resolveAcrylicParams({ spriteLiftRatio: 0.15 }))
+    const s = g.sprite
+    expect(g.liftPx).toBeCloseTo(s.height * 0.15, 9)
+    expect(s.y + s.height).toBeCloseTo(slitOf(g) - g.liftPx, 9)
+    expect(s.y).toBeGreaterThanOrEqual(0)
+    expect(s.x).toBeGreaterThanOrEqual(0)
+    expect(s.x + s.width).toBeLessThanOrEqual(200)
+    expect(s.y + s.height + g.liftPx).toBeLessThanOrEqual(200)
+  })
+
+  it.each([[0], [0.03], [0.15]])('hasBase=false は lift=%s でも liftPx=0', (r) => {
+    const g = computeAcrylicGeometry(
+      100,
+      100,
+      200,
+      resolveAcrylicParams({ hasBase: false, spriteLiftRatio: r })
+    )
+    expect(g.liftPx).toBe(0)
+    expect(g.sprite).toEqual({ x: 10, y: 10, width: 180, height: 180 })
+  })
+
+  it('liftPx / sprite.height は texture 100x100 と 100x400 で等しい（高さに比例）', () => {
+    const a = computeAcrylicGeometry(100, 100, 200)
+    const b = computeAcrylicGeometry(100, 400, 200)
+    expect(a.liftPx / a.sprite.height).toBeCloseTo(0.03, 9)
+    expect(b.liftPx / b.sprite.height).toBeCloseTo(0.03, 9)
+  })
+
+  it.each([
+    [100, 100],
+    [400, 100],
+    [100, 400],
+  ])('lift>0 でも texture %sx%s の縦横比を保つ（width/height = tw/th）', (tw, th) => {
+    const g = computeAcrylicGeometry(tw, th, 200, resolveAcrylicParams({ spriteLiftRatio: 0.1 }))
+    expect(g.sprite.width / g.sprite.height).toBeCloseTo(tw / th, 9)
+  })
+
+  it('幼稚園（小）〜壮年（大）・敵の大小の texture 寸法で有限・非負・枠内・下端が slitY を超えない', () => {
+    const texes: Array<[number, number]> = [
+      [40, 60],
+      [60, 100],
+      [80, 160],
+      [120, 280],
+      [200, 280],
+      [320, 320],
+      [512, 256],
+      [128, 512],
+    ]
+    for (const size of [48, 120, 200, 400])
+      for (const r of [0, 0.03, 0.15])
+        for (const [tw, th] of texes) {
+          const tag = `size=${size} lift=${r} tex=${tw}x${th}`
+          const g = computeAcrylicGeometry(
+            tw,
+            th,
+            size,
+            resolveAcrylicParams({ spriteLiftRatio: r })
+          )
+          const s = g.sprite
+          for (const v of [s.x, s.y, s.width, s.height, g.liftPx])
+            expect(Number.isFinite(v), tag).toBe(true)
+          expect(s.width, tag).toBeGreaterThanOrEqual(0)
+          expect(s.height, tag).toBeGreaterThanOrEqual(0)
+          expect(g.liftPx, tag).toBeGreaterThanOrEqual(0)
+          expect(s.x, tag).toBeGreaterThanOrEqual(-1e-9)
+          expect(s.y, tag).toBeGreaterThanOrEqual(-1e-9)
+          expect(s.x + s.width, tag).toBeLessThanOrEqual(size + 1e-9)
+          expect(s.y + s.height, tag).toBeLessThanOrEqual(slitOf(g) + 1e-9)
         }
   })
 })

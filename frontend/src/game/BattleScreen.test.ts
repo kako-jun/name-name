@@ -1121,9 +1121,11 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(sh.scale.x).toBeCloseTo(t.scaleX, 9)
       expect(sh.scale.y).toBeCloseTo(t.scaleY, 9)
       expect(sh.skew.x).toBeCloseTo(t.skewX, 9)
-      // 基点 = スプライト下端の中央（画面座標）
+      // 基点 = スプライト下端の中央から浮き量ぶん下（台座の差し込み線の高さ・画面座標）(#802)
+      const liftPx = v.sprite!.height * resolveAcrylicParams().spriteLiftRatio
+      expect(liftPx).toBeGreaterThan(0)
       expect(sh.x).toBeCloseTo(v.container.x + v.sprite!.x + v.sprite!.width / 2, 6)
-      expect(sh.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height, 6)
+      expect(sh.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height + liftPx, 6)
       // 破棄で影のテクスチャも破棄され、参照は null
       s.destroy({ children: true })
       expect(v.acrylicShadow).toBeNull()
@@ -1188,7 +1190,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.acrylicPlate!.visible).toBe(true)
     })
 
-    it('成功: sprite は slot 枠に収まり、足元が台座の中心に乗る（computeAcrylicGeometry と一致）', async () => {
+    it('成功: sprite は slot 枠に収まり、足元が差し込み線より浮き量だけ上に来る（computeAcrylicGeometry と一致・#802）', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
@@ -1202,7 +1204,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(sp.x).toBeGreaterThanOrEqual(0)
       expect(sp.y).toBeGreaterThanOrEqual(0)
       expect(sp.x + sp.width).toBeLessThanOrEqual(size + 1e-9)
-      expect(sp.y + sp.height).toBeCloseTo(g.base!.cy, 9)
+      expect(sp.y + sp.height).toBeCloseTo(computeSlitY(g.base!.cy, g.base!.ry) - g.liftPx, 9)
     })
 
     it('成功: 台座・影が描かれる（acrylicBack の bounds が台座の幅に一致）', async () => {
@@ -2546,7 +2548,9 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
       expect(shadow.scale.x).toBeCloseTo(t.scaleX, 9)
       expect(shadow.scale.y).toBeCloseTo(t.scaleY, 9)
       expect(shadow.x).toBeCloseTo(v.container.x + v.sprite!.x + v.sprite!.width / 2, 6)
-      expect(shadow.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height, 6)
+      const liftPx = geom(boxOf(400, 700)).liftPx
+      expect(liftPx).toBeGreaterThan(0)
+      expect(shadow.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height + liftPx, 6)
       expect(shadow.x !== before.x || shadow.y !== before.y || shadow.scale.y !== before.sy).toBe(
         true
       )
@@ -2864,16 +2868,122 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         }
         for (const pr of partyRects)
           for (const er of enemyRects) expect(overlaps(pr, er)).toBe(false)
-        // 影は画面上の足元（スプライト下端の中央）を基点にする
+        // 影は画面上の足元（スプライト下端の中央から浮き量ぶん下＝差し込み線の高さ）を基点にする (#802)
+        const lift = resolveAcrylicParams().spriteLiftRatio
         for (const v of [...i.enemyViews, ...i.partyViews]) {
           expect(v.acrylicShadow!.x).toBeCloseTo(
             v.container.x + v.sprite!.x + v.sprite!.width / 2,
             6
           )
-          expect(v.acrylicShadow!.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height, 6)
+          expect(v.acrylicShadow!.y).toBeCloseTo(
+            v.container.y + v.sprite!.y + v.sprite!.height * (1 + lift),
+            6
+          )
         }
       }
     )
+  })
+
+  describe('スプライトの浮きと板・影 (#802)', () => {
+    const lifted = (ratio: number): BattleScreenOptions => ({
+      ...acrylic,
+      spriteStyleParams: { spriteLiftRatio: ratio },
+    })
+
+    it('影の基点 y = container.y + sprite.y + sprite.height + liftPx（スプライト下端ではなく差し込み線の高さ）', async () => {
+      const s = track(make([entity('hero')], [withSprite('slime')], lifted(0.1)))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const g = geom(boxOf(800, 450), { spriteLiftRatio: 0.1 })
+      expect(g.liftPx).toBeGreaterThan(0)
+      expect(v.acrylicShadow!.y).toBeCloseTo(
+        v.container.y + v.sprite!.y + v.sprite!.height + g.liftPx,
+        6
+      )
+      expect(v.acrylicShadow!.y).toBeCloseTo(
+        v.container.y + computeSlitY(g.base!.cy, g.base!.ry),
+        6
+      )
+    })
+
+    it('hasBase=false は浮き量が 0 で、影の基点はスプライト下端のまま（不整合にならない）', async () => {
+      const s = track(
+        make([entity('hero')], [withSprite('slime')], {
+          ...acrylic,
+          spriteStyleParams: { hasBase: false, spriteLiftRatio: 0.15 },
+        })
+      )
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      expect(v.acrylicShadow!.y).toBeCloseTo(v.container.y + v.sprite!.y + v.sprite!.height, 6)
+    })
+
+    it('redraw・リサイズで liftPx が追従し、影の基点も新しい浮き量になる', async () => {
+      const s = track(make([entity('hero')], [withSprite('slime')], lifted(0.1)))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const lifts: number[] = []
+      for (const [w, h] of [
+        [400, 700],
+        [1280, 720],
+        [800, 450],
+      ]) {
+        s.redraw(w, h)
+        const g = geom(boxOf(w, h), { spriteLiftRatio: 0.1 })
+        lifts.push(g.liftPx)
+        expect(v.acrylicShadow!.y).toBeCloseTo(
+          v.container.y + v.sprite!.y + v.sprite!.height + g.liftPx,
+          6
+        )
+        expect(v.sprite!.y + v.sprite!.height).toBeCloseTo(
+          computeSlitY(g.base!.cy, g.base!.ry) - g.liftPx,
+          6
+        )
+      }
+      expect(new Set(lifts.map((l) => l.toFixed(3))).size).toBeGreaterThan(1) // 画面サイズで浮き量が変わる
+    })
+
+    it('spriteStyle=none は spriteLiftRatio を渡しても板・影・台座が無く、配置は渡さない場合と同一', async () => {
+      const base = track(make([entity('hero')], [withSprite('slime')], { layout: 'side' }))
+      const none = track(
+        make([entity('hero')], [withSprite('slime')], {
+          layout: 'side',
+          spriteStyleParams: { spriteLiftRatio: 0.15 },
+        })
+      )
+      await flushPromises()
+      const a = internals(base).enemyViews[0]
+      const b = internals(none).enemyViews[0]
+      expect(b.acrylicPlate).toBeNull()
+      expect(b.acrylicShadow).toBeNull()
+      expect(b.acrylicBase).toBeNull()
+      expect(b.acrylicBack).toBeNull()
+      expect(b.sprite!.x).toBeCloseTo(a.sprite!.x, 9)
+      expect(b.sprite!.y).toBeCloseTo(a.sprite!.y, 9)
+      expect(b.sprite!.width).toBeCloseTo(a.sprite!.width, 9)
+      expect(b.sprite!.height).toBeCloseTo(a.sprite!.height, 9)
+    })
+
+    it('板が extend ぶん下へ伸びていても mask は差し込み線で水平に切る', async () => {
+      const EXTEND = 10
+      vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+        texture: sized(TEX_W + PAD * 2, TEX_H + EXTEND + PAD * 2),
+        pad: PAD,
+        shadow: sized(TEX_W + PAD * 2, TEX_H + EXTEND + PAD * 2),
+        foot: { x: PAD + TEX_W / 2, y: PAD + TEX_H + EXTEND },
+      })) as never)
+      const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
+      await flushPromises()
+      const v = internals(s).enemyViews[0]
+      const plate = v.acrylicPlate!
+      const g = geom(boxOf(800, 450))
+      const slitY = computeSlitY(g.base!.cy, g.base!.ry)
+      const plateBottom = plate.y + plate.texture.height * plate.scale.y
+      expect(plateBottom).toBeGreaterThan(slitY) // 伸びた板は差し込み線を越えている
+      const b = (plate.mask as Graphics).getLocalBounds()
+      expect(b.maxY).toBeCloseTo(slitY, 6)
+      expect(b.maxY).toBeLessThan(plateBottom)
+    })
   })
 
   describe('spriteStyleParams の反映', () => {
