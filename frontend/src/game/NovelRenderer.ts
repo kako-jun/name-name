@@ -68,9 +68,6 @@ import { ToastOverlay } from './ToastOverlay'
 import { SeekBar, DEFAULT_BAR_FILL_COLOR } from './SeekBar'
 import { computeDisplayIndex, findHistoryIndexForDisplayIndex } from './seekMapping'
 import { countDisplayEvents, getTextEvent, remapEventIndexAfterReResolve } from './eventCursor'
-
-// 公開 API 互換: 既存の import 元（seekMapping・テスト）のため再エクスポートする。
-export { getTextEvent }
 import { buildFreshPositionState } from './freshState'
 import { collectUpcomingAssetUrls } from './preloadPlan'
 import { buildDebugState, type DebugState } from './debugState'

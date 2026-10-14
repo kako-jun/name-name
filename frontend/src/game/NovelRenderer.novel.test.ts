@@ -22,12 +22,8 @@
  *     → これらは書かない。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import {
-  NovelRenderer,
-  NOVEL_SCRIM_ALPHA,
-  NOVEL_SCRIM_VISIBILITY_FADE_MS,
-  getTextEvent,
-} from './NovelRenderer'
+import { NovelRenderer, NOVEL_SCRIM_ALPHA, NOVEL_SCRIM_VISIBILITY_FADE_MS } from './NovelRenderer'
+import { getTextEvent } from './eventCursor'
 import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'

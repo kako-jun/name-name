@@ -7,7 +7,7 @@
 
 import type { NovelGameState } from './GameState'
 import type { Event } from '../types'
-import { getTextEvent } from './NovelRenderer'
+import { getTextEvent } from './eventCursor'
 
 /**
  * 表示用テキストイベントの 1-based 現在 index (Counter / SeekBar 共通)。
