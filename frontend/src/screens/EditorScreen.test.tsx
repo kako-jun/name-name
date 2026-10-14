@@ -853,4 +853,56 @@ describe('EditorScreen: 下書きの保存・破棄との整合 (#778)', () => {
     await new Promise((r) => setTimeout(r, 100))
     expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-draft')
   })
+
+  it('切替先のロード中は編集 UI が読み取り専用（inert + 表示）で、編集は受け付けず、完了後は編集できる (#795)', async () => {
+    const info = (path: string) => ({ path, sha: 's', size: 1, title: null, hidden: false })
+    listScriptsMock.mockImplementation(async () => [info('other.md'), info('script.md')])
+    let releaseB: (v: { content: string; sha: string }) => void = () => {}
+    getContentsMock.mockImplementation(async (_p: string, path: string) => {
+      if (path === 'other.md') {
+        return new Promise((r) => {
+          releaseB = r
+        })
+      }
+      return { content: '# A-body', sha: 'sha' }
+    })
+    renderEditor()
+    fireEvent.click(await screen.findByRole('tab', { name: /^other\.md/ }))
+    const overlay = await screen.findByTestId('doc-switching-overlay')
+    expect(overlay.textContent).toContain('読み込み中')
+    expect(document.querySelector('main')?.hasAttribute('inert')).toBe(true)
+    // ロード中の編集は受け付けない（emit も走らず、保存対象にならない）
+    editedDoc = makeDoc(['hub', 'EDITED'])
+    emitted = '# A-edited'
+    fireEvent.click(screen.getByTestId('edit-doc'))
+    await new Promise((r) => setTimeout(r, 1300))
+    expect(localStorage.getItem('name-name:editor-draft:p:script.md')).toBeNull()
+    expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBeNull()
+    // ロード完了後は編集できる
+    await act(async () => {
+      releaseB({ content: '# B-server', sha: 'shaB' })
+    })
+    await waitFor(() => expect(screen.queryByTestId('doc-switching-overlay')).toBeNull())
+    expect(document.querySelector('main')?.hasAttribute('inert')).toBe(false)
+    emitted = '# B-edited'
+    fireEvent.click(screen.getByTestId('edit-doc'))
+    await waitFor(
+      () => expect(localStorage.getItem('name-name:editor-draft:p:other.md')).toBe('# B-edited'),
+      { timeout: 3000 }
+    )
+  })
+
+  it('保存中は破棄確認モーダルの破棄ボタンが無効', async () => {
+    getContentsMock.mockImplementation(async () => ({ content: '# hub', sha: 'sha' }))
+    putContentsMock.mockImplementation(() => new Promise(() => {}))
+    renderEditor()
+    emitted = '# v1'
+    fireEvent.click(await screen.findByTestId('edit-doc'))
+    // 破棄確認モーダルを開いたまま保存を始める
+    fireEvent.click(await screen.findByRole('button', { name: '変更を破棄' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Gitにコミット・プッシュ' }))
+    await waitFor(() => expect(putContentsMock).toHaveBeenCalled())
+    const discard = (await screen.findByRole('button', { name: '破棄' })) as HTMLButtonElement
+    expect(discard.disabled).toBe(true)
+  })
 })

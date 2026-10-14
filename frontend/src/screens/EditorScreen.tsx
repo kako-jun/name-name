@@ -283,6 +283,9 @@ function EditorScreen({
   // rawMarkdown の更新は autosave useEffect 経由で Worker に PUT される。
   // emit が失敗した場合は rawMarkdown と doc の desync を避けるため、doc を元に戻す。
   const handleDocChange = async (newDoc: EventDocument) => {
+    // 切替先のロード中（表示中の doc が編集中パスの文書でない間）は編集を受け付けない。
+    // 受け付けると旧文書の内容が切替先のロードで黙って消える (#795)。UI 側も読み取り専用にしている。
+    if (docPathRef.current !== currentScriptPathRef.current) return
     // 編集対象の文書のパスは呼び出し時点で控える（emit の await 中にタブが切り替わっても取り違えない）
     const editedPath = docPathRef.current ?? currentScriptPathRef.current
     const prev = doc
@@ -379,6 +382,14 @@ function EditorScreen({
   const [docPath, setDocPath] = useState<string | null>(null)
   const docPathRef = useRef<string | null>(null)
   docPathRef.current = docPath
+  // 切替先のロード中か（表示中の doc が編集中パスの文書でない間）。この間は編集 UI を読み取り専用にする。
+  const switchingDoc = docPath !== currentScriptPath
+  // React 18 は inert 属性を型・値として扱えないため、DOM に直接付け外しする
+  // （フォーカス・キー入力・クリックをまとめて止める）。
+  const mainRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    mainRef.current?.toggleAttribute('inert', switchingDoc)
+  }, [switchingDoc])
   const currentScriptPathRef = useRef(currentScriptPath)
   currentScriptPathRef.current = currentScriptPath
   const loadedOtherDocsRef = useRef<Map<string, EventDocument>>(new Map())
@@ -1098,7 +1109,18 @@ function EditorScreen({
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main ref={mainRef} className="relative flex-1 overflow-hidden">
+        {switchingDoc && doc !== null && (
+          // 切替先のロード中: 旧文書が見えているが編集はできないことを示す
+          <div
+            data-testid="doc-switching-overlay"
+            className={`absolute inset-0 z-40 flex items-center justify-center ${
+              isDark ? 'bg-gray-900/60 text-gray-200' : 'bg-white/60 text-gray-700'
+            }`}
+          >
+            読み込み中...
+          </div>
+        )}
         {editorTab === 'novel' ? (
           mode === 'edit' ? (
             doc !== null ? (
