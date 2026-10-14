@@ -11,6 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { Event, EventScene } from '../types'
+import { internalsOf } from '../test/rendererInternals'
 
 const narration = (...lines: string[]): Event => ({ Narration: { text: lines } })
 const flag = (name: string): Event => ({ Flag: { name, value: { Bool: true } } })
@@ -38,7 +39,7 @@ interface Internals {
   choiceOverlay: { show: (...args: unknown[]) => void }
   seekToTextEventDisplayIndex(i: number): void
 }
-const I = (r: NovelRenderer): Internals => r as unknown as Internals
+const I = (r: NovelRenderer): Internals => internalsOf<Internals>(r)
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 const HUB_TO_FAR_CHOICE = scene('hub', [

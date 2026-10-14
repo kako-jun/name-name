@@ -28,6 +28,8 @@ export interface RendererInternals {
   sentenceIndex: number
   history: NovelGameState[]
   currentSceneId: string | null
+  displayEventCount: number
+  playbackStarted: boolean
   allScenes: EventScene[]
   pendingMissingScenes: Map<string, Promise<EventScene[] | null>>
   confinedSceneIds: string[] | null
@@ -68,7 +70,16 @@ export interface RendererInternals {
  * `NovelRenderer` を private 込みの型で見る。型引数で、そのテストが追加で触る形を足せる。
  */
 export function internals<T extends RendererInternals = RendererInternals>(r: NovelRenderer): T {
+  return internalsOf<T>(r)
+}
+
+/**
+ * `internals` と同じだが、型引数に `RendererInternals` の制約を課さない。テスト専用の簡易な型
+ * （`{ eventIndex: number }` など）で必要なフィールドだけを触るときに使う。
+ */
+export function internalsOf<T>(r: NovelRenderer): T {
   exposeSceneIndexFields(r)
+  exposeCursorFields(r)
   return r as unknown as T
 }
 
@@ -90,6 +101,42 @@ function exposeSceneIndexFields(r: NovelRenderer): void {
       get: () => indexOf()[name],
       set: (v: unknown) => {
         indexOf()[name] = v
+      },
+    })
+  }
+}
+
+/**
+ * 再生カーソルまわりのフィールド (#824) は `PlaybackCursor` へ移った。テストが従来どおり
+ * `internals(r).eventIndex` 等で読み書きできるよう、レンダラ上に `cursor` の private フィールド
+ * （`_` 付きの実体）へ委譲するアクセサを足す。書き込みはメソッドを経由しない直接代入（派生値の
+ * 同期や無効化は行わない）で、従来の `r.eventIndex = n` と同じ意味。移管後のアクセス経路はこの1か所に集約する。
+ */
+const CURSOR_FIELDS = [
+  'rawEvents',
+  'resolvedEvents',
+  'eventIndex',
+  'textIndex',
+  'sentenceIndex',
+  'displayEventCount',
+  'novelPagesCache',
+  'advSentencePagesCache',
+  'history',
+  'currentSceneId',
+  'playbackStarted',
+] as const
+
+function exposeCursorFields(r: NovelRenderer): void {
+  const cursorOf = (): Record<string, unknown> =>
+    (r as unknown as { cursor: Record<string, unknown> }).cursor
+  for (const name of CURSOR_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => cursorOf()[`_${name}`],
+      set: (v: unknown) => {
+        cursorOf()[`_${name}`] = v
       },
     })
   }

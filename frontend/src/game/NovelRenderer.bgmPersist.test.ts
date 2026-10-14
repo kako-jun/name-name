@@ -14,6 +14,7 @@ import { describe, it, expect, vi, afterEach, type MockInstance } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { AudioManager } from './AudioManager'
 import type { Event, EventScene } from '../types'
+import { internalsOf } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -195,7 +196,7 @@ describe('NovelRenderer BGM 持ち越し (#724)', () => {
     ])
     r.jumpToScene('b')
     r.advance() // B2 まで進める
-    const internals = r as unknown as { history: unknown[]; currentBgmPath: string | null }
+    const internals = internalsOf<{ history: unknown[]; currentBgmPath: string | null }>(r)
     expect(internals.history.length).toBeGreaterThanOrEqual(2)
     internals.currentBgmPath = 'other.ogg'
     spies.playBgm.mockClear()
