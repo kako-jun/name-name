@@ -80,14 +80,16 @@ export function internals<T extends RendererInternals = RendererInternals>(r: No
 const SCENE_INDEX_FIELDS = ['allScenes', 'entryRawEvents', 'pendingMissingScenes'] as const
 
 function exposeSceneIndexFields(r: NovelRenderer): void {
-  const index = (r as unknown as { sceneIndex: Record<string, unknown> }).sceneIndex
+  const indexOf = (): Record<string, unknown> =>
+    (r as unknown as { sceneIndex: Record<string, unknown> }).sceneIndex
   for (const name of SCENE_INDEX_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(r, name)) continue
     Object.defineProperty(r, name, {
       configurable: true,
-      get: () => index[name],
-      set: (v) => {
-        index[name] = v
+      enumerable: true,
+      get: () => indexOf()[name],
+      set: (v: unknown) => {
+        indexOf()[name] = v
       },
     })
   }
