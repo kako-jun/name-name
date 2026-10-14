@@ -118,7 +118,7 @@ type SceneEntryResult =
 
 1. 世代を進めて捕捉し、`pendingEntry` を立てる。新規開始と復元では、予約中の Jump タイマーを止める
 2. 進行のときだけ confinement を判定する。圏外なら `endStory()` を呼び、`ended` を返す
-3. `resolveScene(sceneId)` でシーンを引く。`allScenes` にあれば**同期のまま**続行する（同期描画のタイミングを変えない。動画書き出しの preRoll と既存テストの前提を守る）。無ければ `requestMissingScene`（Promise の共有）を await する。await の後は、世代と `initialized` を**この1か所で**判定する。不一致なら `superseded` を返し、成功・失敗とも何もしない（後始末は世代を進めた新しい側が担う）
+3. `SceneIndex.resolve(sceneId)`（#823 で `NovelRenderer.resolveScene` から移した）でシーンを引く。索引（`allScenes`）にあれば**同期のまま**続行する（同期描画のタイミングを変えない。動画書き出しの preRoll と既存テストの前提を守る）。無ければ `SceneIndex.requestMissingScene`（Promise の共有）を await する。await の後は、世代と `initialized` を**この1か所で**判定する。不一致なら `superseded` を返し、成功・失敗とも何もしない（後始末は世代を進めた新しい側が担う）
 4. 見つからなければ、§2 の「失敗」列に従って処理し、`failed` を返す。位置が動かないので、遷移状態を位置から再導出する（`rederiveTransitionAtCurrentPosition()`。`rearmPendingJumpAfterFailedRestore` を一般化したもの）。現在位置が Jump なら再予約し、Choice なら選択肢を再表示する。これにより、選択肢由来の進行が遅延ロード中にプログラム発の新規開始や復元に置き換えられ、その新しい側も失敗して位置が変わらなかった場合も、選択肢が閉じたまま残らない
 5. **適用の前処理**（解決できた後、描画の前）として、種類ごとの文脈を確定する。新規開始では、flags の置換・confinement の置き換え・`storyEnded = false`・`consecutiveJumps = 0` を行う。進行では `storyEnded = false`。適用の中で `resetAndStartEvents` → `processUntilNextTextEvent` が同期で走り、全 option が圏外の Choice の先回り終劇（#398）が `confinedSceneIds` を読む。`endStory()` の二重発火ガードは `storyEnded` を見る。そのため、この2つは適用より前に確定していなければならない
 6. 種類ごとに適用する。進行は `resetAndStartEvents(carryPolicyFor('progress'))`。新規開始は、先頭からなら `resetAndStartEvents(carryPolicyFor('fresh'))`、位置指定なら最小 state で `restoreToScene` する。復元は `restoreToScene(state)`（`storyEnded` は state から入る）
@@ -126,7 +126,7 @@ type SceneEntryResult =
 
 予約中の Jump のタイマーを取り消す経路はすべて、`armJump` の時点で作った deferred を `superseded` で解決する。該当するのは、新規開始・復元の手順1、`applyState`、`resetAndStartEvents` の `clearJumpTimer` など。こうしないと、`playScript` が二度と解決しない `pendingEntry.promise` を待ち続けて止まる。取り消しは `clearJumpTimer` の1か所に集め、deferred の解決もそこで行う。
 
-これで、遅延ロードの後処理3本（不整合13）は `resolveScene` 1本になる。要求の時点で世代を進め、待つ間はゲートで止めるので、不整合4・6も解消する。
+これで、遅延ロードの後処理3本（不整合13）は `SceneIndex.resolve` 1本になる。要求の時点で世代を進め、待つ間はゲートで止めるので、不整合4・6も解消する。
 
 ### 4. 公開 API の写像（互換用のバイパスは作らず、呼び出し側を書き換える）
 
@@ -371,3 +371,12 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **DEV 警告（背景なしの開始シーン）は target `'entry'` では出さない。** `setScenes` が `scenes[0].id` を持って新規開始するようになったため。エディタのライブ再パースで毎回出てしまう
 - **`consecutiveJumps`** は新規開始（`startFrom` の全経路、`setEvents`、`setScenes`）でリセットする（不整合11）
 
+## #823 での追記（2026-10-15、#735 2/8）
+
+シーンの索引・エントリ文書・遅延ロードの共有 Promise・線形区間のキャッシュを、`NovelRenderer` から `frontend/src/game/SceneIndex.ts` に分けた。挙動は変えていない。
+
+- **置き場の変更。** `resolveScene` / `requestMissingScene` / `indexLoaded` / `isDefinitelyUnresolvable` は `SceneIndex` のメソッド（`resolve` / `requestMissingScene` / `indexLoaded` / `isDefinitelyUnresolvable`）になった。フィールドは `allScenes` / `missingSceneResolver` / `pendingMissingScenes` / `entryRawEvents` / `entrySceneId` / `linearSegmentsCache`。`enterScene` は `this.sceneIndex.resolve(sceneId)` を呼ぶ。手順 3 の契約（読み込み済みなら同期・未ロードなら共有 Promise・await 後の世代と `initialized` の判定は呼び出し側の1か所）は不変で、`SceneIndex` は世代も `initialized` も知らない。
+- **同期の契約。** `SceneIndex.resolve` は索引にあれば `SceneLookup` を同期で返し、無いときだけ Promise を返す。遅延ロードで取れたシーン群は、世代の判定を通った後に呼び出し側が `indexLoaded` で索引へ反映する（破棄された入場は何も書き換えない）。
+- **再生中の配列は持たない。** `SceneIndex` は `rawEvents`（再生中の元イベント配列）を持たない。`entryRawEvents`（エントリ文書本来の events, #662）との兼務を避けるためで、再生中かどうかが要る判定（`isEntryStreamActive` / `resolveLinearSegmentsNow`）は、呼び出し側が `currentSceneId` と `rawEvents` を引数で渡す。
+- **`loadEvents` / `loadScenes` / `setJumpSceneIndex`** はレンダラに残り、索引部だけを `SceneIndex`（`setEntry` / `setEntrySceneId` / `setJumpSceneIndex`）へ委譲する。`currentSceneId` と `onSceneChange` に触れる処理は PR5 までレンダラ側にあり、PR5 の記述（`loadScenes` は `scenes[0].id`、`loadEvents` は null）のとおり。
+- 以後の PR5（`SceneEntryController`）は `SceneIndex` をコンストラクタ注入で使う。
