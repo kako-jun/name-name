@@ -598,7 +598,8 @@ describe('NovelRenderer.loadFromSaveData (#256)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(r.getSnapshot().flags).toEqual({ prev: boolFlag(true) })
-    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getPlayheadSceneId()).toBe('entry-hub')
+    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
     expect(toast).toHaveBeenCalledWith('ロードに失敗しました')
   })
 
@@ -910,7 +911,8 @@ describe('NovelRenderer.loadFromSaveDataMissingScene 遅延ロード中の遷移
     d.resolve([...ENTRY, ROUTE])
     expect(await loading).toEqual({ status: 'superseded' })
 
-    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getPlayheadSceneId()).toBe('entry-hub')
+    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
     expect(r.getSnapshot().flags).toEqual({ fresh: boolFlag(true) })
   })
 
@@ -952,7 +954,8 @@ describe('NovelRenderer.loadFromSaveDataMissingScene 遅延ロード中の遷移
     seedQuickSave(craftSave({ sceneId: 'r01-01', flags: { loaded: boolFlag(true) } }))
     r.quickLoad()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(r.getCurrentSceneId()).toBe('entry-hub')
+    expect(r.getPlayheadSceneId()).toBe('entry-hub')
+    expect(r.getCurrentSceneId()).toBeNull() // ストリームの持ち主はエントリのまま (#777)
 
     d.resolve([...ENTRY, ROUTE])
     await vi.waitFor(() => expect(r.getCurrentSceneId()).toBe('r01-01'))
