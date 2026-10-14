@@ -50,6 +50,7 @@ function makeRenderer() {
     positionCounter: 0,
     /** true なら本文が進む（署名が毎回変わる） */
     advancing: false,
+    frameRequests: 0,
     /** `[待機: N]` で待っている ms（待っていなければ null） */
     waitMs: null as number | null,
     /** 終わりのある動画の再生中 */
@@ -66,7 +67,9 @@ function makeRenderer() {
     startFromGate: null as Promise<void> | null,
   }
   const renderer = {
-    getCanvas: () => ({ captureStream: () => ({ getVideoTracks: () => [] }) }),
+    getCanvas: () => ({
+      captureStream: () => ({ getVideoTracks: () => [{ requestFrame: () => h.frameRequests++ }] }),
+    }),
     getAudioManager: () => ({
       ensureContext: () => {},
       enableCapture: () => ({ getAudioTracks: () => [] }),
@@ -462,5 +465,18 @@ describe('exportVideo: 選択肢・中止・停滞 (#780)', () => {
     expect(run.error).toBeInstanceOf(ExportAbortedError)
     expect(stops).toEqual([])
     expect(h.exportCalls).toEqual([true, false])
+  })
+
+  it('静止画面でも冒頭が黒にならないよう、録画開始の直後に最初のフレームを要求する', async () => {
+    const { h, renderer } = makeRenderer()
+    const run = await startRecording(renderer, {
+      startSceneId: 'a',
+      endSceneId: 'b',
+      sceneOrder: ['a', 'b'],
+    })
+    expect(h.frameRequests).toBe(1)
+    h.onEnd?.()
+    await vi.advanceTimersByTimeAsync(10)
+    await run.p
   })
 })

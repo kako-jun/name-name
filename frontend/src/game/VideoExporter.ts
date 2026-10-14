@@ -275,8 +275,21 @@ export async function exportVideo(
   // recorder のコールバック経由でしか呼ばれないため）。ここで try/catch し、!audioStream
   // 経路と同じく副作用（capture / 解像度 / フラグ）を巻き戻してから rethrow する。
   let recorder!: MediaRecorder
+  // captureStream は canvas が再描画されたときだけフレームを出す。静止した画面（選択肢のハブなど）では
+  // 録画開始後しばらく最初のフレームが来ず、冒頭が黒になるため、録画開始の直後に1枚要求する。
+  let requestFirstFrame: () => void = () => {}
   try {
     const videoStream = canvas.captureStream(fps)
+    const videoTrack = videoStream.getVideoTracks()[0] as
+      | (MediaStreamTrack & { requestFrame?: () => void })
+      | undefined
+    requestFirstFrame = () => {
+      try {
+        videoTrack?.requestFrame?.()
+      } catch (e) {
+        console.warn('[VideoExporter] requestFrame failed', e)
+      }
+    }
     const combined = new MediaStream([
       ...videoStream.getVideoTracks(),
       ...audioStream.getAudioTracks(),
@@ -525,6 +538,7 @@ export async function exportVideo(
   recordingStarted = true
   startedAt = performance.now()
   recorder.start(1000) // 1 秒ごとに dataavailable。途中 error 時の partial 保存にも有効
+  requestFirstFrame()
   onProgress?.('録画開始')
 
   // 選択肢への到達と停滞の見張り (#780)。録画開始後だけ回す。時計は performance.now。
