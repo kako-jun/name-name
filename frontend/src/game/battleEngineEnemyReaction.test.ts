@@ -677,4 +677,20 @@ describe('倒れた使い手は自分を効果の対象にできない (#837)', 
     expect(imp.hp).toBe(0)
     expect(other.hp).toBe(80) // 敵の other は回復だけ受ける
   })
+
+  it('蘇生の仲間単体: 本人が倒れた別の仲間より前にいても、本人を飛ばして別の仲間を蘇生する', () => {
+    const REVIVE: SkillExecution = { name: 'よみがえり', target: '仲間単体', effect: 'revive' }
+    const hero = ent({ id: 'hero', atk: 100, hp: 500, maxHp: 500 })
+    const a = ent({ id: 'a', name: 'A', hp: 5, onDeath: '候補=revive_ally' })
+    const b = ent({ id: 'b', name: 'B', hp: 0, maxHp: 80 })
+    const c = ent({ id: 'c', name: 'C', hp: 900 })
+    const eng = new BattleEngine([hero], [a, b, c], {
+      rng: () => 0,
+      skills: { ...SKILLS, revive_ally: REVIVE },
+    })
+    eng.selectAttack()
+    expect(a.hp).toBe(0) // 本人は戻らない
+    expect(b.hp).toBe(80) // 倒れていた別の仲間が蘇生する
+    expect(eng.getState().enemyMemory![0].died).toBe(true)
+  })
 })

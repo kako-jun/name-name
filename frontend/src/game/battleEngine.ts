@@ -443,9 +443,8 @@ export class BattleEngine {
     if (!caster || (caster.hp <= 0 && !opts.allowDowned)) return false
     // 倒れた使い手（死亡時の行動 #837）は自分を効果の対象にできない（自分向けの回復・蘇生で生き返る抜け道を塞ぐ）。
     // 生きている仲間への回復・強化や、倒れた別の仲間の蘇生は使える
-    const targets = this.resolveSkillTargets(user.side, caster, skill, target).filter(
-      (t) => !(opts.allowDowned && t === caster && caster.hp <= 0)
-    )
+    const excludeUser = !!opts.allowDowned && caster.hp <= 0
+    const targets = this.resolveSkillTargets(user.side, caster, skill, target, excludeUser)
     const message =
       typeof skill.message === 'string' && skill.message.trim() !== ''
         ? skill.message.split('{user}').join(caster.name)
@@ -963,7 +962,8 @@ export class BattleEngine {
     side: 'party' | 'enemy',
     user: BattleEntity,
     skill: SkillExecution,
-    target?: BattleActorRef
+    target?: BattleActorRef,
+    excludeUser = false
   ): BattleEntity[] {
     const allies = side === 'party' ? this.state.party : this.state.enemies
     const opponents = side === 'party' ? this.state.enemies : this.state.party
@@ -973,18 +973,21 @@ export class BattleEngine {
       case '相手全体':
         return opponents.filter((e) => e.hp > 0)
       case '自分':
-        return [user]
+        return excludeUser ? [] : [user]
       case '仲間全体':
-        return allies.filter((e) => e.hp > 0)
+        return allies.filter((e) => e.hp > 0 && !(excludeUser && e === user))
       case '仲間単体': {
         const revive = isReviveEntry('spell', skill)
-        const picked = explicit(allies, side)
+        // 倒れた使い手本人（死亡時の行動 #837）は、明示した対象にも既定の「最初の倒れた仲間」にもならない
+        const candidates = excludeUser ? allies.filter((e) => e !== user) : allies
+        const p0 = explicit(allies, side)
+        const picked = p0 && !(excludeUser && p0 === user) ? p0 : undefined
         const t =
           picked && (picked.hp > 0 || revive)
             ? picked
             : revive
-              ? (allies.find((e) => e.hp <= 0) ?? this.firstAlive(allies))
-              : this.firstAlive(allies)
+              ? (candidates.find((e) => e.hp <= 0) ?? this.firstAlive(candidates))
+              : this.firstAlive(candidates)
         return t ? [t] : []
       }
       case '相手単体':
