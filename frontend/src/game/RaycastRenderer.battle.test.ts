@@ -12,6 +12,11 @@ import type { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
+import {
+  buildPartyBattleEntities as buildParty,
+  partyDefToBattleEntity as partyDefToEntity,
+  type FieldBattleSettings,
+} from './fieldBattle'
 
 function member(id: string, over: Partial<PartyMemberDef> = {}): PartyMemberDef {
   return { id, name: id.toUpperCase(), hp: 20, mp: 5, atk: 4, def: 2, agi: 3, ...over }
@@ -33,13 +38,9 @@ interface RendererInternals {
   app: { stage: Container }
   masterParty: Record<string, PartyMemberDef>
   masterPartyOrder: string[]
-  battleLayout: 'front' | 'side'
-  battleBackground: string | undefined
-  spriteStyle: 'none' | 'acrylic'
+  battleSettings: FieldBattleSettings
   battleScreen: { engine: BattleEngine; opts: Record<string, unknown> } | null
   startBattle(enemies: BattleEntity[]): void
-  buildPartyBattleEntities(): BattleEntity[]
-  partyDefToBattleEntity(def: PartyMemberDef): BattleEntity
   ensureWallTextures(): Promise<void>
 }
 
@@ -93,7 +94,7 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     const { i } = makeRenderer()
     // hero が定義の途中にあっても先頭に来る
     i.masterParty = { mage: member('mage'), hero: member('hero'), priest: member('priest') }
-    i.battleLayout = 'side'
+    i.battleSettings.layout = 'side'
     i.startBattle([enemy()])
     expect(i.battleScreen!.engine.getState().party.map((p) => p.id)).toEqual([
       'hero',
@@ -105,8 +106,11 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
   it('side・hero 定義なし → 定義にない「ゆうしゃ」を混ぜず、定義順の先頭から', () => {
     const { i } = makeRenderer()
     i.masterParty = { mage: member('mage'), priest: member('priest') }
-    i.battleLayout = 'side'
-    const party = i.buildPartyBattleEntities()
+    i.battleSettings.layout = 'side'
+    const party = buildParty(
+      { party: i.masterParty, order: i.masterPartyOrder },
+      i.battleSettings.layout
+    )
     expect(party.map((p) => p.id)).toEqual(['mage', 'priest'])
   })
 
@@ -114,27 +118,42 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     const { i } = makeRenderer()
     i.masterParty = { b: member('b'), '2': member('2'), a: member('a'), '1': member('1') }
     i.masterPartyOrder = ['b', '2', 'a', '1']
-    i.battleLayout = 'side'
-    expect(i.buildPartyBattleEntities().map((p) => p.id)).toEqual(['b', '2', 'a', '1'])
+    i.battleSettings.layout = 'side'
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map(
+        (p) => p.id
+      )
+    ).toEqual(['b', '2', 'a', '1'])
   })
 
   it('side・hero と整数風 ID → hero 先頭・残りは定義順', () => {
     const { i } = makeRenderer()
     i.masterParty = { '3': member('3'), hero: member('hero'), '1': member('1') }
     i.masterPartyOrder = ['3', 'hero', '1']
-    i.battleLayout = 'side'
-    expect(i.buildPartyBattleEntities().map((p) => p.id)).toEqual(['hero', '3', '1'])
+    i.battleSettings.layout = 'side'
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map(
+        (p) => p.id
+      )
+    ).toEqual(['hero', '3', '1'])
   })
 
   it('side・masterParty 空 → ハードコード hero 1 人', () => {
     const { i } = makeRenderer()
-    i.battleLayout = 'side'
-    expect(i.buildPartyBattleEntities().map((p) => p.id)).toEqual(['hero'])
+    i.battleSettings.layout = 'side'
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout).map(
+        (p) => p.id
+      )
+    ).toEqual(['hero'])
   })
 
   it('partyDefToBattleEntity が sprite と ステータスを写す', () => {
     const { i } = makeRenderer()
-    const e = i.partyDefToBattleEntity(member('mage', { sprite: 'p/mage.webp', mp: 9 }))
+    const e = partyDefToEntity(
+      member('mage', { sprite: 'p/mage.webp', mp: 9 }),
+      i.battleSettings.layout
+    )
     expect(e.sprite).toBe('p/mage.webp')
     expect(e.maxHp).toBe(e.hp)
     expect(e.mp).toBe(9)
@@ -143,7 +162,7 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
 
   it('partyDefToBattleEntity: mp 未定義は 0、sprite 未指定は undefined', () => {
     const { i } = makeRenderer()
-    const e = i.partyDefToBattleEntity({ ...member('x'), mp: undefined })
+    const e = partyDefToEntity({ ...member('x'), mp: undefined }, i.battleSettings.layout)
     expect(e.mp).toBe(0)
     expect(e.maxMp).toBe(0)
     expect(e.sprite).toBeUndefined()
@@ -152,7 +171,10 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
   it('hero 定義の sprite も戦闘 entity に写る', () => {
     const { i } = makeRenderer()
     i.masterParty = { hero: member('hero', { sprite: 'p/hero.webp' }) }
-    expect(i.buildPartyBattleEntities()[0].sprite).toBe('p/hero.webp')
+    expect(
+      buildParty({ party: i.masterParty, order: i.masterPartyOrder }, i.battleSettings.layout)[0]
+        .sprite
+    ).toBe('p/hero.webp')
   })
 })
 
@@ -167,8 +189,8 @@ describe('RaycastRenderer.load → BattleScreen opts の流れ (#736)', () => {
   it('load() が battleLayout / battleBackground を保持し BattleScreen の opts に流す', () => {
     vi.spyOn(Assets, 'load').mockResolvedValue({ width: 1, height: 1 } as never)
     const i = loaded({ battleLayout: 'side', battleBackground: 'bg/a.webp' })
-    expect(i.battleLayout).toBe('side')
-    expect(i.battleBackground).toBe('bg/a.webp')
+    expect(i.battleSettings.layout).toBe('side')
+    expect(i.battleSettings.background).toBe('bg/a.webp')
     i.startBattle([enemy()])
     expect(i.battleScreen!.opts.layout).toBe('side')
     expect(i.battleScreen!.opts.background).toBe('bg/a.webp')
@@ -178,8 +200,8 @@ describe('RaycastRenderer.load → BattleScreen opts の流れ (#736)', () => {
   it('battleLayout 未指定 → front・背景なし（Assets.load を呼ばない）', () => {
     const load = vi.spyOn(Assets, 'load')
     const i = loaded({})
-    expect(i.battleLayout).toBe('front')
-    expect(i.battleBackground).toBeUndefined()
+    expect(i.battleSettings.layout).toBe('front')
+    expect(i.battleSettings.background).toBeUndefined()
     i.startBattle([enemy()])
     expect(i.battleScreen!.opts.layout).toBe('front')
     expect(load).not.toHaveBeenCalled()
@@ -191,8 +213,8 @@ describe('RaycastRenderer.load → BattleScreen opts の流れ (#736)', () => {
     vi.spyOn(Assets, 'load').mockResolvedValue({ width: 1, height: 1 } as never)
     r.load(project({ battleLayout: 'side', battleBackground: 'bg/a.webp' }))
     r.load(project({}))
-    expect(i.battleLayout).toBe('front')
-    expect(i.battleBackground).toBeUndefined()
+    expect(i.battleSettings.layout).toBe('front')
+    expect(i.battleSettings.background).toBeUndefined()
   })
 
   it('load() の masterParty が side の味方組み立てに使われる', () => {
@@ -302,14 +324,14 @@ describe('RaycastRenderer.load → spriteStyle の流れ (#737)', () => {
 
   it("load() が spriteStyle を保持し BattleScreen の opts に流す（'acrylic' → opts.spriteStyle === 'acrylic'）", () => {
     const { i } = loaded({ battleLayout: 'side', spriteStyle: 'acrylic' })
-    expect(i.spriteStyle).toBe('acrylic')
+    expect(i.battleSettings.spriteStyle).toBe('acrylic')
     i.startBattle([enemy()])
     expect(i.battleScreen!.opts.spriteStyle).toBe('acrylic')
   })
 
   it("spriteStyle 未指定 → 'none' で opts にも 'none' が渡る", () => {
     const { i } = loaded({ battleLayout: 'side' })
-    expect(i.spriteStyle).toBe('none')
+    expect(i.battleSettings.spriteStyle).toBe('none')
     i.startBattle([enemy()])
     expect(i.battleScreen!.opts.spriteStyle).toBe('none')
   })
@@ -323,9 +345,9 @@ describe('RaycastRenderer.load → spriteStyle の流れ (#737)', () => {
 
   it('load() の再呼び出しで前回の acrylic が残らない（acrylic → 未指定で none に戻る）', () => {
     const { r, i } = loaded({ spriteStyle: 'acrylic' })
-    expect(i.spriteStyle).toBe('acrylic')
+    expect(i.battleSettings.spriteStyle).toBe('acrylic')
     r.load(project({}))
-    expect(i.spriteStyle).toBe('none')
+    expect(i.battleSettings.spriteStyle).toBe('none')
     i.startBattle([enemy()])
     expect(i.battleScreen!.opts.spriteStyle).toBe('none')
   })
@@ -362,21 +384,27 @@ describe('RaycastRenderer.load → windowStyle の流れ (#744)', () => {
 describe('RaycastRenderer: 隊列・奥行き・前景の配線 (#747)', () => {
   it('side・row: back（別名 後衛 も）→ BattleEntity.row が back', () => {
     const { i } = makeRenderer()
-    i.battleLayout = 'side'
-    expect(i.partyDefToBattleEntity(member('a', { row: 'back' })).row).toBe('back')
-    expect(i.partyDefToBattleEntity(member('b', { row: '後衛' })).row).toBe('back')
+    i.battleSettings.layout = 'side'
+    expect(partyDefToEntity(member('a', { row: 'back' }), i.battleSettings.layout).row).toBe('back')
+    expect(partyDefToEntity(member('b', { row: '後衛' }), i.battleSettings.layout).row).toBe('back')
   })
   it('side・row 未指定・front・未知値 → row キーなし', () => {
     const { i } = makeRenderer()
-    i.battleLayout = 'side'
-    expect('row' in i.partyDefToBattleEntity(member('a'))).toBe(false)
-    expect('row' in i.partyDefToBattleEntity(member('b', { row: 'front' }))).toBe(false)
-    expect('row' in i.partyDefToBattleEntity(member('c', { row: 'foo' }))).toBe(false)
+    i.battleSettings.layout = 'side'
+    expect('row' in partyDefToEntity(member('a'), i.battleSettings.layout)).toBe(false)
+    expect('row' in partyDefToEntity(member('b', { row: 'front' }), i.battleSettings.layout)).toBe(
+      false
+    )
+    expect('row' in partyDefToEntity(member('c', { row: 'foo' }), i.battleSettings.layout)).toBe(
+      false
+    )
   })
   it('front 配置では row: back でも row キーを載せない', () => {
     const { i } = makeRenderer()
-    i.battleLayout = 'front'
-    expect('row' in i.partyDefToBattleEntity(member('a', { row: 'back' }))).toBe(false)
+    i.battleSettings.layout = 'front'
+    expect('row' in partyDefToEntity(member('a', { row: 'back' }), i.battleSettings.layout)).toBe(
+      false
+    )
   })
   it('load() の battleDepth / battleForeground が BattleScreen の opts に流れる', () => {
     vi.spyOn(Assets, 'load').mockResolvedValue({ width: 1, height: 1 } as never)
@@ -466,7 +494,7 @@ describe('RaycastRenderer.onTick → BattleScreen.tick の配線 (#205)', () => 
 
   it('戦闘中は経過 ms が BattleScreen.tick に渡り、ATB のゲージが進む', () => {
     const { t } = ticking()
-    ;(t as unknown as { battleAtb: unknown }).battleAtb = { mode: 'wait' }
+    ;(t as unknown as { battleSettings: FieldBattleSettings }).battleSettings.atb = { mode: 'wait' }
     t.startBattle([enemy()])
     const screen = t.battleScreen as unknown as { tick(ms: number): void }
     const spy = vi.spyOn(screen, 'tick')
@@ -573,7 +601,7 @@ describe('RaycastRenderer: 戦闘中のキー入力とフィールド移動 (#20
     handleKeyDown(e: KeyboardEvent): void
     handleKeyUp(e: KeyboardEvent): void
     handleBlur(): void
-    heldArrowKeys: Set<string>
+    inputGate: { heldKeys(): string[] }
     setInputSuspended(v: boolean): void
     onTick(): void
     advanceTurnAnim(dt: number): void
@@ -705,6 +733,6 @@ describe('RaycastRenderer: 戦闘中のキー入力とフィールド移動 (#20
     expect(t.keys.size).toBe(1)
     t.handleBlur()
     expect(t.keys.size).toBe(0)
-    expect(t.heldArrowKeys.size).toBe(0)
+    expect(t.inputGate.heldKeys().length).toBe(0)
   })
 })

@@ -908,6 +908,38 @@ export function resolveAssetUrl(baseUrl: string, kind: AssetKind, path: string):
 }
 
 /**
+ * RPG 側の画像パス（NPC スプライト・NPC 顔・戦闘スプライト・戦闘背景/前景）を、
+ * プロジェクトのアセットのベース URL で配信 URL に解決する純粋関数 (#746)。
+ *
+ * - `baseUrl` が未指定・空、または `path` が未指定・空: `path` をそのまま返す（従来どおり）
+ * - `path` が絶対指定（`https://` 等の `scheme://`・`data:`・`blob:`・先頭 `/`）、
+ *   または `__demo`（手続き生成の合図）: そのまま返す。`a:b.png` のような `:` を含む相対パスは
+ *   絶対指定とみなさず相対として解決する
+ * - それ以外の相対パス: `resolveAssetUrl(baseUrl, 'images', path)` で `{base}/images/{path}` にする
+ *   （相対パスの規則はノベルと同じ）。`baseUrl` 末尾の `/` は落としてから連結する
+ * - ノベルとの違い: ノベルの `resolveAssetUrl` は先頭 `/` を剥がして `images/` 配下の相対として扱うが、
+ *   RPG は従来の「先頭 `/` = サイトルートの絶対パス」の挙動を変えないため、先頭 `/` は剥がさずそのまま返す
+ */
+export function resolveRpgImagePath(baseUrl: string | undefined, path: string): string
+export function resolveRpgImagePath(
+  baseUrl: string | undefined,
+  path: string | undefined
+): string | undefined
+export function resolveRpgImagePath(
+  baseUrl: string | undefined,
+  path: string | undefined
+): string | undefined {
+  if (!path || !baseUrl) return path
+  if (
+    path === '__demo' ||
+    path.startsWith('/') ||
+    /^(?:[a-z][a-z0-9+.-]*:\/\/|data:|blob:)/i.test(path)
+  )
+    return path
+  return resolveAssetUrl(baseUrl.replace(/\/+$/, ''), 'images', path)
+}
+
+/**
  * 立ち絵（拡張子を省略したキャラ画像）を配信 URL に解決する候補列を優先順で返す (#376)。
  *
  * エンジンは従来 `${base}/images/{path}/{expr}.png` と `.png` 固定で読み込んでいたが、

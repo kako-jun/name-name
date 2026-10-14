@@ -11,6 +11,7 @@ import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
 import { isEditableTarget } from './inputGuards'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
+import { resolveRpgImagePath } from './novelLayout'
 import {
   NPC_ANIM_PERIOD_MS,
   clampFrames,
@@ -52,19 +53,17 @@ import {
 } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { MinimapOverlay } from './MinimapOverlay'
-import { BattleScreen } from './BattleScreen'
-import { BattleEngine } from './battleEngine'
+import type { BattleScreen } from './BattleScreen'
 import type { BattleEntity } from './spellDsl'
 import { rollEncounter } from './encounter'
-import type { BattleDepth, BattleLayoutMode } from './battleLayout'
-import { normalizeBattleRow } from './battleLayout'
-import type { SpriteStyle } from './spriteStyle'
-import type { WindowStyle } from './windowStyle'
-import type { BackgroundTone } from './backgroundTone'
-import type { BackgroundDof } from './depthOfField'
-import type { BattleLogTypewriterMode } from './battleLogTypewriter'
-import type { BattleAtbConfig } from './battleAtb'
-import type { CommandLabels, CommandLayout } from './battleCommands'
+import {
+  DEFAULT_FIELD_BATTLE_SETTINGS,
+  FieldInputGate,
+  closeFieldBattle,
+  openFieldBattle,
+  readFieldBattleSettings,
+  type FieldBattleSettings,
+} from './fieldBattle'
 export { rollEncounter } from './encounter'
 
 interface NPCRuntime {
@@ -134,29 +133,10 @@ export class RaycastRenderer {
   private masterParty: Record<string, import('../types').PartyMemberDef> = {}
   /** masterParty の定義順（整数風 ID でも出現順を保つため別持ち） */
   private masterPartyOrder: string[] = []
-  /** 戦闘画面のレイアウト / 背景画像 (#736)。frontmatter `battle_layout` / `battle_background` 由来 */
-  private battleLayout: BattleLayoutMode = 'front'
-  private battleBackground: string | undefined = undefined
-  /** 戦闘スプライトの表示スタイル (#737)。frontmatter `sprite_style` 由来 */
-  private spriteStyle: SpriteStyle = 'none'
-  /** 戦闘ウィンドウの配色テーマ (#744)。frontmatter `window_style` 由来 */
-  private windowStyle: WindowStyle = 'dark'
-  /** 戦闘背景のトーン調整 (#753)。frontmatter `battle_background_tone` 由来 */
-  private battleBackgroundTone: BackgroundTone = 'on'
-  /** 戦闘背景の被写界深度風ぼかし (#753)。frontmatter `battle_background_dof` 由来 */
-  private battleBackgroundDof: BackgroundDof = 'off'
-  /** 戦闘ログの 1 文字ずつ表示 (#755)。frontmatter `battle_log_typewriter` 由来 */
-  private battleLogTypewriter: BattleLogTypewriterMode = 'off'
-  /** 戦闘画面の奥行き / 前景レイヤー (#747)。frontmatter `battle_horizon` `battle_perspective` / `battle_foreground` 由来 */
-  private battleDepth: BattleDepth | null = null
-  private battleForeground: string | undefined = undefined
-  /** ドット絵モード (#466)。戦闘のテクスチャを nearest のままにする (#760) */
-  private pixelArt = false
-  /** 戦闘の ATB 方式 (#205)。frontmatter `battle_atb` / `battle_atb_mode` 由来。undefined = 従来ターン制 */
-  private battleAtb: BattleAtbConfig | undefined = undefined
-  /** 戦闘コマンド窓の配置・表示名 (#204)。frontmatter `battle_command_layout` / `battle_command_labels` 由来 */
-  private battleCommandLayout: CommandLayout = 'grid'
-  private battleCommandLabels: CommandLabels | undefined = undefined
+  /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
+  private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
+  /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔・戦闘の画像パス解決に使う。未設定ならパスをそのまま読む */
+  private assetBaseUrl: string | undefined = undefined
   private stepCounter: number = 0
   /** 戦闘直後の連続エンカウント抑止カウンタ。残歩数だけ抽選をスキップする (#172) */
   private encounterCooldown: number = 0
@@ -286,12 +266,8 @@ export class RaycastRenderer {
   private readonly maxStepsPerColumn = 3
 
   private keys = new Set<string>()
-  /** 今押されている矢印キー（KeyboardEvent.key）。戦闘開始時に BattleScreen へ渡し、押しっぱなしの誤爆を防ぐ (#204) */
-  private heldArrowKeys = new Set<string>()
-  /** 戦闘終了時に押されていた矢印キー。keyup されるまでフィールド移動に使わない（repeat の keydown で戻さない）(#204) */
-  private releaseGateKeys = new Set<string>()
-  /** 外側の UI（設定オーバーレイ）が入力を止めているか (#204) */
-  private inputSuspended = false
+  /** 戦闘をまたぐキー入力状態（押下中の矢印キー・離すまで無視・設定中の停止）(#204 / #784) */
+  private inputGate = new FieldInputGate()
   private lastTickMs = 0
 
   private resizeRaf: number | null = null
@@ -370,7 +346,14 @@ export class RaycastRenderer {
     this.initialized = true
   }
 
+  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
+  setAssetBaseUrl(url: string | undefined): void {
+    this.assetBaseUrl = url
+  }
+
   load(gameData: RPGProject): void {
+    // 戦闘中に再 load されたら戦闘画面を畳む（古い onClosed が新しいマップの状態を上書きしないよう強制終了）
+    this.closeBattle()
     this.dialogBox?.hide()
 
     this.mapTiles = gameData.map.tiles
@@ -402,19 +385,7 @@ export class RaycastRenderer {
     this.masterMonsters = gameData.monsters ?? {}
     this.masterParty = gameData.party ?? {}
     this.masterPartyOrder = gameData.partyOrder ?? []
-    this.battleLayout = gameData.battleLayout ?? 'front'
-    this.battleBackground = gameData.battleBackground
-    this.spriteStyle = gameData.spriteStyle ?? 'none'
-    this.windowStyle = gameData.windowStyle ?? 'dark'
-    this.battleBackgroundTone = gameData.battleBackgroundTone ?? 'on'
-    this.battleBackgroundDof = gameData.battleBackgroundDof ?? 'off'
-    this.battleLogTypewriter = gameData.battleLogTypewriter ?? 'off'
-    this.battleDepth = gameData.battleDepth ?? null
-    this.battleForeground = gameData.battleForeground
-    this.pixelArt = gameData.pixelArt === true
-    this.battleAtb = gameData.battleAtb
-    this.battleCommandLayout = gameData.battleCommandLayout ?? 'grid'
-    this.battleCommandLabels = gameData.battleCommandLabels
+    this.battleSettings = readFieldBattleSettings(gameData)
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -439,7 +410,7 @@ export class RaycastRenderer {
 
     this.lastTickMs = performance.now()
     this.keys.clear()
-    this.heldArrowKeys.clear()
+    this.inputGate.resetHeld()
 
     // ミニマップ (#149): マップ寸法をセット。NPC は rebuildNpcObjects 経由で同期済。
     // プレイヤー位置は onTick 毎に更新する。
@@ -525,7 +496,7 @@ export class RaycastRenderer {
 
   private async loadNpcSprite(npc: NPCRuntime): Promise<void> {
     const sheet = await loadNpcSpriteSheet(
-      npc.data.sprite!,
+      resolveRpgImagePath(this.assetBaseUrl, npc.data.sprite!),
       clampFrames(npc.data.frames),
       this.tileSize,
       npc.data.color,
@@ -554,11 +525,12 @@ export class RaycastRenderer {
    * 戦闘のキー操作（BattleScreen の isInputSuspended 経由）も受け付けない。
    */
   setInputSuspended(suspended: boolean): void {
-    this.inputSuspended = suspended
+    this.inputGate.setSuspended(suspended)
     if (suspended) this.keys.clear()
   }
 
   destroy(): void {
+    this.closeBattle()
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
@@ -617,12 +589,12 @@ export class RaycastRenderer {
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (!this.initialized) return
     // 押下中の矢印キーは戦闘開始時に BattleScreen へ渡す（戦闘中も追跡する）
-    if (e.key.startsWith('Arrow')) this.heldArrowKeys.add(e.key)
+    this.inputGate.trackKeyDown(e.key)
     // 戦闘中はフィールドの操作を受け付けない（戦闘画面の矢印キーで裏のプレイヤーが動くのを防ぐ）(#204)
     if (this.battleScreen) return
-    if (this.inputSuspended) return
+    if (this.inputGate.isSuspended) return
     // 戦闘終了時に押しっぱなしだったキーは、一度離されるまで移動に使わない
-    if (this.releaseGateKeys.has(e.key)) return
+    if (this.inputGate.isReleaseGated(e.key)) return
     if (this.isEditableFocused()) return
 
     if (this.dialogBox?.isShowing) {
@@ -675,14 +647,12 @@ export class RaycastRenderer {
   /** ウィンドウがフォーカスを失うと keyup が届かないので、押下状態を捨てる (#204) */
   private handleBlur = (): void => {
     this.keys.clear()
-    this.heldArrowKeys.clear()
-    this.releaseGateKeys.clear()
+    this.inputGate.blur()
   }
 
   private handleKeyUp = (e: KeyboardEvent): void => {
     if (!this.initialized) return
-    this.heldArrowKeys.delete(e.key)
-    this.releaseGateKeys.delete(e.key)
+    this.inputGate.trackKeyUp(e.key)
     const k = normalizeKey(e.key)
     this.keys.delete(k)
   }
@@ -708,7 +678,7 @@ export class RaycastRenderer {
       this.dialogBox?.show(
         npc.data.name,
         stripExpressionDirectives(npc.data.message),
-        resolveNpcPortrait(npc.data)
+        resolveRpgImagePath(this.assetBaseUrl, resolveNpcPortrait(npc.data))
       )
       // ダイアログ表示中は updateMovement がスキップされるため、押されたままのキー
       // （移動・回転・pitch）が残留する。閉じた瞬間に意図しない挙動にならないよう一括クリア。
@@ -838,11 +808,18 @@ export class RaycastRenderer {
     if (enemies) this.startBattle(enemies)
   }
 
+  /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
+  private closeBattle(): void {
+    if (!this.battleScreen) return
+    closeFieldBattle(this.app.stage, this.battleScreen)
+    this.battleScreen = null
+  }
+
   /**
    * 戦闘画面を起動する (#173 + #172 + #175)。
    *
    * front のパーティは masterParty['hero']（#175 で master 化済み）1 人。未定義ならハードコード「ゆうしゃ」。
-   * side は masterParty 全員（#736、buildPartyBattleEntities）。
+   * side は masterParty 全員（#736、fieldBattle.ts の buildPartyBattleEntities）。
    * 敵は呼び出し側が解決済の BattleEntity[] を渡す（エンカウント抽選または
    * 「しらべる」テスト経路から）。戦闘終了で自動的に画面を畳み、エンカウント
    * クールダウン（連続エンカウント抑止）を 3 歩セットする。
@@ -852,107 +829,23 @@ export class RaycastRenderer {
     if (enemies.length === 0) return
     // 押しっぱなしの移動キーが戦闘後に残らないよう、開始時に捨てる (#204)
     this.keys.clear()
-    // front は従来どおり先頭 1 人だけをエンジンに渡す（全員を渡すと、画面に出ない仲間が
-    // 敵の標的・敗北判定に関与して挙動が変わるため）。side は全員を渡して全員を描く (#736)。
-    // 従来ターン制では行動するのは先頭の生存者のみ。ATB (#205) は side なら全員がゲージ満タンの順に行動する。
-    const party =
-      this.battleLayout === 'side'
-        ? this.buildPartyBattleEntities()
-        : [this.buildHeroBattleEntity()]
-    const engine = new BattleEngine(party, enemies, this.battleAtb ? { atb: this.battleAtb } : {})
-    this.battleScreen = new BattleScreen(engine, this.screenWidth, this.screenHeight, {
-      layout: this.battleLayout,
-      background: this.battleBackground,
-      spriteStyle: this.spriteStyle,
-      windowStyle: this.windowStyle,
-      backgroundTone: this.battleBackgroundTone,
-      backgroundDof: this.battleBackgroundDof,
-      logTypewriter: this.battleLogTypewriter,
-      depth: this.battleDepth,
-      foreground: this.battleForeground,
-      pixelArt: this.pixelArt,
-      commandLayout: this.battleCommandLayout,
-      commandLabels: this.battleCommandLabels,
-      initialHeldKeys: [...this.heldArrowKeys],
-      isInputSuspended: () => this.inputSuspended,
-      onClose: () => {
+    // 組み立て・キー規約・終了時の畳み方は TopDownRenderer と共通 (fieldBattle.ts, #784)
+    this.battleScreen = openFieldBattle({
+      stage: this.app.stage,
+      width: this.screenWidth,
+      height: this.screenHeight,
+      settings: this.battleSettings,
+      roster: { party: this.masterParty, order: this.masterPartyOrder },
+      enemies,
+      gate: this.inputGate,
+      assetBaseUrl: this.assetBaseUrl,
+      onClosed: () => {
         this.keys.clear()
-        this.releaseGateKeys = new Set(this.heldArrowKeys)
-        if (this.battleScreen) {
-          this.app.stage.removeChild(this.battleScreen)
-          this.battleScreen.destroy({ children: true })
-          this.battleScreen = null
-        }
+        this.battleScreen = null
         // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）#172
         this.encounterCooldown = 3
       },
     })
-    this.app.stage.addChild(this.battleScreen)
-  }
-
-  /**
-   * masterParty['hero'] から BattleEntity を組み立てる。未定義ならハードコード値 (#175)。
-   * 将来的にはセーブデータの現在値（HP/MP 残量、レベル）を反映する。
-   */
-  private buildHeroBattleEntity(): BattleEntity {
-    const def = this.masterParty['hero']
-    if (def) return this.partyDefToBattleEntity(def)
-    return {
-      id: 'hero',
-      name: 'ゆうしゃ',
-      hp: 20,
-      maxHp: 20,
-      mp: 4,
-      maxMp: 4,
-      atk: 5,
-      def: 3,
-      agi: 4,
-    }
-  }
-
-  /**
-   * masterParty のキーを定義順で返す。`masterPartyOrder`（ドキュメント上の出現順）を優先し、
-   * それに無いキーは `Object.keys` 順で後ろに足す。`Object.keys` だけだと ID が整数風（"2" 等）のとき
-   * 定義順より前に並べ替えられてしまう (#736)。
-   */
-  private orderedPartyKeys(): string[] {
-    const own = new Set(Object.keys(this.masterParty))
-    const keys = this.masterPartyOrder.filter((k) => own.has(k))
-    const seen = new Set(keys)
-    for (const k of own) if (!seen.has(k)) keys.push(k)
-    return keys
-  }
-
-  /**
-   * 戦闘に出す味方全員を組み立てる (#736)。
-   * - masterParty が空: ハードコード hero 1 人（従来どおり）
-   * - hero 定義あり: hero を先頭に、残りを定義順
-   * - hero 定義なし: 定義順そのまま（定義に無い「ゆうしゃ」を混ぜない）
-   */
-  private buildPartyBattleEntities(): BattleEntity[] {
-    const keys = this.orderedPartyKeys()
-    if (keys.length === 0) return [this.buildHeroBattleEntity()]
-    const ordered = keys.includes('hero') ? ['hero', ...keys.filter((k) => k !== 'hero')] : keys
-    return ordered.map((k) => this.partyDefToBattleEntity(this.masterParty[k]))
-  }
-
-  private partyDefToBattleEntity(def: import('../types').PartyMemberDef): BattleEntity {
-    return {
-      id: def.id,
-      name: def.name,
-      hp: def.hp,
-      maxHp: def.hp,
-      mp: def.mp ?? 0,
-      maxMp: def.mp ?? 0,
-      atk: def.atk,
-      def: def.def,
-      agi: def.agi,
-      sprite: def.sprite,
-      // 隊列 (#747)。front 配置は先頭 1 人だけを渡し隊列を描かないので、補正も side のときだけかける
-      ...(this.battleLayout === 'side' && normalizeBattleRow(def.row) === 'back'
-        ? { row: 'back' as const }
-        : {}),
-    }
   }
 
   /**
@@ -1169,8 +1062,9 @@ export class RaycastRenderer {
     const dt = Math.max(0, Math.min(0.1, (now - this.lastTickMs) / 1000))
     this.lastTickMs = now
 
-    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない
-    this.battleScreen?.tick(dt * 1000)
+    // 戦闘中は ATB のゲージを進める (#205)。従来ターン制の BattleScreen.tick は何もしない。
+    // 設定オーバーレイ中は入力と同様に進行も止める (#784)
+    if (!this.inputGate.isSuspended) this.battleScreen?.tick(dt * 1000)
 
     // ミニマップ (#149): イベント中（ダイアログ表示）/ メニュー表示中は邪魔なので隠す。
     // 通常探索中だけ表示し、自機位置 + 向きを毎フレ更新する。
@@ -1188,7 +1082,7 @@ export class RaycastRenderer {
     // プレイヤー位置の更新だけが dialog 中スキップ対象。
     this.advanceTurnAnim(dt)
 
-    if (!this.dialogBox?.isShowing && !this.battleScreen && !this.inputSuspended) {
+    if (!this.dialogBox?.isShowing && !this.battleScreen && !this.inputGate.isSuspended) {
       this.updateMovement(dt)
     }
     this.updateNpcAnimations(now)

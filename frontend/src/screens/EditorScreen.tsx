@@ -1313,6 +1313,7 @@ function EditorScreen({
                       rpgProject={rpgProject}
                       onChange={handleMapChange}
                       isDark={isDark}
+                      assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
                     />
                   )}
                   {rpgSubTab === 'npc' && (
@@ -1326,7 +1327,11 @@ function EditorScreen({
                     />
                   )}
                   {rpgSubTab === 'play' && (
-                    <RPGPlayer gameData={rpgProject ?? undefined} view={rpgProject?.view} />
+                    <RPGPlayer
+                      gameData={rpgProject ?? undefined}
+                      view={rpgProject?.view}
+                      assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
+                    />
                   )}
                 </>
               )}
