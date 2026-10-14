@@ -156,24 +156,21 @@ describe('対象= の上書きは単体の特技だけ', () => {
 
 describe('仲間向けの特技は ランダム / HP最小 / 全体 で相手側に向かない', () => {
   it.each(['ランダム', 'HP最小', '全体'])(
-    '仲間単体の回復に 対象=%s を付けても敵がプレイヤーを回復しない',
+    '仲間単体の回復に 対象=%s を付けても敵がプレイヤーを回復せず、敵側の最初の生存者（使い手自身）に当たる',
     (t) => {
       const mend: SkillExecution = { name: '手当て', target: '仲間単体', effect: 'heal 20..20' }
       const hero = ent({ id: 'hero', hp: 50, maxHp: 500 })
-      const foe = ent({
-        id: 'foe',
-        hp: 100,
-        maxHp: 500,
-        actions: [`候補=mend 対象=${t}`],
-      })
-      const eng = new BattleEngine([hero], [foe], { rng: () => 0, skills: { mend } })
-      eng.selectAttack()
-      expect(hero.hp).toBe(50) // プレイヤーは回復しない
-      expect(foe.hp).toBe(100 - 8 + 20) // 味方の攻撃 8 のあと、敵側の仲間（ここでは自分）が回復
+      const user = ent({ id: 'user', hp: 100, maxHp: 500, actions: [`候補=mend 対象=${t}`] })
+      const other = ent({ id: 'other', hp: 100, maxHp: 500 })
+      const eng = new BattleEngine([hero], [user, other], { rng: () => 0, skills: { mend } })
+      eng.selectAttack() // 味方の攻撃は最初の生存敵（user）に 8
+      expect(user.hp).toBe(100 - 8 + 20) // 使い手自身が回復
+      expect(other.hp).toBe(100) // 別の敵側の仲間には当たらない（明示指定なし = 最初の生存者）
+      expect(hero.hp).toBe(50 - 8) // other の通常攻撃 8 のみ。プレイヤーは回復しない
     }
   )
 
-  it('仲間全体・自分の特技も同様。対象=仲間 / 自分 は上書きする', () => {
+  it('仲間全体の特技も相手側に向かない。相手全体の特技に 対象=自分 を付けると自分に向く', () => {
     const mendAll: SkillExecution = { name: '手当て', target: '仲間全体', effect: 'heal 20..20' }
     const hero = ent({ id: 'hero', hp: 50, maxHp: 500 })
     const foe = ent({ id: 'foe', hp: 100, maxHp: 500, actions: ['候補=mendAll 対象=HP最小'] })
