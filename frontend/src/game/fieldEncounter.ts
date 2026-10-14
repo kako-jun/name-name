@@ -55,7 +55,13 @@ export function advanceEncounter(
   masters: Record<string, MonsterDef>,
   rng: () => number
 ): { state: EncounterWalkState; enemies: BattleEntity[] | null } {
-  if (!scene || scene.rate === 0 || walked <= 0 || step.stepDistance <= 0) {
+  if (
+    !scene ||
+    scene.rate === 0 ||
+    !(walked > 0) ||
+    !Number.isFinite(walked) ||
+    step.stepDistance <= 0
+  ) {
     return { state, enemies: null }
   }
   let distance = state.distance + walked

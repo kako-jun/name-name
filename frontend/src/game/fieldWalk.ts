@@ -127,7 +127,10 @@ export function stepMove(
   let y = pos.y
   let moved = 0
   for (let i = 0; i < n; i++) {
-    if (isWalkable(mask, x + dx, y + dy)) {
+    // 斜めの 1 歩が歩けても、x のみ・y のみの単独の歩みがどちらも歩けない（角）なら通さない
+    const cornerBlocked =
+      dx !== 0 && dy !== 0 && !isWalkable(mask, x + dx, y) && !isWalkable(mask, x, y + dy)
+    if (!cornerBlocked && isWalkable(mask, x + dx, y + dy)) {
       x += dx
       y += dy
       moved += Math.hypot(dx, dy)
@@ -163,7 +166,8 @@ export const WALK_FRAMES = 3
 
 /** 歩行アニメのコマ番号 (0..2)。止まっているときは 0（1 コマ目）。moving の間 frameMs ごとに 0→1→2 を繰り返す */
 export function walkFrame(moving: boolean, movingElapsedMs: number, frameMs: number): number {
-  if (!moving || frameMs <= 0 || movingElapsedMs < 0) return 0
+  if (!moving || !(frameMs > 0) || !(movingElapsedMs >= 0) || !Number.isFinite(movingElapsedMs))
+    return 0
   return Math.floor(movingElapsedMs / frameMs) % WALK_FRAMES
 }
 

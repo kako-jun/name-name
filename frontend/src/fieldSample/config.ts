@@ -3,6 +3,7 @@
  * 画像は URL で指す（相対 URL は設定 JSON の URL を基準に解決。assetBaseUrl があれば RPG の画像と同じく
  * `${base}/images/...` に解決する (#746/#785)）。
  */
+import { hasOwn } from '../game/ownProperty'
 import { resolveRpgImagePath } from '../game/novelLayout'
 import { resolveUrl, type ParseResult } from '../battleSample/config'
 import type { Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
@@ -108,7 +109,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
 
   if (!isObj(raw.scenes) || Object.keys(raw.scenes).length === 0)
     return fail('scenes は 1 件以上のオブジェクトが必要です')
-  if (typeof raw.startScene !== 'string' || !(raw.startScene in raw.scenes))
+  if (typeof raw.startScene !== 'string' || !hasOwn(raw.scenes, raw.startScene))
     return fail(`startScene は scenes のキーのどれか: ${JSON.stringify(raw.startScene)}`)
   const s = raw.start
   if (
@@ -165,10 +166,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
           r.length !== 2 ||
           typeof r[0] !== 'number' ||
           typeof r[1] !== 'number' ||
+          !Number.isFinite(r[0]) ||
+          !Number.isFinite(r[1]) ||
           r[0] > r[1]
         )
           return fail(`${p}.range は [小, 大] の数値 2 つが必要です`)
-        if (typeof l.to !== 'string' || !(l.to in raw.scenes))
+        if (typeof l.to !== 'string' || !hasOwn(raw.scenes, l.to))
           return fail(`${p}.to は scenes のキーのどれか: ${JSON.stringify(l.to)}`)
         links.push({ edge: l.edge as Edge, range: [r[0], r[1]], to: l.to })
       }
@@ -229,7 +232,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   for (const sc of Object.values(scenes)) {
     for (const g of sc.encounter?.groups ?? []) {
       for (const mid of g.split('+').map((t) => t.trim())) {
-        if (mid && !(mid in monsters))
+        if (mid && !hasOwn(monsters, mid))
           return fail(`scenes.${sc.id}.encounter.groups の "${mid}" が monsters にありません`)
       }
     }
@@ -357,7 +360,10 @@ export function findReturnLink(
   srcId: string,
   link: FieldLink
 ): FieldLink | null {
-  const back = config.scenes[link.to]?.links.filter((l) => l.to === srcId) ?? []
+  const back =
+    (hasOwn(config.scenes, link.to) ? config.scenes[link.to] : undefined)?.links.filter(
+      (l) => l.to === srcId
+    ) ?? []
   if (back.length === 0) return null
   return back.find((l) => l.edge === OPPOSITE[link.edge]) ?? back[0]
 }
