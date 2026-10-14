@@ -17,6 +17,7 @@ export default defineConfig({
       input: {
         index: 'index.html',
         'battle-sample': 'battle-sample.html',
+        'field-sample': 'field-sample.html',
       },
     },
   },

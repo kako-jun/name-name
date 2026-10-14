@@ -284,3 +284,27 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - `background` / `sprite` の URL は、設定 JSON の URL を基準に解決される（絶対 URL も可）
 - 設定 JSON と画像が別オリジンの場合、そのオリジンが CORS を許可している必要がある
 - 計算部（検証・補完・URL 解決・ブリンク履歴）は `frontend/src/battleSample/config.ts` の純粋関数、ブラウザ API 部は `main.ts`
+
+## 一枚絵フィールドサンプルページ（開発用・#807）
+
+一枚絵の上を主人公が歩き、絵の端で隣の絵へ移る「一枚絵フィールド」の試作を確認する独立ページ。ビルド成果物の `field-sample.html` として出力される（本編からはリンクしない・既存の `TopDownRenderer` とは別モードで、MD パイプラインにも組み込んでいない。設定は JSON で持つ）。
+
+- 開発サーバー: `http://localhost:7374/field-sample.html`。ビルド後は `dist/field-sample.html` を静的配信して開く
+- 設定 JSON は `?config=<URL>`（なければ `frontend/src/fieldSample/teramachi.sample.json`＝sit-by-me の寺町 4 枚の例）。画像はコピーせず URL で指す。sit-by-me のリポジトリのルートを CORS 付きで配信する前提（例: ルートで `python3 -m http.server 8765` に `Access-Control-Allow-Origin: *` を付けたもの。サンプルの URL は `http://localhost:8765/...`）。画像は fetch で取得するので CORS が必須
+- 操作: 矢印キー / WASD（斜めを含む 8 方向）、またはキャンバスを押し続ける（ドラッグ）と足元から指の方向へ連続した向きで歩く。操作の案内は画面に常に出る。「歩行マスクと足元を表示」で歩ける領域（緑）と足元の点（赤）を重ねる
+- 歩行マスク: 背景と同じ大きさの白黒画像（白=歩ける）。判定は足元 1 点。壁にぶつかったときは通れる軸だけ滑る。向きは移動ベクトルの支配軸（きっちり斜めのときは直前の向きを保つ）。歩行スプライトは 4 方向 × 3 コマ
+- 端のリンク: 足元が端のしきい値（`edgeThreshold`）内で、`links` の `range` に入り、その端へ向かって進むと遷移する（フェード）。遷移先では、遷移先シーンの「元のシーンへ戻るリンク」の `range` に、出た位置の相対位置を写して端から少し内側に出る（歩けなければ近い歩ける点へずらす）。到着直後は、その端へ向かう入力が途切れるまでそのリンクを無効にし、折り返しを防ぐ
+- エラー表示: 背景とマスクの大きさが違うシーンは読み込み失敗としてエラーを画面に出す。`start` の近くに歩ける点がなければ警告を出す。遷移先に歩ける点がない、またはシーンの読み込みに失敗したときは、遷移を中止して元のシーンに留まり、エラーを出す（その端へ向かう入力が途切れるまで同じリンクは再試行しない）。画像の fetch が失敗したときは URL と CORS（`Access-Control-Allow-Origin`）の可能性を添えて表示する。モンスター・味方の `hp` は 1 以上
+- 設定 JSON の主なキー: `startScene` / `start`（初期の足元）/ `speed`（背景ピクセル/秒）/ `edgeThreshold` / `assetBaseUrl`（指定時は RPG の画像と同じく `${base}/images/...` に解決 #746）/ `player.sprites`（`up|down|left|right` それぞれ 3 コマの URL）・`height`・`frameMs` / `scenes.<id>`（`background`・`mask`・`links[]`＝`{ edge, range, to }`）
+- 純粋関数は `frontend/src/game/fieldWalk.ts`（マスク判定・移動・向き・歩行アニメ・端のリンク・出現位置）、設定の検証は `frontend/src/fieldSample/config.ts`、ブラウザ API 部は `main.ts`
+
+### ランダムエンカウント（#809）
+
+フィールドサンプルは、歩いた距離でランダムエンカウントし、既存の `BattleEngine` / `BattleScreen` で戦って、終わると同じ位置に戻る。
+
+- 設定 JSON: `encounter`（`stepDistance`＝抽選 1 回分の歩行距離（既定 80）、`minSteps`＝戦闘後に飛ばす抽選回数（既定 3））/ `monsters`（id → `name`・`hp`・`atk`・`def`・`agi`・`exp`・`gold`・`sprite`）/ `party`（戦闘に出す味方。`sprite` に主人公のポーズ画像）/ `battle`（`layout`・`spriteStyle`・`background`・`width`・`height`）/ `scenes.<id>.encounter`（`rate`・`groups`・`background`）
+- `rate` は `rollEncounter`（#172）と同じ: `0` = エンカウントなし、`N` = 抽選のたび 1/N、`1` = 毎回。`groups` は `"slime+slime"` のようにモンスター id を `+` で連結（`monsters` にない id は設定エラー）
+- 歩いた距離だけが進む。壁に押しつけて動けていないときは進まない。エンカウントなしのシーンでは貯めない。当選したら貯めた距離を捨て、戦闘後 `minSteps` 回の抽選を飛ばす
+- 戦闘中は歩きの入力は無視される（戦闘側は戦闘画面が自前で入力を受ける）。戦闘後は `sceneId` / 足元 / 向きを保ったまま復帰する。ツールバーの「今すぐエンカウント」は確認用で、抽選を 1 回で必ず当てる
+- 画面下の表示（`encounter=貯めた距離/刻み 抑制=経過/最低`、`lastBattle`）で状態を確認できる
+- 純粋関数は `frontend/src/game/fieldEncounter.ts`（`advanceEncounter`・`initialEncounterState`・`afterBattleState`。乱数は注入）
