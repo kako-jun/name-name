@@ -982,6 +982,14 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         out.push_str(&format!("行動: {a}\n"));
                     }
                 }
+                if let Some(counters) = &m.counters {
+                    for c in counters {
+                        out.push_str(&format!("反撃: {c}\n"));
+                    }
+                }
+                if let Some(d) = &m.on_death {
+                    out.push_str(&format!("死亡時: {d}\n"));
+                }
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
@@ -1826,9 +1834,12 @@ mod tests {
                 "条件=初手 候補=こうげき".to_string(),
                 "候補=こうげき:3 | 墨:1".to_string(),
             ]),
+            counters: Some(vec!["条件=受けた=物理 候補=こうげき".to_string()]),
+            on_death: Some("候補=自爆".to_string()),
         }));
         let out = emit(&doc);
         assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
+        assert!(out.contains("反撃: 条件=受けた=物理 候補=こうげき\n死亡時: 候補=自爆\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
         assert!(out.contains("[モンスター slime]"));
         assert!(out.contains("名前: スライム"));

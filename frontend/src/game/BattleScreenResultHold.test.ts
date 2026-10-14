@@ -38,7 +38,10 @@ interface Internals {
   commands: { id: string; hit: Container }[]
   messageText: Text | null
   logPanel: Container
-  sampleEntity(side: 'party' | 'enemy', index: number): { pose: string }
+  sampleEntity(
+    side: 'party' | 'enemy',
+    index: number
+  ): { pose: string; forward: number; downProgress: number }
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
 
@@ -376,5 +379,32 @@ describe('コマンドボタンが実際のイベント境界のヒットテス�
     expect(hitsButtons(s)).toBe(true)
     tap(s, 'attack')
     expect(engine.getState().phase).toBe('victory')
+  })
+})
+
+describe('死亡時の行動の演出 (#837): ff', () => {
+  it('倒れて薄くなった使い手は前へ踏み出さない（forward 0）', () => {
+    const engine = new BattleEngine(
+      [entity('hero', { atk: 999, hp: 500, maxHp: 500 })],
+      [entity('imp', { hp: 1, maxHp: 1, atk: 5, onDeath: '候補=こうげき' })],
+      { rng: () => 0.5 }
+    )
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    created.push(s)
+    tap(s, 'attack')
+    const seen: number[] = []
+    let sawDownedActor = false
+    for (let i = 0; i < 400; i++) {
+      s.tick(16)
+      const p = (s as unknown as { playback: { active?: { event: { actor: { side: string } } } } })
+        .playback.active
+      const e = I(s).sampleEntity('enemy', 0)
+      if (p?.event.actor.side === 'enemy' && e.downProgress > 0) {
+        sawDownedActor = true
+        seen.push(e.forward)
+      }
+    }
+    expect(sawDownedActor).toBe(true)
+    expect(seen.every((f) => f === 0)).toBe(true)
   })
 })

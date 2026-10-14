@@ -370,6 +370,14 @@ pub struct MonsterDef {
     /// 1 行も無ければ None（`行動:` を書かない敵は従来どおり通常攻撃だけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<String>>,
+    /// 敵の反撃ルール (#837、敵の行動パターン P3 / 親 #832)。`反撃: 条件=受けた=系統:fire 候補=氷` の値部分を、書いた順の生文字列で持つ。
+    /// `actions` と同じく parser は検証せず透過する（解釈は runtime の `enemyAi.ts`）。1 行も無ければ None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counters: Option<Vec<String>>,
+    /// 敵の死亡時の行動 (#837)。`死亡時: 候補=自爆` の値部分の生文字列。倒されたとき 1 度だけ行う専用の 1 行
+    /// （複数書いたときは最初の 1 行だけを持つ）。無ければ None。JSON / TS 側のキーは `onDeath`。
+    #[serde(default, rename = "onDeath", skip_serializing_if = "Option::is_none")]
+    pub on_death: Option<String>,
 }
 
 /// アイテム定義 (#174)。

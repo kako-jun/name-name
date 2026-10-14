@@ -241,6 +241,10 @@ export interface BattleEntity {
    * 解釈・選択は `enemyAi.ts` の `chooseEnemyAction`。無い（または空の）敵は従来どおり通常攻撃だけで、乱数の消費も変わらない
    */
   actions?: string[]
+  /** 敵の反撃ルール (#837)。`MonsterDef.counters`（`反撃:` の値の生文字列、書いた順）を戦闘への組み立て時に写す。解釈は `enemyAi.ts` */
+  counters?: string[]
+  /** 敵の死亡時の行動 (#837)。`MonsterDef.onDeath`（`死亡時:` の値の生文字列）を写す。倒されたとき 1 度だけ実行する */
+  onDeath?: string
 }
 
 /** 戦闘の隊列 (#747) */

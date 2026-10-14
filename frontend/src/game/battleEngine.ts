@@ -20,7 +20,7 @@
  *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
- * - 敵 AI の P3（カウンター・死亡時。#837）と builtin: での挙動委譲
+ * - 敵の builtin: での挙動委譲
  * - ターン跨ぎ状態異常の減衰
  */
 
@@ -30,10 +30,16 @@ import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
 import { isReviveEntry } from './battleMenu'
 import {
   chooseEnemyAction,
+  chooseEnemyReaction,
   createEnemyMemory,
+  hasOnDeath,
+  parseCounterRules,
+  parseDeathRules,
   recordEnemyAction,
+  tracksHits,
   type ChosenAction,
   type EnemyMemory,
+  type HitSource,
 } from './enemyAi'
 import { hasOwn } from './ownProperty'
 
@@ -263,7 +269,9 @@ export class BattleEngine {
       this.appendLog(`${target.name} を たおした！`)
     }
 
-    this.advanceAfterPartyAction()
+    this.advanceAfterPartyAction(
+      this.reactionOf(hero, { category: 'physical' }, new Map([[target, hpBefore]]))
+    )
   }
 
   /**
@@ -370,7 +378,13 @@ export class BattleEngine {
     for (const line of lines) this.appendLog(line)
     this.recordEffect('spell', caster, spell.name, targets, hpSnapshot, amounts)
 
-    this.advanceAfterPartyAction()
+    this.advanceAfterPartyAction(
+      this.reactionOf(
+        caster,
+        { category: 'magic', name: spell.name, type: spellDamageType(spell) },
+        hpSnapshot
+      )
+    )
   }
 
   /** 「どうぐ」: アイテムを使用 */
@@ -397,7 +411,9 @@ export class BattleEngine {
     for (const line of lines) this.appendLog(line)
     this.recordEffect('item', user, item.name, targets, hpSnapshot, amounts)
 
-    this.advanceAfterPartyAction()
+    this.advanceAfterPartyAction(
+      this.reactionOf(user, { category: 'item', name: item.name }, hpSnapshot)
+    )
   }
 
   /**
@@ -410,15 +426,25 @@ export class BattleEngine {
    *   それ以外は最初の生存者に落ちる。省略時は最初の生存者（蘇生の仲間単体だけは最初の倒れた仲間）
    * - 効果は呪文と同じ評価器を内部で共有（`builtin` があればそれ、無ければ `effect` の DSL）。MP は持たず消費しない
    * - ログに `message`（`{user}` を使った側の名前に置換）か「〇〇 は △△ を つかった！」、演出イベントに `kind: 'skill'` を残す
+   * - `opts.allowDowned` は死亡時の行動 (#837) 用。倒れている使い手でも使える
    * - フェーズ・ATB ゲージ・勝敗判定は触らない（敵ターンの途中で呼ばれても二重に終了処理しないため、呼び出し側が checkEnd 相当を行う）
    * - 乱数は効果の評価でだけ消費する（対象の解決は rng を使わない）
    */
-  performSkill(user: BattleActorRef, skill: SkillExecution, target?: BattleActorRef): boolean {
+  performSkill(
+    user: BattleActorRef,
+    skill: SkillExecution,
+    target?: BattleActorRef,
+    opts: { allowDowned?: boolean } = {}
+  ): boolean {
     const userList = user.side === 'party' ? this.state.party : this.state.enemies
     const caster = userList[user.index]
     if (this.isOver()) return false
-    if (!caster || caster.hp <= 0) return false
-    const targets = this.resolveSkillTargets(user.side, caster, skill, target)
+    // 倒れた者は行動できない。ただし死亡時の行動 (#837) は、倒れた本人が最後に 1 度だけ使う
+    if (!caster || (caster.hp <= 0 && !opts.allowDowned)) return false
+    // 倒れた使い手（死亡時の行動 #837）は自分を効果の対象にできない（自分向けの回復・蘇生で生き返る抜け道を塞ぐ）。
+    // 生きている仲間への回復・強化や、倒れた別の仲間の蘇生は使える
+    const excludeUser = !!opts.allowDowned && caster.hp <= 0
+    const targets = this.resolveSkillTargets(user.side, caster, skill, target, excludeUser)
     const message =
       typeof skill.message === 'string' && skill.message.trim() !== ''
         ? skill.message.split('{user}').join(caster.name)
@@ -467,17 +493,26 @@ export class BattleEngine {
     return applyEffect(parsed, ctx)
   }
 
-  private advanceAfterPartyAction(): void {
+  private advanceAfterPartyAction(react?: PartyReaction): void {
     const atb = this.state.atb
+    // 行動した人は、反撃で倒れる前に控える（ATB の currentActorIndex は倒れた者を飛ばす）
+    const idx = atb ? this.currentActorIndex() : -1
+    // 被弾した敵の反撃と、倒れた敵の死亡時の行動 (#837)。勝敗はこのあとの 1 か所だけで判定する（二重にならない）
+    if (react) this.reactToPartyAction(react)
     if (atb) {
-      // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）
-      const idx = this.currentActorIndex()
+      // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）。同時全滅は勝利
       if (idx !== -1) this.finishAtbAction(idx)
       if (this.state.enemies.every((e) => e.hp === 0)) {
         this.handleVictory()
         return
       }
       this.settleAtbPhase()
+      return
+    }
+    // 従来ターン制: 反撃・死亡時の行動で味方が全滅したら（同時全滅を含め）敗北
+    if (react && this.state.party.every((p) => p.hp === 0)) {
+      this.state.phase = 'defeat'
+      this.appendLog('ぜんめつ してしまった……')
       return
     }
     if (this.state.enemies.every((e) => e.hp === 0)) {
@@ -653,6 +688,8 @@ export class BattleEngine {
         atb.partyGauge[i] = 0
       })
       this.countEnemyAction(enemyIndex, choice)
+      this.resolveDeaths()
+      this.pruneDownedParty(atb)
       this.checkEnd()
       return
     }
@@ -672,6 +709,8 @@ export class BattleEngine {
       atb.partyGauge[idx] = 0
     }
     this.countEnemyAction(enemyIndex, choice, true)
+    this.resolveDeaths()
+    this.pruneDownedParty(atb)
     this.checkEnd()
   }
 
@@ -687,7 +726,8 @@ export class BattleEngine {
   /** 選ばれた特技を使う。エンジンに無い id、使えない状況（戦闘終了など）なら false（呼び出し側が通常攻撃に落とす） */
   private useEnemySkill(
     enemyIndex: number,
-    choice: Extract<ChosenAction, { kind: 'skill' }>
+    choice: Extract<ChosenAction, { kind: 'skill' }>,
+    allowDowned = false
   ): boolean {
     const skill = hasOwn(this.skills, choice.skillId) ? this.skills[choice.skillId] : undefined
     if (!skill) {
@@ -717,7 +757,8 @@ export class BattleEngine {
     return this.performSkill(
       { side: 'enemy', index: enemyIndex },
       exec,
-      applies || o === undefined ? choice.target : undefined
+      applies || o === undefined ? choice.target : undefined,
+      allowDowned ? { allowDowned: true } : undefined
     )
   }
 
@@ -738,6 +779,96 @@ export class BattleEngine {
     if (!choice.target || choice.target.side !== 'party') return null
     const t = this.state.party[choice.target.index]
     return t && t.hp > 0 ? t : null
+  }
+
+  /** 味方の行動のうち、被弾した敵の反撃・死亡時の行動に渡す情報。敵の記憶が無い戦闘では undefined（何も起きない） */
+  private reactionOf(
+    attacker: BattleEntity,
+    source: HitSource,
+    before: Map<BattleEntity, number>
+  ): PartyReaction | undefined {
+    if (!this.state.enemyMemory) return undefined
+    const ref = this.refOf(attacker)
+    return ref ? { attacker: ref, source, before } : undefined
+  }
+
+  /**
+   * 味方の行動 1 回のあとの、被弾した敵の反撃と死亡時の行動 (#837)。
+   * - 被弾 = 行動の前後で HP が減った敵。**1 行動につき 1 回**（1 行動で何ヒットしても、全体攻撃で複数の敵に当たっても敵ごとに 1 回）
+   * - 被弾の記憶（`hits` `lastHit` `lastAttacker`）は、被弾の語彙を使う敵（`tracksHits`）だけに残す。ほかの敵の記憶・乱数は触らない
+   * - 反撃は生きている敵だけ。ダメージ確定後、敵の並び順に 1 体ずつ。反撃は反撃を起こさない（この関数は味方の行動からしか呼ばれない）
+   * - そのあと倒れた敵の死亡時の行動（`resolveDeaths`）。勝敗は呼び出し側が 1 度だけ判定する
+   */
+  private reactToPartyAction(react: PartyReaction): void {
+    const memory = this.state.enemyMemory
+    if (!memory) return
+    const hit: number[] = []
+    this.state.enemies.forEach((e, i) => {
+      const before = react.before.get(e)
+      if (before === undefined || e.hp >= before || !tracksHits(e)) return
+      const m = memory[i]
+      m.hits = (m.hits ?? 0) + 1
+      m.lastHit = react.source
+      m.lastAttacker = react.attacker
+      hit.push(i)
+    })
+    for (const i of hit) {
+      const enemy = this.state.enemies[i]
+      if (enemy.hp <= 0 || !enemy.counters || enemy.counters.length === 0) continue
+      if (this.state.party.every((p) => p.hp === 0)) break
+      const choice = chooseEnemyReaction(this.state, i, parseCounterRules(enemy.counters), this.rng)
+      if (choice) this.performReaction(i, choice, 'はんげき！')
+    }
+    this.resolveDeaths()
+  }
+
+  /**
+   * 倒れた敵の `死亡時:` を、倒れた順（敵の並び順）に 1 体ずつ 1 度だけ実行する (#837)。
+   * 死亡時の行動で別の敵が倒れたときはその敵の分も続ける。味方が全滅していれば実行しない。
+   * 記憶が無い戦闘・`死亡時:` を持たない敵は何も起きない（乱数も消費しない）
+   */
+  private resolveDeaths(): void {
+    const memory = this.state.enemyMemory
+    if (!memory) return
+    for (let guard = 0; guard <= this.state.enemies.length; guard++) {
+      const i = this.state.enemies.findIndex(
+        (e, k) => e.hp <= 0 && hasOnDeath(e) && !memory[k].died
+      )
+      if (i === -1) return
+      memory[i].died = true
+      if (this.state.party.every((p) => p.hp === 0)) return
+      const rules = parseDeathRules(this.state.enemies[i].onDeath as string)
+      const choice = chooseEnemyReaction(this.state, i, rules, this.rng)
+      if (choice) this.performReaction(i, choice, 'さいごの あがき！')
+    }
+  }
+
+  /**
+   * 反撃・死亡時の行動を 1 回実行する (#837)。特技（エンジンに無い id は通常攻撃に落ちる）か通常攻撃。
+   * 敵の行動回数 `acted`・順番の位置は進めない（ターンの台本とは別）。狙いが決まらなければ最初の生存味方
+   */
+  private performReaction(enemyIndex: number, choice: ChosenAction, attackLine: string): void {
+    const enemy = this.state.enemies[enemyIndex]
+    if (choice.kind === 'skill' && this.useEnemySkill(enemyIndex, choice, true)) return
+    const hero = this.pickedParty(choice) ?? this.firstAlive(this.state.party)
+    if (!hero) return
+    const dmg = this.computeAttackDamage(enemy, hero)
+    const hpBefore = hero.hp
+    hero.hp = Math.max(0, hero.hp - dmg)
+    this.recordAttack(enemy, hero, hpBefore, dmg)
+    // 既定の文言（仮。上書きの仕組みは未実装）。特技を使うときは特技の message / 既定の「つかった！」が出る
+    this.appendLog(`${enemy.name} の ${attackLine}`)
+    this.appendLog(`${hero.name} は ${dmg} の ダメージを うけた！`)
+    if (hero.hp === 0) this.appendLog(`${hero.name} は たおれた！`)
+  }
+
+  /** ATB: 倒れた味方をコマンド待ち・ゲージから外す（反撃・死亡時の行動で倒れた分。通常攻撃と同じ後始末） */
+  private pruneDownedParty(atb: AtbState): void {
+    this.state.party.forEach((p, i) => {
+      if (p.hp > 0) return
+      atb.queue = atb.queue.filter((q) => q !== i)
+      atb.partyGauge[i] = 0
+    })
   }
 
   private handleVictory(): void {
@@ -766,6 +897,7 @@ export class BattleEngine {
       if (choice.kind === 'skill' && this.useEnemySkill(i, choice)) {
         usedSkill = true
         this.countEnemyAction(i, choice)
+        this.resolveDeaths()
         continue
       }
       const hero = this.pickedParty(choice) ?? firstHero
@@ -830,7 +962,8 @@ export class BattleEngine {
     side: 'party' | 'enemy',
     user: BattleEntity,
     skill: SkillExecution,
-    target?: BattleActorRef
+    target?: BattleActorRef,
+    excludeUser = false
   ): BattleEntity[] {
     const allies = side === 'party' ? this.state.party : this.state.enemies
     const opponents = side === 'party' ? this.state.enemies : this.state.party
@@ -840,18 +973,21 @@ export class BattleEngine {
       case '相手全体':
         return opponents.filter((e) => e.hp > 0)
       case '自分':
-        return [user]
+        return excludeUser ? [] : [user]
       case '仲間全体':
-        return allies.filter((e) => e.hp > 0)
+        return allies.filter((e) => e.hp > 0 && !(excludeUser && e === user))
       case '仲間単体': {
         const revive = isReviveEntry('spell', skill)
-        const picked = explicit(allies, side)
+        // 倒れた使い手本人（死亡時の行動 #837）は、明示した対象にも既定の「最初の倒れた仲間」にもならない
+        const candidates = excludeUser ? allies.filter((e) => e !== user) : allies
+        const p0 = explicit(allies, side)
+        const picked = p0 && !(excludeUser && p0 === user) ? p0 : undefined
         const t =
           picked && (picked.hp > 0 || revive)
             ? picked
             : revive
-              ? (allies.find((e) => e.hp <= 0) ?? this.firstAlive(allies))
-              : this.firstAlive(allies)
+              ? (candidates.find((e) => e.hp <= 0) ?? this.firstAlive(candidates))
+              : this.firstAlive(candidates)
         return t ? [t] : []
       }
       case '相手単体':
@@ -1052,6 +1188,20 @@ export function computeRowAttackDamage(
     attacker.row,
     defender.row
   )
+}
+
+/** 味方の行動 1 回が敵に与えた被弾の情報 (#837)。`before` は行動の前の全員の HP */
+interface PartyReaction {
+  attacker: BattleActorRef
+  source: HitSource
+  before: Map<BattleEntity, number>
+}
+
+/** 呪文の効果 DSL が `damage ... type=` を持つときその系統（`受けた=系統:x` の判定用）。builtin・DSL でなければ undefined */
+function spellDamageType(spell: SpellExecution): string | undefined {
+  if (spell.builtin || !spell.effect) return undefined
+  const parsed = parseEffect(spell.effect)
+  return parsed && parsed.kind === 'damage' ? parsed.type : undefined
 }
 
 /** 呪文発動の引数。マスターからの解決は呼び出し側で行う */
