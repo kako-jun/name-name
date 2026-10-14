@@ -361,7 +361,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
     await startedPromise
     onEnd!()
     await p
-    expect(startFrom).toHaveBeenCalledWith({ sceneId: 'a', flags: {} })
+    expect(startFrom).toHaveBeenCalledWith({ sceneId: 'a', flags: {}, linear: true })
     expect(progress.some((s) => s.includes('flags: {}'))).toBe(true)
   })
 
@@ -390,6 +390,7 @@ describe('exportVideo setExporting 復元（#350 F 群）', () => {
     expect(startFrom).toHaveBeenCalledWith({
       sceneId: 'a',
       flags: { met: { Bool: true }, n: { Number: 2 } },
+      linear: true,
     })
     expect(progress.some((s) => s.includes('{"met":{"Bool":true},"n":{"Number":2}}'))).toBe(true)
   })

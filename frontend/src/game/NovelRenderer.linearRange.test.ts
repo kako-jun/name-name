@@ -69,7 +69,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
   it('開始 a・終了 c: b, c で onSceneChange が発火し、c の末尾まで録画される', async () => {
     const { r } = linearRenderer()
     const rec = recordRange(r, 'c')
-    const res = await r.startFrom({ sceneId: 'a' })
+    const res = await r.startFrom({ sceneId: 'a', linear: true })
     expect(res).toEqual({ status: 'entered', sceneId: 'a' })
     expect(r.getDebugState().eventText).toContain('a-line')
     expect(r.getPlayheadSceneId()).toBe('a')
@@ -92,7 +92,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
   it('開始 b・終了 b: b だけ録画され、c へは進まない（b の後ろで止まる）', async () => {
     const { r } = linearRenderer()
     const rec = recordRange(r, 'b')
-    const res = await r.startFrom({ sceneId: 'b' })
+    const res = await r.startFrom({ sceneId: 'b', linear: true })
     expect(res).toEqual({ status: 'entered', sceneId: 'b' })
     expect(r.getDebugState().eventText).toContain('b-line')
     expect(rec.entered).toEqual(['b'])
@@ -105,7 +105,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
   it('開始 a・終了 b: b の末尾（c に入る手前）で止まる', async () => {
     const { r } = linearRenderer()
     const rec = recordRange(r, 'b')
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r) // b
     expect(rec.stoppedBy()).toBeNull()
     advance(r) // c に入る → 範囲終了
@@ -127,11 +127,11 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
     }
     // 陽性対照: a から始めれば a の BGM が鳴る
     const fromA = mk()
-    await fromA.startFrom({ sceneId: 'a' })
+    await fromA.startFrom({ sceneId: 'a', linear: true })
     expect(fromA.getSnapshot().currentBgmPath).toContain('a.mp3')
     // b から始めると a の [BGM:] は実行されない
     const fromB = mk()
-    await fromB.startFrom({ sceneId: 'b' })
+    await fromB.startFrom({ sceneId: 'b', linear: true })
     expect(fromB.getDebugState().eventIndex).toBe(3)
     expect(fromB.getDebugState().eventText).toContain('b-line')
     expect(fromB.getSnapshot().currentBgmPath).toBeNull()
@@ -139,7 +139,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
 
   it('保存は線形ストリームのまま（sceneId = エントリ(null) + eventIndex）で、復元できる', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'b' })
+    await r.startFrom({ sceneId: 'b', linear: true })
     const snap = r.getSnapshot()
     expect(snap.sceneId).toBeNull()
     advance(r)
@@ -152,7 +152,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
 
   it('最後のシーンから始めた後のセーブ（sceneId = null）から復元できる', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'c' })
+    await r.startFrom({ sceneId: 'c', linear: true })
     const snap = r.getSnapshot()
     expect(snap.sceneId).toBeNull()
     const other = new NovelRenderer()
@@ -178,7 +178,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
     const rec = recordRange(r, 'b')
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     expect(r.getDebugState().eventText).toContain('a2')
     expect(r.getPlayheadSceneId()).toBe('a')
@@ -190,7 +190,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
   it('選択肢・ジャンプで別シーンへ進む範囲指定は従来どおり（退行ガード）', async () => {
     const { r } = linearRenderer()
     const rec = recordRange(r, 'c')
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     // a の途中から c へ進行（選択肢の確定・[ジャンプ:] と同じ progress 入場）。b は飛ばす。
     r.jumpToScene('c')
     expect(r.getCurrentSceneId()).toBe('c')
@@ -206,7 +206,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
   it('最後のシーン c から始めても線形経路（ストリームの持ち主はエントリのまま）で、c の末尾で完走する', async () => {
     const { r } = linearRenderer()
     const rec = recordRange(r, 'c')
-    await r.startFrom({ sceneId: 'c' })
+    await r.startFrom({ sceneId: 'c', linear: true })
     expect(r.getCurrentSceneId()).toBeNull()
     expect(r.getPlayheadSceneId()).toBe('c')
     expect(r.getDebugState().eventText).toContain('c-line')
@@ -223,7 +223,7 @@ describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
     r.setJumpSceneIndex([...entry, other])
     const onEnd = vi.fn()
     r.setOnEnd(onEnd)
-    await r.startFrom({ sceneId: 'x' })
+    await r.startFrom({ sceneId: 'x', linear: true })
     expect(r.getCurrentSceneId()).toBe('x')
     expect(r.getPlayheadSceneId()).toBe('x')
     advance(r)
@@ -252,10 +252,10 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
       return r
     }
     const off = mk()
-    await off.startFrom({ sceneId: 'b' })
+    await off.startFrom({ sceneId: 'b', linear: true })
     expect(off.getDebugState().eventIndex).toBe(2)
     const on = mk()
-    await on.startFrom({ sceneId: 'b', flags: { x: { Bool: true } } })
+    await on.startFrom({ sceneId: 'b', linear: true, flags: { x: { Bool: true } } })
     expect(on.getDebugState().eventIndex).toBe(4)
     expect(on.getDebugState().eventText).toContain('b1')
   })
@@ -270,7 +270,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
     const rec = recordRange(r, 'c')
-    await r.startFrom({ sceneId: 'b' })
+    await r.startFrom({ sceneId: 'b', linear: true })
     expect(r.getDebugState().eventText).toContain('b1')
     advance(r) // Flag を処理 → a の展開が伸びる。位置は b2 のまま
     expect(r.getDebugState().eventText).toContain('b2')
@@ -290,7 +290,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
     const rec = recordRange(r, 'c')
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     expect(r.getDebugState().eventText).toContain('bx1')
     expect(r.getPlayheadSceneId()).toBe('b')
@@ -312,7 +312,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
     const rec = recordRange(r, 'd')
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     expect(r.getDebugState().eventText).toContain('c1')
     advance(r)
@@ -324,7 +324,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
 
   it('復元後に c へ進むと onSceneChange("c") がちょうど1回', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'b' })
+    await r.startFrom({ sceneId: 'b', linear: true })
     const snap = r.getSnapshot()
     advance(r)
     await r.restoreSnapshot(snap)
@@ -345,7 +345,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     )
     const spy = vi.spyOn(r, 'requestAutoSave')
     r.setOnSceneChange(() => r.requestAutoSave())
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     advance(r)
     expect(spy).toHaveBeenCalledTimes(3) // a（開始）, b, c
@@ -359,7 +359,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
     const rec = recordRange(r, 'b')
     const ended = vi.fn()
     r.setOnStoryEndedChange(ended)
-    await r.startFrom({ sceneId: 'b', confinedSceneIds: ['b'] })
+    await r.startFrom({ sceneId: 'b', linear: true, confinedSceneIds: ['b'] })
     advance(r) // b → c へ入る: 圏外なので終劇
     expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(true)
     expect(ended).toHaveBeenCalledTimes(1)
@@ -370,21 +370,21 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
 
   it('閉じ込めなし（?debug_scene= 相当）なら後続へ流れる', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'b', confinedSceneIds: null })
+    await r.startFrom({ sceneId: 'b', linear: true, confinedSceneIds: null })
     advance(r)
     expect(r.getDebugState().eventText).toContain('c-line')
   })
 
   it('セーブ一覧・デバッグ状態のシーンは再生位置のシーン、セーブデータの sceneId は持ち主のまま', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'b' })
+    await r.startFrom({ sceneId: 'b', linear: true })
     expect(r.getDebugState().sceneId).toBe('b')
     expect(r.getSnapshot().sceneId).toBeNull()
   })
 
   it('goBack で境界を戻ってから進むと通知が再発火する（シーク操作では発火しない）', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     const entered: string[] = []
     r.setOnSceneChange((id) => entered.push(id))
@@ -396,7 +396,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
 
   it('seekTo で境界を越えても通知は発火しない', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     advance(r)
     const entered: string[] = []
@@ -409,7 +409,7 @@ describe('線形連結の新規開始の追加ケース (#777 レビュー対応
 
   it('intermission のタブローの SceneTransition ではシーン通知しない', async () => {
     const { r } = linearRenderer()
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     const entered: string[] = []
     r.setOnSceneChange((id) => entered.push(id))
     // 境界の位置（eventIndex = 1）にあっても、タブローの命令列は本編のストリームではない
@@ -459,7 +459,7 @@ describe('再展開後のセーブから同じ位置・同じ進行を再現で�
     const enteredAt: { at: number; id: string }[] = []
     let trace: string[] = []
     base.setOnSceneChange((id) => enteredAt.push({ at: trace.length, id }))
-    await base.startFrom({ sceneId: 'a', flags })
+    await base.startFrom({ sceneId: 'a', linear: true, flags })
     trace = [text(base)]
     const snaps = [base.getSnapshot()]
     for (let i = 0; i < 12; i++) {
@@ -550,7 +550,7 @@ describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復
   it('Flag を越えて goBack: 表示・playhead・別インスタンスへの復元が一致し、さらに戻っても未表示の本文に飛ばない', async () => {
     const scenes = forwardScenes()
     const r = build(scenes)
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     expect(text(r)).toBe('a1')
     advance(r)
     expect(text(r)).toBe('b1')
@@ -574,7 +574,7 @@ describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復
   it('seekTo でも同様', async () => {
     const scenes = forwardScenes()
     const r = build(scenes)
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     advance(r)
     expect(text(r)).toBe('b2')
@@ -593,7 +593,7 @@ describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復
   it('自己否定ブロックの中（Flag の前）まで goBack しても一致する', async () => {
     const scenes = selfNegatingScenes()
     const r = build(scenes)
-    await r.startFrom({ sceneId: 'a', flags: { x: { Bool: true } } })
+    await r.startFrom({ sceneId: 'a', linear: true, flags: { x: { Bool: true } } })
     expect(text(r)).toBe('a0')
     advance(r)
     expect(text(r)).toBe('A')
@@ -620,7 +620,7 @@ describe('再展開は常に全体の展開と一致する・既読 (#777 再レ
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
     const rec = recordRange(r, 'b')
-    await r.startFrom({ sceneId: 'a', flags: { x: { Bool: true } } })
+    await r.startFrom({ sceneId: 'a', linear: true, flags: { x: { Bool: true } } })
     const texts: string[] = []
     for (let i = 0; i < 6 && !rec.stoppedBy(); i++) {
       texts.push(r.getDebugState().eventText ?? '')
@@ -643,7 +643,7 @@ describe('再展開は常に全体の展開と一致する・既読 (#777 再レ
     const r = new NovelRenderer()
     r.setEvents(flatten(scenes))
     r.setJumpSceneIndex(scenes)
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     advance(r)
     expect(r.getDebugState().eventText).toContain('Y')
   })
@@ -651,7 +651,7 @@ describe('再展開は常に全体の展開と一致する・既読 (#777 再レ
   it('線形ストリームで、読み終えたシーンが境界で既読になる（持ち主 null でも）', async () => {
     const { r } = linearRenderer()
     r.setDocKey('t777-read')
-    await r.startFrom({ sceneId: 'a' })
+    await r.startFrom({ sceneId: 'a', linear: true })
     const read = (r as unknown as { readSceneProgress: Set<string> }).readSceneProgress
     expect(read.has('a')).toBe(false)
     advance(r) // b に入る
@@ -726,5 +726,56 @@ describe('findLinearSegments / resolveLinearSegments / segmentAt (#777)', () => 
     const stream = flatten([q, c])
     // allScenes の先頭に別ファイルの p（同じ内容）があっても、q→c の連鎖を採る
     expect(findLinearSegments(stream, [p, q, c]).map((x) => x.sceneId)).toEqual(['q', 'c'])
+  })
+
+  // #817: linear を渡さない新規開始（?scene= / ?debug_scene= / 既定）は、指定シーンの events だけを流して末尾で終劇する。
+  describe('linear 無しの新規開始は指定シーンだけ (#817)', () => {
+    it('既定の startFrom({ sceneId }): そのシーンの events のみ、currentSceneId はそのシーン、末尾で終劇', async () => {
+      const { r } = linearRenderer()
+      const ended = vi.fn()
+      r.setOnStoryEndedChange(ended)
+      const entered: string[] = []
+      r.setOnSceneChange((id) => entered.push(id))
+      const res = await r.startFrom({ sceneId: 'b' })
+      expect(res).toEqual({ status: 'entered', sceneId: 'b' })
+      expect(r.getCurrentSceneId()).toBe('b')
+      expect(r.getPlayheadSceneId()).toBe('b')
+      expect(r.getDebugState().eventText).toContain('b-line')
+      advance(r) // b の末尾 → c へ進まず終劇
+      expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(true)
+      expect(ended).toHaveBeenCalledWith(true)
+      expect(r.getDebugState().eventText ?? '').not.toContain('c-line')
+      expect(entered).toEqual(['b'])
+    })
+
+    it('?scene= 相当（confinedSceneIds 付き）: エントリ内のシーンの末尾で終劇する', async () => {
+      const { r } = linearRenderer()
+      const ended = vi.fn()
+      r.setOnStoryEndedChange(ended)
+      await r.startFrom({ sceneId: 'a', confinedSceneIds: ['a'] })
+      advance(r)
+      expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(true)
+      expect(ended).toHaveBeenCalledWith(true)
+      expect(r.getDebugState().eventText ?? '').not.toContain('b-line')
+    })
+
+    it('?debug_scene= 相当（confinedSceneIds なし）: エントリ内のシーンの末尾で終劇する', async () => {
+      const { r } = linearRenderer()
+      const ended = vi.fn()
+      r.setOnStoryEndedChange(ended)
+      await r.startFrom({ sceneId: 'b', confinedSceneIds: null })
+      advance(r)
+      expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(true)
+      expect(ended).toHaveBeenCalledWith(true)
+      expect(r.getDebugState().eventText ?? '').not.toContain('c-line')
+    })
+
+    it('陽性対照: linear: true なら同じ開始で後続へ流れ、終劇にならない', async () => {
+      const { r } = linearRenderer()
+      await r.startFrom({ sceneId: 'b', linear: true, confinedSceneIds: null })
+      advance(r)
+      expect((r as unknown as { storyEnded: boolean }).storyEnded).toBe(false)
+      expect(r.getDebugState().eventText).toContain('c-line')
+    })
   })
 })
