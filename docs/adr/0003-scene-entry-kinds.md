@@ -391,7 +391,6 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **`currentSceneId` / `onSceneChange`。** `currentSceneId` の書き込みは `setCurrentSceneId`（`startScene` と `restoreToScene` のみ）。`onSceneChange` の発火箇所と順序は変えていない。
 - 以後の #826（#735 5/8, `SceneEntryController`）は、カーソルの書き込みをメソッド越しにだけ行う。
 
-
 ## #825 での追記（2026-10-15、#735 4/8）
 
 遷移ゲートと Jump 予約の状態機械を、`NovelRenderer` から `frontend/src/game/TransitionState.ts` に分けた。挙動は変えていない。本文中の `armJump` / `clearJumpTimer` / `advanceGeneration` / `awaitPendingEntry` / `isTransitionGated` / `gateState` は、次のとおり `TransitionState` のメソッドへ移った（読み替え表）。
@@ -410,5 +409,5 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **重複ブロックの集約。** `waitingFor*=false; jumpState='idle'; advanceGeneration(); clearJumpTimer()` の重複は `resetForNewPosition()`（`resetAndStartEvents`）と `resetJumpForRestore()`（`applyState`。選択肢・待機のフラグは触らない）に分けた。`restoreToScene` の選択肢・待機・入力抑制のリセットは、それぞれ `leaveChoiceWait` / `leaveWait` / `clearJustSelectedChoice`。
 - **契約の保持。** ADR 本文の契約はすべて `TransitionState` の不変条件になった: 予約中の Jump の取り消しは `clear()` を通り deferred を `superseded` で解決する／`arm()` は予約時点（タイマー発火前）に `pendingEntry` を立てる／`advanceGeneration()` は `pendingEntry` を下ろす／`JUMP_CHAIN_LIMIT`（100）超過で `stalled`。復元後の位置が Jump なら再予約する（#733）規則と、停止状態を復元をまたいで持ち越さない規則（#758）は、レンダラの `applyState` が `resetJumpForRestore()` のあとで `rearmJumpAtCurrentPosition()` を呼ぶ形のまま。
 - **依存。** `TransitionState` は DOM / Pixi / レンダラ / シーン内容を知らず、`NovelRenderer` を import しない。タイマーはコンストラクタで注入した `TimeController` を使う。`JUMP_CHAIN_LIMIT` は `TransitionState.ts` の export になった。
-- **テスト。** private への直接アクセスは `src/test/rendererInternals.ts` の `exposeTransitionFields`（実体の `_` 付きフィールドへ委譲、存在チェック付き）に集約した。状態機械の単体テストは後続の別作業（#825 の完了条件）で足す。
+- **テスト。** private への直接アクセスは `src/test/rendererInternals.ts` の `exposeTransitionFields`（実体の `_` 付きフィールドへ委譲、存在チェック付き）に集約した。状態機械の単体テスト（`TransitionState.test.ts`。旧 `armJump` 等のオラクルとの等価性照合を含む）と、レンダラとの結線テスト（`onStall` によるスキップ解除・選択肢確定直後の抑制）を同じ PR で追加した。
 - 以後の #826（#735 5/8, `SceneEntryController`）は `TransitionState` をコンストラクタ注入で使う。
