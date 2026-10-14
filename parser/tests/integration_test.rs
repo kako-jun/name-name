@@ -5341,6 +5341,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_atb_mode: None,
         battle_command_layout: None,
         battle_command_labels: None,
+        battle_transition: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10526,6 +10527,7 @@ fn telop_test_doc_base() -> Document {
         battle_atb_mode: None,
         battle_command_layout: None,
         battle_command_labels: None,
+        battle_transition: None,
         chapters: vec![],
     }
 }
@@ -11959,4 +11961,24 @@ fn test_party_and_monster_poses_parse_partial_and_roundtrip() {
     // ポーズ未指定なら行自体を出さない
     let none = emitter::emit(&parser::parse(&party_src("")));
     assert!(!none.contains("ポーズ"), "{none}");
+}
+
+// ---- #830: battle_transition ----
+
+#[test]
+fn test_battle_transition_parses_default_none_and_roundtrips() {
+    let doc = parser::parse(&battle_doc("battle_transition: ff\n"));
+    assert_eq!(doc.battle_transition.as_deref(), Some("ff"));
+    assert_eq!(
+        parser::parse(&battle_doc("battle_transition:\n")).battle_transition,
+        None
+    );
+    assert_eq!(parser::parse(&battle_doc("")).battle_transition, None);
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("battle_transition: \"ff\"\n"), "{emitted}");
+    assert_eq!(
+        parser::parse(&emitted).battle_transition,
+        doc.battle_transition
+    );
+    assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_transition"));
 }

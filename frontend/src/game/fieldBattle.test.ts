@@ -386,6 +386,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       atb: undefined,
       commandLayout: 'grid',
       commandLabels: undefined,
+      transition: 'none',
     })
   })
 
@@ -405,6 +406,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       battleCommandLayout: 'cross',
       battleCommandLabels: { attack: '斬る' },
       battlePresentation: 'ff',
+      battleTransition: 'ff',
     })
     expect(readFieldBattleSettings(p)).toEqual({
       layout: 'side',
@@ -421,6 +423,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       atb: { mode: 'active' },
       commandLayout: 'cross',
       commandLabels: { attack: '斬る' },
+      transition: 'ff',
     })
   })
 })

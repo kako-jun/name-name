@@ -27,6 +27,8 @@ import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { CommandLabels, CommandLayout } from './battleCommands'
 import type { BattleMenuData, BattleSpellEntry } from './battleMenu'
+import type { BattleTransitionMode } from './battleTransition'
+import type { FieldBattleTransition } from './fieldBattleTransition'
 
 /** 戦闘画面の設定（frontmatter 由来）。未指定の既定値は `readFieldBattleSettings` が正本 */
 export interface FieldBattleSettings {
@@ -58,6 +60,8 @@ export interface FieldBattleSettings {
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
   commandLabels: CommandLabels | undefined
+  /** `battle_transition` (#830)。`none`（既定・現行の挙動）/ `ff`（開始=2段ズームして暗転、終了=黒を経由して戻る） */
+  transition: BattleTransitionMode
 }
 
 /** 未指定時の戦闘設定（既定値の正本） */
@@ -76,6 +80,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   atb: undefined,
   commandLayout: 'grid',
   commandLabels: undefined,
+  transition: 'none',
 }
 
 /** RPGProject から戦闘設定を読む。未指定は既定値に倒す */
@@ -96,6 +101,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     atb: gameData.battleAtb,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
+    transition: gameData.battleTransition ?? d.transition,
   }
 }
 
@@ -284,6 +290,8 @@ export interface OpenFieldBattleArgs {
   gate: FieldInputGate
   /** プロジェクトのアセットのベース URL (#746)。レンダラーの状態なので設定ではなく引数で受ける。未設定ならパスをそのまま読む */
   assetBaseUrl?: string
+  /** `battle_transition: ff` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
+  transition?: FieldBattleTransition
   /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
   onClosed: (outcome: BattleOutcome) => void
 }
@@ -311,7 +319,18 @@ export function closeFieldBattle(stage: Container, screen: BattleScreen): void {
  * 終了（勝利・逃走・全滅）で画面を畳み、その時点で押されていた矢印キーを離すまで無視する gate を張る。
  */
 export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
-  const { stage, width, height, settings, roster, enemies, gate, assetBaseUrl, onClosed } = args
+  const {
+    stage,
+    width,
+    height,
+    settings,
+    roster,
+    enemies,
+    gate,
+    assetBaseUrl,
+    transition,
+    onClosed,
+  } = args
   const party =
     settings.layout === 'side'
       ? buildPartyBattleEntities(roster, settings.layout)
@@ -337,13 +356,25 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     isInputSuspended: () => gate.isSuspended,
     onClose: (outcome) => {
       if (closedScreens.has(screen)) return
-      // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
-      // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する。
-      // ff では演出を見せ切ってから閉じるため、この抑止は閉じた直後 400ms の保険として働く (#745)
-      suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
-      gate.armReleaseGate()
-      closeFieldBattle(stage, screen)
-      onClosed(outcome)
+      const finishClose = (): void => {
+        // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
+        // 続けて canvas の onUp が handleTap に届き、フィールドのメニューが開いてしまう。直後の tap を抑止する。
+        // ff では演出を見せ切ってから閉じるため、この抑止は閉じた直後 400ms の保険として働く (#745)
+        suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
+        gate.armReleaseGate()
+        closeFieldBattle(stage, screen)
+        onClosed(outcome)
+      }
+      if (settings.transition === 'ff' && transition) {
+        // 勝敗待機 (#745) のあと、黒を経由して畳む (#830)。畳むのは真っ暗になった瞬間。
+        // フェードイン中に押された矢印キーも、離すまで移動に使わない (#779)
+        transition.playExit(width, height, outcome, finishClose, () => {
+          gate.armReleaseGate()
+          suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
+        })
+        return
+      }
+      finishClose()
     },
   })
   stage.addChild(screen)

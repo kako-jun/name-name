@@ -14,6 +14,7 @@ import { FieldInputGate, openFieldBattle, readFieldBattleSettings } from './fiel
 import { RaycastRenderer } from './RaycastRenderer'
 import { TopDownRenderer } from './TopDownRenderer'
 import type { BattleEntity } from './spellDsl'
+import type { FieldBattleTransition } from './fieldBattleTransition'
 import type { PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 
@@ -73,6 +74,14 @@ interface Field {
     tick(ms: number): void
   } | null
   startBattle(enemies: BattleEntity[]): unknown
+  transition: FieldBattleTransition
+  deferredStepTrigger: { x: number; y: number } | null
+  keys?: Set<string>
+  handleKeyDown(e: KeyboardEvent): void
+  handleTap(): void
+  handleSwipe(d: 'up' | 'down' | 'left' | 'right'): void
+  menuOverlay: { showMenu(): void } | null
+  setBattleTransitionHooks(h: { onTransitionBeat?: (n: number) => void }): void
   setInputSuspended(v: boolean): void
   onTick(): void
   destroy(): void
@@ -176,5 +185,206 @@ describe.each([
     f.setInputSuspended(false)
     tickAt(2000, 2050)
     expect(spy).toHaveBeenCalledWith(50)
+  })
+})
+
+describe.each([
+  ['TopDownRenderer', topDown],
+  ['RaycastRenderer', raycast],
+])('%s の戦闘の画面遷移 battle_transition: ff (#830)', (_name, make) => {
+  const advance = (f: Field, ms: number): void => {
+    for (let e = 0; e < ms; e += 16) f.transition.tick(16)
+  }
+
+  it('既定（none）は演出なしで即座に戦闘画面が開く', () => {
+    const f = make()
+    f.startBattle([enemy()])
+    expect(f.transition.active).toBe(false)
+    expect(f.battleScreen).not.toBeNull()
+  })
+
+  it('ff: 開始は演出が先 → 真っ暗で戦闘画面が開き、演出中は多重起動しない。見た目は等倍に戻る', () => {
+    const f = make({ battleTransition: 'ff' })
+    const mock = vi.mocked(openFieldBattle)
+    mock.mockClear()
+    const beats: number[] = []
+    f.setBattleTransitionHooks({ onTransitionBeat: (n) => beats.push(n) })
+    f.startBattle([enemy()])
+    expect(f.battleScreen).toBeNull()
+    expect(mock).not.toHaveBeenCalled()
+    expect(f.transition.active).toBe(true)
+    advance(f, 500)
+    expect(f.app.stage.scale.x).toBeGreaterThan(1)
+    f.startBattle([enemy()]) // 演出中の再発火は無視
+    advance(f, 3000)
+    expect(mock).toHaveBeenCalledTimes(1)
+    expect(f.battleScreen).not.toBeNull()
+    expect(f.transition.active).toBe(false)
+    expect(f.app.stage.scale.x).toBe(1)
+    expect(beats).toEqual([1, 2])
+  })
+
+  it('ff: 終了は勝敗待機の後、黒を経由して畳まれる。畳むのは真っ暗の間で、戻った後のクールダウンも張られる', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    advance(f, 3000)
+    const screen = f.battleScreen!
+    ;(screen.opts.onClose as (o: string) => void)('victory')
+    // まだ畳まれていない（フェードアウト中）
+    expect(f.battleScreen).toBe(screen)
+    expect(screen.destroyed).toBe(false)
+    expect(f.transition.active).toBe(true)
+    advance(f, 400)
+    expect(screen.destroyed).toBe(true)
+    expect(f.battleScreen).toBeNull()
+    expect(f.encounterCooldown).toBe(3)
+    expect(f.transition.active).toBe(true) // フェードイン中もまだ入力は止まる
+    f.inputGate.trackKeyDown('ArrowUp')
+    advance(f, 3000)
+    expect(f.transition.active).toBe(false)
+    // フェードイン中に押された矢印キーは離すまで無視 (#779)
+    expect(f.inputGate.isReleaseGated('ArrowUp')).toBe(true)
+    expect(f.app.stage.children).not.toContain(screen)
+  })
+
+  it('ff: 開始の演出中に load() し直すと演出が捨てられ、戦闘は開かない', () => {
+    const f = make({ battleTransition: 'ff' })
+    const mock = vi.mocked(openFieldBattle)
+    mock.mockClear()
+    f.startBattle([enemy()])
+    advance(f, 300)
+    f.load(project('topdown', { battleTransition: 'ff' }))
+    expect(f.transition.active).toBe(false)
+    expect(f.app.stage.scale.x).toBe(1)
+    advance(f, 3000)
+    expect(mock).not.toHaveBeenCalled()
+  })
+
+  it('ff: 終了の演出中に destroy() しても演出が捨てられ、あとで戦闘が畳まれない', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    advance(f, 3000)
+    ;(f.battleScreen!.opts.onClose as (o: string) => void)('defeat')
+    f.initialized = false
+    f.destroy()
+    expect(f.transition.active).toBe(false)
+    expect(f.encounterCooldown).toBe(0)
+  })
+
+  it('ff: onTick が演出を進める', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    let now = 10_000
+    f.lastTickMs = now
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    for (let i = 0; i < 80; i++) {
+      now += 50
+      f.onTick()
+    }
+    expect(f.battleScreen).not.toBeNull()
+  })
+})
+
+describe.each([
+  ['TopDownRenderer', topDown],
+  ['RaycastRenderer', raycast],
+])('%s: 画面遷移中の入力・停止・順序 (#830)', (name, make) => {
+  const advance = (f: Field, ms: number): void => {
+    for (let e = 0; e < ms; e += 16) f.transition.tick(16)
+  }
+  const isTop = name === 'TopDownRenderer'
+
+  function spyInputs(f: Field) {
+    const g = f as unknown as Record<string, unknown>
+    const tryMove = vi.fn()
+    const snapStep = vi.fn()
+    const queueTurn = vi.fn()
+    if (isTop) g.tryMove = tryMove
+    g.snapStep = snapStep
+    g.queueTurn = queueTurn
+    const show = f.menuOverlay ? vi.spyOn(f.menuOverlay, 'showMenu') : vi.fn()
+    return { tryMove, snapStep, queueTurn, show }
+  }
+  const key = (k: string) =>
+    ({ key: k, repeat: false, preventDefault() {}, target: null }) as unknown as KeyboardEvent
+
+  function expectIgnored(f: Field, spies: ReturnType<typeof spyInputs>) {
+    f.handleKeyDown(key('ArrowUp'))
+    f.handleTap()
+    f.handleSwipe('up')
+    f.handleSwipe('left')
+    expect(spies.tryMove).not.toHaveBeenCalled()
+    expect(spies.snapStep).not.toHaveBeenCalled()
+    expect(spies.queueTurn).not.toHaveBeenCalled()
+    expect(spies.show).not.toHaveBeenCalled()
+    if (f.keys) expect(f.keys.has('ArrowUp')).toBe(false)
+  }
+
+  it('開始の演出中・終了の演出中（フェードアウト／フェードイン）は キー・タップ・スワイプ を無視する', () => {
+    const f = make({ battleTransition: 'ff' })
+    const spies = spyInputs(f)
+    f.startBattle([enemy()])
+    advance(f, 300)
+    expectIgnored(f, spies) // 開始の演出中
+    advance(f, 3000)
+    ;(f.battleScreen!.opts.onClose as (o: string) => void)('victory')
+    advance(f, 100)
+    expectIgnored(f, spies) // フェードアウト中
+    advance(f, 300)
+    expect(f.battleScreen).toBeNull()
+    expect(f.transition.active).toBe(true)
+    expectIgnored(f, spies) // フェードイン中（戦闘画面は既に無い）
+  })
+
+  it('設定オーバーレイ中は onTick から演出が止まり、解除で再開する', () => {
+    const f = make({ battleTransition: 'ff' })
+    const spy = vi.spyOn(f.transition, 'tick')
+    f.startBattle([enemy()])
+    let now = 50_000
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    f.setInputSuspended(true)
+    f.lastTickMs = now
+    now += 50
+    f.onTick()
+    expect(spy).not.toHaveBeenCalled()
+    f.setInputSuspended(false)
+    f.lastTickMs = now
+    now += 50
+    f.onTick()
+    expect(spy).toHaveBeenCalledWith(50)
+  })
+
+  it('interlude は黒の間に幕より手前へ載り、フェードインに入ると stage から外れる', () => {
+    const f = make({ battleTransition: 'ff' })
+    const extra = new Container()
+    ;(f as unknown as { transition: FieldBattleTransition }).transition.hooks = {
+      interlude: () => ({ container: extra, durationMs: 400 }),
+    }
+    f.startBattle([enemy()])
+    advance(f, 3000)
+    ;(f.battleScreen!.opts.onClose as (o: string) => void)('victory')
+    advance(f, 400)
+    const ch = f.app.stage.children
+    expect(ch).toContain(extra)
+    expect(ch.indexOf(extra)).toBe(ch.length - 1)
+    advance(f, 1500)
+    expect(f.app.stage.children).not.toContain(extra)
+  })
+})
+
+describe('TopDownRenderer: 終了演出の黒の間に踏み込みトリガーが発火する (#830)', () => {
+  it('deferredStepTrigger は onBlack（戦闘画面が畳まれた瞬間）で発火し、それより前には発火しない', () => {
+    const f = topDown({ battleTransition: 'ff' })
+    const check = vi.fn()
+    ;(f as unknown as Record<string, unknown>).checkStepTriggers = check
+    f.startBattle([enemy()])
+    f.deferredStepTrigger = { x: 3, y: 4 }
+    for (let e = 0; e < 3000; e += 16) f.transition.tick(16)
+    ;(f.battleScreen!.opts.onClose as (o: string) => void)('victory')
+    for (let e = 0; e < 100; e += 16) f.transition.tick(16)
+    expect(check).not.toHaveBeenCalled()
+    for (let e = 0; e < 300; e += 16) f.transition.tick(16)
+    expect(check).toHaveBeenCalledWith(3, 4)
+    expect(f.transition.active).toBe(true) // まだフェードイン中
   })
 })

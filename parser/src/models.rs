@@ -1671,6 +1671,11 @@ pub struct Document {
     /// frontmatter `battle_command_labels:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_command_labels: Option<String>,
+    /// RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、
+    /// 終了=黒を経由してフェードで戻る）。値は parser でバリデーションせず生文字列で透過し、runtime 側で未知値・空文字は
+    /// `"none"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_transition: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 
