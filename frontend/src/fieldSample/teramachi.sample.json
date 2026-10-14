@@ -1,0 +1,91 @@
+{
+  "startScene": "overview",
+  "start": {
+    "x": 760,
+    "y": 600
+  },
+  "speed": 260,
+  "edgeThreshold": 6,
+  "player": {
+    "sprites": {
+      "up": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-3.png"
+      ],
+      "down": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-3.png"
+      ],
+      "left": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-3.png"
+      ],
+      "right": [
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-1.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-2.png",
+        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-3.png"
+      ]
+    },
+    "height": 150,
+    "frameMs": 140
+  },
+  "scenes": {
+    "overview": {
+      "background": "http://localhost:8765/sample/field/teramachi-overview.png",
+      "mask": "http://localhost:8765/sample/field/masks/overview-mask.png",
+      "links": [
+        {
+          "edge": "left",
+          "range": [245, 335],
+          "to": "wide-road"
+        }
+      ]
+    },
+    "wide-road": {
+      "background": "http://localhost:8765/sample/field/teramachi-wide-road.png",
+      "mask": "http://localhost:8765/sample/field/masks/wide-road-mask.png",
+      "links": [
+        {
+          "edge": "top",
+          "range": [1440, 1536],
+          "to": "overview"
+        },
+        {
+          "edge": "bottom",
+          "range": [0, 880],
+          "to": "connector"
+        }
+      ]
+    },
+    "connector": {
+      "background": "http://localhost:8765/sample/field/teramachi-connector.png",
+      "mask": "http://localhost:8765/sample/field/masks/connector-mask.png",
+      "links": [
+        {
+          "edge": "bottom",
+          "range": [200, 1290],
+          "to": "wide-road"
+        },
+        {
+          "edge": "top",
+          "range": [200, 240],
+          "to": "narrow-lane"
+        }
+      ]
+    },
+    "narrow-lane": {
+      "background": "http://localhost:8765/sample/field/teramachi-narrow-lane.png",
+      "mask": "http://localhost:8765/sample/field/masks/narrow-lane-mask.png",
+      "links": [
+        {
+          "edge": "bottom",
+          "range": [120, 850],
+          "to": "connector"
+        }
+      ]
+    }
+  }
+}

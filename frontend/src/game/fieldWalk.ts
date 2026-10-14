@@ -1,0 +1,260 @@
+/**
+ * 一枚絵フィールド (#807) の純粋関数群。DOM / PixiJS には触れない。
+ *
+ * 座標はすべて「背景画像のピクセル座標」（歩行マスクも背景と同じ大きさ）。
+ * 主人公の位置 = 足元の点。判定は足元の 1 点だけで行う。
+ */
+
+export type Edge = 'top' | 'bottom' | 'left' | 'right'
+export type Facing = 'up' | 'down' | 'left' | 'right'
+export interface Vec {
+  x: number
+  y: number
+}
+
+// ---- 歩行マスク ----
+
+/** 歩行マスク。walkable[y * width + x] = 1 なら歩ける */
+export interface WalkMask {
+  width: number
+  height: number
+  walkable: Uint8Array
+}
+
+/**
+ * RGBA ピクセル列（ImageData.data 相当）から歩行マスクを作る。白（輝度が threshold 以上）= 歩ける、黒 = 歩けない。
+ * 輝度は R の値ではなく (R+G+B)/3 で見る。
+ */
+export function maskFromRgba(
+  width: number,
+  height: number,
+  rgba: ArrayLike<number>,
+  threshold = 128
+): WalkMask {
+  const walkable = new Uint8Array(width * height)
+  for (let i = 0; i < width * height; i++) {
+    const lum = (rgba[i * 4] + rgba[i * 4 + 1] + rgba[i * 4 + 2]) / 3
+    walkable[i] = lum >= threshold ? 1 : 0
+  }
+  return { width, height, walkable }
+}
+
+/** 足元の座標が歩けるか。範囲外は歩けない（黒扱い） */
+export function isWalkable(mask: WalkMask, x: number, y: number): boolean {
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  if (!(ix >= 0 && iy >= 0 && ix < mask.width && iy < mask.height)) return false
+  return mask.walkable[iy * mask.width + ix] === 1
+}
+
+/**
+ * 指定位置が歩けなければ、近い歩ける点へずらす（正方形の外周を 1px ずつ広げて探す）。
+ * radius 内に無ければ null。
+ */
+export function snapToWalkable(mask: WalkMask, p: Vec, radius: number): Vec | null {
+  if (isWalkable(mask, p.x, p.y)) return { x: p.x, y: p.y }
+  for (let r = 1; r <= radius; r++) {
+    let best: Vec | null = null
+    let bestD = Infinity
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+        if (!isWalkable(mask, p.x + dx, p.y + dy)) continue
+        const d = dx * dx + dy * dy
+        if (d < bestD) {
+          bestD = d
+          best = { x: p.x + dx, y: p.y + dy }
+        }
+      }
+    }
+    if (best) return best
+  }
+  return null
+}
+
+// ---- 入力 → 移動ベクトル ----
+
+export interface DirectionKeys {
+  up: boolean
+  down: boolean
+  left: boolean
+  right: boolean
+}
+
+/** キー 8 方向 → 長さ 1 の移動ベクトル（斜めも速さが変わらない）。入力なしは (0,0) */
+export function keysToVector(keys: DirectionKeys): Vec {
+  const x = (keys.right ? 1 : 0) - (keys.left ? 1 : 0)
+  const y = (keys.down ? 1 : 0) - (keys.up ? 1 : 0)
+  const len = Math.hypot(x, y)
+  return len === 0 ? { x: 0, y: 0 } : { x: x / len, y: y / len }
+}
+
+/** タップ・ドラッグ: 足元から指の位置へ向かう連続した向き。deadzone 内は入力なし */
+export function pointerToVector(feet: Vec, target: Vec, deadzone: number): Vec {
+  const dx = target.x - feet.x
+  const dy = target.y - feet.y
+  const len = Math.hypot(dx, dy)
+  if (len <= deadzone || len === 0) return { x: 0, y: 0 }
+  return { x: dx / len, y: dy / len }
+}
+
+// ---- 移動 ----
+
+export interface MoveResult {
+  pos: Vec
+  /** 実際に位置が変わった距離（歩数カウント用。壁に押しつけるだけなら 0） */
+  distance: number
+}
+
+/**
+ * 移動ベクトル × 速さ(px/秒) × 経過ms だけ進む。壁にぶつかったら通れる軸だけ滑らせる。
+ * すり抜けを防ぐため、1 回の判定は最大 maxStep px ずつ刻む。
+ */
+export function stepMove(
+  mask: WalkMask,
+  pos: Vec,
+  vec: Vec,
+  speed: number,
+  dtMs: number,
+  maxStep = 1
+): MoveResult {
+  const total = (speed * dtMs) / 1000
+  if (total <= 0 || (vec.x === 0 && vec.y === 0)) return { pos, distance: 0 }
+  const n = Math.max(1, Math.ceil(total / maxStep))
+  const dx = (vec.x * total) / n
+  const dy = (vec.y * total) / n
+  let x = pos.x
+  let y = pos.y
+  let moved = 0
+  for (let i = 0; i < n; i++) {
+    if (isWalkable(mask, x + dx, y + dy)) {
+      x += dx
+      y += dy
+      moved += Math.hypot(dx, dy)
+    } else if (dx !== 0 && isWalkable(mask, x + dx, y)) {
+      x += dx
+      moved += Math.abs(dx)
+    } else if (dy !== 0 && isWalkable(mask, x, y + dy)) {
+      y += dy
+      moved += Math.abs(dy)
+    } else {
+      break
+    }
+  }
+  return { pos: { x, y }, distance: moved }
+}
+
+// ---- 向き・歩行アニメ ----
+
+/**
+ * 向き: 移動ベクトルの支配軸で選ぶ（横の成分が大きければ左右、縦なら上下）。
+ * 入力なし・成分が同じ（きっちり斜め）のときは直前の向きを保つ。
+ */
+export function facingFromVector(vec: Vec, prev: Facing): Facing {
+  const ax = Math.abs(vec.x)
+  const ay = Math.abs(vec.y)
+  if (ax === 0 && ay === 0) return prev
+  if (ax > ay) return vec.x > 0 ? 'right' : 'left'
+  if (ay > ax) return vec.y > 0 ? 'down' : 'up'
+  return prev
+}
+
+export const WALK_FRAMES = 3
+
+/** 歩行アニメのコマ番号 (0..2)。止まっているときは 0（1 コマ目）。moving の間 frameMs ごとに 0→1→2 を繰り返す */
+export function walkFrame(moving: boolean, movingElapsedMs: number, frameMs: number): number {
+  if (!moving || frameMs <= 0 || movingElapsedMs < 0) return 0
+  return Math.floor(movingElapsedMs / frameMs) % WALK_FRAMES
+}
+
+// ---- 端のリンク ----
+
+/** 端のリンク。edge 上の range（辺に沿った範囲。left/right なら y、top/bottom なら x）に入ると to へ遷移 */
+export interface FieldLink {
+  edge: Edge
+  range: [number, number]
+  to: string
+}
+
+/** その端に向かって進んでいるか（edge への外向き成分が正） */
+export function isOutward(edge: Edge, vec: Vec): boolean {
+  switch (edge) {
+    case 'left':
+      return vec.x < 0
+    case 'right':
+      return vec.x > 0
+    case 'top':
+      return vec.y < 0
+    case 'bottom':
+      return vec.y > 0
+  }
+}
+
+function alongEdge(edge: Edge, p: Vec): number {
+  return edge === 'left' || edge === 'right' ? p.y : p.x
+}
+
+/**
+ * 足元が端のしきい値内で、リンクのある区間に入り、かつその端へ向かって進んでいれば、そのリンクを返す。
+ * disarmed: 到着直後に折り返さないよう、いま無効にしているリンク（呼び出し側が、その端へ向かう入力が
+ * 途切れたら解除する）。
+ */
+export function detectEdgeLink(
+  pos: Vec,
+  size: { width: number; height: number },
+  links: readonly FieldLink[],
+  threshold: number,
+  vec: Vec,
+  disarmed: FieldLink | null = null
+): FieldLink | null {
+  for (const link of links) {
+    if (link === disarmed) continue
+    if (!isOutward(link.edge, vec)) continue
+    const dist =
+      link.edge === 'left'
+        ? pos.x
+        : link.edge === 'right'
+          ? size.width - 1 - pos.x
+          : link.edge === 'top'
+            ? pos.y
+            : size.height - 1 - pos.y
+    if (dist > threshold) continue
+    const c = alongEdge(link.edge, pos)
+    if (c >= link.range[0] && c <= link.range[1]) return link
+  }
+  return null
+}
+
+/**
+ * 遷移先の出現位置。出た位置が出口の range のどこにあたるか（0..1）を、遷移先の対応するリンクの range に写し、
+ * 遷移先の端から inset だけ内側に置く。歩けない点ならマスク上の近い点にずらす（見つからなければ null）。
+ */
+export function arrivalPosition(
+  srcLink: FieldLink,
+  srcPos: Vec,
+  dstLink: FieldLink,
+  dstMask: WalkMask,
+  inset: number,
+  snapRadius = 80
+): Vec | null {
+  const [a, b] = srcLink.range
+  const t =
+    b === a ? 0.5 : Math.min(1, Math.max(0, (alongEdge(srcLink.edge, srcPos) - a) / (b - a)))
+  const c = dstLink.range[0] + t * (dstLink.range[1] - dstLink.range[0])
+  let p: Vec
+  switch (dstLink.edge) {
+    case 'left':
+      p = { x: inset, y: c }
+      break
+    case 'right':
+      p = { x: dstMask.width - 1 - inset, y: c }
+      break
+    case 'top':
+      p = { x: c, y: inset }
+      break
+    case 'bottom':
+      p = { x: c, y: dstMask.height - 1 - inset }
+      break
+  }
+  return snapToWalkable(dstMask, p, snapRadius)
+}
