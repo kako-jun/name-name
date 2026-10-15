@@ -317,5 +317,6 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - `rate` は `rollEncounter`（#172）と同じ: `0` = エンカウントなし、`N` = 抽選のたび 1/N、`1` = 毎回。`groups` は `"slime+slime"` のようにモンスター id を `+` で連結（`monsters` にない id は設定エラー）
 - 歩いた距離だけが進む。壁に押しつけて動けていないときは進まない。エンカウントなしのシーンでは貯めない。当選したら貯めた距離を捨て、戦闘後 `minSteps` 回の抽選を飛ばす
 - 戦闘中は歩きの入力は無視される（戦闘側は戦闘画面が自前で入力を受ける）。戦闘後は `sceneId` / 足元 / 向きを保ったまま復帰する。ツールバーの「今すぐエンカウント」は確認用で、抽選を 1 回で必ず当てる
+- 敵の大きさと隊形 (#839): `monsters.<id>` に `size`（`"2x1"` 形式の幅x高さ、整数 1 以上。不正値は設定エラー）と `scale`（数値、0.25〜1 に丸める）、`battle` に `enemyGrid`（`"6x2"` 形式、不正値は無効＝従来の配置）と `enemyWindowOverlap`（0〜0.5）を書ける。`enemyGrid` が有効なときは、読み込み時に全シーンの `groups` を検証し、敵グリッドに収まらない群を抽選から外して `console.error` と画面のエラー表示に一覧を出す（書式と意味は [敵の隊形ガイド](./enemy-formation.md)）
 - 画面下の表示（`encounter=貯めた距離/刻み 抑制=経過/最低`、`lastBattle`）で状態を確認できる
 - 純粋関数は `frontend/src/game/fieldEncounter.ts`（`advanceEncounter`・`initialEncounterState`・`afterBattleState`。乱数は注入）
