@@ -291,7 +291,10 @@ function EditorScreen({
     if (!found) return null
     const sceneIdForThisDoc = doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
     // #238: data.md 等の他 .md からマスターデータを取り込む
-    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName, otherDocs)
+    // 導出した project は編集後に doc へ書き戻すので、収まらない群の除外（検証）は行わない (#839)
+    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName, otherDocs, {
+      validateEncounterGroups: false,
+    })
   }, [doc, projectName, rpgSceneId, otherDocs])
 
   // 現在の rpgSceneId が doc 内に存在しない場合、先頭の RPG シーンに切り替える。
