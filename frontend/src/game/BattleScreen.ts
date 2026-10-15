@@ -206,7 +206,7 @@ const SELECT_MARK_FILL = 0xffffff
 const SELECT_MARK_OUTLINE = 0x000000
 // MP_COLOR は HP/MP バー UI 実装時（戦闘 Phase 2、#175 と同時想定）に追加する
 
-const STAGE_PADDING = 16
+export const STAGE_PADDING = 16
 const STATS_HEIGHT = 32
 const COMMAND_HEIGHT = 56
 const LOG_HEIGHT = 96

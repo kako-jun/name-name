@@ -5,12 +5,11 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Container, Graphics, Text } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, STAGE_PADDING, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
 
-const STAGE_PADDING = 16
 import type { BattleEntity } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -183,16 +182,16 @@ describe('BattleScreen ATB: 番の味方のマーカー（名前の左の ▶ + 
   })
 
   it.each([
-    [800, 450, 8],
-    [360, 640, 4],
+    [800, 450],
+    [360, 640],
   ])(
-    'front %dx%d: ▶ は枠から %dpx 以上離れ、ATB 棒の左端は名前の左端にそろう (#805)',
-    (w, h, minGap) => {
+    'front %dx%d: ▶ は枠からちょうど 8px 離れ（余裕のある幅）、ATB 棒の左端は名前の左端にそろう (#805)',
+    (w, h) => {
       const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' }, w, h)
       s.tick(0)
       const m = I(s).atbMarkers[0]
       const nameX = I(s).heroStatsText.x
-      expect(m.x - STAGE_PADDING).toBeGreaterThanOrEqual(minGap - 1e-9)
+      expect(m.x - STAGE_PADDING).toBeCloseTo(8)
       expect(nameX - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
       expect(I(s).atbBarRects[0].x).toBeCloseTo(nameX)
     }
