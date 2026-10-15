@@ -120,6 +120,7 @@ import {
   computeContainFitRect,
   computeFallbackRect,
   computeSideBattleLayout,
+  computeAcrylicBoxSize,
   SIDE_COMMAND_TEXT_PADDING,
   fitCommandFontSize,
   SIDE_LABEL_FONT_SIZE,
@@ -139,6 +140,13 @@ import {
   type BattleLayoutMode,
   type SpriteSlot,
 } from './battleLayout'
+import {
+  enemyDrawOrder,
+  isEnemyGridSlot,
+  placeEnemies,
+  type EnemyFootprint,
+  type GridCell,
+} from './enemyGrid'
 import { getSharedDofMask, quantizeDofRamp } from './dofMaskCache'
 import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
 import { computeSlitY } from './acrylicBase'
@@ -373,10 +381,10 @@ export interface BattleScreenOptions {
   commandLabels?: CommandLabels
   /**
    * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid` 由来（`side` のときだけ効く）。undefined = 従来の敵配置。
-   * 値を受け取るだけで、描画への反映（`computeSideBattleLayout` への配線）は #839 段4
+   * 指定があるとき、敵は戦闘開始時に `placeEnemies` で 1 回配置し（`enemyFootprints`）、`computeSideBattleLayout` のグリッド配置で描く（#839 段4で配線済み）
    */
   enemyGrid?: { cols: number; rows: number }
-  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。配線は段4 */
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッド時だけ効く */
   enemyWindowOverlap?: number
   /**
    * 候補窓に出す呪文・アイテム (#204)。`commandLayout` が `cross` のとき（かつ 1 件以上あるとき）だけ有効で、
@@ -500,6 +508,8 @@ export class BattleScreen extends Container {
   /** 前景レイヤー (#747)。スプライトより手前・パネルより奥 */
   private foregroundSprite: Sprite | null = null
   private enemyViews: EntityView[] = []
+  /** 敵グリッド (#839 段4): 戦闘開始時に `placeEnemies` で 1 回決めた配置と、敵ごとの占有（enemyViews と同じ index。置けなかった敵は null）。グリッドなしは null */
+  private enemyFootprints: (EnemyFootprint | null)[] | null = null
   private partyViews: EntityView[] = []
   /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
@@ -873,6 +883,7 @@ export class BattleScreen extends Container {
       stage.addChild(view.container)
       this.enemyViews.push(view)
     }
+    this.enemyFootprints = this.opts.enemyGrid ? this.placeEnemyFootprints(s.enemies) : null
     for (const p of s.party) {
       const view = this.createEntityView(p, FALLBACK_PARTY_COLOR, false)
       stage.addChild(view.container)
@@ -1477,6 +1488,39 @@ export class BattleScreen extends Container {
     }
   }
 
+  /**
+   * 敵グリッド (#839 段4): 敵を戦闘開始時に 1 回だけ配置する（入力は enemies の index 順の `layout`。無ければ 1x1・倍率 1・自動配置）。
+   * 結果は BattleScreen が保持し、GameState には足さない（ADR 0002）。置けなかった敵は null（描かない）で警告を出す（ランタイムの保険。通常は読み込み時に群が検証される）
+   */
+  private placeEnemyFootprints(enemies: readonly BattleEntity[]): (EnemyFootprint | null)[] {
+    const grid = this.opts.enemyGrid
+    if (!grid) return enemies.map(() => null)
+    const result = placeEnemies(
+      grid,
+      enemies.map((e): { w: number; h: number; at?: GridCell } => ({
+        w: e.layout?.w ?? 1,
+        h: e.layout?.h ?? 1,
+        ...(e.layout?.at ? { at: e.layout.at } : {}),
+      }))
+    )
+    for (const err of result.errors) {
+      console.warn(
+        `[BattleScreen] 敵グリッドに置けない敵を描きません: ${enemies[err.index]?.name ?? err.index} (${err.kind})`
+      )
+    }
+    return result.cells.map((cell, i) =>
+      cell
+        ? {
+            col: cell.col,
+            row: cell.row,
+            w: enemies[i].layout?.w ?? 1,
+            h: enemies[i].layout?.h ?? 1,
+            scale: enemies[i].layout?.scale ?? 1,
+          }
+        : null
+    )
+  }
+
   /** サイドビューの配置 (#736)。座標は battleLayout.ts の純粋関数が正本 */
   private layoutSide(): void {
     const s = this.engine.getState()
@@ -1493,6 +1537,14 @@ export class BattleScreen extends Container {
       depth: this.opts.depth,
       // アクスタの板（枠の外へ広がる）を含めて、隣の板と重ならない列ピッチ・窓との重なりが許容量以内になるよう配置する (#838)
       enemyAcrylic: this.acrylicParams,
+      // 敵グリッド (#839 段4): 有効なときだけグリッド配置（enemyAspects / enemyAcrylic の窓フィットは使われない）
+      ...(this.opts.enemyGrid && this.enemyFootprints
+        ? {
+            enemyGrid: this.opts.enemyGrid,
+            enemyFootprints: this.enemyFootprints,
+            enemyWindowOverlap: this.opts.enemyWindowOverlap,
+          }
+        : {}),
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)
@@ -1502,7 +1554,10 @@ export class BattleScreen extends Container {
       height: this.screenHeight,
       command: L.command,
       top: L.log.y + L.log.h + SIDE_GAP,
-      enemySlots: L.enemies.map(slotRect),
+      // 敵グリッド (#839 段4): 対象選択の手は、倍率で縮めた絵の箱（slot.box）基準。占有矩形のままだと倍率<1の敵で絵からずれる
+      enemySlots: L.enemies.map((sl) =>
+        isEnemyGridSlot(sl) ? { x: sl.box.x, y: sl.box.y, w: sl.box.w, h: sl.box.h } : slotRect(sl)
+      ),
       partySlots: L.party.map(slotRect),
     }
 
@@ -1527,12 +1582,16 @@ export class BattleScreen extends Container {
     }
     // 奥行き (#747): 床の基準 y の昇順（奥→手前）で重ねる。平面のときは従来どおり挿入順
     if (this.sideStage) {
-      this.sideStage.sortableChildren = L.depthActive
+      // 敵グリッド (#839 段4): 奥行きオフでも、floor 昇順・同じなら列昇順（enemyDrawOrder）で重ねる。同順位の微小な加算で列順を表す
+      const gridOrder = this.enemyFootprints ? enemyDrawOrder(L.enemies) : null
+      this.sideStage.sortableChildren = L.depthActive || gridOrder !== null
       this.enemyViews.forEach((v, i) => {
-        v.container.zIndex = L.depthActive ? (L.enemies[i]?.floor ?? 0) : 0
+        if (gridOrder) v.container.zIndex = (L.enemies[i]?.floor ?? 0) + gridOrder.indexOf(i) * 1e-6
+        else v.container.zIndex = L.depthActive ? (L.enemies[i]?.floor ?? 0) : 0
       })
       this.partyViews.forEach((v, i) => {
-        v.container.zIndex = L.depthActive ? (L.party[i]?.floor ?? 0) : 0
+        // グリッドで奥行きオフのときも、味方は従来どおり敵より手前（敵は floor を zIndex に持つため大きい値にする）
+        v.container.zIndex = L.depthActive ? (L.party[i]?.floor ?? 0) : gridOrder ? 1e9 : 0
       })
     }
     // 前景レイヤー (#747)
@@ -1657,11 +1716,28 @@ export class BattleScreen extends Container {
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
     view.slotRef = slot
+    // 敵グリッド (#839 段4): 絵・箱は占有矩形を倍率で縮めた slot.box に収める（足元中央）。被ダメ数字の高さは描いた絵の矩形、対象選択は slot.box 基準
+    const gridBox = isEnemyGridSlot(slot) ? slot.box : null
     const size = slot.size
+    const fx = gridBox ? gridBox.x : slot.x
+    const fy = gridBox ? gridBox.y : slot.y
+    const fw = gridBox ? gridBox.w : slot.width
+    const fh = gridBox ? gridBox.h : size
     // 味方 (#760) は縦長の枠（width < size）。acrylic は正方形 size の中央に置くので、container を左へ寄せて枠の中央に合わせる
     // 横長の敵 (#760) は枠の幅が高さより大きいので、正方形はその幅（長辺）にして下端を枠の下端に揃える
     const acrylic = !!(this.acrylicParams && view.acrylicBack && view.sprite)
     let box = acrylic ? Math.max(size, slot.width) : size
+    if (acrylic && gridBox && view.sprite) {
+      // グリッド: 板(pad)・台座・影が占有領域の内側に収まる最大の正方形（足元中央）。2x1 のような横長でも高さ h·cell を超えない (§3.6)
+      const tex = view.baseVisual?.texture ?? view.sprite.texture
+      box = computeAcrylicBoxSize(
+        gridBox,
+        tex.height > 0 ? tex.width / tex.height : undefined,
+        this.acrylicParams as AcrylicParams
+      )
+    } else if (gridBox && !acrylic) {
+      box = fh
+    }
     // 味方の枠は固定の基準縦横比 (#813)。枠より横に広い絵は、アクリルの正方形ごと縮めて枠の幅に収める（足元中央は不変）
     // 縦長の絵（a<=1）は箱の幅いっぱいまで使えるので縮めない。a>1 のとき箱の幅は a でなく 1 を基準にする
     const isParty = this.partyViews.includes(view)
@@ -1670,33 +1746,34 @@ export class BattleScreen extends Container {
       const a = tex.height > 0 ? tex.width / tex.height : 0
       if (a > 0) box = Math.min(box, slot.width / Math.min(1, a))
     }
-    view.baseX = acrylic ? slot.x - (box - slot.width) / 2 : slot.x
-    view.baseY = acrylic ? slot.y + size - box : slot.y
-    view.unit = size
+    view.baseX = acrylic ? fx - (box - fw) / 2 : fx
+    view.baseY = acrylic ? fy + fh - box : fy
+    view.unit = gridBox ? fh : size
     view.anchorX = slot.x + slot.width / 2
-    // ダメージ数字の出る高さ: 既定は枠の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
-    view.anchorY = slot.y + size * 0.35
+    // ダメージ数字の出る高さ: 既定は枠（グリッド敵は倍率で縮めた箱）の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
+    view.anchorY = fy + fh * 0.35
     view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
-    const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
-    const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
+    const fbX = acrylic ? fb.x : size > 0 ? fw * (fb.x / fh) : 0
+    const fbW = acrylic ? fb.w : size > 0 ? fw * (fb.w / fh) : 0
     view.fallback.clear().rect(fbX, fb.y, fbW, fb.h).fill(view.color)
     // ▼ の基準（絵の中央 x と上端 y）。絵が読み込めたら基本の絵の矩形に置き換える
     let head = { cx: fbX + fbW / 2, top: fb.y }
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack) {
         head = this.placeAcrylic(view, box) ?? head
-        if (isParty) view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
+        if (isParty || gridBox)
+          view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
       } else {
         // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
         const baseTex = view.baseVisual?.texture ?? view.sprite.texture
-        const fit = computeContainFitRect(baseTex.width, baseTex.height, slot.width, size)
+        const fit = computeContainFitRect(baseTex.width, baseTex.height, fw, fh)
         const r = this.poseRectOnBase(fit, baseTex, view.sprite.texture)
         view.sprite.position.set(r.x, r.y)
         view.sprite.width = r.width
         view.sprite.height = r.height
         head = { cx: fit.x + fit.width / 2, top: fit.y }
-        if (isParty) view.anchorY = slot.y + fit.y + fit.height * 0.35
+        if (isParty || gridBox) view.anchorY = fy + fit.y + fit.height * 0.35
       }
       view.fallback.visible = false
     }

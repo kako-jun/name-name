@@ -224,7 +224,7 @@ export interface RPGProject {
   battleAtb?: { mode: 'wait' | 'active' }
   /**
    * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid: 6x2`（列 1〜12・行 1〜4 に丸める）由来。
-   * 不正値・未指定は undefined＝従来の配置（`battle_layout: side` のときだけ効く。配線は #839 段4）
+   * 不正値・未指定は undefined＝従来の配置（`battle_layout: side` のときだけ効く。`BattleScreen` → `computeSideBattleLayout` に配線済み #839 段4）
    */
   // 型は game/enemyGrid.ts の EnemyGridSize と同形（types 層は game 層を import しない）
   battleEnemyGrid?: { cols: number; rows: number }

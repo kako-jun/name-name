@@ -58,7 +58,7 @@ export interface FieldBattleSettings {
   pixelArt: boolean
   /** `battle_atb` / `battle_atb_mode` (#205)。undefined = 従来ターン制 */
   atb: BattleAtbConfig | undefined
-  /** `battle_enemy_grid` (#839)。undefined = 無効（従来の敵配置）。描画への配線は段4 */
+  /** `battle_enemy_grid` (#839)。undefined = 無効（従来の敵配置）。`BattleScreen` 経由で描画に効く（#839 段4で配線済み） */
   enemyGrid: EnemyGridSize | undefined
   /** `battle_enemy_window_overlap` (#839)。undefined = 既定（0.25） */
   enemyWindowOverlap: number | undefined
