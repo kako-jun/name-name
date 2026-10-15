@@ -232,7 +232,10 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   }
   for (const sc of Object.values(scenes)) {
     for (const g of sc.encounter?.groups ?? []) {
-      for (const { id: mid } of parseEncounterGroup(g).items) {
+      const parsed = parseEncounterGroup(g)
+      if (parsed.warnings.length > 0)
+        return fail(`scenes.${sc.id}.encounter.groups の "${g}": ${parsed.warnings[0]}`)
+      for (const { id: mid } of parsed.items) {
         if (!hasOwn(monsters, mid))
           return fail(`scenes.${sc.id}.encounter.groups の "${mid}" が monsters にありません`)
       }

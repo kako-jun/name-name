@@ -165,6 +165,21 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     if (!r.ok) expect(r.error).toContain('"ghost"')
   })
 
+  it.each(['slime*0', 'slime*1..', 'slime:0', 'slime*3..1', 'slime@1A'])(
+    '群の構文エラー %s は parseConfig で失敗する (#839)',
+    (g) => {
+      const r = parseConfig(
+        mutated((c) => {
+          c.monsters = { slime: { name: 'スライム', hp: 10 } }
+          c.scenes.a.encounter = { rate: 5, groups: [g] }
+        }),
+        BASE
+      )
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain(`"${g}"`)
+    }
+  )
+
   it('encounter.rate=0 と小数 0.5 は ok、groups が空配列も ok', () => {
     const c0 = ok(mutated((r) => (r.scenes.a.encounter = { rate: 0, groups: [] })))
     expect(c0.scenes.a.encounter?.rate).toBe(0)
