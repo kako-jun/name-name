@@ -381,7 +381,7 @@ export interface BattleScreenOptions {
   commandLabels?: CommandLabels
   /**
    * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid` 由来（`side` のときだけ効く）。undefined = 従来の敵配置。
-   * 指定があるとき、敵は戦闘開始時に `placeEnemies` で 1 回配置し（`enemyPlacement`）、`computeSideBattleLayout` のグリッド配置で描く（段4）
+   * 指定があるとき、敵は戦闘開始時に `placeEnemies` で 1 回配置し（`enemyFootprints`）、`computeSideBattleLayout` のグリッド配置で描く（#839 段4で配線済み）
    */
   enemyGrid?: { cols: number; rows: number }
   /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッド時だけ効く */

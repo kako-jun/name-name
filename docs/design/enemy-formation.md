@@ -161,12 +161,16 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 
 - **contain**: 占有領域（幅 `w·cell`、高さ `h·cell`）に、絵を縦横比維持・**足元中央**で収める（`computeContainFitRect` を流用）。`倍率` は contain した結果をさらに足元中央基準で縮める。`SpriteSlot` は `{x, y, width: w·cell, size: h·cell}` で表し、既存の `placeEntityView` が長方形の枠をすでに扱える（味方 #760/#813 で実績あり）ため、レンダラの変更は小さい。
 - **アクスタ (#737/#760/#848)**: 板の `pad`（余白＋線）と台座の厚みは**占有領域の内側に取る**（領域を `pad` ぶん内側へ縮めた矩形に絵・箱を収める）。これで板が隣のセルへはみ出さない（窓との重なりは次項の許容量の範囲で別に扱う）。`pad` は `size` に比例する量なので、「占有領域から `pad` 比を引いた箱」を `computeAcrylicGeometry` の入力枠として渡す形（案）。#838 の「2 列で隣にかぶる」は同じ手当てで根本的に消える。
+  - 実装 (#839 段4): 上の「案」のとおり `pad` 比の閉形式にはせず、`computeAcrylicBoxSize(frame, aspect, params)` が板の**実矩形**（`computeEnemyPlateRect`）で判定する。占有領域（倍率で縮めた `slot.box`）の左右・上端に板が収まる最大の正方形（上限 `min(w, h)`）を二分法で求め、絵・台座・影はその箱の足元中央に置く。2x1 のような横長の占有でも高さ `h·cell` を超えない。
 - **重なり順（R7）**: 各敵の `floor` は「占有領域の下端」。`floor` 昇順（奥 → 手前）に描き、同じ `floor` は**列の昇順（左 = 奥が先）**。行 1 の敵より行 2 の敵が手前に重なる。奥行き (#747) の縮尺は、最前列の `floor` を**グリッドの最下行の下端（体数によらない固定値）**にして求める（味方の 4 枠固定と同じ思想。空きセルがあっても縮尺が変わらない）。
 - **メッセージ窓との重なりの許容 (#838・方針変更 2026-10-15)**: 窓は敵の**手前（上）**に描く（現行どおりログ帯のパネルが sideStage より手前）。敵の絵の上端の一部が窓の下に入ってよい。許容量は frontmatter `battle_enemy_window_overlap`（案。0〜0.5 の数値、既定 `0.25`、不正値は既定）で、**各敵の占有領域の高さに対する比**（アクスタの板の `pad` も絵に含めて数え、`pad` が窓の下に入るのも許容量の内）。
   - 根拠: 25% なら頭（上 30%）が完全には隠れず、立体感（敵が窓の奥から迫る）が出る。0 にすれば従来の「隠れない」になる。0.5 を上限にするのは、顔が半分以上隠れる設定を作らせないため。
   - 実現: グリッド領域の上端を `log` の下端 + `SIDE_GAP` から**最大 `overlap × cell`（1x1 の高さの許容量）だけ上へ延ばす**。最上行の 1x1 が許容量ちょうど、2 行以上の敵は高さが大きいぶん比が小さくなるので、全員が許容量以下。セルの大きさの式は 3.2 のとおり（延長ぶんを含めた閉形式）。
   - 窓の外側（log 帯の上や画面外）には出さない: 延長しても `log.y + log.h − overlap × cell ≥ log.y` を満たす範囲に丸める。
+  - 実装 (#839 段4): `clampEnemyWindowOverlap(region, grid, withLabel, overlap, log.h)` が、`cell` 自体が `overlap` に依る（`cell = min(cw, hn/(rows − o))`）ことを踏まえ、延長 `f(o) = o·cell(o)` を窓の高さ `L` 以下にする最大の `o = max(L/cw, L·rows/(hn+L))` を上限に丸める閉形式で解く（`f` は単調増加）。`computeEnemyGridLayout` は窓矩形を入力に持たないまま、配線側が丸めた `o` を渡す。
 - **ラベル**: 占有領域の最下行の直下（現行と同じく sideStage の外の `labelLayer` に絶対座標で）。同じ列の隣の敵のラベルと重ならないよう、ラベル幅は占有幅 `w·cell` まで。
+- **ログ行数の固定 (#839 段4)**: ログ帯の行数が体数で変わると stage の高さ → `cell` が体数で変わり §3.8 の体数不変に反する。グリッド有効時は希望行数を `desiredSideLogLines(cols*rows)`（グリッド容量）で決め、体数に依らず固定する（stage が最小高さに満たないときに行数を減らす既存の処理はそのまま）。
+- **描画順の補正 (#839 段4)**: 奥行きオフでも `enemyDrawOrder` で重ねるため敵に `zIndex = floor`（同順位は列昇順を微小加算）を与え、`sortableChildren` を有効にする。味方は従来どおり敵より手前に出すため、奥行きオフのグリッド時は味方の `zIndex` を大きな値に補正する。
 - **死亡・消滅**: 倒れた敵のセルは**詰めない**（現行のスロットも index で固定されている）。空いたセルは何も描かない。
 
 ### 3.7 既存方式との共存（R11）
@@ -201,7 +205,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 | 1 | **【実装済み #839 段1: `frontend/src/game/enemyGrid.ts`＋総当たりテスト。グリッド/セル表記のパース `parseEnemyGrid` `parseCellRef` も含む。サイズ区分 `サイズ:` のパースは段3で Rust parser が正本となり、TS の `parseEnemySize` は未使用のため削除】** 純粋関数 `enemyGrid.ts`: （サイズ文字列のパースは段3で Rust parser に移し TS からは削除）、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
 | 2 | **【実装済み #839 段2: `frontend/src/game/enemyGroup.ts`（`parseEncounterGroup` / `pickGroupIndex` / `resolveEncounterGroup`）＋ `encounter.ts` の `rollEncounter` が利用。配置 `at` は段2では BattleEntity に載せず、段3で `layout.at` に載せた。個数は 1 項 48 体まで。不正な重みは警告して無視（既定 1）】** 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
 | 3 | **【実装済み #839 段3: Rust parser（`master.rs` `サイズ:`/`size`・`倍率:`/`scale` を `MonsterDef.size{w,h}`/`scale` に丸め済みで、不正は警告して無し＝1x1・倍率1。`parser.rs` frontmatter `battle_enemy_grid`・`battle_enemy_window_overlap` は生文字列透過）→ `normalizeDocument` → `rpgProjectFromDoc`（`normalizeEnemyGrid` / `normalizeEnemyWindowOverlapSetting` → `RPGProject.battleEnemyGrid` / `battleEnemyWindowOverlap`）→ `fieldBattle.ts` `readFieldBattleSettings`（`enemyGrid` / `enemyWindowOverlap`）→ `BattleScreenOptions`。`rollEncounter` が `BattleEntity.layout?: {w,h,scale,at?}` を写す（サイズ・倍率・配置のどれも無ければ付けない）。wasm 再ビルド＋pkg コミット済み。値を通すだけで描画は変えない】** `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
-| 4 | `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。**§3.6 末尾の「延長は窓の高さまでにクランプ」は、段1の `computeEnemyGridLayout` が窓矩形を入力に持たないため未実装で、この段（窓矩形が手に入る配線時）で入れる。** アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
+| 4 | **【実装済み #839 段4: `battleLayout.ts` `computeSideBattleLayout`（入力 `enemyGrid` / `enemyFootprints` / `enemyWindowOverlap`。`enemyGrid` なしは従来のまま）＋ `enemyGrid.ts` `clampEnemyWindowOverlap`（窓の高さへの延長クランプ。閉形式）・`applyDepthToGridSlots`・`emptyEnemyGridSlot` ＋ `battleLayout.ts` `computeAcrylicBoxSize`（アクスタ箱）＋ `BattleScreen`（戦闘開始時に `placeEnemies` を 1 回・`slot.box` へ contain・描画順 `enemyDrawOrder`）。ログ行数はグリッド有効時 `desiredSideLogLines(cols*rows)` で固定。実ブラウザ A/B 検証は未了（kako-jun の実機確認が残る）】** `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
 | 5 | 読み込み時の群検証（収まらない群の無効化とエラー表示）。docs（spec / architecture / guide）・サンプル（sit-by-me 寺町）への反映 | 4 | 作者向けの安全網 |
 | 6（任意） | `サイズ: 自動`（画像の縦横比から区分を決める台帳の規則 1.8 / 0.55 をエンジン側の設定に） | 4 | 台帳に明示の区分があるなら不要。論点 Q6 |
 
@@ -290,4 +294,5 @@ Q5 の補足（未決として残る細部）: ランタイムで置けなかっ
 - 正方形セル + 横は中央・縦は下端、は第一案。実機の見た目で、横を右寄せ（味方側）にするほうが自然なら変える（段 4 のライブ比較で決める）。
 - 台帳の「ボス = 大型」の区分（2x2 以上）がグリッド 2 行に収まるのは `h ≤ 2` まで。3 行以上の巨体が要るなら `battle_enemy_grid` の行数を増やす（行数の上限 4 で足りるか、実際のボスの寸法で確認する）。
 - **ff のポーズ違いの絵（段階 0 の既知のリスク）**: `poseRectOnBase` で基本の絵より大きい slash などへ差し替えると、板はそのポーズの絵ごとに広がるが、配置（列ピッチ・窓との重なり）は基本の絵の縦横比で計算している。ポーズ中だけ隣の板や窓にかぶりうる（演出中の一時的な見た目）。
+- **ラベルが窓に隠れる限界 (#839 段4)**: 窓との重なり許容量 0.5 と奥行きを併用すると、縮んだ（上端基準）奥の最上行の足元が窓の下に入り、ラベルも窓に隠れうる。許容量が既定の 0.25 以下なら総当たりで常にラベルは stage 内（`battleLayout.test.ts`）。
 - **窓との重なりの対象（段階 0）**: `measureWindowOver` が見るのはログ帯だけ。`cross` レイアウトで敵に重なって開く候補窓・手のカーソルとの重なりは対象外。

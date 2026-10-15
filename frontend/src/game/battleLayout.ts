@@ -856,7 +856,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
 
   // 上: ログ帯。行数は敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
   const stageBottom = bottomY - SIDE_GAP
-  let logLines = desiredSideLogLines(enemyCount)
+  // グリッド有効時 (#839 段4) は希望行数をグリッド容量（cols*rows）で決める。体数で行数が変わると stage 高さ→cell が
+  // 体数で変わり、設計書 §3.8「体数不変」に反するため。グリッドなしは従来どおり敵の数で決める
+  let logLines = desiredSideLogLines(
+    input.enemyGrid ? input.enemyGrid.cols * input.enemyGrid.rows : enemyCount
+  )
   while (
     logLines > SIDE_LOG_MIN_LINES &&
     stageBottom - (SIDE_PADDING + computeSideLogHeight(logLines) + SIDE_GAP) < SIDE_MIN_STAGE_HEIGHT

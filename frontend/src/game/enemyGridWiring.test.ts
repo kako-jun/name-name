@@ -61,7 +61,7 @@ describe('computeSideBattleLayout 敵グリッド (#839 段4)', () => {
     const b = computeSideBattleLayout({ ...base, enemyCount: 3, enemyFootprints: [fp(0)] })
     expect(b).toEqual(a)
   })
-  // 注: ログ帯の行数は敵の数で決まる（desiredSideLogLines。3 体以上で上限）ので、それが同じ体数どうしで比べる
+  // ログ帯の行数もグリッド容量で決まる（体数に依らない）ので、体数が違っても 1 体目の枠は不変
   it('置けない敵は大きさ 0、体数が変わっても 1 体目の枠と奥行きの縮尺は不変', () => {
     const depth = { horizon: 0.3, perspective: 1 }
     const grid = { cols: 6, rows: 2 }

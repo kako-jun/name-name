@@ -248,7 +248,7 @@ export interface BattleEntity {
   /**
    * 敵の隊形上の大きさと配置指定 (#839)。`MonsterDef.size` / `scale` と群の配置 `@C1` を、戦闘への組み立て時（`rollEncounter`）に写す。
    * `size` / `scale` / 配置のどれも無い敵（従来の定義・群）は付かない＝従来の挙動のまま。
-   * 描画専用のマスターデータで、戦闘エンジン（`battleEngine.ts`）は読まない。`battle_enemy_grid` が有効なときだけ描画（段4）が使う。
+   * 描画専用のマスターデータで、戦闘エンジン（`battleEngine.ts`）は読まない。`battle_enemy_grid` が有効なときだけ描画（`BattleScreen` / `computeSideBattleLayout`、#839 段4）が使う。
    */
   layout?: EnemyLayout
 }
