@@ -9,6 +9,7 @@
 
 import {
   SIDE_LABEL_GAP,
+  computeDepthScale,
   SIDE_LABEL_HEIGHT,
   isLabelWidthReadable,
   normalizeEnemyWindowOverlap,
@@ -338,4 +339,102 @@ export function enemyDrawOrder(slots: readonly Pick<SpriteSlot, 'floor' | 'x'>[]
   return slots
     .map((_, i) => i)
     .sort((a, b) => slots[a].floor - slots[b].floor || slots[a].x - slots[b].x || a - b)
+}
+
+/** `computeSideBattleLayout` / `applyDepthToGridSlots` が返す敵スロットが、グリッド由来（`box` などを持つ）か */
+export function isEnemyGridSlot(slot: SpriteSlot | undefined | null): slot is EnemyGridSlot {
+  return !!slot && 'occupied' in slot && 'box' in slot && 'displayScale' in slot
+}
+
+/**
+ * 窓との重なり許容量を、延長ぶん `overlap * cell` が窓の高さ `windowHeight` を超えない範囲に絞る (#839 段4。設計書 §3.6 末尾)。
+ * これで領域の上端を延ばしても `log.y + log.h - overlap * cell >= log.y`（窓の外＝画面上へ出ない）が保たれる。
+ *
+ * `cell` 自体が `overlap` に依る（`cell = min(cw, hn / (rows - overlap))`、`cw = region.w/cols`、`hn = region.h - rows*labelBand`）ので、
+ * 延長量 `f(o) = o * cell(o) = min(o*cw, o*hn/(rows - o))` を `windowHeight` 以下にする最大の `o` を閉形式で解く:
+ * `o*cw <= L` または `o*hn/(rows - o) <= L`（= `o <= L*rows/(hn + L)`）のどちらかを満たせばよい（min なので）。
+ * `f` は `o` について単調増加なので、`o` を許容量の上限から落とした最大値がそのまま答え。
+ * 領域が狭く `cell` が 0 になる（置けない）ときは、延長は意味を持たないので 0。
+ */
+export function clampEnemyWindowOverlap(
+  region: Pick<Rect, 'w' | 'h'>,
+  grid: EnemyGridSize,
+  withLabel: boolean,
+  overlap: number | null | undefined,
+  windowHeight: number
+): number {
+  const o = normalizeEnemyWindowOverlap(overlap)
+  const { cols, rows } = grid
+  if (!isValidDim(cols) || !isValidDim(rows) || !(windowHeight > 0)) return 0
+  const labelBand = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+  const cw = region.w / cols
+  const hn = region.h - rows * labelBand
+  if (!(cw > 0) || !(hn > 0)) return 0
+  const L = windowHeight
+  const limit = Math.max(L / cw, (L * rows) / (hn + L))
+  return Math.max(0, Math.min(o, limit))
+}
+
+/**
+ * 奥行き (#747) をグリッド由来の敵スロットに適用する。`applyDepthToSlots` と同じ規則（元の占有矩形の上端・水平中央を保って縮尺 `s` で縮める）を、
+ * `occupied` / `box` にも同じ変換で適用し、ラベルも追従させる。`floor` は元の値のまま（描画順の基準）。
+ */
+export function applyDepthToGridSlots(
+  slots: readonly EnemyGridSlot[],
+  frontFloor: number,
+  horizonY: number,
+  perspective: number
+): EnemyGridSlot[] {
+  return slots.map((slot) => {
+    const s = computeDepthScale(slot.floor, frontFloor, horizonY, perspective)
+    if (s >= 1) return slot
+    const cx = slot.x + slot.width / 2
+    const top = slot.y
+    const shrink = (r: Rect): Rect => ({
+      x: cx + (r.x - cx) * s,
+      y: top + (r.y - top) * s,
+      w: r.w * s,
+      h: r.h * s,
+    })
+    const occupied = shrink(slot.occupied)
+    const out: EnemyGridSlot = {
+      x: occupied.x,
+      y: occupied.y,
+      width: occupied.w,
+      size: occupied.h,
+      floor: slot.floor,
+      scale: s,
+      displayScale: slot.displayScale,
+      occupied,
+      box: shrink(slot.box),
+    }
+    if (slot.label) {
+      const w = slot.label.w * s
+      if (isLabelWidthReadable(w)) {
+        out.label = {
+          x: slot.label.x + (slot.label.w - w) / 2,
+          y: out.y + out.size + SIDE_LABEL_GAP,
+          w,
+          h: slot.label.h,
+        }
+      }
+    }
+    return out
+  })
+}
+
+/** 置けなかった敵のスロット（大きさ 0＝後段が描かない）。足元はグリッド下端 */
+export function emptyEnemyGridSlot(x: number, floor: number): EnemyGridSlot {
+  const zero: Rect = { x, y: floor, w: 0, h: 0 }
+  return {
+    x,
+    y: floor,
+    width: 0,
+    size: 0,
+    floor,
+    scale: 1,
+    displayScale: 1,
+    occupied: zero,
+    box: { ...zero },
+  }
 }

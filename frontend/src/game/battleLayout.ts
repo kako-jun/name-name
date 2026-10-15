@@ -21,6 +21,15 @@
 import type { BattleRow } from './spellDsl'
 import type { CommandLayout } from './battleCommands'
 import { computeAcrylicGeometry, resolveAcrylicParams, type AcrylicParams } from './spriteStyle'
+import {
+  applyDepthToGridSlots,
+  clampEnemyWindowOverlap,
+  computeEnemyGridLayout,
+  emptyEnemyGridSlot,
+  type EnemyFootprint,
+  type EnemyGridSize,
+  type EnemyGridSlot,
+} from './enemyGrid'
 
 export interface Rect {
   x: number
@@ -86,6 +95,17 @@ export interface SideBattleLayoutInput {
    * 0〜0.5 に丸め、未指定・不正は `SIDE_ENEMY_WINDOW_OVERLAP`（0.25）。窓は敵の手前に描かれるので、許容量までは隠れてよい（仕様）
    */
   enemyWindowOverlap?: number
+  /**
+   * 敵の見えないグリッド (#839 段4)。渡すと敵を従来の `computeFormation` でなくグリッド（`computeEnemyGridLayout`）に置く。
+   * 未指定は従来の配置のまま（`enemyFootprints` / #838 の窓フィットも従来どおり）。
+   * このとき `enemyAspects` / `enemyAcrylic` の窓フィットは使わず、窓との重なりは `enemyWindowOverlap`（窓の高さまでに絞る）で扱う
+   */
+  enemyGrid?: EnemyGridSize
+  /**
+   * グリッド時の敵ごとの占有（`placeEnemies` の結果 + サイズ区分 + 倍率）。敵の index 順。
+   * null・足りない分は置けなかった敵＝大きさ 0 のスロット（後段が描かない）
+   */
+  enemyFootprints?: readonly (EnemyFootprint | null | undefined)[]
 }
 
 export interface SideBattleLayout {
@@ -273,6 +293,39 @@ export function computeEnemyPlateRect(
   const y = baseY + g.sprite.y - spread
   const w = g.sprite.width + spread * 2
   return { x, y, w, h: Math.max(0, slot.y + slot.size - y) }
+}
+
+const ACRYLIC_BOX_FIT_ITERATIONS = 32
+
+/**
+ * 敵グリッド (#839 段4) のアクスタ用の箱の一辺を求める。`computeAcrylicGeometry` は正方形の箱が前提なので、
+ * 占有領域 `frame`（幅 × 高さ）の足元中央に置く正方形のうち、板（絵を余白＋線ぶん外へ広げた矩形 = `computeEnemyPlateRect`）・台座・影が
+ * `frame` の内側（横は左右、縦は上端）に収まる最大の一辺を返す。箱の下端は `frame` の下端に揃える（台座・影は箱の幅・下端に収まる）。
+ * 板のはみ出しは箱の一辺に対して単調に増えるので、上限 `min(w, h)` から二分法で求める。
+ * `aspect` が無い（色四角）・不正なら板がないので `min(w, h)`。`frame` が潰れていれば 0。
+ */
+export function computeAcrylicBoxSize(
+  frame: Pick<Rect, 'w' | 'h'>,
+  aspect: number | undefined,
+  params: AcrylicParams
+): number {
+  const upper = Math.min(frame.w, frame.h)
+  if (!(upper > 0) || !Number.isFinite(upper)) return 0
+  if (aspect === undefined || !(aspect > 0) || !Number.isFinite(aspect)) return upper
+  const fits = (size: number): boolean => {
+    const slot = { x: (frame.w - size) / 2, y: frame.h - size, size, width: size }
+    const plate = computeEnemyPlateRect(slot, aspect, params)
+    return plate.x >= -1e-6 && plate.x + plate.w <= frame.w + 1e-6 && plate.y >= -1e-6
+  }
+  if (fits(upper)) return upper
+  let lo = 0
+  let hi = upper
+  for (let i = 0; i < ACRYLIC_BOX_FIT_ITERATIONS; i++) {
+    const mid = (lo + hi) / 2
+    if (fits(mid)) lo = mid
+    else hi = mid
+  }
+  return lo
 }
 
 const ELLIPSIS = '…'
@@ -856,17 +909,53 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const partyHeight = halfSlots[0]?.size ?? 0
 
   const enemyPlate = input.enemyAcrylic ?? null
+  // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
+  let gridFrontFloor: number | null = null
   const formEnemies = (region: Rect): SpriteSlot[] =>
     computeFormation(region, enemyCount, 'enemy', true, undefined, input.enemyAspects, {
       maxSize: SIDE_ENEMY_MAX_SIZE,
       minSize: partyHeight,
       plateParams: enemyPlate,
     })
-  let enemies = formEnemies(enemyRegion)
+  let enemies: SpriteSlot[]
+  if (input.enemyGrid) {
+    // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
+    const overlap = clampEnemyWindowOverlap(
+      enemyRegion,
+      input.enemyGrid,
+      true,
+      input.enemyWindowOverlap,
+      log.h
+    )
+    const placedIdx: number[] = []
+    const footprints: EnemyFootprint[] = []
+    for (let i = 0; i < enemyCount; i++) {
+      const fp = input.enemyFootprints?.[i]
+      if (fp) {
+        placedIdx.push(i)
+        footprints.push(fp)
+      }
+    }
+    const gl = computeEnemyGridLayout(enemyRegion, input.enemyGrid, footprints, {
+      withLabel: true,
+      windowOverlap: overlap,
+    })
+    const band = gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+    gridFrontFloor = gl.grid.y + gl.grid.h - band
+    const slots: EnemyGridSlot[] = Array.from({ length: enemyCount }, () =>
+      emptyEnemyGridSlot(gl.grid.x, gridFrontFloor as number)
+    )
+    placedIdx.forEach((enemyIndex, k) => {
+      slots[enemyIndex] = gl.slots[k]
+    })
+    enemies = slots
+  } else {
+    enemies = formEnemies(enemyRegion)
+  }
   // 窓との重なり (#838): 敵の絵（アクスタの板を含む）の上端がログ帯の下へ入ってよいのは、各敵の枠の高さの
   // `enemyWindowOverlap`（既定 0.25）まで。超えるときだけ領域の上端を下げて収める（許容量以内なら何も変えない）。
   // 窓は敵の手前（上）に描かれるので、許容量までは隠れてよい（立体感）。領域の中で内容は中央寄せなので、上端を下げる
-  if (enemyPlate && enemies.length > 0) {
+  if (!input.enemyGrid && enemyPlate && enemies.length > 0) {
     const overlap = normalizeEnemyWindowOverlap(input.enemyWindowOverlap)
     const overAt = (drop: number): { over: number; slots: SpriteSlot[] } => {
       const region: Rect = { ...enemyRegion, y: enemyRegion.y + drop, h: enemyRegion.h - drop }
@@ -895,10 +984,15 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
     // 空き枠も最前列の基準に含める（人数で縮尺が変わらないように）
     const all = [...enemies, ...party]
-    if (all.length > 0) {
-      const frontFloor = Math.max(...all.map((sl) => sl.floor))
+    if (all.length > 0 || gridFrontFloor !== null) {
+      const frontFloor = Math.max(
+        ...all.map((sl) => sl.floor),
+        ...(gridFrontFloor !== null ? [gridFrontFloor] : [])
+      )
       const horizonY = H * Math.min(1, Math.max(0, depth.horizon))
-      enemies = applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
+      enemies = input.enemyGrid
+        ? applyDepthToGridSlots(enemies as EnemyGridSlot[], frontFloor, horizonY, depth.perspective)
+        : applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
       party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)
     }
   }
