@@ -980,6 +980,16 @@ export function normalizeBattleRow(raw: string | null | undefined): BattleRow {
 export const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
 export const SIDE_STATUS_TEXT_PADDING = 12
+/** ATB の番の印 ▶ を置く、名前の左の追加の余白（枠から ▶ まで約 8〜10px 取るため）(#805)。欄が狭いときは付けない */
+export const SIDE_STATUS_MARKER_GUTTER = 8
+export const SIDE_STATUS_MARKER_GUTTER_MIN_WIDTH = 400
+/** status 欄の左端から名前の文字の開始までの余白。ATB で欄に余裕があるときは ▶ ぶんを足す */
+export function sideStatusLeftPadding(width: number, atb: boolean): number {
+  return (
+    SIDE_STATUS_TEXT_PADDING +
+    (atb && width >= SIDE_STATUS_MARKER_GUTTER_MIN_WIDTH ? SIDE_STATUS_MARKER_GUTTER : 0)
+  )
+}
 /** 列と列の間 */
 export const SIDE_STATUS_COLUMN_GAP = 8
 /** 名前列に最低限確保する全角文字数。これに届かないときは MP → 見出し → HP の最大値 → ゲージ幅の順に削る */
@@ -1041,7 +1051,7 @@ export const SIDE_STATUS_GAUGE_MIN_WIDTH = 16
  */
 export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const font = input.fontPx ?? SIDE_STATUS_FONT_SIZE
-  const left = input.x + SIDE_STATUS_TEXT_PADDING
+  const left = input.x + sideStatusLeftPadding(input.width, input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
   const build = (

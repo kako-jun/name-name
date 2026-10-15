@@ -8,11 +8,7 @@ import type { Container, Graphics, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
-import {
-  SIDE_STATUS_TEXT_PADDING,
-  computeSideBattleLayout,
-  estimateTextWidth,
-} from './battleLayout'
+import { sideStatusLeftPadding, computeSideBattleLayout, estimateTextWidth } from './battleLayout'
 import type { BattleEntity } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -405,9 +401,21 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     expect(m.visible).toBe(true)
     expect(m.text).toBe('▶')
     const t0 = I(on.s).statusTexts[0]
-    // 枠（名前の左 SIDE_STATUS_TEXT_PADDING 手前）から 3px 以上離れ、名前の文字にも重ならない
-    expect(m.x - (t0.x - SIDE_STATUS_TEXT_PADDING)).toBeGreaterThanOrEqual(3)
+    // 狭い欄では余白を足さない（名前の文字を削らない）。▶ は名前の文字に重ならない
     expect(m.x + estimateTextWidth('▶', 7)).toBeLessThanOrEqual(t0.x + 0.001)
+  })
+
+  it('800x450・ATB: ▶ は枠から 8px 以上離れ、名前の直前（4px 手前）に置かれる (#805)', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }), {
+      layout: 'side',
+    })
+    s.tick(0)
+    const t0 = I(s).statusTexts[0]
+    for (const m of I(s).atbMarkers) {
+      expect(m.x - (t0.x - sideStatusLeftPadding(800, true))).toBeGreaterThanOrEqual(8)
+      expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
+      expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeLessThanOrEqual(6)
+    }
   })
 
   it('ATB on/off で HP の列位置は ATB のゲージぶんだけ左へ寄る（off は寄らない）', () => {

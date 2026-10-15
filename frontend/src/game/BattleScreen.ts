@@ -201,11 +201,12 @@ const ATB_BAR_HEIGHT = 3
  * 画面のスケールに追従する。FF6 ピクセルリマスターの 1080p 換算で、頭から約 10〜15px 離した小さな三角
  */
 /**
- * 番の味方の印 ▶（名前の左）。ウィンドウの枠から ATB_MARKER_INSET だけ離し、名前の列（SIDE_STATUS_TEXT_PADDING）には食い込ませない (#805)。
+ * 番の味方の印 ▶（名前の直前に小さく）。名前の左に取った余白（sideStatusLeftPadding）の中へ置いて枠から離し、名前には食い込ませない (#805)。
  * アクスタ頭上の ▼ と併存する
  */
 const ATB_MARKER_FONT_SIZE = 7
-const ATB_MARKER_INSET = 3
+/** ▶ の右端と名前の文字の間 */
+const ATB_MARKER_NAME_GAP = 4
 const SELECT_MARK_WIDTH_RATIO = 0.1
 const SELECT_MARK_HEIGHT_RATIO = 0.07
 const SELECT_MARK_GAP_RATIO = 0.06
@@ -1448,7 +1449,7 @@ export class BattleScreen extends Container {
         },
       ]
       const m = this.atbMarkers[0]
-      m.x = STAGE_PADDING + ATB_MARKER_INSET
+      m.x = STAGE_PADDING + 1
       m.y = statsY + (STATS_HEIGHT - ATB_MARKER_FONT_SIZE) / 2
       this.drawAtbBars()
     }
@@ -1609,7 +1610,7 @@ export class BattleScreen extends Container {
       L.statusRows.forEach((row, i) => {
         const m = this.atbMarkers[i]
         if (!m) return
-        m.x = row.x + ATB_MARKER_INSET
+        m.x = cols.name.x - ATB_MARKER_NAME_GAP - ATB_MARKER_FONT_SIZE
         m.y = row.y + (row.h - ATB_MARKER_FONT_SIZE) / 2
       })
       this.drawAtbBars()

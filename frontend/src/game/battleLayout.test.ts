@@ -39,6 +39,7 @@ import {
   SIDE_STATUS_GAUGE_WIDTH,
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
+  sideStatusLeftPadding,
   desiredSideLogLines,
   effectiveCommandLayout,
   fitCommandFontSize,
@@ -1786,7 +1787,7 @@ describe('computeStatusColumns (#745)', () => {
   it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
     const c = computeStatusColumns({ ...base, atb: true })
     const inner = {
-      l: base.x + SIDE_STATUS_TEXT_PADDING,
+      l: base.x + sideStatusLeftPadding(base.width, true),
       r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
     }
     expect(c.name.x).toBe(inner.l)
@@ -1909,7 +1910,7 @@ describe('computeStatusColumns: 見出しと数字のすき間・狭いときの
 
   it('極端に狭く HP 列を左余白で止めても、現在値は見出しと重ならない位置までは右へ押し出される', () => {
     const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
-    const left = base.x + SIDE_STATUS_TEXT_PADDING
+    const left = base.x + sideStatusLeftPadding(20, true)
     const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
     const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
     expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)

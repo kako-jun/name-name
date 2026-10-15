@@ -11,6 +11,7 @@ import {
   SIDE_STATUS_GAUGE_WIDTH,
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
+  sideStatusLeftPadding,
   type StatusColumnsInput,
 } from './battleLayout'
 import { getSharedDofMask, quantizeDofRamp, resetSharedDofMasksForTest } from './dofMaskCache'
@@ -145,7 +146,9 @@ describe('computeStatusColumns: 省略段階のデシジョンテーブル (#745
   it('ATB on では MP 省略のしきい値幅が ATB off より広い側（ゲージぶん先に削る）にある', () => {
     const w = exactMinNameWidth(base)
     const wOn = exactMinNameWidth({ ...base, atb: true })
-    expect(wOn - w).toBeCloseTo(SIDE_STATUS_GAUGE_WIDTH + SIDE_STATUS_COLUMN_GAP, 6)
+    // exactMinNameWidth は幅 600 で逆算するので、▶ のための左余白（SIDE_STATUS_MARKER_GUTTER）も ATB on のぶん増える
+    const gutter = sideStatusLeftPadding(600, true) - sideStatusLeftPadding(600, false)
+    expect(wOn - w).toBeCloseTo(SIDE_STATUS_GAUGE_WIDTH + SIDE_STATUS_COLUMN_GAP + gutter, 6)
   })
 })
 
@@ -176,7 +179,7 @@ describe('computeStatusColumns: 画面幅 × ATB × パーティ数 (#745)', () 
         })
         const cols = [c.name, c.hp, c.mp, c.gauge].filter((x) => x !== null)
         expect(c.gauge !== null).toBe(atb)
-        expect(c.name.x).toBe(L.status.x + SIDE_STATUS_TEXT_PADDING)
+        expect(c.name.x).toBe(L.status.x + sideStatusLeftPadding(L.status.w, atb))
         for (let i = 1; i < cols.length; i++) {
           expect(cols[i]!.x).toBeGreaterThanOrEqual(cols[i - 1]!.x + cols[i - 1]!.w - 1e-9)
         }
