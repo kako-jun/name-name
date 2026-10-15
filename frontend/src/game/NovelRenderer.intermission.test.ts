@@ -20,7 +20,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { defaultTimeController } from './TimeController'
 import type { Event, EventScene, ChoiceOption } from '../types'
-import { internals, type RendererInternals } from '../test/rendererInternals'
+import {
+  backgroundControllerOf,
+  internals,
+  type RendererInternals,
+} from '../test/rendererInternals'
 
 // --- fixture helpers（NovelRenderer.confinement.test.ts と同じスタイル） ---
 
@@ -102,7 +106,6 @@ interface LocalInternals extends RendererInternals {
   eventImageLayer: {
     show: (...args: unknown[]) => void
   }
-  fadeOutBackgroundEntries: (durationMs: number) => void
   renderIntermissionTableau: (events: Event[], startIndex?: number) => void
   app: { canvas: unknown; destroy: (...args: unknown[]) => void }
 }
@@ -170,10 +173,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
   it('3: intermission 未設定で jumpToScene 圏外 → fadeOutBackgroundEntries/clearForSceneTransition が本編の backgroundFadeMs で呼ばれる', () => {
     const r = makeRenderer(SCENES)
     r.setBackgroundFadeMs(650) // 本編 per-game 設定（intermission とは無関係な値にしておく）
-    const bgSpy = vi.spyOn(
-      r as unknown as { fadeOutBackgroundEntries: (ms: number) => void },
-      'fadeOutBackgroundEntries'
-    )
+    const bgSpy = vi.spyOn(backgroundControllerOf(r), 'fadeOutBackgroundEntries')
     const charSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'clearForSceneTransition')
 
     confineForTest(r, ['entry'])
@@ -188,10 +188,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const r = makeRenderer(SCENES)
     r.setBackgroundFadeMs(650) // 本編値。intermission 側の値と異なることを確認するための対照値。
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 900, characterFadeMs: 800 })
-    const bgSpy = vi.spyOn(
-      r as unknown as { fadeOutBackgroundEntries: (ms: number) => void },
-      'fadeOutBackgroundEntries'
-    )
+    const bgSpy = vi.spyOn(backgroundControllerOf(r), 'fadeOutBackgroundEntries')
     const charSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'clearForSceneTransition')
 
     confineForTest(r, ['entry'])
@@ -226,10 +223,7 @@ describe('NovelRenderer intermission.md 専用シーン (#404)', () => {
     const r = makeRenderer(CHOICE_SCENES)
     r.setDocKey('doc-404-choice-all-out') // markCurrentSceneRead を実際に効かせる
     r.setIntermissionScene([narration('x')], { backgroundFadeMs: 900, characterFadeMs: 800 })
-    const bgSpy = vi.spyOn(
-      r as unknown as { fadeOutBackgroundEntries: (ms: number) => void },
-      'fadeOutBackgroundEntries'
-    )
+    const bgSpy = vi.spyOn(backgroundControllerOf(r), 'fadeOutBackgroundEntries')
     const charSpy = vi.spyOn(internals<LocalInternals>(r).characterLayer, 'clearForSceneTransition')
     confineForTest(r, ['entry']) // hub / other は圏外
 
