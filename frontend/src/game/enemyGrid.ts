@@ -45,8 +45,7 @@ function parseWH(raw: string): [number, number] | null {
   if (!m) return null
   const a = Number(m[1])
   const b = Number(m[2])
-  // 桁あふれ（Infinity）だけ弾く。巨大な値はグリッドでは上限へ丸め、サイズでは parseEnemySize が弾く
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  // 数字だけのパターンなので NaN にはならない。桁あふれ（Infinity）はグリッドでは上限へ丸め、サイズでは parseEnemySize が弾く
   return [a, b]
 }
 
@@ -282,8 +281,8 @@ export function computeEnemyGridLayout(
 
   // 置けないほど狭いときはラベル帯も取らない（グリッド全体が 0）
   const band = cell > 0 ? labelBand : 0
-  const gridW = cell * cols
-  const gridH = (cell + band) * rows
+  const gridW = gridValid ? cell * cols : 0
+  const gridH = gridValid ? (cell + band) * rows : 0
   const gridRect: Rect = {
     x: region.x + (region.w - gridW) / 2,
     y: region.y + region.h - gridH,

@@ -47,7 +47,10 @@ describe('parseEnemyGrid', () => {
   it('桁あふれの巨大値は上限へ丸める', () => {
     expect(parseEnemyGrid('99999999999999999999x2')).toEqual({ cols: 12, rows: 2 })
     expect(parseEnemyGrid('6x99999999999999999999')).toEqual({ cols: 6, rows: 4 })
+    const huge = '9'.repeat(400)
+    expect(parseEnemyGrid(`${huge}x${huge}`)).toEqual({ cols: 12, rows: 4 })
     expect(parseEnemySize('99999999999999999999x2')).toBeNull()
+    expect(parseEnemySize(`${huge}x1`)).toBeNull()
   })
   it('列 1〜12・行 1〜4 に丸める', () => {
     expect(parseEnemyGrid('6x2')).toEqual({ cols: 6, rows: 2 })
@@ -332,6 +335,27 @@ describe('computeEnemyGridLayout', () => {
       })
       expect(l.cell).toBe(0)
       expect(l.slots[0].size).toBe(0)
+    }
+    for (const g of [
+      { cols: NaN, rows: 2 },
+      { cols: Infinity, rows: 2 },
+      { cols: 6, rows: -Infinity },
+    ]) {
+      const l = computeEnemyGridLayout(region, g, [{ col: 0, row: 0, w: 1, h: 1 }], {
+        withLabel: true,
+      })
+      const nums = [
+        l.cell,
+        ...Object.values(l.grid),
+        ...Object.values(l.slots[0].occupied),
+        ...Object.values(l.slots[0].box),
+        l.slots[0].x,
+        l.slots[0].y,
+        l.slots[0].width,
+        l.slots[0].size,
+        l.slots[0].floor,
+      ]
+      expect(nums.every(Number.isFinite), JSON.stringify(g)).toBe(true)
     }
   })
 
