@@ -58,7 +58,13 @@ vi.mock('../components/CanvasEditor', () => ({
 }))
 vi.mock('../components/MapEditor', () => ({ default: () => <div /> }))
 vi.mock('../components/NPCEditor', () => ({ default: () => <div /> }))
-vi.mock('../components/RPGPlayer', () => ({ default: () => <div /> }))
+const rpgPlayerProps: Array<Record<string, unknown>> = []
+vi.mock('../components/RPGPlayer', () => ({
+  default: (props: Record<string, unknown>) => {
+    rpgPlayerProps.push(props)
+    return <div data-testid="rpg-player" />
+  },
+}))
 vi.mock('../components/VideoExportModal', () => ({
   default: (props: {
     isRunning: boolean
@@ -1210,5 +1216,85 @@ describe('EditorScreen: 動画書き出し中の操作制限・中止 (#780, #79
       expect(screen.getByTestId('export-status').textContent).toContain('タイムアウト')
     )
     expect(screen.getByTestId('export-status').textContent).toContain('60秒間進まなかった')
+  })
+})
+
+describe('EditorScreen: play タブは収まらない群を検証して外す (#839 段5)', () => {
+  const mon = (id: string, size?: { w: number; h: number }) => ({
+    Monster: {
+      id,
+      name: id,
+      hp: 5,
+      atk: 1,
+      def: 1,
+      agi: 1,
+      exp: 0,
+      gold: 0,
+      ...(size ? { size } : {}),
+    },
+  })
+  const gridDoc = (): EventDocument =>
+    ({
+      engine: 'name-name',
+      battle_enemy_grid: '6x2',
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'field',
+              title: 'field',
+              view: 'TopDown',
+              events: [
+                mon('bit'),
+                mon('wide', { w: 3, h: 3 }),
+                {
+                  RpgMap: {
+                    width: 1,
+                    height: 1,
+                    tile_size: 32,
+                    tiles: [[0]],
+                    encounter_rate: 8,
+                    encounter_groups: ['bit', 'wide'],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }) as unknown as EventDocument
+
+  beforeEach(() => {
+    rpgPlayerProps.length = 0
+    playerProps.length = 0
+    parsedByMarkdown.clear()
+    localStorage.clear()
+    getContentsMock.mockReset()
+    getContentsMock.mockImplementation(async () => ({ content: '# x', sha: 'sha' }))
+    listScriptsMock.mockReset()
+    listScriptsMock.mockImplementation(async () => [])
+  })
+
+  it('RPGPlayer に渡る project は群が検証済み（3x3 の wide は 6x2 に入らず外れる）', async () => {
+    parsed = gridDoc()
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      renderEditor()
+      fireEvent.click(await screen.findByRole('tab', { name: 'RPG' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'プレイ' }))
+      await waitFor(() => expect(rpgPlayerProps.length).toBeGreaterThan(0))
+      const game = rpgPlayerProps[rpgPlayerProps.length - 1].gameData as {
+        map: { encounterGroups?: string[] }
+        encounterGroupErrors?: unknown[]
+      }
+      expect(game.map.encounterGroups).toEqual(['bit'])
+      expect(game.encounterGroupErrors).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

@@ -87,6 +87,10 @@ describe('validateEncounterGroups (#839 段5)', () => {
     expect(r.errors.map((e) => e.kind)).toEqual(['invalid-grid', 'invalid-grid'])
   })
 
+  it('配置指定は最初の 1 体だけに効く（bit*2@E1 は 2 体目が自動配置でエラーなし）', () => {
+    expect(run('bit*2@E1').errors).toEqual([])
+  })
+
   it('*m..n は最大数で検証する', () => {
     expect(run('bit*1..13').errors).toHaveLength(1)
     expect(run('bit*1..12').errors).toEqual([])

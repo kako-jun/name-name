@@ -31,7 +31,12 @@ import {
 } from '../game/fieldWalk'
 import { formatEncounterGroupErrors } from '../game/encounterGroupValidation'
 import { resolveUrl } from '../battleSample/config'
-import { findReturnLink, parseConfigText, type FieldSampleConfig } from './config'
+import {
+  findReturnLink,
+  forceBattleCandidates,
+  parseConfigText,
+  type FieldSampleConfig,
+} from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -317,8 +322,8 @@ async function main(): Promise<void> {
 
   $('tb-force-battle').addEventListener('click', () => {
     if (battle || transition) return
-    const sc = config.scenes[sceneId].encounter
-    const groups = sc && sc.groups.length > 0 ? sc.groups : Object.keys(config.monsters)
+    const groups = forceBattleCandidates(config, sceneId)
+    if (groups.length === 0) return
     const r = advanceEncounter(
       initialEncounterState({ stepDistance: 1, minSteps: 0 }),
       1,

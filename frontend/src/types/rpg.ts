@@ -151,10 +151,7 @@ export interface EventAction {
   params: Record<string, unknown> // パラメータ
 }
 
-/**
- * RPGプロジェクトデータ
- */
-/** 敵グリッドに収まらなかった敵 1 体（game/encounterGroupValidation.ts の EncounterGroupError と同形。types 層は game 層を import しない） */
+/** 敵グリッドに収まらなかった敵 1 体 (#839 段5。game/encounterGroupValidation.ts が使う) */
 export interface EncounterGroupError {
   /** マップ（シーン）の id */
   mapId: string
@@ -168,6 +165,9 @@ export interface EncounterGroupError {
   reason: string
 }
 
+/**
+ * RPGプロジェクトデータ
+ */
 export interface RPGProject {
   name: string // プロジェクト名
   version: string // データバージョン

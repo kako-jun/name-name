@@ -453,6 +453,29 @@ function parseEntity(
 }
 
 /**
+ * 「今すぐエンカウント（確認用）」の抽選候補（群の文字列の配列）。
+ * シーンに群があればそれ。群が空（最初から無い・全群が敵グリッドに収まらず無効化された）なら全モンスターを 1 体ずつの群として使うが、
+ * 敵グリッドが有効なときは、1 体でも収まらない（サイズ超過など）モンスターは候補から外す (#839 段5)。
+ */
+export function forceBattleCandidates(config: FieldSampleConfig, sceneId: string): string[] {
+  const groups = hasOwn(config.scenes, sceneId)
+    ? (config.scenes[sceneId].encounter?.groups ?? [])
+    : []
+  if (groups.length > 0) return groups
+  const ids = Object.keys(config.monsters)
+  const grid = config.battle.enemyGrid
+  if (!grid) return ids
+  return ids.filter(
+    (id) =>
+      validateEncounterGroups({
+        grid,
+        masters: config.monsters,
+        groups: [{ mapId: sceneId, spec: id }],
+      }).errors.length === 0
+  )
+}
+
+/**
  * srcId のシーンから link で出たとき、遷移先シーンで対応する（srcId へ戻る）リンクを返す。
  * 遷移先に複数あれば、辺が反対側のものを優先し、なければ最初のもの。無ければ null。
  */

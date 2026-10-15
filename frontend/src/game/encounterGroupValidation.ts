@@ -11,6 +11,7 @@
  */
 
 import type { MonsterDef } from '../types'
+import type { EncounterGroupError } from '../types/rpg'
 import { hasOwn } from './ownProperty'
 import { parseEncounterGroup } from './enemyGroup'
 import {
@@ -20,24 +21,13 @@ import {
   type PlacementItem,
 } from './enemyGrid'
 
+export type { EncounterGroupError }
+
 /** 検証する群 1 つ。`mapId` はエラー表示用（シーン id など） */
 export interface EncounterGroupInput {
   mapId: string
   /** 群の生文字列（`[エンカウント群: …]` の 1 項目。重み `:3` 込み） */
   spec: string
-}
-
-/** 収まらなかった敵 1 体 */
-export interface EncounterGroupError {
-  mapId: string
-  /** 群の生文字列 */
-  group: string
-  monsterId: string
-  /** 群の中でその敵が何体目か（その monsterId の 1 始まりの通し番号。`*m..n` は最大数で数える） */
-  nth: number
-  kind: PlacementErrorKind
-  /** 日本語の理由 */
-  reason: string
 }
 
 export interface EncounterGroupValidation {

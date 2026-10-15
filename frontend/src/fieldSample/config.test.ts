@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   DEFAULTS,
   findReturnLink,
+  forceBattleCandidates,
   parseConfig,
   parseConfigText,
   type FieldSampleConfig,
@@ -559,6 +560,26 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     try {
       const c = ok(withGrid('6x2', ['bit@M1']))
       expect(c.scenes.a.encounter?.groups).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('今すぐエンカウントの候補: 群があればそれ、群が空なら全モンスター（グリッド有効時は収まらないものを除く）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const mk = (groups: string[]) => {
+        const raw = withGrid('6x2', groups)
+        ;(raw.monsters as Record<string, unknown>).huge = { name: '巨体', hp: 9, size: '7x1' }
+        return ok(raw)
+      }
+      expect(forceBattleCandidates(mk(['bit', 'boss']), 'a')).toEqual(['bit', 'boss'])
+      // 最初から群が無い
+      expect(forceBattleCandidates(mk([]), 'a')).toEqual(['bit', 'boss'])
+      // 全群が無効化された（huge は 6x2 に入らない）→ 群は空。フォールバックでも収まらない huge は外す
+      const allBad = mk(['huge'])
+      expect(allBad.scenes.a.encounter?.groups).toEqual([])
+      expect(forceBattleCandidates(allBad, 'a')).toEqual(['bit', 'boss'])
     } finally {
       spy.mockRestore()
     }
