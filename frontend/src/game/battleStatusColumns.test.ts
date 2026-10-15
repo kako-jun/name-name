@@ -12,6 +12,8 @@ import {
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
   sideStatusLeftPadding,
+  SIDE_STATUS_MARKER_GUTTER_MAX,
+  SIDE_STATUS_MARKER_GUTTER_MIN,
   type StatusColumnsInput,
 } from './battleLayout'
 import { getSharedDofMask, quantizeDofRamp, resetSharedDofMasksForTest } from './dofMaskCache'
@@ -27,11 +29,16 @@ const base: StatusColumnsInput = {
   atb: false,
 }
 
-/** 名前列がちょうど MIN_NAME になる status 幅（最初の段階 = MP あり・見出しあり）を、関数の出力から逆算する */
+/**
+ * 名前列がちょうど MIN_NAME になる status 幅（最初の段階 = MP あり・見出しあり）を、関数の出力から逆算する。
+ * 注意: ATB のときは、名前列に余裕があるぶん（幅 600 では最大）名前の左の余白が広がって名前列が削られている。
+ * 境界では余裕がなく余白は広がらないので、広がったぶん（c.name.x と基本の余白の差）を名前幅へ戻して逆算する (#805)
+ */
 function exactMinNameWidth(input: StatusColumnsInput): number {
   const c = computeStatusColumns({ ...input, width: 600 })
+  const widened = c.name.x - (input.x + sideStatusLeftPadding(600, input.atb))
   // 浮動小数の丸めで境界ちょうどが 1 ulp 下回らないよう、ごく小さく上げる
-  return 600 - (c.name.w - MIN_NAME) + 1e-9
+  return 600 - (c.name.w + widened - MIN_NAME) + 1e-9
 }
 
 describe('computeStatusColumns: 名前列の最低文字数の境界 (#745)', () => {
@@ -146,7 +153,7 @@ describe('computeStatusColumns: 省略段階のデシジョンテーブル (#745
   it('ATB on では MP 省略のしきい値幅が ATB off より広い側（ゲージぶん先に削る）にある', () => {
     const w = exactMinNameWidth(base)
     const wOn = exactMinNameWidth({ ...base, atb: true })
-    // exactMinNameWidth は幅 600 で逆算するので、▶ のための左余白（SIDE_STATUS_MARKER_GUTTER）も ATB on のぶん増える
+    // ATB on では名前の左の基本の余白に、▶ のための最小の余白（SIDE_STATUS_MARKER_GUTTER_MIN）が乗る
     const gutter = sideStatusLeftPadding(600, true) - sideStatusLeftPadding(600, false)
     expect(wOn - w).toBeCloseTo(SIDE_STATUS_GAUGE_WIDTH + SIDE_STATUS_COLUMN_GAP + gutter, 6)
   })
@@ -179,7 +186,12 @@ describe('computeStatusColumns: 画面幅 × ATB × パーティ数 (#745)', () 
         })
         const cols = [c.name, c.hp, c.mp, c.gauge].filter((x) => x !== null)
         expect(c.gauge !== null).toBe(atb)
-        expect(c.name.x).toBe(L.status.x + sideStatusLeftPadding(L.status.w, atb))
+        // 名前の左端は基本の余白から、名前列の余裕ぶん（ATB のみ・最大 MAX-MIN）まで広がる
+        const base0 = L.status.x + sideStatusLeftPadding(L.status.w, atb)
+        expect(c.name.x).toBeGreaterThanOrEqual(base0 - 1e-9)
+        expect(c.name.x).toBeLessThanOrEqual(
+          base0 + (atb ? SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN : 0) + 1e-9
+        )
         for (let i = 1; i < cols.length; i++) {
           expect(cols[i]!.x).toBeGreaterThanOrEqual(cols[i - 1]!.x + cols[i - 1]!.w - 1e-9)
         }

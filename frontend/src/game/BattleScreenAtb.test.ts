@@ -8,7 +8,7 @@ import type { Container, Graphics, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
-import { sideStatusLeftPadding, computeSideBattleLayout, estimateTextWidth } from './battleLayout'
+import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
 import type { BattleEntity } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -424,7 +424,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     s.tick(0)
     const L = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 1 })
     const t0 = I(s).statusTexts[0]
-    const frameX = t0.x - sideStatusLeftPadding(L.status.w, true)
+    const frameX = L.status.x
     for (const m of I(s).atbMarkers) {
       expect(m.x - frameX).toBeGreaterThanOrEqual(4 - 1e-9)
       expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
@@ -439,7 +439,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 2, enemyCount: 1 })
     const t0 = I(s).statusTexts[0]
     const m = I(s).atbMarkers[0]
-    expect(m.x - (t0.x - sideStatusLeftPadding(L.status.w, true))).toBeGreaterThanOrEqual(8)
+    expect(m.x - L.status.x).toBeGreaterThanOrEqual(8 - 1e-9)
     expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeLessThanOrEqual(6)
   })
 
@@ -533,9 +533,12 @@ describe('BattleScreen ATB: アクスタ頭上の ▼ の出し入れ (#805)', (
     const first = marks(s).indexOf(true)
     expect(marks(s).filter(Boolean)).toHaveLength(1)
     I(s).commands[0].hit.emit('pointertap', {} as never)
-    const after = marks(s)
-    expect(after.filter(Boolean).length).toBeLessThanOrEqual(1)
-    expect(after[first]).toBe(false)
+    // 前の味方の ▼ は消え、もう一人の味方（次の番）に移る
+    const next = first === 0 ? 1 : 0
+    expect(marks(s)[first]).toBe(false)
+    expect(marks(s)[next]).toBe(true)
+    expect(I(s).atbMarkers[next].visible).toBe(true)
+    expect(I(s).atbMarkers[first].visible).toBe(false)
   })
 
   it('倒れた味方（HP 0）には、ゲージが満タンでも出ない', () => {

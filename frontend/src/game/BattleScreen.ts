@@ -130,7 +130,8 @@ import {
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_HEIGHT,
   SIDE_STATUS_MARKER_FONT_SIZE,
-  FRONT_MARKER_INSET,
+  sideStatusLeftPadding,
+  SELECT_MARK_LOG_GAP,
   sideStatusMarkerX,
   computeSelectMarkTriangle,
   type StatusColumns,
@@ -1440,7 +1441,9 @@ export class BattleScreen extends Container {
         },
       ]
       const m = this.atbMarkers[0]
-      m.x = STAGE_PADDING + FRONT_MARKER_INSET
+      // 名前（heroStatsText）を ▶ のぶん右へ寄せ、▶ と名前の隙間は side と同じ（sideStatusMarkerX）
+      this.heroStatsText.x = STAGE_PADDING + sideStatusLeftPadding(0, true)
+      m.x = sideStatusMarkerX(this.heroStatsText.x)
       m.y = statsY + (STATS_HEIGHT - SIDE_STATUS_MARKER_FONT_SIZE) / 2
       this.drawAtbBars()
     }
@@ -1711,7 +1714,15 @@ export class BattleScreen extends Container {
   private layoutSelectMark(view: EntityView, head: { cx: number; top: number }): void {
     view.selectMark
       .clear()
-      .poly(computeSelectMarkTriangle(head.cx, head.top, view.unit))
+      .poly(
+        computeSelectMarkTriangle(
+          head.cx,
+          head.top,
+          view.unit,
+          // 上のログ窓（画面基準）の下端＋隙間を container 座標へ。窓の下に隠れないよう三角を下げる
+          this.messageRect.y + this.messageRect.h + SELECT_MARK_LOG_GAP - view.baseY
+        )
+      )
       .fill(SELECT_MARK_FILL)
       .stroke({ color: SELECT_MARK_OUTLINE, width: 1 })
   }

@@ -35,6 +35,9 @@ import {
   SIDE_STATUS_COMPACT_WIDTH,
   computeContainFitRect,
   computeSideBattleLayout,
+  computeSelectMarkTriangle,
+  SELECT_MARK_LOG_GAP,
+  SELECT_MARK_MIN_WIDTH,
   estimateTextWidth,
 } from './battleLayout'
 import type { SpriteSlot } from './battleLayout'
@@ -3433,18 +3436,26 @@ describe('BattleScreen: 選択中の印 ▼ の形と位置 (#805)', () => {
     acrylicPlate: Sprite | null
     selectMark: Graphics
     unit: number
+    baseY: number
   }
   const views = (s: BattleScreen, side: 'partyViews' | 'enemyViews'): MarkView[] =>
     (s as unknown as Record<string, MarkView[]>)[side]
-  /** ▼ の塗りの三角（container 基準）。[左上, 右上, 先端] の座標 */
-  const triangle = (g: Graphics): number[] => {
-    const ins = (
-      g.context.instructions as unknown as Array<{
-        action: string
-        data: { path: { shapePath: { shapePrimitives: Array<{ shape: { points: number[] } }> } } }
-      }>
-    ).find((i) => i.action === 'fill')!
-    return ins.data.path.shapePath.shapePrimitives[0].shape.points
+  /** ▼ の外接矩形（container 基準）。縁取り 1px ぶん（片側 0.5）を引いた三角そのものの範囲 */
+  const box = (g: Graphics) => {
+    const b = g.getLocalBounds()
+    return {
+      l: b.x + 0.5,
+      r: b.x + b.width - 0.5,
+      t: b.y + 0.5,
+      b: b.y + b.height - 0.5,
+      cx: b.x + b.width / 2,
+      w: b.width - 1,
+    }
+  }
+  /** 本番の純関数が返す三角（container 基準）。minTop は上のログ窓の下端＋隙間 */
+  const expectedTriangle = (s: BattleScreen, v: MarkView, cx: number, top: number): number[] => {
+    const m = (s as unknown as { messageRect: { y: number; h: number } }).messageRect
+    return computeSelectMarkTriangle(cx, top, v.unit, m.y + m.h + SELECT_MARK_LOG_GAP - v.baseY)
   }
   const withSprite = (id: string): BattleEntity => entity(id, { sprite: `img/${id}.webp` })
   const acrylic: BattleScreenOptions = { layout: 'side', spriteStyle: 'acrylic' }
@@ -3470,17 +3481,14 @@ describe('BattleScreen: 選択中の印 ▼ の形と位置 (#805)', () => {
     const s = track(make([withSprite('p')], [withSprite('e')], acrylic))
     await flushPromises()
     for (const v of [...views(s, 'partyViews'), ...views(s, 'enemyViews')]) {
-      const [x0, y0, x1, y1, x2, y2] = triangle(v.selectMark)
       const sp = v.sprite!
       const top = Math.min(sp.y, v.acrylicPlate!.y)
-      expect(y0).toBe(y1) // 上辺は水平
-      expect(y2).toBeGreaterThan(y0) // 先端が下
-      expect(x2).toBeCloseTo((x0 + x1) / 2, 6) // 中央
-      expect(x2).toBeCloseTo(sp.x + sp.width / 2, 6) // 絵の中央
-      expect(y2).toBeLessThan(top) // 頭より上
-      expect(y2).toBeCloseTo(top - v.unit * 0.06, 6)
-      expect(x1 - x0).toBeCloseTo(v.unit * 0.1, 6)
-      expect(y2 - y0).toBeCloseTo(v.unit * 0.07, 6)
+      const e = expectedTriangle(s, v, sp.x + sp.width / 2, top)
+      const b = box(v.selectMark)
+      expect(Math.abs(b.cx - (e[0] + e[2]) / 2)).toBeLessThan(1) // 絵の中央
+      expect(Math.abs(b.t - e[1])).toBeLessThan(1)
+      expect(Math.abs(b.b - e[5])).toBeLessThan(1.5) // 先端が下（縁取りの尖りぶんの誤差を許す）
+      expect(Math.abs(b.w - (e[2] - e[0]))).toBeLessThan(2)
     }
   })
 
@@ -3501,31 +3509,53 @@ describe('BattleScreen: 選択中の印 ▼ の形と位置 (#805)', () => {
     const s = track(make([withSprite('p')], [entity('e')], acrylic))
     const v = views(s, 'partyViews')[0]
     expect(v.sprite).toBeNull()
-    const before = triangle(v.selectMark)
-    expect(before[5]).toBeLessThan(v.fallback.getLocalBounds().y)
+    const before = box(v.selectMark)
+    expect(before.b).toBeGreaterThan(before.t)
     resolve(sized(100, 50))
     await flushPromises()
     expect(v.sprite).not.toBeNull()
-    const after = triangle(v.selectMark)
+    const after = box(v.selectMark)
     const top = Math.min(v.sprite!.y, v.acrylicPlate?.y ?? Infinity)
-    expect(after[5]).toBeCloseTo(top - v.unit * 0.06, 6)
-    expect(after[4]).toBeCloseTo(v.sprite!.x + v.sprite!.width / 2, 6)
+    const e = expectedTriangle(s, v, v.sprite!.x + v.sprite!.width / 2, top)
+    expect(Math.abs(after.b - e[5])).toBeLessThan(1.5)
+    expect(Math.abs(after.cx - (v.sprite!.x + v.sprite!.width / 2))).toBeLessThan(1)
   })
 
   it('画面サイズを変えると、大きさ・間隔が枠の一辺（unit）に比例して変わる', async () => {
     const s = track(make([withSprite('p')], [withSprite('e')], acrylic, 1600, 900))
     await flushPromises()
     const v = views(s, 'enemyViews')[0]
-    const big = triangle(v.selectMark)
+    const big = box(v.selectMark)
     const bigUnit = v.unit
     s.redraw(800, 450)
     await flushPromises()
-    const small = triangle(v.selectMark)
+    const small = box(v.selectMark)
     expect(v.unit).toBeLessThan(bigUnit)
-    expect(small[2] - small[0]).toBeCloseTo(v.unit * 0.1, 6)
-    expect(small[5] - small[1]).toBeCloseTo(v.unit * 0.07, 6)
-    expect((small[2] - small[0]) / (big[2] - big[0])).toBeCloseTo(v.unit / bigUnit, 6)
+    expect(Math.abs(small.w - Math.max(SELECT_MARK_MIN_WIDTH, v.unit * 0.1))).toBeLessThan(2)
+    expect(Math.abs(big.w - bigUnit * 0.1)).toBeLessThan(2)
+    expect(big.w).toBeGreaterThan(small.w)
   })
+
+  it.each([
+    [568, 320],
+    [800, 450],
+    [1280, 720],
+    [1920, 1080],
+  ])(
+    '%dx%d: ▼ は味方・敵の全員で、上端のログ窓の下端より下に出る（窓に隠れない）',
+    async (w, h) => {
+      const party = ['a', 'b', 'c', 'd'].map(withSprite)
+      const foes = ['e', 'f', 'g', 'h'].map(withSprite)
+      const s = track(make(party, foes, acrylic, w, h))
+      await flushPromises()
+      const L = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 4 })
+      const logBottom = L.log.y + L.log.h
+      for (const v of [...views(s, 'partyViews'), ...views(s, 'enemyViews')]) {
+        const b = v.selectMark.getLocalBounds()
+        expect(v.container.y + b.y).toBeGreaterThanOrEqual(logBottom)
+      }
+    }
+  )
 
   it('destroy 後も例外にならない（▼ は container ごと破棄される）', async () => {
     const s = track(make([withSprite('p')], [withSprite('e')], acrylic))
@@ -3537,15 +3567,6 @@ describe('BattleScreen: 選択中の印 ▼ の形と位置 (#805)', () => {
 })
 
 describe('BattleScreen: ff の踏み出し・のけぞりと選択中の印 ▼ (#805)', () => {
-  const pointsOf = (g: Graphics): number[] =>
-    (
-      g.context.instructions as unknown as Array<{
-        action: string
-        data: { path: { shapePath: { shapePrimitives: Array<{ shape: { points: number[] } }> } } }
-      }>
-    )
-      .find((i) => i.action === 'fill')!
-      .data.path.shapePath.shapePrimitives[0].shape.points.slice()
   it('container が動いても ▼ は container の子のまま、container 基準の座標は変わらない（一緒に動く）', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(
       new Texture({ source: new TextureSource({ width: 40, height: 80 }) }) as never
@@ -3575,13 +3596,14 @@ describe('BattleScreen: ff の踏み出し・のけぞりと選択中の印 ▼ 
         partyViews: Array<{ container: Container; baseX: number; selectMark: Graphics }>
       }
     ).partyViews[0]
-    const pts = pointsOf(v.selectMark)
+    const pts = v.selectMark.getLocalBounds()
+    const ptsRect = { x: pts.x, y: pts.y, width: pts.width, height: pts.height }
     engine.selectAttack()
     s.redraw(800, 450)
     for (let left = 150; left > 0; left -= 16) s.tick(16)
     expect(Math.abs(v.container.x - v.baseX)).toBeGreaterThan(1)
     expect(v.selectMark.parent).toBe(v.container)
-    const after = pointsOf(v.selectMark)
-    expect(after).toEqual(pts)
+    const after = v.selectMark.getLocalBounds()
+    expect({ x: after.x, y: after.y, width: after.width, height: after.height }).toEqual(ptsRect)
   })
 })

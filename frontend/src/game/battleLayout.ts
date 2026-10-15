@@ -984,31 +984,15 @@ export const SIDE_STATUS_TEXT_PADDING = 12
 export const SIDE_STATUS_MARKER_FONT_SIZE = 7
 /** ▶ の右端と名前の文字の間 */
 export const SIDE_STATUS_MARKER_NAME_GAP = 3
-/** front 配置: ▶ の左端をパネルの左端（STAGE_PADDING）から離す量 */
-export const FRONT_MARKER_INSET = 4
 /**
- * ATB のときだけ、名前の左に足す余白（▶ を置く場所）。欄幅に応じて MIN → MAX へなめらかに増える（閾値でのジャンプは無い）。
- * どの幅でも枠から ▶ まで 4px 以上（MIN）取り、広い欄では約 9px 離す。狭い欄は MIN だけなので名前列を削りすぎない (#805)
+ * ATB のときの、名前の左の余白（▶ を置く場所）。基本は MIN だけ足し（どの幅でも枠から ▶ まで 4px 以上）、
+ * 名前列に余裕がある幅では最小名前幅を割らない範囲で MAX まで広げる（枠から ▶ まで最大 8px。`computeStatusColumns` が余裕から決める）(#805)
  */
 export const SIDE_STATUS_MARKER_GUTTER_MIN = 2
-export const SIDE_STATUS_MARKER_GUTTER_MAX = 8
-const MARKER_GUTTER_RAMP_FROM = 300
-const MARKER_GUTTER_RAMP_TO = 500
-/** status 欄の左端から名前の文字の開始までの余白。ATB のときは ▶ ぶんを足す */
-export function sideStatusLeftPadding(width: number, atb: boolean): number {
-  if (!atb) return SIDE_STATUS_TEXT_PADDING
-  const t = Math.max(
-    0,
-    Math.min(
-      1,
-      (width - MARKER_GUTTER_RAMP_FROM) / (MARKER_GUTTER_RAMP_TO - MARKER_GUTTER_RAMP_FROM)
-    )
-  )
-  return (
-    SIDE_STATUS_TEXT_PADDING +
-    SIDE_STATUS_MARKER_GUTTER_MIN +
-    t * (SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN)
-  )
+export const SIDE_STATUS_MARKER_GUTTER_MAX = 6
+/** status 欄の左端から名前の文字の開始までの基本の余白（余裕で広がる前）。ATB のときは ▶ ぶんの最小を足す */
+export function sideStatusLeftPadding(_width: number, atb: boolean): number {
+  return SIDE_STATUS_TEXT_PADDING + (atb ? SIDE_STATUS_MARKER_GUTTER_MIN : 0)
 }
 /** ▶ の左端 x。名前列の x の手前に、▶ の幅（estimateTextWidth）と名前との間隔ぶん空ける */
 export function sideStatusMarkerX(nameX: number): number {
@@ -1026,11 +1010,22 @@ export const SELECT_MARK_GAP_RATIO = 0.06
 export const SELECT_MARK_MIN_WIDTH = 10
 export const SELECT_MARK_MIN_HEIGHT = 8
 export const SELECT_MARK_MIN_GAP = 4
-/** ▼ の頂点（左上・右上・下の尖り）。`cx` は絵の中央 x、`headTop` は絵（板があれば板）の上端 y（同じ座標系） */
-export function computeSelectMarkTriangle(cx: number, headTop: number, unit: number): number[] {
+/** 三角の上端と、上のログ窓の下端との最低の隙間（px）。窓にかかる分は三角を下げる */
+export const SELECT_MARK_LOG_GAP = 2
+/** ▼ の頂点（左上・右上・下の尖り）。`cx` は絵の中央 x、`headTop` は絵（板があれば板）の上端 y、`minTop` は三角の上端の下限 y（同じ座標系。上のログ窓の下端＋SELECT_MARK_LOG_GAP） */
+export function computeSelectMarkTriangle(
+  cx: number,
+  headTop: number,
+  unit: number,
+  minTop = -Infinity
+): number[] {
   const w = Math.max(SELECT_MARK_MIN_WIDTH, unit * SELECT_MARK_WIDTH_RATIO)
   const h = Math.max(SELECT_MARK_MIN_HEIGHT, unit * SELECT_MARK_HEIGHT_RATIO)
-  const tipY = headTop - Math.max(SELECT_MARK_MIN_GAP, unit * SELECT_MARK_GAP_RATIO)
+  // 上端が minTop（上のログ窓の下端＋隙間）より上にならないよう、必要なら下げる（頭に少し重なってよい。大きさ・隙間は保つ）
+  const tipY = Math.max(
+    headTop - Math.max(SELECT_MARK_MIN_GAP, unit * SELECT_MARK_GAP_RATIO),
+    minTop + h
+  )
   return [cx - w / 2, tipY - h, cx + w / 2, tipY - h, cx, tipY]
 }
 
@@ -1095,15 +1090,17 @@ export const SIDE_STATUS_GAUGE_MIN_WIDTH = 16
  */
 export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const font = input.fontPx ?? SIDE_STATUS_FONT_SIZE
-  const left = input.x + sideStatusLeftPadding(input.width, input.atb)
+  const leftBase = input.x + sideStatusLeftPadding(input.width, input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
   const build = (
     withMp: boolean,
     labels: boolean,
     maxHpShown: boolean,
-    gaugeW: number
+    gaugeW: number,
+    extraLeft = 0
   ): StatusColumns => {
+    const left = leftBase + extraLeft
     let edge = right
     let gauge: StatusColumn | null = null
     if (input.atb) {
@@ -1151,7 +1148,16 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   ]
   for (const [withMp, labels, maxHpShown, gaugeW] of tries) {
     const c = build(withMp, labels, maxHpShown, gaugeW)
-    if (c.name.w >= minName) return c
+    if (c.name.w >= minName) {
+      // ATB: 名前列に余裕があるぶん（最小名前幅を割らない範囲）だけ、▶ の余白を MAX まで広げる。段階（省略）は変えない
+      const extra = input.atb
+        ? Math.min(
+            SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN,
+            c.name.w - minName
+          )
+        : 0
+      return extra > 0 ? build(withMp, labels, maxHpShown, gaugeW, extra) : c
+    }
   }
   return build(false, false, false, SIDE_STATUS_GAUGE_MIN_WIDTH)
 }
