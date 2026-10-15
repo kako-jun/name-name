@@ -25,23 +25,18 @@ export interface EnemyGridSize {
   rows: number
 }
 
-/** 敵のサイズ区分（占有するセルの幅 x 高さ。整数 1 以上） */
-export interface EnemySize {
-  w: number
-  h: number
-}
-
 /** グリッド上のセル（0 始まり。左上） */
 export interface GridCell {
   col: number
   row: number
 }
 
-const SIZE_PATTERN = /^(\d+)\s*[x×]\s*(\d+)$/
+/** `列数x行数`（グリッド指定）の書式。敵のサイズ区分 `サイズ:` は Rust parser が解釈する */
+const GRID_PATTERN = /^(\d+)\s*[x×]\s*(\d+)$/
 
 function parseWH(raw: string): [number, number] | null {
   // 全角の数字・x を半角へ。× (U+00D7) は NFKC で変わらないのでパターン側で受ける
-  const m = SIZE_PATTERN.exec(raw.normalize('NFKC').trim().toLowerCase())
+  const m = GRID_PATTERN.exec(raw.normalize('NFKC').trim().toLowerCase())
   if (!m) return null
   const a = Number(m[1])
   const b = Number(m[2])

@@ -204,7 +204,7 @@ fn parse_size_pair(raw: &str) -> Option<MonsterSize> {
     Some(MonsterSize { w, h })
 }
 
-/// 全角の数字・x・符号・小数点を半角へ寄せる（TS 側の NFKC と同じ範囲）。
+/// 全角の数字・`x` / `X`・`.`・`+`・`-` だけを半角へ寄せる（それ以外の全角は変えない。`×` はそのまま）。
 fn to_halfwidth(raw: &str) -> String {
     raw.trim()
         .chars()

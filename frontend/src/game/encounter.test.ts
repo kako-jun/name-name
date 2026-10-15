@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { rollEncounter } from './RaycastRenderer'
+import { enemyLayoutField } from './encounter'
 import type { MonsterDef } from '../types'
 
 const slime: MonsterDef = {
@@ -330,8 +331,11 @@ describe('rollEncounter: サイズ・倍率・配置を BattleEntity.layout に�
     e.layout!.w = 9
     expect(size.w).toBe(2)
     // 群の解析結果の at とも参照を共有しない（別の戦闘へ持ち越さない）
-    const [e2, e3] = [roll(['slime@C1'], { slime })![0], roll(['slime@C1'], { slime })![0]]
-    e2.layout!.at!.col = 9
-    expect(e3.layout!.at).toEqual({ col: 2, row: 0 })
+    const at = { col: 2, row: 0 }
+    const { layout } = enemyLayoutField(slime, at) as {
+      layout: { at?: { col: number; row: number } }
+    }
+    expect(layout.at).toEqual(at)
+    expect(layout.at).not.toBe(at)
   })
 })
