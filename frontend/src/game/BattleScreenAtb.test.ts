@@ -469,3 +469,53 @@ describe('BattleScreen ATB: console 汚染', () => {
     expect(err).not.toHaveBeenCalled()
   })
 })
+
+describe('BattleScreen ATB: アクスタ頭上の ▼ の出し入れ (#805)', () => {
+  const marks = (s: BattleScreen): boolean[] => I(s).partyViews.map((v) => v.selectMark.visible)
+
+  it.each([1, 2, 3, 4])('味方 %d 人: 番の味方（末尾）にだけ ▼ が出る', (n) => {
+    const party = Array.from({ length: n }, (_, i) => ent(`p${i}`))
+    const gauges = party.map((_, i) => (i === n - 1 ? 1000 : 0))
+    const { s } = build(party, [ent('s')], ATB({ party: gauges }))
+    expect(I(s).partyViews).toHaveLength(n)
+    expect(marks(s)).toEqual(party.map((_, i) => i === n - 1))
+  })
+
+  it('行動すると消え、次に番が来た味方へ移る', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 1000] }))
+    const first = marks(s).indexOf(true)
+    expect(marks(s).filter(Boolean)).toHaveLength(1)
+    I(s).commands[0].hit.emit('pointertap', {} as never)
+    const after = marks(s)
+    expect(after.filter(Boolean).length).toBeLessThanOrEqual(1)
+    expect(after[first]).toBe(false)
+  })
+
+  it('倒れた味方（HP 0）には、ゲージが満タンでも出ない', () => {
+    const { s } = build([ent('a', { hp: 0 }), ent('b')], [ent('s')], ATB({ party: [1000, 1000] }))
+    expect(marks(s)).toEqual([false, true])
+  })
+
+  it('誰も番でなければ（ゲージ未満）どこにも出ない', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [10, 20] }))
+    expect(marks(s)).toEqual([false, false])
+  })
+
+  it('ATB でなければ出ない', () => {
+    const engine = new BattleEngine([ent('a')], [ent('s')], { rng: () => 0 })
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side' })
+    created.push(s)
+    expect(marks(s)).toEqual([false])
+  })
+
+  it('front は味方のアクスタを持たない: ▼ は作られず、番の表示は heroStatsText の色だけ', () => {
+    const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' })
+    expect(I(s).partyViews).toHaveLength(0)
+    expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
+  })
+
+  it('ウィンドウ側（ステータス行）に ▶ の Text は無い', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }))
+    expect('atbMarkers' in (s as object)).toBe(false)
+  })
+})

@@ -3422,3 +3422,166 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     expect(vb.container.alpha).toBeLessThan(1)
   })
 })
+
+describe('BattleScreen: 選択中の印 ▼ の形と位置 (#805)', () => {
+  const sized = (w: number, h: number): Texture =>
+    new Texture({ source: new TextureSource({ width: w, height: h }) })
+  interface MarkView {
+    container: Container
+    fallback: Graphics
+    sprite: Sprite | null
+    acrylicPlate: Sprite | null
+    selectMark: Graphics
+    unit: number
+  }
+  const views = (s: BattleScreen, side: 'partyViews' | 'enemyViews'): MarkView[] =>
+    (s as unknown as Record<string, MarkView[]>)[side]
+  /** ▼ の塗りの三角（container 基準）。[左上, 右上, 先端] の座標 */
+  const triangle = (g: Graphics): number[] => {
+    const ins = (
+      g.context.instructions as unknown as Array<{
+        action: string
+        data: { path: { shapePath: { shapePrimitives: Array<{ shape: { points: number[] } }> } } }
+      }>
+    ).find((i) => i.action === 'fill')!
+    return ins.data.path.shapePath.shapePrimitives[0].shape.points
+  }
+  const withSprite = (id: string): BattleEntity => entity(id, { sprite: `img/${id}.webp` })
+  const acrylic: BattleScreenOptions = { layout: 'side', spriteStyle: 'acrylic' }
+  beforeEach(() => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(sized(100, 50) as never)
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+      texture: sized(116, 66),
+      pad: 8,
+    })) as never)
+  })
+
+  it('container の最後の子で、非表示のまま作られる（板・台座ごと動く）', async () => {
+    const s = track(make([withSprite('p')], [withSprite('e')], acrylic))
+    await flushPromises()
+    for (const v of [...views(s, 'partyViews'), ...views(s, 'enemyViews')]) {
+      expect(v.selectMark.parent).toBe(v.container)
+      expect(v.container.children[v.container.children.length - 1]).toBe(v.selectMark)
+      expect(v.selectMark.visible).toBe(false)
+    }
+  })
+
+  it('白い下向き三角: 絵（板があれば板）の頭上・中央に、先端を下にして置かれる', async () => {
+    const s = track(make([withSprite('p')], [withSprite('e')], acrylic))
+    await flushPromises()
+    for (const v of [...views(s, 'partyViews'), ...views(s, 'enemyViews')]) {
+      const [x0, y0, x1, y1, x2, y2] = triangle(v.selectMark)
+      const sp = v.sprite!
+      const top = Math.min(sp.y, v.acrylicPlate!.y)
+      expect(y0).toBe(y1) // 上辺は水平
+      expect(y2).toBeGreaterThan(y0) // 先端が下
+      expect(x2).toBeCloseTo((x0 + x1) / 2, 6) // 中央
+      expect(x2).toBeCloseTo(sp.x + sp.width / 2, 6) // 絵の中央
+      expect(y2).toBeLessThan(top) // 頭より上
+      expect(y2).toBeCloseTo(top - v.unit * 0.06, 6)
+      expect(x1 - x0).toBeCloseTo(v.unit * 0.1, 6)
+      expect(y2 - y0).toBeCloseTo(v.unit * 0.07, 6)
+    }
+  })
+
+  it('白塗り・黒縁', async () => {
+    const s = track(make([withSprite('p')], [withSprite('e')], acrylic))
+    await flushPromises()
+    const ins = views(s, 'partyViews')[0].selectMark.context.instructions as unknown as Array<{
+      action: string
+      data: { style: { color: number } }
+    }>
+    expect(ins.find((i) => i.action === 'fill')!.data.style.color).toBe(0xffffff)
+    expect(ins.find((i) => i.action === 'stroke')!.data.style.color).toBe(0x000000)
+  })
+
+  it('絵が無い枠（読み込み前・失敗）でも色四角の上端の上に置かれる。読み込み後は絵の頭上へ再配置', async () => {
+    let resolve!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>((r) => (resolve = r)) as never)
+    const s = track(make([withSprite('p')], [entity('e')], acrylic))
+    const v = views(s, 'partyViews')[0]
+    expect(v.sprite).toBeNull()
+    const before = triangle(v.selectMark)
+    expect(before[5]).toBeLessThan(v.fallback.getLocalBounds().y)
+    resolve(sized(100, 50))
+    await flushPromises()
+    expect(v.sprite).not.toBeNull()
+    const after = triangle(v.selectMark)
+    const top = Math.min(v.sprite!.y, v.acrylicPlate?.y ?? Infinity)
+    expect(after[5]).toBeCloseTo(top - v.unit * 0.06, 6)
+    expect(after[4]).toBeCloseTo(v.sprite!.x + v.sprite!.width / 2, 6)
+  })
+
+  it('画面サイズを変えると、大きさ・間隔が枠の一辺（unit）に比例して変わる', async () => {
+    const s = track(make([withSprite('p')], [withSprite('e')], acrylic, 800, 450))
+    await flushPromises()
+    const v = views(s, 'enemyViews')[0]
+    const big = triangle(v.selectMark)
+    const bigUnit = v.unit
+    s.redraw(400, 225)
+    await flushPromises()
+    const small = triangle(v.selectMark)
+    expect(v.unit).toBeLessThan(bigUnit)
+    expect(small[2] - small[0]).toBeCloseTo(v.unit * 0.1, 6)
+    expect(small[5] - small[1]).toBeCloseTo(v.unit * 0.07, 6)
+    expect((small[2] - small[0]) / (big[2] - big[0])).toBeCloseTo(v.unit / bigUnit, 6)
+  })
+
+  it('destroy 後も例外にならない（▼ は container ごと破棄される）', async () => {
+    const s = track(make([withSprite('p')], [withSprite('e')], acrylic))
+    await flushPromises()
+    const g = views(s, 'partyViews')[0].selectMark
+    s.destroy({ children: true })
+    expect(g.destroyed).toBe(true)
+  })
+})
+
+describe('BattleScreen: ff の踏み出し・のけぞりと選択中の印 ▼ (#805)', () => {
+  const pointsOf = (g: Graphics): number[] =>
+    (
+      g.context.instructions as unknown as Array<{
+        action: string
+        data: { path: { shapePath: { shapePrimitives: Array<{ shape: { points: number[] } }> } } }
+      }>
+    )
+      .find((i) => i.action === 'fill')!
+      .data.path.shapePath.shapePrimitives[0].shape.points.slice()
+  it('container が動いても ▼ は container の子のまま、container 基準の座標は変わらない（一緒に動く）', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue(
+      new Texture({ source: new TextureSource({ width: 40, height: 80 }) }) as never
+    )
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+      texture: new Texture({ source: new TextureSource({ width: 56, height: 96 }) }),
+      pad: 8,
+      shadow: new Texture({ source: new TextureSource({ width: 64, height: 32 }) }),
+      foot: { x: 32, y: 16 },
+    })) as never)
+    const engine = new BattleEngine(
+      [entity('hero', { sprite: 'img/hero.webp', hp: 20, maxHp: 20 })],
+      [entity('slime', { atk: 1, hp: 999, maxHp: 999 })],
+      { rng: () => 0.5 }
+    )
+    const s = track(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        spriteStyle: 'acrylic',
+        presentation: 'ff',
+      })
+    )
+    await flushPromises()
+    await flushPromises()
+    const v = (
+      s as unknown as {
+        partyViews: Array<{ container: Container; baseX: number; selectMark: Graphics }>
+      }
+    ).partyViews[0]
+    const pts = pointsOf(v.selectMark)
+    engine.selectAttack()
+    s.redraw(800, 450)
+    for (let left = 150; left > 0; left -= 16) s.tick(16)
+    expect(Math.abs(v.container.x - v.baseX)).toBeGreaterThan(1)
+    expect(v.selectMark.parent).toBe(v.container)
+    const after = pointsOf(v.selectMark)
+    expect(after).toEqual(pts)
+  })
+})
