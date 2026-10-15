@@ -188,9 +188,10 @@ export const SIDE_DEFAULT_SPRITE_ASPECT = 0.5
 export const SIDE_PARTY_FRAME_ASPECT = 0.8
 export const SIDE_PARTY_ASPECT_MIN = 0.2
 export const SIDE_PARTY_ASPECT_MAX = 1.5
-/** 窓との重なりを許容量以内に収める反復の上限・許容誤差 (#838) */
-const SIDE_WINDOW_FIT_ITERATIONS = 24
-const FIT_EPS = 1e-9
+/** 二分法の反復回数（列ピッチ・窓との重なり）と、収まり判定の許容誤差（列ピッチは px の浮動小数誤差、窓は 0.01px） */
+const COLUMN_FIT_ITERATIONS = 32
+const COLUMN_FIT_EPS = 1e-9
+const WINDOW_FIT_ITERATIONS = 24
 const WINDOW_FIT_EPS = 0.01
 
 /** 敵の窓への重なり許容量 (#838) を 0〜`SIDE_ENEMY_WINDOW_OVERLAP_MAX` に丸める。未指定・非有限は既定 */
@@ -519,11 +520,11 @@ export function computeFormation(
     // 板を含めた幅は size に対して単調に増える。枠の幅だけで決めた大きさで板も収まるなら従来どおり（見た目を変えない）。
     // 収まらないときだけ、横に収まる最大の size を二分法で求める
     const fits = (size: number): boolean =>
-      (columns + stagger) * cellWidthAt(size) <= regionW + FIT_EPS
+      (columns + stagger) * cellWidthAt(size) <= regionW + COLUMN_FIT_EPS
     if (!(plain > 0) || fits(plain)) return plain
     let lo = 0
     let hi = plain
-    for (let i = 0; i < 32; i++) {
+    for (let i = 0; i < COLUMN_FIT_ITERATIONS; i++) {
       const mid = (lo + hi) / 2
       if (fits(mid)) lo = mid
       else hi = mid
@@ -876,7 +877,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       // 上端を下げるほど絵は下がる（または小さくなる）ので、はみ出しは単調に減る。収まる最小の下げ幅を二分法で求める
       let lo = 0
       let hi = enemyRegion.h
-      for (let iter = 0; iter < SIDE_WINDOW_FIT_ITERATIONS; iter++) {
+      for (let iter = 0; iter < WINDOW_FIT_ITERATIONS; iter++) {
         const mid = (lo + hi) / 2
         if (overAt(mid).over <= WINDOW_FIT_EPS) hi = mid
         else lo = mid

@@ -1521,7 +1521,8 @@ describe('BattleScreen: acrylic (#737)', () => {
       const g = computeAcrylicGeometry(
         TEX_W,
         TEX_H,
-        slotSize(800, 450, 1, 1, { marginRatio: 9 }),
+        // 配置の期待値も、BattleScreen と同じ丸め（resolveAcrylicParams: 9 → 0.15）を経由した板で求める
+        slotSize(800, 450, 1, 1, { marginRatio: 0.15 }),
         resolveAcrylicParams({ marginRatio: 0.15 })
       )
       expect(sp.x).toBeCloseTo(g.sprite.x, 9)
