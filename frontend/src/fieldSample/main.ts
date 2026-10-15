@@ -29,9 +29,9 @@ import {
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
-import { formatEncounterGroupErrors } from '../game/encounterGroupValidation'
 import { resolveUrl } from '../battleSample/config'
 import {
+  configNotice,
   findReturnLink,
   forceBattleCandidates,
   parseConfigText,
@@ -122,14 +122,11 @@ async function loadConfig(): Promise<FieldSampleConfig> {
   }
   const parsed = parseConfigText(text, textBase)
   if (parsed.ok) {
-    // 敵グリッドに収まらず無効化した群 (#839 段5)。console.error は parseConfig が出している
-    const errs = parsed.value.groupErrors
-    if (errs && errs.length > 0) showError(formatEncounterGroupErrors(errs))
-    const warns = parsed.value.warnings
-    if (warns && warns.length > 0) {
-      for (const w of warns) console.warn(w)
-      showError(warns.join('\n'))
-    }
+    // 群エラー (#839 段5。console.error は parseConfig が出している) と警告 (#883) は 1 回でまとめて出す
+    // （showError は置換なので別々に呼ぶと後が前を消す）
+    for (const w of parsed.value.warnings ?? []) console.warn(w)
+    const notice = configNotice(parsed.value)
+    if (notice) showError(notice)
     return parsed.value
   }
   showError(`設定 JSON が不正です\n${parsed.error}`)

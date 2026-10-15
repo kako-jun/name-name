@@ -534,3 +534,12 @@ export function findReturnLink(
 }
 
 const OPPOSITE: Record<Edge, Edge> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }
+
+/** 読み込み成功時に画面へ出す通知（群エラーの一覧＋警告）。無ければ null。showError は置換なので 1 つにまとめる */
+export function configNotice(config: FieldSampleConfig): string | null {
+  const parts: string[] = []
+  if (config.groupErrors && config.groupErrors.length > 0)
+    parts.push(formatEncounterGroupErrors(config.groupErrors))
+  if (config.warnings) parts.push(...config.warnings)
+  return parts.length > 0 ? parts.join('\n') : null
+}

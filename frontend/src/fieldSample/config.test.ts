@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   DEFAULTS,
+  configNotice,
   findReturnLink,
   forceBattleCandidates,
   parseConfig,
@@ -609,6 +610,23 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
       expect(c.groupErrors).toBeUndefined()
       expect(c.scenes.a.encounter?.groups).toEqual(['boss*9'])
     }
+  })
+
+  it('configNotice は群エラーと警告を 1 つにまとめる（両方画面に出る） (#883)', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const c = withGrid('6x2', ['boss*9'])
+    c.battle = { ...c.battle, layout: 'front', presentation: 'ff' }
+    const v = ok(c)
+    expect(v.groupErrors?.length).toBeGreaterThan(0)
+    expect(v.warnings).toHaveLength(1)
+    const n = configNotice(v)
+    expect(n).toContain('boss')
+    expect(n).toContain('presentation')
+    vi.restoreAllMocks()
+  })
+
+  it('configNotice は何も無ければ null (#883)', () => {
+    expect(configNotice(ok(minimal()))).toBeNull()
   })
 
   it('収まらない群を除外し、groupErrors と console.error に出す', () => {
