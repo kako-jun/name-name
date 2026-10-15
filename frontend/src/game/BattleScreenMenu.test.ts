@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // Container に eventMode / isInteractive を足す（実アプリでは Application がイベントシステムを登録する）
 import 'pixi.js/events'
-import { EventBoundary, Sprite, Texture, TextureSource, type Container } from 'pixi.js'
+import { EventBoundary, Graphics, Sprite, Texture, TextureSource, type Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import type { BattleMenuData, MenuStack } from './battleMenu'
@@ -887,5 +887,29 @@ describe('敵グリッドの被ダメ数字の高さ・対象選択の矩形 (#8
     g.layoutSide()
     const box = g.enemyViews[0].slotRef!.box
     expect(g.enemyViews[0].anchorY).toBeCloseTo(box.y + box.h / 4 + (box.h / 2) * 0.35, 6)
+  })
+
+  it('アクスタのとき、被ダメ数字の高さは描いた絵（スプライト）の矩形の上端から 35%', () => {
+    const { s } = build(
+      { enemyGrid: { cols: 6, rows: 2 }, spriteStyle: 'acrylic' },
+      { rng: () => 0 },
+      [ent('a')],
+      [ent('s1', { layout: { w: 1, h: 1, scale: 0.5 } }), ent('s2')]
+    )
+    const g = G(s)
+    const v = g.enemyViews[0] as unknown as {
+      anchorY: number
+      baseY: number
+      sprite: Sprite | null
+      acrylicBack: Graphics | null
+    }
+    // 画像の読み込みは行わないので、読み込み後の状態（台座・影の Graphics と絵）を直接作る
+    v.acrylicBack = new Graphics()
+    v.sprite = new Sprite(new Texture({ source: new TextureSource({ width: 200, height: 100 }) }))
+    g.layoutSide()
+    const box = g.enemyViews[0].slotRef!.box
+    expect(v.anchorY).toBeCloseTo(v.baseY + v.sprite.y + v.sprite.height * 0.35, 6)
+    // 箱の上端から 35%（既定値）とは別物（絵は箱の余白の内側に収まる）
+    expect(Math.abs(v.anchorY - (box.y + box.h * 0.35))).toBeGreaterThan(0.5)
   })
 })

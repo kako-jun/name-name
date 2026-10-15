@@ -2415,15 +2415,14 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
                 // 奥行きで縮んだあとも、占有高さ（縮んだ高さ）に対する重なりが許容量以下
                 expect(over, `${ctx} enemy${i} overlap/size`).toBeLessThanOrEqual(ov * r.h + 1e-6)
                 // ずらしは最小限: 奥行きで縮めたあと、窓に届かない（縮める前の重なりが許容量以内）敵は上端固定の位置のまま。
-                // ずれた敵は、元の下端に張り付いていなければ重なりがちょうど許容量（窓クランプが効かない画面だけ。許容量 = ov）
+                // ずれた敵は、重なりがちょうど許容量（下端まで落とすずらしすぎを許さない）（窓クランプが効かない画面だけ。許容量 = ov）
                 if (depth && ov * cell <= L.log.h + 1e-6) {
                   const flat = layoutFor(f, fps, f.defs.length, w, h, ov, null, acrylic).enemies[i]
                   const preOver = Math.max(0, L.log.y + L.log.h - flat.y)
                   if (preOver <= ov * r.h + 1e-6) {
                     expect(r.y, `${ctx} enemy${i} not shifted`).toBeCloseTo(flat.y, 6)
                   } else {
-                    const bottomed = Math.abs(r.y + r.h - (flat.y + flat.size)) < 1e-6
-                    if (!bottomed) expect(over, `${ctx} enemy${i} exact`).toBeCloseTo(ov * r.h, 6)
+                    expect(over, `${ctx} enemy${i} exact`).toBeCloseTo(ov * r.h, 6)
                   }
                 }
                 for (const pr of partyRects) expect(overlaps(r, pr), `${ctx} party`).toBe(false)
