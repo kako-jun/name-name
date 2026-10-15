@@ -25,39 +25,23 @@ export interface EnemyGridSize {
   rows: number
 }
 
-/** 敵のサイズ区分（占有するセルの幅 x 高さ。整数 1 以上） */
-export interface EnemySize {
-  w: number
-  h: number
-}
-
 /** グリッド上のセル（0 始まり。左上） */
 export interface GridCell {
   col: number
   row: number
 }
 
-const SIZE_PATTERN = /^(\d+)\s*[x×]\s*(\d+)$/
+/** `列数x行数`（グリッド指定）の書式。敵のサイズ区分 `サイズ:` は Rust parser が解釈する */
+const GRID_PATTERN = /^(\d+)\s*[x×]\s*(\d+)$/
 
 function parseWH(raw: string): [number, number] | null {
   // 全角の数字・x を半角へ。× (U+00D7) は NFKC で変わらないのでパターン側で受ける
-  const m = SIZE_PATTERN.exec(raw.normalize('NFKC').trim().toLowerCase())
+  const m = GRID_PATTERN.exec(raw.normalize('NFKC').trim().toLowerCase())
   if (!m) return null
   const a = Number(m[1])
   const b = Number(m[2])
-  // 数字だけのパターンなので NaN にはならない。桁あふれ（Infinity）はグリッドでは上限へ丸め、サイズでは parseEnemySize が弾く
+  // 数字だけのパターンなので NaN にはならない。桁あふれ（Infinity）はグリッドでは上限へ丸める
   return [a, b]
-}
-
-/**
- * サイズ区分 `2x1` / `1X2` / `２×２` を解釈する。幅・高さとも 1 以上の整数のみ有効。
- * 不正値は null（呼び出し側が警告して 1x1 にする）
- */
-export function parseEnemySize(raw: string): EnemySize | null {
-  const wh = parseWH(raw)
-  if (!wh || !Number.isSafeInteger(wh[0]) || !Number.isSafeInteger(wh[1]) || wh[0] < 1 || wh[1] < 1)
-    return null
-  return { w: wh[0], h: wh[1] }
 }
 
 /**
@@ -71,6 +55,31 @@ export function parseEnemyGrid(raw: string): EnemyGridSize | null {
     cols: Math.min(ENEMY_GRID_MAX_COLS, wh[0]),
     rows: Math.min(ENEMY_GRID_MAX_ROWS, wh[1]),
   }
+}
+
+/**
+ * frontmatter `battle_enemy_grid` の値を正規化する (#839)。書式が不正・未指定は undefined＝無効（従来方式）。
+ * 列 1〜12・行 1〜4 に丸める（`parseEnemyGrid`）
+ */
+export function normalizeEnemyGrid(raw: string | null | undefined): EnemyGridSize | undefined {
+  if (typeof raw !== 'string') return undefined
+  return parseEnemyGrid(raw) ?? undefined
+}
+
+const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/
+
+/**
+ * frontmatter `battle_enemy_window_overlap` の値を正規化する (#839)。0〜0.5 に丸める。
+ * 未指定・数値でない値は undefined＝既定（`normalizeEnemyWindowOverlap` が 0.25 にする）。
+ * `Number('')` = 0 や `Number('0x10')` に化けないよう、素直な十進数だけを受ける
+ */
+export function normalizeEnemyWindowOverlapSetting(
+  raw: string | null | undefined
+): number | undefined {
+  if (typeof raw !== 'string') return undefined
+  const t = raw.normalize('NFKC').trim()
+  if (!PLAIN_NUMBER.test(t)) return undefined
+  return normalizeEnemyWindowOverlap(Number(t))
 }
 
 /** 配置指定 `C1`（列 = 英字、行 = 1 始まりの数字。大小無視）を 0 始まりのセルへ。不正は null */

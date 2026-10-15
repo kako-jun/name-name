@@ -116,7 +116,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 | `サイズ` | `size` | `1x1` | 占有するセルの 幅x高さ（整数 1 以上。上限はグリッドの列数・行数。`2x1` = 横2倍、`1x2` = 縦2倍、`3x2` のようにそれ以上も可）。大小・全角× 可。不正値は警告して 1x1 |
 | `倍率` | `scale` | `1` | 占有領域の中での**表示倍率**（0.25〜1。下の「倍率」を参照）。サイズ区分の「枠」はそのまま、絵だけ縮める |
 
-- 区分は `MonsterDef.size`（`{w, h}`）と `MonsterDef.scale` に載せ、`rollEncounter` が `BattleEntity`（`layout?: { w, h, scale, cell? }`）へ写す。`サイズ:` を書かない敵は `layout` なし＝1x1・倍率 1。**エンジン（`battleEngine.ts`）は読まない**（描画専用のマスターデータ。ADR 0002 のとおり GameState に中間状態を足さない）。
+- 区分は `MonsterDef.size`（`{w, h}`）と `MonsterDef.scale` に載せ、`rollEncounter` が `BattleEntity`（`layout?: { w, h, scale, at? }`）へ写す（`at` = 群の配置指定 `@C1` の 0 始まりセル。段4 が `placeEnemies` の `PlacementItem.at` にそのまま渡すために載せる。設計当初の `cell?` はこの `at` に置き換えた）。サイズ・倍率・配置のどれも無い敵は `layout` を付けない（＝1x1・倍率 1・自動配置。倍率だけ・`@C1` だけ書いた敵でも付く）。**エンジン（`battleEngine.ts`）は読まない**（描画専用のマスターデータ。ADR 0002 のとおり GameState に中間状態を足さない）。
 - **倍率**: 「実際の大きさの違いが画面に出る」ためにはセル（サイズ区分）で大小を表すのが主、`倍率` は同じ区分の中の微調整（例: 同じ 1x1 の中で小さめの敵）。`1` を超える倍率は、占有領域を超えて隣や窓にはみ出す＝不変条件を壊すため**受け付けない（上限 1）**。大きく見せたいときは区分を上げる。→ 確定 Q3。
 - **占有領域**: 左上セル `(c, r)` から `w × h` セル。矩形は `x = gridX + c·cell`, `幅 = w·cell`, `高さ = h·cell`（ラベル帯は最下行の下）。複数行の敵は、行の間のラベル帯ぶんを含めず、**最下行のセルの下端に揃えて**高さ `h·cell` を取る（同じ行の 1x1 と足元・`floor` が合い、2x2 は 1x1 の幅・高さとも厳密に 2 倍になる）。
 - **ボス**: 台帳の方針（すべて大型）はサイズ区分で表す。エンジンに「ボスかどうか」の概念は足さない。
@@ -175,7 +175,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 
 - `enemyGrid` なし → 現行の `computeFormation(…, 'enemy', …)` をそのまま呼ぶ（**一切変えない**）。#838 の修正（段階 0）だけがここに入る。
 - `enemyGrid` あり → 新関数 `computeEnemyGridLayout(region, grid, footprints, withLabel)` を呼ぶ。出力は同じ `SpriteSlot[]`（`enemies[i]` は `state.enemies` の index 順）なので、`BattleScreen` 以降（ラベル、演出、被ダメ数字の `anchorX/Y`、対象選択の `menuGeometry.enemySlots`）は変更を要しない。
-- 配置は戦闘の開始時に 1 回決め（敵の並び＝index 順に `placeEnemies`）、`BattleScreen` が保持するか、`BattleEntity.layout.cell` に書き込んで渡す。**GameState に中間状態は足さない**（レイアウトは入力から毎回求まる。ADR 0002）。
+- 配置は戦闘の開始時に 1 回決め（敵の並び＝index 順に `placeEnemies`）、`BattleScreen` が保持するか、`BattleEntity.layout.at`（配置指定）を入力に毎回求める。**GameState に中間状態は足さない**（レイアウトは入力から毎回求まる。ADR 0002）。
 
 ### 3.8 画面サイズ総当たりの不変条件
 
@@ -198,9 +198,9 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 | 段 | 内容 | 依存 | 備考 |
 |---|---|---|---|
 | 0 | **【実装済み #838・TS のみ。frontmatter `battle_enemy_window_overlap` は未配線で既定 0.25 の定数】** **#838 修正（現行方式）**: 窓との重なりを許容量（`battle_enemy_window_overlap`、既定 25%）以下に抑える（超える場合だけ上端を下げる。板の `pad` も絵に数える）。2 列で隣の板にかぶらないよう列ピッチに `pad` を含める。不変条件に「窓との重なりが許容量以下」を足す | なし | TS のみ。独立してマージ可能。グリッド有効化の前に、症状を止める |
-| 1 | **【実装済み #839 段1: `frontend/src/game/enemyGrid.ts`＋総当たりテスト。サイズ/グリッド/セル表記のパース `parseEnemySize` `parseEnemyGrid` `parseCellRef` も含む】** 純粋関数 `enemyGrid.ts`: サイズ文字列のパース、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
-| 2 | **【実装済み #839 段2: `frontend/src/game/enemyGroup.ts`（`parseEncounterGroup` / `pickGroupIndex` / `resolveEncounterGroup`）＋ `encounter.ts` の `rollEncounter` が利用。配置 `at` は未配線（BattleEntity には載せない）。個数は 1 項 48 体まで。不正な重みは警告して無視（既定 1）】** 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
-| 3 | `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
+| 1 | **【実装済み #839 段1: `frontend/src/game/enemyGrid.ts`＋総当たりテスト。グリッド/セル表記のパース `parseEnemyGrid` `parseCellRef` も含む。サイズ区分 `サイズ:` のパースは段3で Rust parser が正本となり、TS の `parseEnemySize` は未使用のため削除】** 純粋関数 `enemyGrid.ts`: （サイズ文字列のパースは段3で Rust parser に移し TS からは削除）、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
+| 2 | **【実装済み #839 段2: `frontend/src/game/enemyGroup.ts`（`parseEncounterGroup` / `pickGroupIndex` / `resolveEncounterGroup`）＋ `encounter.ts` の `rollEncounter` が利用。配置 `at` は段2では BattleEntity に載せず、段3で `layout.at` に載せた。個数は 1 項 48 体まで。不正な重みは警告して無視（既定 1）】** 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
+| 3 | **【実装済み #839 段3: Rust parser（`master.rs` `サイズ:`/`size`・`倍率:`/`scale` を `MonsterDef.size{w,h}`/`scale` に丸め済みで、不正は警告して無し＝1x1・倍率1。`parser.rs` frontmatter `battle_enemy_grid`・`battle_enemy_window_overlap` は生文字列透過）→ `normalizeDocument` → `rpgProjectFromDoc`（`normalizeEnemyGrid` / `normalizeEnemyWindowOverlapSetting` → `RPGProject.battleEnemyGrid` / `battleEnemyWindowOverlap`）→ `fieldBattle.ts` `readFieldBattleSettings`（`enemyGrid` / `enemyWindowOverlap`）→ `BattleScreenOptions`。`rollEncounter` が `BattleEntity.layout?: {w,h,scale,at?}` を写す（サイズ・倍率・配置のどれも無ければ付けない）。wasm 再ビルド＋pkg コミット済み。値を通すだけで描画は変えない】** `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
 | 4 | `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。**§3.6 末尾の「延長は窓の高さまでにクランプ」は、段1の `computeEnemyGridLayout` が窓矩形を入力に持たないため未実装で、この段（窓矩形が手に入る配線時）で入れる。** アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
 | 5 | 読み込み時の群検証（収まらない群の無効化とエラー表示）。docs（spec / architecture / guide）・サンプル（sit-by-me 寺町）への反映 | 4 | 作者向けの安全網 |
 | 6（任意） | `サイズ: 自動`（画像の縦横比から区分を決める台帳の規則 1.8 / 0.55 をエンジン側の設定に） | 4 | 台帳に明示の区分があるなら不要。論点 Q6 |

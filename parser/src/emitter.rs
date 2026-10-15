@@ -215,6 +215,15 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_transition: \"{sanitized}\"\n"));
         }
+        // battle_enemy_grid / battle_enemy_window_overlap (#839)。同じ流儀
+        if let Some(ref v) = doc.battle_enemy_grid {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_enemy_grid: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_enemy_window_overlap {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_enemy_window_overlap: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -989,6 +998,12 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(d) = &m.on_death {
                     out.push_str(&format!("死亡時: {d}\n"));
+                }
+                if let Some(sz) = &m.size {
+                    out.push_str(&format!("サイズ: {}x{}\n", sz.w, sz.h));
+                }
+                if let Some(sc) = m.scale {
+                    out.push_str(&format!("倍率: {sc}\n"));
                 }
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
@@ -1781,6 +1796,8 @@ mod tests {
             battle_command_layout: None,
             battle_command_labels: None,
             battle_transition: None,
+            battle_enemy_grid: None,
+            battle_enemy_window_overlap: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -1836,11 +1853,14 @@ mod tests {
             ]),
             counters: Some(vec!["条件=受けた=物理 候補=こうげき".to_string()]),
             on_death: Some("候補=自爆".to_string()),
+            size: Some(MonsterSize { w: 2, h: 1 }),
+            scale: Some(0.5),
         }));
         let out = emit(&doc);
         assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("反撃: 条件=受けた=物理 候補=こうげき\n死亡時: 候補=自爆\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
+        assert!(out.contains("サイズ: 2x1\n倍率: 0.5\n"));
         assert!(out.contains("[モンスター slime]"));
         assert!(out.contains("名前: スライム"));
         assert!(out.contains("HP: 10"));
@@ -2090,6 +2110,8 @@ mod tests {
             battle_command_layout: None,
             battle_command_labels: None,
             battle_transition: None,
+            battle_enemy_grid: None,
+            battle_enemy_window_overlap: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

@@ -1885,3 +1885,39 @@ describe('rpgProjectFromDoc: battle_transition (#830)', () => {
     )
   })
 })
+
+describe('rpgProjectFromDoc: battle_enemy_grid / battle_enemy_window_overlap (#839)', () => {
+  const withEnemy = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it('battle_enemy_grid は 列x行（列 1〜12・行 1〜4 に丸め）で battleEnemyGrid になる', () => {
+    expect(rpgProjectFromDoc(withEnemy({ battle_enemy_grid: '6x2' }))!.battleEnemyGrid).toEqual({
+      cols: 6,
+      rows: 2,
+    })
+    expect(rpgProjectFromDoc(withEnemy({ battle_enemy_grid: '30×9' }))!.battleEnemyGrid).toEqual({
+      cols: 12,
+      rows: 4,
+    })
+  })
+
+  it('battle_enemy_grid が不正・空・null・未指定 → battleEnemyGrid は undefined（従来方式）', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleEnemyGrid).toBeUndefined()
+    for (const v of ['on', '', '0x2', '6', null]) {
+      expect(
+        rpgProjectFromDoc(withEnemy({ battle_enemy_grid: v }))!.battleEnemyGrid
+      ).toBeUndefined()
+    }
+  })
+
+  it('battle_enemy_window_overlap は 0〜0.5 に丸めて battleEnemyWindowOverlap になる。不正・未指定は undefined（既定）', () => {
+    const o = (v: string | null | undefined) =>
+      rpgProjectFromDoc(withEnemy({ battle_enemy_window_overlap: v }))!.battleEnemyWindowOverlap
+    expect(o('0.1')).toBe(0.1)
+    expect(o('2')).toBe(0.5)
+    expect(o('0')).toBe(0)
+    expect(o('abc')).toBeUndefined()
+    expect(o('')).toBeUndefined()
+    expect(o(null)).toBeUndefined()
+    expect(rpgProjectFromDoc(makeDoc())!.battleEnemyWindowOverlap).toBeUndefined()
+  })
+})

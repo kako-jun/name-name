@@ -372,6 +372,13 @@ export interface BattleScreenOptions {
   /** コマンドの表示名の上書き (#204)。id（attack / spell / item / escape）は変えず label だけ差し替える。部分指定可 */
   commandLabels?: CommandLabels
   /**
+   * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid` 由来（`side` のときだけ効く）。undefined = 従来の敵配置。
+   * 値を受け取るだけで、描画への反映（`computeSideBattleLayout` への配線）は #839 段4
+   */
+  enemyGrid?: { cols: number; rows: number }
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。配線は段4 */
+  enemyWindowOverlap?: number
+  /**
    * 候補窓に出す呪文・アイテム (#204)。`commandLayout` が `cross` のとき（かつ 1 件以上あるとき）だけ有効で、
    * 「じゅもん」「どうぐ」を選ぶと一覧の窓が重なって開く（FF5/6 風の窓の階層）。MP が足りない呪文はグレー。
    * 未指定・空は従来どおり（じゅもん・どうぐは何も起きない）。有効なとき、ATB の wait は候補窓を開いている間だけ止まる

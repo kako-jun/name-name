@@ -5342,6 +5342,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_command_layout: None,
         battle_command_labels: None,
         battle_transition: None,
+        battle_enemy_grid: None,
+        battle_enemy_window_overlap: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10528,6 +10530,8 @@ fn telop_test_doc_base() -> Document {
         battle_command_layout: None,
         battle_command_labels: None,
         battle_transition: None,
+        battle_enemy_grid: None,
+        battle_enemy_window_overlap: None,
         chapters: vec![],
     }
 }
@@ -11981,4 +11985,125 @@ fn test_battle_transition_parses_default_none_and_roundtrips() {
         doc.battle_transition
     );
     assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_transition"));
+}
+
+// ---- #839: battle_enemy_grid / battle_enemy_window_overlap / モンスターの サイズ・倍率 ----
+
+#[test]
+fn test_battle_enemy_grid_and_window_overlap_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_enemy_grid: 6x2\nbattle_enemy_window_overlap: 0.3\n",
+    ));
+    // 値は検証せず生文字列で透過する（丸めは runtime）
+    assert_eq!(doc.battle_enemy_grid.as_deref(), Some("6x2"));
+    assert_eq!(doc.battle_enemy_window_overlap.as_deref(), Some("0.3"));
+    let weird = parser::parse(&battle_doc(
+        "battle_enemy_grid: \"６×２\"\nbattle_enemy_window_overlap: abc\n",
+    ));
+    assert_eq!(weird.battle_enemy_grid.as_deref(), Some("６×２"));
+    assert_eq!(weird.battle_enemy_window_overlap.as_deref(), Some("abc"));
+    let empty = parser::parse(&battle_doc(
+        "battle_enemy_grid:\nbattle_enemy_window_overlap:\n",
+    ));
+    assert_eq!(empty.battle_enemy_grid, None);
+    assert_eq!(empty.battle_enemy_window_overlap, None);
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_enemy_grid, None);
+    assert_eq!(none.battle_enemy_window_overlap, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_enemy_grid: \"6x2\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("battle_enemy_window_overlap: \"0.3\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_enemy_grid, doc.battle_enemy_grid);
+    assert_eq!(
+        re.battle_enemy_window_overlap,
+        doc.battle_enemy_window_overlap
+    );
+    let none_out = emitter::emit(&none);
+    assert!(!none_out.contains("battle_enemy"), "{none_out}");
+}
+
+fn monster_with(extra_body: &str) -> name_name_parser::models::MonsterDef {
+    let src = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\n{extra_body}[/モンスター]\n"
+    );
+    let doc = parser::parse(&src);
+    match &doc.chapters[0].scenes[0].events[0] {
+        name_name_parser::models::Event::Monster(m) => m.clone(),
+        other => panic!("expected Monster, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_monster_size_and_scale_parse() {
+    use name_name_parser::models::MonsterSize;
+    // 未指定は None（従来どおり 1x1・倍率 1）
+    let m = monster_with("");
+    assert_eq!(m.size, None);
+    assert_eq!(m.scale, None);
+    // 書式: 別名・大小・全角
+    for (line, w, h) in [
+        ("サイズ: 2x1\n", 2, 1),
+        ("size: 1x2\n", 1, 2),
+        ("サイズ: 2X2\n", 2, 2),
+        ("サイズ: 3×2\n", 3, 2),
+        ("サイズ: ２ｘ１\n", 2, 1),
+        ("サイズ: 1x1\n", 1, 1),
+        ("サイズ: 12 x 4\n", 12, 4),
+    ] {
+        assert_eq!(
+            monster_with(line).size,
+            Some(MonsterSize { w, h }),
+            "{line}"
+        );
+    }
+    // 不正は警告して None（1x1）
+    for line in [
+        "サイズ: 0x1\n",
+        "サイズ: 2x0\n",
+        "サイズ: big\n",
+        "サイズ: 2\n",
+        "サイズ: -1x2\n",
+        "サイズ: 1.5x2\n",
+        "サイズ: 99999999999x1\n",
+        "サイズ:\n",
+    ] {
+        assert_eq!(monster_with(line).size, None, "{line}");
+    }
+    // 倍率: 0.25〜1 に丸める
+    assert_eq!(monster_with("倍率: 0.8\n").scale, Some(0.8));
+    assert_eq!(monster_with("scale: 0.5\n").scale, Some(0.5));
+    assert_eq!(monster_with("倍率: 0.1\n").scale, Some(0.25));
+    assert_eq!(monster_with("倍率: 3\n").scale, Some(1.0));
+    assert_eq!(monster_with("倍率: -2\n").scale, Some(0.25));
+    assert_eq!(monster_with("倍率: 1\n").scale, Some(1.0));
+    for line in ["倍率: abc\n", "倍率: NaN\n", "倍率: inf\n", "倍率:\n"] {
+        assert_eq!(monster_with(line).scale, None, "{line}");
+    }
+}
+
+#[test]
+fn test_monster_size_and_scale_roundtrip() {
+    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\nサイズ: 2x2\n倍率: 0.75\n[/モンスター]\n";
+    let doc = parser::parse(src);
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("サイズ: 2x2\n倍率: 0.75\n"), "{emitted}");
+    assert_eq!(
+        parser::parse(&emitted).chapters[0].scenes[0].events,
+        doc.chapters[0].scenes[0].events
+    );
+    let plain = emitter::emit(&parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\n[/モンスター]\n",
+    ));
+    assert!(
+        !plain.contains("サイズ") && !plain.contains("倍率"),
+        "{plain}"
+    );
 }

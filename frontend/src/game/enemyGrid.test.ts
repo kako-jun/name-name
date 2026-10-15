@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   computeEnemyGridLayout,
   enemyDrawOrder,
+  normalizeEnemyGrid,
+  normalizeEnemyWindowOverlapSetting,
   parseCellRef,
   parseEnemyGrid,
-  parseEnemySize,
   placeEnemies,
   type EnemyFootprint,
   type EnemyGridSize,
@@ -14,43 +15,12 @@ import { SIDE_LABEL_GAP, SIDE_LABEL_HEIGHT, type Rect } from './battleLayout'
 
 const EPS = 1e-6
 
-describe('parseEnemySize', () => {
-  it('2x1 / 1X2 / 全角 / × を解釈する', () => {
-    expect(parseEnemySize('1x1')).toEqual({ w: 1, h: 1 })
-    expect(parseEnemySize('2x1')).toEqual({ w: 2, h: 1 })
-    expect(parseEnemySize(' 1X2 ')).toEqual({ w: 1, h: 2 })
-    expect(parseEnemySize('２×２')).toEqual({ w: 2, h: 2 })
-    expect(parseEnemySize('3×2')).toEqual({ w: 3, h: 2 })
-    expect(parseEnemySize('10x10')).toEqual({ w: 10, h: 10 })
-  })
-  it('不正値は null', () => {
-    for (const bad of [
-      '',
-      'x',
-      '0x1',
-      '1x0',
-      '2',
-      '2x',
-      'x2',
-      '-1x2',
-      '1.5x2',
-      '1x2x3',
-      'axb',
-      '1 2',
-    ]) {
-      expect(parseEnemySize(bad), bad).toBeNull()
-    }
-  })
-})
-
 describe('parseEnemyGrid', () => {
   it('桁あふれの巨大値は上限へ丸める', () => {
     expect(parseEnemyGrid('99999999999999999999x2')).toEqual({ cols: 12, rows: 2 })
     expect(parseEnemyGrid('6x99999999999999999999')).toEqual({ cols: 6, rows: 4 })
     const huge = '9'.repeat(400)
     expect(parseEnemyGrid(`${huge}x${huge}`)).toEqual({ cols: 12, rows: 4 })
-    expect(parseEnemySize('99999999999999999999x2')).toBeNull()
-    expect(parseEnemySize(`${huge}x1`)).toBeNull()
   })
   it('列 1〜12・行 1〜4 に丸める', () => {
     expect(parseEnemyGrid('6x2')).toEqual({ cols: 6, rows: 2 })
@@ -668,5 +638,33 @@ describe('画面サイズ総当たり（敵グリッド）', () => {
         expect(many.grid).toEqual(base.grid)
       }
     }
+  })
+})
+
+describe('normalizeEnemyGrid (#839)', () => {
+  it('列 1〜12・行 1〜4 に丸める。不正・未指定は undefined（無効）', () => {
+    expect(normalizeEnemyGrid('6x2')).toEqual({ cols: 6, rows: 2 })
+    expect(normalizeEnemyGrid(' ６×２ ')).toEqual({ cols: 6, rows: 2 })
+    expect(normalizeEnemyGrid('99x99')).toEqual({ cols: 12, rows: 4 })
+    for (const bad of ['on', '', '6', '0x2', '6x0', 'x', '6x2x1', '-1x2', '2.5x2']) {
+      expect(normalizeEnemyGrid(bad)).toBeUndefined()
+    }
+    expect(normalizeEnemyGrid(undefined)).toBeUndefined()
+    expect(normalizeEnemyGrid(null)).toBeUndefined()
+  })
+})
+
+describe('normalizeEnemyWindowOverlapSetting (#839)', () => {
+  it('0〜0.5 に丸める。不正・未指定は undefined（既定 0.25 に倒れる）', () => {
+    expect(normalizeEnemyWindowOverlapSetting('0.3')).toBe(0.3)
+    expect(normalizeEnemyWindowOverlapSetting('0')).toBe(0)
+    expect(normalizeEnemyWindowOverlapSetting('.4')).toBe(0.4)
+    expect(normalizeEnemyWindowOverlapSetting('0.9')).toBe(0.5)
+    expect(normalizeEnemyWindowOverlapSetting('-1')).toBe(0)
+    for (const bad of ['', ' ', 'abc', '0x10', '1e3', 'NaN', 'Infinity', '25%']) {
+      expect(normalizeEnemyWindowOverlapSetting(bad)).toBeUndefined()
+    }
+    expect(normalizeEnemyWindowOverlapSetting(undefined)).toBeUndefined()
+    expect(normalizeEnemyWindowOverlapSetting(null)).toBeUndefined()
   })
 })
