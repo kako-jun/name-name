@@ -227,6 +227,32 @@ export function singleCandidates(
   return aliveIndexes(side === 'enemy' ? enemies : party)
 }
 
+/**
+ * 「選択中」の印 ▼ を出す者 (#805)。対象選択窓が開いているあいだは、手が指す者だけ（行動者の ▼ は隠す。手との二重表示で
+ * 誰が対象か分からなくなるため）。開いていなければ、ATB でコマンドを出す番の味方（`actorIndex` >= 0）だけ。
+ * 倒れた者には出さない（蘇生の対象窓の候補だけは倒れた味方に出す）。範囲外の index（空き枠）は無視される
+ */
+export function selectMarkTargets(
+  party: readonly BattleEntity[],
+  enemies: readonly BattleEntity[],
+  actorIndex: number,
+  w: MenuWindow | undefined
+): { party: boolean[]; enemy: boolean[] } {
+  const out = { party: party.map(() => false), enemy: enemies.map(() => false) }
+  if (w?.type === 'target') {
+    for (const h of targetHands(w, party, enemies, actorIndex)) {
+      if (h.side === 'enemy') {
+        if ((enemies[h.index]?.hp ?? 0) > 0) out.enemy[h.index] = true
+      } else if (party[h.index] && (party[h.index].hp > 0 || !!w.spec.revive)) {
+        out.party[h.index] = true
+      }
+    }
+    return out
+  }
+  if (actorIndex >= 0 && (party[actorIndex]?.hp ?? 0) > 0) out.party[actorIndex] = true
+  return out
+}
+
 /** 窓に手が立つ位置（描画用）。single = 1 本 / all = 側の生存者全員 / self = 使用者 */
 export function targetHands(
   w: TargetWindow,

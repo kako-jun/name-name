@@ -76,6 +76,7 @@ import {
   scrollList,
   setListCursor,
   setTargetCursor,
+  selectMarkTargets,
   type BattleItemEntry,
   type BattleMenuData,
   type BattleSpellEntry,
@@ -128,6 +129,11 @@ import {
   computeStatusColumns,
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_HEIGHT,
+  SIDE_STATUS_MARKER_FONT_SIZE,
+  frontStatsLeftPadding,
+  SELECT_MARK_LOG_GAP,
+  sideStatusMarkerX,
+  computeSelectMarkTriangle,
   type StatusColumns,
   type BattleDepth,
   type BattleLayoutMode,
@@ -195,12 +201,12 @@ const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
 /** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
-/** 番の味方の印 ▶ の文字サイズと、行の左端からの余白（左余白 SIDE_STATUS_TEXT_PADDING の中に収まる） */
-const ATB_MARKER_FONT_SIZE = 10
-const ATB_MARKER_INSET = 1
+/** 「選択中」の印 ▼（アクスタ頭上の白い下向き三角）の塗りと縁。形・大きさは computeSelectMarkTriangle (#805) */
+const SELECT_MARK_FILL = 0xffffff
+const SELECT_MARK_OUTLINE = 0x000000
 // MP_COLOR は HP/MP バー UI 実装時（戦闘 Phase 2、#175 と同時想定）に追加する
 
-const STAGE_PADDING = 16
+export const STAGE_PADDING = 16
 const STATS_HEIGHT = 32
 const COMMAND_HEIGHT = 56
 const LOG_HEIGHT = 96
@@ -396,6 +402,8 @@ interface EntityView {
   acrylicBaseLayout: AcrylicBaseTexture['layout'] | null
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
+  /** 「選択中」の印 ▼ (#805)。container の子なので板・台座ごと動く（踏み出し演出にも追従）。出し入れは updateSelectMarks */
+  selectMark: Graphics
   /** 演出 (#745): 最後に placeEntityView が置いた枠。ポーズ差し替え時の再配置に使う */
   slotRef: SpriteSlot | null
   /** 演出 (#745): placeEntityView が置いた container の基準位置（モーションのずれを足す前）と、枠の一辺（距離の単位） */
@@ -497,7 +505,7 @@ export class BattleScreen extends Container {
   private statusMpMaxes: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
-  /** 番の味方の印 ▶ (#205)。名前の文字列には混ぜず、行の左余白に別の Text で置く。bars と同じ index */
+  /** 番の味方の印 ▶ (#205, #805)。名前の文字列には混ぜず、行の左余白に別の Text で置く（枠から離す）。bars と同じ index */
   private atbMarkers: PixiText[] = []
   /** 各ゲージ棒の矩形（画面絶対）。layout が更新 */
   private atbBarRects: Array<{ x: number; y: number; w: number; h: number }> = []
@@ -945,6 +953,9 @@ export class BattleScreen extends Container {
       // sideStage の外（前景より上の層）へ置く。座標は画面絶対（placeEntityView が更新）
       this.labelLayer?.addChild(label)
     }
+    const selectMark = new Graphics()
+    selectMark.visible = false
+    container.addChild(selectMark)
     const view: EntityView = {
       container,
       fallback,
@@ -959,6 +970,7 @@ export class BattleScreen extends Container {
       acrylicPlatePad: 0,
       acrylicBaseLayout: null,
       label,
+      selectMark,
       slotRef: null,
       baseX: 0,
       baseY: 0,
@@ -1193,7 +1205,7 @@ export class BattleScreen extends Container {
         style: this.themedStyle(
           new TextStyle({
             fontFamily: "'Noto Sans JP', sans-serif",
-            fontSize: ATB_MARKER_FONT_SIZE,
+            fontSize: SIDE_STATUS_MARKER_FONT_SIZE,
             fill: ACTOR_COLOR,
           })
         ),
@@ -1419,18 +1431,20 @@ export class BattleScreen extends Container {
     this.heroStatsText.x = STAGE_PADDING + 12
     this.heroStatsText.y = statsY + (STATS_HEIGHT - HP_FONT_SIZE) / 2
     if (this.atbBars.length > 0) {
-      // 棒はパネルの下端に左右の文字余白ぶん内側で行幅いっぱい（文字の下に置くので重ならない）
+      // 名前（heroStatsText）を ▶ のぶん右へ寄せ（余裕があれば最大 8px まで）、▶ と名前の隙間は side と同じ（sideStatusMarkerX）
+      this.heroStatsText.x = STAGE_PADDING + frontStatsLeftPadding(panelW - 24, true)
+      // 棒はパネルの下端に、左端を名前にそろえ、右は文字余白ぶん内側まで（文字の下に置くので重ならない）
       this.atbBarRects = [
         {
-          x: STAGE_PADDING + 12,
+          x: this.heroStatsText.x,
           y: statsY + STATS_HEIGHT - ATB_BAR_HEIGHT - 1,
-          w: Math.max(0, panelW - 24),
+          w: Math.max(0, STAGE_PADDING + panelW - 12 - this.heroStatsText.x),
           h: ATB_BAR_HEIGHT,
         },
       ]
       const m = this.atbMarkers[0]
-      m.x = STAGE_PADDING + ATB_MARKER_INSET
-      m.y = statsY + (STATS_HEIGHT - ATB_MARKER_FONT_SIZE) / 2
+      m.x = sideStatusMarkerX(this.heroStatsText.x)
+      m.y = statsY + (STATS_HEIGHT - SIDE_STATUS_MARKER_FONT_SIZE) / 2
       this.drawAtbBars()
     }
 
@@ -1590,8 +1604,8 @@ export class BattleScreen extends Container {
       L.statusRows.forEach((row, i) => {
         const m = this.atbMarkers[i]
         if (!m) return
-        m.x = row.x + ATB_MARKER_INSET
-        m.y = row.y + (row.h - ATB_MARKER_FONT_SIZE) / 2
+        m.x = sideStatusMarkerX(cols.name.x)
+        m.y = row.y + (row.h - SIDE_STATUS_MARKER_FONT_SIZE) / 2
       })
       this.drawAtbBars()
     }
@@ -1660,9 +1674,11 @@ export class BattleScreen extends Container {
     const fbX = acrylic ? fb.x : slot.width * (fb.x / size)
     const fbW = acrylic ? fb.w : slot.width * (fb.w / size)
     view.fallback.clear().rect(fbX, fb.y, fbW, fb.h).fill(view.color)
+    // ▼ の基準（絵の中央 x と上端 y）。絵が読み込めたら基本の絵の矩形に置き換える
+    let head = { cx: fbX + fbW / 2, top: fb.y }
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack) {
-        this.placeAcrylic(view, box)
+        head = this.placeAcrylic(view, box) ?? head
         if (isParty) view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
       } else {
         // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
@@ -1672,6 +1688,7 @@ export class BattleScreen extends Container {
         view.sprite.position.set(r.x, r.y)
         view.sprite.width = r.width
         view.sprite.height = r.height
+        head = { cx: fit.x + fit.width / 2, top: fit.y }
         if (isParty) view.anchorY = slot.y + fit.y + fit.height * 0.35
       }
       view.fallback.visible = false
@@ -1686,6 +1703,47 @@ export class BattleScreen extends Container {
         view.label.y = view.labelBaseY
       }
     }
+    this.layoutSelectMark(view, head)
+  }
+
+  /**
+   * 「選択中」の印 ▼ を、絵の頭上・中央に置く (#805)。container の子なので座標は container 基準。
+   * 位置はポーズの絵でなく基本の絵の矩形（head）に固定するので、ポーズ差し替えで上下しない。
+   * 三角の形・大きさは純粋関数 computeSelectMarkTriangle（枠の一辺に比例＝画面スケールに追従）
+   */
+  private layoutSelectMark(view: EntityView, head: { cx: number; top: number }): void {
+    view.selectMark
+      .clear()
+      .poly(
+        computeSelectMarkTriangle(
+          head.cx,
+          head.top,
+          view.unit,
+          // 上のログ窓（画面基準）の下端＋隙間を container 座標へ。窓の下に隠れないよう三角を下げる
+          this.messageRect.y + this.messageRect.h + SELECT_MARK_LOG_GAP - view.baseY
+        )
+      )
+      .fill(SELECT_MARK_FILL)
+      .stroke({ color: SELECT_MARK_OUTLINE, width: 1 })
+  }
+
+  /**
+   * 「選択中」の印 ▼ の出し入れ (#805)。出す者の規則は純粋関数 selectMarkTargets（新しい状態は持たない）。
+   * 対象選択窓が開いている間は対象だけ、そうでなければ ATB の番の味方
+   */
+  private updateSelectMarks(): void {
+    if (this.partyViews.length === 0 && this.enemyViews.length === 0) return
+    const s = this.engine.getState()
+    const w = this.menuStack[this.menuStack.length - 1]
+    const ctx = w?.type === 'target' ? this.menuContext() : null
+    const marks = selectMarkTargets(
+      s.party,
+      s.enemies,
+      ctx ? ctx.actorIndex : this.actorIndex(),
+      ctx ? w : undefined
+    )
+    this.partyViews.forEach((v, i) => (v.selectMark.visible = marks.party[i] ?? false))
+    this.enemyViews.forEach((v, i) => (v.selectMark.visible = marks.enemy[i] ?? false))
   }
 
   /**
@@ -1699,7 +1757,7 @@ export class BattleScreen extends Container {
    * スプライト本体と台座・影は slot 枠の内側に収まる。板は余白+線ぶん（pad）だけ枠の外へ広がる。
    * `size` は正方形の一辺（横長の敵は枠の長辺）。
    */
-  private placeAcrylic(view: EntityView, size: number): void {
+  private placeAcrylic(view: EntityView, size: number): { cx: number; top: number } | undefined {
     const params = this.acrylicParams
     const sprite = view.sprite
     const back = view.acrylicBack
@@ -1776,6 +1834,12 @@ export class BattleScreen extends Container {
     }
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true
+    // ▼ の基準: 基本の絵の矩形（g0）。板が出ているときは板の外へ広がるぶん（pad）だけ上端を上げる。ポーズの絵では動かさない (#805)
+    const k0 = baseTex.width > 0 ? g0.sprite.width / baseTex.width : 0
+    const platePad = view.acrylicPlate?.visible
+      ? view.acrylicPlatePad * k0 * view.acrylicPlateScale
+      : 0
+    return { cx: g0.sprite.x + g0.sprite.width / 2, top: g0.sprite.y - platePad }
   }
 
   /** サイドビューのテキスト・生死表示を更新する (#736) */
@@ -1819,7 +1883,7 @@ export class BattleScreen extends Container {
       const cols = this.sideStatusColumns
       const hpT = this.statusHpTexts[i]
       const mpT = this.statusMpTexts[i]
-      // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない） (#205)
+      // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない）。アクスタ頭上の ▼ は updateSelectMarks (#205, #805)
       const isActor = p.hp > 0 && i === this.actorIndex()
       if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
@@ -1912,6 +1976,7 @@ export class BattleScreen extends Container {
     const s = this.engine.getState()
     if (this.presentation === 'ff') this.syncPresentation()
     if (this.layoutMode === 'side') this.refreshSide()
+    this.updateSelectMarks()
     const aliveEnemy: BattleEntity | undefined = s.enemies.find((e) => e.hp > 0) ?? s.enemies[0]
     if (aliveEnemy) {
       this.enemyNameText.text = aliveEnemy.name
@@ -2131,6 +2196,7 @@ export class BattleScreen extends Container {
     const view =
       ctx && this.menuGeometry ? buildMenuView(this.menuStack, ctx, this.menuGeometry) : []
     this.menuLayer.update(view, this.screenWidth, this.screenHeight)
+    this.updateSelectMarks()
     // 他の表示物（ログ行など）が後から足されても、窓は常に最前面
     this.addChild(this.menuLayer)
   }

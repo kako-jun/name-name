@@ -980,6 +980,71 @@ export function normalizeBattleRow(raw: string | null | undefined): BattleRow {
 export const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
 export const SIDE_STATUS_TEXT_PADDING = 12
+/** 番の印 ▶（名前の左）の文字サイズ。幅は estimateTextWidth と同じ見積りで測る (#805) */
+export const SIDE_STATUS_MARKER_FONT_SIZE = 7
+/** ▶ の右端と名前の文字の間 */
+export const SIDE_STATUS_MARKER_NAME_GAP = 3
+/**
+ * ATB のときの、名前の左の余白（▶ を置く場所）。基本は MIN だけ足し（どの幅でも枠から ▶ まで 4px 以上）、
+ * 名前列に余裕がある幅では最小名前幅を割らない範囲で MAX まで広げる（枠から ▶ まで最大 8px。`computeStatusColumns` が余裕から決める）(#805)
+ */
+export const SIDE_STATUS_MARKER_GUTTER_MIN = 2
+export const SIDE_STATUS_MARKER_GUTTER_MAX = 6
+/** status 欄の左端から名前の文字の開始までの基本の余白（余裕で広がる前）。ATB のときは ▶ ぶんの最小を足す */
+export function sideStatusLeftPadding(atb: boolean): number {
+  return SIDE_STATUS_TEXT_PADDING + (atb ? SIDE_STATUS_MARKER_GUTTER_MIN : 0)
+}
+/** front 配置の名前（HP/MP の 1 行）が最低限使う幅の目安。これを超える余裕があれば ▶ の余白を広げる */
+export const FRONT_STATS_TEXT_BUDGET = 260
+/**
+ * front 配置（HP/MP パネル）の、パネル左端から名前の文字の開始までの余白。ATB のとき基本は MIN だけ足し、
+ * 1 行の文字に余裕がある幅（`innerWidth` = パネル幅 − 左右の文字余白）では MAX まで広げる（side と同じ考え方）(#805)
+ */
+export function frontStatsLeftPadding(innerWidth: number, atb: boolean): number {
+  const base = sideStatusLeftPadding(atb)
+  if (!atb) return base
+  const slack = innerWidth - FRONT_STATS_TEXT_BUDGET
+  const extra = Math.max(
+    0,
+    Math.min(SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN, slack)
+  )
+  return base + extra
+}
+/** ▶ の左端 x。名前列の x の手前に、▶ の幅（estimateTextWidth）と名前との間隔ぶん空ける */
+export function sideStatusMarkerX(nameX: number): number {
+  return nameX - SIDE_STATUS_MARKER_NAME_GAP - estimateTextWidth('▶', SIDE_STATUS_MARKER_FONT_SIZE)
+}
+
+/**
+ * 「選択中」の印（アクスタ頭上の白い下向き三角 ▼）(#805)。大きさ・頭からの間隔は枠の一辺（unit）に対する比で、
+ * 画面のスケールに追従する。FF6 ピクセルリマスターの 1080p 換算で、頭から約 10〜15px 離した小さな三角
+ */
+export const SELECT_MARK_WIDTH_RATIO = 0.1
+export const SELECT_MARK_HEIGHT_RATIO = 0.07
+export const SELECT_MARK_GAP_RATIO = 0.06
+/** 小さな画面でも見えるよう、三角の幅・高さ・頭からの間隔の下限（px）。大きい画面は unit に比例 */
+export const SELECT_MARK_MIN_WIDTH = 10
+export const SELECT_MARK_MIN_HEIGHT = 8
+export const SELECT_MARK_MIN_GAP = 4
+/** 三角の上端と、上のログ窓の下端との最低の隙間（px）。窓にかかる分は三角を下げる */
+export const SELECT_MARK_LOG_GAP = 2
+/** ▼ の頂点（左上・右上・下の尖り）。`cx` は絵の中央 x、`headTop` は絵（板があれば板）の上端 y、`minTop` は三角の上端の下限 y（同じ座標系。上のログ窓の下端＋SELECT_MARK_LOG_GAP） */
+export function computeSelectMarkTriangle(
+  cx: number,
+  headTop: number,
+  unit: number,
+  minTop = -Infinity
+): number[] {
+  const w = Math.max(SELECT_MARK_MIN_WIDTH, unit * SELECT_MARK_WIDTH_RATIO)
+  const h = Math.max(SELECT_MARK_MIN_HEIGHT, unit * SELECT_MARK_HEIGHT_RATIO)
+  // 上端が minTop（上のログ窓の下端＋隙間）より上にならないよう、必要なら下げる（大きさとログ窓との隙間は保ち、頭とは重なってよい）
+  const tipY = Math.max(
+    headTop - Math.max(SELECT_MARK_MIN_GAP, unit * SELECT_MARK_GAP_RATIO),
+    minTop + h
+  )
+  return [cx - w / 2, tipY - h, cx + w / 2, tipY - h, cx, tipY]
+}
+
 /** 列と列の間 */
 export const SIDE_STATUS_COLUMN_GAP = 8
 /** 名前列に最低限確保する全角文字数。これに届かないときは MP → 見出し → HP の最大値 → ゲージ幅の順に削る */
@@ -1041,15 +1106,17 @@ export const SIDE_STATUS_GAUGE_MIN_WIDTH = 16
  */
 export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const font = input.fontPx ?? SIDE_STATUS_FONT_SIZE
-  const left = input.x + SIDE_STATUS_TEXT_PADDING
+  const leftBase = input.x + sideStatusLeftPadding(input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
   const build = (
     withMp: boolean,
     labels: boolean,
     maxHpShown: boolean,
-    gaugeW: number
+    gaugeW: number,
+    extraLeft = 0
   ): StatusColumns => {
+    const left = leftBase + extraLeft
     let edge = right
     let gauge: StatusColumn | null = null
     if (input.atb) {
@@ -1097,7 +1164,16 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   ]
   for (const [withMp, labels, maxHpShown, gaugeW] of tries) {
     const c = build(withMp, labels, maxHpShown, gaugeW)
-    if (c.name.w >= minName) return c
+    if (c.name.w >= minName) {
+      // ATB: 名前列に余裕があるぶん（最小名前幅を割らない範囲）だけ、▶ の余白を MAX まで広げる。段階（省略）は変えない
+      const extra = input.atb
+        ? Math.min(
+            SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN,
+            c.name.w - minName
+          )
+        : 0
+      return extra > 0 ? build(withMp, labels, maxHpShown, gaugeW, extra) : c
+    }
   }
   return build(false, false, false, SIDE_STATUS_GAUGE_MIN_WIDTH)
 }

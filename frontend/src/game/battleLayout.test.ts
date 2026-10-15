@@ -39,6 +39,17 @@ import {
   SIDE_STATUS_GAUGE_WIDTH,
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
+  sideStatusLeftPadding,
+  frontStatsLeftPadding,
+  SIDE_STATUS_MARKER_GUTTER_MAX,
+  SIDE_STATUS_MARKER_GUTTER_MIN,
+  sideStatusMarkerX,
+  computeSelectMarkTriangle,
+  SELECT_MARK_GAP_RATIO,
+  SELECT_MARK_MIN_WIDTH,
+  SELECT_MARK_MIN_HEIGHT,
+  SELECT_MARK_MIN_GAP,
+  SIDE_STATUS_MARKER_FONT_SIZE,
   desiredSideLogLines,
   effectiveCommandLayout,
   fitCommandFontSize,
@@ -1786,7 +1797,7 @@ describe('computeStatusColumns (#745)', () => {
   it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
     const c = computeStatusColumns({ ...base, atb: true })
     const inner = {
-      l: base.x + SIDE_STATUS_TEXT_PADDING,
+      l: base.x + sideStatusLeftPadding(true) + 4,
       r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
     }
     expect(c.name.x).toBe(inner.l)
@@ -1909,7 +1920,7 @@ describe('computeStatusColumns: 見出しと数字のすき間・狭いときの
 
   it('極端に狭く HP 列を左余白で止めても、現在値は見出しと重ならない位置までは右へ押し出される', () => {
     const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
-    const left = base.x + SIDE_STATUS_TEXT_PADDING
+    const left = base.x + sideStatusLeftPadding(true) // 狭すぎて余裕が無いので広がらない
     const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
     const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
     expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)
@@ -2120,4 +2131,94 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
     },
     60_000
   )
+})
+
+describe('ATB の番の印 ▶ と選択印 ▼ の幾何 (#805)', () => {
+  it('sideStatusLeftPadding: ATB でなければ従来の余白、ATB は ▶ ぶんの最小を足す', () => {
+    expect(sideStatusLeftPadding(false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    expect(sideStatusLeftPadding(true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+    )
+  })
+
+  it('frontStatsLeftPadding: ATB のとき基本は MIN、1 行に余裕がある幅では MAX まで広がる。連続', () => {
+    expect(frontStatsLeftPadding(1000, false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    expect(frontStatsLeftPadding(100, true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+    )
+    expect(frontStatsLeftPadding(1000, true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX
+    )
+    let prev = frontStatsLeftPadding(0, true)
+    for (let w = 1; w <= 600; w++) {
+      const p = frontStatsLeftPadding(w, true)
+      expect(p).toBeGreaterThanOrEqual(prev)
+      expect(p - prev).toBeLessThanOrEqual(1)
+      prev = p
+    }
+  })
+
+  it('名前の左の余白は、名前列の余裕から MIN〜MAX の範囲で決まり、最小名前幅を割らない。399/400 でジャンプしない', () => {
+    const base = { x: 0, maxHp: 120, maxMp: 99, compact: false, atb: true }
+    const minName = SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE
+    const padding = (width: number) => {
+      const c = computeStatusColumns({ ...base, width })
+      expect(c.name.w).toBeGreaterThanOrEqual(minName - 1e-9)
+      return c.name.x
+    }
+    for (const w of [260, 300, 320, 360, 400, 480, 640, 800]) {
+      const x = padding(w)
+      expect(x).toBeGreaterThanOrEqual(
+        SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN - 1e-9
+      )
+      expect(x).toBeLessThanOrEqual(SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX + 1e-9)
+    }
+    // 余裕が十分ある幅では MAX（枠から ▶ まで最大 8px）
+    expect(padding(800)).toBeCloseTo(SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX)
+    expect(Math.abs(padding(400) - padding(399))).toBeLessThan(0.1)
+  })
+
+  it('sideStatusMarkerX: ▶ は枠から 4px 以上離れ、名前の文字の手前に収まる（MIN〜MAX のどの余白でも）', () => {
+    for (const g of [SIDE_STATUS_MARKER_GUTTER_MIN, SIDE_STATUS_MARKER_GUTTER_MAX]) {
+      const nameX = SIDE_STATUS_TEXT_PADDING + g
+      const x = sideStatusMarkerX(nameX)
+      expect(x).toBeGreaterThanOrEqual(4 - 1e-9)
+      expect(x + estimateTextWidth('▶', SIDE_STATUS_MARKER_FONT_SIZE)).toBeLessThanOrEqual(nameX)
+    }
+    expect(sideStatusMarkerX(SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX)).toBeCloseTo(
+      8
+    )
+  })
+
+  it('computeSelectMarkTriangle: 上端の下限（ログ窓の下端）より上には出ず、大きさ・形は保つ', () => {
+    const free = computeSelectMarkTriangle(50, 20, 100)
+    const clamped = computeSelectMarkTriangle(50, 20, 100, 30)
+    expect(free[1]).toBeLessThan(30) // 下限が無ければ窓にかかる位置
+    expect(clamped[1]).toBeGreaterThanOrEqual(30 - 1e-9)
+    expect(clamped[1]).toBeCloseTo(30)
+    expect(clamped[2] - clamped[0]).toBeCloseTo(free[2] - free[0])
+    expect(clamped[5] - clamped[1]).toBeCloseTo(free[5] - free[1])
+    // 下限が十分上なら何も変わらない
+    expect(computeSelectMarkTriangle(50, 20, 100, -100)).toEqual(free)
+  })
+
+  it('computeSelectMarkTriangle: unit が小さくても最小の幅・高さ・間隔を下回らない', () => {
+    const p = computeSelectMarkTriangle(50, 100, 20)
+    expect(p[2] - p[0]).toBeCloseTo(SELECT_MARK_MIN_WIDTH)
+    expect(p[5] - p[1]).toBeCloseTo(SELECT_MARK_MIN_HEIGHT)
+    expect(100 - p[5]).toBeCloseTo(SELECT_MARK_MIN_GAP)
+  })
+
+  it('computeSelectMarkTriangle: 中央に下向きの三角。頭から離れ、大きさは unit に比例する', () => {
+    const p = computeSelectMarkTriangle(50, 100, 200)
+    expect(p).toHaveLength(6)
+    expect((p[0] + p[2]) / 2).toBeCloseTo(50)
+    expect(p[4]).toBeCloseTo(50)
+    expect(p[1]).toBe(p[3])
+    expect(p[5]).toBeGreaterThan(p[1])
+    expect(p[5]).toBeLessThan(100)
+    expect(100 - p[5]).toBeCloseTo(200 * SELECT_MARK_GAP_RATIO)
+    const q = computeSelectMarkTriangle(50, 100, 400)
+    expect(q[2] - q[0]).toBeCloseTo((p[2] - p[0]) * 2)
+  })
 })

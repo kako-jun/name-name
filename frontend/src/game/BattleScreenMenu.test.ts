@@ -517,6 +517,20 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
     expect(engine.getState().party[1].hp).toBeGreaterThan(0)
   })
 
+  it('蘇生の対象窓では、候補の倒れた味方にだけ ▼ が出る（生きている味方・窓を閉じたあとは出ない） (#805)', () => {
+    const { s } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    const marks = () =>
+      (s as unknown as { partyViews: Array<{ selectMark: { visible: boolean } }> }).partyViews.map(
+        (x) => x.selectMark.visible
+      )
+    press('ArrowLeft')
+    press('Enter')
+    expect(marks()).toEqual([false, true])
+    press('Escape')
+    press('Escape')
+    expect(marks()).toEqual([false, false])
+  })
+
   it('蘇生できる相手がいないときは確定できず、窓は残り、MP は減らない', () => {
     const { s, engine } = build({ menu: REVIVE })
     press('ArrowLeft')
@@ -695,5 +709,134 @@ describe('窓の右端と味方ステータス欄の HP 列 (#204 レビュー)'
       { label: 'ながいなまえのじゅもん', cost: '123', disabled: false },
     ]).rect
     expect(r.x + r.w).toBeLessThanOrEqual(geo.avoidX! + 0.001)
+  })
+})
+
+describe('対象選択の「選択中」の印 ▼ (#805)', () => {
+  interface MarkViews {
+    partyViews: Array<{ selectMark: { visible: boolean } }>
+    enemyViews: Array<{ selectMark: { visible: boolean } }>
+  }
+  const marks = (s: BattleScreen) => {
+    const v = s as unknown as MarkViews
+    return {
+      party: v.partyViews.map((x) => x.selectMark.visible),
+      enemy: v.enemyViews.map((x) => x.selectMark.visible),
+    }
+  }
+  const SPELLS: BattleMenuData = {
+    spells: {
+      a: [
+        { id: 'fire', name: 'ほのお', mp: 1, target: '敵単体', effect: 'damage 8..14' },
+        { id: 'thunder', name: 'いなずま', mp: 1, target: '敵全体', effect: 'damage 5..5' },
+        { id: 'heal', name: 'ヒール', mp: 1, target: '味方単体', effect: 'heal 10..10' },
+        { id: 'allheal', name: 'ベホマラー', mp: 1, target: '味方全体', effect: 'heal 10..10' },
+        { id: 'self', name: 'セルフ', mp: 1, target: '自分', effect: 'heal 10..10' },
+      ],
+    },
+  }
+  /** i 番目の呪文の対象窓を開く */
+  const openTarget = (i: number) => {
+    press('ArrowLeft')
+    for (let k = 0; k < i; k++) press('ArrowDown')
+    press('Enter')
+  }
+  const team = () => [ent('a'), ent('b'), ent('c')]
+  const foes = () => [ent('s1'), ent('s2')]
+
+  it('窓を開く前は ATB でなければどこにも出ない', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+    press('ArrowLeft')
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+  })
+
+  it('敵単体: 手の指す敵だけに出て、↑↓で移り、Escape で消える', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    openTarget(0)
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false] })
+    press('ArrowDown')
+    expect(marks(s).enemy).toEqual([false, true])
+    press('ArrowUp')
+    expect(marks(s).enemy).toEqual([true, false])
+    press('Escape')
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+  })
+
+  it('敵単体: 倒れた敵は候補から外れ、印も出ない', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), [
+      ent('s1', { hp: 0 }),
+      ent('s2'),
+    ])
+    openTarget(0)
+    expect(marks(s).enemy).toEqual([false, true])
+  })
+
+  it('敵全体: 生きている敵の全員に出る（倒れた敵には出ない）', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), [
+      ent('s1'),
+      ent('s2', { hp: 0 }),
+      ent('s3'),
+    ])
+    openTarget(1)
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false, true] })
+  })
+
+  it('味方単体: 指された味方だけに出て、↑↓で移る。倒れた味方は飛ばす', () => {
+    const { s } = build(
+      { menu: SPELLS },
+      { rng: () => 0 },
+      [ent('a'), ent('b', { hp: 0 }), ent('c')],
+      foes()
+    )
+    openTarget(2)
+    const first = marks(s).party.indexOf(true)
+    expect(marks(s).party.filter(Boolean)).toHaveLength(1)
+    expect(marks(s).enemy).toEqual([false, false])
+    press('ArrowDown')
+    const second = marks(s).party.indexOf(true)
+    expect(second).not.toBe(first)
+    expect(marks(s).party[1]).toBe(false) // 倒れた b
+    expect(marks(s).party.filter(Boolean)).toHaveLength(1)
+  })
+
+  it('味方全体: 生きている味方の全員に出る', () => {
+    const { s } = build(
+      { menu: SPELLS },
+      { rng: () => 0 },
+      [ent('a'), ent('b', { hp: 0 }), ent('c')],
+      foes()
+    )
+    openTarget(3)
+    expect(marks(s)).toEqual({ party: [true, false, true], enemy: [false, false] })
+  })
+
+  it('自分: 使用者だけに出る', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    openTarget(4)
+    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
+  })
+
+  it('確定して窓が閉じると消える', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    openTarget(0)
+    expect(marks(s).enemy).toEqual([true, false])
+    press('Enter')
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+  })
+
+  it('ATB で番の味方がいても、対象選択中は番の味方の ▼ を隠し、手の指す者の ▼ だけ出す', () => {
+    const { s } = build(
+      { menu: SPELLS },
+      { rng: () => 0, atb: { mode: 'wait', initialGauges: { party: [1000, 0, 0] } } },
+      team(),
+      foes()
+    )
+    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
+    openTarget(0)
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false] })
+    press('Escape')
+    press('Escape')
+    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
   })
 })
