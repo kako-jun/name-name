@@ -45,7 +45,8 @@ function parseWH(raw: string): [number, number] | null {
   if (!m) return null
   const a = Number(m[1])
   const b = Number(m[2])
-  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) return null
+  // 桁あふれ（Infinity）だけ弾く。巨大な値はグリッドでは上限へ丸め、サイズでは parseEnemySize が弾く
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
   return [a, b]
 }
 
@@ -55,7 +56,8 @@ function parseWH(raw: string): [number, number] | null {
  */
 export function parseEnemySize(raw: string): EnemySize | null {
   const wh = parseWH(raw)
-  if (!wh || wh[0] < 1 || wh[1] < 1) return null
+  if (!wh || !Number.isSafeInteger(wh[0]) || !Number.isSafeInteger(wh[1]) || wh[0] < 1 || wh[1] < 1)
+    return null
   return { w: wh[0], h: wh[1] }
 }
 
@@ -97,6 +99,8 @@ export type PlacementErrorKind =
   | 'overlap'
   /** 自動配置で空きが無い */
   | 'full'
+  /** グリッド自体が不正（列数・行数が 1 以上の整数でない）。全敵がこのエラーになる */
+  | 'invalid-grid'
 
 export interface PlacementError {
   /** `items` の添字 */
@@ -127,6 +131,12 @@ export function placeEnemies(
   items: readonly PlacementItem[]
 ): PlacementResult {
   const { cols, rows } = grid
+  if (!isValidDim(cols) || !isValidDim(rows)) {
+    return {
+      cells: items.map(() => null),
+      errors: items.map((_, index) => ({ index, kind: 'invalid-grid' as const })),
+    }
+  }
   const occupied: boolean[][] = Array.from({ length: rows }, () =>
     new Array<boolean>(cols).fill(false)
   )
@@ -215,12 +225,17 @@ export interface EnemyGridLayoutOptions {
 export const ENEMY_SCALE_MIN = 0.25
 export const ENEMY_SCALE_MAX = 1
 
-/** 敵 1 体ぶんの配置結果。`SpriteSlot` の上位互換（`x,y,width,size` = 占有矩形） */
+/**
+ * 敵 1 体ぶんの配置結果。`SpriteSlot` の形に `x,y,width,size` = 占有矩形を載せる。
+ * `SpriteSlot.scale` は奥行き (#747) の縮尺なので、ここでは常に 1（モンスターの倍率は `displayScale`）
+ */
 export interface EnemyGridSlot extends SpriteSlot {
   /** 占有矩形（`x,y,width,size` と同じ。ラベル帯は含めない） */
   occupied: Rect
-  /** 絵（contain 前の箱）: 占有矩形を `scale` で足元中央基準に縮めた矩形。絵はこの箱へ contain する */
+  /** 絵（contain 前の箱）: 占有矩形を `displayScale` で足元中央基準に縮めた矩形。絵はこの箱へ contain する */
   box: Rect
+  /** モンスターの表示倍率（0.25〜1）。`box` の縮み率 */
+  displayScale: number
 }
 
 export interface EnemyGridLayout {
@@ -233,7 +248,7 @@ export interface EnemyGridLayout {
 }
 
 function clampScale(raw: number | undefined): number {
-  if (raw === undefined || !Number.isFinite(raw)) return ENEMY_SCALE_MAX
+  if (raw === undefined || Number.isNaN(raw)) return ENEMY_SCALE_MAX
   return Math.min(ENEMY_SCALE_MAX, Math.max(ENEMY_SCALE_MIN, raw))
 }
 
@@ -255,12 +270,14 @@ export function computeEnemyGridLayout(
   options: EnemyGridLayoutOptions
 ): EnemyGridLayout {
   const { cols, rows } = grid
+  // 前提: 列数・行数は 1 以上の整数。不正なら cell 0（何も置かない）
+  const gridValid = isValidDim(cols) && isValidDim(rows)
   const overlap = normalizeEnemyWindowOverlap(options.windowOverlap)
   const labelBand = options.withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
 
   const byWidth = region.w / cols
   const byHeight = (region.h - rows * labelBand) / (rows - overlap)
-  const raw = Math.min(byWidth, byHeight)
+  const raw = gridValid ? Math.min(byWidth, byHeight) : 0
   const cell = Number.isFinite(raw) && raw > 0 ? raw : 0
 
   // 置けないほど狭いときはラベル帯も取らない（グリッド全体が 0）
@@ -294,7 +311,8 @@ export function computeEnemyGridLayout(
       size,
       width,
       floor,
-      scale: s,
+      scale: 1,
+      displayScale: s,
       occupied: { x, y, w: width, h: size },
       box,
     }

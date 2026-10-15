@@ -44,6 +44,11 @@ describe('parseEnemySize', () => {
 })
 
 describe('parseEnemyGrid', () => {
+  it('桁あふれの巨大値は上限へ丸める', () => {
+    expect(parseEnemyGrid('99999999999999999999x2')).toEqual({ cols: 12, rows: 2 })
+    expect(parseEnemyGrid('6x99999999999999999999')).toEqual({ cols: 6, rows: 4 })
+    expect(parseEnemySize('99999999999999999999x2')).toBeNull()
+  })
   it('列 1〜12・行 1〜4 に丸める', () => {
     expect(parseEnemyGrid('6x2')).toEqual({ cols: 6, rows: 2 })
     expect(parseEnemyGrid('6×2')).toEqual({ cols: 6, rows: 2 })
@@ -184,6 +189,22 @@ describe('placeEnemies', () => {
     expect(r.errors.map((e) => e.index)).toEqual([0, 2])
   })
 
+  it('不正なグリッドは全敵エラー（例外にしない）', () => {
+    for (const g of [
+      { cols: 2.5, rows: 2 },
+      { cols: 0, rows: 2 },
+      { cols: 6, rows: -1 },
+      { cols: NaN, rows: 2 },
+    ]) {
+      const r = placeEnemies(g, [one, one])
+      expect(r.cells).toEqual([null, null])
+      expect(r.errors).toEqual([
+        { index: 0, kind: 'invalid-grid' },
+        { index: 1, kind: 'invalid-grid' },
+      ])
+    }
+  })
+
   it('空の群は空の結果', () => {
     expect(placeEnemies(grid, [])).toEqual({ cells: [], errors: [] })
   })
@@ -294,8 +315,24 @@ describe('computeEnemyGridLayout', () => {
     expect(b.box.h).toBeCloseTo(b.size / 2, 6)
     expect(b.box.x + b.box.w / 2).toBeCloseTo(b.x + b.width / 2, 6)
     expect(b.box.y + b.box.h).toBeCloseTo(b.floor, 6)
-    expect(b.scale).toBe(0.5)
+    expect(b.scale).toBe(1)
+    expect(b.displayScale).toBe(0.5)
     expect(a.box).toEqual(a.occupied)
+  })
+
+  it('不正なグリッドでは cell 0（例外にしない）', () => {
+    for (const g of [
+      { cols: 2.5, rows: 2 },
+      { cols: 0, rows: 2 },
+      { cols: 6, rows: -1 },
+      { cols: NaN, rows: 2 },
+    ]) {
+      const l = computeEnemyGridLayout(region, g, [{ col: 0, row: 0, w: 1, h: 1 }], {
+        withLabel: true,
+      })
+      expect(l.cell).toBe(0)
+      expect(l.slots[0].size).toBe(0)
+    }
   })
 
   it('倍率は 0.25〜1 に丸める（1 超は受け付けない）', () => {
@@ -309,7 +346,30 @@ describe('computeEnemyGridLayout', () => {
       ],
       { withLabel: false }
     )
-    expect(l.slots.map((s) => s.scale)).toEqual([1, 0.25, 1])
+    expect(l.slots.map((s) => s.displayScale)).toEqual([1, 0.25, 1])
+    expect(l.slots.map((s) => s.scale)).toEqual([1, 1, 1])
+    // ±Infinity は上下限に通す
+    const inf = computeEnemyGridLayout(
+      region,
+      grid,
+      [
+        { col: 5, row: 0, w: 1, h: 1, scale: Infinity },
+        { col: 4, row: 0, w: 1, h: 1, scale: -Infinity },
+      ],
+      { withLabel: false }
+    )
+    expect(inf.slots.map((x) => x.displayScale)).toEqual([1, 0.25])
+    // 倍率を縮めても size は占有高さのまま
+    const half = computeEnemyGridLayout(
+      region,
+      { cols: 6, rows: 2 },
+      [{ col: 0, row: 0, w: 1, h: 1, scale: 0.5 }],
+      {
+        withLabel: false,
+      }
+    )
+    expect(half.slots[0].size).toBe(half.cell)
+    expect(half.slots[0].scale).toBe(1)
   })
 
   it('withLabel=false ではラベルなし。幅が読めないセルのラベルも省く', () => {
@@ -447,6 +507,24 @@ describe('画面サイズ総当たり（敵グリッド）', () => {
                 expect(s.x + s.width, tag).toBeLessThanOrEqual(l.grid.x + l.grid.w + EPS)
                 expect(s.y, tag).toBeGreaterThanOrEqual(l.grid.y - EPS)
                 expect(s.floor, tag).toBeLessThanOrEqual(l.grid.y + l.grid.h + EPS)
+                // 占有矩形の下端 = floor（複数行の敵も最下行の足元に揃う）。occupied は x,y,width,size と一致、box ⊆ occupied
+                expect(s.y + s.size, tag).toBeCloseTo(s.floor, 6)
+                expect(s.occupied, tag).toEqual({ x: s.x, y: s.y, w: s.width, h: s.size })
+                expect(s.box.x, tag).toBeGreaterThanOrEqual(s.occupied.x - EPS)
+                expect(s.box.y, tag).toBeGreaterThanOrEqual(s.occupied.y - EPS)
+                expect(s.box.x + s.box.w, tag).toBeLessThanOrEqual(
+                  s.occupied.x + s.occupied.w + EPS
+                )
+                expect(s.box.y + s.box.h, tag).toBeLessThanOrEqual(
+                  s.occupied.y + s.occupied.h + EPS
+                )
+                // 同じ行の最下端にいる 1x1 と floor が一致（行の下端 = grid 下端 - 行ぶんのラベル帯）
+                const lastRow = fps[i].row + fps[i].h - 1
+                const band = l.cell > 0 ? LABEL_BAND : 0
+                expect(s.floor, tag).toBeCloseTo(
+                  l.grid.y + (lastRow + 1) * (l.cell + band) - band,
+                  6
+                )
                 // 窓との重なり: 領域の上端より上へ出る量は、その敵の占有高さの overlap 以下
                 const over = Math.max(0, region.y - s.y)
                 expect(over, tag).toBeLessThanOrEqual(ov * s.size + EPS)
@@ -510,6 +588,42 @@ describe('画面サイズ総当たり（敵グリッド）', () => {
     }
     expect(checked).toBeGreaterThan(1000)
   }, 120000)
+
+  it('体数不変（placeEnemies 込み）: 2x2 が先頭の混成群で体数を変えても先頭の x/y/width/size が不変', () => {
+    const g: EnemyGridSize = { cols: 6, rows: 2 }
+    const full: PlacementItem[] = [
+      { w: 2, h: 2 },
+      { w: 1, h: 2 },
+      { w: 2, h: 1 },
+      { w: 1, h: 1 },
+      { w: 1, h: 1 },
+    ]
+    for (const W of widths) {
+      for (const H of heights) {
+        const region: Rect = { x: 16, y: 80, w: W, h: H }
+        let ref: { x: number; y: number; width: number; size: number } | null = null
+        for (let n = 1; n <= full.length; n++) {
+          const items = full.slice(0, n)
+          const placed = placeEnemies(g, items)
+          expect(placed.errors).toEqual([])
+          const l = computeEnemyGridLayout(
+            region,
+            g,
+            placed.cells.map((c, i) => fpOf(c!, items[i])),
+            { withLabel: true }
+          )
+          const first = {
+            x: l.slots[0].x,
+            y: l.slots[0].y,
+            width: l.slots[0].width,
+            size: l.slots[0].size,
+          }
+          if (ref) expect(first).toEqual(ref)
+          ref = first
+        }
+      }
+    }
+  })
 
   it('cell は領域・グリッド・ラベル帯・重なりだけで決まり、footprints に依存しない', () => {
     for (const W of widths) {

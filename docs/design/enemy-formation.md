@@ -93,7 +93,7 @@ battle_enemy_grid: 6x2
 ```
 labelBand = SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT          // 行ごとの足元ラベルの予約
 cell      = min( regionW / C,  (regionH - R*labelBand) / (R - ov) )   // 正方形セル（0 以下なら 0）。ov = battle_enemy_window_overlap（窓の下へ延ばす上端ぶん ov*cell を領域に足した閉形式。ov=0 なら regionH/R - labelBand）
-gridW     = cell * C,  gridH = (cell + labelBand) * R
+gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けないほど狭い）のときはラベル帯も 0 で、グリッド全体が 0
 ```
 
 - セルを**正方形**にする理由: サイズ区分の縦横比（2x1 = 2:1, 1x2 = 1:2）が台帳の割り当て規則（縦横比 1.8 / 0.55）と一致し、占有領域の contain が直感どおりになる。
@@ -200,7 +200,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R
 | 1 | **【実装済み #839 段1: `frontend/src/game/enemyGrid.ts`＋総当たりテスト。サイズ/グリッド/セル表記のパース `parseEnemySize` `parseEnemyGrid` `parseCellRef` も含む】** 純粋関数 `enemyGrid.ts`: サイズ文字列のパース、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
 | 2 | 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
 | 3 | `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
-| 4 | `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
+| 4 | `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。**§3.6 末尾の「延長は窓の高さまでにクランプ」は、段1の `computeEnemyGridLayout` が窓矩形を入力に持たないため未実装で、この段（窓矩形が手に入る配線時）で入れる。** アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
 | 5 | 読み込み時の群検証（収まらない群の無効化とエラー表示）。docs（spec / architecture / guide）・サンプル（sit-by-me 寺町）への反映 | 4 | 作者向けの安全網 |
 | 6（任意） | `サイズ: 自動`（画像の縦横比から区分を決める台帳の規則 1.8 / 0.55 をエンジン側の設定に） | 4 | 台帳に明示の区分があるなら不要。論点 Q6 |
 
