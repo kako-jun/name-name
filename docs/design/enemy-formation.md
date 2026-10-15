@@ -118,7 +118,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R
 
 - 区分は `MonsterDef.size`（`{w, h}`）と `MonsterDef.scale` に載せ、`rollEncounter` が `BattleEntity`（`layout?: { w, h, scale, cell? }`）へ写す。`サイズ:` を書かない敵は `layout` なし＝1x1・倍率 1。**エンジン（`battleEngine.ts`）は読まない**（描画専用のマスターデータ。ADR 0002 のとおり GameState に中間状態を足さない）。
 - **倍率**: 「実際の大きさの違いが画面に出る」ためにはセル（サイズ区分）で大小を表すのが主、`倍率` は同じ区分の中の微調整（例: 同じ 1x1 の中で小さめの敵）。`1` を超える倍率は、占有領域を超えて隣や窓にはみ出す＝不変条件を壊すため**受け付けない（上限 1）**。大きく見せたいときは区分を上げる。→ 確定 Q3。
-- **占有領域**: 左上セル `(c, r)` から `w × h` セル。矩形は `x = gridX + c·cell`, `幅 = w·cell`, `高さ = h·cell`（ラベル帯は最下行の下）。
+- **占有領域**: 左上セル `(c, r)` から `w × h` セル。矩形は `x = gridX + c·cell`, `幅 = w·cell`, `高さ = h·cell`（ラベル帯は最下行の下）。複数行の敵は、行の間のラベル帯ぶんを含めず、**最下行のセルの下端に揃えて**高さ `h·cell` を取る（同じ行の 1x1 と足元・`floor` が合い、2x2 は 1x1 の幅・高さとも厳密に 2 倍になる）。
 - **ボス**: 台帳の方針（すべて大型）はサイズ区分で表す。エンジンに「ボスかどうか」の概念は足さない。
 
 ### 3.4 群の書式の拡張（後方互換）
@@ -197,7 +197,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R
 | 段 | 内容 | 依存 | 備考 |
 |---|---|---|---|
 | 0 | **【実装済み #838・TS のみ。frontmatter `battle_enemy_window_overlap` は未配線で既定 0.25 の定数】** **#838 修正（現行方式）**: 窓との重なりを許容量（`battle_enemy_window_overlap`、既定 25%）以下に抑える（超える場合だけ上端を下げる。板の `pad` も絵に数える）。2 列で隣の板にかぶらないよう列ピッチに `pad` を含める。不変条件に「窓との重なりが許容量以下」を足す | なし | TS のみ。独立してマージ可能。グリッド有効化の前に、症状を止める |
-| 1 | 純粋関数 `enemyGrid.ts`: サイズ文字列のパース、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
+| 1 | **【実装済み #839 段1: `frontend/src/game/enemyGrid.ts`＋総当たりテスト。サイズ/グリッド/セル表記のパース `parseEnemySize` `parseEnemyGrid` `parseCellRef` も含む】** 純粋関数 `enemyGrid.ts`: サイズ文字列のパース、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
 | 2 | 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
 | 3 | `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
 | 4 | `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
