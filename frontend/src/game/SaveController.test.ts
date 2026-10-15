@@ -627,6 +627,19 @@ describe('openSaveMenu', () => {
     expect(s.store.hasQuickSave()).toBe(false)
     expect(s.host.getSnapshot).not.toHaveBeenCalled()
   })
+
+  it('menu 未接続: DEV では警告し、本番ビルド相当（DEV=false）では出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubEnv('DEV', true)
+    setup().ctrl.openSaveMenu()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('openSaveMenu')
+    vi.stubEnv('DEV', false)
+    setup().ctrl.openSaveMenu()
+    expect(warn).toHaveBeenCalledTimes(1)
+    vi.unstubAllEnvs()
+    warn.mockRestore()
+  })
 })
 
 describe('openLoadMenu', () => {
@@ -689,6 +702,19 @@ describe('openLoadMenu', () => {
     expect(() => s.ctrl.openLoadMenu()).not.toThrow()
     expect(s.toasts).toEqual([])
     expect(s.host.enter).not.toHaveBeenCalled()
+  })
+
+  it('menu 未接続: DEV では警告し、本番ビルド相当（DEV=false）では出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubEnv('DEV', true)
+    setup().ctrl.openLoadMenu()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('openLoadMenu')
+    vi.stubEnv('DEV', false)
+    setup().ctrl.openLoadMenu()
+    expect(warn).toHaveBeenCalledTimes(1)
+    vi.unstubAllEnvs()
+    warn.mockRestore()
   })
 })
 

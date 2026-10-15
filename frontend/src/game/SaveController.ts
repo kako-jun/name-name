@@ -213,7 +213,8 @@ export class SaveController {
     // （ロードのたびに再予約・警告・停止を繰り返す状態を避ける。復元側は #733 で再予約するので
     // 行き止まりにはならないが、保存する価値のある位置ではない）。
     if (this.transition.isGated('saveMenu')) return
-    this.menu?.showSave((slot: number) => {
+    if (!this.menu) return this.warnMenuDetached('openSaveMenu')
+    this.menu.showSave((slot: number) => {
       // オーバーレイ表示中も autoTimer / skipTimer / [待機] は進み、裏で Jump が予約・停止し得る。
       // 開く時だけでなく確定時にも再確認する (#759)。
       if (this.transition.isGated('saveMenu')) {
@@ -234,7 +235,8 @@ export class SaveController {
   openLoadMenu(): void {
     // Jump 遷移の予約中 (#733)・入場中 (#734) は quickLoad と同じく開かない（遷移途中に別の位置へ復元させない）。
     if (this.transition.isGated('loadMenu')) return
-    this.menu?.showLoad((data: SaveSlotData) => {
+    if (!this.menu) return this.warnMenuDetached('openLoadMenu')
+    this.menu.showLoad((data: SaveSlotData) => {
       // 表示中に裏で遷移が始まった場合は復元させない（開く時だけでなく確定時にも再確認 #759）。
       if (this.transition.isGated('loadMenu')) {
         this.host.showToast('場面転換中のためロードできません')
@@ -292,6 +294,13 @@ export class SaveController {
    */
   notifyLoadSuccess(origin: LoadOrigin): void {
     if (origin === 'quick') this.host.showToast('クイックロードしました')
+  }
+
+  /** メニュー未接続（`attachMenu` 前）の呼び出しは no-op。配線漏れに気づけるよう DEV だけ警告する。 */
+  private warnMenuDetached(method: string): void {
+    if (import.meta.env.DEV) {
+      console.warn(`[name-name] SaveController.${method}: メニューが未接続です（attachMenu 前）`)
+    }
   }
 
   /** 再生位置のシーンタイトル（sceneId ガード + find + ?.title ?? null は novelLayout.resolveSceneTitle に集約 #260）。 */
