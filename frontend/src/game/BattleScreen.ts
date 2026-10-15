@@ -200,6 +200,12 @@ const ATB_BAR_HEIGHT = 3
  * 「選択中」の印（アクスタ頭上の白い下向き三角 ▼）(#805)。大きさ・頭からの間隔は枠の一辺（view.unit）に対する比で、
  * 画面のスケールに追従する。FF6 ピクセルリマスターの 1080p 換算で、頭から約 10〜15px 離した小さな三角
  */
+/**
+ * 番の味方の印 ▶（名前の左）。ウィンドウの枠から ATB_MARKER_INSET だけ離し、名前の列（SIDE_STATUS_TEXT_PADDING）には食い込ませない (#805)。
+ * アクスタ頭上の ▼ と併存する
+ */
+const ATB_MARKER_FONT_SIZE = 7
+const ATB_MARKER_INSET = 3
 const SELECT_MARK_WIDTH_RATIO = 0.1
 const SELECT_MARK_HEIGHT_RATIO = 0.07
 const SELECT_MARK_GAP_RATIO = 0.06
@@ -506,6 +512,8 @@ export class BattleScreen extends Container {
   private statusMpMaxes: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
+  /** 番の味方の印 ▶ (#205, #805)。名前の文字列には混ぜず、行の左余白に別の Text で置く（枠から離す）。bars と同じ index */
+  private atbMarkers: PixiText[] = []
   /** 各ゲージ棒の矩形（画面絶対）。layout が更新 */
   private atbBarRects: Array<{ x: number; y: number; w: number; h: number }> = []
   /** onClose を 1 回だけ呼ぶためのフラグ（ATB は tick でも戦闘が終わる） */
@@ -1199,6 +1207,19 @@ export class BattleScreen extends Container {
       const g = new Graphics()
       this.atbBars.push(g)
       this.addChild(g)
+      const m = new PixiText({
+        text: '▶',
+        style: this.themedStyle(
+          new TextStyle({
+            fontFamily: "'Noto Sans JP', sans-serif",
+            fontSize: ATB_MARKER_FONT_SIZE,
+            fill: ACTOR_COLOR,
+          })
+        ),
+      })
+      m.visible = false
+      this.atbMarkers.push(m)
+      this.addChild(m)
     }
   }
 
@@ -1426,6 +1447,9 @@ export class BattleScreen extends Container {
           h: ATB_BAR_HEIGHT,
         },
       ]
+      const m = this.atbMarkers[0]
+      m.x = STAGE_PADDING + ATB_MARKER_INSET
+      m.y = statsY + (STATS_HEIGHT - ATB_MARKER_FONT_SIZE) / 2
       this.drawAtbBars()
     }
 
@@ -1582,6 +1606,12 @@ export class BattleScreen extends Container {
         w: g.w,
         h: SIDE_STATUS_GAUGE_HEIGHT,
       }))
+      L.statusRows.forEach((row, i) => {
+        const m = this.atbMarkers[i]
+        if (!m) return
+        m.x = row.x + ATB_MARKER_INSET
+        m.y = row.y + (row.h - ATB_MARKER_FONT_SIZE) / 2
+      })
       this.drawAtbBars()
     }
     this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
@@ -1704,7 +1734,7 @@ export class BattleScreen extends Container {
 
   /**
    * 「選択中」の印 ▼ の出し入れ (#805)。出す対象は既存の状態から導く（新しい状態は持たない）:
-   * ATB でコマンドを出す番の味方 / 対象選択で手が指している者（味方・敵）。倒れた者・空き枠には出さない
+   * ATB でコマンドを出す番の味方 / 対象選択で手が指している者（味方・敵）。倒れた者（蘇生の対象窓の候補を除く）・空き枠には出さない
    */
   private updateSelectMarks(): void {
     if (this.partyViews.length === 0 && this.enemyViews.length === 0) return
@@ -1722,8 +1752,11 @@ export class BattleScreen extends Container {
         }
       }
     }
+    // 蘇生の対象窓のときだけ、倒れた味方（唯一の候補）にも出す
+    const revive = w?.type === 'target' && !!w.spec.revive
     this.partyViews.forEach((v, i) => {
-      v.selectMark.visible = party.has(i) && (s.party[i]?.hp ?? 0) > 0
+      const hp = s.party[i]?.hp ?? 0
+      v.selectMark.visible = party.has(i) && (hp > 0 || (revive && i !== actor && !!s.party[i]))
     })
     this.enemyViews.forEach((v, i) => {
       v.selectMark.visible = enemy.has(i) && (s.enemies[i]?.hp ?? 0) > 0
@@ -1861,8 +1894,9 @@ export class BattleScreen extends Container {
       const cols = this.sideStatusColumns
       const hpT = this.statusHpTexts[i]
       const mpT = this.statusMpTexts[i]
-      // ATB: 今コマンドを出す番の味方は色を変える（「選択中」の印はアクスタ頭上の ▼。updateSelectMarks が出す） (#205, #805)
+      // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない）。アクスタ頭上の ▼ は updateSelectMarks (#205, #805)
       const isActor = p.hp > 0 && i === this.actorIndex()
+      if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
       this.fitStatusName(t, p.name, cols?.name.w ?? Infinity)
       const lbl = cols?.showLabels ?? true
@@ -1963,6 +1997,7 @@ export class BattleScreen extends Container {
     const hero: BattleEntity | undefined = s.party[0]
     if (hero) {
       const isActor = hero.hp > 0 && this.actorIndex() === 0
+      if (this.layoutMode === 'front' && this.atbMarkers[0]) this.atbMarkers[0].visible = isActor
       this.heroStatsText.text = `${hero.name}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }

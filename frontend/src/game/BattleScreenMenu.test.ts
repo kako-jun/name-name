@@ -517,6 +517,20 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
     expect(engine.getState().party[1].hp).toBeGreaterThan(0)
   })
 
+  it('蘇生の対象窓では、候補の倒れた味方にだけ ▼ が出る（生きている味方・窓を閉じたあとは出ない） (#805)', () => {
+    const { s } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    const marks = () =>
+      (s as unknown as { partyViews: Array<{ selectMark: { visible: boolean } }> }).partyViews.map(
+        (x) => x.selectMark.visible
+      )
+    press('ArrowLeft')
+    press('Enter')
+    expect(marks()).toEqual([false, true])
+    press('Escape')
+    press('Escape')
+    expect(marks()).toEqual([false, false])
+  })
+
   it('蘇生できる相手がいないときは確定できず、窓は残り、MP は減らない', () => {
     const { s, engine } = build({ menu: REVIVE })
     press('ArrowLeft')

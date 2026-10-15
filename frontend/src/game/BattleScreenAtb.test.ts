@@ -8,7 +8,11 @@ import type { Container, Graphics, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
-import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
+import {
+  SIDE_STATUS_TEXT_PADDING,
+  computeSideBattleLayout,
+  estimateTextWidth,
+} from './battleLayout'
 import type { BattleEntity } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -30,6 +34,7 @@ interface Internals {
   atbBars: Graphics[]
   atbBarRects: Array<{ x: number; y: number; w: number; h: number }>
   partyViews: Array<{ selectMark: Graphics }>
+  atbMarkers: Text[]
   statusTexts: Text[]
   statusHpTexts: Text[]
   statusMpTexts: Text[]
@@ -147,15 +152,17 @@ describe('BattleScreen ATB: ゲージ棒の色と幅（溜まり中は青・満�
   })
 })
 
-describe('BattleScreen ATB: 番の味方のマーカー（アクスタ頭上の ▼ + 黄色）', () => {
+describe('BattleScreen ATB: 番の味方のマーカー（名前の左の ▶ + アクスタ頭上の ▼ + 黄色）', () => {
   it('side: キュー先頭の味方のアクスタにだけ ▼ が付いて黄色。他は付かず白', () => {
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [0, 1000] }))
     const [ta, tb] = I(s).statusTexts
-    // ▼ はウィンドウ側でなくアクスタ側（partyViews の selectMark）に出す (#805)
+    // ▶ は名前に混ぜず別 Text（左余白）で出し、▼ はアクスタ側（partyViews の selectMark）にも出す (#805)
     expect(tb.text.startsWith('B')).toBe(true)
     expect(I(s).partyViews[1].selectMark.visible).toBe(true)
+    expect(I(s).atbMarkers[1].visible).toBe(true)
     expect(tb.style.fill).toBe(0xffee66)
     expect(ta.text.includes('▶')).toBe(false)
+    expect(I(s).atbMarkers[0].visible).toBe(false)
     expect(I(s).partyViews[0].selectMark.visible).toBe(false)
     expect(ta.style.fill).toBe(0xffffff)
   })
@@ -165,14 +172,15 @@ describe('BattleScreen ATB: 番の味方のマーカー（アクスタ頭上の 
     expect(I(s).partyViews[0].selectMark.visible).toBe(true)
     I(s).commands[0].hit.emit('pointertap', {} as never)
     expect(I(s).partyViews[0].selectMark.visible).toBe(false)
+    expect(I(s).atbMarkers[0].visible).toBe(false)
     expect(I(s).statusTexts[0].text.includes('▶')).toBe(false)
     expect(I(s).statusTexts[0].style.fill).toBe(0xffffff)
   })
 
-  it('front: 番なら heroStatsText が黄色（▶ は付かない）', () => {
+  it('front: 番なら heroStatsText に ▶ と黄色', () => {
     const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' })
     expect(I(s).heroStatsText.text.startsWith('A')).toBe(true)
-    expect(I(s).heroStatsText.text.includes('▶')).toBe(false)
+    expect(I(s).atbMarkers[0].visible).toBe(true)
     expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
   })
 
@@ -375,7 +383,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     })
   })
 
-  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見える（ウィンドウ側に ▶ は出ない）', () => {
+  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見え、▶ は枠からも名前からも離れる', () => {
     const mk = () =>
       Array.from({ length: 4 }, (_, i) =>
         ent(`p${i}`, { name: 'ゆうしゃ', hp: 120, maxHp: 120, mp: 99, maxMp: 99 })
@@ -393,7 +401,13 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
       expect(t.text.startsWith('ゆ')).toBe(true)
       expect(I(on.s).statusHpTexts[i].text + I(on.s).statusHpMaxes[i].text).toContain('120/120')
     })
-    I(on.s).statusTexts.forEach((t) => expect(t.text.includes('▶')).toBe(false))
+    const m = I(on.s).atbMarkers[0]
+    expect(m.visible).toBe(true)
+    expect(m.text).toBe('▶')
+    const t0 = I(on.s).statusTexts[0]
+    // 枠（名前の左 SIDE_STATUS_TEXT_PADDING 手前）から 3px 以上離れ、名前の文字にも重ならない
+    expect(m.x - (t0.x - SIDE_STATUS_TEXT_PADDING)).toBeGreaterThanOrEqual(3)
+    expect(m.x + estimateTextWidth('▶', 7)).toBeLessThanOrEqual(t0.x + 0.001)
   })
 
   it('ATB on/off で HP の列位置は ATB のゲージぶんだけ左へ寄る（off は寄らない）', () => {
@@ -514,8 +528,9 @@ describe('BattleScreen ATB: アクスタ頭上の ▼ の出し入れ (#805)', (
     expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
   })
 
-  it('ウィンドウ側（ステータス行）に ▶ の Text は無い', () => {
+  it('ウィンドウ側の ▶ と併存する: 番の味方では ▶ と ▼ が同時に出る', () => {
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }))
-    expect('atbMarkers' in (s as object)).toBe(false)
+    expect(I(s).atbMarkers.map((m) => m.visible)).toEqual([true, false])
+    expect(marks(s)).toEqual([true, false])
   })
 })
