@@ -5,7 +5,7 @@ import {
   computeEnemyPlateRect,
   computeSideBattleLayout,
 } from './battleLayout'
-import { DEFAULT_ACRYLIC_PARAMS } from './spriteStyle'
+import { DEFAULT_ACRYLIC_PARAMS, computeAcrylicGeometry } from './spriteStyle'
 
 describe('clampEnemyWindowOverlap (#839 段4)', () => {
   const grid = { cols: 6, rows: 2 }
@@ -31,15 +31,17 @@ describe('clampEnemyWindowOverlap (#839 段4)', () => {
 })
 
 describe('computeAcrylicBoxSize (#839 段4)', () => {
-  it('2x1 のような横長の占有でも板が占有領域の内側に収まる', () => {
-    for (const frame of [
-      { w: 160, h: 80 },
-      { w: 80, h: 160 },
-      { w: 60, h: 60 },
-    ]) {
+  const frames = [
+    { w: 160, h: 80 },
+    { w: 80, h: 160 },
+    { w: 60, h: 60 },
+    { w: 240, h: 120 },
+  ]
+  it('板・台座・影が占有領域の内側に収まる', () => {
+    for (const frame of frames) {
       for (const aspect of [0.5, 1, 2]) {
         const size = computeAcrylicBoxSize(frame, aspect, DEFAULT_ACRYLIC_PARAMS)
-        expect(size).toBeLessThanOrEqual(Math.min(frame.w, frame.h) + 1e-9)
+        expect(size).toBeLessThanOrEqual(Math.max(frame.w, frame.h) + 1e-9)
         const plate = computeEnemyPlateRect(
           { x: (frame.w - size) / 2, y: frame.h - size, size, width: size },
           aspect,
@@ -48,8 +50,25 @@ describe('computeAcrylicBoxSize (#839 段4)', () => {
         expect(plate.x).toBeGreaterThanOrEqual(-1e-6)
         expect(plate.x + plate.w).toBeLessThanOrEqual(frame.w + 1e-6)
         expect(plate.y).toBeGreaterThanOrEqual(-1e-6)
+        const g = computeAcrylicGeometry(aspect, 1, size, DEFAULT_ACRYLIC_PARAMS)
+        for (const e of [g.base, g.shadow])
+          if (e) expect(2 * e.rx).toBeLessThanOrEqual(frame.w + 1e-6)
       }
     }
+  })
+  it('正方形の占有は従来どおり一辺いっぱい以下、横長・縦長の占有は短辺を超えて大きく描ける', () => {
+    const one = computeAcrylicBoxSize({ w: 80, h: 80 }, 1, DEFAULT_ACRYLIC_PARAMS)
+    expect(one).toBeLessThanOrEqual(80 + 1e-9)
+    // 2x1: 同じ cell の 1x1 より箱が大きい（短辺 80 を超える）
+    const wide = computeAcrylicBoxSize({ w: 160, h: 80 }, 1, DEFAULT_ACRYLIC_PARAMS)
+    expect(wide).toBeGreaterThan(80)
+    expect(wide).toBeGreaterThan(one)
+    // 1x2: 縦長の占有。横は 80 に収まるので箱は 1x1 と同じ幅の制約（絵が縦に伸びる分は aspect で決まる）
+    const tall = computeAcrylicBoxSize({ w: 80, h: 160 }, 0.5, DEFAULT_ACRYLIC_PARAMS)
+    const tall1 = computeAcrylicBoxSize({ w: 80, h: 80 }, 0.5, DEFAULT_ACRYLIC_PARAMS)
+    expect(tall).toBeGreaterThanOrEqual(tall1 - 1e-6)
+    // 画像なし（色四角）は短辺
+    expect(computeAcrylicBoxSize({ w: 160, h: 80 }, undefined, DEFAULT_ACRYLIC_PARAMS)).toBe(80)
   })
 })
 

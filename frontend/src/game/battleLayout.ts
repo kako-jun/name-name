@@ -299,9 +299,10 @@ const ACRYLIC_BOX_FIT_ITERATIONS = 32
 
 /**
  * 敵グリッド (#839 段4) のアクスタ用の箱の一辺を求める。`computeAcrylicGeometry` は正方形の箱が前提なので、
- * 占有領域 `frame`（幅 × 高さ）の足元中央に置く正方形のうち、板（絵を余白＋線ぶん外へ広げた矩形 = `computeEnemyPlateRect`）・台座・影が
- * `frame` の内側（横は左右、縦は上端）に収まる最大の一辺を返す。箱の下端は `frame` の下端に揃える（台座・影は箱の幅・下端に収まる）。
- * 板のはみ出しは箱の一辺に対して単調に増えるので、上限 `min(w, h)` から二分法で求める。
+ * 占有領域 `frame`（幅 × 高さ）の足元中央に置く正方形のうち、次をすべて `frame` の内側に収める最大の一辺を返す。
+ * (1) 板（絵を余白＋線ぶん外へ広げた矩形 = `computeEnemyPlateRect`）の左右と上端、(2) 台座・影の楕円の横幅（中心は `frame` の中央）。
+ * 箱の下端は `frame` の下端に揃える。2x1 のような横長の占有では箱が高さ（短辺）を超えて幅いっぱいまで広がり、絵が占有領域を使い切る
+ * （サイズ区分の大きさ差が画面に出る）。上限は `max(w, h)`。判定は一辺に対して単調に厳しくなるので二分法で求める。
  * `aspect` が無い（色四角）・不正なら板がないので `min(w, h)`。`frame` が潰れていれば 0。
  */
 export function computeAcrylicBoxSize(
@@ -309,13 +310,18 @@ export function computeAcrylicBoxSize(
   aspect: number | undefined,
   params: AcrylicParams
 ): number {
-  const upper = Math.min(frame.w, frame.h)
-  if (!(upper > 0) || !Number.isFinite(upper)) return 0
-  if (aspect === undefined || !(aspect > 0) || !Number.isFinite(aspect)) return upper
+  const lower = Math.min(frame.w, frame.h)
+  if (!(lower > 0) || !Number.isFinite(lower)) return 0
+  if (aspect === undefined || !(aspect > 0) || !Number.isFinite(aspect)) return lower
+  const upper = Math.max(frame.w, frame.h)
+  const p = resolveAcrylicParams(params)
   const fits = (size: number): boolean => {
     const slot = { x: (frame.w - size) / 2, y: frame.h - size, size, width: size }
-    const plate = computeEnemyPlateRect(slot, aspect, params)
-    return plate.x >= -1e-6 && plate.x + plate.w <= frame.w + 1e-6 && plate.y >= -1e-6
+    const plate = computeEnemyPlateRect(slot, aspect, p)
+    if (!(plate.x >= -1e-6 && plate.x + plate.w <= frame.w + 1e-6 && plate.y >= -1e-6)) return false
+    const g = computeAcrylicGeometry(aspect, 1, size, p)
+    for (const e of [g.base, g.shadow]) if (e && 2 * e.rx > frame.w + 1e-6) return false
+    return true
   }
   if (fits(upper)) return upper
   let lo = 0

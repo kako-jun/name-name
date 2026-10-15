@@ -63,7 +63,7 @@ import {
   type SideBattleLayout,
   type SpriteSlot,
 } from './battleLayout'
-import { DEFAULT_ACRYLIC_PARAMS, type AcrylicParams } from './spriteStyle'
+import { DEFAULT_ACRYLIC_PARAMS, computeAcrylicGeometry, type AcrylicParams } from './spriteStyle'
 import { isEnemyGridSlot, placeEnemies, type EnemyFootprint, type EnemyGridSize } from './enemyGrid'
 
 const EPS = 1e-9
@@ -2393,6 +2393,9 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
                   expect(plate.x + plate.w, `${ctx} plate r`).toBeLessThanOrEqual(r.x + r.w + 1e-6)
                   expect(plate.y, `${ctx} plate y`).toBeGreaterThanOrEqual(r.y - 1e-6)
                   expect(plate.y + plate.h, ctx).toBeLessThanOrEqual(r.y + r.h + 1e-6)
+                  const g = computeAcrylicGeometry(aspect, 1, sz, acrylic)
+                  for (const e of [g.base, g.shadow])
+                    if (e) expect(2 * e.rx, `${ctx} base/shadow`).toBeLessThanOrEqual(r.w + 1e-6)
                 }
               })
               for (let a = 0; a < placed.length; a++)
