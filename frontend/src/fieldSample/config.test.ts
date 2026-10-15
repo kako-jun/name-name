@@ -143,6 +143,43 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     expect(ok(withEncounter()).scenes.a.encounter).toEqual({ rate: 5, groups: ['slime'] })
   })
 
+  it('群の新書式（個数・重み・配置）は monsters 照合で id だけを見る (#839)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.monsters = { slime: { name: 'スライム', hp: 10 }, bit: { name: 'ビット', hp: 5 } }
+        r.scenes.a.encounter = { rate: 5, groups: ['slime*3', 'slime*1..2+bit@E1:2'] }
+      })
+    )
+    expect(c.scenes.a.encounter?.groups).toEqual(['slime*3', 'slime*1..2+bit@E1:2'])
+  })
+
+  it('新書式でも未知の id は monsters にありませんで失敗', () => {
+    const r = parseConfig(
+      mutated((c) => {
+        c.monsters = { slime: { name: 'スライム', hp: 10 } }
+        c.scenes.a.encounter = { rate: 5, groups: ['slime*3+ghost@B1:2'] }
+      }),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('"ghost"')
+  })
+
+  it.each(['slime*0', 'slime*1..', 'slime:0', 'slime*3..1', 'slime@1A'])(
+    '群の構文エラー %s は parseConfig で失敗する (#839)',
+    (g) => {
+      const r = parseConfig(
+        mutated((c) => {
+          c.monsters = { slime: { name: 'スライム', hp: 10 } }
+          c.scenes.a.encounter = { rate: 5, groups: [g] }
+        }),
+        BASE
+      )
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain(`"${g}"`)
+    }
+  )
+
   it('encounter.rate=0 と小数 0.5 は ok、groups が空配列も ok', () => {
     const c0 = ok(mutated((r) => (r.scenes.a.encounter = { rate: 0, groups: [] })))
     expect(c0.scenes.a.encounter?.rate).toBe(0)

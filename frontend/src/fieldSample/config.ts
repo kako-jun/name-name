@@ -4,6 +4,7 @@
  * `${base}/images/...` に解決する (#746/#785)）。
  */
 import { hasOwn } from '../game/ownProperty'
+import { parseEncounterGroup } from '../game/enemyGroup'
 import { resolveRpgImagePath } from '../game/novelLayout'
 import { resolveUrl, type ParseResult } from '../battleSample/config'
 import type { Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
@@ -231,8 +232,11 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   }
   for (const sc of Object.values(scenes)) {
     for (const g of sc.encounter?.groups ?? []) {
-      for (const mid of g.split('+').map((t) => t.trim())) {
-        if (mid && !hasOwn(monsters, mid))
+      const parsed = parseEncounterGroup(g)
+      if (parsed.warnings.length > 0)
+        return fail(`scenes.${sc.id}.encounter.groups の "${g}": ${parsed.warnings[0]}`)
+      for (const { id: mid } of parsed.items) {
+        if (!hasOwn(monsters, mid))
           return fail(`scenes.${sc.id}.encounter.groups の "${mid}" が monsters にありません`)
       }
     }

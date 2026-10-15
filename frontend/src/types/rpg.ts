@@ -49,7 +49,7 @@ export interface MapData {
   encounterRate?: number
   /**
    * エンカウント時の敵グループ候補。各要素は単体モンスター ID または `+` 連結
-   * （`slime+ghost` で「スライム＋ゴースト同時」）。重み均等で抽選。
+   * （`slime+ghost` で「スライム＋ゴースト同時」）。修飾子 `@C1`（配置）`*3` `*1..3`（個数）末尾 `:3`（重み）を付けられる（#839）。重み指定が無ければ均等で抽選。
    */
   encounterGroups?: string[]
 }

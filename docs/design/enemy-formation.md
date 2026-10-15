@@ -123,7 +123,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 
 ### 3.4 群の書式の拡張（後方互換）
 
-群は引き続き `[エンカウント群: g1, g2, …]` のカンマ区切り。**群の中の各項は `+` 連結**。ここまで既存と同じ。各項（敵）と群全体に、**任意の修飾子**を足す。ids は slug（`@` `*` `:` `.` を含まない）なので、既存の群は 1 文字も変えずに同じ意味で解釈される。
+群は引き続き `[エンカウント群: g1, g2, …]` のカンマ区切り。**群の中の各項は `+` 連結**。ここまで既存と同じ。各項（敵）と群全体に、**任意の修飾子**を足す。ids は slug（空白・`@` `*` `:` を含まない。`.` は含んでよい＝`a.b` は通る）なので、既存の群は 1 文字も変えずに同じ意味で解釈される。
 
 | 修飾 | 書式 | 意味 |
 |---|---|---|
@@ -136,6 +136,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 
 - **ランダム構成（種類）**は、群を複数並べて重みを変えることで表す（種類違いの群を並べるだけ）。体数のランダムは `*m..n`。両方を混ぜる群（`a*1..2+b*0..1`）も書ける（`*0..n` で 0 体を許すが、群全体が 0 体になったら 1 回振り直す）。
 - **抽選の互換**: 重みの指定が**どの群にも無い**ときは、現行の `Math.floor(rng() × groups.length)` をそのまま使う（乱数の消費も同じ。既存のテスト・再現と同じ結果）。重みがあるときは、累積重みから 1 回の `rng()` で選ぶ。`*m..n` は、群を選んだ後に範囲ごとに 1 回ずつ `rng()` を消費する（範囲指定を書いた群だけ追加消費）。
+- **全角・不正な重み**: 修飾記号・修飾部分の数字・セルは全角（`＠＊：．`・`Ｃ１`）も NFKC 正規化して受理する（id 本体は正規化しない）。重み `:0` など不正な重みは警告して無視し、既定の 1 として扱う。
 - **配置の解釈単位**: 群の配置は群の文字列の中に閉じる（敵の定義側に「いつもここ」を持たせない。同じ敵でも群によって位置が違うことがあるため）。配置の同じ敵が複数体いるとき（`bit*2@E1`）は、`@` を**最初の 1 体**の位置とし、残りは自動配置（3.5）。
 - **parser**: 群は `Vec<String>` の生文字列透過のままなので Rust 変更は不要。解釈は TS 側の新しい純粋関数（案: `frontend/src/game/enemyGroup.ts` の `parseEncounterGroup`）が持つ。構文エラーの項は警告して**その項だけ捨てる**（現行の「未知の id は警告して飛ばす」と同じ寛容さ）。
 - **TUI/ほかの利用**: `EventDisplay.tsx` 等が群を表示しているなら生文字列のまま表示で問題ない（構文を解釈しない）ことを実装時に確認する。
@@ -198,7 +199,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 |---|---|---|---|
 | 0 | **【実装済み #838・TS のみ。frontmatter `battle_enemy_window_overlap` は未配線で既定 0.25 の定数】** **#838 修正（現行方式）**: 窓との重なりを許容量（`battle_enemy_window_overlap`、既定 25%）以下に抑える（超える場合だけ上端を下げる。板の `pad` も絵に数える）。2 列で隣の板にかぶらないよう列ピッチに `pad` を含める。不変条件に「窓との重なりが許容量以下」を足す | なし | TS のみ。独立してマージ可能。グリッド有効化の前に、症状を止める |
 | 1 | **【実装済み #839 段1: `frontend/src/game/enemyGrid.ts`＋総当たりテスト。サイズ/グリッド/セル表記のパース `parseEnemySize` `parseEnemyGrid` `parseCellRef` も含む】** 純粋関数 `enemyGrid.ts`: サイズ文字列のパース、`placeEnemies`（配置指定・first-fit・エラー）、`computeEnemyGridLayout`（セル・占有矩形・floor）。単体テスト＋総当たり。**まだどこにも配線しない** | なし | TS のみ。不変条件の大半はここで証明できる |
-| 2 | 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
+| 2 | **【実装済み #839 段2: `frontend/src/game/enemyGroup.ts`（`parseEncounterGroup` / `pickGroupIndex` / `resolveEncounterGroup`）＋ `encounter.ts` の `rollEncounter` が利用。配置 `at` は未配線（BattleEntity には載せない）。個数は 1 項 48 体まで。不正な重みは警告して無視（既定 1）】** 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
 | 3 | `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
 | 4 | `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。**§3.6 末尾の「延長は窓の高さまでにクランプ」は、段1の `computeEnemyGridLayout` が窓矩形を入力に持たないため未実装で、この段（窓矩形が手に入る配線時）で入れる。** アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
 | 5 | 読み込み時の群検証（収まらない群の無効化とエラー表示）。docs（spec / architecture / guide）・サンプル（sit-by-me 寺町）への反映 | 4 | 作者向けの安全網 |
