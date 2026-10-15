@@ -203,7 +203,8 @@ async function main(): Promise<void> {
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
     const engine = new BattleEngine(
       config.party.map((p) => ({ ...p })),
-      enemies.map((e) => ({ ...e }))
+      enemies.map((e) => ({ ...e })),
+      b.atb ? { atb: b.atb } : {}
     )
     world.visible = false
     fade.visible = false
@@ -211,6 +212,9 @@ async function main(): Promise<void> {
     battle = new BattleScreen(engine, b.width, b.height, {
       layout: b.layout,
       spriteStyle: b.spriteStyle,
+      ...(b.presentation ? { presentation: b.presentation } : {}),
+      ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
+      ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
       ...(bg ? { background: bg } : {}),
       ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
       ...(b.enemyGrid && b.enemyWindowOverlap !== undefined

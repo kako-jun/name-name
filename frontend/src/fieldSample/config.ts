@@ -23,6 +23,10 @@ import type { MonsterDef } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
+import type { BattlePresentation } from '../game/battleMotion'
+import type { WindowStyle } from '../game/windowStyle'
+import type { CommandLayout } from '../game/battleCommands'
+import type { BattleAtbConfig } from '../game/battleAtb'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
 export const FACINGS: readonly Facing[] = ['up', 'down', 'left', 'right']
@@ -51,6 +55,14 @@ export interface FieldBattleConfig {
   enemyGrid?: EnemyGridSize
   /** 敵の絵と窓の重なり許容量 (#838/#839)。`battle.enemyWindowOverlap`（0〜0.5 に丸める）。未指定は既定 */
   enemyWindowOverlap?: number
+  /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
+  presentation?: BattlePresentation
+  /** 窓の配色 (#883)。`battle.windowStyle`: `dark` / `ff-blue`。未指定は undefined＝既定（dark） */
+  windowStyle?: WindowStyle
+  /** コマンド窓の配置 (#883)。`battle.commandLayout`: `grid` / `cross`。未指定は undefined＝既定（grid） */
+  commandLayout?: CommandLayout
+  /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
+  atb?: BattleAtbConfig
 }
 
 export interface FieldSampleConfig {
@@ -293,6 +305,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     return fail(`battle.layout は "front" か "side": ${JSON.stringify(b.layout)}`)
   if (b.spriteStyle !== undefined && b.spriteStyle !== 'none' && b.spriteStyle !== 'acrylic')
     return fail(`battle.spriteStyle は "none" か "acrylic": ${JSON.stringify(b.spriteStyle)}`)
+  if (b.presentation !== undefined && b.presentation !== 'dq' && b.presentation !== 'ff')
+    return fail(`battle.presentation は "dq" か "ff": ${JSON.stringify(b.presentation)}`)
+  if (b.windowStyle !== undefined && b.windowStyle !== 'dark' && b.windowStyle !== 'ff-blue')
+    return fail(`battle.windowStyle は "dark" か "ff-blue": ${JSON.stringify(b.windowStyle)}`)
+  if (b.commandLayout !== undefined && b.commandLayout !== 'grid' && b.commandLayout !== 'cross')
+    return fail(`battle.commandLayout は "grid" か "cross": ${JSON.stringify(b.commandLayout)}`)
+  if (b.atb !== undefined && b.atb !== 'on' && b.atb !== 'off')
+    return fail(`battle.atb は "on" か "off": ${JSON.stringify(b.atb)}`)
+  if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
+    return fail(`battle.atbMode は "wait" か "active": ${JSON.stringify(b.atbMode)}`)
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -355,6 +377,10 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         height: bh.value,
         ...(enemyGrid ? { enemyGrid } : {}),
         ...(enemyWindowOverlap !== undefined ? { enemyWindowOverlap } : {}),
+        ...(b.presentation ? { presentation: b.presentation } : {}),
+        ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
+        ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
+        ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
       },
       ...(groupErrors ? { groupErrors } : {}),
     },

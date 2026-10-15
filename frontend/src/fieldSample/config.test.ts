@@ -526,6 +526,54 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle の presentation / windowStyle / commandLayout / atb を読む (#883)', () => {
+    const c = withEncounter()
+    c.battle = {
+      presentation: 'ff',
+      windowStyle: 'ff-blue',
+      commandLayout: 'cross',
+      atb: 'on',
+      atbMode: 'active',
+    }
+    const b = ok(c).battle
+    expect(b.presentation).toBe('ff')
+    expect(b.windowStyle).toBe('ff-blue')
+    expect(b.commandLayout).toBe('cross')
+    expect(b.atb).toEqual({ mode: 'active' })
+  })
+
+  it('atb: "on" だけなら wait、"off" や未指定は atb なし (#883)', () => {
+    const c = withEncounter()
+    c.battle = { atb: 'on' }
+    expect(ok(c).battle.atb).toEqual({ mode: 'wait' })
+    c.battle = { atb: 'off', atbMode: 'active' }
+    expect(ok(c).battle.atb).toBeUndefined()
+  })
+
+  it('battle の演出系が未指定なら該当キーが無い（従来どおり） (#883)', () => {
+    const b = ok(withEncounter()).battle
+    for (const k of ['presentation', 'windowStyle', 'commandLayout', 'atb']) {
+      expect(k in b).toBe(false)
+    }
+  })
+
+  it('battle の演出系の不正値はエラー (#883)', () => {
+    const bad: Array<Record<string, unknown>> = [
+      { presentation: 'ffx' },
+      { presentation: 1 },
+      { windowStyle: 'blue' },
+      { commandLayout: 'diamond' },
+      { atb: true },
+      { atb: 'maybe' },
+      { atbMode: 'fast' },
+    ]
+    for (const battle of bad) {
+      const c = withEncounter()
+      c.battle = battle
+      expect(parseConfig(c, BASE).ok).toBe(false)
+    }
+  })
+
   it('battle.enemyGrid / enemyWindowOverlap を読む', () => {
     const c = ok(withGrid('6x2', ['bit']))
     expect(c.battle.enemyGrid).toEqual({ cols: 6, rows: 2 })

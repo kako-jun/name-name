@@ -306,6 +306,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 歩行マスク: 背景と同じ大きさの白黒画像（白=歩ける）。判定は足元 1 点。壁にぶつかったときは通れる軸だけ滑る。向きは移動ベクトルの支配軸（きっちり斜めのときは直前の向きを保つ）。歩行スプライトは 4 方向 × 3 コマ
 - 端のリンク: 足元が端のしきい値（`edgeThreshold`）内で、`links` の `range` に入り、その端へ向かって進むと遷移する（フェード）。遷移先では、遷移先シーンの「元のシーンへ戻るリンク」の `range` に、出た位置の相対位置を写して端から少し内側に出る（歩けなければ近い歩ける点へずらす）。到着直後は、その端へ向かう入力が途切れるまでそのリンクを無効にし、折り返しを防ぐ
 - エラー表示: 背景とマスクの大きさが違うシーンは読み込み失敗としてエラーを画面に出す。`start` の近くに歩ける点がなければ警告を出す。遷移先に歩ける点がない、またはシーンの読み込みに失敗したときは、遷移を中止して元のシーンに留まり、エラーを出す（その端へ向かう入力が途切れるまで同じリンクは再試行しない）。画像の fetch が失敗したときは URL と CORS（`Access-Control-Allow-Origin`）の可能性を添えて表示する。モンスター・味方の `hp` は 1 以上
+- 戦闘の演出（`battle`、#883）: `presentation`（`dq`/`ff`。`ff` は踏み出して斬る・のけぞり・ダメージ数字・技名だけのメッセージ窓。`layout: "side"` のときだけ効く）・`windowStyle`（`dark`/`ff-blue`）・`commandLayout`（`grid`/`cross`。`cross` は `side` のときだけ）・`atb`（`"on"`/`"off"`）・`atbMode`（`wait`/`active`。`atb: "on"` のときだけ使う、既定 `wait`）。値は本編の `battle_presentation` / `window_style` / `battle_command_layout` / `battle_atb` / `battle_atb_mode` と同じ。不正値は読み込みエラー。未指定は従来どおり（`dq`・`dark`・`grid`・ターン制）
 - 設定 JSON の主なキー: `startScene` / `start`（初期の足元）/ `speed`（背景ピクセル/秒）/ `edgeThreshold` / `assetBaseUrl`（指定時は RPG の画像と同じく `${base}/images/...` に解決 #746）/ `player.sprites`（`up|down|left|right` それぞれ 3 コマの URL）・`height`・`frameMs` / `scenes.<id>`（`background`・`mask`・`links[]`＝`{ edge, range, to }`）
 - 純粋関数は `frontend/src/game/fieldWalk.ts`（マスク判定・移動・向き・歩行アニメ・端のリンク・出現位置）、設定の検証は `frontend/src/fieldSample/config.ts`、ブラウザ API 部は `main.ts`
 
