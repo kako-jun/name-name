@@ -29,7 +29,13 @@ export function rollEncounter(input: {
   // 群の書式 (#839 段2): 配置 `@C1`・個数 `*3` `*1..3`・重み `:3`。修飾なしの群は従来と同じ解釈。
   // 重みがどの群にも無ければ従来の等確率抽選（乱数消費も同一）
   const parsedGroups = input.groups.map(parseEncounterGroup)
-  const picked = parsedGroups[pickGroupIndex(parsedGroups.map((g) => g.weight), input.rng)]
+  const picked =
+    parsedGroups[
+      pickGroupIndex(
+        parsedGroups.map((g) => g.weight),
+        input.rng
+      )
+    ]
   for (const w of picked.warnings) console.warn(`[name-name] encounter group: ${w}`)
   const monsterIds = resolveEncounterGroup(picked, input.rng).map((e) => e.id)
   const enemies: BattleEntity[] = []

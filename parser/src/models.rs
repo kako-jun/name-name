@@ -268,9 +268,11 @@ pub struct RpgMapData {
     /// Issue #172 で追加。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encounter_rate: Option<u32>,
-    /// エンカウント時に抽選される敵グループ名のリスト（重み均等）。
+    /// エンカウント時に抽選される敵グループ名のリスト（重み指定が無ければ均等）。
     /// `[エンカウント群: slime, ghost, slime+skeleton]` で指定。
     /// 各要素は単体モンスター ID または `+` 連結の複合（同時出現）。
+    /// 修飾子 `@C1`（配置）`*3` `*1..3`（個数）末尾 `:3`（重み）は生文字列のまま透過し、
+    /// TS 側 (enemyGroup.ts) が解釈する（#839）。
     /// 未指定の場合 encounter_rate が設定されていてもエンカウントしない。
     /// Issue #172 で追加。
     #[serde(default, skip_serializing_if = "Option::is_none")]

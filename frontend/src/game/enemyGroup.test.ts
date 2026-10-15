@@ -62,6 +62,29 @@ describe('parseEncounterGroup', () => {
   it('個数の上限ちょうどは通る', () => {
     expect(parseEncounterGroup(`a*${ENCOUNTER_ITEM_MAX_COUNT}`).items).toHaveLength(1)
   })
+  it('有効な項が無い群は警告する（重みだけ・項が全部捨てられた）', () => {
+    expect(parseEncounterGroup(':2').warnings.some((w) => w.includes('有効な項が無い'))).toBe(true)
+    const g = parseEncounterGroup('a:2:3')
+    expect(g.items).toEqual([])
+    expect(g.weight).toBe(3)
+    expect(g.warnings.some((w) => w.includes('有効な項が無い'))).toBe(true)
+    expect(parseEncounterGroup('').warnings).toEqual([])
+  })
+  it('全角の修飾記号・数字・セルを受理する（id 本体は正規化しない）', () => {
+    const g = parseEncounterGroup('boss＠Ｃ１＋x')
+    // 全角プラスは連結記号ではないので boss＠Ｃ１＋x 全体が1項（修飾部が不正）→ 捨てる
+    expect(g.items).toEqual([])
+    const h = parseEncounterGroup('bit＊２＠Ｅ１+s＊１．．３：２')
+    expect(h.weight).toBe(2)
+    expect(h.items).toEqual([
+      { id: 'bit', min: 2, max: 2, ranged: false, at: { col: 4, row: 0 } },
+      { id: 's', min: 1, max: 3, ranged: true },
+    ])
+    expect(parseEncounterGroup('ｓｌｉｍｅ').items[0].id).toBe('ｓｌｉｍｅ')
+  })
+  it('id に . を含んでよい', () => {
+    expect(parseEncounterGroup('a.b*2').items[0]).toMatchObject({ id: 'a.b', min: 2 })
+  })
   it('不正な重みは無視して警告（項は残る）', () => {
     for (const bad of [':0', ':x', ':1.5', ':-1', ':', ':99999999999999999999']) {
       const g = parseEncounterGroup(`a${bad}`)
@@ -108,7 +131,15 @@ describe('resolveEncounterGroup', () => {
   it('範囲ごとに rng を 1 回ずつ消費し、境界値を取る', () => {
     const g = parseEncounterGroup('a*1..3+b*2..4')
     expect(resolveEncounterGroup(g, () => 0).map((e) => e.id)).toEqual(['a', 'b', 'b'])
-    expect(resolveEncounterGroup(g, () => 0.9999).map((e) => e.id)).toEqual(['a', 'a', 'a', 'b', 'b', 'b', 'b'])
+    expect(resolveEncounterGroup(g, () => 0.9999).map((e) => e.id)).toEqual([
+      'a',
+      'a',
+      'a',
+      'b',
+      'b',
+      'b',
+      'b',
+    ])
     const s = seq([0, 0])
     resolveEncounterGroup(g, s.rng)
     expect(s.count()).toBe(2)
@@ -118,7 +149,7 @@ describe('resolveEncounterGroup', () => {
     expect(r).toEqual([{ id: 'bit', at: { col: 4, row: 0 } }, { id: 'bit' }])
     const res = placeEnemies(
       { cols: 6, rows: 2 },
-      r.map((e) => ({ w: 1, h: 1, ...(e.at ? { at: e.at } : {}) })),
+      r.map((e) => ({ w: 1, h: 1, ...(e.at ? { at: e.at } : {}) }))
     )
     expect(res.errors).toEqual([])
     expect(res.cells[0]).toEqual({ col: 4, row: 0 })
@@ -151,6 +182,45 @@ describe('rollEncounter: 群の書式 (#839 段2)', () => {
       expect(s.count()).toBe(2)
     }
   })
+  it('回帰: k/n ちょうどと k/n-ε の境界値・未知id・constructor・空項を含むシード固定ランダム', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 旧実装の式を参照実装として持つ
+    const legacyIds = (spec: string) =>
+      spec
+        .split('+')
+        .map((x) => x.trim())
+        .filter(Boolean)
+    const legacyRoll = (groups: string[], r: number) => {
+      const ids = legacyIds(groups[Math.floor(r * groups.length)]).filter((id) =>
+        Object.prototype.hasOwnProperty.call(masters, id)
+      )
+      return ids.length > 0 ? ids : null
+    }
+    const check = (groups: string[], r: number) => {
+      const s = seq([0, r])
+      const out = rollEncounter({ rate: 1, groups, masters, rng: s.rng })
+      expect(out?.map((e) => e.id) ?? null).toEqual(legacyRoll(groups, r))
+      expect(s.count()).toBe(2)
+    }
+    const groups = ['a', 'b+c', 'constructor', 'zzz+ a ++b', 'c+c']
+    const n = groups.length
+    for (let k = 0; k <= n; k++) {
+      if (k < n) check(groups, k / n)
+      if (k > 0) check(groups, k / n - Number.EPSILON)
+      if (k > 0) check(groups, (k - 0.01) / n)
+    }
+    let state = 12345
+    const lcg = () => (state = (state * 1664525 + 1013904223) % 4294967296) / 4294967296
+    for (let i = 0; i < 300; i++) check(groups.slice(0, 1 + (i % n)), lcg())
+    warn.mockRestore()
+  })
+  it('構文エラー項の警告は console.warn で出る', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    rollEncounter({ rate: 1, groups: ['a+b*0'], masters, rng: () => 0 })
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain("'b*0'")
+    warn.mockRestore()
+  })
   it('重みつきは rng 2 回（当選判定＋抽選）。重みの比で選ぶ', () => {
     const groups = ['a', 'b:3']
     const s = seq([0, 0.3])
@@ -160,7 +230,11 @@ describe('rollEncounter: 群の書式 (#839 段2)', () => {
   })
   it('個数の幅は群を選んだ後に範囲ごと 1 回ずつ消費', () => {
     const s = seq([0, 0, 0.99])
-    expect(ids(rollEncounter({ rate: 1, groups: ['a*1..3'], masters, rng: s.rng }))).toEqual(['a', 'a', 'a'])
+    expect(ids(rollEncounter({ rate: 1, groups: ['a*1..3'], masters, rng: s.rng }))).toEqual([
+      'a',
+      'a',
+      'a',
+    ])
     expect(s.count()).toBe(3)
   })
   it('構文エラーの項だけ捨てる。全部捨てたら不発', () => {
@@ -171,7 +245,9 @@ describe('rollEncounter: 群の書式 (#839 段2)', () => {
   })
   it('未知 id は従来どおり警告して飛ばす', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(ids(rollEncounter({ rate: 1, groups: ['zzz*2+a'], masters, rng: () => 0 }))).toEqual(['a'])
+    expect(ids(rollEncounter({ rate: 1, groups: ['zzz*2+a'], masters, rng: () => 0 }))).toEqual([
+      'a',
+    ])
     expect(warn).toHaveBeenCalledTimes(2)
     warn.mockRestore()
   })

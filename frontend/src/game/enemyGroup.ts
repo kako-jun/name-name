@@ -13,10 +13,10 @@
  * 構文エラーの項は警告を返し、その項だけ捨てる。純粋関数のみ（乱数は引数）。
  */
 
-import { parseCellRef, type GridCell } from './enemyGrid'
+import { ENEMY_GRID_MAX_COLS, ENEMY_GRID_MAX_ROWS, parseCellRef, type GridCell } from './enemyGrid'
 
 /** 1 項あたりの個数の上限（敵グリッドの最大セル数 12×4 に合わせる） */
-export const ENCOUNTER_ITEM_MAX_COUNT = 48
+export const ENCOUNTER_ITEM_MAX_COUNT = ENEMY_GRID_MAX_COLS * ENEMY_GRID_MAX_ROWS
 
 export interface EncounterGroupItem {
   id: string
@@ -43,13 +43,21 @@ export interface ResolvedEnemy {
   at?: GridCell
 }
 
-const ITEM_RE = /^([^@*:\s]+)(?:\*(\d+)(?:\.\.(\d+))?)?(?:@(\S+))?$/
+/** 修飾の開始記号（半角・全角）。id 本体はこれらを含まない */
+const MODIFIER_START_RE = /[@*:＠＊：]/
+/** 修飾部分（NFKC 正規化後）。個数 `*3` `*1..3` と配置 `@C1` */
+const MODIFIER_RE = /^(?:\*(\d+)(?:\.\.(\d+))?)?(?:@(\S+))?$/
 const UINT_RE = /^\d+$/
 
 function parseItem(raw: string): EncounterGroupItem | string {
-  const m = ITEM_RE.exec(raw)
+  const idx = raw.search(MODIFIER_START_RE)
+  const id = idx < 0 ? raw : raw.slice(0, idx)
+  if (!id || /\s/.test(id)) return `構文エラーの項を捨てた '${raw}'`
+  // 全角の修飾記号・数字・セルだけ NFKC で受理する（id 本体は正規化しない）
+  const mod = idx < 0 ? '' : raw.slice(idx).normalize('NFKC')
+  const m = MODIFIER_RE.exec(mod)
   if (!m) return `構文エラーの項を捨てた '${raw}'`
-  const [, id, a, b, cellRaw] = m
+  const [, a, b, cellRaw] = m
   let min = 1
   let max = 1
   let ranged = false
@@ -67,7 +75,6 @@ function parseItem(raw: string): EncounterGroupItem | string {
     if (max > ENCOUNTER_ITEM_MAX_COUNT) {
       return `個数が上限 ${ENCOUNTER_ITEM_MAX_COUNT} を超える項を捨てた '${raw}'`
     }
-    if (!ranged && min < 1) return `個数が不正な項を捨てた '${raw}'`
   }
   const item: EncounterGroupItem = { id, min, max, ranged }
   if (cellRaw !== undefined) {
@@ -83,9 +90,12 @@ export function parseEncounterGroup(spec: string): ParsedEncounterGroup {
   const warnings: string[] = []
   let body = spec
   let weight: number | undefined
-  const colon = spec.lastIndexOf(':')
+  const colon = Math.max(spec.lastIndexOf(':'), spec.lastIndexOf('：'))
   if (colon >= 0) {
-    const w = spec.slice(colon + 1).trim()
+    const w = spec
+      .slice(colon + 1)
+      .normalize('NFKC')
+      .trim()
     body = spec.slice(0, colon)
     const n = Number(w)
     if (UINT_RE.test(w) && Number.isSafeInteger(n) && n >= 1) weight = n
@@ -99,6 +109,7 @@ export function parseEncounterGroup(spec: string): ParsedEncounterGroup {
     if (typeof r === 'string') warnings.push(r)
     else items.push(r)
   }
+  if (items.length === 0 && spec.trim() !== '') warnings.push(`有効な項が無い群 '${spec.trim()}'`)
   return { items, ...(weight !== undefined ? { weight } : {}), warnings }
 }
 
@@ -107,7 +118,10 @@ export function parseEncounterGroup(spec: string): ParsedEncounterGroup {
  * どの群にも重みが無ければ現行どおり `Math.floor(rng() * n)`（乱数消費 1 回で同一）。
  * あれば累積重み（未指定は 1）から rng() 1 回。
  */
-export function pickGroupIndex(weights: ReadonlyArray<number | undefined>, rng: () => number): number {
+export function pickGroupIndex(
+  weights: ReadonlyArray<number | undefined>,
+  rng: () => number
+): number {
   const n = weights.length
   if (weights.every((w) => w === undefined)) return Math.floor(rng() * n)
   const ws = weights.map((w) => w ?? 1)
@@ -136,7 +150,10 @@ function rollOnce(items: readonly EncounterGroupItem[], rng: () => number): Reso
  * 群の個数を確定して敵のリストにする。範囲指定を書いた項ごとに rng() を 1 回消費する。
  * 全体が 0 体になったら 1 回だけ振り直す（2 回目は 0 のままでも返す）。
  */
-export function resolveEncounterGroup(group: ParsedEncounterGroup, rng: () => number): ResolvedEnemy[] {
+export function resolveEncounterGroup(
+  group: ParsedEncounterGroup,
+  rng: () => number
+): ResolvedEnemy[] {
   const first = rollOnce(group.items, rng)
   if (first.length > 0 || !group.items.some((i) => i.ranged)) return first
   return rollOnce(group.items, rng)
