@@ -29,7 +29,7 @@ function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 interface Internals {
   atbBars: Graphics[]
   atbBarRects: Array<{ x: number; y: number; w: number; h: number }>
-  atbMarkers: Text[]
+  partyViews: Array<{ selectMark: Graphics }>
   statusTexts: Text[]
   statusHpTexts: Text[]
   statusMpTexts: Text[]
@@ -147,32 +147,32 @@ describe('BattleScreen ATB: ゲージ棒の色と幅（溜まり中は青・満�
   })
 })
 
-describe('BattleScreen ATB: 番の味方のマーカー（▶ + 黄色）', () => {
-  it('side: キュー先頭だけ ▶ が付いて黄色。他は付かず白', () => {
+describe('BattleScreen ATB: 番の味方のマーカー（アクスタ頭上の ▼ + 黄色）', () => {
+  it('side: キュー先頭の味方のアクスタにだけ ▼ が付いて黄色。他は付かず白', () => {
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [0, 1000] }))
     const [ta, tb] = I(s).statusTexts
-    // ▶ は名前の文字列に混ぜず、別 Text（左余白）で出す
+    // ▼ はウィンドウ側でなくアクスタ側（partyViews の selectMark）に出す (#805)
     expect(tb.text.startsWith('B')).toBe(true)
-    expect(I(s).atbMarkers[1].visible).toBe(true)
+    expect(I(s).partyViews[1].selectMark.visible).toBe(true)
     expect(tb.style.fill).toBe(0xffee66)
     expect(ta.text.includes('▶')).toBe(false)
-    expect(I(s).atbMarkers[0].visible).toBe(false)
+    expect(I(s).partyViews[0].selectMark.visible).toBe(false)
     expect(ta.style.fill).toBe(0xffffff)
   })
 
   it('side: 行動後はマーカーが消える', () => {
     const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }))
-    expect(I(s).atbMarkers[0].visible).toBe(true)
+    expect(I(s).partyViews[0].selectMark.visible).toBe(true)
     I(s).commands[0].hit.emit('pointertap', {} as never)
-    expect(I(s).atbMarkers[0].visible).toBe(false)
+    expect(I(s).partyViews[0].selectMark.visible).toBe(false)
     expect(I(s).statusTexts[0].text.includes('▶')).toBe(false)
     expect(I(s).statusTexts[0].style.fill).toBe(0xffffff)
   })
 
-  it('front: 番なら heroStatsText に ▶ と黄色', () => {
+  it('front: 番なら heroStatsText が黄色（▶ は付かない）', () => {
     const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' })
     expect(I(s).heroStatsText.text.startsWith('A')).toBe(true)
-    expect(I(s).atbMarkers[0].visible).toBe(true)
+    expect(I(s).heroStatsText.text.includes('▶')).toBe(false)
     expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
   })
 
@@ -375,7 +375,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     })
   })
 
-  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見え、▶ は名前に重ならない', () => {
+  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見える（ウィンドウ側に ▶ は出ない）', () => {
     const mk = () =>
       Array.from({ length: 4 }, (_, i) =>
         ent(`p${i}`, { name: 'ゆうしゃ', hp: 120, maxHp: 120, mp: 99, maxMp: 99 })
@@ -393,11 +393,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
       expect(t.text.startsWith('ゆ')).toBe(true)
       expect(I(on.s).statusHpTexts[i].text + I(on.s).statusHpMaxes[i].text).toContain('120/120')
     })
-    const m = I(on.s).atbMarkers[0]
-    expect(m.visible).toBe(true)
-    expect(m.text).toBe('▶')
-    // ▶ は名前の左余白に収まり、名前の文字と重ならない
-    expect(m.x + estimateTextWidth('▶', 10)).toBeLessThanOrEqual(I(on.s).statusTexts[0].x + 0.001)
+    I(on.s).statusTexts.forEach((t) => expect(t.text.includes('▶')).toBe(false))
   })
 
   it('ATB on/off で HP の列位置は ATB のゲージぶんだけ左へ寄る（off は寄らない）', () => {
