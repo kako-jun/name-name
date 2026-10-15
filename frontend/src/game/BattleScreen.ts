@@ -1554,7 +1554,10 @@ export class BattleScreen extends Container {
       height: this.screenHeight,
       command: L.command,
       top: L.log.y + L.log.h + SIDE_GAP,
-      enemySlots: L.enemies.map(slotRect),
+      // 敵グリッド (#839 段4): 対象選択の手は、倍率で縮めた絵の箱（slot.box）基準。占有矩形のままだと倍率<1の敵で絵からずれる
+      enemySlots: L.enemies.map((sl) =>
+        isEnemyGridSlot(sl) ? { x: sl.box.x, y: sl.box.y, w: sl.box.w, h: sl.box.h } : slotRect(sl)
+      ),
       partySlots: L.party.map(slotRect),
     }
 
@@ -1713,7 +1716,7 @@ export class BattleScreen extends Container {
   private placeEntityView(view: EntityView, slot: SpriteSlot | undefined): void {
     if (!slot) return
     view.slotRef = slot
-    // 敵グリッド (#839 段4): 絵・箱は占有矩形を倍率で縮めた slot.box に収める（足元中央）。占有矩形（slot 本体）は被ダメ数字・対象選択の基準のまま
+    // 敵グリッド (#839 段4): 絵・箱は占有矩形を倍率で縮めた slot.box に収める（足元中央）。被ダメ数字の高さは描いた絵の矩形、対象選択は slot.box 基準
     const gridBox = isEnemyGridSlot(slot) ? slot.box : null
     const size = slot.size
     const fx = gridBox ? gridBox.x : slot.x
@@ -1759,7 +1762,8 @@ export class BattleScreen extends Container {
     if (view.sprite) {
       if (this.acrylicParams && view.acrylicBack) {
         head = this.placeAcrylic(view, box) ?? head
-        if (isParty) view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
+        if (isParty || gridBox)
+          view.anchorY = view.baseY + view.sprite.y + view.sprite.height * 0.35
       } else {
         // 縮尺は基本の絵を枠に収めたときのものを全ポーズで共通に使い、足元（下端中央）を基本の絵に揃える (#745)
         const baseTex = view.baseVisual?.texture ?? view.sprite.texture
@@ -1769,7 +1773,7 @@ export class BattleScreen extends Container {
         view.sprite.width = r.width
         view.sprite.height = r.height
         head = { cx: fit.x + fit.width / 2, top: fit.y }
-        if (isParty) view.anchorY = slot.y + fit.y + fit.height * 0.35
+        if (isParty || gridBox) view.anchorY = fy + fit.y + fit.height * 0.35
       }
       view.fallback.visible = false
     }

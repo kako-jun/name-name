@@ -921,6 +921,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const enemyPlate = input.enemyAcrylic ?? null
   // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
   let gridFrontFloor: number | null = null
+  let gridOverlap = 0
   const formEnemies = (region: Rect): SpriteSlot[] =>
     computeFormation(region, enemyCount, 'enemy', true, undefined, input.enemyAspects, {
       maxSize: SIDE_ENEMY_MAX_SIZE,
@@ -937,6 +938,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       input.enemyWindowOverlap,
       log.h
     )
+    gridOverlap = overlap
     const placedIdx: number[] = []
     const footprints: EnemyFootprint[] = []
     for (let i = 0; i < enemyCount; i++) {
@@ -1001,7 +1003,16 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       )
       const horizonY = H * Math.min(1, Math.max(0, depth.horizon))
       enemies = input.enemyGrid
-        ? applyDepthToGridSlots(enemies as EnemyGridSlot[], frontFloor, horizonY, depth.perspective)
+        ? applyDepthToGridSlots(
+            enemies as EnemyGridSlot[],
+            frontFloor,
+            horizonY,
+            depth.perspective,
+            {
+              bottom: log.y + log.h,
+              overlap: gridOverlap,
+            }
+          )
         : applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
       party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)
     }

@@ -1,5 +1,5 @@
 /**
- * 敵の見えないグリッド (#839 段1): 純粋関数のみ。まだどこにも配線しない（既存の戦闘配置は不変）。
+ * 敵の見えないグリッド (#839): 純粋関数のみ（段1）。段4で `computeSideBattleLayout` / `BattleScreen` に配線済み（`battle_enemy_grid` を書いたゲームだけ。未指定は従来の配置）。
  *
  * 設計の正本は docs/design/enemy-formation.md §3.1〜3.6。
  * - 座標系: 列は左から 0,1,2,…（表記 A,B,C,…。左 = 奥・味方から遠い、右 = 手前）、行は上から 0,1,…（表記 1,2,…）
@@ -378,12 +378,14 @@ export function clampEnemyWindowOverlap(
 /**
  * 奥行き (#747) をグリッド由来の敵スロットに適用する。`applyDepthToSlots` と同じ規則（元の占有矩形の上端・水平中央を保って縮尺 `s` で縮める）を、
  * `occupied` / `box` にも同じ変換で適用し、ラベルも追従させる。`floor` は元の値のまま（描画順の基準）。
+ * `window` を渡すと、縮めたあとの窓との重なりが `overlap * 縮んだ高さ` を超えないよう、元の占有矩形の内側で下へずらす。
  */
 export function applyDepthToGridSlots(
   slots: readonly EnemyGridSlot[],
   frontFloor: number,
   horizonY: number,
-  perspective: number
+  perspective: number,
+  window?: { bottom: number; overlap: number }
 ): EnemyGridSlot[] {
   return slots.map((slot) => {
     const s = computeDepthScale(slot.floor, frontFloor, horizonY, perspective)
@@ -396,7 +398,21 @@ export function applyDepthToGridSlots(
       w: r.w * s,
       h: r.h * s,
     })
-    const occupied = shrink(slot.occupied)
+    let occupied = shrink(slot.occupied)
+    let box = shrink(slot.box)
+    // 窓との重なり (#838): グリッドは縮める前の cell で上端を `overlap * cell` だけ窓の下へ延ばしている。上端固定で縮めると、
+    // 縮んだ高さに対する重なりの比が許容量を超える（縮尺が小さいほど窓の下に丸ごと隠れる）。元の占有矩形の内側で、
+    // 窓に入る量が `overlap * 縮んだ高さ` 以下になる位置まで下へずらす（元の下端は超えない＝非重複などの不変条件は保たれる）
+    let dy = 0
+    if (window) {
+      const want = window.bottom - window.overlap * occupied.h - occupied.y
+      const room = slot.occupied.y + slot.occupied.h - (occupied.y + occupied.h)
+      dy = Math.max(0, Math.min(want, room))
+      if (dy > 0) {
+        occupied = { ...occupied, y: occupied.y + dy }
+        box = { ...box, y: box.y + dy }
+      }
+    }
     const out: EnemyGridSlot = {
       x: occupied.x,
       y: occupied.y,
@@ -406,7 +422,7 @@ export function applyDepthToGridSlots(
       scale: s,
       displayScale: slot.displayScale,
       occupied,
-      box: shrink(slot.box),
+      box,
     }
     if (slot.label) {
       const w = slot.label.w * s

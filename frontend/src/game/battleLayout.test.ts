@@ -2285,7 +2285,14 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
   const overlaps0 = [0, 0.25, 0.5]
   const depths = [null, { horizon: 0.3, perspective: 1 }]
   const acrylics = [null, DEFAULT_ACRYLIC_PARAMS]
-  const sizes: Array<[number, number]> = [...SWEEP_SIZES, [1280, 400], [900, 900]]
+  // 大きい画面は、窓の高さ（延長 overlap*cell の上限）を超える延長を求める入力＝窓クランプが効く画面（外すと総当たりが落ちる）
+  const sizes: Array<[number, number]> = [
+    ...SWEEP_SIZES,
+    [1280, 400],
+    [900, 900],
+    [1920, 1080],
+    [1600, 900],
+  ]
 
   function footprints(f: Fixture): FP[] {
     const r = placeEnemies(
@@ -2321,6 +2328,43 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
       enemyAspects: Array(n).fill(0.7),
     })
   }
+
+  it('奥行き有効でも窓との重なりが許容量（縮んだ占有高さ比）以下（最上行の 1x1・回帰）', () => {
+    const cases: Array<[number, number, { cols: number; rows: number }, number]> = [
+      [1600, 720, { cols: 4, rows: 2 }, 0.25],
+      [800, 450, { cols: 6, rows: 2 }, 0.25],
+      [1280, 568, { cols: 4, rows: 2 }, 0.5],
+    ]
+    for (const [w, h, grid, ov] of cases) {
+      const L = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyGrid: grid,
+        enemyFootprints: [{ col: 0, row: 0, w: 1, h: 1 }],
+        enemyWindowOverlap: ov,
+        depth: { horizon: 0.3, perspective: 1 },
+      })
+      const s = L.enemies[0]
+      const over = Math.max(0, L.log.y + L.log.h - s.y)
+      const ctx = `${w}x${h} ${grid.cols}x${grid.rows} ov${ov}`
+      expect(s.scale, ctx).toBeLessThan(1)
+      expect(over, ctx).toBeLessThanOrEqual(ov * s.size + 1e-6)
+      // 元の占有矩形（縮める前）の中に収まったまま
+      const flat = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyGrid: grid,
+        enemyFootprints: [{ col: 0, row: 0, w: 1, h: 1 }],
+        enemyWindowOverlap: ov,
+      }).enemies[0]
+      expect(s.y + s.size, ctx).toBeLessThanOrEqual(flat.y + flat.size + 1e-6)
+      expect(s.y, ctx).toBeGreaterThanOrEqual(flat.y - 1e-6)
+    }
+  })
 
   it('占有矩形・ラベル・板の不変条件（画面内・ログ帯の重なり量・非重複・味方領域）', () => {
     let checked = 0
@@ -2368,7 +2412,8 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
                 expect(r.y, `${ctx} enemy${i} above log`).toBeGreaterThanOrEqual(L.log.y - 1e-6)
                 const over = Math.max(0, L.log.y + L.log.h - r.y)
                 expect(over, `${ctx} enemy${i} overlap`).toBeLessThanOrEqual(ov * cell + 1e-6)
-                if (!depth) expect(over, ctx).toBeLessThanOrEqual(ov * r.h + 1e-6)
+                // 奥行きで縮んだあとも、占有高さ（縮んだ高さ）に対する重なりが許容量以下
+                expect(over, `${ctx} enemy${i} overlap/size`).toBeLessThanOrEqual(ov * r.h + 1e-6)
                 for (const pr of partyRects) expect(overlaps(r, pr), `${ctx} party`).toBe(false)
                 // ラベル: stage 内
                 if (s.label) {
