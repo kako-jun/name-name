@@ -431,3 +431,18 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **手順の順序と同期の契約は不変。** 世代捕捉（`beginEntry`）→ confinement 判定 → 解決 → 適用前の文脈確定 → 適用 → 後処理。読み込み済みのシーンへの入場は同期のまま適用する。`await` の後の `superseded` 判定（世代と `isActive`）は `enter` の1か所だけ。
 - **適用前の文脈確定の分担。** 新規開始では `confinedSceneIds` の置き換え（コントローラ）→ flags の置換と `storyEnded = false`（Host の `applyFreshContext`）→ `consecutiveJumps = 0`（`transition.resetChain()`）の順で、いずれも適用より前に済ませる。`storyEnded = false` は、通常の入場でも `startEvents` が適用の前に行う（先回り終劇 #398 の二重発火ガード）。スナップショットの復元は `restoreToScene` の `presetStoryEnded` で、適用の前に `storyEnded` を直接セットする（#460）。
 - **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（`confinedSceneIds` は `exposeEntryFields`、入場の内部メソッドを `vi.spyOn` する場合は `entryControllerOf`）。
+
+## #827 での追記（2026-10-15、#735 6/8）
+
+クイックセーブ・自動セーブ・セーブ/ロードメニュー・ロード通知を、`NovelRenderer` から `frontend/src/game/SaveController.ts` に分けた。**実装の置き場は `SaveController`** である。挙動と本 ADR の契約（保存内容・トースト文言・自動セーブの時点・通知の順序）は変えていない。本文中の語は、次のとおり読み替える。
+
+| 旧（レンダラの private / public） | 新 |
+| --- | --- |
+| `quickSave()` / `quickLoad(origin)` / `requestAutoSave()` / `getQuickSaveFlags()` / `hasQuickSave()` / `clearQuickSave()` | 公開 API とシグネチャ・戻り値はレンダラに残り、`SaveController` の同名メソッドへ委譲する薄いラッパー |
+| `saveQuick(origin)` / `flushAutoSave()` / `openSaveMenu()` / `openLoadMenu()` / `loadFromSaveData(data, origin)` / `notifyLoadFailure()` / `notifyLoadSuccess(origin)` | `SaveController` の同名メソッド（レンダラからは消えた。キー操作と入場の通知は `save.*` を直接呼ぶ） |
+| `autoSavePending` | `SaveController` の private。保留の書き込みはクラス内（`requestAutoSave` / `flushAutoSave`）と `discardPendingAutoSave()` だけ。新しい入場（`resetAndStartEvents`）・復元（`applyState`）が `discardPendingAutoSave()` を呼ぶ（#768 の「保留は次の入場・復元で破棄」） |
+| `saveManager` | `SaveController.saveManager`（`setDocKey` と `SaveLoadOverlay` の生成にレンダラが使う） |
+| `applyState` / `restoreToScene` / `getSnapshot` | レンダラに残る（ステージとカーソルを横断する合成。Host の `getSnapshot` と、`enter` 経由の `restoreToScene` として使われる） |
+
+- **Host 越し。** `SaveController` は `NovelRenderer` も pixi も import せず、自分で定義する `SaveHost`（7 メソッド: `getSnapshot` / `isStoryEnded` / `getPlayheadSceneId` / `showToast` / `ensureAudioContext` / `normalizeBackgroundFade` / `enter`）だけを見る。ゲート判定は `TransitionState`、本文位置の判定は `PlaybackCursor`、シーン名の解決は `SceneIndex` をコンストラクタ注入で使う。`SaveLoadOverlay`（pixi）はレンダラが生成し、`attachMenu` で渡す。
+- **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（`saveManager` / `autoSavePending` / `saveQuick` / `openSaveMenu` / `openLoadMenu` は `exposeSaveMembers`、コントローラ内部の呼び出しを `vi.spyOn` する場合は `saveControllerOf`）。

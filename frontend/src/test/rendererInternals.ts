@@ -3,6 +3,8 @@ import type { NovelGameState } from '../game/GameState'
 import type { Deferred, SceneEntryResult } from '../game/sceneEntry'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import type { SceneEntryController } from '../game/SceneEntryController'
+import type { SaveController } from '../game/SaveController'
+import type { SaveManager } from '../game/SaveManager'
 
 /**
  * テスト用: `NovelRenderer` の private フィールド・メソッドを読み書きするための型付きアクセサ (#735 1/8, #822)。
@@ -60,11 +62,21 @@ export interface RendererInternals {
   processDirective(event: Event): void
   openSaveMenu(): void
   openLoadMenu(): void
+  saveQuick(origin: 'quick' | 'auto'): boolean
   preloadUpcomingAssets(): void
   scheduleAutoAdvance(): void
   scheduleSkipStep(): void
   isNovelStyle(): boolean
   showToast(msg: string): void
+}
+
+/**
+ * セーブまわり (#827) のフィールド。狭い型で `saveManager` を宣言し直すテストが多いので基底には置かず、
+ * 実物の型で触りたいテストが `internals<SaveInternals>(r)` で取る。
+ */
+export interface SaveInternals extends RendererInternals {
+  saveManager: SaveManager
+  autoSavePending: boolean
 }
 
 /**
@@ -83,6 +95,7 @@ export function internalsOf<T>(r: NovelRenderer): T {
   exposeCursorFields(r)
   exposeTransitionFields(r)
   exposeEntryFields(r)
+  exposeSaveMembers(r)
   return r as unknown as T
 }
 
@@ -228,3 +241,58 @@ export type EntryControllerForTest = Pick<
   SceneEntryController,
   'enter' | 'run' | 'jumpTo' | 'startFrom'
 > & { startScene(...args: unknown[]): void }
+
+/**
+ * セーブまわり (#827) は `SaveController` へ移った。テストが従来どおり `internals(r).saveManager` /
+ * `.autoSavePending` / `.openSaveMenu()` / `.saveQuick()` で触れるよう、レンダラ上に `save` の
+ * メンバーへ委譲するアクセサ・メソッドを足す。移管後のアクセス経路はこの1か所に集約する。
+ * 注意: `vi.spyOn(internals(r), 'saveQuick')` はレンダラ上の委譲だけを差し替え、コントローラ内部の呼び出し
+ * （`flushAutoSave` → `saveQuick`）は差し替わらない。内部呼び出しを差し替えるときは `saveControllerOf(r)` を使う。
+ */
+const SAVE_FIELDS = ['saveManager', 'autoSavePending'] as const
+const SAVE_METHODS = ['saveQuick', 'openSaveMenu', 'openLoadMenu'] as const
+
+function exposeSaveMembers(r: NovelRenderer): void {
+  const saveOf = (): Record<string, unknown> =>
+    (r as unknown as { save: Record<string, unknown> }).save
+  for (const name of SAVE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    // 実体のフィールド名が変わったとき、黙って undefined を読み書きしないよう即座に落とす。
+    if (!(name in saveOf())) {
+      throw new Error(`SaveController に ${name} が無い（rendererInternals の委譲先を直す）`)
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => saveOf()[name],
+      set: (v: unknown) => {
+        saveOf()[name] = v
+      },
+    })
+  }
+  for (const name of SAVE_METHODS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    if (typeof saveOf()[name] !== 'function') {
+      throw new Error(`SaveController に ${name}() が無い（rendererInternals の委譲先を直す）`)
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: (...args: unknown[]) => (saveOf()[name] as (...a: unknown[]) => unknown)(...args),
+    })
+  }
+}
+
+/**
+ * `NovelRenderer` が持つ `SaveController` (#827)。内部メソッド（`saveQuick`）を `vi.spyOn` で差し替える
+ * テスト用。旧実装ではレンダラ自身の private メソッドだった。
+ */
+export function saveControllerOf(r: NovelRenderer): SaveControllerForTest {
+  return (r as unknown as { save: SaveControllerForTest }).save
+}
+
+/** `saveControllerOf` の戻り値。公開メソッドに、spy で差し替える private の `saveQuick` を足した型。 */
+export type SaveControllerForTest = SaveController & {
+  saveQuick(origin: 'quick' | 'auto'): boolean
+}

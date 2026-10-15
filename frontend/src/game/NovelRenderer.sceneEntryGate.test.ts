@@ -16,7 +16,13 @@ import { defaultTimeController } from './TimeController'
 import type { NovelGameState } from './GameState'
 import type { Event, EventScene } from '../types'
 import type { SceneEntryResult } from './sceneEntry'
-import { entryControllerOf, internals, type RendererInternals } from '../test/rendererInternals'
+import {
+  entryControllerOf,
+  internals,
+  type RendererInternals,
+  saveControllerOf,
+  type SaveInternals,
+} from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
   return { Narration: { text: lines } }
@@ -194,7 +200,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
       // ロード系
       i.openLoadMenu()
       expect(showLoad).not.toHaveBeenCalled()
-      const loadSpy = vi.spyOn(i, 'loadFromSaveData').mockImplementation(() => {})
+      const loadSpy = vi.spyOn(saveControllerOf(r), 'loadFromSaveData').mockImplementation(() => {})
       expect(await r.quickLoad()).toBeNull()
       expect(toast).toHaveBeenCalledWith('場面転換中のためロードできません')
       expect(loadSpy).not.toHaveBeenCalled()
@@ -233,11 +239,8 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
       loadCb = a[0] as (data: unknown) => void
     })
     const toast = vi.spyOn(i2, 'showToast').mockImplementation(() => {})
-    const loadSpy = vi.spyOn(i2, 'loadFromSaveData').mockImplementation(() => {})
-    const saveSpy = vi.spyOn(
-      (r2 as unknown as { saveManager: { save: (...a: unknown[]) => void } }).saveManager,
-      'save'
-    )
+    const loadSpy = vi.spyOn(saveControllerOf(r2), 'loadFromSaveData').mockImplementation(() => {})
+    const saveSpy = vi.spyOn(internals<SaveInternals>(r2).saveManager, 'save')
     const calls: unknown[][] = []
     vi.spyOn(i2.choiceOverlay, 'show').mockImplementation((...a: unknown[]) => {
       calls.push(a)
@@ -288,9 +291,7 @@ describe('進行入場中の全ゲート操作 (#734 PR1)', () => {
     const d = deferred<EventScene[] | null>()
     const r = makeRenderer(() => d.promise, [HUB, FAR])
     expect(r.quickSave()).toBe(true)
-    const loadSpy = vi
-      .spyOn(internals<Internals>(r), 'loadFromSaveData')
-      .mockImplementation(() => {})
+    const loadSpy = vi.spyOn(saveControllerOf(r), 'loadFromSaveData').mockImplementation(() => {})
     expect(await r.quickLoad()).not.toBeNull()
     expect(loadSpy).toHaveBeenCalledTimes(1)
     loadSpy.mockClear()

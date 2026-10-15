@@ -60,7 +60,7 @@ import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { TitleScreenOverlay, TITLE_LOGO_Y_RATIO } from './TitleScreenOverlay'
-import { SaveManager, SaveSlotData } from './SaveManager'
+import { SaveController } from './SaveController'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
 import { EndingOverlay } from './EndingOverlay'
@@ -75,12 +75,7 @@ import { PlaybackCursor } from './PlaybackCursor'
 import { SceneIndex } from './SceneIndex'
 import { JUMP_CHAIN_LIMIT, TransitionState } from './TransitionState'
 import { SceneEntryController } from './SceneEntryController'
-import {
-  type LoadOrigin,
-  type SceneEntryResult,
-  segmentAt,
-  type ResolvedSegment,
-} from './sceneEntry'
+import { type SceneEntryResult, segmentAt, type ResolvedSegment } from './sceneEntry'
 import {
   CameraElevation,
   CameraMode,
@@ -119,14 +114,11 @@ import {
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
-  saveSlotToGameState,
-  gameStateToSaveSlot,
   resolveFontFamily,
   formatCounterText,
   computeSeekBarPosition,
   PLAYER_BUTTON_CENTER_FROM_BOTTOM_PX,
   PLAYER_BUTTON_ROW_HEIGHT_PX,
-  resolveSceneTitle,
   splitIntoSentences,
   paginateSentencesByLines,
   type NovelPage,
@@ -597,11 +589,6 @@ export class NovelRenderer {
    *  別の Dialog に進んだ後に古い family が `setFontFamily` で上書きされる事故を防ぐ。 */
   private currentResolvedFontFamily: string | null = null
 
-  /**
-   * シーン入場後の自動セーブが保留中か (#768)。`requestAutoSave()` で立て、そのシーンで最初の本文が
-   * 表示されゲートが開いた時点（`flushAutoSave`）で1回保存して下ろす。新しい入場・復元で破棄する。
-   */
-  private autoSavePending = false
   /** playScript 実行中フラグ（再入ガード用 #220） */
   private isReplaying = false
 
@@ -660,8 +647,8 @@ export class NovelRenderer {
       },
       notify: (notice) => {
         if (notice.kind === 'sceneChange') this.onSceneChangeCallback?.(notice.sceneId)
-        else if (notice.kind === 'loadSuccess') this.notifyLoadSuccess(notice.origin)
-        else this.notifyLoadFailure()
+        else if (notice.kind === 'loadSuccess') this.save.notifyLoadSuccess(notice.origin)
+        else this.save.notifyLoadFailure()
       },
       rederiveTransition: () => this.rederiveTransitionAtCurrentPosition(),
       isTextPaginated: () => this.isNovelStyle() || this.sentencePerPage,
@@ -671,8 +658,25 @@ export class NovelRenderer {
     this.cursor
   )
 
-  /** セーブマネージャー */
-  private saveManager: SaveManager = new SaveManager()
+  /**
+   * クイックセーブ・自動セーブ・セーブ/ロードメニュー・ロード通知 (#827)。`autoSavePending` と `SaveManager` の
+   * 持ち主。`applyState` / `restoreToScene` / `getSnapshot` はステージとカーソルを横断する合成なのでレンダラに残し、
+   * Host として渡す（`implements` ではなくオブジェクトで渡し、メソッドをレンダラの公開 API にしない）。
+   */
+  private readonly save = new SaveController(
+    {
+      getSnapshot: () => this.getSnapshot(),
+      isStoryEnded: () => this.storyEnded,
+      getPlayheadSceneId: () => this.getPlayheadSceneId(),
+      showToast: (message) => this.showToast(message),
+      ensureAudioContext: () => this.audioManager.ensureContext(),
+      normalizeBackgroundFade: (fade) => normalizeBackgroundFade(fade),
+      enter: (request) => this.entry.enter(request),
+    },
+    this.sceneIndex,
+    this.transition,
+    this.cursor
+  )
 
   /** セーブ/ロードオーバーレイ */
   private saveLoadOverlay!: SaveLoadOverlay
@@ -901,8 +905,9 @@ export class NovelRenderer {
     this.saveLoadOverlay = new SaveLoadOverlay(
       this.screenWidth,
       this.screenHeight,
-      this.saveManager
+      this.save.saveManager
     )
+    this.save.attachMenu(this.saveLoadOverlay)
     this.backlogOverlay = new BacklogOverlay(this.screenWidth, this.screenHeight)
     // SeekBar の無操作タイマーも既存の TimeController 流儀に乗せる (#350)。
     this.seekBar = new SeekBar(this.screenWidth, this.screenHeight, this.time)
@@ -1975,7 +1980,7 @@ export class NovelRenderer {
     }
   ): void {
     this.cursor.markStarted()
-    this.autoSavePending = false
+    this.save.discardPendingAutoSave()
     this.transition.resetForNewPosition()
     if (this.waitTimer) {
       this.time.clearTimeout(this.waitTimer)
@@ -3004,13 +3009,13 @@ export class NovelRenderer {
    * 設定するとスキップモードが有効になり、既読進捗を localStorage から読み込む。
    *
    * SaveManager のセーブキー名前空間も同じ docKey に切り替える (#578)。saveLoadOverlay は
-   * コンストラクタで this.saveManager への参照を保持したまま渡されているため、ここでは
+   * コンストラクタで this.save.saveManager への参照を保持したまま渡されているため、ここでは
    * インスタンスを差し替えず（差し替えると saveLoadOverlay 側が古い docKey のままの
    * インスタンスを握り続けてしまう）、SaveManager.setDocKey() で内部の docKey だけ更新する。
    */
   setDocKey(docKey: string): void {
     this.docKey = docKey
-    this.saveManager.setDocKey(docKey)
+    this.save.saveManager.setDocKey(docKey)
     this.reloadReadProgress()
   }
 
@@ -3719,7 +3724,7 @@ export class NovelRenderer {
       // 本文を描画した時点で、Jump だけが続く連鎖の回数をリセットする (#725)。
       this.transition.resetChain()
       this.cursor.pushHistory(this.getSnapshot())
-      this.flushAutoSave()
+      this.save.flushAutoSave()
     }
   }
 
@@ -3728,7 +3733,7 @@ export class NovelRenderer {
    */
   private applyState(state: NovelGameState): void {
     this.transition.resetChain()
-    this.autoSavePending = false
+    this.save.discardPendingAutoSave()
     // Jump の遷移状態は GameState に載せず位置から導出する (#733)。復元は新しい到達として扱うので、
     // 予約中・停止中のどちらも持ち越さず idle へ戻し、末尾で位置が Jump なら再予約する。
     this.transition.resetJumpForRestore()
@@ -4273,13 +4278,13 @@ export class NovelRenderer {
       case 's':
       case 'S':
         if (!this.transition.waitingForChoice) {
-          this.openSaveMenu()
+          this.save.openSaveMenu()
         }
         break
       case 'l':
       case 'L':
         if (!this.transition.waitingForChoice) {
-          this.openLoadMenu()
+          this.save.openLoadMenu()
         }
         break
       case 'b':
@@ -5573,127 +5578,31 @@ export class NovelRenderer {
     )
   }
 
-  // --- クイックセーブ / クイックロード (#142) ---
+  // --- クイックセーブ / クイックロード (#142) --- 手続きは SaveController (#827)。公開 API の署名はここに残す。
 
-  /**
-   * 現在のゲーム状態をクイックセーブスロットに保存する。
-   * 選択肢・Wait 待機中・終劇後は保存しない（不整合状態を避けるため）。
-   *
-   * 終劇後 (#386) を除外する理由: `endStory()` は `waitingForChoice` を false に戻すため
-   * その条件だけでは終劇後のセーブを防げない。また `SaveSlotData`/`saveSlotToGameState` は
-   * 意図的に `storyEnded` を保存しない設計（常に false で復元）なので、もし終劇後の
-   * eventIndex（圏外 choice に到達したまま止まっている位置）でセーブを許すと、ロード時に
-   * 「storyEnded=false なのに Choice イベント位置で止まっている」行き止まり（テキストも
-   * 選択肢も "to be continued..." も出ない空白画面）になる。
-   * 成功したら true、保存できない状態なら false を返す。
-   *
-   * sceneId が null の局面（シーン索引を使わない線形ストリーム〔`loadEvents`〕でジャンプ前）でも
-   * セーブできる。null は「エントリ文書の線形ストリーム上の位置」を意味し、ロード側が eventIndex で
-   * 復元する (#768)。
-   */
+  /** クイックセーブ。保存できない状態なら false（理由は SaveController.quickSave 参照）。 */
   quickSave(): boolean {
-    // 手動（F5）専用。自動セーブは requestAutoSave() → saveQuick('auto') だけが行う (#769, #768)。
-    return this.saveQuick('quick')
+    return this.save.quickSave()
   }
 
-  /**
-   * シーン入場の自動セーブを要求する (#768)。NovelPlayer の `onSceneChange` から呼ぶ。保存はこの時点では行わず、
-   * そのシーンの最初の本文が表示されゲートが開いた時点で1回行う。シーン冒頭が `[待機]`・Jump・選択肢でも
-   * 同じ仕組みで扱える（入場直後は待機中などでゲートが閉じているため、入場の瞬間に保存すると黙って弾かれる）。
-   * 保存位置は「その本文の位置」で、宣言的復元は待機を再実行しないので、ロードすると待機を挟まずその本文から
-   * 再開できる。冒頭が Jump だけの中継シーンは本文が無いので保存されず、遷移先の本文で保存される。
-   * 次の入場・復元・新規開始・はじめからで保留は破棄される。
-   */
+  /** シーン入場の自動セーブを要求する (#768)。 */
   requestAutoSave(): void {
-    this.autoSavePending = true
-    this.flushAutoSave()
+    this.save.requestAutoSave()
   }
 
-  /** 保留中の自動セーブを、現在位置が本文でゲートが開いていれば実行して下ろす (#768)。 */
-  private flushAutoSave(): void {
-    if (!this.autoSavePending) return
-    if (this.storyEnded || !getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])) return
-    if (this.transition.gateReason('quickSave') !== null) return
-    this.autoSavePending = false
-    this.saveQuick('auto')
-  }
-
-  private saveQuick(origin: 'quick' | 'auto'): boolean {
-    // 結果のトースト（成功・弾かれた理由）はここで出す (#769。ロードの #765 と対称)。手動（F5）のみ通知し、
-    // 自動セーブ（`onSceneChange` 経由の 'auto'）は無言。
-    if (this.storyEnded) {
-      if (origin === 'quick') this.showToast('この場面ではセーブできません')
-      return false
-    }
-    // 選択肢・待機・Jump 待機中・停止中 (#725)・入場中 (#734): 遷移途中・停止位置をセーブに残さない
-    // （openSaveMenu と同じ理由）。文言の振り分けはロード側（quickLoad）と同じ。
-    const blocked = this.transition.gateReason('quickSave')
-    if (blocked) {
-      if (origin === 'quick') {
-        this.showToast(
-          blocked === 'jump' || blocked === 'entry'
-            ? '場面転換中のためセーブできません'
-            : 'この場面ではセーブできません'
-        )
-      }
-      return false
-    }
-
-    // シーンタイトルの解決（sceneId ガード + find + ?.title ?? null）は openSaveMenu と
-    // 共通の novelLayout.resolveSceneTitle に集約 (#260)。
-    const sceneName = resolveSceneTitle(this.sceneIndex.getScenes(), this.getPlayheadSceneId())
-
-    const data = gameStateToSaveSlot(this.getSnapshot(), {
-      slot: -1, // クイックセーブはスロット番号不使用
-      savedAt: new Date().toISOString(),
-      sceneName,
-    })
-    this.saveManager.quickSave(data)
-    if (origin === 'quick') this.showToast('クイックセーブしました')
-    return true
-  }
-
-  /**
-   * クイックセーブスロットからゲーム状態を復元する。
-   * 選択肢・Wait 待機中はロードしない（不整合状態を避けるため）。
-   * 復元の入場（`SceneEntryController.enter` の restore）の結果を Promise で返す (#734)。null は、クイックセーブデータが
-   * 無いか、ゲートで弾かれた場合（入場を始めていない）。トーストは入場の結末（成功・失敗）で出る (#765)。
-   */
+  /** クイックロード。null はデータ無し／ゲートで弾かれた場合 (#734)。 */
   quickLoad(origin: 'quick' | 'auto' = 'quick'): Promise<SceneEntryResult | null> {
-    const blocked = this.transition.gateReason('navigate')
-    if (blocked) {
-      // 弾かれた理由に合った通知を出す（手動 F8 のみ。マウント時の自動ロード〔auto〕は
-      // 弾かれた理由のトーストを出さない。ロード自体が失敗したときの「ロードに失敗しました」は auto でも出す〔notifyLoadFailure〕）(#765)。
-      if (origin === 'quick') {
-        this.showToast(
-          blocked === 'jump' || blocked === 'entry'
-            ? '場面転換中のためロードできません'
-            : 'この場面ではロードできません'
-        )
-      }
-      return Promise.resolve(null)
-    }
-    const data = this.saveManager.quickLoad()
-    if (!data) {
-      if (origin === 'quick') this.showToast('クイックセーブデータがありません')
-      return Promise.resolve(null)
-    }
-    return this.loadFromSaveData(data, origin)
+    return this.save.quickLoad(origin)
   }
 
-  /**
-   * クイックセーブの flags を返す（データが無ければ null）。マウント時の自動クイックロードが失敗したとき、
-   * 位置は失っても進めたルートの flags は保ってエントリから始めるために使う (#734, ADR 0003 §5)。
-   */
+  /** クイックセーブの flags（データが無ければ null）(#734)。 */
   getQuickSaveFlags(): Record<string, FlagValue> | null {
-    return this.saveManager.quickLoad()?.flags ?? null
+    return this.save.getQuickSaveFlags()
   }
 
-  /**
-   * クイックセーブデータが存在するか返す。
-   */
+  /** クイックセーブデータが存在するか。 */
   hasQuickSave(): boolean {
-    return this.saveManager.hasQuickSave()
+    return this.save.hasQuickSave()
   }
 
   /**
@@ -5704,62 +5613,9 @@ export class NovelRenderer {
     this.audioManager.ensureContext()
   }
 
-  /**
-   * クイックセーブデータを消去する (#637)。
-   * 「はじめから」（`PlayerScreen.onNewGame`）等、直前のセッションのクイックセーブを完全に
-   * 無効化したい場面で使う。新規開始後は自動セーブが走るまで（loadEvents 構成では最初のシーン境界・ジャンプまで）旧セーブが残るため、
-   * それまでの間にリロードされると旧クイックセーブがそのまま復元されてしまう。
-   * 呼び出し側が明示的にこれを呼び、リロード時に旧セーブが復活しないことを保証する。
-   */
+  /** クイックセーブデータを消去する (#637)。 */
   clearQuickSave(): void {
-    this.saveManager.deleteQuickSave()
-  }
-
-  /**
-   * セーブメニューを表示する。
-   * 終劇後 (#386) はメニュー自体を開かない。理由は quickSave() の doc コメント参照
-   * （SaveSlotData は storyEnded を持たないため、終劇後のセーブは行き止まりの原因になる）。
-   */
-  private openSaveMenu(): void {
-    if (this.storyEnded) return
-    // Jump 待機中・停止中 (#725)・入場中 (#734) は開かない。遷移途中・停止位置をセーブに残さない
-    // （ロードのたびに再予約・警告・停止を繰り返す状態を避ける。復元側は #733 で再予約するので
-    // 行き止まりにはならないが、保存する価値のある位置ではない）。
-    if (this.transition.isGated('saveMenu')) return
-    this.saveLoadOverlay.showSave((slot: number) => {
-      // オーバーレイ表示中も autoTimer / skipTimer / [待機] は進み、裏で Jump が予約・停止し得る。
-      // 開く時だけでなく確定時にも再確認する (#759)。
-      if (this.transition.isGated('saveMenu')) {
-        // オーバーレイは確定後に必ず閉じるので、無通知だと保存されたと誤認する。
-        this.showToast('場面転換中のためセーブできません')
-        return
-      }
-      // quickSave と共通のシーンタイトル解決 (#260)。
-      const sceneName = resolveSceneTitle(this.sceneIndex.getScenes(), this.getPlayheadSceneId())
-
-      const data = gameStateToSaveSlot(this.getSnapshot(), {
-        slot,
-        savedAt: new Date().toISOString(),
-        sceneName,
-      })
-      this.saveManager.save(slot, data)
-    })
-  }
-
-  /**
-   * ロードメニューを表示する
-   */
-  private openLoadMenu(): void {
-    // Jump 遷移の予約中 (#733)・入場中 (#734) は quickLoad と同じく開かない（遷移途中に別の位置へ復元させない）。
-    if (this.transition.isGated('loadMenu')) return
-    this.saveLoadOverlay.showLoad((data: SaveSlotData) => {
-      // 表示中に裏で遷移が始まった場合は復元させない（開く時だけでなく確定時にも再確認 #759）。
-      if (this.transition.isGated('loadMenu')) {
-        this.showToast('場面転換中のためロードできません')
-        return
-      }
-      void this.loadFromSaveData(data, 'menu')
-    })
+    this.save.clearQuickSave()
   }
 
   /**
@@ -5815,58 +5671,6 @@ export class NovelRenderer {
     this.cursor.resetHistory(this.getSnapshot())
 
     this.render()
-  }
-
-  /**
-   * セーブデータからゲーム状態を復元する（applyState ベースの宣言的復元）
-   *
-   * #578 再発修正: restoreSnapshot（#460）と同じ「hub(entry doc) + ルート別 md」問題が
-   * quickLoad() 経由でも起きる。起動直後の自動 quickLoad（本 Issue の新機能）は allScenes
-   * にまだ entry doc 分のシーンしか無い状態で呼ばれ得るため、ルート内シーンをセーブして
-   * いた場合に findSceneById が不発になり、常にフラグのみ復元＋warn のフォールバックへ
-   * 縮退して意図したシーン位置に戻れない。restoreSnapshot と同じく missingSceneResolver
-   * 経由の非同期再解決を挟んでから復元する。
-   *
-   * #578 セルフレビュー must 対応: ensureContext() をここで呼ぶ。当初は「同一 renderer
-   * インスタンス上でユーザー操作を経て既に ensureContext 済み」という前提で不要と判断していたが、
-   * 本 Issue で追加した起動時自動 quickLoad（NovelPlayer のマウント effect から
-   * `renderer.hasQuickSave()` が true の場合に同期呼び出しされる）はユーザー操作より前に
-   * quickLoad() → loadFromSaveData() が走る。ensureContext() を呼ばないと AudioManager.ctx が
-   * null のままで、この後 applyState 経由の playBgm() が `if (!this.ctx) return` で無音のまま
-   * 早期 return し、以後ユーザーが操作しても currentBgmUrl 未設定のため再試行されない
-   * （復元先シーンの BGM が次のシーン遷移までサイレントになる回帰）。restoreSnapshot（#460）と
-   * 同じ対処であり、ensureContext() はべき等なので通常の openLoadMenu 経由（既に
-   * ensureContext 済み）で重複呼び出しになっても副作用はない。
-   */
-  private loadFromSaveData(data: SaveSlotData, origin: LoadOrigin): Promise<SceneEntryResult> {
-    this.audioManager.ensureContext()
-
-    // SaveSlotData → NovelGameState のフィールド対応・後方互換フォールバックは
-    // novelLayout.saveSlotToGameState に集約 (#260)。fade だけは PixiJS を間接参照する
-    // normalizeBackgroundFade をここで適用し、純粋関数には正規化済みの値を渡す。
-    // シーンの引き当て・遅延ロード（マルチMD構成 #578）・失敗時の通知は、単一の入口（SceneEntryController.enter）に任せる。
-    // 失敗（解決手段が無い・resolver が null/例外・ロード後も不在）は位置・flags とも現状維持（#765）。
-    const state = saveSlotToGameState(data, normalizeBackgroundFade(data.backgroundFade))
-    return this.entry.enter({ kind: 'restore', state, source: 'save', origin })
-  }
-
-  /**
-   * ロード失敗（復元先シーンを解決できない）のプレイヤー通知 (#765)。同期・非同期とも即時に出す。
-   * 成功トーストは restoreToScene が実際に成功した時点で出す（notifyLoadSuccess）ので、
-   * 失敗通知が成功通知に先行・上書きされることはない。マウント時の自動ロードも、続きを期待している
-   * 場面なので失敗は通知する。
-   */
-  private notifyLoadFailure(): void {
-    this.showToast('ロードに失敗しました')
-  }
-
-  /**
-   * ロード成功の通知 (#765)。クイックロード（F8）だけ「クイックロードしました」を出す。
-   * ロードメニューは確定後にオーバーレイが閉じて結果が見えるため出さず（従来どおり）、
-   * マウント時の自動クイックロードも出さない。
-   */
-  private notifyLoadSuccess(origin: LoadOrigin): void {
-    if (origin === 'quick') this.showToast('クイックロードしました')
   }
 
   /**
