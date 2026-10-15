@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   rpgProjectFromDoc,
   applyRpgProjectToDoc,
@@ -1919,5 +1919,122 @@ describe('rpgProjectFromDoc: battle_enemy_grid / battle_enemy_window_overlap (#8
     expect(o('')).toBeUndefined()
     expect(o(null)).toBeUndefined()
     expect(rpgProjectFromDoc(makeDoc())!.battleEnemyWindowOverlap).toBeUndefined()
+  })
+})
+
+describe('rpgProjectFromDoc エンカウント群の検証 (#839 段5)', () => {
+  const mon = (id: string, size?: { w: number; h: number }) => ({
+    Monster: {
+      id,
+      name: id,
+      hp: 5,
+      atk: 1,
+      def: 1,
+      agi: 1,
+      exp: 0,
+      gold: 0,
+      ...(size ? { size } : {}),
+    },
+  })
+  const rpgScene = (id: string, groups: string[]) => ({
+    id,
+    title: id,
+    view: 'TopDown' as const,
+    events: [
+      {
+        RpgMap: {
+          width: 1,
+          height: 1,
+          tile_size: 32,
+          tiles: [[0]],
+          encounter_rate: 8,
+          encounter_groups: groups,
+        },
+      },
+    ] as unknown as EventDocument['chapters'][number]['scenes'][number]['events'],
+  })
+  function gridDoc(grid: string | undefined): EventDocument {
+    return {
+      engine: 'name-name',
+      ...(grid ? { battle_enemy_grid: grid } : {}),
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data',
+              title: 'data',
+              view: 'TopDown' as const,
+              events: [
+                mon('bit'),
+                mon('wide', { w: 3, h: 3 }),
+              ] as unknown as EventDocument['chapters'][number]['scenes'][number]['events'],
+            },
+            rpgScene('field-a', ['bit', 'wide', 'bit+bit']),
+            rpgScene('field-b', ['bit@M1', 'bit']),
+          ],
+        },
+      ],
+    } as EventDocument
+  }
+
+  it('返さないシーンの不正な群も errors に出て、返すマップだけ除外される', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc('6x2'), 'field-a')!
+      expect(p.map.encounterGroups).toEqual(['bit', 'bit+bit'])
+      expect(p.encounterGroupErrors!.map((e) => `${e.mapId}:${e.group}`)).toEqual([
+        'field-a:wide',
+        'field-b:bit@M1',
+      ])
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(String(spy.mock.calls[0][0])).toContain('field-b')
+      // もう一方のシーンを返すと、そちらの群が除外される
+      const q = rpgProjectFromDoc(gridDoc('6x2'), 'field-b')!
+      expect(q.map.encounterGroups).toEqual(['bit'])
+      expect(q.encounterGroupErrors).toHaveLength(2)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('検証オプションを切ると何も変えない（エディタの書き戻し経路用）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc('6x2'), 'field-a', 'x', [], {
+        validateEncounterGroups: false,
+      })!
+      expect(p.map.encounterGroups).toEqual(['bit', 'wide', 'bit+bit'])
+      expect(p.encounterGroupErrors).toBeUndefined()
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('battle_enemy_grid が無いゲームでは検証しない（console.error なし・群は不変・errors 未設定）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc(undefined), 'field-a')!
+      expect(p.map.encounterGroups).toEqual(['bit', 'wide', 'bit+bit'])
+      expect(p.encounterGroupErrors).toBeUndefined()
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('グリッドが大きければ 3x3 も入る（範囲外の配置だけが残りエラー）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc('12x4'), 'field-a')!
+      expect(p.map.encounterGroups).toEqual(['bit', 'wide', 'bit+bit'])
+      expect(p.encounterGroupErrors?.map((e) => e.group)).toEqual(['bit@M1'])
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

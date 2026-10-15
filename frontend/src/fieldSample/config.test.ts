@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   DEFAULTS,
   findReturnLink,
+  forceBattleCandidates,
   parseConfig,
   parseConfigText,
   type FieldSampleConfig,
@@ -462,5 +463,145 @@ describe('findReturnLink (Issue #807)', () => {
     const c = configOf({ a: [] })
     expect(findReturnLink(c, 'a', { edge: 'right', range: [0, 10], to: 'constructor' })).toBeNull()
     expect(findReturnLink(c, 'a', { edge: 'right', range: [0, 10], to: 'toString' })).toBeNull()
+  })
+})
+
+describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => {
+  function withGrid(grid: unknown, groups: string[]): Raw {
+    const c = minimal()
+    c.monsters = {
+      bit: { name: 'ビット', hp: 5 },
+      boss: { name: 'ボス', hp: 50, size: '2x2', scale: 0.5 },
+    }
+    c.scenes.a.encounter = { rate: 5, groups }
+    c.battle = { enemyGrid: grid, enemyWindowOverlap: 0.3 }
+    return c
+  }
+
+  it('monsters.<id>.size / scale を MonsterDef に入れる（scale は 0.25〜1 に丸める）', () => {
+    const c = ok(withGrid('6x2', ['bit']))
+    expect(c.monsters.boss.size).toEqual({ w: 2, h: 2 })
+    expect(c.monsters.boss.scale).toBe(0.5)
+    expect(c.monsters.bit.size).toBeUndefined()
+    expect(c.monsters.bit.scale).toBeUndefined()
+    const lo = withGrid('6x2', ['bit'])
+    lo.monsters.boss.scale = 0.1
+    expect(ok(lo).monsters.boss.scale).toBe(0.25)
+    const hi = withGrid('6x2', ['bit'])
+    hi.monsters.boss.scale = 3
+    expect(ok(hi).monsters.boss.scale).toBe(1)
+  })
+
+  it('size は Rust parser と同じ書式（全角・× 可）、不正はエラー', () => {
+    for (const [raw, want] of [
+      ['2x1', { w: 2, h: 1 }],
+      ['２×１', { w: 2, h: 1 }],
+      ['3X4', { w: 3, h: 4 }],
+    ] as const) {
+      const c = withGrid('6x2', ['bit'])
+      c.monsters.boss.size = raw
+      expect(ok(c).monsters.boss.size).toEqual(want)
+    }
+    for (const bad of [
+      '0x1',
+      '2',
+      '2x',
+      'x2',
+      '+2x1',
+      '1.5x1',
+      'axb',
+      2,
+      '1x1x1',
+      '99999999999x1',
+    ]) {
+      const c = withGrid('6x2', ['bit'])
+      c.monsters.boss.size = bad
+      expect(parseConfig(c, BASE).ok, String(bad)).toBe(false)
+    }
+  })
+
+  it('scale が数値でなければエラー', () => {
+    const c = withGrid('6x2', ['bit'])
+    c.monsters.boss.scale = 'big'
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
+  it('battle.enemyGrid / enemyWindowOverlap を読む', () => {
+    const c = ok(withGrid('6x2', ['bit']))
+    expect(c.battle.enemyGrid).toEqual({ cols: 6, rows: 2 })
+    expect(c.battle.enemyWindowOverlap).toBe(0.3)
+  })
+
+  it('enemyGrid が不正ならエラーにせず無効（検証もしない）', () => {
+    for (const bad of ['abc', '0x2', 6, null]) {
+      const c = ok(withGrid(bad, ['boss*9']))
+      expect(c.battle.enemyGrid).toBeUndefined()
+      expect(c.groupErrors).toBeUndefined()
+      expect(c.scenes.a.encounter?.groups).toEqual(['boss*9'])
+    }
+  })
+
+  it('収まらない群を除外し、groupErrors と console.error に出す', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // 6x2 に 2x2 は 3 体まで入る（4 体は入らない）。bit@M1 は範囲外
+      const c = ok(withGrid('6x2', ['bit', 'boss*4', 'bit@M1', 'boss+bit']))
+      expect(c.scenes.a.encounter?.groups).toEqual(['bit', 'boss+bit'])
+      expect(c.groupErrors!.map((e) => e.group)).toEqual(['boss*4', 'bit@M1'])
+      expect(c.groupErrors![0].mapId).toBe('a')
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('全群が無効なら空配列になる', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const c = ok(withGrid('6x2', ['bit@M1']))
+      expect(c.scenes.a.encounter?.groups).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('今すぐエンカウントの候補: 群があればそれ、群が空なら全モンスター（グリッド有効時は収まらないものを除く）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const mk = (groups: string[]) => {
+        const raw = withGrid('6x2', groups)
+        ;(raw.monsters as Record<string, unknown>).huge = { name: '巨体', hp: 9, size: '7x1' }
+        return ok(raw)
+      }
+      expect(forceBattleCandidates(mk(['bit', 'boss']), 'a')).toEqual(['bit', 'boss'])
+      // 最初から群が無い
+      expect(forceBattleCandidates(mk([]), 'a')).toEqual(['bit', 'boss'])
+      // 全群が無効化された（huge は 6x2 に入らない）→ 群は空。フォールバックでも収まらない huge は外す
+      const allBad = mk(['huge'])
+      expect(allBad.scenes.a.encounter?.groups).toEqual([])
+      expect(forceBattleCandidates(allBad, 'a')).toEqual(['bit', 'boss'])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('グリッド未指定では検証しない（console.error なし・群は不変）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const raw = withGrid(undefined, ['bit@M1', 'boss*40'])
+      const c = ok(raw)
+      expect(c.scenes.a.encounter?.groups).toEqual(['bit@M1', 'boss*40'])
+      expect(c.groupErrors).toBeUndefined()
+      expect(c.battle.enemyGrid).toBeUndefined()
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('同梱の寺町サンプルは従来どおり（グリッドなし・errors なし）', () => {
+    const c = ok(JSON.parse(teramachiSample))
+    expect(c.battle.enemyGrid).toBeUndefined()
+    expect(c.groupErrors).toBeUndefined()
   })
 })

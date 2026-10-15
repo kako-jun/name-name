@@ -29,8 +29,14 @@ import {
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
+import { formatEncounterGroupErrors } from '../game/encounterGroupValidation'
 import { resolveUrl } from '../battleSample/config'
-import { findReturnLink, parseConfigText, type FieldSampleConfig } from './config'
+import {
+  findReturnLink,
+  forceBattleCandidates,
+  parseConfigText,
+  type FieldSampleConfig,
+} from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -115,7 +121,12 @@ async function loadConfig(): Promise<FieldSampleConfig> {
     }
   }
   const parsed = parseConfigText(text, textBase)
-  if (parsed.ok) return parsed.value
+  if (parsed.ok) {
+    // 敵グリッドに収まらず無効化した群 (#839 段5)。console.error は parseConfig が出している
+    const errs = parsed.value.groupErrors
+    if (errs && errs.length > 0) showError(formatEncounterGroupErrors(errs))
+    return parsed.value
+  }
   showError(`設定 JSON が不正です\n${parsed.error}`)
   const fallback = parseConfigText(defaultConfigText, base)
   if (!fallback.ok) throw new Error(fallback.error)
@@ -201,6 +212,10 @@ async function main(): Promise<void> {
       layout: b.layout,
       spriteStyle: b.spriteStyle,
       ...(bg ? { background: bg } : {}),
+      ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
+      ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
+        ? { enemyWindowOverlap: b.enemyWindowOverlap }
+        : {}),
       onClose: (outcome) => {
         lastOutcome = outcome
         endBattle()
@@ -307,8 +322,8 @@ async function main(): Promise<void> {
 
   $('tb-force-battle').addEventListener('click', () => {
     if (battle || transition) return
-    const sc = config.scenes[sceneId].encounter
-    const groups = sc && sc.groups.length > 0 ? sc.groups : Object.keys(config.monsters)
+    const groups = forceBattleCandidates(config, sceneId)
+    if (groups.length === 0) return
     const r = advanceEncounter(
       initialEncounterState({ stepDistance: 1, minSteps: 0 }),
       1,

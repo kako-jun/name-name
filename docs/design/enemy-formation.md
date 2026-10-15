@@ -1,6 +1,6 @@
 # 敵の隊形（見えないグリッド・サイズ区分・ランダム構成）: 現状分析・設計案 (#839, #838)
 
-- ステータス: **論点 Q1〜Q7 は確定（2026-10-15）。窓との多少の重なりは仕様（許容量パラメータ）。実装は含まない**
+- ステータス: **論点 Q1〜Q7 は確定（2026-10-15）。窓との多少の重なりは仕様（許容量パラメータ）。段 0〜5 実装済み（#838 / #839）。この文書は設計の記録で、書き方は `docs/guide/enemy-formation.md`**
 - 範囲: Issue #839（敵のサイズ区分・見えないグリッド・体数で大きさが変わらない・配置指定・ランダム構成）と #838（縦長・大きい敵の上端がメッセージ窓に隠れる／2列で細長い絵が隣にかぶる）の設計。手順は「現状分析 → 要件整理 → 設計案 → 擬似設定 → 論点」
 - 利用ゲーム: sit-by-me（台帳 `docs/monsters.md` 3-7「サイズ区分」。縦横比 1.8 以上=2x1 / 0.55 以下=1x2 / 中間=1x1 の仮置き規則で割り当て済み。ボスは大型で区分は未決）
 - 関連: #736（side 戦闘）、#747（奥行き）、#737 / #760 / #848（アクスタ）、#813（味方の枠固定）、#832 系（敵の行動。ビットを先に倒すとボスだけ残る等の意味づけはこちらで、本設計は配置の表現まで）
@@ -153,8 +153,8 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 
 **収まらない群の扱い**:
 
-- **定義時（ゲーム読み込み時）に検証**する: すべてのマップの全群について、`*m..n` は**最大数**で、実際に配置を試す（`rpgProjectFromDoc` の後段で 1 回）。収まらない群は**エラーとして一覧**し、読み込みはその群を**無効化（抽選候補から外す）**して続行する。ゲームが開けなくなる事態は避け、作者へはコンソールのエラーと（デバッグ表示があれば）画面の警告で知らせる。
-- ランタイムの保険: 検証をすり抜けた群（実行時に組み立てた敵など）で置けない敵は、**描かず**警告ログを出す。戦闘そのものは続行する（描かれないだけで HP/行動はある、は望ましくないので、検証側でほぼ防ぐ前提）。→ 確定 Q5（置けない敵を戦闘から除くか）。
+- **定義時（ゲーム読み込み時）に検証**する (#839 段5 実装済み): `battle_enemy_grid` が有効なゲームだけ、すべてのマップ（シーン）の全群について、`*m..n` は**最大数**で、実際に配置を試す（`rpgProjectFromDoc` の後段で 1 回。`encounterGroupValidation.ts` の `validateEncounterGroups`）。収まらない群（サイズ超過・範囲外・重なり・満杯）は**エラーとして一覧**（`console.error`）し、その群を**無効化（抽選候補から外す）**して読み込みを続行する。ゲームが開けなくなる事態は避ける。`RPGProject.encounterGroupErrors` にも載る。一枚絵フィールドサンプルは同じ検証を `parseConfig` で行い、画面のエラー表示にも出す。本編（`PlayerScreen`）は画面への警告表示を持たず、コンソールのみ。エディタが編集用に導出する project は doc へ書き戻すので検証しない（`validateEncounterGroups: false`）。ただしエディタの「プレイ」タブの `RPGPlayer` には、検証済みの project を別に導出して渡す（PlayerScreen と同じ挙動）。
+- ランタイムの保険 (#839 段4 実装済み): 検証をすり抜けた群（実行時に組み立てた敵など）で置けない敵は、`BattleScreen.placeEnemyFootprints` が**描かず** `console.warn` を出す。その敵は**戦闘には残る**（HP も行動もある。戦闘から除く処理は持たない）。描かれないだけで戦闘に残るのは望ましくないので、検証側でほぼ防ぐ前提。→ 確定 Q5。
 - 縦2倍・縦横2倍は全行を使うので同じ列に別の敵は入らない、という要件 R4 は、占有矩形の重なり判定で自然に満たされる（`R = 2` かつ `h = 2`）。
 
 ### 3.6 描画
@@ -206,7 +206,7 @@ gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けな�
 | 2 | **【実装済み #839 段2: `frontend/src/game/enemyGroup.ts`（`parseEncounterGroup` / `pickGroupIndex` / `resolveEncounterGroup`）＋ `encounter.ts` の `rollEncounter` が利用。配置 `at` は段2では BattleEntity に載せず、段3で `layout.at` に載せた。個数は 1 項 48 体まで。不正な重みは警告して無視（既定 1）】** 群の書式 `enemyGroup.ts` (`parseEncounterGroup`) と `rollEncounter` の重み・個数の幅。重みなし群の乱数列が現行と一致する回帰テスト | 1 の型 | TS のみ。parser 変更なし |
 | 3 | **【実装済み #839 段3: Rust parser（`master.rs` `サイズ:`/`size`・`倍率:`/`scale` を `MonsterDef.size{w,h}`/`scale` に丸め済みで、不正は警告して無し＝1x1・倍率1。`parser.rs` frontmatter `battle_enemy_grid`・`battle_enemy_window_overlap` は生文字列透過）→ `normalizeDocument` → `rpgProjectFromDoc`（`normalizeEnemyGrid` / `normalizeEnemyWindowOverlapSetting` → `RPGProject.battleEnemyGrid` / `battleEnemyWindowOverlap`）→ `fieldBattle.ts` `readFieldBattleSettings`（`enemyGrid` / `enemyWindowOverlap`）→ `BattleScreenOptions`。`rollEncounter` が `BattleEntity.layout?: {w,h,scale,at?}` を写す（サイズ・倍率・配置のどれも無ければ付けない）。wasm 再ビルド＋pkg コミット済み。値を通すだけで描画は変えない】** `サイズ:` / `倍率:`（モンスター定義）と `battle_enemy_grid`（frontmatter）を Rust parser に追加 → `MonsterDef` / `RPGProject` → `BattleEntity.layout`。**wasm-pack + pkg コミット**が必要 | 1 | Rust + wasm。型・正規化・spec 追記 |
 | 4 | **【実装済み #839 段4: `battleLayout.ts` `computeSideBattleLayout`（入力 `enemyGrid` / `enemyFootprints` / `enemyWindowOverlap`。`enemyGrid` なしは従来のまま）＋ `enemyGrid.ts` `clampEnemyWindowOverlap`（窓の高さへの延長クランプ。閉形式）・`applyDepthToGridSlots`・`emptyEnemyGridSlot` ＋ `battleLayout.ts` `computeAcrylicBoxSize`（アクスタ箱）＋ `BattleScreen`（戦闘開始時に `placeEnemies` を 1 回・`slot.box` へ contain・描画順 `enemyDrawOrder`）。ログ行数はグリッド有効時 `desiredSideLogLines(cols*rows)` で固定。実ブラウザ検証はヘッドレス（swiftshader）の静止画 A/B まで済み。ライブ blink 比較と kako-jun の実機確認が残る】** `computeSideBattleLayout` / `BattleScreen` に配線（グリッド有効時のみ）。アクスタ・奥行き・描画順・ラベル。実ブラウザ A/B 検証 | 1〜3 | 見た目の変更。ライブ blink 比較でサインオフ |
-| 5 | 読み込み時の群検証（収まらない群の無効化とエラー表示）。docs（spec / architecture / guide）・サンプル（sit-by-me 寺町）への反映 | 4 | 作者向けの安全網 |
+| 5 | **【実装済み #839 段5: `frontend/src/game/encounterGroupValidation.ts`（`validateEncounterGroups`・`formatEncounterGroupErrors`。`*m..n` は最大数で展開し、`MonsterDef.size` と `@` 配置を `placeEnemies` に通す）＋ `rpgProjectFromDoc` の後段（`battleEnemyGrid` 有効時のみ。全シーンの群を検証し、`console.error` に一覧・対象マップの `encounterGroups` から外す・`RPGProject.encounterGroupErrors`）＋ 一枚絵フィールドサンプル（`fieldSample/config.ts` に `monsters.<id>.size` / `scale`・`battle.enemyGrid` / `enemyWindowOverlap`、同じ検証、`main.ts` が画面にも表示）。docs は spec・architecture・guide（`docs/guide/enemy-formation.md`）・debugger。sit-by-me 側のゲームへの反映は別リポの作業でこの PR には含まない】** 読み込み時の群検証（収まらない群の無効化とエラー表示） | 4 | 作者向けの安全網 |
 | 6（任意） | `サイズ: 自動`（画像の縦横比から区分を決める台帳の規則 1.8 / 0.55 をエンジン側の設定に） | 4 | 台帳に明示の区分があるなら不要。論点 Q6 |
 
 docs は各段の PR で追従する（絶対ルール 6）: 段 3 で `docs/spec/markdown-v0.1.md`（モンスターのキー表・frontmatter 表・エンカウント節）、段 4 で `docs/architecture.md` の side 戦闘の節（#736/#813 の続き）、段 5 で `docs/guide/`。
@@ -284,7 +284,7 @@ sprite_style: acrylic
 | Q7 | #838 の先行修正 | **段 0 として先に出す** |
 | 追加 | 窓との重なり | 「窓と多少かぶったほうが大きくて立体感が出る」。**許容量以下の重なりは仕様**（既定: 占有領域/絵の高さの 25%、設定名案 `battle_enemy_window_overlap`）。窓は敵の手前に描く |
 
-Q5 の補足（未決として残る細部）: ランタイムで置けなかった敵は、描かない警告ログを出す。戦闘から除くかどうかは段 5 の実装時に、検証をすり抜ける経路の有無を見て決める。
+Q5 の補足（確定）: ランタイムで置けなかった敵は、描かず警告ログ（`console.warn`）を出すだけで、**戦闘からは除かない**（`BattleScreen.placeEnemyFootprints`。HP も行動も残る）。読み込み時の検証で群ごと抽選から外すのが主で、この保険は検証をすり抜けた経路（コードから直接組んだ敵など）向け。
 
 ## 7. 既知のリスク・未確認事項
 
@@ -298,4 +298,7 @@ Q5 の補足（未決として残る細部）: ランタイムで置けなかっ
 - 台帳の「ボス = 大型」の区分（2x2 以上）がグリッド 2 行に収まるのは `h ≤ 2` まで。3 行以上の巨体が要るなら `battle_enemy_grid` の行数を増やす（行数の上限 4 で足りるか、実際のボスの寸法で確認する）。
 - **ff のポーズ違いの絵（段階 0 の既知のリスク）**: `poseRectOnBase` で基本の絵より大きい slash などへ差し替えると、板はそのポーズの絵ごとに広がるが、配置（列ピッチ・窓との重なり）は基本の絵の縦横比で計算している。ポーズ中だけ隣の板や窓にかぶりうる（演出中の一時的な見た目）。
 - **ラベルが窓に隠れる限界 (#839 段4)**: 段4レビュー修正（奥行きで縮めたあとの窓重なりのずらし）で解消。総当たり（`battleLayout.test.ts`）で、許容量 0.5・奥行き併用でも常にラベルは stage 内。
+- **画面への警告表示の範囲 (#839 段5)**: 収まらない群のエラー一覧は、本編のプレイ（`PlayerScreen`）では `console.error` のみで、画面には出ない。画面にも出すのは一枚絵フィールドサンプルだけ（`main.ts` の `showError`）。本編に画面警告を足すかは未決。
+- **エディタでは検証しない (#839 段5)**: エディタが編集用に導出する project は doc へ書き戻すため、群の除外をしない（`EditorScreen` が `validateEncounterGroups: false`）。作者がエディタで群を書いても、収まらない群のエラーはプレイ画面（エディタの「プレイ」タブを含む。こちらは検証済みの project を別に導出する）で読み込むまで出ない。
+- **検証は読み込み時 1 回・静的な群のみ (#839 段5)**: 検証対象は MD の `[エンカウント群]`。未知のモンスター id は数えない（`rollEncounter` が警告して飛ばす）。`@` 配置の敵が複数体（`id*2@E1`）のときは最初の 1 体だけが配置指定で、検証もそのとおりに行う。
 - **窓との重なりの対象（段階 0）**: `measureWindowOver` が見るのはログ帯だけ。`cross` レイアウトで敵に重なって開く候補窓・手のカーソルとの重なりは対象外。
