@@ -1750,8 +1750,8 @@ export class BattleScreen extends Container {
     view.baseY = acrylic ? fy + fh - box : fy
     view.unit = gridBox ? fh : size
     view.anchorX = slot.x + slot.width / 2
-    // ダメージ数字の出る高さ: 既定は枠の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
-    view.anchorY = slot.y + size * 0.35
+    // ダメージ数字の出る高さ: 既定は枠（グリッド敵は倍率で縮めた箱）の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
+    view.anchorY = fy + fh * 0.35
     view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
     const fbX = acrylic ? fb.x : size > 0 ? fw * (fb.x / fh) : 0

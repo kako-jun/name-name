@@ -2414,14 +2414,22 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
                 expect(over, `${ctx} enemy${i} overlap`).toBeLessThanOrEqual(ov * cell + 1e-6)
                 // 奥行きで縮んだあとも、占有高さ（縮んだ高さ）に対する重なりが許容量以下
                 expect(over, `${ctx} enemy${i} overlap/size`).toBeLessThanOrEqual(ov * r.h + 1e-6)
+                // ずらしは最小限: 奥行きで縮めたあと、窓に届かない（縮める前の重なりが許容量以内）敵は上端固定の位置のまま。
+                // ずれた敵は、元の下端に張り付いていなければ重なりがちょうど許容量（窓クランプが効かない画面だけ。許容量 = ov）
+                if (depth && ov * cell <= L.log.h + 1e-6) {
+                  const flat = layoutFor(f, fps, f.defs.length, w, h, ov, null, acrylic).enemies[i]
+                  const preOver = Math.max(0, L.log.y + L.log.h - flat.y)
+                  if (preOver <= ov * r.h + 1e-6) {
+                    expect(r.y, `${ctx} enemy${i} not shifted`).toBeCloseTo(flat.y, 6)
+                  } else {
+                    const bottomed = Math.abs(r.y + r.h - (flat.y + flat.size)) < 1e-6
+                    if (!bottomed) expect(over, `${ctx} enemy${i} exact`).toBeCloseTo(ov * r.h, 6)
+                  }
+                }
                 for (const pr of partyRects) expect(overlaps(r, pr), `${ctx} party`).toBe(false)
                 // ラベル: stage 内
                 if (s.label) {
-                  // 既知の限界: 窓との重なり 0.5 と奥行きの併用では、縮んだ奥の最上行の足元が窓の下に入り、ラベルも窓に隠れうる
-                  // （縮尺は上端基準・設計書 §7）。許容量が既定（0.25）以下なら必ず stage 内
-                  if (ov <= 0.25 || !depth)
-                    expect(inside(s.label, L.stage), `${ctx} label in stage`).toBe(true)
-                  else expect(s.label.y, ctx).toBeGreaterThanOrEqual(L.log.y - 1e-6)
+                  expect(inside(s.label, L.stage), `${ctx} label in stage`).toBe(true)
                   for (const pr of partyRects) expect(overlaps(s.label, pr), ctx).toBe(false)
                 }
                 // アクスタ板: 実際に BattleScreen が描く箱（slot の box を computeAcrylicBoxSize で絞った正方形）が占有矩形内
