@@ -162,6 +162,10 @@ export interface MonsterDef {
   counters?: string[]
   /** 敵の死亡時の行動 (#837)。`死亡時:` の値（最初の 1 行）の生文字列。解釈は `enemyAi.ts`。無ければ何もしない */
   onDeath?: string
+  /** 敵のサイズ区分 (#839)。`サイズ:` の値（占有するセルの 幅x高さ）。parser が丸め済み（不正は警告して未指定＝1x1）。無ければ 1x1。`battle_enemy_grid` が有効なときだけ描画に効く */
+  size?: { w: number; h: number }
+  /** 敵の表示倍率 (#839)。`倍率:` の値（parser が 0.25〜1 に丸め済み。不正は警告して未指定＝1）。占有領域の中で絵を縮める比 */
+  scale?: number
 }
 
 /** アイテム定義 (#174) */
@@ -912,6 +916,10 @@ export interface EventDocument {
   battle_atb?: string | null
   /** RPG 戦闘の ATB の進行方式 (#205)。`"wait"`（既定）/ `"active"`。`battle_atb: on` のときだけ効く。frontmatter `battle_atb_mode:` から流す。 */
   battle_atb_mode?: string | null
+  /** RPG 戦闘（`battle_layout: side`）の敵の見えないグリッド (#839)。`列数x行数`（例 `6x2`）の生文字列。frontmatter `battle_enemy_grid:` から流す。不正値・未指定は無効（従来の配置）。解釈は `enemyGrid.ts` の `normalizeEnemyGrid`。GUI 専用。 */
+  battle_enemy_grid?: string | null
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5 の数値文字列。frontmatter `battle_enemy_window_overlap:` から流す。不正値・未指定は既定 0.25。GUI 専用。 */
+  battle_enemy_window_overlap?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
   /** RPG 戦闘のコマンド窓の配置 (#204)。`"grid"`（既定・2x2）/ `"cross"`（十字）。frontmatter `battle_command_layout:` から流す。GUI 専用。 */

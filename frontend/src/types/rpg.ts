@@ -222,6 +222,14 @@ export interface RPGProject {
    */
   // 型は game/battleAtb.ts の BattleAtbConfig と同形（types 層は game 層を import しない）
   battleAtb?: { mode: 'wait' | 'active' }
+  /**
+   * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid: 6x2`（列 1〜12・行 1〜4 に丸める）由来。
+   * 不正値・未指定は undefined＝従来の配置（`battle_layout: side` のときだけ効く。配線は #839 段4）
+   */
+  // 型は game/enemyGrid.ts の EnemyGridSize と同形（types 層は game 層を import しない）
+  battleEnemyGrid?: { cols: number; rows: number }
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap:`（0〜0.5 に丸める）由来。不正値・未指定は undefined＝既定 0.25 */
+  battleEnemyWindowOverlap?: number
   /** 戦闘コマンド窓の配置 (#204)。frontmatter `battle_command_layout:` 由来。未指定は `'grid'`（2x2・現行どおり） */
   battleCommandLayout?: 'grid' | 'cross'
   /** 戦闘コマンドの表示名の上書き (#204)。frontmatter `battle_command_labels:` 由来。id は変えず label だけ差し替える。未指定は undefined（既定の日本語） */

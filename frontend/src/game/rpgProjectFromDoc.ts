@@ -27,6 +27,7 @@ import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
 import { normalizeBattlePresentation } from './battleMotion'
 import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb } from './battleAtb'
+import { normalizeEnemyGrid, normalizeEnemyWindowOverlapSetting } from './enemyGrid'
 import { normalizeCommandLayout, parseCommandLabels } from './battleCommands'
 
 /**
@@ -266,6 +267,8 @@ export function rpgProjectFromDoc(
     battleForeground: doc.battle_foreground || undefined,
     pixelArt: doc.pixel_art === true ? true : undefined,
     battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
+    battleEnemyGrid: normalizeEnemyGrid(doc.battle_enemy_grid),
+    battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleTransition: normalizeBattleTransition(doc.battle_transition),

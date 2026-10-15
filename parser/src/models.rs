@@ -380,6 +380,22 @@ pub struct MonsterDef {
     /// （複数書いたときは最初の 1 行だけを持つ）。無ければ None。JSON / TS 側のキーは `onDeath`。
     #[serde(default, rename = "onDeath", skip_serializing_if = "Option::is_none")]
     pub on_death: Option<String>,
+    /// 敵のサイズ区分 (#839)。`サイズ: 2x1`（占有するセルの 幅x高さ。整数 1 以上、大小・全角× 可）。
+    /// 書かない・不正値（警告を出す）は None＝1x1（従来どおり）。`battle_enemy_grid` が有効なときだけ描画に効く。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<MonsterSize>,
+    /// 敵の表示倍率 (#839)。`倍率: 0.8`。占有領域の中で絵を縮める比（0.25〜1 に丸める）。
+    /// 書かない・不正値（警告を出す）は None＝1。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+}
+
+/// 敵のサイズ区分 (#839)。占有するセルの幅 x 高さ（どちらも 1 以上）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+pub struct MonsterSize {
+    pub w: u32,
+    pub h: u32,
 }
 
 /// アイテム定義 (#174)。
@@ -1691,6 +1707,15 @@ pub struct Document {
     /// `"none"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_transition: Option<String>,
+    /// RPG 戦闘（`battle_layout: side`）の敵の見えないグリッド (#839)。`列数x行数`（例 `6x2`、半角 x / × 可）。
+    /// 値は parser でバリデーションせず生文字列で透過し、runtime 側（`normalizeEnemyGrid`）で列 1〜12・行 1〜4 に丸める。
+    /// 不正値・未指定は無効＝従来の配置。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_grid:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_enemy_grid: Option<String>,
+    /// 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5 の数値文字列（既定 0.25）。
+    /// 値は生文字列で透過し、runtime 側で丸める（不正は既定）。GUI 専用。frontmatter `battle_enemy_window_overlap:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_enemy_window_overlap: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

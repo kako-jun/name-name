@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   computeEnemyGridLayout,
   enemyDrawOrder,
+  normalizeEnemyGrid,
+  normalizeEnemyWindowOverlapSetting,
   parseCellRef,
   parseEnemyGrid,
   parseEnemySize,
@@ -668,5 +670,33 @@ describe('画面サイズ総当たり（敵グリッド）', () => {
         expect(many.grid).toEqual(base.grid)
       }
     }
+  })
+})
+
+describe('normalizeEnemyGrid (#839)', () => {
+  it('列 1〜12・行 1〜4 に丸める。不正・未指定は undefined（無効）', () => {
+    expect(normalizeEnemyGrid('6x2')).toEqual({ cols: 6, rows: 2 })
+    expect(normalizeEnemyGrid(' ６×２ ')).toEqual({ cols: 6, rows: 2 })
+    expect(normalizeEnemyGrid('99x99')).toEqual({ cols: 12, rows: 4 })
+    for (const bad of ['on', '', '6', '0x2', '6x0', 'x', '6x2x1', '-1x2', '2.5x2']) {
+      expect(normalizeEnemyGrid(bad)).toBeUndefined()
+    }
+    expect(normalizeEnemyGrid(undefined)).toBeUndefined()
+    expect(normalizeEnemyGrid(null)).toBeUndefined()
+  })
+})
+
+describe('normalizeEnemyWindowOverlapSetting (#839)', () => {
+  it('0〜0.5 に丸める。不正・未指定は undefined（既定 0.25 に倒れる）', () => {
+    expect(normalizeEnemyWindowOverlapSetting('0.3')).toBe(0.3)
+    expect(normalizeEnemyWindowOverlapSetting('0')).toBe(0)
+    expect(normalizeEnemyWindowOverlapSetting('.4')).toBe(0.4)
+    expect(normalizeEnemyWindowOverlapSetting('0.9')).toBe(0.5)
+    expect(normalizeEnemyWindowOverlapSetting('-1')).toBe(0)
+    for (const bad of ['', ' ', 'abc', '0x10', '1e3', 'NaN', 'Infinity', '25%']) {
+      expect(normalizeEnemyWindowOverlapSetting(bad)).toBeUndefined()
+    }
+    expect(normalizeEnemyWindowOverlapSetting(undefined)).toBeUndefined()
+    expect(normalizeEnemyWindowOverlapSetting(null)).toBeUndefined()
   })
 })

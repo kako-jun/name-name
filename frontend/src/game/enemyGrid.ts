@@ -73,6 +73,31 @@ export function parseEnemyGrid(raw: string): EnemyGridSize | null {
   }
 }
 
+/**
+ * frontmatter `battle_enemy_grid` の値を正規化する (#839)。書式が不正・未指定は undefined＝無効（従来方式）。
+ * 列 1〜12・行 1〜4 に丸める（`parseEnemyGrid`）
+ */
+export function normalizeEnemyGrid(raw: string | null | undefined): EnemyGridSize | undefined {
+  if (typeof raw !== 'string') return undefined
+  return parseEnemyGrid(raw) ?? undefined
+}
+
+const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/
+
+/**
+ * frontmatter `battle_enemy_window_overlap` の値を正規化する (#839)。0〜0.5 に丸める。
+ * 未指定・数値でない値は undefined＝既定（`normalizeEnemyWindowOverlap` が 0.25 にする）。
+ * `Number('')` = 0 や `Number('0x10')` に化けないよう、素直な十進数だけを受ける
+ */
+export function normalizeEnemyWindowOverlapSetting(
+  raw: string | null | undefined
+): number | undefined {
+  if (typeof raw !== 'string') return undefined
+  const t = raw.normalize('NFKC').trim()
+  if (!PLAIN_NUMBER.test(t)) return undefined
+  return normalizeEnemyWindowOverlap(Number(t))
+}
+
 /** 配置指定 `C1`（列 = 英字、行 = 1 始まりの数字。大小無視）を 0 始まりのセルへ。不正は null */
 export function parseCellRef(raw: string): GridCell | null {
   const m = /^([a-z])(\d+)$/.exec(raw.normalize('NFKC').trim().toLowerCase())

@@ -154,7 +154,75 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         counters: collect_values(entries, &["反撃", "counter"]),
         on_death: collect_values(entries, &["死亡時", "onDeath", "on_death"])
             .and_then(|v| v.into_iter().next()),
+        size: collect_size(entries),
+        scale: collect_scale(entries),
     })
+}
+
+/// `サイズ` / `size` を敵のサイズ区分にする (#839)。`2x1` / `2X1` / `２×１`（幅x高さ、整数 1 以上）。
+/// 書かない場合は None。不正値は警告して None（＝1x1）。同じキーが複数あれば最初の 1 行。
+fn collect_size(entries: &[(String, String)]) -> Option<MonsterSize> {
+    let raw = lookup_master_value(entries, &["サイズ", "size"])?;
+    if raw.is_empty() {
+        return None;
+    }
+    let parsed = parse_size_pair(raw);
+    if parsed.is_none() {
+        emit_master_warning(&format!(
+            "invalid monster size '{raw}', falling back to 1x1. Expected e.g. 1x1 / 2x1 / 2x2"
+        ));
+    }
+    parsed
+}
+
+/// 全角英数を半角へ寄せた上で `<整数>x<整数>`（x は x / X / ×）を読む。両方 1 以上のときだけ Some。
+fn parse_size_pair(raw: &str) -> Option<MonsterSize> {
+    let normalized: String = raw
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '\u{FF10}'..='\u{FF19}' => char::from_u32(c as u32 - 0xFF10 + '0' as u32).unwrap_or(c),
+            '\u{FF58}' | '\u{FF38}' => 'x',
+            _ => c,
+        })
+        .collect();
+    let (a, b) = normalized.split_once(['x', 'X', '×'])?;
+    let w: u32 = a.trim().parse().ok()?;
+    let h: u32 = b.trim().parse().ok()?;
+    if w < 1 || h < 1 {
+        return None;
+    }
+    Some(MonsterSize { w, h })
+}
+
+/// `倍率` / `scale` を 0.25〜1 に丸めた表示倍率にする (#839)。書かない場合は None。
+/// 数値でない・非有限の値は警告して None（＝1）。範囲外は丸める（1 超は占有領域をはみ出すため 1）。
+fn collect_scale(entries: &[(String, String)]) -> Option<f64> {
+    let raw = lookup_master_value(entries, &["倍率", "scale"])?;
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.parse::<f64>() {
+        Ok(v) if v.is_finite() => Some(v.clamp(0.25, 1.0)),
+        _ => {
+            emit_master_warning(&format!(
+                "invalid monster scale '{raw}', falling back to 1. Expected a number between 0.25 and 1"
+            ));
+            None
+        }
+    }
+}
+
+fn emit_master_warning(detail: &str) {
+    let msg = format!("[name-name-parser] warning: {detail}");
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::warn_1(&msg.into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        eprintln!("{msg}");
+    }
 }
 
 /// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
