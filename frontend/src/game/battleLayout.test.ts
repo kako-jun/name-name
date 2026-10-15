@@ -43,6 +43,9 @@ import {
   sideStatusMarkerX,
   computeSelectMarkTriangle,
   SELECT_MARK_GAP_RATIO,
+  SELECT_MARK_MIN_WIDTH,
+  SELECT_MARK_MIN_HEIGHT,
+  SELECT_MARK_MIN_GAP,
   SIDE_STATUS_MARKER_FONT_SIZE,
   SIDE_STATUS_MARKER_GUTTER_MAX,
   SIDE_STATUS_MARKER_GUTTER_MIN,
@@ -2155,16 +2158,23 @@ describe('ATB の番の印 ▶ と選択印 ▼ の幾何 (#805)', () => {
     }
   })
 
+  it('computeSelectMarkTriangle: unit が小さくても最小の幅・高さ・間隔を下回らない', () => {
+    const p = computeSelectMarkTriangle(50, 100, 20)
+    expect(p[2] - p[0]).toBeCloseTo(SELECT_MARK_MIN_WIDTH)
+    expect(p[5] - p[1]).toBeCloseTo(SELECT_MARK_MIN_HEIGHT)
+    expect(100 - p[5]).toBeCloseTo(SELECT_MARK_MIN_GAP)
+  })
+
   it('computeSelectMarkTriangle: 中央に下向きの三角。頭から離れ、大きさは unit に比例する', () => {
-    const p = computeSelectMarkTriangle(50, 100, 80)
+    const p = computeSelectMarkTriangle(50, 100, 200)
     expect(p).toHaveLength(6)
     expect((p[0] + p[2]) / 2).toBeCloseTo(50)
     expect(p[4]).toBeCloseTo(50)
     expect(p[1]).toBe(p[3])
     expect(p[5]).toBeGreaterThan(p[1])
     expect(p[5]).toBeLessThan(100)
-    expect(100 - p[5]).toBeCloseTo(80 * SELECT_MARK_GAP_RATIO)
-    const q = computeSelectMarkTriangle(50, 100, 160)
+    expect(100 - p[5]).toBeCloseTo(200 * SELECT_MARK_GAP_RATIO)
+    const q = computeSelectMarkTriangle(50, 100, 400)
     expect(q[2] - q[0]).toBeCloseTo((p[2] - p[0]) * 2)
   })
 })

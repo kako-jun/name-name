@@ -1022,11 +1022,15 @@ export function sideStatusMarkerX(nameX: number): number {
 export const SELECT_MARK_WIDTH_RATIO = 0.1
 export const SELECT_MARK_HEIGHT_RATIO = 0.07
 export const SELECT_MARK_GAP_RATIO = 0.06
+/** 小さな画面でも見えるよう、三角の幅・高さ・頭からの間隔の下限（px）。大きい画面は unit に比例 */
+export const SELECT_MARK_MIN_WIDTH = 10
+export const SELECT_MARK_MIN_HEIGHT = 8
+export const SELECT_MARK_MIN_GAP = 4
 /** ▼ の頂点（左上・右上・下の尖り）。`cx` は絵の中央 x、`headTop` は絵（板があれば板）の上端 y（同じ座標系） */
 export function computeSelectMarkTriangle(cx: number, headTop: number, unit: number): number[] {
-  const w = unit * SELECT_MARK_WIDTH_RATIO
-  const h = unit * SELECT_MARK_HEIGHT_RATIO
-  const tipY = headTop - unit * SELECT_MARK_GAP_RATIO
+  const w = Math.max(SELECT_MARK_MIN_WIDTH, unit * SELECT_MARK_WIDTH_RATIO)
+  const h = Math.max(SELECT_MARK_MIN_HEIGHT, unit * SELECT_MARK_HEIGHT_RATIO)
+  const tipY = headTop - Math.max(SELECT_MARK_MIN_GAP, unit * SELECT_MARK_GAP_RATIO)
   return [cx - w / 2, tipY - h, cx + w / 2, tipY - h, cx, tipY]
 }
 

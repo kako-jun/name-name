@@ -3513,12 +3513,12 @@ describe('BattleScreen: 選択中の印 ▼ の形と位置 (#805)', () => {
   })
 
   it('画面サイズを変えると、大きさ・間隔が枠の一辺（unit）に比例して変わる', async () => {
-    const s = track(make([withSprite('p')], [withSprite('e')], acrylic, 800, 450))
+    const s = track(make([withSprite('p')], [withSprite('e')], acrylic, 1600, 900))
     await flushPromises()
     const v = views(s, 'enemyViews')[0]
     const big = triangle(v.selectMark)
     const bigUnit = v.unit
-    s.redraw(400, 225)
+    s.redraw(800, 450)
     await flushPromises()
     const small = triangle(v.selectMark)
     expect(v.unit).toBeLessThan(bigUnit)
