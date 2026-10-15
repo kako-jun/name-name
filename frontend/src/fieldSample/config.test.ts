@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   DEFAULTS,
+  configNotice,
   findReturnLink,
   forceBattleCandidates,
   parseConfig,
@@ -526,6 +527,76 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle の presentation / windowStyle / commandLayout / atb を読む (#883)', () => {
+    const c = withEncounter()
+    c.battle = {
+      presentation: 'ff',
+      windowStyle: 'ff-blue',
+      commandLayout: 'cross',
+      atb: 'on',
+      atbMode: 'active',
+    }
+    const b = ok(c).battle
+    expect(b.presentation).toBe('ff')
+    expect(b.windowStyle).toBe('ff-blue')
+    expect(b.commandLayout).toBe('cross')
+    expect(b.atb).toEqual({ mode: 'active' })
+  })
+
+  it('atb: "on" だけなら wait、"off" や未指定は atb なし (#883)', () => {
+    const c = withEncounter()
+    c.battle = { atb: 'on' }
+    expect(ok(c).battle.atb).toEqual({ mode: 'wait' })
+    c.battle = { atb: 'off', atbMode: 'active' }
+    expect(ok(c).battle.atb).toBeUndefined()
+  })
+
+  it('battle の演出系が未指定なら該当キーが無い（従来どおり） (#883)', () => {
+    const b = ok(withEncounter()).battle
+    for (const k of ['presentation', 'windowStyle', 'commandLayout', 'atb']) {
+      expect(k in b).toBe(false)
+    }
+  })
+
+  it('layout front と ff／cross の組は警告を出す（読み込みは成功） (#883)', () => {
+    const c = withEncounter()
+    c.battle = { layout: 'front', presentation: 'ff', commandLayout: 'cross' }
+    const v = ok(c)
+    expect(v.warnings).toHaveLength(2)
+    expect(v.warnings?.[0]).toContain('presentation')
+    expect(v.warnings?.[1]).toContain('commandLayout')
+  })
+
+  it('組でなければ警告は出ない (#883)', () => {
+    for (const battle of [
+      { layout: 'side', presentation: 'ff', commandLayout: 'cross' },
+      { presentation: 'ff', commandLayout: 'cross' },
+      { layout: 'front', presentation: 'dq', commandLayout: 'grid' },
+      { layout: 'front' },
+    ]) {
+      const c = withEncounter()
+      c.battle = battle
+      expect(ok(c).warnings).toBeUndefined()
+    }
+  })
+
+  it('battle の演出系の不正値はエラー (#883)', () => {
+    const bad: Array<Record<string, unknown>> = [
+      { presentation: 'ffx' },
+      { presentation: 1 },
+      { windowStyle: 'blue' },
+      { commandLayout: 'diamond' },
+      { atb: true },
+      { atb: 'maybe' },
+      { atbMode: 'fast' },
+    ]
+    for (const battle of bad) {
+      const c = withEncounter()
+      c.battle = battle
+      expect(parseConfig(c, BASE).ok).toBe(false)
+    }
+  })
+
   it('battle.enemyGrid / enemyWindowOverlap を読む', () => {
     const c = ok(withGrid('6x2', ['bit']))
     expect(c.battle.enemyGrid).toEqual({ cols: 6, rows: 2 })
@@ -539,6 +610,41 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
       expect(c.groupErrors).toBeUndefined()
       expect(c.scenes.a.encounter?.groups).toEqual(['boss*9'])
     }
+  })
+
+  it('configNotice は群エラーと警告を 1 つにまとめる（両方画面に出る） (#883)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const c = withGrid('6x2', ['boss*9'])
+      c.battle = { ...c.battle, layout: 'front', presentation: 'ff' }
+      const v = ok(c)
+      expect(v.groupErrors?.length).toBeGreaterThan(0)
+      expect(v.warnings).toHaveLength(1)
+      const n = configNotice(v)
+      expect(n).toContain('boss')
+      expect(n).toContain('presentation')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('configNotice は群エラーだけ・警告だけでも出す (#883)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const onlyErr = ok(withGrid('6x2', ['boss*9']))
+      expect(onlyErr.warnings).toBeUndefined()
+      expect(configNotice(onlyErr)).toContain('boss')
+      const c = withEncounter()
+      c.battle = { layout: 'front', commandLayout: 'cross' }
+      const n = configNotice(ok(c))
+      expect(n).toContain('commandLayout')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('configNotice は何も無ければ null (#883)', () => {
+    expect(configNotice(ok(minimal()))).toBeNull()
   })
 
   it('収まらない群を除外し、groupErrors と console.error に出す', () => {

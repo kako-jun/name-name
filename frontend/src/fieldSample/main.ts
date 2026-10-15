@@ -29,9 +29,9 @@ import {
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
-import { formatEncounterGroupErrors } from '../game/encounterGroupValidation'
 import { resolveUrl } from '../battleSample/config'
 import {
+  configNotice,
   findReturnLink,
   forceBattleCandidates,
   parseConfigText,
@@ -122,9 +122,11 @@ async function loadConfig(): Promise<FieldSampleConfig> {
   }
   const parsed = parseConfigText(text, textBase)
   if (parsed.ok) {
-    // 敵グリッドに収まらず無効化した群 (#839 段5)。console.error は parseConfig が出している
-    const errs = parsed.value.groupErrors
-    if (errs && errs.length > 0) showError(formatEncounterGroupErrors(errs))
+    // 群エラー (#839 段5。console.error は parseConfig が出している) と警告 (#883) は 1 回でまとめて出す
+    // （showError は置換なので別々に呼ぶと後が前を消す）
+    for (const w of parsed.value.warnings ?? []) console.warn(w)
+    const notice = configNotice(parsed.value)
+    if (notice) showError(notice)
     return parsed.value
   }
   showError(`設定 JSON が不正です\n${parsed.error}`)
@@ -203,7 +205,8 @@ async function main(): Promise<void> {
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
     const engine = new BattleEngine(
       config.party.map((p) => ({ ...p })),
-      enemies.map((e) => ({ ...e }))
+      enemies.map((e) => ({ ...e })),
+      b.atb ? { atb: b.atb } : {}
     )
     world.visible = false
     fade.visible = false
@@ -211,6 +214,9 @@ async function main(): Promise<void> {
     battle = new BattleScreen(engine, b.width, b.height, {
       layout: b.layout,
       spriteStyle: b.spriteStyle,
+      ...(b.presentation ? { presentation: b.presentation } : {}),
+      ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
+      ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
       ...(bg ? { background: bg } : {}),
       ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
       ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
