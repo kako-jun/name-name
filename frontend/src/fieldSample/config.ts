@@ -91,6 +91,8 @@ export interface FieldSampleConfig {
   battle: FieldBattleConfig
   /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
   groupErrors?: EncounterGroupError[]
+  /** 設定は読めたが効かない組み合わせの警告 (#883)。`layout: "front"` と `presentation: "ff"`／`commandLayout: "cross"` など。無ければ省略 */
+  warnings?: string[]
 }
 
 export const DEFAULTS = {
@@ -315,6 +317,18 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     return fail(`battle.atb は "on" か "off": ${JSON.stringify(b.atb)}`)
   if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
     return fail(`battle.atbMode は "wait" か "active": ${JSON.stringify(b.atbMode)}`)
+  // front では効かない設定の組（静かに無視されるので警告する。読み込みは成功のまま）
+  const warnings: string[] = []
+  if (b.layout === 'front') {
+    if (b.presentation === 'ff')
+      warnings.push(
+        'battle.presentation "ff" は layout "side" のときだけ効きます（"front" では無視されます）'
+      )
+    if (b.commandLayout === 'cross')
+      warnings.push(
+        'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
+      )
+  }
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -383,6 +397,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
       },
       ...(groupErrors ? { groupErrors } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
     },
   }
 }

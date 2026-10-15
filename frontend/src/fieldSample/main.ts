@@ -125,6 +125,11 @@ async function loadConfig(): Promise<FieldSampleConfig> {
     // 敵グリッドに収まらず無効化した群 (#839 段5)。console.error は parseConfig が出している
     const errs = parsed.value.groupErrors
     if (errs && errs.length > 0) showError(formatEncounterGroupErrors(errs))
+    const warns = parsed.value.warnings
+    if (warns && warns.length > 0) {
+      for (const w of warns) console.warn(w)
+      showError(warns.join('\n'))
+    }
     return parsed.value
   }
   showError(`設定 JSON が不正です\n${parsed.error}`)

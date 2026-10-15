@@ -557,6 +557,28 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     }
   })
 
+  it('layout front と ff／cross の組は警告を出す（読み込みは成功） (#883)', () => {
+    const c = withEncounter()
+    c.battle = { layout: 'front', presentation: 'ff', commandLayout: 'cross' }
+    const v = ok(c)
+    expect(v.warnings).toHaveLength(2)
+    expect(v.warnings?.[0]).toContain('presentation')
+    expect(v.warnings?.[1]).toContain('commandLayout')
+  })
+
+  it('組でなければ警告は出ない (#883)', () => {
+    for (const battle of [
+      { layout: 'side', presentation: 'ff', commandLayout: 'cross' },
+      { presentation: 'ff', commandLayout: 'cross' },
+      { layout: 'front', presentation: 'dq', commandLayout: 'grid' },
+      { layout: 'front' },
+    ]) {
+      const c = withEncounter()
+      c.battle = battle
+      expect(ok(c).warnings).toBeUndefined()
+    }
+  })
+
   it('battle の演出系の不正値はエラー (#883)', () => {
     const bad: Array<Record<string, unknown>> = [
       { presentation: 'ffx' },

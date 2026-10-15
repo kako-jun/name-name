@@ -306,7 +306,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 歩行マスク: 背景と同じ大きさの白黒画像（白=歩ける）。判定は足元 1 点。壁にぶつかったときは通れる軸だけ滑る。向きは移動ベクトルの支配軸（きっちり斜めのときは直前の向きを保つ）。歩行スプライトは 4 方向 × 3 コマ
 - 端のリンク: 足元が端のしきい値（`edgeThreshold`）内で、`links` の `range` に入り、その端へ向かって進むと遷移する（フェード）。遷移先では、遷移先シーンの「元のシーンへ戻るリンク」の `range` に、出た位置の相対位置を写して端から少し内側に出る（歩けなければ近い歩ける点へずらす）。到着直後は、その端へ向かう入力が途切れるまでそのリンクを無効にし、折り返しを防ぐ
 - エラー表示: 背景とマスクの大きさが違うシーンは読み込み失敗としてエラーを画面に出す。`start` の近くに歩ける点がなければ警告を出す。遷移先に歩ける点がない、またはシーンの読み込みに失敗したときは、遷移を中止して元のシーンに留まり、エラーを出す（その端へ向かう入力が途切れるまで同じリンクは再試行しない）。画像の fetch が失敗したときは URL と CORS（`Access-Control-Allow-Origin`）の可能性を添えて表示する。モンスター・味方の `hp` は 1 以上
-- 戦闘の演出（`battle`、#883）: `presentation`（`dq`/`ff`。`ff` は踏み出して斬る・のけぞり・ダメージ数字・技名だけのメッセージ窓。`layout: "side"` のときだけ効く）・`windowStyle`（`dark`/`ff-blue`）・`commandLayout`（`grid`/`cross`。`cross` は `side` のときだけ）・`atb`（`"on"`/`"off"`）・`atbMode`（`wait`/`active`。`atb: "on"` のときだけ使う、既定 `wait`）。値は本編の `battle_presentation` / `window_style` / `battle_command_layout` / `battle_atb` / `battle_atb_mode` と同じ。不正値は読み込みエラー。未指定は従来どおり（`dq`・`dark`・`grid`・ターン制）
+- 戦闘の演出（`battle`、#883）: `presentation`（`dq`/`ff`。`ff` は踏み出して斬る・のけぞり・ダメージ数字・技名だけのメッセージ窓。`layout: "side"` のときだけ効く。fieldSample には呪文・アイテム・特技が無いので技名の窓は出ない）・`windowStyle`（`dark`/`ff-blue`）・`commandLayout`（`grid`/`cross`。`cross` は `side` のときだけ）・`atb`（`"on"`/`"off"`）・`atbMode`（`wait`/`active`。`atb: "on"` のときだけ使う、既定 `wait`）。値は本編の `battle_presentation` / `window_style` / `battle_command_layout` / `battle_atb` / `battle_atb_mode` と同じ。不正値は読み込みエラー。`layout: "front"` で `presentation: "ff"`／`commandLayout: "cross"` を書くと、効かない組として画面とコンソールに警告が出る（読み込みは成功）。未指定は従来どおり（`dq`・`dark`・`grid`・ターン制）
 - 設定 JSON の主なキー: `startScene` / `start`（初期の足元）/ `speed`（背景ピクセル/秒）/ `edgeThreshold` / `assetBaseUrl`（指定時は RPG の画像と同じく `${base}/images/...` に解決 #746）/ `player.sprites`（`up|down|left|right` それぞれ 3 コマの URL）・`height`・`frameMs` / `scenes.<id>`（`background`・`mask`・`links[]`＝`{ edge, range, to }`）
 - 純粋関数は `frontend/src/game/fieldWalk.ts`（マスク判定・移動・向き・歩行アニメ・端のリンク・出現位置）、設定の検証は `frontend/src/fieldSample/config.ts`、ブラウザ API 部は `main.ts`
 
@@ -314,7 +314,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 
 フィールドサンプルは、歩いた距離でランダムエンカウントし、既存の `BattleEngine` / `BattleScreen` で戦って、終わると同じ位置に戻る。
 
-- 設定 JSON: `encounter`（`stepDistance`＝抽選 1 回分の歩行距離（既定 80）、`minSteps`＝戦闘後に飛ばす抽選回数（既定 3））/ `monsters`（id → `name`・`hp`・`atk`・`def`・`agi`・`exp`・`gold`・`sprite`）/ `party`（戦闘に出す味方。`sprite` に主人公のポーズ画像）/ `battle`（`layout`・`spriteStyle`・`background`・`width`・`height`）/ `scenes.<id>.encounter`（`rate`・`groups`・`background`）
+- 設定 JSON: `encounter`（`stepDistance`＝抽選 1 回分の歩行距離（既定 80）、`minSteps`＝戦闘後に飛ばす抽選回数（既定 3））/ `monsters`（id → `name`・`hp`・`atk`・`def`・`agi`・`exp`・`gold`・`sprite`）/ `party`（戦闘に出す味方。`sprite` に主人公のポーズ画像）/ `battle`（`layout`・`spriteStyle`・`background`・`width`・`height`、ほかに `enemyGrid`・`enemyWindowOverlap`（#839）、`presentation`・`windowStyle`・`commandLayout`・`atb`・`atbMode`（#883、上の項））/ `scenes.<id>.encounter`（`rate`・`groups`・`background`）
 - `rate` は `rollEncounter`（#172）と同じ: `0` = エンカウントなし、`N` = 抽選のたび 1/N、`1` = 毎回。`groups` は `"slime+slime"` のようにモンスター id を `+` で連結（`monsters` にない id は設定エラー）
 - 歩いた距離だけが進む。壁に押しつけて動けていないときは進まない。エンカウントなしのシーンでは貯めない。当選したら貯めた距離を捨て、戦闘後 `minSteps` 回の抽選を飛ばす
 - 戦闘中は歩きの入力は無視される（戦闘側は戦闘画面が自前で入力を受ける）。戦闘後は `sceneId` / 足元 / 向きを保ったまま復帰する。ツールバーの「今すぐエンカウント」は確認用で、抽選を 1 回で必ず当てる
