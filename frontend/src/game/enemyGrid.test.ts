@@ -6,7 +6,6 @@ import {
   normalizeEnemyWindowOverlapSetting,
   parseCellRef,
   parseEnemyGrid,
-  parseEnemySize,
   placeEnemies,
   type EnemyFootprint,
   type EnemyGridSize,
@@ -16,43 +15,12 @@ import { SIDE_LABEL_GAP, SIDE_LABEL_HEIGHT, type Rect } from './battleLayout'
 
 const EPS = 1e-6
 
-describe('parseEnemySize', () => {
-  it('2x1 / 1X2 / 全角 / × を解釈する', () => {
-    expect(parseEnemySize('1x1')).toEqual({ w: 1, h: 1 })
-    expect(parseEnemySize('2x1')).toEqual({ w: 2, h: 1 })
-    expect(parseEnemySize(' 1X2 ')).toEqual({ w: 1, h: 2 })
-    expect(parseEnemySize('２×２')).toEqual({ w: 2, h: 2 })
-    expect(parseEnemySize('3×2')).toEqual({ w: 3, h: 2 })
-    expect(parseEnemySize('10x10')).toEqual({ w: 10, h: 10 })
-  })
-  it('不正値は null', () => {
-    for (const bad of [
-      '',
-      'x',
-      '0x1',
-      '1x0',
-      '2',
-      '2x',
-      'x2',
-      '-1x2',
-      '1.5x2',
-      '1x2x3',
-      'axb',
-      '1 2',
-    ]) {
-      expect(parseEnemySize(bad), bad).toBeNull()
-    }
-  })
-})
-
 describe('parseEnemyGrid', () => {
   it('桁あふれの巨大値は上限へ丸める', () => {
     expect(parseEnemyGrid('99999999999999999999x2')).toEqual({ cols: 12, rows: 2 })
     expect(parseEnemyGrid('6x99999999999999999999')).toEqual({ cols: 6, rows: 4 })
     const huge = '9'.repeat(400)
     expect(parseEnemyGrid(`${huge}x${huge}`)).toEqual({ cols: 12, rows: 4 })
-    expect(parseEnemySize('99999999999999999999x2')).toBeNull()
-    expect(parseEnemySize(`${huge}x1`)).toBeNull()
   })
   it('列 1〜12・行 1〜4 に丸める', () => {
     expect(parseEnemyGrid('6x2')).toEqual({ cols: 6, rows: 2 })

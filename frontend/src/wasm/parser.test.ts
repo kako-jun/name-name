@@ -2597,6 +2597,8 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(monsterOf(doc)).toMatchObject({ size: { w: 2, h: 1 }, scale: 0.5 })
     const alias = await parseMarkdown(docWith([], monster(['size: ２×２', 'scale: 3'])))
     expect(monsterOf(alias)).toMatchObject({ size: { w: 2, h: 2 }, scale: 1 })
+    const wide = await parseMarkdown(docWith([], monster(['倍率: ０.５'])))
+    expect(monsterOf(wide).scale).toBe(0.5)
     const plain = await parseMarkdown(docWith([], monster([])))
     expect(monsterOf(plain).size).toBeUndefined()
     expect(monsterOf(plain).scale).toBeUndefined()
@@ -2608,6 +2610,11 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
       const doc = await parseMarkdown(docWith([], monster(['サイズ: big', '倍率: abc'])))
       expect(monsterOf(doc).size).toBeUndefined()
       expect(monsterOf(doc).scale).toBeUndefined()
+      // 警告が出ること（消すと落ちる）。サイズ・倍率で 1 回ずつ
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs.filter((m) => m.includes('invalid monster size'))).toHaveLength(1)
+      expect(msgs.filter((m) => m.includes('invalid monster scale'))).toHaveLength(1)
+      expect(warn).toHaveBeenCalledTimes(2)
     } finally {
       warn.mockRestore()
     }

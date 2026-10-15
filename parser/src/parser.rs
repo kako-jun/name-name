@@ -3425,17 +3425,17 @@ fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize
 /// - native + test: 何もしない（テスト中の stderr 汚染防止）
 /// - wasm32: `console.warn` へ流す
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-fn emit_warning(msg: &str) {
+pub(crate) fn emit_warning(msg: &str) {
     eprintln!("{msg}");
 }
 
 #[cfg(all(not(target_arch = "wasm32"), test))]
-fn emit_warning(_msg: &str) {
+pub(crate) fn emit_warning(_msg: &str) {
     // suppress during tests
 }
 
 #[cfg(target_arch = "wasm32")]
-fn emit_warning(msg: &str) {
+pub(crate) fn emit_warning(msg: &str) {
     web_sys::console::warn_1(&msg.into());
 }
 

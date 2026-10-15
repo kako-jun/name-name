@@ -55,7 +55,7 @@ import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOv
 import { MinimapOverlay } from './MinimapOverlay'
 import type { BattleScreen } from './BattleScreen'
 import type { BattleEntity } from './spellDsl'
-import { rollEncounter } from './encounter'
+import { enemyLayoutField, rollEncounter } from './encounter'
 import { posesField } from './battleMotion'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
@@ -915,6 +915,7 @@ export class RaycastRenderer {
           ...(def.actions && def.actions.length > 0 ? { actions: [...def.actions] } : {}),
           ...(def.counters && def.counters.length > 0 ? { counters: [...def.counters] } : {}),
           ...(def.onDeath ? { onDeath: def.onDeath } : {}),
+          ...enemyLayoutField(def, undefined),
         }
       : {
           id: 'slime',

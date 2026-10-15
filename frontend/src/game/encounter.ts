@@ -21,7 +21,7 @@ import { parseEncounterGroup, pickGroupIndex, resolveEncounterGroup } from './en
  * `サイズ:`・`倍率:`・群の配置 `@C1` のどれも無い敵は何も付けない（従来の挙動を変えない）。
  * 戦闘エンジンは読まない（描画専用）。`def.size` / `def.scale` は parser が丸め済みなので再検証しない
  */
-function enemyLayoutField(
+export function enemyLayoutField(
   def: MonsterDef,
   at: { col: number; row: number } | undefined
 ): { layout: EnemyLayout } | Record<string, never> {

@@ -326,8 +326,12 @@ describe('rollEncounter: サイズ・倍率・配置を BattleEntity.layout に�
 
   it('layout は定義と別物（敵の書き換えがマスターを汚さない）', () => {
     const size = { w: 2, h: 1 }
-    const [e] = roll(['slime'], { slime: { ...slime, size } })!
+    const [e] = roll(['slime@C1'], { slime: { ...slime, size } })!
     e.layout!.w = 9
     expect(size.w).toBe(2)
+    // 群の解析結果の at とも参照を共有しない（別の戦闘へ持ち越さない）
+    const [e2, e3] = [roll(['slime@C1'], { slime })![0], roll(['slime@C1'], { slime })![0]]
+    e2.layout!.at!.col = 9
+    expect(e3.layout!.at).toEqual({ col: 2, row: 0 })
   })
 })

@@ -45,19 +45,8 @@ function parseWH(raw: string): [number, number] | null {
   if (!m) return null
   const a = Number(m[1])
   const b = Number(m[2])
-  // 数字だけのパターンなので NaN にはならない。桁あふれ（Infinity）はグリッドでは上限へ丸め、サイズでは parseEnemySize が弾く
+  // 数字だけのパターンなので NaN にはならない。桁あふれ（Infinity）はグリッドでは上限へ丸める
   return [a, b]
-}
-
-/**
- * サイズ区分 `2x1` / `1X2` / `２×２` を解釈する。幅・高さとも 1 以上の整数のみ有効。
- * 不正値は null（呼び出し側が警告して 1x1 にする）
- */
-export function parseEnemySize(raw: string): EnemySize | null {
-  const wh = parseWH(raw)
-  if (!wh || !Number.isSafeInteger(wh[0]) || !Number.isSafeInteger(wh[1]) || wh[0] < 1 || wh[1] < 1)
-    return null
-  return { w: wh[0], h: wh[1] }
 }
 
 /**
