@@ -40,6 +40,7 @@ import {
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
   sideStatusLeftPadding,
+  frontStatsLeftPadding,
   SIDE_STATUS_MARKER_GUTTER_MAX,
   SIDE_STATUS_MARKER_GUTTER_MIN,
   sideStatusMarkerX,
@@ -1796,7 +1797,7 @@ describe('computeStatusColumns (#745)', () => {
   it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
     const c = computeStatusColumns({ ...base, atb: true })
     const inner = {
-      l: base.x + sideStatusLeftPadding(base.width, true) + 4,
+      l: base.x + sideStatusLeftPadding(true) + 4,
       r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
     }
     expect(c.name.x).toBe(inner.l)
@@ -1919,7 +1920,7 @@ describe('computeStatusColumns: 見出しと数字のすき間・狭いときの
 
   it('極端に狭く HP 列を左余白で止めても、現在値は見出しと重ならない位置までは右へ押し出される', () => {
     const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
-    const left = base.x + sideStatusLeftPadding(20, true) // 狭すぎて余裕が無いので広がらない
+    const left = base.x + sideStatusLeftPadding(true) // 狭すぎて余裕が無いので広がらない
     const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
     const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
     expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)
@@ -2133,12 +2134,27 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
 })
 
 describe('ATB の番の印 ▶ と選択印 ▼ の幾何 (#805)', () => {
-  it('sideStatusLeftPadding: ATB でなければ従来の余白、ATB は ▶ ぶんの最小を足す（幅によらず一定）', () => {
-    expect(sideStatusLeftPadding(800, false)).toBe(SIDE_STATUS_TEXT_PADDING)
-    for (const w of [100, 320, 399, 400, 800]) {
-      expect(sideStatusLeftPadding(w, true)).toBe(
-        SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
-      )
+  it('sideStatusLeftPadding: ATB でなければ従来の余白、ATB は ▶ ぶんの最小を足す', () => {
+    expect(sideStatusLeftPadding(false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    expect(sideStatusLeftPadding(true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+    )
+  })
+
+  it('frontStatsLeftPadding: ATB のとき基本は MIN、1 行に余裕がある幅では MAX まで広がる。連続', () => {
+    expect(frontStatsLeftPadding(1000, false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    expect(frontStatsLeftPadding(100, true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+    )
+    expect(frontStatsLeftPadding(1000, true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX
+    )
+    let prev = frontStatsLeftPadding(0, true)
+    for (let w = 1; w <= 600; w++) {
+      const p = frontStatsLeftPadding(w, true)
+      expect(p).toBeGreaterThanOrEqual(prev)
+      expect(p - prev).toBeLessThanOrEqual(1)
+      prev = p
     }
   })
 

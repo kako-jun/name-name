@@ -130,7 +130,7 @@ import {
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_HEIGHT,
   SIDE_STATUS_MARKER_FONT_SIZE,
-  sideStatusLeftPadding,
+  frontStatsLeftPadding,
   SELECT_MARK_LOG_GAP,
   sideStatusMarkerX,
   computeSelectMarkTriangle,
@@ -1431,18 +1431,18 @@ export class BattleScreen extends Container {
     this.heroStatsText.x = STAGE_PADDING + 12
     this.heroStatsText.y = statsY + (STATS_HEIGHT - HP_FONT_SIZE) / 2
     if (this.atbBars.length > 0) {
-      // 棒はパネルの下端に左右の文字余白ぶん内側で行幅いっぱい（文字の下に置くので重ならない）
+      // 名前（heroStatsText）を ▶ のぶん右へ寄せ（余裕があれば最大 8px まで）、▶ と名前の隙間は side と同じ（sideStatusMarkerX）
+      this.heroStatsText.x = STAGE_PADDING + frontStatsLeftPadding(panelW - 24, true)
+      // 棒はパネルの下端に、左端を名前にそろえ、右は文字余白ぶん内側まで（文字の下に置くので重ならない）
       this.atbBarRects = [
         {
-          x: STAGE_PADDING + 12,
+          x: this.heroStatsText.x,
           y: statsY + STATS_HEIGHT - ATB_BAR_HEIGHT - 1,
-          w: Math.max(0, panelW - 24),
+          w: Math.max(0, STAGE_PADDING + panelW - 12 - this.heroStatsText.x),
           h: ATB_BAR_HEIGHT,
         },
       ]
       const m = this.atbMarkers[0]
-      // 名前（heroStatsText）を ▶ のぶん右へ寄せ、▶ と名前の隙間は side と同じ（sideStatusMarkerX）
-      this.heroStatsText.x = STAGE_PADDING + sideStatusLeftPadding(0, true)
       m.x = sideStatusMarkerX(this.heroStatsText.x)
       m.y = statsY + (STATS_HEIGHT - SIDE_STATUS_MARKER_FONT_SIZE) / 2
       this.drawAtbBars()

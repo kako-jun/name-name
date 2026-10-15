@@ -36,7 +36,7 @@ const base: StatusColumnsInput = {
  */
 function exactMinNameWidth(input: StatusColumnsInput): number {
   const c = computeStatusColumns({ ...input, width: 600 })
-  const widened = c.name.x - (input.x + sideStatusLeftPadding(600, input.atb))
+  const widened = c.name.x - (input.x + sideStatusLeftPadding(input.atb))
   // 浮動小数の丸めで境界ちょうどが 1 ulp 下回らないよう、ごく小さく上げる
   return 600 - (c.name.w + widened - MIN_NAME) + 1e-9
 }
@@ -154,7 +154,7 @@ describe('computeStatusColumns: 省略段階のデシジョンテーブル (#745
     const w = exactMinNameWidth(base)
     const wOn = exactMinNameWidth({ ...base, atb: true })
     // ATB on では名前の左の基本の余白に、▶ のための最小の余白（SIDE_STATUS_MARKER_GUTTER_MIN）が乗る
-    const gutter = sideStatusLeftPadding(600, true) - sideStatusLeftPadding(600, false)
+    const gutter = sideStatusLeftPadding(true) - sideStatusLeftPadding(false)
     expect(wOn - w).toBeCloseTo(SIDE_STATUS_GAUGE_WIDTH + SIDE_STATUS_COLUMN_GAP + gutter, 6)
   })
 })
@@ -187,7 +187,7 @@ describe('computeStatusColumns: 画面幅 × ATB × パーティ数 (#745)', () 
         const cols = [c.name, c.hp, c.mp, c.gauge].filter((x) => x !== null)
         expect(c.gauge !== null).toBe(atb)
         // 名前の左端は基本の余白から、名前列の余裕ぶん（ATB のみ・最大 MAX-MIN）まで広がる
-        const base0 = L.status.x + sideStatusLeftPadding(L.status.w, atb)
+        const base0 = L.status.x + sideStatusLeftPadding(atb)
         expect(c.name.x).toBeGreaterThanOrEqual(base0 - 1e-9)
         expect(c.name.x).toBeLessThanOrEqual(
           base0 + (atb ? SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN : 0) + 1e-9

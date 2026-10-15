@@ -991,8 +991,24 @@ export const SIDE_STATUS_MARKER_NAME_GAP = 3
 export const SIDE_STATUS_MARKER_GUTTER_MIN = 2
 export const SIDE_STATUS_MARKER_GUTTER_MAX = 6
 /** status 欄の左端から名前の文字の開始までの基本の余白（余裕で広がる前）。ATB のときは ▶ ぶんの最小を足す */
-export function sideStatusLeftPadding(_width: number, atb: boolean): number {
+export function sideStatusLeftPadding(atb: boolean): number {
   return SIDE_STATUS_TEXT_PADDING + (atb ? SIDE_STATUS_MARKER_GUTTER_MIN : 0)
+}
+/** front 配置の名前（HP/MP の 1 行）が最低限使う幅の目安。これを超える余裕があれば ▶ の余白を広げる */
+export const FRONT_STATS_TEXT_BUDGET = 260
+/**
+ * front 配置（HP/MP パネル）の、パネル左端から名前の文字の開始までの余白。ATB のとき基本は MIN だけ足し、
+ * 1 行の文字に余裕がある幅（`innerWidth` = パネル幅 − 左右の文字余白）では MAX まで広げる（side と同じ考え方）(#805)
+ */
+export function frontStatsLeftPadding(innerWidth: number, atb: boolean): number {
+  const base = sideStatusLeftPadding(atb)
+  if (!atb) return base
+  const slack = innerWidth - FRONT_STATS_TEXT_BUDGET
+  const extra = Math.max(
+    0,
+    Math.min(SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN, slack)
+  )
+  return base + extra
 }
 /** ▶ の左端 x。名前列の x の手前に、▶ の幅（estimateTextWidth）と名前との間隔ぶん空ける */
 export function sideStatusMarkerX(nameX: number): number {
@@ -1021,7 +1037,7 @@ export function computeSelectMarkTriangle(
 ): number[] {
   const w = Math.max(SELECT_MARK_MIN_WIDTH, unit * SELECT_MARK_WIDTH_RATIO)
   const h = Math.max(SELECT_MARK_MIN_HEIGHT, unit * SELECT_MARK_HEIGHT_RATIO)
-  // 上端が minTop（上のログ窓の下端＋隙間）より上にならないよう、必要なら下げる（頭に少し重なってよい。大きさ・隙間は保つ）
+  // 上端が minTop（上のログ窓の下端＋隙間）より上にならないよう、必要なら下げる（大きさとログ窓との隙間は保ち、頭とは重なってよい）
   const tipY = Math.max(
     headTop - Math.max(SELECT_MARK_MIN_GAP, unit * SELECT_MARK_GAP_RATIO),
     minTop + h
@@ -1090,7 +1106,7 @@ export const SIDE_STATUS_GAUGE_MIN_WIDTH = 16
  */
 export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const font = input.fontPx ?? SIDE_STATUS_FONT_SIZE
-  const leftBase = input.x + sideStatusLeftPadding(input.width, input.atb)
+  const leftBase = input.x + sideStatusLeftPadding(input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
   const build = (
