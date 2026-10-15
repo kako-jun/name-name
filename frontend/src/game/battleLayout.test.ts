@@ -40,6 +40,12 @@ import {
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
   sideStatusLeftPadding,
+  sideStatusMarkerX,
+  computeSelectMarkTriangle,
+  SELECT_MARK_GAP_RATIO,
+  SIDE_STATUS_MARKER_FONT_SIZE,
+  SIDE_STATUS_MARKER_GUTTER_MAX,
+  SIDE_STATUS_MARKER_GUTTER_MIN,
   desiredSideLogLines,
   effectiveCommandLayout,
   fitCommandFontSize,
@@ -2121,4 +2127,44 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
     },
     60_000
   )
+})
+
+describe('ATB の番の印 ▶ と選択印 ▼ の幾何 (#805)', () => {
+  it('sideStatusLeftPadding: ATB でなければ従来の余白。ATB は幅に応じて連続して増え、400 の前後でもジャンプしない', () => {
+    expect(sideStatusLeftPadding(800, false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    for (const w of [100, 320, 360, 399, 400, 640, 800]) {
+      expect(sideStatusLeftPadding(w, true)).toBeGreaterThanOrEqual(
+        SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+      )
+      expect(sideStatusLeftPadding(w, true)).toBeLessThanOrEqual(
+        SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX
+      )
+    }
+    expect(
+      Math.abs(sideStatusLeftPadding(400, true) - sideStatusLeftPadding(399, true))
+    ).toBeLessThan(0.1)
+    expect(sideStatusLeftPadding(800, true)).toBeGreaterThan(sideStatusLeftPadding(320, true))
+  })
+
+  it('sideStatusMarkerX: どの幅でも ▶ は枠から 4px 以上離れ、名前の文字の手前に収まる', () => {
+    for (const w of [100, 320, 360, 400, 640, 800]) {
+      const nameX = sideStatusLeftPadding(w, true)
+      const x = sideStatusMarkerX(nameX)
+      expect(x).toBeGreaterThanOrEqual(4 - 1e-9)
+      expect(x + estimateTextWidth('▶', SIDE_STATUS_MARKER_FONT_SIZE)).toBeLessThanOrEqual(nameX)
+    }
+  })
+
+  it('computeSelectMarkTriangle: 中央に下向きの三角。頭から離れ、大きさは unit に比例する', () => {
+    const p = computeSelectMarkTriangle(50, 100, 80)
+    expect(p).toHaveLength(6)
+    expect((p[0] + p[2]) / 2).toBeCloseTo(50)
+    expect(p[4]).toBeCloseTo(50)
+    expect(p[1]).toBe(p[3])
+    expect(p[5]).toBeGreaterThan(p[1])
+    expect(p[5]).toBeLessThan(100)
+    expect(100 - p[5]).toBeCloseTo(80 * SELECT_MARK_GAP_RATIO)
+    const q = computeSelectMarkTriangle(50, 100, 160)
+    expect(q[2] - q[0]).toBeCloseTo((p[2] - p[0]) * 2)
+  })
 })

@@ -825,7 +825,7 @@ describe('対象選択の「選択中」の印 ▼ (#805)', () => {
     expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
   })
 
-  it('ATB で番の味方がいる間、対象選択中は番の味方の ▼ と手の指す者の ▼ が並ぶ', () => {
+  it('ATB で番の味方がいても、対象選択中は番の味方の ▼ を隠し、手の指す者の ▼ だけ出す', () => {
     const { s } = build(
       { menu: SPELLS },
       { rng: () => 0, atb: { mode: 'wait', initialGauges: { party: [1000, 0, 0] } } },
@@ -834,7 +834,7 @@ describe('対象選択の「選択中」の印 ▼ (#805)', () => {
     )
     expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
     openTarget(0)
-    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [true, false] })
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false] })
     press('Escape')
     press('Escape')
     expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })

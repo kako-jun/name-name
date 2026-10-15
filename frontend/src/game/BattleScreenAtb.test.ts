@@ -405,17 +405,42 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     expect(m.x + estimateTextWidth('▶', 7)).toBeLessThanOrEqual(t0.x + 0.001)
   })
 
-  it('800x450・ATB: ▶ は枠から 8px 以上離れ、名前の直前（4px 手前）に置かれる (#805)', () => {
+  it.each([
+    [320, 568],
+    [360, 640],
+    [400, 300],
+    [640, 360],
+    [800, 450],
+  ])('%dx%d・ATB: ▶ は枠から 4px 以上離れ、名前の文字に重ならない (#805)', (w, h) => {
+    const party = Array.from({ length: 4 }, (_, i) => ent(`p${i}`, { name: 'ゆうしゃ' }))
+    const { s } = build(
+      party,
+      [ent('s')],
+      ATB({ party: [1000, 0, 0, 0] }),
+      { layout: 'side' },
+      w,
+      h
+    )
+    s.tick(0)
+    const L = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 1 })
+    const t0 = I(s).statusTexts[0]
+    const frameX = t0.x - sideStatusLeftPadding(L.status.w, true)
+    for (const m of I(s).atbMarkers) {
+      expect(m.x - frameX).toBeGreaterThanOrEqual(4 - 1e-9)
+      expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('800x450・ATB: ▶ は枠から約 8〜10px 離れ、名前の直前に置かれる (#805)', () => {
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }), {
       layout: 'side',
     })
     s.tick(0)
+    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 2, enemyCount: 1 })
     const t0 = I(s).statusTexts[0]
-    for (const m of I(s).atbMarkers) {
-      expect(m.x - (t0.x - sideStatusLeftPadding(800, true))).toBeGreaterThanOrEqual(8)
-      expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
-      expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeLessThanOrEqual(6)
-    }
+    const m = I(s).atbMarkers[0]
+    expect(m.x - (t0.x - sideStatusLeftPadding(L.status.w, true))).toBeGreaterThanOrEqual(8)
+    expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeLessThanOrEqual(6)
   })
 
   it('ATB on/off で HP の列位置は ATB のゲージぶんだけ左へ寄る（off は寄らない）', () => {

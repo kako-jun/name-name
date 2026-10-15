@@ -980,16 +980,56 @@ export function normalizeBattleRow(raw: string | null | undefined): BattleRow {
 export const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
 export const SIDE_STATUS_TEXT_PADDING = 12
-/** ATB の番の印 ▶ を置く、名前の左の追加の余白（枠から ▶ まで約 8〜10px 取るため）(#805)。欄が狭いときは付けない */
-export const SIDE_STATUS_MARKER_GUTTER = 8
-export const SIDE_STATUS_MARKER_GUTTER_MIN_WIDTH = 400
-/** status 欄の左端から名前の文字の開始までの余白。ATB で欄に余裕があるときは ▶ ぶんを足す */
+/** 番の印 ▶（名前の左）の文字サイズ。幅は estimateTextWidth と同じ見積りで測る (#805) */
+export const SIDE_STATUS_MARKER_FONT_SIZE = 7
+/** ▶ の右端と名前の文字の間 */
+export const SIDE_STATUS_MARKER_NAME_GAP = 3
+/** front 配置: ▶ の左端をパネルの左端（STAGE_PADDING）から離す量 */
+export const FRONT_MARKER_INSET = 4
+/**
+ * ATB のときだけ、名前の左に足す余白（▶ を置く場所）。欄幅に応じて MIN → MAX へなめらかに増える（閾値でのジャンプは無い）。
+ * どの幅でも枠から ▶ まで 4px 以上（MIN）取り、広い欄では約 9px 離す。狭い欄は MIN だけなので名前列を削りすぎない (#805)
+ */
+export const SIDE_STATUS_MARKER_GUTTER_MIN = 2
+export const SIDE_STATUS_MARKER_GUTTER_MAX = 8
+const MARKER_GUTTER_RAMP_FROM = 300
+const MARKER_GUTTER_RAMP_TO = 500
+/** status 欄の左端から名前の文字の開始までの余白。ATB のときは ▶ ぶんを足す */
 export function sideStatusLeftPadding(width: number, atb: boolean): number {
+  if (!atb) return SIDE_STATUS_TEXT_PADDING
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      (width - MARKER_GUTTER_RAMP_FROM) / (MARKER_GUTTER_RAMP_TO - MARKER_GUTTER_RAMP_FROM)
+    )
+  )
   return (
     SIDE_STATUS_TEXT_PADDING +
-    (atb && width >= SIDE_STATUS_MARKER_GUTTER_MIN_WIDTH ? SIDE_STATUS_MARKER_GUTTER : 0)
+    SIDE_STATUS_MARKER_GUTTER_MIN +
+    t * (SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN)
   )
 }
+/** ▶ の左端 x。名前列の x の手前に、▶ の幅（estimateTextWidth）と名前との間隔ぶん空ける */
+export function sideStatusMarkerX(nameX: number): number {
+  return nameX - SIDE_STATUS_MARKER_NAME_GAP - estimateTextWidth('▶', SIDE_STATUS_MARKER_FONT_SIZE)
+}
+
+/**
+ * 「選択中」の印（アクスタ頭上の白い下向き三角 ▼）(#805)。大きさ・頭からの間隔は枠の一辺（unit）に対する比で、
+ * 画面のスケールに追従する。FF6 ピクセルリマスターの 1080p 換算で、頭から約 10〜15px 離した小さな三角
+ */
+export const SELECT_MARK_WIDTH_RATIO = 0.1
+export const SELECT_MARK_HEIGHT_RATIO = 0.07
+export const SELECT_MARK_GAP_RATIO = 0.06
+/** ▼ の頂点（左上・右上・下の尖り）。`cx` は絵の中央 x、`headTop` は絵（板があれば板）の上端 y（同じ座標系） */
+export function computeSelectMarkTriangle(cx: number, headTop: number, unit: number): number[] {
+  const w = unit * SELECT_MARK_WIDTH_RATIO
+  const h = unit * SELECT_MARK_HEIGHT_RATIO
+  const tipY = headTop - unit * SELECT_MARK_GAP_RATIO
+  return [cx - w / 2, tipY - h, cx + w / 2, tipY - h, cx, tipY]
+}
+
 /** 列と列の間 */
 export const SIDE_STATUS_COLUMN_GAP = 8
 /** 名前列に最低限確保する全角文字数。これに届かないときは MP → 見出し → HP の最大値 → ゲージ幅の順に削る */
