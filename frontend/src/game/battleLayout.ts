@@ -20,6 +20,7 @@
 
 import type { BattleRow } from './spellDsl'
 import type { CommandLayout } from './battleCommands'
+import { computeAcrylicGeometry, resolveAcrylicParams, type AcrylicParams } from './spriteStyle'
 
 export interface Rect {
   x: number
@@ -75,6 +76,16 @@ export interface SideBattleLayoutInput {
   enemyAspects?: readonly (number | undefined)[]
   /** 奥行き (#747)。未指定・perspective が 0 以下は平面（現行どおり） */
   depth?: BattleDepth | null
+  /**
+   * 敵がアクスタ (#737) のときの板のパラメータ (#838)。渡すと、板（余白＋線ぶん枠の外へ広がる）を含めた見た目の矩形で
+   * 列ピッチ（隣の板と重ならない）と窓との重なり（許容量以下）を求める。未指定・null は素材そのまま（板なし）
+   */
+  enemyAcrylic?: AcrylicParams | null
+  /**
+   * 敵の絵の上端がメッセージ窓（ログ帯）の下へ入ってよい量 (#838)。各敵の枠の高さ（`size`）に対する比。
+   * 0〜0.5 に丸め、未指定・不正は `SIDE_ENEMY_WINDOW_OVERLAP`（0.25）。窓は敵の手前に描かれるので、許容量までは隠れてよい（仕様）
+   */
+  enemyWindowOverlap?: number
 }
 
 export interface SideBattleLayout {
@@ -139,6 +150,10 @@ export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
 export const SIDE_LABEL_GAP = 2
 /** 縦長の stage で敵を下寄せにするとき、領域の上端を下げてよい上限（stage の高さに対する比）(#760) */
 export const SIDE_PORTRAIT_ENEMY_MAX_DROP = 0.4
+/** 敵の絵が窓（ログ帯）の下へ入ってよい量の既定 (#838)。敵の枠の高さに対する比。窓と多少かぶるほうが大きく立体感が出る（kako-jun 方針） */
+export const SIDE_ENEMY_WINDOW_OVERLAP = 0.25
+/** 窓への重なり許容量の上限 (#838)。顔が半分以上隠れる設定を作らせない */
+export const SIDE_ENEMY_WINDOW_OVERLAP_MAX = 0.5
 /** 敵の立ち絵の縦横比の丸め範囲 (#760) */
 export const SIDE_ENEMY_ASPECT_MIN = 0.2
 export const SIDE_ENEMY_ASPECT_MAX = 3
@@ -173,6 +188,40 @@ export const SIDE_DEFAULT_SPRITE_ASPECT = 0.5
 export const SIDE_PARTY_FRAME_ASPECT = 0.8
 export const SIDE_PARTY_ASPECT_MIN = 0.2
 export const SIDE_PARTY_ASPECT_MAX = 1.5
+/** 二分法の反復回数（列ピッチ・窓との重なり）と、収まり判定の許容誤差（列ピッチは px の浮動小数誤差、窓は 0.01px） */
+const COLUMN_FIT_ITERATIONS = 32
+const COLUMN_FIT_EPS = 1e-9
+const WINDOW_FIT_ITERATIONS = 24
+const WINDOW_FIT_EPS = 0.01
+
+/** 敵の窓への重なり許容量 (#838) を 0〜`SIDE_ENEMY_WINDOW_OVERLAP_MAX` に丸める。未指定・非有限は既定 */
+export function normalizeEnemyWindowOverlap(raw: number | undefined | null): number {
+  if (raw === undefined || raw === null || !Number.isFinite(raw)) return SIDE_ENEMY_WINDOW_OVERLAP
+  return Math.min(SIDE_ENEMY_WINDOW_OVERLAP_MAX, Math.max(0, raw))
+}
+
+/**
+ * 敵の絵（アクスタの板を含む）の上端が窓の下端 `windowBottom` より上へはみ出す量のうち、許容量
+ * （各敵の枠の高さ × `overlap`。窓の高さまで）を超える分の最大値 (#838)。0 以下なら全員が許容量以内
+ */
+export function measureWindowOver(
+  slots: readonly SpriteSlot[],
+  aspects: readonly (number | undefined)[] | undefined,
+  params: AcrylicParams,
+  window: Pick<Rect, 'y' | 'h'>,
+  overlap: number
+): number {
+  const windowBottom = window.y + window.h
+  let worst = 0
+  slots.forEach((slot, i) => {
+    if (!(slot.size > 0)) return
+    const plate = computeEnemyPlateRect(slot, aspects?.[i], params)
+    // 窓の上端より上（画面の外）へは出さない: 許容量は窓の高さまで
+    worst = Math.max(worst, windowBottom - plate.y - Math.min(overlap * slot.size, window.h))
+  })
+  return worst
+}
+
 /** 奥行き (#747) の縮尺の下限（地平線に近い・地平線より上でも潰れない） */
 export const DEPTH_MIN_SCALE = 0.3
 /** `battle_perspective` だけ指定されたときの地平線の高さ（画面比）の既定 */
@@ -195,6 +244,35 @@ export function desiredSideLogLines(enemyCount: number): number {
 /** フォールバック四角（スプライト枠 `size` の左上を原点とした相対矩形） */
 export function computeFallbackRect(size: number): Rect {
   return { x: size * FALLBACK_X, y: size * FALLBACK_Y, w: size * FALLBACK_W, h: size * FALLBACK_H }
+}
+
+/**
+ * 敵がアクスタ (#737) のとき、画面に実際に描かれる板（スプライトの輪郭を余白＋線ぶん外へ広げた矩形）の範囲 (#838)。
+ * `BattleScreen.placeEntityView` / `placeAcrylic` の配置を純粋関数で写したもの:
+ * 正方形の箱（一辺 `max(size, width)`・下端を枠の下端に揃え・水平は枠の中央）の中に `computeAcrylicGeometry` で絵を置き、
+ * 板は絵の長辺の `marginRatio + lineWidthRatio` 倍だけ外へ広がる（`acrylicPlate.computePlateLayout` の spread）。
+ * 箱の中に予約された余白（px で頭打ち）より板の広がり（長辺比）が大きいぶんは、箱の外へはみ出す。
+ * `aspect`: 立ち絵の縦横比（幅/高さ。丸め前の実際の比）。画像が無い（色四角）ときは板がないので `slot` の枠をそのまま返す。
+ * 下端は枠の下端（板は台座に差し込まれ、枠の下へは出ない）。
+ */
+export function computeEnemyPlateRect(
+  slot: Pick<SpriteSlot, 'x' | 'y' | 'size' | 'width'>,
+  aspect: number | undefined,
+  params: AcrylicParams
+): Rect {
+  const frame: Rect = { x: slot.x, y: slot.y, w: slot.width, h: slot.size }
+  if (aspect === undefined || !(aspect > 0) || !Number.isFinite(aspect)) return frame
+  if (!(slot.size > 0) || !(slot.width > 0)) return frame
+  const p = resolveAcrylicParams(params)
+  const box = Math.max(slot.size, slot.width)
+  const baseX = slot.x - (box - slot.width) / 2
+  const baseY = slot.y + slot.size - box
+  const g = computeAcrylicGeometry(aspect, 1, box, p)
+  const spread = (p.marginRatio + p.lineWidthRatio) * Math.max(g.sprite.width, g.sprite.height)
+  const x = baseX + g.sprite.x - spread
+  const y = baseY + g.sprite.y - spread
+  const w = g.sprite.width + spread * 2
+  return { x, y, w, h: Math.max(0, slot.y + slot.size - y) }
 }
 
 const ELLIPSIS = '…'
@@ -386,6 +464,11 @@ export interface FormationOptions {
   maxSize?: number
   /** この高さ以上に届く最小の列数を選ぶ（どの列数でも届かなければ最大になる列数）。味方の立ち絵の高さを渡す */
   minSize?: number
+  /**
+   * 敵がアクスタ (#737) のときの板のパラメータ (#838)。渡すと列ピッチ（1 体ぶんの横幅）を、枠の幅でなく
+   * 板（余白＋線ぶん外へ広がる）を含めた幅にして、同じ行の隣の板と重ならないようにする。省略は従来どおり（枠の幅）
+   */
+  plateParams?: AcrylicParams | null
 }
 
 export function computeFormation(
@@ -415,13 +498,38 @@ export function computeFormation(
   for (let i = 0; i < count; i++) maxAspect = Math.max(maxAspect, enemyAspect(i))
   const maxSize = opts?.maxSize ?? SIDE_MAX_SPRITE_SIZE
   const wantSize = Math.max(SIDE_READABLE_SPRITE_SIZE, opts?.minSize ?? 0)
+  // 1 体ぶんの横幅（列ピッチ）。既定は枠の幅（size × 最大の縦横比）。アクスタのときは、各敵の板（枠の幅より広がりうる）も入る幅 (#838)
+  const plateParams = opts?.plateParams ?? null
+  const cellWidthAt = (size: number): number => {
+    let w = size * maxAspect
+    if (!plateParams || !(size > 0)) return w
+    for (let i = 0; i < count; i++) {
+      const raw = aspects?.[i]
+      if (raw === undefined || !Number.isFinite(raw) || raw <= 0) continue
+      const frame = { x: 0, y: 0, size, width: size * enemyAspect(i) }
+      w = Math.max(w, computeEnemyPlateRect(frame, raw, plateParams).w)
+    }
+    return w
+  }
   const sizeFor = (columns: number): number => {
     const rowCount = Math.ceil(count / columns)
     const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
-    return Math.max(
-      0,
-      Math.min(regionW / ((columns + stagger) * maxAspect), regionH / rowCount - extra, maxSize)
-    )
+    const byHeight = Math.min(regionH / rowCount - extra, maxSize)
+    const plain = Math.max(0, Math.min(regionW / ((columns + stagger) * maxAspect), byHeight))
+    if (!plateParams) return plain
+    // 板を含めた幅は size に対して単調に増える。枠の幅だけで決めた大きさで板も収まるなら従来どおり（見た目を変えない）。
+    // 収まらないときだけ、横に収まる最大の size を二分法で求める
+    const fits = (size: number): boolean =>
+      (columns + stagger) * cellWidthAt(size) <= regionW + COLUMN_FIT_EPS
+    if (!(plain > 0) || fits(plain)) return plain
+    let lo = 0
+    let hi = plain
+    for (let i = 0; i < COLUMN_FIT_ITERATIONS; i++) {
+      const mid = (lo + hi) / 2
+      if (fits(mid)) lo = mid
+      else hi = mid
+    }
+    return lo
   }
   const baseColumns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
   const pick = (): { columns: number; size: number } => {
@@ -442,7 +550,7 @@ export function computeFormation(
   }
   const rowCount = Math.ceil(count / columns)
   const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
-  const cellW = size * maxAspect
+  const cellW = cellWidthAt(size)
   const colPitch = cellW
   const totalW = colPitch * columns + cellW * stagger
   const totalH = (size + extra) * rowCount
@@ -747,15 +855,38 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   }
   const partyHeight = halfSlots[0]?.size ?? 0
 
-  let enemies = computeFormation(
-    enemyRegion,
-    enemyCount,
-    'enemy',
-    true,
-    undefined,
-    input.enemyAspects,
-    { maxSize: SIDE_ENEMY_MAX_SIZE, minSize: partyHeight }
-  )
+  const enemyPlate = input.enemyAcrylic ?? null
+  const formEnemies = (region: Rect): SpriteSlot[] =>
+    computeFormation(region, enemyCount, 'enemy', true, undefined, input.enemyAspects, {
+      maxSize: SIDE_ENEMY_MAX_SIZE,
+      minSize: partyHeight,
+      plateParams: enemyPlate,
+    })
+  let enemies = formEnemies(enemyRegion)
+  // 窓との重なり (#838): 敵の絵（アクスタの板を含む）の上端がログ帯の下へ入ってよいのは、各敵の枠の高さの
+  // `enemyWindowOverlap`（既定 0.25）まで。超えるときだけ領域の上端を下げて収める（許容量以内なら何も変えない）。
+  // 窓は敵の手前（上）に描かれるので、許容量までは隠れてよい（立体感）。領域の中で内容は中央寄せなので、上端を下げる
+  if (enemyPlate && enemies.length > 0) {
+    const overlap = normalizeEnemyWindowOverlap(input.enemyWindowOverlap)
+    const overAt = (drop: number): { over: number; slots: SpriteSlot[] } => {
+      const region: Rect = { ...enemyRegion, y: enemyRegion.y + drop, h: enemyRegion.h - drop }
+      const slots = formEnemies(region)
+      return { over: measureWindowOver(slots, input.enemyAspects, enemyPlate, log, overlap), slots }
+    }
+    if (overAt(0).over > WINDOW_FIT_EPS) {
+      // 上端を下げるほど絵は下がる（または小さくなる）ので、はみ出しは単調に減る。収まる最小の下げ幅を二分法で求める
+      let lo = 0
+      let hi = enemyRegion.h
+      for (let iter = 0; iter < WINDOW_FIT_ITERATIONS; iter++) {
+        const mid = (lo + hi) / 2
+        if (overAt(mid).over <= WINDOW_FIT_EPS) hi = mid
+        else lo = mid
+      }
+      enemies = overAt(hi).slots
+      enemyRegion.y += hi
+      enemyRegion.h -= hi
+    }
+  }
   // 大きさは右半分で決めたもの（halfSlots[0].size）に固定する。狭めた領域で計算し直すと幅の制約で縮むため
   let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
     height: partyHeight,

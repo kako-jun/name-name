@@ -1470,6 +1470,8 @@ export class BattleScreen extends Container {
       // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
       enemyAspects: this.enemyViews.map((v) => this.layoutAspect(v)),
       depth: this.opts.depth,
+      // アクスタの板（枠の外へ広がる）を含めて、隣の板と重ならない列ピッチ・窓との重なりが許容量以内になるよう配置する (#838)
+      enemyAcrylic: this.acrylicParams,
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)

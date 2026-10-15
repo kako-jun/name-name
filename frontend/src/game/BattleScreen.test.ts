@@ -953,17 +953,31 @@ describe('BattleScreen: acrylic (#737)', () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(sizedTexture(TEX_W, TEX_H) as never)
   }
   /** 敵の slot（#760: 敵は立ち絵の縦横比 TEX_W/TEX_H の枠になる） */
-  const enemySlot = (w = 800, h = 450, party = 1, enemies = 1) =>
+  const enemySlot = (
+    w = 800,
+    h = 450,
+    party = 1,
+    enemies = 1,
+    plate: Parameters<typeof resolveAcrylicParams>[0] | null = {}
+  ) =>
     computeSideBattleLayout({
       width: w,
       height: h,
       partyCount: party,
       enemyCount: enemies,
       enemyAspects: Array(enemies).fill(TEX_W / TEX_H),
+      // アクスタの板を含めた配置 (#838)。BattleScreen は acrylicParams を渡す（null は板なし＝spriteStyle none）
+      enemyAcrylic: plate === null ? undefined : resolveAcrylicParams(plate),
     }).enemies[0]
   /** acrylic の正方形の一辺 = 敵の枠の長辺（横長の敵は幅。下端は枠の下端に揃う） */
-  const slotSize = (w = 800, h = 450, party = 1, enemies = 1): number => {
-    const e = enemySlot(w, h, party, enemies)
+  const slotSize = (
+    w = 800,
+    h = 450,
+    party = 1,
+    enemies = 1,
+    plate: Parameters<typeof resolveAcrylicParams>[0] = {}
+  ): number => {
+    const e = enemySlot(w, h, party, enemies, plate)
     return Math.max(e.size, e.width)
   }
   const defaultGeometry = (size: number) =>
@@ -1048,7 +1062,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const s = track(make([entity('hero')], [withSprite('slime')], sideNone))
       await flushPromises()
       const sp = internals(s).enemyViews[0].sprite!
-      const e = enemySlot()
+      const e = enemySlot(800, 450, 1, 1, null)
       const fit = computeContainFitRect(TEX_W, TEX_H, e.width, e.size)
       expect(sp.x).toBeCloseTo(fit.x, 9)
       expect(sp.y).toBeCloseTo(fit.y, 9)
@@ -1489,7 +1503,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const b = v.acrylicBack!.getLocalBounds()
       expect(b.width).toBe(0)
       expect(b.height).toBe(0)
-      const size = slotSize()
+      const size = slotSize(800, 450, 1, 1, { hasBase: false })
       const g = computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams({ hasBase: false }))
       expect(v.sprite!.y + v.sprite!.height).toBeCloseTo(size - g.marginPx - g.linePx, 9)
     })
@@ -1507,7 +1521,8 @@ describe('BattleScreen: acrylic (#737)', () => {
       const g = computeAcrylicGeometry(
         TEX_W,
         TEX_H,
-        slotSize(),
+        // 配置の期待値も、BattleScreen と同じ丸め（resolveAcrylicParams: 9 → 0.15）を経由した板で求める
+        slotSize(800, 450, 1, 1, { marginRatio: 0.15 }),
         resolveAcrylicParams({ marginRatio: 0.15 })
       )
       expect(sp.x).toBeCloseTo(g.sprite.x, 9)
@@ -2538,13 +2553,20 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
   })
   const geom = (size: number, over: Parameters<typeof resolveAcrylicParams>[0] = {}) =>
     computeAcrylicGeometry(TEX_W, TEX_H, size, resolveAcrylicParams(over))
-  const boxOf = (w: number, h: number, party = 1, enemies = 1): number => {
+  const boxOf = (
+    w: number,
+    h: number,
+    party = 1,
+    enemies = 1,
+    over: Parameters<typeof resolveAcrylicParams>[0] = {}
+  ): number => {
     const e = computeSideBattleLayout({
       width: w,
       height: h,
       partyCount: party,
       enemyCount: enemies,
       enemyAspects: Array(enemies).fill(TEX_W / TEX_H),
+      enemyAcrylic: resolveAcrylicParams(over),
     }).enemies[0]
     return Math.max(e.size, e.width)
   }
@@ -3041,7 +3063,7 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
       const s = track(make([entity('hero')], [withSprite('slime')], lifted(0.1)))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      const g = geom(boxOf(800, 450), { spriteLiftRatio: 0.1 })
+      const g = geom(boxOf(800, 450, 1, 1, { spriteLiftRatio: 0.1 }), { spriteLiftRatio: 0.1 })
       expect(g.liftPx).toBeGreaterThan(0)
       expect(v.acrylicShadow!.y).toBeCloseTo(
         v.container.y + v.sprite!.y + v.sprite!.height + g.liftPx,
@@ -3076,7 +3098,7 @@ describe('BattleScreen: acrylic 追加観点 (#760)', () => {
         [800, 450],
       ]) {
         s.redraw(w, h)
-        const g = geom(boxOf(w, h), { spriteLiftRatio: 0.1 })
+        const g = geom(boxOf(w, h, 1, 1, { spriteLiftRatio: 0.1 }), { spriteLiftRatio: 0.1 })
         lifts.push(g.liftPx)
         expect(v.acrylicShadow!.y).toBeCloseTo(
           v.container.y + v.sprite!.y + v.sprite!.height + g.liftPx,
