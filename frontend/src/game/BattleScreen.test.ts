@@ -1051,7 +1051,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.acrylicPlate).toBeNull()
       expect(v.sprite!.filters ?? []).toHaveLength(0)
       // ラベルは container の外（labelLayer・#747）
-      expect(v.container.children).toHaveLength(2)
+      expect(v.container.children).toHaveLength(3)
       expect(v.container.children[0]).toBe(v.fallback)
       expect(v.container.children[1]).toBe(v.sprite)
       expect(v.label!.parent).toBe(internals(s).labelLayer)
@@ -1102,7 +1102,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const v = internals(s).enemyViews[0]
       expect(v.acrylicBack).toBeNull()
       expect(v.acrylicPlate).toBeNull()
-      expect(v.container.children).toHaveLength(2)
+      expect(v.container.children).toHaveLength(3)
     })
   })
 
@@ -1139,12 +1139,12 @@ describe('BattleScreen: acrylic (#737)', () => {
       expect(v.sprite!.filters ?? []).toHaveLength(0)
     })
 
-    it('成功: 子の順序は fallback → acrylicBack → 板 → 板の mask → sprite（label は container の外）(#760)', async () => {
+    it('成功: 子の順序は fallback → acrylicBack → 板 → 板の mask → sprite → 選択印 ▼（label は container の外）(#760)', async () => {
       okLoad()
       const s = track(make([entity('hero')], [withSprite('slime')], acrylic))
       await flushPromises()
       const v = internals(s).enemyViews[0]
-      expect(v.container.children).toHaveLength(5)
+      expect(v.container.children).toHaveLength(6)
       expect(v.container.children[0]).toBe(v.fallback)
       expect(v.container.children[1]).toBe(v.acrylicBack)
       expect(v.container.children[2]).toBe(v.acrylicPlate)
@@ -1163,7 +1163,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const v = internals(s).enemyViews[0]
       expect(v.acrylicPlate).toBeNull()
       expect(v.acrylicBack!.visible).toBe(true)
-      expect(v.container.children).toHaveLength(3)
+      expect(v.container.children).toHaveLength(4)
       expect(v.container.children[2]).toBe(v.sprite)
     })
 
@@ -1380,7 +1380,7 @@ describe('BattleScreen: acrylic (#737)', () => {
       const v = internals(s).partyViews[0]
       expect(v.acrylicPlate).not.toBeNull()
       expect(v.acrylicBack!.visible).toBe(true)
-      expect(v.container.children).toHaveLength(5) // 味方にラベルはない: fallback → back → 板 → mask → sprite
+      expect(v.container.children).toHaveLength(6) // 味方にラベルはない: fallback → back → 板 → mask → sprite → 選択印 (#805)
       expect(v.container.children[4]).toBe(v.sprite)
     })
 
