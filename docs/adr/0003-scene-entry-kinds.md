@@ -446,3 +446,18 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 
 - **Host 越し。** `SaveController` は `NovelRenderer` も pixi も import せず、自分で定義する `SaveHost`（7 メソッド: `getSnapshot` / `isStoryEnded` / `getPlayheadSceneId` / `showToast` / `ensureAudioContext` / `normalizeBackgroundFade` / `enter`）だけを見る。ゲート判定は `TransitionState`、本文位置の判定は `PlaybackCursor`、シーン名の解決は `SceneIndex` をコンストラクタ注入で使う。`SaveLoadOverlay`（pixi）はレンダラが生成し、`attachMenu` で渡す。
 - **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（`saveManager` / `autoSavePending` / `saveQuick` / `openSaveMenu` / `openLoadMenu` は `exposeSaveMembers`、コントローラ内部の呼び出しを `vi.spyOn` する場合は `saveControllerOf`）。
+
+## #828 7a での追記（2026-10-15、#735 7/8 の第1段）
+
+背景（クロスフェード・端フェードマスク・明るさ・下地ベタ・地色・テクスチャキャッシュ・ロードトークン）を、`NovelRenderer` から `frontend/src/game/BackgroundController.ts` に分けた。**実装の置き場は `BackgroundController`** である。挙動と本 ADR の契約は変えていない。本文中の語は、次のとおり読み替える。
+
+| 旧（レンダラの private / public） | 新 |
+| --- | --- |
+| `bgEntries` / `bgMaskSprite` / `bgCrossfadeTimer` / `currentBackgroundPath` / `Color` / `Fade` / `Brightness` / `defaultBackgroundColor` / `textureCache` / `bgLoadToken` / `pendingBackgroundLoadToken` / `pendingBackgroundLoad` | `BackgroundController` の private（唯一の書き手）。`bgGraphics` → `graphics`、`bgContainer` → `container` |
+| `setBackground` / `clearBackground` / `setBackgroundColor` / `clearBackgroundColor` / `fadeOutBackgroundEntries` / `finishBackgroundCrossfadeInstant` / `updateBackgroundFadeFrame` / `hasActiveBackgroundFade` / `hasPendingBackgroundLoad` ほか背景系 | `BackgroundController` の同名メソッド。`clearBackground()` は動画レイヤに触れなくなり、呼び出し側（`resetAndStartEvents` / `applyState` / `destroy` / `[場面転換]`）が直後に `videoLayer.remove()` を呼ぶ |
+| `setDefaultBackgroundColor` / `waitForBackgroundLoad`（公開） | シグネチャ不変。レンダラに残る薄いラッパー |
+| `getSnapshot` の背景 4 フィールド / `applyState` の背景復元 | `background.capture()` / `background.restore(state)`（フィールド集合と復元順〔画像 → 地色〕は不変。セーブ形式不変） |
+
+- **持ち越し規律は不変。** `resetAndStartEvents` の背景の分岐は従来どおり `preserveBackgroundForTransition` の1か所だけ。持ち越し時は `cancelPendingLoad()`（`bgLoadToken` を進める）→ `finishBackgroundCrossfadeInstant()` → `videoLayer.remove()`、非持ち越し時は `clearBackground()` → `videoLayer.remove()` → 背景板 → `clearBackgroundColor()` の順で、旧実装と同じ順序。トークンを進めるのは持ち越し時（と `clearBackground` / 終劇の `forgetBackground`）だけ。
+- **Host 越し。** `BackgroundController` は `NovelRenderer` を import せず、自分で定義する `BackgroundHost`（5 メソッド: `getAssetBaseUrl` / `isSkipMode` / `isInitialized` / `getScreenSize` / `getCrossfadeMs`）だけを見る。`TimeController` はコンストラクタ注入。
+- **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（フィールド・メソッドは `exposeBackgroundMembers`、コントローラ内部の呼び出しを `vi.spyOn` する場合は `backgroundControllerOf`）。
