@@ -114,6 +114,35 @@ describe('自動セーブの配線 (#768)', () => {
     await flush()
     expect(new SaveManager().hasQuickSave()).toBe(false)
   })
+
+  it('保留中にクイックロード（復元）すると保留は破棄され、復元後の本文で古い保留による自動セーブが走らない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const STALL = scene('stall', [jump('nowhere')]) // 冒頭が遷移先不在の Jump
+    const r = prepare(new NovelRenderer())
+    r.setJumpSceneIndex([STALL])
+    r.loadEvents([narration('s0'), narration('s1'), jump('stall')])
+    await r.startFrom({})
+    expect(r.quickSave()).toBe(true) // s0 の位置を手動セーブ（復元先）
+    r.advance() // s1
+    r.setOnSceneChange(() => r.requestAutoSave())
+    r.advance() // Jump stall
+    r.getTimeController().tick(1)
+    await flush()
+    expect(r.getCurrentSceneId()).toBe('stall')
+    r.getTimeController().tick(1) // 冒頭 Jump も遷移先不在 → stalled
+    await flush()
+    expect(internals(r).jumpState).toBe('stalled')
+    expect(internals<SaveInternals>(r).autoSavePending).toBe(true) // 本文が無いので保留のまま
+
+    r.setOnSceneChange(() => {})
+    const quickSave = vi.spyOn(internals<SaveInternals>(r).saveManager, 'quickSave')
+    expect(await r.quickLoad()).not.toBeNull() // navigate ゲートは stalled の Jump を通す → applyState
+    expect(internals<SaveInternals>(r).autoSavePending).toBe(false)
+
+    // 復元後の本文位置で pushSnapshot → flushAutoSave が走っても、古い保留では保存されない
+    ;(r as unknown as { pushSnapshot(): void }).pushSnapshot()
+    expect(quickSave).not.toHaveBeenCalled()
+  })
 })
 
 describe('クイックセーブ → 別インスタンスへロード (#827)', () => {
