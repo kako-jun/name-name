@@ -20,6 +20,16 @@
 
 import type { BattleRow } from './spellDsl'
 import type { CommandLayout } from './battleCommands'
+import { computeAcrylicGeometry, resolveAcrylicParams, type AcrylicParams } from './spriteStyle'
+import {
+  applyDepthToGridSlots,
+  clampEnemyWindowOverlap,
+  computeEnemyGridLayout,
+  emptyEnemyGridSlot,
+  type EnemyFootprint,
+  type EnemyGridSize,
+  type EnemyGridSlot,
+} from './enemyGrid'
 
 export interface Rect {
   x: number
@@ -75,6 +85,27 @@ export interface SideBattleLayoutInput {
   enemyAspects?: readonly (number | undefined)[]
   /** 奥行き (#747)。未指定・perspective が 0 以下は平面（現行どおり） */
   depth?: BattleDepth | null
+  /**
+   * 敵がアクスタ (#737) のときの板のパラメータ (#838)。渡すと、板（余白＋線ぶん枠の外へ広がる）を含めた見た目の矩形で
+   * 列ピッチ（隣の板と重ならない）と窓との重なり（許容量以下）を求める。未指定・null は素材そのまま（板なし）
+   */
+  enemyAcrylic?: AcrylicParams | null
+  /**
+   * 敵の絵の上端がメッセージ窓（ログ帯）の下へ入ってよい量 (#838)。各敵の枠の高さ（`size`）に対する比。
+   * 0〜0.5 に丸め、未指定・不正は `SIDE_ENEMY_WINDOW_OVERLAP`（0.25）。窓は敵の手前に描かれるので、許容量までは隠れてよい（仕様）
+   */
+  enemyWindowOverlap?: number
+  /**
+   * 敵の見えないグリッド (#839 段4)。渡すと敵を従来の `computeFormation` でなくグリッド（`computeEnemyGridLayout`）に置く。
+   * 未指定は従来の配置のまま（`enemyFootprints` / #838 の窓フィットも従来どおり）。
+   * このとき `enemyAspects` / `enemyAcrylic` の窓フィットは使わず、窓との重なりは `enemyWindowOverlap`（窓の高さまでに絞る）で扱う
+   */
+  enemyGrid?: EnemyGridSize
+  /**
+   * グリッド時の敵ごとの占有（`placeEnemies` の結果 + サイズ区分 + 倍率）。敵の index 順。
+   * null・足りない分は置けなかった敵＝大きさ 0 のスロット（後段が描かない）
+   */
+  enemyFootprints?: readonly (EnemyFootprint | null | undefined)[]
 }
 
 export interface SideBattleLayout {
@@ -139,6 +170,10 @@ export const SIDE_LABEL_HEIGHT = SIDE_LABEL_LINE_HEIGHT * SIDE_LABEL_LINES
 export const SIDE_LABEL_GAP = 2
 /** 縦長の stage で敵を下寄せにするとき、領域の上端を下げてよい上限（stage の高さに対する比）(#760) */
 export const SIDE_PORTRAIT_ENEMY_MAX_DROP = 0.4
+/** 敵の絵が窓（ログ帯）の下へ入ってよい量の既定 (#838)。敵の枠の高さに対する比。窓と多少かぶるほうが大きく立体感が出る（kako-jun 方針） */
+export const SIDE_ENEMY_WINDOW_OVERLAP = 0.25
+/** 窓への重なり許容量の上限 (#838)。顔が半分以上隠れる設定を作らせない */
+export const SIDE_ENEMY_WINDOW_OVERLAP_MAX = 0.5
 /** 敵の立ち絵の縦横比の丸め範囲 (#760) */
 export const SIDE_ENEMY_ASPECT_MIN = 0.2
 export const SIDE_ENEMY_ASPECT_MAX = 3
@@ -173,6 +208,40 @@ export const SIDE_DEFAULT_SPRITE_ASPECT = 0.5
 export const SIDE_PARTY_FRAME_ASPECT = 0.8
 export const SIDE_PARTY_ASPECT_MIN = 0.2
 export const SIDE_PARTY_ASPECT_MAX = 1.5
+/** 二分法の反復回数（列ピッチ・窓との重なり）と、収まり判定の許容誤差（列ピッチは px の浮動小数誤差、窓は 0.01px） */
+const COLUMN_FIT_ITERATIONS = 32
+const COLUMN_FIT_EPS = 1e-9
+const WINDOW_FIT_ITERATIONS = 24
+const WINDOW_FIT_EPS = 0.01
+
+/** 敵の窓への重なり許容量 (#838) を 0〜`SIDE_ENEMY_WINDOW_OVERLAP_MAX` に丸める。未指定・非有限は既定 */
+export function normalizeEnemyWindowOverlap(raw: number | undefined | null): number {
+  if (raw === undefined || raw === null || !Number.isFinite(raw)) return SIDE_ENEMY_WINDOW_OVERLAP
+  return Math.min(SIDE_ENEMY_WINDOW_OVERLAP_MAX, Math.max(0, raw))
+}
+
+/**
+ * 敵の絵（アクスタの板を含む）の上端が窓の下端 `windowBottom` より上へはみ出す量のうち、許容量
+ * （各敵の枠の高さ × `overlap`。窓の高さまで）を超える分の最大値 (#838)。0 以下なら全員が許容量以内
+ */
+export function measureWindowOver(
+  slots: readonly SpriteSlot[],
+  aspects: readonly (number | undefined)[] | undefined,
+  params: AcrylicParams,
+  window: Pick<Rect, 'y' | 'h'>,
+  overlap: number
+): number {
+  const windowBottom = window.y + window.h
+  let worst = 0
+  slots.forEach((slot, i) => {
+    if (!(slot.size > 0)) return
+    const plate = computeEnemyPlateRect(slot, aspects?.[i], params)
+    // 窓の上端より上（画面の外）へは出さない: 許容量は窓の高さまで
+    worst = Math.max(worst, windowBottom - plate.y - Math.min(overlap * slot.size, window.h))
+  })
+  return worst
+}
+
 /** 奥行き (#747) の縮尺の下限（地平線に近い・地平線より上でも潰れない） */
 export const DEPTH_MIN_SCALE = 0.3
 /** `battle_perspective` だけ指定されたときの地平線の高さ（画面比）の既定 */
@@ -195,6 +264,74 @@ export function desiredSideLogLines(enemyCount: number): number {
 /** フォールバック四角（スプライト枠 `size` の左上を原点とした相対矩形） */
 export function computeFallbackRect(size: number): Rect {
   return { x: size * FALLBACK_X, y: size * FALLBACK_Y, w: size * FALLBACK_W, h: size * FALLBACK_H }
+}
+
+/**
+ * 敵がアクスタ (#737) のとき、画面に実際に描かれる板（スプライトの輪郭を余白＋線ぶん外へ広げた矩形）の範囲 (#838)。
+ * `BattleScreen.placeEntityView` / `placeAcrylic` の配置を純粋関数で写したもの:
+ * 正方形の箱（一辺 `max(size, width)`・下端を枠の下端に揃え・水平は枠の中央）の中に `computeAcrylicGeometry` で絵を置き、
+ * 板は絵の長辺の `marginRatio + lineWidthRatio` 倍だけ外へ広がる（`acrylicPlate.computePlateLayout` の spread）。
+ * 箱の中に予約された余白（px で頭打ち）より板の広がり（長辺比）が大きいぶんは、箱の外へはみ出す。
+ * `aspect`: 立ち絵の縦横比（幅/高さ。丸め前の実際の比）。画像が無い（色四角）ときは板がないので `slot` の枠をそのまま返す。
+ * 下端は枠の下端（板は台座に差し込まれ、枠の下へは出ない）。
+ */
+export function computeEnemyPlateRect(
+  slot: Pick<SpriteSlot, 'x' | 'y' | 'size' | 'width'>,
+  aspect: number | undefined,
+  params: AcrylicParams
+): Rect {
+  const frame: Rect = { x: slot.x, y: slot.y, w: slot.width, h: slot.size }
+  if (aspect === undefined || !(aspect > 0) || !Number.isFinite(aspect)) return frame
+  if (!(slot.size > 0) || !(slot.width > 0)) return frame
+  const p = resolveAcrylicParams(params)
+  const box = Math.max(slot.size, slot.width)
+  const baseX = slot.x - (box - slot.width) / 2
+  const baseY = slot.y + slot.size - box
+  const g = computeAcrylicGeometry(aspect, 1, box, p)
+  const spread = (p.marginRatio + p.lineWidthRatio) * Math.max(g.sprite.width, g.sprite.height)
+  const x = baseX + g.sprite.x - spread
+  const y = baseY + g.sprite.y - spread
+  const w = g.sprite.width + spread * 2
+  return { x, y, w, h: Math.max(0, slot.y + slot.size - y) }
+}
+
+const ACRYLIC_BOX_FIT_ITERATIONS = 32
+
+/**
+ * 敵グリッド (#839 段4) のアクスタ用の箱の一辺を求める。`computeAcrylicGeometry` は正方形の箱が前提なので、
+ * 占有領域 `frame`（幅 × 高さ）の足元中央に置く正方形のうち、次をすべて `frame` の内側に収める最大の一辺を返す。
+ * (1) 板（絵を余白＋線ぶん外へ広げた矩形 = `computeEnemyPlateRect`）の左右と上端、(2) 台座・影の楕円の横幅（中心は `frame` の中央）。
+ * 箱の下端は `frame` の下端に揃える。2x1 のような横長の占有では箱が高さ（短辺）を超えて幅いっぱいまで広がり、絵が占有領域を使い切る
+ * （サイズ区分の大きさ差が画面に出る）。上限は `max(w, h)`。判定は一辺に対して単調に厳しくなるので二分法で求める。
+ * `aspect` が無い（色四角）・不正なら板がないので `min(w, h)`。`frame` が潰れていれば 0。
+ */
+export function computeAcrylicBoxSize(
+  frame: Pick<Rect, 'w' | 'h'>,
+  aspect: number | undefined,
+  params: AcrylicParams
+): number {
+  const lower = Math.min(frame.w, frame.h)
+  if (!(lower > 0) || !Number.isFinite(lower)) return 0
+  if (aspect === undefined || !(aspect > 0) || !Number.isFinite(aspect)) return lower
+  const upper = Math.max(frame.w, frame.h)
+  const p = resolveAcrylicParams(params)
+  const fits = (size: number): boolean => {
+    const slot = { x: (frame.w - size) / 2, y: frame.h - size, size, width: size }
+    const plate = computeEnemyPlateRect(slot, aspect, p)
+    if (!(plate.x >= -1e-6 && plate.x + plate.w <= frame.w + 1e-6 && plate.y >= -1e-6)) return false
+    const g = computeAcrylicGeometry(aspect, 1, size, p)
+    for (const e of [g.base, g.shadow]) if (e && 2 * e.rx > frame.w + 1e-6) return false
+    return true
+  }
+  if (fits(upper)) return upper
+  let lo = 0
+  let hi = upper
+  for (let i = 0; i < ACRYLIC_BOX_FIT_ITERATIONS; i++) {
+    const mid = (lo + hi) / 2
+    if (fits(mid)) lo = mid
+    else hi = mid
+  }
+  return lo
 }
 
 const ELLIPSIS = '…'
@@ -386,6 +523,11 @@ export interface FormationOptions {
   maxSize?: number
   /** この高さ以上に届く最小の列数を選ぶ（どの列数でも届かなければ最大になる列数）。味方の立ち絵の高さを渡す */
   minSize?: number
+  /**
+   * 敵がアクスタ (#737) のときの板のパラメータ (#838)。渡すと列ピッチ（1 体ぶんの横幅）を、枠の幅でなく
+   * 板（余白＋線ぶん外へ広がる）を含めた幅にして、同じ行の隣の板と重ならないようにする。省略は従来どおり（枠の幅）
+   */
+  plateParams?: AcrylicParams | null
 }
 
 export function computeFormation(
@@ -415,13 +557,38 @@ export function computeFormation(
   for (let i = 0; i < count; i++) maxAspect = Math.max(maxAspect, enemyAspect(i))
   const maxSize = opts?.maxSize ?? SIDE_MAX_SPRITE_SIZE
   const wantSize = Math.max(SIDE_READABLE_SPRITE_SIZE, opts?.minSize ?? 0)
+  // 1 体ぶんの横幅（列ピッチ）。既定は枠の幅（size × 最大の縦横比）。アクスタのときは、各敵の板（枠の幅より広がりうる）も入る幅 (#838)
+  const plateParams = opts?.plateParams ?? null
+  const cellWidthAt = (size: number): number => {
+    let w = size * maxAspect
+    if (!plateParams || !(size > 0)) return w
+    for (let i = 0; i < count; i++) {
+      const raw = aspects?.[i]
+      if (raw === undefined || !Number.isFinite(raw) || raw <= 0) continue
+      const frame = { x: 0, y: 0, size, width: size * enemyAspect(i) }
+      w = Math.max(w, computeEnemyPlateRect(frame, raw, plateParams).w)
+    }
+    return w
+  }
   const sizeFor = (columns: number): number => {
     const rowCount = Math.ceil(count / columns)
     const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
-    return Math.max(
-      0,
-      Math.min(regionW / ((columns + stagger) * maxAspect), regionH / rowCount - extra, maxSize)
-    )
+    const byHeight = Math.min(regionH / rowCount - extra, maxSize)
+    const plain = Math.max(0, Math.min(regionW / ((columns + stagger) * maxAspect), byHeight))
+    if (!plateParams) return plain
+    // 板を含めた幅は size に対して単調に増える。枠の幅だけで決めた大きさで板も収まるなら従来どおり（見た目を変えない）。
+    // 収まらないときだけ、横に収まる最大の size を二分法で求める
+    const fits = (size: number): boolean =>
+      (columns + stagger) * cellWidthAt(size) <= regionW + COLUMN_FIT_EPS
+    if (!(plain > 0) || fits(plain)) return plain
+    let lo = 0
+    let hi = plain
+    for (let i = 0; i < COLUMN_FIT_ITERATIONS; i++) {
+      const mid = (lo + hi) / 2
+      if (fits(mid)) lo = mid
+      else hi = mid
+    }
+    return lo
   }
   const baseColumns = count > SIDE_MAX_ROWS_PER_COLUMN ? 2 : 1
   const pick = (): { columns: number; size: number } => {
@@ -442,7 +609,7 @@ export function computeFormation(
   }
   const rowCount = Math.ceil(count / columns)
   const stagger = rowCount > 1 ? SIDE_STAGGER_RATIO : 0
-  const cellW = size * maxAspect
+  const cellW = cellWidthAt(size)
   const colPitch = cellW
   const totalW = colPitch * columns + cellW * stagger
   const totalH = (size + extra) * rowCount
@@ -695,7 +862,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
 
   // 上: ログ帯。行数は敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
   const stageBottom = bottomY - SIDE_GAP
-  let logLines = desiredSideLogLines(enemyCount)
+  // グリッド有効時 (#839 段4) は希望行数をグリッド容量（cols*rows）で決める。体数で行数が変わると stage 高さ→cell が
+  // 体数で変わり、設計書 §3.8「体数不変」に反するため。グリッドなしは従来どおり敵の数で決める
+  let logLines = desiredSideLogLines(
+    input.enemyGrid ? input.enemyGrid.cols * input.enemyGrid.rows : enemyCount
+  )
   while (
     logLines > SIDE_LOG_MIN_LINES &&
     stageBottom - (SIDE_PADDING + computeSideLogHeight(logLines) + SIDE_GAP) < SIDE_MIN_STAGE_HEIGHT
@@ -747,15 +918,76 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   }
   const partyHeight = halfSlots[0]?.size ?? 0
 
-  let enemies = computeFormation(
-    enemyRegion,
-    enemyCount,
-    'enemy',
-    true,
-    undefined,
-    input.enemyAspects,
-    { maxSize: SIDE_ENEMY_MAX_SIZE, minSize: partyHeight }
-  )
+  const enemyPlate = input.enemyAcrylic ?? null
+  // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
+  let gridFrontFloor: number | null = null
+  let gridOverlap = 0
+  const formEnemies = (region: Rect): SpriteSlot[] =>
+    computeFormation(region, enemyCount, 'enemy', true, undefined, input.enemyAspects, {
+      maxSize: SIDE_ENEMY_MAX_SIZE,
+      minSize: partyHeight,
+      plateParams: enemyPlate,
+    })
+  let enemies: SpriteSlot[]
+  if (input.enemyGrid) {
+    // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
+    const overlap = clampEnemyWindowOverlap(
+      enemyRegion,
+      input.enemyGrid,
+      true,
+      input.enemyWindowOverlap,
+      log.h
+    )
+    gridOverlap = overlap
+    const placedIdx: number[] = []
+    const footprints: EnemyFootprint[] = []
+    for (let i = 0; i < enemyCount; i++) {
+      const fp = input.enemyFootprints?.[i]
+      if (fp) {
+        placedIdx.push(i)
+        footprints.push(fp)
+      }
+    }
+    const gl = computeEnemyGridLayout(enemyRegion, input.enemyGrid, footprints, {
+      withLabel: true,
+      windowOverlap: overlap,
+    })
+    const band = gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+    gridFrontFloor = gl.grid.y + gl.grid.h - band
+    const slots: EnemyGridSlot[] = Array.from({ length: enemyCount }, () =>
+      emptyEnemyGridSlot(gl.grid.x, gridFrontFloor as number)
+    )
+    placedIdx.forEach((enemyIndex, k) => {
+      slots[enemyIndex] = gl.slots[k]
+    })
+    enemies = slots
+  } else {
+    enemies = formEnemies(enemyRegion)
+  }
+  // 窓との重なり (#838): 敵の絵（アクスタの板を含む）の上端がログ帯の下へ入ってよいのは、各敵の枠の高さの
+  // `enemyWindowOverlap`（既定 0.25）まで。超えるときだけ領域の上端を下げて収める（許容量以内なら何も変えない）。
+  // 窓は敵の手前（上）に描かれるので、許容量までは隠れてよい（立体感）。領域の中で内容は中央寄せなので、上端を下げる
+  if (!input.enemyGrid && enemyPlate && enemies.length > 0) {
+    const overlap = normalizeEnemyWindowOverlap(input.enemyWindowOverlap)
+    const overAt = (drop: number): { over: number; slots: SpriteSlot[] } => {
+      const region: Rect = { ...enemyRegion, y: enemyRegion.y + drop, h: enemyRegion.h - drop }
+      const slots = formEnemies(region)
+      return { over: measureWindowOver(slots, input.enemyAspects, enemyPlate, log, overlap), slots }
+    }
+    if (overAt(0).over > WINDOW_FIT_EPS) {
+      // 上端を下げるほど絵は下がる（または小さくなる）ので、はみ出しは単調に減る。収まる最小の下げ幅を二分法で求める
+      let lo = 0
+      let hi = enemyRegion.h
+      for (let iter = 0; iter < WINDOW_FIT_ITERATIONS; iter++) {
+        const mid = (lo + hi) / 2
+        if (overAt(mid).over <= WINDOW_FIT_EPS) hi = mid
+        else lo = mid
+      }
+      enemies = overAt(hi).slots
+      enemyRegion.y += hi
+      enemyRegion.h -= hi
+    }
+  }
   // 大きさは右半分で決めたもの（halfSlots[0].size）に固定する。狭めた領域で計算し直すと幅の制約で縮むため
   let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
     height: partyHeight,
@@ -764,10 +996,24 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
     // 空き枠も最前列の基準に含める（人数で縮尺が変わらないように）
     const all = [...enemies, ...party]
-    if (all.length > 0) {
-      const frontFloor = Math.max(...all.map((sl) => sl.floor))
+    if (all.length > 0 || gridFrontFloor !== null) {
+      const frontFloor = Math.max(
+        ...all.map((sl) => sl.floor),
+        ...(gridFrontFloor !== null ? [gridFrontFloor] : [])
+      )
       const horizonY = H * Math.min(1, Math.max(0, depth.horizon))
-      enemies = applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
+      enemies = input.enemyGrid
+        ? applyDepthToGridSlots(
+            enemies as EnemyGridSlot[],
+            frontFloor,
+            horizonY,
+            depth.perspective,
+            {
+              bottom: log.y + log.h,
+              overlap: gridOverlap,
+            }
+          )
+        : applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
       party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)
     }
   }
@@ -849,6 +1095,71 @@ export function normalizeBattleRow(raw: string | null | undefined): BattleRow {
 export const SIDE_STATUS_FONT_SIZE = 14
 /** status 行の左右余白（テキスト開始位置と、右端に残す余白） */
 export const SIDE_STATUS_TEXT_PADDING = 12
+/** 番の印 ▶（名前の左）の文字サイズ。幅は estimateTextWidth と同じ見積りで測る (#805) */
+export const SIDE_STATUS_MARKER_FONT_SIZE = 7
+/** ▶ の右端と名前の文字の間 */
+export const SIDE_STATUS_MARKER_NAME_GAP = 3
+/**
+ * ATB のときの、名前の左の余白（▶ を置く場所）。基本は MIN だけ足し（どの幅でも枠から ▶ まで 4px 以上）、
+ * 名前列に余裕がある幅では最小名前幅を割らない範囲で MAX まで広げる（枠から ▶ まで最大 8px。`computeStatusColumns` が余裕から決める）(#805)
+ */
+export const SIDE_STATUS_MARKER_GUTTER_MIN = 2
+export const SIDE_STATUS_MARKER_GUTTER_MAX = 6
+/** status 欄の左端から名前の文字の開始までの基本の余白（余裕で広がる前）。ATB のときは ▶ ぶんの最小を足す */
+export function sideStatusLeftPadding(atb: boolean): number {
+  return SIDE_STATUS_TEXT_PADDING + (atb ? SIDE_STATUS_MARKER_GUTTER_MIN : 0)
+}
+/** front 配置の名前（HP/MP の 1 行）が最低限使う幅の目安。これを超える余裕があれば ▶ の余白を広げる */
+export const FRONT_STATS_TEXT_BUDGET = 260
+/**
+ * front 配置（HP/MP パネル）の、パネル左端から名前の文字の開始までの余白。ATB のとき基本は MIN だけ足し、
+ * 1 行の文字に余裕がある幅（`innerWidth` = パネル幅 − 左右の文字余白）では MAX まで広げる（side と同じ考え方）(#805)
+ */
+export function frontStatsLeftPadding(innerWidth: number, atb: boolean): number {
+  const base = sideStatusLeftPadding(atb)
+  if (!atb) return base
+  const slack = innerWidth - FRONT_STATS_TEXT_BUDGET
+  const extra = Math.max(
+    0,
+    Math.min(SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN, slack)
+  )
+  return base + extra
+}
+/** ▶ の左端 x。名前列の x の手前に、▶ の幅（estimateTextWidth）と名前との間隔ぶん空ける */
+export function sideStatusMarkerX(nameX: number): number {
+  return nameX - SIDE_STATUS_MARKER_NAME_GAP - estimateTextWidth('▶', SIDE_STATUS_MARKER_FONT_SIZE)
+}
+
+/**
+ * 「選択中」の印（アクスタ頭上の白い下向き三角 ▼）(#805)。大きさ・頭からの間隔は枠の一辺（unit）に対する比で、
+ * 画面のスケールに追従する。FF6 ピクセルリマスターの 1080p 換算で、頭から約 10〜15px 離した小さな三角
+ */
+export const SELECT_MARK_WIDTH_RATIO = 0.1
+export const SELECT_MARK_HEIGHT_RATIO = 0.07
+export const SELECT_MARK_GAP_RATIO = 0.06
+/** 小さな画面でも見えるよう、三角の幅・高さ・頭からの間隔の下限（px）。大きい画面は unit に比例 */
+export const SELECT_MARK_MIN_WIDTH = 10
+export const SELECT_MARK_MIN_HEIGHT = 8
+export const SELECT_MARK_MIN_GAP = 4
+/** 三角の上端と、上のログ窓の下端との最低の隙間（px）。窓にかかる分は三角を下げる */
+export const SELECT_MARK_LOG_GAP = 2
+/** ▼ の頂点（左上・右上・下の尖り）。`cx` は絵の中央 x、`headTop` は絵（板があれば板）の上端 y、`minTop` は三角の上端の下限 y（同じ座標系。上のログ窓の下端＋SELECT_MARK_LOG_GAP） */
+export function computeSelectMarkTriangle(
+  cx: number,
+  headTop: number,
+  unit: number,
+  minTop = -Infinity
+): number[] {
+  const w = Math.max(SELECT_MARK_MIN_WIDTH, unit * SELECT_MARK_WIDTH_RATIO)
+  const h = Math.max(SELECT_MARK_MIN_HEIGHT, unit * SELECT_MARK_HEIGHT_RATIO)
+  // 上端が minTop（上のログ窓の下端＋隙間）より上にならないよう、必要なら下げる（大きさとログ窓との隙間は保ち、頭とは重なってよい）
+  const tipY = Math.max(
+    headTop - Math.max(SELECT_MARK_MIN_GAP, unit * SELECT_MARK_GAP_RATIO),
+    minTop + h
+  )
+  return [cx - w / 2, tipY - h, cx + w / 2, tipY - h, cx, tipY]
+}
+
 /** 列と列の間 */
 export const SIDE_STATUS_COLUMN_GAP = 8
 /** 名前列に最低限確保する全角文字数。これに届かないときは MP → 見出し → HP の最大値 → ゲージ幅の順に削る */
@@ -910,15 +1221,17 @@ export const SIDE_STATUS_GAUGE_MIN_WIDTH = 16
  */
 export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const font = input.fontPx ?? SIDE_STATUS_FONT_SIZE
-  const left = input.x + SIDE_STATUS_TEXT_PADDING
+  const leftBase = input.x + sideStatusLeftPadding(input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
   const build = (
     withMp: boolean,
     labels: boolean,
     maxHpShown: boolean,
-    gaugeW: number
+    gaugeW: number,
+    extraLeft = 0
   ): StatusColumns => {
+    const left = leftBase + extraLeft
     let edge = right
     let gauge: StatusColumn | null = null
     if (input.atb) {
@@ -966,7 +1279,16 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   ]
   for (const [withMp, labels, maxHpShown, gaugeW] of tries) {
     const c = build(withMp, labels, maxHpShown, gaugeW)
-    if (c.name.w >= minName) return c
+    if (c.name.w >= minName) {
+      // ATB: 名前列に余裕があるぶん（最小名前幅を割らない範囲）だけ、▶ の余白を MAX まで広げる。段階（省略）は変えない
+      const extra = input.atb
+        ? Math.min(
+            SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN,
+            c.name.w - minName
+          )
+        : 0
+      return extra > 0 ? build(withMp, labels, maxHpShown, gaugeW, extra) : c
+    }
   }
   return build(false, false, false, SIDE_STATUS_GAUGE_MIN_WIDTH)
 }

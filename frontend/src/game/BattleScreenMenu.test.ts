@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // Container に eventMode / isInteractive を足す（実アプリでは Application がイベントシステムを登録する）
 import 'pixi.js/events'
-import { EventBoundary, type Container } from 'pixi.js'
+import { EventBoundary, Graphics, Sprite, Texture, TextureSource, type Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import type { BattleMenuData, MenuStack } from './battleMenu'
@@ -517,6 +517,20 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
     expect(engine.getState().party[1].hp).toBeGreaterThan(0)
   })
 
+  it('蘇生の対象窓では、候補の倒れた味方にだけ ▼ が出る（生きている味方・窓を閉じたあとは出ない） (#805)', () => {
+    const { s } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    const marks = () =>
+      (s as unknown as { partyViews: Array<{ selectMark: { visible: boolean } }> }).partyViews.map(
+        (x) => x.selectMark.visible
+      )
+    press('ArrowLeft')
+    press('Enter')
+    expect(marks()).toEqual([false, true])
+    press('Escape')
+    press('Escape')
+    expect(marks()).toEqual([false, false])
+  })
+
   it('蘇生できる相手がいないときは確定できず、窓は残り、MP は減らない', () => {
     const { s, engine } = build({ menu: REVIVE })
     press('ArrowLeft')
@@ -695,5 +709,207 @@ describe('窓の右端と味方ステータス欄の HP 列 (#204 レビュー)'
       { label: 'ながいなまえのじゅもん', cost: '123', disabled: false },
     ]).rect
     expect(r.x + r.w).toBeLessThanOrEqual(geo.avoidX! + 0.001)
+  })
+})
+
+describe('対象選択の「選択中」の印 ▼ (#805)', () => {
+  interface MarkViews {
+    partyViews: Array<{ selectMark: { visible: boolean } }>
+    enemyViews: Array<{ selectMark: { visible: boolean } }>
+  }
+  const marks = (s: BattleScreen) => {
+    const v = s as unknown as MarkViews
+    return {
+      party: v.partyViews.map((x) => x.selectMark.visible),
+      enemy: v.enemyViews.map((x) => x.selectMark.visible),
+    }
+  }
+  const SPELLS: BattleMenuData = {
+    spells: {
+      a: [
+        { id: 'fire', name: 'ほのお', mp: 1, target: '敵単体', effect: 'damage 8..14' },
+        { id: 'thunder', name: 'いなずま', mp: 1, target: '敵全体', effect: 'damage 5..5' },
+        { id: 'heal', name: 'ヒール', mp: 1, target: '味方単体', effect: 'heal 10..10' },
+        { id: 'allheal', name: 'ベホマラー', mp: 1, target: '味方全体', effect: 'heal 10..10' },
+        { id: 'self', name: 'セルフ', mp: 1, target: '自分', effect: 'heal 10..10' },
+      ],
+    },
+  }
+  /** i 番目の呪文の対象窓を開く */
+  const openTarget = (i: number) => {
+    press('ArrowLeft')
+    for (let k = 0; k < i; k++) press('ArrowDown')
+    press('Enter')
+  }
+  const team = () => [ent('a'), ent('b'), ent('c')]
+  const foes = () => [ent('s1'), ent('s2')]
+
+  it('窓を開く前は ATB でなければどこにも出ない', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+    press('ArrowLeft')
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+  })
+
+  it('敵単体: 手の指す敵だけに出て、↑↓で移り、Escape で消える', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    openTarget(0)
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false] })
+    press('ArrowDown')
+    expect(marks(s).enemy).toEqual([false, true])
+    press('ArrowUp')
+    expect(marks(s).enemy).toEqual([true, false])
+    press('Escape')
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+  })
+
+  it('敵単体: 倒れた敵は候補から外れ、印も出ない', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), [
+      ent('s1', { hp: 0 }),
+      ent('s2'),
+    ])
+    openTarget(0)
+    expect(marks(s).enemy).toEqual([false, true])
+  })
+
+  it('敵全体: 生きている敵の全員に出る（倒れた敵には出ない）', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), [
+      ent('s1'),
+      ent('s2', { hp: 0 }),
+      ent('s3'),
+    ])
+    openTarget(1)
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false, true] })
+  })
+
+  it('味方単体: 指された味方だけに出て、↑↓で移る。倒れた味方は飛ばす', () => {
+    const { s } = build(
+      { menu: SPELLS },
+      { rng: () => 0 },
+      [ent('a'), ent('b', { hp: 0 }), ent('c')],
+      foes()
+    )
+    openTarget(2)
+    const first = marks(s).party.indexOf(true)
+    expect(marks(s).party.filter(Boolean)).toHaveLength(1)
+    expect(marks(s).enemy).toEqual([false, false])
+    press('ArrowDown')
+    const second = marks(s).party.indexOf(true)
+    expect(second).not.toBe(first)
+    expect(marks(s).party[1]).toBe(false) // 倒れた b
+    expect(marks(s).party.filter(Boolean)).toHaveLength(1)
+  })
+
+  it('味方全体: 生きている味方の全員に出る', () => {
+    const { s } = build(
+      { menu: SPELLS },
+      { rng: () => 0 },
+      [ent('a'), ent('b', { hp: 0 }), ent('c')],
+      foes()
+    )
+    openTarget(3)
+    expect(marks(s)).toEqual({ party: [true, false, true], enemy: [false, false] })
+  })
+
+  it('自分: 使用者だけに出る', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    openTarget(4)
+    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
+  })
+
+  it('確定して窓が閉じると消える', () => {
+    const { s } = build({ menu: SPELLS }, { rng: () => 0 }, team(), foes())
+    openTarget(0)
+    expect(marks(s).enemy).toEqual([true, false])
+    press('Enter')
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [false, false] })
+  })
+
+  it('ATB で番の味方がいても、対象選択中は番の味方の ▼ を隠し、手の指す者の ▼ だけ出す', () => {
+    const { s } = build(
+      { menu: SPELLS },
+      { rng: () => 0, atb: { mode: 'wait', initialGauges: { party: [1000, 0, 0] } } },
+      team(),
+      foes()
+    )
+    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
+    openTarget(0)
+    expect(marks(s)).toEqual({ party: [false, false, false], enemy: [true, false] })
+    press('Escape')
+    press('Escape')
+    expect(marks(s)).toEqual({ party: [true, false, false], enemy: [false, false] })
+  })
+})
+
+describe('敵グリッドの被ダメ数字の高さ・対象選択の矩形 (#839 段4)', () => {
+  interface GridInternals {
+    menuGeometry: { enemySlots: Array<{ x: number; y: number; w: number; h: number }> }
+    enemyViews: Array<{
+      anchorY: number
+      sprite: Sprite | null
+      slotRef: { box: { x: number; y: number; w: number; h: number } } | null
+    }>
+    layoutSide(): void
+  }
+  const G = (s: BattleScreen) => s as unknown as GridInternals
+  const gridScreen = () =>
+    build(
+      { enemyGrid: { cols: 6, rows: 2 } },
+      { rng: () => 0 },
+      [ent('a')],
+      [ent('s1', { layout: { w: 1, h: 1, scale: 0.5 } }), ent('s2')]
+    ).s
+
+  it('対象選択の矩形（手の位置・タップの当たり判定）は、倍率で縮めた箱 slot.box と一致する', () => {
+    const s = gridScreen()
+    const g = G(s)
+    const box = g.enemyViews[0].slotRef!.box
+    expect(g.menuGeometry.enemySlots[0]).toEqual({ x: box.x, y: box.y, w: box.w, h: box.h })
+    // 倍率 1 の敵は箱＝占有矩形
+    const box1 = g.enemyViews[1].slotRef!.box
+    expect(g.menuGeometry.enemySlots[1]).toEqual({ x: box1.x, y: box1.y, w: box1.w, h: box1.h })
+    // 倍率 0.5 の箱は倍率 1 の箱の半分
+    expect(box.h).toBeCloseTo(box1.h / 2, 6)
+  })
+
+  it('絵が読めないとき（色四角）の被ダメ数字の高さは、箱の上端から 35%', () => {
+    const g = G(gridScreen())
+    const box = g.enemyViews[0].slotRef!.box
+    expect(g.enemyViews[0].anchorY).toBeCloseTo(box.y + box.h * 0.35, 6)
+  })
+
+  it('絵があるときの被ダメ数字の高さは、描いた絵の矩形の上端から 35%（箱の中で contain した矩形基準）', () => {
+    const s = gridScreen()
+    const g = G(s)
+    // 横長の絵（200x100）。正方形の箱へ contain すると高さは箱の半分・縦は中央
+    const tex = new Texture({ source: new TextureSource({ width: 200, height: 100 }) })
+    g.enemyViews[0].sprite = new Sprite(tex)
+    g.layoutSide()
+    const box = g.enemyViews[0].slotRef!.box
+    expect(g.enemyViews[0].anchorY).toBeCloseTo(box.y + box.h / 4 + (box.h / 2) * 0.35, 6)
+  })
+
+  it('アクスタのとき、被ダメ数字の高さは描いた絵（スプライト）の矩形の上端から 35%', () => {
+    const { s } = build(
+      { enemyGrid: { cols: 6, rows: 2 }, spriteStyle: 'acrylic' },
+      { rng: () => 0 },
+      [ent('a')],
+      [ent('s1', { layout: { w: 1, h: 1, scale: 0.5 } }), ent('s2')]
+    )
+    const g = G(s)
+    const v = g.enemyViews[0] as unknown as {
+      anchorY: number
+      baseY: number
+      sprite: Sprite | null
+      acrylicBack: Graphics | null
+    }
+    // 画像の読み込みは行わないので、読み込み後の状態（台座・影の Graphics と絵）を直接作る
+    v.acrylicBack = new Graphics()
+    v.sprite = new Sprite(new Texture({ source: new TextureSource({ width: 200, height: 100 }) }))
+    g.layoutSide()
+    const box = g.enemyViews[0].slotRef!.box
+    expect(v.anchorY).toBeCloseTo(v.baseY + v.sprite.y + v.sprite.height * 0.35, 6)
+    // 箱の上端から 35%（既定値）とは別物（絵は箱の余白の内側に収まる）
+    expect(Math.abs(v.anchorY - (box.y + box.h * 0.35))).toBeGreaterThan(0.5)
   })
 })

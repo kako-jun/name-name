@@ -14,6 +14,7 @@ import {
   parseSpellTarget,
   scrollTopFor,
   setListCursor,
+  selectMarkTargets,
   setTargetCursor,
   targetHands,
   type BattleItemEntry,
@@ -341,5 +342,69 @@ describe('一覧のスクロール（タップの▲▼）', () => {
     st = refitList(st, ctxOf({ maxRows: 2 }))
     expect(st[0]).toMatchObject({ top: 4, cursor: 5 })
     expect(refitList(st, ctxOf({ maxRows: 2 }))).toBe(st)
+  })
+})
+
+describe('selectMarkTargets（▼ を出す者）(#805)', () => {
+  const e = (id: string, hp = 10): BattleEntity => ({
+    id,
+    name: id,
+    hp,
+    maxHp: 10,
+    mp: 5,
+    maxMp: 5,
+    atk: 1,
+    def: 0,
+    agi: 1,
+  })
+  const party = [e('a'), e('b', 0), e('c')]
+  const foes = [e('s1'), e('s2', 0)]
+  const tw = (over: Partial<TargetWindow>): TargetWindow => ({
+    type: 'target',
+    kind: 'spell',
+    entryIndex: 0,
+    spec: { scope: 'single', side: 'enemy' },
+    side: 'enemy',
+    cursor: 0,
+    ...over,
+  })
+
+  it('窓なし: 番の味方だけ。番がなければ（-1）誰にも出ない', () => {
+    expect(selectMarkTargets(party, foes, 2, undefined)).toEqual({
+      party: [false, false, true],
+      enemy: [false, false],
+    })
+    expect(selectMarkTargets(party, foes, -1, undefined).party).toEqual([false, false, false])
+  })
+
+  it('窓なし: 倒れた番の味方・範囲外の index（空き枠）には出さない', () => {
+    expect(selectMarkTargets(party, foes, 1, undefined).party).toEqual([false, false, false])
+    expect(selectMarkTargets(party, foes, 9, undefined).party).toEqual([false, false, false])
+  })
+
+  it('対象窓が開いている間は番の味方を隠し、手の指す者だけに出す', () => {
+    expect(selectMarkTargets(party, foes, 0, tw({ cursor: 0 }))).toEqual({
+      party: [false, false, false],
+      enemy: [true, false],
+    })
+  })
+
+  it('倒れた敵には出ない。味方単体は生きている者だけ。自分は使用者', () => {
+    expect(selectMarkTargets(party, foes, 0, tw({ cursor: 1 })).enemy).toEqual([false, false])
+    const ally = tw({ side: 'party', spec: { scope: 'single', side: 'party' }, cursor: 2 })
+    expect(selectMarkTargets(party, foes, 0, ally).party).toEqual([false, false, true])
+    const self = tw({ spec: { scope: 'self', side: 'party' } })
+    expect(selectMarkTargets(party, foes, 2, self).party).toEqual([false, false, true])
+  })
+
+  it('全体: 生きている側の全員。蘇生の対象窓だけ倒れた味方に出る', () => {
+    const all = tw({ spec: { scope: 'all', side: 'enemy' } })
+    expect(selectMarkTargets(party, foes, 0, all).enemy).toEqual([true, false])
+    const revive = tw({
+      side: 'party',
+      spec: { scope: 'single', side: 'party', revive: true },
+      cursor: 1,
+    })
+    expect(selectMarkTargets(party, foes, 0, revive).party).toEqual([false, true, false])
   })
 })

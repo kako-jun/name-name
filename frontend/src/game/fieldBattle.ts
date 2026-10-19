@@ -26,6 +26,7 @@ import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
+import type { EnemyGridSize } from './enemyGrid'
 import type { CommandLabels, CommandLayout } from './battleCommands'
 import type { BattleMenuData, BattleSpellEntry } from './battleMenu'
 import type { BattleTransitionMode } from './battleTransition'
@@ -57,6 +58,10 @@ export interface FieldBattleSettings {
   pixelArt: boolean
   /** `battle_atb` / `battle_atb_mode` (#205)。undefined = 従来ターン制 */
   atb: BattleAtbConfig | undefined
+  /** `battle_enemy_grid` (#839)。undefined = 無効（従来の敵配置）。`BattleScreen` 経由で描画に効く（#839 段4で配線済み） */
+  enemyGrid: EnemyGridSize | undefined
+  /** `battle_enemy_window_overlap` (#839)。undefined = 既定（0.25） */
+  enemyWindowOverlap: number | undefined
   /** `battle_command_layout` (#204) */
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
@@ -79,6 +84,8 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   foreground: undefined,
   pixelArt: false,
   atb: undefined,
+  enemyGrid: undefined,
+  enemyWindowOverlap: undefined,
   commandLayout: 'grid',
   commandLabels: undefined,
   transition: 'none',
@@ -100,6 +107,8 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     foreground: gameData.battleForeground,
     pixelArt: gameData.pixelArt === true,
     atb: gameData.battleAtb,
+    enemyGrid: gameData.battleEnemyGrid,
+    enemyWindowOverlap: gameData.battleEnemyWindowOverlap,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
     transition: gameData.battleTransition ?? d.transition,
@@ -355,6 +364,10 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     depth: settings.depth,
     foreground: settings.foreground,
     pixelArt: settings.pixelArt,
+    ...(settings.enemyGrid ? { enemyGrid: settings.enemyGrid } : {}),
+    ...(settings.enemyWindowOverlap !== undefined
+      ? { enemyWindowOverlap: settings.enemyWindowOverlap }
+      : {}),
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
     menu: buildBattleMenuData(roster, party),

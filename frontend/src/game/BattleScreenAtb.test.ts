@@ -5,10 +5,11 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Container, Graphics, Text } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, STAGE_PADDING, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
+
 import type { BattleEntity } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -29,6 +30,7 @@ function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 interface Internals {
   atbBars: Graphics[]
   atbBarRects: Array<{ x: number; y: number; w: number; h: number }>
+  partyViews: Array<{ selectMark: Graphics }>
   atbMarkers: Text[]
   statusTexts: Text[]
   statusHpTexts: Text[]
@@ -147,23 +149,26 @@ describe('BattleScreen ATB: ゲージ棒の色と幅（溜まり中は青・満�
   })
 })
 
-describe('BattleScreen ATB: 番の味方のマーカー（▶ + 黄色）', () => {
-  it('side: キュー先頭だけ ▶ が付いて黄色。他は付かず白', () => {
+describe('BattleScreen ATB: 番の味方のマーカー（名前の左の ▶ + アクスタ頭上の ▼ + 黄色）', () => {
+  it('side: キュー先頭の味方のアクスタにだけ ▼ が付いて黄色。他は付かず白', () => {
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [0, 1000] }))
     const [ta, tb] = I(s).statusTexts
-    // ▶ は名前の文字列に混ぜず、別 Text（左余白）で出す
+    // ▶ は名前に混ぜず別 Text（左余白）で出し、▼ はアクスタ側（partyViews の selectMark）にも出す (#805)
     expect(tb.text.startsWith('B')).toBe(true)
+    expect(I(s).partyViews[1].selectMark.visible).toBe(true)
     expect(I(s).atbMarkers[1].visible).toBe(true)
     expect(tb.style.fill).toBe(0xffee66)
     expect(ta.text.includes('▶')).toBe(false)
     expect(I(s).atbMarkers[0].visible).toBe(false)
+    expect(I(s).partyViews[0].selectMark.visible).toBe(false)
     expect(ta.style.fill).toBe(0xffffff)
   })
 
   it('side: 行動後はマーカーが消える', () => {
     const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }))
-    expect(I(s).atbMarkers[0].visible).toBe(true)
+    expect(I(s).partyViews[0].selectMark.visible).toBe(true)
     I(s).commands[0].hit.emit('pointertap', {} as never)
+    expect(I(s).partyViews[0].selectMark.visible).toBe(false)
     expect(I(s).atbMarkers[0].visible).toBe(false)
     expect(I(s).statusTexts[0].text.includes('▶')).toBe(false)
     expect(I(s).statusTexts[0].style.fill).toBe(0xffffff)
@@ -175,6 +180,22 @@ describe('BattleScreen ATB: 番の味方のマーカー（▶ + 黄色）', () =
     expect(I(s).atbMarkers[0].visible).toBe(true)
     expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
   })
+
+  it.each([
+    [800, 450],
+    [360, 640],
+  ])(
+    'front %dx%d: ▶ は枠からちょうど 8px 離れ（余裕のある幅）、ATB 棒の左端は名前の左端にそろう (#805)',
+    (w, h) => {
+      const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' }, w, h)
+      s.tick(0)
+      const m = I(s).atbMarkers[0]
+      const nameX = I(s).heroStatsText.x
+      expect(m.x - STAGE_PADDING).toBeCloseTo(8)
+      expect(nameX - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
+      expect(I(s).atbBarRects[0].x).toBeCloseTo(nameX)
+    }
+  )
 
   it('従来ターン制にはマーカーが付かない（不変）', () => {
     const { s } = build([ent('a')], [ent('s')], { rng: () => 0 })
@@ -375,7 +396,7 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     })
   })
 
-  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見え、▶ は名前に重ならない', () => {
+  it('360x640・味方 4 人・HP 3 桁: ATB on でも名前の先頭と HP が見え、▶ は枠からも名前からも離れる', () => {
     const mk = () =>
       Array.from({ length: 4 }, (_, i) =>
         ent(`p${i}`, { name: 'ゆうしゃ', hp: 120, maxHp: 120, mp: 99, maxMp: 99 })
@@ -396,8 +417,47 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     const m = I(on.s).atbMarkers[0]
     expect(m.visible).toBe(true)
     expect(m.text).toBe('▶')
-    // ▶ は名前の左余白に収まり、名前の文字と重ならない
-    expect(m.x + estimateTextWidth('▶', 10)).toBeLessThanOrEqual(I(on.s).statusTexts[0].x + 0.001)
+    const t0 = I(on.s).statusTexts[0]
+    // 狭い欄では余白を足さない（名前の文字を削らない）。▶ は名前の文字に重ならない
+    expect(m.x + estimateTextWidth('▶', 7)).toBeLessThanOrEqual(t0.x + 0.001)
+  })
+
+  it.each([
+    [320, 568],
+    [360, 640],
+    [400, 300],
+    [640, 360],
+    [800, 450],
+  ])('%dx%d・ATB: ▶ は枠から 4px 以上離れ、名前の文字に重ならない (#805)', (w, h) => {
+    const party = Array.from({ length: 4 }, (_, i) => ent(`p${i}`, { name: 'ゆうしゃ' }))
+    const { s } = build(
+      party,
+      [ent('s')],
+      ATB({ party: [1000, 0, 0, 0] }),
+      { layout: 'side' },
+      w,
+      h
+    )
+    s.tick(0)
+    const L = computeSideBattleLayout({ width: w, height: h, partyCount: 4, enemyCount: 1 })
+    const t0 = I(s).statusTexts[0]
+    const frameX = L.status.x
+    for (const m of I(s).atbMarkers) {
+      expect(m.x - frameX).toBeGreaterThanOrEqual(4 - 1e-9)
+      expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('800x450・ATB: ▶ は枠から約 8〜10px 離れ、名前の直前に置かれる (#805)', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }), {
+      layout: 'side',
+    })
+    s.tick(0)
+    const L = computeSideBattleLayout({ width: 800, height: 450, partyCount: 2, enemyCount: 1 })
+    const t0 = I(s).statusTexts[0]
+    const m = I(s).atbMarkers[0]
+    expect(m.x - L.status.x).toBeGreaterThanOrEqual(8 - 1e-9)
+    expect(t0.x - (m.x + estimateTextWidth('▶', 7))).toBeLessThanOrEqual(6)
   })
 
   it('ATB on/off で HP の列位置は ATB のゲージぶんだけ左へ寄る（off は寄らない）', () => {
@@ -471,5 +531,59 @@ describe('BattleScreen ATB: console 汚染', () => {
     s.destroy({ children: true })
     expect(warn).not.toHaveBeenCalled()
     expect(err).not.toHaveBeenCalled()
+  })
+})
+
+describe('BattleScreen ATB: アクスタ頭上の ▼ の出し入れ (#805)', () => {
+  const marks = (s: BattleScreen): boolean[] => I(s).partyViews.map((v) => v.selectMark.visible)
+
+  it.each([1, 2, 3, 4])('味方 %d 人: 番の味方（末尾）にだけ ▼ が出る', (n) => {
+    const party = Array.from({ length: n }, (_, i) => ent(`p${i}`))
+    const gauges = party.map((_, i) => (i === n - 1 ? 1000 : 0))
+    const { s } = build(party, [ent('s')], ATB({ party: gauges }))
+    expect(I(s).partyViews).toHaveLength(n)
+    expect(marks(s)).toEqual(party.map((_, i) => i === n - 1))
+  })
+
+  it('行動すると消え、次に番が来た味方へ移る', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 1000] }))
+    const first = marks(s).indexOf(true)
+    expect(marks(s).filter(Boolean)).toHaveLength(1)
+    I(s).commands[0].hit.emit('pointertap', {} as never)
+    // 前の味方の ▼ は消え、もう一人の味方（次の番）に移る
+    const next = first === 0 ? 1 : 0
+    expect(marks(s)[first]).toBe(false)
+    expect(marks(s)[next]).toBe(true)
+    expect(I(s).atbMarkers[next].visible).toBe(true)
+    expect(I(s).atbMarkers[first].visible).toBe(false)
+  })
+
+  it('倒れた味方（HP 0）には、ゲージが満タンでも出ない', () => {
+    const { s } = build([ent('a', { hp: 0 }), ent('b')], [ent('s')], ATB({ party: [1000, 1000] }))
+    expect(marks(s)).toEqual([false, true])
+  })
+
+  it('誰も番でなければ（ゲージ未満）どこにも出ない', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [10, 20] }))
+    expect(marks(s)).toEqual([false, false])
+  })
+
+  it('ATB でなければ出ない', () => {
+    const engine = new BattleEngine([ent('a')], [ent('s')], { rng: () => 0 })
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side' })
+    created.push(s)
+    expect(marks(s)).toEqual([false])
+  })
+
+  it('front は味方のアクスタを持たない: ▼ は作られず、番の表示は heroStatsText の色だけ', () => {
+    const { s } = build([ent('a')], [ent('s')], ATB({ party: [1000] }), { layout: 'front' })
+    expect(I(s).partyViews).toHaveLength(0)
+    expect(I(s).heroStatsText.style.fill).toBe(0xffee66)
+  })
+
+  it('ウィンドウ側の ▶ と併存する: 番の味方では ▶ と ▼ が同時に出る', () => {
+    const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }))
+    expect(I(s).atbMarkers.map((m) => m.visible)).toEqual([true, false])
+    expect(marks(s)).toEqual([true, false])
   })
 })

@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_command_layout`, `battle_command_labels`, `battle_transition`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_enemy_grid`, `battle_enemy_window_overlap`, `battle_command_layout`, `battle_command_labels`, `battle_transition`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -438,6 +438,9 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // 戦闘の ATB (#205)。同上。
     battle_atb: nullIfEmpty(doc.battle_atb),
     battle_atb_mode: nullIfEmpty(doc.battle_atb_mode),
+    // 敵の見えないグリッドと窓との重なり許容量 (#839)。同上。ここの列挙漏れで wasm 経由だけ undefined になる事故に注意。
+    battle_enemy_grid: nullIfEmpty(doc.battle_enemy_grid),
+    battle_enemy_window_overlap: nullIfEmpty(doc.battle_enemy_window_overlap),
     // 戦闘コマンド窓の配置と表示名 (#204)。同上。
     battle_command_layout: nullIfEmpty(doc.battle_command_layout),
     battle_command_labels: nullIfEmpty(doc.battle_command_labels),

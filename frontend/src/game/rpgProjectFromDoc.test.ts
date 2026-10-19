@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   rpgProjectFromDoc,
   applyRpgProjectToDoc,
@@ -1883,5 +1883,158 @@ describe('rpgProjectFromDoc: battle_transition (#830)', () => {
     expect(rpgProjectFromDoc({ ...makeDoc(), battle_transition: raw })!.battleTransition).toBe(
       expected
     )
+  })
+})
+
+describe('rpgProjectFromDoc: battle_enemy_grid / battle_enemy_window_overlap (#839)', () => {
+  const withEnemy = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+
+  it('battle_enemy_grid は 列x行（列 1〜12・行 1〜4 に丸め）で battleEnemyGrid になる', () => {
+    expect(rpgProjectFromDoc(withEnemy({ battle_enemy_grid: '6x2' }))!.battleEnemyGrid).toEqual({
+      cols: 6,
+      rows: 2,
+    })
+    expect(rpgProjectFromDoc(withEnemy({ battle_enemy_grid: '30×9' }))!.battleEnemyGrid).toEqual({
+      cols: 12,
+      rows: 4,
+    })
+  })
+
+  it('battle_enemy_grid が不正・空・null・未指定 → battleEnemyGrid は undefined（従来方式）', () => {
+    expect(rpgProjectFromDoc(makeDoc())!.battleEnemyGrid).toBeUndefined()
+    for (const v of ['on', '', '0x2', '6', null]) {
+      expect(
+        rpgProjectFromDoc(withEnemy({ battle_enemy_grid: v }))!.battleEnemyGrid
+      ).toBeUndefined()
+    }
+  })
+
+  it('battle_enemy_window_overlap は 0〜0.5 に丸めて battleEnemyWindowOverlap になる。不正・未指定は undefined（既定）', () => {
+    const o = (v: string | null | undefined) =>
+      rpgProjectFromDoc(withEnemy({ battle_enemy_window_overlap: v }))!.battleEnemyWindowOverlap
+    expect(o('0.1')).toBe(0.1)
+    expect(o('2')).toBe(0.5)
+    expect(o('0')).toBe(0)
+    expect(o('abc')).toBeUndefined()
+    expect(o('')).toBeUndefined()
+    expect(o(null)).toBeUndefined()
+    expect(rpgProjectFromDoc(makeDoc())!.battleEnemyWindowOverlap).toBeUndefined()
+  })
+})
+
+describe('rpgProjectFromDoc エンカウント群の検証 (#839 段5)', () => {
+  const mon = (id: string, size?: { w: number; h: number }) => ({
+    Monster: {
+      id,
+      name: id,
+      hp: 5,
+      atk: 1,
+      def: 1,
+      agi: 1,
+      exp: 0,
+      gold: 0,
+      ...(size ? { size } : {}),
+    },
+  })
+  const rpgScene = (id: string, groups: string[]) => ({
+    id,
+    title: id,
+    view: 'TopDown' as const,
+    events: [
+      {
+        RpgMap: {
+          width: 1,
+          height: 1,
+          tile_size: 32,
+          tiles: [[0]],
+          encounter_rate: 8,
+          encounter_groups: groups,
+        },
+      },
+    ] as unknown as EventDocument['chapters'][number]['scenes'][number]['events'],
+  })
+  function gridDoc(grid: string | undefined): EventDocument {
+    return {
+      engine: 'name-name',
+      ...(grid ? { battle_enemy_grid: grid } : {}),
+      chapters: [
+        {
+          number: 1,
+          title: '',
+          hidden: false,
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'data',
+              title: 'data',
+              view: 'TopDown' as const,
+              events: [
+                mon('bit'),
+                mon('wide', { w: 3, h: 3 }),
+              ] as unknown as EventDocument['chapters'][number]['scenes'][number]['events'],
+            },
+            rpgScene('field-a', ['bit', 'wide', 'bit+bit']),
+            rpgScene('field-b', ['bit@M1', 'bit']),
+          ],
+        },
+      ],
+    } as EventDocument
+  }
+
+  it('返さないシーンの不正な群も errors に出て、返すマップだけ除外される', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc('6x2'), 'field-a')!
+      expect(p.map.encounterGroups).toEqual(['bit', 'bit+bit'])
+      expect(p.encounterGroupErrors!.map((e) => `${e.mapId}:${e.group}`)).toEqual([
+        'field-a:wide',
+        'field-b:bit@M1',
+      ])
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(String(spy.mock.calls[0][0])).toContain('field-b')
+      // もう一方のシーンを返すと、そちらの群が除外される
+      const q = rpgProjectFromDoc(gridDoc('6x2'), 'field-b')!
+      expect(q.map.encounterGroups).toEqual(['bit'])
+      expect(q.encounterGroupErrors).toHaveLength(2)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('検証オプションを切ると何も変えない（エディタの書き戻し経路用）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc('6x2'), 'field-a', 'x', [], {
+        validateEncounterGroups: false,
+      })!
+      expect(p.map.encounterGroups).toEqual(['bit', 'wide', 'bit+bit'])
+      expect(p.encounterGroupErrors).toBeUndefined()
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('battle_enemy_grid が無いゲームでは検証しない（console.error なし・群は不変・errors 未設定）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc(undefined), 'field-a')!
+      expect(p.map.encounterGroups).toEqual(['bit', 'wide', 'bit+bit'])
+      expect(p.encounterGroupErrors).toBeUndefined()
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('グリッドが大きければ 3x3 も入る（範囲外の配置だけが残りエラー）', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const p = rpgProjectFromDoc(gridDoc('12x4'), 'field-a')!
+      expect(p.map.encounterGroups).toEqual(['bit', 'wide', 'bit+bit'])
+      expect(p.encounterGroupErrors?.map((e) => e.group)).toEqual(['bit@M1'])
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

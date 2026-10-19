@@ -49,7 +49,7 @@ export interface MapData {
   encounterRate?: number
   /**
    * エンカウント時の敵グループ候補。各要素は単体モンスター ID または `+` 連結
-   * （`slime+ghost` で「スライム＋ゴースト同時」）。重み均等で抽選。
+   * （`slime+ghost` で「スライム＋ゴースト同時」）。修飾子 `@C1`（配置）`*3` `*1..3`（個数）末尾 `:3`（重み）を付けられる（#839）。重み指定が無ければ均等で抽選。
    */
   encounterGroups?: string[]
 }
@@ -151,6 +151,20 @@ export interface EventAction {
   params: Record<string, unknown> // パラメータ
 }
 
+/** 敵グリッドに収まらなかった敵 1 体 (#839 段5。game/encounterGroupValidation.ts が使う) */
+export interface EncounterGroupError {
+  /** マップ（シーン）の id */
+  mapId: string
+  /** 群の生文字列 */
+  group: string
+  monsterId: string
+  /** 群の中でその敵が何体目か（その monsterId の 1 始まり） */
+  nth: number
+  kind: 'invalid-size' | 'out-of-range' | 'overlap' | 'full' | 'invalid-grid'
+  /** 日本語の理由 */
+  reason: string
+}
+
 /**
  * RPGプロジェクトデータ
  */
@@ -222,6 +236,20 @@ export interface RPGProject {
    */
   // 型は game/battleAtb.ts の BattleAtbConfig と同形（types 層は game 層を import しない）
   battleAtb?: { mode: 'wait' | 'active' }
+  /**
+   * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid: 6x2`（列 1〜12・行 1〜4 に丸める）由来。
+   * 不正値・未指定は undefined＝従来の配置（`battle_layout: side` のときだけ効く。`BattleScreen` → `computeSideBattleLayout` に配線済み #839 段4）
+   */
+  // 型は game/enemyGrid.ts の EnemyGridSize と同形（types 層は game 層を import しない）
+  battleEnemyGrid?: { cols: number; rows: number }
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap:`（0〜0.5 に丸める）由来。不正値・未指定は undefined＝既定 0.25 */
+  battleEnemyWindowOverlap?: number
+  /**
+   * 敵グリッドに収まらないため無効化したエンカウント群 (#839 段5)。`battle_enemy_grid` が有効なゲームを読み込んだときだけ、
+   * 全マップ（全シーン）の群を検証した結果が入る。無ければ（全部収まる・グリッド無効）undefined。
+   * 対象マップの `encounterGroups` からは、ここに載った群が除外済み
+   */
+  encounterGroupErrors?: EncounterGroupError[]
   /** 戦闘コマンド窓の配置 (#204)。frontmatter `battle_command_layout:` 由来。未指定は `'grid'`（2x2・現行どおり） */
   battleCommandLayout?: 'grid' | 'cross'
   /** 戦闘コマンドの表示名の上書き (#204)。frontmatter `battle_command_labels:` 由来。id は変えず label だけ差し替える。未指定は undefined（既定の日本語） */

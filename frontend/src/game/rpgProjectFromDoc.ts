@@ -11,6 +11,7 @@ import type {
 } from '../types'
 import type {
   RPGProject,
+  EncounterGroupError,
   MapData,
   UiNpcData,
   PlayerData,
@@ -27,6 +28,12 @@ import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
 import { normalizeBattlePresentation } from './battleMotion'
 import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb } from './battleAtb'
+import { normalizeEnemyGrid, normalizeEnemyWindowOverlapSetting } from './enemyGrid'
+import {
+  formatEncounterGroupErrors,
+  validateEncounterGroups,
+  type EncounterGroupInput,
+} from './encounterGroupValidation'
 import { normalizeCommandLayout, parseCommandLabels } from './battleCommands'
 
 /**
@@ -158,6 +165,28 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   return merged
 }
 
+export interface RpgProjectFromDocOptions {
+  /**
+   * `battle_enemy_grid` が有効なとき、収まらないエンカウント群を検証して除外する (#839 段5)。既定 true。
+   * エディタのように導出した project を doc へ書き戻す経路では false にする（除外した群が書き戻しで失われるため）
+   */
+  validateEncounterGroups?: boolean
+}
+
+/** doc の全シーン（RpgMap を持つもの）のエンカウント群を集める (#839 段5)。`mapId` はシーン id */
+function collectEncounterGroupInputs(doc: EventDocument): EncounterGroupInput[] {
+  const out: EncounterGroupInput[] = []
+  for (const chapter of doc.chapters) {
+    for (const scene of chapter.scenes) {
+      for (const ev of scene.events) {
+        if (typeof ev === 'string' || !('RpgMap' in ev)) continue
+        for (const spec of ev.RpgMap.encounter_groups ?? []) out.push({ mapId: scene.id, spec })
+      }
+    }
+  }
+  return out
+}
+
 /**
  * Document から RPGProject を導出する。
  *
@@ -170,7 +199,8 @@ export function rpgProjectFromDoc(
   doc: EventDocument,
   sceneId?: string,
   projectName = 'rpg-project',
-  extraDocs: EventDocument[] = []
+  extraDocs: EventDocument[] = [],
+  options: RpgProjectFromDocOptions = {}
 ): RPGProject | null {
   const targetScene = findRpgScene(doc, sceneId)
   if (!targetScene) return null
@@ -241,6 +271,34 @@ export function rpgProjectFromDoc(
   // Document 全体から RPG トリガーを収集する (#187)
   const triggers = collectRpgTriggers(doc)
 
+  // 敵グリッドに収まらない群の検証 (#839 段5)。`battle_enemy_grid` が無いゲームは何もしない。
+  // 全シーンぶんを検証して一覧し、返すマップの encounterGroups からは収まらない群を外す（読み込みは続行）
+  const battleEnemyGrid = normalizeEnemyGrid(doc.battle_enemy_grid)
+  let encounterGroupErrors: EncounterGroupError[] | undefined
+  if (battleEnemyGrid && options.validateEncounterGroups !== false) {
+    const inputs = collectEncounterGroupInputs(doc)
+    const result = validateEncounterGroups({
+      grid: battleEnemyGrid,
+      masters: master.monsters,
+      groups: inputs,
+    })
+    if (result.errors.length > 0) {
+      console.error(`[name-name] ${formatEncounterGroupErrors(result.errors)}`)
+      encounterGroupErrors = result.errors
+      if (map.encounterGroups) {
+        const bad = new Set(
+          inputs.filter((_, i) => !result.valid[i]).map((g) => `${g.mapId}\u0000${g.spec}`)
+        )
+        map = {
+          ...map,
+          encounterGroups: map.encounterGroups.filter(
+            (spec) => !bad.has(`${targetScene.id}\u0000${spec}`)
+          ),
+        }
+      }
+    }
+  }
+
   return {
     name: projectName,
     version: '1.0.0',
@@ -266,11 +324,14 @@ export function rpgProjectFromDoc(
     battleForeground: doc.battle_foreground || undefined,
     pixelArt: doc.pixel_art === true ? true : undefined,
     battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
+    battleEnemyGrid,
+    battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleTransition: normalizeBattleTransition(doc.battle_transition),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
+    ...(encounterGroupErrors ? { encounterGroupErrors } : {}),
   }
 }
 
@@ -285,6 +346,7 @@ function findRpgScene(
   doc: EventDocument,
   sceneId?: string
 ): {
+  id: string
   chapterIndex: number
   sceneIndex: number
   events: Event[]
@@ -300,6 +362,7 @@ function findRpgScene(
       const hasMap = scene.events.some((e) => typeof e !== 'string' && 'RpgMap' in e)
       if (hasMap) {
         return {
+          id: scene.id,
           chapterIndex: ci,
           sceneIndex: si,
           events: scene.events,

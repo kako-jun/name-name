@@ -4,6 +4,17 @@
  * `${base}/images/...` に解決する (#746/#785)）。
  */
 import { hasOwn } from '../game/ownProperty'
+import { parseEncounterGroup } from '../game/enemyGroup'
+import {
+  formatEncounterGroupErrors,
+  validateEncounterGroups,
+  type EncounterGroupError,
+} from '../game/encounterGroupValidation'
+import {
+  normalizeEnemyGrid,
+  normalizeEnemyWindowOverlapSetting,
+  type EnemyGridSize,
+} from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
 import { resolveUrl, type ParseResult } from '../battleSample/config'
 import type { Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
@@ -12,6 +23,10 @@ import type { MonsterDef } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
+import type { BattlePresentation } from '../game/battleMotion'
+import type { WindowStyle } from '../game/windowStyle'
+import type { CommandLayout } from '../game/battleCommands'
+import type { BattleAtbConfig } from '../game/battleAtb'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
 export const FACINGS: readonly Facing[] = ['up', 'down', 'left', 'right']
@@ -36,6 +51,18 @@ export interface FieldBattleConfig {
   /** 戦闘中の画面の大きさ（戦闘サンプルの 800x450 と同じ既定） */
   width: number
   height: number
+  /** 敵の見えないグリッド (#839)。`battle.enemyGrid: "6x2"`。不正値・未指定は undefined＝従来の配置 */
+  enemyGrid?: EnemyGridSize
+  /** 敵の絵と窓の重なり許容量 (#838/#839)。`battle.enemyWindowOverlap`（0〜0.5 に丸める）。未指定は既定 */
+  enemyWindowOverlap?: number
+  /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
+  presentation?: BattlePresentation
+  /** 窓の配色 (#883)。`battle.windowStyle`: `dark` / `ff-blue`。未指定は undefined＝既定（dark） */
+  windowStyle?: WindowStyle
+  /** コマンド窓の配置 (#883)。`battle.commandLayout`: `grid` / `cross`。未指定は undefined＝既定（grid） */
+  commandLayout?: CommandLayout
+  /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
+  atb?: BattleAtbConfig
 }
 
 export interface FieldSampleConfig {
@@ -62,6 +89,10 @@ export interface FieldSampleConfig {
   /** 戦闘に出す味方 (#809)。主人公のポーズ画像を sprite に指す */
   party: BattleEntity[]
   battle: FieldBattleConfig
+  /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
+  groupErrors?: EncounterGroupError[]
+  /** 設定は読めたが効かない組み合わせの警告 (#883)。`layout: "front"` と `presentation: "ff"`／`commandLayout: "cross"` など。無ければ省略 */
+  warnings?: string[]
 }
 
 export const DEFAULTS = {
@@ -215,6 +246,10 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     for (const [mid, m] of Object.entries(raw.monsters)) {
       const e = parseEntity(m, mid, `monsters.${mid}`, url)
       if (!e.ok) return e
+      const size = parseMonsterSize((m as Obj).size, `monsters.${mid}.size`)
+      if (!size.ok) return size
+      const scale = parseMonsterScale((m as Obj).scale, `monsters.${mid}.scale`)
+      if (!scale.ok) return scale
       monsters[mid] = {
         id: mid,
         name: e.value.name,
@@ -226,13 +261,18 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         exp: e.value.exp ?? 0,
         gold: e.value.gold ?? 0,
         ...(e.value.sprite ? { sprite: e.value.sprite } : {}),
+        ...(size.value ? { size: size.value } : {}),
+        ...(scale.value !== undefined ? { scale: scale.value } : {}),
       }
     }
   }
   for (const sc of Object.values(scenes)) {
     for (const g of sc.encounter?.groups ?? []) {
-      for (const mid of g.split('+').map((t) => t.trim())) {
-        if (mid && !hasOwn(monsters, mid))
+      const parsed = parseEncounterGroup(g)
+      if (parsed.warnings.length > 0)
+        return fail(`scenes.${sc.id}.encounter.groups の "${g}": ${parsed.warnings[0]}`)
+      for (const { id: mid } of parsed.items) {
+        if (!hasOwn(monsters, mid))
           return fail(`scenes.${sc.id}.encounter.groups の "${mid}" が monsters にありません`)
       }
     }
@@ -267,6 +307,28 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     return fail(`battle.layout は "front" か "side": ${JSON.stringify(b.layout)}`)
   if (b.spriteStyle !== undefined && b.spriteStyle !== 'none' && b.spriteStyle !== 'acrylic')
     return fail(`battle.spriteStyle は "none" か "acrylic": ${JSON.stringify(b.spriteStyle)}`)
+  if (b.presentation !== undefined && b.presentation !== 'dq' && b.presentation !== 'ff')
+    return fail(`battle.presentation は "dq" か "ff": ${JSON.stringify(b.presentation)}`)
+  if (b.windowStyle !== undefined && b.windowStyle !== 'dark' && b.windowStyle !== 'ff-blue')
+    return fail(`battle.windowStyle は "dark" か "ff-blue": ${JSON.stringify(b.windowStyle)}`)
+  if (b.commandLayout !== undefined && b.commandLayout !== 'grid' && b.commandLayout !== 'cross')
+    return fail(`battle.commandLayout は "grid" か "cross": ${JSON.stringify(b.commandLayout)}`)
+  if (b.atb !== undefined && b.atb !== 'on' && b.atb !== 'off')
+    return fail(`battle.atb は "on" か "off": ${JSON.stringify(b.atb)}`)
+  if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
+    return fail(`battle.atbMode は "wait" か "active": ${JSON.stringify(b.atbMode)}`)
+  // front では効かない設定の組（静かに無視されるので警告する。読み込みは成功のまま）
+  const warnings: string[] = []
+  if (b.layout === 'front') {
+    if (b.presentation === 'ff')
+      warnings.push(
+        'battle.presentation "ff" は layout "side" のときだけ効きます（"front" では無視されます）'
+      )
+    if (b.commandLayout === 'cross')
+      warnings.push(
+        'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
+      )
+  }
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -276,6 +338,37 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     const u = url(b.background, 'battle.background')
     if (!u.ok) return u
     battleBg = u.value
+  }
+
+  // 敵グリッド (#839)。不正値はエラーにせず無効（従来の配置）
+  const enemyGrid = normalizeEnemyGrid(typeof b.enemyGrid === 'string' ? b.enemyGrid : undefined)
+  const enemyWindowOverlap =
+    typeof b.enemyWindowOverlap === 'number' && Number.isFinite(b.enemyWindowOverlap)
+      ? normalizeEnemyWindowOverlapSetting(String(b.enemyWindowOverlap))
+      : undefined
+
+  // 収まらない群の検証 (#839 段5)。グリッドが有効なときだけ全シーンの群を検証し、収まらない群を除外する
+  let groupErrors: EncounterGroupError[] | undefined
+  if (enemyGrid) {
+    const inputs = Object.values(scenes).flatMap((sc) =>
+      (sc.encounter?.groups ?? []).map((spec) => ({ mapId: sc.id, spec }))
+    )
+    const result = validateEncounterGroups({ grid: enemyGrid, masters: monsters, groups: inputs })
+    if (result.errors.length > 0) {
+      groupErrors = result.errors
+      console.error(`[name-name] ${formatEncounterGroupErrors(result.errors)}`)
+      const bad = new Set(
+        inputs.filter((_, i) => !result.valid[i]).map((g) => `${g.mapId}\u0000${g.spec}`)
+      )
+      for (const sc of Object.values(scenes)) {
+        const enc = sc.encounter
+        if (!enc) continue
+        sc.encounter = {
+          ...enc,
+          groups: enc.groups.filter((spec) => !bad.has(`${sc.id}\u0000${spec}`)),
+        }
+      }
+    }
   }
 
   return {
@@ -296,9 +389,57 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(battleBg ? { background: battleBg } : {}),
         width: bw.value,
         height: bh.value,
+        ...(enemyGrid ? { enemyGrid } : {}),
+        ...(enemyWindowOverlap !== undefined ? { enemyWindowOverlap } : {}),
+        ...(b.presentation ? { presentation: b.presentation } : {}),
+        ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
+        ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
+        ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
       },
+      ...(groupErrors ? { groupErrors } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
     },
   }
+}
+
+/** 全角の数字・x を半角へ（parser/src/master.rs の `to_halfwidth` と同じ範囲。`×` はそのまま） */
+function toHalfwidth(raw: string): string {
+  return raw
+    .trim()
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 0x30))
+    .replace(/[ｘＸ]/g, 'x')
+}
+
+/**
+ * `monsters.<id>.size`（"2x1" など。幅x高さ、整数 1 以上）を解釈する。Rust parser の `サイズ:`（master.rs `parse_size_pair`）と同じ書式:
+ * x / X / × 区切り・全角数字可・符号や小数は不可・u32 の範囲。未指定は undefined。不正はエラー
+ */
+export function parseMonsterSize(
+  raw: unknown,
+  path: string
+): ParseResult<{ w: number; h: number } | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined }
+  const bad = fail(`${path} は "2x1" のような 幅x高さ（整数 1 以上）: ${JSON.stringify(raw)}`)
+  if (typeof raw !== 'string') return bad
+  const parts = toHalfwidth(raw).split(/[xX×]/)
+  if (parts.length < 2) return bad
+  // Rust の split_once は最初の区切りで 2 つに割る。残りに区切りが含まれると数字だけの検査で落ちる
+  if (parts.length > 2) return bad
+  const [a, b] = parts.map((t) => t.trim())
+  if (!/^[0-9]+$/.test(a) || !/^[0-9]+$/.test(b)) return bad
+  const w = Number(a)
+  const h = Number(b)
+  const U32_MAX = 4294967295
+  if (w < 1 || h < 1 || w > U32_MAX || h > U32_MAX) return bad
+  return { ok: true, value: { w, h } }
+}
+
+/** `monsters.<id>.scale`（数値。0.25〜1 に丸める。`倍率:` と同じ範囲）。未指定は undefined。数値でなければエラー */
+export function parseMonsterScale(raw: unknown, path: string): ParseResult<number | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined }
+  if (typeof raw !== 'number' || !Number.isFinite(raw))
+    return fail(`${path} は数値（0.25〜1 に丸めます）: ${JSON.stringify(raw)}`)
+  return { ok: true, value: Math.min(1, Math.max(0.25, raw)) }
 }
 
 /** 味方・モンスターの 1 件分の検証（ステータスは数値、sprite は URL に解決） */
@@ -353,6 +494,29 @@ function parseEntity(
 }
 
 /**
+ * 「今すぐエンカウント（確認用）」の抽選候補（群の文字列の配列）。
+ * シーンに群があればそれ。群が空（最初から無い・全群が敵グリッドに収まらず無効化された）なら全モンスターを 1 体ずつの群として使うが、
+ * 敵グリッドが有効なときは、1 体でも収まらない（サイズ超過など）モンスターは候補から外す (#839 段5)。
+ */
+export function forceBattleCandidates(config: FieldSampleConfig, sceneId: string): string[] {
+  const groups = hasOwn(config.scenes, sceneId)
+    ? (config.scenes[sceneId].encounter?.groups ?? [])
+    : []
+  if (groups.length > 0) return groups
+  const ids = Object.keys(config.monsters)
+  const grid = config.battle.enemyGrid
+  if (!grid) return ids
+  return ids.filter(
+    (id) =>
+      validateEncounterGroups({
+        grid,
+        masters: config.monsters,
+        groups: [{ mapId: sceneId, spec: id }],
+      }).errors.length === 0
+  )
+}
+
+/**
  * srcId のシーンから link で出たとき、遷移先シーンで対応する（srcId へ戻る）リンクを返す。
  * 遷移先に複数あれば、辺が反対側のものを優先し、なければ最初のもの。無ければ null。
  */
@@ -370,3 +534,12 @@ export function findReturnLink(
 }
 
 const OPPOSITE: Record<Edge, Edge> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }
+
+/** 読み込み成功時に画面へ出す通知（群エラーの一覧＋警告）。無ければ null。showError は置換なので 1 つにまとめる */
+export function configNotice(config: FieldSampleConfig): string | null {
+  const parts: string[] = []
+  if (config.groupErrors && config.groupErrors.length > 0)
+    parts.push(formatEncounterGroupErrors(config.groupErrors))
+  if (config.warnings) parts.push(...config.warnings)
+  return parts.length > 0 ? parts.join('\n') : null
+}

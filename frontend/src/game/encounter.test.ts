@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { rollEncounter } from './RaycastRenderer'
+import { enemyLayoutField } from './encounter'
 import type { MonsterDef } from '../types'
 
 const slime: MonsterDef = {
@@ -287,5 +288,54 @@ describe('rollEncounter: actions を BattleEntity に写す (#835)', () => {
     expect(a.actions).toEqual(actions)
     expect(a.actions).not.toBe(actions)
     expect('actions' in b).toBe(false)
+  })
+})
+
+describe('rollEncounter: サイズ・倍率・配置を BattleEntity.layout に写す (#839 段3)', () => {
+  const roll = (groups: string[], masters: Record<string, MonsterDef>) =>
+    rollEncounter({ rate: 1, groups, masters, rng: () => 0 })
+
+  it('サイズ・倍率・配置のどれも無い敵は layout なし（従来どおり）', () => {
+    const enemies = roll(['slime+ghost'], { slime, ghost })!
+    for (const e of enemies) expect('layout' in e).toBe(false)
+  })
+
+  it('size だけ → 倍率 1。scale だけ → 1x1。両方 → そのまま', () => {
+    const enemies = roll(['slime+ghost+slime'], {
+      slime: { ...slime, size: { w: 2, h: 1 } },
+      ghost: { ...ghost, scale: 0.5 },
+    })!
+    expect(enemies[0].layout).toEqual({ w: 2, h: 1, scale: 1 })
+    expect(enemies[1].layout).toEqual({ w: 1, h: 1, scale: 0.5 })
+    expect(enemies[2].layout).toEqual({ w: 2, h: 1, scale: 1 })
+    const both = roll(['slime'], { slime: { ...slime, size: { w: 2, h: 2 }, scale: 0.75 } })!
+    expect(both[0].layout).toEqual({ w: 2, h: 2, scale: 0.75 })
+  })
+
+  it('群の配置指定 @C1 は個数の先頭 1 体の layout.at に載る（サイズ未指定でも 1x1 の layout が付く）', () => {
+    const enemies = roll(['slime*2@C1+ghost'], {
+      slime: { ...slime, size: { w: 2, h: 2 } },
+      ghost,
+    })!
+    expect(enemies.map((e) => e.id)).toEqual(['slime', 'slime', 'ghost'])
+    expect(enemies[0].layout).toEqual({ w: 2, h: 2, scale: 1, at: { col: 2, row: 0 } })
+    expect(enemies[1].layout).toEqual({ w: 2, h: 2, scale: 1 })
+    expect('layout' in enemies[2]).toBe(false)
+    const atOnly = roll(['ghost@A2'], { ghost })!
+    expect(atOnly[0].layout).toEqual({ w: 1, h: 1, scale: 1, at: { col: 0, row: 1 } })
+  })
+
+  it('layout は定義と別物（敵の書き換えがマスターを汚さない）', () => {
+    const size = { w: 2, h: 1 }
+    const [e] = roll(['slime@C1'], { slime: { ...slime, size } })!
+    e.layout!.w = 9
+    expect(size.w).toBe(2)
+    // 群の解析結果の at とも参照を共有しない（別の戦闘へ持ち越さない）
+    const at = { col: 2, row: 0 }
+    const { layout } = enemyLayoutField(slime, at) as {
+      layout: { at?: { col: number; row: number } }
+    }
+    expect(layout.at).toEqual(at)
+    expect(layout.at).not.toBe(at)
   })
 })

@@ -2529,3 +2529,100 @@ describe('parseMarkdown + normalizeDocument: battle_transition が生き残る (
     expect((await parseMarkdown(docWith(['battle_transition:']))).battle_transition).toBeNull()
   })
 })
+
+describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・倍率が normalize を生き残る (#839)', () => {
+  // 新しい frontmatter / ブロックキーが Rust parser か normalizeDocument で黙って消える事故（#310/#378）の再発防止。
+  // 実 parseMarkdown（WASM 同梱）を通して縛る。
+  function docWith(front: string[], body: string[] = []): string {
+    return [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      ...front,
+      '---',
+      '',
+      '## data: マスター',
+      '',
+      ...body,
+    ].join('\n')
+  }
+  const monster = (extra: string[]): string[] => [
+    '[モンスター m]',
+    '名前: M',
+    'HP: 5',
+    ...extra,
+    '[/モンスター]',
+    '',
+  ]
+  function monsterOf(doc: Awaited<ReturnType<typeof parseMarkdown>>): {
+    size?: { w: number; h: number }
+    scale?: number
+  } {
+    const ev = doc.chapters
+      .flatMap((c) => c.scenes.flatMap((s) => s.events))
+      .find((e) => typeof e === 'object' && 'Monster' in e) as
+      | { Monster: { size?: { w: number; h: number }; scale?: number } }
+      | undefined
+    return ev!.Monster
+  }
+
+  it('battle_enemy_grid / battle_enemy_window_overlap が doc に残り、省略・空値は null', async () => {
+    const doc = await parseMarkdown(
+      docWith(['battle_enemy_grid: 6x2', 'battle_enemy_window_overlap: 0.3'])
+    )
+    expect(doc.battle_enemy_grid).toBe('6x2')
+    expect(doc.battle_enemy_window_overlap).toBe('0.3')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_enemy_grid).toBeNull()
+    expect(none.battle_enemy_window_overlap).toBeNull()
+    const empty = await parseMarkdown(
+      docWith(['battle_enemy_grid:', 'battle_enemy_window_overlap: ""'])
+    )
+    expect(empty.battle_enemy_grid).toBeNull()
+    expect(empty.battle_enemy_window_overlap).toBeNull()
+  })
+
+  it('emit → parse の往復で frontmatter が保たれる', async () => {
+    const doc = await parseMarkdown(
+      docWith(['battle_enemy_grid: 6x2', 'battle_enemy_window_overlap: 0.3'])
+    )
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.battle_enemy_grid).toBe('6x2')
+    expect(again.battle_enemy_window_overlap).toBe('0.3')
+  })
+
+  it('モンスターの サイズ: / 倍率: が size / scale として残る。未指定は無し', async () => {
+    const doc = await parseMarkdown(docWith([], monster(['サイズ: 2x1', '倍率: 0.5'])))
+    expect(monsterOf(doc)).toMatchObject({ size: { w: 2, h: 1 }, scale: 0.5 })
+    const alias = await parseMarkdown(docWith([], monster(['size: ２×２', 'scale: 3'])))
+    expect(monsterOf(alias)).toMatchObject({ size: { w: 2, h: 2 }, scale: 1 })
+    const wide = await parseMarkdown(docWith([], monster(['倍率: ０.５'])))
+    expect(monsterOf(wide).scale).toBe(0.5)
+    const plain = await parseMarkdown(docWith([], monster([])))
+    expect(monsterOf(plain).size).toBeUndefined()
+    expect(monsterOf(plain).scale).toBeUndefined()
+  })
+
+  it('不正な サイズ: / 倍率: は警告して未指定（1x1・倍率 1）になる', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const doc = await parseMarkdown(docWith([], monster(['サイズ: big', '倍率: abc'])))
+      expect(monsterOf(doc).size).toBeUndefined()
+      expect(monsterOf(doc).scale).toBeUndefined()
+      // 警告が出ること（消すと落ちる）。サイズ・倍率で 1 回ずつ
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs.filter((m) => m.includes('invalid monster size'))).toHaveLength(1)
+      expect(msgs.filter((m) => m.includes('invalid monster scale'))).toHaveLength(1)
+      expect(warn).toHaveBeenCalledTimes(2)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('emit → parse の往復で size / scale が保たれる', async () => {
+    const doc = await parseMarkdown(docWith([], monster(['サイズ: 1x2', '倍率: 0.75'])))
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(monsterOf(again)).toMatchObject({ size: { w: 1, h: 2 }, scale: 0.75 })
+  })
+})

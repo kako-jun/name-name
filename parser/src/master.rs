@@ -8,6 +8,7 @@
 //! 5 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
+use crate::parser::emit_warning;
 
 pub(crate) struct ParsedMasterBlock {
     pub event: Event,
@@ -154,7 +155,100 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         counters: collect_values(entries, &["反撃", "counter"]),
         on_death: collect_values(entries, &["死亡時", "onDeath", "on_death"])
             .and_then(|v| v.into_iter().next()),
+        size: collect_size(entries),
+        scale: collect_scale(entries),
     })
+}
+
+/// `サイズ` / `size` を敵のサイズ区分にする (#839)。`2x1` / `2X1` / `２×１`（幅x高さ、整数 1 以上）。
+/// 書かない場合は None。不正値は警告して None（＝1x1）。同じキーが複数あれば最初の 1 行が勝つ
+/// （その値が空なら未指定扱いで、後の行は見ない）。
+fn collect_size(entries: &[(String, String)]) -> Option<MonsterSize> {
+    let (size, warning) = interpret_size(lookup_master_value(entries, &["サイズ", "size"]));
+    if let Some(w) = warning {
+        emit_warning(&format!("[name-name-parser] warning: {w}"));
+    }
+    size
+}
+
+/// `サイズ:` の値の解釈（副作用なし）。戻りは (サイズ, 警告文)。
+fn interpret_size(raw: Option<&str>) -> (Option<MonsterSize>, Option<String>) {
+    let Some(raw) = raw.filter(|r| !r.is_empty()) else {
+        return (None, None);
+    };
+    match parse_size_pair(raw) {
+        Some(sz) => (Some(sz), None),
+        None => (
+            None,
+            Some(format!(
+                "invalid monster size '{raw}', falling back to 1x1. Expected e.g. 1x1 / 2x1 / 2x2"
+            )),
+        ),
+    }
+}
+
+/// 全角英数を半角へ寄せた上で `<整数>x<整数>`（x は x / X / ×）を読む。両方 1 以上のときだけ Some。
+fn parse_size_pair(raw: &str) -> Option<MonsterSize> {
+    let normalized = to_halfwidth(raw);
+    let (a, b) = normalized.split_once(['x', 'X', '×'])?;
+    let (a, b) = (a.trim(), b.trim());
+    // `u32::parse` は先頭の `+` を許すので、数字だけであることを先に見る
+    if !a.chars().all(|c| c.is_ascii_digit()) || !b.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let w: u32 = a.parse().ok()?;
+    let h: u32 = b.parse().ok()?;
+    if w < 1 || h < 1 {
+        return None;
+    }
+    Some(MonsterSize { w, h })
+}
+
+/// 全角の数字・`x` / `X`・`.`・`+`・`-` だけを半角へ寄せる（それ以外の全角は変えない。`×` はそのまま）。
+fn to_halfwidth(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .map(|c| match c {
+            '\u{FF10}'..='\u{FF19}' => char::from_u32(c as u32 - 0xFF10 + '0' as u32).unwrap_or(c),
+            '\u{FF58}' | '\u{FF38}' => 'x',
+            '\u{FF0E}' => '.',
+            '\u{FF0B}' => '+',
+            '\u{FF0D}' => '-',
+            _ => c,
+        })
+        .collect()
+}
+
+/// `倍率` / `scale` を 0.25〜1 に丸めた表示倍率にする (#839)。書かない場合は None。
+/// 全角数字可。素直な十進数（符号・小数点・数字だけ。指数表記・`inf`・`NaN` は不可。
+/// frontmatter の `battle_enemy_window_overlap` と同じ範囲）以外は警告して None（＝1）。
+/// 範囲外は丸める（1 超は占有領域をはみ出すため 1）。同じキーが複数あれば最初の 1 行が勝つ。
+fn collect_scale(entries: &[(String, String)]) -> Option<f64> {
+    let (scale, warning) = interpret_scale(lookup_master_value(entries, &["倍率", "scale"]));
+    if let Some(w) = warning {
+        emit_warning(&format!("[name-name-parser] warning: {w}"));
+    }
+    scale
+}
+
+/// `倍率:` の値の解釈（副作用なし）。戻りは (倍率, 警告文)。
+fn interpret_scale(raw: Option<&str>) -> (Option<f64>, Option<String>) {
+    let Some(raw) = raw.filter(|r| !r.is_empty()) else {
+        return (None, None);
+    };
+    let t = to_halfwidth(raw);
+    let plain = !t.is_empty()
+        && t.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | '+' | '-'));
+    match t.parse::<f64>() {
+        Ok(v) if plain && v.is_finite() => (Some(v.clamp(0.25, 1.0)), None),
+        _ => (
+            None,
+            Some(format!(
+                "invalid monster scale '{raw}', falling back to 1. Expected a number between 0.25 and 1"
+            )),
+        ),
+    }
 }
 
 /// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
@@ -338,4 +432,61 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
         message: lookup_master_string(entries, &["メッセージ", "message"]),
         telegraph: lookup_master_string(entries, &["予兆", "telegraph"]),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_size_returns_warning_and_none() {
+        let (sz, w) = interpret_size(Some("big"));
+        assert_eq!(sz, None);
+        assert!(w.unwrap().contains("invalid monster size 'big'"));
+        let (sz, w) = interpret_size(Some("2x1"));
+        assert_eq!(sz, Some(MonsterSize { w: 2, h: 1 }));
+        assert_eq!(w, None);
+        // 未指定・空は警告なし
+        assert_eq!(interpret_size(None), (None, None));
+        assert_eq!(interpret_size(Some("")), (None, None));
+    }
+
+    #[test]
+    fn size_rejects_signs_and_overflow() {
+        for bad in ["+2x1", "-1x2", "5000000000x1", "0x1", "2x0", "1.5x2", "2"] {
+            assert_eq!(interpret_size(Some(bad)).0, None, "{bad}");
+            assert!(interpret_size(Some(bad)).1.is_some(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn invalid_scale_returns_warning_and_none() {
+        for bad in ["abc", "NaN", "inf", "1e3", "1e-1", "--1", "."] {
+            let (sc, w) = interpret_scale(Some(bad));
+            assert_eq!(sc, None, "{bad}");
+            assert!(w.unwrap().contains("invalid monster scale"), "{bad}");
+        }
+        assert_eq!(interpret_scale(None), (None, None));
+        assert_eq!(interpret_scale(Some("")), (None, None));
+    }
+
+    #[test]
+    fn scale_accepts_fullwidth_and_clamps() {
+        assert_eq!(interpret_scale(Some("０.５")).0, Some(0.5));
+        assert_eq!(interpret_scale(Some("０．５")).0, Some(0.5));
+        assert_eq!(interpret_scale(Some(".5")).0, Some(0.5));
+        assert_eq!(interpret_scale(Some("0.1")).0, Some(0.25));
+        assert_eq!(interpret_scale(Some("3")).0, Some(1.0));
+        assert_eq!(interpret_scale(Some("-2")).0, Some(0.25));
+        assert_eq!(interpret_scale(Some("+0.5")).0, Some(0.5));
+    }
+
+    #[test]
+    fn first_duplicate_key_wins_even_if_empty() {
+        let entries = vec![
+            ("サイズ".to_string(), String::new()),
+            ("size".to_string(), "2x2".to_string()),
+        ];
+        assert_eq!(collect_size(&entries), None);
+    }
 }

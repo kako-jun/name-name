@@ -236,6 +236,16 @@ export interface MonsterDef {
      * （複数書いたときは最初の 1 行だけを持つ）。無ければ None。JSON / TS 側のキーは `onDeath`。
      */
     onDeath?: string;
+    /**
+     * 敵のサイズ区分 (#839)。`サイズ: 2x1`（占有するセルの 幅x高さ。整数 1 以上、大小・全角× 可）。
+     * 書かない・不正値（警告を出す）は None＝1x1（従来どおり）。`battle_enemy_grid` が有効なときだけ描画に効く。
+     */
+    size?: MonsterSize;
+    /**
+     * 敵の表示倍率 (#839)。`倍率: 0.8`。占有領域の中で絵を縮める比（0.25〜1 に丸める）。
+     * 書かない・不正値（警告を出す）は None＝1。
+     */
+    scale?: number;
 }
 
 /**
@@ -261,6 +271,14 @@ export interface SpellDef {
      * 系統（\"fire\" / \"ice\" / \"holy\" / \"breath\" 等、耐性計算用）。
      */
     school?: string;
+}
+
+/**
+ * 敵のサイズ区分 (#839)。占有するセルの幅 x 高さ（どちらも 1 以上）。
+ */
+export interface MonsterSize {
+    w: number;
+    h: number;
 }
 
 /**
@@ -677,6 +695,17 @@ export interface Document {
      * `\"none\"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。
      */
     battle_transition?: string;
+    /**
+     * RPG 戦闘（`battle_layout: side`）の敵の見えないグリッド (#839)。`列数x行数`（例 `6x2`、半角 x / × 可）。
+     * 値は parser でバリデーションせず生文字列で透過し、runtime 側（`normalizeEnemyGrid`）で列 1〜12・行 1〜4 に丸める。
+     * 不正値・未指定は無効＝従来の配置。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_grid:` から流す。
+     */
+    battle_enemy_grid?: string;
+    /**
+     * 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5 の数値文字列（既定 0.25）。
+     * 値は生文字列で透過し、runtime 側で丸める（不正は既定）。GUI 専用。frontmatter `battle_enemy_window_overlap:` から流す。
+     */
+    battle_enemy_window_overlap?: string;
     chapters: Chapter[];
 }
 
@@ -767,9 +796,11 @@ export interface RpgMapData {
      */
     encounter_rate?: number;
     /**
-     * エンカウント時に抽選される敵グループ名のリスト（重み均等）。
+     * エンカウント時に抽選される敵グループ名のリスト（重み指定が無ければ均等）。
      * `[エンカウント群: slime, ghost, slime+skeleton]` で指定。
      * 各要素は単体モンスター ID または `+` 連結の複合（同時出現）。
+     * 修飾子 `@C1`（配置）`*3` `*1..3`（個数）末尾 `:3`（重み）は生文字列のまま透過し、
+     * TS 側 (enemyGroup.ts) が解釈する（#839）。
      * 未指定の場合 encounter_rate が設定されていてもエンカウントしない。
      * Issue #172 で追加。
      */

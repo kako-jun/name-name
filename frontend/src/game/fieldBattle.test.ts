@@ -101,6 +101,17 @@ describe('readFieldBattleSettings', () => {
     expect(readFieldBattleSettings(minimalProject()).pixelArt).toBe(false)
   })
 
+  it('敵グリッド・窓との重なり許容量 (#839) は RPGProject の値がそのまま入り、未指定は undefined', () => {
+    const s = readFieldBattleSettings(
+      minimalProject({ battleEnemyGrid: { cols: 6, rows: 2 }, battleEnemyWindowOverlap: 0.3 })
+    )
+    expect(s.enemyGrid).toEqual({ cols: 6, rows: 2 })
+    expect(s.enemyWindowOverlap).toBe(0.3)
+    const d = readFieldBattleSettings(minimalProject())
+    expect(d.enemyGrid).toBeUndefined()
+    expect(d.enemyWindowOverlap).toBeUndefined()
+  })
+
   it('ATB 未指定は undefined（従来ターン制）', () => {
     expect(readFieldBattleSettings(minimalProject()).atb).toBeUndefined()
   })
@@ -305,6 +316,17 @@ describe('openFieldBattle', () => {
       'ff'
     )
     expect(open().s.opts.presentation).toBe('dq')
+  })
+
+  it('enemyGrid / enemyWindowOverlap は BattleScreen の opts に転送される（未指定は載らない） (#839)', () => {
+    const { s } = open({
+      settings: { layout: 'side', enemyGrid: { cols: 6, rows: 2 }, enemyWindowOverlap: 0.3 },
+    })
+    expect(s.opts.enemyGrid).toEqual({ cols: 6, rows: 2 })
+    expect(s.opts.enemyWindowOverlap).toBe(0.3)
+    const d = open().s
+    expect('enemyGrid' in d.opts).toBe(false)
+    expect('enemyWindowOverlap' in d.opts).toBe(false)
   })
 
   it('ステージに戦闘画面が載る', () => {

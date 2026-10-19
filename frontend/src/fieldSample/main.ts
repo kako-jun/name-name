@@ -30,7 +30,13 @@ import {
   type WalkMask,
 } from '../game/fieldWalk'
 import { resolveUrl } from '../battleSample/config'
-import { findReturnLink, parseConfigText, type FieldSampleConfig } from './config'
+import {
+  configNotice,
+  findReturnLink,
+  forceBattleCandidates,
+  parseConfigText,
+  type FieldSampleConfig,
+} from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -115,7 +121,14 @@ async function loadConfig(): Promise<FieldSampleConfig> {
     }
   }
   const parsed = parseConfigText(text, textBase)
-  if (parsed.ok) return parsed.value
+  if (parsed.ok) {
+    // 群エラー (#839 段5。console.error は parseConfig が出している) と警告 (#883) は 1 回でまとめて出す
+    // （showError は置換なので別々に呼ぶと後が前を消す）
+    for (const w of parsed.value.warnings ?? []) console.warn(w)
+    const notice = configNotice(parsed.value)
+    if (notice) showError(notice)
+    return parsed.value
+  }
   showError(`設定 JSON が不正です\n${parsed.error}`)
   const fallback = parseConfigText(defaultConfigText, base)
   if (!fallback.ok) throw new Error(fallback.error)
@@ -192,7 +205,8 @@ async function main(): Promise<void> {
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
     const engine = new BattleEngine(
       config.party.map((p) => ({ ...p })),
-      enemies.map((e) => ({ ...e }))
+      enemies.map((e) => ({ ...e })),
+      b.atb ? { atb: b.atb } : {}
     )
     world.visible = false
     fade.visible = false
@@ -200,7 +214,14 @@ async function main(): Promise<void> {
     battle = new BattleScreen(engine, b.width, b.height, {
       layout: b.layout,
       spriteStyle: b.spriteStyle,
+      ...(b.presentation ? { presentation: b.presentation } : {}),
+      ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
+      ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
       ...(bg ? { background: bg } : {}),
+      ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
+      ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
+        ? { enemyWindowOverlap: b.enemyWindowOverlap }
+        : {}),
       onClose: (outcome) => {
         lastOutcome = outcome
         endBattle()
@@ -307,8 +328,8 @@ async function main(): Promise<void> {
 
   $('tb-force-battle').addEventListener('click', () => {
     if (battle || transition) return
-    const sc = config.scenes[sceneId].encounter
-    const groups = sc && sc.groups.length > 0 ? sc.groups : Object.keys(config.monsters)
+    const groups = forceBattleCandidates(config, sceneId)
+    if (groups.length === 0) return
     const r = advanceEncounter(
       initialEncounterState({ stepDistance: 1, minSteps: 0 }),
       1,

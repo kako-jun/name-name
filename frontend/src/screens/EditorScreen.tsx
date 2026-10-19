@@ -284,15 +284,29 @@ function EditorScreen({
   // doc から RPGProject を導出（メモ化・純粋な派生値計算）。
   // rpgSceneId が doc 内の RPG シーンと一致すればそのシーンを優先、
   // 未設定または doc に存在しない場合は最初の RPG シーンにフォールバックする。
-  const rpgProject: RPGProject | null = useMemo(() => {
-    if (!doc) return null
-    const explicitFound = rpgSceneId !== null ? findRpgSceneIndex(doc, rpgSceneId) : null
-    const found = explicitFound ?? findRpgSceneIndex(doc)
-    if (!found) return null
-    const sceneIdForThisDoc = doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
-    // #238: data.md 等の他 .md からマスターデータを取り込む
-    return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName, otherDocs)
-  }, [doc, projectName, rpgSceneId, otherDocs])
+  // 導出の本体。`validateEncounterGroups` で収まらない群の検証（#839 段5）を切り替える
+  const deriveRpgProject = useCallback(
+    (validateEncounterGroups: boolean): RPGProject | null => {
+      if (!doc) return null
+      const explicitFound = rpgSceneId !== null ? findRpgSceneIndex(doc, rpgSceneId) : null
+      const found = explicitFound ?? findRpgSceneIndex(doc)
+      if (!found) return null
+      const sceneIdForThisDoc =
+        doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? null
+      // #238: data.md 等の他 .md からマスターデータを取り込む
+      return rpgProjectFromDoc(doc, sceneIdForThisDoc ?? undefined, projectName, otherDocs, {
+        validateEncounterGroups,
+      })
+    },
+    [doc, projectName, rpgSceneId, otherDocs]
+  )
+  // 編集用: 導出した project は編集後に doc へ書き戻すので、収まらない群の除外（検証）は行わない (#839)
+  const rpgProject: RPGProject | null = useMemo(() => deriveRpgProject(false), [deriveRpgProject])
+  // play タブ用: 実際にプレイされる状態（PlayerScreen と同じく群を検証して、収まらない群を外す）。play タブを開いているときだけ導出し、書き戻しには使わない
+  const rpgPlayProject: RPGProject | null = useMemo(
+    () => (rpgSubTab === 'play' ? deriveRpgProject(true) : null),
+    [rpgSubTab, deriveRpgProject]
+  )
 
   // 現在の rpgSceneId が doc 内に存在しない場合、先頭の RPG シーンに切り替える。
   // useMemo 内で setState しないよう副作用を分離。
@@ -1441,8 +1455,8 @@ function EditorScreen({
                   )}
                   {rpgSubTab === 'play' && (
                     <RPGPlayer
-                      gameData={rpgProject ?? undefined}
-                      view={rpgProject?.view}
+                      gameData={rpgPlayProject ?? undefined}
+                      view={rpgPlayProject?.view}
                       assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
                     />
                   )}

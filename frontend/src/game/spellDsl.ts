@@ -245,6 +245,23 @@ export interface BattleEntity {
   counters?: string[]
   /** 敵の死亡時の行動 (#837)。`MonsterDef.onDeath`（`死亡時:` の値の生文字列）を写す。倒されたとき 1 度だけ実行する */
   onDeath?: string
+  /**
+   * 敵の隊形上の大きさと配置指定 (#839)。`MonsterDef.size` / `scale` と群の配置 `@C1` を、戦闘への組み立て時（`rollEncounter`）に写す。
+   * `size` / `scale` / 配置のどれも無い敵（従来の定義・群）は付かない＝従来の挙動のまま。
+   * 描画専用のマスターデータで、戦闘エンジン（`battleEngine.ts`）は読まない。`battle_enemy_grid` が有効なときだけ描画（`BattleScreen` / `computeSideBattleLayout`、#839 段4）が使う。
+   */
+  layout?: EnemyLayout
+}
+
+/** 敵の隊形上の大きさ・倍率・配置指定 (#839) */
+export interface EnemyLayout {
+  /** サイズ区分（占有セル数）。`サイズ:` 未指定は 1 */
+  w: number
+  h: number
+  /** 表示倍率（0.25〜1）。`倍率:` 未指定は 1 */
+  scale: number
+  /** 群の配置指定 `@C1`（0 始まりの列・行。未指定は自動配置）。`placeEnemies` の `PlacementItem.at` にそのまま渡す */
+  at?: { col: number; row: number }
 }
 
 /** 戦闘の隊列 (#747) */

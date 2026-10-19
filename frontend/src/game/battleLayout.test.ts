@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   SIDE_COMMAND_CELL_HEIGHT,
+  SIDE_ENEMY_WINDOW_OVERLAP,
+  computeEnemyPlateRect,
+  computeAcrylicBoxSize,
+  normalizeEnemyWindowOverlap,
   SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT,
   SIDE_GAP,
   SIDE_LABEL_FONT_SIZE,
@@ -36,6 +40,17 @@ import {
   SIDE_STATUS_GAUGE_WIDTH,
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
+  sideStatusLeftPadding,
+  frontStatsLeftPadding,
+  SIDE_STATUS_MARKER_GUTTER_MAX,
+  SIDE_STATUS_MARKER_GUTTER_MIN,
+  sideStatusMarkerX,
+  computeSelectMarkTriangle,
+  SELECT_MARK_GAP_RATIO,
+  SELECT_MARK_MIN_WIDTH,
+  SELECT_MARK_MIN_HEIGHT,
+  SELECT_MARK_MIN_GAP,
+  SIDE_STATUS_MARKER_FONT_SIZE,
   desiredSideLogLines,
   effectiveCommandLayout,
   fitCommandFontSize,
@@ -48,6 +63,8 @@ import {
   type SideBattleLayout,
   type SpriteSlot,
 } from './battleLayout'
+import { DEFAULT_ACRYLIC_PARAMS, computeAcrylicGeometry, type AcrylicParams } from './spriteStyle'
+import { isEnemyGridSlot, placeEnemies, type EnemyFootprint, type EnemyGridSize } from './enemyGrid'
 
 const EPS = 1e-9
 
@@ -1782,7 +1799,7 @@ describe('computeStatusColumns (#745)', () => {
   it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
     const c = computeStatusColumns({ ...base, atb: true })
     const inner = {
-      l: base.x + SIDE_STATUS_TEXT_PADDING,
+      l: base.x + sideStatusLeftPadding(true) + 4,
       r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
     }
     expect(c.name.x).toBe(inner.l)
@@ -1905,7 +1922,7 @@ describe('computeStatusColumns: 見出しと数字のすき間・狭いときの
 
   it('極端に狭く HP 列を左余白で止めても、現在値は見出しと重ならない位置までは右へ押し出される', () => {
     const c = computeStatusColumns({ ...base, maxHp: 99999, width: 20, atb: true })
-    const left = base.x + SIDE_STATUS_TEXT_PADDING
+    const left = base.x + sideStatusLeftPadding(true) // 狭すぎて余裕が無いので広がらない
     const labelRight = c.showLabels ? left + estimateTextWidth('HP', F) : left
     const curLeft = c.hp.curRight - estimateTextWidth('99999', F)
     expect(curLeft).toBeGreaterThanOrEqual(labelRight - 1e-9)
@@ -1959,5 +1976,601 @@ describe('味方の枠は人数によらず4人のときと同じ (#813・縦横
     expect(one.enemies[0].y).toBeCloseTo(four.enemies[0].y, 9)
     // 上限を超える下げ幅は許されない: 敵の上端は上限より下がりすぎない（領域の上端 = 上限）
     expect(four.enemies[0].y).toBeGreaterThanOrEqual(four.stage.y + four.stage.h * 0.4)
+  })
+})
+
+describe('アクスタの敵: 隣の板と重ならず、窓との重なりは許容量以内 (#838)', () => {
+  const PARAMS = DEFAULT_ACRYLIC_PARAMS
+  const WIDTHS = [320, 360, 390, 480, 568, 640, 800, 1024, 1280, 1600, 1920]
+  const HEIGHTS = [240, 320, 480, 568, 640, 720, 844, 900, 1080]
+  const ASPECT_SETS: number[][] = [
+    [0.2],
+    [0.35],
+    [0.5],
+    [1],
+    [1.6],
+    [2.5],
+    [0.2, 2.5, 1, 0.35, 1.6, 0.5],
+  ]
+  const aspectsOf = (set: number[], n: number): number[] =>
+    Array.from({ length: n }, (_, i) => set[i % set.length])
+
+  it('normalizeEnemyWindowOverlap: 未指定・不正は 0.25、0〜0.5 に丸める', () => {
+    expect(SIDE_ENEMY_WINDOW_OVERLAP).toBe(0.25)
+    expect(normalizeEnemyWindowOverlap(undefined)).toBe(0.25)
+    expect(normalizeEnemyWindowOverlap(null)).toBe(0.25)
+    expect(normalizeEnemyWindowOverlap(Number.NaN)).toBe(0.25)
+    expect(normalizeEnemyWindowOverlap(Infinity)).toBe(0.25)
+    expect(normalizeEnemyWindowOverlap(0)).toBe(0)
+    expect(normalizeEnemyWindowOverlap(0.4)).toBe(0.4)
+    expect(normalizeEnemyWindowOverlap(0.9)).toBe(0.5)
+    expect(normalizeEnemyWindowOverlap(-1)).toBe(0)
+  })
+
+  it('computeEnemyPlateRect: 絵が無い・不正な入力は枠そのまま。下端は枠の下端、水平は枠の中央', () => {
+    const slot = { x: 100, y: 50, size: 200, width: 40 }
+    const frame = { x: 100, y: 50, w: 40, h: 200 }
+    expect(computeEnemyPlateRect(slot, undefined, PARAMS)).toEqual(frame)
+    expect(computeEnemyPlateRect(slot, 0, PARAMS)).toEqual(frame)
+    expect(computeEnemyPlateRect({ ...slot, size: 0 }, 0.2, PARAMS).h).toBe(0)
+    const plate = computeEnemyPlateRect(slot, 0.2, PARAMS)
+    expect(plate.w).toBeGreaterThan(0)
+    expect(plate.y + plate.h).toBeCloseTo(250, 9)
+    expect(plate.x + plate.w / 2).toBeCloseTo(120, 9)
+    // 横長の絵は箱（一辺 = 幅）が枠の上へ伸び、板の上端も枠の上端より上へ出る
+    const wide = computeEnemyPlateRect({ x: 0, y: 100, size: 100, width: 250 }, 2.5, PARAMS)
+    expect(wide.y).toBeLessThan(100)
+  })
+
+  it('2 列の細長い絵: 同じ行の板が隣に食い込まない（修正前は 18px 重なった）', () => {
+    const input = {
+      width: 1600,
+      height: 844,
+      partyCount: 4,
+      enemyCount: 4,
+      enemyAspects: [0.2, 0.2, 0.2, 0.2],
+    }
+    const before = computeSideBattleLayout(input)
+    const L = computeSideBattleLayout({ ...input, enemyAcrylic: PARAMS })
+    const overlapPx = (S: SideBattleLayout): number => {
+      const pl = S.enemies.map((s) => computeEnemyPlateRect(s, 0.2, PARAMS))
+      let worst = -Infinity
+      for (let i = 0; i < pl.length; i++)
+        for (let j = i + 1; j < pl.length; j++)
+          if (Math.abs(S.enemies[i].y - S.enemies[j].y) < 0.5)
+            worst = Math.max(
+              worst,
+              Math.min(pl[i].x + pl[i].w, pl[j].x + pl[j].w) - Math.max(pl[i].x, pl[j].x)
+            )
+      return worst
+    }
+    expect(overlapPx(before)).toBeGreaterThan(5) // 修正前（enemyAcrylic なし＝従来の列ピッチ）は重なる
+    expect(overlapPx(L)).toBeLessThanOrEqual(0.02)
+  })
+
+  it('窓との重なり: 許容量 0 なら窓の下端より上へ出ず、0.25 は枠の高さの 25% まで窓の下へ入る', () => {
+    const base = { width: 1920, height: 720, partyCount: 4, enemyCount: 1, enemyAspects: [2.5] }
+    const none = computeSideBattleLayout({ ...base, enemyAcrylic: PARAMS, enemyWindowOverlap: 0 })
+    const dflt = computeSideBattleLayout({ ...base, enemyAcrylic: PARAMS })
+    const half = computeSideBattleLayout({ ...base, enemyAcrylic: PARAMS, enemyWindowOverlap: 0.5 })
+    const plateTop = (L: SideBattleLayout) => computeEnemyPlateRect(L.enemies[0], 2.5, PARAMS).y
+    const winBottom = (L: SideBattleLayout) => L.log.y + L.log.h
+    expect(plateTop(none)).toBeGreaterThanOrEqual(winBottom(none) - 0.02)
+    expect(half.enemies[0].size).toBeGreaterThanOrEqual(dflt.enemies[0].size)
+    expect(dflt.enemies[0].size).toBeGreaterThanOrEqual(none.enemies[0].size)
+    const into = winBottom(dflt) - plateTop(dflt)
+    expect(into).toBeLessThanOrEqual(0.25 * dflt.enemies[0].size + 0.02)
+    expect(into).toBeGreaterThan(0) // 許容量内の重なりは仕様なので、あえて詰めない
+  })
+
+  it('許容量内なら何も変えない（enemyAcrylic なしと同じ配置）— 縦横比 0.5 / 1', () => {
+    for (const a of [0.5, 1])
+      for (const W of WIDTHS)
+        for (const H of HEIGHTS)
+          for (const n of [1, 2, 3, 4, 6]) {
+            const input = {
+              width: W,
+              height: H,
+              partyCount: 4,
+              enemyCount: n,
+              enemyAspects: Array(n).fill(a),
+            }
+            const plain = computeSideBattleLayout(input)
+            const withPlate = computeSideBattleLayout({ ...input, enemyAcrylic: PARAMS })
+            expect(withPlate.enemies, `${W}x${H} n${n} a${a}`).toEqual(plain.enemies)
+          }
+  })
+
+  it.each(WIDTHS)(
+    '画面サイズ総当たり 幅%d: 敵 1〜6 体 × 縦横比 × 許容量 × 奥行きで、板が画面内・同じ行の板が非重複・窓との重なりが許容量以下',
+    (W) => {
+      const depths = [null, { horizon: 0.3, perspective: 0.8 }]
+      let cases = 0
+      for (const H of HEIGHTS)
+        for (let n = 1; n <= 6; n++)
+          for (const set of ASPECT_SETS)
+            for (const overlap of [0, 0.25, 0.5])
+              for (const depth of depths) {
+                const aspects = aspectsOf(set, n)
+                const L = computeSideBattleLayout({
+                  width: W,
+                  height: H,
+                  partyCount: 4,
+                  enemyCount: n,
+                  enemyAspects: aspects,
+                  enemyAcrylic: PARAMS,
+                  enemyWindowOverlap: overlap,
+                  depth,
+                })
+                const tag = `${W}x${H} n${n} a[${set}] ov${overlap} d${depth ? 1 : 0}`
+                const plates = L.enemies.map((s, i) => computeEnemyPlateRect(s, aspects[i], PARAMS))
+                const windowBottom = L.log.y + L.log.h
+                L.enemies.forEach((s, i) => {
+                  if (!(s.size > 0)) return
+                  const r = plates[i]
+                  expect(r.x, tag).toBeGreaterThanOrEqual(L.stage.x - 1e-6)
+                  expect(r.x + r.w, tag).toBeLessThanOrEqual(L.stage.x + L.stage.w + 1e-6)
+                  expect(r.y, tag).toBeGreaterThanOrEqual(-1e-6)
+                  expect(r.y + r.h, tag).toBeLessThanOrEqual(L.stage.y + L.stage.h + 1e-6)
+                  // 窓との重なりが許容量（枠の高さ × overlap）以下
+                  expect(windowBottom - r.y, tag).toBeLessThanOrEqual(
+                    Math.min(overlap * s.size, L.log.h) + 0.02
+                  )
+                })
+                // 同じ行の隣の板と重ならない（行が違う板の上下の重なりは奥行きの重なりで、仕様）
+                for (let i = 0; i < plates.length; i++)
+                  for (let j = i + 1; j < plates.length; j++) {
+                    if (!(L.enemies[i].size > 0) || !(L.enemies[j].size > 0)) continue
+                    if (Math.abs(L.enemies[i].floor - L.enemies[j].floor) > 0.5) continue
+                    const a = plates[i]
+                    const b = plates[j]
+                    const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+                    expect(ox, `${tag} i${i} j${j}`).toBeLessThanOrEqual(0.02)
+                  }
+                cases++
+              }
+      expect(cases).toBe(HEIGHTS.length * 6 * ASPECT_SETS.length * 3 * 2)
+    },
+    60_000
+  )
+})
+
+describe('ATB の番の印 ▶ と選択印 ▼ の幾何 (#805)', () => {
+  it('sideStatusLeftPadding: ATB でなければ従来の余白、ATB は ▶ ぶんの最小を足す', () => {
+    expect(sideStatusLeftPadding(false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    expect(sideStatusLeftPadding(true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+    )
+  })
+
+  it('frontStatsLeftPadding: ATB のとき基本は MIN、1 行に余裕がある幅では MAX まで広がる。連続', () => {
+    expect(frontStatsLeftPadding(1000, false)).toBe(SIDE_STATUS_TEXT_PADDING)
+    expect(frontStatsLeftPadding(100, true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN
+    )
+    expect(frontStatsLeftPadding(1000, true)).toBe(
+      SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX
+    )
+    let prev = frontStatsLeftPadding(0, true)
+    for (let w = 1; w <= 600; w++) {
+      const p = frontStatsLeftPadding(w, true)
+      expect(p).toBeGreaterThanOrEqual(prev)
+      expect(p - prev).toBeLessThanOrEqual(1)
+      prev = p
+    }
+  })
+
+  it('名前の左の余白は、名前列の余裕から MIN〜MAX の範囲で決まり、最小名前幅を割らない。399/400 でジャンプしない', () => {
+    const base = { x: 0, maxHp: 120, maxMp: 99, compact: false, atb: true }
+    const minName = SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE
+    const padding = (width: number) => {
+      const c = computeStatusColumns({ ...base, width })
+      expect(c.name.w).toBeGreaterThanOrEqual(minName - 1e-9)
+      return c.name.x
+    }
+    for (const w of [260, 300, 320, 360, 400, 480, 640, 800]) {
+      const x = padding(w)
+      expect(x).toBeGreaterThanOrEqual(
+        SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MIN - 1e-9
+      )
+      expect(x).toBeLessThanOrEqual(SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX + 1e-9)
+    }
+    // 余裕が十分ある幅では MAX（枠から ▶ まで最大 8px）
+    expect(padding(800)).toBeCloseTo(SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX)
+    expect(Math.abs(padding(400) - padding(399))).toBeLessThan(0.1)
+  })
+
+  it('sideStatusMarkerX: ▶ は枠から 4px 以上離れ、名前の文字の手前に収まる（MIN〜MAX のどの余白でも）', () => {
+    for (const g of [SIDE_STATUS_MARKER_GUTTER_MIN, SIDE_STATUS_MARKER_GUTTER_MAX]) {
+      const nameX = SIDE_STATUS_TEXT_PADDING + g
+      const x = sideStatusMarkerX(nameX)
+      expect(x).toBeGreaterThanOrEqual(4 - 1e-9)
+      expect(x + estimateTextWidth('▶', SIDE_STATUS_MARKER_FONT_SIZE)).toBeLessThanOrEqual(nameX)
+    }
+    expect(sideStatusMarkerX(SIDE_STATUS_TEXT_PADDING + SIDE_STATUS_MARKER_GUTTER_MAX)).toBeCloseTo(
+      8
+    )
+  })
+
+  it('computeSelectMarkTriangle: 上端の下限（ログ窓の下端）より上には出ず、大きさ・形は保つ', () => {
+    const free = computeSelectMarkTriangle(50, 20, 100)
+    const clamped = computeSelectMarkTriangle(50, 20, 100, 30)
+    expect(free[1]).toBeLessThan(30) // 下限が無ければ窓にかかる位置
+    expect(clamped[1]).toBeGreaterThanOrEqual(30 - 1e-9)
+    expect(clamped[1]).toBeCloseTo(30)
+    expect(clamped[2] - clamped[0]).toBeCloseTo(free[2] - free[0])
+    expect(clamped[5] - clamped[1]).toBeCloseTo(free[5] - free[1])
+    // 下限が十分上なら何も変わらない
+    expect(computeSelectMarkTriangle(50, 20, 100, -100)).toEqual(free)
+  })
+
+  it('computeSelectMarkTriangle: unit が小さくても最小の幅・高さ・間隔を下回らない', () => {
+    const p = computeSelectMarkTriangle(50, 100, 20)
+    expect(p[2] - p[0]).toBeCloseTo(SELECT_MARK_MIN_WIDTH)
+    expect(p[5] - p[1]).toBeCloseTo(SELECT_MARK_MIN_HEIGHT)
+    expect(100 - p[5]).toBeCloseTo(SELECT_MARK_MIN_GAP)
+  })
+
+  it('computeSelectMarkTriangle: 中央に下向きの三角。頭から離れ、大きさは unit に比例する', () => {
+    const p = computeSelectMarkTriangle(50, 100, 200)
+    expect(p).toHaveLength(6)
+    expect((p[0] + p[2]) / 2).toBeCloseTo(50)
+    expect(p[4]).toBeCloseTo(50)
+    expect(p[1]).toBe(p[3])
+    expect(p[5]).toBeGreaterThan(p[1])
+    expect(p[5]).toBeLessThan(100)
+    expect(100 - p[5]).toBeCloseTo(200 * SELECT_MARK_GAP_RATIO)
+    const q = computeSelectMarkTriangle(50, 100, 400)
+    expect(q[2] - q[0]).toBeCloseTo((p[2] - p[0]) * 2)
+  })
+})
+
+// ---- #839 段4: 敵グリッド有効時の画面サイズ総当たり（設計書 §3.8 の不変条件） ----
+
+describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設計書 §3.8)', () => {
+  type FP = EnemyFootprint | null
+  type Fixture = {
+    name: string
+    grid: EnemyGridSize
+    // 敵の定義（先頭が「同じ群の先頭の敵」）。at は先頭だけに付ける（後ろの at が先頭の自動配置を押し出すのを避ける）
+    defs: Array<{ w: number; h: number; at?: { col: number; row: number }; scale?: number }>
+  }
+  const fixtures: Fixture[] = [
+    {
+      name: '6x2 混在・配置なし',
+      grid: { cols: 6, rows: 2 },
+      defs: [
+        { w: 1, h: 1 },
+        { w: 2, h: 2 },
+        { w: 1, h: 1 },
+        { w: 2, h: 1 },
+        { w: 1, h: 2 },
+        { w: 1, h: 1, scale: 0.5 },
+        { w: 1, h: 1 },
+      ],
+    },
+    {
+      name: '6x2 先頭に配置指定',
+      grid: { cols: 6, rows: 2 },
+      defs: [
+        { w: 2, h: 2, at: { col: 0, row: 0 } },
+        { w: 1, h: 1 },
+        { w: 1, h: 1 },
+        { w: 2, h: 1 },
+        { w: 1, h: 1 },
+      ],
+    },
+    {
+      name: '4x2',
+      grid: { cols: 4, rows: 2 },
+      defs: [
+        { w: 1, h: 1 },
+        { w: 1, h: 1 },
+        { w: 2, h: 1 },
+        { w: 1, h: 2 },
+        { w: 1, h: 1 },
+      ],
+    },
+    {
+      name: '3x1',
+      grid: { cols: 3, rows: 1 },
+      defs: [
+        { w: 1, h: 1 },
+        { w: 1, h: 1 },
+        { w: 1, h: 1 },
+      ],
+    },
+    { name: '1x1', grid: { cols: 1, rows: 1 }, defs: [{ w: 1, h: 1 }] },
+  ]
+  const overlaps0 = [0, 0.25, 0.5]
+  const depths = [null, { horizon: 0.3, perspective: 1 }]
+  const acrylics = [null, DEFAULT_ACRYLIC_PARAMS]
+  // 大きい画面は、窓の高さ（延長 overlap*cell の上限）を超える延長を求める入力＝窓クランプが効く画面（外すと総当たりが落ちる）
+  const sizes: Array<[number, number]> = [
+    ...SWEEP_SIZES,
+    [1280, 400],
+    [900, 900],
+    [1920, 1080],
+    [1600, 900],
+  ]
+
+  function footprints(f: Fixture): FP[] {
+    const r = placeEnemies(
+      f.grid,
+      f.defs.map((d) => ({ w: d.w, h: d.h, ...(d.at ? { at: d.at } : {}) }))
+    )
+    return r.cells.map((c, i) =>
+      c
+        ? { col: c.col, row: c.row, w: f.defs[i].w, h: f.defs[i].h, scale: f.defs[i].scale ?? 1 }
+        : null
+    )
+  }
+  function layoutFor(
+    f: Fixture,
+    fps: FP[],
+    n: number,
+    w: number,
+    h: number,
+    ov: number,
+    depth: (typeof depths)[number],
+    acrylic: AcrylicParams | null
+  ) {
+    return computeSideBattleLayout({
+      width: w,
+      height: h,
+      partyCount: 4,
+      enemyCount: n,
+      enemyGrid: f.grid,
+      enemyFootprints: fps.slice(0, n),
+      enemyWindowOverlap: ov,
+      depth,
+      enemyAcrylic: acrylic,
+      enemyAspects: Array(n).fill(0.7),
+    })
+  }
+
+  it('奥行き有効でも窓との重なりが許容量（縮んだ占有高さ比）以下（最上行の 1x1・回帰）', () => {
+    const cases: Array<[number, number, { cols: number; rows: number }, number]> = [
+      [1600, 720, { cols: 4, rows: 2 }, 0.25],
+      [800, 450, { cols: 6, rows: 2 }, 0.25],
+      [1280, 568, { cols: 4, rows: 2 }, 0.5],
+    ]
+    for (const [w, h, grid, ov] of cases) {
+      const L = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyGrid: grid,
+        enemyFootprints: [{ col: 0, row: 0, w: 1, h: 1 }],
+        enemyWindowOverlap: ov,
+        depth: { horizon: 0.3, perspective: 1 },
+      })
+      const s = L.enemies[0]
+      const over = Math.max(0, L.log.y + L.log.h - s.y)
+      const ctx = `${w}x${h} ${grid.cols}x${grid.rows} ov${ov}`
+      expect(s.scale, ctx).toBeLessThan(1)
+      expect(over, ctx).toBeLessThanOrEqual(ov * s.size + 1e-6)
+      // 元の占有矩形（縮める前）の中に収まったまま
+      const flat = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyGrid: grid,
+        enemyFootprints: [{ col: 0, row: 0, w: 1, h: 1 }],
+        enemyWindowOverlap: ov,
+      }).enemies[0]
+      expect(s.y + s.size, ctx).toBeLessThanOrEqual(flat.y + flat.size + 1e-6)
+      expect(s.y, ctx).toBeGreaterThanOrEqual(flat.y - 1e-6)
+    }
+  })
+
+  it('占有矩形・ラベル・板の不変条件（画面内・ログ帯の重なり量・非重複・味方領域）', () => {
+    let checked = 0
+    for (const f of fixtures) {
+      const fps = footprints(f)
+      for (const [w, h] of sizes)
+        for (const ov of overlaps0)
+          for (const depth of depths)
+            for (const acrylic of acrylics) {
+              const n = f.defs.length
+              const L = layoutFor(f, fps, n, w, h, ov, depth, acrylic)
+              const ctx = `${f.name} ${w}x${h} ov${ov} depth${depth ? 1 : 0} acr${acrylic ? 1 : 0}`
+              const screen: Rect = { x: 0, y: 0, w, h }
+              const partyRects = L.party.map(slotRect).filter((r) => r.w > EPS && r.h > EPS)
+              // 窓との重なりの基準 cell: 同じ入力で 1x1 を最下行に置いたときの一辺（体数に依らない）
+              const cell = (() => {
+                const one = layoutFor(
+                  { ...f, defs: [{ w: 1, h: 1 }] },
+                  [{ col: 0, row: f.grid.rows - 1, w: 1, h: 1 }],
+                  1,
+                  w,
+                  h,
+                  ov,
+                  null,
+                  null
+                )
+                return one.enemies[0].size
+              })()
+              const placed: Array<{ i: number; r: Rect }> = []
+              L.enemies.forEach((s, i) => {
+                if (!fps[i]) {
+                  expect(s.size, ctx).toBe(0)
+                  expect(s.width, ctx).toBe(0)
+                  return
+                }
+                if (s.size <= EPS) return
+                const r = slotRect(s)
+                placed.push({ i, r })
+                expect(inside(r, screen), `${ctx} enemy${i} screen`).toBe(true)
+                // stage の左右下（上はログ帯との重なり許容ぶん延びる）
+                expect(r.x, ctx).toBeGreaterThanOrEqual(L.stage.x - 1e-6)
+                expect(r.x + r.w, ctx).toBeLessThanOrEqual(L.stage.x + L.stage.w + 1e-6)
+                expect(r.y + r.h, ctx).toBeLessThanOrEqual(L.stage.y + L.stage.h + 1e-6)
+                // ログ帯: 画面上へ出ない・重なり量が許容量以下
+                expect(r.y, `${ctx} enemy${i} above log`).toBeGreaterThanOrEqual(L.log.y - 1e-6)
+                const over = Math.max(0, L.log.y + L.log.h - r.y)
+                expect(over, `${ctx} enemy${i} overlap`).toBeLessThanOrEqual(ov * cell + 1e-6)
+                // 奥行きで縮んだあとも、占有高さ（縮んだ高さ）に対する重なりが許容量以下
+                expect(over, `${ctx} enemy${i} overlap/size`).toBeLessThanOrEqual(ov * r.h + 1e-6)
+                // ずらしは最小限: 奥行きで縮めたあと、窓に届かない（縮める前の重なりが許容量以内）敵は上端固定の位置のまま。
+                // ずれた敵は、重なりがちょうど許容量（下端まで落とすずらしすぎを許さない）（窓クランプが効かない画面だけ。許容量 = ov）
+                if (depth && ov * cell <= L.log.h + 1e-6) {
+                  const flat = layoutFor(f, fps, f.defs.length, w, h, ov, null, acrylic).enemies[i]
+                  const preOver = Math.max(0, L.log.y + L.log.h - flat.y)
+                  if (preOver <= ov * r.h + 1e-6) {
+                    expect(r.y, `${ctx} enemy${i} not shifted`).toBeCloseTo(flat.y, 6)
+                  } else {
+                    expect(over, `${ctx} enemy${i} exact`).toBeCloseTo(ov * r.h, 6)
+                  }
+                }
+                for (const pr of partyRects) expect(overlaps(r, pr), `${ctx} party`).toBe(false)
+                // ラベル: stage 内
+                if (s.label) {
+                  expect(inside(s.label, L.stage), `${ctx} label in stage`).toBe(true)
+                  for (const pr of partyRects) expect(overlaps(s.label, pr), ctx).toBe(false)
+                }
+                // アクスタ板: 実際に BattleScreen が描く箱（slot の box を computeAcrylicBoxSize で絞った正方形）が占有矩形内
+                if (acrylic && isEnemyGridSlot(s)) {
+                  const b = s.box
+                  const aspect = 0.7
+                  const sz = computeAcrylicBoxSize(b, aspect, acrylic)
+                  const plate = computeEnemyPlateRect(
+                    { x: b.x + (b.w - sz) / 2, y: b.y + b.h - sz, size: sz, width: sz },
+                    aspect,
+                    acrylic
+                  )
+                  expect(plate.x, `${ctx} plate x`).toBeGreaterThanOrEqual(r.x - 1e-6)
+                  expect(plate.x + plate.w, `${ctx} plate r`).toBeLessThanOrEqual(r.x + r.w + 1e-6)
+                  expect(plate.y, `${ctx} plate y`).toBeGreaterThanOrEqual(r.y - 1e-6)
+                  expect(plate.y + plate.h, ctx).toBeLessThanOrEqual(r.y + r.h + 1e-6)
+                  const g = computeAcrylicGeometry(aspect, 1, sz, acrylic)
+                  for (const e of [g.base, g.shadow])
+                    if (e) expect(2 * e.rx, `${ctx} base/shadow`).toBeLessThanOrEqual(r.w + 1e-6)
+                }
+              })
+              for (let a = 0; a < placed.length; a++)
+                for (let b = a + 1; b < placed.length; b++)
+                  expect(overlaps(placed[a].r, placed[b].r), `${ctx} ${a}-${b}`).toBe(false)
+              const labels = placed
+                .map((p) => L.enemies[p.i].label)
+                .filter((l): l is Rect => !!l && l.w > EPS)
+              for (let a = 0; a < labels.length; a++)
+                for (let b = a + 1; b < labels.length; b++)
+                  expect(overlaps(labels[a], labels[b]), `${ctx} label ${a}-${b}`).toBe(false)
+              checked++
+            }
+    }
+    expect(checked).toBe(fixtures.length * sizes.length * 3 * 2 * 2)
+  })
+
+  it('体数不変: 先頭の敵の x/y/width/size（奥行きあり含む scale）・cell・logLines が体数 1〜最大で変わらない', () => {
+    for (const f of fixtures) {
+      const fps = footprints(f)
+      for (const [w, h] of sizes)
+        for (const depth of depths)
+          for (const acrylic of acrylics) {
+            const ref = layoutFor(f, fps, f.defs.length, w, h, 0.25, depth, acrylic)
+            for (let n = 1; n <= f.defs.length; n++) {
+              const L = layoutFor(f, fps, n, w, h, 0.25, depth, acrylic)
+              const ctx = `${f.name} ${w}x${h} n${n} depth${depth ? 1 : 0}`
+              const a = L.enemies[0]
+              const b = ref.enemies[0]
+              expect([a.x, a.y, a.width, a.size, a.scale], ctx).toEqual([
+                b.x,
+                b.y,
+                b.width,
+                b.size,
+                b.scale,
+              ])
+              expect(L.logLines, ctx).toBe(ref.logLines)
+              expect(L.stage, ctx).toEqual(ref.stage)
+              expect(L.log, ctx).toEqual(ref.log)
+              expect(L.party, ctx).toEqual(ref.party)
+              // 2 体目以降も追加で既存の敵が動かない（後ろに足すだけ）
+              for (let k = 0; k < n; k++) {
+                expect(L.enemies[k].x, `${ctx} k${k}`).toBeCloseTo(ref.enemies[k].x, 6)
+                expect(L.enemies[k].size, `${ctx} k${k}`).toBeCloseTo(ref.enemies[k].size, 6)
+              }
+            }
+          }
+    }
+  })
+
+  it('logLines は体数に依らずグリッド容量で決まる（A: 回帰）', () => {
+    const grid = { cols: 6, rows: 2 }
+    const lines = [1, 2, 3, 5].map(
+      (n) =>
+        computeSideBattleLayout({
+          width: 1280,
+          height: 720,
+          partyCount: 4,
+          enemyCount: n,
+          enemyGrid: grid,
+          enemyFootprints: Array.from({ length: n }, (_, i) => ({
+            col: 5 - i,
+            row: 0,
+            w: 1,
+            h: 1,
+          })),
+        }).logLines
+    )
+    expect(new Set(lines).size).toBe(1)
+    expect(lines[0]).toBe(desiredSideLogLines(12))
+    // グリッドなしは従来どおり敵の数で変わる
+    const plain = [1, 3].map(
+      (n) =>
+        computeSideBattleLayout({ width: 1280, height: 720, partyCount: 4, enemyCount: n }).logLines
+    )
+    expect(plain[0]).not.toBe(plain[1])
+  })
+
+  it('2x2 の占有は 1x1 の幅・高さとも 2 倍', () => {
+    const grid = { cols: 6, rows: 2 }
+    for (const [w, h] of sizes) {
+      const a = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyGrid: grid,
+        enemyFootprints: [{ col: 5, row: 1, w: 1, h: 1 }],
+      }).enemies[0]
+      const b = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        enemyGrid: grid,
+        enemyFootprints: [{ col: 4, row: 0, w: 2, h: 2 }],
+      }).enemies[0]
+      expect(b.width).toBeCloseTo(a.width * 2, 6)
+      expect(b.size).toBeCloseTo(a.size * 2, 6)
+    }
+  })
+
+  it('置けない敵はサイズ 0 で返り、enemyGrid なしでは enemyFootprints を渡しても出力が不変', () => {
+    const grid = { cols: 3, rows: 1 }
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 4,
+      enemyCount: 3,
+      enemyGrid: grid,
+      enemyFootprints: [{ col: 2, row: 0, w: 1, h: 1 }, null],
+    })
+    expect(L.enemies).toHaveLength(3)
+    for (const i of [1, 2]) {
+      expect(L.enemies[i].size).toBe(0)
+      expect(L.enemies[i].width).toBe(0)
+    }
+    const base = { width: 800, height: 450, partyCount: 4, enemyCount: 3 }
+    expect(
+      computeSideBattleLayout({
+        ...base,
+        enemyFootprints: [{ col: 0, row: 0, w: 2, h: 2 }],
+      })
+    ).toEqual(computeSideBattleLayout(base))
   })
 })
