@@ -1751,6 +1751,8 @@ describe('同梱の例 public/battle-sample/enemy-affinity.json (#872)', () => {
     if (!r.ok) return
     expect(r.value.enemies.map((e) => 'affinity' in e)).toEqual([true, true, false])
     expect(r.value.spells.map((s) => s.id)).toContain('death')
+  })
+})
 
 describe('parsePoses 単体（フィールドサンプルと共有 #890）', () => {
   const resolve = (u: string) => resolveUrl(u, BASE)
