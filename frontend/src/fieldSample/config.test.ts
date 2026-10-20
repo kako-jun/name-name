@@ -6,10 +6,12 @@ import {
   forceBattleCandidates,
   parseConfig,
   parseConfigText,
+  pickConfigSource,
   type FieldSampleConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
 import teramachiSample from './teramachi.sample.json?raw'
+import diagonalSample from './diagonal-walk.sample.json?raw'
 
 const BASE = 'https://example.com/field/config.json'
 
@@ -55,6 +57,22 @@ function ok(raw: unknown): FieldSampleConfig {
   if (!r.ok) throw new Error(`ok のはずが失敗: ${r.error}`)
   return r.value
 }
+
+describe('playerHeight (#810)', () => {
+  it('既定の player.height は 96', () => {
+    expect(DEFAULTS.height).toBe(96)
+    expect(ok(minimal()).player.height).toBe(96)
+  })
+  it('シーンの playerHeight を読む・未指定は undefined（全体値を使う）', () => {
+    const raw = minimal()
+    raw.scenes.a.playerHeight = 60
+    raw.scenes.b = { background: 'b.png', mask: 'b-mask.png' }
+    const c = ok(raw)
+    expect(c.scenes.a.playerHeight).toBe(60)
+    expect(c.scenes.b.playerHeight).toBeUndefined()
+    expect('playerHeight' in c.scenes.b).toBe(false)
+  })
+})
 
 describe('parseConfig 正常系 (Issue #807/#809)', () => {
   it('最小設定が ok で既定値が入る', () => {
@@ -264,6 +282,10 @@ describe('parseConfig 異常系 (Issue #807/#809)', () => {
     ['player.height が負', (c) => (c.player.height = -1)],
     ['player.height が NaN', (c) => (c.player.height = NaN)],
     ['player.height が文字列', (c) => (c.player.height = '150')],
+    ['scenes.a.playerHeight が 0', (c) => (c.scenes.a.playerHeight = 0)],
+    ['scenes.a.playerHeight が負', (c) => (c.scenes.a.playerHeight = -1)],
+    ['scenes.a.playerHeight が NaN', (c) => (c.scenes.a.playerHeight = NaN)],
+    ['scenes.a.playerHeight が文字列', (c) => (c.scenes.a.playerHeight = '60')],
     ['player.frameMs が 0', (c) => (c.player.frameMs = 0)],
     ['player.frameMs が負', (c) => (c.player.frameMs = -1)],
     ['player.frameMs が NaN', (c) => (c.player.frameMs = NaN)],
@@ -709,5 +731,273 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     const c = ok(JSON.parse(teramachiSample))
     expect(c.battle.enemyGrid).toBeUndefined()
     expect(c.groupErrors).toBeUndefined()
+  })
+})
+
+describe('parseConfig 斜め 4 方向 (Issue #811)', () => {
+  const frames = (d: string) => [`${d}1.png`, `${d}2.png`, `${d}3.png`]
+  const withDiag = (fn: (s: Raw) => void): Raw =>
+    mutated((c) => {
+      for (const d of ['upLeft', 'upRight', 'downLeft', 'downRight'])
+        c.player.sprites[d] = frames(d)
+      fn(c.player.sprites)
+    })
+
+  it('斜めの設定が無ければ 4 方向のまま（mirrorOf は空）', () => {
+    const c = ok(minimal())
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.mirrorOf).toEqual({})
+  })
+
+  it('斜め 4 方向を自前の画像で指定できる', () => {
+    const c = ok(withDiag(() => {}))
+    expect(c.player.sprites.downRight?.[2]).toBe('https://example.com/field/downRight3.png')
+  })
+
+  it('mirrorOf で一部を反転で埋められる', () => {
+    const c = ok(
+      withDiag((s) => {
+        delete s.upLeft
+        s.mirrorOf = { upLeft: 'upRight' }
+      })
+    )
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight' })
+  })
+
+  it.each([
+    ['斜めが 3 方向だけ', (s: Raw) => delete s.upLeft],
+    ['斜めの URL が 2 コマ', (s: Raw) => (s.upLeft = ['a', 'b'])],
+    ['mirrorOf のキーが斜めでない', (s: Raw) => (s.mirrorOf = { left: 'upRight' })],
+    [
+      'mirrorOf の値が斜めでない',
+      (s: Raw) => ((s.mirrorOf = { upLeft: 'right' }), delete s.upLeft),
+    ],
+    ['自前画像と mirrorOf の両方', (s: Raw) => (s.mirrorOf = { upLeft: 'upRight' })],
+    [
+      '反転元が mirrorOf 側',
+      (s: Raw) => {
+        delete s.upLeft
+        delete s.upRight
+        s.mirrorOf = { upLeft: 'upRight', upRight: 'upLeft' }
+      },
+    ],
+    ['mirrorOf がオブジェクトでない', (s: Raw) => (s.mirrorOf = 'upRight')],
+  ])('不正: %s', (_name, fn) => {
+    expect(parseConfig(withDiag(fn), BASE).ok).toBe(false)
+  })
+
+  it.each([
+    ['upLeft', 'downRight'],
+    ['upLeft', 'downLeft'],
+    ['downLeft', 'upRight'],
+    ['downRight', 'upLeft'],
+    ['upLeft', 'upLeft'],
+  ])('mirrorOf.%s は %s を指せない（左右の相方だけ）', (k, v) => {
+    const r = parseConfig(
+      withDiag((s) => {
+        delete s[k]
+        s.mirrorOf = { [k]: v }
+      }),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('左右の相方')
+  })
+
+  it('mirrorOf を左右の相方に向けると 4 組とも通る', () => {
+    for (const [k, v] of [
+      ['upLeft', 'upRight'],
+      ['upRight', 'upLeft'],
+      ['downLeft', 'downRight'],
+      ['downRight', 'downLeft'],
+    ]) {
+      const c = ok(
+        withDiag((s) => {
+          delete s[k]
+          s.mirrorOf = { [k]: v }
+        })
+      )
+      expect(c.player.mirrorOf).toEqual({ [k]: v })
+    }
+  })
+
+  it('同梱の斜めサンプル（diagonal-walk.sample.json）が ok で、upLeft は upRight の反転', () => {
+    const c = ok(JSON.parse(diagonalSample))
+    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight' })
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.sprites.upRight).toHaveLength(3)
+    expect(c.player.sprites.downLeft).toHaveLength(3)
+    expect(c.player.sprites.downRight).toHaveLength(3)
+  })
+})
+
+describe('parseConfig spells / items (#890)', () => {
+  const fail = (raw: unknown) => {
+    const r = parseConfig(raw, BASE)
+    expect(r.ok).toBe(false)
+    return r.ok ? '' : r.error
+  }
+
+  it('spells / items 未指定は空配列（従来の設定は変わらない）', () => {
+    const c = ok(minimal())
+    expect(c.spells).toEqual([])
+    expect(c.items).toEqual([])
+  })
+
+  it('teramachi.sample.json は ok で spells / items が空', () => {
+    const c = ok(JSON.parse(teramachiSample))
+    expect(c.spells).toEqual([])
+    expect(c.items).toEqual([])
+  })
+
+  it('指定した spells / items を保持する（呪文は mp と target、アイテムは count）', () => {
+    const c = ok(
+      mutated((r) => {
+        r.spells = [{ id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' }]
+        r.items = [{ id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 }]
+      })
+    )
+    expect(c.spells).toEqual([
+      { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' },
+    ])
+    expect(c.items).toEqual([{ id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 }])
+  })
+
+  it('count 省略はキー自体が無い（所持数管理なし）', () => {
+    const c = ok(mutated((r) => (r.items = [{ name: 'みず' }])))
+    expect(c.items[0]).not.toHaveProperty('count')
+  })
+
+  it.each([
+    [-1, 0],
+    [0, 0],
+    [1, 1],
+    [2.7, 2],
+  ])('count=%s は %s に丸められる', (count, expected) => {
+    const c = ok(mutated((r) => (r.items = [{ name: 'みず', count }])))
+    expect(c.items[0].count).toBe(expected)
+  })
+
+  it('id 省略は連番で、spells と items で独立している', () => {
+    const c = ok(
+      mutated((r) => {
+        r.spells = [{ name: 'a' }, { name: 'b' }]
+        r.items = [{ name: 'c' }]
+      })
+    )
+    expect(c.spells.map((s) => s.id)).toEqual(['spells-1', 'spells-2'])
+    expect(c.items.map((i) => i.id)).toEqual(['items-1'])
+  })
+
+  it.each([
+    ['spells が配列でない', { spells: {} }],
+    ['items が配列でない', { items: 'x' }],
+    ['spells の要素が null', { spells: [null] }],
+    ['items の要素が null', { items: [null] }],
+    ['name が空', { spells: [{ name: '' }] }],
+    ['name が空白だけ', { items: [{ name: '  ' }] }],
+    ['name が無い', { items: [{ count: 1 }] }],
+    ['mp が文字列', { spells: [{ name: 'a', mp: '3' }] }],
+    ['mp が NaN', { spells: [{ name: 'a', mp: NaN }] }],
+    ['mp が Infinity', { spells: [{ name: 'a', mp: Infinity }] }],
+    ['count が文字列', { items: [{ name: 'a', count: '2' }] }],
+    ['count が NaN', { items: [{ name: 'a', count: NaN }] }],
+    ['count が Infinity', { items: [{ name: 'a', count: Infinity }] }],
+  ])('不正（%s）は ok=false', (_label, patch) => {
+    const err = fail({ ...minimal(), ...patch })
+    expect(err).toMatch(/spells|items/)
+  })
+})
+
+describe('parseConfig monsters / party の poses (#890)', () => {
+  const withMonster = (monster: Raw) =>
+    mutated((r) => {
+      r.monsters = { slime: { name: 'スライム', hp: 10, ...monster } }
+    })
+  const err = (raw: unknown) => {
+    const r = parseConfig(raw, BASE)
+    if (r.ok) throw new Error('失敗するはずが ok')
+    return r.error
+  }
+
+  it('monsters.poses は URL を解決して保持する（部分指定可）', () => {
+    const c = ok(withMonster({ poses: { idle: 'i.png', hurt: '/h.png' } }))
+    expect(c.monsters.slime.poses).toEqual({
+      idle: 'https://example.com/field/i.png',
+      hurt: 'https://example.com/h.png',
+    })
+  })
+
+  it('poses 未指定は poses キー無し', () => {
+    expect(ok(withMonster({})).monsters.slime).not.toHaveProperty('poses')
+  })
+
+  it('未知のポーズ名は捨てる。全部捨てたら poses 無し', () => {
+    const c = ok(withMonster({ poses: { idle: 'i.png', bogus: 'b.png' } }))
+    expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
+    expect(ok(withMonster({ poses: { bogus: 'b.png' } })).monsters.slime).not.toHaveProperty(
+      'poses'
+    )
+  })
+
+  it('空白だけの URL は無視する', () => {
+    const c = ok(withMonster({ poses: { idle: 'i.png', hurt: '   ' } }))
+    expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
+  })
+
+  it('poses がオブジェクトでない／値が文字列でないときは path つきエラー', () => {
+    expect(err(withMonster({ poses: [] }))).toContain('monsters.slime.poses')
+    expect(err(withMonster({ poses: 'x' }))).toContain('monsters.slime.poses')
+    expect(err(withMonster({ poses: { idle: 3 } }))).toContain('monsters.slime.poses.idle')
+  })
+
+  it('party の poses も同じ規則で通る', () => {
+    const c = ok(
+      mutated((r) => {
+        r.party = [{ name: 'ゆうしゃ', hp: 10, poses: { idle: 'h.png', slash: 's.png' } }]
+      })
+    )
+    expect(c.party[0].poses).toEqual({
+      idle: 'https://example.com/field/h.png',
+      slash: 'https://example.com/field/s.png',
+    })
+    const r = parseConfig(
+      mutated((x) => (x.party = [{ name: 'a', hp: 10, poses: { idle: 1 } }])),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('party[0].poses.idle')
+  })
+
+  it('__proto__ / constructor をポーズ名にしても汚染されない（未知名として捨てる）', () => {
+    const raw = JSON.parse('{"__proto__":"x.png","constructor":"y.png","idle":"i.png"}')
+    const c = ok(withMonster({ poses: raw }))
+    expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
+    expect(({} as Record<string, unknown>).idle).toBeUndefined()
+    expect(Object.getPrototypeOf(c.monsters.slime.poses)).toBe(Object.prototype)
+  })
+})
+
+describe('pickConfigSource (#890)', () => {
+  it('?fixture=dummy だけなら dummy', () => {
+    expect(pickConfigSource('?fixture=dummy')).toEqual({ configParam: undefined, dummy: true })
+  })
+
+  it('?config= があれば fixture=dummy より優先（dummy にならない）', () => {
+    expect(pickConfigSource('?config=a.json&fixture=dummy')).toEqual({
+      configParam: 'a.json',
+      dummy: false,
+    })
+  })
+
+  it('解決できない ?config= でも dummy に化けない', () => {
+    expect(pickConfigSource('?config=http://&fixture=dummy').dummy).toBe(false)
+  })
+
+  it('空白だけの ?config= は無指定扱い。fixture が dummy 以外なら dummy でない', () => {
+    expect(pickConfigSource('?config=%20&fixture=dummy').dummy).toBe(true)
+    expect(pickConfigSource('?fixture=x').dummy).toBe(false)
+    expect(pickConfigSource('').dummy).toBe(false)
   })
 })

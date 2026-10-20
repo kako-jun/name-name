@@ -388,6 +388,26 @@ pub struct MonsterDef {
     /// 書かない・不正値（警告を出す）は None＝1。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
+    /// 属性相性 (#872)。`弱点:` / `半減:` / `無効:` / `吸収:` の 4 欄に書いた属性 id。
+    /// 4 欄すべて空（1 つも書かない）なら None＝従来どおり相性なし。倍率は持たない（解釈・倍率は runtime の `resolveAffinity`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<MonsterAffinity>,
+}
+
+/// モンスターの属性相性 (#872)。各欄は属性 id（`fire` / `ice` / `thunder` / `death` 等。小文字・半角に正規化済み）を書いた順に持つ。
+/// 同じ属性は 1 つの欄にしか入らない（複数欄に書いたら優先順位 吸収 > 無効 > 半減 > 弱点 の高い欄が勝つ）。
+/// JSON / TS 側のキーは `weak` / `halve` / `nullify` / `absorb`。空の欄は出力しない。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+pub struct MonsterAffinity {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weak: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub halve: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nullify: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub absorb: Vec<String>,
 }
 
 /// 敵のサイズ区分 (#839)。占有するセルの幅 x 高さ（どちらも 1 以上）。

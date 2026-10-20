@@ -203,6 +203,32 @@ describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
     expect(spy.mock.calls[0][0][0].poses).toEqual({ hurt: 'm/h.png' })
   })
 
+  it('「しらべる」の暫定戦闘: モンスター定義の affinity が敵の BattleEntity に写る (#872)', () => {
+    const { i } = makeRenderer()
+    const f = i as unknown as {
+      masterMonsters: Record<string, unknown>
+      startTestBattle(): void
+      startBattle(e: BattleEntity[]): void
+    }
+    f.masterMonsters = {
+      slime: {
+        id: 'slime',
+        name: 'スライム',
+        hp: 5,
+        atk: 1,
+        def: 0,
+        agi: 1,
+        exp: 1,
+        gold: 1,
+        affinity: { weak: ['fire'], nullify: ['death'] },
+      },
+    }
+    const spy = vi.fn()
+    f.startBattle = spy
+    f.startTestBattle()
+    expect(spy.mock.calls[0][0][0].affinity).toEqual({ weak: ['fire'], nullify: ['death'] })
+  })
+
   it('partyDefToBattleEntity: mp 未定義は 0、sprite 未指定は undefined', () => {
     const { i } = makeRenderer()
     const e = partyDefToEntity({ ...member('x'), mp: undefined }, i.battleSettings.layout)

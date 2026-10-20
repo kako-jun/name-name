@@ -1005,6 +1005,18 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(sc) = m.scale {
                     out.push_str(&format!("倍率: {sc}\n"));
                 }
+                if let Some(a) = &m.affinity {
+                    for (label, ids) in [
+                        ("弱点", &a.weak),
+                        ("半減", &a.halve),
+                        ("無効", &a.nullify),
+                        ("吸収", &a.absorb),
+                    ] {
+                        if !ids.is_empty() {
+                            out.push_str(&format!("{label}: {}\n", ids.join(", ")));
+                        }
+                    }
+                }
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
@@ -1855,12 +1867,20 @@ mod tests {
             on_death: Some("候補=自爆".to_string()),
             size: Some(MonsterSize { w: 2, h: 1 }),
             scale: Some(0.5),
+            affinity: Some(MonsterAffinity {
+                weak: vec!["ice".to_string(), "water".to_string()],
+                halve: vec![],
+                nullify: vec!["wind".to_string()],
+                absorb: vec!["thunder".to_string()],
+            }),
         }));
         let out = emit(&doc);
         assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("反撃: 条件=受けた=物理 候補=こうげき\n死亡時: 候補=自爆\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
         assert!(out.contains("サイズ: 2x1\n倍率: 0.5\n"));
+        assert!(out.contains("弱点: ice, water\n無効: wind\n吸収: thunder\n"));
+        assert!(!out.contains("半減:"));
         assert!(out.contains("[モンスター slime]"));
         assert!(out.contains("名前: スライム"));
         assert!(out.contains("HP: 10"));

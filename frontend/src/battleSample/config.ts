@@ -3,6 +3,7 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
+import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -75,7 +76,7 @@ export interface BattleSampleConfig {
   commandLabels: CommandLabels
   /** 候補窓の呪文 (#204)。味方全員が使える（cross のときだけ「じゅもん」で開く）。MP が足りないものはグレー */
   spells: BattleSpellEntry[]
-  /** 候補窓のアイテム (#204)。`count` は所持数（表示だけ。使っても減らない） */
+  /** 候補窓のアイテム (#204)。`count` は所持数（使うたびに BattleScreen が渡された entry の count を 1 減らす。呼び出し側は戦闘ごとに複製を渡す） */
   items: BattleItemEntry[]
   /** 絶対 URL。なしは null */
   background: string | null
@@ -228,6 +229,30 @@ function num(v: unknown, fallback: number, min = 0): number {
   return typeof v === 'number' && Number.isFinite(v) ? Math.max(min, v) : fallback
 }
 
+/**
+ * 戦闘ポーズ別スプライト (#745) の設定 `{ "idle": "...", "step": "...", ... }` を検証して URL に解決する（部分指定可・値は URL 文字列）。
+ * 戦闘サンプルとフィールドサンプル (#890) で共有する。URL の解決方法は `resolve` で呼び出し側が決める。
+ * 未知のポーズ名は無視する（部分指定の typo で全体を落とさない）。1 つも残らなければ undefined
+ */
+export function parsePoses(
+  raw: unknown,
+  path: string,
+  resolve: (url: string) => string | null
+): ParseResult<BattleEntity['poses'] | undefined> {
+  if (!isRecord(raw)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+  const resolved: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v !== 'string') {
+      return { ok: false, error: `${path}.${k} は URL 文字列である必要があります` }
+    }
+    if (!v.trim()) continue
+    const url = resolve(v.trim())
+    if (!url) return { ok: false, error: `${path}.${k} の URL を解決できません: ${v}` }
+    resolved[k] = url
+  }
+  return { ok: true, value: normalizePoses(resolved) }
+}
+
 function parseEntity(
   raw: unknown,
   fallback: BattleEntity,
@@ -271,23 +296,9 @@ function parseEntity(
     entity.sprite = url
   }
   if (raw.poses !== undefined) {
-    // 戦闘ポーズ別スプライト (#745)。{ "idle": "...", "step": "...", ... }（部分指定可・値は URL 文字列）
-    if (!isRecord(raw.poses)) {
-      return { ok: false, error: `${path}.poses はオブジェクトである必要があります` }
-    }
-    const resolved: Record<string, string> = {}
-    for (const [k, v] of Object.entries(raw.poses)) {
-      if (typeof v !== 'string') {
-        return { ok: false, error: `${path}.poses.${k} は URL 文字列である必要があります` }
-      }
-      if (!v.trim()) continue
-      const url = resolveUrl(v.trim(), baseUrl)
-      if (!url) return { ok: false, error: `${path}.poses.${k} の URL を解決できません: ${v}` }
-      resolved[k] = url
-    }
-    // 未知のポーズ名は無視する（部分指定の typo で全体を落とさない）。1 つも残らなければ poses なし
-    const poses = normalizePoses(resolved)
-    if (poses) entity.poses = poses
+    const poses = parsePoses(raw.poses, `${path}.poses`, (u) => resolveUrl(u, baseUrl))
+    if (!poses.ok) return poses
+    if (poses.value) entity.poses = poses.value
   }
   if (raw.actions !== undefined) {
     // 敵の行動ルール (#835)。`行動:` の値と同じ書式の文字列の配列（書いた順）。解釈は enemyAi.ts（不正な行は戦闘側で警告して無視）
@@ -311,6 +322,30 @@ function parseEntity(
       return { ok: false, error: `${path}.onDeath は文字列である必要があります` }
     }
     if (raw.onDeath.trim() !== '') entity.onDeath = raw.onDeath.trim()
+  }
+  if (raw.affinity !== undefined) {
+    // 味方側の属性（防具・魔石）は未対応 (#872 の範囲外)。黙って効いてしまわないよう読み込みエラーにする
+    if (path.startsWith('party[')) {
+      return {
+        ok: false,
+        error: `${path}.affinity: 味方側の相性は未対応です（enemies[].affinity のみ）`,
+      }
+    }
+    // 属性相性 (#872)。`[モンスター]` の `弱点:` 等と同じ 4 欄。各欄は属性 id の文字列の配列（parser と同じ表で半角・小文字に寄せる）
+    if (!isRecord(raw.affinity)) {
+      return { ok: false, error: `${path}.affinity はオブジェクトである必要があります` }
+    }
+    const out: BattleAffinity = {}
+    for (const key of ['weak', 'halve', 'nullify', 'absorb'] as const) {
+      const v = raw.affinity[key]
+      if (v === undefined) continue
+      if (!Array.isArray(v) || v.some((a) => typeof a !== 'string')) {
+        return { ok: false, error: `${path}.affinity.${key} は文字列の配列である必要があります` }
+      }
+      const ids = (v as string[]).map((a) => normalizeAttrId(a.trim())).filter((a) => a !== '')
+      if (ids.length > 0) out[key] = ids
+    }
+    if (Object.keys(out).length > 0) entity.affinity = out
   }
   return { ok: true, value: entity }
 }
@@ -392,7 +427,7 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
 }
 
 /** 設定 JSON の spells / items (#204) を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
-function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
+export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
   raw: unknown,
   fallback: T[],
   key: 'spells' | 'items'

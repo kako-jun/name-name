@@ -7,6 +7,9 @@
 
 export type Edge = 'top' | 'bottom' | 'left' | 'right'
 export type Facing = 'up' | 'down' | 'left' | 'right'
+/** 斜め 4 方向 (#811)。画面は y が下向きなので、upLeft = 左上 */
+export type DiagonalFacing = 'upLeft' | 'upRight' | 'downLeft' | 'downRight'
+export type Facing8 = Facing | DiagonalFacing
 export interface Vec {
   x: number
   y: number
@@ -149,17 +152,59 @@ export function stepMove(
 
 // ---- 向き・歩行アニメ ----
 
+/** 8 方向それぞれの中心角（度）。y が下向きなので、右=0・下=90・左=180・上=-90 */
+const FACING8_ANGLE: Record<Facing8, number> = {
+  right: 0,
+  downRight: 45,
+  down: 90,
+  downLeft: 135,
+  left: 180,
+  upLeft: -135,
+  up: -90,
+  upRight: -45,
+}
+const FACING8_LIST = Object.keys(FACING8_ANGLE) as Facing8[]
+
+/** 8 分割の 1 区画の半幅（度）。45 度刻みなので 22.5 */
+export const SECTOR_HALF_DEG = 22.5
+/** ヒステリシス: 直前の向きの区画を、境界からさらにこの角度（度）だけ広く扱う */
+export const FACING_HYSTERESIS_DEG = 8
+
+/** 2 つの角度（度）の差の絶対値 (0..180) */
+function angleDiff(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360
+  return d > 180 ? 360 - d : d
+}
+
 /**
- * 向き: 移動ベクトルの支配軸で選ぶ（横の成分が大きければ左右、縦なら上下）。
- * 入力なし・成分が同じ（きっちり斜め）のときは直前の向きを保つ。
+ * 向き。
+ * diagonal = false（既定）: 移動ベクトルの支配軸で 4 方向から選ぶ（横の成分が大きければ左右、縦なら上下）。
+ * 入力なし・成分が同じ（きっちり斜め）のときは直前の向き prev をそのまま返す（4 方向へ寄せ直さない）。
+ * diagonal = true (#811): 移動ベクトルの角度を 8 分割して選ぶ。直前の向きの区画は
+ * FACING_HYSTERESIS_DEG だけ広く扱い、境界付近で向きが細かく切り替わらないようにする。
+ * 入力なし（長さ 0）は直前の向きを保つ。
  */
-export function facingFromVector(vec: Vec, prev: Facing): Facing {
+export function facingFromVector(vec: Vec, prev: Facing8, diagonal = false): Facing8 {
   const ax = Math.abs(vec.x)
   const ay = Math.abs(vec.y)
   if (ax === 0 && ay === 0) return prev
-  if (ax > ay) return vec.x > 0 ? 'right' : 'left'
-  if (ay > ax) return vec.y > 0 ? 'down' : 'up'
-  return prev
+  if (!diagonal) {
+    if (ax > ay) return vec.x > 0 ? 'right' : 'left'
+    if (ay > ax) return vec.y > 0 ? 'down' : 'up'
+    return prev
+  }
+  const angle = (Math.atan2(vec.y, vec.x) * 180) / Math.PI
+  if (angleDiff(angle, FACING8_ANGLE[prev]) <= SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG) return prev
+  let best = FACING8_LIST[0]
+  let bestD = Infinity
+  for (const f of FACING8_LIST) {
+    const d = angleDiff(angle, FACING8_ANGLE[f])
+    if (d < bestD) {
+      bestD = d
+      best = f
+    }
+  }
+  return best
 }
 
 export const WALK_FRAMES = 3
@@ -261,4 +306,19 @@ export function arrivalPosition(
       break
   }
   return snapToWalkable(dstMask, p, snapRadius)
+}
+
+/**
+ * 主人公の表示高さ（背景ピクセル）を決める (#810)。シーンの `playerHeight` があればそれ、無ければ全体の値。
+ * 表示の大きさだけを決める。足元（スプライト下端中心）・歩行マスク判定・端リンク判定・移動速度は大きさに依存しない
+ */
+export function resolvePlayerHeight(sceneHeight: number | undefined, globalHeight: number): number {
+  return sceneHeight !== undefined && Number.isFinite(sceneHeight) && sceneHeight > 0
+    ? sceneHeight
+    : globalHeight
+}
+
+/** 表示高さ `height` にするためのスプライト倍率（元画像の高さ `textureHeight` が基準）。画像の高さが 0 以下なら 1 */
+export function playerScale(height: number, textureHeight: number): number {
+  return textureHeight > 0 ? height / textureHeight : 1
 }

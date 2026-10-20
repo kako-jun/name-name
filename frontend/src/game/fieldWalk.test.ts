@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest'
 import {
   arrivalPosition,
   detectEdgeLink,
+  FACING_HYSTERESIS_DEG,
+  SECTOR_HALF_DEG,
   facingFromVector,
   isOutward,
   isWalkable,
   keysToVector,
   maskFromRgba,
+  playerScale,
   pointerToVector,
+  resolvePlayerHeight,
   snapToWalkable,
   stepMove,
   walkFrame,
@@ -683,5 +687,103 @@ describe('arrivalPosition (Issue #807)', () => {
     const into = { x: -1, y: 0 }
     expect(detectEdgeLink(p, size, [dstLeft], T, into)).toBe(dstLeft)
     expect(detectEdgeLink(p, size, [dstLeft], T, into, dstLeft)).toBeNull()
+  })
+})
+
+describe('facingFromVector 8 方向 (Issue #811)', () => {
+  const deg = (d: number): { x: number; y: number } => ({
+    x: Math.cos((d * Math.PI) / 180),
+    y: Math.sin((d * Math.PI) / 180),
+  })
+
+  it.each([
+    [0, 'right'],
+    [45, 'downRight'],
+    [90, 'down'],
+    [135, 'downLeft'],
+    [180, 'left'],
+    [-135, 'upLeft'],
+    [-90, 'up'],
+    [-45, 'upRight'],
+  ] as const)('角度 %d 度は %s（直前が正反対でも中心では確実に切り替わる）', (d, expected) => {
+    const opposite = facingFromVector(deg(d + 180), 'down', true)
+    expect(facingFromVector(deg(d), opposite, true)).toBe(expected)
+  })
+
+  it.each([
+    [{ up: true, down: false, left: true, right: false }, 'down', 'upLeft'],
+    [{ up: true, down: false, left: false, right: true }, 'down', 'upRight'],
+    [{ up: false, down: true, left: true, right: false }, 'up', 'downLeft'],
+    [{ up: false, down: true, left: false, right: true }, 'up', 'downRight'],
+  ] as const)('キー入力 %j は %s→%s', (keys, prev, expected) => {
+    expect(facingFromVector(keysToVector(keys), prev, true)).toBe(expected)
+  })
+
+  it('入力なしは直前の向き（斜めでも）を保つ', () => {
+    expect(facingFromVector({ x: 0, y: 0 }, 'upLeft', true)).toBe('upLeft')
+  })
+
+  it('境界（22.5 度）の少し先まではヒステリシスで直前の向きを保つ', () => {
+    // 右(0度)から 22.5+8 度未満は right のまま、超えたら downRight
+    expect(facingFromVector(deg(25), 'right', true)).toBe('right')
+    expect(facingFromVector(deg(30), 'right', true)).toBe('right')
+    expect(facingFromVector(deg(31), 'right', true)).toBe('downRight')
+  })
+
+  it.each([
+    [SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG - 0.1, 'right'],
+    [SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG, 'right'],
+    [SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG + 0.1, 'downRight'],
+  ] as const)('ヒステリシス境界の角度 %f 度は %s（境界ちょうどは保つ）', (d, expected) => {
+    expect(facingFromVector(deg(d), 'right', true)).toBe(expected)
+  })
+
+  it('境界をまたいで細かく揺れても向きが切り替わり続けない', () => {
+    let f: ReturnType<typeof facingFromVector> = 'right'
+    const seen: string[] = []
+    for (const d of [20, 24, 21, 26, 23, 25, 22, 27]) {
+      f = facingFromVector(deg(d), f, true)
+      seen.push(f)
+    }
+    expect(new Set(seen).size).toBe(1)
+    // 直前が downRight だと同じ揺れでも downRight のまま
+    f = 'downRight'
+    for (const d of [20, 24, 21, 26, 23, 25, 22, 27]) f = facingFromVector(deg(d), f, true)
+    expect(f).toBe('downRight')
+  })
+
+  it('±180 度の継ぎ目（左）でも正しく扱う', () => {
+    expect(facingFromVector(deg(175), 'left', true)).toBe('left')
+    expect(facingFromVector(deg(-175), 'left', true)).toBe('left')
+    expect(facingFromVector(deg(-160), 'upLeft', true)).toBe('upLeft')
+    expect(facingFromVector(deg(-170), 'upLeft', true)).toBe('left')
+    expect(facingFromVector(deg(-150), 'left', true)).toBe('left')
+    expect(facingFromVector(deg(-145), 'left', true)).toBe('upLeft')
+  })
+
+  it('diagonal 未指定・false は従来の 4 方向のまま（斜めの入力でも斜めにならない）', () => {
+    expect(facingFromVector({ x: 1, y: 1 }, 'left')).toBe('left')
+    expect(facingFromVector({ x: 0.9, y: 0.6 }, 'up', false)).toBe('right')
+    expect(facingFromVector({ x: 0.6, y: 0.9 }, 'up', false)).toBe('down')
+  })
+})
+
+describe('resolvePlayerHeight / playerScale (#810)', () => {
+  it('シーン指定が無ければ全体値', () => {
+    expect(resolvePlayerHeight(undefined, 96)).toBe(96)
+  })
+  it('シーン指定があればそれを使う', () => {
+    expect(resolvePlayerHeight(60, 96)).toBe(60)
+  })
+  it('不正なシーン値（0・負・NaN）は全体値へ戻す', () => {
+    expect(resolvePlayerHeight(0, 96)).toBe(96)
+    expect(resolvePlayerHeight(-5, 96)).toBe(96)
+    expect(resolvePlayerHeight(NaN, 96)).toBe(96)
+  })
+  it('倍率は表示高さ / 画像の高さ', () => {
+    expect(playerScale(96, 192)).toBe(0.5)
+  })
+  it('画像の高さが 0 なら倍率は 1', () => {
+    expect(playerScale(96, 0)).toBe(1)
   })
 })
