@@ -232,6 +232,56 @@ describe('checkState: 壊れた状態を検出する', () => {
   })
 })
 
+describe('checkState: 受けたダメージの記憶 (#871)', () => {
+  const dmg = (amount: number, index = 0) => ({
+    target: { side: 'enemy' as const, index },
+    kind: 'damage' as const,
+    amount,
+    hpBefore: 100,
+    hpAfter: 100 - amount,
+  })
+  const miss = {
+    target: { side: 'enemy' as const, index: 0 },
+    kind: 'miss' as const,
+    amount: 0,
+    hpBefore: 100,
+    hpAfter: 100,
+  }
+  const make = (last: number | undefined, hits: Parameters<typeof pushEvent>[1]) => {
+    const s = baseState(
+      [entity('a')],
+      [entity('s', { actions: ['条件=ダメージ=偶数 候補=x', '候補=こうげき'] }), entity('t')]
+    )
+    s.enemyMemory = [
+      last === undefined ? { acted: 0 } : { acted: 0, lastDamage: last },
+      { acted: 0 },
+    ]
+    pushEvent(s, hits)
+    return s
+  }
+
+  it('記憶が直前の行動の表示数字の合計と一致していれば違反なし（複数ヒットは合計、0 も数字）', () => {
+    expect(kinds(make(14, [dmg(7), dmg(7)]))).toEqual([])
+    expect(kinds(make(0, [dmg(0)]))).toEqual([])
+    expect(kinds(make(undefined, [miss]))).toEqual([])
+  })
+
+  it('数字が出なかったのに前回の値が残っていると検出する', () => {
+    expect(kinds(make(8, [miss]))).toContain('damage-memory')
+    expect(kinds(make(8, [{ ...dmg(5), kind: 'heal' as const, hpAfter: 100 }]))).toContain(
+      'damage-memory'
+    )
+    expect(kinds(make(8, [dmg(5, 1)]))).toContain('damage-memory') // 対象外の敵
+    expect(kinds(make(7, [dmg(8)]))).toContain('damage-memory') // 値が違う
+  })
+
+  it('ダメージ条件を書かない敵は見ない', () => {
+    const s = make(8, [miss])
+    s.enemies[0] = entity('s')
+    expect(kinds(s)).toEqual([])
+  })
+})
+
 describe('fingerprint / isBroken', () => {
   it('HP・状態・ゲージが同じなら同じ指紋、変われば変わる', () => {
     const a = baseState([entity('a')], [entity('s')])

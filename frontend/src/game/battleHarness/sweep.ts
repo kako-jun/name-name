@@ -2,6 +2,7 @@
  * 検証ハーネスの総当たり実行 (#877 段階 3)。生成 → 全件実行 → 集計。
  */
 import {
+  damageConditions,
   effectMatrix,
   enemySkillMatrix,
   randomScenarios,
@@ -31,6 +32,7 @@ export type SweepFamily =
   | 'random'
   | 'status-matrix'
   | 'random-status'
+  | 'damage-condition'
 
 export const DEFAULT_SWEEP: SweepConfig = {
   randomSeed: 1,
@@ -53,6 +55,7 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
           cfg.randomSeed,
           cfg.randomStatusCount ?? DEFAULT_SWEEP.randomStatusCount ?? 0
         )),
+    ...(skip.has('damage-condition') ? [] : damageConditions()),
   ]
 }
 
