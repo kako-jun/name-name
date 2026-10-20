@@ -170,17 +170,27 @@ describe('エンジン経由の複数ヒット', () => {
       ])
       expect(st.enemies[1].hp).toBe(90)
     })
-    it('死亡時の行動（倒れた使い手が仲間単体へ）', () => {
-      const e = mk()
-      e.getState().enemies[0].hp = 0
+    it('死亡時の行動（倒れた使い手が仲間単体へ）。生存している第三の仲間に漏れない', () => {
+      const e = new BattleEngine(
+        [ent({ id: 'h1' })],
+        [
+          ent({ id: 's1', hp: 0, maxHp: 50 }),
+          ent({ id: 's2', hp: 50, maxHp: 50 }),
+          ent({ id: 's3', hp: 90, maxHp: 90 }),
+        ],
+        { rng: () => 0 }
+      )
       e.performSkill(
         { side: 'enemy', index: 0 },
         { name: 'みちづれ', target: '仲間単体', effect: 'damage 30 回数=5' },
         undefined,
         { allowDowned: true }
       )
-      expect(e.getState().enemies[1].hp).toBe(0)
-      expect(e.getState().enemies[0].hp).toBe(0)
+      const st = e.getState()
+      const hits = st.events[st.events.length - 1].hits
+      expect(hits.every((h) => h.target.index === 1)).toBe(true)
+      expect(hits.map((h) => h.hpAfter)).toEqual([20, 0])
+      expect(st.enemies[2].hp).toBe(90)
     })
     it('味方の 味方単体 呪文でも倒れたら打ち切り（敵・他の味方は不変）', () => {
       const e = new BattleEngine(
@@ -193,6 +203,21 @@ describe('エンジン経由の複数ヒット', () => {
       expect(st.events[0].hits.every((h) => h.target.index === 0)).toBe(true)
       expect(st.events[0].hits.map((h) => h.hpAfter)).toEqual([10, 0])
     })
+  })
+
+  it('アイテムの damage 回数=N は味方単体（自陣営）に当たり、倒れても他の味方に流れない', () => {
+    // アイテムの対象は味方単体のみ（resolveItemTargets）。敵単体へ撃つ経路は無いので、自陣営狙いの打ち切りで確認する
+    const e = new BattleEngine(
+      [ent({ id: 'h1', hp: 40, maxHp: 40 }), ent({ id: 'h2' })],
+      [ent({ id: 's1' })],
+      { rng: () => 0 }
+    )
+    e.selectItem({ name: 'ばくだん', effect: 'damage 30 回数=4' } as never)
+    const hits = e.getState().events[0].hits
+    expect(hits.map((h) => [h.target.index, h.hpAfter])).toEqual([
+      [0, 10],
+      [0, 0],
+    ])
   })
 
   it('アイテムに回数を付けても無視（警告ログ）', () => {
