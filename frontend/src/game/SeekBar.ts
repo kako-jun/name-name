@@ -41,8 +41,8 @@ export const ACTIVE_THUMB_SCALE = 1.6
 /** 通常（inactive）時のコンテナ不透明度 (#350)。控えめに常時表示しつつボタンより背面に見せる。 */
 export const INACTIVE_ALPHA = 0.2
 /**
- * 無効（終劇＝行き止まり、#815）時のコンテナ不透明度。DOM 側の disabled ボタン（Skip 等、`opacity-30`）の
- * 流儀に合わせる。見えてはいるが操作できないことを見た目で示す（inactive の控えめ表示より薄い）。
+ * 無効（終劇＝意図した終端、#815）時のコンテナ不透明度。通常 inactive(0.2) より薄くし、つまみを消して
+ * inactive と見分ける（Skip の opacity-30 とは値を揃えない。SeekBar は常時 0.2 と既に薄いため）。
  */
 export const DISABLED_ALPHA = 0.1
 /** 操作（タップ/ドラッグ）が止まってから inactive に戻すまでの時間 (ms) (#350)。 */
@@ -210,6 +210,8 @@ export class SeekBar extends Container {
    * active に入る／無操作タイマーを延長する (#350)。
    * スライダ領域での実操作（タップ/ドラッグ/クリック開始）で呼ぶ（ホバーでは呼ばない）。
    * 動画書き出し中（exportSuppressed）は no-op。
+   * disabled 中も no-op で、disabled 中は `_active` が true にならないことを保証する
+   * （handleClick の「初回タップはシークしない」判定がこの不変条件に依存する）。
    */
   activate(): void {
     if (this.exportSuppressed || this.disabled) return
@@ -350,8 +352,9 @@ export class SeekBar extends Container {
   }
 
   private handleClick = (e: FederatedPointerEvent): void => {
-    // 無効（終劇、#815）中は eventMode='none' で到達せず、直接呼ばれても activate() が no-op で
-    // wasActive=false のまま下の早期 return に落ちる（シークしない）。
+    // 無効（終劇、#815）中は eventMode='none' で通常到達しないが、直接呼ばれてもシークしないよう明示ガード。
+    // activate() の disabled no-op と二重の防御（このガードを外してもテストは落ちない等価変異だが、不変条件に依存しないよう残す）。
+    if (this.disabled) return
     const wasActive = this._active
     // スライダの実操作で active に入る (#350)。初回タップ（inactive→active）は「操作可能化」だけ
     // にしてシークしない。すでに active のとき（2回目以降のタップ/ドラッグ）だけシークする。
