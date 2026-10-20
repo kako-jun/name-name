@@ -79,7 +79,7 @@ export interface BattleSampleConfig {
   commandLayout: CommandLayout
   /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
   commandLabels: CommandLabels
-  /** 候補窓の呪文 (#204)。味方全員が使える（cross のときだけ「じゅもん」で開く）。MP が足りないものはグレー */
+  /** 候補窓の呪文 (#204)。味方全員が使える（grid でも cross でも「じゅもん」で開く）。MP が足りないものはグレー */
   spells: BattleSpellEntry[]
   /** 候補窓のアイテム (#204)。`count` は所持数（使うたびに BattleScreen が渡された entry の count を 1 減らす。呼び出し側は戦闘ごとに複製を渡す） */
   items: BattleItemEntry[]
@@ -766,7 +766,7 @@ export function buildBattleSetup(
     presentation: BattlePresentation
     commandLayout: CommandLayout
     commandLabels: CommandLabels
-    /** 候補窓の呪文・アイテム (#204)。commandLayout が cross のときだけ BattleScreen が使う */
+    /** 候補窓の呪文・アイテム (#204)。side の BattleScreen が grid でも cross でも使う */
     menu: BattleMenuData
     background?: string
     depth: BattleDepth | null

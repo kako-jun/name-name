@@ -116,12 +116,12 @@ export interface FieldSampleConfig {
   battle: FieldBattleConfig
   /**
    * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘サンプルと同じ書式）。`items`: 試作用の所持品（`count` が所持数。
-   * 本編の inventory とは無関係で、戦闘のたびに設定の値から始まる）。どちらも `battle.commandLayout: "cross"` のときだけ候補窓に出る。
+   * 本編の inventory とは無関係で、戦闘のたびに設定の値から始まる）。どちらも `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。
    * 未指定は空＝じゅもん・どうぐの窓が開かない（従来どおり）
    */
   spells: BattleSpellEntry[]
   items: BattleItemEntry[]
-  /** 「わざ」の候補 (#873)。味方全員共通（`id` / `name` / `target`〔特技の相対表現。既定 `相手単体`〕/ `effect` / `builtin`）。MP なし。`battle.commands` に `skill` があり `battle.commandLayout: "cross"` のときだけ候補窓に出る。未指定は空 */
+  /** 「わざ」の候補 (#873)。味方全員共通（`id` / `name` / `target`〔特技の相対表現。既定 `相手単体`〕/ `effect` / `builtin`）。MP なし。`battle.commands` に `skill` があると `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。未指定は空 */
   skills: BattleSkillEntry[]
   /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
   groupErrors?: EncounterGroupError[]

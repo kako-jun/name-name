@@ -90,7 +90,7 @@ import {
   type TargetSide,
 } from './battleMenu'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
-import { BattleMenuLayer, HINT_FONT_SIZE } from './BattleMenuLayer'
+import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
   MOTION_EXTENT_PAD,
   MOTION_SCREEN_MARGIN,
@@ -1120,7 +1120,7 @@ export class BattleScreen extends Container {
       case 'skill':
       case 'spell':
       case 'item':
-        // 候補窓 (#204): cross で呪文・アイテムが渡されているときだけ一覧の窓を開く。
+        // 候補窓 (#204, #806): 呪文・わざ・アイテムが渡されている side なら（grid でも cross でも）一覧の窓を開く。
         // それ以外は従来どおり識別ログのみ（戦闘エンジン側の log には積まない）
         if (this.openMenu(id)) return
         console.info(`[BattleScreen] command '${id}' は #175 で実装`)
@@ -1312,7 +1312,7 @@ export class BattleScreen extends Container {
     return s.phase === 'party-input'
   }
 
-  /** `cross` のとき、矢印キー 1 押しでその方向のコマンドを決定するリスナーを付ける (#204)。grid には付けない */
+  /** キーリスナーを付ける。`cross` なら矢印キー 1 押しでその方向のコマンドを決定する (#204)。grid は候補窓が開くときだけ付け、窓の操作キーだけ受ける（コマンドの矢印キー決定はしない #806） */
   private attachCrossKeys(): void {
     if (
       (this.commandLayout !== 'cross' && !this.hasMenuData()) ||
@@ -2139,7 +2139,7 @@ export class BattleScreen extends Container {
 
   // ===== 候補窓 (#204) =====
 
-  /** cross で呪文・アイテムが渡されているときだけ候補窓を有効にし、ATB の wait を「候補窓を開いている間だけ停止」にする */
+  /** side で呪文・わざ・アイテムが渡されているとき（grid でも cross でも）だけ候補窓を有効にし、ATB の wait を「候補窓を開いている間だけ停止」にする */
   private buildMenu(): void {
     this.menuEnabled = this.hasMenuData()
     if (!this.menuEnabled) {
@@ -2338,15 +2338,20 @@ export class BattleScreen extends Container {
     const view =
       ctx && this.menuGeometry ? buildMenuView(this.menuStack, ctx, this.menuGeometry) : []
     // 操作の案内 (#806)。窓が開いていなければ、コマンドを選べる局面（入力待ち）だけ出す
+    const rects = view.flatMap((v) => (v.type === 'list' ? [v.rect] : []))
     const top = this.menuStack[this.menuStack.length - 1]
     const s = this.engine.getState()
     const hint =
       top || (!this.engine.isOver() && s.phase === 'party-input')
-        ? menuHint(
-            top,
-            this.commandLayout === 'cross',
-            (text) => estimateTextWidth(text, HINT_FONT_SIZE) <= this.screenWidth - 16
-          )
+        ? menuHint(top, this.commandLayout === 'cross', (text) => {
+            const w = estimateTextWidth(text, HINT_FONT_SIZE)
+            // 画面に収まり、かつ窓（下端の余白まで伸びる一覧窓）を避けて置けること
+            return (
+              w <= this.screenWidth - 16 &&
+              placeHint({ w, h: HINT_LINE_HEIGHT }, this.screenWidth, this.screenHeight, rects) !==
+                null
+            )
+          })
         : ''
     this.menuLayer.update(view, this.screenWidth, this.screenHeight, hint)
     this.updateSelectMarks()

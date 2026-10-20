@@ -15,6 +15,7 @@ import {
   type MenuView,
 } from './battleMenuLayout'
 import type { TargetSide } from './battleMenu'
+import { estimateTextWidth } from './battleLayout'
 
 /** BattleScreen が提供する、見た目の共通部品と入力の通知先 */
 export interface BattleMenuHost {
@@ -43,6 +44,68 @@ const MORE_MARK_COLOR = 0xffee66
 export const HINT_FONT_SIZE = 10
 const HINT_COLOR = 0xdddddd
 const HINT_BOTTOM = 3
+/** 案内 1 行の高さの見積もり（文字の大きさ + 上下の余白。計測が使えない環境でも同じ値で配置できる） */
+export const HINT_LINE_HEIGHT = HINT_FONT_SIZE + 3
+
+export interface HintRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 案内と窓の間に空ける隙間 (px) */
+export const HINT_GAP = 2
+
+/** 案内の置き場所。`cx` は文字の中心 x、`bottom` は文字の下端 y */
+export interface HintPlacement {
+  cx: number
+  bottom: number
+}
+
+/** 案内を左右に逃がすとき、画面の端に空ける余白 (px) */
+const HINT_SIDE_MARGIN = 8
+
+/**
+ * 案内を置く位置を返す。窓（一覧窓は画面下端の余白まで伸びる）と交差しない位置が無ければ null＝出さない。
+ * 優先順: 中央（既定。画面下端から `HINT_BOTTOM`）→ 窓の横の空きの中央（右、次に左）→ 窓の下端 + `HINT_GAP` の下。
+ */
+export function placeHint(
+  size: { w: number; h: number },
+  width: number,
+  height: number,
+  windows: ReadonlyArray<HintRect>
+): HintPlacement | null {
+  const defBottom = height - HINT_BOTTOM
+  const hits = (cx: number, bottom: number): boolean => {
+    const left = cx - size.w / 2
+    const right = cx + size.w / 2
+    const top = bottom - size.h
+    return windows.some(
+      (r) =>
+        r.x < right + HINT_GAP &&
+        left < r.x + r.w + HINT_GAP &&
+        r.y < bottom + HINT_GAP &&
+        top < r.y + r.h + HINT_GAP
+    )
+  }
+  const inScreen = (cx: number, bottom: number): boolean =>
+    cx - size.w / 2 >= 0 && cx + size.w / 2 <= width && bottom <= height
+  const candidates: HintPlacement[] = [{ cx: width / 2, bottom: defBottom }]
+  const near = windows.filter((r) => r.y + r.h + HINT_GAP > defBottom - size.h)
+  if (near.length > 0) {
+    const maxRight = Math.max(...near.map((r) => r.x + r.w)) + HINT_GAP
+    const minLeft = Math.min(...near.map((r) => r.x)) - HINT_GAP
+    const rightSpan = [maxRight, width - HINT_SIDE_MARGIN]
+    const leftSpan = [HINT_SIDE_MARGIN, minLeft]
+    for (const [l, r] of [rightSpan, leftSpan]) {
+      if (r - l >= size.w) candidates.push({ cx: (l + r) / 2, bottom: defBottom })
+    }
+    const maxBottom = Math.max(...near.map((r) => r.y + r.h))
+    candidates.push({ cx: width / 2, bottom: maxBottom + HINT_GAP + size.h })
+  }
+  return candidates.find((c) => inScreen(c.cx, c.bottom) && !hits(c.cx, c.bottom)) ?? null
+}
 
 export class BattleMenuLayer extends Container {
   private host: BattleMenuHost
@@ -66,7 +129,7 @@ export class BattleMenuLayer extends Container {
     this.backdrop.clear()
     if (view.length === 0) {
       this.backdrop.hitArea = null
-      this.drawHint(hint, width, height)
+      this.drawHint(hint, width, height, [])
       return
     }
     // 窓の外のタップは全面で受けてキャンセルにする（下のコマンドに漏らさない）
@@ -76,17 +139,40 @@ export class BattleMenuLayer extends Container {
       if (v.type === 'list') this.drawList(v)
       else this.drawTarget(v)
     }
-    this.drawHint(hint, width, height)
+    this.drawHint(
+      hint,
+      width,
+      height,
+      view.flatMap((v) => (v.type === 'list' ? [v.rect] : []))
+    )
   }
 
-  /** 操作の案内（画面の下端の余白に小さく中央寄せ。タップは受けない） */
-  private drawHint(hint: string, width: number, height: number): void {
+  /**
+   * 操作の案内（画面の下端の余白に小さく中央寄せ。タップは受けない）。
+   * 窓が下端の余白まで伸びて案内と交差するときは `placeHint` で窓を避けた位置へ逃がし、置けなければ出さない
+   */
+  private drawHint(
+    hint: string,
+    width: number,
+    height: number,
+    windows: ReadonlyArray<HintRect>
+  ): void {
     if (hint === '') return
     const t = new PixiText({ text: hint, style: this.styled(HINT_COLOR, HINT_FONT_SIZE) })
     t.anchor.set(0.5, 1)
     t.eventMode = 'none'
-    t.x = width / 2
-    t.y = height - HINT_BOTTOM
+    const at = placeHint(
+      { w: estimateTextWidth(hint, HINT_FONT_SIZE), h: HINT_LINE_HEIGHT },
+      width,
+      height,
+      windows
+    )
+    if (at === null) {
+      t.destroy()
+      return
+    }
+    t.x = at.cx
+    t.y = at.bottom
     this.body.addChild(t)
   }
 
