@@ -387,11 +387,18 @@ export class BattleEngine {
     )
   }
 
-  /** 「どうぐ」: アイテムを使用 */
-  selectItem(item: ItemExecution, targetId?: string): void {
+  /** 行動を選べなかった理由を、MP 不足と同じ経路（ログ＋窓の知らせ）で出す。入力待ちの味方がいるときだけ。状態は変えない */
+  notifyBlocked(label: string): void {
     if (this.state.phase !== 'party-input') return
+    this.appendLog(label)
+    this.recordNotice(this.currentActor() ?? undefined, label)
+  }
+
+  /** 「どうぐ」: アイテムを使用。実際に使えたら true、行動が成立しなかった（入力待ちでない等）ら false */
+  selectItem(item: ItemExecution, targetId?: string): boolean {
+    if (this.state.phase !== 'party-input') return false
     const user = this.currentActor()
-    if (!user) return
+    if (!user) return false
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
 
     const targets = this.resolveItemTargets(item, targetId)
@@ -414,6 +421,7 @@ export class BattleEngine {
     this.advanceAfterPartyAction(
       this.reactionOf(user, { category: 'item', name: item.name }, hpSnapshot)
     )
+    return true
   }
 
   /**
