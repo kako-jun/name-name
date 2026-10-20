@@ -216,4 +216,35 @@ describe('NovelRenderer × ScreenEffectsController 配線 (#828 7b)', () => {
     expect(stop).toHaveBeenCalledTimes(1)
     expect(h.time.getPendingTimerCount()).toBe(0)
   })
+
+  it('intermission のタブロー描画タイマーが発火すると hideEffectOverlay が呼ばれる', () => {
+    vi.useFakeTimers()
+    const r = new NovelRenderer()
+    r.setScenes(SCENES)
+    const h = internalsOf<Hooks & { initialized: boolean }>(r)
+    h.time.setMode('virtual')
+    h.initialized = true
+    const fx = screenEffectsControllerOf(r)
+    const hide = vi.spyOn(fx, 'hideEffectOverlay')
+    r.setIntermissionScene([{ Narration: { text: ['幕間'] } } as Event], {
+      backgroundFadeMs: 10,
+      characterFadeMs: 10,
+    })
+    confineForTest(r, ['entry'])
+    r.jumpToScene('out')
+    // endStory 時点でも別経路（reset 等）が呼ぶので、タイマー発火による増分で見る
+    const before = hide.mock.calls.length
+    r.getTimeController().tick(10)
+    expect(hide.mock.calls.length).toBe(before + 1)
+  })
+
+  it('setDialogStyle("adv") は hideNovelScrim を呼び、"novel" では呼ばない', () => {
+    const r = new NovelRenderer()
+    const fx = screenEffectsControllerOf(r)
+    const hide = vi.spyOn(fx, 'hideNovelScrim')
+    r.setDialogStyle('novel')
+    expect(hide).not.toHaveBeenCalled()
+    r.setDialogStyle('adv')
+    expect(hide).toHaveBeenCalledTimes(1)
+  })
 })

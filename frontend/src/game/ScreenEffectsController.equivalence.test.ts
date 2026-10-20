@@ -479,6 +479,14 @@ const SCENARIOS: Record<string, { novel: boolean; steps: Step[]; endMs: number }
       { at: 150, run: (o) => o.destroyTimers() },
     ],
   },
+  'scrim 通常フェード途中（退避なし）に destroyTimers': {
+    novel: true,
+    endMs: 400,
+    steps: [
+      { at: 0, run: (o) => o.setScrim(true) },
+      { at: 50, run: (o) => o.destroyTimers() },
+    ],
+  },
   '暗転 on/off': {
     novel: true,
     endMs: 100,

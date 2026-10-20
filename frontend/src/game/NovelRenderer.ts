@@ -49,13 +49,7 @@ import {
   normalizeBackgroundBrightness,
   normalizeBackgroundFade,
 } from './BackgroundController'
-import {
-  NOVEL_SCRIM_ALPHA,
-  NOVEL_SCRIM_HOLD_MS,
-  NOVEL_SCRIM_RETREAT_MS,
-  NOVEL_SCRIM_VISIBILITY_FADE_MS,
-  ScreenEffectsController,
-} from './ScreenEffectsController'
+import { ScreenEffectsController } from './ScreenEffectsController'
 import { SaveController } from './SaveController'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
@@ -186,7 +180,7 @@ export {
   NOVEL_SCRIM_RETREAT_MS,
   NOVEL_SCRIM_HOLD_MS,
   NOVEL_SCRIM_VISIBILITY_FADE_MS,
-}
+} from './ScreenEffectsController'
 
 export const BACKGROUND_CROSSFADE_MS = 700
 export const EVENT_IMAGE_FADE_MS = 700

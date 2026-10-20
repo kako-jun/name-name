@@ -355,6 +355,23 @@ describe('ScreenEffectsController reset / destroy の止め方', () => {
   })
 })
 
+describe('ScreenEffectsController stopAllTimers スクリム通常フェード単独', () => {
+  it('通常フェード途中（退避なし）に stopAllTimers すると scrimVisibilityTimer が null で pending 0', () => {
+    vi.useFakeTimers()
+    const { fx, inner, advance, time } = setup()
+    fx.updateNovelScrim(true)
+    advance(TICK * 3) // フェード（180ms）の途中
+    expect(inner.scrimVisibilityTimer).not.toBeNull()
+    expect(time.getPendingTimerCount()).toBe(1)
+    fx.stopAllTimers()
+    expect(inner.scrimVisibilityTimer).toBeNull()
+    expect(time.getPendingTimerCount()).toBe(0)
+    const s = inner.novelScrim!.alpha
+    advance(1000)
+    expect(inner.novelScrim!.alpha).toBe(s)
+  })
+})
+
 describe('ScreenEffectsController novel スクリム', () => {
   it('novel のセリフ表示で NOVEL_SCRIM_VISIBILITY_FADE_MS かけて 0→ALPHA、非表示で ALPHA→0 かつ消灯', () => {
     vi.useFakeTimers()

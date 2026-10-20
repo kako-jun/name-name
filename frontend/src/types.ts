@@ -626,7 +626,7 @@ export type Event =
   | {
       /** フラッシュ演出 (#143)。エリア限定・ストロボ拡張 (#693)。
        *  `area` 省略は全画面（既定・後方互換）。`strobe` 省略は 1（単発、後方互換）。
-       *  `interval_ms` 省略は `duration_ms` と同じ値にフォールバック（NovelRenderer.startFlash）。 */
+       *  `interval_ms` 省略は `duration_ms` と同じ値にフォールバック（ScreenEffectsController.startFlash）。 */
       Flash: {
         color: string
         alpha: number

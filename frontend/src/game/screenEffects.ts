@@ -140,7 +140,7 @@ export function computeFlashAreaRect(
  * と完全に同じ結果になる（後方互換）。
  *
  * 入力契約: `strobeCount` の非有限値/1未満は `1` 扱い。`intervalMs` の非有限値/0以下は
- * `durationMs`（0以下なら `1`）にフォールバック（呼び出し側 `NovelRenderer.startFlash` が
+ * `durationMs`（0以下なら `1`）にフォールバック（呼び出し側 `ScreenEffectsController.startFlash` が
  * `interval_ms ?? duration_ms` を渡す想定だが、二重に防御する）。
  */
 export function computeStrobeFlashAlpha(

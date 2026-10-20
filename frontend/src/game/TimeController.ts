@@ -13,7 +13,7 @@
  * - `now()`: CharacterLayer の elapsedMs と同等の参照時刻
  *
  * 未統合 (今後動画化が本実装に進んだ際に対応):
- * - Pixi の Ticker (NovelRenderer.shakeTimer / effectTimer、CharacterLayer.animTicker、
+ * - Pixi の Ticker (ScreenEffectsController.shakeTimer / effectTimer、CharacterLayer.animTicker、
  *   DialogBox.ticker)
  * - AudioManager の voice/BGM 同期（fetch/decodeAudioData の非同期待ちや BGM フェード完了
  *   タイマーは引き続き実時計依存）。SE 複数候補プールの再生順序（`playSeSequence` の gap
