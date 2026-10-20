@@ -13,7 +13,7 @@
 
 import { Container, Sprite, Texture, VideoSource } from 'pixi.js'
 import { BackgroundFade, VideoState } from './GameState'
-import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
+import { getSharedEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { AudioManager } from './AudioManager'
 import { hasOwn } from './ownProperty'
 
@@ -232,7 +232,7 @@ export class VideoLayer extends Container {
   }
 
   private applyMask(sprite: Sprite, fade: BackgroundFade | null): void {
-    const maskSprite = buildEdgeFadeMask(fade, this.screenWidth, this.screenHeight)
+    const maskSprite = getSharedEdgeFadeMask(fade, this.screenWidth, this.screenHeight)
     if (!maskSprite) return
     this.maskSprite = maskSprite
     this.addChild(maskSprite)
@@ -266,8 +266,8 @@ export class VideoLayer extends Container {
     }
     if (this.maskSprite) {
       this.maskSprite.removeFromParent()
-      // canvas 由来テクスチャは textureCache に乗らないので確実に破棄する
-      this.maskSprite.destroy({ texture: true, textureSource: true })
+      // マスクの Texture は共有キャッシュ (getSharedEdgeFadeMask) のもの。Sprite だけ壊し Texture / source は壊さない (#791)
+      this.maskSprite.destroy()
       this.maskSprite = null
     }
     if (this.sprite) {
