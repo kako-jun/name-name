@@ -19,6 +19,7 @@ export type Family =
   | 'random'
   | 'status-matrix'
   | 'random-status'
+  | 'damage-condition'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -261,6 +262,106 @@ export function reactionChains(): Scenario[] {
         }
       }
     }
+  }
+  return out
+}
+
+/** ダメージ条件 (#871) の式。値の境界・不正な書式（警告して無視されるだけで壊れてはならない）を含む */
+export const DAMAGE_CONDITIONS: readonly string[] = [
+  'ダメージ=奇数',
+  'ダメージ=偶数',
+  'ダメージ=3の倍数',
+  'ダメージ>=100',
+  'ダメージ<10',
+  'ダメージ=0',
+  'ダメージ桁数>=4',
+  'ダメージ=奇数, 受けた=魔法',
+  'ダメージ=奇数, ダメージ>=5',
+  'ダメージ=abc',
+  'ダメージ桁数=奇数',
+  'ダメージ=0の倍数',
+]
+
+/** 条件を書く場所（`行動:` `反撃:` `死亡時:`） */
+const DAMAGE_CONDITION_PLACES = ['actions', 'counters', 'onDeath'] as const
+
+/** 受けるダメージの元。固定（奇数・偶数）・乱数幅・複数ヒット・極大・即死・回復・相性が絡むもの */
+const DAMAGE_SOURCES: readonly string[] = [
+  'damage 0..0',
+  'damage 7..7',
+  'damage 8..8',
+  'damage 5..9',
+  'damage 7..7 回数=3',
+  'damage 100000..100000',
+  'damage 50..50 type=fire',
+  'damage_full',
+  'heal 10..10',
+]
+
+/**
+ * 敵の条件 `ダメージ…` (#871): 条件 × 書く場所 × 受けるダメージの元 × 相手の相性 × 敵の HP（小さい=倒れる）× ターン制/ATB。
+ * 味方が呪文を 3 回撃ってから攻撃し、決着まで進める。反撃・死亡時・行動の特技は固定ダメージ
+ */
+export function damageConditions(): Scenario[] {
+  const out: Scenario[] = []
+  const variants = DEFENDER_VARIANTS.filter((v) =>
+    ['plain', 'resist0', 'absorb', 'nullify', 'weak'].includes(v.name)
+  )
+  for (const atb of [false, true]) {
+    DAMAGE_CONDITIONS.forEach((cond, ci) => {
+      for (const place of DAMAGE_CONDITION_PLACES) {
+        DAMAGE_SOURCES.forEach((src, si) => {
+          for (const dv of variants) {
+            for (const [hv, after8] of [
+              [30, false],
+              [900, false],
+              [900, true],
+            ] as const) {
+              const script =
+                place === 'onDeath'
+                  ? { onDeath: `条件=${cond} 候補=ctr` }
+                  : { [place]: [`条件=${cond} 候補=ctr`, '候補=こうげき'] }
+              out.push({
+                id: `damage-condition/${atb ? 'atb' : 'turn'}/c${ci}/${place}/s${si}/${dv.name}/hp${hv}${after8 ? '/after8' : ''}`,
+                seed: 60_000 + out.length,
+                party: [entity('a', { hp: 800, maxHp: 800 }), entity('b', { hp: 800, maxHp: 800 })],
+                enemies: [
+                  foe('s', { ...dv.over, hp: hv, maxHp: hv, ...script }),
+                  foe('t', { hp: 500, maxHp: 500 }),
+                ],
+                atb: atb ? { mode: 'active' } : undefined,
+                skills: { ctr: { name: 'はんげき', target: '相手単体', effect: 'damage 3..3' } },
+                spells: [
+                  { name: 'テスト', mp: 0, target: '敵単体', effect: src },
+                  { name: 'やっつ', mp: 0, target: '敵単体', effect: 'damage 8..8' },
+                ],
+                items: [],
+                // after8: 先に 8（偶数）を当ててから src を受ける。MISS・無効・吸収・表示 0・即死のあとに前回の 8 が残らないことを検出器が見る
+                ops: after8
+                  ? [
+                      { t: 'spell', s: 1 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 1 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      ATK,
+                    ]
+                  : [
+                      { t: 'spell', s: 0 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      ATK,
+                    ],
+              })
+            }
+          }
+        })
+      }
+    })
   }
   return out
 }
