@@ -4820,6 +4820,72 @@ builtin: some_builtin
     }
 
     #[test]
+    fn status_block_parses_raw_fields() {
+        // [状態] (#870): 名前必須、ほかは生文字列で透過、空の値は未指定、英語キーも受理
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[状態 poison]
+名前: どく
+持続: 5
+継続ダメージ: 1/16
+解除: 被ダメージ
+[/状態]
+
+[状態 zombie]
+名前: ゾンビ
+反転: 回復, ダメージ
+行動:
+[/状態]
+
+[状態 eng]
+name: Eng
+duration: 2
+tick_damage: 3..4
+action: 混乱
+expire: 戦闘不能
+[/状態]
+
+[状態 noname]
+持続: 3
+[/状態]
+"#;
+        let doc = parse(input);
+        let statuses: Vec<&StatusDef> = doc.chapters[0].scenes[0]
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Status(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(statuses.len(), 3, "名前の無いブロックは破棄される");
+        assert_eq!(statuses[0].id, "poison");
+        assert_eq!(statuses[0].name, "どく");
+        assert_eq!(statuses[0].duration.as_deref(), Some("5"));
+        assert_eq!(statuses[0].tick_damage.as_deref(), Some("1/16"));
+        assert_eq!(statuses[0].cure.as_deref(), Some("被ダメージ"));
+        assert_eq!(statuses[0].action, None);
+        assert_eq!(statuses[1].reverse.as_deref(), Some("回復, ダメージ"));
+        assert_eq!(statuses[1].action, None, "空の値は未指定");
+        assert_eq!(statuses[2].name, "Eng");
+        assert_eq!(statuses[2].duration.as_deref(), Some("2"));
+        assert_eq!(statuses[2].tick_damage.as_deref(), Some("3..4"));
+        assert_eq!(statuses[2].action.as_deref(), Some("混乱"));
+        assert_eq!(statuses[2].expire.as_deref(), Some("戦闘不能"));
+        // 出力して読み直しても同じ（状態ブロックは他のマスターに化けない）
+        let doc2 = parse(&crate::emitter::emit(&doc));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events,
+            doc2.chapters[0].scenes[0].events
+        );
+    }
+
+    #[test]
     fn english_keys_are_accepted() {
         let input = r#"---
 engine: name-name

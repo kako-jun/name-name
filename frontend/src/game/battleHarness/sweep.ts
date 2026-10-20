@@ -5,8 +5,10 @@ import {
   effectMatrix,
   enemySkillMatrix,
   randomScenarios,
+  randomStatusScenarios,
   reactionChains,
   stackOrders,
+  statusMatrix,
 } from './generate'
 import { runScenario, type RunOptions, type ScenarioResult } from './run'
 import type { Scenario } from './scenario'
@@ -15,11 +17,26 @@ export interface SweepConfig {
   /** ランダム合成の seed とシナリオ数 */
   randomSeed: number
   randomCount: number
+  /** 状態を宣言したランダム合成 (#870) のシナリオ数（seed は `randomSeed` と共通） */
+  randomStatusCount?: number
   /** 総当たりの族を省く（短く回したいとき） */
-  skip?: Array<'effect-matrix' | 'enemy-skill' | 'stack-order' | 'reaction-chain' | 'random'>
+  skip?: SweepFamily[]
 }
 
-export const DEFAULT_SWEEP: SweepConfig = { randomSeed: 1, randomCount: 3000 }
+export type SweepFamily =
+  | 'effect-matrix'
+  | 'enemy-skill'
+  | 'stack-order'
+  | 'reaction-chain'
+  | 'random'
+  | 'status-matrix'
+  | 'random-status'
+
+export const DEFAULT_SWEEP: SweepConfig = {
+  randomSeed: 1,
+  randomCount: 3000,
+  randomStatusCount: 2000,
+}
 
 export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
   const skip = new Set(cfg.skip ?? [])
@@ -29,6 +46,13 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('stack-order') ? [] : stackOrders()),
     ...(skip.has('reaction-chain') ? [] : reactionChains()),
     ...(skip.has('random') ? [] : randomScenarios(cfg.randomSeed, cfg.randomCount)),
+    ...(skip.has('status-matrix') ? [] : statusMatrix()),
+    ...(skip.has('random-status')
+      ? []
+      : randomStatusScenarios(
+          cfg.randomSeed,
+          cfg.randomStatusCount ?? DEFAULT_SWEEP.randomStatusCount ?? 0
+        )),
   ]
 }
 

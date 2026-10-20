@@ -1,0 +1,119 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "statuses": [
+    { "id": "poison", "name": "どく", "duration": "5", "tickDamage": "1/16" },
+    { "id": "sleep", "name": "ねむり", "duration": "3", "action": "不能", "cure": "被ダメージ" },
+    {
+      "id": "confusion",
+      "name": "こんらん",
+      "duration": "3",
+      "action": "混乱",
+      "cure": "被ダメージ"
+    },
+    { "id": "zombie", "name": "ゾンビ", "duration": "6", "reverse": "回復, ダメージ" },
+    { "id": "doom", "name": "しのせんこく", "duration": "3", "expire": "戦闘不能" }
+  ],
+  "spells": [
+    {
+      "id": "poisona",
+      "name": "どくのこな",
+      "mp": 2,
+      "target": "敵単体",
+      "effect": "status poison"
+    },
+    {
+      "id": "sleepel",
+      "name": "スリプル",
+      "mp": 2,
+      "target": "敵単体",
+      "effect": "status sleep 確率=70"
+    },
+    {
+      "id": "confu",
+      "name": "メダパニ",
+      "mp": 2,
+      "target": "敵単体",
+      "effect": "status confusion 確率=70"
+    },
+    { "id": "doom", "name": "デスぜんこく", "mp": 4, "target": "敵単体", "effect": "status doom" },
+    { "id": "cure", "name": "ケアル", "mp": 2, "target": "味方単体", "effect": "heal 40..40" },
+    { "id": "esuna", "name": "エスナ", "mp": 2, "target": "味方単体", "effect": "cure all" },
+    {
+      "id": "fire",
+      "name": "ファイア",
+      "mp": 2,
+      "target": "敵単体",
+      "effect": "damage 30..30 type=fire"
+    },
+    {
+      "id": "undead",
+      "name": "ゾンビのこな",
+      "mp": 3,
+      "target": "味方全体",
+      "effect": "status zombie"
+    }
+  ],
+  "skills": [
+    {
+      "id": "venom",
+      "name": "どくのきり",
+      "target": "相手全体",
+      "effect": "status poison 確率=80",
+      "message": "{user}は どくのきりを はいた！"
+    },
+    {
+      "id": "lullaby",
+      "name": "ララバイ",
+      "target": "相手単体",
+      "effect": "status sleep 確率=60"
+    },
+    {
+      "id": "madness",
+      "name": "くるわせのうた",
+      "target": "相手単体",
+      "effect": "status confusion 確率=60"
+    },
+    {
+      "id": "curse",
+      "name": "ゾンビのまじない",
+      "target": "相手全体",
+      "effect": "status zombie",
+      "message": "{user}は ゾンビのまじないを となえた！"
+    },
+    {
+      "id": "meteor",
+      "name": "メテオ",
+      "target": "相手全体",
+      "effect": "damage 9999..9999",
+      "telegraph": "{user}は 空を ふるわせている……"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 400, "mp": 40, "atk": 25, "def": 4, "agi": 6 },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 300,
+      "mp": 60,
+      "atk": 14,
+      "def": 2,
+      "agi": 5,
+      "row": "back"
+    }
+  ],
+  "enemies": [
+    {
+      "id": "boss",
+      "name": "どくのりゅう",
+      "hp": 900,
+      "atk": 14,
+      "def": 2,
+      "agi": 5,
+      "affinity": { "halve": ["poison"], "nullify": ["confusion"] },
+      "actions": ["順番=venom > lullaby > madness > curse > meteor > こうげき"]
+    },
+    { "id": "imp", "name": "こあくま", "hp": 120, "atk": 10, "def": 2, "agi": 4 }
+  ]
+}

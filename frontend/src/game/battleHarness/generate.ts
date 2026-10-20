@@ -3,14 +3,22 @@
  * 生成は決定論的: 同じ引数なら同じシナリオ列になる。
  *
  * 対象は**現状エンジンに実装があるものだけ**: 効果 DSL の全動詞 × 耐性・属性相性 × HP × 範囲 × 複数ヒット `回数=N`、
- * 状態/バフの重ね順、反撃・死亡時・敵の行動、ATB。
+ * 状態/バフの重ね順、反撃・死亡時・敵の行動、ATB、宣言した状態異常 (#870。継続ダメージ・行動不能・混乱・満了・回復の反転 × 付与の確率・持続・耐性)。
  */
 import type { SkillExecution } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
+import type { StatusDef } from '../../types'
 import { lcg } from './rng'
 import type { Op, Scenario } from './scenario'
 
-export type Family = 'effect-matrix' | 'enemy-skill' | 'stack-order' | 'reaction-chain' | 'random'
+export type Family =
+  | 'effect-matrix'
+  | 'enemy-skill'
+  | 'stack-order'
+  | 'reaction-chain'
+  | 'random'
+  | 'status-matrix'
+  | 'random-status'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -257,7 +265,229 @@ export function reactionChains(): Scenario[] {
   return out
 }
 
+/**
+ * 宣言した状態 (#870) の集合。継続ダメージ（割合・固定幅・上限超え）・行動不能・混乱・被ダメージで解除・満了で戦闘不能・
+ * 回復/ダメージの反転・長い持続（永久気味）・全部入り・不正な値だらけの宣言を含む（不正な宣言は警告して既定に落ちるだけで壊れてはならない）
+ */
+export const STATUS_SET: Readonly<Record<string, StatusDef>> = {
+  poison: { id: 'poison', name: 'どく', duration: '3', tickDamage: '1/16' },
+  venom: { id: 'venom', name: 'もうどく', duration: '9', tickDamage: '1..99999' },
+  sleep: { id: 'sleep', name: 'ねむり', duration: '2', action: '不能', cure: '被ダメージ' },
+  coma: { id: 'coma', name: 'こんすい', duration: '99', action: '不能' },
+  mad: { id: 'mad', name: 'こんらん', duration: '3', action: '混乱' },
+  shock: { id: 'shock', name: 'ぼうぜん', duration: '5', action: '混乱', cure: '被ダメージ' },
+  doom: { id: 'doom', name: 'しのせんこく', duration: '2', expire: '戦闘不能' },
+  zombie: { id: 'zombie', name: 'ゾンビ', duration: '99', reverse: '回復, ダメージ' },
+  healrev: { id: 'healrev', name: 'かいふくぎゃく', reverse: '回復' },
+  dmgrev: { id: 'dmgrev', name: 'ダメージかいふく', reverse: 'ダメージ' },
+  kitchen: {
+    id: 'kitchen',
+    name: 'ぜんぶいり',
+    duration: '4',
+    tickDamage: '5..20',
+    action: '混乱',
+    reverse: '回復, ダメージ',
+    cure: '被ダメージ',
+    expire: '戦闘不能',
+  },
+  weird: {
+    id: 'weird',
+    name: 'ふせい',
+    duration: 'abc',
+    tickDamage: '1/0',
+    action: '???',
+    reverse: '??',
+    cure: '??',
+    expire: '??',
+  },
+}
+
+const STATUS_IDS = Object.keys(STATUS_SET)
+
+/** 状態の効果 DSL（付与の持続・確率の境界、解除、反転の対象になる回復/ダメージ）。ids は `STATUS_SET` の id から作る */
+function statusEffects(ids: readonly string[]): string[] {
+  const out: string[] = []
+  for (const id of ids) {
+    out.push(
+      `status ${id}`,
+      `status ${id} duration=1`,
+      `status ${id} duration=99`,
+      `status ${id} duration=100`,
+      `status ${id} duration=0`,
+      `status ${id} 確率=50`,
+      `status ${id} 確率=99`,
+      `status ${id} 確率=0`,
+      `status ${id} 確率=100`,
+      `status ${id} 確率=abc`,
+      `cure ${id}`
+    )
+  }
+  out.push(
+    'cure all',
+    'cure',
+    'heal 30..30',
+    'heal_full',
+    'heal -5..-1',
+    'damage 30..30',
+    'damage 30..30 type=fire',
+    'damage_full',
+    'damage 5..9 回数=3',
+    'revive',
+    'status marker duration=3' // 宣言の無い印は何も起きない
+  )
+  return out
+}
+
+/** 状態の耐性変種（属性相性の欄に状態 id と `death` を書く） */
+const STATUS_AFFINITIES: ReadonlyArray<{
+  name: string
+  over: (id: string) => Partial<BattleEntity>
+}> = [
+  { name: 'plain', over: () => ({}) },
+  { name: 'nullify', over: (id) => ({ affinity: { nullify: [id, 'death'] } }) },
+  { name: 'absorb', over: (id) => ({ affinity: { absorb: [id, 'death'] } }) },
+  { name: 'halve', over: (id) => ({ affinity: { halve: [id, 'death'] } }) },
+  { name: 'weak', over: (id) => ({ affinity: { weak: [id, 'death'] } }) },
+]
+
+const MODES: ReadonlyArray<{ name: string; atb?: Scenario['atb'] }> = [
+  { name: 'turn' },
+  { name: 'atb-wait', atb: { mode: 'wait' } },
+  { name: 'atb-active', atb: { mode: 'active' } },
+]
+
+/**
+ * 宣言した状態の総当たり (#870)。状態 × 付与の持続 × 確率 × 相手の耐性 × 進行方式。
+ * 味方が呪文で敵単体・自分・味方全体へ付け、敵が特技で味方全体・自分へ付ける。そのあと決着まで進めて、ロック・無限ループ・不変条件違反を見る
+ */
+export function statusMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  for (const mode of MODES) {
+    for (const id of STATUS_IDS) {
+      for (const dur of ['', ' duration=1', ' duration=99', ' duration=100']) {
+        for (const chance of ['', ' 確率=50', ' 確率=99']) {
+          for (const aff of STATUS_AFFINITIES) {
+            const effect = `status ${id}${dur}${chance}`
+            const spell = (target: string) => ({ name: `s-${target}`, mp: 0, target, effect })
+            out.push({
+              id: `status-matrix/${mode.name}/${id}${dur.replace(/\s|=/g, '')}${chance.replace(/\s|=/g, '')}/${aff.name}`,
+              seed: 60_000 + out.length,
+              party: [
+                entity('a', { hp: 300, maxHp: 300, agi: 12, ...aff.over(id) }),
+                entity('b', { hp: 300, maxHp: 300, agi: 8 }),
+              ],
+              enemies: [
+                foe('s', {
+                  hp: 400,
+                  maxHp: 400,
+                  agi: 9,
+                  actions: ['候補=sk'],
+                  ...aff.over(id),
+                }),
+                foe('t', { hp: 400, maxHp: 400, agi: 6, ...aff.over(id) }),
+              ],
+              ...(mode.atb ? { atb: mode.atb } : {}),
+              statuses: { ...STATUS_SET },
+              skills: { sk: { name: 'のろい', target: '相手全体', effect } },
+              spells: [spell('敵単体'), spell('自分'), spell('味方全体'), spell('敵全体')],
+              items: [],
+              ops: [
+                { t: 'spell', s: 0 },
+                { t: 'tick', ms: 4000 },
+                { t: 'spell', s: 1 },
+                { t: 'tick', ms: 4000 },
+                { t: 'spell', s: 2 },
+                { t: 'spell', s: 3 },
+                ATK,
+                { t: 'tick', ms: 4000 },
+                ATK,
+              ],
+            })
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
 const pick = <T>(rng: () => number, xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)]
+
+/**
+ * 状態を常に宣言したランダム合成 (#870)。効果は状態の付与・解除・反転の対象を中心に、能力値・HP・耐性・敵の台本・操作列をランダムに組む。
+ * seed 固定で決定論的
+ */
+export function randomStatusScenarios(seed: number, count: number): Scenario[] {
+  const out: Scenario[] = []
+  const effects = statusEffects(STATUS_IDS)
+  const HPS = [1, 5, 100, 9999, 50_000]
+  const ATKS = [0, 1, 10, 100, 9999]
+  const AGIS = [0, 1, 5, 50, 1000]
+  for (let n = 0; n < count; n++) {
+    const sseed = (seed * 6151 + n * 77_711) >>> 0
+    const rng = lcg(sseed)
+    const side = (id: string, enemy: boolean): BattleEntity => {
+      const hp = pick(rng, HPS)
+      const aff = pick(rng, STATUS_AFFINITIES).over(pick(rng, STATUS_IDS))
+      const status: Record<string, number> = {}
+      // 最初から状態を持って始まる者もいる（行動不能・混乱で始まる戦闘、倒れていない者だけ）
+      if (rng() < 0.4) status[pick(rng, STATUS_IDS)] = 1 + Math.floor(rng() * 5)
+      const over: Partial<BattleEntity> = {
+        hp,
+        maxHp: hp,
+        atk: pick(rng, ATKS),
+        def: 0,
+        agi: pick(rng, AGIS),
+        ...(Object.keys(status).length > 0 ? { status } : {}),
+        ...(rng() < 0.3 ? { statusChanceBonus: Math.floor(rng() * 200) - 50 } : {}),
+        ...aff,
+      }
+      return enemy ? foe(id, over) : entity(id, over)
+    }
+    const skillIds = ['k0', 'k1', 'k2']
+    const skills: Record<string, SkillExecution> = {}
+    for (const id of skillIds) {
+      skills[id] = { name: id, target: pick(rng, SKILL_SCOPES), effect: pick(rng, effects) }
+    }
+    const enemies = [side('s', true), side('t', true)]
+    enemies.forEach((e) => {
+      if (rng() < 0.6) e.actions = [`候補=${pick(rng, skillIds)}`]
+      if (rng() < 0.3) e.counters = [`候補=${pick(rng, skillIds)}`]
+      if (rng() < 0.2) e.onDeath = `候補=${pick(rng, skillIds)}`
+    })
+    const spells = Array.from({ length: 4 }, (_, i) => ({
+      name: `m${i}`,
+      mp: 0,
+      target: pick(rng, SPELL_SCOPES) as string,
+      effect: pick(rng, effects),
+    }))
+    const items = [{ name: 'i0', effect: pick(rng, effects) }]
+    const ops: Op[] = []
+    const opCount = 20 + Math.floor(rng() * 30)
+    for (let k = 0; k < opCount; k++) {
+      const r = rng()
+      if (r < 0.3) ops.push({ t: 'attack' })
+      else if (r < 0.65) ops.push({ t: 'spell', s: Math.floor(rng() * spells.length) })
+      else if (r < 0.75) ops.push({ t: 'item', i: 0 })
+      else if (r < 0.8) ops.push({ t: 'escape' })
+      else ops.push({ t: 'tick', ms: Math.floor(rng() * 4000) + 1 })
+    }
+    const atbMode = rng()
+    out.push({
+      id: `random-status/${seed}-${n}`,
+      seed: sseed,
+      party: [side('a', false), side('b', false)],
+      enemies,
+      atb: atbMode < 0.33 ? { mode: 'wait' } : atbMode < 0.66 ? { mode: 'active' } : undefined,
+      statuses: { ...STATUS_SET },
+      skills,
+      spells,
+      items,
+      ops,
+    })
+  }
+  return out
+}
 
 /** seed 固定のランダム合成。能力値・HP は境界値の集合から選び、呪文・敵の台本・操作列をランダムに組む */
 export function randomScenarios(seed: number, count: number): Scenario[] {

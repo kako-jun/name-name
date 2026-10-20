@@ -191,6 +191,25 @@ describe('EventDisplay', () => {
     expect(container.textContent).not.toContain('MP=')
   })
 
+  it('renders Status master data (#870)', () => {
+    const { container } = renderEvent({
+      Status: {
+        id: 'poison',
+        name: 'どく',
+        duration: '5',
+        tickDamage: '1/16',
+        reverse: '回復',
+        expire: '戦闘不能',
+      },
+    })
+    expect(container.textContent).toContain('状態: どく')
+    expect(container.textContent).toContain('(id=poison)')
+    expect(container.textContent).toContain('持続=5 継続ダメージ=1/16')
+    expect(container.textContent).toContain('反転=回復')
+    expect(container.textContent).toContain('満了=戦闘不能')
+    expect(container.textContent).not.toContain('行動=')
+  })
+
   it('renders PartyMember with learns', () => {
     const { container } = renderEvent({
       PartyMember: {

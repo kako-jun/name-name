@@ -10,6 +10,7 @@ import {
   type SpellExecution,
 } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
+import type { StatusDef } from '../../types'
 
 /** 操作列の 1 要素。`s` / `i` は `Scenario.spells` / `Scenario.items` の添字 */
 export type Op =
@@ -30,6 +31,8 @@ export interface Scenario {
   atb?: { mode: 'wait' | 'active' }
   /** 敵の特技（`actions` / `counters` / `onDeath` の候補 id → 実行内容） */
   skills?: Record<string, SkillExecution>
+  /** 状態の宣言 (#870)。`[状態]` の内容（id → `StatusDef`）。無いシナリオは従来どおり */
+  statuses?: Record<string, StatusDef>
   spells: SpellExecution[]
   items: ItemExecution[]
   ops: Op[]
@@ -54,6 +57,7 @@ export const realEngineFactory: EngineFactory = (scenario, rng) =>
     rng,
     atb: scenario.atb ? { mode: scenario.atb.mode } : undefined,
     skills: scenario.skills ? clone(scenario.skills) : undefined,
+    statuses: scenario.statuses ? clone(scenario.statuses) : undefined,
   })
 
 export function clone<T>(v: T): T {

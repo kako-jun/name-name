@@ -31,7 +31,10 @@ interface Internals {
   playerGridX: number
   playerGridY: number
   encounterCooldown: number
-  battleScreen: { opts: Record<string, unknown> } | null
+  battleScreen: {
+    opts: Record<string, unknown>
+    engine: { getStatusRules(): Record<string, unknown> }
+  } | null
   startBattle(enemies: BattleEntity[]): void
   maybeRollEncounter(): boolean
   handleKeyDown(e: KeyboardEvent): void
@@ -87,6 +90,15 @@ describe('TopDownRenderer: エンカウントで戦闘画面に入り、終了�
     expect(i.battleScreen!.opts.windowStyle).toBe('ff-blue')
     expect(i.battleScreen!.opts.commandLayout).toBe('cross')
     expect(i.app.stage.children).toContain(i.battleScreen)
+  })
+
+  it('[状態] の宣言 (#870) が戦闘エンジンに渡る。宣言の無いプロジェクトは空', () => {
+    const i = field({ statuses: { poison: { id: 'poison', name: 'どく', tickDamage: '1/16' } } })
+    i.startBattle([enemy()])
+    expect(Object.keys(i.battleScreen!.engine.getStatusRules())).toEqual(['poison'])
+    const plain = field()
+    plain.startBattle([enemy()])
+    expect(plain.battleScreen!.engine.getStatusRules()).toEqual({})
   })
 
   it('エンカウント抽選に当たると戦闘が始まり、クールダウンはまだセットされない', () => {

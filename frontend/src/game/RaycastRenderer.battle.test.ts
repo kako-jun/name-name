@@ -76,6 +76,18 @@ afterEach(() => {
 })
 
 describe('RaycastRenderer.startBattle の味方組み立て (#736)', () => {
+  it('[状態] の宣言 (#870) が戦闘エンジンに渡る', () => {
+    const { i } = makeRenderer()
+    ;(i as unknown as { masterStatuses: unknown }).masterStatuses = {
+      poison: { id: 'poison', name: 'どく', tickDamage: '1/16' },
+    }
+    i.startBattle([enemy()])
+    const engine = i.battleScreen!.engine as unknown as {
+      getStatusRules(): Record<string, unknown>
+    }
+    expect(Object.keys(engine.getStatusRules())).toEqual(['poison'])
+  })
+
   it('front・masterParty 空 → エンジンの味方は hero 1 人', () => {
     const { i } = makeRenderer()
     i.startBattle([enemy()])

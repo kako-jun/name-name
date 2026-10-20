@@ -115,6 +115,7 @@ async function main(): Promise<void> {
       const engine = new BattleEngine(setup.party, setup.enemies, {
         ...(setup.atb ? { atb: setup.atb } : {}),
         ...(Object.keys(setup.skills).length > 0 ? { skills: setup.skills } : {}),
+        ...(Object.keys(setup.statuses).length > 0 ? { statuses: setup.statuses } : {}),
       })
       screen = new BattleScreen(engine, setup.width, setup.height, setup.options)
       app.stage.addChild(screen)

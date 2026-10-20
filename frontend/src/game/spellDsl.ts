@@ -18,7 +18,10 @@
  *   buff {stat}=+{n} duration={t}  # ATK+/DEF+/AGI+ 一定ターン強化
  *   debuff {stat}=-{n} duration={t}
  *   revive [hp=full|hp=half]       # 蘇生
- *   status {state} duration={t}    # 毒/麻痺/混乱/眠り
+ *   status {state} [duration={t}] [確率={P}]
+ *                                  # 毒/麻痺/混乱/眠り など。確率は 0〜99 の整数 %（省略は必中）。
+ *                                  # `[状態 id]` で宣言した id は継続ダメージ・行動不能・回復の反転などが働く (#870)
+ *   cure {state|all}               # 状態の解除 (#870)
  *   escape_battle                  # 戦闘離脱
  *   escape_dungeon                 # ダンジョン脱出
  *
@@ -26,7 +29,14 @@
  */
 
 import { hasOwn, safeAssign } from './ownProperty'
-import { applyDamageToHp, clampDamage, clampHp, MAX_HITS_PER_ACTION } from './battleLimits'
+import {
+  applyDamageToHp,
+  clampDamage,
+  clampHp,
+  MAX_HITS_PER_ACTION,
+  MAX_STATUS_CHANCE,
+  MAX_STATUS_TURNS,
+} from './battleLimits'
 import type { BattlePoseSprites } from './battleMotion'
 import {
   applyAffinityToDamage,
@@ -36,6 +46,16 @@ import {
   rollDeath,
   type BattleAffinity,
 } from './affinity'
+import {
+  resolveRuleId,
+  reversalOf,
+  STATUS_ALIASES,
+  statusSuccessRate,
+  type StatusRule,
+} from './statusEffects'
+
+// 従来どおり spellDsl から読めるように再エクスポートする（定義は statusEffects.ts）
+export { STATUS_ALIASES }
 
 export type EffectKind =
   | 'heal'
@@ -46,6 +66,7 @@ export type EffectKind =
   | 'debuff'
   | 'revive'
   | 'status'
+  | 'cure'
   | 'escape_battle'
   | 'escape_dungeon'
 
@@ -74,8 +95,13 @@ export interface ParsedEffect {
   duration?: number
   /** revive の hp 指定（full / half、省略時は full） */
   hp?: 'full' | 'half'
-  /** status の状態名（poison / paralysis / confusion / sleep 等） */
+  /** status / cure の状態名（poison / paralysis / confusion / sleep 等。cure は `all` で全解除） */
   state?: string
+  /**
+   * status の付与成功率（%、0〜`MAX_STATUS_CHANCE`、`確率=P`）(#870)。付くのは書いたときだけ。
+   * 無い = 必中（従来と同じ。耐性が無ければ乱数も使わない）
+   */
+  chance?: number
 }
 
 /**
@@ -101,8 +127,21 @@ export function parseEffect(input: string): ParsedEffect | null {
   ) {
     parsed.warnings = [...(parsed.warnings ?? []), '回数= は damage 専用のため無視した']
   }
+  // `確率=` は status 専用 (#870)
+  if (
+    parsed.kind !== 'status' &&
+    input
+      .trim()
+      .split(/\s+/)
+      .some((t) => t.startsWith(CHANCE_KEY + '='))
+  ) {
+    parsed.warnings = [...(parsed.warnings ?? []), '確率= は status 専用のため無視した']
+  }
   return parsed
 }
+
+/** `status` の「付与成功率」キー (#870) */
+const CHANCE_KEY = '確率'
 
 /** `damage` の「ヒット数」キー (#879)。`hits` は敵 AI の被弾記憶と被るので使わない */
 const COUNT_KEY = '回数'
@@ -174,11 +213,28 @@ function parseEffectInner(input: string): ParsedEffect | null {
     if (rest.length === 0) return null
     const state = rest[0]
     let duration: number | undefined
+    let chance: number | undefined
+    let warnings: string[] | undefined
     for (const t of rest.slice(1)) {
       const [k, v] = splitKv(t)
       if (k === 'duration' && v) duration = parseInt(v, 10)
+      if (k === CHANCE_KEY) {
+        const c = parseChance(v)
+        if (c.warning) warnings = [...(warnings ?? []), c.warning]
+        if (c.chance !== undefined) chance = c.chance
+      }
     }
-    return { kind: 'status', state, duration }
+    return {
+      kind: 'status',
+      state,
+      duration,
+      ...(chance !== undefined ? { chance } : {}),
+      ...(warnings ? { warnings } : {}),
+    }
+  }
+  if (verb === 'cure') {
+    if (rest.length === 0) return null
+    return { kind: 'cure', state: rest[0] }
   }
   return null
 }
@@ -219,6 +275,27 @@ function parseHitCount(raw: string | undefined): { count: number; warning?: stri
   return { count: n }
 }
 
+/**
+ * `確率=` の値を解釈する (#870)。0 以上の整数 % だけ有効。`MAX_STATUS_CHANCE`（99）を超えたら 99 に切って警告する。
+ * 負の整数は 0（必ず外れる）に切って警告する（誤記で必中にならない安全側）。それ以外の整数でない値は警告して未指定＝必中に落とす
+ */
+function parseChance(raw: string | undefined): { chance?: number; warning?: string } {
+  if (raw !== undefined && /^-\d+$/.test(raw)) {
+    return { chance: 0, warning: `確率=${raw} は負のため 0 にした（必ず外れる）` }
+  }
+  if (raw === undefined || !/^\d+$/.test(raw)) {
+    return { warning: `確率=${raw ?? ''} は 0〜${MAX_STATUS_CHANCE} の整数でないため必中にした` }
+  }
+  const n = Number(raw)
+  if (n > MAX_STATUS_CHANCE) {
+    return {
+      chance: MAX_STATUS_CHANCE,
+      warning: `確率=${raw} は上限 ${MAX_STATUS_CHANCE} を超えたため ${MAX_STATUS_CHANCE} にした`,
+    }
+  }
+  return { chance: n }
+}
+
 function splitKv(token: string): [string, string | undefined] {
   const eq = token.indexOf('=')
   if (eq < 0) return [token, undefined]
@@ -251,7 +328,12 @@ export interface EffectContext {
    * 計算した量（オーバーキル・回復の上限切りを含む）を出すので、効果の評価側が 1 対象ごとに知らせる。
    * 通知しない効果（builtin など）は呼び出し側が HP の前後差で代用する。
    */
-  onAmount?: (target: BattleEntity, kind: 'damage' | 'heal', amount: number) => void
+  onAmount?: (
+    target: BattleEntity,
+    kind: 'damage' | 'heal',
+    amount: number,
+    reversed?: boolean
+  ) => void
   /**
    * 即死で倒したことの通知 (#877)。`damage_full` の成功時と builtin の即死が呼ぶ。即死は HP をそのまま 0 にするので
    * ダメージの数字を持たない（`onAmount` は呼ばない）。戦闘側は hits に `instantDeath` を付け、数字を出さず「たおれた」だけにする
@@ -272,16 +354,19 @@ export interface EffectContext {
     target: BattleEntity,
     kind: 'damage' | 'heal' | 'miss',
     amount: number,
-    round: number
+    round: number,
+    reversed?: boolean
   ) => void
-}
-
-/** 状態異常の日本語名 → 効果 DSL の `status` が書く英語名（`BattleEntity.status` のキー）。敵 AI の `状態=` 条件がどちらの名前でも一致させるのに使う */
-export const STATUS_ALIASES: Readonly<Record<string, string>> = {
-  毒: 'poison',
-  麻痺: 'paralysis',
-  混乱: 'confusion',
-  眠り: 'sleep',
+  /**
+   * 状態の規則 (#870)。エンジンが `[状態]` から作って渡す。あれば `status` / `cure` の id を規則に引き、
+   * 回復・ダメージの反転（`reversalOf`）を `heal` / `damage` に適用する。無い・空は従来どおり（状態は印が付くだけ）
+   */
+  statusRules?: Readonly<Record<string, StatusRule>>
+  /**
+   * `status` で状態を書いた通知 (#870)。`key` は書いた状態の id（宣言した状態は規則の id、印だけの状態は DSL に書かれた名前）。
+   * エンジンが、今の手番の中で付いた状態をその手番の終わりに減らさないために使う
+   */
+  onStatus?: (target: BattleEntity, key: string, change?: 'apply' | 'cure') => void
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
@@ -303,8 +388,13 @@ export interface BattleEntity {
    * どれにも該当しなければ従来の `resist` を見る。通常攻撃は見ない（未対応）。無い敵は従来どおり
    */
   affinity?: BattleAffinity
-  /** 状態異常（毒/麻痺/混乱/眠り など）。値は残ターン */
+  /** 状態異常（毒/麻痺/混乱/眠り など）。値は残ターン。`[状態]` で宣言した id はエンジンが手番ごとに減らす (#870) */
   status?: Partial<Record<string, number>>
+  /**
+   * この者が付ける状態の付与成功率に足す点（%）(#870)。魔法の成長（使うほど状態異常魔法の成功率が上がる、#882）が埋める口。
+   * 未指定は 0。足した後も `MAX_STATUS_CHANCE`（99%）で頭打ち。`確率=` を書かない付与（必中）には効かない
+   */
+  statusChanceBonus?: number
   /** buff / debuff の累積値（atk+5 等）。残ターン管理は将来 Issue */
   buffs?: Partial<Record<StatKey, number>>
   /** 倒したときに得られる経験値（敵側のみ、味方は undefined） */
@@ -386,6 +476,16 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           ? Infinity
           : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
       for (const t of ctx.targets) {
+        // 回復の反転 (#870): ダメージになる（上限 9999・倒れている者は対象外）。蘇生 (revive) は反転しない
+        if (reversalOf(t, ctx.statusRules).heal) {
+          if (t.hp > 0) {
+            const dealt = applyDamageToHp(t, amount)
+            ctx.onAmount?.(t, 'damage', dealt, true)
+            log.push(`${t.name} は 回復が さかさまに はたらき ${dealt} のダメージ！`)
+            if (t.hp === 0) log.push(`${t.name} は たおれた！`)
+          }
+          continue
+        }
         const before = t.hp
         t.hp = clampHp(t.hp + amount, t.maxHp) // 下限 0: 負値の回復で HP を 0 未満にしない (#877)
         const healed = t.hp - before
@@ -402,6 +502,29 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
       const multi = effect.kind === 'damage' && (effect.count ?? 1) > 1
       /** 対象 1 体への 1 ヒット。`base` は計算済みの基礎ダメージ（damage_full は Infinity）、`round` はヒット番号 */
       const hitOne = (t: BattleEntity, base: number, round: number): void => {
+        // ダメージの反転 (#870): 属性相性・耐性を通した最終値が回復になる。即死は全回復。倒れている者は生き返らない
+        const reverse = reversalOf(t, ctx.statusRules).damage
+        /** 反転: `amount` だけ回復する（最大 HP で止まる。0 以下・倒れている者は何も起きない＝MISS） */
+        const healInstead = (amount: number): void => {
+          const healed = clampDamage(Math.max(0, amount))
+          if (healed > 0 && t.hp > 0) {
+            t.hp = clampHp(t.hp + healed, t.maxHp)
+            ctx.onAmount?.(t, 'heal', healed, true)
+            if (multi) ctx.onHit?.(t, 'heal', healed, round, true)
+            log.push(`${t.name} は ${healed} 回復した！`)
+          } else if (multi) {
+            ctx.onHit?.(t, 'miss', 0, round)
+          }
+        }
+        if (reverse && effect.kind === 'damage_full') {
+          if (t.hp > 0) {
+            const healed = t.maxHp - t.hp
+            t.hp = clampHp(t.maxHp, t.maxHp)
+            ctx.onAmount?.(t, 'heal', healed, true)
+            log.push(`${t.name} は 全回復した！`)
+          }
+          return
+        }
         // 属性相性 (#872)。吸収 > 無効 > 半減 > 弱点で該当した時点で打ち切り、どれにも該当しなければ下の従来の resist へ。
         // 即死 (damage_full) は属性 id `death` を見て成功率を変える（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 DEATH_CHANCE_CAP〉。既定は 100%）
         const kind = resolveAffinity(
@@ -434,6 +557,10 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           log.push(`${t.name} には きかなかった！`)
           return
         } else if (kind === 'halve' || kind === 'weak') {
+          if (reverse) {
+            healInstead(applyAffinityToDamage(kind, base))
+            return
+          }
           const dealt = applyDamageToHp(t, applyAffinityToDamage(kind, base))
           ctx.onAmount?.(t, 'damage', dealt)
           if (multi) ctx.onHit?.(t, 'damage', dealt, round)
@@ -456,6 +583,10 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           t.hp = 0
           ctx.onKill?.(t)
           log.push(`${t.name} は たおれた！`)
+          return
+        }
+        if (reverse && resist !== 0) {
+          healInstead(Math.floor(base * resist))
           return
         }
         const dealt = applyDamageToHp(t, Math.floor(base * resist))
@@ -526,11 +657,60 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
     }
     case 'status': {
       if (!effect.state) return ['(警告: status の state 名なし)']
+      // `[状態]` で宣言した id は規則に引く (#870)。日本語名の別名（毒 → poison）も引く。宣言の無い id は従来どおり印だけ
+      const ruleId = resolveRuleId(ctx.statusRules, effect.state)
+      const rule = ruleId !== null ? ctx.statusRules?.[ruleId] : undefined
       for (const t of ctx.targets) {
+        // 宣言した状態は倒れている者に付けない（宣言の無い印は従来どおり対象を選ばない）
+        if (rule && t.hp <= 0) continue
+        // 付与の成功判定 (#870)。`確率=` が無く耐性も無ければ必中で乱数を使わない（従来と同じ）。
+        // 耐性は属性相性の欄に書いた状態 id（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 99%〉）。
+        // 宣言の無い印には耐性を当てない（従来どおり、`確率=` だけで判定する）
+        const rate = statusSuccessRate(
+          rule && ruleId !== null ? resolveAffinity(t.affinity, ruleId) : 'normal',
+          effect.chance,
+          ctx.caster.statusChanceBonus
+        )
+        if (!rollDeath(rate, ctx.rng)) {
+          log.push(`${t.name} には きかなかった！`)
+          continue
+        }
         if (!t.status) t.status = {}
+        // 持続: 宣言した状態は duration= → 持続: → 既定の順で 1〜上限に収める。宣言の無い印は従来どおり（既定 1）
+        const turns = rule ? turnsOf(effect.duration, rule.duration) : (effect.duration ?? 1)
         // #370: state は DSL の自由記述文字列。"__proto__" でも own-property として書く
-        safeAssign(t.status, effect.state, effect.duration ?? 1)
-        log.push(`${t.name} は ${effect.state} になった！`)
+        safeAssign(t.status, ruleId ?? effect.state, turns)
+        ctx.onStatus?.(t, ruleId ?? effect.state)
+        log.push(`${t.name} は ${rule ? rule.name : effect.state} になった！`)
+      }
+      return log
+    }
+    case 'cure': {
+      // 状態の解除 (#870)。`all` は付いている状態すべて。付いていない状態は何も言わない
+      const which = effect.state
+      if (!which) return ['(警告: cure の state 名なし)']
+      for (const t of ctx.targets) {
+        const st = t.status
+        if (!st) continue
+        if (which === 'all') {
+          const keys = Object.keys(st).filter((k) => (st[k] ?? 0) > 0)
+          for (const k of keys) delete st[k]
+          if (keys.length > 0) {
+            log.push(`${t.name} の 状態異常が なおった！`)
+            ctx.onStatus?.(t, which, 'cure')
+          }
+          continue
+        }
+        const ruleId = resolveRuleId(ctx.statusRules, which)
+        for (const key of ruleId !== null && ruleId !== which ? [ruleId, which] : [which]) {
+          if (hasOwn(st, key) && (st[key] ?? 0) > 0) {
+            delete st[key]
+            const name =
+              ctx.statusRules && hasOwn(ctx.statusRules, key) ? ctx.statusRules[key].name : key
+            log.push(`${t.name} の ${name} が なおった！`)
+            ctx.onStatus?.(t, key, 'cure')
+          }
+        }
       }
       return log
     }
@@ -543,7 +723,14 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
   }
 }
 
-function rollRange(min: number, max: number, rng: () => number): number {
+/** 宣言した状態の持続ターン数。`duration=` が 1 以上の有限値ならそれ（切り捨て）、無ければ既定。`MAX_STATUS_TURNS` で頭打ち */
+function turnsOf(duration: number | undefined, fallback: number): number {
+  const d =
+    duration !== undefined && Number.isFinite(duration) && duration >= 1 ? duration : fallback
+  return Math.min(Math.floor(d), MAX_STATUS_TURNS)
+}
+
+export function rollRange(min: number, max: number, rng: () => number): number {
   if (min === max) return min
   const r = rng()
   // Math.random() は [0, 1) なので通常 max+1 にはならないが、
