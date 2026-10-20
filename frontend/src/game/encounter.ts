@@ -14,6 +14,7 @@ import type { MonsterDef } from '../types'
 import type { BattleEntity, EnemyLayout } from './spellDsl'
 import { hasOwn } from './ownProperty'
 import { posesField } from './battleMotion'
+import { affinityField } from './affinity'
 import { parseEncounterGroup, pickGroupIndex, resolveEncounterGroup } from './enemyGroup'
 
 /**
@@ -85,6 +86,7 @@ export function rollEncounter(input: {
       ...(def.actions && def.actions.length > 0 ? { actions: [...def.actions] } : {}),
       ...(def.counters && def.counters.length > 0 ? { counters: [...def.counters] } : {}),
       ...(def.onDeath ? { onDeath: def.onDeath } : {}),
+      ...affinityField(def.affinity),
       ...enemyLayoutField(def, at),
     })
   }

@@ -23,6 +23,7 @@
 
 import type { BattleEntity, EffectContext } from './spellDsl'
 import { hasOwn } from './ownProperty'
+import { DEATH_ATTRIBUTE, resolveAffinity } from './affinity'
 
 /**
  * builtin 関数のシグネチャ。
@@ -43,7 +44,9 @@ export const BUILTIN_SPELLS: Record<string, BuiltinSpellFn> = {
   zaraki: (ctx) => {
     const log: string[] = []
     for (const t of ctx.targets) {
-      if (t.resist?.['death'] === 0) {
+      // 即死耐性 (#872): 属性相性の `death` が無効・吸収なら効かない
+      const death = resolveAffinity(t.affinity, DEATH_ATTRIBUTE)
+      if (death === 'nullify' || death === 'absorb' || t.resist?.['death'] === 0) {
         log.push(`${t.name} には きかなかった！`)
         continue
       }

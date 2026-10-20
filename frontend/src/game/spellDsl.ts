@@ -25,6 +25,12 @@
 
 import { hasOwn, safeAssign } from './ownProperty'
 import type { BattlePoseSprites } from './battleMotion'
+import {
+  applyAffinityToDamage,
+  DEATH_ATTRIBUTE,
+  resolveAffinity,
+  type BattleAffinity,
+} from './affinity'
 
 export type EffectKind =
   | 'heal'
@@ -212,6 +218,12 @@ export interface BattleEntity {
   agi: number
   /** type 別耐性（'fire' → 0.5 = 半減 / 1.0 = 等倍 / 0 = 無効 / 2.0 = 弱点）。未指定は 1.0 */
   resist?: Partial<Record<string, number>>
+  /**
+   * 属性相性 (#872)。`MonsterDef.affinity`（`弱点:` / `半減:` / `無効:` / `吸収:`）を戦闘への組み立て時に写す。
+   * 呪文・特技・アイテムの `damage` / `damage_full` が、吸収 > 無効 > 半減 > 弱点の順に判定する（`resolveAffinity`）。
+   * どれにも該当しなければ従来の `resist` を見る。通常攻撃は見ない（未対応）。無い敵は従来どおり
+   */
+  affinity?: BattleAffinity
   /** 状態異常（毒/麻痺/混乱/眠り など）。値は残ターン */
   status?: Partial<Record<string, number>>
   /** buff / debuff の累積値（atk+5 等）。残ターン管理は将来 Issue */
@@ -303,6 +315,35 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           ? Infinity
           : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
       for (const t of ctx.targets) {
+        // 属性相性 (#872)。吸収 > 無効 > 半減 > 弱点で該当した時点で打ち切り、どれにも該当しなければ下の従来の resist へ。
+        // 即死 (damage_full) は属性 id `death` を見る: 無効・吸収は効かない（吸収でも回復はしない）。半減・弱点は即死に意味が無いので見ない
+        const kind = resolveAffinity(
+          t.affinity,
+          effect.kind === 'damage_full' ? DEATH_ATTRIBUTE : effect.type
+        )
+        if (effect.kind === 'damage_full') {
+          if (kind === 'nullify' || kind === 'absorb') {
+            log.push(`${t.name} には きかなかった！`)
+            continue
+          }
+        } else if (kind === 'absorb') {
+          // 吸収: 計算したダメージ量だけ回復する（最大 HP で切る。倒れている対象は生き返らせない）
+          if (t.hp > 0) t.hp = Math.min(t.maxHp, t.hp + base)
+          ctx.onAmount?.(t, 'heal', base)
+          log.push(`${t.name} は ${base} のダメージを吸収した！`)
+          continue
+        } else if (kind === 'nullify') {
+          // 無効: ダメージ 0・通知なし（戦闘側で MISS）。追加効果は無い
+          log.push(`${t.name} には きかなかった！`)
+          continue
+        } else if (kind === 'halve' || kind === 'weak') {
+          const dealt = applyAffinityToDamage(kind, base)
+          t.hp = Math.max(0, t.hp - dealt)
+          ctx.onAmount?.(t, 'damage', dealt)
+          log.push(`${t.name} に ${dealt} のダメージ！`)
+          if (t.hp === 0) log.push(`${t.name} は たおれた！`)
+          continue
+        }
         // own-property のみ見る (#368)。素朴な `t.resist?.[effect.type]` は Object.prototype も
         // 辿ってしまい、DSL の `type=...` が自由記述の effect.type が `constructor` 等と一致すると
         // （truthy な関数オブジェクトを返すため）`??` のフォールバックが発火せず耐性倍率が
