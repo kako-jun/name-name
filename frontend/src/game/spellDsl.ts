@@ -253,6 +253,11 @@ export interface EffectContext {
    */
   onAmount?: (target: BattleEntity, kind: 'damage' | 'heal', amount: number) => void
   /**
+   * 即死で倒したことの通知 (#877)。`damage_full` の成功時と builtin の即死が呼ぶ。即死は HP をそのまま 0 にするので
+   * ダメージの数字を持たない（`onAmount` は呼ばない）。戦闘側は hits に `instantDeath` を付け、数字を出さず「たおれた」だけにする
+   */
+  onKill?: (target: BattleEntity) => void
+  /**
    * 複数ヒットの乗り換え先 (#879)。行動者から見て**相手陣営の単体**を狙う `回数=N` で、標的が途中で倒れたら、ここ（相手陣営の全員）の
    * 並び順で先頭の生存者へ残りのヒットを回す。エンジンが渡す。自分・仲間を狙うとき・未指定は乗り換え先なし
    * （標的が倒れたら残りは打ち切り。仲間に流さない）
@@ -412,11 +417,13 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           // 吸収: 計算したダメージ量だけ回復する（最大 HP で切る。倒れている対象は生き返らせない）
           // 計算量が 0 のときは回復も吸収ログも出さない。通知も無いので、戦闘側は HP が変わらない対象を MISS（hits に miss）にする
           // 複数ヒットでは、吸収したそのヒットだけが heal になる (#879)
-          if (base > 0) {
-            if (t.hp > 0) t.hp = Math.min(t.maxHp, t.hp + base)
-            ctx.onAmount?.(t, 'heal', base)
-            if (multi) ctx.onHit?.(t, 'heal', base, round)
-            log.push(`${t.name} は ${base} のダメージを吸収した！`)
+          // 吸収量はダメージと同じく 9999 で頭打ち（吸収=受けるはずだったダメージ。回復量一般には上限を掛けない、#877）
+          const absorbed = clampDamage(base)
+          if (absorbed > 0) {
+            if (t.hp > 0) t.hp = clampHp(t.hp + absorbed, t.maxHp)
+            ctx.onAmount?.(t, 'heal', absorbed)
+            if (multi) ctx.onHit?.(t, 'heal', absorbed, round)
+            log.push(`${t.name} は ${absorbed} のダメージを吸収した！`)
           } else if (multi) {
             ctx.onHit?.(t, 'miss', 0, round)
           }
@@ -438,18 +445,20 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
         // 辿ってしまい、DSL の `type=...` が自由記述の effect.type が `constructor` 等と一致すると
         // （truthy な関数オブジェクトを返すため）`??` のフォールバックが発火せず耐性倍率が
         // 数値でなくなってしまう。
-        const resist =
+        // 負の耐性は 0（無効）に丸める (#877)。HP を増やす向きの相性は属性相性の `吸収:` (#872) に一本化した
+        const resistRaw =
           effect.type && t.resist && hasOwn(t.resist, effect.type)
             ? (t.resist[effect.type] ?? 1.0)
             : 1.0
-        // 即死 (damage_full) は HP をそのまま 0 にする（ダメージ上限は掛けない）。通知・ログの数字だけ上限で頭打ち
-        let dealt: number
+        const resist = resistRaw < 0 ? 0 : resistRaw
+        // 即死 (damage_full) は HP をそのまま 0 にする（ダメージ上限は掛けない）。ダメージの数字は持たず「たおれた」だけを知らせる (#877)
         if (effect.kind === 'damage_full') {
-          dealt = clampDamage(t.hp)
           t.hp = 0
-        } else {
-          dealt = applyDamageToHp(t, Math.floor(base * resist))
+          ctx.onKill?.(t)
+          log.push(`${t.name} は たおれた！`)
+          return
         }
+        const dealt = applyDamageToHp(t, Math.floor(base * resist))
         // 耐性 0（無効）は通知しない＝呼び出し側で MISS になる。それ以外は 0 でも計算上のダメージとして知らせる (#745)
         if (resist !== 0) ctx.onAmount?.(t, 'damage', dealt)
         if (multi) ctx.onHit?.(t, resist !== 0 ? 'damage' : 'miss', resist !== 0 ? dealt : 0, round)
@@ -510,7 +519,7 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
     case 'revive': {
       for (const t of ctx.targets) {
         if (t.hp > 0) continue
-        t.hp = effect.hp === 'half' ? Math.floor(t.maxHp / 2) : t.maxHp
+        t.hp = clampHp(effect.hp === 'half' ? Math.floor(t.maxHp / 2) : t.maxHp, t.maxHp)
         log.push(`${t.name} は生き返った！`)
       }
       return log

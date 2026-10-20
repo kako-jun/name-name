@@ -285,7 +285,7 @@ describe('即死 (damage_full / zaraki) の即死耐性: 属性 id death (#872)'
     const t = ent({ hp: 77 })
     const { amounts } = run('damage_full', t)
     expect(t.hp).toBe(0)
-    expect(amounts).toEqual([{ kind: 'damage', amount: 77 }])
+    expect(amounts).toEqual([]) // 即死は数字を持たない（onKill で知らせる、#877）
   })
   it('無効: death は効かない（HP 不変・通知なし）', () => {
     const t = ent({ affinity: { nullify: ['death'] } })

@@ -120,20 +120,31 @@ describe('呪文・特技・アイテムの damage（効果 DSL）', () => {
     expect(t.hp).toBe(50000 - 9999)
   })
 
-  it('吸収の回復量にはダメージ上限を掛けない（最大 HP で止まる）', () => {
+  it('吸収量もダメージと同じく 9999 で頭打ち（さらに最大 HP で止まる）', () => {
     const t = ent({ hp: 1, maxHp: 50000, affinity: { absorb: ['fire'] } })
     const amounts: { kind: string; amount: number }[] = []
-    applyEffect(parseEffect('damage 12000..12000 type=fire')!, ctxFor([t], amounts))
-    expect(t.hp).toBe(12001)
-    expect(amounts).toEqual([{ kind: 'heal', amount: 12000 }])
+    const log = applyEffect(parseEffect('damage 12000..12000 type=fire')!, ctxFor([t], amounts))
+    expect(t.hp).toBe(10000)
+    expect(amounts).toEqual([{ kind: 'heal', amount: 9999 }])
+    expect(log[0]).toContain('9999 のダメージを吸収')
+    // 最大 HP クランプは維持
+    const u = ent({ hp: 9000, maxHp: 9500, affinity: { absorb: ['fire'] } })
+    applyEffect(parseEffect('damage 12000..12000 type=fire')!, ctxFor([u]))
+    expect(u.hp).toBe(9500)
   })
 
-  it('即死 (damage_full) は高 HP でも倒す。数字だけ 9999 で頭打ち', () => {
+  it('即死 (damage_full) は高 HP でも倒す。数字は出さず（onAmount なし・onKill）ログも「たおれた」だけ', () => {
     const t = ent({ hp: 50000, maxHp: 50000 })
     const amounts: { kind: string; amount: number }[] = []
-    applyEffect(parseEffect('damage_full')!, ctxFor([t], amounts))
+    const killed: unknown[] = []
+    const log = applyEffect(parseEffect('damage_full')!, {
+      ...ctxFor([t], amounts),
+      onKill: (k) => killed.push(k),
+    })
     expect(t.hp).toBe(0)
-    expect(amounts).toEqual([{ kind: 'damage', amount: 9999 }])
+    expect(amounts).toEqual([])
+    expect(killed).toEqual([t])
+    expect(log).toEqual([`${t.name} は たおれた！`])
   })
 })
 
@@ -276,7 +287,7 @@ describe('エンジン経由（全経路）で数字・ログ・イベントが 
     expect(e.getState().events[0].hits[0].amount).toBe(9999)
   })
 
-  it('builtin の即死（HP の前後差で数字を出す経路）も 9999 で止まる', () => {
+  it('builtin の即死（zaraki）は数字を持たず instantDeath の hit になる（amount は HP の前後差）', () => {
     const e = new BattleEngine(
       [ent({ id: 'hero' })],
       [ent({ id: 'boss', hp: 50000, maxHp: 50000, atk: 0 })],
@@ -284,7 +295,14 @@ describe('エンジン経由（全経路）で数字・ログ・イベントが 
     )
     e.selectSpell({ name: 'ザラキ', mp: 1, target: '敵全体', builtin: 'zaraki' })
     expect(e.getState().enemies[0].hp).toBe(0)
-    expect(e.getState().events[0].hits[0]).toMatchObject({ kind: 'damage', amount: 9999 })
+    // 即死は数字を持たない (#877): instantDeath の印と HP の前後差。表示は数字なしで「たおれた」だけ
+    expect(e.getState().events[0].hits[0]).toMatchObject({
+      kind: 'damage',
+      amount: 50000,
+      hpBefore: 50000,
+      hpAfter: 0,
+      instantDeath: true,
+    })
   })
 
   it('負値 heal で味方 HP が 0 未満にならない（エンジン経由）', () => {
