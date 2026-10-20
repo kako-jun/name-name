@@ -24,6 +24,7 @@
  */
 
 import { hasOwn, safeAssign } from './ownProperty'
+import { applyDamageToHp, clampDamage, clampHp } from './battleLimits'
 import type { BattlePoseSprites } from './battleMotion'
 import {
   applyAffinityToDamage,
@@ -302,7 +303,7 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
       for (const t of ctx.targets) {
         const before = t.hp
-        t.hp = Math.min(t.maxHp, t.hp + amount)
+        t.hp = clampHp(t.hp + amount, t.maxHp) // 下限 0: 負値の回復で HP を 0 未満にしない (#877)
         const healed = t.hp - before
         // 計算上の回復量（上限で切らない）。完全回復は回復した分
         ctx.onAmount?.(t, 'heal', Number.isFinite(amount) ? amount : healed)
@@ -342,8 +343,7 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           log.push(`${t.name} には きかなかった！`)
           continue
         } else if (kind === 'halve' || kind === 'weak') {
-          const dealt = applyAffinityToDamage(kind, base)
-          t.hp = Math.max(0, t.hp - dealt)
+          const dealt = applyDamageToHp(t, applyAffinityToDamage(kind, base))
           ctx.onAmount?.(t, 'damage', dealt)
           log.push(`${t.name} に ${dealt} のダメージ！`)
           if (t.hp === 0) log.push(`${t.name} は たおれた！`)
@@ -357,8 +357,14 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           effect.type && t.resist && hasOwn(t.resist, effect.type)
             ? (t.resist[effect.type] ?? 1.0)
             : 1.0
-        const dealt = effect.kind === 'damage_full' ? t.hp : Math.floor(base * resist)
-        t.hp = Math.max(0, t.hp - dealt)
+        // 即死 (damage_full) は HP をそのまま 0 にする（ダメージ上限は掛けない）。通知・ログの数字だけ上限で頭打ち
+        let dealt: number
+        if (effect.kind === 'damage_full') {
+          dealt = clampDamage(t.hp)
+          t.hp = 0
+        } else {
+          dealt = applyDamageToHp(t, Math.floor(base * resist))
+        }
         // 耐性 0（無効）は通知しない＝呼び出し側で MISS になる。それ以外は 0 でも計算上のダメージとして知らせる (#745)
         if (resist !== 0) ctx.onAmount?.(t, 'damage', dealt)
         log.push(`${t.name} に ${dealt} のダメージ！`)

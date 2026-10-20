@@ -42,6 +42,7 @@ import {
   type HitSource,
 } from './enemyAi'
 import { hasOwn } from './ownProperty'
+import { applyDamageToHp, clampDamage } from './battleLimits'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -259,9 +260,8 @@ export class BattleEngine {
       : this.firstAlive(this.state.enemies)
     if (!target) return
 
-    const dmg = this.computeAttackDamage(hero, target)
     const hpBefore = target.hp
-    target.hp = Math.max(0, target.hp - dmg)
+    const dmg = applyDamageToHp(target, this.computeAttackDamage(hero, target))
     this.recordAttack(hero, target, hpBefore, dmg)
     this.appendLog(`${hero.name} の こうげき！`)
     this.appendLog(`${target.name} に ${dmg} の ダメージ！`)
@@ -704,9 +704,8 @@ export class BattleEngine {
     const picked = this.pickedParty(choice)
     const target =
       picked ?? alive[Math.min(alive.length - 1, Math.floor(this.rng() * alive.length))]
-    const dmg = this.computeAttackDamage(enemy, target)
     const hpBefore = target.hp
-    target.hp = Math.max(0, target.hp - dmg)
+    const dmg = applyDamageToHp(target, this.computeAttackDamage(enemy, target))
     this.recordAttack(enemy, target, hpBefore, dmg)
     this.appendLog(`${enemy.name} の こうげき！`)
     this.appendLog(`${target.name} は ${dmg} の ダメージを うけた！`)
@@ -860,9 +859,8 @@ export class BattleEngine {
     if (choice.kind === 'skill' && this.useEnemySkill(enemyIndex, choice, true)) return
     const hero = this.pickedParty(choice) ?? this.firstAlive(this.state.party)
     if (!hero) return
-    const dmg = this.computeAttackDamage(enemy, hero)
     const hpBefore = hero.hp
-    hero.hp = Math.max(0, hero.hp - dmg)
+    const dmg = applyDamageToHp(hero, this.computeAttackDamage(enemy, hero))
     this.recordAttack(enemy, hero, hpBefore, dmg)
     // 既定の文言（仮。上書きの仕組みは未実装）。特技を使うときは特技の message / 既定の「つかった！」が出る
     this.appendLog(`${enemy.name} の ${attackLine}`)
@@ -909,9 +907,8 @@ export class BattleEngine {
         continue
       }
       const hero = this.pickedParty(choice) ?? firstHero
-      const dmg = this.computeAttackDamage(enemy, hero)
       const hpBefore = hero.hp
-      hero.hp = Math.max(0, hero.hp - dmg)
+      const dmg = applyDamageToHp(hero, this.computeAttackDamage(enemy, hero))
       this.recordAttack(enemy, hero, hpBefore, dmg)
       this.appendLog(`${enemy.name} の こうげき！`)
       this.appendLog(`${hero.name} は ${dmg} の ダメージを うけた！`)
@@ -1066,6 +1063,11 @@ export class BattleEngine {
    * 呪文・アイテム・特技 (#834) 1 回を記録する (#745)。効果は DSL・builtin のどちらでも HP を直接書き換えるので、
    * 効果の前後の HP 差で結果を導く（減った=damage / 増えた=heal）。対象にしたのに HP が変わらなかった者は miss。
    */
+  /** ダメージ数字は 1 回のダメージの上限 (#877) を超えない（HP の前後差で代用する builtin の即死など）。回復は切らない */
+  private capHitAmount(kind: 'damage' | 'heal', amount: number): number {
+    return kind === 'damage' ? clampDamage(amount) : amount
+  }
+
   private recordEffect(
     kind: 'spell' | 'item' | 'skill',
     actor: BattleEntity,
@@ -1090,7 +1092,10 @@ export class BattleEngine {
         hits.push({
           target: ref,
           kind: k,
-          amount: computed.kind === k ? computed.amount : Math.abs(e.hp - hpBefore),
+          amount: this.capHitAmount(
+            k,
+            computed.kind === k ? computed.amount : Math.abs(e.hp - hpBefore)
+          ),
           hpBefore,
           hpAfter: e.hp,
         })
@@ -1107,7 +1112,13 @@ export class BattleEngine {
         // 計算上のダメージが 0（防御が上回るなど）は MISS でなく「0」。MISS は回避・無効（耐性 0）のときだけ
         hits.push({ target: ref, kind: 'damage', amount: 0, hpBefore, hpAfter: e.hp })
       } else if (e.hp < hpBefore) {
-        hits.push({ target: ref, kind: 'damage', amount: hpBefore - e.hp, hpBefore, hpAfter: e.hp })
+        hits.push({
+          target: ref,
+          kind: 'damage',
+          amount: clampDamage(hpBefore - e.hp),
+          hpBefore,
+          hpAfter: e.hp,
+        })
       } else if (e.hp > hpBefore) {
         hits.push({ target: ref, kind: 'heal', amount: e.hp - hpBefore, hpBefore, hpAfter: e.hp })
       } else if (targets.includes(e) && !(computed?.kind === 'heal' && computed.amount === 0)) {
