@@ -3,6 +3,7 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
+import type { BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -311,6 +312,23 @@ function parseEntity(
       return { ok: false, error: `${path}.onDeath は文字列である必要があります` }
     }
     if (raw.onDeath.trim() !== '') entity.onDeath = raw.onDeath.trim()
+  }
+  if (raw.affinity !== undefined) {
+    // 属性相性 (#872)。`[モンスター]` の `弱点:` 等と同じ 4 欄。各欄は属性 id の文字列の配列（小文字に寄せる）
+    if (!isRecord(raw.affinity)) {
+      return { ok: false, error: `${path}.affinity はオブジェクトである必要があります` }
+    }
+    const out: BattleAffinity = {}
+    for (const key of ['weak', 'halve', 'nullify', 'absorb'] as const) {
+      const v = raw.affinity[key]
+      if (v === undefined) continue
+      if (!Array.isArray(v) || v.some((a) => typeof a !== 'string')) {
+        return { ok: false, error: `${path}.affinity.${key} は文字列の配列である必要があります` }
+      }
+      const ids = (v as string[]).map((a) => a.trim().toLowerCase()).filter((a) => a !== '')
+      if (ids.length > 0) out[key] = ids
+    }
+    if (Object.keys(out).length > 0) entity.affinity = out
   }
   return { ok: true, value: entity }
 }

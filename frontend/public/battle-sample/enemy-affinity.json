@@ -1,0 +1,79 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "spells": [
+    {
+      "id": "fire",
+      "name": "ほのお",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 20..20 type=fire"
+    },
+    {
+      "id": "water",
+      "name": "みず",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 20..20 type=water"
+    },
+    {
+      "id": "wind",
+      "name": "かぜ",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 20..20 type=wind"
+    },
+    {
+      "id": "thunder",
+      "name": "いなずま",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 20..20 type=thunder"
+    },
+    {
+      "id": "ice",
+      "name": "こおり",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 20..20 type=ice"
+    },
+    {
+      "id": "plain",
+      "name": "むぞくこうげき",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 20..20"
+    },
+    { "id": "death", "name": "デス", "mp": 1, "target": "敵単体", "effect": "damage_full" }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 999, "mp": 99, "atk": 25, "def": 4, "agi": 6 }
+  ],
+  "enemies": [
+    {
+      "id": "tiger",
+      "name": "ほのおのとら",
+      "hp": 300,
+      "atk": 1,
+      "def": 2,
+      "agi": 3,
+      "affinity": {
+        "weak": ["water"],
+        "halve": ["ice"],
+        "nullify": ["wind"],
+        "absorb": ["thunder"]
+      }
+    },
+    {
+      "id": "ghost",
+      "name": "ぼうれい",
+      "hp": 300,
+      "atk": 1,
+      "def": 2,
+      "agi": 3,
+      "affinity": { "weak": ["fire"], "nullify": ["death"] }
+    },
+    { "id": "slime", "name": "ふつうのスライム", "hp": 300, "atk": 1, "def": 2, "agi": 3 }
+  ]
+}
