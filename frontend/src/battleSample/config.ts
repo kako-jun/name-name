@@ -4,6 +4,7 @@
  */
 import type { BattleEntity } from '../game/spellDsl'
 import type { MonsterLoot, StatusDef } from '../types'
+import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
@@ -41,6 +42,28 @@ export type ScreenSizeId = (typeof SCREEN_SIZES)[number]['id']
  */
 export const RESOLUTION_MODES = ['main', 'dpr'] as const
 export type ResolutionMode = (typeof RESOLUTION_MODES)[number]
+/**
+ * 戦闘の結果（経験値・ゴールド・戦利品、#831）を 1 つの文にする。ホストが `onClose` で受け取る `BattleResult` の確認用（サンプルページの表示）。
+ * 戦利品は獲得順に `品 ×個数（ドロップ / ぬすむ / ぬすむ〔レア〕・元の敵）`、無ければ「なし」
+ */
+export function describeBattleResult(
+  result: BattleResult,
+  names: Readonly<Record<string, string>> = {}
+): string {
+  const name = (id: string): string =>
+    Object.prototype.hasOwnProperty.call(names, id) ? names[id] : id
+  const loot =
+    result.loot.length === 0
+      ? 'なし'
+      : result.loot
+          .map((l) => {
+            const via = l.via === 'drop' ? 'ドロップ' : l.rare ? 'ぬすむ・レア' : 'ぬすむ'
+            return `${name(l.itemId)} ×${l.count}（${via}・${l.enemyName}）`
+          })
+          .join(' / ')
+  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}`
+}
+
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 
 /**

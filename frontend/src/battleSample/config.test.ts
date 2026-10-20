@@ -22,6 +22,7 @@ import {
   defaultSpells,
   defaultEnemies,
   defaultParty,
+  describeBattleResult,
   describeView,
   effectivePartyCount,
   extractConfigUrl,
@@ -1957,5 +1958,40 @@ describe('同梱の例 public/battle-sample/loot.json (#831)', () => {
     expect(r.value.enemies[1].loot?.stealLimit).toBe('3')
     expect(r.value.spells.filter((s) => s.effect?.startsWith('steal')).length).toBe(5)
     expect(r.value.itemNames.potion).toBe('ポーション')
+  })
+})
+
+describe('describeBattleResult (#831)', () => {
+  const entry = (over: Record<string, unknown>) => ({
+    itemId: 'potion',
+    count: 1,
+    via: 'drop' as const,
+    rare: false,
+    enemyId: 's',
+    enemyName: 'スライム',
+    ...over,
+  })
+
+  it('戦利品なし・あり（表示名・ドロップ / ぬすむ / ぬすむ・レア）', () => {
+    expect(describeBattleResult({ outcome: 'escaped', exp: 0, gold: 0, loot: [], items: [] })).toBe(
+      '結果: escaped  exp=0  gold=0  戦利品: なし'
+    )
+    const text = describeBattleResult(
+      {
+        outcome: 'victory',
+        exp: 5,
+        gold: 3,
+        loot: [
+          entry({ via: 'steal', rare: true, itemId: 'elixir' }),
+          entry({ count: 2 }),
+          entry({ via: 'steal' }),
+        ],
+        items: [],
+      },
+      { potion: 'ポーション' }
+    )
+    expect(text).toBe(
+      '結果: victory  exp=5  gold=3  戦利品: elixir ×1（ぬすむ・レア・スライム） / ポーション ×2（ドロップ・スライム） / ポーション ×1（ぬすむ・スライム）'
+    )
   })
 })
