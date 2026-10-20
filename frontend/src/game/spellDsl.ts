@@ -253,8 +253,9 @@ export interface EffectContext {
    */
   onAmount?: (target: BattleEntity, kind: 'damage' | 'heal', amount: number) => void
   /**
-   * 複数ヒットの標的の候補 (#879)。単体対象の技が `回数=N` のとき、標的が途中で倒れたら、ここ（行動の相手陣営の全員。
-   * 並び順どおり先頭の生存者）へ残りのヒットを回す。エンジンが渡す。未指定は `targets` で代用（＝乗り換え先なし）
+   * 複数ヒットの乗り換え先 (#879)。行動者から見て**相手陣営の単体**を狙う `回数=N` で、標的が途中で倒れたら、ここ（相手陣営の全員）の
+   * 並び順で先頭の生存者へ残りのヒットを回す。エンジンが渡す。自分・仲間を狙うとき・未指定は乗り換え先なし
+   * （標的が倒れたら残りは打ち切り。仲間に流さない）
    */
   pool?: BattleEntity[]
   /**
@@ -479,7 +480,7 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           for (const t of alive) hitOne(t, base, round)
         }
       } else if (ctx.targets.length === 1) {
-        const pool = ctx.pool ?? ctx.targets
+        const pool = ctx.pool ?? []
         let current = ctx.targets[0]
         for (let round = 0; round < count; round++) {
           if (current.hp <= 0) {

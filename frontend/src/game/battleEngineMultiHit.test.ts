@@ -100,7 +100,7 @@ describe('エンジン経由の複数ヒット', () => {
     ])
   })
 
-  it('回数未指定: 従来の経路（hits 1 件・round なし・）', () => {
+  it('回数未指定: 従来の経路（hits 1 件・round なし）', () => {
     const { e } = setup([ent({ id: 's1' })])
     e.selectSpell({ name: 'ファイア', mp: 1, target: '敵単体', effect: 'damage 4..7' })
     const hits = e.getState().events[0].hits
@@ -127,14 +127,72 @@ describe('エンジン経由の複数ヒット', () => {
     expect(run()).toBe(run())
   })
 
-  it('特技（performSkill）でも複数ヒット。敵が味方へ撃つと味方陣営の中で乗り換える', () => {
-    const { e } = setup([ent({ id: 's1' })])
+  it('特技（performSkill）でも複数ヒット。敵が相手単体を撃つと相手陣営（味方）の中で乗り換える', () => {
+    const rng = () => 0
+    const e = new BattleEngine(
+      [ent({ id: 'h1', hp: 50, maxHp: 50 }), ent({ id: 'h2', hp: 100, maxHp: 100 })],
+      [ent({ id: 's1' })],
+      { rng }
+    )
     e.performSkill(
       { side: 'enemy', index: 0 },
-      { name: 'ひっかき', target: '相手単体', effect: 'damage 30 回数=3' }
+      { name: 'ひっかき', target: '相手単体', effect: 'damage 30 回数=4' }
     )
     const hits = e.getState().events[e.getState().events.length - 1].hits
-    expect(hits.map((h) => h.hpAfter)).toEqual([70, 40, 10])
+    expect(hits.map((h) => [h.target.index, h.hpAfter])).toEqual([
+      [0, 20],
+      [0, 0],
+      [1, 70],
+      [1, 40],
+    ])
+  })
+
+  describe('自分・仲間を狙う複数ヒットは、標的が倒れたら打ち切り（仲間に流さない）', () => {
+    const mk = () => {
+      const rng = () => 0
+      return new BattleEngine(
+        [ent({ id: 'h1' })],
+        [ent({ id: 's1', hp: 50, maxHp: 50 }), ent({ id: 's2', hp: 90, maxHp: 90 })],
+        { rng }
+      )
+    }
+    it.each(['自分', '仲間単体'])('敵の特技 %s', (target) => {
+      const e = mk()
+      e.performSkill(
+        { side: 'enemy', index: 0 },
+        { name: 'じばく', target, effect: 'damage 30 回数=5' }
+      )
+      const st = e.getState()
+      const hits = st.events[st.events.length - 1].hits
+      expect(hits.map((h) => [h.target.index, h.hpAfter])).toEqual([
+        [0, 20],
+        [0, 0],
+      ])
+      expect(st.enemies[1].hp).toBe(90)
+    })
+    it('死亡時の行動（倒れた使い手が仲間単体へ）', () => {
+      const e = mk()
+      e.getState().enemies[0].hp = 0
+      e.performSkill(
+        { side: 'enemy', index: 0 },
+        { name: 'みちづれ', target: '仲間単体', effect: 'damage 30 回数=5' },
+        undefined,
+        { allowDowned: true }
+      )
+      expect(e.getState().enemies[1].hp).toBe(0)
+      expect(e.getState().enemies[0].hp).toBe(0)
+    })
+    it('味方の 味方単体 呪文でも倒れたら打ち切り（敵・他の味方は不変）', () => {
+      const e = new BattleEngine(
+        [ent({ id: 'h1', hp: 40, maxHp: 40 }), ent({ id: 'h2' })],
+        [ent({ id: 's1' })],
+        { rng: () => 0 }
+      )
+      e.selectSpell({ name: 'じゅうし', mp: 1, target: '味方単体', effect: 'damage 30 回数=4' })
+      const st = e.getState()
+      expect(st.events[0].hits.every((h) => h.target.index === 0)).toBe(true)
+      expect(st.events[0].hits.map((h) => h.hpAfter)).toEqual([10, 0])
+    })
   })
 
   it('アイテムに回数を付けても無視（警告ログ）', () => {

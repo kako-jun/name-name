@@ -143,7 +143,7 @@ describe('applyEffect 複数ヒット', () => {
     expect(log.filter((l) => l.includes('たおれた'))).toHaveLength(1)
   })
 
-  it('pool が無ければ乗り換えず、倒れたら打ち切り', () => {
+  it('pool が無ければ（自分・仲間狙い）乗り換えず、倒れたら打ち切り', () => {
     const a = ent({ id: 'a', hp: 5, maxHp: 5 })
     const { hits } = run('damage 6 回数=4', { targets: [a] })
     expect(hits).toHaveLength(1)

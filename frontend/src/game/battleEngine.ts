@@ -374,7 +374,7 @@ export class BattleEngine {
       caster,
       targets,
       rng: this.rng,
-      pool: this.poolOf(targets),
+      pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
       onHit: (t, kind, amount, round) =>
         multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
@@ -428,7 +428,7 @@ export class BattleEngine {
       caster: user,
       targets,
       rng: this.rng,
-      pool: this.poolOf(targets),
+      pool: this.poolOf(user, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
       onHit: (t, kind, amount, round) =>
         multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
@@ -504,7 +504,7 @@ export class BattleEngine {
       caster,
       targets,
       rng: this.rng,
-      pool: this.poolOf(targets),
+      pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
       onHit: (t, kind, amount, round) =>
         multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
@@ -1066,13 +1066,16 @@ export class BattleEngine {
     return ei !== -1 ? { side: 'enemy', index: ei } : null
   }
 
-  /** 効果の標的（先頭）がいる側の全員。複数ヒットで標的が倒れたときの乗り換え先 (#879)。標的がいなければ undefined */
-  private poolOf(targets: BattleEntity[]): BattleEntity[] | undefined {
+  /**
+   * 複数ヒットで標的が倒れたときの乗り換え先 (#879)。**行動者から見て相手陣営の単体を狙うときだけ**その陣営の全員を返す。
+   * 自分・仲間（同陣営）を狙うとき・標的がいないときは undefined（倒れたら残りのヒットは打ち切り。仲間に流さない）
+   */
+  private poolOf(caster: BattleEntity, targets: BattleEntity[]): BattleEntity[] | undefined {
     const first = targets[0]
     if (!first) return undefined
-    if (this.state.party.includes(first)) return this.state.party
-    if (this.state.enemies.includes(first)) return this.state.enemies
-    return undefined
+    const casterIsParty = this.state.party.includes(caster)
+    const opponents = casterIsParty ? this.state.enemies : this.state.party
+    return opponents.includes(first) ? opponents : undefined
   }
 
   /** 全員の現在 HP を控える（呪文・アイテムの効果の前後差から結果を導く） */
