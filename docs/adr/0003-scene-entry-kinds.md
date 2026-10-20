@@ -478,3 +478,27 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **camera 3つ組と `paperDollOutline` は触っていない**（7c の範囲）。
 - **Host 越し。** `ScreenEffectsController` は `NovelRenderer` を import せず、自分で定義する `ScreenEffectsHost`（5 メソッド: `getScreenSize` / `setStagePosition` / `isNovelStyle` / `setDialogAlpha` / `setSeekBarBlackoutHidden`）だけを見る。`TimeController` はコンストラクタ注入。
 - **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（フィールド・メソッドは `exposeScreenEffectsMembers`、レンダラ本体からの呼び出しを `vi.spyOn` で観測する場合は `screenEffectsControllerOf`）。分離前の実装を写した参照実装との1フレーム刻みの状態列比較は `ScreenEffectsController.equivalence.test.ts`。
+
+## #828 7c での追記（2026-10-21、#735 7/8 の第3段）
+
+背景（7a）・画面効果（7b）・カメラ3つ組・紙人形輪郭を束ねる薄いコンポジタ `Stage` を、`frontend/src/game/Stage.ts` に置いた。これで #828（演出レイヤー群の分離）は完了する。**実装の置き場は `Stage`** である。挙動と本 ADR の契約は変えていない。本文中の語は、次のとおり読み替える。
+
+| 旧（レンダラの private） | 新 |
+| --- | --- |
+| `cameraMode` / `cameraOrientation` / `cameraElevation` / `paperDollOutline` | `Stage` の private（唯一の書き手）。読み取りは getter（`stage.cameraMode` など） |
+| `processDirective` の `[カメラ:]` / `[紙人形輪郭:]` が行っていた、フィールド更新と背景板・大道具・立ち絵への伝播 | `stage.setCamera(mode, orientation, elevation)` / `stage.setPaperDollOutline(config)`（伝播は Host の `applyCamera` / `applyPaperDollOutline`。順序は旧実装どおり、カメラは 背景板 → 大道具 → 立ち絵、輪郭は 立ち絵 → 大道具） |
+| `resetAndStartEvents` の演出消去（画面効果のタイマー停止・背景・輪郭・暗転・カメラ・スクリム退避リセット） | `stage.reset(carry)`（`carry` は `carryPolicyFor` の戻り値の `CarryPolicy`） |
+| `applyState` の演出の消去と復元 | `stage.restore(state)` |
+| `getSnapshot` の演出フィールド（背景4・`isBlackout`・カメラ3・`paperDollOutline` の計9個） | `stage.capture()`（セーブ形式のフィールド集合は不変） |
+| `destroy` の画面効果・背景タイマー停止と背景解放 | `stage.cancelAllTimers()` / `stage.release()` |
+
+- **複数モジュールをまたいでリセットしてよいのは `resetAndStartEvents` / `applyState` / `destroy` の3つだけ。** この3つの本体のうち演出部分が `stage.*` の呼び出しになった。立ち絵・大道具・背景板・動画・幕・スポットライト・テロップなど演出以外のレイヤーは Stage に入れず、レンダラが前後で呼ぶ。`endStory` の `screenEffects.reset()` + `resetStagePosition()` と、`[場面転換]` の背景クリアは個別の経路なので Stage には寄せていない。
+- **`reset(policy)` の順序（`resetAndStartEvents` の実行順序）。** レンダラのタイマー停止 → 動画・背景板・大道具・幕・立ち絵のクリア → `stage.reset(carry)`（画面効果のタイマー停止とオーバーレイ消去 → 背景: 持ち越しなら `cancelPendingLoad()`（`bgLoadToken` を進める）→ `finishBackgroundCrossfadeInstant()`、持ち越さないなら `clearBackground()`（内部で同じくトークンを進める）→ `clearBackgroundColor()` → 輪郭: 持ち越さないときだけ解除 → 暗転解除 → カメラ既定へ → スクリム退避リセット）→ 選択肢を隠す → BGM → SE → イベント絵・テロップ・スポットライト → ダイアログ → カーソル読み込み → 再生開始。Issue #828 の「タイマー停止 → 演出消去 → BGM → カーソル → 再生開始」に揃い、7b で別々だった「画面効果の消去（BGM の前）」と「スクリム退避リセット（BGM の後）」は `stage.reset` の中にまとまった（音声と独立で、同一の同期区間内なので観測できる差はない）。**カメラの伝播を立ち絵のクリア / 退場開始より後に置く順序は旧実装のまま**（持ち越しで退場に入る立ち絵が、退場開始の後で再配置される）。
+- **持ち越しは `carryPolicyFor` 経由のみ。** `Stage.reset` が見るのは `CarryPolicy.preserveBackgroundForTransition` の1か所だけで、個別フラグは増やしていない（`carryBgm` は音声の持ち越しなのでレンダラが見る）。`resetAndStartEvents` が受け取る方針は `SceneEntryController` が `carryPolicyFor` から渡したものだけで、省略は「持ち越さない」。
+- **`restore(state)` は `reset` と別に、持ち越しなしで宣言的に復元する。** 画面効果（揺れ・フラッシュ/フェード）の停止 → stage 位置を原点へ → スクリム退避リセット → 背景画像 → 地色 → 暗転 → 輪郭 → カメラ、の順。`reset(carryPolicyFor('restore'))` を経由しない（経由すると一度背景を消してから置き直すことになり、同一パスのときのクロスフェードやテクスチャ再利用の挙動が変わるため）。`resetAndStartEvents` は stage 位置を戻さず `applyState` / `endStory` は戻す、という 7b の挙動もそのまま。揺れ中の `resetAndStartEvents` で位置が戻らない件は #913 として別に判断する（テストでは現状を固定してある）。
+- **`applyState` 内で処理の位置が動いた点。** 旧実装は演出の消去・復元を `applyState` の随所に散らしていたが、`stage.restore` にまとめたため次が動いた。① 効果停止・stage 位置・スクリム退避のリセットが、`gameState.fromJSON`・`cursor.restorePosition`・ページ数による clamp・`onStoryEndedChangeCallback`・`syncEndingOverlayVisibility` より後へ、また `cancelSeSequence`・`clearTelopLayer` より後へ移った。② 背景・地色・暗転・輪郭・カメラ（背景板・大道具・立ち絵への `setCamera` と輪郭の伝播）が、動画・イベント絵の restore と `applyEventImageVisibility`、背景板・大道具・幕の restore より前へ移った（暗転の復元は動画とイベント絵の restore より前、立ち絵の `setCamera` は背景板・大道具・幕の restore より前）。いずれも同一の同期区間内で、移した処理同士は互いの状態を読まず独立のため、観測できる差はない（`applyEventImageVisibility` はレイヤーの `visible` を書くだけ、`setCamera` と輪郭の伝播は動画・イベント絵に触れない、SE とテロップは画面効果と独立、`onStoryEndedChangeCallback` の受け手は NovelPlayer の `setState` と postMessage だけでレンダラへ同期的に戻らない）。
+- **`cancelAllTimers()` は背景のクロスフェードタイマーも止める。** 旧 `destroy` は画面効果のタイマー停止だけで、背景のタイマーは後段の `clearBackgroundEntries()` が止めていた。同一の同期区間内で、止める順序を前に出すだけなので観測できる差はない。
+- **`getSnapshot` はキー順を保つ。** セーブ JSON 回帰テスト（`snapshotJson` / `playbackCursor`）がキー順まで固定しているため、レンダラは `stage.capture()` の値を従来の位置に並べ直して入れる（`...` で展開しない）。
+- **Host 越し。** `Stage` は `NovelRenderer` を import せず、自分で定義する `StageHost`（`BackgroundHost` + `ScreenEffectsHost` + `applyCamera` / `applyPaperDollOutline`）だけを見る。`BackgroundController` と `ScreenEffectsController` は Stage がコンストラクタで作る（`stage.background` / `stage.effects`）。z 順のため、積むのは `attachBackground`（下地ベタ・背景画像）と `attachEffects`（スクリム・暗転・効果オーバーレイ）の2回に分ける。
+- **ファイル名は `Stage.ts`。** 既存に大文字小文字だけが違うファイル（`stage.ts`）は無い。
+- **テスト。** 単体は `Stage.test.ts`（新規開始 / 進行 / 復元の `reset(policy)` 後の状態、クロスフェード中の復元、capture のフィールド集合、capture → restore の往復、`cancelAllTimers` 後にタイマーが残らないこと）。旧実装との等価性は `Stage.equivalence.test.ts`（Stage 導入前の演出まわりの呼び出し順を写した参照実装と、メソッド呼び出し列・毎フレームの状態を比較）。レンダラとの配線は `NovelRenderer.stage.test.ts`（`stage.reset` の呼び出し位置と引数、`applyState` の伝播順、`destroy` の順序）。他レイヤーとの相対順序と見た目は、実 WebGL で同一シナリオを固定時刻で撮った画素ハッシュの比較（base と新ブランチで差分0）で確認した。

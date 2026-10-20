@@ -3,7 +3,7 @@
  *
  * 画面効果の中身は ScreenEffectsController.test.ts に任せ、ここでは「レンダラがどの時点でどのメソッドを
  * どの順で呼ぶか」だけを見る。守る契約:
- *  - resetAndStartEvents: 画面効果の消去は BGM 停止より前、かつ stage 位置は戻さない
+ *  - resetAndStartEvents: 画面効果の消去（スクリム退避リセットを含む）は BGM 停止より前、かつ stage 位置は戻さない
  *  - applyState: 効果の停止 → stage 位置リセット → スクリム退避リセット → 暗転復元 の順
  *  - getSnapshot の isBlackout は ScreenEffectsController.capture 由来で、セーブ形式は変わらない
  *  - processDirective の Shake/Flash/Fade/Blackout は引数をそのまま渡す
@@ -155,8 +155,10 @@ describe('NovelRenderer × ScreenEffectsController 配線 (#828 7b)', () => {
     // 旧実装どおり: 新しいイベント列の開始では stage 位置を戻さない（原点リセットは applyState / endStory のみ）
     expect(stagePos).not.toHaveBeenCalled()
     expect(h.app.stage.position.x).toBe(9)
-    // 旧実装どおり: スクリム退避リセットは背景クリア等のあと（BGM 停止より後）
-    expect(order.indexOf('resetNovelScrimState')).toBeGreaterThan(order.indexOf('stopBgm'))
+    // 7c: スクリム退避リセットは Stage.reset の末尾（演出消去のひとかたまり）で行う。旧実装では BGM 停止の後だったが、
+    // 音声と独立で同期区間内なので観測できる差はない。Issue #828 の順序（タイマー停止 → 演出消去 → BGM）に揃えた。
+    expect(order.indexOf('resetNovelScrimState')).toBeGreaterThan(order.indexOf('reset'))
+    expect(order.indexOf('resetNovelScrimState')).toBeLessThan(order.indexOf('stopBgm'))
   })
 
   it('endStory（confinement 外への遷移）は揺れを止めて stage を原点へ戻し、終劇フェードを startEndStoryBlackoutFade に任せる', () => {

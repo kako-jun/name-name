@@ -45,7 +45,7 @@ export const HINT_FONT_SIZE = 10
 const HINT_COLOR = 0xdddddd
 const HINT_BOTTOM = 3
 /** 案内 1 行の高さの見積もり（文字の大きさ + 上下の余白。計測が使えない環境でも同じ値で配置できる） */
-export const HINT_LINE_HEIGHT = HINT_FONT_SIZE + 3
+export const HINT_LINE_HEIGHT = HINT_FONT_SIZE + 4
 
 export interface HintRect {
   x: number
