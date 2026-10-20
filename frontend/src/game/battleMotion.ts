@@ -116,6 +116,11 @@ export const CAST_HIT_MS = 400
 export const NOTICE_MS = 700
 /** 1 つの行動が終わってから次の行動を始めるまでの間（ms） */
 export const ACTION_GAP_MS = 120
+
+/** 状態異常の継続ダメージ・満了 (#870, `kind: 'status'`) の、命中までの ms。本人は動かず、窓に状態名が出てから数字が出る */
+export const STATUS_HIT_MS = 200
+/** 同上、行動 1 回の最短の長さ（命中・のけぞりが短くても、状態名と数字を読める時間） */
+export const STATUS_MS = 500
 /** 被ダメージ: のけぞって戻る時間 / 倒れ切るまでの時間（のけぞりの終わりから）（ms） */
 export const RECOIL_MS = 260
 export const DOWN_MS = 320
@@ -216,8 +221,17 @@ export function buildActionTimeline(
   if (kind === 'notice')
     return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0, hitInterval: MULTI_HIT_INTERVAL_MS }
   const motionEnd =
-    kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS : CAST_MS
-  const hitAt = kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS : CAST_HIT_MS
+    kind === 'attack'
+      ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS
+      : kind === 'status'
+        ? STATUS_MS
+        : CAST_MS
+  const hitAt =
+    kind === 'attack'
+      ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS
+      : kind === 'status'
+        ? STATUS_HIT_MS
+        : CAST_HIT_MS
   // のけぞり・倒れが途中で切れないよう、受ける側の動きが終わるまで次の行動を待つ
   let end = motionEnd
   // 複数ヒットの間隔は最大 round で自動調整する（総時間が約 2 秒に収まる）
@@ -269,7 +283,7 @@ export interface ActorSample {
 /** 行動する側の、開始から t ms 時点の位置とポーズ */
 export function sampleActor(kind: ActionKind, t: number): ActorSample {
   const time = Number.isFinite(t) ? Math.max(0, t) : 0
-  if (kind === 'notice') return { forward: 0, pose: 'idle' }
+  if (kind === 'notice' || kind === 'status') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
     // 呪文の構えは cast、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
     return {

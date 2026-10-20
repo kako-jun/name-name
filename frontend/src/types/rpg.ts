@@ -197,6 +197,8 @@ export interface RPGProject {
   spells?: Record<string, import('../types').SpellDef>
   /** 同上、特技 (#834)。敵が使う技（呪文とは別のマスターデータ） */
   skills?: Record<string, import('../types').SkillDef>
+  /** 同上、状態 (#870)。`[状態 id]` で宣言した毒・混乱・回復の反転など。戦闘エンジンの `statuses` に渡す */
+  statuses?: Record<string, import('../types').StatusDef>
   /** 同上、パーティメンバー (#175) */
   party?: Record<string, import('../types').PartyMemberDef>
   /** `party` のキーのドキュメント上の出現順 (#736)。整数風 ID でも定義順を保つために別持ち */

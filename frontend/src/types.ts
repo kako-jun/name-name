@@ -241,6 +241,28 @@ export interface SkillDef {
   telegraph?: string
 }
 
+/**
+ * 状態定義 (#870、状態異常システム)。`[状態 id]` ブロック。毒・混乱・回復の反転などを宣言で足す。
+ * 名前以外は書いたままの文字列で、解釈と不正値の警告は `game/statusEffects.ts` が行う。
+ */
+export interface StatusDef {
+  id: string
+  /** 表示名（戦闘の状態表示・ログに出る） */
+  name: string
+  /** 既定の持続ターン数（`持続:`）。効果 DSL の `duration=` が優先 */
+  duration?: string
+  /** 手番の終わりの継続ダメージ（`継続ダメージ:` `1/16` / `5..8` / `5`） */
+  tickDamage?: string
+  /** 行動の乱れ（`行動:` `不能` / `混乱` / `通常`） */
+  action?: string
+  /** 回復・ダメージの反転（`反転:` `回復` / `ダメージ` をカンマ区切り） */
+  reverse?: string
+  /** 解ける条件（`解除:` `被ダメージ`） */
+  cure?: string
+  /** 持続が尽きたときの効果（`満了:` `戦闘不能`） */
+  expire?: string
+}
+
 export interface PlayerStartData {
   x: number
   y: number
@@ -495,6 +517,7 @@ export type Event =
   | { Item: ItemDef }
   | { Spell: SpellDef }
   | { Skill: SkillDef }
+  | { Status: StatusDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {

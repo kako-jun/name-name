@@ -10,7 +10,7 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { PartyMemberDef, SkillDef, SpellDef } from '../types'
+import type { PartyMemberDef, SkillDef, SpellDef, StatusDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -128,6 +128,8 @@ export interface FieldBattleRoster {
   spells?: Record<string, SpellDef>
   /** 特技のマスター (#835)。敵の `行動:` の候補の id から引く。無ければ特技の候補は通常攻撃になる */
   skills?: Record<string, SkillDef>
+  /** 状態のマスター (#870)。`[状態]` の宣言。あれば戦闘エンジンの `statuses` に渡す（継続ダメージ・行動不能・回復の反転などが働く） */
+  statuses?: Record<string, StatusDef>
 }
 
 /**
@@ -377,6 +379,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   const engine = new BattleEngine(party, enemies, {
     ...(settings.atb ? { atb: settings.atb } : {}),
     ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
+    ...(roster.statuses ? { statuses: roster.statuses } : {}),
   })
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,

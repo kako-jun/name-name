@@ -69,7 +69,11 @@ export const DEFAULT_RUN: Required<Omit<RunOptions, 'engineFactory' | 'detect'>>
 
 export function runScenario(scenario: Scenario, options: RunOptions = {}): ScenarioResult {
   const o = { ...DEFAULT_RUN, ...options }
-  const detect = options.detect ?? { maxDamage: MAX_DAMAGE }
+  const detect = {
+    ...(options.detect ?? { maxDamage: MAX_DAMAGE }),
+    // 宣言した状態の不変条件 (#870)。宣言の無いシナリオは検査しない
+    ...(scenario.statuses ? { statusIds: Object.keys(scenario.statuses) } : {}),
+  }
   const factory = options.engineFactory ?? realEngineFactory
   const rng = budgetRng(scenario.seed, o.rngBudgetPerOp)
 

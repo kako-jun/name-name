@@ -115,6 +115,7 @@ export class TopDownRenderer {
   private masterPartyOrder: string[] = []
   private masterSpells: Record<string, import('../types').SpellDef> | undefined
   private masterSkills: Record<string, import('../types').SkillDef> | undefined
+  private masterStatuses: Record<string, import('../types').StatusDef> | undefined
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
@@ -244,6 +245,7 @@ export class TopDownRenderer {
     this.masterPartyOrder = gameData.partyOrder ?? []
     this.masterSpells = gameData.spells
     this.masterSkills = gameData.skills
+    this.masterStatuses = gameData.statuses
     this.battleSettings = readFieldBattleSettings(gameData)
     this.encounterCooldown = 0
     this.deferredStepTrigger = null
@@ -711,6 +713,7 @@ export class TopDownRenderer {
           order: this.masterPartyOrder,
           spells: this.masterSpells,
           skills: this.masterSkills,
+          statuses: this.masterStatuses,
         },
         enemies,
         gate: this.inputGate,

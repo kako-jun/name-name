@@ -106,6 +106,7 @@ import {
   emptyPlayback,
   enqueueEvents,
   fitPopupFontSize,
+  groupHitsByRound,
   isPlaybackBusy,
   messageWindowText,
   popupCenterOffset,
@@ -137,6 +138,7 @@ import {
   SIDE_LABEL_STROKE_WIDTH,
   fitHpLabel,
   fitLabel,
+  fitEnemyLabelWithStatus,
   computeStatusColumns,
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_HEIGHT,
@@ -512,6 +514,10 @@ export class BattleScreen extends Container {
   private seenEventTotal = 0
   /** 再生が追いつくまで画面に出す HP（key=`party:0` 等）。命中の瞬間に確定値へ進める。再生が空になれば捨てる */
   private hpOverride = new Map<string, number>()
+  /** 演出が追いつくまで画面に出す状態名 (#870)。HP（hpOverride）と同じく、再生位置で切り替える。再生が空になったら捨てる */
+  private statusOverride = new Map<string, string[]>()
+  /** 直近に画面へ出した状態名。演出の取り込み時に「変わる前の表示」として使う */
+  private shownStatusLabels = new Map<string, string[]>()
   private popups: DamagePopup[] = []
   /** ダメージ数字の層（敵ラベル層の手前・パネルの奥） */
   private popupLayer: Container | null = null
@@ -1981,7 +1987,7 @@ export class BattleScreen extends Container {
         // 縁取りは文字の両側にはみ出すので、そのぶん（左右 2 本）を最大幅から引く
         const w = Math.max(0, (this.sideLabelWidths[i] ?? 0) - SIDE_LABEL_STROKE_WIDTH * 2)
         view.label.text =
-          `${fitLabel(e.name, w, SIDE_LABEL_FONT_SIZE)}\n` +
+          `${fitEnemyLabelWithStatus(e.name, this.statusLabelsOf('enemy', i, e0), w, SIDE_LABEL_FONT_SIZE)}\n` +
           fitHpLabel(e.hp, e.maxHp, w, SIDE_LABEL_FONT_SIZE)
       }
     }
@@ -2004,7 +2010,7 @@ export class BattleScreen extends Container {
       const isActor = p.hp > 0 && i === this.actorIndex()
       if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
-      this.fitStatusName(t, p.name, cols?.name.w ?? Infinity)
+      this.fitStatusName(t, this.withStatusTags(p.name, p0, 'party', i), cols?.name.w ?? Infinity)
       const lbl = cols?.showLabels ?? true
       const showMaxHp = cols?.showMaxHp ?? true
       this.statusHpLabels[i].text = lbl ? 'HP' : ''
@@ -2021,6 +2027,28 @@ export class BattleScreen extends Container {
       for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.style.fill = fill
       t.style.fill = fill
     }
+  }
+
+  /** 画面に出す状態名。FF 式の演出中は再生位置の値（エンジンの今の値は先に進んでいる）。出した値は控える */
+  private statusLabelsOf(side: 'party' | 'enemy', index: number, entity: BattleEntity): string[] {
+    const key = this.entityKey(side, index)
+    const labels = this.statusOverride.get(key) ?? this.engine.getStatusLabels(entity)
+    this.shownStatusLabels.set(key, labels)
+    return labels
+  }
+
+  /**
+   * 味方側の名前に状態異常の表示名を前置きする (#870)。`[どく] ゆうしゃ`。省略は末尾から削られるので、状態名を先頭に置いて見える側に残す。
+   * `[状態]` を宣言していない戦闘・状態の付いていない者は名前そのまま
+   */
+  private withStatusTags(
+    name: string,
+    entity: BattleEntity,
+    side: 'party' | 'enemy',
+    index: number
+  ): string {
+    const tags = this.statusLabelsOf(side, index, entity)
+    return tags.length === 0 ? name : `[${tags.join('・')}] ${name}`
   }
 
   /**
@@ -2104,7 +2132,7 @@ export class BattleScreen extends Container {
     if (hero) {
       const isActor = hero.hp > 0 && this.actorIndex() === 0
       if (this.layoutMode === 'front' && this.atbMarkers[0]) this.atbMarkers[0].visible = isActor
-      this.heroStatsText.text = `${hero.name}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
+      this.heroStatsText.text = `${this.withStatusTags(hero.name, hero, 'party', 0)}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
     // ログ末尾 visibleLogLines 件（front は LOG_VISIBLE_LINES、side は layoutSide が決めた行数）
@@ -2388,12 +2416,30 @@ export class BattleScreen extends Container {
     this.seenEventTotal = s.eventTotal
     const fresh = s.events.slice(Math.max(0, s.events.length - added))
     for (const ev of fresh) {
+      if (ev.statusLabels) this.holdStatusLabels(ev.statusLabels.party, ev.statusLabels.enemies)
       for (const hit of ev.hits) {
         const key = this.entityKey(hit.target.side, hit.target.index)
         if (!this.hpOverride.has(key)) this.hpOverride.set(key, hit.hpBefore)
       }
     }
     this.playback = enqueueEvents(this.playback, fresh)
+  }
+
+  /** 演出が追いつくまで、直近に出した状態名（無ければ今の値）を見せ続ける (#870) */
+  private holdStatusLabels(party: readonly unknown[], enemies: readonly unknown[]): void {
+    const s = this.engine.getState()
+    const hold = (side: 'party' | 'enemy', list: readonly BattleEntity[], n: number): void => {
+      for (let i = 0; i < n; i++) {
+        const key = this.entityKey(side, i)
+        if (this.statusOverride.has(key) || !list[i]) continue
+        this.statusOverride.set(
+          key,
+          this.shownStatusLabels.get(key) ?? this.engine.getStatusLabels(list[i])
+        )
+      }
+    }
+    hold('party', s.party, party.length)
+    hold('enemy', s.enemies, enemies.length)
   }
 
   /**
@@ -2413,10 +2459,18 @@ export class BattleScreen extends Container {
         this.spawnPopup(hit, fire.sinceHit, popupStackIndex(fire.event.hits, hit))
       }
       changed = true
+      // 状態名も命中の瞬間に、その行動を記録した時点の値へ進める。複数ヒットは最後の round で (#870)
+      const sl = fire.event.statusLabels
+      const rounds = groupHitsByRound(fire.event)
+      if (sl && rounds[rounds.length - 1]?.round === fire.round) {
+        sl.party.forEach((l, i) => this.statusOverride.set(this.entityKey('party', i), l))
+        sl.enemies.forEach((l, i) => this.statusOverride.set(this.entityKey('enemy', i), l))
+      }
     }
     this.advancePopups(dt)
     if (!isPlaybackBusy(this.playback)) {
       if (this.hpOverride.size > 0) this.hpOverride.clear()
+      if (this.statusOverride.size > 0) this.statusOverride.clear()
       if (wasBusy) changed = true // コマンドの有効・無効、生死の見た目を確定値で整え直す
     }
     if (changed) this.refresh()
