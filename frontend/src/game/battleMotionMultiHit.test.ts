@@ -171,3 +171,40 @@ describe('popupStackIndex: 同じ対象への連続ヒットの段', () => {
     expect(popupStackIndex([e0, other], other)).toBe(0)
   })
 })
+
+describe('全 round が発火する（heal・miss・混在・大きい round）', () => {
+  const roundsOf = (hits: BattleHit[]) => playAll(ev(hits), 1).map((l) => l.round)
+  const kindChain = (n: number, kind: BattleHit['kind']) =>
+    chain(n).map((h) => ({ ...h, kind, hpBefore: 100, hpAfter: kind === 'heal' ? 100 : 100 }))
+
+  it('吸収 5 ヒット（heal だけ）', () => {
+    expect(roundsOf(kindChain(5, 'heal'))).toEqual([0, 1, 2, 3, 4])
+  })
+  it('無効 5 ヒット（miss だけ）', () => {
+    expect(roundsOf(kindChain(5, 'miss'))).toEqual([0, 1, 2, 3, 4])
+  })
+  it('damage と heal の混在', () => {
+    const hits = chain(6).map((h, i) => (i % 2 ? { ...h, kind: 'heal' as const } : h))
+    expect(roundsOf(hits)).toEqual([0, 1, 2, 3, 4, 5])
+  })
+  it('最大 round が大きい', () => {
+    const hits = [hit({ round: 0, kind: 'heal' }), hit({ round: 40, kind: 'miss' })]
+    expect(roundsOf(hits)).toEqual([0, 40])
+    const tl = eventTimeline(ev(hits))
+    expect(tl.duration).toBeGreaterThan(tl.hitAt + 40 * MULTI_HIT_INTERVAL_MS)
+  })
+  it('round なし・全 0 の heal/miss の duration は従来値のまま', () => {
+    const base = buildActionTimeline('spell', {})
+    expect(eventTimeline(ev([hit({ kind: 'heal' })])).duration).toBe(base.duration)
+    expect(eventTimeline(ev([hit({ kind: 'miss', round: 0 })])).duration).toBe(base.duration)
+    expect(base.duration).toBe(buildActionTimeline('spell', { lastRound: 0 }).duration)
+  })
+})
+
+describe('popupStackIndex: 陣営をまたぐ', () => {
+  it('同じ index でも party と enemy は別の対象として数える', () => {
+    const a = hit({ target: { side: 'party', index: 0 } })
+    const b = hit({ target: { side: 'enemy', index: 0 } })
+    expect(popupStackIndex([a, b], b)).toBe(0)
+  })
+})

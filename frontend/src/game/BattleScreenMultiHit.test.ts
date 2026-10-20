@@ -190,6 +190,46 @@ describe('FF 式 複数ヒットの順次再生', () => {
     for (const p of ps) expect(p.text.style.fill).toBe(POPUP_COLORS.heal)
   })
 
+  it('吸収 5 ヒット: 全ヒットの数字が出て、再生後の HP 表示は最終値（hpOverride 空）', () => {
+    const { s, engine } = setup([
+      entity('slime', {
+        atk: 0,
+        hp: 500,
+        maxHp: 1000,
+        affinity: { weak: [], halve: [], nullify: [], absorb: ['fire'] },
+      }),
+    ])
+    engine.selectSpell({
+      name: 'ほのお',
+      mp: 1,
+      target: '敵単体',
+      effect: 'damage 20 type=fire 回数=5',
+    })
+    s.redraw(800, 450)
+    expect(engine.getState().events[0].hits.map((h) => h.kind)).toEqual(Array(5).fill('heal'))
+    const appear = stepAndRecord(s, 6000)
+    expect(appear.filter((a) => a.text === '20')).toHaveLength(5)
+    expect((s as unknown as { hpOverride: Map<string, number> }).hpOverride.size).toBe(0)
+  })
+
+  it('無効 5 ヒット: MISS が 5 つ出る', () => {
+    const { s, engine } = setup([
+      entity('slime', {
+        atk: 0,
+        affinity: { weak: [], halve: [], nullify: ['fire'], absorb: [] },
+      }),
+    ])
+    engine.selectSpell({
+      name: 'ほのお',
+      mp: 1,
+      target: '敵単体',
+      effect: 'damage 20 type=fire 回数=5',
+    })
+    s.redraw(800, 450)
+    const appear = stepAndRecord(s, 6000)
+    expect(appear.filter((a) => a.text === 'MISS')).toHaveLength(5)
+  })
+
   it('従来の単発（round なし）は発火 1 回・数字 1 つ・段 0・時刻も従来どおり', () => {
     const { s, engine } = setup([entity('slime', { atk: 0 })])
     engine.selectSpell({ name: 'ひとつ', mp: 1, target: '敵単体', effect: 'damage 20' })

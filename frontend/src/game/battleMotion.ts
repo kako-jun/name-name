@@ -182,6 +182,8 @@ export function buildActionTimeline(
     downs?: boolean
     lastDamageRound?: number
     lastDownRound?: number
+    /** 種別を問わない最大 round。この round の命中まで行動を終わらせない */
+    lastRound?: number
   } = {}
 ): ActionTimeline {
   if (kind === 'notice') return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0 }
@@ -194,6 +196,8 @@ export function buildActionTimeline(
   if (opts.damages) end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0) + RECOIL_MS)
   if (opts.downs)
     end = Math.max(end, hitTimeOf(hitAt, opts.lastDownRound ?? 0) + RECOIL_MS + DOWN_MS)
+  // heal・miss だけの round も取りこぼさない（最大 round が 0 なら何もしない = 従来と同じ）
+  if ((opts.lastRound ?? 0) > 0) end = Math.max(end, hitTimeOf(hitAt, opts.lastRound ?? 0))
   return { duration: end + ACTION_GAP_MS, hitAt }
 }
 
@@ -203,12 +207,20 @@ export function eventTimeline(event: BattleActionEvent): ActionTimeline {
   const downs = event.hits.some((h) => h.kind === 'damage' && h.hpAfter <= 0)
   let lastDamageRound = 0
   let lastDownRound = 0
+  let lastRound = 0
   for (const h of event.hits) {
+    lastRound = Math.max(lastRound, hitRound(h))
     if (h.kind !== 'damage') continue
     lastDamageRound = Math.max(lastDamageRound, hitRound(h))
     if (h.hpAfter <= 0) lastDownRound = Math.max(lastDownRound, hitRound(h))
   }
-  return buildActionTimeline(event.kind, { damages, downs, lastDamageRound, lastDownRound })
+  return buildActionTimeline(event.kind, {
+    damages,
+    downs,
+    lastDamageRound,
+    lastDownRound,
+    lastRound,
+  })
 }
 
 export interface ActorSample {
@@ -428,7 +440,6 @@ export function popupText(hit: Pick<BattleHit, 'kind' | 'amount'>): string {
   return hit.kind === 'miss' ? 'MISS' : String(Math.max(0, Math.round(hit.amount)))
 }
 
-/** 数字のフォントサイズ（px）。枠の一辺の 0.35 倍（FF らしく読みやすい大きさ）。小さすぎ・大きすぎは抑える */
 /** 同じ対象への連続ヒット (#879) の数字を縦にずらす段数の上限（超えたら最下段へ戻る）と、1 段のずれ（数字の高さに対する比） */
 export const POPUP_STACK_LEVELS = 5
 export const POPUP_STACK_STEP = 0.85
@@ -442,6 +453,7 @@ export function popupStackIndex(hits: readonly BattleHit[], hit: BattleHit): num
   return n % POPUP_STACK_LEVELS
 }
 
+/** 数字のフォントサイズ（px）。枠の一辺の 0.35 倍（FF らしく読みやすい大きさ）。小さすぎ・大きすぎは抑える */
 export const POPUP_FONT_RATIO = 0.35
 export const POPUP_FONT_MIN = 20
 export const POPUP_FONT_MAX = 56
