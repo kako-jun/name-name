@@ -168,6 +168,7 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         size: collect_size(entries),
         scale: collect_scale(entries),
         affinity: collect_affinity(entries),
+        loot: collect_loot(entries),
     })
 }
 
@@ -357,6 +358,22 @@ fn interpret_scale(raw: Option<&str>) -> (Option<f64>, Option<String>) {
 
 /// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
 /// 書式の検証（条件・候補の構文）は runtime が行い、不正な行はそこで無視する。1 行も無ければ None。
+/// `ドロップ` / `ぬすむ` / `ぬすむレア` / `ぬすむ回数` を戦利品の宣言にする (#831)。生文字列で透過し、4 欄とも空なら None。
+fn collect_loot(entries: &[(String, String)]) -> Option<Box<MonsterLoot>> {
+    let loot = MonsterLoot {
+        drops: collect_values(entries, &["ドロップ", "drop", "drops"]),
+        steal: collect_values(entries, &["ぬすむ", "steal"]),
+        steal_rare: collect_values(entries, &["ぬすむレア", "stealRare", "steal_rare"]),
+        steal_limit: collect_values(entries, &["ぬすむ回数", "stealLimit", "steal_limit"])
+            .and_then(|v| v.into_iter().next()),
+    };
+    if loot.is_empty() {
+        None
+    } else {
+        Some(Box::new(loot))
+    }
+}
+
 fn collect_actions(entries: &[(String, String)]) -> Option<Vec<String>> {
     collect_values(entries, &["行動", "action"])
 }

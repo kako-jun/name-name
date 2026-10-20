@@ -1022,6 +1022,22 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         }
                     }
                 }
+                if let Some(loot) = &m.loot {
+                    for (label, lines) in [
+                        ("ドロップ", &loot.drops),
+                        ("ぬすむ", &loot.steal),
+                        ("ぬすむレア", &loot.steal_rare),
+                    ] {
+                        if let Some(lines) = lines {
+                            for l in lines {
+                                out.push_str(&format!("{label}: {l}\n"));
+                            }
+                        }
+                    }
+                    if let Some(l) = &loot.steal_limit {
+                        out.push_str(&format!("ぬすむ回数: {l}\n"));
+                    }
+                }
                 if let Some(b) = &m.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
@@ -1905,8 +1921,15 @@ mod tests {
                 nullify: vec!["wind".to_string()],
                 absorb: vec!["thunder".to_string()],
             }),
+            loot: Some(Box::new(MonsterLoot {
+                drops: Some(vec!["potion 確率=25".to_string(), "ether".to_string()]),
+                steal: Some(vec!["potion 確率=80".to_string()]),
+                steal_rare: Some(vec!["elixir".to_string()]),
+                steal_limit: Some("2".to_string()),
+            })),
         }));
         let out = emit(&doc);
+        assert!(out.contains("ドロップ: potion 確率=25\nドロップ: ether\nぬすむ: potion 確率=80\nぬすむレア: elixir\nぬすむ回数: 2\n"));
         assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("反撃: 条件=受けた=物理 候補=こうげき\n死亡時: 候補=自爆\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
