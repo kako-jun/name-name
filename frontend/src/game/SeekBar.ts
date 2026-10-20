@@ -40,6 +40,11 @@ const THUMB_RADIUS = 7
 export const ACTIVE_THUMB_SCALE = 1.6
 /** 通常（inactive）時のコンテナ不透明度 (#350)。控えめに常時表示しつつボタンより背面に見せる。 */
 export const INACTIVE_ALPHA = 0.2
+/**
+ * 無効（終劇＝行き止まり、#815）時のコンテナ不透明度。DOM 側の disabled ボタン（Skip 等、`opacity-30`）の
+ * 流儀に合わせる。見えてはいるが操作できないことを見た目で示す（inactive の控えめ表示より薄い）。
+ */
+export const DISABLED_ALPHA = 0.1
 /** 操作（タップ/ドラッグ）が止まってから inactive に戻すまでの時間 (ms) (#350)。 */
 export const INACTIVITY_MS = 2800
 
@@ -84,6 +89,12 @@ export class SeekBar extends Container {
    * exportSuppressed/blackoutHidden と同じゲート方式で明示的に隠す。
    */
   private titleScreenHidden = false
+  /**
+   * 無効フラグ (#815)。終劇（storyEnded）は行き止まりで巻き戻せないため、NovelRenderer が storyEnded から
+   * 導出して同期する transient な UI ゲート（GameState には持たない）。true の間はバーを薄く見せたまま
+   * タップ/ドラッグを一切受け付けず、active にも入らない。`visible`（非表示）とは別概念。
+   */
+  private disabled = false
   /** 無操作で inactive に戻すタイマー（TimeController 経由なので number）。 */
   private inactivityTimer: number | null = null
 
@@ -170,6 +181,26 @@ export class SeekBar extends Container {
     this.updateVisual()
   }
 
+  /**
+   * 無効表示の切り替え (#815)。true: 薄い表示にし、操作（タップ/ドラッグ）を受け付けず active も解除する。
+   * false: 通常に戻す。冪等。
+   */
+  setDisabled(disabled: boolean): void {
+    if (this.disabled === disabled) return
+    this.disabled = disabled
+    this.clickRegion.eventMode = disabled ? 'none' : 'static'
+    this.clickRegion.cursor = disabled ? 'default' : 'pointer'
+    // active 中に無効化されたら即解除する（丸ボタンの退避を戻す）。解除済みなら見た目だけ更新。
+    if (disabled) this.deactivate()
+    this.applyActiveVisual()
+    this.updateVisual()
+  }
+
+  /** 無効（終劇）かどうか (#815)。 */
+  isDisabled(): boolean {
+    return this.disabled
+  }
+
   /** 現在 active かどうか (#350)。 */
   isActive(): boolean {
     return this._active
@@ -181,7 +212,7 @@ export class SeekBar extends Container {
    * 動画書き出し中（exportSuppressed）は no-op。
    */
   activate(): void {
-    if (this.exportSuppressed) return
+    if (this.exportSuppressed || this.disabled) return
     this.setActive(true)
     this.restartInactivityTimer()
   }
@@ -277,7 +308,7 @@ export class SeekBar extends Container {
 
   /** active/inactive に応じて見た目（不透明度・つまみ拡大）を反映する (#350)。 */
   private applyActiveVisual(): void {
-    this.alpha = this._active ? 1 : INACTIVE_ALPHA
+    this.alpha = this.disabled ? DISABLED_ALPHA : this._active ? 1 : INACTIVE_ALPHA
     const scale = this._active ? ACTIVE_THUMB_SCALE : 1
     this.thumb.scale.set(scale)
   }
@@ -314,10 +345,13 @@ export class SeekBar extends Container {
 
     // つまみ位置（X のみ。Y はつまみ中心＝ボタン中央で固定）
     this.thumb.x = this.barX + this.barWidth * ratio
-    this.thumb.visible = this._total > 0
+    // 無効（終劇、#815）中はつまみも消す＝つかめるものが無いことを見た目で示す。
+    this.thumb.visible = this._total > 0 && !this.disabled
   }
 
   private handleClick = (e: FederatedPointerEvent): void => {
+    // 無効（終劇、#815）中は eventMode='none' で到達せず、直接呼ばれても activate() が no-op で
+    // wasActive=false のまま下の早期 return に落ちる（シークしない）。
     const wasActive = this._active
     // スライダの実操作で active に入る (#350)。初回タップ（inactive→active）は「操作可能化」だけ
     // にしてシークしない。すでに active のとき（2回目以降のタップ/ドラッグ）だけシークする。
