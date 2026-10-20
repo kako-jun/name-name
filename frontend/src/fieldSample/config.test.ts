@@ -56,6 +56,22 @@ function ok(raw: unknown): FieldSampleConfig {
   return r.value
 }
 
+describe('playerHeight (#810)', () => {
+  it('既定の player.height は 96', () => {
+    expect(DEFAULTS.height).toBe(96)
+    expect(ok(minimal()).player.height).toBe(96)
+  })
+  it('シーンの playerHeight を読む・未指定は undefined（全体値を使う）', () => {
+    const raw = minimal()
+    raw.scenes.a.playerHeight = 60
+    raw.scenes.b = { background: 'b.png', mask: 'b-mask.png' }
+    const c = ok(raw)
+    expect(c.scenes.a.playerHeight).toBe(60)
+    expect(c.scenes.b.playerHeight).toBeUndefined()
+    expect('playerHeight' in c.scenes.b).toBe(false)
+  })
+})
+
 describe('parseConfig 正常系 (Issue #807/#809)', () => {
   it('最小設定が ok で既定値が入る', () => {
     const c = ok(minimal())
@@ -264,6 +280,9 @@ describe('parseConfig 異常系 (Issue #807/#809)', () => {
     ['player.height が負', (c) => (c.player.height = -1)],
     ['player.height が NaN', (c) => (c.player.height = NaN)],
     ['player.height が文字列', (c) => (c.player.height = '150')],
+    ['scenes.a.playerHeight が 0', (c) => (c.scenes.a.playerHeight = 0)],
+    ['scenes.a.playerHeight が負', (c) => (c.scenes.a.playerHeight = -1)],
+    ['scenes.a.playerHeight が文字列', (c) => (c.scenes.a.playerHeight = '60')],
     ['player.frameMs が 0', (c) => (c.player.frameMs = 0)],
     ['player.frameMs が負', (c) => (c.player.frameMs = -1)],
     ['player.frameMs が NaN', (c) => (c.player.frameMs = NaN)],
