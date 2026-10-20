@@ -3,6 +3,7 @@
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js'
+import { orderedLayers } from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -225,7 +226,16 @@ async function main(): Promise<void> {
   const marker = new Graphics()
   const fade = new Graphics()
   const world = new Container()
-  world.addChild(bgSprite, overlaySprite, player, foregroundSprite, marker)
+  // 描画順は layers.ts (テストで固定)
+  world.addChild(
+    ...orderedLayers<Container>({
+      background: bgSprite,
+      overlay: overlaySprite,
+      player,
+      foreground: foregroundSprite,
+      marker,
+    })
+  )
   app.stage.addChild(world, fade)
 
   const startSnap = snapToWalkable(scene.mask, config.start, 80)
