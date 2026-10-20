@@ -56,6 +56,7 @@ pub fn parse(input: &str) -> Document {
     let mut battle_atb_mode: Option<String> = None;
     let mut battle_command_layout: Option<String> = None;
     let mut battle_command_labels: Option<String> = None;
+    let mut battle_commands: Option<String> = None;
     let mut battle_transition: Option<String> = None;
     let mut battle_enemy_grid: Option<String> = None;
     let mut battle_enemy_window_overlap: Option<String> = None;
@@ -310,6 +311,12 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_command_labels = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_commands:") {
+                // RPG 戦闘のコマンドの構成と順序 (#873)。`skill, spell, item, escape` 形式。値は生文字列で透過する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_commands = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_transition:") {
                 // RPG 戦闘の開始・終了の画面遷移 (#830)。none / ff。値は生文字列で透過し、runtime 側で未知値は none に倒す。
@@ -1185,6 +1192,7 @@ pub fn parse(input: &str) -> Document {
         battle_atb_mode,
         battle_command_layout,
         battle_command_labels,
+        battle_commands,
         battle_transition,
         battle_enemy_grid,
         battle_enemy_window_overlap,

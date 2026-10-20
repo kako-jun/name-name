@@ -34,7 +34,7 @@ import {
   validateEncounterGroups,
   type EncounterGroupInput,
 } from './encounterGroupValidation'
-import { normalizeCommandLayout, parseCommandLabels } from './battleCommands'
+import { normalizeCommandLayout, parseCommandIds, parseCommandLabels } from './battleCommands'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -328,6 +328,7 @@ export function rpgProjectFromDoc(
     battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
+    battleCommands: parseCommandIds(doc.battle_commands),
     battleTransition: normalizeBattleTransition(doc.battle_transition),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,

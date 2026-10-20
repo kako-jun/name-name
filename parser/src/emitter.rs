@@ -210,6 +210,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_command_labels: \"{sanitized}\"\n"));
         }
+        // battle_commands (#873)。同じ流儀
+        if let Some(ref v) = doc.battle_commands {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_commands: \"{sanitized}\"\n"));
+        }
         // battle_transition (#830)。同じ流儀
         if let Some(ref v) = doc.battle_transition {
             let sanitized = v.replace('"', "");
@@ -1070,6 +1075,11 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         out.push_str(&format!("習得: Lv{} {}\n", l.level, l.spell));
                     }
                 }
+                if let Some(abilities) = &p.abilities {
+                    for a in abilities {
+                        out.push_str(&format!("わざ: {a}\n"));
+                    }
+                }
                 out.push_str("[/パーティ]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1807,6 +1817,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_commands: None,
             battle_transition: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
@@ -2129,6 +2140,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_commands: None,
             battle_transition: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
