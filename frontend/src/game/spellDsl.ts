@@ -330,9 +330,12 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           }
         } else if (kind === 'absorb') {
           // 吸収: 計算したダメージ量だけ回復する（最大 HP で切る。倒れている対象は生き返らせない）
-          if (t.hp > 0) t.hp = Math.min(t.maxHp, t.hp + base)
-          ctx.onAmount?.(t, 'heal', base)
-          log.push(`${t.name} は ${base} のダメージを吸収した！`)
+          // 計算量が 0 のときは回復も吸収ログも出さない（通知なし＝戦闘側で MISS 扱いにならず何も起きない）
+          if (base > 0) {
+            if (t.hp > 0) t.hp = Math.min(t.maxHp, t.hp + base)
+            ctx.onAmount?.(t, 'heal', base)
+            log.push(`${t.name} は ${base} のダメージを吸収した！`)
+          }
           continue
         } else if (kind === 'nullify') {
           // 無効: ダメージ 0・通知なし（戦闘側で MISS）。追加効果は無い

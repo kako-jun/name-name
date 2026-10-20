@@ -66,7 +66,8 @@ export function resolveAffinity(
   type: string | undefined
 ): AffinityKind {
   if (!affinity || !type) return 'normal'
-  const id = type.trim().toLowerCase()
+  // parser（Rust 側）と同じく全角英数を半角にしてから小文字へ（NFKC）
+  const id = type.normalize('NFKC').trim().toLowerCase()
   if (id === '') return 'normal'
   if (listHas(affinity.absorb, id)) return 'absorb'
   if (listHas(affinity.nullify, id)) return 'nullify'

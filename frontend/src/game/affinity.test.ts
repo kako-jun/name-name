@@ -76,6 +76,10 @@ describe('resolveAffinity: 境界・不正値', () => {
     expect(resolveAffinity(aff, '')).toBe('normal')
     expect(resolveAffinity(aff, '  ')).toBe('normal')
   })
+  it('全角の type（ＦＩＲＥ）も parser と同じく半角に寄せて比べる', () => {
+    expect(resolveAffinity({ weak: ['fire'] }, 'ＦＩＲＥ')).toBe('weak')
+    expect(resolveAffinity({ weak: ['thunder_2'] }, 'Ｔｈｕｎｄｅｒ＿２')).toBe('weak')
+  })
   it('type の大小・前後空白は寄せて比べる', () => {
     expect(resolveAffinity(aff, 'ICE')).toBe('weak')
     expect(resolveAffinity(aff, ' ice ')).toBe('weak')
@@ -469,27 +473,28 @@ describe('戦闘エンジン経由: 呪文・特技・アイテム (#872)', () =
     expect(e.getState().enemies[0].hp).toBe(100)
     expect(lastHit(e).kind).toBe('miss')
   })
-  it('特技: 敵が味方に使う特技にも相性が効く（味方側の affinity）', () => {
-    const hero = ent({ id: 'hero', hp: 500, maxHp: 500, affinity: { weak: ['ink'] } })
-    const boss = ent({ id: 'boss', name: 'ボス' })
-    const e = new BattleEngine([hero], [boss], { rng })
+  it('特技: 味方が敵に使う特技にも相性が効く（敵の affinity）', () => {
+    const e = engineWith({ affinity: { weak: ['ink'] } })
     const sk: SkillExecution = {
       name: 'すみ',
       target: '相手単体',
       effect: 'damage 10..10 type=ink',
     }
-    e.performSkill({ side: 'enemy', index: 0 }, sk)
-    expect(e.getState().party[0].hp).toBe(480)
+    e.performSkill({ side: 'party', index: 0 }, sk)
+    expect(e.getState().enemies[0].hp).toBe(80)
     expect(lastHit(e)).toMatchObject({ kind: 'damage', amount: 20 })
   })
-  it('アイテム: damage 効果にも相性が効く', () => {
-    const hero = ent({ id: 'hero', hp: 500, maxHp: 500, affinity: { absorb: ['fire'] } })
-    hero.hp = 400
-    const e = new BattleEngine([hero], [ent({ id: 'boss' })], { rng })
-    e.selectItem({ name: 'ほのおのたま', effect: 'damage 30..30 type=fire' }, 'hero')
-    // 直後に敵の通常攻撃が入るので、アイテム行動の記録（events[0]）で見る
-    expect(lastHit(e)).toMatchObject({ kind: 'heal', amount: 30, hpBefore: 400, hpAfter: 430 })
+  it('特技: 吸収も敵の affinity で効く', () => {
+    const e = engineWith({ hp: 60, affinity: { absorb: ['fire'] } })
+    e.performSkill(
+      { side: 'party', index: 0 },
+      { name: 'ひ', target: '相手単体', effect: 'damage 30..30 type=fire' }
+    )
+    expect(e.getState().enemies[0].hp).toBe(90)
+    expect(lastHit(e)).toMatchObject({ kind: 'heal', amount: 30, hpBefore: 60, hpAfter: 90 })
   })
+  // アイテムの damage 効果も同じ applyEffect を通る（上の applyEffect 直接テストが担保）。
+  // エンジンの selectItem は味方単体だけを対象にするので、敵の affinity を試すエンジン経由のテストは作れない
   it('通常攻撃は相性を見ない（未対応）', () => {
     const e = engineWith({ affinity: { nullify: ['death', 'fire'], absorb: ['thunder'] } })
     e.selectAttack()
@@ -546,5 +551,15 @@ describe('実 WASM パーサ → 戦闘への組み立て (#872)', () => {
     const t = b
     run('damage 10..10 type=water', t)
     expect(t.hp).toBe(80)
+  })
+})
+
+describe('吸収で計算量が 0 のとき (#872)', () => {
+  it('回復・通知・ログを出さない', () => {
+    const t = ent({ hp: 50, affinity: { absorb: ['fire'] } })
+    const { log, amounts } = run('damage 0..0 type=fire', t)
+    expect(t.hp).toBe(50)
+    expect(amounts).toEqual([])
+    expect(log).toEqual([])
   })
 })

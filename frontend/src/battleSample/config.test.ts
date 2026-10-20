@@ -1837,3 +1837,22 @@ describe('parseMenuList の挙動（export 化後も不変 #890）', () => {
     })
   })
 })
+
+describe('parseConfig 属性相性: party[].affinity は読み込みエラー (#872)', () => {
+  const base = 'https://example.com/battle-sample/x.json'
+  it('party[i].affinity を指定するとエラー（空オブジェクトでも）', () => {
+    for (const aff of [{ weak: ['fire'] }, {}]) {
+      const r = parseConfig({ party: [{}, { affinity: aff }] }, base)
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error).toContain(
+          'party[1].affinity: 味方側の相性は未対応です（enemies[].affinity のみ）'
+        )
+      }
+    }
+  })
+  it('enemies[].affinity は従来どおり読める', () => {
+    const r = parseConfig({ enemies: [{ affinity: { weak: ['fire'] } }] }, base)
+    expect(r.ok).toBe(true)
+  })
+})
