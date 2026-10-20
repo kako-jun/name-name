@@ -11,6 +11,7 @@ import {
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
 import teramachiSample from './teramachi.sample.json?raw'
+import diagonalSample from './diagonal-walk.sample.json?raw'
 
 const BASE = 'https://example.com/field/config.json'
 
@@ -730,6 +731,104 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     const c = ok(JSON.parse(teramachiSample))
     expect(c.battle.enemyGrid).toBeUndefined()
     expect(c.groupErrors).toBeUndefined()
+  })
+})
+
+describe('parseConfig 斜め 4 方向 (Issue #811)', () => {
+  const frames = (d: string) => [`${d}1.png`, `${d}2.png`, `${d}3.png`]
+  const withDiag = (fn: (s: Raw) => void): Raw =>
+    mutated((c) => {
+      for (const d of ['upLeft', 'upRight', 'downLeft', 'downRight'])
+        c.player.sprites[d] = frames(d)
+      fn(c.player.sprites)
+    })
+
+  it('斜めの設定が無ければ 4 方向のまま（mirrorOf は空）', () => {
+    const c = ok(minimal())
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.mirrorOf).toEqual({})
+  })
+
+  it('斜め 4 方向を自前の画像で指定できる', () => {
+    const c = ok(withDiag(() => {}))
+    expect(c.player.sprites.downRight?.[2]).toBe('https://example.com/field/downRight3.png')
+  })
+
+  it('mirrorOf で一部を反転で埋められる', () => {
+    const c = ok(
+      withDiag((s) => {
+        delete s.upLeft
+        s.mirrorOf = { upLeft: 'upRight' }
+      })
+    )
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight' })
+  })
+
+  it.each([
+    ['斜めが 3 方向だけ', (s: Raw) => delete s.upLeft],
+    ['斜めの URL が 2 コマ', (s: Raw) => (s.upLeft = ['a', 'b'])],
+    ['mirrorOf のキーが斜めでない', (s: Raw) => (s.mirrorOf = { left: 'upRight' })],
+    [
+      'mirrorOf の値が斜めでない',
+      (s: Raw) => ((s.mirrorOf = { upLeft: 'right' }), delete s.upLeft),
+    ],
+    ['自前画像と mirrorOf の両方', (s: Raw) => (s.mirrorOf = { upLeft: 'upRight' })],
+    [
+      '反転元が mirrorOf 側',
+      (s: Raw) => {
+        delete s.upLeft
+        delete s.upRight
+        s.mirrorOf = { upLeft: 'upRight', upRight: 'upLeft' }
+      },
+    ],
+    ['mirrorOf がオブジェクトでない', (s: Raw) => (s.mirrorOf = 'upRight')],
+  ])('不正: %s', (_name, fn) => {
+    expect(parseConfig(withDiag(fn), BASE).ok).toBe(false)
+  })
+
+  it.each([
+    ['upLeft', 'downRight'],
+    ['upLeft', 'downLeft'],
+    ['downLeft', 'upRight'],
+    ['downRight', 'upLeft'],
+    ['upLeft', 'upLeft'],
+  ])('mirrorOf.%s は %s を指せない（左右の相方だけ）', (k, v) => {
+    const r = parseConfig(
+      withDiag((s) => {
+        delete s[k]
+        s.mirrorOf = { [k]: v }
+      }),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('左右の相方')
+  })
+
+  it('mirrorOf を左右の相方に向けると 4 組とも通る', () => {
+    for (const [k, v] of [
+      ['upLeft', 'upRight'],
+      ['upRight', 'upLeft'],
+      ['downLeft', 'downRight'],
+      ['downRight', 'downLeft'],
+    ]) {
+      const c = ok(
+        withDiag((s) => {
+          delete s[k]
+          s.mirrorOf = { [k]: v }
+        })
+      )
+      expect(c.player.mirrorOf).toEqual({ [k]: v })
+    }
+  })
+
+  it('同梱の斜めサンプル（diagonal-walk.sample.json）が ok で、upLeft は upRight の反転', () => {
+    const c = ok(JSON.parse(diagonalSample))
+    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight' })
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.sprites.upRight).toHaveLength(3)
+    expect(c.player.sprites.downLeft).toHaveLength(3)
+    expect(c.player.sprites.downRight).toHaveLength(3)
   })
 })
 
