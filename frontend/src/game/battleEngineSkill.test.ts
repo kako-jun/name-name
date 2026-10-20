@@ -480,4 +480,43 @@ describe('selectSkill: 味方の「わざ」(#873)', () => {
       false
     )
   })
+
+  it('属性わざ（damage … type=fire）で「受けた=系統:fire」が成立する。物理には成立しない', () => {
+    const mk = (cond: string) => {
+      const hero = ent({ id: 'hero', name: 'ゆうしゃ', hp: 500, maxHp: 500 })
+      const boss = ent({
+        id: 'boss',
+        name: 'ボス',
+        hp: 900,
+        maxHp: 900,
+        atk: 0,
+        counters: [`条件=${cond} 候補=lance`],
+      })
+      const lance: SkillExecution = {
+        name: 'こおりのやり',
+        target: '相手単体',
+        effect: 'damage 20..20',
+      }
+      return { hero, eng: new BattleEngine([hero], [boss], { rng, skills: { lance } }) }
+    }
+    const fire = mk('受けた=系統:fire')
+    fire.eng.selectSkill(ability('相手単体', 'damage 3..3 type=fire'))
+    expect(
+      fire.eng
+        .getState()
+        .events.map((e) => `${e.actor.side}:${e.kind}`)
+        .slice(0, 2)
+    ).toEqual(['party:skill', 'enemy:skill'])
+    const plain = mk('受けた=系統:fire')
+    plain.eng.selectSkill(ability('相手単体', 'damage 3..3'))
+    expect(
+      plain.eng.getState().events.some((e) => e.actor.side === 'enemy' && e.kind === 'skill')
+    ).toBe(false)
+    // 属性わざでも 受けた=物理 は従来どおり成立する
+    const phys = mk('受けた=物理')
+    phys.eng.selectSkill(ability('相手単体', 'damage 3..3 type=fire'))
+    expect(
+      phys.eng.getState().events.some((e) => e.actor.side === 'enemy' && e.kind === 'skill')
+    ).toBe(true)
+  })
 })

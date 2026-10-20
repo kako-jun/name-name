@@ -329,6 +329,20 @@ describe('openFieldBattle', () => {
     expect('enemyWindowOverlap' in d.opts).toBe(false)
   })
 
+  it('commands / commandLabels は BattleScreen の opts に転送される (#873)', () => {
+    const { s } = open({
+      settings: {
+        layout: 'side',
+        commands: ['skill', 'spell', 'item', 'escape'],
+        commandLabels: { skill: '刀' },
+      },
+    })
+    expect(s.opts.commands).toEqual(['skill', 'spell', 'item', 'escape'])
+    expect(s.opts.commandLabels).toEqual({ skill: '刀' })
+    const d = open().s
+    expect(d.opts.commands).toBeUndefined()
+  })
+
   it('ステージに戦闘画面が載る', () => {
     const { stage, screen } = open()
     expect(stage.children).toContain(screen)
@@ -605,6 +619,33 @@ describe('openFieldBattle: 候補窓の呪文を BattleScreen へ渡す (#204)',
   it('cross + 呪文マスターありで「じゅもん」が候補窓を開く', () => {
     const { stage, screen, s } = open('cross', true)
     s.handleCommand('spell')
+    expect(s.menuStack).toHaveLength(1)
+    closeFieldBattle(stage, screen)
+  })
+
+  it('わざだけ（呪文・アイテムなし）でも cross なら「わざ」が候補窓を開く (#873)', () => {
+    const stage = new Container()
+    const r = {
+      ...roster(['hero'], { hero: { abilities: ['slash'] } }),
+      skills: { slash: { id: 'slash', name: 'きる', target: '相手単体', effect: 'damage 5..9' } },
+    }
+    const screen = openFieldBattle({
+      stage,
+      width: 800,
+      height: 450,
+      settings: {
+        ...DEFAULT_FIELD_BATTLE_SETTINGS,
+        layout: 'side',
+        commandLayout: 'cross',
+        commands: ['skill', 'attack', 'item', 'escape'],
+      },
+      roster: r,
+      enemies: [enemy()],
+      gate: new FieldInputGate(),
+      onClosed: vi.fn(),
+    })
+    const s = screen as unknown as { menuStack: unknown[]; handleCommand(id: string): void }
+    s.handleCommand('skill')
     expect(s.menuStack).toHaveLength(1)
     closeFieldBattle(stage, screen)
   })
