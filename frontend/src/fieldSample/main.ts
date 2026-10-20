@@ -36,7 +36,13 @@ import {
   type WalkMask,
 } from '../game/fieldWalk'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
-import { WARP_COLOR, sampleWarp } from '../game/fieldWarp'
+import {
+  WARP_COLOR,
+  WARP_LOAD_TIMEOUT_MS,
+  canStartBattleNow,
+  sampleWarp,
+  withTimeout,
+} from '../game/fieldWarp'
 import { hasOwn } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
@@ -275,14 +281,18 @@ async function main(): Promise<void> {
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
   let lastOutcome = '-'
-  const startBattle = (enemies: BattleEntity[]): void => {
-    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）。押しっぱなしの pointer capture も解放する
+  /** 歩きの入力を全部捨てる。押しっぱなしの pointer capture も解放する（戦闘・ワープの開始時） */
+  const releaseWalkInput = (): void => {
     keys.up = keys.down = keys.left = keys.right = false
     if (activePointerId !== null && canvas.hasPointerCapture(activePointerId))
       canvas.releasePointerCapture(activePointerId)
     activePointerId = null
     pointer = null
     movingMs = 0
+  }
+  const startBattle = (enemies: BattleEntity[]): void => {
+    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
+    releaseWalkInput()
     const b = config.battle
     const menu = buildBattleMenu(config)
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
@@ -344,6 +354,12 @@ async function main(): Promise<void> {
     switched: boolean
   }
   let warpRun: WarpRun | null = null
+  /** ワープを中止して元のシーンへ戻す（覆いの色も黒に戻す。flash の白が端リンクのフェードに残らないように） */
+  const abortWarp = (): void => {
+    warpRun = null
+    fade.alpha = 0
+    fade.tint = 0x000000
+  }
   /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
   const startWarp = (id: string): boolean => {
     if (battle || transition || warpRun) return false
@@ -352,22 +368,31 @@ async function main(): Promise<void> {
       return false
     }
     const warp = config.warps[id]
-    const run: WarpRun = { warp, t: 0, next: ensureScene(warp.to), ready: null, switched: false }
+    const run: WarpRun = {
+      warp,
+      t: 0,
+      // 読み込みが終わらなくても暗転のまま待ち続けない（WARP_LOAD_TIMEOUT_MS で中止）
+      next: withTimeout(
+        ensureScene(warp.to),
+        WARP_LOAD_TIMEOUT_MS,
+        `読み込みが ${WARP_LOAD_TIMEOUT_MS / 1000} 秒以内に終わりませんでした`
+      ),
+      ready: null,
+      switched: false,
+    }
     run.next.then(
       (s) => {
         run.ready = s
       },
       (e) => {
-        // 読み込み失敗: 元のシーンへ戻す
-        if (warpRun === run) warpRun = null
-        fade.alpha = 0
+        if (disposed) return
+        // 読み込み失敗・タイムアウト: 元のシーンへ戻す
+        if (warpRun === run) abortWarp()
         showError(`ワープ先の読み込みに失敗しました\n${e instanceof Error ? e.message : String(e)}`)
       }
     )
     fade.tint = WARP_COLOR[warp.effect]
-    keys.up = keys.down = keys.left = keys.right = false
-    pointer = null
-    movingMs = 0
+    releaseWalkInput()
     warpRun = run
     return true
   }
@@ -386,8 +411,7 @@ async function main(): Promise<void> {
           showError(
             `ワープ先 ${run.warp.id} の at (${run.warp.at.x}, ${run.warp.at.y}) の近くに歩ける点がありません。ワープを中止しました`
           )
-          warpRun = null
-          fade.alpha = 0
+          abortWarp()
           return
         }
         sceneId = dst.id
@@ -503,7 +527,8 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (battle || transition) return
+    if (!canStartBattleNow({ battle: !!battle, transition: !!transition, warping: !!warpRun }))
+      return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
     const r = advanceEncounter(

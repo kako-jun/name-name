@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { WARP_COLOR, WARP_DEFAULTS, sampleWarp } from './fieldWarp'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  WARP_COLOR,
+  WARP_DEFAULTS,
+  WARP_LOAD_TIMEOUT_MS,
+  canStartBattleNow,
+  sampleWarp,
+  withTimeout,
+} from './fieldWarp'
 
 const T = { outMs: 100, holdMs: 50, inMs: 200 }
 
@@ -40,5 +47,49 @@ describe('sampleWarp (#864)', () => {
       expect(WARP_DEFAULTS[k].outMs).toBeGreaterThan(0)
       expect(WARP_DEFAULTS[k].inMs).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('canStartBattleNow (#864 レビュー: ワープ中の強制エンカウント)', () => {
+  const idle = { battle: false, transition: false, warping: false }
+  it('何も取り込み中でなければ始められる', () => {
+    expect(canStartBattleNow(idle)).toBe(true)
+  })
+  it('戦闘中・エリア遷移中・ワープ中のどれでも始められない', () => {
+    expect(canStartBattleNow({ ...idle, battle: true })).toBe(false)
+    expect(canStartBattleNow({ ...idle, transition: true })).toBe(false)
+    expect(canStartBattleNow({ ...idle, warping: true })).toBe(false)
+  })
+})
+
+describe('withTimeout / WARP_LOAD_TIMEOUT_MS (#864 レビュー: 読み込みが終わらないとき)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('上限は 15 秒', () => {
+    expect(WARP_LOAD_TIMEOUT_MS).toBe(15000)
+  })
+  it('上限内に終われば値をそのまま返す', async () => {
+    const p = withTimeout(Promise.resolve(7), WARP_LOAD_TIMEOUT_MS, 'x')
+    await expect(p).resolves.toBe(7)
+  })
+  it('元の Promise の失敗はそのまま伝える', async () => {
+    await expect(withTimeout(Promise.reject(new Error('boom')), 1000, 'x')).rejects.toThrow('boom')
+  })
+  it('上限を超えたら message で reject する', async () => {
+    const never = new Promise<number>(() => {})
+    const p = withTimeout(never, WARP_LOAD_TIMEOUT_MS, 'timeout!')
+    const assertion = expect(p).rejects.toThrow('timeout!')
+    await vi.advanceTimersByTimeAsync(WARP_LOAD_TIMEOUT_MS - 1)
+    let settled = false
+    p.catch(() => (settled = true))
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await assertion
   })
 })
