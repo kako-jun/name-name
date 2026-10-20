@@ -152,6 +152,21 @@ const SELF_CLOSE_REENTER = [
   '> end',
 ].join('\n\n')
 
+// 内側で偽にしたブロックの中の [フラグ:] が、位置を含む要素の外の [条件:] に波及してはいけない脚本
+const OUTSIDE_LEAK = [
+  '[条件: x]',
+  '> A',
+  '[フラグ: y = false]',
+  '[条件: y]',
+  '[フラグ: w = false]',
+  '[/条件]',
+  '[/条件]',
+  '[条件: w]',
+  '> W',
+  '[/条件]',
+  '> end',
+].join('\n\n')
+
 interface Case {
   name: string
   bodies: string[]
@@ -254,23 +269,28 @@ describe('旧形式セーブの再生列が導入前の実装と一致する (#7
   }
 })
 
-describe('旧形式セーブの既知の差分 (#799)', () => {
-  it('位置を含むブロックの中で、位置より後ろの [フラグ:] を同じブロックの内側の [条件:] が見るときは、評価し直されない', async () => {
-    // 導入前の実装は [フラグ: w = true] の実行で再展開し ['A', 'W', 'B', 'end'] になっていた。
-    // 位置を含むトップレベルの要素は保存位置の添字を保つため静的に展開するので、その内側の条件は評価し直されない。
+describe('旧形式セーブの入れ子ブロック (#799)', () => {
+  it('位置を含むブロックの中で、位置より後ろの [フラグ:] を同じブロックの内側の [条件:] が見るときも、導入前と同じ列になる', async () => {
+    // 導入前の実装は [フラグ: w = true] の実行で再展開し ['A', 'W', 'B', 'end']。
     const scenes = await scenesOf([NESTED])
     const r = await loadLegacy(scenes, legacySlot('a', 1, { x: T }))
-    expect(playRest(r)).toEqual(['A', 'B', 'end'])
+    expect(playRest(r)).toEqual(['A', 'W', 'B', 'end'])
+  })
+
+  it('内側で偽にしたブロックの中の [フラグ:] が、位置より後ろの要素に波及しない', async () => {
+    const scenes = await scenesOf([OUTSIDE_LEAK])
+    const r = await loadLegacy(scenes, legacySlot('a', 0, { x: T, y: T, w: T }))
+    expect(playRest(r)).toEqual(['A', 'W', 'end'])
   })
 })
 
 describe('旧形式セーブからの再保存 (#799)', () => {
-  it('復元した訪問の再保存でも同じ列に戻る（entryScanFlags を通す）', async () => {
+  it('復元した訪問の再保存でも同じ列に戻る（entryResumeIndex を通す）', async () => {
     const scenes = await scenesOf([SELF_CLOSE])
     const r = await loadLegacy(scenes, legacySlot('a', 1, { x: T }))
     const snap = r.getSnapshot()
     expect(snap.entryFlags).toEqual({ x: T })
-    expect(snap.entryScanFlags).toEqual({ x: { Bool: false }, y: T })
+    expect(snap.entryResumeIndex).toBe(1)
     r.quickSave()
     const loaded = new NovelRenderer()
     loaded.setScenes(scenes)
@@ -279,11 +299,23 @@ describe('旧形式セーブからの再保存 (#799)', () => {
     expect(playRest(loaded)).toEqual(['A', 'B', 'Y', 'end'])
   })
 
-  it('新形式の訪問は entryScanFlags を出さない', async () => {
+  it('再開位置 0 も再保存される', async () => {
+    const scenes = await scenesOf([OUTSIDE_LEAK])
+    const r = await loadLegacy(scenes, legacySlot('a', 0, { x: T, y: T, w: T }))
+    expect(r.getSnapshot().entryResumeIndex).toBe(0)
+    r.quickSave()
+    const loaded = new NovelRenderer()
+    loaded.setScenes(scenes)
+    loaded.setDocKey('legacy')
+    expect((await loaded.quickLoad())?.status).toBe('entered')
+    expect(playRest(loaded)).toEqual(['A', 'W', 'end'])
+  })
+
+  it('新形式の訪問は entryResumeIndex を出さない', async () => {
     const scenes = await scenesOf([SELF_CLOSE])
     const r = new NovelRenderer()
     r.setScenes(scenes)
     await r.startFrom({ sceneId: 'a', flags: { x: T } })
-    expect(Object.keys(r.getSnapshot())).not.toContain('entryScanFlags')
+    expect(Object.keys(r.getSnapshot())).not.toContain('entryResumeIndex')
   })
 })

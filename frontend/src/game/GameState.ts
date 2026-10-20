@@ -215,16 +215,16 @@ export interface NovelGameState {
    * 固定するので、展開後の列 = `expandEvents(raw, { flags: entryFlags, ... })` で再現でき、`eventIndex` は
    * その列の添字になる（ADR 0002 の「展開は純関数」を、位置までに実行した `[フラグ:]` を含めて保つ）。
    * `getSnapshot` は元列に `[条件:]` を含むときだけ出力する（含まなければ展開が flags に依存しない）。
-   * 後方互換: 古いセーブ/スナップショットには無い → 復元時は保存位置を含むトップレベル要素までを `flags` で静的に
-   * 展開し、それより後ろは `flags` から逐次評価する（`entryFromState`）。
+   * 後方互換: 古いセーブ/スナップショットには無い → 復元時は保存位置までを `flags` で静的に展開し、
+   * 位置から後ろは `flags` から逐次評価する（`entryFromState`）。
    */
   entryFlags?: Record<string, FlagValue>
   /**
-   * 古いセーブから復元した訪問だけが持つ、逐次評価の走査開始 flags (#799)。静的に展開する部分は `entryFlags`、
-   * `entryRawIndex` 以降の走査は、保存位置を含む要素の残りの `[フラグ:]` を適用したこの flags から始める。
-   * 無いときは `entryFlags`。
+   * 古いセーブから復元した訪問だけが持つ、再開位置 (#799)。保存時の `eventIndex`（展開後の列の添字）。
+   * 展開後の列がこの長さに達するまでは `entryFlags` で `[条件:]` を静的に評価し（`[フラグ:]` は適用しない）、
+   * 達した後は `[フラグ:]` を適用しながら1イベントずつ逐次に評価する。無いときは `entryRawIndex` の規則だけ。
    */
-  entryScanFlags?: Record<string, FlagValue>
+  entryResumeIndex?: number
   /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。0 のときは出力しない。 */
   entryRawIndex?: number
 }
@@ -278,47 +278,28 @@ export interface StartFromOptions {
 /**
  * 保存された状態から、展開の入場条件を求める (#799)。`raw` は復元先の元イベント列。
  *
- * `entryFlags` が無い（古いセーブ・手書きの状態）は、保存位置（`eventIndex`）を含むトップレベル要素までを
- * `flags` で静的に展開し（旧実装の展開と添字が一致する）、それより後ろは `flags` から逐次評価する
+ * `entryFlags` が無い（古いセーブ・手書きの状態）は、保存位置（`eventIndex`）に達するまでを保存時の `flags` で
+ * 静的に展開し（旧実装の展開と添字が一致する）、位置から後ろは `flags` から1イベントずつ逐次評価する
  * （旧実装は `[フラグ:]` の実行ごとに再展開していたので、位置より後ろの条件も評価し直されていた）。
+ * 位置を囲む `[条件:]` ブロックには入った状態から続き、その内側の位置より後ろの `[フラグ:]` も後続の
+ * `[条件:]` に反映される。再開位置は `resumeIndex` として入場条件に載り、再保存でも同じ列に戻る。
  * 位置が展開後の列の範囲外のときは全体を静的に展開する。
- * 位置を含む要素 k の中で位置より後ろにある `[フラグ:]` は `scanFlags` として k+1 以降の走査の起点に先に適用する
- * ので、k より後ろの `[条件:]` はそれらを反映して評価される。
- * 残る制約: 要素 k の内側にある `[条件:]` は、保存時の flags で静的に展開する（k 自身の残りの `[フラグ:]` では評価し直さない）。
+ * 旧実装との差は、ブロックに入る時点の評価を再展開でなく到達時に1回行う点だけ（ADR 0003）。
  */
 export function entryFromState(state: NovelGameState, raw: readonly Event[]): ExpansionEntry {
   if (state.entryFlags !== undefined) {
     return {
       flags: state.entryFlags,
-      ...(state.entryScanFlags !== undefined ? { scanFlags: state.entryScanFlags } : {}),
+      ...(state.entryResumeIndex !== undefined ? { resumeIndex: state.entryResumeIndex } : {}),
       fromRawIndex: state.entryRawIndex ?? 0,
     }
   }
   const all = raw.length
   const base = expandEvents(raw, { flags: state.flags, fromRawIndex: all })
-  let k = -1
-  for (let i = 0; i < all; i++) {
-    if (base.rawOffsets[i] <= state.eventIndex && state.eventIndex < base.rawOffsets[i + 1]) {
-      k = i
-      break
-    }
+  if (state.eventIndex < 0 || state.eventIndex >= base.events.length) {
+    return { flags: state.flags, fromRawIndex: all }
   }
-  if (k < 0) return { flags: state.flags, fromRawIndex: all }
-
-  // 位置を含む要素 k の中で位置より後ろにある `[フラグ:]` は、旧実装では実行のたびの再展開で後続の条件に効いていた。
-  // 要素 0..k の静的展開は保存時の flags のまま（添字を旧実装と一致させる）にし、k+1 以降の逐次評価だけ
-  // それらを先に適用した flags（scanFlags）から始める。
-  const end = base.rawOffsets[k + 1]
-  const later = gameStateFromFlags(state.flags)
-  let changed = false
-  for (const event of base.events.slice(state.eventIndex, end)) {
-    if (typeof event === 'object' && event !== null && 'Flag' in event) {
-      later.setFlag(event.Flag.name, event.Flag.value)
-      changed = true
-    }
-  }
-  if (changed) return { flags: state.flags, scanFlags: later.toJSON(), fromRawIndex: k + 1 }
-  return { flags: state.flags, fromRawIndex: k + 1 }
+  return { flags: state.flags, resumeIndex: state.eventIndex, fromRawIndex: 0 }
 }
 
 /**
@@ -356,11 +337,11 @@ export function resolveEvents(events: readonly Event[], gameState: GameState): E
 export interface ExpansionEntry {
   flags: Record<string, FlagValue>
   /**
-   * 逐次評価（`fromRawIndex` 以降）の走査を始める flags。省略時は `flags`。古いセーブの復元だけが使う:
-   * 保存位置を含む要素 k の静的展開は保存時の `flags` のまま、k+1 以降は k の残りの `[フラグ:]` を
-   * 適用した flags から評価する (#799)。
+   * 再開位置（展開後の列の添字）。古いセーブの復元だけが使う (#799): 展開後の列がこの長さに達するまでは
+   * `[条件:]` を `flags` で静的に評価して `[フラグ:]` は走査に適用せず、達した後は `[フラグ:]` を適用しながら
+   * 逐次評価する（位置を囲むブロックには入った状態から続く）。省略時は `fromRawIndex` の規則だけ。
    */
-  scanFlags?: Record<string, FlagValue>
+  resumeIndex?: number
   fromRawIndex: number
 }
 
@@ -394,14 +375,19 @@ export function expandEvents(raw: readonly Event[], entry: ExpansionEntry): Expa
   const events: Event[] = []
   const rawOffsets: number[] = []
   const staticState = gameStateFromFlags(entry.flags)
-  const scan = gameStateFromFlags(entry.scanFlags ?? entry.flags)
+  const scan = gameStateFromFlags(entry.flags)
+  const resume = entry.resumeIndex
 
-  const walkSequential = (list: readonly Event[]): void => {
+  // topStatic: トップレベル要素ごとの静的展開（`fromRawIndex` より前）。再開位置に達するまでも静的に評価する。
+  const walk = (list: readonly Event[], topStatic: boolean): void => {
     for (const event of list) {
+      const isStatic = topStatic || (resume !== undefined && events.length < resume)
       if (typeof event === 'object' && event !== null && 'Condition' in event) {
-        if (scan.checkFlag(event.Condition.flag)) walkSequential(event.Condition.events)
+        if ((isStatic ? staticState : scan).checkFlag(event.Condition.flag)) {
+          walk(event.Condition.events, topStatic)
+        }
       } else {
-        if (typeof event === 'object' && event !== null && 'Flag' in event) {
+        if (!isStatic && typeof event === 'object' && event !== null && 'Flag' in event) {
           scan.setFlag(event.Flag.name, event.Flag.value)
         }
         events.push(event)
@@ -411,11 +397,7 @@ export function expandEvents(raw: readonly Event[], entry: ExpansionEntry): Expa
 
   for (let i = 0; i < raw.length; i++) {
     rawOffsets.push(events.length)
-    if (i < entry.fromRawIndex) {
-      events.push(...resolveEvents([raw[i]], staticState))
-    } else {
-      walkSequential([raw[i]])
-    }
+    walk([raw[i]], i < entry.fromRawIndex)
   }
   rawOffsets.push(events.length)
   return { events, rawOffsets }

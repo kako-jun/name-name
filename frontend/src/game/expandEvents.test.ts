@@ -303,29 +303,43 @@ describe('expandEvents rawOffsets / fromRawIndex (#799)', () => {
     )
   })
 
-  it('entryFromState: entryFlags が無ければ保存位置を含むトップレベル要素までを静的、後ろを逐次評価にする（古いセーブ）', () => {
-    // 0: t0 / 1: Flag / 2: [条件 c] X / 3: t3。flags 空の静的展開は [t0, Flag, t3]（rawOffsets 0,1,2,2,3）
+  it('entryFromState: entryFlags が無ければ保存位置に達するまでを静的、位置から後ろを逐次評価にする（古いセーブ）', () => {
+    // 0: t0 / 1: Flag / 2: [条件 c] X / 3: t3。flags 空の静的展開は [t0, Flag, t3]
     const raw: Event[] = [narr('t0'), flagB('c', true), cond('c', narr('X')), narr('t3')]
     const at = (eventIndex: number): NovelGameState =>
       ({ flags: {}, eventIndex }) as unknown as NovelGameState
-    expect(entryFromState(at(0), raw)).toEqual({ flags: {}, fromRawIndex: 1 })
-    // 位置1 は Flag 自身（これから実行する）。要素 0..1 は flags で静的に展開し、c=true を先に適用した scanFlags から走査する
-    expect(entryFromState(at(1), raw)).toEqual({
-      flags: {},
-      scanFlags: bools({ c: true }),
-      fromRawIndex: 2,
-    })
-    // 位置2 は t3（空の [条件] はまたぐ）
-    expect(entryFromState(at(2), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
-    // 終端・範囲外は全体を静的展開
+    expect(entryFromState(at(0), raw)).toEqual({ flags: {}, resumeIndex: 0, fromRawIndex: 0 })
+    expect(entryFromState(at(1), raw)).toEqual({ flags: {}, resumeIndex: 1, fromRawIndex: 0 })
+    expect(entryFromState(at(2), raw)).toEqual({ flags: {}, resumeIndex: 2, fromRawIndex: 0 })
+    // 終端・範囲外・負は全体を静的展開
     expect(entryFromState(at(3), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
     expect(entryFromState(at(9), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
+    expect(entryFromState(at(-1), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
+    // 再開位置 1（Flag の直前）以降は逐次: c=true が [条件 c] に効く
+    expect(expandEvents(raw, entryFromState(at(1), raw)).events).toEqual([
+      narr('t0'),
+      flagB('c', true),
+      narr('X'),
+      narr('t3'),
+    ])
+    // 再開位置 2（Flag の後）: Flag は適用されないので [条件 c] は偽のまま
+    expect(expandEvents(raw, entryFromState(at(2), raw)).events).toEqual([
+      narr('t0'),
+      flagB('c', true),
+      narr('t3'),
+    ])
     const modern = {
       flags: bools({ x: false }),
       entryFlags: bools({ x: true }),
       entryRawIndex: 4,
     } as unknown as NovelGameState
     expect(entryFromState(modern, raw)).toEqual({ flags: bools({ x: true }), fromRawIndex: 4 })
+    const resumed = { ...modern, entryResumeIndex: 2 } as unknown as NovelGameState
+    expect(entryFromState(resumed, raw)).toEqual({
+      flags: bools({ x: true }),
+      resumeIndex: 2,
+      fromRawIndex: 4,
+    })
   })
 
   it('hasCondition', () => {

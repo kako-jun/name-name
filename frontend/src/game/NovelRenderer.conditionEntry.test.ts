@@ -359,9 +359,10 @@ describe('後方互換 (#799)', () => {
     const r = build(scenes)
     expect((await r.quickLoad())?.status).toBe('entered')
     expect(textOf(r)).toBe('t3')
-    // 位置 t3 は最後の要素なので、再保存すると全体を静的に展開する印（entryRawIndex = 元列の長さ）が付き、同じ列を再現する
+    // 再保存すると再開位置（entryResumeIndex = 2）が付き、同じ列を再現する
     const snap = r.getSnapshot()
-    expect(snap.entryRawIndex).toBe(4)
+    expect(snap.entryResumeIndex).toBe(2)
+    expect(snap.entryRawIndex).toBeUndefined()
     expect(snap.entryFlags).toEqual({})
     r.quickSave()
     const loaded = build(scenes)
@@ -386,7 +387,7 @@ describe('後方互換 (#799)', () => {
     const r = build(scenes)
     expect((await r.quickLoad())?.status).toBe('entered')
     expect(playRest(r)).toEqual(['s0', 's1', 'Y', 'end'])
-    // 1つ進めて再保存 → 別インスタンスで復元しても同じ残り（保存位置までの静的展開と後ろの逐次評価を entryFlags / entryRawIndex で再現）
+    // 1つ進めて再保存 → 別インスタンスで復元しても同じ残り（保存位置までの静的展開と後ろの逐次評価を entryFlags / entryResumeIndex で再現）
     const second = build(scenes)
     await second.quickLoad()
     advance(second)
@@ -731,14 +732,14 @@ describe('フラグの書き手の固定 (#799)', () => {
   const sources = Object.keys(sourceMap).map((p) => p.replace(/^\.\//, ''))
   const read = (f: string): string => sourceMap[`./${f}`]
 
-  it('setFlag の呼び出しは GameState.ts の走査用の複製への適用（expandEvents・entryFromState）と NovelRenderer の Flag 分岐 1 か所だけ', () => {
+  it('setFlag の呼び出しは GameState.ts の走査用の複製への適用（expandEvents）と NovelRenderer の Flag 分岐 1 か所だけ', () => {
     const hits: string[] = []
     for (const f of sources) {
       const text = read(f)
       const count = (text.match(/\.setFlag\(/g) ?? []).length
       if (count > 0) hits.push(`${f}:${count}`)
     }
-    expect(hits.sort()).toEqual(['GameState.ts:2', 'NovelRenderer.ts:1'])
+    expect(hits.sort()).toEqual(['GameState.ts:1', 'NovelRenderer.ts:1'])
   })
 
   it('gameState.fromJSON（flags の置換）は 新規開始・復元の 3 か所だけ', () => {

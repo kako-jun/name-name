@@ -445,7 +445,7 @@ export class SceneEntryController {
    * 範囲内なら null、範囲外なら `failEntry` に渡す失敗（out-of-range）を返す。何も変更しない。
    * 展開後で判定するのは、`[条件:]` の真偽で長さが変わり、`eventIndex` は展開後の列を指すため
    * （`restoreToScene` が `entryFromState(state, events)` で展開した列に `applyState` が eventIndex を当てる）。
-   * 展開は `restoreToScene` と同じ `expandEvents(events, entryFromState(state, events))`（旧セーブは保存位置までを静的展開）。
+   * 展開は `restoreToScene` と同じ `expandEvents(events, entryFromState(state, events))`（旧セーブは保存位置に達するまでを静的展開、後ろを逐次評価）。
    */
   private checkRestorePosition(
     events: readonly Event[],
