@@ -705,6 +705,7 @@ export class BattleEngine {
     const idx = atb ? this.currentActorIndex() : -1
     // 被弾した敵の反撃と、倒れた敵の死亡時の行動 (#837)。勝敗はこのあとの 1 か所だけで判定する（二重にならない）
     if (react) this.reactToPartyAction(react)
+    else this.clearLastDamage()
     // 味方の手番の終わりに状態を進める (#870)。継続ダメージで倒れた味方も、下の勝敗判定・掃除に流れる
     this.endPartyTurnStatuses(idx)
     if (atb) {
@@ -1012,7 +1013,7 @@ export class BattleEngine {
 
   /**
    * 味方 `attacker` の行動 1 回（直前に記録されたイベント）が、敵 index ごとに与えたダメージ（画面に出る数字 = `BattleHit.amount` の合計）(#871)。
-   * 数字を持たない即死・MISS・回復（吸収）は数えない。直前のイベントがその味方の行動でなければ空（`ダメージ…` 条件が不成立になる）
+   * 数字を持たない即死・MISS・回復（吸収）は数えない（その敵は値なし）。直前のイベントがその味方の行動でなければ空（`ダメージ…` 条件が不成立になる）
    */
   private damageDealtBy(attacker: BattleActorRef): Map<number, number> {
     const out = new Map<number, number>()
@@ -1024,6 +1025,15 @@ export class BattleEngine {
       out.set(h.target.index, (out.get(h.target.index) ?? 0) + h.amount)
     }
     return out
+  }
+
+  /** 味方の行動が敵にダメージを与えなかった手番（行動不能など）。`ダメージ…` を書いた敵の前回の値を残さない (#871) */
+  private clearLastDamage(): void {
+    const memory = this.state.enemyMemory
+    if (!memory) return
+    this.state.enemies.forEach((e, i) => {
+      if (tracksDamage(e)) delete memory[i].lastDamage
+    })
   }
 
   /**
@@ -1038,18 +1048,19 @@ export class BattleEngine {
     if (!memory) return
     const hit: number[] = []
     this.state.enemies.forEach((e, i) => {
+      // 受けたダメージ (#871)。HP が減ったかどうかに関わらず、この行動が与えた表示数字（0 を含む）に置き換える。
+      // 数字が出なかった（MISS・無効・吸収・即死のみ・この行動の対象外）敵は前回の値を残さず値なしにする
+      if (tracksDamage(e)) {
+        const dealt = react.damage.get(i)
+        if (dealt === undefined) delete memory[i].lastDamage
+        else memory[i].lastDamage = dealt
+      }
       const before = react.before.get(e)
       if (before === undefined || e.hp >= before || !tracksHits(e)) return
       const m = memory[i]
       m.hits = (m.hits ?? 0) + 1
       m.lastHit = react.source
       m.lastAttacker = react.attacker
-      // 受けたダメージ (#871)。数字が出なかった被弾（即死・MISS 等）では前回の値を残さず消す
-      if (tracksDamage(e)) {
-        const dealt = react.damage.get(i)
-        if (dealt === undefined) delete m.lastDamage
-        else m.lastDamage = dealt
-      }
       hit.push(i)
     })
     for (const i of hit) {

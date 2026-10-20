@@ -394,3 +394,113 @@ describe('エンジン統合（ATB）', () => {
     expect(eng.getState().enemyMemory![0].lastDamage).toBe(7)
   })
 })
+
+/**
+ * 数字が出なかった手番では、前回の値を持ち越さない (#871)。
+ * 8（偶数）を当てたあと、HP が減らない被弾（MISS・無効・吸収・表示 0）や、即死・その行動の対象外の手番を挟んでも、
+ * `行動:` の `ダメージ=偶数` が前回の値で成立してはならない。画面に出た数字だけを見て推理できることが目的
+ */
+describe('数字が出なかった手番で前回の値を残さない', () => {
+  const NULLIFY = spell('みずでっぽう', 'damage 5..5 type=water')
+  const ABSORB = spell('かみなり', 'damage 5..5 type=thunder')
+  const ZERO = spell('からぶり', 'damage 0..0')
+  const waiting = ['条件=ダメージ=偶数 候補=even', '条件=ダメージ=奇数 候補=odd', '候補=こうげき']
+
+  const duel = (extra: Partial<BattleEntity> = {}) => {
+    const hero = ent({ id: 'hero', hp: 5000, maxHp: 5000 })
+    const boss = ent({
+      id: 'boss',
+      name: 'ボス',
+      hp: 900,
+      maxHp: 900,
+      actions: waiting,
+      affinity: { nullify: ['water'], absorb: ['thunder'] },
+      ...extra,
+    })
+    const eng = new BattleEngine([hero], [boss], { rng: () => 0, skills: SKILLS })
+    return { eng, hero, boss }
+  }
+
+  /** 8 を当てて偶数トリガー（ぐうすう）が引かれたことを確かめてから、`next` を撃つ。次の手番の敵の行動ラベルを返す */
+  const afterEight = (next: (eng: BattleEngine) => void, extra: Partial<BattleEntity> = {}) => {
+    const { eng, boss } = duel(extra)
+    eng.selectSpell(EIGHT)
+    expect(skillLabels(eng)).toEqual(['ぐうすう'])
+    expect(eng.getState().enemyMemory![0].lastDamage).toBe(8)
+    boss.hp = boss.maxHp
+    next(eng)
+    return { eng, labels: skillLabels(eng).slice(1) }
+  }
+
+  it('無効（MISS 表示）のあとは値なし。偶数のトリガーは再発動しない', () => {
+    const { eng, labels } = afterEight((e) => e.selectSpell(NULLIFY))
+    const hit = eng.getState().events.filter((e) => e.kind === 'spell')[1].hits[0]
+    expect(hit.kind).toBe('miss')
+    expect(eng.getState().enemyMemory![0]).not.toHaveProperty('lastDamage')
+    expect(labels).toEqual([]) // 条件が一つも成立しない → 通常攻撃
+  })
+
+  it('吸収（回復になる）のあとは値なし', () => {
+    const { eng, labels } = afterEight((e) => e.selectSpell(ABSORB))
+    const hit = eng.getState().events.filter((e) => e.kind === 'spell')[1].hits[0]
+    expect(hit.kind).toBe('heal')
+    expect(eng.getState().enemyMemory![0]).not.toHaveProperty('lastDamage')
+    expect(labels).toEqual([])
+  })
+
+  it('表示が 0 のダメージは値 0。「0 は偶数」なので偶数が成立し、ダメージ=0 も成立する', () => {
+    const { eng, labels } = afterEight((e) => e.selectSpell(ZERO))
+    expect(eng.getState().enemyMemory![0].lastDamage).toBe(0)
+    expect(labels).toEqual(['ぐうすう'])
+    const zero = duel({ actions: ['条件=ダメージ=0 候補=odd', '候補=even'] })
+    zero.eng.selectSpell(SEVEN)
+    expect(skillLabels(zero.eng)).toEqual(['ぐうすう']) // 7 は 0 でない
+    zero.eng.selectSpell(ZERO)
+    expect(skillLabels(zero.eng)).toEqual(['ぐうすう', 'きすう'])
+  })
+
+  it('奇数 7 のあとの値 0 では奇数が成立しない（前回の 7 を使わない）', () => {
+    const { eng } = duel()
+    eng.selectSpell(SEVEN)
+    eng.selectSpell(ZERO)
+    expect(skillLabels(eng)).toEqual(['きすう', 'ぐうすう'])
+  })
+
+  it('別の敵への攻撃（この行動の対象外）では、対象外の敵の前回の値を持ち越さない', () => {
+    const hero = ent({ id: 'hero', hp: 5000, maxHp: 5000 })
+    const a = ent({ id: 'a', name: 'A', hp: 900, maxHp: 900, actions: waiting })
+    const b = ent({ id: 'b', name: 'B', hp: 900, maxHp: 900 })
+    const eng = new BattleEngine([hero], [a, b], { rng: () => 0, skills: SKILLS })
+    eng.selectSpell(EIGHT, 'a')
+    expect(eng.getState().enemyMemory![0].lastDamage).toBe(8)
+    expect(skillLabels(eng)).toEqual(['ぐうすう'])
+    eng.selectSpell(SEVEN, 'b') // A には当たらない
+    expect(eng.getState().enemyMemory![0]).not.toHaveProperty('lastDamage')
+    expect(skillLabels(eng).slice(1)).toEqual([]) // A は偶数のトリガーを再発動しない
+  })
+
+  it('複数ヒットは画面に出た数字の合計。無効な敵は値なし、当たった敵は合計（全体）', () => {
+    const hero = ent({ id: 'hero', hp: 5000, maxHp: 5000 })
+    const a = ent({ id: 'a', name: 'A', hp: 900, maxHp: 900, actions: waiting })
+    const b = ent({
+      id: 'b',
+      name: 'B',
+      hp: 900,
+      maxHp: 900,
+      actions: waiting,
+      affinity: { nullify: ['water'] },
+    })
+    const eng = new BattleEngine([hero], [a, b], { rng: () => 0, skills: SKILLS })
+    eng.selectSpell(spell('みずのれんだ', 'damage 5..5 回数=3 type=water', '敵全体'))
+    const mem = eng.getState().enemyMemory!
+    expect(mem[0].lastDamage).toBe(15)
+    expect(mem[1]).not.toHaveProperty('lastDamage')
+  })
+
+  it('ダメージ条件を書かない敵には lastDamage を書かない（記憶・乱数は不変）', () => {
+    const { eng } = fight(['条件=受けた=魔法 候補=odd'])
+    eng.selectSpell(SEVEN)
+    eng.selectSpell(ZERO)
+    expect(eng.getState().enemyMemory![0]).not.toHaveProperty('lastDamage')
+  })
+})

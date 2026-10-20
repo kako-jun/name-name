@@ -29,7 +29,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 | `random`         | seed 固定。能力値・HP を境界値から選び、呪文・敵の台本・ATB の有無・操作列（攻撃/呪文/道具/逃走/tick）をランダムに組む                                                                                                                                                                                                                                                                          |
 | `status-matrix`  | 宣言した状態 (#870。毒・もうどく〈上限超えの固定幅〉・睡眠・昏睡〈99 ターン〉・混乱・被ダメージ解除・死の宣告・ゾンビ・回復/ダメージだけの反転・全部入り・不正値だらけの宣言) × 付与の持続（省略・1・99・100 超）× 確率（省略・50・99）× 相手の耐性（属性欄に状態 id と `death`）× ターン制/ATB の 2 種。味方が呪文で敵単体・自分・味方全体・敵全体へ、敵が特技で味方全体へ付け、決着まで進める |
 | `random-status`  | seed 固定。状態を常に宣言し、付与・解除・反転の対象になる効果を中心に、能力値・HP・耐性・最初から持つ状態・`statusChanceBonus`・敵の台本・操作列をランダムに組む                                                                                                                                                                                                                                |
-| `damage-condition` | 敵の条件 `ダメージ…` (#871。奇数・偶数・倍数・閾値・ちょうど・桁数・併用・不正な書式) × 書く場所（`行動:` `反撃:` `死亡時:`）× 受けるダメージの元（固定の奇数・偶数、乱数幅、複数ヒット、極大、相性が絡む属性ダメージ、即死、回復）× 相手の相性 × 敵の HP（小さい=倒れる）× ターン制/ATB。味方が呪文を 3 回撃ってから攻撃する |
+| `damage-condition` | 敵の条件 `ダメージ…` (#871。奇数・偶数・倍数・閾値・ちょうど・桁数・併用・不正な書式) × 書く場所（`行動:` `反撃:` `死亡時:`）× 受けるダメージの元（固定の奇数・偶数、乱数幅、複数ヒット、極大、相性が絡む属性ダメージ、即死、回復）× 相手の相性 × 敵の HP（小さい=倒れる）× ターン制/ATB。味方が呪文を 3 回撃ってから攻撃する。先に 8（偶数）を当ててから同じ呪文を受ける並び（`/after8`）も含み、MISS・吸収・表示 0 のあとに前回の値が残らないことを `damage-memory` が見る |
 
 エンジンの `opts.rng` に seed 固定の LCG を注入するので、同じシナリオは必ず同じ結果になる。操作列のあと、決着まで「攻撃 / ATB を進める」を最大 500 回押して、膠着していないかも見る。
 
@@ -47,7 +47,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 - 凄い組み合わせ（強すぎ・許容）: **閾値を決めていない**。壊れでないシナリオの指標（1 行動の合計ダメージ・HP の減少量・回復量・ヒット数・バフ累積値）の上位を数値のまま並べるだけ。残す/潰すは人間が判断する。
 - ダメージ上限違反は `damage` のヒットの量が 9999 超（`battleLimits.MAX_DAMAGE`）かで見る。`heal` は上限が未決のため検出せず、候補（`maxHealAmount`）に回す。`damage_full`（即死）は上限の対象外（hit に `instantDeath` が付き、数字は出ない）で、検出から除外し、HP 減少は `maxHpDrop` の候補に並ぶ。
 
-検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
+検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `damage-memory`（`ダメージ…` を書いた敵の記憶が直前の味方の行動の表示数字と食い違う。MISS・吸収のあとに前回値が残る等）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
 
 無限ループは「1 操作の乱数消費が 200 万回を超える」で止めて検出する（乱数を使わないループや同期的な無限ループまでは拾えない）。検出できないもの: エンジンが残すイベントは直近 30 件（`EVENT_MAX`）なので、1 操作で 30 件を超えて増えた分のヒットは検査されない。
 

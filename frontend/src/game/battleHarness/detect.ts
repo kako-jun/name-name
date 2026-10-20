@@ -9,6 +9,7 @@
 import { ATB_GAUGE_MAX, type BattleActionEvent, type BattleState } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
 import { MAX_STATUS_TURNS } from '../battleLimits'
+import { tracksDamage } from '../enemyAi'
 
 export type ViolationKind =
   | 'non-finite' // NaN / Infinity が状態・イベントに入った
@@ -28,6 +29,7 @@ export type ViolationKind =
   | 'rng-budget' // 1 操作の乱数消費が予算超（無限ループの疑い）
   | 'slow-op' // 1 操作が極端に遅い（無限ループの疑い）
   | 'status-invariant' // 宣言した状態の不変条件違反（残りターンが整数でない・上限超・倒れた者に残る・status イベントの形が違う）(#870)
+  | 'damage-memory' // `ダメージ…` を書いた敵の記憶 lastDamage が、直前の味方の行動が与えた表示数字の合計と食い違う（数字が出なかったのに前回値が残る等）(#871)
   | 'exception' // エンジンが例外を投げた
 
 /** 壊れと断定しない（人間が見て判断する）種類。これだけのシナリオは「壊れ」に数えない */
@@ -149,6 +151,41 @@ function checkEvents(push: Push, events: readonly BattleActionEvent[], opts: Det
   }
 }
 
+/**
+ * 受けたダメージの記憶 (#871): `ダメージ…` を書いた敵の `lastDamage` は、直前の味方の行動 1 回がその敵に与えた表示数字（即死でない damage ヒットの合計。0 を含む）。
+ * 数字が出なかった（MISS・無効・吸収・即死のみ・対象外）ときは値なしで、前回の値が残ってはならない。
+ * 直前の操作で味方の行動（attack / spell / item / skill）が記録されたときだけ見る
+ */
+function checkDamageMemory(
+  push: Push,
+  s: Readonly<BattleState>,
+  newEvents: readonly BattleActionEvent[]
+): void {
+  const memory = s.enemyMemory
+  if (!memory) return
+  let last: BattleActionEvent | undefined
+  for (const ev of newEvents) {
+    if (ev.actor.side === 'party' && ev.kind !== 'status' && ev.kind !== 'notice') last = ev
+  }
+  if (!last) return
+  const expected = new Map<number, number>()
+  for (const h of last.hits) {
+    if (h.kind !== 'damage' || h.instantDeath || h.target.side !== 'enemy') continue
+    expected.set(h.target.index, (expected.get(h.target.index) ?? 0) + h.amount)
+  }
+  s.enemies.forEach((e, i) => {
+    if (!tracksDamage(e)) return
+    const got = memory[i]?.lastDamage
+    const want = expected.get(i)
+    if (got !== want) {
+      push(
+        'damage-memory',
+        `enemies[${i}] ${e.name}: lastDamage = ${String(got)}（直前の行動 event#${last.seq} が与えた表示数字は ${want === undefined ? '無し' : want}）`
+      )
+    }
+  })
+}
+
 function checkPhase(push: Push, s: BattleState): void {
   const over = OVER_PHASES.includes(s.phase)
   const partyAlive = s.party.some((p) => p.hp > 0)
@@ -210,6 +247,7 @@ export function checkState(
   for (const line of state.log) {
     if (BAD_TEXT.test(line)) push('bad-log-text', `ログ「${line}」`)
   }
+  checkDamageMemory(push, state, newEvents)
   checkPhase(push, state)
   checkAtb(push, state)
   return out

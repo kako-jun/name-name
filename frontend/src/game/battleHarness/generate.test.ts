@@ -24,8 +24,8 @@ describe('生成', () => {
     expect(enemySkillMatrix()).toHaveLength(EFFECTS.length * 5 * 10 * 3)
     expect(stackOrders(3)).toHaveLength(STACK_EFFECTS.length ** 3 * 2)
     expect(reactionChains()).toHaveLength(8 * 8 * 8 * 2)
-    // 条件 × 場所 3 × 受けるダメージの元 9 × 相手の相性 5 × 敵の HP 2 × ターン制/ATB 2
-    expect(damageConditions()).toHaveLength(DAMAGE_CONDITIONS.length * 3 * 9 * 5 * 2 * 2)
+    // 条件 × 場所 3 × 受けるダメージの元 9 × 相手の相性 5 × (敵の HP 2 + 8 を当ててから受ける 1) × ターン制/ATB 2
+    expect(damageConditions()).toHaveLength(DAMAGE_CONDITIONS.length * 3 * 9 * 5 * 3 * 2)
   })
 
   it('ダメージ条件の族は JSON 化でき、実際に反撃が動くシナリオを含む', () => {
@@ -42,6 +42,18 @@ describe('生成', () => {
     const eng2 = realEngineFactory(t, () => 0)
     eng2.selectSpell(t.spells[0])
     expect(eng2.getState().events.some((e) => e.kind === 'skill')).toBe(false)
+  })
+
+  it('8 を当ててから MISS・吸収・表示 0 を受ける族は、記憶が前回値を残さず壊れなしで通る', () => {
+    const all = damageConditions().filter((x) => x.id.endsWith('/after8'))
+    expect(all.length).toBeGreaterThan(0)
+    // 条件 c1 = `ダメージ=偶数`。行動: に書いた敵、ソース s0 = 表示 0・s8 = 回復・相性 resist0 / absorb
+    const pick = all.filter((x) => /\/c[15]\/(actions|counters)\//.test(x.id))
+    expect(pick.length).toBeGreaterThan(0)
+    for (const sc of pick) {
+      const r = runScenario(sc)
+      expect(r.violations.filter((v) => v.kind === 'damage-memory')).toEqual([])
+    }
   })
 
   it('id は全体で一意', () => {

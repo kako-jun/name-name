@@ -312,13 +312,17 @@ export function damageConditions(): Scenario[] {
       for (const place of DAMAGE_CONDITION_PLACES) {
         DAMAGE_SOURCES.forEach((src, si) => {
           for (const dv of variants) {
-            for (const hv of [30, 900]) {
+            for (const [hv, after8] of [
+              [30, false],
+              [900, false],
+              [900, true],
+            ] as const) {
               const script =
                 place === 'onDeath'
                   ? { onDeath: `条件=${cond} 候補=ctr` }
                   : { [place]: [`条件=${cond} 候補=ctr`, '候補=こうげき'] }
               out.push({
-                id: `damage-condition/${atb ? 'atb' : 'turn'}/c${ci}/${place}/s${si}/${dv.name}/hp${hv}`,
+                id: `damage-condition/${atb ? 'atb' : 'turn'}/c${ci}/${place}/s${si}/${dv.name}/hp${hv}${after8 ? '/after8' : ''}`,
                 seed: 60_000 + out.length,
                 party: [entity('a', { hp: 800, maxHp: 800 }), entity('b', { hp: 800, maxHp: 800 })],
                 enemies: [
@@ -327,16 +331,31 @@ export function damageConditions(): Scenario[] {
                 ],
                 atb: atb ? { mode: 'active' } : undefined,
                 skills: { ctr: { name: 'はんげき', target: '相手単体', effect: 'damage 3..3' } },
-                spells: [{ name: 'テスト', mp: 0, target: '敵単体', effect: src }],
-                items: [],
-                ops: [
-                  { t: 'spell', s: 0 },
-                  { t: 'tick', ms: 3000 },
-                  { t: 'spell', s: 0 },
-                  { t: 'tick', ms: 3000 },
-                  { t: 'spell', s: 0 },
-                  ATK,
+                spells: [
+                  { name: 'テスト', mp: 0, target: '敵単体', effect: src },
+                  { name: 'やっつ', mp: 0, target: '敵単体', effect: 'damage 8..8' },
                 ],
+                items: [],
+                // after8: 先に 8（偶数）を当ててから src を受ける。MISS・無効・吸収・表示 0・即死のあとに前回の 8 が残らないことを検出器が見る
+                ops: after8
+                  ? [
+                      { t: 'spell', s: 1 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 1 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      ATK,
+                    ]
+                  : [
+                      { t: 'spell', s: 0 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      { t: 'tick', ms: 3000 },
+                      { t: 'spell', s: 0 },
+                      ATK,
+                    ],
               })
             }
           }
