@@ -695,9 +695,9 @@ mod tests {
             let a = a.unwrap();
             let winner = (0..4).find(|i| mask & (1 << i) != 0).unwrap();
             let got = [&a.absorb, &a.nullify, &a.halve, &a.weak];
-            for i in 0..4 {
+            for (i, item) in got.iter().enumerate() {
                 let expect = if i == winner { strs(&["x"]) } else { vec![] };
-                assert_eq!(*got[i], expect, "mask={mask:04b} col={i}");
+                assert_eq!(**item, expect, "mask={mask:04b} col={i}");
             }
             assert_eq!(
                 w.len(),
