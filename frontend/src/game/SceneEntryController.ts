@@ -444,15 +444,15 @@ export class SceneEntryController {
    * 復元位置を、復元先のイベント列を入場時 flags で展開した後の長さに照らして検証する (#789, #799)。
    * 範囲内なら null、範囲外なら `failEntry` に渡す失敗（out-of-range）を返す。何も変更しない。
    * 展開後で判定するのは、`[条件:]` の真偽で長さが変わり、`eventIndex` は展開後の列を指すため
-   * （`restoreToScene` が `entryFromState(state)` で展開した列に `applyState` が eventIndex を当てる）。
-   * 展開は `restoreToScene` と同じ `expandEvents(events, entryFromState(state))`（旧セーブは静的展開）。
+   * （`restoreToScene` が `entryFromState(state, events)` で展開した列に `applyState` が eventIndex を当てる）。
+   * 展開は `restoreToScene` と同じ `expandEvents(events, entryFromState(state, events))`（旧セーブは保存位置までを静的展開）。
    */
   private checkRestorePosition(
     events: readonly Event[],
     state: NovelGameState
   ): EntryFailure | null {
     const detail = findRestorePositionError(
-      expandEvents(events, entryFromState(state)).events,
+      expandEvents(events, entryFromState(state, events)).events,
       { eventIndex: state.eventIndex, textIndex: state.textIndex },
       (event) => {
         const textEvt = getTextEvent(event)

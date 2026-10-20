@@ -38,7 +38,7 @@ function gs(flags: Record<string, boolean>): GameState {
 
 /** 入場条件（逐次評価）。 */
 function entryOf(flags: Record<string, boolean>, fromRawIndex = 0): ExpansionEntry {
-  return { flags: gs(flags).toJSON(), fromRawIndex, legacyStatic: false }
+  return { flags: gs(flags).toJSON(), fromRawIndex }
 }
 
 /** 位置だけを持つスナップショット（NovelGameState の残りは PlaybackCursor が読まない）。 */
@@ -266,7 +266,7 @@ describe('PlaybackCursor 入場時展開 (#799)', () => {
     expect(Object.keys(c.snapshotEntry())).toEqual([])
   })
 
-  it('snapshotEntry: [条件:] があれば入場時 flags を出し、entryRawIndex は非0のときだけ、entryStatic は旧セーブ由来のときだけ', () => {
+  it('snapshotEntry: [条件:] があれば入場時 flags を出し、entryRawIndex は非0のときだけ', () => {
     const raw: Event[] = [narr('a'), cond('x', [narr('b')]), narr('c')]
     const c = new PlaybackCursor()
     c.load(raw, gs({ x: true }))
@@ -274,8 +274,6 @@ describe('PlaybackCursor 入場時展開 (#799)', () => {
     expect(Object.keys(c.snapshotEntry())).toEqual(['entryFlags'])
     c.load(raw, gs({ x: false }), 0, 2)
     expect(c.snapshotEntry()).toEqual({ entryFlags: { x: { Bool: false } }, entryRawIndex: 2 })
-    c.replaceEvents(raw, { flags: { x: { Bool: true } }, fromRawIndex: 0, legacyStatic: true })
-    expect(c.snapshotEntry()).toEqual({ entryFlags: { x: { Bool: true } }, entryStatic: true })
   })
 
   it('rawOffsets は元列のトップレベル i 番目の展開後の開始位置（長さ raw.length + 1）', () => {

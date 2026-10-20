@@ -240,7 +240,6 @@ export class SceneIndex {
     const { rawOffsets } = expandEvents(this.entryRawEvents, {
       flags: flags ?? {},
       fromRawIndex: seg.start,
-      legacyStatic: false,
     })
     return { rawStart: seg.start, startIndex: rawOffsets[seg.start] ?? 0 }
   }

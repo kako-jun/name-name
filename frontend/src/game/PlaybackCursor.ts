@@ -27,7 +27,7 @@ export class PlaybackCursor {
   /** Condition 展開済みのフラットなイベント配列。訪問中は固定。 */
   private _resolvedEvents: Event[] = []
   /** 展開の入場条件（入場時 flags, #799）。セーブ（`entryFlags` ほか）に載せて同じ列を再現する。 */
-  private _entry: ExpansionEntry = { flags: {}, fromRawIndex: 0, legacyStatic: false }
+  private _entry: ExpansionEntry = { flags: {}, fromRawIndex: 0 }
   /** 元列のトップレベル i 番目の展開後の開始位置（長さ `rawEvents.length + 1`）。線形ストリームの境界計算に使う。 */
   private _rawOffsets: number[] = [0]
   /** 元列に `[条件:]` を含むか（含まなければ展開は flags に依存しない）。 */
@@ -121,7 +121,7 @@ export class PlaybackCursor {
    * 元列での開始位置（それより前は静的に展開し、以降を逐次評価する）。
    */
   load(rawEvents: Event[], flags: GameState, startIndex = 0, fromRawIndex = 0): void {
-    this.replaceEvents(rawEvents, { flags: flags.toJSON(), fromRawIndex, legacyStatic: false })
+    this.replaceEvents(rawEvents, { flags: flags.toJSON(), fromRawIndex })
     this._eventIndex = startIndex
     this._textIndex = 0
     this._sentenceIndex = 0
@@ -145,14 +145,13 @@ export class PlaybackCursor {
   /**
    * 現在の訪問の入場条件を、セーブに載せる任意フィールドとして返す (#799)。元列に `[条件:]` が無ければ
    * 展開が flags に依存しないので何も出さない（セーブ JSON は従来と 1 バイトも変わらない）。
-   * `entryRawIndex` は非0のとき、`entryStatic` は旧セーブ由来の訪問のときだけ出す。
+   * `entryRawIndex` は非0のときだけ出す。
    */
-  snapshotEntry(): Pick<NovelGameState, 'entryFlags' | 'entryRawIndex' | 'entryStatic'> {
+  snapshotEntry(): Pick<NovelGameState, 'entryFlags' | 'entryRawIndex'> {
     if (!this._hasCondition) return {}
     return {
       entryFlags: this._entry.flags,
       ...(this._entry.fromRawIndex !== 0 ? { entryRawIndex: this._entry.fromRawIndex } : {}),
-      ...(this._entry.legacyStatic ? { entryStatic: true } : {}),
     }
   }
 

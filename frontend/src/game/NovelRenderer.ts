@@ -4287,9 +4287,9 @@ export class NovelRenderer {
     this.choiceOverlay.hide()
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
-    // 展開は入場時 flags（`state.entryFlags`。古いセーブには無く、その場合は `state.flags` での静的展開）から
+    // 展開は入場時 flags（`state.entryFlags`。古いセーブには無く、その場合は保存位置までを `state.flags` で静的展開し後ろは逐次評価）から
     // 1回だけ行い、訪問中は固定する (#799)。
-    this.cursor.replaceEvents([...scene.events], entryFromState(state))
+    this.cursor.replaceEvents([...scene.events], entryFromState(state, scene.events))
 
     // 完成済み NovelGameState を applyState で宣言的に復元
     this.applyState(state)

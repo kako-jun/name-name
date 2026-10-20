@@ -325,7 +325,6 @@ describe('後方互換 (#799)', () => {
     const snap = r.getSnapshot()
     expect(Object.keys(snap)).not.toContain('entryFlags')
     expect(Object.keys(snap)).not.toContain('entryRawIndex')
-    expect(Object.keys(snap)).not.toContain('entryStatic')
     expect(Object.keys(snap)[Object.keys(snap).length - 1]).toBe('storyEnded')
     r.quickSave()
     const raw = JSON.parse(localStorage.getItem('name-name-save-t799-quick') ?? '{}')
@@ -349,7 +348,7 @@ describe('後方互換 (#799)', () => {
     expect(saved.flags.x).toEqual({ Bool: false })
   })
 
-  it('旧セーブ（entryFlags 無し）: 従来どおり state.flags での静的展開で復元し、その訪問は列を固定する', async () => {
+  it('旧セーブ（entryFlags 無し）: 保存位置までは従来どおり state.flags での静的展開で復元する', async () => {
     // [t0, Flag c=true, Cond c [X], t3]。旧実装の静的展開（flags 空）は [t0, Flag, t3] で、位置2 は t3。
     const md = body(
       ['> t0', '[フラグ: c = true]', '[条件: c]', '> X', '[/条件]', '> t3'].join('\n')
@@ -360,19 +359,41 @@ describe('後方互換 (#799)', () => {
     const r = build(scenes)
     expect((await r.quickLoad())?.status).toBe('entered')
     expect(textOf(r)).toBe('t3')
-    // 再保存しても同じ列（entryStatic の印で静的展開に固定）
+    // 位置 t3 は最後の要素なので、再保存すると全体を静的に展開する印（entryRawIndex = 元列の長さ）が付き、同じ列を再現する
     const snap = r.getSnapshot()
-    expect(snap.entryStatic).toBe(true)
+    expect(snap.entryRawIndex).toBe(4)
     expect(snap.entryFlags).toEqual({})
     r.quickSave()
     const loaded = build(scenes)
     await loaded.quickLoad()
     expect(textOf(loaded)).toBe('t3')
     expect(I(loaded).resolvedEvents.length).toBe(3)
-    // 同じ入場時 flags で新規の逐次評価をすると別の列になる（= 旧セーブ経路が静的であることの対照）
+    // 同じ入場時 flags で新規の逐次評価をすると別の列になる（= 旧セーブの位置までが静的であることの対照）
     const fresh = build(scenes)
     await fresh.startFrom({ sceneId: 'a', flags: {} })
     expect(I(fresh).resolvedEvents.length).toBe(4)
+  })
+
+  it('旧セーブ: 保存位置より後ろの [フラグ:] で切り替わる [条件:] は逐次評価される（s0 → s1 → Y → end）', async () => {
+    const md = body(
+      ['> s0', '> s1', '[フラグ: y = true]', '[条件: y]', '> Y', '[/条件]', '> end'].join('\n\n')
+    )
+    const scenes = await scenesOf(md)
+    localStorage.setItem(
+      'name-name-save-t799-quick',
+      JSON.stringify(legacySlot({ sceneId: 'a', eventIndex: 0, flags: {} }))
+    )
+    const r = build(scenes)
+    expect((await r.quickLoad())?.status).toBe('entered')
+    expect(playRest(r)).toEqual(['s0', 's1', 'Y', 'end'])
+    // 1つ進めて再保存 → 別インスタンスで復元しても同じ残り（保存位置までの静的展開と後ろの逐次評価を entryFlags / entryRawIndex で再現）
+    const second = build(scenes)
+    await second.quickLoad()
+    advance(second)
+    second.quickSave()
+    const loaded = build(scenes)
+    await loaded.quickLoad()
+    expect(playRest(loaded)).toEqual(['s1', 'Y', 'end'])
   })
 
   it('旧セーブの範囲検証は従来と同じ（静的展開後の長さで判定し、範囲外は復元失敗）', async () => {
@@ -479,6 +500,53 @@ describe('新規開始の位置指定（debug_eventIndex）と線形ストリー
     await a.startFrom({ sceneId: 'a', linear: true, flags: {} })
     expect(a.getSnapshot().entryRawIndex).toBeUndefined()
     expect(playRest(a)).toEqual(['a1', 'bk', 'b1'])
+  })
+
+  it('線形ストリームの途中から始めた訪問は、SaveSlotData（quickSave / quickLoad）を通っても同じ位置・同じ残りになる', async () => {
+    const two = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## a: A',
+      '',
+      '[フラグ: k = true]',
+      '> a1',
+      '',
+      '## b: B',
+      '',
+      '[条件: k]',
+      '> bk',
+      '[/条件]',
+      '> b1',
+      '',
+      '> b2',
+      '',
+    ].join('\n')
+    const scenes = await scenesOf(two)
+    const flat: Event[] = scenes.flatMap((sc, i) =>
+      i ? (['SceneTransition', ...sc.events] as Event[]) : sc.events
+    )
+    const mk = (): NovelRenderer => {
+      const r = new NovelRenderer()
+      r.setEvents(flat)
+      r.setJumpSceneIndex(scenes)
+      r.setDocKey('t799')
+      return r
+    }
+    const r = mk()
+    await r.startFrom({ sceneId: 'b', linear: true, flags: {} })
+    advance(r)
+    expect(textOf(r)).toBe('b2')
+    r.quickSave()
+    const saved = JSON.parse(localStorage.getItem('name-name-save-t799-quick') ?? '{}')
+    expect(saved.entryRawIndex).toBe(3)
+    const loaded = mk()
+    expect((await loaded.quickLoad())?.status).toBe('entered')
+    expect(textOf(loaded)).toBe('b2')
+    expect(playRest(loaded)).toEqual(['b2'])
   })
 })
 
@@ -663,14 +731,14 @@ describe('フラグの書き手の固定 (#799)', () => {
   const sources = Object.keys(sourceMap).map((p) => p.replace(/^\.\//, ''))
   const read = (f: string): string => sourceMap[`./${f}`]
 
-  it('setFlag の呼び出しは GameState.ts の定義と NovelRenderer の Flag 分岐 1 か所だけ', () => {
+  it('setFlag の呼び出しは GameState.ts の走査用の複製への適用（expandEvents・entryFromState）と NovelRenderer の Flag 分岐 1 か所だけ', () => {
     const hits: string[] = []
     for (const f of sources) {
       const text = read(f)
       const count = (text.match(/\.setFlag\(/g) ?? []).length
       if (count > 0) hits.push(`${f}:${count}`)
     }
-    expect(hits.sort()).toEqual(['GameState.ts:1', 'NovelRenderer.ts:1'])
+    expect(hits.sort()).toEqual(['GameState.ts:2', 'NovelRenderer.ts:1'])
   })
 
   it('gameState.fromJSON（flags の置換）は 新規開始・復元の 3 か所だけ', () => {

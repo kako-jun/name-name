@@ -26,11 +26,10 @@ const flagB = (name: string, v: boolean): Event => setFlag(name, { Bool: v })
 const cond = (flag: string, ...events: Event[]): Event => ({ Condition: { flag, events } })
 const jump = (target: string): Event => ({ Jump: { target } })
 
-const entryOf = (
-  flags: Record<string, FlagValue>,
-  fromRawIndex = 0,
-  legacyStatic = false
-): ExpansionEntry => ({ flags, fromRawIndex, legacyStatic })
+const entryOf = (flags: Record<string, FlagValue>, fromRawIndex = 0): ExpansionEntry => ({
+  flags,
+  fromRawIndex,
+})
 
 const bools = (o: Record<string, boolean>): Record<string, FlagValue> =>
   Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { Bool: v }]))
@@ -266,9 +265,9 @@ function gsOf(flags: Record<string, FlagValue>): GameState {
   return g
 }
 
-// --- rawOffsets / fromRawIndex / legacyStatic ---
+// --- rawOffsets / fromRawIndex ---
 
-describe('expandEvents rawOffsets / fromRawIndex / legacyStatic (#799)', () => {
+describe('expandEvents rawOffsets / fromRawIndex (#799)', () => {
   it('rawOffsets: 元列のトップレベル i 番目の展開後の開始位置（長さ raw.length + 1）', () => {
     const raw = [narr('a'), cond('x', narr('b'), narr('c')), narr('d')]
     expect(expandEvents(raw, entryOf(bools({ x: true }))).rawOffsets).toEqual([0, 1, 3, 4])
@@ -296,37 +295,33 @@ describe('expandEvents rawOffsets / fromRawIndex / legacyStatic (#799)', () => {
     expect(from3.rawOffsets[3]).toBe(2)
   })
 
-  it('legacyStatic は resolveEvents と同じ（Flag を無視して全体を入場時 flags で静的に展開）', () => {
+  it('fromRawIndex = raw.length は resolveEvents と同じ（Flag を無視して全体を入場時 flags で静的に展開）', () => {
     const raw = [cond('x', narr('A'), flagB('x', false), narr('B')), narr('C')]
     const flags = bools({ x: true })
-    expect(expandEvents(raw, entryOf(flags, 0, true)).events).toEqual(
+    expect(expandEvents(raw, entryOf(flags, raw.length)).events).toEqual(
       resolveEvents(raw, gsOf(flags))
     )
   })
 
-  it('entryFromState: entryFlags が無ければ state.flags での静的展開に倒す（古いセーブ）', () => {
-    const legacy = { flags: bools({ x: true }) } as unknown as NovelGameState
-    expect(entryFromState(legacy)).toEqual({
-      flags: bools({ x: true }),
-      fromRawIndex: 0,
-      legacyStatic: true,
-    })
+  it('entryFromState: entryFlags が無ければ保存位置を含むトップレベル要素までを静的、後ろを逐次評価にする（古いセーブ）', () => {
+    // 0: t0 / 1: Flag / 2: [条件 c] X / 3: t3。flags 空の静的展開は [t0, Flag, t3]（rawOffsets 0,1,2,2,3）
+    const raw: Event[] = [narr('t0'), flagB('c', true), cond('c', narr('X')), narr('t3')]
+    const at = (eventIndex: number): NovelGameState =>
+      ({ flags: {}, eventIndex }) as unknown as NovelGameState
+    expect(entryFromState(at(0), raw)).toEqual({ flags: {}, fromRawIndex: 1 })
+    // 位置1 は Flag 自身（これから実行する）。要素 0..1 の展開が変わらないので c=true を先に適用して走査する
+    expect(entryFromState(at(1), raw)).toEqual({ flags: bools({ c: true }), fromRawIndex: 2 })
+    // 位置2 は t3（空の [条件] はまたぐ）
+    expect(entryFromState(at(2), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
+    // 終端・範囲外は全体を静的展開
+    expect(entryFromState(at(3), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
+    expect(entryFromState(at(9), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
     const modern = {
       flags: bools({ x: false }),
       entryFlags: bools({ x: true }),
       entryRawIndex: 4,
     } as unknown as NovelGameState
-    expect(entryFromState(modern)).toEqual({
-      flags: bools({ x: true }),
-      fromRawIndex: 4,
-      legacyStatic: false,
-    })
-    const pinned = {
-      flags: {},
-      entryFlags: bools({ x: true }),
-      entryStatic: true,
-    } as unknown as NovelGameState
-    expect(entryFromState(pinned).legacyStatic).toBe(true)
+    expect(entryFromState(modern, raw)).toEqual({ flags: bools({ x: true }), fromRawIndex: 4 })
   })
 
   it('hasCondition', () => {
@@ -424,12 +419,12 @@ describe('expandEvents プロパティテスト (#799)', () => {
     expect(nonTrivial).toBeGreaterThan(100)
   })
 
-  it('legacyStatic はどの入力でも resolveEvents と一致する', () => {
+  it('fromRawIndex = raw.length はどの入力でも resolveEvents と一致する', () => {
     const rand = rng(5799)
     for (let n = 0; n < 300; n++) {
       const raw = randomTree(rand, { flags: true })
       const E = randomFlags(rand)
-      expect(expandEvents(raw, entryOf(E, 0, true)).events).toEqual(resolveEvents(raw, gsOf(E)))
+      expect(expandEvents(raw, entryOf(E, raw.length)).events).toEqual(resolveEvents(raw, gsOf(E)))
     }
   })
 })

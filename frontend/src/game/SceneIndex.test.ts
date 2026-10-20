@@ -489,7 +489,7 @@ describe('SceneIndex.resolveLinearSegmentsNow', () => {
     idx.setEntry(flatten(sc))
     idx.setJumpSceneIndex(sc)
     const raw = idx.getEntryEvents()
-    const { rawOffsets } = expandEvents(raw, { flags: {}, fromRawIndex: 0, legacyStatic: false })
+    const { rawOffsets } = expandEvents(raw, { flags: {}, fromRawIndex: 0 })
     expect(idx.resolveLinearSegmentsNow(null, raw, rawOffsets)).toEqual([
       { sceneId: 'a', start: 0, separator: null },
       { sceneId: 'b', start: 2, separator: 1 },
@@ -497,7 +497,6 @@ describe('SceneIndex.resolveLinearSegmentsNow', () => {
     const on = expandEvents(raw, {
       flags: { f: { Bool: true } },
       fromRawIndex: 0,
-      legacyStatic: false,
     })
     expect(idx.resolveLinearSegmentsNow(null, raw, on.rawOffsets)).toEqual([
       { sceneId: 'a', start: 0, separator: null },

@@ -215,16 +215,12 @@ export interface NovelGameState {
    * 固定するので、展開後の列 = `expandEvents(raw, { flags: entryFlags, ... })` で再現でき、`eventIndex` は
    * その列の添字になる（ADR 0002 の「展開は純関数」を、位置までに実行した `[フラグ:]` を含めて保つ）。
    * `getSnapshot` は元列に `[条件:]` を含むときだけ出力する（含まなければ展開が flags に依存しない）。
-   * 後方互換: 古いセーブ/スナップショットには無い → 復元時は `flags` で静的に展開して列を固定する。
+   * 後方互換: 古いセーブ/スナップショットには無い → 復元時は保存位置を含むトップレベル要素までを `flags` で静的に
+   * 展開し、それより後ろは `flags` から逐次評価する（`entryFromState`）。
    */
   entryFlags?: Record<string, FlagValue>
   /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。0 のときは出力しない。 */
   entryRawIndex?: number
-  /**
-   * 旧セーブ由来で静的展開に固定された訪問であることの印 (#799)。再保存しても同じ列を再現するため。
-   * 新規の入場では出力しない。
-   */
-  entryStatic?: boolean
 }
 
 /**
@@ -274,18 +270,51 @@ export interface StartFromOptions {
 }
 
 /**
- * 保存された状態から、展開の入場条件を求める (#799)。`entryFlags` が無い（古いセーブ・手書きの状態）は
- * `flags` での静的展開に倒す。
+ * 保存された状態から、展開の入場条件を求める (#799)。`raw` は復元先の元イベント列。
+ *
+ * `entryFlags` が無い（古いセーブ・手書きの状態）は、保存位置（`eventIndex`）を含むトップレベル要素までを
+ * `flags` で静的に展開し（旧実装の展開と添字が一致する）、それより後ろは `flags` から逐次評価する
+ * （旧実装は `[フラグ:]` の実行ごとに再展開していたので、位置より後ろの条件も評価し直されていた）。
+ * 位置が展開後の列の範囲外のときは全体を静的に展開する。
+ * 位置を含む要素の中で位置より後ろにある `[フラグ:]` は、要素 0..k の展開が変わらない限り走査の起点 flags に先に適用する。
+ * 残る制約: それを適用すると要素 0..k の展開（添字）が変わってしまう場合だけ、適用せず保存時の flags のまま走査する。
  */
-export function entryFromState(state: NovelGameState): ExpansionEntry {
-  if (state.entryFlags === undefined) {
-    return { flags: state.flags, fromRawIndex: 0, legacyStatic: true }
+export function entryFromState(state: NovelGameState, raw: readonly Event[]): ExpansionEntry {
+  if (state.entryFlags !== undefined) {
+    return { flags: state.entryFlags, fromRawIndex: state.entryRawIndex ?? 0 }
   }
-  return {
-    flags: state.entryFlags,
-    fromRawIndex: state.entryRawIndex ?? 0,
-    legacyStatic: state.entryStatic === true,
+  const all = raw.length
+  const base = expandEvents(raw, { flags: state.flags, fromRawIndex: all })
+  let k = -1
+  for (let i = 0; i < all; i++) {
+    if (base.rawOffsets[i] <= state.eventIndex && state.eventIndex < base.rawOffsets[i + 1]) {
+      k = i
+      break
+    }
   }
+  if (k < 0) return { flags: state.flags, fromRawIndex: all }
+
+  // 位置を含む要素 k の中で、位置より後ろにある `[フラグ:]` は、旧実装では実行のたびの再展開で後続の条件に効いていた。
+  // 走査の起点 flags にそれらを先に適用する。ただし起点 flags は要素 k までの静的展開にも使うので、
+  // 適用しても要素 0..k の展開が変わらないときだけ採用する（添字を旧実装と一致させるため）。
+  const end = base.rawOffsets[k + 1]
+  const later = gameStateFromFlags(state.flags)
+  let changed = false
+  for (const event of base.events.slice(state.eventIndex, end)) {
+    if (typeof event === 'object' && event !== null && 'Flag' in event) {
+      later.setFlag(event.Flag.name, event.Flag.value)
+      changed = true
+    }
+  }
+  if (changed) {
+    const flags = later.toJSON()
+    const alt = expandEvents(raw, { flags, fromRawIndex: all })
+    const same =
+      alt.rawOffsets.slice(0, k + 2).join() === base.rawOffsets.slice(0, k + 2).join() &&
+      JSON.stringify(alt.events.slice(0, end)) === JSON.stringify(base.events.slice(0, end))
+    if (same) return { flags, fromRawIndex: k + 1 }
+  }
+  return { flags: state.flags, fromRawIndex: k + 1 }
 }
 
 /**
@@ -319,12 +348,10 @@ export function resolveEvents(events: readonly Event[], gameState: GameState): E
  * - `flags`: シーン訪問に入った瞬間の flags（入場時 flags）。
  * - `fromRawIndex`: 元列のトップレベルでこの位置より前は静的に展開し、この位置以降を逐次評価する
  *   （線形ストリームの途中のシーンから始めるときだけ非0）。
- * - `legacyStatic`: `true` なら全体を `flags` で静的に展開する（旧セーブの復元用）。
  */
 export interface ExpansionEntry {
   flags: Record<string, FlagValue>
   fromRawIndex: number
-  legacyStatic: boolean
 }
 
 /** `expandEvents` の結果。 */
@@ -350,14 +377,14 @@ function gameStateFromFlags(flags: Record<string, FlagValue>): GameState {
  * ブロックに入った後で、ブロック内でそのフラグを変えても、入場済みのブロックの残りは流れる。
  * 偽のブロックは内側の `Flag` も実行しない。
  *
- * `legacyStatic` と `fromRawIndex` より前のトップレベルは `entry.flags` で静的に展開する（`resolveEvents` と同じ）。
+ * `fromRawIndex` より前のトップレベルは `entry.flags` で静的に展開する（`resolveEvents` と同じ）。
  * 結果は `(raw, entry)` だけで決まる（フラグの履歴・乱数・時刻に依存しない）。
  */
 export function expandEvents(raw: readonly Event[], entry: ExpansionEntry): Expansion {
   const events: Event[] = []
   const rawOffsets: number[] = []
   const staticState = gameStateFromFlags(entry.flags)
-  const scan = entry.legacyStatic ? staticState : gameStateFromFlags(entry.flags)
+  const scan = gameStateFromFlags(entry.flags)
 
   const walkSequential = (list: readonly Event[]): void => {
     for (const event of list) {
@@ -374,7 +401,7 @@ export function expandEvents(raw: readonly Event[], entry: ExpansionEntry): Expa
 
   for (let i = 0; i < raw.length; i++) {
     rawOffsets.push(events.length)
-    if (entry.legacyStatic || i < entry.fromRawIndex) {
+    if (i < entry.fromRawIndex) {
       events.push(...resolveEvents([raw[i]], staticState))
     } else {
       walkSequential([raw[i]])
