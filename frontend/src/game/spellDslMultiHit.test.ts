@@ -1,12 +1,7 @@
 /** 効果 DSL の複数ヒット `回数=N` (#879) */
 import { describe, it, expect, vi } from 'vitest'
-import {
-  parseEffect,
-  applyEffect,
-  MAX_HITS_PER_ACTION,
-  type BattleEntity,
-  type EffectContext,
-} from './spellDsl'
+import { MAX_HITS_PER_ACTION } from './battleLimits'
+import { parseEffect, applyEffect, type BattleEntity, type EffectContext } from './spellDsl'
 
 function ent(over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -266,5 +261,54 @@ describe('applyEffect 複数ヒット', () => {
       expect(r.calls).toHaveLength(1)
       expect(log).toEqual(['E に 6 のダメージ！', 'E に 6 のダメージ！'])
     }
+  })
+
+  describe('ヒットごとのダメージ上限 9999 (#877)', () => {
+    it.each([
+      [9998, 9998],
+      [9999, 9999],
+      [10000, 9999],
+    ])('1 ヒット %i は %i で頭打ち', (base, dealt) => {
+      const t = ent({ hp: 99999, maxHp: 99999 })
+      const hits: number[] = []
+      applyEffect(parseEffect(`damage ${base} 回数=2`)!, {
+        caster: ent(),
+        targets: [t],
+        rng: () => 0,
+        onHit: (_t, _k, a) => hits.push(a),
+      })
+      expect(hits).toEqual([dealt, dealt])
+      expect(t.hp).toBe(99999 - dealt * 2)
+    })
+    it('合計は 9999 を超えられる（行動全体の上限ではない）', () => {
+      const t = ent({ hp: 99999, maxHp: 99999 })
+      applyEffect(parseEffect('damage 20000 回数=5')!, {
+        caster: ent(),
+        targets: [t],
+        rng: () => 0,
+      })
+      expect(t.hp).toBe(99999 - 9999 * 5)
+    })
+    it('全体・弱点補正後も各ヒットで頭打ち', () => {
+      const a = ent({
+        id: 'a',
+        hp: 99999,
+        maxHp: 99999,
+        affinity: { weak: ['fire'], halve: [], nullify: [], absorb: [] },
+      })
+      const b = ent({ id: 'b', hp: 99999, maxHp: 99999 })
+      applyEffect(parseEffect('damage 6000 type=fire 回数=2')!, {
+        caster: ent(),
+        targets: [a, b],
+        rng: () => 0,
+      })
+      expect(a.hp).toBe(99999 - 9999 * 2)
+      expect(b.hp).toBe(99999 - 6000 * 2)
+    })
+    it('負値の heal は複数ヒット経路でなく通常経路だが HP 下限 0 を保つ', () => {
+      const t = ent({ hp: 5 })
+      applyEffect(parseEffect('heal -50')!, { caster: ent(), targets: [t], rng: () => 0 })
+      expect(t.hp).toBe(0)
+    })
   })
 })
