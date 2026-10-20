@@ -6,7 +6,7 @@
  * - `battleAtb.ts`: `ATB_GAUGE_MAX` / `ATB_FILL_PER_AGI_MS` / `ATB_MAX_TICK_MS`、tick ループの安全弁
  * - `affinity.ts`: `DEATH_CHANCE_CAP`（即死の成功率の頭打ち。値の確定は #877 の後続段階）
  *
- * 上限を置かないもの（kako-jun の決定）: 敵・味方の HP（ラスボスは何万も必要）、回復量。
+ * 上限を置かないもの: 敵 HP は kako-jun の決定（ラスボスは何万も必要）。味方 HP・回復量は未決のため、現状は上限なし。
  */
 
 /** 1 回のダメージの上限（kako-jun 決定 2026-10-20）。HP の上限ではない */
@@ -14,12 +14,6 @@ export const MAX_DAMAGE = 9999
 
 /** HP の下限。負値の回復などで HP を 0 未満にしない */
 export const MIN_HP = 0
-
-/**
- * 1 回の行動で出せるヒット数の上限。#879（複数ヒット）が使う名前だけ先に用意した。
- * 値は暫定（現行は 1 行動 = 1 ヒットで、この定数はまだどこからも参照されない）。決定は #879 側で行う。
- */
-export const MAX_HITS_PER_ACTION = Number.MAX_SAFE_INTEGER
 
 /** ダメージ量を `MAX_DAMAGE` で頭打ちにする。下限側は触らない（0 以下はそのまま返す） */
 export function clampDamage(amount: number): number {

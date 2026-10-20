@@ -3,14 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { parseEffect, applyEffect } from './spellDsl'
-import {
-  MAX_DAMAGE,
-  MIN_HP,
-  MAX_HITS_PER_ACTION,
-  applyDamageToHp,
-  clampDamage,
-  clampHp,
-} from './battleLimits'
+import { MAX_DAMAGE, MIN_HP, applyDamageToHp, clampDamage, clampHp } from './battleLimits'
 
 function ent(over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -43,10 +36,9 @@ function ctxFor(targets: BattleEntity[], amounts?: { kind: string; amount: numbe
 afterEach(() => vi.restoreAllMocks())
 
 describe('定数', () => {
-  it('ダメージ上限は 9999、HP 下限は 0、MAX_HITS_PER_ACTION は #879 用に用意されている', () => {
+  it('ダメージ上限は 9999、HP 下限は 0', () => {
     expect(MAX_DAMAGE).toBe(9999)
     expect(MIN_HP).toBe(0)
-    expect(MAX_HITS_PER_ACTION).toBeGreaterThan(0)
   })
 })
 
@@ -83,7 +75,7 @@ describe('呪文・特技・アイテムの damage（効果 DSL）', () => {
     [9999, 9999],
     [10000, 9999],
     [12000, 9999],
-  ])('damage %i..%i → 数字 %i', (raw, shown) => {
+  ])('damage $0 → 数字 $1', (raw, shown) => {
     const t = ent({ hp: 50000, maxHp: 50000 })
     const amounts: { kind: string; amount: number }[] = []
     const log = applyEffect(parseEffect(`damage ${raw}..${raw}`)!, ctxFor([t], amounts))
@@ -116,7 +108,7 @@ describe('呪文・特技・アイテムの damage（効果 DSL）', () => {
     expect(t.hp).toBe(50000 - 9998)
   })
 
-  it('半減は従来どおり', () => {
+  it('半減しても元が大きければ 9999 で頭打ち（30000 → 15000 → 9999）', () => {
     const t = ent({ hp: 50000, maxHp: 50000, affinity: { halve: ['fire'] } })
     applyEffect(parseEffect('damage 30000..30000 type=fire')!, ctxFor([t]))
     expect(t.hp).toBe(50000 - 9999)
@@ -201,6 +193,51 @@ describe('エンジン経由（全経路）で数字・ログ・イベントが 
     expect(e.getState().party[0].hp).toBe(100000 - 9999)
     const hit = e.getState().events.find((v) => v.actor.side === 'enemy')!.hits[0]
     expect(hit.amount).toBe(9999)
+  })
+
+  it('ATB の敵の通常攻撃: ATK が巨大でも 9999。ログ・events も 9999', () => {
+    const hero = ent({ id: 'hero', hp: 100000, maxHp: 100000, def: 0, agi: 1 })
+    const boss = ent({ id: 'boss', atk: 100000, agi: 100 })
+    const e = new BattleEngine([hero], [boss], { rng: rng0, atb: {} })
+    for (let i = 0; i < 50 && hero.hp === 100000; i++) e.tick(1000)
+    const hits = e
+      .getState()
+      .events.filter((v) => v.actor.side === 'enemy')
+      .map((v) => v.hits[0].amount)
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits.every((a) => a === 9999)).toBe(true)
+    expect(hero.hp).toBe(100000 - 9999 * hits.length)
+    expect(e.getState().log.some((l) => l.includes('9999 の ダメージ'))).toBe(true)
+  })
+
+  it('反撃の通常攻撃: ATK が巨大でも 9999。ログ・events も 9999', () => {
+    const hero = ent({ id: 'hero', hp: 100000, maxHp: 100000, def: 0 })
+    const boss = ent({
+      id: 'boss',
+      hp: 100000,
+      maxHp: 100000,
+      atk: 100000,
+      counters: ['候補=こうげき'],
+    })
+    const e = new BattleEngine([hero], [boss], { rng: rng0 })
+    e.selectAttack() // 反撃 1 回 + 敵ターンの通常攻撃 1 回
+    expect(hero.hp).toBe(100000 - 9999 * 2)
+    const hits = e
+      .getState()
+      .events.filter((v) => v.actor.side === 'enemy')
+      .map((v) => v.hits[0].amount)
+    expect(hits).toEqual([9999, 9999])
+    expect(e.getState().log.filter((l) => l.includes('9999 の ダメージを うけた')).length).toBe(2)
+  })
+
+  it('死亡時の通常攻撃（さいごのあがき）: ATK が巨大でも 9999', () => {
+    const hero = ent({ id: 'hero', hp: 100000, maxHp: 100000, def: 0, atk: 1000 })
+    const boss = ent({ id: 'boss', hp: 1, maxHp: 1, atk: 100000, def: 0, onDeath: '候補=こうげき' })
+    const e = new BattleEngine([hero], [boss], { rng: rng0 })
+    e.selectAttack()
+    expect(boss.hp).toBe(0)
+    expect(hero.hp).toBe(100000 - 9999)
+    expect(e.getState().events.find((v) => v.actor.side === 'enemy')!.hits[0].amount).toBe(9999)
   })
 
   it('呪文 12000 → 数字 9999、HP は 9999 だけ減る', () => {

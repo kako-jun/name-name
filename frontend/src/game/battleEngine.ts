@@ -1059,15 +1059,15 @@ export class BattleEngine {
     })
   }
 
-  /**
-   * 呪文・アイテム・特技 (#834) 1 回を記録する (#745)。効果は DSL・builtin のどちらでも HP を直接書き換えるので、
-   * 効果の前後の HP 差で結果を導く（減った=damage / 増えた=heal）。対象にしたのに HP が変わらなかった者は miss。
-   */
   /** ダメージ数字は 1 回のダメージの上限 (#877) を超えない（HP の前後差で代用する builtin の即死など）。回復は切らない */
   private capHitAmount(kind: 'damage' | 'heal', amount: number): number {
     return kind === 'damage' ? clampDamage(amount) : amount
   }
 
+  /**
+   * 呪文・アイテム・特技 (#834) 1 回を記録する (#745)。効果は DSL・builtin のどちらでも HP を直接書き換えるので、
+   * 効果の前後の HP 差で結果を導く（減った=damage / 増えた=heal）。対象にしたのに HP が変わらなかった者は miss。
+   */
   private recordEffect(
     kind: 'spell' | 'item' | 'skill',
     actor: BattleEntity,
