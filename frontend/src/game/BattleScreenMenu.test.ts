@@ -8,7 +8,7 @@ import 'pixi.js/events'
 import { EventBoundary, Graphics, Sprite, Texture, TextureSource, type Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
-import type { BattleMenuData, MenuStack } from './battleMenu'
+import { buildMenuRows, type BattleMenuData, type MenuStack } from './battleMenu'
 import { RESULT_SKIP_GUARD_MS } from './battleResult'
 import type { BattleEntity } from './spellDsl'
 
@@ -57,7 +57,7 @@ function build(
   const s = new BattleScreen(engine, 800, 450, {
     layout: 'side',
     commandLayout: 'cross',
-    menu: MENU,
+    menu: structuredClone(MENU),
     ...opts,
   })
   created.push(s)
@@ -338,14 +338,14 @@ describe('ATB の wait: 候補窓を開いている間だけ停止', () => {
     const first = new BattleScreen(engine, 800, 450, {
       layout: 'side',
       commandLayout: 'cross',
-      menu: MENU,
+      menu: structuredClone(MENU),
     })
     created.push(first)
     first.destroy({ children: true })
     const grid = new BattleScreen(engine, 800, 450, {
       layout: 'side',
       commandLayout: 'grid',
-      menu: MENU,
+      menu: structuredClone(MENU),
     })
     created.push(grid)
     grid.tick(500)
@@ -499,7 +499,10 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
   }
 
   it('倒れた味方に蘇生の呪文を使うと生き返り、MP を消費する（生きている味方は指せない）', () => {
-    const { engine } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    const { engine } = build({ menu: structuredClone(REVIVE) }, { rng: () => 0 }, [
+      ent('a'),
+      ent('b', { hp: 0 }),
+    ])
     press('ArrowLeft')
     press('Enter') // 対象は倒れた b のみ
     press('ArrowDown') // 候補が 1 人なので動かない
@@ -510,7 +513,10 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
   })
 
   it('倒れた味方に蘇生のアイテムを使うと生き返る', () => {
-    const { engine } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    const { engine } = build({ menu: structuredClone(REVIVE) }, { rng: () => 0 }, [
+      ent('a'),
+      ent('b', { hp: 0 }),
+    ])
     press('ArrowRight')
     press('Enter')
     press('Enter')
@@ -518,7 +524,10 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
   })
 
   it('蘇生の対象窓では、候補の倒れた味方にだけ ▼ が出る（生きている味方・窓を閉じたあとは出ない） (#805)', () => {
-    const { s } = build({ menu: REVIVE }, { rng: () => 0 }, [ent('a'), ent('b', { hp: 0 })])
+    const { s } = build({ menu: structuredClone(REVIVE) }, { rng: () => 0 }, [
+      ent('a'),
+      ent('b', { hp: 0 }),
+    ])
     const marks = () =>
       (s as unknown as { partyViews: Array<{ selectMark: { visible: boolean } }> }).partyViews.map(
         (x) => x.selectMark.visible
@@ -532,7 +541,7 @@ describe('蘇生をエンジンまで通す (#204 レビュー)', () => {
   })
 
   it('蘇生できる相手がいないときは確定できず、窓は残り、MP は減らない', () => {
-    const { s, engine } = build({ menu: REVIVE })
+    const { s, engine } = build({ menu: structuredClone(REVIVE) })
     press('ArrowLeft')
     press('Enter')
     expect(types(s)).toEqual(['list'])
@@ -699,7 +708,7 @@ describe('窓の右端と味方ステータス欄の HP 列 (#204 レビュー)'
     const s = new BattleScreen(engine, 360, 640, {
       layout: 'side',
       commandLayout: 'cross',
-      menu: MENU,
+      menu: structuredClone(MENU),
     })
     created.push(s)
     const geo = (s as unknown as { menuGeometry: import('./battleMenuLayout').MenuGeometry })
@@ -911,5 +920,170 @@ describe('敵グリッドの被ダメ数字の高さ・対象選択の矩形 (#8
     expect(v.anchorY).toBeCloseTo(v.baseY + v.sprite.y + v.sprite.height * 0.35, 6)
     // 箱の上端から 35%（既定値）とは別物（絵は箱の余白の内側に収まる）
     expect(Math.abs(v.anchorY - (box.y + box.h * 0.35))).toBeGreaterThan(0.5)
+  })
+})
+
+describe('どうぐの所持数と知らせ (#890)', () => {
+  const POTION = { id: 'potion', name: 'ポーション', effect: 'heal 20..20' }
+  const menuOf = (count?: number): BattleMenuData => ({
+    spells: MENU.spells,
+    items: [{ ...POTION, ...(count !== undefined ? { count } : {}) }],
+  })
+  const foes = () => [ent('s1', { atk: 0 }), ent('s2', { atk: 0 })]
+  const lastLog = (e: BattleEngine) => e.getState().log[e.getState().log.length - 1]
+  const useItem = () => {
+    press('ArrowRight')
+    press('Enter')
+    press('Enter')
+  }
+  const rowsOf = (m: BattleMenuData, mp = 5) => buildMenuRows('item', m.items ?? [], { mp })
+
+  it('使うたびに count が 2→1→0 と減り、0 でグレーになる', () => {
+    const m = menuOf(2)
+    const { engine } = build({ menu: m }, { rng: () => 0 }, [ent('a')], foes())
+    useItem()
+    expect(m.items![0].count).toBe(1)
+    expect(rowsOf(m)[0]).toMatchObject({ cost: '×1', disabled: false })
+    useItem()
+    expect(m.items![0].count).toBe(0)
+    expect(rowsOf(m)[0]).toMatchObject({ cost: '×0', disabled: true })
+    expect(engine.getState().log.filter((l) => l.includes('ポーション を つかった')).length).toBe(2)
+  })
+
+  it('count 0 で確定すると「もっていない！」。窓は残り、count は負にならず、ターンも進まない', () => {
+    const m = menuOf(0)
+    const { s, engine } = build({ menu: m }, { rng: () => 0 }, [ent('a', { hp: 50 })], foes())
+    press('ArrowRight')
+    expect(types(s)).toEqual(['list'])
+    const logLen = engine.getState().log.length
+    press('Enter')
+    expect(types(s)).toEqual(['list'])
+    expect(m.items![0].count).toBe(0)
+    expect(engine.getState().log).toHaveLength(logLen + 1)
+    expect(lastLog(engine)).toBe('もっていない！')
+    expect(engine.getState().events[engine.getState().events.length - 1]).toMatchObject({
+      kind: 'notice',
+      label: 'もっていない！',
+    })
+    expect(engine.getState().phase).toBe('party-input')
+    expect(engine.getState().party[0].hp).toBe(50) // 回復せず、敵の反撃もない
+    press('Enter')
+    expect(m.items![0].count).toBe(0)
+  })
+
+  it('count 未指定のアイテムは何度使っても減らず、「×」表示も出ない', () => {
+    const m = menuOf()
+    const { engine } = build({ menu: m }, { rng: () => 0 }, [ent('a')], foes())
+    useItem()
+    useItem()
+    useItem()
+    expect(m.items![0]).not.toHaveProperty('count')
+    expect(rowsOf(m)[0]).toMatchObject({ cost: '', disabled: false })
+    expect(engine.getState().log.filter((l) => l.includes('つかった')).length).toBe(3)
+  })
+
+  it('最後の 1 個で戦闘が終わっても count は 0 になり、窓は残らない', () => {
+    const m = menuOf(1)
+    const { s, engine } = build(
+      { menu: m },
+      { rng: () => 0 },
+      [ent('a', { hp: 1 })],
+      [ent('s1', { atk: 50 })]
+    )
+    useItem()
+    expect(engine.isOver()).toBe(true)
+    expect(m.items![0].count).toBe(0)
+    expect(types(s)).toEqual([])
+  })
+
+  it('同じ戦闘で 2 人が同じアイテムを使うと、所持数は共有で減る（ATB で 2 人が順に番になる）', () => {
+    const m = menuOf(2)
+    const atb = {
+      atb: { mode: 'wait' as const, initialGauges: { party: [1000, 1000], enemies: [0, 0] } },
+      rng: () => 0,
+    }
+    const { engine } = build({ menu: m }, atb, [ent('a'), ent('b')], foes())
+    expect(engine.getCurrentActorIndex()).toBe(0)
+    useItem() // a の番
+    expect(m.items![0].count).toBe(1)
+    expect(engine.getCurrentActorIndex()).toBe(1)
+    useItem() // b の番
+    expect(m.items![0].count).toBe(0)
+    expect(engine.getState().log.filter((l) => l.includes('ポーション を つかった')).length).toBe(2)
+  })
+
+  it('呪文の対象がいない（全敵撃破済み）と「たいしょうがいない！」。窓は閉じず、MP も減らない', () => {
+    const { s, engine } = build({ menu: menuOf(1) }, { rng: () => 0 }, [ent('a')], foes())
+    press('ArrowLeft')
+    press('ArrowDown') // いなずま（敵全体）ではなくほのお（敵単体）に合わせる
+    press('ArrowDown')
+    press('ArrowDown')
+    const w = I(s).menuStack[0] as { cursor: number }
+    expect(w.cursor).toBe(0)
+    for (const e of engine.getState().enemies) e.hp = 0
+    press('Enter')
+    expect(types(s)).toEqual(['list'])
+    expect(engine.getState().party[0].mp).toBe(5)
+    expect(lastLog(engine)).toBe('たいしょうがいない！')
+    expect(engine.getState().events[engine.getState().events.length - 1]).toMatchObject({
+      kind: 'notice',
+      label: 'たいしょうがいない！',
+    })
+  })
+
+  it('対象窓で手の指す敵が倒れていたら「たいしょうがいない！」。窓は残り、MP は減らない', () => {
+    const { s, engine } = build({ menu: menuOf(1) }, { rng: () => 0 }, [ent('a')], foes())
+    press('ArrowLeft')
+    press('ArrowDown')
+    press('ArrowDown')
+    press('ArrowDown')
+    press('Enter') // ほのお → 対象窓
+    expect(types(s)).toEqual(['list', 'target'])
+    engine.getState().enemies[0].hp = 0 // 手の指す s1 が倒れた
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    expect(engine.getState().party[0].mp).toBe(5)
+    expect(lastLog(engine)).toBe('たいしょうがいない！')
+  })
+
+  it('アイテムの対象窓で手の指す味方が倒れていたら、知らせだけで count は減らない', () => {
+    const m = menuOf(2)
+    const { s, engine } = build({ menu: m }, { rng: () => 0 }, [ent('a'), ent('b')], foes())
+    press('ArrowRight')
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    press('ArrowDown') // b を指す
+    engine.getState().party[1].hp = 0
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    expect(m.items![0].count).toBe(2)
+    expect(lastLog(engine)).toBe('たいしょうがいない！')
+  })
+
+  it('行動が成立しなかった（phase が party-input でない）ときは count を減らさない', () => {
+    const m = menuOf(2)
+    const { engine } = build({ menu: m }, { rng: () => 0 }, [ent('a')], foes())
+    press('ArrowRight')
+    press('Enter')
+    ;(engine.getState() as { phase: string }).phase = 'enemy-turn' // 窓を開いたまま局面だけ変わった状況
+    const logLen = engine.getState().log.length
+    press('Enter')
+    expect(engine.getState().log).toHaveLength(logLen) // selectItem は何もしなかった
+    expect(m.items![0].count).toBe(2)
+  })
+
+  it('これらの操作で console.error / console.warn を出さない', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const m = menuOf(1)
+    build({ menu: m }, { rng: () => 0 }, [ent('a')], foes())
+    useItem()
+    press('ArrowRight')
+    press('Enter') // もっていない
+    press('Escape')
+    press('ArrowLeft')
+    press('Enter')
+    expect(err).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
   })
 })

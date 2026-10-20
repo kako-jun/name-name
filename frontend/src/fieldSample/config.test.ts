@@ -711,3 +711,150 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(c.groupErrors).toBeUndefined()
   })
 })
+
+describe('parseConfig spells / items (#890)', () => {
+  const fail = (raw: unknown) => {
+    const r = parseConfig(raw, BASE)
+    expect(r.ok).toBe(false)
+    return r.ok ? '' : r.error
+  }
+
+  it('spells / items 未指定は空配列（従来の設定は変わらない）', () => {
+    const c = ok(minimal())
+    expect(c.spells).toEqual([])
+    expect(c.items).toEqual([])
+  })
+
+  it('teramachi.sample.json は ok で spells / items が空', () => {
+    const c = ok(JSON.parse(teramachiSample))
+    expect(c.spells).toEqual([])
+    expect(c.items).toEqual([])
+  })
+
+  it('指定した spells / items を保持する（呪文は mp と target、アイテムは count）', () => {
+    const c = ok(
+      mutated((r) => {
+        r.spells = [{ id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' }]
+        r.items = [{ id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 }]
+      })
+    )
+    expect(c.spells).toEqual([
+      { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' },
+    ])
+    expect(c.items).toEqual([{ id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 }])
+  })
+
+  it('count 省略はキー自体が無い（所持数管理なし）', () => {
+    const c = ok(mutated((r) => (r.items = [{ name: 'みず' }])))
+    expect(c.items[0]).not.toHaveProperty('count')
+  })
+
+  it.each([
+    [-1, 0],
+    [0, 0],
+    [1, 1],
+    [2.7, 2],
+  ])('count=%s は %s に丸められる', (count, expected) => {
+    const c = ok(mutated((r) => (r.items = [{ name: 'みず', count }])))
+    expect(c.items[0].count).toBe(expected)
+  })
+
+  it('id 省略は連番で、spells と items で独立している', () => {
+    const c = ok(
+      mutated((r) => {
+        r.spells = [{ name: 'a' }, { name: 'b' }]
+        r.items = [{ name: 'c' }]
+      })
+    )
+    expect(c.spells.map((s) => s.id)).toEqual(['spells-1', 'spells-2'])
+    expect(c.items.map((i) => i.id)).toEqual(['items-1'])
+  })
+
+  it.each([
+    ['spells が配列でない', { spells: {} }],
+    ['items が配列でない', { items: 'x' }],
+    ['spells の要素が null', { spells: [null] }],
+    ['items の要素が null', { items: [null] }],
+    ['name が空', { spells: [{ name: '' }] }],
+    ['name が空白だけ', { items: [{ name: '  ' }] }],
+    ['name が無い', { items: [{ count: 1 }] }],
+    ['mp が文字列', { spells: [{ name: 'a', mp: '3' }] }],
+    ['mp が NaN', { spells: [{ name: 'a', mp: NaN }] }],
+    ['mp が Infinity', { spells: [{ name: 'a', mp: Infinity }] }],
+    ['count が文字列', { items: [{ name: 'a', count: '2' }] }],
+    ['count が NaN', { items: [{ name: 'a', count: NaN }] }],
+    ['count が Infinity', { items: [{ name: 'a', count: Infinity }] }],
+  ])('不正（%s）は ok=false', (_label, patch) => {
+    const err = fail({ ...minimal(), ...patch })
+    expect(err).toMatch(/spells|items/)
+  })
+})
+
+describe('parseConfig monsters / party の poses (#890)', () => {
+  const withMonster = (monster: Raw) =>
+    mutated((r) => {
+      r.monsters = { slime: { name: 'スライム', hp: 10, ...monster } }
+    })
+  const err = (raw: unknown) => {
+    const r = parseConfig(raw, BASE)
+    if (r.ok) throw new Error('失敗するはずが ok')
+    return r.error
+  }
+
+  it('monsters.poses は URL を解決して保持する（部分指定可）', () => {
+    const c = ok(withMonster({ poses: { idle: 'i.png', hurt: '/h.png' } }))
+    expect(c.monsters.slime.poses).toEqual({
+      idle: 'https://example.com/field/i.png',
+      hurt: 'https://example.com/h.png',
+    })
+  })
+
+  it('poses 未指定は poses キー無し', () => {
+    expect(ok(withMonster({})).monsters.slime).not.toHaveProperty('poses')
+  })
+
+  it('未知のポーズ名は捨てる。全部捨てたら poses 無し', () => {
+    const c = ok(withMonster({ poses: { idle: 'i.png', bogus: 'b.png' } }))
+    expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
+    expect(ok(withMonster({ poses: { bogus: 'b.png' } })).monsters.slime).not.toHaveProperty(
+      'poses'
+    )
+  })
+
+  it('空白だけの URL は無視する', () => {
+    const c = ok(withMonster({ poses: { idle: 'i.png', hurt: '   ' } }))
+    expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
+  })
+
+  it('poses がオブジェクトでない／値が文字列でないときは path つきエラー', () => {
+    expect(err(withMonster({ poses: [] }))).toContain('monsters.slime.poses')
+    expect(err(withMonster({ poses: 'x' }))).toContain('monsters.slime.poses')
+    expect(err(withMonster({ poses: { idle: 3 } }))).toContain('monsters.slime.poses.idle')
+  })
+
+  it('party の poses も同じ規則で通る', () => {
+    const c = ok(
+      mutated((r) => {
+        r.party = [{ name: 'ゆうしゃ', hp: 10, poses: { idle: 'h.png', slash: 's.png' } }]
+      })
+    )
+    expect(c.party[0].poses).toEqual({
+      idle: 'https://example.com/field/h.png',
+      slash: 'https://example.com/field/s.png',
+    })
+    const r = parseConfig(
+      mutated((x) => (x.party = [{ name: 'a', hp: 10, poses: { idle: 1 } }])),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('party[0].poses.idle')
+  })
+
+  it('__proto__ / constructor をポーズ名にしても汚染されない（未知名として捨てる）', () => {
+    const raw = JSON.parse('{"__proto__":"x.png","constructor":"y.png","idle":"i.png"}')
+    const c = ok(withMonster({ poses: raw }))
+    expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
+    expect(({} as Record<string, unknown>).idle).toBeUndefined()
+    expect(Object.getPrototypeOf(c.monsters.slime.poses)).toBe(Object.prototype)
+  })
+})

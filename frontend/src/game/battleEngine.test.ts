@@ -291,3 +291,60 @@ describe('BattleEngine: 行動の記録 (#745)', () => {
     expect(s.events[s.events.length - 1].seq).toBe(39)
   })
 })
+
+describe('BattleEngine.notifyBlocked (#890)', () => {
+  const snapshot = (e: BattleEngine) => {
+    const st = e.getState()
+    return JSON.stringify({ party: st.party, enemies: st.enemies, phase: st.phase })
+  }
+
+  it('party-input では、ログの末尾に label が入り、通知イベントが記録される。状態は変わらない', () => {
+    const eng = new BattleEngine([hero()], [slime()], { rng: () => 0 })
+    const before = snapshot(eng)
+    const logLen = eng.getState().log.length
+    eng.notifyBlocked('もっていない！')
+    const st = eng.getState()
+    expect(st.log).toHaveLength(logLen + 1)
+    expect(st.log[st.log.length - 1]).toBe('もっていない！')
+    expect(st.events[st.events.length - 1]).toMatchObject({
+      kind: 'notice',
+      label: 'もっていない！',
+      actor: { side: 'party', index: 0 },
+    })
+    expect(snapshot(eng)).toBe(before)
+    expect(st.phase).toBe('party-input')
+  })
+
+  it('連続 2 回呼んでも破綻せず、ターンは進まない', () => {
+    const eng = new BattleEngine([hero()], [slime()], { rng: () => 0 })
+    const before = snapshot(eng)
+    eng.notifyBlocked('A')
+    eng.notifyBlocked('B')
+    const st = eng.getState()
+    expect(st.log.slice(-2)).toEqual(['A', 'B'])
+    expect(st.events.slice(-2).map((e) => e.label)).toEqual(['A', 'B'])
+    expect(snapshot(eng)).toBe(before)
+  })
+
+  it('party-input 以外（終了後）では何もしない', () => {
+    const eng = new BattleEngine([hero({ atk: 99 })], [slime()], { rng: () => 0 })
+    eng.selectAttack()
+    expect(eng.isOver()).toBe(true)
+    const logLen = eng.getState().log.length
+    const evLen = eng.getState().events.length
+    const total = eng.getState().logTotal
+    eng.notifyBlocked('x')
+    expect(eng.getState().log).toHaveLength(logLen)
+    expect(eng.getState().events).toHaveLength(evLen)
+    expect(eng.getState().logTotal).toBe(total)
+  })
+
+  it('敵ターンなど party-input でない phase でも何もしない', () => {
+    const eng = new BattleEngine([hero()], [slime()], { rng: () => 0 })
+    ;(eng.getState() as { phase: string }).phase = 'enemy-turn'
+    const logLen = eng.getState().log.length
+    eng.notifyBlocked('x')
+    expect(eng.getState().log).toHaveLength(logLen)
+    expect(eng.getState().events.some((e) => e.label === 'x')).toBe(false)
+  })
+})
