@@ -37,6 +37,14 @@ export const DIAGONAL_FACINGS: readonly DiagonalFacing[] = [
   'downRight',
 ]
 
+/** 斜めの向きの左右の相方（mirrorOf の反転元にできるのはこれだけ） */
+export const MIRROR_PARTNER: Record<DiagonalFacing, DiagonalFacing> = {
+  upLeft: 'upRight',
+  upRight: 'upLeft',
+  downLeft: 'downRight',
+  downRight: 'downLeft',
+}
+
 export interface FieldSceneConfig {
   id: string
   /** 背景画像の URL */
@@ -204,12 +212,13 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         return fail(
           `player.sprites.mirrorOf.${k} は斜めの向き（${DIAGONAL_FACINGS.join(' / ')}）のどれかにしてください`
         )
-      if (typeof v !== 'string' || !(DIAGONAL_FACINGS as readonly string[]).includes(v))
+      // 左右反転は x だけを入れ替えるので、反転元は左右の相方（upLeft↔upRight / downLeft↔downRight）だけ
+      const partner = MIRROR_PARTNER[k as DiagonalFacing]
+      if (v !== partner)
         return fail(
-          `player.sprites.mirrorOf.${k} は斜めの向き（${DIAGONAL_FACINGS.join(' / ')}）のどれかにしてください`
+          `player.sprites.mirrorOf.${k} は左右の相方 ${partner} だけを指せます（左右反転なので上下は変えられません）`
         )
-      const to = v as DiagonalFacing
-      if (to === k) return fail(`player.sprites.mirrorOf.${k} が自分自身を指しています`)
+      const to = partner
       if (sprites[k as DiagonalFacing])
         return fail(`player.sprites.${k} と player.sprites.mirrorOf.${k} は同時に指定できません`)
       mirrorOf[k as DiagonalFacing] = to

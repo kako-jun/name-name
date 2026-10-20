@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   arrivalPosition,
   detectEdgeLink,
+  FACING_HYSTERESIS_DEG,
+  SECTOR_HALF_DEG,
   facingFromVector,
   isOutward,
   isWalkable,
@@ -708,35 +710,13 @@ describe('facingFromVector 8 方向 (Issue #811)', () => {
     expect(facingFromVector(deg(d), opposite, true)).toBe(expected)
   })
 
-  it('キー入力の 8 方向がそのまま 8 つの向きになる', () => {
-    expect(
-      facingFromVector(
-        keysToVector({ up: true, down: false, left: true, right: false }),
-        'down',
-        true
-      )
-    ).toBe('upLeft')
-    expect(
-      facingFromVector(
-        keysToVector({ up: true, down: false, left: false, right: true }),
-        'down',
-        true
-      )
-    ).toBe('upRight')
-    expect(
-      facingFromVector(
-        keysToVector({ up: false, down: true, left: true, right: false }),
-        'up',
-        true
-      )
-    ).toBe('downLeft')
-    expect(
-      facingFromVector(
-        keysToVector({ up: false, down: true, left: false, right: true }),
-        'up',
-        true
-      )
-    ).toBe('downRight')
+  it.each([
+    [{ up: true, down: false, left: true, right: false }, 'down', 'upLeft'],
+    [{ up: true, down: false, left: false, right: true }, 'down', 'upRight'],
+    [{ up: false, down: true, left: true, right: false }, 'up', 'downLeft'],
+    [{ up: false, down: true, left: false, right: true }, 'up', 'downRight'],
+  ] as const)('キー入力 %j は %s→%s', (keys, prev, expected) => {
+    expect(facingFromVector(keysToVector(keys), prev, true)).toBe(expected)
   })
 
   it('入力なしは直前の向き（斜めでも）を保つ', () => {
@@ -748,6 +728,14 @@ describe('facingFromVector 8 方向 (Issue #811)', () => {
     expect(facingFromVector(deg(25), 'right', true)).toBe('right')
     expect(facingFromVector(deg(30), 'right', true)).toBe('right')
     expect(facingFromVector(deg(31), 'right', true)).toBe('downRight')
+  })
+
+  it.each([
+    [SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG - 0.1, 'right'],
+    [SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG, 'right'],
+    [SECTOR_HALF_DEG + FACING_HYSTERESIS_DEG + 0.1, 'downRight'],
+  ] as const)('ヒステリシス境界の角度 %f 度は %s（境界ちょうどは保つ）', (d, expected) => {
+    expect(facingFromVector(deg(d), 'right', true)).toBe(expected)
   })
 
   it('境界をまたいで細かく揺れても向きが切り替わり続けない', () => {
