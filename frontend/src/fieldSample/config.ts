@@ -95,7 +95,7 @@ export interface FieldSampleConfig {
     sprites: Record<Facing, [string, string, string]> &
       Partial<Record<DiagonalFacing, [string, string, string]>>
     /**
-     * 斜めの向きを、別の斜めの向きの画像の左右反転で済ませる指定 (#811)。例: `{ upLeft: 'upRight' }`。
+     * 斜めの向きを、左右の相方（upLeft↔upRight、downLeft↔downRight）の画像の左右反転で済ませる指定 (#811)。例: `{ upLeft: 'upRight' }`。
      * 斜めの 4 方向がすべて（自前の画像か `mirrorOf` で）揃ったときだけ 8 方向で動く。揃っていなければ 4 方向
      */
     mirrorOf: Partial<Record<DiagonalFacing, DiagonalFacing>>
