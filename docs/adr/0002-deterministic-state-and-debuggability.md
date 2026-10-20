@@ -173,10 +173,10 @@ confinement とは無関係に、`onEndCallback`（VideoExporter 専用）が未
 本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の
 フェードアウト自体は一度きりの見た目でしかなく、状態として確定するのは「背景も立ち絵もない
 終劇後」という終端値だけである。`getSnapshot()`/`applyState()` は他のフィールドと同様に
-`storyEnded` をそのまま往復し（goBack/seekTo/startFrom/loadFromSaveData いずれも即時反映、
+`storyEnded` をそのまま往復し（goBack/seekTo/startFrom/loadFromSaveData いずれも即時反映。終劇中の goBack/seekTo はガードで no-op、#815。
 フェードの再生はしない）。ただしセーブだけは例外で、`saveSlotToGameState` は常に `false` を返す
 （セーブは終劇状態を持ち越さない設計。終劇後の eventIndex をそのままセーブすると、ロード時に
-「`storyEnded=false` なのに choice イベント位置で止まっている」行き止まりになるため）。
+「`storyEnded=false` なのに choice イベント位置で止まっている」行き止まりになるため。ここでの「行き止まり」は不具合の詰み状態の意味で、意図した終端である終劇とは別、#815）。
 `quickSave()`/`openSaveMenu()` は `storyEnded` 中は no-op（終劇後のセーブによる行き止まり防止）、
 `quickLoad()`/`openLoadMenu()` は許可する（脱出手段として維持）。
 
