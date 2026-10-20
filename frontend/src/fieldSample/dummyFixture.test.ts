@@ -42,6 +42,13 @@ describe('buildDummyFixture (#890)', () => {
     expect(c.scenes.train.encounter?.groups.length).toBeGreaterThan(0)
   })
 
+  it('条件付き通行 (#862): assist・companion・フラグを持つ（?fixture=dummy で橙の階段を試せる）', () => {
+    const c = parsed()
+    expect(c.assist).not.toBeNull()
+    expect(c.companion).not.toBeNull()
+    expect(Object.keys(c.flags)).toContain(c.assist!.requires[0])
+  })
+
   it('parseConfig を通り、console.error / warn を出さない', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

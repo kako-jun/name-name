@@ -14,6 +14,8 @@ import {
   stepAssistFrame,
   stepBlockedEvent,
   arrivalMask,
+  arrivalRuntime,
+  limitRetreat,
   INITIAL_ASSIST_RUNTIME,
   type AssistRuntime,
   type AssistState,
@@ -157,7 +159,7 @@ describe('同行者の位置・向き・速さ・不透明度 (#862)', () => {
   })
 })
 
-describe('橙の通行状態のラッチ (#862 レビュー: 橙の上で通行が止まっても渡り切れない)', () => {
+describe('橙の通行状態のラッチ（橙の上で通行が止まっても渡り切れない）', () => {
   // 横一列: 白 20 + 橙 40 + 白 20。x=0..19 白、20..59 橙、60..79 白
   const base = maskOf(['.'.repeat(20) + 'o'.repeat(40) + '.'.repeat(20)])
   const asst = maskWithAssist(base)
@@ -196,7 +198,8 @@ describe('橙の通行状態のラッチ (#862 レビュー: 橙の上で通行�
       })
       const ev = stepBlockedEvent(armed0.v, fr.blocked)
       armed0.v = ev.armed
-      const r = stepMove(fr.walkMask, t.pos, fr.moveVec, fr.onAssist ? 70 : 100, 16)
+      const moved = stepMove(fr.walkMask, t.pos, fr.moveVec, fr.onAssist ? 70 : 100, 16)
+      const r = fr.retreatFrom ? limitRetreat(fr.retreatFrom, t.pos, moved) : moved
       t = {
         pos: r.pos,
         runtime: fr.runtime,
@@ -277,7 +280,7 @@ describe('橙の通行状態のラッチ (#862 レビュー: 橙の上で通行�
   })
 })
 
-describe('stepBlockedEvent (#862 レビュー)', () => {
+describe('stepBlockedEvent（通れない橙へ進もうとした合図は 1 回だけ）', () => {
   it('blocked が続く間は最初の 1 回だけ emit、途切れたら再武装', () => {
     let armed = true
     const seq = [true, true, true, false, true, true]
@@ -290,7 +293,7 @@ describe('stepBlockedEvent (#862 レビュー)', () => {
   })
 })
 
-describe('arrivalMask (#862 レビュー: 到着位置は通れる状態なら橙込みで)', () => {
+describe('arrivalMask（到着位置は通れる状態なら橙込みで）', () => {
   // 左端 3 セルが橙の階段（画像の端に接する）。そこが到着点
   const base = maskOf(['ooo....'])
   const asst = maskWithAssist(base)
@@ -299,5 +302,105 @@ describe('arrivalMask (#862 レビュー: 到着位置は通れる状態なら�
     expect(snapToWalkable(arrivalMask(base, asst, true), at, 10)).toEqual(at)
     const shifted = snapToWalkable(arrivalMask(base, asst, false), at, 10)
     expect(shifted?.x).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('戻る動きだけを通す (limitRetreat)', () => {
+  const from: Vec = { x: 0, y: 0 }
+  const prev: Vec = { x: 10, y: 0 }
+  it('入ってきた場所に近づく動きは通し、遠ざかる・横へそれる動きは無かったことにする', () => {
+    const closer = { pos: { x: 9, y: 0.5 }, distance: 1 }
+    expect(limitRetreat(from, prev, closer)).toBe(closer)
+    expect(limitRetreat(from, prev, { pos: { x: 11, y: 0 }, distance: 1 })).toEqual({
+      pos: prev,
+      distance: 0,
+    })
+    expect(limitRetreat(from, prev, { pos: { x: 10, y: 1 }, distance: 1 })).toEqual({
+      pos: prev,
+      distance: 0,
+    })
+  })
+})
+
+describe('橙の帯の中で壁に沿って滑っても前へ進めない', () => {
+  // 幅 30。上 10 行と下 10 行は白、間の 40 行は x=10..19 が橙で左右は壁（黒）
+  const band = '#'.repeat(10) + 'o'.repeat(10) + '#'.repeat(10)
+  const base = maskOf([
+    ...Array(10).fill('.'.repeat(30)),
+    ...Array(40).fill(band),
+    ...Array(10).fill('.'.repeat(30)),
+  ])
+  const asst = maskWithAssist(base)
+  const REFUSE: AssistState = { passable: false, held: true, ghost: false }
+  const entry: Vec = { x: 19.5, y: 9.5 }
+
+  function slide(vec: Vec, frames: number, start: Vec): Vec {
+    let pos = start
+    let runtime: AssistRuntime = { latch: { entry }, lastFree: entry }
+    for (let f = 0; f < frames; f++) {
+      const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state: REFUSE, runtime })
+      runtime = fr.runtime
+      const moved = stepMove(fr.walkMask, pos, fr.moveVec, 70, 16)
+      pos = (fr.retreatFrom ? limitRetreat(fr.retreatFrom, pos, moved) : moved).pos
+    }
+    return pos
+  }
+
+  it('入口側の壁へ寄せつつ前向きの成分が混ざる入力でも、前へ進めない（斜めの許可入力が壁で滑る）', () => {
+    // entry より右の壁際。vec·(entry-pos) は正だが、右の壁に当たると y だけが前へ滑る
+    const end = slide({ x: 1, y: 0.1 }, 400, { x: 19.2, y: 30 })
+    expect(end.y).toBeLessThanOrEqual(30 + 1e-6)
+  })
+
+  it('入ってきた側（上）へはまっすぐ戻れる', () => {
+    const end = slide({ x: 0, y: -1 }, 100, { x: 19.5, y: 30 })
+    expect(end.y).toBeLessThan(15)
+  })
+})
+
+describe('端リンクで橙の上に着いたときのラッチ (arrivalRuntime)', () => {
+  // 橙の階段が上端に接する（y=0 から 14 行）。その下は白
+  const base = maskOf([
+    ...Array(14).fill('.'.repeat(5) + 'o'.repeat(10) + '.'.repeat(5)),
+    ...Array(6).fill('.'.repeat(20)),
+  ])
+  const asst = maskWithAssist(base)
+  const REFUSE: AssistState = { passable: false, held: true, ghost: false }
+  const landing: Vec = { x: 10.5, y: 1.5 }
+
+  it('橙の上に着いたら、来た端の外側を「入ってきた場所」にする（4 辺）', () => {
+    expect(arrivalRuntime(base, landing, 'top').lastFree).toEqual({ x: 10.5, y: -1 })
+    expect(arrivalRuntime(base, landing, 'bottom').lastFree).toEqual({ x: 10.5, y: base.height })
+    expect(arrivalRuntime(base, landing, 'left').lastFree).toEqual({ x: -1, y: 1.5 })
+    expect(arrivalRuntime(base, landing, 'right').lastFree).toEqual({ x: base.width, y: 1.5 })
+  })
+
+  it('橙でない場所に着いたときは何も持たない', () => {
+    expect(arrivalRuntime(base, { x: 2.5, y: 2.5 }, 'top')).toBe(INITIAL_ASSIST_RUNTIME)
+  })
+
+  function walk(vec: Vec, frames: number, runtime: AssistRuntime): { pos: Vec; moved: number } {
+    let pos = landing
+    let rt = runtime
+    let moved = 0
+    for (let f = 0; f < frames; f++) {
+      const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state: REFUSE, runtime: rt })
+      rt = fr.runtime
+      const m = stepMove(fr.walkMask, pos, fr.moveVec, 70, 16)
+      const r = fr.retreatFrom ? limitRetreat(fr.retreatFrom, pos, m) : m
+      pos = r.pos
+      moved += r.distance
+    }
+    return { pos, moved }
+  }
+
+  it('拒否の中、到着した橙を奥へは渡り切れず、来た端へは戻れる', () => {
+    const rt = arrivalRuntime(base, landing, 'top')
+    expect(walk({ x: 0, y: 1 }, 300, rt).pos.y).toBeLessThanOrEqual(landing.y + 1e-6)
+    expect(walk({ x: 0, y: -1 }, 100, rt).pos.y).toBeLessThan(0.5)
+  })
+
+  it('比較: 到着時に何も持たせないと、拒否しても渡り切れてしまう', () => {
+    expect(walk({ x: 0, y: 1 }, 300, INITIAL_ASSIST_RUNTIME).pos.y).toBeGreaterThan(14)
   })
 })

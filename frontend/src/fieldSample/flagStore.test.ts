@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createFlagStore } from './flagStore'
 
-describe('createFlagStore (#862 レビュー: フラグ名に " 等を含んでも例外にならない)', () => {
+describe('createFlagStore (#862: フラグ名に " 等を含んでも例外にならない)', () => {
   it('宣言済みなら値とチェックボックスを更新する', () => {
     const s = createFlagStore({ a: false })
     const box = { checked: false }

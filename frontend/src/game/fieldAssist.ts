@@ -4,7 +4,15 @@
  * 通行は 3 通りだけ（歩行マスクの白・黒・橙）。橙のセルは、`requires` のフラグがすべて真の間だけ通れ、
  * 通るときは同行者が主人公の後ろに現れて押す。例外の場所は設けない。
  */
-import { isAssistCell, type Facing, type Facing8, type Vec, type WalkMask } from './fieldWalk'
+import {
+  isAssistCell,
+  type Edge,
+  type Facing,
+  type Facing8,
+  type MoveResult,
+  type Vec,
+  type WalkMask,
+} from './fieldWalk'
 
 export type Flags = Readonly<Record<string, boolean>>
 
@@ -132,8 +140,9 @@ export function companionDisplayAlpha(alpha: number, ghost: boolean, ghostAlpha:
 
 /**
  * 橙の通行状態のラッチ。足元が橙に入った時点で作り、橙を抜けるまで持つ。
- * entry は橙に入る直前の「橙でない」足元（戻る方向の基準）。ワープや開始位置で最初から橙の上に
- * 立っていたときは null（入った場所が無いので、従来どおり抜けるまで自由に歩ける）。
+ * entry は橙に入る直前の「橙でない」足元（戻る方向の基準）。端リンクで橙の上に着いたときは、来た端の
+ * 外側の点（arrivalRuntime）。ワープや開始位置で最初から橙の上に立っていたときは null
+ * （入った場所が無いので、従来どおり抜けるまで自由に歩ける）。
  */
 export interface AssistLatch {
   entry: Vec | null
@@ -164,8 +173,13 @@ export interface AssistFrameInput {
 export interface AssistFrame {
   /** 移動に使うマスク */
   walkMask: WalkMask
-  /** 実際に使う移動ベクトル（ラッチ中に通行が止まったら戻る方向だけに絞る） */
+  /** 移動ベクトル */
   moveVec: Vec
+  /**
+   * ラッチ中に通行が止まった間の「入ってきた場所」。非 null のあいだ、動いたあとのこの点までの距離が
+   * 動く前より大きくなる移動は通さない（limitRetreat）。入ってきた側へ戻れるが、前へは進めない
+   */
+  retreatFrom: Vec | null
   /** 橙の上で押されている（速度倍率を掛ける）か */
   onAssist: boolean
   /** 同行者を出したいか */
@@ -182,7 +196,7 @@ export interface AssistFrame {
  * - 橙に入ったら、抜けるまで「押されている」状態をラッチする。同行者と速度倍率はラッチの間ずっと維持し、
  *   途中でフラグが変わっても blocked は出さない（合図は入口の 1 回だけ）
  * - ラッチ中に通れない状態（unless=拒否・requires が偽）になったら、橙の中では「入ってきた側へ戻る」
- *   向きにだけ動ける（前へは進めない。橙の中で詰まらず、渡り切ることもできない）
+ *   動きにだけ進める（retreatFrom と limitRetreat。前へは進めない。橙の中で詰まらず、渡り切ることもできない）
  */
 export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
   const { base, assisted, pos, vec, state, runtime } = input
@@ -191,6 +205,7 @@ export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
     return {
       walkMask: state.passable ? assisted : base,
       moveVec: vec,
+      retreatFrom: null,
       onAssist: false,
       wantCompanion: companionWanted(base, pos, vec, state.passable),
       blocked: blockedAttempt(base, pos, vec, state.passable),
@@ -200,19 +215,43 @@ export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
   const latch: AssistLatch = runtime.latch ?? { entry: runtime.lastFree }
   const next: AssistRuntime = { latch, lastFree: runtime.lastFree }
   const pushed = state.passable || latch.entry !== null
-  let moveVec = vec
-  if (!state.passable && latch.entry !== null) {
-    const back = { x: latch.entry.x - pos.x, y: latch.entry.y - pos.y }
-    if (vec.x * back.x + vec.y * back.y <= 0) moveVec = { x: 0, y: 0 }
-  }
   return {
     walkMask: assisted,
-    moveVec,
+    moveVec: vec,
+    retreatFrom: !state.passable ? latch.entry : null,
     onAssist: pushed,
     wantCompanion: pushed,
     blocked: false,
     runtime: next,
   }
+}
+
+/**
+ * 戻る動きだけを通す。stepMove の結果 moved が、入ってきた場所 from までの距離を動く前より大きくするなら、
+ * その移動は無かったことにする（壁に沿った滑りで前向きの成分だけが通るのも、ここで止まる）
+ */
+export function limitRetreat(from: Vec, prev: Vec, moved: MoveResult): MoveResult {
+  const d0 = Math.hypot(from.x - prev.x, from.y - prev.y)
+  const d1 = Math.hypot(from.x - moved.pos.x, from.y - moved.pos.y)
+  return d1 > d0 ? { pos: prev, distance: 0 } : moved
+}
+
+/**
+ * 端リンクで着いた直後の実行時状態。着地点が橙の上なら、来た端の外側（画像の外の 1 つ手前）を「入ってきた場所」に
+ * する。拒否されると戻る向き＝来た端になり、渡り切れない（シーンをまたいでも橙の契約を保つ）。
+ * 橙でない場所に着いたなら、ラッチは空で良い（次に橙へ入るときに作られる）
+ */
+export function arrivalRuntime(base: WalkMask, landing: Vec, edge: Edge): AssistRuntime {
+  if (!isAssistCell(base, landing.x, landing.y)) return INITIAL_ASSIST_RUNTIME
+  const outside: Vec =
+    edge === 'top'
+      ? { x: landing.x, y: -1 }
+      : edge === 'bottom'
+        ? { x: landing.x, y: base.height }
+        : edge === 'left'
+          ? { x: -1, y: landing.y }
+          : { x: base.width, y: landing.y }
+  return { latch: null, lastFree: outside }
 }
 
 /** 到着位置（ワープの at・端リンク・開始位置）の計算に使うマスク。通れる状態なら橙も歩ける扱い */

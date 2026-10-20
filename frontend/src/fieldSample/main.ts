@@ -41,6 +41,8 @@ import {
 import {
   INITIAL_ASSIST_RUNTIME,
   arrivalMask,
+  arrivalRuntime,
+  limitRetreat,
   assistSpeed,
   companionDisplayAlpha,
   companionPosition,
@@ -666,6 +668,8 @@ async function main(): Promise<void> {
               sceneId = link.to
               applyScene(dst)
               pos = landing
+              // 端リンクで橙の上に着いたら、来た端を「入ってきた場所」にする（拒否されても渡り切れない）
+              if (back) assistRt = arrivalRuntime(dst.mask, landing, back.edge)
               disarmed = back
               movingMs = 0
               transition = { phase: 'in', t: 0 }
@@ -727,7 +731,8 @@ async function main(): Promise<void> {
         dt,
         config.assist?.fadeMs ?? 0
       )
-      const r = stepMove(walkMask, pos, moveVec, speed, dt)
+      const moved = stepMove(walkMask, pos, moveVec, speed, dt)
+      const r = frame?.retreatFrom ? limitRetreat(frame.retreatFrom, pos, moved) : moved
       pos = r.pos
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0

@@ -50,7 +50,7 @@ describe('sampleWarp (#864)', () => {
   })
 })
 
-describe('canStartBattleNow (#864 レビュー: ワープ中の強制エンカウント)', () => {
+describe('canStartBattleNow (#864: ワープ中は強制エンカウントを始めない)', () => {
   const idle = { battle: false, transition: false, warping: false }
   it('何も取り込み中でなければ始められる', () => {
     expect(canStartBattleNow(idle)).toBe(true)
@@ -62,7 +62,7 @@ describe('canStartBattleNow (#864 レビュー: ワープ中の強制エンカ�
   })
 })
 
-describe('withTimeout / WARP_LOAD_TIMEOUT_MS (#864 レビュー: 読み込みが終わらないとき)', () => {
+describe('withTimeout / WARP_LOAD_TIMEOUT_MS (#864: 読み込みが終わらないとき)', () => {
   beforeEach(() => {
     vi.useFakeTimers()
   })
