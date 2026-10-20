@@ -116,6 +116,7 @@ async function main(): Promise<void> {
         ...(setup.atb ? { atb: setup.atb } : {}),
         ...(Object.keys(setup.skills).length > 0 ? { skills: setup.skills } : {}),
         ...(Object.keys(setup.statuses).length > 0 ? { statuses: setup.statuses } : {}),
+        ...(Object.keys(setup.itemNames).length > 0 ? { itemNames: setup.itemNames } : {}),
       })
       screen = new BattleScreen(engine, setup.width, setup.height, setup.options)
       app.stage.addChild(screen)

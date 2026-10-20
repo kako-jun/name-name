@@ -4,6 +4,7 @@ import { TopDownRenderer } from '../game/TopDownRenderer'
 import { RaycastRenderer } from '../game/RaycastRenderer'
 import { sampleRpgData } from '../game/sampleRpgData'
 import { RPGProject } from '../types/rpg'
+import type { BattleResult } from '../game/loot'
 import { type Settings, loadSettings, makeDebouncedSaveSettings } from '../game/settings'
 import SettingsOverlay from './SettingsOverlay'
 
@@ -16,6 +17,8 @@ type RendererLike = {
   setInputSuspended?(suspended: boolean): void
   /** プロジェクトのアセットのベース URL。`load()` より前に渡す (#746) */
   setAssetBaseUrl?(url: string | undefined): void
+  /** 戦闘の結果（経験値・ゴールド・戦利品、#831）を受け取るハンドラ。戦闘画面を畳んだ直後に呼ばれる */
+  setBattleEndHandler?(handler: ((result: BattleResult) => void) | undefined): void
 }
 
 interface RPGPlayerProps {
@@ -23,6 +26,11 @@ interface RPGPlayerProps {
   view?: 'topdown' | 'raycast'
   /** プロジェクトのアセットのベース URL（例 `${apiBaseUrl}/api/projects/${name}/assets/raw`）。相対の画像パスを `${base}/images/...` に解決する (#746) */
   assetBaseUrl?: string
+  /**
+   * 戦闘が終わって画面を畳んだ直後に、結果（経験値・ゴールド・獲得した戦利品）を受け取る (#831)。
+   * エンジンは所持品を持たないので、反映や戦利品の画面はホスト側が作る（`battle_transition: ff` では暗転の間に呼ばれる）
+   */
+  onBattleEnd?: (result: BattleResult) => void
 }
 
 /**
@@ -70,11 +78,14 @@ interface RPGPlayerProps {
  */
 const RPG_SETTINGS_SLIDER_COLOR = '#53eafd'
 
-function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl }: RPGPlayerProps) {
+function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl, onBattleEnd }: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<RendererLike | null>(null)
   // renderer が作り直されても設定オーバーレイの開閉状態を引き継ぐための ref (#204)
   const settingsOpenRef = useRef(false)
+  // 戦闘結果のハンドラは最新の関数を ref 越しに呼ぶ（renderer を作り直さずに差し替えられる、#831）
+  const onBattleEndRef = useRef(onBattleEnd)
+  onBattleEndRef.current = onBattleEnd
 
   // 設定 (Issue #138) — slider drag による書き込み連打は debounce で吸収 (review #155 should-2)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
@@ -100,6 +111,7 @@ function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl }: RPGPlayerProps)
         renderer.applySettings?.(settings)
         renderer.setInputSuspended?.(settingsOpenRef.current)
         renderer.setAssetBaseUrl?.(assetBaseUrl)
+        renderer.setBattleEndHandler?.((result) => onBattleEndRef.current?.(result))
         renderer.load(gameData ?? sampleRpgData)
       })
       .catch((err) => {

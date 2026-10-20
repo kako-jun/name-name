@@ -168,6 +168,20 @@ export interface MonsterDef {
   scale?: number
   /** 属性相性 (#872)。`弱点:` / `半減:` / `無効:` / `吸収:` の属性 id（parser が小文字・半角に正規化済み。優先順位 吸収 > 無効 > 半減 > 弱点で重複排除済み）。4 欄とも空なら無い。解釈・倍率は `game/affinity.ts` */
   affinity?: { weak?: string[]; halve?: string[]; nullify?: string[]; absorb?: string[] }
+  /** 戦利品の宣言 (#831)。`ドロップ:` `ぬすむ:` `ぬすむレア:` `ぬすむ回数:` のどれかを書いたときだけある。生文字列で透過し、解釈は `game/loot.ts` */
+  loot?: MonsterLoot
+}
+
+/** 敵の戦利品の宣言 (#831)。各欄は値部分を書いた順の生文字列（1 行 = `<アイテムid> [確率=P] [個数=N]`）。解釈・不正行の無視は `game/loot.ts` の `parseLootSpec` */
+export interface MonsterLoot {
+  /** ドロップ。1 行 = 1 つの独立した抽選（勝利時） */
+  drops?: string[]
+  /** ぬすむの通常枠。先頭の行から順に判定する */
+  steal?: string[]
+  /** ぬすむのレア枠 */
+  stealRare?: string[]
+  /** 盗める回数（`2` / `無限`。最初の 1 行の生文字列）。無ければ 1 回 */
+  stealLimit?: string
 }
 
 /** アイテム定義 (#174) */
