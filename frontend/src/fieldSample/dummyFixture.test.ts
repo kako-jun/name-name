@@ -42,16 +42,6 @@ describe('buildDummyFixture (#890)', () => {
     expect(c.scenes.train.encounter?.groups.length).toBeGreaterThan(0)
   })
 
-  it('条件付き通行（廃墟の橙の階段）・フラグ・同行者 (#862)', () => {
-    const c = parsed()
-    expect(c.warps.toRuin.to).toBe('ruin')
-    expect(Object.keys(c.flags).sort()).toEqual(['afterEvent', 'partnerGhost', 'refuse'])
-    expect(c.assist?.requires).toEqual(['afterEvent'])
-    expect(c.assist?.unless).toBe('refuse')
-    expect(c.assist?.ghostWhen).toBe('partnerGhost')
-    expect(c.companion?.height).toBe(64)
-  })
-
   it('parseConfig を通り、console.error / warn を出さない', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

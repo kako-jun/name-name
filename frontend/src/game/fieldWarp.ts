@@ -46,3 +46,41 @@ export function sampleWarp(timing: WarpTiming, elapsedMs: number): WarpSample {
   if (t < outMs + holdMs + inMs) return { phase: 'in', alpha: 1 - (t - outMs - holdMs) / inMs }
   return { phase: 'done', alpha: 0 }
 }
+
+/**
+ * 遷移先シーンの読み込みを待つ上限 (ms)。これを超えたらワープを中止して元のシーンに戻す。
+ * 暗転のまま無期限に待たないための安全弁（通常の画像読み込みは数秒以内に終わる）。
+ */
+export const WARP_LOAD_TIMEOUT_MS = 15000
+
+/** 上限 ms で打ち切る Promise。超えたら message の Error で reject する（元の Promise は放置） */
+export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      }
+    )
+  })
+}
+
+/** フィールドの状態。戦闘・エリア遷移・ワープのどれかの最中は「取り込み中」 */
+export interface FieldBusyState {
+  battle: boolean
+  transition: boolean
+  warping: boolean
+}
+
+/**
+ * 「今すぐエンカウント」ボタンなど、外から戦闘を始めてよいか。取り込み中は不可。
+ * ワープ中に戦闘を始めると、戦闘とワープが同時に走って暗転が戻らなくなる。
+ */
+export function canStartBattleNow(s: FieldBusyState): boolean {
+  return !s.battle && !s.transition && !s.warping
+}

@@ -3,6 +3,8 @@
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
+import { createFlagStore } from './flagStore'
+import { WORLD_Z, companionZ, orderedLayers } from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -16,7 +18,6 @@ import {
   arrivalPosition,
   detectEdgeLink,
   foregroundCoverage,
-  isAssistCell,
   foregroundFromRgba,
   facingFromVector,
   isOutward,
@@ -38,18 +39,26 @@ import {
   type WalkMask,
 } from '../game/fieldWalk'
 import {
-  activeMask,
+  INITIAL_ASSIST_RUNTIME,
+  arrivalMask,
   assistSpeed,
-  blockedAttempt,
   companionDisplayAlpha,
   companionPosition,
-  companionWanted,
   evalAssist,
   facing4,
+  stepAssistFrame,
+  stepBlockedEvent,
   stepCompanionAlpha,
+  type AssistRuntime,
 } from '../game/fieldAssist'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
-import { WARP_COLOR, sampleWarp } from '../game/fieldWarp'
+import {
+  WARP_COLOR,
+  WARP_LOAD_TIMEOUT_MS,
+  canStartBattleNow,
+  sampleWarp,
+  withTimeout,
+} from '../game/fieldWarp'
 import { hasOwn } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
@@ -275,26 +284,36 @@ async function main(): Promise<void> {
   const marker = new Graphics()
   const fade = new Graphics()
   const world = new Container()
+  // 描画順は layers.ts (テストで固定)
   world.addChild(
-    scrollSprite,
-    bgSprite,
-    overlaySprite,
-    companionSprite,
-    player,
-    foregroundSprite,
-    marker
+    ...orderedLayers<Container>({
+      scroll: scrollSprite,
+      background: bgSprite,
+      overlay: overlaySprite,
+      companion: companionSprite,
+      player,
+      foreground: foregroundSprite,
+      marker,
+    })
   )
   // 同行者は主人公の後ろ（y が大きければ手前）に並べ替える。前面・マーカーは常に上
   world.sortableChildren = true
-  scrollSprite.zIndex = 0
-  bgSprite.zIndex = 1
-  overlaySprite.zIndex = 2
-  player.zIndex = 10
-  foregroundSprite.zIndex = 20
-  marker.zIndex = 30
+  scrollSprite.zIndex = WORLD_Z.scroll
+  bgSprite.zIndex = WORLD_Z.background
+  overlaySprite.zIndex = WORLD_Z.overlay
+  player.zIndex = WORLD_Z.player
+  foregroundSprite.zIndex = WORLD_Z.foreground
+  marker.zIndex = WORLD_Z.marker
   app.stage.addChild(world, fade)
 
-  const startSnap = snapToWalkable(scene.mask, config.start, 80)
+  // 到着位置の計算は、通れる状態なら橙も歩ける扱いのマスクで行う（橙の階段が端に接していても近くの白へずらされない）
+  const landingMask = (s: LoadedScene, flagValues: Readonly<Record<string, boolean>>): WalkMask =>
+    arrivalMask(
+      s.mask,
+      s.maskAssist,
+      config.assist ? evalAssist(config.assist, flagValues).passable : false
+    )
+  const startSnap = snapToWalkable(landingMask(scene, config.flags), config.start, 80)
   if (!startSnap)
     showError(
       `start (${config.start.x}, ${config.start.y}) の近くに歩ける点がありません。マスクか start を確認してください`
@@ -305,31 +324,32 @@ async function main(): Promise<void> {
   let disarmed: FieldLink | null = null
   let debug = false
   // ---- フラグ・条件付き通行 (#862) ----
-  const flags: Record<string, boolean> = { ...config.flags }
+  const flagStore = createFlagStore(config.flags)
+  const flags = flagStore.flags
   const setFlag = (name: string, value: boolean): boolean => {
-    if (!hasOwn(flags, name)) {
-      console.warn(`[field-sample] 未宣言のフラグ: ${name}`)
-      return false
-    }
-    flags[name] = value
-    const box = document.querySelector<HTMLInputElement>(`input[data-flag="${name}"]`)
-    if (box) box.checked = value
-    return true
+    const ok = flagStore.set(name, value)
+    if (!ok) console.warn(`[field-sample] 未宣言のフラグ: ${name}`)
+    return ok
   }
   let companionAlpha = 0
   let assistArmed = true
+  let assistRt: AssistRuntime = INITIAL_ASSIST_RUNTIME
   // ---- ランダムエンカウント・戦闘 (#809) ----
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
   let lastOutcome = '-'
-  const startBattle = (enemies: BattleEntity[]): void => {
-    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）。押しっぱなしの pointer capture も解放する
+  /** 歩きの入力を全部捨てる。押しっぱなしの pointer capture も解放する（戦闘・ワープの開始時） */
+  const releaseWalkInput = (): void => {
     keys.up = keys.down = keys.left = keys.right = false
     if (activePointerId !== null && canvas.hasPointerCapture(activePointerId))
       canvas.releasePointerCapture(activePointerId)
     activePointerId = null
     pointer = null
     movingMs = 0
+  }
+  const startBattle = (enemies: BattleEntity[]): void => {
+    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
+    releaseWalkInput()
     const b = config.battle
     const menu = buildBattleMenu(config)
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
@@ -391,6 +411,12 @@ async function main(): Promise<void> {
     switched: boolean
   }
   let warpRun: WarpRun | null = null
+  /** ワープを中止して元のシーンへ戻す（覆いの色も黒に戻す。flash の白が端リンクのフェードに残らないように） */
+  const abortWarp = (): void => {
+    warpRun = null
+    fade.alpha = 0
+    fade.tint = 0x000000
+  }
   /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
   const startWarp = (id: string): boolean => {
     if (battle || transition || warpRun) return false
@@ -399,22 +425,31 @@ async function main(): Promise<void> {
       return false
     }
     const warp = config.warps[id]
-    const run: WarpRun = { warp, t: 0, next: ensureScene(warp.to), ready: null, switched: false }
+    const run: WarpRun = {
+      warp,
+      t: 0,
+      // 読み込みが終わらなくても暗転のまま待ち続けない（WARP_LOAD_TIMEOUT_MS で中止）
+      next: withTimeout(
+        ensureScene(warp.to),
+        WARP_LOAD_TIMEOUT_MS,
+        `読み込みが ${WARP_LOAD_TIMEOUT_MS / 1000} 秒以内に終わりませんでした`
+      ),
+      ready: null,
+      switched: false,
+    }
     run.next.then(
       (s) => {
         run.ready = s
       },
       (e) => {
-        // 読み込み失敗: 元のシーンへ戻す
-        if (warpRun === run) warpRun = null
-        fade.alpha = 0
+        if (disposed) return
+        // 読み込み失敗・タイムアウト: 元のシーンへ戻す
+        if (warpRun === run) abortWarp()
         showError(`ワープ先の読み込みに失敗しました\n${e instanceof Error ? e.message : String(e)}`)
       }
     )
     fade.tint = WARP_COLOR[warp.effect]
-    keys.up = keys.down = keys.left = keys.right = false
-    pointer = null
-    movingMs = 0
+    releaseWalkInput()
     warpRun = run
     return true
   }
@@ -428,13 +463,12 @@ async function main(): Promise<void> {
       if (!run.ready) run.t = timing.outMs
       else {
         const dst = run.ready
-        const landing = snapToWalkable(dst.mask, run.warp.at, 80)
+        const landing = snapToWalkable(landingMask(dst, flags), run.warp.at, 80)
         if (!landing) {
           showError(
             `ワープ先 ${run.warp.id} の at (${run.warp.at.x}, ${run.warp.at.y}) の近くに歩ける点がありません。ワープを中止しました`
           )
-          warpRun = null
-          fade.alpha = 0
+          abortWarp()
           return
         }
         sceneId = dst.id
@@ -459,6 +493,9 @@ async function main(): Promise<void> {
 
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    // 同行者の表示とラッチはシーンをまたいで持ち越さない（ワープ・端リンクの暗転明けに残さない）
+    companionAlpha = 0
+    assistRt = INITIAL_ASSIST_RUNTIME
     bgSprite.texture = s.background
     overlaySprite.texture = s.overlay
     foregroundSprite.texture = s.foreground?.texture ?? Texture.EMPTY
@@ -550,7 +587,8 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (battle || transition) return
+    if (!canStartBattleNow({ battle: !!battle, transition: !!transition, warping: !!warpRun }))
+      return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
     const r = advanceEncounter(
@@ -605,12 +643,12 @@ async function main(): Promise<void> {
                     link,
                     pos,
                     back,
-                    dst.mask,
+                    landingMask(dst, flags),
                     config.edgeThreshold * ARRIVAL_INSET_FACTOR
                   )
                 : null
               const fallback = snapToWalkable(
-                dst.mask,
+                landingMask(dst, flags),
                 { x: dst.mask.width / 2, y: dst.mask.height / 2 },
                 Math.max(dst.mask.width, dst.mask.height)
               )
@@ -654,27 +692,34 @@ async function main(): Promise<void> {
       if (disarmed && !isOutward(disarmed.edge, vec)) disarmed = null
       // 条件付き通行 (#862): 橙のセルはフラグが成り立つ間だけ歩ける。橙の上は押されて少し遅い
       const ast = config.assist ? evalAssist(config.assist, flags) : null
-      const walkMask = ast
-        ? activeMask(scene.mask, scene.maskAssist, ast.passable, pos)
-        : scene.mask
-      const onAssist = ast !== null && ast.passable && isAssistCell(scene.mask, pos.x, pos.y)
+      const frame = ast
+        ? stepAssistFrame({
+            base: scene.mask,
+            assisted: scene.maskAssist,
+            pos,
+            vec,
+            state: ast,
+            runtime: assistRt,
+          })
+        : null
+      if (frame) assistRt = frame.runtime
+      const walkMask = frame ? frame.walkMask : scene.mask
+      const moveVec = frame ? frame.moveVec : vec
       const speed =
-        ast && config.assist
-          ? assistSpeed(config.speed, onAssist, ast.ghost, config.assist.speedFactor)
+        ast && config.assist && frame
+          ? assistSpeed(config.speed, frame.onAssist, ast.ghost, config.assist.speedFactor)
           : config.speed
-      const wantCompanion = ast ? companionWanted(scene.mask, pos, vec, ast.passable) : false
-      if (ast) {
-        // 通れない状態で橙へ進もうとした瞬間に 1 回だけ脚本へ知らせる（入力が途切れたら再武装）
-        if (blockedAttempt(scene.mask, pos, vec, ast.passable)) {
-          if (assistArmed) {
-            assistArmed = false
-            window.dispatchEvent(
-              new CustomEvent('fieldsample:assist-blocked', {
-                detail: { scene: sceneId, pos: { ...pos }, reason: ast.held ? 'held' : 'locked' },
-              })
-            )
-          }
-        } else assistArmed = true
+      const wantCompanion = frame ? frame.wantCompanion : false
+      if (ast && frame) {
+        // 通れない状態で橙へ進もうとした瞬間に 1 回だけ脚本へ知らせる（入力が途切れたら再武装。橙の上では出さない）
+        const ev = stepBlockedEvent(assistArmed, frame.blocked)
+        assistArmed = ev.armed
+        if (ev.emit)
+          window.dispatchEvent(
+            new CustomEvent('fieldsample:assist-blocked', {
+              detail: { scene: sceneId, pos: { ...pos }, reason: ast.held ? 'held' : 'locked' },
+            })
+          )
       }
       companionAlpha = stepCompanionAlpha(
         companionAlpha,
@@ -682,7 +727,7 @@ async function main(): Promise<void> {
         dt,
         config.assist?.fadeMs ?? 0
       )
-      const r = stepMove(walkMask, pos, vec, speed, dt)
+      const r = stepMove(walkMask, pos, moveVec, speed, dt)
       pos = r.pos
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0
@@ -743,7 +788,7 @@ async function main(): Promise<void> {
       const cp = companionPosition(pos, facing, config.assist.offset)
       companionSprite.position.set(cp.x, cp.y)
       companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
-      companionSprite.zIndex = cp.y > pos.y ? 11 : 9
+      companionSprite.zIndex = companionZ(cp.y, pos.y)
       companionSprite.visible = true
     } else {
       companionSprite.visible = false
@@ -792,6 +837,7 @@ async function main(): Promise<void> {
     input.type = 'checkbox'
     input.dataset.flag = name
     input.checked = flags[name]
+    flagStore.register(name, input)
     input.addEventListener('change', () => setFlag(name, input.checked))
     label.append(input, `フラグ: ${name}`)
     flagBox.appendChild(label)

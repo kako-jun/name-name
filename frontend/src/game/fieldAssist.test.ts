@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   ASSIST_DEFAULTS,
   ASSIST_LOOKAHEAD,
-  activeMask,
   aheadIsAssist,
   assistSpeed,
   blockedAttempt,
@@ -12,9 +11,22 @@ import {
   evalAssist,
   facing4,
   stepCompanionAlpha,
+  stepAssistFrame,
+  stepBlockedEvent,
+  arrivalMask,
+  INITIAL_ASSIST_RUNTIME,
+  type AssistRuntime,
+  type AssistState,
   type AssistConfig,
 } from './fieldAssist'
-import { maskWithAssist, type Facing8, type WalkMask } from './fieldWalk'
+import {
+  maskWithAssist,
+  snapToWalkable,
+  stepMove,
+  type Facing8,
+  type Vec,
+  type WalkMask,
+} from './fieldWalk'
 
 /** ASCII マスク: '.' 白 / '#' 黒 / 'o' 橙。1 行 = 1 y */
 function maskOf(rows: string[]): WalkMask {
@@ -102,18 +114,6 @@ describe('先読み・同行者を出す条件 (#862)', () => {
   })
 })
 
-describe('activeMask (#862)', () => {
-  const base = maskOf(['.o.'])
-  const asst = maskWithAssist(base)
-  it('通れる状態なら橙も歩けるマスク、通れなければ元のマスク', () => {
-    expect(activeMask(base, asst, true, { x: 0.5, y: 0.5 })).toBe(asst)
-    expect(activeMask(base, asst, false, { x: 0.5, y: 0.5 })).toBe(base)
-  })
-  it('通れなくなっても、橙の上に立っていれば抜けるまで橙を歩ける（詰まらない）', () => {
-    expect(activeMask(base, asst, false, { x: 1.5, y: 0.5 })).toBe(asst)
-  })
-})
-
 describe('同行者の位置・向き・速さ・不透明度 (#862)', () => {
   it('companionPosition: 向きの反対側に offset だけ離れる（4 方向）', () => {
     const f = { x: 100, y: 100 }
@@ -154,5 +154,150 @@ describe('同行者の位置・向き・速さ・不透明度 (#862)', () => {
     expect(companionDisplayAlpha(1, true, 0.5)).toBe(0.5)
     expect(companionDisplayAlpha(0.5, true, 0.5)).toBe(0.25)
     expect(companionDisplayAlpha(1, false, 0.5)).toBe(1)
+  })
+})
+
+describe('橙の通行状態のラッチ (#862 レビュー: 橙の上で通行が止まっても渡り切れない)', () => {
+  // 横一列: 白 20 + 橙 40 + 白 20。x=0..19 白、20..59 橙、60..79 白
+  const base = maskOf(['.'.repeat(20) + 'o'.repeat(40) + '.'.repeat(20)])
+  const asst = maskWithAssist(base)
+  const OPEN: AssistState = { passable: true, held: false, ghost: false }
+  const REFUSE: AssistState = { passable: false, held: true, ghost: false }
+  const LOCKED: AssistState = { passable: false, held: false, ghost: false }
+  const RIGHT: Vec = { x: 1, y: 0 }
+  const LEFT: Vec = { x: -1, y: 0 }
+
+  interface Trace {
+    pos: Vec
+    runtime: AssistRuntime
+    blockedFrames: number
+    emits: number
+    companionFrames: number
+    slowFrames: number
+    stuckFrames: number
+  }
+  /** 1 フレーム 16ms・速さ 100px/秒 を frames 回。stateAt(f) でフレームごとの状態を変えられる */
+  function run(
+    start: Trace,
+    frames: number,
+    vec: Vec,
+    stateAt: (f: number) => AssistState,
+    armed0 = { v: true }
+  ): Trace {
+    let t = { ...start }
+    for (let f = 0; f < frames; f++) {
+      const fr = stepAssistFrame({
+        base,
+        assisted: asst,
+        pos: t.pos,
+        vec,
+        state: stateAt(f),
+        runtime: t.runtime,
+      })
+      const ev = stepBlockedEvent(armed0.v, fr.blocked)
+      armed0.v = ev.armed
+      const r = stepMove(fr.walkMask, t.pos, fr.moveVec, fr.onAssist ? 70 : 100, 16)
+      t = {
+        pos: r.pos,
+        runtime: fr.runtime,
+        blockedFrames: t.blockedFrames + (fr.blocked ? 1 : 0),
+        emits: t.emits + (ev.emit ? 1 : 0),
+        companionFrames: t.companionFrames + (fr.wantCompanion ? 1 : 0),
+        slowFrames: t.slowFrames + (fr.onAssist ? 1 : 0),
+        stuckFrames: t.stuckFrames + (r.distance === 0 && vec.x !== 0 ? 1 : 0),
+      }
+    }
+    return t
+  }
+  const t0 = (x: number): Trace => ({
+    pos: { x, y: 0.5 },
+    runtime: INITIAL_ASSIST_RUNTIME,
+    blockedFrames: 0,
+    emits: 0,
+    companionFrames: 0,
+    slowFrames: 0,
+    stuckFrames: 0,
+  })
+
+  it('通れる状態で渡り切ると、橙の間ずっと同行者・速度倍率が続き、合図は出ない', () => {
+    const t = run(t0(10.5), 200, RIGHT, () => OPEN)
+    expect(t.pos.x).toBeGreaterThan(60)
+    expect(t.emits).toBe(0)
+    expect(t.companionFrames).toBeGreaterThan(30)
+    expect(t.slowFrames).toBeGreaterThan(30)
+  })
+
+  it('橙の途中で拒否 (unless) を立てると、前へは進めず、同行者・速度は維持され、合図は出ない', () => {
+    // 橙に入って 10px 進んだところで拒否に切り替える
+    const mid = run(t0(10.5), 30, RIGHT, () => OPEN)
+    expect(mid.pos.x).toBeGreaterThan(22)
+    expect(mid.pos.x).toBeLessThan(58)
+    const held = run(mid, 100, RIGHT, () => REFUSE)
+    expect(held.pos.x).toBeLessThan(mid.pos.x + 0.001) // 前へは進まない
+    expect(held.emits).toBe(0)
+    expect(held.blockedFrames).toBe(0)
+    expect(held.companionFrames - mid.companionFrames).toBe(100) // 同行者は出たまま
+    expect(held.slowFrames - mid.slowFrames).toBe(100) // 倍率も維持
+  })
+
+  it('拒否中でも、入ってきた側へは戻れて（詰まらず）、橙を抜けたらラッチが外れる', () => {
+    const mid = run(t0(10.5), 30, RIGHT, () => OPEN)
+    const back = run(mid, 60, LEFT, () => REFUSE)
+    expect(back.pos.x).toBeLessThan(20)
+    expect(back.runtime.latch).toBeNull()
+    expect(run(mid, 10, LEFT, () => REFUSE).pos.x).toBeLessThan(mid.pos.x - 5) // 戻り始めは詰まらない
+    // 抜けたあとは通常の「通れない橙へ進もうとした」扱いに戻る
+    const again = run(back, 30, RIGHT, () => REFUSE)
+    expect(again.pos.x).toBeLessThan(21)
+    expect(again.emits).toBe(1)
+  })
+
+  it('拒否が解けたら、橙の中からまた進める', () => {
+    const mid = run(t0(10.5), 30, RIGHT, () => OPEN)
+    const held = run(mid, 30, RIGHT, () => REFUSE)
+    const go = run(held, 200, RIGHT, () => OPEN)
+    expect(go.pos.x).toBeGreaterThan(60)
+  })
+
+  it('最初から通れない状態では、橙へ入れず合図は押し続けても 1 回だけ（入力が途切れたら再武装）', () => {
+    const t = run(t0(10.5), 200, RIGHT, () => LOCKED)
+    expect(t.pos.x).toBeLessThan(20)
+    expect(t.emits).toBe(1)
+    expect(t.blockedFrames).toBeGreaterThan(1)
+    const idle = run(t, 3, { x: 0, y: 0 }, () => LOCKED)
+    const again = run(idle, 30, RIGHT, () => LOCKED)
+    expect(again.emits - idle.emits).toBe(1)
+  })
+
+  it('通行が止まっていても、最初から橙の上に置かれたとき（ワープ・開始位置）は詰まらず抜けられる', () => {
+    const t = run(t0(40.5), 300, RIGHT, () => LOCKED)
+    expect(t.pos.x).toBeGreaterThan(60)
+    expect(t.emits).toBe(0)
+    expect(t.companionFrames).toBe(0) // 入った場所が無いので押されない
+  })
+})
+
+describe('stepBlockedEvent (#862 レビュー)', () => {
+  it('blocked が続く間は最初の 1 回だけ emit、途切れたら再武装', () => {
+    let armed = true
+    const seq = [true, true, true, false, true, true]
+    const emits = seq.map((b) => {
+      const r = stepBlockedEvent(armed, b)
+      armed = r.armed
+      return r.emit
+    })
+    expect(emits).toEqual([true, false, false, false, true, false])
+  })
+})
+
+describe('arrivalMask (#862 レビュー: 到着位置は通れる状態なら橙込みで)', () => {
+  // 左端 3 セルが橙の階段（画像の端に接する）。そこが到着点
+  const base = maskOf(['ooo....'])
+  const asst = maskWithAssist(base)
+  it('通れる状態なら橙の上にそのまま立てる / 通れなければ近い白へずらす', () => {
+    const at = { x: 1.5, y: 0.5 }
+    expect(snapToWalkable(arrivalMask(base, asst, true), at, 10)).toEqual(at)
+    const shifted = snapToWalkable(arrivalMask(base, asst, false), at, 10)
+    expect(shifted?.x).toBeGreaterThanOrEqual(3)
   })
 })
