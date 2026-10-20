@@ -23,7 +23,7 @@
  * 宣言の無い戦闘・宣言の無い印（属性欄の耐性も当てない）は、乱数の消費を含めて従来と完全に同じ。
  *
  * 戦利品 (#831): 敵の `loot`（ドロップ・ぬすむの通常枠とレア枠）を宣言した敵だけが働く。ドロップは勝利の瞬間に行ごとに抽選、
- * ぬすむは効果 DSL `steal`（`SpellExecution` / `SkillExecution` / `ItemExecution` の `effect`）が `ctx.steal` を呼んで抽選する。
+ * ぬすむは効果 DSL `steal`（`SpellExecution` / `SkillExecution` の `effect`。アイテムは対象が味方だけなので盗めない）が `ctx.steal` を呼んで抽選する。
  * 獲得は `BattleState.loot` に事実として積み、`getResult()` が結果（`BattleResult`）にまとめてホストへ渡す（所持品の保存は持たない）。
  * 宣言の無い戦闘は、乱数の消費を含めて従来と完全に同じ。
  *
