@@ -568,3 +568,16 @@ export function configNotice(config: FieldSampleConfig): string | null {
   if (config.warnings) parts.push(...config.warnings)
   return parts.length > 0 ? parts.join('\n') : null
 }
+
+/**
+ * URL の検索文字列から、設定の読み元を決める (#890)。`?config=` が与えられていれば（URL として解決できなくても）
+ * それが優先で、`?fixture=dummy` は `?config=` が無いときだけ効く
+ */
+export function pickConfigSource(search: string): {
+  configParam: string | undefined
+  dummy: boolean
+} {
+  const q = new URLSearchParams(search)
+  const configParam = q.get('config')?.trim() || undefined
+  return { configParam, dummy: !configParam && q.get('fixture') === 'dummy' }
+}

@@ -2251,17 +2251,11 @@ export class BattleScreen extends Container {
       if (action.kind === 'spell') {
         this.engine.selectSpell(entry as BattleSpellEntry, action.targetId)
       } else {
-        const logBefore = this.engine.getState().logTotal
-        this.engine.selectItem(entry as BattleItemEntry, action.targetId)
-        // 所持数を持つアイテムは、実際に使われたとき（エンジンがログを書いたとき）だけ減る。
+        // 所持数を持つアイテムは、実際に使われたとき（selectItem が true）だけ減る。
         // 試作の所持数で、呼び出し側が渡した候補の count を戦闘中だけ書き換える
         const item = entry as BattleItemEntry
-        if (
-          this.engine.getState().logTotal > logBefore &&
-          typeof item.count === 'number' &&
-          item.count > 0
-        )
-          item.count -= 1
+        const used = this.engine.selectItem(item, action.targetId)
+        if (used && typeof item.count === 'number' && item.count > 0) item.count -= 1
       }
     }
     this.refresh()

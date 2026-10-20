@@ -6,6 +6,7 @@ import {
   forceBattleCandidates,
   parseConfig,
   parseConfigText,
+  pickConfigSource,
   type FieldSampleConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
@@ -856,5 +857,28 @@ describe('parseConfig monsters / party の poses (#890)', () => {
     expect(c.monsters.slime.poses).toEqual({ idle: 'https://example.com/field/i.png' })
     expect(({} as Record<string, unknown>).idle).toBeUndefined()
     expect(Object.getPrototypeOf(c.monsters.slime.poses)).toBe(Object.prototype)
+  })
+})
+
+describe('pickConfigSource (#890)', () => {
+  it('?fixture=dummy だけなら dummy', () => {
+    expect(pickConfigSource('?fixture=dummy')).toEqual({ configParam: undefined, dummy: true })
+  })
+
+  it('?config= があれば fixture=dummy より優先（dummy にならない）', () => {
+    expect(pickConfigSource('?config=a.json&fixture=dummy')).toEqual({
+      configParam: 'a.json',
+      dummy: false,
+    })
+  })
+
+  it('解決できない ?config= でも dummy に化けない', () => {
+    expect(pickConfigSource('?config=http://&fixture=dummy').dummy).toBe(false)
+  })
+
+  it('空白だけの ?config= は無指定扱い。fixture が dummy 以外なら dummy でない', () => {
+    expect(pickConfigSource('?config=%20&fixture=dummy').dummy).toBe(true)
+    expect(pickConfigSource('?fixture=x').dummy).toBe(false)
+    expect(pickConfigSource('').dummy).toBe(false)
   })
 })

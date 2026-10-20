@@ -394,11 +394,11 @@ export class BattleEngine {
     this.recordNotice(this.currentActor() ?? undefined, label)
   }
 
-  /** 「どうぐ」: アイテムを使用 */
-  selectItem(item: ItemExecution, targetId?: string): void {
-    if (this.state.phase !== 'party-input') return
+  /** 「どうぐ」: アイテムを使用。実際に使えたら true、行動が成立しなかった（入力待ちでない等）ら false */
+  selectItem(item: ItemExecution, targetId?: string): boolean {
+    if (this.state.phase !== 'party-input') return false
     const user = this.currentActor()
-    if (!user) return
+    if (!user) return false
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
 
     const targets = this.resolveItemTargets(item, targetId)
@@ -421,6 +421,7 @@ export class BattleEngine {
     this.advanceAfterPartyAction(
       this.reactionOf(user, { category: 'item', name: item.name }, hpSnapshot)
     )
+    return true
   }
 
   /**

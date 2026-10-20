@@ -348,3 +348,14 @@ describe('BattleEngine.notifyBlocked (#890)', () => {
     expect(eng.getState().events.some((e) => e.label === 'x')).toBe(false)
   })
 })
+
+describe('BattleEngine.selectItem の戻り値 (#890)', () => {
+  it('使えたら true、入力待ちでないときは false で何も起きない', () => {
+    const eng = new BattleEngine([hero({ hp: 5 })], [slime({ atk: 0 })], { rng: () => 0 })
+    expect(eng.selectItem({ name: 'やくそう', effect: 'heal 5..5' })).toBe(true)
+    ;(eng.getState() as { phase: string }).phase = 'enemy-turn'
+    const logLen = eng.getState().log.length
+    expect(eng.selectItem({ name: 'やくそう', effect: 'heal 5..5' })).toBe(false)
+    expect(eng.getState().log).toHaveLength(logLen)
+  })
+})

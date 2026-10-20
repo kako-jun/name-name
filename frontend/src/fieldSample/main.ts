@@ -34,6 +34,7 @@ import {
   configNotice,
   findReturnLink,
   forceBattleCandidates,
+  pickConfigSource,
   parseConfigText,
   type FieldSampleConfig,
 } from './config'
@@ -106,12 +107,12 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
 
 async function loadConfig(): Promise<FieldSampleConfig> {
   const base = location.href
-  const raw = new URLSearchParams(location.search).get('config')?.trim()
+  const { configParam: raw, dummy } = pickConfigSource(location.search)
   const url = raw ? resolveUrl(raw, base) : null
   let text = defaultConfigText
   let textBase = base
   // 素材なしフィクスチャ (#890)。`?fixture=dummy`。?config= が同時にあれば config が優先
-  if (!url && new URLSearchParams(location.search).get('fixture') === 'dummy') {
+  if (dummy) {
     text = JSON.stringify(buildDummyFixture())
   }
   if (url) {

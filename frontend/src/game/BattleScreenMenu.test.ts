@@ -1065,7 +1065,8 @@ describe('どうぐの所持数と知らせ (#890)', () => {
     const { engine } = build({ menu: m }, { rng: () => 0 }, [ent('a')], foes())
     press('ArrowRight')
     press('Enter')
-    ;(engine.getState() as { phase: string }).phase = 'enemy-turn' // 窓を開いたまま局面だけ変わった状況
+    // phase を手で書き換える擬似状態（実運用では窓が閉じるため通常は起きない）。count 減算のガード専用の検証
+    ;(engine.getState() as { phase: string }).phase = 'enemy-turn'
     const logLen = engine.getState().log.length
     press('Enter')
     expect(engine.getState().log).toHaveLength(logLen) // selectItem は何もしなかった

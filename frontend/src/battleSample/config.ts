@@ -75,7 +75,7 @@ export interface BattleSampleConfig {
   commandLabels: CommandLabels
   /** 候補窓の呪文 (#204)。味方全員が使える（cross のときだけ「じゅもん」で開く）。MP が足りないものはグレー */
   spells: BattleSpellEntry[]
-  /** 候補窓のアイテム (#204)。`count` は所持数（表示だけ。使っても減らない） */
+  /** 候補窓のアイテム (#204)。`count` は所持数（使うたびに BattleScreen が渡された entry の count を 1 減らす。呼び出し側は戦闘ごとに複製を渡す） */
   items: BattleItemEntry[]
   /** 絶対 URL。なしは null */
   background: string | null
