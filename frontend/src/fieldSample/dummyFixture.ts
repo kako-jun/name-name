@@ -76,6 +76,58 @@ function overhead(w: number, h: number): string {
   return c.toDataURL('image/png')
 }
 
+/** 電車内の背景 (#864)。窓（透明）から、奥の流れる景色が見える */
+function trainInterior(w: number, h: number): string {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  g.fillStyle = '#8a6a48'
+  g.fillRect(0, 0, w, h)
+  g.fillStyle = '#5a4630'
+  g.fillRect(0, 200, w, h - 200) // 床
+  for (const x of [40, 240, 440]) g.clearRect(x, 40, 160, 110) // 窓（透明に抜く）
+  g.fillStyle = 'rgba(255,255,255,0.6)'
+  g.font = 'bold 22px sans-serif'
+  g.fillText('DUMMY TRAIN', 220, 190)
+  return c.toDataURL('image/png')
+}
+
+/** 窓の外の景色（横にタイルされる）。山と木を並べた帯 */
+function landscape(w: number, h: number): string {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  g.fillStyle = '#7fc4e8'
+  g.fillRect(0, 0, w, h)
+  g.fillStyle = '#2d8a4a'
+  g.fillRect(0, h - 36, w, 36)
+  for (let x = 20; x < w; x += 80) {
+    g.fillStyle = '#1d5a30'
+    g.fillRect(x, h - 76, 14, 40)
+    g.fillStyle = '#e0b030'
+    g.fillRect(x - 8, h - 96, 30, 24)
+  }
+  return c.toDataURL('image/png')
+}
+
+/** 電車内の歩行マスク: 床の通路だけ歩ける */
+function trainMask(w: number, h: number): string {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  g.fillStyle = '#000'
+  g.fillRect(0, 0, w, h)
+  g.fillStyle = '#fff'
+  g.fillRect(16, 230, w - 32, h - 246)
+  return c.toDataURL('image/png')
+}
+
 const FACING_COLOR = { up: '#3a6', down: '#36a', left: '#a63', right: '#a36' } as const
 const POSE_COLOR: Record<string, string> = {
   idle: '#3b6bb5',
@@ -118,6 +170,19 @@ export function buildDummyFixture(): Record<string, unknown> {
         links: [],
         encounter: { rate: 3, groups: ['slime', 'slime+bat', 'bat+bat'] },
       },
+      train: {
+        background: trainInterior(W, H),
+        mask: trainMask(W, H),
+        shake: { amplitudeY: 3, periodMs: 500 },
+        scroll: { image: landscape(320, 110), speed: -240, y: 40 },
+        links: [],
+        encounter: { rate: 3, groups: ['slime', 'slime+bat', 'bat+bat'] },
+      },
+    },
+    // ワープ (#864): 野原 ⇄ 電車内。電車内は揺れ・窓の外の流れる景色つきで、野原と同じ群でエンカウントする
+    warps: {
+      toTrain: { to: 'train', at: { x: 320, y: 300 }, facing: 'up', effect: 'fade' },
+      toMeadow: { to: 'meadow', at: { x: 320, y: 300 }, facing: 'down', effect: 'flash' },
     },
     encounter: { stepDistance: 50, minSteps: 0 },
     monsters: {
