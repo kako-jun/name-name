@@ -21,10 +21,6 @@ import {
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
 import { CurtainLayer } from './CurtainLayer'
-import {
-  DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
-  DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
-} from './outlineFilter'
 import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
 import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
@@ -35,7 +31,6 @@ import {
   clearBackgroundPreloadQueue,
 } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
-import { selectAndShuffleSeFiles } from './seSelection'
 import { GameState, NovelGameState, StartFromOptions, Step, resolveEvents } from './GameState'
 import { VideoLayer } from './VideoLayer'
 import { EventImageLayer } from './EventImageLayer'
@@ -50,6 +45,7 @@ import {
 } from './BackgroundController'
 import { type ScreenEffectsController } from './ScreenEffectsController'
 import { Stage } from './Stage'
+import { dispatchDirective, type DirectiveContext } from './directives'
 import { SaveController } from './SaveController'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
@@ -616,6 +612,105 @@ export class NovelRenderer {
     },
     this.time
   )
+
+  /**
+   * ディレクティブのハンドラ（`directives/`）に渡す最小ポート (#829)。値は getter で毎回最新を返す
+   * （レイヤー・設定はレンダラが差し替えるため、生成時の参照を固定しない）。
+   */
+  private readonly directiveContext: DirectiveContext = this.createDirectiveContext()
+
+  private createDirectiveContext(): DirectiveContext {
+    // getter から private フィールドを読むための別名（アロー関数だと getter 構文にできない）。
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const r = this
+    return {
+      get stage() {
+        return r.stage
+      },
+      get audio() {
+        return r.audioManager
+      },
+      get characters() {
+        return r.characterLayer
+      },
+      layers: {
+        get video() {
+          return r.videoLayer
+        },
+        get backgroundBoard() {
+          return r.backgroundBoardLayer
+        },
+        get prop() {
+          return r.propLayer
+        },
+        get curtain() {
+          return r.curtainLayer
+        },
+        get lighting() {
+          return r.lightingLayer
+        },
+        get eventImage() {
+          return r.eventImageLayer
+        },
+        get telop() {
+          return r.telopLayer
+        },
+        get dialogBox() {
+          return r.dialogBox
+        },
+        get choiceOverlay() {
+          return r.choiceOverlay
+        },
+      },
+      env: {
+        get skipMode() {
+          return r.skipMode
+        },
+        get initialized() {
+          return r.initialized
+        },
+        get assetBaseUrl() {
+          return r.assetBaseUrl
+        },
+        get fullscreenImage() {
+          return r.fullscreenImage
+        },
+        get eventImageFadeMs() {
+          return r.eventImageFadeMs
+        },
+        get eventImageTransitionDefault() {
+          return r.eventImageTransitionDefault
+        },
+        get gameDefaultFontFamily() {
+          return r.gameDefaultFontFamily
+        },
+        get gameDefaultFontSize() {
+          return r.gameDefaultFontSize
+        },
+        get runtimeDefaultFontFamily() {
+          return NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+        },
+        get runtimeDefaultFontSize() {
+          return NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
+        },
+        get telopAccentColorNum() {
+          return r.telopAccentColorNum
+        },
+        get telopClearEpoch() {
+          return r.telopClearEpoch
+        },
+      },
+      hooks: {
+        applyEventImageVisibility: () => r.applyEventImageVisibility(),
+        clearTelopLayer: () => r.clearTelopLayer(),
+        setCurtainZOrder: (front) => r.setCurtainZOrder(front),
+        resolveNovelRoleXRatio: (character) => r.resolveNovelRoleXRatio(character),
+        setCurrentBgmPath: (path) => {
+          r.currentBgmPath = path
+        },
+      },
+    }
+  }
 
   /** 背景（7a）。実体は `stage.background`。 */
   private get background(): BackgroundController {
@@ -3707,277 +3802,20 @@ export class NovelRenderer {
   }
 
   /**
-   * 演出イベント（Background, Blackout, SceneTransition）を実行する
+   * 演出イベントを実行する。
+   *
+   * 背景・立ち絵・オーディオなど演出系の種は `directives/` の領域別ハンドラ（`dispatchDirective`）が処理する (#829)。
+   * ここには再生状態（フラグ・カーソル・遷移・待機タイマー）を同時に触るフロー制御系
+   * （`WaitDisplayComplete` / `Flag` / `Choice` / `Jump` / `Wait`）だけが残る。
    *
    * Condition は resolvedEvents では既に展開済みなので、ここでは処理しない。
    */
   private processDirective(event: Event): void {
+    if (dispatchDirective(event, this.directiveContext)) return
     if (typeof event === 'string') {
-      if (event === 'SceneTransition') {
-        this.background.clearBackground()
-        // 動画レイヤも背景と同じ扱いでクリアする (#252)。
-        this.videoLayer.remove()
-        // 舞台構造の背景板 (#683) も既存の単一スロット背景と同じタイミングでクリアする。
-        this.backgroundBoardLayer.clear()
-        // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
-        this.propLayer.clear()
-        // 幕 (#697) も背景板・大道具と同じ単一スロット持続規律（[場面転換] でクリア、
-        // 通常のシーン間ジャンプでは持ち越し）。z-order も既定位置へ戻す。
-        this.curtainLayer.clear()
-        this.setCurtainZOrder(false)
-        // 追うスポットライト (#693) も同じタイミングで消灯する（resetAndStartEvents と同じ規律）。
-        this.lightingLayer.clear()
-        // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
-        this.videoLayer.remove()
-        // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
-        // 全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が隠れたまま次のシーンに
-        // 持ち越されないようにする防御。
-        this.eventImageLayer.remove()
-        this.applyEventImageVisibility()
-        // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。
-        this.clearTelopLayer()
-        this.screenEffects.setBlackout(false)
-        // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
-        this.screenEffects.retreatNovelScrim()
-      }
-      if (event === 'VideoExit') {
-        // [動画退場] で動画レイヤをクリア (#252)
-        this.videoLayer.remove()
-      }
       if (event === 'WaitDisplayComplete') {
         this.beginWaitDisplayComplete()
       }
-      if (event === 'SpotlightOff') {
-        // スポットライト消灯 (#693)。settled state（fire-and-forget ではない）。
-        this.lightingLayer.clear()
-      }
-      if (event === 'CurtainUp') {
-        // 幕を上げる (#697)。settled state は curtainLayer.raise() 内で即座に null になる
-        // （上昇アニメーション自体は演出の中間状態、ADR-0002）。z-order はそのままでよい
-        // （幕が見えなくなるだけなので、次に [幕:] が来たときの setCurtainZOrder で改めて決まる）。
-        this.curtainLayer.raise()
-      }
-      return
-    }
-    if ('Background' in event) {
-      const bg = event.Background
-      this.background.setBackground(
-        bg.path,
-        normalizeBackgroundFade({
-          top: bg.fade_top,
-          bottom: bg.fade_bottom,
-          left: bg.fade_left,
-          right: bg.fade_right,
-        }),
-        bg.brightness
-      )
-      return
-    }
-    if ('BackgroundBoard' in event) {
-      // 舞台構造の背景板 (#683)。既存の単一スロット背景とは独立した加算的な仕組み:
-      // 同じシーン内で複数回発火すれば、それぞれ別の板として BackgroundBoardLayer に蓄積される。
-      const board = event.BackgroundBoard
-      this.backgroundBoardLayer.add(board.path, board.depth ?? 0, this.assetBaseUrl)
-      return
-    }
-    if ('Prop' in event) {
-      // 舞台構造の大道具 (#692)。背景板とは独立した PixiJS レイヤーに加算的に蓄積される:
-      // 同じシーン内で複数回発火すれば、それぞれ別の大道具として PropLayer に蓄積される。
-      const prop = event.Prop
-      this.propLayer.add(prop.path, prop.depth ?? 0, this.assetBaseUrl)
-      return
-    }
-    if ('BackgroundColor' in event) {
-      // 単色地色 (#273)。背景画像と同じ永続状態（snapshot / applyState / セーブ復元で復元）。
-      this.background.setBackgroundColor(event.BackgroundColor.color)
-      return
-    }
-    if ('Video' in event) {
-      // 動画入力レイヤ (#252)。URL 構築は VideoLayer 側（assetBaseUrl + '/videos/' + path）に委譲し、
-      // ここでは相対パスをそのまま渡す。背景の setBackground と同じ責務分担で、
-      // セーブ/スナップショットには相対パスが保持される（ドメイン変更後のロードでも壊れない）。
-      const v = event.Video
-      if (this.assetBaseUrl) {
-        this.videoLayer.show(v.path, {
-          position: v.position,
-          scale: v.scale,
-          loop: v.loop,
-          mute: v.mute,
-          fade: normalizeBackgroundFade({
-            top: v.fade_top,
-            bottom: v.fade_bottom,
-            left: v.fade_left,
-            right: v.fade_right,
-          }),
-        })
-      }
-      return
-    }
-    if ('EventImage' in event) {
-      // イベント絵レイヤー (#351)。URL 構築は EventImageLayer 側（assetBaseUrl + '/images/' + path）
-      // に委譲する。表示後、全背面レイヤー（背景・背景板・動画・立ち絵・大道具）の可視性を
-      // back 値に応じて宣言的に更新する
-      // （applyEventImageVisibility は setBlackout と同じく processDirective / applyState の
-      // 両方から呼ばれる単一の宣言的トグル。一回限りのアニメーションにはしない・ADR-0002）。
-      // onSettled でロード完了/失敗後にも再計算する（セルフレビュー指摘: ロード失敗のまま
-      // back=Hide が残ると背面が隠れっぱなしになる事故を防ぐ。shouldHideBackLayer() 参照）。
-      const ei = event.EventImage
-      if (this.assetBaseUrl) {
-        this.eventImageLayer.show(ei.path, {
-          back: ei.back,
-          fadeMs: ei.fade_ms ?? this.eventImageFadeMs,
-          // 遷移モード (#583)。parser（Rust）が `遷移=` 未指定タグを frontmatter
-          // `event_image_transition`（#599）の実効デフォルトへ解決済みで、
-          // wasm/parser.ts の normalizeEvents が undefined をそのデフォルトに正規化済みだが、
-          // 念のため ?? で三重に防御する（`this.eventImageTransitionDefault` は
-          // setEventImageTransitionDefault で受けた同じ doc デフォルト）。
-          transition: ei.transition ?? this.eventImageTransitionDefault,
-          // アンビエント演出 (#582)。parser.ts の normalizeEvents が undefined を全 false に
-          // 正規化済みだが、念のため ?? で二重に防御する。
-          effects: ei.effects ?? undefined,
-          onSettled: () => this.applyEventImageVisibility(),
-          onVisibilityChange: () => this.applyEventImageVisibility(),
-        })
-        this.applyEventImageVisibility()
-        // フルキャンバス画像表示モード (#530): テキストウィンドウ/選択肢を隠す。次の
-        // Dialog/Narration（`dialogBox.setDialog`/`show()` 経由）や選択肢表示
-        // （`choiceOverlay.show()`）が呼ばれれば通常どおり再表示される（DialogBox.hide()
-        // は既存の「本文が空のとき自動で隠す」内部ロジックと同じ可逆トグル、DialogBox.ts参照）。
-        if (this.fullscreenImage) {
-          this.dialogBox.hide()
-          this.choiceOverlay.hide()
-        }
-      }
-      return
-    }
-    if ('EventImageExit' in event) {
-      // [イベント絵終了] でイベント絵レイヤーをクリアする (#351)。
-      this.eventImageLayer.remove({ fadeMs: event.EventImageExit.fade_ms ?? this.eventImageFadeMs })
-      this.applyEventImageVisibility()
-      return
-    }
-    if ('Telop' in event) {
-      // 汎用テロップ (#674)。スキップ中は表示しない（ADR-0002: 演出の中間状態を作らない既存方針と
-      // 同じ）。復元（セーブ/ロード・シーク・任意局面起動）は applyState の宣言的復元経由で
-      // processDirective/このイベント自体を通らないため個別ガードは不要
-      // （NovelGameState には Telop を一切持たせない設計、Issue コメント参照）。
-      if (this.skipMode) return
-      const telop = event.Telop
-      const resolvedFontFamily = resolveFontFamily(
-        null,
-        this.gameDefaultFontFamily,
-        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-      )
-      const fontSize = this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
-      const accentColor = this.telopAccentColorNum
-      // フォント未ロードのまま show() すると、その時点のフォールバックフォントの字形幅で
-      // wordWrap の折り返し行数・帯の高さが確定してしまい、後からフォントが差し替わっても
-      // 追従しない（TelopLayer は Dialog/Narration と違い後追いの再測定フックを持たない）。
-      // 他レイヤー（Dialog/Narration）と同じ ensureFontLoaded() の完了を待ってから show() する
-      // （#679 レビューS3）。await 自体は fire-and-forget（本文の進行はブロックしない）。
-      const expectedClearEpoch = this.telopClearEpoch
-      void ensureFontLoaded(resolvedFontFamily)
-        .catch((err) => {
-          // ロード失敗時もフォールバックフォントで表示自体は続行する（.then は必ず走る、
-          // Dialog/Narration の「ロード失敗時は差し替えないだけ」より一段階前の判断——
-          // Telop はまだ一度も描画していないため、失敗しても出さないより出す方が良い）。
-          console.warn('[name-name] テロップ用フォントロードに失敗', resolvedFontFamily, err)
-        })
-        .then(() => {
-          // 待機中にシーン切替/goBack/seekTo/セーブ復元（telopLayer.clear() 経由。
-          // clearTelopLayer() が telopClearEpoch を進める）・スキップ開始・破棄が起きていたら
-          // 古いテロップを出さない。
-          if (!this.initialized) return
-          if (this.skipMode) return
-          if (this.telopClearEpoch !== expectedClearEpoch) return
-          this.telopLayer.show({
-            text: telop.text,
-            position: telop.position ?? 'BottomRight',
-            seconds: telop.seconds ?? 4,
-            kind: telop.kind ?? null,
-            fontFamily: resolvedFontFamily,
-            fontSize,
-            accentColor,
-          })
-        })
-      return
-    }
-    if ('Blackout' in event) {
-      this.screenEffects.setBlackout(event.Blackout.action === 'On')
-      return
-    }
-    if ('CameraMode' in event) {
-      // #681/#682: GameState 更新。orientation 省略/未知値は客席相当（'Audience'）、
-      // elevation 省略/未知値は水平相当（null）。
-      // #694 で解消: CharacterLayer も setCamera() 経由でカメラ状態を受け取るようになったため、
-      // 既存の立ち絵は depth に基づく scale/verticalOffset で再配置される（下記
-      // characterLayer.setCamera 呼び出し）。ただし進行中の stageMotion（歩行入場/退場、#684）は
-      // sprite.x のみを動かす独立の tween で、setCamera の再適用対象外（camera projection は
-      // sprite.y/scale だけを書き換える）のため、引き続きキャンセルされず走り続ける。これは
-      // #684 時点からの既知の割り切りのまま（歩行中に camera 変更が重なる稀なケースの視覚的実害は
-      // 小さいと判断）。
-      // 更新と、背景板・大道具・立ち絵への再配置の伝播は `stage.setCamera` が行う（#683/#692/#694。
-      // 板を持たないゲームでは背景板の entries が空なので no-op）。
-      this.stage.setCamera(
-        event.CameraMode.mode,
-        event.CameraMode.orientation ?? 'Audience',
-        event.CameraMode.elevation ?? null
-      )
-      return
-    }
-    if ('PaperDollOutline' in event) {
-      // #699: GameState 更新。スコープはキャラクター個別ではなくシナリオ全体
-      // （cameraMode と違い場面転換で自動クリアしない、resetAndStartEvents 参照）。
-      // color/thickness 省略時は runtime 側の既定値（白・太さ2）にフォールバックする。
-      // CharacterLayer/PropLayer 両方に同じ設定が伝わる（`stage.setPaperDollOutline`）。現在表示中の
-      // スプライトへ即座に反映されると同時に、以後新規に表示されるスプライトにも自動適用される。
-      this.stage.setPaperDollOutline(
-        event.PaperDollOutline.enabled
-          ? {
-              color: event.PaperDollOutline.color ?? DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
-              thickness: event.PaperDollOutline.thickness ?? DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
-            }
-          : null
-      )
-      return
-    }
-    if ('Curtain' in event) {
-      // 幕を降ろす (#697)。settled state（fire-and-forget ではない）。z-order を
-      // characters_in_front に合わせてから表示する（curtainLayer.show() 自体は自分の stage 上の
-      // 位置を知らない）。
-      const curtain = event.Curtain
-      this.setCurtainZOrder(curtain.characters_in_front)
-      this.curtainLayer.show(curtain.path, curtain.characters_in_front, this.assetBaseUrl)
-      return
-    }
-    if ('Bgm' in event) {
-      if (event.Bgm.action === 'Play' && event.Bgm.path) {
-        const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', event.Bgm.path)
-        // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
-        this.audioManager.playBgm(soundUrl, event.Bgm.fade_ms ?? undefined)
-        this.currentBgmPath = event.Bgm.path
-      } else {
-        // fade_ms (#145): 指定があればその ms で fade-out、未指定は AudioManager 既定 (1000ms)
-        if (event.Bgm.fade_ms != null) {
-          this.audioManager.stopBgm(event.Bgm.fade_ms)
-        } else {
-          this.audioManager.stopBgm()
-        }
-        this.currentBgmPath = null
-      }
-      return
-    }
-    if ('Se' in event) {
-      // paths が1件のみなら従来通りの単発再生（後方互換）。複数件ならランダム抽出+シャッフル
-      // +ランダム間隔の再生プールとして扱う (#672)。選択・シャッフルはここ（トリガ発火時）で
-      // 毎回新たに計算し、GameState 等の永続構造には焼き込まない（doctrine 規律3）。
-      const selected = selectAndShuffleSeFiles(event.Se.paths, event.Se.count)
-      const soundUrls = selected.map((path) => resolveAssetUrl(this.assetBaseUrl, 'sounds', path))
-      // 間隔省略時のランタイム既定 50-200ms (#672 Issue本文)
-      const gapMinMs = event.Se.gap_min_ms ?? 50
-      const gapMaxMs = event.Se.gap_max_ms ?? 200
-      // fade_ms (#145): 指定があれば各再生に fade-in、未指定なら即時再生
-      this.audioManager.playSeSequence(soundUrls, gapMinMs, gapMaxMs, event.Se.fade_ms ?? undefined)
       return
     }
     if ('Flag' in event) {
@@ -4041,224 +3879,6 @@ export class NovelRenderer {
       this.markCurrentSceneRead()
       // 遷移の予約（pending への移行・次 tick での発火・循環上限）は armJump に集約 (#733)。
       this.armJump(event.Jump.target)
-      return
-    }
-    if ('ExpressionChange' in event) {
-      this.characterLayer.changeExpression(
-        event.ExpressionChange.character,
-        event.ExpressionChange.expression,
-        this.assetBaseUrl
-      )
-      // novel: 表情変化でスクリム+文字を退避して立ち絵の変化を見せ、戻す (#283)
-      this.screenEffects.retreatNovelScrim()
-      return
-    }
-    if ('Exit' in event) {
-      // スキップモード中はフェードを抑制して即時退場（既読を素早く流す UX に揃える）#177
-      // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
-      // 無視して従来通りのフェード退場にフォールバックする（#681 の cameraMode を参照して分岐）。
-      const exitDirection =
-        this.stage.cameraMode === 'Theater' ? (event.Exit.exit_direction ?? undefined) : undefined
-      this.characterLayer.remove(event.Exit.character, {
-        instant: this.skipMode,
-        durationMsOverride: event.Exit.fade_ms ?? undefined,
-        exitDirection,
-      })
-      return
-    }
-    if ('Enter' in event) {
-      // 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]`。
-      // Dialog 経由の showCharacterFromDialog と同じ show ロジック（役割配置の xRatio / fit /
-      // skip 中の即時表示）で立ち絵を出すが、本文を持たないため lastSpeaker 追跡・nudge・
-      // scrim 退避は行わない（無言のまま立たせるだけ・話者交代の合図ではない）。
-      // expression / position / character が揃っていない不完全な指定は showCharacterFromDialog の
-      // 実表示ガードに揃えて silent skip（立ち絵を出さない）。
-      // 冪等: 同一 name/expression/position/fit の再宣言は CharacterLayer.show 側の no-op ガードで無効。
-      const { character, expression, position, fit, enter_direction, depth } = event.Enter
-      if (character && expression && position) {
-        const xRatio = this.resolveNovelRoleXRatio(character)
-        // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
-        // 無視して従来通りの瞬間表示/フェード登場にフォールバックする。
-        const enterDirection =
-          this.stage.cameraMode === 'Theater' ? (enter_direction ?? undefined) : undefined
-        this.characterLayer.show(character, expression, position, this.assetBaseUrl, {
-          instant: this.skipMode,
-          xRatio,
-          fit: fit === true,
-          enterDirection,
-          // シアターモードの奥行き配置 (#694)。未指定/null は 0（最前面）。
-          depth: depth ?? 0,
-        })
-      }
-      return
-    }
-    if ('Animate' in event) {
-      // 立ち絵アニメ (#134) — fire-and-forget。完了を待たず次へ進む。
-      this.characterLayer.animate(event.Animate.target, {
-        dx: event.Animate.dx,
-        dy: event.Animate.dy,
-        rotation: event.Animate.rotation,
-        scale: event.Animate.scale,
-        duration_ms: event.Animate.duration_ms,
-        easing: event.Animate.easing,
-      })
-      return
-    }
-    if ('DialogBorderless' in event) {
-      // 文字ウィンドウ枠の ON/OFF (#135)
-      this.dialogBox.setBorderless(event.DialogBorderless.borderless)
-      return
-    }
-    if ('TitleShow' in event) {
-      // 動画タイトル中央表示 (llll-ll-media 用)
-      // Label / Image と同じく union 絞り込み済みの型付きアクセス（types.ts に size/x/y 済み）。
-      const ts = event.TitleShow
-      // フォント解決の優先順チェーンは novelLayout.resolveFontFamily に集約 (#260)。
-      const font = resolveFontFamily(
-        ts.font_family,
-        this.gameDefaultFontFamily,
-        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-      )
-      // タイトル文字色 (#273)。color は CharacterLayer 側で解決し、グリフ演出・カーソルにも波及する。
-      // サイズ・x/y override (#275) は CharacterLayer 側で fontSize / resolvePositionWithOverride に渡す。
-      this.characterLayer.showTitle(ts.text, font, ts.position, ts.color, {
-        size: ts.size,
-        x: ts.x,
-        y: ts.y,
-      })
-      return
-    }
-    if ('Label' in event) {
-      // 単独の色付きラベル (#274) — OP タイトルカードの肩書 / 名前。
-      // フォント解決は TitleShow と共通の resolveFontFamily（per-line → per-game → runtime）。
-      // 位置・色・サイズは CharacterLayer.showLabel が resolvePositionWithOverride / parseColorToNumber で解決する。
-      // 揃え・隣接・x/y override (#275) もそのまま showLabel に渡す（ED の install-line 用）。
-      const lb = event.Label
-      const font = resolveFontFamily(
-        lb.font_family,
-        this.gameDefaultFontFamily,
-        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-      )
-      // skipMode 中はフェードインを飛ばして即時表示する（立ち絵と揃える）。
-      this.characterLayer.showLabel({
-        id: lb.id,
-        text: lb.text,
-        color: lb.color,
-        position: lb.position,
-        size: lb.size,
-        fontFamily: font,
-        align: lb.align,
-        after: lb.after,
-        x: lb.x,
-        y: lb.y,
-        instant: this.skipMode,
-      })
-      return
-    }
-    if ('Image' in event) {
-      // 単独の画像 (#274) — OP タイトルカードのアバター。
-      // url 解決は背景画像と同じ assetBaseUrl + '/images/' + path（CharacterLayer 側で resolveAssetUrl）。
-      const im = event.Image
-      this.characterLayer.showImage({
-        id: im.id,
-        path: im.path,
-        position: im.position,
-        shape: im.shape,
-        size: im.size,
-        // 位置 override (#275)。position トークンより優先。
-        x: im.x,
-        y: im.y,
-        assetBaseUrl: this.assetBaseUrl,
-        instant: this.skipMode,
-        // 遷移モード・所要時間 (#628)。frontmatter event_image_transition には紐付けない
-        // 設計のためここでは im.transition をそのまま渡す（EventImage と違い defaultTransition
-        // フォールバックは適用しない、types.ts Image.transition の JSDoc 参照）。
-        transition: im.transition,
-        fadeMs: im.fade_ms,
-      })
-      return
-    }
-    if ('TextEffect' in event) {
-      // グリフ単位の文字演出 (#268) — fire-and-forget。完了を待たず次へ進む。
-      // skipMode 中は演出を畳んで即時完了（整列・不透明）にする。ADR 0002 に従い
-      // アニメ進行中の中間状態は持たないため、復元/スキップ時は静止状態でよい。
-      const te = event.TextEffect
-      // フォント確定後にグリフ構築する Promise を返すが、fire-and-forget なので待たない。
-      void this.characterLayer.applyTextEffect(
-        te.target,
-        {
-          effect: te.effect,
-          stagger_ms: te.stagger_ms,
-          ms_per_char: te.ms_per_char,
-          dx: te.dx,
-          dy: te.dy,
-          rotation: te.rotation,
-          scale: te.scale,
-          alpha: te.alpha,
-          duration_ms: te.duration_ms,
-          easing: te.easing,
-          // #271 点滅カーソル（効果=タイプ 専用）
-          cursor: te.cursor,
-          blink_ms: te.blink_ms,
-          cursor_color: te.cursor_color,
-        },
-        { instant: this.skipMode }
-      )
-      return
-    }
-    if ('Underline' in event) {
-      // 下線ビーム (#270) — fire-and-forget。完了を待たず次へ進む。
-      // skipMode 中は伸び切った静止線にする（ADR0002: 中間状態を持たない）。
-      const ul = event.Underline
-      void this.characterLayer.applyUnderline(
-        ul.target,
-        {
-          color: ul.color,
-          thickness: ul.thickness,
-          duration_ms: ul.duration_ms,
-          offset: ul.offset,
-          easing: ul.easing,
-        },
-        { instant: this.skipMode }
-      )
-      return
-    }
-    if ('Shake' in event) {
-      // 画面シェイク (#143) — fire-and-forget
-      this.screenEffects.startShake(event.Shake.intensity_px, event.Shake.duration_ms)
-      return
-    }
-    if ('Flash' in event) {
-      // フラッシュ (#143) — fire-and-forget。エリア限定・ストロボは #693 拡張。
-      this.screenEffects.startFlash(
-        event.Flash.color,
-        event.Flash.alpha,
-        event.Flash.duration_ms,
-        event.Flash.area ?? null,
-        event.Flash.strobe,
-        event.Flash.interval_ms ?? null
-      )
-      return
-    }
-    if ('Fade' in event) {
-      // フェード (#143) — fire-and-forget
-      this.screenEffects.startFade(
-        event.Fade.target,
-        event.Fade.color,
-        event.Fade.from_alpha,
-        event.Fade.to_alpha,
-        event.Fade.duration_ms
-      )
-      return
-    }
-    if ('Spotlight' in event) {
-      // 追うスポットライト点灯 (#693)。Flash/Fade と違い settled state（fire-and-forget ではない）。
-      // 'SpotlightOff'（文字列 variant）は本関数冒頭の `typeof event === 'string'` ブロックで処理する。
-      this.lightingLayer.set(
-        event.Spotlight.target ?? null,
-        event.Spotlight.color,
-        event.Spotlight.radius
-      )
       return
     }
     if ('Wait' in event) {
