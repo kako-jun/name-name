@@ -39,6 +39,8 @@ export interface FieldSceneConfig {
   /** 歩行マスク画像の URL（白=歩ける・黒=歩けない。背景と同じ大きさ） */
   mask: string
   links: FieldLink[]
+  /** このシーンでの主人公の表示高さ（背景ピクセル）。省略 = 全体の `player.height` (#810) */
+  playerHeight?: number
   /** ランダムエンカウント (#809)。省略 = エンカウントなし */
   encounter: (SceneEncounter & { background?: string }) | null
 }
@@ -106,7 +108,7 @@ export interface FieldSampleConfig {
 export const DEFAULTS = {
   speed: 260,
   edgeThreshold: 6,
-  height: 150,
+  height: 96,
   frameMs: 140,
   stepDistance: 80,
   minSteps: 3,
@@ -215,6 +217,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         links.push({ edge: l.edge as Edge, range: [r[0], r[1]], to: l.to })
       }
     }
+    let playerHeight: number | undefined
+    if (sc.playerHeight !== undefined) {
+      const ph = positive(sc.playerHeight, 0, `scenes.${id}.playerHeight`)
+      if (!ph.ok) return ph
+      playerHeight = ph.value
+    }
     let encounter: FieldSceneConfig['encounter'] = null
     if (sc.encounter !== undefined) {
       const e = sc.encounter
@@ -232,7 +240,14 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       }
       encounter = { rate: e.rate, groups: e.groups as string[], ...(bg ? { background: bg } : {}) }
     }
-    scenes[id] = { id, background: background.value, mask: mask.value, links, encounter }
+    scenes[id] = {
+      id,
+      background: background.value,
+      mask: mask.value,
+      links,
+      ...(playerHeight !== undefined ? { playerHeight } : {}),
+      encounter,
+    }
   }
 
   // ---- ランダムエンカウント・戦闘 (#809) ----
