@@ -462,6 +462,30 @@ export function popupFontSize(unit: number): number {
   return Math.min(POPUP_FONT_MAX, Math.max(POPUP_FONT_MIN, v))
 }
 
+/** ダメージ数字が基準のフォントのまま収まる文字数。ダメージ上限 9999 (#877) の 4 桁ぶん */
+export const POPUP_FULL_SIZE_CHARS = 4
+/**
+ * 数字のフォントサイズを文字数に応じて縮める (#877)。4 文字以下（ダメージ上限 9999 まで・MISS）は `baseFont` のまま、
+ * 5 文字以上（回復・吸収の 5 桁以上）は 4 文字の幅に収まるよう比例で縮め、枠の外・画面の外へはみ出さないようにする。
+ * 下限 1px は 0 や負を防ぐだけで、読める保証ではない（縁取りが 4px 固定なので小さい文字ほど縁取りの割合が増える。
+ * 基準 20px で 7 桁なら 11px、8 桁なら 10px）。
+ */
+export function fitPopupFontSize(text: string, baseFont: number): number {
+  const len = [...text].length
+  if (len <= POPUP_FULL_SIZE_CHARS) return baseFont
+  return Math.max(1, Math.floor((baseFont * POPUP_FULL_SIZE_CHARS) / len))
+}
+
+/**
+ * 縮小した数字 (#877) を、基本サイズの 1 段の中で上下中央に置くための持ち上げ量（px）。数字は文字の箱の下端に揃えるが、
+ * 箱の下端と字の下端の距離はフォントに比例するので、小さい字をそのまま置くと字の下端が基本サイズより下へ寄り、
+ * 上の段（小さい字）が下の段へ深く食い込む。(基本 − 実際) の半分だけ上げれば縮んだ字は段の中央に収まる。
+ * 縮んでいない（4 文字以下）ときは 0 で、位置は従来（#879）と完全に同じ。
+ */
+export function popupCenterOffset(baseFont: number, fontSize: number): number {
+  return Math.max(0, baseFont - fontSize) * 0.5
+}
+
 // ---------------------------------------------------------------------------
 // FF 式メッセージ窓
 // ---------------------------------------------------------------------------
