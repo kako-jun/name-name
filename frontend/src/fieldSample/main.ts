@@ -24,13 +24,15 @@ import {
   stepMove,
   walkFrame,
   type DirectionKeys,
-  type Facing,
+  type Facing8,
   type FieldLink,
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
 import { resolveUrl } from '../battleSample/config'
 import {
+  DIAGONAL_FACINGS,
+  FACINGS,
   configNotice,
   findReturnLink,
   forceBattleCandidates,
@@ -149,13 +151,25 @@ async function main(): Promise<void> {
     return p
   }
 
-  // 歩行スプライト（向き×3コマ）
-  const walkTex = {} as Record<Facing, Texture[]>
-  for (const f of ['up', 'down', 'left', 'right'] as const) {
-    walkTex[f] = await Promise.all(
-      config.player.sprites[f].map(async (u) => Texture.from(await loadBitmap(u)))
-    )
+  // 歩行スプライト（向き×3コマ）。斜め 4 方向 (#811) は、自前の画像か mirrorOf で 4 つ揃ったときだけ使う
+  const loadFrames = async (urls: readonly string[]) =>
+    Promise.all(urls.map(async (u) => Texture.from(await loadBitmap(u))))
+  const walkTex = {} as Partial<Record<Facing8, Texture[]>>
+  for (const f of FACINGS) walkTex[f] = await loadFrames(config.player.sprites[f])
+  for (const f of DIAGONAL_FACINGS) {
+    const own = config.player.sprites[f]
+    if (own) walkTex[f] = await loadFrames(own)
   }
+  /** 左右反転して描く向き (#811)。反転元の画像を共有する */
+  const flipped = new Set<Facing8>()
+  for (const f of DIAGONAL_FACINGS) {
+    const src = config.player.mirrorOf[f]
+    if (src) {
+      walkTex[f] = walkTex[src]
+      flipped.add(f)
+    }
+  }
+  const diagonalWalk = DIAGONAL_FACINGS.every((f) => walkTex[f])
 
   let scene = await ensureScene(config.startScene)
   let sceneId = config.startScene
@@ -171,7 +185,7 @@ async function main(): Promise<void> {
 
   const bgSprite = new Sprite(scene.background)
   const overlaySprite = new Sprite(scene.overlay)
-  const player = new Sprite(walkTex.down[0])
+  const player = new Sprite(walkTex.down![0])
   player.anchor.set(0.5, 1) // 足元 = スプライト下端中心
   const marker = new Graphics()
   const fade = new Graphics()
@@ -185,7 +199,7 @@ async function main(): Promise<void> {
       `start (${config.start.x}, ${config.start.y}) の近くに歩ける点がありません。マスクか start を確認してください`
     )
   let pos: Vec = startSnap ?? config.start
-  let facing: Facing = 'down'
+  let facing: Facing8 = 'down'
   let movingMs = 0
   let disarmed: FieldLink | null = null
   let debug = false
@@ -427,7 +441,7 @@ async function main(): Promise<void> {
       if (disarmed && !isOutward(disarmed.edge, vec)) disarmed = null
       const r = stepMove(scene.mask, pos, vec, config.speed, dt)
       pos = r.pos
-      facing = facingFromVector(vec, facing)
+      facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0
       const link = detectEdgeLink(
         pos,
@@ -457,10 +471,10 @@ async function main(): Promise<void> {
     }
 
     // ---- 描画 ----
-    const tex = walkTex[facing][walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
+    const tex = walkTex[facing]![walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
     player.texture = tex
     const s = config.player.height / tex.height
-    player.scale.set(s)
+    player.scale.set(flipped.has(facing) ? -s : s, s)
     player.position.set(pos.x, pos.y)
     overlaySprite.visible = debug
     marker.clear()

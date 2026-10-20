@@ -685,3 +685,95 @@ describe('arrivalPosition (Issue #807)', () => {
     expect(detectEdgeLink(p, size, [dstLeft], T, into, dstLeft)).toBeNull()
   })
 })
+
+describe('facingFromVector 8 方向 (Issue #811)', () => {
+  const deg = (d: number): { x: number; y: number } => ({
+    x: Math.cos((d * Math.PI) / 180),
+    y: Math.sin((d * Math.PI) / 180),
+  })
+
+  it.each([
+    [0, 'right'],
+    [45, 'downRight'],
+    [90, 'down'],
+    [135, 'downLeft'],
+    [180, 'left'],
+    [-135, 'upLeft'],
+    [-90, 'up'],
+    [-45, 'upRight'],
+  ] as const)('角度 %d 度は %s（直前が正反対でも中心では確実に切り替わる）', (d, expected) => {
+    const opposite = facingFromVector(deg(d + 180), 'down', true)
+    expect(facingFromVector(deg(d), opposite, true)).toBe(expected)
+  })
+
+  it('キー入力の 8 方向がそのまま 8 つの向きになる', () => {
+    expect(
+      facingFromVector(
+        keysToVector({ up: true, down: false, left: true, right: false }),
+        'down',
+        true
+      )
+    ).toBe('upLeft')
+    expect(
+      facingFromVector(
+        keysToVector({ up: true, down: false, left: false, right: true }),
+        'down',
+        true
+      )
+    ).toBe('upRight')
+    expect(
+      facingFromVector(
+        keysToVector({ up: false, down: true, left: true, right: false }),
+        'up',
+        true
+      )
+    ).toBe('downLeft')
+    expect(
+      facingFromVector(
+        keysToVector({ up: false, down: true, left: false, right: true }),
+        'up',
+        true
+      )
+    ).toBe('downRight')
+  })
+
+  it('入力なしは直前の向き（斜めでも）を保つ', () => {
+    expect(facingFromVector({ x: 0, y: 0 }, 'upLeft', true)).toBe('upLeft')
+  })
+
+  it('境界（22.5 度）の少し先まではヒステリシスで直前の向きを保つ', () => {
+    // 右(0度)から 22.5+8 度未満は right のまま、超えたら downRight
+    expect(facingFromVector(deg(25), 'right', true)).toBe('right')
+    expect(facingFromVector(deg(30), 'right', true)).toBe('right')
+    expect(facingFromVector(deg(31), 'right', true)).toBe('downRight')
+  })
+
+  it('境界をまたいで細かく揺れても向きが切り替わり続けない', () => {
+    let f: ReturnType<typeof facingFromVector> = 'right'
+    const seen: string[] = []
+    for (const d of [20, 24, 21, 26, 23, 25, 22, 27]) {
+      f = facingFromVector(deg(d), f, true)
+      seen.push(f)
+    }
+    expect(new Set(seen).size).toBe(1)
+    // 直前が downRight だと同じ揺れでも downRight のまま
+    f = 'downRight'
+    for (const d of [20, 24, 21, 26, 23, 25, 22, 27]) f = facingFromVector(deg(d), f, true)
+    expect(f).toBe('downRight')
+  })
+
+  it('±180 度の継ぎ目（左）でも正しく扱う', () => {
+    expect(facingFromVector(deg(175), 'left', true)).toBe('left')
+    expect(facingFromVector(deg(-175), 'left', true)).toBe('left')
+    expect(facingFromVector(deg(-160), 'upLeft', true)).toBe('upLeft')
+    expect(facingFromVector(deg(-170), 'upLeft', true)).toBe('left')
+    expect(facingFromVector(deg(-150), 'left', true)).toBe('left')
+    expect(facingFromVector(deg(-145), 'left', true)).toBe('upLeft')
+  })
+
+  it('diagonal 未指定・false は従来の 4 方向のまま（斜めの入力でも斜めにならない）', () => {
+    expect(facingFromVector({ x: 1, y: 1 }, 'left')).toBe('left')
+    expect(facingFromVector({ x: 0.9, y: 0.6 }, 'up', false)).toBe('right')
+    expect(facingFromVector({ x: 0.6, y: 0.9 }, 'up', false)).toBe('down')
+  })
+})

@@ -711,3 +711,58 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(c.groupErrors).toBeUndefined()
   })
 })
+
+describe('parseConfig 斜め 4 方向 (Issue #811)', () => {
+  const frames = (d: string) => [`${d}1.png`, `${d}2.png`, `${d}3.png`]
+  const withDiag = (fn: (s: Raw) => void): Raw =>
+    mutated((c) => {
+      for (const d of ['upLeft', 'upRight', 'downLeft', 'downRight'])
+        c.player.sprites[d] = frames(d)
+      fn(c.player.sprites)
+    })
+
+  it('斜めの設定が無ければ 4 方向のまま（mirrorOf は空）', () => {
+    const c = ok(minimal())
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.mirrorOf).toEqual({})
+  })
+
+  it('斜め 4 方向を自前の画像で指定できる', () => {
+    const c = ok(withDiag(() => {}))
+    expect(c.player.sprites.downRight?.[2]).toBe('https://example.com/field/downRight3.png')
+  })
+
+  it('mirrorOf で一部を反転で埋められる', () => {
+    const c = ok(
+      withDiag((s) => {
+        delete s.upLeft
+        s.mirrorOf = { upLeft: 'upRight' }
+      })
+    )
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight' })
+  })
+
+  it.each([
+    ['斜めが 3 方向だけ', (s: Raw) => delete s.upLeft],
+    ['斜めの URL が 2 コマ', (s: Raw) => (s.upLeft = ['a', 'b'])],
+    ['mirrorOf のキーが斜めでない', (s: Raw) => (s.mirrorOf = { left: 'upRight' })],
+    [
+      'mirrorOf の値が斜めでない',
+      (s: Raw) => ((s.mirrorOf = { upLeft: 'right' }), delete s.upLeft),
+    ],
+    ['mirrorOf が自分自身', (s: Raw) => ((s.mirrorOf = { upLeft: 'upLeft' }), delete s.upLeft)],
+    ['自前画像と mirrorOf の両方', (s: Raw) => (s.mirrorOf = { upLeft: 'upRight' })],
+    [
+      '反転元が mirrorOf 側',
+      (s: Raw) => {
+        delete s.upLeft
+        delete s.upRight
+        s.mirrorOf = { upLeft: 'upRight', upRight: 'downRight' }
+      },
+    ],
+    ['mirrorOf がオブジェクトでない', (s: Raw) => (s.mirrorOf = 'upRight')],
+  ])('不正: %s', (_name, fn) => {
+    expect(parseConfig(withDiag(fn), BASE).ok).toBe(false)
+  })
+})
