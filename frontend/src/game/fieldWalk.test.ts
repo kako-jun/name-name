@@ -8,8 +8,8 @@ import {
   keysToVector,
   maskFromRgba,
   playerScale,
-  resolvePlayerHeight,
   pointerToVector,
+  resolvePlayerHeight,
   snapToWalkable,
   stepMove,
   walkFrame,
@@ -700,8 +700,10 @@ describe('resolvePlayerHeight / playerScale (#810)', () => {
     expect(resolvePlayerHeight(-5, 96)).toBe(96)
     expect(resolvePlayerHeight(NaN, 96)).toBe(96)
   })
-  it('倍率は表示高さ / 画像の高さ。画像高さ 0 は 1', () => {
+  it('倍率は表示高さ / 画像の高さ', () => {
     expect(playerScale(96, 192)).toBe(0.5)
+  })
+  it('画像の高さが 0 なら倍率は 1', () => {
     expect(playerScale(96, 0)).toBe(1)
   })
 })

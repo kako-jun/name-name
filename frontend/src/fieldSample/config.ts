@@ -209,8 +209,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         links.push({ edge: l.edge as Edge, range: [r[0], r[1]], to: l.to })
       }
     }
-    const playerHeight = positive(sc.playerHeight, 0, `scenes.${id}.playerHeight`)
-    if (!playerHeight.ok) return playerHeight
+    let playerHeight: number | undefined
+    if (sc.playerHeight !== undefined) {
+      const ph = positive(sc.playerHeight, 0, `scenes.${id}.playerHeight`)
+      if (!ph.ok) return ph
+      playerHeight = ph.value
+    }
     let encounter: FieldSceneConfig['encounter'] = null
     if (sc.encounter !== undefined) {
       const e = sc.encounter
@@ -233,7 +237,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       background: background.value,
       mask: mask.value,
       links,
-      ...(sc.playerHeight !== undefined ? { playerHeight: playerHeight.value } : {}),
+      ...(playerHeight !== undefined ? { playerHeight } : {}),
       encounter,
     }
   }

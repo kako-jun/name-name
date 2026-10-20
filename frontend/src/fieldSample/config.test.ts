@@ -282,6 +282,7 @@ describe('parseConfig 異常系 (Issue #807/#809)', () => {
     ['player.height が文字列', (c) => (c.player.height = '150')],
     ['scenes.a.playerHeight が 0', (c) => (c.scenes.a.playerHeight = 0)],
     ['scenes.a.playerHeight が負', (c) => (c.scenes.a.playerHeight = -1)],
+    ['scenes.a.playerHeight が NaN', (c) => (c.scenes.a.playerHeight = NaN)],
     ['scenes.a.playerHeight が文字列', (c) => (c.scenes.a.playerHeight = '60')],
     ['player.frameMs が 0', (c) => (c.player.frameMs = 0)],
     ['player.frameMs が負', (c) => (c.player.frameMs = -1)],
