@@ -341,16 +341,16 @@ describe('NovelRenderer 無条件ジャンプ [ジャンプ:] (#725)', () => {
     expect(text(rFalse)).toContain('a2')
   })
 
-  it('11: Flag 後の reResolveEvents 再展開で現れた Jump も正しく遷移する（最初は偽で展開されない）', () => {
+  it('11: 先行する [フラグ:] で真になる [条件:] 内の Jump は、入場時評価で展開列に入り、到達時に遷移する (#799)', () => {
     const r = makeRenderer([
       scene('a', [narration('a1'), flag('f'), condition('f', [jump('c')]), narration('a2')]),
       scene('c', [narration('c1')]),
     ])
-    // 初期 resolve 時点では f 未設定 → Jump は resolvedEvents に居ない
+    // 入場時に元列を先頭から走査する: f 未設定でも、先行する Flag が f を真にするので Jump は展開列に入る
     expect(
       internals<Internals>(r).resolvedEvents.some((e) => typeof e === 'object' && 'Jump' in e)
-    ).toBe(false)
-    r.advance() // a1 → Flag 処理 → reResolve → Jump 到達
+    ).toBe(true)
+    r.advance() // a1 → Flag 処理 → Jump 到達
     tick(r)
     expect(r.getCurrentSceneId()).toBe('c')
   })

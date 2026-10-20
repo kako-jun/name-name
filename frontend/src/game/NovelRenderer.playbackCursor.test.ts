@@ -8,6 +8,7 @@
  *
  * シナリオ（novel）: 3 ページに改頁される本文 → Flag → Condition(展開) → 本文。
  * 本文送り・戻る・シーク・クイックセーブ→別インスタンスへロードの各局面で getSnapshot() を固定する。
+ * #799: 元列に `[条件:]` を含むので、入場時 flags（`entryFlags`）が末尾に加わる（既存のキーの値と順序は不変）。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
@@ -58,15 +59,15 @@ const json = (r: NovelRenderer): string => JSON.stringify(r.getSnapshot())
 /** 期待値(origin/main の実装で実測)。 */
 const EXPECTED = {
   midPage:
-    '{"sceneId":"a","eventIndex":0,"textIndex":2,"sentenceIndex":0,"flags":{},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false}',
+    '{"sceneId":"a","eventIndex":0,"textIndex":2,"sentenceIndex":0,"flags":{},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false,"entryFlags":{}}',
   atCondition:
-    '{"sceneId":"a","eventIndex":2,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true}},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false}',
+    '{"sceneId":"a","eventIndex":2,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true}},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false,"entryFlags":{}}',
   backFromCondition:
-    '{"sceneId":"a","eventIndex":0,"textIndex":0,"sentenceIndex":0,"flags":{},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false}',
+    '{"sceneId":"a","eventIndex":0,"textIndex":0,"sentenceIndex":0,"flags":{},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false,"entryFlags":{}}',
   afterSeekCondition:
-    '{"sceneId":"a","eventIndex":2,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true}},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false}',
+    '{"sceneId":"a","eventIndex":2,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true}},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false,"entryFlags":{}}',
   afterSeekHead:
-    '{"sceneId":"a","eventIndex":0,"textIndex":0,"sentenceIndex":0,"flags":{},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false}',
+    '{"sceneId":"a","eventIndex":0,"textIndex":0,"sentenceIndex":0,"flags":{},"backgroundPath":null,"backgroundColor":null,"backgroundFade":null,"backgroundBrightness":null,"video":null,"eventImage":null,"backgroundBoards":[],"props":[],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[],"currentBgmPath":null,"cameraMode":"Novel","cameraOrientation":"Audience","cameraElevation":null,"paperDollOutline":null,"storyEnded":false,"entryFlags":{}}',
 }
 
 describe('再生カーソル経由の getSnapshot() の JSON 回帰 (#824)', () => {

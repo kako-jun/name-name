@@ -31,7 +31,7 @@ import {
   clearBackgroundPreloadQueue,
 } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
-import { GameState, NovelGameState, StartFromOptions, Step, resolveEvents } from './GameState'
+import { GameState, NovelGameState, StartFromOptions, Step, entryFromState } from './GameState'
 import { VideoLayer } from './VideoLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
@@ -1441,7 +1441,7 @@ export class NovelRenderer {
    *   同じフィールドを再利用。destroy/resetAndStartEvents/applyState で既にキャンセルされる）で
    *   指定 ms 後に `renderIntermissionTableau(events, i + 1)` を呼び、残りのイベントから再開する。
    * - Choice/WaitDisplayComplete/Flag/Jump は resolvedEvents/eventIndex を前提にする（Choice）か
-   *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag` + `reResolveEvents`）かのいずれかで、
+   *   `NovelGameState` を恒久的に書き換える（Flag → `gameState.setFlag`）かのいずれかで、
    *   単発タブローには意味を持たない・持たせてはいけないため無視する（dev のみ warn）。特に Flag は
    *   docstring 冒頭の「GameState には一切触れない」を破るため、他の演出ディレクティブと違い明示除外が必須。
    * - Bgm/Se/Video 等はここでは意図的に素通しして `processDirective` に委譲する（エンディング演出の
@@ -1694,12 +1694,12 @@ export class NovelRenderer {
     return false
   }
 
-  /** 現在の flags で展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null (#777)。 */
+  /** 入場時に展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null (#777)。 */
   private resolveLinearSegmentsNow(): ResolvedSegment[] | null {
     return this.sceneIndex.resolveLinearSegmentsNow(
       this.cursor.currentSceneId,
       this.cursor.rawEvents,
-      (events) => resolveEvents(events, this.gameState).length
+      this.cursor.rawOffsets
     )
   }
 
@@ -1820,6 +1820,8 @@ export class NovelRenderer {
     options?: Partial<CarryPolicy> & {
       /** 展開後のイベント列のこの位置から始める（既定 0）。線形ストリーム上のシーン先頭から始めるとき (#777)。 */
       startIndex?: number
+      /** 線形ストリーム上のシーン先頭から始めるときの、元列での開始位置 (#799)。それ以前は入場時 flags で静的に展開する。 */
+      fromRawIndex?: number
     }
   ): void {
     // 持ち越し方針は `carryPolicyFor` の戻り値（`SceneEntryController` が全項目を渡す）。省略は「持ち越さない」。
@@ -1918,7 +1920,7 @@ export class NovelRenderer {
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
     // novel 改頁キャッシュ (#283)・adv 文単位ページキャッシュ (#448) などの派生データも load が破棄する。
-    this.cursor.load(events, this.gameState, options?.startIndex ?? 0)
+    this.cursor.load(events, this.gameState, options?.startIndex ?? 0, options?.fromRawIndex ?? 0)
     // 先読み済み URL 集合 (#389) もイベント列に紐づくので破棄する。setEvents は表示済み背景を
     // Assets.unload するため、ここでクリアしないと「積み済み」誤判定で先読みがスキップされ
     // コールドロードに戻る。新しいイベント列＝先読み状態も作り直すのが正しい（末尾の
@@ -2929,6 +2931,8 @@ export class NovelRenderer {
       cameraElevation: stage.cameraElevation,
       paperDollOutline: stage.paperDollOutline,
       storyEnded: this.storyEnded,
+      // 入場時 flags (#799)。元列に `[条件:]` が無い脚本では何も足さない（JSON は従来のまま）。末尾に足して既存のキー順を保つ。
+      ...this.cursor.snapshotEntry(),
     }
   }
 
@@ -3245,17 +3249,17 @@ export class NovelRenderer {
     this.clearTelopLayer()
 
     // フラグ復元。goBack/seekTo は applyState を単独で呼ぶため、ここでの復元は必須。
-    // restoreToScene 経由では resolveEvents 用に先んじて同じ復元が行われるが、
+    // restoreToScene 経由では列の展開より前に同じ復元が行われるが、
     // 冪等な fromJSON なので二重適用に副作用はない（詳細は restoreToScene のコメント #256）。
     this.gameState.fromJSON(state.flags)
 
-    // 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できる状態に保つ (#777)。goBack/seekTo は
-    // flags だけを過去の値に戻すので、Flag を越えて戻ると列（`[条件:]` の展開）と位置が食い違う。
-    // restoreToScene 経由では同じ flags で展開済みなので、結果は同じ（冪等）。
+    // 展開後の列は訪問の入場時 flags で決まり、訪問中は固定する (#799)。goBack/seekTo は flags だけを過去の値に
+    // 戻すが列は変わらないので、ここでは再展開せず位置だけを復元する（シーンをまたぐ復元は restoreToScene が
+    // 先に列を作る）。
     // 続けて位置（eventIndex / textIndex / sentenceIndex）を復元する。novel 文 index (#292) は古い
     // snapshot/セーブには無い → ?? 0（ページ先頭の文）に倒す。novel 改頁キャッシュ (#283)・adv 文単位
     // ページキャッシュ (#448) は派生データなので、任意局面復元で破棄し render() 側で再計算させる。
-    this.cursor.restorePosition(state, this.gameState)
+    this.cursor.restorePosition(state)
 
     // fluid remount 対応 (#663): aspect_ratio:auto プロジェクトは画面幅リサイズで向きの
     // カテゴリ境界を跨ぐと新しい gameWidth/gameHeight で renderer が再構築され、この
@@ -3408,22 +3412,6 @@ export class NovelRenderer {
       this.markCurrentSceneRead()
       this.armJump(restoredJump.Jump.target)
     }
-  }
-
-  /**
-   * rawEvents を現在のフラグ状態で全体を再展開し、eventIndex を決定的に写像する（現在の Flag が新しい列に
-   * 残ればその位置、囲む `[条件:]` が偽で消えたら次に残るイベントへ。`countSurvivingBefore`）。
-   * Flag イベント処理後に呼ばれ、後続の Condition が新しいフラグ値で評価される。
-   */
-  private reResolveEvents(): void {
-    // 展開後の列は常に `resolveEvents(rawEvents, flags)` で再現できる状態に保つ（セーブは eventIndex + 最新の
-    // flags だけを持つので、再展開の結果が flags の履歴に依存してはならない。ADR 0002）。全体を展開し直し、
-    // eventIndex を決定的に写像する (#777)。
-    // 写像は純粋関数 `remapEventIndexAfterReResolve`（eventCursor.ts）。現在の Flag が新しい列にも残れば
-    // その位置、囲む `[条件:]` が偽で消えたら元イベント列上で次に残るイベントの直前（呼び出し元が続けて
-    // eventIndex を進める。囲んでいたブロックの残りは、この版の GUI では消える。TUI はシーン構築時評価で
-    // 残りを流す。#799）。展開後のイベント列に紐づくページキャッシュ (#283, #448) も破棄される。
-    this.cursor.reResolve(this.gameState)
   }
 
   /**
@@ -3771,7 +3759,7 @@ export class NovelRenderer {
    * - 走査は**次の分岐に当たるまで**。分岐 = `Choice`（`{ Choice: {...} }`）または
    *   `Condition`（`{ Condition: {...} }`、フラグ依存分岐）。分岐先が確定するまで先読みは
    *   できないため、当たったら止める（配列末尾でも止める）。
-   *   ※ `Condition` は `resolveEvents` で展開済みのため `resolvedEvents` には通常現れないが、
+   *   ※ `Condition` は入場時に展開済みのため `resolvedEvents` には通常現れないが、
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
    *   webp/png の複数候補）、`Background` の背景画像、`BackgroundBoard` の背景板 (#683)、
@@ -3834,10 +3822,9 @@ export class NovelRenderer {
       return
     }
     if ('Flag' in event) {
+      // `[条件:]` はシーン訪問の入場時に展開済みで、訪問中は列を固定する (#799)。ここで再展開しない
+      // （ブロック内でそのフラグを変えても、入場済みのブロックの残りは流れる。TUI と同じ）。
       this.gameState.setFlag(event.Flag.name, event.Flag.value)
-      // フラグ変更により後続の Condition の評価結果が変わる可能性がある。
-      // 元イベント列全体を現在の flags で展開し直す。
-      this.reResolveEvents()
       return
     }
     if ('Choice' in event) {
@@ -4260,12 +4247,12 @@ export class NovelRenderer {
    * 指定シーン + 完成済み NovelGameState へ宣言的に復元する共通コア (#256)。
    *
    * loadFromSaveData / startFrom / restoreSnapshot の均質な骨格を集約する:
-   * 「フラグ設定 → 選択肢/待機リセット → resolveEvents → applyState → history リセット → render」。
+   * 「フラグ設定 → 選択肢/待機リセット → 入場時 flags での展開 → applyState → history リセット → render」。
    *
    * 呼び出し側の責務:
    * - シーン探索と「見つからない場合の挙動」（no-op か警告か）は呼び出し側が決める。
    * - 復元先の状態（背景/動画/立ち絵/BGM 等）を含む完全な NovelGameState を構築して渡す。
-   *   state.flags は this.gameState へ反映され、resolveEvents の判定にも使われる。
+   *   state.flags は this.gameState へ反映される。展開は state.entryFlags（無ければ state.flags で静的に）で行う (#799)。
    *
    * @param scene 復元先シーン（events を rawEvents として保持する）
    * @param state applyState に渡す完成済みの状態スナップショット
@@ -4273,15 +4260,15 @@ export class NovelRenderer {
   private restoreToScene(scene: EventScene, state: NovelGameState): void {
     this.cursor.markStarted()
     // フラグを設定（置換セマンティクス）。
-    // resolveEvents が flags に依存するため、必ず resolveEvents より前に設定する。
+    // 旧セーブ（entryFlags 無し）の展開が state.flags に依存するため、必ず展開より前に設定する。
     //
     // 注意 (#256): この fromJSON は後段の applyState 内でも同じ state.flags で
     // 再度呼ばれる（goBack/seekTo は applyState を単独で叩くため applyState 側の
     // フラグ復元も必須）。二重適用に見えるが両者は別目的:
-    //   - ここ: resolveEvents（下の展開）より前に flags を確定させるため
+    //   - ここ: 展開（下の replaceEvents）より前に flags を確定させるため
     //   - applyState 内: applyState を直接呼ぶ経路のフラグ復元のため
     // 同一値の冪等な fromJSON なので副作用はない。どちらか一方を消すと
-    // resolveEvents の展開か直接 applyState 経路のどちらかが壊れるため残す。
+    // 展開か直接 applyState 経路のどちらかが壊れるため残す。
     this.gameState.fromJSON(state.flags)
 
     this.cursor.setCurrentSceneId(state.sceneId)
@@ -4300,7 +4287,9 @@ export class NovelRenderer {
     this.choiceOverlay.hide()
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
-    this.cursor.replaceEvents([...scene.events], this.gameState)
+    // 展開は入場時 flags（`state.entryFlags`。古いセーブには無く、その場合は `state.flags` での静的展開）から
+    // 1回だけ行い、訪問中は固定する (#799)。
+    this.cursor.replaceEvents([...scene.events], entryFromState(state))
 
     // 完成済み NovelGameState を applyState で宣言的に復元
     this.applyState(state)

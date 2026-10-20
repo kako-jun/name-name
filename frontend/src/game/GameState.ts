@@ -209,6 +209,22 @@ export interface NovelGameState {
    * 通常のハブ経由フロー（confinement 無効）では常に false。
    */
   storyEnded: boolean
+
+  /**
+   * このシーン訪問に入った瞬間の flags（入場時 flags, #799）。`[条件:]` は入場時に1回だけ展開して訪問中は
+   * 固定するので、展開後の列 = `expandEvents(raw, { flags: entryFlags, ... })` で再現でき、`eventIndex` は
+   * その列の添字になる（ADR 0002 の「展開は純関数」を、位置までに実行した `[フラグ:]` を含めて保つ）。
+   * `getSnapshot` は元列に `[条件:]` を含むときだけ出力する（含まなければ展開が flags に依存しない）。
+   * 後方互換: 古いセーブ/スナップショットには無い → 復元時は `flags` で静的に展開して列を固定する。
+   */
+  entryFlags?: Record<string, FlagValue>
+  /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。0 のときは出力しない。 */
+  entryRawIndex?: number
+  /**
+   * 旧セーブ由来で静的展開に固定された訪問であることの印 (#799)。再保存しても同じ列を再現するため。
+   * 新規の入場では出力しない。
+   */
+  entryStatic?: boolean
 }
 
 /**
@@ -258,6 +274,21 @@ export interface StartFromOptions {
 }
 
 /**
+ * 保存された状態から、展開の入場条件を求める (#799)。`entryFlags` が無い（古いセーブ・手書きの状態）は
+ * `flags` での静的展開に倒す。
+ */
+export function entryFromState(state: NovelGameState): ExpansionEntry {
+  if (state.entryFlags === undefined) {
+    return { flags: state.flags, fromRawIndex: 0, legacyStatic: true }
+  }
+  return {
+    flags: state.entryFlags,
+    fromRawIndex: state.entryRawIndex ?? 0,
+    legacyStatic: state.entryStatic === true,
+  }
+}
+
+/**
  * Condition イベントをフラグに基づいて展開し、フラットなイベント配列を返す。
  *
  * - Condition が真 → 内部 events を再帰的に展開して挿入（Condition 自体は除去）
@@ -280,6 +311,82 @@ export function resolveEvents(events: readonly Event[], gameState: GameState): E
     }
   }
   return result
+}
+
+/**
+ * 入場時 flags で `[条件:]` を展開する際の入場条件 (#799)。
+ *
+ * - `flags`: シーン訪問に入った瞬間の flags（入場時 flags）。
+ * - `fromRawIndex`: 元列のトップレベルでこの位置より前は静的に展開し、この位置以降を逐次評価する
+ *   （線形ストリームの途中のシーンから始めるときだけ非0）。
+ * - `legacyStatic`: `true` なら全体を `flags` で静的に展開する（旧セーブの復元用）。
+ */
+export interface ExpansionEntry {
+  flags: Record<string, FlagValue>
+  fromRawIndex: number
+  legacyStatic: boolean
+}
+
+/** `expandEvents` の結果。 */
+export interface Expansion {
+  /** 展開後の平坦なイベント列（`Flag` は残す）。 */
+  events: Event[]
+  /** `rawOffsets[i]` = 元列のトップレベル i 番目を処理する直前の展開後の長さ（長さは `raw.length + 1`）。 */
+  rawOffsets: number[]
+}
+
+function gameStateFromFlags(flags: Record<string, FlagValue>): GameState {
+  const gs = new GameState()
+  gs.fromJSON(flags)
+  return gs
+}
+
+/**
+ * 元イベント列を入場条件から展開する (#799)。シーン訪問の入口で1回だけ呼び、その訪問中は結果を固定する。
+ *
+ * 逐次評価（TUI の `build_scene_items` と同じ手順）: 元列を先頭から1イベントずつ走査し、走査用の flags の
+ * 複製に `Flag` を適用しながら、`Condition` に達した時点の複製で真偽を判定して真なら内側を再帰する。
+ * `Flag` イベント自体は展開後の列に残す（実フラグを書くのは再生時の `processDirective` のまま）。
+ * ブロックに入った後で、ブロック内でそのフラグを変えても、入場済みのブロックの残りは流れる。
+ * 偽のブロックは内側の `Flag` も実行しない。
+ *
+ * `legacyStatic` と `fromRawIndex` より前のトップレベルは `entry.flags` で静的に展開する（`resolveEvents` と同じ）。
+ * 結果は `(raw, entry)` だけで決まる（フラグの履歴・乱数・時刻に依存しない）。
+ */
+export function expandEvents(raw: readonly Event[], entry: ExpansionEntry): Expansion {
+  const events: Event[] = []
+  const rawOffsets: number[] = []
+  const staticState = gameStateFromFlags(entry.flags)
+  const scan = entry.legacyStatic ? staticState : gameStateFromFlags(entry.flags)
+
+  const walkSequential = (list: readonly Event[]): void => {
+    for (const event of list) {
+      if (typeof event === 'object' && event !== null && 'Condition' in event) {
+        if (scan.checkFlag(event.Condition.flag)) walkSequential(event.Condition.events)
+      } else {
+        if (typeof event === 'object' && event !== null && 'Flag' in event) {
+          scan.setFlag(event.Flag.name, event.Flag.value)
+        }
+        events.push(event)
+      }
+    }
+  }
+
+  for (let i = 0; i < raw.length; i++) {
+    rawOffsets.push(events.length)
+    if (entry.legacyStatic || i < entry.fromRawIndex) {
+      events.push(...resolveEvents([raw[i]], staticState))
+    } else {
+      walkSequential([raw[i]])
+    }
+  }
+  rawOffsets.push(events.length)
+  return { events, rawOffsets }
+}
+
+/** 元イベント列に `[条件:]` を含むか。展開結果が入場時 flags に依存するかの判定に使う (#799)。 */
+export function hasCondition(raw: readonly Event[]): boolean {
+  return raw.some((e) => typeof e === 'object' && e !== null && 'Condition' in e)
 }
 
 export class GameState {
@@ -347,35 +454,4 @@ export class GameState {
       this.flags.set(key, value)
     }
   }
-}
-
-/**
- * `events`（`[条件:]` を含む元イベント列）を `gameState` の flags で展開したとき、`target`（同一オブジェクト）
- * より前に残るイベント（`[条件:]` 自体は数えない）の数を返す。`target` が見つからなければ null (#777)。
- *
- * `target` が展開後の列に残るなら、その数が展開後の位置。囲む `[条件:]` が偽で消えるなら、その数は
- * 「元イベント列上で次に残っているイベント」の位置になる。結果は flags だけで決まる（展開の履歴に依存しない）。
- */
-export function countSurvivingBefore(
-  events: readonly Event[],
-  target: Event,
-  gameState: GameState
-): number | null {
-  const state = { count: 0, found: false }
-  const walk = (list: readonly Event[], alive: boolean): void => {
-    for (const event of list) {
-      if (state.found) return
-      if (event === target) {
-        state.found = true
-        return
-      }
-      if (typeof event === 'object' && event !== null && 'Condition' in event) {
-        walk(event.Condition.events, alive && gameState.checkFlag(event.Condition.flag))
-      } else if (alive) {
-        state.count++
-      }
-    }
-  }
-  walk(events, true)
-  return state.found ? state.count : null
 }

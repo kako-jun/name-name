@@ -1,5 +1,10 @@
 import type { Event, EventScene, FlagValue } from '../types'
-import { GameState, resolveEvents, type NovelGameState, type StartFromOptions } from './GameState'
+import {
+  expandEvents,
+  entryFromState,
+  type NovelGameState,
+  type StartFromOptions,
+} from './GameState'
 import { getTextEvent } from './eventCursor'
 import { buildFreshPositionState } from './freshState'
 import { isSceneIdConfined } from './sceneConfinement'
@@ -51,7 +56,12 @@ export interface EntryHost {
   startEvents(
     sceneId: string | null,
     events: readonly Event[],
-    opts: { preserveBackgroundForTransition: boolean; carryBgm: boolean; startIndex?: number }
+    opts: {
+      preserveBackgroundForTransition: boolean
+      carryBgm: boolean
+      startIndex?: number
+      fromRawIndex?: number
+    }
   ): void
   /**
    * 完成済みの状態へ宣言的に復元する（`restoreToScene`）。`presetStoryEnded` が true のときは、適用の前に
@@ -381,14 +391,15 @@ export class SceneEntryController {
     // 続くシーンまで再生される。ストリームの持ち主はエントリのまま（セーブは sceneId = エントリ + eventIndex
     // で復元できる）。既定（`?scene=` / `?debug_scene=` を含む）は指定シーンの events だけを流して末尾で終劇する。
     if (req.linear && sceneId !== null && sceneId !== this.sceneIndex.getEntrySceneId()) {
-      const linearStart = this.sceneIndex.linearStartIndex(sceneId, req.flags)
+      const linearStart = this.sceneIndex.linearStart(sceneId, req.flags)
       if (linearStart !== null) {
         this.startScene(
           this.sceneIndex.getEntrySceneId(),
           this.sceneIndex.getEntryEvents(),
           carryPolicyFor('fresh'),
           {
-            startIndex: linearStart,
+            startIndex: linearStart.startIndex,
+            fromRawIndex: linearStart.rawStart,
             announcedSceneId: sceneId,
           }
         )
@@ -406,7 +417,7 @@ export class SceneEntryController {
    * @param carry 持ち越し方針 (#734)。種類ごとに `carryPolicyFor(kind)` を渡す。
    * @param sceneId ストリームの持ち主の ID（`currentSceneId` に入る）。新規開始の 'entry'（線形ストリームの
    *   先頭）で sceneId を持たないときは null。
-   * @param linear 線形ストリームの途中のシーンから始めるとき (#777)。`startIndex` は展開後の位置、
+   * @param linear 線形ストリームの途中のシーンから始めるとき (#777)。`startIndex` は展開後の位置、`fromRawIndex` は元列での開始位置 (#799)、
    *   `announcedSceneId` は入ったシーン（`onSceneChange` で知らせる ID。持ち主とは別）。
    *   指定が無ければ `sceneId` を知らせる（null なら発火しない）。
    */
@@ -414,7 +425,7 @@ export class SceneEntryController {
     sceneId: string | null,
     events: readonly Event[],
     carry: { preserveBackgroundForTransition: boolean; carryBgm: boolean },
-    linear?: { startIndex: number; announcedSceneId: string }
+    linear?: { startIndex: number; fromRawIndex: number; announcedSceneId: string }
   ): void {
     // 終劇状態の解除・currentSceneId の設定・演出のリセットは Host.startEvents が行う。
     // #386: 通常のシーン遷移が成立する経路なので、終劇状態は解除しておく（宣言的整合性の保険）。
@@ -422,6 +433,7 @@ export class SceneEntryController {
       preserveBackgroundForTransition: carry.preserveBackgroundForTransition,
       carryBgm: carry.carryBgm,
       startIndex: linear?.startIndex,
+      fromRawIndex: linear?.fromRawIndex,
     })
     // 線形ストリームの途中のシーンから始めるときは、ストリームの持ち主ではなく入ったシーンを知らせる (#777)。
     const announced = linear ? linear.announcedSceneId : sceneId
@@ -429,19 +441,18 @@ export class SceneEntryController {
   }
 
   /**
-   * 復元位置を、復元先のイベント列を復元する flags で展開した後の長さに照らして検証する (#789)。
+   * 復元位置を、復元先のイベント列を入場時 flags で展開した後の長さに照らして検証する (#789, #799)。
    * 範囲内なら null、範囲外なら `failEntry` に渡す失敗（out-of-range）を返す。何も変更しない。
    * 展開後で判定するのは、`[条件:]` の真偽で長さが変わり、`eventIndex` は展開後の列を指すため
-   * （`restoreToScene` が `resolveEvents` した列に `applyState` が eventIndex を当てる）。
+   * （`restoreToScene` が `entryFromState(state)` で展開した列に `applyState` が eventIndex を当てる）。
+   * 展開は `restoreToScene` と同じ `expandEvents(events, entryFromState(state))`（旧セーブは静的展開）。
    */
   private checkRestorePosition(
     events: readonly Event[],
     state: NovelGameState
   ): EntryFailure | null {
-    const flagsState = new GameState()
-    flagsState.fromJSON(state.flags)
     const detail = findRestorePositionError(
-      resolveEvents(events, flagsState),
+      expandEvents(events, entryFromState(state)).events,
       { eventIndex: state.eventIndex, textIndex: state.textIndex },
       (event) => {
         const textEvt = getTextEvent(event)

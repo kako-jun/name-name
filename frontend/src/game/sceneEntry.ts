@@ -322,7 +322,7 @@ function matchesAt(stream: readonly Event[], pos: number, events: readonly Event
 /**
  * 区間を `[条件:]` 展開後の位置に直した境界 (#777)。
  * `start`: 展開後のストリームでのシーン先頭、`separator`: 直前の境界の `SceneTransition` の位置
- * （先頭の区間は null）。展開は現在の flags で行うので、flags が変わったら引き直す。
+ * （先頭の区間は null）。展開は入場時に固定されるので、訪問中は変わらない (#799)。
  */
 export interface ResolvedSegment {
   sceneId: string
@@ -331,20 +331,15 @@ export interface ResolvedSegment {
 }
 
 export function resolveLinearSegments(
-  entryEvents: readonly Event[],
   segments: readonly LinearSegment[],
-  resolvedLength: (events: readonly Event[]) => number
+  rawOffsets: readonly number[]
 ): ResolvedSegment[] {
-  const out: ResolvedSegment[] = []
-  let pos = 0
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]
-    const separator = i === 0 ? null : pos
-    if (i > 0) pos += 1
-    out.push({ sceneId: seg.sceneId, start: pos, separator })
-    pos += resolvedLength(entryEvents.slice(seg.start, seg.start + seg.length))
-  }
-  return out
+  // `rawOffsets[i]` は元列のトップレベル i 番目の展開後の開始位置 (#799)。シーン区間の先頭は `rawOffsets[seg.start]`、
+  // 直前の境界の `SceneTransition`（元列で `seg.start - 1`）は展開後も常に残るので、その位置は `start - 1`。
+  return segments.map((seg, i) => {
+    const start = rawOffsets[seg.start] ?? 0
+    return { sceneId: seg.sceneId, start, separator: i === 0 ? null : start - 1 }
+  })
 }
 
 /** 展開後のイベント位置 `index` が属するシーン区間（境界の `SceneTransition` 自身は次のシーンに属す）。 */

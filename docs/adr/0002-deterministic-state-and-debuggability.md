@@ -27,8 +27,11 @@ interface NovelGameState {
   isBlackout: boolean               // 暗転中か
   characters: Array<{ name, expression, position }>  // 立ち絵
   currentBgmPath: string | null     // BGM
+  entryFlags?: Record<string, FlagValue>  // このシーン訪問に入った瞬間の flags（#799）
 }
 ```
+
+`entryFlags` は、`[条件:]` の展開（`eventIndex` が指す列）を再現するための入力で、元列に `[条件:]` を含む脚本のセーブ・スナップショットにだけ載る（#799）。展開は「入場時 flags の純粋関数」で、シーン訪問の中で `flags` を書き換えるのは `[フラグ:]` の実行だけなので、`(元列, entryFlags)` から訪問中の列は常に決定的に再現できる。付随して `entryRawIndex?`（線形ストリームの途中から始めた訪問の元列での開始位置。非0のときだけ）と `entryStatic?`（`entryFlags` の無い旧セーブ由来で、静的展開に固定した訪問の印）を持つ。いずれも任意フィールドで、古いセーブには無い。
 
 BGM / SE のフェード途中、タイプライターアニメーション中、フェードイン中といった
 **演出の中間状態**はスナップショットに含めない。スナップショットは「次のユーザー操作
@@ -50,7 +53,7 @@ BGM / SE のフェード途中、タイプライターアニメーション中�
 初期状態 + [advance, advance, choice('1-3'), advance] → 決定論的な状態 S
 ```
 
-これは `resolveEvents` がフラグ状態に対して純粋関数であることと、
+これは `[条件:]` の展開が入場時の flags に対して純粋関数であること（`expandEvents`。#799 以降。従来は `resolveEvents`）と、
 `advance()` / `jumpToScene()` が副作用を `NovelGameState` に集約していることで保証される。
 
 この性質を活用すると:
@@ -218,4 +221,5 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 - Issue #398: 全 option 圏外の `[選択]` は描画せず `processDirective` の Choice 分岐で先回りして終劇する
 - Issue #399: 埋め込み開始（`?scene=`, `eventIndex=0`）を fresh-start 経路に乗せ、冒頭ディレクティブ実行＋立ち絵表示を通す
 - Issue #470: 選択肢なしでシーンの記述が尽きたとき `advance()` が `endStory()` を呼び明示的な終劇表示を出す
+- Issue #799: `[条件:]` のブロック入場時評価と、入場時 flags（`entryFlags`）をセーブに載せた決定的な再現（ADR 0003 #799 追記）
 - Issue #652: `debug_scene`/`debug_flags` を production ビルドでも常時有効化し、`?debug_unlock_all=1`（全選択肢ロック強制解放）と TUI版 `--debug-scene`/`--debug-unlock-all` を追加
