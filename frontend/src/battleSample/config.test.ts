@@ -4,6 +4,7 @@ import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
 import enemyOrderOmenSample from '../../public/battle-sample/enemy-order-omen.json?raw'
 import enemyCounterSample from '../../public/battle-sample/enemy-counter.json?raw'
+import enemyAffinitySample from '../../public/battle-sample/enemy-affinity.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -1698,6 +1699,61 @@ describe('同梱の例 public/battle-sample/enemy-counter.json (#837)', () => {
   })
 })
 
+describe('parseConfig 属性相性: affinity (#872)', () => {
+  const base = 'https://example.com/battle-sample/x.json'
+
+  it('enemies[].affinity の 4 欄は文字列の配列（trim・小文字・空要素は捨てる）', () => {
+    const r = parseConfig(
+      {
+        enemies: [
+          {
+            affinity: { weak: [' Water ', ''], halve: ['fire'], nullify: [], absorb: ['THUNDER'] },
+          },
+        ],
+      },
+      base
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].affinity).toEqual({
+      weak: ['water'],
+      halve: ['fire'],
+      absorb: ['thunder'],
+    })
+  })
+
+  it('未指定・全欄空は付かない', () => {
+    const r = parseConfig({ enemies: [{ affinity: {} }, { affinity: { weak: [' '] } }, {}] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    for (const e of r.value.enemies) expect('affinity' in e).toBe(false)
+  })
+
+  it.each([
+    [{ enemies: [{ affinity: 'fire' }] }, 'enemies[0].affinity'],
+    [{ enemies: [{ affinity: [] }] }, 'enemies[0].affinity'],
+    [{ enemies: [{ affinity: { weak: 'fire' } }] }, 'enemies[0].affinity.weak'],
+    [{ enemies: [{ affinity: { absorb: [1] } }] }, 'enemies[0].affinity.absorb'],
+  ])('型が違うとエラー %j', (raw, path) => {
+    const r = parseConfig(raw, base)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain(path)
+  })
+})
+
+describe('同梱の例 public/battle-sample/enemy-affinity.json (#872)', () => {
+  it('parseConfigText で読め、相性を持つ敵 2 体と持たない敵 1 体が入っている', () => {
+    const r = parseConfigText(
+      enemyAffinitySample,
+      'https://example.com/battle-sample/enemy-affinity.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies.map((e) => 'affinity' in e)).toEqual([true, true, false])
+    expect(r.value.spells.map((s) => s.id)).toContain('death')
+  })
+})
+
 describe('parsePoses 単体（フィールドサンプルと共有 #890）', () => {
   const resolve = (u: string) => resolveUrl(u, BASE)
 
@@ -1779,5 +1835,36 @@ describe('parseMenuList の挙動（export 化後も不変 #890）', () => {
         { id: 'items-2', name: 'b', count: 0 },
       ],
     })
+  })
+})
+
+describe('parseConfig 属性相性: party[].affinity は読み込みエラー (#872)', () => {
+  const base = 'https://example.com/battle-sample/x.json'
+  it('party[i].affinity を指定するとエラー（空オブジェクトでも）', () => {
+    for (const aff of [{ weak: ['fire'] }, {}]) {
+      const r = parseConfig({ party: [{}, { affinity: aff }] }, base)
+      expect(r.ok).toBe(false)
+      if (!r.ok) {
+        expect(r.error).toContain(
+          'party[1].affinity: 味方側の相性は未対応です（enemies[].affinity のみ）'
+        )
+      }
+    }
+  })
+  it('enemies[].affinity は従来どおり読める', () => {
+    const r = parseConfig({ enemies: [{ affinity: { weak: ['fire'] } }] }, base)
+    expect(r.ok).toBe(true)
+  })
+})
+
+describe('parseConfig 属性相性: 全角の属性 id は parser と同じ表で半角・小文字にする (#872)', () => {
+  it('weak: ["ＦＩＲＥ"] は fire、半角カナ・丸数字は変えない', () => {
+    const r = parseConfig(
+      { enemies: [{ affinity: { weak: ['ＦＩＲＥ', 'ﾎﾉｵ'], halve: ['①'] } }] },
+      'https://example.com/battle-sample/x.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].affinity).toEqual({ weak: ['fire', 'ﾎﾉｵ'], halve: ['①'] })
   })
 })

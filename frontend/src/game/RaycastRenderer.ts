@@ -57,6 +57,7 @@ import type { BattleScreen } from './BattleScreen'
 import type { BattleEntity } from './spellDsl'
 import { enemyLayoutField, rollEncounter } from './encounter'
 import { posesField } from './battleMotion'
+import { affinityField } from './affinity'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
@@ -915,6 +916,7 @@ export class RaycastRenderer {
           ...(def.actions && def.actions.length > 0 ? { actions: [...def.actions] } : {}),
           ...(def.counters && def.counters.length > 0 ? { counters: [...def.counters] } : {}),
           ...(def.onDeath ? { onDeath: def.onDeath } : {}),
+          ...affinityField(def.affinity),
           ...enemyLayoutField(def, undefined),
         }
       : {

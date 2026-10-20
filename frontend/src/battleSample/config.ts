@@ -3,6 +3,7 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
+import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -321,6 +322,30 @@ function parseEntity(
       return { ok: false, error: `${path}.onDeath は文字列である必要があります` }
     }
     if (raw.onDeath.trim() !== '') entity.onDeath = raw.onDeath.trim()
+  }
+  if (raw.affinity !== undefined) {
+    // 味方側の属性（防具・魔石）は未対応 (#872 の範囲外)。黙って効いてしまわないよう読み込みエラーにする
+    if (path.startsWith('party[')) {
+      return {
+        ok: false,
+        error: `${path}.affinity: 味方側の相性は未対応です（enemies[].affinity のみ）`,
+      }
+    }
+    // 属性相性 (#872)。`[モンスター]` の `弱点:` 等と同じ 4 欄。各欄は属性 id の文字列の配列（parser と同じ表で半角・小文字に寄せる）
+    if (!isRecord(raw.affinity)) {
+      return { ok: false, error: `${path}.affinity はオブジェクトである必要があります` }
+    }
+    const out: BattleAffinity = {}
+    for (const key of ['weak', 'halve', 'nullify', 'absorb'] as const) {
+      const v = raw.affinity[key]
+      if (v === undefined) continue
+      if (!Array.isArray(v) || v.some((a) => typeof a !== 'string')) {
+        return { ok: false, error: `${path}.affinity.${key} は文字列の配列である必要があります` }
+      }
+      const ids = (v as string[]).map((a) => normalizeAttrId(a.trim())).filter((a) => a !== '')
+      if (ids.length > 0) out[key] = ids
+    }
+    if (Object.keys(out).length > 0) entity.affinity = out
   }
   return { ok: true, value: entity }
 }

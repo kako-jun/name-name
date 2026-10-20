@@ -157,7 +157,101 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
             .and_then(|v| v.into_iter().next()),
         size: collect_size(entries),
         scale: collect_scale(entries),
+        affinity: collect_affinity(entries),
     })
+}
+
+/// 属性相性の 4 欄のキー（別名を含む）。優先順位の高い順（吸収 > 無効 > 半減 > 弱点）で並べる (#872)。
+const AFFINITY_COLUMNS: [(&str, &[&str]); 4] = [
+    ("吸収", &["吸収", "absorb"]),
+    ("無効", &["無効", "null", "immune"]),
+    ("半減", &["半減", "halve"]),
+    ("弱点", &["弱点", "weak"]),
+];
+
+/// `弱点` / `半減` / `無効` / `吸収` を属性相性にする (#872)。4 欄すべて空なら None。警告は `emit_warning` へ流す。
+fn collect_affinity(entries: &[(String, String)]) -> Option<MonsterAffinity> {
+    let (affinity, warnings) = interpret_affinity(entries);
+    for w in warnings {
+        emit_warning(&format!("[name-name-parser] warning: {w}"));
+    }
+    affinity
+}
+
+/// 属性 id を小文字・半角に寄せる（全角英数と `_` `-` だけを半角にし、小文字にする。半角カナ・丸数字などは変えない。JS 側 `normalizeAttrId`（`frontend/src/game/affinity.ts`）と同じ表）。
+fn normalize_attr_id(raw: &str) -> String {
+    raw.chars()
+        .map(|c| match c {
+            '\u{FF10}'..='\u{FF19}' | '\u{FF21}'..='\u{FF3A}' | '\u{FF41}'..='\u{FF5A}' => {
+                char::from_u32(c as u32 - 0xFF00 + 0x20).unwrap_or(c)
+            }
+            '\u{FF3F}' => '_',
+            '\u{FF0D}' => '-',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// 属性相性の解釈（副作用なし）。戻りは (相性, 警告文の列)。
+///
+/// - 値は属性 id を `,` `，` `、` 空白で区切って複数指定。同じキーを複数行書いたら足し合わせる
+/// - 語彙は検証しない（`type=` が自由記述なので、任意の属性を足せるようにする）
+/// - 同じ属性が同じ欄に重なったら 1 つにまとめる（警告なし）。複数の欄にまたがったら警告して優先順位の高い欄を採る
+/// - `無属性` / `none` は耐性欄に書けない（警告して無視）
+/// - 区切りだけで属性が 1 つも取れない値は警告。値が空の行は黙って無視
+fn interpret_affinity(entries: &[(String, String)]) -> (Option<MonsterAffinity>, Vec<String>) {
+    let mut warnings = Vec::new();
+    // 優先順位の高い欄から順に埋める。先に採られた属性が後の欄に出たら捨てる
+    let mut taken: Vec<String> = Vec::new();
+    let mut columns: Vec<Vec<String>> = Vec::new();
+    for (label, keys) in AFFINITY_COLUMNS {
+        let mut col: Vec<String> = Vec::new();
+        for (k, v) in entries {
+            if !keys.contains(&k.as_str()) || v.trim().is_empty() {
+                continue;
+            }
+            let tokens: Vec<String> = v
+                .split(|c: char| c == ',' || c == '，' || c == '、' || c.is_whitespace())
+                .filter(|t| !t.is_empty())
+                .map(normalize_attr_id)
+                .collect();
+            if tokens.is_empty() {
+                warnings.push(format!(
+                    "monster {label}: '{}' has no attribute id, ignored",
+                    v.trim()
+                ));
+                continue;
+            }
+            for t in tokens {
+                if t == "無属性" || t == "none" {
+                    warnings.push(format!(
+                        "monster {label}: '{t}' (no attribute) cannot be written in an affinity column, ignored"
+                    ));
+                } else if taken.contains(&t) {
+                    warnings.push(format!(
+                        "monster {label}: attribute '{t}' is already in a higher-priority column (吸収 > 無効 > 半減 > 弱点), ignored"
+                    ));
+                } else if !col.contains(&t) {
+                    col.push(t);
+                }
+            }
+        }
+        taken.extend(col.iter().cloned());
+        columns.push(col);
+    }
+    let mut it = columns.into_iter();
+    let affinity = MonsterAffinity {
+        absorb: it.next().unwrap_or_default(),
+        nullify: it.next().unwrap_or_default(),
+        halve: it.next().unwrap_or_default(),
+        weak: it.next().unwrap_or_default(),
+    };
+    if affinity == MonsterAffinity::default() {
+        (None, warnings)
+    } else {
+        (Some(affinity), warnings)
+    }
 }
 
 /// `サイズ` / `size` を敵のサイズ区分にする (#839)。`2x1` / `2X1` / `２×１`（幅x高さ、整数 1 以上）。
@@ -488,5 +582,164 @@ mod tests {
             ("size".to_string(), "2x2".to_string()),
         ];
         assert_eq!(collect_size(&entries), None);
+    }
+
+    // ===== 属性相性 (#872) =====
+
+    fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn affinity_none_when_no_key_or_all_empty() {
+        assert_eq!(interpret_affinity(&kv(&[("名前", "x")])), (None, vec![]));
+        // 値が空の行は黙って無視（警告なし）
+        assert_eq!(
+            interpret_affinity(&kv(&[("弱点", ""), ("weak", "  ")])),
+            (None, vec![])
+        );
+    }
+
+    #[test]
+    fn affinity_reads_four_columns_with_aliases() {
+        let (a, w) = interpret_affinity(&kv(&[
+            ("weak", "water"),
+            ("halve", "fire"),
+            ("immune", "wind"),
+            ("absorb", "thunder"),
+        ]));
+        assert_eq!(w, Vec::<String>::new());
+        let a = a.unwrap();
+        assert_eq!(a.weak, strs(&["water"]));
+        assert_eq!(a.halve, strs(&["fire"]));
+        assert_eq!(a.nullify, strs(&["wind"]));
+        assert_eq!(a.absorb, strs(&["thunder"]));
+        let (a, _) = interpret_affinity(&kv(&[("null", "death"), ("無効", "ink")]));
+        assert_eq!(a.unwrap().nullify, strs(&["death", "ink"]));
+    }
+
+    #[test]
+    fn affinity_separators_case_and_fullwidth() {
+        let (a, w) = interpret_affinity(&kv(&[(
+            "弱点",
+            "Ice, ＷＡＴＥＲ、fire，ｅａｒｔｈ　Thunder_2 ,, ",
+        )]));
+        assert!(w.is_empty());
+        assert_eq!(
+            a.unwrap().weak,
+            strs(&["ice", "water", "fire", "earth", "thunder_2"])
+        );
+    }
+
+    #[test]
+    fn affinity_normalizes_only_fullwidth_alnum_underscore_hyphen() {
+        // 全角数字・英字・`＿`・`－` は半角になり、半角カナ・丸数字は変換しない（JS 側 normalizeAttrId と同じ表）
+        let (a, w) = interpret_affinity(&kv(&[("弱点", "ＦＩＲＥ＿０－Ａ ﾎﾉｵ ①")]));
+        assert!(w.is_empty());
+        assert_eq!(a.unwrap().weak, strs(&["fire_0-a", "ﾎﾉｵ", "①"]));
+    }
+
+    #[test]
+    fn affinity_multiple_lines_accumulate_and_dedup_silently() {
+        let (a, w) = interpret_affinity(&kv(&[
+            ("弱点", "ice"),
+            ("weak", "water, ICE"),
+            ("弱点", "water"),
+        ]));
+        assert!(w.is_empty());
+        assert_eq!(a.unwrap().weak, strs(&["ice", "water"]));
+    }
+
+    #[test]
+    fn affinity_separator_only_value_warns() {
+        let (a, w) = interpret_affinity(&kv(&[("弱点", ","), ("半減", "、 ，")]));
+        assert_eq!(a, None);
+        assert_eq!(w.len(), 2);
+        assert!(w[0].contains("has no attribute id"));
+    }
+
+    #[test]
+    fn affinity_no_attribute_is_rejected_with_warning() {
+        for bad in ["無属性", "none", "NONE", "ＮＯＮＥ"] {
+            let (a, w) = interpret_affinity(&kv(&[("無効", &format!("fire, {bad}"))]));
+            assert_eq!(a.unwrap().nullify, strs(&["fire"]), "{bad}");
+            assert_eq!(w.len(), 1, "{bad}");
+            assert!(w[0].contains("cannot be written"), "{bad}");
+        }
+        // 無属性だけなら相性なし
+        let (a, w) = interpret_affinity(&kv(&[("弱点", "none")]));
+        assert_eq!(a, None);
+        assert_eq!(w.len(), 1);
+    }
+
+    /// デシジョンテーブル: 1 つの属性 `x` を 4 欄のうちどの部分集合に書いても、
+    /// 優先順位 吸収 > 無効 > 半減 > 弱点 の最も高い欄に 1 回だけ入り、勝てなかった欄の数だけ警告が出る。
+    #[test]
+    fn affinity_priority_decision_table_all_subsets() {
+        let cols = [("吸収", 0usize), ("無効", 1), ("半減", 2), ("弱点", 3)];
+        for mask in 1u32..16 {
+            let mut pairs = Vec::new();
+            for (name, i) in cols {
+                if mask & (1 << i) != 0 {
+                    pairs.push((name, "x"));
+                }
+            }
+            let (a, w) = interpret_affinity(&kv(&pairs));
+            let a = a.unwrap();
+            let winner = (0..4).find(|i| mask & (1 << i) != 0).unwrap();
+            let got = [&a.absorb, &a.nullify, &a.halve, &a.weak];
+            for i in 0..4 {
+                let expect = if i == winner { strs(&["x"]) } else { vec![] };
+                assert_eq!(*got[i], expect, "mask={mask:04b} col={i}");
+            }
+            assert_eq!(
+                w.len(),
+                (mask.count_ones() - 1) as usize,
+                "mask={mask:04b} warnings"
+            );
+        }
+    }
+
+    #[test]
+    fn affinity_priority_independent_per_attribute() {
+        let (a, w) = interpret_affinity(&kv(&[
+            ("弱点", "fire, ice"),
+            ("吸収", "fire"),
+            ("半減", "ice, wind"),
+        ]));
+        let a = a.unwrap();
+        assert_eq!(a.absorb, strs(&["fire"]));
+        assert_eq!(a.halve, strs(&["ice", "wind"]));
+        assert_eq!(a.weak, Vec::<String>::new());
+        assert_eq!(w.len(), 2);
+    }
+
+    #[test]
+    fn monster_without_affinity_keys_serializes_without_affinity() {
+        let def = build_monster_def("m".into(), &kv(&[("名前", "m"), ("HP", "5")])).unwrap();
+        assert_eq!(def.affinity, None);
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(!json.contains("affinity"), "{json}");
+    }
+
+    #[test]
+    fn monster_affinity_json_shape_omits_empty_columns() {
+        let def = build_monster_def(
+            "m".into(),
+            &kv(&[("名前", "m"), ("無効", "death, wind"), ("弱点", "thunder")]),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::to_value(&def).unwrap();
+        assert_eq!(
+            v["affinity"],
+            serde_json::json!({"weak": ["thunder"], "nullify": ["death", "wind"]})
+        );
     }
 }

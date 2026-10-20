@@ -166,6 +166,8 @@ export interface MonsterDef {
   size?: { w: number; h: number }
   /** 敵の表示倍率 (#839)。`倍率:` の値（parser が 0.25〜1 に丸め済み。不正は警告して未指定＝1）。占有領域の中で絵を縮める比 */
   scale?: number
+  /** 属性相性 (#872)。`弱点:` / `半減:` / `無効:` / `吸収:` の属性 id（parser が小文字・半角に正規化済み。優先順位 吸収 > 無効 > 半減 > 弱点で重複排除済み）。4 欄とも空なら無い。解釈・倍率は `game/affinity.ts` */
+  affinity?: { weak?: string[]; halve?: string[]; nullify?: string[]; absorb?: string[] }
 }
 
 /** アイテム定義 (#174) */

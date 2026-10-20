@@ -4605,6 +4605,53 @@ HP: 5
     }
 
     #[test]
+    fn monster_block_parses_affinity_and_roundtrips_through_emit() {
+        // 弱点/半減/無効/吸収 (#872)。パース → emit → 再パースで同じ相性になる。書かない敵は None
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[モンスター boss]
+名前: ボス
+HP: 50
+弱点: water, ice
+半減: fire
+無効: wind, death
+吸収: thunder
+[/モンスター]
+
+[モンスター plain]
+名前: ふつう
+HP: 5
+[/モンスター]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::Monster(m) => {
+                let a = m.affinity.as_ref().expect("affinity");
+                assert_eq!(a.weak, vec!["water", "ice"]);
+                assert_eq!(a.halve, vec!["fire"]);
+                assert_eq!(a.nullify, vec!["wind", "death"]);
+                assert_eq!(a.absorb, vec!["thunder"]);
+            }
+            other => panic!("expected Monster, got {other:?}"),
+        }
+        match &events[1] {
+            Event::Monster(m) => assert_eq!(m.affinity, None),
+            other => panic!("expected Monster, got {other:?}"),
+        }
+        let doc2 = parse(&crate::emitter::emit(&doc));
+        assert_eq!(
+            doc.chapters[0].scenes[0].events,
+            doc2.chapters[0].scenes[0].events
+        );
+    }
+
+    #[test]
     fn monster_block_without_name_is_dropped() {
         let input = r#"---
 engine: name-name

@@ -23,6 +23,7 @@
 
 import type { BattleEntity, EffectContext } from './spellDsl'
 import { hasOwn } from './ownProperty'
+import { DEATH_ATTRIBUTE, deathSuccessRate, resolveAffinity, rollDeath } from './affinity'
 
 /**
  * builtin 関数のシグネチャ。
@@ -37,17 +38,19 @@ export type BuiltinItemFn = (ctx: EffectContext) => string[]
 /** 呪文の専用関数レジストリ。spell.builtin の値で lookup する */
 export const BUILTIN_SPELLS: Record<string, BuiltinSpellFn> = {
   /**
-   * ザラキ: 敵全体に確率で即死。耐性持ちは無効、成功率は固定 0.5（プロト用、
-   * 将来レベル差ベースに差し替え予定）。
+   * ザラキ: 敵全体に確率で即死。耐性持ちは無効、既定の成功率は固定 0.5（プロト用、
+   * 将来レベル差ベースに差し替え予定）。`death` の属性相性で成功率が変わる（#872、`deathSuccessRate`）。
    */
   zaraki: (ctx) => {
     const log: string[] = []
     for (const t of ctx.targets) {
-      if (t.resist?.['death'] === 0) {
+      // 即死耐性 (#872): 属性相性の `death` で成功率を変える（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限あり〉）
+      const rate = deathSuccessRate(resolveAffinity(t.affinity, DEATH_ATTRIBUTE), 0.5)
+      if (rate <= 0 || t.resist?.['death'] === 0) {
         log.push(`${t.name} には きかなかった！`)
         continue
       }
-      if (ctx.rng() < 0.5) {
+      if (rollDeath(rate, ctx.rng)) {
         t.hp = 0
         log.push(`${t.name} は しんでしまった！`)
       } else {
