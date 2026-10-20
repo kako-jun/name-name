@@ -19,7 +19,9 @@ import {
   isOutward,
   keysToVector,
   maskFromRgba,
+  playerScale,
   pointerToVector,
+  resolvePlayerHeight,
   snapToWalkable,
   stepMove,
   walkFrame,
@@ -459,7 +461,10 @@ async function main(): Promise<void> {
     // ---- 描画 ----
     const tex = walkTex[facing][walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
     player.texture = tex
-    const s = config.player.height / tex.height
+    const s = playerScale(
+      resolvePlayerHeight(config.scenes[sceneId].playerHeight, config.player.height),
+      tex.height
+    )
     player.scale.set(s)
     player.position.set(pos.x, pos.y)
     overlaySprite.visible = debug
