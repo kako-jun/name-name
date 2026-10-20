@@ -4,6 +4,7 @@ import type { Deferred, SceneEntryResult } from '../game/sceneEntry'
 import type { NovelRenderer } from '../game/NovelRenderer'
 import type { SceneEntryController } from '../game/SceneEntryController'
 import type { SaveController } from '../game/SaveController'
+import type { BackgroundController } from '../game/BackgroundController'
 import type { SaveManager } from '../game/SaveManager'
 
 /**
@@ -96,6 +97,7 @@ export function internalsOf<T>(r: NovelRenderer): T {
   exposeTransitionFields(r)
   exposeEntryFields(r)
   exposeSaveMembers(r)
+  exposeBackgroundMembers(r)
   return r as unknown as T
 }
 
@@ -295,4 +297,95 @@ export function saveControllerOf(r: NovelRenderer): SaveControllerForTest {
 /** `saveControllerOf` の戻り値。公開メソッドに、spy で差し替える private の `saveQuick` を足した型。 */
 export type SaveControllerForTest = SaveController & {
   saveQuick(origin: 'quick' | 'auto'): boolean
+}
+
+/**
+ * 背景まわり (#828 7a) は `BackgroundController` へ移った。テストが従来どおり
+ * `internals(r).bgEntries` / `.setBackground()` 等で読み書きできるよう、レンダラ上に `background` の
+ * メンバーへ委譲するアクセサ・メソッドを足す。移管後のアクセス経路はこの1か所に集約する。
+ * 注意: メソッドの委譲は呼び出しのたびにコントローラを引くので、`vi.spyOn(backgroundControllerOf(r), ...)` は効く。
+ * 一方 `vi.spyOn(internals(r), 'xxx')` はレンダラ上の委譲だけを差し替え、コントローラ内部の呼び出しは
+ * 差し替わらない。内部呼び出し（`setBackground` → `showLoadedBackground` 等）を差し替えるときは
+ * `backgroundControllerOf(r)` を使う。
+ * 旧名との対応: `bgGraphics` → `graphics`、`bgContainer` → `container`（それ以外はコントローラ内でも同名）。
+ */
+const BACKGROUND_FIELDS: Record<string, string> = {
+  bgEntries: 'bgEntries',
+  bgMaskSprite: 'bgMaskSprite',
+  bgCrossfadeTimer: 'bgCrossfadeTimer',
+  bgLoadToken: 'bgLoadToken',
+  pendingBackgroundLoadToken: 'pendingBackgroundLoadToken',
+  pendingBackgroundLoad: 'pendingBackgroundLoad',
+  textureCache: 'textureCache',
+  currentBackgroundPath: 'currentBackgroundPath',
+  currentBackgroundColor: 'currentBackgroundColor',
+  currentBackgroundFade: 'currentBackgroundFade',
+  currentBackgroundBrightness: 'currentBackgroundBrightness',
+  defaultBackgroundColor: 'defaultBackgroundColor',
+  bgGraphics: 'graphics',
+  bgContainer: 'container',
+}
+const BACKGROUND_METHODS = [
+  'setBackground',
+  'showLoadedBackground',
+  'clearBackground',
+  'setBackgroundColor',
+  'clearBackgroundColor',
+  'defaultBackgroundColorNum',
+  'updateBackgroundFadeFrame',
+  'fadeOutBackgroundEntries',
+  'finishBackgroundCrossfadeInstant',
+  'hasActiveBackgroundFade',
+  'hasPendingBackgroundLoad',
+  'applyBrightnessTint',
+] as const
+
+function exposeBackgroundMembers(r: NovelRenderer): void {
+  const bgOf = (): Record<string, unknown> =>
+    (r as unknown as { background: Record<string, unknown> }).background
+  for (const [name, target] of Object.entries(BACKGROUND_FIELDS)) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    // 実体のフィールド名が変わったとき、黙って undefined を読み書きしないよう即座に落とす。
+    if (!(target in bgOf())) {
+      throw new Error(
+        `BackgroundController に ${target} が無い（rendererInternals の委譲先を直す）`
+      )
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => bgOf()[target],
+      set: (v: unknown) => {
+        bgOf()[target] = v
+      },
+    })
+  }
+  for (const name of BACKGROUND_METHODS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    if (typeof bgOf()[name] !== 'function') {
+      throw new Error(
+        `BackgroundController に ${name}() が無い（rendererInternals の委譲先を直す）`
+      )
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: (...args: unknown[]) =>
+        (bgOf()[name] as (...a: unknown[]) => unknown).apply(bgOf(), args),
+    })
+  }
+}
+
+/**
+ * `NovelRenderer` が持つ `BackgroundController` (#828 7a)。内部メソッド（`showLoadedBackground` 等）を
+ * `vi.spyOn` で差し替えるテスト用。旧実装ではレンダラ自身の private メソッドだった。
+ */
+export function backgroundControllerOf(r: NovelRenderer): BackgroundControllerForTest {
+  return (r as unknown as { background: BackgroundControllerForTest }).background
+}
+
+/** `backgroundControllerOf` の戻り値。公開メソッドに、spy で差し替える private の `showLoadedBackground` を足した型。 */
+export type BackgroundControllerForTest = BackgroundController & {
+  showLoadedBackground(...args: unknown[]): void
 }

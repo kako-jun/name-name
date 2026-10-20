@@ -93,6 +93,10 @@ import {
   MOTION_SCREEN_MARGIN,
   clampMotionDx,
   POPUP_COLORS,
+  POPUP_STACK_STEP,
+  hitRound,
+  hitTimeOf,
+  popupStackIndex,
   eventTimeline,
   SINK_DISTANCE,
   advancePlayback,
@@ -457,6 +461,8 @@ interface DamagePopup {
   x: number
   y: number
   unit: number
+  /** 同じ対象への連続ヒット (#879) で何段目か。数字の高さぶん縦にずらす（単発は 0） */
+  stack: number
 }
 
 export class BattleScreen extends Container {
@@ -2347,9 +2353,10 @@ export class BattleScreen extends Container {
     this.playback = r.state
     let changed = false
     for (const fire of r.fires) {
-      for (const hit of fire.event.hits) {
+      // 複数ヒット (#879): round ごとの発火。その round の hits だけを出す（単発は全 hits で従来どおり）
+      for (const hit of fire.hits) {
         this.hpOverride.set(this.entityKey(hit.target.side, hit.target.index), hit.hpAfter)
-        this.spawnPopup(hit, fire.sinceHit)
+        this.spawnPopup(hit, fire.sinceHit, popupStackIndex(fire.event.hits, hit))
       }
       changed = true
     }
@@ -2370,7 +2377,7 @@ export class BattleScreen extends Container {
   }
 
   /** 対象の位置にダメージ数字を出す（ダメージ白・回復緑・ミスは MISS）。命中から sinceHit ms 経っていたぶん進める */
-  private spawnPopup(hit: BattleHit, sinceHit: number): void {
+  private spawnPopup(hit: BattleHit, sinceHit: number, stack = 0): void {
     const view = this.viewOf(hit.target.side, hit.target.index)
     if (!view || !this.popupLayer) return
     const label = popupText(hit)
@@ -2395,6 +2402,7 @@ export class BattleScreen extends Container {
       x: view.anchorX,
       y: view.anchorY,
       unit: view.unit,
+      stack,
     })
     this.updatePopup(this.popups[this.popups.length - 1])
   }
@@ -2408,7 +2416,9 @@ export class BattleScreen extends Container {
       p.y = view.anchorY
       p.unit = view.unit
     }
-    p.text.position.set(p.x, p.y + s.dy * p.unit)
+    // 連続ヒット (#879) は段ごとに数字の高さぶん上へずらす（stack 0 は従来の位置そのまま）
+    const stackDy = p.stack * popupFontSize(p.unit) * POPUP_STACK_STEP
+    p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy)
     p.text.alpha = s.alpha
     return s.done
   }
@@ -2463,11 +2473,17 @@ export class BattleScreen extends Container {
       const downed = out.downProgress > 0
       out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
     }
+    // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
+    const baseHitAt = eventTimeline(ev).hitAt
+    let latest: { sinceHit: number; downs: boolean } | null = null
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
-      const sinceHit = active.elapsed - eventTimeline(ev).hitAt
+      const sinceHit = active.elapsed - hitTimeOf(baseHitAt, hitRound(hit))
       if (sinceHit < 0) continue
-      const t = sampleTarget('damage', sinceHit, hit.hpAfter <= 0)
+      if (!latest || sinceHit <= latest.sinceHit) latest = { sinceHit, downs: hit.hpAfter <= 0 }
+    }
+    if (latest) {
+      const t = sampleTarget('damage', latest.sinceHit, latest.downs)
       out = { ...out, recoil: t.recoil, pose: t.pose, downProgress: t.downProgress }
     }
     return out
