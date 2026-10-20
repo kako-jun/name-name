@@ -472,3 +472,32 @@ export function menuKeyAction(key: string): MenuKeyAction | undefined {
       return undefined
   }
 }
+
+/**
+ * 画面の下端に常に出す操作の案内 (#806。暗黙の操作を作らない)。`w` は一番上の窓（無ければコマンド窓の状態）。
+ * `fits` は「その文字列が収まるか」の判定（画面幅から呼び出し側が渡す）。長い文は収まらなければ短い文に落とし、
+ * 短い文も収まらなければ空文字（出さない）。キーとタップの両方を書く。
+ * `commandKeys` は cross のときの矢印キーによるコマンド決定の案内を足す
+ */
+export function menuHint(
+  w: MenuWindow | undefined,
+  commandKeys: boolean,
+  fits: (text: string) => boolean
+): string {
+  let long: string
+  let short: string
+  if (!w) {
+    long = commandKeys ? '矢印キー・タップ: コマンドをえらぶ' : 'タップ: コマンドをえらぶ'
+    short = commandKeys ? '矢印・タップ: コマンド' : 'タップ: コマンド'
+  } else if (w.type === 'list') {
+    long = '↑↓: えらぶ  Enter・タップ: けってい  Esc・そとをタップ: もどる'
+    short = '↑↓ えらぶ  Enter けってい  Esc もどる'
+  } else if (w.spec.scope === 'single') {
+    long = '↑↓: たいしょう  Enter・タップ: けってい  Esc・そとをタップ: もどる'
+    short = '↑↓ たいしょう  Enter けってい  Esc もどる'
+  } else {
+    long = 'Enter・タップ: けってい  Esc・そとをタップ: もどる'
+    short = 'Enter けってい  Esc もどる'
+  }
+  return fits(long) ? long : fits(short) ? short : ''
+}

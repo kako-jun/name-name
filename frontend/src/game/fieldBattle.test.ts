@@ -609,13 +609,17 @@ describe('openFieldBattle: 候補窓の呪文を BattleScreen へ渡す (#204)',
     closeFieldBattle(stage, screen)
   })
 
-  it.each([
-    ['grid', true],
-    ['cross', false],
-  ] as const)('%s / 呪文マスター=%s では従来どおり何も起きない', (layout, withSpells) => {
-    const { stage, screen, s } = open(layout, withSpells)
+  it('cross でも呪文マスターが無ければ従来どおり何も起きない', () => {
+    const { stage, screen, s } = open('cross', false)
     s.handleCommand('spell')
     expect(s.menuStack).toHaveLength(0)
+    closeFieldBattle(stage, screen)
+  })
+
+  it('grid でも呪文マスターがあれば候補窓が開く (#806)', () => {
+    const { stage, screen, s } = open('grid', true)
+    s.handleCommand('spell')
+    expect(s.menuStack).toHaveLength(1)
     closeFieldBattle(stage, screen)
   })
 })

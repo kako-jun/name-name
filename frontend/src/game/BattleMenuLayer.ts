@@ -39,6 +39,10 @@ const ROW_DISABLED_COLOR = 0x808080
 /** 一番上でない窓（下に隠れた一覧）を暗く描く */
 const INACTIVE_ALPHA = 0.6
 const MORE_MARK_COLOR = 0xffee66
+/** 操作の案内の文字（画面下端の余白 16px に収まる大きさ） */
+export const HINT_FONT_SIZE = 10
+const HINT_COLOR = 0xdddddd
+const HINT_BOTTOM = 3
 
 export class BattleMenuLayer extends Container {
   private host: BattleMenuHost
@@ -56,12 +60,13 @@ export class BattleMenuLayer extends Container {
   }
 
   /** 窓を描き直す。`view` が空なら全体を隠し、入力も通す */
-  update(view: MenuView, width: number, height: number): void {
+  update(view: MenuView, width: number, height: number, hint = ''): void {
     for (const c of this.body.removeChildren()) c.destroy({ children: true })
-    this.visible = view.length > 0
+    this.visible = view.length > 0 || hint !== ''
     this.backdrop.clear()
     if (view.length === 0) {
       this.backdrop.hitArea = null
+      this.drawHint(hint, width, height)
       return
     }
     // 窓の外のタップは全面で受けてキャンセルにする（下のコマンドに漏らさない）
@@ -71,6 +76,18 @@ export class BattleMenuLayer extends Container {
       if (v.type === 'list') this.drawList(v)
       else this.drawTarget(v)
     }
+    this.drawHint(hint, width, height)
+  }
+
+  /** 操作の案内（画面の下端の余白に小さく中央寄せ。タップは受けない） */
+  private drawHint(hint: string, width: number, height: number): void {
+    if (hint === '') return
+    const t = new PixiText({ text: hint, style: this.styled(HINT_COLOR, HINT_FONT_SIZE) })
+    t.anchor.set(0.5, 1)
+    t.eventMode = 'none'
+    t.x = width / 2
+    t.y = height - HINT_BOTTOM
+    this.body.addChild(t)
   }
 
   private drawList(v: MenuListView): void {
