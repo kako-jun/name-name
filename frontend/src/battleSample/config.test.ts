@@ -4,6 +4,7 @@ import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
 import enemyOrderOmenSample from '../../public/battle-sample/enemy-order-omen.json?raw'
 import enemyCounterSample from '../../public/battle-sample/enemy-counter.json?raw'
+import enemyDamageParitySample from '../../public/battle-sample/enemy-damage-parity.json?raw'
 import enemyAffinitySample from '../../public/battle-sample/enemy-affinity.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
@@ -1696,6 +1697,20 @@ describe('同梱の例 public/battle-sample/enemy-counter.json (#837)', () => {
     expect(Object.keys(r.value.skills)).toEqual(['frost_lance', 'self_burst'])
     expect(r.value.enemies[0].counters?.length).toBe(2)
     expect(r.value.enemies[1].onDeath).toBe('候補=self_burst')
+  })
+})
+
+describe('同梱の例 public/battle-sample/enemy-damage-parity.json (#871)', () => {
+  it('parseConfigText で読め、ダメージ条件の反撃を持つ敵と固定ダメージの呪文が入っている', () => {
+    const r = parseConfigText(
+      enemyDamageParitySample,
+      'https://example.com/battle-sample/enemy-damage-parity.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].counters).toHaveLength(3)
+    expect(r.value.enemies[0].counters?.every((c) => c.includes('ダメージ'))).toBe(true)
+    expect(r.value.spells.find((s) => s.id === 'haribon')?.effect).toBe('damage 8..8')
   })
 })
 

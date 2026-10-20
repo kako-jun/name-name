@@ -1,0 +1,77 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "skills": [
+    {
+      "id": "stone_rage",
+      "name": "いかりの いしつぶて",
+      "target": "相手単体",
+      "effect": "damage 30..30",
+      "message": "{user}の めが あかく ひかった！ いしつぶてが とんでくる！"
+    },
+    {
+      "id": "stone_calm",
+      "name": "しずかな いのり",
+      "target": "自分",
+      "effect": "heal 40..40",
+      "message": "{user}は しずかに いのっている……きずが ふさがっていく"
+    },
+    {
+      "id": "stone_crack",
+      "name": "ひびわれ",
+      "target": "相手全体",
+      "effect": "damage 25..25",
+      "message": "{user}に おおきな ひびが はいった！ はへんが とびちる！"
+    }
+  ],
+  "spells": [
+    {
+      "id": "haribon",
+      "name": "ハリセンボン",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 8..8"
+    },
+    {
+      "id": "hitotsubu",
+      "name": "ひとつぶ",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 7..7"
+    },
+    {
+      "id": "twin",
+      "name": "にれんだ",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 7..7 回数=2"
+    },
+    {
+      "id": "big",
+      "name": "おおぶり",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 100..100"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 600, "mp": 40, "atk": 20, "def": 4, "agi": 6 },
+    { "id": "mage", "name": "まほうつかい", "hp": 400, "mp": 40, "atk": 12, "def": 2, "agi": 5 }
+  ],
+  "enemies": [
+    {
+      "id": "stone_statue",
+      "name": "なぞの せきぞう",
+      "hp": 900,
+      "atk": 10,
+      "def": 2,
+      "agi": 3,
+      "counters": [
+        "条件=ダメージ>=100 候補=stone_crack",
+        "条件=ダメージ=奇数 候補=stone_rage 対象=最後に攻撃した者",
+        "条件=ダメージ=偶数 候補=stone_calm"
+      ]
+    }
+  ]
+}

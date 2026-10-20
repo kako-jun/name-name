@@ -21,6 +21,8 @@
  *   （直前の被弾の種類。系統は効果 DSL の `damage ... type=` の値）・対象 `最後に攻撃した者`。
  *   `反撃:`（`MonsterDef.counters`）と `死亡時:`（`MonsterDef.onDeath`）は同じ書式の別の台本で、`parseReactionRules` / `chooseEnemyReaction` が扱う
  *   （`順番=` `上限=` は使えない＝進行位置を持たない。毎回先頭から評価・抽選する）
+ * - #871: `ダメージ=奇数` / `ダメージ=偶数` / `ダメージ=3の倍数` / `ダメージ>=100` / `ダメージ=777`（直前の被弾で受けたダメージ＝画面に出る数字の合計）・
+ *   `ダメージ桁数>=3`（その桁数）。ダメージの数字が出なかった被弾（即死・MISS・吸収）と被弾前は不成立。述語の解釈は `numberPredicate.ts`（味方側の対象指定 #876 と共通の語彙）
  *
  * 乱数の消費（注入された rng を使う。同じ state・同じ rng 列なら必ず同じ結果）:
  * - 採用した行の候補が 2 つ以上ならちょうど 1 回（重みの抽選）。1 つなら消費しない。`順番=` の行は消費しない
@@ -32,6 +34,14 @@ import type { SkillDef } from '../types'
 import type { BattleActorRef, BattleState, SkillExecution } from './battleEngine'
 import { STATUS_ALIASES, type BattleEntity } from './spellDsl'
 import { hasOwn, safeAssign } from './ownProperty'
+import {
+  compareNumbers,
+  digitCount,
+  matchesNumber,
+  parseNumberPredicate,
+  type CompareOp,
+  type NumberPredicate,
+} from './numberPredicate'
 
 /**
  * 敵ごとの記憶 (#835)。`BattleState.enemyMemory` は `enemies` と同じ index の配列。
@@ -66,6 +76,11 @@ export interface EnemyMemory {
   lastAttacker?: BattleActorRef
   /** `死亡時:` を実行し終えた印（倒されたときに 1 度だけ） */
   died?: boolean
+  /**
+   * 直前の被弾で受けたダメージ（#871。`ダメージ…` 条件の判定に使う）。味方の行動 1 回が与えた、画面に出る数字（`BattleHit.amount`）の合計。
+   * 即死・MISS・吸収などダメージの数字が出ない被弾では持たない（消える）。`tracksHits` の敵だけが持つ
+   */
+  lastDamage?: number
 }
 
 /** 被弾の種類 (#837)。`受けた=` の判定に使う。`name` は呪文・アイテムの名前、`type` は効果 DSL の `damage ... type=` の値 */
@@ -106,8 +121,6 @@ export type ChosenAction =
       track?: ActionTrack
     }
 
-type CompareOp = '<' | '<=' | '>' | '>=' | '='
-
 type Condition =
   | { kind: 'always' }
   | { kind: 'first' }
@@ -120,6 +133,7 @@ type Condition =
   | { kind: 'status'; who: 'self' | 'party'; name: string }
   | { kind: 'hits'; op: CompareOp; n: number }
   | { kind: 'received'; category: HitSource['category']; name?: string; type?: string }
+  | { kind: 'damage'; digits: boolean; predicate: NumberPredicate }
 
 type TargetSpec = 'random' | 'lowest-hp' | 'all' | 'ally' | 'self' | 'last-attacker'
 
@@ -177,27 +191,13 @@ const CYCLE_RE = /^周期\s*=\s*(\d+)(?:\s*\/\s*(\d+))?$/
 const USED_RE = new RegExp(`^使用\\s*<([^<>]+)>\\s*${OP_RE}\\s*(\\d+)$`)
 const HITS_RE = COUNT_RE('被弾')
 const RECEIVED_RE = /^受けた\s*=\s*(.+)$/
+const DAMAGE_RE = /^ダメージ(桁数)?\s*(.*)$/
 const SELF_STATUS_RE = /^状態\s*=\s*(\S+)$/
 const PARTY_STATUS_RE = /^味方状態\s*=\s*(\S+)$/
 const ATTACK_KEY = 'こうげき'
 
 function toOp(raw: string): CompareOp {
   return raw === '==' ? '=' : (raw as CompareOp)
-}
-
-function compare(left: number, op: CompareOp, right: number): boolean {
-  switch (op) {
-    case '<':
-      return left < right
-    case '<=':
-      return left <= right
-    case '>':
-      return left > right
-    case '>=':
-      return left >= right
-    case '=':
-      return left === right
-  }
 }
 
 function parseCondition(raw: string): Condition | string {
@@ -238,6 +238,8 @@ function parseCondition(raw: string): Condition | string {
   if (hits) return { kind: 'hits', op: toOp(hits[1]), n: Number(hits[2]) }
   const received = RECEIVED_RE.exec(text)
   if (received) return parseReceived(text, received[1].trim())
+  const damage = DAMAGE_RE.exec(text)
+  if (damage) return parseDamage(text, damage[1] !== undefined, damage[2])
   return `条件 '${text}' は未対応です`
 }
 
@@ -254,6 +256,13 @@ function parseReceived(text: string, value: string): Condition | string {
     return { kind: 'received', category: 'magic', type: arg }
   }
   return `条件 '${text}' の受けた= は 物理 / 魔法 / アイテム / アイテム:名前 / 呪文:名前 / 系統:x のいずれかです`
+}
+
+/** `ダメージ…` (#871): 直前の被弾で受けたダメージの値（奇数・偶数・N の倍数・比較・ちょうど）か、その桁数（`ダメージ桁数>=3`） */
+function parseDamage(text: string, digits: boolean, rest: string): Condition | string {
+  const predicate = parseNumberPredicate(rest, digits)
+  if (typeof predicate === 'string') return `条件 '${text}': ${predicate}`
+  return { kind: 'damage', digits, predicate }
 }
 
 function parseCandidate(raw: string): Candidate | string {
@@ -410,7 +419,21 @@ export function tracksHits(enemy: BattleEntity): boolean {
   return parseActionRules(enemy.actions ?? []).some(
     (r) =>
       r.target === 'last-attacker' ||
-      r.conditions.some((c) => c.kind === 'hits' || c.kind === 'received')
+      r.conditions.some((c) => c.kind === 'hits' || c.kind === 'received' || c.kind === 'damage')
+  )
+}
+
+/**
+ * `ダメージ…` 条件を書いた敵か (#871)。`行動:` `反撃:` `死亡時:` のどれかに書いていれば、被弾のたびに受けたダメージ（`lastDamage`）を記憶する。
+ * 書いていない敵の記憶の形は変わらない
+ */
+export function tracksDamage(enemy: BattleEntity): boolean {
+  const uses = (rules: readonly ActionRule[]): boolean =>
+    rules.some((r) => r.conditions.some((c) => c.kind === 'damage'))
+  return (
+    uses(parseActionRules(enemy.actions ?? [])) ||
+    uses(parseCounterRules(enemy.counters ?? [])) ||
+    (hasOnDeath(enemy) && uses(parseDeathRules(enemy.onDeath as string)))
   )
 }
 
@@ -440,28 +463,34 @@ function conditionHolds(
       return acted === 0
     case 'hp':
       // 割合の比較は整数のまま行う（hp/maxHp*100 の丸め誤差で境界がずれないように）
-      return compare(self.hp * 100, cond.op, cond.percent * self.maxHp)
+      return compareNumbers(self.hp * 100, cond.op, cond.percent * self.maxHp)
     case 'allies':
-      return compare(
+      return compareNumbers(
         state.enemies.filter((e, i) => i !== enemyIndex && e.hp > 0).length,
         cond.op,
         cond.n
       )
     case 'party':
-      return compare(state.party.filter((p) => p.hp > 0).length, cond.op, cond.n)
+      return compareNumbers(state.party.filter((p) => p.hp > 0).length, cond.op, cond.n)
     case 'acted':
-      return compare(acted, cond.op, cond.n)
+      return compareNumbers(acted, cond.op, cond.n)
     case 'cycle':
       return acted % cond.n === cond.r
     case 'used':
-      return compare(readCount(memory.used, cond.key), cond.op, cond.n)
+      return compareNumbers(readCount(memory.used, cond.key), cond.op, cond.n)
     case 'hits':
-      return compare(memory.hits ?? 0, cond.op, cond.n)
+      return compareNumbers(memory.hits ?? 0, cond.op, cond.n)
     case 'received': {
       const h = memory.lastHit
       if (!h) return false
       if (cond.type !== undefined) return h.type === cond.type
       return h.category === cond.category && (cond.name === undefined || h.name === cond.name)
+    }
+    case 'damage': {
+      // 数字が出なかった被弾（即死・MISS・吸収）や被弾前は、ダメージ条件はすべて不成立
+      const v = memory.lastDamage
+      if (v === undefined) return false
+      return matchesNumber(cond.digits ? digitCount(v) : v, cond.predicate)
     }
     case 'status':
       return cond.who === 'self'
