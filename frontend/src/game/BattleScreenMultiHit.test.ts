@@ -160,31 +160,46 @@ describe('FF 式 複数ヒットの順次再生', () => {
     expect(closed).toEqual(['victory'])
   })
 
-  describe('連続ヒットの段の間隔は実際に描く数字の高さに比例する (#877)', () => {
-    /** 段 0 と段 2 を同じ時刻で出し、y の差と描いたフォントサイズを返す */
-    const stackGap = (amount: number) => {
+  describe('連続ヒットの段の間隔は縮小前の基本フォントで決まる (#877)', () => {
+    /** 同一対象に amounts を段 0,1,2… で同時に出し、各数字の y と描いたフォントサイズを返す */
+    const spawnStack = (amounts: number[]) => {
       const { s } = setup([entity('slime', { atk: 0 })])
       s.redraw(800, 450)
-      const hit = { kind: 'heal', amount, target: { side: 'enemy', index: 0 } }
-      I(s).spawnPopup(hit, 0, 0)
-      I(s).spawnPopup(hit, 0, 2)
-      const [a, b] = I(s).popups
-      return { gap: a.text.y - b.text.y, font: Number(a.text.style.fontSize) }
+      amounts.forEach((amount, stack) => {
+        const hit = { kind: 'heal', amount, target: { side: 'enemy', index: 0 } }
+        I(s).spawnPopup(hit, 0, stack)
+      })
+      return I(s).popups.map((p) => ({ y: p.text.y, font: Number(p.text.style.fontSize) }))
     }
-    it('4 文字以下は従来（#879）どおり、縮めない基本フォントの 0.85 倍ずつ', () => {
+    it('4 文字以下は従来（#879）どおり、基本フォントの 0.85 倍ずつ', () => {
       for (const amount of [9, 9999]) {
-        const { gap, font } = stackGap(amount)
-        expect(font).toBe(fitPopupFontSize(String(amount), font))
-        expect(gap).toBeCloseTo(2 * font * POPUP_STACK_STEP, 5)
+        const [a, , c] = spawnStack([amount, amount, amount])
+        expect(c.y).toBeLessThan(a.y)
+        expect(a.y - c.y).toBeCloseTo(2 * a.font * POPUP_STACK_STEP, 5)
+        expect(a.font).toBe(fitPopupFontSize(String(amount), a.font))
       }
     })
-    it('5 桁以上は縮小後のサイズに比例し、4 桁より間隔が狭い', () => {
-      const base = stackGap(9999)
+    it('5 桁以上でも段の間隔は 4 桁と同じ（数字は縮むが間隔は基本フォント基準）', () => {
+      const base = spawnStack([9999, 9999, 9999])
+      const baseGap = base[0].y - base[2].y
       for (const amount of [99999, 999999, 9999999]) {
-        const { gap, font } = stackGap(amount)
-        expect(font).toBeLessThan(base.font)
-        expect(gap).toBeCloseTo(2 * font * POPUP_STACK_STEP, 5)
-        expect(gap).toBeLessThan(base.gap)
+        const r = spawnStack([amount, amount, amount])
+        expect(r[0].font).toBeLessThan(base[0].font)
+        expect(r[0].y - r[2].y).toBeCloseTo(baseGap, 5)
+      }
+    })
+    it.each([
+      [[9999, 9999, 99999]],
+      [[99999, 9999, 9999]],
+      [[9999, 99999, 9999]],
+      [[999999, 9999, 99999, 9999]],
+      [[9999, 9999999, 9999, 999999]],
+    ])('桁が混在する連続ヒット %j でも、隣り合う段の数字が重ならない', (amounts) => {
+      const r = spawnStack(amounts)
+      // 数字の高さ = フォント × POPUP_STACK_STEP（段の間隔の定義）。上の段の下端（y）が下の段の上端以上に上がる
+      for (let i = 1; i < r.length; i++) {
+        const lowerTop = r[i - 1].y - r[i - 1].font * POPUP_STACK_STEP
+        expect(r[i].y).toBeLessThanOrEqual(lowerTop + 1e-6)
       }
     })
   })
