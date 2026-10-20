@@ -102,8 +102,10 @@ import {
   advancePlayback,
   emptyPlayback,
   enqueueEvents,
+  fitPopupFontSize,
   isPlaybackBusy,
   messageWindowText,
+  popupCenterOffset,
   popupFontSize,
   popupText,
   resolvePose,
@@ -460,6 +462,8 @@ interface DamagePopup {
   x: number
   y: number
   unit: number
+  /** 実際に描いている数字のフォントサイズ（px。5 文字以上は縮小後 #877）。縮んだ数字を基本サイズの段の中で中央に置くのに使う */
+  fontSize: number
   /** 同じ対象への連続ヒット (#879) で何段目か。数字の高さぶん縦にずらす（単発は 0） */
   stack: number
 }
@@ -2377,13 +2381,17 @@ export class BattleScreen extends Container {
 
   /** 対象の位置にダメージ数字を出す（ダメージ白・回復緑・ミスは MISS）。命中から sinceHit ms 経っていたぶん進める */
   private spawnPopup(hit: BattleHit, sinceHit: number, stack = 0): void {
+    // 即死 (#877) は数字を出さない（「たおれた」の演出だけ。HP ゲージは hpAfter へ向かう）
+    if (hit.instantDeath) return
     const view = this.viewOf(hit.target.side, hit.target.index)
     if (!view || !this.popupLayer) return
+    const label = popupText(hit)
+    const fontSize = fitPopupFontSize(label, popupFontSize(view.unit))
     const text = new PixiText({
-      text: popupText(hit),
+      text: label,
       style: new TextStyle({
         fontFamily: "'Noto Sans JP', sans-serif",
-        fontSize: popupFontSize(view.unit),
+        fontSize,
         fontWeight: 'bold',
         fill: POPUP_COLORS[hit.kind],
         stroke: { color: 0x000000, width: 4 },
@@ -2400,6 +2408,7 @@ export class BattleScreen extends Container {
       x: view.anchorX,
       y: view.anchorY,
       unit: view.unit,
+      fontSize,
       stack,
     })
     this.updatePopup(this.popups[this.popups.length - 1])
@@ -2414,9 +2423,12 @@ export class BattleScreen extends Container {
       p.y = view.anchorY
       p.unit = view.unit
     }
-    // 連続ヒット (#879) は段ごとに数字の高さぶん上へずらす（stack 0 は従来の位置そのまま）
+    // 連続ヒット (#879) は段ごとに数字の高さぶん上へずらす（stack 0 は従来の位置そのまま）。間隔は縮小前の基本フォントで決める:
+    // 5 文字以上の縮小 (#877) に揃えると、桁数が混ざる連続ヒット（吸収の回復など）で小さい字の段が下の大きい字に食い込む
     const stackDy = p.stack * popupFontSize(p.unit) * POPUP_STACK_STEP
-    p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy)
+    // 縮んだ数字は基本サイズの段の中で上下中央に置く（4 文字以下は 0 で従来位置）
+    const centerDy = popupCenterOffset(popupFontSize(p.unit), p.fontSize)
+    p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy - centerDy)
     p.text.alpha = s.alpha
     return s.done
   }
@@ -2472,11 +2484,11 @@ export class BattleScreen extends Container {
       out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
-    const baseHitAt = eventTimeline(ev).hitAt
+    const tl = eventTimeline(ev)
     let latest: { sinceHit: number; downs: boolean } | null = null
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
-      const sinceHit = active.elapsed - hitTimeOf(baseHitAt, hitRound(hit))
+      const sinceHit = active.elapsed - hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval)
       if (sinceHit < 0) continue
       if (!latest || sinceHit <= latest.sinceHit) latest = { sinceHit, downs: hit.hpAfter <= 0 }
     }

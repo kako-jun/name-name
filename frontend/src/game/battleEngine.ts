@@ -76,9 +76,14 @@ export interface BattleHit {
   /**
    * 1 回の行動の中の何発目か（0 始まり。全体対象の `回数=N` は何巡目か）(#879)。**複数ヒット（効果 DSL `damage … 回数=N`）のときだけ付く**。
    * 無い（単発）は 0 と同じ。`hits` 配列の順序がそのまま再生順で、同じ `target` が複数回現れてよく、
-   * `hpBefore` / `hpAfter` は直前のヒットから連鎖する（1 発目の `hpAfter` = 2 発目の `hpBefore`）。FF 式の順次再生は実装済み（`round` ごとに `MULTI_HIT_INTERVAL_MS` 間隔で発火。`battleMotion.ts`）
+   * `hpBefore` / `hpAfter` は直前のヒットから連鎖する（1 発目の `hpAfter` = 2 発目の `hpBefore`）。FF 式の順次再生は実装済み（`round` ごとに `MULTI_HIT_INTERVAL_MS` 間隔で発火（多いときは自動で縮む）。`battleMotion.ts`）
    */
   round?: number
+  /**
+   * 即死で倒した (#877)。ダメージの数字を出さず「たおれた」の演出だけにする印。`amount` は HP の前後差（`hpBefore - hpAfter`）で、
+   * 1 回のダメージの上限 9999 の対象外（即死は上限を超える HP も 0 にする）。HP ゲージは `hpAfter`（0）へ向かう
+   */
+  instantDeath?: boolean
 }
 
 /**
@@ -368,7 +373,7 @@ export class BattleEngine {
     this.appendLog(`${caster.name} は ${spell.name} を となえた！`)
 
     const targets = this.resolveSpellTargets(spell, targetId)
-    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const amounts = new Map<BattleEntity, ComputedAmount>()
     const multi: MultiHit[] = []
     const ctx: EffectContext = {
       caster,
@@ -376,6 +381,7 @@ export class BattleEngine {
       rng: this.rng,
       pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
       onHit: (t, kind, amount, round) =>
         multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
     }
@@ -422,7 +428,7 @@ export class BattleEngine {
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
 
     const targets = this.resolveItemTargets(item, targetId)
-    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const amounts = new Map<BattleEntity, ComputedAmount>()
     const multi: MultiHit[] = []
     const ctx: EffectContext = {
       caster: user,
@@ -430,6 +436,7 @@ export class BattleEngine {
       rng: this.rng,
       pool: this.poolOf(user, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
       onHit: (t, kind, amount, round) =>
         multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
     }
@@ -498,7 +505,7 @@ export class BattleEngine {
         : undefined
     if (omen !== undefined) this.appendLog(omen)
 
-    const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const amounts = new Map<BattleEntity, ComputedAmount>()
     const multi: MultiHit[] = []
     const ctx: EffectContext = {
       caster,
@@ -506,6 +513,7 @@ export class BattleEngine {
       rng: this.rng,
       pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
       onHit: (t, kind, amount, round) =>
         multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
     }
@@ -547,17 +555,14 @@ export class BattleEngine {
     // 被弾した敵の反撃と、倒れた敵の死亡時の行動 (#837)。勝敗はこのあとの 1 か所だけで判定する（二重にならない）
     if (react) this.reactToPartyAction(react)
     if (atb) {
-      // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）。同時全滅は勝利
+      // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）。
+      // 倒れた味方の掃除と勝敗は settleAtbPhase に一本化する（同時全滅は敗北優先、#877）
       if (idx !== -1) this.finishAtbAction(idx)
-      if (this.state.enemies.every((e) => e.hp === 0)) {
-        this.handleVictory()
-        return
-      }
       this.settleAtbPhase()
       return
     }
-    // 従来ターン制: 反撃・死亡時の行動で味方が全滅したら（同時全滅を含め）敗北
-    if (react && this.state.party.every((p) => p.hp === 0)) {
+    // 従来ターン制: 味方が全滅したら（敵も同時に全滅していても）敗北を優先 (#877)
+    if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
       this.appendLog('ぜんめつ してしまった……')
       return
@@ -647,13 +652,14 @@ export class BattleEngine {
   /** 全滅 / 殲滅していれば終了フェーズへ。終了したら true */
   private checkEnd(): boolean {
     if (this.isOver()) return true
-    if (this.state.enemies.every((e) => e.hp === 0)) {
-      this.handleVictory()
-      return true
-    }
+    // 同時全滅（敵も味方も HP 0）は味方全滅=敗北を優先する (#877)
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
       this.appendLog('ぜんめつ してしまった……')
+      return true
+    }
+    if (this.state.enemies.every((e) => e.hp === 0)) {
+      this.handleVictory()
       return true
     }
     return false
@@ -1110,7 +1116,7 @@ export class BattleEngine {
     })
   }
 
-  /** ダメージ数字は 1 回のダメージの上限 (#877) を超えない（HP の前後差で代用する builtin の即死など）。回復は切らない */
+  /** ダメージ数字は 1 回のダメージの上限 (#877) を超えない（計算量を通知しない効果の HP の前後差で代用する経路。即死は kill 分岐で数字を持たない）。回復は切らない */
   private capHitAmount(kind: 'damage' | 'heal', amount: number): number {
     return kind === 'damage' ? clampDamage(amount) : amount
   }
@@ -1125,7 +1131,7 @@ export class BattleEngine {
     label: string,
     targets: BattleEntity[],
     before: Map<BattleEntity, number>,
-    amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>,
+    amounts: Map<BattleEntity, ComputedAmount>,
     message?: string,
     omen?: string,
     multi: MultiHit[] = []
@@ -1167,7 +1173,17 @@ export class BattleEngine {
       if (!ref) continue
       // 計算上の量（オーバーキル・回復の上限切りを含む）が通知されていればそれを数字にする。無ければ HP の前後差
       const computed = amounts.get(e)
-      if (computed && e.hp !== hpBefore) {
+      if (computed?.kill && e.hp < hpBefore) {
+        // 即死 (#877): 数字を持たない。amount は HP の前後差（hpBefore - hpAfter）で、表示は instantDeath を見て「たおれた」だけにする
+        hits.push({
+          target: ref,
+          kind: 'damage',
+          amount: hpBefore - e.hp,
+          hpBefore,
+          hpAfter: e.hp,
+          instantDeath: true,
+        })
+      } else if (computed && e.hp !== hpBefore) {
         const k = e.hp < hpBefore ? 'damage' : 'heal'
         hits.push({
           target: ref,
@@ -1287,6 +1303,13 @@ export function computeRowAttackDamage(
     attacker.row,
     defender.row
   )
+}
+
+/** 効果が通知した計算上の量 (#745)。`kill` は即死で倒した印（#877。量は持たない） */
+interface ComputedAmount {
+  kind: 'damage' | 'heal'
+  amount: number
+  kill?: boolean
 }
 
 /** 効果 DSL の複数ヒット (#879) が 1 ヒットごとに通知した結果。`recordEffect` が `BattleHit` 列にする */

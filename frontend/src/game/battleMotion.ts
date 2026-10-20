@@ -156,13 +156,36 @@ export interface ActionTimeline {
   duration: number
   /** 開始から命中までの ms */
   hitAt: number
+  /** 複数ヒット (#879): round と次の round の間の ms（最大 round に応じた自動調整後。単発・少ヒットは MULTI_HIT_INTERVAL_MS） */
+  hitInterval: number
 }
 
 /**
- * 複数ヒット (#879) の、ヒット（round）と次のヒットの間の ms。暫定値（設計案は 90〜120ms。実機で詰める・未決）。
- * round 無し（単発）のイベントには掛からない。
+ * 複数ヒット (#879) の、ヒット（round）と次のヒットの間の基本 ms。暫定値（設計案は 90〜120ms。実機で詰める・未決）。
+ * round 無し（単発）のイベントには掛からない。ヒットが多いときは下の自動調整で縮む。
  */
 export const MULTI_HIT_INTERVAL_MS = 100
+
+/**
+ * 複数ヒットの 1 行動の総時間（最初の命中から最後の round の命中まで）の目安 ms。暫定・未決（おすすめ案の採用）。
+ * 最大 round が TOTAL / MULTI_HIT_INTERVAL_MS（= 20）以下なら基本間隔のまま（従来と完全に同じ）。
+ */
+export const MULTI_HIT_TOTAL_MS = 2000
+
+/**
+ * 自動調整後の間隔の下限 ms。暫定・未決。MAX_HITS_PER_ACTION=99（最大 round 98）でも 2000/98 ≒ 20.4ms なので、
+ * 現行の上限では効かない安全弁（上限を引き上げたとき、命中を 1 フレーム未満に詰めない）。
+ */
+export const MULTI_HIT_MIN_INTERVAL_MS = 10
+
+/** 最大 round から、round 間の ms を決める: min(基本, 総時間 / 最大 round)。下限あり。最大 round 0 は基本値 */
+export function multiHitIntervalFor(lastRound: number): number {
+  if (!(lastRound > 0)) return MULTI_HIT_INTERVAL_MS
+  return Math.max(
+    MULTI_HIT_MIN_INTERVAL_MS,
+    Math.min(MULTI_HIT_INTERVAL_MS, MULTI_HIT_TOTAL_MS / lastRound)
+  )
+}
 
 /** ヒットの round（無ければ 0）。負・非有限・小数は 0 以上の整数に丸める */
 export function hitRound(hit: BattleHit): number {
@@ -171,8 +194,12 @@ export function hitRound(hit: BattleHit): number {
 }
 
 /** round の命中の瞬間（行動の開始からの ms）。round 0 は従来の hitAt そのまま */
-export function hitTimeOf(baseHitAt: number, round: number): number {
-  return baseHitAt + round * MULTI_HIT_INTERVAL_MS
+export function hitTimeOf(
+  baseHitAt: number,
+  round: number,
+  interval: number = MULTI_HIT_INTERVAL_MS
+): number {
+  return baseHitAt + round * interval
 }
 
 export function buildActionTimeline(
@@ -186,19 +213,29 @@ export function buildActionTimeline(
     lastRound?: number
   } = {}
 ): ActionTimeline {
-  if (kind === 'notice') return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0 }
+  if (kind === 'notice')
+    return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0, hitInterval: MULTI_HIT_INTERVAL_MS }
   const motionEnd =
     kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS : CAST_MS
   const hitAt = kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS : CAST_HIT_MS
   // のけぞり・倒れが途中で切れないよう、受ける側の動きが終わるまで次の行動を待つ
   let end = motionEnd
+  // 複数ヒットの間隔は最大 round で自動調整する（総時間が約 2 秒に収まる）
+  const hitInterval = multiHitIntervalFor(
+    Math.max(opts.lastRound ?? 0, opts.lastDamageRound ?? 0, opts.lastDownRound ?? 0)
+  )
   // 複数ヒット (#879): のけぞり・倒れ切りは、最後のダメージ・倒れるヒットの round ぶん後ろにずれる（round 無しは 0 で従来と同じ）
-  if (opts.damages) end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0) + RECOIL_MS)
+  if (opts.damages)
+    end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0, hitInterval) + RECOIL_MS)
   if (opts.downs)
-    end = Math.max(end, hitTimeOf(hitAt, opts.lastDownRound ?? 0) + RECOIL_MS + DOWN_MS)
+    end = Math.max(
+      end,
+      hitTimeOf(hitAt, opts.lastDownRound ?? 0, hitInterval) + RECOIL_MS + DOWN_MS
+    )
   // heal・miss だけの round も取りこぼさない（最大 round が 0 なら何もしない = 従来と同じ）
-  if ((opts.lastRound ?? 0) > 0) end = Math.max(end, hitTimeOf(hitAt, opts.lastRound ?? 0))
-  return { duration: end + ACTION_GAP_MS, hitAt }
+  if ((opts.lastRound ?? 0) > 0)
+    end = Math.max(end, hitTimeOf(hitAt, opts.lastRound ?? 0, hitInterval))
+  return { duration: end + ACTION_GAP_MS, hitAt, hitInterval }
 }
 
 /** 行動の記録から時間割を作る。HP が減る対象がいればのけぞり、HP 0 になる対象がいれば倒れ切るまで含める */
@@ -379,7 +416,7 @@ export function advancePlayback(
     const groups = groupHitsByRound(active.event)
     while (active.firedRounds < groups.length) {
       const g = groups[active.firedRounds]
-      const at = hitTimeOf(tl.hitAt, g.round)
+      const at = hitTimeOf(tl.hitAt, g.round, tl.hitInterval)
       if (active.elapsed < at) break
       active.firedRounds += 1
       fires.push({
@@ -460,6 +497,30 @@ export const POPUP_FONT_MAX = 56
 export function popupFontSize(unit: number): number {
   const v = Number.isFinite(unit) ? Math.round(unit * POPUP_FONT_RATIO) : 0
   return Math.min(POPUP_FONT_MAX, Math.max(POPUP_FONT_MIN, v))
+}
+
+/** ダメージ数字が基準のフォントのまま収まる文字数。ダメージ上限 9999 (#877) の 4 桁ぶん */
+export const POPUP_FULL_SIZE_CHARS = 4
+/**
+ * 数字のフォントサイズを文字数に応じて縮める (#877)。4 文字以下（ダメージ上限 9999 まで・MISS）は `baseFont` のまま、
+ * 5 文字以上（回復・吸収の 5 桁以上）は 4 文字の幅に収まるよう比例で縮め、枠の外・画面の外へはみ出さないようにする。
+ * 下限 1px は 0 や負を防ぐだけで、読める保証ではない（縁取りが 4px 固定なので小さい文字ほど縁取りの割合が増える。
+ * 基準 20px で 7 桁なら 11px、8 桁なら 10px）。
+ */
+export function fitPopupFontSize(text: string, baseFont: number): number {
+  const len = [...text].length
+  if (len <= POPUP_FULL_SIZE_CHARS) return baseFont
+  return Math.max(1, Math.floor((baseFont * POPUP_FULL_SIZE_CHARS) / len))
+}
+
+/**
+ * 縮小した数字 (#877) を、基本サイズの 1 段の中で上下中央に置くための持ち上げ量（px）。数字は文字の箱の下端に揃えるが、
+ * 箱の下端と字の下端の距離はフォントに比例するので、小さい字をそのまま置くと字の下端が基本サイズより下へ寄り、
+ * 上の段（小さい字）が下の段へ深く食い込む。(基本 − 実際) の半分だけ上げれば縮んだ字は段の中央に収まる。
+ * 縮んでいない（4 文字以下）ときは 0 で、位置は従来（#879）と完全に同じ。
+ */
+export function popupCenterOffset(baseFont: number, fontSize: number): number {
+  return Math.max(0, baseFont - fontSize) * 0.5
 }
 
 // ---------------------------------------------------------------------------

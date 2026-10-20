@@ -936,6 +936,32 @@ describe('fitHpLabel', () => {
   it('… すら入らなければ空文字', () => {
     expect(fitHpLabel(1, 1, 2, 12)).toBe('')
   })
+  // #877: 敵 HP は何万まであり得る。桁別に、収まる幅は不変・収まらない幅は最大値の桁を途中で切らない
+  const widthOf = (t: string) => estimateTextWidth(t, 12)
+  it.each([9999, 99999, 999999, 9999999])(
+    'HP 最大値 $0 のとき: 「HP 」付きで収まる幅はそのまま（入らなければ「HP 」だけ落とす）',
+    (n) => {
+      const w = widthOf(`HP ${n}/${n}`)
+      expect(fitHpLabel(n, n, w, 12)).toBe(`HP ${n}/${n}`)
+      expect(fitHpLabel(n, n, w - 0.01, 12)).toBe(`${n}/${n}`)
+    }
+  )
+  it.each([9999, 99999, 999999, 9999999])(
+    'HP 最大値 $0 のとき: 数値も入らない幅では「現在値/…」にし、最大値を途中で切らない',
+    (n) => {
+      const s = `${n}`
+      const w = widthOf(`${s}/…`)
+      expect(fitHpLabel(n, n, w, 12)).toBe(`${s}/…`)
+      // 最大値の先頭 1 桁が入る幅でも、最大値の一部（「99999/9…」）にはしない
+      const r = fitHpLabel(n, n, widthOf(`${s}/9…`), 12)
+      expect(r).toBe(`${s}/…`)
+    }
+  )
+  it('現在値だけで精一杯の幅では現在値＋…（数字は先頭から残る）', () => {
+    const r = fitHpLabel(9999999, 9999999, widthOf('9999999…'), 12)
+    expect(r.startsWith('9999999')).toBe(true)
+    expect(widthOf(r)).toBeLessThanOrEqual(widthOf('9999999…'))
+  })
 })
 
 describe('読めない幅のラベルは省く (#736)', () => {
@@ -2572,5 +2598,62 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
         enemyFootprints: [{ col: 0, row: 0, w: 2, h: 2 }],
       })
     ).toEqual(computeSideBattleLayout(base))
+  })
+})
+
+describe('computeStatusColumns: 味方 HP の桁数別 (#877)', () => {
+  const widths = [200, 280, 360, 480, 640, 800, 1280]
+  it.each([9999, 99999, 999999, 9999999])(
+    'HP 最大値 $0 のとき: 幅によらず HP 列はパネルの内側に収まり、名前列と重ならず、現在値の列は残る',
+    (maxHp) => {
+      for (const width of widths) {
+        for (const atb of [false, true]) {
+          for (const compact of [false, true]) {
+            const c = computeStatusColumns({ x: 10, width, maxHp, maxMp: 99, compact, atb })
+            const right = 10 + width - SIDE_STATUS_TEXT_PADDING
+            expect(c.hp.x).toBeGreaterThanOrEqual(10)
+            expect(c.hp.x + c.hp.w).toBeLessThanOrEqual(right + EPS)
+            expect(c.name.x + c.name.w).toBeLessThanOrEqual(c.hp.x + EPS)
+            expect(c.hp.w).toBeGreaterThanOrEqual(
+              estimateTextWidth(`${maxHp}`, SIDE_STATUS_FONT_SIZE) - EPS
+            )
+          }
+        }
+      }
+    }
+  )
+  it('桁が増えるほど HP 列は広がるが、広い窓（800 以上）では 7 桁でも見出し・最大値・MP をすべて残す', () => {
+    let prev = 0
+    for (const maxHp of [9999, 99999, 999999, 9999999]) {
+      const c = computeStatusColumns({
+        x: 0,
+        width: 800,
+        maxHp,
+        maxMp: 99,
+        compact: false,
+        atb: false,
+      })
+      expect(c.hp.w).toBeGreaterThan(prev)
+      prev = c.hp.w
+      expect(c.showLabels).toBe(true)
+      expect(c.showMaxHp).toBe(true)
+      expect(c.mp).not.toBeNull()
+    }
+  })
+  it('狭い窓（360x640 の status パネル幅 180）では、9999 で MP が消え、5 桁で見出しが消え、6 桁以上で最大値が消え、どの桁でも名前の最小幅は守る', () => {
+    const at = (maxHp: number) =>
+      computeStatusColumns({ x: 165, width: 180, maxHp, maxMp: 99, compact: false, atb: false })
+    expect(at(9999).mp).toBeNull()
+    expect(at(9999).showLabels).toBe(true)
+    expect(at(9999).showMaxHp).toBe(true)
+    expect(at(99999).showLabels).toBe(false)
+    expect(at(99999).showMaxHp).toBe(true)
+    expect(at(999999).showMaxHp).toBe(false)
+    expect(at(9999999).showMaxHp).toBe(false)
+    for (const maxHp of [9999, 99999, 999999, 9999999]) {
+      expect(at(maxHp).name.w).toBeGreaterThanOrEqual(
+        SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE - EPS
+      )
+    }
   })
 })

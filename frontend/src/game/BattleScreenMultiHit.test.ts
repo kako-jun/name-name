@@ -7,6 +7,9 @@ import type { BattleEntity } from './spellDsl'
 import {
   MULTI_HIT_INTERVAL_MS,
   POPUP_COLORS,
+  POPUP_STACK_STEP,
+  fitPopupFontSize,
+  popupCenterOffset,
   buildActionTimeline,
   eventTimeline,
 } from './battleMotion'
@@ -31,6 +34,7 @@ function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 interface Internals {
   enemyViews: { container: Container; baseX: number }[]
   popups: { text: Text; stack: number }[]
+  spawnPopup: (hit: unknown, sinceHit: number, stack?: number) => void
   playback: { queue: unknown[]; active: unknown }
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
@@ -121,6 +125,29 @@ describe('FF 式 複数ヒットの順次再生', () => {
     expect(peaks + (dxs[dxs.length - 1] > dxs[dxs.length - 2] ? 1 : 0)).toBeGreaterThanOrEqual(3)
   })
 
+  it('22 ヒット以上: のけぞりは縮んだ間隔で再トリガされる（各ヒットの直後は戻って 0 付近）', () => {
+    const { s, engine } = setup([entity('slime', { atk: 0 })])
+    engine.selectSpell({ name: 'れんぞく', mp: 1, target: '敵単体', effect: 'damage 1 回数=30' })
+    s.redraw(800, 450)
+    const tl = eventTimeline(engine.getState().events[0])
+    expect(tl.hitInterval).toBeLessThan(MULTI_HIT_INTERVAL_MS)
+    const enemy = I(s).enemyViews[0]
+    const dxs = new Map<number, number>()
+    let peak = 0
+    for (let t = 1; t <= tl.hitAt + 29 * tl.hitInterval + 5; t++) {
+      s.tick(1)
+      const d = Math.abs(enemy.container.x - enemy.baseX)
+      peak = Math.max(peak, d)
+      dxs.set(t, d)
+    }
+    expect(peak).toBeGreaterThan(0)
+    // 命中の直後（経過 1ms 未満）はのけぞりが頭から始まり直して 0 付近。間隔を渡し忘れると後半の命中が無視され、この時刻の量が大きいまま
+    for (let k = 10; k <= 29; k++) {
+      const t = Math.ceil(tl.hitAt + k * tl.hitInterval)
+      expect(dxs.get(t)).toBeLessThan(peak * 0.1)
+    }
+  })
+
   it('途中で倒れて別の敵へ移る: 発火順は配列順で、全員の HP 表示が最後に確定値になる', () => {
     const { s, engine } = setup([
       entity('a', { hp: 15, maxHp: 15, atk: 0 }),
@@ -155,6 +182,70 @@ describe('FF 式 複数ヒットの順次再生', () => {
     expect(closed).toEqual([])
     for (let t = 0; t < 6000; t++) s.tick(1)
     expect(closed).toEqual(['victory'])
+  })
+
+  describe('連続ヒットの段の間隔は縮小前の基本フォントで決まる (#877)', () => {
+    /** 同一対象に amounts を段 0,1,2… で同時に出し、各数字の y と描いたフォントサイズを返す */
+    const spawnStack = (amounts: number[]) => {
+      const { s } = setup([entity('slime', { atk: 0 })])
+      s.redraw(800, 450)
+      amounts.forEach((amount, stack) => {
+        const hit = { kind: 'heal', amount, target: { side: 'enemy', index: 0 } }
+        I(s).spawnPopup(hit, 0, stack)
+      })
+      return I(s).popups.map((p) => ({ y: p.text.y, font: Number(p.text.style.fontSize) }))
+    }
+    it('4 文字以下は従来（#879）どおり、基本フォントの 0.85 倍ずつ', () => {
+      for (const amount of [9, 9999]) {
+        const [a, , c] = spawnStack([amount, amount, amount])
+        expect(c.y).toBeLessThan(a.y)
+        expect(a.y - c.y).toBeCloseTo(2 * a.font * POPUP_STACK_STEP, 5)
+        expect(a.font).toBe(fitPopupFontSize(String(amount), a.font))
+      }
+    })
+    it('5 桁以上でも段の間隔は 4 桁と同じ（数字は縮むが間隔は基本フォント基準）', () => {
+      const base = spawnStack([9999, 9999, 9999])
+      const baseGap = base[0].y - base[2].y
+      for (const amount of [99999, 999999, 9999999]) {
+        const r = spawnStack([amount, amount, amount])
+        expect(r[0].font).toBeLessThan(base[0].font)
+        expect(r[0].y - r[2].y).toBeCloseTo(baseGap, 5)
+      }
+    })
+    it.each([
+      [[9999, 9999, 99999]],
+      [[99999, 9999, 9999]],
+      [[9999, 99999, 9999]],
+      [[999999, 9999, 99999, 9999]],
+      [[9999, 9999999, 9999, 999999]],
+    ])(
+      '桁が混在する連続ヒット %j: 段 k の位置 = 段 0 の基準 − k × 基本フォント × 0.85 − 縮小ぶんの中央寄せ（(基本 − 実際) / 2）',
+      (amounts) => {
+        const r = spawnStack(amounts)
+        const base = spawnStack([9999])[0] // 縮まない基準（段 0・4 桁）
+        amounts.forEach((_, k) => {
+          const expected =
+            base.y - k * base.font * POPUP_STACK_STEP - popupCenterOffset(base.font, r[k].font)
+          expect(r[k].y).toBeCloseTo(expected, 5)
+        })
+      }
+    )
+    it('縮んだ数字（5 桁以上）は同じ段の 4 桁より (基本 − 実際) / 2 だけ上、4 文字以下は 4 桁と完全に同じ位置', () => {
+      for (const stack of [0, 1, 3]) {
+        const amounts = Array.from({ length: stack + 1 }, () => 9999)
+        const ref = spawnStack(amounts)[stack]
+        for (const amount of [9, 99, 999]) {
+          const a = Array.from({ length: stack + 1 }, () => amount)
+          expect(spawnStack(a)[stack].y).toBe(ref.y)
+        }
+        for (const amount of [99999, 999999, 9999999]) {
+          const a = Array.from({ length: stack + 1 }, () => amount)
+          const r = spawnStack(a)[stack]
+          expect(r.font).toBeLessThan(ref.font)
+          expect(ref.y - r.y).toBeCloseTo((ref.font - r.font) / 2, 5)
+        }
+      }
+    })
   })
 
   it('ダメージ数字は 1 ヒット 9999 で頭打ち（#877）', () => {

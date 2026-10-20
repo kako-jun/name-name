@@ -52,6 +52,7 @@ export const BUILTIN_SPELLS: Record<string, BuiltinSpellFn> = {
       }
       if (rollDeath(rate, ctx.rng)) {
         t.hp = 0
+        ctx.onKill?.(t)
         log.push(`${t.name} は しんでしまった！`)
       } else {
         log.push(`${t.name} には きかなかった。`)

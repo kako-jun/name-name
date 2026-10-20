@@ -27,6 +27,8 @@ import {
   isPlaybackBusy,
   messageWindowText,
   normalizePoses,
+  fitPopupFontSize,
+  popupCenterOffset,
   popupFontSize,
   POPUP_FONT_MIN,
   POPUP_FONT_MAX,
@@ -314,6 +316,64 @@ describe('popupText / popupFontSize: 境界', () => {
     expect(popupFontSize(100)).toBe(Math.round(100 * POPUP_FONT_RATIO))
     expect(popupFontSize(POPUP_FONT_MAX / POPUP_FONT_RATIO)).toBe(POPUP_FONT_MAX)
     expect(popupFontSize(10000)).toBe(POPUP_FONT_MAX)
+  })
+})
+
+describe('fitPopupFontSize: 桁数別 (#877)', () => {
+  it('4 文字以下（上限 9999 まで・MISS）は基準のまま', () => {
+    for (const t of ['0', '9', '99', '999', '9999', 'MISS']) {
+      expect(fitPopupFontSize(t, 33)).toBe(33)
+    }
+  })
+  it('5 桁以上は 4 桁ぶんの幅に収まるよう比例で縮む', () => {
+    expect(fitPopupFontSize('99999', 40)).toBe(32)
+    expect(fitPopupFontSize('999999', 36)).toBe(24)
+    expect(fitPopupFontSize('9999999', 56)).toBe(32)
+  })
+  it('どの桁・基準でも幅（文字数×係数）は 4 桁の基準幅を越えない', () => {
+    for (const base of [POPUP_FONT_MIN, 33, POPUP_FONT_MAX]) {
+      for (let digits = 5; digits <= 12; digits++) {
+        const f = fitPopupFontSize('9'.repeat(digits), base)
+        expect(f * digits).toBeLessThanOrEqual(base * 4)
+      }
+    }
+  })
+  it('どの桁・基準でも 1 未満にならない', () => {
+    for (const base of [POPUP_FONT_MIN, 33, POPUP_FONT_MAX]) {
+      for (let digits = 5; digits <= 12; digits++) {
+        expect(fitPopupFontSize('9'.repeat(digits), base)).toBeGreaterThanOrEqual(1)
+      }
+    }
+  })
+  it('極端に長い文字列（100 文字）でも下限 1 で止まる', () => {
+    expect(fitPopupFontSize('9'.repeat(100), 20)).toBe(1)
+  })
+  it('popupText と組み合わせても 9999 以下は不変', () => {
+    const t = popupText({ kind: 'damage', amount: 9999 })
+    expect(fitPopupFontSize(t, popupFontSize(96))).toBe(popupFontSize(96))
+  })
+})
+
+describe('popupCenterOffset: 縮んだ数字を基本サイズの段の中央に置く (#877)', () => {
+  it('縮んでいない（実際 = 基本）ときは 0 で、位置は従来と完全に同じ（-0 でもない）', () => {
+    for (const f of [20, 33, 56]) expect(Object.is(popupCenterOffset(f, f), 0)).toBe(true)
+  })
+  it('縮んだぶんの半分', () => {
+    expect(popupCenterOffset(20, 16)).toBe(2)
+    expect(popupCenterOffset(56, 32)).toBe(12)
+  })
+  it('実際が基本以上（想定外）でも負にならない', () => {
+    expect(popupCenterOffset(20, 30)).toBe(0)
+  })
+  it('fitPopupFontSize と組み合わせて、4 文字以下は常に 0・5 文字以上は正', () => {
+    for (const base of [20, 33, 56]) {
+      for (const t of ['9', '9999', 'MISS']) {
+        expect(popupCenterOffset(base, fitPopupFontSize(t, base))).toBe(0)
+      }
+      for (const t of ['99999', '9999999']) {
+        expect(popupCenterOffset(base, fitPopupFontSize(t, base))).toBeGreaterThan(0)
+      }
+    }
   })
 })
 
