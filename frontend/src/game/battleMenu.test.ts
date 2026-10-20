@@ -6,6 +6,7 @@ import {
   cancel,
   confirm,
   isReviveEntry,
+  menuHint,
   menuKeyAction,
   refitList,
   scrollList,
@@ -469,5 +470,44 @@ describe('わざ（kind: skill）(#873)', () => {
     })
     const all = confirm(setListCursor(open, 1, ctx), ctx)
     expect(confirm(all.stack, ctx).action).toEqual({ kind: 'skill', entryIndex: 1 })
+  })
+})
+
+describe('menuHint: 常に出す操作の案内 (#806)', () => {
+  const always = () => true
+  const list = openList(EMPTY_STACK, 'spell', ctxOf())[0]
+  const single: TargetWindow = {
+    type: 'target',
+    kind: 'spell',
+    entryIndex: 0,
+    spec: { side: 'enemy', scope: 'single' },
+    side: 'enemy',
+    cursor: 0,
+  }
+  const all: TargetWindow = { ...single, spec: { side: 'enemy', scope: 'all' } }
+
+  it('局面ごとに違う文で、どの文もキーとタップの両方を書く（コマンド窓の grid はタップだけ）', () => {
+    const cmdCross = menuHint(undefined, true, always)
+    const cmdGrid = menuHint(undefined, false, always)
+    expect(cmdCross).toContain('矢印キー')
+    expect(cmdGrid).not.toContain('矢印')
+    for (const t of [cmdCross, cmdGrid]) expect(t).toContain('タップ')
+    for (const w of [list, single, all]) {
+      const t = menuHint(w, true, always)
+      expect(t).toContain('Enter')
+      expect(t).toContain('Esc')
+      expect(t).toContain('タップ')
+    }
+    expect(menuHint(single, true, always)).toContain('たいしょう')
+    expect(menuHint(all, true, always)).not.toContain('↑↓') // 全体は選ぶ対象が無い
+    expect(new Set([menuHint(list, true, always), menuHint(single, true, always)]).size).toBe(2)
+  })
+
+  it('長い文が収まらなければ短い文、短い文も収まらなければ空', () => {
+    const long = menuHint(list, true, always)
+    const short = menuHint(list, true, (t) => t.length < long.length)
+    expect(short).not.toBe('')
+    expect(short.length).toBeLessThan(long.length)
+    expect(menuHint(list, true, () => false)).toBe('')
   })
 })

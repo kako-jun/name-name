@@ -69,6 +69,7 @@ import {
   buildMenuRows,
   cancel as cancelMenuWindow,
   confirm as confirmMenuWindow,
+  menuHint,
   menuKeyAction,
   moveCursor as moveMenuCursor,
   openList,
@@ -89,7 +90,7 @@ import {
   type TargetSide,
 } from './battleMenu'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
-import { BattleMenuLayer } from './BattleMenuLayer'
+import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
   MOTION_EXTENT_PAD,
   MOTION_SCREEN_MARGIN,
@@ -126,6 +127,7 @@ import {
   SIDE_LABEL_LINE_HEIGHT,
   SIDE_LOG_LINE_HEIGHT,
   computeContainFitRect,
+  estimateTextWidth,
   computeFallbackRect,
   computeSideBattleLayout,
   computeAcrylicBoxSize,
@@ -401,7 +403,7 @@ export interface BattleScreenOptions {
   /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッド時だけ効く */
   enemyWindowOverlap?: number
   /**
-   * 候補窓に出す呪文・アイテム (#204)。`commandLayout` が `cross` のとき（かつ 1 件以上あるとき）だけ有効で、
+   * 候補窓に出す呪文・わざ・アイテム (#204 / #873)。`side` のとき（かつ 1 件以上あるとき）だけ有効で（配置は `grid` でも `cross` でもよい。#806）、
    * 「わざ」「じゅもん」「どうぐ」を選ぶと一覧の窓が重なって開く（FF5/6 風の窓の階層。わざは #873）。MP が足りない呪文はグレー。
    * 未指定・空は従来どおり（じゅもん・どうぐは何も起きない）。有効なとき、ATB の wait は候補窓を開いている間だけ止まる
    */
@@ -1118,7 +1120,7 @@ export class BattleScreen extends Container {
       case 'skill':
       case 'spell':
       case 'item':
-        // 候補窓 (#204): cross で呪文・アイテムが渡されているときだけ一覧の窓を開く。
+        // 候補窓 (#204, #806): 呪文・わざ・アイテムが渡されている side なら（grid でも cross でも）一覧の窓を開く。
         // それ以外は従来どおり識別ログのみ（戦闘エンジン側の log には積まない）
         if (this.openMenu(id)) return
         console.info(`[BattleScreen] command '${id}' は #175 で実装`)
@@ -1310,9 +1312,13 @@ export class BattleScreen extends Container {
     return s.phase === 'party-input'
   }
 
-  /** `cross` のとき、矢印キー 1 押しでその方向のコマンドを決定するリスナーを付ける (#204)。grid には付けない */
+  /** キーリスナーを付ける。`cross` なら矢印キー 1 押しでその方向のコマンドを決定する (#204)。grid は候補窓が開くときだけ付け、窓の操作キーだけ受ける（コマンドの矢印キー決定はしない #806） */
   private attachCrossKeys(): void {
-    if (this.commandLayout !== 'cross' || typeof globalThis.addEventListener !== 'function') return
+    if (
+      (this.commandLayout !== 'cross' && !this.hasMenuData()) ||
+      typeof globalThis.addEventListener !== 'function'
+    )
+      return
     this.heldKeys = new Set(this.opts.initialHeldKeys ?? [])
     this.keyListener = (e: KeyboardEvent) => {
       if (this.destroyedFlag || this.closedFlag) return
@@ -1326,6 +1332,8 @@ export class BattleScreen extends Container {
         this.handleMenuKey(e)
         return
       }
+      // grid（#806）は候補窓のキー操作だけ受ける。コマンドの矢印キー決定は cross のとき
+      if (this.commandLayout !== 'cross') return
       const id = crossKeyToCommandId(e.key, this.opts.commands)
       if (!id) return
       // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
@@ -2131,15 +2139,9 @@ export class BattleScreen extends Container {
 
   // ===== 候補窓 (#204) =====
 
-  /** cross で呪文・アイテムが渡されているときだけ候補窓を有効にし、ATB の wait を「候補窓を開いている間だけ停止」にする */
+  /** side で呪文・わざ・アイテムが渡されているとき（grid でも cross でも）だけ候補窓を有効にし、ATB の wait を「候補窓を開いている間だけ停止」にする */
   private buildMenu(): void {
-    const m = this.opts.menu
-    const hasData =
-      !!m &&
-      ((m.items?.length ?? 0) > 0 ||
-        Object.values(m.spells ?? {}).some((l) => l.length > 0) ||
-        Object.values(m.skills ?? {}).some((l) => l.length > 0))
-    this.menuEnabled = this.commandLayout === 'cross' && hasData
+    this.menuEnabled = this.hasMenuData()
     if (!this.menuEnabled) {
       // 同じエンジンを使い回す作り直しで、前の画面の設定を持ち越さない
       this.engine.setAtbWaitScope('command')
@@ -2169,6 +2171,18 @@ export class BattleScreen extends Container {
     })
     this.addChild(this.menuLayer)
     this.engine.setAtbWaitScope('menu')
+  }
+
+  /** 候補窓を使えるか: `side` で、呪文・わざ・アイテムが 1 件以上渡されている（配置が grid でも使える。#806） */
+  private hasMenuData(): boolean {
+    const m = this.opts.menu
+    return (
+      this.layoutMode === 'side' &&
+      !!m &&
+      ((m.items?.length ?? 0) > 0 ||
+        Object.values(m.spells ?? {}).some((l) => l.length > 0) ||
+        Object.values(m.skills ?? {}).some((l) => l.length > 0))
+    )
   }
 
   private menuEntries(
@@ -2323,7 +2337,23 @@ export class BattleScreen extends Container {
     if (ctx) this.menuStack = refitList(this.menuStack, ctx)
     const view =
       ctx && this.menuGeometry ? buildMenuView(this.menuStack, ctx, this.menuGeometry) : []
-    this.menuLayer.update(view, this.screenWidth, this.screenHeight)
+    // 操作の案内 (#806)。窓が開いていなければ、コマンドを選べる局面（入力待ち）だけ出す
+    const rects = view.flatMap((v) => (v.type === 'list' ? [v.rect] : []))
+    const top = this.menuStack[this.menuStack.length - 1]
+    const s = this.engine.getState()
+    const hint =
+      top || (!this.engine.isOver() && s.phase === 'party-input')
+        ? menuHint(top, this.commandLayout === 'cross', (text) => {
+            const w = estimateTextWidth(text, HINT_FONT_SIZE)
+            // 画面に収まり、かつ窓（下端の余白まで伸びる一覧窓）を避けて置けること
+            return (
+              w <= this.screenWidth - 16 &&
+              placeHint({ w, h: HINT_LINE_HEIGHT }, this.screenWidth, this.screenHeight, rects) !==
+                null
+            )
+          })
+        : ''
+    this.menuLayer.update(view, this.screenWidth, this.screenHeight, hint)
     this.updateSelectMarks()
     // 他の表示物（ログ行など）が後から足されても、窓は常に最前面
     this.addChild(this.menuLayer)

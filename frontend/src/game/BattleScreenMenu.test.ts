@@ -5,10 +5,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // Container に eventMode / isInteractive を足す（実アプリでは Application がイベントシステムを登録する）
 import 'pixi.js/events'
-import { EventBoundary, Graphics, Sprite, Texture, TextureSource, type Container } from 'pixi.js'
+import {
+  EventBoundary,
+  Graphics,
+  Rectangle,
+  Sprite,
+  Texture,
+  TextureSource,
+  type Container,
+} from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import { buildMenuRows, type BattleMenuData, type MenuStack } from './battleMenu'
+import { estimateTextWidth } from './battleLayout'
+import { HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import { RESULT_SKIP_GUARD_MS } from './battleResult'
 import type { BattleEntity } from './spellDsl'
 
@@ -139,12 +149,13 @@ describe('窓のスタックとキャンセル', () => {
 
   it('表示用のレイヤーが窓の枚数に合わせて出る・消える', () => {
     const { s } = build()
-    const layer = I(s).menuLayer!
-    expect(layer.visible).toBe(false)
+    // 窓が無い間は全面のキャンセル受け（backdrop）が無く、下のコマンドへのタップを奪わない
+    const backdrop = () => (I(s).menuLayer as unknown as { backdrop: Container }).backdrop.hitArea
+    expect(backdrop()).toBeNull()
     press('ArrowLeft')
-    expect(layer.visible).toBe(true)
+    expect(backdrop()).not.toBeNull()
     press('Escape')
-    expect(layer.visible).toBe(false)
+    expect(backdrop()).toBeNull()
   })
 })
 
@@ -195,11 +206,12 @@ describe('MP の消費とグレーアウト', () => {
 })
 
 describe('設定で有効化するまで従来どおり', () => {
-  it('grid では候補窓は開かない（矢印キーも効かない）', () => {
-    const { s } = build({ commandLayout: 'grid' })
-    press('ArrowLeft')
+  it('menu 未指定の grid は従来どおり（候補窓なし・矢印キーも効かない・キーを奪わない）', () => {
+    const { s } = build({ commandLayout: 'grid', menu: undefined })
+    const e = press('ArrowLeft')
     expect(types(s)).toEqual([])
     expect(I(s).menuLayer).toBeNull()
+    expect(e.defaultPrevented).toBe(false)
   })
 
   it('front では候補窓は開かない', () => {
@@ -304,7 +316,7 @@ describe('ATB の wait: 候補窓を開いている間だけ停止', () => {
   })
 
   it('候補窓を使わない構成（grid）の wait は従来どおりコマンド待ちの間ずっと止まる', () => {
-    const { engine, s } = build({ commandLayout: 'grid' }, ATB)
+    const { engine, s } = build({ commandLayout: 'grid', menu: undefined }, ATB)
     s.tick(500)
     expect(engine.getState().atb!.enemyGauge[0]).toBe(0)
   })
@@ -345,7 +357,6 @@ describe('ATB の wait: 候補窓を開いている間だけ停止', () => {
     const grid = new BattleScreen(engine, 800, 450, {
       layout: 'side',
       commandLayout: 'grid',
-      menu: structuredClone(MENU),
     })
     created.push(grid)
     grid.tick(500)
@@ -1201,5 +1212,149 @@ describe('コマンド構成 battle_commands と「わざ」(#873)', () => {
     first.emit('pointertap', {} as never)
     expect(types(s)).toEqual(['list'])
     expect(I(s).menuStack[0]).toMatchObject({ kind: 'skill' })
+  })
+})
+
+describe('placeHint: 案内の置き場所 (#806)', () => {
+  const size = { w: 100, h: 13 }
+  it('窓が無い・離れている・下端の余白に届かない窓なら、画面下端の中央', () => {
+    expect(placeHint(size, 400, 300, [])).toEqual({ cx: 200, bottom: 297 })
+    expect(placeHint(size, 400, 300, [{ x: 0, y: 100, w: 100, h: 170 }])).toEqual({
+      cx: 200,
+      bottom: 297,
+    })
+  })
+  it('窓が案内に食い込むときは、窓の横の空きの中央へ逃がす（右 → 左の順）', () => {
+    // 窓 x=100..300 は中央の案内（150..250）に重なる。右の空き 302..392 は 90 しかなく 100 入らない
+    expect(placeHint(size, 400, 300, [{ x: 100, y: 100, w: 200, h: 190 }])).toBeNull()
+    const right = placeHint(size, 400, 300, [{ x: 0, y: 100, w: 190, h: 190 }])
+    expect(right).toEqual({ cx: (192 + 392) / 2, bottom: 297 })
+    const left = placeHint(size, 400, 300, [{ x: 210, y: 100, w: 190, h: 190 }])
+    expect(left).toEqual({ cx: (8 + 208) / 2, bottom: 297 })
+  })
+  it('横に逃げられず、窓の下に収まるなら窓の下端 + 2 の下。収まらなければ出さない(null)', () => {
+    expect(placeHint(size, 400, 300, [{ x: 8, y: 100, w: 384, h: 183 }])).toEqual({
+      cx: 200,
+      bottom: 298,
+    })
+    expect(placeHint(size, 400, 300, [{ x: 8, y: 100, w: 384, h: 190 }])).toBeNull()
+  })
+})
+
+describe('grid でも候補窓が使える・操作の案内 (#806)', () => {
+  const commandHit = (s: BattleScreen, i: number) =>
+    (s as unknown as { commands: Array<{ hit: Container }> }).commands[i].hit
+  const hintText = (s: BattleScreen): string[] => {
+    const layer = I(s).menuLayer as unknown as { body: Container }
+    return layer.body.children.flatMap((c) => ('text' in c ? [(c as { text: string }).text] : []))
+  }
+
+  it('grid: コマンドのタップで一覧が開き、矢印キー・Enter・Escape が窓の操作になる。矢印キーでコマンドは決まらない', () => {
+    const { s, engine } = build({ commandLayout: 'grid' })
+    const e = press('ArrowLeft')
+    expect(types(s)).toEqual([])
+    expect(e.defaultPrevented).toBe(false) // grid ではコマンド用の矢印キーを奪わない
+    commandHit(s, 1).emit('pointertap', {} as never) // 並びの 2 番目 = じゅもん
+    expect(types(s)).toEqual(['list'])
+    const down = press('ArrowDown')
+    expect(down.defaultPrevented).toBe(true)
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    press('Enter')
+    expect(types(s)).toEqual([])
+    expect(engine.getState().party[0].mp).toBeLessThan(5)
+  })
+
+  it('grid: 候補窓を開いている間だけ ATB の wait が止まる', () => {
+    const ATB = {
+      atb: { mode: 'wait' as const, initialGauges: { party: [1000], enemies: [0, 0] } },
+      rng: () => 0,
+    }
+    const { s, engine } = build({ commandLayout: 'grid' }, ATB)
+    commandHit(s, 1).emit('pointertap', {} as never)
+    s.tick(500)
+    expect(engine.getState().atb!.enemyGauge[0]).toBe(0)
+  })
+
+  it('front では grid でも候補窓は開かない', () => {
+    const { s } = build({ commandLayout: 'grid', layout: 'front' })
+    expect(I(s).menuLayer).toBeNull()
+  })
+
+  it('操作の案内: コマンド選択中 → 一覧 → 対象で文言が変わり、どれもキーとタップの両方を書く', () => {
+    const { s } = build()
+    expect(I(s).menuLayer!.visible).toBe(true) // 窓が無くても案内のために表示される
+    expect(hintText(s)[0]).toContain('矢印キー')
+    expect(hintText(s)[0]).toContain('タップ')
+    press('ArrowLeft')
+    expect(hintText(s)[0]).toMatch(/Enter.*タップ.*Esc/)
+    press('Enter')
+    expect(hintText(s)[0]).toMatch(/たいしょう.*Enter.*Esc/)
+    press('Escape')
+    press('Escape')
+    expect(hintText(s)[0]).toContain('コマンド')
+  })
+
+  it('操作の案内: grid のコマンド選択中はタップだけを案内する。menu の無い画面には出ない', () => {
+    const { s } = build({ commandLayout: 'grid' })
+    expect(hintText(s)[0]).not.toContain('矢印')
+    const none = build({ menu: undefined })
+    expect(none.s.children.some((c) => c === I(none.s).menuLayer)).toBe(false)
+  })
+
+  it('操作の案内: 狭い画面では短い文に落ち、さらに狭ければ出さない', () => {
+    const { s } = build()
+    s.redraw(150, 450)
+    const t = hintText(s)[0] ?? ''
+    expect(t.length).toBeLessThan('矢印キー・タップ: コマンドをえらぶ'.length)
+    s.redraw(40, 450)
+    expect(hintText(s)).toEqual([])
+  })
+
+  it.each([
+    [800, 450],
+    [360, 640],
+    [640, 360],
+    [480, 270],
+  ])('操作の案内: 一覧窓・対象選択のどちらでも、案内は窓と重ならない（%i×%i）', (w, h) => {
+    const { s } = build()
+    s.redraw(w, h)
+    const rects = (): { win: Rectangle[]; hint: Rectangle[] } => {
+      const layer = I(s).menuLayer as unknown as { body: Container }
+      const win: Rectangle[] = []
+      const hint: Rectangle[] = []
+      for (const c of layer.body.children) {
+        if ('text' in c) {
+          // jsdom には文字の計測が無いので、配置と同じ見積もり（幅・高さ）で矩形を作る
+          const tw = estimateTextWidth((c as { text: string }).text, HINT_FONT_SIZE)
+          hint.push(new Rectangle(c.x - tw / 2, c.y - HINT_LINE_HEIGHT, tw, HINT_LINE_HEIGHT))
+        } else win.push((c as Container).children[0].getBounds().rectangle)
+      }
+      return { win, hint }
+    }
+    const overlap = (a: Rectangle, b: Rectangle) =>
+      a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    for (const key of ['ArrowLeft', 'Enter']) {
+      press(key) // 一覧 → 対象
+      const { win, hint } = rects()
+      for (const hr of hint) {
+        expect(hr.y + hr.height).toBeLessThanOrEqual(h + 0.5) // 画面内
+        for (const wr of win) expect(overlap(hr, wr)).toBe(false)
+      }
+    }
+  })
+
+  it('操作の案内: 長い文は窓を避けて置けないが短い文なら置けるとき、短い文に落とす', () => {
+    const { s } = build()
+    s.redraw(600, 450)
+    press('ArrowLeft')
+    expect(hintText(s)).toEqual(['↑↓ えらぶ  Enter けってい  Esc もどる'])
+  })
+
+  it('操作の案内: 戦闘が終わったら（入力待ちでなければ）コマンド選択の案内は消える', () => {
+    const { s, engine } = build()
+    ;(engine.getState() as { phase: string }).phase = 'victory'
+    s.redraw(800, 450)
+    expect(hintText(s)).toEqual([])
   })
 })
