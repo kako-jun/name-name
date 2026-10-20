@@ -122,8 +122,8 @@ export class Stage {
    * 新しいイベント列の開始 (`resetAndStartEvents`) の演出部。順序:
    * 1) 揺れ・フラッシュ/フェードのタイマー停止とオーバーレイ消去（stage 位置は戻さない＝#913 の現状維持）
    * 2) 背景: 持ち越すなら進行中のロードを無効化しクロスフェードを畳む／持ち越さないなら背景・地色を捨てる
-   *    （ロード無効化のトークンを進めるのは持ち越し時のみ…ではなく、どちらの経路でもトークンは進む。
-   *     `clearBackground` も `cancelPendingLoad` を含む。旧実装と同じ）
+   *    （ロード無効化のトークンはどちらの経路でも進む。持ち越し時は `cancelPendingLoad` 単独、
+   *     非持ち越しは `clearBackground`→`forgetBackground` の中。旧実装と同じ）
    * 3) 紙人形輪郭: 持ち越さないときだけ通常表示へ戻す
    * 4) 暗転解除 → カメラ既定 → スクリム退避状態のリセット
    * 持ち越し判定は `policy.preserveBackgroundForTransition` だけを見る（個別フラグを増やさない）。

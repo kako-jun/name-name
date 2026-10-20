@@ -248,9 +248,27 @@ interface BgInternals {
 }
 const inner = (rig: Rig) => rig.bg as unknown as BgInternals
 
+interface FxInternals {
+  effectOverlay: { visible: boolean; alpha: number } | null
+  novelScrim: { visible: boolean; alpha: number } | null
+  blackoutOverlay: { visible: boolean; alpha: number }
+}
+/** 画面効果の3枚のオーバーレイの表示状態（呼び出し列でなく、結果の状態で比べる）。 */
+function overlays(rig: Rig) {
+  const fx = rig.fx as unknown as FxInternals
+  const pick = (g: { visible: boolean; alpha: number } | null) =>
+    g ? { visible: g.visible, alpha: Math.round(g.alpha * 1e6) / 1e6 } : null
+  return {
+    effectOverlay: pick(fx.effectOverlay),
+    novelScrim: pick(fx.novelScrim),
+    blackoutOverlay: pick(fx.blackoutOverlay),
+  }
+}
+
 function observe(rig: Rig) {
   return {
     snapshot: rig.snapshot(),
+    overlays: overlays(rig),
     entries: inner(rig).bgEntries.map((e) => Math.round(e.sprite.alpha * 1e6) / 1e6),
     token: inner(rig).bgLoadToken,
     crossfadeTimer: inner(rig).bgCrossfadeTimer !== null,
@@ -264,11 +282,7 @@ function observe(rig: Rig) {
 type Prepare = (rig: Rig, advance: (ms: number) => void) => void
 
 /** 新旧を同時に作り、同じ前状態を与えてから、各フレームで状態を比べる。 */
-function compare(
-  prepare: Prepare,
-  op: (rig: Rig) => void,
-  options: { dropNewOnly?: string[] } = {}
-) {
+function compare(prepare: Prepare, op: (rig: Rig) => void) {
   vi.useFakeTimers()
   vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
   const oldRig = makeOldRig()
@@ -302,9 +316,7 @@ function compare(
   // 操作
   for (const r of rigs) op(r)
   const oldLog = oldRig.world.log.slice()
-  const dropNewOnly = new Set(options.dropNewOnly ?? [])
-  const newLog = newRig.world.log.filter((l) => !dropNewOnly.has(l))
-  expect(newLog).toEqual(oldLog)
+  expect(newRig.world.log).toEqual(oldLog)
   expect(observe(newRig)).toEqual(observe(oldRig))
   // 以後 1 フレームずつ 400ms 進め、毎フレーム同じ状態であること
   for (let f = 0; f < 24; f++) {
@@ -409,14 +421,10 @@ describe('Stage × 旧実装の等価性 (#828 7c)', () => {
       // 新実装の cancelAllTimers は背景クロスフェードのタイマーも止める（bg.cancelTimers）。旧 destroy は
       // fx.stopAllTimers だけで、背景のタイマーは後段の clearBackgroundEntries が止めていた。同一の同期区間内なので
       // 観測できる差はなく、最終状態（保留タイマー 0・entries 空）が一致することで担保する。
-      compare(
-        prep,
-        (r) => {
-          r.destroyTimers()
-          r.destroyRelease()
-        },
-        { dropNewOnly: [] }
-      )
+      compare(prep, (r) => {
+        r.destroyTimers()
+        r.destroyRelease()
+      })
     })
   }
 
