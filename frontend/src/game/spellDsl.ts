@@ -11,7 +11,9 @@
  * 文法（最低セット、段階的に拡張）:
  *   heal {min}..{max}              # 一様乱数で min..max を回復
  *   heal_full                      # 完全回復
- *   damage {min}..{max} [type=...] # 一様乱数で min..max のダメージ。type は耐性計算用
+ *   damage {min}..{max} [type=...] [回数=N]
+ *                                  # 一様乱数で min..max のダメージ。type は耐性計算用。
+ *                                  # 回数=N は 1 回の行動の中でヒットを N 回に増やす (#879。damage 専用)
  *   damage_full                    # 即死
  *   buff {stat}=+{n} duration={t}  # ATK+/DEF+/AGI+ 一定ターン強化
  *   debuff {stat}=-{n} duration={t}
@@ -46,6 +48,12 @@ export type EffectKind =
   | 'escape_battle'
   | 'escape_dungeon'
 
+/**
+ * 1 回の行動に含められるヒット数の上限（`回数=` の上限）(#879)。
+ * 暫定値: #877 が `battleLimits.ts` に `MAX_HITS_PER_ACTION` を作るので、入ったらこの定数をそちらへ移す。
+ */
+export const MAX_HITS_PER_ACTION = 99
+
 export type StatKey = 'hp' | 'mp' | 'atk' | 'def' | 'agi'
 
 export interface ParsedEffect {
@@ -56,6 +64,13 @@ export interface ParsedEffect {
   max?: number
   /** damage の系統（fire / ice / holy / breath 等）。耐性計算用 */
   type?: string
+  /**
+   * damage のヒット数（`回数=N`、2 以上のときだけ付く。未指定・1 は付かない＝従来の経路）(#879)。
+   * 上限は `MAX_HITS_PER_ACTION`
+   */
+  count?: number
+  /** パース時の警告（`applyEffect` が戦闘ログに `(警告: …)` として出す。無ければ付かない）(#879) */
+  warnings?: string[]
   /** buff/debuff のターゲット ステータス */
   stat?: StatKey
   /** buff/debuff の増減量（`+5` / `-3`） */
@@ -79,12 +94,33 @@ export interface ParsedEffect {
  *   parseEffect("escape_battle")           → { kind: 'escape_battle' }
  */
 export function parseEffect(input: string): ParsedEffect | null {
+  const parsed = parseEffectInner(input)
+  if (!parsed) return null
+  // `回数=` は damage 専用 (#879)。damage 以外に付いていたら無視して警告する（damage 自身の不正値は parseDamage 側で警告済み）
+  if (
+    parsed.kind !== 'damage' &&
+    input
+      .trim()
+      .split(/\s+/)
+      .some((t) => t.startsWith(COUNT_KEY + '='))
+  ) {
+    parsed.warnings = [...(parsed.warnings ?? []), '回数= は damage 専用のため無視した']
+  }
+  return parsed
+}
+
+/** `damage` の「ヒット数」キー (#879)。`hits` は敵 AI の被弾記憶と被るので使わない */
+const COUNT_KEY = '回数'
+
+function parseEffectInner(input: string): ParsedEffect | null {
   const trimmed = input.trim()
   if (trimmed.length === 0) return null
 
   // 単独動詞のキーワード
   if (trimmed === 'heal_full') return { kind: 'heal_full' }
   if (trimmed === 'damage_full') return { kind: 'damage_full' }
+  // `damage_full 回数=3` は回数を無視（警告は parseEffect が付ける）。回数以外の余計な語は従来どおり不正
+  if (/^damage_full(\s+回数=\S*)+$/.test(trimmed)) return { kind: 'damage_full' }
   if (trimmed === 'escape_battle') return { kind: 'escape_battle' }
   if (trimmed === 'escape_dungeon') return { kind: 'escape_dungeon' }
 
@@ -104,6 +140,11 @@ export function parseEffect(input: string): ParsedEffect | null {
     for (const t of rest.slice(1)) {
       const [k, v] = splitKv(t)
       if (k === 'type' && v) out.type = v
+      if (k === COUNT_KEY) {
+        const c = parseHitCount(v)
+        if (c.warning) out.warnings = [...(out.warnings ?? []), c.warning]
+        if (c.count > 1) out.count = c.count
+      }
     }
     return out
   }
@@ -164,6 +205,25 @@ function parseRange(raw: string | undefined): { min: number; max: number } | nul
   return null
 }
 
+/**
+ * `回数=` の値を解釈する (#879)。正の整数だけ有効（0・負・小数・数字以外は警告して 1＝従来どおり）。
+ * `MAX_HITS_PER_ACTION` を超えたら上限に切り詰めて警告する。範囲指定（`2..4`）は未対応（不正値として警告）
+ */
+function parseHitCount(raw: string | undefined): { count: number; warning?: string } {
+  if (raw === undefined || !/^\d+$/.test(raw)) {
+    return { count: 1, warning: `回数=${raw ?? ''} は正の整数でないため 1 回にした` }
+  }
+  const n = Number(raw)
+  if (n < 1) return { count: 1, warning: `回数=${raw} は 1 以上でないため 1 回にした` }
+  if (n > MAX_HITS_PER_ACTION) {
+    return {
+      count: MAX_HITS_PER_ACTION,
+      warning: `回数=${raw} は上限 ${MAX_HITS_PER_ACTION} を超えたため ${MAX_HITS_PER_ACTION} 回にした`,
+    }
+  }
+  return { count: n }
+}
+
 function splitKv(token: string): [string, string | undefined] {
   const eq = token.indexOf('=')
   if (eq < 0) return [token, undefined]
@@ -197,6 +257,22 @@ export interface EffectContext {
    * 通知しない効果（builtin など）は呼び出し側が HP の前後差で代用する。
    */
   onAmount?: (target: BattleEntity, kind: 'damage' | 'heal', amount: number) => void
+  /**
+   * 複数ヒットの標的の候補 (#879)。単体対象の技が `回数=N` のとき、標的が途中で倒れたら、ここ（行動の相手陣営の全員。
+   * 並び順どおり先頭の生存者）へ残りのヒットを回す。エンジンが渡す。未指定は `targets` で代用（＝乗り換え先なし）
+   */
+  pool?: BattleEntity[]
+  /**
+   * 複数ヒット（`回数=N` で N>=2）の 1 ヒットごとの通知 (#879)。呼ばれる順が再生順。
+   * `round` は 0 始まりのヒット番号（全体対象は巡の番号）。`miss` は無効（耐性 0・属性無効）など HP が動かないヒット。
+   * `回数` を使わない効果では呼ばれない（従来の `onAmount` と HP 前後差の経路のまま）。`onAmount` は複数ヒットでも従来どおり呼ぶ
+   */
+  onHit?: (
+    target: BattleEntity,
+    kind: 'damage' | 'heal' | 'miss',
+    amount: number,
+    round: number
+  ) => void
 }
 
 /** 状態異常の日本語名 → 効果 DSL の `status` が書く英語名（`BattleEntity.status` のキー）。敵 AI の `状態=` 条件がどちらの名前でも一致させるのに使う */
@@ -289,6 +365,14 @@ export type BattleRow = 'front' | 'back'
  * ログに `(警告: ...)` を入れて呼び出し側が表示できるようにする。
  */
 export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] {
+  // パース時の警告（`回数=` の不正値など）は、効果のログの前に `(警告: …)` として出す (#879)
+  const warnings = (effect.warnings ?? []).map((w) => `(警告: ${w})`)
+  return warnings.length > 0
+    ? [...warnings, ...applyEffectBody(effect, ctx)]
+    : applyEffectBody(effect, ctx)
+}
+
+function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
   const log: string[] = []
   switch (effect.kind) {
     case 'heal':
@@ -312,11 +396,11 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
     }
     case 'damage':
     case 'damage_full': {
-      const base =
-        effect.kind === 'damage_full'
-          ? Infinity
-          : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
-      for (const t of ctx.targets) {
+      // 複数ヒット (#879)。`回数=N`（N>=2）のときだけ onHit でヒットごとに通知する。未指定・1 は従来と同じ経路
+      // （基礎値の抽選は 1 回・rng 消費・ログとも不変）
+      const multi = effect.kind === 'damage' && (effect.count ?? 1) > 1
+      /** 対象 1 体への 1 ヒット。`base` は計算済みの基礎ダメージ（damage_full は Infinity）、`round` はヒット番号 */
+      const hitOne = (t: BattleEntity, base: number, round: number): void => {
         // 属性相性 (#872)。吸収 > 無効 > 半減 > 弱点で該当した時点で打ち切り、どれにも該当しなければ下の従来の resist へ。
         // 即死 (damage_full) は属性 id `death` を見て成功率を変える（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 DEATH_CHANCE_CAP〉。既定は 100%）
         const kind = resolveAffinity(
@@ -326,28 +410,34 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
         if (effect.kind === 'damage_full') {
           if (!rollDeath(deathSuccessRate(kind, 1), ctx.rng)) {
             log.push(`${t.name} には きかなかった！`)
-            continue
+            return
           }
         } else if (kind === 'absorb') {
           // 吸収: 計算したダメージ量だけ回復する（最大 HP で切る。倒れている対象は生き返らせない）
           // 計算量が 0 のときは回復も吸収ログも出さない。通知も無いので、戦闘側は HP が変わらない対象を MISS（hits に miss）にする
+          // 複数ヒットでは、吸収したそのヒットだけが heal になる (#879)
           if (base > 0) {
             if (t.hp > 0) t.hp = Math.min(t.maxHp, t.hp + base)
             ctx.onAmount?.(t, 'heal', base)
+            if (multi) ctx.onHit?.(t, 'heal', base, round)
             log.push(`${t.name} は ${base} のダメージを吸収した！`)
+          } else if (multi) {
+            ctx.onHit?.(t, 'miss', 0, round)
           }
-          continue
+          return
         } else if (kind === 'nullify') {
           // 無効: ダメージ 0・通知なし（戦闘側で MISS）。追加効果は無い
+          if (multi) ctx.onHit?.(t, 'miss', 0, round)
           log.push(`${t.name} には きかなかった！`)
-          continue
+          return
         } else if (kind === 'halve' || kind === 'weak') {
           const dealt = applyAffinityToDamage(kind, base)
           t.hp = Math.max(0, t.hp - dealt)
           ctx.onAmount?.(t, 'damage', dealt)
+          if (multi) ctx.onHit?.(t, 'damage', dealt, round)
           log.push(`${t.name} に ${dealt} のダメージ！`)
           if (t.hp === 0) log.push(`${t.name} は たおれた！`)
-          continue
+          return
         }
         // own-property のみ見る (#368)。素朴な `t.resist?.[effect.type]` は Object.prototype も
         // 辿ってしまい、DSL の `type=...` が自由記述の effect.type が `constructor` 等と一致すると
@@ -361,8 +451,44 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
         t.hp = Math.max(0, t.hp - dealt)
         // 耐性 0（無効）は通知しない＝呼び出し側で MISS になる。それ以外は 0 でも計算上のダメージとして知らせる (#745)
         if (resist !== 0) ctx.onAmount?.(t, 'damage', dealt)
+        if (multi) ctx.onHit?.(t, resist !== 0 ? 'damage' : 'miss', resist !== 0 ? dealt : 0, round)
         log.push(`${t.name} に ${dealt} のダメージ！`)
         if (t.hp === 0) log.push(`${t.name} は たおれた！`)
+      }
+
+      if (!multi) {
+        const base =
+          effect.kind === 'damage_full'
+            ? Infinity
+            : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
+        for (const t of ctx.targets) hitOne(t, base, 0)
+        return log
+      }
+
+      // 複数ヒット (#879)。1 ヒット（全体対象は 1 巡）ごとにダメージを振り直す。rng 消費順は「ヒットごとにダメージ抽選」だけ
+      // （標的の乗り換えは rng を使わず、並び順の先頭の生存者）。全体対象（targets が 2 体以上）は N 巡して毎巡その時点の生存者全員、
+      // 単体対象は標的が倒れたら pool の先頭の生存者へ移り、全滅したらそこで打ち切る
+      const count = effect.count ?? 1
+      const min = effect.min ?? 0
+      const max = effect.max ?? 0
+      if (ctx.targets.length >= 2) {
+        for (let round = 0; round < count; round++) {
+          const alive = ctx.targets.filter((t) => t.hp > 0)
+          if (alive.length === 0) break
+          const base = rollRange(min, max, ctx.rng)
+          for (const t of alive) hitOne(t, base, round)
+        }
+      } else if (ctx.targets.length === 1) {
+        const pool = ctx.pool ?? ctx.targets
+        let current = ctx.targets[0]
+        for (let round = 0; round < count; round++) {
+          if (current.hp <= 0) {
+            const next = pool.find((e) => e.hp > 0)
+            if (!next) break
+            current = next
+          }
+          hitOne(current, rollRange(min, max, ctx.rng), round)
+        }
       }
       return log
     }
