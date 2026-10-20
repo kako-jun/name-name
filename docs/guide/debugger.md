@@ -306,7 +306,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 歩行マスク: 背景と同じ大きさの白黒画像（白=歩ける）。判定は足元 1 点。壁にぶつかったときは通れる軸だけ滑る。向きは移動ベクトルの支配軸（きっちり斜めのときは直前の向きを保つ）。歩行スプライトは 4 方向 × 3 コマ
 - 端のリンク: 足元が端のしきい値（`edgeThreshold`）内で、`links` の `range` に入り、その端へ向かって進むと遷移する（フェード）。遷移先では、遷移先シーンの「元のシーンへ戻るリンク」の `range` に、出た位置の相対位置を写して端から少し内側に出る（歩けなければ近い歩ける点へずらす）。到着直後は、その端へ向かう入力が途切れるまでそのリンクを無効にし、折り返しを防ぐ
 - エラー表示: 背景とマスクの大きさが違うシーンは読み込み失敗としてエラーを画面に出す。`start` の近くに歩ける点がなければ警告を出す。遷移先に歩ける点がない、またはシーンの読み込みに失敗したときは、遷移を中止して元のシーンに留まり、エラーを出す（その端へ向かう入力が途切れるまで同じリンクは再試行しない）。画像の fetch が失敗したときは URL と CORS（`Access-Control-Allow-Origin`）の可能性を添えて表示する。モンスター・味方の `hp` は 1 以上
-- 戦闘の演出（`battle`、#883）: `presentation`（`dq`/`ff`。`ff` は踏み出して斬る・のけぞり・ダメージ数字・技名だけのメッセージ窓。`layout: "side"` のときだけ効く。fieldSample には呪文・アイテム・特技が無いので技名の窓は出ない）・`windowStyle`（`dark`/`ff-blue`）・`commandLayout`（`grid`/`cross`。`cross` は `side` のときだけ）・`atb`（`"on"`/`"off"`）・`atbMode`（`wait`/`active`。`atb: "on"` のときだけ使う、既定 `wait`）。値は本編の `battle_presentation` / `window_style` / `battle_command_layout` / `battle_atb` / `battle_atb_mode` と同じ。不正値は読み込みエラー。`layout: "front"` で `presentation: "ff"`／`commandLayout: "cross"` を書くと、効かない組として画面とコンソールに警告が出る（読み込みは成功）。未指定は従来どおり（`dq`・`dark`・`grid`・ターン制）
+- 戦闘の演出（`battle`、#883）: `presentation`（`dq`/`ff`。`ff` は踏み出して斬る・のけぞり・ダメージ数字・技名だけのメッセージ窓。`layout: "side"` のときだけ効く。呪文・アイテムは下の「戦闘の候補窓」で設定できる。特技は fieldSample にはないので、技名の窓は出ない）・`windowStyle`（`dark`/`ff-blue`）・`commandLayout`（`grid`/`cross`。`cross` は `side` のときだけ）・`atb`（`"on"`/`"off"`）・`atbMode`（`wait`/`active`。`atb: "on"` のときだけ使う、既定 `wait`）。値は本編の `battle_presentation` / `window_style` / `battle_command_layout` / `battle_atb` / `battle_atb_mode` と同じ。不正値は読み込みエラー。`layout: "front"` で `presentation: "ff"`／`commandLayout: "cross"` を書くと、効かない組として画面とコンソールに警告が出る（読み込みは成功）。未指定は従来どおり（`dq`・`dark`・`grid`・ターン制）
 - 設定 JSON の主なキー: `startScene` / `start`（初期の足元）/ `speed`（背景ピクセル/秒）/ `edgeThreshold` / `assetBaseUrl`（指定時は RPG の画像と同じく `${base}/images/...` に解決 #746）/ `player.sprites`（`up|down|left|right` それぞれ 3 コマの URL）・`height`・`frameMs` / `scenes.<id>`（`background`・`mask`・`links[]`＝`{ edge, range, to }`）
 - 純粋関数は `frontend/src/game/fieldWalk.ts`（マスク判定・移動・向き・歩行アニメ・端のリンク・出現位置）、設定の検証は `frontend/src/fieldSample/config.ts`、ブラウザ API 部は `main.ts`
 
@@ -314,10 +314,18 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 
 フィールドサンプルは、歩いた距離でランダムエンカウントし、既存の `BattleEngine` / `BattleScreen` で戦って、終わると同じ位置に戻る。
 
-- 設定 JSON: `encounter`（`stepDistance`＝抽選 1 回分の歩行距離（既定 80）、`minSteps`＝戦闘後に飛ばす抽選回数（既定 3））/ `monsters`（id → `name`・`hp`・`atk`・`def`・`agi`・`exp`・`gold`・`sprite`）/ `party`（戦闘に出す味方。`sprite` に主人公のポーズ画像）/ `battle`（`layout`・`spriteStyle`・`background`・`width`・`height`、ほかに `enemyGrid`・`enemyWindowOverlap`（#839）、`presentation`・`windowStyle`・`commandLayout`・`atb`・`atbMode`（#883、上の項））/ `scenes.<id>.encounter`（`rate`・`groups`・`background`）
+- 設定 JSON: `encounter`（`stepDistance`＝抽選 1 回分の歩行距離（既定 80）、`minSteps`＝戦闘後に飛ばす抽選回数（既定 3））/ `monsters`（id → `name`・`hp`・`atk`・`def`・`agi`・`exp`・`gold`・`sprite`・`poses`）/ `party`（戦闘に出す味方。`sprite` に主人公のポーズ画像、`poses` に戦闘ポーズ別の画像）/ `spells` / `items`（戦闘の候補窓、下の節）/ `battle`（`layout`・`spriteStyle`・`background`・`width`・`height`、ほかに `enemyGrid`・`enemyWindowOverlap`（#839）、`presentation`・`windowStyle`・`commandLayout`・`atb`・`atbMode`（#883、上の項））/ `scenes.<id>.encounter`（`rate`・`groups`・`background`）
 - `rate` は `rollEncounter`（#172）と同じ: `0` = エンカウントなし、`N` = 抽選のたび 1/N、`1` = 毎回。`groups` は `"slime+slime"` のようにモンスター id を `+` で連結（`monsters` にない id は設定エラー）
 - 歩いた距離だけが進む。壁に押しつけて動けていないときは進まない。エンカウントなしのシーンでは貯めない。当選したら貯めた距離を捨て、戦闘後 `minSteps` 回の抽選を飛ばす
 - 戦闘中は歩きの入力は無視される（戦闘側は戦闘画面が自前で入力を受ける）。戦闘後は `sceneId` / 足元 / 向きを保ったまま復帰する。ツールバーの「今すぐエンカウント」は確認用で、抽選を 1 回で必ず当てる
 - 敵の大きさと隊形 (#839): `monsters.<id>` に `size`（`"2x1"` 形式の幅x高さ、整数 1 以上。不正値は設定エラー）と `scale`（数値、0.25〜1 に丸める）、`battle` に `enemyGrid`（`"6x2"` 形式、不正値は無効＝従来の配置）と `enemyWindowOverlap`（0〜0.5）を書ける。`enemyGrid` が有効なときは、読み込み時に全シーンの `groups` を検証し、敵グリッドに収まらない群を抽選から外して `console.error` と画面のエラー表示に一覧を出す（書式と意味は [敵の隊形ガイド](./enemy-formation.md)）
 - 画面下の表示（`encounter=貯めた距離/刻み 抑制=経過/最低`、`lastBattle`）で状態を確認できる
 - 純粋関数は `frontend/src/game/fieldEncounter.ts`（`advanceEncounter`・`initialEncounterState`・`afterBattleState`。乱数は注入）
+
+### 戦闘の候補窓・ポーズ・素材なしの確認（#890）
+
+- `monsters.<id>.poses` / `party[].poses`: 戦闘ポーズ別スプライト。`{ "idle": "...", "hurt": "...", "down": "..." }` のように URL 文字列で部分指定できる（戦闘サンプルと同じ検証。未知のポーズ名は無視し、空白だけの URL は読み飛ばす。値が文字列でない・URL を解決できないときは `monsters.slime.poses.idle` のような path つきの読み込みエラー）。`presentation: "ff"` で表示に使われる
+- `spells`: 味方全員が使える呪文の配列。書式は戦闘サンプルと同じ（`name` 必須・`id` 省略は連番・`mp`・`target`・`effect` / `builtin`）。`items`: 試作用の所持品の配列（`name` 必須・`effect` / `builtin`・`count`）。`count` は所持数で、小数は切り捨て・負数は 0、省略すると所持数の管理なし（無限・「×」表示なし）。`count` が 0 のアイテムはグレーで、決定すると「もっていない！」と出て窓は閉じない。使うたびに戦闘中だけ 1 減り、次の戦闘は設定の値から始まる（本編の inventory とは連動しない）
+- 候補窓は `battle.commandLayout: "cross"`（`layout: "side"`）のときだけ出る。十字キーで 上=たたかう・左=じゅもん・右=どうぐ・下=にげる。未指定は空＝じゅもん・どうぐの窓は開かない（従来どおり）。MP 不足の呪文はグレーで、決定すると「MPが たりない！」。指せる対象がいない（敵が全員倒れている・手の指す敵が倒れている）ときは「たいしょうがいない！」と出て、窓は閉じず MP・所持数も減らない
+- 素材なしで一通り試す: `http://localhost:7374/field-sample.html?fixture=dummy`。画像ファイルを使わず、canvas で作った単色の矩形（背景・歩行・モンスター・味方・ポーズ）でフィールドと戦闘を組む。野原を歩く → エンカウント（ツールバーの「今すぐエンカウント」でも可）→ たたかう・じゅもん（ほのお・いなずま・ヒール、メテオは全員 MP 不足でグレー）・どうぐ（ポーション、エーテルは所持数 0 でグレー）・にげる を確認できる。`?config=` を同時に付けた場合は `?config=` が優先される
+- 構成: フィクスチャは `frontend/src/fieldSample/dummyFixture.ts`、候補窓データの組み立ては `frontend/src/fieldSample/battleMenu.ts`（`buildBattleMenu`）
