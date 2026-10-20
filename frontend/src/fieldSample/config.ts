@@ -18,6 +18,8 @@ import {
 import { resolveRpgImagePath } from '../game/novelLayout'
 import { parseMenuList, parsePoses, resolveUrl, type ParseResult } from '../battleSample/config'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
+import { WARP_DEFAULTS, type WarpEffectKind, type WarpTiming } from '../game/fieldWarp'
+import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
@@ -46,12 +48,43 @@ export const MIRROR_PARTNER: Record<DiagonalFacing, DiagonalFacing> = {
   downRight: 'downLeft',
 }
 
+/** 窓の外の流れる景色 (#864)。背景より奥に、横へタイル敷きして流す */
+export interface SceneScrollConfig {
+  /** 景色の画像 URL（横にタイルされる。高さは画像のまま） */
+  image: string
+  /** 1 秒に流れる量（背景ピクセル）。正で右へ、負で左へ。0 なら止まった景色 */
+  speed: number
+  /** 景色の上端の y（背景ピクセル）。既定 0 */
+  y: number
+}
+
+/** ワープ先 (#864)。`warps.<id>`。遷移先のシーン・出現位置・向き・演出を固定する */
+export interface FieldWarp {
+  id: string
+  to: string
+  /** 遷移先の足元（背景ピクセル）。歩けない点なら近い歩ける点へずらす */
+  at: Vec
+  /** 到着後の向き。省略 = 向きを変えない */
+  facing?: Facing
+  effect: WarpEffectKind
+  timing: WarpTiming
+}
+
 export interface FieldSceneConfig {
   id: string
   /** 背景画像の URL */
   background: string
   /** 歩行マスク画像の URL（白=歩ける・黒=歩けない。背景と同じ大きさ） */
   mask: string
+  /**
+   * 前面レイヤー (#866)。背景と同じ大きさの透明 PNG の URL。主人公（と同行者）より手前に重ねて描く（天井から吊った物の下を歩くと隠れる）。
+   * 見た目だけで、歩行マスク・リンク・エンカウントには関与しない。省略 = 従来どおり（前面なし）
+   */
+  foreground?: string
+  /** 走行中の揺れ (#864)。描画だけを上下に揺らす（足元・マスク判定は動かない）。省略 = 揺れない */
+  shake?: ShakeConfig
+  /** 窓の外の流れる景色 (#864)。背景の透明な部分（窓）から見える。省略 = なし */
+  scroll?: SceneScrollConfig
   links: FieldLink[]
   /** このシーンでの主人公の表示高さ（背景ピクセル）。省略 = 全体の `player.height` (#810) */
   playerHeight?: number
@@ -107,6 +140,8 @@ export interface FieldSampleConfig {
     frameMs: number
   }
   scenes: Record<string, FieldSceneConfig>
+  /** ワープ先 (#864)。省略 = なし */
+  warps: Record<string, FieldWarp>
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
   encounter: EncounterStepConfig
   /** エンカウントで使うモンスターのマスター (#809) */
@@ -138,6 +173,7 @@ export const DEFAULTS = {
   minSteps: 3,
   battleWidth: 800,
   battleHeight: 450,
+  shakePeriodMs: 600,
 } as const
 
 type Obj = Record<string, unknown>
@@ -283,6 +319,39 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         links.push({ edge: l.edge as Edge, range: [r[0], r[1]], to: l.to })
       }
     }
+    let foreground: string | undefined
+    if (sc.foreground !== undefined) {
+      const fg = url(sc.foreground, `scenes.${id}.foreground`)
+      if (!fg.ok) return fg
+      foreground = fg.value
+    }
+    let shake: ShakeConfig | undefined
+    if (sc.shake !== undefined) {
+      const p = `scenes.${id}.shake`
+      if (!isObj(sc.shake)) return fail(`${p} はオブジェクトが必要です`)
+      const amplitudeY = positive(sc.shake.amplitudeY, 0, `${p}.amplitudeY`)
+      if (!amplitudeY.ok) return amplitudeY
+      if (sc.shake.amplitudeY === undefined) return fail(`${p}.amplitudeY が必要です`)
+      const periodMs = positive(sc.shake.periodMs, DEFAULTS.shakePeriodMs, `${p}.periodMs`)
+      if (!periodMs.ok) return periodMs
+      shake = { amplitudeY: amplitudeY.value, periodMs: periodMs.value }
+    }
+    let scroll: SceneScrollConfig | undefined
+    if (sc.scroll !== undefined) {
+      const p = `scenes.${id}.scroll`
+      if (!isObj(sc.scroll)) return fail(`${p} はオブジェクトが必要です`)
+      const image = url(sc.scroll.image, `${p}.image`)
+      if (!image.ok) return image
+      const speed = sc.scroll.speed
+      if (typeof speed !== 'number' || !Number.isFinite(speed))
+        return fail(
+          `${p}.speed は数値（背景ピクセル/秒。正=右へ・負=左へ）: ${JSON.stringify(speed)}`
+        )
+      const sy = sc.scroll.y === undefined ? 0 : sc.scroll.y
+      if (typeof sy !== 'number' || !Number.isFinite(sy))
+        return fail(`${p}.y は数値: ${JSON.stringify(sy)}`)
+      scroll = { image: image.value, speed, y: sy }
+    }
     let playerHeight: number | undefined
     if (sc.playerHeight !== undefined) {
       const ph = positive(sc.playerHeight, 0, `scenes.${id}.playerHeight`)
@@ -310,9 +379,54 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       id,
       background: background.value,
       mask: mask.value,
+      ...(foreground !== undefined ? { foreground } : {}),
+      ...(shake ? { shake } : {}),
+      ...(scroll ? { scroll } : {}),
       links,
       ...(playerHeight !== undefined ? { playerHeight } : {}),
       encounter,
+    }
+  }
+
+  // ---- ワープ (#864) ----
+  const warps: Record<string, FieldWarp> = {}
+  if (raw.warps !== undefined) {
+    if (!isObj(raw.warps)) return fail('warps はオブジェクトが必要です')
+    for (const [wid, w] of Object.entries(raw.warps)) {
+      const p = `warps.${wid}`
+      if (!isObj(w)) return fail(`${p} はオブジェクトが必要です`)
+      if (typeof w.to !== 'string' || !hasOwn(scenes, w.to))
+        return fail(`${p}.to は scenes のキーのどれか: ${JSON.stringify(w.to)}`)
+      const at = w.at
+      if (
+        !isObj(at) ||
+        typeof at.x !== 'number' ||
+        typeof at.y !== 'number' ||
+        !Number.isFinite(at.x) ||
+        !Number.isFinite(at.y)
+      )
+        return fail(`${p}.at は { x, y }（数値）が必要です`)
+      if (w.facing !== undefined && !FACINGS.includes(w.facing as Facing))
+        return fail(`${p}.facing は ${FACINGS.join(' / ')} のどれか: ${JSON.stringify(w.facing)}`)
+      const effect = w.effect === undefined ? 'fade' : w.effect
+      if (effect !== 'fade' && effect !== 'flash')
+        return fail(`${p}.effect は "fade" か "flash": ${JSON.stringify(effect)}`)
+      const timing: WarpTiming = { ...WARP_DEFAULTS[effect] }
+      for (const k of ['outMs', 'holdMs', 'inMs'] as const) {
+        const v = w[k]
+        if (v === undefined) continue
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+          return fail(`${p}.${k} は 0 以上の数値(ms): ${JSON.stringify(v)}`)
+        timing[k] = v
+      }
+      warps[wid] = {
+        id: wid,
+        to: w.to,
+        at: { x: at.x, y: at.y },
+        ...(w.facing !== undefined ? { facing: w.facing as Facing } : {}),
+        effect,
+        timing,
+      }
     }
   }
 
@@ -488,6 +602,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       edgeThreshold: edgeThreshold.value,
       player: { sprites, mirrorOf, height: height.value, frameMs: frameMs.value },
       scenes,
+      warps,
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,

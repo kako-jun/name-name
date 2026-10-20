@@ -32,6 +32,16 @@ describe('buildDummyFixture (#890)', () => {
     return r.value
   }
 
+  it('ワープ（野原⇄電車内）と、電車内の揺れ・景色・エンカウント (#864)', () => {
+    const c = parsed()
+    expect(Object.keys(c.warps).sort()).toEqual(['toMeadow', 'toTrain'])
+    expect(c.warps.toTrain.to).toBe('train')
+    expect(c.warps.toMeadow.to).toBe('meadow')
+    expect(c.scenes.train.shake).toBeDefined()
+    expect(c.scenes.train.scroll).toBeDefined()
+    expect(c.scenes.train.encounter?.groups.length).toBeGreaterThan(0)
+  })
+
   it('parseConfig を通り、console.error / warn を出さない', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

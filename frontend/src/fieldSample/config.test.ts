@@ -58,6 +58,145 @@ function ok(raw: unknown): FieldSampleConfig {
   return r.value
 }
 
+describe('foreground 前面レイヤー (#866)', () => {
+  const parse = (c: Raw) => parseConfig(c, BASE)
+  it('省略は undefined（既存設定は変わらない）', () => {
+    const r = parse(minimal())
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.scenes.a.foreground).toBeUndefined()
+    expect('foreground' in r.value.scenes.a).toBe(false)
+  })
+  it('URL に解決される（相対は設定 JSON 基準・assetBaseUrl は images 配下）', () => {
+    const c = mutated((c) => (c.scenes.a.foreground = 'a-fg.png'))
+    const r = parse(c)
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.scenes.a.foreground).toBe('https://example.com/field/a-fg.png')
+    const c2 = mutated((c) => {
+      c.assetBaseUrl = 'https://cdn.example.com/g'
+      c.scenes.a.foreground = 'maps/a-fg.png'
+    })
+    const r2 = parse(c2)
+    if (!r2.ok) throw new Error(r2.error)
+    expect(r2.value.scenes.a.foreground).toBe('https://cdn.example.com/g/images/maps/a-fg.png')
+  })
+  it('文字列以外・空文字は、パスつきのエラー', () => {
+    for (const bad of [1, '', '  ', null, {}]) {
+      const r = parse(mutated((c) => (c.scenes.a.foreground = bad)))
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('scenes.a.foreground')
+    }
+  })
+})
+
+describe('warps / shake / scroll (#864)', () => {
+  const parse = (c: Raw) => parseConfig(c, BASE)
+  const withScene = (c: Raw) => {
+    c.scenes.b = { background: 'b.png', mask: 'b-mask.png' }
+    return c
+  }
+  const ok = (c: Raw) => {
+    const r = parse(c)
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  it('省略は空（既存設定は変わらない）', () => {
+    const v = ok(minimal())
+    expect(v.warps).toEqual({})
+    expect('shake' in v.scenes.a).toBe(false)
+    expect('scroll' in v.scenes.a).toBe(false)
+  })
+  it('warps: 既定は fade・時間は演出の既定、上書きできる', () => {
+    const v = ok(
+      withScene(
+        mutated((c) => {
+          c.warps = {
+            w1: { to: 'b', at: { x: 5, y: 6 } },
+            w2: {
+              to: 'a',
+              at: { x: 1, y: 2 },
+              facing: 'up',
+              effect: 'flash',
+              holdMs: 0,
+              outMs: 10,
+            },
+          }
+        })
+      )
+    )
+    expect(v.warps.w1).toEqual({
+      id: 'w1',
+      to: 'b',
+      at: { x: 5, y: 6 },
+      effect: 'fade',
+      timing: { outMs: 400, holdMs: 200, inMs: 400 },
+    })
+    expect(v.warps.w2.facing).toBe('up')
+    expect(v.warps.w2.effect).toBe('flash')
+    expect(v.warps.w2.timing).toEqual({ outMs: 10, holdMs: 0, inMs: 500 })
+  })
+  it('warps: 不正はパスつきエラー（to 不明・at 不正・facing・effect・時間の負）', () => {
+    const bad: Array<[string, unknown]> = [
+      ['to', { to: 'zzz', at: { x: 0, y: 0 } }],
+      ['at', { to: 'a', at: { x: 'x', y: 0 } }],
+      ['at', { to: 'a' }],
+      ['facing', { to: 'a', at: { x: 0, y: 0 }, facing: 'upLeft' }],
+      ['effect', { to: 'a', at: { x: 0, y: 0 }, effect: 'spin' }],
+      ['holdMs', { to: 'a', at: { x: 0, y: 0 }, holdMs: -1 }],
+      ['outMs', { to: 'a', at: { x: 0, y: 0 }, outMs: NaN }],
+    ]
+    for (const [key, w] of bad) {
+      const r = parse(mutated((c) => (c.warps = { w1: w })))
+      expect(r.ok, key).toBe(false)
+      if (!r.ok) expect(r.error, key).toContain(`warps.w1.${key}`)
+    }
+    expect(parse(mutated((c) => (c.warps = []))).ok).toBe(false)
+  })
+  it('warps: 時間 0 は許す（その区間を飛ばす）', () => {
+    const v = ok(mutated((c) => (c.warps = { w: { to: 'a', at: { x: 0, y: 0 }, outMs: 0 } })))
+    expect(v.warps.w.timing.outMs).toBe(0)
+  })
+  it('shake: amplitudeY は必須の正数、periodMs の既定は 600', () => {
+    const v = ok(mutated((c) => (c.scenes.a.shake = { amplitudeY: 3 })))
+    expect(v.scenes.a.shake).toEqual({ amplitudeY: 3, periodMs: 600 })
+    for (const sh of [
+      {},
+      { amplitudeY: 0 },
+      { amplitudeY: -1 },
+      { amplitudeY: 3, periodMs: 0 },
+      5,
+    ]) {
+      const r = parse(mutated((c) => (c.scenes.a.shake = sh)))
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('scenes.a.shake')
+    }
+  })
+  it('scroll: image は URL に解決・speed は負も 0 も可・y の既定は 0', () => {
+    const v = ok(mutated((c) => (c.scenes.a.scroll = { image: 'sky.png', speed: -120 })))
+    expect(v.scenes.a.scroll).toEqual({
+      image: 'https://example.com/field/sky.png',
+      speed: -120,
+      y: 0,
+    })
+    const v0 = ok(mutated((c) => (c.scenes.a.scroll = { image: 'sky.png', speed: 0, y: 40 })))
+    expect(v0.scenes.a.scroll?.speed).toBe(0)
+    expect(v0.scenes.a.scroll?.y).toBe(40)
+  })
+  it('scroll: image 無し・speed が数値でない・y が数値でないはエラー', () => {
+    for (const sc of [
+      { speed: 1 },
+      { image: 'a.png' },
+      { image: 'a.png', speed: '1' },
+      { image: 'a.png', speed: Infinity },
+      { image: 'a.png', speed: 1, y: 'x' },
+      3,
+    ]) {
+      const r = parse(mutated((c) => (c.scenes.a.scroll = sc)))
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('scenes.a.scroll')
+    }
+  })
+})
+
 describe('playerHeight (#810)', () => {
   it('既定の player.height は 96', () => {
     expect(DEFAULTS.height).toBe(96)
