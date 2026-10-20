@@ -73,6 +73,12 @@ export interface BattleHit {
   amount: number
   hpBefore: number
   hpAfter: number
+  /**
+   * 1 回の行動の中の何発目か（0 始まり。全体対象の `回数=N` は何巡目か）(#879)。**複数ヒット（効果 DSL `damage … 回数=N`）のときだけ付く**。
+   * 無い（単発）は 0 と同じ。`hits` 配列の順序がそのまま再生順で、同じ `target` が複数回現れてよく、
+   * `hpBefore` / `hpAfter` は直前のヒットから連鎖する（1 発目の `hpAfter` = 2 発目の `hpBefore`）。表示の順次再生は未実装（#879 P2）
+   */
+  round?: number
 }
 
 /**
@@ -363,11 +369,15 @@ export class BattleEngine {
 
     const targets = this.resolveSpellTargets(spell, targetId)
     const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const multi: MultiHit[] = []
     const ctx: EffectContext = {
       caster,
       targets,
       rng: this.rng,
+      pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onHit: (t, kind, amount, round) =>
+        multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
     }
     const hpSnapshot = this.snapshotHp()
     const lines = spell.builtin
@@ -376,7 +386,17 @@ export class BattleEngine {
         ? this.evalEffectDsl(spell.effect, ctx)
         : ['(呪文に効果定義なし)']
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('spell', caster, spell.name, targets, hpSnapshot, amounts)
+    this.recordEffect(
+      'spell',
+      caster,
+      spell.name,
+      targets,
+      hpSnapshot,
+      amounts,
+      undefined,
+      undefined,
+      multi
+    )
 
     this.advanceAfterPartyAction(
       this.reactionOf(
@@ -403,11 +423,15 @@ export class BattleEngine {
 
     const targets = this.resolveItemTargets(item, targetId)
     const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const multi: MultiHit[] = []
     const ctx: EffectContext = {
       caster: user,
       targets,
       rng: this.rng,
+      pool: this.poolOf(user, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onHit: (t, kind, amount, round) =>
+        multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
     }
     const hpSnapshot = this.snapshotHp()
     const lines = item.builtin
@@ -416,7 +440,17 @@ export class BattleEngine {
         ? this.evalEffectDsl(item.effect, ctx)
         : ['(アイテムに効果定義なし)']
     for (const line of lines) this.appendLog(line)
-    this.recordEffect('item', user, item.name, targets, hpSnapshot, amounts)
+    this.recordEffect(
+      'item',
+      user,
+      item.name,
+      targets,
+      hpSnapshot,
+      amounts,
+      undefined,
+      undefined,
+      multi
+    )
 
     this.advanceAfterPartyAction(
       this.reactionOf(user, { category: 'item', name: item.name }, hpSnapshot)
@@ -465,11 +499,15 @@ export class BattleEngine {
     if (omen !== undefined) this.appendLog(omen)
 
     const amounts = new Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>()
+    const multi: MultiHit[] = []
     const ctx: EffectContext = {
       caster,
       targets,
       rng: this.rng,
+      pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onHit: (t, kind, amount, round) =>
+        multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
     }
     const hpSnapshot = this.snapshotHp()
     // 効果も builtin も無い特技は、予兆・メッセージだけの演出用（ログの警告も、対象の MISS も出さない）
@@ -488,7 +526,8 @@ export class BattleEngine {
       hpSnapshot,
       amounts,
       message,
-      omen
+      omen,
+      multi
     )
     return true
   }
@@ -1027,6 +1066,18 @@ export class BattleEngine {
     return ei !== -1 ? { side: 'enemy', index: ei } : null
   }
 
+  /**
+   * 複数ヒットで標的が倒れたときの乗り換え先 (#879)。**行動者から見て相手陣営の単体を狙うときだけ**その陣営の全員を返す。
+   * 自分・仲間（同陣営）を狙うとき・標的がいないときは undefined（倒れたら残りのヒットは打ち切り。仲間に流さない）
+   */
+  private poolOf(caster: BattleEntity, targets: BattleEntity[]): BattleEntity[] | undefined {
+    const first = targets[0]
+    if (!first) return undefined
+    const casterIsParty = this.state.party.includes(caster)
+    const opponents = casterIsParty ? this.state.enemies : this.state.party
+    return opponents.includes(first) ? opponents : undefined
+  }
+
   /** 全員の現在 HP を控える（呪文・アイテムの効果の前後差から結果を導く） */
   private snapshotHp(): Map<BattleEntity, number> {
     const m = new Map<BattleEntity, number>()
@@ -1076,11 +1127,40 @@ export class BattleEngine {
     before: Map<BattleEntity, number>,
     amounts: Map<BattleEntity, { kind: 'damage' | 'heal'; amount: number }>,
     message?: string,
-    omen?: string
+    omen?: string,
+    multi: MultiHit[] = []
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
     const hits: BattleHit[] = []
+    // 複数ヒット (#879): 効果が 1 ヒットごとに通知したときは、その列（再生順）をそのまま hits にする。
+    // HP は直前のヒットから連鎖させる（各対象の最初の hpBefore は行動前の HP）
+    if (multi.length > 0) {
+      const chain = new Map<BattleEntity, number>()
+      for (const h of multi) {
+        const ref = this.refOf(h.target)
+        if (!ref) continue
+        const hpBefore = chain.get(h.target) ?? before.get(h.target) ?? h.target.hp
+        chain.set(h.target, h.hpAfter)
+        hits.push({
+          target: ref,
+          kind: h.kind,
+          amount: h.amount,
+          hpBefore,
+          hpAfter: h.hpAfter,
+          round: h.round,
+        })
+      }
+      this.pushEvent({
+        actor: actorRef,
+        kind,
+        label,
+        ...(message !== undefined ? { message } : {}),
+        ...(omen !== undefined ? { omen } : {}),
+        hits,
+      })
+      return
+    }
     for (const e of [...this.state.party, ...this.state.enemies]) {
       const hpBefore = before.get(e) ?? e.hp
       const ref = this.refOf(e)
@@ -1207,6 +1287,16 @@ export function computeRowAttackDamage(
     attacker.row,
     defender.row
   )
+}
+
+/** 効果 DSL の複数ヒット (#879) が 1 ヒットごとに通知した結果。`recordEffect` が `BattleHit` 列にする */
+interface MultiHit {
+  target: BattleEntity
+  kind: BattleHitKind
+  amount: number
+  round: number
+  /** 通知した時点（そのヒットを反映した直後）の対象の HP */
+  hpAfter: number
 }
 
 /** 味方の行動 1 回が敵に与えた被弾の情報 (#837)。`before` は行動の前の全員の HP */

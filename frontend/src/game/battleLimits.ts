@@ -12,6 +12,12 @@
 /** 1 回のダメージの上限（kako-jun 決定 2026-10-20）。HP の上限ではない */
 export const MAX_DAMAGE = 9999
 
+/**
+ * 1 回の行動に含められるヒット数の上限（効果 DSL `damage … 回数=N` の `N` の上限、#879）。
+ * 上限値は未決（#877 の検証で決める）。99 は暫定。ダメージ上限 `MAX_DAMAGE` はヒット 1 回ごとで、この回数とは独立
+ */
+export const MAX_HITS_PER_ACTION = 99
+
 /** HP の下限。負値の回復などで HP を 0 未満にしない */
 export const MIN_HP = 0
 

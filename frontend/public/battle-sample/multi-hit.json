@@ -1,0 +1,59 @@
+{
+  "layout": "side",
+  "presentation": "dq",
+  "commandLayout": "cross",
+  "spells": [
+    { "id": "one", "name": "ひとつ", "mp": 1, "target": "敵単体", "effect": "damage 20..20" },
+    {
+      "id": "multi5",
+      "name": "れんぞく5",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 10..10 回数=5"
+    },
+    {
+      "id": "all3",
+      "name": "ぜんたい3",
+      "mp": 1,
+      "target": "敵全体",
+      "effect": "damage 7..7 回数=3"
+    },
+    {
+      "id": "range",
+      "name": "みだれ",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 4..7 回数=5"
+    },
+    {
+      "id": "bad",
+      "name": "ふせい0",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 10..10 回数=0"
+    },
+    {
+      "id": "fire3",
+      "name": "ほのお3",
+      "mp": 1,
+      "target": "敵単体",
+      "effect": "damage 10..10 type=fire 回数=3"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 999, "mp": 99, "atk": 25, "def": 4, "agi": 6 }
+  ],
+  "enemies": [
+    { "id": "a", "name": "スライムA", "hp": 25, "atk": 1, "def": 2, "agi": 3 },
+    { "id": "b", "name": "スライムB", "hp": 200, "atk": 1, "def": 2, "agi": 3 },
+    {
+      "id": "c",
+      "name": "ほのおのとら",
+      "hp": 200,
+      "atk": 1,
+      "def": 2,
+      "agi": 3,
+      "affinity": { "weak": ["fire"] }
+    }
+  ]
+}
