@@ -286,6 +286,25 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('Status' in event) {
+    const t = event.Status
+    return (
+      <div className="space-y-0.5">
+        <div className={`text-sm font-semibold ml-2 ${head}`}>
+          ☠ 状態: {t.name} <span className={`text-xs font-normal ${meta}`}>(id={t.id})</span>
+        </div>
+        <div className={`text-xs ml-4 font-mono ${accent}`}>
+          {t.duration ? `持続=${t.duration}` : ''}
+          {t.tickDamage ? ` 継続ダメージ=${t.tickDamage}` : ''}
+          {t.action ? ` 行動=${t.action}` : ''}
+          {t.reverse ? ` 反転=${t.reverse}` : ''}
+          {t.cure ? ` 解除=${t.cure}` : ''}
+          {t.expire ? ` 満了=${t.expire}` : ''}
+        </div>
+      </div>
+    )
+  }
+
   if ('PartyMember' in event) {
     const p = event.PartyMember
     const learns = p.learns?.map((l) => `Lv${l.level} ${l.spell}`).join(', ')

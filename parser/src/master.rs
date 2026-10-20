@@ -1,11 +1,11 @@
 //! マスターデータブロック (#174 / #175) のパース。
 //!
-//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[パーティ <id>]` の
-//! 5 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
+//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[パーティ <id>]` の
+//! 6 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
 //! 構造を持ち、ボディ部の解釈だけが kind ごとに違う。
 //!
 //! parser.rs の本体ループから 1 関数 `try_parse_master_data_block` を呼び出すことで
-//! 5 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
+//! 6 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
 use crate::parser::emit_warning;
@@ -15,7 +15,7 @@ pub(crate) struct ParsedMasterBlock {
     pub next_pos: usize,
 }
 
-/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[パーティ <id>]` の
+/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[パーティ <id>]` の
 /// いずれかを検出して、ボディの key: value ペアからオブジェクトを組み立てる。
 /// 検出に失敗（ヘッダ形式不一致 / 必須項目欠落）した場合は `None` を返し、
 /// 呼び出し側は次の解釈ルートへ進む。
@@ -34,6 +34,7 @@ pub(crate) fn try_parse_master_data_block(
         MasterKind::Item => Event::Item(build_item_def(id, &body.entries)),
         MasterKind::Spell => Event::Spell(build_spell_def(id, &body.entries)?),
         MasterKind::Skill => Event::Skill(build_skill_def(id, &body.entries)?),
+        MasterKind::Status => Event::Status(build_status_def(id, &body.entries)?),
         MasterKind::PartyMember => Event::PartyMember(build_party_member_def(id, &body.entries)?),
     };
 
@@ -46,6 +47,7 @@ enum MasterKind {
     Item,
     Spell,
     Skill,
+    Status,
     PartyMember,
 }
 
@@ -77,6 +79,13 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
             return None;
         }
         return Some((MasterKind::Skill, id, "[/特技]"));
+    }
+    if let Some(rest) = header.strip_prefix("[状態 ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            return None;
+        }
+        return Some((MasterKind::Status, id, "[/状態]"));
     }
     if let Some(rest) = header.strip_prefix("[パーティ ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
@@ -527,6 +536,26 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
         builtin: lookup_master_string(entries, &["builtin"]),
         message: lookup_master_string(entries, &["メッセージ", "message"]),
         telegraph: lookup_master_string(entries, &["予兆", "telegraph"]),
+    })
+}
+
+/// `[状態 <id>]` (#870)。`名前` 必須。ほかのキーは生文字列で透過し、runtime（`statusEffects.ts`）が解釈する。
+/// 値が空のキーは未指定扱い。
+fn build_status_def(id: String, entries: &[(String, String)]) -> Option<StatusDef> {
+    let name = lookup_master_string(entries, &["名前", "name"])?;
+    if name.is_empty() {
+        return None;
+    }
+    let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
+    Some(StatusDef {
+        id,
+        name,
+        duration: value(&["持続", "duration"]),
+        tick_damage: value(&["継続ダメージ", "tick_damage", "tickDamage"]),
+        action: value(&["行動", "action"]),
+        reverse: value(&["反転", "reverse"]),
+        cure: value(&["解除", "cure"]),
+        expire: value(&["満了", "expire"]),
     })
 }
 

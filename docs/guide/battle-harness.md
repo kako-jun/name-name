@@ -9,23 +9,26 @@
 
 ```bash
 cd frontend
-npm run test:battle-harness                       # 総当たり（約 23,000 件・1 分弱）
+npm run test:battle-harness                       # 総当たり（約 25,500 件・2 分弱）
 HARNESS_RANDOM_COUNT=500 npm run test:battle-harness   # ランダム合成の件数を変える（既定 3000）
 HARNESS_SEED=2 npm run test:battle-harness             # ランダム合成の seed を変える（既定 1）
 HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
+HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言したランダム合成の件数（既定 2000）
 ```
 
-環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
+環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
 
 ## 何を動かすか
 
-| 族               | 内容                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `effect-matrix`  | 効果 DSL の動詞（`damage` / `heal` / `heal_full` / `damage_full` / `buff` / `debuff` / `status` / `revive` / `escape_battle` / `escape_dungeon`・不正な書式）× 範囲の境界値（0・負・min>max・極大）× `回数=N`（1・2・99・100 超・0・不正）× 対象範囲 × 耐性(`resist`)・属性相性(`affinity`) × HP（0・1・満タン・5 万・10 億）。味方が 3 回撃ってから攻撃 |
-| `enemy-skill`    | 同じ効果を敵が特技（`行動:`）として使う。味方の HP は 1・100・5 万（hp0 は実質 hp1 と重複するので外した）                                                                                                                                                                                                                                                |
-| `stack-order`    | 状態・バフ・デバフ・回復・ダメージの重ね順（長さ 4 の列の総当たり）× ターン制/ATB                                                                                                                                                                                                                                                                        |
-| `reaction-chain` | 敵の `行動:` `反撃:` `死亡時:` に別々の特技を割り当てた組み合わせ × ターン制/ATB                                                                                                                                                                                                                                                                         |
-| `random`         | seed 固定。能力値・HP を境界値から選び、呪文・敵の台本・ATB の有無・操作列（攻撃/呪文/道具/逃走/tick）をランダムに組む                                                                                                                                                                                                                                   |
+| 族               | 内容                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `effect-matrix`  | 効果 DSL の動詞（`damage` / `heal` / `heal_full` / `damage_full` / `buff` / `debuff` / `status` / `revive` / `escape_battle` / `escape_dungeon`・不正な書式）× 範囲の境界値（0・負・min>max・極大）× `回数=N`（1・2・99・100 超・0・不正）× 対象範囲 × 耐性(`resist`)・属性相性(`affinity`) × HP（0・1・満タン・5 万・10 億）。味方が 3 回撃ってから攻撃                                        |
+| `enemy-skill`    | 同じ効果を敵が特技（`行動:`）として使う。味方の HP は 1・100・5 万（hp0 は実質 hp1 と重複するので外した）                                                                                                                                                                                                                                                                                       |
+| `stack-order`    | 状態・バフ・デバフ・回復・ダメージの重ね順（長さ 4 の列の総当たり）× ターン制/ATB                                                                                                                                                                                                                                                                                                               |
+| `reaction-chain` | 敵の `行動:` `反撃:` `死亡時:` に別々の特技を割り当てた組み合わせ × ターン制/ATB                                                                                                                                                                                                                                                                                                                |
+| `random`         | seed 固定。能力値・HP を境界値から選び、呪文・敵の台本・ATB の有無・操作列（攻撃/呪文/道具/逃走/tick）をランダムに組む                                                                                                                                                                                                                                                                          |
+| `status-matrix`  | 宣言した状態 (#870。毒・もうどく〈上限超えの固定幅〉・睡眠・昏睡〈99 ターン〉・混乱・被ダメージ解除・死の宣告・ゾンビ・回復/ダメージだけの反転・全部入り・不正値だらけの宣言) × 付与の持続（省略・1・99・100 超）× 確率（省略・50・99）× 相手の耐性（属性欄に状態 id と `death`）× ターン制/ATB の 2 種。味方が呪文で敵単体・自分・味方全体・敵全体へ、敵が特技で味方全体へ付け、決着まで進める |
+| `random-status`  | seed 固定。状態を常に宣言し、付与・解除・反転の対象になる効果を中心に、能力値・HP・耐性・最初から持つ状態・`statusChanceBonus`・敵の台本・操作列をランダムに組む                                                                                                                                                                                                                                |
 
 エンジンの `opts.rng` に seed 固定の LCG を注入するので、同じシナリオは必ず同じ結果になる。操作列のあと、決着まで「攻撃 / ATB を進める」を最大 500 回押して、膠着していないかも見る。
 
@@ -43,9 +46,11 @@ HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
 - 凄い組み合わせ（強すぎ・許容）: **閾値を決めていない**。壊れでないシナリオの指標（1 行動の合計ダメージ・HP の減少量・回復量・ヒット数・バフ累積値）の上位を数値のまま並べるだけ。残す/潰すは人間が判断する。
 - ダメージ上限違反は `damage` のヒットの量が 9999 超（`battleLimits.MAX_DAMAGE`）かで見る。`heal` は上限が未決のため検出せず、候補（`maxHealAmount`）に回す。`damage_full`（即死）は上限の対象外（hit に `instantDeath` が付き、数字は出ない）で、検出から除外し、HP 減少は `maxHpDrop` の候補に並ぶ。
 
-検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
+検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
 
 無限ループは「1 操作の乱数消費が 200 万回を超える」で止めて検出する（乱数を使わないループや同期的な無限ループまでは拾えない）。検出できないもの: エンジンが残すイベントは直近 30 件（`EVENT_MAX`）なので、1 操作で 30 件を超えて増えた分のヒットは検査されない。
+
+状態異常 (#870) の永久の行動不能（毎ターン睡眠・昏睡を付け直す敵）は、壊れではなく膠着（`stalemate`、要判断）として拾う。エンジンは持続を 99 で頭打ちにし、行動不能の味方の手番を 1000 手番までで自動解決して制御を返すので固まらないが、付け直し続ける敵への歯止め（免疫など）は未決。
 
 ATB の不変条件（ゲージ 0..1000・キューは生存者のみ等）と `lcg` は `battleEngineAtb.test.ts` にもあり、正本が 2 つになっている。統合は後続。
 
