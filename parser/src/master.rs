@@ -83,6 +83,7 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
     if let Some(rest) = header.strip_prefix("[状態 ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
         if id.is_empty() {
+            emit_warning("[name-name-parser] warning: [状態 ] は id が空のため捨てた");
             return None;
         }
         return Some((MasterKind::Status, id, "[/状態]"));
@@ -542,9 +543,36 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
 /// `[状態 <id>]` (#870)。`名前` 必須。ほかのキーは生文字列で透過し、runtime（`statusEffects.ts`）が解釈する。
 /// 値が空のキーは未指定扱い。
 fn build_status_def(id: String, entries: &[(String, String)]) -> Option<StatusDef> {
-    let name = lookup_master_string(entries, &["名前", "name"])?;
-    if name.is_empty() {
+    let name = lookup_master_string(entries, &["名前", "name"]).filter(|n| !n.is_empty());
+    let Some(name) = name else {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [状態 {id}] は 名前 が無いため捨てた"
+        ));
         return None;
+    };
+    const KNOWN: &[&str] = &[
+        "名前",
+        "name",
+        "持続",
+        "duration",
+        "継続ダメージ",
+        "tick_damage",
+        "tickDamage",
+        "行動",
+        "action",
+        "反転",
+        "reverse",
+        "解除",
+        "cure",
+        "満了",
+        "expire",
+    ];
+    for (k, _) in entries {
+        if !KNOWN.contains(&k.as_str()) {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [状態 {id}] の未知のキー `{k}` は無視した"
+            ));
+        }
     }
     let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
     Some(StatusDef {

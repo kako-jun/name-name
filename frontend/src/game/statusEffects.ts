@@ -253,7 +253,8 @@ export function statusSuccessRate(
 ): number {
   let base = 1
   if (chance !== undefined) {
-    const b = Number.isFinite(bonus) ? (bonus as number) : 0
+    // 成長ぶんが NaN・未指定なら 0。+Infinity は上限（99）、-Infinity は 0 に収まる
+    const b = typeof bonus === 'number' && !Number.isNaN(bonus) ? bonus : 0
     base = Math.min(MAX_STATUS_CHANCE, Math.max(0, chance + b)) / 100
   }
   return deathSuccessRate(kind, base)

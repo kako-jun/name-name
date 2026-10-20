@@ -70,14 +70,21 @@ describe('parseEffect: status の 確率= と cure', () => {
     })
     expect('chance' in (parseEffect('status poison') as object)).toBe(false)
   })
-  it('100 以上は 99 に切って警告、整数でない・負・小数は必中にして警告', () => {
+  it('100 以上は 99 に切って警告、整数でない・小数は必中にして警告', () => {
     const over = parseEffect('status poison 確率=100')
     expect(over?.chance).toBe(99)
     expect(over?.warnings).toHaveLength(1)
-    for (const bad of ['abc', '-5', '1.5', '', '５０']) {
+    for (const bad of ['abc', '1.5', '', '５０']) {
       const p = parseEffect(`status poison 確率=${bad}`)
       expect(p?.chance, bad).toBeUndefined()
       expect(p?.warnings, bad).toHaveLength(1)
+    }
+  })
+  it('負の確率は 0（必ず外れる）に切って警告する。誤記で必中にならない', () => {
+    for (const neg of ['-5', '-1', '-100']) {
+      const p = parseEffect(`status poison 確率=${neg}`)
+      expect(p?.chance, neg).toBe(0)
+      expect(p?.warnings, neg).toHaveLength(1)
     }
   })
   it('確率= は status 専用。ほかの動詞に付けたら無視して警告する', () => {
@@ -234,10 +241,25 @@ describe('status の付与: 成功率と耐性', () => {
     run('status 毒', [t])
     expect(t.status?.poison).toBeUndefined()
   })
-  it('耐性は宣言の無い印にも効く（属性欄に書いた id は意味を持つ）', () => {
-    const t = ent({ affinity: { nullify: ['marker'] } })
-    run('status marker', [t])
-    expect(t.status?.marker).toBeUndefined()
+  it('宣言の無い印には耐性を当てない（旧挙動と同じ。確率= だけで判定し、書かなければ必中で乱数を使わない）', () => {
+    for (const col of ['nullify', 'absorb', 'halve'] as const) {
+      const t = ent({ affinity: { [col]: ['marker'] } })
+      const r = run('status marker', [t], { rng: () => 0.999 })
+      expect(t.status?.marker, col).toBe(1)
+      expect(r.calls, col).toBe(0)
+    }
+    const p = ent({ affinity: { nullify: ['marker'] } })
+    run('status marker 確率=50', [p], { rng: () => 0.49 })
+    expect(p.status?.marker).toBe(1) // 確率だけが効く
+    const q = ent({ affinity: { nullify: ['marker'] } })
+    run('status marker 確率=50', [q], { rng: () => 0.5 })
+    expect(q.status?.marker).toBeUndefined()
+  })
+  it('宣言のある状態には耐性が効く（宣言なしで耐性を書いただけでは変わらない対比）', () => {
+    const t = ent({ affinity: { halve: ['poison'] } })
+    const r = run('status poison', [t], { rng: () => 0.5 })
+    expect(t.status?.poison).toBeUndefined()
+    expect(r.calls).toBe(1)
   })
   it('全体に付けるとき、耐性のある者だけ付かない', () => {
     const a = ent({ id: 'a' })
@@ -375,6 +397,14 @@ describe('ダメージの反転', () => {
     const ab = ent({ hp: 10, affinity: { absorb: ['fire'] }, status: { dmgHeals: 3 } })
     run('damage 20..20 type=fire', [ab])
     expect(ab.hp).toBe(30)
+  })
+  it('吸収は反転状態でも回復のまま（FF の流儀: 吸収は反転の対象外）。ゾンビ（回復・ダメージとも反転）でも +30', () => {
+    const z = ent({ hp: 10, affinity: { absorb: ['fire'] }, status: { zombie: 3 } })
+    run('damage 30..30 type=fire', [z])
+    expect(z.hp).toBe(40)
+    const plain = ent({ hp: 10, status: { zombie: 3 } })
+    run('damage 30..30 type=fire', [plain])
+    expect(plain.hp).toBe(40) // 反転して回復。吸収でも反転でも、HP は増える向きで一致する
   })
   it('倒れている者は生き返らない。ダメージ 0 は回復 0（HP 不変）', () => {
     const dead = ent({ hp: 0, status: { dmgHeals: 3 } })

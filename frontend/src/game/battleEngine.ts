@@ -20,7 +20,7 @@
  *
  * 状態異常 (#870): `[状態]` で宣言した状態（`BattleEngineOptions.statuses`）だけが働く。状態は**その者の手番の終わり**に進み
  * （継続ダメージ → 持続 -1 → 尽きたら解除。満了で戦闘不能もある）、行動不能・混乱の者は手番を自動で解決する。
- * 宣言の無い戦闘は、乱数の消費を含めて従来と完全に同じ。
+ * 宣言の無い戦闘・宣言の無い印（属性欄の耐性も当てない）は、乱数の消費を含めて従来と完全に同じ。
  *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
@@ -131,6 +131,11 @@ export interface BattleActionEvent {
    */
   omen?: string
   hits: BattleHit[]
+  /**
+   * この行動を記録した時点の、全員の状態名（付いた順。宣言した状態だけ。`party[i]` / `enemies[i]` の順）(#870)。
+   * FF 式の演出が、HP の数字と同じく再生位置で状態名を切り替えるために読む。`[状態]` の宣言が無い戦闘では付かない
+   */
+  statusLabels?: { party: string[][]; enemies: string[][] }
 }
 
 export interface BattleState {
@@ -238,9 +243,12 @@ export class BattleEngine {
   private hasStatusRules = false
   /** 行動不能・混乱の味方の手番を自動で解決している最中（再入防止） */
   private autoResolving = false
+  /** 状態名の控え（イベントの `statusLabels`）を付け始めたか。状態が一度でも付いたら true */
+  private statusLabelsSeen = false
   /**
-   * 付与した本人の手番の終わりに減らさない、付けたばかりの状態の記録 (#870)。`applier` が自分の行動で `target` に `key` を書いた。
-   * その者の手番の終わり（`tickStatuses`）で、自分に付けた分を 1 度だけ飛ばして消す（自分への付与が、付けた直後に目減りしない）
+   * 今の手番の中で付いた状態の記録 (#870)。`applier` が `target` に `key` を書いた（付与者は問わない: 自分への付与も、
+   * 味方の手番中に敵の反撃・死亡時の行動が付けた状態も含む）。`target` の手番の終わり（`tickStatuses`）はこの分を 1 度だけ飛ばし、
+   * 手番の終わりごとに全部消す（付けた直後に目減りしない。敵が味方に付けた状態は、敵の手番の終わりに記録が消えるので味方の次の手番まで減らない）
    */
   private freshStatuses: { applier: BattleEntity; target: BattleEntity; key: string }[] = []
   /** 今の行動で状態を付けられた・解かれた者。HP が動かなくても MISS にしない（`recordEffect` が使って空にする） */
@@ -263,6 +271,10 @@ export class BattleEngine {
     if (opts.statuses) {
       this.statusRules = buildStatusRules(opts.statuses)
       this.hasStatusRules = Object.keys(this.statusRules).length > 0
+      // 最初から状態が付いている者がいれば、状態名の控え（イベントの `statusLabels`）は最初のイベントから付ける
+      this.statusLabelsSeen =
+        this.hasStatusRules &&
+        [...party, ...enemies].some((en) => statusLabels(en, this.statusRules).length > 0)
       // 宣言の不正値の警告は、同じ状態・同じ文面なら 1 度だけ（戦闘のたびに出さない）
       for (const rule of Object.values(this.statusRules)) {
         for (const w of rule.warnings) {
@@ -415,6 +427,8 @@ export class BattleEngine {
           if (m && m.hp > 0 && !atb.queue.includes(who.index)) atb.queue.push(who.index)
         } else {
           this.runAtbEnemyAction(atb, who.index)
+          // 死亡時の行動などで手番の終わりのあとに付いた状態の記録を、次の手番へ持ち越さない (#870)
+          this.freshStatuses = []
         }
       }
       // 行動不能・混乱の味方は入力待ちに入った時点で解決する (#870)。待機（wait）の時間停止に巻き込まない
@@ -1129,6 +1143,8 @@ export class BattleEngine {
         this.resolveDeaths()
       }
     }
+    // 敵側の手番の終わりに、今の手番で付いた状態の記録を持ち越さない (#870)
+    this.freshStatuses = []
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
       this.appendLog('ぜんめつ してしまった……')
@@ -1427,7 +1443,23 @@ export class BattleEngine {
   private pushEvent(e: Omit<BattleActionEvent, 'seq'>): void {
     // 倒れた者は宣言した状態を全部失う (#870)。行動の結果の HP はすべて、記録の前に確定している
     this.clearDownedStatuses()
-    this.state.events.push({ seq: this.state.eventTotal, ...e })
+    // 状態名の控え。状態が一度も付いていない間は付けない（宣言だけして使わない戦闘は、イベントも従来と同じ）。
+    // 一度付いたあとは、全員の状態が消えたことも伝えるため付け続ける
+    let labelsSnap: { party: string[][]; enemies: string[][] } | undefined
+    if (this.hasStatusRules) {
+      const snap = {
+        party: this.state.party.map((p) => this.getStatusLabels(p)),
+        enemies: this.state.enemies.map((en) => this.getStatusLabels(en)),
+      }
+      const any = [...snap.party, ...snap.enemies].some((l) => l.length > 0)
+      if (any || this.statusLabelsSeen) labelsSnap = snap
+      if (any) this.statusLabelsSeen = true
+    }
+    this.state.events.push({
+      seq: this.state.eventTotal,
+      ...e,
+      ...(labelsSnap ? { statusLabels: labelsSnap } : {}),
+    })
     this.state.eventTotal++
     if (this.state.events.length > EVENT_MAX) this.state.events.shift()
   }
@@ -1526,32 +1558,21 @@ export class BattleEngine {
       if (m) this.tickStatuses(m)
       return
     }
-    // 従来ターン制: 味方側の行動 1 回が手番。味方のだれかが付けたばかりの状態は全員とも飛ばす
-    const appliers = this.state.party
-    for (const p of this.state.party) this.tickStatuses(p, appliers, false)
-    this.freshStatuses = this.freshStatuses.filter((f) => !appliers.includes(f.applier))
+    // 従来ターン制: 味方側の行動 1 回が手番。この手番で付いた状態は全員とも飛ばす（反撃で付いた分も）
+    for (const p of this.state.party) this.tickStatuses(p, false)
+    this.freshStatuses = []
   }
 
   /**
    * 者の宣言済みの状態を 1 手番ぶん進める: 継続ダメージ → 持続 -1 → 0 なら解除（満了があればその効果）。
-   * 付与されたばかりの状態も、この手番の終わりに 1 減る（付与した側の手番では呼ばれないので、敵が付けた混乱は味方の次の手番に効く）。
+   * 今の手番の中で付いた状態（付与者は問わない）は、この手番の終わりには進めない。敵が味方に付けた混乱は、敵の手番の終わりに記録が消えるので味方の次の手番に効く。
    * 倒れている者は状態を失うだけ。宣言の無い状態（印だけ）は触らない
    */
-  private tickStatuses(
-    entity: BattleEntity,
-    appliers: readonly BattleEntity[] = [entity],
-    clearFresh = true
-  ): void {
+  private tickStatuses(entity: BattleEntity, clearFresh = true): void {
     if (!this.hasStatusRules) return
-    // 付与した本人（たち）の手番の終わりに、その行動で付いた状態は進めない（1 度だけ）
-    const fresh = new Set(
-      this.freshStatuses
-        .filter((f) => f.target === entity && appliers.includes(f.applier))
-        .map((f) => f.key)
-    )
-    if (clearFresh) {
-      this.freshStatuses = this.freshStatuses.filter((f) => !appliers.includes(f.applier))
-    }
+    // この手番の中で付いた状態は進めない（1 度だけ。付与者は問わない）
+    const fresh = new Set(this.freshStatuses.filter((f) => f.target === entity).map((f) => f.key))
+    if (clearFresh) this.freshStatuses = []
     if (entity.hp <= 0) {
       this.clearDownedStatuses()
       return
@@ -1659,7 +1680,7 @@ export class BattleEngine {
   }
 
   /**
-   * 効果が状態を付けた・解いた通知。宣言した状態の付与は「付けたばかり」として記録し（付与した本人の手番の終わりに、自分に付けた分は減らさない）、
+   * 効果が状態を付けた・解いた通知。宣言した状態の付与は「今の手番で付いた」として記録し（その手番の終わりには減らさない）、
    * 付与・解除とも、その対象は MISS にしない（HP が変わらなくても、効いた）。宣言の無い印は従来どおり
    */
   private noteStatus(
@@ -1681,9 +1702,9 @@ export class BattleEngine {
   /** 倒れた者の宣言済みの状態を消す（蘇生しても残らない）。宣言の無い印は触らない */
   private clearDownedStatuses(): void {
     if (!this.hasStatusRules) return
-    // 倒れた者が付けた・倒れた者に付けた「付けたばかり」の記録も捨てる（溜まり続けない）
+    // 倒れた者に付けた「付けたばかり」の記録も捨てる（溜まり続けない。付与者が倒れても、付いた状態の記録は残す）
     if (this.freshStatuses.length > 0) {
-      this.freshStatuses = this.freshStatuses.filter((f) => f.applier.hp > 0 && f.target.hp > 0)
+      this.freshStatuses = this.freshStatuses.filter((f) => f.target.hp > 0)
     }
     for (const e of [...this.state.party, ...this.state.enemies]) {
       const st = e.status

@@ -1,5 +1,5 @@
 /** `[状態]` の宣言 (#870): markdown → parser(wasm) → マスター集約 → RPGProject → 戦闘エンジンまで通る */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parseMarkdown } from '../wasm/parser'
 import { collectMasterData, mergeMasterDataFromDocs, rpgProjectFromDoc } from './rpgProjectFromDoc'
 import { BattleEngine } from './battleEngine'
@@ -163,5 +163,64 @@ describe('markdown の宣言で戦闘が動く（端から端まで）', () => {
     expect(a.hp).toBe(500)
     expect(b.hp).toBe(0)
     expect(e.getState().phase).not.toBe('defeat')
+  })
+})
+
+describe('[状態] の誤記を知らせる (#870)', () => {
+  const BAD = `---
+engine: name-name
+chapter: 1
+title: "t"
+---
+## data: マスター
+
+[状態 noname]
+持続: 3
+[/状態]
+
+[状態 typo]
+名前: ほげ
+持続: 3
+継続ダメージュ: 5
+[/状態]
+
+[状態 ]
+名前: からid
+[/状態]
+
+[状態 dup]
+名前: いち
+[/状態]
+
+[状態 dup]
+名前: に
+[/状態]
+`
+  it('名前なし・未知キーは parser が console.warn する。同じ id の重複は集約時に上書きを知らせる', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const doc = await parseMarkdown(BAD)
+      const msgs = () => warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs().some((m) => m.includes('[状態 noname]') && m.includes('名前'))).toBe(true)
+      expect(msgs().some((m) => m.includes('[状態 typo]') && m.includes('継続ダメージュ'))).toBe(
+        true
+      )
+      expect(msgs().some((m) => m.includes('[状態 ]') && m.includes('id が空'))).toBe(true)
+      const master = collectMasterData(doc)
+      expect(master.statuses.dup.name).toBe('に') // 後勝ち
+      expect(msgs().filter((m) => m.includes('[状態 dup]') && m.includes('重複'))).toHaveLength(1)
+      expect(master.statuses.noname).toBeUndefined()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it('正しい宣言は何も警告しない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      collectMasterData(await parseMarkdown(MD))
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('状態'))).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

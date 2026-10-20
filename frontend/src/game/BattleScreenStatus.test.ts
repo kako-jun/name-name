@@ -55,6 +55,22 @@ afterEach(() => {
 })
 
 describe('BattleScreen: 状態名の表示 (#870)', () => {
+  it('敵: 状態が複数なら先頭 1 つ + 「…」に略し、長い名前でも状態名が名前を押し出さない', () => {
+    const s = make(
+      [entity('hero')],
+      [entity('slime', { hp: 10, maxHp: 10, status: { poison: 2, sleep: 2 } })],
+      STATUSES
+    )
+    expect(I(s).enemyViews[0].label?.text).toBe('SLIME [どく…]\nHP 10/10')
+    const long = make(
+      [entity('hero')],
+      [entity('veryLongBossName', { hp: 10, maxHp: 10, status: { poison: 2, sleep: 2 } })],
+      STATUSES
+    )
+    const first = (I(long).enemyViews[0].label?.text ?? '').split('\n')[0]
+    expect(first.startsWith('VERYLONG')).toBe(true) // 名前の頭が読める
+  })
+
   it('味方: 宣言した状態が付いていると名前の前に [状態名] が付く。付いていなければ名前のまま', () => {
     const s = make(
       [entity('hero', { status: { poison: 3 } }), entity('mage')],
@@ -85,7 +101,7 @@ describe('BattleScreen: 状態名の表示 (#870)', () => {
       [entity('slime', { hp: 10, maxHp: 10, status: { poison: 2 } })],
       STATUSES
     )
-    expect(I(s).enemyViews[0].label?.text).toBe('[どく] SLIME\nHP 10/10')
+    expect(I(s).enemyViews[0].label?.text).toBe('SLIME [どく]\nHP 10/10') // 名前を先に、状態名は後ろ
   })
 
   it('状態を宣言しない戦闘は、印が付いていても名前はそのまま（従来どおり）', () => {
@@ -106,5 +122,45 @@ describe('BattleScreen: 状態名の表示 (#870)', () => {
       'front'
     )
     expect(I(s).heroStatsText.text).toContain('[どく] HERO')
+  })
+})
+
+describe('BattleScreen: FF 式は状態名も演出の再生位置で切り替える (#870)', () => {
+  const run = (s: BattleScreen, ms: number) => {
+    for (let left = ms; left > 0; left -= 16) s.tick(Math.min(16, left))
+  }
+  const refresh = (s: BattleScreen) => (s as unknown as { refresh(): void }).refresh()
+  const makeFf = (enemy: BattleEntity) => {
+    const engine = new BattleEngine([entity('hero')], [enemy], {
+      rng: () => 0.5,
+      statuses: STATUSES,
+    })
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    created.push(s)
+    return { s, engine }
+  }
+
+  it('状態を付ける行動: エンジンはすぐ付くが、画面の状態名は命中の瞬間まで出ない', () => {
+    const { s, engine } = makeFf(entity('slime', { hp: 999, maxHp: 999 }))
+    const label = () => I(s).enemyViews[0].label?.text ?? ''
+    engine.selectSpell({ name: 'どく', mp: 1, target: '敵単体', effect: 'status poison' })
+    expect(engine.getState().enemies[0].status?.poison).toBeGreaterThan(0)
+    refresh(s)
+    expect(label()).not.toContain('どく')
+    run(s, 5000)
+    expect(label()).toContain('[どく]')
+  })
+
+  it('状態を解く行動: 命中の瞬間までは古い状態名を出し続け、そのあと消える', () => {
+    const { s, engine } = makeFf(entity('slime', { hp: 999, maxHp: 999, status: { poison: 5 } }))
+    const label = () => I(s).enemyViews[0].label?.text ?? ''
+    refresh(s)
+    expect(label()).toContain('[どく]')
+    engine.selectSpell({ name: 'なおし', mp: 1, target: '敵単体', effect: 'cure poison' })
+    expect(engine.getState().enemies[0].status?.poison).toBeUndefined()
+    refresh(s)
+    expect(label()).toContain('[どく]')
+    run(s, 5000)
+    expect(label()).not.toContain('どく')
   })
 })

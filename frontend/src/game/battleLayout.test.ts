@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  fitEnemyLabelWithStatus,
   SIDE_COMMAND_CELL_HEIGHT,
   SIDE_ENEMY_WINDOW_OVERLAP,
   computeEnemyPlateRect,
@@ -2655,5 +2656,20 @@ describe('computeStatusColumns: 味方 HP の桁数別 (#877)', () => {
         SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE - EPS
       )
     }
+  })
+})
+
+describe('fitEnemyLabelWithStatus (#870)', () => {
+  const F = 12
+  it('状態が無ければ名前だけ。あれば名前の後ろに先頭 1 つ、ほかにもあれば「…」を足す', () => {
+    expect(fitEnemyLabelWithStatus('ボス', [], 200, F)).toBe('ボス')
+    expect(fitEnemyLabelWithStatus('ボス', ['どく'], 200, F)).toBe('ボス [どく]')
+    expect(fitEnemyLabelWithStatus('ボス', ['どく', 'しのせんこく'], 200, F)).toBe('ボス [どく…]')
+  })
+  it('狭いときは名前を優先する: 状態名は縮め、名前が半分も読めなければ落とす', () => {
+    const narrow = fitEnemyLabelWithStatus('ながいなまえのボス', ['しのせんこく', 'どく'], 90, F)
+    expect(narrow.startsWith('ながい')).toBe(true)
+    expect(narrow.length).toBeLessThanOrEqual('ながいなまえのボス [しのせんこく…]'.length)
+    expect(fitEnemyLabelWithStatus('ながいなまえのボス', ['どく'], 50, F)).not.toContain('[どく')
   })
 })

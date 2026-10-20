@@ -118,8 +118,13 @@ export function collectMasterData(doc: EventDocument): {
         else if ('Item' in ev) safeAssign(items, ev.Item.id, ev.Item)
         else if ('Spell' in ev) safeAssign(spells, ev.Spell.id, ev.Spell)
         else if ('Skill' in ev) safeAssign(skills, ev.Skill.id, ev.Skill)
-        else if ('Status' in ev) safeAssign(statuses, ev.Status.id, ev.Status)
-        else if ('PartyMember' in ev) {
+        else if ('Status' in ev) {
+          // 同じ id の [状態] は後勝ち。誤記に気づけるよう 1 度だけ知らせる (#870)
+          if (Object.prototype.hasOwnProperty.call(statuses, ev.Status.id)) {
+            console.warn(`[状態 ${ev.Status.id}] が重複している。後ろの宣言で上書きした`)
+          }
+          safeAssign(statuses, ev.Status.id, ev.Status)
+        } else if ('PartyMember' in ev) {
           safeAssign(party, ev.PartyMember.id, ev.PartyMember)
           if (!partyOrder.includes(ev.PartyMember.id)) partyOrder.push(ev.PartyMember.id)
         }

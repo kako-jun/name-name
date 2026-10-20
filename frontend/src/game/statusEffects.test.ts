@@ -197,6 +197,10 @@ describe('statusSuccessRate', () => {
     expect(statusSuccessRate('normal', 99, 0)).toBeCloseTo(0.99)
     expect(statusSuccessRate('normal', 0, undefined)).toBe(0)
     expect(statusSuccessRate('normal', 10, -50)).toBe(0) // 負の成長ぶんでも 0 未満にならない
+    // 非有限の成長ぶん: +Infinity は上限 99%、-Infinity は 0、NaN は成長なし（0 点）扱い
+    expect(statusSuccessRate('normal', 10, Infinity)).toBeCloseTo(MAX_STATUS_CHANCE / 100)
+    expect(statusSuccessRate('normal', 10, -Infinity)).toBe(0)
+    expect(statusSuccessRate('normal', 60, NaN)).toBeCloseTo(0.6)
     expect(statusSuccessRate('normal', 50, NaN)).toBeCloseTo(0.5)
   })
   it('耐性: 無効・吸収は 0 / 半減は ×0.5 / 弱点は ×2（上限 99%・元より下がらない）', () => {

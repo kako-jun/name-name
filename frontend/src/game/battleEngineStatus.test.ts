@@ -697,3 +697,94 @@ describe('状態を付ける・解く行動の記録（MISS にしない）', ()
     expect(run('status marker')?.hits.map((h) => h.kind)).toEqual(['miss'])
   })
 })
+
+describe('反撃・死亡時の行動で付けた状態は、その手番の終わりに減らない', () => {
+  const skills: Record<string, SkillExecution> = {
+    lull: { name: 'ララバイ', target: '相手単体', effect: 'status sleep duration=1' },
+  }
+  const mkBoss = (over: Partial<BattleEntity> = {}) =>
+    ent({ id: 'b', name: 'ボス', hp: 9999, maxHp: 9999, atk: 0, counters: ['候補=lull'], ...over })
+
+  it('従来ターン制: 反撃で付いた睡眠 1 は次の味方の手番を飛ばす（付いた手番では解けない）', () => {
+    const hero = ent({ id: 'h', name: 'ゆうしゃ', hp: 1000, maxHp: 1000, atk: 20 })
+    const e = new BattleEngine([hero], [mkBoss()], { rng: () => 0, statuses: STATUSES, skills })
+    e.selectAttack()
+    const log = e.getState().log
+    const slept = log.indexOf('ゆうしゃ は ねむり になった！')
+    const woke = log.indexOf('ゆうしゃ の ねむり が とけた！')
+    const bossAttack = log.indexOf('ボス の こうげき！')
+    expect(slept).toBeGreaterThanOrEqual(0)
+    expect(bossAttack).toBeGreaterThan(slept)
+    expect(woke).toBeGreaterThan(bossAttack) // 敵の手番のあと、飛ばされた次の手番の終わりで解ける
+  })
+
+  it('ATB: 反撃で付いた睡眠 1 は、行動した本人の手番の終わりには減らない', () => {
+    const hero = ent({ id: 'h', name: 'ゆうしゃ', hp: 1000, maxHp: 1000, atk: 20, agi: 50 })
+    const boss = mkBoss({ agi: 1 })
+    const e = new BattleEngine([hero], [boss], {
+      rng: () => 0,
+      statuses: STATUSES,
+      skills,
+      atb: { mode: 'wait' },
+    })
+    for (let i = 0; i < 20 && e.getState().phase !== 'party-input'; i++) e.tick(700)
+    expect(e.getState().phase).toBe('party-input')
+    e.selectAttack()
+    expect(hero.status?.sleep).toBe(1) // 付いた手番の終わりでは 1 のまま
+  })
+
+  it('従来ターン制: 宣言のある状態を敵が味方に付けたときは従来どおり、味方の次の手番まで減らない', () => {
+    const hero = ent({ id: 'h', name: 'ゆうしゃ', hp: 1000, maxHp: 1000, atk: 20 })
+    const skl: Record<string, SkillExecution> = {
+      lull2: { name: 'ララバイ', target: '相手単体', effect: 'status sleep duration=1' },
+    }
+    const boss = ent({
+      id: 'b',
+      name: 'ボス',
+      hp: 9999,
+      maxHp: 9999,
+      atk: 0,
+      actions: ['候補=lull2'],
+    })
+    const e = new BattleEngine([hero], [boss], { rng: () => 0, statuses: STATUSES, skills: skl })
+    e.selectAttack() // 味方の手番 → 敵が眠らせる
+    const log = e.getState().log
+    expect(log.indexOf('ゆうしゃ の ねむり が とけた！')).toBeGreaterThan(
+      log.indexOf('ゆうしゃ は ねむり になった！')
+    )
+    // 眠らされた手番の次の味方の手番は、飛ばされてから解ける（敵が付けた分は味方の次の手番まで減らない）
+    const stuck = log.indexOf('ゆうしゃ は ねむり で うごけない！')
+    expect(stuck).toBeGreaterThan(log.indexOf('ゆうしゃ は ねむり になった！'))
+    expect(log.indexOf('ゆうしゃ の ねむり が とけた！')).toBeGreaterThan(stuck)
+  })
+})
+
+describe('状態名の控え（イベントの statusLabels）', () => {
+  it('宣言だけして一度も状態が付かない戦闘では、イベントに付かない（旧挙動不変）', () => {
+    const e = new BattleEngine(
+      [ent({ atk: 20 })],
+      [ent({ id: 's', hp: 9999, maxHp: 9999, atk: 0 })],
+      {
+        rng: () => 0,
+        statuses: STATUSES,
+      }
+    )
+    e.selectAttack()
+    expect(e.getState().events.every((ev) => !('statusLabels' in ev))).toBe(true)
+  })
+  it('状態が付いたら、その行動を記録した時点の全員の状態名が付く。全員から消えたことも伝える', () => {
+    const hero = ent({ id: 'h', hp: 1000, maxHp: 1000, atk: 20, status: { poison: 1 } })
+    const e = new BattleEngine([hero], [ent({ id: 's', hp: 9999, maxHp: 9999, atk: 0 })], {
+      rng: () => 0,
+      statuses: STATUSES,
+    })
+    e.selectAttack()
+    const evs = e.getState().events
+    expect(evs[0].statusLabels).toEqual({ party: [['どく']], enemies: [[]] })
+    e.selectAttack()
+    expect(e.getState().events[e.getState().events.length - 1]?.statusLabels).toEqual({
+      party: [[]],
+      enemies: [[]],
+    })
+  })
+})

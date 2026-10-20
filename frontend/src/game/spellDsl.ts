@@ -277,9 +277,12 @@ function parseHitCount(raw: string | undefined): { count: number; warning?: stri
 
 /**
  * `確率=` の値を解釈する (#870)。0 以上の整数 % だけ有効。`MAX_STATUS_CHANCE`（99）を超えたら 99 に切って警告する。
- * 整数でない値は警告して未指定＝必中（従来どおり）に落とす
+ * 負の整数は 0（必ず外れる）に切って警告する（誤記で必中にならない安全側）。それ以外の整数でない値は警告して未指定＝必中に落とす
  */
 function parseChance(raw: string | undefined): { chance?: number; warning?: string } {
+  if (raw !== undefined && /^-\d+$/.test(raw)) {
+    return { chance: 0, warning: `確率=${raw} は負のため 0 にした（必ず外れる）` }
+  }
   if (raw === undefined || !/^\d+$/.test(raw)) {
     return { warning: `確率=${raw ?? ''} は 0〜${MAX_STATUS_CHANCE} の整数でないため必中にした` }
   }
@@ -361,7 +364,7 @@ export interface EffectContext {
   statusRules?: Readonly<Record<string, StatusRule>>
   /**
    * `status` で状態を書いた通知 (#870)。`key` は書いた状態の id（宣言した状態は規則の id、印だけの状態は DSL に書かれた名前）。
-   * エンジンが、付与した本人の手番の終わりに、付けたばかりの状態を減らさないために使う
+   * エンジンが、今の手番の中で付いた状態をその手番の終わりに減らさないために使う
    */
   onStatus?: (target: BattleEntity, key: string, change?: 'apply' | 'cure') => void
 }
@@ -661,9 +664,10 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
         // 宣言した状態は倒れている者に付けない（宣言の無い印は従来どおり対象を選ばない）
         if (rule && t.hp <= 0) continue
         // 付与の成功判定 (#870)。`確率=` が無く耐性も無ければ必中で乱数を使わない（従来と同じ）。
-        // 耐性は属性相性の欄に書いた状態 id（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 99%〉）
+        // 耐性は属性相性の欄に書いた状態 id（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 99%〉）。
+        // 宣言の無い印には耐性を当てない（従来どおり、`確率=` だけで判定する）
         const rate = statusSuccessRate(
-          resolveAffinity(t.affinity, ruleId ?? effect.state),
+          rule && ruleId !== null ? resolveAffinity(t.affinity, ruleId) : 'normal',
           effect.chance,
           ctx.caster.statusChanceBonus
         )
