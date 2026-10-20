@@ -2,7 +2,7 @@
  * 一枚絵フィールドサンプルページ (#807) のブラウザ側エントリ。本編からはリンクしない開発用ページ。
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
-import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js'
+import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { orderedLayers } from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
@@ -35,6 +35,15 @@ import {
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
+import { scrollOffset, shakeOffset } from '../game/fieldMotion'
+import {
+  WARP_COLOR,
+  WARP_LOAD_TIMEOUT_MS,
+  canStartBattleNow,
+  sampleWarp,
+  withTimeout,
+} from '../game/fieldWarp'
+import { hasOwn } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
   DIAGONAL_FACINGS,
@@ -45,6 +54,7 @@ import {
   pickConfigSource,
   parseConfigText,
   type FieldSampleConfig,
+  type FieldWarp,
 } from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 import { buildBattleMenu } from './battleMenu'
@@ -81,19 +91,23 @@ async function loadBitmap(url: string): Promise<ImageBitmap> {
 }
 
 interface LoadedScene {
+  id: string
   background: Texture
   mask: WalkMask
   overlay: Texture
   /** 前面レイヤー (#866)。シーンに foreground が無ければ null */
   foreground: { texture: Texture; mask: ForegroundMask } | null
+  /** 窓の外の流れる景色 (#864)。シーンに scroll が無ければ null */
+  scroll: Texture | null
 }
 
 async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedScene> {
   const sc = config.scenes[id]
-  const [bg, maskBmp, fgBmp] = await Promise.all([
+  const [bg, maskBmp, fgBmp, scrollBmp] = await Promise.all([
     loadBitmap(sc.background),
     loadBitmap(sc.mask),
     sc.foreground ? loadBitmap(sc.foreground) : Promise.resolve(null),
+    sc.scroll ? loadBitmap(sc.scroll.image) : Promise.resolve(null),
   ])
   const canvas = document.createElement('canvas')
   canvas.width = maskBmp.width
@@ -131,7 +145,14 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
     }
   }
   ctx.putImageData(ov, 0, 0)
-  return { background: Texture.from(bg), mask, overlay: Texture.from(canvas), foreground }
+  return {
+    id,
+    background: Texture.from(bg),
+    mask,
+    overlay: Texture.from(canvas),
+    foreground,
+    scroll: scrollBmp ? Texture.from(scrollBmp) : null,
+  }
 }
 
 async function loadConfig(): Promise<FieldSampleConfig> {
@@ -217,6 +238,13 @@ async function main(): Promise<void> {
   })
   $('stage').appendChild(app.canvas as HTMLCanvasElement)
 
+  // 窓の外の流れる景色 (#864): 背景より奥。背景の透明な部分から見える
+  const scrollSprite = new TilingSprite({
+    texture: Texture.EMPTY,
+    width: scene.mask.width,
+    height: scene.mask.height,
+  })
+  scrollSprite.visible = false
   const bgSprite = new Sprite(scene.background)
   const overlaySprite = new Sprite(scene.overlay)
   // 前面レイヤー (#866): 主人公より手前。シーンに前面が無ければ非表示
@@ -229,6 +257,7 @@ async function main(): Promise<void> {
   // 描画順は layers.ts (テストで固定)
   world.addChild(
     ...orderedLayers<Container>({
+      scroll: scrollSprite,
       background: bgSprite,
       overlay: overlaySprite,
       player,
@@ -252,14 +281,18 @@ async function main(): Promise<void> {
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
   let lastOutcome = '-'
-  const startBattle = (enemies: BattleEntity[]): void => {
-    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）。押しっぱなしの pointer capture も解放する
+  /** 歩きの入力を全部捨てる。押しっぱなしの pointer capture も解放する（戦闘・ワープの開始時） */
+  const releaseWalkInput = (): void => {
     keys.up = keys.down = keys.left = keys.right = false
     if (activePointerId !== null && canvas.hasPointerCapture(activePointerId))
       canvas.releasePointerCapture(activePointerId)
     activePointerId = null
     pointer = null
     movingMs = 0
+  }
+  const startBattle = (enemies: BattleEntity[]): void => {
+    // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
+    releaseWalkInput()
     const b = config.battle
     const menu = buildBattleMenu(config)
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
@@ -302,6 +335,8 @@ async function main(): Promise<void> {
     fade.visible = true
     encState = afterBattleState()
   }
+  /** 揺れ・景色の流れの時計（戦闘中は進まない） */
+  let clockMs = 0
   let transition: {
     phase: 'out' | 'in'
     t: number
@@ -309,15 +344,116 @@ async function main(): Promise<void> {
     next?: Promise<LoadedScene>
   } | null = null
 
+  // ---- ワープ (#864) ----
+  interface WarpRun {
+    warp: FieldWarp
+    t: number
+    next: Promise<LoadedScene>
+    /** 読み込めたシーン（out が終わるまでに届いていなければ、届くまで out の終端で待つ） */
+    ready: LoadedScene | null
+    switched: boolean
+  }
+  let warpRun: WarpRun | null = null
+  /** ワープを中止して元のシーンへ戻す（覆いの色も黒に戻す。flash の白が端リンクのフェードに残らないように） */
+  const abortWarp = (): void => {
+    warpRun = null
+    fade.alpha = 0
+    fade.tint = 0x000000
+  }
+  /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
+  const startWarp = (id: string): boolean => {
+    if (battle || transition || warpRun) return false
+    if (!hasOwn(config.warps, id)) {
+      console.warn(`[field-sample] 未知のワープ id: ${id}`)
+      return false
+    }
+    const warp = config.warps[id]
+    const run: WarpRun = {
+      warp,
+      t: 0,
+      // 読み込みが終わらなくても暗転のまま待ち続けない（WARP_LOAD_TIMEOUT_MS で中止）
+      next: withTimeout(
+        ensureScene(warp.to),
+        WARP_LOAD_TIMEOUT_MS,
+        `読み込みが ${WARP_LOAD_TIMEOUT_MS / 1000} 秒以内に終わりませんでした`
+      ),
+      ready: null,
+      switched: false,
+    }
+    run.next.then(
+      (s) => {
+        run.ready = s
+      },
+      (e) => {
+        if (disposed) return
+        // 読み込み失敗・タイムアウト: 元のシーンへ戻す
+        if (warpRun === run) abortWarp()
+        showError(`ワープ先の読み込みに失敗しました\n${e instanceof Error ? e.message : String(e)}`)
+      }
+    )
+    fade.tint = WARP_COLOR[warp.effect]
+    releaseWalkInput()
+    warpRun = run
+    return true
+  }
+  const tickWarp = (dt: number): void => {
+    const run = warpRun
+    if (!run) return
+    const timing = run.warp.timing
+    run.t += dt
+    // 覆い切ったところで、遷移先が読めるまで待つ
+    if (!run.switched && run.t >= timing.outMs) {
+      if (!run.ready) run.t = timing.outMs
+      else {
+        const dst = run.ready
+        const landing = snapToWalkable(dst.mask, run.warp.at, 80)
+        if (!landing) {
+          showError(
+            `ワープ先 ${run.warp.id} の at (${run.warp.at.x}, ${run.warp.at.y}) の近くに歩ける点がありません。ワープを中止しました`
+          )
+          abortWarp()
+          return
+        }
+        sceneId = dst.id
+        applyScene(dst)
+        fade.tint = WARP_COLOR[run.warp.effect]
+        pos = landing
+        if (run.warp.facing) facing = run.warp.facing
+        disarmed = null
+        movingMs = 0
+        run.switched = true
+        showError(null)
+      }
+    }
+    const smp = sampleWarp(timing, run.t)
+    fade.alpha = smp.alpha
+    if (smp.phase === 'done' && run.switched) {
+      warpRun = null
+      fade.alpha = 0
+      fade.tint = 0x000000
+    }
+  }
+
   const applyScene = (s: LoadedScene): void => {
     scene = s
     bgSprite.texture = s.background
     overlaySprite.texture = s.overlay
     foregroundSprite.texture = s.foreground?.texture ?? Texture.EMPTY
     foregroundSprite.visible = s.foreground !== null
+    // 景色: 画像の高さのまま横にタイル。高さは画像 1 枚分（y から下はなし）
+    const sc = config.scenes[s.id]
+    scrollSprite.visible = s.scroll !== null && !!sc.scroll
+    if (s.scroll && sc.scroll) {
+      scrollSprite.texture = s.scroll
+      scrollSprite.width = s.mask.width
+      scrollSprite.height = s.scroll.height
+      scrollSprite.y = sc.scroll.y
+    }
     if (app.renderer.width !== s.mask.width || app.renderer.height !== s.mask.height)
       app.renderer.resize(s.mask.width, s.mask.height)
-    fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0x000000)
+    // 白で塗って tint で色を切り替える（暗転=黒・ワープの flash=白）
+    fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0xffffff)
+    fade.tint = 0x000000
   }
   applyScene(scene)
   fade.alpha = 0
@@ -391,7 +527,8 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (battle || transition) return
+    if (!canStartBattleNow({ battle: !!battle, transition: !!transition, warping: !!warpRun }))
+      return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
     const r = advanceEncounter(
@@ -425,7 +562,11 @@ async function main(): Promise<void> {
     const w = scene.mask.width
     const h = scene.mask.height
 
-    if (transition) {
+    clockMs += dt
+    if (warpRun) {
+      // ワープ中は入力・移動・エンカウントを止める（描画の時計だけ進む）
+      tickWarp(dt)
+    } else if (transition) {
       transition.t += dt
       if (transition.phase === 'out') {
         fade.alpha = Math.min(1, transition.t / FADE_MS)
@@ -521,6 +662,12 @@ async function main(): Promise<void> {
     }
 
     // ---- 描画 ----
+    // 揺れ (#864): 描画だけを上下に揺らす。足元・マスク判定は動かない
+    const shake = config.scenes[sceneId].shake
+    world.y = shake ? shakeOffset(shake, clockMs) : 0
+    const scrollCfg = config.scenes[sceneId].scroll
+    if (scrollCfg && scene.scroll)
+      scrollSprite.tilePosition.x = scrollOffset(scrollCfg.speed, clockMs, scene.scroll.width)
     const tex = walkTex[facing]![walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
     player.texture = tex
     const s = playerScale(
@@ -542,6 +689,23 @@ async function main(): Promise<void> {
     $('info').textContent =
       `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}${scene.foreground ? `  前面に隠れる=${(hidden * 100).toFixed(0)}%` : ''}`
   })
+
+  // ワープの呼び出し口 (#864)。脚本・出口ゾーン(#842)・テストが id だけでワープを起こす。開発用ページ専用
+  const api = {
+    warp: startWarp,
+    /** 現在の状態（検証用の読み取り） */
+    state: () => ({ sceneId, pos: { ...pos }, facing, warping: warpRun !== null }),
+  }
+  ;(window as unknown as { fieldSample?: typeof api }).fieldSample = api
+  const warpBox = $('tb-warps')
+  for (const id of Object.keys(config.warps)) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.textContent = `ワープ: ${id}`
+    b.dataset.warp = id
+    b.addEventListener('click', () => startWarp(id))
+    warpBox.appendChild(b)
+  }
 
   // bfcache に入る場合（persisted）は破棄しない（pageshow で復帰したとき動かなくなるため）
   const onPageHide = (ev: PageTransitionEvent): void => {

@@ -3,6 +3,7 @@
  * 来なくなるため、main.ts はこの並びのまま addChild し、layers.test.ts で順序を固定する。
  */
 export const WORLD_LAYER_ORDER = [
+  'scroll',
   'background',
   'overlay',
   'player',
