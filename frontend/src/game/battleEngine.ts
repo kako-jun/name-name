@@ -76,7 +76,7 @@ export interface BattleHit {
   /**
    * 1 回の行動の中の何発目か（0 始まり。全体対象の `回数=N` は何巡目か）(#879)。**複数ヒット（効果 DSL `damage … 回数=N`）のときだけ付く**。
    * 無い（単発）は 0 と同じ。`hits` 配列の順序がそのまま再生順で、同じ `target` が複数回現れてよく、
-   * `hpBefore` / `hpAfter` は直前のヒットから連鎖する（1 発目の `hpAfter` = 2 発目の `hpBefore`）。表示の順次再生は未実装（#879 P2）
+   * `hpBefore` / `hpAfter` は直前のヒットから連鎖する（1 発目の `hpAfter` = 2 発目の `hpBefore`）。FF 式の順次再生は実装済み（`round` ごとに `MULTI_HIT_INTERVAL_MS` 間隔で発火。`battleMotion.ts`）
    */
   round?: number
 }
