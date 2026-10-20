@@ -15,7 +15,6 @@ import {
 } from '../game/fieldEncounter'
 import type { BattleEntity } from '../game/spellDsl'
 import {
-  arrivalPosition,
   detectEdgeLink,
   foregroundCoverage,
   foregroundFromRgba,
@@ -23,6 +22,7 @@ import {
   isOutward,
   keysToVector,
   maskFromRgba,
+  isAssistCell,
   maskWithAssist,
   playerScale,
   pointerToVector,
@@ -41,7 +41,7 @@ import {
 import {
   INITIAL_ASSIST_RUNTIME,
   arrivalMask,
-  arrivalRuntime,
+  resolveEdgeArrival,
   limitRetreat,
   assistSpeed,
   companionDisplayAlpha,
@@ -315,6 +315,20 @@ async function main(): Promise<void> {
       s.maskAssist,
       config.assist ? evalAssist(config.assist, flagValues).passable : false
     )
+  // ワープの at・開始位置が橙の上なのに通れない状態だと、近い白へずらされる（向こう側の白になりうる）。
+  // 端リンクと違い「来た端」が無く橙の上に置けないので、設定の見直しを促す
+  const warnOrangeShifted = (what: string, s: LoadedScene, p: Vec, passable: boolean): void => {
+    if (!passable && isAssistCell(s.mask, p.x, p.y))
+      console.warn(
+        `[field-sample] ${what} (${p.x}, ${p.y}) は橙の上ですが、いまは通れない状態なので近い白へずらします。橙を避けた位置にしてください`
+      )
+  }
+  warnOrangeShifted(
+    'start',
+    scene,
+    config.start,
+    config.assist ? evalAssist(config.assist, config.flags).passable : false
+  )
   const startSnap = snapToWalkable(landingMask(scene, config.flags), config.start, 80)
   if (!startSnap)
     showError(
@@ -465,6 +479,12 @@ async function main(): Promise<void> {
       if (!run.ready) run.t = timing.outMs
       else {
         const dst = run.ready
+        warnOrangeShifted(
+          `ワープ ${run.warp.id} の at`,
+          dst,
+          run.warp.at,
+          config.assist ? evalAssist(config.assist, flags).passable : false
+        )
         const landing = snapToWalkable(landingMask(dst, flags), run.warp.at, 80)
         if (!landing) {
           showError(
@@ -640,21 +660,16 @@ async function main(): Promise<void> {
             .then((dst) => {
               if (disposed) return
               const back = findReturnLink(config, sceneId, link)
-              const arrived = back
-                ? arrivalPosition(
-                    link,
-                    pos,
-                    back,
-                    landingMask(dst, flags),
-                    config.edgeThreshold * ARRIVAL_INSET_FACTOR
-                  )
-                : null
-              const fallback = snapToWalkable(
-                landingMask(dst, flags),
-                { x: dst.mask.width / 2, y: dst.mask.height / 2 },
-                Math.max(dst.mask.width, dst.mask.height)
-              )
-              const landing = arrived ?? fallback
+              // 着地点は通行状態に関係なく橙も歩ける扱いで探す（通れない状態でも橙の階段の上に着く）
+              const arrival = resolveEdgeArrival({
+                link,
+                back,
+                srcPos: pos,
+                base: dst.mask,
+                assisted: dst.maskAssist,
+                inset: config.edgeThreshold * ARRIVAL_INSET_FACTOR,
+              })
+              const landing = arrival?.pos ?? null
               if (!landing) {
                 // 新シーンに歩ける点が無い: 遷移を中止して元のシーンに留まる
                 disarmed = link
@@ -669,7 +684,7 @@ async function main(): Promise<void> {
               applyScene(dst)
               pos = landing
               // 端リンクで橙の上に着いたら、来た端を「入ってきた場所」にする（拒否されても渡り切れない）
-              if (back) assistRt = arrivalRuntime(dst.mask, landing, back.edge)
+              assistRt = arrival?.runtime ?? INITIAL_ASSIST_RUNTIME
               disarmed = back
               movingMs = 0
               transition = { phase: 'in', t: 0 }
@@ -708,7 +723,6 @@ async function main(): Promise<void> {
         : null
       if (frame) assistRt = frame.runtime
       const walkMask = frame ? frame.walkMask : scene.mask
-      const moveVec = frame ? frame.moveVec : vec
       const speed =
         ast && config.assist && frame
           ? assistSpeed(config.speed, frame.onAssist, ast.ghost, config.assist.speedFactor)
@@ -731,8 +745,8 @@ async function main(): Promise<void> {
         dt,
         config.assist?.fadeMs ?? 0
       )
-      const moved = stepMove(walkMask, pos, moveVec, speed, dt)
-      const r = frame?.retreatFrom ? limitRetreat(frame.retreatFrom, pos, moved) : moved
+      const moved = stepMove(walkMask, pos, vec, speed, dt)
+      const r = frame?.retreatField ? limitRetreat(frame.retreatField, pos, moved) : moved
       pos = r.pos
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0

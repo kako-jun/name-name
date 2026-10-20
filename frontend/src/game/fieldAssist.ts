@@ -5,8 +5,11 @@
  * 通るときは同行者が主人公の後ろに現れて押す。例外の場所は設けない。
  */
 import {
+  arrivalPosition,
   isAssistCell,
+  snapToWalkable,
   type Edge,
+  type FieldLink,
   type Facing,
   type Facing8,
   type MoveResult,
@@ -139,6 +142,16 @@ export function companionDisplayAlpha(alpha: number, ghost: boolean, ghostAlpha:
 }
 
 /**
+ * 入口からの経路距離の場。assisted マスク（橙も歩ける）の歩けるセルに、入口（端リンク到着なら来た端）から
+ * 4 近傍で辿った歩数を入れる。入口から辿れないセルは -1。
+ */
+export interface DistanceField {
+  width: number
+  height: number
+  dist: Int32Array
+}
+
+/**
  * 橙の通行状態のラッチ。足元が橙に入った時点で作り、橙を抜けるまで持つ。
  * entry は橙に入る直前の「橙でない」足元（戻る方向の基準）。端リンクで橙の上に着いたときは、来た端の
  * 外側の点（arrivalRuntime）。ワープや開始位置で最初から橙の上に立っていたときは null
@@ -146,6 +159,10 @@ export function companionDisplayAlpha(alpha: number, ghost: boolean, ghostAlpha:
  */
 export interface AssistLatch {
   entry: Vec | null
+  /** ラッチを作った時点で通れる状態だったか。真の間（途中でフラグが変わっても）同行者が押し、速度倍率を掛ける */
+  pushed: boolean
+  /** entry からの経路距離の場。通行が止まった最初のフレームに 1 回だけ作る（作る前は undefined） */
+  field?: DistanceField
 }
 
 /** 条件付き通行の 1 フレーム分の実行時状態 */
@@ -173,13 +190,11 @@ export interface AssistFrameInput {
 export interface AssistFrame {
   /** 移動に使うマスク */
   walkMask: WalkMask
-  /** 移動ベクトル */
-  moveVec: Vec
   /**
-   * ラッチ中に通行が止まった間の「入ってきた場所」。非 null のあいだ、動いたあとのこの点までの距離が
-   * 動く前より大きくなる移動は通さない（limitRetreat）。入ってきた側へ戻れるが、前へは進めない
+   * ラッチ中に通行が止まった間の、入口からの経路距離の場。非 null のあいだ、動いたあとの場の値が
+   * 動く前より大きくなる移動は通さない（limitRetreat）。入口へ向かう側へは動けるが、前へは進めない
    */
-  retreatFrom: Vec | null
+  retreatField: DistanceField | null
   /** 橙の上で押されている（速度倍率を掛ける）か */
   onAssist: boolean
   /** 同行者を出したいか */
@@ -195,8 +210,10 @@ export interface AssistFrame {
  * - 橙の外: 通れる状態なら橙も歩ける。橙へ進もうとして通れなければ blocked（脚本への合図）
  * - 橙に入ったら、抜けるまで「押されている」状態をラッチする。同行者と速度倍率はラッチの間ずっと維持し、
  *   途中でフラグが変わっても blocked は出さない（合図は入口の 1 回だけ）
- * - ラッチ中に通れない状態（unless=拒否・requires が偽）になったら、橙の中では「入ってきた側へ戻る」
- *   動きにだけ進める（retreatFrom と limitRetreat。前へは進めない。橙の中で詰まらず、渡り切ることもできない）
+ * - ラッチ中に通れない状態（unless=拒否・requires が偽）になったら、橙の中では「入口へ向かう」動きにだけ
+ *   進める（retreatField と limitRetreat）。入口からの経路距離が増える移動は通さない。保証するのは、
+ *   渡り切れない（橙が折り返していても向こう側の白へ抜けない）ことと、入口へ向かう経路に沿って必ず動けること。
+ *   入口と逆向きの入力は、経路が折り返す場所では動けないことがある（その向きには進めない）
  */
 export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
   const { base, assisted, pos, vec, state, runtime } = input
@@ -204,41 +221,92 @@ export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
   if (!onOrange) {
     return {
       walkMask: state.passable ? assisted : base,
-      moveVec: vec,
-      retreatFrom: null,
+      retreatField: null,
       onAssist: false,
       wantCompanion: companionWanted(base, pos, vec, state.passable),
       blocked: blockedAttempt(base, pos, vec, state.passable),
       runtime: { latch: null, lastFree: { x: pos.x, y: pos.y } },
     }
   }
-  const latch: AssistLatch = runtime.latch ?? { entry: runtime.lastFree }
-  const next: AssistRuntime = { latch, lastFree: runtime.lastFree }
-  const pushed = state.passable || latch.entry !== null
+  let latch: AssistLatch = runtime.latch ?? { entry: runtime.lastFree, pushed: state.passable }
+  if (!state.passable && latch.entry && !latch.field) {
+    latch = { ...latch, field: buildDistanceField(assisted, latch.entry) }
+  }
+  const pushed = state.passable || latch.pushed
   return {
     walkMask: assisted,
-    moveVec: vec,
-    retreatFrom: !state.passable ? latch.entry : null,
+    retreatField: !state.passable && latch.entry ? (latch.field ?? null) : null,
     onAssist: pushed,
     wantCompanion: pushed,
     blocked: false,
-    runtime: next,
+    runtime: { latch, lastFree: runtime.lastFree },
   }
 }
 
 /**
- * 戻る動きだけを通す。stepMove の結果 moved が、入ってきた場所 from までの距離を動く前より大きくするなら、
- * その移動は無かったことにする（壁に沿った滑りで前向きの成分だけが通るのも、ここで止まる）
+ * 入口 entry からの経路距離の場を作る（マスクのセル数に比例・決定的）。entry がマスクの中ならそのセルを、
+ * 外（端リンクで着いたときの来た端の外側）なら、その端の歩けるセルすべてを 0 の種にする。
  */
-export function limitRetreat(from: Vec, prev: Vec, moved: MoveResult): MoveResult {
-  const d0 = Math.hypot(from.x - prev.x, from.y - prev.y)
-  const d1 = Math.hypot(from.x - moved.pos.x, from.y - moved.pos.y)
-  return d1 > d0 ? { pos: prev, distance: 0 } : moved
+export function buildDistanceField(mask: WalkMask, entry: Vec): DistanceField {
+  const { width, height, walkable, assist } = mask
+  const dist = new Int32Array(width * height).fill(-1)
+  const ok = (i: number): boolean => walkable[i] === 1 || (assist !== undefined && assist[i] === 1)
+  const queue = new Int32Array(width * height)
+  let head = 0
+  let tail = 0
+  const seed = (x: number, y: number): void => {
+    const i = y * width + x
+    if (dist[i] === -1 && ok(i)) {
+      dist[i] = 0
+      queue[tail++] = i
+    }
+  }
+  if (entry.y < 0) for (let x = 0; x < width; x++) seed(x, 0)
+  else if (entry.y >= height) for (let x = 0; x < width; x++) seed(x, height - 1)
+  else if (entry.x < 0) for (let y = 0; y < height; y++) seed(0, y)
+  else if (entry.x >= width) for (let y = 0; y < height; y++) seed(width - 1, y)
+  else seed(Math.floor(entry.x), Math.floor(entry.y))
+  while (head < tail) {
+    const i = queue[head++]
+    const x = i % width
+    const y = (i - x) / width
+    const d = dist[i] + 1
+    const push = (nx: number, ny: number): void => {
+      const j = ny * width + nx
+      if (dist[j] === -1 && ok(j)) {
+        dist[j] = d
+        queue[tail++] = j
+      }
+    }
+    if (x > 0) push(x - 1, y)
+    if (x < width - 1) push(x + 1, y)
+    if (y > 0) push(x, y - 1)
+    if (y < height - 1) push(x, y + 1)
+  }
+  return { width, height, dist }
+}
+
+/** 場の値。マスクの外・入口から辿れないセルは Infinity */
+function fieldAt(field: DistanceField, p: Vec): number {
+  const x = Math.floor(p.x)
+  const y = Math.floor(p.y)
+  if (x < 0 || y < 0 || x >= field.width || y >= field.height) return Infinity
+  const d = field.dist[y * field.width + x]
+  return d < 0 ? Infinity : d
+}
+
+/**
+ * 戻る動きだけを通す。stepMove の結果 moved の場の値（入口からの経路距離）が動く前より大きくなるなら、
+ * その移動は無かったことにする（壁に沿った滑りで前向きの成分だけが通るのも、ここで止まる）。
+ * 場の値は一度も増えないので、橙が折り返していても入口側の連結な経路の外へは出られない
+ */
+export function limitRetreat(field: DistanceField, prev: Vec, moved: MoveResult): MoveResult {
+  return fieldAt(field, moved.pos) > fieldAt(field, prev) ? { pos: prev, distance: 0 } : moved
 }
 
 /**
  * 端リンクで着いた直後の実行時状態。着地点が橙の上なら、来た端の外側（画像の外の 1 つ手前）を「入ってきた場所」に
- * する。拒否されると戻る向き＝来た端になり、渡り切れない（シーンをまたいでも橙の契約を保つ）。
+ * する。拒否されると戻る先＝来た端になり、渡り切れない（シーンをまたいでも橙の契約を保つ）。
  * 橙でない場所に着いたなら、ラッチは空で良い（次に橙へ入るときに作られる）
  */
 export function arrivalRuntime(base: WalkMask, landing: Vec, edge: Edge): AssistRuntime {
@@ -254,7 +322,41 @@ export function arrivalRuntime(base: WalkMask, landing: Vec, edge: Edge): Assist
   return { latch: null, lastFree: outside }
 }
 
-/** 到着位置（ワープの at・端リンク・開始位置）の計算に使うマスク。通れる状態なら橙も歩ける扱い */
+const OPPOSITE: Record<Edge, Edge> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }
+
+/** 端リンクの到着位置とそのときの実行時状態 */
+export interface EdgeArrival {
+  pos: Vec
+  runtime: AssistRuntime
+}
+
+/**
+ * 端リンクで着く場所と実行時状態を決める。着地点は通行状態に関係なく常に assisted マスク（橙も歩ける）で探す
+ * （通れない状態でも橙の階段の上に着き、橙を飛び越えて向こうの白に置かれない）。戻りリンク back が無い
+ * 片道リンクでは、来た端（link.edge の反対側）を入ってきた端として扱う。歩ける点が無ければ null
+ */
+export function resolveEdgeArrival(args: {
+  link: FieldLink
+  back: FieldLink | null
+  srcPos: Vec
+  base: WalkMask
+  assisted: WalkMask
+  inset: number
+}): EdgeArrival | null {
+  const { link, back, srcPos, base, assisted, inset } = args
+  const arrived = back ? arrivalPosition(link, srcPos, back, assisted, inset) : null
+  const pos =
+    arrived ??
+    snapToWalkable(
+      assisted,
+      { x: assisted.width / 2, y: assisted.height / 2 },
+      Math.max(assisted.width, assisted.height)
+    )
+  if (!pos) return null
+  return { pos, runtime: arrivalRuntime(base, pos, back ? back.edge : OPPOSITE[link.edge]) }
+}
+
+/** 到着位置（ワープの at・開始位置）の計算に使うマスク。通れる状態なら橙も歩ける扱い */
 export function arrivalMask(base: WalkMask, assisted: WalkMask, passable: boolean): WalkMask {
   return passable ? assisted : base
 }

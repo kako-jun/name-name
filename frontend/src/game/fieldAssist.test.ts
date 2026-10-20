@@ -16,6 +16,8 @@ import {
   arrivalMask,
   arrivalRuntime,
   limitRetreat,
+  buildDistanceField,
+  resolveEdgeArrival,
   INITIAL_ASSIST_RUNTIME,
   type AssistRuntime,
   type AssistState,
@@ -25,10 +27,14 @@ import {
   maskWithAssist,
   snapToWalkable,
   stepMove,
+  type FieldLink,
   type Facing8,
   type Vec,
   type WalkMask,
 } from './fieldWalk'
+
+import { isAssistCell } from './fieldWalk'
+const isAssistCellOf = (m: WalkMask, p: Vec): boolean => isAssistCell(m, p.x, p.y)
 
 /** ASCII マスク: '.' 白 / '#' 黒 / 'o' 橙。1 行 = 1 y */
 function maskOf(rows: string[]): WalkMask {
@@ -198,8 +204,8 @@ describe('橙の通行状態のラッチ（橙の上で通行が止まっても�
       })
       const ev = stepBlockedEvent(armed0.v, fr.blocked)
       armed0.v = ev.armed
-      const moved = stepMove(fr.walkMask, t.pos, fr.moveVec, fr.onAssist ? 70 : 100, 16)
-      const r = fr.retreatFrom ? limitRetreat(fr.retreatFrom, t.pos, moved) : moved
+      const moved = stepMove(fr.walkMask, t.pos, vec, fr.onAssist ? 70 : 100, 16)
+      const r = fr.retreatField ? limitRetreat(fr.retreatField, t.pos, moved) : moved
       t = {
         pos: r.pos,
         runtime: fr.runtime,
@@ -306,19 +312,74 @@ describe('arrivalMask（到着位置は通れる状態なら橙込みで）', ()
 })
 
 describe('戻る動きだけを通す (limitRetreat)', () => {
-  const from: Vec = { x: 0, y: 0 }
-  const prev: Vec = { x: 10, y: 0 }
-  it('入ってきた場所に近づく動きは通し、遠ざかる・横へそれる動きは無かったことにする', () => {
-    const closer = { pos: { x: 9, y: 0.5 }, distance: 1 }
-    expect(limitRetreat(from, prev, closer)).toBe(closer)
-    expect(limitRetreat(from, prev, { pos: { x: 11, y: 0 }, distance: 1 })).toEqual({
+  // 横一列。x=0 が入口。場の値は x と同じ
+  const field = buildDistanceField(maskOf(['.'.repeat(30)]), { x: 0.5, y: 0.5 })
+  const prev: Vec = { x: 10.5, y: 0.5 }
+  it('場の値が増えない動きは通し、増える動きは無かったことにする', () => {
+    const closer = { pos: { x: 9.5, y: 0.5 }, distance: 1 }
+    expect(limitRetreat(field, prev, closer)).toBe(closer)
+    expect(limitRetreat(field, prev, { pos: { x: 11.5, y: 0.5 }, distance: 1 })).toEqual({
       pos: prev,
       distance: 0,
     })
-    expect(limitRetreat(from, prev, { pos: { x: 10, y: 1 }, distance: 1 })).toEqual({
-      pos: prev,
-      distance: 0,
-    })
+  })
+})
+
+describe('経路距離の場 (buildDistanceField)', () => {
+  it('入口から 4 近傍で辿った歩数になり、辿れないセルは -1。黒は越えない', () => {
+    const f = buildDistanceField(maskOf(['..#..', '.o#.o']), { x: 0.5, y: 0.5 })
+    expect(Array.from(f.dist)).toEqual([0, 1, -1, -1, -1, 1, 2, -1, -1, -1])
+  })
+  it('入口がマスクの外（来た端の外側）なら、その端の歩けるセルすべてが 0 の種になる', () => {
+    const f = buildDistanceField(maskOf(['.#.', '...', '#..']), { x: 1, y: -1 })
+    expect(Array.from(f.dist.slice(0, 3))).toEqual([0, -1, 0])
+    expect(Array.from(f.dist.slice(3, 6))).toEqual([1, 2, 1])
+    const b = buildDistanceField(maskOf(['...', '#..']), { x: 1, y: 2 })
+    expect(Array.from(b.dist)).toEqual([2, 1, 1, -1, 0, 0])
+  })
+})
+
+describe('折り返す（逆 U 字の）橙でも渡り切れず、入口へは経路どおりに戻れる', () => {
+  // 逆 U 字の橙。左腕 (x=1..2) と右腕 (x=7..8) が y=1..10、上 (y=0) でつながる。腕の下は左が入口の白、右が向こう側の白
+  // （黒で隔てられ、橙を通らないと行き来できない）。入口の白から左腕へ入り、上を回って右腕まで来た状態で拒否される
+  const base = maskOf([
+    '#oooooooo#',
+    ...Array(10).fill('#oo####oo#'),
+    ...Array(3).fill('#..####..#'),
+  ])
+  const asst = maskWithAssist(base)
+  const REFUSE: AssistState = { passable: false, held: true, ghost: false }
+  const entry: Vec = { x: 1.5, y: 11.5 }
+  const start: Vec = { x: 7.5, y: 5.5 }
+  function walk(legs: [Vec, number][], from: Vec): Vec {
+    let pos = from
+    let runtime: AssistRuntime = { latch: { entry, pushed: true }, lastFree: entry }
+    for (const [vec, frames] of legs)
+      for (let f = 0; f < frames; f++) {
+        const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state: REFUSE, runtime })
+        runtime = fr.runtime
+        const m = stepMove(fr.walkMask, pos, vec, 40, 16)
+        pos = (fr.retreatField ? limitRetreat(fr.retreatField, pos, m) : m).pos
+      }
+    return pos
+  }
+  it('前（右腕の下の向こう側の白）へは、直線では入口に近づいていても抜けられない', () => {
+    const down = walk([[{ x: 0, y: 1 }, 400]], start)
+    expect(down.y).toBeLessThanOrEqual(start.y + 1e-6)
+  })
+  it('入口へは経路どおり（右腕を上り → 上を左へ → 左腕を下る）戻れて、橙を出る', () => {
+    const up = walk([[{ x: 0, y: -1 }, 100]], start)
+    expect(up.y).toBeLessThan(1) // 戻る側（上）は詰まらない
+    const out = walk(
+      [
+        [{ x: 0, y: -1 }, 100],
+        [{ x: -1, y: 0 }, 150],
+        [{ x: 0, y: 1 }, 150],
+      ],
+      start
+    )
+    expect(out.y).toBeGreaterThan(10.9)
+    expect(out.x).toBeLessThan(3)
   })
 })
 
@@ -336,12 +397,12 @@ describe('橙の帯の中で壁に沿って滑っても前へ進めない', () =
 
   function slide(vec: Vec, frames: number, start: Vec): Vec {
     let pos = start
-    let runtime: AssistRuntime = { latch: { entry }, lastFree: entry }
+    let runtime: AssistRuntime = { latch: { entry, pushed: true }, lastFree: entry }
     for (let f = 0; f < frames; f++) {
       const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state: REFUSE, runtime })
       runtime = fr.runtime
-      const moved = stepMove(fr.walkMask, pos, fr.moveVec, 70, 16)
-      pos = (fr.retreatFrom ? limitRetreat(fr.retreatFrom, pos, moved) : moved).pos
+      const moved = stepMove(fr.walkMask, pos, vec, 70, 16)
+      pos = (fr.retreatField ? limitRetreat(fr.retreatField, pos, moved) : moved).pos
     }
     return pos
   }
@@ -349,7 +410,7 @@ describe('橙の帯の中で壁に沿って滑っても前へ進めない', () =
   it('入口側の壁へ寄せつつ前向きの成分が混ざる入力でも、前へ進めない（斜めの許可入力が壁で滑る）', () => {
     // entry より右の壁際。vec·(entry-pos) は正だが、右の壁に当たると y だけが前へ滑る
     const end = slide({ x: 1, y: 0.1 }, 400, { x: 19.2, y: 30 })
-    expect(end.y).toBeLessThanOrEqual(30 + 1e-6)
+    expect(end.y).toBeLessThan(31) // 場はセル単位なので、同じセルの中の 1 セル未満は動ける。それ以上は前へ進めない
   })
 
   it('入ってきた側（上）へはまっすぐ戻れる', () => {
@@ -386,8 +447,8 @@ describe('端リンクで橙の上に着いたときのラッチ (arrivalRuntime
     for (let f = 0; f < frames; f++) {
       const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state: REFUSE, runtime: rt })
       rt = fr.runtime
-      const m = stepMove(fr.walkMask, pos, fr.moveVec, 70, 16)
-      const r = fr.retreatFrom ? limitRetreat(fr.retreatFrom, pos, m) : m
+      const m = stepMove(fr.walkMask, pos, vec, 70, 16)
+      const r = fr.retreatField ? limitRetreat(fr.retreatField, pos, m) : m
       pos = r.pos
       moved += r.distance
     }
@@ -402,5 +463,212 @@ describe('端リンクで橙の上に着いたときのラッチ (arrivalRuntime
 
   it('比較: 到着時に何も持たせないと、拒否しても渡り切れてしまう', () => {
     expect(walk({ x: 0, y: 1 }, 300, INITIAL_ASSIST_RUNTIME).pos.y).toBeGreaterThan(14)
+  })
+})
+
+describe('端リンク到着の挙動（4 辺。拒否・通れない状態で、前へ渡れず来た端へ戻れる）', () => {
+  // 20x20。橙の階段（x/y=5..14）が指定の端から深さ 14 まで接し、その奥と両脇は白
+  function stairs(edge: 'top' | 'bottom' | 'left' | 'right'): WalkMask {
+    const rows: string[] = []
+    for (let y = 0; y < 20; y++) {
+      let row = ''
+      for (let x = 0; x < 20; x++) {
+        const along = edge === 'top' || edge === 'bottom' ? x : y
+        const depth = edge === 'top' ? y : edge === 'bottom' ? 19 - y : edge === 'left' ? x : 19 - x
+        row += along >= 5 && along <= 14 && depth < 14 ? 'o' : '.'
+      }
+      rows.push(row)
+    }
+    return maskOf(rows)
+  }
+  const cases = [
+    { edge: 'top', inward: { x: 0, y: 1 }, landing: { x: 10.5, y: 1.5 } },
+    { edge: 'bottom', inward: { x: 0, y: -1 }, landing: { x: 10.5, y: 18.5 } },
+    { edge: 'left', inward: { x: 1, y: 0 }, landing: { x: 1.5, y: 10.5 } },
+    { edge: 'right', inward: { x: -1, y: 0 }, landing: { x: 18.5, y: 10.5 } },
+  ] as const
+  const LOCKED: AssistState = { passable: false, held: false, ghost: false }
+  function walk(
+    base: WalkMask,
+    from: Vec,
+    edge: 'top' | 'bottom' | 'left' | 'right',
+    vec: Vec,
+    frames: number
+  ): Vec {
+    const asst = maskWithAssist(base)
+    let pos = from
+    let runtime = arrivalRuntime(base, from, edge)
+    for (let f = 0; f < frames; f++) {
+      const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state: LOCKED, runtime })
+      runtime = fr.runtime
+      const m = stepMove(fr.walkMask, pos, vec, 70, 16)
+      pos = (fr.retreatField ? limitRetreat(fr.retreatField, pos, m) : m).pos
+    }
+    return pos
+  }
+  for (const c of cases) {
+    it(`${c.edge}: 通れない間は奥へ渡り切れず、来た端へは戻れる`, () => {
+      const base = stairs(c.edge)
+      const inward = walk(base, c.landing, c.edge, c.inward, 300)
+      const gain = (inward.x - c.landing.x) * c.inward.x + (inward.y - c.landing.y) * c.inward.y
+      expect(gain).toBeLessThan(1)
+      const out = walk(base, c.landing, c.edge, { x: -c.inward.x, y: -c.inward.y }, 100)
+      const depth =
+        c.edge === 'top'
+          ? out.y
+          : c.edge === 'bottom'
+            ? 20 - out.y
+            : c.edge === 'left'
+              ? out.x
+              : 20 - out.x
+      expect(depth).toBeLessThan(0.5)
+    })
+  }
+})
+
+describe('端リンクの着地 (resolveEdgeArrival。通行状態によらず橙の上に着く)', () => {
+  // 着地側 A: 橙の階段が上端に接し（x=5..14, y=0..13）、その下が白。上端に戻りリンクがある
+  const A = maskOf([
+    ...Array(14).fill('#####' + 'o'.repeat(10) + '#####'),
+    ...Array(26).fill('.'.repeat(20)),
+  ])
+  const aAsst = maskWithAssist(A)
+  const fromLink: FieldLink = { edge: 'bottom', range: [5, 15], to: 'A' }
+  const back: FieldLink = { edge: 'top', range: [5, 15], to: 'B' }
+  const src: Vec = { x: 10, y: 59 }
+  const LOCKED: AssistState = { passable: false, held: false, ghost: false }
+  const OPEN: AssistState = { passable: true, held: false, ghost: false }
+
+  it('通れない状態でも橙の上に着き、橙を飛び越えた向こうの白には置かれない', () => {
+    const r = resolveEdgeArrival({
+      link: fromLink,
+      back,
+      srcPos: src,
+      base: A,
+      assisted: aAsst,
+      inset: 1.5,
+    })
+    expect(r).not.toBeNull()
+    expect(r!.pos.y).toBeLessThan(14)
+    expect(isAssistCellOf(A, r!.pos)).toBe(true)
+    expect(r!.runtime.lastFree).toEqual({ x: r!.pos.x, y: -1 })
+    // 比較: 通れない扱いのマスクで探すと階段の向こうの白へずらされる（修正前の挙動）
+    const old = snapToWalkable(A, { x: 10, y: 1.5 }, 80)
+    expect(old!.y).toBeGreaterThanOrEqual(14)
+  })
+
+  it('通れない状態で着くと、同行者は出ず速度も落ちず、来た端へ戻ることしかできない', () => {
+    const r = resolveEdgeArrival({
+      link: fromLink,
+      back,
+      srcPos: src,
+      base: A,
+      assisted: aAsst,
+      inset: 1.5,
+    })!
+    const fr = stepAssistFrame({
+      base: A,
+      assisted: aAsst,
+      pos: r.pos,
+      vec: { x: 0, y: 1 },
+      state: LOCKED,
+      runtime: r.runtime,
+    })
+    expect(fr.wantCompanion).toBe(false)
+    expect(fr.onAssist).toBe(false)
+    expect(fr.retreatField).not.toBeNull()
+    expect(fr.runtime.latch?.pushed).toBe(false)
+    // 着いたあとで通れるようになれば、押される
+    const open = stepAssistFrame({
+      base: A,
+      assisted: aAsst,
+      pos: r.pos,
+      vec: { x: 0, y: 1 },
+      state: OPEN,
+      runtime: fr.runtime,
+    })
+    expect(open.wantCompanion).toBe(true)
+    expect(open.onAssist).toBe(true)
+  })
+
+  it('通れる状態で着いたラッチは、あとで通れなくなっても押されたまま', () => {
+    const r = resolveEdgeArrival({
+      link: fromLink,
+      back,
+      srcPos: src,
+      base: A,
+      assisted: aAsst,
+      inset: 1.5,
+    })!
+    const a = stepAssistFrame({
+      base: A,
+      assisted: aAsst,
+      pos: r.pos,
+      vec: { x: 0, y: 1 },
+      state: OPEN,
+      runtime: r.runtime,
+    })
+    expect(a.runtime.latch?.pushed).toBe(true)
+    const b = stepAssistFrame({
+      base: A,
+      assisted: aAsst,
+      pos: r.pos,
+      vec: { x: 0, y: 1 },
+      state: LOCKED,
+      runtime: a.runtime,
+    })
+    expect(b.onAssist).toBe(true)
+    expect(b.wantCompanion).toBe(true)
+  })
+
+  it('戻りリンクが無い片道リンクでも、画面中心の近くの橙の上に着き、来た端（link.edge の反対側）を入口にする', () => {
+    // 中央に縦の橙の帯 (x=5..14)。左右は白。中心 (10, 20) は橙
+    const strip = maskOf(Array(40).fill('.....' + 'o'.repeat(10) + '.....'))
+    const sAsst = maskWithAssist(strip)
+    const link: FieldLink = { edge: 'top', range: [5, 15], to: 'S' }
+    const r = resolveEdgeArrival({
+      link,
+      back: null,
+      srcPos: src,
+      base: strip,
+      assisted: sAsst,
+      inset: 1.5,
+    })!
+    expect(isAssistCellOf(strip, r.pos)).toBe(true) // 通れない扱いのマスクなら橙の外の白へずらされる
+    expect(r.runtime.lastFree).toEqual({ x: r.pos.x, y: strip.height })
+    // 拒否中は、入口（下端）の側へしか動けない
+    const fr = stepAssistFrame({
+      base: strip,
+      assisted: sAsst,
+      pos: r.pos,
+      vec: { x: 0, y: -1 },
+      state: LOCKED,
+      runtime: r.runtime,
+    })
+    expect(fr.retreatField).not.toBeNull()
+    const up = limitRetreat(fr.retreatField!, r.pos, {
+      pos: { x: r.pos.x, y: r.pos.y - 3 },
+      distance: 3,
+    })
+    expect(up.distance).toBe(0)
+    const down = limitRetreat(fr.retreatField!, r.pos, {
+      pos: { x: r.pos.x, y: r.pos.y + 3 },
+      distance: 3,
+    })
+    expect(down.distance).toBe(3)
+  })
+
+  it('歩ける点が無ければ null', () => {
+    const wall = maskOf(['###', '###'])
+    expect(
+      resolveEdgeArrival({
+        link: fromLink,
+        back,
+        srcPos: src,
+        base: wall,
+        assisted: maskWithAssist(wall),
+        inset: 1,
+      })
+    ).toBeNull()
   })
 })
