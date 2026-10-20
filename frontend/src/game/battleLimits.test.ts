@@ -287,7 +287,7 @@ describe('エンジン経由（全経路）で数字・ログ・イベントが 
     expect(e.getState().events[0].hits[0].amount).toBe(9999)
   })
 
-  it('builtin の即死（HP の前後差で数字を出す経路）も 9999 で止まる', () => {
+  it('builtin の即死（zaraki）は数字を持たず instantDeath の hit になる（amount は HP の前後差）', () => {
     const e = new BattleEngine(
       [ent({ id: 'hero' })],
       [ent({ id: 'boss', hp: 50000, maxHp: 50000, atk: 0 })],

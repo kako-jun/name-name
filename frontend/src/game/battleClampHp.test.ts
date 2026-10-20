@@ -50,6 +50,20 @@ describe('負のダメージは HP を増やさない', () => {
     applyEffect(parseEffect('damage 1000..1000 type=fire')!, ctx([u]))
     expect(u.hp).toBe(100)
   })
+  it('負の resist の丸めは無効扱い: 「0 のダメージ」でなく MISS の hit になる（単発・複数ヒット）', () => {
+    for (const effect of ['damage 10..10 type=fire', 'damage 10..10 type=fire 回数=2']) {
+      const e = new BattleEngine(
+        [ent({ id: 'hero' })],
+        [ent({ id: 'boss', atk: 0, resist: { fire: -1 } })],
+        { rng: rng0 }
+      )
+      e.selectSpell({ name: 'ほのお', mp: 1, target: '敵単体', effect })
+      const hits = e.getState().events[0].hits
+      expect(hits.length).toBeGreaterThan(0)
+      expect(hits.every((h) => h.kind === 'miss' && h.amount === 0)).toBe(true)
+      expect(e.getState().enemies[0].hp).toBe(100)
+    }
+  })
   it('正の量・上限内の既存挙動は不変', () => {
     const t = ent({ hp: 100 })
     applyEffect(parseEffect('damage 10..10')!, ctx([t]))

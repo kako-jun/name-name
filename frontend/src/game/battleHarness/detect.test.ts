@@ -81,6 +81,28 @@ describe('checkState: 壊れた状態を検出する', () => {
     expect(hit(10000)).toContain('damage-over-cap')
   })
 
+  it('即死 (instantDeath) は上限の対象外。フラグ無しの同じ hit・誤って付いたフラグは検出する', () => {
+    const run = (extra: { instantDeath?: boolean }, hpAfter = 0, amount = 50000 - hpAfter) => {
+      const s = baseState([entity('a')], [entity('s')])
+      pushEvent(s, [
+        {
+          target: { side: 'enemy', index: 0 },
+          kind: 'damage',
+          amount,
+          hpBefore: 50000,
+          hpAfter,
+          ...extra,
+        },
+      ])
+      return kinds(s)
+    }
+    expect(run({ instantDeath: true })).not.toContain('damage-over-cap')
+    expect(run({})).toContain('damage-over-cap')
+    // フラグだけ付いて HP が 0 でない／amount が前後差と合わない
+    expect(run({ instantDeath: true }, 20000)).toContain('damage-over-cap')
+    expect(run({ instantDeath: true }, 0, 49999)).toContain('damage-over-cap')
+  })
+
   it('heal の量は上限違反にしない（吸収の回復表示は別問題として候補に回す）', () => {
     const s = baseState([entity('a')], [entity('s')])
     pushEvent(s, [

@@ -1116,7 +1116,7 @@ export class BattleEngine {
     })
   }
 
-  /** ダメージ数字は 1 回のダメージの上限 (#877) を超えない（HP の前後差で代用する builtin の即死など）。回復は切らない */
+  /** ダメージ数字は 1 回のダメージの上限 (#877) を超えない（計算量を通知しない効果の HP の前後差で代用する経路。即死は kill 分岐で数字を持たない）。回復は切らない */
   private capHitAmount(kind: 'damage' | 'heal', amount: number): number {
     return kind === 'damage' ? clampDamage(amount) : amount
   }
@@ -1305,7 +1305,6 @@ export function computeRowAttackDamage(
   )
 }
 
-/** 効果 DSL の複数ヒット (#879) が 1 ヒットごとに通知した結果。`recordEffect` が `BattleHit` 列にする */
 /** 効果が通知した計算上の量 (#745)。`kill` は即死で倒した印（#877。量は持たない） */
 interface ComputedAmount {
   kind: 'damage' | 'heal'
@@ -1313,6 +1312,7 @@ interface ComputedAmount {
   kill?: boolean
 }
 
+/** 効果 DSL の複数ヒット (#879) が 1 ヒットごとに通知した結果。`recordEffect` が `BattleHit` 列にする */
 interface MultiHit {
   target: BattleEntity
   kind: BattleHitKind
