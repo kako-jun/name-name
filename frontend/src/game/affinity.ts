@@ -56,6 +56,33 @@ export function rollDeath(rate: number, rng: () => number): boolean {
   return rng() < rate
 }
 
+/**
+ * 属性 id の正規化。parser（Rust）の `normalize_attr_id`（`parser/src/master.rs`）と**同じ表**:
+ * 全角数字 U+FF10-FF19・全角英大文字 U+FF21-FF3A・全角英小文字 U+FF41-FF5A・`＿`（U+FF3F）・`－`（U+FF0D）だけを半角にし、小文字にする。
+ * NFKC は使わない（半角カナ・丸数字・合字など Rust が変えない文字は JS でも変えない。parser が保存した値と `type=` 側を一致させるため）。
+ * この表を変えるときは Rust 側も同時に変える。
+ */
+export function normalizeAttrId(raw: string): string {
+  let out = ''
+  for (const ch of raw) {
+    const c = ch.codePointAt(0) as number
+    if (
+      (c >= 0xff10 && c <= 0xff19) ||
+      (c >= 0xff21 && c <= 0xff3a) ||
+      (c >= 0xff41 && c <= 0xff5a)
+    ) {
+      out += String.fromCodePoint(c - 0xfee0)
+    } else if (c === 0xff3f) {
+      out += '_'
+    } else if (c === 0xff0d) {
+      out += '-'
+    } else {
+      out += ch
+    }
+  }
+  return out.toLowerCase()
+}
+
 function listHas(list: string[] | undefined, id: string): boolean {
   return Array.isArray(list) && list.includes(id)
 }
@@ -66,8 +93,7 @@ export function resolveAffinity(
   type: string | undefined
 ): AffinityKind {
   if (!affinity || !type) return 'normal'
-  // parser（Rust 側）と同じく全角英数を半角にしてから小文字へ（NFKC）
-  const id = type.normalize('NFKC').trim().toLowerCase()
+  const id = normalizeAttrId(type.trim())
   if (id === '') return 'normal'
   if (listHas(affinity.absorb, id)) return 'absorb'
   if (listHas(affinity.nullify, id)) return 'nullify'

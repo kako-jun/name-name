@@ -1,6 +1,7 @@
 /** 属性相性 (#872): 解決関数・ダメージ適用・呪文/特技/アイテム/即死への適用・既存挙動不変 */
 import { describe, it, expect } from 'vitest'
 import {
+  normalizeAttrId,
   DEATH_CHANCE_CAP,
   deathSuccessRate,
   rollDeath,
@@ -79,6 +80,17 @@ describe('resolveAffinity: 境界・不正値', () => {
   it('全角の type（ＦＩＲＥ）も parser と同じく半角に寄せて比べる', () => {
     expect(resolveAffinity({ weak: ['fire'] }, 'ＦＩＲＥ')).toBe('weak')
     expect(resolveAffinity({ weak: ['thunder_2'] }, 'Ｔｈｕｎｄｅｒ＿２')).toBe('weak')
+  })
+  it('Rust が正規化しない文字は JS でも変換しない（半角カナ・丸数字・合字は NFKC しない）', () => {
+    expect(normalizeAttrId('ﾎﾉｵ')).toBe('ﾎﾉｵ')
+    expect(normalizeAttrId('①')).toBe('①')
+    expect(normalizeAttrId('ﬁre')).toBe('ﬁre')
+    expect(resolveAffinity({ weak: ['ホノオ'] }, 'ﾎﾉｵ')).toBe('normal')
+    expect(resolveAffinity({ weak: ['1'] }, '①')).toBe('normal')
+  })
+  it('normalizeAttrId は Rust の表（全角英数・＿・－ だけ半角、小文字）と同じ', () => {
+    expect(normalizeAttrId('ＦｉＲｅ０９＿ａ－Ｚ')).toBe('fire09_a-z')
+    expect(normalizeAttrId('火')).toBe('火')
   })
   it('type の大小・前後空白は寄せて比べる', () => {
     expect(resolveAffinity(aff, 'ICE')).toBe('weak')
@@ -555,6 +567,14 @@ describe('実 WASM パーサ → 戦闘への組み立て (#872)', () => {
 })
 
 describe('吸収で計算量が 0 のとき (#872)', () => {
+  it('エンジン経由では MISS 表示（仕様）', () => {
+    const hero = ent({ id: 'hero', hp: 500, maxHp: 500, mp: 9, maxMp: 9 })
+    const boss = ent({ id: 'boss', hp: 50, affinity: { absorb: ['fire'] } })
+    const e = new BattleEngine([hero], [boss], { rng: () => 0 })
+    e.selectSpell({ name: 'ほのお', mp: 1, target: '敵単体', effect: 'damage 0..0 type=fire' })
+    expect(e.getState().enemies[0].hp).toBe(50)
+    expect(e.getState().events[0].hits[0]).toMatchObject({ kind: 'miss', amount: 0 })
+  })
   it('回復・通知・ログを出さない', () => {
     const t = ent({ hp: 50, affinity: { absorb: ['fire'] } })
     const { log, amounts } = run('damage 0..0 type=fire', t)

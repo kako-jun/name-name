@@ -1856,3 +1856,15 @@ describe('parseConfig 属性相性: party[].affinity は読み込みエラー (#
     expect(r.ok).toBe(true)
   })
 })
+
+describe('parseConfig 属性相性: 全角の属性 id は parser と同じ表で半角・小文字にする (#872)', () => {
+  it('weak: ["ＦＩＲＥ"] は fire、半角カナ・丸数字は変えない', () => {
+    const r = parseConfig(
+      { enemies: [{ affinity: { weak: ['ＦＩＲＥ', 'ﾎﾉｵ'], halve: ['①'] } }] },
+      'https://example.com/battle-sample/x.json'
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].affinity).toEqual({ weak: ['fire', 'ﾎﾉｵ'], halve: ['①'] })
+  })
+})

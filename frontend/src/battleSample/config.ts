@@ -3,7 +3,7 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { BattleAffinity } from '../game/affinity'
+import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -342,7 +342,7 @@ function parseEntity(
       if (!Array.isArray(v) || v.some((a) => typeof a !== 'string')) {
         return { ok: false, error: `${path}.affinity.${key} は文字列の配列である必要があります` }
       }
-      const ids = (v as string[]).map((a) => a.trim().toLowerCase()).filter((a) => a !== '')
+      const ids = (v as string[]).map((a) => normalizeAttrId(a.trim())).filter((a) => a !== '')
       if (ids.length > 0) out[key] = ids
     }
     if (Object.keys(out).length > 0) entity.affinity = out
