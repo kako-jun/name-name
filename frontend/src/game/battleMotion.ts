@@ -192,7 +192,7 @@ export function buildActionTimeline(
   const hitAt = kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS : CAST_HIT_MS
   // のけぞり・倒れが途中で切れないよう、受ける側の動きが終わるまで次の行動を待つ
   let end = motionEnd
-  // 複数ヒット (#879): 最後のダメージ・倒れるヒットの round ぶん後ろにずれる（round 無しは 0 で従来と同じ）
+  // 複数ヒット (#879): のけぞり・倒れ切りは、最後のダメージ・倒れるヒットの round ぶん後ろにずれる（round 無しは 0 で従来と同じ）
   if (opts.damages) end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0) + RECOIL_MS)
   if (opts.downs)
     end = Math.max(end, hitTimeOf(hitAt, opts.lastDownRound ?? 0) + RECOIL_MS + DOWN_MS)

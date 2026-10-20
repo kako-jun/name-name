@@ -175,7 +175,7 @@ describe('popupStackIndex: 同じ対象への連続ヒットの段', () => {
 describe('全 round が発火する（heal・miss・混在・大きい round）', () => {
   const roundsOf = (hits: BattleHit[]) => playAll(ev(hits), 1).map((l) => l.round)
   const kindChain = (n: number, kind: BattleHit['kind']) =>
-    chain(n).map((h) => ({ ...h, kind, hpBefore: 100, hpAfter: kind === 'heal' ? 100 : 100 }))
+    chain(n).map((h) => ({ ...h, kind, hpBefore: 100, hpAfter: 100 }))
 
   it('吸収 5 ヒット（heal だけ）', () => {
     expect(roundsOf(kindChain(5, 'heal'))).toEqual([0, 1, 2, 3, 4])
@@ -184,7 +184,11 @@ describe('全 round が発火する（heal・miss・混在・大きい round）'
     expect(roundsOf(kindChain(5, 'miss'))).toEqual([0, 1, 2, 3, 4])
   })
   it('damage と heal の混在', () => {
-    const hits = chain(6).map((h, i) => (i % 2 ? { ...h, kind: 'heal' as const } : h))
+    // damage は round 0 だけ（のけぞり終了 400+260=660ms）。最後の heal は 400+500=900ms でそれより後
+    const hits = [
+      hit({ round: 0 }),
+      ...[1, 2, 3, 4, 5].map((r) => hit({ round: r, kind: 'heal', hpBefore: 50, hpAfter: 60 })),
+    ]
     expect(roundsOf(hits)).toEqual([0, 1, 2, 3, 4, 5])
   })
   it('最大 round が大きい', () => {
@@ -197,7 +201,12 @@ describe('全 round が発火する（heal・miss・混在・大きい round）'
     const base = buildActionTimeline('spell', {})
     expect(eventTimeline(ev([hit({ kind: 'heal' })])).duration).toBe(base.duration)
     expect(eventTimeline(ev([hit({ kind: 'miss', round: 0 })])).duration).toBe(base.duration)
-    expect(base.duration).toBe(buildActionTimeline('spell', { lastRound: 0 }).duration)
+    // 変更前のコードの値をリテラルで固定する（CAST_MS 560 + ACTION_GAP_MS 120）
+    expect(base.duration).toBe(680)
+    expect(eventTimeline(ev([hit({ kind: 'heal' })])).duration).toBe(680)
+    // attack で damage あり: 移動 620ms が のけぞり終了 (290+260) より長いので 620 + 120
+    expect(eventTimeline(ev([hit()], 'attack')).duration).toBe(740)
+    expect(eventTimeline(ev([hit({ round: 0 })], 'attack')).duration).toBe(740)
   })
 })
 
