@@ -228,6 +228,30 @@ function num(v: unknown, fallback: number, min = 0): number {
   return typeof v === 'number' && Number.isFinite(v) ? Math.max(min, v) : fallback
 }
 
+/**
+ * 戦闘ポーズ別スプライト (#745) の設定 `{ "idle": "...", "step": "...", ... }` を検証して URL に解決する（部分指定可・値は URL 文字列）。
+ * 戦闘サンプルとフィールドサンプル (#890) で共有する。URL の解決方法は `resolve` で呼び出し側が決める。
+ * 未知のポーズ名は無視する（部分指定の typo で全体を落とさない）。1 つも残らなければ undefined
+ */
+export function parsePoses(
+  raw: unknown,
+  path: string,
+  resolve: (url: string) => string | null
+): ParseResult<BattleEntity['poses'] | undefined> {
+  if (!isRecord(raw)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+  const resolved: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v !== 'string') {
+      return { ok: false, error: `${path}.${k} は URL 文字列である必要があります` }
+    }
+    if (!v.trim()) continue
+    const url = resolve(v.trim())
+    if (!url) return { ok: false, error: `${path}.${k} の URL を解決できません: ${v}` }
+    resolved[k] = url
+  }
+  return { ok: true, value: normalizePoses(resolved) }
+}
+
 function parseEntity(
   raw: unknown,
   fallback: BattleEntity,
@@ -271,23 +295,9 @@ function parseEntity(
     entity.sprite = url
   }
   if (raw.poses !== undefined) {
-    // 戦闘ポーズ別スプライト (#745)。{ "idle": "...", "step": "...", ... }（部分指定可・値は URL 文字列）
-    if (!isRecord(raw.poses)) {
-      return { ok: false, error: `${path}.poses はオブジェクトである必要があります` }
-    }
-    const resolved: Record<string, string> = {}
-    for (const [k, v] of Object.entries(raw.poses)) {
-      if (typeof v !== 'string') {
-        return { ok: false, error: `${path}.poses.${k} は URL 文字列である必要があります` }
-      }
-      if (!v.trim()) continue
-      const url = resolveUrl(v.trim(), baseUrl)
-      if (!url) return { ok: false, error: `${path}.poses.${k} の URL を解決できません: ${v}` }
-      resolved[k] = url
-    }
-    // 未知のポーズ名は無視する（部分指定の typo で全体を落とさない）。1 つも残らなければ poses なし
-    const poses = normalizePoses(resolved)
-    if (poses) entity.poses = poses
+    const poses = parsePoses(raw.poses, `${path}.poses`, (u) => resolveUrl(u, baseUrl))
+    if (!poses.ok) return poses
+    if (poses.value) entity.poses = poses.value
   }
   if (raw.actions !== undefined) {
     // 敵の行動ルール (#835)。`行動:` の値と同じ書式の文字列の配列（書いた順）。解釈は enemyAi.ts（不正な行は戦闘側で警告して無視）
@@ -392,7 +402,7 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
 }
 
 /** 設定 JSON の spells / items (#204) を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
-function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
+export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
   raw: unknown,
   fallback: T[],
   key: 'spells' | 'items'

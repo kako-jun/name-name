@@ -38,6 +38,7 @@ import {
   type FieldSampleConfig,
 } from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
+import { buildDummyFixture } from './dummyFixture'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -108,6 +109,10 @@ async function loadConfig(): Promise<FieldSampleConfig> {
   const url = raw ? resolveUrl(raw, base) : null
   let text = defaultConfigText
   let textBase = base
+  // 素材なしフィクスチャ (#890)。`?fixture=dummy`。?config= が同時にあれば config が優先
+  if (!url && new URLSearchParams(location.search).get('fixture') === 'dummy') {
+    text = JSON.stringify(buildDummyFixture())
+  }
   if (url) {
     try {
       const res = await fetch(url)
@@ -218,6 +223,17 @@ async function main(): Promise<void> {
       ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
       ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
       ...(bg ? { background: bg } : {}),
+      // 候補窓 (#890)。呪文は味方全員共通、アイテムは試作所持数（BattleScreen は読むだけだが戦闘ごとに複製して渡す）
+      ...(config.spells.length > 0 || config.items.length > 0
+        ? {
+            menu: {
+              spells: Object.fromEntries(
+                config.party.map((p) => [p.id, config.spells.map((x) => ({ ...x }))])
+              ),
+              items: config.items.map((x) => ({ ...x })),
+            },
+          }
+        : {}),
       ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
       ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
         ? { enemyWindowOverlap: b.enemyWindowOverlap }

@@ -16,7 +16,7 @@ import {
   type EnemyGridSize,
 } from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
-import { resolveUrl, type ParseResult } from '../battleSample/config'
+import { parseMenuList, parsePoses, resolveUrl, type ParseResult } from '../battleSample/config'
 import type { Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
@@ -27,6 +27,7 @@ import type { BattlePresentation } from '../game/battleMotion'
 import type { WindowStyle } from '../game/windowStyle'
 import type { CommandLayout } from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
+import type { BattleItemEntry, BattleSpellEntry } from '../game/battleMenu'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
 export const FACINGS: readonly Facing[] = ['up', 'down', 'left', 'right']
@@ -89,6 +90,13 @@ export interface FieldSampleConfig {
   /** 戦闘に出す味方 (#809)。主人公のポーズ画像を sprite に指す */
   party: BattleEntity[]
   battle: FieldBattleConfig
+  /**
+   * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘サンプルと同じ書式）。`items`: 試作用の所持品（`count` が所持数。
+   * 本編の inventory とは無関係で、戦闘のたびに設定の値から始まる）。どちらも `battle.commandLayout: "cross"` のときだけ候補窓に出る。
+   * 未指定は空＝じゅもん・どうぐの窓が開かない（従来どおり）
+   */
+  spells: BattleSpellEntry[]
+  items: BattleItemEntry[]
   /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
   groupErrors?: EncounterGroupError[]
   /** 設定は読めたが効かない組み合わせの警告 (#883)。`layout: "front"` と `presentation: "ff"`／`commandLayout: "cross"` など。無ければ省略 */
@@ -261,6 +269,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         exp: e.value.exp ?? 0,
         gold: e.value.gold ?? 0,
         ...(e.value.sprite ? { sprite: e.value.sprite } : {}),
+        ...(e.value.poses ? { poses: e.value.poses } : {}),
         ...(size.value ? { size: size.value } : {}),
         ...(scale.value !== undefined ? { scale: scale.value } : {}),
       }
@@ -300,6 +309,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       agi: 5,
     })
   }
+
+  // 戦闘の候補窓 (#890)。戦闘サンプルと同じ parser（spells は味方全員共通）
+  const spells = parseMenuList<BattleSpellEntry>(raw.spells, [], 'spells')
+  if (!spells.ok) return spells
+  const items = parseMenuList<BattleItemEntry>(raw.items, [], 'items')
+  if (!items.ok) return items
 
   const b = raw.battle === undefined ? {} : raw.battle
   if (!isObj(b)) return fail('battle はオブジェクトが必要です')
@@ -383,6 +398,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,
+      spells: spells.value,
+      items: items.value,
       battle: {
         layout: b.layout ?? 'side',
         spriteStyle: b.spriteStyle ?? 'none',
@@ -489,6 +506,14 @@ function parseEntity(
     const u = url(raw.sprite, `${path}.sprite`)
     if (!u.ok) return u
     e.sprite = u.value
+  }
+  if (raw.poses !== undefined) {
+    const poses = parsePoses(raw.poses, `${path}.poses`, (v) => {
+      const r = url(v, `${path}.poses`)
+      return r.ok ? r.value : null
+    })
+    if (!poses.ok) return poses
+    if (poses.value) e.poses = poses.value
   }
   return { ok: true, value: e }
 }
