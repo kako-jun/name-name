@@ -1,7 +1,7 @@
 /**
  * 画面効果 (#143) の時間→値 純粋計算。
  *
- * `NovelRenderer` の `startShake` / `startFlash` / `startFade` は内部で
+ * 分離前の `NovelRenderer` の `startShake` / `startFlash` / `startFade`（#828 7b 以降は `ScreenEffectsController`）は内部で
  * `performance.now()` を読み、その経過時間から「stage の揺れオフセット」や
  * 「effectOverlay の alpha」を毎フレーム計算して PixiJS に反映していた。
  * その計算自体（減衰 sin/cos 揺れ・線形 alpha 補間）は決定論的な pure computation

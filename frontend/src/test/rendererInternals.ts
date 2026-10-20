@@ -5,6 +5,7 @@ import type { NovelRenderer } from '../game/NovelRenderer'
 import type { SceneEntryController } from '../game/SceneEntryController'
 import type { SaveController } from '../game/SaveController'
 import type { BackgroundController } from '../game/BackgroundController'
+import type { ScreenEffectsController } from '../game/ScreenEffectsController'
 import type { SaveManager } from '../game/SaveManager'
 
 /**
@@ -98,6 +99,7 @@ export function internalsOf<T>(r: NovelRenderer): T {
   exposeEntryFields(r)
   exposeSaveMembers(r)
   exposeBackgroundMembers(r)
+  exposeScreenEffectsMembers(r)
   return r as unknown as T
 }
 
@@ -388,4 +390,80 @@ export function backgroundControllerOf(r: NovelRenderer): BackgroundControllerFo
 /** `backgroundControllerOf` の戻り値。公開メソッドに、spy で差し替える private の `showLoadedBackground` を足した型。 */
 export type BackgroundControllerForTest = BackgroundController & {
   showLoadedBackground(...args: unknown[]): void
+}
+
+/**
+ * 画面効果まわり (#828 7b) は `ScreenEffectsController` へ移った。テストが従来どおり
+ * `internals(r).effectOverlay` / `.shakeTimer` / `.updateNovelScrim()` 等で読み書きできるよう、レンダラ上に
+ * `screenEffects` のメンバーへ委譲するアクセサ・メソッドを足す。移管後のアクセス経路はこの1か所に集約する。
+ * 注意: メソッドの委譲は呼び出しのたびにコントローラを引くので、`vi.spyOn(screenEffectsControllerOf(r), ...)` は効く。
+ * 一方 `vi.spyOn(internals(r), 'xxx')` はレンダラ上の委譲だけを差し替え、レンダラ本体からの呼び出し
+ * （`processDirective` → `retreatNovelScrim` 等）は差し替わらない。そこを観測するときは
+ * `screenEffectsControllerOf(r)` を使う。
+ */
+const SCREEN_EFFECTS_FIELDS = [
+  'effectOverlay',
+  'shakeTimer',
+  'shakeStartMs',
+  'effectTimer',
+  'novelScrim',
+  'scrimRetreatActive',
+  'scrimRetreatTimer',
+  'scrimVisibilityTimer',
+  'blackoutOverlay',
+] as const
+const SCREEN_EFFECTS_METHODS = [
+  'startShake',
+  'startFlash',
+  'startFade',
+  'setBlackout',
+  'updateNovelScrim',
+  'retreatNovelScrim',
+  'resetNovelScrimState',
+  'startEndStoryBlackoutFade',
+] as const
+
+function exposeScreenEffectsMembers(r: NovelRenderer): void {
+  const fxOf = (): Record<string, unknown> =>
+    (r as unknown as { screenEffects: Record<string, unknown> }).screenEffects
+  for (const name of SCREEN_EFFECTS_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    // 実体のフィールド名が変わったとき、黙って undefined を読み書きしないよう即座に落とす。
+    if (!(name in fxOf())) {
+      throw new Error(
+        `ScreenEffectsController に ${name} が無い（rendererInternals の委譲先を直す）`
+      )
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      get: () => fxOf()[name],
+      set: (v: unknown) => {
+        fxOf()[name] = v
+      },
+    })
+  }
+  for (const name of SCREEN_EFFECTS_METHODS) {
+    if (Object.prototype.hasOwnProperty.call(r, name)) continue
+    if (typeof fxOf()[name] !== 'function') {
+      throw new Error(
+        `ScreenEffectsController に ${name}() が無い（rendererInternals の委譲先を直す）`
+      )
+    }
+    Object.defineProperty(r, name, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: (...args: unknown[]) =>
+        (fxOf()[name] as (...a: unknown[]) => unknown).apply(fxOf(), args),
+    })
+  }
+}
+
+/**
+ * `NovelRenderer` が持つ `ScreenEffectsController` (#828 7b)。`retreatNovelScrim` 等を `vi.spyOn` で
+ * 差し替えて「レンダラが呼んだか」を観測するテスト用。旧実装ではレンダラ自身の private メソッドだった。
+ */
+export function screenEffectsControllerOf(r: NovelRenderer): ScreenEffectsController {
+  return (r as unknown as { screenEffects: ScreenEffectsController }).screenEffects
 }

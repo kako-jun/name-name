@@ -461,3 +461,20 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **持ち越し規律は不変。** `resetAndStartEvents` の背景の分岐は従来どおり `preserveBackgroundForTransition` の1か所だけ。持ち越し時は `cancelPendingLoad()`（`bgLoadToken` を進める）→ `finishBackgroundCrossfadeInstant()` → `videoLayer.remove()`、非持ち越し時は `clearBackground()` → `videoLayer.remove()` → 背景板 → `clearBackgroundColor()` の順で、旧実装と同じ順序。このリセット処理内で単独の `cancelPendingLoad()` を呼ぶのは持ち越し時のみ。トークン自体は `clearBackground` / 終劇の `forgetBackground` に加え、`setBackground` の各要求でもキャッシュヒットを含めて進める。
 - **Host 越し。** `BackgroundController` は `NovelRenderer` を import せず、自分で定義する `BackgroundHost`（5 メソッド: `getAssetBaseUrl` / `isSkipMode` / `isInitialized` / `getScreenSize` / `getCrossfadeMs`）だけを見る。`TimeController` はコンストラクタ注入。
 - **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（フィールド・メソッドは `exposeBackgroundMembers`、コントローラ内部の呼び出しを `vi.spyOn` する場合は `backgroundControllerOf`）。
+
+## #828 7b での追記（2026-10-20、#735 7/8 の第2段）
+
+画面効果（揺れ・フラッシュ・フェード・終劇の黒フェード・暗転・novel スクリム）を、`NovelRenderer` から `frontend/src/game/ScreenEffectsController.ts` に分けた。**実装の置き場は `ScreenEffectsController`** である。挙動と本 ADR の契約は変えていない。本文中の語は、次のとおり読み替える。
+
+| 旧（レンダラの private） | 新 |
+| --- | --- |
+| `effectOverlay` / `shakeTimer` / `shakeStartMs` / `effectTimer` / `novelScrim` / `scrimRetreatActive` / `scrimRetreatTimer` / `scrimVisibilityTimer` / `blackoutOverlay` | `ScreenEffectsController` の private（唯一の書き手）。`blackoutOverlay` だけは readonly の公開（ステージ積みはコントローラの `attachTo`） |
+| `startShake` / `startFlash` / `startFade` / `startEndStoryBlackoutFade` / `setBlackout` / `updateNovelScrim` / `retreatNovelScrim` / `resetNovelScrimState` / `applyNovelScrimRegion` / `resetNovelScrimRegion` | `ScreenEffectsController` の同名メソッド（`setNovelScrimImmediate` 等の内部部品は private） |
+| `resetAndStartEvents` / `applyState` / `endStory` / `destroy` 内の「timer を止めてオーバーレイを消す」重複ブロック | `reset()`（stage 位置は戻さない）／`reset()` + `resetStagePosition()`／`stopAllTimers()`／`hideEffectOverlay()` を呼び分ける |
+| `getSnapshot` の `isBlackout` / `applyState` の暗転復元 | `screenEffects.capture()` / `screenEffects.restore(state)`（フィールド集合不変。セーブ形式不変） |
+| `NOVEL_SCRIM_*` 定数 | 定義は `ScreenEffectsController.ts`、`NovelRenderer` から再エクスポート |
+
+- **リセット規律は不変。** `resetAndStartEvents` の順序（タイマー停止 → 演出消去 → BGM → カーソル → 再生開始）はそのまま。ここで効果を消す `reset()` は **stage 位置を戻さない**（旧実装と同じ。原点へ戻すのは `applyState` と `endStory` だけ）。持ち越しは `carryPolicyFor` 経由のみで、画面効果は持ち越し対象に加えていない（暗転は従来どおり `setBlackout(false)` で新しい列の頭に戻す）。
+- **camera 3つ組と `paperDollOutline` は触っていない**（7c の範囲）。
+- **Host 越し。** `ScreenEffectsController` は `NovelRenderer` を import せず、自分で定義する `ScreenEffectsHost`（5 メソッド: `getScreenSize` / `setStagePosition` / `isNovelStyle` / `setDialogAlpha` / `setSeekBarBlackoutHidden`）だけを見る。`TimeController` はコンストラクタ注入。
+- **テスト。** private へのアクセスは `src/test/rendererInternals.ts` に集約した（フィールド・メソッドは `exposeScreenEffectsMembers`、レンダラ本体からの呼び出しを `vi.spyOn` で観測する場合は `screenEffectsControllerOf`）。分離前の実装を写した参照実装との1フレーム刻みの状態列比較は `ScreenEffectsController.equivalence.test.ts`。

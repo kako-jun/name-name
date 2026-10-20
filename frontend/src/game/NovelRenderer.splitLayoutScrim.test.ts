@@ -17,6 +17,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { NovelRenderer } from './NovelRenderer'
 import { computeSplitLayoutRegions } from './novelLayout'
+import { internalsOf } from '../test/rendererInternals'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO, type AspectRatio } from './constants'
 
 interface FakeScrimGraphics {
@@ -43,7 +44,7 @@ interface RendererScrimInternals {
   screenHeight: number
 }
 function scrimInternals(r: NovelRenderer): RendererScrimInternals {
-  return r as unknown as RendererScrimInternals
+  return internalsOf<RendererScrimInternals>(r)
 }
 
 /** init() を経ずに novelScrim をフェイクへ差し替える（既存 attachFakeNovelScrim と同じ手筋）。 */

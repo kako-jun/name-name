@@ -11,7 +11,7 @@
  * - SE: 単発再生（複数同時可）
  */
 
-import { Application, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
+import { Application, Text as PixiText, TextStyle } from 'pixi.js'
 import {
   CharacterLayer,
   CHARACTER_X_RATIO,
@@ -49,6 +49,13 @@ import {
   normalizeBackgroundBrightness,
   normalizeBackgroundFade,
 } from './BackgroundController'
+import {
+  NOVEL_SCRIM_ALPHA,
+  NOVEL_SCRIM_HOLD_MS,
+  NOVEL_SCRIM_RETREAT_MS,
+  NOVEL_SCRIM_VISIBILITY_FADE_MS,
+  ScreenEffectsController,
+} from './ScreenEffectsController'
 import { SaveController } from './SaveController'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
@@ -74,7 +81,6 @@ import {
   EventImageTransition,
   EventScene,
   FlagValue,
-  FlashArea,
 } from '../types'
 import { LightingLayer } from './LightingLayer'
 import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
@@ -92,14 +98,7 @@ import {
 } from './readProgress'
 import { TimeController, defaultTimeController } from './TimeController'
 import {
-  computeShakeOffset,
-  computeFadeAlpha,
-  computeFlashAreaRect,
-  computeStrobeFlashAlpha,
-} from './screenEffects'
-import {
   clampFadeMs,
-  parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
   resolveFontFamily,
@@ -180,21 +179,14 @@ export { normalizeBackgroundFade, normalizeBackgroundBrightness, brightnessToTin
 // playScript / startFrom で使う型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
 export type { Step, StartFromOptions } from './GameState'
 
-/**
- * novel スタイル (#283) のセリフ表示中スクリム不透明度。
- * ToHeart 式に背景・立ち絵を半分ほど沈め、白文字 + DropShadow の可読性を上げる。
- * blink/A-B 実機検証で詰める前提の初期値（テストが参照できるよう export する）。
- */
-export const NOVEL_SCRIM_ALPHA = 0.5
-
-/** novel スクリムの自動退避フェード時間（ms）。表情変化・場面転換で絵を見せるための退避/復帰 (#283)。 */
-export const NOVEL_SCRIM_RETREAT_MS = 220
-
-/** novel スクリム退避後、絵を見せたまま保持する時間（ms）。退避→ホールド→復帰の中段 (#283)。 */
-export const NOVEL_SCRIM_HOLD_MS = 500
-
-/** novel スクリムの通常表示/非表示フェード時間（ms）。ページ送り時の明暗ジャンプを抑える。 */
-export const NOVEL_SCRIM_VISIBILITY_FADE_MS = 180
+// novel スクリムの定数は ScreenEffectsController (#828 7b) へ移った。既存の import 経路（`NovelRenderer` から）と
+// 既存テストを壊さないため、ここに再エクスポートを残す。
+export {
+  NOVEL_SCRIM_ALPHA,
+  NOVEL_SCRIM_RETREAT_MS,
+  NOVEL_SCRIM_HOLD_MS,
+  NOVEL_SCRIM_VISIBILITY_FADE_MS,
+}
 
 export const BACKGROUND_CROSSFADE_MS = 700
 export const EVENT_IMAGE_FADE_MS = 700
@@ -250,10 +242,6 @@ export class NovelRenderer {
    * `clearTelopLayer()` 経由の呼び出しと突き合わせて確認する。
    */
   private telopClearEpoch = 0
-  private blackoutOverlay: Graphics
-  /** novel スタイル (#283) の全画面スクリム。セリフ表示中だけ半透明黒を敷く。
-   *  z 順は characterLayer の上・blackoutOverlay の下。adv では常に visible=false。 */
-  private novelScrim: Graphics | null = null
   private counterText: PixiText | null = null
   /**
    * 再生カーソルとイベント配列・履歴の唯一の書き手 (#824)。`rawEvents` / `resolvedEvents` / `eventIndex` /
@@ -621,6 +609,25 @@ export class NovelRenderer {
     this.time
   )
 
+  /**
+   * 画面効果（揺れ・フラッシュ・フェード・暗転・novel スクリム）の状態と更新 (#828 7b)。
+   * `effectOverlay` / `shakeTimer` / `effectTimer` / `novelScrim` / `blackoutOverlay` と scrim 系フィールドの唯一の書き手。
+   * どの時点で何を止めるか（resetAndStartEvents / applyState / endStory / destroy）はここのメソッドを呼び分けて決める。
+   * Host はオブジェクトで渡す（`implements` にしない）。
+   */
+  private readonly screenEffects = new ScreenEffectsController(
+    {
+      getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
+      setStagePosition: (x, y) => this.app.stage.position.set(x, y),
+      isNovelStyle: () => this.isNovelStyle(),
+      setDialogAlpha: (alpha) => {
+        this.dialogBox.alpha = alpha
+      },
+      setSeekBarBlackoutHidden: (hidden) => this.seekBar.setBlackoutHidden(hidden),
+    },
+    this.time
+  )
+
   /** セーブ/ロードオーバーレイ */
   private saveLoadOverlay!: SaveLoadOverlay
 
@@ -729,24 +736,6 @@ export class NovelRenderer {
   /** SeekBar の縦位置をキャンバス表示倍率に追従させる ResizeObserver (#350)。 */
   private seekBarResizeObserver: ResizeObserver | null = null
 
-  // ---- 画面効果 (#143) ----
-  /** flash/fade 用全画面オーバーレイ Graphics */
-  private effectOverlay: Graphics | null = null
-  /** shake アニメーション用タイマー */
-  private shakeTimer: number | null = null
-  /** shake 開始時刻（ms） */
-  private shakeStartMs: number = 0
-  /** flash/fade アニメーション用タイマー */
-  private effectTimer: number | null = null
-
-  // ---- novel スクリム自動退避 (#283) ----
-  /** スクリム退避フェード中フラグ。true の間は updateNovelScrim が触らない（フェードが制御） */
-  private scrimRetreatActive = false
-  /** スクリム退避フェード用タイマー */
-  private scrimRetreatTimer: number | null = null
-  /** スクリム通常表示/非表示フェード用タイマー */
-  private scrimVisibilityTimer: number | null = null
-
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
     // config.aspectRatio は既に厳密な AspectRatio 型（呼び出し側 NovelPlayer が生の
@@ -785,7 +774,6 @@ export class NovelRenderer {
     // テロップレイヤー (#674)。同じ TimeController を共有し、動画 export でもスライドイン/
     // フェードアウトが決定論的に進む（EventImageLayer と同じ流儀）。
     this.telopLayer = new TelopLayer(this.screenWidth, this.screenHeight, this.time)
-    this.blackoutOverlay = new Graphics()
     this.defaultDialogBorderless = config?.dialogBorderless ?? false
     this.dialogBox = new DialogBox({
       screenWidth: this.screenWidth,
@@ -900,30 +888,9 @@ export class NovelRenderer {
     // （背景・背景板・動画・立ち絵・大道具）より前面（novelScrim/ダイアログより前）。
     this.app.stage.addChild(this.eventImageLayer)
 
-    // novel スタイルの全画面スクリム (#283)。z 順は立ち絵の上・暗転/効果/ダイアログの下。
-    // セリフ表示中だけ半透明黒を敷き、白文字の可読性を上げつつ ToHeart 的な「絵を薄く沈める」
-    // 見え方にする。adv では常に非表示。表情変化/場面転換では NovelRenderer がフェード退避する。
-    this.novelScrim = new Graphics()
-    this.novelScrim.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.novelScrim.fill(0x000000)
-    this.novelScrim.alpha = 0
-    this.novelScrim.visible = false
-    this.app.stage.addChild(this.novelScrim)
-
-    // 暗転レイヤー
-    this.blackoutOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.blackoutOverlay.fill(0x000000)
-    this.setBlackout(false)
-    this.app.stage.addChild(this.blackoutOverlay)
-
-    // 画面効果オーバーレイ（#143: flash/fade — blackout より上、dialog より下）
-    // fill 色は startFlash/startFade で毎回 clear() → fill(color) し直すため初期値は任意
-    this.effectOverlay = new Graphics()
-    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.effectOverlay.fill(0x000000)
-    this.effectOverlay.alpha = 0
-    this.effectOverlay.visible = false
-    this.app.stage.addChild(this.effectOverlay)
+    // novel スクリム (#283, z 順は立ち絵の上) → 暗転 → 画面効果オーバーレイ (#143, blackout より上・dialog より下)。
+    // 3枚は連続して積む。実体は ScreenEffectsController (#828 7b)。
+    this.screenEffects.attachTo(this.app.stage)
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
@@ -1292,19 +1259,8 @@ export class NovelRenderer {
     // これらを仕込んだ直後の text から confinement 外への choice が続くと、そのタイマーが
     // endStory() 後も生き続けて "to be continued..." 画面に効果（Fade の色かぶり等）が
     // 残ってしまう。applyState() の画面効果リセットブロックと同じロジックをそのまま流用する。
-    if (this.shakeTimer) {
-      this.time.clearTimeout(this.shakeTimer)
-      this.shakeTimer = null
-    }
-    this.app.stage.position.set(0, 0)
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-    if (this.effectOverlay) {
-      this.effectOverlay.alpha = 0
-      this.effectOverlay.visible = false
-    }
+    this.screenEffects.reset()
+    this.screenEffects.resetStagePosition()
     // 追うスポットライト (#693) も同じ理由で消灯する。settled state ではあるが、"to be
     // continued..." 画面まで光が残るのは Shake/Flash/Fade の残留と同種の見た目の事故のため。
     this.lightingLayer.clear()
@@ -1342,7 +1298,7 @@ export class NovelRenderer {
     this.background.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
     this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
     const eraseVisualFadeMs = Math.max(eraseBackgroundFadeMs, eraseCharacterFadeMs ?? 0)
-    this.startEndStoryBlackoutFade(eraseVisualFadeMs, () => {
+    this.screenEffects.startEndStoryBlackoutFade(eraseVisualFadeMs, () => {
       if (!this.storyEnded) return
       // イベント絵レイヤーも終劇で「なし」に確定する (#351)。黒で覆った後なら、
       // back=Hide の背面可視性を戻しても読者には黒しか見えない。
@@ -1371,61 +1327,10 @@ export class NovelRenderer {
         // goBack/seekTo で storyEnded が解除されていたら描画しない（applyState 側でも
         // このタイマーをキャンセルするが、二重の安全策として storyEnded も確認する）。
         if (!this.initialized || !this.storyEnded) return
-        if (this.effectOverlay) {
-          this.effectOverlay.visible = false
-          this.effectOverlay.alpha = 0
-        }
+        this.screenEffects.hideEffectOverlay()
         this.renderIntermissionTableau(events)
       }, delayMs)
     }
-  }
-
-  /**
-   * 終劇専用の黒フェード。
-   *
-   * endStory() では背景・立ち絵・イベント絵を最終的に消すが、イベント絵が出ている状態で
-   * 先に eventImageLayer.remove() すると背面が戻ってしまう。eventImageLayer より上の
-   * effectOverlay を黒へフェードし、黒で覆い切った後に後始末する。
-   */
-  private startEndStoryBlackoutFade(durationMs: number, onComplete: () => void): void {
-    if (!this.effectOverlay) {
-      onComplete()
-      return
-    }
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-
-    this.effectOverlay.clear()
-    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.effectOverlay.fill(0x000000)
-    this.effectOverlay.alpha = durationMs > 0 ? 0 : 1
-    this.effectOverlay.visible = true
-
-    if (durationMs <= 0) {
-      onComplete()
-      return
-    }
-
-    const startMs = this.time.now()
-    const FPS = 60
-    const intervalMs = 1000 / FPS
-
-    this.effectTimer = this.time.setInterval(() => {
-      const elapsed = this.time.now() - startMs
-      if (!this.effectOverlay) return
-      const { alpha, done } = computeFadeAlpha(elapsed, 0, 1, durationMs)
-      this.effectOverlay.alpha = alpha
-      if (done) {
-        this.effectOverlay.alpha = 1
-        if (this.effectTimer) {
-          this.time.clearInterval(this.effectTimer)
-          this.effectTimer = null
-        }
-        onComplete()
-      }
-    }, intervalMs)
   }
 
   /**
@@ -1490,7 +1395,7 @@ export class NovelRenderer {
           this.dialogBox.skipTypewriter()
           // novel スクリムはセリフが表示されている間だけ敷く。render() と同じ判定を流用する。
           const hasVisibleText = text.replace(/[\s\u3000]/g, '') !== ''
-          this.updateNovelScrim(hasVisibleText)
+          this.screenEffects.updateNovelScrim(hasVisibleText)
           // 凍結タブローには「次へ」が無いため、進行を示唆するインジケータは出さない。
           this.dialogBox.setIndicatorVisible(false)
           continue
@@ -1858,18 +1763,7 @@ export class NovelRenderer {
       this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
-    if (this.shakeTimer) {
-      this.time.clearTimeout(this.shakeTimer)
-      this.shakeTimer = null
-    }
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-    if (this.effectOverlay) {
-      this.effectOverlay.alpha = 0
-      this.effectOverlay.visible = false
-    }
+    this.screenEffects.reset()
     this.choiceOverlay.hide()
     // BGM は「変えるまで鳴り続ける」(#724): 選択肢・物語進行によるジャンプ（carryBgm=true）では
     // 持ち越し、次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
@@ -1925,7 +1819,7 @@ export class NovelRenderer {
     // テロップ (#674) も新しいイベント列の開始で常にクリアする。前シーンの表示中テロップを
     // 引き継がない（演出の中間状態を持ち越さない、eventImageLayer と同じ規律）。
     this.clearTelopLayer()
-    this.setBlackout(false)
+    this.screenEffects.setBlackout(false)
     // currentBgmPath は上の stopBgm と対で、持ち越し時（#724）は保持して snapshot/save と整合させる。
     if (!options?.carryBgm) {
       this.currentBgmPath = null
@@ -1963,7 +1857,7 @@ export class NovelRenderer {
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
     // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用し、
     // スクリム退避状態と alpha をリセットする（前シーンの退避途中が残らないようにする）。
-    this.resetNovelScrimState()
+    this.screenEffects.resetNovelScrimState()
     this.dialogBox.setNovelMode(this.isNovelStyle())
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
@@ -2383,7 +2277,7 @@ export class NovelRenderer {
       this.characterLayer.setSplitLayoutRegion(null)
       this.choiceOverlay.setSplitLayoutRegion(null)
       this.eventImageLayer.setSplitLayoutRegion(null)
-      this.resetNovelScrimRegion()
+      this.screenEffects.resetNovelScrimRegion()
       return
     }
     const regions = computeSplitLayoutRegions(this.screenWidth, this.screenHeight)
@@ -2401,7 +2295,7 @@ export class NovelRenderer {
     // 選択肢UIもテキスト領域へ収める (#442 self-review should-5)。キャラ画像パネルへの
     // 重なりを防ぐ（[選択] ブロックは Gymnasia の実脚本で使われるためスコープ外にできない）。
     this.choiceOverlay.setSplitLayoutRegion(regions.text)
-    this.applyNovelScrimRegion(regions.text)
+    this.screenEffects.applyNovelScrimRegion(regions.text)
   }
 
   /**
@@ -2423,28 +2317,6 @@ export class NovelRenderer {
    */
   private resolveDualWindowIsSelf(speaker: string | null): boolean {
     return speaker === null || speaker === this.protagonist
-  }
-
-  /**
-   * novelScrim の矩形を split_layout のテキスト領域に絞る (#442 self-review must-2)。
-   * `novelScrim` は init() 完了後にしか存在しない（コンストラクタでは未生成）ため、
-   * まだ無ければ何もしない（init() 完了後の `applyDialogStyle` 経由の再適用や resize 相当の
-   * 呼び出しは無い設計 — screenWidth/screenHeight は construct 時に固定・上のコメント参照 —
-   * なので null チェックで十分。次に applySplitLayout が呼ばれた時点で改めて適用される）。
-   */
-  private applyNovelScrimRegion(region: LayoutRect): void {
-    if (!this.novelScrim) return
-    this.novelScrim.clear()
-    this.novelScrim.rect(region.x, region.y, region.width, region.height)
-    this.novelScrim.fill(0x000000)
-  }
-
-  /** novelScrim の矩形を画面全体に戻す (#442 self-review must-2)。split_layout 無効時の従来どおり。 */
-  private resetNovelScrimRegion(): void {
-    if (!this.novelScrim) return
-    this.novelScrim.clear()
-    this.novelScrim.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.novelScrim.fill(0x000000)
   }
 
   /**
@@ -2677,9 +2549,9 @@ export class NovelRenderer {
     // per-game 本文サイズ (#283 補遺) を再アサートする。setNovelMode は geometry/borderless を
     // 冪等に再適用するため、スタイル切替を跨いでも gameDefaultFontSize が確実に効くようにする。
     this.dialogBox.setFontSize(this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE)
-    if (!novel && this.novelScrim) {
-      // adv ではスクリムを常に消す。
-      this.setNovelScrimImmediate(false, 0)
+    if (!novel) {
+      // adv ではスクリムを常に消す（スクリム未生成＝init 前なら no-op）。
+      this.screenEffects.hideNovelScrim()
     }
     // 改頁は幾何（boxH）依存なので、スタイル切替で派生キャッシュを破棄する (#283)。
     this.cursor.invalidatePages()
@@ -2688,63 +2560,6 @@ export class NovelRenderer {
     if (this.initialized && this.cursor.eventIndex < this.cursor.resolvedEvents.length) {
       this.render()
     }
-  }
-
-  /**
-   * novel スクリムの表示状態を「セリフ表示中か」に合わせて更新する (#283)。
-   * adv では no-op。退避フェード中（scrimRetreatActive）は触らない（フェードが制御する）。
-   * 通常のページ/イベント送りでは短くフェードさせ、立ち絵切替時の明暗ジャンプを抑える。
-   */
-  private updateNovelScrim(visibleForDialog: boolean): void {
-    if (!this.novelScrim) return
-    if (!this.isNovelStyle()) {
-      this.setNovelScrimImmediate(false, 0)
-      return
-    }
-    if (this.scrimRetreatActive) return
-    this.startNovelScrimVisibilityFade(visibleForDialog)
-  }
-
-  private cancelNovelScrimVisibilityFade(): void {
-    if (!this.scrimVisibilityTimer) return
-    this.time.clearInterval(this.scrimVisibilityTimer)
-    this.scrimVisibilityTimer = null
-  }
-
-  private startNovelScrimVisibilityFade(visibleForDialog: boolean): void {
-    if (!this.novelScrim) return
-    this.cancelNovelScrimVisibilityFade()
-    const targetAlpha = visibleForDialog ? NOVEL_SCRIM_ALPHA : 0
-    const fromAlpha = this.novelScrim.visible ? this.novelScrim.alpha : 0
-    if (fromAlpha === targetAlpha) {
-      this.novelScrim.visible = visibleForDialog
-      this.novelScrim.alpha = targetAlpha
-      return
-    }
-    this.novelScrim.visible = true
-    const durationMs = NOVEL_SCRIM_VISIBILITY_FADE_MS
-    const startedAt = this.time.now()
-    const tick = () => {
-      if (!this.novelScrim) return
-      const elapsed = this.time.now() - startedAt
-      const { alpha, done } = computeFadeAlpha(elapsed, fromAlpha, targetAlpha, durationMs)
-      this.novelScrim.alpha = alpha
-      if (!done) return
-      this.novelScrim.alpha = targetAlpha
-      this.novelScrim.visible = visibleForDialog
-      this.cancelNovelScrimVisibilityFade()
-    }
-    tick()
-    if (!this.scrimVisibilityTimer) {
-      this.scrimVisibilityTimer = this.time.setInterval(tick, 1000 / 60)
-    }
-  }
-
-  private setNovelScrimImmediate(visible: boolean, alpha: number): void {
-    if (!this.novelScrim) return
-    this.cancelNovelScrimVisibilityFade()
-    this.novelScrim.visible = visible
-    this.novelScrim.alpha = alpha
   }
 
   /**
@@ -2981,23 +2796,11 @@ export class NovelRenderer {
       this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
-    if (this.shakeTimer) {
-      this.time.clearTimeout(this.shakeTimer)
-      this.shakeTimer = null
-    }
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-    if (this.scrimRetreatTimer) {
-      this.time.clearInterval(this.scrimRetreatTimer)
-      this.scrimRetreatTimer = null
-    }
+    this.screenEffects.stopAllTimers()
     if (this.toastTimer) {
       this.time.clearTimeout(this.toastTimer)
       this.toastTimer = null
     }
-    this.cancelNovelScrimVisibilityFade()
     // 動画レイヤを破棄（video 要素解放・AudioManager から detach・Sprite/Texture/mask 破棄）(#252)。
     // audioManager.destroy() より前に呼んで detach を確実に通す。
     this.videoLayer.remove()
@@ -3040,228 +2843,6 @@ export class NovelRenderer {
     this.initialized = false
   }
 
-  // ---- 画面効果メソッド (#143) ----
-  // 16進カラーパース parseHexColor は novelLayout に切り出した (#260)
-
-  /**
-   * 画面シェイク演出 (#143)。
-   * sin 波ベースの決定論的な揺れ。stage の position を直接動かして実現する。
-   */
-  private startShake(intensityPx: number, durationMs: number): void {
-    if (this.shakeTimer) {
-      this.time.clearTimeout(this.shakeTimer)
-      this.shakeTimer = null
-    }
-    this.shakeStartMs = performance.now()
-
-    const FPS = 60
-    const intervalMs = 1000 / FPS
-
-    const tick = (): void => {
-      const elapsed = performance.now() - this.shakeStartMs
-      // 減衰 sin/cos 揺れの数式は screenEffects.computeShakeOffset に集約 (#260)
-      const { offsetX, offsetY, done } = computeShakeOffset(elapsed, intensityPx, durationMs)
-      this.app.stage.position.set(offsetX, offsetY)
-
-      if (!done) {
-        this.shakeTimer = this.time.setTimeout(tick, intervalMs)
-      } else {
-        this.app.stage.position.set(0, 0)
-        this.shakeTimer = null
-      }
-    }
-    tick()
-  }
-
-  /**
-   * フラッシュ演出 (#143)。エリア限定・ストロボ拡張 (#693)。
-   * effectOverlay を指定色で alpha ピーク → 0 にフェードアウトする。
-   * `area` 指定時はオーバーレイの矩形をその範囲に限定する（`null` は全画面、後方互換）。
-   * `strobe` > 1 のときは `intervalMs` 間隔で同じパルスを繰り返す（`computeStrobeFlashAlpha`）。
-   */
-  private startFlash(
-    colorHex: string,
-    peakAlpha: number,
-    durationMs: number,
-    area: FlashArea | null,
-    strobeCount: number,
-    intervalMs: number | null
-  ): void {
-    if (!this.effectOverlay) return
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-
-    const color = parseHexColor(colorHex)
-    // エリア限定矩形は screenEffects.computeFlashAreaRect に集約 (#693)。area なしは全画面。
-    const rect = computeFlashAreaRect(area, this.screenWidth, this.screenHeight)
-    this.effectOverlay.clear()
-    this.effectOverlay.rect(rect.x, rect.y, rect.width, rect.height)
-    this.effectOverlay.fill(color)
-    this.effectOverlay.alpha = peakAlpha
-    this.effectOverlay.visible = true
-
-    const startMs = performance.now()
-    const FPS = 60
-    const intervalMsTick = 1000 / FPS
-    // interval 省略時は duration と同程度の適当なデフォルト（Issue #693 方針）。
-    const effectivePulseIntervalMs = intervalMs ?? durationMs
-
-    this.effectTimer = this.time.setInterval(() => {
-      const elapsed = performance.now() - startMs
-      if (!this.effectOverlay) return
-      // alpha 補間は screenEffects.computeStrobeFlashAlpha に集約 (#260/#693)。
-      // strobeCount<=1 のときは computeFlashAlpha と完全に同じ結果になる（後方互換）。
-      const { alpha, done } = computeStrobeFlashAlpha(
-        elapsed,
-        peakAlpha,
-        durationMs,
-        strobeCount,
-        effectivePulseIntervalMs
-      )
-      this.effectOverlay.alpha = alpha
-      if (done) {
-        this.effectOverlay.visible = false
-        this.effectOverlay.alpha = 0
-        if (this.effectTimer) {
-          this.time.clearInterval(this.effectTimer)
-          this.effectTimer = null
-        }
-      }
-    }, intervalMsTick)
-  }
-
-  /**
-   * フェード演出 (#143)。
-   * effectOverlay を指定色・指定アルファ範囲で補間する。
-   * target: "bg"（背景のみ）は将来拡張。現状は "all" と同じ全画面オーバーレイ。
-   */
-  private startFade(
-    _target: string,
-    colorHex: string,
-    fromAlpha: number,
-    toAlpha: number,
-    durationMs: number
-  ): void {
-    if (!this.effectOverlay) return
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-
-    const color = parseHexColor(colorHex)
-    this.effectOverlay.clear()
-    this.effectOverlay.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.effectOverlay.fill(color)
-    this.effectOverlay.alpha = fromAlpha
-    this.effectOverlay.visible = true
-
-    const startMs = performance.now()
-    const FPS = 60
-    const intervalMs = 1000 / FPS
-
-    this.effectTimer = this.time.setInterval(() => {
-      const elapsed = performance.now() - startMs
-      if (!this.effectOverlay) return
-      // alpha 補間は screenEffects.computeFadeAlpha に集約 (#260)。
-      // done 時に alpha=toAlpha ちょうどを返すので、従来の「progress>=1 で toAlpha を当て直す」挙動と一致。
-      const { alpha, done } = computeFadeAlpha(elapsed, fromAlpha, toAlpha, durationMs)
-      this.effectOverlay.alpha = alpha
-      if (done) {
-        // toAlpha が 0 なら不可視に戻す
-        if (toAlpha <= 0) {
-          this.effectOverlay.visible = false
-        }
-        if (this.effectTimer) {
-          this.time.clearInterval(this.effectTimer)
-          this.effectTimer = null
-        }
-      }
-    }, intervalMs)
-  }
-
-  /**
-   * novel スクリム退避の途中状態をリセットする (#283)。
-   * シーン遷移・状態復元・破棄で退避フェードのタイマーを止め、文字 alpha を元に戻す。
-   * 退避中間状態（フェード途中）は GameState に持たないため、復元では「退避していない」前提に倒す。
-   */
-  private resetNovelScrimState(): void {
-    this.cancelNovelScrimVisibilityFade()
-    if (this.scrimRetreatTimer) {
-      this.time.clearInterval(this.scrimRetreatTimer)
-      this.scrimRetreatTimer = null
-    }
-    this.scrimRetreatActive = false
-    this.dialogBox.alpha = 1
-    this.setNovelScrimImmediate(false, 0)
-  }
-
-  /**
-   * novel スクリム自動退避 (#283)。
-   *
-   * 表情変化 / 場面転換のとき、スクリム（とその上の白文字）を一旦 α→0 へ滑らかに退避して
-   * 絵を見せ、`holdMs` 後に元の不透明度へ戻す。エンジン自動（作者は記述不要）。
-   * adv では no-op。セリフ非表示中（スクリムが既に消えている）も no-op。
-   *
-   * 退避中は `scrimRetreatActive=true` にして updateNovelScrim が触らないようにする。
-   * フェード計算は screenEffects.computeFadeAlpha を流用（演出中間状態は GameState に持たない）。
-   */
-  private retreatNovelScrim(holdMs = NOVEL_SCRIM_HOLD_MS): void {
-    if (!this.isNovelStyle() || !this.novelScrim) return
-    // セリフが表示されておらずスクリムが既に消えているなら退避不要。
-    if (!this.novelScrim.visible || this.novelScrim.alpha <= 0) return
-
-    this.cancelNovelScrimVisibilityFade()
-    if (this.scrimRetreatTimer) {
-      this.time.clearInterval(this.scrimRetreatTimer)
-      this.scrimRetreatTimer = null
-    }
-    this.scrimRetreatActive = true
-    const text = this.dialogBox
-    const FPS = 60
-    const intervalMs = 1000 / FPS
-    const durationMs = NOVEL_SCRIM_RETREAT_MS
-
-    // フェーズ: 0 = 退避(α: ALPHA→0)、1 = ホールド、2 = 復帰(α: 0→ALPHA)
-    let phase: 0 | 1 | 2 = 0
-    let phaseStart = performance.now()
-
-    this.scrimRetreatTimer = this.time.setInterval(() => {
-      if (!this.novelScrim) return
-      const elapsed = performance.now() - phaseStart
-      if (phase === 0) {
-        const { alpha, done } = computeFadeAlpha(elapsed, NOVEL_SCRIM_ALPHA, 0, durationMs)
-        this.novelScrim.alpha = alpha
-        text.alpha = 1 - (NOVEL_SCRIM_ALPHA - alpha) / NOVEL_SCRIM_ALPHA // 文字も一緒に退避
-        if (done) {
-          this.novelScrim.alpha = 0
-          text.alpha = 0
-          phase = 1
-          phaseStart = performance.now()
-        }
-      } else if (phase === 1) {
-        if (elapsed >= holdMs) {
-          phase = 2
-          phaseStart = performance.now()
-        }
-      } else {
-        const { alpha, done } = computeFadeAlpha(elapsed, 0, NOVEL_SCRIM_ALPHA, durationMs)
-        this.novelScrim.alpha = alpha
-        text.alpha = alpha / NOVEL_SCRIM_ALPHA
-        if (done) {
-          this.novelScrim.alpha = NOVEL_SCRIM_ALPHA
-          text.alpha = 1
-          if (this.scrimRetreatTimer) {
-            this.time.clearInterval(this.scrimRetreatTimer)
-            this.scrimRetreatTimer = null
-          }
-          this.scrimRetreatActive = false
-        }
-      }
-    }, intervalMs)
-  }
-
   /**
    * 現在のゲーム状態のスナップショットを返す
    */
@@ -3279,7 +2860,7 @@ export class NovelRenderer {
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
       curtain: this.curtainLayer.getState(),
-      isBlackout: this.blackoutOverlay.visible,
+      ...this.screenEffects.capture(),
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
       cameraMode: this.cameraMode,
@@ -3356,7 +2937,7 @@ export class NovelRenderer {
       // ここで消しておかないと「前ページの文字が残ったまま次の立ち絵が動く」見え方になる。
       this.dialogBox.clearText()
       this.dialogBox.setIndicatorVisible(false)
-      this.updateNovelScrim(false)
+      this.screenEffects.updateNovelScrim(false)
     }
 
     // textIndex / novel 文 index (#292) はページ先頭へ戻り、eventIndex 単位の派生ページキャッシュ
@@ -3594,26 +3175,15 @@ export class NovelRenderer {
       this.intermissionTimer = null
     }
     // 画面効果をリセット（シーク・バック時に演出が残留しないよう）
-    if (this.shakeTimer) {
-      this.time.clearTimeout(this.shakeTimer)
-      this.shakeTimer = null
-    }
-    this.app.stage.position.set(0, 0)
-    if (this.effectTimer) {
-      this.time.clearInterval(this.effectTimer)
-      this.effectTimer = null
-    }
-    if (this.effectOverlay) {
-      this.effectOverlay.alpha = 0
-      this.effectOverlay.visible = false
-    }
+    this.screenEffects.reset()
+    this.screenEffects.resetStagePosition()
     // SE シーケンス（#672）の gap 待機タイマーも画面効果と同じくリセットする。goBack/seekTo/
     // セーブロードで別の時点へ飛ぶ以上、飛ぶ前の [SE: 複数候補] の残りを鳴らし続けるのは
     // 画面効果の残留と同じ種類の事故（AudioManager.cancelSeSequence のdoc comment参照）。
     this.audioManager.cancelSeSequence()
     // novel スクリム退避途中（#283）は演出中間状態なので復元では持たない。リセットして
     // 「退避していない」前提に倒す。render() が現在ページのスクリム可視性を再設定する。
-    this.resetNovelScrimState()
+    this.screenEffects.resetNovelScrimState()
     // テロップ (#674) も演出の中間状態なので復元（goBack/seekTo/セーブ復元/任意局面起動）では
     // 一切持たない（NovelGameState に持たせない設計、ADR-0002）。表示中の段があれば即座に消す。
     this.clearTelopLayer()
@@ -3701,7 +3271,7 @@ export class NovelRenderer {
     this.applyEventImageVisibility()
 
     // 暗転復元（セーブ/ロード・シーク・任意局面起動の applyState はすべてここを通る #350）
-    this.setBlackout(state.isBlackout)
+    this.screenEffects.restore(state)
 
     // カメラモード復元 (#681/#682)。isBlackout と同種の宣言的 settled state で、
     // goBack/seekTo/セーブ復元/任意局面起動のすべてがこの applyState を通る。
@@ -3904,17 +3474,6 @@ export class NovelRenderer {
     if (this.telopReserveEnabled) {
       this.applyTelopReserve()
     }
-  }
-
-  /**
-   * 暗転オーバーレイの表示を切り替え、SeekBar の可視ゲートと同期する (#350)。
-   * 暗転中はスライダを隠す（z 順は変えず可視性ゲートで対処し、黒の上に薄いスライダ線が残らない）。
-   * active も SeekBar 側で解除する。GameState の永続 isBlackout から導出する transient な見た目同期で、
-   * 適用/解除/復元（processDirective / restoreToScene / applyState）すべてこの 1 経路に集約する。
-   */
-  private setBlackout(visible: boolean): void {
-    this.blackoutOverlay.visible = visible
-    this.seekBar.setBlackoutHidden(visible)
   }
 
   /**
@@ -4249,9 +3808,9 @@ export class NovelRenderer {
         this.applyEventImageVisibility()
         // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。
         this.clearTelopLayer()
-        this.setBlackout(false)
+        this.screenEffects.setBlackout(false)
         // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
-        this.retreatNovelScrim()
+        this.screenEffects.retreatNovelScrim()
       }
       if (event === 'VideoExit') {
         // [動画退場] で動画レイヤをクリア (#252)
@@ -4416,7 +3975,7 @@ export class NovelRenderer {
       return
     }
     if ('Blackout' in event) {
-      this.setBlackout(event.Blackout.action === 'On')
+      this.screenEffects.setBlackout(event.Blackout.action === 'On')
       return
     }
     if ('CameraMode' in event) {
@@ -4570,7 +4129,7 @@ export class NovelRenderer {
         this.assetBaseUrl
       )
       // novel: 表情変化でスクリム+文字を退避して立ち絵の変化を見せ、戻す (#283)
-      this.retreatNovelScrim()
+      this.screenEffects.retreatNovelScrim()
       return
     }
     if ('Exit' in event) {
@@ -4745,12 +4304,12 @@ export class NovelRenderer {
     }
     if ('Shake' in event) {
       // 画面シェイク (#143) — fire-and-forget
-      this.startShake(event.Shake.intensity_px, event.Shake.duration_ms)
+      this.screenEffects.startShake(event.Shake.intensity_px, event.Shake.duration_ms)
       return
     }
     if ('Flash' in event) {
       // フラッシュ (#143) — fire-and-forget。エリア限定・ストロボは #693 拡張。
-      this.startFlash(
+      this.screenEffects.startFlash(
         event.Flash.color,
         event.Flash.alpha,
         event.Flash.duration_ms,
@@ -4762,7 +4321,7 @@ export class NovelRenderer {
     }
     if ('Fade' in event) {
       // フェード (#143) — fire-and-forget
-      this.startFade(
+      this.screenEffects.startFade(
         event.Fade.target,
         event.Fade.color,
         event.Fade.from_alpha,
@@ -4922,7 +4481,7 @@ export class NovelRenderer {
       if (this.speakerNudge) {
         this.characterLayer.nudgePose(speaker)
       }
-      this.retreatNovelScrim()
+      this.screenEffects.retreatNovelScrim()
     }
   }
 
@@ -4995,7 +4554,8 @@ export class NovelRenderer {
           // dialogBox.alpha を一時的に下げるため、ここで待たないと数文字だけ出て消える。
           // renderOnly のタイトル演出やカーソル点滅は CharacterLayer 側で除外している。
           if (
-            (this.characterLayer.hasActivePortraitTransition() || this.scrimRetreatActive) &&
+            (this.characterLayer.hasActivePortraitTransition() ||
+              this.screenEffects.isScrimRetreatActive()) &&
             this.time.now() - startedAt < 6_000
           ) {
             this.time.setTimeout(poll, 16)
@@ -5583,7 +5143,7 @@ export class NovelRenderer {
     // novel スクリム (#283): セリフが表示されている間だけ半透明黒を敷く。
     // 空ページ（立ち絵だけの空ダイアログ）はテキスト非表示なのでスクリムも出さない。
     const hasVisibleText = line.replace(/[\s\u3000]/g, '') !== ''
-    this.updateNovelScrim(hasVisibleText)
+    this.screenEffects.updateNovelScrim(hasVisibleText)
 
     // インジケータ (#292):
     //  - 種別: novel で「現在がそのページの最後の文」なら pageturn（❯・改頁）、それ以外は next（▼・次の文）。
