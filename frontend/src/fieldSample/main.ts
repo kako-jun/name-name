@@ -19,7 +19,9 @@ import {
   isOutward,
   keysToVector,
   maskFromRgba,
+  playerScale,
   pointerToVector,
+  resolvePlayerHeight,
   snapToWalkable,
   stepMove,
   walkFrame,
@@ -34,10 +36,13 @@ import {
   configNotice,
   findReturnLink,
   forceBattleCandidates,
+  pickConfigSource,
   parseConfigText,
   type FieldSampleConfig,
 } from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
+import { buildBattleMenu } from './battleMenu'
+import { buildDummyFixture } from './dummyFixture'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -104,10 +109,14 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
 
 async function loadConfig(): Promise<FieldSampleConfig> {
   const base = location.href
-  const raw = new URLSearchParams(location.search).get('config')?.trim()
+  const { configParam: raw, dummy } = pickConfigSource(location.search)
   const url = raw ? resolveUrl(raw, base) : null
   let text = defaultConfigText
   let textBase = base
+  // 素材なしフィクスチャ (#890)。`?fixture=dummy`。?config= が同時にあれば config が優先
+  if (dummy) {
+    text = JSON.stringify(buildDummyFixture())
+  }
   if (url) {
     try {
       const res = await fetch(url)
@@ -202,6 +211,7 @@ async function main(): Promise<void> {
     pointer = null
     movingMs = 0
     const b = config.battle
+    const menu = buildBattleMenu(config)
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
     const engine = new BattleEngine(
       config.party.map((p) => ({ ...p })),
@@ -218,6 +228,8 @@ async function main(): Promise<void> {
       ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
       ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
       ...(bg ? { background: bg } : {}),
+      // 候補窓 (#890)。戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
+      ...(menu ? { menu } : {}),
       ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
       ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
         ? { enemyWindowOverlap: b.enemyWindowOverlap }
@@ -459,7 +471,10 @@ async function main(): Promise<void> {
     // ---- 描画 ----
     const tex = walkTex[facing][walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
     player.texture = tex
-    const s = config.player.height / tex.height
+    const s = playerScale(
+      resolvePlayerHeight(config.scenes[sceneId].playerHeight, config.player.height),
+      tex.height
+    )
     player.scale.set(s)
     player.position.set(pos.x, pos.y)
     overlaySprite.visible = debug

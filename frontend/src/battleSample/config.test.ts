@@ -26,6 +26,8 @@ import {
   initialView,
   parseConfig,
   parseConfigText,
+  parseMenuList,
+  parsePoses,
   pushView,
   resolveResolution,
   resolveSize,
@@ -1749,5 +1751,87 @@ describe('同梱の例 public/battle-sample/enemy-affinity.json (#872)', () => {
     if (!r.ok) return
     expect(r.value.enemies.map((e) => 'affinity' in e)).toEqual([true, true, false])
     expect(r.value.spells.map((s) => s.id)).toContain('death')
+
+describe('parsePoses 単体（フィールドサンプルと共有 #890）', () => {
+  const resolve = (u: string) => resolveUrl(u, BASE)
+
+  it('URL を解決して返し、未知のポーズ名は捨てる', () => {
+    expect(parsePoses({ idle: 'a.png', bogus: 'b.png' }, 'p', resolve)).toEqual({
+      ok: true,
+      value: { idle: 'https://example.com/dir/a.png' },
+    })
+  })
+
+  it('空オブジェクト・全部未知・空白 URL だけなら value は undefined（ok のまま）', () => {
+    expect(parsePoses({}, 'p', resolve)).toEqual({ ok: true, value: undefined })
+    expect(parsePoses({ bogus: 'a.png' }, 'p', resolve)).toEqual({ ok: true, value: undefined })
+    expect(parsePoses({ idle: '  ' }, 'p', resolve)).toEqual({ ok: true, value: undefined })
+  })
+
+  it('オブジェクトでなければ path つきエラー（既存の文言のまま）', () => {
+    expect(parsePoses([], 'party[0].poses', resolve)).toEqual({
+      ok: false,
+      error: 'party[0].poses はオブジェクトである必要があります',
+    })
+    expect(parsePoses(null, 'x', resolve).ok).toBe(false)
+  })
+
+  it('値が文字列でなければ、キーつきの path でエラー', () => {
+    expect(parsePoses({ idle: 3 }, 'enemies[1].poses', resolve)).toEqual({
+      ok: false,
+      error: 'enemies[1].poses.idle は URL 文字列である必要があります',
+    })
+  })
+
+  it('resolve が null を返したらエラー（元の文字列つき）', () => {
+    expect(parsePoses({ idle: 'a.png' }, 'p', () => null)).toEqual({
+      ok: false,
+      error: 'p.idle の URL を解決できません: a.png',
+    })
+  })
+
+  it('battle-sample の parseConfig 経由でもエラー文言が変わらない', () => {
+    const r = parseConfig({ party: [{ poses: { idle: 3 } }] }, BASE)
+    expect(r).toEqual({ ok: false, error: 'party[0].poses.idle は URL 文字列である必要があります' })
+    const r2 = parseConfig({ party: [{ poses: [] }] }, BASE)
+    expect(r2).toEqual({ ok: false, error: 'party[0].poses はオブジェクトである必要があります' })
+  })
+})
+
+describe('parseMenuList の挙動（export 化後も不変 #890）', () => {
+  it('undefined は fallback をそのまま返す', () => {
+    const fb: never[] = []
+    const r = parseMenuList(undefined, fb, 'spells')
+    expect(r.ok && r.value).toBe(fb)
+  })
+
+  it('配列でないと key つきのエラー', () => {
+    expect(parseMenuList({}, [], 'items')).toEqual({
+      ok: false,
+      error: 'items は配列である必要があります',
+    })
+  })
+
+  it('呪文は mp と target の既定、アイテムは count の切り捨て・下限 0', () => {
+    expect(parseMenuList([{ name: ' a ' }], [], 'spells')).toEqual({
+      ok: true,
+      value: [{ id: 'spells-1', name: 'a', mp: 0, target: '敵単体' }],
+    })
+    expect(
+      parseMenuList(
+        [
+          { name: 'a', count: 2.9 },
+          { name: 'b', count: -3 },
+        ],
+        [],
+        'items'
+      )
+    ).toEqual({
+      ok: true,
+      value: [
+        { id: 'items-1', name: 'a', count: 2 },
+        { id: 'items-2', name: 'b', count: 0 },
+      ],
+    })
   })
 })
