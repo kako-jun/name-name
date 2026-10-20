@@ -28,6 +28,7 @@ import {
   messageWindowText,
   normalizePoses,
   fitPopupFontSize,
+  popupCenterOffset,
   popupFontSize,
   POPUP_FONT_MIN,
   POPUP_FONT_MAX,
@@ -350,6 +351,29 @@ describe('fitPopupFontSize: 桁数別 (#877)', () => {
   it('popupText と組み合わせても 9999 以下は不変', () => {
     const t = popupText({ kind: 'damage', amount: 9999 })
     expect(fitPopupFontSize(t, popupFontSize(96))).toBe(popupFontSize(96))
+  })
+})
+
+describe('popupCenterOffset: 縮んだ数字を基本サイズの段の中央に置く (#877)', () => {
+  it('縮んでいない（実際 = 基本）ときは 0 で、位置は従来と完全に同じ（-0 でもない）', () => {
+    for (const f of [20, 33, 56]) expect(Object.is(popupCenterOffset(f, f), 0)).toBe(true)
+  })
+  it('縮んだぶんの半分', () => {
+    expect(popupCenterOffset(20, 16)).toBe(2)
+    expect(popupCenterOffset(56, 32)).toBe(12)
+  })
+  it('実際が基本以上（想定外）でも負にならない', () => {
+    expect(popupCenterOffset(20, 30)).toBe(0)
+  })
+  it('fitPopupFontSize と組み合わせて、4 文字以下は常に 0・5 文字以上は正', () => {
+    for (const base of [20, 33, 56]) {
+      for (const t of ['9', '9999', 'MISS']) {
+        expect(popupCenterOffset(base, fitPopupFontSize(t, base))).toBe(0)
+      }
+      for (const t of ['99999', '9999999']) {
+        expect(popupCenterOffset(base, fitPopupFontSize(t, base))).toBeGreaterThan(0)
+      }
+    }
   })
 })
 

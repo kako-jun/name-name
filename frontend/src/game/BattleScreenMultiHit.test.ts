@@ -9,6 +9,7 @@ import {
   POPUP_COLORS,
   POPUP_STACK_STEP,
   fitPopupFontSize,
+  popupCenterOffset,
   buildActionTimeline,
   eventTimeline,
 } from './battleMotion'
@@ -194,12 +195,32 @@ describe('FF 式 複数ヒットの順次再生', () => {
       [[9999, 99999, 9999]],
       [[999999, 9999, 99999, 9999]],
       [[9999, 9999999, 9999, 999999]],
-    ])('桁が混在する連続ヒット %j でも、隣り合う段の数字が重ならない', (amounts) => {
-      const r = spawnStack(amounts)
-      // 数字の高さ = フォント × POPUP_STACK_STEP（段の間隔の定義）。上の段の下端（y）が下の段の上端以上に上がる
-      for (let i = 1; i < r.length; i++) {
-        const lowerTop = r[i - 1].y - r[i - 1].font * POPUP_STACK_STEP
-        expect(r[i].y).toBeLessThanOrEqual(lowerTop + 1e-6)
+    ])(
+      '桁が混在する連続ヒット %j: 段 k の位置 = 段 0 の基準 − k × 基本フォント × 0.85 − 縮小ぶんの中央寄せ（(基本 − 実際) / 2）',
+      (amounts) => {
+        const r = spawnStack(amounts)
+        const base = spawnStack([9999])[0] // 縮まない基準（段 0・4 桁）
+        amounts.forEach((_, k) => {
+          const expected =
+            base.y - k * base.font * POPUP_STACK_STEP - popupCenterOffset(base.font, r[k].font)
+          expect(r[k].y).toBeCloseTo(expected, 5)
+        })
+      }
+    )
+    it('縮んだ数字（5 桁以上）は同じ段の 4 桁より (基本 − 実際) / 2 だけ上、4 文字以下は 4 桁と完全に同じ位置', () => {
+      for (const stack of [0, 1, 3]) {
+        const amounts = Array.from({ length: stack + 1 }, () => 9999)
+        const ref = spawnStack(amounts)[stack]
+        for (const amount of [9, 99, 999]) {
+          const a = Array.from({ length: stack + 1 }, () => amount)
+          expect(spawnStack(a)[stack].y).toBe(ref.y)
+        }
+        for (const amount of [99999, 999999, 9999999]) {
+          const a = Array.from({ length: stack + 1 }, () => amount)
+          const r = spawnStack(a)[stack]
+          expect(r.font).toBeLessThan(ref.font)
+          expect(ref.y - r.y).toBeCloseTo((ref.font - r.font) / 2, 5)
+        }
       }
     })
   })

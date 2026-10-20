@@ -476,6 +476,16 @@ export function fitPopupFontSize(text: string, baseFont: number): number {
   return Math.max(1, Math.floor((baseFont * POPUP_FULL_SIZE_CHARS) / len))
 }
 
+/**
+ * 縮小した数字 (#877) を、基本サイズの 1 段の中で上下中央に置くための持ち上げ量（px）。数字は文字の箱の下端に揃えるが、
+ * 箱の下端と字の下端の距離はフォントに比例するので、小さい字をそのまま置くと字の下端が基本サイズより下へ寄り、
+ * 上の段（小さい字）が下の段へ深く食い込む。(基本 − 実際) の半分だけ上げれば縮んだ字は段の中央に収まる。
+ * 縮んでいない（4 文字以下）ときは 0 で、位置は従来（#879）と完全に同じ。
+ */
+export function popupCenterOffset(baseFont: number, fontSize: number): number {
+  return Math.max(0, baseFont - fontSize) * 0.5
+}
+
 // ---------------------------------------------------------------------------
 // FF 式メッセージ窓
 // ---------------------------------------------------------------------------

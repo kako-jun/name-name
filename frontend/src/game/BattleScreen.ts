@@ -105,6 +105,7 @@ import {
   fitPopupFontSize,
   isPlaybackBusy,
   messageWindowText,
+  popupCenterOffset,
   popupFontSize,
   popupText,
   resolvePose,
@@ -461,6 +462,8 @@ interface DamagePopup {
   x: number
   y: number
   unit: number
+  /** 実際に描いている数字のフォントサイズ（px。5 文字以上は縮小後 #877）。縮んだ数字を基本サイズの段の中で中央に置くのに使う */
+  fontSize: number
   /** 同じ対象への連続ヒット (#879) で何段目か。数字の高さぶん縦にずらす（単発は 0） */
   stack: number
 }
@@ -2403,6 +2406,7 @@ export class BattleScreen extends Container {
       x: view.anchorX,
       y: view.anchorY,
       unit: view.unit,
+      fontSize,
       stack,
     })
     this.updatePopup(this.popups[this.popups.length - 1])
@@ -2420,7 +2424,9 @@ export class BattleScreen extends Container {
     // 連続ヒット (#879) は段ごとに数字の高さぶん上へずらす（stack 0 は従来の位置そのまま）。間隔は縮小前の基本フォントで決める:
     // 5 文字以上の縮小 (#877) に揃えると、桁数が混ざる連続ヒット（吸収の回復など）で小さい字の段が下の大きい字に食い込む
     const stackDy = p.stack * popupFontSize(p.unit) * POPUP_STACK_STEP
-    p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy)
+    // 縮んだ数字は基本サイズの段の中で上下中央に置く（4 文字以下は 0 で従来位置）
+    const centerDy = popupCenterOffset(popupFontSize(p.unit), p.fontSize)
+    p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy - centerDy)
     p.text.alpha = s.alpha
     return s.done
   }
