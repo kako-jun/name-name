@@ -387,6 +387,13 @@ export class BattleEngine {
     )
   }
 
+  /** 行動を選べなかった理由を、MP 不足と同じ経路（ログ＋窓の知らせ）で出す。入力待ちの味方がいるときだけ。状態は変えない */
+  notifyBlocked(label: string): void {
+    if (this.state.phase !== 'party-input') return
+    this.appendLog(label)
+    this.recordNotice(this.currentActor() ?? undefined, label)
+  }
+
   /** 「どうぐ」: アイテムを使用 */
   selectItem(item: ItemExecution, targetId?: string): void {
     if (this.state.phase !== 'party-input') return
