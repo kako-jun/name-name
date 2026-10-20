@@ -19,7 +19,12 @@ import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
 import type { AtbMode, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
-import type { BattleItemEntry, BattleMenuData, BattleSpellEntry } from '../game/battleMenu'
+import type {
+  BattleItemEntry,
+  BattleMenuData,
+  BattleSkillEntry,
+  BattleSpellEntry,
+} from '../game/battleMenu'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -74,7 +79,7 @@ export interface BattleSampleConfig {
   commandLayout: CommandLayout
   /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
   commandLabels: CommandLabels
-  /** 候補窓の呪文 (#204)。味方全員が使える（cross のときだけ「じゅもん」で開く）。MP が足りないものはグレー */
+  /** 候補窓の呪文 (#204)。味方全員が使える（grid でも cross でも「じゅもん」で開く）。MP が足りないものはグレー */
   spells: BattleSpellEntry[]
   /** 候補窓のアイテム (#204)。`count` は所持数（使うたびに BattleScreen が渡された entry の count を 1 減らす。呼び出し側は戦闘ごとに複製を渡す） */
   items: BattleItemEntry[]
@@ -426,11 +431,11 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
   return { ok: true, value: Object.fromEntries(entries) }
 }
 
-/** 設定 JSON の spells / items (#204) を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
-export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
+/** 設定 JSON の spells / items (#204) と skills（わざ、#873。MP なし・`target` は特技の相対表現で既定 `相手単体`）を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
+export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | BattleSkillEntry>(
   raw: unknown,
   fallback: T[],
-  key: 'spells' | 'items'
+  key: 'spells' | 'items' | 'skills'
 ): ParseResult<T[]> {
   if (raw === undefined) return { ok: true, value: fallback }
   if (!Array.isArray(raw)) return { ok: false, error: `${key} は配列である必要があります` }
@@ -458,7 +463,15 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
       ...(typeof r.effect === 'string' ? { effect: r.effect } : {}),
       ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
     }
-    if (key === 'spells') {
+    if (key === 'skills') {
+      if (typeof r.target !== 'undefined' && typeof r.target !== 'string') {
+        return { ok: false, error: `${path}.target は文字列である必要があります` }
+      }
+      out.push({
+        ...base,
+        target: typeof r.target === 'string' ? r.target : '相手単体',
+      } as T)
+    } else if (key === 'spells') {
       if (typeof r.target !== 'undefined' && typeof r.target !== 'string') {
         return { ok: false, error: `${path}.target は文字列である必要があります` }
       }
@@ -753,7 +766,7 @@ export function buildBattleSetup(
     presentation: BattlePresentation
     commandLayout: CommandLayout
     commandLabels: CommandLabels
-    /** 候補窓の呪文・アイテム (#204)。commandLayout が cross のときだけ BattleScreen が使う */
+    /** 候補窓の呪文・アイテム (#204)。side の BattleScreen が grid でも cross でも使う */
     menu: BattleMenuData
     background?: string
     depth: BattleDepth | null

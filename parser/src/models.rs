@@ -473,6 +473,10 @@ pub struct PartyMemberDef {
     /// Phase 1 ではデータとして保持するだけ、ランタイム評価は #175 follow-up。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub learns: Option<Vec<PartyLearns>>,
+    /// 戦闘コマンド「わざ」の候補 (#873)。`[特技 id]` の id を書いた順に持つ（`わざ:` を複数行書ける）。
+    /// 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abilities: Option<Vec<String>>,
 }
 
 /// パーティメンバーの呪文習得スロット (#175)
@@ -1722,6 +1726,11 @@ pub struct Document {
     /// frontmatter `battle_command_labels:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_command_labels: Option<String>,
+    /// RPG 戦闘のコマンドの構成と順序 (#873)。`skill, spell, item, escape` のように id をカンマ区切りで並べる
+    /// （id は attack / skill / spell / item / escape。未指定は既定の attack, spell, item, escape）。
+    /// 値は生文字列で透過し、runtime 側で解釈する。GUI 専用。frontmatter `battle_commands:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_commands: Option<String>,
     /// RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、
     /// 終了=黒を経由してフェードで戻る）。値は parser でバリデーションせず生文字列で透過し、runtime 側で未知値・空文字は
     /// `"none"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。

@@ -444,6 +444,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     // 戦闘コマンド窓の配置と表示名 (#204)。同上。
     battle_command_layout: nullIfEmpty(doc.battle_command_layout),
     battle_command_labels: nullIfEmpty(doc.battle_command_labels),
+    battle_commands: nullIfEmpty(doc.battle_commands),
     battle_transition: nullIfEmpty(doc.battle_transition),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,

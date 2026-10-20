@@ -6,14 +6,15 @@
  * BattleScreen が `MenuStack` として持つだけで GameState / BattleState には持たない（ADR 0002）。
  * 確定したときだけ `MenuAction` が出て、BattleScreen がエンジン（selectSpell / selectItem）へ渡す。
  *
+ * - 「わざ」(#873) の一覧は呪文と同じ窓で、MP は持たない（コスト列は空）。対象は特技と同じ相対表現（`相手単体` など）
  * - 呪文・アイテムの一覧は呼び出し側（ゲームの設定）が渡す。エンジンは汎用のまま
  * - 消費 MP が足りない呪文は `disabled`（グレー）。確定しようとすると `blocked` を返し、窓は閉じない
  * - 対象は呪文の `target` 文字列（味方単体 / 敵全体 など）から決まる。単体は手が 1 本、全体は対象の全員に同時に手が立つ
  */
-import type { ItemExecution, SpellExecution } from './battleEngine'
+import type { ItemExecution, SkillExecution, SpellExecution } from './battleEngine'
 import { parseEffect, type BattleEntity } from './spellDsl'
 
-export type MenuKind = 'spell' | 'item'
+export type MenuKind = 'spell' | 'item' | 'skill'
 export type TargetSide = 'enemy' | 'party'
 /** single = 手で 1 体選ぶ / all = 側の全員 / self = 使用者本人 / none = 対象なし（マップ用など。選択を挟まず即実行） */
 export type TargetScope = 'single' | 'all' | 'self' | 'none'
@@ -36,11 +37,21 @@ export interface BattleItemEntry extends ItemExecution {
   count?: number
 }
 
-/** 候補窓に出すデータ。呪文は味方の id ごと（覚えているものが人によって違う）、アイテムは全員共通 */
+/** 「わざ」(#873) の候補。`SkillExecution`（エンジンへ渡す形）に一覧用の id を足したもの。MP は持たない */
+export interface BattleSkillEntry extends SkillExecution {
+  id: string
+}
+
+/** 候補窓に出すデータ。呪文・わざは味方の id ごと（覚えているものが人によって違う）、アイテムは全員共通 */
 export interface BattleMenuData {
   spells?: Readonly<Record<string, readonly BattleSpellEntry[]>>
+  /** 「わざ」(#873)。味方の id ごと（装備中の刀のアビリティなど） */
+  skills?: Readonly<Record<string, readonly BattleSkillEntry[]>>
   items?: readonly BattleItemEntry[]
 }
+
+/** 候補窓の 1 件（呪文・わざ・アイテムのどれか） */
+export type BattleMenuEntry = BattleSpellEntry | BattleSkillEntry | BattleItemEntry
 
 /** 一覧の 1 行 */
 export interface MenuRow {
@@ -69,16 +80,37 @@ export function parseSpellTarget(raw: string | undefined): TargetSpec {
   }
 }
 
+/**
+ * 特技（わざ）の `target`（使う側から見た相対表現）→ 対象 (#873)。味方が使うので「相手」は敵側、「仲間」は味方側。
+ * 未指定・未知は相手単体（エンジンの `performSkill` の既定と同じ）
+ */
+export function parseSkillTarget(raw: string | undefined): TargetSpec {
+  switch (typeof raw === 'string' ? raw.trim() : '') {
+    case '仲間単体':
+      return { side: 'party', scope: 'single' }
+    case '仲間全体':
+      return { side: 'party', scope: 'all' }
+    case '相手全体':
+      return { side: 'enemy', scope: 'all' }
+    case '自分':
+      return { side: 'party', scope: 'self' }
+    default:
+      return { side: 'enemy', scope: 'single' }
+  }
+}
+
 /** アイテムの対象。エンジンの `selectItem` は味方単体だけを扱うので常に味方単体 */
 export const ITEM_TARGET: TargetSpec = { side: 'party', scope: 'single' }
 
 /** 一覧の行を作る。MP が足りない呪文・所持数 0 のアイテムは disabled */
 export function buildMenuRows(
   kind: MenuKind,
-  entries: ReadonlyArray<BattleSpellEntry | BattleItemEntry>,
+  entries: ReadonlyArray<BattleMenuEntry>,
   actor: Pick<BattleEntity, 'mp'> | undefined
 ): MenuRow[] {
   return entries.map((e) => {
+    // わざ (#873) は MP も所持数も無い。常に選べる（コスト列は空）
+    if (kind === 'skill') return { label: e.name, cost: '', disabled: !actor }
     if (kind === 'spell') {
       const mp = (e as BattleSpellEntry).mp
       return {
@@ -100,23 +132,26 @@ export function buildMenuRows(
   })
 }
 
-export function targetSpecOf(
-  kind: MenuKind,
-  entry: BattleSpellEntry | BattleItemEntry
-): TargetSpec {
-  const spec = kind === 'spell' ? parseSpellTarget((entry as BattleSpellEntry).target) : ITEM_TARGET
+export function targetSpecOf(kind: MenuKind, entry: BattleMenuEntry): TargetSpec {
+  const spec =
+    kind === 'spell'
+      ? parseSpellTarget((entry as BattleSpellEntry).target)
+      : kind === 'skill'
+        ? parseSkillTarget((entry as BattleSkillEntry).target)
+        : ITEM_TARGET
   return spec.scope === 'single' && isReviveEntry(kind, entry) ? { ...spec, revive: true } : spec
 }
 
 /**
  * 蘇生の呪文・アイテムか。効果 DSL が `revive`、または蘇生の builtin（呪文は ザオリク `zaorik`、
- * アイテムは せかいじゅのしずく `world_tree_drop`）。呪文の builtin はアイテムでは、逆もまた別の関数を指すので種別ごとに見る
+ * アイテムは せかいじゅのしずく `world_tree_drop`）。呪文の builtin はアイテムでは、逆もまた別の関数を指すので種別ごとに見る。
+ * わざ (#873) はエンジンの特技と同じく呪文の builtin 表（`zaorik`）で見る
  */
 export function isReviveEntry(
   kind: MenuKind,
   entry: { effect?: string; builtin?: string }
 ): boolean {
-  if (kind === 'spell' ? entry.builtin === 'zaorik' : entry.builtin === 'world_tree_drop') {
+  if (kind === 'item' ? entry.builtin === 'world_tree_drop' : entry.builtin === 'zaorik') {
     return true
   }
   return typeof entry.effect === 'string' && parseEffect(entry.effect)?.kind === 'revive'
@@ -168,7 +203,7 @@ export interface MenuContext {
   /** 一覧窓に同時に見える行数（画面の大きさで決まる） */
   maxRows: number
   /** 一覧窓の候補（対象の決定に使う） */
-  entries: ReadonlyArray<BattleSpellEntry | BattleItemEntry>
+  entries: ReadonlyArray<BattleMenuEntry>
   party: readonly BattleEntity[]
   enemies: readonly BattleEntity[]
   /** いまコマンドを出している味方の index */
@@ -436,4 +471,33 @@ export function menuKeyAction(key: string): MenuKeyAction | undefined {
     default:
       return undefined
   }
+}
+
+/**
+ * 画面の下端に常に出す操作の案内 (#806。暗黙の操作を作らない)。`w` は一番上の窓（無ければコマンド窓の状態）。
+ * `fits` は「その文字列が収まるか」の判定（画面幅から呼び出し側が渡す）。長い文は収まらなければ短い文に落とし、
+ * 短い文も収まらなければ空文字（出さない）。キーとタップの両方を書く。
+ * `commandKeys` は cross のときの矢印キーによるコマンド決定の案内を足す
+ */
+export function menuHint(
+  w: MenuWindow | undefined,
+  commandKeys: boolean,
+  fits: (text: string) => boolean
+): string {
+  let long: string
+  let short: string
+  if (!w) {
+    long = commandKeys ? '矢印キー・タップ: コマンドをえらぶ' : 'タップ: コマンドをえらぶ'
+    short = commandKeys ? '矢印・タップ: コマンド' : 'タップ: コマンド'
+  } else if (w.type === 'list') {
+    long = '↑↓: えらぶ  Enter・タップ: けってい  Esc・そとをタップ: もどる'
+    short = '↑↓ えらぶ  Enter けってい  Esc もどる'
+  } else if (w.spec.scope === 'single') {
+    long = '↑↓: たいしょう  Enter・タップ: けってい  Esc・そとをタップ: もどる'
+    short = '↑↓ たいしょう  Enter けってい  Esc もどる'
+  } else {
+    long = 'Enter・タップ: けってい  Esc・そとをタップ: もどる'
+    short = 'Enter けってい  Esc もどる'
+  }
+  return fits(long) ? long : fits(short) ? short : ''
 }

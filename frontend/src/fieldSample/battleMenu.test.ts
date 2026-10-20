@@ -63,3 +63,24 @@ describe('buildBattleMenu (#890)', () => {
     expect(m2.items![0].count).toBe(2) // 次の戦闘は設定の所持数から始まる
   })
 })
+
+describe('buildBattleMenu: わざ (#873)', () => {
+  const party = [member('a'), member('b')]
+  const skill = { id: 'slash', name: 'きる', target: '相手単体' }
+
+  it('わざだけでも menu になり、味方ごと・要素ごとに別インスタンス。アイテム・呪文は空', () => {
+    const skills = [skill]
+    const m = buildBattleMenu({ party, spells: [], items: [], skills })!
+    expect(Object.keys(m.skills!)).toEqual(['a', 'b'])
+    expect(m.skills!.a).toEqual(skills)
+    expect(m.skills!.a[0]).not.toBe(m.skills!.b[0])
+    expect(m.skills!.a[0]).not.toBe(skills[0])
+    expect(m.items).toEqual([])
+  })
+
+  it('わざが空・未指定なら skills キーを出さない（従来の形のまま）', () => {
+    const m = buildBattleMenu({ party, spells: [spell('fire')], items: [], skills: [] })!
+    expect('skills' in m).toBe(false)
+    expect(buildBattleMenu({ party, spells: [], items: [], skills: [] })).toBeUndefined()
+  })
+})

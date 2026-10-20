@@ -399,6 +399,8 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         agi: lookup_master_u32(entries, &["AGI", "agi", "素早さ"], 0),
         // 「習得」キーは複数行 OK で `Lv4 ホイミ` / `4 ホイミ` のような形式を受理する
         learns: collect_party_learns(entries),
+        // 「わざ」キーは複数行 OK で、`[特技 id]` の id を書いた順に集める (#873)
+        abilities: collect_values(entries, &["わざ", "abilities"]),
     })
 }
 
