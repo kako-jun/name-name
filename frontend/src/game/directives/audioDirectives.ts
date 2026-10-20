@@ -3,9 +3,9 @@
  */
 import { resolveAssetUrl } from '../novelLayout'
 import { selectAndShuffleSeFiles } from '../seSelection'
-import { on, type DirectiveTable } from './types'
+import { on, type ObjectDirectiveTable } from './types'
 
-export const audioDirectives: DirectiveTable = {
+export const audioDirectives: ObjectDirectiveTable = {
   Bgm: on<'Bgm'>((event, ctx) => {
     const { audio, env, hooks } = ctx
     if (event.Bgm.action === 'Play' && event.Bgm.path) {

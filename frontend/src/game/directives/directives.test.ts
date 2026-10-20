@@ -12,6 +12,7 @@ import {
   type DirectiveContext,
 } from './index'
 import { stageDirectives, stageSignalDirectives } from './stageDirectives'
+import { on, type ObjectDirectiveTable } from './types'
 
 const E = (e: unknown): Event => e as Event
 
@@ -239,5 +240,20 @@ describe('ハンドラ単体', () => {
       'fx.setBlackout',
       'fx.retreatNovelScrim',
     ])
+  })
+})
+
+describe('表のキーとハンドラの型の対応 (#829)', () => {
+  it('キーと on<K> の K が食い違うと型エラーになる（型検査: npm run type-check）', () => {
+    const ok: ObjectDirectiveTable = { Shake: on<'Shake'>(() => {}) }
+    const bad: ObjectDirectiveTable = {
+      // @ts-expect-error Shake のキーに Fade 用ハンドラは入れられない
+      Shake: on<'Fade'>(() => {}),
+    }
+    const unknownKey: ObjectDirectiveTable = {
+      // @ts-expect-error 存在しないイベント種はキーにできない
+      NoSuchEvent: on<'Shake'>(() => {}),
+    }
+    expect([ok, bad, unknownKey]).toHaveLength(3)
   })
 })

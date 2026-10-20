@@ -1,8 +1,8 @@
 /**
  * ディレクティブ処理の共通型 (#829, #735 8/8)。
  *
- * `NovelRenderer.processDirective` を領域別ハンドラへ分けたときの「ハンドラが触ってよいもの」の最小ポート。
- * ハンドラは `(event, ctx) => void` で、ディスパッチ表のキー（イベント種）に 1 対 1 で結び付く。
+ * `NovelRenderer.processDirective` から領域別ハンドラへ分けたときの「ハンドラが触ってよいもの」の最小ポート。
+ * ハンドラは `(event, ctx) => void` で、ディスパッチ表のキー（イベント種）に 1 対 1 で結び付く（処理したかは戻り値でなく、表にキーがあるかで決まる）。
  * フロー制御系（Flag / Choice / Jump / Wait / WaitDisplayComplete）は再生状態
  * （カーソル・遷移・タイマー）を同時に触るため、ここには入れずレンダラに残す。
  *
@@ -88,9 +88,23 @@ export type DirectiveTable = Readonly<Record<string, DirectiveHandler>>
 /** オブジェクト形のイベントのうち、キー `K` を持つ種だけに絞った型。 */
 export type EventOf<K extends string> = Extract<Event, Record<K, unknown>>
 
-/** 型付きのハンドラを表の要素（`DirectiveHandler`）にする。表のキーと `K` を一致させるのは呼び出し側の責任。 */
+/** オブジェクト形のイベントが取りうるキー（`{ Bgm: ... }` の `Bgm` など）の和。 */
+export type EventKey =
+  Exclude<Event, string> extends infer E ? (E extends unknown ? keyof E & string : never) : never
+
+declare const handlerKey: unique symbol
+
+/** `on<K>` が返す、どのキーのハンドラかを型に残したハンドラ。実行時には `DirectiveHandler` そのもの。 */
+export type KeyedHandler<K extends string> = DirectiveHandler & { readonly [handlerKey]?: K }
+
+/** オブジェクトイベント用の表。キー `K` の値は `on<K>` で作ったものに限る（`Shake: on<'Fade'>` は型エラー）。 */
+export type ObjectDirectiveTable = { readonly [K in EventKey]?: KeyedHandler<K> }
+
+/**
+ * 型付きのハンドラを表の要素にする。`ObjectDirectiveTable` のキーと `K` が一致しないと、表への代入で型エラーになる。
+ */
 export function on<K extends string>(
   handler: (event: EventOf<K>, ctx: DirectiveContext) => void
-): DirectiveHandler {
-  return handler as unknown as DirectiveHandler
+): KeyedHandler<K> {
+  return handler as unknown as KeyedHandler<K>
 }

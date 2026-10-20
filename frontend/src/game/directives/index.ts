@@ -11,7 +11,7 @@ import type { Event } from '../../types'
 import { audioDirectives } from './audioDirectives'
 import { characterDirectives } from './characterDirectives'
 import { stageDirectives, stageSignalDirectives } from './stageDirectives'
-import type { DirectiveContext, DirectiveHandler, DirectiveTable } from './types'
+import type { DirectiveContext, DirectiveHandler } from './types'
 
 export type {
   DirectiveContext,
@@ -20,12 +20,16 @@ export type {
   DirectiveHooks,
   DirectiveLayers,
   DirectiveTable,
+  ObjectDirectiveTable,
 } from './types'
 
-function mergeTables(...tables: DirectiveTable[]): Map<string, DirectiveHandler> {
+function mergeTables(
+  ...tables: Readonly<Record<string, DirectiveHandler | undefined>>[]
+): Map<string, DirectiveHandler> {
   const merged = new Map<string, DirectiveHandler>()
   for (const table of tables) {
     for (const [key, handler] of Object.entries(table)) {
+      if (!handler) continue
       if (merged.has(key)) throw new Error(`ディレクティブ表のキーが重複しています: ${key}`)
       merged.set(key, handler)
     }

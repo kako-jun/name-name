@@ -103,6 +103,12 @@ describe('NovelRenderer × directives 配線 (#829)', () => {
     expect(ctx.env.initialized).toBe(h.initialized)
     h.clearTelopLayer()
     expect(ctx.env.telopClearEpoch).toBe(h.telopClearEpoch)
+    // 設定側（レンダラが後から差し替える値）も毎回読み直す
+    expect(ctx.env.eventImageTransitionDefault).toBe('Fade')
+    r.setEventImageTransitionDefault('Pixelate')
+    expect(ctx.env.eventImageTransitionDefault).toBe('Pixelate')
+    r.setEventImageTransitionDefault(null)
+    expect(ctx.env.eventImageTransitionDefault).toBe('Fade')
     expect(ctx.stage).toBe(h.stage)
     expect(ctx.audio).toBe(h.audioManager)
     expect(ctx.characters).toBe(h.characterLayer)

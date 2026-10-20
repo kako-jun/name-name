@@ -507,6 +507,6 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 
 `processDirective` の演出系ディレクティブを `frontend/src/game/directives/` の領域別の表（ステージ / 立ち絵 / オーディオ）へ移した。**実装の置き場が変わっただけで、本 ADR の契約（入場の種類・持ち越し規律）は変えていない。**
 
-- `[場面転換]` のクリア対象と順序は旧 `processDirective` と同じ（`stageSignalDirectives.SceneTransition`）。`resetAndStartEvents` の新規開始（`stage.reset` を含む）と同じ規律で、場面転換は背景・動画・背景板・大道具・幕（z-order も既定へ）・照明・イベント絵・テロップ・暗転・novel スクリムをクリアし、立ち絵・BGM・フラグは触らない。動画レイヤの `remove()` が 2 回呼ばれる旧実装の呼び出し列も保っている（等価性テストで固定）。
+- `[場面転換]` のクリア対象と順序は旧 `processDirective` と同じ（`stageSignalDirectives.SceneTransition`）。クリア対象は旧と同じで、背景・動画・背景板・大道具・幕（z-order も既定へ）・照明・イベント絵・テロップ・暗転・novel スクリムをクリアする。`resetAndStartEvents` の新規開始（`stage.reset`・立ち絵・BGM・カメラ・輪郭・文字窓の枠の復帰を含む）より狭く、立ち絵・BGM・カメラ・輪郭・文字窓の枠・フラグは触らない。動画レイヤの `remove()` が 2 回呼ばれる旧実装の呼び出し列も保っている（等価性テストで固定）。
 - `Flag` / `Choice` / `Jump` / `Wait` / `WaitDisplayComplete` は遷移ゲートと再生カーソルを触るためレンダラに残り、`rederiveTransitionAtCurrentPosition()` などが `processDirective` を呼ぶ経路は変わらない。
 - 立ち絵ロード待ち（`showCharacterThenRender`、#293）はレンダラに残る。`[登場:]` / `[退場:]` / `[表情:]` のハンドラは旧と同じ引数で `CharacterLayer` を呼ぶだけで、`lastSpeaker` や話者交代 nudge には触らない。

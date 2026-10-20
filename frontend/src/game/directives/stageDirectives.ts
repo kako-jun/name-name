@@ -9,9 +9,9 @@ import {
   DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
   DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
 } from '../outlineFilter'
-import { on, type DirectiveHandler, type DirectiveTable } from './types'
+import { on, type DirectiveHandler, type DirectiveTable, type ObjectDirectiveTable } from './types'
 
-/** 場面転換 `[場面転換]`。クリア対象と順序は `resetAndStartEvents` の新規開始と同じ規律。 */
+/** 場面転換 `[場面転換]`。クリア対象と順序は旧 processDirective の SceneTransition 分岐と同じ（新規開始の `resetAndStartEvents` よりクリア対象は狭い）。 */
 const sceneTransition: DirectiveHandler = (_event, ctx) => {
   const { stage, layers, hooks } = ctx
   stage.background.clearBackground()
@@ -63,7 +63,7 @@ export const stageSignalDirectives: DirectiveTable = {
 }
 
 /** オブジェクトイベント。表のキーは `{ キー: ... }` のキー。 */
-export const stageDirectives: DirectiveTable = {
+export const stageDirectives: ObjectDirectiveTable = {
   Background: on<'Background'>((event, ctx) => {
     const bg = event.Background
     ctx.stage.background.setBackground(

@@ -6,9 +6,9 @@
  * 無言の `[登場:]` などを `CharacterLayer` へ渡すだけで、`lastSpeaker` / 話者交代 nudge には触れない。
  */
 import { resolveFontFamily } from '../novelLayout'
-import { on, type DirectiveTable } from './types'
+import { on, type ObjectDirectiveTable } from './types'
 
-export const characterDirectives: DirectiveTable = {
+export const characterDirectives: ObjectDirectiveTable = {
   ExpressionChange: on<'ExpressionChange'>((event, ctx) => {
     ctx.characters.changeExpression(
       event.ExpressionChange.character,

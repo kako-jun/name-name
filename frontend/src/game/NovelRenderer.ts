@@ -221,7 +221,7 @@ export class NovelRenderer {
   private telopButtonRowHeightPx: number = PLAYER_BUTTON_ROW_HEIGHT_PX
   /**
    * `telopLayer.clear()`（destroy 以外の呼び出し = scene切替/goBack/seekTo/セーブ復元）が
-   * 起きるたびに1つ増える世代カウンタ (#679 レビューS3)。`processDirective` の `Telop` 分岐は
+   * 起きるたびに1つ増える世代カウンタ (#679 レビューS3)。`directives/stageDirectives.ts` の `Telop` ハンドラ（旧 processDirective の Telop 分岐）は
    * `ensureFontLoaded()` の完了を待ってから `telopLayer.show()` する（フォント未ロードのまま
    * 折り返し行数が確定してしまう問題の修正）が、待機中にシーン切替等が起きて古いテロップを
    * 出すのは事故なので、show 呼び出し予定時にこの値を記録し、完了時に変化していないか
@@ -615,7 +615,8 @@ export class NovelRenderer {
 
   /**
    * ディレクティブのハンドラ（`directives/`）に渡す最小ポート (#829)。値は getter で毎回最新を返す
-   * （レイヤー・設定はレンダラが差し替えるため、生成時の参照を固定しない）。
+   * （設定値は `setXxx` で後から差し替わるため getter が必須。レイヤーや Stage は代入がコンストラクタでの1回だけだが、
+   * このフィールド初期化はその代入より前に走るので、生成時には未代入であり、getter で遅延評価する）。
    */
   private readonly directiveContext: DirectiveContext = this.createDirectiveContext()
 
@@ -3308,9 +3309,9 @@ export class NovelRenderer {
     this.videoLayer.restore(state.video)
 
     // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。全背面レイヤー
-    // （背景・背景板・動画・立ち絵・大道具）の可視性は復元後の状態を見て宣言的に再計算する（processDirective と
-    // 同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
-    // （processDirective の EventImage 分岐と同じセルフレビュー対応）。
+    // （背景・背景板・動画・立ち絵・大道具）の可視性は復元後の状態を見て宣言的に再計算する（ライブ進行の `directives/stageDirectives.ts` の
+    // `EventImage` ハンドラと同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
+    // （`EventImage` ハンドラと同じセルフレビュー対応）。
     this.eventImageLayer.restore(state.eventImage, {
       onSettled: () => this.applyEventImageVisibility(),
     })
@@ -3478,7 +3479,7 @@ export class NovelRenderer {
   /**
    * `telopLayer.clear()` を呼びつつ `telopClearEpoch` を1つ進める (#679 レビューS3)。
    * scene切替（resetAndStartEvents / SceneTransition）・goBack/seekTo/セーブ復元（applyState）・
-   * destroy() の4箇所全てここ経由にし、`processDirective` の `Telop` 分岐が
+   * destroy() の4箇所全てここ経由にし、`directives/stageDirectives.ts` の `Telop` ハンドラが
    * `ensureFontLoaded()` 完了時にこのエポックの変化を見て「待機中に打ち切られたか」を判定する。
    */
   private clearTelopLayer(): void {
@@ -3503,7 +3504,7 @@ export class NovelRenderer {
    * イベント絵レイヤー (#351) の `back` 値に応じて、背景・背景板・動画・立ち絵・スポットライト・
    * 大道具の可視性を宣言的にトグルする。
    *
-   * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
+   * `setBlackout` と同じ「単一の宣言的セッター」パターン: `directives/stageDirectives.ts` の `EventImage` ハンドラ（ライブ進行）と
    * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
    * 素直に読んで反映するだけにする。退避 → 復元のような一回限りのアニメーションは持たない
    * （ADR-0002: スナップショットは常に settled 状態のみを持つ）。
