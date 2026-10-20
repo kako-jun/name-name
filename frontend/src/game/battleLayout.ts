@@ -394,7 +394,7 @@ export function fitLabel(text: string, maxWidthPx: number, fontPx: number): stri
  * HP 行を `maxWidthPx` に収める。「HP 12/12」が入らなければ「HP 」を落として「12/12」を残し、
  * それでも入らないときだけ「…」で省略する（数値を優先して見せる）。
  * 省略するとき、最大値の桁が途中で切れる（「99999/9…」は最大値が 9 に見える）より、現在値を残して最大値全体を「…」に
- * 置き換える（「99999/…」）ほうを先に採る。5 桁以上の HP で窓が狭いときに起きる (#877)。
+ * 置き換える（「99999/…」）ほうを先に採る。最大値が途中で切れる幅では（最大値が 3 桁以上なら起きうる。#877 の測定では 5 桁以上が目立った）(#877)。
  */
 export function fitHpLabel(hp: number, maxHp: number, maxWidthPx: number, fontPx: number): string {
   const nums = `${hp}/${maxHp}`

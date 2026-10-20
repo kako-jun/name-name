@@ -329,15 +329,22 @@ describe('fitPopupFontSize: 桁数別 (#877)', () => {
     expect(fitPopupFontSize('999999', 36)).toBe(24)
     expect(fitPopupFontSize('9999999', 56)).toBe(32)
   })
-  it('どの桁・基準でも幅（文字数×係数）は 4 桁の基準幅を越えず、1 未満にならない', () => {
+  it('どの桁・基準でも幅（文字数×係数）は 4 桁の基準幅を越えない', () => {
     for (const base of [POPUP_FONT_MIN, 33, POPUP_FONT_MAX]) {
       for (let digits = 5; digits <= 12; digits++) {
-        const t = '9'.repeat(digits)
-        const f = fitPopupFontSize(t, base)
+        const f = fitPopupFontSize('9'.repeat(digits), base)
         expect(f * digits).toBeLessThanOrEqual(base * 4)
-        expect(f).toBeGreaterThanOrEqual(1)
       }
     }
+  })
+  it('どの桁・基準でも 1 未満にならない', () => {
+    for (const base of [POPUP_FONT_MIN, 33, POPUP_FONT_MAX]) {
+      for (let digits = 5; digits <= 12; digits++) {
+        expect(fitPopupFontSize('9'.repeat(digits), base)).toBeGreaterThanOrEqual(1)
+      }
+    }
+  })
+  it('極端に長い文字列（100 文字）でも下限 1 で止まる', () => {
     expect(fitPopupFontSize('9'.repeat(100), 20)).toBe(1)
   })
   it('popupText と組み合わせても 9999 以下は不変', () => {

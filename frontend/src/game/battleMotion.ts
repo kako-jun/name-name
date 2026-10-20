@@ -385,6 +385,8 @@ export const POPUP_FULL_SIZE_CHARS = 4
 /**
  * 数字のフォントサイズを文字数に応じて縮める (#877)。4 文字以下（ダメージ上限 9999 まで・MISS）は `baseFont` のまま、
  * 5 文字以上（回復・吸収の 5 桁以上）は 4 文字の幅に収まるよう比例で縮め、枠の外・画面の外へはみ出さないようにする。
+ * 下限 1px は 0 や負を防ぐだけで、読める保証ではない（縁取りが 4px 固定なので小さい文字ほど縁取りの割合が増える。
+ * 基準 20px で 7 桁なら 11px、8 桁なら 10px）。
  */
 export function fitPopupFontSize(text: string, baseFont: number): number {
   const len = [...text].length

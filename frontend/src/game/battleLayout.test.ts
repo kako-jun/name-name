@@ -939,7 +939,7 @@ describe('fitHpLabel', () => {
   // #877: 敵 HP は何万まであり得る。桁別に、収まる幅は不変・収まらない幅は最大値の桁を途中で切らない
   const widthOf = (t: string) => estimateTextWidth(t, 12)
   it.each([9999, 99999, 999999, 9999999])(
-    '%i : 「HP 」付きで収まる幅はそのまま（入らなければ「HP 」だけ落とす）',
+    'HP 最大値 $0 のとき: 「HP 」付きで収まる幅はそのまま（入らなければ「HP 」だけ落とす）',
     (n) => {
       const w = widthOf(`HP ${n}/${n}`)
       expect(fitHpLabel(n, n, w, 12)).toBe(`HP ${n}/${n}`)
@@ -947,7 +947,7 @@ describe('fitHpLabel', () => {
     }
   )
   it.each([9999, 99999, 999999, 9999999])(
-    '%i 桁: 数値も入らない幅では「現在値/…」にし、最大値を途中で切らない',
+    'HP 最大値 $0 のとき: 数値も入らない幅では「現在値/…」にし、最大値を途中で切らない',
     (n) => {
       const s = `${n}`
       const w = widthOf(`${s}/…`)
@@ -2604,7 +2604,7 @@ describe('敵グリッド有効時の総当たり不変条件 (#839 段4・設�
 describe('computeStatusColumns: 味方 HP の桁数別 (#877)', () => {
   const widths = [200, 280, 360, 480, 640, 800, 1280]
   it.each([9999, 99999, 999999, 9999999])(
-    '%i: 幅によらず HP 列はパネルの内側に収まり、名前列と重ならず、現在値の列は残る',
+    'HP 最大値 $0 のとき: 幅によらず HP 列はパネルの内側に収まり、名前列と重ならず、現在値の列は残る',
     (maxHp) => {
       for (const width of widths) {
         for (const atb of [false, true]) {
@@ -2640,11 +2640,15 @@ describe('computeStatusColumns: 味方 HP の桁数別 (#877)', () => {
       expect(c.mp).not.toBeNull()
     }
   })
-  it('狭い窓（360x640 の status パネル幅 180）では桁が増えると MP → 見出し → 最大値の順に削り、名前の最小幅は守る', () => {
+  it('狭い窓（360x640 の status パネル幅 180）では、9999 で MP が消え、5 桁で見出しが消え、6 桁以上で最大値が消え、どの桁でも名前の最小幅は守る', () => {
     const at = (maxHp: number) =>
       computeStatusColumns({ x: 165, width: 180, maxHp, maxMp: 99, compact: false, atb: false })
     expect(at(9999).mp).toBeNull()
+    expect(at(9999).showLabels).toBe(true)
     expect(at(9999).showMaxHp).toBe(true)
+    expect(at(99999).showLabels).toBe(false)
+    expect(at(99999).showMaxHp).toBe(true)
+    expect(at(999999).showMaxHp).toBe(false)
     expect(at(9999999).showMaxHp).toBe(false)
     for (const maxHp of [9999, 99999, 999999, 9999999]) {
       expect(at(maxHp).name.w).toBeGreaterThanOrEqual(
