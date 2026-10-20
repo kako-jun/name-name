@@ -307,3 +307,18 @@ export function arrivalPosition(
   }
   return snapToWalkable(dstMask, p, snapRadius)
 }
+
+/**
+ * 主人公の表示高さ（背景ピクセル）を決める (#810)。シーンの `playerHeight` があればそれ、無ければ全体の値。
+ * 表示の大きさだけを決める。足元（スプライト下端中心）・歩行マスク判定・端リンク判定・移動速度は大きさに依存しない
+ */
+export function resolvePlayerHeight(sceneHeight: number | undefined, globalHeight: number): number {
+  return sceneHeight !== undefined && Number.isFinite(sceneHeight) && sceneHeight > 0
+    ? sceneHeight
+    : globalHeight
+}
+
+/** 表示高さ `height` にするためのスプライト倍率（元画像の高さ `textureHeight` が基準）。画像の高さが 0 以下なら 1 */
+export function playerScale(height: number, textureHeight: number): number {
+  return textureHeight > 0 ? height / textureHeight : 1
+}

@@ -7,7 +7,9 @@ import {
   isWalkable,
   keysToVector,
   maskFromRgba,
+  playerScale,
   pointerToVector,
+  resolvePlayerHeight,
   snapToWalkable,
   stepMove,
   walkFrame,
@@ -775,5 +777,25 @@ describe('facingFromVector 8 方向 (Issue #811)', () => {
     expect(facingFromVector({ x: 1, y: 1 }, 'left')).toBe('left')
     expect(facingFromVector({ x: 0.9, y: 0.6 }, 'up', false)).toBe('right')
     expect(facingFromVector({ x: 0.6, y: 0.9 }, 'up', false)).toBe('down')
+  })
+})
+
+describe('resolvePlayerHeight / playerScale (#810)', () => {
+  it('シーン指定が無ければ全体値', () => {
+    expect(resolvePlayerHeight(undefined, 96)).toBe(96)
+  })
+  it('シーン指定があればそれを使う', () => {
+    expect(resolvePlayerHeight(60, 96)).toBe(60)
+  })
+  it('不正なシーン値（0・負・NaN）は全体値へ戻す', () => {
+    expect(resolvePlayerHeight(0, 96)).toBe(96)
+    expect(resolvePlayerHeight(-5, 96)).toBe(96)
+    expect(resolvePlayerHeight(NaN, 96)).toBe(96)
+  })
+  it('倍率は表示高さ / 画像の高さ', () => {
+    expect(playerScale(96, 192)).toBe(0.5)
+  })
+  it('画像の高さが 0 なら倍率は 1', () => {
+    expect(playerScale(96, 0)).toBe(1)
   })
 })
