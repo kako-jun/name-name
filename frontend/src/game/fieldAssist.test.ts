@@ -547,6 +547,7 @@ describe('端リンクの着地 (resolveEdgeArrival。通行状態によらず�
       base: A,
       assisted: aAsst,
       inset: 1.5,
+      passable: false,
     })
     expect(r).not.toBeNull()
     expect(r!.pos.y).toBeLessThan(14)
@@ -565,6 +566,7 @@ describe('端リンクの着地 (resolveEdgeArrival。通行状態によらず�
       base: A,
       assisted: aAsst,
       inset: 1.5,
+      passable: false,
     })!
     const fr = stepAssistFrame({
       base: A,
@@ -599,6 +601,7 @@ describe('端リンクの着地 (resolveEdgeArrival。通行状態によらず�
       base: A,
       assisted: aAsst,
       inset: 1.5,
+      passable: true,
     })!
     const a = stepAssistFrame({
       base: A,
@@ -621,41 +624,114 @@ describe('端リンクの着地 (resolveEdgeArrival。通行状態によらず�
     expect(b.wantCompanion).toBe(true)
   })
 
-  it('戻りリンクが無い片道リンクでも、画面中心の近くの橙の上に着き、来た端（link.edge の反対側）を入口にする', () => {
+  describe('戻りリンクの無い片道リンク（来た端が決まらないので、画面中心の近くを arrivalMask で探す）', () => {
     // 中央に縦の橙の帯 (x=5..14)。左右は白。中心 (10, 20) は橙
     const strip = maskOf(Array(40).fill('.....' + 'o'.repeat(10) + '.....'))
     const sAsst = maskWithAssist(strip)
     const link: FieldLink = { edge: 'top', range: [5, 15], to: 'S' }
-    const r = resolveEdgeArrival({
-      link,
-      back: null,
-      srcPos: src,
-      base: strip,
-      assisted: sAsst,
-      inset: 1.5,
-    })!
-    expect(isAssistCellOf(strip, r.pos)).toBe(true) // 通れない扱いのマスクなら橙の外の白へずらされる
-    expect(r.runtime.lastFree).toEqual({ x: r.pos.x, y: strip.height })
-    // 拒否中は、入口（下端）の側へしか動けない
-    const fr = stepAssistFrame({
-      base: strip,
-      assisted: sAsst,
-      pos: r.pos,
-      vec: { x: 0, y: -1 },
-      state: LOCKED,
-      runtime: r.runtime,
+    const args = { link, back: null, srcPos: src, base: strip, assisted: sAsst, inset: 1.5 }
+
+    it('通れる状態なら橙の上に着き、入ってきた場所は無し（ワープの at と同じ扱い）', () => {
+      const r = resolveEdgeArrival({ ...args, passable: true })!
+      expect(isAssistCellOf(strip, r.pos)).toBe(true)
+      expect(r.runtime).toEqual({ latch: null, lastFree: null })
     })
-    expect(fr.retreatField).not.toBeNull()
-    const up = limitRetreat(fr.retreatField!, r.pos, {
-      pos: { x: r.pos.x, y: r.pos.y - 3 },
-      distance: 3,
+
+    it('通れない状態では橙を除いて探し、橙の外の白に着く（橙の上で身動きが取れなくならない）', () => {
+      const r = resolveEdgeArrival({ ...args, passable: false })!
+      expect(isAssistCellOf(strip, r.pos)).toBe(false)
+      expect(r.runtime).toBe(INITIAL_ASSIST_RUNTIME)
     })
-    expect(up.distance).toBe(0)
-    const down = limitRetreat(fr.retreatField!, r.pos, {
-      pos: { x: r.pos.x, y: r.pos.y + 3 },
-      distance: 3,
+  })
+
+  describe('来た端から辿れない橙に、通れない状態で着いたとき（場が全部 Infinity で自由に歩けてしまう退行）', () => {
+    const stairsRows = (rim: number): string[] => [
+      ...Array(rim).fill('#'.repeat(40)),
+      ...Array(40 - rim).fill('#'.repeat(10) + 'o'.repeat(20) + '#'.repeat(10)),
+      ...Array(20).fill('.'.repeat(40)),
+    ]
+
+    it('(b) 戻りリンクの無い片道リンク。外周が黒い 40x40 の上下 2 部屋で中心が橙: 通れない状態では白の部屋に着く', () => {
+      // 上の部屋 y=1..18、下の部屋 y=21..38、真ん中 y=19..20 が橙の通路。外周は黒（来た端と橙はつながらない）
+      const base = maskOf([
+        '#'.repeat(40),
+        ...Array(18).fill('#' + '.'.repeat(38) + '#'),
+        '#' + 'o'.repeat(38) + '#',
+        '#' + 'o'.repeat(38) + '#',
+        ...Array(18).fill('#' + '.'.repeat(38) + '#'),
+        '#'.repeat(40),
+      ])
+      const args = {
+        link: { edge: 'top', range: [0, 40], to: 'R' } as FieldLink,
+        back: null,
+        srcPos: { x: 20, y: 39 },
+        base,
+        assisted: maskWithAssist(base),
+        inset: 18,
+      }
+      expect(isAssistCellOf(base, resolveEdgeArrival({ ...args, passable: true })!.pos)).toBe(true)
+      const locked = resolveEdgeArrival({ ...args, passable: false })!
+      expect(isAssistCellOf(base, locked.pos)).toBe(false) // 橙の中央に立たされて身動きが取れない、にならない
+      expect(locked.runtime).toBe(INITIAL_ASSIST_RUNTIME)
     })
-    expect(down.distance).toBe(3)
+
+    it('(c) 戻りリンクがあっても、橙が来た端の帯に届かない（黒い縁が帯より厚い）なら、通れない状態では橙を除いて探す', () => {
+      const base = maskOf(stairsRows(8))
+      const r = resolveEdgeArrival({
+        link: { edge: 'bottom', range: [0, 40], to: 'B' },
+        back: { edge: 'top', range: [0, 40], to: 'A' },
+        srcPos: { x: 20, y: 99 },
+        base,
+        assisted: maskWithAssist(base),
+        inset: 18,
+        passable: false,
+        edgeBand: 6,
+      })!
+      expect(isAssistCellOf(base, r.pos)).toBe(false)
+      expect(r.runtime).toBe(INITIAL_ASSIST_RUNTIME)
+    })
+
+    it('(a) 橙が来た端から 3px 手前で止まり、黒い縁がある: 橙の上に着き、通れない間は奥へ渡れず来た端へ戻れる', () => {
+      // 40x60。上端 y=0..2 は黒い縁、橙の階段 y=3..39（x=10..29）、その奥 y=40..59 は白。左右は黒
+      const rows = stairsRows(3)
+      const base = maskOf(rows)
+      const asst = maskWithAssist(base)
+      const link: FieldLink = { edge: 'bottom', range: [0, 40], to: 'B' }
+      const back: FieldLink = { edge: 'top', range: [0, 40], to: 'A' }
+      const r = resolveEdgeArrival({
+        link,
+        back,
+        srcPos: { x: 20, y: 99 },
+        base,
+        assisted: asst,
+        inset: 18,
+        passable: false,
+        edgeBand: 6,
+      })!
+      expect(isAssistCellOf(base, r.pos)).toBe(true) // 橙の上に着く（場は端の帯で種を持てる）
+      const LOCKED: AssistState = { passable: false, held: false, ghost: false }
+      function walk(vec: Vec, frames: number): Vec {
+        let pos = r.pos
+        let rt = r.runtime
+        for (let f = 0; f < frames; f++) {
+          const fr = stepAssistFrame({
+            base,
+            assisted: asst,
+            pos,
+            vec,
+            state: LOCKED,
+            runtime: rt,
+            edgeBand: 6,
+          })
+          rt = fr.runtime
+          const m = stepMove(fr.walkMask, pos, vec, 182, 16)
+          pos = (fr.retreatField ? limitRetreat(fr.retreatField, pos, m) : m).pos
+        }
+        return pos
+      }
+      expect(walk({ x: 0, y: 1 }, 200).y).toBeLessThan(r.pos.y + 1) // 奥の白へは渡れない
+      expect(walk({ x: 0, y: -1 }, 100).y).toBeLessThan(r.pos.y - 5) // 来た端へは戻れる
+    })
   })
 
   it('歩ける点が無ければ null', () => {
@@ -668,7 +744,163 @@ describe('端リンクの着地 (resolveEdgeArrival。通行状態によらず�
         base: wall,
         assisted: maskWithAssist(wall),
         inset: 1,
+        passable: false,
       })
     ).toBeNull()
+  })
+})
+
+describe('場の種を来た端の帯にする (buildDistanceField の band)', () => {
+  // 上端 y=0..2 は黒い縁、橙は y=3 から。端の 1 行だけを種にすると、歩けるセルが無く場が全部 -1 になる
+  const rows = [...Array(3).fill('#####'), ...Array(5).fill('#ooo#')]
+  it('帯の幅だけ深い行までを種にし、端からの深さを初期値にする', () => {
+    const f = buildDistanceField(maskOf(rows), { x: 2, y: -1 }, 6)
+    const col = (y: number): number => f.dist[y * 5 + 2]
+    expect([col(0), col(1), col(2)]).toEqual([-1, -1, -1])
+    expect([col(3), col(4), col(5), col(6), col(7)]).toEqual([3, 4, 5, 6, 7])
+  })
+  it('帯が無い（幅 1）と、場が全部 -1 になる（比較）', () => {
+    const f = buildDistanceField(maskOf(rows), { x: 2, y: -1 })
+    expect(Array.from(f.dist).every((d) => d === -1)).toBe(true)
+  })
+  it('下端・左端・右端も同じ（4 辺）', () => {
+    const bottom = buildDistanceField(maskOf([...rows].reverse()), { x: 2, y: 8 }, 6)
+    expect(bottom.dist[4 * 5 + 2]).toBe(3)
+    const left = buildDistanceField(maskOf(['###ooooo', '###ooooo']), { x: -1, y: 0 }, 6)
+    expect(left.dist[3]).toBe(3)
+    const right = buildDistanceField(maskOf(['ooooo###', 'ooooo###']), { x: 8, y: 0 }, 6)
+    expect(right.dist[4]).toBe(3)
+  })
+})
+
+describe('場は入口側の白と橙だけを辿る（橙の向こうにだけつながる白を近道にしない）', () => {
+  // 上の白の行 y=0 は、橙を通らないと入口（下の白の行 y=2）からたどれない
+  const mask = maskOf(['.....', 'ooooo', '.....'])
+  it('橙の向こうの白は Infinity（-1）。橙と入口側の白は距離が付く', () => {
+    const f = buildDistanceField(mask, { x: 2.5, y: 2.5 })
+    expect(Array.from(f.dist.slice(0, 5))).toEqual([-1, -1, -1, -1, -1])
+    expect(Array.from(f.dist.slice(5, 10))).toEqual([3, 2, 1, 2, 3])
+    expect(f.dist[12]).toBe(0)
+  })
+})
+
+describe('斜めの入力で前へ登れない (limitRetreat は真に減るときだけセルをまたぐ)', () => {
+  // 広い一面の橙。入口は (0.5, 40.5)。場の値はマンハッタン距離
+  const rows = Array(41).fill('o'.repeat(41))
+  const field = buildDistanceField(maskOf(rows), { x: 0.5, y: 40.5 })
+  const prev: Vec = { x: 10.5, y: 20.5 }
+  it('入口の列へ寄る 1px ＋前へ 1px の斜め移動（値が等しい）は通さず、寄る成分だけ通す', () => {
+    const r = limitRetreat(field, prev, { pos: { x: 9.5, y: 19.5 }, distance: Math.SQRT2 })
+    expect(r.pos).toEqual({ x: 9.5, y: 20.5 })
+    expect(r.distance).toBe(1)
+  })
+  it('前へ（入口から遠ざかる）だけの動きは通さない', () => {
+    const away = limitRetreat(field, prev, { pos: { x: 10.5, y: 19.5 }, distance: 1 })
+    expect(away).toEqual({ pos: prev, distance: 0 })
+    const awayBoth = limitRetreat(field, prev, { pos: { x: 11.5, y: 19.5 }, distance: Math.SQRT2 })
+    expect(awayBoth).toEqual({ pos: prev, distance: 0 })
+  })
+  it('同じセルの中の動きは、値が変わらないので通す', () => {
+    const inCell = { pos: { x: 10.9, y: 20.1 }, distance: 0.5 }
+    expect(limitRetreat(field, prev, inCell)).toBe(inCell)
+  })
+  it('動く前の場所が場の外（入口から辿れない）なら判定できないので通す', () => {
+    const outside = buildDistanceField(maskOf(['..#..']), { x: 0.5, y: 0.5 })
+    const m = { pos: { x: 4.5, y: 0.5 }, distance: 1 }
+    expect(limitRetreat(outside, { x: 3.5, y: 0.5 }, m)).toBe(m)
+  })
+})
+
+describe('拒否中は 8 方向入力のどの組み合わせでも向こう側の白へ出られない（到達位置の全探索）', () => {
+  const REFUSE: AssistState = { passable: false, held: true, ghost: false }
+  const DIRS: Vec[] = [-1, 0, 1].flatMap((x) =>
+    [-1, 0, 1].filter((y) => x !== 0 || y !== 0).map((y) => ({ x, y }))
+  )
+  const SPEED = 182 // 260 * 0.7（廃墟の橙の上の速さ）
+  const DTS = [1000 / 60, 4] // 1 フレームと、端数をずらすための短い 1 歩
+
+  /** start から入力の列で到達できる位置（0.5px 刻みで同一視）をすべて集める。本番の stepAssistFrame / stepMove / limitRetreat を使う */
+  function reachable(base: WalkMask, entry: Vec, start: Vec, cap = 400000): Vec[] {
+    const asst = maskWithAssist(base)
+    const rt0 = stepAssistFrame({
+      base,
+      assisted: asst,
+      pos: start,
+      vec: { x: 0, y: 0 },
+      state: REFUSE,
+      runtime: { latch: { entry, pushed: true }, lastFree: entry },
+    }).runtime
+    const key = (p: Vec): string => `${Math.round(p.x * 2)},${Math.round(p.y * 2)}`
+    const seen = new Map<string, Vec>([[key(start), start]])
+    const stack: { pos: Vec; rt: AssistRuntime }[] = [{ pos: start, rt: rt0 }]
+    while (stack.length > 0 && seen.size < cap) {
+      const cur = stack.pop()!
+      for (const vec of DIRS)
+        for (const dt of DTS) {
+          const fr = stepAssistFrame({
+            base,
+            assisted: asst,
+            pos: cur.pos,
+            vec,
+            state: REFUSE,
+            runtime: cur.rt,
+          })
+          const m = stepMove(fr.walkMask, cur.pos, vec, SPEED, dt)
+          const r = fr.retreatField ? limitRetreat(fr.retreatField, cur.pos, m) : m
+          const k = key(r.pos)
+          if (!seen.has(k)) {
+            seen.set(k, r.pos)
+            stack.push({ pos: r.pos, rt: fr.runtime })
+          }
+        }
+    }
+    expect(seen.size).toBeLessThan(cap) // 探索を打ち切っていない
+    return [...seen.values()]
+  }
+
+  /** 矩形 (x0..x1, y0..y1) を ch で塗る */
+  function paint(rows: string[][], x0: number, y0: number, x1: number, y1: number, ch: string) {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) rows[y][x] = ch
+  }
+  const blank = (w: number, h: number): string[][] =>
+    Array.from({ length: h }, () => Array<string>(w).fill('#'))
+  const toMask = (rows: string[][]): WalkMask => maskOf(rows.map((r) => r.join('')))
+
+  it('廃墟と同じ寸法の橙の階段（100x130、上下に白）: 入口の列からずれた位置からでも上の白へ届かない', () => {
+    const g = blank(640, 300)
+    paint(g, 240, 50, 399, 89, '.') // 上の白（向こう側）
+    paint(g, 270, 90, 369, 219, 'o') // 橙の階段
+    paint(g, 240, 220, 399, 259, '.') // 下の白（入口側）
+    const base = toMask(g)
+    for (const start of [
+      { x: 349.6, y: 140.2 },
+      { x: 280.3, y: 110.7 },
+    ]) {
+      const ps = reachable(base, { x: 320.5, y: 240.5 }, start)
+      expect(Math.min(...ps.map((p) => p.y))).toBeGreaterThanOrEqual(90) // 上の白 (y<90) に出ない
+      expect(ps.some((p) => p.y > 220)).toBe(true) // 入口側の白へは出られる（戻れる）
+    }
+  })
+
+  it('逆 U 字（右腕の最下段から）: 向こう側の白へ出ない', () => {
+    const g = blank(40, 40)
+    paint(g, 4, 0, 35, 4, 'o') // 上の橙
+    paint(g, 4, 0, 9, 29, 'o') // 左腕
+    paint(g, 30, 0, 35, 29, 'o') // 右腕
+    paint(g, 4, 30, 9, 36, '.') // 入口側の白（左腕の下）
+    paint(g, 30, 30, 35, 36, '.') // 向こう側の白（右腕の下）
+    const ps = reachable(toMask(g), { x: 6.5, y: 33.5 }, { x: 32.5, y: 29.5 })
+    expect(ps.some((p) => p.x > 20 && p.y >= 30)).toBe(false)
+    expect(ps.some((p) => p.x < 12 && p.y >= 30)).toBe(true)
+  })
+
+  it('幅広の階段（40x30、上下に白）: 向こう側の白へ出ない', () => {
+    const g = blank(80, 60)
+    paint(g, 0, 4, 79, 9, '.') // 向こう側
+    paint(g, 20, 10, 59, 39, 'o')
+    paint(g, 0, 40, 79, 45, '.') // 入口側
+    const ps = reachable(toMask(g), { x: 40.5, y: 43.5 }, { x: 55.5, y: 14.5 })
+    expect(Math.min(...ps.map((p) => p.y))).toBeGreaterThanOrEqual(10)
+    expect(ps.some((p) => p.y >= 40)).toBe(true)
   })
 })

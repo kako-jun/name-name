@@ -660,7 +660,7 @@ async function main(): Promise<void> {
             .then((dst) => {
               if (disposed) return
               const back = findReturnLink(config, sceneId, link)
-              // 着地点は通行状態に関係なく橙も歩ける扱いで探す（通れない状態でも橙の階段の上に着く）
+              // 着地点は橙も歩ける扱いで探す（通れない状態でも橙の階段の上に着く）。来た端から辿れないときだけ橙を除いて探し直す
               const arrival = resolveEdgeArrival({
                 link,
                 back,
@@ -668,6 +668,8 @@ async function main(): Promise<void> {
                 base: dst.mask,
                 assisted: dst.maskAssist,
                 inset: config.edgeThreshold * ARRIVAL_INSET_FACTOR,
+                passable: config.assist ? evalAssist(config.assist, flags).passable : false,
+                edgeBand: config.edgeThreshold,
               })
               const landing = arrival?.pos ?? null
               if (!landing) {
@@ -719,6 +721,7 @@ async function main(): Promise<void> {
             vec,
             state: ast,
             runtime: assistRt,
+            edgeBand: config.edgeThreshold,
           })
         : null
       if (frame) assistRt = frame.runtime
