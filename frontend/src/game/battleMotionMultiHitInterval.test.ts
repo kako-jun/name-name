@@ -54,19 +54,18 @@ describe('multiHitIntervalFor: min(基本, 総時間 / 最大 round)', () => {
     expect(MULTI_HIT_TOTAL_MS).toBe(2000)
     expect(MULTI_HIT_MIN_INTERVAL_MS).toBe(10)
   })
-  it('最大 round 0（単発）・少ヒットは基本値 100 のまま', () => {
-    expect(multiHitIntervalFor(0)).toBe(100)
-    expect(multiHitIntervalFor(NaN)).toBe(100)
-    expect(multiHitIntervalFor(-3)).toBe(100)
-    expect(multiHitIntervalFor(1)).toBe(100)
-    expect(multiHitIntervalFor(4)).toBe(100)
-    expect(multiHitIntervalFor(19)).toBe(100)
-  })
-  it('境界: 最大 round 20（21 ヒット）でちょうど 2000ms。±1', () => {
-    expect(multiHitIntervalFor(20)).toBe(100)
+  it.each([0, NaN, -3, 1, 4, 19, 20])(
+    '最大 round %s は基本値 100 のまま（20 まで総時間 2000 以内）',
+    (r) => {
+      expect(multiHitIntervalFor(r)).toBe(100)
+    }
+  )
+  it('最大 round 20（21 ヒット）はちょうど総時間 2000ms', () => {
     expect(20 * multiHitIntervalFor(20)).toBe(2000)
-    expect(multiHitIntervalFor(21)).toBeCloseTo(2000 / 21, 10)
-    expect(multiHitIntervalFor(21)).toBeLessThan(100)
+  })
+  it.each([21, 22, 40])('最大 round %i は 2000 / round に縮む', (r) => {
+    expect(multiHitIntervalFor(r)).toBeCloseTo(2000 / r, 10)
+    expect(multiHitIntervalFor(r)).toBeLessThan(100)
   })
   it('最大 round 98（99 ヒット）は約 20.4ms で総時間 2000ms。下限は効かない', () => {
     expect(MAX_HITS_PER_ACTION).toBe(99)
