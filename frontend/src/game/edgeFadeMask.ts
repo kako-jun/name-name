@@ -156,6 +156,7 @@ const sharedTextures = new Map<string, Texture>()
  * source を束ねたまま残る。その source を破棄すると次にマスク付きで描く 1 フレームが
  * `Cannot read properties of null (reading '0')` で落ちる（dofMaskCache.ts と同じ事情）。
  * そのため **返した Sprite は引数なしの `destroy()` で破棄し、Texture / TextureSource は壊さない**こと。
+ * fade は `normalizeEdgeFade` を通した整数値を渡す前提（キーは `fade.top ?? 0` 等の値そのもの。未正規化の小数を渡すと別キーになる）。
  * キーは実用上少ない（画面サイズ種 × シナリオ中のフェード指定種）ので上限は設けない。
  */
 export function getSharedEdgeFadeMask(

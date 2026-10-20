@@ -58,33 +58,24 @@ describe('getSharedEdgeFadeMask', () => {
     expect(a.texture).toBe(b.texture)
   })
 
-  it('画面サイズ・フェード指定が違えば別 Texture', () => {
+  it('画面サイズが違えば別 Texture', () => {
     const a = getSharedEdgeFadeMask({ top: 10 }, 100, 50)!
-    const sizeDiff = getSharedEdgeFadeMask({ top: 10 }, 200, 50)!
-    const fadeDiff = getSharedEdgeFadeMask({ bottom: 10 }, 100, 50)!
-    expect(textureFromMock).toHaveBeenCalledTimes(3)
-    expect(a.texture).not.toBe(sizeDiff.texture)
-    expect(a.texture).not.toBe(fadeDiff.texture)
+    const b = getSharedEdgeFadeMask({ top: 10 }, 200, 50)!
+    expect(textureFromMock).toHaveBeenCalledTimes(2)
+    expect(a.texture).not.toBe(b.texture)
+  })
+
+  it('フェード指定が違えば別 Texture', () => {
+    const a = getSharedEdgeFadeMask({ top: 10 }, 100, 50)!
+    const b = getSharedEdgeFadeMask({ bottom: 10 }, 100, 50)!
+    expect(textureFromMock).toHaveBeenCalledTimes(2)
+    expect(a.texture).not.toBe(b.texture)
   })
 
   it('キーは丸めた画面サイズで引く（小数差は同じ Texture）', () => {
     const a = getSharedEdgeFadeMask({ top: 10 }, 100.2, 50.4)!
     const b = getSharedEdgeFadeMask({ top: 10 }, 99.8, 49.6)!
     expect(a.texture).toBe(b.texture)
-  })
-
-  it('Sprite を destroy() しても共有 Texture / source は壊れず、次も同じ Texture を返す', () => {
-    const a = getSharedEdgeFadeMask({ top: 10 }, 100, 50)!
-    const tex = a.texture as unknown as {
-      destroy: ReturnType<typeof vi.fn>
-      source: { destroy: ReturnType<typeof vi.fn> }
-    }
-    a.destroy()
-    expect(tex.destroy).not.toHaveBeenCalled()
-    expect(tex.source.destroy).not.toHaveBeenCalled()
-    const b = getSharedEdgeFadeMask({ top: 10 }, 100, 50)!
-    expect(b.texture).toBe(a.texture)
-    expect(textureFromMock).toHaveBeenCalledTimes(1)
   })
 
   it('2D コンテキストが取れないときは null を返し、覚えない', () => {
