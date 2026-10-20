@@ -28,7 +28,9 @@ import type { BattlePoseSprites } from './battleMotion'
 import {
   applyAffinityToDamage,
   DEATH_ATTRIBUTE,
+  deathSuccessRate,
   resolveAffinity,
+  rollDeath,
   type BattleAffinity,
 } from './affinity'
 
@@ -316,13 +318,13 @@ export function applyEffect(effect: ParsedEffect, ctx: EffectContext): string[] 
           : rollRange(effect.min ?? 0, effect.max ?? 0, ctx.rng)
       for (const t of ctx.targets) {
         // 属性相性 (#872)。吸収 > 無効 > 半減 > 弱点で該当した時点で打ち切り、どれにも該当しなければ下の従来の resist へ。
-        // 即死 (damage_full) は属性 id `death` を見る: 無効・吸収は効かない（吸収でも回復はしない）。半減・弱点は即死に意味が無いので見ない
+        // 即死 (damage_full) は属性 id `death` を見て成功率を変える（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 DEATH_CHANCE_CAP〉。既定は 100%）
         const kind = resolveAffinity(
           t.affinity,
           effect.kind === 'damage_full' ? DEATH_ATTRIBUTE : effect.type
         )
         if (effect.kind === 'damage_full') {
-          if (kind === 'nullify' || kind === 'absorb') {
+          if (!rollDeath(deathSuccessRate(kind, 1), ctx.rng)) {
             log.push(`${t.name} には きかなかった！`)
             continue
           }

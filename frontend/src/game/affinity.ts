@@ -5,7 +5,7 @@
  *   （sit-by-me `docs/ff-battle-rules.md` §1）。どの欄にも該当しなければ `normal`（呼び出し側が従来の `resist` へフォールバックする）
  * - 属性 id は自由記述の文字列で、parser が小文字・半角に寄せて渡す。技の `type=` 側も小文字にして比べる
  * - **無属性**（`type=` が無い・空）は相性判定の対象外で常に `normal`（耐性欄に無属性は書けない。parser が警告して捨てる）
- * - 即死は属性 id `death` として同じ欄に書く（`damage_full` と builtin `zaraki` が参照する。`death` で意味があるのは無効・吸収だけ）
+ * - 即死は属性 id `death` として同じ欄に書く（`damage_full` と builtin `zaraki` が参照し、成功率を変える。`deathSuccessRate`）
  * - 倍率の適用（弱点 ×2・半減 ×½〈最低 1〉・無効 0・吸収 = 回復）は `applyAffinityToDamage`。
  *   防御との順序は FF6 SNES どおり「防御で軽減した後に属性」。呪文・特技・アイテムの `damage` は防御を使わないので、
  *   乱数で出した値にそのまま掛ける（通常攻撃は未対応で、この関数を通らない）
@@ -21,8 +21,40 @@ export interface BattleAffinity {
 
 export type AffinityKind = 'absorb' | 'nullify' | 'halve' | 'weak' | 'normal'
 
-/** 即死耐性の属性 id (#872)。`無効: death` / `吸収: death` で即死を受け付けない */
+/** 即死耐性の属性 id (#872)。`death` の相性で即死の成功率が変わる（`deathSuccessRate`） */
 export const DEATH_ATTRIBUTE = 'death'
+
+/** 即死の成功率の上限 (#872)。弱点で成功率が上がるときの頭打ち（#877 で値を確定する想定。ここ 1 か所だけに置く） */
+export const DEATH_CHANCE_CAP = 0.99
+
+/**
+ * 即死の成功率を `death` の相性で変える (#872)。`base` は効果の既定の成功率（0〜1。`damage_full` は 1、`zaraki` は 0.5）。
+ * 吸収・無効 = 0（吸収でも回復しない）/ 半減 = ×0.5 / 弱点 = ×2 だが上限 `DEATH_CHANCE_CAP` で頭打ち。
+ * 上限は「元より下がる方向」にだけ効く: 弱点でも `base` を下回らない（既定 100% の効果は弱点でも 100% のまま）。相性なしは `base` のまま。
+ */
+export function deathSuccessRate(kind: AffinityKind, base: number): number {
+  switch (kind) {
+    case 'absorb':
+    case 'nullify':
+      return 0
+    case 'halve':
+      return base * 0.5
+    case 'weak':
+      return Math.max(base, Math.min(base * 2, DEATH_CHANCE_CAP))
+    default:
+      return base
+  }
+}
+
+/**
+ * 即死の成功判定。成功率が 1 以上なら成功・0 以下なら失敗で、どちらも乱数を使わない
+ * （相性なし・既定 100% の `damage_full` の乱数消費は従来と同じ）。0 < 率 < 1 のときだけ乱数を 1 回使う。
+ */
+export function rollDeath(rate: number, rng: () => number): boolean {
+  if (rate >= 1) return true
+  if (rate <= 0) return false
+  return rng() < rate
+}
 
 function listHas(list: string[] | undefined, id: string): boolean {
   return Array.isArray(list) && list.includes(id)

@@ -72,7 +72,7 @@
       "atk": 1,
       "def": 2,
       "agi": 3,
-      "affinity": { "weak": ["fire"], "nullify": ["death"] }
+      "affinity": { "weak": ["fire"], "halve": ["death"] }
     },
     { "id": "slime", "name": "ふつうのスライム", "hp": 300, "atk": 1, "def": 2, "agi": 3 }
   ]

@@ -1,6 +1,9 @@
 /** 属性相性 (#872): 解決関数・ダメージ適用・呪文/特技/アイテム/即死への適用・既存挙動不変 */
 import { describe, it, expect } from 'vitest'
 import {
+  DEATH_CHANCE_CAP,
+  deathSuccessRate,
+  rollDeath,
   affinityField,
   applyAffinityToDamage,
   resolveAffinity,
@@ -281,13 +284,6 @@ describe('即死 (damage_full / zaraki) の即死耐性: 属性 id death (#872)'
     expect(t.hp).toBe(40)
     expect(amounts).toEqual([])
   })
-  it('半減・弱点の death は即死に意味が無いので見ない（即死する）', () => {
-    for (const aff of [{ halve: ['death'] }, { weak: ['death'] }]) {
-      const t = ent({ affinity: aff })
-      run('damage_full', t)
-      expect(t.hp).toBe(0)
-    }
-  })
   it('death 以外の無効は即死を止めない', () => {
     const t = ent({ affinity: { nullify: ['fire'] } })
     run('damage_full', t)
@@ -316,6 +312,117 @@ describe('即死 (damage_full / zaraki) の即死耐性: 属性 id death (#872)'
     const resisted = ent({ resist: { death: 0 } })
     invokeBuiltinSpell('zaraki', { caster: resisted, targets: [resisted], rng: () => 0 })
     expect(resisted.hp).toBe(100)
+  })
+})
+
+describe('即死の成功率: death の相性で変わる (#872)', () => {
+  it('上限は 0.99（定数 1 か所）', () => {
+    expect(DEATH_CHANCE_CAP).toBe(0.99)
+  })
+
+  // 4 欄 + 相性なし × 既定の成功率（100% / 50% / 境界 0% / 30% / 80%）
+  const table: Array<[AffinityKind, number, number]> = [
+    ['normal', 1, 1],
+    ['normal', 0.5, 0.5],
+    ['normal', 0, 0],
+    ['nullify', 1, 0],
+    ['nullify', 0.5, 0],
+    ['absorb', 1, 0],
+    ['absorb', 0.5, 0],
+    ['halve', 1, 0.5],
+    ['halve', 0.5, 0.25],
+    ['halve', 0, 0],
+    // 弱点: ×2 を上限 0.99 で頭打ち。ただし元の率を下回らない（既定 100% は弱点でも 100%）
+    ['weak', 1, 1],
+    ['weak', 0.5, 0.99],
+    ['weak', 0.3, 0.6],
+    ['weak', 0.8, 0.99],
+    ['weak', 0.99, 0.99],
+    ['weak', 0, 0],
+  ]
+  it.each(table)('%s × 既定 %d → %d', (kind, base, expected) => {
+    expect(deathSuccessRate(kind, base)).toBeCloseTo(expected, 10)
+  })
+
+  it('rollDeath: 境界（率 1 以上・0 以下は乱数を使わない）', () => {
+    let calls = 0
+    const rng = () => (calls++, 0.5)
+    expect(rollDeath(1, rng)).toBe(true)
+    expect(rollDeath(1.5, rng)).toBe(true)
+    expect(rollDeath(0, rng)).toBe(false)
+    expect(rollDeath(-1, rng)).toBe(false)
+    expect(calls).toBe(0)
+  })
+  it('rollDeath: 0 < 率 < 1 は乱数を 1 回だけ使い、rng < 率 で成功（境界: rng = 率は失敗）', () => {
+    let calls = 0
+    const at = (v: number) => () => (calls++, v)
+    expect(rollDeath(0.5, at(0))).toBe(true)
+    expect(rollDeath(0.5, at(0.4999))).toBe(true)
+    expect(rollDeath(0.5, at(0.5))).toBe(false)
+    expect(rollDeath(0.5, at(0.99))).toBe(false)
+    expect(calls).toBe(4)
+  })
+
+  describe('damage_full（既定 100%）', () => {
+    const hit = (aff: BattleAffinity | undefined, r: number) => {
+      let calls = 0
+      const t = ent({ ...(aff ? { affinity: aff } : {}) })
+      const { amounts } = run('damage_full', t, () => (calls++, r))
+      return { hp: t.hp, calls, amounts }
+    }
+    it('相性なし・弱点（100% のまま）は乱数を使わず確実に即死', () => {
+      expect(hit(undefined, 0.999)).toMatchObject({ hp: 0, calls: 0 })
+      expect(hit({ weak: ['death'] }, 0.999)).toMatchObject({ hp: 0, calls: 0 })
+    })
+    it('無効・吸収は乱数を使わず確実に失敗（MISS: 通知なし）', () => {
+      for (const aff of [{ nullify: ['death'] }, { absorb: ['death'] }]) {
+        expect(hit(aff, 0)).toEqual({ hp: 100, calls: 0, amounts: [] })
+      }
+    })
+    it('半減: 成功率 50%。乱数を 1 回使い、rng 固定で成功・失敗の両方', () => {
+      const ok = hit({ halve: ['death'] }, 0.49)
+      expect(ok).toMatchObject({ hp: 0, calls: 1 })
+      const ng = hit({ halve: ['death'] }, 0.5)
+      expect(ng).toEqual({ hp: 100, calls: 1, amounts: [] })
+    })
+  })
+
+  describe('zaraki（既定 50%）', () => {
+    const cast = (aff: BattleAffinity | undefined, r: number) => {
+      let calls = 0
+      const t = ent({ ...(aff ? { affinity: aff } : {}) })
+      invokeBuiltinSpell('zaraki', { caster: t, targets: [t], rng: () => (calls++, r) })
+      return { hp: t.hp, calls }
+    }
+    it('相性なしは従来どおり（rng 1 回・< 0.5 で成功）', () => {
+      expect(cast(undefined, 0.49)).toEqual({ hp: 0, calls: 1 })
+      expect(cast(undefined, 0.5)).toEqual({ hp: 100, calls: 1 })
+    })
+    it('半減 25%・弱点 99%', () => {
+      expect(cast({ halve: ['death'] }, 0.24)).toEqual({ hp: 0, calls: 1 })
+      expect(cast({ halve: ['death'] }, 0.25)).toEqual({ hp: 100, calls: 1 })
+      expect(cast({ weak: ['death'] }, 0.98)).toEqual({ hp: 0, calls: 1 })
+      expect(cast({ weak: ['death'] }, 0.99)).toEqual({ hp: 100, calls: 1 })
+    })
+    it('無効・吸収は乱数を使わず効かない', () => {
+      expect(cast({ nullify: ['death'] }, 0)).toEqual({ hp: 100, calls: 0 })
+      expect(cast({ absorb: ['death'] }, 0)).toEqual({ hp: 100, calls: 0 })
+    })
+  })
+
+  it('エンジン経由: 半減デスの失敗は MISS・成功は倒れる', () => {
+    const mk = (r: number) => {
+      const hero = ent({ id: 'hero', hp: 500, maxHp: 500, mp: 9, maxMp: 9 })
+      const boss = ent({ id: 'boss', affinity: { halve: ['death'] } })
+      const e = new BattleEngine([hero], [boss], { rng: () => r })
+      e.selectSpell({ name: 'デス', mp: 1, target: '敵単体', effect: 'damage_full' })
+      return e
+    }
+    const ng = mk(0.9)
+    expect(ng.getState().enemies[0].hp).toBe(100)
+    expect(ng.getState().events[0].hits[0].kind).toBe('miss')
+    const ok = mk(0.1)
+    expect(ok.getState().enemies[0].hp).toBe(0)
   })
 })
 
