@@ -380,6 +380,18 @@ export function popupFontSize(unit: number): number {
   return Math.min(POPUP_FONT_MAX, Math.max(POPUP_FONT_MIN, v))
 }
 
+/** ダメージ数字が基準のフォントのまま収まる文字数。ダメージ上限 9999 (#877) の 4 桁ぶん */
+export const POPUP_FULL_SIZE_CHARS = 4
+/**
+ * 数字のフォントサイズを文字数に応じて縮める (#877)。4 文字以下（ダメージ上限 9999 まで・MISS）は `baseFont` のまま、
+ * 5 文字以上（回復・吸収の 5 桁以上）は 4 文字の幅に収まるよう比例で縮め、枠の外・画面の外へはみ出さないようにする。
+ */
+export function fitPopupFontSize(text: string, baseFont: number): number {
+  const len = [...text].length
+  if (len <= POPUP_FULL_SIZE_CHARS) return baseFont
+  return Math.max(1, Math.floor((baseFont * POPUP_FULL_SIZE_CHARS) / len))
+}
+
 // ---------------------------------------------------------------------------
 // FF 式メッセージ窓
 // ---------------------------------------------------------------------------

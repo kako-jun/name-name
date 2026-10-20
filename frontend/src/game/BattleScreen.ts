@@ -98,6 +98,7 @@ import {
   advancePlayback,
   emptyPlayback,
   enqueueEvents,
+  fitPopupFontSize,
   isPlaybackBusy,
   messageWindowText,
   popupFontSize,
@@ -2372,11 +2373,12 @@ export class BattleScreen extends Container {
   private spawnPopup(hit: BattleHit, sinceHit: number): void {
     const view = this.viewOf(hit.target.side, hit.target.index)
     if (!view || !this.popupLayer) return
+    const label = popupText(hit)
     const text = new PixiText({
-      text: popupText(hit),
+      text: label,
       style: new TextStyle({
         fontFamily: "'Noto Sans JP', sans-serif",
-        fontSize: popupFontSize(view.unit),
+        fontSize: fitPopupFontSize(label, popupFontSize(view.unit)),
         fontWeight: 'bold',
         fill: POPUP_COLORS[hit.kind],
         stroke: { color: 0x000000, width: 4 },
