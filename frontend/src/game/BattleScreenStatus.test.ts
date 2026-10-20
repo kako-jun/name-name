@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Text } from 'pixi.js'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import { isPlaybackBusy } from './battleMotion'
 import type { BattleEntity } from './spellDsl'
 import type { StatusDef } from '../types'
 
@@ -162,5 +163,53 @@ describe('BattleScreen: FF 式は状態名も演出の再生位置で切り替�
     expect(label()).toContain('[どく]')
     run(s, 5000)
     expect(label()).not.toContain('どく')
+  })
+
+  it('状態が解ける行動: 命中の瞬間（最後の round）に切り替わり、途中の round ではまだ古い状態名で、再生が終わる前に出し切る', () => {
+    const NAP: Record<string, StatusDef> = {
+      nap: { id: 'nap', name: 'うたたね', action: '不能', cure: '被ダメージ' },
+    }
+    const engine = new BattleEngine(
+      [entity('hero')],
+      [entity('slime', { hp: 999, maxHp: 999, status: { nap: 5 } })],
+      { rng: () => 0.5, statuses: NAP }
+    )
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    created.push(s)
+    const label = () => I(s).enemyViews[0].label?.text ?? ''
+    const busy = () => isPlaybackBusy((s as unknown as { playback: never }).playback)
+    refresh(s)
+    const before = label()
+    expect(before).toContain('[うたたね]')
+    engine.selectSpell({
+      name: 'れんぞく',
+      mp: 1,
+      target: '敵単体',
+      effect: 'damage 3 回数=3',
+    })
+    const ev = engine.getState().events.find((e) => e.kind === 'spell')
+    expect(new Set(ev?.hits.map((h) => h.round)).size).toBe(3)
+    expect(engine.getState().enemies[0].status?.nap).toBeUndefined()
+    refresh(s)
+    expect(label()).toContain('[うたたね]')
+    // 1 行ごとに進め、HP が減り始めた（最初の round が命中した）瞬間と、状態名が消えた瞬間を記録する
+    let firstHit = -1
+    let flipped = -1
+    let busyAtFlip: boolean | null = null
+    const hpLine = (t: string) => t.split('\n')[1]
+    for (let step = 0; step < 400 && flipped < 0; step++) {
+      s.tick(5)
+      const t = label()
+      if (firstHit < 0 && hpLine(t) !== hpLine(before)) firstHit = step
+      if (!t.includes('うたたね')) {
+        flipped = step
+        busyAtFlip = busy()
+      }
+    }
+    expect(firstHit).toBeGreaterThanOrEqual(0)
+    expect(flipped).toBeGreaterThan(firstHit) // 最初の round では切り替わらず、あとの round で切り替わる
+    expect(busyAtFlip).toBe(true) // 再生が終わるのを待たずに、命中の瞬間に切り替わる
+    // 切り替わった時点で、全 round ぶんの HP が出ている
+    expect(label()).toContain('HP 990/999')
   })
 })

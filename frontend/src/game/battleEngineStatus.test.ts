@@ -759,6 +759,54 @@ describe('反撃・死亡時の行動で付けた状態は、その手番の終�
   })
 })
 
+describe('死亡時の行動で後ろの敵に付けた状態は、通常の行動と同じ数え方', () => {
+  const MARK: Record<string, StatusDef> = {
+    ...STATUSES,
+    mark: def('mark', { name: 'しるし', duration: '3' }),
+  }
+  const skills: Record<string, SkillExecution> = {
+    brand: { name: 'しるし', target: '仲間全体', effect: 'status mark duration=1' },
+  }
+  // A は毒の継続ダメージで倒れ、死亡時の行動で仲間（B）へ持続 1 の印を付ける
+  const mkA = () =>
+    ent({
+      id: 'a',
+      name: 'A',
+      hp: 5,
+      maxHp: 5,
+      atk: 0,
+      agi: 50,
+      status: { poison: 3 },
+      onDeath: '候補=brand',
+    })
+  const mkB = (agi: number) =>
+    ent({ id: 'b', name: 'B', hp: 9999, maxHp: 9999, atk: 0, agi, def: 9999 })
+
+  it('従来ターン制: 毒で倒れた敵の死亡時の行動で後ろの敵に付いた持続 1 は、その敵の手番の終わりに解ける', () => {
+    const hero = ent({ id: 'h', name: 'ゆうしゃ', hp: 1000, maxHp: 1000, atk: 0, def: 9999 })
+    const b = mkB(1)
+    const e = new BattleEngine([hero], [mkA(), b], { rng: () => 0, statuses: MARK, skills })
+    e.selectAttack('b')
+    expect(e.getState().log).toContain('B の こうげき！')
+    expect(b.status?.mark).toBeUndefined()
+  })
+
+  it('ATB: 毒で倒れた敵の死亡時の行動で後ろの敵に付いた持続 1 は、その敵の手番の終わりに解ける', () => {
+    const hero = ent({ id: 'h', name: 'ゆうしゃ', hp: 1000, maxHp: 1000, atk: 0, agi: 1 })
+    const b = mkB(20)
+    const e = new BattleEngine([hero], [mkA(), b], {
+      rng: () => 0,
+      statuses: MARK,
+      skills,
+      atb: { mode: 'wait' },
+    })
+    for (let i = 0; i < 60 && !e.getState().log.includes('B の こうげき！'); i++) e.tick(300)
+    expect(e.getState().log).toContain('B は しるし になった！')
+    expect(e.getState().log).toContain('B の こうげき！')
+    expect(b.status?.mark).toBeUndefined()
+  })
+})
+
 describe('状態名の控え（イベントの statusLabels）', () => {
   it('宣言だけして一度も状態が付かない戦闘では、イベントに付かない（旧挙動不変）', () => {
     const e = new BattleEngine(

@@ -1116,6 +1116,8 @@ export class BattleEngine {
         this.runBlockedEnemy(enemy, block)
         this.tickStatuses(enemy)
         this.resolveDeaths()
+        // 死亡時の行動で付いた状態の記録は、次の敵の手番の終わりまで持ち越さない (#870)
+        this.freshStatuses = []
         continue
       }
       const choice = this.decideEnemyAction(i)
@@ -1124,6 +1126,8 @@ export class BattleEngine {
         this.countEnemyAction(i, choice)
         this.tickStatuses(enemy)
         this.resolveDeaths()
+        // 死亡時の行動で付いた状態の記録は、次の敵の手番の終わりまで持ち越さない (#870)
+        this.freshStatuses = []
         continue
       }
       const hero = this.pickedParty(choice) ?? firstHero
@@ -1141,6 +1145,8 @@ export class BattleEngine {
         usedSkill = true
         this.tickStatuses(enemy)
         this.resolveDeaths()
+        // 死亡時の行動で付いた状態の記録は、次の敵の手番の終わりまで持ち越さない (#870)
+        this.freshStatuses = []
       }
     }
     // 敵側の手番の終わりに、今の手番で付いた状態の記録を持ち越さない (#870)
