@@ -5341,6 +5341,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_atb_mode: None,
         battle_command_layout: None,
         battle_command_labels: None,
+        battle_commands: None,
         battle_transition: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
@@ -10529,6 +10530,7 @@ fn telop_test_doc_base() -> Document {
         battle_atb_mode: None,
         battle_command_layout: None,
         battle_command_labels: None,
+        battle_commands: None,
         battle_transition: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
@@ -11901,6 +11903,79 @@ fn test_battle_command_emit_only_set_fields() {
         "{emitted}"
     );
     assert!(!emitted.contains("battle_command_layout"), "{emitted}");
+}
+
+// ---- #873: battle_commands / パーティの「わざ」 ----
+
+#[test]
+fn test_battle_commands_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_commands: \"skill, spell, item, escape\"\n",
+    ));
+    assert_eq!(
+        doc.battle_commands.as_deref(),
+        Some("skill, spell, item, escape")
+    );
+    let doc0 = parser::parse(&battle_doc("battle_commands:\n"));
+    assert_eq!(doc0.battle_commands, None);
+    let doc_unset = parser::parse(&battle_doc("battle_command_layout: cross\n"));
+    assert_eq!(doc_unset.battle_commands, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_commands: \"skill, spell, item, escape\"\n"),
+        "{emitted}"
+    );
+    assert_eq!(parser::parse(&emitted).battle_commands, doc.battle_commands);
+    // 未指定のときは出力にキーを出さない
+    assert!(!emitter::emit(&doc_unset).contains("battle_commands"));
+}
+
+#[test]
+fn test_party_abilities_parse_in_order_skip_empty_and_roundtrip() {
+    let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[パーティ hero]
+名前: ゆうしゃ
+HP: 20
+ATK: 5
+DEF: 3
+AGI: 4
+わざ: sumihaki
+わざ:
+わざ: slash
+[/パーティ]
+
+[パーティ mage]
+名前: まほうつかい
+HP: 10
+ATK: 2
+DEF: 1
+AGI: 3
+[/パーティ]
+"#;
+    let doc = parser::parse(input);
+    let events = &doc.chapters[0].scenes[0].events;
+    let abilities = |i: usize| match &events[i] {
+        Event::PartyMember(p) => p.abilities.clone(),
+        other => panic!("PartyMember ではない: {other:?}"),
+    };
+    assert_eq!(
+        abilities(0),
+        Some(vec!["sumihaki".to_string(), "slash".to_string()])
+    );
+    assert_eq!(abilities(1), None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("わざ: sumihaki\nわざ: slash\n"),
+        "{emitted}"
+    );
+    let doc2 = parser::parse(&emitted);
+    assert_eq!(doc2.chapters[0].scenes[0].events[0], events[0]);
 }
 
 // ---- #745: battle_presentation / ポーズ（戦闘ポーズ別スプライト）----

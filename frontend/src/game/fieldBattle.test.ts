@@ -619,3 +619,69 @@ describe('openFieldBattle: 候補窓の呪文を BattleScreen へ渡す (#204)',
     closeFieldBattle(stage, screen)
   })
 })
+
+describe('buildBattleMenuData: 候補窓のわざ (#873)', () => {
+  const skills = {
+    slash: { id: 'slash', name: 'きる', target: '相手単体', effect: 'damage 5..9' },
+    sweep: {
+      id: 'sweep',
+      name: 'なぎはらい',
+      target: '相手全体',
+      builtin: 'x',
+      message: '{user}は薙いだ',
+    },
+  }
+
+  it('わざ: の特技 id のうち特技マスターにあるものを、書いた順・重複なしで味方ごとに作る', () => {
+    const r = {
+      ...roster(['a', 'b'], {
+        a: { abilities: ['sweep', 'nope', 'slash', 'sweep'] },
+        b: { abilities: ['slash'] },
+      }),
+      skills,
+    }
+    const m = buildBattleMenuData(r, buildPartyBattleEntities(r, 'side'))!
+    expect(m.skills!.a.map((e) => e.id)).toEqual(['sweep', 'slash'])
+    expect(m.skills!.b.map((e) => e.id)).toEqual(['slash'])
+    expect(m.skills!.a[0]).toEqual({
+      id: 'sweep',
+      name: 'なぎはらい',
+      target: '相手全体',
+      builtin: 'x',
+      message: '{user}は薙いだ',
+    })
+    expect(m.spells).toBeUndefined() // 呪文が無ければ spells は出さない
+  })
+
+  it('呪文とわざは同じ味方に共存できる', () => {
+    const r = {
+      ...roster(['a'], { a: { abilities: ['slash'], learns: [{ level: 1, spell: 'fire' }] } }),
+      skills,
+      spells: { fire: { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体' } },
+    }
+    const m = buildBattleMenuData(r, buildPartyBattleEntities(r, 'side'))!
+    expect(m.skills!.a).toHaveLength(1)
+    expect(m.spells!.a).toHaveLength(1)
+  })
+
+  it('特技マスターが無い・わざが無い・Object.prototype のキーは undefined（従来どおり）', () => {
+    const noMaster = roster(['a'], { a: { abilities: ['slash'] } })
+    expect(
+      buildBattleMenuData(noMaster, buildPartyBattleEntities(noMaster, 'side'))
+    ).toBeUndefined()
+    const none = { ...roster(['a']), skills }
+    expect(buildBattleMenuData(none, buildPartyBattleEntities(none, 'side'))).toBeUndefined()
+    const proto = { ...roster(['a'], { a: { abilities: ['toString'] } }), skills }
+    expect(buildBattleMenuData(proto, buildPartyBattleEntities(proto, 'side'))).toBeUndefined()
+  })
+})
+
+describe('readFieldBattleSettings: battleCommands (#873)', () => {
+  it('未指定は undefined（既定の 4 コマンド）、指定は透過する', () => {
+    expect(readFieldBattleSettings(minimalProject()).commands).toBeUndefined()
+    expect(
+      readFieldBattleSettings(minimalProject({ battleCommands: ['skill', 'escape'] })).commands
+    ).toEqual(['skill', 'escape'])
+    expect(DEFAULT_FIELD_BATTLE_SETTINGS.commands).toBeUndefined()
+  })
+})

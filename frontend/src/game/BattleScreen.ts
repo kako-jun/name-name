@@ -79,6 +79,8 @@ import {
   selectMarkTargets,
   type BattleItemEntry,
   type BattleMenuData,
+  type BattleMenuEntry,
+  type BattleSkillEntry,
   type BattleSpellEntry,
   type MenuAction,
   type MenuContext,
@@ -371,7 +373,7 @@ export interface BattleScreenOptions {
    */
   pixelArt?: boolean
   /**
-   * コマンド窓の配置 (#204)。`grid`（既定・2x2）/ `cross`（FF6「短縮」風の十字。上=たたかう・左=じゅもん・右=どうぐ・下=にげる）。
+   * コマンド窓の配置 (#204)。`grid`（既定・2x2）/ `cross`（FF6「短縮」風の十字。上=たたかう・左=じゅもん・右=どうぐ・下=にげる。`commands` で並びを変えたときはその位置）。
    * `cross` は `side` のときだけ効き、矢印キー 1 押しでその方向のコマンドを決定する（タップも従来どおり）。
    * `front` では無視する（キー操作も付けない）。
    */
@@ -386,6 +388,11 @@ export interface BattleScreenOptions {
   /** コマンドの表示名の上書き (#204)。id（attack / spell / item / escape）は変えず label だけ差し替える。部分指定可 */
   commandLabels?: CommandLabels
   /**
+   * コマンドの構成と順序 (#873)。frontmatter `battle_commands` 由来。未指定・空は既定の attack / spell / item / escape。
+   * `cross` は 4 つのときだけ有効（配置は並びの位置: 1 番目=上・2 番目=左・3 番目=右・4 番目=下）
+   */
+  commands?: readonly CommandId[]
+  /**
    * 敵の見えないグリッド (#839)。frontmatter `battle_enemy_grid` 由来（`side` のときだけ効く）。undefined = 従来の敵配置。
    * 指定があるとき、敵は戦闘開始時に `placeEnemies` で 1 回配置し（`enemyFootprints`）、`computeSideBattleLayout` のグリッド配置で描く（#839 段4で配線済み）
    */
@@ -394,7 +401,7 @@ export interface BattleScreenOptions {
   enemyWindowOverlap?: number
   /**
    * 候補窓に出す呪文・アイテム (#204)。`commandLayout` が `cross` のとき（かつ 1 件以上あるとき）だけ有効で、
-   * 「じゅもん」「どうぐ」を選ぶと一覧の窓が重なって開く（FF5/6 風の窓の階層）。MP が足りない呪文はグレー。
+   * 「わざ」「じゅもん」「どうぐ」を選ぶと一覧の窓が重なって開く（FF5/6 風の窓の階層。わざは #873）。MP が足りない呪文はグレー。
    * 未指定・空は従来どおり（じゅもん・どうぐは何も起きない）。有効なとき、ATB の wait は候補窓を開いている間だけ止まる
    */
   menu?: BattleMenuData
@@ -1101,6 +1108,7 @@ export class BattleScreen extends Container {
       case 'escape':
         this.engine.selectEscape()
         break
+      case 'skill':
       case 'spell':
       case 'item':
         // 候補窓 (#204): cross で呪文・アイテムが渡されているときだけ一覧の窓を開く。
@@ -1272,7 +1280,7 @@ export class BattleScreen extends Container {
   }
 
   private buildCommandButtons(): void {
-    for (const item of resolveCommandSpecs(this.opts.commandLabels)) {
+    for (const item of resolveCommandSpecs(this.opts.commandLabels, this.opts.commands)) {
       const text = new PixiText({ text: item.label, style: this.themedStyle(TEXT_STYLE_COMMAND) })
       const hit = new Container()
       hit.eventMode = 'static'
@@ -1311,7 +1319,7 @@ export class BattleScreen extends Container {
         this.handleMenuKey(e)
         return
       }
-      const id = crossKeyToCommandId(e.key)
+      const id = crossKeyToCommandId(e.key, this.opts.commands)
       if (!id) return
       // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
       e.preventDefault()
@@ -2120,7 +2128,10 @@ export class BattleScreen extends Container {
   private buildMenu(): void {
     const m = this.opts.menu
     const hasData =
-      !!m && ((m.items?.length ?? 0) > 0 || Object.values(m.spells ?? {}).some((l) => l.length > 0))
+      !!m &&
+      ((m.items?.length ?? 0) > 0 ||
+        Object.values(m.spells ?? {}).some((l) => l.length > 0) ||
+        Object.values(m.skills ?? {}).some((l) => l.length > 0))
     this.menuEnabled = this.commandLayout === 'cross' && hasData
     if (!this.menuEnabled) {
       // 同じエンジンを使い回す作り直しで、前の画面の設定を持ち越さない
@@ -2156,8 +2167,9 @@ export class BattleScreen extends Container {
   private menuEntries(
     kind: MenuKind,
     actor: BattleEntity | undefined
-  ): ReadonlyArray<BattleSpellEntry | BattleItemEntry> {
+  ): ReadonlyArray<BattleMenuEntry> {
     if (kind === 'spell') return (actor && this.opts.menu?.spells?.[actor.id]) || []
+    if (kind === 'skill') return (actor && this.opts.menu?.skills?.[actor.id]) || []
     return this.opts.menu?.items ?? []
   }
 
@@ -2182,7 +2194,7 @@ export class BattleScreen extends Container {
     }
   }
 
-  /** 「じゅもん」「どうぐ」で一覧の窓を開く。開けたら true（候補がない・窓を出せないときは false） */
+  /** 「わざ」「じゅもん」「どうぐ」で一覧の窓を開く。開けたら true（候補がない・窓を出せないときは false） */
   private openMenu(kind: MenuKind): boolean {
     if (this.menuStack.length > 0) return true
     const ctx = this.menuContext(kind)
@@ -2260,6 +2272,8 @@ export class BattleScreen extends Container {
     if (entry) {
       if (action.kind === 'spell') {
         this.engine.selectSpell(entry as BattleSpellEntry, action.targetId)
+      } else if (action.kind === 'skill') {
+        this.engine.selectSkill(entry as BattleSkillEntry, action.targetId)
       } else {
         // 所持数を持つアイテムは、実際に使われたとき（selectItem が true）だけ減る。
         // 試作の所持数で、呼び出し側が渡した候補の count を戦闘中だけ書き換える

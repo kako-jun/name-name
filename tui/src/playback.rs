@@ -2368,6 +2368,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_commands: None,
             battle_transition: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,

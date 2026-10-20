@@ -395,3 +395,89 @@ describe('[特技] マスターデータ: 実 WASM パーサ経由 (#834)', () =
     expect(engine.getState().events[0].message).toBe('クラーケンは 墨を はいた！')
   })
 })
+
+describe('selectSkill: 味方の「わざ」(#873)', () => {
+  const ability = (target: string, effect = 'damage 10..10'): SkillExecution => ({
+    name: 'きりさく',
+    target,
+    effect,
+  })
+
+  it('相手単体: targetId の敵に当たり、MP は減らず、ログと skill イベントが残り、ターンが敵へ進む', () => {
+    const { engine, party, enemies } = setup()
+    const total = engine.getState().eventTotal
+    expect(engine.selectSkill(ability('相手単体'), 'tentacle')).toBe(true)
+    expect(enemies.map((e) => e.hp)).toEqual([50, 30])
+    expect(party[0].mp).toBe(5)
+    expect(
+      engine.getState().log.some((l) => l.includes('ゆうしゃ は きりさく を つかった！'))
+    ).toBe(true)
+    expect(engine.getState().eventTotal).toBeGreaterThan(total)
+    expect(engine.getState().events.some((e) => e.kind === 'skill')).toBe(true)
+  })
+
+  it('targetId 省略は最初の生存者、倒れた敵を指しても生存者に落ちる', () => {
+    const { engine, enemies } = setup()
+    enemies[0].hp = 0
+    engine.selectSkill(ability('相手単体'), 'kraken')
+    expect(enemies.map((e) => e.hp)).toEqual([0, 30])
+  })
+
+  it('相手全体は敵全員、仲間単体は targetId の味方、自分は使い手本人', () => {
+    const { engine, party, enemies } = setup()
+    party[1].hp = 10
+    engine.selectSkill(ability('相手全体', 'damage 5..5'))
+    expect(enemies.map((e) => e.hp)).toEqual([45, 35])
+    const s2 = setup()
+    s2.party[1].hp = 10
+    s2.engine.selectSkill(ability('仲間単体', 'heal 20..20'), 'mage')
+    expect(s2.party[1].hp).toBe(30) // 敵ターンの反撃は使い手（先頭）に向かう
+    const s3 = setup()
+    s3.party[0].hp = 50
+    s3.engine.selectSkill(ability('自分', 'heal 20..20'))
+    expect(s3.party[0].hp).toBeGreaterThan(50) // 回復 +20 のあと敵ターンの被弾ぶんは引かれる
+  })
+
+  it('入力待ちでないフェーズ・終了後は何もせず false', () => {
+    const { engine, enemies } = setup()
+    ;(engine.getState() as { phase: string }).phase = 'victory'
+    expect(engine.selectSkill(ability('相手単体'))).toBe(false)
+    expect(enemies.map((e) => e.hp)).toEqual([50, 40])
+  })
+
+  it('敵の「受けた=物理」はわざにも成立する（物理で反撃する敵が、わざを受けても反撃する）', () => {
+    const hero = ent({ id: 'hero', name: 'ゆうしゃ', hp: 500, maxHp: 500 })
+    const boss = ent({
+      id: 'boss',
+      name: 'ボス',
+      hp: 900,
+      maxHp: 900,
+      atk: 0,
+      counters: ['条件=受けた=物理 候補=lance'],
+    })
+    const lance: SkillExecution = {
+      name: 'こおりのやり',
+      target: '相手単体',
+      effect: 'damage 20..20',
+    }
+    const eng = new BattleEngine([hero], [boss], { rng, skills: { lance } })
+    eng.selectSkill(ability('相手単体', 'damage 3..3'))
+    const kinds = eng.getState().events.map((e) => `${e.actor.side}:${e.kind}`)
+    expect(kinds.slice(0, 2)).toEqual(['party:skill', 'enemy:skill']) // わざ → 反撃
+    expect(hero.hp).toBeLessThan(500 - 19)
+    // 魔法では反撃しない（カテゴリは magic）
+    const hero2 = ent({ id: 'hero', hp: 500, maxHp: 500, mp: 9 })
+    const boss2 = ent({
+      id: 'boss',
+      hp: 900,
+      maxHp: 900,
+      atk: 0,
+      counters: ['条件=受けた=物理 候補=lance'],
+    })
+    const eng2 = new BattleEngine([hero2], [boss2], { rng, skills: { lance } })
+    eng2.selectSpell({ name: 'ほのお', mp: 1, target: '敵単体', effect: 'damage 3..3' })
+    expect(eng2.getState().events.some((e) => e.actor.side === 'enemy' && e.kind === 'skill')).toBe(
+      false
+    )
+  })
+})

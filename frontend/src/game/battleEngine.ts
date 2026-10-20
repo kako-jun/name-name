@@ -413,6 +413,32 @@ export class BattleEngine {
     )
   }
 
+  /**
+   * 「わざ」(#873): 味方が特技（刀のアビリティ）を 1 回使う。MP は消費しない。効果・対象の解決は `performSkill` と同じ
+   * （対象は使う側から見た相対表現 `相手単体` / `相手全体` / `仲間単体` / `仲間全体` / `自分`。`targetId` は単体のときだけ効く）。
+   * 敵の `受けた=物理` 条件は、わざ（アビリティ）にも成立する（通常こうげきが無いゲームでも条件が働くように、
+   * 反応カテゴリは `physical` で、`受けた=わざ名` の名前指定は無い）。
+   * 入力待ちでない・使い手がいない・使えなかったときは何も起きず false。使えたら true。
+   */
+  selectSkill(skill: SkillExecution, targetId?: string): boolean {
+    if (this.state.phase !== 'party-input') return false
+    const caster = this.currentActor()
+    if (!caster) return false
+    const user = this.refOf(caster)
+    if (!user) return false
+    let target: BattleActorRef | undefined
+    if (targetId) {
+      const pi = this.state.party.findIndex((e) => e.id === targetId)
+      const ei = pi === -1 ? this.state.enemies.findIndex((e) => e.id === targetId) : -1
+      if (pi !== -1) target = { side: 'party', index: pi }
+      else if (ei !== -1) target = { side: 'enemy', index: ei }
+    }
+    const hpSnapshot = this.snapshotHp()
+    if (!this.performSkill(user, skill, target)) return false
+    this.advanceAfterPartyAction(this.reactionOf(caster, { category: 'physical' }, hpSnapshot))
+    return true
+  }
+
   /** 行動を選べなかった理由を、MP 不足と同じ経路（ログ＋窓の知らせ）で出す。入力待ちの味方がいるときだけ。状態は変えない */
   notifyBlocked(label: string): void {
     if (this.state.phase !== 'party-input') return

@@ -1088,3 +1088,107 @@ describe('どうぐの所持数と知らせ (#890)', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 })
+
+describe('コマンド構成 battle_commands と「わざ」(#873)', () => {
+  const WITH_SKILLS: BattleMenuData = {
+    ...MENU,
+    skills: {
+      a: [
+        { id: 'slash', name: 'きる', target: '相手単体', effect: 'damage 10..10' },
+        { id: 'sweep', name: 'なぎはらい', target: '相手全体', effect: 'damage 4..4' },
+      ],
+    },
+  }
+  const COMMANDS = ['skill', 'spell', 'item', 'escape'] as const
+  const buildSkill = (over: BattleScreenOptions = {}, enemies?: BattleEntity[]) =>
+    build(
+      { commands: COMMANDS, menu: structuredClone(WITH_SKILLS), ...over },
+      { rng: () => 0 },
+      [ent('a')],
+      enemies ?? [ent('s1', { atk: 0 }), ent('s2', { atk: 0 })]
+    )
+  const labels = (s: BattleScreen) =>
+    (s as unknown as { commands: Array<{ id: string; text: { text: string } }> }).commands.map(
+      (c) => `${c.id}:${c.text.text}`
+    )
+
+  it('並びと表示名が設定どおり（わざ の既定名は「わざ」、たたかうは出ない）', () => {
+    const { s } = buildSkill()
+    expect(labels(s)).toEqual(['skill:わざ', 'spell:じゅもん', 'item:どうぐ', 'escape:にげる'])
+  })
+
+  it('未指定は従来の attack/spell/item/escape（不変）', () => {
+    const { s } = build()
+    expect(labels(s)).toEqual(['attack:たたかう', 'spell:じゅもん', 'item:どうぐ', 'escape:にげる'])
+  })
+
+  it('↑(1 番目=わざ)で一覧が開く。←は 2 番目のじゅもん', () => {
+    const { s } = buildSkill()
+    press('ArrowUp')
+    expect(types(s)).toEqual(['list'])
+    expect(I(s).menuStack[0]).toMatchObject({ kind: 'skill' })
+    press('Escape')
+    press('ArrowLeft')
+    expect(I(s).menuStack[0]).toMatchObject({ kind: 'spell' })
+  })
+
+  it('わざ: 一覧 → 対象 → 確定でダメージ。MP は減らず、敵ターンへ進む', () => {
+    const { s, engine } = buildSkill()
+    press('ArrowUp')
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    press('ArrowDown') // 2 体目の敵へ
+    press('Enter')
+    expect(types(s)).toEqual([])
+    const st = engine.getState()
+    expect(st.enemies.map((e) => e.hp)).toEqual([100, 90])
+    expect(st.party[0].mp).toBe(5)
+    expect(st.log.some((l) => l.includes('A は きる を つかった！'))).toBe(true)
+  })
+
+  it('わざ（全体）は対象選択のあと全員に当たり、Escape で戻れる', () => {
+    const { s, engine } = buildSkill()
+    press('ArrowUp')
+    press('ArrowDown') // なぎはらい
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    press('Escape')
+    expect(types(s)).toEqual(['list'])
+    press('Enter')
+    press('Enter')
+    expect(engine.getState().enemies.map((e) => e.hp)).toEqual([96, 96])
+  })
+
+  it('たたかう抜きでも魔法だけで戦える（基本の攻撃は魔法メニュー）', () => {
+    const { s, engine } = buildSkill()
+    press('ArrowLeft')
+    press('Enter')
+    press('Enter')
+    expect(types(s)).toEqual([])
+    expect(engine.getState().enemies[0].hp).toBeLessThan(100)
+    expect(engine.getState().party[0].mp).toBe(2) // ほのお 3
+  })
+
+  it('わざの候補が無い味方は、わざを選んでも何も起きない（従来のじゅもん・どうぐと同じ）', () => {
+    const { s, engine } = buildSkill({ menu: structuredClone(MENU) })
+    press('ArrowUp')
+    expect(types(s)).toEqual([])
+    expect(engine.getState().log).toHaveLength(1)
+  })
+
+  it('3 コマンド（にげる無し）でも落ちず、4 番目のキー(↓)は何も起きない', () => {
+    const { s, engine } = buildSkill({ commands: ['skill', 'spell', 'item'] })
+    expect(labels(s)).toHaveLength(3)
+    press('ArrowDown')
+    expect(engine.isOver()).toBe(false)
+    expect(types(s)).toEqual([])
+  })
+
+  it('わざのタップ（ボタン）でも一覧が開く', () => {
+    const { s } = buildSkill()
+    const first = (s as unknown as { commands: Array<{ hit: Container }> }).commands[0].hit
+    first.emit('pointertap', {} as never)
+    expect(types(s)).toEqual(['list'])
+    expect(I(s).menuStack[0]).toMatchObject({ kind: 'skill' })
+  })
+})

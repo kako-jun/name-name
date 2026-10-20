@@ -15,6 +15,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { parseMarkdown, emitMarkdown } from './parser'
+import { collectMasterData } from '../game/rpgProjectFromDoc'
 
 describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive normalize (#310)', () => {
   // #308 / #310 / #407 / 既存 (#283 dialog_style / #286 protagonist) をまとめて持つ最小スクリプト。
@@ -2624,5 +2625,28 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     const doc = await parseMarkdown(docWith([], monster(['サイズ: 1x2', '倍率: 0.75'])))
     const again = await parseMarkdown(await emitMarkdown(doc))
     expect(monsterOf(again)).toMatchObject({ size: { w: 1, h: 2 }, scale: 0.75 })
+  })
+})
+
+describe('parseMarkdown + normalizeDocument: battle_commands / わざ が生き残る (#873)', () => {
+  const doc = (fm: string, body = '') =>
+    `---\nengine: name-name\nchapter: 1\ntitle: "t"\n${fm}---\n## data: マスター\n${body}\n`
+
+  it('battle_commands は wasm 経由で文字列のまま届き、未指定は null', async () => {
+    const d = await parseMarkdown(doc('battle_commands: "skill, spell, item, escape"\n'))
+    expect(d.battle_commands).toBe('skill, spell, item, escape')
+    expect((await parseMarkdown(doc(''))).battle_commands).toBeNull()
+  })
+
+  it('パーティの わざ: は abilities（書いた順）として届き、無ければ undefined', async () => {
+    const d = await parseMarkdown(
+      doc(
+        '',
+        '[パーティ hero]\n名前: ゆうしゃ\nHP: 20\nATK: 5\nDEF: 3\nAGI: 4\nわざ: slash\nわざ: sweep\n[/パーティ]\n[パーティ mage]\n名前: まほうつかい\nHP: 9\nATK: 1\nDEF: 1\nAGI: 1\n[/パーティ]\n'
+      )
+    )
+    const { party } = collectMasterData(d)
+    expect(party.hero.abilities).toEqual(['slash', 'sweep'])
+    expect(party.mage.abilities).toBeUndefined()
   })
 })
