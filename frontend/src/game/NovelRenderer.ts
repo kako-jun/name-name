@@ -1252,9 +1252,20 @@ export class NovelRenderer {
   private clearStoryEnded(): void {
     if (this.storyEnded) {
       this.storyEnded = false
+      this.syncSeekBarEnabled()
       this.onStoryEndedChangeCallback?.(false)
       this.syncEndingOverlayVisibility()
     }
+  }
+
+  /**
+   * 終劇は行き止まり（kako-jun 決定 2026-10-20, #815）。storyEnded の間は SeekBar を無効表示にして
+   * 「操作できない」ことを見た目で示す。巻き戻し自体は goBack()/seekTo() の storyEnded ガード（#386）が
+   * 根本で止める。storyEnded が書き換わる箇所（endStory / clearStoryEnded / applyState。セーブ復元の
+   * restoreToScene も applyState を通る）から呼んで SeekBar の状態を GameState 由来の値に常に揃える。
+   */
+  private syncSeekBarEnabled(): void {
+    this.seekBar.setDisabled(this.storyEnded)
   }
 
   /**
@@ -1307,6 +1318,7 @@ export class NovelRenderer {
   private endStory(): void {
     if (this.storyEnded) return // 二重発火防止（連打等でフェード/コールバックを重複させない）
     this.storyEnded = true
+    this.syncSeekBarEnabled()
     // skipMode を宣言的にリセットする (#424 セルフレビュー must)。通常の Choice 表示は
     // setSkipMode(false) を経由するが、全 option 圏外の短絡（#398）はそれを飛ばして直接
     // endStory() へ来るため、skipMode=true のままここに到達し得る。renderIntermissionTableau
@@ -3116,6 +3128,7 @@ export class NovelRenderer {
     // スナップショット）が残ったままになる。ここをガードしないと goBack で applyState が
     // storyEnded を false に巻き戻し、"to be continued..." が消えて背景/立ち絵/BGM が
     // 直前の状態に戻ってしまう（終劇の無効化）。
+    // 終劇は行き止まり（決定 2026-10-20, #815）。SeekBar も同じ理由で無効表示にしている。
     if (this.storyEnded) return
     if (this.cursor.resolvedEvents.length === 0) return
     if (this.transition.isGated('navigate')) return
@@ -3280,6 +3293,7 @@ export class NovelRenderer {
     // （再マウントのたびに終劇 postMessage が重複送信されるのを防ぐ）。
     const prevStoryEnded = this.storyEnded
     this.storyEnded = state.storyEnded
+    this.syncSeekBarEnabled()
     if (prevStoryEnded !== state.storyEnded) {
       this.onStoryEndedChangeCallback?.(state.storyEnded)
     }

@@ -277,7 +277,11 @@ resolvedEvents を最後まで消化した場合**は、confinement とは無関
 固まって見える不具合の修正。`onEndCallback` 登録時＝動画書き出し中はそちらに完全委譲し
 `endStory()` の演出は重ねない）。`?scene=` が hub 自身の sceneId を指した場合は
 `findConfinedSceneIds` が null を返し、confinement を組まず無制限フローにフォールバックする
-（hub → 各お題への通常 choice 遷移を壊さないため）。`storyEnded` の設計上の位置づけ
+（hub → 各お題への通常 choice 遷移を壊さないため）。**終劇は行き止まり**（kako-jun 決定、#815）:
+`storyEnded` の間は `goBack()` / `seekTo()` が冒頭のガードで no-op（#386）であり、`SeekBar` も無効表示にして
+操作（タップ/ドラッグ）を受け付けない。`SeekBar.setDisabled` は `storyEnded` の書き換え箇所
+（`endStory` / `clearStoryEnded` / `applyState`）から `syncSeekBarEnabled()` で同期する transient な UI ゲート
+（GameState には持たない）。TUI には巻き戻し・シークバー自体が無く対応不要。`storyEnded` の設計上の位置づけ
 （ADR 0002 の「演出の中間状態を持たない」規律との関係）は
 [ADR 0002](./adr/0002-deterministic-state-and-debuggability.md) を参照。
 
