@@ -2229,9 +2229,6 @@ export class BattleScreen extends Container {
         if (actor.mp < (entry as BattleSpellEntry).mp) {
           this.engine.selectSpell(entry as BattleSpellEntry)
           this.refresh()
-        } else if ((entry as BattleSpellEntry).target?.trim() === 'マップ') {
-          this.engine.notifyBlocked('いまは つかえない！')
-          this.refresh()
         }
       } else if (w?.type === 'list' && w.kind === 'item' && entry) {
         // 所持数 0 のアイテム
