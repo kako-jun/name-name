@@ -2484,11 +2484,11 @@ export class BattleScreen extends Container {
       out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
-    const baseHitAt = eventTimeline(ev).hitAt
+    const tl = eventTimeline(ev)
     let latest: { sinceHit: number; downs: boolean } | null = null
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
-      const sinceHit = active.elapsed - hitTimeOf(baseHitAt, hitRound(hit))
+      const sinceHit = active.elapsed - hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval)
       if (sinceHit < 0) continue
       if (!latest || sinceHit <= latest.sinceHit) latest = { sinceHit, downs: hit.hpAfter <= 0 }
     }

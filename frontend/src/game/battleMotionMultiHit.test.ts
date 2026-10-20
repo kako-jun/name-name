@@ -195,7 +195,8 @@ describe('全 round が発火する（heal・miss・混在・大きい round）'
     const hits = [hit({ round: 0, kind: 'heal' }), hit({ round: 40, kind: 'miss' })]
     expect(roundsOf(hits)).toEqual([0, 40])
     const tl = eventTimeline(ev(hits))
-    expect(tl.duration).toBeGreaterThan(tl.hitAt + 40 * MULTI_HIT_INTERVAL_MS)
+    // 最大 round 40 は間隔が 2000/40=50ms に縮み、最後の命中は hitAt + 2000ms（自動調整 #879）。その後に ACTION_GAP_MS 120
+    expect(tl.duration).toBe(tl.hitAt + 2000 + 120)
   })
   it('round なし・全 0 の heal/miss の duration は従来値のまま', () => {
     const base = buildActionTimeline('spell', {})

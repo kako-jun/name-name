@@ -125,6 +125,29 @@ describe('FF 式 複数ヒットの順次再生', () => {
     expect(peaks + (dxs[dxs.length - 1] > dxs[dxs.length - 2] ? 1 : 0)).toBeGreaterThanOrEqual(3)
   })
 
+  it('22 ヒット以上: のけぞりは縮んだ間隔で再トリガされる（各ヒットの直後は戻って 0 付近）', () => {
+    const { s, engine } = setup([entity('slime', { atk: 0 })])
+    engine.selectSpell({ name: 'れんぞく', mp: 1, target: '敵単体', effect: 'damage 1 回数=30' })
+    s.redraw(800, 450)
+    const tl = eventTimeline(engine.getState().events[0])
+    expect(tl.hitInterval).toBeLessThan(MULTI_HIT_INTERVAL_MS)
+    const enemy = I(s).enemyViews[0]
+    const dxs = new Map<number, number>()
+    let peak = 0
+    for (let t = 1; t <= tl.hitAt + 29 * tl.hitInterval + 5; t++) {
+      s.tick(1)
+      const d = Math.abs(enemy.container.x - enemy.baseX)
+      peak = Math.max(peak, d)
+      dxs.set(t, d)
+    }
+    expect(peak).toBeGreaterThan(0)
+    // 命中の直後（経過 1ms 未満）はのけぞりが頭から始まり直して 0 付近。間隔を渡し忘れると後半の命中が無視され、この時刻の量が大きいまま
+    for (let k = 10; k <= 29; k++) {
+      const t = Math.ceil(tl.hitAt + k * tl.hitInterval)
+      expect(dxs.get(t)).toBeLessThan(peak * 0.1)
+    }
+  })
+
   it('途中で倒れて別の敵へ移る: 発火順は配列順で、全員の HP 表示が最後に確定値になる', () => {
     const { s, engine } = setup([
       entity('a', { hp: 15, maxHp: 15, atk: 0 }),
