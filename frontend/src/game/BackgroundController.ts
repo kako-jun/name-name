@@ -371,6 +371,11 @@ export class BackgroundController {
     this.ensureBackgroundCrossfadeTicker()
   }
 
+  /** クロスフェードの更新タイマーだけを止める（`Stage.cancelAllTimers`）。見た目の entries には触れない。 */
+  cancelTimers(): void {
+    this.stopBackgroundCrossfade()
+  }
+
   private stopBackgroundCrossfade(): void {
     if (this.bgCrossfadeTimer == null) return
     this.time.clearInterval(this.bgCrossfadeTimer)

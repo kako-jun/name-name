@@ -823,6 +823,35 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(b.atb).toEqual({ mode: 'active' })
   })
 
+  it('battle.commands と skills を読む。未指定は commands キーなし・skills 空 (#873)', () => {
+    const c = withEncounter()
+    c.battle = { commands: ['skill', 'spell', 'item', 'escape'] }
+    c.skills = [
+      { name: 'きる', effect: 'damage 5..5' },
+      { id: 'sw', name: 'なぎ', target: '相手全体' },
+    ]
+    const v = ok(c)
+    expect(v.battle.commands).toEqual(['skill', 'spell', 'item', 'escape'])
+    expect(v.skills).toEqual([
+      { id: 'skills-1', name: 'きる', effect: 'damage 5..5', target: '相手単体' },
+      { id: 'sw', name: 'なぎ', target: '相手全体' },
+    ])
+    const d = ok(withEncounter())
+    expect('commands' in d.battle).toBe(false)
+    expect(d.skills).toEqual([])
+  })
+
+  it('battle.commands は配列・既知 id・重複なしでなければエラー (#873)', () => {
+    for (const bad of ['skill', ['skill', 'foo'], ['skill', 'skill'], [1], []]) {
+      const c = withEncounter()
+      c.battle = { commands: bad }
+      expect(parseConfig(c, BASE).ok, JSON.stringify(bad)).toBe(false)
+    }
+    const c = withEncounter()
+    c.skills = [{ name: 1 }]
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
   it('atb: "on" だけなら wait、"off" や未指定は atb なし (#883)', () => {
     const c = withEncounter()
     c.battle = { atb: 'on' }

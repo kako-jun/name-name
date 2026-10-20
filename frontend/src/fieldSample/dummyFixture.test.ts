@@ -64,6 +64,12 @@ describe('buildDummyFixture (#890)', () => {
     expect(c.battle.commandLayout).toBe('cross')
   })
 
+  it('sit-by-me と同じ構成: たたかうを外した わざ・じゅもん・どうぐ・にげる、わざは MP なしの 2 件 (#873)', () => {
+    const c = parsed()
+    expect(c.battle.commands).toEqual(['skill', 'spell', 'item', 'escape'])
+    expect(c.skills.map((s) => s.name)).toEqual(['きる', 'なぎはらい'])
+  })
+
   it('全モンスターが idle / hurt / down のポーズを持つ', () => {
     for (const m of Object.values(parsed().monsters)) {
       expect(m.poses).toMatchObject({

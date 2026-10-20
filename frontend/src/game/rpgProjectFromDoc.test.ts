@@ -1854,6 +1854,22 @@ describe('rpgProjectFromDoc: battle_command_layout / battle_command_labels (#204
   })
 })
 
+describe('rpgProjectFromDoc: battle_commands (#873)', () => {
+  const withCmds = (v: string | null): EventDocument => ({ ...makeDoc(), battle_commands: v })
+
+  it('順序どおりの id 列になる。未知・重複は無視、大小無視', () => {
+    expect(
+      rpgProjectFromDoc(withCmds('skill, SPELL, foo, skill, item, escape'))!.battleCommands
+    ).toEqual(['skill', 'spell', 'item', 'escape'])
+  })
+
+  it('未指定・空・有効な id なしは undefined（既定の 4 コマンド）', () => {
+    for (const v of [null, '', ' , ', 'foo, bar']) {
+      expect(rpgProjectFromDoc(withCmds(v))!.battleCommands).toBeUndefined()
+    }
+  })
+})
+
 describe('rpgProjectFromDoc: battle_presentation (#745)', () => {
   const withPres = (v: string | null): EventDocument => ({
     ...makeDoc(),

@@ -6,18 +6,22 @@ import {
   cancel,
   confirm,
   isReviveEntry,
+  menuHint,
   menuKeyAction,
   refitList,
   scrollList,
   moveCursor,
   openList,
+  parseSkillTarget,
   parseSpellTarget,
+  targetSpecOf,
   scrollTopFor,
   setListCursor,
   selectMarkTargets,
   setTargetCursor,
   targetHands,
   type BattleItemEntry,
+  type BattleSkillEntry,
   type BattleSpellEntry,
   type MenuContext,
   type TargetWindow,
@@ -406,5 +410,104 @@ describe('selectMarkTargets（▼ を出す者）(#805)', () => {
       cursor: 1,
     })
     expect(selectMarkTargets(party, foes, 0, revive).party).toEqual([false, true, false])
+  })
+})
+
+describe('わざ（kind: skill）(#873)', () => {
+  const skills: BattleSkillEntry[] = [
+    { id: 'slash', name: 'きる', target: '相手単体' },
+    { id: 'sweep', name: 'なぎはらい', target: '相手全体' },
+    { id: 'mend', name: 'いやし', target: '仲間単体', effect: 'heal 5..5' },
+    { id: 'rally', name: 'ときのこえ', target: '仲間全体' },
+    { id: 'focus', name: 'しゅうちゅう', target: '自分' },
+    { id: 'raise', name: 'おこす', target: '仲間単体', builtin: 'zaorik' },
+  ]
+
+  it('parseSkillTarget: 相対表現を味方視点の側へ。未指定・未知は相手単体', () => {
+    expect(parseSkillTarget('相手単体')).toEqual({ side: 'enemy', scope: 'single' })
+    expect(parseSkillTarget('相手全体')).toEqual({ side: 'enemy', scope: 'all' })
+    expect(parseSkillTarget('仲間単体')).toEqual({ side: 'party', scope: 'single' })
+    expect(parseSkillTarget('仲間全体')).toEqual({ side: 'party', scope: 'all' })
+    expect(parseSkillTarget(' 自分 ')).toEqual({ side: 'party', scope: 'self' })
+    expect(parseSkillTarget(undefined)).toEqual({ side: 'enemy', scope: 'single' })
+    expect(parseSkillTarget('敵全体')).toEqual({ side: 'enemy', scope: 'single' }) // 呪文の語彙は特技では未知
+  })
+
+  it('buildMenuRows: MP も個数も無い。コスト列は空で、MP 0 の使い手でも選べる', () => {
+    const rows = buildMenuRows('skill', skills, ent('a', { mp: 0 }))
+    expect(rows.map((r) => r.label)).toEqual(skills.map((s) => s.name))
+    expect(rows.every((r) => r.cost === '' && !r.disabled)).toBe(true)
+  })
+
+  it('targetSpecOf: 蘇生の仲間単体だけ revive（builtin zaorik）', () => {
+    expect(targetSpecOf('skill', skills[2])).toEqual({ side: 'party', scope: 'single' })
+    expect(targetSpecOf('skill', skills[5])).toEqual({
+      side: 'party',
+      scope: 'single',
+      revive: true,
+    })
+    expect(targetSpecOf('skill', skills[1])).toEqual({ side: 'enemy', scope: 'all' })
+  })
+
+  it('一覧 → 対象 → 確定で kind: skill の操作が出る（敵単体は targetId つき、全体は無し）', () => {
+    const party = [ent('a'), ent('b')]
+    const enemies = [ent('e1'), ent('e2')]
+    const ctx = ctxOf({
+      rows: buildMenuRows('skill', skills, party[0]),
+      entries: skills,
+      party,
+      enemies,
+      actorIndex: 0,
+    })
+    const open = openList(EMPTY_STACK, 'skill', ctx)
+    expect(open[0]).toMatchObject({ type: 'list', kind: 'skill' })
+    const single = confirm(open, ctx)
+    expect(single.stack[1]).toMatchObject({ type: 'target', kind: 'skill', side: 'enemy' })
+    expect(confirm(single.stack, ctx).action).toEqual({
+      kind: 'skill',
+      entryIndex: 0,
+      targetId: 'e1',
+    })
+    const all = confirm(setListCursor(open, 1, ctx), ctx)
+    expect(confirm(all.stack, ctx).action).toEqual({ kind: 'skill', entryIndex: 1 })
+  })
+})
+
+describe('menuHint: 常に出す操作の案内 (#806)', () => {
+  const always = () => true
+  const list = openList(EMPTY_STACK, 'spell', ctxOf())[0]
+  const single: TargetWindow = {
+    type: 'target',
+    kind: 'spell',
+    entryIndex: 0,
+    spec: { side: 'enemy', scope: 'single' },
+    side: 'enemy',
+    cursor: 0,
+  }
+  const all: TargetWindow = { ...single, spec: { side: 'enemy', scope: 'all' } }
+
+  it('局面ごとに違う文で、どの文もキーとタップの両方を書く（コマンド窓の grid はタップだけ）', () => {
+    const cmdCross = menuHint(undefined, true, always)
+    const cmdGrid = menuHint(undefined, false, always)
+    expect(cmdCross).toContain('矢印キー')
+    expect(cmdGrid).not.toContain('矢印')
+    for (const t of [cmdCross, cmdGrid]) expect(t).toContain('タップ')
+    for (const w of [list, single, all]) {
+      const t = menuHint(w, true, always)
+      expect(t).toContain('Enter')
+      expect(t).toContain('Esc')
+      expect(t).toContain('タップ')
+    }
+    expect(menuHint(single, true, always)).toContain('たいしょう')
+    expect(menuHint(all, true, always)).not.toContain('↑↓') // 全体は選ぶ対象が無い
+    expect(new Set([menuHint(list, true, always), menuHint(single, true, always)]).size).toBe(2)
+  })
+
+  it('長い文が収まらなければ短い文、短い文も収まらなければ空', () => {
+    const long = menuHint(list, true, always)
+    const short = menuHint(list, true, (t) => t.length < long.length)
+    expect(short).not.toBe('')
+    expect(short.length).toBeLessThan(long.length)
+    expect(menuHint(list, true, () => false)).toBe('')
   })
 })

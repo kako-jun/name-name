@@ -10,7 +10,7 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { PartyMemberDef, SkillDef, SpellDef } from '../types'
+import type { PartyMemberDef, SkillDef, SpellDef, StatusDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -27,8 +27,8 @@ import type { BattleLogTypewriterMode } from './battleLogTypewriter'
 import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { EnemyGridSize } from './enemyGrid'
-import type { CommandLabels, CommandLayout } from './battleCommands'
-import type { BattleMenuData, BattleSpellEntry } from './battleMenu'
+import type { CommandId, CommandLabels, CommandLayout } from './battleCommands'
+import type { BattleMenuData, BattleSkillEntry, BattleSpellEntry } from './battleMenu'
 import type { BattleTransitionMode } from './battleTransition'
 import type { FieldBattleTransition } from './fieldBattleTransition'
 
@@ -66,6 +66,8 @@ export interface FieldBattleSettings {
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
   commandLabels: CommandLabels | undefined
+  /** `battle_commands` (#873)。undefined = 既定の attack / spell / item / escape */
+  commands: CommandId[] | undefined
   /** `battle_transition` (#830)。`none`（既定・現行の挙動）/ `ff`（開始=2段ズームして暗転、終了=黒を経由して戻る） */
   transition: BattleTransitionMode
 }
@@ -88,6 +90,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   enemyWindowOverlap: undefined,
   commandLayout: 'grid',
   commandLabels: undefined,
+  commands: undefined,
   transition: 'none',
 }
 
@@ -111,6 +114,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     enemyWindowOverlap: gameData.battleEnemyWindowOverlap,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
+    commands: gameData.battleCommands,
     transition: gameData.battleTransition ?? d.transition,
   }
 }
@@ -124,22 +128,44 @@ export interface FieldBattleRoster {
   spells?: Record<string, SpellDef>
   /** 特技のマスター (#835)。敵の `行動:` の候補の id から引く。無ければ特技の候補は通常攻撃になる */
   skills?: Record<string, SkillDef>
+  /** 状態のマスター (#870)。`[状態]` の宣言。あれば戦闘エンジンの `statuses` に渡す（継続ダメージ・行動不能・回復の反転などが働く） */
+  statuses?: Record<string, StatusDef>
 }
 
 /**
  * 戦闘の味方ごとの呪文の一覧（候補窓用 #204）。`PartyMemberDef.learns` のうち、そのメンバーのレベル（既定 1）以下で
  * 覚えるもので、呪文マスターに定義があるものを定義順に並べる。1 つもなければ undefined（候補窓は開かない）。
  * アイテムは所持品の仕組みが無いので渡さない（どうぐは従来どおり何も起きない）。
+ * 「わざ」(#873) は `PartyMemberDef.abilities`（`わざ:` の特技 id）のうち特技マスター（`roster.skills`）にあるものを書いた順に作る。
  */
 export function buildBattleMenuData(
   roster: FieldBattleRoster,
   party: readonly BattleEntity[]
 ): BattleMenuData | undefined {
-  const master = roster.spells
-  if (!master) return undefined
+  const master = roster.spells ?? {}
   const spells: Record<string, BattleSpellEntry[]> = {}
+  const skills: Record<string, BattleSkillEntry[]> = {}
   for (const member of party) {
     const def = roster.party[member.id]
+    // 「わざ」(#873): `わざ:` の特技 id のうち、特技マスターに定義があるものを書いた順に並べる（MP なし）
+    if (def?.abilities && roster.skills) {
+      const sm = roster.skills
+      const sl: BattleSkillEntry[] = []
+      for (const id of def.abilities) {
+        const sk = Object.prototype.hasOwnProperty.call(sm, id) ? sm[id] : undefined
+        if (!sk || sl.some((e) => e.id === sk.id)) continue
+        sl.push({
+          id: sk.id,
+          name: sk.name,
+          target: sk.target,
+          ...(sk.effect !== undefined ? { effect: sk.effect } : {}),
+          ...(sk.builtin !== undefined ? { builtin: sk.builtin } : {}),
+          ...(sk.message !== undefined ? { message: sk.message } : {}),
+          ...(sk.telegraph !== undefined ? { telegraph: sk.telegraph } : {}),
+        })
+      }
+      if (sl.length > 0) skills[member.id] = sl
+    }
     if (!def?.learns) continue
     const level = def.level ?? 1
     const list: BattleSpellEntry[] = []
@@ -157,7 +183,10 @@ export function buildBattleMenuData(
     }
     if (list.length > 0) spells[member.id] = list
   }
-  return Object.keys(spells).length > 0 ? { spells } : undefined
+  const hasSpells = Object.keys(spells).length > 0
+  const hasSkills = Object.keys(skills).length > 0
+  if (!hasSpells && !hasSkills) return undefined
+  return { ...(hasSpells ? { spells } : {}), ...(hasSkills ? { skills } : {}) }
 }
 
 /** PartyMemberDef → BattleEntity。隊列 (#747) は side のときだけ反映する（front は隊列を描かない） */
@@ -350,6 +379,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   const engine = new BattleEngine(party, enemies, {
     ...(settings.atb ? { atb: settings.atb } : {}),
     ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
+    ...(roster.statuses ? { statuses: roster.statuses } : {}),
   })
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,
@@ -370,6 +400,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
       : {}),
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
+    commands: settings.commands,
     menu: buildBattleMenuData(roster, party),
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,

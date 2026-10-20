@@ -21,11 +21,6 @@ import {
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
 import { CurtainLayer } from './CurtainLayer'
-import {
-  DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
-  DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
-  type PaperDollOutlineConfig,
-} from './outlineFilter'
 import { BubbleLayer, type BubbleStyle } from './BubbleLayer'
 import { resolveTextDisplay } from './bubblePresentation'
 import { DialogBox } from './DialogBox'
@@ -36,7 +31,6 @@ import {
   clearBackgroundPreloadQueue,
 } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
-import { selectAndShuffleSeFiles } from './seSelection'
 import { GameState, NovelGameState, StartFromOptions, Step, resolveEvents } from './GameState'
 import { VideoLayer } from './VideoLayer'
 import { EventImageLayer } from './EventImageLayer'
@@ -44,12 +38,14 @@ import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { TitleScreenOverlay, TITLE_LOGO_Y_RATIO } from './TitleScreenOverlay'
 import {
-  BackgroundController,
+  type BackgroundController,
   brightnessToTint,
   normalizeBackgroundBrightness,
   normalizeBackgroundFade,
 } from './BackgroundController'
-import { ScreenEffectsController } from './ScreenEffectsController'
+import { type ScreenEffectsController } from './ScreenEffectsController'
+import { Stage } from './Stage'
+import { dispatchDirective, type DirectiveContext } from './directives'
 import { SaveController } from './SaveController'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
@@ -65,17 +61,13 @@ import { PlaybackCursor } from './PlaybackCursor'
 import { SceneIndex } from './SceneIndex'
 import { JUMP_CHAIN_LIMIT, TransitionState } from './TransitionState'
 import { SceneEntryController } from './SceneEntryController'
-import { type SceneEntryResult, segmentAt, type ResolvedSegment } from './sceneEntry'
 import {
-  CameraElevation,
-  CameraMode,
-  ChoiceOption,
-  CameraOrientation,
-  Event,
-  EventImageTransition,
-  EventScene,
-  FlagValue,
-} from '../types'
+  type CarryPolicy,
+  type SceneEntryResult,
+  segmentAt,
+  type ResolvedSegment,
+} from './sceneEntry'
+import { ChoiceOption, Event, EventImageTransition, EventScene, FlagValue } from '../types'
 import { LightingLayer } from './LightingLayer'
 import { ASPECT_RATIOS, type AspectRatio, DEFAULT_ASPECT_RATIO } from './constants'
 import {
@@ -229,7 +221,7 @@ export class NovelRenderer {
   private telopButtonRowHeightPx: number = PLAYER_BUTTON_ROW_HEIGHT_PX
   /**
    * `telopLayer.clear()`（destroy 以外の呼び出し = scene切替/goBack/seekTo/セーブ復元）が
-   * 起きるたびに1つ増える世代カウンタ (#679 レビューS3)。`processDirective` の `Telop` 分岐は
+   * 起きるたびに1つ増える世代カウンタ (#679 レビューS3)。`directives/stageDirectives.ts` の `Telop` ハンドラ（旧 processDirective の Telop 分岐）は
    * `ensureFontLoaded()` の完了を待ってから `telopLayer.show()` する（フォント未ロードのまま
    * 折り返し行数が確定してしまう問題の修正）が、待機中にシーン切替等が起きて古いテロップを
    * 出すのは事故なので、show 呼び出し予定時にこの値を記録し、完了時に変化していないか
@@ -587,40 +579,149 @@ export class NovelRenderer {
   )
 
   /**
-   * 背景（下地ベタ・背景画像のクロスフェード・端フェードマスク・明るさ・地色・テクスチャキャッシュ）の
-   * 状態と更新 (#828 7a)。`bgEntries` / `currentBackground*` / `bgLoadToken` 等の唯一の書き手。
-   * 他レイヤー（動画・背景板）との同時クリアは、複数モジュールをまたぐ `resetAndStartEvents` /
-   * `applyState` / `destroy` がここのメソッドを呼び分けて行う。Host はオブジェクトで渡す（`implements` にしない）。
+   * 演出状態（背景・画面効果・カメラ3つ組・紙人形輪郭）の束ね役 (#828 7c)。`BackgroundController`（7a）・
+   * `ScreenEffectsController`（7b）の持ち主で、`cameraMode` / `cameraOrientation` / `cameraElevation` /
+   * `paperDollOutline` の唯一の書き手。タイマー停止と演出消去の分岐は `resetAndStartEvents` / `applyState` /
+   * `destroy` の3か所だけが `stage.reset` / `restore` / `cancelAllTimers` + `release` として呼ぶ。
+   * Host はオブジェクトで渡す（`implements` にしない）。立ち絵・大道具・背景板へのカメラと輪郭の伝播は
+   * `applyCamera` / `applyPaperDollOutline` が担う（旧実装と同じ順序）。
    */
-  private readonly background = new BackgroundController(
+  private readonly stage = new Stage(
     {
       getAssetBaseUrl: () => this.assetBaseUrl,
       isSkipMode: () => this.skipMode,
       isInitialized: () => this.initialized,
       getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
       getCrossfadeMs: () => this.backgroundFadeMs,
-    },
-    this.time
-  )
-
-  /**
-   * 画面効果（揺れ・フラッシュ・フェード・暗転・novel スクリム）の状態と更新 (#828 7b)。
-   * `effectOverlay` / `shakeTimer` / `effectTimer` / `novelScrim` / `blackoutOverlay` と scrim 系フィールドの唯一の書き手。
-   * どの時点で何を止めるか（resetAndStartEvents / applyState / endStory / destroy）はここのメソッドを呼び分けて決める。
-   * Host はオブジェクトで渡す（`implements` にしない）。
-   */
-  private readonly screenEffects = new ScreenEffectsController(
-    {
-      getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
       setStagePosition: (x, y) => this.app.stage.position.set(x, y),
       isNovelStyle: () => this.isNovelStyle(),
       setDialogAlpha: (alpha) => {
         this.dialogBox.alpha = alpha
       },
       setSeekBarBlackoutHidden: (hidden) => this.seekBar.setBlackoutHidden(hidden),
+      applyCamera: (mode, orientation, elevation) => {
+        // 背景板 → 大道具 → 立ち絵の順（#683/#692/#694。各レイヤーはカメラ状態を自前で保持する）。
+        this.backgroundBoardLayer.setCamera(mode, orientation, elevation)
+        this.propLayer.setCamera(mode, orientation, elevation)
+        this.characterLayer.setCamera(mode, orientation, elevation)
+      },
+      applyPaperDollOutline: (config) => {
+        this.characterLayer.setPaperDollOutline(config)
+        this.propLayer.setPaperDollOutline(config)
+      },
     },
     this.time
   )
+
+  /**
+   * ディレクティブのハンドラ（`directives/`）に渡す最小ポート (#829)。値は getter で毎回最新を返す
+   * （設定値は `setXxx` で後から差し替わるため getter が必須。レイヤーや Stage は代入がコンストラクタでの1回だけだが、
+   * このフィールド初期化はその代入より前に走るので、生成時には未代入であり、getter で遅延評価する）。
+   */
+  private readonly directiveContext: DirectiveContext = this.createDirectiveContext()
+
+  private createDirectiveContext(): DirectiveContext {
+    // getter から private フィールドを読むための別名（アロー関数だと getter 構文にできない）。
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const r = this
+    return {
+      get stage() {
+        return r.stage
+      },
+      get audio() {
+        return r.audioManager
+      },
+      get characters() {
+        return r.characterLayer
+      },
+      layers: {
+        get video() {
+          return r.videoLayer
+        },
+        get backgroundBoard() {
+          return r.backgroundBoardLayer
+        },
+        get prop() {
+          return r.propLayer
+        },
+        get curtain() {
+          return r.curtainLayer
+        },
+        get lighting() {
+          return r.lightingLayer
+        },
+        get eventImage() {
+          return r.eventImageLayer
+        },
+        get telop() {
+          return r.telopLayer
+        },
+        get dialogBox() {
+          return r.dialogBox
+        },
+        get choiceOverlay() {
+          return r.choiceOverlay
+        },
+      },
+      env: {
+        get skipMode() {
+          return r.skipMode
+        },
+        get initialized() {
+          return r.initialized
+        },
+        get assetBaseUrl() {
+          return r.assetBaseUrl
+        },
+        get fullscreenImage() {
+          return r.fullscreenImage
+        },
+        get eventImageFadeMs() {
+          return r.eventImageFadeMs
+        },
+        get eventImageTransitionDefault() {
+          return r.eventImageTransitionDefault
+        },
+        get gameDefaultFontFamily() {
+          return r.gameDefaultFontFamily
+        },
+        get gameDefaultFontSize() {
+          return r.gameDefaultFontSize
+        },
+        get runtimeDefaultFontFamily() {
+          return NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
+        },
+        get runtimeDefaultFontSize() {
+          return NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
+        },
+        get telopAccentColorNum() {
+          return r.telopAccentColorNum
+        },
+        get telopClearEpoch() {
+          return r.telopClearEpoch
+        },
+      },
+      hooks: {
+        applyEventImageVisibility: () => r.applyEventImageVisibility(),
+        clearTelopLayer: () => r.clearTelopLayer(),
+        setCurtainZOrder: (front) => r.setCurtainZOrder(front),
+        resolveNovelRoleXRatio: (character) => r.resolveNovelRoleXRatio(character),
+        setCurrentBgmPath: (path) => {
+          r.currentBgmPath = path
+        },
+      },
+    }
+  }
+
+  /** 背景（7a）。実体は `stage.background`。 */
+  private get background(): BackgroundController {
+    return this.stage.background
+  }
+
+  /** 画面効果（7b）。実体は `stage.effects`。 */
+  private get screenEffects(): ScreenEffectsController {
+    return this.stage.effects
+  }
 
   /** セーブ/ロードオーバーレイ */
   private saveLoadOverlay!: SaveLoadOverlay
@@ -631,30 +732,6 @@ export class NovelRenderer {
   /** シークバー */
   private seekBar: SeekBar
   private currentBgmPath: string | null = null
-
-  /**
-   * カメラモード (#681)。`isBlackout` と同種の宣言的 settled state。
-   * `[カメラ: シアター]` / `[カメラ: ノベル]` イベント処理で更新する。
-   * 実際の射影計算は `cameraProjection.computeCameraProjection` に委譲する（未配線、#683）。
-   */
-  private cameraMode: CameraMode = 'Novel'
-  /** シアターモードのカメラの向き (#681)。`cameraMode` が 'Novel' のときは意味を持たない。 */
-  private cameraOrientation: CameraOrientation = 'Audience'
-  /**
-   * シアターモードのカメラ仰角 (#682)。`cameraOrientation` と同種の宣言的 settled state。
-   * `cameraMode` が 'Novel' のときは意味を持たない。null = 水平（既定）。
-   */
-  private cameraElevation: CameraElevation | null = null
-
-  /**
-   * 紙人形風の輪郭 (#699)。`isBlackout`/`cameraMode` と同種の宣言的 settled state
-   * （`NovelGameState.paperDollOutline`）だが、スコープはシーン単位ではなくシナリオ
-   * （entryRawEvents）全体: `[紙人形輪郭: オン]` イベント処理で更新した後、`cameraMode` と違い
-   * `resetAndStartEvents` の場面転換（preserveBackgroundForTransition）経路では自動クリア
-   * しない——非 preserve 経路（新規開始。`setEvents` / `startFrom({})` を含む）でのみリセットする。
-   * `characterLayer`/`propLayer` 両方に同じ設定を伝える。`null` = 通常表示（既定）。
-   */
-  private paperDollOutline: PaperDollOutlineConfig | null = null
 
   /**
    * 舞台構造の背景板レイヤー (#683)。`[背景板: path, depth: N]` の加算的な蓄積を管理する。
@@ -840,7 +917,7 @@ export class NovelRenderer {
 
     // 下地ベタ（既定色・#409）と背景画像コンテナ。frontmatter `background_color:` の既定色（未指定なら黒）で
     // 全面を塗る。最初の背景絵はこの地色の上に alpha 0→1 で重なってフェードインする（コールドスタート）。
-    this.background.attachTo(this.app.stage)
+    this.stage.attachBackground(this.app.stage)
 
     // 舞台構造の背景板レイヤー (#683)。既存の単一スロット背景の直後・動画/立ち絵より下
     // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
@@ -884,7 +961,7 @@ export class NovelRenderer {
 
     // novel スクリム (#283, z 順は立ち絵の上) → 暗転 → 画面効果オーバーレイ (#143, blackout より上・dialog より下)。
     // 3枚は連続して積む。実体は ScreenEffectsController (#828 7b)。
-    this.screenEffects.attachTo(this.app.stage)
+    this.stage.attachEffects(this.app.stage)
 
     // ダイアログボックス
     this.app.stage.addChild(this.dialogBox)
@@ -1175,9 +1252,20 @@ export class NovelRenderer {
   private clearStoryEnded(): void {
     if (this.storyEnded) {
       this.storyEnded = false
+      this.syncSeekBarEnabled()
       this.onStoryEndedChangeCallback?.(false)
       this.syncEndingOverlayVisibility()
     }
+  }
+
+  /**
+   * 終劇は行き止まり（kako-jun 決定 2026-10-20, #815）。storyEnded の間は SeekBar を無効表示にして
+   * 「操作できない」ことを見た目で示す。巻き戻し自体は goBack()/seekTo() の storyEnded ガード（#386）が
+   * 根本で止める。storyEnded が書き換わる箇所（endStory / clearStoryEnded / applyState。セーブ復元の
+   * restoreToScene も applyState を通る）から呼んで SeekBar の状態を GameState 由来の値に常に揃える。
+   */
+  private syncSeekBarEnabled(): void {
+    this.seekBar.setDisabled(this.storyEnded)
   }
 
   /**
@@ -1230,6 +1318,7 @@ export class NovelRenderer {
   private endStory(): void {
     if (this.storyEnded) return // 二重発火防止（連打等でフェード/コールバックを重複させない）
     this.storyEnded = true
+    this.syncSeekBarEnabled()
     // skipMode を宣言的にリセットする (#424 セルフレビュー must)。通常の Choice 表示は
     // setSkipMode(false) を経由するが、全 option 圏外の短絡（#398）はそれを飛ばして直接
     // endStory() へ来るため、skipMode=true のままここに到達し得る。renderIntermissionTableau
@@ -1728,13 +1817,17 @@ export class NovelRenderer {
    */
   private resetAndStartEvents(
     events: Event[],
-    options?: {
-      preserveBackgroundForTransition?: boolean
-      carryBgm?: boolean
+    options?: Partial<CarryPolicy> & {
       /** 展開後のイベント列のこの位置から始める（既定 0）。線形ストリーム上のシーン先頭から始めるとき (#777)。 */
       startIndex?: number
     }
   ): void {
+    // 持ち越し方針は `carryPolicyFor` の戻り値（`SceneEntryController` が全項目を渡す）。省略は「持ち越さない」。
+    // ここで1つの `CarryPolicy` にまとめ、以降の判定と `stage.reset` はこれだけを見る（個別フラグを増やさない）。
+    const carry: CarryPolicy = {
+      preserveBackgroundForTransition: options?.preserveBackgroundForTransition ?? false,
+      carryBgm: options?.carryBgm ?? false,
+    }
     this.cursor.markStarted()
     this.save.discardPendingAutoSave()
     this.transition.resetForNewPosition()
@@ -1757,54 +1850,45 @@ export class NovelRenderer {
       this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
-    this.screenEffects.reset()
-    this.choiceOverlay.hide()
-    // BGM は「変えるまで鳴り続ける」(#724): 選択肢・物語進行によるジャンプ（carryBgm=true）では
-    // 持ち越し、次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
-    // 新規開始（setEvents・startFrom の ?scene= / ?debug_scene=）では従来どおり停止する。
-    // 背景等の持ち越し（preserveBackgroundForTransition）とは独立した別オプション。
-    if (!options?.carryBgm) {
-      this.audioManager.stopBgm(0)
-    }
-    // SE シーケンス（#672）の gap 待機タイマーをキャンセルする。新しいシーンへ遷移した後も
-    // 前シーンで発火した [SE: 複数候補] の残りが setTimeout 越しにバックグラウンド再生され
-    // 続けないようにする（他タイマーと同じ規律、AudioManager.cancelSeSequence のdoc comment参照）。
-    this.audioManager.cancelSeSequence()
-    if (options?.preserveBackgroundForTransition) {
-      this.background.cancelPendingLoad()
-      this.background.finishBackgroundCrossfadeInstant()
-      this.videoLayer.remove()
-    } else {
-      this.background.clearBackground()
-      // 動画レイヤも背景と同じ扱いでクリアする (#252)。背景コントローラは動画に触れないのでここで消す。
-      this.videoLayer.remove()
+    // 動画レイヤは背景と同じ扱いでクリアする (#252)。背景コントローラは動画に触れないのでここで消す。
+    this.videoLayer.remove()
+    if (!carry.preserveBackgroundForTransition) {
       // 背景板 (#683) も既存の単一スロット背景と同じ持続規律にする: 通常のシーン間ジャンプ
       // （preserveBackgroundForTransition=true）では持ち越し、この非 preserve 分岐（新しい
       // イベント列の最初の開始・setEvents() 経由）と明示的な `[場面転換]` でのみクリアする。
       this.backgroundBoardLayer.clear()
-      // 地色（[背景色:]、#273）も新規開始では文脈として捨てる (#734)。進行（preserve）では持ち越す。
-      this.background.clearBackgroundColor()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
       this.curtainLayer.clear()
       this.setCurtainZOrder(false)
     }
-    if (options?.preserveBackgroundForTransition) {
+    if (carry.preserveBackgroundForTransition) {
       this.characterLayer.clearForSceneTransition()
     } else {
       this.characterLayer.clear()
     }
-    // 紙人形輪郭 (#699) は cameraMode/spotlight と異なり、場面転換
-    // （preserveBackgroundForTransition=true、同シナリオ内のシーン間ジャンプ）では自動クリア
-    // しない——一度オンにしたら、そのシナリオ内で以降表示される全キャラクター/大道具に
-    // 持続させる設計（Issue #699 方針）。新しいエントリ文書の開始（setEvents()）・startFrom({}) の
-    // ときだけ通常表示にリセットする（背景板/大道具と同じ非 preserve 条件、上記参照）。
-    if (!options?.preserveBackgroundForTransition) {
-      this.paperDollOutline = null
-      this.characterLayer.setPaperDollOutline(null)
-      this.propLayer.setPaperDollOutline(null)
+    // 演出（背景・画面効果・カメラ3つ組・紙人形輪郭）をまとめてリセットする (#828 7c)。タイマー停止
+    // （揺れ・フラッシュ/フェード）→ 背景（持ち越しなら進行中ロードの無効化とクロスフェードの畳み込み、
+    // そうでなければ背景・地色を捨てる）→ 輪郭（持ち越さないときだけ解除。#699 でシナリオ全体で持続させる設計）
+    // → 暗転解除 → カメラを既定（Novel）へ（背景板・大道具・立ち絵へも伝える）→ スクリム退避状態のリセット。
+    // isBlackout / cameraMode と同じ規律: シーンをまたいで暗黙に持ち越さず、必要なら脚本で明示する。
+    // カメラの伝播は立ち絵・大道具・背景板の clear / clearForSceneTransition の後でなければならない
+    // （持ち越しで退場に入る立ち絵が、退場開始の後で再配置される旧順序を保つため、ここに置く）。
+    // 順序: タイマー停止 → 演出消去（ここまで）→ BGM → カーソル → 再生開始。
+    this.stage.reset(carry)
+    this.choiceOverlay.hide()
+    // BGM は「変えるまで鳴り続ける」(#724): 選択肢・物語進行によるジャンプ（carryBgm=true）では
+    // 持ち越し、次シーン冒頭の同一曲 [BGM:] も頭出ししない（AudioManager.playBgm の同一 URL 継続分岐）。
+    // 新規開始（setEvents・startFrom の ?scene= / ?debug_scene=）では従来どおり停止する。
+    // 背景等の持ち越し（preserveBackgroundForTransition）とは独立した別オプション。
+    if (!carry.carryBgm) {
+      this.audioManager.stopBgm(0)
     }
+    // SE シーケンス（#672）の gap 待機タイマーをキャンセルする。新しいシーンへ遷移した後も
+    // 前シーンで発火した [SE: 複数候補] の残りが setTimeout 越しにバックグラウンド再生され
+    // 続けないようにする（他タイマーと同じ規律、AudioManager.cancelSeSequence のdoc comment参照）。
+    this.audioManager.cancelSeSequence()
     // イベント絵レイヤーは新しいイベント列の開始で常にクリアする (#351)。前シーンのイベント絵は
     // 引き継がない（両分岐共通）。back=Hide で隠れていた全背面レイヤー
     // （背景・背景板・動画・立ち絵・大道具）の可視性もここで戻す。
@@ -1813,35 +1897,14 @@ export class NovelRenderer {
     // テロップ (#674) も新しいイベント列の開始で常にクリアする。前シーンの表示中テロップを
     // 引き継がない（演出の中間状態を持ち越さない、eventImageLayer と同じ規律）。
     this.clearTelopLayer()
-    this.screenEffects.setBlackout(false)
     // currentBgmPath は上の stopBgm と対で、持ち越し時（#724）は保持して snapshot/save と整合させる。
-    if (!options?.carryBgm) {
+    if (!carry.carryBgm) {
       this.currentBgmPath = null
     }
     // 追うスポットライト (#693) も新しいシーンの開始で常に消灯する。isBlackout/cameraMode と
     // 同じ規律: target キャラは次シーンに存在するとは限らないため、シーンをまたいで暗黙に
     // 持ち越さず、そのシーンで必要なら明示的に [スポットライト:] を書く。
     this.lightingLayer.clear()
-    // 新しいシーンの開始でカメラモードを既定に戻す (#681)。isBlackout と同じ規律:
-    // シーンをまたいで暗黙に持ち越さず、そのシーンで必要なら明示的に [カメラ:] を書く。
-    this.cameraMode = 'Novel'
-    this.cameraOrientation = 'Audience'
-    this.cameraElevation = null
-    // #683 PR #690 セルフレビュー must: BackgroundBoardLayer は自身のカメラ状態を内部に保持し、
-    // setCamera()（[カメラ:] ディレクティブ処理 / applyState 復元）でしか同期されない。上の
-    // 3行の代入だけでは伝わらないため、ここで明示的に同期する（entries が空なら no-op）。
-    // これを忘れると、preserveBackgroundForTransition=true で持ち越した板が前シーンのカメラ
-    // 射影（縮小表示等）のまま取り残されたり、新しいシーンで積む板が前シーンのカメラ状態で
-    // 配置されたりする（preserve/非 preserve どちらの分岐でも起きる。applyState の同種コメント参照）。
-    this.backgroundBoardLayer.setCamera(
-      this.cameraMode,
-      this.cameraOrientation,
-      this.cameraElevation
-    )
-    // 大道具レイヤー (#692) も背景板と同じ理由でカメラ状態を明示的に同期する。
-    this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
-    // 立ち絵レイヤー (#694) も背景板・大道具と同じ理由でカメラ状態を明示的に同期する。
-    this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
     // 吹き出しも DialogBox と同じ一時的な本文表示であり、シーン/イベント列の境界をまたいで
@@ -1849,9 +1912,8 @@ export class NovelRenderer {
     this.bubbleLayer.hide()
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
-    // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用し、
-    // スクリム退避状態と alpha をリセットする（前シーンの退避途中が残らないようにする）。
-    this.screenEffects.resetNovelScrimState()
+    // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用する
+    // （スクリム退避状態と alpha のリセットは上の `stage.reset` で済んでいる）。
     this.dialogBox.setNovelMode(this.isNovelStyle())
 
     // 元イベントを保持し、Condition をフラグに基づいて展開
@@ -2790,7 +2852,7 @@ export class NovelRenderer {
       this.time.clearTimeout(this.skipTimer)
       this.skipTimer = null
     }
-    this.screenEffects.stopAllTimers()
+    this.stage.cancelAllTimers()
     if (this.toastTimer) {
       this.time.clearTimeout(this.toastTimer)
       this.toastTimer = null
@@ -2826,13 +2888,12 @@ export class NovelRenderer {
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
-    // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放
-    this.background.releaseTextures()
+    // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放し、canvas 由来マスクテクスチャを
+    // 含む背景 entry を全て解放する (#250/#319)。
+    this.stage.release()
     // 先読み済み URL 集合もクリアする（リーク予防・#389）。
     this.preloadedUrls.clear()
     clearBackgroundPreload()
-    // canvas 由来マスクテクスチャを含む背景 entry を全て解放する (#250/#319)
-    this.background.clearBackgroundEntries()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -2841,26 +2902,32 @@ export class NovelRenderer {
    * 現在のゲーム状態のスナップショットを返す
    */
   getSnapshot(): NovelGameState {
+    // 演出フィールドは `stage.capture()` の値を、従来の位置（キー順）に並べ直して入れる。キー順は
+    // セーブ JSON 回帰テスト（snapshotJson / playbackCursor）が固定しているため、展開（...）はしない。
+    const stage = this.stage.capture()
     return {
       sceneId: this.cursor.currentSceneId,
       eventIndex: this.cursor.eventIndex,
       textIndex: this.cursor.textIndex,
       sentenceIndex: this.cursor.sentenceIndex,
       flags: this.gameState.toJSON(),
-      ...this.background.capture(),
+      backgroundPath: stage.backgroundPath,
+      backgroundColor: stage.backgroundColor,
+      backgroundFade: stage.backgroundFade,
+      backgroundBrightness: stage.backgroundBrightness,
       video: this.videoLayer.getState(),
       eventImage: this.eventImageLayer.getState(),
       backgroundBoards: this.backgroundBoardLayer.getState(),
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
       curtain: this.curtainLayer.getState(),
-      ...this.screenEffects.capture(),
+      isBlackout: stage.isBlackout,
       characters: this.characterLayer.getCharacterStates(),
       currentBgmPath: this.currentBgmPath,
-      cameraMode: this.cameraMode,
-      cameraOrientation: this.cameraOrientation,
-      cameraElevation: this.cameraElevation,
-      paperDollOutline: this.paperDollOutline,
+      cameraMode: stage.cameraMode,
+      cameraOrientation: stage.cameraOrientation,
+      cameraElevation: stage.cameraElevation,
+      paperDollOutline: stage.paperDollOutline,
       storyEnded: this.storyEnded,
     }
   }
@@ -3061,6 +3128,7 @@ export class NovelRenderer {
     // スナップショット）が残ったままになる。ここをガードしないと goBack で applyState が
     // storyEnded を false に巻き戻し、"to be continued..." が消えて背景/立ち絵/BGM が
     // 直前の状態に戻ってしまう（終劇の無効化）。
+    // 終劇は行き止まり（決定 2026-10-20, #815）。SeekBar も同じ理由で無効表示にしている。
     if (this.storyEnded) return
     if (this.cursor.resolvedEvents.length === 0) return
     if (this.transition.isGated('navigate')) return
@@ -3168,16 +3236,10 @@ export class NovelRenderer {
       this.time.clearTimeout(this.intermissionTimer)
       this.intermissionTimer = null
     }
-    // 画面効果をリセット（シーク・バック時に演出が残留しないよう）
-    this.screenEffects.reset()
-    this.screenEffects.resetStagePosition()
     // SE シーケンス（#672）の gap 待機タイマーも画面効果と同じくリセットする。goBack/seekTo/
     // セーブロードで別の時点へ飛ぶ以上、飛ぶ前の [SE: 複数候補] の残りを鳴らし続けるのは
     // 画面効果の残留と同じ種類の事故（AudioManager.cancelSeSequence のdoc comment参照）。
     this.audioManager.cancelSeSequence()
-    // novel スクリム退避途中（#283）は演出中間状態なので復元では持たない。リセットして
-    // 「退避していない」前提に倒す。render() が現在ページのスクリム可視性を再設定する。
-    this.screenEffects.resetNovelScrimState()
     // テロップ (#674) も演出の中間状態なので復元（goBack/seekTo/セーブ復元/任意局面起動）では
     // 一切持たない（NovelGameState に持たせない設計、ADR-0002）。表示中の段があれば即座に消す。
     this.clearTelopLayer()
@@ -3231,6 +3293,7 @@ export class NovelRenderer {
     // （再マウントのたびに終劇 postMessage が重複送信されるのを防ぐ）。
     const prevStoryEnded = this.storyEnded
     this.storyEnded = state.storyEnded
+    this.syncSeekBarEnabled()
     if (prevStoryEnded !== state.storyEnded) {
       this.onStoryEndedChangeCallback?.(state.storyEnded)
     }
@@ -3245,9 +3308,13 @@ export class NovelRenderer {
     // 発火させず即時反映する。通常の物語進行（endStory()）はこの経路を通らないため影響しない。
     this.syncEndingOverlayVisibility(true)
 
-    // 背景復元
-    // 背景画像 → 単色地色の順（実体は BackgroundController.restore、#828 7a）。
-    this.background.restore(state)
+    // 演出の復元 (#828 7c)。`stage.restore` が、画面効果（揺れ・フラッシュ/フェード）の停止と stage 位置の
+    // 原点戻し、novel スクリム退避途中（#283）のリセット（render() が現在ページのスクリム可視性を再設定する）
+    // を先に行ってから、背景画像 → 単色地色 → 暗転（#350）→ 紙人形輪郭 (#699) → カメラ3つ組 (#681/#682) を
+    // 宣言的に復元する。クロスフェード・揺れ・スクリム退避などの中間状態は持たない（ADR-0002）。
+    // 輪郭とカメラは立ち絵・大道具・背景板へも伝わる。以降の show()/restore() で新規作成される
+    // スプライトにも自動適用されるため、それらより前にここで行う。
+    this.stage.restore(state)
     // 背景なしの復元は動画レイヤも消す扱い (#252)。コントローラは動画に触れないのでここで行う。
     if (!state.backgroundPath) this.videoLayer.remove()
 
@@ -3256,44 +3323,22 @@ export class NovelRenderer {
     this.videoLayer.restore(state.video)
 
     // イベント絵レイヤー復元 (#351)。フェードは行わず即時反映（ADR-0002）。全背面レイヤー
-    // （背景・背景板・動画・立ち絵・大道具）の可視性は復元後の状態を見て宣言的に再計算する（processDirective と
-    // 同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
-    // （processDirective の EventImage 分岐と同じセルフレビュー対応）。
+    // （背景・背景板・動画・立ち絵・大道具）の可視性は復元後の状態を見て宣言的に再計算する（ライブ進行の `directives/stageDirectives.ts` の
+    // `EventImage` ハンドラと同じ applyEventImageVisibility を共有）。onSettled でロード完了/失敗後にも再計算する
+    // （`EventImage` ハンドラと同じセルフレビュー対応）。
     this.eventImageLayer.restore(state.eventImage, {
       onSettled: () => this.applyEventImageVisibility(),
     })
     this.applyEventImageVisibility()
 
-    // 暗転復元（セーブ/ロード・シーク・任意局面起動の applyState はすべてここを通る #350）
-    this.screenEffects.restore(state)
-
-    // カメラモード復元 (#681/#682)。isBlackout と同種の宣言的 settled state で、
-    // goBack/seekTo/セーブ復元/任意局面起動のすべてがこの applyState を通る。
-    this.cameraMode = state.cameraMode
-    this.cameraOrientation = state.cameraOrientation
-    this.cameraElevation = state.cameraElevation
-
-    // 紙人形輪郭復元 (#699)。cameraMode と同種の宣言的 settled state。CharacterLayer/PropLayer
-    // 両方に同じ設定を伝える。以降の characterLayer.show()/propLayer.restore() で新規作成される
-    // スプライトにも自動適用されるため、それらより前に呼ぶ。
-    this.paperDollOutline = state.paperDollOutline
-    this.characterLayer.setPaperDollOutline(this.paperDollOutline)
-    this.propLayer.setPaperDollOutline(this.paperDollOutline)
-
     // 舞台構造の背景板復元 (#683)。characters と同じくスライドインは起こさず、スナップショット
     // 時点の状態を即時表示する（ADR-0002: 演出の中間状態を復元しない）。BackgroundBoardLayer は
-    // カメラ状態を自前で保持している（上の this.cameraMode 等への代入はこのレイヤーには伝わらない）
-    // ため、restore() で板を再配置する前に setCamera() で明示的に同期させる。
-    this.backgroundBoardLayer.setCamera(
-      this.cameraMode,
-      this.cameraOrientation,
-      this.cameraElevation
-    )
+    // カメラ状態を自前で保持しているため、restore() で板を再配置する前にカメラを同期させる必要がある
+    // （`stage.restore` が `applyCamera` で済ませてある）。
     this.backgroundBoardLayer.restore(state.backgroundBoards, this.assetBaseUrl)
 
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順
-    // （自前でカメラ状態を保持しているため restore() 前に setCamera() で明示的に同期する）。
-    this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
+    // （カメラは `stage.restore` で同期済み）。
     this.propLayer.restore(state.props, this.assetBaseUrl)
 
     // 幕復元 (#697)。backgroundBoardLayer/propLayer と異なりカメラ射影は持たないため
@@ -3305,9 +3350,8 @@ export class NovelRenderer {
     // 立ち絵復元（フェードインは入れず、スナップショット時点の状態を即時表示する #177）。
     // novel 役割配置 (#286): protagonist 指定時は復元でも質問役=左 / 回答役=右の x を当てる
     // （token のままだと前進時の配置と食い違うため）。ポーズ nudge は演出なので復元では起こさない。
-    // 立ち絵レイヤー (#694) も背景板/大道具と同じ理由・同じ手順（自前でカメラ状態を保持している
-    // ため、以下の show() 呼び出しより前に setCamera() で明示的に同期する）。
-    this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
+    // 立ち絵レイヤー (#694) も背景板/大道具と同じ理由・同じ手順（カメラは `stage.restore` で同期済みで、
+    // 以下の show() 呼び出しより前に済んでいる）。
     this.characterLayer.clear()
     for (const ch of state.characters) {
       const xRatio = this.resolveNovelRoleXRatio(ch.name)
@@ -3449,7 +3493,7 @@ export class NovelRenderer {
   /**
    * `telopLayer.clear()` を呼びつつ `telopClearEpoch` を1つ進める (#679 レビューS3)。
    * scene切替（resetAndStartEvents / SceneTransition）・goBack/seekTo/セーブ復元（applyState）・
-   * destroy() の4箇所全てここ経由にし、`processDirective` の `Telop` 分岐が
+   * destroy() の4箇所全てここ経由にし、`directives/stageDirectives.ts` の `Telop` ハンドラが
    * `ensureFontLoaded()` 完了時にこのエポックの変化を見て「待機中に打ち切られたか」を判定する。
    */
   private clearTelopLayer(): void {
@@ -3474,7 +3518,7 @@ export class NovelRenderer {
    * イベント絵レイヤー (#351) の `back` 値に応じて、背景・背景板・動画・立ち絵・スポットライト・
    * 大道具の可視性を宣言的にトグルする。
    *
-   * `setBlackout` と同じ「単一の宣言的セッター」パターン: processDirective（ライブ進行）と
+   * `setBlackout` と同じ「単一の宣言的セッター」パターン: `directives/stageDirectives.ts` の `EventImage` ハンドラ（ライブ進行）と
    * applyState（goBack/seekTo/セーブ復元）の両方から、eventImageLayer の現在状態を毎回
    * 素直に読んで反映するだけにする。退避 → 復元のような一回限りのアニメーションは持たない
    * （ADR-0002: スナップショットは常に settled 状態のみを持つ）。
@@ -3773,284 +3817,20 @@ export class NovelRenderer {
   }
 
   /**
-   * 演出イベント（Background, Blackout, SceneTransition）を実行する
+   * 演出イベントを実行する。
+   *
+   * 背景・立ち絵・オーディオなど演出系の種は `directives/` の領域別ハンドラ（`dispatchDirective`）が処理する (#829)。
+   * ここには再生状態（フラグ・カーソル・遷移・待機タイマー）を同時に触るフロー制御系
+   * （`WaitDisplayComplete` / `Flag` / `Choice` / `Jump` / `Wait`）だけが残る。
    *
    * Condition は resolvedEvents では既に展開済みなので、ここでは処理しない。
    */
   private processDirective(event: Event): void {
+    if (dispatchDirective(event, this.directiveContext)) return
     if (typeof event === 'string') {
-      if (event === 'SceneTransition') {
-        this.background.clearBackground()
-        // 動画レイヤも背景と同じ扱いでクリアする (#252)。
-        this.videoLayer.remove()
-        // 舞台構造の背景板 (#683) も既存の単一スロット背景と同じタイミングでクリアする。
-        this.backgroundBoardLayer.clear()
-        // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
-        this.propLayer.clear()
-        // 幕 (#697) も背景板・大道具と同じ単一スロット持続規律（[場面転換] でクリア、
-        // 通常のシーン間ジャンプでは持ち越し）。z-order も既定位置へ戻す。
-        this.curtainLayer.clear()
-        this.setCurtainZOrder(false)
-        // 追うスポットライト (#693) も同じタイミングで消灯する（resetAndStartEvents と同じ規律）。
-        this.lightingLayer.clear()
-        // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
-        this.videoLayer.remove()
-        // イベント絵レイヤーも場面転換でクリアする (#351)。作者が [イベント絵終了] を書き忘れても
-        // 全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が隠れたまま次のシーンに
-        // 持ち越されないようにする防御。
-        this.eventImageLayer.remove()
-        this.applyEventImageVisibility()
-        // テロップ (#674) も場面転換でクリアする（eventImageLayer と同じ防御）。
-        this.clearTelopLayer()
-        this.screenEffects.setBlackout(false)
-        // novel: 場面転換でスクリム+文字を退避して新しい絵を見せ、戻す (#283)
-        this.screenEffects.retreatNovelScrim()
-      }
-      if (event === 'VideoExit') {
-        // [動画退場] で動画レイヤをクリア (#252)
-        this.videoLayer.remove()
-      }
       if (event === 'WaitDisplayComplete') {
         this.beginWaitDisplayComplete()
       }
-      if (event === 'SpotlightOff') {
-        // スポットライト消灯 (#693)。settled state（fire-and-forget ではない）。
-        this.lightingLayer.clear()
-      }
-      if (event === 'CurtainUp') {
-        // 幕を上げる (#697)。settled state は curtainLayer.raise() 内で即座に null になる
-        // （上昇アニメーション自体は演出の中間状態、ADR-0002）。z-order はそのままでよい
-        // （幕が見えなくなるだけなので、次に [幕:] が来たときの setCurtainZOrder で改めて決まる）。
-        this.curtainLayer.raise()
-      }
-      return
-    }
-    if ('Background' in event) {
-      const bg = event.Background
-      this.background.setBackground(
-        bg.path,
-        normalizeBackgroundFade({
-          top: bg.fade_top,
-          bottom: bg.fade_bottom,
-          left: bg.fade_left,
-          right: bg.fade_right,
-        }),
-        bg.brightness
-      )
-      return
-    }
-    if ('BackgroundBoard' in event) {
-      // 舞台構造の背景板 (#683)。既存の単一スロット背景とは独立した加算的な仕組み:
-      // 同じシーン内で複数回発火すれば、それぞれ別の板として BackgroundBoardLayer に蓄積される。
-      const board = event.BackgroundBoard
-      this.backgroundBoardLayer.add(board.path, board.depth ?? 0, this.assetBaseUrl)
-      return
-    }
-    if ('Prop' in event) {
-      // 舞台構造の大道具 (#692)。背景板とは独立した PixiJS レイヤーに加算的に蓄積される:
-      // 同じシーン内で複数回発火すれば、それぞれ別の大道具として PropLayer に蓄積される。
-      const prop = event.Prop
-      this.propLayer.add(prop.path, prop.depth ?? 0, this.assetBaseUrl)
-      return
-    }
-    if ('BackgroundColor' in event) {
-      // 単色地色 (#273)。背景画像と同じ永続状態（snapshot / applyState / セーブ復元で復元）。
-      this.background.setBackgroundColor(event.BackgroundColor.color)
-      return
-    }
-    if ('Video' in event) {
-      // 動画入力レイヤ (#252)。URL 構築は VideoLayer 側（assetBaseUrl + '/videos/' + path）に委譲し、
-      // ここでは相対パスをそのまま渡す。背景の setBackground と同じ責務分担で、
-      // セーブ/スナップショットには相対パスが保持される（ドメイン変更後のロードでも壊れない）。
-      const v = event.Video
-      if (this.assetBaseUrl) {
-        this.videoLayer.show(v.path, {
-          position: v.position,
-          scale: v.scale,
-          loop: v.loop,
-          mute: v.mute,
-          fade: normalizeBackgroundFade({
-            top: v.fade_top,
-            bottom: v.fade_bottom,
-            left: v.fade_left,
-            right: v.fade_right,
-          }),
-        })
-      }
-      return
-    }
-    if ('EventImage' in event) {
-      // イベント絵レイヤー (#351)。URL 構築は EventImageLayer 側（assetBaseUrl + '/images/' + path）
-      // に委譲する。表示後、全背面レイヤー（背景・背景板・動画・立ち絵・大道具）の可視性を
-      // back 値に応じて宣言的に更新する
-      // （applyEventImageVisibility は setBlackout と同じく processDirective / applyState の
-      // 両方から呼ばれる単一の宣言的トグル。一回限りのアニメーションにはしない・ADR-0002）。
-      // onSettled でロード完了/失敗後にも再計算する（セルフレビュー指摘: ロード失敗のまま
-      // back=Hide が残ると背面が隠れっぱなしになる事故を防ぐ。shouldHideBackLayer() 参照）。
-      const ei = event.EventImage
-      if (this.assetBaseUrl) {
-        this.eventImageLayer.show(ei.path, {
-          back: ei.back,
-          fadeMs: ei.fade_ms ?? this.eventImageFadeMs,
-          // 遷移モード (#583)。parser（Rust）が `遷移=` 未指定タグを frontmatter
-          // `event_image_transition`（#599）の実効デフォルトへ解決済みで、
-          // wasm/parser.ts の normalizeEvents が undefined をそのデフォルトに正規化済みだが、
-          // 念のため ?? で三重に防御する（`this.eventImageTransitionDefault` は
-          // setEventImageTransitionDefault で受けた同じ doc デフォルト）。
-          transition: ei.transition ?? this.eventImageTransitionDefault,
-          // アンビエント演出 (#582)。parser.ts の normalizeEvents が undefined を全 false に
-          // 正規化済みだが、念のため ?? で二重に防御する。
-          effects: ei.effects ?? undefined,
-          onSettled: () => this.applyEventImageVisibility(),
-          onVisibilityChange: () => this.applyEventImageVisibility(),
-        })
-        this.applyEventImageVisibility()
-        // フルキャンバス画像表示モード (#530): テキストウィンドウ/選択肢を隠す。次の
-        // Dialog/Narration（`dialogBox.setDialog`/`show()` 経由）や選択肢表示
-        // （`choiceOverlay.show()`）が呼ばれれば通常どおり再表示される（DialogBox.hide()
-        // は既存の「本文が空のとき自動で隠す」内部ロジックと同じ可逆トグル、DialogBox.ts参照）。
-        if (this.fullscreenImage) {
-          this.dialogBox.hide()
-          this.choiceOverlay.hide()
-        }
-      }
-      return
-    }
-    if ('EventImageExit' in event) {
-      // [イベント絵終了] でイベント絵レイヤーをクリアする (#351)。
-      this.eventImageLayer.remove({ fadeMs: event.EventImageExit.fade_ms ?? this.eventImageFadeMs })
-      this.applyEventImageVisibility()
-      return
-    }
-    if ('Telop' in event) {
-      // 汎用テロップ (#674)。スキップ中は表示しない（ADR-0002: 演出の中間状態を作らない既存方針と
-      // 同じ）。復元（セーブ/ロード・シーク・任意局面起動）は applyState の宣言的復元経由で
-      // processDirective/このイベント自体を通らないため個別ガードは不要
-      // （NovelGameState には Telop を一切持たせない設計、Issue コメント参照）。
-      if (this.skipMode) return
-      const telop = event.Telop
-      const resolvedFontFamily = resolveFontFamily(
-        null,
-        this.gameDefaultFontFamily,
-        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-      )
-      const fontSize = this.gameDefaultFontSize ?? NovelRenderer.RUNTIME_DEFAULT_FONT_SIZE
-      const accentColor = this.telopAccentColorNum
-      // フォント未ロードのまま show() すると、その時点のフォールバックフォントの字形幅で
-      // wordWrap の折り返し行数・帯の高さが確定してしまい、後からフォントが差し替わっても
-      // 追従しない（TelopLayer は Dialog/Narration と違い後追いの再測定フックを持たない）。
-      // 他レイヤー（Dialog/Narration）と同じ ensureFontLoaded() の完了を待ってから show() する
-      // （#679 レビューS3）。await 自体は fire-and-forget（本文の進行はブロックしない）。
-      const expectedClearEpoch = this.telopClearEpoch
-      void ensureFontLoaded(resolvedFontFamily)
-        .catch((err) => {
-          // ロード失敗時もフォールバックフォントで表示自体は続行する（.then は必ず走る、
-          // Dialog/Narration の「ロード失敗時は差し替えないだけ」より一段階前の判断——
-          // Telop はまだ一度も描画していないため、失敗しても出さないより出す方が良い）。
-          console.warn('[name-name] テロップ用フォントロードに失敗', resolvedFontFamily, err)
-        })
-        .then(() => {
-          // 待機中にシーン切替/goBack/seekTo/セーブ復元（telopLayer.clear() 経由。
-          // clearTelopLayer() が telopClearEpoch を進める）・スキップ開始・破棄が起きていたら
-          // 古いテロップを出さない。
-          if (!this.initialized) return
-          if (this.skipMode) return
-          if (this.telopClearEpoch !== expectedClearEpoch) return
-          this.telopLayer.show({
-            text: telop.text,
-            position: telop.position ?? 'BottomRight',
-            seconds: telop.seconds ?? 4,
-            kind: telop.kind ?? null,
-            fontFamily: resolvedFontFamily,
-            fontSize,
-            accentColor,
-          })
-        })
-      return
-    }
-    if ('Blackout' in event) {
-      this.screenEffects.setBlackout(event.Blackout.action === 'On')
-      return
-    }
-    if ('CameraMode' in event) {
-      // #681/#682: GameState 更新。orientation 省略/未知値は客席相当（'Audience'）、
-      // elevation 省略/未知値は水平相当（null）。
-      // #694 で解消: CharacterLayer も setCamera() 経由でカメラ状態を受け取るようになったため、
-      // 既存の立ち絵は depth に基づく scale/verticalOffset で再配置される（下記
-      // characterLayer.setCamera 呼び出し）。ただし進行中の stageMotion（歩行入場/退場、#684）は
-      // sprite.x のみを動かす独立の tween で、setCamera の再適用対象外（camera projection は
-      // sprite.y/scale だけを書き換える）のため、引き続きキャンセルされず走り続ける。これは
-      // #684 時点からの既知の割り切りのまま（歩行中に camera 変更が重なる稀なケースの視覚的実害は
-      // 小さいと判断）。
-      this.cameraMode = event.CameraMode.mode
-      this.cameraOrientation = event.CameraMode.orientation ?? 'Audience'
-      this.cameraElevation = event.CameraMode.elevation ?? null
-      // #683: カメラ状態が変わったので、既存の背景板があれば新しい scale/verticalOffset で
-      // 再配置する（板を持たないゲームでは entries が空なので no-op）。
-      this.backgroundBoardLayer.setCamera(
-        this.cameraMode,
-        this.cameraOrientation,
-        this.cameraElevation
-      )
-      // #692: 大道具も背景板と同じ理由で再配置する。
-      this.propLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
-      // #694: 立ち絵も背景板・大道具と同じ理由で再配置する。
-      this.characterLayer.setCamera(this.cameraMode, this.cameraOrientation, this.cameraElevation)
-      return
-    }
-    if ('PaperDollOutline' in event) {
-      // #699: GameState 更新。スコープはキャラクター個別ではなくシナリオ全体
-      // （cameraMode と違い場面転換で自動クリアしない、resetAndStartEvents 参照）。
-      // color/thickness 省略時は runtime 側の既定値（白・太さ2）にフォールバックする。
-      this.paperDollOutline = event.PaperDollOutline.enabled
-        ? {
-            color: event.PaperDollOutline.color ?? DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
-            thickness: event.PaperDollOutline.thickness ?? DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
-          }
-        : null
-      // CharacterLayer/PropLayer 両方に同じ設定を伝える。現在表示中のスプライトへ即座に
-      // 反映されると同時に、以後新規に表示されるスプライトにも自動適用される。
-      this.characterLayer.setPaperDollOutline(this.paperDollOutline)
-      this.propLayer.setPaperDollOutline(this.paperDollOutline)
-      return
-    }
-    if ('Curtain' in event) {
-      // 幕を降ろす (#697)。settled state（fire-and-forget ではない）。z-order を
-      // characters_in_front に合わせてから表示する（curtainLayer.show() 自体は自分の stage 上の
-      // 位置を知らない）。
-      const curtain = event.Curtain
-      this.setCurtainZOrder(curtain.characters_in_front)
-      this.curtainLayer.show(curtain.path, curtain.characters_in_front, this.assetBaseUrl)
-      return
-    }
-    if ('Bgm' in event) {
-      if (event.Bgm.action === 'Play' && event.Bgm.path) {
-        const soundUrl = resolveAssetUrl(this.assetBaseUrl, 'sounds', event.Bgm.path)
-        // fade_ms (#145): 指定があれば fade-in、未指定なら即時再生
-        this.audioManager.playBgm(soundUrl, event.Bgm.fade_ms ?? undefined)
-        this.currentBgmPath = event.Bgm.path
-      } else {
-        // fade_ms (#145): 指定があればその ms で fade-out、未指定は AudioManager 既定 (1000ms)
-        if (event.Bgm.fade_ms != null) {
-          this.audioManager.stopBgm(event.Bgm.fade_ms)
-        } else {
-          this.audioManager.stopBgm()
-        }
-        this.currentBgmPath = null
-      }
-      return
-    }
-    if ('Se' in event) {
-      // paths が1件のみなら従来通りの単発再生（後方互換）。複数件ならランダム抽出+シャッフル
-      // +ランダム間隔の再生プールとして扱う (#672)。選択・シャッフルはここ（トリガ発火時）で
-      // 毎回新たに計算し、GameState 等の永続構造には焼き込まない（doctrine 規律3）。
-      const selected = selectAndShuffleSeFiles(event.Se.paths, event.Se.count)
-      const soundUrls = selected.map((path) => resolveAssetUrl(this.assetBaseUrl, 'sounds', path))
-      // 間隔省略時のランタイム既定 50-200ms (#672 Issue本文)
-      const gapMinMs = event.Se.gap_min_ms ?? 50
-      const gapMaxMs = event.Se.gap_max_ms ?? 200
-      // fade_ms (#145): 指定があれば各再生に fade-in、未指定なら即時再生
-      this.audioManager.playSeSequence(soundUrls, gapMinMs, gapMaxMs, event.Se.fade_ms ?? undefined)
       return
     }
     if ('Flag' in event) {
@@ -4114,224 +3894,6 @@ export class NovelRenderer {
       this.markCurrentSceneRead()
       // 遷移の予約（pending への移行・次 tick での発火・循環上限）は armJump に集約 (#733)。
       this.armJump(event.Jump.target)
-      return
-    }
-    if ('ExpressionChange' in event) {
-      this.characterLayer.changeExpression(
-        event.ExpressionChange.character,
-        event.ExpressionChange.expression,
-        this.assetBaseUrl
-      )
-      // novel: 表情変化でスクリム+文字を退避して立ち絵の変化を見せ、戻す (#283)
-      this.screenEffects.retreatNovelScrim()
-      return
-    }
-    if ('Exit' in event) {
-      // スキップモード中はフェードを抑制して即時退場（既読を素早く流す UX に揃える）#177
-      // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
-      // 無視して従来通りのフェード退場にフォールバックする（#681 の cameraMode を参照して分岐）。
-      const exitDirection =
-        this.cameraMode === 'Theater' ? (event.Exit.exit_direction ?? undefined) : undefined
-      this.characterLayer.remove(event.Exit.character, {
-        instant: this.skipMode,
-        durationMsOverride: event.Exit.fade_ms ?? undefined,
-        exitDirection,
-      })
-      return
-    }
-    if ('Enter' in event) {
-      // 無言の立ち絵登場 (#401)。`[登場: 名前 (sprite/表情, 位置)]`。
-      // Dialog 経由の showCharacterFromDialog と同じ show ロジック（役割配置の xRatio / fit /
-      // skip 中の即時表示）で立ち絵を出すが、本文を持たないため lastSpeaker 追跡・nudge・
-      // scrim 退避は行わない（無言のまま立たせるだけ・話者交代の合図ではない）。
-      // expression / position / character が揃っていない不完全な指定は showCharacterFromDialog の
-      // 実表示ガードに揃えて silent skip（立ち絵を出さない）。
-      // 冪等: 同一 name/expression/position/fit の再宣言は CharacterLayer.show 側の no-op ガードで無効。
-      const { character, expression, position, fit, enter_direction, depth } = event.Enter
-      if (character && expression && position) {
-        const xRatio = this.resolveNovelRoleXRatio(character)
-        // 方向モーション (#684): シアターモードのときだけ方向引数を反映する。ノベルモードでは
-        // 無視して従来通りの瞬間表示/フェード登場にフォールバックする。
-        const enterDirection =
-          this.cameraMode === 'Theater' ? (enter_direction ?? undefined) : undefined
-        this.characterLayer.show(character, expression, position, this.assetBaseUrl, {
-          instant: this.skipMode,
-          xRatio,
-          fit: fit === true,
-          enterDirection,
-          // シアターモードの奥行き配置 (#694)。未指定/null は 0（最前面）。
-          depth: depth ?? 0,
-        })
-      }
-      return
-    }
-    if ('Animate' in event) {
-      // 立ち絵アニメ (#134) — fire-and-forget。完了を待たず次へ進む。
-      this.characterLayer.animate(event.Animate.target, {
-        dx: event.Animate.dx,
-        dy: event.Animate.dy,
-        rotation: event.Animate.rotation,
-        scale: event.Animate.scale,
-        duration_ms: event.Animate.duration_ms,
-        easing: event.Animate.easing,
-      })
-      return
-    }
-    if ('DialogBorderless' in event) {
-      // 文字ウィンドウ枠の ON/OFF (#135)
-      this.dialogBox.setBorderless(event.DialogBorderless.borderless)
-      return
-    }
-    if ('TitleShow' in event) {
-      // 動画タイトル中央表示 (llll-ll-media 用)
-      // Label / Image と同じく union 絞り込み済みの型付きアクセス（types.ts に size/x/y 済み）。
-      const ts = event.TitleShow
-      // フォント解決の優先順チェーンは novelLayout.resolveFontFamily に集約 (#260)。
-      const font = resolveFontFamily(
-        ts.font_family,
-        this.gameDefaultFontFamily,
-        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-      )
-      // タイトル文字色 (#273)。color は CharacterLayer 側で解決し、グリフ演出・カーソルにも波及する。
-      // サイズ・x/y override (#275) は CharacterLayer 側で fontSize / resolvePositionWithOverride に渡す。
-      this.characterLayer.showTitle(ts.text, font, ts.position, ts.color, {
-        size: ts.size,
-        x: ts.x,
-        y: ts.y,
-      })
-      return
-    }
-    if ('Label' in event) {
-      // 単独の色付きラベル (#274) — OP タイトルカードの肩書 / 名前。
-      // フォント解決は TitleShow と共通の resolveFontFamily（per-line → per-game → runtime）。
-      // 位置・色・サイズは CharacterLayer.showLabel が resolvePositionWithOverride / parseColorToNumber で解決する。
-      // 揃え・隣接・x/y override (#275) もそのまま showLabel に渡す（ED の install-line 用）。
-      const lb = event.Label
-      const font = resolveFontFamily(
-        lb.font_family,
-        this.gameDefaultFontFamily,
-        NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY
-      )
-      // skipMode 中はフェードインを飛ばして即時表示する（立ち絵と揃える）。
-      this.characterLayer.showLabel({
-        id: lb.id,
-        text: lb.text,
-        color: lb.color,
-        position: lb.position,
-        size: lb.size,
-        fontFamily: font,
-        align: lb.align,
-        after: lb.after,
-        x: lb.x,
-        y: lb.y,
-        instant: this.skipMode,
-      })
-      return
-    }
-    if ('Image' in event) {
-      // 単独の画像 (#274) — OP タイトルカードのアバター。
-      // url 解決は背景画像と同じ assetBaseUrl + '/images/' + path（CharacterLayer 側で resolveAssetUrl）。
-      const im = event.Image
-      this.characterLayer.showImage({
-        id: im.id,
-        path: im.path,
-        position: im.position,
-        shape: im.shape,
-        size: im.size,
-        // 位置 override (#275)。position トークンより優先。
-        x: im.x,
-        y: im.y,
-        assetBaseUrl: this.assetBaseUrl,
-        instant: this.skipMode,
-        // 遷移モード・所要時間 (#628)。frontmatter event_image_transition には紐付けない
-        // 設計のためここでは im.transition をそのまま渡す（EventImage と違い defaultTransition
-        // フォールバックは適用しない、types.ts Image.transition の JSDoc 参照）。
-        transition: im.transition,
-        fadeMs: im.fade_ms,
-      })
-      return
-    }
-    if ('TextEffect' in event) {
-      // グリフ単位の文字演出 (#268) — fire-and-forget。完了を待たず次へ進む。
-      // skipMode 中は演出を畳んで即時完了（整列・不透明）にする。ADR 0002 に従い
-      // アニメ進行中の中間状態は持たないため、復元/スキップ時は静止状態でよい。
-      const te = event.TextEffect
-      // フォント確定後にグリフ構築する Promise を返すが、fire-and-forget なので待たない。
-      void this.characterLayer.applyTextEffect(
-        te.target,
-        {
-          effect: te.effect,
-          stagger_ms: te.stagger_ms,
-          ms_per_char: te.ms_per_char,
-          dx: te.dx,
-          dy: te.dy,
-          rotation: te.rotation,
-          scale: te.scale,
-          alpha: te.alpha,
-          duration_ms: te.duration_ms,
-          easing: te.easing,
-          // #271 点滅カーソル（効果=タイプ 専用）
-          cursor: te.cursor,
-          blink_ms: te.blink_ms,
-          cursor_color: te.cursor_color,
-        },
-        { instant: this.skipMode }
-      )
-      return
-    }
-    if ('Underline' in event) {
-      // 下線ビーム (#270) — fire-and-forget。完了を待たず次へ進む。
-      // skipMode 中は伸び切った静止線にする（ADR0002: 中間状態を持たない）。
-      const ul = event.Underline
-      void this.characterLayer.applyUnderline(
-        ul.target,
-        {
-          color: ul.color,
-          thickness: ul.thickness,
-          duration_ms: ul.duration_ms,
-          offset: ul.offset,
-          easing: ul.easing,
-        },
-        { instant: this.skipMode }
-      )
-      return
-    }
-    if ('Shake' in event) {
-      // 画面シェイク (#143) — fire-and-forget
-      this.screenEffects.startShake(event.Shake.intensity_px, event.Shake.duration_ms)
-      return
-    }
-    if ('Flash' in event) {
-      // フラッシュ (#143) — fire-and-forget。エリア限定・ストロボは #693 拡張。
-      this.screenEffects.startFlash(
-        event.Flash.color,
-        event.Flash.alpha,
-        event.Flash.duration_ms,
-        event.Flash.area ?? null,
-        event.Flash.strobe,
-        event.Flash.interval_ms ?? null
-      )
-      return
-    }
-    if ('Fade' in event) {
-      // フェード (#143) — fire-and-forget
-      this.screenEffects.startFade(
-        event.Fade.target,
-        event.Fade.color,
-        event.Fade.from_alpha,
-        event.Fade.to_alpha,
-        event.Fade.duration_ms
-      )
-      return
-    }
-    if ('Spotlight' in event) {
-      // 追うスポットライト点灯 (#693)。Flash/Fade と違い settled state（fire-and-forget ではない）。
-      // 'SpotlightOff'（文字列 variant）は本関数冒頭の `typeof event === 'string'` ブロックで処理する。
-      this.lightingLayer.set(
-        event.Spotlight.target ?? null,
-        event.Spotlight.color,
-        event.Spotlight.radius
-      )
       return
     }
     if ('Wait' in event) {
@@ -5040,7 +4602,7 @@ export class NovelRenderer {
       const spatialization =
         typeof current === 'object' && current !== null && 'Dialog' in current
           ? resolveVoiceSpatialization(
-              this.cameraMode,
+              this.stage.cameraMode,
               resolveCharacterXRatio(
                 normalizePosition(current.Dialog.position ?? 'center'),
                 CHARACTER_X_RATIO
@@ -5124,9 +4686,9 @@ export class NovelRenderer {
             )
           : 0.5,
         depth: dialog?.depth ?? 0,
-        mode: this.cameraMode,
-        orientation: this.cameraOrientation,
-        elevation: this.cameraElevation,
+        mode: this.stage.cameraMode,
+        orientation: this.stage.cameraOrientation,
+        elevation: this.stage.cameraElevation,
         fontFamily: resolvedFontFamily,
         fontSize: resolvedFontSize,
       })

@@ -171,6 +171,11 @@ export interface PartyMemberDef {
      * Phase 1 ではデータとして保持するだけ、ランタイム評価は #175 follow-up。
      */
     learns?: PartyLearns[];
+    /**
+     * 戦闘コマンド「わざ」の候補 (#873)。`[特技 id]` の id を書いた順に持つ（`わざ:` を複数行書ける）。
+     * 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
+     */
+    abilities?: string[];
 }
 
 /**
@@ -329,6 +334,46 @@ export interface SkillDef {
      * 予兆の文言（生文字列で透過。解釈は P2 #836）。
      */
     telegraph?: string;
+}
+
+/**
+ * 状態定義 (#870、状態異常システム)。`[状態 <id>] ... [/状態]` ブロックで書く。
+ *
+ * 毒・混乱・ゾンビ相当など、戦闘中に者へ付く状態を**宣言**で足すための土台。効果 DSL の
+ * `status <id>` が付け、ここに書いた内容（継続ダメージ・行動の乱れ・回復の反転など）が戦闘エンジンで働く。
+ * 定義の無い id の `status` は従来どおり「印が付くだけ」。
+ * 名前以外は生文字列で透過し、解釈と不正値の警告は runtime（`statusEffects.ts`）が行う（効果 DSL と同じ流儀）。
+ */
+export interface StatusDef {
+    id: string;
+    /**
+     * 表示名（戦闘の状態表示・ログに出る）。
+     */
+    name: string;
+    /**
+     * 既定の持続ターン数（`持続:`）。効果 DSL の `duration=` が優先。
+     */
+    duration?: string;
+    /**
+     * 手番の終わりの継続ダメージ（`継続ダメージ:` `1/16` / `5..8` / `5`）。JSON / TS 側のキーは `tickDamage`。
+     */
+    tickDamage?: string;
+    /**
+     * 行動の乱れ（`行動:` `不能` / `混乱` / `通常`）。
+     */
+    action?: string;
+    /**
+     * 回復・ダメージの反転（`反転:` `回復` / `ダメージ` をカンマ区切り）。
+     */
+    reverse?: string;
+    /**
+     * 解ける条件（`解除:` `被ダメージ`）。
+     */
+    cure?: string;
+    /**
+     * 持続が尽きたときの効果（`満了:` `戦闘不能`）。省略は単に解ける。
+     */
+    expire?: string;
 }
 
 /**
@@ -707,6 +752,12 @@ export interface Document {
      */
     battle_command_labels?: string;
     /**
+     * RPG 戦闘のコマンドの構成と順序 (#873)。`skill, spell, item, escape` のように id をカンマ区切りで並べる
+     * （id は attack / skill / spell / item / escape。未指定は既定の attack, spell, item, escape）。
+     * 値は生文字列で透過し、runtime 側で解釈する。GUI 専用。frontmatter `battle_commands:` から流す。
+     */
+    battle_commands?: string;
+    /**
      * RPG 戦闘の開始・終了の画面遷移 (#830)。`\"none\"`（既定・現行の挙動）/ `\"ff\"`（開始=操作キャラ付近を2段でズームして暗転、
      * 終了=黒を経由してフェードで戻る）。値は parser でバリデーションせず生文字列で透過し、runtime 側で未知値・空文字は
      * `\"none\"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。
@@ -839,7 +890,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { BackgroundBoard: { path: string; depth?: number } } | { Prop: { path: string; depth?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { BackgroundBoard: { path: string; depth?: number } } | { Prop: { path: string; depth?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 

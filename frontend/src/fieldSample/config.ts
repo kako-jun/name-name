@@ -28,9 +28,9 @@ import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
 import type { BattlePresentation } from '../game/battleMotion'
 import type { WindowStyle } from '../game/windowStyle'
-import type { CommandLayout } from '../game/battleCommands'
+import { parseCommandIds, type CommandId, type CommandLayout } from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
-import type { BattleItemEntry, BattleSpellEntry } from '../game/battleMenu'
+import type { BattleItemEntry, BattleSkillEntry, BattleSpellEntry } from '../game/battleMenu'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
 export const FACINGS: readonly Facing[] = ['up', 'down', 'left', 'right']
@@ -119,6 +119,8 @@ export interface FieldBattleConfig {
   windowStyle?: WindowStyle
   /** コマンド窓の配置 (#883)。`battle.commandLayout`: `grid` / `cross`。未指定は undefined＝既定（grid） */
   commandLayout?: CommandLayout
+  /** コマンドの構成と順序 (#873)。`battle.commands`: `["skill", "spell", "item", "escape"]`。未指定は undefined＝既定（attack / spell / item / escape） */
+  commands?: CommandId[]
   /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
   atb?: BattleAtbConfig
 }
@@ -163,11 +165,13 @@ export interface FieldSampleConfig {
   battle: FieldBattleConfig
   /**
    * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘サンプルと同じ書式）。`items`: 試作用の所持品（`count` が所持数。
-   * 本編の inventory とは無関係で、戦闘のたびに設定の値から始まる）。どちらも `battle.commandLayout: "cross"` のときだけ候補窓に出る。
+   * 本編の inventory とは無関係で、戦闘のたびに設定の値から始まる）。どちらも `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。
    * 未指定は空＝じゅもん・どうぐの窓が開かない（従来どおり）
    */
   spells: BattleSpellEntry[]
   items: BattleItemEntry[]
+  /** 「わざ」の候補 (#873)。味方全員共通（`id` / `name` / `target`〔特技の相対表現。既定 `相手単体`〕/ `effect` / `builtin`）。MP なし。`battle.commands` に `skill` があると `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。未指定は空 */
+  skills: BattleSkillEntry[]
   /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
   groupErrors?: EncounterGroupError[]
   /** 設定は読めたが効かない組み合わせの警告 (#883)。`layout: "front"` と `presentation: "ff"`／`commandLayout: "cross"` など。無ければ省略 */
@@ -609,6 +613,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!spells.ok) return spells
   const items = parseMenuList<BattleItemEntry>(raw.items, [], 'items')
   if (!items.ok) return items
+  const skills = parseMenuList<BattleSkillEntry>(raw.skills, [], 'skills')
+  if (!skills.ok) return skills
 
   const b = raw.battle === undefined ? {} : raw.battle
   if (!isObj(b)) return fail('battle はオブジェクトが必要です')
@@ -622,6 +628,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     return fail(`battle.windowStyle は "dark" か "ff-blue": ${JSON.stringify(b.windowStyle)}`)
   if (b.commandLayout !== undefined && b.commandLayout !== 'grid' && b.commandLayout !== 'cross')
     return fail(`battle.commandLayout は "grid" か "cross": ${JSON.stringify(b.commandLayout)}`)
+  let commands: CommandId[] | undefined
+  if (b.commands !== undefined) {
+    if (!Array.isArray(b.commands) || b.commands.some((c) => typeof c !== 'string'))
+      return fail(`battle.commands は文字列の配列が必要です: ${JSON.stringify(b.commands)}`)
+    commands = parseCommandIds((b.commands as string[]).join(','))
+    if (!commands || commands.length !== (b.commands as string[]).length)
+      return fail(
+        `battle.commands は attack / skill / spell / item / escape を重複なく並べてください: ${JSON.stringify(b.commands)}`
+      )
+  }
   if (b.atb !== undefined && b.atb !== 'on' && b.atb !== 'off')
     return fail(`battle.atb は "on" か "off": ${JSON.stringify(b.atb)}`)
   if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
@@ -698,6 +714,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       party,
       spells: spells.value,
       items: items.value,
+      skills: skills.value,
       battle: {
         layout: b.layout ?? 'side',
         spriteStyle: b.spriteStyle ?? 'none',
@@ -709,6 +726,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
+        ...(commands ? { commands } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
       },
       ...(groupErrors ? { groupErrors } : {}),

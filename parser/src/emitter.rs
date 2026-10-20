@@ -210,6 +210,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_command_labels: \"{sanitized}\"\n"));
         }
+        // battle_commands (#873)。同じ流儀
+        if let Some(ref v) = doc.battle_commands {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_commands: \"{sanitized}\"\n"));
+        }
         // battle_transition (#830)。同じ流儀
         if let Some(ref v) = doc.battle_transition {
             let sanitized = v.replace('"', "");
@@ -1070,6 +1075,11 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         out.push_str(&format!("習得: Lv{} {}\n", l.level, l.spell));
                     }
                 }
+                if let Some(abilities) = &p.abilities {
+                    for a in abilities {
+                        out.push_str(&format!("わざ: {a}\n"));
+                    }
+                }
                 out.push_str("[/パーティ]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1113,6 +1123,27 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     out.push_str(&format!("予兆: {t}\n"));
                 }
                 out.push_str("[/特技]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Status(st) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[状態 {}]\n", st.id));
+                out.push_str(&format!("名前: {}\n", st.name));
+                for (label, value) in [
+                    ("持続", &st.duration),
+                    ("継続ダメージ", &st.tick_damage),
+                    ("行動", &st.action),
+                    ("反転", &st.reverse),
+                    ("解除", &st.cure),
+                    ("満了", &st.expire),
+                ] {
+                    if let Some(v) = value {
+                        out.push_str(&format!("{label}: {v}\n"));
+                    }
+                }
+                out.push_str("[/状態]\n");
                 prev_was_dialog_or_text = false;
             }
             Event::RpgEvent { name, commands } => {
@@ -1807,6 +1838,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_commands: None,
             battle_transition: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
@@ -1952,9 +1984,27 @@ mod tests {
     }
 
     #[test]
+    fn emits_status_block() {
+        let doc = make_doc_with_event(Event::Status(StatusDef {
+            id: "poison".to_string(),
+            name: "どく".to_string(),
+            duration: Some("5".to_string()),
+            tick_damage: Some("1/16".to_string()),
+            action: None,
+            reverse: Some("回復, ダメージ".to_string()),
+            cure: Some("被ダメージ".to_string()),
+            expire: Some("戦闘不能".to_string()),
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("[状態 poison]\n名前: どく\n持続: 5\n継続ダメージ: 1/16\n"));
+        assert!(out.contains("反転: 回復, ダメージ\n解除: 被ダメージ\n満了: 戦闘不能\n[/状態]"));
+        assert!(!out.contains("行動:"));
+    }
+
+    #[test]
     fn round_trip_master_blocks() {
         // parse → emit → parse がフィールド一致で安定することを確認
-        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[モンスター slime]\n名前: スライム\nHP: 10\nATK: 3\nDEF: 1\nAGI: 2\nEXP: 2\nGOLD: 1\n[/モンスター]\n\n[呪文 ホイミ]\n名前: ホイミ\nMP: 4\n対象: 味方単体\n効果: heal 15..25\n[/呪文]\n\n[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n\n[特技 ink]\n名前: すみはき\n対象: 相手全体\n効果: damage 3..5\nメッセージ: {user}は 墨を はいた！\n予兆: ふるえている\n[/特技]\n";
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[モンスター slime]\n名前: スライム\nHP: 10\nATK: 3\nDEF: 1\nAGI: 2\nEXP: 2\nGOLD: 1\n[/モンスター]\n\n[呪文 ホイミ]\n名前: ホイミ\nMP: 4\n対象: 味方単体\n効果: heal 15..25\n[/呪文]\n\n[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n\n[特技 ink]\n名前: すみはき\n対象: 相手全体\n効果: damage 3..5\nメッセージ: {user}は 墨を はいた！\n予兆: ふるえている\n[/特技]\n\n[状態 poison]\n名前: どく\n持続: 4\n継続ダメージ: 1/16\n反転: 回復\n解除: 被ダメージ\n満了: 戦闘不能\n[/状態]\n";
         let doc1 = crate::parser::parse(input);
         let emitted = emit(&doc1);
         let doc2 = crate::parser::parse(&emitted);
@@ -2129,6 +2179,7 @@ mod tests {
             battle_atb_mode: None,
             battle_command_layout: None,
             battle_command_labels: None,
+            battle_commands: None,
             battle_transition: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,

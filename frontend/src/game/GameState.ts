@@ -58,7 +58,7 @@ export interface VideoState {
  * テキストより背面・全背面レイヤー（背景・背景板・動画・立ち絵・大道具）より前面に出る、
  * 画面ぴったりの単一スロット画像。
  * `back` が `'Hide'`（既定）のとき、全背面レイヤーは非表示になる（NovelRenderer.applyState /
- * processDirective が state.eventImage の有無・back 値を見て毎回宣言的に可視性をトグルする）。
+ * directives/stageDirectives.ts の `EventImage` ハンドラが state.eventImage の有無・back 値を見て毎回宣言的に可視性をトグルする）。
  * `'Keep'` は全背面レイヤーを裏で維持する（物証アップ/一時ズーム用途）。
  *
  * フェード時間（表示フェードイン/退場フェードアウト）は持たない。それは一度きりの transition

@@ -3,6 +3,7 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
+import type { StatusDef } from '../types'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
@@ -19,7 +20,12 @@ import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
 import type { AtbMode, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
-import type { BattleItemEntry, BattleMenuData, BattleSpellEntry } from '../game/battleMenu'
+import type {
+  BattleItemEntry,
+  BattleMenuData,
+  BattleSkillEntry,
+  BattleSpellEntry,
+} from '../game/battleMenu'
 
 export const SCREEN_SIZES = [
   { id: '360x640', width: 360, height: 640 },
@@ -74,7 +80,7 @@ export interface BattleSampleConfig {
   commandLayout: CommandLayout
   /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
   commandLabels: CommandLabels
-  /** 候補窓の呪文 (#204)。味方全員が使える（cross のときだけ「じゅもん」で開く）。MP が足りないものはグレー */
+  /** 候補窓の呪文 (#204)。味方全員が使える（grid でも cross でも「じゅもん」で開く）。MP が足りないものはグレー */
   spells: BattleSpellEntry[]
   /** 候補窓のアイテム (#204)。`count` は所持数（使うたびに BattleScreen が渡された entry の count を 1 減らす。呼び出し側は戦闘ごとに複製を渡す） */
   items: BattleItemEntry[]
@@ -88,6 +94,8 @@ export interface BattleSampleConfig {
   foreground: string | null
   /** 敵が使える特技 (#835)。設定 JSON の `skills`。`enemies[].actions` の候補の id から引く。既定は空 */
   skills: Record<string, SkillExecution>
+  /** 状態の宣言 (#870)。設定 JSON の `statuses`（`[状態]` と同じキー: id / name / duration / tickDamage / action / reverse / cure / expire）。既定は空 */
+  statuses: Record<string, StatusDef>
   party: BattleEntity[]
   enemies: BattleEntity[]
 }
@@ -200,6 +208,7 @@ export function defaultConfig(): BattleSampleConfig {
     perspective: SAMPLE_DEFAULT_PERSPECTIVE,
     foreground: null,
     skills: {},
+    statuses: {},
     party: defaultParty(),
     enemies: defaultEnemies(),
   }
@@ -426,11 +435,45 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
   return { ok: true, value: Object.fromEntries(entries) }
 }
 
-/** 設定 JSON の spells / items (#204) を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
-export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
+/**
+ * 設定 JSON の statuses (#870) を検証する。`[{ id, name?, duration?, tickDamage?, action?, reverse?, cure?, expire? }]`。
+ * `id` は必須。値は `[状態]` と同じ書式の文字列（解釈は `game/statusEffects.ts`）。`name` 省略は id
+ */
+function parseStatuses(raw: unknown): ParseResult<Record<string, StatusDef>> {
+  if (raw === undefined) return { ok: true, value: {} }
+  if (!Array.isArray(raw)) return { ok: false, error: 'statuses は配列である必要があります' }
+  const entries: [string, StatusDef][] = []
+  for (let i = 0; i < raw.length; i++) {
+    const r: unknown = raw[i]
+    const path = `statuses[${i}]`
+    if (!isRecord(r)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+    if (typeof r.id !== 'string' || r.id.trim() === '') {
+      return { ok: false, error: `${path}.id は空でない文字列である必要があります` }
+    }
+    const def: StatusDef = {
+      id: r.id.trim(),
+      name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : r.id.trim(),
+    }
+    for (const f of ['duration', 'tickDamage', 'action', 'reverse', 'cure', 'expire'] as const) {
+      const v = r[f]
+      if (v === undefined) continue
+      // 持続は数値でも書ける（`"duration": 3`）
+      const text = typeof v === 'number' && f === 'duration' ? String(v) : v
+      if (typeof text !== 'string') {
+        return { ok: false, error: `${path}.${f} は文字列である必要があります` }
+      }
+      if (text.trim() !== '') def[f] = text.trim()
+    }
+    entries.push([def.id, def])
+  }
+  return { ok: true, value: Object.fromEntries(entries) }
+}
+
+/** 設定 JSON の spells / items (#204) と skills（わざ、#873。MP なし・`target` は特技の相対表現で既定 `相手単体`）を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
+export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | BattleSkillEntry>(
   raw: unknown,
   fallback: T[],
-  key: 'spells' | 'items'
+  key: 'spells' | 'items' | 'skills'
 ): ParseResult<T[]> {
   if (raw === undefined) return { ok: true, value: fallback }
   if (!Array.isArray(raw)) return { ok: false, error: `${key} は配列である必要があります` }
@@ -458,7 +501,15 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry>(
       ...(typeof r.effect === 'string' ? { effect: r.effect } : {}),
       ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
     }
-    if (key === 'spells') {
+    if (key === 'skills') {
+      if (typeof r.target !== 'undefined' && typeof r.target !== 'string') {
+        return { ok: false, error: `${path}.target は文字列である必要があります` }
+      }
+      out.push({
+        ...base,
+        target: typeof r.target === 'string' ? r.target : '相手単体',
+      } as T)
+    } else if (key === 'spells') {
       if (typeof r.target !== 'undefined' && typeof r.target !== 'string') {
         return { ok: false, error: `${path}.target は文字列である必要があります` }
       }
@@ -593,6 +644,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!items.ok) return items
   const skills = parseSkills(raw.skills)
   if (!skills.ok) return skills
+  const statuses = parseStatuses(raw.statuses)
+  if (!statuses.ok) return statuses
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -655,6 +708,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       perspective: perspective.value,
       foreground,
       skills: skills.value,
+      statuses: statuses.value,
       party: party.value,
       enemies: enemies.value,
     },
@@ -753,7 +807,7 @@ export function buildBattleSetup(
     presentation: BattlePresentation
     commandLayout: CommandLayout
     commandLabels: CommandLabels
-    /** 候補窓の呪文・アイテム (#204)。commandLayout が cross のときだけ BattleScreen が使う */
+    /** 候補窓の呪文・アイテム (#204)。side の BattleScreen が grid でも cross でも使う */
     menu: BattleMenuData
     background?: string
     depth: BattleDepth | null
@@ -763,6 +817,8 @@ export function buildBattleSetup(
   atb?: BattleAtbConfig
   /** BattleEngine に渡す敵の特技 (#835) */
   skills: Record<string, SkillExecution>
+  /** BattleEngine に渡す状態の宣言 (#870) */
+  statuses: Record<string, StatusDef>
   width: number
   height: number
 } {
@@ -781,6 +837,7 @@ export function buildBattleSetup(
   return {
     ...(view.atb === 'on' ? { atb: { mode: view.atbMode } } : {}),
     skills: config.skills,
+    statuses: config.statuses,
     // front 配置は本編と同じく隊列を使わない（RaycastRenderer.partyDefToBattleEntity と同じ）
     party: applyFormation(party, view.layout === 'front' ? 'front' : view.formation),
     enemies: fill(

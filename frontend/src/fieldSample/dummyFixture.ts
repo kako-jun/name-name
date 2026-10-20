@@ -304,6 +304,11 @@ export function buildDummyFixture(): Record<string, unknown> {
       { id: 'heal', name: 'ヒール', mp: 2, target: '味方単体', effect: 'heal 15..25' },
       { id: 'meteor', name: 'メテオ', mp: 20, target: '敵全体', effect: 'damage 30..40' },
     ],
+    // 「わざ」(#873)。sit-by-me と同じ構成（たたかうを外して わざ・じゅもん・どうぐ・にげる）。MP なし
+    skills: [
+      { id: 'slash', name: 'きる', target: '相手単体', effect: 'damage 8..12' },
+      { id: 'sweep', name: 'なぎはらい', target: '相手全体', effect: 'damage 3..6' },
+    ],
     items: [
       { id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 },
       { id: 'ether', name: 'エーテル', effect: 'heal 1..1', count: 0 },
@@ -313,6 +318,7 @@ export function buildDummyFixture(): Record<string, unknown> {
       presentation: 'ff',
       windowStyle: 'ff-blue',
       commandLayout: 'cross',
+      commands: ['skill', 'spell', 'item', 'escape'],
       enemyGrid: '4x2',
       spriteStyle: 'none',
       width: 800,

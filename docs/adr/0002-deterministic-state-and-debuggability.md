@@ -173,10 +173,10 @@ confinement とは無関係に、`onEndCallback`（VideoExporter 専用）が未
 本 ADR の核心（演出の中間状態を持たない・完全にシリアライズ可能）にそのまま従う: 背景・立ち絵の
 フェードアウト自体は一度きりの見た目でしかなく、状態として確定するのは「背景も立ち絵もない
 終劇後」という終端値だけである。`getSnapshot()`/`applyState()` は他のフィールドと同様に
-`storyEnded` をそのまま往復し（goBack/seekTo/startFrom/loadFromSaveData いずれも即時反映、
+`storyEnded` をそのまま往復し（goBack/seekTo/startFrom/loadFromSaveData いずれも即時反映。終劇中の goBack/seekTo はガードで no-op、#815。
 フェードの再生はしない）。ただしセーブだけは例外で、`saveSlotToGameState` は常に `false` を返す
 （セーブは終劇状態を持ち越さない設計。終劇後の eventIndex をそのままセーブすると、ロード時に
-「`storyEnded=false` なのに choice イベント位置で止まっている」行き止まりになるため）。
+「`storyEnded=false` なのに choice イベント位置で止まっている」行き止まりになるため。ここでの「行き止まり」は不具合の詰み状態の意味で、意図した終端である終劇とは別、#815）。
 `quickSave()`/`openSaveMenu()` は `storyEnded` 中は no-op（終劇後のセーブによる行き止まり防止）、
 `quickLoad()`/`openLoadMenu()` は許可する（脱出手段として維持）。
 
@@ -208,7 +208,7 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 ## 関連
 
 - `GameState.ts`: `NovelGameState` 定義
-- `NovelRenderer.ts`: `applyState`（背景の復元は #828 7a で `BackgroundController.restore` へ、暗転の復元は #828 7b で `ScreenEffectsController.restore` へ移った。背景のクロスフェード中間状態・揺れ/フラッシュ/フェード/スクリム退避の中間状態をシリアライズに持たない規律は不変）、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定と、セーブ復元〔`SaveController.loadFromSaveData`、#827 で移設〕の共通コア。後者は `enter({ kind: 'restore' })` 経由で到達する）、`seekTo`、`advance`（選択肢なし消化時の終劇、#470）、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`endStory`（確定済みの confinement は `SceneEntryController` の `confinedSceneIds`。旧 `setConfinedSceneIds` は #734 PR2 で廃止）
+- `NovelRenderer.ts`: `applyState`（背景の復元は #828 7a で `BackgroundController.restore` へ、暗転の復元は #828 7b で `ScreenEffectsController.restore` へ移り、背景・暗転・輪郭・カメラ3つ組の復元と中間状態の消去は #828 7c で `Stage.restore` に集約された。背景のクロスフェード中間状態・揺れ/フラッシュ/フェード/スクリム退避の中間状態をシリアライズに持たない規律は不変）、`startFrom`（`eventIndex=0` は `startScene` の fresh-start 経路、#399）、`restoreToScene`（startFrom の途中局面指定と、セーブ復元〔`SaveController.loadFromSaveData`、#827 で移設〕の共通コア。後者は `enter({ kind: 'restore' })` 経由で到達する）、`seekTo`、`advance`（選択肢なし消化時の終劇、#470）、`jumpToScene`、`processDirective`（Choice 短絡での終劇、#398）、`endStory`（確定済みの confinement は `SceneEntryController` の `confinedSceneIds`。旧 `setConfinedSceneIds` は #734 PR2 で廃止）
 - `frontend/src/game/sceneQuery.ts` / `frontend/src/game/sceneConfinement.ts`: `?scene=` パーサ・confinement 判定（#386）
 - `docs/architecture.md`: 「状態管理: NovelGameState」セクション、「production 向けシーン直接ディープリンク `?scene=`」セクション
 - `docs/guide/debugger.md`: `debug_scene`（#652で production 常時有効化）の使い方ガイド

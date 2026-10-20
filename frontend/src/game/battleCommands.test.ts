@@ -3,6 +3,7 @@ import {
   COMMAND_DEFAULTS,
   crossKeyToCommandId,
   normalizeCommandLayout,
+  parseCommandIds,
   parseCommandLabels,
   resolveCommandSpecs,
 } from './battleCommands'
@@ -109,5 +110,71 @@ describe('battleCommands: 追加の観点 (#204)', () => {
 
   it.each(['arrowup', 'Up', '', 'W'])('crossKeyToCommandId: %j は undefined', (key) => {
     expect(crossKeyToCommandId(key)).toBeUndefined()
+  })
+})
+
+describe('battle_commands: コマンドの構成と順序 (#873)', () => {
+  it('parseCommandIds: 順序どおり・未知 id/空/重複は無視・大小無視・全角カンマ可', () => {
+    expect(parseCommandIds('skill, spell, item, escape')).toEqual([
+      'skill',
+      'spell',
+      'item',
+      'escape',
+    ])
+    expect(parseCommandIds(' ESCAPE ，Skill, foo, , skill, escape')).toEqual(['escape', 'skill'])
+    expect(parseCommandIds('attack')).toEqual(['attack'])
+  })
+
+  it.each([undefined, null, '', '  ', ',,', 'foo, bar'])(
+    'parseCommandIds: %j は undefined（既定のまま）',
+    (raw) => {
+      expect(parseCommandIds(raw)).toBeUndefined()
+    }
+  )
+
+  it('resolveCommandSpecs: ids を渡すとその順序・個数になり、わざの既定名は「わざ」', () => {
+    const specs = resolveCommandSpecs(null, ['skill', 'spell', 'item', 'escape'])
+    expect(specs.map((s) => s.id)).toEqual(['skill', 'spell', 'item', 'escape'])
+    expect(specs.map((s) => s.label)).toEqual(['わざ', 'じゅもん', 'どうぐ', 'にげる'])
+    expect(resolveCommandSpecs({ skill: '刀' }, ['skill', 'escape']).map((s) => s.label)).toEqual([
+      '刀',
+      'にげる',
+    ])
+  })
+
+  it('resolveCommandSpecs: ids が未指定・空なら既定の 4 つ（不変）', () => {
+    const ids = COMMAND_DEFAULTS.map((c) => c.id)
+    expect(resolveCommandSpecs(null, undefined).map((s) => s.id)).toEqual(ids)
+    expect(resolveCommandSpecs(null, []).map((s) => s.id)).toEqual(ids)
+    expect(ids).toEqual(['attack', 'spell', 'item', 'escape'])
+  })
+
+  it('parseCommandLabels: skill=刀 を受ける', () => {
+    expect(parseCommandLabels('skill=刀')).toEqual({ skill: '刀' })
+  })
+
+  it('crossKeyToCommandId: 位置で決まる（先頭=↑・2 番目=←・3 番目=→・4 番目=↓）。並びに無い位置は undefined', () => {
+    const ids = ['skill', 'spell', 'item', 'escape'] as const
+    expect(
+      ['ArrowUp', 'ArrowLeft', 'ArrowRight', 'ArrowDown'].map((k) => crossKeyToCommandId(k, ids))
+    ).toEqual(['skill', 'spell', 'item', 'escape'])
+    expect(crossKeyToCommandId('ArrowDown', ['skill', 'escape'])).toBeUndefined()
+    // 未指定は従来どおり
+    expect(crossKeyToCommandId('ArrowUp')).toBe('attack')
+    expect(crossKeyToCommandId('ArrowDown', [])).toBe('escape')
+  })
+
+  it('コマンドが 3 つ（attack 抜きなど）でも grid のセルが窓からはみ出さない', () => {
+    const cells = computeCommandCells({ x: 0, y: 0, w: 200, h: 80 }, 3, 'grid')
+    expect(cells).toHaveLength(3)
+    for (const c of cells) {
+      expect(c.x).toBeGreaterThanOrEqual(0)
+      expect(c.x + c.w).toBeLessThanOrEqual(200)
+      expect(c.y + c.h).toBeLessThanOrEqual(80)
+    }
+    // cross は 4 つのときだけ（3 つは grid に倒れる）
+    expect(computeCommandCells({ x: 0, y: 0, w: 200, h: 90 }, 3, 'cross')).toEqual(
+      computeCommandCells({ x: 0, y: 0, w: 200, h: 90 }, 3, 'grid')
+    )
   })
 })

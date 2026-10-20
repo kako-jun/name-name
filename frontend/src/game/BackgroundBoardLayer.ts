@@ -166,7 +166,7 @@ export class BackgroundBoardLayer extends Container {
 
   /**
    * 全ての板を即座に消去する（`[場面転換]` / 新しいシーンの開始時）。既存の単一画像背景の
-   * `clearBackground()` と対になる操作——`processDirective` の `SceneTransition` 分岐、
+   * `clearBackground()` と対になる操作——`directives/stageDirectives.ts` の `SceneTransition` ハンドラ（旧 processDirective の分岐）、
    * `resetAndStartEvents` の非 preserve 分岐から呼ばれる想定。フェード等の退場演出は持たない
    * （Issue #683 のスコープはスライドイン＝追加時の演出のみ）。
    */

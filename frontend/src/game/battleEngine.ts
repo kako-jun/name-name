@@ -18,14 +18,26 @@
  * 敵の特技 (#834): `performSkill` は「ある者が特技を 1 回使う」内部 API。敵の行動選択（`enemyAi.ts` の `chooseEnemyAction`、#835）の結果を
  * 従来ターン制の `runEnemyTurn` と ATB の `runAtbEnemyAction` が実行するときに呼ぶ。この API 自体はターン・ATB ゲージ・勝敗判定を進めない（呼び出し側が行う）。
  *
+ * 状態異常 (#870): `[状態]` で宣言した状態（`BattleEngineOptions.statuses`）だけが働く。状態は**その者の手番の終わり**に進み
+ * （継続ダメージ → 持続 -1 → 尽きたら解除。満了で戦闘不能もある）、行動不能・混乱の者は手番を自動で解決する。
+ * 宣言の無い戦闘・宣言の無い印（属性欄の耐性も当てない）は、乱数の消費を含めて従来と完全に同じ。
+ *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
  * - 敵の builtin: での挙動委譲
- * - ターン跨ぎ状態異常の減衰
  */
 
 import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
-import { applyEffect, parseEffect } from './spellDsl'
+import { applyEffect, parseEffect, rollRange } from './spellDsl'
+import type { StatusDef } from '../types'
+import {
+  activeStatusRules,
+  blockingAction,
+  buildStatusRules,
+  statusLabels,
+  type StatusRule,
+} from './statusEffects'
+import { applyAffinityToDamage, DEATH_ATTRIBUTE, resolveAffinity } from './affinity'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
 import { isReviveEntry } from './battleMenu'
 import {
@@ -41,8 +53,8 @@ import {
   type EnemyMemory,
   type HitSource,
 } from './enemyAi'
-import { hasOwn } from './ownProperty'
-import { applyDamageToHp, clampDamage } from './battleLimits'
+import { hasOwn, safeAssign } from './ownProperty'
+import { applyDamageToHp, clampDamage, clampHp } from './battleLimits'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -84,6 +96,11 @@ export interface BattleHit {
    * 1 回のダメージの上限 9999 の対象外（即死は上限を超える HP も 0 にする）。HP ゲージは `hpAfter`（0）へ向かう
    */
   instantDeath?: boolean
+  /**
+   * 状態による回復・ダメージの反転 (#870) で向きが入れ替わったヒット。`kind` は実際に起きた向き（回復が反転してダメージなら `damage`）。
+   * 元の技の種類を知りたい消費側（ラーニング判定など）の印で、エンジン自身は参照しない
+   */
+  reversed?: boolean
 }
 
 /**
@@ -94,7 +111,11 @@ export interface BattleActionEvent {
   /** 戦闘開始からの通し番号（0 始まり） */
   seq: number
   actor: BattleActorRef
-  kind: 'attack' | 'spell' | 'item' | 'skill' | 'notice'
+  /**
+   * `status` (#870) = 状態異常の継続ダメージ・満了による戦闘不能。`actor` と `hits[0].target` は状態が付いている本人、`label` は状態名。
+   * 本人は動かず、ダメージ数字だけが出る
+   */
+  kind: 'attack' | 'spell' | 'item' | 'skill' | 'notice' | 'status'
   /**
    * FF 式メッセージ窓に出す短い言葉。呪文・アイテム・特技 (#834) の名前、または `notice`（行動が成立しなかったことの知らせ。
    * 「にげられない！」「MPが たりない！」）の文言。通常攻撃は undefined
@@ -110,6 +131,11 @@ export interface BattleActionEvent {
    */
   omen?: string
   hits: BattleHit[]
+  /**
+   * この行動を記録した時点の、全員の状態名（付いた順。宣言した状態だけ。`party[i]` / `enemies[i]` の順）(#870)。
+   * FF 式の演出が、HP の数字と同じく再生位置で状態名を切り替えるために読む。`[状態]` の宣言が無い戦闘では付かない
+   */
+  statusLabels?: { party: string[][]; enemies: string[][] }
 }
 
 export interface BattleState {
@@ -141,6 +167,8 @@ export interface BattleState {
 }
 
 const LOG_MAX = 30
+/** 警告を出した状態の宣言（`id` + 文面）。同じ宣言の警告を戦闘のたびに繰り返さない (#870) */
+const warnedStatusDefs = new Set<string>()
 /** 特技の対象の相対表現 (#834)。これ以外の値・省略は相手単体の扱い */
 const SKILL_TARGETS = ['相手単体', '相手全体', '自分', '仲間単体', '仲間全体']
 const EVENT_MAX = 30
@@ -194,6 +222,11 @@ export interface BattleEngineOptions {
    * 候補の id がここに無ければ、その行動は通常攻撃になる。エンジンはマスター参照を持たないので呼び出し側が渡す
    */
   skills?: Record<string, SkillExecution>
+  /**
+   * 状態の宣言 (#870)。マスターの `[状態]`（id → `StatusDef`）。宣言した id だけが継続ダメージ・行動不能・回復の反転などで働く。
+   * 無い・空は従来どおり（`status` は印が付くだけ）。エンジンはマスター参照を持たないので呼び出し側が渡す
+   */
+  statuses?: Record<string, StatusDef>
 }
 
 export class BattleEngine {
@@ -205,6 +238,21 @@ export class BattleEngine {
   private skills: Record<string, SkillExecution>
   /** 見つからない特技 id の警告を出した印（1 戦闘に 1 度だけ） */
   private warnedSkills = new Set<string>()
+  /** 状態の規則 (#870)。`statuses` を解釈したもの。空なら状態異常の処理は一切走らない（従来どおり） */
+  private statusRules: Record<string, StatusRule> = {}
+  private hasStatusRules = false
+  /** 行動不能・混乱の味方の手番を自動で解決している最中（再入防止） */
+  private autoResolving = false
+  /** 状態名の控え（イベントの `statusLabels`）を付け始めたか。状態が一度でも付いたら true */
+  private statusLabelsSeen = false
+  /**
+   * 今の手番の中で付いた状態の記録 (#870)。`applier` が `target` に `key` を書いた（付与者は問わない: 自分への付与も、
+   * 味方の手番中に敵の反撃・死亡時の行動が付けた状態も含む）。`target` の手番の終わり（`tickStatuses`）はこの分を 1 度だけ飛ばし、
+   * 手番の終わりごとに全部消す（付けた直後に目減りしない。敵が味方に付けた状態は、敵の手番の終わりに記録が消えるので味方の次の手番まで減らない）
+   */
+  private freshStatuses: { applier: BattleEntity; target: BattleEntity; key: string }[] = []
+  /** 今の行動で状態を付けられた・解かれた者。HP が動かなくても MISS にしない（`recordEffect` が使って空にする） */
+  private statusTouched = new Set<BattleEntity>()
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -220,6 +268,23 @@ export class BattleEngine {
     }
     this.rng = opts.rng ?? Math.random
     this.skills = opts.skills ?? {}
+    if (opts.statuses) {
+      this.statusRules = buildStatusRules(opts.statuses)
+      this.hasStatusRules = Object.keys(this.statusRules).length > 0
+      // 最初から状態が付いている者がいれば、状態名の控え（イベントの `statusLabels`）は最初のイベントから付ける
+      this.statusLabelsSeen =
+        this.hasStatusRules &&
+        [...party, ...enemies].some((en) => statusLabels(en, this.statusRules).length > 0)
+      // 宣言の不正値の警告は、同じ状態・同じ文面なら 1 度だけ（戦闘のたびに出さない）
+      for (const rule of Object.values(this.statusRules)) {
+        for (const w of rule.warnings) {
+          const key = `${rule.id}\u0000${w}`
+          if (warnedStatusDefs.has(key)) continue
+          warnedStatusDefs.add(key)
+          console.warn(`[name-name] 状態 '${rule.id}': ${w}`)
+        }
+      }
+    }
     const memory = createEnemyMemory(enemies)
     if (memory) this.state.enemyMemory = memory
     if (opts.atb) {
@@ -228,6 +293,18 @@ export class BattleEngine {
     }
     const enemyNames = enemies.map((e) => e.name).join(' と ')
     this.appendLog(`${enemyNames} が あらわれた！`)
+    // 最初から行動不能・混乱の味方が先頭なら、入力を待たずに解決する (#870)
+    this.autoResolveParty()
+  }
+
+  /** 宣言された状態の規則 (#870)。表示（状態名）が引く。宣言が無ければ空 */
+  getStatusRules(): Readonly<Record<string, StatusRule>> {
+    return this.statusRules
+  }
+
+  /** 者に付いている宣言済みの状態の表示名（付いた順）(#870)。宣言が無い戦闘は常に空 */
+  getStatusLabels(entity: BattleEntity): string[] {
+    return this.hasStatusRules ? statusLabels(entity, this.statusRules) : []
   }
 
   getState(): Readonly<BattleState> {
@@ -264,6 +341,7 @@ export class BattleEngine {
   /** 「たたかう」: 指定敵に通常攻撃。ターゲット未指定なら最初に生きてる敵 */
   selectAttack(targetId?: string): void {
     if (this.state.phase !== 'party-input') return
+    if (this.refuseIfBlocked()) return
     const hero = this.currentActor()
     if (!hero) return
     const target = targetId
@@ -308,10 +386,12 @@ export class BattleEngine {
       const cur = this.currentActorIndex()
       const idx = cur !== -1 ? cur : this.fullestAliveIndex(atb)
       this.recordNotice(idx !== -1 ? this.state.party[idx] : undefined, 'にげられない！')
+      this.endPartyTurnStatuses(idx)
       if (idx !== -1) this.finishAtbAction(idx)
       this.settleAtbPhase()
     } else {
       this.recordNotice(this.currentActor() ?? undefined, 'にげられない！')
+      this.endPartyTurnStatuses(-1)
       this.runEnemyTurn()
     }
   }
@@ -347,8 +427,13 @@ export class BattleEngine {
           if (m && m.hp > 0 && !atb.queue.includes(who.index)) atb.queue.push(who.index)
         } else {
           this.runAtbEnemyAction(atb, who.index)
+          // 死亡時の行動などで手番の終わりのあとに付いた状態の記録を、次の手番へ持ち越さない (#870)
+          this.freshStatuses = []
         }
       }
+      // 行動不能・混乱の味方は入力待ちに入った時点で解決する (#870)。待機（wait）の時間停止に巻き込まない
+      // （フェーズをコマンド待ちに整えてから解決する。宣言の無い戦闘は従来どおり何もしない）
+      if (this.hasStatusRules) this.settleAtbPhase()
     }
     this.settleAtbPhase()
   }
@@ -362,6 +447,7 @@ export class BattleEngine {
    */
   selectSpell(spell: SpellExecution, targetId?: string): void {
     if (this.state.phase !== 'party-input') return
+    if (this.refuseIfBlocked()) return
     const caster = this.currentActor()
     if (!caster) return
     if (caster.mp < spell.mp) {
@@ -379,11 +465,21 @@ export class BattleEngine {
       caster,
       targets,
       rng: this.rng,
+      statusRules: this.statusRules,
+      onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
       pool: this.poolOf(caster, targets),
-      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onAmount: (t, kind, amount, reversed) =>
+        amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
       onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
-      onHit: (t, kind, amount, round) =>
-        multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
+      onHit: (t, kind, amount, round, reversed) =>
+        multi.push({
+          target: t,
+          kind,
+          amount,
+          round,
+          hpAfter: t.hp,
+          ...(reversed ? { reversed: true } : {}),
+        }),
     }
     const hpSnapshot = this.snapshotHp()
     const lines = spell.builtin
@@ -413,6 +509,39 @@ export class BattleEngine {
     )
   }
 
+  /**
+   * 「わざ」(#873): 味方が特技（刀のアビリティ）を 1 回使う。MP は消費しない。効果・対象の解決は `performSkill` と同じ
+   * （対象は使う側から見た相対表現 `相手単体` / `相手全体` / `仲間単体` / `仲間全体` / `自分`。`targetId` は単体のときだけ効く）。
+   * 敵の `受けた=物理` 条件は、わざ（アビリティ）にも成立する（通常こうげきが無いゲームでも条件が働くように、
+   * 反応カテゴリは `physical` で、`受けた=わざ名` の名前指定は無い）。
+   * 入力待ちでない・使い手がいない・使えなかったときは何も起きず false。使えたら true。
+   */
+  selectSkill(skill: SkillExecution, targetId?: string): boolean {
+    if (this.state.phase !== 'party-input') return false
+    if (this.refuseIfBlocked()) return false
+    const caster = this.currentActor()
+    if (!caster) return false
+    const user = this.refOf(caster)
+    if (!user) return false
+    let target: BattleActorRef | undefined
+    if (targetId) {
+      const pi = this.state.party.findIndex((e) => e.id === targetId)
+      const ei = pi === -1 ? this.state.enemies.findIndex((e) => e.id === targetId) : -1
+      if (pi !== -1) target = { side: 'party', index: pi }
+      else if (ei !== -1) target = { side: 'enemy', index: ei }
+    }
+    const hpSnapshot = this.snapshotHp()
+    if (!this.performSkill(user, skill, target)) return false
+    this.advanceAfterPartyAction(
+      this.reactionOf(
+        caster,
+        { category: 'physical', name: skill.name, type: spellDamageType(skill) },
+        hpSnapshot
+      )
+    )
+    return true
+  }
+
   /** 行動を選べなかった理由を、MP 不足と同じ経路（ログ＋窓の知らせ）で出す。入力待ちの味方がいるときだけ。状態は変えない */
   notifyBlocked(label: string): void {
     if (this.state.phase !== 'party-input') return
@@ -423,6 +552,7 @@ export class BattleEngine {
   /** 「どうぐ」: アイテムを使用。実際に使えたら true、行動が成立しなかった（入力待ちでない等）ら false */
   selectItem(item: ItemExecution, targetId?: string): boolean {
     if (this.state.phase !== 'party-input') return false
+    if (this.refuseIfBlocked()) return false
     const user = this.currentActor()
     if (!user) return false
     this.appendLog(`${user.name} は ${item.name} を つかった！`)
@@ -434,11 +564,21 @@ export class BattleEngine {
       caster: user,
       targets,
       rng: this.rng,
+      statusRules: this.statusRules,
+      onStatus: (t, key, change) => this.noteStatus(user, t, key, change),
       pool: this.poolOf(user, targets),
-      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onAmount: (t, kind, amount, reversed) =>
+        amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
       onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
-      onHit: (t, kind, amount, round) =>
-        multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
+      onHit: (t, kind, amount, round, reversed) =>
+        multi.push({
+          target: t,
+          kind,
+          amount,
+          round,
+          hpAfter: t.hp,
+          ...(reversed ? { reversed: true } : {}),
+        }),
     }
     const hpSnapshot = this.snapshotHp()
     const lines = item.builtin
@@ -511,11 +651,21 @@ export class BattleEngine {
       caster,
       targets,
       rng: this.rng,
+      statusRules: this.statusRules,
+      onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
       pool: this.poolOf(caster, targets),
-      onAmount: (t, kind, amount) => amounts.set(t, { kind, amount }),
+      onAmount: (t, kind, amount, reversed) =>
+        amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
       onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
-      onHit: (t, kind, amount, round) =>
-        multi.push({ target: t, kind, amount, round, hpAfter: t.hp }),
+      onHit: (t, kind, amount, round, reversed) =>
+        multi.push({
+          target: t,
+          kind,
+          amount,
+          round,
+          hpAfter: t.hp,
+          ...(reversed ? { reversed: true } : {}),
+        }),
     }
     const hpSnapshot = this.snapshotHp()
     // 効果も builtin も無い特技は、予兆・メッセージだけの演出用（ログの警告も、対象の MISS も出さない）
@@ -554,6 +704,8 @@ export class BattleEngine {
     const idx = atb ? this.currentActorIndex() : -1
     // 被弾した敵の反撃と、倒れた敵の死亡時の行動 (#837)。勝敗はこのあとの 1 か所だけで判定する（二重にならない）
     if (react) this.reactToPartyAction(react)
+    // 味方の手番の終わりに状態を進める (#870)。継続ダメージで倒れた味方も、下の勝敗判定・掃除に流れる
+    this.endPartyTurnStatuses(idx)
     if (atb) {
       // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）。
       // 倒れた味方の掃除と勝敗は settleAtbPhase に一本化する（同時全滅は敗北優先、#877）
@@ -647,6 +799,7 @@ export class BattleEngine {
     })
     if (this.checkEnd()) return
     this.state.phase = atb.queue.length > 0 ? 'party-input' : 'atb-running'
+    this.autoResolveParty()
   }
 
   /** 全滅 / 殲滅していれば終了フェーズへ。終了したら true */
@@ -732,6 +885,16 @@ export class BattleEngine {
     if (!enemy || enemy.hp <= 0) return
     const alive = this.state.party.filter((p) => p.hp > 0)
     if (alive.length === 0) return
+    // 行動不能・混乱の敵 (#870): 行動を選ばず、手番を状態に従って過ごす（行動回数・順番の記憶は進めない）
+    const block = this.actorBlock(enemy)
+    if (block) {
+      this.runBlockedEnemy(enemy, block)
+      this.tickStatuses(enemy)
+      this.resolveDeaths()
+      this.pruneDownedParty(atb)
+      this.checkEnd()
+      return
+    }
     const choice = this.decideEnemyAction(enemyIndex)
     if (choice.kind === 'skill' && this.useEnemySkill(enemyIndex, choice)) {
       // 特技で倒れた味方は、通常攻撃で倒れたときと同じくコマンド待ち・ゲージから外す
@@ -741,6 +904,7 @@ export class BattleEngine {
         atb.partyGauge[i] = 0
       })
       this.countEnemyAction(enemyIndex, choice)
+      this.tickStatuses(enemy)
       this.resolveDeaths()
       this.pruneDownedParty(atb)
       this.checkEnd()
@@ -761,6 +925,7 @@ export class BattleEngine {
       atb.partyGauge[idx] = 0
     }
     this.countEnemyAction(enemyIndex, choice, true)
+    this.tickStatuses(enemy)
     this.resolveDeaths()
     this.pruneDownedParty(atb)
     this.checkEnd()
@@ -944,11 +1109,25 @@ export class BattleEngine {
       if (enemy.hp === 0) continue
       const firstHero = this.firstAlive(this.state.party)
       if (!firstHero) break
+      // 行動不能・混乱の敵 (#870)。味方陣営が減るのは混乱した敵が味方の敵を殴るときだけだが、敵が倒れうるので勝敗を見直す印を立てる
+      const block = this.actorBlock(enemy)
+      if (block) {
+        usedSkill = true
+        this.runBlockedEnemy(enemy, block)
+        this.tickStatuses(enemy)
+        this.resolveDeaths()
+        // 死亡時の行動で付いた状態の記録は、次の敵の手番の終わりまで持ち越さない (#870)
+        this.freshStatuses = []
+        continue
+      }
       const choice = this.decideEnemyAction(i)
       if (choice.kind === 'skill' && this.useEnemySkill(i, choice)) {
         usedSkill = true
         this.countEnemyAction(i, choice)
+        this.tickStatuses(enemy)
         this.resolveDeaths()
+        // 死亡時の行動で付いた状態の記録は、次の敵の手番の終わりまで持ち越さない (#870)
+        this.freshStatuses = []
         continue
       }
       const hero = this.pickedParty(choice) ?? firstHero
@@ -961,7 +1140,17 @@ export class BattleEngine {
         this.appendLog(`${hero.name} は たおれた！`)
       }
       this.countEnemyAction(i, choice, true)
+      if (this.hasStatusRules) {
+        // 継続ダメージ・満了で敵が倒れうる (#870)
+        usedSkill = true
+        this.tickStatuses(enemy)
+        this.resolveDeaths()
+        // 死亡時の行動で付いた状態の記録は、次の敵の手番の終わりまで持ち越さない (#870)
+        this.freshStatuses = []
+      }
     }
+    // 敵側の手番の終わりに、今の手番で付いた状態の記録を持ち越さない (#870)
+    this.freshStatuses = []
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
       this.appendLog('ぜんめつ してしまった……')
@@ -973,6 +1162,7 @@ export class BattleEngine {
       return
     }
     this.state.phase = 'party-input'
+    this.autoResolveParty()
   }
 
   private resolveSpellTargets(spell: SpellExecution, targetId?: string): BattleEntity[] {
@@ -1101,6 +1291,7 @@ export class BattleEngine {
     const actorRef = this.refOf(actor)
     const targetRef = this.refOf(target)
     if (!actorRef || !targetRef) return
+    this.breakOnDamage(target, hpBefore)
     this.pushEvent({
       actor: actorRef,
       kind: 'attack',
@@ -1138,6 +1329,14 @@ export class BattleEngine {
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
+    // この行動で状態を付けられた・解かれた者（HP が動かなくても MISS にしない）。次の行動へ持ち越さない (#870)
+    const touched = this.statusTouched
+    this.statusTouched = new Set()
+    // HP が減って生き残った者の「被ダメージで解ける」状態を解く (#870)
+    for (const e of [...this.state.party, ...this.state.enemies]) {
+      const b = before.get(e)
+      if (b !== undefined) this.breakOnDamage(e, b)
+    }
     const hits: BattleHit[] = []
     // 複数ヒット (#879): 効果が 1 ヒットごとに通知したときは、その列（再生順）をそのまま hits にする。
     // HP は直前のヒットから連鎖させる（各対象の最初の hpBefore は行動前の HP）
@@ -1155,6 +1354,7 @@ export class BattleEngine {
           hpBefore,
           hpAfter: h.hpAfter,
           round: h.round,
+          ...(h.reversed ? { reversed: true } : {}),
         })
       }
       this.pushEvent({
@@ -1173,6 +1373,7 @@ export class BattleEngine {
       if (!ref) continue
       // 計算上の量（オーバーキル・回復の上限切りを含む）が通知されていればそれを数字にする。無ければ HP の前後差
       const computed = amounts.get(e)
+      const rv = computed?.reversed ? { reversed: true as const } : {}
       if (computed?.kill && e.hp < hpBefore) {
         // 即死 (#877): 数字を持たない。amount は HP の前後差（hpBefore - hpAfter）で、表示は instantDeath を見て「たおれた」だけにする
         hits.push({
@@ -1194,6 +1395,7 @@ export class BattleEngine {
           ),
           hpBefore,
           hpAfter: e.hp,
+          ...rv,
         })
       } else if (computed?.kind === 'heal' && computed.amount > 0 && targets.includes(e)) {
         // HP が変わらなかったが量はある（満タンへの回復）。数字は計算上の量
@@ -1203,6 +1405,7 @@ export class BattleEngine {
           amount: computed.amount,
           hpBefore,
           hpAfter: e.hp,
+          ...rv,
         })
       } else if (computed?.kind === 'damage' && computed.amount === 0 && hpBefore > 0) {
         // 計算上のダメージが 0（防御が上回るなど）は MISS でなく「0」。MISS は回避・無効（耐性 0）のときだけ
@@ -1217,7 +1420,11 @@ export class BattleEngine {
         })
       } else if (e.hp > hpBefore) {
         hits.push({ target: ref, kind: 'heal', amount: e.hp - hpBefore, hpBefore, hpAfter: e.hp })
-      } else if (targets.includes(e) && !(computed?.kind === 'heal' && computed.amount === 0)) {
+      } else if (
+        targets.includes(e) &&
+        !touched.has(e) &&
+        !(computed?.kind === 'heal' && computed.amount === 0)
+      ) {
         // 回復量 0 で HP も変わらない対象は MISS にしない（予兆だけの特技など）
         hits.push({ target: ref, kind: 'miss', amount: 0, hpBefore, hpAfter: e.hp })
       }
@@ -1240,7 +1447,25 @@ export class BattleEngine {
   }
 
   private pushEvent(e: Omit<BattleActionEvent, 'seq'>): void {
-    this.state.events.push({ seq: this.state.eventTotal, ...e })
+    // 倒れた者は宣言した状態を全部失う (#870)。行動の結果の HP はすべて、記録の前に確定している
+    this.clearDownedStatuses()
+    // 状態名の控え。状態が一度も付いていない間は付けない（宣言だけして使わない戦闘は、イベントも従来と同じ）。
+    // 一度付いたあとは、全員の状態が消えたことも伝えるため付け続ける
+    let labelsSnap: { party: string[][]; enemies: string[][] } | undefined
+    if (this.hasStatusRules) {
+      const snap = {
+        party: this.state.party.map((p) => this.getStatusLabels(p)),
+        enemies: this.state.enemies.map((en) => this.getStatusLabels(en)),
+      }
+      const any = [...snap.party, ...snap.enemies].some((l) => l.length > 0)
+      if (any || this.statusLabelsSeen) labelsSnap = snap
+      if (any) this.statusLabelsSeen = true
+    }
+    this.state.events.push({
+      seq: this.state.eventTotal,
+      ...e,
+      ...(labelsSnap ? { statusLabels: labelsSnap } : {}),
+    })
     this.state.eventTotal++
     if (this.state.events.length > EVENT_MAX) this.state.events.shift()
   }
@@ -1249,6 +1474,249 @@ export class BattleEngine {
     this.state.log.push(line)
     this.state.logTotal++
     if (this.state.log.length > LOG_MAX) this.state.log.shift()
+  }
+
+  // ===== 状態異常 (#870) =====
+
+  /** 者の行動の乱れ。宣言が無い戦闘は常に null */
+  private actorBlock(entity: BattleEntity): ReturnType<typeof blockingAction> {
+    return this.hasStatusRules ? blockingAction(entity, this.statusRules) : null
+  }
+
+  /**
+   * 手番が来た味方が行動不能・混乱なら、入力を受けずエンジンが解決する。解決した（入力は無効）なら true。
+   * 通常はコマンド待ちに入った時点で `autoResolveParty` が済ませているので、ここへ来るのは解決しきれなかった（ガードに達した）ときだけ
+   */
+  private refuseIfBlocked(): boolean {
+    if (!this.hasStatusRules) return false
+    const actor = this.currentActor()
+    if (!actor || !this.actorBlock(actor)) return false
+    this.autoResolveParty()
+    return true
+  }
+
+  /**
+   * コマンド待ちの先頭の味方が行動不能・混乱の間、その手番を自動で解決し続ける (#870、FF6 の「コマンドが選べず」)。
+   * 行動不能 = 手番を飛ばす / 混乱 = 自陣営の生存者（自分を含む）へ通常攻撃。解決のたびに状態は 1 手番進む（持続は有限なので必ず終わる）。
+   * ガード（1000 手番）に達したら止める（無限ループ防止の安全弁。この場合は次の入力で再び解決を試みる）
+   */
+  private autoResolveParty(): void {
+    if (!this.hasStatusRules || this.autoResolving) return
+    this.autoResolving = true
+    try {
+      for (let guard = 0; guard < 1000; guard++) {
+        if (this.isOver() || this.state.phase !== 'party-input') return
+        const idx = this.currentActorIndex()
+        if (idx === -1) return
+        const actor = this.state.party[idx]
+        const block = this.actorBlock(actor)
+        if (!block) return
+        if (block.action === 'stun') {
+          this.appendLog(`${actor.name} は ${block.rule.name} で うごけない！`)
+          this.recordNotice(actor, 'うごけない！')
+        } else {
+          this.confusedAttack(actor, this.randomAlive(this.state.party), block.rule)
+        }
+        this.advanceAfterPartyAction(undefined)
+      }
+    } finally {
+      this.autoResolving = false
+    }
+  }
+
+  /** 行動不能・混乱の敵の手番。行動不能は飛ばし、混乱は敵陣営の生存者（自分を含む）へ通常攻撃する */
+  private runBlockedEnemy(
+    enemy: BattleEntity,
+    block: NonNullable<ReturnType<typeof blockingAction>>
+  ): void {
+    if (block.action === 'stun') {
+      this.appendLog(`${enemy.name} は ${block.rule.name} で うごけない！`)
+      this.recordNotice(enemy, 'うごけない！')
+      return
+    }
+    this.confusedAttack(enemy, this.randomAlive(this.state.enemies), block.rule)
+  }
+
+  /** 生存者のうち 1 人を乱数で選ぶ（乱数は常に 1 回使う）。呼び出し側が生存者の存在を保証する */
+  private randomAlive(list: BattleEntity[]): BattleEntity {
+    const alive = list.filter((e) => e.hp > 0)
+    return alive[Math.min(alive.length - 1, Math.floor(this.rng() * alive.length))]
+  }
+
+  /** 混乱した者の通常攻撃 1 回（狙いは呼び出し側が決める）。反撃・死亡時の行動は起こさない（敵の行動ではないため） */
+  private confusedAttack(actor: BattleEntity, target: BattleEntity, rule: StatusRule): void {
+    const hpBefore = target.hp
+    const dmg = applyDamageToHp(target, this.computeAttackDamage(actor, target))
+    this.recordAttack(actor, target, hpBefore, dmg)
+    this.appendLog(`${actor.name} は ${rule.name} で あばれた！`)
+    this.appendLog(`${target.name} に ${dmg} の ダメージ！`)
+    if (target.hp === 0) this.appendLog(`${target.name} は たおれた！`)
+  }
+
+  /**
+   * 味方の手番の終わりに状態を進める。ATB は行動した本人（`idx`）だけ、従来ターン制は味方全員
+   * （従来ターン制は 1 手番に先頭の 1 人しか動かないので、手番の単位は「味方側の行動 1 回」）
+   */
+  private endPartyTurnStatuses(idx: number): void {
+    if (!this.hasStatusRules) return
+    if (this.state.atb) {
+      const m = idx !== -1 ? this.state.party[idx] : undefined
+      if (m) this.tickStatuses(m)
+      return
+    }
+    // 従来ターン制: 味方側の行動 1 回が手番。この手番で付いた状態は全員とも飛ばす（反撃で付いた分も）
+    for (const p of this.state.party) this.tickStatuses(p, false)
+    this.freshStatuses = []
+  }
+
+  /**
+   * 者の宣言済みの状態を 1 手番ぶん進める: 継続ダメージ → 持続 -1 → 0 なら解除（満了があればその効果）。
+   * 今の手番の中で付いた状態（付与者は問わない）は、この手番の終わりには進めない。敵が味方に付けた混乱は、敵の手番の終わりに記録が消えるので味方の次の手番に効く。
+   * 倒れている者は状態を失うだけ。宣言の無い状態（印だけ）は触らない
+   */
+  private tickStatuses(entity: BattleEntity, clearFresh = true): void {
+    if (!this.hasStatusRules) return
+    // この手番の中で付いた状態は進めない（1 度だけ。付与者は問わない）
+    const fresh = new Set(this.freshStatuses.filter((f) => f.target === entity).map((f) => f.key))
+    if (clearFresh) this.freshStatuses = []
+    if (entity.hp <= 0) {
+      this.clearDownedStatuses()
+      return
+    }
+    const st = entity.status
+    const ref = this.refOf(entity)
+    if (!st || !ref) return
+    for (const key of Object.keys(st)) {
+      if (!hasOwn(this.statusRules, key) || fresh.has(key)) continue
+      const rule = this.statusRules[key]
+      const turns = st[key]
+      if (typeof turns !== 'number' || !(turns > 0)) continue
+      if (entity.hp <= 0) break
+      if (rule.tick) this.applyStatusTick(entity, ref, rule)
+      if (entity.hp <= 0) break
+      if (turns - 1 > 0) {
+        safeAssign(st, key, turns - 1)
+        continue
+      }
+      delete st[key]
+      this.expireStatus(entity, ref, rule)
+      if (entity.hp <= 0) break
+    }
+    this.clearDownedStatuses()
+  }
+
+  /** 継続ダメージ 1 回。状態 id の属性相性が効く: 無効 = なし / 吸収 = 回復 / 半減 ×½ / 弱点 ×2（上限 9999 は共通） */
+  private applyStatusTick(entity: BattleEntity, ref: BattleActorRef, rule: StatusRule): void {
+    const tick = rule.tick
+    if (!tick) return
+    const base =
+      tick.kind === 'fraction'
+        ? Math.max(1, Math.floor((entity.maxHp * tick.num) / tick.den))
+        : rollRange(tick.min, tick.max, this.rng)
+    const kind = resolveAffinity(entity.affinity, rule.id)
+    if (kind === 'nullify') return
+    const hpBefore = entity.hp
+    if (kind === 'absorb') {
+      const healed = clampDamage(base)
+      if (!(healed > 0)) return
+      entity.hp = clampHp(entity.hp + healed, entity.maxHp)
+      this.appendLog(`${entity.name} は ${rule.name} の力を ${healed} 吸収した！`)
+      this.pushEvent({
+        actor: ref,
+        kind: 'status',
+        label: rule.name,
+        hits: [{ target: ref, kind: 'heal', amount: healed, hpBefore, hpAfter: entity.hp }],
+      })
+      return
+    }
+    const dealt = applyDamageToHp(entity, applyAffinityToDamage(kind, base))
+    this.appendLog(`${entity.name} は ${rule.name} で ${dealt} のダメージ！`)
+    if (entity.hp === 0) this.appendLog(`${entity.name} は たおれた！`)
+    this.pushEvent({
+      actor: ref,
+      kind: 'status',
+      label: rule.name,
+      hits: [{ target: ref, kind: 'damage', amount: dealt, hpBefore, hpAfter: entity.hp }],
+    })
+  }
+
+  /**
+   * 持続が尽きた状態の後始末。`満了: 戦闘不能` は即死扱いで、即死耐性 (#872) の `death` が無効・吸収の者は助かる（解けるだけ）。
+   * 数字は出さない（即死と同じ `instantDeath`）
+   */
+  private expireStatus(entity: BattleEntity, ref: BattleActorRef, rule: StatusRule): void {
+    if (rule.expireDeath) {
+      const death = resolveAffinity(entity.affinity, DEATH_ATTRIBUTE)
+      if (death !== 'nullify' && death !== 'absorb') {
+        const hpBefore = entity.hp
+        entity.hp = 0
+        this.appendLog(`${entity.name} の ${rule.name} の カウントが つきた……`)
+        this.appendLog(`${entity.name} は たおれた！`)
+        this.pushEvent({
+          actor: ref,
+          kind: 'status',
+          label: rule.name,
+          hits: [
+            {
+              target: ref,
+              kind: 'damage',
+              amount: hpBefore,
+              hpBefore,
+              hpAfter: 0,
+              instantDeath: true,
+            },
+          ],
+        })
+        return
+      }
+    }
+    this.appendLog(`${entity.name} の ${rule.name} が とけた！`)
+  }
+
+  /** HP が減って生き残った者の、被ダメージで解ける状態を解く */
+  private breakOnDamage(entity: BattleEntity, hpBefore: number): void {
+    if (!this.hasStatusRules || entity.hp <= 0 || entity.hp >= hpBefore) return
+    const st = entity.status
+    if (!st) return
+    for (const rule of activeStatusRules(entity, this.statusRules)) {
+      if (!rule.cureOnDamage) continue
+      delete st[rule.id]
+      this.appendLog(`${entity.name} の ${rule.name} が なおった！`)
+    }
+  }
+
+  /**
+   * 効果が状態を付けた・解いた通知。宣言した状態の付与は「今の手番で付いた」として記録し（その手番の終わりには減らさない）、
+   * 付与・解除とも、その対象は MISS にしない（HP が変わらなくても、効いた）。宣言の無い印は従来どおり
+   */
+  private noteStatus(
+    applier: BattleEntity,
+    target: BattleEntity,
+    key: string,
+    change: 'apply' | 'cure' = 'apply'
+  ): void {
+    if (!this.hasStatusRules) return
+    if (change === 'cure') {
+      this.statusTouched.add(target)
+      return
+    }
+    if (!hasOwn(this.statusRules, key)) return
+    this.freshStatuses.push({ applier, target, key })
+    this.statusTouched.add(target)
+  }
+
+  /** 倒れた者の宣言済みの状態を消す（蘇生しても残らない）。宣言の無い印は触らない */
+  private clearDownedStatuses(): void {
+    if (!this.hasStatusRules) return
+    // 倒れた者に付けた「付けたばかり」の記録も捨てる（溜まり続けない。付与者が倒れても、付いた状態の記録は残す）
+    if (this.freshStatuses.length > 0) {
+      this.freshStatuses = this.freshStatuses.filter((f) => f.target.hp > 0)
+    }
+    for (const e of [...this.state.party, ...this.state.enemies]) {
+      const st = e.status
+      if (e.hp > 0 || !st) continue
+      for (const k of Object.keys(st)) if (hasOwn(this.statusRules, k)) delete st[k]
+    }
   }
 
   private computeAttackDamage(attacker: BattleEntity, defender: BattleEntity): number {
@@ -1310,6 +1778,8 @@ interface ComputedAmount {
   kind: 'damage' | 'heal'
   amount: number
   kill?: boolean
+  /** 状態による回復・ダメージの反転 (#870) */
+  reversed?: boolean
 }
 
 /** 効果 DSL の複数ヒット (#879) が 1 ヒットごとに通知した結果。`recordEffect` が `BattleHit` 列にする */
@@ -1320,6 +1790,8 @@ interface MultiHit {
   round: number
   /** 通知した時点（そのヒットを反映した直後）の対象の HP */
   hpAfter: number
+  /** 状態による回復・ダメージの反転 (#870) */
+  reversed?: boolean
 }
 
 /** 味方の行動 1 回が敵に与えた被弾の情報 (#837)。`before` は行動の前の全員の HP */
@@ -1330,7 +1802,7 @@ interface PartyReaction {
 }
 
 /** 呪文の効果 DSL が `damage ... type=` を持つときその系統（`受けた=系統:x` の判定用）。builtin・DSL でなければ undefined */
-function spellDamageType(spell: SpellExecution): string | undefined {
+function spellDamageType(spell: { builtin?: string; effect?: string }): string | undefined {
   if (spell.builtin || !spell.effect) return undefined
   const parsed = parseEffect(spell.effect)
   return parsed && parsed.kind === 'damage' ? parsed.type : undefined

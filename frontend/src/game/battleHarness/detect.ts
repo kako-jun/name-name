@@ -8,6 +8,7 @@
  */
 import { ATB_GAUGE_MAX, type BattleActionEvent, type BattleState } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
+import { MAX_STATUS_TURNS } from '../battleLimits'
 
 export type ViolationKind =
   | 'non-finite' // NaN / Infinity が状態・イベントに入った
@@ -26,6 +27,7 @@ export type ViolationKind =
   | 'event-flood' // 1 操作でイベントが異常に増えた（無限ループの疑い）
   | 'rng-budget' // 1 操作の乱数消費が予算超（無限ループの疑い）
   | 'slow-op' // 1 操作が極端に遅い（無限ループの疑い）
+  | 'status-invariant' // 宣言した状態の不変条件違反（残りターンが整数でない・上限超・倒れた者に残る・status イベントの形が違う）(#870)
   | 'exception' // エンジンが例外を投げた
 
 /** 壊れと断定しない（人間が見て判断する）種類。これだけのシナリオは「壊れ」に数えない */
@@ -43,6 +45,8 @@ export interface Violation {
 export interface DetectOptions {
   /** 1 ヒットのダメージ上限（既定 9999 = kako-jun 決定。`battleLimits.MAX_DAMAGE`） */
   maxDamage: number
+  /** 宣言した状態の id (#870)。あれば、その id の残りターン・倒れた者に残っていないか・status イベントの形を検査する */
+  statusIds?: readonly string[]
 }
 
 const OVER_PHASES = ['victory', 'defeat', 'escaped']
@@ -55,8 +59,38 @@ function checkNumber(push: Push, where: string, v: unknown): void {
   if (!Number.isFinite(v)) push('non-finite', `${where} = ${String(v)}`)
 }
 
-function checkEntity(push: Push, side: string, i: number, e: BattleEntity): void {
+/** 宣言した状態 (#870) の不変条件: 残りターンは 1〜上限の整数、倒れた者には残らない */
+function checkDeclaredStatuses(
+  push: Push,
+  w: string,
+  e: BattleEntity,
+  ids: readonly string[] | undefined
+): void {
+  if (!ids || ids.length === 0) return
+  for (const id of ids) {
+    if (!Object.prototype.hasOwnProperty.call(e.status ?? {}, id)) continue
+    const v = e.status?.[id]
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue // 非有限は non-finite で報告済み
+    if (!Number.isInteger(v) || v < 0 || v > MAX_STATUS_TURNS) {
+      push(
+        'status-invariant',
+        `${w}.status.${id} = ${v}（0〜${MAX_STATUS_TURNS} の整数であるべき）`
+      )
+    } else if (v > 0 && e.hp <= 0) {
+      push('status-invariant', `${w}: 倒れているのに状態 ${id} が残っている (${v})`)
+    }
+  }
+}
+
+function checkEntity(
+  push: Push,
+  side: string,
+  i: number,
+  e: BattleEntity,
+  opts: DetectOptions
+): void {
   const w = `${side}[${i}] ${e.name}`
+  checkDeclaredStatuses(push, w, e, opts.statusIds)
   for (const k of ['hp', 'maxHp', 'mp', 'maxMp', 'atk', 'def', 'agi'] as const) {
     checkNumber(push, `${w}.${k}`, e[k])
   }
@@ -79,6 +113,18 @@ function checkEntity(push: Push, side: string, i: number, e: BattleEntity): void
 
 function checkEvents(push: Push, events: readonly BattleActionEvent[], opts: DetectOptions): void {
   for (const ev of events) {
+    // 状態異常の継続ダメージ・満了 (#870): 本人の記録（actor = 対象 1 件）
+    if (ev.kind === 'status') {
+      const own = ev.hits.every(
+        (h) => h.target.side === ev.actor.side && h.target.index === ev.actor.index
+      )
+      if (ev.hits.length === 0 || !own) {
+        push(
+          'status-invariant',
+          `event#${ev.seq} (status): actor 本人だけを対象にした 1 件以上のヒットであるべき`
+        )
+      }
+    }
     ev.hits.forEach((h, k) => {
       const w = `event#${ev.seq}.hits[${k}] (${h.kind})`
       checkNumber(push, `${w}.amount`, h.amount)
@@ -156,8 +202,8 @@ export function checkState(
 ): Violation[] {
   const out: Violation[] = []
   const push: Push = (kind, detail) => out.push({ kind, detail, opIndex })
-  state.party.forEach((e, i) => checkEntity(push, 'party', i, e))
-  state.enemies.forEach((e, i) => checkEntity(push, 'enemies', i, e))
+  state.party.forEach((e, i) => checkEntity(push, 'party', i, e, opts))
+  state.enemies.forEach((e, i) => checkEntity(push, 'enemies', i, e, opts))
   checkNumber(push, 'earnedExp', state.earnedExp)
   checkNumber(push, 'earnedGold', state.earnedGold)
   checkEvents(push, newEvents, opts)

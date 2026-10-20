@@ -16,6 +16,7 @@ import {
   SeekBar,
   ACTIVE_THUMB_SCALE,
   INACTIVE_ALPHA,
+  DISABLED_ALPHA,
   INACTIVITY_MS,
   DEFAULT_BAR_FILL_COLOR,
 } from './SeekBar'
@@ -356,5 +357,83 @@ describe('SeekBar フィル色 setFillColor (#440)', () => {
     const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
     sb.setFillColor(Number.NaN)
     expect(internals(sb).fillColor).toBe(DEFAULT_BAR_FILL_COLOR)
+  })
+})
+
+describe('SeekBar 無効表示 (#815: 終劇は行き止まり)', () => {
+  function disabledBar() {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.update(2, 5)
+    sb.setDisabled(true)
+    return sb
+  }
+
+  it('無効にするとタップ領域が操作を受けない（eventMode=none・cursor=default）', () => {
+    const sb = disabledBar()
+    const region = internals(sb).clickRegion as unknown as { eventMode: string; cursor: string }
+    expect(sb.isDisabled()).toBe(true)
+    expect(region.eventMode).toBe('none')
+    expect(region.cursor).toBe('default')
+  })
+
+  it('無効中は pointerdown を直接 emit しても active に入らず・onSeek も呼ばれない（二重ガード）', () => {
+    const sb = disabledBar()
+    const seekCb = vi.fn()
+    const activeCb = vi.fn()
+    sb.setOnSeek(seekCb)
+    sb.setOnActiveChange(activeCb)
+    const region = internals(sb).clickRegion
+    region.emit('pointerdown', { globalX: SCREEN_W / 2 })
+    region.emit('pointerdown', { globalX: SCREEN_W / 2 })
+    expect(sb.isActive()).toBe(false)
+    expect(seekCb).not.toHaveBeenCalled()
+    expect(activeCb).not.toHaveBeenCalled()
+    sb.activate()
+    expect(sb.isActive()).toBe(false)
+  })
+
+  it('無効中は薄い表示（alpha=DISABLED_ALPHA）でつまみを隠し、バー自体は可視のまま', () => {
+    const sb = disabledBar()
+    expect(sb.alpha).toBe(DISABLED_ALPHA)
+    expect(internals(sb).thumb.visible).toBe(false)
+    expect(sb.visible).toBe(true)
+  })
+
+  it('active 中に無効化すると即 inactive に戻り onActiveChange(false) が 1 回呼ばれる', () => {
+    const sb = new SeekBar(SCREEN_W, SCREEN_H, virtualTime())
+    sb.update(2, 5)
+    sb.activate()
+    const activeCb = vi.fn()
+    sb.setOnActiveChange(activeCb)
+    sb.setDisabled(true)
+    expect(sb.isActive()).toBe(false)
+    expect(activeCb).toHaveBeenCalledTimes(1)
+    expect(activeCb).toHaveBeenCalledWith(false)
+    expect(sb.alpha).toBe(DISABLED_ALPHA)
+  })
+
+  it('無効を解除すると従来どおり（初回タップで active・次のタップでシーク・つまみ復帰）に戻る', () => {
+    const sb = disabledBar()
+    sb.setDisabled(false)
+    const seekCb = vi.fn()
+    sb.setOnSeek(seekCb)
+    const region = internals(sb).clickRegion as unknown as { eventMode: string; cursor: string }
+    expect(region.eventMode).toBe('static')
+    expect(region.cursor).toBe('pointer')
+    expect(sb.alpha).toBe(INACTIVE_ALPHA)
+    expect(internals(sb).thumb.visible).toBe(true)
+    internals(sb).clickRegion.emit('pointerdown', { globalX: SCREEN_W / 2 })
+    expect(sb.isActive()).toBe(true)
+    expect(seekCb).not.toHaveBeenCalled()
+    internals(sb).clickRegion.emit('pointerdown', { globalX: SCREEN_W / 2 })
+    expect(seekCb).toHaveBeenCalledTimes(1)
+  })
+
+  it('同じ値の setDisabled は冪等（onActiveChange を余計に呼ばない）', () => {
+    const sb = disabledBar()
+    const activeCb = vi.fn()
+    sb.setOnActiveChange(activeCb)
+    sb.setDisabled(true)
+    expect(activeCb).not.toHaveBeenCalled()
   })
 })

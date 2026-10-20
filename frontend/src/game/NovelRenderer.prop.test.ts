@@ -375,7 +375,7 @@ describe('NovelRenderer Prop カメラ状態のシーン遷移同期 (PR #690 �
     expect(sprite?.width).toBe(GAME_WIDTH) // 古い Theater 射影を引きずらず Novel（原寸）で配置される
   })
 
-  // 注記: `[場面転換]`（processDirective の 'SceneTransition' 分岐）はシーン内の演出リセット
+  // 注記: `[場面転換]`（`directives/stageDirectives.ts` の 'SceneTransition' ハンドラ）はシーン内の演出リセット
   // であって resetAndStartEvents を経由するシーン境界ではない。cameraMode 自体をここでは
   // リセットしない設計（#681 のスコープ、docs/architecture.md 参照）のため、`[場面転換]` の
   // 前後で propLayer とこの2状態が乖離することはなく、本 must 修正相当の対象外

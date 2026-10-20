@@ -18,6 +18,15 @@ export const MAX_DAMAGE = 9999
  */
 export const MAX_HITS_PER_ACTION = 99
 
+/**
+ * 状態の持続ターン数の上限 (#870)。`status … duration=N` と `[状態]` の `持続:` はこれで頭打ち。
+ * 「戦闘中ずっと」もこの値で表す。持続は必ず有限にして、行動不能の永久ロックを作らない（ability-candidates §1 の壊れ防止）
+ */
+export const MAX_STATUS_TURNS = 99
+
+/** 状態の付与成功率の上限（%）(#870)。魔法の成長で上がっても 99% で頭打ち（kako-jun 決定 2026-10-15。FF の「99%」） */
+export const MAX_STATUS_CHANCE = 99
+
 /** HP の下限。負値の回復などで HP を 0 未満にしない */
 export const MIN_HP = 0
 

@@ -391,6 +391,29 @@ export function fitLabel(text: string, maxWidthPx: number, fontPx: number): stri
 }
 
 /**
+ * 敵のラベル 1 行目（名前 + 状態名）を `maxWidthPx` に収める (#870)。名前を優先する: 状態名は名前の後ろに置き、
+ * 先頭 1 つだけ出して、ほかにもあれば「…」を足す（`ボス [どく…]`）。入らないときは `[…]` に縮め、それでも名前が
+ * 半分も読めなければ状態名を落として名前だけにする。状態の無い者は名前をそのまま収めるだけ。
+ */
+export function fitEnemyLabelWithStatus(
+  name: string,
+  tags: readonly string[],
+  maxWidthPx: number,
+  fontPx: number
+): string {
+  if (tags.length === 0) return fitLabel(name, maxWidthPx, fontPx)
+  const candidates = [`[${tags[0]}${tags.length > 1 ? ELLIPSIS : ''}]`, `[${ELLIPSIS}]`]
+  for (const tag of candidates) {
+    const budget = maxWidthPx - estimateTextWidth(` ${tag}`, fontPx)
+    const nameFull = estimateTextWidth(name, fontPx)
+    if (budget >= Math.min(nameFull, maxWidthPx / 2)) {
+      return `${fitLabel(name, budget, fontPx)} ${tag}`
+    }
+  }
+  return fitLabel(name, maxWidthPx, fontPx)
+}
+
+/**
  * HP 行を `maxWidthPx` に収める。「HP 12/12」が入らなければ「HP 」を落として「12/12」を残し、
  * それでも入らないときだけ「…」で省略する（数値を優先して見せる）。
  * 省略するとき、最大値の桁が途中で切れる（「99999/9…」は最大値が 9 に見える）より、現在値を残して最大値全体を「…」に

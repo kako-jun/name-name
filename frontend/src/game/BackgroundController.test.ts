@@ -291,4 +291,21 @@ describe('BackgroundController extraction contract (#828 7a)', () => {
     expect(inner.bgEntries).toHaveLength(0)
     expect(controller.hasActiveBackgroundFade()).toBe(false)
   })
+
+  it('cancelTimers stops only the crossfade timer and leaves entries and declared state untouched (#828 7c)', () => {
+    const { controller, cache, inner, time } = setup()
+    cache('a.png')
+    cache('b.png')
+    controller.setBackground('a.png', null, null, { instant: true })
+    controller.setBackground('b.png')
+    expect(time.getPendingTimerCount()).toBeGreaterThan(0)
+    expect(inner.bgEntries).toHaveLength(2)
+    controller.cancelTimers()
+    expect(time.getPendingTimerCount()).toBe(0)
+    expect(inner.bgEntries).toHaveLength(2)
+    expect(controller.capture().backgroundPath).toBe('b.png')
+    // 冪等
+    controller.cancelTimers()
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
 })

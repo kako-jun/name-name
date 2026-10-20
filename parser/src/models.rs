@@ -473,6 +473,10 @@ pub struct PartyMemberDef {
     /// Phase 1 ではデータとして保持するだけ、ランタイム評価は #175 follow-up。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub learns: Option<Vec<PartyLearns>>,
+    /// 戦闘コマンド「わざ」の候補 (#873)。`[特技 id]` の id を書いた順に持つ（`わざ:` を複数行書ける）。
+    /// 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abilities: Option<Vec<String>>,
 }
 
 /// パーティメンバーの呪文習得スロット (#175)
@@ -535,6 +539,43 @@ pub struct SkillDef {
     /// 予兆の文言（生文字列で透過。解釈は P2 #836）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegraph: Option<String>,
+}
+
+/// 状態定義 (#870、状態異常システム)。`[状態 <id>] ... [/状態]` ブロックで書く。
+///
+/// 毒・混乱・ゾンビ相当など、戦闘中に者へ付く状態を**宣言**で足すための土台。効果 DSL の
+/// `status <id>` が付け、ここに書いた内容（継続ダメージ・行動の乱れ・回復の反転など）が戦闘エンジンで働く。
+/// 定義の無い id の `status` は従来どおり「印が付くだけ」。
+/// 名前以外は生文字列で透過し、解釈と不正値の警告は runtime（`statusEffects.ts`）が行う（効果 DSL と同じ流儀）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct StatusDef {
+    pub id: String,
+    /// 表示名（戦闘の状態表示・ログに出る）。
+    pub name: String,
+    /// 既定の持続ターン数（`持続:`）。効果 DSL の `duration=` が優先。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<String>,
+    /// 手番の終わりの継続ダメージ（`継続ダメージ:` `1/16` / `5..8` / `5`）。JSON / TS 側のキーは `tickDamage`。
+    #[serde(
+        default,
+        rename = "tickDamage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tick_damage: Option<String>,
+    /// 行動の乱れ（`行動:` `不能` / `混乱` / `通常`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// 回復・ダメージの反転（`反転:` `回復` / `ダメージ` をカンマ区切り）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverse: Option<String>,
+    /// 解ける条件（`解除:` `被ダメージ`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cure: Option<String>,
+    /// 持続が尽きたときの効果（`満了:` `戦闘不能`）。省略は単に解ける。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -937,6 +978,8 @@ pub enum Event {
     Spell(SpellDef),
     /// 特技定義 (#834)。`[特技 <id>] ... [/特技]` ブロックで書く。敵が使う技で、`[呪文]` とは別のマスターデータ。
     Skill(SkillDef),
+    /// 状態定義 (#870)。`[状態 <id>] ... [/状態]` ブロックで書く。毒・混乱・回復の反転などを宣言で足す。
+    Status(StatusDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
     PartyMember(PartyMemberDef),
     /// RPG イベント定義 (#187)。
@@ -1722,6 +1765,11 @@ pub struct Document {
     /// frontmatter `battle_command_labels:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_command_labels: Option<String>,
+    /// RPG 戦闘のコマンドの構成と順序 (#873)。`skill, spell, item, escape` のように id をカンマ区切りで並べる
+    /// （id は attack / skill / spell / item / escape。未指定は既定の attack, spell, item, escape）。
+    /// 値は生文字列で透過し、runtime 側で解釈する。GUI 専用。frontmatter `battle_commands:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_commands: Option<String>,
     /// RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、
     /// 終了=黒を経由してフェードで戻る）。値は parser でバリデーションせず生文字列で透過し、runtime 側で未知値・空文字は
     /// `"none"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。

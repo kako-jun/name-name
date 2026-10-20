@@ -33,7 +33,7 @@ export class AudioManager {
   // playSeSequence の gap 待機だけをこれに通す（#672 フォローアップ、他の音声処理
   // ―ロード・decode・onended 等―は引き続き対象外、TimeController.ts のdoc comment参照）。
   private readonly time: TimeController
-  // playSeSequence が現在待機中の gap（次の再生までの間隔）一覧。processDirective が
+  // playSeSequence が現在待機中の gap（次の再生までの間隔）一覧。`directives/audioDirectives.ts` の `Se` ハンドラ（旧 processDirective）が
   // 同一フレームで複数の [SE: 複数候補] を連続処理すると、1つの AudioManager に対して
   // 複数の playSeSequence 呼び出しが並行して in-flight になりうる——単一フィールドで
   // 最新の待機だけを追跡すると、後発の呼び出しが先発の待機を上書きしてしまい

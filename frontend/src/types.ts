@@ -201,6 +201,8 @@ export interface PartyMemberDef {
   agi: number
   /** レベルアップで習得する呪文。Phase 1 ではデータとして保持するだけ */
   learns?: PartyLearns[]
+  /** 戦闘コマンド「わざ」の候補 (#873)。`[特技 id]` の id（`わざ:` の行を書いた順）。特技マスターへの解決は runtime */
+  abilities?: string[]
 }
 
 /** パーティメンバーの呪文習得スロット (#175) */
@@ -237,6 +239,28 @@ export interface SkillDef {
   message?: string
   /** 予兆の文言（使用時に表示。`{user}` は使った側の名前。敵の行動パターン P2 #836） */
   telegraph?: string
+}
+
+/**
+ * 状態定義 (#870、状態異常システム)。`[状態 id]` ブロック。毒・混乱・回復の反転などを宣言で足す。
+ * 名前以外は書いたままの文字列で、解釈と不正値の警告は `game/statusEffects.ts` が行う。
+ */
+export interface StatusDef {
+  id: string
+  /** 表示名（戦闘の状態表示・ログに出る） */
+  name: string
+  /** 既定の持続ターン数（`持続:`）。効果 DSL の `duration=` が優先 */
+  duration?: string
+  /** 手番の終わりの継続ダメージ（`継続ダメージ:` `1/16` / `5..8` / `5`） */
+  tickDamage?: string
+  /** 行動の乱れ（`行動:` `不能` / `混乱` / `通常`） */
+  action?: string
+  /** 回復・ダメージの反転（`反転:` `回復` / `ダメージ` をカンマ区切り） */
+  reverse?: string
+  /** 解ける条件（`解除:` `被ダメージ`） */
+  cure?: string
+  /** 持続が尽きたときの効果（`満了:` `戦闘不能`） */
+  expire?: string
 }
 
 export interface PlayerStartData {
@@ -493,6 +517,7 @@ export type Event =
   | { Item: ItemDef }
   | { Spell: SpellDef }
   | { Skill: SkillDef }
+  | { Status: StatusDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {
@@ -928,6 +953,8 @@ export interface EventDocument {
   battle_command_layout?: string | null
   /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */
   battle_command_labels?: string | null
+  /** RPG 戦闘のコマンドの構成と順序 (#873)。`skill, spell, item, escape` 形式の生文字列。frontmatter `battle_commands:` から流す。GUI 専用。 */
+  battle_commands?: string | null
   /** RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、終了=黒を経由してフェードで戻る）。frontmatter `battle_transition:` から流す。GUI 専用（TUI は読まない）。 */
   battle_transition?: string | null
   chapters: EventChapter[]

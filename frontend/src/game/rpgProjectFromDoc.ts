@@ -6,6 +6,7 @@ import type {
   ItemDef,
   SpellDef,
   SkillDef,
+  StatusDef,
   PartyMemberDef,
   EventCommand,
 } from '../types'
@@ -34,7 +35,7 @@ import {
   validateEncounterGroups,
   type EncounterGroupInput,
 } from './encounterGroupValidation'
-import { normalizeCommandLayout, parseCommandLabels } from './battleCommands'
+import { normalizeCommandLayout, parseCommandIds, parseCommandLabels } from './battleCommands'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -96,6 +97,7 @@ export function collectMasterData(doc: EventDocument): {
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
   skills: Record<string, SkillDef>
+  statuses: Record<string, StatusDef>
   party: Record<string, PartyMemberDef>
   /** party の ID を定義順（初出順・重複なし）で並べたもの (#736) */
   partyOrder: string[]
@@ -104,6 +106,7 @@ export function collectMasterData(doc: EventDocument): {
   const items: Record<string, ItemDef> = {}
   const spells: Record<string, SpellDef> = {}
   const skills: Record<string, SkillDef> = {}
+  const statuses: Record<string, StatusDef> = {}
   const party: Record<string, PartyMemberDef> = {}
   const partyOrder: string[] = []
   for (const chapter of doc.chapters) {
@@ -115,14 +118,20 @@ export function collectMasterData(doc: EventDocument): {
         else if ('Item' in ev) safeAssign(items, ev.Item.id, ev.Item)
         else if ('Spell' in ev) safeAssign(spells, ev.Spell.id, ev.Spell)
         else if ('Skill' in ev) safeAssign(skills, ev.Skill.id, ev.Skill)
-        else if ('PartyMember' in ev) {
+        else if ('Status' in ev) {
+          // 同じ id の [状態] は後勝ち。誤記に気づけるよう 1 度だけ知らせる (#870)
+          if (Object.prototype.hasOwnProperty.call(statuses, ev.Status.id)) {
+            console.warn(`[状態 ${ev.Status.id}] が重複している。後ろの宣言で上書きした`)
+          }
+          safeAssign(statuses, ev.Status.id, ev.Status)
+        } else if ('PartyMember' in ev) {
           safeAssign(party, ev.PartyMember.id, ev.PartyMember)
           if (!partyOrder.includes(ev.PartyMember.id)) partyOrder.push(ev.PartyMember.id)
         }
       }
     }
   }
-  return { monsters, items, spells, skills, party, partyOrder }
+  return { monsters, items, spells, skills, statuses, party, partyOrder }
 }
 
 /**
@@ -140,6 +149,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   items: Record<string, ItemDef>
   spells: Record<string, SpellDef>
   skills: Record<string, SkillDef>
+  statuses: Record<string, StatusDef>
   party: Record<string, PartyMemberDef>
   partyOrder: string[]
 } {
@@ -148,6 +158,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     items: {} as Record<string, ItemDef>,
     spells: {} as Record<string, SpellDef>,
     skills: {} as Record<string, SkillDef>,
+    statuses: {} as Record<string, StatusDef>,
     party: {} as Record<string, PartyMemberDef>,
     partyOrder: [] as string[],
   }
@@ -159,6 +170,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     safeAssignAll(merged.items, m.items)
     safeAssignAll(merged.spells, m.spells)
     safeAssignAll(merged.skills, m.skills)
+    safeAssignAll(merged.statuses, m.statuses)
     safeAssignAll(merged.party, m.party)
     for (const id of m.partyOrder) if (!merged.partyOrder.includes(id)) merged.partyOrder.push(id)
   }
@@ -310,6 +322,8 @@ export function rpgProjectFromDoc(
     items: master.items,
     spells: master.spells,
     skills: master.skills,
+    // 状態 (#870)。1 つも宣言していないゲームは付けない（従来どおりのキー集合）
+    ...(Object.keys(master.statuses).length > 0 ? { statuses: master.statuses } : {}),
     party: master.party,
     partyOrder: master.partyOrder,
     battleLayout: normalizeBattleLayout(doc.battle_layout),
@@ -328,6 +342,7 @@ export function rpgProjectFromDoc(
     battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
+    battleCommands: parseCommandIds(doc.battle_commands),
     battleTransition: normalizeBattleTransition(doc.battle_transition),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
