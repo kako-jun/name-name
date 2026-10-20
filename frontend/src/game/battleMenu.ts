@@ -30,7 +30,7 @@ export interface BattleSpellEntry extends SpellExecution {
   id: string
 }
 
-/** アイテムの候補。`count` を渡すと「×n」を表示し、0 ならグレー（所持数の管理は呼び出し側） */
+/** アイテムの候補。`count` を渡すと「×n」を表示し、0 ならグレー。使うと BattleScreen がこの entry の count を書き換えるので、呼び出し側は戦闘ごとに複製を渡すこと */
 export interface BattleItemEntry extends ItemExecution {
   id: string
   count?: number

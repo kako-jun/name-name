@@ -2230,7 +2230,16 @@ export class BattleScreen extends Container {
           this.engine.selectSpell(entry as BattleSpellEntry)
           this.refresh()
         }
+      } else if (w?.type === 'list' && w.kind === 'item' && entry) {
+        // 所持数 0 のアイテム
+        this.engine.notifyBlocked('もっていない！')
+        this.refresh()
       }
+      return
+    }
+    if (r.blocked === 'empty') {
+      this.engine.notifyBlocked('たいしょうがいない！')
+      this.refresh()
       return
     }
     this.setMenuStack(r.stack)
@@ -2242,7 +2251,11 @@ export class BattleScreen extends Container {
       if (action.kind === 'spell') {
         this.engine.selectSpell(entry as BattleSpellEntry, action.targetId)
       } else {
-        this.engine.selectItem(entry as BattleItemEntry, action.targetId)
+        // 所持数を持つアイテムは、実際に使われたとき（selectItem が true）だけ減る。
+        // 試作の所持数で、呼び出し側が渡した候補の count を戦闘中だけ書き換える
+        const item = entry as BattleItemEntry
+        const used = this.engine.selectItem(item, action.targetId)
+        if (used && typeof item.count === 'number' && item.count > 0) item.count -= 1
       }
     }
     this.refresh()
