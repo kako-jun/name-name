@@ -33,6 +33,7 @@ HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
 
 `battle-harness-out/`（再現時は `battle-harness-out/replay/`）に 2 つ。標準出力にも `report.md` と同じ内容が出る。
 
+- 件数の注記: 「要判断」は膠着だけがあるシナリオの数で、壊れと膠着の両方を持つシナリオは壊れに数える。そのため一覧の `stalemate` のシナリオ数より冒頭の要判断の件数が少ないことがある。
 - `report.md`: 件数、族ごとの壊れ件数、**壊れ**（種類ごと・代表例つき）、**要判断**（`stalemate`: 行動は起きるが攻撃だけでは決着しない膠着）、**凄い組み合わせの候補**。
 - `failures.json`: 壊れ・要判断のシナリオ（最大 5000 件）。seed・初期パーティ/敵・呪文/特技・操作列がそのまま入っているので、これだけで再現できる。
 
@@ -55,8 +56,8 @@ HARNESS_REPLAY=battle-harness-out/failures.json HARNESS_REPLAY_ID='effect-matrix
   npm run test:battle-harness
 ```
 
-`HARNESS_REPLAY_ID` を省くとファイル内の全件を再実行する。単体のシナリオ JSON（`Scenario` 1 件）もそのまま渡せる。結果は `battle-harness-out/replay/` の `report.md` と標準出力に出る（読み込み元の `failures.json` は上書きしない）。コードからは `runScenario(scenario)`（`run.ts`）を呼ぶ。
+`HARNESS_REPLAY_ID` を省くとファイル内の全件を再実行する。単体のシナリオ JSON（`Scenario` 1 件）もそのまま渡せる。結果は `battle-harness-out/replay/` の `report.md` と標準出力に出る（`HARNESS_OUT` が読み込み元と同じディレクトリなら何も書き出さず、標準出力だけ）。コードからは `runScenario(scenario)`（`run.ts`）を呼ぶ。
 
 ## テスト
 
-ハーネス自体のテスト（`*.test.ts`）は通常の `npm test` に入る（合成エンジンで NaN・負 HP・ロック・無限ループを仕込んで検出できること、正常な戦闘で誤検出しないこと、seed 固定の再現、失敗 JSON からの再現。実行は数秒）。総当たり本体は `harness.sweep.mjs` で、通常実行からは除外している。入口が `.mjs` なので tsc / eslint には掛からない（型の無い node 入口の限界。`@types/node` が無いため `.ts` 化は見送り）。`HARNESS_RANDOM_COUNT` などの不正値と `HARNESS_SKIP` の未知の族名はエラーで止まる。
+ハーネス自体のテスト（`*.test.ts`）は通常の `npm test` に入る（合成エンジンで NaN・負 HP・ロック・無限ループを仕込んで検出できること、正常な戦闘で誤検出しないこと、seed 固定の再現、失敗 JSON からの再現。実行は数秒）。総当たり本体は `harness.sweep.mjs` で、通常実行からは除外している。入口が `.mjs` なので tsc には掛からず、eslint も TS 用のルール（recommended）は効かない（`.mjs` は既定設定で走るだけ。型の無い node 入口の限界。`@types/node` が無いため `.ts` 化は見送り）。`HARNESS_RANDOM_COUNT` などの不正値と `HARNESS_SKIP` の未知の族名はエラーで止まる。

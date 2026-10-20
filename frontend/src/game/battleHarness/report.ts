@@ -142,7 +142,7 @@ export function formatReport(
   L.push('# battle-harness 結果（検出のみ・何も修正していない）')
   L.push('')
   L.push(
-    `走らせた組み合わせ: ${summary.total} 件 / 壊れ: ${summary.broken} 件 / 要判断(膠着): ${summary.needsJudgement} 件 / 正常: ${summary.normal} 件` +
+    `走らせた組み合わせ: ${summary.total} 件 / 壊れ: ${summary.broken} 件 / 要判断(膠着): ${summary.needsJudgement} 件（壊れと重なる膠着は壊れに数える）/ 正常: ${summary.normal} 件` +
       `（うち自動進行の上限内で未決着: ${summary.unfinished} 件。ロックとは別・情報のみ）`
   )
   L.push('')

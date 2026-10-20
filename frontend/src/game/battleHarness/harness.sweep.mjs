@@ -6,13 +6,13 @@
  * - HARNESS_SEED / HARNESS_RANDOM_COUNT: ランダム合成の seed と件数（既定 1 / 3000）
  * - HARNESS_SKIP: 省く族をカンマ区切り（effect-matrix,enemy-skill,stack-order,reaction-chain,random）
  * - HARNESS_OUT: 結果の出力先ディレクトリ（既定 `battle-harness-out`、再現時は `battle-harness-out/replay`）。report.md と failures.json を書く
- *   （読み込み元の failures.json と同じパスには書かない）
+ *   （再現の読み込み元と同じディレクトリには何も書かない）
  * - HARNESS_REPLAY: 失敗ファイル（または単体のシナリオ JSON）のパス。指定すると総当たりでなくそれだけを再実行する
  * - HARNESS_REPLAY_ID: HARNESS_REPLAY の中から 1 件だけ再実行するときのシナリオ id
  * - HARNESS_STRICT=1: 壊れが 1 件でもあれば失敗扱いにする（既定は一覧を出すだけで成功）
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { candidates, formatReport, scenariosFromJson, summarize, toFailureFile } from './report.ts'
 import { buildSweep, DEFAULT_SWEEP, runAll } from './sweep.ts'
@@ -63,13 +63,26 @@ describe('battle-harness', () => {
     const summary = summarize(results)
     const text = formatReport(summary, candidates(results), results)
     mkdirSync(out, { recursive: true })
-    writeFileSync(join(out, 'report.md'), text)
-    const failuresPath = join(out, 'failures.json')
-    // 再現の読み込み元を上書きして総当たりの一覧を消さない
-    if (!env.HARNESS_REPLAY || resolve(failuresPath) !== resolve(env.HARNESS_REPLAY)) {
-      writeFileSync(failuresPath, JSON.stringify(toFailureFile(scenarios, results), null, 1))
+    // 再現の読み込み元と同じディレクトリには何も書かない（総当たりの report.md / failures.json を消さない）
+    const sameDir = env.HARNESS_REPLAY && resolve(out) === resolve(dirname(env.HARNESS_REPLAY))
+    const written = []
+    if (!sameDir) {
+      writeFileSync(join(out, 'report.md'), text)
+      writeFileSync(
+        join(out, 'failures.json'),
+        JSON.stringify(toFailureFile(scenarios, results), null, 1)
+      )
+      written.push(join(out, 'report.md'), join(out, 'failures.json'))
     }
-    process.stdout.write('\n' + text + `\n出力: ${join(out, 'report.md')} / failures.json\n`)
+    process.stdout.write(
+      '\n' +
+        text +
+        '\n' +
+        (written.length
+          ? `出力: ${written.join(' / ')}`
+          : '読み込み元と同じディレクトリなので書き出しなし') +
+        '\n'
+    )
     if (env.HARNESS_STRICT === '1') expect(summary.broken).toBe(0)
   })
 })
