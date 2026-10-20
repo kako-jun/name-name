@@ -1137,7 +1137,7 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
  *
  * 元 NovelRenderer 内で 2 箇所に直書きされていた同形の式:
  *   - `render()`:      `perLineFontFamily ?? this.gameDefaultFontFamily ?? RUNTIME_DEFAULT_FONT_FAMILY`
- *   - `processDirective()` の `TitleShow`:
+ *   - `directives/characterDirectives.ts` の `TitleShow` ハンドラ（旧 processDirective の TitleShow 分岐）:
  *                      `ts.font_family ?? this.gameDefaultFontFamily ?? RUNTIME_DEFAULT_FONT_FAMILY`
  * どちらも「per-line override → per-game default → runtime default」の同じ 3 段フォールバック。
  *

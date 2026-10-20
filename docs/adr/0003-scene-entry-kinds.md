@@ -502,3 +502,11 @@ PR5 の実装で、上の記述から次のとおり変えた。挙動の方針�
 - **Host 越し。** `Stage` は `NovelRenderer` を import せず、自分で定義する `StageHost`（`BackgroundHost` + `ScreenEffectsHost` + `applyCamera` / `applyPaperDollOutline`）だけを見る。`BackgroundController` と `ScreenEffectsController` は Stage がコンストラクタで作る（`stage.background` / `stage.effects`）。z 順のため、積むのは `attachBackground`（下地ベタ・背景画像）と `attachEffects`（スクリム・暗転・効果オーバーレイ）の2回に分ける。
 - **ファイル名は `Stage.ts`。** 既存に大文字小文字だけが違うファイル（`stage.ts`）は無い。
 - **テスト。** 単体は `Stage.test.ts`（新規開始 / 進行 / 復元の `reset(policy)` 後の状態、クロスフェード中の復元、capture のフィールド集合、capture → restore の往復、`cancelAllTimers` 後にタイマーが残らないこと）。旧実装との等価性は `Stage.equivalence.test.ts`（Stage 導入前の演出まわりの呼び出し順を写した参照実装と、メソッド呼び出し列・毎フレームの状態を比較）。レンダラとの配線は `NovelRenderer.stage.test.ts`（`stage.reset` の呼び出し位置と引数、`applyState` の伝播順、`destroy` の順序）。他レイヤーとの相対順序と見た目は、実 WebGL で同一シナリオを固定時刻で撮った画素ハッシュの比較（base と新ブランチで差分0）で確認した。
+
+## #829 での追記（2026-10-21、#735 8/8）
+
+`processDirective` の演出系ディレクティブを `frontend/src/game/directives/` の領域別の表（ステージ / 立ち絵 / オーディオ）へ移した。**実装の置き場が変わっただけで、本 ADR の契約（入場の種類・持ち越し規律）は変えていない。**
+
+- `[場面転換]` のクリア対象と順序は旧 `processDirective` と同じ（`stageSignalDirectives.SceneTransition`）。クリア対象は旧と同じで、背景・動画・背景板・大道具・幕（z-order も既定へ）・照明・イベント絵・テロップ・暗転・novel スクリムをクリアする。`resetAndStartEvents` の新規開始（`stage.reset`・立ち絵・BGM・カメラ・輪郭・文字窓の枠の復帰を含む）より狭く、立ち絵・BGM・カメラ・輪郭・文字窓の枠・フラグは触らない。動画レイヤの `remove()` が 2 回呼ばれる旧実装の呼び出し列も保っている（等価性テストで固定）。
+- `Flag` / `Choice` / `Jump` / `Wait` / `WaitDisplayComplete` は遷移ゲートと再生カーソルを触るためレンダラに残り、`rederiveTransitionAtCurrentPosition()` などが `processDirective` を呼ぶ経路は変わらない。
+- 立ち絵ロード待ち（`showCharacterThenRender`、#293）はレンダラに残る。`[登場:]` / `[退場:]` / `[表情:]` のハンドラは旧と同じ引数で `CharacterLayer` を呼ぶだけで、`lastSpeaker` や話者交代 nudge には触らない。
