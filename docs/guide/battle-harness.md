@@ -9,14 +9,14 @@
 
 ```bash
 cd frontend
-npm run test:battle-harness                       # 総当たり（約 25,500 件・2 分弱）
+npm run test:battle-harness                       # 総当たり（約 32,000 件・2 分強）
 HARNESS_RANDOM_COUNT=500 npm run test:battle-harness   # ランダム合成の件数を変える（既定 3000）
 HARNESS_SEED=2 npm run test:battle-harness             # ランダム合成の seed を変える（既定 1）
 HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
 HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言したランダム合成の件数（既定 2000）
 ```
 
-環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
+環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
 
 ## 何を動かすか
 
@@ -29,6 +29,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 | `random`         | seed 固定。能力値・HP を境界値から選び、呪文・敵の台本・ATB の有無・操作列（攻撃/呪文/道具/逃走/tick）をランダムに組む                                                                                                                                                                                                                                                                          |
 | `status-matrix`  | 宣言した状態 (#870。毒・もうどく〈上限超えの固定幅〉・睡眠・昏睡〈99 ターン〉・混乱・被ダメージ解除・死の宣告・ゾンビ・回復/ダメージだけの反転・全部入り・不正値だらけの宣言) × 付与の持続（省略・1・99・100 超）× 確率（省略・50・99）× 相手の耐性（属性欄に状態 id と `death`）× ターン制/ATB の 2 種。味方が呪文で敵単体・自分・味方全体・敵全体へ、敵が特技で味方全体へ付け、決着まで進める |
 | `random-status`  | seed 固定。状態を常に宣言し、付与・解除・反転の対象になる効果を中心に、能力値・HP・耐性・最初から持つ状態・`statusChanceBonus`・敵の台本・操作列をランダムに組む                                                                                                                                                                                                                                |
+| `damage-condition` | 敵の条件 `ダメージ…` (#871。奇数・偶数・倍数・閾値・ちょうど・桁数・併用・不正な書式) × 書く場所（`行動:` `反撃:` `死亡時:`）× 受けるダメージの元（固定の奇数・偶数、乱数幅、複数ヒット、極大、相性が絡む属性ダメージ、即死、回復）× 相手の相性 × 敵の HP（小さい=倒れる）× ターン制/ATB。味方が呪文を 3 回撃ってから攻撃する |
 
 エンジンの `opts.rng` に seed 固定の LCG を注入するので、同じシナリオは必ず同じ結果になる。操作列のあと、決着まで「攻撃 / ATB を進める」を最大 500 回押して、膠着していないかも見る。
 

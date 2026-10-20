@@ -3,6 +3,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  damageConditions,
+  DAMAGE_CONDITIONS,
   effectMatrix,
   enemySkillMatrix,
   EFFECTS,
@@ -14,6 +16,7 @@ import {
 import { candidates, formatReport, summarize } from './report'
 import { runAll } from './sweep'
 import { runScenario } from './run'
+import { realEngineFactory } from './scenario'
 
 describe('生成', () => {
   it('総当たりの件数が直積どおり', () => {
@@ -21,6 +24,24 @@ describe('生成', () => {
     expect(enemySkillMatrix()).toHaveLength(EFFECTS.length * 5 * 10 * 3)
     expect(stackOrders(3)).toHaveLength(STACK_EFFECTS.length ** 3 * 2)
     expect(reactionChains()).toHaveLength(8 * 8 * 8 * 2)
+    // 条件 × 場所 3 × 受けるダメージの元 9 × 相手の相性 5 × 敵の HP 2 × ターン制/ATB 2
+    expect(damageConditions()).toHaveLength(DAMAGE_CONDITIONS.length * 3 * 9 * 5 * 2 * 2)
+  })
+
+  it('ダメージ条件の族は JSON 化でき、実際に反撃が動くシナリオを含む', () => {
+    const all = damageConditions()
+    expect(new Set(all.map((s) => s.id)).size).toBe(all.length)
+    expect(JSON.parse(JSON.stringify(all[0]))).toEqual(all[0])
+    // 固定 7（奇数）を受けて `ダメージ=奇数` の反撃が出る
+    const s = all.find((x) => x.id === 'damage-condition/turn/c0/counters/s1/plain/hp900')!
+    const eng = realEngineFactory(s, () => 0)
+    eng.selectSpell(s.spells[0])
+    expect(eng.getState().events.some((e) => e.kind === 'skill')).toBe(true)
+    // 固定 8（偶数）では出ない
+    const t = all.find((x) => x.id === 'damage-condition/turn/c0/counters/s2/plain/hp900')!
+    const eng2 = realEngineFactory(t, () => 0)
+    eng2.selectSpell(t.spells[0])
+    expect(eng2.getState().events.some((e) => e.kind === 'skill')).toBe(false)
   })
 
   it('id は全体で一意', () => {
@@ -29,6 +50,7 @@ describe('生成', () => {
       ...enemySkillMatrix(),
       ...stackOrders(2),
       ...reactionChains(),
+      ...damageConditions(),
       ...randomScenarios(1, 200),
     ]
     expect(new Set(all.map((s) => s.id)).size).toBe(all.length)
@@ -48,6 +70,7 @@ describe('小さな総当たりを実エンジンで走らせる（通常実行�
       ...randomScenarios(1, 15),
       ...stackOrders(2).slice(0, 20),
       ...reactionChains().slice(0, 20),
+      ...damageConditions().slice(0, 30),
     ]
     const r1 = runAll(scenarios)
     const r2 = runAll(scenarios)
