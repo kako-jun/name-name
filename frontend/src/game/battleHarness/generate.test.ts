@@ -18,7 +18,7 @@ import { runScenario } from './run'
 describe('生成', () => {
   it('総当たりの件数が直積どおり', () => {
     expect(effectMatrix()).toHaveLength(EFFECTS.length * 5 * 10 * 5)
-    expect(enemySkillMatrix()).toHaveLength(EFFECTS.length * 5 * 10 * 4)
+    expect(enemySkillMatrix()).toHaveLength(EFFECTS.length * 5 * 10 * 3)
     expect(stackOrders(3)).toHaveLength(STACK_EFFECTS.length ** 3 * 2)
     expect(reactionChains()).toHaveLength(8 * 8 * 8 * 2)
   })
@@ -119,8 +119,10 @@ describe('集計', () => {
 })
 
 describe('実エンジンの既知の状態', () => {
-  it('総当たりの 1 件を直接走らせても例外にならない（族の id から再現できる）', () => {
+  it('族の id から 1 件を取り出して走らせると、同じ id の結果が再現する', () => {
     const s = effectMatrix().find((x) => x.id.startsWith('effect-matrix/e0/'))!
-    expect(() => runScenario(s)).not.toThrow()
+    const r = runScenario(s)
+    expect(r.id).toBe(s.id)
+    expect(runScenario(JSON.parse(JSON.stringify(s)))).toEqual(r)
   })
 })

@@ -5,7 +5,7 @@
 import type { BattleActionEvent } from '../battleEngine'
 import { MAX_DAMAGE } from '../battleLimits'
 import { checkState, fingerprint, type DetectOptions, type Violation } from './detect'
-import { budgetRng, RngBudgetExceeded } from './rng'
+import { budgetRng, DEFAULT_RNG_BUDGET_PER_OP, RngBudgetExceeded } from './rng'
 import {
   applyOp,
   realEngineFactory,
@@ -62,7 +62,7 @@ export const DEFAULT_RUN: Required<Omit<RunOptions, 'engineFactory' | 'detect'>>
   driveLimit: 500,
   lockRepeat: 25,
   eventFloodLimit: 5000,
-  rngBudgetPerOp: 2_000_000,
+  rngBudgetPerOp: DEFAULT_RNG_BUDGET_PER_OP,
   slowOpMs: 3000,
   maxPerKind: 3,
 }

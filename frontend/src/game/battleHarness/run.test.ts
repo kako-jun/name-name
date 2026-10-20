@@ -110,6 +110,39 @@ describe('runScenario: わざと壊した合成エンジンを検出する', () 
     expect(r.metrics.opsRun).toBe(2)
   })
 
+  it('遅い操作 → slow-op', () => {
+    const r = runScenario(scenarioOf(), {
+      engineFactory: fakeFactory((_s, n) => {
+        if (n === 0) {
+          const t = performance.now()
+          while (performance.now() - t < 20) {
+            /* 待つ */
+          }
+        }
+      }),
+      slowOpMs: 5,
+      driveLimit: 0,
+    })
+    expect(kindsOf(r)).toContain('slow-op')
+  })
+
+  it('run 経由: ログの NaN と、勝敗と生存者の食い違い', () => {
+    const log = runScenario(scenarioOf(), {
+      engineFactory: fakeFactory((s, n) => {
+        if (n === 0) s.log.push('S に NaN の ダメージ！')
+      }),
+      driveLimit: 0,
+    })
+    expect(kindsOf(log)).toContain('bad-log-text')
+    const phase = runScenario(scenarioOf(), {
+      engineFactory: fakeFactory((s, n) => {
+        if (n === 0) s.enemies[0].hp = 0 // 敵が全滅したのに phase は party-input のまま
+      }),
+      driveLimit: 0,
+    })
+    expect(kindsOf(phase)).toContain('phase-mismatch')
+  })
+
   it('同じ種類の違反は maxPerKind 件まで', () => {
     const r = runScenario(
       scenarioOf({ ops: Array.from({ length: 10 }, () => ({ t: 'attack' as const })) }),
@@ -147,8 +180,19 @@ describe('runScenario: 実エンジン', () => {
     const a = runScenario({ ...normal, atb: { mode: 'active' } })
     const b = runScenario({ ...normal, atb: { mode: 'active' } })
     expect(b).toEqual(a)
-    const c = runScenario({ ...normal, seed: 43, atb: { mode: 'active' } })
-    expect(c.id).toBe(a.id) // seed が違っても実行できる（結果が同じとは限らない）
+    // 注入される乱数列は scenario.seed で決まる（同じ seed なら同じ、違えば違う）
+    const firstRoll = (seed: number): number => {
+      let v = -1
+      runScenario(scenarioOf({ seed }), {
+        engineFactory: fakeFactory((_s, n, rng) => {
+          if (n === 0) v = rng()
+        }),
+        driveLimit: 0,
+      })
+      return v
+    }
+    expect(firstRoll(1)).toBe(firstRoll(1))
+    expect(firstRoll(1)).not.toBe(firstRoll(2))
   })
 
   it('実行はシナリオを書き換えない（同じシナリオを何度走らせても同じ）', () => {

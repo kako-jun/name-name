@@ -27,8 +27,11 @@ export interface BudgetRng {
   total(): number
 }
 
+/** 1 操作の乱数消費の既定の予算。無限ループは数 ms でここに届く */
+export const DEFAULT_RNG_BUDGET_PER_OP = 2_000_000
+
 /** `lcg(seed)` を包み、`reset()` からの消費数が `budgetPerOp` を超えたら `RngBudgetExceeded` を投げる乱数 */
-export function budgetRng(seed: number, budgetPerOp = 20_000): BudgetRng {
+export function budgetRng(seed: number, budgetPerOp = DEFAULT_RNG_BUDGET_PER_OP): BudgetRng {
   const base = lcg(seed)
   let inOp = 0
   let total = 0

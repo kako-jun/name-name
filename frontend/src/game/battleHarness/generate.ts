@@ -153,13 +153,14 @@ export function enemySkillMatrix(): Scenario[] {
   EFFECTS.forEach((effect, ei) => {
     for (const scope of SKILL_SCOPES) {
       for (const dv of DEFENDER_VARIANTS) {
-        for (const hv of HP_VARIANTS.filter((h) => h.hp <= 50_000)) {
+        // hp0（味方が倒れている）は外す: 味方 HP 0 だと戦闘が始まらないので、実質 HP 1 の hp1 と重複する。10 億 HP も敵スキルでは不要
+        for (const hv of HP_VARIANTS.filter((h) => h.hp > 0 && h.hp <= 50_000)) {
           const skill: SkillExecution = { name: 'とくぎ', target: scope, effect }
           out.push({
             id: `enemy-skill/e${ei}/${scope}/${dv.name}/${hv.name}`,
             seed: 5000 + out.length,
             party: [
-              entity('a', { ...dv.over, hp: hv.hp || 1, maxHp: hv.maxHp }),
+              entity('a', { ...dv.over, hp: hv.hp, maxHp: hv.maxHp }),
               entity('b', { ...dv.over }),
             ],
             enemies: [

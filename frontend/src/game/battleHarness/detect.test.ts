@@ -100,12 +100,36 @@ describe('checkState: 壊れた状態を検出する', () => {
     const neg = baseState([entity('a')], [entity('s')])
     pushEvent(neg, [{ target: t, kind: 'damage', amount: -7, hpBefore: 50, hpAfter: 57 }])
     expect(kinds(neg)).toContain('hit-direction')
+    // 量だけ負で HP は変わらない（量の分岐だけで赤になる例）
+    const onlyAmount = baseState([entity('a')], [entity('s')])
+    pushEvent(onlyAmount, [{ target: t, kind: 'damage', amount: -7, hpBefore: 50, hpAfter: 50 }])
+    expect(kinds(onlyAmount)).toContain('hit-direction')
     const up = baseState([entity('a')], [entity('s')])
     pushEvent(up, [{ target: t, kind: 'damage', amount: 5, hpBefore: 50, hpAfter: 60 }])
     expect(kinds(up)).toContain('hit-direction')
     const down = baseState([entity('a')], [entity('s')])
     pushEvent(down, [{ target: t, kind: 'heal', amount: 5, hpBefore: 50, hpAfter: 40 }])
     expect(kinds(down)).toContain('hit-direction')
+  })
+
+  it('ヒット量の unsafe-integer', () => {
+    const s = baseState([entity('a')], [entity('s')])
+    pushEvent(s, [
+      {
+        target: { side: 'enemy', index: 0 },
+        kind: 'heal',
+        amount: 2 ** 60,
+        hpBefore: 1,
+        hpAfter: 100,
+      },
+    ])
+    expect(kinds(s)).toContain('unsafe-integer')
+  })
+
+  it('ATB なのに phase = enemy-turn', () => {
+    const s = baseState([entity('a')], [entity('s')], 'enemy-turn')
+    s.atb = { mode: 'active', partyGauge: [0], enemyGauge: [0], queue: [] }
+    expect(checkState(s, [], 0, OPTS).some((v) => v.detail.includes('ATB なのに'))).toBe(true)
   })
 
   it('イベントの NaN', () => {
@@ -193,9 +217,11 @@ describe('fingerprint / isBroken', () => {
     expect(fingerprint(a)).toBe(fingerprint(b))
     b.enemies[0].hp = 99
     expect(fingerprint(a)).not.toBe(fingerprint(b))
-    a.log.push('x') // ログは指紋に入れない
-    const c = baseState([entity('a')], [entity('s')])
-    expect(fingerprint(c)).toBe(fingerprint(baseState([entity('a')], [entity('s')])))
+    // ログだけ違う 2 状態の指紋は一致する（ログは指紋に入れない）
+    const x = baseState([entity('a')], [entity('s')])
+    const y = baseState([entity('a')], [entity('s')])
+    y.log.push('違うログ')
+    expect(fingerprint(x)).toBe(fingerprint(y))
   })
 
   it('stalemate だけは壊れに数えない', () => {
