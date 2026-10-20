@@ -75,6 +75,56 @@ export function snapToWalkable(mask: WalkMask, p: Vec, radius: number): Vec | nu
   return null
 }
 
+// ---- 前面レイヤー (#866) ----
+
+/**
+ * 前面レイヤーの不透明領域。opaque[y * width + x] = 1 なら、その点は前面の絵が手前に描かれる（主人公を隠す）。
+ * 描画には前面の画像をそのまま重ねる。これは「どれだけ隠れているか」をデバッグ表示・テストで測るためだけに使い、
+ * 歩行・リンク・エンカウントの判定には使わない（見た目だけ）。
+ */
+export interface ForegroundMask {
+  width: number
+  height: number
+  opaque: Uint8Array
+}
+
+/** RGBA ピクセル列から前面の不透明領域を作る。alpha が threshold 以上の点を前面とする */
+export function foregroundFromRgba(
+  width: number,
+  height: number,
+  rgba: ArrayLike<number>,
+  threshold = 128
+): ForegroundMask {
+  const opaque = new Uint8Array(width * height)
+  for (let i = 0; i < width * height; i++) opaque[i] = rgba[i * 4 + 3] >= threshold ? 1 : 0
+  return { width, height, opaque }
+}
+
+/**
+ * 主人公のスプライト矩形のうち、前面に覆われている割合 (0..1)。矩形は足元（下端中心）と表示の幅・高さから作る。
+ * 画面外の部分は数えない（矩形のうち画面内の点だけが分母）。画面内に点が無ければ 0。
+ */
+export function foregroundCoverage(
+  fg: ForegroundMask,
+  feet: Vec,
+  spriteWidth: number,
+  spriteHeight: number
+): number {
+  const x0 = Math.max(0, Math.floor(feet.x - spriteWidth / 2))
+  const x1 = Math.min(fg.width, Math.ceil(feet.x + spriteWidth / 2))
+  const y0 = Math.max(0, Math.floor(feet.y - spriteHeight))
+  const y1 = Math.min(fg.height, Math.ceil(feet.y))
+  let total = 0
+  let covered = 0
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      total++
+      if (fg.opaque[y * fg.width + x] === 1) covered++
+    }
+  }
+  return total === 0 ? 0 : covered / total
+}
+
 // ---- 入力 → 移動ベクトル ----
 
 export interface DirectionKeys {

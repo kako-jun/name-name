@@ -58,6 +58,36 @@ function ok(raw: unknown): FieldSampleConfig {
   return r.value
 }
 
+describe('foreground 前面レイヤー (#866)', () => {
+  const parse = (c: Raw) => parseConfig(c, BASE)
+  it('省略は undefined（既存設定は変わらない）', () => {
+    const r = parse(minimal())
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.scenes.a.foreground).toBeUndefined()
+    expect('foreground' in r.value.scenes.a).toBe(false)
+  })
+  it('URL に解決される（相対は設定 JSON 基準・assetBaseUrl は images 配下）', () => {
+    const c = mutated((c) => (c.scenes.a.foreground = 'a-fg.png'))
+    const r = parse(c)
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.scenes.a.foreground).toBe('https://example.com/field/a-fg.png')
+    const c2 = mutated((c) => {
+      c.assetBaseUrl = 'https://cdn.example.com/g'
+      c.scenes.a.foreground = 'maps/a-fg.png'
+    })
+    const r2 = parse(c2)
+    if (!r2.ok) throw new Error(r2.error)
+    expect(r2.value.scenes.a.foreground).toBe('https://cdn.example.com/g/images/maps/a-fg.png')
+  })
+  it('文字列以外・空文字は、パスつきのエラー', () => {
+    for (const bad of [1, '', '  ', null, {}]) {
+      const r = parse(mutated((c) => (c.scenes.a.foreground = bad)))
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('scenes.a.foreground')
+    }
+  })
+})
+
 describe('playerHeight (#810)', () => {
   it('既定の player.height は 96', () => {
     expect(DEFAULTS.height).toBe(96)

@@ -15,6 +15,8 @@ import type { BattleEntity } from '../game/spellDsl'
 import {
   arrivalPosition,
   detectEdgeLink,
+  foregroundCoverage,
+  foregroundFromRgba,
   facingFromVector,
   isOutward,
   keysToVector,
@@ -28,6 +30,7 @@ import {
   type DirectionKeys,
   type Facing8,
   type FieldLink,
+  type ForegroundMask,
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
@@ -80,11 +83,17 @@ interface LoadedScene {
   background: Texture
   mask: WalkMask
   overlay: Texture
+  /** 前面レイヤー (#866)。シーンに foreground が無ければ null */
+  foreground: { texture: Texture; mask: ForegroundMask } | null
 }
 
 async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedScene> {
   const sc = config.scenes[id]
-  const [bg, maskBmp] = await Promise.all([loadBitmap(sc.background), loadBitmap(sc.mask)])
+  const [bg, maskBmp, fgBmp] = await Promise.all([
+    loadBitmap(sc.background),
+    loadBitmap(sc.mask),
+    sc.foreground ? loadBitmap(sc.foreground) : Promise.resolve(null),
+  ])
   const canvas = document.createElement('canvas')
   canvas.width = maskBmp.width
   canvas.height = maskBmp.height
@@ -97,6 +106,21 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
     throw new Error(
       `シーン ${id}: 背景（${bg.width}x${bg.height}）とマスク（${mask.width}x${mask.height}）の大きさが違います`
     )
+  // 前面レイヤー (#866): 背景と同じ大きさの透明 PNG。不透明領域は隠れ率の測定用に別途読む
+  let foreground: LoadedScene['foreground'] = null
+  if (fgBmp) {
+    if (fgBmp.width !== mask.width || fgBmp.height !== mask.height)
+      throw new Error(
+        `シーン ${id}: 前面（${fgBmp.width}x${fgBmp.height}）と背景（${mask.width}x${mask.height}）の大きさが違います`
+      )
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(fgBmp, 0, 0)
+    const fgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    foreground = {
+      texture: Texture.from(fgBmp),
+      mask: foregroundFromRgba(canvas.width, canvas.height, fgData.data),
+    }
+  }
   // デバッグ用オーバーレイ: 歩ける所を半透明の緑に
   const ov = ctx.createImageData(mask.width, mask.height)
   for (let i = 0; i < mask.walkable.length; i++) {
@@ -106,7 +130,7 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
     }
   }
   ctx.putImageData(ov, 0, 0)
-  return { background: Texture.from(bg), mask, overlay: Texture.from(canvas) }
+  return { background: Texture.from(bg), mask, overlay: Texture.from(canvas), foreground }
 }
 
 async function loadConfig(): Promise<FieldSampleConfig> {
@@ -194,12 +218,14 @@ async function main(): Promise<void> {
 
   const bgSprite = new Sprite(scene.background)
   const overlaySprite = new Sprite(scene.overlay)
+  // 前面レイヤー (#866): 主人公より手前。シーンに前面が無ければ非表示
+  const foregroundSprite = new Sprite(Texture.EMPTY)
   const player = new Sprite(walkTex.down![0])
   player.anchor.set(0.5, 1) // 足元 = スプライト下端中心
   const marker = new Graphics()
   const fade = new Graphics()
   const world = new Container()
-  world.addChild(bgSprite, overlaySprite, player, marker)
+  world.addChild(bgSprite, overlaySprite, player, foregroundSprite, marker)
   app.stage.addChild(world, fade)
 
   const startSnap = snapToWalkable(scene.mask, config.start, 80)
@@ -277,6 +303,8 @@ async function main(): Promise<void> {
     scene = s
     bgSprite.texture = s.background
     overlaySprite.texture = s.overlay
+    foregroundSprite.texture = s.foreground?.texture ?? Texture.EMPTY
+    foregroundSprite.visible = s.foreground !== null
     if (app.renderer.width !== s.mask.width || app.renderer.height !== s.mask.height)
       app.renderer.resize(s.mask.width, s.mask.height)
     fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0x000000)
@@ -497,8 +525,12 @@ async function main(): Promise<void> {
       marker.circle(pos.x, pos.y, 5).fill(0xff0000)
       marker.rect(0, 0, w, h).stroke({ width: 2, color: 0xffff00, alpha: 0.5 })
     }
+    // 前面に隠れている割合（デバッグ表示用。判定には使わない）
+    const hidden = scene.foreground
+      ? foregroundCoverage(scene.foreground.mask, pos, Math.abs(tex.width * s), tex.height * s)
+      : 0
     $('info').textContent =
-      `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}`
+      `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}${scene.foreground ? `  前面に隠れる=${(hidden * 100).toFixed(0)}%` : ''}`
   })
 
   // bfcache に入る場合（persisted）は破棄しない（pageshow で復帰したとき動かなくなるため）

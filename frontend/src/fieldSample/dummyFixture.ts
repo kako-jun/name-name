@@ -54,6 +54,28 @@ function mask(w: number, h: number): string {
   return c.toDataURL('image/png')
 }
 
+/** 前面レイヤー (#866) の見本: 透明な画像に、通路の上へ吊った物（梁と吊り下げのブラウン管）だけを描く */
+function overhead(w: number, h: number): string {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  g.fillStyle = '#c9a227'
+  g.fillRect(180, 40, 280, 10) // 天井の梁
+  g.fillStyle = '#444'
+  g.fillRect(230, 50, 6, 70) // 吊り棒
+  g.fillRect(404, 50, 6, 70)
+  g.fillStyle = '#7a4aa8'
+  g.fillRect(200, 120, 240, 80) // 吊られたブラウン管（足元が通路上でも頭〜体が隠れる高さ）
+  g.fillStyle = '#fff'
+  g.font = 'bold 20px sans-serif'
+  g.textAlign = 'center'
+  g.textBaseline = 'middle'
+  g.fillText('FRONT (hanging)', 320, 160)
+  return c.toDataURL('image/png')
+}
+
 const FACING_COLOR = { up: '#3a6', down: '#36a', left: '#a63', right: '#a36' } as const
 const POSE_COLOR: Record<string, string> = {
   idle: '#3b6bb5',
@@ -92,6 +114,7 @@ export function buildDummyFixture(): Record<string, unknown> {
       meadow: {
         background: field(W, H, '#2f5d3a', 'DUMMY FIELD'),
         mask: mask(W, H),
+        foreground: overhead(W, H),
         links: [],
         encounter: { rate: 3, groups: ['slime', 'slime+bat', 'bat+bat'] },
       },

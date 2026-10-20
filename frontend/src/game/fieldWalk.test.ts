@@ -5,6 +5,8 @@ import {
   FACING_HYSTERESIS_DEG,
   SECTOR_HALF_DEG,
   facingFromVector,
+  foregroundCoverage,
+  foregroundFromRgba,
   isOutward,
   isWalkable,
   keysToVector,
@@ -785,5 +787,67 @@ describe('resolvePlayerHeight / playerScale (#810)', () => {
   })
   it('画像の高さが 0 なら倍率は 1', () => {
     expect(playerScale(96, 0)).toBe(1)
+  })
+})
+
+describe('前面レイヤー (#866)', () => {
+  /** alpha だけの RGBA。rows の '#' が不透明 */
+  function fgOf(rows: string[]) {
+    const h = rows.length
+    const w = rows[0].length
+    const rgba = new Uint8Array(w * h * 4)
+    rows.forEach((row, y) => {
+      for (let x = 0; x < w; x++) rgba[(y * w + x) * 4 + 3] = row[x] === '#' ? 255 : 0
+    })
+    return foregroundFromRgba(w, h, rgba)
+  }
+
+  it('foregroundFromRgba: alpha がしきい値以上の点だけが前面（色は見ない）', () => {
+    const rgba = new Uint8Array(4 * 4)
+    rgba.set([255, 255, 255, 127], 0) // 閾値未満
+    rgba.set([0, 0, 0, 128], 4) // 閾値ちょうど
+    rgba.set([0, 0, 0, 255], 8)
+    rgba.set([255, 255, 255, 0], 12) // 白でも透明なら前面でない
+    expect(Array.from(foregroundFromRgba(4, 1, rgba).opaque)).toEqual([0, 1, 1, 0])
+  })
+
+  it('foregroundCoverage: スプライト矩形（足元=下端中心）のうち前面に覆われた割合', () => {
+    // 10x10。上半分 (y<5) が前面。スプライト 4x4、足元 (5,8) → 矩形は x3..7, y4..8
+    const fg = fgOf([
+      '##########',
+      '##########',
+      '##########',
+      '##########',
+      '##########',
+      '..........',
+      '..........',
+      '..........',
+      '..........',
+      '..........',
+    ])
+    // y=4 の 1 行(4 点)だけが前面 → 4/16
+    expect(foregroundCoverage(fg, { x: 5, y: 8 }, 4, 4)).toBeCloseTo(0.25)
+    // 足元が前面の奥へ入るほど増える: 足元 y=5 → 矩形 y1..5 は全部前面
+    expect(foregroundCoverage(fg, { x: 5, y: 5 }, 4, 4)).toBe(1)
+    // 前面から離れていれば 0
+    expect(foregroundCoverage(fg, { x: 5, y: 10 }, 4, 4)).toBe(0)
+  })
+
+  it('foregroundCoverage: 画面外は分母に数えない・画面内に点が無ければ 0', () => {
+    const fg = fgOf(['####', '####', '####', '####'])
+    // 矩形が左へはみ出しても、画面内の点はすべて前面 → 1
+    expect(foregroundCoverage(fg, { x: 0, y: 4 }, 4, 4)).toBe(1)
+    expect(foregroundCoverage(fg, { x: 100, y: 100 }, 4, 4)).toBe(0)
+    // 右へはみ出しても、次の行の点を数えない（行の折り返しの誤読を防ぐ）
+    const wrap = fgOf(['....', '####'])
+    expect(foregroundCoverage(wrap, { x: 4, y: 1 }, 4, 1)).toBe(0)
+    expect(foregroundCoverage(fg, { x: 2, y: 2 }, 0, 0)).toBe(0)
+  })
+
+  it('前面は歩行判定に関与しない（歩行マスクとは別の型・別の関数）', () => {
+    const walk = openMask(4, 4)
+    const fg = fgOf(['####', '####', '####', '####'])
+    expect(isWalkable(walk, 1, 1)).toBe(true) // 前面に覆われた地面も歩ける
+    expect(fg.opaque[1 * 4 + 1]).toBe(1)
   })
 })

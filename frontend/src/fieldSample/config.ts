@@ -52,6 +52,11 @@ export interface FieldSceneConfig {
   background: string
   /** 歩行マスク画像の URL（白=歩ける・黒=歩けない。背景と同じ大きさ） */
   mask: string
+  /**
+   * 前面レイヤー (#866)。背景と同じ大きさの透明 PNG の URL。主人公（と同行者）より手前に重ねて描く（天井から吊った物の下を歩くと隠れる）。
+   * 見た目だけで、歩行マスク・リンク・エンカウントには関与しない。省略 = 従来どおり（前面なし）
+   */
+  foreground?: string
   links: FieldLink[]
   /** このシーンでの主人公の表示高さ（背景ピクセル）。省略 = 全体の `player.height` (#810) */
   playerHeight?: number
@@ -279,6 +284,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         links.push({ edge: l.edge as Edge, range: [r[0], r[1]], to: l.to })
       }
     }
+    let foreground: string | undefined
+    if (sc.foreground !== undefined) {
+      const fg = url(sc.foreground, `scenes.${id}.foreground`)
+      if (!fg.ok) return fg
+      foreground = fg.value
+    }
     let playerHeight: number | undefined
     if (sc.playerHeight !== undefined) {
       const ph = positive(sc.playerHeight, 0, `scenes.${id}.playerHeight`)
@@ -306,6 +317,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       id,
       background: background.value,
       mask: mask.value,
+      ...(foreground !== undefined ? { foreground } : {}),
       links,
       ...(playerHeight !== undefined ? { playerHeight } : {}),
       encounter,
