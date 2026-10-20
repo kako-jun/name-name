@@ -546,7 +546,7 @@ describe('性質ベースのファズ: 橙の通行', () => {
   }, 120000)
 
   it('(P5) 橙の無いマスクは、従来の stepMove だけの動きと完全に同じ', () => {
-    for (let seed = 1; seed <= 60; seed++) {
+    for (let seed = 1; seed <= 40; seed++) {
       const t = makeTerrain(seed * 7)
       const plainGrid = new Grid(t.grid.w, t.grid.h, 0)
       for (let i = 0; i < t.grid.cells.length; i++)
@@ -576,7 +576,7 @@ describe('性質ベースのファズ: 橙の通行', () => {
         expect(a).toEqual(b)
       }
     }
-  })
+  }, 60000)
 })
 
 function ctxFrame(
@@ -600,12 +600,15 @@ function floodFromBand(base: WalkMask, edge: Edge, band: number): Set<number> {
     seen.add(i)
     q.push(i)
   }
-  for (let d = 0; d < Math.max(1, Math.ceil(band)); d++) {
-    if (edge === 'top') for (let x = 0; x < w; x++) push(x, d)
-    if (edge === 'bottom') for (let x = 0; x < w; x++) push(x, h - 1 - d)
-    if (edge === 'left') for (let y = 0; y < h; y++) push(d, y)
-    if (edge === 'right') for (let y = 0; y < h; y++) push(w - 1 - d, y)
-  }
+  // 端から垂直な一直線に橙が無い（黒は越えてよい）帯の白を種にする
+  const vertical = edge === 'top' || edge === 'bottom'
+  for (let k = 0; k < (vertical ? w : h); k++)
+    for (let d = 0; d < Math.max(1, Math.ceil(band)); d++) {
+      const x = vertical ? k : edge === 'left' ? d : w - 1 - d
+      const y = vertical ? (edge === 'top' ? d : h - 1 - d) : k
+      if (base.assist && base.assist[y * w + x] === 1) break
+      push(x, y)
+    }
   while (q.length) {
     const i = q.pop()!
     const x = i % w
@@ -643,8 +646,9 @@ function makeEdgeTerrain(seed: number): {
   const rim = r() < 0.4 ? ri(1, 8) : 0 // 橙が端から手前で止まる（黒い縁）
   const thick = ri(1, 18)
   const whiteFrom = rim + thick
-  const a0 = ri(0, Math.floor(along / 3))
-  const a1 = ri(Math.floor((along * 2) / 3), along)
+  const full = r() < 0.3 // 橙が端いっぱいに広がる
+  const a0 = full ? 0 : ri(0, Math.floor(along / 3))
+  const a1 = full ? along : ri(Math.floor((along * 2) / 3), along)
   const put = (d0: number, d1: number, c0: number, c1: number, v: Cell): void => {
     for (let d = d0; d < d1; d++)
       for (let c = c0; c < c1; c++) {

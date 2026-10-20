@@ -404,10 +404,13 @@ describe('whiteReachableFromEdge（来た端の帯から橙を通らずにたど
     expect(Array.from(r)).toEqual([1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0])
     expect(whiteReachableFromEdge(split, 'top', 1)[3]).toBe(1)
   })
-  it('帯に白が無ければ空', () => {
-    const base = maskOf(['ooo', '...', '...'])
-    expect(whiteReachableFromEdge(base, 'top', 1).some((v) => v === 1)).toBe(false)
-    expect(whiteReachableFromEdge(base, 'top', 2).some((v) => v === 1)).toBe(true)
+  it('帯に白が無ければ空。黒い縁は越えて帯の白が種になるが、橙の向こうの白は帯の中でも種にしない', () => {
+    const rim = maskOf(['###', '...', '...'])
+    expect(whiteReachableFromEdge(rim, 'top', 1).some((v) => v === 1)).toBe(false)
+    expect(whiteReachableFromEdge(rim, 'top', 2).some((v) => v === 1)).toBe(true)
+    const orange = maskOf(['ooo', '...', '...'])
+    expect(whiteReachableFromEdge(orange, 'top', 1).some((v) => v === 1)).toBe(false)
+    expect(whiteReachableFromEdge(orange, 'top', 2).some((v) => v === 1)).toBe(false)
   })
 })
 
@@ -458,6 +461,15 @@ describe('端リンクの着地 (resolveEdgeArrival)', () => {
   const thin = grid(40, 60, (x, y) => (y < 10 ? (x >= 10 && x <= 29 ? 'o' : '#') : '.'))
   it('通れない状態: 薄い橙（10px）の向こうの白には置かず、断る', () => {
     const r = arrive(thin, {
+      link: { edge: 'bottom', range: [10, 29], to: 'B' },
+      back: { edge: 'top', range: [10, 29], to: 'A' },
+      srcPos: { x: 20, y: 59 },
+    })
+    expect(r.kind).toBe('locked')
+  })
+  it('通れない状態: 端いっぱいの薄い橙（3px。帯の幅の中）の向こうの白にも置かず、断る', () => {
+    const m = grid(40, 60, (_x, y) => (y < 3 ? 'o' : '.'))
+    const r = arrive(m, {
       link: { edge: 'bottom', range: [10, 29], to: 'B' },
       back: { edge: 'top', range: [10, 29], to: 'A' },
       srcPos: { x: 20, y: 59 },

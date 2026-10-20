@@ -243,27 +243,30 @@ export interface EdgeArrivalRefused {
 export type EdgeArrivalResult = EdgeArrivalOk | EdgeArrivalRefused
 
 /**
- * 来た端（edge）の帯（端から band 幅）の歩ける白を種に、橙を通らずに（4 近傍で）たどれる白のセルを 1 に
- * した配列を返す。マスクは橙を除いた元のマスク（橙は walkable=0 なので壁になる）。
+ * 来た端（edge）から橙を通らずにたどれる白のセルを 1 にした配列を返す。種は、端から band 幅の帯の歩ける白のうち、
+ * 端からそのセルまでの一直線（端から垂直に）に橙が無いもの（黒い縁は越えてよい。端から数 px 手前で橙が止まり
+ * 黒い縁があっても、帯の白が種になる。一方、薄い橙の向こうの白は、帯の中にあっても、橙を越えた先なので種にしない）。
+ * そこから橙・黒を通らずに（4 近傍で）たどれる白が対象。マスクは橙を除いた元のマスク（橙は walkable=0 で壁になる）。
  */
 export function whiteReachableFromEdge(base: WalkMask, edge: Edge, band = 1): Uint8Array {
-  const { width, height, walkable } = base
+  const { width, height, walkable, assist } = base
   const seen = new Uint8Array(width * height)
   const queue: number[] = []
-  const depth = (n: number): number => Math.max(1, Math.min(n, Math.ceil(band)))
-  const seed = (x: number, y: number): void => {
-    const i = y * width + x
-    if (walkable[i] === 1 && !seen[i]) {
-      seen[i] = 1
-      queue.push(i)
+  const vertical = edge === 'top' || edge === 'bottom'
+  const lines = vertical ? width : height
+  const len = vertical ? height : width
+  const depth = Math.max(1, Math.min(len, Math.ceil(band)))
+  for (let k = 0; k < lines; k++) {
+    for (let d = 0; d < depth; d++) {
+      const x = vertical ? k : edge === 'left' ? d : width - 1 - d
+      const y = vertical ? (edge === 'top' ? d : height - 1 - d) : k
+      const i = y * width + x
+      if (assist && assist[i] === 1) break // 橙に当たったら、その先は種にしない
+      if (walkable[i] === 1 && !seen[i]) {
+        seen[i] = 1
+        queue.push(i)
+      }
     }
-  }
-  if (edge === 'top' || edge === 'bottom') {
-    for (let d = 0; d < depth(height); d++)
-      for (let x = 0; x < width; x++) seed(x, edge === 'top' ? d : height - 1 - d)
-  } else {
-    for (let d = 0; d < depth(width); d++)
-      for (let y = 0; y < height; y++) seed(edge === 'left' ? d : width - 1 - d, y)
   }
   const visit = (j: number): void => {
     if (walkable[j] === 1 && !seen[j]) {
