@@ -7,6 +7,8 @@ import type { BattleEntity } from './spellDsl'
 import {
   MULTI_HIT_INTERVAL_MS,
   POPUP_COLORS,
+  POPUP_STACK_STEP,
+  fitPopupFontSize,
   buildActionTimeline,
   eventTimeline,
 } from './battleMotion'
@@ -31,6 +33,7 @@ function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 interface Internals {
   enemyViews: { container: Container; baseX: number }[]
   popups: { text: Text; stack: number }[]
+  spawnPopup: (hit: unknown, sinceHit: number, stack?: number) => void
   playback: { queue: unknown[]; active: unknown }
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
@@ -155,6 +158,35 @@ describe('FF 式 複数ヒットの順次再生', () => {
     expect(closed).toEqual([])
     for (let t = 0; t < 6000; t++) s.tick(1)
     expect(closed).toEqual(['victory'])
+  })
+
+  describe('連続ヒットの段の間隔は実際に描く数字の高さに比例する (#877)', () => {
+    /** 段 0 と段 2 を同じ時刻で出し、y の差と描いたフォントサイズを返す */
+    const stackGap = (amount: number) => {
+      const { s } = setup([entity('slime', { atk: 0 })])
+      s.redraw(800, 450)
+      const hit = { kind: 'heal', amount, target: { side: 'enemy', index: 0 } }
+      I(s).spawnPopup(hit, 0, 0)
+      I(s).spawnPopup(hit, 0, 2)
+      const [a, b] = I(s).popups
+      return { gap: a.text.y - b.text.y, font: Number(a.text.style.fontSize) }
+    }
+    it('4 文字以下は従来（#879）どおり、縮めない基本フォントの 0.85 倍ずつ', () => {
+      for (const amount of [9, 9999]) {
+        const { gap, font } = stackGap(amount)
+        expect(font).toBe(fitPopupFontSize(String(amount), font))
+        expect(gap).toBeCloseTo(2 * font * POPUP_STACK_STEP, 5)
+      }
+    })
+    it('5 桁以上は縮小後のサイズに比例し、4 桁より間隔が狭い', () => {
+      const base = stackGap(9999)
+      for (const amount of [99999, 999999, 9999999]) {
+        const { gap, font } = stackGap(amount)
+        expect(font).toBeLessThan(base.font)
+        expect(gap).toBeCloseTo(2 * font * POPUP_STACK_STEP, 5)
+        expect(gap).toBeLessThan(base.gap)
+      }
+    })
   })
 
   it('ダメージ数字は 1 ヒット 9999 で頭打ち（#877）', () => {
