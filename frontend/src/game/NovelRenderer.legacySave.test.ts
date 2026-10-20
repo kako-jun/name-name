@@ -125,6 +125,33 @@ const NESTED = [
   '> end',
 ].join('\n\n')
 
+// 自分のブロックを閉じる一回限りのブロックの中で保存し、後ろの [条件:] が、ブロック内の [フラグ:] に依存する脚本
+const SELF_CLOSE = [
+  '> p',
+  '[条件: x]',
+  '> A',
+  '[フラグ: y = true]',
+  '[フラグ: x = false]',
+  '> B',
+  '[/条件]',
+  '[条件: y]',
+  '> Y',
+  '[/条件]',
+  '> end',
+].join('\n\n')
+// 自分のブロックを閉じ、同じフラグを見る別のブロックが後ろにある脚本（C は新旧どちらの意味論でも出てはいけない）
+const SELF_CLOSE_REENTER = [
+  '> p',
+  '[条件: x]',
+  '> A',
+  '[フラグ: x = false]',
+  '[/条件]',
+  '[条件: x]',
+  '> C',
+  '[/条件]',
+  '> end',
+].join('\n\n')
+
 interface Case {
   name: string
   bodies: string[]
@@ -194,6 +221,22 @@ const CASES: Case[] = [
     linear: true,
     expected: ['A', 'B', 'Z', 'end'],
   },
+  {
+    name: '自分のブロックを閉じる一回限りのブロックの中（A）で保存: 後ろの [フラグ:] が後続の条件に効く',
+    bodies: [SELF_CLOSE],
+    eventIndex: 1,
+    flags: { x: T },
+    // 導入前の実装は ['A', 'Y', 'end']。B はブロック入場時評価の新しい意味論で出る（x は A の時点でまだ真）。Y は残す。
+    expected: ['A', 'B', 'Y', 'end'],
+  },
+  {
+    name: '自分のブロックを閉じるブロックの中（A）で保存: 同じフラグを見る後ろのブロックは出ない',
+    bodies: [SELF_CLOSE_REENTER],
+    eventIndex: 1,
+    flags: { x: T },
+    // 導入前の実装は ['A', 'end']。C は新旧どちらの意味論でも出てはいけない。
+    expected: ['A', 'end'],
+  },
 ]
 
 describe('旧形式セーブの再生列が導入前の実装と一致する (#799)', () => {
@@ -218,5 +261,29 @@ describe('旧形式セーブの既知の差分 (#799)', () => {
     const scenes = await scenesOf([NESTED])
     const r = await loadLegacy(scenes, legacySlot('a', 1, { x: T }))
     expect(playRest(r)).toEqual(['A', 'B', 'end'])
+  })
+})
+
+describe('旧形式セーブからの再保存 (#799)', () => {
+  it('復元した訪問の再保存でも同じ列に戻る（entryScanFlags を通す）', async () => {
+    const scenes = await scenesOf([SELF_CLOSE])
+    const r = await loadLegacy(scenes, legacySlot('a', 1, { x: T }))
+    const snap = r.getSnapshot()
+    expect(snap.entryFlags).toEqual({ x: T })
+    expect(snap.entryScanFlags).toEqual({ x: { Bool: false }, y: T })
+    r.quickSave()
+    const loaded = new NovelRenderer()
+    loaded.setScenes(scenes)
+    loaded.setDocKey('legacy')
+    expect((await loaded.quickLoad())?.status).toBe('entered')
+    expect(playRest(loaded)).toEqual(['A', 'B', 'Y', 'end'])
+  })
+
+  it('新形式の訪問は entryScanFlags を出さない', async () => {
+    const scenes = await scenesOf([SELF_CLOSE])
+    const r = new NovelRenderer()
+    r.setScenes(scenes)
+    await r.startFrom({ sceneId: 'a', flags: { x: T } })
+    expect(Object.keys(r.getSnapshot())).not.toContain('entryScanFlags')
   })
 })

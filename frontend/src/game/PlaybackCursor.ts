@@ -147,10 +147,11 @@ export class PlaybackCursor {
    * 展開が flags に依存しないので何も出さない（セーブ JSON は従来と 1 バイトも変わらない）。
    * `entryRawIndex` は非0のときだけ出す。
    */
-  snapshotEntry(): Pick<NovelGameState, 'entryFlags' | 'entryRawIndex'> {
+  snapshotEntry(): Pick<NovelGameState, 'entryFlags' | 'entryScanFlags' | 'entryRawIndex'> {
     if (!this._hasCondition) return {}
     return {
       entryFlags: this._entry.flags,
+      ...(this._entry.scanFlags !== undefined ? { entryScanFlags: this._entry.scanFlags } : {}),
       ...(this._entry.fromRawIndex !== 0 ? { entryRawIndex: this._entry.fromRawIndex } : {}),
     }
   }

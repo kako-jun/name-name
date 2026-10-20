@@ -451,6 +451,7 @@ interface NovelGameState {
   currentBgmPath: string | null; // 再生中のBGM
   storyEnded: boolean; // 終劇状態（#386）。confinement（在圏）外への choice ジャンプで true になる宣言的フラグ。演出の中間状態ではない
   entryFlags?: Record<string, FlagValue>; // このシーン訪問に入った瞬間の flags（#799）。[条件:] の入場時評価の入力。元列に [条件:] を含むときだけ。無い旧セーブは保存位置を含むトップレベル要素までを flags で静的に、後ろを逐次に展開して復元
+  entryScanFlags?: Record<string, FlagValue>; // 旧セーブから復元した訪問だけ。逐次評価の走査開始 flags（保存位置を含む要素の残りの [フラグ:] を適用したもの）。無ければ entryFlags
   entryRawIndex?: number; // 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置（#799。非0のときだけ）
 }
 ```
@@ -629,7 +630,7 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 - 元の events 配列を変更しない（不変展開）
 - 元列を先頭から走査し、`Flag` を走査用の複製に適用しながら `Condition` に達した時点で評価する（TUI の `build_scene_items` と同じ）。ブロック内でそのフラグを変えても、入場済みのブロックの残りは流れる
 - 展開はシーンの訪問ごとに1回（`PlaybackCursor.load` / `replaceEvents`）。`[フラグ:]` を実行しても再展開しない（`reResolve` は廃止）。訪問中は列が不変で、`displayEventCount`・SeekBar の番号付け・`eventIndex` は固定された列に対する値
-- 入場時の flags は、`NovelGameState.entryFlags`（元列に `[条件:]` を含むときだけ）としてセーブ・スナップショットに載る。`eventIndex` の意味（展開後の列の添字）は変わらない。`entryFlags` が無い旧セーブは、保存位置を含むトップレベル要素までを保存された flags での静的展開（`resolveEvents` と同じ結果）で、後ろを保存時の flags からの逐次評価で復元する（`entryFromState`）
+- 入場時の flags は、`NovelGameState.entryFlags`（元列に `[条件:]` を含むときだけ）としてセーブ・スナップショットに載る。`eventIndex` の意味（展開後の列の添字）は変わらない。`entryFlags` が無い旧セーブは、保存位置を含むトップレベル要素までを保存された flags での静的展開（`resolveEvents` と同じ結果）で、後ろを、保存位置を含む要素の残りの `[フラグ:]` を適用した flags（`entryScanFlags`）からの逐次評価で復元する（`entryFromState`。要素の内側の `[条件:]` だけは評価し直されない制約が残る）
 - `rawOffsets`（元列のトップレベル i 番目の展開後の開始位置）が、線形ストリームのシーン境界の計算（`resolveLinearSegments`）に使われる
 - `resolveEvents(events, flags)` は静的展開（全体を1つの flags で展開）として残り、旧セーブの保存位置までの展開と `[条件:]` を含まない入力の旧挙動との一致の基準になる
 - 詳細は ADR 0003 の #799 追記

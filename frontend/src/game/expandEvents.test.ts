@@ -309,8 +309,12 @@ describe('expandEvents rawOffsets / fromRawIndex (#799)', () => {
     const at = (eventIndex: number): NovelGameState =>
       ({ flags: {}, eventIndex }) as unknown as NovelGameState
     expect(entryFromState(at(0), raw)).toEqual({ flags: {}, fromRawIndex: 1 })
-    // 位置1 は Flag 自身（これから実行する）。要素 0..1 の展開が変わらないので c=true を先に適用して走査する
-    expect(entryFromState(at(1), raw)).toEqual({ flags: bools({ c: true }), fromRawIndex: 2 })
+    // 位置1 は Flag 自身（これから実行する）。要素 0..1 は flags で静的に展開し、c=true を先に適用した scanFlags から走査する
+    expect(entryFromState(at(1), raw)).toEqual({
+      flags: {},
+      scanFlags: bools({ c: true }),
+      fromRawIndex: 2,
+    })
     // 位置2 は t3（空の [条件] はまたぐ）
     expect(entryFromState(at(2), raw)).toEqual({ flags: {}, fromRawIndex: 4 })
     // 終端・範囲外は全体を静的展開
