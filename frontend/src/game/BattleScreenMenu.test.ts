@@ -1176,12 +1176,23 @@ describe('コマンド構成 battle_commands と「わざ」(#873)', () => {
     expect(engine.getState().log).toHaveLength(1)
   })
 
-  it('3 コマンド（にげる無し）でも落ちず、4 番目のキー(↓)は何も起きない', () => {
+  it('3 コマンド + cross は描画どおり grid になり、矢印キーは何も決めず・既定動作も止めない', () => {
     const { s, engine } = buildSkill({ commands: ['skill', 'spell', 'item'] })
     expect(labels(s)).toHaveLength(3)
-    press('ArrowDown')
+    expect((s as unknown as { commandLayout: string }).commandLayout).toBe('grid')
+    for (const k of ['ArrowUp', 'ArrowLeft', 'ArrowRight', 'ArrowDown']) {
+      expect(press(k).defaultPrevented).toBe(false)
+    }
     expect(engine.isOver()).toBe(false)
     expect(types(s)).toEqual([])
+    expect(engine.getState().log).toHaveLength(1)
+  })
+
+  it('4 コマンド + cross は cross のまま（↑ で既定動作を止めて決定する）', () => {
+    const { s } = buildSkill()
+    expect((s as unknown as { commandLayout: string }).commandLayout).toBe('cross')
+    expect(press('ArrowUp').defaultPrevented).toBe(true)
+    expect(types(s)).toEqual(['list'])
   })
 
   it('わざのタップ（ボタン）でも一覧が開く', () => {

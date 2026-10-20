@@ -140,6 +140,7 @@ import {
   SIDE_STATUS_GAUGE_HEIGHT,
   SIDE_STATUS_MARKER_FONT_SIZE,
   frontStatsLeftPadding,
+  effectiveCommandLayout,
   SELECT_MARK_LOG_GAP,
   sideStatusMarkerX,
   computeSelectMarkTriangle,
@@ -611,8 +612,14 @@ export class BattleScreen extends Container {
     this.presentation = opts.presentation === 'ff' && this.layoutMode === 'side' ? 'ff' : 'dq'
     // FF 式の窓は一度に全文を出す。1 文字ずつ表示 (#755) は DQ 式のログ用で、ff では使わない
     this.logTypewriter = opts.logTypewriter === 'on' && this.presentation === 'dq' ? 'on' : 'off'
+    // 描画（battleLayout の effectiveCommandLayout）と同じ判定にそろえる: cross は side かつ 4 コマンドのときだけ
     this.commandLayout =
-      opts.commandLayout === 'cross' && this.layoutMode === 'side' ? 'cross' : 'grid'
+      this.layoutMode === 'side'
+        ? effectiveCommandLayout(
+            opts.commandLayout,
+            resolveCommandSpecs(opts.commandLabels, opts.commands).length
+          )
+        : 'grid'
     this.acrylicParams =
       this.spriteStyle === 'acrylic' ? resolveAcrylicParams(opts.spriteStyleParams) : null
 

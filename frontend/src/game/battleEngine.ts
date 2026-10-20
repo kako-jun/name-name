@@ -435,7 +435,13 @@ export class BattleEngine {
     }
     const hpSnapshot = this.snapshotHp()
     if (!this.performSkill(user, skill, target)) return false
-    this.advanceAfterPartyAction(this.reactionOf(caster, { category: 'physical' }, hpSnapshot))
+    this.advanceAfterPartyAction(
+      this.reactionOf(
+        caster,
+        { category: 'physical', name: skill.name, type: spellDamageType(skill) },
+        hpSnapshot
+      )
+    )
     return true
   }
 
@@ -1356,7 +1362,7 @@ interface PartyReaction {
 }
 
 /** 呪文の効果 DSL が `damage ... type=` を持つときその系統（`受けた=系統:x` の判定用）。builtin・DSL でなければ undefined */
-function spellDamageType(spell: SpellExecution): string | undefined {
+function spellDamageType(spell: { builtin?: string; effect?: string }): string | undefined {
   if (spell.builtin || !spell.effect) return undefined
   const parsed = parseEffect(spell.effect)
   return parsed && parsed.kind === 'damage' ? parsed.type : undefined
