@@ -453,7 +453,7 @@ describe('死亡時: エンジン統合', () => {
     expect(eng.getState().log.filter((l) => l.startsWith('けいけんち'))).toHaveLength(0)
   })
 
-  it('同時全滅: ATB は勝利', () => {
+  it('同時全滅: ATB も敗北（味方全滅を優先、#877）', () => {
     const hero = ent({ id: 'hero', atk: 100, hp: 10, maxHp: 10, agi: 25 })
     const bomb = ent({ id: 'bomb', hp: 5, agi: 1, onDeath: '候補=burst' })
     const eng = new BattleEngine([hero], [bomb], {
@@ -462,9 +462,10 @@ describe('死亡時: エンジン統合', () => {
       atb: { initialGauges: { party: [1000] } },
     })
     eng.selectAttack()
-    expect(eng.getState().phase).toBe('victory')
+    expect(eng.getState().phase).toBe('defeat')
     expect(hero.hp).toBe(0)
-    expect(eng.getState().log.filter((l) => l.startsWith('けいけんち'))).toHaveLength(1)
+    expect(eng.getState().atb!.queue).toEqual([])
+    expect(eng.getState().log.filter((l) => l.startsWith('けいけんち'))).toHaveLength(0)
   })
 
   it('死亡時の行動で別の敵が倒れたら、その敵の死亡時の行動も続けて 1 度ずつ実行する', () => {

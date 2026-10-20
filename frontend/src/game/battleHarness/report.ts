@@ -166,7 +166,7 @@ export function formatReport(
   }
   const isWarn = (k: { kind: ViolationKind }): boolean => WARN_KINDS.includes(k.kind)
   section(
-    '## 壊れ（止めるべき）: 種類ごと（負の damage 範囲・負の resist の扱いは #877/#872 で未決。ここでは暫定的に壊れに分類）',
+    '## 壊れ（止めるべき）: 種類ごと',
     summary.byKind.filter((k) => !isWarn(k))
   )
   section(

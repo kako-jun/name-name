@@ -39,9 +39,9 @@ HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
 
 分類:
 
-- 壊れ / 正常: 機械判定。違反が 1 件でもあれば壊れ。ただし負の `damage` 範囲・負の `resist` の扱いは #877 / #872 で未決で、ここでは暫定的に壊れに分類している。味方も全員 HP 0 の同時全滅で victory になる件は仕様の判断待ちで、`phase-mismatch` にはしていない。
+- 壊れ / 正常: 機械判定。違反が 1 件でもあれば壊れ。負の `damage` 範囲・負の `resist` による最大 HP 超過、同時全滅（敵も味方も HP 0）の victory と ATB キューの残骸は #877 で修正済み（負の量は 0 として扱い、負の `resist` は 0 に丸める。同時全滅は敗北優先）。残る要判断は膠着（`stalemate`）のみ。
 - 凄い組み合わせ（強すぎ・許容）: **閾値を決めていない**。壊れでないシナリオの指標（1 行動の合計ダメージ・HP の減少量・回復量・ヒット数・バフ累積値）の上位を数値のまま並べるだけ。残す/潰すは人間が判断する。
-- ダメージ上限違反は `damage` のヒットの量が 9999 超（`battleLimits.MAX_DAMAGE`）かで見る。`heal` は上限が未決のため検出せず、候補（`maxHealAmount`）に回す。`damage_full`（即死）の HP 減少は上限の対象外なので、`maxHpDrop` の候補に並ぶ。
+- ダメージ上限違反は `damage` のヒットの量が 9999 超（`battleLimits.MAX_DAMAGE`）かで見る。`heal` は上限が未決のため検出せず、候補（`maxHealAmount`）に回す。`damage_full`（即死）は上限の対象外（hit に `instantDeath` が付き、数字は出ない）で、検出から除外し、HP 減少は `maxHpDrop` の候補に並ぶ。
 
 検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
 

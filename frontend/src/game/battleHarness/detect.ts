@@ -85,7 +85,8 @@ function checkEvents(push: Push, events: readonly BattleActionEvent[], opts: Det
       checkNumber(push, `${w}.hpBefore`, h.hpBefore)
       checkNumber(push, `${w}.hpAfter`, h.hpAfter)
       if (h.amount > Number.MAX_SAFE_INTEGER) push('unsafe-integer', `${w}.amount = ${h.amount}`)
-      if (h.kind === 'damage' && h.amount > opts.maxDamage) {
+      // 即死 (instantDeath) は上限の対象外（HP を直接 0 にする。数字は出さない）
+      if (h.kind === 'damage' && !h.instantDeath && h.amount > opts.maxDamage) {
         push('damage-over-cap', `${w}.amount = ${h.amount} > ${opts.maxDamage}`)
       }
       if (h.amount < 0) push('hit-direction', `${w}.amount = ${h.amount}（負の量）`)

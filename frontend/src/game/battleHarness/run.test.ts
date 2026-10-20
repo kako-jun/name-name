@@ -201,15 +201,20 @@ describe('runScenario: 実エンジン', () => {
     expect(JSON.stringify(normal)).toBe(before)
   })
 
-  it('既知の壊れ（負の耐性で HP が maxHp を超える）を実エンジンで検出する', () => {
-    const broken: Scenario = scenarioOf({
-      id: 'test/negative-resist',
-      party: [entity('a')],
-      enemies: [entity('s', { resist: { fire: -1 } })],
-      spells: [{ name: 'ほのお', mp: 0, target: '敵単体', effect: 'damage 10..10 type=fire' }],
-      ops: [{ t: 'spell', s: 0 }],
-    })
-    expect(kindsOf(runScenario(broken))).toContain('hp-over-max')
+  it('負の耐性・負のダメージ範囲でも HP は最大 HP を超えず、ダメージ表示も負にならない（#877 で修正済みの壊れ）', () => {
+    for (const [resist, effect] of [
+      [{ fire: -1 }, 'damage 10..10 type=fire'],
+      [undefined, 'damage -5..-1 type=fire'],
+    ] as const) {
+      const s: Scenario = scenarioOf({
+        id: 'test/negative',
+        party: [entity('a')],
+        enemies: [entity('s', resist ? { resist } : {})],
+        spells: [{ name: 'ほのお', mp: 0, target: '敵単体', effect }],
+        ops: [{ t: 'spell', s: 0 }],
+      })
+      expect(kindsOf(runScenario(s))).toEqual([])
+    }
   })
 })
 
@@ -218,15 +223,22 @@ describe('失敗の JSON から再現できる', () => {
     const broken: Scenario = scenarioOf({
       id: 'test/repro',
       seed: 7,
-      enemies: [entity('s', { resist: { fire: -1 } }), entity('t')],
+      enemies: [entity('s'), entity('t')],
       spells: [{ name: 'ほのお', mp: 0, target: '敵全体', effect: 'damage 5..9 type=fire' }],
       ops: [{ t: 'spell', s: 0 }, { t: 'attack' }],
     })
-    const first = runScenario(broken)
+    // 実エンジンはもう壊れないので、2 回目の操作で HP を最大 HP 超えにする合成エンジンで壊す
+    const options = {
+      engineFactory: fakeFactory((s, n) => {
+        if (n === 1) s.enemies[0].hp = s.enemies[0].maxHp + 1
+      }),
+      driveLimit: 0,
+    }
+    const first = runScenario(broken, options)
     expect(first.violations.length).toBeGreaterThan(0)
     const text = JSON.stringify(toFailureFile([broken], [first]))
     const [again] = scenariosFromJson(JSON.parse(text), 'test/repro')
-    expect(runScenario(again)).toEqual(first)
+    expect(runScenario(again, options)).toEqual(first)
     expect(scenariosFromJson(JSON.parse(text), 'no-such')).toEqual([])
     // 単体のシナリオ JSON もそのまま読める
     expect(scenariosFromJson(JSON.parse(JSON.stringify(broken)))[0].id).toBe('test/repro')

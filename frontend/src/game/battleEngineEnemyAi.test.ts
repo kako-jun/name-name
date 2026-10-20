@@ -186,8 +186,8 @@ describe('仲間向けの特技は ランダム / HP最小 / 全体 で相手側
   })
 })
 
-describe('同時全滅の判定（現状の挙動を固定）', () => {
-  it('ターン制は敗北、ATB は勝利', () => {
+describe('同時全滅の判定（味方全滅=敗北を優先、#877）', () => {
+  it('ターン制も ATB も敗北', () => {
     BUILTIN_SPELLS['test_mutual'] = (ctx) => {
       for (const t of ctx.targets) t.hp = 0
       ctx.caster.hp = 0
@@ -209,7 +209,8 @@ describe('同時全滅の判定（現状の挙動を固定）', () => {
       atb.tick(1000)
       expect(hero2.hp).toBe(0)
       expect(foe2.hp).toBe(0)
-      expect(atb.getState().phase).toBe('victory')
+      expect(atb.getState().phase).toBe('defeat')
+      expect(atb.getState().atb!.queue).toEqual([])
     } finally {
       delete BUILTIN_SPELLS['test_mutual']
     }

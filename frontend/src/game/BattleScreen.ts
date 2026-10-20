@@ -2381,6 +2381,8 @@ export class BattleScreen extends Container {
 
   /** 対象の位置にダメージ数字を出す（ダメージ白・回復緑・ミスは MISS）。命中から sinceHit ms 経っていたぶん進める */
   private spawnPopup(hit: BattleHit, sinceHit: number, stack = 0): void {
+    // 即死 (#877) は数字を出さない（「たおれた」の演出だけ。HP ゲージは hpAfter へ向かう）
+    if (hit.instantDeath) return
     const view = this.viewOf(hit.target.side, hit.target.index)
     if (!view || !this.popupLayer) return
     const label = popupText(hit)
