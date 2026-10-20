@@ -16,11 +16,13 @@ import {
   arrivalPosition,
   detectEdgeLink,
   foregroundCoverage,
+  isAssistCell,
   foregroundFromRgba,
   facingFromVector,
   isOutward,
   keysToVector,
   maskFromRgba,
+  maskWithAssist,
   playerScale,
   pointerToVector,
   resolvePlayerHeight,
@@ -28,12 +30,24 @@ import {
   stepMove,
   walkFrame,
   type DirectionKeys,
+  type Facing,
   type Facing8,
   type FieldLink,
   type ForegroundMask,
   type Vec,
   type WalkMask,
 } from '../game/fieldWalk'
+import {
+  activeMask,
+  assistSpeed,
+  blockedAttempt,
+  companionDisplayAlpha,
+  companionPosition,
+  companionWanted,
+  evalAssist,
+  facing4,
+  stepCompanionAlpha,
+} from '../game/fieldAssist'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
 import { WARP_COLOR, sampleWarp } from '../game/fieldWarp'
 import { hasOwn } from '../game/ownProperty'
@@ -87,6 +101,8 @@ interface LoadedScene {
   id: string
   background: Texture
   mask: WalkMask
+  /** 条件付き（橙）のセルも歩ける扱いにしたマスク (#862)。橙が無ければ mask と同じ */
+  maskAssist: WalkMask
   overlay: Texture
   /** 前面レイヤー (#866)。シーンに foreground が無ければ null */
   foreground: { texture: Texture; mask: ForegroundMask } | null
@@ -129,12 +145,16 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
       mask: foregroundFromRgba(canvas.width, canvas.height, fgData.data),
     }
   }
-  // デバッグ用オーバーレイ: 歩ける所を半透明の緑に
+  // デバッグ用オーバーレイ: 歩ける所を半透明の緑に、条件付き（橙）の所を半透明の橙に
   const ov = ctx.createImageData(mask.width, mask.height)
   for (let i = 0; i < mask.walkable.length; i++) {
     if (mask.walkable[i]) {
       ov.data[i * 4 + 1] = 255
       ov.data[i * 4 + 3] = 90
+    } else if (mask.assist?.[i]) {
+      ov.data[i * 4] = 255
+      ov.data[i * 4 + 1] = 157
+      ov.data[i * 4 + 3] = 120
     }
   }
   ctx.putImageData(ov, 0, 0)
@@ -142,6 +162,7 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
     id,
     background: Texture.from(bg),
     mask,
+    maskAssist: maskWithAssist(mask),
     overlay: Texture.from(canvas),
     foreground,
     scroll: scrollBmp ? Texture.from(scrollBmp) : null,
@@ -218,6 +239,10 @@ async function main(): Promise<void> {
     }
   }
   const diagonalWalk = DIAGONAL_FACINGS.every((f) => walkTex[f])
+  // 条件付き通行の同行者 (#862)。#861（アクスタ化）までの暫定で、歩行絵のスプライトで出す
+  const companionTex = {} as Partial<Record<Facing, Texture[]>>
+  if (config.companion)
+    for (const f of FACINGS) companionTex[f] = await loadFrames(config.companion.sprites[f])
 
   let scene = await ensureScene(config.startScene)
   let sceneId = config.startScene
@@ -243,11 +268,30 @@ async function main(): Promise<void> {
   // 前面レイヤー (#866): 主人公より手前。シーンに前面が無ければ非表示
   const foregroundSprite = new Sprite(Texture.EMPTY)
   const player = new Sprite(walkTex.down![0])
+  const companionSprite = new Sprite(Texture.EMPTY)
+  companionSprite.anchor.set(0.5, 1)
+  companionSprite.visible = false
   player.anchor.set(0.5, 1) // 足元 = スプライト下端中心
   const marker = new Graphics()
   const fade = new Graphics()
   const world = new Container()
-  world.addChild(scrollSprite, bgSprite, overlaySprite, player, foregroundSprite, marker)
+  world.addChild(
+    scrollSprite,
+    bgSprite,
+    overlaySprite,
+    companionSprite,
+    player,
+    foregroundSprite,
+    marker
+  )
+  // 同行者は主人公の後ろ（y が大きければ手前）に並べ替える。前面・マーカーは常に上
+  world.sortableChildren = true
+  scrollSprite.zIndex = 0
+  bgSprite.zIndex = 1
+  overlaySprite.zIndex = 2
+  player.zIndex = 10
+  foregroundSprite.zIndex = 20
+  marker.zIndex = 30
   app.stage.addChild(world, fade)
 
   const startSnap = snapToWalkable(scene.mask, config.start, 80)
@@ -260,6 +304,20 @@ async function main(): Promise<void> {
   let movingMs = 0
   let disarmed: FieldLink | null = null
   let debug = false
+  // ---- フラグ・条件付き通行 (#862) ----
+  const flags: Record<string, boolean> = { ...config.flags }
+  const setFlag = (name: string, value: boolean): boolean => {
+    if (!hasOwn(flags, name)) {
+      console.warn(`[field-sample] 未宣言のフラグ: ${name}`)
+      return false
+    }
+    flags[name] = value
+    const box = document.querySelector<HTMLInputElement>(`input[data-flag="${name}"]`)
+    if (box) box.checked = value
+    return true
+  }
+  let companionAlpha = 0
+  let assistArmed = true
   // ---- ランダムエンカウント・戦闘 (#809) ----
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
@@ -594,7 +652,37 @@ async function main(): Promise<void> {
       const vec = currentVector()
       // 到着直後の折り返し防止: その端へ向かう入力が途切れたら解除
       if (disarmed && !isOutward(disarmed.edge, vec)) disarmed = null
-      const r = stepMove(scene.mask, pos, vec, config.speed, dt)
+      // 条件付き通行 (#862): 橙のセルはフラグが成り立つ間だけ歩ける。橙の上は押されて少し遅い
+      const ast = config.assist ? evalAssist(config.assist, flags) : null
+      const walkMask = ast
+        ? activeMask(scene.mask, scene.maskAssist, ast.passable, pos)
+        : scene.mask
+      const onAssist = ast !== null && ast.passable && isAssistCell(scene.mask, pos.x, pos.y)
+      const speed =
+        ast && config.assist
+          ? assistSpeed(config.speed, onAssist, ast.ghost, config.assist.speedFactor)
+          : config.speed
+      const wantCompanion = ast ? companionWanted(scene.mask, pos, vec, ast.passable) : false
+      if (ast) {
+        // 通れない状態で橙へ進もうとした瞬間に 1 回だけ脚本へ知らせる（入力が途切れたら再武装）
+        if (blockedAttempt(scene.mask, pos, vec, ast.passable)) {
+          if (assistArmed) {
+            assistArmed = false
+            window.dispatchEvent(
+              new CustomEvent('fieldsample:assist-blocked', {
+                detail: { scene: sceneId, pos: { ...pos }, reason: ast.held ? 'held' : 'locked' },
+              })
+            )
+          }
+        } else assistArmed = true
+      }
+      companionAlpha = stepCompanionAlpha(
+        companionAlpha,
+        wantCompanion,
+        dt,
+        config.assist?.fadeMs ?? 0
+      )
+      const r = stepMove(walkMask, pos, vec, speed, dt)
       pos = r.pos
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0
@@ -640,6 +728,26 @@ async function main(): Promise<void> {
     )
     player.scale.set(flipped.has(facing) ? -s : s, s)
     player.position.set(pos.x, pos.y)
+    // 同行者 (#862): 主人公の後ろ。ghost（半透明）はフラグで切り替わる
+    const ctex = config.companion ? companionTex[facing4(facing)] : undefined
+    if (config.assist && config.companion && ctex && companionAlpha > 0) {
+      const g = evalAssist(config.assist, flags).ghost
+      const ct = ctex[walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
+      companionSprite.texture = ct
+      const cs = playerScale(
+        config.companion.height ??
+          resolvePlayerHeight(config.scenes[sceneId].playerHeight, config.player.height),
+        ct.height
+      )
+      companionSprite.scale.set(cs, cs)
+      const cp = companionPosition(pos, facing, config.assist.offset)
+      companionSprite.position.set(cp.x, cp.y)
+      companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
+      companionSprite.zIndex = cp.y > pos.y ? 11 : 9
+      companionSprite.visible = true
+    } else {
+      companionSprite.visible = false
+    }
     overlaySprite.visible = debug
     marker.clear()
     if (debug) {
@@ -658,9 +766,36 @@ async function main(): Promise<void> {
   const api = {
     warp: startWarp,
     /** 現在の状態（検証用の読み取り） */
-    state: () => ({ sceneId, pos: { ...pos }, facing, warping: warpRun !== null }),
+    state: () => ({
+      sceneId,
+      pos: { ...pos },
+      facing,
+      warping: warpRun !== null,
+      flags: { ...flags },
+      companion: {
+        visible: companionSprite.visible,
+        /** 現れる・消える進み具合 (0..1)。画面の不透明度は ghost のとき ghostAlpha 倍 */
+        alpha: companionAlpha,
+        displayAlpha: companionSprite.visible ? companionSprite.alpha : 0,
+      },
+    }),
+    /** フラグを立てる・下ろす (#862)。宣言していない名前は false を返して何もしない */
+    setFlag,
+    getFlags: () => ({ ...flags }),
   }
   ;(window as unknown as { fieldSample?: typeof api }).fieldSample = api
+  // フラグのチェック（開発用。脚本の代わりに手で切り替える）
+  const flagBox = $('tb-flags')
+  for (const name of Object.keys(config.flags)) {
+    const label = document.createElement('label')
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.dataset.flag = name
+    input.checked = flags[name]
+    input.addEventListener('change', () => setFlag(name, input.checked))
+    label.append(input, `フラグ: ${name}`)
+    flagBox.appendChild(label)
+  }
   const warpBox = $('tb-warps')
   for (const id of Object.keys(config.warps)) {
     const b = document.createElement('button')

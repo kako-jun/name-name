@@ -128,6 +128,44 @@ function trainMask(w: number, h: number): string {
   return c.toDataURL('image/png')
 }
 
+/** 廃墟の背景 (#862)。中央の崩れた階段（橙）だけが、下の広場と上の広場をつなぐ */
+function ruinBackground(w: number, h: number): string {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  g.fillStyle = '#4a4a55'
+  g.fillRect(0, 0, w, h)
+  g.fillStyle = '#7a7a66'
+  g.fillRect(16, 16, w - 32, 74) // 上の広場
+  g.fillRect(16, 220, w - 32, h - 236) // 下の広場
+  g.fillStyle = '#b07a30'
+  g.fillRect(270, 90, 100, 130) // 崩れた階段（車椅子では通れない）
+  g.fillStyle = '#fff'
+  g.font = 'bold 20px sans-serif'
+  g.textAlign = 'center'
+  g.fillText('STAIRS', 320, 160)
+  return c.toDataURL('image/png')
+}
+
+/** 廃墟の 3 値マスク (#862): 白=誰でも・黒=誰も通れない・橙(#FF9D00)=条件付き（階段） */
+function ruinMask(w: number, h: number): string {
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  g.fillStyle = '#000'
+  g.fillRect(0, 0, w, h)
+  g.fillStyle = '#fff'
+  g.fillRect(16, 16, w - 32, 74)
+  g.fillRect(16, 220, w - 32, h - 236)
+  g.fillStyle = '#FF9D00'
+  g.fillRect(270, 90, 100, 130)
+  return c.toDataURL('image/png')
+}
+
 const FACING_COLOR = { up: '#3a6', down: '#36a', left: '#a63', right: '#a36' } as const
 const POSE_COLOR: Record<string, string> = {
   idle: '#3b6bb5',
@@ -170,6 +208,11 @@ export function buildDummyFixture(): Record<string, unknown> {
         links: [],
         encounter: { rate: 3, groups: ['slime', 'slime+bat', 'bat+bat'] },
       },
+      ruin: {
+        background: ruinBackground(W, H),
+        mask: ruinMask(W, H),
+        links: [],
+      },
       train: {
         background: trainInterior(W, H),
         mask: trainMask(W, H),
@@ -183,6 +226,28 @@ export function buildDummyFixture(): Record<string, unknown> {
     warps: {
       toTrain: { to: 'train', at: { x: 320, y: 300 }, facing: 'up', effect: 'fade' },
       toMeadow: { to: 'meadow', at: { x: 320, y: 300 }, facing: 'down', effect: 'flash' },
+      toRuin: { to: 'ruin', at: { x: 320, y: 330 }, facing: 'up', effect: 'fade' },
+    },
+    // 条件付き通行 (#862): 橙の階段は、afterEvent が立つと同行者に押されて通れる。partnerGhost で半透明、
+    // refuse の間は押されるのを断って通れない（脚本が説得のあとに下ろす）
+    flags: { afterEvent: false, partnerGhost: false, refuse: false },
+    assist: {
+      requires: 'afterEvent',
+      unless: 'refuse',
+      ghostWhen: 'partnerGhost',
+      speedFactor: 0.7,
+      ghostAlpha: 0.5,
+      offset: 40,
+      fadeMs: 200,
+    },
+    companion: {
+      sprites: Object.fromEntries(
+        (['up', 'down', 'left', 'right'] as const).map((f) => [
+          f,
+          [1, 2, 3].map((n) => box(32, 48, '#d6709a', `P${n}`, 14)),
+        ])
+      ),
+      height: 64,
     },
     encounter: { stepDistance: 50, minSteps: 0 },
     monsters: {

@@ -19,6 +19,7 @@ import { resolveRpgImagePath } from '../game/novelLayout'
 import { parseMenuList, parsePoses, resolveUrl, type ParseResult } from '../battleSample/config'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
 import { WARP_DEFAULTS, type WarpEffectKind, type WarpTiming } from '../game/fieldWarp'
+import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
 import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
@@ -68,6 +69,13 @@ export interface FieldWarp {
   facing?: Facing
   effect: WarpEffectKind
   timing: WarpTiming
+}
+
+/** 同行者 (#862)。条件付き通行で主人公の後ろに現れて押す。歩行絵は主人公と同じ 4 方向×3 コマ（#861 でアクスタ化するまでの暫定の見た目） */
+export interface FieldCompanion {
+  sprites: Record<Facing, [string, string, string]>
+  /** 表示高さ（背景ピクセル）。省略 = 主人公と同じ高さ */
+  height?: number
 }
 
 export interface FieldSceneConfig {
@@ -140,6 +148,12 @@ export interface FieldSampleConfig {
   scenes: Record<string, FieldSceneConfig>
   /** ワープ先 (#864)。省略 = なし */
   warps: Record<string, FieldWarp>
+  /** 名前つきの真偽値 (#862)。脚本が `window.fieldSample.setFlag` で変える。値は初期値。省略 = なし */
+  flags: Record<string, boolean>
+  /** 条件付き通行 (#862)。歩行マスクの橙（#FF9D00）を、フラグが成り立つ間だけ通れるようにする。省略 = 橙も黒と同じ */
+  assist: AssistConfig | null
+  /** 条件付き通行で現れる同行者 (#862)。省略 = 同行者は出さず、通れるだけ */
+  companion: FieldCompanion | null
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
   encounter: EncounterStepConfig
   /** エンカウントで使うモンスターのマスター (#809) */
@@ -384,6 +398,95 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     }
   }
 
+  // ---- フラグと条件付き通行 (#862) ----
+  const flags: Record<string, boolean> = {}
+  if (raw.flags !== undefined) {
+    if (!isObj(raw.flags)) return fail('flags はオブジェクトが必要です')
+    for (const [name, v] of Object.entries(raw.flags)) {
+      if (typeof v !== 'boolean') return fail(`flags.${name} は true / false: ${JSON.stringify(v)}`)
+      flags[name] = v
+    }
+  }
+  const flagName = (v: unknown, path: string): ParseResult<string> => {
+    if (typeof v !== 'string' || !hasOwn(flags, v))
+      return fail(`${path} は flags に宣言したフラグ名のどれか: ${JSON.stringify(v)}`)
+    return { ok: true, value: v }
+  }
+  let companion: FieldCompanion | null = null
+  if (raw.companion !== undefined) {
+    const c = raw.companion
+    if (!isObj(c) || !isObj(c.sprites)) return fail('companion.sprites が必要です')
+    const cs = {} as FieldCompanion['sprites']
+    for (const f of FACINGS) {
+      const r = parseFrames(c.sprites[f], `companion.sprites.${f}`)
+      if (!r.ok) return r
+      cs[f] = r.value
+    }
+    let ch: number | undefined
+    if (c.height !== undefined) {
+      const h = positive(c.height, 0, 'companion.height')
+      if (!h.ok) return h
+      ch = h.value
+    }
+    companion = { sprites: cs, ...(ch !== undefined ? { height: ch } : {}) }
+  }
+  let assist: AssistConfig | null = null
+  if (raw.assist !== undefined) {
+    const a = raw.assist
+    if (!isObj(a)) return fail('assist はオブジェクトが必要です')
+    const reqRaw = Array.isArray(a.requires) ? a.requires : [a.requires]
+    if (a.requires === undefined || reqRaw.length === 0)
+      return fail('assist.requires（フラグ名か、その配列）が必要です')
+    const requires: string[] = []
+    for (let i = 0; i < reqRaw.length; i++) {
+      const r = flagName(
+        reqRaw[i],
+        Array.isArray(a.requires) ? `assist.requires[${i}]` : 'assist.requires'
+      )
+      if (!r.ok) return r
+      requires.push(r.value)
+    }
+    let unless: string | undefined
+    if (a.unless !== undefined) {
+      const r = flagName(a.unless, 'assist.unless')
+      if (!r.ok) return r
+      unless = r.value
+    }
+    let ghostWhen: string | undefined
+    if (a.ghostWhen !== undefined) {
+      const r = flagName(a.ghostWhen, 'assist.ghostWhen')
+      if (!r.ok) return r
+      ghostWhen = r.value
+    }
+    const speedFactor = positive(a.speedFactor, ASSIST_DEFAULTS.speedFactor, 'assist.speedFactor')
+    if (!speedFactor.ok) return speedFactor
+    const offset = positive(a.offset, ASSIST_DEFAULTS.offset, 'assist.offset')
+    if (!offset.ok) return offset
+    let ghostAlpha: number = ASSIST_DEFAULTS.ghostAlpha
+    if (a.ghostAlpha !== undefined) {
+      if (typeof a.ghostAlpha !== 'number' || !(a.ghostAlpha >= 0 && a.ghostAlpha <= 1))
+        return fail(`assist.ghostAlpha は 0〜1 の数値: ${JSON.stringify(a.ghostAlpha)}`)
+      ghostAlpha = a.ghostAlpha
+    }
+    let fadeMs: number = ASSIST_DEFAULTS.fadeMs
+    if (a.fadeMs !== undefined) {
+      if (typeof a.fadeMs !== 'number' || !Number.isFinite(a.fadeMs) || a.fadeMs < 0)
+        return fail(`assist.fadeMs は 0 以上の数値(ms): ${JSON.stringify(a.fadeMs)}`)
+      fadeMs = a.fadeMs
+    }
+    assist = {
+      requires,
+      ...(unless !== undefined ? { unless } : {}),
+      ...(ghostWhen !== undefined ? { ghostWhen } : {}),
+      speedFactor: speedFactor.value,
+      ghostAlpha,
+      offset: offset.value,
+      fadeMs,
+    }
+  }
+  if (companion && !assist)
+    return fail('companion は assist（条件付き通行）と一緒に指定してください')
+
   // ---- ワープ (#864) ----
   const warps: Record<string, FieldWarp> = {}
   if (raw.warps !== undefined) {
@@ -587,6 +690,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       player: { sprites, mirrorOf, height: height.value, frameMs: frameMs.value },
       scenes,
       warps,
+      flags,
+      assist,
+      companion,
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,
