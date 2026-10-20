@@ -11,16 +11,7 @@
  * - SE: 単発再生（複数同時可）
  */
 
-import {
-  Application,
-  Assets,
-  Container,
-  Graphics,
-  Sprite,
-  Text as PixiText,
-  Texture,
-  TextStyle,
-} from 'pixi.js'
+import { Application, Graphics, Text as PixiText, TextStyle } from 'pixi.js'
 import {
   CharacterLayer,
   CHARACTER_X_RATIO,
@@ -46,20 +37,18 @@ import {
 } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
 import { selectAndShuffleSeFiles } from './seSelection'
-import {
-  BackgroundFade,
-  GameState,
-  NovelGameState,
-  StartFromOptions,
-  Step,
-  resolveEvents,
-} from './GameState'
-import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
+import { GameState, NovelGameState, StartFromOptions, Step, resolveEvents } from './GameState'
 import { VideoLayer } from './VideoLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
 import { TitleScreenOverlay, TITLE_LOGO_Y_RATIO } from './TitleScreenOverlay'
+import {
+  BackgroundController,
+  brightnessToTint,
+  normalizeBackgroundBrightness,
+  normalizeBackgroundFade,
+} from './BackgroundController'
 import { SaveController } from './SaveController'
 import { SaveLoadOverlay } from './SaveLoadOverlay'
 import { BacklogOverlay } from './BacklogOverlay'
@@ -110,7 +99,6 @@ import {
 } from './screenEffects'
 import {
   clampFadeMs,
-  computeCoverFit,
   parseHexColor,
   parseColorToNumber,
   resolveAssetUrl,
@@ -185,47 +173,9 @@ export function resolveCharacterFit(
   return false
 }
 
-/**
- * 各端の生 fade 値（parser / セーブデータ由来）を正規化して BackgroundFade | null を返す (#250)。
- *
- * 実体は #252 で `edgeFadeMask` の共通関数 `normalizeEdgeFade` に切り出した。
- * 既存の import 経路（`NovelRenderer` から）と既存テストを壊さないため、ここに再エクスポートを残す。
- */
-export const normalizeBackgroundFade = normalizeEdgeFade
-
-/**
- * 背景の明るさ（brightness）の生値（parser / セーブデータ由来）を 0.0〜1.0 に正規化する。
- *
- * 同一画像をシーン毎に減光する持続プロパティ（「暗いシーンは背景も暗くする」演出用）。
- * - 非数値 / null / undefined / 非有限（NaN/Infinity）→ null（＝原画のまま＝tint 無効）
- * - 1.0 以上（原画と同義）→ null（tint=白 と区別がないため持たない・round-trip 安定）
- * - それ以外は 0.0〜1.0 にクランプして返す（負値は 0.0）
- *
- * parser 側でも同等のクランプ・1.0→None 化を行うが、セーブデータ由来の生値（古い手書き
- * セーブ等）でも安全になるよう、ランタイム側でも防御的に正規化する。
- */
-export function normalizeBackgroundBrightness(
-  brightness: number | null | undefined
-): number | null {
-  if (brightness == null || !Number.isFinite(brightness)) return null
-  const clamped = Math.min(1, Math.max(0, brightness))
-  return clamped < 1 ? clamped : null
-}
-
-/**
- * 背景明るさ（brightness、0.0〜1.0）を PixiJS の tint 値（24bit RGB number）に変換する。
- *
- * PixiJS の tint は乗算なので、明るさ b に対し各チャンネルを `round(b*255)` にした
- * グレー値（`rgb(g, g, g)`）を返すと、スプライト全体が b 倍に減光される（b=0.6 で 60%）。
- * null/未指定は 0xffffff（白）＝tint 無効＝原画のまま（後方互換）。
- * 入力は normalizeBackgroundBrightness 済みを想定するが、防御的に再クランプする。
- */
-export function brightnessToTint(brightness: number | null | undefined): number {
-  if (brightness == null || !Number.isFinite(brightness)) return 0xffffff
-  const clamped = Math.min(1, Math.max(0, brightness))
-  const g = Math.round(clamped * 255)
-  return (g << 16) | (g << 8) | g
-}
+// 背景の正規化・tint 変換の純粋関数は BackgroundController (#828 7a) へ移った。既存の import 経路
+// （`NovelRenderer` から）と既存テストを壊さないため、ここに再エクスポートを残す。
+export { normalizeBackgroundFade, normalizeBackgroundBrightness, brightnessToTint }
 
 // playScript / startFrom で使う型を NovelRenderer 経由でも import できるよう再エクスポートする (#220)
 export type { Step, StartFromOptions } from './GameState'
@@ -264,21 +214,6 @@ const BACKGROUND_FADE_MS_MAX = 5_000
  */
 const INTERMISSION_FADE_MS_DEFAULT = 1_400
 
-interface BackgroundEntry {
-  sprite: Sprite
-  mask: Sprite | null
-  fadeAnimation: BackgroundFadeAnimation | null
-}
-
-interface BackgroundFadeAnimation {
-  startMs: number
-  durationMs: number
-  fromAlpha: number
-  toAlpha: number
-  /** true なら fade-out 完了時に sprite/mask を破棄して bgEntries から消す */
-  destroyOnComplete: boolean
-}
-
 export class NovelRenderer {
   private app: Application
   /** init() 完了済みかのフラグ。React StrictMode 等で init 中に destroy が呼ばれたときの no-op 判定に使う */
@@ -286,8 +221,6 @@ export class NovelRenderer {
   private dialogBox: DialogBox
   /** DialogBox の代替として本文を描く、イベント宣言由来の吹き出し (#698)。 */
   private bubbleLayer: BubbleLayer
-  private bgGraphics: Graphics
-  private bgContainer: Container
   /** 動画入力レイヤ (#252)。背景の直後・立ち絵の下に配置 */
   private videoLayer: VideoLayer
   private characterLayer: CharacterLayer
@@ -367,7 +300,6 @@ export class NovelRenderer {
    *  この callback とは独立に `endingOverlay`（PixiJS 内部描画、#630）が担う。 */
   private onStoryEndedChangeCallback: ((ended: boolean) => void) | null = null
   private assetBaseUrl: string = ''
-  private textureCache: Map<string, Texture> = new Map()
   /**
    * 先読み済みアセット URL の集合 (#389)。`preloadUpcomingAssets` が同一 URL を
    * `backgroundPreload` に二重に積まないための重複除去（無駄呼び出しを避ける）。
@@ -377,12 +309,6 @@ export class NovelRenderer {
    * （エディタのライブプレビュー等で再表示するケース）。`destroy` でもリーク予防にクリアする。
    */
   private preloadedUrls: Set<string> = new Set()
-  /** setBackground の非同期ロード用トークン。destroy / 再入 の race 回避に使う */
-  private bgLoadToken = 0
-  /** 現在表示対象としてロード待ち中の背景 token。本文 reveal の背景待ち判定に使う。 */
-  private pendingBackgroundLoadToken: number | null = null
-  /** 進行中の背景ロード（成功・失敗・破棄のどれでも解決する）。`waitForBackgroundLoad` が待つ (#734) */
-  private pendingBackgroundLoad: Promise<void> | null = null
   private audioManager: AudioManager
 
   /** ゲーム状態（フラグストア）— 章またぎで保持 */
@@ -678,6 +604,23 @@ export class NovelRenderer {
     this.cursor
   )
 
+  /**
+   * 背景（下地ベタ・背景画像のクロスフェード・端フェードマスク・明るさ・地色・テクスチャキャッシュ）の
+   * 状態と更新 (#828 7a)。`bgEntries` / `currentBackground*` / `bgLoadToken` 等の唯一の書き手。
+   * 他レイヤー（動画・背景板）との同時クリアは、複数モジュールをまたぐ `resetAndStartEvents` /
+   * `applyState` / `destroy` がここのメソッドを呼び分けて行う。Host はオブジェクトで渡す（`implements` にしない）。
+   */
+  private readonly background = new BackgroundController(
+    {
+      getAssetBaseUrl: () => this.assetBaseUrl,
+      isSkipMode: () => this.skipMode,
+      isInitialized: () => this.initialized,
+      getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
+      getCrossfadeMs: () => this.backgroundFadeMs,
+    },
+    this.time
+  )
+
   /** セーブ/ロードオーバーレイ */
   private saveLoadOverlay!: SaveLoadOverlay
 
@@ -686,37 +629,6 @@ export class NovelRenderer {
 
   /** シークバー */
   private seekBar: SeekBar
-
-  /** 現在の背景パス */
-  private currentBackgroundPath: string | null = null
-
-  /** 現在の単色地色 (#273)。背景パスと同じ永続状態。なしなら null（既定色＝下地ベタ）。
-   *  背景画像とは独立スロット: bgGraphics を塗り直すだけで bgContainer の画像には触れない。 */
-  private currentBackgroundColor: string | null = null
-
-  /** 下地ベタ（bgGraphics）の既定色 (#409)。frontmatter `background_color:` の値。
-   *  `[背景色:]`（#273）のシーン上書きが無いとき（`currentBackgroundColor === null`）の実塗り色になり、
-   *  最初の背景絵がこの色から `background_fade_ms` でフェードインする。null なら黒 0x000000（後方互換）。
-   *  `setDefaultBackgroundColor` が init 前後に受けて保持し、上書きが無ければ bgGraphics を塗り直す。 */
-  private defaultBackgroundColor: string | null = null
-
-  /** 現在の背景端フェードマスク (#250)。なしなら null */
-  private currentBackgroundFade: BackgroundFade | null = null
-
-  /** 現在の背景明るさ（brightness、0.0〜1.0）。同一画像をシーン毎に減光する持続プロパティ。
-   *  null/未指定は原画のまま（tint=白）。背景スプライト生成/復元時に tint として乗算適用する。 */
-  private currentBackgroundBrightness: number | null = null
-
-  /** 背景 sprite と対応 mask の所有リスト。クロスフェード中は旧 + 新の複数枚になる。 */
-  private bgEntries: BackgroundEntry[] = []
-
-  /** 現在の背景に適用中のマスク Sprite (#250)。解放時に破棄する。互換用に最前面 mask を指す */
-  private bgMaskSprite: Sprite | null = null
-
-  /** 背景クロスフェード用タイマー。GameState には持たない演出中間状態。 */
-  private bgCrossfadeTimer: number | null = null
-
-  /** 現在の BGM パス（スナップショット用） */
   private currentBgmPath: string | null = null
 
   /**
@@ -837,8 +749,6 @@ export class NovelRenderer {
 
   constructor(config?: { dialogBorderless?: boolean; aspectRatio?: AspectRatio }) {
     this.app = new Application()
-    this.bgGraphics = new Graphics()
-    this.bgContainer = new Container()
     // config.aspectRatio は既に厳密な AspectRatio 型（呼び出し側 NovelPlayer が生の
     // frontmatter 文字列を parseAspectRatio で検証・解決済み。fluid 時は pickFluidAspectRatio
     // が '2:1'/'1:2'（#444）を含めて選ぶ）。ここで再度 parseAspectRatio に通すと、
@@ -946,14 +856,9 @@ export class NovelRenderer {
 
     container.appendChild(this.app.canvas as HTMLCanvasElement)
 
-    // 下地ベタ（既定色・#409）。frontmatter `background_color:` の既定色（未指定なら黒）で全面を塗る。
-    // 最初の背景絵はこの地色の上に alpha 0→1 で重なってフェードインする（コールドスタート）。
-    this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.bgGraphics.fill(this.defaultBackgroundColorNum())
-    this.app.stage.addChild(this.bgGraphics)
-
-    // 背景画像コンテナ
-    this.app.stage.addChild(this.bgContainer)
+    // 下地ベタ（既定色・#409）と背景画像コンテナ。frontmatter `background_color:` の既定色（未指定なら黒）で
+    // 全面を塗る。最初の背景絵はこの地色の上に alpha 0→1 で重なってフェードインする（コールドスタート）。
+    this.background.attachTo(this.app.stage)
 
     // 舞台構造の背景板レイヤー (#683)。既存の単一スロット背景の直後・動画/立ち絵より下
     // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
@@ -1186,12 +1091,8 @@ export class NovelRenderer {
   /** 読み込み済みテクスチャを解放する（`setEvents` / `loadEvents` が文書を入れ替えるとき）。 */
   private releaseTextures(): void {
     // PixiJS v8 の Assets.load で取得した Texture は Assets の内部キャッシュに残り続けるため、
-    // キャッシュ済みURLを Assets.unload で解放してから textureCache をクリアする
-    const urls = Array.from(this.textureCache.keys())
-    Promise.all(urls.map((u) => Assets.unload(u))).catch((err) => {
-      console.warn('[name-name] テクスチャの解放に失敗', err)
-    })
-    this.textureCache.clear()
+    // キャッシュ済みURLを Assets.unload で解放してからキャッシュをクリアする（BackgroundController が行う）。
+    this.background.releaseTextures()
     // イベント絵レイヤーのテクスチャも同じタイミングで解放する (#351 セルフレビュー指摘:
     // 背景と違い textureCache 相当の登録先が無く、GPU テクスチャが解放されずリークしていた)。
     this.eventImageLayer.disposeTextures()
@@ -1431,19 +1332,14 @@ export class NovelRenderer {
 
     // 宣言的な終端状態を即座に確定する（背景/色地/動画/立ち絵はすべて「なし」）。
     // 見た目のフェードはこの下で別途アニメさせるが、GameState としては最初からこの値。
-    this.currentBackgroundPath = null
-    this.currentBackgroundFade = null
-    this.currentBackgroundBrightness = null
-    this.bgLoadToken++
-    this.pendingBackgroundLoadToken = null
-    this.pendingBackgroundLoad = null
-    this.clearBackgroundColor()
+    this.background.forgetBackground()
+    this.background.clearBackgroundColor()
     this.videoLayer.remove()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
     // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
     // 終劇専用の黒フェードで画面を覆い切った後に片付ける。
-    this.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
+    this.background.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
     this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
     const eraseVisualFadeMs = Math.max(eraseBackgroundFadeMs, eraseCharacterFadeMs ?? 0)
     this.startEndStoryBlackoutFade(eraseVisualFadeMs, () => {
@@ -1631,45 +1527,6 @@ export class NovelRenderer {
     } finally {
       this.eventImageFadeMs = previousEventImageFadeMs
     }
-  }
-
-  /**
-   * 複数の背景 entry に「alpha 0 へフェードアウト → 完了後に破棄」の fadeAnimation を
-   * 一括で仕込む (#386 セルフレビュー nit)。`crossfadeToBackgroundEntry`（次背景を追加する
-   * クロスフェード）と `fadeOutBackgroundEntries`（次背景を追加しない終劇演出）の両方が
-   * 「旧背景を消す」部分としてこの手続きを共有する（重複実装の解消）。
-   */
-  private beginFadeOutEntries(
-    entries: BackgroundEntry[],
-    startMs: number,
-    durationMs: number
-  ): void {
-    for (const entry of entries) {
-      entry.fadeAnimation = {
-        startMs,
-        durationMs,
-        fromAlpha: entry.sprite.alpha,
-        toAlpha: 0,
-        destroyOnComplete: true,
-      }
-    }
-  }
-
-  /**
-   * 現在の背景画像 entry 群をフェードアウトさせる (#386 終劇演出)。
-   * `crossfadeToBackgroundEntry` の「旧背景を消す」半分だけを取り出した形（次背景を
-   * 追加しない）。完了後は `updateBackgroundFadeFrame` の `destroyOnComplete` で自動的に
-   * 破棄される。ステージ最背面の `bgGraphics` は endStory 側の `clearBackgroundColor()` で
-   * 先に下地ベタの既定色（`background_color:` #409。未指定なら黒）へリセット済みのため、
-   * フェード完了後は自然にその地色が残る。
-   */
-  private fadeOutBackgroundEntries(durationMs: number): void {
-    if (this.bgEntries.length === 0) return
-    this.stopBackgroundCrossfade()
-    const startMs = this.time.now()
-    this.beginFadeOutEntries(this.bgEntries, startMs, durationMs)
-    this.updateBackgroundFadeFrame()
-    this.ensureBackgroundCrossfadeTicker()
   }
 
   /**
@@ -1910,7 +1767,7 @@ export class NovelRenderer {
    * 失敗・破棄（より新しい背景要求）でも reject せず解決する。
    */
   async waitForBackgroundLoad(): Promise<void> {
-    await this.pendingBackgroundLoad
+    await this.background.waitForLoad()
   }
 
   /**
@@ -2026,19 +1883,19 @@ export class NovelRenderer {
     // 続けないようにする（他タイマーと同じ規律、AudioManager.cancelSeSequence のdoc comment参照）。
     this.audioManager.cancelSeSequence()
     if (options?.preserveBackgroundForTransition) {
-      this.bgLoadToken++
-      this.pendingBackgroundLoadToken = null
-      this.pendingBackgroundLoad = null
-      this.finishBackgroundCrossfadeInstant()
+      this.background.cancelPendingLoad()
+      this.background.finishBackgroundCrossfadeInstant()
       this.videoLayer.remove()
     } else {
-      this.clearBackground()
+      this.background.clearBackground()
+      // 動画レイヤも背景と同じ扱いでクリアする (#252)。背景コントローラは動画に触れないのでここで消す。
+      this.videoLayer.remove()
       // 背景板 (#683) も既存の単一スロット背景と同じ持続規律にする: 通常のシーン間ジャンプ
       // （preserveBackgroundForTransition=true）では持ち越し、この非 preserve 分岐（新しい
       // イベント列の最初の開始・setEvents() 経由）と明示的な `[場面転換]` でのみクリアする。
       this.backgroundBoardLayer.clear()
       // 地色（[背景色:]、#273）も新規開始では文脈として捨てる (#734)。進行（preserve）では持ち越す。
-      this.clearBackgroundColor()
+      this.background.clearBackgroundColor()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
@@ -3058,7 +2915,7 @@ export class NovelRenderer {
       // スキップモードとオートモードは排他: スキップ ON 時にオートを解除 (#140)
       this.setAutoMode(false)
       // 既に走っている背景クロスフェードも畳み、skip 中の表示を最新状態へ即時収束させる。
-      this.finishBackgroundCrossfadeInstant()
+      this.background.finishBackgroundCrossfadeInstant()
     }
     if (!on && this.skipTimer) {
       this.time.clearTimeout(this.skipTimer)
@@ -3173,16 +3030,12 @@ export class NovelRenderer {
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
     // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放
-    const urls = Array.from(this.textureCache.keys())
-    Promise.all(urls.map((u) => Assets.unload(u))).catch((err) => {
-      console.warn('[name-name] テクスチャの解放に失敗', err)
-    })
-    this.textureCache.clear()
+    this.background.releaseTextures()
     // 先読み済み URL 集合もクリアする（リーク予防・#389）。
     this.preloadedUrls.clear()
     clearBackgroundPreload()
     // canvas 由来マスクテクスチャを含む背景 entry を全て解放する (#250/#319)
-    this.clearBackgroundEntries()
+    this.background.clearBackgroundEntries()
     this.app.destroy(true, { children: true })
     this.initialized = false
   }
@@ -3419,10 +3272,7 @@ export class NovelRenderer {
       textIndex: this.cursor.textIndex,
       sentenceIndex: this.cursor.sentenceIndex,
       flags: this.gameState.toJSON(),
-      backgroundPath: this.currentBackgroundPath,
-      backgroundColor: this.currentBackgroundColor,
-      backgroundFade: this.currentBackgroundFade,
-      backgroundBrightness: this.currentBackgroundBrightness,
+      ...this.background.capture(),
       video: this.videoLayer.getState(),
       eventImage: this.eventImageLayer.getState(),
       backgroundBoards: this.backgroundBoardLayer.getState(),
@@ -3832,21 +3682,10 @@ export class NovelRenderer {
     this.syncEndingOverlayVisibility(true)
 
     // 背景復元
-    if (state.backgroundPath) {
-      this.setBackground(state.backgroundPath, state.backgroundFade, state.backgroundBrightness, {
-        instant: true,
-      })
-    } else {
-      this.clearBackground()
-    }
-
-    // 単色地色の復元 (#273)。背景画像とは独立スロット（bgGraphics）なので別分岐で復元する。
-    // 古いセーブ・スナップショットには backgroundColor が無い → ?? null で「色なし」に倒す。
-    if (state.backgroundColor) {
-      this.setBackgroundColor(state.backgroundColor)
-    } else {
-      this.clearBackgroundColor()
-    }
+    // 背景画像 → 単色地色の順（実体は BackgroundController.restore、#828 7a）。
+    this.background.restore(state)
+    // 背景なしの復元は動画レイヤも消す扱い (#252)。コントローラは動画に触れないのでここで行う。
+    if (!state.backgroundPath) this.videoLayer.remove()
 
     // 動画レイヤ復元 (#252)。clearBackground / setBackground は背景のみを扱い
     // 動画には触れないため（show が単一スロットを置換、なしなら remove）、背景復元の後に行う。
@@ -4096,8 +3935,7 @@ export class NovelRenderer {
    */
   private applyEventImageVisibility(): void {
     const hide = this.eventImageLayer.shouldHideBackLayer()
-    this.bgGraphics.visible = !hide
-    this.bgContainer.visible = !hide
+    this.background.setVisible(!hide)
     this.backgroundBoardLayer.visible = !hide
     this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
@@ -4389,7 +4227,9 @@ export class NovelRenderer {
   private processDirective(event: Event): void {
     if (typeof event === 'string') {
       if (event === 'SceneTransition') {
-        this.clearBackground()
+        this.background.clearBackground()
+        // 動画レイヤも背景と同じ扱いでクリアする (#252)。
+        this.videoLayer.remove()
         // 舞台構造の背景板 (#683) も既存の単一スロット背景と同じタイミングでクリアする。
         this.backgroundBoardLayer.clear()
         // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
@@ -4434,7 +4274,7 @@ export class NovelRenderer {
     }
     if ('Background' in event) {
       const bg = event.Background
-      this.setBackground(
+      this.background.setBackground(
         bg.path,
         normalizeBackgroundFade({
           top: bg.fade_top,
@@ -4462,7 +4302,7 @@ export class NovelRenderer {
     }
     if ('BackgroundColor' in event) {
       // 単色地色 (#273)。背景画像と同じ永続状態（snapshot / applyState / セーブ復元で復元）。
-      this.setBackgroundColor(event.BackgroundColor.color)
+      this.background.setBackgroundColor(event.BackgroundColor.color)
       return
     }
     if ('Video' in event) {
@@ -4986,8 +4826,8 @@ export class NovelRenderer {
     // イベント絵 load/fade (#351)。将来さらにレイヤを足す場合も、各レイヤの pending API を
     // ここに OR する。
     return (
-      this.hasPendingBackgroundLoad() ||
-      this.hasActiveBackgroundFade() ||
+      this.background.hasPendingBackgroundLoad() ||
+      this.background.hasActiveBackgroundFade() ||
       this.characterLayer.hasPendingVisualTransition() ||
       this.eventImageLayer.hasPendingVisualTransition()
     )
@@ -5008,7 +4848,7 @@ export class NovelRenderer {
     this.transition.enterWait()
 
     const poll = () => {
-      this.updateBackgroundFadeFrame()
+      this.background.updateBackgroundFadeFrame()
       if (this.hasPendingVisualTransition()) return
       this.clearWaitDisplayCompleteTimer()
       this.finishWaitAndContinue()
@@ -5179,9 +5019,10 @@ export class NovelRenderer {
       const startedAt = this.time.now()
       const poll = () => {
         if (!isStillCurrent()) return
-        this.updateBackgroundFadeFrame()
+        this.background.updateBackgroundFadeFrame()
         if (
-          (this.hasPendingBackgroundLoad() || this.hasActiveBackgroundFade()) &&
+          (this.background.hasPendingBackgroundLoad() ||
+            this.background.hasActiveBackgroundFade()) &&
           this.time.now() - startedAt < 6_000
         ) {
           this.time.setTimeout(poll, 16)
@@ -5206,331 +5047,12 @@ export class NovelRenderer {
   }
 
   /**
-   * 背景画像を設定する（アスペクト比維持でカバー）。
-   * fade を渡すと端フェードマスク (#250) を適用する。
-   */
-  private setBackground(
-    path: string,
-    fade?: BackgroundFade | null,
-    brightness?: number | null,
-    opts?: { instant?: boolean }
-  ): void {
-    const previousPath = this.currentBackgroundPath
-    this.currentBackgroundPath = path
-    const normalizedFade = normalizeBackgroundFade(fade)
-    const normalizedBrightness = normalizeBackgroundBrightness(brightness)
-    this.currentBackgroundFade = normalizedFade
-    this.currentBackgroundBrightness = normalizedBrightness
-
-    if (!this.assetBaseUrl) {
-      this.clearBackgroundEntries()
-      return
-    }
-
-    const url = resolveAssetUrl(this.assetBaseUrl, 'images', path)
-    // #409: コールドスタート（直前に背景画像が無い＝物語/シーンの最初の背景）も
-    // crossfade 経路（alpha 0→1）で `background_fade_ms` フェードインさせる。ステージ最背面の
-    // bgGraphics は下地ベタの既定色（frontmatter `background_color:`・未指定なら黒 0x000000）なので、
-    // これは「下地ベタ（既定は黒）から浮かび上がる」フェードインになる（黒フラッシュにはならない）。
-    // 復元（applyState が opts.instant:true を明示＝goBack/seekTo/セーブ復元/任意局面起動）と
-    // skipMode・同一 path だけを即時に残す。以前あった `!previousPath` /
-    // `this.bgEntries.length === 0`（＝コールドスタート指標）は #409 で削除した。
-    const instant = opts?.instant === true || this.skipMode || previousPath === path
-
-    // ロード要求ごとにトークンを更新し、古い非同期完了による UAF / race を防ぐ。
-    // キャッシュヒットで同期描画する場合も必ず進めること。さもないと直前に
-    // 走っていた別背景の Assets.load().then が後から解決し、即描画した背景の上に
-    // 古い sprite+fade を addChild してしまう。
-    const token = ++this.bgLoadToken
-    this.pendingBackgroundLoadToken = null
-    this.pendingBackgroundLoad = null
-
-    // キャッシュ済みの Texture があれば再利用（戻る操作時のフリッカー防止）
-    const cached = this.textureCache.get(url)
-    if (cached) {
-      this.showLoadedBackground(cached, {
-        fade: normalizedFade,
-        brightness: normalizedBrightness,
-        instant,
-      })
-      return
-    }
-
-    this.pendingBackgroundLoadToken = token
-    const loading = Assets.load(url)
-      .then((texture) => {
-        if (token !== this.bgLoadToken) return
-        if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
-        if (!this.initialized) return
-        this.textureCache.set(url, texture)
-        this.showLoadedBackground(texture, {
-          fade: normalizedFade,
-          brightness: normalizedBrightness,
-          instant: instant || this.skipMode,
-        })
-      })
-      .catch((err) => {
-        if (this.pendingBackgroundLoadToken === token) this.pendingBackgroundLoadToken = null
-        console.warn('[name-name] 背景画像の読み込みに失敗: ' + url, err)
-      })
-      .finally(() => {
-        if (this.pendingBackgroundLoad === loading) this.pendingBackgroundLoad = null
-      })
-    this.pendingBackgroundLoad = loading
-  }
-
-  private showLoadedBackground(
-    texture: Texture,
-    opts: {
-      fade: BackgroundFade | null
-      brightness: number | null
-      instant: boolean
-    }
-  ): void {
-    const sprite = new Sprite(texture)
-    this.applyCoverFit(sprite)
-    this.applyBrightnessTint(sprite, opts.brightness)
-    const mask = this.applyEdgeFadeMask(sprite, opts.fade)
-    const entry: BackgroundEntry = { sprite, mask, fadeAnimation: null }
-    this.bgMaskSprite = mask
-
-    if (opts.instant) {
-      this.replaceBackgroundEntries(entry)
-      return
-    }
-
-    this.crossfadeToBackgroundEntry(entry)
-  }
-
-  private replaceBackgroundEntries(entry: BackgroundEntry): void {
-    this.stopBackgroundCrossfade()
-    this.clearBackgroundEntries()
-    entry.sprite.alpha = 1
-    entry.fadeAnimation = null
-    this.addBackgroundEntryToContainer(entry)
-    this.bgEntries = [entry]
-    this.bgMaskSprite = entry.mask
-  }
-
-  private crossfadeToBackgroundEntry(next: BackgroundEntry): void {
-    this.stopBackgroundCrossfade()
-    const startMs = this.time.now()
-    const durationMs = this.backgroundFadeMs
-    const previous = [...this.bgEntries]
-    this.beginFadeOutEntries(previous, startMs, durationMs)
-    next.sprite.alpha = 0
-    next.fadeAnimation = {
-      startMs,
-      durationMs,
-      fromAlpha: 0,
-      toAlpha: 1,
-      destroyOnComplete: false,
-    }
-    this.addBackgroundEntryToContainer(next)
-    this.bgEntries = [...previous, next]
-    this.updateBackgroundFadeFrame()
-    this.ensureBackgroundCrossfadeTicker()
-  }
-
-  private stopBackgroundCrossfade(): void {
-    if (this.bgCrossfadeTimer == null) return
-    this.time.clearInterval(this.bgCrossfadeTimer)
-    this.bgCrossfadeTimer = null
-  }
-
-  private finishBackgroundCrossfadeInstant(): void {
-    if (!this.hasActiveBackgroundFade()) return
-    this.stopBackgroundCrossfade()
-    const latest = this.bgEntries[this.bgEntries.length - 1]
-    for (const entry of this.bgEntries) {
-      if (entry !== latest) this.destroyBackgroundEntry(entry)
-    }
-    if (!latest) {
-      this.bgEntries = []
-      this.bgMaskSprite = null
-      return
-    }
-    latest.sprite.alpha = 1
-    latest.fadeAnimation = null
-    this.bgEntries = [latest]
-    this.bgMaskSprite = latest.mask
-  }
-
-  private ensureBackgroundCrossfadeTicker(): void {
-    if (this.bgCrossfadeTimer != null) return
-    if (!this.hasActiveBackgroundFade()) return
-    this.bgCrossfadeTimer = this.time.setInterval(() => {
-      this.updateBackgroundFadeFrame()
-    }, 16)
-  }
-
-  private hasActiveBackgroundFade(): boolean {
-    return this.bgEntries.some((entry) => entry.fadeAnimation !== null)
-  }
-
-  private hasPendingBackgroundLoad(): boolean {
-    return this.pendingBackgroundLoadToken === this.bgLoadToken
-  }
-
-  private updateBackgroundFadeFrame(): void {
-    let anyActive = false
-    for (const entry of [...this.bgEntries]) {
-      const f = entry.fadeAnimation
-      if (!f) continue
-      const t =
-        f.durationMs <= 0
-          ? 1
-          : Math.min(1, Math.max(0, (this.time.now() - f.startMs) / f.durationMs))
-      if (t >= 1) {
-        entry.sprite.alpha = f.toAlpha
-        entry.fadeAnimation = null
-        if (f.destroyOnComplete) {
-          this.destroyBackgroundEntry(entry)
-          this.bgEntries = this.bgEntries.filter((candidate) => candidate !== entry)
-        }
-      } else {
-        anyActive = true
-        entry.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * t
-      }
-    }
-    const top = this.bgEntries[this.bgEntries.length - 1] ?? null
-    this.bgMaskSprite = top?.mask ?? null
-    if (!anyActive) this.stopBackgroundCrossfade()
-  }
-
-  private addBackgroundEntryToContainer(entry: BackgroundEntry): void {
-    this.bgContainer.addChild(entry.sprite)
-    if (entry.mask) this.bgContainer.addChild(entry.mask)
-  }
-
-  /**
-   * 現在の currentBackgroundBrightness に基づいて背景スプライトの tint（減光）を適用する。
-   * PixiJS の tint は乗算なので、明るさ b（0.0〜1.0）に対し
-   * `tint = rgb(round(b*255), round(b*255), round(b*255))` で全体を b 倍に減光する。
-   * null/未指定（＝原画のまま）は 0xffffff（白＝tint 無効）で従来動作。
-   */
-  private applyBrightnessTint(
-    sprite: { tint: number },
-    brightness: number | null = this.currentBackgroundBrightness
-  ): void {
-    sprite.tint = brightnessToTint(brightness)
-  }
-
-  private applyCoverFit(sprite: Sprite): void {
-    // カバーフィット幾何は novelLayout.computeCoverFit に集約 (#260)。
-    // 戻り値の {width,height,x,y} を Object.assign で sprite の各 setter に流し込む。
-    const { width, height } = sprite.texture
-    Object.assign(sprite, computeCoverFit(width, height, this.screenWidth, this.screenHeight))
-  }
-
-  /**
-   * 現在の currentBackgroundFade に基づいて端フェードマスク (#250) を sprite に適用する。
-   * フェード指定がなければ何もしない（従来動作）。
-   */
-  private applyEdgeFadeMask(
-    sprite: Sprite,
-    fade: BackgroundFade | null = this.currentBackgroundFade
-  ): Sprite | null {
-    // #252 で共通ユーティリティ buildEdgeFadeMask に切り出した（VideoLayer と共有）。
-    const maskSprite = buildEdgeFadeMask(fade, this.screenWidth, this.screenHeight)
-    if (!maskSprite) return null
-    sprite.mask = maskSprite
-    return maskSprite
-  }
-
-  /** 背景 entry が所有する mask Sprite とそのテクスチャを破棄する (#250)。メモリリーク防止 */
-  private disposeBgMask(maskSprite: Sprite | null = this.bgMaskSprite): void {
-    if (maskSprite) {
-      maskSprite.removeFromParent()
-      // canvas 由来のテクスチャは textureCache に乗らないので確実に破棄する
-      maskSprite.destroy({ texture: true, textureSource: true })
-      if (this.bgMaskSprite === maskSprite) this.bgMaskSprite = null
-    }
-  }
-
-  private destroyBackgroundEntry(entry: BackgroundEntry): void {
-    entry.sprite.removeFromParent()
-    entry.sprite.destroy()
-    this.disposeBgMask(entry.mask)
-  }
-
-  private clearBackgroundEntries(): void {
-    this.stopBackgroundCrossfade()
-    for (const entry of this.bgEntries) this.destroyBackgroundEntry(entry)
-    this.bgEntries = []
-    this.bgMaskSprite = null
-    this.bgContainer.removeChildren()
-  }
-
-  /**
-   * 背景画像をクリアする
-   */
-  private clearBackground(): void {
-    this.currentBackgroundPath = null
-    this.currentBackgroundFade = null
-    this.currentBackgroundBrightness = null
-    this.bgLoadToken++
-    this.pendingBackgroundLoadToken = null
-    this.pendingBackgroundLoad = null
-    this.clearBackgroundEntries()
-    // 動画レイヤも背景と同じ扱いでクリアする (#252)
-    this.videoLayer.remove()
-  }
-
-  /**
-   * 単色の地色を設定する (#273)。`bgGraphics`（全面を覆う最背面の塗り）を塗り直す。
-   *
-   * 背景画像とは独立スロット: bgContainer の画像には触れない（画像が上に乗る）。
-   * 色解決は novelLayout.parseColorToNumber に委譲（不正値は黒 0x000000 にフォールバック）。
-   * init 時に一度 rect+fill 済みなので、重ね塗りで透けないよう必ず clear() してから塗り直す。
-   */
-  private setBackgroundColor(color: string): void {
-    this.currentBackgroundColor = color
-    const colorNum = parseColorToNumber(color, 0x000000)
-    this.bgGraphics.clear()
-    this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.bgGraphics.fill(colorNum)
-  }
-
-  /**
-   * 単色の地色をリセットする (#273)。地色を下地ベタの既定色（`background_color:` #409。未指定なら黒）に戻す。
-   * 背景画像の clearBackground と対をなす（背景色スロットだけを初期化する）。`[背景色:]` の解除・終劇で呼ぶ。
-   */
-  private clearBackgroundColor(): void {
-    this.currentBackgroundColor = null
-    this.bgGraphics.clear()
-    this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
-    this.bgGraphics.fill(this.defaultBackgroundColorNum())
-  }
-
-  /**
-   * 下地ベタ（bgGraphics）の既定色を数値で解決する (#409)。`defaultBackgroundColor`（frontmatter
-   * `background_color:`）が設定されていれば parseColorToNumber で解決、未指定なら黒 0x000000（後方互換）。
-   */
-  private defaultBackgroundColorNum(): number {
-    return this.defaultBackgroundColor
-      ? parseColorToNumber(this.defaultBackgroundColor, 0x000000)
-      : 0x000000
-  }
-
-  /**
-   * 下地ベタ（bgGraphics）の既定色を設定する (#409)。frontmatter `background_color:` の値（`#rrggbb`）を
-   * 渡す。`setBackgroundFadeMs`（#407）と対称の per-game 設定で、`NovelPlayer` の init（初回背景表示より前）で
-   * 一度呼ばれ、以後の下地色になる。null/空文字は既定の黒に倒す。
-   *
-   * `[背景色:]`（#273）のシーン上書きが**無い**とき（`currentBackgroundColor === null`）だけ bgGraphics を
-   * 即座に塗り直す。上書きが有効な間は `currentBackgroundColor` が勝つ（上書きを踏み潰さない）。
-   * 復元（applyState → setBackgroundColor / clearBackgroundColor）は不変で、null 復元時の戻り先が
-   * この既定色になるだけ（従来は暗黙の黒）。
+   * 下地ベタの既定色を設定する (#409)。frontmatter `background_color:` の値（`#rrggbb`）を渡す。
+   * `setBackgroundFadeMs`（#407）と対称の per-game 設定で、`NovelPlayer` の init（初回背景表示より前）で
+   * 一度呼ばれる。実体は `BackgroundController`（#828 7a）。
    */
   setDefaultBackgroundColor(color: string | null | undefined): void {
-    this.defaultBackgroundColor = color && color.length > 0 ? color : null
-    // シーン上書きが無いときだけ地色を新しい既定色へ即反映する。上書き中は触らない。
-    if (this.currentBackgroundColor === null) {
-      this.bgGraphics.clear()
-      this.bgGraphics.rect(0, 0, this.screenWidth, this.screenHeight)
-      this.bgGraphics.fill(this.defaultBackgroundColorNum())
-    }
+    this.background.setDefaultBackgroundColor(color)
   }
 
   /**

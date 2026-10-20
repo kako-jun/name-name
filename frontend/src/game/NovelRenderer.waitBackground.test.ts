@@ -7,11 +7,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Assets, Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
+import { backgroundControllerOf, internalsOf } from '../test/rendererInternals'
 
 interface Hooks {
   initialized: boolean
   setBackground(path: string): void
-  showLoadedBackground: (...a: unknown[]) => void
   clearBackground(): void
 }
 
@@ -19,9 +19,11 @@ function setup() {
   vi.spyOn(Assets, 'unload').mockResolvedValue(undefined as never)
   const r = new NovelRenderer()
   r.setAssetBaseUrl('/assets')
-  const h = r as unknown as Hooks
+  const h = internalsOf<Hooks>(r)
   h.initialized = true
-  const shown = vi.spyOn(h, 'showLoadedBackground').mockImplementation(() => {})
+  const shown = vi
+    .spyOn(backgroundControllerOf(r), 'showLoadedBackground')
+    .mockImplementation(() => {})
   return { r, h, shown }
 }
 
