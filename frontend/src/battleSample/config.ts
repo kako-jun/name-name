@@ -331,7 +331,7 @@ function parseEntity(
         error: `${path}.affinity: 味方側の相性は未対応です（enemies[].affinity のみ）`,
       }
     }
-    // 属性相性 (#872)。`[モンスター]` の `弱点:` 等と同じ 4 欄。各欄は属性 id の文字列の配列（小文字に寄せる）
+    // 属性相性 (#872)。`[モンスター]` の `弱点:` 等と同じ 4 欄。各欄は属性 id の文字列の配列（parser と同じ表で半角・小文字に寄せる）
     if (!isRecord(raw.affinity)) {
       return { ok: false, error: `${path}.affinity はオブジェクトである必要があります` }
     }

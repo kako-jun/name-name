@@ -178,7 +178,7 @@ fn collect_affinity(entries: &[(String, String)]) -> Option<MonsterAffinity> {
     affinity
 }
 
-/// 属性 id を小文字・半角に寄せる（全角英数と `_` `-` だけを半角にし、ASCII は小文字にする）。
+/// 属性 id を小文字・半角に寄せる（全角英数と `_` `-` だけを半角にし、小文字にする。半角カナ・丸数字などは変えない。JS 側 `normalizeAttrId`（`frontend/src/game/affinity.ts`）と同じ表）。
 fn normalize_attr_id(raw: &str) -> String {
     raw.chars()
         .map(|c| match c {
@@ -636,6 +636,14 @@ mod tests {
             a.unwrap().weak,
             strs(&["ice", "water", "fire", "earth", "thunder_2"])
         );
+    }
+
+    #[test]
+    fn affinity_normalizes_only_fullwidth_alnum_underscore_hyphen() {
+        // 全角数字・英字・`＿`・`－` は半角になり、半角カナ・丸数字は変換しない（JS 側 normalizeAttrId と同じ表）
+        let (a, w) = interpret_affinity(&kv(&[("弱点", "ＦＩＲＥ＿０－Ａ ﾎﾉｵ ①")]));
+        assert!(w.is_empty());
+        assert_eq!(a.unwrap().weak, strs(&["fire_0-a", "ﾎﾉｵ", "①"]));
     }
 
     #[test]

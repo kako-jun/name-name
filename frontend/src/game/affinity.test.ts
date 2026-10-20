@@ -515,6 +515,30 @@ describe('戦闘エンジン経由: 呪文・特技・アイテム (#872)', () =
 })
 
 describe('実 WASM パーサ → 戦闘への組み立て (#872)', () => {
+  it('Rust の正規化と JS の normalizeAttrId が同じ結果になる', async () => {
+    const input = 'ＦＩＲＥ＿０－Ａ ﾎﾉｵ ① Ice ＷＡＴＥＲ'
+    const doc = await parseMarkdown(
+      [
+        '---',
+        'engine: name-name',
+        'chapter: 1',
+        'title: t',
+        '---',
+        '',
+        '## data: マスター',
+        '',
+        '[モンスター m]',
+        '名前: M',
+        'HP: 1',
+        `弱点: ${input}`,
+        '[/モンスター]',
+        '',
+      ].join('\n')
+    )
+    const weak = collectMasterData(doc).monsters['m'].affinity?.weak
+    expect(weak).toEqual(input.split(' ').map(normalizeAttrId))
+  })
+
   it('弱点:/半減:/無効:/吸収: が BattleEntity.affinity に写り、書かない敵は affinity を持たない', async () => {
     const doc = await parseMarkdown(
       [
