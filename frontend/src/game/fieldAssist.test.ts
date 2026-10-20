@@ -19,6 +19,9 @@ import {
   resolveEdgeArrival,
   whiteReachableFromEdge,
   ASSIST_LATCH_REACH,
+  edgeArrivalPassable,
+  findStrandedWhite,
+  isPinched,
   type EdgeArrivalResult,
   INITIAL_ASSIST_RUNTIME,
   type AssistRuntime,
@@ -322,7 +325,10 @@ describe('細い白を跨いでも橙のラッチが切れない（10x18）', ()
     return { pos: r.pos, runtime: fr.runtime }
   }
   it('上の橙から細い白に降りて止まっても、下の橙へ進め、下へ渡り切れる', () => {
-    let s = { pos: { x: 7.5, y: 6.5 }, runtime: { latched: true } as AssistRuntime }
+    let s = {
+      pos: { x: 7.5, y: 6.5 },
+      runtime: { latched: true, walked: 0, last: null } as AssistRuntime,
+    }
     // 橙の上から白 (4,9) へ（左・下を押して）
     for (let i = 0; i < 80 && !(Math.floor(s.pos.x) === 4 && Math.floor(s.pos.y) === 9); i++)
       s = step(s.pos, i % 2 ? { x: 0, y: 1 } : { x: -1, y: 0 }, s.runtime)
@@ -454,7 +460,7 @@ describe('端リンクの着地 (resolveEdgeArrival)', () => {
     expect(r.kind).toBe('ok')
     if (r.kind === 'ok') {
       expect(isAssistCellOf(stairs, r.pos)).toBe(true)
-      expect(r.runtime).toEqual({ latched: true })
+      expect(r.runtime).toMatchObject({ latched: true })
     }
   })
   // 中2の盤面: 40x60。y=0..9 は x=10..29 が橙・他は黒、y=10..59 は白
@@ -529,5 +535,201 @@ describe('端リンクの着地 (resolveEdgeArrival)', () => {
   it('歩ける点がまったく無ければ none（橙なしのとき）', () => {
     const black = grid(10, 10, () => '#')
     expect(arrive(black).kind).toBe('none')
+  })
+})
+
+describe('端リンクの着地: 予定点が橙の向こうでも、帯から辿れる白があればそこへ置く', () => {
+  const rows: string[] = []
+  for (let y = 0; y < 60; y++) {
+    let row = ''
+    for (let x = 0; x < 40; x++) {
+      if (x >= 32)
+        row += '.' // 右の通路（端の帯から辿れる）
+      else if (y < 10)
+        row += x >= 10 && x < 30 ? 'o' : '#' // 上の橙
+      else if (y < 20)
+        row += x >= 10 && x < 30 ? '.' : '#' // 橙の向こうの小部屋（帯から辿れない）
+      else row += '#'
+    }
+    rows.push(row)
+  }
+  const base = maskOf(rows)
+  const args = {
+    link: { edge: 'bottom', range: [10, 29], to: 'B' } as FieldLink,
+    back: { edge: 'top', range: [10, 29], to: 'A' } as FieldLink,
+    srcPos: { x: 20, y: 59 },
+    base,
+    assisted: maskWithAssist(base),
+    inset: 18,
+    passable: false,
+    edgeBand: 6,
+  }
+  it('予定点は橙の向こうの小部屋だが、右の通路の最寄りに置き、断らない', () => {
+    const planned = arrivalPosition(args.link, args.srcPos, args.back, base, args.inset)
+    expect(planned).not.toBeNull()
+    expect(planned!.x).toBeLessThan(30) // 予定点は小部屋の中
+    const r = resolveEdgeArrival(args)
+    expect(r.kind).toBe('ok')
+    if (r.kind === 'ok') {
+      expect(r.pos.x).toBeGreaterThanOrEqual(32)
+      expect(isAssistCellOf(base, r.pos)).toBe(false)
+      expect(r.runtime).toEqual(INITIAL_ASSIST_RUNTIME)
+      const reach = whiteReachableFromEdge(base, 'top', 6)
+      expect(reach[Math.floor(r.pos.y) * 40 + Math.floor(r.pos.x)]).toBe(1)
+    }
+  })
+  it('辿れる白がひとつも無ければ、従来どおり断る', () => {
+    const blocked = maskOf(rows.map((row, y) => (y < 10 ? row.replace(/\./g, '#') : row)))
+    expect(
+      resolveEdgeArrival({ ...args, base: blocked, assisted: maskWithAssist(blocked) }).kind
+    ).toBe('locked')
+  })
+})
+
+describe('シーンをまたぐ階段のラッチ', () => {
+  // A: 上端まで続く橙の階段（x5..14）、B: 下端から始まる橙の階段。どちらも他は黒
+  const stairsRows = (h: number): string[] =>
+    Array.from({ length: h }, () => '#####oooooooooo#####')
+  const A = maskOf(stairsRows(40))
+  const B = maskOf(stairsRows(40))
+  const REFUSE_ST: AssistState = { passable: false, held: true, ghost: false }
+  const OPEN_ST: AssistState = { passable: true, held: false, ghost: false }
+  const link: FieldLink = { edge: 'top', range: [5, 14], to: 'B' }
+  const back: FieldLink = { edge: 'bottom', range: [5, 14], to: 'A' }
+
+  it('edgeArrivalPassable: 通れる状態か、ラッチ中なら true。どちらでもなければ false', () => {
+    const latched: AssistRuntime = { latched: true, walked: 0, last: null }
+    expect(edgeArrivalPassable(OPEN_ST, INITIAL_ASSIST_RUNTIME)).toBe(true)
+    expect(edgeArrivalPassable(REFUSE_ST, latched)).toBe(true)
+    expect(edgeArrivalPassable(REFUSE_ST, INITIAL_ASSIST_RUNTIME)).toBe(false)
+    expect(edgeArrivalPassable(null, INITIAL_ASSIST_RUNTIME)).toBe(false)
+  })
+
+  it('A の階段の途中で通れない状態にして上端まで進んでも、B 側に橙の上へ着地して渡り切れる', () => {
+    // A: 通れる状態で入り、途中で通れない状態にして上端まで
+    let pos: Vec = { x: 9.5, y: 30.5 }
+    let rt: AssistRuntime = { latched: true, walked: 0, last: pos }
+    const up = { x: 0, y: -1 }
+    for (let i = 0; i < 300 && pos.y > 2; i++) {
+      const fr = stepAssistFrame({
+        base: A,
+        assisted: maskWithAssist(A),
+        pos,
+        vec: up,
+        state: REFUSE_ST,
+        runtime: rt,
+      })
+      rt = fr.runtime
+      pos = stepMove(fr.walkMask, pos, up, 60, 16).pos
+    }
+    expect(pos.y).toBeLessThanOrEqual(2)
+    expect(rt.latched).toBe(true)
+    // 端リンクの着地: ラッチ中なので通れる状態として扱う
+    const arrival = resolveEdgeArrival({
+      link,
+      back,
+      srcPos: pos,
+      base: B,
+      assisted: maskWithAssist(B),
+      inset: 18,
+      passable: edgeArrivalPassable(REFUSE_ST, rt),
+      edgeBand: 6,
+    })
+    expect(arrival.kind).toBe('ok')
+    if (arrival.kind !== 'ok') return
+    expect(isAssistCellOf(B, arrival.pos)).toBe(true)
+    expect(arrival.runtime.latched).toBe(true)
+    expect(arrival.runtime.walked).toBe(0) // 端リンクの到着は新しいラッチ（歩いた距離 0）
+    // B: 通れない状態のまま上へ渡り切る
+    pos = arrival.pos
+    rt = arrival.runtime
+    for (let i = 0; i < 600 && pos.y > 1; i++) {
+      const fr = stepAssistFrame({
+        base: B,
+        assisted: maskWithAssist(B),
+        pos,
+        vec: up,
+        state: REFUSE_ST,
+        runtime: rt,
+      })
+      rt = fr.runtime
+      pos = stepMove(fr.walkMask, pos, up, 60, 16).pos
+    }
+    expect(pos.y).toBeLessThanOrEqual(1)
+  })
+
+  it('ラッチしていない通れない状態では、同じ着地を断る（橙の上へは置かない）', () => {
+    const arrival = resolveEdgeArrival({
+      link,
+      back,
+      srcPos: { x: 9.5, y: 1 },
+      base: B,
+      assisted: maskWithAssist(B),
+      inset: 18,
+      passable: edgeArrivalPassable(REFUSE_ST, INITIAL_ASSIST_RUNTIME),
+      edgeBand: 6,
+    })
+    expect(arrival.kind).toBe('locked')
+  })
+})
+
+describe('isPinched / findStrandedWhite', () => {
+  // 30x40。上の橙 y2..7、白 gap セル、下の橙 y(8+gap)..(13+gap)、その下は白
+  const board = (gap: number): WalkMask =>
+    maskOf(
+      Array.from({ length: 40 }, (_, y) => {
+        const orange = (y >= 2 && y < 8) || (y >= 8 + gap && y < 14 + gap)
+        return '#' + (orange ? 'o'.repeat(28) : '.'.repeat(28)) + '#'
+      })
+    )
+  it('橙に挟まれた白（8 セル以下）は全部挟まれている。9 セルでは端のセルが外れる', () => {
+    const b8 = board(8)
+    for (let y = 8; y < 16; y++) expect(isPinched(b8, { x: 15.5, y: y + 0.5 }), `y${y}`).toBe(true)
+    const b9 = board(9)
+    expect(isPinched(b9, { x: 15.5, y: 8.5 })).toBe(false) // 上の端: 下の橙まで 9 セル
+    expect(isPinched(b9, { x: 15.5, y: 12.5 })).toBe(true)
+    // 挟まれていない縁（下の橙の下）
+    expect(isPinched(b8, { x: 15.5, y: 25.5 })).toBe(false)
+    // 橙の無いマスクは false
+    expect(isPinched(maskOf(['...', '...']), { x: 1.5, y: 0.5 })).toBe(false)
+  })
+  it('黒を挟んだ向こうの橙は数えない', () => {
+    const m = maskOf(['o#.#o'])
+    expect(isPinched(m, { x: 2.5, y: 0.5 })).toBe(false)
+  })
+  it('橙に接しているが start・リンクの帯・ワープの at のどれにも通じていない白を返す', () => {
+    const b = board(12) // 白の踊り場 y8..19、その下の橙 y20..25、その下 y26.. が start 側
+    const found = findStrandedWhite(b, [{ x: 15.5, y: 35.5 }], [])
+    // 踊り場と、上の橙の上（y0..1）の白が候補。踊り場は両側の橙に 28 セルずつ接している
+    const platform = found.find((r) => r.sample.y >= 8 && r.sample.y < 20)
+    expect(platform).toBeDefined()
+    expect(platform!.contact).toBeGreaterThanOrEqual(28)
+  })
+  it('start・リンクの帯・ワープの at のどれかを含む白は返さない', () => {
+    const b = board(12)
+    const viaStart = findStrandedWhite(
+      b,
+      [
+        { x: 15.5, y: 12.5 },
+        { x: 15.5, y: 35.5 },
+      ],
+      []
+    )
+    expect(viaStart.some((r) => r.sample.y >= 8 && r.sample.y < 20)).toBe(false)
+    const m = maskOf(['.o.o.', '.o.o.', '.o.o.'])
+    // 中央の列だけが 2 つの橙に挟まれている（左右の端の列は 1 つの橙にしか接しない）
+    expect(findStrandedWhite(m, [], [], 1).map((r) => r.sample.x)).toEqual([2.5])
+    // 上の端の帯はどの列も含むので、中央の列も通じていることになる
+    expect(findStrandedWhite(m, [], [{ edge: 'top', band: 1 }], 1)).toEqual([])
+  })
+  it('1 つの橙にしか接しない白（階段の先の広場など）は返さない', () => {
+    const m = maskOf(['....', 'oooo', '....', '....'])
+    expect(findStrandedWhite(m, [{ x: 0.5, y: 3.5 }], [], 1)).toEqual([])
+  })
+  it('橙に接する長さが短い白の島は返さない。橙の無いマスクは空', () => {
+    const m = maskOf(['#####', '#o.o#', '#####'])
+    expect(findStrandedWhite(m, [], [])).toEqual([]) // 接する長さ 2 < 8
+    expect(findStrandedWhite(m, [], [], 1).length).toBe(1)
+    expect(findStrandedWhite(maskOf(['...', '...']), [], [])).toEqual([])
   })
 })

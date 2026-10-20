@@ -9,10 +9,15 @@
  * (P3) 詰まらない: ラッチ中のどの到達位置からも橙を抜けられる
  * (P4) 通れない状態の端リンク: 着地できた場合は、来た端の帯から橙を通らずにたどれる白。そうでなければ断られる
  * (P5) 橙の無いマスクは従来と完全に同じ動き
+ * (P1b) ラッチ中の白（橙の縁など）から橙への進入は、最後に橙を踏んでから橙に挟まれていない白を歩いた距離が ASSIST_LATCH_WALK 以内に限る
+ * (P2b) 橙と橙の間の白（踊り場）: 8 セル以下なら到達できる全位置から出られる。10 セル以上の閉じ込めは既知の限界で、
+ *       findStrandedWhite が警告の対象にする
  */
 import { describe, expect, it } from 'vitest'
 import {
   ASSIST_LOOKAHEAD,
+  findStrandedWhite,
+  isPinched,
   orangeNear,
   refuseEdgeLink,
   resolveEdgeArrival,
@@ -709,22 +714,36 @@ describe('性質ベースのファズ: 通れない状態の端リンク (P4)', 
           const flood = floodFromBand(e.base, e.back.edge, e.edgeBand)
           const i = Math.floor(res.pos.y) * e.base.width + Math.floor(res.pos.x)
           expect(flood.has(i), `seed ${seed} ${e.shape}: 着地点が帯から辿れない`).toBe(true)
+          // 予定点が辿れる白ならそこ、そうでなければ辿れる白のうち最寄り
+          const planned =
+            arrivalPosition(e.link, e.srcPos, e.back, e.base, e.inset) ??
+            snapToWalkable(
+              e.base,
+              { x: e.base.width / 2, y: e.base.height / 2 },
+              Math.max(e.base.width, e.base.height)
+            )
+          if (planned) {
+            const pi = Math.floor(planned.y) * e.base.width + Math.floor(planned.x)
+            if (flood.has(pi)) expect(res.pos, `seed ${seed}`).toEqual(planned)
+            else {
+              let best = Infinity
+              for (const j of flood) {
+                const dx = (j % e.base.width) + 0.5 - planned.x
+                const dy = Math.floor(j / e.base.width) + 0.5 - planned.y
+                best = Math.min(best, dx * dx + dy * dy)
+              }
+              const got = (res.pos.x - planned.x) ** 2 + (res.pos.y - planned.y) ** 2
+              expect(got, `seed ${seed} ${e.shape}: 最寄りの辿れる白でない`).toBeCloseTo(best, 6)
+            }
+          }
         }
       } else {
-        // 断るのは、戻りリンクがあって橙を含むマスクのときだけ。着地点（橙を除いて探した点）が辿れないとき
+        // 断るのは、戻りリンクがあって橙を含むマスクで、帯から辿れる白がひとつも無いときだけ
         locked++
         expect(res.kind, `seed ${seed}`).toBe('locked')
         expect(e.back, `seed ${seed}`).not.toBeNull()
         const flood = floodFromBand(e.base, e.back!.edge, e.edgeBand)
-        const p =
-          arrivalPosition(e.link, e.srcPos, e.back!, e.base, e.inset) ??
-          snapToWalkable(
-            e.base,
-            { x: e.base.width / 2, y: e.base.height / 2 },
-            Math.max(e.base.width, e.base.height)
-          )
-        const reach = p ? flood.has(Math.floor(p.y) * e.base.width + Math.floor(p.x)) : false
-        expect(reach, `seed ${seed} ${e.shape}: 辿れる着地点なのに断った`).toBe(false)
+        expect(flood.size, `seed ${seed} ${e.shape}: 辿れる白があるのに断った`).toBe(0)
       }
     }
     expect(ok).toBeGreaterThan(50)
@@ -788,5 +807,164 @@ describe('回帰: 直近の再現盤面', () => {
       ...edgeArgs,
     })
     expect(res.kind).toBe('locked')
+  })
+})
+
+// ---- (P1b) 橙の縁沿いの白でラッチが残らない ----
+
+describe('性質ベースのファズ: 縁沿いの白 (P1b)', () => {
+  it('通れない状態で、ラッチ中の白から橙へ入れるのは、最後に橙を踏んでから橙に挟まれていない白を歩いた距離が ASSIST_LATCH_WALK 以内のときだけ', () => {
+    let walks = 0
+    let whiteEntries = 0
+    for (let seed = 1; seed <= 70; seed++) {
+      const t = makeTerrain(seed)
+      const c = ctxOf(t)
+      const open = bfs(
+        c,
+        [{ pos: t.start, rt: INITIAL_ASSIST_RUNTIME }],
+        () => OPEN,
+        6000,
+        undefined,
+        {
+          when: (n) => onOrange(t, n.pos),
+          count: 4,
+        }
+      )
+      const entries = open.filter((n) => onOrange(t, n.pos)).slice(0, 4)
+      const r = rng(seed * 31)
+      for (const entry of entries) {
+        for (let k = 0; k < 6; k++) {
+          walks++
+          let cur = entry
+          let since = 0 // 独立に数える: 最後に橙を踏んでから、橙に挟まれていない白の上を歩いた距離
+          let d = DIRS[Math.floor(r() * DIRS.length)]
+          for (let f = 0; f < 260; f++) {
+            if (f % 9 === 0 && r() < 0.7) d = DIRS[Math.floor(r() * DIRS.length)]
+            const a = advance(c, cur, d, REFUSE)
+            const wasOrange = onOrange(t, cur.pos)
+            if (wasOrange) since = 0
+            else {
+              const before = since // 入る一歩のぶんは数えない（今の位置までの距離）
+              if (!isPinched(t.base, cur.pos))
+                since += Math.hypot(a.node.pos.x - cur.pos.x, a.node.pos.y - cur.pos.y)
+              if (onOrange(t, a.node.pos)) {
+                whiteEntries++
+                if (before > 8 + 1e-9)
+                  throw new Error(
+                    `seed ${seed} (${t.shape}): 橙を踏まずに ${before.toFixed(1)}px 歩いた白から橙へ入った`
+                  )
+              }
+            }
+            cur = a.node
+          }
+        }
+      }
+    }
+    expect(walks).toBeGreaterThan(150)
+    expect(whiteEntries).toBeGreaterThanOrEqual(0)
+  }, 30000)
+})
+
+// ---- (P2b) 橙と橙の間の白（踊り場） ----
+
+/** 30x100。通路 x5..24。1 本目の橙 y60..69、踊り場 gap セル、2 本目の橙（10 セル） */
+function landingBoard(gap: number): { base: WalkMask; assisted: WalkMask; top: number } {
+  const g = new Grid(30, 100, 0)
+  g.rect(5, 0, 25, 100, 1)
+  g.rect(5, 60, 25, 70, 2)
+  const second1 = 60 - gap
+  g.rect(5, second1 - 10, 25, second1, 2)
+  const base = g.mask()
+  return { base, assisted: maskWithAssist(base), top: second1 - 10 }
+}
+
+describe('性質ベースのファズ: 踊り場 (P2b)', () => {
+  const run = (gap: number): { trapped: number; nodes: number; flagged: number } => {
+    const { base, assisted, top } = landingBoard(gap)
+    const c: Ctx = { base, assisted, speed: 100, dtMs: 1000 / 30, q: 0.75 }
+    // 1 本目の橙の途中でラッチし、そのあと通れない状態に切り替えた
+    const pos = { x: 15.5, y: 64.5 }
+    const entry: Node = { pos, rt: { latched: true, walked: 0, last: pos } }
+    const nodes = bfs(c, [entry], () => REFUSE, 30000)
+    const idx = new Map<number, number>()
+    nodes.forEach((n, i) => idx.set(keyOf(c, n), i))
+    const rev: number[][] = nodes.map(() => [])
+    nodes.forEach((n, i) => {
+      for (const d of DIRS) {
+        const j = idx.get(keyOf(c, advance(c, n, d, REFUSE).node))
+        if (j !== undefined) rev[j].push(i)
+      }
+    })
+    // 出られる = 出発点側の白（y >= 70）か、渡り切った先の白（2 本目の橙より上）に行ける
+    const good = new Uint8Array(nodes.length)
+    const stack: number[] = []
+    nodes.forEach((n, i) => {
+      if (!onOrangeAt(base, n.pos) && (n.pos.y >= 70 || n.pos.y < top)) {
+        good[i] = 1
+        stack.push(i)
+      }
+    })
+    while (stack.length) {
+      const j = stack.pop() as number
+      for (const i of rev[j])
+        if (!good[i]) {
+          good[i] = 1
+          stack.push(i)
+        }
+    }
+    const flagged = findStrandedWhite(base, [{ x: 15.5, y: 95 }], [{ edge: 'top', band: 1 }]).length
+    return { trapped: good.reduce((a, v) => a + (v ? 0 : 1), 0), nodes: nodes.length, flagged }
+  }
+  const onOrangeAt = (base: WalkMask, p: Vec): boolean => isAssistCell(base, p.x, p.y)
+
+  it('踊り場が 8 セル以下なら、到達できるどの位置からも出られる', () => {
+    for (let gap = 1; gap <= 8; gap++) {
+      const r = run(gap)
+      expect(r.nodes, `gap ${gap}`).toBeGreaterThan(200)
+      expect(r.trapped, `gap ${gap}`).toBe(0)
+    }
+  }, 30000)
+
+  it('踊り場が 10 セル以上だと閉じ込められる位置がある（既知の限界）。その白は警告の対象になる', () => {
+    for (const gap of [10, 14, 20]) {
+      const r = run(gap)
+      expect(r.trapped, `gap ${gap}`).toBeGreaterThan(0)
+      expect(r.flagged, `gap ${gap}`).toBe(1)
+    }
+  }, 30000)
+  it('縁沿いの白（40x24。橙の塊の縁から 2px の白）: 渡り切ったあと白を歩いて、別の面から橙に入れない', () => {
+    const g = new Grid(40, 24, 1)
+    g.rect(10, 6, 20, 16, 2)
+    const base = g.mask()
+    const asst = maskWithAssist(base)
+    let pos: Vec = { x: 2.5, y: 10.5 }
+    let rt: AssistRuntime = INITIAL_ASSIST_RUNTIME
+    const go = (state: AssistState, vec: Vec, until: (p: Vec) => boolean): void => {
+      for (let i = 0; i < 400 && !until(pos); i++) {
+        const fr = stepAssistFrame({ base, assisted: asst, pos, vec, state, runtime: rt })
+        rt = fr.runtime
+        pos = stepMove(fr.walkMask, pos, vec, 60, 16).pos
+      }
+    }
+    go(OPEN, { x: 1, y: 0 }, (p) => p.x >= 21.5) // 通れる状態で左から右へ渡り切って止める
+    expect(isAssistCell(base, pos.x, pos.y)).toBe(false)
+    go(REFUSE, { x: 0, y: -1 }, (p) => p.y <= 4.5) // 通れない状態で縁沿いに上へ
+    go(REFUSE, { x: -1, y: 0 }, (p) => p.x <= 14.5) // 左へ
+    for (let i = 0; i < 200; i++) {
+      go(REFUSE, { x: 0, y: 1 }, () => true)
+      const fr = stepAssistFrame({
+        base,
+        assisted: asst,
+        pos,
+        vec: { x: 0, y: 1 },
+        state: REFUSE,
+        runtime: rt,
+      })
+      rt = fr.runtime
+      pos = stepMove(fr.walkMask, pos, { x: 0, y: 1 }, 60, 16).pos
+      expect(isAssistCell(base, pos.x, pos.y), `frame ${i} ${JSON.stringify(pos)}`).toBe(false)
+    }
+    expect(rt.latched).toBe(false)
+    expect(pos.y).toBeLessThan(6)
   })
 })

@@ -42,12 +42,14 @@ import {
   INITIAL_ASSIST_RUNTIME,
   INITIAL_BLOCKED_GATE,
   arrivalMask,
+  edgeArrivalPassable,
   resolveEdgeArrival,
   refuseEdgeLink,
   assistSpeed,
   companionDisplayAlpha,
   companionPosition,
   evalAssist,
+  findStrandedWhite,
   facing4,
   stepAssistFrame,
   stepBlockedEvent,
@@ -219,6 +221,23 @@ async function loadConfig(): Promise<FieldSampleConfig> {
   return fallback.value
 }
 
+/**
+ * 橙に接しているが、start・リンクの帯・ワープの at のどれにも通じていない白（踊り場）を警告する (#862)。
+ * 通れない状態で橙の途中から入ると、その白から出られなくなる
+ */
+function warnStrandedWhite(config: FieldSampleConfig, s: LoadedScene): void {
+  if (!s.mask.assist) return
+  const sc = config.scenes[s.id]
+  const safe: Vec[] = []
+  if (config.startScene === s.id) safe.push(config.start)
+  for (const w of Object.values(config.warps)) if (w.to === s.id) safe.push(w.at)
+  const edges = sc.links.map((l) => ({ edge: l.edge, band: config.edgeThreshold }))
+  for (const r of findStrandedWhite(s.mask, safe, edges))
+    console.warn(
+      `[field-sample] シーン ${s.id}: (${r.sample.x}, ${r.sample.y}) 付近の白（${r.size} セル）は、橙からしか入れません。橙の途中で通れない状態になると、そこから出られなくなります。橙で塗ることを推奨します`
+    )
+}
+
 async function main(): Promise<void> {
   const config = await loadConfig()
   const cache = new Map<string, Promise<LoadedScene>>()
@@ -226,6 +245,7 @@ async function main(): Promise<void> {
     let p = cache.get(id)
     if (!p) {
       p = loadScene(config, id)
+      p.then((s) => warnStrandedWhite(config, s)).catch(() => undefined)
       // 失敗は次回やり直せるようキャッシュから外す
       p.catch(() => cache.delete(id))
       cache.set(id, p)
@@ -673,7 +693,8 @@ async function main(): Promise<void> {
                 base: dst.mask,
                 assisted: dst.maskAssist,
                 inset: config.edgeThreshold * ARRIVAL_INSET_FACTOR,
-                passable: passableNow?.passable ?? false,
+                // ラッチ中（橙の途中で通れない状態になって渡り切った）なら、橙の上にも着地できる
+                passable: edgeArrivalPassable(passableNow, assistRt),
                 edgeBand: config.edgeThreshold,
               })
               if (arrival.kind !== 'ok') {
@@ -852,6 +873,8 @@ async function main(): Promise<void> {
       facing,
       warping: warpRun !== null,
       flags: { ...flags },
+      /** 橙のラッチの状態（検証用） */
+      assist: { latched: assistRt.latched, walked: assistRt.walked },
       companion: {
         visible: companionSprite.visible,
         /** 現れる・消える進み具合 (0..1)。画面の不透明度は ghost のとき ghostAlpha 倍 */
