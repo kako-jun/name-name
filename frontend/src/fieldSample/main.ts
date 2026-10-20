@@ -40,9 +40,10 @@ import {
 } from '../game/fieldWalk'
 import {
   INITIAL_ASSIST_RUNTIME,
+  INITIAL_BLOCKED_GATE,
   arrivalMask,
   resolveEdgeArrival,
-  limitRetreat,
+  refuseEdgeLink,
   assistSpeed,
   companionDisplayAlpha,
   companionPosition,
@@ -52,6 +53,7 @@ import {
   stepBlockedEvent,
   stepCompanionAlpha,
   type AssistRuntime,
+  type BlockedGate,
 } from '../game/fieldAssist'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
 import {
@@ -348,7 +350,7 @@ async function main(): Promise<void> {
     return ok
   }
   let companionAlpha = 0
-  let assistArmed = true
+  let assistGate: BlockedGate = INITIAL_BLOCKED_GATE
   let assistRt: AssistRuntime = INITIAL_ASSIST_RUNTIME
   // ---- ランダムエンカウント・戦闘 (#809) ----
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
@@ -661,7 +663,9 @@ async function main(): Promise<void> {
             .then((dst) => {
               if (disposed) return
               const back = findReturnLink(config, sceneId, link)
-              // 着地点は橙も歩ける扱いで探す（通れない状態でも橙の階段の上に着く）。来た端から辿れないときだけ橙を除いて探し直す
+              // 通れる状態は橙込みで着地点を探し、橙の上ならラッチして続ける。通れない状態は橙を除いて探し、
+              // 来た端の帯から橙を通らずにたどれる白に着けないときは移動を断る
+              const passableNow = config.assist ? evalAssist(config.assist, flags) : null
               const arrival = resolveEdgeArrival({
                 link,
                 back,
@@ -669,25 +673,35 @@ async function main(): Promise<void> {
                 base: dst.mask,
                 assisted: dst.maskAssist,
                 inset: config.edgeThreshold * ARRIVAL_INSET_FACTOR,
-                passable: config.assist ? evalAssist(config.assist, flags).passable : false,
+                passable: passableNow?.passable ?? false,
                 edgeBand: config.edgeThreshold,
               })
-              const landing = arrival?.pos ?? null
-              if (!landing) {
-                // 新シーンに歩ける点が無い: 遷移を中止して元のシーンに留まる
-                disarmed = link
+              if (arrival.kind !== 'ok') {
+                // 遷移を中止して元のシーンに留まる（同じリンクは入力が途切れるまで再発火しない）
+                const refused = refuseEdgeLink(link, arrival.kind, passableNow?.held ?? false)
+                disarmed = refused.disarmed
                 transition = null
                 fade.alpha = 0
-                showError(
-                  `遷移先 ${link.to} に歩ける点が見つかりません。遷移を中止しました（マスクを確認してください）`
-                )
+                if (refused.reason) {
+                  // 通れない状態で、橙の向こう側へ置くことになる移動を断った: 脚本へ 1 回だけ知らせる
+                  window.dispatchEvent(
+                    new CustomEvent('fieldsample:assist-blocked', {
+                      detail: { scene: sceneId, pos: { ...pos }, reason: refused.reason },
+                    })
+                  )
+                } else {
+                  showError(
+                    `遷移先 ${link.to} に歩ける点が見つかりません。遷移を中止しました（マスクを確認してください）`
+                  )
+                }
                 return
               }
+              const landing = arrival.pos
               sceneId = link.to
               applyScene(dst)
               pos = landing
-              // 端リンクで橙の上に着いたら、来た端を「入ってきた場所」にする（拒否されても渡り切れない）
-              assistRt = arrival?.runtime ?? INITIAL_ASSIST_RUNTIME
+              // 端リンクで橙の上に着いたら、押されて渡る状態でラッチして続ける
+              assistRt = arrival.runtime
               disarmed = back
               movingMs = 0
               transition = { phase: 'in', t: 0 }
@@ -722,7 +736,6 @@ async function main(): Promise<void> {
             vec,
             state: ast,
             runtime: assistRt,
-            edgeBand: config.edgeThreshold,
           })
         : null
       if (frame) assistRt = frame.runtime
@@ -734,8 +747,8 @@ async function main(): Promise<void> {
       const wantCompanion = frame ? frame.wantCompanion : false
       if (ast && frame) {
         // 通れない状態で橙へ進もうとした瞬間に 1 回だけ脚本へ知らせる（入力が途切れたら再武装。橙の上では出さない）
-        const ev = stepBlockedEvent(assistArmed, frame.blocked)
-        assistArmed = ev.armed
+        const ev = stepBlockedEvent(assistGate, frame.blocked, pos, vec)
+        assistGate = ev.gate
         if (ev.emit)
           window.dispatchEvent(
             new CustomEvent('fieldsample:assist-blocked', {
@@ -749,8 +762,7 @@ async function main(): Promise<void> {
         dt,
         config.assist?.fadeMs ?? 0
       )
-      const moved = stepMove(walkMask, pos, vec, speed, dt)
-      const r = frame?.retreatField ? limitRetreat(frame.retreatField, pos, moved) : moved
+      const r = stepMove(walkMask, pos, vec, speed, dt)
       pos = r.pos
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0
