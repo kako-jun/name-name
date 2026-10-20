@@ -158,9 +158,33 @@ export interface ActionTimeline {
   hitAt: number
 }
 
+/**
+ * 複数ヒット (#879) の、ヒット（round）と次のヒットの間の ms。暫定値（設計案は 90〜120ms。実機で詰める・未決）。
+ * round 無し（単発）のイベントには掛からない。
+ */
+export const MULTI_HIT_INTERVAL_MS = 100
+
+/** ヒットの round（無ければ 0）。負・非有限・小数は 0 以上の整数に丸める */
+export function hitRound(hit: BattleHit): number {
+  const r = hit.round
+  return typeof r === 'number' && Number.isFinite(r) && r > 0 ? Math.floor(r) : 0
+}
+
+/** round の命中の瞬間（行動の開始からの ms）。round 0 は従来の hitAt そのまま */
+export function hitTimeOf(baseHitAt: number, round: number): number {
+  return baseHitAt + round * MULTI_HIT_INTERVAL_MS
+}
+
 export function buildActionTimeline(
   kind: ActionKind,
-  opts: { damages?: boolean; downs?: boolean } = {}
+  opts: {
+    damages?: boolean
+    downs?: boolean
+    lastDamageRound?: number
+    lastDownRound?: number
+    /** 種別を問わない最大 round。この round の命中まで行動を終わらせない */
+    lastRound?: number
+  } = {}
 ): ActionTimeline {
   if (kind === 'notice') return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0 }
   const motionEnd =
@@ -168,8 +192,12 @@ export function buildActionTimeline(
   const hitAt = kind === 'attack' ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS : CAST_HIT_MS
   // のけぞり・倒れが途中で切れないよう、受ける側の動きが終わるまで次の行動を待つ
   let end = motionEnd
-  if (opts.damages) end = Math.max(end, hitAt + RECOIL_MS)
-  if (opts.downs) end = Math.max(end, hitAt + RECOIL_MS + DOWN_MS)
+  // 複数ヒット (#879): のけぞり・倒れ切りは、最後のダメージ・倒れるヒットの round ぶん後ろにずれる（round 無しは 0 で従来と同じ）
+  if (opts.damages) end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0) + RECOIL_MS)
+  if (opts.downs)
+    end = Math.max(end, hitTimeOf(hitAt, opts.lastDownRound ?? 0) + RECOIL_MS + DOWN_MS)
+  // heal・miss だけの round も取りこぼさない（最大 round が 0 なら何もしない = 従来と同じ）
+  if ((opts.lastRound ?? 0) > 0) end = Math.max(end, hitTimeOf(hitAt, opts.lastRound ?? 0))
   return { duration: end + ACTION_GAP_MS, hitAt }
 }
 
@@ -177,7 +205,22 @@ export function buildActionTimeline(
 export function eventTimeline(event: BattleActionEvent): ActionTimeline {
   const damages = event.hits.some((h) => h.kind === 'damage')
   const downs = event.hits.some((h) => h.kind === 'damage' && h.hpAfter <= 0)
-  return buildActionTimeline(event.kind, { damages, downs })
+  let lastDamageRound = 0
+  let lastDownRound = 0
+  let lastRound = 0
+  for (const h of event.hits) {
+    lastRound = Math.max(lastRound, hitRound(h))
+    if (h.kind !== 'damage') continue
+    lastDamageRound = Math.max(lastDamageRound, hitRound(h))
+    if (h.hpAfter <= 0) lastDownRound = Math.max(lastDownRound, hitRound(h))
+  }
+  return buildActionTimeline(event.kind, {
+    damages,
+    downs,
+    lastDamageRound,
+    lastDownRound,
+    lastRound,
+  })
 }
 
 export interface ActorSample {
@@ -257,8 +300,8 @@ export interface ActivePlayback {
   event: BattleActionEvent
   /** この行動の開始からの経過 ms */
   elapsed: number
-  /** 命中の瞬間を処理済みか */
-  hitFired: boolean
+  /** 命中の瞬間を処理済みの round の数（round の小さい順に数える。round 無しの行動は 0 か 1） (#879) */
+  firedRounds: number
 }
 
 export interface PlaybackState {
@@ -285,8 +328,25 @@ export function isPlaybackBusy(pb: PlaybackState): boolean {
 /** 命中の瞬間に起きた出来事。画面はこれを受けて HP 表示・ダメージ数字を出す */
 export interface HitFire {
   event: BattleActionEvent
+  /** この瞬間に命中する hits（その round のぶんだけ。round 無しの行動は全 hits） (#879) */
+  hits: readonly BattleHit[]
+  /** 何発目か（round。round 無しは 0） */
+  round: number
   /** 命中の瞬間から、今回の進行の終わりまでの ms（数字の出始めを時間ぶんだけ進める） */
   sinceHit: number
+}
+
+/** イベントの hits を round ごとにまとめる（round の小さい順。同じ round 内は配列順）。hits が空なら round 0 の空の組 1 つ */
+export function groupHitsByRound(event: BattleActionEvent): { round: number; hits: BattleHit[] }[] {
+  if (event.hits.length === 0) return [{ round: 0, hits: [] }]
+  const map = new Map<number, BattleHit[]>()
+  for (const h of event.hits) {
+    const r = hitRound(h)
+    const list = map.get(r)
+    if (list) list.push(h)
+    else map.set(r, [h])
+  }
+  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([round, hits]) => ({ round, hits }))
 }
 
 /** 暴走防止: 1 回の進行で処理する行動の上限 */
@@ -310,15 +370,24 @@ export function advancePlayback(
       const next = queue[0]
       if (!next) break
       queue = queue.slice(1)
-      active = { event: next, elapsed: 0, hitFired: false }
+      active = { event: next, elapsed: 0, firedRounds: 0 }
     }
     const tl = eventTimeline(active.event)
     const step = Math.min(rest, tl.duration - active.elapsed)
     active.elapsed += step
     rest -= step
-    if (!active.hitFired && active.elapsed >= tl.hitAt) {
-      active.hitFired = true
-      fires.push({ event: active.event, sinceHit: active.elapsed - tl.hitAt })
+    const groups = groupHitsByRound(active.event)
+    while (active.firedRounds < groups.length) {
+      const g = groups[active.firedRounds]
+      const at = hitTimeOf(tl.hitAt, g.round)
+      if (active.elapsed < at) break
+      active.firedRounds += 1
+      fires.push({
+        event: active.event,
+        hits: g.hits,
+        round: g.round,
+        sinceHit: active.elapsed - at,
+      })
     }
     if (active.elapsed >= tl.duration) active = null
   }
@@ -369,6 +438,19 @@ export const POPUP_COLORS: Record<BattleHitKind, number> = {
 
 export function popupText(hit: Pick<BattleHit, 'kind' | 'amount'>): string {
   return hit.kind === 'miss' ? 'MISS' : String(Math.max(0, Math.round(hit.amount)))
+}
+
+/** 同じ対象への連続ヒット (#879) の数字を縦にずらす段数の上限（超えたら最下段へ戻る）と、1 段のずれ（数字の高さに対する比） */
+export const POPUP_STACK_LEVELS = 5
+export const POPUP_STACK_STEP = 0.85
+/** 同じイベント内で、同じ対象への何番目のヒットか（0 始まり）。段にして縦にずらす。単発（同じ対象に 1 回）は常に 0 */
+export function popupStackIndex(hits: readonly BattleHit[], hit: BattleHit): number {
+  let n = 0
+  for (const h of hits) {
+    if (h === hit) break
+    if (h.target.side === hit.target.side && h.target.index === hit.target.index) n += 1
+  }
+  return n % POPUP_STACK_LEVELS
 }
 
 /** 数字のフォントサイズ（px）。枠の一辺の 0.35 倍（FF らしく読みやすい大きさ）。小さすぎ・大きすぎは抑える */
