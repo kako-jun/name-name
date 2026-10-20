@@ -17,7 +17,7 @@ import {
 } from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
 import { parseMenuList, parsePoses, resolveUrl, type ParseResult } from '../battleSample/config'
-import type { Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
+import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
@@ -31,6 +31,20 @@ import type { BattleItemEntry, BattleSpellEntry } from '../game/battleMenu'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
 export const FACINGS: readonly Facing[] = ['up', 'down', 'left', 'right']
+export const DIAGONAL_FACINGS: readonly DiagonalFacing[] = [
+  'upLeft',
+  'upRight',
+  'downLeft',
+  'downRight',
+]
+
+/** 斜めの向きの左右の相方（mirrorOf の反転元にできるのはこれだけ） */
+export const MIRROR_PARTNER: Record<DiagonalFacing, DiagonalFacing> = {
+  upLeft: 'upRight',
+  upRight: 'upLeft',
+  downLeft: 'downRight',
+  downRight: 'downLeft',
+}
 
 export interface FieldSceneConfig {
   id: string
@@ -77,8 +91,14 @@ export interface FieldSampleConfig {
   /** 端のしきい値（背景ピクセル） */
   edgeThreshold: number
   player: {
-    /** 向きごとに 3 コマの画像 URL */
-    sprites: Record<Facing, [string, string, string]>
+    /** 向きごとに 3 コマの画像 URL。斜め 4 方向 (#811) は optional（`mirrorOf` で埋めた分は含まない） */
+    sprites: Record<Facing, [string, string, string]> &
+      Partial<Record<DiagonalFacing, [string, string, string]>>
+    /**
+     * 斜めの向きを、左右の相方（upLeft↔upRight、downLeft↔downRight）の画像の左右反転で済ませる指定 (#811)。例: `{ upLeft: 'upRight' }`。
+     * 斜めの 4 方向がすべて（自前の画像か `mirrorOf` で）揃ったときだけ 8 方向で動く。揃っていなければ 4 方向
+     */
+    mirrorOf: Partial<Record<DiagonalFacing, DiagonalFacing>>
     /** 表示する高さ（背景ピクセル） */
     height: number
     /** 1 コマの長さ(ms) */
@@ -168,19 +188,61 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!edgeThreshold.ok) return edgeThreshold
 
   if (!isObj(raw.player) || !isObj(raw.player.sprites)) return fail('player.sprites が必要です')
-  const sprites = {} as Record<Facing, [string, string, string]>
-  for (const f of FACINGS) {
-    const arr = raw.player.sprites[f]
-    if (!Array.isArray(arr) || arr.length !== 3)
-      return fail(`player.sprites.${f} は 3 コマ分の URL 配列が必要です`)
+  const parseFrames = (v: unknown, path: string): ParseResult<[string, string, string]> => {
+    if (!Array.isArray(v) || v.length !== 3) return fail(`${path} は 3 コマ分の URL 配列が必要です`)
     const urls: string[] = []
     for (let i = 0; i < 3; i++) {
-      const u = url(arr[i], `player.sprites.${f}[${i}]`)
+      const u = url(v[i], `${path}[${i}]`)
       if (!u.ok) return u
       urls.push(u.value)
     }
-    sprites[f] = urls as [string, string, string]
+    return { ok: true, value: urls as [string, string, string] }
   }
+  const sprites = {} as FieldSampleConfig['player']['sprites']
+  for (const f of FACINGS) {
+    const r = parseFrames(raw.player.sprites[f], `player.sprites.${f}`)
+    if (!r.ok) return r
+    sprites[f] = r.value
+  }
+  // 斜め 4 方向 (#811)。未指定は 4 方向のまま（後方互換）
+  for (const f of DIAGONAL_FACINGS) {
+    if (raw.player.sprites[f] === undefined) continue
+    const r = parseFrames(raw.player.sprites[f], `player.sprites.${f}`)
+    if (!r.ok) return r
+    sprites[f] = r.value
+  }
+  const mirrorOf: FieldSampleConfig['player']['mirrorOf'] = {}
+  const mirrorRaw = raw.player.sprites.mirrorOf
+  if (mirrorRaw !== undefined) {
+    if (!isObj(mirrorRaw)) return fail('player.sprites.mirrorOf はオブジェクトが必要です')
+    for (const [k, v] of Object.entries(mirrorRaw)) {
+      if (!(DIAGONAL_FACINGS as readonly string[]).includes(k))
+        return fail(
+          `player.sprites.mirrorOf.${k} は斜めの向き（${DIAGONAL_FACINGS.join(' / ')}）のどれかにしてください`
+        )
+      // 左右反転は x だけを入れ替えるので、反転元は左右の相方（upLeft↔upRight / downLeft↔downRight）だけ
+      const partner = MIRROR_PARTNER[k as DiagonalFacing]
+      if (v !== partner)
+        return fail(
+          `player.sprites.mirrorOf.${k} は左右の相方 ${partner} だけを指せます（左右反転なので上下は変えられません）`
+        )
+      const to = partner
+      if (sprites[k as DiagonalFacing])
+        return fail(`player.sprites.${k} と player.sprites.mirrorOf.${k} は同時に指定できません`)
+      mirrorOf[k as DiagonalFacing] = to
+    }
+    for (const [k, to] of Object.entries(mirrorOf)) {
+      if (!sprites[to as DiagonalFacing])
+        return fail(
+          `player.sprites.mirrorOf.${k} の反転元 ${to} には、mirrorOf ではなく自前の画像（player.sprites.${to}）が必要です`
+        )
+    }
+  }
+  const diagCount = DIAGONAL_FACINGS.filter((f) => sprites[f] || mirrorOf[f]).length
+  if (diagCount !== 0 && diagCount !== DIAGONAL_FACINGS.length)
+    return fail(
+      `斜めの向きは 4 方向（${DIAGONAL_FACINGS.join(' / ')}）すべてを、画像か mirrorOf で揃えてください（いまは ${diagCount} 方向）`
+    )
   const height = positive(raw.player.height, DEFAULTS.height, 'player.height')
   if (!height.ok) return height
   const frameMs = positive(raw.player.frameMs, DEFAULTS.frameMs, 'player.frameMs')
@@ -408,7 +470,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       start: { x: s.x, y: s.y },
       speed: speed.value,
       edgeThreshold: edgeThreshold.value,
-      player: { sprites, height: height.value, frameMs: frameMs.value },
+      player: { sprites, mirrorOf, height: height.value, frameMs: frameMs.value },
       scenes,
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
