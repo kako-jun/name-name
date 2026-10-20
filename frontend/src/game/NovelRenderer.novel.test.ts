@@ -28,7 +28,12 @@ import { NOVEL_ROLE_X_RATIO } from './CharacterLayer'
 import { ASPECT_RATIOS, DEFAULT_ASPECT_RATIO } from './constants'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
-import { internals, type RendererInternals, internalsOf } from '../test/rendererInternals'
+import {
+  internals,
+  type RendererInternals,
+  internalsOf,
+  screenEffectsControllerOf,
+} from '../test/rendererInternals'
 
 /**
  * 役割配置の期待 x を定数から導出する (#286 follow-up S1)。
@@ -92,7 +97,7 @@ interface NovelScrimInternals {
   novelScrim: { visible: boolean; alpha: number } | null
 }
 function scrimInternals(r: NovelRenderer): NovelScrimInternals {
-  return r as unknown as NovelScrimInternals
+  return internalsOf<NovelScrimInternals>(r)
 }
 function attachFakeNovelScrim(r: NovelRenderer): NovelScrimInternals {
   const i = scrimInternals(r)
@@ -728,7 +733,7 @@ describe('NovelRenderer novel speaker_nudge フラグによる nudge 抑制 (#38
 
   /** private retreatNovelScrim を spy して「呼ばれたか」を取る（jsdom では状態観測不能なため）。 */
   function spyRetreat(r: NovelRenderer) {
-    return vi.spyOn(r as unknown as { retreatNovelScrim: () => void }, 'retreatNovelScrim')
+    return vi.spyOn(screenEffectsControllerOf(r), 'retreatNovelScrim')
   }
 
   // D2（最重要）: speaker_nudge=false では話者交代しても nudgePose を発火しない。
