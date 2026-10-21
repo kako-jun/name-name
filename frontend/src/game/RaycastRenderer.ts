@@ -143,6 +143,7 @@ export class RaycastRenderer {
   private masterSkills: Record<string, import('../types').SkillDef> | undefined
   private masterStatuses: Record<string, import('../types').StatusDef> | undefined
   private masterMagicites: Record<string, import('../types').MagiciteDef> | undefined
+  private masterJobs: Record<string, import('../types').JobDef> | undefined
   /** アイテムマスター (#831)。戦利品のログの表示名だけに使う */
   private masterItems: Record<string, import('../types').ItemDef> | undefined
   /** 戦闘が終わって画面を畳んだ直後に結果（経験値・ゴールド・戦利品）を受け取るホスト側のハンドラ (#831) */
@@ -413,6 +414,7 @@ export class RaycastRenderer {
     this.masterSkills = gameData.skills
     this.masterStatuses = gameData.statuses
     this.masterMagicites = gameData.magicites
+    this.masterJobs = gameData.jobs
     this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
     this.stepCounter = 0
@@ -887,6 +889,7 @@ export class RaycastRenderer {
           skills: this.masterSkills,
           statuses: this.masterStatuses,
           ...(this.masterMagicites ? { magicites: this.masterMagicites } : {}),
+          ...(this.masterJobs ? { jobs: this.masterJobs } : {}),
           items: this.masterItems,
         },
         enemies,
