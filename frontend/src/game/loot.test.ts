@@ -236,7 +236,7 @@ describe('attemptSteal', () => {
     expect(attemptSteal(only, 0, {}, seq([0.9]).rng)).toEqual({ kind: 'miss' })
   })
 
-  it('使い手の加算: 確率を書いたときだけ効き、載ったときだけ 99 で頭打ち', () => {
+  it('使い手の加算: 確率を書いたときだけ効き、加算で 99 を超えては上がらないが元から 99 超の値は下げない', () => {
     // 確率 60 + 加算 50 → 99%。0.98 は成功、0.99 は失敗
     expect(
       attemptSteal(spec({ stealRare: [] }), 0, { chance: 60, chanceBonus: 50 }, seq([0.98]).rng)
@@ -244,6 +244,36 @@ describe('attemptSteal', () => {
     ).toBe('got')
     expect(
       attemptSteal(spec({ stealRare: [] }), 0, { chance: 60, chanceBonus: 50 }, seq([0.99]).rng)
+        .kind
+    ).toBe('miss')
+    // 元から 99 超の値は、正の加算が載っても下がらない（100 + 10 は 100 のまま。レア率の既定 100 も同様）
+    expect(
+      attemptSteal(spec({ stealRare: [] }), 0, { chance: 100, chanceBonus: 10 }, seq([0.995]).rng)
+        .kind
+    ).toBe('got')
+    expect(
+      attemptSteal(spec(), 0, { slot: 'rare', rareBonus: 20 }, seq([0.995, 0.0]).rng)
+    ).toMatchObject({ kind: 'got', rare: true })
+    // 99 未満の値は加算で 99 まで上がり、そこで頭打ち
+    expect(
+      attemptSteal(spec({ stealRare: [] }), 0, { chance: 50, chanceBonus: 60 }, seq([0.985]).rng)
+        .kind
+    ).toBe('got')
+    expect(
+      attemptSteal(spec({ stealRare: [] }), 0, { chance: 50, chanceBonus: 60 }, seq([0.99]).rng)
+        .kind
+    ).toBe('miss')
+    // 負の加算は下げる（下限 0）
+    expect(
+      attemptSteal(spec({ stealRare: [] }), 0, { chance: 100, chanceBonus: -30 }, seq([0.7]).rng)
+        .kind
+    ).toBe('miss')
+    expect(
+      attemptSteal(spec({ stealRare: [] }), 0, { chance: 100, chanceBonus: -30 }, seq([0.69]).rng)
+        .kind
+    ).toBe('got')
+    expect(
+      attemptSteal(spec({ stealRare: [] }), 0, { chance: 20, chanceBonus: -50 }, seq([0.0]).rng)
         .kind
     ).toBe('miss')
     // 加算なしの確率 100 は必中（頭打ちに掛からない）

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { Container } from 'pixi.js'
 import { DEFAULT_BATTLE_TRANSITION_PARAMS as P } from './battleTransition'
 import { FieldBattleTransition } from './fieldBattleTransition'
+import { DEFAULT_FIELD_BATTLE_SETTINGS, FieldInputGate, openFieldBattle } from './fieldBattle'
+import { RESULT_HOLD_DQ_MS } from './battleResult'
 
 function make() {
   const stage = new Container()
@@ -200,5 +202,61 @@ describe('FieldBattleTransition 終了: 大きな dt・端のパラメータ (#8
     stage.scale.set(2)
     new FieldBattleTransition(() => stage).cancel()
     expect(stage.scale.x).toBe(2)
+  })
+})
+
+describe('battle_transition: ff で戦闘の結果がホストへ渡る (#831)', () => {
+  it('暗転の最も暗い瞬間に onClosed が result つきで呼ばれ、それまでは呼ばれない', () => {
+    const { stage, t } = make()
+    const onClosed = vi.fn()
+    const screen = openFieldBattle({
+      stage,
+      width: 800,
+      height: 600,
+      settings: { ...DEFAULT_FIELD_BATTLE_SETTINGS, transition: 'ff' },
+      roster: {
+        party: { hero: { id: 'hero', name: 'hero', hp: 20, mp: 5, atk: 400, def: 2, agi: 3 } },
+        order: ['hero'],
+        items: { potion: { id: 'potion', name: 'ポーション', kind: '回復' } },
+      },
+      enemies: [
+        {
+          id: 'slime',
+          name: 'スライム',
+          hp: 5,
+          maxHp: 5,
+          mp: 0,
+          maxMp: 0,
+          atk: 1,
+          def: 0,
+          agi: 1,
+          exp: 4,
+          gold: 6,
+          loot: { drops: ['potion 個数=2'] },
+        },
+      ],
+      gate: new FieldInputGate(),
+      transition: t,
+      onClosed,
+    }) as unknown as { handleCommand(id: string): void; tick(ms: number): void }
+    screen.handleCommand('attack')
+    screen.tick(RESULT_HOLD_DQ_MS)
+    // 演出が始まったが、まだ畳まれていない
+    expect(t.active).toBe(true)
+    expect(onClosed).not.toHaveBeenCalled()
+    run(t, P.exitFadeOutMs - 40)
+    expect(onClosed).not.toHaveBeenCalled()
+    run(t, 100) // 最も暗い瞬間を越える
+    expect(onClosed).toHaveBeenCalledTimes(1)
+    const [outcome, result] = onClosed.mock.calls[0]
+    expect(outcome).toBe('victory')
+    expect(result).toMatchObject({
+      outcome: 'victory',
+      exp: 4,
+      gold: 6,
+      items: [{ itemId: 'potion', count: 2 }],
+    })
+    run(t, 2000)
+    expect(onClosed).toHaveBeenCalledTimes(1)
   })
 })

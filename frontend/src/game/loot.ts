@@ -236,9 +236,9 @@ export interface StealParams {
   rareRate?: number
   /** 狙う枠（省略は both） */
   slot?: StealSlot
-  /** 使い手の成功率への加算（点）。`chance` を書いたときだけ効く。載ったときだけ `MAX_STEAL_CHANCE` で頭打ち */
+  /** 使い手の成功率への加算（点）。`chance` を書いたときだけ効く。加算で `MAX_STEAL_CHANCE` を超えては上がらない（元から超える値は下げない） */
   chanceBonus?: number
-  /** 使い手のレア率への加算（点）。載ったときだけ `MAX_STEAL_CHANCE` で頭打ち */
+  /** 使い手のレア率への加算（点）。加算で `MAX_STEAL_CHANCE` を超えては上がらない（元から超える値は下げない） */
   rareBonus?: number
 }
 
@@ -253,11 +253,11 @@ export type StealOutcome =
   | { kind: 'miss' }
   | { kind: 'got'; line: LootLine; rare: boolean }
 
-/** 成功率・レア率に加算を載せる。加算が 0 でなければ `MAX_STEAL_CHANCE` で頭打ち、下限 0。NaN の加算は 0 */
+/** 成功率・レア率に加算を載せる。加算で `MAX_STEAL_CHANCE` を超えては上がらない（元から超える値は下げない）、下限 0。NaN の加算は 0 */
 function withBonus(base: number, bonus: number | undefined): number {
   const b = typeof bonus === 'number' && !Number.isNaN(bonus) ? bonus : 0
   if (b === 0) return Math.max(0, Math.min(100, base))
-  return Math.max(0, Math.min(MAX_STEAL_CHANCE, base + b))
+  return Math.max(0, Math.min(Math.max(base, MAX_STEAL_CHANCE), base + b))
 }
 
 /**

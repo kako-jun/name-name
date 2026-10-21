@@ -209,7 +209,6 @@ export class TopDownRenderer {
     this.initialized = true
   }
 
-  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
   /**
    * 戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）を受け取るハンドラを登録する。
    * 戦闘画面を畳んだ直後（`battle_transition: ff` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
@@ -219,6 +218,7 @@ export class TopDownRenderer {
     this.battleEndHandler = handler
   }
 
+  /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
   setAssetBaseUrl(url: string | undefined): void {
     this.assetBaseUrl = url
   }

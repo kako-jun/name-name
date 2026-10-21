@@ -258,14 +258,30 @@ function parseEffectInner(input: string): ParsedEffect | null {
   return null
 }
 
+/** 同じ警告を 1 度だけ `console.warn` する（敵の行動のたびに出さない） */
+const warnedStealParse = new Set<string>()
+function warnStealOnce(input: string, message: string): void {
+  const key = `${input}\u0000${message}`
+  if (warnedStealParse.has(key)) return
+  warnedStealParse.add(key)
+  console.warn(`[name-name] steal ${input}: ${message}`)
+}
+
 /** `steal` の引数 (#831)。不正な値は警告して既定に落とす（`warnings` は `applyEffect` が戦闘ログに `(警告: …)` で出す） */
 function parseSteal(tokens: string[]): ParsedEffect {
   const out: ParsedEffect = { kind: 'steal' }
   const warn = (w: string): void => {
     out.warnings = [...(out.warnings ?? []), w]
   }
+  const input = tokens.join(' ')
+  const seen = new Set<string>()
   for (const t of tokens) {
     const [k, v] = splitKv(t)
+    // 同じキーの重複は後の値が勝つ。黙って上書きせず 1 度だけ console.warn する
+    if (k !== undefined && v !== undefined && (k === CHANCE_KEY || k === RARE_RATE_KEY)) {
+      if (seen.has(k)) warnStealOnce(input, `${k}= が重複しているため後の値を使う`)
+      seen.add(k)
+    }
     if (k === CHANCE_KEY) {
       const c = parseStealPercent(v, '確率')
       if (c.warning) warn(c.warning)
@@ -292,6 +308,9 @@ function parseSteal(tokens: string[]): ParsedEffect {
     } else {
       warn(`'${t}' は steal の指定として解釈できないため無視した`)
     }
+  }
+  if (out.type !== undefined && out.plunder === undefined) {
+    warnStealOnce(input, `type=${out.type} は ぶんどる= が無いため効かない`)
   }
   return out
 }
@@ -498,9 +517,9 @@ export interface BattleEntity {
    * 解釈・抽選は `loot.ts` とエンジン。無い敵は従来どおり何も起きない
    */
   loot?: MonsterLoot
-  /** この者が使う `steal` の成功率に足す点（%）(#831)。成長・ジョブが埋める口。`確率=` を書いたときだけ効き、載ったときだけ 99% で頭打ち */
+  /** この者が使う `steal` の成功率に足す点（%）(#831)。成長・ジョブが埋める口。`確率=` を書いたときだけ効く。加算で 99% を超えては上がらない（元から超える値は下げない） */
   stealChanceBonus?: number
-  /** この者が使う `steal` のレア率に足す点（%）(#831)。載ったときだけ 99% で頭打ち */
+  /** この者が使う `steal` のレア率に足す点（%）(#831)。加算で 99% を超えては上がらない（元から超える値は下げない） */
   stealRareBonus?: number
   /**
    * 戦闘画面に描くスプライト画像のパス (#736)。`MonsterDef.sprite` / `PartyMemberDef.sprite` を

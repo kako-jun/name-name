@@ -241,6 +241,34 @@ describe('ぬすむ（通常枠・レア枠）', () => {
     expect(ally.getState().loot).toBeUndefined()
   })
 
+  it('倒れた敵を ctx.steal で直接狙っても何も盗まない（防御用の経路）', () => {
+    const hero = ent({ id: 'hero', name: 'ゆうしゃ' })
+    const dead = ent({ id: 'a', name: 'A', hp: 0, loot: { steal: ['potion'] } })
+    const e = make([dead], () => 0.5, [hero])
+    const hook = (
+      e as unknown as {
+        stealHook(
+          c: BattleEntity
+        ): (t: BattleEntity, p: object) => { log: string[]; outcome: string }
+      }
+    ).stealHook(hero)
+    const r = hook(e.getState().enemies[0], {})
+    expect(r).toEqual({ log: [], outcome: 'empty' })
+    expect(e.getState().loot).toBeUndefined()
+    // 生きていれば同じ呼び出しで盗める（フックを正しく呼べていることの対照）
+    const alive = make([ent({ id: 'b', name: 'B', loot: { steal: ['potion'] } })], () => 0.5, [
+      hero,
+    ])
+    const hook2 = (
+      alive as unknown as {
+        stealHook(
+          c: BattleEntity
+        ): (t: BattleEntity, p: object) => { log: string[]; outcome: string }
+      }
+    ).stealHook(alive.getState().party[0])
+    expect(hook2(alive.getState().enemies[0], {}).outcome).toBe('got')
+  })
+
   it('戦利品を宣言しない敵・盗めない敵は「もう なにも もっていない」で乱数を使わない', () => {
     const r = seq([0.5])
     const e = make([ent({ id: 'rock', name: 'いわ', atk: 0 })], r.rng)

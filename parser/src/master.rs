@@ -356,8 +356,6 @@ fn interpret_scale(raw: Option<&str>) -> (Option<f64>, Option<String>) {
     }
 }
 
-/// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
-/// 書式の検証（条件・候補の構文）は runtime が行い、不正な行はそこで無視する。1 行も無ければ None。
 /// `ドロップ` / `ぬすむ` / `ぬすむレア` / `ぬすむ回数` を戦利品の宣言にする (#831)。生文字列で透過し、4 欄とも空なら None。
 fn collect_loot(entries: &[(String, String)]) -> Option<Box<MonsterLoot>> {
     let loot = MonsterLoot {
@@ -374,6 +372,8 @@ fn collect_loot(entries: &[(String, String)]) -> Option<Box<MonsterLoot>> {
     }
 }
 
+/// `行動` / `action` の値を書いた順に集める (#835)。値は生文字列のまま透過し、空の行は捨てる。
+/// 書式の検証（条件・候補の構文）は runtime が行い、不正な行はそこで無視する。1 行も無ければ None。
 fn collect_actions(entries: &[(String, String)]) -> Option<Vec<String>> {
     collect_values(entries, &["行動", "action"])
 }

@@ -1,5 +1,5 @@
 /** 効果 DSL `steal` (#831) の解釈 */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { applyEffect, parseEffect, type BattleEntity, type EffectContext } from './spellDsl'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -46,6 +46,32 @@ describe('parseEffect steal', () => {
     expect(parseEffect('steal 回数=0')?.count).toBeUndefined()
     expect(parseEffect('steal 回数=0')?.warnings?.[0]).toContain('回数')
     expect(parseEffect('steal こんな=1')?.warnings?.[0]).toContain('こんな=1')
+  })
+
+  it('ぶんどる 無しの type= と、確率= / レア率= の重複は console.warn を 1 度だけ出す', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const a = parseEffect('steal type=fire')
+      expect(a?.kind).toBe('steal')
+      parseEffect('steal type=fire')
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0][0]).toContain('type=fire')
+      // ぶんどる があれば警告しない
+      parseEffect('steal ぶんどる=3..5 type=ice')
+      expect(warn).toHaveBeenCalledTimes(1)
+      // 確率= の重複: 後の値が勝つ。警告は 1 度だけ
+      expect(parseEffect('steal 確率=30 確率=70')?.chance).toBe(70)
+      parseEffect('steal 確率=30 確率=70')
+      expect(warn).toHaveBeenCalledTimes(2)
+      expect(warn.mock.calls[1][0]).toContain('確率')
+      expect(parseEffect('steal レア率=10 レア率=20')?.rareRate).toBe(20)
+      expect(warn).toHaveBeenCalledTimes(3)
+      // 重複のない普通の書き方は警告しない
+      parseEffect('steal 確率=30 レア率=20')
+      expect(warn).toHaveBeenCalledTimes(3)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('回数=・確率= は steal でも「他の動詞専用」の警告を出さない。heal には従来どおり出る', () => {
