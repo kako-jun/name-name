@@ -2,7 +2,8 @@
  * 魔石 (#889)。`[魔石 id]` の宣言を、戦闘に出る味方の能力値・属性・召喚の候補にする純関数群。ブラウザ API にも PixiJS にも触れない。
  *
  * - 装備: `[パーティ]` の `魔石:`（初期装備）と `魔石枠:`（枠の数。既定 1）。枠を超える分・定義の無い id・`装備可` に入っていない味方は警告して捨てる。
- *   装備の変更（メニュー UI・保存）は #207 / #738 の領分で、ここは「いま誰が何を装備しているか」を入力に受けるだけ（`roster.equipment` が `魔石:` を上書きする）
+ *   武器・防具などのアイテムと魔石を同じ装備の宣言で扱う口は `equipment.ts` (#207)。ここは魔石だけを解く部品（枠・`装備可`・属性の層・ボーナス）を持ち、`equipment.ts` が再利用する。
+ *   装備の変更（メニュー UI・保存）は #738 / #880 / #881 の領分で、ここは「いま誰が何を装備しているか」を入力に受けるだけ（`roster.equipment` が `魔石:` を上書きする）
  * - 属性の層: 魔石の召喚獣の属性（と、防具など他の出どころの属性）を**合計 2 層まで**積む。**1 層 = 半減、同じ属性が 2 層 = 吸収**
  *   （`BattleEntity.affinity` に写し、敵の属性攻撃への耐性は #872 の既存の経路で働く）。同時に、積んだ属性は通常攻撃の属性（`attackElements`）にもなる
  * - ボーナス: `装備時`（装備している間だけ足す）と `成長`（レベルアップのたびに恒久で足す。魔石を外しても残る）。書式は `atk+3, hp+20`
@@ -84,7 +85,7 @@ export function isEmptyBonus(b: StatBonus | undefined): boolean {
   return !b || Object.values(b).every((v) => !v)
 }
 
-/** 魔石の装備時ボーナス（解釈できた分だけ） */
+/** 魔石の装備時ボーナス（解釈できた分だけ）。アイテムの装備時ボーナス (#207) も同じ書式・同じ解釈器（`parseStatBonus`） */
 export function equipBonusOf(stone: MagiciteDef): StatBonus {
   return parseStatBonus(stone.equipBonus).bonus
 }
@@ -236,7 +237,7 @@ export interface MemberMagicite {
 export interface MagiciteRoster {
   /** 魔石のマスター（`[魔石]`） */
   magicites?: Record<string, MagiciteDef>
-  /** 装備の指定（味方 id → 魔石 id の列）。あれば `[パーティ]` の `魔石:` を上書きする（装備の変更 UI・保存は #207 / #738） */
+  /** 装備の指定（味方 id → 装備の id の列）。あれば `[パーティ]` の `魔石:` / `装備:` を上書きする。`resolveMemberEquipment` (#207) は魔石とアイテムの id を混在で受ける（`resolveMemberMagicite` は魔石だけ）。装備の変更 UI・保存は #738 / #880 / #881 */
   equipment?: Record<string, string[]>
   /** レベルアップで恒久に得たボーナスの累計（味方 id → ボーナス）。装備時ボーナスとは別に足す */
   growth?: MagiciteGrowth
@@ -328,6 +329,6 @@ export function warnMagiciteOnce(warnings: readonly string[]): void {
   for (const w of warnings) {
     if (warnedMagicite.has(w)) continue
     warnedMagicite.add(w)
-    console.warn(`[name-name] 魔石: ${w}`)
+    console.warn(`[name-name] 装備: ${w}`)
   }
 }

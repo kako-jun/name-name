@@ -4,7 +4,7 @@
  *
  * 環境変数:
  * - HARNESS_SEED / HARNESS_RANDOM_COUNT: ランダム合成の seed と件数（既定 1 / 3000）。HARNESS_RANDOM_STATUS_COUNT: 状態を宣言したランダム合成 (#870) の件数（既定 2000）
- * - HARNESS_SKIP: 省く族をカンマ区切り（effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,magicite,loot）
+ * - HARNESS_SKIP: 省く族をカンマ区切り（effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,magicite,loot,equipment）
  * - HARNESS_OUT: 結果の出力先ディレクトリ（既定 `battle-harness-out`、再現時は `battle-harness-out/replay`）。report.md と failures.json を書く
  *   （再現の読み込み元と同じディレクトリには何も書かない）
  * - HARNESS_REPLAY: 失敗ファイル（または単体のシナリオ JSON）のパス。指定すると総当たりでなくそれだけを再実行する
@@ -30,6 +30,7 @@ const FAMILIES = [
   'damage-condition',
   'magicite',
   'loot',
+  'equipment',
 ]
 
 /** 入力の誤りは黙って無視せずエラーで止める（NaN で 0 件になる、未知の族名が素通りする、を防ぐ） */

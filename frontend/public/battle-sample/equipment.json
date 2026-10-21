@@ -1,0 +1,135 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "commands": ["skill", "summon", "item", "escape"],
+  "gear": [
+    {
+      "id": "katana-a",
+      "name": "かたな・あ",
+      "kind": "武器",
+      "equipBonus": "atk+8",
+      "abilities": ["slash"]
+    },
+    {
+      "id": "katana-b",
+      "name": "かたな・い",
+      "kind": "武器",
+      "equipBonus": "atk+3, agi+2",
+      "abilities": ["sweep"],
+      "equippableBy": ["ally"]
+    },
+    {
+      "id": "armor-water",
+      "name": "あいいろのよろい",
+      "kind": "防具",
+      "equipBonus": "def+4, hp+30",
+      "elements": ["water"]
+    },
+    {
+      "id": "armor-fire",
+      "name": "あかいとのよろい",
+      "kind": "防具",
+      "equipBonus": "def+4",
+      "elements": ["fire"]
+    }
+  ],
+  "magicites": [
+    {
+      "id": "sea",
+      "name": "うみの石",
+      "summon": "うみの召喚獣",
+      "elements": ["water"],
+      "target": "相手全体",
+      "effect": "damage 40..40 type=water",
+      "message": "{user}が にぎった石から 波が あふれだす！"
+    }
+  ],
+  "skills": [
+    {
+      "id": "slash",
+      "name": "きりさく",
+      "target": "相手単体",
+      "effect": "damage 45..45",
+      "message": "{user}は きりさいた！"
+    },
+    {
+      "id": "sweep",
+      "name": "なぎはらい",
+      "target": "相手全体",
+      "effect": "damage 25..25 type=fire",
+      "message": "{user}は なぎはらった！"
+    },
+    {
+      "id": "wave",
+      "name": "たいかいのなみ",
+      "target": "相手全体",
+      "effect": "damage 40..40 type=water",
+      "message": "{user}は 大波を よびよせた！"
+    },
+    {
+      "id": "ember",
+      "name": "ひのこのあめ",
+      "target": "相手全体",
+      "effect": "damage 40..40 type=fire",
+      "message": "{user}は 火の粉を ふらせた！"
+    }
+  ],
+  "party": [
+    {
+      "id": "hero",
+      "name": "ゆうしゃ",
+      "hp": 120,
+      "mp": 20,
+      "atk": 20,
+      "def": 4,
+      "agi": 6,
+      "equipmentSlots": ["武器", "防具"],
+      "equipment": ["katana-a", "armor-water"]
+    },
+    {
+      "id": "ally",
+      "name": "なかま",
+      "hp": 100,
+      "mp": 20,
+      "atk": 16,
+      "def": 3,
+      "agi": 5,
+      "equipmentSlots": ["武器", "防具"],
+      "equipment": ["katana-b", "armor-water"],
+      "magicites": ["sea"]
+    },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 90,
+      "mp": 30,
+      "atk": 12,
+      "def": 2,
+      "agi": 5,
+      "row": "back",
+      "equipmentSlots": ["武器", "防具"],
+      "equipment": ["katana-b", "armor-fire"]
+    }
+  ],
+  "enemies": [
+    {
+      "id": "kawanushi",
+      "name": "かわのぬし",
+      "hp": 500,
+      "atk": 12,
+      "def": 2,
+      "agi": 4,
+      "actions": ["順番=wave > こうげき"]
+    },
+    {
+      "id": "hinotori",
+      "name": "ひのとり",
+      "hp": 400,
+      "atk": 10,
+      "def": 2,
+      "agi": 5,
+      "actions": ["順番=ember > こうげき"]
+    }
+  ]
+}

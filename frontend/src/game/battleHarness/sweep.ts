@@ -3,6 +3,7 @@
  */
 import {
   damageConditions,
+  equipmentScenarios,
   lootMatrix,
   effectMatrix,
   magiciteScenarios,
@@ -37,6 +38,7 @@ export type SweepFamily =
   | 'damage-condition'
   | 'magicite'
   | 'loot'
+  | 'equipment'
 
 export const DEFAULT_SWEEP: SweepConfig = {
   randomSeed: 1,
@@ -62,6 +64,7 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('damage-condition') ? [] : damageConditions()),
     ...(skip.has('magicite') ? [] : magiciteScenarios()),
     ...(skip.has('loot') ? [] : lootMatrix()),
+    ...(skip.has('equipment') ? [] : equipmentScenarios()),
   ]
 }
 

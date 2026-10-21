@@ -7,8 +7,9 @@
  */
 import type { SkillExecution, SummonExecution } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
-import type { MagiciteDef, MonsterLoot, StatusDef } from '../../types'
+import type { ItemDef, MagiciteDef, MonsterLoot, StatusDef } from '../../types'
 import { applyMemberMagicite, resolveMemberMagicite } from '../magicite'
+import { resolveMemberEquipment } from '../equipment'
 import { lcg } from './rng'
 import type { Op, Scenario } from './scenario'
 
@@ -23,6 +24,7 @@ export type Family =
   | 'damage-condition'
   | 'magicite'
   | 'loot'
+  | 'equipment'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -904,6 +906,171 @@ export function lootMatrix(): Scenario[] {
         }
       }
     })
+  }
+  return out
+}
+
+/** 装備品 (#207) の宣言の集合。武器・防具・盾・兜、属性防御（同属性 2 つで吸収）、極端なボーナス・不正なボーナスの書式、装備できない種別・`装備可` の制限・宣言の無いわざを含む */
+export const EQUIPMENT_SET: Readonly<Record<string, ItemDef>> = {
+  sword: { id: 'sword', name: 'かたな', kind: '武器', equipBonus: 'atk+8', abilities: ['slash'] },
+  axe: { id: 'axe', name: 'おの', kind: '武器', equipBonus: 'atk+3', abilities: ['sweep'] },
+  twinblade: {
+    id: 'twinblade',
+    name: 'にとうりゅう',
+    kind: '武器',
+    abilities: ['slash', 'guard', 'sweep'],
+  },
+  plate: {
+    id: 'plate',
+    name: 'ひのよろい',
+    kind: '鎧',
+    equipBonus: 'def+5, hp+20',
+    elements: ['fire'],
+  },
+  robe: { id: 'robe', name: 'みずのふく', kind: '防具', equipBonus: 'def+1', elements: ['water'] },
+  robe2: { id: 'robe2', name: 'みずのふく2', kind: '防具', elements: ['water'] },
+  shield: { id: 'shield', name: 'たて', kind: '盾', equipBonus: 'def+3' },
+  helm: { id: 'helm', name: 'かぶと', kind: '兜', equipBonus: 'def+2, agi-1' },
+  cursed: {
+    id: 'cursed',
+    name: 'のろいの刀',
+    kind: '武器',
+    equipBonus: 'hp-1000000, atk-1000000, def+99999999, mp+5',
+    abilities: ['big'],
+  },
+  cracked: {
+    id: 'cracked',
+    name: 'こわれた刀',
+    kind: '武器',
+    equipBonus: 'xx+3, atk+, hp+1.5, def+2',
+    abilities: ['broken', 'ghost'],
+  },
+  potion: { id: 'potion', name: 'くすり', kind: '回復', equipBonus: 'atk+100' },
+  restricted: {
+    id: 'restricted',
+    name: 'せんようの刀',
+    kind: '武器',
+    equipBonus: 'atk+50',
+    equippableBy: ['zzz'],
+    abilities: ['slash'],
+  },
+}
+
+/** 装備品のわざの中身（特技 id → 実行内容）。単体・全体・自分・味方・連続・極大・不正な書式・演出のみ。`ghost` は宣言しない（出ない） */
+export const EQUIPMENT_ABILITIES: Readonly<Record<string, SkillExecution>> = {
+  slash: { name: 'きりさく', target: '相手単体', effect: 'damage 20..30' },
+  sweep: {
+    name: 'なぎはらい',
+    target: '相手全体',
+    effect: 'damage 10..15 type=fire 回数=2',
+  },
+  guard: { name: 'みがまえ', target: '自分', effect: 'buff def=+5 duration=3' },
+  heal: { name: 'いやし', target: '仲間単体', effect: 'heal 30..40' },
+  big: { name: 'おおぶり', target: '相手全体', effect: 'damage 100000..100000' },
+  broken: { name: 'こわれた技', target: '相手単体', effect: 'foo bar' },
+}
+
+/**
+ * 装備の組み合わせ（装備する id・枠の種類・魔石）。枠超過・種別違い・`装備可` 違反・宣言なし・重複・層の超過・枠なしを含む。
+ * `layers` は魔石と防具の属性の層（合計 2 まで）、わざは武器の宣言から導く
+ */
+const EQUIPMENT_LOADOUTS: ReadonlyArray<{
+  name: string
+  ids: string[]
+  slots?: string[]
+  stones?: string[]
+}> = [
+  { name: 'none', ids: [] },
+  { name: 'sword', ids: ['sword'] },
+  { name: 'sword+plate', ids: ['sword', 'plate'] },
+  { name: 'full', ids: ['sword', 'plate', 'shield', 'helm'] },
+  { name: 'two-weapons-one-slot', ids: ['sword', 'axe'] },
+  { name: 'two-weapons-two-slots', ids: ['sword', 'axe'], slots: ['武器', '武器'] },
+  { name: 'many-abilities', ids: ['twinblade'] },
+  { name: 'armor-absorb', ids: ['robe', 'robe2'], slots: ['防具', '防具'] },
+  { name: 'armor-layers-over', ids: ['plate', 'robe', 'robe2'], slots: ['防具', '防具', '防具'] },
+  { name: 'stone+armor', ids: ['robe'], stones: ['fire'] },
+  { name: 'stone-twin+armor', ids: ['robe'], stones: ['twin'] },
+  { name: 'cursed', ids: ['cursed'] },
+  { name: 'broken', ids: ['cracked'] },
+  { name: 'not-equippable', ids: ['potion'] },
+  { name: 'restricted', ids: ['restricted'] },
+  { name: 'unknown', ids: ['nothing'] },
+  { name: 'duplicate', ids: ['sword', 'sword'] },
+  { name: 'no-weapon-slot', ids: ['sword', 'plate'], slots: ['防具'] },
+  { name: 'no-slots', ids: ['sword', 'plate'], slots: [] },
+  { name: 'stone-only', ids: [], stones: ['water'] },
+]
+
+/**
+ * 装備 (#207): 装備の組み合わせ（`EQUIPMENT_LOADOUTS`。実際の `resolveMemberEquipment` で味方 a を組み立て、武器のわざを導く）×
+ * 敵の相性（水属性の特技を使う敵に対する防具の耐性）× 敵の HP × 操作の並び（わざの連打・攻撃のあとにわざ）× ターン制/ATB。決着まで進める。
+ * 魔石は `MAGICITE_SET` を使う（属性の層の合計 2 まで・装備品と魔石で共通の枠の検査）
+ */
+export function equipmentScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  const affinities: ReadonlyArray<{ name: string; over: Partial<BattleEntity> }> = [
+    { name: 'plain', over: {} },
+    { name: 'weak-fire', over: { affinity: { weak: ['fire'] } } },
+    { name: 'absorb-fire', over: { affinity: { absorb: ['fire'] } } },
+  ]
+  for (const atb of [false, true]) {
+    for (const lo of EQUIPMENT_LOADOUTS) {
+      const member = entity('a', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 })
+      const eq = resolveMemberEquipment(
+        {
+          id: 'a',
+          magicites: lo.stones,
+          equipment: lo.ids,
+          ...(lo.slots ? { equipmentSlots: lo.slots } : {}),
+        },
+        { magicites: { ...MAGICITE_SET }, items: { ...EQUIPMENT_SET } }
+      )
+      applyMemberMagicite(member, eq)
+      const abilities = eq.abilities.flatMap((id) =>
+        Object.prototype.hasOwnProperty.call(EQUIPMENT_ABILITIES, id)
+          ? [EQUIPMENT_ABILITIES[id]]
+          : []
+      )
+      for (const ev of affinities) {
+        for (const hv of [30, 900]) {
+          for (const [opName, ops] of [
+            [
+              'ability-spam',
+              [
+                { t: 'ability', k: 0 },
+                tick,
+                { t: 'ability', k: 1 },
+                tick,
+                { t: 'ability', k: 0 },
+                tick,
+                ATK,
+              ],
+            ],
+            ['attack-first', [ATK, tick, { t: 'ability', k: 0 }, tick, { t: 'ability', k: 2 }]],
+          ] as const) {
+            out.push({
+              id: `equipment/${atb ? 'atb' : 'turn'}/${lo.name}/${ev.name}/hp${hv}/${opName}`,
+              seed: 90_000 + out.length,
+              party: [{ ...member }, entity('b', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 })],
+              enemies: [
+                foe('s', { ...ev.over, hp: hv, maxHp: hv, actions: ['候補=wave'], agi: 9 }),
+                foe('t', { hp: 500, maxHp: 500 }),
+              ],
+              atb: atb ? { mode: 'active' } : undefined,
+              skills: {
+                wave: { name: 'なみ', target: '相手全体', effect: 'damage 40..40 type=water' },
+              },
+              spells: [],
+              items: [],
+              abilities: abilities.map((a) => ({ ...a })),
+              ops: [...ops],
+            })
+          }
+        }
+      }
+    }
   }
   return out
 }
