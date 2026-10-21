@@ -197,6 +197,125 @@ describe('warps / shake / scroll (#864)', () => {
   })
 })
 
+describe('flags / assist / companion (#862)', () => {
+  const parse = (c: Raw) => parseConfig(c, BASE)
+  const ok = (c: Raw) => {
+    const r = parse(c)
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  const frames = (d: string) => [`${d}1.png`, `${d}2.png`, `${d}3.png`]
+  const companionRaw = () => ({
+    sprites: { up: frames('cu'), down: frames('cd'), left: frames('cl'), right: frames('cr') },
+  })
+  const withAssist = (a: Raw = { requires: 'after' }): Raw =>
+    mutated((c) => {
+      c.flags = { after: false, refuse: false, dead: false }
+      c.assist = a
+    })
+
+  it('省略は flags 空・assist/companion なし（既存設定は変わらない）', () => {
+    const v = ok(minimal())
+    expect(v.flags).toEqual({})
+    expect(v.assist).toBeNull()
+    expect(v.companion).toBeNull()
+  })
+  it('flags: 真偽値だけ。初期値を保つ', () => {
+    expect(ok(mutated((c) => (c.flags = { a: true, b: false }))).flags).toEqual({
+      a: true,
+      b: false,
+    })
+    for (const bad of [{ a: 1 }, { a: 'true' }, { a: null }, [], 'x']) {
+      expect(parse(mutated((c) => (c.flags = bad))).ok).toBe(false)
+    }
+  })
+  it('assist: requires は 1 つの文字列でも配列でもよく、既定値が入る', () => {
+    const v = ok(withAssist({ requires: 'after' }))
+    expect(v.assist).toEqual({
+      requires: ['after'],
+      speedFactor: 0.7,
+      ghostAlpha: 0.5,
+      offset: 40,
+      fadeMs: 200,
+    })
+    const v2 = ok(withAssist({ requires: ['after', 'dead'], unless: 'refuse', ghostWhen: 'dead' }))
+    expect(v2.assist?.requires).toEqual(['after', 'dead'])
+    expect(v2.assist?.unless).toBe('refuse')
+    expect(v2.assist?.ghostWhen).toBe('dead')
+  })
+  it('assist: 上書きできる（fadeMs 0 は即時、ghostAlpha 0/1 は境界として可）', () => {
+    const v = ok(
+      withAssist({ requires: 'after', speedFactor: 1, ghostAlpha: 0, offset: 10, fadeMs: 0 })
+    )
+    expect(v.assist).toMatchObject({ speedFactor: 1, ghostAlpha: 0, offset: 10, fadeMs: 0 })
+    expect(ok(withAssist({ requires: 'after', ghostAlpha: 1 })).assist?.ghostAlpha).toBe(1)
+  })
+  it('assist: 宣言していないフラグ名・requires 無し/空はパスつきエラー', () => {
+    const bad: Array<[string, Raw]> = [
+      ['assist.requires', { requires: 'nope' }],
+      ['assist.requires[1]', { requires: ['after', 'nope'] }],
+      ['assist.requires', {}],
+      ['assist.requires', { requires: [] }],
+      ['assist.requires', { requires: 5 }],
+      ['assist.unless', { requires: 'after', unless: 'nope' }],
+      ['assist.ghostWhen', { requires: 'after', ghostWhen: 'nope' }],
+    ]
+    for (const [path, a] of bad) {
+      const r = parse(withAssist(a))
+      expect(r.ok, path).toBe(false)
+      if (!r.ok) expect(r.error, path).toContain(path)
+    }
+  })
+  it('assist: 数値の範囲（speedFactor>0・offset>0・ghostAlpha 0..1・fadeMs>=0）', () => {
+    const bad: Array<[string, Raw]> = [
+      ['speedFactor', { speedFactor: 0 }],
+      ['speedFactor', { speedFactor: -1 }],
+      ['offset', { offset: 0 }],
+      ['ghostAlpha', { ghostAlpha: 1.01 }],
+      ['ghostAlpha', { ghostAlpha: -0.01 }],
+      ['ghostAlpha', { ghostAlpha: '0.5' }],
+      ['fadeMs', { fadeMs: -1 }],
+    ]
+    for (const [key, extra] of bad) {
+      const r = parse(withAssist({ requires: 'after', ...extra }))
+      expect(r.ok, key).toBe(false)
+      if (!r.ok) expect(r.error, key).toContain(`assist.${key}`)
+    }
+    expect(parse(withAssist('x' as unknown as Raw)).ok).toBe(false)
+  })
+  it('companion: 4 方向×3 コマを URL に解決・height は任意', () => {
+    const c = withAssist()
+    c.companion = companionRaw()
+    const v = ok(c)
+    expect(v.companion?.sprites.up[0]).toBe('https://example.com/field/cu1.png')
+    expect(v.companion?.height).toBeUndefined()
+    c.companion.height = 80
+    expect(ok(c).companion?.height).toBe(80)
+  })
+  it('companion: 方向の欠け・コマ数違い・height 不正・assist なしはエラー', () => {
+    const noLeft = withAssist()
+    noLeft.companion = companionRaw()
+    delete noLeft.companion.sprites.left
+    const r1 = parse(noLeft)
+    expect(r1.ok).toBe(false)
+    if (!r1.ok) expect(r1.error).toContain('companion.sprites.left')
+    const two = withAssist()
+    two.companion = companionRaw()
+    two.companion.sprites.up = ['a.png', 'b.png']
+    expect(parse(two).ok).toBe(false)
+    const hb = withAssist()
+    hb.companion = { ...companionRaw(), height: 0 }
+    const r2 = parse(hb)
+    expect(r2.ok).toBe(false)
+    if (!r2.ok) expect(r2.error).toContain('companion.height')
+    const lone = mutated((c) => (c.companion = companionRaw()))
+    const r3 = parse(lone)
+    expect(r3.ok).toBe(false)
+    if (!r3.ok) expect(r3.error).toContain('companion')
+    expect(parse(mutated((c) => (c.companion = 3))).ok).toBe(false)
+  })
+})
+
 describe('playerHeight (#810)', () => {
   it('既定の player.height は 96', () => {
     expect(DEFAULTS.height).toBe(96)

@@ -8,9 +8,12 @@ import {
   foregroundCoverage,
   foregroundFromRgba,
   isOutward,
+  isAssistColor,
+  isAssistCell,
   isWalkable,
   keysToVector,
   maskFromRgba,
+  maskWithAssist,
   playerScale,
   pointerToVector,
   resolvePlayerHeight,
@@ -849,5 +852,63 @@ describe('前面レイヤー (#866)', () => {
     const fg = fgOf(['####', '####', '####', '####'])
     expect(isWalkable(walk, 1, 1)).toBe(true) // 前面に覆われた地面も歩ける
     expect(fg.opaque[1 * 4 + 1]).toBe(1)
+  })
+})
+
+describe('3 値マスク: 橙 = 条件付き (#862)', () => {
+  const ORANGE = [255, 157, 0, 255]
+  it('isAssistColor: sit-by-me の橙 #FF9D00 は橙、白・黒・灰・純赤・純黄・青は橙でない', () => {
+    expect(isAssistColor(255, 157, 0)).toBe(true)
+    for (const c of [
+      [255, 255, 255],
+      [0, 0, 0],
+      [128, 128, 128],
+      [255, 0, 0],
+      [255, 255, 0],
+      [0, 0, 255],
+      [255, 157, 200],
+    ])
+      expect(isAssistColor(c[0], c[1], c[2]), c.join(',')).toBe(false)
+  })
+  it('isAssistColor の境界: R 192・G 96/224・B 96 は橙、1 つ外れると橙でない', () => {
+    expect(isAssistColor(192, 96, 96)).toBe(true)
+    expect(isAssistColor(255, 224, 0)).toBe(true)
+    expect(isAssistColor(191, 157, 0)).toBe(false)
+    expect(isAssistColor(255, 95, 0)).toBe(false)
+    expect(isAssistColor(255, 225, 0)).toBe(false)
+    expect(isAssistColor(255, 157, 97)).toBe(false)
+  })
+  it('橙は walkable=0・assist=1。白は歩ける・黒は歩けない（assist なし）', () => {
+    const m = maskFromRgba(3, 1, [...ORANGE, 255, 255, 255, 255, 0, 0, 0, 255])
+    expect(Array.from(m.walkable)).toEqual([0, 1, 0])
+    expect(Array.from(m.assist!)).toEqual([1, 0, 0])
+  })
+  it('橙が 1 点も無いマスクは assist を持たない（既存マスクは不変）', () => {
+    const m = maskFromRgba(2, 1, [255, 255, 255, 255, 0, 0, 0, 255])
+    expect(m.assist).toBeUndefined()
+    expect('assist' in m).toBe(false)
+  })
+  it('maskWithAssist: 橙も歩ける扱い・元のマスクは変えない・assist が無ければ同じオブジェクト', () => {
+    const m = maskFromRgba(3, 1, [...ORANGE, 255, 255, 255, 255, 0, 0, 0, 255])
+    const a = maskWithAssist(m)
+    expect(Array.from(a.walkable)).toEqual([1, 1, 0])
+    expect(Array.from(m.walkable)).toEqual([0, 1, 0])
+    const plain = maskFromRgba(1, 1, [255, 255, 255, 255])
+    expect(maskWithAssist(plain)).toBe(plain)
+  })
+  it('isAssistCell: 範囲外・assist なしは false', () => {
+    const m = maskFromRgba(2, 1, [...ORANGE, 0, 0, 0, 255])
+    expect(isAssistCell(m, 0.5, 0.5)).toBe(true)
+    expect(isAssistCell(m, 1, 0)).toBe(false)
+    expect(isAssistCell(m, -1, 0)).toBe(false)
+    expect(isAssistCell(m, 2, 0)).toBe(false)
+    expect(isAssistCell(maskFromRgba(1, 1, [255, 255, 255, 255]), 0, 0)).toBe(false)
+  })
+  it('橙は通常のマスクのままでは壁（stepMove で入れない）・maskWithAssist なら通れる', () => {
+    const m = maskFromRgba(3, 1, [255, 255, 255, 255, ...ORANGE, 255, 255, 255, 255])
+    const stuck = stepMove(m, { x: 0.5, y: 0.5 }, { x: 1, y: 0 }, 100, 100, 0.1)
+    expect(stuck.pos.x).toBeLessThan(1)
+    const pass = stepMove(maskWithAssist(m), { x: 0.5, y: 0.5 }, { x: 1, y: 0 }, 100, 100, 0.1)
+    expect(pass.pos.x).toBeGreaterThan(1)
   })
 })

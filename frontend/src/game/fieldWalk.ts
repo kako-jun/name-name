@@ -17,16 +17,30 @@ export interface Vec {
 
 // ---- 歩行マスク ----
 
-/** 歩行マスク。walkable[y * width + x] = 1 なら歩ける */
+/**
+ * 歩行マスク。walkable[y * width + x] = 1 なら歩ける（白）。
+ * assist[y * width + x] = 1 は「条件付き」のセル（橙 #FF9D00。車椅子だけ通れない＝同行者に押してもらえる間だけ通れる #862）。
+ * assist のセルは walkable = 0（既定では黒と同じ）。橙が 1 点も無いマスクでは assist は無い。
+ */
 export interface WalkMask {
   width: number
   height: number
   walkable: Uint8Array
+  assist?: Uint8Array
 }
 
 /**
- * RGBA ピクセル列（ImageData.data 相当）から歩行マスクを作る。白（輝度が threshold 以上）= 歩ける、黒 = 歩けない。
- * 輝度は R の値ではなく (R+G+B)/3 で見る。
+ * 橙（条件付き通行）の色か (#862)。sit-by-me の traversal 3 値の橙 #FF9D00 に合わせ、
+ * R≥192・96≤G≤224・B≤96 とする（白・灰・黒・純赤・純黄は橙ではない）。
+ */
+export function isAssistColor(r: number, g: number, b: number): boolean {
+  return r >= 192 && g >= 96 && g <= 224 && b <= 96
+}
+
+/**
+ * RGBA ピクセル列（ImageData.data 相当）から歩行マスクを作る。3 値 (#862): 橙 = 条件付き（assist）、
+ * それ以外は白（輝度が threshold 以上）= 歩ける、黒 = 歩けない。
+ * 輝度は R の値ではなく (R+G+B)/3 で見る。橙の判定は輝度より先。
  */
 export function maskFromRgba(
   width: number,
@@ -35,11 +49,38 @@ export function maskFromRgba(
   threshold = 128
 ): WalkMask {
   const walkable = new Uint8Array(width * height)
+  let assist: Uint8Array | undefined
   for (let i = 0; i < width * height; i++) {
-    const lum = (rgba[i * 4] + rgba[i * 4 + 1] + rgba[i * 4 + 2]) / 3
+    const r = rgba[i * 4]
+    const g = rgba[i * 4 + 1]
+    const b = rgba[i * 4 + 2]
+    if (isAssistColor(r, g, b)) {
+      assist ??= new Uint8Array(width * height)
+      assist[i] = 1
+      continue
+    }
+    const lum = (r + g + b) / 3
     walkable[i] = lum >= threshold ? 1 : 0
   }
-  return { width, height, walkable }
+  return assist ? { width, height, walkable, assist } : { width, height, walkable }
+}
+
+/** 条件付きのセルも歩ける扱いにしたマスク (#862)。assist が無ければ同じマスクをそのまま返す */
+export function maskWithAssist(mask: WalkMask): WalkMask {
+  const assist = mask.assist
+  if (!assist) return mask
+  const walkable = new Uint8Array(mask.walkable.length)
+  for (let i = 0; i < walkable.length; i++) walkable[i] = mask.walkable[i] | assist[i]
+  return { width: mask.width, height: mask.height, walkable, assist }
+}
+
+/** その足元が条件付き（橙）のセルか。範囲外は false */
+export function isAssistCell(mask: WalkMask, x: number, y: number): boolean {
+  if (!mask.assist) return false
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  if (!(ix >= 0 && iy >= 0 && ix < mask.width && iy < mask.height)) return false
+  return mask.assist[iy * mask.width + ix] === 1
 }
 
 /** 足元の座標が歩けるか。範囲外は歩けない（黒扱い） */
