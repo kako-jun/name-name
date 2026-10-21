@@ -22,6 +22,8 @@
  *                                  # 毒/麻痺/混乱/眠り など。確率は 0〜99 の整数 %（省略は必中）。
  *                                  # `[状態 id]` で宣言した id は継続ダメージ・行動不能・回復の反転などが働く (#870)
  *   cure {state|all}               # 状態の解除 (#870)
+ *   steal [確率=P] [レア率=P] [枠=通常|レア|両方] [回数=N] [ぶんどる=min..max [type=...]]
+ *                                  # 敵の戦利品のぬすむ枠から盗む (#831)。確率は 0〜100（省略は必中）。書式と抽選は `loot.ts`
  *   escape_battle                  # 戦闘離脱
  *   escape_dungeon                 # ダンジョン脱出
  *
@@ -29,6 +31,8 @@
  */
 
 import { hasOwn, safeAssign } from './ownProperty'
+import type { MonsterLoot } from '../types'
+import type { StealParams, StealSlot } from './loot'
 import {
   applyDamageToHp,
   clampDamage,
@@ -67,6 +71,7 @@ export type EffectKind =
   | 'revive'
   | 'status'
   | 'cure'
+  | 'steal'
   | 'escape_battle'
   | 'escape_dungeon'
 
@@ -102,6 +107,12 @@ export interface ParsedEffect {
    * 無い = 必中（従来と同じ。耐性が無ければ乱数も使わない）
    */
   chance?: number
+  /** steal のレア枠に回る割合（%、`レア率=P`）(#831)。無ければ枠ごとの既定（`loot.ts`） */
+  rareRate?: number
+  /** steal の狙う枠（`枠=`）。無ければ両方 */
+  slot?: StealSlot
+  /** steal の「ぶんどる」(#831): 盗みと同時に与えるダメージの範囲（`ぶんどる=8..14`。系統は `type`） */
+  plunder?: { min: number; max: number }
 }
 
 /**
@@ -120,6 +131,7 @@ export function parseEffect(input: string): ParsedEffect | null {
   // `回数=` は damage 専用 (#879)。damage 以外に付いていたら無視して警告する（damage 自身の不正値は parseDamage 側で警告済み）
   if (
     parsed.kind !== 'damage' &&
+    parsed.kind !== 'steal' &&
     input
       .trim()
       .split(/\s+/)
@@ -130,6 +142,7 @@ export function parseEffect(input: string): ParsedEffect | null {
   // `確率=` は status 専用 (#870)
   if (
     parsed.kind !== 'status' &&
+    parsed.kind !== 'steal' &&
     input
       .trim()
       .split(/\s+/)
@@ -145,6 +158,11 @@ const CHANCE_KEY = '確率'
 
 /** `damage` の「ヒット数」キー (#879)。`hits` は敵 AI の被弾記憶と被るので使わない */
 const COUNT_KEY = '回数'
+
+/** `steal` のレア枠へ回る割合・狙う枠・ぶんどるのキー (#831) */
+const RARE_RATE_KEY = 'レア率'
+const SLOT_KEY = '枠'
+const PLUNDER_KEY = 'ぶんどる'
 
 function parseEffectInner(input: string): ParsedEffect | null {
   const trimmed = input.trim()
@@ -236,7 +254,91 @@ function parseEffectInner(input: string): ParsedEffect | null {
     if (rest.length === 0) return null
     return { kind: 'cure', state: rest[0] }
   }
+  if (verb === 'steal') return parseSteal(rest)
   return null
+}
+
+/** 同じ警告を 1 度だけ `console.warn` する（敵の行動のたびに出さない） */
+const warnedStealParse = new Set<string>()
+function warnStealOnce(input: string, message: string): void {
+  const key = `${input}\u0000${message}`
+  if (warnedStealParse.has(key)) return
+  warnedStealParse.add(key)
+  console.warn(`[name-name] steal ${input}: ${message}`)
+}
+
+/** `steal` の引数 (#831)。不正な値は警告して既定に落とす（`warnings` は `applyEffect` が戦闘ログに `(警告: …)` で出す） */
+function parseSteal(tokens: string[]): ParsedEffect {
+  const out: ParsedEffect = { kind: 'steal' }
+  const warn = (w: string): void => {
+    out.warnings = [...(out.warnings ?? []), w]
+  }
+  const input = tokens.join(' ')
+  const seen = new Set<string>()
+  for (const t of tokens) {
+    const [k, v] = splitKv(t)
+    // 同じキーの重複は後の値が勝つ。黙って上書きせず 1 度だけ console.warn する
+    if (k !== undefined && v !== undefined && (k === CHANCE_KEY || k === RARE_RATE_KEY)) {
+      if (seen.has(k)) warnStealOnce(input, `${k}= が重複しているため後の値を使う`)
+      seen.add(k)
+    }
+    if (k === CHANCE_KEY) {
+      const c = parseStealPercent(v, '確率')
+      if (c.warning) warn(c.warning)
+      if (c.value !== undefined) out.chance = c.value
+    } else if (k === RARE_RATE_KEY) {
+      const c = parseStealPercent(v, RARE_RATE_KEY)
+      if (c.warning) warn(c.warning)
+      if (c.value !== undefined) out.rareRate = c.value
+    } else if (k === SLOT_KEY) {
+      const slot = v === undefined ? undefined : STEAL_SLOTS[v]
+      if (slot === undefined)
+        warn(`枠=${v ?? ''} は 通常 / レア / 両方 のどれでもないため両方にした`)
+      else out.slot = slot
+    } else if (k === COUNT_KEY) {
+      const c = parseHitCount(v)
+      if (c.warning) warn(c.warning)
+      if (c.count > 1) out.count = c.count
+    } else if (k === PLUNDER_KEY) {
+      const range = parseRange(v)
+      if (!range) warn(`ぶんどる=${v ?? ''} は 8..14 のような範囲でないため盗みだけにした`)
+      else out.plunder = range
+    } else if (k === 'type' && v) {
+      out.type = v
+    } else {
+      warn(`'${t}' は steal の指定として解釈できないため無視した`)
+    }
+  }
+  if (out.type !== undefined && out.plunder === undefined) {
+    warnStealOnce(input, `type=${out.type} は ぶんどる= が無いため効かない`)
+  }
+  return out
+}
+
+/** `steal` の枠の書き方 → 枠 */
+const STEAL_SLOTS: Record<string, StealSlot> = {
+  通常: 'normal',
+  normal: 'normal',
+  レア: 'rare',
+  rare: 'rare',
+  両方: 'both',
+  both: 'both',
+}
+
+/** `steal` の `確率=` / `レア率=` の値: 0〜100 の数（小数可）。100 超は 100、負は 0、数でないものは警告して未指定 */
+function parseStealPercent(
+  raw: string | undefined,
+  key: string
+): { value?: number; warning?: string } {
+  if (raw !== undefined && /^-\d+(\.\d+)?$/.test(raw)) {
+    return { value: 0, warning: `${key}=${raw} は負のため 0 にした（必ず外れる）` }
+  }
+  if (raw === undefined || !/^\d+(\.\d+)?$/.test(raw)) {
+    return { warning: `${key}=${raw ?? ''} は 0〜100 の数でないため指定なしにした` }
+  }
+  const n = Number(raw)
+  if (n > 100) return { value: 100, warning: `${key}=${raw} は 100 を超えたため 100 にした` }
+  return { value: n }
 }
 
 function parseRange(raw: string | undefined): { min: number; max: number } | null {
@@ -367,6 +469,15 @@ export interface EffectContext {
    * エンジンが、今の手番の中で付いた状態をその手番の終わりに減らさないために使う
    */
   onStatus?: (target: BattleEntity, key: string, change?: 'apply' | 'cure') => void
+  /**
+   * `steal` で敵 1 体にぬすむを 1 回試みる (#831)。エンジンが渡す（敵の戦利品の宣言・盗めた回数・獲得の記録を持つのはエンジン）。
+   * 戻りは戦闘ログの行と結果（`empty` = もう盗めない。複数回の途中で出たらそこで打ち切る）。
+   * 無ければ `steal` は「この場面では使えない」警告だけで何もしない
+   */
+  steal?: (
+    target: BattleEntity,
+    params: StealParams
+  ) => { log: string[]; outcome: 'got' | 'miss' | 'empty' }
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
@@ -401,6 +512,15 @@ export interface BattleEntity {
   exp?: number
   /** 倒したときに落とすゴールド（敵側のみ） */
   gold?: number
+  /**
+   * 敵の戦利品の宣言 (#831)。`MonsterDef.loot`（`ドロップ:` `ぬすむ:` `ぬすむレア:` `ぬすむ回数:` の生文字列）を戦闘への組み立て時に写す。
+   * 解釈・抽選は `loot.ts` とエンジン。無い敵は従来どおり何も起きない
+   */
+  loot?: MonsterLoot
+  /** この者が使う `steal` の成功率に足す点（%）(#831)。成長・ジョブが埋める口。`確率=` を書いたときだけ効く。加算で 99% を超えては上がらない（元から超える値は下げない） */
+  stealChanceBonus?: number
+  /** この者が使う `steal` のレア率に足す点（%）(#831)。加算で 99% を超えては上がらない（元から超える値は下げない） */
+  stealRareBonus?: number
   /**
    * 戦闘画面に描くスプライト画像のパス (#736)。`MonsterDef.sprite` / `PartyMemberDef.sprite` を
    * 戦闘への組み立て時に写す。未指定・読み込み失敗時は色四角で描く（サイドビューのみ参照、
@@ -711,6 +831,38 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
             ctx.onStatus?.(t, key, 'cure')
           }
         }
+      }
+      return log
+    }
+    case 'steal': {
+      // ぬすむ (#831)。成功判定・枠の決定・在庫・獲得の記録はエンジン（`ctx.steal`）。ここは対象ごとに回数ぶん試みるだけ
+      if (!ctx.steal) return ['(警告: ぬすむはこの場面では使えない)']
+      const params: StealParams = {
+        ...(effect.chance !== undefined ? { chance: effect.chance } : {}),
+        ...(effect.rareRate !== undefined ? { rareRate: effect.rareRate } : {}),
+        ...(effect.slot !== undefined ? { slot: effect.slot } : {}),
+      }
+      const attempts = effect.count ?? 1
+      for (const t of ctx.targets) {
+        for (let i = 0; i < attempts; i++) {
+          const r = ctx.steal(t, params)
+          log.push(...r.log)
+          if (r.outcome === 'empty') break
+        }
+      }
+      // ぶんどる: 盗みと同時に攻撃（damage と同じ評価器。盗みのあとに与える）
+      if (effect.plunder) {
+        log.push(
+          ...applyEffectBody(
+            {
+              kind: 'damage',
+              min: effect.plunder.min,
+              max: effect.plunder.max,
+              ...(effect.type ? { type: effect.type } : {}),
+            },
+            ctx
+          )
+        )
       }
       return log
     }

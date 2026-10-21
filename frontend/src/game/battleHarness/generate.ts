@@ -7,7 +7,7 @@
  */
 import type { SkillExecution } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
-import type { StatusDef } from '../../types'
+import type { MonsterLoot, StatusDef } from '../../types'
 import { lcg } from './rng'
 import type { Op, Scenario } from './scenario'
 
@@ -20,6 +20,7 @@ export type Family =
   | 'status-matrix'
   | 'random-status'
   | 'damage-condition'
+  | 'loot'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -366,6 +367,58 @@ export function damageConditions(): Scenario[] {
   return out
 }
 
+/** ぬすむ (#831) の効果 DSL。確率・レア率・枠・回数・ぶんどるの通常値と境界値・不正値 */
+export const STEAL_EFFECTS: readonly string[] = [
+  'steal',
+  'steal 確率=0',
+  'steal 確率=60',
+  'steal 確率=100',
+  'steal 確率=999',
+  'steal 確率=-5',
+  'steal 確率=abc',
+  'steal 枠=レア',
+  'steal 枠=通常',
+  'steal 枠=ふしぎ',
+  'steal 枠=レア レア率=40',
+  'steal レア率=100',
+  'steal レア率=0',
+  'steal 回数=3',
+  'steal 回数=99',
+  'steal 回数=100',
+  'steal 回数=0',
+  'steal ぶんどる=8..14',
+  'steal ぶんどる=100000..100000 type=fire',
+  'steal ぶんどる=abc',
+  'steal 確率=60 レア率=30 枠=両方 回数=2 ぶんどる=1..2',
+]
+
+/** 敵の戦利品の宣言の変種 (#831)。通常/レア枠の構成・確率・個数・盗める回数・不正な行 */
+const LOOT_VARIANTS: ReadonlyArray<{ name: string; loot?: MonsterLoot }> = [
+  { name: 'none' },
+  { name: 'normal', loot: { steal: ['potion'] } },
+  { name: 'rare', loot: { stealRare: ['elixir'] } },
+  { name: 'both', loot: { steal: ['potion'], stealRare: ['elixir'], drops: ['ether'] } },
+  {
+    name: 'chances',
+    loot: {
+      steal: ['a 確率=50', 'b 確率=0', 'c 個数=3'],
+      stealRare: ['r 確率=30'],
+      drops: ['d1 確率=50', 'd2 個数=5', 'd3 確率=0'],
+    },
+  },
+  { name: 'limit3', loot: { steal: ['potion'], stealRare: ['elixir'], stealLimit: '3' } },
+  { name: 'unlimited', loot: { steal: ['potion'], stealRare: ['elixir'], stealLimit: '無限' } },
+  {
+    name: 'invalid',
+    loot: {
+      steal: ['確率=50', 'p 確率=abc', 'q 個数=1000', 'ok 確率=150'],
+      stealRare: ['r 個数=0'],
+      drops: ['d 確率=zz', 'e 確率=100'],
+      stealLimit: 'abc',
+    },
+  },
+]
+
 /**
  * 宣言した状態 (#870) の集合。継続ダメージ（割合・固定幅・上限超え）・行動不能・混乱・被ダメージで解除・満了で戦闘不能・
  * 回復/ダメージの反転・長い持続（永久気味）・全部入り・不正な値だらけの宣言を含む（不正な宣言は警告して既定に落ちるだけで壊れてはならない）
@@ -652,6 +705,67 @@ export function randomScenarios(seed: number, count: number): Scenario[] {
       spells,
       items,
       ops,
+    })
+  }
+  return out
+}
+
+/**
+ * ぬすむ・ドロップ (#831)。効果 DSL `steal`（確率・レア率・枠・回数・ぶんどるの境界値と不正値）× 対象の範囲 × 敵の戦利品の宣言
+ * （通常/レア枠・確率・個数・盗める回数・不正な行）× 使い手の加算（なし・+50・極大・極小）× 敵の HP（倒れる・倒れない）× ターン制/ATB。
+ * 味方が 4 回ぬすんでから攻撃し、決着までの間のドロップも見る。不変条件は `loot-invariant`（`detect.ts`）。
+ */
+export function lootMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  const bonuses = [
+    { name: 'bonus0', over: {} },
+    { name: 'bonus50', over: { stealChanceBonus: 50, stealRareBonus: 50 } },
+    { name: 'bonus1e9', over: { stealChanceBonus: 1e9, stealRareBonus: 1e9 } },
+    { name: 'bonus-1e9', over: { stealChanceBonus: -1e9, stealRareBonus: -1e9 } },
+  ]
+  for (const atb of [false, true]) {
+    STEAL_EFFECTS.forEach((effect, ei) => {
+      for (const scope of SPELL_SCOPES) {
+        for (const lv of LOOT_VARIANTS) {
+          for (const bv of bonuses) {
+            // 範囲外の対象（味方・自分）は戦利品の宣言を 1 種類だけに絞って数を抑える（盗めないことの確認で十分）
+            if (
+              (scope === '味方単体' || scope === '味方全体' || scope === '自分') &&
+              lv.name !== 'both'
+            ) {
+              continue
+            }
+            for (const hp of [20, 500]) {
+              const ops: Op[] = []
+              for (let i = 0; i < 4; i++) {
+                ops.push({ t: 'spell', s: 0 })
+                if (atb) ops.push({ t: 'tick', ms: 4000 })
+              }
+              ops.push(ATK)
+              out.push({
+                id: `loot/${atb ? 'atb' : 'turn'}/e${ei}/${scope}/${lv.name}/${bv.name}/hp${hp}`,
+                seed: 80_000 + out.length,
+                party: [
+                  entity('a', { hp: 900, maxHp: 900, ...bv.over }),
+                  entity('b', { hp: 900, maxHp: 900 }),
+                ],
+                enemies: [
+                  foe('s', { hp, maxHp: hp, ...(lv.loot ? { loot: lv.loot } : {}) }),
+                  foe('t', {
+                    hp: 500,
+                    maxHp: 500,
+                    loot: { steal: ['potion'], stealRare: ['elixir'], drops: ['ether'] },
+                  }),
+                ],
+                atb: atb ? { mode: 'active' } : undefined,
+                spells: [{ name: 'ぬすむ', mp: 0, target: scope, effect }],
+                items: [],
+                ops,
+              })
+            }
+          }
+        }
+      }
     })
   }
   return out

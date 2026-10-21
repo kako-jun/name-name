@@ -254,7 +254,7 @@ describe('BattleScreen ATB: コマンドの有効状態（atb-running 中は「�
     const { s } = build([ent('a')], [ent('s')], ATB(), { layout: 'side', onClose })
     I(s).commands[3].hit.emit('pointertap', {} as never)
     expect(onClose).toHaveBeenCalledTimes(1)
-    expect(onClose).toHaveBeenCalledWith('escaped')
+    expect(onClose).toHaveBeenCalledWith('escaped', expect.objectContaining({ outcome: 'escaped' }))
   })
 })
 
@@ -270,7 +270,7 @@ describe('BattleScreen ATB: onClose は 1 回だけ', () => {
     s.tick(2500)
     s.tick(RESULT_HOLD_DQ_MS) // 全滅を読ませる待機 (#745)
     expect(onClose).toHaveBeenCalledTimes(1)
-    expect(onClose).toHaveBeenCalledWith('defeat')
+    expect(onClose).toHaveBeenCalledWith('defeat', expect.objectContaining({ outcome: 'defeat' }))
     s.tick(2500)
     s.tick(2500)
     for (const c of I(s).commands) c.hit.emit('pointertap', {} as never)
@@ -287,7 +287,7 @@ describe('BattleScreen ATB: onClose は 1 回だけ', () => {
     s.tick(5000)
     I(s).commands[0].hit.emit('pointertap', {} as never)
     expect(onClose).toHaveBeenCalledTimes(1)
-    expect(onClose).toHaveBeenCalledWith('victory')
+    expect(onClose).toHaveBeenCalledWith('victory', expect.objectContaining({ outcome: 'victory' }))
   })
 
   it('従来ターン制でも onClose は 1 回', () => {

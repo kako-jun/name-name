@@ -6,6 +6,7 @@ import enemyOrderOmenSample from '../../public/battle-sample/enemy-order-omen.js
 import enemyCounterSample from '../../public/battle-sample/enemy-counter.json?raw'
 import enemyDamageParitySample from '../../public/battle-sample/enemy-damage-parity.json?raw'
 import enemyAffinitySample from '../../public/battle-sample/enemy-affinity.json?raw'
+import lootSample from '../../public/battle-sample/loot.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -21,6 +22,7 @@ import {
   defaultSpells,
   defaultEnemies,
   defaultParty,
+  describeBattleResult,
   describeView,
   effectivePartyCount,
   extractConfigUrl,
@@ -1881,5 +1883,115 @@ describe('parseConfig 属性相性: 全角の属性 id は parser と同じ表�
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.enemies[0].affinity).toEqual({ weak: ['fire', 'ﾎﾉｵ'], halve: ['①'] })
+  })
+})
+
+describe('parseConfig 敵の戦利品: loot と itemNames (#831)', () => {
+  const base = 'https://example.com/battle-sample/x.json'
+
+  it('enemies[].loot は drops / steal / stealRare の文字列配列（trim・空要素は捨てる）と stealLimit（数も文字列にする）', () => {
+    const r = parseConfig(
+      {
+        itemNames: { potion: 'ポーション' },
+        enemies: [
+          {
+            loot: {
+              drops: [' potion 確率=25 ', ''],
+              steal: ['potion'],
+              stealRare: ['elixir'],
+              stealLimit: 2,
+            },
+          },
+        ],
+      },
+      base
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies[0].loot).toEqual({
+      drops: ['potion 確率=25'],
+      steal: ['potion'],
+      stealRare: ['elixir'],
+      stealLimit: '2',
+    })
+    expect(r.value.itemNames).toEqual({ potion: 'ポーション' })
+  })
+
+  it('未指定・空は付かない。itemNames の既定は空', () => {
+    const r = parseConfig({ enemies: [{ loot: { drops: [] } }, {}] }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('loot' in r.value.enemies[0]).toBe(false)
+    expect('loot' in r.value.enemies[1]).toBe(false)
+    expect(r.value.itemNames).toEqual({})
+  })
+
+  it('buildBattleSetup は itemNames を戦闘へ渡す', () => {
+    const r = parseConfig({ itemNames: { potion: 'ポーション' } }, base)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const setup = buildBattleSetup(r.value, initialView(r.value))
+    expect(setup.itemNames).toEqual({ potion: 'ポーション' })
+  })
+
+  it.each([
+    [{ enemies: [{ loot: 'x' }] }, 'enemies[0].loot'],
+    [{ enemies: [{ loot: { drops: 'x' } }] }, 'enemies[0].loot.drops'],
+    [{ enemies: [{ loot: { steal: [1] } }] }, 'enemies[0].loot.steal'],
+    [{ enemies: [{ loot: { stealLimit: {} } }] }, 'enemies[0].loot.stealLimit'],
+    [{ party: [{ loot: { drops: ['a'] } }] }, 'party[0].loot'],
+    [{ itemNames: 'x' }, 'itemNames'],
+    [{ itemNames: { a: 1 } }, 'itemNames.a'],
+  ])('型が違うとエラー %j', (raw, path) => {
+    const r = parseConfig(raw, base)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain(path)
+  })
+})
+
+describe('同梱の例 public/battle-sample/loot.json (#831)', () => {
+  it('parseConfigText で読め、戦利品を持つ敵・ぬすむの呪文・アイテム名が入っている', () => {
+    const r = parseConfigText(lootSample, 'https://example.com/battle-sample/loot.json')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.enemies.map((e) => 'loot' in e)).toEqual([true, true, false])
+    expect(r.value.enemies[1].loot?.stealLimit).toBe('3')
+    expect(r.value.spells.filter((s) => s.effect?.startsWith('steal')).length).toBe(5)
+    expect(r.value.itemNames.potion).toBe('ポーション')
+  })
+})
+
+describe('describeBattleResult (#831)', () => {
+  const entry = (over: Record<string, unknown>) => ({
+    itemId: 'potion',
+    count: 1,
+    via: 'drop' as const,
+    rare: false,
+    enemyId: 's',
+    enemyName: 'スライム',
+    ...over,
+  })
+
+  it('戦利品なし・あり（表示名・ドロップ / ぬすむ / ぬすむ・レア）', () => {
+    expect(describeBattleResult({ outcome: 'escaped', exp: 0, gold: 0, loot: [], items: [] })).toBe(
+      '結果: escaped  exp=0  gold=0  戦利品: なし'
+    )
+    const text = describeBattleResult(
+      {
+        outcome: 'victory',
+        exp: 5,
+        gold: 3,
+        loot: [
+          entry({ via: 'steal', rare: true, itemId: 'elixir' }),
+          entry({ count: 2 }),
+          entry({ via: 'steal' }),
+        ],
+        items: [],
+      },
+      { potion: 'ポーション' }
+    )
+    expect(text).toBe(
+      '結果: victory  exp=5  gold=3  戦利品: elixir ×1（ぬすむ・レア・スライム） / ポーション ×2（ドロップ・スライム） / ポーション ×1（ぬすむ・スライム）'
+    )
   })
 })

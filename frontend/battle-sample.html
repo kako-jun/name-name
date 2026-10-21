@@ -43,6 +43,15 @@
       #error[hidden] {
         display: none;
       }
+      #result {
+        padding: 4px 12px;
+        font-family: monospace;
+        color: #fc8;
+        white-space: pre-wrap;
+      }
+      #result[hidden] {
+        display: none;
+      }
       .hint {
         padding: 2px 12px;
         color: #cc8;
@@ -73,6 +82,7 @@
       layout=front は本編と同じく味方 1 人だけを戦闘エンジンに渡すため、味方の人数は選べません
     </div>
     <div id="info"></div>
+    <div id="result" hidden></div>
     <div id="stage"></div>
     <script type="module" src="/src/battleSample/main.ts"></script>
   </body>
