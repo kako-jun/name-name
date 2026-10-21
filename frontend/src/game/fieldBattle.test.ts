@@ -495,7 +495,10 @@ describe('openFieldBattle: 終了・強制終了・タップ抑止 (#784)', () =
     const { s, onClosed } = open()
     s.handleCommand('attack')
     s.tick(RESULT_HOLD_DQ_MS)
-    expect(onClosed).toHaveBeenCalledWith('victory')
+    expect(onClosed).toHaveBeenCalledWith(
+      'victory',
+      expect.objectContaining({ outcome: 'victory', exp: 0, gold: 0, loot: [], items: [] })
+    )
   })
 
   it('closeFieldBattle は画面を外して破棄し、onClosed は呼ばず、多重呼び出しも無害', () => {

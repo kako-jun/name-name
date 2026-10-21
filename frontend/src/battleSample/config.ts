@@ -3,7 +3,8 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { StatusDef } from '../types'
+import type { MonsterLoot, StatusDef } from '../types'
+import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import {
   DEPTH_DEFAULT_HORIZON,
@@ -41,6 +42,28 @@ export type ScreenSizeId = (typeof SCREEN_SIZES)[number]['id']
  */
 export const RESOLUTION_MODES = ['main', 'dpr'] as const
 export type ResolutionMode = (typeof RESOLUTION_MODES)[number]
+/**
+ * 戦闘の結果（経験値・ゴールド・戦利品、#831）を 1 つの文にする。ホストが `onClose` で受け取る `BattleResult` の確認用（サンプルページの表示）。
+ * 戦利品は獲得順に `品 ×個数（ドロップ / ぬすむ / ぬすむ〔レア〕・元の敵）`、無ければ「なし」
+ */
+export function describeBattleResult(
+  result: BattleResult,
+  names: Readonly<Record<string, string>> = {}
+): string {
+  const name = (id: string): string =>
+    Object.prototype.hasOwnProperty.call(names, id) ? names[id] : id
+  const loot =
+    result.loot.length === 0
+      ? 'なし'
+      : result.loot
+          .map((l) => {
+            const via = l.via === 'drop' ? 'ドロップ' : l.rare ? 'ぬすむ・レア' : 'ぬすむ'
+            return `${name(l.itemId)} ×${l.count}（${via}・${l.enemyName}）`
+          })
+          .join(' / ')
+  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}`
+}
+
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 
 /**
@@ -96,6 +119,8 @@ export interface BattleSampleConfig {
   skills: Record<string, SkillExecution>
   /** 状態の宣言 (#870)。設定 JSON の `statuses`（`[状態]` と同じキー: id / name / duration / tickDamage / action / reverse / cure / expire）。既定は空 */
   statuses: Record<string, StatusDef>
+  /** 戦利品のログ用の表示名 (#831)。設定 JSON の `itemNames`（アイテム id → 名前）。既定は空（id をそのまま表示） */
+  itemNames: Record<string, string>
   party: BattleEntity[]
   enemies: BattleEntity[]
 }
@@ -209,6 +234,7 @@ export function defaultConfig(): BattleSampleConfig {
     foreground: null,
     skills: {},
     statuses: {},
+    itemNames: {},
     party: defaultParty(),
     enemies: defaultEnemies(),
   }
@@ -355,6 +381,32 @@ function parseEntity(
       if (ids.length > 0) out[key] = ids
     }
     if (Object.keys(out).length > 0) entity.affinity = out
+  }
+  if (raw.loot !== undefined) {
+    // 敵の戦利品 (#831)。`[モンスター]` の `ドロップ:` `ぬすむ:` `ぬすむレア:` `ぬすむ回数:` と同じ書式の文字列（drops / steal / stealRare は配列、stealLimit は 1 つの文字列）
+    if (path.startsWith('party[')) {
+      return { ok: false, error: `${path}.loot: 戦利品は enemies[] だけに書けます` }
+    }
+    if (!isRecord(raw.loot)) {
+      return { ok: false, error: `${path}.loot はオブジェクトである必要があります` }
+    }
+    const out: MonsterLoot = {}
+    for (const key of ['drops', 'steal', 'stealRare'] as const) {
+      const v = raw.loot[key]
+      if (v === undefined) continue
+      if (!Array.isArray(v) || v.some((a) => typeof a !== 'string')) {
+        return { ok: false, error: `${path}.loot.${key} は文字列の配列である必要があります` }
+      }
+      const lines = (v as string[]).map((a) => a.trim()).filter((a) => a !== '')
+      if (lines.length > 0) out[key] = lines
+    }
+    if (raw.loot.stealLimit !== undefined) {
+      if (typeof raw.loot.stealLimit !== 'string' && typeof raw.loot.stealLimit !== 'number') {
+        return { ok: false, error: `${path}.loot.stealLimit は文字列か数です` }
+      }
+      out.stealLimit = String(raw.loot.stealLimit)
+    }
+    if (Object.keys(out).length > 0) entity.loot = out
   }
   return { ok: true, value: entity }
 }
@@ -646,6 +698,21 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!skills.ok) return skills
   const statuses = parseStatuses(raw.statuses)
   if (!statuses.ok) return statuses
+  const itemNames: Record<string, string> = {}
+  if (raw.itemNames !== undefined) {
+    if (!isRecord(raw.itemNames)) {
+      return {
+        ok: false,
+        error: 'itemNames は { アイテムid: 名前 } のオブジェクトである必要があります',
+      }
+    }
+    for (const [id, name] of Object.entries(raw.itemNames)) {
+      if (typeof name !== 'string') {
+        return { ok: false, error: `itemNames.${id} は文字列である必要があります` }
+      }
+      itemNames[id] = name
+    }
+  }
   let background: string | null = null
   if (raw.background !== undefined && raw.background !== null && raw.background !== '') {
     if (typeof raw.background !== 'string') {
@@ -709,6 +776,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       foreground,
       skills: skills.value,
       statuses: statuses.value,
+      itemNames,
       party: party.value,
       enemies: enemies.value,
     },
@@ -819,6 +887,8 @@ export function buildBattleSetup(
   skills: Record<string, SkillExecution>
   /** BattleEngine に渡す状態の宣言 (#870) */
   statuses: Record<string, StatusDef>
+  /** BattleEngine に渡す戦利品の表示名 (#831) */
+  itemNames: Record<string, string>
   width: number
   height: number
 } {
@@ -838,6 +908,7 @@ export function buildBattleSetup(
     ...(view.atb === 'on' ? { atb: { mode: view.atbMode } } : {}),
     skills: config.skills,
     statuses: config.statuses,
+    itemNames: config.itemNames,
     // front 配置は本編と同じく隊列を使わない（RaycastRenderer.partyDefToBattleEntity と同じ）
     party: applyFormation(party, view.layout === 'front' ? 'front' : view.formation),
     enemies: fill(

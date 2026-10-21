@@ -6,6 +6,7 @@ import type { BattleActionEvent } from '../battleEngine'
 import { MAX_DAMAGE } from '../battleLimits'
 import { checkState, fingerprint, type DetectOptions, type Violation } from './detect'
 import { budgetRng, DEFAULT_RNG_BUDGET_PER_OP, RngBudgetExceeded } from './rng'
+import { parseLootSpec } from '../loot'
 import {
   applyOp,
   realEngineFactory,
@@ -73,6 +74,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     ...(options.detect ?? { maxDamage: MAX_DAMAGE }),
     // 宣言した状態の不変条件 (#870)。宣言の無いシナリオは検査しない
     ...(scenario.statuses ? { statusIds: Object.keys(scenario.statuses) } : {}),
+    // 戦利品の宣言 (#831)。宣言のある敵がいるシナリオだけ、`state.loot` の不変条件を検査する
+    ...lootDeclarations(scenario),
   }
   const factory = options.engineFactory ?? realEngineFactory
   const rng = budgetRng(scenario.seed, o.rngBudgetPerOp)
@@ -207,6 +210,23 @@ function collectMetrics(m: Metrics, events: readonly BattleActionEvent[]): void 
     }
     m.maxEventDamage = Math.max(m.maxEventDamage, dmg)
   }
+}
+
+/** シナリオの敵の `loot` 宣言を、検出器が使う「敵 id → 宣言した品」に直す (#831)。宣言のある敵がいなければ空 */
+function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
+  const loot: Record<string, { normal: string[]; rare: string[]; drops: string[]; limit: number }> =
+    {}
+  for (const e of scenario.enemies) {
+    const spec = parseLootSpec(e.loot)
+    if (!spec) continue
+    loot[e.id] = {
+      normal: spec.steal.map((l) => l.itemId),
+      rare: spec.stealRare.map((l) => l.itemId),
+      drops: spec.drops.map((l) => l.itemId),
+      limit: spec.stealLimit,
+    }
+  }
+  return Object.keys(loot).length > 0 ? { loot } : {}
 }
 
 function describe(e: unknown): string {

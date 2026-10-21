@@ -10,6 +10,7 @@ import { ATB_GAUGE_MAX, type BattleActionEvent, type BattleState } from '../batt
 import type { BattleEntity } from '../spellDsl'
 import { MAX_STATUS_TURNS } from '../battleLimits'
 import { tracksDamage } from '../enemyAi'
+import { MAX_LOOT_COUNT } from '../loot'
 
 export type ViolationKind =
   | 'non-finite' // NaN / Infinity が状態・イベントに入った
@@ -30,6 +31,7 @@ export type ViolationKind =
   | 'slow-op' // 1 操作が極端に遅い（無限ループの疑い）
   | 'status-invariant' // 宣言した状態の不変条件違反（残りターンが整数でない・上限超・倒れた者に残る・status イベントの形が違う）(#870)
   | 'damage-memory' // `ダメージ…` を書いた敵の記憶 lastDamage が、直前の味方の行動が与えた表示数字の合計と食い違う（数字が出なかったのに前回値が残る等）(#871)
+  | 'loot-invariant' // 戦利品の不変条件違反（宣言していない品・個数が正の整数でない・ドロップが勝利以外で出た・盗めた回数が上限超・レア枠でない品が rare）(#831)
   | 'exception' // エンジンが例外を投げた
 
 /** 壊れと断定しない（人間が見て判断する）種類。これだけのシナリオは「壊れ」に数えない */
@@ -49,6 +51,22 @@ export interface DetectOptions {
   maxDamage: number
   /** 宣言した状態の id (#870)。あれば、その id の残りターン・倒れた者に残っていないか・status イベントの形を検査する */
   statusIds?: readonly string[]
+  /**
+   * 敵ごとの戦利品の宣言 (#831)。キーは敵の id。あれば `BattleState.loot` を、宣言した品だけか・レア枠の印が合うか・
+   * 盗めた回数が上限内か・個数が 1〜`MAX_LOOT_COUNT` の整数か・ドロップが勝利のときだけかで検査する。
+   * 宣言の無いシナリオは検査しない（`state.loot` が積まれていたら宣言が無い敵の品として違反）
+   */
+  loot?: Readonly<
+    Record<
+      string,
+      {
+        normal: readonly string[]
+        rare: readonly string[]
+        drops: readonly string[]
+        limit: number
+      }
+    >
+  >
 }
 
 const OVER_PHASES = ['victory', 'defeat', 'escaped']
@@ -250,7 +268,60 @@ export function checkState(
   checkDamageMemory(push, state, newEvents)
   checkPhase(push, state)
   checkAtb(push, state)
+  checkLoot(push, state, opts)
   return out
+}
+
+/** 戦利品の不変条件 (#831)。`state.loot` が無い（戦利品なしの戦闘）ならそもそも検査しない */
+function checkLoot(push: Push, s: BattleState, opts: DetectOptions): void {
+  const loot = s.loot
+  if (loot === undefined) return
+  if (!Array.isArray(loot) || loot.length === 0) {
+    push('loot-invariant', `state.loot が空配列か配列でない（積むまでは undefined のはず）`)
+    return
+  }
+  const decl = opts.loot ?? {}
+  const stolen = new Map<string, number>()
+  loot.forEach((e, i) => {
+    const w = `loot[${i}]`
+    if (!Number.isInteger(e.count) || e.count < 1 || e.count > MAX_LOOT_COUNT) {
+      push('loot-invariant', `${w}.count = ${String(e.count)} が 1〜${MAX_LOOT_COUNT} の整数でない`)
+    }
+    if (e.via !== 'drop' && e.via !== 'steal') push('loot-invariant', `${w}.via = ${String(e.via)}`)
+    if (typeof e.itemId !== 'string' || e.itemId === '') {
+      push('loot-invariant', `${w}.itemId が空`)
+    }
+    const d = Object.prototype.hasOwnProperty.call(decl, e.enemyId) ? decl[e.enemyId] : undefined
+    if (!d) {
+      push('loot-invariant', `${w}: 戦利品を宣言していない敵 '${e.enemyId}' から ${e.itemId}`)
+      return
+    }
+    if (e.via === 'drop') {
+      if (s.phase !== 'victory') push('loot-invariant', `${w}: 勝利でないのにドロップ (${s.phase})`)
+      if (e.rare) push('loot-invariant', `${w}: ドロップに rare が付いている`)
+      if (!d.drops.includes(e.itemId)) {
+        push('loot-invariant', `${w}: 宣言に無いドロップ '${e.itemId}' (${e.enemyId})`)
+      }
+    } else {
+      const slot = e.rare ? d.rare : d.normal
+      if (!slot.includes(e.itemId)) {
+        push(
+          'loot-invariant',
+          `${w}: ${e.rare ? 'レア' : '通常'}枠に無い品 '${e.itemId}' を盗んだ (${e.enemyId})`
+        )
+      }
+      stolen.set(e.enemyId, (stolen.get(e.enemyId) ?? 0) + 1)
+    }
+  })
+  for (const [enemyId, n] of stolen) {
+    const limit = decl[enemyId]?.limit ?? 0
+    if (n > limit) push('loot-invariant', `敵 '${enemyId}' から ${n} 回盗めた（上限 ${limit}）`)
+  }
+  // ドロップは盗みの後（勝利の瞬間）にだけ積まれる: ドロップのあとに盗みが来たら順序違反
+  const firstDrop = loot.findIndex((e) => e.via === 'drop')
+  if (firstDrop !== -1 && loot.slice(firstDrop).some((e) => e.via === 'steal')) {
+    push('loot-invariant', 'ドロップのあとにぬすんだ品が積まれた')
+  }
 }
 
 /** ロック判定用の指紋。HP/MP/状態/バフ/フェーズ/ATB ゲージ。同じ指紋が続けば「何も進んでいない」 */
