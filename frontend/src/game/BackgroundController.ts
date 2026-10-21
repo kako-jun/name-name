@@ -1,6 +1,6 @@
 import { Assets, Container, Graphics, Sprite, Texture } from 'pixi.js'
 import type { BackgroundFade, NovelGameState } from './GameState'
-import { buildEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
+import { getSharedEdgeFadeMask, normalizeEdgeFade } from './edgeFadeMask'
 import { computeCoverFit, parseColorToNumber, resolveAssetUrl } from './novelLayout'
 import type { TimeController } from './TimeController'
 
@@ -485,20 +485,21 @@ export class BackgroundController {
     sprite: Sprite,
     fade: BackgroundFade | null = this.currentBackgroundFade
   ): Sprite | null {
-    // #252 で共通ユーティリティ buildEdgeFadeMask に切り出した（VideoLayer と共有）。
+    // #252 で共通ユーティリティに切り出した（VideoLayer と共有）。Texture は共有キャッシュのもの (#791)。
     const screen = this.host.getScreenSize()
-    const maskSprite = buildEdgeFadeMask(fade, screen.width, screen.height)
+    const maskSprite = getSharedEdgeFadeMask(fade, screen.width, screen.height)
     if (!maskSprite) return null
     sprite.mask = maskSprite
     return maskSprite
   }
 
-  /** 背景 entry が所有する mask Sprite とそのテクスチャを破棄する (#250)。メモリリーク防止 */
+  /** 背景 entry が所有する mask Sprite を破棄する (#250)。Texture は共有キャッシュのものなので壊さない (#791) */
   private disposeBgMask(maskSprite: Sprite | null = this.bgMaskSprite): void {
     if (maskSprite) {
       maskSprite.removeFromParent()
-      // canvas 由来のテクスチャは textureCache に乗らないので確実に破棄する
-      maskSprite.destroy({ texture: true, textureSource: true })
+      // Texture / TextureSource を壊すと、Pixi のマスク用フィルタが束ねた source を失い、
+      // 次にマスク付きで描く 1 フレームが落ちる (#791)。引数なしで Sprite だけ破棄する
+      maskSprite.destroy()
       if (this.bgMaskSprite === maskSprite) this.bgMaskSprite = null
     }
   }
@@ -509,7 +510,7 @@ export class BackgroundController {
     this.disposeBgMask(entry.mask)
   }
 
-  /** 背景 entry を全て破棄する（canvas 由来マスクテクスチャを含む #250/#319）。`destroy` からも呼ぶ。 */
+  /** 背景 entry を全て破棄する（マスク Sprite を含む。Texture は共有キャッシュなので残す #250/#319/#791）。`destroy` からも呼ぶ。 */
   clearBackgroundEntries(): void {
     this.stopBackgroundCrossfade()
     for (const entry of this.bgEntries) this.destroyBackgroundEntry(entry)

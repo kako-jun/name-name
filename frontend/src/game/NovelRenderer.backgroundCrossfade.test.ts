@@ -207,7 +207,7 @@ describe('NovelRenderer 背景クロスフェード', () => {
     expect(oldEntry.sprite.removeFromParent).toHaveBeenCalledTimes(1)
     expect(oldEntry.sprite.destroy).toHaveBeenCalledTimes(1)
     expect(mask.removeFromParent).toHaveBeenCalledTimes(1)
-    expect(mask.destroy).toHaveBeenCalledWith({ texture: true, textureSource: true })
+    expect(mask.destroy).toHaveBeenCalledWith()
     expect(internals<LocalInternals>(r).bgEntries).toEqual([newEntry])
   })
 
