@@ -7,13 +7,14 @@
  * - 枠: 種類ごと。魔石の枠は従来どおり `魔石枠:`（無ければ `装備枠:` の `魔石` の数、それも無ければ 1）。枠を超える分・宣言の無い id・装備できない種別・`装備可` に入っていない味方・同じ品の重複は警告して捨てる
  * - 属性の層: 魔石 → アイテムの順に積み、**合計 2 層まで**（`magicite.ts` の `elementLayers`）。アイテムの属性は耐性にだけ効き、通常攻撃の属性にはならない
  * - 武器の `属性`: 現在は無視する（警告）。将来の「武器自体の属性（攻撃の属性）」のために予約。防具・盾・兜の `属性` だけが耐性になる
+ * - ジョブ (#740): 就いているジョブの `装備時`（能力値）と `属性`（耐性の層。魔石 → 装備品 → ジョブの順で合計 2 層まで）を、同じ結果に足す（`job.ts`）。ジョブは装備の枠や id の入口とは別（`roster.currentJobs`）
  * - わざ: 装備中の**どの装備品の** `わざ`（武器でも防具でも）も、装備した順に並べる（`fieldBattle.ts` が、メンバー自身の `わざ:` の後ろへ重複なく足して候補窓を作る）
  * - 装備の変更の計算（`equipItem` / `unequipItem`）: 新しい装備列を返す純関数。所持品の有無・メニュー UI・保存は #738 / #880 / #881 の領分で、
  *   エンジンは「いま誰が何を装備しているか」（`roster.equipment`）を入力に受けるだけ
  *
  * 何も宣言していない・何も装備していない味方は、ここを通っても `BattleEntity` が従来と同一（キーも増えない）。
  */
-import type { ItemDef, MagiciteDef, PartyMemberDef } from '../types'
+import type { ItemDef, JobDef, MagiciteDef, PartyMemberDef } from '../types'
 import {
   addBonus,
   DEFAULT_MAGICITE_SLOTS,
@@ -28,6 +29,7 @@ import {
   type MemberMagicite,
   type StatBonus,
 } from './magicite'
+import { resolveMemberJob, type JobRoster } from './job'
 import { hasOwn } from './ownProperty'
 
 /** アイテムの装備枠の種類 */
@@ -72,6 +74,8 @@ export interface EquippedItem {
 
 /** 戦闘への組み立て用: 味方 1 人の装備まわりの結果（魔石まわりの結果に、アイテムとわざを足したもの） */
 export interface MemberEquipment extends MemberMagicite {
+  /** 就いているジョブ (#740)。ジョブを持たない味方は undefined */
+  job?: JobDef
   /** 装備中のアイテム（装備した順） */
   items: EquippedItem[]
   /** 装備中のアイテムの `わざ`（特技 id。装備した順・重複なし） */
@@ -79,14 +83,14 @@ export interface MemberEquipment extends MemberMagicite {
 }
 
 /** 装備まわりの入力（`FieldBattleRoster` の一部。すべて省略可）。魔石の入力（`MagiciteRoster`）に、アイテムのマスターを足したもの */
-export interface EquipmentRoster extends MagiciteRoster {
+export interface EquipmentRoster extends MagiciteRoster, JobRoster {
   /** アイテムのマスター（`[アイテム]`）。装備品はここから id で引く */
   items?: Record<string, ItemDef>
 }
 
 type MemberDef = Pick<
   PartyMemberDef,
-  'id' | 'magicites' | 'magiciteSlots' | 'equipment' | 'equipmentSlots'
+  'id' | 'magicites' | 'magiciteSlots' | 'equipment' | 'equipmentSlots' | 'jobs'
 >
 
 /** 枠の種類ごとの枠の数と、魔石の枠の数 */
@@ -242,12 +246,17 @@ export function resolveMemberEquipment(
     roster?.extraElements && hasOwn(roster.extraElements, def.id)
       ? roster.extraElements[def.id]
       : []
-  const el = elementLayers(r.stones, [...itemElements, ...extra])
+  // ジョブ (#740): 能力値のボーナスと属性の層（最後に積むので、上限を超えたらジョブの層が先に捨てられる）
+  const job = resolveMemberJob(def, roster)
+  warnings.push(...job.warnings)
+  bonus = addBonus(bonus, job.bonus)
+  const el = elementLayers(r.stones, [...itemElements, ...extra, ...job.elements])
   const grown = roster?.growth && hasOwn(roster.growth, def.id) ? roster.growth[def.id] : {}
   return {
     stones: r.stones,
     items: r.items,
     abilities,
+    ...(job.job ? { job: job.job } : {}),
     bonus: addBonus(bonus, grown),
     layers: el.layers,
     attackElements: el.layers.slice(0, el.stoneLayerCount),

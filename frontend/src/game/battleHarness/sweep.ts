@@ -4,6 +4,7 @@
 import {
   damageConditions,
   equipmentScenarios,
+  jobScenarios,
   lootMatrix,
   effectMatrix,
   magiciteScenarios,
@@ -44,6 +45,7 @@ export type SweepFamily =
   | 'script'
   | 'random-script'
   | 'equipment'
+  | 'job'
 
 export const DEFAULT_SWEEP: SweepConfig = {
   randomSeed: 1,
@@ -78,6 +80,7 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
           cfg.randomScriptCount ?? DEFAULT_SWEEP.randomScriptCount ?? 0
         )),
     ...(skip.has('equipment') ? [] : equipmentScenarios()),
+    ...(skip.has('job') ? [] : jobScenarios()),
   ]
 }
 

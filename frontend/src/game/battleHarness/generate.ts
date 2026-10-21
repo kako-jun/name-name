@@ -7,7 +7,7 @@
  */
 import type { SkillExecution, SummonExecution } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
-import type { ItemDef, MagiciteDef, MonsterLoot, StatusDef } from '../../types'
+import type { ItemDef, JobDef, MagiciteDef, MonsterLoot, StatusDef } from '../../types'
 import { applyMemberMagicite, resolveMemberMagicite } from '../magicite'
 import { resolveMemberEquipment } from '../equipment'
 import { lcg } from './rng'
@@ -25,6 +25,7 @@ export type Family =
   | 'magicite'
   | 'loot'
   | 'equipment'
+  | 'job'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -1065,6 +1066,109 @@ export function equipmentScenarios(): Scenario[] {
               spells: [],
               items: [],
               abilities: abilities.map((a) => ({ ...a })),
+              ops: [...ops],
+            })
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** ジョブ (#740) の宣言の集合。能力値のボーナス・属性防御（1 つ・2 つ）・極端なボーナス・不正なボーナスの書式・何もしないジョブを含む */
+export const JOB_SET: Readonly<Record<string, JobDef>> = {
+  nurse: { id: 'nurse', name: '看護師', equipBonus: 'def+3, hp+20' },
+  diver: { id: 'diver', name: '海女', equipBonus: 'agi+2', elements: ['water'] },
+  twin: { id: 'twin', name: '氷炎使い', elements: ['fire', 'ice'] },
+  plain: { id: 'plain', name: '無職' },
+  cursed: {
+    id: 'cursed',
+    name: 'のろわれ',
+    equipBonus: 'hp-1000000, atk-1000000, def+99999999, mp+5',
+  },
+  cracked: { id: 'cracked', name: 'こわれた', equipBonus: 'xx+3, atk+, hp+1.5, def+2' },
+}
+
+/**
+ * ジョブの組み合わせ（就けるジョブ・現在のジョブ・装備・魔石）。ジョブ無し・先頭が既定・転職後・`''`（ジョブ無し）・宣言なし・就けないジョブ・
+ * 層の超過（ジョブの層が先に捨てられる）・同属性で吸収を含む。`current` を省くと先頭のジョブ
+ */
+const JOB_LOADOUTS: ReadonlyArray<{
+  name: string
+  jobs?: string[]
+  current?: string
+  ids?: string[]
+  stones?: string[]
+}> = [
+  { name: 'none' },
+  { name: 'first', jobs: ['nurse', 'diver', 'twin'] },
+  { name: 'changed', jobs: ['nurse', 'diver', 'twin'], current: 'diver' },
+  { name: 'no-job', jobs: ['nurse', 'diver'], current: '' },
+  { name: 'plain', jobs: ['plain'] },
+  { name: 'unknown', jobs: ['nothing'] },
+  { name: 'not-candidate', jobs: ['nurse'], current: 'diver' },
+  { name: 'no-candidates', current: 'nurse' },
+  { name: 'cursed', jobs: ['cursed'] },
+  { name: 'broken', jobs: ['cracked'] },
+  { name: 'twin', jobs: ['twin'] },
+  { name: 'job+armor-absorb', jobs: ['diver'], ids: ['robe'] },
+  { name: 'job+armor-over', jobs: ['twin'], ids: ['plate'] },
+  { name: 'job+stone-over', jobs: ['twin'], stones: ['twin'] },
+  { name: 'job+stone+armor', jobs: ['diver'], ids: ['robe'], stones: ['fire'] },
+]
+
+/**
+ * ジョブ (#740): ジョブの組み合わせ（`JOB_LOADOUTS`。実際の `resolveMemberEquipment` で味方 a を組み立てる。装備品は `EQUIPMENT_SET`、魔石は `MAGICITE_SET`）×
+ * 敵の相性（水属性の特技を使う敵に対するジョブの耐性）× 敵の HP × 操作の並び（攻撃の連打・攻撃のあとに逃走）× ターン制/ATB。決着まで進める。
+ * ジョブはコマンドを増やさないので、`abilities` は持たない
+ */
+export function jobScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  const affinities: ReadonlyArray<{ name: string; over: Partial<BattleEntity> }> = [
+    { name: 'plain', over: {} },
+    { name: 'weak-fire', over: { affinity: { weak: ['fire'] } } },
+    { name: 'absorb-fire', over: { affinity: { absorb: ['fire'] } } },
+  ]
+  for (const atb of [false, true]) {
+    for (const lo of JOB_LOADOUTS) {
+      const member = entity('a', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 })
+      const eq = resolveMemberEquipment(
+        {
+          id: 'a',
+          ...(lo.stones ? { magicites: lo.stones } : {}),
+          ...(lo.ids ? { equipment: lo.ids } : {}),
+          ...(lo.jobs ? { jobs: lo.jobs } : {}),
+        },
+        {
+          magicites: { ...MAGICITE_SET },
+          items: { ...EQUIPMENT_SET },
+          jobs: { ...JOB_SET },
+          ...(lo.current !== undefined ? { currentJobs: { a: lo.current } } : {}),
+        }
+      )
+      applyMemberMagicite(member, eq)
+      for (const ev of affinities) {
+        for (const hv of [30, 900]) {
+          for (const [opName, ops] of [
+            ['attack-spam', [ATK, tick, ATK, tick, ATK]],
+            ['attack-then-escape', [ATK, tick, { t: 'escape' }, tick, ATK]],
+          ] as const) {
+            out.push({
+              id: `job/${atb ? 'atb' : 'turn'}/${lo.name}/${ev.name}/hp${hv}/${opName}`,
+              seed: 95_000 + out.length,
+              party: [{ ...member }, entity('b', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 })],
+              enemies: [
+                foe('s', { ...ev.over, hp: hv, maxHp: hv, actions: ['候補=wave'], agi: 9 }),
+                foe('t', { hp: 500, maxHp: 500 }),
+              ],
+              atb: atb ? { mode: 'active' } : undefined,
+              skills: {
+                wave: { name: 'なみ', target: '相手全体', effect: 'damage 40..40 type=water' },
+              },
+              spells: [],
+              items: [],
               ops: [...ops],
             })
           }

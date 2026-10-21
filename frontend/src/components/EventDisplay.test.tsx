@@ -237,6 +237,26 @@ describe('EventDisplay', () => {
     expect(min.container.textContent).not.toContain('装備時=')
   })
 
+  it('renders Job master data (#740)', () => {
+    const { container } = renderEvent({
+      Job: {
+        id: 'nurse',
+        name: '看護師',
+        description: '守りに強い',
+        elements: ['water'],
+        equipBonus: 'def+3, hp+20',
+      },
+    })
+    expect(container.textContent).toContain('ジョブ: 看護師')
+    expect(container.textContent).toContain('(id=nurse)')
+    expect(container.textContent).toContain('説明=守りに強い 属性=water 装備時=def+3, hp+20')
+    // 省略できるものは出ない
+    const min = renderEvent({ Job: { id: 'j', name: 'ただ' } })
+    expect(min.container.textContent).not.toContain('属性=')
+    expect(min.container.textContent).not.toContain('装備時=')
+    expect(min.container.textContent).not.toContain('説明=')
+  })
+
   it('renders PartyMember with learns', () => {
     const { container } = renderEvent({
       PartyMember: {

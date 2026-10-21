@@ -233,6 +233,24 @@ export interface PartyMemberDef {
   equipment?: string[]
   /** 装備枠の種類の列 (#207。`装備枠: 武器, 防具`)。同じ種類を並べると複数枠。省略は 武器・防具・盾・兜 が各 1。種類の解釈は runtime */
   equipmentSlots?: string[]
+  /** 就けるジョブ (#740)。`[ジョブ id]` の id（`ジョブ:` を書いた順。先頭が最初のジョブ）。現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。解決・検査は `game/job.ts` */
+  jobs?: string[]
+}
+
+/**
+ * ジョブ（職業）定義 (#740)。`[ジョブ id]` ブロック。アビリティを変化させるパッシブで、アクティブなコマンドは持たない。
+ * 就いている間だけ `装備時` が能力値に足され、`属性` が耐性の層に積まれる（魔石・装備品と合わせて 1 人 2 つまで。攻撃の属性にはならない）。
+ * ボーナスは書いたままの文字列で、解釈は `game/magicite.ts` の `parseStatBonus`（魔石・装備品と共通）
+ */
+export interface JobDef {
+  id: string
+  name: string
+  /** 説明文（メニュー等の表示用。エンジンは解釈しない） */
+  description?: string
+  /** このジョブの間だけ能力値に足す分（`装備時:` `atk+3, hp+20`） */
+  equipBonus?: string
+  /** このジョブの間だけ持つ属性防御の属性 id（parser が小文字・半角に正規化・重複排除済み。最大 2 つ） */
+  elements?: string[]
 }
 
 /**
@@ -591,6 +609,7 @@ export type Event =
   | { Status: StatusDef }
   | { BattleScript: BattleScriptDef }
   | { Magicite: MagiciteDef }
+  | { Job: JobDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {

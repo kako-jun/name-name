@@ -1122,6 +1122,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(e) = &p.equipment_slots {
                     out.push_str(&format!("装備枠: {}\n", e.join(", ")));
                 }
+                if let Some(j) = &p.jobs {
+                    out.push_str(&format!("ジョブ: {}\n", j.join(", ")));
+                }
                 out.push_str("[/パーティ]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1225,6 +1228,24 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     out.push_str(&format!("装備可: {}\n", v.join(", ")));
                 }
                 out.push_str("[/魔石]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Job(j) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[ジョブ {}]\n", j.id));
+                out.push_str(&format!("名前: {}\n", j.name));
+                if let Some(d) = &j.description {
+                    out.push_str(&format!("説明: {d}\n"));
+                }
+                if !j.elements.is_empty() {
+                    out.push_str(&format!("属性: {}\n", j.elements.join(", ")));
+                }
+                if let Some(v) = &j.equip_bonus {
+                    out.push_str(&format!("装備時: {v}\n"));
+                }
+                out.push_str("[/ジョブ]\n");
                 prev_was_dialog_or_text = false;
             }
             Event::Status(st) => {
@@ -2117,6 +2138,21 @@ mod tests {
         assert!(out.contains("メッセージ: {user}は 墨を はいた！"));
         assert!(!out.contains("MP:"));
         assert!(out.contains("[/特技]"));
+    }
+
+    #[test]
+    fn emits_job_block() {
+        let doc = make_doc_with_event(Event::Job(JobDef {
+            id: "nurse".to_string(),
+            name: "看護師".to_string(),
+            description: Some("守りに強い".to_string()),
+            equip_bonus: Some("def+3".to_string()),
+            elements: vec!["water".to_string()],
+        }));
+        let out = emit(&doc);
+        assert!(out.contains(
+            "[ジョブ nurse]\n名前: 看護師\n説明: 守りに強い\n属性: water\n装備時: def+3\n[/ジョブ]"
+        ));
     }
 
     #[test]
