@@ -31,6 +31,8 @@ pub enum EventCommand {
     },
     /// ナレーションを表示する。
     Narration { text: Vec<String> },
+    /// 脚本制御の戦闘 (`[戦闘 <id>]`、#741) を始め、終わるまで待つ。`[戦闘: noto_water]`
+    Battle { id: String },
 }
 
 fn default_npc_move_speed() -> u32 {
@@ -714,6 +716,31 @@ pub struct StatusDef {
     pub expire: Option<String>,
 }
 
+/// 脚本制御の戦闘の定義 (#741、拡張 #863)。`[戦闘 <id>] ... [/戦闘]` ブロックで書く。
+///
+/// 勝敗の固定・戦闘中の台詞・途中参戦・復活・逃走・中断・結果のフラグを**宣言**で書く。`enemies`（`敵:`、
+/// 敵グループと同じ書式）・`party`（`味方:`、初期編成のパーティ id）以外は `rules` に、書いた順の生文字列
+/// （`台詞: 条件=開始 話者=… 文=…` のように、キー込みの 1 行）で透過する。解釈と不正行の警告は runtime
+/// （`battleScript.ts`）が行う（`行動:` と同じ流儀）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct BattleScriptDef {
+    pub id: String,
+    /// 表示用の名前（任意）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 敵の構成（`敵:`。エンカウント群と同じ書式の生文字列。1 つ目の行だけを使う）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enemies: Option<String>,
+    /// 初期編成（`味方:`。`[パーティ id]` の id をカンマ区切りで、複数行可）。省略は従来のパーティ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<Vec<String>>,
+    /// 脚本のルール行（書いた順。`キー: 値` の生文字列）。
+    #[serde(default)]
+    pub rules: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
@@ -1116,6 +1143,8 @@ pub enum Event {
     Skill(SkillDef),
     /// 状態定義 (#870)。`[状態 <id>] ... [/状態]` ブロックで書く。毒・混乱・回復の反転などを宣言で足す。
     Status(StatusDef),
+    /// 脚本制御の戦闘の定義 (#741)。`[戦闘 <id>] ... [/戦闘]` ブロックで書く。勝敗の固定・戦闘中の台詞・途中参戦・復活・逃走・中断を宣言する。
+    BattleScript(BattleScriptDef),
     /// 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。装備すると召喚獣を呼べ、属性・能力値のボーナスがつく。
     Magicite(MagiciteDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。

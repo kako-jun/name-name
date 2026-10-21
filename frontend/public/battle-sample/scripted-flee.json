@@ -1,0 +1,29 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "script": {
+    "id": "error-cell",
+    "rules": [
+      "下限: 対象=error_cell HP=1",
+      "台詞: 条件=開始 文=ちいさな エラーさいぼうが たちふさがっている！",
+      "逃走: 条件=倒れた[stomach_guard] 対象=error_cell 文=エラーさいぼうは にげだした！",
+      "終了: 条件=ターン>=30 結果=中断",
+      "勝利時: フラグ=cell_escaped=true 次=stomach_after"
+    ]
+  },
+  "party": [
+    { "id": "hero", "name": "ぼく", "hp": 120, "mp": 10, "atk": 20, "def": 4, "agi": 6 },
+    { "id": "friend", "name": "おさななじみ", "hp": 100, "mp": 10, "atk": 16, "def": 3, "agi": 7 }
+  ],
+  "enemies": [
+    {
+      "id": "stomach_guard",
+      "name": "いぶくろの ばんにん",
+      "hp": 160,
+      "atk": 9,
+      "def": 4,
+      "agi": 3
+    },
+    { "id": "error_cell", "name": "エラーさいぼう", "hp": 3, "atk": 0, "def": 0, "agi": 8 }
+  ]
+}

@@ -722,6 +722,34 @@ pub fn parse(input: &str) -> Document {
                                 continue;
                             }
                         }
+                        // [戦闘: <id>] (#741)。脚本制御の戦闘 `[戦闘 <id>]` を始めて、終わるまで待つ
+                        if let Some(rest) = cmd_line.strip_prefix("[戦闘:") {
+                            if rest.ends_with(']') {
+                                if let Some(char) = pending_dialog_char.take() {
+                                    if !pending_dialog_lines.is_empty() {
+                                        commands.push(EventCommand::Dialog {
+                                            character: Some(char),
+                                            text: std::mem::take(&mut pending_dialog_lines),
+                                        });
+                                    }
+                                } else if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: None,
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                                let id = rest.trim_end_matches(']').trim();
+                                if id.is_empty() {
+                                    emit_warning(
+                                        "[name-name-parser] warning: [戦闘: ] は id が空のため捨てた",
+                                    );
+                                } else {
+                                    commands.push(EventCommand::Battle { id: id.to_string() });
+                                }
+                                pos += 1;
+                                continue;
+                            }
+                        }
                         // > テキスト → Narration
                         if cmd_line.starts_with("> ") {
                             if let Some(char) = pending_dialog_char.take() {
@@ -4817,6 +4845,143 @@ builtin: some_builtin
         assert_eq!(skills[1].target, "相手単体");
         assert_eq!(skills[1].builtin.as_deref(), Some("some_builtin"));
         assert_eq!(skills[1].message, None);
+    }
+
+    #[test]
+    fn battle_script_block_parses_raw_rules_in_order() {
+        // [戦闘] (#741): 敵・味方は専用欄、ルール行は書いた順に `キー: 値` の生文字列で透過。
+        // 値が空のルール・未知のキーは捨てる。名前・敵・味方の英語キーも受理する
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[戦闘 noto]
+名前: 能登の海
+敵: boss, cell
+味方: hero
+味方: ally , ally2
+にげる: 不可
+台詞: 条件=開始 話者=水の召喚獣 文=……:こんにちは
+参戦: 条件=HP[hero]<=1 対象=ally
+未知のキー: 何か
+下限:
+固定: 結果=敗北 上限ターン=8
+勝利時: フラグ=won=true 次=after
+[/戦闘]
+
+[戦闘 minimal]
+[/戦闘]
+
+[戦闘 en]
+party: a
+enemies: x
+[/戦闘]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let defs: Vec<&BattleScriptDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::BattleScript(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(defs.len(), 3);
+        assert_eq!(defs[0].id, "noto");
+        assert_eq!(defs[0].name.as_deref(), Some("能登の海"));
+        assert_eq!(defs[0].enemies.as_deref(), Some("boss, cell"));
+        assert_eq!(
+            defs[0].party.as_deref(),
+            Some(&["hero".to_string(), "ally , ally2".to_string()][..])
+        );
+        assert_eq!(
+            defs[0].rules,
+            vec![
+                "にげる: 不可".to_string(),
+                "台詞: 条件=開始 話者=水の召喚獣 文=……:こんにちは".to_string(),
+                "参戦: 条件=HP[hero]<=1 対象=ally".to_string(),
+                "固定: 結果=敗北 上限ターン=8".to_string(),
+                "勝利時: フラグ=won=true 次=after".to_string(),
+            ]
+        );
+        // 何も書かない [戦闘] も定義として残る（空のルール・敵なし。runtime が「敵なし」を警告する）
+        assert_eq!(defs[1].id, "minimal");
+        assert_eq!(defs[1].name, None);
+        assert_eq!(defs[1].enemies, None);
+        assert_eq!(defs[1].party, None);
+        assert!(defs[1].rules.is_empty());
+        // 英語キー
+        assert_eq!(defs[2].enemies.as_deref(), Some("x"));
+        assert_eq!(defs[2].party.as_deref(), Some(&["a".to_string()][..]));
+    }
+
+    #[test]
+    fn battle_script_uses_only_first_enemy_line() {
+        // 敵: が複数行あっても最初の 1 行だけを使う（残りは警告して捨てる。警告はテスト中は出ない）
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: m\n\n[戦闘 two]\n敵: a\n敵: b\n[/戦闘]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let def = events
+            .iter()
+            .find_map(|e| match e {
+                Event::BattleScript(b) => Some(b),
+                _ => None,
+            })
+            .expect("battle script");
+        assert_eq!(def.enemies.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn battle_script_header_requires_id() {
+        // id が空の [戦闘 ] は捨てる（ヘッダとして成立しない）
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: m\n\n[戦闘 ]\n敵: x\n[/戦闘]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(!events.iter().any(|e| matches!(e, Event::BattleScript(_))));
+    }
+
+    #[test]
+    fn rpg_event_battle_command_flushes_pending_dialog_and_keeps_order() {
+        // [イベント] の `[戦闘: id]` (#741): 直前の台詞を確定してからコマンドにする。id が空なら捨てる
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## map: m
+
+[イベント go]
+**衛兵**:
+やる気か。
+[戦闘: noto]
+[戦闘: ]
+ひとこと。
+[戦闘: second ]
+[/イベント]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::RpgEvent { commands, .. } => {
+                assert_eq!(commands.len(), 4, "{commands:?}");
+                assert!(
+                    matches!(&commands[0], EventCommand::Dialog { character: Some(c), .. } if c == "衛兵")
+                );
+                assert!(matches!(&commands[1], EventCommand::Battle { id } if id == "noto"));
+                assert!(matches!(
+                    &commands[2],
+                    EventCommand::Dialog {
+                        character: None,
+                        ..
+                    }
+                ));
+                assert!(matches!(&commands[3], EventCommand::Battle { id } if id == "second"));
+            }
+            other => panic!("expected RpgEvent, got {other:?}"),
+        }
     }
 
     #[test]

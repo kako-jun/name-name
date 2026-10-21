@@ -1,0 +1,44 @@
+{
+  "layout": "side",
+  "presentation": "dq",
+  "skills": [
+    {
+      "id": "water_burst",
+      "name": "みずのしんぞうだま",
+      "target": "相手全体",
+      "effect": "damage 400..500 type=water",
+      "message": "{user}は とうめいな みずの たまを はなった！"
+    }
+  ],
+  "statuses": [{ "id": "fire_will", "name": "ほのおの いし", "duration": 5 }],
+  "spells": [
+    {
+      "id": "flame",
+      "name": "ほのお",
+      "mp": 4,
+      "target": "敵単体",
+      "effect": "damage 60..80 type=fire"
+    }
+  ],
+  "script": {
+    "id": "heart-spirit",
+    "rules": [
+      "台詞: 条件=開始 話者=みずの せいれい 文=しんぞうは とめさせてもらう",
+      "復活: 条件=倒れた[hero] 対象=hero HP=100% MP=100% 付与=fire_will 文=ほのおが ぼくを よみがえらせた！ みずより つよい ひとつの ひ だ！",
+      "台詞: 条件=ターン>=1, !倒れた[hero] 話者=ぼく 文=まだ やれる！",
+      "勝利時: フラグ=spirit_defeated=true, fire_awakened=true 次=heart_after"
+    ]
+  },
+  "party": [{ "id": "hero", "name": "ぼく", "hp": 60, "mp": 20, "atk": 14, "def": 3, "agi": 6 }],
+  "enemies": [
+    {
+      "id": "water_spirit",
+      "name": "みずの せいれい",
+      "hp": 220,
+      "atk": 12,
+      "def": 3,
+      "agi": 5,
+      "actions": ["条件=初手 候補=water_burst", "候補=こうげき:1 | water_burst:1"]
+    }
+  ]
+}

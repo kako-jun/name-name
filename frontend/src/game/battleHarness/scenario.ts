@@ -43,6 +43,13 @@ export interface Scenario {
   /** 「わざ」(#873 / #207)。`Op` の `ability` の `k` が添字（装備中の武器のわざなど）。無いシナリオは従来どおり */
   abilities?: SkillExecution[]
   ops: Op[]
+  /** 脚本制御の戦闘 (#741 / #863)。`[戦闘]` の宣言（`rules`）と、途中参戦できる味方。無いシナリオは従来どおり */
+  script?: { id: string; rules: string[]; joiners?: Record<string, BattleEntity> }
+  /**
+   * 脚本のシナリオの期待。`ends` = 決着したときの phase として許すもの（これ以外で終わる・終わらない＝壊れ）、
+   * `maxTurn` = 経過ターンの上限（`固定` の上限ターン。これを超えたら壊れ）。決着しなければ（`ends` を持つシナリオは）必ず壊れ
+   */
+  scriptExpect?: { ends: string[]; maxTurn?: number }
 }
 
 /** ハーネスがエンジンに要求する最小の口。`BattleEngine` はこれを満たす（検出器のテストでは合成エンジンを差し込む） */
@@ -69,6 +76,7 @@ export const realEngineFactory: EngineFactory = (scenario, rng) =>
     atb: scenario.atb ? { mode: scenario.atb.mode } : undefined,
     skills: scenario.skills ? clone(scenario.skills) : undefined,
     statuses: scenario.statuses ? clone(scenario.statuses) : undefined,
+    script: scenario.script ? clone(scenario.script) : undefined,
   })
 
 export function clone<T>(v: T): T {

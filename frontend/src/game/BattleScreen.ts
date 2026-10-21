@@ -124,7 +124,7 @@ import {
   type TargetSample,
 } from './battleMotion'
 import type { BattleHit } from './battleEngine'
-import type { BattleResult } from './loot'
+import type { BattleOutcome, BattleResult } from './loot'
 import {
   SIDE_GAP,
   SIDE_LABEL_LINE_HEIGHT,
@@ -318,7 +318,7 @@ export interface BattleScreenOptions {
    * バトル終了（victory / defeat / escaped）時に呼ばれる。victory / defeat は決着後に読ませる待機（battleResult.ts）を置いてから (#745)。
    * 第 2 引数 `result` は戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）。ホストが所持品への反映や戦利品の画面に使う
    */
-  onClose?: (outcome: 'victory' | 'defeat' | 'escaped', result: BattleResult) => void
+  onClose?: (outcome: BattleOutcome, result: BattleResult) => void
   /**
    * 戦闘レイアウト (#736)。`front`（既定）= 従来の Undertale 風正面配置（先頭 1 人のみ表示）、
    * `side` = FF 系サイドビュー（敵群が左・味方全員が右・下にコマンドと HP パネル）。
@@ -663,8 +663,15 @@ export class BattleScreen extends Container {
     else this.buildSideViews()
     this.buildAtbBars()
     this.buildMenu()
-    // 作り直した画面は過去の行動を再生しない（確定した状態から始める）
-    this.seenEventTotal = this.engine.getState().eventTotal
+    // 作り直した画面は過去の行動を再生しない（確定した状態から始める）。
+    // ただし脚本制御の戦闘 (#741) の開始の台詞（戦闘の開始と同時に積まれた `line` だけの記録）は、この画面で読ませる
+    const initial = this.engine.getState()
+    const introOnly =
+      initial.script !== undefined &&
+      initial.script.turn === 0 &&
+      initial.events.length === initial.eventTotal &&
+      initial.events.every((e) => e.line)
+    this.seenEventTotal = introOnly ? 0 : initial.eventTotal
     if (opts.background) void this.loadBackground(opts.background)
     if (opts.foreground && this.layoutMode === 'side') void this.loadForeground(opts.foreground)
     this.layout()
@@ -926,8 +933,42 @@ export class BattleScreen extends Container {
       stage.addChild(view.container)
       this.partyViews.push(view)
     }
-    for (let i = 0; i < s.party.length; i++) {
-      const t = new PixiText({
+    for (let i = 0; i < s.party.length; i++) this.addStatusRow()
+    if (this.presentation === 'ff') {
+      // FF 式メッセージ窓の言葉 (#745)。ログ帯の上に中央寄せで置く。ログ行は ff では使わない
+      const m = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_LOG) })
+      m.anchor.set(0.5, 0.5)
+      m.visible = false
+      this.messageText = m
+      this.addChild(m)
+      this.logPanel.visible = false
+    }
+  }
+
+  /** 味方 1 人ぶんの HP/MP の表示行（名前・HP・MP の文字）を作って足す。戦闘開始時と、途中参戦 (#741) のときに使う */
+  private addStatusRow(): void {
+    const t = new PixiText({
+      text: '',
+      style: this.themedStyle(
+        new TextStyle({
+          fontFamily: "'Noto Sans JP', sans-serif",
+          fontSize: SIDE_STATUS_FONT_SIZE,
+          fill: TEXT_COLOR,
+        })
+      ),
+    })
+    this.statusTexts.push(t)
+    this.addChild(t)
+    const parts: Array<[PixiText[], boolean]> = [
+      [this.statusHpLabels, false],
+      [this.statusHpTexts, true],
+      [this.statusHpMaxes, false],
+      [this.statusMpLabels, false],
+      [this.statusMpTexts, true],
+      [this.statusMpMaxes, false],
+    ]
+    for (const [list, alignRight] of parts) {
+      const n = new PixiText({
         text: '',
         style: this.themedStyle(
           new TextStyle({
@@ -937,41 +978,10 @@ export class BattleScreen extends Container {
           })
         ),
       })
-      this.statusTexts.push(t)
-      this.addChild(t)
-      const parts: Array<[PixiText[], boolean]> = [
-        [this.statusHpLabels, false],
-        [this.statusHpTexts, true],
-        [this.statusHpMaxes, false],
-        [this.statusMpLabels, false],
-        [this.statusMpTexts, true],
-        [this.statusMpMaxes, false],
-      ]
-      for (const [list, alignRight] of parts) {
-        const n = new PixiText({
-          text: '',
-          style: this.themedStyle(
-            new TextStyle({
-              fontFamily: "'Noto Sans JP', sans-serif",
-              fontSize: SIDE_STATUS_FONT_SIZE,
-              fill: TEXT_COLOR,
-            })
-          ),
-        })
-        // 数値は列の基準 x に右寄せ（桁数が違っても右端がそろう）。見出しと「/最大値」は左寄せ
-        n.anchor.set(alignRight ? 1 : 0, 0)
-        list.push(n)
-        this.addChild(n)
-      }
-    }
-    if (this.presentation === 'ff') {
-      // FF 式メッセージ窓の言葉 (#745)。ログ帯の上に中央寄せで置く。ログ行は ff では使わない
-      const m = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_LOG) })
-      m.anchor.set(0.5, 0.5)
-      m.visible = false
-      this.messageText = m
-      this.addChild(m)
-      this.logPanel.visible = false
+      // 数値は列の基準 x に右寄せ（桁数が違っても右端がそろう）。見出しと「/最大値」は左寄せ
+      n.anchor.set(alignRight ? 1 : 0, 0)
+      list.push(n)
+      this.addChild(n)
     }
   }
 
@@ -1253,24 +1263,27 @@ export class BattleScreen extends Container {
   private buildAtbBars(): void {
     if (!this.engine.getState().atb) return
     const n = this.layoutMode === 'side' ? this.engine.getState().party.length : 1
-    for (let i = 0; i < n; i++) {
-      const g = new Graphics()
-      this.atbBars.push(g)
-      this.addChild(g)
-      const m = new PixiText({
-        text: '▶',
-        style: this.themedStyle(
-          new TextStyle({
-            fontFamily: "'Noto Sans JP', sans-serif",
-            fontSize: SIDE_STATUS_MARKER_FONT_SIZE,
-            fill: ACTOR_COLOR,
-          })
-        ),
-      })
-      m.visible = false
-      this.atbMarkers.push(m)
-      this.addChild(m)
-    }
+    for (let i = 0; i < n; i++) this.addAtbBar()
+  }
+
+  /** 味方 1 人ぶんの ATB ゲージ棒と「▶」印を足す。戦闘開始時と、途中参戦 (#741) のときに使う */
+  private addAtbBar(): void {
+    const g = new Graphics()
+    this.atbBars.push(g)
+    this.addChild(g)
+    const m = new PixiText({
+      text: '▶',
+      style: this.themedStyle(
+        new TextStyle({
+          fontFamily: "'Noto Sans JP', sans-serif",
+          fontSize: SIDE_STATUS_MARKER_FONT_SIZE,
+          fill: ACTOR_COLOR,
+        })
+      ),
+    })
+    m.visible = false
+    this.atbMarkers.push(m)
+    this.addChild(m)
   }
 
   /** ゲージ棒を描く。満タン（コマンド待ち）は色を変える。倒れた味方は空 */
@@ -2123,8 +2136,30 @@ export class BattleScreen extends Container {
   }
 
   /** エンジン状態を読み取り、テキストを更新する */
+  /**
+   * 途中参戦 (#741) で味方が増えたら、その人の絵・HP/MP の行・ATB ゲージ棒を足して配置し直す。
+   * side だけ（front は先頭 1 人しか描かないので、増えても何もしない）。味方が減ることは無い（倒れても配列からは消えない）。
+   * 参戦の知らせ（ログ・窓）はエンジンが積むので、ここは見た目の数合わせだけ
+   */
+  private syncPartyViews(): void {
+    if (this.layoutMode !== 'side' || !this.sideStage) return
+    const s = this.engine.getState()
+    if (s.party.length <= this.partyViews.length) return
+    for (let i = this.partyViews.length; i < s.party.length; i++) {
+      const view = this.createEntityView(s.party[i], FALLBACK_PARTY_COLOR, false)
+      this.sideStage.addChild(view.container)
+      this.partyViews.push(view)
+      this.addStatusRow()
+      if (s.atb) this.addAtbBar()
+    }
+    // 追加した文字が候補窓・メッセージ窓より手前に出ないよう、窓を最前面に戻す
+    if (this.menuLayer) this.addChild(this.menuLayer)
+    this.layout()
+  }
+
   private refresh(): void {
     const s = this.engine.getState()
+    this.syncPartyViews()
     if (this.presentation === 'ff') this.syncPresentation()
     if (this.layoutMode === 'side') this.refreshSide()
     this.updateSelectMarks()

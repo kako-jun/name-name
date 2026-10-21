@@ -1,11 +1,11 @@
 //! マスターデータブロック (#174 / #175) のパース。
 //!
-//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[魔石 <id>]` / `[パーティ <id>]` の
-//! 7 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
+//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[魔石 <id>]` / `[パーティ <id>]` の
+//! 8 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
 //! 構造を持ち、ボディ部の解釈だけが kind ごとに違う。
 //!
 //! parser.rs の本体ループから 1 関数 `try_parse_master_data_block` を呼び出すことで
-//! 7 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
+//! 8 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
 use crate::parser::emit_warning;
@@ -15,7 +15,7 @@ pub(crate) struct ParsedMasterBlock {
     pub next_pos: usize,
 }
 
-/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[パーティ <id>]` の
+/// `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[パーティ <id>]` の
 /// いずれかを検出して、ボディの key: value ペアからオブジェクトを組み立てる。
 /// 検出に失敗（ヘッダ形式不一致 / 必須項目欠落）した場合は `None` を返し、
 /// 呼び出し側は次の解釈ルートへ進む。
@@ -35,6 +35,7 @@ pub(crate) fn try_parse_master_data_block(
         MasterKind::Spell => Event::Spell(build_spell_def(id, &body.entries)?),
         MasterKind::Skill => Event::Skill(build_skill_def(id, &body.entries)?),
         MasterKind::Status => Event::Status(build_status_def(id, &body.entries)?),
+        MasterKind::BattleScript => Event::BattleScript(build_battle_script_def(id, &body.entries)),
         MasterKind::Magicite => Event::Magicite(build_magicite_def(id, &body.entries)?),
         MasterKind::PartyMember => Event::PartyMember(build_party_member_def(id, &body.entries)?),
     };
@@ -49,6 +50,7 @@ enum MasterKind {
     Spell,
     Skill,
     Status,
+    BattleScript,
     Magicite,
     PartyMember,
 }
@@ -89,6 +91,14 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
             return None;
         }
         return Some((MasterKind::Status, id, "[/状態]"));
+    }
+    if let Some(rest) = header.strip_prefix("[戦闘 ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            emit_warning("[name-name-parser] warning: [戦闘 ] は id が空のため捨てた");
+            return None;
+        }
+        return Some((MasterKind::BattleScript, id, "[/戦闘]"));
     }
     if let Some(rest) = header.strip_prefix("[魔石 ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
@@ -714,6 +724,57 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
         message: lookup_master_string(entries, &["メッセージ", "message"]),
         telegraph: lookup_master_string(entries, &["予兆", "telegraph"]),
     })
+}
+
+/// 脚本制御の戦闘のルールのキー（行頭の `キー:`）(#741 / #863)。ここに無いキーは警告して無視する。
+/// 値は生文字列のまま、`キー: 値` の 1 行として書いた順に `rules` へ透過する（解釈は runtime の `battleScript.ts`）。
+const BATTLE_SCRIPT_RULE_KEYS: &[&str] = &[
+    "台詞",
+    "参戦",
+    "復活",
+    "下限",
+    "逃走",
+    "終了",
+    "固定",
+    "勝利時",
+    "敗北時",
+    "中断時",
+    "逃走時",
+    "にげる",
+];
+
+/// `[戦闘 <id>]` (#741)。`名前` は任意。`敵:` は最初の 1 行、`味方:` は書いた順（カンマ区切りは runtime が分ける）、
+/// ルール行は書いた順に `キー: 値` の生文字列で透過する。値が空のキーは捨てる。
+fn build_battle_script_def(id: String, entries: &[(String, String)]) -> BattleScriptDef {
+    const KNOWN: &[&str] = &["名前", "name", "敵", "enemies", "味方", "party"];
+    let mut rules: Vec<String> = Vec::new();
+    for (k, v) in entries {
+        let key = k.as_str();
+        if BATTLE_SCRIPT_RULE_KEYS.contains(&key) {
+            if !v.trim().is_empty() {
+                rules.push(format!("{key}: {}", v.trim()));
+            }
+        } else if !KNOWN.contains(&key) {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [戦闘 {id}] の未知のキー `{k}` は無視した"
+            ));
+        }
+    }
+    // `敵:` は 1 行だけ使う（複数体は `+` かカンマでつなぐ）。2 行目以降を黙って捨てない
+    let enemy_lines = collect_values(entries, &["敵", "enemies"]).unwrap_or_default();
+    if enemy_lines.len() > 1 {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [戦闘 {id}] の 敵: が {} 行ある。最初の 1 行だけ使い、残りは無視した（複数体は `+` かカンマでつなぐ）",
+            enemy_lines.len()
+        ));
+    }
+    BattleScriptDef {
+        id,
+        name: lookup_master_string(entries, &["名前", "name"]).filter(|n| !n.is_empty()),
+        enemies: enemy_lines.into_iter().next(),
+        party: collect_values(entries, &["味方", "party"]),
+        rules,
+    }
 }
 
 /// `[状態 <id>]` (#870)。`名前` 必須。ほかのキーは生文字列で透過し、runtime（`statusEffects.ts`）が解釈する。

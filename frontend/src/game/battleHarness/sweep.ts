@@ -14,6 +14,7 @@ import {
   stackOrders,
   statusMatrix,
 } from './generate'
+import { randomScriptScenarios, scriptMatrix } from './scriptFamily'
 import { runScenario, type RunOptions, type ScenarioResult } from './run'
 import type { Scenario } from './scenario'
 
@@ -23,6 +24,8 @@ export interface SweepConfig {
   randomCount: number
   /** 状態を宣言したランダム合成 (#870) のシナリオ数（seed は `randomSeed` と共通） */
   randomStatusCount?: number
+  /** 脚本制御の戦闘のランダム合成 (#741) のシナリオ数（seed は `randomSeed` と共通） */
+  randomScriptCount?: number
   /** 総当たりの族を省く（短く回したいとき） */
   skip?: SweepFamily[]
 }
@@ -38,12 +41,15 @@ export type SweepFamily =
   | 'damage-condition'
   | 'magicite'
   | 'loot'
+  | 'script'
+  | 'random-script'
   | 'equipment'
 
 export const DEFAULT_SWEEP: SweepConfig = {
   randomSeed: 1,
   randomCount: 3000,
   randomStatusCount: 2000,
+  randomScriptCount: 1000,
 }
 
 export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
@@ -64,6 +70,13 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('damage-condition') ? [] : damageConditions()),
     ...(skip.has('magicite') ? [] : magiciteScenarios()),
     ...(skip.has('loot') ? [] : lootMatrix()),
+    ...(skip.has('script') ? [] : scriptMatrix()),
+    ...(skip.has('random-script')
+      ? []
+      : randomScriptScenarios(
+          cfg.randomSeed,
+          cfg.randomScriptCount ?? DEFAULT_SWEEP.randomScriptCount ?? 0
+        )),
     ...(skip.has('equipment') ? [] : equipmentScenarios()),
   ]
 }

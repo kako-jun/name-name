@@ -60,12 +60,24 @@ export function rollEncounter(input: {
     ]
   for (const w of picked.warnings) console.warn(`[name-name] encounter group: ${w}`)
   const resolved = resolveEncounterGroup(picked, input.rng)
+  const enemies = buildEnemyEntities(resolved, input.masters)
+  return enemies.length > 0 ? enemies : null
+}
+
+/**
+ * 解決済みの敵（id と配置）から、マスターの定義どおりに `BattleEntity` を組み立てる。マスターに無い id は警告して飛ばす。
+ * `rollEncounter`（ランダムエンカウント）と、脚本制御の戦闘 (#741) の敵の組み立てが共有する（組み立て方は一か所）
+ */
+export function buildEnemyEntities(
+  resolved: ReadonlyArray<{ id: string; at?: { col: number; row: number } }>,
+  masters: Record<string, MonsterDef>
+): BattleEntity[] {
   const enemies: BattleEntity[] = []
   for (const { id, at } of resolved) {
     // own-property のみ見る (#368)。素朴な `input.masters[id]` は Object.prototype も辿ってしまい、
     // エンカウントグループの id が `constructor` 等と一致すると `!def` ガードをすり抜けて
     // 関数オブジェクトを敵マスターとして組み立ててしまう。
-    const def = hasOwn(input.masters, id) ? input.masters[id] : undefined
+    const def = hasOwn(masters, id) ? masters[id] : undefined
     if (!def) {
       console.warn(`[name-name] encounter group references unknown monster '${id}'`)
       continue
@@ -92,5 +104,5 @@ export function rollEncounter(input: {
       ...enemyLayoutField(def, at),
     })
   }
-  return enemies.length > 0 ? enemies : null
+  return enemies
 }

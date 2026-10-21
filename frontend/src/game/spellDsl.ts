@@ -37,6 +37,7 @@ import {
   applyDamageToHp,
   clampDamage,
   clampHp,
+  knockOutHp,
   MAX_HITS_PER_ACTION,
   MAX_STATUS_CHANCE,
   MAX_STATUS_TURNS,
@@ -491,6 +492,11 @@ export interface BattleEntity {
   atk: number
   def: number
   agi: number
+  /**
+   * HP の下限 (#741)。脚本制御の戦闘（`[戦闘]` の `下限:` / `固定:`）が条件の真偽で付け外しする。ダメージ・即死・状態の満了でも
+   * HP はこれ未満に減らない（`applyDamageToHp` / `knockOutHp`）。未指定（普通の戦闘）は従来どおり 0 まで減る
+   */
+  hpFloor?: number
   /** type 別耐性（'fire' → 0.5 = 半減 / 1.0 = 等倍 / 0 = 無効 / 2.0 = 弱点）。未指定は 1.0 */
   resist?: Partial<Record<string, number>>
   /**
@@ -615,6 +621,10 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
         }
         const before = t.hp
         t.hp = clampHp(t.hp + amount, t.maxHp) // 下限 0: 負値の回復で HP を 0 未満にしない (#877)
+        // 負値の回復も HP の下限 (#741) をすり抜けない（下限が無ければ何もしない）
+        if (t.hp < before && t.hpFloor !== undefined && t.hpFloor > 0) {
+          t.hp = Math.max(t.hp, Math.min(before, t.hpFloor))
+        }
         const healed = t.hp - before
         // 計算上の回復量（上限で切らない）。完全回復は回復した分
         ctx.onAmount?.(t, 'heal', Number.isFinite(amount) ? amount : healed)
@@ -707,7 +717,13 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
         const resist = resistRaw < 0 ? 0 : resistRaw
         // 即死 (damage_full) は HP をそのまま 0 にする（ダメージ上限は掛けない）。ダメージの数字は持たず「たおれた」だけを知らせる (#877)
         if (effect.kind === 'damage_full') {
-          t.hp = 0
+          const hpBefore = t.hp
+          if (!knockOutHp(t)) {
+            // HP の下限 (#741) で倒れなかった。数字つきのダメージとして知らせる（下限が無ければここへは来ない）
+            ctx.onAmount?.(t, 'damage', hpBefore - t.hp)
+            log.push(`${t.name} は もちこたえた！`)
+            return
+          }
           ctx.onKill?.(t)
           log.push(`${t.name} は たおれた！`)
           return

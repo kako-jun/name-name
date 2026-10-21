@@ -118,6 +118,7 @@ async function main(): Promise<void> {
         ...(Object.keys(setup.skills).length > 0 ? { skills: setup.skills } : {}),
         ...(Object.keys(setup.statuses).length > 0 ? { statuses: setup.statuses } : {}),
         ...(Object.keys(setup.itemNames).length > 0 ? { itemNames: setup.itemNames } : {}),
+        ...(setup.script ? { script: setup.script } : {}),
       })
       // 戦闘の結果（ホストへ渡る BattleResult、#831）を画面の上に出す。やり直し・設定変更で消す
       $('result').hidden = true

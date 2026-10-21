@@ -1167,6 +1167,29 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[/特技]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::BattleScript(b) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[戦闘 {}]\n", b.id));
+                if let Some(n) = &b.name {
+                    out.push_str(&format!("名前: {n}\n"));
+                }
+                if let Some(e) = &b.enemies {
+                    out.push_str(&format!("敵: {e}\n"));
+                }
+                if let Some(p) = &b.party {
+                    for line in p {
+                        out.push_str(&format!("味方: {line}\n"));
+                    }
+                }
+                for rule in &b.rules {
+                    out.push_str(rule);
+                    out.push('\n');
+                }
+                out.push_str("[/戦闘]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Magicite(mg) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1263,6 +1286,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                             for line in text {
                                 out.push_str(&format!("> {line}\n"));
                             }
+                        }
+                        EventCommand::Battle { id } => {
+                            out.push_str(&format!("[戦闘: {id}]\n"));
                         }
                     }
                 }
@@ -2143,6 +2169,18 @@ mod tests {
         let emitted = emit(&doc1);
         let doc2 = crate::parser::parse(&emitted);
         assert_eq!(doc1, doc2, "master data round-trip should be stable");
+    }
+
+    #[test]
+    fn round_trip_battle_script_block_and_event_command() {
+        // [戦闘] (#741): 敵・味方・ルール行（書いた順）と、[イベント] の [戦闘: id] が parse → emit → parse で安定する
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[戦闘 noto]\n名前: 能登の海\n敵: boss\n味方: hero\n味方: ally, ally2\n固定: 結果=敗北 上限ターン=8\n台詞: 条件=開始 話者=水 文=……\n勝利時: フラグ=won=true 次=after\n[/戦闘]\n\n## map: m\n\n[イベント go]\n開始だ。\n[戦闘: noto]\n終わった。\n[/イベント]\n";
+        let doc1 = crate::parser::parse(input);
+        let emitted = emit(&doc1);
+        assert!(emitted.contains("[戦闘 noto]\n名前: 能登の海\n敵: boss\n味方: hero\n味方: ally, ally2\n固定: 結果=敗北 上限ターン=8\n台詞: 条件=開始 話者=水 文=……\n勝利時: フラグ=won=true 次=after\n[/戦闘]"));
+        assert!(emitted.contains("[戦闘: noto]\n"));
+        let doc2 = crate::parser::parse(&emitted);
+        assert_eq!(doc1, doc2, "battle script round-trip should be stable");
     }
 
     #[test]
