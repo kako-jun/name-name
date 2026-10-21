@@ -308,4 +308,62 @@ describe('BackgroundController extraction contract (#828 7a)', () => {
     controller.cancelTimers()
     expect(time.getPendingTimerCount()).toBe(0)
   })
+
+  describe('端フェードマスクの共有 Texture (#791)', () => {
+    type MaskEntry = Entry & { mask: Sprite | null }
+    const maskOf = (inner: Internals, i: number) => (inner.bgEntries as MaskEntry[])[i].mask!
+
+    function mockCanvas() {
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+        () =>
+          ({
+            fillRect: vi.fn(),
+            createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
+          }) as never
+      )
+    }
+
+    it('同じフェードの背景は Texture を共有し、フェード無しはマスクを持たない', () => {
+      mockCanvas()
+      const { controller, inner, cache } = setup()
+      cache('a.png')
+      cache('b.png')
+      cache('c.png')
+      controller.setBackground('a.png', { top: 20, left: 10 }, null, { instant: true })
+      controller.setBackground('b.png', { top: 20, left: 10 })
+      controller.setBackground('c.png', null)
+      expect(maskOf(inner, 0)).not.toBe(maskOf(inner, 1))
+      expect(maskOf(inner, 0).texture).toBe(maskOf(inner, 1).texture)
+      expect((inner.bgEntries as MaskEntry[])[2].mask).toBeNull()
+      expect((inner.bgEntries[0].sprite as Sprite).mask).toBe(maskOf(inner, 0))
+    })
+
+    it('差し替え・クロスフェード完了・全消去で Sprite だけ破棄し、共有 Texture と source は壊さない', () => {
+      mockCanvas()
+      const { controller, inner, cache, time } = setup()
+      cache('a.png')
+      cache('b.png')
+      controller.setBackground('a.png', { bottom: 30 }, null, { instant: true })
+      const shared = maskOf(inner, 0).texture
+      const oldMask = maskOf(inner, 0)
+      // クロスフェード中は旧・新のマスクが同時に生きている
+      controller.setBackground('b.png', { bottom: 30 })
+      expect(inner.bgEntries).toHaveLength(2)
+      expect(oldMask.destroyed).toBe(false)
+      time.tick(100)
+      controller.updateBackgroundFadeFrame()
+      expect(inner.bgEntries).toHaveLength(1)
+      expect(oldMask.destroyed).toBe(true)
+      expect(shared.destroyed).toBe(false)
+      expect(shared.source.destroyed).toBe(false)
+      // 全消去 → 再生成しても同じ Texture が使え、生きている
+      const liveMask = maskOf(inner, 0)
+      controller.clearBackgroundEntries()
+      expect(liveMask.destroyed).toBe(true)
+      expect(shared.source.destroyed).toBe(false)
+      controller.setBackground('a.png', { bottom: 30 }, null, { instant: true })
+      expect(maskOf(inner, 0).texture).toBe(shared)
+      expect(maskOf(inner, 0).destroyed).toBe(false)
+    })
+  })
 })
