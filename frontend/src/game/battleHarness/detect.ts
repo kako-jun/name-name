@@ -9,6 +9,7 @@
 import { ATB_GAUGE_MAX, type BattleActionEvent, type BattleState } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
 import { MAX_STATUS_TURNS } from '../battleLimits'
+import { MAX_ELEMENT_LAYERS } from '../magicite'
 import { tracksDamage } from '../enemyAi'
 import { MAX_LOOT_COUNT } from '../loot'
 
@@ -31,6 +32,7 @@ export type ViolationKind =
   | 'slow-op' // 1 操作が極端に遅い（無限ループの疑い）
   | 'status-invariant' // 宣言した状態の不変条件違反（残りターンが整数でない・上限超・倒れた者に残る・status イベントの形が違う）(#870)
   | 'damage-memory' // `ダメージ…` を書いた敵の記憶 lastDamage が、直前の味方の行動が与えた表示数字の合計と食い違う（数字が出なかったのに前回値が残る等）(#871)
+  | 'magicite-invariant' // 魔石 (#889) の不変条件違反（通常攻撃の属性が 2 つを超える・召喚済みの印が真偽でない・同じ味方が 2 回召喚した・召喚したのに印が立たない）
   | 'loot-invariant' // 戦利品の不変条件違反（宣言していない品・個数が正の整数でない・ドロップが勝利以外で出た・盗めた回数が上限超・レア枠でない品が rare）(#831)
   | 'exception' // エンジンが例外を投げた
 
@@ -102,6 +104,26 @@ function checkDeclaredStatuses(
   }
 }
 
+/** 魔石 (#889) の不変条件: 通常攻撃の属性は文字列で最大 `MAX_ELEMENT_LAYERS` 個、召喚済みの印は真（立てるときだけ）か未指定 */
+function checkMagiciteEntity(push: Push, w: string, e: BattleEntity): void {
+  if (e.attackElements !== undefined) {
+    const els: unknown = e.attackElements
+    if (
+      !Array.isArray(els) ||
+      els.length > MAX_ELEMENT_LAYERS ||
+      els.some((x) => typeof x !== 'string' || x === '')
+    ) {
+      push(
+        'magicite-invariant',
+        `${w}.attackElements = ${JSON.stringify(els)}（空でない文字列が最大 ${MAX_ELEMENT_LAYERS} 個であるべき）`
+      )
+    }
+  }
+  if (e.summoned !== undefined && e.summoned !== true) {
+    push('magicite-invariant', `${w}.summoned = ${String(e.summoned)}（真か未指定であるべき）`)
+  }
+}
+
 function checkEntity(
   push: Push,
   side: string,
@@ -111,6 +133,7 @@ function checkEntity(
 ): void {
   const w = `${side}[${i}] ${e.name}`
   checkDeclaredStatuses(push, w, e, opts.statusIds)
+  checkMagiciteEntity(push, w, e)
   for (const k of ['hp', 'maxHp', 'mp', 'maxMp', 'atk', 'def', 'agi'] as const) {
     checkNumber(push, `${w}.${k}`, e[k])
   }

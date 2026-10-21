@@ -42,7 +42,12 @@ import {
   statusLabels,
   type StatusRule,
 } from './statusEffects'
-import { applyAffinityToDamage, DEATH_ATTRIBUTE, resolveAffinity } from './affinity'
+import {
+  applyAffinityToDamage,
+  DEATH_ATTRIBUTE,
+  resolveAffinity,
+  resolveAffinityMulti,
+} from './affinity'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
 import { isReviveEntry } from './battleMenu'
 import {
@@ -398,17 +403,82 @@ export class BattleEngine {
     if (!target) return
 
     const hpBefore = target.hp
-    const dmg = applyDamageToHp(target, this.computeAttackDamage(hero, target))
-    this.recordAttack(hero, target, hpBefore, dmg)
-    this.appendLog(`${hero.name} の こうげき！`)
-    this.appendLog(`${target.name} に ${dmg} の ダメージ！`)
-    if (target.hp === 0) {
-      this.appendLog(`${target.name} を たおした！`)
+    const raw = this.computeAttackDamage(hero, target)
+    // 通常攻撃の属性 (#889): 攻撃側が `attackElements` を持つときだけ、敵の属性相性で判定する（持たなければ常に normal ＝従来どおり）
+    const kind = resolveAffinityMulti(target.affinity, hero.attackElements)
+    if (kind === 'absorb') {
+      // 吸収: 計算したダメージ量だけ回復する（最大 HP で止まる。数字は 9999 で頭打ち、#877）
+      const absorbed = clampDamage(raw)
+      target.hp = clampHp(target.hp + absorbed, target.maxHp)
+      this.recordAttack(hero, target, hpBefore, absorbed, 'heal')
+      this.appendLog(`${hero.name} の こうげき！`)
+      this.appendLog(`${target.name} は ${absorbed} のダメージを吸収した！`)
+    } else if (kind === 'nullify') {
+      this.recordAttack(hero, target, hpBefore, 0, 'miss')
+      this.appendLog(`${hero.name} の こうげき！`)
+      this.appendLog(`${target.name} には きかなかった！`)
+    } else {
+      const dmg = applyDamageToHp(target, applyAffinityToDamage(kind, raw))
+      this.recordAttack(hero, target, hpBefore, dmg)
+      this.appendLog(`${hero.name} の こうげき！`)
+      this.appendLog(`${target.name} に ${dmg} の ダメージ！`)
+      if (target.hp === 0) {
+        this.appendLog(`${target.name} を たおした！`)
+      }
     }
 
     this.advanceAfterPartyAction(
       this.reactionOf(hero, { category: 'physical' }, new Map([[target, hpBefore]]))
     )
+  }
+
+  /**
+   * 「しょうかん」(#889): 味方が装備中の魔石の召喚獣を呼ぶ。1 人が 1 バトルで 1 回だけ（`BattleEntity.summoned`）。
+   * 消費 MP（既定 0）が足りないときは何も起きず false（呪文と同じ「MPが たりない！」）、呼び済みなら false（ログと吹き出しで知らせる）。
+   * 効果・対象の解決は `performSkill`（「わざ」と同じ。対象は使う側から見た相対表現）。召喚は魔法扱いで、敵の `受けた=魔法` に成立する。
+   * 召喚の演出そのもの（登場・退場、#750）は無く、ログと演出イベント（`kind: 'skill'`、ラベルは召喚獣の名前）だけを残す。
+   * 呼べたら true。入力待ちでない・使い手がいないときも false
+   */
+  selectSummon(summon: SummonExecution, targetId?: string): boolean {
+    if (this.state.phase !== 'party-input') return false
+    if (this.refuseIfBlocked()) return false
+    const caster = this.currentActor()
+    if (!caster) return false
+    const user = this.refOf(caster)
+    if (!user) return false
+    if (caster.summoned) {
+      this.notifyBlocked('このたたかいでは もう よべない！')
+      return false
+    }
+    const mp = Number.isFinite(summon.mp) && summon.mp > 0 ? Math.floor(summon.mp) : 0
+    if (caster.mp < mp) {
+      this.appendLog('MPが たりない！')
+      this.recordNotice(caster, 'MPが たりない！')
+      return false
+    }
+    let target: BattleActorRef | undefined
+    if (targetId) {
+      const pi = this.state.party.findIndex((e) => e.id === targetId)
+      const ei = pi === -1 ? this.state.enemies.findIndex((e) => e.id === targetId) : -1
+      if (pi !== -1) target = { side: 'party', index: pi }
+      else if (ei !== -1) target = { side: 'enemy', index: ei }
+    }
+    const hpSnapshot = this.snapshotHp()
+    caster.mp -= mp
+    caster.summoned = true
+    if (!this.performSkill(user, summon, target)) {
+      caster.mp += mp
+      delete caster.summoned
+      return false
+    }
+    this.advanceAfterPartyAction(
+      this.reactionOf(
+        caster,
+        { category: 'magic', name: summon.name, type: spellDamageType(summon) },
+        hpSnapshot
+      )
+    )
+    return true
   }
 
   /**
@@ -1468,7 +1538,9 @@ export class BattleEngine {
     actor: BattleEntity,
     target: BattleEntity,
     hpBefore: number,
-    damage: number
+    damage: number,
+    /** 通常攻撃の属性 (#889) が吸収された（heal）・無効だった（miss）ときだけ指定する。既定は damage */
+    hitKind: BattleHitKind = 'damage'
   ): void {
     const actorRef = this.refOf(actor)
     const targetRef = this.refOf(target)
@@ -1480,7 +1552,7 @@ export class BattleEngine {
       hits: [
         {
           target: targetRef,
-          kind: 'damage',
+          kind: hitKind,
           amount: damage,
           hpBefore,
           hpAfter: target.hp,
@@ -2014,6 +2086,15 @@ export interface SkillExecution {
   message?: string
   /** 予兆の文言（P2 #836）。使用時に `message` のあとへ出す。`{user}` は使った側の名前に置き換わる */
   telegraph?: string
+}
+
+/**
+ * 召喚 (#889) の引数。魔石（`[魔石]`）から `magicite.ts` の `toSummonExecution` で作る。特技と同じ書式の効果に、消費 MP（既定 0）を足したもの。
+ * `name` は召喚獣の表示名、`message` は召喚時の演出文（`{user}` は呼んだ側の名前）
+ */
+export interface SummonExecution extends SkillExecution {
+  /** 消費 MP（0 以上） */
+  mp: number
 }
 
 /** アイテム使用の引数 */

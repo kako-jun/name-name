@@ -499,6 +499,13 @@ export interface BattleEntity {
    * どれにも該当しなければ従来の `resist` を見る。通常攻撃は見ない（未対応）。無い敵は従来どおり
    */
   affinity?: BattleAffinity
+  /**
+   * 通常攻撃に加わる属性 (#889)。装備中の魔石の召喚獣の属性（と防具などの属性。合計 2 つまで）を戦闘への組み立て時に写す（`magicite.ts`）。
+   * 通常攻撃が敵の `affinity` で判定される（複数属性は `resolveAffinityMulti`）。無い（または空）者の通常攻撃は従来どおり相性を見ない
+   */
+  attackElements?: string[]
+  /** このバトルで召喚済み (#889)。1 人が 1 バトルで 1 回だけ召喚できる（`BattleEngine.selectSummon` が立てる）。戦闘ごとに作り直すので持ち越さない */
+  summoned?: boolean
   /** 状態異常（毒/麻痺/混乱/眠り など）。値は残ターン。`[状態]` で宣言した id はエンジンが手番ごとに減らす (#870) */
   status?: Partial<Record<string, number>>
   /**

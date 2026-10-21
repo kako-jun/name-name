@@ -16,7 +16,7 @@ HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
 HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言したランダム合成の件数（既定 2000）
 ```
 
-環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,loot`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
+環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,magicite,loot`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
 
 ## 何を動かすか
 
@@ -30,6 +30,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 | `status-matrix`  | 宣言した状態 (#870。毒・もうどく〈上限超えの固定幅〉・睡眠・昏睡〈99 ターン〉・混乱・被ダメージ解除・死の宣告・ゾンビ・回復/ダメージだけの反転・全部入り・不正値だらけの宣言) × 付与の持続（省略・1・99・100 超）× 確率（省略・50・99）× 相手の耐性（属性欄に状態 id と `death`）× ターン制/ATB の 2 種。味方が呪文で敵単体・自分・味方全体・敵全体へ、敵が特技で味方全体へ付け、決着まで進める |
 | `random-status`  | seed 固定。状態を常に宣言し、付与・解除・反転の対象になる効果を中心に、能力値・HP・耐性・最初から持つ状態・`statusChanceBonus`・敵の台本・操作列をランダムに組む                                                                                                                                                                                                                                |
 | `damage-condition` | 敵の条件 `ダメージ…` (#871。奇数・偶数・倍数・閾値・ちょうど・桁数・併用・不正な書式) × 書く場所（`行動:` `反撃:` `死亡時:`）× 受けるダメージの元（固定の奇数・偶数、乱数幅、複数ヒット、極大、相性が絡む属性ダメージ、即死、回復）× 相手の相性 × 敵の HP（小さい=倒れる）× ターン制/ATB。味方が呪文を 3 回撃ってから攻撃する。先に 8（偶数）を当ててから同じ呪文を受ける並び（`/after8`）も含み、MISS・吸収・表示 0 のあとに前回の値が残らないことを `damage-memory` が見る |
+| `magicite` | 魔石 (#889): 魔石の組み合わせ（装備なし・1 属性・同属性 2 つ=吸収・水と火・3 つ装備〈層は合計 2 まで〉・魔石と防具の層の超過・防具の属性は耐性だけで攻撃に乗らない・枠超過・枠 0・負の極端なボーナス・不正なボーナスの書式）× 召喚の中身（単体・全体・回復・複数ヒット・即死・状態・極大・不正な書式・演出のみ・有料・MP 不足）× 敵の相性（水・火の単独と複数属性）× 敵の HP（小さい=倒れる）× 操作（召喚 2 連打 = 1 人 1 バトル 1 回の制限 / 通常攻撃のあとに召喚）× ターン制/ATB。味方 a の魔石は本物の `resolveMemberMagicite` で組み立て、敵は味方全員へ水属性の特技を使う（味方の耐性も動く） |
 | `loot` | ぬすむ・ドロップ (#831)。効果 `steal`（確率・レア率・枠・回数・ぶんどるの通常値と境界値・不正値） × 対象の範囲 × 敵の戦利品の宣言（なし・通常枠・レア枠・両方・確率と個数・盗める回数 3 / 無限・不正な行だらけ） × 使い手の加算（なし・+50・極大・極小） × 敵の HP（倒れる・倒れない） × ターン制/ATB。味方が 4 回ぬすんでから攻撃し、勝利時のドロップまで見る。不変条件は `loot-invariant` |
 
 エンジンの `opts.rng` に seed 固定の LCG を注入するので、同じシナリオは必ず同じ結果になる。操作列のあと、決着まで「攻撃 / ATB を進める」を最大 500 回押して、膠着していないかも見る。
@@ -48,7 +49,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 - 凄い組み合わせ（強すぎ・許容）: **閾値を決めていない**。壊れでないシナリオの指標（1 行動の合計ダメージ・HP の減少量・回復量・ヒット数・バフ累積値）の上位を数値のまま並べるだけ。残す/潰すは人間が判断する。
 - ダメージ上限違反は `damage` のヒットの量が 9999 超（`battleLimits.MAX_DAMAGE`）かで見る。`heal` は上限が未決のため検出せず、候補（`maxHealAmount`）に回す。`damage_full`（即死）は上限の対象外（hit に `instantDeath` が付き、数字は出ない）で、検出から除外し、HP 減少は `maxHpDrop` の候補に並ぶ。
 
-検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `damage-memory`（`ダメージ…` を書いた敵の記憶が直前の味方の行動の表示数字と食い違う。MISS・吸収のあとに前回値が残る等）/ `loot-invariant`（`state.loot` が宣言した品だけか・レア枠の印が合うか・敵ごとに盗めた回数が上限内か・個数が 1〜99 の整数か・ドロップが勝利のときだけでぬすんだ品より後か）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
+検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `damage-memory`（`ダメージ…` を書いた敵の記憶が直前の味方の行動の表示数字と食い違う。MISS・吸収のあとに前回値が残る等）/ `magicite-invariant`（魔石 #889: 通常攻撃の属性が 2 つを超える・召喚済みの印が真でない・同じ味方が 1 バトルで 2 回召喚した・召喚したのに印が立たない）/ `loot-invariant`（`state.loot` が宣言した品だけか・レア枠の印が合うか・敵ごとに盗めた回数が上限内か・個数が 1〜99 の整数か・ドロップが勝利のときだけでぬすんだ品より後か）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
 
 無限ループは「1 操作の乱数消費が 200 万回を超える」で止めて検出する（乱数を使わないループや同期的な無限ループまでは拾えない）。検出できないもの: エンジンが残すイベントは直近 30 件（`EVENT_MAX`）なので、1 操作で 30 件を超えて増えた分のヒットは検査されない。
 

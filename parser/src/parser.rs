@@ -4886,6 +4886,118 @@ expire: 戦闘不能
     }
 
     #[test]
+    fn magicite_block_parses_and_round_trips() {
+        // [魔石] (#889): 名前必須、属性は正規化・重複排除・最大2つ、ボーナスは生文字列、空の値は未指定
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[魔石 sea]
+名前: 日本海の石
+召喚獣: 日本海の召喚獣
+属性: ＷＡＴＥＲ, water, Ice
+対象: 相手全体
+消費MP: 6
+効果: damage 20..30 type=water
+メッセージ: {user}は 波を よびだした！
+装備時: hp+20, def+3
+成長: hp+2
+装備可: hero, ally
+[/魔石]
+
+[魔石 plain]
+名前: ただの石
+属性:
+装備時:
+[/魔石]
+
+[魔石 noname]
+属性: fire
+[/魔石]
+
+[魔石 many]
+名前: たくさん
+属性: fire, ice, wind, 無属性
+[/魔石]
+
+[パーティ hero]
+名前: 主人公
+HP: 30
+ATK: 5
+DEF: 3
+AGI: 4
+魔石: sea, plain
+魔石: sea，many
+魔石枠: 2
+[/パーティ]
+
+[パーティ none]
+名前: なし
+HP: 1
+ATK: 1
+DEF: 1
+AGI: 1
+魔石枠: 0
+[/パーティ]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let stones: Vec<&MagiciteDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Magicite(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stones.len(), 3, "名前の無いブロックは破棄される");
+        let sea = stones[0];
+        assert_eq!(sea.id, "sea");
+        assert_eq!(sea.summon.as_deref(), Some("日本海の召喚獣"));
+        assert_eq!(sea.elements, vec!["water", "ice"]);
+        assert_eq!(sea.target, "相手全体");
+        assert_eq!(sea.mp, 6);
+        assert_eq!(sea.effect.as_deref(), Some("damage 20..30 type=water"));
+        assert_eq!(sea.equip_bonus.as_deref(), Some("hp+20, def+3"));
+        assert_eq!(sea.growth.as_deref(), Some("hp+2"));
+        assert_eq!(
+            sea.equippable_by.as_deref(),
+            Some(&["hero".to_string(), "ally".to_string()][..])
+        );
+        let plain = stones[1];
+        assert!(plain.elements.is_empty(), "空の属性は未指定");
+        assert_eq!(plain.equip_bonus, None, "空の値は未指定");
+        assert_eq!(plain.target, "相手単体", "対象の既定は相手単体");
+        assert_eq!(plain.mp, 0);
+        assert_eq!(plain.equippable_by, None);
+        assert_eq!(
+            stones[2].elements,
+            vec!["fire", "ice"],
+            "属性は最大2つ・無属性は書けない"
+        );
+        let members: Vec<&PartyMemberDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PartyMember(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            members[0].magicites.as_deref(),
+            Some(&["sea".to_string(), "plain".to_string(), "many".to_string()][..]),
+            "複数行・全角カンマ・重複排除"
+        );
+        assert_eq!(members[0].magicite_slots, Some(2));
+        assert_eq!(members[1].magicites, None);
+        assert_eq!(members[1].magicite_slots, Some(0), "枠 0 は有効な指定");
+        // 出力して読み直しても同じ
+        let doc2 = parse(&crate::emitter::emit(&doc));
+        assert_eq!(*events, doc2.chapters[0].scenes[0].events);
+    }
+
+    #[test]
     fn english_keys_are_accepted() {
         let input = r#"---
 engine: name-name

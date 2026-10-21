@@ -1096,6 +1096,12 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         out.push_str(&format!("わざ: {a}\n"));
                     }
                 }
+                if let Some(m) = &p.magicites {
+                    out.push_str(&format!("魔石: {}\n", m.join(", ")));
+                }
+                if let Some(n) = p.magicite_slots {
+                    out.push_str(&format!("魔石枠: {n}\n"));
+                }
                 out.push_str("[/パーティ]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1139,6 +1145,43 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     out.push_str(&format!("予兆: {t}\n"));
                 }
                 out.push_str("[/特技]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Magicite(mg) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[魔石 {}]\n", mg.id));
+                out.push_str(&format!("名前: {}\n", mg.name));
+                if let Some(s) = &mg.summon {
+                    out.push_str(&format!("召喚獣: {s}\n"));
+                }
+                if !mg.elements.is_empty() {
+                    out.push_str(&format!("属性: {}\n", mg.elements.join(", ")));
+                }
+                out.push_str(&format!("対象: {}\n", mg.target));
+                if mg.mp > 0 {
+                    out.push_str(&format!("消費MP: {}\n", mg.mp));
+                }
+                if let Some(e) = &mg.effect {
+                    out.push_str(&format!("効果: {e}\n"));
+                }
+                if let Some(b) = &mg.builtin {
+                    out.push_str(&format!("builtin: {b}\n"));
+                }
+                if let Some(m) = &mg.message {
+                    out.push_str(&format!("メッセージ: {m}\n"));
+                }
+                if let Some(v) = &mg.equip_bonus {
+                    out.push_str(&format!("装備時: {v}\n"));
+                }
+                if let Some(v) = &mg.growth {
+                    out.push_str(&format!("成長: {v}\n"));
+                }
+                if let Some(v) = &mg.equippable_by {
+                    out.push_str(&format!("装備可: {}\n", v.join(", ")));
+                }
+                out.push_str("[/魔石]\n");
                 prev_was_dialog_or_text = false;
             }
             Event::Status(st) => {
@@ -2004,6 +2047,30 @@ mod tests {
         assert!(out.contains("メッセージ: {user}は 墨を はいた！"));
         assert!(!out.contains("MP:"));
         assert!(out.contains("[/特技]"));
+    }
+
+    #[test]
+    fn emits_magicite_block() {
+        let doc = make_doc_with_event(Event::Magicite(MagiciteDef {
+            id: "sea".to_string(),
+            name: "日本海の石".to_string(),
+            summon: Some("日本海の召喚獣".to_string()),
+            elements: vec!["water".to_string(), "ice".to_string()],
+            target: "相手全体".to_string(),
+            effect: Some("damage 20..30 type=water".to_string()),
+            builtin: None,
+            message: None,
+            mp: 6,
+            equip_bonus: Some("hp+20".to_string()),
+            growth: Some("hp+2".to_string()),
+            equippable_by: Some(vec!["hero".to_string(), "ally".to_string()]),
+        }));
+        let out = emit(&doc);
+        assert!(out
+            .contains("[魔石 sea]\n名前: 日本海の石\n召喚獣: 日本海の召喚獣\n属性: water, ice\n"));
+        assert!(out.contains("対象: 相手全体\n消費MP: 6\n効果: damage 20..30 type=water\n"));
+        assert!(out.contains("装備時: hp+20\n成長: hp+2\n装備可: hero, ally\n[/魔石]"));
+        assert!(!out.contains("メッセージ:"));
     }
 
     #[test]

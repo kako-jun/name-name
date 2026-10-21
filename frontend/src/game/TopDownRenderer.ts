@@ -117,6 +117,7 @@ export class TopDownRenderer {
   private masterSpells: Record<string, import('../types').SpellDef> | undefined
   private masterSkills: Record<string, import('../types').SkillDef> | undefined
   private masterStatuses: Record<string, import('../types').StatusDef> | undefined
+  private masterMagicites: Record<string, import('../types').MagiciteDef> | undefined
   /** アイテムマスター (#831)。戦利品のログの表示名だけに使う */
   private masterItems: Record<string, import('../types').ItemDef> | undefined
   /** 戦闘が終わって画面を畳んだ直後に結果（経験値・ゴールド・戦利品）を受け取るホスト側のハンドラ (#831) */
@@ -260,6 +261,7 @@ export class TopDownRenderer {
     this.masterSpells = gameData.spells
     this.masterSkills = gameData.skills
     this.masterStatuses = gameData.statuses
+    this.masterMagicites = gameData.magicites
     this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
     this.encounterCooldown = 0
@@ -729,6 +731,7 @@ export class TopDownRenderer {
           spells: this.masterSpells,
           skills: this.masterSkills,
           statuses: this.masterStatuses,
+          ...(this.masterMagicites ? { magicites: this.masterMagicites } : {}),
           items: this.masterItems,
         },
         enemies,

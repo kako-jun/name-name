@@ -210,6 +210,33 @@ describe('EventDisplay', () => {
     expect(container.textContent).not.toContain('行動=')
   })
 
+  it('renders Magicite master data (#889)', () => {
+    const { container } = renderEvent({
+      Magicite: {
+        id: 'sea',
+        name: 'うみの石',
+        summon: 'うみの召喚獣',
+        elements: ['water', 'ice'],
+        target: '相手全体',
+        mp: 4,
+        effect: 'damage 60..60 type=water',
+        equipBonus: 'hp+30',
+        growth: 'hp+3',
+        equippableBy: ['hero', 'ally'],
+      },
+    })
+    expect(container.textContent).toContain('魔石: うみの石')
+    expect(container.textContent).toContain('(id=sea)')
+    expect(container.textContent).toContain('召喚獣=うみの召喚獣 属性=water,ice 対象=相手全体')
+    expect(container.textContent).toContain('消費MP=4')
+    expect(container.textContent).toContain('装備時=hp+30 成長=hp+3 装備可=hero,ally')
+    // 省略できるものは出ない
+    const min = renderEvent({ Magicite: { id: 'm', name: 'ただ', target: '相手単体' } })
+    expect(min.container.textContent).not.toContain('属性=')
+    expect(min.container.textContent).not.toContain('消費MP')
+    expect(min.container.textContent).not.toContain('装備時=')
+  })
+
   it('renders PartyMember with learns', () => {
     const { container } = renderEvent({
       PartyMember: {

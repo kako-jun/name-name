@@ -1,0 +1,143 @@
+/**
+ * 戦闘画面サンプル (#749) の設定 JSON の魔石 (#889)。純粋関数のみ（ブラウザ API に触れない）。
+ *
+ * - `magicites`: `[魔石 id]` と同じキーの配列（id / name / summon / elements / target / effect / builtin / message / mp / equipBonus / growth / equippableBy）
+ * - `party[].magicites`（装備する魔石の id の配列）と `party[].magiciteSlots`（枠の数。既定 1）を読み、本編と同じ `magicite.ts` で
+ *   能力値・耐性・通常攻撃の属性を味方に反映し、候補窓の「しょうかん」の行を作る
+ */
+import type { MagiciteDef } from '../types'
+import type { BattleSummonEntry } from '../game/battleMenu'
+import { normalizeAttrId } from '../game/affinity'
+import { applyMemberMagicite, resolveMemberMagicite, summonEntries } from '../game/magicite'
+import type { BattleEntity } from '../game/spellDsl'
+
+type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string }
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function stringList(v: unknown): string[] | null {
+  if (!Array.isArray(v) || v.some((a) => typeof a !== 'string')) return null
+  return (v as string[]).map((a) => a.trim()).filter((a) => a !== '')
+}
+
+/** 設定 JSON の magicites を検証する。`id` と `name` は必須。parser と同じく属性は正規化・重複排除して最大 2 つ */
+export function parseMagicites(raw: unknown): ParseResult<Record<string, MagiciteDef>> {
+  if (raw === undefined) return { ok: true, value: {} }
+  if (!Array.isArray(raw)) return { ok: false, error: 'magicites は配列である必要があります' }
+  const out: Record<string, MagiciteDef> = {}
+  for (let i = 0; i < raw.length; i++) {
+    const r: unknown = raw[i]
+    const path = `magicites[${i}]`
+    if (!isRecord(r)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+    for (const f of ['id', 'name'] as const) {
+      if (typeof r[f] !== 'string' || r[f].trim() === '') {
+        return { ok: false, error: `${path}.${f} は空でない文字列である必要があります` }
+      }
+    }
+    for (const f of [
+      'summon',
+      'target',
+      'effect',
+      'builtin',
+      'message',
+      'equipBonus',
+      'growth',
+    ] as const) {
+      if (r[f] !== undefined && typeof r[f] !== 'string') {
+        return { ok: false, error: `${path}.${f} は文字列である必要があります` }
+      }
+    }
+    if (r.mp !== undefined && (typeof r.mp !== 'number' || !Number.isFinite(r.mp) || r.mp < 0)) {
+      return { ok: false, error: `${path}.mp は 0 以上の数値である必要があります` }
+    }
+    const elements: string[] = []
+    if (r.elements !== undefined) {
+      const list = stringList(r.elements)
+      if (!list) return { ok: false, error: `${path}.elements は文字列の配列である必要があります` }
+      for (const e of list) {
+        const id = normalizeAttrId(e)
+        if (id !== '' && id !== '無属性' && id !== 'none' && !elements.includes(id)) {
+          elements.push(id)
+        }
+      }
+      if (elements.length > 2) {
+        return { ok: false, error: `${path}.elements は最大 2 つまでです` }
+      }
+    }
+    let equippableBy: string[] | undefined
+    if (r.equippableBy !== undefined) {
+      const list = stringList(r.equippableBy)
+      if (!list)
+        return { ok: false, error: `${path}.equippableBy は文字列の配列である必要があります` }
+      if (list.length > 0) equippableBy = list
+    }
+    const text = (f: string): string | undefined => {
+      const v = r[f]
+      return typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+    }
+    const id = (r.id as string).trim()
+    out[id] = {
+      id,
+      name: (r.name as string).trim(),
+      ...(text('summon') !== undefined ? { summon: text('summon') } : {}),
+      ...(elements.length > 0 ? { elements } : {}),
+      target: text('target') ?? '相手単体',
+      ...(text('effect') !== undefined ? { effect: text('effect') } : {}),
+      ...(text('builtin') !== undefined ? { builtin: text('builtin') } : {}),
+      ...(text('message') !== undefined ? { message: text('message') } : {}),
+      ...(typeof r.mp === 'number' && r.mp > 0 ? { mp: Math.floor(r.mp) } : {}),
+      ...(text('equipBonus') !== undefined ? { equipBonus: text('equipBonus') } : {}),
+      ...(text('growth') !== undefined ? { growth: text('growth') } : {}),
+      ...(equippableBy ? { equippableBy } : {}),
+    }
+  }
+  return { ok: true, value: out }
+}
+
+/**
+ * 設定 JSON の `party[]` の `magicites` / `magiciteSlots` を、parse 済みの味方 `party`（同じ index）に反映する。
+ * 戻りは味方 id → 「しょうかん」の行。魔石を装備する味方がいなければ空。`rawParty` が配列でない（既定の味方）なら何もしない
+ */
+export function applyPartyMagicites(
+  rawParty: unknown,
+  party: BattleEntity[],
+  master: Record<string, MagiciteDef>
+): ParseResult<Record<string, BattleSummonEntry[]>> {
+  const summons: Record<string, BattleSummonEntry[]> = {}
+  if (!Array.isArray(rawParty)) return { ok: true, value: summons }
+  for (let i = 0; i < Math.min(rawParty.length, party.length); i++) {
+    const r: unknown = rawParty[i]
+    if (!isRecord(r) || (r.magicites === undefined && r.magiciteSlots === undefined)) continue
+    const path = `party[${i}]`
+    let ids: string[] | undefined
+    if (r.magicites !== undefined) {
+      ids = stringList(r.magicites) ?? undefined
+      if (!ids) return { ok: false, error: `${path}.magicites は文字列の配列である必要があります` }
+    }
+    let slots: number | undefined
+    if (r.magiciteSlots !== undefined) {
+      if (
+        typeof r.magiciteSlots !== 'number' ||
+        !Number.isInteger(r.magiciteSlots) ||
+        r.magiciteSlots < 0
+      ) {
+        return { ok: false, error: `${path}.magiciteSlots は 0 以上の整数である必要があります` }
+      }
+      slots = r.magiciteSlots
+    }
+    const entity = party[i]
+    const resolved = resolveMemberMagicite(
+      {
+        id: entity.id,
+        ...(ids ? { magicites: ids } : {}),
+        ...(slots !== undefined ? { magiciteSlots: slots } : {}),
+      },
+      { magicites: master }
+    )
+    applyMemberMagicite(entity, resolved)
+    if (resolved.stones.length > 0) summons[entity.id] = summonEntries(resolved.stones)
+  }
+  return { ok: true, value: summons }
+}

@@ -635,7 +635,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     commands = parseCommandIds((b.commands as string[]).join(','))
     if (!commands || commands.length !== (b.commands as string[]).length)
       return fail(
-        `battle.commands は attack / skill / spell / item / escape を重複なく並べてください: ${JSON.stringify(b.commands)}`
+        `battle.commands は attack / skill / summon / spell / item / escape を重複なく並べてください: ${JSON.stringify(b.commands)}`
       )
   }
   if (b.atb !== undefined && b.atb !== 'on' && b.atb !== 'off')
