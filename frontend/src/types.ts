@@ -194,6 +194,14 @@ export interface ItemDef {
   /** 宣言的効果 DSL（"heal 30" 等）。`builtin` と排他 */
   effect?: string
   builtin?: string
+  /** 装備している間だけ能力値に足す分 (#207。`装備時:` `atk+5, def+2`)。魔石の `equipBonus` と同じ書式・同じ解釈（`game/magicite.ts`） */
+  equipBonus?: string
+  /** 装備できる味方の id (#207)。省略は誰でも */
+  equippableBy?: string[]
+  /** 装備品が持つ属性防御 (#207。parser が小文字・半角に正規化・重複排除済み。最大 2 つ)。耐性の層に積まれる（魔石と合わせて 1 人 2 つまで）。通常攻撃の属性にはならない */
+  elements?: string[]
+  /** 装備すると「わざ」に現れる `[特技 id]` の id (#207。`わざ:` の行を書いた順)。特技マスターへの解決は runtime */
+  abilities?: string[]
 }
 
 /** パーティメンバー定義 (#175) */
@@ -221,6 +229,10 @@ export interface PartyMemberDef {
   magicites?: string[]
   /** 魔石を装備できる枠の数 (#889。`魔石枠:`)。省略は 1 */
   magiciteSlots?: number
+  /** 最初に装備している装備品 (#207)。`[アイテム id]` と `[魔石 id]` の id（`装備:` を書いた順。`魔石:` の後ろに続く）。解決・検査は runtime（`game/equipment.ts`） */
+  equipment?: string[]
+  /** 装備枠の種類の列 (#207。`装備枠: 武器, 防具`)。同じ種類を並べると複数枠。省略は 武器・防具・盾・兜 が各 1。種類の解釈は runtime */
+  equipmentSlots?: string[]
 }
 
 /**

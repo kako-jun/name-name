@@ -246,6 +246,10 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
           {i.price != null ? ` 価格=${i.price}` : ''}
           {i.effect ? ` 効果=${i.effect}` : ''}
           {i.builtin ? ` builtin=${i.builtin}` : ''}
+          {i.elements && i.elements.length > 0 ? ` 属性=${i.elements.join(',')}` : ''}
+          {i.equipBonus ? ` 装備時=${i.equipBonus}` : ''}
+          {i.equippableBy && i.equippableBy.length > 0 ? ` 装備可=${i.equippableBy.join(',')}` : ''}
+          {i.abilities && i.abilities.length > 0 ? ` わざ=${i.abilities.join(',')}` : ''}
         </div>
       </div>
     )
@@ -343,6 +347,10 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
           HP={p.hp} ATK={p.atk} DEF={p.def} AGI={p.agi}
           {p.mp ? ` MP=${p.mp}` : ''}
           {p.sprite ? ` sprite=${p.sprite}` : ''}
+          {p.equipment && p.equipment.length > 0 ? ` 装備=${p.equipment.join(',')}` : ''}
+          {p.equipmentSlots && p.equipmentSlots.length > 0
+            ? ` 装備枠=${p.equipmentSlots.join(',')}`
+            : ''}
         </div>
         {learns && <div className={`text-xs ml-4 ${meta}`}>習得: {learns}</div>}
       </div>

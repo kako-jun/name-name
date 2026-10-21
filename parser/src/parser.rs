@@ -4998,6 +4998,110 @@ AGI: 1
     }
 
     #[test]
+    fn parses_equipment_items_and_party_slots() {
+        // 装備品 (#207): `[アイテム]` の 装備時 / 装備可 / 属性 / わざ、`[パーティ]` の 装備: / 装備枠:
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[アイテム katana]
+名前: かたな
+種別: 武器
+装備時: atk+5
+装備可: hero，ally
+わざ: slash
+わざ: guard
+[/アイテム]
+
+[アイテム armor]
+名前: ふく
+種別: 防具
+属性: ＦＩＲＥ, fire, ice, wind, 無属性
+装備時:
+[/アイテム]
+
+[アイテム potion]
+名前: くすり
+種別: 回復
+効果: heal 10
+[/アイテム]
+
+[パーティ hero]
+名前: 主人公
+HP: 30
+ATK: 5
+DEF: 3
+AGI: 4
+装備: katana, armor
+装備: katana，sea
+装備枠: 武器, 防具, 防具
+[/パーティ]
+
+[パーティ none]
+名前: なし
+HP: 1
+ATK: 1
+DEF: 1
+AGI: 1
+[/パーティ]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let items: Vec<&ItemDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Item(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].equip_bonus.as_deref(), Some("atk+5"));
+        assert_eq!(
+            items[0].equippable_by.as_deref(),
+            Some(&["hero".to_string(), "ally".to_string()][..])
+        );
+        assert_eq!(
+            items[0].abilities.as_deref(),
+            Some(&["slash".to_string(), "guard".to_string()][..]),
+            "わざは複数行・書いた順"
+        );
+        assert!(items[0].elements.is_empty());
+        assert_eq!(
+            items[1].elements,
+            vec!["fire", "ice"],
+            "属性は正規化・重複排除・最大2つ・無属性は書けない"
+        );
+        assert_eq!(items[1].equip_bonus, None, "空の値は未指定");
+        assert_eq!(items[2].equip_bonus, None);
+        assert_eq!(items[2].equippable_by, None);
+        assert_eq!(items[2].abilities, None);
+        let members: Vec<&PartyMemberDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PartyMember(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            members[0].equipment.as_deref(),
+            Some(&["katana".to_string(), "armor".to_string(), "sea".to_string()][..]),
+            "複数行・全角カンマ・重複排除"
+        );
+        assert_eq!(
+            members[0].equipment_slots.as_deref(),
+            Some(&["武器".to_string(), "防具".to_string(), "防具".to_string()][..]),
+            "枠の種類は重複を残す（同じ種類を並べると複数枠）"
+        );
+        assert_eq!(members[1].equipment, None);
+        assert_eq!(members[1].equipment_slots, None);
+        let doc2 = parse(&crate::emitter::emit(&doc));
+        assert_eq!(*events, doc2.chapters[0].scenes[0].events);
+    }
+
+    #[test]
     fn english_keys_are_accepted() {
         let input = r#"---
 engine: name-name
