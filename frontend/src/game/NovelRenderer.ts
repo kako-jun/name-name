@@ -2890,8 +2890,8 @@ export class NovelRenderer {
     this.saveLoadOverlay.hide()
     this.backlogOverlay.hide()
     this.dialogBox.dispose()
-    // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放し、canvas 由来マスクテクスチャを
-    // 含む背景 entry を全て解放する (#250/#319)。
+    // GPU テクスチャのリーク防止: Assets.unload で内部キャッシュから解放し、背景 entry を全て解放する。
+    // マスク Sprite は破棄するが、共有 Texture はキャッシュなので残す (#250/#319/#791)。
     this.stage.release()
     // 先読み済み URL 集合もクリアする（リーク予防・#389）。
     this.preloadedUrls.clear()

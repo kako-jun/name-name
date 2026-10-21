@@ -510,7 +510,7 @@ export class BackgroundController {
     this.disposeBgMask(entry.mask)
   }
 
-  /** 背景 entry を全て破棄する（canvas 由来マスクテクスチャを含む #250/#319）。`destroy` からも呼ぶ。 */
+  /** 背景 entry を全て破棄する（マスク Sprite を含む。Texture は共有キャッシュなので残す #250/#319/#791）。`destroy` からも呼ぶ。 */
   clearBackgroundEntries(): void {
     this.stopBackgroundCrossfade()
     for (const entry of this.bgEntries) this.destroyBackgroundEntry(entry)

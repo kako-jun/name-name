@@ -6,6 +6,7 @@ import {
   normalizeBackgroundBrightness,
   type BackgroundHost,
 } from './BackgroundController'
+import { resetSharedEdgeFadeMasksForTest } from './edgeFadeMask'
 import { TimeController } from './TimeController'
 
 interface Entry {
@@ -310,6 +311,8 @@ describe('BackgroundController extraction contract (#828 7a)', () => {
   })
 
   describe('端フェードマスクの共有 Texture (#791)', () => {
+    afterEach(() => resetSharedEdgeFadeMasksForTest())
+
     type MaskEntry = Entry & { mask: Sprite | null }
     const maskOf = (inner: Internals, i: number) => (inner.bgEntries as MaskEntry[])[i].mask!
 
