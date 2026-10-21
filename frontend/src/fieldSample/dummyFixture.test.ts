@@ -34,12 +34,19 @@ describe('buildDummyFixture (#890)', () => {
 
   it('ワープ（野原⇄電車内）と、電車内の揺れ・景色・エンカウント (#864)', () => {
     const c = parsed()
-    expect(Object.keys(c.warps).sort()).toEqual(['toMeadow', 'toTrain'])
+    expect(Object.keys(c.warps).sort()).toEqual(['toMeadow', 'toRuin', 'toTrain'])
     expect(c.warps.toTrain.to).toBe('train')
     expect(c.warps.toMeadow.to).toBe('meadow')
     expect(c.scenes.train.shake).toBeDefined()
     expect(c.scenes.train.scroll).toBeDefined()
     expect(c.scenes.train.encounter?.groups.length).toBeGreaterThan(0)
+  })
+
+  it('条件付き通行 (#862): assist・companion・フラグを持つ（?fixture=dummy で橙の階段を試せる）', () => {
+    const c = parsed()
+    expect(c.assist).not.toBeNull()
+    expect(c.companion).not.toBeNull()
+    expect(Object.keys(c.flags)).toContain(c.assist!.requires[0])
   })
 
   it('parseConfig を通り、console.error / warn を出さない', () => {
