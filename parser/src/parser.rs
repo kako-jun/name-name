@@ -4919,6 +4919,22 @@ enemies: x
     }
 
     #[test]
+    fn battle_script_uses_only_first_enemy_line() {
+        // 敵: が複数行あっても最初の 1 行だけを使う（残りは警告して捨てる。警告はテスト中は出ない）
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: m\n\n[戦闘 two]\n敵: a\n敵: b\n[/戦闘]\n";
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let def = events
+            .iter()
+            .find_map(|e| match e {
+                Event::BattleScript(b) => Some(b),
+                _ => None,
+            })
+            .expect("battle script");
+        assert_eq!(def.enemies.as_deref(), Some("a"));
+    }
+
+    #[test]
     fn battle_script_header_requires_id() {
         // id が空の [戦闘 ] は捨てる（ヘッダとして成立しない）
         let input = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: m\n\n[戦闘 ]\n敵: x\n[/戦闘]\n";

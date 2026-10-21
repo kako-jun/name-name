@@ -728,10 +728,18 @@ fn build_battle_script_def(id: String, entries: &[(String, String)]) -> BattleSc
             ));
         }
     }
+    // `敵:` は 1 行だけ使う（複数体は `+` かカンマでつなぐ）。2 行目以降を黙って捨てない
+    let enemy_lines = collect_values(entries, &["敵", "enemies"]).unwrap_or_default();
+    if enemy_lines.len() > 1 {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [戦闘 {id}] の 敵: が {} 行ある。最初の 1 行だけ使い、残りは無視した（複数体は `+` かカンマでつなぐ）",
+            enemy_lines.len()
+        ));
+    }
     BattleScriptDef {
         id,
         name: lookup_master_string(entries, &["名前", "name"]).filter(|n| !n.is_empty()),
-        enemies: collect_values(entries, &["敵", "enemies"]).and_then(|v| v.into_iter().next()),
+        enemies: enemy_lines.into_iter().next(),
         party: collect_values(entries, &["味方", "party"]),
         rules,
     }

@@ -247,6 +247,7 @@ export class TopDownRenderer {
         spells: this.masterSpells,
         skills: this.masterSkills,
         statuses: this.masterStatuses,
+        ...(this.masterMagicites ? { magicites: this.masterMagicites } : {}),
         items: this.masterItems,
       },
       this.battleSettings.layout,

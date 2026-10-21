@@ -57,15 +57,15 @@ export interface DetectOptions {
   /** 宣言した状態の id (#870)。あれば、その id の残りターン・倒れた者に残っていないか・status イベントの形を検査する */
   statusIds?: readonly string[]
   /**
-   * 敵ごとの戦利品の宣言 (#831)。キーは敵の id。あれば `BattleState.loot` を、宣言した品だけか・レア枠の印が合うか・
-   * 盗めた回数が上限内か・個数が 1〜`MAX_LOOT_COUNT` の整数か・ドロップが勝利のときだけかで検査する。
-   * 宣言の無いシナリオは検査しない（`state.loot` が積まれていたら宣言が無い敵の品として違反）
-   */
-  /**
    * 脚本制御の戦闘 (#741) のシナリオ。あれば `BattleState.script` の整合（ターン・発動済み・参戦・逃走・hpFloor）を検査し、
    * 脚本が決めた勝敗（生存者と食い違う victory / defeat、interrupted）を許す。`ruleCount` は解釈済みルールの数（発動済み index の範囲）
    */
   script?: { ruleCount: number }
+  /**
+   * 敵ごとの戦利品の宣言 (#831)。キーは敵の id。あれば `BattleState.loot` を、宣言した品だけか・レア枠の印が合うか・
+   * 盗めた回数が上限内か・個数が 1〜`MAX_LOOT_COUNT` の整数か・ドロップが勝利のときだけかで検査する。
+   * 宣言の無いシナリオは検査しない（`state.loot` が積まれていたら宣言が無い敵の品として違反）
+   */
   loot?: Readonly<
     Record<
       string,

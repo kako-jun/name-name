@@ -205,3 +205,63 @@ describe('[戦闘: id] を含む [イベント] の再生', () => {
     expect(shown).toEqual(['おわり'])
   })
 })
+
+describe('魔石 (#889) は脚本の戦闘でも効く', () => {
+  const SEA = {
+    id: 'sea',
+    name: 'うみのませき',
+    summon: 'うみの主',
+    elements: ['water'],
+    target: '相手全体',
+    effect: 'damage 30..30 type=water',
+    equipBonus: 'atk+50, hp+30',
+  }
+  const withSea = (rules: string[]): Partial<RPGProject> => ({
+    magicites: { sea: SEA },
+    party: {
+      hero: { ...PARTY.hero, def: 0, magicites: ['sea'] },
+      ally: { ...PARTY.ally, def: 0, magicites: ['sea'] },
+    },
+    battleScripts: {
+      duel: { id: 'duel', enemies: 'boss', party: ['hero'], rules },
+    },
+  })
+  type Member = { id: string; atk: number; maxHp: number; attackElements?: string[] }
+  const members = (i: Internals): Member[] =>
+    (i.battleScreen!.engine.getState() as unknown as { party: Member[] }).party
+  const menuSummons = (i: Internals): Record<string, unknown[]> =>
+    (i.battleScreen!.opts as unknown as { menu?: { summons?: Record<string, unknown[]> } }).menu
+      ?.summons ?? {}
+
+  it('味方: で選んだ初期編成にも、装備ボーナス・属性・召喚が効く', () => {
+    const i = field(withSea(['台詞: 条件=開始 文=はじまり']))
+    void i.startScriptedBattle('duel')
+    const [hero] = members(i)
+    expect(hero.id).toBe('hero')
+    expect(hero.atk).toBe(PARTY.hero.atk + 50)
+    expect(hero.maxHp).toBe(PARTY.hero.hp + 30)
+    expect(hero.attackElements).toEqual(['water'])
+    expect(menuSummons(i).hero).toHaveLength(1)
+  })
+
+  it('途中参戦する味方にも、装備ボーナス・属性・召喚が効く', () => {
+    const i = field(withSea(['参戦: 条件=開始 対象=ally']))
+    void i.startScriptedBattle('duel')
+    const ally = members(i).find((m) => m.id === 'ally')
+    expect(ally).toBeDefined()
+    expect(ally!.atk).toBe(PARTY.ally.atk + 50)
+    expect(ally!.maxHp).toBe(PARTY.ally.hp + 30)
+    expect(ally!.attackElements).toEqual(['water'])
+    expect(menuSummons(i).ally).toHaveLength(1)
+  })
+
+  it('魔石を宣言しないゲームは従来どおり（ボーナス・属性なし）', () => {
+    const i = field({
+      battleScripts: { duel: { id: 'duel', enemies: 'boss', party: ['hero'], rules: [] } },
+    })
+    void i.startScriptedBattle('duel')
+    const [hero] = members(i)
+    expect(hero.atk).toBe(PARTY.hero.atk)
+    expect(hero.attackElements).toBeUndefined()
+  })
+})

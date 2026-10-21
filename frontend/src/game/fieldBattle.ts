@@ -423,7 +423,7 @@ export function buildScriptedBattle(
     const initial = partyIds.length > 0 ? partyIds : orderedPartyKeys(roster)
     for (const id of orderedPartyKeys(roster)) {
       if (initial.includes(id)) continue
-      joiners[id] = partyDefToBattleEntity(roster.party[id], layout)
+      joiners[id] = partyDefToBattleEntity(roster.party[id], layout, roster)
     }
   }
   return {
@@ -490,7 +490,9 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   // 初期編成: 脚本制御の戦闘が `味方:` を宣言していればその順（front は先頭 1 人だけ）。なければ従来どおり
   const scriptedParty =
     scripted && scripted.partyIds.length > 0
-      ? scripted.partyIds.map((id) => partyDefToBattleEntity(roster.party[id], settings.layout))
+      ? scripted.partyIds.map((id) =>
+          partyDefToBattleEntity(roster.party[id], settings.layout, roster)
+        )
       : null
   const party = scriptedParty
     ? settings.layout === 'side'

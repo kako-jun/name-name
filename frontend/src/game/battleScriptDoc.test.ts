@@ -96,6 +96,13 @@ describe('markdown から戦闘まで', () => {
     expect(start?.commands[1]).toEqual({ type: 'Battle', id: 'noto' })
   })
 
+  it('[戦闘：id]（全角コロン）は [戦闘: id] として受け付けない（コマンドにならず、ただの文）', async () => {
+    const doc = await parseMarkdown(MD.replace('[戦闘: noto]', '[戦闘：noto]'))
+    const project = rpgProjectFromDoc(doc)
+    const start = project?.rpgEvents?.find((e) => e.name === 'start')
+    expect(start?.commands.some((c: EventCommand) => c.type === 'Battle')).toBe(false)
+  })
+
   it('[戦闘] を 1 つも書かないゲームの RPGProject には battleScripts が付かない', async () => {
     const doc = await parseMarkdown(MD.replace(/\[戦闘 noto\][\s\S]*?\[\/戦闘\]/, ''))
     expect(rpgProjectFromDoc(doc)?.battleScripts).toBeUndefined()

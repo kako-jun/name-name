@@ -792,3 +792,87 @@ describe('決定論と保存', () => {
     expect(r?.script).toEqual({ id: 'test', flags: { won: true }, next: 'after' })
   })
 })
+
+describe('復活: 付与= の宣言チェック', () => {
+  it('復活: 付与= に宣言していない状態を書くと、警告して付けない（生のキーを書き込まない）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const e = make(
+      [hero({ hp: 1, maxHp: 20 })],
+      [boss({ atk: 50 })],
+      ['復活: 対象=hero 付与=ghost_state'],
+      {
+        statuses: { blessing: { id: 'blessing', name: 'かご', duration: '3' } },
+      }
+    )
+    e.selectAttack()
+    expect(e.getState().party[0].hp).toBe(20)
+    expect(e.getState().party[0].status ?? {}).toEqual({})
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('ghost_state'))).toHaveLength(1)
+    warn.mockRestore()
+  })
+})
+
+describe('逃げた敵は倒れたことにならない（死亡時・反撃・蘇生）', () => {
+  const burst: SkillExecution = { name: 'じばく', target: '相手全体', effect: 'damage 40..40' }
+  const cell = (over: Partial<BattleEntity> = {}) =>
+    ent({
+      id: 'cell',
+      name: 'さいぼう',
+      hp: 3,
+      maxHp: 3,
+      atk: 0,
+      exp: 100,
+      gold: 100,
+      onDeath: '候補=burst',
+      ...over,
+    })
+  const guard = () =>
+    ent({ id: 'guard', name: 'ばんにん', hp: 40, maxHp: 40, atk: 0, exp: 5, gold: 5 })
+  const setup = () =>
+    make(
+      [hero({ hp: 100, maxHp: 100, atk: 3 })],
+      [guard(), cell()],
+      ['逃走: 条件=開始 対象=cell'],
+      {
+        skills: { burst },
+      }
+    )
+
+  it('逃げた敵は 死亡時: を発動しない（味方にダメージも出ない）', () => {
+    const e = setup()
+    expect(e.getState().script?.fled).toEqual([1])
+    e.selectAttack('guard')
+    e.selectAttack('guard')
+    const st = e.getState()
+    expect(st.log.join('\n')).not.toContain('じばく')
+    expect(st.events.some((ev) => ev.actor.side === 'enemy' && ev.actor.index === 1)).toBe(false)
+    expect(st.party[0].hp).toBeGreaterThan(60) // ばんにんの通常攻撃（最低 1）だけ。じばく 40 は受けない
+  })
+
+  it('逃げた敵の経験値・ゴールドは入らず、倒れた（逃げていない）敵の分は入る', () => {
+    const e = setup()
+    for (let i = 0; i < 30 && !e.isOver(); i++) e.selectAttack('guard')
+    expect(e.getState().phase).toBe('victory')
+    expect(e.getResult()).toMatchObject({ exp: 5, gold: 5 })
+  })
+
+  it('敵の蘇生の特技でも、逃げた敵は戻らない（明示の対象にも、倒れた仲間の既定にもならない）', () => {
+    const e = setup()
+    const revive: SkillExecution = { name: 'いのり', target: '仲間単体', effect: 'revive' }
+    e.performSkill({ side: 'enemy', index: 0 }, revive, { side: 'enemy', index: 1 })
+    expect(e.getState().enemies[1].hp).toBe(0)
+    e.performSkill({ side: 'enemy', index: 0 }, revive)
+    expect(e.getState().enemies[1].hp).toBe(0)
+  })
+
+  it('倒れた敵（逃げていない）は従来どおり蘇生でき、死亡時: も発動する', () => {
+    const e = make([hero({ hp: 100, maxHp: 100, atk: 99 })], [guard(), cell()], [], {
+      skills: { burst },
+    })
+    e.selectAttack('cell')
+    expect(e.getState().log.join('\n')).toContain('じばく')
+    const revive: SkillExecution = { name: 'いのり', target: '仲間単体', effect: 'revive' }
+    e.performSkill({ side: 'enemy', index: 0 }, revive, { side: 'enemy', index: 1 })
+    expect(e.getState().enemies[1].hp).toBeGreaterThan(0)
+  })
+})

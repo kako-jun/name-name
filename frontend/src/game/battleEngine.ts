@@ -348,6 +348,7 @@ export class BattleEngine {
   private scriptRunning = false
   /** 参戦できなかった id の警告を出した印（1 戦闘に 1 度だけ） */
   private warnedJoiners = new Set<string>()
+  private warnedStatuses = new Set<string>()
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -401,7 +402,13 @@ export class BattleEngine {
     if (opts.script) {
       const parsed = parseBattleScript(opts.script.rules)
       this.scriptParsed = parsed
-      this.state.script = { id: opts.script.id, turn: 0, fired: [], joined: [], fled: [] }
+      this.state.script = {
+        id: opts.script.id,
+        turn: 0,
+        fired: [],
+        joined: [],
+        fled: [],
+      }
       for (const [id, member] of Object.entries(opts.script.joiners ?? {})) {
         safeAssign(this.joiners, id, JSON.parse(JSON.stringify(member)) as BattleEntity)
       }
@@ -1586,9 +1593,12 @@ export class BattleEngine {
       case '仲間単体': {
         const revive = isReviveEntry('spell', skill)
         // 倒れた使い手本人（死亡時の行動 #837）は、明示した対象にも既定の「最初の倒れた仲間」にもならない
-        const candidates = excludeUser ? allies.filter((e) => e !== user) : allies
+        // 脚本で逃げた敵 (#741) は戦闘から消えている。蘇生の対象にも、最初の倒れた仲間にもならない
+        const candidates = allies.filter(
+          (e) => !(excludeUser && e === user) && !this.isFledEnemy(e)
+        )
         const p0 = explicit(allies, side)
-        const picked = p0 && !(excludeUser && p0 === user) ? p0 : undefined
+        const picked = p0 && !(excludeUser && p0 === user) && !this.isFledEnemy(p0) ? p0 : undefined
         const t =
           picked && (picked.hp > 0 || revive)
             ? picked
@@ -1965,15 +1975,30 @@ export class BattleEngine {
     if (a.mp) m.mp = resolveAmount(a.mp, m.maxMp, 0)
     if (a.status) {
       const ruleId = resolveRuleId(this.statusRules, a.status)
-      const rule = ruleId !== null ? this.statusRules[ruleId] : undefined
-      if (!m.status) m.status = {}
-      safeAssign(m.status, ruleId ?? a.status, rule ? rule.duration : 1)
-      this.noteStatus(m, m, ruleId ?? a.status)
+      if (ruleId === null) {
+        // 宣言（[状態]）の無い id は付けない（生のキーを書き込まない）。警告は id ごとに 1 度だけ
+        if (!this.warnedStatuses.has(a.status)) {
+          this.warnedStatuses.add(a.status)
+          console.warn(
+            `[name-name] 復活の 付与= '${a.status}' は [状態] に宣言が無い（付与は無視した）`
+          )
+        }
+      } else {
+        if (!m.status) m.status = {}
+        safeAssign(m.status, ruleId, this.statusRules[ruleId].duration)
+        this.noteStatus(m, m, ruleId)
+      }
     }
     const ref: BattleActorRef = { side: 'party', index: idx }
     this.emitScriptLine(undefined, a.text ?? `${m.name} は ふっかつした！`, [
       { target: ref, kind: 'heal', amount: m.hp - hpBefore, hpBefore, hpAfter: m.hp },
     ])
+  }
+
+  /** 脚本の `逃走` で戦闘から消えた敵か (#741) */
+  private isFledEnemy(e: BattleEntity): boolean {
+    const fled = this.state.script?.fled
+    return !!fled && fled.some((i) => this.state.enemies[i] === e)
   }
 
   /** 逃走: 生きている敵のうち id が一致する先頭 1 体を、戦闘から消す（HP 0・経験値・ドロップなし。倒したことにはしない） */
@@ -1985,6 +2010,9 @@ export class BattleEngine {
     delete enemy.hpFloor
     const st = this.state.script as ScriptState
     st.fled.push(idx)
+    // 倒れたのではないので、死亡時: は発動しない（resolveDeaths の対象から外す）
+    const memory = this.state.enemyMemory
+    if (memory) memory[idx].died = true
     const atb = this.state.atb
     if (atb) atb.enemyGauge[idx] = 0
     this.emitScriptLine(undefined, text ?? `${enemy.name} は にげだした！`)

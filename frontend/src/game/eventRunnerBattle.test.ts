@@ -125,6 +125,8 @@ describe('Battle コマンド', () => {
     const { runner } = makeRunner({
       startBattle: () => {
         calls++
+        // 上限が外れて連鎖が止まらなくなっても、テストが固まらず `calls` の不一致として落ちるよう、余裕を超えたら戦闘を終えない
+        if (calls > MAX_BATTLE_BRANCH_DEPTH + 5) return new Promise<BattleResult | null>(() => {})
         return Promise.resolve(result('loop'))
       },
       findEvent: (n) => events[n],
