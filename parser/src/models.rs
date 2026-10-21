@@ -630,7 +630,7 @@ pub struct SkillDef {
     /// 予兆の文言（生文字列で透過。解釈は P2 #836）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegraph: Option<String>,
-    /// 使うと召喚獣の演出（登場・名前・想像の層）が付く (#750。`召喚獣id:`)。`[召喚獣 <id>]` の id。
+    /// 使うと召喚獣の演出（登場・名前・想像の層）が付く (#750。`召喚獣id:`)。`[召喚獣 <id>]` の id。味方の「わざ」で使う（敵は召喚獣を呼ばない。敵が使うと演出は付かない）。
     /// 特技が自分の `効果`/`builtin` を持たないときは、召喚獣の中身を使う。解決は runtime（`summons.ts`）。JSON / TS 側のキーは `summonId`。
     #[serde(default, rename = "summonId", skip_serializing_if = "Option::is_none")]
     pub summon_id: Option<String>,
@@ -638,7 +638,7 @@ pub struct SkillDef {
 
 /// 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。
 ///
-/// 魔石（`[魔石]`）の石そのものとは独立した「召喚獣の像」の宣言で、魔石や特技（敵が呼ぶ場合を含む）が `召喚獣id:` で参照する。
+/// 魔石（`[魔石]`）の石そのものとは独立した「召喚獣の像」の宣言で、魔石や味方の「わざ」（特技）が `召喚獣id:` で参照する。敵は召喚獣を呼ばない。
 /// 画像・効果音は素材の相対パスを透過するだけ（素材の有無・読み込みは runtime 側。素材が無いときは名前の札だけで演出する）。
 /// `想像` は「主人公の想像の層」として、登場の間だけ戦場を沈める演出を付けるか（既定 false）。
 /// `target` / `effect` / `builtin` / `message` は参照する魔石・特技が自分の `効果`/`builtin` を持たないときの既定（`[特技]` と同書式）。
@@ -655,7 +655,7 @@ pub struct SummonDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     /// 絵が向いている向き（`向き:` 右 / 左。parser が `right` / `left` に正規化。読めない値は警告して None）。省略は右向き（runtime の既定）。
-    /// 画面は召喚獣が相手陣営を向くよう、絵の向きと呼んだ側（サイドビューは敵が左・味方が右）から左右反転の要否を決める。
+    /// 画面は召喚獣が相手陣営を向くよう、絵の向き（呼ぶのは味方＝サイドビューの右側）から左右反転の要否を決める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facing: Option<String>,
     /// 登場の効果音（`効果音:`。素材の相対パスを透過。再生はホストの領分）。

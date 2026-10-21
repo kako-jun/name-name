@@ -30,26 +30,29 @@ describe('summonScenarios: 生成', () => {
   const all = summonScenarios()
 
   it('決定的で、id は一意・`summon/` で始まり、JSON にそのまま書き出せる', () => {
-    expect(all.length).toBeGreaterThan(150)
+    expect(all.length).toBe(128)
     expect(summonScenarios().map((s) => s.id)).toEqual(all.map((s) => s.id))
     expect(new Set(all.map((s) => s.id)).size).toBe(all.length)
     expect(all.every((s) => s.id.startsWith('summon/'))).toBe(true)
     for (const s of all.filter((_, i) => i % 13 === 0)) expect(clone(s)).toEqual(s)
   })
 
-  it('演出の変種（なし・名前だけ・絵つき・左向き）× 呼び方（召喚・わざ・敵の特技）× ターン制/ATB を含む', () => {
+  it('演出の変種（なし・名前だけ・絵つき・左向き）× 呼び方（召喚・わざ。敵は呼ばない）× ターン制/ATB を含む', () => {
     for (const n of ['no-cue', 'name-only', 'full', 'faces-left']) {
       expect(
         all.some((s) => s.id.split('/')[2] === n),
         n
       ).toBe(true)
     }
-    for (const how of ['summon', 'ability', 'enemy-skill']) {
+    for (const how of ['summon', 'ability']) {
       expect(
         all.some((s) => s.id.split('/')[3] === how),
         how
       ).toBe(true)
     }
+    // 敵は召喚獣を呼ばない: 敵の特技で呼ぶシナリオは作らない
+    expect(all.some((s) => s.id.split('/')[3] === 'enemy-skill')).toBe(false)
+    expect(all.every((s) => s.skills === undefined)).toBe(true)
     expect(all.some((s) => s.atb)).toBe(true)
     expect(all.some((s) => !s.atb)).toBe(true)
     // 対照（演出なし）は cue を持たない
@@ -120,6 +123,11 @@ describe('checkState: 召喚獣の演出の不変条件 (summon-invariant)', () 
   it('宣言していない id・skill 以外のイベントは検出する', () => {
     expect(kindsWith([ev({ summon: { ...cue, id: 'zz' } })], ['b1'])).toContain('summon-invariant')
     expect(kindsWith([ev({ kind: 'attack', summon: cue })], ['b1'])).toContain('summon-invariant')
+  })
+  it('敵の行動に summon が付いたら（宣言した id でも）検出する', () => {
+    const enemyEv = ev({ actor: { side: 'enemy', index: 0 }, summon: cue })
+    expect(kindsWith([enemyEv], ['b1'])).toContain('summon-invariant')
+    expect(kindsWith([ev({ summon: cue })], ['b1'])).toEqual([])
   })
   it('名前・id が空、画像/効果音が空、想像が偽、向きが left 以外は検出する', () => {
     const bad = (c: unknown): ViolationKind[] =>

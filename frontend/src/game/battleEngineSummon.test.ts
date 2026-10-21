@@ -92,21 +92,23 @@ describe('召喚: 行動の記録に summon が載る', () => {
   })
 })
 
-describe('特技: 演出の元つきの特技（敵が呼ぶ場合を含む）', () => {
+describe('特技: 演出の元つきの特技（味方の「わざ」だけ。敵は呼ばない）', () => {
   const call: SkillExecution = {
     name: 'みなものよびごえ',
     target: '相手全体',
     effect: 'damage 12..12 type=water',
     cue,
   }
-  it('敵が使うと enemy 側の skill イベントに summon が付く', () => {
+  it('敵が使っても enemy 側の skill イベントに summon は付かない（普通の特技として動く）', () => {
     const enemy = foe('boss', { hp: 999, maxHp: 999, actions: ['候補=call'], agi: 99 })
     const engine = new BattleEngine([ent('a')], [enemy], { rng: () => 0, skills: { call } })
     engine.selectAttack()
     const ev = engine.getState().events.find((e) => e.kind === 'skill')
     expect(ev?.actor.side).toBe('enemy')
-    expect(ev?.summon).toEqual(cue)
+    expect(ev?.summon).toBeUndefined()
+    expect('summon' in (ev ?? {})).toBe(false)
     expect(ev?.label).toBe('みなものよびごえ')
+    expect(ev?.hits.length).toBeGreaterThan(0)
   })
   it('味方の「わざ」でも付く', () => {
     const engine = new BattleEngine([ent('a')], [foe('s')], { rng: () => 0 })

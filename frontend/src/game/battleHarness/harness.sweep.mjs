@@ -34,8 +34,8 @@ const FAMILIES = [
   'script',
   'random-script',
   'equipment',
-  'summon',
   'job',
+  'summon',
 ]
 
 /** 入力の誤りは黙って無視せずエラーで止める（NaN で 0 件になる、未知の族名が素通りする、を防ぐ） */

@@ -1,12 +1,12 @@
 /**
  * BattleScreen の召喚獣の登場 (#750): 再生中の行動に summon があるあいだ名前の札・絵・想像の層のかぶせを出し、終われば隠す。
- * 絵が無い／読めないときは名前の札だけ。呼んだ側が味方なら右向きの絵を反転する（敵が呼ぶなら反転しない。左向きの絵は逆）。
+ * 絵が無い／読めないときは名前の札だけ。呼ぶのは味方だけで、右向きの絵は反転して左向きに出す（左向きの絵は反転しない）。敵は呼ばない。
  * 時間の計算そのものは battleMotionSummon.test.ts。
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { Texture, type Container, type Graphics, type Sprite, type Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
-import { BattleEngine, type SkillExecution, type SummonExecution } from './battleEngine'
+import { BattleEngine, type SummonExecution } from './battleEngine'
 import type { SummonCue } from '../types'
 import type { BattleEntity } from './spellDsl'
 import { SUMMON_APPEAR_MS, SUMMON_HOLD_MS, SUMMON_MS } from './battleMotion'
@@ -33,6 +33,7 @@ interface Internals {
   summonVeil: Graphics | null
   summonSprite: Sprite | null
   summonPlate: Text | null
+  summonPlateFloorY: number
   summonTextures: Map<string, Texture | null>
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
@@ -149,35 +150,41 @@ describe('BattleScreen 召喚獣の登場', () => {
     expect(I(left.s).summonSprite!.scale.x).toBeGreaterThan(0)
   })
 
-  it('敵が呼ぶ右向きの絵は反転しない。左向きの絵は反転する', () => {
-    const skill = (c: SummonCue): SkillExecution => ({
-      name: 'よびごえ',
-      target: '相手全体',
-      effect: 'damage 1..1',
-      cue: c,
-    })
-    for (const [faces, wantNegative] of [
-      [undefined, false],
-      ['left', true],
-    ] as const) {
-      const engine = new BattleEngine(
-        [entity('hero')],
-        [entity('boss', { atk: 0, agi: 99, actions: ['候補=call'] })],
-        {
-          rng: () => 0.5,
-          skills: { call: skill({ ...cue, image: 'a.webp', ...(faces ? { faces } : {}) }) },
-        }
-      )
-      const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
-      created.push(s)
-      I(s).summonTextures.set('a.webp', Texture.WHITE)
-      engine.selectAttack()
-      sync(s)
-      run(s, 1300) // 先に味方の通常攻撃（約 740ms）、その後に敵の召喚の登場
-      const sp = I(s).summonSprite
-      expect(sp, String(faces)).not.toBeNull()
-      expect(sp!.scale.x < 0, String(faces)).toBe(wantNegative)
-    }
+  it('敵の特技に cue があっても、敵は召喚獣を呼ばない（絵も札も出ない）', () => {
+    const engine = new BattleEngine(
+      [entity('hero')],
+      [entity('boss', { atk: 0, agi: 99, actions: ['候補=call'] })],
+      {
+        rng: () => 0.5,
+        skills: {
+          call: {
+            name: 'よびごえ',
+            target: '相手全体',
+            effect: 'damage 1..1',
+            cue: { ...cue, image: 'a.webp' },
+          },
+        },
+      }
+    )
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    created.push(s)
+    I(s).summonTextures.set('a.webp', Texture.WHITE)
+    engine.selectAttack()
+    sync(s)
+    run(s, 1300)
+    expect(I(s).summonSprite).toBeNull()
+    expect(I(s).summonLayer!.visible).toBe(false)
+  })
+
+  it('名前の札は下の窓（コマンド・味方）の上端より上に収まる', () => {
+    const { s, engine } = setup()
+    I(s).summonTextures.set('tall.webp', Texture.WHITE)
+    engine.selectSummon(call({ ...cue, image: 'tall.webp' }))
+    sync(s)
+    run(s, SUMMON_APPEAR_MS + 50)
+    const plate = I(s).summonPlate!
+    expect(I(s).summonPlateFloorY).toBeLessThan(450)
+    expect(plate.y + Number(plate.style.fontSize) * 1.5).toBeLessThanOrEqual(I(s).summonPlateFloorY)
   })
 
   it('登場の始まりに 1 回だけ onSummonCue を呼ぶ（tick を重ねても増えない）', () => {

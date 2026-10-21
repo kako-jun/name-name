@@ -177,7 +177,7 @@ export interface BattleActionEvent {
    */
   omen?: string
   /**
-   * 召喚獣の演出 (#750)。召喚 (#889) と、`召喚獣id` を持つ特技（敵が呼ぶ場合を含む）の行動に付く。画面が登場の演出（絵・名前の札・想像の層・効果音）に使う
+   * 召喚獣の演出 (#750)。召喚 (#889) と、味方の「わざ」（`召喚獣id` を持つ特技）の行動に付く。敵の行動には付かない。画面が登場の演出（絵・名前の札・想像の層・効果音）に使う
    * 事実で、エンジンの状態・乱数には効かない。`召喚獣id` を使わない戦闘・他の行動のイベントには付かない（従来と同じ形）
    */
   summon?: SummonCue
@@ -1184,8 +1184,11 @@ export class BattleEngine {
     const applies = o !== undefined && (o === '仲間単体' || o === '自分' || isOpponentSingle)
     // 予兆: 行の `予兆=` が特技の `予兆` より優先（P2 #836）
     const omen = choice.omen !== undefined ? choice.omen : skill.telegraph
+    // 敵は召喚獣を呼ばない (#750): 特技に `cue` が付いていても敵の行動の記録には載せない（召喚獣の演出は味方の召喚・「わざ」だけ）
+    const enemySkill: SkillExecution = { ...skill }
+    delete enemySkill.cue
     const exec = {
-      ...skill,
+      ...enemySkill,
       ...(applies ? { target: o } : {}),
       ...(omen !== undefined ? { telegraph: omen } : {}),
     }
@@ -2415,7 +2418,7 @@ export interface SkillExecution {
   message?: string
   /** 予兆の文言（P2 #836）。使用時に `message` のあとへ出す。`{user}` は使った側の名前に置き換わる */
   telegraph?: string
-  /** 召喚獣の演出 (#750)。あれば行動の記録（`BattleActionEvent.summon`）に載る。魔石 (#889) の召喚と、`召喚獣id` を持つ特技が付ける */
+  /** 召喚獣の演出 (#750)。あれば行動の記録（`BattleActionEvent.summon`）に載る。魔石 (#889) の召喚と、味方の「わざ」（`召喚獣id` を持つ特技）が付ける。敵が使う特技の `cue` は無視される */
   cue?: SummonCue
 }
 

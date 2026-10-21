@@ -2,7 +2,7 @@
  * 戦闘画面サンプル (#749) の設定 JSON の魔石 (#889)。純粋関数のみ（ブラウザ API に触れない）。
  *
  * - `magicites`: `[魔石 id]` と同じキーの配列（id / name / summon / summonId / elements / target / effect / builtin / message / mp / equipBonus / growth / equippableBy）
- * - `beasts`: `[召喚獣 id]` と同じキーの配列（id / name / elements / image / se / imaginary / target / effect / builtin / message）(#750)。魔石・特技の `summonId` が引く
+ * - `beasts`: `[召喚獣 id]` と同じキーの配列（id / name / elements / image / facing / se / imaginary / target / effect / builtin / message）(#750)。魔石・味方の「わざ」（特技）の `summonId` が引く
  * - `party[].magicites`（装備する魔石の id の配列）と `party[].magiciteSlots`（枠の数。既定 1）の味方への反映は、装備 (#207) と一緒に `configEquipment.ts` が行う
  */
 import type { MagiciteDef, SummonDef } from '../types'

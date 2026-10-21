@@ -1100,7 +1100,7 @@ const SUMMON_BODIES: ReadonlyArray<{ name: string; target: string; effect?: stri
 ]
 
 /**
- * 召喚獣の演出 (#750): 演出（なし・名前だけ・絵つき・左向き）× 呼び方（味方の召喚 / 味方のわざ / 敵の特技）× 効果 × 敵の HP × ターン制/ATB。
+ * 召喚獣の演出 (#750): 演出（なし・名前だけ・絵つき・左向き）× 呼び方（味方の召喚 / 味方のわざ。敵は召喚獣を呼ばない）× 効果 × 敵の HP × ターン制/ATB。
  * 演出つきの行動の記録に `summon` が付くこと（宣言した id だけ・`skill` のイベントだけ）、演出を宣言しないシナリオ（対照）と、
  * 他の全ての族のイベントに `summon` が付かないこと（旧挙動不変）を `summon-invariant` で見る。召喚は 1 バトル 1 回の制限も従来どおり（`magicite-invariant`）
  */
@@ -1109,7 +1109,7 @@ export function summonScenarios(): Scenario[] {
   const tick: Op = { t: 'tick', ms: 3000 }
   for (const atb of [false, true]) {
     for (const cv of SUMMON_CUES) {
-      for (const how of ['summon', 'ability', 'enemy-skill'] as const) {
+      for (const how of ['summon', 'ability'] as const) {
         for (const body of SUMMON_BODIES) {
           for (const hv of [30, 900]) {
             const exec = {
@@ -1121,9 +1121,7 @@ export function summonScenarios(): Scenario[] {
             const ops: Op[] =
               how === 'summon'
                 ? [{ t: 'summon', m: 0 }, tick, { t: 'summon', m: 0 }, tick, ATK]
-                : how === 'ability'
-                  ? [{ t: 'ability', k: 0 }, tick, { t: 'ability', k: 0 }, tick, ATK]
-                  : [ATK, tick, ATK, tick, ATK]
+                : [{ t: 'ability', k: 0 }, tick, { t: 'ability', k: 0 }, tick, ATK]
             out.push({
               id: `summon/${atb ? 'atb' : 'turn'}/${cv.name}/${how}/${body.name}/hp${hv}`,
               seed: 110_000 + out.length,
@@ -1131,17 +1129,8 @@ export function summonScenarios(): Scenario[] {
                 entity('a', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 }),
                 entity('b', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 }),
               ],
-              enemies: [
-                foe('s', {
-                  hp: hv,
-                  maxHp: hv,
-                  agi: 9,
-                  ...(how === 'enemy-skill' ? { actions: ['候補=call'] } : {}),
-                }),
-                foe('t', { hp: 500, maxHp: 500 }),
-              ],
+              enemies: [foe('s', { hp: hv, maxHp: hv, agi: 9 }), foe('t', { hp: 500, maxHp: 500 })],
               atb: atb ? { mode: 'active' } : undefined,
-              skills: how === 'enemy-skill' ? { call: { ...exec } } : undefined,
               spells: [],
               items: [],
               ...(how === 'summon' ? { summons: [{ ...exec, mp: 0 }] } : {}),

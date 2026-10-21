@@ -316,14 +316,10 @@ function collectMetrics(m: Metrics, events: readonly BattleActionEvent[]): void 
   }
 }
 
-/** シナリオが宣言した召喚獣の演出（特技・召喚・わざの `cue`）の id (#750)。1 つも無ければ空（検出器は `summon` が付いたら違反にする） */
+/** シナリオが宣言した召喚獣の演出（召喚・わざの `cue`。敵は召喚獣を呼ばないので敵の特技は数えない）の id (#750)。1 つも無ければ空（検出器は `summon` が付いたら違反にする） */
 function summonCueDeclarations(scenario: Scenario): Pick<DetectOptions, 'summonCueIds'> {
   const ids = new Set<string>()
-  const lists = [
-    ...Object.values(scenario.skills ?? {}),
-    ...(scenario.summons ?? []),
-    ...(scenario.abilities ?? []),
-  ]
+  const lists = [...(scenario.summons ?? []), ...(scenario.abilities ?? [])]
   for (const e of lists) if (e.cue) ids.add(e.cue.id)
   return ids.size > 0 ? { summonCueIds: [...ids] } : {}
 }

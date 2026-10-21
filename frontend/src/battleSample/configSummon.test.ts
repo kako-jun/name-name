@@ -90,7 +90,7 @@ describe('summonId の引き当て', () => {
     expect(r.value.summons.hero[0]).toMatchObject({ name: 'うみの主', cue: { id: 'S1' } })
     expect(r.value.party[0].attackElements).toEqual(['water'])
   })
-  it('特技: 効果が無ければ召喚獣の中身を使い cue が付く。特技の表示名は特技のまま。敵が使える', () => {
+  it('特技: 効果が無ければ召喚獣の中身を使い cue が付く。特技の表示名は特技のまま（味方の「わざ」で使う）', () => {
     const r = parseConfig(
       {
         party: [HERO],
@@ -112,6 +112,23 @@ describe('summonId の引き当て', () => {
     })
     expect(r.value.skills.hit).not.toHaveProperty('cue')
     expect(r.value.skills.hit).not.toHaveProperty('summonId')
+  })
+  it('味方の「わざ」の行（party[].abilities）にも cue が残る（サンプルでも味方は召喚獣を呼べる）', () => {
+    const r = parseConfig(
+      {
+        party: [{ ...HERO, abilities: ['call'] }],
+        skills: [{ id: 'call', name: 'よびごえ', summonId: 'S1' }],
+        beasts: [BEAST],
+      },
+      BASE
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.abilities.hero[0]).toMatchObject({
+      id: 'call',
+      name: 'よびごえ',
+      cue: { id: 'S1' },
+    })
   })
   it('宣言の無い summonId は警告して無視（cue なし・継承なし）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -155,11 +172,10 @@ describe('サンプル summon.json', () => {
     })
     expect(c.magicites['gate-stone'].cue?.imaginary).toBeUndefined()
     expect(c.magicites['plain-stone']).not.toHaveProperty('cue')
-    expect(c.skills['call-flood'].cue?.id).toBe('flood')
     expect(c.skills.swing).not.toHaveProperty('cue')
   })
 
-  it('実エンジンで召喚（味方）と、敵の初手の召喚獣が演出つきの記録になる', () => {
+  it('実エンジンで召喚（味方）が演出つきの記録になり、敵は召喚獣を呼ばない', () => {
     const r = parseConfigText(summonSample, 'https://example.com/battle-sample/summon.json')
     if (!r.ok) throw new Error(r.error)
     const view = initialView(r.value)
@@ -173,9 +189,10 @@ describe('サンプル summon.json', () => {
     const evs = engine.getState().events
     const mine = evs.find((e) => e.actor.side === 'party' && e.kind === 'skill')
     expect(mine?.summon).toMatchObject({ id: 'sea', imaginary: true })
-    // 敵の初手は召喚獣を呼ぶ特技（条件=初手）
-    const theirs = evs.find((e) => e.actor.side === 'enemy' && e.kind === 'skill')
-    expect(theirs?.summon).toMatchObject({ id: 'flood' })
-    expect(theirs?.label).toBe('おおみずをよぶ')
+    // 敵は召喚獣を呼ばない: 敵の記録に summon は付かない
+    engine.selectAttack()
+    expect(
+      engine.getState().events.filter((e) => e.actor.side === 'enemy' && e.summon !== undefined)
+    ).toEqual([])
   })
 })

@@ -173,6 +173,10 @@ function checkSummonCue(push: Push, ev: BattleActionEvent, opts: DetectOptions):
   const cue: unknown = ev.summon
   if (cue === undefined) return
   const w = `event#${ev.seq}.summon`
+  // 敵は召喚獣を呼ばない (#750): 敵側の行動に付いたら、経路によらず違反（敵の特技の cue 外し忘れを捕まえる）
+  if (ev.actor.side === 'enemy') {
+    push('summon-invariant', `${w}: 敵の行動に付いた（敵は召喚獣を呼ばない）`)
+  }
   if (!opts.summonCueIds) {
     push('summon-invariant', `${w}: 召喚獣の演出を宣言していないシナリオに付いた`)
     return

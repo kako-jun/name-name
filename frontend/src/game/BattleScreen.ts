@@ -226,10 +226,10 @@ const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
 /** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
-/** 「選択中」の印 ▼（アクスタ頭上の白い下向き三角）の塗りと縁。形・大きさは computeSelectMarkTriangle (#805) */
 /** 想像の層 (#750) のかぶせの色（暗い寒色）と、最も濃いときの不透明度 */
 const SUMMON_VEIL_COLOR = 0x0a1230
 const SUMMON_VEIL_ALPHA = 0.62
+/** 「選択中」の印 ▼（アクスタ頭上の白い下向き三角）の塗りと縁。形・大きさは computeSelectMarkTriangle (#805) */
 const SELECT_MARK_FILL = 0xffffff
 const SELECT_MARK_OUTLINE = 0x000000
 // MP_COLOR は HP/MP バー UI 実装時（戦闘 Phase 2、#175 と同時想定）に追加する
@@ -552,6 +552,8 @@ export class BattleScreen extends Container {
   /** FF 式メッセージ窓の言葉と、窓（ログ帯）の矩形。layoutSide が更新 */
   private messageText: PixiText | null = null
   private messageRect = { x: 0, y: 0, w: 0, h: 0 }
+  /** 召喚獣の名前の札の下端の限度 y (#750)。下パネル（コマンド・味方の窓）の上端。札の層は窓の奥なので、これより下へは置かない */
+  private summonPlateFloorY = Number.POSITIVE_INFINITY
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
@@ -1674,6 +1676,7 @@ export class BattleScreen extends Container {
       if (this.presentation === 'ff') text.visible = false
     }
     this.messageRect = { x: L.log.x, y: L.log.y, w: L.log.w, h: L.log.h }
+    this.summonPlateFloorY = Math.min(L.command.y, L.status.y)
 
     // 敵・味方スプライト
     for (let i = 0; i < this.enemyViews.length; i++) {
@@ -2638,8 +2641,7 @@ export class BattleScreen extends Container {
       veil.rect(0, 0, w, h).fill({ color: SUMMON_VEIL_COLOR })
     }
     veil.alpha = cue.imaginary ? s.veil * SUMMON_VEIL_ALPHA : 0
-    // 絵（読めていれば）。呼んだ側が相手陣営を向くよう反転: 味方は右側にいて左の敵へ向く、敵は左側にいて右の味方へ向く。
-    // 絵は右向きが既定（`faces: 'left'` の絵は逆）なので、味方が呼ぶ右向きの絵・敵が呼ぶ左向きの絵を反転する
+    // 絵（読めていれば）。呼ぶのは味方（右側にいて左の敵へ向く）なので、右向きが既定の絵（`faces: 'left'` の絵は逆）は反転して左向きにする
     const path = cue.image
     let tex: Texture | null | undefined
     if (path) {
@@ -2662,7 +2664,8 @@ export class BattleScreen extends Container {
       }
       const fit = Math.min((w * 0.62) / tex.width, (h * 0.5) / tex.height)
       const faceRight = cue.faces !== 'left'
-      const flip = active.event.actor.side === 'party' ? faceRight : !faceRight
+      // 召喚獣を呼ぶのは味方だけ（敵は呼ばない）。呼んだ側が左の敵へ向くよう、右向きの絵は反転する
+      const flip = active.event.actor.side === 'party' && faceRight
       sp.scale.set(flip ? -fit : fit, fit)
       const cy = h * 0.38 - s.rise * h
       sp.position.set(centerX, cy)
@@ -2673,7 +2676,10 @@ export class BattleScreen extends Container {
       this.summonSprite.visible = false
     }
     plate.text = cue.name
-    plate.style.fontSize = Math.max(18, Math.round(h * 0.05))
+    const fontSize = Math.max(18, Math.round(h * 0.05))
+    plate.style.fontSize = fontSize
+    // 札の下端が下の窓（コマンド・味方）に隠れないよう、上端を窓の上端より札の高さぶん上に抑える（高さは字の大きさと縁取りから見積もる。測ると描画環境に依る）
+    plateY = Math.min(plateY, this.summonPlateFloorY - Math.ceil(fontSize * 1.5) - 4)
     plate.position.set(centerX, plateY)
     plate.alpha = s.alpha
   }

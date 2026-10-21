@@ -22,25 +22,26 @@
       "facing": "right",
       "target": "相手単体",
       "effect": "damage 90..90 type=fire"
-    },
-    {
-      "id": "flood",
-      "name": "おおみずの主",
-      "elements": ["water"],
-      "image": "summon-wave.svg",
-      "imaginary": true,
-      "target": "相手全体",
-      "effect": "damage 25..25 type=water",
-      "message": "{user}の 足もとから 水が せりあがる！"
     }
   ],
   "magicites": [
-    { "id": "sea-stone", "name": "うみの石", "summonId": "sea", "equipBonus": "hp+30", "growth": "hp+3" },
+    {
+      "id": "sea-stone",
+      "name": "うみの石",
+      "summonId": "sea",
+      "equipBonus": "hp+30",
+      "growth": "hp+3"
+    },
     { "id": "gate-stone", "name": "もんの石", "summonId": "gate", "mp": 5, "equipBonus": "atk+6" },
-    { "id": "plain-stone", "name": "ただの石", "summon": "ふつうの召喚獣", "elements": ["ice"], "effect": "damage 40..40 type=ice" }
+    {
+      "id": "plain-stone",
+      "name": "ただの石",
+      "summon": "ふつうの召喚獣",
+      "elements": ["ice"],
+      "effect": "damage 40..40 type=ice"
+    }
   ],
   "skills": [
-    { "id": "call-flood", "name": "おおみずをよぶ", "summonId": "flood" },
     { "id": "swing", "name": "なぎはらい", "target": "相手全体", "effect": "damage 12..12" }
   ],
   "party": [
@@ -74,7 +75,7 @@
       "atk": 14,
       "def": 2,
       "agi": 9,
-      "actions": ["条件=初手 候補=call-flood", "順番=swing > こうげき"]
+      "actions": ["順番=swing > こうげき"]
     }
   ]
 }

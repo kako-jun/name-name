@@ -273,7 +273,7 @@ describe('戦闘まで通る（実パーサ経由）', () => {
     expect(ev?.hits[0]).toMatchObject({ kind: 'damage', amount: 30 })
   })
 
-  it('敵が cue つきの特技を使うと、enemy 側の記録に summon が付く', async () => {
+  it('敵が cue つきの特技を使っても、enemy 側の記録に summon は付かない（普通の特技として動く）', async () => {
     const p = rpgProjectFromDoc(withMap(await load()))!
     const boss = {
       id: 'boss',
@@ -306,7 +306,8 @@ describe('戦闘まで通る（実パーサ経由）', () => {
     })
     engine.selectAttack()
     const ev = engine.getState().events.find((e) => e.kind === 'skill' && e.actor.side === 'enemy')
-    expect(ev?.summon).toMatchObject({ id: 'S001', name: '日本海の召喚獣' })
+    expect(ev).toBeDefined()
+    expect(ev?.summon).toBeUndefined()
     expect(ev?.label).toBe('よびごえ')
     expect(ev?.hits[0]).toMatchObject({ kind: 'damage', amount: 30 })
   })
