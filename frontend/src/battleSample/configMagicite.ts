@@ -2,14 +2,10 @@
  * 戦闘画面サンプル (#749) の設定 JSON の魔石 (#889)。純粋関数のみ（ブラウザ API に触れない）。
  *
  * - `magicites`: `[魔石 id]` と同じキーの配列（id / name / summon / elements / target / effect / builtin / message / mp / equipBonus / growth / equippableBy）
- * - `party[].magicites`（装備する魔石の id の配列）と `party[].magiciteSlots`（枠の数。既定 1）を読み、本編と同じ `magicite.ts` で
- *   能力値・耐性・通常攻撃の属性を味方に反映し、候補窓の「しょうかん」の行を作る
+ * - `party[].magicites`（装備する魔石の id の配列）と `party[].magiciteSlots`（枠の数。既定 1）の味方への反映は、装備 (#207) と一緒に `configEquipment.ts` が行う
  */
 import type { MagiciteDef } from '../types'
-import type { BattleSummonEntry } from '../game/battleMenu'
 import { normalizeAttrId } from '../game/affinity'
-import { applyMemberMagicite, resolveMemberMagicite, summonEntries } from '../game/magicite'
-import type { BattleEntity } from '../game/spellDsl'
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -94,50 +90,4 @@ export function parseMagicites(raw: unknown): ParseResult<Record<string, Magicit
     }
   }
   return { ok: true, value: out }
-}
-
-/**
- * 設定 JSON の `party[]` の `magicites` / `magiciteSlots` を、parse 済みの味方 `party`（同じ index）に反映する。
- * 戻りは味方 id → 「しょうかん」の行。魔石を装備する味方がいなければ空。`rawParty` が配列でない（既定の味方）なら何もしない
- */
-export function applyPartyMagicites(
-  rawParty: unknown,
-  party: BattleEntity[],
-  master: Record<string, MagiciteDef>
-): ParseResult<Record<string, BattleSummonEntry[]>> {
-  const summons: Record<string, BattleSummonEntry[]> = {}
-  if (!Array.isArray(rawParty)) return { ok: true, value: summons }
-  for (let i = 0; i < Math.min(rawParty.length, party.length); i++) {
-    const r: unknown = rawParty[i]
-    if (!isRecord(r) || (r.magicites === undefined && r.magiciteSlots === undefined)) continue
-    const path = `party[${i}]`
-    let ids: string[] | undefined
-    if (r.magicites !== undefined) {
-      ids = stringList(r.magicites) ?? undefined
-      if (!ids) return { ok: false, error: `${path}.magicites は文字列の配列である必要があります` }
-    }
-    let slots: number | undefined
-    if (r.magiciteSlots !== undefined) {
-      if (
-        typeof r.magiciteSlots !== 'number' ||
-        !Number.isInteger(r.magiciteSlots) ||
-        r.magiciteSlots < 0
-      ) {
-        return { ok: false, error: `${path}.magiciteSlots は 0 以上の整数である必要があります` }
-      }
-      slots = r.magiciteSlots
-    }
-    const entity = party[i]
-    const resolved = resolveMemberMagicite(
-      {
-        id: entity.id,
-        ...(ids ? { magicites: ids } : {}),
-        ...(slots !== undefined ? { magiciteSlots: slots } : {}),
-      },
-      { magicites: master }
-    )
-    applyMemberMagicite(entity, resolved)
-    if (resolved.stones.length > 0) summons[entity.id] = summonEntries(resolved.stones)
-  }
-  return { ok: true, value: summons }
 }

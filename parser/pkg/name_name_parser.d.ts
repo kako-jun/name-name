@@ -36,6 +36,25 @@ export interface ItemDef {
      * 専用関数 ID（\"world_tree_drop\" / \"wing_of_chimera\" 等）。`effect` と排他。
      */
     builtin?: string;
+    /**
+     * 装備している間だけ能力値に足す分 (#207。`装備時:` `atk+5, def+2`)。`[魔石]` の `装備時` と同じ書式・同じ解釈器。
+     * 装備できる種別（`武器` / `防具` / `盾` / `兜`）のアイテムだけが意味を持つ。JSON / TS 側のキーは `equipBonus`。
+     */
+    equipBonus?: string;
+    /**
+     * 装備できる味方の id (#207。`装備可:` カンマ区切り)。省略は誰でも装備できる。JSON / TS 側のキーは `equippableBy`。
+     */
+    equippableBy?: string[];
+    /**
+     * 装備品が持つ属性防御 (#207。`属性:`。parser が小文字・半角に正規化済み・重複排除済み)。最大 2 つ。
+     * 持ち主の耐性の層に積まれ（魔石と合わせて 1 人 2 つまで）、通常攻撃の属性にはならない。
+     */
+    elements?: string[];
+    /**
+     * 装備すると戦闘コマンド「わざ」に現れる `[特技 id]` の id (#207。`わざ:` を複数行書ける)。
+     * 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
+     */
+    abilities?: string[];
 }
 
 /**
@@ -185,6 +204,16 @@ export interface PartyMemberDef {
      * 魔石を装備できる枠の数 (#889。`魔石枠:`)。省略は 1（runtime の既定）。JSON / TS 側のキーは `magiciteSlots`。
      */
     magiciteSlots?: number;
+    /**
+     * 最初に装備している装備品 (#207)。`[アイテム id]` と `[魔石 id]` の id を書いた順に持つ（`装備:` はカンマ区切り・複数行可）。
+     * `魔石:` と同じ入口で、どちらの宣言かは runtime が引き当てる。枠を超える分・装備できない種別・定義の無い id は runtime が警告して捨てる。
+     */
+    equipment?: string[];
+    /**
+     * 装備枠の種類の列 (#207。`装備枠: 武器, 防具`)。同じ種類を並べると複数枠。省略は runtime の既定（武器・防具・盾・兜 が各 1）。
+     * 値は生文字列のまま透過し、種類の別名の解釈は runtime 側。JSON / TS 側のキーは `equipmentSlots`。
+     */
+    equipmentSlots?: string[];
 }
 
 /**

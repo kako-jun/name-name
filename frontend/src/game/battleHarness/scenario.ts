@@ -19,6 +19,7 @@ export type Op =
   | { t: 'spell'; s: number; target?: string }
   | { t: 'item'; i: number; target?: string }
   | { t: 'summon'; m: number; target?: string }
+  | { t: 'ability'; k: number; target?: string }
   | { t: 'escape' }
   | { t: 'tick'; ms: number }
 
@@ -39,6 +40,8 @@ export interface Scenario {
   items: ItemExecution[]
   /** 召喚 (#889)。`Op` の `summon` の `m` が添字。無いシナリオは従来どおり */
   summons?: SummonExecution[]
+  /** 「わざ」(#873 / #207)。`Op` の `ability` の `k` が添字（装備中の武器のわざなど）。無いシナリオは従来どおり */
+  abilities?: SkillExecution[]
   ops: Op[]
   /** 脚本制御の戦闘 (#741 / #863)。`[戦闘]` の宣言（`rules`）と、途中参戦できる味方。無いシナリオは従来どおり */
   script?: { id: string; rules: string[]; joiners?: Record<string, BattleEntity> }
@@ -59,6 +62,8 @@ export interface HarnessEngine {
   selectItem(item: ItemExecution, targetId?: string): boolean
   /** 召喚 (#889)。召喚を使わない合成エンジンは持たなくてよい */
   selectSummon?(summon: SummonExecution, targetId?: string): boolean
+  /** 「わざ」(#873 / #207)。わざを使わない合成エンジンは持たなくてよい */
+  selectSkill?(skill: SkillExecution, targetId?: string): boolean
   selectEscape(): void
 }
 
@@ -97,6 +102,11 @@ export function applyOp(engine: HarnessEngine, scenario: Scenario, op: Op): void
     case 'summon': {
       const summon = scenario.summons?.[op.m]
       if (summon) engine.selectSummon?.(clone(summon), op.target)
+      return
+    }
+    case 'ability': {
+      const ability = scenario.abilities?.[op.k]
+      if (ability) engine.selectSkill?.(clone(ability), op.target)
       return
     }
     case 'escape':

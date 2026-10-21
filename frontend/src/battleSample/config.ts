@@ -3,10 +3,11 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { MagiciteDef, MonsterLoot, StatusDef } from '../types'
+import type { ItemDef, MagiciteDef, MonsterLoot, StatusDef } from '../types'
 import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
-import { applyPartyMagicites, parseMagicites } from './configMagicite'
+import { applyPartyEquipment, parseGear } from './configEquipment'
+import { parseMagicites } from './configMagicite'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -134,8 +135,12 @@ export interface BattleSampleConfig {
   commands: CommandId[] | undefined
   /** 魔石の宣言 (#889)。設定 JSON の `magicites`（`[魔石]` と同じキー）。`party[].magicites` が装備する。既定は空 */
   magicites: Record<string, MagiciteDef>
-  /** 魔石を装備した味方の「しょうかん」の行 (#889)（味方 id → 行）。`party[].magicites` から作る。既定は空 */
+  /** 魔石を装備した味方の「しょうかん」の行 (#889)（味方 id → 行）。`party[].magicites` / `party[].equipment` から作る。既定は空 */
   summons: Record<string, BattleSummonEntry[]>
+  /** 装備品の宣言 (#207)。設定 JSON の `gear`（`[アイテム]` の装備品と同じキー）。`party[].equipment` が装備する。既定は空 */
+  gear: Record<string, ItemDef>
+  /** 味方の「わざ」の行 (#207)（味方 id → 行）。`party[].abilities` と装備中の `gear` の `abilities` から、`skills` を引いて作る。既定は空 */
+  abilities: Record<string, BattleSkillEntry[]>
   /** 戦利品のログ用の表示名 (#831)。設定 JSON の `itemNames`（アイテム id → 名前）。既定は空（id をそのまま表示） */
   itemNames: Record<string, string>
   /**
@@ -259,6 +264,8 @@ export function defaultConfig(): BattleSampleConfig {
     commands: undefined,
     magicites: {},
     summons: {},
+    gear: {},
+    abilities: {},
     itemNames: {},
     script: null,
     party: defaultParty(),
@@ -756,6 +763,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!statuses.ok) return statuses
   const magicites = parseMagicites(raw.magicites)
   if (!magicites.ok) return magicites
+  const gear = parseGear(raw.gear)
+  if (!gear.ok) return gear
   let commands: CommandId[] | undefined
   if (raw.commands !== undefined) {
     if (!Array.isArray(raw.commands) || raw.commands.some((c) => typeof c !== 'string')) {
@@ -826,9 +835,13 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!party.ok) return party
   const enemies = parseEntities(raw.enemies, def.enemies, MAX_ENEMIES, baseUrl, 'enemies')
   if (!enemies.ok) return enemies
-  // 魔石 (#889): 装備する味方の能力値・耐性・通常攻撃の属性を反映し、「しょうかん」の行を作る
-  const summons = applyPartyMagicites(raw.party, party.value, magicites.value)
-  if (!summons.ok) return summons
+  // 魔石 (#889)・装備 (#207): 装備する味方の能力値・耐性・通常攻撃の属性を反映し、「しょうかん」「わざ」の行を作る
+  const equipped = applyPartyEquipment(raw.party, party.value, {
+    magicites: magicites.value,
+    gear: gear.value,
+    skills: skills.value,
+  })
+  if (!equipped.ok) return equipped
   return {
     ok: true,
     value: {
@@ -854,7 +867,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       statuses: statuses.value,
       commands,
       magicites: magicites.value,
-      summons: summons.value,
+      summons: equipped.value.summons,
+      gear: gear.value,
+      abilities: equipped.value.skills,
       itemNames,
       script: script.value,
       party: party.value,
@@ -1026,6 +1041,16 @@ export function buildBattleSetup(
           ])
         ),
         items: config.items.map((e) => ({ ...e })),
+        // わざ (#207): 固定のわざ（`party[].abilities`）と装備中の `gear` の `abilities` を持つ味方だけ。画面に出る味方の分だけ複製する
+        ...(party.some((p) => config.abilities[p.id])
+          ? {
+              skills: Object.fromEntries(
+                party
+                  .filter((p) => config.abilities[p.id])
+                  .map((p) => [p.id, config.abilities[p.id].map((e) => ({ ...e }))])
+              ),
+            }
+          : {}),
         // 召喚 (#889): 魔石を装備した味方だけ。画面に出る（渡す）味方の分だけ複製する
         ...(party.some((p) => config.summons[p.id])
           ? {

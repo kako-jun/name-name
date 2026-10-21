@@ -45,12 +45,8 @@ import type {
   BattleSpellEntry,
   BattleSummonEntry,
 } from './battleMenu'
-import {
-  applyMemberMagicite,
-  resolveMemberMagicite,
-  summonEntries,
-  type MagiciteRoster,
-} from './magicite'
+import { applyMemberMagicite, summonEntries } from './magicite'
+import { resolveMemberEquipment, type EquipmentRoster } from './equipment'
 import type { BattleTransitionMode } from './battleTransition'
 import type { FieldBattleTransition } from './fieldBattleTransition'
 
@@ -143,9 +139,10 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
 
 /**
  * 戦闘のパーティマスター（`party` と、その定義順 `order`）。
- * 魔石 (#889) の入力（`magicites` / `equipment` / `growth` / `extraElements`、`MagiciteRoster`）は、魔石を宣言しないゲームでは全部省略する
+ * 魔石 (#889) と装備 (#207) の入力（`magicites` / `equipment` / `growth` / `extraElements`、`EquipmentRoster`。アイテムのマスターは `items`）は、
+ * 魔石も装備品も宣言しないゲームでは全部省略する。`equipment` は魔石とアイテムの id を混在で受ける
  */
-export interface FieldBattleRoster extends MagiciteRoster {
+export interface FieldBattleRoster extends EquipmentRoster {
   party: Record<string, PartyMemberDef>
   /** 定義順。整数風 ID でも出現順を保つため別持ち */
   order: string[]
@@ -155,7 +152,7 @@ export interface FieldBattleRoster extends MagiciteRoster {
   skills?: Record<string, SkillDef>
   /** 状態のマスター (#870)。`[状態]` の宣言。あれば戦闘エンジンの `statuses` に渡す（継続ダメージ・行動不能・回復の反転などが働く） */
   statuses?: Record<string, StatusDef>
-  /** アイテムのマスター (#831)。戦利品のログ（「〇〇 を てにいれた！」）の表示名だけに使う。所持品の保存は持たない */
+  /** アイテムのマスター (#831)。戦利品のログ（「〇〇 を てにいれた！」）の表示名と、装備品 (#207) の宣言（`種別` が 武器 / 防具 / 盾 / 兜 のもの）に使う。所持品の保存は持たない */
   items?: Record<string, ItemDef>
 }
 
@@ -163,7 +160,8 @@ export interface FieldBattleRoster extends MagiciteRoster {
  * 戦闘の味方ごとの呪文の一覧（候補窓用 #204）。`PartyMemberDef.learns` のうち、そのメンバーのレベル（既定 1）以下で
  * 覚えるもので、呪文マスターに定義があるものを定義順に並べる。1 つもなければ undefined（候補窓は開かない）。
  * アイテムは所持品の仕組みが無いので渡さない（どうぐは従来どおり何も起きない）。
- * 「わざ」(#873) は `PartyMemberDef.abilities`（`わざ:` の特技 id）のうち特技マスター（`roster.skills`）にあるものを書いた順に作る。
+ * 「わざ」(#873) は `PartyMemberDef.abilities`（`わざ:` の特技 id）に、装備中のアイテムの `わざ` (#207) を重複なく後ろへ足した列のうち、
+ * 特技マスター（`roster.skills`）にあるものを並べて作る。
  */
 export function buildBattleMenuData(
   roster: FieldBattleRoster,
@@ -175,18 +173,21 @@ export function buildBattleMenuData(
   const summons: Record<string, BattleSummonEntry[]> = {}
   for (const member of party) {
     const def = roster.party[member.id]
+    // 装備 (#207 / #889): 装備中の魔石とアイテム。何も宣言していないゲームでは空
+    const equipped =
+      def && (roster.magicites || roster.items || roster.equipment)
+        ? resolveMemberEquipment(def, roster)
+        : undefined
     // 「しょうかん」(#889): 装備中の魔石の召喚獣を枠の順に並べる（呼び済みのグレー表示は画面が entity の `summoned` で決める）
-    if (def && roster.magicites) {
-      const stones = resolveMemberMagicite(def, roster).stones
-      if (stones.length > 0) {
-        summons[member.id] = summonEntries(stones)
-      }
+    if (equipped && roster.magicites && equipped.stones.length > 0) {
+      summons[member.id] = summonEntries(equipped.stones)
     }
-    // 「わざ」(#873): `わざ:` の特技 id のうち、特技マスターに定義があるものを書いた順に並べる（MP なし）
-    if (def?.abilities && roster.skills) {
+    // 「わざ」(#873): `わざ:` の特技 id と、装備中のアイテムの `わざ` (#207) のうち、特技マスターに定義があるものを並べる（MP なし）
+    const abilityIds = [...(def?.abilities ?? []), ...(equipped?.abilities ?? [])]
+    if (abilityIds.length > 0 && roster.skills) {
       const sm = roster.skills
       const sl: BattleSkillEntry[] = []
-      for (const id of def.abilities) {
+      for (const id of abilityIds) {
         const sk = Object.prototype.hasOwnProperty.call(sm, id) ? sm[id] : undefined
         if (!sk || sl.some((e) => e.id === sk.id)) continue
         sl.push({
@@ -233,8 +234,8 @@ export function buildBattleMenuData(
 export function partyDefToBattleEntity(
   def: PartyMemberDef,
   layout: BattleLayoutMode,
-  /** 魔石 (#889) の入力。省略・魔石を使わない味方は従来と同一の `BattleEntity`（キーも増えない） */
-  magicite?: MagiciteRoster
+  /** 魔石 (#889) と装備 (#207) の入力。省略・何も装備しない味方は従来と同一の `BattleEntity`（キーも増えない） */
+  magicite?: EquipmentRoster
 ): BattleEntity {
   const entity: BattleEntity = {
     id: def.id,
@@ -252,7 +253,7 @@ export function partyDefToBattleEntity(
       ? { row: 'back' as const }
       : {}),
   }
-  if (magicite) applyMemberMagicite(entity, resolveMemberMagicite(def, magicite))
+  if (magicite) applyMemberMagicite(entity, resolveMemberEquipment(def, magicite))
   return entity
 }
 

@@ -1060,6 +1060,20 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(b) = &it.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
+                if !it.elements.is_empty() {
+                    out.push_str(&format!("属性: {}\n", it.elements.join(", ")));
+                }
+                if let Some(v) = &it.equip_bonus {
+                    out.push_str(&format!("装備時: {v}\n"));
+                }
+                if let Some(v) = &it.equippable_by {
+                    out.push_str(&format!("装備可: {}\n", v.join(", ")));
+                }
+                if let Some(abilities) = &it.abilities {
+                    for a in abilities {
+                        out.push_str(&format!("わざ: {a}\n"));
+                    }
+                }
                 out.push_str("[/アイテム]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1101,6 +1115,12 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(n) = p.magicite_slots {
                     out.push_str(&format!("魔石枠: {n}\n"));
+                }
+                if let Some(e) = &p.equipment {
+                    out.push_str(&format!("装備: {}\n", e.join(", ")));
+                }
+                if let Some(e) = &p.equipment_slots {
+                    out.push_str(&format!("装備枠: {}\n", e.join(", ")));
                 }
                 out.push_str("[/パーティ]\n");
                 prev_was_dialog_or_text = false;
@@ -2025,6 +2045,10 @@ mod tests {
             price: Some(8),
             effect: Some("heal 30".to_string()),
             builtin: None,
+            equip_bonus: None,
+            equippable_by: None,
+            elements: vec![],
+            abilities: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[アイテム やくそう]"));
@@ -2033,6 +2057,26 @@ mod tests {
         assert!(out.contains("価格: 8"));
         assert!(out.contains("効果: heal 30"));
         assert!(out.contains("[/アイテム]"));
+    }
+
+    #[test]
+    fn emits_equipment_item_block() {
+        let doc = make_doc_with_event(Event::Item(ItemDef {
+            id: "katana".to_string(),
+            name: "かたな".to_string(),
+            kind: "武器".to_string(),
+            price: None,
+            effect: None,
+            builtin: None,
+            equip_bonus: Some("atk+5".to_string()),
+            equippable_by: Some(vec!["hero".to_string(), "ally".to_string()]),
+            elements: vec!["fire".to_string(), "ice".to_string()],
+            abilities: Some(vec!["slash".to_string(), "guard".to_string()]),
+        }));
+        let out = emit(&doc);
+        assert!(out.contains(
+            "[アイテム katana]\n名前: かたな\n種別: 武器\n属性: fire, ice\n装備時: atk+5\n装備可: hero, ally\nわざ: slash\nわざ: guard\n[/アイテム]"
+        ));
     }
 
     #[test]
