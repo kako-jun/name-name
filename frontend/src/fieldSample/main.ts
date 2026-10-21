@@ -234,6 +234,11 @@ function holdFor(config: FieldSampleConfig, id: string, mask: WalkMask): Uint8Ar
   const safe: Vec[] = []
   if (config.startScene === id) safe.push(config.start)
   for (const w of Object.values(config.warps)) if (w.to === id) safe.push(w.at)
+  // 戻りリンクの無い（片道の）リンクの到着点は画面中心の近くの白
+  for (const [srcId, src] of Object.entries(config.scenes))
+    for (const l of src.links)
+      if (l.to === id && findReturnLink(config, srcId, l) === null)
+        safe.push({ x: mask.width / 2, y: mask.height / 2 })
   const edges = sc.links.map((l) => ({ edge: l.edge, band: config.edgeThreshold }))
   return findLatchHoldWhite(mask, safe, edges)
 }

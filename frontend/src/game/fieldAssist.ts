@@ -219,7 +219,9 @@ export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
   // 橙の上: 橙を踏んだので歩いた距離は 0 に戻る。ラッチが無いのに橙の上にいるのは、ワープや開始位置で置かれた
   // とき。通れない状態でも歩いて抜けられるようにする（閉じ込めない）
   let rt: AssistRuntime | null = onOrange ? { latched: true, walked: 0, last: pos } : null
-  if (!rt && runtime.latched) {
+  // 保持の白（橙からしか入れない白）にいるなら、ラッチ中として扱う。薄い橙を 1 フレームで飛び越えて足元が橙に
+  // 一度も乗らず入った場合も、そこで閉じ込められない（保持の白は start・ワープの at・リンクの帯に通じない）
+  if (!rt && (runtime.latched || isHeldWhite(base, hold, pos))) {
     // 橙に挟まれた白（隙間・踊り場）の上はラッチを保つ（歩いた距離も数えない）。それ以外の橙のそばの白は、橙を
     // 踏まずに歩きすぎたら解く（縁沿いに歩いて別の面から入るのを防ぐ）
     const pinched = isHeldWhite(base, hold, pos) || isPinched(base, pos)
@@ -438,17 +440,16 @@ function labelOrange(base: WalkMask): Int32Array {
     while (stack.length) {
       const i = stack.pop() as number
       const x = i % width
-      const nb = [
-        x > 0 ? i - 1 : -1,
-        x < width - 1 ? i + 1 : -1,
-        i >= width ? i - width : -1,
-        i < width * (height - 1) ? i + width : -1,
-      ]
-      for (const j of nb)
-        if (j >= 0 && assist[j] === 1 && label[j] < 0) {
+      const grow = (j: number): void => {
+        if (assist[j] === 1 && label[j] < 0) {
           label[j] = next
           stack.push(j)
         }
+      }
+      if (x > 0) grow(i - 1)
+      if (x < width - 1) grow(i + 1)
+      if (i >= width) grow(i - width)
+      if (i < width * (height - 1)) grow(i + width)
     }
     next++
   }
@@ -457,11 +458,12 @@ function labelOrange(base: WalkMask): Int32Array {
 
 /**
  * 橙からしか入れない白のセルを 1 にした配列を返す（無ければ undefined）。白（橙を壁にした 4 近傍）の連結成分のうち、
- * safe（start・ワープの at）にも edges（リンクのある端の帯）にも通じていないもので、(a) 2 つ以上の別々の橙に接する
- * （橙と橙の間の踊り場）か、(b) 橙にしか接しない（黒・画像の端に接しない。橙に囲まれた島）もの。そこへは橙を通って
- * しか入れないので、ラッチ中はその上でラッチを保つ（通れない状態に切り替わっても、橙の続きとして渡り切れる）。
- * 1 つの橙にしか接さず黒にも接する白（橙の先の行き止まりの広場）は対象外: 渡り切った先なので、通れない状態では
- * 橙へ戻れない。base は橙を除いた元のマスク
+ * safe（start・ワープの at・片道リンクの到着点）にも edges（リンクのある端の帯）にも通じていないもので、
+ * (a) 橙の向こうで通じている別の白の成分が 2 つ以上ある（橙と橙の間の踊り場。手すりで割れた 1 本の階段や、同じ
+ * 広場へ下りる 2 本の階段は向こうの白が 1 つなので数えない）か、(b) 橙にしか接しない（黒・画像の端に接しない。
+ * 橙に囲まれた島）もの。そこへは橙を通ってしか入れないので、ラッチ中はその上でラッチを保つ（通れない状態に
+ * 切り替わっても、橙の続きとして渡り切れる）。橙の向こうの白が 1 つだけで黒にも接する白（橙の先の行き止まりの広場）は
+ * 対象外: 渡り切った先なので、通れない状態では橙へ戻れない。base は橙を除いた元のマスク
  */
 export function findLatchHoldWhite(
   base: WalkMask,
@@ -473,6 +475,8 @@ export function findLatchHoldWhite(
   const orange = labelOrange(base)
   const label = new Int32Array(width * height).fill(-1)
   const regions: { touches: Set<number>; walled: boolean; ok: boolean }[] = []
+  // 橙の成分ごとに、接している白の成分の番号
+  const orangeWhites = new Map<number, Set<number>>()
   const stack: number[] = []
   for (let s0 = 0; s0 < label.length; s0++) {
     if (walkable[s0] !== 1 || label[s0] >= 0) continue
@@ -481,26 +485,31 @@ export function findLatchHoldWhite(
     regions.push(r)
     label[s0] = id
     stack.push(s0)
+    const look = (j: number): void => {
+      if (assist[j] === 1) {
+        const o = orange[j]
+        r.touches.add(o)
+        let ws = orangeWhites.get(o)
+        if (!ws) orangeWhites.set(o, (ws = new Set<number>()))
+        ws.add(id)
+      } else if (walkable[j] !== 1) {
+        r.walled = true // 黒
+      } else if (label[j] < 0) {
+        label[j] = id
+        stack.push(j)
+      }
+    }
     while (stack.length) {
       const i = stack.pop() as number
       const x = i % width
-      const nb = [
-        x > 0 ? i - 1 : -1,
-        x < width - 1 ? i + 1 : -1,
-        i >= width ? i - width : -1,
-        i < width * (height - 1) ? i + width : -1,
-      ]
-      for (const j of nb) {
-        if (j < 0)
-          r.walled = true // 画像の端
-        else if (assist[j] === 1) r.touches.add(orange[j])
-        else if (walkable[j] !== 1)
-          r.walled = true // 黒
-        else if (label[j] < 0) {
-          label[j] = id
-          stack.push(j)
-        }
-      }
+      if (x > 0) look(i - 1)
+      else r.walled = true // 画像の端
+      if (x < width - 1) look(i + 1)
+      else r.walled = true
+      if (i >= width) look(i - width)
+      else r.walled = true
+      if (i < width * (height - 1)) look(i + width)
+      else r.walled = true
     }
   }
   const mark = (x: number, y: number): void => {
@@ -516,21 +525,32 @@ export function findLatchHoldWhite(
   for (const { edge, band } of edges) {
     const vertical = edge === 'top' || edge === 'bottom'
     const lines = vertical ? width : height
-    const depth = Math.max(1, Math.ceil(band))
+    const len = vertical ? height : width
+    const depth = Math.max(1, Math.min(len, Math.ceil(band)))
     for (let k = 0; k < lines; k++)
       for (let d = 0; d < depth; d++) {
         const x = vertical ? k : edge === 'left' ? d : width - 1 - d
         const y = vertical ? (edge === 'top' ? d : height - 1 - d) : k
+        if (assist[y * width + x] === 1) break // whiteReachableFromEdge と同じく、橙の先は種にしない
         mark(x, y)
       }
   }
-  const isHeld = (r: { touches: Set<number>; walled: boolean }): boolean =>
-    r.touches.size >= 2 || (r.touches.size === 1 && !r.walled)
+  const isHeld = (id: number): boolean => {
+    const r = regions[id]
+    if (r.touches.size === 0) return false
+    if (!r.walled) return true // 橙にしか接しない島
+    // 橙の向こうで通じている別の白の成分
+    const others = new Set<number>()
+    for (const o of r.touches) for (const w of orangeWhites.get(o) as Set<number>) others.add(w)
+    others.delete(id)
+    return others.size >= 2
+  }
+  const heldOf = regions.map((r, id) => !r.ok && isHeld(id))
   const hold = new Uint8Array(width * height)
   let any = false
   for (let i = 0; i < label.length; i++) {
     const l = label[i]
-    if (l >= 0 && !regions[l].ok && isHeld(regions[l])) {
+    if (l >= 0 && heldOf[l]) {
       hold[i] = 1
       any = true
     }

@@ -802,4 +802,47 @@ describe('isPinched / findStrandedWhite', () => {
     expect(run(hold).walked).toBe(0)
     expect(run(undefined).latched).toBe(false)
   })
+  it('橙の向こうで通じている別の白が 1 つだけなら、橙が複数の成分に割れていても行き止まりの広場（保持しない）', () => {
+    // 下の広場 (start)・橙の階段・上の広場。手すり（黒）で階段が 2 つの橙に割れる / 階段が 2 本ある
+    const rail = maskOf(['######', '#....#', '#oo#o#', '#oo#o#', '#....#', '######'])
+    expect(findLatchHoldWhite(rail, [{ x: 1.5, y: 4.5 }], [])).toBeUndefined()
+    const twoStairs = maskOf(['######', '#....#', '#o##o#', '#o##o#', '#....#', '######'])
+    expect(findLatchHoldWhite(twoStairs, [{ x: 1.5, y: 4.5 }], [])).toBeUndefined()
+  })
+  it('橙の向こうの別の白が 2 つあれば踊り場（保持する）', () => {
+    const m = maskOf(['#...#', '#ooo#', '#...#', '#ooo#', '#...#'])
+    const h = findLatchHoldWhite(m, [{ x: 2.5, y: 4.5 }], [])!
+    expect(h[2 * 5 + 2]).toBe(1)
+    expect(h[0 * 5 + 2]).toBe(0)
+  })
+  it('端の帯の印付けは橙で止まる: 帯の中の薄い橙の向こうの白は安全な白にならず、保持の対象になりうる', () => {
+    // 上の端の帯（幅 3）の 0 行目が白、1 行目が橙、2 行目の白は橙の向こう。その白は 2 つの橙に挟まれている
+    const m = maskOf(['.....', 'ooooo', '.....', 'ooooo', '.....'])
+    const h = findLatchHoldWhite(m, [{ x: 2.5, y: 4.5 }], [{ edge: 'top', band: 3 }])!
+    expect(h[2 * 5 + 2]).toBe(1)
+    expect(h[0 * 5 + 2]).toBe(0)
+  })
+  it('stepAssistFrame: 薄い橙を飛び越えてラッチなしで保持の白に入っても、ラッチ中として扱う（拒否でも閉じ込めない）', () => {
+    const m = maskOf(['#...#', '#ooo#', '#...#', '#ooo#', '#...#'])
+    const hold = findLatchHoldWhite(m, [{ x: 2.5, y: 4.5 }], [])
+    const asst = maskWithAssist(m)
+    const input = {
+      base: m,
+      assisted: asst,
+      pos: { x: 2.5, y: 2.5 },
+      vec: { x: 0, y: -1 },
+      state: { passable: false, held: true, ghost: false },
+      runtime: INITIAL_ASSIST_RUNTIME,
+    }
+    const fr = stepAssistFrame({ ...input, hold })
+    expect(fr.runtime.latched).toBe(true)
+    expect(fr.walkMask).toBe(asst)
+    expect(fr.onAssist).toBe(true)
+    expect(fr.wantCompanion).toBe(true)
+    expect(fr.blocked).toBe(false)
+    // 保持が無ければ従来どおり（橙を壁として扱う）
+    const none = stepAssistFrame(input)
+    expect(none.runtime.latched).toBe(false)
+    expect(none.walkMask).toBe(m)
+  })
 })

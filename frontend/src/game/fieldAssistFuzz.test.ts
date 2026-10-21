@@ -16,6 +16,8 @@
  *       戻れる
  * (P2'') 橙に囲まれた白い島の中で通れない状態にしても、まっすぐ歩けば島から出られる
  * (P4b) 渡り切った白でラッチが残っていても、端リンクで橙の向こうへ置かれない
+ * (P2b') 薄い橙（1〜3px）を 1 フレームで飛び越えてラッチなしで保持の白に入っても、拒否にして閉じ込められない
+ * (P6) 行き止まりの広場は、階段が手すりで割れていても保持されず、渡り切った後は階段へ戻れない
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -315,6 +317,8 @@ const ctxOf = (t: Terrain): Ctx => ({
   speed: t.speed,
   dtMs: t.dtMs,
   q: qFor(t),
+  // 本番と同じく、start・上端のリンクの帯に通じない白を保持の白にする
+  hold: findLatchHoldWhite(t.base, [t.start], [{ edge: 'top', band: 1 }]),
 })
 
 /** 幅優先探索。stateOf で状態（通れる/拒否）を決め、visit が false を返したらその節点から先へは進まない */
@@ -392,6 +396,9 @@ function whiteComponentSize(base: WalkMask, pos: Vec): number {
 }
 
 const onOrange = (t: Terrain, p: Vec): boolean => isAssistCell(t.base, p.x, p.y)
+const cellOf = (m: WalkMask, p: Vec): number =>
+  Math.min(m.height - 1, Math.max(0, Math.floor(p.y))) * m.width +
+  Math.min(m.width - 1, Math.max(0, Math.floor(p.x)))
 
 const COUNT = 212
 const CAP = 20000
@@ -595,8 +602,22 @@ describe('性質ベースのファズ: 橙の通行', () => {
 function ctxFrame(
   c: Ctx,
   n: Node
-): { base: WalkMask; assisted: WalkMask; pos: Vec; vec: Vec; runtime: AssistRuntime } {
-  return { base: c.base, assisted: c.assisted, pos: n.pos, vec: DIRS[0], runtime: n.rt }
+): {
+  base: WalkMask
+  assisted: WalkMask
+  pos: Vec
+  vec: Vec
+  runtime: AssistRuntime
+  hold?: Uint8Array
+} {
+  return {
+    base: c.base,
+    assisted: c.assisted,
+    pos: n.pos,
+    vec: DIRS[0],
+    runtime: n.rt,
+    hold: c.hold,
+  }
 }
 
 // ---- (P4) 端リンク ----
@@ -853,7 +874,8 @@ describe('性質ベースのファズ: 縁沿いの白 (P1b)', () => {
             if (wasOrange) since = 0
             else {
               const before = since // 入る一歩のぶんは数えない（今の位置までの距離）
-              if (!isPinched(t.base, cur.pos))
+              // 橙に挟まれた白・保持の白（橙からしか入れない白）の上は数えない
+              if (!isPinched(t.base, cur.pos) && !(c.hold && c.hold[cellOf(t.base, cur.pos)] === 1))
                 since += Math.hypot(a.node.pos.x - cur.pos.x, a.node.pos.y - cur.pos.y)
               if (onOrange(t, a.node.pos)) {
                 whiteEntries++
@@ -1087,6 +1109,151 @@ describe("性質ベースのファズ: 橙に囲まれた白い島 (P2'')", () =
     }
     expect(cases).toBe(22 * 3 * 3 * 4)
   }, 120000)
+})
+
+// ---- (P2b') 薄い橙を 1 フレームで飛び越えて保持の白に入る / (P6) 行き止まりの広場（手すりの有無） ----
+
+/** entries から REFUSE で到達できる節点のうち、isExit に行けない（閉じ込められた）節点の数と節点数 */
+function trappedFrom(
+  c: Ctx,
+  entries: Node[],
+  isExit: (n: Node) => boolean
+): { trapped: number; nodes: number } {
+  const nodes = bfs(c, entries, () => REFUSE, 30000)
+  const idx = new Map<number, number>()
+  nodes.forEach((n, i) => idx.set(keyOf(c, n), i))
+  const rev: number[][] = nodes.map(() => [])
+  nodes.forEach((n, i) => {
+    for (const d of DIRS) {
+      const j = idx.get(keyOf(c, advance(c, n, d, REFUSE).node))
+      if (j !== undefined) rev[j].push(i)
+    }
+  })
+  const good = new Uint8Array(nodes.length)
+  const stack: number[] = []
+  nodes.forEach((n, i) => {
+    if (isExit(n)) {
+      good[i] = 1
+      stack.push(i)
+    }
+  })
+  while (stack.length) {
+    const j = stack.pop() as number
+    for (const i of rev[j])
+      if (!good[i]) {
+        good[i] = 1
+        stack.push(i)
+      }
+  }
+  return { trapped: good.reduce((a, v) => a + (v ? 0 : 1), 0), nodes: nodes.length }
+}
+
+describe("性質ベースのファズ: 薄い橙を飛び越えて保持の白に入る (P2b')", () => {
+  it('厚さ 1〜3px の橙の奥の保持の白へ速度 260・dt 1/30 で入り（足元が橙に乗らない）、そこで拒否にしても出られる', () => {
+    const gap = 12
+    let skipped = 0
+    let cases = 0
+    for (const th of [1, 2, 3])
+      for (const sx of [10.5, 15.5, 20.5])
+        for (let off = 0; off < 9; off++) {
+          // 下の白 y>=60+th、薄い橙 y60..60+th、踊り場 gap セル、橙 10 セル、上の白
+          const g = new Grid(30, 120, 0)
+          g.rect(5, 0, 25, 120, 1)
+          g.rect(5, 60, 25, 60 + th, 2)
+          const second1 = 60 - gap
+          g.rect(5, second1 - 10, 25, second1, 2)
+          const base = g.mask()
+          const start = { x: sx, y: 110.5 - off * 0.9 }
+          const hold = findLatchHoldWhite(base, [start], [{ edge: 'top', band: 1 }])
+          expect(hold).toBeDefined()
+          const c: Ctx = {
+            base,
+            assisted: maskWithAssist(base),
+            speed: 260,
+            dtMs: 1000 / 30,
+            q: 1,
+            hold,
+          }
+          // 通れる状態で上へ歩き、踊り場に入ったところで止める。途中で足元が橙に乗らなければ「飛び越えた」
+          let n: Node = { pos: start, rt: INITIAL_ASSIST_RUNTIME }
+          let touched = false
+          for (let f = 0; f < 400 && n.pos.y > 60 - gap / 2; f++) {
+            n = stepStraight(c, n, UP, OPEN)
+            if (isAssistCell(base, n.pos.x, n.pos.y)) touched = true
+          }
+          expect(n.pos.y, `th ${th} sx ${sx} off ${off}`).toBeLessThanOrEqual(60 - gap / 2)
+          if (touched) continue
+          skipped++
+          // ラッチなしで踊り場にいる。ここで拒否にしても、どこからでも出られる
+          const r = trappedFrom(
+            c,
+            [n],
+            (m) =>
+              !isAssistCell(base, m.pos.x, m.pos.y) &&
+              (m.pos.y >= 60 + th || m.pos.y < second1 - 10)
+          )
+          expect(r.nodes, `th ${th}`).toBeGreaterThan(50)
+          expect(r.trapped, `th ${th} sx ${sx} off ${off} 閉じ込められた`).toBe(0)
+          cases++
+        }
+    // 飛び越える配置が実際に出ていること（前提の確認）
+    expect(skipped).toBeGreaterThan(10)
+    expect(cases).toBe(skipped)
+  }, 60000)
+})
+
+/**
+ * 行き止まりの広場: 下の広場 (y>=100。start) から橙の階段 (y60..100) を上がると、黒に囲まれた上の広場 (y<60) に着く。
+ * rails は階段の途中に置く黒い手すり（x 範囲）。1 本以上あると階段は橙の連結成分に割れる
+ */
+function ruinBoard(rails: [number, number][]) {
+  const g = new Grid(60, 150, 0)
+  g.rect(10, 100, 50, 150, 1)
+  g.rect(10, 60, 50, 100, 2)
+  for (const [a, b] of rails) g.rect(a, 60, b, 100, 0)
+  g.rect(10, 0, 50, 60, 1)
+  const base = g.mask()
+  const start = { x: 12.5, y: 140.5 } // 階段の左端の列（手すりの外）
+  const hold = findLatchHoldWhite(base, [start], [])
+  return { base, assisted: maskWithAssist(base), start, hold }
+}
+
+describe('性質ベースのファズ: 行き止まりの広場 (P6)', () => {
+  const railsCases: [number, number][][] = [
+    [],
+    [[28, 32]],
+    [[20, 24]],
+    [
+      [18, 22],
+      [38, 42],
+    ],
+    [[15, 45]],
+  ]
+  it('手すりの有無・本数に依らず、行き止まりの広場は保持されない（橙の向こうの白が 1 つ）', () => {
+    for (const rails of railsCases)
+      expect(ruinBoard(rails).hold, JSON.stringify(rails)).toBeUndefined()
+  })
+  it('渡り切ったあと広場を歩いて拒否にすると、橙の階段を下りられない（手すりの有無に依らない）', () => {
+    for (const rails of railsCases)
+      for (const speed of [120, 182, 260])
+        for (const dtMs of [1000 / 30, 1000 / 60]) {
+          const b = ruinBoard(rails)
+          const c: Ctx = { base: b.base, assisted: b.assisted, speed, dtMs, q: 1, hold: b.hold }
+          const label = `rails ${JSON.stringify(rails)} v ${speed} dt ${dtMs.toFixed(0)}`
+          // 通れる状態で階段を上り、広場の奥まで渡り切る
+          let n: Node = { pos: b.start, rt: INITIAL_ASSIST_RUNTIME }
+          for (let f = 0; f < 4000 && n.pos.y > 30; f++) n = stepStraight(c, n, UP, OPEN)
+          expect(n.pos.y, `${label} 渡り切れる`).toBeLessThanOrEqual(30)
+          // 広場の右端まで歩く（階段から離れる）
+          for (let f = 0; f < 4000 && n.pos.x < 48.5; f++)
+            n = stepStraight(c, n, { x: 1, y: 0 }, REFUSE)
+          // 拒否にして、どの方向へ押しても橙に入れない
+          const nodes = bfs(c, [n], () => REFUSE, 20000)
+          for (const m of nodes)
+            if (isAssistCell(b.base, m.pos.x, m.pos.y))
+              throw new Error(`${label}: 拒否中に橙へ入れた ${JSON.stringify(m.pos)}`)
+        }
+  }, 60000)
 })
 
 // ---- (P4b) ラッチ引き継ぎの穴 ----
