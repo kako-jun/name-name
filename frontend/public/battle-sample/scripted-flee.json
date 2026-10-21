@@ -16,7 +16,14 @@
     { "id": "friend", "name": "おさななじみ", "hp": 100, "mp": 10, "atk": 16, "def": 3, "agi": 7 }
   ],
   "enemies": [
-    { "id": "stomach_guard", "name": "いぶくろの ばんにん", "hp": 160, "atk": 9, "def": 4, "agi": 3 },
+    {
+      "id": "stomach_guard",
+      "name": "いぶくろの ばんにん",
+      "hp": 160,
+      "atk": 9,
+      "def": 4,
+      "agi": 3
+    },
     { "id": "error_cell", "name": "エラーさいぼう", "hp": 3, "atk": 0, "def": 0, "agi": 8 }
   ]
 }

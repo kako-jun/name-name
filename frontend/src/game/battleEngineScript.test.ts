@@ -777,4 +777,18 @@ describe('決定論と保存', () => {
     const e = scenario()
     expect(playOut(e, 500)).not.toBeNull()
   })
+
+  it('戦利品（#831）と脚本の結果は同じ BattleResult に両方載る', () => {
+    const e = make(
+      [hero({ atk: 999 })],
+      [boss({ hp: 1, maxHp: 1, loot: { drops: ['potion'] } })],
+      ['勝利時: フラグ=won=true 次=after']
+    )
+    e.selectAttack()
+    const r = e.getResult()
+    expect(r?.outcome).toBe('victory')
+    expect(r?.loot.map((l) => l.itemId)).toEqual(['potion'])
+    expect(r?.items).toEqual([{ itemId: 'potion', count: 1 }])
+    expect(r?.script).toEqual({ id: 'test', flags: { won: true }, next: 'after' })
+  })
 })

@@ -10,11 +10,15 @@
       "message": "{user}は とうめいな みずの たまを はなった！"
     }
   ],
-  "statuses": [
-    { "id": "fire_will", "name": "ほのおの いし", "duration": 5 }
-  ],
+  "statuses": [{ "id": "fire_will", "name": "ほのおの いし", "duration": 5 }],
   "spells": [
-    { "id": "flame", "name": "ほのお", "mp": 4, "target": "敵単体", "effect": "damage 60..80 type=fire" }
+    {
+      "id": "flame",
+      "name": "ほのお",
+      "mp": 4,
+      "target": "敵単体",
+      "effect": "damage 60..80 type=fire"
+    }
   ],
   "script": {
     "id": "heart-spirit",
@@ -25,9 +29,7 @@
       "勝利時: フラグ=spirit_defeated=true, fire_awakened=true 次=heart_after"
     ]
   },
-  "party": [
-    { "id": "hero", "name": "ぼく", "hp": 60, "mp": 20, "atk": 14, "def": 3, "agi": 6 }
-  ],
+  "party": [{ "id": "hero", "name": "ぼく", "hp": 60, "mp": 20, "atk": 14, "def": 3, "agi": 6 }],
   "enemies": [
     {
       "id": "water_spirit",
