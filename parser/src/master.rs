@@ -1,11 +1,11 @@
 //! マスターデータブロック (#174 / #175) のパース。
 //!
-//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[パーティ <id>]` の
-//! 7 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
+//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[魔石 <id>]` / `[パーティ <id>]` の
+//! 8 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
 //! 構造を持ち、ボディ部の解釈だけが kind ごとに違う。
 //!
 //! parser.rs の本体ループから 1 関数 `try_parse_master_data_block` を呼び出すことで
-//! 7 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
+//! 8 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
 use crate::parser::emit_warning;
@@ -36,6 +36,7 @@ pub(crate) fn try_parse_master_data_block(
         MasterKind::Skill => Event::Skill(build_skill_def(id, &body.entries)?),
         MasterKind::Status => Event::Status(build_status_def(id, &body.entries)?),
         MasterKind::BattleScript => Event::BattleScript(build_battle_script_def(id, &body.entries)),
+        MasterKind::Magicite => Event::Magicite(build_magicite_def(id, &body.entries)?),
         MasterKind::PartyMember => Event::PartyMember(build_party_member_def(id, &body.entries)?),
     };
 
@@ -50,6 +51,7 @@ enum MasterKind {
     Skill,
     Status,
     BattleScript,
+    Magicite,
     PartyMember,
 }
 
@@ -97,6 +99,14 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
             return None;
         }
         return Some((MasterKind::BattleScript, id, "[/戦闘]"));
+    }
+    if let Some(rest) = header.strip_prefix("[魔石 ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            emit_warning("[name-name-parser] warning: [魔石 ] は id が空のため捨てた");
+            return None;
+        }
+        return Some((MasterKind::Magicite, id, "[/魔石]"));
     }
     if let Some(rest) = header.strip_prefix("[パーティ ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
@@ -438,6 +448,123 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         learns: collect_party_learns(entries),
         // 「わざ」キーは複数行 OK で、`[特技 id]` の id を書いた順に集める (#873)
         abilities: collect_values(entries, &["わざ", "abilities"]),
+        // 「魔石」キーは複数行 OK で、カンマ区切りの `[魔石 id]` の id を書いた順に集める (#889)
+        magicites: collect_id_list(entries, &["魔石", "magicites"]),
+        magicite_slots: lookup_master_value(
+            entries,
+            &["魔石枠", "magicite_slots", "magiciteSlots"],
+        )
+        .and_then(|v| v.trim().parse().ok()),
+    })
+}
+
+/// 指定したキーの値をカンマ（`,` `，` `、`）で区切って id の列にする (#889)。複数行は書いた順に連結し、重複は最初のものだけ残す。
+/// 空の要素は捨てる。1 つも無ければ None。
+fn collect_id_list(entries: &[(String, String)], keys: &[&str]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for (k, v) in entries {
+        if !keys.contains(&k.as_str()) {
+            continue;
+        }
+        for part in v.split([',', '，', '、']) {
+            let part = part.trim();
+            if !part.is_empty() && !out.iter().any(|e| e == part) {
+                out.push(part.to_string());
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// 魔石 1 つの属性の上限 (#889)。魔石と防具を合わせて 1 人 2 つまでなので、1 つの魔石も 2 つまで。
+const MAGICITE_MAX_ELEMENTS: usize = 2;
+
+/// `[魔石 <id>]` (#889)。`名前` 必須。属性は小文字・半角に正規化し、重複と `無属性` を除いて最大 2 つ。
+/// ボーナスは生文字列で透過し、解釈と不正値の警告は runtime（`magicite.ts`）が行う。値が空のキーは未指定扱い。
+fn build_magicite_def(id: String, entries: &[(String, String)]) -> Option<MagiciteDef> {
+    let name = lookup_master_string(entries, &["名前", "name"]).filter(|n| !n.is_empty());
+    let Some(name) = name else {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [魔石 {id}] は 名前 が無いため捨てた"
+        ));
+        return None;
+    };
+    const KNOWN: &[&str] = &[
+        "名前",
+        "name",
+        "召喚獣",
+        "summon",
+        "属性",
+        "element",
+        "elements",
+        "対象",
+        "target",
+        "効果",
+        "effect",
+        "builtin",
+        "メッセージ",
+        "message",
+        "消費MP",
+        "MP",
+        "mp",
+        "装備時",
+        "equip",
+        "成長",
+        "growth",
+        "装備可",
+        "equippable_by",
+        "equippableBy",
+    ];
+    for (k, _) in entries {
+        if !KNOWN.contains(&k.as_str()) {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [魔石 {id}] の未知のキー `{k}` は無視した"
+            ));
+        }
+    }
+    let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
+    let mut elements: Vec<String> = Vec::new();
+    for (k, v) in entries {
+        if !["属性", "element", "elements"].contains(&k.as_str()) {
+            continue;
+        }
+        for token in v
+            .split(|c: char| c == ',' || c == '，' || c == '、' || c.is_whitespace())
+            .filter(|t| !t.is_empty())
+            .map(normalize_attr_id)
+        {
+            if token == "無属性" || token == "none" {
+                emit_warning(&format!(
+                    "[name-name-parser] warning: [魔石 {id}] の属性 '{token}' (無属性) は書けないため無視した"
+                ));
+            } else if elements.contains(&token) {
+                // 同じ属性の重複は 1 つにまとめる（2 重の吸収は、魔石 2 個や防具との重なりで作る）
+            } else if elements.len() >= MAGICITE_MAX_ELEMENTS {
+                emit_warning(&format!(
+                    "[name-name-parser] warning: [魔石 {id}] の属性は最大 {MAGICITE_MAX_ELEMENTS} つのため '{token}' は無視した"
+                ));
+            } else {
+                elements.push(token);
+            }
+        }
+    }
+    Some(MagiciteDef {
+        id,
+        name,
+        summon: value(&["召喚獣", "summon"]),
+        elements,
+        target: value(&["対象", "target"]).unwrap_or_else(|| "相手単体".to_string()),
+        effect: value(&["効果", "effect"]),
+        builtin: value(&["builtin"]),
+        message: value(&["メッセージ", "message"]),
+        mp: lookup_master_u32(entries, &["消費MP", "MP", "mp"], 0),
+        equip_bonus: value(&["装備時", "equip"]),
+        growth: value(&["成長", "growth"]),
+        equippable_by: collect_id_list(entries, &["装備可", "equippable_by", "equippableBy"]),
     })
 }
 

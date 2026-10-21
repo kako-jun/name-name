@@ -2,22 +2,24 @@
  * 戦闘コマンド窓の配置・表示名・十字キーの対応 (#204)。純粋関数のみ（this / PixiJS に触れない）。
  *
  * - 配置 `grid`（既定・2x2）/ `cross`（FF6 の「短縮」風の十字。上・左・右・下に 1 コマンドずつ）
- * - 表示名: コマンド id（attack / skill / spell / item / escape）は固定のまま、label だけをゲームの設定から差し替える
+ * - 表示名: コマンド id（attack / skill / summon / spell / item / escape）は固定のまま、label だけをゲームの設定から差し替える
  * - 構成と順序 (#873): frontmatter `battle_commands: skill, spell, item, escape` で、使うコマンドの列と順序を変えられる
- *   （未指定は attack / spell / item / escape）。新しいコマンドの種類は `skill`（わざ）だけで、特殊なコマンドは足さない
+ *   （未指定は attack / spell / item / escape）。コマンドの種類は `skill`（わざ）と `summon`（しょうかん、#889。装備中の魔石の召喚獣を呼ぶ）を足してあり、
+ *   どちらも `battle_commands` に書いたときだけ並ぶ（既存のゲームの並びは変わらない）。特殊なコマンドはこれ以上足さない
  * - `cross` のキー: 矢印キー 1 押しでその**位置**のコマンドを決定する（1 番目=上・2 番目=左・3 番目=右・4 番目=下。
  *   既定の並びでは 上=たたかう・左=じゅもん・右=どうぐ・下=にげる）
  *
  * 座標の計算は battleLayout.ts の `computeCommandCells`、描画と入力の配線は BattleScreen.ts が行う。
  */
 
-export type CommandId = 'attack' | 'skill' | 'spell' | 'item' | 'escape'
+export type CommandId = 'attack' | 'skill' | 'summon' | 'spell' | 'item' | 'escape'
 export type CommandLayout = 'grid' | 'cross'
 
 /** コマンド id ごとの既定の表示名 */
 export const COMMAND_DEFAULT_LABELS: Readonly<Record<CommandId, string>> = {
   attack: 'たたかう',
   skill: 'わざ',
+  summon: 'しょうかん',
   spell: 'じゅもん',
   item: 'どうぐ',
   escape: 'にげる',
@@ -40,7 +42,7 @@ export function normalizeCommandLayout(raw: string | null | undefined): CommandL
 
 /**
  * frontmatter `battle_command_labels` を解釈する。`attack=斬る, spell=魔石` のように `id=表示名` をカンマ
- * （`,` / `，`）区切りで並べる。id は attack / skill / spell / item / escape。未知の id・空の表示名・`=` のない項目は無視する。
+ * （`,` / `，`）区切りで並べる。id は attack / skill / summon / spell / item / escape。未知の id・空の表示名・`=` のない項目は無視する。
  * 同じ id が複数あれば後のものが勝つ。有効な指定が 1 つもなければ undefined。
  */
 export function parseCommandLabels(raw: string | null | undefined): CommandLabels | undefined {

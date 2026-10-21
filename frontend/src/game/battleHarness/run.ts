@@ -116,10 +116,15 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
 
   let seenEvents = engine.getState().eventTotal
+  // 召喚 (#889): 同じ味方が 2 回召喚してはならず、召喚した味方には印が立っている。
+  // 数えるのは「召喚の操作（`summon`）を実行した 1 操作の間に増えた、味方の演出イベントのうちラベルがその召喚獣の名前のもの」だけ。
+  // 召喚の演出イベントは特技と同じ `kind: 'skill'` で区別できないため、操作の種類で絞って、同じ名前の特技・呪文が別の場面で
+  // 使われても数えないようにしている（限界: 召喚の操作の最中に同じ名前の味方の特技が同時に起きるシナリオは想定しない）
+  const summonCount = new Map<number, number>()
   add(checkState(engine.getState(), [], -1, detect))
 
   /** 1 操作を実行して検査する。続行不能（例外・予算超過）なら false */
-  const step = (opIndex: number, run: () => void): boolean => {
+  const step = (opIndex: number, run: () => void, summonName?: string): boolean => {
     rng.reset()
     const t0 = performance.now()
     try {
@@ -141,6 +146,30 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     // events は直近 30 件だけ残る。増えた分のうち残っている分を検査する
     const fresh = delta > 0 ? s.events.slice(-Math.min(delta, s.events.length)) : []
     collectMetrics(metrics, fresh)
+    if (summonName !== undefined) {
+      for (const ev of fresh) {
+        if (ev.kind !== 'skill' || ev.actor.side !== 'party' || ev.label !== summonName) continue
+        const n = (summonCount.get(ev.actor.index) ?? 0) + 1
+        summonCount.set(ev.actor.index, n)
+        if (n > 1) {
+          add([
+            {
+              kind: 'magicite-invariant',
+              detail: `party[${ev.actor.index}] が 1 バトルで ${n} 回召喚した（event#${ev.seq}）`,
+              opIndex,
+            },
+          ])
+        } else if (s.party[ev.actor.index]?.summoned !== true) {
+          add([
+            {
+              kind: 'magicite-invariant',
+              detail: `party[${ev.actor.index}] が召喚したのに summoned が立っていない（event#${ev.seq}）`,
+              opIndex,
+            },
+          ])
+        }
+      }
+    }
     for (const e of [...s.party, ...s.enemies]) {
       for (const v of Object.values(e.buffs ?? {})) {
         if (Number.isFinite(v))
@@ -153,7 +182,12 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
 
   let alive = true
   for (let i = 0; i < scenario.ops.length && alive; i++) {
-    alive = step(i, () => applyOp(engine, scenario, scenario.ops[i]))
+    const op = scenario.ops[i]
+    alive = step(
+      i,
+      () => applyOp(engine, scenario, op),
+      op.t === 'summon' ? scenario.summons?.[op.m]?.name : undefined
+    )
     metrics.opsRun = i + 1
   }
 

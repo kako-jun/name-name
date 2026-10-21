@@ -39,7 +39,18 @@ import { posesField, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { EnemyGridSize } from './enemyGrid'
 import type { CommandId, CommandLabels, CommandLayout } from './battleCommands'
-import type { BattleMenuData, BattleSkillEntry, BattleSpellEntry } from './battleMenu'
+import type {
+  BattleMenuData,
+  BattleSkillEntry,
+  BattleSpellEntry,
+  BattleSummonEntry,
+} from './battleMenu'
+import {
+  applyMemberMagicite,
+  resolveMemberMagicite,
+  summonEntries,
+  type MagiciteRoster,
+} from './magicite'
 import type { BattleTransitionMode } from './battleTransition'
 import type { FieldBattleTransition } from './fieldBattleTransition'
 
@@ -130,8 +141,11 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
   }
 }
 
-/** 戦闘のパーティマスター（`party` と、その定義順 `order`） */
-export interface FieldBattleRoster {
+/**
+ * 戦闘のパーティマスター（`party` と、その定義順 `order`）。
+ * 魔石 (#889) の入力（`magicites` / `equipment` / `growth` / `extraElements`、`MagiciteRoster`）は、魔石を宣言しないゲームでは全部省略する
+ */
+export interface FieldBattleRoster extends MagiciteRoster {
   party: Record<string, PartyMemberDef>
   /** 定義順。整数風 ID でも出現順を保つため別持ち */
   order: string[]
@@ -158,8 +172,16 @@ export function buildBattleMenuData(
   const master = roster.spells ?? {}
   const spells: Record<string, BattleSpellEntry[]> = {}
   const skills: Record<string, BattleSkillEntry[]> = {}
+  const summons: Record<string, BattleSummonEntry[]> = {}
   for (const member of party) {
     const def = roster.party[member.id]
+    // 「しょうかん」(#889): 装備中の魔石の召喚獣を枠の順に並べる（呼び済みのグレー表示は画面が entity の `summoned` で決める）
+    if (def && roster.magicites) {
+      const stones = resolveMemberMagicite(def, roster).stones
+      if (stones.length > 0) {
+        summons[member.id] = summonEntries(stones)
+      }
+    }
     // 「わざ」(#873): `わざ:` の特技 id のうち、特技マスターに定義があるものを書いた順に並べる（MP なし）
     if (def?.abilities && roster.skills) {
       const sm = roster.skills
@@ -198,16 +220,23 @@ export function buildBattleMenuData(
   }
   const hasSpells = Object.keys(spells).length > 0
   const hasSkills = Object.keys(skills).length > 0
-  if (!hasSpells && !hasSkills) return undefined
-  return { ...(hasSpells ? { spells } : {}), ...(hasSkills ? { skills } : {}) }
+  const hasSummons = Object.keys(summons).length > 0
+  if (!hasSpells && !hasSkills && !hasSummons) return undefined
+  return {
+    ...(hasSpells ? { spells } : {}),
+    ...(hasSkills ? { skills } : {}),
+    ...(hasSummons ? { summons } : {}),
+  }
 }
 
 /** PartyMemberDef → BattleEntity。隊列 (#747) は side のときだけ反映する（front は隊列を描かない） */
 export function partyDefToBattleEntity(
   def: PartyMemberDef,
-  layout: BattleLayoutMode
+  layout: BattleLayoutMode,
+  /** 魔石 (#889) の入力。省略・魔石を使わない味方は従来と同一の `BattleEntity`（キーも増えない） */
+  magicite?: MagiciteRoster
 ): BattleEntity {
-  return {
+  const entity: BattleEntity = {
     id: def.id,
     name: def.name,
     hp: def.hp,
@@ -223,6 +252,8 @@ export function partyDefToBattleEntity(
       ? { row: 'back' as const }
       : {}),
   }
+  if (magicite) applyMemberMagicite(entity, resolveMemberMagicite(def, magicite))
+  return entity
 }
 
 /**
@@ -234,7 +265,7 @@ export function buildHeroBattleEntity(
   layout: BattleLayoutMode
 ): BattleEntity {
   const def = roster.party['hero']
-  if (def) return partyDefToBattleEntity(def, layout)
+  if (def) return partyDefToBattleEntity(def, layout, roster)
   return {
     id: 'hero',
     name: 'ゆうしゃ',
@@ -274,7 +305,7 @@ export function buildPartyBattleEntities(
   const keys = orderedPartyKeys(roster)
   if (keys.length === 0) return [buildHeroBattleEntity(roster, layout)]
   const ordered = keys.includes('hero') ? ['hero', ...keys.filter((k) => k !== 'hero')] : keys
-  return ordered.map((k) => partyDefToBattleEntity(roster.party[k], layout))
+  return ordered.map((k) => partyDefToBattleEntity(roster.party[k], layout, roster))
 }
 
 /**

@@ -176,6 +176,15 @@ export interface PartyMemberDef {
      * 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
      */
     abilities?: string[];
+    /**
+     * 最初に装備している魔石 (#889)。`[魔石 id]` の id を書いた順に持つ（`魔石:` はカンマ区切り・複数行可）。
+     * 枠の数（`magiciteSlots`）を超える分や、定義の無い id は runtime が警告して捨てる。
+     */
+    magicites?: string[];
+    /**
+     * 魔石を装備できる枠の数 (#889。`魔石枠:`)。省略は 1（runtime の既定）。JSON / TS 側のキーは `magiciteSlots`。
+     */
+    magiciteSlots?: number;
 }
 
 /**
@@ -443,6 +452,59 @@ export interface BattleScriptDef {
  * 瞬間表示/フェード、後方互換）。
  */
 export type StageDirection = "Kamite" | "Shimote";
+
+/**
+ * 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。
+ *
+ * 装備すると、戦闘中にその召喚獣を呼べる（1 人が 1 バトルで 1 回）。召喚獣の属性は、持ち主の攻撃（通常攻撃）と
+ * 防御（耐性）に加わる。装備している間は `equip_bonus` が能力値に足され、レベルアップのたびに `growth` が恒久で足される。
+ * 召喚の中身（`target` / `effect` / `builtin` / `message`）は `[特技]` と同じ書式・解釈で、MP は `mp`（既定 0）。
+ * ボーナスは `atk+3, hp+20` のような生文字列で透過し、解釈と不正値の警告は runtime（`magicite.ts`）が行う（効果 DSL と同じ流儀）。
+ */
+export interface MagiciteDef {
+    id: string;
+    name: string;
+    /**
+     * 召喚獣の表示名（`召喚獣:`）。省略は `name`。
+     */
+    summon?: string;
+    /**
+     * 召喚獣の属性 id（`属性:`。parser が小文字・半角に正規化済み・重複排除済み）。最大 2 つ。
+     */
+    elements?: string[];
+    /**
+     * 召喚の対象（使う側から見た相対表現。`[特技]` と同じ。既定 `相手単体`）。
+     */
+    target: string;
+    /**
+     * 召喚の効果 DSL（`[特技]` と同書式）。`builtin` と排他。
+     */
+    effect?: string;
+    /**
+     * 専用関数 ID（`SpellDef.builtin` と同じレジストリ）。
+     */
+    builtin?: string;
+    /**
+     * 召喚時に出す演出文（`{user}` は呼んだ側の名前）。省略は「{user} は {召喚獣} を よびだした！」。
+     */
+    message?: string;
+    /**
+     * 召喚の消費 MP（`消費MP:`。既定 0）。
+     */
+    mp?: number;
+    /**
+     * 装備している間だけ能力値に足す分（`装備時:` `atk+3, hp+20`）。JSON / TS 側のキーは `equipBonus`。
+     */
+    equipBonus?: string;
+    /**
+     * レベルアップのたびに恒久で足す分（`成長:` `atk+1`）。魔石を外しても上がった分は残る。
+     */
+    growth?: string;
+    /**
+     * 装備できる味方の id（`装備可:` カンマ区切り）。省略は誰でも装備できる。JSON / TS 側のキーは `equippableBy`。
+     */
+    equippableBy?: string[];
+}
 
 export interface Chapter {
     number: number;
@@ -948,7 +1010,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { BackgroundBoard: { path: string; depth?: number } } | { Prop: { path: string; depth?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { BattleScript: BattleScriptDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { BackgroundBoard: { path: string; depth?: number } } | { Prop: { path: string; depth?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { BattleScript: BattleScriptDef } | { Magicite: MagiciteDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 

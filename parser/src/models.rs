@@ -518,6 +518,17 @@ pub struct PartyMemberDef {
     /// 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abilities: Option<Vec<String>>,
+    /// 最初に装備している魔石 (#889)。`[魔石 id]` の id を書いた順に持つ（`魔石:` はカンマ区切り・複数行可）。
+    /// 枠の数（`magiciteSlots`）を超える分や、定義の無い id は runtime が警告して捨てる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magicites: Option<Vec<String>>,
+    /// 魔石を装備できる枠の数 (#889。`魔石枠:`)。省略は 1（runtime の既定）。JSON / TS 側のキーは `magiciteSlots`。
+    #[serde(
+        default,
+        rename = "magiciteSlots",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub magicite_slots: Option<u32>,
 }
 
 /// パーティメンバーの呪文習得スロット (#175)
@@ -580,6 +591,57 @@ pub struct SkillDef {
     /// 予兆の文言（生文字列で透過。解釈は P2 #836）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegraph: Option<String>,
+}
+
+/// 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。
+///
+/// 装備すると、戦闘中にその召喚獣を呼べる（1 人が 1 バトルで 1 回）。召喚獣の属性は、持ち主の攻撃（通常攻撃）と
+/// 防御（耐性）に加わる。装備している間は `equip_bonus` が能力値に足され、レベルアップのたびに `growth` が恒久で足される。
+/// 召喚の中身（`target` / `effect` / `builtin` / `message`）は `[特技]` と同じ書式・解釈で、MP は `mp`（既定 0）。
+/// ボーナスは `atk+3, hp+20` のような生文字列で透過し、解釈と不正値の警告は runtime（`magicite.ts`）が行う（効果 DSL と同じ流儀）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct MagiciteDef {
+    pub id: String,
+    pub name: String,
+    /// 召喚獣の表示名（`召喚獣:`）。省略は `name`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summon: Option<String>,
+    /// 召喚獣の属性 id（`属性:`。parser が小文字・半角に正規化済み・重複排除済み）。最大 2 つ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<String>,
+    /// 召喚の対象（使う側から見た相対表現。`[特技]` と同じ。既定 `相手単体`）。
+    pub target: String,
+    /// 召喚の効果 DSL（`[特技]` と同書式）。`builtin` と排他。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    /// 専用関数 ID（`SpellDef.builtin` と同じレジストリ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
+    /// 召喚時に出す演出文（`{user}` は呼んだ側の名前）。省略は「{user} は {召喚獣} を よびだした！」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// 召喚の消費 MP（`消費MP:`。既定 0）。
+    #[serde(default)]
+    pub mp: u32,
+    /// 装備している間だけ能力値に足す分（`装備時:` `atk+3, hp+20`）。JSON / TS 側のキーは `equipBonus`。
+    #[serde(
+        default,
+        rename = "equipBonus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub equip_bonus: Option<String>,
+    /// レベルアップのたびに恒久で足す分（`成長:` `atk+1`）。魔石を外しても上がった分は残る。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub growth: Option<String>,
+    /// 装備できる味方の id（`装備可:` カンマ区切り）。省略は誰でも装備できる。JSON / TS 側のキーは `equippableBy`。
+    #[serde(
+        default,
+        rename = "equippableBy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub equippable_by: Option<Vec<String>>,
 }
 
 /// 状態定義 (#870、状態異常システム)。`[状態 <id>] ... [/状態]` ブロックで書く。
@@ -1048,6 +1110,8 @@ pub enum Event {
     Status(StatusDef),
     /// 脚本制御の戦闘の定義 (#741)。`[戦闘 <id>] ... [/戦闘]` ブロックで書く。勝敗の固定・戦闘中の台詞・途中参戦・復活・逃走・中断を宣言する。
     BattleScript(BattleScriptDef),
+    /// 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。装備すると召喚獣を呼べ、属性・能力値のボーナスがつく。
+    Magicite(MagiciteDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
     PartyMember(PartyMemberDef),
     /// RPG イベント定義 (#187)。

@@ -102,6 +102,23 @@ export function resolveAffinity(
   return 'normal'
 }
 
+const KIND_PRIORITY: readonly AffinityKind[] = ['absorb', 'nullify', 'halve', 'weak']
+
+/**
+ * 複数の属性を持つ攻撃 (#889) の相性。それぞれの属性を `resolveAffinity` で判定し、**優先順位の最も高い種類**
+ * （吸収 > 無効 > 半減 > 弱点）を採る。つまり 1 つでも吸収する属性があれば吸収、なければ無効、…。
+ * 属性が 1 つ（または 0 個）なら `resolveAffinity` と同じ。複数属性の判定は FF5/6 の調査でも記述が無いので、#872 の優先順位をそのまま延ばした
+ */
+export function resolveAffinityMulti(
+  affinity: BattleAffinity | undefined,
+  types: readonly string[] | undefined
+): AffinityKind {
+  if (!affinity || !types || types.length === 0) return 'normal'
+  const kinds = new Set(types.map((t) => resolveAffinity(affinity, t)))
+  for (const k of KIND_PRIORITY) if (kinds.has(k)) return k
+  return 'normal'
+}
+
 /**
  * 相性をダメージ量に当てる。戻りの `amount` は kind ごとに意味が違う:
  * `weak` = 2 倍 / `halve` = 半分（切り捨て、元が 1 以上なら最低 1）/ `nullify` = 0 /

@@ -8,6 +8,7 @@ import {
   type ItemExecution,
   type SkillExecution,
   type SpellExecution,
+  type SummonExecution,
 } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
 import type { StatusDef } from '../../types'
@@ -17,6 +18,7 @@ export type Op =
   | { t: 'attack'; target?: string }
   | { t: 'spell'; s: number; target?: string }
   | { t: 'item'; i: number; target?: string }
+  | { t: 'summon'; m: number; target?: string }
   | { t: 'escape' }
   | { t: 'tick'; ms: number }
 
@@ -35,6 +37,8 @@ export interface Scenario {
   statuses?: Record<string, StatusDef>
   spells: SpellExecution[]
   items: ItemExecution[]
+  /** 召喚 (#889)。`Op` の `summon` の `m` が添字。無いシナリオは従来どおり */
+  summons?: SummonExecution[]
   ops: Op[]
   /** 脚本制御の戦闘 (#741 / #863)。`[戦闘]` の宣言（`rules`）と、途中参戦できる味方。無いシナリオは従来どおり */
   script?: { id: string; rules: string[]; joiners?: Record<string, BattleEntity> }
@@ -53,6 +57,8 @@ export interface HarnessEngine {
   selectAttack(targetId?: string): void
   selectSpell(spell: SpellExecution, targetId?: string): void
   selectItem(item: ItemExecution, targetId?: string): boolean
+  /** 召喚 (#889)。召喚を使わない合成エンジンは持たなくてよい */
+  selectSummon?(summon: SummonExecution, targetId?: string): boolean
   selectEscape(): void
 }
 
@@ -86,6 +92,11 @@ export function applyOp(engine: HarnessEngine, scenario: Scenario, op: Op): void
     case 'item': {
       const item = scenario.items[op.i]
       if (item) engine.selectItem(clone(item), op.target)
+      return
+    }
+    case 'summon': {
+      const summon = scenario.summons?.[op.m]
+      if (summon) engine.selectSummon?.(clone(summon), op.target)
       return
     }
     case 'escape':

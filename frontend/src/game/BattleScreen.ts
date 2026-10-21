@@ -83,6 +83,7 @@ import {
   type BattleMenuEntry,
   type BattleSkillEntry,
   type BattleSpellEntry,
+  type BattleSummonEntry,
   type MenuAction,
   type MenuContext,
   type MenuKind,
@@ -1138,9 +1139,10 @@ export class BattleScreen extends Container {
         this.engine.selectEscape()
         break
       case 'skill':
+      case 'summon':
       case 'spell':
       case 'item':
-        // 候補窓 (#204, #806): 呪文・わざ・アイテムが渡されている side なら（grid でも cross でも）一覧の窓を開く。
+        // 候補窓 (#204, #806): 呪文・わざ・召喚 (#889)・アイテムが渡されている side なら（grid でも cross でも）一覧の窓を開く。
         // それ以外は従来どおり識別ログのみ（戦闘エンジン側の log には積まない）
         if (this.openMenu(id)) return
         console.info(`[BattleScreen] command '${id}' は #175 で実装`)
@@ -2240,7 +2242,7 @@ export class BattleScreen extends Container {
     this.engine.setAtbWaitScope('menu')
   }
 
-  /** 候補窓を使えるか: `side` で、呪文・わざ・アイテムが 1 件以上渡されている（配置が grid でも使える。#806） */
+  /** 候補窓を使えるか: `side` で、呪文・わざ・召喚・アイテムが 1 件以上渡されている（配置が grid でも使える。#806） */
   private hasMenuData(): boolean {
     const m = this.opts.menu
     return (
@@ -2248,7 +2250,8 @@ export class BattleScreen extends Container {
       !!m &&
       ((m.items?.length ?? 0) > 0 ||
         Object.values(m.spells ?? {}).some((l) => l.length > 0) ||
-        Object.values(m.skills ?? {}).some((l) => l.length > 0))
+        Object.values(m.skills ?? {}).some((l) => l.length > 0) ||
+        Object.values(m.summons ?? {}).some((l) => l.length > 0))
     )
   }
 
@@ -2258,6 +2261,7 @@ export class BattleScreen extends Container {
   ): ReadonlyArray<BattleMenuEntry> {
     if (kind === 'spell') return (actor && this.opts.menu?.spells?.[actor.id]) || []
     if (kind === 'skill') return (actor && this.opts.menu?.skills?.[actor.id]) || []
+    if (kind === 'summon') return (actor && this.opts.menu?.summons?.[actor.id]) || []
     return this.opts.menu?.items ?? []
   }
 
@@ -2340,6 +2344,10 @@ export class BattleScreen extends Container {
           this.engine.selectSpell(entry as BattleSpellEntry)
           this.refresh()
         }
+      } else if (w?.type === 'list' && w.kind === 'summon' && entry && actor) {
+        // 呼び済み（このバトルでは もう よべない）・MP 不足は、エンジンが理由をログと吹き出しで知らせる（状態は変えない）
+        this.engine.selectSummon(entry as BattleSummonEntry)
+        this.refresh()
       } else if (w?.type === 'list' && w.kind === 'item' && entry) {
         // 所持数 0 のアイテム
         this.engine.notifyBlocked('もっていない！')
@@ -2362,6 +2370,8 @@ export class BattleScreen extends Container {
         this.engine.selectSpell(entry as BattleSpellEntry, action.targetId)
       } else if (action.kind === 'skill') {
         this.engine.selectSkill(entry as BattleSkillEntry, action.targetId)
+      } else if (action.kind === 'summon') {
+        this.engine.selectSummon(entry as BattleSummonEntry, action.targetId)
       } else {
         // 所持数を持つアイテムは、実際に使われたとき（selectItem が true）だけ減る。
         // 試作の所持数で、呼び出し側が渡した候補の count を戦闘中だけ書き換える

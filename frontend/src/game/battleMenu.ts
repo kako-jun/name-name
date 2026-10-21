@@ -11,10 +11,10 @@
  * - 消費 MP が足りない呪文は `disabled`（グレー）。確定しようとすると `blocked` を返し、窓は閉じない
  * - 対象は呪文の `target` 文字列（味方単体 / 敵全体 など）から決まる。単体は手が 1 本、全体は対象の全員に同時に手が立つ
  */
-import type { ItemExecution, SkillExecution, SpellExecution } from './battleEngine'
+import type { ItemExecution, SkillExecution, SpellExecution, SummonExecution } from './battleEngine'
 import { parseEffect, type BattleEntity } from './spellDsl'
 
-export type MenuKind = 'spell' | 'item' | 'skill'
+export type MenuKind = 'spell' | 'item' | 'skill' | 'summon'
 export type TargetSide = 'enemy' | 'party'
 /** single = 手で 1 体選ぶ / all = 側の全員 / self = 使用者本人 / none = 対象なし（マップ用など。選択を挟まず即実行） */
 export type TargetScope = 'single' | 'all' | 'self' | 'none'
@@ -42,16 +42,27 @@ export interface BattleSkillEntry extends SkillExecution {
   id: string
 }
 
-/** 候補窓に出すデータ。呪文・わざは味方の id ごと（覚えているものが人によって違う）、アイテムは全員共通 */
+/** 「しょうかん」(#889) の候補。`SummonExecution`（エンジンへ渡す形。名前は召喚獣の表示名）に一覧用の魔石の id を足したもの */
+export interface BattleSummonEntry extends SummonExecution {
+  id: string
+}
+
+/** 候補窓に出すデータ。呪文・わざ・召喚は味方の id ごと（覚えているもの・装備している魔石が人によって違う）、アイテムは全員共通 */
 export interface BattleMenuData {
   spells?: Readonly<Record<string, readonly BattleSpellEntry[]>>
   /** 「わざ」(#873)。味方の id ごと（装備中の刀のアビリティなど） */
   skills?: Readonly<Record<string, readonly BattleSkillEntry[]>>
+  /** 「しょうかん」(#889)。味方の id ごと（装備中の魔石の召喚獣。枠の順） */
+  summons?: Readonly<Record<string, readonly BattleSummonEntry[]>>
   items?: readonly BattleItemEntry[]
 }
 
-/** 候補窓の 1 件（呪文・わざ・アイテムのどれか） */
-export type BattleMenuEntry = BattleSpellEntry | BattleSkillEntry | BattleItemEntry
+/** 候補窓の 1 件（呪文・わざ・召喚・アイテムのどれか） */
+export type BattleMenuEntry =
+  | BattleSpellEntry
+  | BattleSkillEntry
+  | BattleSummonEntry
+  | BattleItemEntry
 
 /** 一覧の 1 行 */
 export interface MenuRow {
@@ -106,11 +117,20 @@ export const ITEM_TARGET: TargetSpec = { side: 'party', scope: 'single' }
 export function buildMenuRows(
   kind: MenuKind,
   entries: ReadonlyArray<BattleMenuEntry>,
-  actor: Pick<BattleEntity, 'mp'> | undefined
+  actor: Pick<BattleEntity, 'mp' | 'summoned'> | undefined
 ): MenuRow[] {
   return entries.map((e) => {
     // わざ (#873) は MP も所持数も無い。常に選べる（コスト列は空）
     if (kind === 'skill') return { label: e.name, cost: '', disabled: !actor }
+    // 召喚 (#889): MP を使うのは 0 より大きいときだけ表示する。呼び済み（1 人 1 バトル 1 回）・MP 不足はグレー
+    if (kind === 'summon') {
+      const mp = (e as BattleSummonEntry).mp
+      return {
+        label: e.name,
+        cost: mp > 0 ? String(mp) : '',
+        disabled: !actor || !!actor.summoned || actor.mp < mp,
+      }
+    }
     if (kind === 'spell') {
       const mp = (e as BattleSpellEntry).mp
       return {
@@ -136,7 +156,7 @@ export function targetSpecOf(kind: MenuKind, entry: BattleMenuEntry): TargetSpec
   const spec =
     kind === 'spell'
       ? parseSpellTarget((entry as BattleSpellEntry).target)
-      : kind === 'skill'
+      : kind === 'skill' || kind === 'summon'
         ? parseSkillTarget((entry as BattleSkillEntry).target)
         : ITEM_TARGET
   return spec.scope === 'single' && isReviveEntry(kind, entry) ? { ...spec, revive: true } : spec

@@ -3,9 +3,10 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { MonsterLoot, StatusDef } from '../types'
+import type { MagiciteDef, MonsterLoot, StatusDef } from '../types'
 import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
+import { applyPartyMagicites, parseMagicites } from './configMagicite'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -20,12 +21,19 @@ import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
 import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
 import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
-import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
+import {
+  COMMAND_DEFAULTS,
+  parseCommandIds,
+  type CommandId,
+  type CommandLabels,
+  type CommandLayout,
+} from '../game/battleCommands'
 import type {
   BattleItemEntry,
   BattleMenuData,
   BattleSkillEntry,
   BattleSpellEntry,
+  BattleSummonEntry,
 } from '../game/battleMenu'
 
 export const SCREEN_SIZES = [
@@ -122,6 +130,12 @@ export interface BattleSampleConfig {
   skills: Record<string, SkillExecution>
   /** 状態の宣言 (#870)。設定 JSON の `statuses`（`[状態]` と同じキー: id / name / duration / tickDamage / action / reverse / cure / expire）。既定は空 */
   statuses: Record<string, StatusDef>
+  /** コマンドの構成と順序 (#889)。設定 JSON の `commands`（`attack` / `skill` / `summon` / `spell` / `item` / `escape` を重複なく）。未指定は undefined＝既定の 4 つ */
+  commands: CommandId[] | undefined
+  /** 魔石の宣言 (#889)。設定 JSON の `magicites`（`[魔石]` と同じキー）。`party[].magicites` が装備する。既定は空 */
+  magicites: Record<string, MagiciteDef>
+  /** 魔石を装備した味方の「しょうかん」の行 (#889)（味方 id → 行）。`party[].magicites` から作る。既定は空 */
+  summons: Record<string, BattleSummonEntry[]>
   /** 戦利品のログ用の表示名 (#831)。設定 JSON の `itemNames`（アイテム id → 名前）。既定は空（id をそのまま表示） */
   itemNames: Record<string, string>
   /**
@@ -242,6 +256,9 @@ export function defaultConfig(): BattleSampleConfig {
     foreground: null,
     skills: {},
     statuses: {},
+    commands: undefined,
+    magicites: {},
+    summons: {},
     itemNames: {},
     script: null,
     party: defaultParty(),
@@ -737,6 +754,21 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!skills.ok) return skills
   const statuses = parseStatuses(raw.statuses)
   if (!statuses.ok) return statuses
+  const magicites = parseMagicites(raw.magicites)
+  if (!magicites.ok) return magicites
+  let commands: CommandId[] | undefined
+  if (raw.commands !== undefined) {
+    if (!Array.isArray(raw.commands) || raw.commands.some((c) => typeof c !== 'string')) {
+      return { ok: false, error: 'commands は文字列の配列である必要があります' }
+    }
+    commands = parseCommandIds((raw.commands as string[]).join(','))
+    if (!commands || commands.length !== raw.commands.length) {
+      return {
+        ok: false,
+        error: `commands は attack / skill / summon / spell / item / escape を重複なく並べてください: ${JSON.stringify(raw.commands)}`,
+      }
+    }
+  }
   const itemNames: Record<string, string> = {}
   if (raw.itemNames !== undefined) {
     if (!isRecord(raw.itemNames)) {
@@ -794,6 +826,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!party.ok) return party
   const enemies = parseEntities(raw.enemies, def.enemies, MAX_ENEMIES, baseUrl, 'enemies')
   if (!enemies.ok) return enemies
+  // 魔石 (#889): 装備する味方の能力値・耐性・通常攻撃の属性を反映し、「しょうかん」の行を作る
+  const summons = applyPartyMagicites(raw.party, party.value, magicites.value)
+  if (!summons.ok) return summons
   return {
     ok: true,
     value: {
@@ -817,6 +852,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       foreground,
       skills: skills.value,
       statuses: statuses.value,
+      commands,
+      magicites: magicites.value,
+      summons: summons.value,
       itemNames,
       script: script.value,
       party: party.value,
@@ -917,7 +955,9 @@ export function buildBattleSetup(
     presentation: BattlePresentation
     commandLayout: CommandLayout
     commandLabels: CommandLabels
-    /** 候補窓の呪文・アイテム (#204)。side の BattleScreen が grid でも cross でも使う */
+    /** コマンドの構成と順序 (#889)。未指定は既定の 4 つ */
+    commands?: CommandId[]
+    /** 候補窓の呪文・アイテム (#204)・召喚 (#889)。side の BattleScreen が grid でも cross でも使う */
     menu: BattleMenuData
     background?: string
     depth: BattleDepth | null
@@ -976,6 +1016,7 @@ export function buildBattleSetup(
       presentation: view.presentation,
       commandLayout: view.commandLayout,
       commandLabels: config.commandLabels,
+      ...(config.commands ? { commands: [...config.commands] } : {}),
       menu: {
         // 呪文は味方全員が同じものを使える（複製して渡す。BattleScreen は読むだけだが、設定を共有しない）
         spells: Object.fromEntries(
@@ -985,6 +1026,16 @@ export function buildBattleSetup(
           ])
         ),
         items: config.items.map((e) => ({ ...e })),
+        // 召喚 (#889): 魔石を装備した味方だけ。画面に出る（渡す）味方の分だけ複製する
+        ...(party.some((p) => config.summons[p.id])
+          ? {
+              summons: Object.fromEntries(
+                party
+                  .filter((p) => config.summons[p.id])
+                  .map((p) => [p.id, config.summons[p.id].map((e) => ({ ...e }))])
+              ),
+            }
+          : {}),
       },
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),
       depth:
