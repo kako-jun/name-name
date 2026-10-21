@@ -1,5 +1,5 @@
 /** 装備 (#207) の純関数: 枠の割り当て・装備の解決（アイテムと魔石を同じ入口で）・属性の層・ボーナス・わざ・装備の変更 */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ItemDef, MagiciteDef } from '../types'
 import {
   MAX_SLOTS_PER_KIND,
@@ -34,6 +34,10 @@ const ITEMS: Record<string, ItemDef> = {
   helm: gear({ id: 'helm', kind: '兜', equipBonus: 'def+2' }),
   potion: gear({ id: 'potion', kind: '回復', equipBonus: 'atk+99' }),
   only: gear({ id: 'only', equippableBy: ['mage'], equipBonus: 'atk+50' }),
+  fsword: gear({ id: 'fsword', elements: ['fire'], equipBonus: 'atk+4' }),
+  zz: gear({ id: 'zz', equippableBy: ['zz'] }),
+  shield2: gear({ id: 'shield2', kind: '盾', elements: ['ice'] }),
+  helm2: gear({ id: 'helm2', kind: '兜', elements: ['wind'] }),
   bad: gear({ id: 'bad', equipBonus: 'xx+3, atk+2, def+' }),
 }
 const STONES: Record<string, MagiciteDef> = {
@@ -176,6 +180,40 @@ describe('resolveMemberEquipment: 装備の解決', () => {
     expect(over.warnings.some((w) => w.includes("'fire'") && w.includes('2 つまで'))).toBe(true)
   })
 
+  it('武器の `属性` は耐性にならず警告する（予約）。防具・盾・兜の `属性` は従来どおり耐性になる', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const w = resolveMemberEquipment({ id: 'a', equipment: ['fsword'] }, ROSTER)
+      expect(w.affinity).toBeUndefined()
+      expect(w.layers).toEqual([])
+      expect(w.attackElements).toEqual([])
+      expect(w.bonus).toEqual({ atk: 4 })
+      expect(w.warnings).toEqual([
+        "a: 武器 'fsword' の属性は現在は無視される（予約。耐性にはならない）",
+      ])
+      // console.warn は同じ id につき 1 度だけ
+      resolveMemberEquipment({ id: 'a', equipment: ['fsword'] }, ROSTER)
+      expect(warn).toHaveBeenCalledTimes(1)
+      const g = resolveMemberEquipment({ id: 'a', equipment: ['robe', 'shield2'] }, ROSTER)
+      expect(g.layers).toEqual(['water', 'ice'])
+      expect(g.affinity).toEqual({ halve: ['water', 'ice'] })
+      const h = resolveMemberEquipment({ id: 'a', equipment: ['helm2'] }, ROSTER)
+      expect(h.affinity).toEqual({ halve: ['wind'] })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('装備品と extraElements が合わせて 2 層を超えるとき、装備品が先に積まれ extra が捨てられる', () => {
+    const r = resolveMemberEquipment(
+      { id: 'a', equipment: ['robe', 'shield2'] },
+      { ...ROSTER, extraElements: { a: ['wind'] } }
+    )
+    expect(r.layers).toEqual(['water', 'ice'])
+    expect(r.affinity).toEqual({ halve: ['water', 'ice'] })
+    expect(r.warnings.some((w) => w.includes("'wind'") && w.includes('2 つまで'))).toBe(true)
+  })
+
   it('武器のわざを装備した順に集める（重複なし）', () => {
     const r = resolveMemberEquipment(
       { id: 'a', equipment: ['sword', 'axe'], equipmentSlots: ['武器', '武器'] },
@@ -306,6 +344,13 @@ describe('equipItem / unequipItem: 装備の変更の計算', () => {
 
   it('すでに装備している id は変更なしで ok', () => {
     expect(equipItem(def, ROSTER, ['sword'], 'sword')).toEqual({ equipment: ['sword'], ok: true })
+    // 列にあるだけで枠に入っていない（装備可に無い）品は「装備済み」にならない
+    const ng = equipItem({ id: 'a' }, ROSTER, ['zz'], 'zz')
+    expect(ng.ok).toBe(false)
+    expect(ng.equipment).toEqual(['zz'])
+    expect(ng.reason).toContain('装備可')
+    // 枠から溢れて捨てられている品も同じ
+    expect(equipItem({ id: 'a' }, ROSTER, ['sword', 'axe'], 'axe').ok).toBe(false)
   })
 
   it('付けられないもの（宣言なし・種別違い・装備可違反・枠なし）は変更なしで理由を返す', () => {
