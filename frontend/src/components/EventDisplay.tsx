@@ -331,6 +331,22 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('Job' in event) {
+    const j = event.Job
+    return (
+      <div className="space-y-0.5">
+        <div className={`text-sm font-semibold ml-2 ${head}`}>
+          🧰 ジョブ: {j.name} <span className={`text-xs font-normal ${meta}`}>(id={j.id})</span>
+        </div>
+        <div className={`text-xs ml-4 font-mono ${accent}`}>
+          {j.description ? `説明=${j.description}` : ''}
+          {j.elements && j.elements.length > 0 ? ` 属性=${j.elements.join(',')}` : ''}
+          {j.equipBonus ? ` 装備時=${j.equipBonus}` : ''}
+        </div>
+      </div>
+    )
+  }
+
   if ('PartyMember' in event) {
     const p = event.PartyMember
     const learns = p.learns?.map((l) => `Lv${l.level} ${l.spell}`).join(', ')
@@ -351,6 +367,7 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
           {p.equipmentSlots && p.equipmentSlots.length > 0
             ? ` 装備枠=${p.equipmentSlots.join(',')}`
             : ''}
+          {p.jobs && p.jobs.length > 0 ? ` ジョブ=${p.jobs.join(',')}` : ''}
         </div>
         {learns && <div className={`text-xs ml-4 ${meta}`}>習得: {learns}</div>}
       </div>

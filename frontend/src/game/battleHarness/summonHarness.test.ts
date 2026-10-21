@@ -76,6 +76,8 @@ describe('buildSweep: 族 summon', () => {
       'loot',
       'script',
       'random-script',
+      'equipment',
+      'job',
     ] as const
     const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0 }
     const withIt = buildSweep({ ...cfg, skip: [...heavy] })

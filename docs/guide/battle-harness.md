@@ -17,7 +17,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 HARNESS_RANDOM_SCRIPT_COUNT=300 npm run test:battle-harness   # 脚本制御の戦闘のランダム合成の件数（既定 1000）
 ```
 
-環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_RANDOM_SCRIPT_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,magicite,loot,script,random-script,equipment,summon`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
+環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_RANDOM_SCRIPT_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,magicite,loot,script,random-script,equipment,job,summon`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
 
 ## 何を動かすか
 
@@ -34,6 +34,7 @@ HARNESS_RANDOM_SCRIPT_COUNT=300 npm run test:battle-harness   # 脚本制御の�
 | `magicite` | 魔石 (#889): 魔石の組み合わせ（装備なし・1 属性・同属性 2 つ=吸収・水と火・3 つ装備〈層は合計 2 まで〉・魔石と防具の層の超過・防具の属性は耐性だけで攻撃に乗らない・枠超過・枠 0・負の極端なボーナス・不正なボーナスの書式）× 召喚の中身（単体・全体・回復・複数ヒット・即死・状態・極大・不正な書式・演出のみ・有料・MP 不足）× 敵の相性（水・火の単独と複数属性）× 敵の HP（小さい=倒れる）× 操作（召喚 2 連打 = 1 人 1 バトル 1 回の制限 / 通常攻撃のあとに召喚）× ターン制/ATB。味方 a の魔石は本物の `resolveMemberMagicite` で組み立て、敵は味方全員へ水属性の特技を使う（味方の耐性も動く） |
 | `loot` | ぬすむ・ドロップ (#831)。効果 `steal`（確率・レア率・枠・回数・ぶんどるの通常値と境界値・不正値） × 対象の範囲 × 敵の戦利品の宣言（なし・通常枠・レア枠・両方・確率と個数・盗める回数 3 / 無限・不正な行だらけ） × 使い手の加算（なし・+50・極大・極小） × 敵の HP（倒れる・倒れない） × ターン制/ATB。味方が 4 回ぬすんでから攻撃し、勝利時のドロップまで見る。不変条件は `loot-invariant` |
 | `equipment` | 装備 (#207): 装備の組み合わせ（装備なし・武器 1 本・武器＋防具・4 枠すべて・枠超過・武器 2 枠・防具 2 枠で同属性=吸収・防具 3 枚で層の超過〈合計 2 まで〉・魔石と防具の層・極端な負のボーナス・不正なボーナスの書式・装備できない種別・`装備可` 違反・宣言なし・重複・武器の枠なし・枠なし）× 敵の相性（なし・火が弱点・火を吸収）× 敵の HP（小さい=倒れる）× 操作（わざの連打 / 攻撃のあとにわざ）× ターン制/ATB。実際の `resolveMemberEquipment` で味方 a を組み立て、装備中の装備品のわざを `Scenario.abilities`（操作 `ability`）にする。敵 s は味方全員へ水属性の特技を使い、防具の耐性も動かす |
+| `job` | ジョブ (#740): ジョブの組み合わせ（ジョブなし・先頭が既定・転職後・ジョブ無し〈`''`〉・宣言なし・就けないジョブ・候補なし・極端な負のボーナス・不正なボーナスの書式・属性 2 つ・ジョブと防具の同属性=吸収・ジョブと防具/魔石の層の超過〈合計 2 まで。ジョブの層が先に捨てられる〉）× 敵の相性（なし・火が弱点・火を吸収）× 敵の HP（小さい=倒れる）× 操作（攻撃の連打 / 攻撃のあとに逃走）× ターン制/ATB。実際の `resolveMemberEquipment` で味方 a を組み立てる。ジョブはコマンドを増やさないので `abilities` は持たない。敵 s は味方全員へ水属性の特技を使い、ジョブの耐性も動かす |
 
 | `summon` | 召喚獣の演出 (#750): 演出（なし・名前だけ・絵と効果音と想像の層・左向きの絵）× 呼び方（味方の召喚〈魔石〉・味方の「わざ」・敵の特技）× 効果（ダメージ・回復・演出のみ・不正な書式）× 敵の HP（小さい=倒れる）× ターン制/ATB。演出つきの行動の記録に `summon` が付くこと、演出を宣言しない対照（`no-cue`）と**他のすべての族のイベントに `summon` が付かないこと**（旧挙動不変）を `summon-invariant` で見る |
 | `script` | 脚本制御の戦闘 (#741 / #863。約 250 件)。**勝敗固定**（勝利・敗北・中断 × 上限ターン 1 / 3 / 既定 × ターン制・ATB 2 種 × 強さ 4 組〈味方が弱い / 強い / 互角 / どちらも攻撃 0〉）、**固定を壊そうとする効果**（HP を 0 にする `damage` / `damage_full` / 負の `heal` / 死の宣告 / 多段ヒット × 撃つ側〈味方→敵・味方→味方・敵→味方〉× 固定 × ターン制・ATB）、**途中参戦**（参戦できる味方・いない id・すでにいる id × 戦闘方式 × 下限の有無）、**復活**（HP 指定 5 種 × 戦闘方式 × 味方 1・2 人）、**逃げるイベントバトル**（倒せない敵＋盾役 × 戦闘方式 × 味方の強さ）、**「にげる」禁止**（連打）。期待（`scriptExpect`）は「決着する・許した終わり方・ターン上限内」 |

@@ -2,11 +2,13 @@
  * 戦闘画面サンプル (#749) の設定 JSON の装備 (#207) と魔石 (#889) の味方への反映。純粋関数のみ（ブラウザ API に触れない）。
  *
  * - `gear`: `[アイテム id]` の装備品と同じキーの配列（id / name / kind / equipBonus / equippableBy / elements / abilities）。`kind` は 武器 / 防具 / 盾 / 兜
+ * - `jobs`（#740）: `[ジョブ id]` と同じキーの配列（id / name / description / equipBonus / elements）。`party[].jobs`（就けるジョブの id の配列。先頭が最初のジョブ）と
+ *   `party[].job`（いま就いているジョブの id。省略は `jobs` の先頭、`''` はジョブ無し）で味方に就かせ、`job.ts` で能力値・耐性に反映する
  * - `party[].equipment`（装備する id の配列。`gear` と `magicites` の id を混在で書ける）・`party[].equipmentSlots`（枠の種類の列。省略は 武器・防具・盾・兜 が各 1）・
  *   `party[].magicites` / `party[].magiciteSlots`（#889）・`party[].abilities`（固定の「わざ」の特技 id。`skills` から引く）を読み、
  *   本編と同じ `equipment.ts` で能力値・耐性・通常攻撃の属性を味方に反映し、候補窓の「しょうかん」と「わざ」の行を作る
  */
-import type { ItemDef, MagiciteDef } from '../types'
+import type { ItemDef, JobDef, MagiciteDef } from '../types'
 import type { BattleSkillEntry, BattleSummonEntry } from '../game/battleMenu'
 import type { SkillExecution } from '../game/battleEngine'
 import { normalizeAttrId } from '../game/affinity'
@@ -83,6 +85,55 @@ export function parseGear(raw: unknown): ParseResult<Record<string, ItemDef>> {
   return { ok: true, value: out }
 }
 
+/** 設定 JSON の jobs を検証する (#740)。`id` と `name` は必須。parser と同じく属性は正規化・重複排除して最大 2 つ */
+export function parseJobs(raw: unknown): ParseResult<Record<string, JobDef>> {
+  if (raw === undefined) return { ok: true, value: {} }
+  if (!Array.isArray(raw)) return { ok: false, error: 'jobs は配列である必要があります' }
+  const out: Record<string, JobDef> = {}
+  for (let i = 0; i < raw.length; i++) {
+    const r: unknown = raw[i]
+    const path = `jobs[${i}]`
+    if (!isRecord(r)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
+    for (const f of ['id', 'name'] as const) {
+      if (typeof r[f] !== 'string' || r[f].trim() === '') {
+        return { ok: false, error: `${path}.${f} は空でない文字列である必要があります` }
+      }
+    }
+    for (const f of ['description', 'equipBonus'] as const) {
+      if (r[f] !== undefined && typeof r[f] !== 'string') {
+        return { ok: false, error: `${path}.${f} は文字列である必要があります` }
+      }
+    }
+    const elements: string[] = []
+    if (r.elements !== undefined) {
+      const list = stringList(r.elements)
+      if (!list) return { ok: false, error: `${path}.elements は文字列の配列である必要があります` }
+      for (const e of list) {
+        const id = normalizeAttrId(e)
+        if (id !== '' && id !== '無属性' && id !== 'none' && !elements.includes(id)) {
+          elements.push(id)
+        }
+      }
+      if (elements.length > 2) {
+        return { ok: false, error: `${path}.elements は最大 2 つまでです` }
+      }
+    }
+    const text = (f: string): string | undefined => {
+      const v = r[f]
+      return typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+    }
+    const id = (r.id as string).trim()
+    out[id] = {
+      id,
+      name: (r.name as string).trim(),
+      ...(text('description') !== undefined ? { description: text('description') } : {}),
+      ...(text('equipBonus') !== undefined ? { equipBonus: text('equipBonus') } : {}),
+      ...(elements.length > 0 ? { elements } : {}),
+    }
+  }
+  return { ok: true, value: out }
+}
+
 /** 味方ごとの候補窓の行（装備から導いたもの）。装備も魔石も無い味方は含まない */
 export interface PartyEquipmentMenus {
   /** 味方 id → 「しょうかん」の行 (#889) */
@@ -103,6 +154,8 @@ export function applyPartyEquipment(
     magicites: Record<string, MagiciteDef>
     gear: Record<string, ItemDef>
     skills: Record<string, SkillExecution>
+    /** ジョブの宣言 (#740)。省略は宣言なし */
+    jobs?: Record<string, JobDef>
   }
 ): ParseResult<PartyEquipmentMenus> {
   const menus: PartyEquipmentMenus = { summons: {}, skills: {} }
@@ -115,19 +168,24 @@ export function applyPartyEquipment(
         r.magiciteSlots === undefined &&
         r.equipment === undefined &&
         r.equipmentSlots === undefined &&
-        r.abilities === undefined)
+        r.abilities === undefined &&
+        r.jobs === undefined &&
+        r.job === undefined)
     ) {
       continue
     }
     const path = `party[${i}]`
     const lists: Partial<
-      Record<'magicites' | 'equipment' | 'equipmentSlots' | 'abilities', string[]>
+      Record<'magicites' | 'equipment' | 'equipmentSlots' | 'abilities' | 'jobs', string[]>
     > = {}
-    for (const f of ['magicites', 'equipment', 'equipmentSlots', 'abilities'] as const) {
+    for (const f of ['magicites', 'equipment', 'equipmentSlots', 'abilities', 'jobs'] as const) {
       if (r[f] === undefined) continue
       const list = stringList(r[f])
       if (!list) return { ok: false, error: `${path}.${f} は文字列の配列である必要があります` }
       lists[f] = list
+    }
+    if (r.job !== undefined && typeof r.job !== 'string') {
+      return { ok: false, error: `${path}.job は文字列である必要があります` }
     }
     let slots: number | undefined
     if (r.magiciteSlots !== undefined) {
@@ -148,8 +206,14 @@ export function applyPartyEquipment(
         ...(slots !== undefined ? { magiciteSlots: slots } : {}),
         ...(lists.equipment ? { equipment: lists.equipment } : {}),
         ...(lists.equipmentSlots ? { equipmentSlots: lists.equipmentSlots } : {}),
+        ...(lists.jobs ? { jobs: lists.jobs } : {}),
       },
-      { magicites: masters.magicites, items: masters.gear }
+      {
+        magicites: masters.magicites,
+        items: masters.gear,
+        ...(masters.jobs ? { jobs: masters.jobs } : {}),
+        ...(typeof r.job === 'string' ? { currentJobs: { [entity.id]: r.job.trim() } } : {}),
+      }
     )
     applyMemberMagicite(entity, resolved)
     if (resolved.stones.length > 0) menus.summons[entity.id] = summonEntries(resolved.stones)

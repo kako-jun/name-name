@@ -564,6 +564,10 @@ pub struct PartyMemberDef {
         skip_serializing_if = "Option::is_none"
     )]
     pub equipment_slots: Option<Vec<String>>,
+    /// 就けるジョブ (#740)。`[ジョブ id]` の id を書いた順に持つ（`ジョブ:` はカンマ区切り・複数行可）。先頭が最初のジョブ。
+    /// 現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。定義の無い id・候補に無いジョブは runtime が警告して無視する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<Vec<String>>,
 }
 
 /// パーティメンバーの呪文習得スロット (#175)
@@ -727,6 +731,32 @@ pub struct MagiciteDef {
     /// 魔石が自分の `効果`/`builtin` を持たないときの召喚の中身を引く。`召喚獣:`（表示名）とは別のキー。JSON / TS 側のキーは `summonId`。
     #[serde(default, rename = "summonId", skip_serializing_if = "Option::is_none")]
     pub summon_id: Option<String>,
+}
+
+/// ジョブ（職業）定義 (#740)。`[ジョブ <id>] ... [/ジョブ]` ブロックで書く。
+///
+/// ジョブは「アビリティを変化させるパッシブ」で、アクティブなコマンドを持たない。就いている間だけ `equip_bonus` が能力値に足され、
+/// `elements` が持ち主の耐性の層に積まれる（魔石・装備品と合わせて 1 人 2 つまで。攻撃の属性にはならない）。
+/// ボーナスは `atk+3, hp+20` のような生文字列で透過し、解釈と不正値の警告は runtime（`magicite.ts` と共有）が行う。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct JobDef {
+    pub id: String,
+    pub name: String,
+    /// 説明文（`説明:`）。メニュー等の表示用で、エンジンは解釈しない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// このジョブの間だけ能力値に足す分（`装備時:` `atk+3, hp+20`。魔石・装備品と同じ書式）。JSON / TS 側のキーは `equipBonus`。
+    #[serde(
+        default,
+        rename = "equipBonus",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub equip_bonus: Option<String>,
+    /// このジョブの間だけ持つ属性防御の属性 id（`属性:`。parser が小文字・半角に正規化済み・重複排除済み）。最大 2 つ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<String>,
 }
 
 /// 状態定義 (#870、状態異常システム)。`[状態 <id>] ... [/状態]` ブロックで書く。
@@ -1199,6 +1229,8 @@ pub enum Event {
     Magicite(MagiciteDef),
     /// 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。魔石・特技が `召喚獣id:` で参照する。画像・効果音・属性・想像の層を持つ。
     Summon(SummonDef),
+    /// ジョブ（職業）定義 (#740)。`[ジョブ <id>] ... [/ジョブ]` ブロックで書く。就いている間だけ能力値と属性防御に効くパッシブ。
+    Job(JobDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
     PartyMember(PartyMemberDef),
     /// RPG イベント定義 (#187)。

@@ -75,7 +75,7 @@ describe('equipmentScenarios: 生成', () => {
     expect(Object.keys(EQUIPMENT_ABILITIES).length).toBeGreaterThanOrEqual(5)
   })
 
-  it('SweepFamily `equipment` は buildSweep の最後に足され、skip で除ける。直前の族のシナリオは変わらない', () => {
+  it('SweepFamily `equipment` は buildSweep の `job` の前に足され、skip で除ける。直前の族のシナリオは変わらない', () => {
     // 重い族は skip で省いて、末尾に足されることだけを確かめる（既存族のバイト一致は npm run test:battle-harness の出力比較で見る）
     const heavy = [
       'effect-matrix',
@@ -92,8 +92,8 @@ describe('equipmentScenarios: 生成', () => {
       'summon',
     ] as const
     const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0 }
-    const withIt = buildSweep({ ...cfg, skip: [...heavy] })
-    const without = buildSweep({ ...cfg, skip: [...heavy, 'equipment'] })
+    const withIt = buildSweep({ ...cfg, skip: [...heavy, 'job'] })
+    const without = buildSweep({ ...cfg, skip: [...heavy, 'job', 'equipment'] })
     expect(withIt.length - without.length).toBe(all.length)
     expect(withIt.slice(0, without.length)).toEqual(without)
     expect(without.every((s) => s.id.startsWith('loot/'))).toBe(true)

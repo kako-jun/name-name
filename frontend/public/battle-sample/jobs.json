@@ -1,0 +1,91 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "jobs": [
+    {
+      "id": "nurse",
+      "name": "看護師",
+      "description": "守りに強い。HPが増える",
+      "equipBonus": "def+4, hp+30"
+    },
+    {
+      "id": "diver",
+      "name": "海女",
+      "description": "水の攻撃を半減する",
+      "equipBonus": "agi+3",
+      "elements": ["water"]
+    },
+    {
+      "id": "lawyer",
+      "name": "弁護士",
+      "description": "少しだけ攻めと守りが上がる",
+      "equipBonus": "atk+3, def+1"
+    }
+  ],
+  "gear": [
+    {
+      "id": "armor-water",
+      "name": "あいいろのよろい",
+      "kind": "防具",
+      "equipBonus": "def+2",
+      "elements": ["water"]
+    }
+  ],
+  "party": [
+    {
+      "id": "hero",
+      "name": "ゆうしゃ",
+      "hp": 120,
+      "mp": 20,
+      "atk": 20,
+      "def": 4,
+      "agi": 6,
+      "jobs": ["nurse", "diver"],
+      "job": "diver"
+    },
+    {
+      "id": "ally",
+      "name": "なかま",
+      "hp": 100,
+      "mp": 20,
+      "atk": 16,
+      "def": 3,
+      "agi": 5,
+      "jobs": ["diver"],
+      "equipmentSlots": ["防具"],
+      "equipment": ["armor-water"]
+    },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 90,
+      "mp": 30,
+      "atk": 12,
+      "def": 2,
+      "agi": 5,
+      "row": "back",
+      "jobs": ["lawyer", "nurse"]
+    }
+  ],
+  "skills": [
+    {
+      "id": "wave",
+      "name": "たいかいのなみ",
+      "target": "相手全体",
+      "effect": "damage 40..40 type=water",
+      "message": "{user}は 大波を よびよせた！"
+    }
+  ],
+  "enemies": [
+    {
+      "id": "kawanushi",
+      "name": "かわのぬし",
+      "hp": 500,
+      "atk": 12,
+      "def": 2,
+      "agi": 4,
+      "actions": ["順番=wave > こうげき"]
+    }
+  ]
+}

@@ -59,6 +59,7 @@ function variantToDeskClass(event: Event): string {
     'Skill' in event ||
     'Status' in event ||
     'Magicite' in event ||
+    'Job' in event ||
     'PartyMember' in event
   )
     return 'desk-fusen desk-fusen-g'

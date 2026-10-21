@@ -3,10 +3,18 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { ItemDef, MagiciteDef, MonsterLoot, SkillDef, StatusDef, SummonDef } from '../types'
+import type {
+  ItemDef,
+  JobDef,
+  MagiciteDef,
+  MonsterLoot,
+  SkillDef,
+  StatusDef,
+  SummonDef,
+} from '../types'
 import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
-import { applyPartyEquipment, parseGear } from './configEquipment'
+import { applyPartyEquipment, parseGear, parseJobs } from './configEquipment'
 import { parseBeasts, parseMagicites } from './configMagicite'
 import { resolveSummonRefs, warnSummonOnce } from '../game/summons'
 import { toSkillExecutions } from '../game/enemyAi'
@@ -141,6 +149,8 @@ export interface BattleSampleConfig {
   summons: Record<string, BattleSummonEntry[]>
   /** 装備品の宣言 (#207)。設定 JSON の `gear`（`[アイテム]` の装備品と同じキー）。`party[].equipment` が装備する。既定は空 */
   gear: Record<string, ItemDef>
+  /** ジョブの宣言 (#740)。設定 JSON の `jobs`（`[ジョブ]` と同じキー）。`party[].jobs` が就けるジョブ、`party[].job` が現在のジョブ。既定は空 */
+  jobs: Record<string, JobDef>
   /** 味方の「わざ」の行 (#207)（味方 id → 行）。`party[].abilities` と装備中の `gear` の `abilities` から、`skills` を引いて作る。既定は空 */
   abilities: Record<string, BattleSkillEntry[]>
   /** 戦利品のログ用の表示名 (#831)。設定 JSON の `itemNames`（アイテム id → 名前）。既定は空（id をそのまま表示） */
@@ -267,6 +277,7 @@ export function defaultConfig(): BattleSampleConfig {
     magicites: {},
     summons: {},
     gear: {},
+    jobs: {},
     abilities: {},
     itemNames: {},
     script: null,
@@ -808,6 +819,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   const refs = resolveSampleSummons(skills.value, magicites.value, beasts.value)
   const gear = parseGear(raw.gear)
   if (!gear.ok) return gear
+  const jobs = parseJobs(raw.jobs)
+  if (!jobs.ok) return jobs
   let commands: CommandId[] | undefined
   if (raw.commands !== undefined) {
     if (!Array.isArray(raw.commands) || raw.commands.some((c) => typeof c !== 'string')) {
@@ -883,6 +896,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     magicites: refs.magicites,
     gear: gear.value,
     skills: refs.skills,
+    jobs: jobs.value,
   })
   if (!equipped.ok) return equipped
   return {
@@ -912,6 +926,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       magicites: refs.magicites,
       summons: equipped.value.summons,
       gear: gear.value,
+      jobs: jobs.value,
       abilities: equipped.value.skills,
       itemNames,
       script: script.value,

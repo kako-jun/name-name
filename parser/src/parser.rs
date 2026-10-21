@@ -5385,6 +5385,99 @@ AGI: 1
     }
 
     #[test]
+    fn parses_job_blocks_and_party_jobs() {
+        // ジョブ (#740): `[ジョブ]` の 名前 / 説明 / 属性 / 装備時、`[パーティ]` の ジョブ:
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[ジョブ nurse]
+名前: 看護師
+説明: 守りに強い
+属性: ＷＡＴＥＲ, water, ice, wind, 無属性
+装備時: def+3, hp+10
+[/ジョブ]
+
+[ジョブ lawyer]
+名前: 弁護士
+装備時:
+[/ジョブ]
+
+[ジョブ nameless]
+装備時: atk+1
+[/ジョブ]
+
+[ジョブ ]
+名前: 空
+[/ジョブ]
+
+[パーティ hero]
+名前: 主人公
+HP: 30
+ATK: 5
+DEF: 3
+AGI: 4
+ジョブ: nurse, lawyer
+ジョブ: nurse，clerk
+[/パーティ]
+
+[パーティ none]
+名前: なし
+HP: 1
+ATK: 1
+DEF: 1
+AGI: 1
+[/パーティ]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let jobs: Vec<&JobDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Job(j) => Some(j),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jobs.len(), 2, "名前の無いジョブ・id が空のジョブは捨てる");
+        assert_eq!(jobs[0].id, "nurse");
+        assert_eq!(jobs[0].name, "看護師");
+        assert_eq!(jobs[0].description.as_deref(), Some("守りに強い"));
+        assert_eq!(
+            jobs[0].elements,
+            vec!["water", "ice"],
+            "属性は正規化・重複排除・最大2つ・無属性は書けない"
+        );
+        assert_eq!(jobs[0].equip_bonus.as_deref(), Some("def+3, hp+10"));
+        assert_eq!(jobs[1].equip_bonus, None, "空の値は未指定");
+        assert!(jobs[1].elements.is_empty());
+        assert_eq!(jobs[1].description, None);
+        let members: Vec<&PartyMemberDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PartyMember(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            members[0].jobs.as_deref(),
+            Some(
+                &[
+                    "nurse".to_string(),
+                    "lawyer".to_string(),
+                    "clerk".to_string()
+                ][..]
+            ),
+            "複数行・全角カンマ・重複排除・書いた順"
+        );
+        assert_eq!(members[1].jobs, None);
+        let doc2 = parse(&crate::emitter::emit(&doc));
+        assert_eq!(*events, doc2.chapters[0].scenes[0].events);
+    }
+
+    #[test]
     fn english_keys_are_accepted() {
         let input = r#"---
 engine: name-name

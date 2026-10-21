@@ -1,11 +1,11 @@
 //! マスターデータブロック (#174 / #175) のパース。
 //!
-//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[魔石 <id>]` / `[召喚獣 <id>]` / `[パーティ <id>]` の
-//! 9 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
+//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[魔石 <id>]` / `[召喚獣 <id>]` / `[ジョブ <id>]` / `[パーティ <id>]` の
+//! 10 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
 //! 構造を持ち、ボディ部の解釈だけが kind ごとに違う。
 //!
 //! parser.rs の本体ループから 1 関数 `try_parse_master_data_block` を呼び出すことで
-//! 9 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
+//! 10 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
 use crate::parser::emit_warning;
@@ -38,6 +38,7 @@ pub(crate) fn try_parse_master_data_block(
         MasterKind::BattleScript => Event::BattleScript(build_battle_script_def(id, &body.entries)),
         MasterKind::Magicite => Event::Magicite(build_magicite_def(id, &body.entries)?),
         MasterKind::Summon => Event::Summon(build_summon_def(id, &body.entries)?),
+        MasterKind::Job => Event::Job(build_job_def(id, &body.entries)?),
         MasterKind::PartyMember => Event::PartyMember(build_party_member_def(id, &body.entries)?),
     };
 
@@ -54,6 +55,7 @@ enum MasterKind {
     BattleScript,
     Magicite,
     Summon,
+    Job,
     PartyMember,
 }
 
@@ -117,6 +119,14 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
             return None;
         }
         return Some((MasterKind::Summon, id, "[/召喚獣]"));
+    }
+    if let Some(rest) = header.strip_prefix("[ジョブ ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            emit_warning("[name-name-parser] warning: [ジョブ ] は id が空のため捨てた");
+            return None;
+        }
+        return Some((MasterKind::Job, id, "[/ジョブ]"));
     }
     if let Some(rest) = header.strip_prefix("[パーティ ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
@@ -477,6 +487,8 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
             entries,
             &["装備枠", "equipment_slots", "equipmentSlots"],
         ),
+        // 「ジョブ」キーはカンマ区切り・複数行可で、`[ジョブ id]` の id を書いた順に集める (#740)
+        jobs: collect_id_list(entries, &["ジョブ", "jobs"]),
     })
 }
 
@@ -611,6 +623,44 @@ fn build_magicite_def(id: String, entries: &[(String, String)]) -> Option<Magici
         growth: value(&["成長", "growth"]),
         equippable_by: collect_id_list(entries, &["装備可", "equippable_by", "equippableBy"]),
         summon_id: value(&["召喚獣id", "summon_id", "summonId"]),
+    })
+}
+
+/// `[ジョブ <id>]` (#740)。`名前` 必須。属性は魔石・装備品と同じ正規化（小文字・半角、重複と `無属性` を除いて最大 2 つ）。
+/// ボーナスは生文字列で透過し、解釈と不正値の警告は runtime が行う。値が空のキーは未指定扱い。
+fn build_job_def(id: String, entries: &[(String, String)]) -> Option<JobDef> {
+    let name = lookup_master_string(entries, &["名前", "name"]).filter(|n| !n.is_empty());
+    let Some(name) = name else {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [ジョブ {id}] は 名前 が無いため捨てた"
+        ));
+        return None;
+    };
+    const KNOWN: &[&str] = &[
+        "名前",
+        "name",
+        "説明",
+        "description",
+        "属性",
+        "element",
+        "elements",
+        "装備時",
+        "equip",
+    ];
+    for (k, _) in entries {
+        if !KNOWN.contains(&k.as_str()) {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [ジョブ {id}] の未知のキー `{k}` は無視した"
+            ));
+        }
+    }
+    let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
+    Some(JobDef {
+        elements: collect_elements(&format!("ジョブ {id}"), entries),
+        description: value(&["説明", "description"]),
+        equip_bonus: value(&["装備時", "equip"]),
+        id,
+        name,
     })
 }
 

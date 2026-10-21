@@ -203,6 +203,8 @@ export interface RPGProject {
   battleScripts?: Record<string, import('../types').BattleScriptDef>
   /** 同上、魔石 (#889)。`[魔石 id]` で宣言した、装備すると召喚獣を呼べて属性・能力値がつく石。`[パーティ]` の `魔石:` が装備する */
   magicites?: Record<string, import('../types').MagiciteDef>
+  /** 同上、ジョブ (#740)。`[ジョブ id]` で宣言した、就いている間だけ能力値・属性防御に効くパッシブ。`[パーティ]` の `ジョブ:` が就けるジョブを持つ */
+  jobs?: Record<string, import('../types').JobDef>
   /** 同上、パーティメンバー (#175) */
   party?: Record<string, import('../types').PartyMemberDef>
   /** `party` のキーのドキュメント上の出現順 (#736)。整数風 ID でも定義順を保つために別持ち */
