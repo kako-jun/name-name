@@ -184,6 +184,8 @@ export interface AssistFrameInput {
   /** 現在のフラグから評価した状態 */
   state: AssistState
   runtime: AssistRuntime
+  /** 橙からしか入れない白のセル（findLatchHoldWhite）。ラッチ中はその上でラッチを保つ。無ければ保持なし */
+  hold?: Uint8Array
 }
 
 export interface AssistFrame {
@@ -212,7 +214,7 @@ export interface AssistFrame {
  *   では橙へ戻れない
  */
 export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
-  const { base, assisted, pos, vec, state, runtime } = input
+  const { base, assisted, pos, vec, state, runtime, hold } = input
   const onOrange = isAssistCell(base, pos.x, pos.y)
   // 橙の上: 橙を踏んだので歩いた距離は 0 に戻る。ラッチが無いのに橙の上にいるのは、ワープや開始位置で置かれた
   // とき。通れない状態でも歩いて抜けられるようにする（閉じ込めない）
@@ -220,7 +222,7 @@ export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
   if (!rt && runtime.latched) {
     // 橙に挟まれた白（隙間・踊り場）の上はラッチを保つ（歩いた距離も数えない）。それ以外の橙のそばの白は、橙を
     // 踏まずに歩きすぎたら解く（縁沿いに歩いて別の面から入るのを防ぐ）
-    const pinched = isPinched(base, pos)
+    const pinched = isHeldWhite(base, hold, pos) || isPinched(base, pos)
     const walked = runtime.walked + (!pinched && runtime.last ? dist(pos, runtime.last) : 0)
     if (pinched || (walked <= ASSIST_LATCH_WALK && orangeNear(base, pos, ASSIST_LATCH_REACH)))
       rt = { latched: true, walked, last: pos }
@@ -235,6 +237,15 @@ export function stepAssistFrame(input: AssistFrameInput): AssistFrame {
     }
   }
   return { walkMask: assisted, onAssist: true, wantCompanion: true, blocked: false, runtime: rt }
+}
+
+/** pos が hold（橙からしか入れない白）のセルか */
+function isHeldWhite(mask: WalkMask, hold: Uint8Array | undefined, pos: Vec): boolean {
+  if (!hold) return false
+  const x = Math.floor(pos.x)
+  const y = Math.floor(pos.y)
+  if (x < 0 || y < 0 || x >= mask.width || y >= mask.height) return false
+  return hold[y * mask.width + x] === 1
 }
 
 const dist = (a: Vec, b: Vec): number => Math.hypot(a.x - b.x, a.y - b.y)
@@ -270,10 +281,20 @@ export function orangeNear(mask: WalkMask, pos: Vec, reach: number): boolean {
 
 /**
  * 端リンクの着地を「通れる状態」として扱うか。通れる状態か、橙の途中でラッチ中（橙の途中で通れない状態に
- * 切り替わって、渡り切るまで固定されている）のとき。シーンをまたぐ階段でも渡り切れる
+ * 切り替わって、渡り切るまで固定されている）のとき。シーンをまたぐ階段でも渡り切れる。
+ * ラッチ中でも、足元が橙でも橙に挟まれた白でも橙からしか入れない白（hold）でもなければ、橙は渡り切っている
+ * （縁沿いの白でラッチが残っているだけ）ので引き継がない（橙の向こうへ置かれない）
  */
-export function edgeArrivalPassable(state: AssistState | null, runtime: AssistRuntime): boolean {
-  return (state?.passable ?? false) || runtime.latched
+export function edgeArrivalPassable(
+  state: AssistState | null,
+  runtime: AssistRuntime,
+  base: WalkMask,
+  pos: Vec,
+  hold?: Uint8Array
+): boolean {
+  if (state?.passable) return true
+  if (!runtime.latched) return false
+  return isAssistCell(base, pos.x, pos.y) || isHeldWhite(base, hold, pos) || isPinched(base, pos)
 }
 
 /** 端リンクの到着位置とそのときの実行時状態 */
@@ -403,19 +424,6 @@ function nearestMarked(marked: Uint8Array, width: number, p: Vec): Vec | null {
   return best < 0 ? null : { x: (best % width) + 0.5, y: Math.floor(best / width) + 0.5 }
 }
 
-/** 橙に接する長さ(セル数)がこれ未満の白の島は、取り残された白として警告しない（縁の取りこぼしなど） */
-export const STRANDED_MIN_CONTACT = 8
-
-/** 取り残された白: 橙に接しているが、start・リンクの帯・ワープの at のどれにも通じていない白の連結成分 */
-export interface StrandedRegion {
-  /** 成分のセル数 */
-  size: number
-  /** 橙に接するセル数 */
-  contact: number
-  /** 成分の代表点（橙に接するセルの 1 つの中心） */
-  sample: Vec
-}
-
 /** 橙のセルを 4 近傍の連結成分ごとに 0.. の番号で塗る（橙でないセルは -1） */
 function labelOrange(base: WalkMask): Int32Array {
   const { width, height, assist } = base
@@ -448,41 +456,34 @@ function labelOrange(base: WalkMask): Int32Array {
 }
 
 /**
- * 白（橙を壁にした 4 近傍）の連結成分のうち、橙に接する長さが minContact 以上で、2 つ以上の別々の橙に接し
- * （橙と橙の間の白 = 踊り場。行き止まりの広場は 1 つの橙にしか接しないので除く）、safe（start・戻れる点）にも
- * edges（リンクのある端の帯）にも通じていないものを返す。そこは橙からしか入れない白で、通れない状態で橙の
- * 途中から入ると出られなくなることがある。橙で塗ることを推奨する。base は橙を除いた元のマスク
+ * 橙からしか入れない白のセルを 1 にした配列を返す（無ければ undefined）。白（橙を壁にした 4 近傍）の連結成分のうち、
+ * safe（start・ワープの at）にも edges（リンクのある端の帯）にも通じていないもので、(a) 2 つ以上の別々の橙に接する
+ * （橙と橙の間の踊り場）か、(b) 橙にしか接しない（黒・画像の端に接しない。橙に囲まれた島）もの。そこへは橙を通って
+ * しか入れないので、ラッチ中はその上でラッチを保つ（通れない状態に切り替わっても、橙の続きとして渡り切れる）。
+ * 1 つの橙にしか接さず黒にも接する白（橙の先の行き止まりの広場）は対象外: 渡り切った先なので、通れない状態では
+ * 橙へ戻れない。base は橙を除いた元のマスク
  */
-export function findStrandedWhite(
+export function findLatchHoldWhite(
   base: WalkMask,
   safe: readonly Vec[],
-  edges: readonly { edge: Edge; band: number }[],
-  minContact = STRANDED_MIN_CONTACT
-): StrandedRegion[] {
+  edges: readonly { edge: Edge; band: number }[]
+): Uint8Array | undefined {
   const { width, height, walkable, assist } = base
-  if (!assist) return []
+  if (!assist) return undefined
   const orange = labelOrange(base)
   const label = new Int32Array(width * height).fill(-1)
-  const regions: {
-    size: number
-    contact: number
-    sample: number
-    ok: boolean
-    touches: Set<number>
-  }[] = []
+  const regions: { touches: Set<number>; walled: boolean; ok: boolean }[] = []
   const stack: number[] = []
   for (let s0 = 0; s0 < label.length; s0++) {
     if (walkable[s0] !== 1 || label[s0] >= 0) continue
     const id = regions.length
-    const r = { size: 0, contact: 0, sample: -1, ok: false, touches: new Set<number>() }
+    const r = { touches: new Set<number>(), walled: false, ok: false }
     regions.push(r)
     label[s0] = id
     stack.push(s0)
     while (stack.length) {
       const i = stack.pop() as number
       const x = i % width
-      r.size++
-      let touches = false
       const nb = [
         x > 0 ? i - 1 : -1,
         x < width - 1 ? i + 1 : -1,
@@ -490,18 +491,15 @@ export function findStrandedWhite(
         i < width * (height - 1) ? i + width : -1,
       ]
       for (const j of nb) {
-        if (j < 0) continue
-        if (assist[j] === 1) {
-          touches = true
-          r.touches.add(orange[j])
-        } else if (walkable[j] === 1 && label[j] < 0) {
+        if (j < 0)
+          r.walled = true // 画像の端
+        else if (assist[j] === 1) r.touches.add(orange[j])
+        else if (walkable[j] !== 1)
+          r.walled = true // 黒
+        else if (label[j] < 0) {
           label[j] = id
           stack.push(j)
         }
-      }
-      if (touches) {
-        r.contact++
-        if (r.sample < 0) r.sample = i
       }
     }
   }
@@ -526,13 +524,18 @@ export function findStrandedWhite(
         mark(x, y)
       }
   }
-  return regions
-    .filter((r) => !r.ok && r.contact >= minContact && r.touches.size >= 2)
-    .map((r) => ({
-      size: r.size,
-      contact: r.contact,
-      sample: { x: (r.sample % width) + 0.5, y: Math.floor(r.sample / width) + 0.5 },
-    }))
+  const isHeld = (r: { touches: Set<number>; walled: boolean }): boolean =>
+    r.touches.size >= 2 || (r.touches.size === 1 && !r.walled)
+  const hold = new Uint8Array(width * height)
+  let any = false
+  for (let i = 0; i < label.length; i++) {
+    const l = label[i]
+    if (l >= 0 && !regions[l].ok && isHeld(regions[l])) {
+      hold[i] = 1
+      any = true
+    }
+  }
+  return any ? hold : undefined
 }
 
 /** 到着位置（ワープの at・開始位置）の計算に使うマスク。通れる状態なら橙も歩ける扱い */

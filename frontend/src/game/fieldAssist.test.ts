@@ -20,7 +20,7 @@ import {
   whiteReachableFromEdge,
   ASSIST_LATCH_REACH,
   edgeArrivalPassable,
-  findStrandedWhite,
+  findLatchHoldWhite,
   isPinched,
   type EdgeArrivalResult,
   INITIAL_ASSIST_RUNTIME,
@@ -597,12 +597,49 @@ describe('シーンをまたぐ階段のラッチ', () => {
   const link: FieldLink = { edge: 'top', range: [5, 14], to: 'B' }
   const back: FieldLink = { edge: 'bottom', range: [5, 14], to: 'A' }
 
-  it('edgeArrivalPassable: 通れる状態か、ラッチ中なら true。どちらでもなければ false', () => {
+  it('edgeArrivalPassable: 通れる状態なら true。ラッチ中は足元が橙・橙に挟まれた白・hold の白のときだけ true', () => {
     const latched: AssistRuntime = { latched: true, walked: 0, last: null }
-    expect(edgeArrivalPassable(OPEN_ST, INITIAL_ASSIST_RUNTIME)).toBe(true)
-    expect(edgeArrivalPassable(REFUSE_ST, latched)).toBe(true)
-    expect(edgeArrivalPassable(REFUSE_ST, INITIAL_ASSIST_RUNTIME)).toBe(false)
-    expect(edgeArrivalPassable(null, INITIAL_ASSIST_RUNTIME)).toBe(false)
+    // 橙の列（x5..14）の左右に白: x0..4 は橙の外、x15.. も外
+    const m = maskOf(Array.from({ length: 6 }, () => '.....ooooooooooo.....'))
+    const onOrange = { x: 8.5, y: 3.5 }
+    const outside = { x: 2.5, y: 3.5 }
+    expect(edgeArrivalPassable(OPEN_ST, INITIAL_ASSIST_RUNTIME, m, outside)).toBe(true)
+    expect(edgeArrivalPassable(null, INITIAL_ASSIST_RUNTIME, m, onOrange)).toBe(false)
+    expect(edgeArrivalPassable(REFUSE_ST, INITIAL_ASSIST_RUNTIME, m, onOrange)).toBe(false)
+    expect(edgeArrivalPassable(REFUSE_ST, latched, m, onOrange)).toBe(true)
+    // ラッチが残っているだけの渡り切った白（橙の脇）は引き継がない
+    expect(edgeArrivalPassable(REFUSE_ST, latched, m, outside)).toBe(false)
+    expect(edgeArrivalPassable(null, latched, m, outside)).toBe(false)
+    // hold の白の上なら引き継ぐ
+    const hold = new Uint8Array(m.width * m.height)
+    hold[3 * m.width + 2] = 1
+    expect(edgeArrivalPassable(REFUSE_ST, latched, m, outside, hold)).toBe(true)
+    // 橙に挟まれた白（橙と橙の間の細い白）なら引き継ぐ
+    const pinch = maskOf(['oo...oo'])
+    expect(edgeArrivalPassable(REFUSE_ST, latched, pinch, { x: 3.5, y: 0.5 })).toBe(true)
+  })
+
+  it('渡り切った白（橙の脇）でラッチが残っていても、通れない状態の B 側では橙の向こうへ置かれず断られる', () => {
+    // B: 下端の橙 10px の向こうに白（x5..14, y0..49 が白、y50..59 が橙、その下が下端の帯の白）
+    const Bm = maskOf([
+      ...Array.from({ length: 50 }, () => '#####..........#####'),
+      ...Array.from({ length: 10 }, () => '#####oooooooooo#####'),
+    ])
+    const rt: AssistRuntime = { latched: true, walked: 4, last: { x: 2.5, y: 3.5 } }
+    const aMask = maskOf(Array.from({ length: 8 }, () => '.....ooooooooooo.....'))
+    const passable = edgeArrivalPassable(REFUSE_ST, rt, aMask, { x: 2.5, y: 3.5 })
+    expect(passable).toBe(false)
+    const arrival = resolveEdgeArrival({
+      link,
+      back,
+      srcPos: { x: 9.5, y: 1 },
+      base: Bm,
+      assisted: maskWithAssist(Bm),
+      inset: 18,
+      passable,
+      edgeBand: 6,
+    })
+    expect(arrival.kind).toBe('locked')
   })
 
   it('A の階段の途中で通れない状態にして上端まで進んでも、B 側に橙の上へ着地して渡り切れる', () => {
@@ -632,7 +669,7 @@ describe('シーンをまたぐ階段のラッチ', () => {
       base: B,
       assisted: maskWithAssist(B),
       inset: 18,
-      passable: edgeArrivalPassable(REFUSE_ST, rt),
+      passable: edgeArrivalPassable(REFUSE_ST, rt, A, pos),
       edgeBand: 6,
     })
     expect(arrival.kind).toBe('ok')
@@ -666,7 +703,7 @@ describe('シーンをまたぐ階段のラッチ', () => {
       base: B,
       assisted: maskWithAssist(B),
       inset: 18,
-      passable: edgeArrivalPassable(REFUSE_ST, INITIAL_ASSIST_RUNTIME),
+      passable: edgeArrivalPassable(REFUSE_ST, INITIAL_ASSIST_RUNTIME, A, { x: 9.5, y: 1 }),
       edgeBand: 6,
     })
     expect(arrival.kind).toBe('locked')
@@ -697,39 +734,72 @@ describe('isPinched / findStrandedWhite', () => {
     const m = maskOf(['o#.#o'])
     expect(isPinched(m, { x: 2.5, y: 0.5 })).toBe(false)
   })
-  it('橙に接しているが start・リンクの帯・ワープの at のどれにも通じていない白を返す', () => {
+  it('橙に接しているが start・リンクの帯・ワープの at のどれにも通じていない白（踊り場）のセルを返す', () => {
     const b = board(12) // 白の踊り場 y8..19、その下の橙 y20..25、その下 y26.. が start 側
-    const found = findStrandedWhite(b, [{ x: 15.5, y: 35.5 }], [])
-    // 踊り場と、上の橙の上（y0..1）の白が候補。踊り場は両側の橙に 28 セルずつ接している
-    const platform = found.find((r) => r.sample.y >= 8 && r.sample.y < 20)
-    expect(platform).toBeDefined()
-    expect(platform!.contact).toBeGreaterThanOrEqual(28)
+    const hold = findLatchHoldWhite(b, [{ x: 15.5, y: 35.5 }], [])!
+    expect(hold).toBeDefined()
+    const at = (x: number, y: number): number => hold[Math.floor(y) * b.width + Math.floor(x)]
+    expect(at(15.5, 12.5)).toBe(1) // 踊り場
+    expect(at(15.5, 35.5)).toBe(0) // start 側
+    expect(at(15.5, 0.5)).toBe(0) // 上の橙の先の白は、橙1つ＋黒にしか接しない行き止まり。対象外（渡り切った先）
   })
-  it('start・リンクの帯・ワープの at のどれかを含む白は返さない', () => {
+  it('start・リンクの帯・ワープの at のどれかを含む白は対象にしない', () => {
     const b = board(12)
-    const viaStart = findStrandedWhite(
+    const viaStart = findLatchHoldWhite(
       b,
       [
         { x: 15.5, y: 12.5 },
         { x: 15.5, y: 35.5 },
+        { x: 15.5, y: 0.5 },
       ],
       []
     )
-    expect(viaStart.some((r) => r.sample.y >= 8 && r.sample.y < 20)).toBe(false)
+    expect(viaStart).toBeUndefined()
     const m = maskOf(['.o.o.', '.o.o.', '.o.o.'])
-    // 中央の列だけが 2 つの橙に挟まれている（左右の端の列は 1 つの橙にしか接しない）
-    expect(findStrandedWhite(m, [], [], 1).map((r) => r.sample.x)).toEqual([2.5])
-    // 上の端の帯はどの列も含むので、中央の列も通じていることになる
-    expect(findStrandedWhite(m, [], [{ edge: 'top', band: 1 }], 1)).toEqual([])
+    const h = findLatchHoldWhite(m, [], [])!
+    // 中央の列だけが 2 つの橙に挟まれている（左右の端の列は 1 つの橙＋画像の端なので対象外）
+    expect(Array.from(h)).toEqual([0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0])
+    // 上の端の帯はどの列も含むので、全部通じていることになる
+    expect(findLatchHoldWhite(m, [], [{ edge: 'top', band: 1 }])).toBeUndefined()
   })
-  it('1 つの橙にしか接しない白（階段の先の広場など）は返さない', () => {
+  it('1 つの橙にしか接しない白（橙に囲まれた島）は、黒・画像の端に接しなければ対象。行き止まりの広場は対象外', () => {
+    const island = maskOf(['#####', '#ooo#', '#o.o#', '#ooo#', '#####'])
+    const h = findLatchHoldWhite(island, [], [])!
+    expect(h[2 * 5 + 2]).toBe(1)
     const m = maskOf(['....', 'oooo', '....', '....'])
-    expect(findStrandedWhite(m, [{ x: 0.5, y: 3.5 }], [], 1)).toEqual([])
+    const h2 = findLatchHoldWhite(m, [{ x: 0.5, y: 3.5 }], [])!
+    // 橙の向こうの上の白は、橙1つ＋画像の端なので行き止まりの広場。対象外
+    expect(h2).toBeUndefined()
   })
-  it('橙に接する長さが短い白の島は返さない。橙の無いマスクは空', () => {
-    const m = maskOf(['#####', '#o.o#', '#####'])
-    expect(findStrandedWhite(m, [], [])).toEqual([]) // 接する長さ 2 < 8
-    expect(findStrandedWhite(m, [], [], 1).length).toBe(1)
-    expect(findStrandedWhite(maskOf(['...', '...']), [], [])).toEqual([])
+  it('橙に接しない白・橙の無いマスクは対象外', () => {
+    expect(findLatchHoldWhite(maskOf(['...', '...']), [], [])).toBeUndefined()
+    expect(findLatchHoldWhite(maskOf(['#.#', 'ooo']), [{ x: 1.5, y: 0.5 }], [])).toBeUndefined()
+  })
+  it('stepAssistFrame: ラッチ中は hold の白の上でラッチを保ち、歩いた距離も増えない。hold が無ければ 8px を超えて解ける', () => {
+    const b = board(14)
+    const hold = findLatchHoldWhite(b, [{ x: 15.5, y: 35.5 }], [])
+    const asst = maskWithAssist(b)
+    const run = (h: Uint8Array | undefined): AssistRuntime => {
+      let pos: Vec = { x: 15.5, y: 7.5 }
+      let rt: AssistRuntime = { latched: true, walked: 0, last: pos }
+      for (let i = 0; i < 40; i++) {
+        const fr = stepAssistFrame({
+          base: b,
+          assisted: asst,
+          pos,
+          vec: { x: 0, y: 1 },
+          state: { passable: false, held: true, ghost: false },
+          runtime: rt,
+          hold: h,
+        })
+        rt = fr.runtime
+        pos = stepMove(fr.walkMask, pos, { x: 0, y: 1 }, 60, 16).pos
+        if (pos.y >= 17) break
+      }
+      return rt
+    }
+    expect(run(hold).latched).toBe(true)
+    expect(run(hold).walked).toBe(0)
+    expect(run(undefined).latched).toBe(false)
   })
 })

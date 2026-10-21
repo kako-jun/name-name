@@ -49,7 +49,7 @@ import {
   companionDisplayAlpha,
   companionPosition,
   evalAssist,
-  findStrandedWhite,
+  findLatchHoldWhite,
   facing4,
   stepAssistFrame,
   stepBlockedEvent,
@@ -118,6 +118,8 @@ interface LoadedScene {
   mask: WalkMask
   /** 条件付き（橙）のセルも歩ける扱いにしたマスク (#862)。橙が無ければ mask と同じ */
   maskAssist: WalkMask
+  /** 橙からしか入れない白（踊り場・橙に囲まれた島）のセル。ラッチ中はその上でラッチを保つ。無ければ undefined */
+  hold: Uint8Array | undefined
   overlay: Texture
   /** 前面レイヤー (#866)。シーンに foreground が無ければ null */
   foreground: { texture: Texture; mask: ForegroundMask } | null
@@ -178,6 +180,7 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
     background: Texture.from(bg),
     mask,
     maskAssist: maskWithAssist(mask),
+    hold: holdFor(config, id, mask),
     overlay: Texture.from(canvas),
     foreground,
     scroll: scrollBmp ? Texture.from(scrollBmp) : null,
@@ -222,20 +225,17 @@ async function loadConfig(): Promise<FieldSampleConfig> {
 }
 
 /**
- * 橙に接しているが、start・リンクの帯・ワープの at のどれにも通じていない白（踊り場）を警告する (#862)。
- * 通れない状態で橙の途中から入ると、その白から出られなくなる
+ * 橙からしか入れない白（start・リンクの帯・ワープの at のどれにも通じない白）を求める (#862, #928)。
+ * 橙を通って入るしかないので、ラッチ中はその上でラッチを保つ（橙の途中で通れない状態になっても出られる）
  */
-function warnStrandedWhite(config: FieldSampleConfig, s: LoadedScene): void {
-  if (!s.mask.assist) return
-  const sc = config.scenes[s.id]
+function holdFor(config: FieldSampleConfig, id: string, mask: WalkMask): Uint8Array | undefined {
+  if (!mask.assist) return undefined
+  const sc = config.scenes[id]
   const safe: Vec[] = []
-  if (config.startScene === s.id) safe.push(config.start)
-  for (const w of Object.values(config.warps)) if (w.to === s.id) safe.push(w.at)
+  if (config.startScene === id) safe.push(config.start)
+  for (const w of Object.values(config.warps)) if (w.to === id) safe.push(w.at)
   const edges = sc.links.map((l) => ({ edge: l.edge, band: config.edgeThreshold }))
-  for (const r of findStrandedWhite(s.mask, safe, edges))
-    console.warn(
-      `[field-sample] シーン ${s.id}: (${r.sample.x}, ${r.sample.y}) 付近の白（${r.size} セル）は、橙からしか入れません。橙の途中で通れない状態になると、そこから出られなくなります。橙で塗ることを推奨します`
-    )
+  return findLatchHoldWhite(mask, safe, edges)
 }
 
 async function main(): Promise<void> {
@@ -245,7 +245,6 @@ async function main(): Promise<void> {
     let p = cache.get(id)
     if (!p) {
       p = loadScene(config, id)
-      p.then((s) => warnStrandedWhite(config, s)).catch(() => undefined)
       // 失敗は次回やり直せるようキャッシュから外す
       p.catch(() => cache.delete(id))
       cache.set(id, p)
@@ -694,7 +693,7 @@ async function main(): Promise<void> {
                 assisted: dst.maskAssist,
                 inset: config.edgeThreshold * ARRIVAL_INSET_FACTOR,
                 // ラッチ中（橙の途中で通れない状態になって渡り切った）なら、橙の上にも着地できる
-                passable: edgeArrivalPassable(passableNow, assistRt),
+                passable: edgeArrivalPassable(passableNow, assistRt, scene.mask, pos, scene.hold),
                 edgeBand: config.edgeThreshold,
               })
               if (arrival.kind !== 'ok') {
@@ -757,6 +756,7 @@ async function main(): Promise<void> {
             vec,
             state: ast,
             runtime: assistRt,
+            hold: scene.hold,
           })
         : null
       if (frame) assistRt = frame.runtime
