@@ -62,6 +62,10 @@ function linearRenderer() {
   return { r, scenes }
 }
 
+/** 条件を含まない元列の rawOffsets（元列の添字そのもの）。 */
+const identityOffsets = (raw: readonly unknown[]): number[] =>
+  raw.map((_, k) => k).concat(raw.length)
+
 describe('線形連結のシーンを跨ぐ新規開始 (#777)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -497,9 +501,9 @@ describe('再展開後のセーブから同じ位置・同じ進行を再現で�
     return trace
   }
 
-  it('自己否定ブロック: Flag 直後〜ブロック外後続〜境界の各位置で、保存→復元が同じ本文と進行になる', async () => {
+  it('自己否定ブロック: ブロックの残りを流し、Flag 直後〜ブロック外後続〜境界の各位置で、保存→復元が同じ本文と進行になる (#799)', async () => {
     const trace = await expectRoundTrip(selfNegatingScenes(), { x: { Bool: true } })
-    expect(trace.slice(0, 4)).toEqual(['a0', 'A', 'C', 'b1'])
+    expect(trace.slice(0, 5)).toEqual(['a0', 'A', 'B', 'C', 'b1'])
   })
 
   it('前方の [条件:] が Flag で変わっても、保存→復元で位置が重複・欠落しない', async () => {
@@ -589,7 +593,7 @@ describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復
     expect(text(other)).toBe(text(r))
   })
 
-  it('自己否定ブロックの中（Flag の前）まで goBack しても一致する', async () => {
+  it('自己否定ブロックの中（Flag の前後）まで goBack しても一致する (#799)', async () => {
     const scenes = selfNegatingScenes()
     const r = build(scenes)
     await r.startFrom({ sceneId: 'a', linear: true, flags: { x: { Bool: true } } })
@@ -597,7 +601,11 @@ describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復
     advance(r)
     expect(text(r)).toBe('A')
     advance(r)
+    expect(text(r)).toBe('B') // Flag x=false を実行した後でも、入場済みのブロックの残りは流れる
+    advance(r)
     expect(text(r)).toBe('C')
+    r.goBack()
+    expect(text(r)).toBe('B')
     r.goBack()
     expect(text(r)).toBe('A')
     const other = build(scenes)
@@ -605,15 +613,15 @@ describe('goBack / seekTo で Flag を越えて戻っても、列・位置・復
     expect(text(other)).toBe('A')
     advance(r)
     advance(other)
-    expect(text(r)).toBe('C')
-    expect(text(other)).toBe('C')
+    expect(text(r)).toBe('B')
+    expect(text(other)).toBe('B')
   })
 })
 
 describe('再展開は常に全体の展開と一致する・既読 (#777 再レビュー対応)', () => {
   const cond = (name: string, ...events: Event[]): Event => ({ Condition: { flag: name, events } })
 
-  it('Flag 自身を囲む [条件:] が偽になると、ブロックの残りは消え（GUI 版の意味論）、外の後続と境界の通知は1回出る', async () => {
+  it('Flag 自身を囲む [条件:] が偽になっても、入場済みのブロックの残りは流れ（TUI と同じ意味論, #799）、外の後続と境界の通知は1回出る', async () => {
     const scenes = selfNegatingScenes()
     const r = new NovelRenderer()
     r.setEvents(flatten(scenes))
@@ -625,7 +633,13 @@ describe('再展開は常に全体の展開と一致する・既読 (#777 再レ
       texts.push(r.getDebugState().eventText ?? '')
       advance(r)
     }
-    expect(texts.map((t) => t.replace(/.*?(a0|A|B|C|b1).*/s, '$1'))).toEqual(['a0', 'A', 'C', 'b1'])
+    expect(texts.map((t) => t.replace(/.*?(a0|A|B|C|b1).*/s, '$1'))).toEqual([
+      'a0',
+      'A',
+      'B',
+      'C',
+      'b1',
+    ])
     expect(rec.entered).toEqual(['a', 'b'])
   })
 
@@ -684,7 +698,7 @@ describe('findLinearSegments / resolveLinearSegments / segmentAt (#777)', () => 
   it('展開後の境界と、位置が属するシーン', () => {
     const stream = flatten([a, b, c])
     const segs = findLinearSegments(stream, [a, b, c])
-    const resolved = resolveLinearSegments(stream, segs, (events) => events.length)
+    const resolved = resolveLinearSegments(segs, identityOffsets(stream))
     expect(resolved).toEqual([
       { sceneId: 'a', start: 0, separator: null },
       { sceneId: 'b', start: 2, separator: 1 },
@@ -707,9 +721,8 @@ describe('findLinearSegments / resolveLinearSegments / segmentAt (#777)', () => 
       'd',
     ])
     const resolved = resolveLinearSegments(
-      stream,
       findLinearSegments(stream, [a, e, c, d]),
-      (ev) => ev.length
+      identityOffsets(stream)
     )
     expect(resolved.map((x) => [x.sceneId, x.separator, x.start])).toEqual([
       ['a', null, 0],

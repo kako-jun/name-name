@@ -209,6 +209,24 @@ export interface NovelGameState {
    * 通常のハブ経由フロー（confinement 無効）では常に false。
    */
   storyEnded: boolean
+
+  /**
+   * このシーン訪問に入った瞬間の flags（入場時 flags, #799）。`[条件:]` は入場時に1回だけ展開して訪問中は
+   * 固定するので、展開後の列 = `expandEvents(raw, { flags: entryFlags, ... })` で再現でき、`eventIndex` は
+   * その列の添字になる（ADR 0002 の「展開は純関数」を、位置までに実行した `[フラグ:]` を含めて保つ）。
+   * `getSnapshot` は元列に `[条件:]` を含むときだけ出力する（含まなければ展開が flags に依存しない）。
+   * 後方互換: 古いセーブ/スナップショットには無い → 復元時は保存位置までを `flags` で静的に展開し、
+   * 位置から後ろは `flags` から逐次評価する（`entryFromState`）。
+   */
+  entryFlags?: Record<string, FlagValue>
+  /**
+   * 古いセーブから復元した訪問だけが持つ、再開位置 (#799)。保存時の `eventIndex`（展開後の列の添字）。
+   * 展開後の列がこの長さに達するまでは `entryFlags` で `[条件:]` を静的に評価し（`[フラグ:]` は適用しない）、
+   * 達した後は `[フラグ:]` を適用しながら1イベントずつ逐次に評価する。無いときは `entryRawIndex` の規則だけ。
+   */
+  entryResumeIndex?: number
+  /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。0 のときは出力しない。 */
+  entryRawIndex?: number
 }
 
 /**
@@ -258,6 +276,33 @@ export interface StartFromOptions {
 }
 
 /**
+ * 保存された状態から、展開の入場条件を求める (#799)。`raw` は復元先の元イベント列。
+ *
+ * `entryFlags` が無い（古いセーブ・手書きの状態）は、保存位置（`eventIndex`）に達するまでを保存時の `flags` で
+ * 静的に展開し（旧実装の展開と添字が一致する）、位置から後ろは `flags` から1イベントずつ逐次評価する
+ * （旧実装は `[フラグ:]` の実行ごとに再展開していたので、位置より後ろの条件も評価し直されていた）。
+ * 位置を囲む `[条件:]` ブロックには入った状態から続き、その内側の位置より後ろの `[フラグ:]` も後続の
+ * `[条件:]` に反映される。再開位置は `resumeIndex` として入場条件に載り、再保存でも同じ列に戻る。
+ * 位置が展開後の列の範囲外のときは全体を静的に展開する。
+ * 旧実装との差は、ブロックに入る時点の評価を再展開でなく到達時に1回行う点だけ（ADR 0003）。
+ */
+export function entryFromState(state: NovelGameState, raw: readonly Event[]): ExpansionEntry {
+  if (state.entryFlags !== undefined) {
+    return {
+      flags: state.entryFlags,
+      ...(state.entryResumeIndex !== undefined ? { resumeIndex: state.entryResumeIndex } : {}),
+      fromRawIndex: state.entryRawIndex ?? 0,
+    }
+  }
+  const all = raw.length
+  const base = expandEvents(raw, { flags: state.flags, fromRawIndex: all })
+  if (state.eventIndex < 0 || state.eventIndex >= base.events.length) {
+    return { flags: state.flags, fromRawIndex: all }
+  }
+  return { flags: state.flags, resumeIndex: state.eventIndex, fromRawIndex: 0 }
+}
+
+/**
  * Condition イベントをフラグに基づいて展開し、フラットなイベント配列を返す。
  *
  * - Condition が真 → 内部 events を再帰的に展開して挿入（Condition 自体は除去）
@@ -280,6 +325,87 @@ export function resolveEvents(events: readonly Event[], gameState: GameState): E
     }
   }
   return result
+}
+
+/**
+ * 入場時 flags で `[条件:]` を展開する際の入場条件 (#799)。
+ *
+ * - `flags`: シーン訪問に入った瞬間の flags（入場時 flags）。
+ * - `fromRawIndex`: 元列のトップレベルでこの位置より前は静的に展開し、この位置以降を逐次評価する
+ *   （線形ストリームの途中のシーンから始めるときだけ非0）。
+ */
+export interface ExpansionEntry {
+  flags: Record<string, FlagValue>
+  /**
+   * 再開位置（展開後の列の添字）。古いセーブの復元だけが使う (#799): 展開後の列がこの長さに達するまでは
+   * `[条件:]` を `flags` で静的に評価して `[フラグ:]` は走査に適用せず、達した後は `[フラグ:]` を適用しながら
+   * 逐次評価する（位置を囲むブロックには入った状態から続く）。省略時は `fromRawIndex` の規則だけ。
+   */
+  resumeIndex?: number
+  fromRawIndex: number
+}
+
+/** `expandEvents` の結果。 */
+export interface Expansion {
+  /** 展開後の平坦なイベント列（`Flag` は残す）。 */
+  events: Event[]
+  /** `rawOffsets[i]` = 元列のトップレベル i 番目を処理する直前の展開後の長さ（長さは `raw.length + 1`）。 */
+  rawOffsets: number[]
+}
+
+function gameStateFromFlags(flags: Record<string, FlagValue>): GameState {
+  const gs = new GameState()
+  gs.fromJSON(flags)
+  return gs
+}
+
+/**
+ * 元イベント列を入場条件から展開する (#799)。シーン訪問の入口で1回だけ呼び、その訪問中は結果を固定する。
+ *
+ * 逐次評価（TUI の `build_scene_items` と同じ手順）: 元列を先頭から1イベントずつ走査し、走査用の flags の
+ * 複製に `Flag` を適用しながら、`Condition` に達した時点の複製で真偽を判定して真なら内側を再帰する。
+ * `Flag` イベント自体は展開後の列に残す（実フラグを書くのは再生時の `processDirective` のまま）。
+ * ブロックに入った後で、ブロック内でそのフラグを変えても、入場済みのブロックの残りは流れる。
+ * 偽のブロックは内側の `Flag` も実行しない。
+ *
+ * `fromRawIndex` より前のトップレベルは `entry.flags` で静的に展開する（`resolveEvents` と同じ）。
+ * 結果は `(raw, entry)` だけで決まる（フラグの履歴・乱数・時刻に依存しない）。
+ */
+export function expandEvents(raw: readonly Event[], entry: ExpansionEntry): Expansion {
+  const events: Event[] = []
+  const rawOffsets: number[] = []
+  const staticState = gameStateFromFlags(entry.flags)
+  const scan = gameStateFromFlags(entry.flags)
+  const resume = entry.resumeIndex
+
+  // topStatic: トップレベル要素ごとの静的展開（`fromRawIndex` より前）。再開位置に達するまでも静的に評価する。
+  const walk = (list: readonly Event[], topStatic: boolean): void => {
+    for (const event of list) {
+      const isStatic = topStatic || (resume !== undefined && events.length < resume)
+      if (typeof event === 'object' && event !== null && 'Condition' in event) {
+        if ((isStatic ? staticState : scan).checkFlag(event.Condition.flag)) {
+          walk(event.Condition.events, topStatic)
+        }
+      } else {
+        if (!isStatic && typeof event === 'object' && event !== null && 'Flag' in event) {
+          scan.setFlag(event.Flag.name, event.Flag.value)
+        }
+        events.push(event)
+      }
+    }
+  }
+
+  for (let i = 0; i < raw.length; i++) {
+    rawOffsets.push(events.length)
+    walk([raw[i]], i < entry.fromRawIndex)
+  }
+  rawOffsets.push(events.length)
+  return { events, rawOffsets }
+}
+
+/** 元イベント列に `[条件:]` を含むか。展開結果が入場時 flags に依存するかの判定に使う (#799)。 */
+export function hasCondition(raw: readonly Event[]): boolean {
+  return raw.some((e) => typeof e === 'object' && e !== null && 'Condition' in e)
 }
 
 export class GameState {
@@ -347,35 +473,4 @@ export class GameState {
       this.flags.set(key, value)
     }
   }
-}
-
-/**
- * `events`（`[条件:]` を含む元イベント列）を `gameState` の flags で展開したとき、`target`（同一オブジェクト）
- * より前に残るイベント（`[条件:]` 自体は数えない）の数を返す。`target` が見つからなければ null (#777)。
- *
- * `target` が展開後の列に残るなら、その数が展開後の位置。囲む `[条件:]` が偽で消えるなら、その数は
- * 「元イベント列上で次に残っているイベント」の位置になる。結果は flags だけで決まる（展開の履歴に依存しない）。
- */
-export function countSurvivingBefore(
-  events: readonly Event[],
-  target: Event,
-  gameState: GameState
-): number | null {
-  const state = { count: 0, found: false }
-  const walk = (list: readonly Event[], alive: boolean): void => {
-    for (const event of list) {
-      if (state.found) return
-      if (event === target) {
-        state.found = true
-        return
-      }
-      if (typeof event === 'object' && event !== null && 'Condition' in event) {
-        walk(event.Condition.events, alive && gameState.checkFlag(event.Condition.flag))
-      } else if (alive) {
-        state.count++
-      }
-    }
-  }
-  walk(events, true)
-  return state.found ? state.count : null
 }

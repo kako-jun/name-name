@@ -1,7 +1,7 @@
 import type { Event } from '../types'
 import type { NovelGameState } from './GameState'
-import { resolveEvents, type GameState } from './GameState'
-import { countDisplayEvents, remapEventIndexAfterReResolve } from './eventCursor'
+import { expandEvents, hasCondition, type ExpansionEntry, type GameState } from './GameState'
+import { countDisplayEvents } from './eventCursor'
 import type { NovelPage } from './novelLayout'
 
 /**
@@ -12,19 +12,26 @@ import type { NovelPage } from './novelLayout'
  * 履歴、再生中のシーン id、再生開始済みか、はここだけが書く。`NovelRenderer` は読み取り用の getter で読み、
  * 書き込みは必ずこのクラスのメソッド経由にする（読み取りの getter だけを公開し setter は持たない）。
  *
- * 不変条件: 展開後の列（`resolvedEvents`）は常に `resolveEvents(rawEvents, flags)` で再現できる
- * （ADR 0003 #777 追記）。3点セット（`rawEvents` / `resolvedEvents` / `displayEventCount`）は
- * `expand` を通してのみ更新する。
+ * 不変条件: 展開後の列（`resolvedEvents`）は常に `expandEvents(rawEvents, entry)` で再現できる
+ * （ADR 0003 #777/#799 追記）。`[条件:]` はシーン訪問の入口（`load` / `replaceEvents`）で入場時 flags から
+ * 1回だけ展開し、訪問中は列を固定する（`[フラグ:]` を実行しても再展開しない）。3点セット
+ * （`rawEvents` / `resolvedEvents` / `displayEventCount`）と `entry` / `rawOffsets` は `expand` を通してのみ更新する。
  *
  * ページ分割そのもの（`getNovelPages` / `getAdvSentencePages`）はスタイル設定・DOM 計測に依存するので
  * レンダラに残し、ここは派生キャッシュの保持と無効化（`invalidatePages`）だけを持つ。
  * Pixi・DOM・タイマーには依存しない。
  */
 export class PlaybackCursor {
-  /** Condition 展開前の元イベント配列（Flag 変更時の再展開に使用）。「今どのルートを再生中か」を表す。 */
+  /** Condition 展開前の元イベント配列（入場時展開の入力、#799）。「今どのルートを再生中か」を表す。 */
   private _rawEvents: Event[] = []
-  /** Condition 展開済みのフラットなイベント配列。 */
+  /** Condition 展開済みのフラットなイベント配列。訪問中は固定。 */
   private _resolvedEvents: Event[] = []
+  /** 展開の入場条件（入場時 flags, #799）。セーブ（`entryFlags` ほか）に載せて同じ列を再現する。 */
+  private _entry: ExpansionEntry = { flags: {}, fromRawIndex: 0 }
+  /** 元列のトップレベル i 番目の展開後の開始位置（長さ `rawEvents.length + 1`）。線形ストリームの境界計算に使う。 */
+  private _rawOffsets: number[] = [0]
+  /** 元列に `[条件:]` を含むか（含まなければ展開は flags に依存しない）。 */
+  private _hasCondition = false
   private _eventIndex = 0
   private _textIndex = 0
   /** novel スタイルの「現ページ内で表示済みの最後の文 index」（0-based）。adv では常に 0。 */
@@ -67,6 +74,10 @@ export class PlaybackCursor {
     return this._sentenceIndex
   }
 
+  get rawOffsets(): readonly number[] {
+    return this._rawOffsets
+  }
+
   get displayEventCount(): number {
     return this._displayEventCount
   }
@@ -94,21 +105,23 @@ export class PlaybackCursor {
   // --- イベント列（3点セット） ---
 
   /**
-   * `rawEvents` を入れ替え、`resolvedEvents` / `displayEventCount` を同時に求め直す。
+   * `rawEvents` を入れ替え、入場条件 `entry` で `resolvedEvents` / `displayEventCount` を同時に求め直す。
    * 位置・履歴・ページキャッシュには触らない（呼び出し側が続けて `load` 相当の再設定をするか、
    * `restorePosition` で位置を確定する）。
    */
-  replaceEvents(rawEvents: Event[], flags: GameState): void {
+  replaceEvents(rawEvents: Event[], entry: ExpansionEntry): void {
     this._rawEvents = rawEvents
-    this.expand(flags)
+    this.expand(entry)
   }
 
   /**
    * 新しいイベント列で再生位置を最初から作り直す（位置は `startIndex`、textIndex / sentenceIndex は 0、
    * 履歴は空、ページキャッシュは破棄）。`playbackStarted` は変えない。
+   * 入場時 flags は呼び出し時点の `flags`。`fromRawIndex` は線形ストリームの途中のシーンから始めるときの
+   * 元列での開始位置（それより前は静的に展開し、以降を逐次評価する）。
    */
-  load(rawEvents: Event[], flags: GameState, startIndex = 0): void {
-    this.replaceEvents(rawEvents, flags)
+  load(rawEvents: Event[], flags: GameState, startIndex = 0, fromRawIndex = 0): void {
+    this.replaceEvents(rawEvents, { flags: flags.toJSON(), fromRawIndex })
     this._eventIndex = startIndex
     this._textIndex = 0
     this._sentenceIndex = 0
@@ -117,41 +130,42 @@ export class PlaybackCursor {
   }
 
   /**
-   * `flags` で `rawEvents` を全体展開し直して `resolvedEvents` / `displayEventCount` を更新する。
-   * 展開は履歴に依存せず flags だけで決まる（ADR 0003 #777 追記）。
+   * 入場条件 `entry` で `rawEvents` を展開して `resolvedEvents` / `rawOffsets` / `displayEventCount` を更新する。
+   * 結果は `(rawEvents, entry)` だけで決まる（ADR 0003 #799 追記）。シーン訪問の入口以外から呼ばない。
    */
-  private expand(flags: GameState): void {
-    this._resolvedEvents = resolveEvents(this._rawEvents, flags)
-    this._displayEventCount = countDisplayEvents(this._resolvedEvents)
+  private expand(entry: ExpansionEntry): void {
+    const { events, rawOffsets } = expandEvents(this._rawEvents, entry)
+    this._entry = entry
+    this._resolvedEvents = events
+    this._rawOffsets = rawOffsets
+    this._hasCondition = hasCondition(this._rawEvents)
+    this._displayEventCount = countDisplayEvents(events)
   }
 
   /**
-   * Flag 実行後の再展開。全体を展開し直し、`eventIndex` を決定的に写像する (#777)。
-   * 現在のイベントが新しい列に残ればその位置、囲む `[条件:]` が偽で消えたら元イベント列上で次に残る
-   * イベントの直前（呼び出し元が続けて `eventIndex` を進める）。textIndex / sentenceIndex / 履歴は変えない。
+   * 現在の訪問の入場条件を、セーブに載せる任意フィールドとして返す (#799)。元列に `[条件:]` が無ければ
+   * 展開が flags に依存しないので何も出さない（セーブ JSON は従来と 1 バイトも変わらない）。
+   * `entryRawIndex` は非0のときだけ出す。
    */
-  reResolve(flags: GameState): void {
-    const current = this._resolvedEvents[this._eventIndex]
-    this.expand(flags)
-    this._eventIndex = remapEventIndexAfterReResolve(
-      this._rawEvents,
-      this._resolvedEvents,
-      current,
-      this._eventIndex,
-      flags
-    )
-    this.invalidatePages()
+  snapshotEntry(): Pick<NovelGameState, 'entryFlags' | 'entryResumeIndex' | 'entryRawIndex'> {
+    if (!this._hasCondition) return {}
+    return {
+      entryFlags: this._entry.flags,
+      ...(this._entry.resumeIndex !== undefined
+        ? { entryResumeIndex: this._entry.resumeIndex }
+        : {}),
+      ...(this._entry.fromRawIndex !== 0 ? { entryRawIndex: this._entry.fromRawIndex } : {}),
+    }
   }
 
   // --- 位置 ---
 
   /**
-   * スナップショットの位置へ復元する。復元前に `flags`（呼び出し側が `state.flags` で置換済み）で全体を
-   * 展開し直す（goBack/seekTo は flags だけを過去の値に戻すので、列と位置を揃える #777）。
-   * `sentenceIndex` が無い古いスナップショットは 0（ページ先頭の文）に倒す。
+   * スナップショットの位置へ復元する。展開は訪問中固定なので再展開しない（goBack/seekTo は flags だけを
+   * 過去の値に戻すが、列は同じ訪問の入場時 flags で決まったまま #799）。シーンをまたぐ復元は、呼び出し側が
+   * 先に `replaceEvents` で列を作る。`sentenceIndex` が無い古いスナップショットは 0（ページ先頭の文）に倒す。
    */
-  restorePosition(state: NovelGameState, flags: GameState): void {
-    this.expand(flags)
+  restorePosition(state: NovelGameState): void {
     this._eventIndex = state.eventIndex
     this._textIndex = state.textIndex
     this._sentenceIndex = state.sentenceIndex ?? 0

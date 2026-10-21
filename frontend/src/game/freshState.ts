@@ -39,5 +39,8 @@ export function buildFreshPositionState(
     cameraElevation: null,
     paperDollOutline: null,
     storyEnded: false,
+    // 入場時 flags (#799)。指定した flags が展開の入場条件（これが無いと旧セーブ扱いの静的展開になる）。
+    // 既存のキー順を保つため末尾に置く。
+    entryFlags: flags ?? {},
   }
 }

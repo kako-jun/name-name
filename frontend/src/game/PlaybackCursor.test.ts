@@ -9,7 +9,13 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { Event, FlagValue } from '../types'
-import { GameState, resolveEvents, type NovelGameState } from './GameState'
+import {
+  GameState,
+  expandEvents,
+  resolveEvents,
+  type ExpansionEntry,
+  type NovelGameState,
+} from './GameState'
 import { PlaybackCursor } from './PlaybackCursor'
 import type { NovelPage } from './novelLayout'
 
@@ -28,6 +34,11 @@ function gs(flags: Record<string, boolean>): GameState {
   const g = new GameState()
   for (const [k, v] of Object.entries(flags)) g.setFlag(k, { Bool: v })
   return g
+}
+
+/** 入場条件（逐次評価）。 */
+function entryOf(flags: Record<string, boolean>, fromRawIndex = 0): ExpansionEntry {
+  return { flags: gs(flags).toJSON(), fromRawIndex }
 }
 
 /** 位置だけを持つスナップショット（NovelGameState の残りは PlaybackCursor が読まない）。 */
@@ -199,31 +210,30 @@ describe('PlaybackCursor.restorePosition', () => {
   it('sentenceIndex 未定義のスナップショットは 0 に倒す（古いセーブ）', () => {
     const c = movedCursor()
     expect(c.sentenceIndex).toBe(2)
-    c.restorePosition(snap(3, 1), gs({}))
+    c.restorePosition(snap(3, 1))
     expect(pos(c)).toEqual([3, 1, 0])
   })
 
   it('sentenceIndex 付きはその値を復元する', () => {
     const c = new PlaybackCursor()
     c.load(plainRaw(6), gs({}))
-    c.restorePosition(snap(4, 2, 5), gs({}))
+    c.restorePosition(snap(4, 2, 5))
     expect(pos(c)).toEqual([4, 2, 5])
   })
 
-  it('flags が過去の値に戻ると resolved が作り直されてキャッシュを破棄し、displayEventCount が同期する', () => {
+  it('再展開しない: flags が別の値でも resolved は訪問の入場時に固定されたまま、キャッシュは破棄する (#799)', () => {
     const raw: Event[] = [cond('x', [narr('tx0'), dlg('tx1')]), narr('t1'), narr('t2')]
     const c = new PlaybackCursor()
     c.load(raw, gs({ x: true }))
+    const before = c.resolvedEvents
     expect(c.resolvedEvents.length).toBe(4)
     expect(c.displayEventCount).toBe(4)
     c.cacheNovelPages([] as NovelPage[])
     c.cacheAdvSentencePages(['p'])
 
-    c.restorePosition(snap(1, 0, 0), gs({ x: false }))
-    expect(c.resolvedEvents).toEqual(resolveEvents(raw, gs({ x: false })))
-    expect(c.resolvedEvents.length).toBe(2)
-    expect(c.displayEventCount).toBe(countText(c.resolvedEvents))
-    expect(c.displayEventCount).toBe(2)
+    c.restorePosition(snap(1, 0, 0))
+    expect(c.resolvedEvents).toBe(before)
+    expect(c.displayEventCount).toBe(4)
     expect(c.novelPagesCache).toBeNull()
     expect(c.advSentencePagesCache).toBeNull()
   })
@@ -231,63 +241,48 @@ describe('PlaybackCursor.restorePosition', () => {
   it('履歴には触れない', () => {
     const c = movedCursor()
     const hist = c.history.length
-    c.restorePosition(snap(0, 0, 0), gs({}))
+    c.restorePosition(snap(0, 0, 0))
     expect(c.history.length).toBe(hist)
   })
 })
 
-describe('PlaybackCursor.reResolve (#777, #822 の remapEventIndexAfterReResolve と整合)', () => {
-  it('現在イベントが [条件:] ごと消える場合は before-1', () => {
-    const t0 = narr('t0')
-    const t2 = narr('t2')
-    const raw: Event[] = [t0, cond('c', [narr('t1'), t2]), narr('t3')]
+describe('PlaybackCursor 入場時展開 (#799)', () => {
+  it('load は呼び出し時の flags を入場時 flags として固定し、その後 flags が変わっても列は変わらない', () => {
+    const f = flagEv('x', false)
+    const raw: Event[] = [cond('x', [narr('a'), f, narr('b')]), narr('c')]
     const c = new PlaybackCursor()
-    c.load(raw, gs({ c: true }), 2)
-    expect(c.resolvedEvents[2]).toBe(t2)
-    c.reResolve(gs({ c: false }))
-    // 新しい列は t0, t3。t2 の前に生き残るのは t0 の 1 件。位置 1 は t3 で t2 ではないので 0。
-    expect(c.resolvedEvents.length).toBe(2)
-    expect(c.eventIndex).toBe(0)
+    const g = gs({ x: true })
+    c.load(raw, g)
+    const before = [...c.resolvedEvents]
+    g.setFlag('x', { Bool: false }) // Flag の実行相当。再展開の入口は無い
+    expect(c.resolvedEvents).toEqual(before)
+    expect(c.displayEventCount).toBe(3)
   })
 
-  it('現在イベントが残る場合は新しい列上のその位置', () => {
-    const t2 = narr('t2')
-    const raw: Event[] = [cond('x', [narr('tx')]), narr('t1'), t2]
+  it('snapshotEntry: 元列に [条件:] が無ければ何も出さない', () => {
     const c = new PlaybackCursor()
-    c.load(raw, gs({ x: true }), 2)
-    expect(c.resolvedEvents[2]).toBe(t2)
-    c.reResolve(gs({ x: false }))
-    expect(c.resolvedEvents[1]).toBe(t2)
-    expect(c.eventIndex).toBe(1)
+    c.load(plainRaw(3), gs({ x: true }))
+    expect(c.snapshotEntry()).toEqual({})
+    expect(Object.keys(c.snapshotEntry())).toEqual([])
   })
 
-  it('範囲外の eventIndex は末尾へ丸める', () => {
-    const c = new PlaybackCursor()
-    c.load(plainRaw(4), gs({}), 99)
-    c.reResolve(gs({}))
-    expect(c.eventIndex).toBe(3)
-  })
-
-  it('textIndex / sentenceIndex / history は変えず、ページキャッシュは破棄する', () => {
-    const c = movedCursor()
-    const [, t, s] = pos(c)
-    const hist = [...c.history]
-    c.reResolve(gs({}))
-    expect(c.textIndex).toBe(t)
-    expect(c.sentenceIndex).toBe(s)
-    expect(c.history).toEqual(hist)
-    expect(c.novelPagesCache).toBeNull()
-    expect(c.advSentencePagesCache).toBeNull()
-  })
-
-  it('displayEventCount を再導出値に同期する', () => {
-    const raw: Event[] = [cond('x', [narr('a'), narr('b')]), flagEv('x', false), narr('c')]
+  it('snapshotEntry: [条件:] があれば入場時 flags を出し、entryRawIndex は非0のときだけ', () => {
+    const raw: Event[] = [narr('a'), cond('x', [narr('b')]), narr('c')]
     const c = new PlaybackCursor()
     c.load(raw, gs({ x: true }))
-    expect(c.displayEventCount).toBe(3)
-    c.reResolve(gs({ x: false }))
-    expect(c.displayEventCount).toBe(countText(resolveEvents(raw, gs({ x: false }))))
-    expect(c.displayEventCount).toBe(1)
+    expect(c.snapshotEntry()).toEqual({ entryFlags: { x: { Bool: true } } })
+    expect(Object.keys(c.snapshotEntry())).toEqual(['entryFlags'])
+    c.load(raw, gs({ x: false }), 0, 2)
+    expect(c.snapshotEntry()).toEqual({ entryFlags: { x: { Bool: false } }, entryRawIndex: 2 })
+  })
+
+  it('rawOffsets は元列のトップレベル i 番目の展開後の開始位置（長さ raw.length + 1）', () => {
+    const raw: Event[] = [narr('a'), cond('x', [narr('b'), narr('c')]), narr('d')]
+    const c = new PlaybackCursor()
+    c.load(raw, gs({ x: true }))
+    expect(c.rawOffsets).toEqual([0, 1, 3, 4])
+    c.load(raw, gs({ x: false }))
+    expect(c.rawOffsets).toEqual([0, 1, 1, 2])
   })
 })
 
@@ -350,7 +345,7 @@ describe('PlaybackCursor load / replaceEvents / 開始状態', () => {
     const before = pos(c)
     const hist = [...c.history]
     const raw = [cond('x', [narr('a')]), narr('b')]
-    c.replaceEvents(raw, gs({ x: true }))
+    c.replaceEvents(raw, entryOf({ x: true }))
     expect(c.rawEvents).toBe(raw)
     expect(c.resolvedEvents).toEqual(resolveEvents(raw, gs({ x: true })))
     expect(c.displayEventCount).toBe(2)
@@ -429,7 +424,7 @@ const RAW_POOL: Event[][] = [
   [narr('only')],
 ]
 
-describe('PlaybackCursor 不変条件: resolved は常に resolveEvents(raw, flags) で再現でき、displayEventCount は導出と一致する', () => {
+describe('PlaybackCursor 不変条件: resolved は常に expandEvents(raw, 入場条件) で再現でき、displayEventCount は導出と一致する', () => {
   it('固定シードの多数の操作列でも成り立ち、状態が実際に変わった件数も十分ある', () => {
     const rand = rng(824)
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]
@@ -445,6 +440,7 @@ describe('PlaybackCursor 不変条件: resolved は常に resolveEvents(raw, fla
       const c = new PlaybackCursor()
       let raw = pick(RAW_POOL)
       let flags = randFlags()
+      let entry = entryOf(flags)
       c.load(raw, gs(flags), 0)
       for (let step = 0; step < 30; step++) {
         const prevResolved = c.resolvedEvents
@@ -453,23 +449,24 @@ describe('PlaybackCursor 不変条件: resolved は常に resolveEvents(raw, fla
         if (op === 0) {
           c.nextEvent()
         } else if (op === 1) {
+          // 訪問中の flags 変化は列に影響しない（再展開の入口が無い）
           flags = randFlags()
-          c.reResolve(gs(flags))
         } else if (op === 2) {
-          flags = randFlags()
-          c.restorePosition(snap(Math.floor(rand() * 6), Math.floor(rand() * 3)), gs(flags))
+          c.restorePosition(snap(Math.floor(rand() * 6), Math.floor(rand() * 3)))
         } else if (op === 3) {
           raw = pick(RAW_POOL)
           flags = randFlags()
+          entry = entryOf(flags)
           c.load(raw, gs(flags), Math.floor(rand() * 3))
         } else {
           raw = pick(RAW_POOL)
           flags = randFlags()
-          c.replaceEvents(raw, gs(flags))
+          entry = entryOf(flags)
+          c.replaceEvents(raw, entry)
         }
         total++
         expect(c.rawEvents).toBe(raw)
-        expect(c.resolvedEvents).toEqual(resolveEvents(raw, gs(flags)))
+        expect(c.resolvedEvents).toEqual(expandEvents(raw, entry).events)
         expect(c.displayEventCount).toBe(countText(c.resolvedEvents))
         if (
           JSON.stringify(c.resolvedEvents) !== JSON.stringify(prevResolved) ||
@@ -569,7 +566,7 @@ function curAdvance(c: PlaybackCursor): void {
   if (c.eventIndex < c.resolvedEvents.length) c.pushHistory(snap(c.eventIndex, 0, 0))
 }
 
-function curGoBack(c: PlaybackCursor, flags: GameState): void {
+function curGoBack(c: PlaybackCursor): void {
   if (c.sentenceIndex > 0) {
     c.prevSentence()
     return
@@ -580,14 +577,14 @@ function curGoBack(c: PlaybackCursor, flags: GameState): void {
   }
   if (c.history.length > 1) {
     c.popHistory()
-    c.restorePosition(c.history[c.history.length - 1], flags)
+    c.restorePosition(c.history[c.history.length - 1])
   }
 }
 
-function curSeekTo(c: PlaybackCursor, i: number, flags: GameState): void {
+function curSeekTo(c: PlaybackCursor, i: number): void {
   if (i < 0 || i >= c.history.length) return
   const target = c.truncateHistory(i)
-  if (target) c.restorePosition(target, flags)
+  if (target) c.restorePosition(target)
 }
 
 function refOf(c: PlaybackCursor): Ref {
@@ -619,12 +616,12 @@ describe('旧 NovelRenderer（origin/main）の位置更新との等価性', () 
             refAdvance(ref, c.resolvedEvents.length)
           } else if (op < 0.9) {
             const h0 = c.history.length
-            curGoBack(c, gs({}))
+            curGoBack(c)
             refGoBack(ref)
             if (c.history.length < h0) backs++
           } else {
             const i = Math.floor(rand() * (ref.history.length + 1)) - 1
-            curSeekTo(c, i, gs({}))
+            curSeekTo(c, i)
             refSeekTo(ref, i)
             if (i >= 0 && i < ref.history.length) seeks++
           }
@@ -651,10 +648,10 @@ describe('旧 NovelRenderer（origin/main）の位置更新との等価性', () 
         curAdvance(c)
         refAdvance(ref, c.resolvedEvents.length)
       } else if (f === 'b') {
-        curGoBack(c, gs({}))
+        curGoBack(c)
         refGoBack(ref)
       } else {
-        curSeekTo(c, f, gs({}))
+        curSeekTo(c, f)
         refSeekTo(ref, f)
       }
       expect(pos(c)).toEqual([ref.eventIndex, ref.textIndex, ref.sentenceIndex])

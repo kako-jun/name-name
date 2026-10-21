@@ -10,6 +10,10 @@
  * を一時的に置き、本テストの import だけを `./NovelRendererOld` に差し替えて実行すると、同じ値で緑になる
  * （確認後に一時ファイルを消す。コミットしない）。
  *
+ * #799: 元列に `[条件:]` を含む脚本では、入場時 flags（`entryFlags`）がスナップショットの末尾・セーブの
+ * `savedAt` 直前に加わる（既存キーの値・順序は不変）。`[条件:]` を含まない脚本は従来の JSON のまま
+ * （`NovelRenderer.conditionEntry.test.ts` が固定）。
+ *
  * シナリオ: Flag 後に Condition が展開され、単色背景・背景画像(明るさ・端フェード)・背景板・大道具・
  * カメラ・立ち絵が乗った状態。jsdom で到達できる（実描画に依存しない）範囲。
  */
@@ -52,13 +56,13 @@ interface LocalInternals extends RendererInternals {
 
 /** 期待値(origin/main の実装で実測)。 */
 const EXPECTED_SNAPSHOT_JSON =
-  '{"sceneId":"a","eventIndex":8,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true},"inner":{"Number":2}},"backgroundPath":"bg/room.png","backgroundColor":"#112233","backgroundFade":{"top":10},"backgroundBrightness":0.6,"video":null,"eventImage":null,"backgroundBoards":[{"path":"board.png","depth":3}],"props":[{"path":"desk.png","depth":1}],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0}],"currentBgmPath":null,"cameraMode":"Theater","cameraOrientation":"Stage","cameraElevation":null,"paperDollOutline":null,"storyEnded":false}'
+  '{"sceneId":"a","eventIndex":8,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true},"inner":{"Number":2}},"backgroundPath":"bg/room.png","backgroundColor":"#112233","backgroundFade":{"top":10},"backgroundBrightness":0.6,"video":null,"eventImage":null,"backgroundBoards":[{"path":"board.png","depth":3}],"props":[{"path":"desk.png","depth":1}],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0}],"currentBgmPath":null,"cameraMode":"Theater","cameraOrientation":"Stage","cameraElevation":null,"paperDollOutline":null,"storyEnded":false,"entryFlags":{}}'
 const EXPECTED_QUICKSAVE_JSON =
-  '{"slot":-1,"sceneId":"a","eventIndex":8,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true},"inner":{"Number":2}},"backgroundPath":"bg/room.png","backgroundColor":"#112233","backgroundFade":{"top":10},"backgroundBrightness":0.6,"video":null,"eventImage":null,"backgroundBoards":[{"path":"board.png","depth":3}],"props":[{"path":"desk.png","depth":1}],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0}],"currentBgmPath":null,"cameraMode":"Theater","cameraOrientation":"Stage","cameraElevation":null,"paperDollOutline":null,"savedAt":"2026-10-15T00:00:00.000Z","sceneName":"シーンA"}'
+  '{"slot":-1,"sceneId":"a","eventIndex":8,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true},"inner":{"Number":2}},"backgroundPath":"bg/room.png","backgroundColor":"#112233","backgroundFade":{"top":10},"backgroundBrightness":0.6,"video":null,"eventImage":null,"backgroundBoards":[{"path":"board.png","depth":3}],"props":[{"path":"desk.png","depth":1}],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0}],"currentBgmPath":null,"cameraMode":"Theater","cameraOrientation":"Stage","cameraElevation":null,"paperDollOutline":null,"entryFlags":{},"savedAt":"2026-10-15T00:00:00.000Z","sceneName":"シーンA"}'
 const EXPECTED_DEBUG_JSON =
   '{"eventIndex":8,"eventCount":9,"eventKind":"Dialog","eventText":"\\"d0\\"","autoMode":false,"waitingForChoice":false,"waitingForWait":false,"jumpState":"idle","currentResolvedFontFamily":null,"sceneId":"a","audioWarning":null,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0,"x":150,"y":450,"scale":1}]}'
 const EXPECTED_SLOT_JSON =
-  '{"slot":3,"sceneId":"a","eventIndex":8,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true},"inner":{"Number":2}},"backgroundPath":"bg/room.png","backgroundColor":"#112233","backgroundFade":{"top":10},"backgroundBrightness":0.6,"video":null,"eventImage":null,"backgroundBoards":[{"path":"board.png","depth":3}],"props":[{"path":"desk.png","depth":1}],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0}],"currentBgmPath":null,"cameraMode":"Theater","cameraOrientation":"Stage","cameraElevation":null,"paperDollOutline":null,"savedAt":"2026-10-15T00:00:00.000Z","sceneName":"シーンA"}'
+  '{"slot":3,"sceneId":"a","eventIndex":8,"textIndex":0,"sentenceIndex":0,"flags":{"seen":{"Bool":true},"inner":{"Number":2}},"backgroundPath":"bg/room.png","backgroundColor":"#112233","backgroundFade":{"top":10},"backgroundBrightness":0.6,"video":null,"eventImage":null,"backgroundBoards":[{"path":"board.png","depth":3}],"props":[{"path":"desk.png","depth":1}],"spotlight":null,"curtain":null,"isBlackout":false,"characters":[{"name":"a","expression":"a/smile","position":"left","depth":0}],"currentBgmPath":null,"cameraMode":"Theater","cameraOrientation":"Stage","cameraElevation":null,"paperDollOutline":null,"entryFlags":{},"savedAt":"2026-10-15T00:00:00.000Z","sceneName":"シーンA"}'
 
 async function playToEnd(): Promise<NovelRenderer> {
   const r = new NovelRenderer()

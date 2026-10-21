@@ -42,7 +42,7 @@ confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の�
 | クエリ | 意味 | 例 |
 |---|---|---|
 | `debug_scene` | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移） | `?debug_scene=1-2` |
-| `debug_flags` | 開始時に立てるフラグ（`key:val` をカンマ区切り） | `&debug_flags=saw_characters:true,gold:100` |
+| `debug_flags` | 開始時に立てるフラグ（`key:val` をカンマ区切り）。その訪問の `[条件:]` を入場時に評価する flags（入場時 flags）にもなる（#799）。ブロック内で `[フラグ:]` が同じフラグを変えても、入場済みのブロックの残りは流れる | `&debug_flags=saw_characters:true,gold:100` |
 | `debug_eventIndex` | 開始イベント index（省略時 0）。`[ジャンプ:]` を指すと、そこから遷移を再予約して先へ進む（遷移先不在なら警告して停止、#733） | `&debug_eventIndex=3` |
 | `debug_textIndex` | 開始テキスト index（省略時 0） | `&debug_textIndex=2` |
 | `debug_script` | クリック操作列を自動再生（カンマ区切り） | `?debug_script=advance,advance,choice:2-1` |

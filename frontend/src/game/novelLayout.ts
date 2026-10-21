@@ -1031,6 +1031,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   cameraOrientation = data.cameraOrientation ?? 'Audience'  // 古いセーブには無い (#681)
  *   cameraElevation   = data.cameraElevation ?? null  // 古いセーブには無い (#682)
  *   paperDollOutline  = data.paperDollOutline ?? null  // 古いセーブには無い (#699)
+ *   entryFlags / entryResumeIndex / entryRawIndex = data の値（無ければ付けない）  // 入場時 flags (#799)。無い → 保存位置までを静的展開、後ろを逐次評価
  *   storyEnded     = false  // SaveSlotData 未対応 (#386)。セーブ/ロードは常に「終劇していない」扱い
  *
  * `backgroundFade` の正規化（`normalizeBackgroundFade` / `edgeFadeMask`）は PixiJS を間接
@@ -1082,6 +1083,10 @@ export function saveSlotToGameState(
     // 終劇状態 (#386) はセーブデータに持たせない（SaveSlotData 未対応・古いセーブにも無い）。
     // quicksave/quickload・スロット保存はすべて「終劇していない」状態として復元する。
     storyEnded: false,
+    // 入場時 flags (#799)。古いセーブには無い → キー自体を付けない（`entryFromState` が保存位置までの静的展開に倒す）。
+    ...(data.entryFlags !== undefined ? { entryFlags: data.entryFlags } : {}),
+    ...(data.entryResumeIndex !== undefined ? { entryResumeIndex: data.entryResumeIndex } : {}),
+    ...(data.entryRawIndex !== undefined ? { entryRawIndex: data.entryRawIndex } : {}),
   }
 }
 
@@ -1127,6 +1132,12 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
     cameraOrientation: snapshot.cameraOrientation,
     cameraElevation: snapshot.cameraElevation,
     paperDollOutline: snapshot.paperDollOutline,
+    // 入場時 flags (#799)。スナップショットが持つときだけ書く（元列に `[条件:]` が無い脚本では JSON は従来のまま）。
+    ...(snapshot.entryFlags !== undefined ? { entryFlags: snapshot.entryFlags } : {}),
+    ...(snapshot.entryResumeIndex !== undefined
+      ? { entryResumeIndex: snapshot.entryResumeIndex }
+      : {}),
+    ...(snapshot.entryRawIndex !== undefined ? { entryRawIndex: snapshot.entryRawIndex } : {}),
     savedAt: meta.savedAt,
     sceneName: meta.sceneName,
   }
