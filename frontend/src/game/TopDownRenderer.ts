@@ -35,10 +35,12 @@ import type { BattleResult } from './loot'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
+  buildScriptedBattle,
   closeFieldBattle,
   openFieldBattle,
   readFieldBattleSettings,
   type FieldBattleSettings,
+  type ScriptedBattleSetup,
 } from './fieldBattle'
 import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 
@@ -121,6 +123,8 @@ export class TopDownRenderer {
   private masterItems: Record<string, import('../types').ItemDef> | undefined
   /** 戦闘が終わって画面を畳んだ直後に結果（経験値・ゴールド・戦利品）を受け取るホスト側のハンドラ (#831) */
   private battleEndHandler: ((result: BattleResult) => void) | undefined
+  /** 脚本制御の戦闘 (#741) の結果を待っている `startScriptedBattle` の解決関数。戦闘が普通に終わったときに結果で解決する */
+  private scriptedResolve: ((result: BattleResult | null) => void) | null = null
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
@@ -180,7 +184,10 @@ export class TopDownRenderer {
     const npcMover: NpcMover = {
       moveNpcTo: (name, x, y, speed) => this.moveNpcTo(name, x, y, speed),
     }
-    this.eventRunner = new EventRunner(this.dialogBox, npcMover)
+    this.eventRunner = new EventRunner(this.dialogBox, npcMover, {
+      startBattle: (id) => this.startScriptedBattle(id),
+      findEvent: (name) => this.gameData?.rpgEvents?.find((e) => e.name === name)?.commands,
+    })
 
     // ミニマップは raycast 専用 (#149)。topdown は元々全体俯瞰で見えているので不要。
 
@@ -216,6 +223,42 @@ export class TopDownRenderer {
    */
   setBattleEndHandler(handler: ((result: BattleResult) => void) | undefined): void {
     this.battleEndHandler = handler
+  }
+
+  /**
+   * 脚本制御の戦闘 (`[戦闘 <id>]`、#741) を始める。`[イベント]` の `[戦闘: id]` が呼ぶほか、ホストが直接呼んでもよい。
+   * 終わったら結果（`BattleResult.script` に結果フラグ・次のイベントが入る）で解決する。結果は `setBattleEndHandler` のハンドラにも渡る。
+   * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中）は null で解決する。戦闘中に `load` / `destroy` で強制終了されたときは解決しない
+   */
+  startScriptedBattle(id: string): Promise<BattleResult | null> {
+    const def = this.gameData?.battleScripts
+    if (!def || !Object.prototype.hasOwnProperty.call(def, id)) {
+      console.warn(`[TopDownRenderer] 戦闘 '${id}' の宣言（[戦闘 ${id}]）が無い`)
+      return Promise.resolve(null)
+    }
+    if (this.battleBusy || this.scriptedResolve) return Promise.resolve(null)
+    const setup = buildScriptedBattle(
+      def[id],
+      this.masterMonsters,
+      {
+        party: this.masterParty,
+        order: this.masterPartyOrder,
+        spells: this.masterSpells,
+        skills: this.masterSkills,
+        statuses: this.masterStatuses,
+        items: this.masterItems,
+      },
+      this.battleSettings.layout,
+      Math.random
+    )
+    if (!setup) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      this.scriptedResolve = resolve
+      if (!this.startBattle(setup.enemies, setup)) {
+        this.scriptedResolve = null
+        resolve(null)
+      }
+    })
   }
 
   /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
@@ -712,7 +755,7 @@ export class TopDownRenderer {
    * 戦闘画面を起動する (#784)。組み立て・キー規約・終了時の畳み方は RaycastRenderer と共通 (fieldBattle.ts)。
    * 終了（勝利・逃走・全滅）でフィールドに戻り、エンカウントのクールダウンを 3 歩セットする（RaycastRenderer と同方式）。
    */
-  private startBattle(enemies: BattleEntity[]): boolean {
+  private startBattle(enemies: BattleEntity[], scripted?: ScriptedBattleSetup): boolean {
     if (this.battleBusy) return false // 多重起動防止
     if (enemies.length === 0) return false
     // キューされたスワイプは戦闘後に持ち越さない
@@ -732,6 +775,7 @@ export class TopDownRenderer {
           items: this.masterItems,
         },
         enemies,
+        ...(scripted ? { scripted } : {}),
         gate: this.inputGate,
         assetBaseUrl: this.assetBaseUrl,
         transition: this.transition,
@@ -739,6 +783,10 @@ export class TopDownRenderer {
           this.battleScreen = null
           this.pendingSwipe = null
           this.battleEndHandler?.(result)
+          // 脚本制御の戦闘 (#741) を待っているイベントがあれば、結果で再開させる（ハンドラのあと）
+          const resolve = this.scriptedResolve
+          this.scriptedResolve = null
+          resolve?.(result)
           // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）
           this.encounterCooldown = 3
           // 戦闘に入った歩の踏み込みトリガーを、戦闘が終わってから発火する
@@ -766,6 +814,11 @@ export class TopDownRenderer {
   /** 戦闘画面があれば畳む（onClosed は呼ばない）。load() / destroy() 用 */
   private closeBattle(): void {
     this.transition.cancel()
+    // 強制終了では、結果を待っていたイベントごと捨てる（古い続きが新しい状態で動かない）。解決はしない
+    if (this.scriptedResolve) {
+      this.scriptedResolve = null
+      this.eventRunner?.destroy()
+    }
     if (!this.battleScreen) return
     closeFieldBattle(this.app.stage, this.battleScreen)
     this.battleScreen = null

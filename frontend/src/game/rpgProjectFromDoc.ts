@@ -7,6 +7,7 @@ import type {
   SpellDef,
   SkillDef,
   StatusDef,
+  BattleScriptDef,
   PartyMemberDef,
   EventCommand,
 } from '../types'
@@ -98,6 +99,7 @@ export function collectMasterData(doc: EventDocument): {
   spells: Record<string, SpellDef>
   skills: Record<string, SkillDef>
   statuses: Record<string, StatusDef>
+  battleScripts: Record<string, BattleScriptDef>
   party: Record<string, PartyMemberDef>
   /** party の ID を定義順（初出順・重複なし）で並べたもの (#736) */
   partyOrder: string[]
@@ -107,6 +109,7 @@ export function collectMasterData(doc: EventDocument): {
   const spells: Record<string, SpellDef> = {}
   const skills: Record<string, SkillDef> = {}
   const statuses: Record<string, StatusDef> = {}
+  const battleScripts: Record<string, BattleScriptDef> = {}
   const party: Record<string, PartyMemberDef> = {}
   const partyOrder: string[] = []
   for (const chapter of doc.chapters) {
@@ -124,6 +127,12 @@ export function collectMasterData(doc: EventDocument): {
             console.warn(`[状態 ${ev.Status.id}] が重複している。後ろの宣言で上書きした`)
           }
           safeAssign(statuses, ev.Status.id, ev.Status)
+        } else if ('BattleScript' in ev) {
+          // 同じ id の [戦闘] は後勝ち。誤記に気づけるよう 1 度だけ知らせる (#741)
+          if (Object.prototype.hasOwnProperty.call(battleScripts, ev.BattleScript.id)) {
+            console.warn(`[戦闘 ${ev.BattleScript.id}] が重複している。後ろの宣言で上書きした`)
+          }
+          safeAssign(battleScripts, ev.BattleScript.id, ev.BattleScript)
         } else if ('PartyMember' in ev) {
           safeAssign(party, ev.PartyMember.id, ev.PartyMember)
           if (!partyOrder.includes(ev.PartyMember.id)) partyOrder.push(ev.PartyMember.id)
@@ -131,7 +140,7 @@ export function collectMasterData(doc: EventDocument): {
       }
     }
   }
-  return { monsters, items, spells, skills, statuses, party, partyOrder }
+  return { monsters, items, spells, skills, statuses, battleScripts, party, partyOrder }
 }
 
 /**
@@ -150,6 +159,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   spells: Record<string, SpellDef>
   skills: Record<string, SkillDef>
   statuses: Record<string, StatusDef>
+  battleScripts: Record<string, BattleScriptDef>
   party: Record<string, PartyMemberDef>
   partyOrder: string[]
 } {
@@ -159,6 +169,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     spells: {} as Record<string, SpellDef>,
     skills: {} as Record<string, SkillDef>,
     statuses: {} as Record<string, StatusDef>,
+    battleScripts: {} as Record<string, BattleScriptDef>,
     party: {} as Record<string, PartyMemberDef>,
     partyOrder: [] as string[],
   }
@@ -171,6 +182,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     safeAssignAll(merged.spells, m.spells)
     safeAssignAll(merged.skills, m.skills)
     safeAssignAll(merged.statuses, m.statuses)
+    safeAssignAll(merged.battleScripts, m.battleScripts)
     safeAssignAll(merged.party, m.party)
     for (const id of m.partyOrder) if (!merged.partyOrder.includes(id)) merged.partyOrder.push(id)
   }
@@ -324,6 +336,10 @@ export function rpgProjectFromDoc(
     skills: master.skills,
     // 状態 (#870)。1 つも宣言していないゲームは付けない（従来どおりのキー集合）
     ...(Object.keys(master.statuses).length > 0 ? { statuses: master.statuses } : {}),
+    // 脚本制御の戦闘 (#741)。1 つも宣言していないゲームは付けない（従来どおりのキー集合）
+    ...(Object.keys(master.battleScripts).length > 0
+      ? { battleScripts: master.battleScripts }
+      : {}),
     party: master.party,
     partyOrder: master.partyOrder,
     battleLayout: normalizeBattleLayout(doc.battle_layout),

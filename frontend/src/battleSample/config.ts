@@ -18,7 +18,7 @@ import type { BackgroundTone } from '../game/backgroundTone'
 import type { BackgroundDof } from '../game/depthOfField'
 import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
 import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
-import type { AtbMode, SkillExecution } from '../game/battleEngine'
+import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import { COMMAND_DEFAULTS, type CommandLabels, type CommandLayout } from '../game/battleCommands'
 import type {
@@ -61,7 +61,10 @@ export function describeBattleResult(
             return `${name(l.itemId)} ×${l.count}（${via}・${l.enemyName}）`
           })
           .join(' / ')
-  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}`
+  const script = result.script
+    ? `  脚本: ${result.script.id} フラグ=${JSON.stringify(result.script.flags)}${result.script.next !== undefined ? ` 次=${result.script.next}` : ''}`
+    : ''
+  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}${script}`
 }
 
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
@@ -121,6 +124,11 @@ export interface BattleSampleConfig {
   statuses: Record<string, StatusDef>
   /** 戦利品のログ用の表示名 (#831)。設定 JSON の `itemNames`（アイテム id → 名前）。既定は空（id をそのまま表示） */
   itemNames: Record<string, string>
+  /**
+   * 脚本制御の戦闘 (#741 / #863)。設定 JSON の `script`（`{ id?, rules: [...], joiners?: [...] }`。`rules` は `[戦闘]` の `キー: 値` の行、
+   * `joiners` は途中参戦する味方で `party` と同じ書式）。既定は null（脚本なし＝従来の戦闘）
+   */
+  script: BattleScriptOptions | null
   party: BattleEntity[]
   enemies: BattleEntity[]
 }
@@ -235,6 +243,7 @@ export function defaultConfig(): BattleSampleConfig {
     skills: {},
     statuses: {},
     itemNames: {},
+    script: null,
     party: defaultParty(),
     enemies: defaultEnemies(),
   }
@@ -583,6 +592,36 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
 }
 
 /** 設定 JSON（パース済みの値）を検証し、既定値を補完し、URL を絶対化する */
+/** 設定 JSON の `script` (#741)。`rules` は文字列の配列（必須）、`joiners` は味方と同じ書式の配列（任意） */
+function parseScript(raw: unknown, baseUrl: string): ParseResult<BattleScriptOptions | null> {
+  if (raw === undefined || raw === null) return { ok: true, value: null }
+  if (!isRecord(raw)) return { ok: false, error: 'script はオブジェクトである必要があります' }
+  if (!Array.isArray(raw.rules) || raw.rules.some((r) => typeof r !== 'string')) {
+    return { ok: false, error: 'script.rules は文字列の配列である必要があります' }
+  }
+  let id = 'sample'
+  if (raw.id !== undefined) {
+    if (typeof raw.id !== 'string' || raw.id === '') {
+      return { ok: false, error: 'script.id は空でない文字列である必要があります' }
+    }
+    id = raw.id
+  }
+  const joiners: Record<string, BattleEntity> = {}
+  if (raw.joiners !== undefined) {
+    const list = parseEntities(raw.joiners, defaultParty(), MAX_PARTY, baseUrl, 'script.joiners')
+    if (!list.ok) return list
+    for (const e of list.value) joiners[e.id] = e
+  }
+  return {
+    ok: true,
+    value: {
+      id,
+      rules: raw.rules as string[],
+      ...(Object.keys(joiners).length > 0 ? { joiners } : {}),
+    },
+  }
+}
+
 export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSampleConfig> {
   if (!isRecord(raw))
     return { ok: false, error: '設定 JSON のルートはオブジェクトである必要があります' }
@@ -749,6 +788,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
         return { ok: false, error: `foreground の URL を解決できません: ${raw.foreground}` }
     }
   }
+  const script = parseScript(raw.script, baseUrl)
+  if (!script.ok) return script
   const party = parseEntities(raw.party, def.party, MAX_PARTY, baseUrl, 'party')
   if (!party.ok) return party
   const enemies = parseEntities(raw.enemies, def.enemies, MAX_ENEMIES, baseUrl, 'enemies')
@@ -777,6 +818,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       skills: skills.value,
       statuses: statuses.value,
       itemNames,
+      script: script.value,
       party: party.value,
       enemies: enemies.value,
     },
@@ -889,6 +931,8 @@ export function buildBattleSetup(
   statuses: Record<string, StatusDef>
   /** BattleEngine に渡す戦利品の表示名 (#831) */
   itemNames: Record<string, string>
+  /** BattleEngine に渡す脚本 (#741)。無ければ undefined（従来の戦闘）。味方の人数の切り替えとは独立（参戦者は設定どおり） */
+  script?: BattleScriptOptions
   width: number
   height: number
 } {
@@ -909,6 +953,10 @@ export function buildBattleSetup(
     skills: config.skills,
     statuses: config.statuses,
     itemNames: config.itemNames,
+    // 脚本は戦闘ごとに複製を渡す（エンジンも複製するが、設定を共有しない）
+    ...(config.script
+      ? { script: JSON.parse(JSON.stringify(config.script)) as BattleScriptOptions }
+      : {}),
     // front 配置は本編と同じく隊列を使わない（RaycastRenderer.partyDefToBattleEntity と同じ）
     party: applyFormation(party, view.layout === 'front' ? 'front' : view.formation),
     enemies: fill(
@@ -930,7 +978,12 @@ export function buildBattleSetup(
       commandLabels: config.commandLabels,
       menu: {
         // 呪文は味方全員が同じものを使える（複製して渡す。BattleScreen は読むだけだが、設定を共有しない）
-        spells: Object.fromEntries(party.map((p) => [p.id, config.spells.map((e) => ({ ...e }))])),
+        spells: Object.fromEntries(
+          [...party, ...Object.values(config.script?.joiners ?? {})].map((p) => [
+            p.id,
+            config.spells.map((e) => ({ ...e })),
+          ])
+        ),
         items: config.items.map((e) => ({ ...e })),
       },
       ...(view.backgroundOn && config.background ? { background: config.background } : {}),

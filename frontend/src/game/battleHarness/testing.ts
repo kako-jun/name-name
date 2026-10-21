@@ -51,7 +51,7 @@ export function fakeFactory(
     const step = (): void => onOp(state, n++, rng)
     const engine: HarnessEngine = {
       getState: () => state,
-      isOver: () => ['victory', 'defeat', 'escaped'].includes(state.phase),
+      isOver: () => ['victory', 'defeat', 'escaped', 'interrupted'].includes(state.phase),
       tick: step,
       selectAttack: step,
       selectSpell: step,

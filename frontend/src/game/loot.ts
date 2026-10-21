@@ -89,9 +89,26 @@ export interface LootEntry {
   enemyName: string
 }
 
+/**
+ * 戦闘の終わり方。`interrupted` = 脚本が勝敗がつく前に中断した (#741)。経験値・ゴールド・ドロップは victory のときだけで、
+ * ホストは勝敗のどちらでもない扱い（暗転して次の場面へ、など）にする
+ */
+export type BattleOutcome = 'victory' | 'defeat' | 'escaped' | 'interrupted'
+
+/**
+ * 脚本制御の戦闘 (#741) の結果。`[戦闘 id]` で始めた戦闘にだけ付く（普通のエンカウントの結果には付かない）。
+ * `flags` は `勝利時` `敗北時` `中断時` `逃走時` の `フラグ=` で宣言したもの（値は `[フラグ:]` と同じく真偽・数値・文字列）で、
+ * ホストが自分のフラグに反映する。`next` は `次=` のイベント名。**エンジンは `flags` を保存しない**（反映と保存はホストの責務）
+ */
+export interface BattleScriptResult {
+  id: string
+  flags: Record<string, boolean | number | string>
+  next?: string
+}
+
 /** ホストへ渡す戦闘の結果 */
 export interface BattleResult {
-  outcome: 'victory' | 'defeat' | 'escaped'
+  outcome: BattleOutcome
   /** 入手経験値・ゴールド（victory のときだけ入る。それ以外は 0） */
   exp: number
   gold: number
@@ -99,6 +116,8 @@ export interface BattleResult {
   loot: LootEntry[]
   /** `loot` をアイテム id ごとに個数で集計したもの（初めて出た順） */
   items: { itemId: string; count: number }[]
+  /** 脚本制御の戦闘 (#741) のとき、その結果（結果フラグ・次のイベント）。普通の戦闘には付かない */
+  script?: BattleScriptResult
 }
 
 /** `loot` をアイテム id ごとの個数に集計する（初めて出た順） */

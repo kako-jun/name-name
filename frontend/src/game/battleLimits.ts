@@ -50,10 +50,33 @@ export function clampHp(hp: number, maxHp: number = Infinity): number {
  * ダメージを HP に適用する唯一の口。ダメージを `MAX_DAMAGE` で頭打ちにし、HP は `MIN_HP` 未満にしない。
  * **ダメージは HP を増やさない**: 負の量（`damage -5..-1`・負の倍率）は 0 として扱う（#877。以前は負の量が HP を増やし最大 HP を超えた）。
  * HP が増えないので最大 HP を超えることもない（HP を増やす手段は回復・吸収・復活で、それぞれ `clampHp(…, maxHp)` で止める）。
+ * 脚本制御の戦闘 (#741) が付ける `hpFloor`（HP の下限）があれば、HP はそれ未満に減らない（すでに下限未満の者は上げも下げもしない）。
+ * `hpFloor` を持たない者は従来と同一。
  * 実際に適用した（頭打ち後の）ダメージ量を返す。ログ・ダメージ表示にはこの戻り値を使う。
  */
-export function applyDamageToHp(entity: { hp: number }, damage: number): number {
+export function applyDamageToHp(entity: { hp: number; hpFloor?: number }, damage: number): number {
   const dealt = Math.max(0, clampDamage(damage))
+  const floor = entity.hpFloor
+  if (floor !== undefined && floor > 0) {
+    const kept = Math.min(entity.hp, floor)
+    const next = clampHp(entity.hp - dealt)
+    entity.hp = Math.max(next, kept)
+    return dealt
+  }
   entity.hp = clampHp(entity.hp - dealt)
   return dealt
+}
+
+/**
+ * HP を 0 にする（即死・状態の満了など「ダメージの数字を介さず HP を直接 0 にする」経路の共通口）。
+ * `hpFloor` (#741) があれば 0 でなく下限で止める。倒した（HP が 0 になった）なら true。`hpFloor` を持たない者は従来どおり `hp = 0`
+ */
+export function knockOutHp(entity: { hp: number; hpFloor?: number }): boolean {
+  const floor = entity.hpFloor
+  if (floor === undefined || floor <= 0) {
+    entity.hp = 0
+    return true
+  }
+  entity.hp = Math.min(entity.hp, floor)
+  return entity.hp <= 0
 }

@@ -10,11 +10,21 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { ItemDef, PartyMemberDef, SkillDef, SpellDef, StatusDef } from '../types'
+import type {
+  BattleScriptDef,
+  ItemDef,
+  MonsterDef,
+  PartyMemberDef,
+  SkillDef,
+  SpellDef,
+  StatusDef,
+} from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
-import { itemNamesOf, type BattleResult } from './loot'
-import { BattleEngine } from './battleEngine'
+import { itemNamesOf, type BattleOutcome, type BattleResult } from './loot'
+import { BattleEngine, type BattleScriptOptions } from './battleEngine'
+import { buildEnemyEntities } from './encounter'
+import { parseEncounterGroup, resolveEncounterGroup } from './enemyGroup'
 import { toSkillExecutions } from './enemyAi'
 import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
@@ -324,6 +334,74 @@ export class FieldInputGate {
   }
 }
 
+/**
+ * 脚本制御の戦闘 (`[戦闘 id]`、#741) の組み立て結果。`openFieldBattle` の `scripted` に渡す。
+ * `enemies` は戦闘の敵、`party` は初期編成（空なら従来のパーティ）、`script` と `joiners` はエンジンの `script` オプション
+ */
+export interface ScriptedBattleSetup {
+  enemies: BattleEntity[]
+  /** 初期編成の味方の id（定義順ではなく `味方:` に書いた順）。空は従来のパーティ（`buildPartyBattleEntities` など） */
+  partyIds: string[]
+  script: BattleScriptOptions
+}
+
+/** `味方:` の行（カンマ区切り）から id を集める。空要素は捨てる・重複は最初だけ */
+export function parsePartyIds(lines: readonly string[] | undefined): string[] {
+  const out: string[] = []
+  for (const line of lines ?? []) {
+    for (const piece of line.split(/[,、，]/)) {
+      const id = piece.trim()
+      if (id !== '' && !out.includes(id)) out.push(id)
+    }
+  }
+  return out
+}
+
+/**
+ * `[戦闘 id]` の宣言から、戦闘の敵・初期編成・脚本を組み立てる (#741 / #863)。純粋関数（乱数は敵グループの個数の抽選だけで、注入する）。
+ * - 敵: `敵:`（敵グループと同じ書式。`+` 連結。カンマ区切りも受理）。1 体も組み立てられなければ null（戦闘を始めない）
+ * - 初期編成: `味方:` の id のうち `[パーティ]` にあるもの（無い id は警告して飛ばす）。1 人もいなければ従来のパーティ
+ * - 途中参戦できる味方: 初期編成にいない `[パーティ]` 全員。**side レイアウトだけ**（front は先頭 1 人しか描かないので、参戦しても操作・表示できない）
+ */
+export function buildScriptedBattle(
+  def: BattleScriptDef,
+  masters: Record<string, MonsterDef>,
+  roster: FieldBattleRoster,
+  layout: BattleLayoutMode,
+  rng: () => number
+): ScriptedBattleSetup | null {
+  if (!def.enemies || def.enemies.trim() === '') {
+    console.warn(`[name-name] 戦闘 '${def.id}': 敵: がありません（戦闘を始めない）`)
+    return null
+  }
+  const group = parseEncounterGroup(def.enemies.replace(/[,、，]/g, '+'))
+  for (const w of group.warnings) console.warn(`[name-name] 戦闘 '${def.id}' の敵: ${w}`)
+  const enemies = buildEnemyEntities(resolveEncounterGroup(group, rng), masters)
+  if (enemies.length === 0) {
+    console.warn(`[name-name] 戦闘 '${def.id}': 敵を 1 体も組み立てられない（戦闘を始めない）`)
+    return null
+  }
+  const partyIds: string[] = []
+  for (const id of parsePartyIds(def.party)) {
+    if (Object.prototype.hasOwnProperty.call(roster.party, id)) partyIds.push(id)
+    else
+      console.warn(`[name-name] 戦闘 '${def.id}' の味方: '${id}' は [パーティ] に無い（無視した）`)
+  }
+  const joiners: Record<string, BattleEntity> = {}
+  if (layout === 'side') {
+    const initial = partyIds.length > 0 ? partyIds : orderedPartyKeys(roster)
+    for (const id of orderedPartyKeys(roster)) {
+      if (initial.includes(id)) continue
+      joiners[id] = partyDefToBattleEntity(roster.party[id], layout)
+    }
+  }
+  return {
+    enemies,
+    partyIds,
+    script: { id: def.id, rules: def.rules, joiners },
+  }
+}
+
 export interface OpenFieldBattleArgs {
   stage: Container
   width: number
@@ -336,12 +414,14 @@ export interface OpenFieldBattleArgs {
   assetBaseUrl?: string
   /** `battle_transition: ff` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
   transition?: FieldBattleTransition
+  /** 脚本制御の戦闘 (#741)。渡すと、`enemies` の代わりにこの組み立て結果の敵・初期編成・脚本で戦う（`enemies` は無視） */
+  scripted?: ScriptedBattleSetup
   /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
   onClosed: (outcome: BattleOutcome, result: BattleResult) => void
 }
 
-/** 戦闘の結果（BattleScreen の onClose と同じ） */
-export type BattleOutcome = 'victory' | 'defeat' | 'escaped'
+/** 戦闘の結果（BattleScreen の onClose と同じ）。`interrupted` = 脚本が中断した (#741) */
+export type { BattleOutcome }
 
 /** 畳み済みの戦闘画面。強制終了（`closeFieldBattle`）後に古い onClose が走って二重に後始末しないための印 */
 const closedScreens = new WeakSet<BattleScreen>()
@@ -373,13 +453,24 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     gate,
     assetBaseUrl,
     transition,
+    scripted,
     onClosed,
   } = args
-  const party =
-    settings.layout === 'side'
+  // 初期編成: 脚本制御の戦闘が `味方:` を宣言していればその順（front は先頭 1 人だけ）。なければ従来どおり
+  const scriptedParty =
+    scripted && scripted.partyIds.length > 0
+      ? scripted.partyIds.map((id) => partyDefToBattleEntity(roster.party[id], settings.layout))
+      : null
+  const party = scriptedParty
+    ? settings.layout === 'side'
+      ? scriptedParty
+      : [scriptedParty[0]]
+    : settings.layout === 'side'
       ? buildPartyBattleEntities(roster, settings.layout)
       : [buildHeroBattleEntity(roster, settings.layout)]
-  const engine = new BattleEngine(party, enemies, {
+  const battleEnemies = scripted ? scripted.enemies : enemies
+  const engine = new BattleEngine(party, battleEnemies, {
+    ...(scripted ? { script: scripted.script } : {}),
     ...(settings.atb ? { atb: settings.atb } : {}),
     ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
     ...(roster.statuses ? { statuses: roster.statuses } : {}),
@@ -405,7 +496,8 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
     commands: settings.commands,
-    menu: buildBattleMenuData(roster, party),
+    // 途中参戦する味方（#741）の呪文・わざも、参戦したときに選べるよう最初から用意する
+    menu: buildBattleMenuData(roster, [...party, ...Object.values(scripted?.script.joiners ?? {})]),
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
     onClose: (outcome, result) => {

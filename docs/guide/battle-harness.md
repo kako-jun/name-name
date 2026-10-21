@@ -14,9 +14,10 @@ HARNESS_RANDOM_COUNT=500 npm run test:battle-harness   # ランダム合成の�
 HARNESS_SEED=2 npm run test:battle-harness             # ランダム合成の seed を変える（既定 1）
 HARNESS_SKIP=random,enemy-skill npm run test:battle-harness   # 族を省く
 HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言したランダム合成の件数（既定 2000）
+HARNESS_RANDOM_SCRIPT_COUNT=300 npm run test:battle-harness   # 脚本制御の戦闘のランダム合成の件数（既定 1000）
 ```
 
-環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,loot`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
+環境変数: `HARNESS_SEED` / `HARNESS_RANDOM_COUNT` / `HARNESS_RANDOM_STATUS_COUNT` / `HARNESS_RANDOM_SCRIPT_COUNT` / `HARNESS_SKIP`（`effect-matrix,enemy-skill,stack-order,reaction-chain,random,status-matrix,random-status,damage-condition,loot,script,random-script`）/ `HARNESS_OUT`（出力先。既定 `frontend/battle-harness-out/`。git 管理外）/ `HARNESS_STRICT=1`（壊れがあれば失敗扱い。既定は一覧を出して成功）。
 
 ## 何を動かすか
 
@@ -31,6 +32,9 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 | `random-status`  | seed 固定。状態を常に宣言し、付与・解除・反転の対象になる効果を中心に、能力値・HP・耐性・最初から持つ状態・`statusChanceBonus`・敵の台本・操作列をランダムに組む                                                                                                                                                                                                                                |
 | `damage-condition` | 敵の条件 `ダメージ…` (#871。奇数・偶数・倍数・閾値・ちょうど・桁数・併用・不正な書式) × 書く場所（`行動:` `反撃:` `死亡時:`）× 受けるダメージの元（固定の奇数・偶数、乱数幅、複数ヒット、極大、相性が絡む属性ダメージ、即死、回復）× 相手の相性 × 敵の HP（小さい=倒れる）× ターン制/ATB。味方が呪文を 3 回撃ってから攻撃する。先に 8（偶数）を当ててから同じ呪文を受ける並び（`/after8`）も含み、MISS・吸収・表示 0 のあとに前回の値が残らないことを `damage-memory` が見る |
 | `loot` | ぬすむ・ドロップ (#831)。効果 `steal`（確率・レア率・枠・回数・ぶんどるの通常値と境界値・不正値） × 対象の範囲 × 敵の戦利品の宣言（なし・通常枠・レア枠・両方・確率と個数・盗める回数 3 / 無限・不正な行だらけ） × 使い手の加算（なし・+50・極大・極小） × 敵の HP（倒れる・倒れない） × ターン制/ATB。味方が 4 回ぬすんでから攻撃し、勝利時のドロップまで見る。不変条件は `loot-invariant` |
+
+| `script` | 脚本制御の戦闘 (#741 / #863。約 250 件)。**勝敗固定**（勝利・敗北・中断 × 上限ターン 1 / 3 / 既定 × ターン制・ATB 2 種 × 強さ 4 組〈味方が弱い / 強い / 互角 / どちらも攻撃 0〉）、**固定を壊そうとする効果**（HP を 0 にする `damage` / `damage_full` / 負の `heal` / 死の宣告 / 多段ヒット × 撃つ側〈味方→敵・味方→味方・敵→味方〉× 固定 × ターン制・ATB）、**途中参戦**（参戦できる味方・いない id・すでにいる id × 戦闘方式 × 下限の有無）、**復活**（HP 指定 5 種 × 戦闘方式 × 味方 1・2 人）、**逃げるイベントバトル**（倒せない敵＋盾役 × 戦闘方式 × 味方の強さ）、**「にげる」禁止**（連打）。期待（`scriptExpect`）は「決着する・許した終わり方・ターン上限内」 |
+| `random-script` | seed 固定。ルールを 1〜5 個（台詞・参戦・復活・下限・逃走・終了・固定・にげる禁止・結果・壊れた行）選び、**必ず終了条件を 1 つ足して**、戦闘方式・強さ・操作列・敵味方の効果をランダムに組む。どの組み合わせでも決着し、脚本の状態が整合することを見る |
 
 エンジンの `opts.rng` に seed 固定の LCG を注入するので、同じシナリオは必ず同じ結果になる。操作列のあと、決着まで「攻撃 / ATB を進める」を最大 500 回押して、膠着していないかも見る。
 
@@ -48,7 +52,7 @@ HARNESS_RANDOM_STATUS_COUNT=500 npm run test:battle-harness   # 状態を宣言�
 - 凄い組み合わせ（強すぎ・許容）: **閾値を決めていない**。壊れでないシナリオの指標（1 行動の合計ダメージ・HP の減少量・回復量・ヒット数・バフ累積値）の上位を数値のまま並べるだけ。残す/潰すは人間が判断する。
 - ダメージ上限違反は `damage` のヒットの量が 9999 超（`battleLimits.MAX_DAMAGE`）かで見る。`heal` は上限が未決のため検出せず、候補（`maxHealAmount`）に回す。`damage_full`（即死）は上限の対象外（hit に `instantDeath` が付き、数字は出ない）で、検出から除外し、HP 減少は `maxHpDrop` の候補に並ぶ。
 
-検出する種類: `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `damage-memory`（`ダメージ…` を書いた敵の記憶が直前の味方の行動の表示数字と食い違う。MISS・吸収のあとに前回値が残る等）/ `loot-invariant`（`state.loot` が宣言した品だけか・レア枠の印が合うか・敵ごとに盗めた回数が上限内か・個数が 1〜99 の整数か・ドロップが勝利のときだけでぬすんだ品より後か）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
+検出する種類: `script-invariant`（脚本の状態の整合: 経過ターンが非負の整数・発動済みの添字が重複せず範囲内・参戦した味方が味方にいて重複しない・逃げた敵の HP が 0・`hpFloor` が 1〜最大 HP の整数。脚本の無い戦闘に脚本の状態・`interrupted`・`hpFloor` が出ない）/ `script-outcome`（脚本のシナリオが期待外の終わり方・ターン上限超え）/ `script-no-end`（終わるはずの脚本のシナリオが自動進行の上限まで決着しない）/ `non-finite`（NaN/Infinity）/ `unsafe-integer` / `negative-hp` / `negative-mp` / `hp-over-max` / `mp-over-max` / `damage-over-cap` / `hit-direction`（damage で HP が増える・量が負など）/ `bad-log-text` / `phase-mismatch`（勝敗と生存者の食い違い。**脚本のあるシナリオでは、脚本が決めた勝敗〈固定・終了〉の食い違いと interrupted は許し**、終わっていないのに全員倒れている進行不能だけを見る）/ `atb-invariant`（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）/ `status-invariant`（宣言した状態の残りターンが 0〜99 の整数でない・倒れた者に残っている・`status` イベントが本人だけを対象にしていない）/ `damage-memory`（`ダメージ…` を書いた敵の記憶が直前の味方の行動の表示数字と食い違う。MISS・吸収のあとに前回値が残る等）/ `loot-invariant`（`state.loot` が宣言した品だけか・レア枠の印が合うか・敵ごとに盗めた回数が上限内か・個数が 1〜99 の整数か・ドロップが勝利のときだけでぬすんだ品より後か）/ `lock`（HP・状態もイベントも変わらないまま進まない）/ `stalemate` / `event-flood` / `rng-budget` / `slow-op` / `exception`。
 
 無限ループは「1 操作の乱数消費が 200 万回を超える」で止めて検出する（乱数を使わないループや同期的な無限ループまでは拾えない）。検出できないもの: エンジンが残すイベントは直近 30 件（`EVENT_MAX`）なので、1 操作で 30 件を超えて増えた分のヒットは検査されない。
 

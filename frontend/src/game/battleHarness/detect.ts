@@ -31,6 +31,9 @@ export type ViolationKind =
   | 'slow-op' // 1 操作が極端に遅い（無限ループの疑い）
   | 'status-invariant' // 宣言した状態の不変条件違反（残りターンが整数でない・上限超・倒れた者に残る・status イベントの形が違う）(#870)
   | 'damage-memory' // `ダメージ…` を書いた敵の記憶 lastDamage が、直前の味方の行動が与えた表示数字の合計と食い違う（数字が出なかったのに前回値が残る等）(#871)
+  | 'script-invariant' // 脚本の進行の不変条件違反（ターン・発動済み・参戦・逃走の整合、hpFloor の範囲、script の無い戦闘に脚本の状態・interrupted）(#741)
+  | 'script-outcome' // 脚本のシナリオが、期待した終わり方（`scriptExpect.ends`）・ターン上限（`maxTurn`）を守らない (#741)
+  | 'script-no-end' // 終わるはずの脚本のシナリオが、自動進行の上限まで決着しなかった（膠着・進行不能）(#741)
   | 'loot-invariant' // 戦利品の不変条件違反（宣言していない品・個数が正の整数でない・ドロップが勝利以外で出た・盗めた回数が上限超・レア枠でない品が rare）(#831)
   | 'exception' // エンジンが例外を投げた
 
@@ -56,6 +59,11 @@ export interface DetectOptions {
    * 盗めた回数が上限内か・個数が 1〜`MAX_LOOT_COUNT` の整数か・ドロップが勝利のときだけかで検査する。
    * 宣言の無いシナリオは検査しない（`state.loot` が積まれていたら宣言が無い敵の品として違反）
    */
+  /**
+   * 脚本制御の戦闘 (#741) のシナリオ。あれば `BattleState.script` の整合（ターン・発動済み・参戦・逃走・hpFloor）を検査し、
+   * 脚本が決めた勝敗（生存者と食い違う victory / defeat、interrupted）を許す。`ruleCount` は解釈済みルールの数（発動済み index の範囲）
+   */
+  script?: { ruleCount: number }
   loot?: Readonly<
     Record<
       string,
@@ -69,7 +77,7 @@ export interface DetectOptions {
   >
 }
 
-const OVER_PHASES = ['victory', 'defeat', 'escaped']
+const OVER_PHASES = ['victory', 'defeat', 'escaped', 'interrupted']
 const BAD_TEXT = /NaN|Infinity|undefined/
 
 type Push = (kind: ViolationKind, detail: string) => void
@@ -204,14 +212,75 @@ function checkDamageMemory(
   })
 }
 
-function checkPhase(push: Push, s: BattleState): void {
+function checkPhase(push: Push, s: BattleState, scripted: boolean): void {
   const over = OVER_PHASES.includes(s.phase)
   const partyAlive = s.party.some((p) => p.hp > 0)
   const enemiesAlive = s.enemies.some((e) => e.hp > 0)
   if (!over && !partyAlive) push('phase-mismatch', `味方が全員倒れているのに phase = ${s.phase}`)
   if (!over && !enemiesAlive) push('phase-mismatch', `敵が全員倒れているのに phase = ${s.phase}`)
-  if (s.phase === 'victory' && enemiesAlive) push('phase-mismatch', 'victory なのに敵が生きている')
-  if (s.phase === 'defeat' && partyAlive) push('phase-mismatch', 'defeat なのに味方が生きている')
+  // 脚本が決めた勝敗（`固定` `終了`）は、生存者と食い違ってよい。interrupted は脚本の戦闘にだけある
+  if (!scripted) {
+    if (s.phase === 'victory' && enemiesAlive)
+      push('phase-mismatch', 'victory なのに敵が生きている')
+    if (s.phase === 'defeat' && partyAlive) push('phase-mismatch', 'defeat なのに味方が生きている')
+  }
+}
+
+/** 脚本の進行の不変条件 (#741)。`opts.script` が無い（脚本の無い戦闘）なら、脚本の状態・hpFloor・interrupted が無いことを見る */
+function checkScript(push: Push, s: BattleState, opts: DetectOptions): void {
+  const decl = opts.script
+  const st = s.script
+  if (!decl) {
+    if (st !== undefined) push('script-invariant', '脚本の無い戦闘に state.script がある')
+    if (s.phase === 'interrupted') push('script-invariant', '脚本の無い戦闘が interrupted になった')
+    for (const e of [...s.party, ...s.enemies]) {
+      if (e.hpFloor !== undefined) push('script-invariant', `脚本の無い戦闘で ${e.name} に hpFloor`)
+    }
+    return
+  }
+  if (!st) {
+    push('script-invariant', '脚本のある戦闘に state.script が無い')
+    return
+  }
+  if (!Number.isInteger(st.turn) || st.turn < 0)
+    push('script-invariant', `turn = ${String(st.turn)}`)
+  const uniqueInts = (label: string, list: readonly number[], max: number): void => {
+    if (new Set(list).size !== list.length)
+      push('script-invariant', `${label} に重複 [${list.join(',')}]`)
+    for (const v of list) {
+      if (!Number.isInteger(v) || v < 0 || v >= max) {
+        push('script-invariant', `${label} に範囲外の値 ${String(v)}（0〜${max - 1}）`)
+      }
+    }
+  }
+  uniqueInts('fired', st.fired, decl.ruleCount)
+  uniqueInts('fled', st.fled, s.enemies.length)
+  for (const i of st.fled) {
+    if (s.enemies[i] && s.enemies[i].hp !== 0)
+      push('script-invariant', `逃げた敵 ${i} の HP が 0 でない`)
+  }
+  if (new Set(st.joined).size !== st.joined.length) {
+    push('script-invariant', `joined に重複 [${st.joined.join(',')}]`)
+  }
+  for (const id of st.joined) {
+    if (!s.party.some((p) => p.id === id))
+      push('script-invariant', `参戦したはずの ${id} が味方にいない`)
+  }
+  if (s.party.length < 1) push('script-invariant', '味方がいない')
+  for (const [side, list] of [
+    ['party', s.party],
+    ['enemies', s.enemies],
+  ] as const) {
+    list.forEach((e, i) => {
+      if (e.hpFloor === undefined) return
+      if (!Number.isInteger(e.hpFloor) || e.hpFloor < 1 || e.hpFloor > e.maxHp) {
+        push(
+          'script-invariant',
+          `${side}[${i}] ${e.name}.hpFloor = ${String(e.hpFloor)}（1〜maxHp の整数であるべき）`
+        )
+      }
+    })
+  }
 }
 
 /** `battleEngineAtb.test.ts` の不変条件（ゲージ 0..1000・キューは生存者のみで重複なし・フェーズ整合）を移した */
@@ -266,7 +335,8 @@ export function checkState(
     if (BAD_TEXT.test(line)) push('bad-log-text', `ログ「${line}」`)
   }
   checkDamageMemory(push, state, newEvents)
-  checkPhase(push, state)
+  checkPhase(push, state, opts.script !== undefined)
+  checkScript(push, state, opts)
   checkAtb(push, state)
   checkLoot(push, state, opts)
   return out
@@ -331,5 +401,7 @@ export function fingerprint(s: Readonly<BattleState>): string {
     s.party.map((e) => [e.hp, e.mp, e.status, e.buffs]),
     s.enemies.map((e) => [e.hp, e.mp, e.status, e.buffs]),
     s.atb && [s.atb.partyGauge, s.atb.enemyGauge, s.atb.queue],
+    // 脚本のターンは HP が動かなくても進む（上限ターンまで押し続ける戦闘をロックと取り違えない）(#741)
+    s.script && [s.script.turn, s.script.fired, s.script.joined, s.script.fled],
   ])
 }

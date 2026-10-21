@@ -16,6 +16,7 @@ import {
   sampleExit,
   type BattleTransitionParams,
 } from './battleTransition'
+import type { BattleOutcome } from './loot'
 
 /** 黒の間に挟める追加画面（戦利品の画面など #831）。`container` は stage に載せられ、`durationMs` の間見える */
 export interface BattleInterlude {
@@ -28,7 +29,7 @@ export interface FieldBattleTransitionHooks {
   /** 開始のズーム 1 段ごとの始まり（n = 1, 2, ...）。「ドゥン」の音のきっかけ */
   onTransitionBeat?: (n: number) => void
   /** 戦闘の結果から、黒の間に挟む追加画面を返す。undefined（既定）なら何も挟まない */
-  interlude?: (outcome: 'victory' | 'defeat' | 'escaped') => BattleInterlude | undefined
+  interlude?: (outcome: BattleOutcome) => BattleInterlude | undefined
 }
 
 type Run =
@@ -96,7 +97,7 @@ export class FieldBattleTransition {
   playExit(
     width: number,
     height: number,
-    outcome: 'victory' | 'defeat' | 'escaped',
+    outcome: BattleOutcome,
     onBlack: () => void,
     onDone: () => void
   ): void {

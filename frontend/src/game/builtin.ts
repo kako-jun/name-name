@@ -23,6 +23,7 @@
 
 import type { BattleEntity, EffectContext } from './spellDsl'
 import { hasOwn } from './ownProperty'
+import { knockOutHp } from './battleLimits'
 import { DEATH_ATTRIBUTE, deathSuccessRate, resolveAffinity, rollDeath } from './affinity'
 
 /**
@@ -51,7 +52,13 @@ export const BUILTIN_SPELLS: Record<string, BuiltinSpellFn> = {
         continue
       }
       if (rollDeath(rate, ctx.rng)) {
-        t.hp = 0
+        const hpBefore = t.hp
+        if (!knockOutHp(t)) {
+          // HP の下限 (#741) で倒れなかった（下限が無ければここへは来ない）
+          ctx.onAmount?.(t, 'damage', hpBefore - t.hp)
+          log.push(`${t.name} は もちこたえた！`)
+          continue
+        }
         ctx.onKill?.(t)
         log.push(`${t.name} は しんでしまった！`)
       } else {

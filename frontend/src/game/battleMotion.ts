@@ -116,6 +116,14 @@ export const CAST_HIT_MS = 400
 export const NOTICE_MS = 700
 /** 1 つの行動が終わってから次の行動を始めるまでの間（ms） */
 export const ACTION_GAP_MS = 120
+/** 台詞・知らせ (#741) を見せる時間: 基本 + 1 文字あたり。長い台詞でも上限で止める（ATB でも進行を止めない） */
+export const LINE_BASE_MS = 600
+export const LINE_PER_CHAR_MS = 55
+export const LINE_MAX_MS = 3500
+export function lineDurationMs(label: string | undefined): number {
+  const n = typeof label === 'string' ? [...label].length : 0
+  return Math.min(LINE_MAX_MS, LINE_BASE_MS + n * LINE_PER_CHAR_MS)
+}
 
 /** 状態異常の継続ダメージ・満了 (#870, `kind: 'status'`) の、命中までの ms。本人は動かず、窓に状態名が出てから数字が出る */
 export const STATUS_HIT_MS = 200
@@ -254,6 +262,14 @@ export function buildActionTimeline(
 
 /** 行動の記録から時間割を作る。HP が減る対象がいればのけぞり、HP 0 になる対象がいれば倒れ切るまで含める */
 export function eventTimeline(event: BattleActionEvent): ActionTimeline {
+  // 脚本制御の戦闘 (#741) の台詞・知らせは、字数に応じて読める長さだけ見せる（短い知らせの固定時間では読み切れない）。復活の回復数字は最初に出る
+  if (event.kind === 'notice' && event.line) {
+    return {
+      duration: lineDurationMs(event.label) + ACTION_GAP_MS,
+      hitAt: 0,
+      hitInterval: MULTI_HIT_INTERVAL_MS,
+    }
+  }
   const damages = event.hits.some((h) => h.kind === 'damage')
   const downs = event.hits.some((h) => h.kind === 'damage' && h.hpAfter <= 0)
   let lastDamageRound = 0

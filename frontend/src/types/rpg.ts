@@ -199,6 +199,8 @@ export interface RPGProject {
   skills?: Record<string, import('../types').SkillDef>
   /** 同上、状態 (#870)。`[状態 id]` で宣言した毒・混乱・回復の反転など。戦闘エンジンの `statuses` に渡す */
   statuses?: Record<string, import('../types').StatusDef>
+  /** 同上、脚本制御の戦闘 (#741)。`[戦闘 id]` の宣言。`[イベント]` の `[戦闘: id]` が id で引く。1 つも宣言していないゲームは付かない */
+  battleScripts?: Record<string, import('../types').BattleScriptDef>
   /** 同上、パーティメンバー (#175) */
   party?: Record<string, import('../types').PartyMemberDef>
   /** `party` のキーのドキュメント上の出現順 (#736)。整数風 ID でも定義順を保つために別持ち */

@@ -1,0 +1,34 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "script": {
+    "id": "lose-event",
+    "rules": [
+      "にげる: 不可",
+      "固定: 結果=敗北 上限ターン=8",
+      "下限: 対象=hero HP=1 条件=!参戦[friend]",
+      "台詞: 条件=開始 話者=うみの しょうかんじゅう 文=……ここから かえすわけには いかない",
+      "台詞: 条件=HP[hero]<=1 話者=ぼく 文=もう……うごけない……",
+      "参戦: 条件=HP[hero]<=1 対象=friend 文=おさななじみが うみに とびこんできた！",
+      "台詞: 条件=参戦[friend] 話者=おさななじみ 文=あきらめないで！",
+      "台詞: 条件=ターン>=6 文=なみが おおきく うねった……",
+      "敗北時: フラグ=noto_lost=true, hero_lost_leg=true 次=black_out"
+    ],
+    "joiners": [
+      { "id": "friend", "name": "おさななじみ", "hp": 60, "mp": 10, "atk": 14, "def": 4, "agi": 7 }
+    ]
+  },
+  "party": [
+    { "id": "hero", "name": "ぼく", "hp": 24, "mp": 8, "atk": 9, "def": 2, "agi": 5 }
+  ],
+  "enemies": [
+    {
+      "id": "water_summon",
+      "name": "うみの しょうかんじゅう",
+      "hp": 9999,
+      "atk": 12,
+      "def": 4,
+      "agi": 4
+    }
+  ]
+}

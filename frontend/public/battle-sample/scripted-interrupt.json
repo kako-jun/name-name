@@ -1,0 +1,35 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "spells": [
+    { "id": "flare", "name": "フレア", "mp": 0, "target": "敵単体", "effect": "damage 4000..6000 type=fire" },
+    { "id": "meteor", "name": "メテオ", "mp": 0, "target": "敵全体", "effect": "damage 7000..9999" }
+  ],
+  "script": {
+    "id": "play-quake",
+    "rules": [
+      "にげる: 不可",
+      "固定: 結果=中断 上限ターン=5",
+      "台詞: 条件=開始 話者=だんボールの ドラゴン 文=がおー！ たおせるものなら たおしてみろ！",
+      "台詞: 条件=HP[dragon]<=50% 話者=だんボールの ドラゴン 文=ぐ……やるな……",
+      "台詞: 条件=ターン>=4 文=……ゆかが ぐらりと ゆれた",
+      "中断時: フラグ=play_interrupted=true 次=field_first"
+    ]
+  },
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 80, "mp": 99, "atk": 12, "def": 4, "agi": 6 },
+    { "id": "friend", "name": "おさななじみ", "hp": 80, "mp": 99, "atk": 11, "def": 4, "agi": 7 },
+    { "id": "mage", "name": "ともだち", "hp": 70, "mp": 99, "atk": 9, "def": 3, "agi": 5, "row": "back" },
+    { "id": "monk", "name": "ともだち２", "hp": 90, "mp": 99, "atk": 10, "def": 5, "agi": 4 }
+  ],
+  "enemies": [
+    {
+      "id": "dragon",
+      "name": "だんボールの ドラゴン",
+      "hp": 1000000,
+      "atk": 14,
+      "def": 2,
+      "agi": 3
+    }
+  ]
+}

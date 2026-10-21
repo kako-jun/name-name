@@ -277,6 +277,19 @@ export interface StatusDef {
   expire?: string
 }
 
+/**
+ * 脚本制御の戦闘の定義 (#741、拡張 #863)。`[戦闘 id]` ブロック。勝敗の固定・戦闘中の台詞・途中参戦・復活・逃走・中断・結果のフラグを宣言する。
+ * `enemies` は敵グループと同じ書式の生文字列、`party` は初期編成の味方 id（`味方:` の行ごとの生文字列。カンマ区切りは runtime が分ける）、
+ * `rules` は書いた順の `キー: 値` の生の行。解釈と不正行の警告は `game/battleScript.ts` が行う。
+ */
+export interface BattleScriptDef {
+  id: string
+  name?: string
+  enemies?: string
+  party?: string[]
+  rules: string[]
+}
+
 export interface PlayerStartData {
   x: number
   y: number
@@ -532,6 +545,7 @@ export type Event =
   | { Spell: SpellDef }
   | { Skill: SkillDef }
   | { Status: StatusDef }
+  | { BattleScript: BattleScriptDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {
@@ -992,3 +1006,5 @@ export type EventCommand =
   | { type: 'Wait'; ms: number }
   | { type: 'Dialog'; character?: string; text: string[] }
   | { type: 'Narration'; text: string[] }
+  /** 脚本制御の戦闘 (`[戦闘 id]`、#741) を始めて、終わるまで待つ。`[戦闘: id]` */
+  | { type: 'Battle'; id: string }

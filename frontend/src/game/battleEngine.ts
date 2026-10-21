@@ -27,6 +27,11 @@
  * 獲得は `BattleState.loot` に事実として積み、`getResult()` が結果（`BattleResult`）にまとめてホストへ渡す（所持品の保存は持たない）。
  * 宣言の無い戦闘は、乱数の消費を含めて従来と完全に同じ。
  *
+ * 脚本制御の戦闘 (#741 / #863): `BattleEngineOptions.script`（`[戦闘]` の宣言）を渡した戦闘だけが働く。脚本の解釈・条件評価・
+ * 「いま発動するルール」の決定は純粋関数モジュール `battleScript.ts` が行い、エンジンは**ステップの境目**（行動の後・敵の手番の後・ATB の判定のとき）に
+ * `scriptStep` で決定を受けて、自分の操作（台詞・参戦・復活・逃走・強制終了・HP 下限の付け外し）で適用するだけ。乱数は使わない。
+ * `script` を渡さない戦闘は、状態の形・ログ・乱数の消費まで従来と完全に同じ。
+ *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
  * - 敵の builtin: での挙動委譲
@@ -39,6 +44,7 @@ import {
   activeStatusRules,
   blockingAction,
   buildStatusRules,
+  resolveRuleId,
   statusLabels,
   type StatusRule,
 } from './statusEffects'
@@ -60,7 +66,20 @@ import {
   type HitSource,
 } from './enemyAi'
 import { hasOwn, safeAssign } from './ownProperty'
-import { applyDamageToHp, clampDamage, clampHp } from './battleLimits'
+import { applyDamageToHp, clampDamage, clampHp, knockOutHp } from './battleLimits'
+import {
+  computeFloors,
+  nextScriptAction,
+  SCRIPT_STEP_SLACK,
+  parseBattleScript,
+  resolveAmount,
+  resultFor,
+  type ParsedBattleScript,
+  type ScriptAction,
+  type ScriptEndResult,
+  type ScriptState,
+  type ScriptView,
+} from './battleScript'
 import {
   attemptSteal,
   parseLootSpec,
@@ -79,6 +98,7 @@ export type BattlePhase =
   | 'victory'
   | 'defeat'
   | 'escaped'
+  | 'interrupted' // 脚本が勝敗がつく前に打ち切った (#741)
 
 /** 行動の主体・対象の指し示し (#745)。`party` / `enemies` の index */
 export interface BattleActorRef {
@@ -133,6 +153,11 @@ export interface BattleActionEvent {
    */
   kind: 'attack' | 'spell' | 'item' | 'skill' | 'notice' | 'status'
   /**
+   * 脚本制御の戦闘 (#741) が出した「読ませる文」（台詞・参戦・復活・逃走の知らせ）の印。`kind` は `notice` で `label` が全文。
+   * 窓は短い知らせより長く見せる（`eventTimeline`）。HP が動く復活は `hits` に回復を持つ。脚本の無い戦闘・他の行動には付かない
+   */
+  line?: true
+  /**
    * FF 式メッセージ窓に出す短い言葉。呪文・アイテム・特技 (#834) の名前、または `notice`（行動が成立しなかったことの知らせ。
    * 「にげられない！」「MPが たりない！」）の文言。通常攻撃は undefined
    */
@@ -185,6 +210,11 @@ export interface BattleState {
    * （従来の状態と同じ形）。ホストへは `getResult()` で渡す
    */
   loot?: LootEntry[]
+  /**
+   * 脚本制御の戦闘 (#741) の進行（経過ターン・発動済みのルール・参戦した味方・逃走した敵）。`BattleEngineOptions.script` を渡した戦闘にだけ付く
+   * （普通の戦闘は undefined で、状態の形は従来と同じ）。数値・文字列・配列だけ（ADR 0002）
+   */
+  script?: ScriptState
 }
 
 const LOG_MAX = 30
@@ -253,10 +283,26 @@ export interface BattleEngineOptions {
    * 無い id は id をそのまま表示する（戦利品の id はゲームが決める不透明な文字列で、アイテムマスターに無くてもよい）
    */
   itemNames?: Record<string, string>
+  /**
+   * 脚本制御の戦闘 (#741 / #863)。`[戦闘 id]` の宣言。渡した戦闘だけ脚本が働く（無い・渡さない戦闘は従来どおり）。
+   * エンジンはマスター参照を持たないので、途中参戦できる味方（`joiners`）も呼び出し側が渡す
+   */
+  script?: BattleScriptOptions
+}
+
+/** 脚本制御の戦闘の入力 (#741)。`rules` は `BattleScriptDef.rules`（`キー: 値` の生の行）をそのまま渡す */
+export interface BattleScriptOptions {
+  /** `[戦闘 id]` の id（`BattleResult.script.id` に載る） */
+  id: string
+  rules: readonly string[]
+  /** 途中参戦できる味方（`参戦: 対象=` の id → 味方）。戦闘ごとに複製して使う（渡した側の値は書き換えない） */
+  joiners?: Record<string, BattleEntity>
 }
 
 /** 戦利品の宣言の警告を出した印（敵 id + 文面）。同じ宣言の警告を戦闘のたびに繰り返さない (#831) */
 const warnedLootDefs = new Set<string>()
+/** 脚本の宣言の警告を出した印（戦闘 id + 文面）。同じ宣言の警告を戦闘のたびに繰り返さない (#741) */
+const warnedScriptDefs = new Set<string>()
 
 export class BattleEngine {
   private state: BattleState
@@ -289,6 +335,14 @@ export class BattleEngine {
   private itemNames: Record<string, string>
   /** ドロップを抽選した印（勝利は 1 度だけ） */
   private dropsRolled = false
+  /** 脚本制御の戦闘 (#741)。解釈済みの宣言。渡さない戦闘は null（脚本の処理は一切走らない） */
+  private scriptParsed: ParsedBattleScript | null = null
+  /** 途中参戦できる味方（複製済み）。`参戦:` が id で引く */
+  private joiners: Record<string, BattleEntity> = {}
+  /** 脚本のステップを実行している最中（再入防止） */
+  private scriptRunning = false
+  /** 参戦できなかった id の警告を出した印（1 戦闘に 1 度だけ） */
+  private warnedJoiners = new Set<string>()
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -339,8 +393,25 @@ export class BattleEngine {
       this.initAtb(opts.atb)
       this.atbWaitScope = opts.atb.waitScope === 'menu' ? 'menu' : 'command'
     }
+    if (opts.script) {
+      const parsed = parseBattleScript(opts.script.rules)
+      this.scriptParsed = parsed
+      this.state.script = { id: opts.script.id, turn: 0, fired: [], joined: [], fled: [] }
+      for (const [id, member] of Object.entries(opts.script.joiners ?? {})) {
+        safeAssign(this.joiners, id, JSON.parse(JSON.stringify(member)) as BattleEntity)
+      }
+      for (const w of parsed.warnings) {
+        const key = `${opts.script.id}\u0000${w}`
+        if (warnedScriptDefs.has(key)) continue
+        warnedScriptDefs.add(key)
+        console.warn(`[name-name] 戦闘 '${opts.script.id}': ${w}`)
+      }
+    }
     const enemyNames = enemies.map((e) => e.name).join(' と ')
     this.appendLog(`${enemyNames} が あらわれた！`)
+    // 脚本の最初のステップ（`開始` の台詞・最初の HP 下限・開始時の逃走や終了）と、そのあとの勝敗の判定。戦闘の開始の行は出したあと。
+    // 脚本の戦闘だけ（普通の戦闘は開始時に勝敗を見ない＝従来どおり）
+    if (this.scriptParsed) this.checkEnd()
     // 最初から行動不能・混乱の味方が先頭なら、入力を待たずに解決する (#870)
     this.autoResolveParty()
   }
@@ -382,7 +453,8 @@ export class BattleEngine {
     return (
       this.state.phase === 'victory' ||
       this.state.phase === 'defeat' ||
-      this.state.phase === 'escaped'
+      this.state.phase === 'escaped' ||
+      this.state.phase === 'interrupted'
     )
   }
 
@@ -424,6 +496,12 @@ export class BattleEngine {
     } else if (this.state.phase !== 'party-input') {
       return
     }
+    // 脚本が「にげる」を禁じている (#741)。ターンも乱数も使わず、知らせだけ出す（連打しても進行しない・詰まない）
+    if (this.scriptParsed?.noEscape) {
+      this.appendLog('にげられない！')
+      this.recordNotice(this.currentActor() ?? undefined, 'にげられない！')
+      return
+    }
     if (this.rng() < 0.5) {
       this.appendLog('にげだした！')
       this.state.phase = 'escaped'
@@ -436,6 +514,7 @@ export class BattleEngine {
       this.recordNotice(idx !== -1 ? this.state.party[idx] : undefined, 'にげられない！')
       this.endPartyTurnStatuses(idx)
       if (idx !== -1) this.finishAtbAction(idx)
+      this.countScriptTurn()
       this.settleAtbPhase()
     } else {
       this.recordNotice(this.currentActor() ?? undefined, 'にげられない！')
@@ -472,7 +551,15 @@ export class BattleEngine {
         if (this.isOver()) break
         if (who.side === 'party') {
           const m = this.state.party[who.index]
-          if (m && m.hp > 0 && !atb.queue.includes(who.index)) atb.queue.push(who.index)
+          // ゲージが満タンのままか（同じ時刻に満タンになった敵が先に動いて倒し、脚本が復活させた味方は、ゲージが 0 に戻っているので並べない）
+          if (
+            m &&
+            m.hp > 0 &&
+            atb.partyGauge[who.index] >= ATB_GAUGE_MAX &&
+            !atb.queue.includes(who.index)
+          ) {
+            atb.queue.push(who.index)
+          }
         } else {
           this.runAtbEnemyAction(atb, who.index)
           // 死亡時の行動などで手番の終わりのあとに付いた状態の記録を、次の手番へ持ち越さない (#870)
@@ -762,19 +849,12 @@ export class BattleEngine {
       // ATB: 行動した人のゲージを 0 に戻し、キューの次へ（敵は自分のゲージで動くので敵ターンは挟まない）。
       // 倒れた味方の掃除と勝敗は settleAtbPhase に一本化する（同時全滅は敗北優先、#877）
       if (idx !== -1) this.finishAtbAction(idx)
+      this.countScriptTurn()
       this.settleAtbPhase()
       return
     }
-    // 従来ターン制: 味方が全滅したら（敵も同時に全滅していても）敗北を優先 (#877)
-    if (this.state.party.every((p) => p.hp === 0)) {
-      this.state.phase = 'defeat'
-      this.appendLog('ぜんめつ してしまった……')
-      return
-    }
-    if (this.state.enemies.every((e) => e.hp === 0)) {
-      this.handleVictory()
-      return
-    }
+    // 従来ターン制: 味方が全滅したら（敵も同時に全滅していても）敗北を優先 (#877)。脚本があれば先にステップを進める（復活・終了など）
+    if (this.checkEnd()) return
     this.runEnemyTurn()
   }
 
@@ -856,6 +936,9 @@ export class BattleEngine {
 
   /** 全滅 / 殲滅していれば終了フェーズへ。終了したら true */
   private checkEnd(): boolean {
+    if (this.isOver()) return true
+    // 脚本のステップ (#741)。復活・参戦・逃走・強制終了は、勝敗の判定より前に決める（復活すれば全滅にならない）
+    this.scriptStep()
     if (this.isOver()) return true
     // 同時全滅（敵も味方も HP 0）は味方全滅=敗北を優先する (#877)
     if (this.state.party.every((p) => p.hp === 0)) {
@@ -1175,10 +1258,12 @@ export class BattleEngine {
     this.state.phase = 'victory'
     let exp = 0
     let gold = 0
-    for (const e of this.state.enemies) {
+    const fled = this.state.script?.fled ?? []
+    this.state.enemies.forEach((e, i) => {
+      if (fled.includes(i)) return // 逃げた敵の経験値・ゴールドは入らない (#741)
       exp += e.exp ?? 0
       gold += e.gold ?? 0
-    }
+    })
     this.state.earnedExp = exp
     this.state.earnedGold = gold
     this.appendLog(`けいけんち ${exp} を てに いれた！`)
@@ -1193,7 +1278,9 @@ export class BattleEngine {
   private rollDropsOnVictory(): void {
     if (this.dropsRolled) return
     this.dropsRolled = true
-    for (const enemy of this.state.enemies) {
+    const fled = this.state.script?.fled ?? []
+    for (const [i, enemy] of this.state.enemies.entries()) {
+      if (fled.includes(i)) continue // 逃げた敵はドロップしない (#741)
       const spec = this.lootSpecs.get(enemy)
       if (!spec) continue
       for (const line of rollDrops(spec, this.rng)) {
@@ -1272,14 +1359,33 @@ export class BattleEngine {
    */
   getResult(): BattleResult | null {
     const phase = this.state.phase
-    if (phase !== 'victory' && phase !== 'defeat' && phase !== 'escaped') return null
+    if (
+      phase !== 'victory' &&
+      phase !== 'defeat' &&
+      phase !== 'escaped' &&
+      phase !== 'interrupted'
+    ) {
+      return null
+    }
     const loot = (this.state.loot ?? []).map((e) => ({ ...e }))
+    const script = this.state.script
+    const declared = script && this.scriptParsed ? resultFor(this.scriptParsed, phase) : undefined
     return {
       outcome: phase,
       exp: this.state.earnedExp,
       gold: this.state.earnedGold,
       loot,
       items: summarizeLoot(loot),
+      // 脚本制御の戦闘 (#741): 結果フラグ・次のイベントをホストへ返す（宣言が無い終わり方も、脚本の戦闘だったことは伝える）
+      ...(script
+        ? {
+            script: {
+              id: script.id,
+              flags: { ...(declared?.flags ?? {}) },
+              ...(declared?.next !== undefined ? { next: declared.next } : {}),
+            },
+          }
+        : {}),
     }
   }
 
@@ -1333,13 +1439,22 @@ export class BattleEngine {
     }
     // 敵側の手番の終わりに、今の手番で付いた状態の記録を持ち越さない (#870)
     this.freshStatuses = []
+    // 従来ターン制は「味方の行動 → 敵の行動」の 1 巡で 1 ターン (#741)。脚本のステップは勝敗の判定より前（復活すれば全滅にならない）
+    if (!this.state.atb) {
+      this.countScriptTurn()
+      this.scriptStep()
+      if (this.isOver()) return
+    }
     if (this.state.party.every((p) => p.hp === 0)) {
       this.state.phase = 'defeat'
       this.appendLog('ぜんめつ してしまった……')
       return
     }
-    // 特技（仲間への攻撃など）で敵が全滅しうるのは特技を使ったときだけ（通常攻撃では敵は減らない）
-    if (usedSkill && this.state.enemies.every((e) => e.hp === 0)) {
+    // 特技（仲間への攻撃など）で敵が全滅しうるのは特技を使ったときだけ（通常攻撃では敵は減らない）。脚本の逃走で全滅するのは脚本の戦闘だけ
+    if (
+      (usedSkill || this.state.script !== undefined) &&
+      this.state.enemies.every((e) => e.hp === 0)
+    ) {
       this.handleVictory()
       return
     }
@@ -1658,6 +1773,164 @@ export class BattleEngine {
     if (this.state.log.length > LOG_MAX) this.state.log.shift()
   }
 
+  // ===== 脚本制御の戦闘 (#741 / #863) =====
+
+  /** 経過ターンを 1 進める（脚本のある戦闘だけ）。従来ターン制は敵の手番の終わり、ATB は味方の行動の終わり */
+  private countScriptTurn(): void {
+    if (this.state.script) this.state.script.turn++
+  }
+
+  /** 脚本の判定に使う、戦闘の状態の写し */
+  private scriptView(): ScriptView {
+    const st = this.state.script as ScriptState
+    return {
+      turn: st.turn,
+      party: this.state.party.map((p) => ({ id: p.id, hp: p.hp, maxHp: p.maxHp })),
+      enemies: this.state.enemies.map((e) => ({ id: e.id, hp: e.hp, maxHp: e.maxHp })),
+      joined: st.joined,
+    }
+  }
+
+  /**
+   * 脚本のステップ: HP 下限を整え、いま発動するルールを 1 つずつ（宣言順に）適用し、もう発動するものが無くなったら下限をもう一度整える。
+   * ルールは 1 回しか発動しないので、回数はルール数で止まる（安全弁としてルール数 + 余裕で打ち切る）。終了したら止める。再入しない。
+   */
+  private scriptStep(): void {
+    const parsed = this.scriptParsed
+    const st = this.state.script
+    if (!parsed || !st || this.scriptRunning || this.isOver()) return
+    this.scriptRunning = true
+    try {
+      for (let guard = 0; guard < parsed.rules.length + SCRIPT_STEP_SLACK; guard++) {
+        this.applyScriptFloors()
+        const action = nextScriptAction(parsed, st, this.scriptView())
+        if (!action) break
+        st.fired.push(action.index)
+        this.performScriptAction(action)
+        if (this.isOver()) return
+      }
+      this.applyScriptFloors()
+    } finally {
+      this.scriptRunning = false
+    }
+  }
+
+  /** 条件が真の `下限` を、者の `hpFloor` に付け外しする（脚本のない戦闘は何も付かない） */
+  private applyScriptFloors(): void {
+    const parsed = this.scriptParsed
+    if (!parsed) return
+    const floors = computeFloors(parsed, this.scriptView())
+    const set = (list: BattleEntity[], values: number[]): void => {
+      list.forEach((e, i) => {
+        if (values[i] > 0) e.hpFloor = values[i]
+        else delete e.hpFloor
+      })
+    }
+    set(this.state.party, floors.party)
+    set(this.state.enemies, floors.enemies)
+  }
+
+  private performScriptAction(a: ScriptAction): void {
+    switch (a.kind) {
+      case 'line':
+        this.emitScriptLine(a.speaker, a.text)
+        return
+      case 'join':
+        this.scriptJoin(a.target, a.text)
+        return
+      case 'revive':
+        this.scriptRevive(a)
+        return
+      case 'flee':
+        this.scriptFlee(a.target, a.text)
+        return
+      case 'end':
+        this.scriptEnd(a.result, a.text)
+        return
+    }
+  }
+
+  /** 読ませる 1 文（台詞・知らせ）を、戦闘ログと窓の演出（`line` の notice）の両方に出す。`hits` は HP が動くときだけ */
+  private emitScriptLine(speaker: string | undefined, text: string, hits: BattleHit[] = []): void {
+    const line = speaker ? `${speaker}「${text}」` : text
+    this.appendLog(line)
+    this.pushEvent({
+      actor: { side: 'party', index: 0 },
+      kind: 'notice',
+      label: line,
+      line: true,
+      hits,
+    })
+  }
+
+  /** 途中参戦: `joiners` の味方を末尾に加える。すでに味方にいれば何もしない。参戦できる味方がいなければ警告（1 度だけ） */
+  private scriptJoin(id: string, text: string | undefined): void {
+    if (this.state.party.some((p) => p.id === id)) return
+    const src = hasOwn(this.joiners, id) ? this.joiners[id] : undefined
+    if (!src) {
+      if (!this.warnedJoiners.has(id)) {
+        this.warnedJoiners.add(id)
+        console.warn(`[name-name] 参戦できる味方 '${id}' が渡されていない（参戦: は無視した）`)
+      }
+      return
+    }
+    const member = JSON.parse(JSON.stringify(src)) as BattleEntity
+    this.state.party.push(member)
+    const st = this.state.script as ScriptState
+    st.joined.push(member.id)
+    const atb = this.state.atb
+    if (atb) atb.partyGauge.push(0)
+    this.emitScriptLine(undefined, text ?? `${member.name} が くわわった！`)
+  }
+
+  /** 復活: HP0 の味方 1 人を戦闘不能から戻す（全滅にしない）。HP は指定（既定は全回復）、MP も指定すれば、状態も付けられる */
+  private scriptRevive(a: Extract<ScriptAction, { kind: 'revive' }>): void {
+    const idx = this.state.party.findIndex((p) => p.id === a.target && p.hp <= 0)
+    if (idx === -1) return
+    const m = this.state.party[idx]
+    const hpBefore = m.hp
+    m.hp = resolveAmount(a.hp, m.maxHp, 1)
+    if (a.mp) m.mp = resolveAmount(a.mp, m.maxMp, 0)
+    if (a.status) {
+      const ruleId = resolveRuleId(this.statusRules, a.status)
+      const rule = ruleId !== null ? this.statusRules[ruleId] : undefined
+      if (!m.status) m.status = {}
+      safeAssign(m.status, ruleId ?? a.status, rule ? rule.duration : 1)
+      this.noteStatus(m, m, ruleId ?? a.status)
+    }
+    const ref: BattleActorRef = { side: 'party', index: idx }
+    this.emitScriptLine(undefined, a.text ?? `${m.name} は ふっかつした！`, [
+      { target: ref, kind: 'heal', amount: m.hp - hpBefore, hpBefore, hpAfter: m.hp },
+    ])
+  }
+
+  /** 逃走: 生きている敵のうち id が一致する先頭 1 体を、戦闘から消す（HP 0・経験値・ドロップなし。倒したことにはしない） */
+  private scriptFlee(id: string, text: string | undefined): void {
+    const idx = this.state.enemies.findIndex((e) => e.id === id && e.hp > 0)
+    if (idx === -1) return
+    const enemy = this.state.enemies[idx]
+    enemy.hp = 0
+    delete enemy.hpFloor
+    const st = this.state.script as ScriptState
+    st.fled.push(idx)
+    const atb = this.state.atb
+    if (atb) atb.enemyGauge[idx] = 0
+    this.emitScriptLine(undefined, text ?? `${enemy.name} は にげだした！`)
+  }
+
+  /** 強制終了: 勝利（ふつうの勝利と同じ報酬）/ 敗北（全滅の扱い。ゲームオーバーにするかはホストが決める）/ 中断（報酬なし） */
+  private scriptEnd(result: ScriptEndResult, text: string | undefined): void {
+    if (text !== undefined) this.emitScriptLine(undefined, text)
+    if (result === 'victory') {
+      this.handleVictory()
+    } else if (result === 'defeat') {
+      this.state.phase = 'defeat'
+      this.appendLog('ぜんめつ してしまった……')
+    } else {
+      this.state.phase = 'interrupted'
+    }
+  }
+
   // ===== 状態異常 (#870) =====
 
   /** 者の行動の乱れ。宣言が無い戦闘は常に null */
@@ -1831,7 +2104,26 @@ export class BattleEngine {
       const death = resolveAffinity(entity.affinity, DEATH_ATTRIBUTE)
       if (death !== 'nullify' && death !== 'absorb') {
         const hpBefore = entity.hp
-        entity.hp = 0
+        if (!knockOutHp(entity)) {
+          // HP の下限 (#741) で倒れなかった。数字つきのダメージとして知らせる（下限が無ければここへは来ない）
+          this.appendLog(`${entity.name} の ${rule.name} の カウントが つきた……`)
+          this.appendLog(`${entity.name} は もちこたえた！`)
+          this.pushEvent({
+            actor: ref,
+            kind: 'status',
+            label: rule.name,
+            hits: [
+              {
+                target: ref,
+                kind: 'damage',
+                amount: hpBefore - entity.hp,
+                hpBefore,
+                hpAfter: entity.hp,
+              },
+            ],
+          })
+          return
+        }
         this.appendLog(`${entity.name} の ${rule.name} の カウントが つきた……`)
         this.appendLog(`${entity.name} は たおれた！`)
         this.pushEvent({

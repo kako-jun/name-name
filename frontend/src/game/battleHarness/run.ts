@@ -7,6 +7,7 @@ import { MAX_DAMAGE } from '../battleLimits'
 import { checkState, fingerprint, type DetectOptions, type Violation } from './detect'
 import { budgetRng, DEFAULT_RNG_BUDGET_PER_OP, RngBudgetExceeded } from './rng'
 import { parseLootSpec } from '../loot'
+import { parseBattleScript } from '../battleScript'
 import {
   applyOp,
   realEngineFactory,
@@ -76,6 +77,10 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     ...(scenario.statuses ? { statusIds: Object.keys(scenario.statuses) } : {}),
     // 戦利品の宣言 (#831)。宣言のある敵がいるシナリオだけ、`state.loot` の不変条件を検査する
     ...lootDeclarations(scenario),
+    // 脚本制御の戦闘 (#741)。脚本のあるシナリオだけ、`state.script` の整合を検査し、脚本が決めた勝敗を許す
+    ...(scenario.script
+      ? { script: { ruleCount: parseBattleScript(scenario.script.rules).rules.length } }
+      : {}),
   }
   const factory = options.engineFactory ?? realEngineFactory
   const rng = budgetRng(scenario.seed, o.rngBudgetPerOp)
@@ -193,7 +198,53 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
   metrics.ended = engine.isOver()
   metrics.finalPhase = engine.getState().phase
+  if (alive) checkScriptExpect(scenario, engine, o.driveLimit, add)
   return { id: scenario.id, violations, metrics }
+}
+
+/**
+ * 脚本のシナリオが「終わるはず」なら、自動進行の上限までに決着し、許した終わり方で、ターン上限内かを見る (#741)。
+ * 勝敗固定の戦闘が、条件が満たされないまま膠着しない（ロック・無限ループ・進行不能を作らない）ことの検査。
+ * `driveLimit` が 0 のシナリオ（自動進行しない設定）では決着を要求しない
+ */
+function checkScriptExpect(
+  scenario: Scenario,
+  engine: HarnessEngine,
+  driveLimit: number,
+  add: (vs: Violation[]) => void
+): void {
+  const ex = scenario.scriptExpect
+  if (!ex || driveLimit <= 0) return
+  const s = engine.getState()
+  const opIndex = scenario.ops.length
+  if (!engine.isOver()) {
+    add([
+      {
+        kind: 'script-no-end',
+        detail: `自動進行 ${driveLimit} 回までに決着しなかった（phase = ${s.phase}, turn = ${s.script?.turn ?? '-'}）`,
+        opIndex,
+      },
+    ])
+    return
+  }
+  if (!ex.ends.includes(s.phase)) {
+    add([
+      {
+        kind: 'script-outcome',
+        detail: `phase = ${s.phase} で終わった（期待: ${ex.ends.join(' / ')}）`,
+        opIndex,
+      },
+    ])
+  }
+  if (ex.maxTurn !== undefined && (s.script?.turn ?? 0) > ex.maxTurn) {
+    add([
+      {
+        kind: 'script-outcome',
+        detail: `turn = ${s.script?.turn} が上限 ${ex.maxTurn} を超えた`,
+        opIndex,
+      },
+    ])
+  }
 }
 
 function collectMetrics(m: Metrics, events: readonly BattleActionEvent[]): void {
