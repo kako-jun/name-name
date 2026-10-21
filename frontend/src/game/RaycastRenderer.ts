@@ -57,6 +57,7 @@ import type { BattleScreen } from './BattleScreen'
 import type { BattleEntity } from './spellDsl'
 import { enemyLayoutField, rollEncounter } from './encounter'
 import { posesField } from './battleMotion'
+import { lootField, type BattleResult } from './loot'
 import { affinityField } from './affinity'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
@@ -142,6 +143,10 @@ export class RaycastRenderer {
   private masterSkills: Record<string, import('../types').SkillDef> | undefined
   private masterStatuses: Record<string, import('../types').StatusDef> | undefined
   private masterMagicites: Record<string, import('../types').MagiciteDef> | undefined
+  /** アイテムマスター (#831)。戦利品のログの表示名だけに使う */
+  private masterItems: Record<string, import('../types').ItemDef> | undefined
+  /** 戦闘が終わって画面を畳んだ直後に結果（経験値・ゴールド・戦利品）を受け取るホスト側のハンドラ (#831) */
+  private battleEndHandler: ((result: BattleResult) => void) | undefined
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
   /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔・戦闘の画像パス解決に使う。未設定ならパスをそのまま読む */
@@ -356,6 +361,15 @@ export class RaycastRenderer {
     this.initialized = true
   }
 
+  /**
+   * 戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）を受け取るハンドラを登録する。
+   * 戦闘画面を畳んだ直後（`battle_transition: ff` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
+   * エンジンは所持品を持たないので、反映や戦利品の画面を出すのはホスト側。強制終了（`load` / `destroy`）では呼ばない
+   */
+  setBattleEndHandler(handler: ((result: BattleResult) => void) | undefined): void {
+    this.battleEndHandler = handler
+  }
+
   /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
   setAssetBaseUrl(url: string | undefined): void {
     this.assetBaseUrl = url
@@ -399,6 +413,7 @@ export class RaycastRenderer {
     this.masterSkills = gameData.skills
     this.masterStatuses = gameData.statuses
     this.masterMagicites = gameData.magicites
+    this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
     this.stepCounter = 0
     this.encounterCooldown = 0
@@ -872,14 +887,16 @@ export class RaycastRenderer {
           skills: this.masterSkills,
           statuses: this.masterStatuses,
           ...(this.masterMagicites ? { magicites: this.masterMagicites } : {}),
+          items: this.masterItems,
         },
         enemies,
         gate: this.inputGate,
         assetBaseUrl: this.assetBaseUrl,
         transition: this.transition,
-        onClosed: () => {
+        onClosed: (_outcome, result) => {
           this.keys.clear()
           this.battleScreen = null
+          this.battleEndHandler?.(result)
           // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）#172
           this.encounterCooldown = 3
         },
@@ -923,6 +940,7 @@ export class RaycastRenderer {
           ...(def.counters && def.counters.length > 0 ? { counters: [...def.counters] } : {}),
           ...(def.onDeath ? { onDeath: def.onDeath } : {}),
           ...affinityField(def.affinity),
+          ...lootField(def.loot),
           ...enemyLayoutField(def, undefined),
         }
       : {

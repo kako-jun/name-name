@@ -392,6 +392,45 @@ pub struct MonsterDef {
     /// 4 欄すべて空（1 つも書かない）なら None＝従来どおり相性なし。倍率は持たない（解釈・倍率は runtime の `resolveAffinity`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affinity: Option<MonsterAffinity>,
+    /// 敵の戦利品 (#831)。`ドロップ:` `ぬすむ:` `ぬすむレア:` `ぬすむ回数:` のどれかを書いたときだけ Some（`Box` は `Event` の大きさを抑えるため）。
+    /// 全部書かない敵は None＝従来どおり何も起きない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loot: Option<Box<MonsterLoot>>,
+}
+
+/// 敵の戦利品の宣言 (#831)。各欄は値部分を書いた順の生文字列で持ち、parser は検証せず透過する
+/// （効果 DSL・`行動:` と同じ流儀）。解釈・不正な行の無視は runtime（`loot.ts`）が行う。
+/// 1 行 = `<アイテムid> [確率=P] [個数=N]`。id は呼び出し側（ゲーム）が決める不透明な文字列。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+pub struct MonsterLoot {
+    /// ドロップ（`ドロップ: potion 確率=25 個数=1`）。1 行 = 1 つの独立した抽選（勝利時）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drops: Option<Vec<String>>,
+    /// ぬすむの通常枠（`ぬすむ: potion 確率=80`）。先頭の行から順に判定する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steal: Option<Vec<String>>,
+    /// ぬすむのレア枠（`ぬすむレア: elixir`）。JSON / TS 側のキーは `stealRare`。
+    #[serde(default, rename = "stealRare", skip_serializing_if = "Option::is_none")]
+    pub steal_rare: Option<Vec<String>>,
+    /// 敵から盗める回数（`ぬすむ回数: 2` / `無限`）の生文字列（複数書いたら最初の 1 行）。JSON / TS 側のキーは `stealLimit`。
+    /// 無ければ None（runtime の既定は 1 回＝盗むと空になる）。
+    #[serde(
+        default,
+        rename = "stealLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub steal_limit: Option<String>,
+}
+
+impl MonsterLoot {
+    /// 4 欄すべて空か
+    pub fn is_empty(&self) -> bool {
+        self.drops.is_none()
+            && self.steal.is_none()
+            && self.steal_rare.is_none()
+            && self.steal_limit.is_none()
+    }
 }
 
 /// モンスターの属性相性 (#872)。各欄は属性 id（`fire` / `ice` / `thunder` / `death` 等。小文字・半角に正規化済み）を書いた順に持つ。

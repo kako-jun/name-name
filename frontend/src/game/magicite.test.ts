@@ -199,6 +199,12 @@ describe('属性の層と耐性', () => {
     expect(elementLayers([], ['fire']).layers).toEqual(['fire'])
     expect(elementLayers([MASTER.plain]).layers).toEqual([])
   })
+  it('stoneLayerCount は上限を適用した後の魔石由来の層の数（防具の層は含めない）', () => {
+    expect(elementLayers([MASTER.sea], ['fire']).stoneLayerCount).toBe(1)
+    expect(elementLayers([MASTER.sea, MASTER.tiger], ['ice']).stoneLayerCount).toBe(2)
+    expect(elementLayers([], ['fire', 'ice']).stoneLayerCount).toBe(0)
+    expect(elementLayers([MASTER.plain], ['fire']).stoneLayerCount).toBe(0)
+  })
   it('属性 id は正規化する（全角・大文字）。空は無視。同じ属性 2 層は有効', () => {
     expect(elementLayers([], ['ＷＡＴＥＲ', ' Water ', '']).layers).toEqual(['water', 'water'])
   })
@@ -242,16 +248,42 @@ describe('resolveMemberMagicite / applyMemberMagicite', () => {
     })
     expect(m.stones.map((s) => s.id)).toEqual(['sea'])
     expect(m.layers).toEqual(['water', 'water'])
+    expect(m.attackElements).toEqual(['water'])
     expect(m.affinity).toEqual({ absorb: ['water'] })
+  })
+  it('防具の属性は耐性にだけ効き、通常攻撃の属性にはならない', () => {
+    const armorOnly = resolveMemberMagicite(
+      { id: 'a', magicites: ['plain'] },
+      { magicites: MASTER, extraElements: { a: ['water'] } }
+    )
+    expect(armorOnly.layers).toEqual(['water'])
+    expect(armorOnly.attackElements).toEqual([])
+    expect(armorOnly.affinity).toEqual({ halve: ['water'] })
+    const e = ent()
+    applyMemberMagicite(e, armorOnly)
+    expect(e.affinity).toEqual({ halve: ['water'] })
+    expect(Object.keys(e)).not.toContain('attackElements')
+    // 魔石の層が上限を埋めたら、防具の層は耐性にも乗らず攻撃にも乗らない
+    const full = resolveMemberMagicite(def, { magicites: MASTER, extraElements: { a: ['ice'] } })
+    expect(full.layers).toEqual(['water', 'fire'])
+    expect(full.attackElements).toEqual(['water', 'fire'])
+    expect(full.warnings.some((w) => w.includes("'ice'"))).toBe(true)
   })
   it('魔石のない味方・roster 無しは空。warnings が付く', () => {
     const none = resolveMemberMagicite({ id: 'a' }, undefined)
-    expect(none).toEqual({ stones: [], bonus: {}, layers: [], affinity: undefined, warnings: [] })
+    expect(none).toEqual({
+      stones: [],
+      bonus: {},
+      layers: [],
+      attackElements: [],
+      affinity: undefined,
+      warnings: [],
+    })
     const bad = resolveMemberMagicite({ id: 'a', magicites: ['nope'] }, { magicites: MASTER })
     expect(bad.warnings).toHaveLength(1)
   })
 
-  it('applyMemberMagicite: 能力値・最大 HP/MP（満タンで開始）・通常攻撃の属性・耐性を写す', () => {
+  it('applyMemberMagicite: 能力値・最大 HP/MP（現在値は増えた分だけ）・通常攻撃の属性・耐性を写す', () => {
     const e = ent()
     applyMemberMagicite(e, resolveMemberMagicite(def, { magicites: MASTER }))
     expect(e).toMatchObject({
@@ -270,12 +302,50 @@ describe('resolveMemberMagicite / applyMemberMagicite', () => {
       stones: [],
       bonus: { mp: 5, hp: -1000, atk: -1000, def: -1000, agi: -1000 },
       layers: [],
+      attackElements: [],
       affinity: undefined,
       warnings: [],
     })
     expect(e).toMatchObject({ maxMp: 15, mp: 15, maxHp: 1, hp: 1, atk: 0, def: 0, agi: 0 })
     expect(e.attackElements).toBeUndefined()
     expect(e.affinity).toBeUndefined()
+  })
+  it('装備時の HP/MP ボーナスは増えた分だけ現在値に足す（hp < maxHp の味方が全回復しない）', () => {
+    const e = ent()
+    e.hp = 20
+    e.mp = 3
+    applyMemberMagicite(e, {
+      stones: [],
+      bonus: { hp: 30, mp: 5 },
+      layers: [],
+      attackElements: [],
+      affinity: undefined,
+      warnings: [],
+    })
+    expect(e).toMatchObject({ maxHp: 80, hp: 50, maxMp: 15, mp: 8 })
+  })
+  it('最大値が下がるときは現在値を新しい最大値に収める。倒れている者は起こさない', () => {
+    const down = (e: BattleEntity, hp: number, mp: number): void =>
+      applyMemberMagicite(e, {
+        stones: [],
+        bonus: { hp, mp },
+        layers: [],
+        attackElements: [],
+        affinity: undefined,
+        warnings: [],
+      })
+    const e = ent() // maxHp 50 / hp 50, maxMp 10 / mp 10
+    down(e, -20, -4)
+    expect(e).toMatchObject({ maxHp: 30, hp: 30, maxMp: 6, mp: 6 })
+    const low = ent()
+    low.hp = 10
+    low.mp = 2
+    down(low, -20, -9)
+    expect(low).toMatchObject({ maxHp: 30, hp: 1, maxMp: 1, mp: 0 })
+    const dead = ent()
+    dead.hp = 0
+    down(dead, 30, 0)
+    expect(dead).toMatchObject({ maxHp: 80, hp: 0 })
   })
   it('何も無い結果は entity を変えない（キーも増えない）', () => {
     const e = ent()

@@ -1,0 +1,84 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "itemNames": {
+    "potion": "ポーション",
+    "ether": "エーテル",
+    "elixir": "エリクサー",
+    "goblin_ear": "ゴブリンのみみ",
+    "moon_stone": "つきのいし"
+  },
+  "spells": [
+    { "id": "steal", "name": "ぬすむ", "mp": 0, "target": "敵単体", "effect": "steal" },
+    {
+      "id": "steal60",
+      "name": "ぬすむ（60%）",
+      "mp": 0,
+      "target": "敵単体",
+      "effect": "steal 確率=60"
+    },
+    {
+      "id": "steal_rare",
+      "name": "ぬすむ（レア枠だけ）",
+      "mp": 0,
+      "target": "敵単体",
+      "effect": "steal 枠=レア レア率=40"
+    },
+    {
+      "id": "steal_twice",
+      "name": "ぬすむ（2 回）",
+      "mp": 0,
+      "target": "敵単体",
+      "effect": "steal 回数=2"
+    },
+    {
+      "id": "plunder",
+      "name": "ぶんどる",
+      "mp": 0,
+      "target": "敵単体",
+      "effect": "steal ぶんどる=8..14"
+    },
+    {
+      "id": "fire",
+      "name": "ファイア",
+      "mp": 2,
+      "target": "敵全体",
+      "effect": "damage 40..40 type=fire"
+    }
+  ],
+  "party": [
+    { "id": "hero", "name": "オトン", "hp": 999, "mp": 99, "atk": 40, "def": 4, "agi": 6 },
+    { "id": "nam", "name": "ナム", "hp": 999, "mp": 99, "atk": 30, "def": 4, "agi": 8 }
+  ],
+  "enemies": [
+    {
+      "id": "slime",
+      "name": "スライム",
+      "hp": 60,
+      "atk": 1,
+      "def": 2,
+      "agi": 3,
+      "loot": {
+        "drops": ["potion 確率=50"],
+        "steal": ["potion"],
+        "stealRare": ["elixir"]
+      }
+    },
+    {
+      "id": "goblin",
+      "name": "ゴブリン",
+      "hp": 120,
+      "atk": 1,
+      "def": 2,
+      "agi": 3,
+      "loot": {
+        "drops": ["goblin_ear 個数=2", "ether 確率=25"],
+        "steal": ["ether 確率=80", "potion"],
+        "stealRare": ["moon_stone"],
+        "stealLimit": "3"
+      }
+    },
+    { "id": "rock", "name": "いわ", "hp": 80, "atk": 1, "def": 2, "agi": 3 }
+  ]
+}

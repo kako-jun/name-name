@@ -6,6 +6,7 @@ import type { BattleActionEvent } from '../battleEngine'
 import { MAX_DAMAGE } from '../battleLimits'
 import { checkState, fingerprint, type DetectOptions, type Violation } from './detect'
 import { budgetRng, DEFAULT_RNG_BUDGET_PER_OP, RngBudgetExceeded } from './rng'
+import { parseLootSpec } from '../loot'
 import {
   applyOp,
   realEngineFactory,
@@ -73,6 +74,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     ...(options.detect ?? { maxDamage: MAX_DAMAGE }),
     // 宣言した状態の不変条件 (#870)。宣言の無いシナリオは検査しない
     ...(scenario.statuses ? { statusIds: Object.keys(scenario.statuses) } : {}),
+    // 戦利品の宣言 (#831)。宣言のある敵がいるシナリオだけ、`state.loot` の不変条件を検査する
+    ...lootDeclarations(scenario),
   }
   const factory = options.engineFactory ?? realEngineFactory
   const rng = budgetRng(scenario.seed, o.rngBudgetPerOp)
@@ -108,13 +111,15 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
 
   let seenEvents = engine.getState().eventTotal
-  // 召喚 (#889): 同じ味方が 2 回召喚してはならず、召喚した味方には印が立っている
-  const summonNames = new Set((scenario.summons ?? []).map((m) => m.name))
+  // 召喚 (#889): 同じ味方が 2 回召喚してはならず、召喚した味方には印が立っている。
+  // 数えるのは「召喚の操作（`summon`）を実行した 1 操作の間に増えた、味方の演出イベントのうちラベルがその召喚獣の名前のもの」だけ。
+  // 召喚の演出イベントは特技と同じ `kind: 'skill'` で区別できないため、操作の種類で絞って、同じ名前の特技・呪文が別の場面で
+  // 使われても数えないようにしている（限界: 召喚の操作の最中に同じ名前の味方の特技が同時に起きるシナリオは想定しない）
   const summonCount = new Map<number, number>()
   add(checkState(engine.getState(), [], -1, detect))
 
   /** 1 操作を実行して検査する。続行不能（例外・予算超過）なら false */
-  const step = (opIndex: number, run: () => void): boolean => {
+  const step = (opIndex: number, run: () => void, summonName?: string): boolean => {
     rng.reset()
     const t0 = performance.now()
     try {
@@ -136,10 +141,9 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     // events は直近 30 件だけ残る。増えた分のうち残っている分を検査する
     const fresh = delta > 0 ? s.events.slice(-Math.min(delta, s.events.length)) : []
     collectMetrics(metrics, fresh)
-    if (summonNames.size > 0) {
+    if (summonName !== undefined) {
       for (const ev of fresh) {
-        if (ev.kind !== 'skill' || ev.actor.side !== 'party' || !summonNames.has(ev.label ?? ''))
-          continue
+        if (ev.kind !== 'skill' || ev.actor.side !== 'party' || ev.label !== summonName) continue
         const n = (summonCount.get(ev.actor.index) ?? 0) + 1
         summonCount.set(ev.actor.index, n)
         if (n > 1) {
@@ -173,7 +177,12 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
 
   let alive = true
   for (let i = 0; i < scenario.ops.length && alive; i++) {
-    alive = step(i, () => applyOp(engine, scenario, scenario.ops[i]))
+    const op = scenario.ops[i]
+    alive = step(
+      i,
+      () => applyOp(engine, scenario, op),
+      op.t === 'summon' ? scenario.summons?.[op.m]?.name : undefined
+    )
     metrics.opsRun = i + 1
   }
 
@@ -235,6 +244,23 @@ function collectMetrics(m: Metrics, events: readonly BattleActionEvent[]): void 
     }
     m.maxEventDamage = Math.max(m.maxEventDamage, dmg)
   }
+}
+
+/** シナリオの敵の `loot` 宣言を、検出器が使う「敵 id → 宣言した品」に直す (#831)。宣言のある敵がいなければ空 */
+function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
+  const loot: Record<string, { normal: string[]; rare: string[]; drops: string[]; limit: number }> =
+    {}
+  for (const e of scenario.enemies) {
+    const spec = parseLootSpec(e.loot)
+    if (!spec) continue
+    loot[e.id] = {
+      normal: spec.steal.map((l) => l.itemId),
+      rare: spec.stealRare.map((l) => l.itemId),
+      drops: spec.drops.map((l) => l.itemId),
+      limit: spec.stealLimit,
+    }
+  }
+  return Object.keys(loot).length > 0 ? { loot } : {}
 }
 
 function describe(e: unknown): string {

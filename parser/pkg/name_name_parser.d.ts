@@ -277,6 +277,11 @@ export interface MonsterDef {
      * 4 欄すべて空（1 つも書かない）なら None＝従来どおり相性なし。倍率は持たない（解釈・倍率は runtime の `resolveAffinity`）。
      */
     affinity?: MonsterAffinity;
+    /**
+     * 敵の戦利品 (#831)。`ドロップ:` `ぬすむ:` `ぬすむレア:` `ぬすむ回数:` のどれかを書いたときだけ Some（`Box` は `Event` の大きさを抑えるため）。
+     * 全部書かない敵は None＝従来どおり何も起きない。
+     */
+    loot?: MonsterLoot;
 }
 
 /**
@@ -310,6 +315,31 @@ export interface SpellDef {
 export interface MonsterSize {
     w: number;
     h: number;
+}
+
+/**
+ * 敵の戦利品の宣言 (#831)。各欄は値部分を書いた順の生文字列で持ち、parser は検証せず透過する
+ * （効果 DSL・`行動:` と同じ流儀）。解釈・不正な行の無視は runtime（`loot.ts`）が行う。
+ * 1 行 = `<アイテムid> [確率=P] [個数=N]`。id は呼び出し側（ゲーム）が決める不透明な文字列。
+ */
+export interface MonsterLoot {
+    /**
+     * ドロップ（`ドロップ: potion 確率=25 個数=1`）。1 行 = 1 つの独立した抽選（勝利時）。
+     */
+    drops?: string[];
+    /**
+     * ぬすむの通常枠（`ぬすむ: potion 確率=80`）。先頭の行から順に判定する。
+     */
+    steal?: string[];
+    /**
+     * ぬすむのレア枠（`ぬすむレア: elixir`）。JSON / TS 側のキーは `stealRare`。
+     */
+    stealRare?: string[];
+    /**
+     * 敵から盗める回数（`ぬすむ回数: 2` / `無限`）の生文字列（複数書いたら最初の 1 行）。JSON / TS 側のキーは `stealLimit`。
+     * 無ければ None（runtime の既定は 1 回＝盗むと空になる）。
+     */
+    stealLimit?: string;
 }
 
 /**

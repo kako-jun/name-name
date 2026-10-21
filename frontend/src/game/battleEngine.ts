@@ -22,6 +22,11 @@
  * （継続ダメージ → 持続 -1 → 尽きたら解除。満了で戦闘不能もある）、行動不能・混乱の者は手番を自動で解決する。
  * 宣言の無い戦闘・宣言の無い印（属性欄の耐性も当てない）は、乱数の消費を含めて従来と完全に同じ。
  *
+ * 戦利品 (#831): 敵の `loot`（ドロップ・ぬすむの通常枠とレア枠）を宣言した敵だけが働く。ドロップは勝利の瞬間に行ごとに抽選、
+ * ぬすむは効果 DSL `steal`（`SpellExecution` / `SkillExecution` の `effect`。アイテムは対象が味方だけなので盗めない）が `ctx.steal` を呼んで抽選する。
+ * 獲得は `BattleState.loot` に事実として積み、`getResult()` が結果（`BattleResult`）にまとめてホストへ渡す（所持品の保存は持たない）。
+ * 宣言の無い戦闘は、乱数の消費を含めて従来と完全に同じ。
+ *
  * 将来拡張:
  * - 呪文 / アイテム / さくせん（#174 / #175）
  * - 敵の builtin: での挙動委譲
@@ -61,6 +66,16 @@ import {
 } from './enemyAi'
 import { hasOwn, safeAssign } from './ownProperty'
 import { applyDamageToHp, clampDamage, clampHp } from './battleLimits'
+import {
+  attemptSteal,
+  parseLootSpec,
+  rollDrops,
+  summarizeLoot,
+  type BattleResult,
+  type LootEntry,
+  type LootSpec,
+  type StealParams,
+} from './loot'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -170,6 +185,11 @@ export interface BattleState {
    * （持たない戦闘では undefined で、敵の挙動・乱数の消費は従来のまま）。従来ターン制・ATB のどちらでも同じ意味
    */
   enemyMemory?: EnemyMemory[]
+  /**
+   * 獲得した戦利品（獲得順、#831）。ぬすんだ品は盗んだ時点で、ドロップは勝利の瞬間に積む。戦利品が 1 つも無い戦闘では undefined
+   * （従来の状態と同じ形）。ホストへは `getResult()` で渡す
+   */
+  loot?: LootEntry[]
 }
 
 const LOG_MAX = 30
@@ -233,7 +253,15 @@ export interface BattleEngineOptions {
    * 無い・空は従来どおり（`status` は印が付くだけ）。エンジンはマスター参照を持たないので呼び出し側が渡す
    */
   statuses?: Record<string, StatusDef>
+  /**
+   * アイテムの表示名 (#831)。戦利品のログ（「〇〇 を てにいれた！」）に使う id → 名前。マスターのアイテム定義から作って渡す。
+   * 無い id は id をそのまま表示する（戦利品の id はゲームが決める不透明な文字列で、アイテムマスターに無くてもよい）
+   */
+  itemNames?: Record<string, string>
 }
+
+/** 戦利品の宣言の警告を出した印（敵 id + 文面）。同じ宣言の警告を戦闘のたびに繰り返さない (#831) */
+const warnedLootDefs = new Set<string>()
 
 export class BattleEngine {
   private state: BattleState
@@ -259,6 +287,13 @@ export class BattleEngine {
   private freshStatuses: { applier: BattleEntity; target: BattleEntity; key: string }[] = []
   /** 今の行動で状態を付けられた・解かれた者。HP が動かなくても MISS にしない（`recordEffect` が使って空にする） */
   private statusTouched = new Set<BattleEntity>()
+  /** 敵ごとの戦利品の宣言（解釈済み、#831）。宣言の無い敵は入らない */
+  private lootSpecs = new Map<BattleEntity, LootSpec>()
+  /** 敵ごとに盗めた回数 (#831)。`ぬすむ回数` に達した敵は空になる */
+  private stolenCounts = new Map<BattleEntity, number>()
+  private itemNames: Record<string, string>
+  /** ドロップを抽選した印（勝利は 1 度だけ） */
+  private dropsRolled = false
 
   constructor(party: BattleEntity[], enemies: BattleEntity[], opts: BattleEngineOptions = {}) {
     this.state = {
@@ -274,6 +309,18 @@ export class BattleEngine {
     }
     this.rng = opts.rng ?? Math.random
     this.skills = opts.skills ?? {}
+    this.itemNames = opts.itemNames ?? {}
+    for (const e of enemies) {
+      const spec = parseLootSpec(e.loot)
+      if (!spec) continue
+      this.lootSpecs.set(e, spec)
+      for (const w of spec.warnings) {
+        const key = `${e.id}\u0000${w}`
+        if (warnedLootDefs.has(key)) continue
+        warnedLootDefs.add(key)
+        console.warn(`[name-name] 敵 '${e.id}' の戦利品: ${w}`)
+      }
+    }
     if (opts.statuses) {
       this.statusRules = buildStatusRules(opts.statuses)
       this.hasStatusRules = Object.keys(this.statusRules).length > 0
@@ -538,6 +585,7 @@ export class BattleEngine {
       rng: this.rng,
       statusRules: this.statusRules,
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
+      steal: this.stealHook(caster),
       pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount, reversed) =>
         amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
@@ -637,6 +685,7 @@ export class BattleEngine {
       rng: this.rng,
       statusRules: this.statusRules,
       onStatus: (t, key, change) => this.noteStatus(user, t, key, change),
+      steal: this.stealHook(user),
       pool: this.poolOf(user, targets),
       onAmount: (t, kind, amount, reversed) =>
         amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
@@ -724,6 +773,7 @@ export class BattleEngine {
       rng: this.rng,
       statusRules: this.statusRules,
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
+      steal: this.stealHook(caster),
       pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount, reversed) =>
         amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
@@ -1203,6 +1253,104 @@ export class BattleEngine {
     this.state.earnedGold = gold
     this.appendLog(`けいけんち ${exp} を てに いれた！`)
     this.appendLog(`${gold} ゴールドを てに いれた！`)
+    this.rollDropsOnVictory()
+  }
+
+  /**
+   * ドロップの抽選 (#831)。勝利の瞬間に、戦利品を宣言した敵だけを敵の並び順に、`ドロップ:` の行ごとに独立に判定する。
+   * 宣言の無い戦闘は何もしない（乱数を使わない）
+   */
+  private rollDropsOnVictory(): void {
+    if (this.dropsRolled) return
+    this.dropsRolled = true
+    for (const enemy of this.state.enemies) {
+      const spec = this.lootSpecs.get(enemy)
+      if (!spec) continue
+      for (const line of rollDrops(spec, this.rng)) {
+        this.addLoot({
+          itemId: line.itemId,
+          count: line.count,
+          via: 'drop',
+          rare: false,
+          enemyId: enemy.id,
+          enemyName: enemy.name,
+        })
+        this.appendLog(`${this.lootLabel(line.itemId, line.count)} を てに いれた！`)
+      }
+    }
+  }
+
+  /** 戦利品の表示名（`名前` または `名前 ×N`）。名前が分からない id は id のまま */
+  private lootLabel(itemId: string, count: number): string {
+    const name = hasOwn(this.itemNames, itemId) ? this.itemNames[itemId] : itemId
+    return count > 1 ? `${name} ×${count}` : name
+  }
+
+  private addLoot(entry: LootEntry): void {
+    if (!this.state.loot) this.state.loot = []
+    this.state.loot.push(entry)
+  }
+
+  /**
+   * ぬすむの実行口 (#831)。効果 DSL `steal` が `EffectContext.steal` として呼ぶ。盗めるのは**味方が敵から**だけ
+   * （敵が味方から盗む・ゴールドや装備を盗むのは未対応）。倒れた敵・戦利品を宣言しない敵・盗める回数に達した敵は `empty`。
+   * 盗めた品は `BattleState.loot` に積み（その場でホストに渡る扱い。逃走・敗北でも失われない）、その敵の盗めた回数を 1 増やす。
+   * HP が動かなくても MISS 表示にならないよう、対象を `statusTouched` に入れる
+   */
+  private stealHook(caster: BattleEntity): NonNullable<EffectContext['steal']> {
+    return (target, params) => {
+      if (!this.state.party.includes(caster) || !this.state.enemies.includes(target)) {
+        return { log: ['(警告: ぬすめるのは味方から敵だけ)'], outcome: 'empty' }
+      }
+      if (target.hp <= 0) return { log: [], outcome: 'empty' }
+      this.statusTouched.add(target)
+      const spec = this.lootSpecs.get(target)
+      const stolen = this.stolenCounts.get(target) ?? 0
+      const full: StealParams = {
+        ...params,
+        ...(caster.stealChanceBonus !== undefined ? { chanceBonus: caster.stealChanceBonus } : {}),
+        ...(caster.stealRareBonus !== undefined ? { rareBonus: caster.stealRareBonus } : {}),
+      }
+      const r = spec ? attemptSteal(spec, stolen, full, this.rng) : { kind: 'empty' as const }
+      if (r.kind === 'empty') {
+        return { log: [`${target.name} は もう なにも もっていない！`], outcome: 'empty' }
+      }
+      if (r.kind === 'miss') {
+        return { log: [`${target.name} から ぬすめなかった！`], outcome: 'miss' }
+      }
+      this.stolenCounts.set(target, stolen + 1)
+      this.addLoot({
+        itemId: r.line.itemId,
+        count: r.line.count,
+        via: 'steal',
+        rare: r.rare,
+        enemyId: target.id,
+        enemyName: target.name,
+      })
+      return {
+        log: [
+          `${caster.name} は ${target.name} から ${this.lootLabel(r.line.itemId, r.line.count)} を ぬすんだ！`,
+        ],
+        outcome: 'got',
+      }
+    }
+  }
+
+  /**
+   * 戦闘の結果をホストに渡す形にまとめる (#831)。終了していなければ null。経験値・ゴールドは victory のときだけ入る。
+   * 戦利品はぬすんだ品（逃走・敗北でも入る）とドロップ（victory のみ）
+   */
+  getResult(): BattleResult | null {
+    const phase = this.state.phase
+    if (phase !== 'victory' && phase !== 'defeat' && phase !== 'escaped') return null
+    const loot = (this.state.loot ?? []).map((e) => ({ ...e }))
+    return {
+      outcome: phase,
+      exp: this.state.earnedExp,
+      gold: this.state.earnedGold,
+      loot,
+      items: summarizeLoot(loot),
+    }
   }
 
   private runEnemyTurn(): void {

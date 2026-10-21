@@ -173,12 +173,13 @@ export function resolveEquipped(
 
 /**
  * 属性の層を積む。魔石の召喚獣の属性（装備順）→ 防具など他の出どころ（`extra`）の順に積み、`MAX_ELEMENT_LAYERS` を超えた分は捨てる。
- * 属性 id は正規化する（小文字・半角）。空文字は無視。同じ属性が 2 層になるのは有効（吸収）
+ * 属性 id は正規化する（小文字・半角）。空文字は無視。同じ属性が 2 層になるのは有効（吸収）。
+ * `stoneLayerCount` は上限を適用した後の魔石由来の層の数（通常攻撃の属性にするのは魔石由来の層だけ。防具の属性は耐性にだけ効く）
  */
 export function elementLayers(
   stones: readonly MagiciteDef[],
   extra: readonly string[] = []
-): { layers: string[]; warnings: string[] } {
+): { layers: string[]; stoneLayerCount: number; warnings: string[] } {
   const layers: string[] = []
   const warnings: string[] = []
   const push = (raw: string): void => {
@@ -193,8 +194,10 @@ export function elementLayers(
     layers.push(id)
   }
   for (const s of stones) for (const e of s.elements ?? []) push(e)
+  // 魔石由来の層の数（上限を適用した後）。魔石が先に積まれるので、`layers` の先頭からこの数だけが魔石由来
+  const stoneLayerCount = layers.length
   for (const e of extra) push(e)
-  return { layers, warnings }
+  return { layers, stoneLayerCount, warnings }
 }
 
 /**
@@ -220,9 +223,11 @@ export interface MemberMagicite {
   stones: MagiciteDef[]
   /** 能力値に足すボーナス（装備時 + 恒久の成長分） */
   bonus: StatBonus
-  /** 属性の層（通常攻撃の属性にもなる） */
+  /** 属性の層（魔石由来 → 防具など他の出どころの順、合計 2 層まで）。耐性の元になる */
   layers: string[]
-  /** 耐性（層から作る）。層が無ければ undefined */
+  /** 通常攻撃の属性。`layers` のうち魔石由来の層だけ（防具など他の出どころの属性は攻撃に乗らない） */
+  attackElements: string[]
+  /** 耐性（`layers` から作る＝魔石＋防具）。層が無ければ undefined */
   affinity: BattleAffinity | undefined
   warnings: string[]
 }
@@ -257,30 +262,36 @@ export function resolveMemberMagicite(
     stones: equipped.stones,
     bonus: addBonus(totalEquipBonus(equipped.stones), grown),
     layers: el.layers,
+    attackElements: el.layers.slice(0, el.stoneLayerCount),
     affinity: layersToAffinity(el.layers),
     warnings: [...equipped.warnings, ...el.warnings],
   }
 }
 
 /**
- * 魔石の結果を戦闘の味方に反映する: 能力値のボーナス（最大 HP / 最大 MP が増えた分は満タンで始める）、通常攻撃の属性（`attackElements`）、
- * 耐性（`affinity`）。能力値は 0 未満にせず、最大 HP は 1 以上に保つ。何も無ければ `entity` を変えない（キーも増やさない）。警告は 1 度だけ出す
+ * 魔石の結果を戦闘の味方に反映する: 能力値のボーナス（最大 HP / 最大 MP が変わった分だけ現在値も動かす。現在値は 0〜最大値に収め、生きている者は 1 以上に保つ）、
+ * 通常攻撃の属性（`attackElements`。魔石由来の層だけ）、耐性（`affinity`。魔石＋防具の全層）。能力値は 0 未満にせず、最大 HP は 1 以上に保つ。何も無ければ `entity` を変えない（キーも増やさない）。警告は 1 度だけ出す
  */
 export function applyMemberMagicite(entity: BattleEntity, m: MemberMagicite): void {
   warnMagiciteOnce(m.warnings)
   const b = m.bonus
   if (b.hp) {
-    entity.maxHp = Math.max(1, entity.maxHp + b.hp)
-    entity.hp = entity.maxHp
+    const before = entity.maxHp
+    entity.maxHp = Math.max(1, before + b.hp)
+    // 実際に増減した分だけ現在値も動かす（hp < maxHp の味方が装備しただけで全回復しない）。倒れている者（0）は起こさない
+    if (entity.hp > 0) {
+      entity.hp = Math.min(entity.maxHp, Math.max(1, entity.hp + (entity.maxHp - before)))
+    }
   }
   if (b.mp) {
-    entity.maxMp = Math.max(0, entity.maxMp + b.mp)
-    entity.mp = entity.maxMp
+    const before = entity.maxMp
+    entity.maxMp = Math.max(0, before + b.mp)
+    entity.mp = Math.min(entity.maxMp, Math.max(0, entity.mp + (entity.maxMp - before)))
   }
   if (b.atk) entity.atk = Math.max(0, entity.atk + b.atk)
   if (b.def) entity.def = Math.max(0, entity.def + b.def)
   if (b.agi) entity.agi = Math.max(0, entity.agi + b.agi)
-  if (m.layers.length > 0) entity.attackElements = [...m.layers]
+  if (m.attackElements.length > 0) entity.attackElements = [...m.attackElements]
   if (m.affinity) entity.affinity = m.affinity
 }
 

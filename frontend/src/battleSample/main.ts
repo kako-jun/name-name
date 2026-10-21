@@ -15,6 +15,7 @@ import {
   assetsToUnload,
   buildBattleSetup,
   defaultConfig,
+  describeBattleResult,
   describeView,
   effectivePartyCount,
   extractConfigUrl,
@@ -116,8 +117,18 @@ async function main(): Promise<void> {
         ...(setup.atb ? { atb: setup.atb } : {}),
         ...(Object.keys(setup.skills).length > 0 ? { skills: setup.skills } : {}),
         ...(Object.keys(setup.statuses).length > 0 ? { statuses: setup.statuses } : {}),
+        ...(Object.keys(setup.itemNames).length > 0 ? { itemNames: setup.itemNames } : {}),
       })
-      screen = new BattleScreen(engine, setup.width, setup.height, setup.options)
+      // 戦闘の結果（ホストへ渡る BattleResult、#831）を画面の上に出す。やり直し・設定変更で消す
+      $('result').hidden = true
+      screen = new BattleScreen(engine, setup.width, setup.height, {
+        ...setup.options,
+        onClose: (_outcome, result) => {
+          const el = $('result')
+          el.textContent = describeBattleResult(result, setup.itemNames)
+          el.hidden = false
+        },
+      })
       app.stage.addChild(screen)
       $('info').textContent = describeView(
         view,

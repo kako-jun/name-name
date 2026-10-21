@@ -12182,3 +12182,44 @@ fn test_monster_size_and_scale_roundtrip() {
         "{plain}"
     );
 }
+
+#[test]
+fn test_monster_loot_lines_are_raw_strings_and_roundtrip() {
+    // 戦利品 (#831): ドロップ / ぬすむ / ぬすむレア は書いた順の生文字列、ぬすむ回数は最初の 1 行だけ。検証しない・空は捨てる
+    let m = monster_with(
+        "ドロップ: potion 確率=25\ndrop: ether 個数=2\nドロップ:\nぬすむ: potion 確率=80\nsteal: bomb\nぬすむレア: elixir\nぬすむ回数: 無限\nstealLimit: 3\n",
+    );
+    assert_eq!(
+        m.loot.as_ref().unwrap().drops.as_deref(),
+        Some(&["potion 確率=25".to_string(), "ether 個数=2".to_string()][..])
+    );
+    assert_eq!(
+        m.loot.as_ref().unwrap().steal.as_deref(),
+        Some(&["potion 確率=80".to_string(), "bomb".to_string()][..])
+    );
+    assert_eq!(
+        m.loot.as_ref().unwrap().steal_rare.as_deref(),
+        Some(&["elixir".to_string()][..])
+    );
+    assert_eq!(
+        m.loot.as_ref().unwrap().steal_limit.as_deref(),
+        Some("無限")
+    );
+    // 書かない敵は全部 None（従来どおり）
+    let plain = monster_with("");
+    assert_eq!(plain.loot, None);
+    // JSON のキー（TS 側）は stealRare / stealLimit。書かないものは出力しない
+    let json = serde_json::to_value(&m).unwrap();
+    assert!(json["loot"].get("stealRare").is_some());
+    assert!(json["loot"].get("stealLimit").is_some());
+    let json_plain = serde_json::to_value(&plain).unwrap();
+    assert!(json_plain.get("loot").is_none());
+    // パース → emit → 再パースで同じ内容になる
+    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\nドロップ: potion 確率=25\nぬすむ: potion\nぬすむレア: elixir\nぬすむ回数: 2\n[/モンスター]\n";
+    let doc = parser::parse(src);
+    let doc2 = parser::parse(&name_name_parser::emitter::emit(&doc));
+    assert_eq!(
+        doc.chapters[0].scenes[0].events,
+        doc2.chapters[0].scenes[0].events
+    );
+}

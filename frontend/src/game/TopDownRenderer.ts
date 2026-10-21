@@ -31,6 +31,7 @@ import { rollEncounter } from './encounter'
 import { EventRunner, type NpcMover } from './eventRunner'
 import type { BattleScreen } from './BattleScreen'
 import type { BattleEntity } from './spellDsl'
+import type { BattleResult } from './loot'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
   FieldInputGate,
@@ -117,6 +118,10 @@ export class TopDownRenderer {
   private masterSkills: Record<string, import('../types').SkillDef> | undefined
   private masterStatuses: Record<string, import('../types').StatusDef> | undefined
   private masterMagicites: Record<string, import('../types').MagiciteDef> | undefined
+  /** アイテムマスター (#831)。戦利品のログの表示名だけに使う */
+  private masterItems: Record<string, import('../types').ItemDef> | undefined
+  /** 戦闘が終わって画面を畳んだ直後に結果（経験値・ゴールド・戦利品）を受け取るホスト側のハンドラ (#831) */
+  private battleEndHandler: ((result: BattleResult) => void) | undefined
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
@@ -205,6 +210,15 @@ export class TopDownRenderer {
     this.initialized = true
   }
 
+  /**
+   * 戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）を受け取るハンドラを登録する。
+   * 戦闘画面を畳んだ直後（`battle_transition: ff` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
+   * エンジンは所持品を持たないので、反映や戦利品の画面を出すのはホスト側。強制終了（`load` / `destroy`）では呼ばない
+   */
+  setBattleEndHandler(handler: ((result: BattleResult) => void) | undefined): void {
+    this.battleEndHandler = handler
+  }
+
   /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
   setAssetBaseUrl(url: string | undefined): void {
     this.assetBaseUrl = url
@@ -248,6 +262,7 @@ export class TopDownRenderer {
     this.masterSkills = gameData.skills
     this.masterStatuses = gameData.statuses
     this.masterMagicites = gameData.magicites
+    this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
     this.encounterCooldown = 0
     this.deferredStepTrigger = null
@@ -717,14 +732,16 @@ export class TopDownRenderer {
           skills: this.masterSkills,
           statuses: this.masterStatuses,
           ...(this.masterMagicites ? { magicites: this.masterMagicites } : {}),
+          items: this.masterItems,
         },
         enemies,
         gate: this.inputGate,
         assetBaseUrl: this.assetBaseUrl,
         transition: this.transition,
-        onClosed: (outcome) => {
+        onClosed: (outcome, result) => {
           this.battleScreen = null
           this.pendingSwipe = null
+          this.battleEndHandler?.(result)
           // 戦闘直後 3 歩はエンカウントしない（DQ4 式の連続エンカウント抑止）
           this.encounterCooldown = 3
           // 戦闘に入った歩の踏み込みトリガーを、戦闘が終わってから発火する

@@ -215,7 +215,7 @@ describe('戦闘の味方への反映（実パーサ経由）', () => {
       maxHp: 100 + 30 + 9,
       def: 6,
       atk: 12,
-      attackElements: ['water', 'water'],
+      attackElements: ['water'],
       affinity: { absorb: ['water'] },
     })
   })

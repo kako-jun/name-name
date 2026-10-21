@@ -178,6 +178,7 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         size: collect_size(entries),
         scale: collect_scale(entries),
         affinity: collect_affinity(entries),
+        loot: collect_loot(entries),
     })
 }
 
@@ -362,6 +363,22 @@ fn interpret_scale(raw: Option<&str>) -> (Option<f64>, Option<String>) {
                 "invalid monster scale '{raw}', falling back to 1. Expected a number between 0.25 and 1"
             )),
         ),
+    }
+}
+
+/// `ドロップ` / `ぬすむ` / `ぬすむレア` / `ぬすむ回数` を戦利品の宣言にする (#831)。生文字列で透過し、4 欄とも空なら None。
+fn collect_loot(entries: &[(String, String)]) -> Option<Box<MonsterLoot>> {
+    let loot = MonsterLoot {
+        drops: collect_values(entries, &["ドロップ", "drop", "drops"]),
+        steal: collect_values(entries, &["ぬすむ", "steal"]),
+        steal_rare: collect_values(entries, &["ぬすむレア", "stealRare", "steal_rare"]),
+        steal_limit: collect_values(entries, &["ぬすむ回数", "stealLimit", "steal_limit"])
+            .and_then(|v| v.into_iter().next()),
+    };
+    if loot.is_empty() {
+        None
+    } else {
+        Some(Box::new(loot))
     }
 }
 

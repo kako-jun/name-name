@@ -10,9 +10,10 @@
  */
 
 import type { Container } from 'pixi.js'
-import type { PartyMemberDef, SkillDef, SpellDef, StatusDef } from '../types'
+import type { ItemDef, PartyMemberDef, SkillDef, SpellDef, StatusDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { BattleScreen } from './BattleScreen'
+import { itemNamesOf, type BattleResult } from './loot'
 import { BattleEngine } from './battleEngine'
 import { toSkillExecutions } from './enemyAi'
 import type { BattleEntity } from './spellDsl'
@@ -144,6 +145,8 @@ export interface FieldBattleRoster extends MagiciteRoster {
   skills?: Record<string, SkillDef>
   /** 状態のマスター (#870)。`[状態]` の宣言。あれば戦闘エンジンの `statuses` に渡す（継続ダメージ・行動不能・回復の反転などが働く） */
   statuses?: Record<string, StatusDef>
+  /** アイテムのマスター (#831)。戦利品のログ（「〇〇 を てにいれた！」）の表示名だけに使う。所持品の保存は持たない */
+  items?: Record<string, ItemDef>
 }
 
 /**
@@ -365,7 +368,7 @@ export interface OpenFieldBattleArgs {
   /** `battle_transition: ff` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
   transition?: FieldBattleTransition
   /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
-  onClosed: (outcome: BattleOutcome) => void
+  onClosed: (outcome: BattleOutcome, result: BattleResult) => void
 }
 
 /** 戦闘の結果（BattleScreen の onClose と同じ） */
@@ -411,6 +414,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     ...(settings.atb ? { atb: settings.atb } : {}),
     ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
     ...(roster.statuses ? { statuses: roster.statuses } : {}),
+    ...(itemNamesOf(roster.items) ? { itemNames: itemNamesOf(roster.items) } : {}),
   })
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,
@@ -435,7 +439,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     menu: buildBattleMenuData(roster, party),
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
-    onClose: (outcome) => {
+    onClose: (outcome, result) => {
       if (closedScreens.has(screen)) return
       const finishClose = (): void => {
         // 戦闘を終わらせたタップ（にげる・止めのたたかう）は PixiJS の pointertap が先に処理して画面を畳むため、
@@ -444,7 +448,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
         suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
         gate.armReleaseGate()
         closeFieldBattle(stage, screen)
-        onClosed(outcome)
+        onClosed(outcome, result)
       }
       if (settings.transition === 'ff' && transition) {
         // 勝敗待機 (#745) のあと、黒を経由して畳む (#830)。畳むのは真っ暗になった瞬間。

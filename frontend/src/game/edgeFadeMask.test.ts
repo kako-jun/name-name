@@ -21,11 +21,7 @@ vi.mock('pixi.js', () => {
   return { Sprite, Texture: { from: (c: unknown) => textureFromMock(c) } }
 })
 
-import {
-  getSharedEdgeFadeMask,
-  buildEdgeFadeMask,
-  resetSharedEdgeFadeMasksForTest,
-} from './edgeFadeMask'
+import { getSharedEdgeFadeMask, resetSharedEdgeFadeMasksForTest } from './edgeFadeMask'
 
 function fakeCtx() {
   return {
@@ -82,13 +78,5 @@ describe('getSharedEdgeFadeMask', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null)
     expect(getSharedEdgeFadeMask({ top: 10 }, 100, 50)).toBeNull()
     expect(textureFromMock).not.toHaveBeenCalled()
-  })
-})
-
-describe('buildEdgeFadeMask（従来版・BackgroundController 用）は共有しない', () => {
-  it('呼ぶたびに新しい Texture を作る', () => {
-    buildEdgeFadeMask({ top: 10 }, 100, 50)
-    buildEdgeFadeMask({ top: 10 }, 100, 50)
-    expect(textureFromMock).toHaveBeenCalledTimes(2)
   })
 })

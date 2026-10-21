@@ -44,6 +44,13 @@ describe('magiciteScenarios: 生成', () => {
     }
     const absorb = all.find((s) => s.id.includes('/water+water/'))!
     expect(absorb.party[0].affinity).toEqual({ absorb: ['water'] })
+    // 防具の属性（extra）は耐性にだけ効き、通常攻撃の属性にはならない。魔石の属性が先に層を埋める
+    const armor = all.find((s) => s.id.includes('/plain+armor-water/'))!
+    expect(armor.party[0].affinity).toEqual({ halve: ['water'] })
+    expect(armor.party[0].attackElements).toBeUndefined()
+    const twin = all.find((s) => s.id.includes('/twin+extra/'))!
+    expect(twin.party[0].attackElements).toEqual(['fire', 'ice'])
+    expect(twin.party[0].affinity).toEqual({ halve: ['fire', 'ice'] })
     // 重い魔石でも最大 HP は 1 以上・能力値は 0 以上
     const heavy = all.find((s) => s.id.includes('/heavy/'))!
     expect(heavy.party[0].maxHp).toBeGreaterThanOrEqual(1)
@@ -139,6 +146,25 @@ describe('runScenario: 召喚の回数制限の検出', () => {
     expect(kindsOf(r)).toEqual(['magicite-invariant'])
     expect(r.violations[0].detail).toContain('2 回召喚')
     expect(r.violations[0].opIndex).toBe(1)
+  })
+  it('召喚の操作でない場面の、召喚獣と同じ名前のイベントは数えない', () => {
+    const sc = withSummon({ ops: [{ t: 'summon', m: 0 }, { t: 'attack' }, { t: 'attack' }] })
+    const base = factory(true)
+    const sameNameSkill = (s: Scenario, rng: () => number): HarnessEngine => {
+      const e = base(s, rng)
+      e.selectAttack = () => {
+        const st = e.getState() as ReturnType<typeof baseState>
+        st.events.push({
+          seq: st.eventTotal++,
+          actor: { side: 'party', index: 0 },
+          kind: 'skill',
+          label: 'うみ',
+          hits: [],
+        })
+      }
+      return e
+    }
+    expect(kindsOf(runScenario(sc, { engineFactory: sameNameSkill, driveLimit: 0 }))).toEqual([])
   })
   it('1 回だけなら違反なし。別の味方が 1 回ずつなら違反なし', () => {
     const one = runScenario(withSummon({ ops: [{ t: 'summon', m: 0 }] }), {

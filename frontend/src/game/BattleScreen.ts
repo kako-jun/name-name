@@ -124,6 +124,7 @@ import {
   type TargetSample,
 } from './battleMotion'
 import type { BattleHit } from './battleEngine'
+import type { BattleResult } from './loot'
 import {
   SIDE_GAP,
   SIDE_LABEL_LINE_HEIGHT,
@@ -313,8 +314,11 @@ export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void 
 }
 
 export interface BattleScreenOptions {
-  /** バトル終了（victory / defeat / escaped）時に呼ばれる。victory / defeat は決着後に読ませる待機（battleResult.ts）を置いてから (#745) */
-  onClose?: (outcome: 'victory' | 'defeat' | 'escaped') => void
+  /**
+   * バトル終了（victory / defeat / escaped）時に呼ばれる。victory / defeat は決着後に読ませる待機（battleResult.ts）を置いてから (#745)。
+   * 第 2 引数 `result` は戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）。ホストが所持品への反映や戦利品の画面に使う
+   */
+  onClose?: (outcome: 'victory' | 'defeat' | 'escaped', result: BattleResult) => void
   /**
    * 戦闘レイアウト (#736)。`front`（既定）= 従来の Undertale 風正面配置（先頭 1 人のみ表示）、
    * `side` = FF 系サイドビュー（敵群が左・味方全員が右・下にコマンドと HP パネル）。
@@ -1204,9 +1208,9 @@ export class BattleScreen extends Container {
     }
     this.closedFlag = true
     this.detachResultSkip()
-    const outcome = this.engine.getState().phase
-    // outcome は victory / defeat / escaped のいずれか（isOver がガード）
-    this.opts.onClose?.(outcome as 'victory' | 'defeat' | 'escaped')
+    // isOver がガードしているので、結果は必ずある（outcome は victory / defeat / escaped のいずれか）
+    const result = this.engine.getResult()
+    if (result) this.opts.onClose?.(result.outcome, result)
   }
 
   /**

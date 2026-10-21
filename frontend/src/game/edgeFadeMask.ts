@@ -104,54 +104,16 @@ function drawEdgeFadeCanvas(
   return canvas
 }
 
-/**
- * 端フェードマスク Sprite を生成する (#250)。
- *
- * screenWidth × screenHeight の Canvas を白(不透明)で塗り、各指定端について
- * 端→内側に向かう線形グラデーション(alpha 0→1)を destination-in 合成で重ねる。
- * これにより複数端が重なる角は乗算的により透明になる（4辺すべてが寄与した角も正しく透明）。
- * 決定論的（時間・乱数を使わない）。背景・動画レイヤ双方で流用できる純粋な生成ロジック。
- *
- * 全端が 0/None なら null を返す（マスク不要）。
- *
- * 返した Sprite は呼び出し側が所有・破棄する。canvas 由来テクスチャは
- * textureCache に乗らないため `destroy({ texture: true, textureSource: true })` で確実に解放すること。
- * （ただしこの破棄は次のマスク付き描画を 1 フレーム落とす (#791)。Texture を共有する `getSharedEdgeFadeMask` を使う側は
- * 引数なし `destroy()` にする。BackgroundController は #828 7c 後に共有版へ切り替える。）
- */
-export function buildEdgeFadeMask(
-  fade: BackgroundFade | null,
-  screenWidth: number,
-  screenHeight: number
-): Sprite | null {
-  if (!fade) return null
-  const top = fade.top ?? 0
-  const bottom = fade.bottom ?? 0
-  const left = fade.left ?? 0
-  const right = fade.right ?? 0
-  if (top <= 0 && bottom <= 0 && left <= 0 && right <= 0) return null
-
-  const w = Math.round(screenWidth)
-  const h = Math.round(screenHeight)
-  const canvas = drawEdgeFadeCanvas(top, bottom, left, right, w, h)
-  if (!canvas) return null
-
-  const texture = Texture.from(canvas)
-  const maskSprite = new Sprite(texture)
-  maskSprite.x = 0
-  maskSprite.y = 0
-  maskSprite.width = screenWidth
-  maskSprite.height = screenHeight
-  return maskSprite
-}
-
 /** 共有キャッシュ: キー `WxH|top,bottom,left,right` → Texture（Sprite は毎回作り、Texture だけ共有する） */
 const sharedTextures = new Map<string, Texture>()
 
 /**
- * 端フェードマスク Sprite を、Texture だけ共有キャッシュから取って生成する (#791)。
+ * 端フェードマスク Sprite を、Texture だけ共有キャッシュから取って生成する (#250 / #791)。
  *
- * `buildEdgeFadeMask` と同じ絵・同じ Sprite 配置だが、Texture は同じ「画面サイズ × フェード指定」で 1 枚だけ作って使い回す。
+ * screenWidth × screenHeight の Canvas を白(不透明)で塗り、各指定端について端→内側の線形グラデーション(alpha 0→1)を
+ * destination-in 合成で重ねる。複数端が重なる角は乗算的により透明になる。決定論的（時間・乱数を使わない）。
+ * 全端が 0/None なら null を返す（マスク不要）。背景（BackgroundController）・動画（VideoLayer）で共有する。
+ * Texture は同じ「画面サイズ × フェード指定」で 1 枚だけ作って使い回す（Sprite は毎回作る）。
  * Pixi はマスク用フィルタ（AlphaMaskEffect）を共有プールに戻して使い回し、プール内のフィルタは直前のマスクの
  * source を束ねたまま残る。その source を破棄すると次にマスク付きで描く 1 フレームが
  * `Cannot read properties of null (reading '0')` で落ちる（dofMaskCache.ts と同じ事情）。
