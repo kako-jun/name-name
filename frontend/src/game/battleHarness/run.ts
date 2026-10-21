@@ -108,6 +108,9 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
 
   let seenEvents = engine.getState().eventTotal
+  // 召喚 (#889): 同じ味方が 2 回召喚してはならず、召喚した味方には印が立っている
+  const summonNames = new Set((scenario.summons ?? []).map((m) => m.name))
+  const summonCount = new Map<number, number>()
   add(checkState(engine.getState(), [], -1, detect))
 
   /** 1 操作を実行して検査する。続行不能（例外・予算超過）なら false */
@@ -133,6 +136,31 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     // events は直近 30 件だけ残る。増えた分のうち残っている分を検査する
     const fresh = delta > 0 ? s.events.slice(-Math.min(delta, s.events.length)) : []
     collectMetrics(metrics, fresh)
+    if (summonNames.size > 0) {
+      for (const ev of fresh) {
+        if (ev.kind !== 'skill' || ev.actor.side !== 'party' || !summonNames.has(ev.label ?? ''))
+          continue
+        const n = (summonCount.get(ev.actor.index) ?? 0) + 1
+        summonCount.set(ev.actor.index, n)
+        if (n > 1) {
+          add([
+            {
+              kind: 'magicite-invariant',
+              detail: `party[${ev.actor.index}] が 1 バトルで ${n} 回召喚した（event#${ev.seq}）`,
+              opIndex,
+            },
+          ])
+        } else if (s.party[ev.actor.index]?.summoned !== true) {
+          add([
+            {
+              kind: 'magicite-invariant',
+              detail: `party[${ev.actor.index}] が召喚したのに summoned が立っていない（event#${ev.seq}）`,
+              opIndex,
+            },
+          ])
+        }
+      }
+    }
     for (const e of [...s.party, ...s.enemies]) {
       for (const v of Object.values(e.buffs ?? {})) {
         if (Number.isFinite(v))

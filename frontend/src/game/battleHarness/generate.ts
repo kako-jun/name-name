@@ -5,9 +5,10 @@
  * 対象は**現状エンジンに実装があるものだけ**: 効果 DSL の全動詞 × 耐性・属性相性 × HP × 範囲 × 複数ヒット `回数=N`、
  * 状態/バフの重ね順、反撃・死亡時・敵の行動、ATB、宣言した状態異常 (#870。継続ダメージ・行動不能・混乱・満了・回復の反転 × 付与の確率・持続・耐性)。
  */
-import type { SkillExecution } from '../battleEngine'
+import type { SkillExecution, SummonExecution } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
-import type { StatusDef } from '../../types'
+import type { MagiciteDef, StatusDef } from '../../types'
+import { applyMemberMagicite, resolveMemberMagicite } from '../magicite'
 import { lcg } from './rng'
 import type { Op, Scenario } from './scenario'
 
@@ -20,6 +21,7 @@ export type Family =
   | 'status-matrix'
   | 'random-status'
   | 'damage-condition'
+  | 'magicite'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -653,6 +655,141 @@ export function randomScenarios(seed: number, count: number): Scenario[] {
       items,
       ops,
     })
+  }
+  return out
+}
+
+/** 魔石 (#889) の宣言の集合。属性なし・1 属性・2 属性・装備時/成長のボーナス（負の極端な値を含む）・不正なボーナスの書式を含む */
+export const MAGICITE_SET: Readonly<Record<string, MagiciteDef>> = {
+  water: {
+    id: 'water',
+    name: 'みず',
+    elements: ['water'],
+    target: '相手単体',
+    equipBonus: 'hp+20, atk+3',
+  },
+  water2: { id: 'water2', name: 'みず2', elements: ['water'], target: '相手単体', growth: 'hp+2' },
+  fire: { id: 'fire', name: 'ひ', elements: ['fire'], target: '相手単体', equipBonus: 'agi+2' },
+  ice: { id: 'ice', name: 'こおり', elements: ['ice'], target: '相手単体' },
+  twin: { id: 'twin', name: 'ふたつ', elements: ['fire', 'ice'], target: '相手単体' },
+  plain: { id: 'plain', name: 'ただの石', target: '相手単体' },
+  heavy: {
+    id: 'heavy',
+    name: 'おもい石',
+    target: '相手単体',
+    equipBonus: 'hp-1000000, atk-1000000, def+99999999, mp+5',
+  },
+  broken: {
+    id: 'broken',
+    name: 'こわれた石',
+    elements: ['water'],
+    target: '相手単体',
+    equipBonus: 'xx+3, atk+, hp+1.5, def+2',
+  },
+}
+
+/** 魔石の組み合わせ（装備する魔石 id・枠の数・防具など他の出どころの属性）。層は合計 2 まで・同属性 2 層で吸収 */
+const MAGICITE_LOADOUTS: ReadonlyArray<{
+  name: string
+  ids: string[]
+  slots: number
+  extra?: string[]
+}> = [
+  { name: 'none', ids: [], slots: 1 },
+  { name: 'water', ids: ['water'], slots: 1 },
+  { name: 'water+water', ids: ['water', 'water2'], slots: 2 },
+  { name: 'water+fire', ids: ['water', 'fire'], slots: 2 },
+  { name: 'three-over', ids: ['water', 'fire', 'ice'], slots: 3 },
+  { name: 'twin+extra', ids: ['twin'], slots: 1, extra: ['wind'] },
+  { name: 'plain+armor-water', ids: ['plain'], slots: 1, extra: ['water'] },
+  { name: 'over-slots', ids: ['water', 'fire'], slots: 1 },
+  { name: 'heavy', ids: ['heavy'], slots: 1 },
+  { name: 'broken', ids: ['broken'], slots: 1 },
+  { name: 'zero-slot', ids: ['water'], slots: 0 },
+]
+
+/** 召喚の中身。効果の種類・複数ヒット・即死・状態・極大・不正な書式・効果なし・消費 MP（足りる・足りない） */
+export const MAGICITE_SUMMONS: readonly SummonExecution[] = [
+  { name: 'ダメージ', target: '相手全体', effect: 'damage 60..60 type=water', mp: 0 },
+  { name: '単体', target: '相手単体', effect: 'damage 40..60 type=fire', mp: 0 },
+  { name: '回復', target: '仲間全体', effect: 'heal 80..80', mp: 0 },
+  { name: '連続', target: '相手全体', effect: 'damage 20..30 type=water 回数=3', mp: 0 },
+  { name: '即死', target: '相手単体', effect: 'damage_full', mp: 0 },
+  { name: '状態', target: '相手全体', effect: 'status poison duration=3', mp: 0 },
+  { name: '極大', target: '相手全体', effect: 'damage 100000..100000', mp: 0 },
+  { name: '不正', target: '相手単体', effect: 'foo bar', mp: 0 },
+  { name: '演出のみ', target: '自分', mp: 0 },
+  { name: '有料', target: '相手全体', effect: 'damage 30..30', mp: 5 },
+  { name: '高額', target: '相手全体', effect: 'damage 30..30', mp: 99_999 },
+]
+
+/** 魔石の攻撃属性を受ける敵の相性（水・火の単独と複数属性。通常攻撃は複数属性をまとめて判定する） */
+const MAGICITE_ENEMY_AFFINITIES: ReadonlyArray<{ name: string; over: Partial<BattleEntity> }> = [
+  { name: 'plain', over: {} },
+  { name: 'absorb-water', over: { affinity: { absorb: ['water'] } } },
+  { name: 'nullify-water', over: { affinity: { nullify: ['water'] } } },
+  { name: 'halve-water', over: { affinity: { halve: ['water'] } } },
+  { name: 'weak-water', over: { affinity: { weak: ['water'] } } },
+  { name: 'absorb-fire-weak-water', over: { affinity: { absorb: ['fire'], weak: ['water'] } } },
+  { name: 'weak-fire-halve-water', over: { affinity: { weak: ['fire'], halve: ['water'] } } },
+]
+
+/**
+ * 魔石 (#889): 魔石の組み合わせ（`MAGICITE_LOADOUTS`。実際の `resolveMemberMagicite` で味方 a を組み立てる）× 召喚の中身 × 敵の相性 ×
+ * 敵の HP（小さい=倒れる）× 操作の並び（召喚 2 連打 = 1 バトル 1 回の制限 / 通常攻撃のあとに召喚）× ターン制/ATB。
+ * 敵 s は味方全員へ水属性の特技を使い、味方の耐性（半減・吸収）も動かす。決着まで進める
+ */
+export function magiciteScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  for (const atb of [false, true]) {
+    for (const lo of MAGICITE_LOADOUTS) {
+      const member = entity('a', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 })
+      applyMemberMagicite(
+        member,
+        resolveMemberMagicite(
+          { id: 'a', magicites: lo.ids, magiciteSlots: lo.slots },
+          {
+            magicites: { ...MAGICITE_SET },
+            ...(lo.extra ? { extraElements: { a: lo.extra } } : {}),
+          }
+        )
+      )
+      MAGICITE_SUMMONS.forEach((summon, si) => {
+        for (const ev of MAGICITE_ENEMY_AFFINITIES) {
+          for (const hv of [30, 900]) {
+            for (const [opName, ops] of [
+              [
+                'twice',
+                [{ t: 'summon', m: si }, tick, { t: 'summon', m: si }, tick, ATK, tick, ATK],
+              ],
+              [
+                'attack-first',
+                [ATK, tick, { t: 'summon', m: si }, tick, ATK, tick, { t: 'summon', m: si }],
+              ],
+            ] as const) {
+              out.push({
+                id: `magicite/${atb ? 'atb' : 'turn'}/${lo.name}/s${si}/${ev.name}/hp${hv}/${opName}`,
+                seed: 70_000 + out.length,
+                party: [{ ...member }, entity('b', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 })],
+                enemies: [
+                  foe('s', { ...ev.over, hp: hv, maxHp: hv, actions: ['候補=wave'], agi: 9 }),
+                  foe('t', { hp: 500, maxHp: 500 }),
+                ],
+                atb: atb ? { mode: 'active' } : undefined,
+                skills: {
+                  wave: { name: 'なみ', target: '相手全体', effect: 'damage 40..40 type=water' },
+                },
+                spells: [],
+                items: [],
+                summons: [summon],
+                ops: [...ops],
+              })
+            }
+          }
+        }
+      })
+    }
   }
   return out
 }

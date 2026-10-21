@@ -1,0 +1,114 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "commands": ["attack", "summon", "spell", "escape"],
+  "magicites": [
+    {
+      "id": "sea",
+      "name": "うみの石",
+      "summon": "うみの召喚獣",
+      "elements": ["water"],
+      "target": "相手全体",
+      "effect": "damage 60..60 type=water",
+      "message": "{user}が にぎった石から 波が あふれだす！",
+      "equipBonus": "hp+30",
+      "growth": "hp+3"
+    },
+    {
+      "id": "tiger",
+      "name": "かわぎりの石",
+      "summon": "ひのとら",
+      "elements": ["fire"],
+      "target": "相手単体",
+      "mp": 5,
+      "effect": "damage 90..90 type=fire",
+      "equipBonus": "atk+6",
+      "growth": "atk+1"
+    },
+    {
+      "id": "spring",
+      "name": "わきみずの石",
+      "summon": "わきみずの召喚獣",
+      "elements": ["water"],
+      "target": "仲間全体",
+      "effect": "heal 80..80",
+      "equipBonus": "def+3",
+      "growth": "def+1",
+      "equippableBy": ["mage"]
+    }
+  ],
+  "skills": [
+    {
+      "id": "wave",
+      "name": "たいかいのなみ",
+      "target": "相手全体",
+      "effect": "damage 30..30 type=water",
+      "message": "{user}は 大波を よびよせた！"
+    },
+    {
+      "id": "ember",
+      "name": "ひのこのあめ",
+      "target": "相手全体",
+      "effect": "damage 30..30 type=fire",
+      "message": "{user}は 火の粉を ふらせた！"
+    }
+  ],
+  "party": [
+    {
+      "id": "hero",
+      "name": "ゆうしゃ",
+      "hp": 120,
+      "mp": 20,
+      "atk": 22,
+      "def": 4,
+      "agi": 6,
+      "magicites": ["sea"]
+    },
+    {
+      "id": "ally",
+      "name": "なかま",
+      "hp": 100,
+      "mp": 20,
+      "atk": 18,
+      "def": 3,
+      "agi": 5,
+      "magicites": ["sea", "tiger"],
+      "magiciteSlots": 2
+    },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 90,
+      "mp": 30,
+      "atk": 12,
+      "def": 2,
+      "agi": 5,
+      "row": "back",
+      "magicites": ["sea", "spring"],
+      "magiciteSlots": 2
+    }
+  ],
+  "enemies": [
+    {
+      "id": "kawanushi",
+      "name": "かわのぬし",
+      "hp": 500,
+      "atk": 12,
+      "def": 2,
+      "agi": 4,
+      "affinity": { "absorb": ["water"], "weak": ["fire"] },
+      "actions": ["順番=wave > こうげき"]
+    },
+    {
+      "id": "hinotori",
+      "name": "ひのとり",
+      "hp": 400,
+      "atk": 10,
+      "def": 2,
+      "agi": 5,
+      "affinity": { "nullify": ["fire"], "weak": ["water"] },
+      "actions": ["順番=ember > こうげき"]
+    }
+  ]
+}

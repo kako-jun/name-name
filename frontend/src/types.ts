@@ -203,6 +203,38 @@ export interface PartyMemberDef {
   learns?: PartyLearns[]
   /** 戦闘コマンド「わざ」の候補 (#873)。`[特技 id]` の id（`わざ:` の行を書いた順）。特技マスターへの解決は runtime */
   abilities?: string[]
+  /** 最初に装備している魔石 (#889)。`[魔石 id]` の id（`魔石:` を書いた順）。枠の数・定義の有無・`装備可` の検査は runtime（`game/magicite.ts`） */
+  magicites?: string[]
+  /** 魔石を装備できる枠の数 (#889。`魔石枠:`)。省略は 1 */
+  magiciteSlots?: number
+}
+
+/**
+ * 魔石定義 (#889)。`[魔石 id]` ブロック。装備すると召喚獣を戦闘中に呼べ（1 人 1 バトル 1 回）、召喚獣の属性が
+ * 攻撃（通常攻撃）と防御（耐性）に加わる。召喚の中身は特技と同書式。ボーナスは書いたままの文字列で、解釈は `game/magicite.ts`
+ */
+export interface MagiciteDef {
+  id: string
+  name: string
+  /** 召喚獣の表示名（省略は `name`） */
+  summon?: string
+  /** 召喚獣の属性 id（parser が小文字・半角に正規化・重複排除済み。最大 2 つ）。無ければ属性を付けない魔石 */
+  elements?: string[]
+  /** 召喚の対象（使う側から見た相対表現。`SkillDef.target` と同じ。parser の既定は `相手単体`） */
+  target: string
+  /** 召喚の効果 DSL（`SkillDef.effect` と同書式）。`builtin` と排他 */
+  effect?: string
+  builtin?: string
+  /** 召喚時の演出文（`{user}` は呼んだ側の名前）。省略は「{user} は {召喚獣} を よびだした！」 */
+  message?: string
+  /** 召喚の消費 MP（既定 0） */
+  mp?: number
+  /** 装備している間だけ能力値に足す分（`装備時:` `atk+3, hp+20`） */
+  equipBonus?: string
+  /** レベルアップのたびに恒久で足す分（`成長:`） */
+  growth?: string
+  /** 装備できる味方の id。省略は誰でも */
+  equippableBy?: string[]
 }
 
 /** パーティメンバーの呪文習得スロット (#175) */
@@ -518,6 +550,7 @@ export type Event =
   | { Spell: SpellDef }
   | { Skill: SkillDef }
   | { Status: StatusDef }
+  | { Magicite: MagiciteDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }
   | {

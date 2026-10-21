@@ -141,6 +141,7 @@ export class RaycastRenderer {
   private masterSpells: Record<string, import('../types').SpellDef> | undefined
   private masterSkills: Record<string, import('../types').SkillDef> | undefined
   private masterStatuses: Record<string, import('../types').StatusDef> | undefined
+  private masterMagicites: Record<string, import('../types').MagiciteDef> | undefined
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
   /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔・戦闘の画像パス解決に使う。未設定ならパスをそのまま読む */
@@ -397,6 +398,7 @@ export class RaycastRenderer {
     this.masterSpells = gameData.spells
     this.masterSkills = gameData.skills
     this.masterStatuses = gameData.statuses
+    this.masterMagicites = gameData.magicites
     this.battleSettings = readFieldBattleSettings(gameData)
     this.stepCounter = 0
     this.encounterCooldown = 0
@@ -869,6 +871,7 @@ export class RaycastRenderer {
           spells: this.masterSpells,
           skills: this.masterSkills,
           statuses: this.masterStatuses,
+          ...(this.masterMagicites ? { magicites: this.masterMagicites } : {}),
         },
         enemies,
         gate: this.inputGate,

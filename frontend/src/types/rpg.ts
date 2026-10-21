@@ -199,6 +199,8 @@ export interface RPGProject {
   skills?: Record<string, import('../types').SkillDef>
   /** 同上、状態 (#870)。`[状態 id]` で宣言した毒・混乱・回復の反転など。戦闘エンジンの `statuses` に渡す */
   statuses?: Record<string, import('../types').StatusDef>
+  /** 同上、魔石 (#889)。`[魔石 id]` で宣言した、装備すると召喚獣を呼べて属性・能力値がつく石。`[パーティ]` の `魔石:` が装備する */
+  magicites?: Record<string, import('../types').MagiciteDef>
   /** 同上、パーティメンバー (#175) */
   party?: Record<string, import('../types').PartyMemberDef>
   /** `party` のキーのドキュメント上の出現順 (#736)。整数風 ID でも定義順を保つために別持ち */
@@ -255,9 +257,11 @@ export interface RPGProject {
   /** 戦闘コマンド窓の配置 (#204)。frontmatter `battle_command_layout:` 由来。未指定は `'grid'`（2x2・現行どおり） */
   battleCommandLayout?: 'grid' | 'cross'
   /** 戦闘コマンドの表示名の上書き (#204)。frontmatter `battle_command_labels:` 由来。id は変えず label だけ差し替える。未指定は undefined（既定の日本語） */
-  battleCommandLabels?: Partial<Record<'attack' | 'skill' | 'spell' | 'item' | 'escape', string>>
+  battleCommandLabels?: Partial<
+    Record<'attack' | 'skill' | 'summon' | 'spell' | 'item' | 'escape', string>
+  >
   /** 戦闘コマンドの構成と順序 (#873)。frontmatter `battle_commands:` 由来（id の列）。未指定は undefined（既定の attack / spell / item / escape） */
-  battleCommands?: Array<'attack' | 'skill' | 'spell' | 'item' | 'escape'>
+  battleCommands?: Array<'attack' | 'skill' | 'summon' | 'spell' | 'item' | 'escape'>
   /** 戦闘の開始・終了の画面遷移 (#830)。frontmatter `battle_transition:` 由来。未指定は `'none'`（現行の挙動のまま） */
   battleTransition?: 'none' | 'ff'
 }

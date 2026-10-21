@@ -305,6 +305,28 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('Magicite' in event) {
+    const m = event.Magicite
+    return (
+      <div className="space-y-0.5">
+        <div className={`text-sm font-semibold ml-2 ${head}`}>
+          💎 魔石: {m.name} <span className={`text-xs font-normal ${meta}`}>(id={m.id})</span>
+        </div>
+        <div className={`text-xs ml-4 font-mono ${accent}`}>
+          {m.summon ? `召喚獣=${m.summon}` : ''}
+          {m.elements && m.elements.length > 0 ? ` 属性=${m.elements.join(',')}` : ''}
+          {` 対象=${m.target}`}
+          {m.mp ? ` 消費MP=${m.mp}` : ''}
+          {m.effect ? ` 効果=${m.effect}` : ''}
+          {m.builtin ? ` builtin=${m.builtin}` : ''}
+          {m.equipBonus ? ` 装備時=${m.equipBonus}` : ''}
+          {m.growth ? ` 成長=${m.growth}` : ''}
+          {m.equippableBy && m.equippableBy.length > 0 ? ` 装備可=${m.equippableBy.join(',')}` : ''}
+        </div>
+      </div>
+    )
+  }
+
   if ('PartyMember' in event) {
     const p = event.PartyMember
     const learns = p.learns?.map((l) => `Lv${l.level} ${l.spell}`).join(', ')
