@@ -406,13 +406,19 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
     let name = lookup_master_string(entries, &["名前", "name"]).unwrap_or_default();
     let kind =
         lookup_master_string(entries, &["種別", "kind"]).unwrap_or_else(|| "その他".to_string());
+    let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
     ItemDef {
+        elements: collect_elements(&format!("アイテム {id}"), entries),
         id,
         name,
         kind,
         price: lookup_master_value(entries, &["価格", "price"]).and_then(|v| v.parse().ok()),
         effect: lookup_master_string(entries, &["効果", "effect"]),
         builtin: lookup_master_string(entries, &["builtin"]),
+        // 装備品の項目 (#207)。`[魔石]` と同じ書式・同じ解釈（ボーナスは生文字列で透過し、runtime が解釈する）
+        equip_bonus: value(&["装備時", "equip"]),
+        equippable_by: collect_id_list(entries, &["装備可", "equippable_by", "equippableBy"]),
+        abilities: collect_values(entries, &["わざ", "abilities"]),
     }
 }
 
@@ -445,12 +451,31 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
             &["魔石枠", "magicite_slots", "magiciteSlots"],
         )
         .and_then(|v| v.trim().parse().ok()),
+        // 「装備」キーは `魔石` と同じくカンマ区切り・複数行可で、`[アイテム id]` / `[魔石 id]` の id を書いた順に集める (#207)
+        equipment: collect_id_list(entries, &["装備", "equipment"]),
+        equipment_slots: collect_repeatable_list(
+            entries,
+            &["装備枠", "equipment_slots", "equipmentSlots"],
+        ),
     })
 }
 
 /// 指定したキーの値をカンマ（`,` `，` `、`）で区切って id の列にする (#889)。複数行は書いた順に連結し、重複は最初のものだけ残す。
 /// 空の要素は捨てる。1 つも無ければ None。
 fn collect_id_list(entries: &[(String, String)], keys: &[&str]) -> Option<Vec<String>> {
+    collect_comma_list(entries, keys, true)
+}
+
+/// `collect_id_list` の重複を残す版 (#207)。`装備枠: 防具, 防具`（同じ種類の枠を 2 つ）のように、並べた数が意味を持つ値に使う。
+fn collect_repeatable_list(entries: &[(String, String)], keys: &[&str]) -> Option<Vec<String>> {
+    collect_comma_list(entries, keys, false)
+}
+
+fn collect_comma_list(
+    entries: &[(String, String)],
+    keys: &[&str],
+    dedup: bool,
+) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for (k, v) in entries {
         if !keys.contains(&k.as_str()) {
@@ -458,7 +483,7 @@ fn collect_id_list(entries: &[(String, String)], keys: &[&str]) -> Option<Vec<St
         }
         for part in v.split([',', '，', '、']) {
             let part = part.trim();
-            if !part.is_empty() && !out.iter().any(|e| e == part) {
+            if !part.is_empty() && !(dedup && out.iter().any(|e| e == part)) {
                 out.push(part.to_string());
             }
         }
@@ -470,8 +495,39 @@ fn collect_id_list(entries: &[(String, String)], keys: &[&str]) -> Option<Vec<St
     }
 }
 
-/// 魔石 1 つの属性の上限 (#889)。魔石と防具を合わせて 1 人 2 つまでなので、1 つの魔石も 2 つまで。
-const MAGICITE_MAX_ELEMENTS: usize = 2;
+/// 魔石 1 つ・装備品 1 つの属性の上限 (#889 / #207)。魔石と防具を合わせて 1 人 2 つまでなので、1 つの宣言も 2 つまで。
+const MAX_ELEMENTS_PER_DECL: usize = 2;
+
+/// `属性` / `element` / `elements` を集める (#889 / #207)。小文字・半角に正規化し、重複と `無属性` を除いて最大 2 つ。
+/// `label` は警告文の宣言名（`魔石 sea` / `アイテム armor` 等）。
+fn collect_elements(label: &str, entries: &[(String, String)]) -> Vec<String> {
+    let mut elements: Vec<String> = Vec::new();
+    for (k, v) in entries {
+        if !["属性", "element", "elements"].contains(&k.as_str()) {
+            continue;
+        }
+        for token in v
+            .split(|c: char| c == ',' || c == '，' || c == '、' || c.is_whitespace())
+            .filter(|t| !t.is_empty())
+            .map(normalize_attr_id)
+        {
+            if token == "無属性" || token == "none" {
+                emit_warning(&format!(
+                    "[name-name-parser] warning: [{label}] の属性 '{token}' (無属性) は書けないため無視した"
+                ));
+            } else if elements.contains(&token) {
+                // 同じ属性の重複は 1 つにまとめる（2 重の吸収は、魔石 2 個や防具との重なりで作る）
+            } else if elements.len() >= MAX_ELEMENTS_PER_DECL {
+                emit_warning(&format!(
+                    "[name-name-parser] warning: [{label}] の属性は最大 {MAX_ELEMENTS_PER_DECL} つのため '{token}' は無視した"
+                ));
+            } else {
+                elements.push(token);
+            }
+        }
+    }
+    elements
+}
 
 /// `[魔石 <id>]` (#889)。`名前` 必須。属性は小文字・半角に正規化し、重複と `無属性` を除いて最大 2 つ。
 /// ボーナスは生文字列で透過し、解釈と不正値の警告は runtime（`magicite.ts`）が行う。値が空のキーは未指定扱い。
@@ -517,31 +573,7 @@ fn build_magicite_def(id: String, entries: &[(String, String)]) -> Option<Magici
         }
     }
     let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
-    let mut elements: Vec<String> = Vec::new();
-    for (k, v) in entries {
-        if !["属性", "element", "elements"].contains(&k.as_str()) {
-            continue;
-        }
-        for token in v
-            .split(|c: char| c == ',' || c == '，' || c == '、' || c.is_whitespace())
-            .filter(|t| !t.is_empty())
-            .map(normalize_attr_id)
-        {
-            if token == "無属性" || token == "none" {
-                emit_warning(&format!(
-                    "[name-name-parser] warning: [魔石 {id}] の属性 '{token}' (無属性) は書けないため無視した"
-                ));
-            } else if elements.contains(&token) {
-                // 同じ属性の重複は 1 つにまとめる（2 重の吸収は、魔石 2 個や防具との重なりで作る）
-            } else if elements.len() >= MAGICITE_MAX_ELEMENTS {
-                emit_warning(&format!(
-                    "[name-name-parser] warning: [魔石 {id}] の属性は最大 {MAGICITE_MAX_ELEMENTS} つのため '{token}' は無視した"
-                ));
-            } else {
-                elements.push(token);
-            }
-        }
-    }
+    let elements = collect_elements(&format!("魔石 {id}"), entries);
     Some(MagiciteDef {
         id,
         name,
