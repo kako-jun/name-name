@@ -36,6 +36,7 @@ export type ViolationKind =
   | 'script-outcome' // 脚本のシナリオが、期待した終わり方（`scriptExpect.ends`）・ターン上限（`maxTurn`）を守らない (#741)
   | 'script-no-end' // 終わるはずの脚本のシナリオが、自動進行の上限まで決着しなかった（膠着・進行不能）(#741)
   | 'magicite-invariant' // 魔石 (#889) の不変条件違反（通常攻撃の属性が 2 つを超える・召喚済みの印が真偽でない・同じ味方が 2 回召喚した・召喚したのに印が立たない）
+  | 'summon-invariant' // 召喚獣の演出 (#750) の不変条件違反（宣言していない召喚獣の演出が付いた・skill 以外のイベントに付いた・名前や id が空・画像/効果音が文字列でない）
   | 'loot-invariant' // 戦利品の不変条件違反（宣言していない品・個数が正の整数でない・ドロップが勝利以外で出た・盗めた回数が上限超・レア枠でない品が rare）(#831)
   | 'exception' // エンジンが例外を投げた
 
@@ -61,6 +62,11 @@ export interface DetectOptions {
    * 脚本が決めた勝敗（生存者と食い違う victory / defeat、interrupted）を許す。`ruleCount` は解釈済みルールの数（発動済み index の範囲）
    */
   script?: { ruleCount: number }
+  /**
+   * シナリオが宣言した召喚獣の演出の id (#750。`cue.id`)。イベントの `summon` はこの id のものだけが許され、
+   * 宣言の無いシナリオ（undefined）は `summon` が 1 件でも付いたら違反（召喚獣を使わない戦闘は従来と同じイベントの形、の検査）
+   */
+  summonCueIds?: readonly string[]
   /**
    * 敵ごとの戦利品の宣言 (#831)。キーは敵の id。あれば `BattleState.loot` を、宣言した品だけか・レア枠の印が合うか・
    * 盗めた回数が上限内か・個数が 1〜`MAX_LOOT_COUNT` の整数か・ドロップが勝利のときだけかで検査する。
@@ -162,8 +168,49 @@ function checkEntity(
   }
 }
 
+/** 召喚獣の演出 (#750) の不変条件: 宣言した id だけ・`skill` のイベントだけ・名前と id は空でない文字列・画像/効果音は空でない文字列か無い・想像/向きは型どおり */
+function checkSummonCue(push: Push, ev: BattleActionEvent, opts: DetectOptions): void {
+  const cue: unknown = ev.summon
+  if (cue === undefined) return
+  const w = `event#${ev.seq}.summon`
+  // 敵は召喚獣を呼ばない (#750): 敵側の行動に付いたら、経路によらず違反（敵の特技の cue 外し忘れを捕まえる）
+  if (ev.actor.side === 'enemy') {
+    push('summon-invariant', `${w}: 敵の行動に付いた（敵は召喚獣を呼ばない）`)
+  }
+  if (!opts.summonCueIds) {
+    push('summon-invariant', `${w}: 召喚獣の演出を宣言していないシナリオに付いた`)
+    return
+  }
+  if (typeof cue !== 'object' || cue === null) {
+    push('summon-invariant', `${w} = ${String(cue)}（オブジェクトであるべき）`)
+    return
+  }
+  const c = cue as Record<string, unknown>
+  if (ev.kind !== 'skill') push('summon-invariant', `${w}: kind=${ev.kind}（skill であるべき）`)
+  for (const k of ['id', 'name'] as const) {
+    if (typeof c[k] !== 'string' || c[k] === '') {
+      push('summon-invariant', `${w}.${k} = ${String(c[k])}（空でない文字列であるべき）`)
+    }
+  }
+  if (typeof c.id === 'string' && !opts.summonCueIds.includes(c.id)) {
+    push('summon-invariant', `${w}.id = ${c.id}（宣言した召喚獣のどれでもない）`)
+  }
+  for (const k of ['image', 'se'] as const) {
+    if (c[k] !== undefined && (typeof c[k] !== 'string' || c[k] === '')) {
+      push('summon-invariant', `${w}.${k} = ${String(c[k])}（空でない文字列か未指定であるべき）`)
+    }
+  }
+  if (c.imaginary !== undefined && c.imaginary !== true) {
+    push('summon-invariant', `${w}.imaginary = ${String(c.imaginary)}（真か未指定であるべき）`)
+  }
+  if (c.faces !== undefined && c.faces !== 'left') {
+    push('summon-invariant', `${w}.faces = ${String(c.faces)}（'left' か未指定であるべき）`)
+  }
+}
+
 function checkEvents(push: Push, events: readonly BattleActionEvent[], opts: DetectOptions): void {
   for (const ev of events) {
+    checkSummonCue(push, ev, opts)
     // 状態異常の継続ダメージ・満了 (#870): 本人の記録（actor = 対象 1 件）
     if (ev.kind === 'status') {
       const own = ev.hits.every(

@@ -82,6 +82,7 @@ describe('jobScenarios: 生成', () => {
       'script',
       'random-script',
       'equipment',
+      'summon',
     ] as const
     const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0 }
     const withIt = buildSweep({ ...cfg, skip: [...heavy] })

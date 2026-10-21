@@ -1167,6 +1167,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(t) = &sk.telegraph {
                     out.push_str(&format!("予兆: {t}\n"));
                 }
+                if let Some(v) = &sk.summon_id {
+                    out.push_str(&format!("召喚獣id: {v}\n"));
+                }
                 out.push_str("[/特技]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1227,7 +1230,49 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(v) = &mg.equippable_by {
                     out.push_str(&format!("装備可: {}\n", v.join(", ")));
                 }
+                if let Some(v) = &mg.summon_id {
+                    out.push_str(&format!("召喚獣id: {v}\n"));
+                }
                 out.push_str("[/魔石]\n");
+                prev_was_dialog_or_text = false;
+            }
+            Event::Summon(sm) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[召喚獣 {}]\n", sm.id));
+                out.push_str(&format!("名前: {}\n", sm.name));
+                if !sm.elements.is_empty() {
+                    out.push_str(&format!("属性: {}\n", sm.elements.join(", ")));
+                }
+                if let Some(v) = &sm.image {
+                    out.push_str(&format!("画像: {v}\n"));
+                }
+                if let Some(v) = &sm.facing {
+                    out.push_str(&format!(
+                        "向き: {}\n",
+                        if v == "left" { "左" } else { "右" }
+                    ));
+                }
+                if let Some(v) = &sm.se {
+                    out.push_str(&format!("効果音: {v}\n"));
+                }
+                if sm.imaginary {
+                    out.push_str("想像: はい\n");
+                }
+                if let Some(v) = &sm.target {
+                    out.push_str(&format!("対象: {v}\n"));
+                }
+                if let Some(v) = &sm.effect {
+                    out.push_str(&format!("効果: {v}\n"));
+                }
+                if let Some(v) = &sm.builtin {
+                    out.push_str(&format!("builtin: {v}\n"));
+                }
+                if let Some(v) = &sm.message {
+                    out.push_str(&format!("メッセージ: {v}\n"));
+                }
+                out.push_str("[/召喚獣]\n");
                 prev_was_dialog_or_text = false;
             }
             Event::Job(j) => {
@@ -2129,6 +2174,7 @@ mod tests {
             builtin: None,
             message: Some("{user}は 墨を はいた！".to_string()),
             telegraph: None,
+            summon_id: Some("ink_beast".to_string()),
         }));
         let out = emit(&doc);
         assert!(out.contains("[特技 ink]"));
@@ -2136,6 +2182,7 @@ mod tests {
         assert!(out.contains("対象: 相手全体"));
         assert!(out.contains("効果: damage 3..5"));
         assert!(out.contains("メッセージ: {user}は 墨を はいた！"));
+        assert!(out.contains("召喚獣id: ink_beast\n[/特技]"));
         assert!(!out.contains("MP:"));
         assert!(out.contains("[/特技]"));
     }
@@ -2170,13 +2217,55 @@ mod tests {
             equip_bonus: Some("hp+20".to_string()),
             growth: Some("hp+2".to_string()),
             equippable_by: Some(vec!["hero".to_string(), "ally".to_string()]),
+            summon_id: Some("S001".to_string()),
         }));
         let out = emit(&doc);
         assert!(out
             .contains("[魔石 sea]\n名前: 日本海の石\n召喚獣: 日本海の召喚獣\n属性: water, ice\n"));
         assert!(out.contains("対象: 相手全体\n消費MP: 6\n効果: damage 20..30 type=water\n"));
-        assert!(out.contains("装備時: hp+20\n成長: hp+2\n装備可: hero, ally\n[/魔石]"));
+        assert!(
+            out.contains("装備時: hp+20\n成長: hp+2\n装備可: hero, ally\n召喚獣id: S001\n[/魔石]")
+        );
         assert!(!out.contains("メッセージ:"));
+    }
+
+    #[test]
+    fn emits_summon_block() {
+        let doc = make_doc_with_event(Event::Summon(SummonDef {
+            id: "S001".to_string(),
+            name: "日本海の召喚獣".to_string(),
+            elements: vec!["water".to_string()],
+            image: Some("summons/S001.webp".to_string()),
+            facing: Some("left".to_string()),
+            se: Some("se/wave.ogg".to_string()),
+            imaginary: true,
+            target: Some("相手全体".to_string()),
+            effect: Some("damage 20..30 type=water".to_string()),
+            builtin: None,
+            message: None,
+        }));
+        let out = emit(&doc);
+        assert!(out.contains(
+            "[召喚獣 S001]\n名前: 日本海の召喚獣\n属性: water\n画像: summons/S001.webp\n向き: 左\n効果音: se/wave.ogg\n想像: はい\n"
+        ));
+        assert!(out.contains("対象: 相手全体\n効果: damage 20..30 type=water\n[/召喚獣]"));
+        // 省略できる欄・偽の想像は出さない
+        let plain = make_doc_with_event(Event::Summon(SummonDef {
+            id: "p".to_string(),
+            name: "ただの".to_string(),
+            elements: vec![],
+            image: None,
+            facing: None,
+            se: None,
+            imaginary: false,
+            target: None,
+            effect: None,
+            builtin: None,
+            message: None,
+        }));
+        let out2 = emit(&plain);
+        assert!(out2.contains("[召喚獣 p]\n名前: ただの\n[/召喚獣]"));
+        assert!(!out2.contains("想像"));
     }
 
     #[test]

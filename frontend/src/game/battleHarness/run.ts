@@ -77,6 +77,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     ...(scenario.statuses ? { statusIds: Object.keys(scenario.statuses) } : {}),
     // 戦利品の宣言 (#831)。宣言のある敵がいるシナリオだけ、`state.loot` の不変条件を検査する
     ...lootDeclarations(scenario),
+    // 召喚獣の演出 (#750)。宣言したシナリオだけ、宣言した id の演出だけを許す（宣言の無いシナリオは `summon` が付いたら違反）
+    ...summonCueDeclarations(scenario),
     // 脚本制御の戦闘 (#741)。脚本のあるシナリオだけ、`state.script` の整合を検査し、脚本が決めた勝敗を許す
     ...(scenario.script
       ? { script: { ruleCount: parseBattleScript(scenario.script.rules).rules.length } }
@@ -124,7 +126,12 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   add(checkState(engine.getState(), [], -1, detect))
 
   /** 1 操作を実行して検査する。続行不能（例外・予算超過）なら false */
-  const step = (opIndex: number, run: () => void, summonName?: string): boolean => {
+  const step = (
+    opIndex: number,
+    run: () => void,
+    summonName?: string,
+    summonCue?: { id: string }
+  ): boolean => {
     rng.reset()
     const t0 = performance.now()
     try {
@@ -149,6 +156,17 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     if (summonName !== undefined) {
       for (const ev of fresh) {
         if (ev.kind !== 'skill' || ev.actor.side !== 'party' || ev.label !== summonName) continue
+        // 召喚獣の演出 (#750): 魔石が演出の元（cue）を持つなら、その召喚の記録に同じ id の演出が付く
+        const wantCue = summonCue
+        if (wantCue !== undefined && ev.summon?.id !== wantCue.id) {
+          add([
+            {
+              kind: 'summon-invariant',
+              detail: `召喚の記録 event#${ev.seq} に演出 ${wantCue.id} が付いていない（${String(ev.summon?.id)}）`,
+              opIndex,
+            },
+          ])
+        }
         const n = (summonCount.get(ev.actor.index) ?? 0) + 1
         summonCount.set(ev.actor.index, n)
         if (n > 1) {
@@ -186,7 +204,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     alive = step(
       i,
       () => applyOp(engine, scenario, op),
-      op.t === 'summon' ? scenario.summons?.[op.m]?.name : undefined
+      op.t === 'summon' ? scenario.summons?.[op.m]?.name : undefined,
+      op.t === 'summon' ? scenario.summons?.[op.m]?.cue : undefined
     )
     metrics.opsRun = i + 1
   }
@@ -295,6 +314,14 @@ function collectMetrics(m: Metrics, events: readonly BattleActionEvent[]): void 
     }
     m.maxEventDamage = Math.max(m.maxEventDamage, dmg)
   }
+}
+
+/** シナリオが宣言した召喚獣の演出（召喚・わざの `cue`。敵は召喚獣を呼ばないので敵の特技は数えない）の id (#750)。1 つも無ければ空（検出器は `summon` が付いたら違反にする） */
+function summonCueDeclarations(scenario: Scenario): Pick<DetectOptions, 'summonCueIds'> {
+  const ids = new Set<string>()
+  const lists = [...(scenario.summons ?? []), ...(scenario.abilities ?? [])]
+  for (const e of lists) if (e.cue) ids.add(e.cue.id)
+  return ids.size > 0 ? { summonCueIds: [...ids] } : {}
 }
 
 /** シナリオの敵の `loot` 宣言を、検出器が使う「敵 id → 宣言した品」に直す (#831)。宣言のある敵がいなければ空 */

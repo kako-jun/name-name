@@ -48,6 +48,7 @@ import {
   Ticker,
 } from 'pixi.js'
 import { ATB_GAUGE_MAX, BattleEngine } from './battleEngine'
+import type { SummonCue } from '../types'
 import {
   advanceResultElapsed,
   canSkipResultHold,
@@ -93,6 +94,7 @@ import {
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
+  sampleSummonCue,
   MOTION_EXTENT_PAD,
   MOTION_SCREEN_MARGIN,
   clampMotionDx,
@@ -224,6 +226,9 @@ const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
 /** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
+/** 想像の層 (#750) のかぶせの色（暗い寒色）と、最も濃いときの不透明度 */
+const SUMMON_VEIL_COLOR = 0x0a1230
+const SUMMON_VEIL_ALPHA = 0.62
 /** 「選択中」の印 ▼（アクスタ頭上の白い下向き三角）の塗りと縁。形・大きさは computeSelectMarkTriangle (#805) */
 const SELECT_MARK_FILL = 0xffffff
 const SELECT_MARK_OUTLINE = 0x000000
@@ -415,6 +420,11 @@ export interface BattleScreenOptions {
    * 未指定・空は従来どおり（じゅもん・どうぐは何も起きない）。有効なとき、ATB の wait は候補窓を開いている間だけ止まる
    */
   menu?: BattleMenuData
+  /**
+   * 召喚獣の登場 (#750) が始まるたびに 1 回呼ぶ（効果音を鳴らすのはホストの領分。画面は音を鳴らさない）。`ff` の演出のときだけ。
+   * 未指定は何もしない
+   */
+  onSummonCue?: (cue: SummonCue) => void
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -526,9 +536,24 @@ export class BattleScreen extends Container {
   private popups: DamagePopup[] = []
   /** ダメージ数字の層（敵ラベル層の手前・パネルの奥） */
   private popupLayer: Container | null = null
+  /** 召喚獣の登場 (#750) の層（敵ラベル層の手前・ダメージ数字層の奥・パネルの奥）。`ff` のときだけ作る。登場の間だけ visible */
+  private summonLayer: Container | null = null
+  /** 想像の層のかぶせ（暗い寒色の全面）。想像の召喚獣のときだけ濃くなる */
+  private summonVeil: Graphics | null = null
+  private summonSprite: Sprite | null = null
+  private summonPlate: PixiText | null = null
+  /** 絵の画像の読み込み結果（パス → 読めたテクスチャ / 読めなかった null）。読み込み中は持たない */
+  private summonTextures = new Map<string, Texture | null>()
+  private summonLoading = new Set<string>()
+  /** いま画面に出している登場の絵のパス・かぶせを描いた大きさ・最後に `onSummonCue` を呼んだ行動の通し番号 */
+  private summonShownPath: string | null = null
+  private summonVeilSize = ''
+  private summonCuedSeq = -1
   /** FF 式メッセージ窓の言葉と、窓（ログ帯）の矩形。layoutSide が更新 */
   private messageText: PixiText | null = null
   private messageRect = { x: 0, y: 0, w: 0, h: 0 }
+  /** 召喚獣の名前の札の下端の限度 y (#750)。下パネル（コマンド・味方の窓）の上端。札の層は窓の奥なので、これより下へは置かない */
+  private summonPlateFloorY = Number.POSITIVE_INFINITY
   private backgroundSprite: Sprite | null = null
   /** side: 敵・味方スプライトの親（奥行き有効時は zIndex で奥→手前に並べる） (#747) */
   private sideStage: Container | null = null
@@ -921,6 +946,27 @@ export class BattleScreen extends Container {
       const popupLayer = new Container()
       this.popupLayer = popupLayer
       this.addChildAt(popupLayer, this.getChildIndex(labelLayer) + 1)
+      // 召喚獣の登場 (#750): ダメージ数字の奥（絵の上に数字が出る）・敵ラベルの手前・パネルの奥
+      const summonLayer = new Container()
+      summonLayer.visible = false
+      const veil = new Graphics()
+      const plate = new PixiText({
+        text: '',
+        style: new TextStyle({
+          fontFamily: "'Noto Sans JP', sans-serif",
+          fontSize: 24,
+          fontWeight: 'bold',
+          fill: 0xffffff,
+          stroke: { color: 0x000000, width: 5 },
+        }),
+      })
+      plate.anchor.set(0.5, 0)
+      summonLayer.addChild(veil, plate)
+      this.summonLayer = summonLayer
+      this.summonVeil = veil
+      this.summonPlate = plate
+      this.addChildAt(summonLayer, this.getChildIndex(popupLayer))
+      this.prefetchSummonImages()
     }
     for (const e of s.enemies) {
       const view = this.createEntityView(e, FALLBACK_ENEMY_COLOR, true)
@@ -1630,6 +1676,7 @@ export class BattleScreen extends Container {
       if (this.presentation === 'ff') text.visible = false
     }
     this.messageRect = { x: L.log.x, y: L.log.y, w: L.log.w, h: L.log.h }
+    this.summonPlateFloorY = Math.min(L.command.y, L.status.y)
 
     // 敵・味方スプライト
     for (let i = 0; i < this.enemyViews.length; i++) {
@@ -2517,6 +2564,7 @@ export class BattleScreen extends Container {
       }
     }
     this.advancePopups(dt)
+    this.updateSummonCue()
     if (!isPlaybackBusy(this.playback)) {
       if (this.hpOverride.size > 0) this.hpOverride.clear()
       if (this.statusOverride.size > 0) this.statusOverride.clear()
@@ -2527,6 +2575,113 @@ export class BattleScreen extends Container {
       this.updateMessageWindow()
       this.applyMotionFrame()
     }
+  }
+
+  /** 候補窓（しょうかん・わざ）の召喚獣の絵を先に読み込んでおく。登場の最初から絵が出る（読めなければ名前の札だけ） */
+  private prefetchSummonImages(): void {
+    const menu = this.opts.menu
+    if (!menu) return
+    for (const rows of [
+      ...Object.values(menu.summons ?? {}),
+      ...Object.values(menu.skills ?? {}),
+    ]) {
+      for (const row of rows) {
+        const path = row.cue?.image
+        if (path) void this.loadSummonTexture(path)
+      }
+    }
+  }
+
+  /** 召喚獣の絵を 1 度だけ読み込む。失敗は null で覚える（再試行しない。名前の札だけで演出する） */
+  private async loadSummonTexture(path: string): Promise<void> {
+    if (this.summonTextures.has(path) || this.summonLoading.has(path)) return
+    this.summonLoading.add(path)
+    try {
+      const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, path))) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
+      this.summonTextures.set(path, tex)
+    } catch (e) {
+      console.warn(`[BattleScreen] failed to load summon image "${path}":`, e)
+      this.summonTextures.set(path, null)
+    } finally {
+      this.summonLoading.delete(path)
+    }
+  }
+
+  /**
+   * 召喚獣の登場 (#750): 再生中の行動に `summon` があるあいだ、絵（呼んだ側が味方なら左右反転して左向き）・名前の札を中央に出し、
+   * 想像の層なら全面を暗い寒色で沈める。絵が無い／読めないときは名前の札だけ。再生が終われば隠す。効果音はホストへ通知する（始まりに 1 回）。
+   * 表示だけで、エンジンの状態・HP 表示は変えない
+   */
+  private updateSummonCue(): void {
+    const layer = this.summonLayer
+    const plate = this.summonPlate
+    const veil = this.summonVeil
+    if (!layer || !plate || !veil) return
+    const active = this.playback.active
+    const cue = active?.event.summon
+    if (!active || !cue) {
+      if (layer.visible) layer.visible = false
+      return
+    }
+    const w = this.screenWidth
+    const h = this.screenHeight
+    // 始まりに 1 回だけホストへ知らせる（効果音）
+    if (this.summonCuedSeq !== active.event.seq) {
+      this.summonCuedSeq = active.event.seq
+      this.opts.onSummonCue?.(cue)
+    }
+    const s = sampleSummonCue(active.elapsed)
+    layer.visible = true
+    // 想像の層: 全面の暗い寒色。大きさが変わったときだけ描き直す
+    const veilSize = `${w}x${h}`
+    if (this.summonVeilSize !== veilSize) {
+      this.summonVeilSize = veilSize
+      veil.clear()
+      veil.rect(0, 0, w, h).fill({ color: SUMMON_VEIL_COLOR })
+    }
+    veil.alpha = cue.imaginary ? s.veil * SUMMON_VEIL_ALPHA : 0
+    // 絵（読めていれば）。呼ぶのは味方（右側にいて左の敵へ向く）なので、右向きが既定の絵（`faces: 'left'` の絵は逆）は反転して左向きにする
+    const path = cue.image
+    let tex: Texture | null | undefined
+    if (path) {
+      tex = this.summonTextures.get(path)
+      if (tex === undefined) void this.loadSummonTexture(path)
+    }
+    const centerX = w / 2
+    let plateY = h * 0.42
+    if (tex) {
+      if (!this.summonSprite) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        this.summonSprite = sp
+        layer.addChildAt(sp, 1)
+      }
+      const sp = this.summonSprite
+      if (this.summonShownPath !== path) {
+        this.summonShownPath = path ?? null
+        sp.texture = tex
+      }
+      const fit = Math.min((w * 0.62) / tex.width, (h * 0.5) / tex.height)
+      const faceRight = cue.faces !== 'left'
+      // 召喚獣を呼ぶのは味方だけ（敵は呼ばない）。呼んだ側が左の敵へ向くよう、右向きの絵は反転する
+      const flip = active.event.actor.side === 'party' && faceRight
+      sp.scale.set(flip ? -fit : fit, fit)
+      const cy = h * 0.38 - s.rise * h
+      sp.position.set(centerX, cy)
+      sp.alpha = s.alpha
+      sp.visible = true
+      plateY = Math.min(h * 0.78, cy + (tex.height * fit) / 2 + 6)
+    } else if (this.summonSprite) {
+      this.summonSprite.visible = false
+    }
+    plate.text = cue.name
+    const fontSize = Math.max(18, Math.round(h * 0.05))
+    plate.style.fontSize = fontSize
+    // 札の下端が下の窓（コマンド・味方）に隠れないよう、上端を窓の上端より札の高さぶん上に抑える（高さは字の大きさと縁取りから見積もる。測ると描画環境に依る）
+    plateY = Math.min(plateY, this.summonPlateFloorY - Math.ceil(fontSize * 1.5) - 4)
+    plate.position.set(centerX, plateY)
+    plate.alpha = s.alpha
   }
 
   private viewOf(side: 'party' | 'enemy', index: number): EntityView | undefined {

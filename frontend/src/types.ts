@@ -279,6 +279,10 @@ export interface MagiciteDef {
   growth?: string
   /** 装備できる味方の id。省略は誰でも */
   equippableBy?: string[]
+  /** 呼ぶ召喚獣 (#750。`召喚獣id:`)。`[召喚獣 id]` の id。表示名の `summon` とは別。解決は `game/summons.ts` */
+  summonId?: string
+  /** 解決済みの召喚獣の演出 (#750)。**parser は出さない**。`resolveSummonRefs` が `summonId` から作る */
+  cue?: SummonCue
 }
 
 /** パーティメンバーの呪文習得スロット (#175) */
@@ -315,6 +319,50 @@ export interface SkillDef {
   message?: string
   /** 予兆の文言（使用時に表示。`{user}` は使った側の名前。敵の行動パターン P2 #836） */
   telegraph?: string
+  /** 使うと召喚獣の演出が付く (#750。`召喚獣id:`)。`[召喚獣 id]` の id。解決は `game/summons.ts` */
+  summonId?: string
+  /** 解決済みの召喚獣の演出 (#750)。**parser は出さない**。`resolveSummonRefs` が `summonId` から作る（宣言に無い id は付かない） */
+  cue?: SummonCue
+}
+
+/**
+ * 召喚獣の演出の元 (#750)。戦闘の行動の記録（`BattleActionEvent.summon`）に載り、画面が登場の演出に使う。
+ * 画像・効果音は素材の相対パス（無い／読めないときは名前の札だけで演出する）。
+ */
+export interface SummonCue {
+  /** `[召喚獣 id]` の id */
+  id: string
+  /** 召喚獣の表示名 */
+  name: string
+  /** 絵の相対パス */
+  image?: string
+  /** 絵が左向きのとき `'left'`（右向きは既定で付けない）。画面は召喚獣が相手陣営を向くよう、絵の向き（呼ぶのは味方）から左右反転の要否を決める */
+  faces?: 'left'
+  /** 登場の効果音の相対パス（再生はホストの領分） */
+  se?: string
+  /** 想像の層か。true なら登場の間だけ戦場を暗い寒色に沈める */
+  imaginary?: boolean
+}
+
+/**
+ * 召喚獣定義 (#750)。`[召喚獣 id]` ブロック。魔石・特技が `召喚獣id:` で参照する。画像・効果音・属性・想像の層を持ち、
+ * `target` / `effect` / `builtin` / `message` は参照側が自分の `効果`/`builtin` を持たないときの召喚の中身の既定（`[特技]` と同書式）
+ */
+export interface SummonDef {
+  id: string
+  name: string
+  /** 召喚獣の属性 id（parser が小文字・半角に正規化・重複排除済み。最大 2 つ）。参照する魔石に属性が無いときの既定 */
+  elements?: string[]
+  image?: string
+  /** 絵が向いている向き（`向き: 右 / 左`。parser が `right` / `left` に正規化。省略は右向き） */
+  facing?: 'right' | 'left'
+  se?: string
+  /** 想像の層か（`想像: はい`）。parser は偽のとき出さない */
+  imaginary?: boolean
+  target?: string
+  effect?: string
+  builtin?: string
+  message?: string
 }
 
 /**
@@ -609,6 +657,7 @@ export type Event =
   | { Status: StatusDef }
   | { BattleScript: BattleScriptDef }
   | { Magicite: MagiciteDef }
+  | { Summon: SummonDef }
   | { Job: JobDef }
   | { PartyMember: PartyMemberDef }
   | { RpgEvent: { name: string; commands: EventCommand[] } }

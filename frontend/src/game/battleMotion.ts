@@ -112,6 +112,17 @@ export const ATTACK_SLASH_HIT_MS = 70
 /** 呪文・アイテム: 構え（ready）の長さと、その開始から命中までの ms */
 export const CAST_MS = 560
 export const CAST_HIT_MS = 400
+/**
+ * 召喚獣の登場 (#750, `BattleActionEvent.summon` のある `skill`): 絵がフェードインする時間 / そのまま見せる時間 / フェードアウトする時間（ms）。
+ * 暫定値（目視で調整する・未決）。効果の命中（ダメージ数字・のけぞり）は `SUMMON_HIT_MS` で、絵が出そろったあと。
+ */
+export const SUMMON_APPEAR_MS = 360
+export const SUMMON_HOLD_MS = 820
+export const SUMMON_LEAVE_MS = 420
+/** 召喚獣の登場の長さ（開始から退場の終わりまで）。命中・のけぞりがこれより遅ければそちらまで待つ */
+export const SUMMON_MS = SUMMON_APPEAR_MS + SUMMON_HOLD_MS + SUMMON_LEAVE_MS
+/** 召喚の開始から、効果が命中する（数字が出る）までの ms */
+export const SUMMON_HIT_MS = 600
 /** 知らせ（行動が成立しなかった）の窓を出しておく長さ（ms）。絵は動かない */
 export const NOTICE_MS = 700
 /** 1 つの行動が終わってから次の行動を始めるまでの間（ms） */
@@ -224,18 +235,23 @@ export function buildActionTimeline(
     lastDownRound?: number
     /** 種別を問わない最大 round。この round の命中まで行動を終わらせない */
     lastRound?: number
+    /** 召喚獣の登場 (#750)。`skill` のときだけ効き、登場の長さ・命中の瞬間が召喚用になる。無ければ従来と同じ */
+    summon?: boolean
   } = {}
 ): ActionTimeline {
   if (kind === 'notice')
     return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0, hitInterval: MULTI_HIT_INTERVAL_MS }
-  const motionEnd =
-    kind === 'attack'
+  const summon = opts.summon === true && kind === 'skill'
+  const motionEnd = summon
+    ? SUMMON_MS
+    : kind === 'attack'
       ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS
       : kind === 'status'
         ? STATUS_MS
         : CAST_MS
-  const hitAt =
-    kind === 'attack'
+  const hitAt = summon
+    ? SUMMON_HIT_MS
+    : kind === 'attack'
       ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS
       : kind === 'status'
         ? STATUS_HIT_MS
@@ -287,7 +303,30 @@ export function eventTimeline(event: BattleActionEvent): ActionTimeline {
     lastDamageRound,
     lastDownRound,
     lastRound,
+    ...(event.summon ? { summon: true } : {}),
   })
+}
+
+export interface SummonCueSample {
+  /** 召喚獣の絵・名前の札の不透明度（0〜1） */
+  alpha: number
+  /** 想像の層のかぶせの強さ（0〜1）。想像でない召喚獣は画面がこれを使わない */
+  veil: number
+  /** 絵の上方向のずれ（枠の高さに対する比）。登場の間に 0 へ落ち着く */
+  rise: number
+}
+
+/** 召喚獣の登場の、開始から t ms 時点の見え方 (#750)。フェードイン → そのまま → フェードアウト。範囲外・非有限は端の値に丸める */
+export function sampleSummonCue(t: number): SummonCueSample {
+  const time = Number.isFinite(t) ? Math.min(Math.max(0, t), SUMMON_MS) : 0
+  if (time < SUMMON_APPEAR_MS) {
+    const p = easeOutQuad(time / SUMMON_APPEAR_MS)
+    return { alpha: p, veil: p, rise: 0.05 * (1 - p) }
+  }
+  const afterHold = time - SUMMON_APPEAR_MS - SUMMON_HOLD_MS
+  if (afterHold <= 0) return { alpha: 1, veil: 1, rise: 0 }
+  const p = 1 - Math.min(1, afterHold / SUMMON_LEAVE_MS)
+  return { alpha: p, veil: p, rise: 0 }
 }
 
 export interface ActorSample {

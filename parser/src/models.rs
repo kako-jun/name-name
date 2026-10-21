@@ -630,6 +630,52 @@ pub struct SkillDef {
     /// 予兆の文言（生文字列で透過。解釈は P2 #836）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegraph: Option<String>,
+    /// 使うと召喚獣の演出（登場・名前・想像の層）が付く (#750。`召喚獣id:`)。`[召喚獣 <id>]` の id。味方の「わざ」で使う（敵は召喚獣を呼ばない。敵が使うと演出は付かない）。
+    /// 特技が自分の `効果`/`builtin` を持たないときは、召喚獣の中身を使う。解決は runtime（`summons.ts`）。JSON / TS 側のキーは `summonId`。
+    #[serde(default, rename = "summonId", skip_serializing_if = "Option::is_none")]
+    pub summon_id: Option<String>,
+}
+
+/// 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。
+///
+/// 魔石（`[魔石]`）の石そのものとは独立した「召喚獣の像」の宣言で、魔石や味方の「わざ」（特技）が `召喚獣id:` で参照する。敵は召喚獣を呼ばない。
+/// 画像・効果音は素材の相対パスを透過するだけ（素材の有無・読み込みは runtime 側。素材が無いときは名前の札だけで演出する）。
+/// `想像` は「主人公の想像の層」として、登場の間だけ戦場を沈める演出を付けるか（既定 false）。
+/// `target` / `effect` / `builtin` / `message` は参照する魔石・特技が自分の `効果`/`builtin` を持たないときの既定（`[特技]` と同書式）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SummonDef {
+    pub id: String,
+    pub name: String,
+    /// 召喚獣の属性 id（`属性:`。parser が小文字・半角に正規化済み・重複排除済み）。最大 2 つ。参照する魔石に属性が無いときの既定。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<String>,
+    /// 召喚獣の絵（`画像:`。素材の相対パスを透過）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// 絵が向いている向き（`向き:` 右 / 左。parser が `right` / `left` に正規化。読めない値は警告して None）。省略は右向き（runtime の既定）。
+    /// 画面は召喚獣が相手陣営を向くよう、絵の向き（呼ぶのは味方＝サイドビューの右側）から左右反転の要否を決める。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facing: Option<String>,
+    /// 登場の効果音（`効果音:`。素材の相対パスを透過。再生はホストの領分）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub se: Option<String>,
+    /// 想像の層か（`想像:` はい/いいえ。既定 いいえ）。はいなら登場の間だけ戦場を暗い寒色に沈める。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub imaginary: bool,
+    /// 召喚の対象の既定（使う側から見た相対表現）。書かなければ None（参照側の既定 `相手単体`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// 召喚の効果 DSL の既定（`[特技]` と同書式）。`builtin` と排他。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    /// 専用関数 ID の既定（`SpellDef.builtin` と同じレジストリ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
+    /// 召喚時の演出文の既定（`{user}` は呼んだ側の名前）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。
@@ -681,6 +727,10 @@ pub struct MagiciteDef {
         skip_serializing_if = "Option::is_none"
     )]
     pub equippable_by: Option<Vec<String>>,
+    /// この魔石が呼ぶ召喚獣 (#750。`召喚獣id:`)。`[召喚獣 <id>]` の id。召喚の演出（画像・効果音・想像の層）と、
+    /// 魔石が自分の `効果`/`builtin` を持たないときの召喚の中身を引く。`召喚獣:`（表示名）とは別のキー。JSON / TS 側のキーは `summonId`。
+    #[serde(default, rename = "summonId", skip_serializing_if = "Option::is_none")]
+    pub summon_id: Option<String>,
 }
 
 /// ジョブ（職業）定義 (#740)。`[ジョブ <id>] ... [/ジョブ]` ブロックで書く。
@@ -1177,6 +1227,8 @@ pub enum Event {
     BattleScript(BattleScriptDef),
     /// 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。装備すると召喚獣を呼べ、属性・能力値のボーナスがつく。
     Magicite(MagiciteDef),
+    /// 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。魔石・特技が `召喚獣id:` で参照する。画像・効果音・属性・想像の層を持つ。
+    Summon(SummonDef),
     /// ジョブ（職業）定義 (#740)。`[ジョブ <id>] ... [/ジョブ]` ブロックで書く。就いている間だけ能力値と属性防御に効くパッシブ。
     Job(JobDef),
     /// パーティメンバー定義 (#175)。`[パーティ <id>] ... [/パーティ]` ブロックで書く。
