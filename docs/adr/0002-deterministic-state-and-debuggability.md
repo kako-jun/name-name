@@ -28,6 +28,8 @@ interface NovelGameState {
   characters: Array<{ name, expression, position }>  // 立ち絵
   currentBgmPath: string | null     // BGM
   entryFlags?: Record<string, FlagValue>  // このシーン訪問に入った瞬間の flags（#799）
+  entryResumeIndex?: number         // 旧セーブ由来の訪問の再開位置（保存時の eventIndex。#799）
+  entryRawIndex?: number            // 線形ストリームの途中開始の元列での開始位置（非0のときだけ。#799）
 }
 ```
 
