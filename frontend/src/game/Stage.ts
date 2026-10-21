@@ -179,7 +179,7 @@ export class Stage {
     this.background.cancelTimers()
   }
 
-  /** `destroy()` の部品。背景テクスチャを解放し、背景 entry（canvas 由来マスクを含む）を全て破棄する。 */
+  /** `destroy()` の部品。背景テクスチャを解放し、背景 entry（マスク Sprite を含む。共有 Texture は残す #791）を全て破棄する。 */
   release(): void {
     this.background.releaseTextures()
     this.background.clearBackgroundEntries()

@@ -3,7 +3,7 @@
  *
  * 背景の端フェードマスク値（parser / セーブデータ由来の生値）を
  * 正規化する純粋関数のみを対象とする。PixiJS の描画パスや
- * buildEdgeFadeMask 等の private メソッドは jsdom では検証できないため
+ * getSharedEdgeFadeMask 等の描画まわりは jsdom では検証できないため
  * 実機 golden path に委ねる（CLAUDE.md ルール7）。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
