@@ -5163,6 +5163,124 @@ AGI: 1
     }
 
     #[test]
+    fn summon_block_parses_and_round_trips() {
+        // [召喚獣] (#750): 名前必須、属性は正規化・重複排除・最大2つ、想像は真偽（既定 偽・読めない値は偽）、空の値は未指定。
+        // [魔石] / [特技] の 召喚獣id は参照の id（既存の 召喚獣: 表示名とは別）
+        let input = r#"---
+engine: name-name
+chapter: 1
+title: "test"
+---
+## data: マスター
+
+[召喚獣 S001]
+名前: 日本海の召喚獣
+属性: ＷＡＴＥＲ, water
+画像: summons/S001.webp
+向き: 左
+効果音: se/wave.ogg
+想像: はい
+対象: 相手全体
+効果: damage 20..30 type=water
+メッセージ: {user}は 荒波を よんだ！
+[/召喚獣]
+
+[召喚獣 plain]
+名前: ただの
+画像:
+想像: いいえ
+[/召喚獣]
+
+[召喚獣 odd]
+名前: へんな
+想像: たぶん
+向き: 斜め
+属性: fire, ice, wind
+まぎれ: 1
+[/召喚獣]
+
+[召喚獣 noname]
+画像: a.webp
+[/召喚獣]
+
+[魔石 sea]
+名前: 日本海の石
+召喚獣: 表示名のまま
+召喚獣id: S001
+[/魔石]
+
+[魔石 old]
+名前: 古い石
+召喚獣: 表示名だけ
+[/魔石]
+
+[特技 wave]
+名前: なみ
+召喚獣id: S001
+[/特技]
+
+[特技 hit]
+名前: たたく
+召喚獣id:
+[/特技]
+"#;
+        let doc = parse(input);
+        let events = &doc.chapters[0].scenes[0].events;
+        let beasts: Vec<&SummonDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Summon(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(beasts.len(), 3, "名前の無いブロックは破棄される");
+        let s1 = beasts[0];
+        assert_eq!(s1.id, "S001");
+        assert_eq!(s1.elements, vec!["water"]);
+        assert_eq!(s1.image.as_deref(), Some("summons/S001.webp"));
+        assert_eq!(s1.facing.as_deref(), Some("left"));
+        assert_eq!(s1.se.as_deref(), Some("se/wave.ogg"));
+        assert!(s1.imaginary);
+        assert_eq!(s1.target.as_deref(), Some("相手全体"));
+        assert_eq!(s1.effect.as_deref(), Some("damage 20..30 type=water"));
+        assert_eq!(s1.message.as_deref(), Some("{user}は 荒波を よんだ！"));
+        let plain = beasts[1];
+        assert_eq!(plain.image, None, "空の値は未指定");
+        assert!(!plain.imaginary);
+        assert_eq!(
+            plain.target, None,
+            "対象の既定は参照側が決める（parser は None）"
+        );
+        let odd = beasts[2];
+        assert!(!odd.imaginary, "読めない想像は偽");
+        assert_eq!(odd.facing, None, "読めない向きは未指定");
+        assert_eq!(plain.facing, None);
+        assert_eq!(odd.elements, vec!["fire", "ice"], "属性は最大2つ");
+        let stones: Vec<&MagiciteDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Magicite(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stones[0].summon.as_deref(), Some("表示名のまま"));
+        assert_eq!(stones[0].summon_id.as_deref(), Some("S001"));
+        assert_eq!(stones[1].summon_id, None);
+        let skills: Vec<&SkillDef> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Skill(k) => Some(k),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(skills[0].summon_id.as_deref(), Some("S001"));
+        assert_eq!(skills[1].summon_id, None, "空の召喚獣id は未指定");
+        // 出力して読み直しても同じ
+        let doc2 = parse(&crate::emitter::emit(&doc));
+        assert_eq!(*events, doc2.chapters[0].scenes[0].events);
+    }
+
+    #[test]
     fn parses_equipment_items_and_party_slots() {
         // 装備品 (#207): `[アイテム]` の 装備時 / 装備可 / 属性 / わざ、`[パーティ]` の 装備: / 装備枠:
         let input = r#"---

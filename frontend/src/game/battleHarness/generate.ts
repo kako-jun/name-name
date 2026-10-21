@@ -7,7 +7,7 @@
  */
 import type { SkillExecution, SummonExecution } from '../battleEngine'
 import type { BattleEntity } from '../spellDsl'
-import type { ItemDef, MagiciteDef, MonsterLoot, StatusDef } from '../../types'
+import type { ItemDef, MagiciteDef, MonsterLoot, StatusDef, SummonCue } from '../../types'
 import { applyMemberMagicite, resolveMemberMagicite } from '../magicite'
 import { resolveMemberEquipment } from '../equipment'
 import { lcg } from './rng'
@@ -25,6 +25,7 @@ export type Family =
   | 'magicite'
   | 'loot'
   | 'equipment'
+  | 'summon'
 
 /** 効果 DSL の文字列。動詞ごとに通常値と境界値（0・負・min>max・極大・不正値）を並べる */
 export const EFFECTS: readonly string[] = [
@@ -1066,6 +1067,85 @@ export function equipmentScenarios(): Scenario[] {
               items: [],
               abilities: abilities.map((a) => ({ ...a })),
               ops: [...ops],
+            })
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** 召喚獣の演出 (#750) の変種。演出なし（対照）・名前だけ・絵と効果音と想像の層・左向きの絵 */
+const SUMMON_CUES: ReadonlyArray<{ name: string; cue?: SummonCue }> = [
+  { name: 'no-cue' },
+  { name: 'name-only', cue: { id: 'b1', name: '名札だけ' } },
+  {
+    name: 'full',
+    cue: { id: 'b2', name: 'みなも', image: 'summons/b2.webp', se: 'se/b2.ogg', imaginary: true },
+  },
+  {
+    name: 'faces-left',
+    cue: { id: 'b3', name: 'ひだり', image: 'summons/b3.webp', faces: 'left' },
+  },
+]
+
+/** 召喚獣を呼んだときの効果。ダメージ・回復・演出だけ（効果なし）・不正な書式 */
+const SUMMON_BODIES: ReadonlyArray<{ name: string; target: string; effect?: string }> = [
+  { name: 'damage', target: '相手全体', effect: 'damage 60..60 type=water' },
+  { name: 'heal', target: '仲間全体', effect: 'heal 80..80' },
+  { name: 'cue-only', target: '自分' },
+  { name: 'broken', target: '相手単体', effect: 'foo bar' },
+]
+
+/**
+ * 召喚獣の演出 (#750): 演出（なし・名前だけ・絵つき・左向き）× 呼び方（味方の召喚 / 味方のわざ / 敵の特技）× 効果 × 敵の HP × ターン制/ATB。
+ * 演出つきの行動の記録に `summon` が付くこと（宣言した id だけ・`skill` のイベントだけ）、演出を宣言しないシナリオ（対照）と、
+ * 他の全ての族のイベントに `summon` が付かないこと（旧挙動不変）を `summon-invariant` で見る。召喚は 1 バトル 1 回の制限も従来どおり（`magicite-invariant`）
+ */
+export function summonScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  for (const atb of [false, true]) {
+    for (const cv of SUMMON_CUES) {
+      for (const how of ['summon', 'ability', 'enemy-skill'] as const) {
+        for (const body of SUMMON_BODIES) {
+          for (const hv of [30, 900]) {
+            const exec = {
+              name: cv.cue?.name ?? 'こうか',
+              target: body.target,
+              ...(body.effect !== undefined ? { effect: body.effect } : {}),
+              ...(cv.cue ? { cue: cv.cue } : {}),
+            }
+            const ops: Op[] =
+              how === 'summon'
+                ? [{ t: 'summon', m: 0 }, tick, { t: 'summon', m: 0 }, tick, ATK]
+                : how === 'ability'
+                  ? [{ t: 'ability', k: 0 }, tick, { t: 'ability', k: 0 }, tick, ATK]
+                  : [ATK, tick, ATK, tick, ATK]
+            out.push({
+              id: `summon/${atb ? 'atb' : 'turn'}/${cv.name}/${how}/${body.name}/hp${hv}`,
+              seed: 110_000 + out.length,
+              party: [
+                entity('a', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 }),
+                entity('b', { hp: 300, maxHp: 300, mp: 50, maxMp: 50 }),
+              ],
+              enemies: [
+                foe('s', {
+                  hp: hv,
+                  maxHp: hv,
+                  agi: 9,
+                  ...(how === 'enemy-skill' ? { actions: ['候補=call'] } : {}),
+                }),
+                foe('t', { hp: 500, maxHp: 500 }),
+              ],
+              atb: atb ? { mode: 'active' } : undefined,
+              skills: how === 'enemy-skill' ? { call: { ...exec } } : undefined,
+              spells: [],
+              items: [],
+              ...(how === 'summon' ? { summons: [{ ...exec, mp: 0 }] } : {}),
+              ...(how === 'ability' ? { abilities: [{ ...exec }] } : {}),
+              ops,
             })
           }
         }

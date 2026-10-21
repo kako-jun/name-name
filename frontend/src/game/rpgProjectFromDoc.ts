@@ -9,6 +9,7 @@ import type {
   StatusDef,
   BattleScriptDef,
   MagiciteDef,
+  SummonDef,
   PartyMemberDef,
   EventCommand,
 } from '../types'
@@ -38,6 +39,7 @@ import {
   type EncounterGroupInput,
 } from './encounterGroupValidation'
 import { normalizeCommandLayout, parseCommandIds, parseCommandLabels } from './battleCommands'
+import { resolveSummonRefs, warnSummonOnce } from './summons'
 
 /**
  * Document 全体（全章 / 全シーン）を走査して `[イベント]` ブロックを収集する (#197)。
@@ -102,6 +104,8 @@ export function collectMasterData(doc: EventDocument): {
   statuses: Record<string, StatusDef>
   battleScripts: Record<string, BattleScriptDef>
   magicites: Record<string, MagiciteDef>
+  /** 召喚獣 (#750)。`[召喚獣 id]` の宣言（魔石・特技が `召喚獣id` で参照する） */
+  summons: Record<string, SummonDef>
   party: Record<string, PartyMemberDef>
   /** party の ID を定義順（初出順・重複なし）で並べたもの (#736) */
   partyOrder: string[]
@@ -113,6 +117,7 @@ export function collectMasterData(doc: EventDocument): {
   const statuses: Record<string, StatusDef> = {}
   const battleScripts: Record<string, BattleScriptDef> = {}
   const magicites: Record<string, MagiciteDef> = {}
+  const summons: Record<string, SummonDef> = {}
   const party: Record<string, PartyMemberDef> = {}
   const partyOrder: string[] = []
   for (const chapter of doc.chapters) {
@@ -142,6 +147,12 @@ export function collectMasterData(doc: EventDocument): {
             console.warn(`[魔石 ${ev.Magicite.id}] が重複している。後ろの宣言で上書きした`)
           }
           safeAssign(magicites, ev.Magicite.id, ev.Magicite)
+        } else if ('Summon' in ev) {
+          // 同じ id の [召喚獣] は後勝ち。誤記に気づけるよう知らせる (#750)
+          if (Object.prototype.hasOwnProperty.call(summons, ev.Summon.id)) {
+            console.warn(`[召喚獣 ${ev.Summon.id}] が重複している。後ろの宣言で上書きした`)
+          }
+          safeAssign(summons, ev.Summon.id, ev.Summon)
         } else if ('PartyMember' in ev) {
           safeAssign(party, ev.PartyMember.id, ev.PartyMember)
           if (!partyOrder.includes(ev.PartyMember.id)) partyOrder.push(ev.PartyMember.id)
@@ -149,7 +160,18 @@ export function collectMasterData(doc: EventDocument): {
       }
     }
   }
-  return { monsters, items, spells, skills, statuses, battleScripts, magicites, party, partyOrder }
+  return {
+    monsters,
+    items,
+    spells,
+    skills,
+    statuses,
+    battleScripts,
+    magicites,
+    summons,
+    party,
+    partyOrder,
+  }
 }
 
 /**
@@ -170,6 +192,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
   statuses: Record<string, StatusDef>
   battleScripts: Record<string, BattleScriptDef>
   magicites: Record<string, MagiciteDef>
+  summons: Record<string, SummonDef>
   party: Record<string, PartyMemberDef>
   partyOrder: string[]
 } {
@@ -181,6 +204,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     statuses: {} as Record<string, StatusDef>,
     battleScripts: {} as Record<string, BattleScriptDef>,
     magicites: {} as Record<string, MagiciteDef>,
+    summons: {} as Record<string, SummonDef>,
     party: {} as Record<string, PartyMemberDef>,
     partyOrder: [] as string[],
   }
@@ -195,6 +219,7 @@ export function mergeMasterDataFromDocs(docs: EventDocument[]): {
     safeAssignAll(merged.statuses, m.statuses)
     safeAssignAll(merged.battleScripts, m.battleScripts)
     safeAssignAll(merged.magicites, m.magicites)
+    safeAssignAll(merged.summons, m.summons)
     safeAssignAll(merged.party, m.party)
     for (const id of m.partyOrder) if (!merged.partyOrder.includes(id)) merged.partyOrder.push(id)
   }
@@ -302,6 +327,11 @@ export function rpgProjectFromDoc(
   // #238: extraDocs (例: data.md) が渡されていれば統合する。重複 ID は active doc 優先のため
   //   active doc を配列末尾に置く（後勝ちルール）。
   const master = mergeMasterDataFromDocs([...extraDocs, doc])
+  // 召喚獣 (#750): 魔石・特技の `召喚獣id` を宣言へ引き当てる（複数 doc を束ねたあとで行う）。参照の無いゲームは入力と同じオブジェクトのまま
+  const summonRefs = resolveSummonRefs(master)
+  warnSummonOnce(summonRefs.warnings)
+  master.skills = summonRefs.skills ?? master.skills
+  master.magicites = summonRefs.magicites ?? master.magicites
   // Document 全体から RPG イベントを収集する (#197)
   const rpgEvents = collectRpgEvents(doc)
   // Document 全体から RPG トリガーを収集する (#187)

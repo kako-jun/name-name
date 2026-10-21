@@ -39,7 +39,7 @@
 
 import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
 import { applyEffect, parseEffect, rollRange } from './spellDsl'
-import type { StatusDef } from '../types'
+import type { StatusDef, SummonCue } from '../types'
 import {
   activeStatusRules,
   blockingAction,
@@ -176,6 +176,11 @@ export interface BattleActionEvent {
    * 予兆の無い特技・他の kind は undefined
    */
   omen?: string
+  /**
+   * 召喚獣の演出 (#750)。召喚 (#889) と、`召喚獣id` を持つ特技（敵が呼ぶ場合を含む）の行動に付く。画面が登場の演出（絵・名前の札・想像の層・効果音）に使う
+   * 事実で、エンジンの状態・乱数には効かない。`召喚獣id` を使わない戦闘・他の行動のイベントには付かない（従来と同じ形）
+   */
+  summon?: SummonCue
   hits: BattleHit[]
   /**
    * この行動を記録した時点の、全員の状態名（付いた順。宣言した状態だけ。`party[i]` / `enemies[i]` の順）(#870)。
@@ -515,7 +520,7 @@ export class BattleEngine {
    * 「しょうかん」(#889): 味方が装備中の魔石の召喚獣を呼ぶ。1 人が 1 バトルで 1 回だけ（`BattleEntity.summoned`）。
    * 消費 MP（既定 0）が足りないときは何も起きず false（呪文と同じ「MPが たりない！」）、呼び済みなら false（ログと吹き出しで知らせる）。
    * 効果・対象の解決は `performSkill`（「わざ」と同じ。対象は使う側から見た相対表現）。召喚は魔法扱いで、敵の `受けた=魔法` に成立する。
-   * 召喚の演出そのもの（登場・退場、#750）は無く、ログと演出イベント（`kind: 'skill'`、ラベルは召喚獣の名前）だけを残す。
+   * 演出イベントは `kind: 'skill'`（ラベルは召喚獣の名前）。魔石が `召喚獣id` で召喚獣を参照していれば、イベントに `summon`（登場の演出の元、#750）が付く。
    * 呼べたら true。入力待ちでない・使い手がいないときも false
    */
   selectSummon(summon: SummonExecution, targetId?: string): boolean {
@@ -900,7 +905,8 @@ export class BattleEngine {
       amounts,
       message,
       omen,
-      multi
+      multi,
+      skill.cue
     )
     return true
   }
@@ -1704,7 +1710,8 @@ export class BattleEngine {
     amounts: Map<BattleEntity, ComputedAmount>,
     message?: string,
     omen?: string,
-    multi: MultiHit[] = []
+    multi: MultiHit[] = [],
+    cue?: SummonCue
   ): void {
     const actorRef = this.refOf(actor)
     if (!actorRef) return
@@ -1742,6 +1749,7 @@ export class BattleEngine {
         label,
         ...(message !== undefined ? { message } : {}),
         ...(omen !== undefined ? { omen } : {}),
+        ...(cue ? { summon: cue } : {}),
         hits,
       })
       return
@@ -1814,6 +1822,7 @@ export class BattleEngine {
       label,
       ...(message !== undefined ? { message } : {}),
       ...(omen !== undefined ? { omen } : {}),
+      ...(cue ? { summon: cue } : {}),
       hits,
     })
   }
@@ -2406,6 +2415,8 @@ export interface SkillExecution {
   message?: string
   /** 予兆の文言（P2 #836）。使用時に `message` のあとへ出す。`{user}` は使った側の名前に置き換わる */
   telegraph?: string
+  /** 召喚獣の演出 (#750)。あれば行動の記録（`BattleActionEvent.summon`）に載る。魔石 (#889) の召喚と、`召喚獣id` を持つ特技が付ける */
+  cue?: SummonCue
 }
 
 /**

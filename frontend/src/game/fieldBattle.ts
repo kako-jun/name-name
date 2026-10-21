@@ -198,6 +198,7 @@ export function buildBattleMenuData(
           ...(sk.builtin !== undefined ? { builtin: sk.builtin } : {}),
           ...(sk.message !== undefined ? { message: sk.message } : {}),
           ...(sk.telegraph !== undefined ? { telegraph: sk.telegraph } : {}),
+          ...(sk.cue !== undefined ? { cue: sk.cue } : {}),
         })
       }
       if (sl.length > 0) skills[member.id] = sl

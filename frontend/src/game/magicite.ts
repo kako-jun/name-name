@@ -314,6 +314,7 @@ export function toSummonExecution(stone: MagiciteDef): SummonExecution {
       stone.message !== undefined && stone.message !== ''
         ? stone.message
         : defaultSummonMessage(summonName),
+    ...(stone.cue !== undefined ? { cue: stone.cue } : {}),
   }
 }
 

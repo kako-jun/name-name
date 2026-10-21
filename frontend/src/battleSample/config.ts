@@ -3,11 +3,13 @@
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import type { BattleEntity } from '../game/spellDsl'
-import type { ItemDef, MagiciteDef, MonsterLoot, StatusDef } from '../types'
+import type { ItemDef, MagiciteDef, MonsterLoot, SkillDef, StatusDef, SummonDef } from '../types'
 import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import { applyPartyEquipment, parseGear } from './configEquipment'
-import { parseMagicites } from './configMagicite'
+import { parseBeasts, parseMagicites } from './configMagicite'
+import { resolveSummonRefs, warnSummonOnce } from '../game/summons'
+import { toSkillExecutions } from '../game/enemyAi'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -488,10 +490,12 @@ function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
 }
 
 /** 設定 JSON の skills (#835) を検証する。`[{ id, name?, target?, effect?, builtin?, message?, telegraph? }]`。`id` は必須（`actions` の候補から引く） */
-function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> {
+function parseSkills(
+  raw: unknown
+): ParseResult<Record<string, SkillExecution & { summonId?: string }>> {
   if (raw === undefined) return { ok: true, value: {} }
   if (!Array.isArray(raw)) return { ok: false, error: 'skills は配列である必要があります' }
-  const entries: [string, SkillExecution][] = []
+  const entries: [string, SkillExecution & { summonId?: string }][] = []
   for (let i = 0; i < raw.length; i++) {
     const r: unknown = raw[i]
     const path = `skills[${i}]`
@@ -499,7 +503,15 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
     if (typeof r.id !== 'string' || r.id.trim() === '') {
       return { ok: false, error: `${path}.id は空でない文字列である必要があります` }
     }
-    for (const f of ['name', 'target', 'effect', 'builtin', 'message', 'telegraph'] as const) {
+    for (const f of [
+      'name',
+      'target',
+      'effect',
+      'builtin',
+      'message',
+      'telegraph',
+      'summonId',
+    ] as const) {
       if (r[f] !== undefined && typeof r[f] !== 'string') {
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }
       }
@@ -514,10 +526,37 @@ function parseSkills(raw: unknown): ParseResult<Record<string, SkillExecution>> 
         ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
         ...(typeof r.message === 'string' ? { message: r.message } : {}),
         ...(typeof r.telegraph === 'string' ? { telegraph: r.telegraph } : {}),
+        // 召喚獣の参照 (#750)。`beasts` を引き当てる前の印で、解決後の特技には演出の元（cue）が付く
+        ...(typeof r.summonId === 'string' && r.summonId.trim() !== ''
+          ? { summonId: r.summonId.trim() }
+          : {}),
       },
     ])
   }
   return { ok: true, value: Object.fromEntries(entries) }
+}
+
+/**
+ * 設定 JSON の特技・魔石の `summonId` (#750) を `beasts` へ引き当てる。どちらも参照しなければ入力と同じオブジェクトを返す（従来と同一）。
+ * 特技は `SkillExecution`（id を持たない）なので、引き当てるときだけ `SkillDef` へ写して解決し、演出の元（cue）つきの `SkillExecution` へ戻す
+ */
+function resolveSampleSummons(
+  skills: Record<string, SkillExecution & { summonId?: string }>,
+  magicites: Record<string, MagiciteDef>,
+  beasts: Record<string, SummonDef>
+): { skills: Record<string, SkillExecution>; magicites: Record<string, MagiciteDef> } {
+  const hasRef =
+    Object.values(skills).some((s) => s.summonId !== undefined) ||
+    Object.values(magicites).some((m) => m.summonId !== undefined)
+  if (!hasRef) return { skills, magicites }
+  const defs: Record<string, SkillDef> = {}
+  for (const [id, s] of Object.entries(skills)) defs[id] = { id, ...s }
+  const r = resolveSummonRefs({ skills: defs, magicites, summons: beasts })
+  warnSummonOnce(r.warnings)
+  return {
+    skills: r.skills ? toSkillExecutions(r.skills) : skills,
+    magicites: r.magicites ?? magicites,
+  }
 }
 
 /**
@@ -763,6 +802,10 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!statuses.ok) return statuses
   const magicites = parseMagicites(raw.magicites)
   if (!magicites.ok) return magicites
+  const beasts = parseBeasts(raw.beasts, (u) => resolveUrl(u, baseUrl))
+  if (!beasts.ok) return beasts
+  // 召喚獣 (#750): 魔石・特技の `summonId` を `beasts` へ引き当てる。参照が無ければ入力のまま（従来と同一）
+  const refs = resolveSampleSummons(skills.value, magicites.value, beasts.value)
   const gear = parseGear(raw.gear)
   if (!gear.ok) return gear
   let commands: CommandId[] | undefined
@@ -837,9 +880,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!enemies.ok) return enemies
   // 魔石 (#889)・装備 (#207): 装備する味方の能力値・耐性・通常攻撃の属性を反映し、「しょうかん」「わざ」の行を作る
   const equipped = applyPartyEquipment(raw.party, party.value, {
-    magicites: magicites.value,
+    magicites: refs.magicites,
     gear: gear.value,
-    skills: skills.value,
+    skills: refs.skills,
   })
   if (!equipped.ok) return equipped
   return {
@@ -863,10 +906,10 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       horizon: horizon.value,
       perspective: perspective.value,
       foreground,
-      skills: skills.value,
+      skills: refs.skills,
       statuses: statuses.value,
       commands,
-      magicites: magicites.value,
+      magicites: refs.magicites,
       summons: equipped.value.summons,
       gear: gear.value,
       abilities: equipped.value.skills,

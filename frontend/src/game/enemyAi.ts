@@ -645,6 +645,7 @@ export function toSkillExecutions(
       ...(s.builtin !== undefined ? { builtin: s.builtin } : {}),
       ...(s.message !== undefined ? { message: s.message } : {}),
       ...(s.telegraph !== undefined ? { telegraph: s.telegraph } : {}),
+      ...(s.cue !== undefined ? { cue: s.cue } : {}),
     }
   }
   return out

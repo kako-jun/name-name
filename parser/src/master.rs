@@ -1,11 +1,11 @@
 //! マスターデータブロック (#174 / #175) のパース。
 //!
-//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[魔石 <id>]` / `[パーティ <id>]` の
-//! 8 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
+//! `[モンスター <id>]` / `[アイテム <id>]` / `[呪文 <id>]` / `[特技 <id>]` / `[状態 <id>]` / `[戦闘 <id>]` / `[魔石 <id>]` / `[召喚獣 <id>]` / `[パーティ <id>]` の
+//! 9 種類のブロックを統一的に処理する。すべてヘッダ + key:value ボディ + 終端タグの
 //! 構造を持ち、ボディ部の解釈だけが kind ごとに違う。
 //!
 //! parser.rs の本体ループから 1 関数 `try_parse_master_data_block` を呼び出すことで
-//! 8 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
+//! 9 種すべてを判定する。各 kind の組み立ては `build_*_def` に委譲する。
 
 use crate::models::*;
 use crate::parser::emit_warning;
@@ -37,6 +37,7 @@ pub(crate) fn try_parse_master_data_block(
         MasterKind::Status => Event::Status(build_status_def(id, &body.entries)?),
         MasterKind::BattleScript => Event::BattleScript(build_battle_script_def(id, &body.entries)),
         MasterKind::Magicite => Event::Magicite(build_magicite_def(id, &body.entries)?),
+        MasterKind::Summon => Event::Summon(build_summon_def(id, &body.entries)?),
         MasterKind::PartyMember => Event::PartyMember(build_party_member_def(id, &body.entries)?),
     };
 
@@ -52,6 +53,7 @@ enum MasterKind {
     Status,
     BattleScript,
     Magicite,
+    Summon,
     PartyMember,
 }
 
@@ -107,6 +109,14 @@ fn parse_master_block_header(header: &str) -> Option<(MasterKind, String, &'stat
             return None;
         }
         return Some((MasterKind::Magicite, id, "[/魔石]"));
+    }
+    if let Some(rest) = header.strip_prefix("[召喚獣 ") {
+        let id = rest.strip_suffix(']')?.trim().to_string();
+        if id.is_empty() {
+            emit_warning("[name-name-parser] warning: [召喚獣 ] は id が空のため捨てた");
+            return None;
+        }
+        return Some((MasterKind::Summon, id, "[/召喚獣]"));
     }
     if let Some(rest) = header.strip_prefix("[パーティ ") {
         let id = rest.strip_suffix(']')?.trim().to_string();
@@ -574,6 +584,9 @@ fn build_magicite_def(id: String, entries: &[(String, String)]) -> Option<Magici
         "装備可",
         "equippable_by",
         "equippableBy",
+        "召喚獣id",
+        "summon_id",
+        "summonId",
     ];
     for (k, _) in entries {
         if !KNOWN.contains(&k.as_str()) {
@@ -597,6 +610,7 @@ fn build_magicite_def(id: String, entries: &[(String, String)]) -> Option<Magici
         equip_bonus: value(&["装備時", "equip"]),
         growth: value(&["成長", "growth"]),
         equippable_by: collect_id_list(entries, &["装備可", "equippable_by", "equippableBy"]),
+        summon_id: value(&["召喚獣id", "summon_id", "summonId"]),
     })
 }
 
@@ -706,6 +720,96 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
     })
 }
 
+/// `想像:` の真偽（はい / true / on / 1 / 有効 = 真、いいえ / false / off / 0 / 無効 = 偽）。読めない値は警告して偽。
+fn parse_summon_bool(id: &str, raw: &str) -> bool {
+    match raw.trim().to_lowercase().as_str() {
+        "はい" | "true" | "yes" | "on" | "1" | "有効" => true,
+        "いいえ" | "false" | "no" | "off" | "0" | "無効" | "" => false,
+        other => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [召喚獣 {id}] の 想像 `{other}` は読めないため いいえ にした"
+            ));
+            false
+        }
+    }
+}
+
+/// `向き:`（絵が向いている向き）。右 / right → `right`、左 / left → `left`。空は未指定、読めない値は警告して未指定。
+fn collect_summon_facing(id: &str, entries: &[(String, String)]) -> Option<String> {
+    let raw = lookup_master_value(entries, &["向き", "facing"])?.trim();
+    match raw.to_lowercase().as_str() {
+        "" => None,
+        "右" | "right" => Some("right".to_string()),
+        "左" | "left" => Some("left".to_string()),
+        other => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [召喚獣 {id}] の 向き `{other}` は読めないため無視した（右 / 左）"
+            ));
+            None
+        }
+    }
+}
+
+/// `[召喚獣 <id>]` (#750)。`名前` 必須。属性は小文字・半角に正規化し、重複と `無属性` を除いて最大 2 つ。
+/// 画像・効果音・対象・効果などは生文字列で透過する（値が空のキーは未指定扱い）。`想像` は真偽（既定 いいえ）。
+fn build_summon_def(id: String, entries: &[(String, String)]) -> Option<SummonDef> {
+    let name = lookup_master_string(entries, &["名前", "name"]).filter(|n| !n.is_empty());
+    let Some(name) = name else {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [召喚獣 {id}] は 名前 が無いため捨てた"
+        ));
+        return None;
+    };
+    const KNOWN: &[&str] = &[
+        "名前",
+        "name",
+        "属性",
+        "element",
+        "elements",
+        "画像",
+        "image",
+        "向き",
+        "facing",
+        "効果音",
+        "se",
+        "想像",
+        "imaginary",
+        "対象",
+        "target",
+        "効果",
+        "effect",
+        "builtin",
+        "メッセージ",
+        "message",
+    ];
+    for (k, _) in entries {
+        if !KNOWN.contains(&k.as_str()) {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [召喚獣 {id}] の未知のキー `{k}` は無視した"
+            ));
+        }
+    }
+    let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
+    let elements = collect_elements(&format!("召喚獣 {id}"), entries);
+    let imaginary = lookup_master_value(entries, &["想像", "imaginary"])
+        .map(|v| parse_summon_bool(&id, v))
+        .unwrap_or(false);
+    let facing = collect_summon_facing(&id, entries);
+    Some(SummonDef {
+        id,
+        name,
+        elements,
+        image: value(&["画像", "image"]),
+        facing,
+        se: value(&["効果音", "se"]),
+        imaginary,
+        target: value(&["対象", "target"]),
+        effect: value(&["効果", "effect"]),
+        builtin: value(&["builtin"]),
+        message: value(&["メッセージ", "message"]),
+    })
+}
+
 /// `[特技 <id>]` (#834)。`名前` 必須。`対象` の既定は `相手単体`（使う側から見た相対表現）。
 /// MP は持たない。`効果` / `builtin` / `メッセージ` / `予兆` は生文字列で透過し、runtime が解釈する。
 fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef> {
@@ -723,6 +827,8 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
         builtin: lookup_master_string(entries, &["builtin"]),
         message: lookup_master_string(entries, &["メッセージ", "message"]),
         telegraph: lookup_master_string(entries, &["予兆", "telegraph"]),
+        summon_id: lookup_master_string(entries, &["召喚獣id", "summon_id", "summonId"])
+            .filter(|v| !v.is_empty()),
     })
 }
 

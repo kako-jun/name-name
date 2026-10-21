@@ -1,0 +1,80 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "commands": ["attack", "summon", "spell", "escape"],
+  "beasts": [
+    {
+      "id": "sea",
+      "name": "うみの主",
+      "elements": ["water"],
+      "image": "summon-wave.svg",
+      "imaginary": true,
+      "target": "相手全体",
+      "effect": "damage 60..60 type=water",
+      "message": "{user}が 石をにぎると 波が あふれだす！"
+    },
+    {
+      "id": "gate",
+      "name": "もんのぬし",
+      "elements": ["fire"],
+      "image": "summon-torii.svg",
+      "facing": "right",
+      "target": "相手単体",
+      "effect": "damage 90..90 type=fire"
+    },
+    {
+      "id": "flood",
+      "name": "おおみずの主",
+      "elements": ["water"],
+      "image": "summon-wave.svg",
+      "imaginary": true,
+      "target": "相手全体",
+      "effect": "damage 25..25 type=water",
+      "message": "{user}の 足もとから 水が せりあがる！"
+    }
+  ],
+  "magicites": [
+    { "id": "sea-stone", "name": "うみの石", "summonId": "sea", "equipBonus": "hp+30", "growth": "hp+3" },
+    { "id": "gate-stone", "name": "もんの石", "summonId": "gate", "mp": 5, "equipBonus": "atk+6" },
+    { "id": "plain-stone", "name": "ただの石", "summon": "ふつうの召喚獣", "elements": ["ice"], "effect": "damage 40..40 type=ice" }
+  ],
+  "skills": [
+    { "id": "call-flood", "name": "おおみずをよぶ", "summonId": "flood" },
+    { "id": "swing", "name": "なぎはらい", "target": "相手全体", "effect": "damage 12..12" }
+  ],
+  "party": [
+    {
+      "id": "hero",
+      "name": "ゆうしゃ",
+      "hp": 220,
+      "mp": 20,
+      "atk": 22,
+      "def": 4,
+      "agi": 6,
+      "magicites": ["sea-stone"]
+    },
+    {
+      "id": "ally",
+      "name": "なかま",
+      "hp": 160,
+      "mp": 20,
+      "atk": 18,
+      "def": 3,
+      "agi": 5,
+      "magicites": ["gate-stone", "plain-stone"],
+      "magiciteSlots": 2
+    }
+  ],
+  "enemies": [
+    {
+      "id": "boss",
+      "name": "かわのぬし",
+      "hp": 900,
+      "atk": 14,
+      "def": 2,
+      "agi": 9,
+      "actions": ["条件=初手 候補=call-flood", "順番=swing > こうげき"]
+    }
+  ]
+}
