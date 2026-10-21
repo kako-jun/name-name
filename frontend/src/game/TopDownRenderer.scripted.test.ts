@@ -255,6 +255,70 @@ describe('魔石 (#889) は脚本の戦闘でも効く', () => {
     expect(menuSummons(i).ally).toHaveLength(1)
   })
 
+  describe('装備品 (#207) と魔石の両方', () => {
+    const GEAR = {
+      items: {
+        sword: {
+          id: 'sword',
+          name: 'つるぎ',
+          kind: '武器',
+          equipBonus: 'atk+8',
+          abilities: ['slash'],
+        },
+        plate: {
+          id: 'plate',
+          name: 'よろい',
+          kind: '鎧',
+          equipBonus: 'def+5, hp+20',
+          elements: ['fire'],
+        },
+      },
+      skills: {
+        slash: { id: 'slash', name: 'きりさく', target: '相手単体', effect: 'damage 5..5' },
+      },
+    } as unknown as Partial<RPGProject>
+    const geared = (rules: string[]): Partial<RPGProject> => {
+      const base = withSea(rules)
+      const party = base.party as unknown as Record<string, Record<string, unknown>>
+      return {
+        ...base,
+        ...GEAR,
+        party: {
+          hero: { ...party.hero, equipment: ['sword', 'plate'] },
+          ally: { ...party.ally, equipment: ['sword', 'plate'] },
+        },
+      } as unknown as Partial<RPGProject>
+    }
+    type Gear = Member & { def: number; affinity?: { halve?: string[] } }
+    const check = (m: Gear | undefined, base: { atk: number; hp: number }): void => {
+      expect(m).toBeDefined()
+      expect(m!.atk).toBe(base.atk + 50 + 8) // 魔石 + 武器
+      expect(m!.maxHp).toBe(base.hp + 30 + 20) // 魔石 + 鎧
+      expect(m!.def).toBe(5)
+      expect(m!.attackElements).toEqual(['water']) // 鎧の属性は攻撃に乗らない
+      expect(m!.affinity?.halve).toContain('fire') // 鎧の属性で火に強い（半減）
+    }
+    const skillsOf = (i: Internals): Record<string, { id: string }[]> =>
+      (i.battleScreen!.opts as unknown as { menu?: { skills?: Record<string, { id: string }[]> } })
+        .menu?.skills ?? {}
+
+    it('味方: で選んだ初期編成: 武器・鎧の能力値と耐性・わざ、魔石が全部効く', () => {
+      const i = field(geared(['台詞: 条件=開始 文=はじまり']))
+      void i.startScriptedBattle('duel')
+      check(members(i)[0] as Gear, PARTY.hero)
+      expect(skillsOf(i).hero?.map((e) => e.id)).toEqual(['slash'])
+      expect(menuSummons(i).hero).toHaveLength(1)
+    })
+
+    it('途中参戦する味方にも、全部効く', () => {
+      const i = field(geared(['参戦: 条件=開始 対象=ally']))
+      void i.startScriptedBattle('duel')
+      check(members(i).find((m) => m.id === 'ally') as Gear, PARTY.ally)
+      expect(skillsOf(i).ally?.map((e) => e.id)).toEqual(['slash'])
+      expect(menuSummons(i).ally).toHaveLength(1)
+    })
+  })
+
   it('魔石を宣言しないゲームは従来どおり（ボーナス・属性なし）', () => {
     const i = field({
       battleScripts: { duel: { id: 'duel', enemies: 'boss', party: ['hero'], rules: [] } },

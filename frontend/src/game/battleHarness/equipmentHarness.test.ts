@@ -87,6 +87,8 @@ describe('equipmentScenarios: 生成', () => {
       'random-status',
       'damage-condition',
       'magicite',
+      'script',
+      'random-script',
     ] as const
     const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0 }
     const withIt = buildSweep({ ...cfg, skip: [...heavy] })
