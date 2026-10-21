@@ -125,14 +125,11 @@ describe('NovelRenderer.getExportProgress (#780)', () => {
     r.setEvents(wait.events)
     expect(r.getExportProgress().waitMs).toBe(80000)
   })
-  it('選択肢のキーは、[条件:] の再展開（flags 変化）や入場経路が変わっても同じ選択肢なら同じ', async () => {
+  it('選択肢のキーは、入場経路が変わっても同じ選択肢なら同じ', async () => {
     const r = makeAtChoice()
     r.advance()
     const k1 = r.getPendingChoice()?.key
     expect(k1).toBeDefined()
-    // flags 変化による再展開
-    ;(r as unknown as { reResolveEvents(): void }).reResolveEvents()
-    expect(r.getPendingChoice()?.key).toBe(k1)
     // 別のシーンへ進んでからジャンプで戻り、同じ選択肢に再到達する
     expect(r.selectPendingChoice('far')).toBe(true)
     await new Promise((res) => setTimeout(res, 0))

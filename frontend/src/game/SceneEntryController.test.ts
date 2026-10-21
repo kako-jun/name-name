@@ -124,12 +124,7 @@ function setup(): Setup {
     ],
     order
   )
-  trace(
-    sceneIndex,
-    'sceneIndex',
-    ['resolve', 'indexLoaded', 'findScene', 'linearStartIndex'],
-    order
-  )
+  trace(sceneIndex, 'sceneIndex', ['resolve', 'indexLoaded', 'findScene', 'linearStart'], order)
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {
     order.push('console.warn')
   })

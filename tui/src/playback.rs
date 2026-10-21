@@ -156,7 +156,7 @@
 //! のではなく、逐次 walk のループに直接組み込む設計）。`Event::Flag` に遭遇したら即座に
 //! `flags.set()` で副作用を適用し、`Event::Condition` に遭遇したら `flags.check()` で判定して
 //! 真なら内部 events を同じ関数に再帰的に渡す。これにより、同一シーン内で「Flag のすぐ後の
-//! Condition」が正しく反応する（GUI版 `reResolveEvents` と同じ効果を1本のループで実現する）。
+//! Condition」が正しく反応する（GUI版 `expandEvents` の入場時の逐次評価と同じ手順を1本のループで実現する）。
 
 use std::collections::HashMap;
 

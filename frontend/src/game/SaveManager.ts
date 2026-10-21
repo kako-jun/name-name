@@ -113,6 +113,17 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined/null は通常表示（既定）扱い。
    */
   paperDollOutline?: PaperDollOutlineConfig | null
+  /**
+   * このシーン訪問に入った瞬間の flags（入場時 flags, #799）。`[条件:]` は入場時に1回だけ展開して訪問中は
+   * 固定するので、`eventIndex`（展開後の列の添字）はこの値から列を再現して初めて意味を持つ。
+   * 元列に `[条件:]` を含まない脚本では出力しない。
+   * 後方互換: 古いセーブデータには無い → 復元時は保存位置までを `flags` で静的に展開し、後ろは逐次評価する。
+   */
+  entryFlags?: Record<string, FlagValue>
+  /** 古いセーブから復元した訪問だけが持つ、再開位置 (#799)。この長さに達するまでは静的、達した後は逐次に評価する。 */
+  entryResumeIndex?: number
+  /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。無い・0 は先頭から。 */
+  entryRawIndex?: number
   savedAt: string // ISO 8601
   sceneName: string | null
 }

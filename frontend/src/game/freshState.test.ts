@@ -68,6 +68,8 @@ describe('buildFreshPositionState (#822)', () => {
       cameraElevation: null,
       paperDollOutline: null,
       storyEnded: false,
+      // 入場時 flags (#799)。flags 省略は {}
+      entryFlags: {},
     })
   })
 
@@ -113,8 +115,12 @@ describe('buildFreshPositionState (#822)', () => {
       for (const f of flagSets) {
         const actual = buildFreshPositionState('scene-x', p, f)
         const expected = referenceBuild('scene-x', p, f)
-        expect(actual).toEqual(expected)
-        expect(JSON.stringify(actual)).toBe(JSON.stringify(expected))
+        // 旧実装に無い #799 の入場時 flags は、キー順を保つため末尾に足した。それを除いた残りが旧実装と一致する
+        const { entryFlags, ...rest } = actual
+        expect(entryFlags).toEqual(f ?? {})
+        expect(Object.keys(actual).pop()).toBe('entryFlags')
+        expect(rest).toEqual(expected)
+        expect(JSON.stringify(rest)).toBe(JSON.stringify(expected))
       }
   })
 })

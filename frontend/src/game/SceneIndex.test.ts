@@ -8,9 +8,9 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { Event, EventScene, FlagValue } from '../types'
-import { GameState, resolveEvents } from './GameState'
+import { GameState, expandEvents, resolveEvents } from './GameState'
 import { findSceneById } from './novelLayout'
-import { findLinearSegments, resolveLinearSegments } from './sceneEntry'
+import { findLinearSegments } from './sceneEntry'
 import { SceneIndex, type MissingSceneResolver } from './SceneIndex'
 
 const narration = (...lines: string[]): Event => ({ Narration: { text: lines } })
@@ -445,7 +445,9 @@ describe('SceneIndex.getLinearSegments', () => {
 
 describe('SceneIndex.resolveLinearSegmentsNow', () => {
   const scenes = [scene('a', [narration('a1')]), scene('b', [narration('b1'), narration('b2')])]
-  const count = (events: readonly Event[]): number => events.length
+  // 条件を含まない元列では、rawOffsets は元列の添字そのもの
+  const identityOffsets = (raw: readonly Event[]): number[] =>
+    raw.map((_, i) => i).concat(raw.length)
 
   function active() {
     const idx = new SceneIndex()
@@ -457,7 +459,7 @@ describe('SceneIndex.resolveLinearSegmentsNow', () => {
   it('アクティブなら展開後のシーン区間を返す', () => {
     const idx = active()
     const raw = idx.getEntryEvents()
-    expect(idx.resolveLinearSegmentsNow(null, raw, count)).toEqual([
+    expect(idx.resolveLinearSegmentsNow(null, raw, identityOffsets(raw))).toEqual([
       { sceneId: 'a', start: 0, separator: null },
       { sceneId: 'b', start: 2, separator: 1 },
     ])
@@ -465,8 +467,8 @@ describe('SceneIndex.resolveLinearSegmentsNow', () => {
 
   it('非アクティブ（別シーン再生中）なら null', () => {
     const idx = active()
-    expect(idx.resolveLinearSegmentsNow('b', scenes[1].events, count)).toBeNull()
-    expect(idx.resolveLinearSegmentsNow('b', idx.getEntryEvents(), count)).toBeNull()
+    expect(idx.resolveLinearSegmentsNow('b', scenes[1].events, [0, 1, 2])).toBeNull()
+    expect(idx.resolveLinearSegmentsNow('b', idx.getEntryEvents(), [0, 1, 2, 3, 4, 5])).toBeNull()
   })
 
   it('区間が 0 件なら null', () => {
@@ -474,21 +476,36 @@ describe('SceneIndex.resolveLinearSegmentsNow', () => {
     idx.setEntry([narration('x')])
     idx.setJumpSceneIndex(scenes)
     expect(idx.getLinearSegments()).toEqual([])
-    expect(idx.resolveLinearSegmentsNow(null, idx.getEntryEvents(), count)).toBeNull()
+    expect(idx.resolveLinearSegmentsNow(null, idx.getEntryEvents(), [0, 1])).toBeNull()
   })
 
-  it('countResolved に各区間の元イベント列が渡る', () => {
-    const idx = active()
-    const seen: number[] = []
-    idx.resolveLinearSegmentsNow(null, idx.getEntryEvents(), (events) => {
-      seen.push(events.length)
-      return events.length
+  it('rawOffsets（条件で縮んだ展開）から境界を出す (#799)', () => {
+    // a: [条件 f -> x,y] a2 / b: b1 。f 偽なら a は 1 件。元列: Cond, a2, ST, b1 → 展開後: a2, ST, b1
+    const sc = [
+      scene('a', [cond('f', [narration('x'), narration('y')]), narration('a2')]),
+      scene('b', [narration('b1')]),
+    ]
+    const idx = new SceneIndex()
+    idx.setEntry(flatten(sc))
+    idx.setJumpSceneIndex(sc)
+    const raw = idx.getEntryEvents()
+    const { rawOffsets } = expandEvents(raw, { flags: {}, fromRawIndex: 0 })
+    expect(idx.resolveLinearSegmentsNow(null, raw, rawOffsets)).toEqual([
+      { sceneId: 'a', start: 0, separator: null },
+      { sceneId: 'b', start: 2, separator: 1 },
+    ])
+    const on = expandEvents(raw, {
+      flags: { f: { Bool: true } },
+      fromRawIndex: 0,
     })
-    expect(seen).toEqual([1, 2])
+    expect(idx.resolveLinearSegmentsNow(null, raw, on.rawOffsets)).toEqual([
+      { sceneId: 'a', start: 0, separator: null },
+      { sceneId: 'b', start: 4, separator: 3 },
+    ])
   })
 })
 
-describe('SceneIndex.linearStartIndex', () => {
+describe('SceneIndex.linearStart', () => {
   // a: [条件: f -> x,y] + a2 、b: b1 。f が真なら a は 3 件、偽なら 1 件に展開される。
   const a = scene('a', [cond('f', [narration('x'), narration('y')]), narration('a2')])
   const b = scene('b', [narration('b1')])
@@ -500,36 +517,47 @@ describe('SceneIndex.linearStartIndex', () => {
     idx.setJumpSceneIndex(scenes)
     return idx
   }
+  const startIndexOf = (
+    idx: SceneIndex,
+    id: string,
+    flags: Record<string, FlagValue> | undefined
+  ) => idx.linearStart(id, flags)?.startIndex ?? null
 
   it('対象が線形区間に無ければ null', () => {
-    expect(index().linearStartIndex('zzz', {})).toBeNull()
+    expect(index().linearStart('zzz', {})).toBeNull()
   })
 
   it('先頭のシーンは 0', () => {
-    expect(index().linearStartIndex('a', {})).toBe(0)
+    expect(startIndexOf(index(), 'a', {})).toBe(0)
+  })
+
+  it('元列での開始位置 rawStart も返す (#799)', () => {
+    expect(index().linearStart('a', {})?.rawStart).toBe(0)
+    // 元列: Cond, a2, ST, b1 → b は 3
+    expect(index().linearStart('b', {})?.rawStart).toBe(3)
   })
 
   it('flags undefined でも動く（空の flags 扱い）', () => {
-    expect(index().linearStartIndex('b', undefined)).toBe(index().linearStartIndex('b', {}))
+    expect(startIndexOf(index(), 'b', undefined)).toBe(startIndexOf(index(), 'b', {}))
   })
 
   it('[条件:] の真偽で開始位置が変わる', () => {
     const idx = index()
     const on: Record<string, FlagValue> = { f: { Bool: true } }
     // 偽: a は 1 件 + 境界 1 件 → b は 2。真: a は 3 件 + 境界 → b は 4
-    expect(idx.linearStartIndex('b', {})).toBe(2)
-    expect(idx.linearStartIndex('b', on)).toBe(4)
+    expect(startIndexOf(idx, 'b', {})).toBe(2)
+    expect(startIndexOf(idx, 'b', on)).toBe(4)
   })
 
   it('線形ストリームの途中のシーンを索引から引ける（区間が 0 件なら null）', () => {
     const idx = new SceneIndex()
     idx.setEntry([narration('x')])
     idx.setJumpSceneIndex(scenes)
-    expect(idx.linearStartIndex('b', {})).toBeNull()
+    expect(idx.linearStart('b', {})).toBeNull()
   })
 
-  it('旧実装（origin/main の linearStartIndex）と複数入力で一致する', () => {
-    // origin/main の NovelRenderer.linearStartIndex を写したリファレンス
+  it('旧実装（作業開始時の main の linearStartIndex）を写した参照と、Flag を含まない複数入力で一致する', () => {
+    // 作業開始時の main の linearStartIndex / resolveLinearSegments を写したリファレンス（断片ごとの独立な静的展開）
     function reference(
       entryRawEvents: readonly Event[],
       allScenes: EventScene[],
@@ -541,12 +569,14 @@ describe('SceneIndex.linearStartIndex', () => {
       if (at < 0) return null
       const gs = new GameState()
       gs.fromJSON(flags ?? {})
-      const resolved = resolveLinearSegments(
-        entryRawEvents,
-        segments,
-        (events) => resolveEvents(events, gs).length
-      )
-      return resolved.find((seg) => seg.sceneId === sceneId)?.start ?? null
+      let pos = 0
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i]
+        if (i > 0) pos += 1
+        if (seg.sceneId === sceneId) return pos
+        pos += resolveEvents(entryRawEvents.slice(seg.start, seg.start + seg.length), gs).length
+      }
+      return null
     }
     const c = scene('c', [cond('g', [narration('g1')]), narration('c1')])
     const all = [a, b, c]
@@ -569,12 +599,29 @@ describe('SceneIndex.linearStartIndex', () => {
       idx.setJumpSceneIndex(sceneIdx)
       for (const id of ['a', 'b', 'c', 'nope']) {
         for (const flags of flagSets) {
-          expect(idx.linearStartIndex(id, flags), `${id}/${JSON.stringify(flags)}`).toBe(
+          expect(startIndexOf(idx, id, flags), `${id}/${JSON.stringify(flags)}`).toBe(
             reference(idx.getEntryEvents(), sceneIdx, id, flags)
           )
         }
       }
     }
+  })
+
+  it('開始シーンより前の [フラグ:] は効かず、開始シーン以降は逐次評価で展開する (#799)', () => {
+    // a: Flag f=true, [条件 f -> x], a2 / b: b1, [条件 f -> bx]
+    const sa = scene('a', [
+      { Flag: { name: 'f', value: { Bool: true } } },
+      cond('f', [narration('x')]),
+      narration('a2'),
+    ])
+    const sb = scene('b', [narration('b1'), cond('f', [narration('bx')])])
+    const idx = new SceneIndex()
+    idx.setEntry(flatten([sa, sb]))
+    idx.setJumpSceneIndex([sa, sb])
+    const start = idx.linearStart('b', {})
+    expect(start).not.toBeNull()
+    // b から始める訪問: a の Flag は実行されないので f は偽のまま → a は静的展開で [Flag, a2] の2件、境界1件 → b は3
+    expect(start?.startIndex).toBe(3)
   })
 })
 

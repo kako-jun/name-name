@@ -1,5 +1,5 @@
 import type { Event, EventScene, FlagValue } from '../types'
-import { GameState, resolveEvents } from './GameState'
+import { expandEvents } from './GameState'
 import { findSceneById } from './novelLayout'
 import {
   findLinearSegments,
@@ -211,35 +211,36 @@ export class SceneIndex {
   }
 
   /**
-   * 現在の flags で展開した、エントリの線形ストリームのシーン区間。線形ストリームでなければ null。
-   * `countResolved` は「元イベント列を現在の flags で展開した長さ」。
+   * 入場時に展開したエントリの線形ストリームのシーン区間。線形ストリームでなければ null。
+   * `rawOffsets` は再生中の展開が持つ、元列のトップレベル i 番目の展開後の開始位置 (#799)。
    */
   resolveLinearSegmentsNow(
     currentSceneId: string | null,
     playingRawEvents: readonly Event[],
-    countResolved: (events: readonly Event[]) => number
+    rawOffsets: readonly number[]
   ): ResolvedSegment[] | null {
     if (!this.isEntryStreamActive(currentSceneId, playingRawEvents)) return null
     const segments = this.getLinearSegments()
     if (segments.length === 0) return null
-    return resolveLinearSegments(this.entryRawEvents, segments, countResolved)
+    return resolveLinearSegments(segments, rawOffsets)
   }
 
   /**
-   * 新規開始の対象 `sceneId` がエントリの線形ストリーム上にあれば、そのシーン先頭の展開後の位置を返す (#777)。
-   * flags は新規開始で置き換えた後の値（`req.flags`）で展開する。線形ストリーム上になければ null。
+   * 新規開始の対象 `sceneId` がエントリの線形ストリーム上にあれば、そのシーン先頭の元列での位置（`rawStart`）と
+   * 展開後の位置（`startIndex`）を返す (#777, #799)。入場時 flags は新規開始で置き換えた後の値（`req.flags`）。
+   * 先頭より前は静的に、先頭以降は逐次評価で展開する（再生側の `PlaybackCursor.load` と同じ展開）。
+   * 線形ストリーム上になければ null。
    */
-  linearStartIndex(sceneId: string, flags: Record<string, FlagValue> | undefined): number | null {
-    const segments = this.getLinearSegments()
-    const at = segments.findIndex((seg) => seg.sceneId === sceneId)
-    if (at < 0) return null
-    const gs = new GameState()
-    gs.fromJSON(flags ?? {})
-    const resolved = resolveLinearSegments(
-      this.entryRawEvents,
-      segments,
-      (events) => resolveEvents(events, gs).length
-    )
-    return resolved.find((seg) => seg.sceneId === sceneId)?.start ?? null
+  linearStart(
+    sceneId: string,
+    flags: Record<string, FlagValue> | undefined
+  ): { rawStart: number; startIndex: number } | null {
+    const seg = this.getLinearSegments().find((s) => s.sceneId === sceneId)
+    if (!seg) return null
+    const { rawOffsets } = expandEvents(this.entryRawEvents, {
+      flags: flags ?? {},
+      fromRawIndex: seg.start,
+    })
+    return { rawStart: seg.start, startIndex: rawOffsets[seg.start] ?? 0 }
   }
 }
