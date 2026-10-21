@@ -6,8 +6,9 @@
  *   `[パーティ]` の `装備:`（初期装備。`[アイテム]` と `[魔石]` の id を混在で書ける。`魔石:` の後ろに続く）と `装備枠:`（枠の種類の列。同じ種類を並べれば複数枠。省略は 武器・防具・盾・兜 が各 1）
  * - 枠: 種類ごと。魔石の枠は従来どおり `魔石枠:`（無ければ `装備枠:` の `魔石` の数、それも無ければ 1）。枠を超える分・宣言の無い id・装備できない種別・`装備可` に入っていない味方・同じ品の重複は警告して捨てる
  * - 属性の層: 魔石 → アイテムの順に積み、**合計 2 層まで**（`magicite.ts` の `elementLayers`）。アイテムの属性は耐性にだけ効き、通常攻撃の属性にはならない
+ * - 武器の `属性`: 現在は無視する（警告）。将来の「武器自体の属性（攻撃の属性）」のために予約。防具・盾・兜の `属性` だけが耐性になる
  * - ジョブ (#740): 就いているジョブの `装備時`（能力値）と `属性`（耐性の層。魔石 → 装備品 → ジョブの順で合計 2 層まで）を、同じ結果に足す（`job.ts`）。ジョブは装備の枠や id の入口とは別（`roster.currentJobs`）
- * - わざ: 装備中のアイテムの `わざ` を、装備した順に並べる（`fieldBattle.ts` が、メンバー自身の `わざ:` の後ろへ重複なく足して候補窓を作る）
+ * - わざ: 装備中の**どの装備品の** `わざ`（武器でも防具でも）も、装備した順に並べる（`fieldBattle.ts` が、メンバー自身の `わざ:` の後ろへ重複なく足して候補窓を作る）
  * - 装備の変更の計算（`equipItem` / `unequipItem`）: 新しい装備列を返す純関数。所持品の有無・メニュー UI・保存は #738 / #880 / #881 の領分で、
  *   エンジンは「いま誰が何を装備しているか」（`roster.equipment`）を入力に受けるだけ
  *
@@ -224,11 +225,21 @@ export function resolveMemberEquipment(
   let bonus: StatBonus = totalEquipBonus(r.stones)
   const itemElements: string[] = []
   const abilities: string[] = []
-  for (const { item } of r.items) {
+  for (const { kind, item } of r.items) {
     const parsed = parseStatBonus(item.equipBonus)
     for (const w of parsed.warnings) warnings.push(`${def.id}: アイテム '${item.id}': ${w}`)
     bonus = addBonus(bonus, parsed.bonus)
-    itemElements.push(...(item.elements ?? []))
+    if (item.elements && item.elements.length > 0) {
+      if (kind === '武器') {
+        // 武器の属性は将来の「攻撃の属性」のために予約している。耐性にはしない（炎の剣で炎耐性が付くと誰も思わない）
+        warnings.push(
+          `${def.id}: 武器 '${item.id}' の属性は現在は無視される（予約。耐性にはならない）`
+        )
+        warnWeaponElementOnce(item.id)
+      } else {
+        itemElements.push(...item.elements)
+      }
+    }
     for (const a of item.abilities ?? []) if (!abilities.includes(a)) abilities.push(a)
   }
   const extra =
@@ -252,6 +263,16 @@ export function resolveMemberEquipment(
     affinity: layersToAffinity(el.layers),
     warnings: [...warnings, ...el.warnings],
   }
+}
+
+/** 武器の `属性` を無視した警告を、同じ id につき 1 度だけ `console.warn` する（戦闘のたびに出さない） */
+const warnedWeaponElement = new Set<string>()
+function warnWeaponElementOnce(id: string): void {
+  if (warnedWeaponElement.has(id)) return
+  warnedWeaponElement.add(id)
+  console.warn(
+    `[name-name] 武器 '${id}' の 属性 は現在は無視される（予約。防具・盾・兜の 属性 は耐性になる）`
+  )
 }
 
 /** 装備の変更の結果 */
@@ -285,9 +306,16 @@ export function equipItem(
   id: string
 ): EquipChange {
   const before = [...current]
-  if (before.includes(id)) return { equipment: before, ok: true }
-  const kind = kindOfId(id, roster)
   const fail = (reason: string): EquipChange => ({ equipment: before, ok: false, reason })
+  if (before.includes(id)) {
+    // 列にあるだけでは「装備済み」にならない。実際に枠に入っている（検査を通っている）ときだけ変更なしで ok
+    const now = resolveIds(def, roster, before)
+    if (now.stones.some((s) => s.id === id) || now.items.some((i) => i.item.id === id)) {
+      return { equipment: before, ok: true }
+    }
+    return fail(now.warnings.find((w) => w.includes(`'${id}'`)) ?? `'${id}' は装備されていない`)
+  }
+  const kind = kindOfId(id, roster)
   if (kind === undefined) {
     const known =
       !!roster &&
