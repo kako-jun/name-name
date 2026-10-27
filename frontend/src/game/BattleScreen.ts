@@ -50,6 +50,18 @@ import {
 import { ATB_GAUGE_MAX, BattleEngine } from './battleEngine'
 import type { SummonCue } from '../types'
 import {
+  effectAnchorPoint,
+  effectDrawSize,
+  effectFrameAt,
+  effectFrameRect,
+  hasBattleEffects,
+  planEventEffects,
+  type BattleEffectKind,
+  type BattleEffectSheet,
+  type BattleEffects,
+  type EffectPlan,
+} from './battleEffects'
+import {
   advanceResultElapsed,
   canSkipResultHold,
   isResultHoldDone,
@@ -425,6 +437,11 @@ export interface BattleScreenOptions {
    * 未指定は何もしない
    */
   onSummonCue?: (cue: SummonCue) => void
+  /**
+   * 戦闘のエフェクト重ね (#936)。種類ごとのコマ割りシート（詠唱・召喚詠唱・打撃・斬撃・魔法ヒット）を、行動の記録に応じて対象の位置へ重ねる。
+   * `ff` の演出のときだけ。未指定・空は何もしない（従来と同じ）。読めない画像はその種類だけ省く（警告を出し、戦闘は止めない）
+   */
+  effects?: BattleEffects
   /** `acrylic` のパラメータ上書き (#737)。省略した項目は既定値。値はスプライト枠一辺に対する比率 */
   spriteStyleParams?: Partial<AcrylicParams>
 }
@@ -471,6 +488,19 @@ interface EntityView {
   baseVisual: PoseVisual | null
   shownVisual: PoseVisual | null
   poseVisuals: Partial<Record<BattlePose, PoseVisual>>
+}
+
+/** 再生中のエフェクト 1 つ (#936)。画面が持つ演出の途中状態（エンジンには持たない） */
+interface EffectInstance {
+  sprite: Sprite
+  kind: BattleEffectKind
+  sheet: BattleEffectSheet
+  /** 位置の基準にする対象 */
+  side: 'party' | 'enemy'
+  index: number
+  elapsed: number
+  /** 出した直後の 1 回は経過時間を進めない（出す時点で `sinceStart` を入れているため） */
+  justSpawned: boolean
 }
 
 /** ポーズ 1 つ分の見た目: スプライトのテクスチャと、acrylic のときの板・影 (#745) */
@@ -549,6 +579,17 @@ export class BattleScreen extends Container {
   private summonShownPath: string | null = null
   private summonVeilSize = ''
   private summonCuedSeq = -1
+  /** エフェクト重ね (#936) の層（召喚獣の層の手前・ダメージ数字の奥・パネルの奥）。`ff` で宣言があるときだけ作る */
+  private effectLayer: Container | null = null
+  /** シート画像の読み込み結果（パス → 読めたテクスチャ / 読めなかった null）。読み込み中は持たない */
+  private effectTextures = new Map<string, Texture | null>()
+  private effectLoading = new Set<string>()
+  /** シートごとに切り出したコマ（キー = 画像パス + 割り方）。destroy で解放（source は Assets のものなので壊さない） */
+  private effectFrames = new Map<string, Texture[]>()
+  private effectInstances: EffectInstance[] = []
+  /** いま再生中の行動（通し番号）のエフェクトの予定のうち、まだ出していないもの */
+  private effectPlanSeq = -1
+  private effectPending: EffectPlan[] = []
   /** FF 式メッセージ窓の言葉と、窓（ログ帯）の矩形。layoutSide が更新 */
   private messageText: PixiText | null = null
   private messageRect = { x: 0, y: 0, w: 0, h: 0 }
@@ -752,6 +793,9 @@ export class BattleScreen extends Container {
     this.disposeBackgroundDof()
     this.disposeLogTicker()
     this.popups = []
+    this.effectInstances = []
+    for (const frames of this.effectFrames.values()) for (const t of frames) t.destroy(false)
+    this.effectFrames.clear()
     this.playback = emptyPlayback()
     super.destroy(options)
   }
@@ -967,6 +1011,13 @@ export class BattleScreen extends Container {
       this.summonPlate = plate
       this.addChildAt(summonLayer, this.getChildIndex(popupLayer))
       this.prefetchSummonImages()
+      // エフェクト重ね (#936): 召喚獣の層の手前・ダメージ数字の奥。宣言が無ければ層も作らない（従来と同一）
+      if (hasBattleEffects(this.opts.effects)) {
+        const effectLayer = new Container()
+        this.effectLayer = effectLayer
+        this.addChildAt(effectLayer, this.getChildIndex(popupLayer))
+        this.prefetchEffectSheets()
+      }
     }
     for (const e of s.enemies) {
       const view = this.createEntityView(e, FALLBACK_ENEMY_COLOR, true)
@@ -2544,7 +2595,7 @@ export class BattleScreen extends Container {
    */
   private advancePresentation(dt: number): void {
     const wasBusy = isPlaybackBusy(this.playback)
-    if (!wasBusy && this.popups.length === 0) return
+    if (!wasBusy && this.popups.length === 0 && this.effectInstances.length === 0) return
     const r = advancePlayback(this.playback, dt)
     this.playback = r.state
     let changed = false
@@ -2565,6 +2616,7 @@ export class BattleScreen extends Container {
     }
     this.advancePopups(dt)
     this.updateSummonCue()
+    this.updateEffects(dt)
     if (!isPlaybackBusy(this.playback)) {
       if (this.hpOverride.size > 0) this.hpOverride.clear()
       if (this.statusOverride.size > 0) this.statusOverride.clear()
@@ -2682,6 +2734,135 @@ export class BattleScreen extends Container {
     plateY = Math.min(plateY, this.summonPlateFloorY - Math.ceil(fontSize * 1.5) - 4)
     plate.position.set(centerX, plateY)
     plate.alpha = s.alpha
+  }
+
+  /** 宣言したシート画像を先に読み込んでおく。最初の再生から出る（読めなければその種類だけ省く） */
+  private prefetchEffectSheets(): void {
+    const effects = this.opts.effects
+    if (!effects) return
+    for (const sheet of Object.values(effects)) void this.loadEffectTexture(sheet.image)
+  }
+
+  /** シート画像を 1 度だけ読み込む。失敗は null で覚える（再試行しない。その種類のエフェクトだけ省いて戦闘は続ける） */
+  private async loadEffectTexture(path: string): Promise<void> {
+    if (this.effectTextures.has(path) || this.effectLoading.has(path)) return
+    this.effectLoading.add(path)
+    try {
+      const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, path))) as Texture
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
+      this.effectTextures.set(path, tex)
+    } catch (e) {
+      console.warn(`[BattleScreen] failed to load effect sheet "${path}":`, e)
+      this.effectTextures.set(path, null)
+    } finally {
+      this.effectLoading.delete(path)
+    }
+  }
+
+  /** シートの frame コマ目のテクスチャ（初回に全コマを切り出して覚える）。画像が読めていなければ null */
+  private effectFrameTexture(sheet: BattleEffectSheet, frame: number): Texture | null {
+    const tex = this.effectTextures.get(sheet.image)
+    if (!tex) return null
+    const key = `${sheet.image}#${sheet.frames}x${sheet.columns}`
+    let frames = this.effectFrames.get(key)
+    if (!frames) {
+      frames = []
+      for (let i = 0; i < sheet.frames; i++) {
+        const r = effectFrameRect(sheet, tex.width, tex.height, i)
+        frames.push(new Texture({ source: tex.source, frame: new Rectangle(r.x, r.y, r.w, r.h) }))
+      }
+      this.effectFrames.set(key, frames)
+    }
+    return frames[frame] ?? null
+  }
+
+  /** 使い手が `slash` ポーズの絵を持つか（打撃と斬撃の出し分け）。エンジンの状態は読むだけ */
+  private usesSlashPose(actor: { side: 'party' | 'enemy'; index: number }): boolean {
+    const s = this.engine.getState()
+    const e = (actor.side === 'party' ? s.party : s.enemies)[actor.index]
+    return !!e?.poses?.slash
+  }
+
+  /**
+   * エフェクト重ね (#936): 再生中の行動の予定（`planEventEffects`）のうち、時刻が来たものを対象の位置に出し、コマを送る。
+   * 位置は毎回、対象の枠から取り直す（画面サイズ変更・のけぞりに追従）。画像が読めない種類は出さない。表示だけでエンジンの状態は変えない
+   */
+  private updateEffects(dt: number): void {
+    const layer = this.effectLayer
+    if (!layer) return
+    const active = this.playback.active
+    if (active && active.event.seq !== this.effectPlanSeq) {
+      this.effectPlanSeq = active.event.seq
+      this.effectPending = planEventEffects(active.event, this.opts.effects, {
+        usesSlashPose: (a) => this.usesSlashPose(a),
+      })
+    } else if (!active) {
+      this.effectPending = []
+    }
+    if (active && this.effectPending.length > 0) {
+      const rest: EffectPlan[] = []
+      for (const plan of this.effectPending) {
+        if (plan.atMs > active.elapsed) {
+          rest.push(plan)
+          continue
+        }
+        this.spawnEffect(plan, active.elapsed - plan.atMs)
+      }
+      this.effectPending = rest
+    }
+    this.effectInstances = this.effectInstances.filter((inst) => {
+      inst.elapsed += inst.justSpawned ? 0 : dt
+      inst.justSpawned = false
+      const done = this.placeEffect(inst)
+      if (done) inst.sprite.destroy()
+      return !done
+    })
+  }
+
+  private spawnEffect(plan: EffectPlan, sinceStart: number): void {
+    const layer = this.effectLayer
+    const sheet = this.opts.effects?.[plan.kind]
+    if (!layer || !sheet) return
+    if (!this.effectTextures.has(sheet.image)) void this.loadEffectTexture(sheet.image)
+    const frame = effectFrameAt(sheet, sinceStart)
+    if (frame === null) return // もう終わっている長さ（大きく遅れたとき）
+    const tex = this.effectFrameTexture(sheet, frame)
+    if (!tex) return // 読み込み中・読めなかった画像は省く
+    const sprite = new Sprite(tex)
+    sprite.anchor.set(0.5)
+    layer.addChild(sprite)
+    const inst: EffectInstance = {
+      sprite,
+      kind: plan.kind,
+      sheet,
+      side: plan.target.side,
+      index: plan.target.index,
+      elapsed: Math.max(0, sinceStart),
+      justSpawned: true,
+    }
+    if (this.placeEffect(inst)) sprite.destroy()
+    else this.effectInstances.push(inst)
+  }
+
+  /** コマと位置を更新する。終わった（または対象の枠が無い）なら true */
+  private placeEffect(inst: EffectInstance): boolean {
+    const frame = effectFrameAt(inst.sheet, inst.elapsed)
+    if (frame === null) return true
+    const view = this.viewOf(inst.side, inst.index)
+    const tex = this.effectFrameTexture(inst.sheet, frame)
+    if (!view || !tex) return true
+    const at = effectAnchorPoint(
+      inst.sheet.anchor,
+      { side: inst.side, x: view.anchorX, y: view.anchorY, unit: view.unit },
+      { w: this.screenWidth, h: this.screenHeight }
+    )
+    const size = effectDrawSize(inst.sheet, tex.width, tex.height, at.unit)
+    if (size.w <= 0) return true
+    inst.sprite.texture = tex
+    inst.sprite.width = size.w
+    inst.sprite.height = size.h
+    inst.sprite.position.set(at.x, at.y)
+    return false
   }
 
   private viewOf(side: 'party' | 'enemy', index: number): EntityView | undefined {
