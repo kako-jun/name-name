@@ -27,6 +27,7 @@ import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
 import type { BattlePresentation } from '../game/battleMotion'
+import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import type { WindowStyle } from '../game/windowStyle'
 import { parseCommandIds, type CommandId, type CommandLayout } from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
@@ -123,6 +124,8 @@ export interface FieldBattleConfig {
   commands?: CommandId[]
   /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
   atb?: BattleAtbConfig
+  /** 戦闘のエフェクト重ね (#936)。`battle.effects`（戦闘サンプルの `effects` と同じ書式）。不正な種類は警告して無視。`presentation: "ff"` のときだけ効く。未指定は undefined＝エフェクトなし */
+  effects?: BattleEffects
 }
 
 export interface FieldSampleConfig {
@@ -654,6 +657,13 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
       )
   }
+  // エフェクト重ね (#936)。不正な種類は読み込みを止めず警告にする（画像 URL は他の画像と同じく assetBaseUrl 基準）
+  const fx = parseBattleEffects(b.effects, (u) =>
+    resolveUrl(resolveRpgImagePath(assetBase, u), baseUrl)
+  )
+  warnings.push(...fx.warnings.map((w) => `battle.${w}`))
+  if (hasBattleEffects(fx.effects) && b.presentation !== 'ff')
+    warnings.push('battle.effects は presentation "ff" のときだけ効きます（"dq" では無視されます）')
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -728,6 +738,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
+        ...(hasBattleEffects(fx.effects) ? { effects: fx.effects } : {}),
       },
       ...(groupErrors ? { groupErrors } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),

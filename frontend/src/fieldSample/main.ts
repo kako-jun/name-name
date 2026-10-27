@@ -410,6 +410,7 @@ async function main(): Promise<void> {
       ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
       ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
       ...(b.commands ? { commands: b.commands } : {}),
+      ...(b.effects ? { effects: b.effects } : {}),
       ...(bg ? { background: bg } : {}),
       // 候補窓 (#890)。戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
       ...(menu ? { menu } : {}),

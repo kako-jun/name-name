@@ -17,6 +17,7 @@ import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import { applyPartyEquipment, parseGear, parseJobs } from './configEquipment'
 import { parseBeasts, parseMagicites } from './configMagicite'
 import { resolveSummonRefs, warnSummonOnce } from '../game/summons'
+import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { toSkillExecutions } from '../game/enemyAi'
 import {
   DEPTH_DEFAULT_HORIZON,
@@ -160,6 +161,11 @@ export interface BattleSampleConfig {
    * `joiners` は途中参戦する味方で `party` と同じ書式）。既定は null（脚本なし＝従来の戦闘）
    */
   script: BattleScriptOptions | null
+  /**
+   * 戦闘のエフェクト重ね (#936)。設定 JSON の `effects`（`{ cast?, summon?, impact?, slash?, magic? }`。各 `{ image, frames, columns?, frameMs?, anchor?, scale? }`）。
+   * 不正な種類は警告して無視する。既定は空（エフェクトなし＝従来と同じ）
+   */
+  effects: BattleEffects
   party: BattleEntity[]
   enemies: BattleEntity[]
 }
@@ -281,6 +287,7 @@ export function defaultConfig(): BattleSampleConfig {
     abilities: {},
     itemNames: {},
     script: null,
+    effects: {},
     party: defaultParty(),
     enemies: defaultEnemies(),
   }
@@ -817,6 +824,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
   if (!beasts.ok) return beasts
   // 召喚獣 (#750): 魔石・特技の `summonId` を `beasts` へ引き当てる。参照が無ければ入力のまま（従来と同一）
   const refs = resolveSampleSummons(skills.value, magicites.value, beasts.value)
+  // エフェクト重ね (#936): 不正な種類は警告して無視（戦闘は止めない）
+  const effects = parseBattleEffects(raw.effects, (u) => resolveUrl(u, baseUrl))
+  for (const w of effects.warnings) console.warn(`[name-name] エフェクト: ${w}`)
   const gear = parseGear(raw.gear)
   if (!gear.ok) return gear
   const jobs = parseJobs(raw.jobs)
@@ -930,6 +940,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       abilities: equipped.value.skills,
       itemNames,
       script: script.value,
+      effects: effects.effects,
       party: party.value,
       enemies: enemies.value,
     },
@@ -1035,6 +1046,8 @@ export function buildBattleSetup(
     background?: string
     depth: BattleDepth | null
     foreground?: string
+    /** エフェクト重ね (#936)。宣言があるときだけ付く（無ければキーも無い） */
+    effects?: BattleEffects
   }
   /** BattleEngine に渡す ATB 設定 (#205)。undefined = 従来ターン制 */
   atb?: BattleAtbConfig
@@ -1124,6 +1137,7 @@ export function buildBattleSetup(
       depth:
         view.depth === 'on' ? { horizon: config.horizon, perspective: config.perspective } : null,
       ...(view.foregroundOn && config.foreground ? { foreground: config.foreground } : {}),
+      ...(hasBattleEffects(config.effects) ? { effects: { ...config.effects } } : {}),
     },
     width,
     height,
@@ -1145,6 +1159,7 @@ export function assetsToUnload(
   const urls = [
     config.background,
     config.foreground,
+    ...Object.values(config.effects).map((e) => e.image),
     ...config.party.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
     ...config.enemies.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
   ]

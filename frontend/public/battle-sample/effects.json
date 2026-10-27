@@ -1,0 +1,102 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "commands": ["attack", "summon", "spell", "escape"],
+  "atb": "on",
+  "atbMode": "wait",
+  "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp",
+  "effects": {
+    "cast": {
+      "image": "http://localhost:8765/assets/images/effects/candidates/cast-magic-v1.png",
+      "frames": 6,
+      "frameMs": 80,
+      "anchor": "hand",
+      "scale": 1.6
+    },
+    "summon": {
+      "image": "http://localhost:8765/assets/images/effects/candidates/cast-summon-v1.png",
+      "frames": 6,
+      "frameMs": 100,
+      "anchor": "hand",
+      "scale": 1.8
+    },
+    "impact": {
+      "image": "http://localhost:8765/assets/images/effects/candidates/hit-impact-v1.png",
+      "frames": 6,
+      "frameMs": 50,
+      "anchor": "center",
+      "scale": 1.2
+    },
+    "slash": {
+      "image": "http://localhost:8765/assets/images/effects/candidates/hit-slash-v1.png",
+      "frames": 6,
+      "frameMs": 50,
+      "anchor": "center",
+      "scale": 1.2
+    },
+    "magic": {
+      "image": "http://localhost:8765/assets/images/effects/candidates/cast-magic-v1.png",
+      "frames": 6,
+      "frameMs": 60,
+      "anchor": "center",
+      "scale": 1.4
+    }
+  },
+  "beasts": [
+    {
+      "id": "sea",
+      "name": "うみの主",
+      "elements": ["water"],
+      "image": "summon-wave.svg",
+      "target": "相手全体",
+      "effect": "damage 30..30 type=water",
+      "message": "{user}が 石をにぎると 波が あふれだす！"
+    }
+  ],
+  "magicites": [{ "id": "sea-stone", "name": "うみの石", "summonId": "sea", "mp": 3 }],
+  "spells": [
+    { "id": "spark", "name": "ひかり", "mp": 2, "target": "敵単体", "effect": "damage 12..12" }
+  ],
+  "party": [
+    {
+      "id": "slasher",
+      "name": "きりつけ",
+      "hp": 200,
+      "mp": 20,
+      "atk": 20,
+      "def": 4,
+      "agi": 6,
+      "magicites": ["sea-stone"],
+      "sprite": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-idle.webp",
+      "poses": {
+        "idle": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-idle.webp",
+        "ready": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-ready.webp",
+        "slash": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-slash.webp",
+        "cast": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-cast.webp",
+        "hurt": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-hurt.webp"
+      }
+    },
+    {
+      "id": "basher",
+      "name": "なぐり",
+      "hp": 160,
+      "mp": 20,
+      "atk": 16,
+      "def": 3,
+      "agi": 5,
+      "sprite": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-character-idle.webp"
+    }
+  ],
+  "enemies": [
+    {
+      "id": "boss",
+      "name": "かわのぬし",
+      "hp": 900,
+      "atk": 4,
+      "def": 2,
+      "agi": 3,
+      "sprite": "http://localhost:8765/assets/images/enemies/M001.webp"
+    }
+  ]
+}
