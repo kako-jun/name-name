@@ -167,6 +167,9 @@ function ruinMask(w: number, h: number): string {
 }
 
 const FACING_COLOR = { up: '#3a6', down: '#36a', left: '#a63', right: '#a36' } as const
+/** 斜めの自前の歩行絵（右側の 2 方向）。左側の 2 方向は mirrorOf で左右反転して作る */
+const DIAGONAL_COLOR = { upRight: '#6a3', downRight: '#63a' } as const
+const DIAGONAL_LABEL = { upRight: '↗', downRight: '↘' } as const
 const POSE_COLOR: Record<string, string> = {
   idle: '#3b6bb5',
   ready: '#3b9bb5',
@@ -188,12 +191,22 @@ function poses(prefix: string, w: number, h: number, colors: Record<string, stri
 export function buildDummyFixture(): Record<string, unknown> {
   const W = 640
   const H = 400
-  const walk = Object.fromEntries(
-    (['up', 'down', 'left', 'right'] as const).map((f) => [
-      f,
-      [1, 2, 3].map((n) => box(32, 48, FACING_COLOR[f], `${f[0].toUpperCase()}${n}`, 14)),
-    ])
-  )
+  const walk = {
+    ...Object.fromEntries(
+      (['up', 'down', 'left', 'right'] as const).map((f) => [
+        f,
+        [1, 2, 3].map((n) => box(32, 48, FACING_COLOR[f], `${f[0].toUpperCase()}${n}`, 14)),
+      ])
+    ),
+    // 斜め 4 方向 (#811): 右側の 2 方向は自前の矩形、左側の 2 方向は mirrorOf（左右反転）で埋める
+    ...Object.fromEntries(
+      (['upRight', 'downRight'] as const).map((f) => [
+        f,
+        [1, 2, 3].map((n) => box(32, 48, DIAGONAL_COLOR[f], `${DIAGONAL_LABEL[f]}${n}`, 14)),
+      ])
+    ),
+    mirrorOf: { upLeft: 'upRight', downLeft: 'downRight' },
+  }
   return {
     startScene: 'meadow',
     start: { x: 320, y: 300 },
