@@ -173,17 +173,65 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(engine.getState().enemies[0].hp).toBeLessThan(999)
   })
 
-  it('エンジンの状態・イベントはエフェクトの有無で変わらない', () => {
-    const a = setup(undefined)
-    const b = setup({ impact: sh(), cast: sh(), magic: sh() })
-    I(b.s).effectTextures.set('sheet.png', sheetTexture(4))
-    for (const t of [a, b]) {
-      t.engine.selectSpell(fire)
-      sync(t.s)
-      run(t.s, 1500)
+  it('1 回の dt が行動の終わりをまたいでも、数字が出るヒットには効果も出る', () => {
+    const { s, engine } = setup({ impact: sh({ frameMs: 2000 }) })
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    engine.selectAttack()
+    sync(s)
+    let popups = 0
+    const inner = s as unknown as { spawnPopup: (...a: unknown[]) => void }
+    const orig = inner.spawnPopup.bind(s)
+    inner.spawnPopup = (...a) => {
+      popups++
+      orig(...a)
     }
-    expect(JSON.stringify(b.engine.getState().events)).toBe(
-      JSON.stringify(a.engine.getState().events)
-    )
+    // タブ復帰などで大きく遅れた 1 tick: 命中も行動の終わりも 1 回で越える
+    s.tick(ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 600)
+    expect(popups).toBeGreaterThan(0)
+    expect(I(s).effectInstances.map((e) => e.kind)).toEqual(['impact'])
+  })
+
+  it('エンジンの状態・イベントはエフェクトの有無で変わらない（攻撃・呪文を数手、変化する乱数列で）', () => {
+    const lcg = (seed: number) => () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0
+      return seed / 0x100000000
+    }
+    const make = (effects: BattleEffects | undefined) => {
+      const engine = new BattleEngine(
+        [entity('hero', { poses: { slash: 'slash.png' } }), entity('mage')],
+        [entity('boss', { atk: 4 }), entity('imp', { atk: 3 })],
+        { rng: lcg(12345), skills: {} }
+      )
+      const s = new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        ...(effects ? { effects } : {}),
+      })
+      created.push(s)
+      for (const f of ['sheet.png']) I(s).effectTextures.set(f, sheetTexture(4))
+      return { s, engine }
+    }
+    const a = make(undefined)
+    const b = make({ impact: sh(), slash: sh(), cast: sh(), magic: sh() })
+    for (const t of [a, b]) {
+      for (let turn = 0; turn < 6; turn++) {
+        if (turn % 2 === 0) t.engine.selectAttack()
+        else t.engine.selectSpell(fire)
+        sync(t.s)
+        run(t.s, 1500)
+      }
+    }
+    const snap = (e: BattleEngine) => {
+      const st = e.getState()
+      return JSON.stringify({
+        events: st.events,
+        party: st.party.map((x) => [x.hp, x.mp]),
+        enemies: st.enemies.map((x) => [x.hp, x.mp]),
+      })
+    }
+    expect(snap(a.engine).length).toBeGreaterThan(200)
+    expect(snap(b.engine)).toBe(snap(a.engine))
+    // 宣言あり側では実際にエフェクトが出ていた（比較が空振りでない）
+    expect(JSON.stringify(a.engine.getState().events)).toContain('"attack"')
   })
 })

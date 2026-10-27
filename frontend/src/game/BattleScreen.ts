@@ -56,6 +56,7 @@ import {
   effectFrameRect,
   hasBattleEffects,
   planEventEffects,
+  planHitEffects,
   type BattleEffectKind,
   type BattleEffectSheet,
   type BattleEffects,
@@ -132,6 +133,7 @@ import {
   sampleActor,
   sampleDamagePopup,
   sampleTarget,
+  type HitFire,
   type BattlePose,
   type BattlePresentation,
   type PlaybackState,
@@ -2616,7 +2618,7 @@ export class BattleScreen extends Container {
     }
     this.advancePopups(dt)
     this.updateSummonCue()
-    this.updateEffects(dt)
+    this.updateEffects(dt, r.fires)
     if (!isPlaybackBusy(this.playback)) {
       if (this.hpOverride.size > 0) this.hpOverride.clear()
       if (this.statusOverride.size > 0) this.statusOverride.clear()
@@ -2784,10 +2786,12 @@ export class BattleScreen extends Container {
   }
 
   /**
-   * エフェクト重ね (#936): 再生中の行動の予定（`planEventEffects`）のうち、時刻が来たものを対象の位置に出し、コマを送る。
-   * 位置は毎回、対象の枠から取り直す（画面サイズ変更・のけぞりに追従）。画像が読めない種類は出さない。表示だけでエンジンの状態は変えない
+   * エフェクト重ね (#936): 詠唱（行動の開始に出す）は再生中の行動の予定（`planEventEffects`）から、
+   * ヒットはダメージ数字と同じ発火（`fires`）から、対象の位置に出し、コマを送る。
+   * 位置は毎回、対象の枠から取り直す（画面サイズの変更には追従する。のけぞりには追従せず命中点に残る。ダメージ数字と同じ）。
+   * 画像が読めない種類は出さない。表示だけでエンジンの状態は変えない
    */
-  private updateEffects(dt: number): void {
+  private updateEffects(dt: number, fires: readonly HitFire[]): void {
     const layer = this.effectLayer
     if (!layer) return
     const active = this.playback.active
@@ -2795,20 +2799,26 @@ export class BattleScreen extends Container {
       this.effectPlanSeq = active.event.seq
       this.effectPending = planEventEffects(active.event, this.opts.effects, {
         usesSlashPose: (a) => this.usesSlashPose(a),
-      })
+      }).filter((p) => p.kind === 'cast' || p.kind === 'summon')
     } else if (!active) {
       this.effectPending = []
     }
     if (active && this.effectPending.length > 0) {
       const rest: EffectPlan[] = []
-      for (const plan of this.effectPending) {
-        if (plan.atMs > active.elapsed) {
-          rest.push(plan)
+      for (const p of this.effectPending) {
+        if (p.atMs > active.elapsed) {
+          rest.push(p)
           continue
         }
-        this.spawnEffect(plan, active.elapsed - plan.atMs)
+        this.spawnEffect(p, active.elapsed - p.atMs)
       }
       this.effectPending = rest
+    }
+    for (const fire of fires) {
+      const plans = planHitEffects(fire.event, fire.hits, this.opts.effects, {
+        usesSlashPose: (a) => this.usesSlashPose(a),
+      })
+      for (const p of plans) this.spawnEffect(p, fire.sinceHit)
     }
     this.effectInstances = this.effectInstances.filter((inst) => {
       inst.elapsed += inst.justSpawned ? 0 : dt

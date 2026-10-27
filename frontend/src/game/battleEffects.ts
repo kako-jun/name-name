@@ -6,7 +6,7 @@
  * - 何をいつ・どこへ出すかは、行動の記録（`BattleActionEvent`）から `planEventEffects` が導く。エンジンの状態・乱数は読まず・変えない
  * - 種類の拡張点: `BATTLE_EFFECT_KINDS` と `planEventEffects`（属性ごとのヒット素材の出し分けなどは今後ここへ足す）
  */
-import type { BattleActionEvent, BattleActorRef } from './battleEngine'
+import type { BattleActionEvent, BattleActorRef, BattleHit } from './battleEngine'
 import { eventTimeline, hitRound, hitTimeOf } from './battleMotion'
 import { hasOwn } from './ownProperty'
 
@@ -259,19 +259,36 @@ export function planEventEffects(
   if (castKind && effects?.[castKind]) {
     plans.push({ kind: castKind, atMs: 0, target: event.actor })
   }
+  plans.push(...planHitEffects(event, event.hits, effects, opts))
+  return plans
+}
+
+/**
+ * 命中ごとのエフェクトの予定。`hits` は行動の hits のうち、いま命中するもの（ダメージ数字の発火 `HitFire.hits` と同じ組）。
+ * 発火を起点に出すと、1 回の dt が行動の終わりをまたいでも、数字の出るヒットには効果も出る
+ */
+export function planHitEffects(
+  event: BattleActionEvent,
+  hits: readonly BattleHit[],
+  effects: BattleEffects | undefined,
+  opts: { usesSlashPose: (actor: BattleActorRef) => boolean }
+): EffectPlan[] {
+  if (!hasBattleEffects(effects)) return []
   let hitKind: BattleEffectKind | null = null
   if (event.kind === 'attack') hitKind = opts.usesSlashPose(event.actor) ? 'slash' : 'impact'
-  else if (isSpell || isSummon) hitKind = 'magic'
-  if (hitKind && effects?.[hitKind]) {
-    const tl = eventTimeline(event)
-    for (const hit of event.hits) {
-      if (hit.kind !== 'damage') continue
-      plans.push({
-        kind: hitKind,
-        atMs: hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval),
-        target: hit.target,
-      })
-    }
+  else if (event.kind === 'spell' || (event.summon !== undefined && event.kind === 'skill')) {
+    hitKind = 'magic'
+  }
+  if (!hitKind || !effects?.[hitKind]) return []
+  const tl = eventTimeline(event)
+  const plans: EffectPlan[] = []
+  for (const hit of hits) {
+    if (hit.kind !== 'damage') continue
+    plans.push({
+      kind: hitKind,
+      atMs: hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval),
+      target: hit.target,
+    })
   }
   return plans
 }
