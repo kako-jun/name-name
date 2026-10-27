@@ -58,6 +58,8 @@ import {
   type BlockedGate,
 } from '../game/fieldAssist'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
+import { FieldEmotionLayer, type EmotionHeads } from '../game/FieldEmotionLayer'
+import { EMOTION_TARGETS, type EmotionTarget } from '../game/fieldEmotion'
 import {
   WARP_COLOR,
   WARP_LOAD_TIMEOUT_MS,
@@ -281,6 +283,23 @@ async function main(): Promise<void> {
   if (config.companion)
     for (const f of FACINGS) companionTex[f] = await loadFrames(config.companion.sprites[f])
 
+  // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
+  const emotionTextures = new Map<string, Texture | null>()
+  for (const sheet of Object.values(config.emotions ?? {})) {
+    if (emotionTextures.has(sheet.image)) continue
+    try {
+      emotionTextures.set(sheet.image, Texture.from(await loadBitmap(sheet.image)))
+    } catch (e) {
+      console.warn(
+        `[field-sample] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
+      )
+      emotionTextures.set(sheet.image, null)
+    }
+  }
+  const emotionLayer = config.emotions
+    ? new FieldEmotionLayer(config.emotions, emotionTextures)
+    : null
+
   let scene = await ensureScene(config.startScene)
   let sceneId = config.startScene
 
@@ -321,6 +340,7 @@ async function main(): Promise<void> {
       companion: companionSprite,
       player,
       foreground: foregroundSprite,
+      emotion: emotionLayer ?? new Container(),
       marker,
     })
   )
@@ -331,6 +351,7 @@ async function main(): Promise<void> {
   overlaySprite.zIndex = WORLD_Z.overlay
   player.zIndex = WORLD_Z.player
   foregroundSprite.zIndex = WORLD_Z.foreground
+  if (emotionLayer) emotionLayer.zIndex = WORLD_Z.emotion
   marker.zIndex = WORLD_Z.marker
   app.stage.addChild(world, fade)
 
@@ -392,6 +413,7 @@ async function main(): Promise<void> {
   const startBattle = (enemies: BattleEntity[]): void => {
     // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
     releaseWalkInput()
+    emotionLayer?.clear()
     const b = config.battle
     const menu = buildBattleMenu(config)
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
@@ -835,6 +857,8 @@ async function main(): Promise<void> {
     )
     player.scale.set(flipped.has(facing) ? -s : s, s)
     player.position.set(pos.x, pos.y)
+    // 感情吹き出し (#937) の置き場所: 人物の表示上端の中央（人物が出ていなければ null）
+    const heads: EmotionHeads = { player: { x: pos.x, y: pos.y - tex.height * s }, companion: null }
     // 同行者 (#862): 主人公の後ろ。ghost（半透明）はフラグで切り替わる
     const ctex = config.companion ? companionTex[facing4(facing)] : undefined
     if (config.assist && config.companion && ctex && companionAlpha > 0) {
@@ -852,9 +876,11 @@ async function main(): Promise<void> {
       companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
       companionSprite.zIndex = companionZ(cp.y, pos.y)
       companionSprite.visible = true
+      heads.companion = { x: cp.x, y: cp.y - ct.height * cs }
     } else {
       companionSprite.visible = false
     }
+    emotionLayer?.tick(dt, heads)
     overlaySprite.visible = debug
     marker.clear()
     if (debug) {
@@ -891,6 +917,17 @@ async function main(): Promise<void> {
     /** フラグを立てる・下ろす (#862)。宣言していない名前は false を返して何もしない */
     setFlag,
     getFlags: () => ({ ...flags }),
+    /**
+     * 感情吹き出し (#937)。人物（player / companion）の頭上に、宣言した種類（"!" "?" など）を出す。見た目だけで歩行には関与しない。
+     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中は false。同じ人物に続けて出すと置き換わる
+     */
+    showEmotion: (target: EmotionTarget, kind: string): boolean => {
+      if (!emotionLayer || battle) return false
+      if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return false
+      return emotionLayer.show(target, kind)
+    },
+    /** 進行中の吹き出し（検証用の読み取り） */
+    emotions: () => emotionLayer?.active() ?? {},
   }
   ;(window as unknown as { fieldSample?: typeof api }).fieldSample = api
   // フラグのチェック（開発用。脚本の代わりに手で切り替える）
@@ -905,6 +942,19 @@ async function main(): Promise<void> {
     input.addEventListener('change', () => setFlag(name, input.checked))
     label.append(input, `フラグ: ${name}`)
     flagBox.appendChild(label)
+  }
+  // 感情吹き出しのボタン (#937。開発用。脚本の代わりに手で出す)
+  const emotionBox = $('tb-emotions')
+  for (const kind of Object.keys(config.emotions ?? {})) {
+    for (const target of config.companion ? EMOTION_TARGETS : (['player'] as const)) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.textContent = `${target === 'player' ? '' : '同行者 '}${kind}`
+      b.dataset.emotion = kind
+      b.dataset.target = target
+      b.addEventListener('click', () => api.showEmotion(target, kind))
+      emotionBox.appendChild(b)
+    }
   }
   const warpBox = $('tb-warps')
   for (const id of Object.keys(config.warps)) {

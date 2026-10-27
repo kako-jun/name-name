@@ -1347,3 +1347,46 @@ describe('battle.effects エフェクト重ね (#936)', () => {
     expect(c.warnings?.[0]).toContain('battle.effects.slash')
   })
 })
+
+describe('emotions 感情吹き出し (#937)', () => {
+  it('未指定は emotions キーが無く警告も無い（従来と同一）', () => {
+    const c = ok(minimal())
+    expect('emotions' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('宣言は URL に解決される（assetBaseUrl は images 配下）。種類名は自由', () => {
+    const c = ok(
+      mutated((c) => {
+        c.assetBaseUrl = 'https://cdn.example.com/g'
+        c.emotions = {
+          '!': { image: 'em/bang.png', durationMs: 800, offset: { x: 0, y: -6 }, motion: 'pop' },
+          '...': { image: 'em/dots.png', frames: 3, frameMs: 200 },
+        }
+      })
+    )
+    expect(Object.keys(c.emotions ?? {})).toEqual(['!', '...'])
+    expect(c.emotions!['!'].image).toBe('https://cdn.example.com/g/images/em/bang.png')
+    expect(c.emotions!['!'].durationMs).toBe(800)
+    expect(c.emotions!['...'].frames).toBe(3)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正な種類は読み込みを止めず、警告にして無視する', () => {
+    const c = ok(
+      mutated((c) => {
+        c.emotions = { '!': { image: 'a.png', durationMs: -1 }, '?': { image: 'q.png' } }
+      })
+    )
+    expect(Object.keys(c.emotions ?? {})).toEqual(['?'])
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('emotions.!.durationMs')
+  })
+  it('全部不正なら emotions キー自体が付かない', () => {
+    const c = ok(
+      mutated((c) => {
+        c.emotions = { '!': {} }
+      })
+    )
+    expect('emotions' in c).toBe(false)
+    expect(c.warnings).toHaveLength(1)
+  })
+})
