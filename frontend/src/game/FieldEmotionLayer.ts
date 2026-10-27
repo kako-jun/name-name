@@ -20,7 +20,13 @@ import {
 } from './fieldEmotion'
 
 /** 人物の表示上端の中央（背景ピクセル）。人物が出ていないときは null */
-export type EmotionHeads = Partial<Record<EmotionTarget, { x: number; y: number } | null>>
+export type EmotionHead = {
+  x: number
+  y: number
+  /** 人物の不透明度（0..1、省略は 1）。同行者の現れる・消える途中や ghost に吹き出しも合わせる */
+  alpha?: number
+}
+export type EmotionHeads = Partial<Record<EmotionTarget, EmotionHead | null>>
 
 export class FieldEmotionLayer extends Container {
   private state: EmotionState = INITIAL_EMOTION_STATE
@@ -93,6 +99,7 @@ export class FieldEmotionLayer extends Container {
       sprite.texture = tex
       sprite.scale.set(s)
       sprite.position.set(at.x, at.y)
+      sprite.alpha = head.alpha ?? 1
       sprite.visible = true
     }
   }

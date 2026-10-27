@@ -7,12 +7,7 @@
  * - 同じ人物に続けて出したときは、古い吹き出しを捨てて新しいものに置き換える（1 人物につき同時に 1 つ）
  * - コマ割りシートの扱い（frames / columns / frameMs）は戦闘のエフェクト (#936) と同じ流儀
  */
-import {
-  effectFrameRect,
-  effectRows,
-  EFFECT_MAX_FRAMES,
-  EFFECT_MAX_FRAME_MS,
-} from './battleEffects'
+import { effectFrameRect, EFFECT_MAX_FRAMES, EFFECT_MAX_FRAME_MS } from './battleEffects'
 import { hasOwn } from './ownProperty'
 
 /** 出す先の人物: 主人公 / 同行者 */
@@ -49,6 +44,7 @@ export const EMOTION_DEFAULT_DURATION_MS = 1200
 export const EMOTION_MAX_DURATION_MS = 10000
 export const EMOTION_MAX_SCALE = 10
 export const EMOTION_MAX_OFFSET = 2000
+/** 種類名の最大文字数（コードポイント数。絵文字は 1 文字） */
 export const EMOTION_MAX_KEY_LENGTH = 16
 /** pop の長さ（ms） */
 export const EMOTION_POP_MS = 160
@@ -75,7 +71,7 @@ export function parseEmotions(
   }
   for (const key of Object.keys(raw)) {
     const path = `emotions.${key}`
-    if (key.trim() === '' || key.length > EMOTION_MAX_KEY_LENGTH || key === '__proto__') {
+    if (key.trim() === '' || [...key].length > EMOTION_MAX_KEY_LENGTH || key === '__proto__') {
       warnings.push(
         `${path} は 1〜${EMOTION_MAX_KEY_LENGTH} 文字の種類名である必要があります（無視します）`
       )
@@ -194,7 +190,6 @@ export function emotionFrameAt(sheet: Pick<EmotionSheet, 'frames' | 'frameMs'>, 
 
 /** シート画像の中の frame コマ目の矩形（戦闘のエフェクトと同じ割り方） */
 export const emotionFrameRect = effectFrameRect
-export const emotionRows = effectRows
 
 /** 出現の動きによる拡大の倍率（pop: 0.4 → 1.2 → 1 を `EMOTION_POP_MS` で）。none・pop 後は 1 */
 export function emotionMotionScale(motion: EmotionMotion, t: number): number {

@@ -104,6 +104,14 @@ describe('parseEmotions', () => {
     expect(r.warnings.join('\n')).toContain('emotions.badMotion.motion')
   })
 
+  it('種類名の長さはコードポイントで数える（絵文字は 1 文字）', () => {
+    const ok = '😀'.repeat(16)
+    const ng = '😀'.repeat(17)
+    const r = parseEmotions({ [ok]: { image: 'a.png' }, [ng]: { image: 'a.png' } })
+    expect(Object.keys(r.emotions)).toEqual([ok])
+    expect(r.warnings).toHaveLength(1)
+  })
+
   it('URL を解決できない種類は無視する', () => {
     const r = parseEmotions({ '!': { image: 'a.png' } }, () => null)
     expect(r.emotions).toEqual({})

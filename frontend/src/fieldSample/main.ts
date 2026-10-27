@@ -285,17 +285,20 @@ async function main(): Promise<void> {
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionTextures = new Map<string, Texture | null>()
-  for (const sheet of Object.values(config.emotions ?? {})) {
-    if (emotionTextures.has(sheet.image)) continue
-    try {
-      emotionTextures.set(sheet.image, Texture.from(await loadBitmap(sheet.image)))
-    } catch (e) {
-      console.warn(
-        `[field-sample] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
-      )
-      emotionTextures.set(sheet.image, null)
-    }
-  }
+  await Promise.all(
+    [...new Set(Object.values(config.emotions ?? {}).map((sheet) => sheet.image))].map(
+      async (image) => {
+        try {
+          emotionTextures.set(image, Texture.from(await loadBitmap(image)))
+        } catch (e) {
+          console.warn(
+            `[field-sample] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
+          )
+          emotionTextures.set(image, null)
+        }
+      }
+    )
+  )
   const emotionLayer = config.emotions
     ? new FieldEmotionLayer(config.emotions, emotionTextures)
     : null
@@ -331,6 +334,8 @@ async function main(): Promise<void> {
   const marker = new Graphics()
   const fade = new Graphics()
   const world = new Container()
+  // 感情吹き出し (#937) の層。宣言が無いときは空の箱（zIndex は層の順序どおり常に付ける）
+  const emotionLayerBox: Container = emotionLayer ?? new Container()
   // 描画順は layers.ts (テストで固定)
   world.addChild(
     ...orderedLayers<Container>({
@@ -340,7 +345,7 @@ async function main(): Promise<void> {
       companion: companionSprite,
       player,
       foreground: foregroundSprite,
-      emotion: emotionLayer ?? new Container(),
+      emotion: emotionLayerBox,
       marker,
     })
   )
@@ -351,7 +356,7 @@ async function main(): Promise<void> {
   overlaySprite.zIndex = WORLD_Z.overlay
   player.zIndex = WORLD_Z.player
   foregroundSprite.zIndex = WORLD_Z.foreground
-  if (emotionLayer) emotionLayer.zIndex = WORLD_Z.emotion
+  emotionLayerBox.zIndex = WORLD_Z.emotion
   marker.zIndex = WORLD_Z.marker
   app.stage.addChild(world, fade)
 
@@ -876,7 +881,7 @@ async function main(): Promise<void> {
       companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
       companionSprite.zIndex = companionZ(cp.y, pos.y)
       companionSprite.visible = true
-      heads.companion = { x: cp.x, y: cp.y - ct.height * cs }
+      heads.companion = { x: cp.x, y: cp.y - ct.height * cs, alpha: companionSprite.alpha }
     } else {
       companionSprite.visible = false
     }
@@ -923,6 +928,8 @@ async function main(): Promise<void> {
      */
     showEmotion: (target: EmotionTarget, kind: string): boolean => {
       if (!emotionLayer || battle) return false
+      // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
+      if (target === 'companion' && !companionSprite.visible) return false
       if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return false
       return emotionLayer.show(target, kind)
     },

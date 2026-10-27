@@ -62,6 +62,16 @@ describe('FieldEmotionLayer', () => {
     expect([sp.x, sp.y]).toEqual([140, 56])
   })
 
+  it('吹き出しの不透明度は人物の alpha に連動する（省略は 1）', () => {
+    const l = setup({ '!': sh() }, new Map([['a.png', sheetTexture(1)]]))
+    l.show('companion', '!')
+    l.tick(16, { player: null, companion: { x: 10, y: 10, alpha: 0.4 } })
+    const sp = l.children[0] as unknown as { alpha: number }
+    expect(sp.alpha).toBeCloseTo(0.4)
+    l.tick(16, { player: null, companion: { x: 10, y: 10 } })
+    expect(sp.alpha).toBe(1)
+  })
+
   it('同じ人物に続けて出すと 1 つに置き換わる（Sprite は増えない）', () => {
     const l = setup(
       { '!': sh(), '?': sh({ image: 'b.png', durationMs: 300 }) },
