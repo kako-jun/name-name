@@ -9,6 +9,7 @@ export const WORLD_LAYER_ORDER = [
   'companion',
   'player',
   'foreground',
+  'emotion',
   'marker',
 ] as const
 
@@ -32,6 +33,7 @@ export const WORLD_Z = {
   companion: 9,
   player: 10,
   foreground: 20,
+  emotion: 25,
   marker: 30,
 } as const satisfies Record<WorldLayer, number>
 

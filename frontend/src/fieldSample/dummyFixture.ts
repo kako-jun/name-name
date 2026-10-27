@@ -166,6 +166,57 @@ function ruinMask(w: number, h: number): string {
   return c.toDataURL('image/png')
 }
 
+/**
+ * 感情吹き出し (#937) の見本。角張った 32x32 の白い箱に、！・？・… を矩形だけで描く（横にコマが並ぶシート）。
+ * 吹き出しの本番の絵ではなく、素材なしで位置・タイミング・置き換えを確かめるための単色の代用品
+ */
+function emotionSheet(frames: number, draw: (g: CanvasRenderingContext2D, frame: number) => void) {
+  const N = 32
+  const c = document.createElement('canvas')
+  c.width = N * frames
+  c.height = N
+  const g = c.getContext('2d')
+  if (!g) throw new Error('2D canvas を作れません')
+  for (let f = 0; f < frames; f++) {
+    g.save()
+    g.translate(f * N, 0)
+    g.fillStyle = '#ffffff'
+    g.fillRect(1, 1, N - 2, N - 2)
+    g.strokeStyle = '#000000'
+    g.lineWidth = 2
+    g.strokeRect(1, 1, N - 2, N - 2)
+    draw(g, f)
+    g.restore()
+  }
+  return c.toDataURL('image/png')
+}
+
+const EMOTION_SHEETS = {
+  // ！: 赤い縦棒と点
+  '!': () =>
+    emotionSheet(1, (g) => {
+      g.fillStyle = '#d62a2a'
+      g.fillRect(13, 6, 6, 14)
+      g.fillRect(13, 23, 6, 4)
+    }),
+  // ？: 青い角張った「？」
+  '?': () =>
+    emotionSheet(1, (g) => {
+      g.fillStyle = '#2a5ad6'
+      g.fillRect(9, 6, 14, 4)
+      g.fillRect(19, 10, 4, 6)
+      g.fillRect(13, 14, 10, 4)
+      g.fillRect(13, 18, 4, 3)
+      g.fillRect(13, 23, 4, 4)
+    }),
+  // …: 灰の点が 1 つ・2 つ・3 つと増える 3 コマ
+  '...': () =>
+    emotionSheet(3, (g, f) => {
+      g.fillStyle = '#555555'
+      for (let i = 0; i <= f; i++) g.fillRect(6 + i * 8, 20, 5, 5)
+    }),
+}
+
 const FACING_COLOR = { up: '#3a6', down: '#36a', left: '#a63', right: '#a36' } as const
 /** 斜めの自前の歩行絵（右側の 2 方向）。左側の 2 方向は mirrorOf で左右反転して作る */
 const DIAGONAL_COLOR = { upRight: '#6a3', downRight: '#63a' } as const
@@ -261,6 +312,28 @@ export function buildDummyFixture(): Record<string, unknown> {
         ])
       ),
       height: 64,
+    },
+    // 感情吹き出し (#937)。ツールバーのボタン（! ? ...）で主人公・同行者の頭上に出す
+    emotions: {
+      '!': {
+        image: EMOTION_SHEETS['!'](),
+        durationMs: 1000,
+        offset: { x: 0, y: -4 },
+        motion: 'pop',
+      },
+      '?': {
+        image: EMOTION_SHEETS['?'](),
+        durationMs: 1000,
+        offset: { x: 0, y: -4 },
+        motion: 'pop',
+      },
+      '...': {
+        image: EMOTION_SHEETS['...'](),
+        frames: 3,
+        frameMs: 250,
+        durationMs: 1500,
+        offset: { x: 0, y: -4 },
+      },
     },
     encounter: { stepDistance: 50, minSteps: 0 },
     monsters: {

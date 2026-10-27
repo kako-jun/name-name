@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { companionZ, layerIndex, orderedLayers, WORLD_LAYER_ORDER, WORLD_Z } from './layers'
 
 describe('world の描画順', () => {
-  it('景色 → 背景 → オーバーレイ → 同行者 → 主人公 → 前面 → マーカーの順', () => {
+  it('景色 → 背景 → オーバーレイ → 同行者 → 主人公 → 前面 → 感情吹き出し → マーカーの順', () => {
     expect([...WORLD_LAYER_ORDER]).toEqual([
       'scroll',
       'background',
@@ -10,6 +10,7 @@ describe('world の描画順', () => {
       'companion',
       'player',
       'foreground',
+      'emotion',
       'marker',
     ])
   })
@@ -17,6 +18,13 @@ describe('world の描画順', () => {
   it('前面は主人公の手前、マーカーは前面の手前', () => {
     expect(layerIndex('foreground')).toBeGreaterThan(layerIndex('player'))
     expect(layerIndex('marker')).toBeGreaterThan(layerIndex('foreground'))
+  })
+
+  it('感情吹き出し (#937) は前面の手前（隠れない）、マーカーの奥', () => {
+    expect(layerIndex('emotion')).toBeGreaterThan(layerIndex('foreground'))
+    expect(layerIndex('marker')).toBeGreaterThan(layerIndex('emotion'))
+    expect(WORLD_Z.emotion).toBeGreaterThan(WORLD_Z.foreground)
+    expect(WORLD_Z.marker).toBeGreaterThan(WORLD_Z.emotion)
   })
 
   it('景色は背景より奥', () => {
@@ -29,11 +37,12 @@ describe('world の描画順', () => {
       marker: 'm',
       player: 'p',
       foreground: 'f',
+      emotion: 'e',
       overlay: 'o',
       companion: 'c',
       background: 'b',
     })
-    expect(r).toEqual(['s', 'b', 'o', 'c', 'p', 'f', 'm'])
+    expect(r).toEqual(['s', 'b', 'o', 'c', 'p', 'f', 'e', 'm'])
   })
 
   it('zIndex の大小も描画順と一致する（前面は同行者・主人公のどちらの手前でもある）', () => {

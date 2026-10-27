@@ -28,6 +28,7 @@ import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
 import type { BattlePresentation } from '../game/battleMotion'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
+import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
 import type { WindowStyle } from '../game/windowStyle'
 import { parseCommandIds, type CommandId, type CommandLayout } from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
@@ -159,6 +160,8 @@ export interface FieldSampleConfig {
   assist: AssistConfig | null
   /** 条件付き通行で現れる同行者 (#862)。省略 = 同行者は出さず、通れるだけ */
   companion: FieldCompanion | null
+  /** 感情吹き出し (#937)。`emotions`（種類名 → 絵の宣言）。見た目だけで歩行・戦闘には関与しない。不正な種類は警告して無視。未指定は undefined＝吹き出しなし */
+  emotions?: EmotionSheets
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
   encounter: EncounterStepConfig
   /** エンカウントで使うモンスターのマスター (#809) */
@@ -664,6 +667,11 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   warnings.push(...fx.warnings.map((w) => `battle.${w}`))
   if (hasBattleEffects(fx.effects) && b.presentation !== 'ff')
     warnings.push('battle.effects は presentation "ff" のときだけ効きます（"dq" では無視されます）')
+  // 感情吹き出し (#937)。不正な種類は読み込みを止めず警告にする（画像 URL は他の画像と同じく assetBaseUrl 基準）
+  const em = parseEmotions(raw.emotions, (u) =>
+    resolveUrl(resolveRpgImagePath(assetBase, u), baseUrl)
+  )
+  warnings.push(...em.warnings)
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -719,6 +727,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       flags,
       assist,
       companion,
+      ...(hasEmotions(em.emotions) ? { emotions: em.emotions } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,

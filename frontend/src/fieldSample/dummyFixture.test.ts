@@ -42,6 +42,13 @@ describe('buildDummyFixture (#890)', () => {
     expect(c.scenes.train.encounter?.groups.length).toBeGreaterThan(0)
   })
 
+  it('感情吹き出し (#937): ! ? ... を素材なしで持つ（… は 3 コマ）', () => {
+    const c = parsed()
+    expect(Object.keys(c.emotions ?? {})).toEqual(['!', '?', '...'])
+    expect(c.emotions!['...'].frames).toBe(3)
+    expect(c.emotions!['!'].motion).toBe('pop')
+  })
+
   it('条件付き通行 (#862): assist・companion・フラグを持つ（?fixture=dummy で橙の階段を試せる）', () => {
     const c = parsed()
     expect(c.assist).not.toBeNull()
