@@ -59,7 +59,7 @@ import {
 } from '../game/fieldAssist'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
 import { FieldEmotionLayer, type EmotionHeads } from '../game/FieldEmotionLayer'
-import { EMOTION_TARGETS, type EmotionTarget } from '../game/fieldEmotion'
+import { EMOTION_TARGETS, isCompanionShown, type EmotionTarget } from '../game/fieldEmotion'
 import {
   WARP_COLOR,
   WARP_LOAD_TIMEOUT_MS,
@@ -924,12 +924,16 @@ async function main(): Promise<void> {
     getFlags: () => ({ ...flags }),
     /**
      * 感情吹き出し (#937)。人物（player / companion）の頭上に、宣言した種類（"!" "?" など）を出す。見た目だけで歩行には関与しない。
-     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中は false。同じ人物に続けて出すと置き換わる
+     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中・同行者が出ていないとき（companion 指定時）は false。同じ人物に続けて出すと置き換わる
      */
     showEmotion: (target: EmotionTarget, kind: string): boolean => {
       if (!emotionLayer || battle) return false
       // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
-      if (target === 'companion' && !companionSprite.visible) return false
+      if (
+        target === 'companion' &&
+        !isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
+      )
+        return false
       if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return false
       return emotionLayer.show(target, kind)
     },
