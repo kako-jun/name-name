@@ -1305,3 +1305,45 @@ describe('pickConfigSource (#890)', () => {
     expect(pickConfigSource('').dummy).toBe(false)
   })
 })
+
+describe('battle.effects エフェクト重ね (#936)', () => {
+  it('未指定は battle に effects キーが無い（従来と同一）', () => {
+    const c = ok(minimal())
+    expect('effects' in c.battle).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('宣言は URL に解決され（assetBaseUrl は images 配下）、ff でなければ効かない警告が出る', () => {
+    const c = ok(
+      mutated((c) => {
+        c.assetBaseUrl = 'https://cdn.example.com/g'
+        c.battle = {
+          layout: 'side',
+          presentation: 'ff',
+          effects: { cast: { image: 'fx/c.png', frames: 6 } },
+        }
+      })
+    )
+    expect(c.battle.effects?.cast?.image).toBe('https://cdn.example.com/g/images/fx/c.png')
+    expect(c.warnings).toBeUndefined()
+    const dq = ok(
+      mutated((c) => {
+        c.battle = { layout: 'side', effects: { cast: { image: 'fx/c.png', frames: 6 } } }
+      })
+    )
+    expect(dq.warnings?.some((w) => w.includes('battle.effects'))).toBe(true)
+  })
+  it('不正な種類は読み込みを止めず、battle. つきの警告にして無視する', () => {
+    const c = ok(
+      mutated((c) => {
+        c.battle = {
+          layout: 'side',
+          presentation: 'ff',
+          effects: { slash: { image: 'a.png', frames: 0 }, magic: { image: 'm.png', frames: 2 } },
+        }
+      })
+    )
+    expect(Object.keys(c.battle.effects ?? {})).toEqual(['magic'])
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('battle.effects.slash')
+  })
+})
