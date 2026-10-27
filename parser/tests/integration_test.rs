@@ -5343,6 +5343,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_command_labels: None,
         battle_commands: None,
         battle_transition: None,
+        field_emotions: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         chapters: vec![Chapter {
@@ -10532,6 +10533,7 @@ fn telop_test_doc_base() -> Document {
         battle_command_labels: None,
         battle_commands: None,
         battle_transition: None,
+        field_emotions: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         chapters: vec![],
@@ -12222,4 +12224,84 @@ fn test_monster_loot_lines_are_raw_strings_and_roundtrip() {
         doc.chapters[0].scenes[0].events,
         doc2.chapters[0].scenes[0].events
     );
+}
+
+// ---- #943: field_emotions / [感情:] ----
+
+fn emotion_events(body: &str) -> Vec<Event> {
+    let src = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n{body}\n"
+    );
+    parser::parse(&src).chapters[0].scenes[0].events.clone()
+}
+
+#[test]
+fn test_field_emotions_frontmatter_parses_and_roundtrips() {
+    let doc = parser::parse(&battle_doc("field_emotions: \"data/emotions.json\"\n"));
+    assert_eq!(doc.field_emotions.as_deref(), Some("data/emotions.json"));
+    assert_eq!(
+        parser::parse(&battle_doc("field_emotions:\n")).field_emotions,
+        None
+    );
+    assert_eq!(parser::parse(&battle_doc("")).field_emotions, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("field_emotions: \"data/emotions.json\"\n"),
+        "{emitted}"
+    );
+    assert_eq!(parser::parse(&emitted).field_emotions, doc.field_emotions);
+    assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("field_emotions"));
+}
+
+#[test]
+fn test_emotion_directive_parses_and_roundtrips() {
+    let src = "[感情: 主人公, びっくり]\n\n[感情: 花子, ？, 持続=1200]\n";
+    let events = emotion_events(src);
+    assert!(events.contains(&Event::Emotion {
+        target: "主人公".into(),
+        kind: "びっくり".into(),
+        duration_ms: None,
+    }));
+    assert!(events.contains(&Event::Emotion {
+        target: "花子".into(),
+        kind: "？".into(),
+        duration_ms: Some(1200),
+    }));
+    let doc = parser::parse(&format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n{src}"
+    ));
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[感情: 主人公, びっくり]\n"), "{emitted}");
+    assert!(
+        emitted.contains("[感情: 花子, ？, 持続=1200]\n"),
+        "{emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).chapters[0].scenes[0].events,
+        doc.chapters[0].scenes[0].events
+    );
+}
+
+#[test]
+fn test_emotion_directive_invalid_is_not_an_event() {
+    for bad in ["[感情: 主人公]", "[感情: , びっくり]", "[感情: 主人公, ]"] {
+        assert!(
+            !emotion_events(bad)
+                .iter()
+                .any(|e| matches!(e, Event::Emotion { .. })),
+            "{bad}"
+        );
+    }
+    // 持続の不正値（0・非数値）は None
+    for bad in ["持続=0", "持続=abc", "持続=-5", "持続="] {
+        let ev = emotion_events(&format!("[感情: 花子, ？, {bad}]"));
+        assert!(
+            ev.contains(&Event::Emotion {
+                target: "花子".into(),
+                kind: "？".into(),
+                duration_ms: None,
+            }),
+            "{bad}"
+        );
+    }
 }

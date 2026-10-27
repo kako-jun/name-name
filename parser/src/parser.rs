@@ -58,6 +58,7 @@ pub fn parse(input: &str) -> Document {
     let mut battle_command_labels: Option<String> = None;
     let mut battle_commands: Option<String> = None;
     let mut battle_transition: Option<String> = None;
+    let mut field_emotions: Option<String> = None;
     let mut battle_enemy_grid: Option<String> = None;
     let mut battle_enemy_window_overlap: Option<String> = None;
 
@@ -323,6 +324,13 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_transition = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("field_emotions:") {
+                // フィールドの感情吹き出し設定 JSON のパス (#943)。assets 相対パスを生文字列で透過し、
+                // 読み込み・検証・不正値の警告は frontend 側で行う（`battle_background` と同じ流儀）。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    field_emotions = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_enemy_window_overlap:") {
                 // 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5。値は生文字列で透過し、runtime 側で丸める。
@@ -1222,6 +1230,7 @@ pub fn parse(input: &str) -> Document {
         battle_command_labels,
         battle_commands,
         battle_transition,
+        field_emotions,
         battle_enemy_grid,
         battle_enemy_window_overlap,
         chapters: vec![Chapter {
@@ -1285,6 +1294,11 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     }
     if let Some(rest) = content.strip_prefix("背景:") {
         return Some(parse_background_directive(rest));
+    }
+    // [感情: 主人公, びっくり] / [感情: 花子, ？, 持続=1200] — フィールドの感情吹き出し (#943)。
+    // 対象が空・種類が空の行は不正としてディレクティブにしない（本文扱いに落ちる他タグと同じ）。
+    if let Some(rest) = content.strip_prefix("感情:") {
+        return parse_emotion_directive(rest);
     }
     // [動画退場] — 動画レイヤをクリア (#252)。「動画:」より先に完全一致で判定する。
     if content == "動画退場" {
@@ -1748,6 +1762,32 @@ fn parse_background_directive(content: &str) -> Event {
         fade_right,
         brightness,
     }
+}
+
+/// `[感情: 対象, 種類]` / `[感情: 対象, 種類, 持続=1200]` の本体を分解する (#943)。
+/// 対象は話者名か `主人公`、種類は frontmatter `field_emotions` の設定 JSON のキー。どちらも生文字列で透過する
+/// （解決・未宣言の警告は frontend）。`持続` は ms の正の整数のみ採用し、0・非数値・空は None（＝設定の既定）。
+/// 未知のキーは silent skip。対象か種類が空なら None（不正行）。
+fn parse_emotion_directive(content: &str) -> Option<Event> {
+    let mut parts = content.split(',');
+    let target = parts.next()?.trim().to_string();
+    let kind = parts.next()?.trim().to_string();
+    if target.is_empty() || kind.is_empty() {
+        return None;
+    }
+    let mut duration_ms: Option<u32> = None;
+    for raw in parts {
+        if let Some((k, v)) = raw.trim().split_once('=') {
+            if k.trim() == "持続" {
+                duration_ms = v.trim().parse::<u32>().ok().filter(|&n| n > 0);
+            }
+        }
+    }
+    Some(Event::Emotion {
+        target,
+        kind,
+        duration_ms,
+    })
 }
 
 /// `[背景: ..., 明るさ=<b>]` の明るさ値をパースする。

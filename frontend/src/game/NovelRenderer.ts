@@ -3821,6 +3821,13 @@ export class NovelRenderer {
       }
       return
     }
+    if ('Emotion' in event) {
+      // [感情:] (#943) はフィールドの吹き出し用。ノベル再生にはフィールドが無いので何もしない。
+      if (import.meta.env.DEV) {
+        console.warn('[name-name] [感情:] はフィールドが無い場面では無視されます')
+      }
+      return
+    }
     if ('Flag' in event) {
       // `[条件:]` はシーン訪問の入場時に展開済みで、訪問中は列を固定する (#799)。ここで再展開しない
       // （ブロック内でそのフラグを変えても、入場済みのブロックの残りは流れる。TUI と同じ）。

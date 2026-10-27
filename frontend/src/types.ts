@@ -560,6 +560,17 @@ export type Event =
       }
     }
   | {
+      /** フィールドの感情吹き出し (#943)。`[感情: 主人公, びっくり]` / `[感情: 花子, ？, 持続=1200]`。
+       *  target は話者名か `主人公`、kind は frontmatter `field_emotions` の設定 JSON のキー（どちらも生文字列）。
+       *  フィールドに届く実行文脈が無い場面（通常ノベル）では何も起きない（開発ビルドで警告）。 */
+      Emotion: {
+        target: string
+        kind: string
+        /** 表示時間の上書き（ms）。未指定は設定の durationMs。 */
+        duration_ms?: number | null
+      }
+    }
+  | {
       /** 単色の地色 (#273)。`[背景色: #f5f0e8]`。背景画像 (Background) と同じ永続状態として
        *  NovelGameState に持たせ、snapshot / applyState / セーブ復元で復元する。 */
       BackgroundColor: {
@@ -1090,6 +1101,8 @@ export interface EventDocument {
   battle_enemy_window_overlap?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
+  /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（フィールドサンプルの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */
+  field_emotions?: string | null
   /** RPG 戦闘のコマンド窓の配置 (#204)。`"grid"`（既定・2x2）/ `"cross"`（十字）。frontmatter `battle_command_layout:` から流す。GUI 専用。 */
   battle_command_layout?: string | null
   /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */

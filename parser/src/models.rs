@@ -895,6 +895,17 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         brightness: Option<f32>,
     },
+    /// フィールドの感情吹き出し (#943)。人物の頭上に「！」「？」などの絵を一定時間出す、見た目だけの演出。
+    /// `target` は話者名か `主人公`、`kind` は frontmatter `field_emotions` の設定 JSON のキー（どちらも生文字列で透過し、
+    /// 解決・未宣言種類の警告は frontend）。`duration_ms` は表示時間の上書き（ms。未指定は設定の `durationMs`）。
+    /// フィールドに届く実行文脈が無い場面（通常ノベル）では何も起きない。
+    /// Markdown 構文: `[感情: 主人公, びっくり]` / `[感情: 花子, ？, 持続=1200]`。日本語ディレクティブのみ（EN エイリアスなし）。
+    Emotion {
+        target: String,
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
+    },
     /// 舞台構造の背景板 (#683)。`Background`（単一スロット・新しいものが古いものを置換）とは
     /// 独立した加算的な仕組み: 1シーン内に複数書けば、それぞれ別の板として蓄積される
     /// （runtime 側のリスト状態管理。パーサーは単に複数の `BackgroundBoard` イベントを
@@ -2026,6 +2037,11 @@ pub struct Document {
     /// `"none"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_transition: Option<String>,
+    /// フィールドの感情吹き出しの設定 JSON のパス (#943)。assets 相対パスを生文字列で透過する（`battle_background` と
+    /// 同じ流儀）。読み込み・検証は frontend（フィールドサンプルの `emotions` と同じ検証。不正は警告して無視）。
+    /// 未指定・空は None（従来どおり吹き出しなし）。GUI 専用（TUI は読まない）。frontmatter `field_emotions:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_emotions: Option<String>,
     /// RPG 戦闘（`battle_layout: side`）の敵の見えないグリッド (#839)。`列数x行数`（例 `6x2`、半角 x / × 可）。
     /// 値は parser でバリデーションせず生文字列で透過し、runtime 側（`normalizeEnemyGrid`）で列 1〜12・行 1〜4 に丸める。
     /// 不正値・未指定は無効＝従来の配置。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_grid:` から流す。
