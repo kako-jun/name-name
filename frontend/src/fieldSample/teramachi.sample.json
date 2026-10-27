@@ -1,46 +1,66 @@
 {
-  "startScene": "overview",
+  "startScene": "shrine-street",
   "start": {
-    "x": 760,
-    "y": 600
+    "x": 300,
+    "y": 500
   },
   "speed": 260,
   "edgeThreshold": 6,
   "player": {
     "sprites": {
       "up": [
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-1.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-2.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-up-3.png"
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-up-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-up-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-up-3.webp"
       ],
       "down": [
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-1.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-2.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-down-3.png"
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-down-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-down-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-down-3.webp"
       ],
       "left": [
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-1.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-2.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-left-3.png"
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-left-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-left-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-left-3.webp"
       ],
       "right": [
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-1.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-2.png",
-        "http://localhost:8765/assets/characters/walk/nam-elementary-wheelchair-walk-right-3.png"
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-right-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-right-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-right-3.webp"
+      ],
+      "upLeft": [
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upleft-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upleft-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upleft-3.webp"
+      ],
+      "upRight": [
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upright-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upright-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upright-3.webp"
+      ],
+      "downLeft": [
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downleft-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downleft-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downleft-3.webp"
+      ],
+      "downRight": [
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downright-1.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downright-2.webp",
+        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downright-3.webp"
       ]
     },
     "height": 150,
     "frameMs": 140
   },
   "scenes": {
-    "overview": {
-      "background": "http://localhost:8765/sample/field/teramachi-overview.png",
-      "mask": "http://localhost:8765/sample/field/masks/overview-mask.png",
+    "shrine-street": {
+      "background": "http://localhost:8765/assets/images/fields/legacy/TRM-07.webp",
+      "mask": "http://localhost:8765/assets/images/fields/legacy/masks/TRM-07-mask.webp",
       "links": [
         {
-          "edge": "left",
-          "range": [245, 335],
-          "to": "wide-road"
+          "edge": "right",
+          "range": [385, 635],
+          "to": "canal"
         }
       ],
       "encounter": {
@@ -48,59 +68,59 @@
         "groups": []
       }
     },
-    "wide-road": {
-      "background": "http://localhost:8765/sample/field/teramachi-wide-road.png",
-      "mask": "http://localhost:8765/sample/field/masks/wide-road-mask.png",
+    "canal": {
+      "background": "http://localhost:8765/assets/images/fields/legacy/TRM-08.webp",
+      "mask": "http://localhost:8765/assets/images/fields/legacy/masks/TRM-08-mask.webp",
       "links": [
         {
-          "edge": "top",
-          "range": [1440, 1536],
-          "to": "overview"
+          "edge": "left",
+          "range": [385, 585],
+          "to": "shrine-street"
         },
         {
-          "edge": "bottom",
-          "range": [0, 880],
-          "to": "connector"
+          "edge": "right",
+          "range": [630, 735],
+          "to": "bathhouse"
         }
       ],
       "encounter": {
         "rate": 8,
-        "groups": ["dragon", "hornet", "hornet+hornet"]
+        "groups": ["dragon", "shachihoko", "shachihoko+shachihoko"]
       }
     },
-    "connector": {
-      "background": "http://localhost:8765/sample/field/teramachi-connector.png",
-      "mask": "http://localhost:8765/sample/field/masks/connector-mask.png",
+    "bathhouse": {
+      "background": "http://localhost:8765/assets/images/fields/legacy/TRM-09.webp",
+      "mask": "http://localhost:8765/assets/images/fields/legacy/masks/TRM-09-mask.webp",
       "links": [
         {
-          "edge": "bottom",
-          "range": [200, 1290],
-          "to": "wide-road"
+          "edge": "left",
+          "range": [510, 640],
+          "to": "canal"
         },
         {
-          "edge": "top",
-          "range": [200, 240],
-          "to": "narrow-lane"
+          "edge": "bottom",
+          "range": [1033, 1420],
+          "to": "slope"
         }
       ],
       "encounter": {
         "rate": 6,
-        "groups": ["hornet", "dragon+hornet"]
+        "groups": ["shachihoko", "dragon+shachihoko"]
       }
     },
-    "narrow-lane": {
-      "background": "http://localhost:8765/sample/field/teramachi-narrow-lane.png",
-      "mask": "http://localhost:8765/sample/field/masks/narrow-lane-mask.png",
+    "slope": {
+      "background": "http://localhost:8765/assets/images/fields/legacy/TRM-10.webp",
+      "mask": "http://localhost:8765/assets/images/fields/legacy/masks/TRM-10-mask.webp",
       "links": [
         {
-          "edge": "bottom",
-          "range": [120, 850],
-          "to": "connector"
+          "edge": "top",
+          "range": [1033, 1420],
+          "to": "bathhouse"
         }
       ],
       "encounter": {
         "rate": 3,
-        "groups": ["dragon", "hornet+hornet", "dragon+hornet"]
+        "groups": ["dragon", "shachihoko+shachihoko", "dragon+shachihoko"]
       }
     }
   },
@@ -110,24 +130,24 @@
   },
   "monsters": {
     "dragon": {
-      "name": "ドラゴン",
+      "name": "段ボールのドラゴン",
       "hp": 40,
       "atk": 9,
       "def": 4,
       "agi": 5,
       "exp": 20,
       "gold": 30,
-      "sprite": "http://localhost:8765/sample/battle/enemy-dragon.png"
+      "sprite": "http://localhost:8765/assets/images/enemies/M001.webp"
     },
-    "hornet": {
-      "name": "スズメバチ",
+    "shachihoko": {
+      "name": "シャチホコ",
       "hp": 18,
       "atk": 7,
       "def": 2,
       "agi": 8,
       "exp": 8,
       "gold": 10,
-      "sprite": "http://localhost:8765/assets/enemies/hornet.png"
+      "sprite": "http://localhost:8765/assets/images/enemies/M008.webp"
     }
   },
   "party": [
@@ -138,7 +158,7 @@
       "atk": 10,
       "def": 5,
       "agi": 6,
-      "sprite": "http://localhost:8765/assets/characters/poses/nam-elementary-wheelchair-ready.png"
+      "sprite": "http://localhost:8765/assets/images/characters/C002/poses/C002-elementary-wheelchair-ready.webp"
     },
     {
       "name": "オトン",
@@ -147,7 +167,7 @@
       "atk": 11,
       "def": 6,
       "agi": 7,
-      "sprite": "http://localhost:8765/assets/characters/poses/otton-elementary-ready.png"
+      "sprite": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-ready.webp"
     },
     {
       "name": "シャー",
@@ -156,7 +176,7 @@
       "atk": 12,
       "def": 7,
       "agi": 5,
-      "sprite": "http://localhost:8765/assets/characters/poses/shah-elementary-ready.png",
+      "sprite": "http://localhost:8765/assets/images/characters/C003/poses/C003-elementary-ready.webp",
       "row": "front"
     },
     {
@@ -166,7 +186,7 @@
       "atk": 8,
       "def": 4,
       "agi": 8,
-      "sprite": "http://localhost:8765/assets/characters/poses/peiko-elementary-ready.png",
+      "sprite": "http://localhost:8765/assets/images/characters/C004/poses/C004-elementary-ready.webp",
       "row": "back"
     }
   ],
@@ -174,6 +194,6 @@
     "layout": "side",
     "width": 800,
     "height": 450,
-    "background": "http://localhost:8765/sample/battle/backgrounds/bg-a.png"
+    "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
   }
 }

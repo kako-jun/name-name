@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   DEFAULTS,
+  DIAGONAL_FACINGS,
   configNotice,
   findReturnLink,
   forceBattleCandidates,
@@ -359,6 +360,14 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
     if (!r.ok) throw new Error(r.error)
     expect(Object.keys(r.value.scenes).length).toBeGreaterThan(0)
+  })
+
+  it('同梱サンプルの素材 URL は sit-by-me の現行パス（assets/images/...webp）を指す (#938)', () => {
+    for (const raw of [teramachiSample, diagonalSample]) {
+      const urls = [...raw.matchAll(/"(http:\/\/localhost:8765\/[^"]+)"/g)].map((m) => m[1])
+      expect(urls.length).toBeGreaterThan(0)
+      for (const u of urls) expect(u).toMatch(/^http:\/\/localhost:8765\/assets\/images\/.+\.webp$/)
+    }
   })
 
   it('相対 URL は baseUrl を基準に解決される', () => {
@@ -1109,13 +1118,12 @@ describe('parseConfig 斜め 4 方向 (Issue #811)', () => {
     }
   })
 
-  it('同梱の斜めサンプル（diagonal-walk.sample.json）が ok で、upLeft は upRight の反転', () => {
+  it('同梱の斜めサンプル（diagonal-walk.sample.json）が ok で、8 方向すべてが自前の 3 コマ', () => {
     const c = ok(JSON.parse(diagonalSample))
-    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight' })
-    expect(c.player.sprites.upLeft).toBeUndefined()
-    expect(c.player.sprites.upRight).toHaveLength(3)
-    expect(c.player.sprites.downLeft).toHaveLength(3)
-    expect(c.player.sprites.downRight).toHaveLength(3)
+    expect(c.player.mirrorOf).toEqual({})
+    for (const f of ['up', 'down', 'left', 'right', ...DIAGONAL_FACINGS] as const) {
+      expect(c.player.sprites[f]).toHaveLength(3)
+    }
   })
 })
 
