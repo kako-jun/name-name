@@ -77,3 +77,14 @@ describe('parseFieldEmotionsText', () => {
     }
   })
 })
+
+describe('resolveEmotion: Object.prototype のキーは未宣言として弾く', () => {
+  it('toString / __proto__ / constructor', () => {
+    const { emotions } = parseFieldEmotionsText(SHEETS)
+    for (const kind of ['toString', '__proto__', 'constructor']) {
+      const r = resolveEmotion({ target: '主人公', kind }, { emotions })
+      expect(r.command, kind).toBeNull()
+      expect(r.warnings[0], kind).toContain('宣言')
+    }
+  })
+})

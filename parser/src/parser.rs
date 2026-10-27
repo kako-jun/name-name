@@ -1296,7 +1296,7 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
         return Some(parse_background_directive(rest));
     }
     // [感情: 主人公, びっくり] / [感情: 花子, ？, 持続=1200] — フィールドの感情吹き出し (#943)。
-    // 対象が空・種類が空の行は不正としてディレクティブにしない（本文扱いに落ちる他タグと同じ）。
+    // 対象か種類が欠けた行は不正で、イベントにならず捨てられる（本文にもならない）。
     if let Some(rest) = content.strip_prefix("感情:") {
         return parse_emotion_directive(rest);
     }
@@ -1767,9 +1767,10 @@ fn parse_background_directive(content: &str) -> Event {
 /// `[感情: 対象, 種類]` / `[感情: 対象, 種類, 持続=1200]` の本体を分解する (#943)。
 /// 対象は話者名か `主人公`、種類は frontmatter `field_emotions` の設定 JSON のキー。どちらも生文字列で透過する
 /// （解決・未宣言の警告は frontend）。`持続` は ms の正の整数のみ採用し、0・非数値・空は None（＝設定の既定）。
-/// 未知のキーは silent skip。対象か種類が空なら None（不正行）。
+/// 区切りは半角 `,` に加え全角 `，` `、` も受ける（master.rs の属性 id 区切りと同じ流儀）。`持続 = 1200` のように前後の空白は許す。
+/// 未知のキーは silent skip。対象か種類が空なら None（不正行。イベントにならず捨てられる）。
 fn parse_emotion_directive(content: &str) -> Option<Event> {
-    let mut parts = content.split(',');
+    let mut parts = content.split([',', '，', '、']);
     let target = parts.next()?.trim().to_string();
     let kind = parts.next()?.trim().to_string();
     if target.is_empty() || kind.is_empty() {

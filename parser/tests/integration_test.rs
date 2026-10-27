@@ -12305,3 +12305,49 @@ fn test_emotion_directive_invalid_is_not_an_event() {
         );
     }
 }
+
+#[test]
+fn test_emotion_directive_fullwidth_separators_and_boundaries() {
+    let ev = |t: &str, k: &str, d: Option<u32>| Event::Emotion {
+        target: t.into(),
+        kind: k.into(),
+        duration_ms: d,
+    };
+    // 全角「，」「、」区切り
+    let events = emotion_events("[感情: 花子，？，持続=1200]\n\n[感情: 主人公、びっくり]");
+    assert!(events.contains(&ev("花子", "？", Some(1200))));
+    assert!(events.contains(&ev("主人公", "びっくり", None)));
+    // 正規化されて半角区切りで emit され、round-trip する
+    let doc = parser::parse(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[感情: 花子，？，持続=1200]\n",
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("[感情: 花子, ？, 持続=1200]\n"),
+        "{emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).chapters[0].scenes[0].events,
+        doc.chapters[0].scenes[0].events
+    );
+    // u32 を超える持続は None
+    assert!(emotion_events("[感情: 花子, ？, 持続=99999999999]").contains(&ev("花子", "？", None)));
+    // 未知キーは無視、前後の空白は許す
+    assert!(
+        emotion_events("[感情: 花子, ？, 持続=1200, 余分=1]").contains(&ev(
+            "花子",
+            "？",
+            Some(1200)
+        ))
+    );
+    assert!(
+        emotion_events("[感情: 花子, ？, 持続 = 1200]").contains(&ev("花子", "？", Some(1200)))
+    );
+    // 不正行は本文にもならず捨てられる
+    let bad = emotion_events("[感情: 主人公]");
+    assert!(
+        bad.iter()
+            .all(|e| !matches!(e, Event::Dialog { .. } | Event::Narration { .. })),
+        "{bad:?}"
+    );
+}

@@ -71,6 +71,17 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     return <div className={`text-xs italic ml-2 ${meta}`}>背景: {event.Background.path}</div>
   }
 
+  if ('Emotion' in event) {
+    const em = event.Emotion
+    const d = em.duration_ms != null ? `, 持続=${em.duration_ms}ms` : ''
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        感情: {em.target}, {em.kind}
+        {d}
+      </div>
+    )
+  }
+
   if ('EventImage' in event) {
     const ei = event.EventImage
     const parts: string[] = []
