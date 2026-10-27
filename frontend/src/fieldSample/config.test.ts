@@ -362,7 +362,7 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     expect(Object.keys(r.value.scenes).length).toBeGreaterThan(0)
   })
 
-  it('同梱サンプルの素材 URL は sit-by-me の現行パス（assets/images/...webp）を指す (#938)', () => {
+  it('同梱サンプルの素材 URL は sit-by-me の現行パスの形（assets/images/...webp）をしている。パスの形だけを確かめ、ファイルの実在は確かめない (#938)', () => {
     for (const raw of [teramachiSample, diagonalSample]) {
       const urls = [...raw.matchAll(/"(http:\/\/localhost:8765\/[^"]+)"/g)].map((m) => m[1])
       expect(urls.length).toBeGreaterThan(0)
