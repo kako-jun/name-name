@@ -868,6 +868,7 @@ async function main(): Promise<void> {
     const ctex = config.companion ? companionTex[facing4(facing)] : undefined
     if (
       config.assist &&
+      config.companion &&
       ctex &&
       isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
     ) {
