@@ -268,3 +268,15 @@ export function emotionAnchor(
 ): { x: number; y: number } {
   return { x: head.x + sheet.offset.x, y: head.y + sheet.offset.y }
 }
+
+/**
+ * 同行者が出ているか（描画と同じ条件）。前フレームの描画結果（sprite.visible）ではなく、設定と現在の不透明度で判定する。
+ * シーン遷移直後に古い visible が残っていても、見えないまま吹き出しの時間だけ進むのを防ぐ。
+ */
+export function isCompanionShown(
+  hasAssist: boolean,
+  hasCompanion: boolean,
+  companionAlpha: number
+): boolean {
+  return hasAssist && hasCompanion && companionAlpha > 0
+}
