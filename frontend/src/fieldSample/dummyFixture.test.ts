@@ -49,6 +49,15 @@ describe('buildDummyFixture (#890)', () => {
     expect(Object.keys(c.flags)).toContain(c.assist!.requires[0])
   })
 
+  it('斜め 4 方向を 8 方向で持つ: 右側は自前の絵、左側は mirrorOf（左右反転）(#811)', () => {
+    const c = parsed()
+    for (const f of ['up', 'down', 'left', 'right', 'upRight', 'downRight'] as const)
+      expect(c.player.sprites[f]).toHaveLength(3)
+    expect(c.player.mirrorOf).toEqual({ upLeft: 'upRight', downLeft: 'downRight' })
+    expect(c.player.sprites.upLeft).toBeUndefined()
+    expect(c.player.sprites.downLeft).toBeUndefined()
+  })
+
   it('parseConfig を通り、console.error / warn を出さない', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
