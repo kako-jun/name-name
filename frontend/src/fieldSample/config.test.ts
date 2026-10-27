@@ -362,6 +362,15 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     expect(Object.keys(r.value.scenes).length).toBeGreaterThan(0)
   })
 
+  it('寺町サンプルの銭湯の下端リンクは歩ける幅いっぱい [930,1535]、坂の上端は [1024,1420] (#938)', () => {
+    const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
+    if (!r.ok) throw new Error(r.error)
+    const bottom = r.value.scenes.bathhouse.links.find((l) => l.edge === 'bottom')
+    const top = r.value.scenes.slope.links.find((l) => l.edge === 'top')
+    expect(bottom?.range).toEqual([930, 1535])
+    expect(top?.range).toEqual([1024, 1420])
+  })
+
   it('同梱サンプルの素材 URL は sit-by-me の現行パスの形（assets/images/...webp）をしている。パスの形だけを確かめ、ファイルの実在は確かめない (#938)', () => {
     for (const raw of [teramachiSample, diagonalSample]) {
       const urls = [...raw.matchAll(/"(http:\/\/localhost:8765\/[^"]+)"/g)].map((m) => m[1])
