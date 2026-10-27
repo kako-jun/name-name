@@ -2198,7 +2198,7 @@ HP: 100
 
 ### 戦闘のエフェクト重ね (#936 段階1)
 
-詠唱・物理ヒット・魔法ヒットの**透過のコマ割りシート**を、`battle_presentation: ff` の戦闘で対象の位置へ重ねて再生する。**段階1は Markdown の宣言を持たない**（frontmatter・ブロックのキーは無く、parser も変えない）。戦闘画面サンプルの設定 JSON のトップレベル `effects`、フィールドサンプルの `battle.effects`、`BattleScreenOptions.effects` で宣言する。RPG モード（frontmatter 経由）への接続は段階2。
+詠唱・物理ヒット・魔法ヒットの**透過のコマ割りシート**を、`battle_presentation: ff` の戦闘（`layout: side` が必要。front と ff の組み合わせでは ff は無視されるので、エフェクトも出ない）で対象の位置へ重ねて再生する。**段階1は Markdown の宣言を持たない**（frontmatter・ブロックのキーは無く、parser も変えない）。戦闘画面サンプルの設定 JSON のトップレベル `effects`、フィールドサンプルの `battle.effects`、`BattleScreenOptions.effects` で宣言する。RPG モード（frontmatter 経由）への接続は段階2。
 
 ```json
 "effects": {
