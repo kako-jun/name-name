@@ -2196,6 +2196,35 @@ HP: 100
 
 **エンジン側の入口**: `召喚獣id` の解決は `rpgProjectFromDoc`（複数 doc を束ねたあと）が行い、解決済みの魔石・特技が `cue`（演出の元）を持って戦闘へ渡る。純関数は `frontend/src/game/summons.ts`（`resolveSummonRefs` / `toSummonCue`）。戦闘画面サンプルの設定 JSON は `beasts`（`[召喚獣]` と同じキー: `id` / `name` / `elements` / `image` / `facing` / `se` / `imaginary` / `target` / `effect` / `builtin` / `message`。`image` / `se` は設定 JSON の位置からの相対 URL）と、`magicites[]` / `skills[]` の `summonId`（サンプル: `frontend/public/battle-sample/summon.json`）。
 
+### 戦闘のエフェクト重ね (#936 段階1)
+
+詠唱・物理ヒット・魔法ヒットの**透過のコマ割りシート**を、`battle_presentation: ff` の戦闘で対象の位置へ重ねて再生する。**段階1は Markdown の宣言を持たない**（frontmatter・ブロックのキーは無く、parser も変えない）。戦闘画面サンプルの設定 JSON のトップレベル `effects`、フィールドサンプルの `battle.effects`、`BattleScreenOptions.effects` で宣言する。RPG モード（frontmatter 経由）への接続は段階2。
+
+```json
+"effects": {
+  "cast":   { "image": "cast-magic.png",  "frames": 6, "frameMs": 80, "anchor": "hand",   "scale": 1.6 },
+  "summon": { "image": "cast-summon.png", "frames": 6 },
+  "impact": { "image": "hit-impact.png",  "frames": 6, "frameMs": 50 },
+  "slash":  { "image": "hit-slash.png",   "frames": 6, "columns": 3 },
+  "magic":  { "image": "hit-magic.png",   "frames": 6 }
+}
+```
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| 種類（`cast` / `summon` / `impact` / `slash` / `magic`） | オブジェクト | 無し | 詠唱（通常）/ 召喚詠唱 / 打撃 / 斬撃 / 魔法ヒット。宣言した種類だけ再生される |
+| `image` | 文字列 | 必須 | シート画像（透過）。相対は設定 JSON（フィールドサンプルは `assetBaseUrl` の images 配下）基準 |
+| `frames` | 整数 1〜256 | 必須 | コマ数 |
+| `columns` | 整数 1〜`frames` | `frames`（横一列） | 1 行のコマ数。左上から右へ・上から下へ数える。セルは画像を `columns` × `ceil(frames / columns)` に等分した大きさ（端数は切り捨て） |
+| `frameMs` | 数 0 超〜5000 | 80 | 1 コマの ms |
+| `anchor` | `hand` / `center` / `foot` / `screen` | 詠唱は `hand`、ヒットは `center` | `hand` = 使い手の手元（相手側へ寄せた位置）、`center` = 対象の中心（ダメージ数字の高さ）、`foot` = 足元、`screen` = 画面中央 |
+| `scale` | 数 0 超〜10 | 1 | 拡大率。1 = セルの幅が対象の枠の一辺と同じ |
+
+**割り当て**: 呪文の発動で `cast` を使い手へ。召喚獣の演出（`BattleActionEvent.summon`）のある行動の発動で `summon` を使い手へ。通常攻撃の命中（ダメージのヒット）で、使い手が `slash` ポーズの絵を持てば `slash`、持たなければ `impact` を対象へ（記録に武器・技の種類が無いための暫定）。呪文と召喚獣の演出のある行動のダメージの命中で `magic` を対象へ。回復・ミス・アイテム・状態・知らせ・召喚獣の無い特技には出さない。複数ヒット・全体攻撃はヒットごと・対象ごとに出る。時刻は命中の瞬間（`eventTimeline`）に合わせる。
+
+**不正値・読めない画像**: 不正な種類（未知のキー・`frames` が整数でない・`columns` が `frames` 超・`anchor` が未知・数が範囲外・画像 URL を解決できない）は**警告を出してその種類だけ無視**し、読み込みと戦闘は止めない。画像が読めなかった種類は、警告を出してエフェクトだけ省く。エンジンの状態・イベント・乱数には一切効かず、宣言しないゲームは従来と完全に同じ。
+
+
 **未決・未実装**（この段階の範囲外）: 亡き仲間の召喚獣化（パーティからの離脱 #738 と一体）、召喚獣の形態変化（段階ごとの絵の差し替え。#741 の脚本制御と合わせる）、登場・退場の動きの細かい宣言（長さ・動き。#745）、戦闘開始時の自動登場、実ゲーム（RPG モード）への効果音の接続（`onSummonCue` を受ける仕組みが RPG モードにまだ無い。段階2）、モンスターに召喚獣の宣言を直接持たせること、効果音の再生（ホストの領分）
 
 ### 装備 (#207)
