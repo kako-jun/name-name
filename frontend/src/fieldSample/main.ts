@@ -866,7 +866,11 @@ async function main(): Promise<void> {
     const heads: EmotionHeads = { player: { x: pos.x, y: pos.y - tex.height * s }, companion: null }
     // 同行者 (#862): 主人公の後ろ。ghost（半透明）はフラグで切り替わる
     const ctex = config.companion ? companionTex[facing4(facing)] : undefined
-    if (config.assist && config.companion && ctex && companionAlpha > 0) {
+    if (
+      config.assist &&
+      ctex &&
+      isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
+    ) {
       const g = evalAssist(config.assist, flags).ghost
       const ct = ctex[walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
       companionSprite.texture = ct
