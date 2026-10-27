@@ -13,6 +13,7 @@ import {
   emotionMotionScale,
   emotionView,
   hasEmotions,
+  isCompanionShown,
   parseEmotions,
   startEmotion,
   stepEmotions,
@@ -233,5 +234,19 @@ describe('startEmotion / stepEmotions', () => {
 describe('emotionAnchor', () => {
   it('頭の位置に offset を足す（y が負で上）', () => {
     expect(emotionAnchor({ x: 100, y: 50 }, { offset: { x: 3, y: -8 } })).toEqual({ x: 103, y: 42 })
+  })
+})
+
+describe('isCompanionShown', () => {
+  it('assist・companion があり不透明度が正のときだけ true', () => {
+    expect(isCompanionShown(true, true, 0.5)).toBe(true)
+    expect(isCompanionShown(true, true, 1)).toBe(true)
+  })
+  it('不透明度 0 は false', () => {
+    expect(isCompanionShown(true, true, 0)).toBe(false)
+  })
+  it('assist か companion が無ければ false', () => {
+    expect(isCompanionShown(false, true, 1)).toBe(false)
+    expect(isCompanionShown(true, false, 1)).toBe(false)
   })
 })
