@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  isWallVideoPath,
   computeCoverFit,
   computeDynamicRenderResolution,
   MAX_RENDER_BACKBUFFER_DIMENSION_PX,
@@ -1212,6 +1213,9 @@ describe('saveSlotToGameState', () => {
       eventImage: data.eventImage ?? null,
       // 舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
       backgroundBoards: data.backgroundBoards ?? [],
+      wall: data.wall
+        ? { ...data.wall, loop: data.wall.loop !== false, mute: data.wall.mute !== false }
+        : null,
       // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
       props: data.props ?? [],
       // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1257,6 +1261,7 @@ describe('saveSlotToGameState', () => {
       video: null,
       eventImage: null,
       backgroundBoards: [],
+      wall: null,
       props: [],
       spotlight: null,
       curtain: null,
@@ -3580,5 +3585,64 @@ describe('computeCurtainRiseOffset (#697)', () => {
     expect(Math.abs(computeBoardSlideInOffset(durationMs, durationMs))).toBe(0)
     expect(Math.abs(computeCurtainRiseOffset(0, durationMs))).toBe(0)
     expect(computeCurtainRiseOffset(durationMs, durationMs)).toBe(-1)
+  })
+})
+
+describe('isWallVideoPath (#703)', () => {
+  it.each([
+    'a.mp4',
+    'a.webm',
+    'a.ogv',
+    'a.mov',
+    'a.m4v',
+    'A.WEBM',
+    'd/e/f.Mp4',
+    'a.webm?v=1',
+    'a.mp4#t=3',
+  ])('%s は動画', (p) => {
+    expect(isWallVideoPath(p)).toBe(true)
+  })
+
+  it.each([
+    'a.webp',
+    'a.png',
+    'a.jpg',
+    'a.gif',
+    'a',
+    '',
+    'mp4',
+    'a.mp4.png',
+    'dir.webm/a.png',
+    '.webm.x',
+  ])('%j は画像', (p) => {
+    expect(isWallVideoPath(p)).toBe(false)
+  })
+
+  it('拡張子だけのファイル名 `.webm` は動画扱い（拡張子判別の仕様の固定）', () => {
+    expect(isWallVideoPath('.webm')).toBe(true)
+  })
+})
+
+describe('saveSlotToGameState / gameStateToSaveSlot: wall (#703)', () => {
+  it('wall が往復し、古いセーブ（無し）は null、loop/mute 欠落は既定 true', () => {
+    const base = {
+      sceneId: 's',
+      eventIndex: 0,
+      textIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+    } as unknown as Parameters<typeof saveSlotToGameState>[0]
+    expect(saveSlotToGameState(base, null).wall).toBeNull()
+    expect(
+      saveSlotToGameState({ ...base, wall: { path: 'a.webm', loop: false, mute: false } }, null)
+        .wall
+    ).toEqual({ path: 'a.webm', loop: false, mute: false })
+    expect(
+      saveSlotToGameState({ ...base, wall: { path: 'a.webm' } } as typeof base, null).wall
+    ).toEqual({ path: 'a.webm', loop: true, mute: true })
+    expect(saveSlotToGameState({ ...base, wall: null }, null).wall).toBeNull()
   })
 })

@@ -2752,3 +2752,48 @@ describe('wasm parseMarkdown: 大道具・背景板の面の切り替え (#704)'
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// 壁 (#703)。wasm → normalizeEvent 経路で、既定値（ループ・ミュートとも true）が boolean に揃い、
+// 解除 `[壁: なし]` が 'WallExit' になり、emit が既定を無出力で往復することを縛る。
+describe('wasm parseMarkdown: 壁 (#703)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[壁: 光.webp]',
+    '[壁: 星空.webm, ループ=false]',
+    '[壁: 映像.webm, loop=false, mute=false]',
+    '[壁: ミュート.webm, ミュート=false]',
+    '[壁: なし]',
+    '[壁:]',
+    '',
+  ].join('\n')
+
+  it('loop/mute は常に boolean に正規化され、解除は WallExit、空 path は捨てられる', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events).toEqual([
+      { Wall: { path: '光.webp', loop: true, mute: true } },
+      { Wall: { path: '星空.webm', loop: false, mute: true } },
+      { Wall: { path: '映像.webm', loop: false, mute: false } },
+      { Wall: { path: 'ミュート.webm', loop: true, mute: false } },
+      'WallExit',
+    ])
+  })
+
+  it('round-trip: 既定は無出力・非既定だけ出力・解除は [壁: なし]', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[壁: 光.webp]\n')
+    expect(emitted).toContain('[壁: 星空.webm, ループ=false]\n')
+    expect(emitted).toContain('[壁: 映像.webm, ループ=false, ミュート=false]\n')
+    expect(emitted).toContain('[壁: ミュート.webm, ミュート=false]\n')
+    expect(emitted).toContain('[壁: なし]\n')
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

@@ -235,3 +235,43 @@ describe('collectUpcomingAssetUrls: 旧実装リファレンスとの突き合�
     expect(nonEmpty).toBeGreaterThan(100) // 空虚な一致(全部空)でないこと
   })
 })
+
+describe('collectUpcomingAssetUrls: 壁 (#703)', () => {
+  const wallEvent = (path: string): Event => ({ Wall: { path, loop: true, mute: true } })
+
+  it('画像の壁は images/ の URL を先読み対象に積む', () => {
+    expect(collectUpcomingAssetUrls([wallEvent('glow.webp'), narr()], 0, BASE)).toEqual([
+      `${BASE}/images/glow.webp`,
+    ])
+  })
+
+  it('動画の壁は積まない（Assets を通らず <video> が読む）', () => {
+    expect(
+      collectUpcomingAssetUrls(
+        [wallEvent('a.webm'), wallEvent('b.MP4'), wallEvent('c.mov'), narr()],
+        0,
+        BASE
+      )
+    ).toEqual([])
+  })
+
+  it('解除 WallExit は先読み対象でも打ち切りでもない。前後の背景は積む', () => {
+    expect(
+      collectUpcomingAssetUrls([bg('a.png'), 'WallExit' as Event, bg('b.png')], 0, BASE)
+    ).toEqual([`${BASE}/images/a.png`, `${BASE}/images/b.png`])
+  })
+
+  it('同じ画像の壁と背景板は重複除去される', () => {
+    expect(
+      collectUpcomingAssetUrls(
+        [wallEvent('x.png'), { BackgroundBoard: { path: 'x.png', depth: 1 } }],
+        0,
+        BASE
+      )
+    ).toEqual([`${BASE}/images/x.png`])
+  })
+
+  it('assetBaseUrl が空なら何も積まない', () => {
+    expect(collectUpcomingAssetUrls([wallEvent('a.png')], 0, '')).toEqual([])
+  })
+})
