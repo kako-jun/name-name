@@ -126,6 +126,34 @@ describe('nearestTalkableNpc (#841)', () => {
   it('NPC がいなければ null', () => {
     expect(nearestTalkableNpc([], me, 'down')).toBeNull()
   })
+  it('stepMoveAroundNpcs が円周で止めた位置（横から触れた状態）なら、円錐の外でも話せる', () => {
+    const m = openMask(1000, 800)
+    const t = [npc('monk', 760, 540)]
+    // y=539 から右へ押す: 円の左側に当たり、円周上（半径 + 1e-6）に乗る。乗った最初の位置を取る
+    let pos = { x: 600, y: 539 }
+    for (let i = 0; i < 200; i++) {
+      pos = stepMoveAroundNpcs(m, pos, { x: 1, y: 0 }, 200, 16, t).pos
+      if (Math.hypot(pos.x - 760, pos.y - 540) < NPC_BLOCK_RADIUS + 0.01) break
+    }
+    const d = Math.hypot(pos.x - 760, pos.y - 540)
+    expect(d).toBeGreaterThanOrEqual(NPC_BLOCK_RADIUS)
+    expect(d).toBeLessThan(NPC_BLOCK_RADIUS + 0.01)
+    // 止まった位置は NPC への方角が右向き（円錐 60°）の外にあり、円の外側に出る向きでもよい
+    expect(nearestTalkableNpc(t, pos, 'right')).toBe('monk')
+    expect(nearestTalkableNpc(t, pos, 'up')).toBe('monk')
+    expect(nearestTalkableNpc(t, pos, 'down')).toBe('monk')
+    // 円から余裕（2px）を超えて離れて円錐外なら対象外
+    expect(nearestTalkableNpc(t, { x: 760 - NPC_BLOCK_RADIUS - 3, y: 540 + 20 }, 'up')).toBeNull()
+  })
+  it('円にほぼ正面から押しても円の中へは入らず、円周で止まるか円周に沿って回り込む（約 90° 回り込むことがある）', () => {
+    const m = openMask(1000, 800)
+    const t = [npc('n', 500, 500)]
+    let pos = { x: 400, y: 500 }
+    for (let i = 0; i < 300; i++) {
+      pos = stepMoveAroundNpcs(m, pos, { x: 1, y: 0 }, 200, 16, t).pos
+      expect(Math.hypot(pos.x - 500, pos.y - 500)).toBeGreaterThanOrEqual(NPC_BLOCK_RADIUS - 1e-6)
+    }
+  })
 })
 
 describe('approachArrived / npcAtPoint (#841)', () => {

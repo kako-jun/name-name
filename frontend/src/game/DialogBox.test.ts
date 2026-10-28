@@ -2582,6 +2582,26 @@ describe('DialogBox setBoxHeight (#841 シーンの大きさに追従)', () => {
     expect(internals(box).boxH).toBe(100)
     box.dispose()
   })
+  it('同値でも boxH が advBoxHeight に揃う', () => {
+    const box = new DialogBox({ screenWidth: 800, screenHeight: 600, boxHeight: 100 })
+    internals(box).boxH = 50
+    box.setBoxHeight(100)
+    expect(internals(box).boxH).toBe(100)
+    box.dispose()
+  })
+  it('生成直後は isShowing=false。hide() で背景が隠れ、redraw・setBoxHeight では再び出ない（会話外は無表示）', () => {
+    const box = new DialogBox({ screenWidth: 800, screenHeight: 600, boxHeight: 100 })
+    const b = box as unknown as { bg: { visible: boolean } }
+    expect(box.isShowing).toBe(false)
+    box.hide()
+    expect(box.isShowing).toBe(false)
+    expect(b.bg.visible).toBe(false)
+    box.setBoxHeight(200)
+    box.redraw(1600, 1000)
+    expect(box.isShowing).toBe(false)
+    expect(b.bg.visible).toBe(false)
+    box.dispose()
+  })
   it('0 以下は 1 に丸める・同値は何もしない', () => {
     const box = new DialogBox({ screenWidth: 800, screenHeight: 600, boxHeight: 100 })
     box.setBoxHeight(0)

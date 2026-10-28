@@ -52,6 +52,8 @@ function nearestNpcDistance(npcs: readonly NpcPoint[], p: Vec): number {
 
 /** 円周へ押し戻すときの余裕（`< radius` で塞ぐ判定に、浮動小数の誤差で入らないための量） */
 const PUSH_EPS = 1e-6
+/** 「触れている」とみなす円周からの余裕 (px)。円周で止まる位置からでも向きを問わず話せるように */
+const NPC_TOUCH_SLACK = 2
 
 function nearestNpc(npcs: readonly NpcPoint[], p: Vec): NpcPoint {
   let best = npcs[0]
@@ -101,7 +103,8 @@ export function stepMoveAroundNpcs(
     const cands: Vec[] = [{ x: cur.x + dx, y: cur.y + dy }]
     const t = cands[0]
     if (!blockedByNpc(npcs, cur, radius) && blockedByNpc(npcs, t, radius)) {
-      // 円周へ押し戻す（円の中心から t へ向かう向きに、半径の外側）
+      // 円周へ押し戻す（円の中心から t へ向かう向きに、半径の外側）。
+      // 円にほぼ正面から押すと、射影の不安定平衡で約 90° 横へ回り込む（仕様。円周に沿って滑る向きは入力の微小なずれで決まる）
       const n = nearestNpc(npcs, t)
       const d = dist(n, t)
       if (d > 1e-9)
@@ -142,7 +145,7 @@ const FACING_VEC: Record<Facing8, Vec> = {
 /**
  * 向いた方向の近傍にいる NPC の id（いちばん近い 1 人）。無ければ null。
  * 足元どうしの距離が reach 以内で、向きから coneDeg 以内の方角にいる NPC が対象。
- * 当たりの円に重なっている（ほぼ真上にいる）NPC は向きによらず対象にする。
+ * 当たりの円に触れている・重なっている NPC は向きによらず対象にする。
  */
 export function nearestTalkableNpc(
   npcs: readonly NpcPoint[],
@@ -159,7 +162,8 @@ export function nearestTalkableNpc(
     const d = dist(n, pos)
     if (d > reach) continue
     const inCone = d < 1e-6 || ((n.x - pos.x) * f.x + (n.y - pos.y) * f.y) / d >= cosMin - 1e-9
-    if (!inCone && d >= NPC_BLOCK_RADIUS) continue
+    // 円に触れている（stepMoveAroundNpcs は円周 + 1e-6 で止めるので余裕を持たせる）なら向きによらず話せる
+    if (!inCone && d > NPC_BLOCK_RADIUS + NPC_TOUCH_SLACK) continue
     if (d < bestD) {
       best = n.id
       bestD = d

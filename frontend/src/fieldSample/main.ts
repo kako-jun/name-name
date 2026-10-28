@@ -454,6 +454,8 @@ async function main(): Promise<void> {
     nameColor: 0xffe066,
     nameSeparateBox: false,
   })
+  // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
+  dialogBox.hide()
   app.stage.addChild(world, fade, dialogBox)
   /** シーン（画面）の大きさが変わったら、会話窓の箱の高さ・文字サイズも合わせる */
   const applyDialogMetrics = (width: number, height: number): void => {
@@ -763,7 +765,8 @@ async function main(): Promise<void> {
   }
   /** 決定キー (Space / Enter / Z): 向いた方向の近傍 NPC に話しかける。会話中は送る・閉じる */
   const onTalkKey = (ev: KeyboardEvent): void => {
-    // 文字入力（text 系 input・textarea・select）にフォーカスがあるときは、そちらの操作を邪魔しない
+    // 文字入力（text 系 input・textarea・select）にフォーカスがあるときは、そちらの操作を邪魔しない。
+    // checkbox / radio / button 以外の input（range・color・file・submit 等も含む）は text 扱い＝安全側で無視する
     const a = document.activeElement
     const typing =
       a instanceof HTMLTextAreaElement ||
@@ -1163,6 +1166,8 @@ async function main(): Promise<void> {
       flags: { ...flags },
       /** 会話中の NPC の id（会話していなければ null）と、このシーンの NPC の足元・向き（検証用） */
       talking: talking ? talking.id : null,
+      /** 会話窓（検証用）。会話外は showing / bgVisible とも false */
+      dialog: { showing: dialogBox.isShowing, bgVisible: dialogBox.isBackgroundVisible },
       npcs: currentNpcs().map((n) => ({ id: n.id, x: n.x, y: n.y, facing: n.facing })),
       /** 橙のラッチの状態（検証用） */
       assist: { latched: assistRt.latched, walked: assistRt.walked },
