@@ -1,5 +1,5 @@
 /** BattleScreen の `motion` (#956) の配線: ff の再生・サンプリングが選んだ時間の組 (default / snappy) で動く */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -91,5 +91,71 @@ describe('BattleScreen: motion の配線 (#956)', () => {
     const df = setup({ motion: 'default' })
     advanceTo(df, dur + 20)
     expect(I(df.s).playback.active?.event.seq).toBe(firstSeq(df))
+  })
+})
+
+describe('BattleScreen: 被弾モザイク (#953)', () => {
+  type Mv = { container: Container & { filters: unknown } }
+  const filt = (h: ReturnType<typeof setup>, i = 0) => {
+    const f = (I(h.s).partyViews[i] as unknown as Mv).container.filters as unknown as
+      | { sizeX: number; destroy: () => void }[]
+      | null
+    return f && f.length ? f[0] : null
+  }
+  function runUntilFilter(h: ReturnType<typeof setup>, limit = 4000): number[] {
+    const sizes: number[] = []
+    for (let t = 0; t < limit; t++) {
+      h.s.tick(1)
+      const f = filt(h)
+      if (f) sizes.push(f.sizeX)
+    }
+    return sizes
+  }
+  function enemyAttackSetup(motion: 'snappy' | 'default') {
+    const engine = new BattleEngine([entity('hero', { agi: 1 })], [entity('boss', { atk: 5, agi: 99 })], {
+      rng: () => 0.5,
+      skills: {},
+    })
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
+    created.push(s)
+    engine.selectAttack()
+    ;(s as unknown as { refresh(): void }).refresh()
+    return { s, engine, restX: I(s).partyViews[0].container.x }
+  }
+
+  it('snappy: 敵の攻撃命中で味方にフィルタが付き、size が 1→最大→1 と動いて終わると外れる', () => {
+    const h = enemyAttackSetup('snappy')
+    const sizes = runUntilFilter(h)
+    expect(sizes.length).toBeGreaterThan(50)
+    const max = Math.max(...sizes)
+    expect(max).toBe(S.hitMosaicMaxSize)
+    expect(sizes[0]).toBeLessThan(max)
+    expect(filt(h)).toBeNull()
+  })
+
+  it('default: 付かない', () => {
+    const h = enemyAttackSetup('default')
+    expect(runUntilFilter(h)).toEqual([])
+  })
+
+  it('味方の攻撃だけの間は敵側にも味方側にも付かない（敵の攻撃前）', () => {
+    const h = setup({ motion: 'snappy' })
+    for (let t = 0; t < SNAPPY_END; t++) {
+      h.s.tick(1)
+      expect(filt(h)).toBeNull()
+    }
+  })
+
+  it('破棄: 付いている最中に destroy してもフィルタが destroy される', () => {
+    const h = enemyAttackSetup('snappy')
+    let f: { destroy: () => void } | null = null
+    for (let t = 0; t < 4000 && !f; t++) {
+      h.s.tick(1)
+      f = filt(h)
+    }
+    expect(f).not.toBeNull()
+    const spy = vi.spyOn(f!, 'destroy')
+    h.s.destroy({ children: true })
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 })

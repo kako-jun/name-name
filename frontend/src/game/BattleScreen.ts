@@ -145,6 +145,8 @@ import {
   type PlaybackState,
   type TargetSample,
 } from './battleMotion'
+import { samplePixelatePulse } from './pixelateTransition'
+import { PixelateFilter } from 'pixi-filters'
 import type { BattleHit } from './battleEngine'
 import type { BattleOutcome, BattleResult } from './loot'
 import {
@@ -501,6 +503,8 @@ interface EntityView {
   baseVisual: PoseVisual | null
   shownVisual: PoseVisual | null
   poseVisuals: Partial<Record<BattlePose, PoseVisual>>
+  /** 被弾モザイク (#953): 付けている間だけ持つ PixelateFilter（container.filters に入っている）。終わる・破棄で外して destroy */
+  hitMosaic?: PixelateFilter | null
 }
 
 /** 再生中のエフェクト 1 つ (#936)。画面が持つ演出の途中状態（エンジンには持たない） */
@@ -797,6 +801,7 @@ export class BattleScreen extends Container {
     if (this.menuEnabled) this.engine.setAtbWaitScope('command')
     this.detachResultSkip()
     for (const v of [...this.enemyViews, ...this.partyViews]) {
+      this.clearHitMosaic(v)
       v.acrylicPlate?.destroy()
       v.acrylicShadow?.destroy()
       v.acrylicShadow = null
@@ -3087,10 +3092,54 @@ export class BattleScreen extends Container {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
           sh.alpha = view.container.alpha
         }
+        if (side === 'party') this.applyHitMosaic(view, this.hitMosaicSince(index))
       })
     }
     apply('enemy', this.enemyViews)
     apply('party', this.partyViews)
+  }
+
+  /**
+   * 被弾モザイク (#953): 敵の行動で味方 index に命中した最後の damage ヒットからの経過 ms。
+   * 無ければ null（miss/heal・味方の行動・未命中・再生なし）。複数ヒットはヒットごとに最新から測り直す（のけぞりと同じ契機）
+   */
+  private hitMosaicSince(index: number): number | null {
+    if (this.motionTiming.hitMosaicMs <= 0) return null
+    const active = this.playback.active
+    if (!active || active.event.actor.side !== 'enemy') return null
+    const ev = active.event
+    const tl = eventTimeline(ev, this.motionTiming)
+    let latest: number | null = null
+    for (const hit of ev.hits) {
+      if (hit.target.side !== 'party' || hit.target.index !== index || hit.kind !== 'damage') continue
+      const since = active.elapsed - hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval)
+      if (since < 0) continue
+      if (latest === null || since <= latest) latest = since
+    }
+    return latest
+  }
+
+  /** since が null か山が終わっていればフィルタを外し、そうでなければ付けて size を更新する（二重には付けない） */
+  private applyHitMosaic(view: EntityView, since: number | null): void {
+    const T = this.motionTiming
+    const pulse = since === null ? null : samplePixelatePulse(since, T.hitMosaicMs, T.hitMosaicMaxSize)
+    if (!pulse || pulse.done) {
+      this.clearHitMosaic(view)
+      return
+    }
+    if (!view.hitMosaic) {
+      view.hitMosaic = new PixelateFilter(1)
+      view.container.filters = [view.hitMosaic]
+    }
+    view.hitMosaic.size = pulse.size
+  }
+
+  private clearHitMosaic(view: EntityView): void {
+    const f = view.hitMosaic
+    if (!f) return
+    view.hitMosaic = null
+    view.container.filters = null
+    f.destroy()
   }
 
   /** スプライトの絵（と acrylic の板・影）を差し替えて、その絵で置き直す */

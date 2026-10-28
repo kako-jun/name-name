@@ -81,3 +81,23 @@ export function isRefineComplete(elapsedMs: number, remainingMs: number): boolea
   const e = Number.isFinite(elapsedMs) && elapsedMs > 0 ? elapsedMs : 0
   return e >= remainingMs
 }
+
+/**
+ * 被弾モザイク (#953): 山形（1→maxSize→1、画像のスワップなし）の `PixelateFilter.size` と終了判定。
+ * 切り替えのコルセン/リファイン（`computeCoarsenSize`/`computeRefineSize`）と同じ丸め・下限（size 1=等倍）。
+ * 山は sin の半周期（中央がピーク）。
+ *
+ * 入力契約: `elapsed` の非有限値/負値は 0 扱い。`durationMs<=0`（非有限含む）は即 done（size 1）。
+ */
+export function samplePixelatePulse(
+  elapsed: number,
+  durationMs: number,
+  maxSize: number = PIXELATE_TRANSITION_MAX_SIZE
+): { size: number; done: boolean } {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return { size: 1, done: true }
+  const e = Number.isFinite(elapsed) && elapsed > 0 ? elapsed : 0
+  if (e >= durationMs) return { size: 1, done: true }
+  const peak = Number.isFinite(maxSize) ? Math.max(1, maxSize) : 1
+  const u = e / durationMs
+  return { size: Math.max(1, Math.round(1 + Math.sin(Math.PI * u) * (peak - 1))), done: false }
+}
