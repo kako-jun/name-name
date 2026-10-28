@@ -29,11 +29,7 @@ import {
 } from 'pixi.js'
 import { wordwrap } from './wordwrap'
 import { computeFfDialogRect } from './ffDialog'
-import {
-  FF_BLUE_PANEL_ALPHA,
-  FF_BLUE_TEXT_SHADOW,
-  computeBands,
-} from './windowStyle'
+import { FF_BLUE_PANEL_ALPHA, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
 import { ensureFontLoaded } from './FontLoader'
@@ -262,8 +258,8 @@ export class DialogBox extends Container {
   // --- 背景・枠 ---
   private bg: Graphics
   /** ffWindow の帯（ff-blue グラデーション）と、それを角丸に切り抜く mask。bg は枠線だけを描く */
-  private ffBands: Graphics
-  private ffMask: Graphics
+  private ffBands: Graphics | null = null
+  private ffMask: Graphics | null = null
   // --- 話者名（separate box モード） ---
   private nameBox: Graphics
   private nameText: Text
@@ -450,10 +446,12 @@ export class DialogBox extends Container {
 
     // --- 背景 ---
     // ff は帯 → mask → 枠（bg）の順（mask は描画されず、帯だけを切り抜く）
-    this.ffBands = new Graphics()
-    this.ffMask = new Graphics()
-    this.ffBands.mask = this.ffMask
-    this.addChild(this.ffBands, this.ffMask)
+    if (this.ffWindow) {
+      this.ffBands = new Graphics()
+      this.ffMask = new Graphics()
+      this.ffBands.mask = this.ffMask
+      this.addChild(this.ffBands, this.ffMask)
+    }
     this.bg = new Graphics()
     if (!this.borderless) {
       this.drawBackground()
@@ -625,7 +623,7 @@ export class DialogBox extends Container {
 
   private setBackgroundVisible(visible: boolean): void {
     this.bg.visible = visible
-    this.ffBands.visible = visible
+    if (this.ffBands) this.ffBands.visible = visible
   }
 
   /** 背景の箱が実際に描画対象か（検証用の読み取り。会話外で出っぱなしになっていないかの確認に使う） */
@@ -861,8 +859,8 @@ export class DialogBox extends Container {
 
     // 背景再描画
     this.bg.clear()
-    this.ffBands.clear()
-    this.ffMask.clear()
+    this.ffBands?.clear()
+    this.ffMask?.clear()
     if (!this.effectiveBorderless()) this.drawBackground()
 
     // テキスト位置更新
@@ -1156,8 +1154,8 @@ export class DialogBox extends Container {
     if (this.borderless === borderless) return
     this.borderless = borderless
     this.bg.clear()
-    this.ffBands.clear()
-    this.ffMask.clear()
+    this.ffBands?.clear()
+    this.ffMask?.clear()
     if (!this.effectiveBorderless()) {
       this.drawBackground()
     }
@@ -1773,7 +1771,7 @@ export class DialogBox extends Container {
   }
 
   private drawBackground(): void {
-    if (this.ffWindow) {
+    if (this.ffWindow && this.ffBands && this.ffMask) {
       // 戦闘窓 (#744) と同じ ff-blue: 帯状グラデーションを角丸で切り抜き、その上に白枠
       this.ffMask
         .clear()

@@ -22,7 +22,7 @@ interface Internals {
   inlineNameText: { text: string; visible: boolean } | null
   nameText: { visible: boolean }
   nameBox: { visible: boolean }
-  ffBands: { visible: boolean }
+  ffBands: { visible: boolean } | null
   bg: { visible: boolean }
 }
 const internals = (b: DialogBox): Internals => b as unknown as Internals
@@ -142,14 +142,14 @@ describe('DialogBox ffWindow (#840)', () => {
   it('ff-blue の見た目: 帯が表示・文字に黒い影。hide で帯も隠れる', () => {
     const box = make(true)
     box.show('', 'テキスト')
-    expect(internals(box).ffBands.visible).toBe(true)
+    expect(internals(box).ffBands?.visible).toBe(true)
     expect(box.isBackgroundVisible).toBe(true)
     expect(internals(box).dialogText.style.dropShadow).toMatchObject({
       color: FF_BLUE_TEXT_SHADOW.color,
       distance: FF_BLUE_TEXT_SHADOW.distance,
     })
     box.hide()
-    expect(internals(box).ffBands.visible).toBe(false)
+    expect(internals(box).ffBands?.visible).toBe(false)
     expect(box.isBackgroundVisible).toBe(false)
     box.dispose()
   })
@@ -217,7 +217,7 @@ describe('DialogBox 非 ff は従来どおり (#840)', () => {
     expect(box.getMsPerChar()).toBe(30)
     box.show('', 'テキスト')
     expect(internals(box).dialogText.style.dropShadow).toBeFalsy()
-    expect(internals(box).ffBands.visible).toBe(true) // 帯は空（描画なし）
+    expect(internals(box).ffBands).toBeNull() // 非 ff は帯・mask を作らない（従来の子構成のまま）
     box.redraw(1280, 720)
     expect(box.getBoxRect().y).toBe(720 - Math.round(600 * 0.22) - 20)
     box.dispose()

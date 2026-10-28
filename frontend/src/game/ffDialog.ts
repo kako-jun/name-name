@@ -56,9 +56,37 @@ export function computeFfDialogRect(screenWidth: number, screenHeight: number): 
   }
 }
 
+/** `dialogMsPerChar` の上限(ms)。これを超える値は誤記とみなす（1 文字に 1 秒以上かかる窓は使えない） */
+export const FF_DIALOG_MS_PER_CHAR_MAX = 1000
+
 /**
- * `msPerChar` の設定値を正規化する。有限の 0 以上はそのまま（0 = 即時表示）、それ以外は undefined（既定を使う）。
+ * `msPerChar` の設定値を正規化する。0 以上 `FF_DIALOG_MS_PER_CHAR_MAX` 以下の有限数はそのまま（0 = 即時表示）、
+ * それ以外（負・上限超え・非数）は undefined（既定を使う）。
  */
 export function normalizeMsPerChar(raw: unknown): number | undefined {
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
+  return typeof raw === 'number' &&
+    Number.isFinite(raw) &&
+    raw >= 0 &&
+    raw <= FF_DIALOG_MS_PER_CHAR_MAX
+    ? raw
+    : undefined
+}
+
+/**
+ * 設定（`dialogStyle` / `dialogMsPerChar`）から DialogBox に渡す追加オプションを作る。
+ * 未指定なら空（キーが無い＝従来の窓・既定の速さ）。ff なら ffWindow と既定速度。
+ * `dialogMsPerChar` は指定があれば ff の既定より優先し、0 は即時表示。
+ */
+export function fieldDialogOptions(c: { dialogStyle?: DialogStyle; dialogMsPerChar?: number }): {
+  ffWindow?: true
+  msPerChar?: number
+} {
+  return {
+    ...(c.dialogStyle === 'ff' ? { ffWindow: true as const } : {}),
+    ...(c.dialogMsPerChar !== undefined
+      ? { msPerChar: c.dialogMsPerChar }
+      : c.dialogStyle === 'ff'
+        ? { msPerChar: FF_DIALOG_MS_PER_CHAR }
+        : {}),
+  }
 }

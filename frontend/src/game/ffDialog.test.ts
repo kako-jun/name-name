@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   FF_DIALOG_HEIGHT_RATIO,
+  FF_DIALOG_MS_PER_CHAR_MAX,
+  fieldDialogOptions,
   FF_DIALOG_MS_PER_CHAR,
   FF_DIALOG_TOP_RATIO,
   computeFfDialogRect,
@@ -57,7 +59,8 @@ describe('computeFfDialogRect (#840)', () => {
   it('非有限・負は 0 扱いで窓が潰れる（NaN を返さない）', () => {
     for (const bad of [NaN, -5, Infinity]) {
       const r = computeFfDialogRect(bad, bad)
-      for (const v of [r.x, r.y, r.width, r.height, r.padding]) expect(Number.isFinite(v)).toBe(true)
+      for (const v of [r.x, r.y, r.width, r.height, r.padding])
+        expect(Number.isFinite(v)).toBe(true)
     }
   })
 })
@@ -76,6 +79,12 @@ describe('normalizeDialogStyle / normalizeMsPerChar (#840)', () => {
     expect(normalizeMsPerChar(45)).toBe(45)
     for (const bad of [-1, NaN, Infinity, '30', null, undefined])
       expect(normalizeMsPerChar(bad)).toBeUndefined()
+  })
+  it('上限（1000ms）まで受け付け、超えたら undefined', () => {
+    expect(FF_DIALOG_MS_PER_CHAR_MAX).toBe(1000)
+    expect(normalizeMsPerChar(1000)).toBe(1000)
+    expect(normalizeMsPerChar(1001)).toBeUndefined()
+    expect(normalizeMsPerChar(1e9)).toBeUndefined()
   })
   it('既定の速さは戦闘ログ (#755) と同じ', () => {
     expect(FF_DIALOG_MS_PER_CHAR).toBe(BATTLE_LOG_MS_PER_CHAR)
@@ -102,5 +111,29 @@ describe('1 文字ずつの進行と全文表示（typewriter 流用）(#840)', 
     t = skipTypewriter(t)
     expect(visibleText(t)).toBe('あいうえお')
     expect(isTypingActive(t)).toBe(false) // この状態の決定 = 次へ
+  })
+})
+
+describe('fieldDialogOptions (#840)', () => {
+  it('未指定はキーが無い（従来の窓・既定の速さ）', () => {
+    const o = fieldDialogOptions({})
+    expect(o).toEqual({})
+    expect('ffWindow' in o).toBe(false)
+    expect('msPerChar' in o).toBe(false)
+  })
+  it('ff は ffWindow と既定速度 30ms', () => {
+    expect(fieldDialogOptions({ dialogStyle: 'ff' })).toEqual({ ffWindow: true, msPerChar: 30 })
+  })
+  it('dialogMsPerChar が優先（0 = 即時表示）', () => {
+    expect(fieldDialogOptions({ dialogStyle: 'ff', dialogMsPerChar: 80 })).toEqual({
+      ffWindow: true,
+      msPerChar: 80,
+    })
+    expect(fieldDialogOptions({ dialogStyle: 'ff', dialogMsPerChar: 0 }).msPerChar).toBe(0)
+  })
+  it('dialogStyle なしで dialogMsPerChar だけなら速さだけ変わり ffWindow は無い', () => {
+    const o = fieldDialogOptions({ dialogMsPerChar: 50 })
+    expect(o).toEqual({ msPerChar: 50 })
+    expect('ffWindow' in o).toBe(false)
   })
 })

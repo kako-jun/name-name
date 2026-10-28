@@ -1701,7 +1701,7 @@ describe('dialogStyle / dialogMsPerChar (#840)', () => {
     }
   })
   it('dialogMsPerChar が不正（負・数値でない）は警告して無視', () => {
-    for (const bad of [-1, '30', null, NaN]) {
+    for (const bad of [-1, 1001, '30', null, NaN]) {
       const c = ok(
         mutated((c) => {
           c.dialogMsPerChar = bad

@@ -4,7 +4,7 @@
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { createFlagStore } from './flagStore'
-import { WORLD_Z, companionZ, npcZ, orderedLayers } from './layers'
+import { WORLD_Z, companionZ, emotionLayerHost, npcZ, orderedLayers } from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -90,7 +90,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
-import { FF_DIALOG_MS_PER_CHAR } from '../game/ffDialog'
+import { fieldDialogOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -475,16 +475,19 @@ async function main(): Promise<void> {
     nameColor: 0xffe066,
     nameSeparateBox: false,
     // FF 風の窓 (#840)。未指定は従来の下部の窓（msPerChar も DialogBox の既定のまま）
-    ...(config.dialogStyle === 'ff' ? { ffWindow: true } : {}),
-    ...(config.dialogMsPerChar !== undefined
-      ? { msPerChar: config.dialogMsPerChar }
-      : config.dialogStyle === 'ff'
-        ? { msPerChar: FF_DIALOG_MS_PER_CHAR }
-        : {}),
+    ...fieldDialogOptions(config),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()
-  app.stage.addChild(world, fade, dialogBox)
+  // ff の窓を出している会話中だけ、感情吹き出しを窓より前へ出す（stage 最前面。揺れは world.y と同期） (#840)
+  const emotionTop = new Container()
+  app.stage.addChild(world, fade, dialogBox, emotionTop)
+  const syncEmotionHost = (): void => {
+    const host = emotionLayerHost(config.dialogStyle === 'ff', !!talking)
+    const target = host === 'stage' ? emotionTop : world
+    if (emotionLayerBox.parent !== target) target.addChild(emotionLayerBox)
+    emotionTop.y = world.y
+  }
   /** シーン（画面）の大きさが変わったら、会話窓の箱の高さ・文字サイズも合わせる */
   const applyDialogMetrics = (width: number, height: number): void => {
     const m = dialogMetricsFor(height)
@@ -1152,6 +1155,7 @@ async function main(): Promise<void> {
     // 揺れ (#864): 描画だけを上下に揺らす。足元・マスク判定は動かない
     const shake = config.scenes[sceneId].shake
     world.y = shake ? shakeOffset(shake, clockMs) : 0
+    syncEmotionHost()
     const scrollCfg = config.scenes[sceneId].scroll
     if (scrollCfg && scene.scroll)
       scrollSprite.tilePosition.x = scrollOffset(scrollCfg.speed, clockMs, scene.scroll.width)
