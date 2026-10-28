@@ -21,6 +21,8 @@ export const MIN_ZOOM_STRENGTH = 1
 export const MAX_ZOOM_STRENGTH = 4
 /** 寄り/戻りの補間時間 (ms)。 */
 export const ZOOM_TWEEN_MS = 450
+/** 対象キャラが現れないまま経つと警告を出す時間 (ms)。ズームしてからキャラを登場させる書き方で警告が出ないよう猶予を持たせる。 */
+export const ZOOM_MISSING_WARN_MS = 2000
 
 export interface ZoomPose {
   scale: number
@@ -71,17 +73,27 @@ function ease(t: number): number {
 export interface CameraZoomHost {
   /** ズームを掛けるレイヤー（背景板・スポットライト・大道具）。立ち絵は `applyCharacterPose` 経由。 */
   getLayers(): Container[]
-  /** 立ち絵レイヤーへのポーズ適用（split_layout の変換との合成は CharacterLayer 側が担う）。 */
+  /** 立ち絵レイヤーへのポーズ適用。 */
   applyCharacterPose(pose: ZoomPose): void
   /** 対象キャラの現在位置（レイヤーのローカル座標）。居なければ null。 */
   getFocus(target: string): { x: number; y: number } | null
   getScreenSize(): { width: number; height: number }
+  /**
+   * split_layout (#442) が有効か。有効なときズームは無効（常に全景）。立ち絵レイヤーが領域内へ
+   * 縮小されるのでフォーカス座標とテキスト領域の扱いが成立しないため。
+   */
+  isSplitLayoutActive(): boolean
+}
+
+function samePose(a: ZoomPose, b: ZoomPose): boolean {
+  return a.scale === b.scale && a.x === b.x && a.y === b.y
 }
 
 /**
  * 現在のズーム状態に追従してレイヤーの変換を更新する。ズーム中は 16ms 間隔の ticker で
  * フォーカス点を問い合わせ直す（歩行中・後から登場したキャラにも追従する）。全景に戻り補間が
- * 終わったら ticker を止める。
+ * 終わったら ticker を止める。対象キャラの登場・退場（フォーカスの有無の切り替わり）では現在の
+ * ポーズから補間し直す（飛ばない）。split_layout 有効中は常に全景（警告は1回）。
  */
 export class CameraZoomController {
   private mode: CameraMode = 'Novel'
@@ -91,7 +103,11 @@ export class CameraZoomController {
   private tweenStart = 0
   private tweening = false
   private tickerId: number | null = null
+  private hadFocus = false
+  private missingSince: number | null = null
   private warnedTarget: string | null = null
+  private warnedSplit = false
+  private disposed = false
 
   constructor(
     private readonly host: CameraZoomHost,
@@ -110,35 +126,65 @@ export class CameraZoomController {
 
   /**
    * ズーム状態を更新する。`snap: true`（スキップ・復元・リセット）は最終ポーズへ即時スナップ、
-   * それ以外は `ZOOM_TWEEN_MS` で補間する。
+   * それ以外は `ZOOM_TWEEN_MS` で補間する。dispose 後は何もしない。
    */
   set(mode: CameraMode, zoom: CameraZoom | null, snap: boolean): void {
+    if (this.disposed) return
     this.mode = mode
     this.zoom = mode === 'Theater' ? zoom : null
     this.warnedTarget = null
+    this.missingSince = null
+    if (this.zoom && this.host.isSplitLayoutActive() && !this.warnedSplit) {
+      this.warnedSplit = true
+      console.warn('[カメラ] split_layout が有効なためズームは無効です（全景のまま表示します）')
+    }
     const target = this.targetPose()
+    this.hadFocus = this.hasFocus()
     if (snap) {
       this.tweening = false
       this.apply(target)
+    } else if (samePose(this.current, target)) {
+      this.tweening = false
     } else {
-      this.tweenFrom = this.current
-      this.tweenStart = this.time.now()
-      this.tweening = true
+      this.startTween()
     }
     if (this.zoom || this.tweening) this.ensureTicker()
     else this.stopTicker()
   }
 
-  /** ticker とレイヤー変換を破棄する（renderer destroy 用）。 */
+  /** ticker を破棄する（renderer destroy 用）。以後の `set` は無視される。 */
   dispose(): void {
+    this.disposed = true
     this.stopTicker()
   }
 
-  /** 対象キャラが表示されていないときの警告（同一対象につき1回）。ディレクティブ処理側から呼ぶ。 */
-  warnIfMissing(): void {
-    const z = this.getZoom()
-    if (!z || this.warnedTarget === z.target) return
-    if (!this.host.getFocus(z.target)) {
+  private startTween(): void {
+    this.tweenFrom = this.current
+    this.tweenStart = this.time.now()
+    this.tweening = true
+  }
+
+  private hasFocus(): boolean {
+    return !!this.zoom && this.host.getFocus(this.zoom.target) !== null
+  }
+
+  private targetPose(): ZoomPose {
+    if (this.host.isSplitLayoutActive()) return IDENTITY_ZOOM_POSE
+    const { width, height } = this.host.getScreenSize()
+    const focus = this.zoom ? this.host.getFocus(this.zoom.target) : null
+    return computeZoomPose(this.mode, this.zoom, focus, width, height)
+  }
+
+  /** 対象が一定時間現れないままのときだけ警告する（同一対象につき1回）。 */
+  private checkMissing(): void {
+    const z = this.zoom
+    if (!z || this.hadFocus) {
+      this.missingSince = null
+      return
+    }
+    const now = this.time.now()
+    if (this.missingSince === null) this.missingSince = now
+    if (this.warnedTarget !== z.target && now - this.missingSince >= ZOOM_MISSING_WARN_MS) {
       this.warnedTarget = z.target
       console.warn(
         `[カメラ] ズーム対象のキャラ「${z.target}」が表示されていないため全景のままにします`
@@ -146,13 +192,14 @@ export class CameraZoomController {
     }
   }
 
-  private targetPose(): ZoomPose {
-    const { width, height } = this.host.getScreenSize()
-    const focus = this.zoom ? this.host.getFocus(this.zoom.target) : null
-    return computeZoomPose(this.mode, this.zoom, focus, width, height)
-  }
-
   private tick = (): void => {
+    const focused = this.hasFocus()
+    if (focused !== this.hadFocus) {
+      // 登場・退場: 現在のポーズから補間し直す（飛ばない）。
+      this.hadFocus = focused
+      this.startTween()
+    }
+    this.checkMissing()
     const target = this.targetPose()
     if (this.tweening) {
       const t = Math.min(1, (this.time.now() - this.tweenStart) / ZOOM_TWEEN_MS)
@@ -170,13 +217,7 @@ export class CameraZoomController {
   }
 
   private apply(pose: ZoomPose): void {
-    if (
-      pose.scale === this.current.scale &&
-      pose.x === this.current.x &&
-      pose.y === this.current.y
-    ) {
-      return
-    }
+    if (samePose(pose, this.current)) return
     this.current = pose
     for (const layer of this.host.getLayers()) {
       layer.scale.set(pose.scale)

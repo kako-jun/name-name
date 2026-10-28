@@ -10,6 +10,7 @@ import {
   IDENTITY_ZOOM_POSE,
   MAX_ZOOM_STRENGTH,
   MIN_ZOOM_STRENGTH,
+  ZOOM_MISSING_WARN_MS,
   ZOOM_TWEEN_MS,
   computeZoomPose,
   resolveZoomStrength,
@@ -141,7 +142,8 @@ function fakeLayer(): FakeLayer {
   return layer
 }
 
-function makeHarness(opts: { screen?: { width: number; height: number } } = {}) {
+function makeHarness(opts: { screen?: { width: number; height: number }; split?: boolean } = {}) {
+  const state = { split: opts.split ?? false }
   const time = new TimeController()
   time.setMode('virtual')
   const layers = [fakeLayer(), fakeLayer()]
@@ -154,10 +156,11 @@ function makeHarness(opts: { screen?: { width: number; height: number } } = {}) 
       applyCharacterPose: (p) => charPoses.push(p),
       getFocus: (t) => focuses.get(t) ?? null,
       getScreenSize: () => opts.screen ?? { width: W, height: H },
+      isSplitLayoutActive: () => state.split,
     },
     time
   )
-  return { time, layers, charPoses, focuses, ctrl }
+  return { time, layers, charPoses, focuses, ctrl, state }
 }
 
 const ZOOM_A = { target: 'A', strength: 2 }
@@ -248,6 +251,7 @@ describe('CameraZoomController (#702)', () => {
     expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
     h.focuses.set('A', { x: 400, y: 250 })
     h.time.tick(16)
+    h.time.tick(ZOOM_TWEEN_MS + 50)
     expect(h.ctrl.getPose()).toEqual({ scale: 2, x: -300, y: -250 })
   })
 
@@ -291,53 +295,112 @@ describe('CameraZoomController (#702)', () => {
     expect(h.charPoses.length).toBe(c)
   })
 
-  describe('warnIfMissing', () => {
-    it('36: 同一対象は 1 回のみ。対象変更で再度 1 回。対象在中と zoom null は 0 回', () => {
+  describe('対象不在の警告（一定時間現れないときだけ）', () => {
+    it('36: 現れないまま ZOOM_MISSING_WARN_MS 経つと 1 回だけ警告。対象在中・zoom null・Novel は 0 回', () => {
       const h = makeHarness()
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      // zoom null
       h.ctrl.set('Theater', null, false)
-      h.ctrl.warnIfMissing()
-      expect(warn).toHaveBeenCalledTimes(0)
-      // 対象在中
       h.ctrl.set('Theater', ZOOM_A, false)
-      h.ctrl.warnIfMissing()
+      h.time.tick(ZOOM_MISSING_WARN_MS * 2)
       expect(warn).toHaveBeenCalledTimes(0)
-      // 対象不在: 同じ対象 → 1 回のみ
+      h.ctrl.set('Novel', { target: 'Ghost', strength: null }, false)
+      h.time.tick(ZOOM_MISSING_WARN_MS * 2)
+      expect(warn).toHaveBeenCalledTimes(0)
       h.ctrl.set('Theater', { target: 'Ghost', strength: null }, false)
-      h.ctrl.warnIfMissing()
-      h.ctrl.warnIfMissing()
-      h.ctrl.warnIfMissing()
+      h.time.tick(ZOOM_MISSING_WARN_MS - 100)
+      expect(warn).toHaveBeenCalledTimes(0)
+      h.time.tick(ZOOM_MISSING_WARN_MS * 3)
       expect(warn).toHaveBeenCalledTimes(1)
       expect(String(warn.mock.calls[0][0])).toContain('Ghost')
-      // 対象変更: 再度 1 回（set で warnedTarget がリセットされるので合計 2）
-      h.ctrl.set('Theater', { target: 'Ghost2', strength: null }, false)
-      h.ctrl.warnIfMissing()
-      h.ctrl.warnIfMissing()
-      expect(warn).toHaveBeenCalledTimes(2)
-      expect(String(warn.mock.calls[1][0])).toContain('Ghost2')
     })
 
-    it('37: set() で warnedTarget がリセットされる（同じ不在対象でも set し直すと再度警告する現挙動の固定）', () => {
+    it('N4: ズームしてからキャラを登場させる書き方では警告しない（猶予内に現れる）', () => {
       const h = makeHarness()
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const z = { target: 'Ghost', strength: null }
-      h.ctrl.set('Theater', z, false)
-      h.ctrl.warnIfMissing()
-      h.ctrl.warnIfMissing()
+      h.ctrl.set('Theater', { target: 'Late', strength: 2 }, false)
+      h.time.tick(ZOOM_MISSING_WARN_MS - 200)
+      h.focuses.set('Late', { x: 400, y: 250 })
+      h.time.tick(ZOOM_MISSING_WARN_MS * 3)
+      expect(warn).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('split_layout 併用 (M1)', () => {
+    it('split 無し: 寄せた後に対象キャラが画面中心に来る（クランプが効かない範囲）', () => {
+      const h = makeHarness()
+      h.ctrl.set('Theater', ZOOM_A, true)
+      const { scale, x, y } = h.ctrl.getPose()
+      const f = h.focuses.get('A')!
+      expect(f.x * scale + x).toBe(W / 2)
+      expect(f.y * scale + y).toBe(H / 2)
+    })
+
+    it('split 有り: 常に全景のまま、警告は 1 回だけ', () => {
+      const h = makeHarness({ split: true })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      h.ctrl.set('Theater', ZOOM_A, true)
+      expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+      h.ctrl.set('Theater', ZOOM_A, false)
+      h.time.tick(1000)
+      expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
       expect(warn).toHaveBeenCalledTimes(1)
-      h.ctrl.set('Theater', z, false)
-      h.ctrl.warnIfMissing()
-      expect(warn).toHaveBeenCalledTimes(2)
+      expect(String(warn.mock.calls[0][0])).toContain('split_layout')
+      // 宣言的な状態は保たれる（split が外れれば寄る）
+      expect(h.ctrl.getZoom()).toEqual(ZOOM_A)
+      h.state.split = false
+      h.time.tick(1000)
+      expect(h.ctrl.getPose().scale).toBe(2)
+    })
+  })
+
+  describe('登場・退場の補間 (S3)', () => {
+    it('登場: 後から現れたキャラへ現在のポーズ（全景）から補間して寄る（飛ばない）', () => {
+      const h = makeHarness()
+      h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+      expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+      h.focuses.set('Late', { x: 400, y: 250 })
+      h.time.tick(16) // 補間の起点
+      h.time.tick(96)
+      const mid = h.ctrl.getPose()
+      expect(mid.scale).toBeGreaterThan(1)
+      expect(mid.scale).toBeLessThan(2)
+      h.time.tick(ZOOM_TWEEN_MS + 50)
+      expect(h.ctrl.getPose().scale).toBe(2)
     })
 
-    it('36: Novel では zoom があっても警告しない', () => {
+    it('退場: 対象が消えたら現在のポーズから全景へ補間して戻る（飛ばない）', () => {
       const h = makeHarness()
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      h.ctrl.set('Novel', { target: 'Ghost', strength: null }, false)
-      h.ctrl.warnIfMissing()
-      expect(warn).toHaveBeenCalledTimes(0)
+      h.ctrl.set('Theater', ZOOM_A, true)
+      expect(h.ctrl.getPose().scale).toBe(2)
+      h.focuses.delete('A')
+      h.time.tick(16) // 補間の起点
+      h.time.tick(96)
+      const mid = h.ctrl.getPose()
+      expect(mid.scale).toBeGreaterThan(1)
+      expect(mid.scale).toBeLessThan(2)
+      h.time.tick(ZOOM_TWEEN_MS + 50)
+      expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
     })
+  })
+
+  it('N2: 開始ポーズと最終ポーズが同じなら補間せず、全景のままなら ticker も残さない', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', null, false)
+    expect(h.time.getPendingTimerCount()).toBe(0)
+    h.ctrl.set('Theater', ZOOM_A, true)
+    const calls = h.layers[0].position.set.mock.calls.length
+    h.ctrl.set('Theater', ZOOM_A, false) // 既に最終ポーズ
+    h.time.tick(ZOOM_TWEEN_MS)
+    expect(h.layers[0].position.set.mock.calls.length).toBe(calls)
+  })
+
+  it('N3: dispose 後の set は何もしない（ticker も作らない）', () => {
+    const h = makeHarness()
+    h.ctrl.dispose()
+    h.ctrl.set('Theater', ZOOM_A, false)
+    expect(h.ctrl.getZoom()).toBeNull()
+    expect(h.time.getPendingTimerCount()).toBe(0)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
   })
 
   it('38: 二重 set で ticker は 1 つ', () => {

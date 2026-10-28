@@ -10,7 +10,12 @@ import type { Event, EventScene } from '../types'
 import type { NovelGameState } from './GameState'
 import type { SaveSlotData } from './SaveManager'
 import { gameStateToSaveSlot, saveSlotToGameState } from './novelLayout'
-import { IDENTITY_ZOOM_POSE, type CameraZoomController } from './cameraZoom'
+import {
+  IDENTITY_ZOOM_POSE,
+  ZOOM_MISSING_WARN_MS,
+  ZOOM_TWEEN_MS,
+  type CameraZoomController,
+} from './cameraZoom'
 import { internals, internalsOf } from '../test/rendererInternals'
 import type { Stage } from './Stage'
 import type { TimeController } from './TimeController'
@@ -46,6 +51,8 @@ function make(
   const r = new NovelRenderer()
   r.setScenes([scene('a', events), scene('b', [narration('next')])])
   const p = internalsOf<Priv>(r)
+  // time は共有インスタンス。前のテストの追従 ticker を持ち越さないよう一度 live に戻して仮想時刻をリセットする。
+  p.time.setMode('live')
   p.time.setMode('virtual')
   vi.spyOn(p.characterLayer, 'getCurrentPosition').mockImplementation(() => focus)
   return { r, p }
@@ -93,20 +100,13 @@ describe('stageDirectives [カメラ:] ズーム (#702)', () => {
     expect(r.getSnapshot().cameraZoom).toBeNull()
   })
 
-  it('50: 非 snap のとき warnIfMissing が呼ばれ、snap では呼ばれない', () => {
-    const { r, p } = make()
-    const warnIfMissing = vi.spyOn(p.cameraZoom, 'warnIfMissing')
-    internals(r).processDirective(cam('Theater', ZOOM_EVT))
-    expect(warnIfMissing).toHaveBeenCalledTimes(1)
-    p.skipMode = true
-    internals(r).processDirective(cam('Theater', ZOOM_EVT))
-    expect(warnIfMissing).toHaveBeenCalledTimes(1)
-  })
-
-  it('50: 対象キャラ不在なら非 snap で警告 1 回（再 apply でも同一対象は増えない）', () => {
-    const { r } = make([narration('one')], null)
+  it('50: 対象キャラが現れないままなら一定時間後に警告 1 回（直後は出ない）', () => {
+    const { r, p } = make([narration('one')], null)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     internals(r).processDirective(cam('Theater', ZOOM_EVT))
+    p.time.tick(100)
+    expect(warn).not.toHaveBeenCalled()
+    p.time.tick(ZOOM_MISSING_WARN_MS * 2)
     expect(warn.mock.calls.filter((c) => String(c[0]).includes('ミナ'))).toHaveLength(1)
   })
 
@@ -131,6 +131,21 @@ describe('stageDirectives [カメラ:] ズーム (#702)', () => {
     expect(pose.scale).toBe(2)
     expect(p.characterLayer.scale.x).toBe(2)
     expect(p.characterLayer.position.x).toBe(pose.x)
+  })
+
+  it('M1: split_layout 有効中はズームしても全景のまま（警告 1 回）、状態は保つ', () => {
+    const { r, p } = make()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ;(
+      p.characterLayer as unknown as {
+        setSplitLayoutRegion(v: { x: number; y: number; width: number; height: number }): void
+      }
+    ).setSplitLayoutRegion({ x: 0, y: 0, width: 400, height: 600 })
+    internals(r).processDirective(cam('Theater', ZOOM_EVT))
+    p.time.tick(2000)
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    expect(p.stage.cameraZoom).toEqual({ target: 'ミナ', strength: 2 })
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('split_layout'))).toHaveLength(1)
   })
 
   it('57: スキップ中の [カメラ:] は即時スナップ（tick を進める前に最終ポーズ）', () => {
@@ -182,6 +197,28 @@ describe('復元・シーク・リセット (#702)', () => {
     expect(p.stage.cameraZoom).toEqual({ target: 'ミナ', strength: 2 })
   })
 
+  it('55: 復元の最終ポーズは立ち絵の復元後に確定する（対象キャラの実在に依存、再スナップの順序）', () => {
+    const { snap } = zoomed()
+    const withChar: NovelGameState = {
+      ...snap,
+      characters: [{ name: 'ミナ', expression: 'x', position: 'Left', depth: 0 }],
+    }
+    const { r, p } = make([narration('one')])
+    // 立ち絵が実在する間だけ位置が引ける（stage.restore 時点では未復元＝全景に倒れる順序を再現）
+    const present = new Set<string>()
+    vi.spyOn(p.characterLayer, 'clear' as never).mockImplementation((() =>
+      present.clear()) as never)
+    vi.spyOn(p.characterLayer, 'show' as never).mockImplementation(((name: string) => {
+      present.add(name)
+    }) as never)
+    vi.spyOn(p.characterLayer, 'getCurrentPosition').mockImplementation((n: string) =>
+      present.has(n) ? { x: 100, y: 100 } : null
+    )
+    internals(r).applyState(withChar)
+    expect(p.cameraZoom.getPose().scale).toBe(2) // tick 前に寄っている
+    expect(p.characterLayer.scale.x).toBe(2)
+  })
+
   it('55: 復元時に対象キャラが未登場でも例外・warn なし（全景のまま）', () => {
     const { snap } = zoomed()
     const { r, p } = make([narration('one')], null)
@@ -194,6 +231,7 @@ describe('復元・シーク・リセット (#702)', () => {
     // その後キャラが現れたら追従する
     vi.spyOn(p.characterLayer, 'getCurrentPosition').mockImplementation(() => ({ x: 100, y: 100 }))
     p.time.tick(16)
+    p.time.tick(ZOOM_TWEEN_MS + 50)
     expect(p.cameraZoom.getPose().scale).toBe(2)
   })
 

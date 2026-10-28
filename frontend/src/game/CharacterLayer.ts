@@ -290,8 +290,9 @@ export interface SplitLayoutTransform {
  * `computeCoverFit`/`computePortraitContainFit`（novelLayout.ts / DialogBox.ts）は個々の
  * テクスチャを矩形に収めるが、これは **CharacterLayer Container 全体**（内部の個々の立ち絵の
  * 座標計算には一切触れない）を丸ごと 1 つの矩形へ射影する点が異なる。適用側
- * （`CharacterLayer.setSplitLayoutRegion`）は `this.scale.set(scale)` / `this.position.set(x, y)`
- * を呼ぶだけで、個々のキャラの位置・スケール計算は完全に無傷（screenWidth/screenHeight 基準の
+ * （`CharacterLayer.setSplitLayoutRegion` → `applyLayerTransform`）は Container の
+ * `scale` / `position` にこの結果を設定する（カメラズーム #702 のポーズとも同じ経路で合成されるが、
+ * split_layout 有効中はズームが無効なので実際には split の値だけが入る）だけで、個々のキャラの位置・スケール計算は完全に無傷（screenWidth/screenHeight 基準の
  * まま）に保てる — 単一責務・変更範囲の最小化（doctrine 規律4）。
  *
  * `scale = min(region.width / nativeWidth, region.height / nativeHeight)`（contain。はみ出さない）。
@@ -912,8 +913,9 @@ export class CharacterLayer extends Container {
 
   /**
    * カメラズーム (#702) のポーズを設定する。split_layout の変換（Container 全体の scale/position）と
-   * 合成する: ズームが外側、split が内側（`p' = z.s * (split.s * p + split.t) + z.t`）。
-   * ズーム無し（identity）では従来どおりの split 変換のみ（後方互換）。
+   * 合成する（`p' = z.s * (split.s * p + split.t) + z.t`）。ただし split_layout 有効中は
+   * `CameraZoomController` がズームを無効にして identity しか渡さないため、実際の表示では
+   * 常にどちらか一方だけが効く。ズーム無し（identity）では従来どおりの split 変換のみ（後方互換）。
    */
   setZoomPose(pose: { scale: number; x: number; y: number }): void {
     this.zoomPose = pose

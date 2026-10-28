@@ -305,7 +305,8 @@ export class NovelRenderer {
    * `characterLayer.getSplitLayoutRegion()` の退避値 (#628 フェーズ2b)。タイトル画面は
    * ゲーム画面（split_layout の画像/テキスト分割）の外側にある全画面 UI のため、ロゴは画面
    * 中央に出したい。しかし `characterLayer.setSplitLayoutRegion()` は Container 全体の
-   * scale/position を書き換える設計（`CharacterLayer.setSplitLayoutRegion` 参照）で、
+   * scale/position を書き換える設計（`CharacterLayer.setSplitLayoutRegion` 参照。カメラズームの
+   * ポーズと合成する `applyLayerTransform` 経由）で、
    * `showImage()` の x/y 比率はそのまま「領域内での比率」に射影されてしまう——結果、
    * `[選択: x=0.5]` のつもりのロゴが split_layout のキャラ領域（画面半分）の中央に寄って
    * 見えてしまう（実機検証で発覚。gymnasia で確認）。`showTitleScreen()` は分割を一時解除して
@@ -607,7 +608,6 @@ export class NovelRenderer {
         this.characterLayer.setCamera(mode, orientation, elevation)
         // ズーム (#702)。復元・リセット・スキップは snap で最終ポーズへ即時スナップする。
         this.cameraZoom.set(mode, zoom, snap)
-        if (!snap) this.cameraZoom.warnIfMissing()
       },
       applyPaperDollOutline: (config) => {
         this.characterLayer.setPaperDollOutline(config)
@@ -627,6 +627,7 @@ export class NovelRenderer {
       applyCharacterPose: (pose) => this.characterLayer.setZoomPose(pose),
       getFocus: (target) => this.characterLayer.getCurrentPosition(target),
       getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
+      isSplitLayoutActive: () => this.characterLayer.getSplitLayoutRegion() !== null,
     },
     this.time
   )
@@ -3417,6 +3418,10 @@ export class NovelRenderer {
     // 古いセーブ等）。到達時と同じ経路で再予約する。[条件:] 内の Jump は resolvedEvents（復元後のフラグで
     // 展開済み）の現在イベントで判定するので、条件が偽なら Jump はここに現れず再予約もしない。
     // 遷移先不在なら通常到達時と同じく warn して stalled に戻る。
+    // カメラズームの再スナップ (#702)。`stage.restore` 内のスナップは立ち絵の復元より前に走るため、
+    // 対象キャラの位置が未確定で全景に倒れる。立ち絵復元後にもう一度最終ポーズへ即時スナップする。
+    this.cameraZoom.set(this.stage.cameraMode, this.stage.cameraZoom, true)
+
     this.rearmJumpAtCurrentPosition()
   }
 
