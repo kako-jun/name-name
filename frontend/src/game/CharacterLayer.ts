@@ -1170,22 +1170,22 @@ export class CharacterLayer extends Container {
    * B の in の開始時刻（= A の out と同時）を返し、呼び出し側が C の `startFlipIn` に渡すことで、
    * A が消える瞬間に C が現れて A→C が継ぎ目なしになる（総時間も延びない）。それ以外は undefined。
    */
-  private startFlipOut(state: CharacterState): number | undefined {
+  private startFlipOut(state: CharacterState, durationMs?: number): number | undefined {
     if (state.sprite.destroyed) return undefined
     const prev = state.flipAnimation
     if (prev && prev.role === 'in') {
       const f = computeBoardFlipFrame('in', this.elapsedMs - prev.startMs, prev.durationMs)
       if (f.visible) {
-        this.beginFlip(state, 'out', this.elapsedMs, f.angleRad)
+        this.beginFlip(state, 'out', this.elapsedMs, f.angleRad, durationMs)
         return undefined
       }
       // 即完了扱いにするため、開始を durationMs 前に置く。ticker は完了判定（elapsed>=duration）で
       // state ごと破棄する。このフレームに作られる mesh は不可視（out の経過 >= half）のまま。
       const inheritedStartMs = prev.startMs
-      this.beginFlip(state, 'out', this.elapsedMs - prev.durationMs, 0)
+      this.beginFlip(state, 'out', this.elapsedMs - prev.durationMs, 0, durationMs)
       return inheritedStartMs
     }
-    this.beginFlip(state, 'out', this.elapsedMs, 0)
+    this.beginFlip(state, 'out', this.elapsedMs, 0, durationMs)
     return undefined
   }
 
@@ -1195,7 +1195,8 @@ export class CharacterLayer extends Container {
     state: CharacterState,
     role: BoardFlipRole,
     startMs: number,
-    fromAngleRad: number
+    fromAngleRad: number,
+    durationMs: number = this.characterFadeMs
   ): void {
     this.clearFlip(state)
     const mesh = new PerspectiveMesh({ texture: state.sprite.texture })
@@ -1206,7 +1207,7 @@ export class CharacterLayer extends Container {
     state.flipAnimation = {
       role,
       startMs,
-      durationMs: this.characterFadeMs,
+      durationMs,
       mesh,
       fromAngleRad,
     }
@@ -1650,10 +1651,12 @@ export class CharacterLayer extends Container {
   /**
    * 同じキャラの `character__transition_*` のうち、誰にも片付けられない孤児の旧ポーズを落とす (#952)。
    *
-   * 孤児 = 旧 state として退避済み（snapshotHidden）で、フェードも板フリップも張られていないもの。
+   * 孤児 = 旧 state として退避済み（snapshotHidden）で、退場の途中でない（退場フェード・退場 walk・
+   * 板フリップ out のいずれでもない）もの。入場フェードや板フリップ in の最中でも、片付け手が
+   * いなければ孤児（退場演出に切り替えて落とす）。
    * A→B→C と読み込み完了前に重ねて変えると、B の `.then` は「自分が最新でない」ため何も張らずに
    * 抜け、B が退避させた A に誰もフェード／flip を張らなくなる。最新の遷移だけが自分の旧 state
-   * （`keep`）を片付けるので、`keep` 以外の未アニメの旧 state はすべて落としてよい。
+   * （`keep`）を片付けるので、`keep` 以外の退場中でない旧 state はすべて落としてよい。
    * 誰かが誰かを引き継ぐ仕組みではなく、単に落とすだけ（B と同じ退場演出）。
    * `keep` を省略した呼び出し（`remove()`）は、そのキャラの旧 state すべてが対象。
    */
@@ -1667,7 +1670,11 @@ export class CharacterLayer extends Container {
     const orphans: string[] = []
     for (const [key, state] of this.characters) {
       if (!key.startsWith(prefix) || state === keep) continue
-      if (!state.snapshotHidden || state.fadeAnimation || state.flipAnimation) continue
+      // 片付け手がいない = 退場の途中ではない。入場フェード・板フリップ in は『片付け』ではない
+      // （入場中に退避された旧 state も、退場に切り替えて落とす必要がある）。
+      if (!state.snapshotHidden || this.isExiting(state) || state.flipAnimation?.role === 'out') {
+        continue
+      }
       orphans.push(key)
     }
     for (const key of orphans) {
@@ -1676,12 +1683,11 @@ export class CharacterLayer extends Container {
         this.destroyCharacterState(state)
         this.characters.delete(key)
       } else if (this.cameraMode === 'Theater' && state.sprite.parent === this) {
-        this.startFlipOut(state)
+        this.startFlipOut(state, durationMs)
       } else {
         this.startFade(state, state.sprite.alpha, 0, true, undefined, durationMs)
       }
     }
-    if (orphans.length > 0 && (instant || durationMs <= 0)) this.maybeStopTicker()
   }
 
   private nextTransitionName(character: string): string {

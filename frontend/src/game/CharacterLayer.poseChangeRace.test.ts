@@ -574,6 +574,65 @@ describe.each(['Theater', 'Novel'] as const)(
       expectSettledTo(layer, 'a')
     })
 
+    it('M1-1: 入場フェード中の A に hero/b(遅い) → hero/c を重ねても A が残らず、最終は C だけ', async () => {
+      layer.show('hero', 'a', '中央', '/assets')
+      await flushPromises()
+      advance(layer, 200)
+      const a = chars(layer).get('hero')!
+      const slowB = loader.hold('b')
+      showCounted(layer, 'b')
+      showCounted(layer, 'c')
+      await flushPromises()
+      slowB.resolve()
+      await settle(layer)
+      expect(a.sprite.destroyed).toBe(true)
+      expectSettledTo(layer, 'c')
+    })
+
+    it('M1-2: A→B(読み込み済み・遷移の入場中)→C(遅い)→D(速い) で B が残らず、最終は D だけ', async () => {
+      await showA()
+      showCounted(layer, 'b')
+      await flushPromises()
+      advance(layer, 100)
+      const b = chars(layer).get('hero')!
+      const slowC = loader.hold('c')
+      showCounted(layer, 'c')
+      showCounted(layer, 'd')
+      await flushPromises()
+      slowC.resolve()
+      await settle(layer)
+      expect(b.sprite.destroyed).toBe(true)
+      expectSettledTo(layer, 'd')
+    })
+
+    it('M1-3: [退場] の途中で hero/b(遅い) → hero/c。revive の入場フェードを持つ A が残らない', async () => {
+      const a = await showA()
+      layer.remove('hero')
+      advance(layer, 200)
+      const slowB = loader.hold('b')
+      showCounted(layer, 'b')
+      showCounted(layer, 'c')
+      await flushPromises()
+      slowB.resolve()
+      await settle(layer)
+      expect(a.sprite.destroyed).toBe(true)
+      expectSettledTo(layer, 'c')
+    })
+
+    it('N1: remove の durationMsOverride は孤児の退場演出にも反映される', async () => {
+      const a = await showA()
+      const slowB = loader.hold('b')
+      showCounted(layer, 'b')
+      await flushPromises()
+      layer.remove('hero', { durationMsOverride: 300 })
+      const d = (a.flipAnimation as { durationMs?: number } | undefined)?.durationMs
+      const f = (a.fadeAnimation as { durationMs?: number } | null)?.durationMs
+      expect(d ?? f).toBe(300)
+      slowB.resolve()
+      await settle(layer)
+      expect(chars(layer).size).toBe(0)
+    })
+
     it('A→B→C→D を矢継ぎ早に変えても最終的に D だけが残り、全 show の onReady が 1 回ずつ', async () => {
       const a = await showA()
       const gb = loader.hold('b')
