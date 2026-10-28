@@ -12447,7 +12447,7 @@ fn test_rpg_event_emotion_command_parses_in_order_and_flushes_dialog() {
 
 #[test]
 fn test_rpg_event_emotion_command_roundtrips() {
-    let src = format!(
+    let src = String::from(
         "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[イベント talk]\n[感情: 子, びっくり]\n[感情: 主人公, ？, 持続=1200]\n[/イベント]\n"
     );
     let doc = parser::parse(&src);
