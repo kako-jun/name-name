@@ -15,6 +15,9 @@ import {
   emotionView,
   hasEmotions,
   isCompanionShown,
+  isEmotionTarget,
+  normalizeEmotionDuration,
+  npcEmotionTarget,
   parseEmotions,
   startEmotion,
   stepEmotions,
@@ -277,5 +280,61 @@ describe('isCompanionShown', () => {
   it('assist か companion が無ければ false', () => {
     expect(isCompanionShown(false, true, 1)).toBe(false)
     expect(isCompanionShown(true, false, 1)).toBe(false)
+  })
+})
+
+describe('NPC 対象と持続の正規化 (#946)', () => {
+  it('isEmotionTarget: 固定の人物と npc:<id>（id 非空）だけ有効', () => {
+    expect(isEmotionTarget('player')).toBe(true)
+    expect(isEmotionTarget('companion')).toBe(true)
+    expect(isEmotionTarget('npc:neighbor-kid')).toBe(true)
+    expect(isEmotionTarget('npc:')).toBe(false)
+    expect(isEmotionTarget('npc')).toBe(false)
+    expect(isEmotionTarget('hero')).toBe(false)
+  })
+
+  it('NPC にも出せて、固定の人物と独立に 1 件ずつ持ち、同じ NPC は置き換わる', () => {
+    const t = npcEmotionTarget('kid')
+    expect(t).toBe('npc:kid')
+    let st = startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets)
+    st = startEmotion(st, t, '?', sheets)
+    expect(st.player?.kind).toBe('!')
+    expect(st[t]?.kind).toBe('?')
+    st = startEmotion(st, t, '!', sheets)
+    expect(st[t]).toEqual({ kind: '!', elapsed: 0 })
+    // 時間が経てば NPC の分も消える（?: 500ms ではなく置き換えた !: 1000ms）
+    expect(stepEmotions(st, 999, sheets)[t]).toBeDefined()
+    expect(stepEmotions(st, 1000, sheets)[t]).toBeUndefined()
+  })
+
+  it('不正な対象（npc: だけ・未知）は何もしない', () => {
+    expect(startEmotion(INITIAL_EMOTION_STATE, 'npc:' as never, '!', sheets)).toBe(
+      INITIAL_EMOTION_STATE
+    )
+    expect(startEmotion(INITIAL_EMOTION_STATE, 'x' as never, '!', sheets)).toBe(
+      INITIAL_EMOTION_STATE
+    )
+  })
+
+  it('normalizeEmotionDuration: floor して 1 以上のときだけ採用、上限に収める', () => {
+    expect(normalizeEmotionDuration(1200.9)).toBe(1200)
+    expect(normalizeEmotionDuration(1)).toBe(1)
+    expect(normalizeEmotionDuration(0.5)).toBeUndefined() // floor して 0
+    expect(normalizeEmotionDuration(0)).toBeUndefined()
+    expect(normalizeEmotionDuration(-5)).toBeUndefined()
+    expect(normalizeEmotionDuration(NaN)).toBeUndefined()
+    expect(normalizeEmotionDuration('300')).toBeUndefined()
+    expect(normalizeEmotionDuration(EMOTION_MAX_DURATION_MS + 1)).toBe(EMOTION_MAX_DURATION_MS)
+  })
+
+  it('startEmotion も同じ規則（小数は floor・0<d<1 は宣言どおり）', () => {
+    expect(startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, 300.7).player).toEqual({
+      kind: '!',
+      elapsed: 0,
+      durationMs: 300,
+    })
+    expect(
+      startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, 0.5).player?.durationMs
+    ).toBeUndefined()
   })
 })

@@ -4,7 +4,7 @@
  * RPG イベントのコマンド単体 (#187 / #196)。
  * RpgEvent の commands に列挙され、EventRunner が順に実行する。
  */
-export type EventCommand = { type: "NpcMove"; npc: string; x: number; y: number; speed?: number; direction?: Direction } | { type: "Wait"; ms: number } | { type: "Dialog"; character: string | undefined; text: string[] } | { type: "Narration"; text: string[] } | { type: "Battle"; id: string };
+export type EventCommand = { type: "NpcMove"; npc: string; x: number; y: number; speed?: number; direction?: Direction } | { type: "Wait"; ms: number } | { type: "Dialog"; character: string | undefined; text: string[] } | { type: "Narration"; text: string[] } | { type: "Battle"; id: string } | { type: "Emotion"; target: string; kind: string; duration_ms?: number };
 
 /**
  * `[文字演出]` の名前付きプリセット (#268)。

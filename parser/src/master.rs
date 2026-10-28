@@ -350,7 +350,7 @@ fn parse_size_pair(raw: &str) -> Option<MonsterSize> {
 }
 
 /// 全角の数字・`x` / `X`・`.`・`+`・`-` だけを半角へ寄せる（それ以外の全角は変えない。`×` はそのまま）。
-fn to_halfwidth(raw: &str) -> String {
+pub(crate) fn to_halfwidth(raw: &str) -> String {
     raw.trim()
         .chars()
         .map(|c| match c {

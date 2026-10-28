@@ -5,13 +5,14 @@
  */
 import type { EventCommand, EventDocument } from '../types'
 import type { DialogBox } from './DialogBox'
-import type { EventBattleHost, EventRunner, NpcMover } from './eventRunner'
+import type { EventBattleHost, EventEmotionHost, EventRunner, NpcMover } from './eventRunner'
+import { resolveEmotion, type EmotionResolveContext } from './fieldEmotionScript'
 
 /** 脚本から集めた `[イベント <name>]`（名前 → コマンド列。同名は先勝ち） */
 export type FieldScriptEvents = Map<string, EventCommand[]>
 
-/** fieldSample が実行できるコマンド（台詞・ナレーション・待機）。NpcMove / Battle などは未対応 */
-const SUPPORTED: readonly string[] = ['Dialog', 'Narration', 'Wait']
+/** fieldSample が実行できるコマンド（台詞・ナレーション・待機・感情 #946）。NpcMove / Battle などは未対応 */
+const SUPPORTED: readonly string[] = ['Dialog', 'Narration', 'Wait', 'Emotion']
 
 /** パース済みドキュメントから `[イベント]` を集める（全章・全シーン） */
 export function collectFieldEvents(doc: EventDocument): FieldScriptEvents {
@@ -140,6 +141,28 @@ export function createFieldBattleHost(
     startBattle(id) {
       warn(`[field-sample] Battle(${id}) はイベントからは未対応です（読み飛ばします）`)
       return Promise.resolve(null)
+    },
+  }
+}
+
+/**
+ * EventRunner の `emotionHost` (#946)。脚本の `[感情:]` を `resolveEmotion` で解決し、`show`（= `showEmotion` 相当）へ渡す。
+ * 解決できない対象・未宣言の種類は警告して無視（フィールドも会話も止めない）。`getContext` は呼ぶたびに最新の
+ * シーン・同行者の状態を返す（シーンをまたいで NPC の一覧が変わるため）
+ */
+export function createFieldEmotionHost(
+  getContext: () => EmotionResolveContext,
+  show: (target: string, kind: string, durationMs?: number) => boolean,
+  warn: (msg: string) => void = (m) => console.warn(m)
+): EventEmotionHost {
+  return {
+    showEmotion(target, kind, durationMs) {
+      const { command, warnings } = resolveEmotion(
+        { target, kind, duration_ms: durationMs },
+        getContext()
+      )
+      for (const w of warnings) warn(`[field-sample] ${w}`)
+      if (command) show(command.target, command.kind, command.durationMs)
     },
   }
 }

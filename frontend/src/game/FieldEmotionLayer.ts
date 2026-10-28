@@ -6,7 +6,6 @@
 import { Container, Rectangle, Sprite, Texture } from 'pixi.js'
 import { hasOwn } from './ownProperty'
 import {
-  EMOTION_TARGETS,
   INITIAL_EMOTION_STATE,
   emotionAnchor,
   emotionFrameRect,
@@ -59,13 +58,13 @@ export class FieldEmotionLayer extends Container {
   /** 全部消す（戦闘の開始など） */
   clear(): void {
     this.state = INITIAL_EMOTION_STATE
-    for (const t of EMOTION_TARGETS) this.hideSprite(t)
+    for (const t of Object.keys(this.sprites) as EmotionTarget[]) this.hideSprite(t)
   }
 
   /** 進行中の吹き出し（検証用の読み取り） */
   active(): Partial<Record<EmotionTarget, ActiveEmotion>> {
     const out: Partial<Record<EmotionTarget, ActiveEmotion>> = {}
-    for (const t of EMOTION_TARGETS) {
+    for (const t of Object.keys(this.state) as EmotionTarget[]) {
       const a = this.state[t]
       if (a) out[t] = { ...a }
     }
@@ -75,7 +74,10 @@ export class FieldEmotionLayer extends Container {
   /** dt ms 進め、`heads` の位置に置き直す。表示時間を過ぎたものは消す */
   tick(dt: number, heads: EmotionHeads): void {
     this.state = stepEmotions(this.state, dt, this.emotions)
-    for (const target of EMOTION_TARGETS) {
+    // 消えた吹き出しの Sprite を隠す（state に無くなったキーも対象）
+    for (const target of Object.keys(this.sprites) as EmotionTarget[])
+      if (!this.state[target]) this.hideSprite(target)
+    for (const target of Object.keys(this.state) as EmotionTarget[]) {
       const a = this.state[target]
       const head = heads[target]
       if (!a || !head) {

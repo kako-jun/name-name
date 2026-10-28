@@ -12399,3 +12399,104 @@ fn test_battle_motion_parses_default_none_and_roundtrips() {
     assert_eq!(parser::parse(&emitted).battle_motion, doc.battle_motion);
     assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_motion"));
 }
+
+// ---- #946: [イベント] 内の [感情:] → EventCommand::Emotion ----
+
+fn rpg_event_commands(body: &str) -> Vec<EventCommand> {
+    let events = emotion_events(&format!("[イベント talk]\n{body}\n[/イベント]"));
+    events
+        .into_iter()
+        .find_map(|e| match e {
+            Event::RpgEvent { commands, .. } => Some(commands),
+            _ => None,
+        })
+        .expect("rpg event")
+}
+
+#[test]
+fn test_rpg_event_emotion_command_parses_in_order_and_flushes_dialog() {
+    let cmds = rpg_event_commands(
+        "**子**:\nあっ！\n[感情: 子, びっくり]\nなに？\n[感情: 主人公, ？, 持続=1200]\n[待機: 100]",
+    );
+    assert_eq!(cmds.len(), 5, "{cmds:?}");
+    assert!(
+        matches!(&cmds[0], EventCommand::Dialog { character: Some(c), text } if c == "子" && text == &vec!["あっ！".to_string()])
+    );
+    assert_eq!(
+        cmds[1],
+        EventCommand::Emotion {
+            target: "子".into(),
+            kind: "びっくり".into(),
+            duration_ms: None
+        }
+    );
+    assert!(matches!(
+        &cmds[2],
+        EventCommand::Dialog {
+            character: None,
+            ..
+        }
+    ));
+    assert_eq!(
+        cmds[3],
+        EventCommand::Emotion {
+            target: "主人公".into(),
+            kind: "？".into(),
+            duration_ms: Some(1200)
+        }
+    );
+    assert!(matches!(&cmds[4], EventCommand::Wait { ms: 100 }));
+}
+
+#[test]
+fn test_rpg_event_emotion_command_roundtrips() {
+    let src = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[イベント talk]\n[感情: 子, びっくり]\n[感情: 主人公, ？, 持続=1200]\n[/イベント]\n"
+    );
+    let doc = parser::parse(&src);
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[感情: 子, びっくり]\n"), "{emitted}");
+    assert!(
+        emitted.contains("[感情: 主人公, ？, 持続=1200]\n"),
+        "{emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).chapters[0].scenes[0].events,
+        doc.chapters[0].scenes[0].events
+    );
+}
+
+#[test]
+fn test_rpg_event_emotion_command_invalid_is_dropped_and_duration_fullwidth() {
+    for bad in ["[感情: 子]", "[感情: , びっくり]", "[感情: 子, ]"] {
+        let cmds = rpg_event_commands(&format!("{bad}\n[待機: 1]"));
+        assert_eq!(cmds, vec![EventCommand::Wait { ms: 1 }], "{bad}");
+    }
+    // 全角 ＝ と全角数字は受理する (#943 nit)。0・非数値は None
+    for (kv, want) in [
+        ("持続＝１２００", Some(1200)),
+        ("持続 ＝ 300", Some(300)),
+        ("持続=１２", Some(12)),
+        ("持続＝０", None),
+        ("持続＝あ", None),
+    ] {
+        let cmds = rpg_event_commands(&format!("[感情: 子, ？, {kv}]"));
+        assert_eq!(
+            cmds,
+            vec![EventCommand::Emotion {
+                target: "子".into(),
+                kind: "？".into(),
+                duration_ms: want
+            }],
+            "{kv}"
+        );
+        // シーン直下の Event::Emotion も同じ規則
+        assert!(
+            emotion_events(&format!("[感情: 子, ？, {kv}]")).contains(&Event::Emotion {
+                target: "子".into(),
+                kind: "？".into(),
+                duration_ms: want
+            })
+        );
+    }
+}

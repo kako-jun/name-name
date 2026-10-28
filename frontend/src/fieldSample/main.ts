@@ -59,12 +59,13 @@ import {
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
 import { FieldEmotionLayer, type EmotionHeads } from '../game/FieldEmotionLayer'
 import {
+  EMOTION_NPC_PREFIX,
   EMOTION_TARGETS,
   isCompanionShown,
-  type EmotionSheets,
-  type EmotionTarget,
+  isEmotionTarget,
+  npcEmotionTarget,
 } from '../game/fieldEmotion'
-import { mergeEmotionSheets, parseFieldEmotionsText } from '../game/fieldEmotionScript'
+import { loadEmotionSheets } from '../game/fieldEmotionScript'
 import {
   WARP_COLOR,
   WARP_LOAD_TIMEOUT_MS,
@@ -93,6 +94,7 @@ import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
   createFieldBattleHost,
+  createFieldEmotionHost,
   createFieldNpcMover,
   checkNpcScripts,
   loadFieldScript,
@@ -291,29 +293,6 @@ function holdFor(config: FieldSampleConfig, id: string, mask: WalkMask): Uint8Ar
 }
 
 /**
- * 感情吹き出しの種類を集める (#946)。設定のインライン `emotions` と、`emotionsUrl` の外部 JSON をマージする（同名はインラインが優先）。
- * 外部 JSON の取得失敗・不正は警告して無視（インラインだけで続ける）。どちらも無ければ undefined＝層を作らない（従来と同一）
- */
-async function loadEmotionSheets(config: FieldSampleConfig): Promise<EmotionSheets | undefined> {
-  let external: EmotionSheets = {}
-  const src = config.emotionsSource
-  if (src) {
-    try {
-      const res = await fetch(src.url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const parsed = parseFieldEmotionsText(await res.text(), src.resolveImage)
-      for (const w of parsed.warnings) console.warn(`[field-sample] emotionsUrl: ${w}`)
-      external = parsed.emotions
-    } catch (e) {
-      console.warn(
-        `[field-sample] emotionsUrl を読めません（無視します）: ${src.url} ${e instanceof Error ? e.message : String(e)}`
-      )
-    }
-  }
-  return mergeEmotionSheets(config.emotions, external)
-}
-
-/**
  * NPC の脚本 `.md` (`scriptUrl`、#841 段階2)。取得・パースの失敗は警告して無視（NPC は固定の `line` で話す）。
  * wasm パーサは scriptUrl があるときだけ遅延 import する（無い設定では wasm を読まない）
  */
@@ -399,7 +378,7 @@ async function main(): Promise<void> {
   const currentNpcs = (): NpcRuntime[] => sceneNpcs.get(sceneId) ?? []
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
-  const emotionSheets = await loadEmotionSheets(config)
+  const emotionSheets = await loadEmotionSheets(config, (url) => fetch(url))
   const scriptEvents = await loadNpcScript(config)
   // scene と脚本の照合は起動時に 1 回だけ（話しかけるたびに同じ警告を出さない）
   {
@@ -573,10 +552,39 @@ async function main(): Promise<void> {
     approach = null
     movingMs = 0
   }
+  /** 感情吹き出しを出す (#937/#946)。`api.showEmotion` と脚本の `[感情:]`（emotionHost）の共通の入口 */
+  const showEmotion = (target: string, kind: string, durationMs?: number): boolean => {
+    if (!emotionLayer || battle) return false
+    if (!isEmotionTarget(target)) return false
+    // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
+    if (
+      target === 'companion' &&
+      !isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
+    )
+      return false
+    // NPC はいまのシーンにいるものだけ（別シーンの NPC は頭上の位置が無い）
+    if (target.startsWith(EMOTION_NPC_PREFIX)) {
+      const id = target.slice(EMOTION_NPC_PREFIX.length)
+      if (!currentNpcs().some((n) => n.id === id)) return false
+    }
+    return emotionLayer.show(target, kind, durationMs)
+  }
   // 会話の実行器 (#841 段階2)。NpcMove / Battle は fieldSample では未対応（警告して読み飛ばす）
   const conversation = new FieldConversation(
     dialogBox,
-    new EventRunner(dialogBox, createFieldNpcMover(), createFieldBattleHost())
+    new EventRunner(
+      dialogBox,
+      createFieldNpcMover(),
+      createFieldBattleHost(),
+      createFieldEmotionHost(
+        () => ({
+          emotions: emotionSheets ?? {},
+          companionName: config.companion?.name ?? null,
+          npcs: currentNpcs().map((n) => ({ id: n.id, name: n.def.name })),
+        }),
+        showEmotion
+      )
+    )
   )
   const startTalk = (npc: NpcRuntime): void => {
     if (!canStartTalk(talkState())) return
@@ -1160,6 +1168,12 @@ async function main(): Promise<void> {
     }
     // 感情吹き出し (#937) の置き場所: 人物の表示上端の中央（人物が出ていなければ null）
     const heads: EmotionHeads = { player: { x: pos.x, y: pos.y - tex.height * s }, companion: null }
+    // NPC の頭上 (#946)。足元 n.y から表示高さ分だけ上
+    for (const n of currentNpcs())
+      heads[npcEmotionTarget(n.id)] = {
+        x: n.x,
+        y: n.y - n.textures[n.facing].height * n.sprite.scale.y,
+      }
     // 同行者 (#862): 主人公の後ろ。ghost（半透明）はフラグで切り替わる
     const ctex = config.companion ? companionTex[facing4(facing)] : undefined
     if (
@@ -1235,21 +1249,11 @@ async function main(): Promise<void> {
     setFlag,
     getFlags: () => ({ ...flags }),
     /**
-     * 感情吹き出し (#937)。人物（player / companion）の頭上に、宣言した種類（"!" "?" など）を出す。見た目だけで歩行には関与しない。
-     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中・同行者が出ていないとき（companion 指定時）は false。同じ人物に続けて出すと置き換わる。
-     * `durationMs`（任意・#946）はこの 1 回だけ表示時間を上書きする（0 超〜10000ms。超えれば 10000 に収め、0 以下・非数・省略は宣言の `durationMs`）
+     * 感情吹き出し (#937)。人物（player / companion / NPC は `npc:<id>`）の頭上に、宣言した種類（"!" "?" など）を出す。見た目だけで歩行には関与しない。
+     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中・同行者が出ていないとき（companion 指定時）・いまのシーンにいない NPC は false。同じ人物に続けて出すと置き換わる。
+     * `durationMs`（任意・#946）はこの 1 回だけ表示時間を上書きする（floor して 1 以上のときだけ採用、10000ms を超えれば 10000 に収め、それ以外は宣言の `durationMs`）
      */
-    showEmotion: (target: EmotionTarget, kind: string, durationMs?: number): boolean => {
-      if (!emotionLayer || battle) return false
-      // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
-      if (
-        target === 'companion' &&
-        !isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
-      )
-        return false
-      if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return false
-      return emotionLayer.show(target, kind, durationMs)
-    },
+    showEmotion,
     /** 進行中の吹き出し（検証用の読み取り） */
     emotions: () => emotionLayer?.active() ?? {},
   }

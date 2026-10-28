@@ -78,6 +78,8 @@ export interface FieldCompanion {
   sprites: Record<Facing, [string, string, string]>
   /** 表示高さ（背景ピクセル）。省略 = 主人公と同じ高さ */
   height?: number
+  /** 脚本の `[感情: <name>, …]` で同行者を指す話者名 (#946)。省略時は固定の対象名 `同行者` だけで指せる */
+  name?: string
 }
 
 /**
@@ -474,7 +476,17 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       if (!h.ok) return h
       ch = h.value
     }
-    companion = { sprites: cs, ...(ch !== undefined ? { height: ch } : {}) }
+    let cn: string | undefined
+    if (c.name !== undefined) {
+      if (typeof c.name !== 'string' || !c.name.trim())
+        return fail(`companion.name は空でない文字列が必要です: ${JSON.stringify(c.name)}`)
+      cn = c.name.trim()
+    }
+    companion = {
+      sprites: cs,
+      ...(ch !== undefined ? { height: ch } : {}),
+      ...(cn !== undefined ? { name: cn } : {}),
+    }
   }
   let assist: AssistConfig | null = null
   if (raw.assist !== undefined) {

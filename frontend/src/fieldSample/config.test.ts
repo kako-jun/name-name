@@ -293,6 +293,17 @@ describe('flags / assist / companion (#862)', () => {
     c.companion.height = 80
     expect(ok(c).companion?.height).toBe(80)
   })
+  it('companion.name（#946）: 任意の話者名。空・文字列でないものはエラー', () => {
+    const c = withAssist()
+    c.companion = companionRaw()
+    expect(ok(c).companion?.name).toBeUndefined()
+    c.companion.name = ' 花子 '
+    expect(ok(c).companion?.name).toBe('花子')
+    for (const bad of ['', '  ', 3]) {
+      c.companion.name = bad
+      expect(parse(c).ok, JSON.stringify(bad)).toBe(false)
+    }
+  })
   it('companion: 方向の欠け・コマ数違い・height 不正・assist なしはエラー', () => {
     const noLeft = withAssist()
     noLeft.companion = companionRaw()
@@ -360,6 +371,15 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
     if (!r.ok) throw new Error(r.error)
     expect(Object.keys(r.value.scenes).length).toBeGreaterThan(0)
+  })
+
+  it('寺町サンプルは emotionsUrl と scriptUrl を持つ (#946)', () => {
+    const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.emotionsSource?.url).toBe(
+      'http://localhost:8780/field-sample/teramachi-emotions.json'
+    )
+    expect(r.value.scriptUrl).toBe('http://localhost:8780/field-sample/teramachi-npc.md')
   })
 
   it('寺町サンプルの銭湯の下端リンクは歩ける幅いっぱい [930,1535]、坂の上端は [1024,1420] (#938)', () => {
