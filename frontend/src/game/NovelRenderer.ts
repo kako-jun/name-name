@@ -3477,7 +3477,7 @@ export class NovelRenderer {
     this.stageFrontLayer.restore(state.stageFront, this.assetBaseUrl)
 
     // 天候復元 (#706)。画面空間のオーバーレイでカメラ射影・ズームを受けない。粒の位置は保存しないので、
-    // 同じ天候が降っていれば流し続け、違う・止まっているときだけ経過 0 から降らせ直す。
+    // 同じ天候が降っていれば流し続け、違うときだけ経過 0 から降らせ直す。
     this.weatherLayer.restore(state.weather ?? null)
 
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順

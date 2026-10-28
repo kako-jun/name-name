@@ -6,7 +6,7 @@
  *
  * - 物理演算なし。粒の位置は `weatherParticles.ts` の純粋関数が「固定シードの初期値 + 経過時間」から決定論的に出す。
  *   このクラスは「いつ計算するか」（`TimeController` の 16ms interval）と「結果をどの Graphics に当てるか」だけを持つ。
- *   時計は `EventImageLayer` のアンビエント演出と同じ `TimeController.now()`（動画書き出しでは仮想時間）。
+ *   時計は `EventImageLayer` のアンビエント演出と同じ `TimeController.now()`。契約は「set してからの経過時間が同じなら同じフレーム」だけで、動画書き出しは実時間録画のため再現を保証しない（仮想時間の書き出しに移れば再現する）。
  * - 描画は既存アセット不要の図形（雨=細い線、雪=円、桜=楕円の花びら）。粒ごとの `Graphics` は種類ごとに一度だけ描き、
  *   毎フレームは x/y/rotation/scale/alpha を書き換えるだけ（`clear()` や再描画をしないので毎フレームのジオメトリ生成・GC が出ない）。
  * - 画面空間のオーバーレイ。depth もカメラ射影も持たず、`CameraZoomController` のズームも受けない（`getLayers` に入れない）。
@@ -90,7 +90,7 @@ export class WeatherLayer extends Container {
 
   /**
    * 完成済みスナップショット（`NovelGameState.weather`）へ宣言的に復元する（goBack/seekTo/セーブ復元/任意局面起動）。
-   * 同じ天候が降っていればそのまま流し続け、違う・止まっているときは経過 0 から降らせ直す。粒の位置は保存しない。
+   * 同じ天候が降っていればそのまま流し続け、違うときは経過 0 から降らせ直す（`set` に委譲し、同じ種類・同じ強さなら何もしない）。粒の位置は保存しない。
    */
   restore(state: WeatherState | null): void {
     if (!state) {

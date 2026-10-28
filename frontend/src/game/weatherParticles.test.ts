@@ -291,6 +291,7 @@ describe('computeWeatherParticle（時間→位置）', () => {
     expect(a).toBe(b)
     expect(a).toBeGreaterThan(0)
     expect(a).toBeLessThan(0.5)
+    // 0.25 / 1.4 は weatherParticles.ts の MOTION.Rain の drift / fall と同期が必要（定数を変えたらここも直す）。
     // 傾きは実際の落下距離（高さ + 上下の余白）に対する横流れの比
     expect(a).toBeCloseTo(Math.atan2(0.25 * W, 1.4 * (H + WEATHER_WRAP_MARGIN * 2)), 10)
   })

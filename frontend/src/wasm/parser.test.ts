@@ -14,7 +14,7 @@
 // ここに 1 ケース追加する運用にする。
 
 import { describe, expect, it, vi } from 'vitest'
-import { parseMarkdown, emitMarkdown } from './parser'
+import { parseMarkdown, emitMarkdown, normalizeEvents } from './parser'
 import { collectMasterData } from '../game/rpgProjectFromDoc'
 
 describe('parseMarkdown + normalizeDocument: per-game frontmatter fields survive normalize (#310)', () => {
@@ -2874,6 +2874,22 @@ describe('wasm parseMarkdown: 天候 (#706)', () => {
       { Weather: { kind: 'Snow', intensity: 0.1 } },
       { Weather: { kind: 'Snow', intensity: 0.7 } },
       'WeatherExit',
+    ])
+  })
+
+  it('強さが null / undefined でも強さ 0 にならず既定の 1 になる', async () => {
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events[0]).toEqual({ Weather: { kind: 'Rain', intensity: 1 } })
+    // 正規化関数は wasm 出力の null も同じく既定へ倒す
+    expect(
+      normalizeEvents(
+        [{ Weather: { kind: 'Rain', intensity: null } }, { Weather: { kind: 'Rain' } }] as never,
+        'Fade'
+      )
+    ).toEqual([
+      { Weather: { kind: 'Rain', intensity: 1 } },
+      { Weather: { kind: 'Rain', intensity: 1 } },
     ])
   })
 
