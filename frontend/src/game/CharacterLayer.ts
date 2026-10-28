@@ -769,6 +769,9 @@ export class CharacterLayer extends Container {
   private transitionSerial = 0
   /** show/changeExpression から起動した立ち絵 texture load の未完数。 */
   private pendingPortraitLoads = 0
+  /** 同一人物のポーズ変更要求の鮮度管理 (#952)。キャラごとの最新トークン。 */
+  private poseTokenSerial = 0
+  private latestPoseToken = new Map<string, number>()
   /** アニメーション駆動用 ticker。動いているキャラがいないときは停止しておく */
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
@@ -1642,6 +1645,133 @@ export class CharacterLayer extends Container {
     this.ensureTicker()
   }
 
+  /** 同一人物の最新要求トークンを進めて返す (#952)。show() の呼び出しごとに更新する。 */
+  private nextPoseToken(character: string): number {
+    this.poseTokenSerial += 1
+    this.latestPoseToken.set(character, this.poseTokenSerial)
+    return this.poseTokenSerial
+  }
+
+  /** 退場フェード中・退場 walk 中か (#952)。読み込み完了時の遷移開始と入場フェードの復活防止に使う。 */
+  private isExiting(state: CharacterState): boolean {
+    return state.fadeAnimation?.destroyOnComplete === true || state.stageMotion?.kind === 'exit'
+  }
+
+  /**
+   * 同一人物のポーズ変更（texture が変わる経路）の要求 (#952)。まず texture の読み込みだけを行い、
+   * 読み込み待ちの間は新ポーズの state を作らない。読み込み完了時に `completePoseChange` が
+   * 要求の鮮度と旧ポーズの健在を確かめ、満たせば同期的に旧→新の遷移を始める。
+   * `onReady` は成功・失敗・捨てた場合のいずれでもちょうど 1 回発火する。
+   */
+  private requestPoseChange(req: {
+    character: string
+    token: number
+    from: CharacterState
+    expression: string
+    position: string
+    assetBaseUrl: string
+    targetX: number
+    fit: boolean
+    depth: number
+    moved: boolean
+    onReady?: () => void
+  }): void {
+    this.pendingPortraitLoads += 1
+    void (async () => {
+      // null: assetBaseUrl が空で描画できない（従来どおり texture 無しで遷移する）。undefined: 失敗。
+      let texture: Texture | null | undefined
+      if (!req.assetBaseUrl) {
+        texture = null
+      } else {
+        const urls = resolveCharacterImageUrls(req.assetBaseUrl, req.expression.replace(/^\//, ''))
+        try {
+          texture = await loadFirstAvailableTexture(
+            urls,
+            (ms) => new Promise<void>((resolve) => this.time.setTimeout(resolve, ms))
+          )
+        } catch (err) {
+          console.warn('[name-name] 立ち絵の読み込みに失敗: ' + urls.join(' , '), err)
+          texture = undefined
+        }
+      }
+      this.pendingPortraitLoads = Math.max(0, this.pendingPortraitLoads - 1)
+      try {
+        this.completePoseChange(req, texture)
+      } finally {
+        req.onReady?.()
+      }
+    })()
+  }
+
+  /** 読み込み完了時の同期遷移 (#952)。条件を満たさなければ何もしない（A は表示され続ける）。 */
+  private completePoseChange(
+    req: {
+      character: string
+      token: number
+      from: CharacterState
+      expression: string
+      position: string
+      assetBaseUrl: string
+      targetX: number
+      fit: boolean
+      depth: number
+      moved: boolean
+    },
+    texture: Texture | null | undefined
+  ): void {
+    const { character, from: existing } = req
+    if (texture === undefined) return // 読み込み失敗: nextState を作っていないのでロールバック不要
+    if (this.latestPoseToken.get(character) !== req.token) return // 後続の要求に追い越された
+    if (this.characters.get(character) !== existing) return
+    if (existing.sprite.destroyed || this.isExiting(existing)) return
+
+    if (req.moved) {
+      this.evictCollidersAt(req.targetX, character, false)
+    }
+    if (existing.idleIntervalId) {
+      this.time.clearInterval(existing.idleIntervalId)
+      existing.idleIntervalId = undefined
+    }
+
+    const oldKey = this.nextTransitionName(character)
+    existing.snapshotHidden = true
+    this.characters.delete(character)
+    this.characters.set(oldKey, existing)
+
+    const nextState = this.createPortraitState(
+      character,
+      req.expression,
+      req.position,
+      req.assetBaseUrl,
+      req.targetX,
+      req.fit,
+      req.depth,
+      0,
+      true
+    )
+    this.attachCharacterState(nextState)
+    this.characters.set(character, nextState)
+    if (texture) {
+      this.applyLoadedTexture(nextState.sprite, character, texture, req.fit, nextState.label)
+    }
+
+    if (this.cameraMode === 'Theater') {
+      // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
+      let inheritedStartMs: number | undefined
+      if (existing.sprite.parent === this) {
+        inheritedStartMs = this.startFlipOut(existing)
+      } else {
+        // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
+        // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
+        this.startFade(existing, existing.sprite.alpha, 0, true)
+      }
+      this.startFlipIn(nextState, inheritedStartMs)
+    } else {
+      this.startFade(existing, existing.sprite.alpha, 0, true)
+      this.startFade(nextState, 0, 1, false)
+    }
+  }
+
   private nextTransitionName(character: string): string {
     this.transitionSerial += 1
     return `${character}__transition_${this.transitionSerial}`
@@ -1704,6 +1834,9 @@ export class CharacterLayer extends Container {
     const targetX =
       overrideX ?? this.screenWidth * resolveCharacterXRatio(normalizedPosition, CHARACTER_X_RATIO)
     const existing = this.characters.get(character)
+    // この show が同一人物の最新の要求になる (#952)。読み込み待ちの古いポーズ変更要求は、
+    // 読み込み完了時にこのトークンの不一致で捨てられる（onReady は捨てても必ず発火する）。
+    const poseToken = this.nextPoseToken(character)
 
     if (existing) {
       // 退場フェード中の再 show: フェードアウトを取り消して再フェードイン（または即時表示）に倒す (#177)
@@ -1724,6 +1857,7 @@ export class CharacterLayer extends Container {
       // シアターモードの奥行き変化 (#694)。position/expression/fit が同じでも depth だけ変わる
       // 再 show（例: 同じキャラの次の Dialog 行で depth 値が変わる）を検知する。
       const depthChanged = existing.depth !== depth
+      const previousDepth = existing.depth
       existing.depth = depth
 
       // 表情が同じで位置も同じ、フィット指定も同じなら何もしない（フェード状態は上で解消済み）。
@@ -1764,69 +1898,24 @@ export class CharacterLayer extends Container {
         // 同一人物の表情・ポーズ/fit 変更は旧 sprite を即 texture 差し替えせず、
         // 旧 sprite と新 sprite を重ねて同時クロスフェードする (#337)。シアターモードでは
         // クロスフェードの代わりに板フリップ (#707)（旧 0→90°、新 -90°→0）で切り替える。
-        if (positionChanged || overrideXChanged) {
-          this.evictCollidersAt(targetX, character, instant)
-        }
-        if (existing.idleIntervalId) {
-          this.time.clearInterval(existing.idleIntervalId)
-          existing.idleIntervalId = undefined
-        }
-
-        const oldKey = this.nextTransitionName(character)
-        existing.snapshotHidden = true
-        this.characters.delete(character)
-        this.characters.set(oldKey, existing)
-
-        const nextState = this.createPortraitState(
+        //
+        // 読み込み待ちの間は新ポーズの state を作らない (#952)。旧ポーズ A は `character` キーの
+        // まま残り、remove・衝突退場・場面転換・セーブはそのまま A に作用する。読み込みが終わった
+        // 時点で、要求が最新かつ A が健在なら同期的に旧→新の遷移を始める（requestPoseChange）。
+        // depth はこの時点では A に書き込まない（読み込み失敗で A が元の姿を保つため戻す）。
+        existing.depth = previousDepth
+        this.requestPoseChange({
           character,
+          token: poseToken,
+          from: existing,
           expression,
-          normalizedPosition,
+          position: normalizedPosition,
           assetBaseUrl,
           targetX,
           fit,
           depth,
-          0,
-          true
-        )
-        this.attachCharacterState(nextState)
-        this.characters.set(character, nextState)
-
-        void this.loadTexture(
-          nextState.sprite,
-          character,
-          expression,
-          assetBaseUrl,
-          nextState.label,
-          fit,
-          onReady
-        ).then((loaded) => {
-          if (this.characters.get(character) !== nextState) return
-          if (this.characters.get(oldKey) !== existing) return
-          if (!loaded && assetBaseUrl) {
-            this.destroyCharacterState(nextState)
-            this.characters.delete(character)
-            existing.fadeAnimation = null
-            existing.snapshotHidden = false
-            existing.sprite.alpha = 1
-            this.characters.delete(oldKey)
-            this.characters.set(character, existing)
-            return
-          }
-          if (this.cameraMode === 'Theater') {
-            // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
-            let inheritedStartMs: number | undefined
-            if (existing.sprite.parent === this) {
-              inheritedStartMs = this.startFlipOut(existing)
-            } else {
-              // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
-              // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
-              this.startFade(existing, existing.sprite.alpha, 0, true)
-            }
-            this.startFlipIn(nextState, inheritedStartMs)
-          } else {
-            this.startFade(existing, existing.sprite.alpha, 0, true)
-            this.startFade(nextState, 0, 1, false)
-          }
+          moved: positionChanged || overrideXChanged,
+          onReady,
         })
         return
       }
@@ -1920,6 +2009,10 @@ export class CharacterLayer extends Container {
       if (entranceStarted) return
       if (!collidersGone || !textureReady) return
       if (this.characters.get(character) !== state) return
+      // 未 attach のまま退場に入った state（衝突退場待ち・読み込み待ち中の [退場]）を入場フェードで
+      // 復活させない。退場フェードの完了で破棄される。再 show されれば reviveFromExitFade が
+      // 退場を取り消すので、ここを通る。
+      if (this.isExiting(state)) return
       if (!textureLoaded && assetBaseUrl) return
       attachEntrance()
     }
@@ -3910,6 +4003,86 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * 読み込み済みの texture を立ち絵 sprite に適用する（スケール・足元 Y・ラベル幅・texture 差し替え）。
+   * `loadTexture`（非同期読み込み）とポーズ変更の同期遷移 (#952) の共通部。destroy 済みなら何もせず
+   * false を返す。
+   */
+  private applyLoadedTexture(
+    sprite: Sprite,
+    characterName: string,
+    texture: Texture,
+    fit: boolean,
+    label?: Text
+  ): boolean {
+    // destroy 後に解決した場合は反映しない（UAF 防止）。ready 通知 (#293) は呼び出し側が
+    // 必ず発火させる（sprite が消えても永久待ちにしない）。
+    if (sprite.destroyed) return false
+    // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
+    // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
+    // `texture.source` の null ガードは reapplyPixelArt() の JSDoc 参照。
+    if (texture.source) texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
+    // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
+    // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
+    // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。
+    // ※ [アニメ] 等の脚本駆動 scale 演出（animate()）はこれとは別物で、ここでは触らない。
+    //
+    // 例外: 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけ (#294)、旧 fit-down を
+    // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
+    // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
+    //
+    // 優先順位 (#360 / #364 / #378): per-line フィット(fit=true, #294) > per-game
+    //   character_scale(#378, 元絵基準) > per-character character_height_ratios override >
+    //   per-game character_height_ratio > 既定 原寸(1)。
+    //   fit のときは従来通り computeFitScale。fit=false かつ character_scale 指定時は元絵基準の
+    //   一律スケール（sprite.scale = 値・既に [0.05,4] クランプ済み）をそのまま使う＝元絵に焼き込んだ
+    //   身長差を保存する。character_scale 未指定時は resolveCharacterHeightRatio でこのキャラの目標比率
+    //   （per-character override があればそれ、なければスクリプト単位の character_height_ratio）を解決し、
+    //   あれば computeTargetHeightScale で**画面基準**の目標表示高さへ合わせる（高解像度立ち絵の巨大化を
+    //   吸収しつつ身長差は潰れる）。どちらも無ければ原寸 1（後方互換の絶対条件）。
+    // ※ loadTexture は show() の立ち絵専用。render-only（Title/Label/Image）は通らないので
+    //   character_scale / height ratio は自動的に立ち絵のみへ効く。
+    let scale: number
+    if (fit) {
+      scale = computeFitScale(texture.width, texture.height, this.screenWidth, this.screenHeight)
+    } else if (this.characterScale !== null) {
+      // character_scale (#378): 元絵基準の一律スケール（既に setCharacterScale で [0.05,4] クランプ済み）。
+      // 画面基準の height_ratio と違いテクスチャの縦pxを割り消さず、表示px = 値 × texture.height。
+      scale = this.characterScale
+    } else {
+      const targetRatio = resolveCharacterHeightRatio(
+        characterName,
+        this.characterHeightRatios,
+        this.characterHeightRatio
+      )
+      scale =
+        targetRatio === null
+          ? 1
+          : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
+    }
+    // カメラ射影 (#694): depth に基づく scale/verticalOffset を、上で決めた基本スケール・
+    // 足元 Y 座標に乗算・加算で合成する（fit/character_scale/character_height_ratio の
+    // どの分岐で決まった scale でも一律に適用する）。ノベルモード（既定）では
+    // computeCameraProjection が常に scale=1/verticalOffset=0 を返すため、既存の見た目は
+    // 無変化（後方互換）。depth は `this.characters` に既に登録済みの state から引く
+    // （show() が loadTexture を呼ぶ前に必ず該当 character キーへ state を set 済み）。
+    const depth = this.characters.get(characterName)?.depth ?? 0
+    const projection = computeCameraProjection(
+      this.cameraMode,
+      this.cameraOrientation,
+      this.cameraElevation,
+      depth
+    )
+    sprite.scale.set(scale * projection.scale)
+    sprite.y = this.characterY + projection.verticalOffset
+    // ラベルを立ち絵（sprite）の幅に収める。natural width が sprite 幅を超えたら縮小、
+    // 収まっていれば等倍のまま（大きくしない）。setCharacterHeightRatio のライブ再スケール (#360)
+    // と共有するヘルパで、fit ロジックの重複を避ける（規律4）。
+    this.fitLabelToSprite(sprite, label)
+    sprite.texture = texture
+    return true
+  }
+
+  /**
    * テクスチャをロードして Sprite に適用する。
    *
    * `onReady` (#293): テクスチャの用意が済んだ（または素早く諦めた）タイミングで**必ず1回だけ**
@@ -3947,77 +4120,7 @@ export class CharacterLayer extends Container {
         (ms) => new Promise<void>((resolve) => this.time.setTimeout(resolve, ms))
       )
         .then((texture) => {
-          // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
-          // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
-          if (sprite.destroyed) return false
-          // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
-          // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
-          // `texture.source` の null ガードは reapplyPixelArt() の JSDoc 参照。
-          if (texture.source) texture.source.scaleMode = this.pixelArt ? 'nearest' : 'linear'
-          // 立ち絵は既定で原寸（scale=1）。画面全体をブラウザ枠に合わせて縮める系統
-          // （PixiJS canvas の wrapper スケール）が唯一の常時縮小であり、立ち絵を個別に
-          // 自動 fit-down してはいけない。論理画面の上端・左右をはみ出してもよい。
-          // ※ [アニメ] 等の脚本駆動 scale 演出（animate()）はこれとは別物で、ここでは触らない。
-          //
-          // 例外: 脚本の話者行に `フィット` / `fit` を書いた立ち絵だけ (#294)、旧 fit-down を
-          // 明示適用する（論理画面より大きいときだけ画面内に収める・小さい時は原寸）。
-          // サイズや位置では自動分岐しない。novel/adv でも分けない（fit フラグだけが分岐の根拠）。
-          //
-          // 優先順位 (#360 / #364 / #378): per-line フィット(fit=true, #294) > per-game
-          //   character_scale(#378, 元絵基準) > per-character character_height_ratios override >
-          //   per-game character_height_ratio > 既定 原寸(1)。
-          //   fit のときは従来通り computeFitScale。fit=false かつ character_scale 指定時は元絵基準の
-          //   一律スケール（sprite.scale = 値・既に [0.05,4] クランプ済み）をそのまま使う＝元絵に焼き込んだ
-          //   身長差を保存する。character_scale 未指定時は resolveCharacterHeightRatio でこのキャラの目標比率
-          //   （per-character override があればそれ、なければスクリプト単位の character_height_ratio）を解決し、
-          //   あれば computeTargetHeightScale で**画面基準**の目標表示高さへ合わせる（高解像度立ち絵の巨大化を
-          //   吸収しつつ身長差は潰れる）。どちらも無ければ原寸 1（後方互換の絶対条件）。
-          // ※ loadTexture は show() の立ち絵専用。render-only（Title/Label/Image）は通らないので
-          //   character_scale / height ratio は自動的に立ち絵のみへ効く。
-          let scale: number
-          if (fit) {
-            scale = computeFitScale(
-              texture.width,
-              texture.height,
-              this.screenWidth,
-              this.screenHeight
-            )
-          } else if (this.characterScale !== null) {
-            // character_scale (#378): 元絵基準の一律スケール（既に setCharacterScale で [0.05,4] クランプ済み）。
-            // 画面基準の height_ratio と違いテクスチャの縦pxを割り消さず、表示px = 値 × texture.height。
-            scale = this.characterScale
-          } else {
-            const targetRatio = resolveCharacterHeightRatio(
-              characterName,
-              this.characterHeightRatios,
-              this.characterHeightRatio
-            )
-            scale =
-              targetRatio === null
-                ? 1
-                : computeTargetHeightScale(texture.height, targetRatio, this.screenHeight)
-          }
-          // カメラ射影 (#694): depth に基づく scale/verticalOffset を、上で決めた基本スケール・
-          // 足元 Y 座標に乗算・加算で合成する（fit/character_scale/character_height_ratio の
-          // どの分岐で決まった scale でも一律に適用する）。ノベルモード（既定）では
-          // computeCameraProjection が常に scale=1/verticalOffset=0 を返すため、既存の見た目は
-          // 無変化（後方互換）。depth は `this.characters` に既に登録済みの state から引く
-          // （show() が loadTexture を呼ぶ前に必ず該当 character キーへ state を set 済み）。
-          const depth = this.characters.get(characterName)?.depth ?? 0
-          const projection = computeCameraProjection(
-            this.cameraMode,
-            this.cameraOrientation,
-            this.cameraElevation,
-            depth
-          )
-          sprite.scale.set(scale * projection.scale)
-          sprite.y = this.characterY + projection.verticalOffset
-          // ラベルを立ち絵（sprite）の幅に収める。natural width が sprite 幅を超えたら縮小、
-          // 収まっていれば等倍のまま（大きくしない）。setCharacterHeightRatio のライブ再スケール (#360)
-          // と共有するヘルパで、fit ロジックの重複を避ける（規律4）。
-          this.fitLabelToSprite(sprite, label)
-          sprite.texture = texture
-          return true
+          return this.applyLoadedTexture(sprite, characterName, texture, fit, label)
         })
         .catch((err) => {
           console.warn('[name-name] 立ち絵の読み込みに失敗: ' + urls.join(' , '), err)

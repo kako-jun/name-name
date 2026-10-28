@@ -5003,6 +5003,8 @@ describe('CharacterLayer クロスフェード中の character_height_ratios 再
     // 旧 sprite は `hero__transition_N` へリネームされ（snapshotHidden: true）、
     // 新 sprite が新規に 'hero' キーへ入る。
     layer.show('hero', 'sad', '中央', '/assets')
+    // 読み込み待ちの間は新 state を作らない (#952)。読み込み完了で旧→新の遷移が始まる。
+    await flushPromises()
     const oldKey = [...chars.keys()].find((k) => k !== 'hero')!
     expect(oldKey).toMatch(/^hero__transition_/)
     expect(chars.get(oldKey)!.snapshotHidden).toBe(true)
@@ -5894,6 +5896,8 @@ describe('CharacterLayer character_scale ライブ再適用（#378）', () => {
 
     // 表情変更 → 非 instant・既定 fade あり → クロスフェード分岐（#337）。旧 sprite は snapshotHidden。
     layer.show('hero', 'sad', '中央', '/assets')
+    // 読み込み待ちの間は新 state を作らない (#952)。読み込み完了で旧→新の遷移が始まる。
+    await flushPromises()
     const oldKey = [...chars.keys()].find((k) => k !== 'hero')!
     expect(oldKey).toMatch(/^hero__transition_/)
     expect(chars.get(oldKey)!.snapshotHidden).toBe(true)
@@ -6051,6 +6055,8 @@ describe('CharacterLayer applyCameraProjectionToCharacter ガード / setCamera 
     const chars = imageChars(layer).characters
     // 表情変更 → 非 instant・既定 fade あり → クロスフェード分岐（#337）。旧 sprite は snapshotHidden。
     layer.show('hero', 'sad', '中央', '/assets', { depth: 5 })
+    // 読み込み待ちの間は新 state を作らない (#952)。読み込み完了で旧→新の遷移が始まる。
+    await flushPromises()
     const oldKey = [...chars.keys()].find((k) => k !== 'hero')!
     expect(chars.get(oldKey)!.snapshotHidden).toBe(true)
     const oldSt = chars.get(oldKey)!
