@@ -1890,39 +1890,35 @@ fn parse_brightness_kv(value: &str) -> Option<f32> {
 /// 非数値・NaN・省略は `0.0`（最前面）にフォールバックする（厳密なバリデーションはフロント側の
 /// 描画時クランプに委ねる、Issue #683 方針）。未知のキーは silent skip する（後方互換重視）。
 fn parse_background_board_directive(content: &str) -> Event {
-    let (path_part, kv_part) = match content.split_once(',') {
-        Some((p, rest)) => (p, Some(rest)),
-        None => (content, None),
-    };
-    let path = path_part.trim().to_string();
-
-    let mut depth: f32 = 0.0;
-    if let Some(kv) = kv_part {
-        for raw in kv.split(',') {
-            let pair = raw.trim();
-            if pair.is_empty() {
-                continue;
-            }
-            if let Some((k, v)) = pair.split_once(':') {
-                if k.trim() == "depth" {
-                    depth = v
-                        .trim()
-                        .parse::<f32>()
-                        .ok()
-                        .filter(|n| n.is_finite())
-                        .unwrap_or(0.0);
-                }
-            }
-        }
+    let (path, depth, flip_from, flip_ms) = parse_board_args(content);
+    Event::BackgroundBoard {
+        path,
+        depth,
+        flip_from,
+        flip_ms,
     }
-
-    Event::BackgroundBoard { path, depth }
 }
 
 /// `[大道具: path]` / `[大道具: path, depth: N]` の本体を分解する (#692)。
-/// `parse_background_board_directive` と同一のロジック（path / kv 分離、`depth:` コロン kv 記法、
-/// 非数値・NaN・省略は `0.0` フォールバック、未知キーは silent skip）。
+/// `parse_background_board_directive` と同一のロジック（`parse_board_args` を共有）。
 fn parse_prop_directive(content: &str) -> Event {
+    let (path, depth, flip_from, flip_ms) = parse_board_args(content);
+    Event::Prop {
+        path,
+        depth,
+        flip_from,
+        flip_ms,
+    }
+}
+
+/// 背景板・大道具に共通の引数分解 (#683 / #692 / #704)。戻り値は (path, depth, flip_from, flip_ms)。
+/// 最初の `,` で path / kv を分離し、kv はすべてコロン記法:
+/// - `depth: N` — 非数値・NaN・省略は `0.0`
+/// - `回転: 旧パス` — 同じ depth の `旧パス` の板を、この板へ回転で差し替える (#704)。空文字は無視（None）
+/// - `時間: N` — 回転の所要時間（ms、`u32`）。非数値・負値は無視（None）。`回転:` が無くても値は保持する
+///
+/// 未知のキーは silent skip する（後方互換重視）。
+fn parse_board_args(content: &str) -> (String, f32, Option<String>, Option<u32>) {
     let (path_part, kv_part) = match content.split_once(',') {
         Some((p, rest)) => (p, Some(rest)),
         None => (content, None),
@@ -1930,6 +1926,8 @@ fn parse_prop_directive(content: &str) -> Event {
     let path = path_part.trim().to_string();
 
     let mut depth: f32 = 0.0;
+    let mut flip_from: Option<String> = None;
+    let mut flip_ms: Option<u32> = None;
     if let Some(kv) = kv_part {
         for raw in kv.split(',') {
             let pair = raw.trim();
@@ -1937,19 +1935,32 @@ fn parse_prop_directive(content: &str) -> Event {
                 continue;
             }
             if let Some((k, v)) = pair.split_once(':') {
-                if k.trim() == "depth" {
-                    depth = v
-                        .trim()
-                        .parse::<f32>()
-                        .ok()
-                        .filter(|n| n.is_finite())
-                        .unwrap_or(0.0);
+                match k.trim() {
+                    "depth" => {
+                        depth = v
+                            .trim()
+                            .parse::<f32>()
+                            .ok()
+                            .filter(|n| n.is_finite())
+                            .unwrap_or(0.0);
+                    }
+                    "回転" => {
+                        let from = v.trim();
+                        flip_from = if from.is_empty() {
+                            None
+                        } else {
+                            Some(from.to_string())
+                        };
+                    }
+                    "時間" => {
+                        flip_ms = v.trim().parse::<u32>().ok();
+                    }
+                    _ => {}
                 }
             }
         }
     }
-
-    Event::Prop { path, depth }
+    (path, depth, flip_from, flip_ms)
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
@@ -6186,6 +6197,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "sky.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         assert_eq!(
@@ -6193,6 +6206,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "mountain.png".to_string(),
                 depth: 7.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         // 非数値な depth は 0.0 (最前面) にフォールバックする。
@@ -6201,6 +6216,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "bogus.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
     }
@@ -6243,6 +6260,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "front.png".to_string(),
                 depth: -3.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "負の depth はクランプされず -3.0 のまま保持される"
         );
@@ -6262,6 +6281,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "huge.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "f32 オーバーフロー値は 0.0 にフォールバックする"
         );
@@ -6299,6 +6320,8 @@ title: "test"
             Event::Prop {
                 path: "desk.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         assert_eq!(
@@ -6306,6 +6329,8 @@ title: "test"
             Event::Prop {
                 path: "chair.png".to_string(),
                 depth: 3.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         // 非数値な depth は 0.0 (最前面) にフォールバックする。
@@ -6314,6 +6339,8 @@ title: "test"
             Event::Prop {
                 path: "bogus.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
     }
@@ -6354,6 +6381,8 @@ title: "test"
             Event::Prop {
                 path: "front.png".to_string(),
                 depth: -3.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "負の depth はクランプされず -3.0 のまま保持される"
         );
@@ -6372,6 +6401,8 @@ title: "test"
             Event::Prop {
                 path: "huge.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "f32 オーバーフロー値は 0.0 にフォールバックする"
         );
@@ -6390,6 +6421,8 @@ title: "test"
             Event::Prop {
                 path: "weird.png".to_string(),
                 depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "\"NaN\" リテラルは parse に成功するが is_finite フィルタで 0.0 に落ちる"
         );
@@ -6426,6 +6459,8 @@ title: "test"
             Event::Prop {
                 path: "desk.png".to_string(),
                 depth: 9.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "depth: が複数回出現したら最後の値が勝つ"
         );
@@ -6443,6 +6478,8 @@ title: "test"
             Event::Prop {
                 path: "机.png".to_string(),
                 depth: 2.0,
+                flip_from: None,
+                flip_ms: None,
             },
             "日本語パスも UTF-8 境界で壊れず正しく parse される"
         );
@@ -6464,6 +6501,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "sky.png".to_string(),
                 depth: 10.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         assert_eq!(
@@ -6471,6 +6510,8 @@ title: "test"
             Event::Prop {
                 path: "desk.png".to_string(),
                 depth: 3.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         assert_eq!(
@@ -6478,6 +6519,8 @@ title: "test"
             Event::BackgroundBoard {
                 path: "mountain.png".to_string(),
                 depth: 7.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
         assert_eq!(
@@ -6485,6 +6528,8 @@ title: "test"
             Event::Prop {
                 path: "chair.png".to_string(),
                 depth: 1.0,
+                flip_from: None,
+                flip_ms: None,
             }
         );
     }
@@ -7853,6 +7898,111 @@ title: "test"
         assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
         assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
         assert_eq!(doc.character_height_ratios.len(), 2);
+    }
+
+    // ===== 面の切り替え（回転）(#704) =====
+
+    fn flip_doc(body: &str) -> Document {
+        parse(&format!(
+            "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n{body}\n"
+        ))
+    }
+
+    #[test]
+    fn parses_prop_and_board_flip_args() {
+        let doc = flip_doc(
+            "[大道具: back.png, depth: 3, 回転: front.png, 時間: 900]\n[背景板: b2.png, 回転: b1.png]",
+        );
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "back.png".to_string(),
+                depth: 3.0,
+                flip_from: Some("front.png".to_string()),
+                flip_ms: Some(900),
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::BackgroundBoard {
+                path: "b2.png".to_string(),
+                depth: 0.0,
+                flip_from: Some("b1.png".to_string()),
+                flip_ms: None,
+            }
+        );
+    }
+
+    #[test]
+    fn flip_args_order_independent_and_invalid_values_ignored() {
+        // 引数の順序は問わない。空の回転元・非数値/負の時間は None。未知キーは無視。
+        let doc = flip_doc(
+            "[大道具: a.png, 時間: 500, 回転: x.png, depth: 2]\n[大道具: b.png, 回転: , 時間: abc]\n[大道具: c.png, 回転: x.png, 時間: -5, foo: bar]",
+        );
+        let events = &doc.chapters[0].scenes[0].events;
+        assert_eq!(
+            events[0],
+            Event::Prop {
+                path: "a.png".to_string(),
+                depth: 2.0,
+                flip_from: Some("x.png".to_string()),
+                flip_ms: Some(500),
+            }
+        );
+        assert_eq!(
+            events[1],
+            Event::Prop {
+                path: "b.png".to_string(),
+                depth: 0.0,
+                flip_from: None,
+                flip_ms: None,
+            }
+        );
+        assert_eq!(
+            events[2],
+            Event::Prop {
+                path: "c.png".to_string(),
+                depth: 0.0,
+                flip_from: Some("x.png".to_string()),
+                flip_ms: None,
+            }
+        );
+    }
+
+    #[test]
+    fn flip_args_round_trip_and_defaults_emit_nothing() {
+        let doc = flip_doc(
+            "[大道具: back.png, depth: 3, 回転: front.png, 時間: 900]\n[背景板: b2.png, 回転: b1.png]\n[大道具: plain.png]\n[背景板: plain2.png, depth: 4]",
+        );
+        let emitted = crate::emitter::emit(&doc);
+        assert!(emitted.contains("[大道具: back.png, depth: 3, 回転: front.png, 時間: 900]"));
+        assert!(emitted.contains("[背景板: b2.png, 回転: b1.png]"));
+        // 既定（回転なし）は無出力。
+        assert!(emitted.contains("[大道具: plain.png]\n"));
+        assert!(emitted.contains("[背景板: plain2.png, depth: 4]\n"));
+        assert_eq!(parse(&emitted), doc);
+    }
+
+    #[test]
+    fn flip_fields_absent_from_json_when_none() {
+        let doc = flip_doc("[大道具: plain.png]");
+        let json = serde_json::to_string(&doc.chapters[0].scenes[0].events[0]).unwrap();
+        assert!(
+            !json.contains("flip_from") && !json.contains("flip_ms"),
+            "{json}"
+        );
+        // 旧 JSON（フィールドなし）も読める。
+        let ev: Event = serde_json::from_str(r#"{"Prop":{"path":"a.png","depth":1.0}}"#).unwrap();
+        assert_eq!(
+            ev,
+            Event::Prop {
+                path: "a.png".to_string(),
+                depth: 1.0,
+                flip_from: None,
+                flip_ms: None,
+            }
+        );
     }
 }
 

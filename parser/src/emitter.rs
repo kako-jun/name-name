@@ -439,7 +439,12 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&format!("[感情: {target}, {kind}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
-            Event::BackgroundBoard { path, depth } => {
+            Event::BackgroundBoard {
+                path,
+                depth,
+                flip_from,
+                flip_ms,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
@@ -449,10 +454,16 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if *depth != 0.0 {
                     kv.push_str(&format!(", depth: {depth}"));
                 }
+                push_flip_kv(&mut kv, flip_from, flip_ms);
                 out.push_str(&format!("[背景板: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
-            Event::Prop { path, depth } => {
+            Event::Prop {
+                path,
+                depth,
+                flip_from,
+                flip_ms,
+            } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
@@ -461,6 +472,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if *depth != 0.0 {
                     kv.push_str(&format!(", depth: {depth}"));
                 }
+                push_flip_kv(&mut kv, flip_from, flip_ms);
                 out.push_str(&format!("[大道具: {path}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
@@ -1881,6 +1893,16 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
 /// 持つ text（`"$ "` のプロンプト記号など）はクオート無しで出すと再 parse で消える。
 /// 前後に空白がある場合だけ `"..."` で囲んで前後スペースを保持する。通常 text（前後空白なし）
 /// はクオート無しのまま出す。クオート内カンマは非対応（parser の `split(',')` 制約）。
+/// 背景板・大道具の面の切り替え (#704) の kv を `kv` に足す。既定（None）は無出力にして round-trip を安定させる。
+fn push_flip_kv(kv: &mut String, flip_from: &Option<String>, flip_ms: &Option<u32>) {
+    if let Some(from) = flip_from {
+        kv.push_str(&format!(", 回転: {from}"));
+    }
+    if let Some(ms) = flip_ms {
+        kv.push_str(&format!(", 時間: {ms}"));
+    }
+}
+
 fn quote_label_text_if_needed(text: &str) -> String {
     let needs_quote = text != text.trim();
     if needs_quote {
