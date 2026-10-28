@@ -1138,3 +1138,5 @@ export type EventCommand =
   | { type: 'Narration'; text: string[] }
   /** 脚本制御の戦闘 (`[戦闘 id]`、#741) を始めて、終わるまで待つ。`[戦闘: id]` */
   | { type: 'Battle'; id: string }
+  /** フィールドの感情吹き出し (#946)。`[感情: 対象, 種類(, 持続=ms)]`。表示後すぐ次へ進む（待たない） */
+  | { type: 'Emotion'; target: string; kind: string; duration_ms?: number }

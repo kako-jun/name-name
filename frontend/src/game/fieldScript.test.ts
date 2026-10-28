@@ -6,6 +6,7 @@ import {
   checkNpcScripts,
   collectFieldEvents,
   createFieldBattleHost,
+  createFieldEmotionHost,
   createFieldNpcMover,
   loadFieldScript,
   resolveNpcCommands,
@@ -334,5 +335,146 @@ describe('実パーサ経路 (parseMarkdown)', () => {
       ['', '夜風が吹いた。'],
     ])
     expect(conv.active).toBe(false)
+  })
+})
+
+describe('Emotion の対応 (#946)', () => {
+  const emo: EventCommand = { type: 'Emotion', target: '近所の子', kind: 'びっくり' }
+
+  it('supportedCommands は Emotion を読み飛ばさず残す（警告なし）', () => {
+    const warn = vi.fn()
+    const cmds = [emo, dlg('子', 'やあ')]
+    expect(supportedCommands('e', cmds, warn)).toEqual(cmds)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('Emotion と待機だけで台詞が無いイベントは固定 line に戻す', () => {
+    expect(supportedCommands('e', [emo, { type: 'Wait', ms: 1 }], () => {})).toBeUndefined()
+  })
+
+  const ctx = () => ({
+    emotions: {
+      びっくり: {
+        image: 'a.png',
+        frames: 1,
+        columns: 1,
+        frameMs: 100,
+        durationMs: 1000,
+        offset: { x: 0, y: 0 },
+        scale: 1,
+        motion: 'none' as const,
+      },
+    },
+    npcs: [{ id: 'kid', name: '近所の子' }],
+  })
+
+  it('createFieldEmotionHost: 解決して show に渡す。未解決は警告して show しない', () => {
+    const show = vi.fn(() => true)
+    const warn = vi.fn()
+    const host = createFieldEmotionHost(ctx, show, warn)
+    host.showEmotion('近所の子', 'びっくり', 700)
+    expect(show).toHaveBeenCalledWith('npc:kid', 'びっくり', 700)
+    host.showEmotion('主人公', 'びっくり')
+    expect(show).toHaveBeenLastCalledWith('player', 'びっくり', undefined)
+    host.showEmotion('幽霊', 'びっくり')
+    host.showEmotion('主人公', '未宣言')
+    expect(show).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('createFieldEmotionHost: show が false のとき原因を追える警告を 1 行出す', () => {
+    const warn = vi.fn()
+    createFieldEmotionHost(ctx, () => false, warn).showEmotion('近所の子', 'びっくり')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('近所の子')
+    expect(warn.mock.calls[0][0]).toContain('びっくり')
+  })
+
+  it('実パーサ経路: parseMarkdown → EventRunner → emotionHost → show（台詞より先に・待たずに）', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント 子の話]',
+      '[感情: 近所の子, びっくり]',
+      '**近所の子**:',
+      'わっ。',
+      '',
+      '[感情: 主人公, びっくり, 持続=900]',
+      '[感情: 幽霊, びっくり]',
+      '> 静かになった。',
+      '[/イベント]',
+      '',
+    ].join('\n')
+    const events = collectFieldEvents(await parseMarkdown(md))
+    const cmds = resolveNpcCommands('子の話', events, () => {})
+    expect(cmds?.map((c) => c.type)).toEqual([
+      'Emotion',
+      'Dialog',
+      'Emotion',
+      'Emotion',
+      'Narration',
+    ])
+    const log: string[] = []
+    const dialog = fakeDialog()
+    const origShow = dialog.show
+    dialog.show = ((...a: Parameters<typeof origShow>) => {
+      log.push(`show:${a[1]}`)
+      return origShow(...a)
+    }) as typeof origShow
+    const show = vi.fn((t: string, k: string, d?: number) => {
+      log.push(`emo:${t}:${k}:${d ?? '-'}`)
+      return true
+    })
+    const warn = vi.fn()
+    const conv = new FieldConversation(
+      dialog,
+      new EventRunner(
+        dialog as never,
+        createFieldNpcMover(() => {}),
+        createFieldBattleHost(() => {}),
+        createFieldEmotionHost(ctx, show, warn)
+      )
+    )
+    conv.start('NPC', '固定', cmds, () => {})
+    let guard = 0
+    while (conv.active && guard++ < 20) conv.advance()
+    expect(log).toEqual([
+      'emo:npc:kid:びっくり:-',
+      'show:わっ。',
+      'emo:player:びっくり:900',
+      'show:静かになった。',
+    ])
+    expect(warn).toHaveBeenCalledTimes(1) // 幽霊
+    expect(conv.active).toBe(false)
+  })
+
+  it('実パーサ: 台詞の途中の [感情:] のあとも同じ話者で続く（#946 レビュー）', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント 子の話]',
+      '**近所の子**:',
+      'あっ！',
+      '[感情: 近所の子, びっくり]',
+      'なに？',
+      '[/イベント]',
+      '',
+    ].join('\n')
+    const cmds = collectFieldEvents(await parseMarkdown(md)).get('子の話')
+    expect(
+      cmds?.filter((c) => c.type === 'Dialog').map((c) => (c as { character?: string }).character)
+    ).toEqual(['近所の子', '近所の子'])
   })
 })

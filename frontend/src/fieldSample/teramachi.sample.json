@@ -1,5 +1,6 @@
 {
   "scriptUrl": "field-sample/teramachi-npc.md",
+  "emotionsUrl": "field-sample/teramachi-emotions.json",
   "startScene": "shrine-street",
   "start": {
     "x": 300,

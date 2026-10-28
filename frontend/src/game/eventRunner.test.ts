@@ -97,4 +97,53 @@ describe('EventRunner', () => {
     runner.destroy()
     expect(runner.isRunning).toBe(false)
   })
+
+  describe('Emotion (#946)', () => {
+    const emo = (target: string, kind: string, duration_ms?: number): EventCommand => ({
+      type: 'Emotion',
+      target,
+      kind,
+      ...(duration_ms !== undefined ? { duration_ms } : {}),
+    })
+
+    it('emotionHost があれば呼び、待たずに次のコマンドへ進む', () => {
+      const host = { showEmotion: vi.fn() }
+      const r = new EventRunner(dialogBox, npcMover, undefined, host)
+      r.run([
+        emo('近所の子', 'びっくり'),
+        emo('主人公', '？', 900),
+        { type: 'Narration', text: ['次'] },
+      ])
+      // Emotion 2 つを同期で消化して、そのまま Narration が出ている（待っていない）
+      expect(host.showEmotion.mock.calls).toEqual([
+        ['近所の子', 'びっくり', undefined],
+        ['主人公', '？', 900],
+      ])
+      expect(dialogBox.show).toHaveBeenCalledWith('', '次', undefined)
+    })
+
+    it('emotionHost が無ければ読み飛ばして次へ進む（TopDown の既存呼び出しと同じ）', () => {
+      const onComplete = vi.fn()
+      runner.run([emo('主人公', 'びっくり'), { type: 'Narration', text: ['次'] }], onComplete)
+      expect(dialogBox.show).toHaveBeenCalledWith('', '次', undefined)
+      // Emotion だけのイベントも完了する
+      runner.destroy()
+      runner.run([emo('主人公', 'びっくり')], onComplete)
+      expect(onComplete).toHaveBeenCalledOnce()
+      expect(runner.isRunning).toBe(false)
+    })
+
+    it('ホストが例外を投げても実行は止まらない', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const host = {
+        showEmotion: vi.fn(() => {
+          throw new Error('boom')
+        }),
+      }
+      const r = new EventRunner(dialogBox, npcMover, undefined, host)
+      r.run([emo('主人公', 'びっくり'), { type: 'Narration', text: ['次'] }])
+      expect(dialogBox.show).toHaveBeenCalledWith('', '次', undefined)
+      warn.mockRestore()
+    })
+  })
 })

@@ -773,6 +773,39 @@ pub fn parse(input: &str) -> Document {
                                 continue;
                             }
                         }
+                        // [感情: 対象, 種類(, 持続=ms)] (#946)。`Event::Emotion` (#943) と同じ構文。不正行（対象か種類が空）は捨てる
+                        if let Some(rest) = cmd_line.strip_prefix("[感情:") {
+                            if rest.ends_with(']') {
+                                // 台詞の行だけ確定し、話者は保持する（途中の感情のあとに続く台詞も同じ話者のまま）
+                                if let Some(char) = pending_dialog_char.as_ref() {
+                                    if !pending_dialog_lines.is_empty() {
+                                        commands.push(EventCommand::Dialog {
+                                            character: Some(char.clone()),
+                                            text: std::mem::take(&mut pending_dialog_lines),
+                                        });
+                                    }
+                                } else if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: None,
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                                if let Some(Event::Emotion {
+                                    target,
+                                    kind,
+                                    duration_ms,
+                                }) = parse_emotion_directive(rest.trim_end_matches(']'))
+                                {
+                                    commands.push(EventCommand::Emotion {
+                                        target,
+                                        kind,
+                                        duration_ms,
+                                    });
+                                }
+                                pos += 1;
+                                continue;
+                            }
+                        }
                         // > テキスト → Narration
                         if cmd_line.starts_with("> ") {
                             if let Some(char) = pending_dialog_char.take() {
@@ -1784,7 +1817,8 @@ fn parse_background_directive(content: &str) -> Event {
 /// `[感情: 対象, 種類]` / `[感情: 対象, 種類, 持続=1200]` の本体を分解する (#943)。
 /// 対象は話者名か `主人公`、種類は frontmatter `field_emotions` の設定 JSON のキー。どちらも生文字列で透過する
 /// （解決・未宣言の警告は frontend）。`持続` は ms の正の整数のみ採用し、0・非数値・空は None（＝設定の既定）。
-/// 区切りは半角 `,` に加え全角 `，` `、` も受ける（master.rs の属性 id 区切りと同じ流儀）。`持続 = 1200` のように前後の空白は許す。
+/// 区切りは半角 `,` に加え全角 `，` `、` も受ける（master.rs の属性 id 区切りと同じ流儀）。`持続 = 1200` のように前後の空白は許し、
+/// `＝` と全角数字（`持続＝１２００`）も受ける。種類名・対象名に区切り文字（`,` `，` `、`）は含められない。
 /// 未知のキーは silent skip。対象か種類が空なら None（不正行。イベントにならず捨てられる）。
 fn parse_emotion_directive(content: &str) -> Option<Event> {
     let mut parts = content.split([',', '，', '、']);
@@ -1795,9 +1829,16 @@ fn parse_emotion_directive(content: &str) -> Option<Event> {
     }
     let mut duration_ms: Option<u32> = None;
     for raw in parts {
-        if let Some((k, v)) = raw.trim().split_once('=') {
+        // 全角 `＝` と全角数字（`持続＝１２００`）も受ける (#943 nit)。数字は master.rs の `to_halfwidth` で半角へ寄せる
+        if let Some((k, v)) = raw.trim().split_once(['=', '＝']) {
             if k.trim() == "持続" {
-                duration_ms = v.trim().parse::<u32>().ok().filter(|&n| n > 0);
+                // 数字だけのときだけ採用（`+1200` / `＋１２００` は無効。u32::parse は `+` を通すので先に弾く）
+                let digits = crate::master::to_halfwidth(v);
+                duration_ms = if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                    digits.parse::<u32>().ok().filter(|&n| n > 0)
+                } else {
+                    None
+                };
             }
         }
     }

@@ -13,6 +13,22 @@ function renderEvent(event: Event) {
 }
 
 describe('EventDisplay', () => {
+  it('renders Emotion with duration (#946)', () => {
+    const { container } = renderEvent({
+      Emotion: { target: '花子', kind: '？', duration_ms: 1200 },
+    })
+    expect(container.textContent).toContain('感情: 花子, ？')
+    expect(container.textContent).toContain('持続=1200ms')
+  })
+
+  it('renders Emotion without duration (#946)', () => {
+    const { container } = renderEvent({
+      Emotion: { target: '主人公', kind: 'びっくり', duration_ms: null },
+    })
+    expect(container.textContent).toContain('感情: 主人公, びっくり')
+    expect(container.textContent).not.toContain('持続')
+  })
+
   it('renders SceneTransition', () => {
     const { container } = renderEvent('SceneTransition')
     expect(container.textContent).toContain('場面転換')

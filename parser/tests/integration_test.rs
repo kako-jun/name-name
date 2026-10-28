@@ -12399,3 +12399,159 @@ fn test_battle_motion_parses_default_none_and_roundtrips() {
     assert_eq!(parser::parse(&emitted).battle_motion, doc.battle_motion);
     assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_motion"));
 }
+
+// ---- #946: [イベント] 内の [感情:] → EventCommand::Emotion ----
+
+fn rpg_event_commands(body: &str) -> Vec<EventCommand> {
+    let events = emotion_events(&format!("[イベント talk]\n{body}\n[/イベント]"));
+    events
+        .into_iter()
+        .find_map(|e| match e {
+            Event::RpgEvent { commands, .. } => Some(commands),
+            _ => None,
+        })
+        .expect("rpg event")
+}
+
+#[test]
+fn test_rpg_event_emotion_command_parses_in_order_and_flushes_dialog() {
+    let cmds = rpg_event_commands(
+        "**子**:\nあっ！\n[感情: 子, びっくり]\nなに？\n[感情: 主人公, ？, 持続=1200]\n[待機: 100]",
+    );
+    assert_eq!(cmds.len(), 5, "{cmds:?}");
+    assert!(
+        matches!(&cmds[0], EventCommand::Dialog { character: Some(c), text } if c == "子" && text == &vec!["あっ！".to_string()])
+    );
+    assert_eq!(
+        cmds[1],
+        EventCommand::Emotion {
+            target: "子".into(),
+            kind: "びっくり".into(),
+            duration_ms: None
+        }
+    );
+    // 感情のあとに続く台詞も同じ話者のまま（話者を保持する）
+    assert!(
+        matches!(&cmds[2], EventCommand::Dialog { character: Some(c), text } if c == "子" && text == &vec!["なに？".to_string()])
+    );
+    assert_eq!(
+        cmds[3],
+        EventCommand::Emotion {
+            target: "主人公".into(),
+            kind: "？".into(),
+            duration_ms: Some(1200)
+        }
+    );
+    assert!(matches!(&cmds[4], EventCommand::Wait { ms: 100 }));
+}
+
+#[test]
+fn test_rpg_event_emotion_command_roundtrips() {
+    let src = String::from(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"テスト\"\n---\n\n## 1-1: シーン\n\n[イベント talk]\n[感情: 子, びっくり]\n[感情: 主人公, ？, 持続=1200]\n[/イベント]\n"
+    );
+    let doc = parser::parse(&src);
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("[感情: 子, びっくり]\n"), "{emitted}");
+    assert!(
+        emitted.contains("[感情: 主人公, ？, 持続=1200]\n"),
+        "{emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).chapters[0].scenes[0].events,
+        doc.chapters[0].scenes[0].events
+    );
+}
+
+#[test]
+fn test_rpg_event_emotion_command_invalid_is_dropped_and_duration_fullwidth() {
+    for bad in ["[感情: 子]", "[感情: , びっくり]", "[感情: 子, ]"] {
+        let cmds = rpg_event_commands(&format!("{bad}\n[待機: 1]"));
+        assert_eq!(cmds, vec![EventCommand::Wait { ms: 1 }], "{bad}");
+    }
+    // 全角 ＝ と全角数字は受理する (#943 nit)。0・非数値は None
+    for (kv, want) in [
+        ("持続＝１２００", Some(1200)),
+        ("持続 ＝ 300", Some(300)),
+        ("持続=１２", Some(12)),
+        ("持続＝０", None),
+        ("持続＝あ", None),
+    ] {
+        let cmds = rpg_event_commands(&format!("[感情: 子, ？, {kv}]"));
+        assert_eq!(
+            cmds,
+            vec![EventCommand::Emotion {
+                target: "子".into(),
+                kind: "？".into(),
+                duration_ms: want
+            }],
+            "{kv}"
+        );
+        // シーン直下の Event::Emotion も同じ規則
+        assert!(
+            emotion_events(&format!("[感情: 子, ？, {kv}]")).contains(&Event::Emotion {
+                target: "子".into(),
+                kind: "？".into(),
+                duration_ms: want
+            })
+        );
+    }
+}
+
+#[test]
+fn test_rpg_event_emotion_keeps_speaker_for_following_lines() {
+    // 話者行の直後・台詞の途中・連続する感情のいずれでも、続きの台詞の話者は消えない
+    let cmds = rpg_event_commands(
+        "**近所の子**:\nあっ！\n[感情: 近所の子, びっくり]\nなに？\n[感情: 主人公, ？]\n[感情: 主人公, ？]\nまだ？",
+    );
+    let dialogs: Vec<_> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            EventCommand::Dialog { character, text } => Some((character.clone(), text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dialogs,
+        vec![
+            (Some("近所の子".to_string()), vec!["あっ！".to_string()]),
+            (Some("近所の子".to_string()), vec!["なに？".to_string()]),
+            (Some("近所の子".to_string()), vec!["まだ？".to_string()]),
+        ]
+    );
+    // 話者行の直後に感情が来ても、その次の台詞は話者つき
+    let cmds = rpg_event_commands("**子**:\n[感情: 子, ？]\nやあ");
+    assert!(
+        matches!(&cmds[1], EventCommand::Dialog { character: Some(c), .. } if c == "子"),
+        "{cmds:?}"
+    );
+}
+
+#[test]
+fn test_emotion_duration_rejects_plus_sign() {
+    for kv in [
+        "持続=+1200",
+        "持続＝＋１２００",
+        "持続=1200ms",
+        "持続=12 00",
+    ] {
+        let want = None;
+        assert!(
+            emotion_events(&format!("[感情: 子, ？, {kv}]")).contains(&Event::Emotion {
+                target: "子".into(),
+                kind: "？".into(),
+                duration_ms: want
+            }),
+            "{kv}"
+        );
+        assert_eq!(
+            rpg_event_commands(&format!("[感情: 子, ？, {kv}]")),
+            vec![EventCommand::Emotion {
+                target: "子".into(),
+                kind: "？".into(),
+                duration_ms: want
+            }],
+            "{kv}"
+        );
+    }
+}
