@@ -429,6 +429,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       backgroundDof: 'off',
       logTypewriter: 'off',
       presentation: 'dq',
+      motion: 'default',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -455,6 +456,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       battleCommandLayout: 'cross',
       battleCommandLabels: { attack: '斬る' },
       battlePresentation: 'ff',
+      battleMotion: 'snappy',
       battleTransition: 'ff',
     })
     expect(readFieldBattleSettings(p)).toEqual({
@@ -466,6 +468,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       backgroundDof: 'on',
       logTypewriter: 'on',
       presentation: 'ff',
+      motion: 'snappy',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,

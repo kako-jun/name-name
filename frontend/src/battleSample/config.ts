@@ -30,7 +30,11 @@ import type { WindowStyle } from '../game/windowStyle'
 import type { BackgroundTone } from '../game/backgroundTone'
 import type { BackgroundDof } from '../game/depthOfField'
 import type { BattleLogTypewriterMode } from '../game/battleLogTypewriter'
-import { normalizePoses, type BattlePresentation } from '../game/battleMotion'
+import {
+  normalizePoses,
+  type BattleMotionPreset,
+  type BattlePresentation,
+} from '../game/battleMotion'
 import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import {
@@ -118,6 +122,8 @@ export interface BattleSampleConfig {
   logTypewriter: BattleLogTypewriterMode
   /** 演出方式 (#745)。既定 dq（現行の見た目・挙動）。ff は side のときだけ効く */
   presentation: BattlePresentation
+  /** 戦闘モーションのプリセット (#956)。既定 default（現行）。snappy はキビキビ。presentation ff のときだけ効く */
+  motion: BattleMotionPreset
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。既定 wait（コマンド選択中は時間停止） */
@@ -181,6 +187,8 @@ export interface BattleSampleView {
   logTypewriter: BattleLogTypewriterMode
   /** 演出方式 (#745)。既定 dq。ff（FF 式）は layout が side のときだけ効く */
   presentation: BattlePresentation
+  /** 戦闘モーションのプリセット (#956)。ff のときだけ効く */
+  motion: BattleMotionPreset
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。atb が on のときだけ効く */
@@ -267,6 +275,7 @@ export function defaultConfig(): BattleSampleConfig {
     pixelArt: 'off',
     logTypewriter: 'off',
     presentation: 'dq',
+    motion: 'default',
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
@@ -781,6 +790,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     presentation = raw.presentation
   }
+  let motion = def.motion
+  if (raw.motion !== undefined) {
+    if (raw.motion !== 'default' && raw.motion !== 'snappy') {
+      return {
+        ok: false,
+        error: `motion は "default" か "snappy": ${JSON.stringify(raw.motion)}`,
+      }
+    }
+    motion = raw.motion
+  }
   let atb = def.atb
   if (raw.atb !== undefined) {
     if (raw.atb !== 'on' && raw.atb !== 'off') {
@@ -920,6 +939,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       pixelArt,
       logTypewriter,
       presentation,
+      motion,
       atb,
       atbMode,
       commandLayout,
@@ -972,6 +992,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     pixelArt: config.pixelArt,
     logTypewriter: config.logTypewriter,
     presentation: config.presentation,
+    motion: config.motion,
     atb: config.atb,
     atbMode: config.atbMode,
     commandLayout: config.commandLayout,
@@ -1037,6 +1058,7 @@ export function buildBattleSetup(
     pixelArt: boolean
     logTypewriter: BattleLogTypewriterMode
     presentation: BattlePresentation
+    motion: BattleMotionPreset
     commandLayout: CommandLayout
     commandLabels: CommandLabels
     /** コマンドの構成と順序 (#889)。未指定は既定の 4 つ */
@@ -1100,6 +1122,7 @@ export function buildBattleSetup(
       pixelArt: view.pixelArt === 'on',
       logTypewriter: view.logTypewriter,
       presentation: view.presentation,
+      motion: view.motion,
       commandLayout: view.commandLayout,
       commandLabels: config.commandLabels,
       ...(config.commands ? { commands: [...config.commands] } : {}),
@@ -1176,6 +1199,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.pixelArt === b.pixelArt &&
     a.logTypewriter === b.logTypewriter &&
     a.presentation === b.presentation &&
+    a.motion === b.motion &&
     a.atb === b.atb &&
     a.atbMode === b.atbMode &&
     a.commandLayout === b.commandLayout &&
@@ -1226,6 +1250,10 @@ export function describeView(
     `logTypewriter=${view.logTypewriter}`,
     // ff は side のときだけ効く（front では無視される）ので、効く場合だけ出す
     ...(view.presentation === 'ff' && view.layout === 'side' ? ['presentation=ff'] : []),
+    // motion は ff のときだけ効く。default は既定なので出さない
+    ...(view.presentation === 'ff' && view.layout === 'side' && view.motion !== 'default'
+      ? [`motion=${view.motion}`]
+      : []),
     // cross は side のときだけ効く（front では無視される）ので、効く場合だけ出す
     ...(view.commandLayout === 'cross' && view.layout === 'side' ? ['commandLayout=cross'] : []),
     ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),

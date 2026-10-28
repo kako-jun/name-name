@@ -270,6 +270,8 @@ export interface RPGProject {
   battleCommands?: Array<'attack' | 'skill' | 'summon' | 'spell' | 'item' | 'escape'>
   /** 戦闘の開始・終了の画面遷移 (#830)。frontmatter `battle_transition:` 由来。未指定は `'none'`（現行の挙動のまま） */
   battleTransition?: 'none' | 'ff'
+  /** 戦闘モーションの時間・距離のプリセット (#956)。frontmatter `battle_motion:` 由来。未指定・不正値は `'default'`（現行）。`battle_presentation: ff` のときだけ効く */
+  battleMotion?: 'default' | 'snappy'
 }
 
 /**

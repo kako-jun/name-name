@@ -100,34 +100,177 @@ export function resolvePose<T>(
 }
 
 // ---------------------------------------------------------------------------
-// 時間定数（目視で調整する値）
+// 時間定数（目視で調整する値）と、プリセット (#956)
 // ---------------------------------------------------------------------------
 
-/** 攻撃: 前へ踏み出す / 斬る / 戻る（ms） */
-export const ATTACK_STEP_MS = 220
-export const ATTACK_SLASH_MS = 180
-export const ATTACK_RETURN_MS = 220
-/** 斬りの開始から、命中（対象がのけぞり・数字が出る）までの ms */
-export const ATTACK_SLASH_HIT_MS = 70
-/** 呪文・アイテム: 構え（ready）の長さと、その開始から命中までの ms */
-export const CAST_MS = 560
-export const CAST_HIT_MS = 400
 /**
- * 召喚獣の登場 (#750, `BattleActionEvent.summon` のある `skill`): 絵がフェードインする時間 / そのまま見せる時間 / フェードアウトする時間（ms）。
- * 暫定値（目視で調整する・未決）。効果の命中（ダメージ数字・のけぞり）は `SUMMON_HIT_MS` で、絵が出そろったあと。
+ * 戦闘モーションの時間・距離の組 (#956)。frontmatter `battle_motion: default | snappy` で選ぶ。
+ * 純粋関数（`sampleActor` / `buildActionTimeline` / `eventTimeline` / `sampleTarget` / `sampleDamagePopup` ほか）は
+ * 最後の引数で受け取り、省略すると `DEFAULT_MOTION_TIMING`（現行値）。時間は ms、距離は枠の一辺に対する比。
  */
-export const SUMMON_APPEAR_MS = 360
-export const SUMMON_HOLD_MS = 820
-export const SUMMON_LEAVE_MS = 420
+export interface MotionTiming {
+  /** 攻撃: 前へ踏み出す / 斬る / 戻る（ms） */
+  attackStepMs: number
+  attackSlashMs: number
+  attackReturnMs: number
+  /** 戻りのイージング（default は easeInOutQuad、snappy は easeOutQuad で出だしを速く） */
+  attackReturnEase: 'inOutQuad' | 'outQuad'
+  /** 斬りの開始から、命中（対象がのけぞり・数字が出る）までの ms */
+  attackSlashHitMs: number
+  /** 踏み出しの距離 */
+  attackStepDistance: number
+  /** 呪文・アイテム: 構え（ready）の長さと、その開始から命中までの ms */
+  castMs: number
+  castHitMs: number
+  /** 召喚獣の登場 (#750): フェードイン / 保持 / フェードアウト（ms）と、開始から命中までの ms */
+  summonAppearMs: number
+  summonHoldMs: number
+  summonLeaveMs: number
+  summonHitMs: number
+  /** 知らせ（行動が成立しなかった）の窓を出しておく長さ（ms） */
+  noticeMs: number
+  /** 1 つの行動が終わってから次の行動を始めるまでの間（ms） */
+  actionGapMs: number
+  /** 状態異常 (#870): 命中までの ms / 行動 1 回の最短の長さ */
+  statusHitMs: number
+  statusMs: number
+  /** 被ダメージ: のけぞって戻る時間 / 倒れ切るまでの時間（のけぞりの終わりから）（ms） */
+  recoilMs: number
+  downMs: number
+  /** のけぞりの最大距離 */
+  recoilDistance: number
+  /** 複数ヒット (#879): 基本の round 間隔 / 総時間の目安 / 間隔の下限（ms） */
+  multiHitIntervalMs: number
+  multiHitTotalMs: number
+  multiHitMinIntervalMs: number
+  /** ダメージ数字の跳ね: 1 回目の跳ね（ms・高さ）/ 2 回目 / 留まる / フェードアウト */
+  popupArc1Ms: number
+  popupArc1Height: number
+  popupArc2Ms: number
+  popupArc2Height: number
+  popupHoldMs: number
+  popupFadeMs: number
+}
+
+/** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
+export const DEFAULT_MOTION_TIMING: MotionTiming = {
+  attackStepMs: 220,
+  attackSlashMs: 180,
+  attackReturnMs: 220,
+  attackReturnEase: 'inOutQuad',
+  attackSlashHitMs: 70,
+  attackStepDistance: 0.7,
+  castMs: 560,
+  castHitMs: 400,
+  // 召喚は暫定値（目視で調整する・未決）。効果の命中は絵が出そろったあと
+  summonAppearMs: 360,
+  summonHoldMs: 820,
+  summonLeaveMs: 420,
+  summonHitMs: 600,
+  noticeMs: 700,
+  actionGapMs: 120,
+  statusHitMs: 200,
+  statusMs: 500,
+  recoilMs: 260,
+  downMs: 320,
+  recoilDistance: 0.12,
+  // 複数ヒットは暫定値（設計案は 90〜120ms。実機で詰める・未決）。最大 round が total/interval（=20）以下なら基本間隔のまま
+  multiHitIntervalMs: 100,
+  multiHitTotalMs: 2000,
+  multiHitMinIntervalMs: 10,
+  popupArc1Ms: 260,
+  popupArc1Height: 0.3,
+  popupArc2Ms: 160,
+  popupArc2Height: 0.09,
+  popupHoldMs: 240,
+  popupFadeMs: 200,
+}
+
+/**
+ * キビキビ版（暫定・#956。#803 の実作品の測定後に ff5/ff6 などの名前付きプリセットへ置き換える）。
+ * - 踏み出し・戻りを 130ms（default の 220ms から。目標 120〜150ms）、斬り 120ms。戻りは easeOutQuad で出だしから速く戻す
+ * - 命中を早め（斬り開始 50ms）、行動間を 120→40ms に詰めてテンポを上げる
+ * - 距離は少し下げる（踏み出し 0.7→0.55、のけぞり 0.12→0.10）。動きが短いぶん、大きいと「ひゅっ」と飛んで見えるため
+ * - のけぞり・倒れ・ダメージ数字・呪文・複数ヒットは default の約 0.75 倍の長さに揃える（動きだけ速く数字が遅いと間延びするため）
+ */
+export const SNAPPY_MOTION_TIMING: MotionTiming = {
+  attackStepMs: 130,
+  attackSlashMs: 120,
+  attackReturnMs: 130,
+  attackReturnEase: 'outQuad',
+  attackSlashHitMs: 50,
+  attackStepDistance: 0.55,
+  castMs: 420,
+  castHitMs: 300,
+  summonAppearMs: 270,
+  summonHoldMs: 620,
+  summonLeaveMs: 320,
+  summonHitMs: 450,
+  noticeMs: 520,
+  actionGapMs: 40,
+  statusHitMs: 150,
+  statusMs: 380,
+  recoilMs: 200,
+  downMs: 240,
+  recoilDistance: 0.1,
+  multiHitIntervalMs: 75,
+  multiHitTotalMs: 1500,
+  multiHitMinIntervalMs: 10,
+  popupArc1Ms: 200,
+  popupArc1Height: 0.26,
+  popupArc2Ms: 120,
+  popupArc2Height: 0.08,
+  popupHoldMs: 180,
+  popupFadeMs: 150,
+}
+
+export type BattleMotionPreset = 'default' | 'snappy'
+
+export const BATTLE_MOTION_PRESETS: Readonly<Record<BattleMotionPreset, MotionTiming>> = {
+  default: DEFAULT_MOTION_TIMING,
+  snappy: SNAPPY_MOTION_TIMING,
+}
+
+/**
+ * frontmatter `battle_motion` の値を正規化する。未指定・空は `default`（黙って）。`default` / `snappy`（大小・前後空白は無視）以外は
+ * 警告して `default` にフォールバックする。
+ */
+export function normalizeBattleMotion(raw: string | null | undefined): BattleMotionPreset {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'default'
+  const v = raw.trim().toLowerCase()
+  if (v === 'default' || v === 'snappy') return v
+  console.warn(`battle_motion '${raw}' は default / snappy のどちらでもないため default にした`)
+  return 'default'
+}
+
+/** プリセット名から時間の組を引く */
+export function motionTimingFor(preset: BattleMotionPreset | undefined): MotionTiming {
+  return preset ? BATTLE_MOTION_PRESETS[preset] : DEFAULT_MOTION_TIMING
+}
+
+// 以下は default（現行値）の個別定数。既存の呼び出し・テスト用に残す（値は DEFAULT_MOTION_TIMING が正本）
+export const ATTACK_STEP_MS = DEFAULT_MOTION_TIMING.attackStepMs
+export const ATTACK_SLASH_MS = DEFAULT_MOTION_TIMING.attackSlashMs
+export const ATTACK_RETURN_MS = DEFAULT_MOTION_TIMING.attackReturnMs
+export const ATTACK_SLASH_HIT_MS = DEFAULT_MOTION_TIMING.attackSlashHitMs
+export const CAST_MS = DEFAULT_MOTION_TIMING.castMs
+export const CAST_HIT_MS = DEFAULT_MOTION_TIMING.castHitMs
+export const SUMMON_APPEAR_MS = DEFAULT_MOTION_TIMING.summonAppearMs
+export const SUMMON_HOLD_MS = DEFAULT_MOTION_TIMING.summonHoldMs
+export const SUMMON_LEAVE_MS = DEFAULT_MOTION_TIMING.summonLeaveMs
 /** 召喚獣の登場の長さ（開始から退場の終わりまで）。命中・のけぞりがこれより遅ければそちらまで待つ */
 export const SUMMON_MS = SUMMON_APPEAR_MS + SUMMON_HOLD_MS + SUMMON_LEAVE_MS
-/** 召喚の開始から、効果が命中する（数字が出る）までの ms */
-export const SUMMON_HIT_MS = 600
-/** 知らせ（行動が成立しなかった）の窓を出しておく長さ（ms）。絵は動かない */
-export const NOTICE_MS = 700
-/** 1 つの行動が終わってから次の行動を始めるまでの間（ms） */
-export const ACTION_GAP_MS = 120
-/** 台詞・知らせ (#741) を見せる時間: 基本 + 1 文字あたり。長い台詞でも上限で止める（ATB でも進行を止めない） */
+export const SUMMON_HIT_MS = DEFAULT_MOTION_TIMING.summonHitMs
+export const NOTICE_MS = DEFAULT_MOTION_TIMING.noticeMs
+export const ACTION_GAP_MS = DEFAULT_MOTION_TIMING.actionGapMs
+export const STATUS_HIT_MS = DEFAULT_MOTION_TIMING.statusHitMs
+export const STATUS_MS = DEFAULT_MOTION_TIMING.statusMs
+export const RECOIL_MS = DEFAULT_MOTION_TIMING.recoilMs
+export const DOWN_MS = DEFAULT_MOTION_TIMING.downMs
+export const ATTACK_STEP_DISTANCE = DEFAULT_MOTION_TIMING.attackStepDistance
+export const RECOIL_DISTANCE = DEFAULT_MOTION_TIMING.recoilDistance
+
+/** 台詞・知らせ (#741) を見せる時間: 基本 + 1 文字あたり。長い台詞でも上限で止める（ATB でも進行を止めない）。プリセットでは変えない */
 export const LINE_BASE_MS = 600
 export const LINE_PER_CHAR_MS = 55
 export const LINE_MAX_MS = 3500
@@ -136,18 +279,6 @@ export function lineDurationMs(label: string | undefined): number {
   return Math.min(LINE_MAX_MS, LINE_BASE_MS + n * LINE_PER_CHAR_MS)
 }
 
-/** 状態異常の継続ダメージ・満了 (#870, `kind: 'status'`) の、命中までの ms。本人は動かず、窓に状態名が出てから数字が出る */
-export const STATUS_HIT_MS = 200
-/** 同上、行動 1 回の最短の長さ（命中・のけぞりが短くても、状態名と数字を読める時間） */
-export const STATUS_MS = 500
-/** 被ダメージ: のけぞって戻る時間 / 倒れ切るまでの時間（のけぞりの終わりから）（ms） */
-export const RECOIL_MS = 260
-export const DOWN_MS = 320
-
-/** 踏み出しの距離（枠の一辺に対する比） */
-export const ATTACK_STEP_DISTANCE = 0.7
-/** のけぞりの最大距離（枠の一辺に対する比） */
-export const RECOIL_DISTANCE = 0.12
 /** 倒れる絵（down ポーズ）が無いときの沈み込み量（枠の一辺に対する比）。下向きが正 */
 export const SINK_DISTANCE = 0.14
 
@@ -188,26 +319,29 @@ export interface ActionTimeline {
  * 複数ヒット (#879) の、ヒット（round）と次のヒットの間の基本 ms。暫定値（設計案は 90〜120ms。実機で詰める・未決）。
  * round 無し（単発）のイベントには掛からない。ヒットが多いときは下の自動調整で縮む。
  */
-export const MULTI_HIT_INTERVAL_MS = 100
+export const MULTI_HIT_INTERVAL_MS = DEFAULT_MOTION_TIMING.multiHitIntervalMs
 
 /**
  * 複数ヒットの 1 行動の総時間（最初の命中から最後の round の命中まで）の目安 ms。暫定・未決（おすすめ案の採用）。
  * 最大 round が TOTAL / MULTI_HIT_INTERVAL_MS（= 20）以下なら基本間隔のまま（従来と完全に同じ）。
  */
-export const MULTI_HIT_TOTAL_MS = 2000
+export const MULTI_HIT_TOTAL_MS = DEFAULT_MOTION_TIMING.multiHitTotalMs
 
 /**
  * 自動調整後の間隔の下限 ms。暫定・未決。MAX_HITS_PER_ACTION=99（最大 round 98）でも 2000/98 ≒ 20.4ms なので、
  * 現行の上限では効かない安全弁（上限を引き上げたとき、命中を 1 フレーム未満に詰めない）。
  */
-export const MULTI_HIT_MIN_INTERVAL_MS = 10
+export const MULTI_HIT_MIN_INTERVAL_MS = DEFAULT_MOTION_TIMING.multiHitMinIntervalMs
 
 /** 最大 round から、round 間の ms を決める: min(基本, 総時間 / 最大 round)。下限あり。最大 round 0 は基本値 */
-export function multiHitIntervalFor(lastRound: number): number {
-  if (!(lastRound > 0)) return MULTI_HIT_INTERVAL_MS
+export function multiHitIntervalFor(
+  lastRound: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): number {
+  if (!(lastRound > 0)) return timing.multiHitIntervalMs
   return Math.max(
-    MULTI_HIT_MIN_INTERVAL_MS,
-    Math.min(MULTI_HIT_INTERVAL_MS, MULTI_HIT_TOTAL_MS / lastRound)
+    timing.multiHitMinIntervalMs,
+    Math.min(timing.multiHitIntervalMs, timing.multiHitTotalMs / lastRound)
   )
 }
 
@@ -221,7 +355,7 @@ export function hitRound(hit: BattleHit): number {
 export function hitTimeOf(
   baseHitAt: number,
   round: number,
-  interval: number = MULTI_HIT_INTERVAL_MS
+  interval: number = DEFAULT_MOTION_TIMING.multiHitIntervalMs
 ): number {
   return baseHitAt + round * interval
 }
@@ -237,53 +371,63 @@ export function buildActionTimeline(
     lastRound?: number
     /** 召喚獣の登場 (#750)。`skill` のときだけ効き、登場の長さ・命中の瞬間が召喚用になる。無ければ従来と同じ */
     summon?: boolean
-  } = {}
+  } = {},
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
 ): ActionTimeline {
+  const T = timing
   if (kind === 'notice')
-    return { duration: NOTICE_MS + ACTION_GAP_MS, hitAt: 0, hitInterval: MULTI_HIT_INTERVAL_MS }
+    return {
+      duration: T.noticeMs + T.actionGapMs,
+      hitAt: 0,
+      hitInterval: T.multiHitIntervalMs,
+    }
   const summon = opts.summon === true && kind === 'skill'
   const motionEnd = summon
-    ? SUMMON_MS
+    ? T.summonAppearMs + T.summonHoldMs + T.summonLeaveMs
     : kind === 'attack'
-      ? ATTACK_STEP_MS + ATTACK_SLASH_MS + ATTACK_RETURN_MS
+      ? T.attackStepMs + T.attackSlashMs + T.attackReturnMs
       : kind === 'status'
-        ? STATUS_MS
-        : CAST_MS
+        ? T.statusMs
+        : T.castMs
   const hitAt = summon
-    ? SUMMON_HIT_MS
+    ? T.summonHitMs
     : kind === 'attack'
-      ? ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS
+      ? T.attackStepMs + T.attackSlashHitMs
       : kind === 'status'
-        ? STATUS_HIT_MS
-        : CAST_HIT_MS
+        ? T.statusHitMs
+        : T.castHitMs
   // のけぞり・倒れが途中で切れないよう、受ける側の動きが終わるまで次の行動を待つ
   let end = motionEnd
   // 複数ヒットの間隔は最大 round で自動調整する（総時間が約 2 秒に収まる）
   const hitInterval = multiHitIntervalFor(
-    Math.max(opts.lastRound ?? 0, opts.lastDamageRound ?? 0, opts.lastDownRound ?? 0)
+    Math.max(opts.lastRound ?? 0, opts.lastDamageRound ?? 0, opts.lastDownRound ?? 0),
+    T
   )
   // 複数ヒット (#879): のけぞり・倒れ切りは、最後のダメージ・倒れるヒットの round ぶん後ろにずれる（round 無しは 0 で従来と同じ）
   if (opts.damages)
-    end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0, hitInterval) + RECOIL_MS)
+    end = Math.max(end, hitTimeOf(hitAt, opts.lastDamageRound ?? 0, hitInterval) + T.recoilMs)
   if (opts.downs)
     end = Math.max(
       end,
-      hitTimeOf(hitAt, opts.lastDownRound ?? 0, hitInterval) + RECOIL_MS + DOWN_MS
+      hitTimeOf(hitAt, opts.lastDownRound ?? 0, hitInterval) + T.recoilMs + T.downMs
     )
   // heal・miss だけの round も取りこぼさない（最大 round が 0 なら何もしない = 従来と同じ）
   if ((opts.lastRound ?? 0) > 0)
     end = Math.max(end, hitTimeOf(hitAt, opts.lastRound ?? 0, hitInterval))
-  return { duration: end + ACTION_GAP_MS, hitAt, hitInterval }
+  return { duration: end + T.actionGapMs, hitAt, hitInterval }
 }
 
 /** 行動の記録から時間割を作る。HP が減る対象がいればのけぞり、HP 0 になる対象がいれば倒れ切るまで含める */
-export function eventTimeline(event: BattleActionEvent): ActionTimeline {
+export function eventTimeline(
+  event: BattleActionEvent,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): ActionTimeline {
   // 脚本制御の戦闘 (#741) の台詞・知らせは、字数に応じて読める長さだけ見せる（短い知らせの固定時間では読み切れない）。復活の回復数字は最初に出る
   if (event.kind === 'notice' && event.line) {
     return {
-      duration: lineDurationMs(event.label) + ACTION_GAP_MS,
+      duration: lineDurationMs(event.label) + timing.actionGapMs,
       hitAt: 0,
-      hitInterval: MULTI_HIT_INTERVAL_MS,
+      hitInterval: timing.multiHitIntervalMs,
     }
   }
   const damages = event.hits.some((h) => h.kind === 'damage')
@@ -297,14 +441,18 @@ export function eventTimeline(event: BattleActionEvent): ActionTimeline {
     lastDamageRound = Math.max(lastDamageRound, hitRound(h))
     if (h.hpAfter <= 0) lastDownRound = Math.max(lastDownRound, hitRound(h))
   }
-  return buildActionTimeline(event.kind, {
-    damages,
-    downs,
-    lastDamageRound,
-    lastDownRound,
-    lastRound,
-    ...(event.summon ? { summon: true } : {}),
-  })
+  return buildActionTimeline(
+    event.kind,
+    {
+      damages,
+      downs,
+      lastDamageRound,
+      lastDownRound,
+      lastRound,
+      ...(event.summon ? { summon: true } : {}),
+    },
+    timing
+  )
 }
 
 export interface SummonCueSample {
@@ -317,15 +465,19 @@ export interface SummonCueSample {
 }
 
 /** 召喚獣の登場の、開始から t ms 時点の見え方 (#750)。フェードイン → そのまま → フェードアウト。範囲外・非有限は端の値に丸める */
-export function sampleSummonCue(t: number): SummonCueSample {
-  const time = Number.isFinite(t) ? Math.min(Math.max(0, t), SUMMON_MS) : 0
-  if (time < SUMMON_APPEAR_MS) {
-    const p = easeOutQuad(time / SUMMON_APPEAR_MS)
+export function sampleSummonCue(
+  t: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): SummonCueSample {
+  const total = timing.summonAppearMs + timing.summonHoldMs + timing.summonLeaveMs
+  const time = Number.isFinite(t) ? Math.min(Math.max(0, t), total) : 0
+  if (time < timing.summonAppearMs) {
+    const p = easeOutQuad(time / timing.summonAppearMs)
     return { alpha: p, veil: p, rise: 0.05 * (1 - p) }
   }
-  const afterHold = time - SUMMON_APPEAR_MS - SUMMON_HOLD_MS
+  const afterHold = time - timing.summonAppearMs - timing.summonHoldMs
   if (afterHold <= 0) return { alpha: 1, veil: 1, rise: 0 }
-  const p = 1 - Math.min(1, afterHold / SUMMON_LEAVE_MS)
+  const p = 1 - Math.min(1, afterHold / timing.summonLeaveMs)
   return { alpha: p, veil: p, rise: 0 }
 }
 
@@ -336,27 +488,33 @@ export interface ActorSample {
 }
 
 /** 行動する側の、開始から t ms 時点の位置とポーズ */
-export function sampleActor(kind: ActionKind, t: number): ActorSample {
+export function sampleActor(
+  kind: ActionKind,
+  t: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): ActorSample {
+  const T = timing
   const time = Number.isFinite(t) ? Math.max(0, t) : 0
   if (kind === 'notice' || kind === 'status') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
     // 呪文の構えは cast、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
     return {
       forward: 0,
-      pose: time < CAST_MS ? (kind === 'spell' || kind === 'skill' ? 'cast' : 'ready') : 'idle',
+      pose: time < T.castMs ? (kind === 'spell' || kind === 'skill' ? 'cast' : 'ready') : 'idle',
     }
   }
-  if (time < ATTACK_STEP_MS) {
-    return { forward: ATTACK_STEP_DISTANCE * easeOutQuad(time / ATTACK_STEP_MS), pose: 'step' }
+  if (time < T.attackStepMs) {
+    return { forward: T.attackStepDistance * easeOutQuad(time / T.attackStepMs), pose: 'step' }
   }
-  const afterStep = time - ATTACK_STEP_MS
-  if (afterStep < ATTACK_SLASH_MS) {
-    return { forward: ATTACK_STEP_DISTANCE, pose: 'slash' }
+  const afterStep = time - T.attackStepMs
+  if (afterStep < T.attackSlashMs) {
+    return { forward: T.attackStepDistance, pose: 'slash' }
   }
-  const afterSlash = afterStep - ATTACK_SLASH_MS
-  if (afterSlash < ATTACK_RETURN_MS) {
+  const afterSlash = afterStep - T.attackSlashMs
+  if (afterSlash < T.attackReturnMs) {
+    const ease = T.attackReturnEase === 'outQuad' ? easeOutQuad : easeInOutQuad
     return {
-      forward: ATTACK_STEP_DISTANCE * (1 - easeInOutQuad(afterSlash / ATTACK_RETURN_MS)),
+      forward: T.attackStepDistance * (1 - ease(afterSlash / T.attackReturnMs)),
       pose: 'step',
     }
   }
@@ -381,15 +539,24 @@ export const FALLEN: TargetSample = { recoil: 0, pose: 'down', downProgress: 1 }
  * damage のときだけ、短く後ろへ揺れて戻る（点滅はしない）。HP 0 になる（downs）なら、のけぞりのあと倒れる。
  * heal / miss は動かない。
  */
-export function sampleTarget(kind: BattleHitKind, sinceHit: number, downs: boolean): TargetSample {
+export function sampleTarget(
+  kind: BattleHitKind,
+  sinceHit: number,
+  downs: boolean,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): TargetSample {
   if (kind !== 'damage' || !Number.isFinite(sinceHit) || sinceHit < 0) return STANDING
-  const recoilU = clamp01(sinceHit / RECOIL_MS)
-  const recoil = RECOIL_DISTANCE * Math.sin(Math.PI * recoilU)
+  const recoilU = clamp01(sinceHit / timing.recoilMs)
+  const recoil = timing.recoilDistance * Math.sin(Math.PI * recoilU)
   if (!downs) {
-    return { recoil, pose: sinceHit < RECOIL_MS ? 'hurt' : 'idle', downProgress: 0 }
+    return { recoil, pose: sinceHit < timing.recoilMs ? 'hurt' : 'idle', downProgress: 0 }
   }
-  if (sinceHit < RECOIL_MS) return { recoil, pose: 'hurt', downProgress: 0 }
-  return { recoil: 0, pose: 'down', downProgress: easeOutQuad((sinceHit - RECOIL_MS) / DOWN_MS) }
+  if (sinceHit < timing.recoilMs) return { recoil, pose: 'hurt', downProgress: 0 }
+  return {
+    recoil: 0,
+    pose: 'down',
+    downProgress: easeOutQuad((sinceHit - timing.recoilMs) / timing.downMs),
+  }
 }
 
 /** 何も再生していないときの姿: 戦闘に勝って生きている味方は victory、倒れていれば down、それ以外は idle */
@@ -464,7 +631,8 @@ const MAX_ADVANCE_STEPS = 200
  */
 export function advancePlayback(
   pb: PlaybackState,
-  dt: number
+  dt: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
 ): { state: PlaybackState; fires: HitFire[] } {
   if (!Number.isFinite(dt) || dt <= 0) return { state: pb, fires: [] }
   let queue = pb.queue
@@ -478,7 +646,7 @@ export function advancePlayback(
       queue = queue.slice(1)
       active = { event: next, elapsed: 0, firedRounds: 0 }
     }
-    const tl = eventTimeline(active.event)
+    const tl = eventTimeline(active.event, timing)
     const step = Math.min(rest, tl.duration - active.elapsed)
     active.elapsed += step
     rest -= step
@@ -505,12 +673,12 @@ export function advancePlayback(
 // ---------------------------------------------------------------------------
 
 /** 数字の跳ね（FF5 風）: 上へ跳ねて落ち、小さく 1 回はねて止まり、少し留まってフェードアウトする */
-export const POPUP_ARC1_MS = 260
-export const POPUP_ARC1_HEIGHT = 0.3
-export const POPUP_ARC2_MS = 160
-export const POPUP_ARC2_HEIGHT = 0.09
-export const POPUP_HOLD_MS = 240
-export const POPUP_FADE_MS = 200
+export const POPUP_ARC1_MS = DEFAULT_MOTION_TIMING.popupArc1Ms
+export const POPUP_ARC1_HEIGHT = DEFAULT_MOTION_TIMING.popupArc1Height
+export const POPUP_ARC2_MS = DEFAULT_MOTION_TIMING.popupArc2Ms
+export const POPUP_ARC2_HEIGHT = DEFAULT_MOTION_TIMING.popupArc2Height
+export const POPUP_HOLD_MS = DEFAULT_MOTION_TIMING.popupHoldMs
+export const POPUP_FADE_MS = DEFAULT_MOTION_TIMING.popupFadeMs
 export const POPUP_TOTAL_MS = POPUP_ARC1_MS + POPUP_ARC2_MS + POPUP_HOLD_MS + POPUP_FADE_MS
 
 export interface PopupSample {
@@ -520,19 +688,24 @@ export interface PopupSample {
   done: boolean
 }
 
-export function sampleDamagePopup(elapsed: number): PopupSample {
+export function sampleDamagePopup(
+  elapsed: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): PopupSample {
+  const T = timing
   const t = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
-  if (t >= POPUP_TOTAL_MS) return { dy: 0, alpha: 0, done: true }
+  if (t >= T.popupArc1Ms + T.popupArc2Ms + T.popupHoldMs + T.popupFadeMs)
+    return { dy: 0, alpha: 0, done: true }
   // `+ 0` で -0 を 0 に揃える
   const arc = (u: number, h: number) => -4 * h * u * (1 - u) + 0
-  if (t < POPUP_ARC1_MS)
-    return { dy: arc(t / POPUP_ARC1_MS, POPUP_ARC1_HEIGHT), alpha: 1, done: false }
-  const t2 = t - POPUP_ARC1_MS
-  if (t2 < POPUP_ARC2_MS)
-    return { dy: arc(t2 / POPUP_ARC2_MS, POPUP_ARC2_HEIGHT), alpha: 1, done: false }
-  const t3 = t2 - POPUP_ARC2_MS
-  if (t3 < POPUP_HOLD_MS) return { dy: 0, alpha: 1, done: false }
-  return { dy: 0, alpha: 1 - clamp01((t3 - POPUP_HOLD_MS) / POPUP_FADE_MS), done: false }
+  if (t < T.popupArc1Ms)
+    return { dy: arc(t / T.popupArc1Ms, T.popupArc1Height), alpha: 1, done: false }
+  const t2 = t - T.popupArc1Ms
+  if (t2 < T.popupArc2Ms)
+    return { dy: arc(t2 / T.popupArc2Ms, T.popupArc2Height), alpha: 1, done: false }
+  const t3 = t2 - T.popupArc2Ms
+  if (t3 < T.popupHoldMs) return { dy: 0, alpha: 1, done: false }
+  return { dy: 0, alpha: 1 - clamp01((t3 - T.popupHoldMs) / T.popupFadeMs), done: false }
 }
 
 /** ダメージ白・回復緑・ミスは薄い灰（FF5 の色分けに倣う） */

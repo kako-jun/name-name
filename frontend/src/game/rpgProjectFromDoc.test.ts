@@ -1902,6 +1902,25 @@ describe('rpgProjectFromDoc: battle_transition (#830)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: battle_motion (#956)', () => {
+  it.each([
+    ['snappy', 'snappy'],
+    [' Snappy ', 'snappy'],
+    ['default', 'default'],
+    [null, 'default'],
+    ['', 'default'],
+    ['ff5', 'default'],
+  ])('battle_motion %j → battleMotion %s（不正値は警告して default）', (raw, expected) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(rpgProjectFromDoc({ ...makeDoc(), battle_motion: raw })!.battleMotion).toBe(expected)
+      expect(warn).toHaveBeenCalledTimes(raw === 'ff5' ? 1 : 0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe('rpgProjectFromDoc: battle_enemy_grid / battle_enemy_window_overlap (#839)', () => {
   const withEnemy = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
 

@@ -30,7 +30,7 @@ import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
 import { normalizeBackgroundDof } from './depthOfField'
 import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
-import { normalizeBattlePresentation } from './battleMotion'
+import { normalizeBattleMotion, normalizeBattlePresentation } from './battleMotion'
 import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb } from './battleAtb'
 import { normalizeEnemyGrid, normalizeEnemyWindowOverlapSetting } from './enemyGrid'
@@ -420,6 +420,7 @@ export function rpgProjectFromDoc(
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),
     battleTransition: normalizeBattleTransition(doc.battle_transition),
+    battleMotion: normalizeBattleMotion(doc.battle_motion),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
     ...(encounterGroupErrors ? { encounterGroupErrors } : {}),

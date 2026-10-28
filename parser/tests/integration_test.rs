@@ -5343,6 +5343,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_command_labels: None,
         battle_commands: None,
         battle_transition: None,
+        battle_motion: None,
         field_emotions: None,
         battle_effects: None,
         battle_enemy_grid: None,
@@ -10534,6 +10535,7 @@ fn telop_test_doc_base() -> Document {
         battle_command_labels: None,
         battle_commands: None,
         battle_transition: None,
+        battle_motion: None,
         field_emotions: None,
         battle_effects: None,
         battle_enemy_grid: None,
@@ -12372,4 +12374,28 @@ fn test_emotion_directive_fullwidth_separators_and_boundaries() {
             .all(|e| !matches!(e, Event::Dialog { .. } | Event::Narration { .. })),
         "{bad:?}"
     );
+}
+
+// ---- #956: battle_motion ----
+
+#[test]
+fn test_battle_motion_parses_default_none_and_roundtrips() {
+    let doc = parser::parse(&battle_doc("battle_motion: snappy\n"));
+    assert_eq!(doc.battle_motion.as_deref(), Some("snappy"));
+    assert_eq!(
+        parser::parse(&battle_doc("battle_motion:\n")).battle_motion,
+        None
+    );
+    assert_eq!(parser::parse(&battle_doc("")).battle_motion, None);
+    // 不正値もそのまま透過する（runtime 側で default に倒す）
+    assert_eq!(
+        parser::parse(&battle_doc("battle_motion: bogus\n"))
+            .battle_motion
+            .as_deref(),
+        Some("bogus")
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("battle_motion: \"snappy\"\n"), "{emitted}");
+    assert_eq!(parser::parse(&emitted).battle_motion, doc.battle_motion);
+    assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_motion"));
 }

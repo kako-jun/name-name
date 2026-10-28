@@ -58,6 +58,7 @@ pub fn parse(input: &str) -> Document {
     let mut battle_command_labels: Option<String> = None;
     let mut battle_commands: Option<String> = None;
     let mut battle_transition: Option<String> = None;
+    let mut battle_motion: Option<String> = None;
     let mut field_emotions: Option<String> = None;
     let mut battle_effects: Option<String> = None;
     let mut battle_enemy_grid: Option<String> = None;
@@ -325,6 +326,12 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_transition = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_motion:") {
+                // RPG 戦闘モーションのプリセット (#956)。default / snappy。値は生文字列で透過し、runtime 側で未知値は default に倒す。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_motion = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("field_emotions:") {
                 // フィールドの感情吹き出し設定 JSON のパス (#943)。assets 相対パスを生文字列で透過し、
@@ -1238,6 +1245,7 @@ pub fn parse(input: &str) -> Document {
         battle_command_labels,
         battle_commands,
         battle_transition,
+        battle_motion,
         field_emotions,
         battle_effects,
         battle_enemy_grid,

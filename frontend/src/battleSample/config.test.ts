@@ -55,6 +55,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     pixelArt: 'off',
     logTypewriter: 'off',
     presentation: 'dq',
+    motion: 'default',
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
@@ -1485,6 +1486,26 @@ describe('presentation / poses (#745)', () => {
       'presentation=ff'
     )
     expect(describeView(view(), 1, size)).not.toContain('presentation=')
+  })
+
+  it('motion は default / snappy だけ。既定 default。不正値はエラー (#956)', () => {
+    expect(parseOk({}).motion).toBe('default')
+    expect(parseOk({ motion: 'snappy' }).motion).toBe('snappy')
+    expect(parseConfig({ motion: 'x' }, BASE).ok).toBe(false)
+    expect(parseConfig({ motion: 1 }, BASE).ok).toBe(false)
+  })
+
+  it('motion は initialView / viewsEqual / describeView に反映され、ff（side）のときだけ表示 (#956)', () => {
+    expect(initialView(parseOk({ presentation: 'ff', motion: 'snappy' })).motion).toBe('snappy')
+    expect(viewsEqual(view(), view({ motion: 'snappy' }))).toBe(false)
+    const size = { width: 800, height: 450 }
+    expect(describeView(view({ presentation: 'ff', motion: 'snappy' }), 1, size)).toContain(
+      'motion=snappy'
+    )
+    expect(describeView(view({ presentation: 'ff' }), 1, size)).not.toContain('motion=')
+    expect(describeView(view({ presentation: 'dq', motion: 'snappy' }), 1, size)).not.toContain(
+      'motion='
+    )
   })
 
   it('poses: 部分指定を URL 解決して保持し、未知のキーは捨て、無ければ poses なし', () => {

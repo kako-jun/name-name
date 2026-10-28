@@ -7,7 +7,7 @@
  * - 種類の拡張点: `BATTLE_EFFECT_KINDS` と `planEventEffects` / `planHitEffects`（属性ごとのヒット素材の出し分けなどは今後ここへ足す）
  */
 import type { BattleActionEvent, BattleActorRef, BattleHit } from './battleEngine'
-import { eventTimeline, hitRound, hitTimeOf } from './battleMotion'
+import { eventTimeline, hitRound, hitTimeOf, type MotionTiming } from './battleMotion'
 import { hasOwn } from './ownProperty'
 
 /** エフェクトの種類: 詠唱（通常）/ 召喚詠唱 / 打撃 / 斬撃 / 魔法ヒット */
@@ -247,7 +247,8 @@ export interface EffectPlan {
  */
 export function planEventEffects(
   event: BattleActionEvent,
-  effects: BattleEffects | undefined
+  effects: BattleEffects | undefined,
+  timing?: MotionTiming
 ): EffectPlan[] {
   if (!hasBattleEffects(effects)) return []
   const plans: EffectPlan[] = []
@@ -257,7 +258,7 @@ export function planEventEffects(
   if (castKind && effects?.[castKind]) {
     plans.push({ kind: castKind, atMs: 0, target: event.actor })
   }
-  plans.push(...planHitEffects(event, event.hits, effects))
+  plans.push(...planHitEffects(event, event.hits, effects, timing))
   return plans
 }
 
@@ -268,7 +269,8 @@ export function planEventEffects(
 export function planHitEffects(
   event: BattleActionEvent,
   hits: readonly BattleHit[],
-  effects: BattleEffects | undefined
+  effects: BattleEffects | undefined,
+  timing?: MotionTiming
 ): EffectPlan[] {
   if (!hasBattleEffects(effects)) return []
   let hitKind: BattleEffectKind | null = null
@@ -277,7 +279,7 @@ export function planHitEffects(
     hitKind = effects?.magic ? 'magic' : 'impact'
   }
   if (!hitKind || !effects?.[hitKind]) return []
-  const tl = eventTimeline(event)
+  const tl = eventTimeline(event, timing)
   const plans: EffectPlan[] = []
   for (const hit of hits) {
     if (hit.kind !== 'damage') continue

@@ -2037,6 +2037,11 @@ pub struct Document {
     /// `"none"` にフォールバックする。GUI 専用（TUI は読まない）。frontmatter `battle_transition:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_transition: Option<String>,
+    /// RPG 戦闘モーションの時間・距離のプリセット (#956)。`"default"`（現行）/ `"snappy"`（キビキビ）。値は parser でバリデーションせず
+    /// 生文字列で透過し、runtime 側で未知値・空文字は警告して `"default"` にフォールバックする。`battle_presentation: ff` のときだけ効く。
+    /// GUI 専用（TUI は読まない）。frontmatter `battle_motion:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_motion: Option<String>,
     /// フィールドの感情吹き出しの設定 JSON のパス (#943)。assets 相対パスを生文字列で透過する（`battle_background` と
     /// 同じ流儀）。読み込み・検証は frontend（フィールドサンプルの `emotions` と同じ検証。不正は警告して無視）。
     /// 未指定・空は None（従来どおり吹き出しなし）。GUI 専用（TUI は読まない）。frontmatter `field_emotions:` から流す。

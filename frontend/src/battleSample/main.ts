@@ -243,6 +243,13 @@ async function main(): Promise<void> {
     (v) => change({ presentation: v }),
     { dq: 'dq（ログ・動かない）', ff: 'ff（モーション・ダメージ数字）' }
   )
+  const motionSel = select(
+    'モーション',
+    'tb-motion',
+    ['default', 'snappy'] as const,
+    (v) => change({ motion: v }),
+    { default: 'default（現行）', snappy: 'snappy（キビキビ）' }
+  )
   const atbLabel = document.createElement('label')
   const atbChk = document.createElement('input')
   atbChk.type = 'checkbox'
@@ -340,6 +347,9 @@ async function main(): Promise<void> {
     // ff は 1 文字ずつ表示を使わない（ff のとき無効）。ff は side のときだけ効く（front では選べない） (#745)
     logTwChk.disabled = v.presentation === 'ff' && v.layout === 'side'
     presentationSel.disabled = v.layout === 'front'
+    // モーションは ff（side）のときだけ効く (#956)
+    motionSel.value = v.motion
+    motionSel.disabled = !(v.presentation === 'ff' && v.layout === 'side')
     atbChk.checked = v.atb === 'on'
     atbModeSel.value = v.atbMode
     atbModeSel.disabled = v.atb !== 'on'
