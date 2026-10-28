@@ -225,6 +225,9 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         BackgroundBoard: {
           path: board.path,
           depth: board.depth ?? 0,
+          // #704: 面の切り替え指定は付いているときだけ載せる（既存の出力形を変えない）。
+          ...(board.flip_from ? { flip_from: board.flip_from } : {}),
+          ...(board.flip_from && board.flip_ms != null ? { flip_ms: board.flip_ms } : {}),
         },
       }
     }
@@ -235,6 +238,8 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         Prop: {
           path: prop.path,
           depth: prop.depth ?? 0,
+          ...(prop.flip_from ? { flip_from: prop.flip_from } : {}),
+          ...(prop.flip_from && prop.flip_ms != null ? { flip_ms: prop.flip_ms } : {}),
         },
       }
     }

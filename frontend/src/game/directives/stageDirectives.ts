@@ -82,13 +82,32 @@ export const stageDirectives: ObjectDirectiveTable = {
   // 同じシーン内で複数回発火すれば、それぞれ別の板として蓄積される。
   BackgroundBoard: on<'BackgroundBoard'>((event, ctx) => {
     const board = event.BackgroundBoard
-    ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
+    if (board.flip_from) {
+      // 面の切り替え (#704): 同じ depth の旧い面を差し替える（シアターは回転、それ以外は即時）。
+      ctx.layers.backgroundBoard.replace(
+        board.path,
+        board.depth ?? 0,
+        board.flip_from,
+        ctx.env.assetBaseUrl,
+        { flipMs: board.flip_ms, skip: ctx.env.skipMode }
+      )
+    } else {
+      ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
+    }
   }),
 
   // 舞台構造の大道具 (#692)。背景板とは独立した加算的レイヤー。
   Prop: on<'Prop'>((event, ctx) => {
     const prop = event.Prop
-    ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl)
+    if (prop.flip_from) {
+      // 面の切り替え (#704): 背景板と同じ。
+      ctx.layers.prop.replace(prop.path, prop.depth ?? 0, prop.flip_from, ctx.env.assetBaseUrl, {
+        flipMs: prop.flip_ms,
+        skip: ctx.env.skipMode,
+      })
+    } else {
+      ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl)
+    }
   }),
 
   // 単色地色 (#273)。背景画像と同じ永続状態（snapshot / applyState / セーブ復元で復元）。

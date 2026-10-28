@@ -937,6 +937,16 @@ pub enum Event {
         path: String,
         #[serde(default)]
         depth: f32,
+        /// 面の切り替え (#704)。`Some(旧パス)` のとき、同じ depth で `旧パス` の背景板を新しい
+        /// `path` に差し替える（加算せず置換）。シアターモードでは板の Y 軸回転で見せ、ノベルでは
+        /// 即時に入れ替える。該当する板が無ければ通常の追加として扱う。
+        /// Markdown 構文: `[背景板: 裏.png, depth: 3, 回転: 表.png]`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_from: Option<String>,
+        /// 回転の所要時間（ms）の上書き (#704)。未指定は `character_fade_ms`。`flip_from` があるときだけ意味を持つ。
+        /// Markdown 構文: `[背景板: 裏.png, 回転: 表.png, 時間: 1000]`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_ms: Option<u32>,
     },
     /// 舞台構造の大道具 (#692)。`BackgroundBoard`（背景板）と対称的な仕組みだが、独立した
     /// PixiJS レイヤーとしてキャラより手前・イベント絵/UIより奥に固定される点が異なる（数値 depth
@@ -962,6 +972,13 @@ pub enum Event {
         path: String,
         #[serde(default)]
         depth: f32,
+        /// 面の切り替え (#704)。`BackgroundBoard::flip_from` と同じ意味（同じ depth の `旧パス` の大道具を差し替える）。
+        /// Markdown 構文: `[大道具: 裏.png, depth: 3, 回転: 表.png]`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_from: Option<String>,
+        /// 回転の所要時間（ms）の上書き (#704)。`BackgroundBoard::flip_ms` と同じ。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_ms: Option<u32>,
     },
     /// 動画入力レイヤ (#252)。立ち絵/背景と同じ枠組みで動画ファイルをレイヤとして配置・再生する。
     /// 背景と同じく単一スロット意味論: 新しい `[動画:]` は前の動画を置換する。
