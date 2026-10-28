@@ -12607,10 +12607,14 @@ fn test_non_speaker_bold_line_after_dialog_does_not_hang() {
         .recv_timeout(Duration::from_secs(5))
         .expect("parse が 5 秒以内に戻ること (#969 無限ループ)");
     let events = &doc.chapters[0].scenes[0].events;
-    assert!(matches!(&events[0], Event::Dialog { text, .. } if text == &vec!["こんにちは".to_string()]));
+    assert!(
+        matches!(&events[0], Event::Dialog { text, .. } if text == &vec!["こんにちは".to_string()])
+    );
     // 読み捨ては各 1 行で止まり、後続の「続きの本文」は継続 Dialog として拾われる
     assert!(
-        events.iter().any(|e| matches!(e, Event::Dialog { text, .. } if text == &vec!["続きの本文".to_string()])),
+        events.iter().any(
+            |e| matches!(e, Event::Dialog { text, .. } if text == &vec!["続きの本文".to_string()])
+        ),
         "{events:?}"
     );
 }

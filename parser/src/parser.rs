@@ -1228,7 +1228,7 @@ pub fn parse(input: &str) -> Document {
                 emit_warning(&format!(
                     "[name-name-parser] warning: {} 行目は話者行でも本文でもないため読み捨てた: {}",
                     pos + 1,
-                    trimmed
+                    truncate_for_warning(trimmed)
                 ));
                 pos += 1;
             }
@@ -3575,9 +3575,21 @@ fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize
     ));
 }
 
+/// 警告に載せる行の最大文字数（chars 単位。超えたら `…` で切る）。
+const WARNING_LINE_MAX_CHARS: usize = 60;
+
+fn truncate_for_warning(line: &str) -> String {
+    if line.chars().count() <= WARNING_LINE_MAX_CHARS {
+        line.to_string()
+    } else {
+        let head: String = line.chars().take(WARNING_LINE_MAX_CHARS).collect();
+        format!("{head}…")
+    }
+}
+
 /// 共通の warning 出力ヘルパー。
 /// - native (`cfg(test)` なし): stderr に出力する
-/// - native + test: 何もしない（テスト中の stderr 汚染防止）
+/// - native + test: stderr には出さず、スレッドローカルに溜める（`take_test_warnings` で取り出す）
 /// - wasm32: `console.warn` へ流す
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 pub(crate) fn emit_warning(msg: &str) {
@@ -7745,9 +7757,28 @@ mod discard_warning_tests {
         let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n\n[/選択]\n\n続き\n";
         let doc = parse(input);
         let w = take_test_warnings();
-        assert!(w.iter().any(|m| m.contains("12 行目") && m.contains("**F5**")), "{w:?}");
-        assert!(w.iter().any(|m| m.contains("14 行目") && m.contains("[/選択]")), "{w:?}");
+        assert!(
+            w.iter()
+                .any(|m| m.contains("12 行目") && m.contains("**F5**")),
+            "{w:?}"
+        );
+        assert!(
+            w.iter()
+                .any(|m| m.contains("14 行目") && m.contains("[/選択]")),
+            "{w:?}"
+        );
         let events = &doc.chapters[0].scenes[0].events;
-        assert!(events.iter().any(|e| matches!(e, Event::Dialog { text, .. } if text == &vec!["続き".to_string()])));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Dialog { text, .. } if text == &vec!["続き".to_string()])));
+    }
+
+    #[test]
+    fn warning_line_is_truncated_by_chars() {
+        let long = "あ".repeat(100);
+        let t = truncate_for_warning(&long);
+        assert_eq!(t.chars().count(), WARNING_LINE_MAX_CHARS + 1);
+        assert!(t.ends_with('…'));
+        assert_eq!(truncate_for_warning("短い"), "短い");
     }
 }

@@ -2683,11 +2683,18 @@ describe('parseMarkdown + normalizeDocument: battle_commands / わざ が生き�
 describe('parseMarkdown: 説明用 Markdown 全文が一定時間内に読める (#969)', () => {
   it('話者行でも本文でもない行は警告つきで読み捨てられる（行番号を含む）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await parseMarkdown(
-      '---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n'
-    )
-    expect(warn.mock.calls.some((c) => String(c[0]).includes('12 行目') && String(c[0]).includes('読み捨てた'))).toBe(true)
-    warn.mockRestore()
+    try {
+      await parseMarkdown(
+        '---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n'
+      )
+      expect(
+        warn.mock.calls.some(
+          (c) => String(c[0]).includes('12 行目') && String(c[0]).includes('読み捨てた')
+        )
+      ).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('話者行のあとの `**太字**` 始まりの行で止まらない', async () => {
