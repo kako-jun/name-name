@@ -153,7 +153,8 @@ export function createFieldBattleHost(
 export function createFieldEmotionHost(
   getContext: () => EmotionResolveContext,
   show: (target: string, kind: string, durationMs?: number) => boolean,
-  warn: (msg: string) => void = (m) => console.warn(m)
+  warn: (msg: string) => void = (m) => console.warn(m),
+  tag = '[field-sample]'
 ): EventEmotionHost {
   return {
     showEmotion(target, kind, durationMs) {
@@ -161,10 +162,10 @@ export function createFieldEmotionHost(
         { target, kind, duration_ms: durationMs },
         getContext()
       )
-      for (const w of warnings) warn(`[field-sample] ${w}`)
+      for (const w of warnings) warn(`${tag} ${w}`)
       if (command && !show(command.target, command.kind, command.durationMs))
         warn(
-          `[field-sample] [感情: ${target}, ${kind}] を出せませんでした（戦闘中・同行者が出ていない・別シーンの NPC・絵が読めない種類のいずれか）`
+          `${tag} [感情: ${target}, ${kind}] を出せませんでした（戦闘中・同行者が出ていない・別シーンの NPC・絵が読めない種類のいずれか）`
         )
     },
   }

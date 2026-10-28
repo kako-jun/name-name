@@ -411,6 +411,8 @@ export function rpgProjectFromDoc(
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
     battlePresentation: normalizeBattlePresentation(doc.battle_presentation),
     battleEffects: doc.battle_effects || undefined,
+    fieldEmotions: doc.field_emotions || undefined,
+    protagonist: doc.protagonist || undefined,
     battleDepth: normalizeBattleDepth(doc.battle_horizon, doc.battle_perspective) ?? undefined,
     battleForeground: doc.battle_foreground || undefined,
     pixelArt: doc.pixel_art === true ? true : undefined,
