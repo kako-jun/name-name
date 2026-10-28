@@ -2035,7 +2035,7 @@ fn parse_stage_front_directive(content: &str) -> Option<Event> {
 /// - 種類が `なし`（`none` も可）→ [`Event::WeatherExit`]（解除。後ろの kv は無視）
 /// - 種類が空 → 不正な行としてイベントにしない（`None`）
 /// - 未知の種類 → 警告を出してイベントにしない（`None`）。typo が無言で消えないようにする
-/// - `強さ`/`intensity` は有限かつ正の数だけ採用し、0.1〜3.0 にクランプ。それ以外は既定 1.0。後勝ち。
+/// - `強さ`/`intensity` は有限かつ正の数だけ採用し、0.1〜3.0 にクランプ。それ以外は無視（有効な値が無ければ既定 1.0）。複数あれば最後の有効値。
 ///   未知のキーは無視。
 fn parse_weather_directive(content: &str) -> Option<Event> {
     let (kind_part, kv_part) = match content.split_once(',') {
@@ -2063,13 +2063,15 @@ fn parse_weather_directive(content: &str) -> Option<Event> {
         for raw in kv.split(',') {
             if let Some((k, v)) = raw.trim().split_once(['=', '＝']) {
                 if matches!(k.trim(), "強さ" | "intensity") {
-                    intensity = v
+                    // 有効な値だけ採用する（最後の有効値が勝つ。無効な値は直前の値を壊さない）。
+                    if let Some(n) = v
                         .trim()
                         .parse::<f32>()
                         .ok()
                         .filter(|n| n.is_finite() && *n > 0.0)
-                        .map(|n| n.clamp(WEATHER_INTENSITY_MIN, WEATHER_INTENSITY_MAX))
-                        .unwrap_or(WEATHER_INTENSITY_DEFAULT);
+                    {
+                        intensity = n.clamp(WEATHER_INTENSITY_MIN, WEATHER_INTENSITY_MAX);
+                    }
                 }
             }
         }

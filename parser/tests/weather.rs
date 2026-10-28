@@ -95,10 +95,14 @@ fn intensity_last_wins_and_order_independent_of_unknown_keys() {
         single("[天候: 雨, 強さ=2, 強さ=0.5]"),
         weather(WeatherKind::Rain, 0.5)
     );
-    // 後ろが不正なら既定へ倒れる（後勝ち）
+    // 後ろが不正なら無視され、直前の有効値が残る（最後の有効値が勝つ）
     assert_eq!(
         single("[天候: 雨, 強さ=2, 強さ=x]"),
-        weather(WeatherKind::Rain, 1.0)
+        weather(WeatherKind::Rain, 2.0)
+    );
+    assert_eq!(
+        single("[天候: 雨, 強さ=0.7, 強さ=bad, 強さ=-1]"),
+        weather(WeatherKind::Rain, 0.7)
     );
     assert_eq!(
         single("[天候: 雨, 無視=3, 強さ=2]"),
