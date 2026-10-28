@@ -50,7 +50,7 @@ export async function loadFieldScript(
 
 /**
  * fieldSample で実行できないコマンド（NpcMove / Battle など）を警告して取り除く。
- * 残りが無ければ undefined（呼び出し側は固定 `line` に戻る）
+ * 台詞（Dialog / Narration）が 1 つも残らなければ undefined（呼び出し側は固定 `line` に戻る）
  */
 export function supportedCommands(
   name: string,
@@ -65,7 +65,8 @@ export function supportedCommands(
         `[field-sample] [イベント ${name}] の ${c.type} はフィールドでは未対応です（読み飛ばします）`
       )
   }
-  return out.length > 0 ? out : undefined
+  // 台詞（Dialog / Narration）が 1 つも無いイベントは会話にならない（Wait だけで閉じてしまう）ので固定 line に戻す
+  return out.some((c) => c.type === 'Dialog' || c.type === 'Narration') ? out : undefined
 }
 
 /**
@@ -91,6 +92,32 @@ export function resolveNpcCommands(
       `[field-sample] [イベント ${scene}] に実行できる台詞がありません（固定の line で話します）`
     )
   return ok
+}
+
+/**
+ * 起動時（脚本の読み込み後）に 1 回だけ、各 NPC の `scene` を脚本と照合して警告する。
+ * 話しかけるたびに同じ警告が出ないよう、実行時の `resolveNpcCommands` には警告を渡さない。
+ * `scriptLoaded` が false（`scriptUrl` なし／読めなかった）のときは、scene 付き NPC ごとに「固定 line で話す」警告を返す
+ */
+export function checkNpcScripts(
+  npcs: ReadonlyArray<{ where: string; scene?: string }>,
+  events: FieldScriptEvents | undefined
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const n of npcs) {
+    if (n.scene === undefined) continue
+    if (!events || events.size === 0) {
+      out.push(
+        `[field-sample] ${n.where} の scene "${n.scene}" は脚本を読めていません（固定の line で話します）`
+      )
+      continue
+    }
+    if (seen.has(n.scene)) continue
+    seen.add(n.scene)
+    resolveNpcCommands(n.scene, events, (m) => out.push(m))
+  }
+  return out
 }
 
 /** EventRunner が要求する NpcMover。フィールドでは動かさない（警告して即完了） */
@@ -140,6 +167,7 @@ export class FieldConversation {
 
   /** 脚本のイベントがあればそれを、無ければ固定の `line` を出す */
   start(name: string, line: string, commands: EventCommand[] | undefined, onEnd: () => void): void {
+    if (this.active) return
     this.onEnd = onEnd
     if (commands && commands.length > 0) {
       this.runner.run(commands, () => this.finish())
@@ -147,6 +175,13 @@ export class FieldConversation {
     }
     this.lineActive = true
     this.dialog.show(name, line)
+  }
+
+  /** 実行中の脚本を捨てる（ページ破棄時） */
+  destroy(): void {
+    this.runner.destroy()
+    this.lineActive = false
+    this.onEnd = undefined
   }
 
   /** 送り: 表示中なら全文表示、済んでいれば次の台詞（最後なら閉じる） */

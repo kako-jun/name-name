@@ -94,6 +94,7 @@ import {
   FieldConversation,
   createFieldBattleHost,
   createFieldNpcMover,
+  checkNpcScripts,
   loadFieldScript,
   resolveNpcCommands,
   type FieldScriptEvents,
@@ -400,6 +401,18 @@ async function main(): Promise<void> {
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionSheets = await loadEmotionSheets(config)
   const scriptEvents = await loadNpcScript(config)
+  // scene と脚本の照合は起動時に 1 回だけ（話しかけるたびに同じ警告を出さない）
+  {
+    const scriptWarnings = checkNpcScripts(
+      Object.entries(config.scenes).flatMap(([sid, sc]) =>
+        (sc.npcs ?? []).map((n) => ({ where: `NPC ${sid}/${n.id}`, scene: n.scene }))
+      ),
+      scriptEvents
+    ).filter(() => !!config.scriptUrl) // scriptUrl 無しは config 段階で警告済み
+    for (const w of scriptWarnings) console.warn(w)
+    if (scriptWarnings.length > 0)
+      showError([configNotice(config), ...scriptWarnings].filter(Boolean).join('\n'))
+  }
   const emotionTextures = new Map<string, Texture | null>()
   await Promise.all(
     [...new Set(Object.values(emotionSheets ?? {}).map((sheet) => sheet.image))].map(
@@ -575,7 +588,7 @@ async function main(): Promise<void> {
     conversation.start(
       npc.def.name,
       npc.def.line,
-      resolveNpcCommands(npc.def.scene, scriptEvents),
+      resolveNpcCommands(npc.def.scene, scriptEvents, () => {}),
       () => {
         talking = null
       }
@@ -1294,6 +1307,7 @@ async function main(): Promise<void> {
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerup', endPointer)
     canvas.removeEventListener('pointercancel', endPointer)
+    conversation.destroy()
     dialogBox.dispose()
     app.destroy(true, { children: true })
   }

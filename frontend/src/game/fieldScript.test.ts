@@ -3,6 +3,7 @@ import type { EventCommand, EventDocument } from '../types'
 import { EventRunner } from './eventRunner'
 import {
   FieldConversation,
+  checkNpcScripts,
   collectFieldEvents,
   createFieldBattleHost,
   createFieldNpcMover,
@@ -116,6 +117,14 @@ describe('supportedCommands / resolveNpcCommands', () => {
       [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }, dlg('A', 'ok'), { type: 'Battle', id: 'b1' }],
     ],
     ['onlyMove', [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }]],
+    ['onlyWait', [{ type: 'Wait', ms: 100 }]],
+    [
+      'moveWait',
+      [
+        { type: 'NpcMove', npc: 'x', x: 1, y: 2 },
+        { type: 'Wait', ms: 100 },
+      ],
+    ],
   ])
   it('台詞・ナレーション・待機はそのまま通す', () => {
     const warn = vi.fn()
@@ -145,6 +154,42 @@ describe('supportedCommands / resolveNpcCommands', () => {
     const warn = vi.fn()
     expect(resolveNpcCommands('onlyMove', events, warn)).toBeUndefined()
     expect(supportedCommands('e', [], warn)).toBeUndefined()
+  })
+  it('台詞（Dialog / Narration）が 1 つも無いイベント（Wait だけ・NpcMove+Wait）は固定 line へ', () => {
+    const warn = vi.fn()
+    expect(resolveNpcCommands('onlyWait', events, warn)).toBeUndefined()
+    expect(resolveNpcCommands('moveWait', events, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('実行できる台詞がありません'))
+  })
+  it('Narration だけでも会話になる', () => {
+    const only: EventCommand[] = [{ type: 'Narration', text: ['n'] }]
+    expect(supportedCommands('e', only, () => {})).toEqual(only)
+  })
+})
+
+describe('checkNpcScripts（起動時に 1 回だけ照合）', () => {
+  const events = new Map<string, EventCommand[]>([['hi', [dlg('A', 'x')]]])
+  it('問題なし・scene なしは警告なし', () => {
+    expect(checkNpcScripts([{ where: 'a' }, { where: 'b', scene: 'hi' }], events)).toEqual([])
+  })
+  it('見つからない scene を警告する（同じ scene は 1 回だけ）', () => {
+    const w = checkNpcScripts(
+      [
+        { where: 'a', scene: 'nope' },
+        { where: 'b', scene: 'nope' },
+      ],
+      events
+    )
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('nope')
+  })
+  it('脚本が空・読めていないときは scene 付き NPC ごとに警告する', () => {
+    expect(
+      checkNpcScripts(
+        [{ where: 'a', scene: 'x' }, { where: 'b', scene: 'y' }, { where: 'c' }],
+        undefined
+      )
+    ).toHaveLength(2)
   })
 })
 
@@ -217,6 +262,25 @@ describe('FieldConversation', () => {
     expect(conv.active).toBe(false)
     expect(dialog.isShowing).toBe(false)
     expect(end).toHaveBeenCalledTimes(1)
+  })
+  it('会話中の start は無視する（二重起動で台詞・onEnd が壊れない）', () => {
+    const { dialog, conv } = make()
+    const end1 = vi.fn()
+    const end2 = vi.fn()
+    conv.start('A', '固定1', undefined, end1)
+    conv.start('B', '固定2', [dlg('B', 'x')], end2)
+    expect(dialog.shown).toEqual([['A', '固定1']])
+    conv.advance()
+    conv.advance()
+    expect(end1).toHaveBeenCalledTimes(1)
+    expect(end2).not.toHaveBeenCalled()
+  })
+  it('destroy で実行中の脚本を捨てる', () => {
+    const { conv } = make()
+    conv.start('A', '固定', [dlg('A', 'x')], () => {})
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
   })
   it('会話していないときの advance は何もしない', () => {
     const { conv } = make()

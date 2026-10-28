@@ -1605,8 +1605,28 @@ describe('scriptUrl と npcs.scene (#841 段階2)', () => {
       expect(c.warnings?.[0]).toContain('scriptUrl')
     }
   })
+  it('scriptUrl が無いのに scene を書いた NPC は警告（NPC と scene は残る）', () => {
+    const c = ok(withNpcs([npcRaw({ scene: 'x' })]))
+    expect(c.scenes.a.npcs![0].scene).toBe('x')
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scriptUrl がありません')
+  })
+  it('scriptUrl があれば同じ NPC に警告なし', () => {
+    const c = ok(
+      mutated((c) => {
+        c.scriptUrl = 'npc.md'
+        c.scenes.a.npcs = [npcRaw({ scene: 'x' })]
+      })
+    )
+    expect(c.warnings).toBeUndefined()
+  })
   it('NPC の scene を読む（前後の空白は除く）', () => {
-    const c = ok(withNpcs([npcRaw({ scene: ' 老婆の話 ' })]))
+    const c = ok(
+      mutated((c) => {
+        c.scriptUrl = 'npc.md'
+        c.scenes.a.npcs = [npcRaw({ scene: ' 老婆の話 ' })]
+      })
+    )
     expect(c.scenes.a.npcs![0].scene).toBe('老婆の話')
     expect(c.warnings).toBeUndefined()
   })

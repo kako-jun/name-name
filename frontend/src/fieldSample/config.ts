@@ -739,6 +739,14 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `scriptUrl は URL 文字列である必要があります: ${JSON.stringify(raw.scriptUrl)}（無視します）`
       )
   }
+  // scriptUrl が無いのに scene を書いた NPC は、固定の line で話す（読み込み時に気づけるよう警告）
+  if (!scriptUrl)
+    for (const [sid, sc] of Object.entries(scenes))
+      for (const n of sc.npcs ?? [])
+        if (n.scene !== undefined)
+          warnings.push(
+            `scenes.${sid}.npcs の ${n.id} は scene "${n.scene}" を指していますが scriptUrl がありません（固定の line で話します）`
+          )
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
