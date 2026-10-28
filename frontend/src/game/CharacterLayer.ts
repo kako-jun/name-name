@@ -1152,7 +1152,7 @@ export class CharacterLayer extends Container {
   /**
    * 新ポーズの板（`in`）の板フリップ (#707) を開始する。`startMs` を省略すると今。
    * `in` 側の state は alpha 0 で作られているので 1 に戻す（フェードが張られていればそちらに任せる）。
-   * `startMs` には、直前の `startFlipOut` が返した「B の in の開始時刻」を渡せる（下記参照）。
+   * `startMs` には、直前の `startFlipOut` が返した「B の in の開始時刻」を渡せる（`startFlipOut` 参照）。
    */
   private startFlipIn(state: CharacterState, startMs: number = this.elapsedMs): void {
     if (state.sprite.destroyed) return
