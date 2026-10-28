@@ -1156,20 +1156,35 @@ export class CharacterLayer extends Container {
    * `out` 側は alpha に触らない（フェードイン途中なら sprite の alpha をそのまま mesh へ写す）。
    *
    * `in` の途中（可視）で `out` を始める場合（A→B→C の連続ポーズ変更）は、B の現在角度から回し続ける。
-   * B がまだ不可視（in の前半）なら一度も見えていないので、回さず次の tick で破棄する。
+   * B がまだ不可視（in の前半）なら一度も見えていないので、回さず次の tick で破棄し、
+   * B の in の開始時刻を戻り値で返す（呼び出し側が次の板 C の in に `startMsOverride` で渡し、
+   * A が消える瞬間に C を現して空白を作らない）。
+   * その場合は B の in の開始時刻を戻り値で返す（`startMsOverride` で次の板の in に渡す）。
    *
    * 呼び出し側は sprite が layer に attach 済みであることを保証する（未 attach の旧 state は
    * 一度も画面に出ていないので回さない）。
    */
-  private startFlip(state: CharacterState, role: BoardFlipRole): void {
-    if (state.sprite.destroyed) return
+  private startFlip(
+    state: CharacterState,
+    role: BoardFlipRole,
+    startMsOverride?: number
+  ): number | undefined {
+    if (state.sprite.destroyed) return undefined
     let fromAngleRad = 0
-    let startMs = this.elapsedMs
+    let startMs = startMsOverride ?? this.elapsedMs
+    let inheritedStartMs: number | undefined
     const prev = state.flipAnimation
     if (prev && prev.role === 'in' && role === 'out') {
       const f = computeBoardFlipFrame('in', this.elapsedMs - prev.startMs, prev.durationMs)
-      if (f.visible) fromAngleRad = f.angleRad
-      else startMs = this.elapsedMs - prev.durationMs // 一度も見えていない板は即終了扱い
+      if (f.visible) {
+        fromAngleRad = f.angleRad
+      } else {
+        // 一度も見えていない板は即終了扱い。戻り値で B の in の開始時刻を返し、呼び出し側が次の板
+        // （C）の in にその時刻を引き継ぐ。A（B と同時に始まった out）が消える瞬間に C が現れ、
+        // A→C が継ぎ目なしになる（総時間も延びない）。
+        startMs = this.elapsedMs - prev.durationMs
+        inheritedStartMs = prev.startMs
+      }
     }
     this.clearFlip(state)
     const mesh = new PerspectiveMesh({ texture: state.sprite.texture })
@@ -1188,6 +1203,7 @@ export class CharacterLayer extends Container {
     this.applySpriteFilters(state)
     this.updateFlipFrame(state, state.flipAnimation)
     this.ensureTicker()
+    return inheritedStartMs
   }
 
   /** 板フリップの mesh を破棄し、sprite を可視に戻す。geometry は mesh.destroy() では破棄されない。 */
@@ -1789,14 +1805,15 @@ export class CharacterLayer extends Container {
           }
           if (this.cameraMode === 'Theater') {
             // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
+            let inheritedStartMs: number | undefined
             if (existing.sprite.parent === this) {
-              this.startFlip(existing, 'out')
+              inheritedStartMs = this.startFlip(existing, 'out')
             } else {
               // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
               // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
               this.startFade(existing, existing.sprite.alpha, 0, true)
             }
-            this.startFlip(nextState, 'in')
+            this.startFlip(nextState, 'in', inheritedStartMs)
           } else {
             this.startFade(existing, existing.sprite.alpha, 0, true)
             this.startFade(nextState, 0, 1, false)
@@ -3548,28 +3565,6 @@ export class CharacterLayer extends Container {
           }
         }
 
-        // シアターモードの板フリップ (#707) を毎フレーム純粋計算で駆動する。
-        const flip = state.flipAnimation
-        if (flip) {
-          if (this.elapsedMs - flip.startMs >= flip.durationMs) {
-            if (flip.role === 'out') {
-              // 旧ポーズの板は回り切って消える。state ごと破棄（mesh も clearFlip で破棄される）。
-              // 通常速度の [退場]/衝突退場が先に張った退場フェードの onComplete は、フェードが
-              // 完了する前に state が消えても必ず呼ぶ（collidersGone 等の待ち合わせを詰まらせない）。
-              const pendingFade = state.fadeAnimation
-              state.fadeAnimation = null
-              this.destroyCharacterState(state)
-              this.characters.delete(name)
-              pendingFade?.onComplete?.()
-              continue
-            }
-            this.clearFlip(state)
-          } else {
-            anyActive = true
-            this.updateFlipFrame(state, flip)
-          }
-        }
-
         // 話者交代のポーズ変化 (#286) を毎フレーム純粋計算で駆動する。
         // baseY を基準に sin 山形オフセットを足し込む（中間状態を sprite.y に焼き込まない）。
         // 進行中の transform animation がある間は y をそちらが支配するため nudge は当てない
@@ -3624,6 +3619,30 @@ export class CharacterLayer extends Container {
         if (px) {
           anyActive = true
           this.updateImagePixelateFrame(name, state, px)
+        }
+
+        // （板フリップは sprite.x/y を動かす他の駆動（animation/stageMotion/poseNudge 等）より後に
+        // 評価する。先だと mesh の四隅が 1 フレーム遅れて追従する。）
+        // シアターモードの板フリップ (#707) を毎フレーム純粋計算で駆動する。
+        const flip = state.flipAnimation
+        if (flip) {
+          if (this.elapsedMs - flip.startMs >= flip.durationMs) {
+            if (flip.role === 'out') {
+              // 旧ポーズの板は回り切って消える。state ごと破棄（mesh も clearFlip で破棄される）。
+              // 通常速度の [退場]/衝突退場が先に張った退場フェードの onComplete は、フェードが
+              // 完了する前に state が消えても必ず呼ぶ（collidersGone 等の待ち合わせを詰まらせない）。
+              const pendingFade = state.fadeAnimation
+              state.fadeAnimation = null
+              this.destroyCharacterState(state)
+              this.characters.delete(name)
+              pendingFade?.onComplete?.()
+              continue
+            }
+            this.clearFlip(state)
+          } else {
+            anyActive = true
+            this.updateFlipFrame(state, flip)
+          }
         }
 
         // 名前ラベルを sprite に追従させる（x のみ。y は loadTexture で画像高さに合わせて固定済み）
@@ -3865,6 +3884,9 @@ export class CharacterLayer extends Container {
    * 以降のトランジションに影響を残さない）。未指定（呼び出し省略）は従来どおり `characterFadeMs`。
    */
   clearForSceneTransition(durationMsOverride?: number): void {
+    // 板フリップ (#707) 中も意図どおり: 回り去る旧板（out）と現れる新板（in）の両方が通常の退場
+    // フェードに入る（クロスフェード中に旧・新の両 sprite が一緒にフェードアウトするのと同じ）。
+    // mesh の alpha は sprite の alpha に追従し、回転完了・フェード完了の早い方で state ごと破棄される。
     const names = Array.from(this.characters.keys())
     for (const name of names) {
       const state = this.characters.get(name)

@@ -8,8 +8,8 @@
  * PerspectiveMesh は実物を使う（WebGL なしでも生成・setCorners・destroy は動く）。
  * texture は実 Texture.WHITE を返す Assets.load モックで供給する（plain object だと mesh が作れない）。
  */
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { Assets, BufferImageSource, PerspectiveMesh, Texture } from 'pixi.js'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { Assets, BufferImageSource, PerspectiveMesh, Texture, Ticker } from 'pixi.js'
 import { CharacterLayer } from './CharacterLayer'
 import { computeBoardFlipCorners, computeBoardFlipFrame } from './boardFlip'
 
@@ -39,15 +39,22 @@ interface StateLike {
 }
 interface Internals {
   characters: Map<string, StateLike>
-  animTicker: { update: () => void } | null
+  animTicker: { update: (t?: number) => void; lastTime: number; stop: () => void } | null
   elapsedMs: number
 }
 const internals = (l: CharacterLayer): Internals => l as unknown as Internals
 
+/**
+ * 仮想時間を ms だけ進めて ticker を 1 回回す。
+ * Ticker.start() を無効化しているので実時間の rAF は走らない（beforeEach）。さらに
+ * `update(lastTime + 1e-6)` で ticker 自身の deltaMS を実質 0 に固定し（lastTime と同値だと listener が呼ばれない）、elapsedMs への実時間混入をなくす
+ * （混入すると角度の許容を超えて不安定になる）。時間の進みは `elapsedMs += ms` だけ。
+ */
 function advance(layer: CharacterLayer, ms: number): void {
   const i = internals(layer)
   i.elapsedMs += ms
-  i.animTicker?.update()
+  const t = i.animTicker
+  if (t) t.update(t.lastTime + 1e-6)
 }
 
 function makeTexture(w: number, h: number): Texture {
@@ -94,6 +101,10 @@ function meshCount(layer: CharacterLayer): number {
 }
 
 describe('CharacterLayer シアターモード板フリップ (#707)', () => {
+  beforeEach(() => {
+    // 実時間の rAF 駆動を止める（advance で仮想時間だけを進める）。
+    vi.spyOn(Ticker.prototype, 'start').mockImplementation(() => {})
+  })
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -251,7 +262,8 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
 
   it('S2: 回転中の全フレームで mesh の頂点が有限値（half ちょうど・MAX 角を含む）', async () => {
     const { layer, oldState, newState } = await setupPoseChange('Theater')
-    const steps = [0, 100, 249, 1, 250, 1, 250, 1, 1, 400]
+    // 累計 250 / 500（half ちょうど）/ 501 / 750 / 1000（完了）を必ず踏む。
+    const steps = [250, 250, 1, 249, 250]
     for (const ms of steps) {
       advance(layer, ms)
       for (const st of [oldState, newState]) {
@@ -339,7 +351,7 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
     const c = internals(layer).characters.get('hero')!
     expect(c).not.toBe(b)
     expect(b.flipAnimation?.role).toBe('out')
-    expect(b.flipAnimation?.fromAngleRad).toBeCloseTo(angleB, 1)
+    expect(b.flipAnimation?.fromAngleRad).toBeCloseTo(angleB, 6)
     // out 開始直後の B の四隅は B の現在角（angleB）の板と一致する（0° に跳ばない）。
     const sp = b.sprite
     const exp = computeBoardFlipCorners(
@@ -350,8 +362,8 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
       angleB
     )
     const cc = b.flipAnimation!.mesh.geometry.corners
-    expect(cc[0]).toBeCloseTo(exp.x0, 0)
-    expect(cc[2]).toBeCloseTo(exp.x1, 0)
+    expect(cc[0]).toBeCloseTo(exp.x0, 3)
+    expect(cc[2]).toBeCloseTo(exp.x1, 3)
     for (let i = 0; i < 8; i++) {
       advance(layer, 400)
       await flushPromises()
@@ -427,5 +439,77 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
     const c = oldState.flipAnimation!.mesh.geometry.corners
     expect(c[2] - c[0]).toBeCloseTo(sp.texture.width * 1.5, 0)
     expect(c[7] - c[1]).toBeCloseTo(sp.texture.height * 2.5, 0)
+  })
+
+  it('S2(空白解消): B が不可視の間に C へ変えると、A が消える瞬間に C が現れる（空白フレームなし）', async () => {
+    const { layer, oldState: a, newState: b } = await setupPoseChange('Theater')
+    advance(layer, 200) // B は in の前半（不可視）
+    layer.show('hero', 'third', '中央', '/assets', {})
+    await flushPromises()
+    const c = internals(layer).characters.get('hero')!
+    expect(c).not.toBe(b)
+    // C の in は B の in の開始時刻（= A の out の開始時刻）を引き継ぐ。
+    expect(c.flipAnimation!.startMs).toBe(a.flipAnimation!.startMs)
+    const visibleAt = (st: StateLike): boolean => st.flipAnimation?.mesh.visible === true
+    let sawBlank = false
+    let handoffMs = -1
+    for (let t = 200; t <= 1000; t += 10) {
+      advance(layer, t === 200 ? 0 : 10)
+      const aVisible = a.sprite.destroyed ? false : visibleAt(a)
+      const cVisible = visibleAt(c)
+      if (!aVisible && !cVisible && t < 1000) sawBlank = true
+      if (!aVisible && handoffMs < 0) handoffMs = t
+      // A が消えたフレームでは C がすでに見えている。
+      if (!aVisible && t >= 500) expect(cVisible || t === 1000).toBe(true)
+    }
+    expect(sawBlank).toBe(false)
+    expect(handoffMs).toBeGreaterThanOrEqual(500)
+    expect(b.sprite.destroyed).toBe(true)
+    advance(layer, 100)
+    expect(meshCount(layer)).toBe(0)
+    expect(internals(layer).characters.get('hero')!.sprite.visible).toBe(true)
+  })
+
+  it('nit-1: 板の四隅は同フレームの poseNudge 適用後の sprite.y に追従する（1 フレーム遅れない）', async () => {
+    const { layer, oldState } = await setupPoseChange('Theater')
+    const sp = oldState.sprite
+    ;(oldState as unknown as { poseNudge: unknown }).poseNudge = {
+      startMs: internals(layer).elapsedMs,
+      durationMs: 1000,
+      baseY: sp.y,
+      liftPx: 50,
+    }
+    advance(layer, 250)
+    const flip = oldState.flipAnimation!
+    const frame = computeBoardFlipFrame(
+      'out',
+      internals(layer).elapsedMs - (flip as unknown as { startMs: number }).startMs,
+      flip.durationMs,
+      flip.fromAngleRad
+    )
+    const exp = computeBoardFlipCorners(
+      sp.x,
+      sp.y, // nudge で持ち上がった後の y
+      sp.texture.width * sp.scale.x,
+      sp.texture.height * sp.scale.y,
+      frame.angleRad
+    )
+    expect(sp.y).toBeLessThan(450) // nudge が実際に効いている
+    const c = flip.mesh.geometry.corners
+    expect(c[1]).toBeCloseTo(exp.y0, 3)
+    expect(c[7]).toBeCloseTo(exp.y3, 3)
+  })
+
+  it('question: 回転中の clearForSceneTransition は旧・新の板が一緒にフェードアウトして mesh を残さない', async () => {
+    const { layer, newState } = await setupPoseChange('Theater')
+    advance(layer, 600)
+    layer.clearForSceneTransition()
+    advance(layer, 200)
+    const mesh = newState.flipAnimation!.mesh
+    expect(mesh.alpha).toBeCloseTo(newState.sprite.alpha, 6)
+    expect(mesh.alpha).toBeLessThan(1)
+    for (let i = 0; i < 6; i++) advance(layer, 250)
+    expect(internals(layer).characters.size).toBe(0)
+    expect(meshCount(layer)).toBe(0)
   })
 })
