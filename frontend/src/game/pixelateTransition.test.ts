@@ -195,5 +195,7 @@ describe('samplePixelatePulse (#953)', () => {
     expect(samplePixelatePulse(10, 0, 16)).toEqual({ size: 1, done: true })
     expect(samplePixelatePulse(10, -1, 16).done).toBe(true)
     expect(samplePixelatePulse(10, NaN, 16).done).toBe(true)
+    // maxSize が NaN・1 未満なら等倍のまま
+    for (const m of [NaN, 0, -3, 0.5]) expect(samplePixelatePulse(130, 260, m).size).toBe(1)
   })
 })

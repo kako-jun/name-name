@@ -147,7 +147,7 @@ import {
 } from './battleMotion'
 import { samplePixelatePulse } from './pixelateTransition'
 import { PixelateFilter } from 'pixi-filters'
-import type { BattleHit } from './battleEngine'
+import type { BattleActionEvent, BattleHit } from './battleEngine'
 import type { BattleOutcome, BattleResult } from './loot'
 import {
   SIDE_GAP,
@@ -630,6 +630,12 @@ export class BattleScreen extends Container {
   /** 敵グリッド (#839 段4): 戦闘開始時に `placeEnemies` で 1 回決めた配置と、敵ごとの占有（enemyViews と同じ index。置けなかった敵は null）。グリッドなしは null */
   private enemyFootprints: (EnemyFootprint | null)[] | null = null
   private partyViews: EntityView[] = []
+  /** 行動の時間割の使い回し（timelineOf） */
+  private timelineCache: {
+    seq: number
+    timing: MotionTiming
+    tl: ReturnType<typeof eventTimeline>
+  } | null = null
   /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
   /** HP・MP は「見出し | 現在値 | /最大値」の 3 つの Text。`*Texts` が現在値（右寄せ）、`*Labels` が見出し（左寄せ）、`*Maxes` が「/最大値」（「/」の x で左寄せ）。見出しと「/」の x が全員そろう */
@@ -3034,7 +3040,7 @@ export class BattleScreen extends Container {
       out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
-    const tl = eventTimeline(ev, this.motionTiming)
+    const tl = this.timelineOf(ev)
     let latest: { sinceHit: number; downs: boolean } | null = null
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
@@ -3092,53 +3098,71 @@ export class BattleScreen extends Container {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
           sh.alpha = view.container.alpha
         }
-        if (side === 'party') this.applyHitMosaic(view, this.hitMosaicSince(index))
+        if (side === 'party') this.applyHitMosaic(view, this.hitMosaicSize(index))
       })
     }
     apply('enemy', this.enemyViews)
     apply('party', this.partyViews)
   }
 
+  /** 行動の時間割。同じ行動の間は同じ値なので seq で使い回す（毎フレーム・全員ぶん組み直さない） */
+  private timelineOf(ev: BattleActionEvent): ReturnType<typeof eventTimeline> {
+    const c = this.timelineCache
+    if (c && c.seq === ev.seq && c.timing === this.motionTiming) return c.tl
+    const tl = eventTimeline(ev, this.motionTiming)
+    this.timelineCache = { seq: ev.seq, timing: this.motionTiming, tl }
+    return tl
+  }
+
   /**
-   * 被弾モザイク (#953): 敵の行動で味方 index に命中した最後の damage ヒットからの経過 ms。
-   * 無ければ null（miss/heal・味方の行動・未命中・再生なし）。複数ヒットはヒットごとに最新から測り直す（のけぞりと同じ契機）
+   * 被弾モザイク (#953): 敵の行動で味方 index に命中した damage ヒット全部の山の包絡（最大）の size。
+   * 各ヒットの山の長さは `min(hitMosaicMs, 行動の残り)` に縮め、行動が終わる前に必ず等倍(1)まで戻す
+   * （行動の長さは変えない）。包絡にするので連続ヒットでも size が 1 に落ちずに繋がる。
+   * 無ければ null（miss/heal・味方の行動・未命中・再生なし）
    */
-  private hitMosaicSince(index: number): number | null {
-    if (this.motionTiming.hitMosaicMs <= 0) return null
+  private hitMosaicSize(index: number): number | null {
+    const T = this.motionTiming
+    if (T.hitMosaicMs <= 0) return null
     const active = this.playback.active
     if (!active || active.event.actor.side !== 'enemy') return null
     const ev = active.event
-    const tl = eventTimeline(ev, this.motionTiming)
-    let latest: number | null = null
+    const tl = this.timelineOf(ev)
+    let best: number | null = null
     for (const hit of ev.hits) {
-      if (hit.target.side !== 'party' || hit.target.index !== index || hit.kind !== 'damage') continue
-      const since = active.elapsed - hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval)
+      if (hit.target.side !== 'party' || hit.target.index !== index || hit.kind !== 'damage')
+        continue
+      const at = hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval)
+      const since = active.elapsed - at
       if (since < 0) continue
-      if (latest === null || since <= latest) latest = since
+      const len = Math.min(T.hitMosaicMs, tl.duration - at)
+      const pulse = samplePixelatePulse(since, len, T.hitMosaicMaxSize)
+      if (pulse.done) continue
+      if (best === null || pulse.size > best) best = pulse.size
     }
-    return latest
+    return best
   }
 
-  /** since が null か山が終わっていればフィルタを外し、そうでなければ付けて size を更新する（二重には付けない） */
-  private applyHitMosaic(view: EntityView, since: number | null): void {
-    const T = this.motionTiming
-    const pulse = since === null ? null : samplePixelatePulse(since, T.hitMosaicMs, T.hitMosaicMaxSize)
-    if (!pulse || pulse.done) {
+  /** size が 2 以上の間だけ自分のフィルタを足し、size を更新する。1 以下・null なら外す（他のフィルタには触れない） */
+  private applyHitMosaic(view: EntityView, size: number | null): void {
+    if (size === null || size < 2) {
       this.clearHitMosaic(view)
       return
     }
     if (!view.hitMosaic) {
-      view.hitMosaic = new PixelateFilter(1)
-      view.container.filters = [view.hitMosaic]
+      const f = new PixelateFilter(1)
+      f.resolution = 'inherit'
+      view.hitMosaic = f
+      view.container.filters = [...(view.container.filters ?? []), f]
     }
-    view.hitMosaic.size = pulse.size
+    view.hitMosaic.size = size
   }
 
   private clearHitMosaic(view: EntityView): void {
     const f = view.hitMosaic
     if (!f) return
     view.hitMosaic = null
-    view.container.filters = null
+    const rest = (view.container.filters ?? []).filter((x) => x !== f)
+    view.container.filters = rest.length > 0 ? rest : null
     f.destroy()
   }
 
