@@ -1425,6 +1425,15 @@ depth 指定の実例（#694）:
 - **回転中の板は `sprite.rotation`（`[アニメ]` の傾き）と `sprite.mask` を反映しない**（mesh が sprite の代わりに描くため）。回転は短時間で、ポーズ変更と `[アニメ]` の傾きを同時に使う想定はプロトタイプのスコープ外
 - 待機判定（`hasActivePortraitTransition` / `hasActiveAnimation`）は `flipAnimation` も進行中として扱う
 
+### 立ち絵の移動中の板の揺らぎ（実装済み・#701）
+
+シアターモードで立ち絵が上手/下手から歩いて入る・去る（#684）間だけ、薄い板が足元を支点にゆらゆら傾く。静止中は揺れない。新しい構文・frontmatter は無い（振れ幅・周期は定数）。
+
+- 実装は `sprite.skew.x` の傾き（`PerspectiveMesh` ではない）。紙人形輪郭（#699、sprite のフィルタ）・ズーム/depth 射影（#694/#702、scale と y）・`[アニメ]` の rotation と同じプロパティを触らないので、共存のための特別な処理が要らない。板フリップ（#707）は mesh が sprite の代わりに描くため、フリップ中は揺れが見えない
+- 傾きは純粋関数 `frontend/src/game/boardSway.ts` の `computeBoardSway(elapsedMs, durationMs)`。釣り鐘型の包絡 sin(πt) に周期 380ms の振動を掛けるので、歩行の開始・終了で連続に 0 へ収束し、最終ポーズに傾きが残らない。振幅上限 0.06rad（約 3.4°）。`Math.random` 不使用で入力は経過時間のみ。時計は歩行 tween と同じ `CharacterLayer` の `elapsedMs`（TimeController とは別）。揺れの値は `NovelGameState` に持たない（ADR 0002）
+- 対象は `stageMotion`（上手/下手の入退場）の進行中のみ。`[アニメ]` による移動や将来の立ち位置変更（#694 の位置 tween）は、同じ `stageMotion` 経路に載らない限り対象外
+- 無効になる場面（`isBoardSwayEnabled`）: ノベルモード（`cameraMode !== 'Theater'`）、動画書き出し中（`NovelRenderer.setExporting` → `CharacterLayer.setExporting`。実時間駆動のため揺れずに歩行だけ進む）、OS の `prefers-reduced-motion: reduce`。スキップ・セーブ復元・シークは `instant` で `stageMotion` 自体が張られないので揺れない。歩行が途中で取り消された場合（同キャラの再 `show`、方向未指定の `[退場]`）は `resetSway` で傾きを 0 に戻す
+
 ### 幕（実装済み・#697）
 
 演劇/漫才の幕の昇降演出。指定画像でスライドダウン演出しながら幕を降ろし、幕より手前にキャラを立てる配置（カーテンコール等）にも対応する。
