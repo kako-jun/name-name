@@ -1115,6 +1115,8 @@ export interface EventDocument {
   battle_transition?: string | null
   /** RPG 戦闘モーションのプリセット (#956)。`"default"`（現行）/ `"snappy"`（キビキビ）。生文字列で透過し、不正値は frontend が警告して default に倒す。`battle_presentation: ff` のときだけ効く。frontmatter `battle_motion:` から流す。GUI 専用。 */
   battle_motion?: string | null
+  /** RPG 戦闘の敵名ウィンドウ (#954)。`"window"` のとき、FF 風戦闘（`battle_layout: side` + `battle_presentation: ff`）でコマンド窓の右隣に敵名の窓を出す（同名は「名前 ×N」）。生文字列で透過し、不正値は frontend が警告して無効にする。frontmatter `battle_enemy_list:` から流す。GUI 専用。 */
+  battle_enemy_list?: string | null
   chapters: EventChapter[]
 }
 

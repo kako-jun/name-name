@@ -106,6 +106,11 @@ export interface SideBattleLayoutInput {
    * null・足りない分は置けなかった敵＝大きさ 0 のスロット（後段が描かない）
    */
   enemyFootprints?: readonly (EnemyFootprint | null | undefined)[]
+  /**
+   * 敵名ウィンドウ (#954)。true なら下段を command | 敵名窓 | status の 3 枚に分ける。
+   * 画面が狭く command / status の最小幅を保てないときは窓を置かず `enemyList: null`（従来の 2 枚構成）。未指定・false は従来どおり
+   */
+  enemyList?: boolean
 }
 
 export interface SideBattleLayout {
@@ -131,6 +136,8 @@ export interface SideBattleLayout {
   statusCompact: boolean
   /** 奥行きが有効か (#747)。有効なら敵・味方を `SpriteSlot.floor` の昇順（奥→手前）で描く */
   depthActive: boolean
+  /** 下パネル中央: 敵名ウィンドウ (#954)。無効・置けない幅のときは null（そのとき command | status の 2 枚構成） */
+  enemyList: Rect | null
 }
 
 export const SIDE_PADDING = 16
@@ -148,6 +155,12 @@ const SIDE_COMMAND_COLUMNS = 2
 const SIDE_COMMAND_MIN_WIDTH = 144
 const SIDE_COMMAND_MAX_WIDTH = 240
 const SIDE_COMMAND_WIDTH_RATIO = 0.4
+/** 敵名ウィンドウ (#954) の幅の目標（画面幅比）・下限・上限。下限を割る画面では窓を置かない */
+const SIDE_ENEMY_LIST_WIDTH_RATIO = 0.2
+export const SIDE_ENEMY_LIST_MIN_WIDTH = 96
+const SIDE_ENEMY_LIST_MAX_WIDTH = 180
+/** 敵名窓が有効なとき、status に残す最小幅（command の最小幅は従来どおり SIDE_COMMAND_MIN_WIDTH） */
+export const SIDE_STATUS_MIN_WIDTH_WITH_ENEMY_LIST = 150
 /** `cross` はコマンドがちょうどこの数のときだけ有効（上・左・右・下に 1 つずつ） */
 const SIDE_COMMAND_CROSS_COUNT = 4
 /** `cross` のセルの段数（上 / 左右 / 下） */
@@ -864,7 +877,21 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     innerW
   )
   const command: Rect = { x: SIDE_PADDING, y: bottomY, w: commandW, h: bottomH }
-  const statusX = SIDE_PADDING + commandW + SIDE_GAP
+  // 敵名ウィンドウ (#954): command と status の間に取る。status に最小幅を残せるぶんだけ（下限未満なら置かない）
+  let enemyList: Rect | null = null
+  let statusX = SIDE_PADDING + commandW + SIDE_GAP
+  if (input.enemyList) {
+    const room = W - SIDE_PADDING - statusX - SIDE_GAP - SIDE_STATUS_MIN_WIDTH_WITH_ENEMY_LIST
+    const listW = Math.min(
+      room,
+      SIDE_ENEMY_LIST_MAX_WIDTH,
+      Math.max(W * SIDE_ENEMY_LIST_WIDTH_RATIO, SIDE_ENEMY_LIST_MIN_WIDTH)
+    )
+    if (listW >= SIDE_ENEMY_LIST_MIN_WIDTH) {
+      enemyList = { x: statusX, y: bottomY, w: listW, h: bottomH }
+      statusX += listW + SIDE_GAP
+    }
+  }
   const status: Rect = {
     x: statusX,
     y: bottomY,
@@ -1060,6 +1087,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     statusRows,
     statusCompact: status.w < SIDE_STATUS_COMPACT_WIDTH,
     depthActive: depth !== null,
+    enemyList,
   }
 }
 

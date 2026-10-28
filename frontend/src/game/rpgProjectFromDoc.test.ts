@@ -2073,3 +2073,23 @@ describe('rpgProjectFromDoc エンカウント群の検証 (#839 段5)', () => {
     }
   })
 })
+
+describe('rpgProjectFromDoc: battle_enemy_list (#954)', () => {
+  it.each([
+    ['window', 'window'],
+    [' Window ', 'window'],
+    [null, 'off'],
+    ['', 'off'],
+    ['list', 'off'],
+  ])('battle_enemy_list %j → battleEnemyList %s（不正値は警告して無効）', (raw, expected) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(rpgProjectFromDoc({ ...makeDoc(), battle_enemy_list: raw })!.battleEnemyList).toBe(
+        expected
+      )
+      expect(warn).toHaveBeenCalledTimes(raw === 'list' ? 1 : 0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

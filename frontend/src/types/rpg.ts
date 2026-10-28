@@ -272,6 +272,8 @@ export interface RPGProject {
   battleTransition?: 'none' | 'ff'
   /** 戦闘モーションの時間・距離のプリセット (#956)。frontmatter `battle_motion:` 由来。未指定・不正値は `'default'`（現行）。`battle_presentation: ff` のときだけ効く */
   battleMotion?: 'default' | 'snappy'
+  /** 敵名ウィンドウ (#954)。frontmatter `battle_enemy_list:` 由来。未指定・不正値は `'off'`。`'window'` は ff かつ side のときだけ効く */
+  battleEnemyList?: 'off' | 'window'
 }
 
 /**
