@@ -263,6 +263,18 @@ export function startEmotion(
   return { ...state, [target]: active }
 }
 
+/**
+ * NPC (`npc:<id>`) の吹き出しだけ消す（シーン遷移用）。NPC はシーンごとに別の人物なので、遷移後に同じ id の別シーンの NPC へ
+ * 乗り移らないようにする。主人公・同行者の吹き出しは持ち越す。消すものが無ければ state をそのまま返す
+ */
+export function clearNpcEmotions(state: EmotionState): EmotionState {
+  const keys = Object.keys(state) as EmotionTarget[]
+  if (!keys.some((k) => k.startsWith(EMOTION_NPC_PREFIX))) return state
+  const next: EmotionState = {}
+  for (const k of keys) if (!k.startsWith(EMOTION_NPC_PREFIX)) next[k] = state[k]
+  return next
+}
+
 /** dt ms 進め、表示時間を過ぎた吹き出しを消す。負・非有限の dt は 0 として扱う */
 export function stepEmotions(
   state: EmotionState,

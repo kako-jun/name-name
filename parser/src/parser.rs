@@ -776,10 +776,11 @@ pub fn parse(input: &str) -> Document {
                         // [感情: 対象, 種類(, 持続=ms)] (#946)。`Event::Emotion` (#943) と同じ構文。不正行（対象か種類が空）は捨てる
                         if let Some(rest) = cmd_line.strip_prefix("[感情:") {
                             if rest.ends_with(']') {
-                                if let Some(char) = pending_dialog_char.take() {
+                                // 台詞の行だけ確定し、話者は保持する（途中の感情のあとに続く台詞も同じ話者のまま）
+                                if let Some(char) = pending_dialog_char.as_ref() {
                                     if !pending_dialog_lines.is_empty() {
                                         commands.push(EventCommand::Dialog {
-                                            character: Some(char),
+                                            character: Some(char.clone()),
                                             text: std::mem::take(&mut pending_dialog_lines),
                                         });
                                     }
@@ -1831,10 +1832,13 @@ fn parse_emotion_directive(content: &str) -> Option<Event> {
         // 全角 `＝` と全角数字（`持続＝１２００`）も受ける (#943 nit)。数字は master.rs の `to_halfwidth` で半角へ寄せる
         if let Some((k, v)) = raw.trim().split_once(['=', '＝']) {
             if k.trim() == "持続" {
-                duration_ms = crate::master::to_halfwidth(v)
-                    .parse::<u32>()
-                    .ok()
-                    .filter(|&n| n > 0);
+                // 数字だけのときだけ採用（`+1200` / `＋１２００` は無効。u32::parse は `+` を通すので先に弾く）
+                let digits = crate::master::to_halfwidth(v);
+                duration_ms = if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                    digits.parse::<u32>().ok().filter(|&n| n > 0)
+                } else {
+                    None
+                };
             }
         }
     }

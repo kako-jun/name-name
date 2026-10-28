@@ -204,4 +204,22 @@ describe('FieldEmotionLayer', () => {
     expect(l.children.filter((c) => c.visible)).toHaveLength(0)
     expect(l.active()).toEqual({})
   })
+
+  it('clearNpcs: シーン遷移で NPC の吹き出しだけ消え、同 id の別シーンの NPC に乗り移らない・戻っても出ない（#946）', () => {
+    const l = setup({ '!': sh() }, new Map([['a.png', sheetTexture(1)]]))
+    // シーン A の npc:kid に出す
+    expect(l.show('npc:kid', '!')).toBe(true)
+    expect(l.show('player', '!')).toBe(true)
+    const h = { ...heads, 'npc:kid': { x: 300, y: 200 } }
+    l.tick(0, h)
+    expect(l.children.filter((c) => c.visible)).toHaveLength(2)
+    // 遷移（シーン B にも同 id の NPC がいて頭が渡される）
+    l.clearNpcs()
+    l.tick(16, h)
+    expect(Object.keys(l.active())).toEqual(['player'])
+    expect(l.children.filter((c) => c.visible)).toHaveLength(1)
+    // A に戻っても出ない
+    l.tick(16, h)
+    expect(l.active()['npc:kid']).toBeUndefined()
+  })
 })

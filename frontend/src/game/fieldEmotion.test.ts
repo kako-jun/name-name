@@ -13,6 +13,7 @@ import {
   emotionFrameRect,
   emotionMotionScale,
   emotionView,
+  clearNpcEmotions,
   hasEmotions,
   isCompanionShown,
   isEmotionTarget,
@@ -336,5 +337,18 @@ describe('NPC 対象と持続の正規化 (#946)', () => {
     expect(
       startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, 0.5).player?.durationMs
     ).toBeUndefined()
+  })
+})
+
+describe('clearNpcEmotions (#946 シーン遷移)', () => {
+  it('npc: のキーだけ消し、主人公・同行者は残す。消すものが無ければ同じ state を返す', () => {
+    let st = startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets)
+    st = startEmotion(st, 'companion', '?', sheets)
+    st = startEmotion(st, npcEmotionTarget('kid'), '!', sheets)
+    st = startEmotion(st, npcEmotionTarget('gate'), '!', sheets)
+    const next = clearNpcEmotions(st)
+    expect(Object.keys(next).sort()).toEqual(['companion', 'player'])
+    expect(clearNpcEmotions(next)).toBe(next)
+    expect(clearNpcEmotions(INITIAL_EMOTION_STATE)).toBe(INITIAL_EMOTION_STATE)
   })
 })

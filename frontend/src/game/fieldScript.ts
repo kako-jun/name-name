@@ -162,7 +162,10 @@ export function createFieldEmotionHost(
         getContext()
       )
       for (const w of warnings) warn(`[field-sample] ${w}`)
-      if (command) show(command.target, command.kind, command.durationMs)
+      if (command && !show(command.target, command.kind, command.durationMs))
+        warn(
+          `[field-sample] [感情: ${target}, ${kind}] を出せませんでした（戦闘中・同行者が出ていない・別シーンの NPC・絵が読めない種類のいずれか）`
+        )
     },
   }
 }

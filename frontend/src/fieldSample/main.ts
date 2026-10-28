@@ -742,6 +742,7 @@ async function main(): Promise<void> {
           return
         }
         sceneId = dst.id
+        emotionLayer?.clearNpcs() // NPC の吹き出しはシーンごと（同 id の別シーンの NPC に乗り移らない）
         applyScene(dst)
         fade.tint = WARP_COLOR[run.warp.effect]
         pos = landing
@@ -1025,6 +1026,7 @@ async function main(): Promise<void> {
               }
               const landing = arrival.pos
               sceneId = link.to
+              emotionLayer?.clearNpcs() // NPC の吹き出しはシーンごと
               applyScene(dst)
               pos = landing
               // 端リンクで橙の上に着いたら、押されて渡る状態でラッチして続ける

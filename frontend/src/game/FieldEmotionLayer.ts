@@ -6,10 +6,12 @@
 import { Container, Rectangle, Sprite, Texture } from 'pixi.js'
 import { hasOwn } from './ownProperty'
 import {
+  EMOTION_NPC_PREFIX,
   INITIAL_EMOTION_STATE,
   emotionAnchor,
   emotionFrameRect,
   emotionView,
+  clearNpcEmotions,
   startEmotion,
   stepEmotions,
   type ActiveEmotion,
@@ -59,6 +61,13 @@ export class FieldEmotionLayer extends Container {
   clear(): void {
     this.state = INITIAL_EMOTION_STATE
     for (const t of Object.keys(this.sprites) as EmotionTarget[]) this.hideSprite(t)
+  }
+
+  /** NPC の吹き出しだけ消す（シーン遷移。主人公・同行者は持ち越す） */
+  clearNpcs(): void {
+    this.state = clearNpcEmotions(this.state)
+    for (const t of Object.keys(this.sprites) as EmotionTarget[])
+      if (t.startsWith(EMOTION_NPC_PREFIX)) this.hideSprite(t)
   }
 
   /** 進行中の吹き出し（検証用の読み取り） */

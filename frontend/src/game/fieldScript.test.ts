@@ -382,6 +382,14 @@ describe('Emotion の対応 (#946)', () => {
     expect(warn).toHaveBeenCalledTimes(2)
   })
 
+  it('createFieldEmotionHost: show が false のとき原因を追える警告を 1 行出す', () => {
+    const warn = vi.fn()
+    createFieldEmotionHost(ctx, () => false, warn).showEmotion('近所の子', 'びっくり')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('近所の子')
+    expect(warn.mock.calls[0][0]).toContain('びっくり')
+  })
+
   it('実パーサ経路: parseMarkdown → EventRunner → emotionHost → show（台詞より先に・待たずに）', async () => {
     const md = [
       '---',
@@ -444,5 +452,29 @@ describe('Emotion の対応 (#946)', () => {
     ])
     expect(warn).toHaveBeenCalledTimes(1) // 幽霊
     expect(conv.active).toBe(false)
+  })
+
+  it('実パーサ: 台詞の途中の [感情:] のあとも同じ話者で続く（#946 レビュー）', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント 子の話]',
+      '**近所の子**:',
+      'あっ！',
+      '[感情: 近所の子, びっくり]',
+      'なに？',
+      '[/イベント]',
+      '',
+    ].join('\n')
+    const cmds = collectFieldEvents(await parseMarkdown(md)).get('子の話')
+    expect(
+      cmds?.filter((c) => c.type === 'Dialog').map((c) => (c as { character?: string }).character)
+    ).toEqual(['近所の子', '近所の子'])
   })
 })
