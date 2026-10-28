@@ -433,6 +433,32 @@ describe('CameraZoomController (#702)', () => {
     expect(h.ctrl.getPose().scale).toBe(2)
   })
 
+  it('S-A: 抑制中に ticker が回った後、tick を挟まず解除→リセットしても、次の通常 set は補間される（即ジャンプしない）', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', ZOOM_A, true)
+    h.ctrl.setSuppressed('ending', true)
+    h.time.tick(32) // 抑制中に ticker が回る
+    h.ctrl.setSuppressed('ending', false)
+    h.ctrl.set('Theater', null, true) // リセット（tick なし。ticker が止まる）
+    h.ctrl.set('Theater', ZOOM_A, false)
+    h.time.tick(16) // 補間の起点
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
+  })
+
+  it('N-A: 無効状態が変わった tick にフォーカスが現れても補間せず即時に最終ポーズ', () => {
+    const h = makeHarness()
+    h.state.split = true
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+    h.time.tick(16)
+    h.state.split = false
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    expect(h.ctrl.getPose().scale).toBe(2)
+  })
+
   it('N-1: 補間中に split が有効になると補間を打ち切って次の tick で全景へ即時切り替え', () => {
     const h = makeHarness()
     h.ctrl.set('Theater', ZOOM_A, true)

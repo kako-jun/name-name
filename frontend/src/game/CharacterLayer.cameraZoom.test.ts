@@ -3,7 +3,7 @@
  * 合成式: p' = z.s * (split.s * p + split.t) + z.t（ズームが外側、split が内側）。
  */
 import { describe, expect, it } from 'vitest'
-import { Sprite, Texture, TextureSource } from 'pixi.js'
+import { Rectangle, Sprite, Texture, TextureSource } from 'pixi.js'
 import { CharacterLayer, computeCharacterLayerSplitTransform } from './CharacterLayer'
 
 const REGION = { x: 400, y: 0, width: 400, height: 450 }
@@ -121,6 +121,19 @@ describe('CharacterLayer.getZoomFocus (#702)', () => {
     sprite.position.set(10, 100)
     withSprite(l, 'A', sprite)
     expect(l.getZoomFocus('A')).toEqual({ x: 10, y: 70 })
+  })
+
+  it('高さ 0 のテクスチャ（EMPTY でも破棄済みでもない）は null', () => {
+    const l = layer()
+    const texture = new Texture({
+      source: new TextureSource({ width: 20, height: 20 }),
+      orig: new Rectangle(0, 0, 20, 0),
+    })
+    const sprite = new Sprite(texture)
+    expect(sprite.texture).not.toBe(Texture.EMPTY)
+    expect(sprite.texture.height).toBeLessThanOrEqual(0)
+    withSprite(l, 'A', sprite)
+    expect(l.getZoomFocus('A')).toBeNull()
   })
 
   it('破棄済みの sprite は null', () => {

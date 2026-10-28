@@ -153,6 +153,7 @@ export class CameraZoomController {
     } else {
       this.startTween()
     }
+    this.wasDisabled = this.isDisabled()
     if (this.zoom || this.tweening) this.ensureTicker()
     else this.stopTicker()
   }
@@ -167,6 +168,7 @@ export class CameraZoomController {
     if (suppressed) this.suppressedBy.add(reason)
     else this.suppressedBy.delete(reason)
     this.tweening = false
+    this.wasDisabled = this.isDisabled()
     this.apply(this.targetPose())
   }
 
@@ -217,15 +219,17 @@ export class CameraZoomController {
   private tick = (): void => {
     // split_layout の動的切替・抑制の切替は補間せず即時（途中の補間も打ち切る）。
     const disabled = this.isDisabled()
-    if (disabled !== this.wasDisabled) {
+    const disabledChanged = disabled !== this.wasDisabled
+    if (disabledChanged) {
       this.wasDisabled = disabled
       this.tweening = false
     }
     const focused = this.hasFocus()
     if (focused !== this.hadFocus) {
-      // 登場・退場: 現在のポーズから補間し直す（飛ばない）。
+      // 登場・退場: 現在のポーズから補間し直す（飛ばない）。無効状態が変わった tick と重なるときは
+      // 補間を始めず即時に反映する。
       this.hadFocus = focused
-      if (this.host.isSkipMode()) this.tweening = false
+      if (disabledChanged || this.host.isSkipMode()) this.tweening = false
       else this.startTween()
     }
     this.checkMissing()
