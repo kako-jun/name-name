@@ -384,6 +384,8 @@ describe('CameraZoomController (#702)', () => {
     })
   })
 
+  // 注: 補間の有無は出力ポーズからは観測できない（同一ポーズ間の補間は見た目が変わらない）ため、
+  // 開始時刻の取得（startTween が now() を読む）を spy する実装詳細に依存したテスト。
   it('N2: 開始ポーズと最終ポーズが同じなら補間（開始時刻の取得）を起こさず、全景のままなら ticker も残さない', () => {
     const h = makeHarness()
     h.ctrl.set('Theater', null, false)
@@ -408,16 +410,40 @@ describe('CameraZoomController (#702)', () => {
     expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
   })
 
-  it('タイトル画面: setSuppressed(true) で補間なしに全景、解除で補間なしに戻る。状態は保つ', () => {
+  it('タイトル画面: setSuppressed(title) で補間なしに全景、解除で補間なしに戻る。状態は保つ', () => {
     const h = makeHarness()
     h.ctrl.set('Theater', ZOOM_A, true)
-    h.ctrl.setSuppressed(true)
+    h.ctrl.setSuppressed('title', true)
     expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
     h.time.tick(1000)
     expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
     expect(h.ctrl.getZoom()).toEqual(ZOOM_A)
-    h.ctrl.setSuppressed(false)
+    h.ctrl.setSuppressed('title', false)
     expect(h.ctrl.getPose().scale).toBe(2)
+  })
+
+  it('終劇とタイトルの抑制は独立: 片方を解除しても他方が立っている間は全景のまま', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', ZOOM_A, true)
+    h.ctrl.setSuppressed('title', true)
+    h.ctrl.setSuppressed('ending', true)
+    h.ctrl.setSuppressed('title', false)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    h.ctrl.setSuppressed('ending', false)
+    expect(h.ctrl.getPose().scale).toBe(2)
+  })
+
+  it('N-1: 補間中に split が有効になると補間を打ち切って次の tick で全景へ即時切り替え', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', ZOOM_A, true)
+    h.ctrl.set('Theater', null, false) // 全景へ戻る補間（scale 2 → 1）
+    h.time.tick(16)
+    h.time.tick(96) // 補間の途中
+    expect(h.ctrl.getPose().scale).toBeGreaterThan(1)
+    expect(h.ctrl.getPose().scale).toBeLessThan(2)
+    h.state.split = true
+    h.time.tick(16)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
   })
 
   it('split_layout が途中から有効になっても警告は出ず、次の tick で補間なしに全景へ切り替わる', () => {

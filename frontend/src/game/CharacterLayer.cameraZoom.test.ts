@@ -3,6 +3,7 @@
  * 合成式: p' = z.s * (split.s * p + split.t) + z.t（ズームが外側、split が内側）。
  */
 import { describe, expect, it } from 'vitest'
+import { Sprite, Texture, TextureSource } from 'pixi.js'
 import { CharacterLayer, computeCharacterLayerSplitTransform } from './CharacterLayer'
 
 const REGION = { x: 400, y: 0, width: 400, height: 450 }
@@ -95,20 +96,38 @@ describe('CharacterLayer zoom × split_layout (#702)', () => {
 })
 
 describe('CharacterLayer.getZoomFocus (#702)', () => {
-  function withState(
-    l: CharacterLayer,
-    name: string,
-    sprite: { x: number; y: number; height: number }
-  ) {
+  function withSprite(l: CharacterLayer, name: string, sprite: Sprite) {
     ;(l as unknown as { characters: Map<string, unknown> }).characters.set(name, { sprite })
   }
 
-  it('未登場・テクスチャ未読み込み（高さ 0）は null、読み込み後は体の中心', () => {
+  it('未登場は null', () => {
+    expect(layer().getZoomFocus('A')).toBeNull()
+  })
+
+  it('未読み込み（本物の new Sprite() は共有の Texture.EMPTY を持つ）は null', () => {
     const l = layer()
+    const sprite = new Sprite()
+    expect(sprite.texture).toBe(Texture.EMPTY)
+    sprite.position.set(10, 100)
+    withSprite(l, 'A', sprite)
     expect(l.getZoomFocus('A')).toBeNull()
-    withState(l, 'A', { x: 10, y: 100, height: 0 })
-    expect(l.getZoomFocus('A')).toBeNull()
-    withState(l, 'A', { x: 10, y: 100, height: 60 })
+  })
+
+  it('読み込み済みの sprite は体の中心', () => {
+    const l = layer()
+    const texture = new Texture({ source: new TextureSource({ width: 20, height: 60 }) })
+    const sprite = new Sprite(texture)
+    sprite.anchor.set(0.5, 1)
+    sprite.position.set(10, 100)
+    withSprite(l, 'A', sprite)
     expect(l.getZoomFocus('A')).toEqual({ x: 10, y: 70 })
+  })
+
+  it('破棄済みの sprite は null', () => {
+    const l = layer()
+    const sprite = new Sprite(new Texture({ source: new TextureSource({ width: 20, height: 60 }) }))
+    withSprite(l, 'A', sprite)
+    sprite.destroy()
+    expect(l.getZoomFocus('A')).toBeNull()
   })
 })

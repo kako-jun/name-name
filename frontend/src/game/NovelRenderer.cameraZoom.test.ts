@@ -168,6 +168,43 @@ describe('stageDirectives [カメラ:] ズーム (#702)', () => {
     expect(p.cameraZoom.getPose().scale).toBe(2)
   })
 
+  it('S-2: skipMode 中に対象の getZoomFocus が null→値に変わると tick 1 回で最終倍率（補間しない）', () => {
+    let focus: { x: number; y: number } | null = null
+    const { r, p } = make()
+    vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation(() => focus)
+    p.skipMode = true
+    internals(r).processDirective(cam('Theater', ZOOM_EVT))
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    focus = { x: 100, y: 100 }
+    p.time.tick(16)
+    expect(p.cameraZoom.getPose().scale).toBe(2)
+  })
+
+  it('S-1: 終劇オーバーレイの表示中はズームが無効（補間なし）、閉じると戻る。タイトルとは独立', () => {
+    const { r, p } = make()
+    internals(r).processDirective(cam('Theater', ZOOM_EVT))
+    p.time.tick(2000)
+    expect(p.cameraZoom.getPose().scale).toBe(2)
+    const priv = internals(r) as unknown as {
+      showEndingOverlay(instant?: boolean): void
+      hideEndingOverlay(): void
+    }
+    priv.showEndingOverlay(true)
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    r.showTitleScreen({
+      title: 't',
+      hasSaveData: false,
+      onNewGame: () => {},
+      onContinue: () => {},
+      onOpenSettings: () => {},
+      onBack: () => {},
+    })
+    r.hideTitleScreen()
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE) // 終劇がまだ立っている
+    priv.hideEndingOverlay()
+    expect(p.cameraZoom.getPose().scale).toBe(2)
+  })
+
   it('57: スキップ中の [カメラ:] は即時スナップ（tick を進める前に最終ポーズ）', () => {
     const { r, p } = make()
     p.skipMode = true

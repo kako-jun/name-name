@@ -110,7 +110,9 @@ export class CameraZoomController {
   private warnedTarget: string | null = null
   private warnedSplit = false
   private disposed = false
-  private suppressed = false
+  /** 一時無効の理由（'title' / 'ending'）。いずれか立っている間は全景。 */
+  private readonly suppressedBy = new Set<string>()
+  private wasDisabled = false
 
   constructor(
     private readonly host: CameraZoomHost,
@@ -156,12 +158,14 @@ export class CameraZoomController {
   }
 
   /**
-   * 一時的にズームを無効にする（タイトル画面表示中など）。状態は保ったまま、切り替えは補間なしで
-   * 即時に反映する。
+   * 理由ごとに一時的にズームを無効にする（タイトル画面・終劇オーバーレイの表示中。ロゴが立ち絵
+   * レイヤーに載るため）。理由はそれぞれ独立で、1つでも立っている間は全景。状態は保ったまま、
+   * 切り替えは補間なしで即時に反映する。
    */
-  setSuppressed(suppressed: boolean): void {
-    if (this.disposed || this.suppressed === suppressed) return
-    this.suppressed = suppressed
+  setSuppressed(reason: 'title' | 'ending', suppressed: boolean): void {
+    if (this.disposed || this.suppressedBy.has(reason) === suppressed) return
+    if (suppressed) this.suppressedBy.add(reason)
+    else this.suppressedBy.delete(reason)
     this.tweening = false
     this.apply(this.targetPose())
   }
@@ -182,8 +186,12 @@ export class CameraZoomController {
     return !!this.zoom && this.host.getFocus(this.zoom.target) !== null
   }
 
+  private isDisabled(): boolean {
+    return this.suppressedBy.size > 0 || this.host.isSplitLayoutActive()
+  }
+
   private targetPose(): ZoomPose {
-    if (this.suppressed || this.host.isSplitLayoutActive()) return IDENTITY_ZOOM_POSE
+    if (this.isDisabled()) return IDENTITY_ZOOM_POSE
     const { width, height } = this.host.getScreenSize()
     const focus = this.zoom ? this.host.getFocus(this.zoom.target) : null
     return computeZoomPose(this.mode, this.zoom, focus, width, height)
@@ -201,12 +209,18 @@ export class CameraZoomController {
     if (this.warnedTarget !== z.target && now - this.missingSince >= ZOOM_MISSING_WARN_MS) {
       this.warnedTarget = z.target
       console.warn(
-        `[カメラ] ズーム対象のキャラ「${z.target}」が表示されていないため全景のままにします`
+        `[カメラ] ズーム対象のキャラ「${z.target}」を表示できないため全景のままにします（未登場、または立ち絵画像の読み込みが未完了・失敗）`
       )
     }
   }
 
   private tick = (): void => {
+    // split_layout の動的切替・抑制の切替は補間せず即時（途中の補間も打ち切る）。
+    const disabled = this.isDisabled()
+    if (disabled !== this.wasDisabled) {
+      this.wasDisabled = disabled
+      this.tweening = false
+    }
     const focused = this.hasFocus()
     if (focused !== this.hadFocus) {
       // 登場・退場: 現在のポーズから補間し直す（飛ばない）。

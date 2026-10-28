@@ -2015,7 +2015,7 @@ export class NovelRenderer {
   }): void {
     this.dialogBox.visible = false
     // タイトル画面中は立ち絵レイヤーにロゴを載せるので、カメラズームを一時的に無効にする (#702)。
-    this.cameraZoom.setSuppressed(true)
+    this.cameraZoom.setSuppressed('title', true)
     this.seekBar.setTitleScreenHidden(true)
     this.eventImageLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
@@ -2080,7 +2080,7 @@ export class NovelRenderer {
     this.characterLayer.remove(NovelRenderer.TITLE_LOGO_IMAGE_ID, { instant: true })
     // showTitleScreen() で隠した層を復元する（上記 JSDoc 参照）。
     this.dialogBox.visible = true
-    this.cameraZoom.setSuppressed(false)
+    this.cameraZoom.setSuppressed('title', false)
     this.seekBar.setTitleScreenHidden(false)
     this.eventImageLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
@@ -2105,6 +2105,8 @@ export class NovelRenderer {
       resolveFontFamily(null, this.gameDefaultFontFamily, NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY)
     )
     this.endingOverlay.show()
+    // 終劇ロゴも立ち絵レイヤーに載るので、タイトル画面と同様にカメラズームを一時無効にする (#702)。
+    this.cameraZoom.setSuppressed('ending', true)
     // 旧 DOM 版と同じく `assetBaseUrl` が無ければロゴ表示自体を試みない（404 ログを増やさない。
     // `showTitleScreen()` は常に呼ぶ設計だが、あちらはフォールバックテキストを持つため無条件で
     // 呼んでも実害が無い——終劇ロゴはフォールバックが無い仕様のため、ここでガードする）。
@@ -2131,6 +2133,7 @@ export class NovelRenderer {
   /** 終劇オーバーレイを非表示にする (#630)。ロゴは `hideTitleScreen()` と同じく即時破棄する。 */
   private hideEndingOverlay(): void {
     this.endingOverlay.hide()
+    this.cameraZoom.setSuppressed('ending', false)
     this.characterLayer.remove(NovelRenderer.ENDING_LOGO_IMAGE_ID, { instant: true })
   }
 
