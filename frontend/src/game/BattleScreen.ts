@@ -136,6 +136,8 @@ import {
   restingSample,
   sampleActor,
   sampleDamagePopup,
+  sampleDigitPopup,
+  popupDigitPitch,
   sampleTarget,
   type HitFire,
   type BattlePose,
@@ -522,7 +524,10 @@ interface PoseVisual {
 
 /** 浮いているダメージ数字 1 つ (#745)。画面が持つ演出の途中状態（GameState には持たない） */
 interface DamagePopup {
-  text: PixiText
+  /** 従来は数字全体の Text。桁ごとの跳ね (#955) のときは桁の Text を束ねた Container */
+  text: PixiText | Container
+  /** 桁ごとの跳ね (#955) のときだけ: 桁の Text（左から順）。undefined なら従来の 1 個 */
+  digits?: PixiText[]
   elapsed: number
   /** 対象。画面の作り直し（redraw）で枠が動いても追従するよう、位置は毎回この枠から読む */
   side: 'party' | 'enemy'
@@ -2892,21 +2897,44 @@ export class BattleScreen extends Container {
     if (!view || !this.popupLayer) return
     const label = popupText(hit)
     const fontSize = fitPopupFontSize(label, popupFontSize(view.unit))
-    const text = new PixiText({
-      text: label,
-      style: new TextStyle({
-        fontFamily: "'Noto Sans JP', sans-serif",
-        fontSize,
-        fontWeight: 'bold',
-        fill: POPUP_COLORS[hit.kind],
-        stroke: { color: 0x000000, width: 4 },
-      }),
-    })
-    text.anchor.set(0.5, 1)
+    const makeText = (str: string) => {
+      const t = new PixiText({
+        text: str,
+        style: new TextStyle({
+          fontFamily: "'Noto Sans JP', sans-serif",
+          fontSize,
+          fontWeight: 'bold',
+          fill: POPUP_COLORS[hit.kind],
+          stroke: { color: 0x000000, width: 4 },
+        }),
+      })
+      t.anchor.set(0.5, 1)
+      return t
+    }
+    // 桁ごとの跳ね (#955): digitStaggerMs > 0 かつ 2 桁以上の数字だけ。MISS・1 桁・default は従来の 1 個
+    const chars = [...label]
+    const perDigit =
+      this.motionTiming.digitStaggerMs > 0 && hit.kind !== 'miss' && chars.length >= 2
+    let text: PixiText | Container
+    let digits: PixiText[] | undefined
+    if (perDigit) {
+      const box = new Container()
+      const pitch = popupDigitPitch(fontSize)
+      digits = chars.map((ch, i) => {
+        const d = makeText(ch)
+        d.position.set((i - (chars.length - 1) / 2) * pitch, 0)
+        box.addChild(d)
+        return d
+      })
+      text = box
+    } else {
+      text = makeText(label)
+    }
     text.position.set(view.anchorX, view.anchorY)
     this.popupLayer.addChild(text)
     this.popups.push({
       text,
+      digits,
       elapsed: Math.max(0, sinceHit),
       side: hit.target.side,
       index: hit.target.index,
@@ -2920,7 +2948,6 @@ export class BattleScreen extends Container {
   }
 
   private updatePopup(p: DamagePopup): boolean {
-    const s = sampleDamagePopup(p.elapsed, this.motionTiming)
     // redraw で枠が動いたら新しい座標へ移す
     const view = this.viewOf(p.side, p.index)
     if (view && view.unit > 0) {
@@ -2933,6 +2960,19 @@ export class BattleScreen extends Container {
     const stackDy = p.stack * popupFontSize(p.unit) * POPUP_STACK_STEP
     // 縮んだ数字は基本サイズの段の中で上下中央に置く（4 文字以下は 0 で従来位置）
     const centerDy = popupCenterOffset(popupFontSize(p.unit), p.fontSize)
+    if (p.digits) {
+      // 桁ごとの跳ね (#955): 束ねた箱は置き位置に固定し、桁の Text が自分の時間軸で縦に動く。最後の桁の done で終わり
+      p.text.position.set(p.x, p.y - stackDy - centerDy)
+      const n = p.digits.length
+      p.digits.forEach((d, i) => {
+        const ds = sampleDigitPopup(p.elapsed, i, n, this.motionTiming)
+        d.position.y = ds.dy * p.unit
+        d.alpha = ds.alpha
+      })
+      // 保持・フェードは全桁共通で、done は最後の桁の時間軸（= どの桁から取っても同じ）
+      return sampleDigitPopup(p.elapsed, n - 1, n, this.motionTiming).done
+    }
+    const s = sampleDamagePopup(p.elapsed, this.motionTiming)
     p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy - centerDy)
     p.text.alpha = s.alpha
     return s.done
@@ -2942,7 +2982,7 @@ export class BattleScreen extends Container {
     this.popups = this.popups.filter((p) => {
       p.elapsed += dt
       const done = this.updatePopup(p)
-      if (done) p.text.destroy({ style: true })
+      if (done) p.text.destroy(p.digits ? { children: true, style: true } : { style: true })
       return !done
     })
   }
