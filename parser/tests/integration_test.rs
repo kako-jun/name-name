@@ -12595,7 +12595,9 @@ fn test_non_speaker_bold_line_after_dialog_does_not_hang() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n\n[未知のディレクティブ]\n\n続きの本文\n";
+    // `**F5**` 始まりの非話者行に加え、単独の `[/選択]` `[/条件]` と未閉じの `[条件: f` も、
+    // 継続行の蓄積ループが進まず無限ループになりうる行（修正前は全てハング）。
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n\n[/選択]\n\n[/条件]\n\n[条件: f\n\n続きの本文\n";
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let doc = parser::parse(input);
@@ -12606,6 +12608,11 @@ fn test_non_speaker_bold_line_after_dialog_does_not_hang() {
         .expect("parse が 5 秒以内に戻ること (#969 無限ループ)");
     let events = &doc.chapters[0].scenes[0].events;
     assert!(matches!(&events[0], Event::Dialog { text, .. } if text == &vec!["こんにちは".to_string()]));
+    // 読み捨ては各 1 行で止まり、後続の「続きの本文」は継続 Dialog として拾われる
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Dialog { text, .. } if text == &vec!["続きの本文".to_string()])),
+        "{events:?}"
+    );
 }
 
 /// #969: 説明用 Markdown（docs/guide/controls.md 全文）が一定時間内に parse できること。

@@ -1220,10 +1220,16 @@ pub fn parse(input: &str) -> Document {
                     depth: last_depth,
                 });
             } else {
-                // 先頭行が `**太字**` 始まり（話者行ではない）・未知の `[...]` 等だと、上の蓄積ループが
-                // 1 行も進まず text_lines が空になる。pos を進めないと同じ行を永久に再評価する
-                // 無限ループになる (#969)。この行は本文にならないので、従来の末尾フォールスルーと
-                // 同じく 1 行読み捨てる。
+                // 先頭行が `**` 始まり（話者行・表情変更ではない太字行）か、`[` 始まりでもどの
+                // ディレクティブ分岐にも消費されなかった行（単独の `[/選択]` `[/条件]`、未閉じの
+                // `[条件: f` など）だと、上の蓄積ループが 1 行も進めず text_lines が空になる。
+                // pos を進めないと同じ行を永久に再評価する無限ループになる (#969)。この行は本文に
+                // ならないので警告つきで 1 行読み捨てる（黙って本文が消えないようにする）。
+                emit_warning(&format!(
+                    "[name-name-parser] warning: {} 行目は話者行でも本文でもないため読み捨てた: {}",
+                    pos + 1,
+                    trimmed
+                ));
                 pos += 1;
             }
             continue;
@@ -3579,8 +3585,19 @@ pub(crate) fn emit_warning(msg: &str) {
 }
 
 #[cfg(all(not(target_arch = "wasm32"), test))]
-pub(crate) fn emit_warning(_msg: &str) {
-    // suppress during tests
+thread_local! {
+    /// テスト中は stderr に出さず、スレッドごとに溜めて `take_test_warnings` で取り出せる。
+    static TEST_WARNINGS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(not(target_arch = "wasm32"), test))]
+pub(crate) fn emit_warning(msg: &str) {
+    TEST_WARNINGS.with(|w| w.borrow_mut().push(msg.to_string()));
+}
+
+#[cfg(all(not(target_arch = "wasm32"), test))]
+pub(crate) fn take_test_warnings() -> Vec<String> {
+    TEST_WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -7714,5 +7731,23 @@ title: "test"
         assert_eq!(doc.character_height_ratios.get("theo"), Some(&0.65));
         assert_eq!(doc.character_height_ratios.get("hue"), Some(&0.68));
         assert_eq!(doc.character_height_ratios.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod discard_warning_tests {
+    use super::*;
+
+    /// #969: 話者行でも本文でもない行は 1 行だけ警告つきで読み捨てられ、後続は継続 Dialog になる。
+    #[test]
+    fn non_speaker_bold_line_emits_warning_with_line_number() {
+        let _ = take_test_warnings();
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n\n[/選択]\n\n続き\n";
+        let doc = parse(input);
+        let w = take_test_warnings();
+        assert!(w.iter().any(|m| m.contains("12 行目") && m.contains("**F5**")), "{w:?}");
+        assert!(w.iter().any(|m| m.contains("14 行目") && m.contains("[/選択]")), "{w:?}");
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(events.iter().any(|e| matches!(e, Event::Dialog { text, .. } if text == &vec!["続き".to_string()])));
     }
 }
