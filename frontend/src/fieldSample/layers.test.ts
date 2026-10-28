@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { Container } from 'pixi.js'
 import {
   companionZ,
+  emotionHostOf,
   emotionLayerHost,
   layerIndex,
   npcZ,
   orderedLayers,
+  syncEmotionLayerHost,
   WORLD_LAYER_ORDER,
   WORLD_Z,
 } from './layers'
@@ -95,5 +98,43 @@ describe('感情吹き出しの層の置き先 (#840)', () => {
     expect(emotionLayerHost(true, false)).toBe('world')
     expect(emotionLayerHost(false, true)).toBe('world')
     expect(emotionLayerHost(false, false)).toBe('world')
+  })
+})
+
+describe('感情吹き出しの層の付け替え配線 (#840)', () => {
+  const setup = () => {
+    const world = new Container()
+    const top = new Container()
+    const layer = new Container()
+    world.addChild(layer)
+    return { world, top, layer }
+  }
+  it('ff の窓の会話中は stage へ、終わったら world へ戻る（state の emotionHost と一致）', () => {
+    const { world, top, layer } = setup()
+    expect(emotionHostOf(layer, top)).toBe('world')
+    expect(syncEmotionLayerHost({ ffWindow: true, talking: true, layer, world, top })).toBe('stage')
+    expect(layer.parent).toBe(top)
+    expect(emotionHostOf(layer, top)).toBe('stage')
+    expect(syncEmotionLayerHost({ ffWindow: true, talking: false, layer, world, top })).toBe(
+      'world'
+    )
+    expect(layer.parent).toBe(world)
+    expect(emotionHostOf(layer, top)).toBe('world')
+  })
+  it('従来の窓は会話中でも world のまま', () => {
+    const { world, top, layer } = setup()
+    expect(syncEmotionLayerHost({ ffWindow: false, talking: true, layer, world, top })).toBe(
+      'world'
+    )
+    expect(layer.parent).toBe(world)
+  })
+  it('stage 側の y は world の揺れに毎回合わせる', () => {
+    const { world, top, layer } = setup()
+    world.y = 7
+    syncEmotionLayerHost({ ffWindow: true, talking: true, layer, world, top })
+    expect(top.y).toBe(7)
+    world.y = -3
+    syncEmotionLayerHost({ ffWindow: true, talking: true, layer, world, top })
+    expect(top.y).toBe(-3)
   })
 })

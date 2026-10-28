@@ -90,3 +90,88 @@ export function fieldDialogOptions(c: { dialogStyle?: DialogStyle; dialogMsPerCh
         : {}),
   }
 }
+
+// ---------------------------------------------------------------------------
+// 改ページ (#840 2本目)
+// ---------------------------------------------------------------------------
+
+/** 台詞の行の高さ（フォントサイズ比）。DialogBox の本文の lineHeight と同じ値を使う（窓を実際に描くサイズと一致させる） */
+export const FF_DIALOG_LINE_HEIGHT_RATIO = 1.6
+
+/** ▼（続きがある印）の点滅周期の半分(ms)。この間隔で ON / OFF を切り替える（ON から始まる） */
+export const FF_CURSOR_BLINK_MS = 500
+
+/** ▼の大きさ（本文フォントサイズ比） */
+export const FF_CURSOR_SIZE_RATIO = 0.6
+
+/**
+ * ▼を出す右下の場所を本文が食わないよう、折り返し幅から引く幅(px)。非有限・非正の fontSize は 0。
+ */
+export function ffCursorReserve(fontSize: number): number {
+  if (!Number.isFinite(fontSize) || fontSize <= 0) return 0
+  return Math.round(fontSize * 0.8)
+}
+
+/**
+ * 窓の高さ・パディング・行の高さから、1 ページに入る行数を求める。使える高さ = 窓の高さ − 上下のパディング。
+ * 極端に小さい窓（1 行も入らない）や非有限値でも最低 1 行（0 行だとページが進まず台詞が出せなくなる）。
+ */
+export function ffLinesPerPage(boxHeight: number, padding: number, lineHeight: number): number {
+  if (!Number.isFinite(lineHeight) || lineHeight <= 0) return 1
+  const h = Number.isFinite(boxHeight) && boxHeight > 0 ? boxHeight : 0
+  const p = Number.isFinite(padding) && padding > 0 ? padding : 0
+  const n = Math.floor((h - p * 2) / lineHeight)
+  return Number.isFinite(n) && n >= 1 ? n : 1
+}
+
+/**
+ * 台詞を `\n` で段落に分け、各段落を別々に折り返して行を並べる。`wrap` は 1 段落（改行なし）を行配列にする関数。
+ * 改行をまたいで行幅を累積する不具合（改行後の行が直前の残り幅で折り返される）を避けるための入口。
+ * 空の段落（連続改行）は空行として残し、末尾の空行は落とす。結果は最低 1 行（空文字なら ['']）。
+ */
+export function wrapParagraphs(text: string, wrap: (paragraph: string) => string[]): string[] {
+  const lines: string[] = []
+  for (const paragraph of text.split('\n')) {
+    if (paragraph === '') lines.push('')
+    else lines.push(...wrap(paragraph))
+  }
+  while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines.length > 0 ? lines : ['']
+}
+
+/** 行を 1 ページ `linesPerPage` 行ずつに分ける（1 行未満・非有限は 1 行）。入力が空でも最低 1 ページ（空ページ） */
+export function paginateLines(lines: readonly string[], linesPerPage: number): string[][] {
+  const per = Number.isFinite(linesPerPage) && linesPerPage >= 1 ? Math.floor(linesPerPage) : 1
+  const pages: string[][] = []
+  for (let i = 0; i < lines.length; i += per) pages.push(lines.slice(i, i + per))
+  return pages.length > 0 ? pages : [[]]
+}
+
+/** ページ内の改行を除いた文字数の合計（再折り返し時に「いま読んでいる位置」を引き継ぐための物差し） */
+export function pageStartOffset(pages: readonly (readonly string[])[], pageIndex: number): number {
+  let n = 0
+  for (let i = 0; i < pageIndex && i < pages.length; i++) {
+    for (const line of pages[i]) n += line.length
+  }
+  return n
+}
+
+/** `pageStartOffset` の逆: 先頭から `offset` 文字目を含む（その位置以下で始まる最後の）ページの番号 */
+export function pageIndexAtOffset(pages: readonly (readonly string[])[], offset: number): number {
+  if (!Number.isFinite(offset) || offset <= 0) return 0
+  let idx = 0
+  for (let i = 0; i < pages.length; i++) {
+    if (pageStartOffset(pages, i) <= offset) idx = i
+    else break
+  }
+  return idx
+}
+
+/**
+ * ▼の点滅。`elapsedMs` = 「次のページ待ち」に入ってからの経過時間。ON から始まり `FF_CURSOR_BLINK_MS` ごとに反転する。
+ * 負・非有限は ON（見えないまま待たせない）。
+ */
+export function ffCursorVisible(elapsedMs: number): boolean {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return true
+  return Math.floor(elapsedMs / FF_CURSOR_BLINK_MS) % 2 === 0
+}

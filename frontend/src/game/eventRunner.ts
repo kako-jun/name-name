@@ -73,11 +73,13 @@ export class EventRunner {
     this.step()
   }
 
-  /** 現在の Dialog を送る（Enter/タップ時に呼ぶ） */
+  /** 現在の Dialog を送る（Enter/タップ時に呼ぶ）。表示中なら全文表示 → 続きのページがあれば次のページ → 済なら次のコマンド */
   advance(): void {
     if (!this.running) return
     if (this.dialogBox.isTyping()) {
       this.dialogBox.skipTypewriter()
+    } else if (this.dialogBox.nextPage()) {
+      // FF 風の窓の改ページ (#840): 続きのページがあれば次のページへ（Dialog は次のコマンドへ進めない）
     } else if (this.dialogBox.isShowing) {
       this.dialogBox.hide()
       this.step()
