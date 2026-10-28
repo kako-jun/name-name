@@ -162,6 +162,11 @@ export interface FieldSampleConfig {
   companion: FieldCompanion | null
   /** 感情吹き出し (#937)。`emotions`（種類名 → 絵の宣言）。見た目だけで歩行・戦闘には関与しない。不正な種類は警告して無視。未指定は undefined＝吹き出しなし */
   emotions?: EmotionSheets
+  /**
+   * 感情吹き出しの外部 JSON (#946)。`emotionsUrl`（`field_emotions` 相当）。解決済みの URL と、中の画像 URL を解決する関数（インライン `emotions` と同じ規則）。
+   * 読み込み（fetch）は main.ts の責務。未指定は undefined
+   */
+  emotionsSource?: { url: string; resolveImage: (u: string) => string | null }
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
   encounter: EncounterStepConfig
   /** エンカウントで使うモンスターのマスター (#809) */
@@ -672,6 +677,23 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     resolveUrl(resolveRpgImagePath(assetBase, u), baseUrl)
   )
   warnings.push(...em.warnings)
+  // 外部 JSON (#946)。URL は他のアセットと同じ規則で解決する。不正な値・解決できない URL は警告して無視（読み込みは成功のまま）
+  let emotionsSource: FieldSampleConfig['emotionsSource']
+  if (raw.emotionsUrl !== undefined) {
+    const eu =
+      typeof raw.emotionsUrl === 'string' && raw.emotionsUrl.trim()
+        ? resolveUrl(resolveRpgImagePath(assetBase, raw.emotionsUrl.trim()), baseUrl)
+        : null
+    if (eu)
+      emotionsSource = {
+        url: eu,
+        resolveImage: (u) => resolveUrl(resolveRpgImagePath(assetBase, u), baseUrl),
+      }
+    else
+      warnings.push(
+        `emotionsUrl は URL 文字列である必要があります: ${JSON.stringify(raw.emotionsUrl)}（無視します）`
+      )
+  }
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -728,6 +750,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       assist,
       companion,
       ...(hasEmotions(em.emotions) ? { emotions: em.emotions } : {}),
+      ...(emotionsSource ? { emotionsSource } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,
