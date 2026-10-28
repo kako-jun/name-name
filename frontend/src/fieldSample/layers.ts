@@ -37,7 +37,20 @@ export const WORLD_Z = {
   marker: 30,
 } as const satisfies Record<WorldLayer, number>
 
-/** 同行者の zIndex: 足元が主人公より下（y が大きい）なら手前 (player+1)、そうでなければ奥 (player-1) */
-export function companionZ(companionFeetY: number, playerFeetY: number): number {
-  return companionFeetY > playerFeetY ? WORLD_Z.player + 1 : WORLD_Z.player - 1
+/**
+ * 足元 y で決まる「主人公・同行者・NPC」共通の zIndex（#841）。主人公は WORLD_Z.player 固定。
+ * それ以外は足元が主人公より下（y が大きい）なら手前 (player+0.5〜+0.9)、同じか上なら奥 (player-0.5〜-0.1)。
+ * 同じ側の中では足元 y が大きいほど手前（シーンの高さに対する比で 0.4 の幅）。
+ * 範囲は 9.5〜10.9 に収まり、前面レイヤー (20) より常に奥・背景/オーバーレイ (1〜2) より常に手前
+ */
+export function feetDepthZ(feetY: number, playerFeetY: number, sceneHeight: number): number {
+  const t = sceneHeight > 0 ? Math.min(1, Math.max(0, feetY / sceneHeight)) : 0
+  const base = feetY > playerFeetY ? WORLD_Z.player + 0.5 : WORLD_Z.player - 0.5
+  return base + t * 0.4
 }
+
+/** 同行者の zIndex（足元 y の式。NPC と共通） */
+export const companionZ = feetDepthZ
+
+/** NPC の zIndex（足元 y の式。同行者と共通） */
+export const npcZ = feetDepthZ

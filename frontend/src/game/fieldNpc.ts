@@ -6,7 +6,14 @@
  * - 話しかけ: 向いた方向（円錐）の近傍 NPC を 1 人選ぶ。クリックされた NPC は近づいてから話しかける。
  * - 会話中は歩行入力・ポインタ移動・エンカウント・ワープ・端リンクを止める（呼び出し側が acceptsWalkInput で判定）。
  */
-import { stepMove, type Facing8, type MoveResult, type Vec, type WalkMask } from './fieldWalk'
+import {
+  isWalkable,
+  stepMove,
+  type Facing8,
+  type MoveResult,
+  type Vec,
+  type WalkMask,
+} from './fieldWalk'
 
 /** NPC の足元を中心に主人公が入れない半径（背景ピクセル） */
 export const NPC_BLOCK_RADIUS = 32
@@ -43,10 +50,28 @@ function nearestNpcDistance(npcs: readonly NpcPoint[], p: Vec): number {
   return d
 }
 
+/** 円周へ押し戻すときの余裕（`< radius` で塞ぐ判定に、浮動小数の誤差で入らないための量） */
+const PUSH_EPS = 1e-6
+
+function nearestNpc(npcs: readonly NpcPoint[], p: Vec): NpcPoint {
+  let best = npcs[0]
+  let bd = dist(best, p)
+  for (const n of npcs) {
+    const d = dist(n, p)
+    if (d < bd) {
+      best = n
+      bd = d
+    }
+  }
+  return best
+}
+
 /**
- * stepMove に NPC の当たりを足したもの。進めなければ x のみ・y のみに滑らせ、それも NPC に入るなら動かない。
+ * stepMove に NPC の当たりを足したもの。NPC の円に入る歩みは、円の外側（円周）へ射影して円に沿って滑らせる
+ * （斜めに押しつけても止まらず、正面でも円周ぴったりまで寄れる）。射影先が歩行マスク外・別の NPC の円内なら
+ * x のみ・y のみに滑らせ、それも駄目ならその歩みだけ止まる。歩みは 1px 以下に刻むのですり抜けない。
  * すでに NPC の円の中にいるとき（開始位置・ワープ着地が重なった場合）は、最寄りの NPC から離れる向きだけ許す。
- * NPC が無ければ stepMove と同一の結果。
+ * NPC が無い・円に当たらないときは stepMove と同一の結果。
  */
 export function stepMoveAroundNpcs(
   mask: WalkMask,
@@ -59,21 +84,47 @@ export function stepMoveAroundNpcs(
 ): MoveResult {
   const full = stepMove(mask, pos, vec, speed, dtMs)
   if (npcs.length === 0) return full
-  const inside = blockedByNpc(npcs, pos, radius)
-  const ok = (p: Vec): boolean =>
-    !blockedByNpc(npcs, p, radius) ||
-    (inside && nearestNpcDistance(npcs, p) >= nearestNpcDistance(npcs, pos))
-  if (ok(full.pos)) return full
-  const tries: Vec[] = [
-    { x: vec.x, y: 0 },
-    { x: 0, y: vec.y },
-  ]
-  for (const v of tries) {
-    if (v.x === 0 && v.y === 0) continue
-    const r = stepMove(mask, pos, v, speed, dtMs)
-    if (r.distance > 0 && ok(r.pos)) return r
+  const accepts = (from: Vec, to: Vec): boolean =>
+    !blockedByNpc(npcs, to, radius) ||
+    (blockedByNpc(npcs, from, radius) &&
+      nearestNpcDistance(npcs, to) >= nearestNpcDistance(npcs, from))
+  if (accepts(pos, full.pos)) return full
+
+  const total = (speed * dtMs) / 1000
+  if (total <= 0 || (vec.x === 0 && vec.y === 0)) return { pos, distance: 0 }
+  const steps = Math.max(1, Math.ceil(total / 1))
+  const dx = (vec.x * total) / steps
+  const dy = (vec.y * total) / steps
+  let cur = pos
+  let moved = 0
+  for (let i = 0; i < steps; i++) {
+    const cands: Vec[] = [{ x: cur.x + dx, y: cur.y + dy }]
+    const t = cands[0]
+    if (!blockedByNpc(npcs, cur, radius) && blockedByNpc(npcs, t, radius)) {
+      // 円周へ押し戻す（円の中心から t へ向かう向きに、半径の外側）
+      const n = nearestNpc(npcs, t)
+      const d = dist(n, t)
+      if (d > 1e-9)
+        cands.push({
+          x: n.x + ((t.x - n.x) / d) * (radius + PUSH_EPS),
+          y: n.y + ((t.y - n.y) / d) * (radius + PUSH_EPS),
+        })
+    }
+    cands.push({ x: cur.x + dx, y: cur.y }, { x: cur.x, y: cur.y + dy })
+    let next: Vec | null = null
+    for (const c of cands) {
+      if (c.x === cur.x && c.y === cur.y) continue
+      if (isWalkable(mask, c.x, c.y) && accepts(cur, c)) {
+        next = c
+        break
+      }
+    }
+    if (!next) break
+    moved += dist(cur, next)
+    cur = next
   }
-  return { pos, distance: 0 }
+  // 円周ぴったりでの浮動小数の揺れ（1e-3px 未満）は動いたことにしない
+  return moved > 1e-3 ? { pos: cur, distance: moved } : { pos, distance: 0 }
 }
 
 const DIAG = Math.SQRT1_2
@@ -141,16 +192,6 @@ export function npcAtPoint(rects: readonly NpcRect[], p: Vec): string | null {
   return best ? best.id : null
 }
 
-/**
- * NPC の zIndex。主人公（WORLD_Z.player = 10）より足元が下なら手前（10.5〜）、上なら奥（〜9.9）。
- * NPC どうしは足元 y が大きいほど手前。範囲は 9.5〜10.9 に収まり、前面レイヤー (20) より常に奥
- */
-export function npcZ(npcFeetY: number, playerFeetY: number, sceneHeight: number): number {
-  const t = sceneHeight > 0 ? Math.min(1, Math.max(0, npcFeetY / sceneHeight)) : 0
-  const base = npcFeetY > playerFeetY ? 10.5 : 9.5
-  return base + t * 0.4
-}
-
 /** 会話・戦闘・遷移・ワープの状態 */
 export interface FieldTalkState {
   battle: boolean
@@ -178,4 +219,113 @@ export function facingToward(from: Vec, to: Vec): 'up' | 'down' | 'left' | 'righ
   const dy = to.y - from.y
   if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 'right' : 'left'
   return dy > 0 ? 'down' : 'up'
+}
+
+/** ワープを始めてよいか。戦闘・会話・遷移・別のワープの最中は不可 */
+export function canStartWarp(s: FieldTalkState): boolean {
+  return !s.battle && !s.talking && !s.transition && !s.warping
+}
+
+/** フォーカス中の要素の種類。text = 文字入力（text 系 input・textarea・select）。other = ボタン・チェック・無し */
+export type FocusKind = 'text' | 'other'
+
+/** 決定キーの結果。ignore = 何もしない（ブラウザの既定動作も触らない）、swallow = 既定動作だけ止める */
+export type TalkKeyDecision =
+  | { action: 'ignore' }
+  | { action: 'swallow' }
+  | { action: 'advance' }
+  | { action: 'start'; npcId: string }
+
+export interface TalkKeyInput {
+  code: string
+  ctrl: boolean
+  alt: boolean
+  meta: boolean
+  repeat: boolean
+  focus: FocusKind
+  state: FieldTalkState
+  npcs: readonly NpcPoint[]
+  pos: Vec
+  facing: Facing8
+}
+
+/**
+ * 決定キー (Space / Enter / Z) の扱いを決める。ignore のときは、呼び出し側はフォーカスも既定動作も触らない
+ * （npcs が無い・向いた先に NPC がいない場合は常に ignore で、ツールバーのボタンを Space で押せる）。
+ * 話しかけが成立する（start）か会話中（advance / swallow）のときだけ、呼び出し側はフォーカス中の要素を外してよい。
+ */
+export function decideTalkKey(i: TalkKeyInput): TalkKeyDecision {
+  if (!TALK_KEY_CODES.includes(i.code) || i.ctrl || i.alt || i.meta) return { action: 'ignore' }
+  if (i.state.battle) return { action: 'ignore' }
+  if (i.focus === 'text') return { action: 'ignore' }
+  if (i.state.talking) return i.repeat ? { action: 'swallow' } : { action: 'advance' }
+  // 押しっぱなしの連打で、閉じた直後に開き直さない
+  if (i.repeat || !canStartTalk(i.state)) return { action: 'ignore' }
+  const npcId = nearestTalkableNpc(i.npcs, i.pos, i.facing)
+  return npcId ? { action: 'start', npcId } : { action: 'ignore' }
+}
+
+/** クリックで近づいている最中の状態 */
+export interface ApproachState {
+  id: string
+  stuckMs: number
+}
+
+/**
+ * 1 フレームの移動の前。近づき先が消えた・方向キーが押された → 取り消し。着いた → arrived（話しかける）。
+ * それ以外は継続。
+ */
+export function approachBeforeMove(
+  approach: ApproachState | null,
+  target: Vec | undefined,
+  pos: Vec,
+  directionKeyHeld: boolean
+): { approach: ApproachState | null; arrived: boolean } {
+  if (!approach) return { approach: null, arrived: false }
+  if (!target || directionKeyHeld) return { approach: null, arrived: false }
+  if (approachArrived(target, pos)) return { approach: null, arrived: true }
+  return { approach, arrived: false }
+}
+
+/**
+ * 1 フレームの移動の後。動けた距離があれば stuck をリセット、動けなければ加算する。
+ * NPC_APPROACH_STUCK_MS 以上動けなければ打ち切り、話しかけが届く距離なら talk = true（届かなければ諦める）。
+ */
+export function approachAfterMove(
+  approach: ApproachState,
+  target: Vec,
+  pos: Vec,
+  moved: number,
+  dtMs: number
+): { approach: ApproachState | null; talk: boolean } {
+  const stuckMs = moved > 0 ? 0 : approach.stuckMs + dtMs
+  if (stuckMs >= NPC_APPROACH_STUCK_MS)
+    return { approach: null, talk: dist(target, pos) <= NPC_TALK_REACH }
+  return { approach: { ...approach, stuckMs }, talk: false }
+}
+
+/** 会話窓の大きさ（シーンの高さに比例。シーンごとに高さが違っても文字・箱が追従するように） */
+export function dialogMetricsFor(sceneHeight: number): { boxHeight: number; fontSize: number } {
+  return {
+    boxHeight: Math.round(sceneHeight * 0.22),
+    fontSize: Math.max(16, Math.round(sceneHeight * 0.04)),
+  }
+}
+
+/**
+ * NPC の置き場所の点検。歩行マスク外（歩けない）の足元は、主人公が近づけず話しかけも届かないことがあるので警告する。
+ * 警告だけで NPC は残す。戻り値は警告メッセージの配列
+ */
+export function npcPlacementWarnings(
+  mask: WalkMask,
+  npcs: readonly NpcPoint[],
+  sceneId: string
+): string[] {
+  const out: string[] = []
+  for (const n of npcs)
+    if (!isWalkable(mask, n.x, n.y))
+      out.push(
+        `scenes.${sceneId}.npcs "${n.id}" の足元 (${n.x}, ${n.y}) は歩行マスクの外（歩けない位置）です。話しかけられない・画面外に出る可能性があります`
+      )
+  return out
 }

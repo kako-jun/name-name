@@ -804,6 +804,19 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   }
 }
 
+/** NPC 1 件で解釈するキー（これ以外は未知として警告） */
+const NPC_KEYS: readonly string[] = [
+  'id',
+  'name',
+  'x',
+  'y',
+  'sprite',
+  'sprites',
+  'height',
+  'facing',
+  'line',
+]
+
 /**
  * `scenes.<id>.npcs` を解釈する (#841)。配列でなければ警告して無視、1 件ずつ不正なら警告してその NPC だけ読み飛ばす
  * （フィールドは止めない）。未指定は空配列。id 重複は後のほうを警告して捨てる
@@ -832,6 +845,10 @@ function parseNpcs(
       skip('はオブジェクトが必要です')
       continue
     }
+    // スペルミス（例: `heigth`）が黙って無視されないよう、未知のキーは警告する（NPC は残す）
+    for (const k of Object.keys(n))
+      if (!NPC_KEYS.includes(k))
+        warnings.push(`${p}.${k} は未知のキーです（無視します。スペルを確認してください）`)
     if (typeof n.id !== 'string' || !n.id.trim()) {
       skip('.id は空でない文字列が必要です')
       continue

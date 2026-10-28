@@ -2,19 +2,26 @@ import { describe, expect, it } from 'vitest'
 import {
   NPC_APPROACH_STOP,
   NPC_BLOCK_RADIUS,
+  NPC_APPROACH_STUCK_MS,
+  NPC_TALK_CONE_DEG,
   NPC_TALK_REACH,
   TALK_KEY_CODES,
   acceptsWalkInput,
+  approachAfterMove,
   approachArrived,
+  approachBeforeMove,
   blockedByNpc,
   canStartTalk,
+  canStartWarp,
+  decideTalkKey,
+  dialogMetricsFor,
   facingToward,
   nearestTalkableNpc,
   npcAtPoint,
-  npcZ,
+  npcPlacementWarnings,
   stepMoveAroundNpcs,
 } from './fieldNpc'
-import { stepMove, type WalkMask } from './fieldWalk'
+import { isWalkable, stepMove, type WalkMask } from './fieldWalk'
 
 function openMask(width: number, height: number): WalkMask {
   return { width, height, walkable: new Uint8Array(width * height).fill(1) }
@@ -140,18 +147,6 @@ describe('approachArrived / npcAtPoint (#841)', () => {
   })
 })
 
-describe('npcZ (#841): 奥行き', () => {
-  it('主人公より足元が下なら手前（10 より大）・上なら奥（10 より小）', () => {
-    expect(npcZ(300, 200, 600)).toBeGreaterThan(10)
-    expect(npcZ(100, 200, 600)).toBeLessThan(10)
-  })
-  it('NPC どうしは足元が下のほうが手前・前面レイヤー(20)より常に奥', () => {
-    expect(npcZ(400, 100, 600)).toBeGreaterThan(npcZ(300, 100, 600))
-    expect(npcZ(100000, 0, 600)).toBeLessThan(20)
-    expect(npcZ(-5, 0, 600)).toBeGreaterThanOrEqual(9)
-  })
-})
-
 describe('会話中の入力停止 (#841)', () => {
   const idle = { battle: false, talking: false, transition: false, warping: false }
   it('歩行入力は戦闘中と会話中に受けない', () => {
@@ -177,5 +172,207 @@ describe('facingToward (#841)', () => {
     expect(facingToward({ x: 0, y: 0 }, { x: -10, y: 3 })).toBe('left')
     expect(facingToward({ x: 0, y: 0 }, { x: 1, y: 9 })).toBe('down')
     expect(facingToward({ x: 0, y: 0 }, { x: 1, y: -9 })).toBe('up')
+  })
+})
+
+describe('stepMoveAroundNpcs: 円への斜め押しつけ・正面 (#841)', () => {
+  const m = openMask(1000, 1000)
+  const n = [npc('a', 760, 500)]
+  it('再現: (790,559) から左上へ押しつけ続けても停止せず、円に入らず、進み続ける', () => {
+    let pos = { x: 790, y: 559 }
+    const v = { x: -Math.SQRT1_2, y: -Math.SQRT1_2 }
+    let moved = 0
+    for (let i = 0; i < 80; i++) {
+      const r = stepMoveAroundNpcs(m, pos, v, 260, 16, n)
+      expect(Math.hypot(r.pos.x - 760, r.pos.y - 500)).toBeGreaterThanOrEqual(NPC_BLOCK_RADIUS)
+      moved += r.distance
+      pos = r.pos
+    }
+    expect(moved).toBeGreaterThan(100)
+    // 円の左上側へ回り込んでいる（y が NPC より上へ）
+    expect(pos.y).toBeLessThan(500)
+  })
+  it('1 フレームの歩幅が大きくても円の中に入らない', () => {
+    let pos = { x: 790, y: 559 }
+    for (let i = 0; i < 40; i++) {
+      pos = stepMoveAroundNpcs(m, pos, { x: -Math.SQRT1_2, y: -Math.SQRT1_2 }, 260, 200, n).pos
+      expect(blockedByNpc(n, pos)).toBe(false)
+    }
+  })
+  it('あらゆる方向から押しつけても円に入らない（全周）', () => {
+    for (let deg = 0; deg < 360; deg += 15) {
+      const a = (deg * Math.PI) / 180
+      let pos = { x: 760 + Math.cos(a) * 80, y: 500 + Math.sin(a) * 80 }
+      const v = { x: -Math.cos(a + 0.4), y: -Math.sin(a + 0.4) }
+      for (let i = 0; i < 100; i++) {
+        pos = stepMoveAroundNpcs(m, pos, v, 260, 100, n).pos
+        expect(blockedByNpc(n, pos)).toBe(false)
+      }
+    }
+  })
+  it('正面は円周ぴったりまで寄れる（隙間は 1px 未満）', () => {
+    let pos = { x: 600, y: 500 }
+    for (let i = 0; i < 200; i++) pos = stepMoveAroundNpcs(m, pos, { x: 1, y: 0 }, 260, 16, n).pos
+    expect(760 - pos.x).toBeGreaterThanOrEqual(NPC_BLOCK_RADIUS - 1e-6)
+    expect(760 - pos.x).toBeLessThan(NPC_BLOCK_RADIUS + 1)
+  })
+  it('射影先が歩行マスク外なら出ない（壁と NPC に挟まれたら止まる）', () => {
+    const w = openMask(1000, 1000)
+    // y < 480 を壁にする
+    for (let y = 0; y < 480; y++) for (let x = 0; x < 1000; x++) w.walkable[y * 1000 + x] = 0
+    let pos = { x: 790, y: 559 }
+    for (let i = 0; i < 200; i++) {
+      pos = stepMoveAroundNpcs(w, pos, { x: -Math.SQRT1_2, y: -Math.SQRT1_2 }, 260, 16, n).pos
+      expect(isWalkable(w, pos.x, pos.y)).toBe(true)
+      expect(blockedByNpc(n, pos)).toBe(false)
+    }
+  })
+  it('複数 NPC の円の隙間にも入らない', () => {
+    const two = [npc('a', 300, 300), npc('b', 340, 300)]
+    let pos = { x: 320, y: 400 }
+    for (let i = 0; i < 100; i++) {
+      pos = stepMoveAroundNpcs(m, pos, { x: 0, y: -1 }, 260, 16, two).pos
+      expect(blockedByNpc(two, pos)).toBe(false)
+    }
+  })
+})
+
+describe('nearestTalkableNpc: 円錐の境界 (#841)', () => {
+  const me = { x: 300, y: 300 }
+  it('ちょうど 60° は対象・60° を超えると対象外', () => {
+    const r = 80
+    const at = (deg: number) => {
+      const a = (deg * Math.PI) / 180
+      return [npc('t', me.x + Math.cos(a) * r, me.y + Math.sin(a) * r)]
+    }
+    expect(NPC_TALK_CONE_DEG).toBe(60)
+    expect(nearestTalkableNpc(at(60), me, 'right')).toBe('t')
+    expect(nearestTalkableNpc(at(-60), me, 'right')).toBe('t')
+    expect(nearestTalkableNpc(at(60.5), me, 'right')).toBeNull()
+  })
+  it('距離ちょうど reach は対象・超えると対象外', () => {
+    expect(nearestTalkableNpc([npc('t', 300 + NPC_TALK_REACH, 300)], me, 'right')).toBe('t')
+    expect(nearestTalkableNpc([npc('t', 300 + NPC_TALK_REACH + 1, 300)], me, 'right')).toBeNull()
+  })
+})
+
+describe('canStartWarp (#841)', () => {
+  const idle = { battle: false, talking: false, transition: false, warping: false }
+  it('会話・戦闘・遷移・ワープ中は不可', () => {
+    expect(canStartWarp(idle)).toBe(true)
+    for (const k of ['battle', 'talking', 'transition', 'warping'] as const)
+      expect(canStartWarp({ ...idle, [k]: true })).toBe(false)
+  })
+})
+
+describe('decideTalkKey (#841)', () => {
+  const idle = { battle: false, talking: false, transition: false, warping: false }
+  const base = {
+    code: 'Space',
+    ctrl: false,
+    alt: false,
+    meta: false,
+    repeat: false,
+    focus: 'other' as const,
+    state: idle,
+    npcs: [npc('a', 360, 300)],
+    pos: { x: 300, y: 300 },
+    facing: 'right' as const,
+  }
+  it('向いた先に NPC がいれば start', () => {
+    expect(decideTalkKey(base)).toEqual({ action: 'start', npcId: 'a' })
+    for (const code of ['Enter', 'NumpadEnter', 'KeyZ'])
+      expect(decideTalkKey({ ...base, code }).action).toBe('start')
+  })
+  it('npcs が無い・向いた先に NPC がいない・遠いときは ignore（ボタンの Space を奪わない）', () => {
+    expect(decideTalkKey({ ...base, npcs: [] }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, facing: 'left' }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, npcs: [npc('a', 900, 300)] }).action).toBe('ignore')
+  })
+  it('決定キー以外・修飾キー付き・文字入力中・戦闘中は ignore', () => {
+    expect(decideTalkKey({ ...base, code: 'KeyA' }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, ctrl: true }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, alt: true }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, meta: true }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, focus: 'text' }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, state: { ...idle, battle: true } }).action).toBe('ignore')
+    expect(
+      decideTalkKey({ ...base, focus: 'text', state: { ...idle, talking: true } }).action
+    ).toBe('ignore')
+  })
+  it('押しっぱなし(repeat)は開かない・遷移/ワープ中は開かない', () => {
+    expect(decideTalkKey({ ...base, repeat: true }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, state: { ...idle, transition: true } }).action).toBe('ignore')
+    expect(decideTalkKey({ ...base, state: { ...idle, warping: true } }).action).toBe('ignore')
+  })
+  it('会話中は advance、repeat なら swallow（送らないが既定動作は止める）', () => {
+    const talking = { ...idle, talking: true }
+    expect(decideTalkKey({ ...base, state: talking }).action).toBe('advance')
+    expect(decideTalkKey({ ...base, state: talking, npcs: [] }).action).toBe('advance')
+    expect(decideTalkKey({ ...base, state: talking, repeat: true }).action).toBe('swallow')
+  })
+})
+
+describe('approach (クリックで近づく) (#841)', () => {
+  const target = { x: 300, y: 300 }
+  const far = { x: 100, y: 300 }
+  it('approach が無ければ何もしない', () => {
+    expect(approachBeforeMove(null, target, far, false)).toEqual({ approach: null, arrived: false })
+  })
+  it('対象が消えた・方向キーが押された → 取り消し', () => {
+    const a = { id: 'a', stuckMs: 0 }
+    expect(approachBeforeMove(a, undefined, far, false).approach).toBeNull()
+    expect(approachBeforeMove(a, target, far, true).approach).toBeNull()
+    expect(approachBeforeMove(a, target, far, true).arrived).toBe(false)
+  })
+  it('着いたら arrived（ちょうど停止距離でも着いた扱い）・遠ければ継続', () => {
+    const a = { id: 'a', stuckMs: 0 }
+    expect(approachBeforeMove(a, target, { x: 300 - NPC_APPROACH_STOP, y: 300 }, false)).toEqual({
+      approach: null,
+      arrived: true,
+    })
+    const r = approachBeforeMove(a, target, { x: 300 - NPC_APPROACH_STOP - 1, y: 300 }, false)
+    expect(r.approach).toEqual(a)
+    expect(r.arrived).toBe(false)
+  })
+  it('動けたら stuck をリセット・動けなければ加算', () => {
+    const a = { id: 'a', stuckMs: 300 }
+    expect(approachAfterMove(a, target, far, 3, 16).approach?.stuckMs).toBe(0)
+    expect(approachAfterMove(a, target, far, 0, 16).approach?.stuckMs).toBe(316)
+  })
+  it('stuck が上限に達したら打ち切り。届く距離なら talk、届かなければ諦めるだけ', () => {
+    const a = { id: 'a', stuckMs: NPC_APPROACH_STUCK_MS - 16 }
+    const near = { x: 300 - NPC_TALK_REACH, y: 300 }
+    expect(approachAfterMove(a, target, near, 0, 16)).toEqual({ approach: null, talk: true })
+    expect(approachAfterMove(a, target, far, 0, 16)).toEqual({ approach: null, talk: false })
+    // 上限の 1 ms 手前では継続
+    expect(
+      approachAfterMove({ id: 'a', stuckMs: NPC_APPROACH_STUCK_MS - 17 }, target, near, 0, 16)
+        .approach
+    ).not.toBeNull()
+  })
+})
+
+describe('dialogMetricsFor (#841)', () => {
+  it('シーンの高さに比例し、小さいシーンでも文字は 16 以上', () => {
+    expect(dialogMetricsFor(1000)).toEqual({ boxHeight: 220, fontSize: 40 })
+    expect(dialogMetricsFor(2000)).toEqual({ boxHeight: 440, fontSize: 80 })
+    expect(dialogMetricsFor(100).fontSize).toBe(16)
+  })
+})
+
+describe('npcPlacementWarnings (#841)', () => {
+  it('歩行マスク外の NPC を警告（歩ける位置・境界内は警告なし）', () => {
+    const m = openMask(100, 100)
+    m.walkable[50 * 100 + 50] = 0
+    const w = npcPlacementWarnings(
+      m,
+      [npc('ok', 10, 10), npc('wall', 50, 50), npc('out', 500, 5)],
+      'a'
+    )
+    expect(w).toHaveLength(2)
+    expect(w[0]).toContain('"wall"')
+    expect(w[1]).toContain('"out"')
+    expect(npcPlacementWarnings(m, [npc('ok', 10, 10)], 'a')).toEqual([])
   })
 })

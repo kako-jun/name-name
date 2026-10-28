@@ -4,7 +4,7 @@
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { createFlagStore } from './flagStore'
-import { WORLD_Z, companionZ, orderedLayers } from './layers'
+import { WORLD_Z, companionZ, npcZ, orderedLayers } from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -73,17 +73,18 @@ import {
   withTimeout,
 } from '../game/fieldWarp'
 import {
-  NPC_TALK_REACH,
-  NPC_APPROACH_STUCK_MS,
   NPC_BLOCK_RADIUS,
-  TALK_KEY_CODES,
   acceptsWalkInput,
+  approachAfterMove,
   approachArrived,
+  approachBeforeMove,
   canStartTalk,
+  canStartWarp,
+  decideTalkKey,
+  dialogMetricsFor,
   facingToward,
-  nearestTalkableNpc,
   npcAtPoint,
-  npcZ,
+  npcPlacementWarnings,
   stepMoveAroundNpcs,
   type NpcRect,
 } from '../game/fieldNpc'
@@ -448,13 +449,19 @@ async function main(): Promise<void> {
   const dialogBox = new DialogBox({
     screenWidth: scene.mask.width,
     screenHeight: scene.mask.height,
-    boxHeight: Math.round(scene.mask.height * 0.22),
-    fontSize: Math.max(16, Math.round(scene.mask.height * 0.04)),
+    ...dialogMetricsFor(scene.mask.height),
     bgColor: 0x000033,
     nameColor: 0xffe066,
     nameSeparateBox: false,
   })
   app.stage.addChild(world, fade, dialogBox)
+  /** シーン（画面）の大きさが変わったら、会話窓の箱の高さ・文字サイズも合わせる */
+  const applyDialogMetrics = (width: number, height: number): void => {
+    const m = dialogMetricsFor(height)
+    dialogBox.setBoxHeight(m.boxHeight)
+    dialogBox.setFontSize(m.fontSize)
+    dialogBox.redraw(width, height)
+  }
 
   // 到着位置の計算は、通れる状態なら橙も歩ける扱いのマスクで行う（橙の階段が端に接していても近くの白へずらされない）
   const landingMask = (s: LoadedScene, flagValues: Readonly<Record<string, boolean>>): WalkMask =>
@@ -585,7 +592,7 @@ async function main(): Promise<void> {
     battle = null
     // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
     app.renderer.resize(scene.mask.width, scene.mask.height)
-    dialogBox.redraw(scene.mask.width, scene.mask.height)
+    applyDialogMetrics(scene.mask.width, scene.mask.height)
     world.visible = true
     fade.visible = true
     encState = afterBattleState()
@@ -617,7 +624,7 @@ async function main(): Promise<void> {
   }
   /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
   const startWarp = (id: string): boolean => {
-    if (battle || transition || warpRun || talking) return false
+    if (!canStartWarp(talkState())) return false
     if (!hasOwn(config.warps, id)) {
       console.warn(`[field-sample] 未知のワープ id: ${id}`)
       return false
@@ -695,6 +702,8 @@ async function main(): Promise<void> {
     }
   }
 
+  /** NPC の置き場所を警告済みのシーン（入るたびに繰り返さない） */
+  const npcChecked = new Set<string>()
   const applyScene = (s: LoadedScene): void => {
     scene = s
     // 同行者の表示とラッチはシーンをまたいで持ち越さない（ワープ・端リンクの暗転明けに残さない）
@@ -715,9 +724,14 @@ async function main(): Promise<void> {
     }
     if (app.renderer.width !== s.mask.width || app.renderer.height !== s.mask.height)
       app.renderer.resize(s.mask.width, s.mask.height)
-    dialogBox.redraw(s.mask.width, s.mask.height)
+    applyDialogMetrics(s.mask.width, s.mask.height)
     // NPC はそのシーンの分だけ出す（クリックで近づく途中の取り消しも）
     approach = null
+    if (!npcChecked.has(s.id)) {
+      npcChecked.add(s.id)
+      for (const w of npcPlacementWarnings(s.mask, sceneNpcs.get(s.id) ?? [], s.id))
+        console.warn(`[field-sample] ${w}`)
+    }
     for (const [sid, list] of sceneNpcs) for (const n of list) n.sprite.visible = sid === s.id
     // 白で塗って tint で色を切り替える（暗転=黒・ワープの flash=白）
     fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0xffffff)
@@ -749,26 +763,34 @@ async function main(): Promise<void> {
   }
   /** 決定キー (Space / Enter / Z): 向いた方向の近傍 NPC に話しかける。会話中は送る・閉じる */
   const onTalkKey = (ev: KeyboardEvent): void => {
-    if (!TALK_KEY_CODES.includes(ev.code) || ev.ctrlKey || ev.altKey || ev.metaKey) return
-    if (battle) return
-    // 文字入力（text 系 input・textarea・select）にフォーカスがあるときは、そちらの操作を邪魔しない。
-    // ツールバーのボタン・チェックにフォーカスが残っているだけなら外して、決定キーをゲームへ渡す（Space で二重に押されないように）
+    // 文字入力（text 系 input・textarea・select）にフォーカスがあるときは、そちらの操作を邪魔しない
     const a = document.activeElement
-    if (a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement) return
-    if (a instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(a.type)) return
+    const typing =
+      a instanceof HTMLTextAreaElement ||
+      a instanceof HTMLSelectElement ||
+      (a instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(a.type))
+    const d = decideTalkKey({
+      code: ev.code,
+      ctrl: ev.ctrlKey,
+      alt: ev.altKey,
+      meta: ev.metaKey,
+      repeat: ev.repeat,
+      focus: typing ? 'text' : 'other',
+      state: talkState(),
+      npcs: currentNpcs(),
+      pos,
+      facing,
+    })
+    // 何も起きない決定キー（npcs 無し・向いた先に NPC がいない）は、フォーカスも既定動作も一切触らない
+    if (d.action === 'ignore') return
+    // 話しかけの成立・会話中だけ、ツールバーのボタン等のフォーカスを外して決定キーをゲームへ渡す（Space で二重に押されないように）
     if (a instanceof HTMLElement && a !== document.body) a.blur()
-    if (talking) {
-      ev.preventDefault()
-      if (!ev.repeat) advanceTalk()
-      return
-    }
-    // 押しっぱなしの連打で、閉じた直後に開き直さない
-    if (ev.repeat || !canStartTalk(talkState())) return
-    const id = nearestTalkableNpc(currentNpcs(), pos, facing)
-    const npc = id ? currentNpcs().find((n) => n.id === id) : undefined
-    if (!npc) return
     ev.preventDefault()
-    startTalk(npc)
+    if (d.action === 'advance') advanceTalk()
+    else if (d.action === 'start') {
+      const npc = currentNpcs().find((n) => n.id === d.npcId)
+      if (npc) startTalk(npc)
+    }
   }
   const onKeyDown = onKey(true)
   const onKeyUp = onKey(false)
@@ -973,15 +995,13 @@ async function main(): Promise<void> {
       let vec = currentVector()
       // NPC をクリックして近づいている最中: その NPC へ向かう。着いたら話しかける
       const appNpc = approach ? currentNpcs().find((n) => n.id === approach!.id) : undefined
-      if (approach && (!appNpc || keysToVector(keys).x !== 0 || keysToVector(keys).y !== 0))
-        approach = null
-      else if (approach && appNpc) {
-        if (approachArrived(appNpc, pos)) {
-          approach = null
-          startTalk(appNpc)
-          vec = { x: 0, y: 0 }
-        } else vec = pointerToVector(pos, appNpc, POINTER_DEADZONE)
-      }
+      const kv = keysToVector(keys)
+      const pre = approachBeforeMove(approach, appNpc, pos, kv.x !== 0 || kv.y !== 0)
+      approach = pre.approach
+      if (pre.arrived && appNpc) {
+        startTalk(appNpc)
+        vec = { x: 0, y: 0 }
+      } else if (approach && appNpc) vec = pointerToVector(pos, appNpc, POINTER_DEADZONE)
       // 到着直後の折り返し防止: その端へ向かう入力が途切れたら解除
       if (disarmed && !isOutward(disarmed.edge, vec)) disarmed = null
       // 条件付き通行 (#862): 橙のセルはフラグが成り立つ間だけ歩ける。橙の上は押されて少し遅い
@@ -1025,12 +1045,9 @@ async function main(): Promise<void> {
       pos = r.pos
       // 近づく途中で動けない（NPC や壁に阻まれた）なら、届く距離ならそのまま話しかけ、届かなければ諦める
       if (approach && appNpc) {
-        approach.stuckMs = r.distance > 0 ? 0 : approach.stuckMs + dt
-        if (approach.stuckMs >= NPC_APPROACH_STUCK_MS) {
-          const reach = Math.hypot(appNpc.x - pos.x, appNpc.y - pos.y) <= NPC_TALK_REACH
-          approach = null
-          if (reach) startTalk(appNpc)
-        }
+        const post = approachAfterMove(approach, appNpc, pos, r.distance, dt)
+        approach = post.approach
+        if (post.talk) startTalk(appNpc)
       }
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0
@@ -1111,7 +1128,7 @@ async function main(): Promise<void> {
       const cp = companionPosition(pos, facing, config.assist.offset)
       companionSprite.position.set(cp.x, cp.y)
       companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
-      companionSprite.zIndex = companionZ(cp.y, pos.y)
+      companionSprite.zIndex = companionZ(cp.y, pos.y, h)
       companionSprite.visible = true
       heads.companion = { x: cp.x, y: cp.y - ct.height * cs, alpha: companionSprite.alpha }
     } else {

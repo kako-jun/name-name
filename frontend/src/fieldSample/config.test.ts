@@ -1545,6 +1545,17 @@ describe('scenes.<id>.npcs (#841 段階1)', () => {
     expect(c.scenes.a.npcs![0].name).toBe('おばあさん')
     expect(c.warnings?.[0]).toContain('重複')
   })
+  it('未知のキー（スペルミス）は警告するが NPC は残す', () => {
+    const c = ok(withNpcs([npc({ heigth: 100 })]))
+    expect(c.scenes.a.npcs).toHaveLength(1)
+    expect(c.scenes.a.npcs![0]).not.toHaveProperty('heigth')
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scenes.a.npcs[0].heigth')
+  })
+  it('既知のキーだけなら警告なし（height・facing も）', () => {
+    const c = ok(withNpcs([npc({ height: 120, facing: 'left' })]))
+    expect(c.warnings).toBeUndefined()
+  })
   it('警告は configNotice の表示にも出る', () => {
     const c = ok(withNpcs([npc({ line: '' })]))
     expect(configNotice(c)).toContain('scenes.a.npcs[0]')

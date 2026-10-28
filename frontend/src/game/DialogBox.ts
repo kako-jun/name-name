@@ -1239,6 +1239,18 @@ export class DialogBox extends Container {
   }
 
   /**
+   * adv 下部バーの箱の高さ (px) を切り替える (#841)。画面の大きさが変わる呼び出し側（一枚絵フィールド）用。
+   * 配置の取り直しは続けて redraw(screenWidth, screenHeight) を呼ぶ。コンストラクタの boxHeight と同じ意味。
+   */
+  setBoxHeight(height: number): void {
+    const next = Math.max(1, Math.round(height))
+    if (this.advBoxHeight === next) return
+    this.advBoxHeight = next
+    this.boxH = next
+    // 配置は呼び出し側の redraw（画面サイズ変更と同時）で取り直す
+  }
+
+  /**
    * 本文フォントサイズ (px) を切り替える (#283 補遺)。
    * frontmatter `font_size:` の per-game 値（未指定なら runtime 既定 40）を渡す。
    * setFontFamily と同じく依存する TextStyle を作り直し、表示中テキストがあれば

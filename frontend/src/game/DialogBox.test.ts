@@ -2562,3 +2562,32 @@ describe('DialogBox #774 destroy 後の画像インジケータ解決で何も�
     box.dispose()
   })
 })
+
+describe('DialogBox setBoxHeight (#841 シーンの大きさに追従)', () => {
+  interface Internals {
+    boxH: number
+    boxY: number
+  }
+  const internals = (b: DialogBox) => b as unknown as Internals
+  it('setBoxHeight + redraw で、箱の高さと下端の位置が新しい画面に追従する', () => {
+    const box = new DialogBox({ screenWidth: 800, screenHeight: 600, boxHeight: 100 })
+    expect(internals(box).boxH).toBe(100)
+    box.setBoxHeight(240)
+    box.redraw(1600, 1000)
+    expect(internals(box).boxH).toBe(240)
+    expect(internals(box).boxY).toBe(1000 - 240 - 20)
+    // 小さい画面へ戻すと高さも戻る（redraw が advBoxHeight に追従する）
+    box.setBoxHeight(100)
+    box.redraw(800, 600)
+    expect(internals(box).boxH).toBe(100)
+    box.dispose()
+  })
+  it('0 以下は 1 に丸める・同値は何もしない', () => {
+    const box = new DialogBox({ screenWidth: 800, screenHeight: 600, boxHeight: 100 })
+    box.setBoxHeight(0)
+    expect(internals(box).boxH).toBe(1)
+    box.setBoxHeight(1)
+    expect(internals(box).boxH).toBe(1)
+    box.dispose()
+  })
+})
