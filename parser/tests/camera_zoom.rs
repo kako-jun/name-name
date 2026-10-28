@@ -186,10 +186,9 @@ fn t12_strength_only_is_dropped() {
 #[test]
 fn t13_duplicate_zoom_last_wins_and_zenkei_resets() {
     assert_eq!(zs("[カメラ: シアター, ズーム: A, ズーム: B]").0, s("B"));
-    // 現挙動: 後勝ち。`全景` は無視（zoom を None に戻さない）ので A が残る。
-    // 仕様としては「後の指定が全景なら全景」と読むのが自然で、不具合寄りの挙動（要判断）。
-    assert_eq!(zs("[カメラ: シアター, ズーム: A, ズーム: 全景]").0, s("A"));
-    assert_eq!(zs("[カメラ: シアター, ズーム: A, ズーム:]").0, s("A"));
+    // 後勝ち: 後の指定が全景・空値なら全景（None）に戻る。
+    assert_eq!(zs("[カメラ: シアター, ズーム: A, ズーム: 全景]").0, None);
+    assert_eq!(zs("[カメラ: シアター, ズーム: A, ズーム:]").0, None);
 }
 
 #[test]

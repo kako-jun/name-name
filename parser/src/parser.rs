@@ -2176,10 +2176,13 @@ fn parse_camera_mode_directive(content: &str) -> Event {
                 }
             } else if let Some(v) = trimmed.strip_prefix("ズーム:") {
                 // #702: 空値・`全景` は全景（None）。それ以外はキャラ名として保持する。
+                // 後勝ち: `ズーム: A, ズーム: 全景` は全景に戻る。
                 let name = v.trim();
-                if !name.is_empty() && name != "全景" {
-                    zoom = Some(name.to_string());
-                }
+                zoom = if name.is_empty() || name == "全景" {
+                    None
+                } else {
+                    Some(name.to_string())
+                };
             } else if let Some(v) = trimmed.strip_prefix("強さ:") {
                 // #702: 有限かつ正の値のみ受理（範囲のクランプはランタイム）。不正値は無視して既定倍率。
                 if let Ok(n) = v.trim().parse::<f32>() {
