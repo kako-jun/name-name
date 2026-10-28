@@ -4,7 +4,7 @@
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { createFlagStore } from './flagStore'
-import { WORLD_Z, companionZ, orderedLayers } from './layers'
+import { WORLD_Z, companionZ, npcZ, orderedLayers } from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -28,7 +28,6 @@ import {
   pointerToVector,
   resolvePlayerHeight,
   snapToWalkable,
-  stepMove,
   walkFrame,
   type DirectionKeys,
   type Facing,
@@ -73,6 +72,23 @@ import {
   sampleWarp,
   withTimeout,
 } from '../game/fieldWarp'
+import {
+  NPC_BLOCK_RADIUS,
+  acceptsWalkInput,
+  approachAfterMove,
+  approachArrived,
+  approachBeforeMove,
+  canStartTalk,
+  canStartWarp,
+  decideTalkKey,
+  dialogMetricsFor,
+  facingToward,
+  npcAtPoint,
+  npcPlacementWarnings,
+  stepMoveAroundNpcs,
+  type NpcRect,
+} from '../game/fieldNpc'
+import { DialogBox } from '../game/DialogBox'
 import { hasOwn } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
@@ -83,6 +99,7 @@ import {
   forceBattleCandidates,
   pickConfigSource,
   parseConfigText,
+  type FieldNpc,
   type FieldSampleConfig,
   type FieldWarp,
 } from './config'
@@ -118,6 +135,18 @@ async function loadBitmap(url: string): Promise<ImageBitmap> {
   }
   if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`)
   return createImageBitmap(await res.blob())
+}
+
+/** 実行時の NPC (#841)。x / y は足元（背景ピクセル）。見た目は読み込めたものだけ（読めない NPC は警告して出さない） */
+interface NpcRuntime {
+  id: string
+  x: number
+  y: number
+  def: FieldNpc
+  sprite: Sprite
+  /** 向きごとの立ち絵。`sprite` 単一画像のときは全向き同じ 1 枚 */
+  textures: Record<Facing, Texture>
+  facing: Facing
 }
 
 interface LoadedScene {
@@ -312,6 +341,35 @@ async function main(): Promise<void> {
   if (config.companion)
     for (const f of FACINGS) companionTex[f] = await loadFrames(config.companion.sprites[f])
 
+  // NPC (#841)。シーンごとに立ち絵を先に読む。読めない NPC は警告して省く（フィールドは止めない）
+  const sceneNpcs = new Map<string, NpcRuntime[]>()
+  await Promise.all(
+    Object.entries(config.scenes).map(async ([sid, sc]) => {
+      const list: NpcRuntime[] = []
+      for (const def of sc.npcs ?? []) {
+        try {
+          const textures = {} as Record<Facing, Texture>
+          if (def.sprites) {
+            for (const f of FACINGS) textures[f] = Texture.from(await loadBitmap(def.sprites[f][0]))
+          } else if (def.sprite) {
+            const t = Texture.from(await loadBitmap(def.sprite))
+            for (const f of FACINGS) textures[f] = t
+          } else continue
+          const sprite = new Sprite(textures[def.facing])
+          sprite.anchor.set(0.5, 1)
+          sprite.visible = false
+          list.push({ id: def.id, x: def.x, y: def.y, def, sprite, textures, facing: def.facing })
+        } catch (e) {
+          console.warn(
+            `[field-sample] NPC ${sid}/${def.id} の画像を読めません（この NPC は出しません）: ${e instanceof Error ? e.message : String(e)}`
+          )
+        }
+      }
+      sceneNpcs.set(sid, list)
+    })
+  )
+  const currentNpcs = (): NpcRuntime[] => sceneNpcs.get(sceneId) ?? []
+
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionSheets = await loadEmotionSheets(config)
   const emotionTextures = new Map<string, Texture | null>()
@@ -386,7 +444,26 @@ async function main(): Promise<void> {
   foregroundSprite.zIndex = WORLD_Z.foreground
   emotionLayerBox.zIndex = WORLD_Z.emotion
   marker.zIndex = WORLD_Z.marker
-  app.stage.addChild(world, fade)
+  for (const list of sceneNpcs.values()) for (const n of list) world.addChild(n.sprite)
+  // 会話窓 (#841)。TopDown と同じ DialogBox。画面の大きさに合わせた箱と文字（シーンの大きさが変わると redraw で追従）
+  const dialogBox = new DialogBox({
+    screenWidth: scene.mask.width,
+    screenHeight: scene.mask.height,
+    ...dialogMetricsFor(scene.mask.height),
+    bgColor: 0x000033,
+    nameColor: 0xffe066,
+    nameSeparateBox: false,
+  })
+  // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
+  dialogBox.hide()
+  app.stage.addChild(world, fade, dialogBox)
+  /** シーン（画面）の大きさが変わったら、会話窓の箱の高さ・文字サイズも合わせる */
+  const applyDialogMetrics = (width: number, height: number): void => {
+    const m = dialogMetricsFor(height)
+    dialogBox.setBoxHeight(m.boxHeight)
+    dialogBox.setFontSize(m.fontSize)
+    dialogBox.redraw(width, height)
+  }
 
   // 到着位置の計算は、通れる状態なら橙も歩ける扱いのマスクで行う（橙の階段が端に接していても近くの白へずらされない）
   const landingMask = (s: LoadedScene, flagValues: Readonly<Record<string, boolean>>): WalkMask =>
@@ -434,6 +511,17 @@ async function main(): Promise<void> {
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
   let lastOutcome = '-'
+  // ---- NPC・会話 (#841) ----
+  /** 会話中の NPC。会話中は歩行入力・ポインタ移動・エンカウント・ワープ・端リンクを止める */
+  let talking: NpcRuntime | null = null
+  /** クリックした NPC へ近づいている最中（着いたら話しかける。キー入力・別の場所のクリックで取り消す） */
+  let approach: { id: string; stuckMs: number } | null = null
+  const talkState = () => ({
+    battle: !!battle,
+    talking: !!talking,
+    transition: !!transition,
+    warping: !!warpRun,
+  })
   /** 歩きの入力を全部捨てる。押しっぱなしの pointer capture も解放する（戦闘・ワープの開始時） */
   const releaseWalkInput = (): void => {
     keys.up = keys.down = keys.left = keys.right = false
@@ -441,7 +529,26 @@ async function main(): Promise<void> {
       canvas.releasePointerCapture(activePointerId)
     activePointerId = null
     pointer = null
+    approach = null
     movingMs = 0
+  }
+  const startTalk = (npc: NpcRuntime): void => {
+    if (!canStartTalk(talkState())) return
+    releaseWalkInput()
+    // お互いに向き合う（主人公の向きは 8 方向なら斜めのまま近い向きへ）
+    facing = facingFromVector({ x: npc.x - pos.x, y: npc.y - pos.y }, facing, diagonalWalk)
+    npc.facing = facingToward(npc, pos)
+    talking = npc
+    dialogBox.show(npc.def.name, npc.def.line)
+  }
+  /** 会話の送り: 表示中なら全文表示、済んでいれば閉じて歩行へ戻る */
+  const advanceTalk = (): void => {
+    if (!talking) return
+    if (dialogBox.isTyping()) dialogBox.skipTypewriter()
+    else {
+      dialogBox.hide()
+      talking = null
+    }
   }
   const startBattle = (enemies: BattleEntity[]): void => {
     // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
@@ -487,6 +594,7 @@ async function main(): Promise<void> {
     battle = null
     // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
     app.renderer.resize(scene.mask.width, scene.mask.height)
+    applyDialogMetrics(scene.mask.width, scene.mask.height)
     world.visible = true
     fade.visible = true
     encState = afterBattleState()
@@ -518,7 +626,7 @@ async function main(): Promise<void> {
   }
   /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
   const startWarp = (id: string): boolean => {
-    if (battle || transition || warpRun) return false
+    if (!canStartWarp(talkState())) return false
     if (!hasOwn(config.warps, id)) {
       console.warn(`[field-sample] 未知のワープ id: ${id}`)
       return false
@@ -596,6 +704,8 @@ async function main(): Promise<void> {
     }
   }
 
+  /** NPC の置き場所を警告済みのシーン（入るたびに繰り返さない） */
+  const npcChecked = new Set<string>()
   const applyScene = (s: LoadedScene): void => {
     scene = s
     // 同行者の表示とラッチはシーンをまたいで持ち越さない（ワープ・端リンクの暗転明けに残さない）
@@ -616,6 +726,15 @@ async function main(): Promise<void> {
     }
     if (app.renderer.width !== s.mask.width || app.renderer.height !== s.mask.height)
       app.renderer.resize(s.mask.width, s.mask.height)
+    applyDialogMetrics(s.mask.width, s.mask.height)
+    // NPC はそのシーンの分だけ出す（クリックで近づく途中の取り消しも）
+    approach = null
+    if (!npcChecked.has(s.id)) {
+      npcChecked.add(s.id)
+      for (const w of npcPlacementWarnings(s.mask, sceneNpcs.get(s.id) ?? [], s.id))
+        console.warn(`[field-sample] ${w}`)
+    }
+    for (const [sid, list] of sceneNpcs) for (const n of list) n.sprite.visible = sid === s.id
     // 白で塗って tint で色を切り替える（暗転=黒・ワープの flash=白）
     fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0xffffff)
     fade.tint = 0x000000
@@ -639,7 +758,42 @@ async function main(): Promise<void> {
     const k = KEYMAP[ev.code]
     if (battle || !k || ev.ctrlKey || ev.altKey || ev.metaKey) return
     ev.preventDefault()
+    // 会話中は歩きの入力を受けない（離すほうは受ける）
+    if (down && !acceptsWalkInput({ battle: false, talking: !!talking })) return
+    if (down) approach = null
     keys[k] = down
+  }
+  /** 決定キー (Space / Enter / Z): 向いた方向の近傍 NPC に話しかける。会話中は送る・閉じる */
+  const onTalkKey = (ev: KeyboardEvent): void => {
+    // 文字入力（text 系 input・textarea・select）にフォーカスがあるときは、そちらの操作を邪魔しない。
+    // checkbox / radio / button 以外の input（range・color・file・submit 等も含む）は text 扱い＝安全側で無視する
+    const a = document.activeElement
+    const typing =
+      a instanceof HTMLTextAreaElement ||
+      a instanceof HTMLSelectElement ||
+      (a instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(a.type))
+    const d = decideTalkKey({
+      code: ev.code,
+      ctrl: ev.ctrlKey,
+      alt: ev.altKey,
+      meta: ev.metaKey,
+      repeat: ev.repeat,
+      focus: typing ? 'text' : 'other',
+      state: talkState(),
+      npcs: currentNpcs(),
+      pos,
+      facing,
+    })
+    // 何も起きない決定キー（npcs 無し・向いた先に NPC がいない）は、フォーカスも既定動作も一切触らない
+    if (d.action === 'ignore') return
+    // 話しかけの成立・会話中だけ、ツールバーのボタン等のフォーカスを外して決定キーをゲームへ渡す（Space で二重に押されないように）
+    if (a instanceof HTMLElement && a !== document.body) a.blur()
+    ev.preventDefault()
+    if (d.action === 'advance') advanceTalk()
+    else if (d.action === 'start') {
+      const npc = currentNpcs().find((n) => n.id === d.npcId)
+      if (npc) startTalk(npc)
+    }
   }
   const onKeyDown = onKey(true)
   const onKeyUp = onKey(false)
@@ -647,9 +801,11 @@ async function main(): Promise<void> {
     keys.up = keys.down = keys.left = keys.right = false
     pointer = null
     activePointerId = null
+    approach = null
   }
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
+  window.addEventListener('keydown', onTalkKey)
   window.addEventListener('blur', onBlur)
 
   let pointer: Vec | null = null
@@ -663,8 +819,34 @@ async function main(): Promise<void> {
       y: ((ev.clientY - r.top) / r.height) * scene.mask.height,
     }
   }
+  /** 各 NPC の表示矩形（クリックの当たり。背景ピクセル） */
+  const npcRects = (): NpcRect[] =>
+    currentNpcs().map((n) => {
+      const w = Math.abs(n.sprite.width)
+      const h = n.sprite.height
+      return { id: n.id, left: n.x - w / 2, right: n.x + w / 2, top: n.y - h, bottom: n.y }
+    })
   const onPointerDown = (ev: PointerEvent) => {
     if (battle) return
+    // 会話中のタップは会話を送る（開いた直後の同じ操作では閉じない）
+    if (talking) {
+      if (!dialogBox.isJustShown(250)) advanceTalk()
+      return
+    }
+    // NPC をクリック・タップ: 近づいて話しかける（歩きの入力は採用しない）
+    if (activePointerId === null && canStartTalk(talkState())) {
+      const hit = npcAtPoint(npcRects(), toScene(ev))
+      const npc = hit ? currentNpcs().find((n) => n.id === hit) : undefined
+      if (npc) {
+        pointer = null
+        if (approachArrived(npc, pos)) {
+          approach = null
+          startTalk(npc)
+        } else approach = { id: npc.id, stuckMs: 0 }
+        return
+      }
+    }
+    approach = null
     // マルチタッチ: 最初の1本だけを歩きの入力にする
     if (activePointerId !== null) return
     canvas.setPointerCapture(ev.pointerId)
@@ -692,7 +874,14 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (!canStartBattleNow({ battle: !!battle, transition: !!transition, warping: !!warpRun }))
+    if (
+      !canStartBattleNow({
+        battle: !!battle,
+        transition: !!transition,
+        warping: !!warpRun,
+        talking: !!talking,
+      })
+    )
       return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
@@ -803,8 +992,19 @@ async function main(): Promise<void> {
         fade.alpha = Math.max(0, 1 - transition.t / FADE_MS)
         if (transition.t >= FADE_MS) transition = null
       }
+    } else if (talking) {
+      // 会話中は歩行・エンカウント・端リンクを止める（描画の時計だけ進む）
     } else {
-      const vec = currentVector()
+      let vec = currentVector()
+      // NPC をクリックして近づいている最中: その NPC へ向かう。着いたら話しかける
+      const appNpc = approach ? currentNpcs().find((n) => n.id === approach!.id) : undefined
+      const kv = keysToVector(keys)
+      const pre = approachBeforeMove(approach, appNpc, pos, kv.x !== 0 || kv.y !== 0)
+      approach = pre.approach
+      if (pre.arrived && appNpc) {
+        startTalk(appNpc)
+        vec = { x: 0, y: 0 }
+      } else if (approach && appNpc) vec = pointerToVector(pos, appNpc, POINTER_DEADZONE)
       // 到着直後の折り返し防止: その端へ向かう入力が途切れたら解除
       if (disarmed && !isOutward(disarmed.edge, vec)) disarmed = null
       // 条件付き通行 (#862): 橙のセルはフラグが成り立つ間だけ歩ける。橙の上は押されて少し遅い
@@ -844,8 +1044,14 @@ async function main(): Promise<void> {
         dt,
         config.assist?.fadeMs ?? 0
       )
-      const r = stepMove(walkMask, pos, vec, speed, dt)
+      const r = stepMoveAroundNpcs(walkMask, pos, vec, speed, dt, currentNpcs())
       pos = r.pos
+      // 近づく途中で動けない（NPC や壁に阻まれた）なら、届く距離ならそのまま話しかけ、届かなければ諦める
+      if (approach && appNpc) {
+        const post = approachAfterMove(approach, appNpc, pos, r.distance, dt)
+        approach = post.approach
+        if (post.talk) startTalk(appNpc)
+      }
       facing = facingFromVector(vec, facing, diagonalWalk)
       movingMs = r.distance > 0 ? movingMs + dt : 0
       const link = detectEdgeLink(
@@ -890,6 +1096,19 @@ async function main(): Promise<void> {
     )
     player.scale.set(flipped.has(facing) ? -s : s, s)
     player.position.set(pos.x, pos.y)
+    // NPC (#841): 足元 y で主人公との前後を決める（同行者と同じ考え方）。立ち止まりは 1 コマ目
+    for (const n of currentNpcs()) {
+      const ntex = n.textures[n.facing]
+      n.sprite.texture = ntex
+      const ns = playerScale(
+        n.def.height ??
+          resolvePlayerHeight(config.scenes[sceneId].playerHeight, config.player.height),
+        ntex.height
+      )
+      n.sprite.scale.set(ns, ns)
+      n.sprite.position.set(n.x, n.y)
+      n.sprite.zIndex = npcZ(n.y, pos.y, h)
+    }
     // 感情吹き出し (#937) の置き場所: 人物の表示上端の中央（人物が出ていなければ null）
     const heads: EmotionHeads = { player: { x: pos.x, y: pos.y - tex.height * s }, companion: null }
     // 同行者 (#862): 主人公の後ろ。ghost（半透明）はフラグで切り替わる
@@ -912,7 +1131,7 @@ async function main(): Promise<void> {
       const cp = companionPosition(pos, facing, config.assist.offset)
       companionSprite.position.set(cp.x, cp.y)
       companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
-      companionSprite.zIndex = companionZ(cp.y, pos.y)
+      companionSprite.zIndex = companionZ(cp.y, pos.y, h)
       companionSprite.visible = true
       heads.companion = { x: cp.x, y: cp.y - ct.height * cs, alpha: companionSprite.alpha }
     } else {
@@ -924,6 +1143,8 @@ async function main(): Promise<void> {
     if (debug) {
       marker.circle(pos.x, pos.y, 5).fill(0xff0000)
       marker.rect(0, 0, w, h).stroke({ width: 2, color: 0xffff00, alpha: 0.5 })
+      for (const n of currentNpcs())
+        marker.circle(n.x, n.y, NPC_BLOCK_RADIUS).stroke({ width: 2, color: 0x00ffff, alpha: 0.8 })
     }
     // 前面に隠れている割合（デバッグ表示用。判定には使わない）
     const hidden = scene.foreground
@@ -943,6 +1164,11 @@ async function main(): Promise<void> {
       facing,
       warping: warpRun !== null,
       flags: { ...flags },
+      /** 会話中の NPC の id（会話していなければ null）と、このシーンの NPC の足元・向き（検証用） */
+      talking: talking ? talking.id : null,
+      /** 会話窓（検証用）。会話外は showing / bgVisible とも false */
+      dialog: { showing: dialogBox.isShowing, bgVisible: dialogBox.isBackgroundVisible },
+      npcs: currentNpcs().map((n) => ({ id: n.id, x: n.x, y: n.y, facing: n.facing })),
       /** 橙のラッチの状態（検証用） */
       assist: { latched: assistRt.latched, walked: assistRt.walked },
       companion: {
@@ -1021,12 +1247,14 @@ async function main(): Promise<void> {
     disposed = true
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
+    window.removeEventListener('keydown', onTalkKey)
     window.removeEventListener('blur', onBlur)
     window.removeEventListener('pagehide', onPageHide)
     canvas.removeEventListener('pointerdown', onPointerDown)
     canvas.removeEventListener('pointermove', onPointerMove)
     canvas.removeEventListener('pointerup', endPointer)
     canvas.removeEventListener('pointercancel', endPointer)
+    dialogBox.dispose()
     app.destroy(true, { children: true })
   }
   window.addEventListener('pagehide', onPageHide)

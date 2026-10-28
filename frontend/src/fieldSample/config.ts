@@ -80,6 +80,25 @@ export interface FieldCompanion {
   height?: number
 }
 
+/**
+ * 一枚絵フィールドの NPC (#841 段階1)。`scenes.<id>.npcs[]`。位置は足元（背景ピクセル）。
+ * 見た目は `sprites`（4 方向 × 3 コマの歩行絵。立ち止まりは 1 コマ目）か `sprite`（単一画像）のどちらか。台詞は固定の 1 行
+ */
+export interface FieldNpc {
+  id: string
+  name: string
+  x: number
+  y: number
+  sprites?: Record<Facing, [string, string, string]>
+  sprite?: string
+  /** 表示する高さ（背景ピクセル）。省略 = そのシーンの主人公と同じ高さ */
+  height?: number
+  /** 最初に向く向き。省略 = down（`sprite` 単一画像のときは向きの見た目は変わらない） */
+  facing: Facing
+  /** 話しかけたとき DialogBox に出す 1 行 */
+  line: string
+}
+
 export interface FieldSceneConfig {
   id: string
   /** 背景画像の URL */
@@ -96,6 +115,8 @@ export interface FieldSceneConfig {
   /** 窓の外の流れる景色 (#864)。背景の透明な部分（窓）から見える。省略 = なし */
   scroll?: SceneScrollConfig
   links: FieldLink[]
+  /** NPC (#841)。省略 = NPC なし（従来どおり） */
+  npcs?: FieldNpc[]
   /** このシーンでの主人公の表示高さ（背景ピクセル）。省略 = 全体の `player.height` (#810) */
   playerHeight?: number
   /** ランダムエンカウント (#809)。省略 = エンカウントなし */
@@ -314,6 +335,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!frameMs.ok) return frameMs
 
   const scenes: Record<string, FieldSceneConfig> = {}
+  /** NPC の不正（その NPC だけ読み飛ばす）の警告 (#841)。後で warnings へ合流する */
+  const npcWarnings: string[] = []
   for (const [id, sc] of Object.entries(raw.scenes)) {
     if (!isObj(sc)) return fail(`scenes.${id} はオブジェクトが必要です`)
     const background = url(sc.background, `scenes.${id}.background`)
@@ -400,10 +423,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       }
       encounter = { rate: e.rate, groups: e.groups as string[], ...(bg ? { background: bg } : {}) }
     }
+    const npcs = parseNpcs(sc.npcs, `scenes.${id}.npcs`, url, parseFrames, npcWarnings)
     scenes[id] = {
       id,
       background: background.value,
       mask: mask.value,
+      ...(npcs.length > 0 ? { npcs } : {}),
       ...(foreground !== undefined ? { foreground } : {}),
       ...(shake ? { shake } : {}),
       ...(scroll ? { scroll } : {}),
@@ -665,6 +690,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
       )
   }
+  warnings.push(...npcWarnings)
   // エフェクト重ね (#936)。不正な種類は読み込みを止めず警告にする（画像 URL は他の画像と同じく assetBaseUrl 基準）
   const fx = parseBattleEffects(b.effects, (u) =>
     resolveUrl(resolveRpgImagePath(assetBase, u), baseUrl)
@@ -776,6 +802,142 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(warnings.length > 0 ? { warnings } : {}),
     },
   }
+}
+
+/** NPC 1 件で解釈するキー（これ以外は未知として警告） */
+const NPC_KEYS: readonly string[] = [
+  'id',
+  'name',
+  'x',
+  'y',
+  'sprite',
+  'sprites',
+  'height',
+  'facing',
+  'line',
+]
+
+/**
+ * `scenes.<id>.npcs` を解釈する (#841)。配列でなければ警告して無視、1 件ずつ不正なら警告してその NPC だけ読み飛ばす
+ * （フィールドは止めない）。未指定は空配列。id 重複は後のほうを警告して捨てる
+ */
+function parseNpcs(
+  raw: unknown,
+  path: string,
+  url: (v: unknown, path: string) => ParseResult<string>,
+  parseFrames: (v: unknown, path: string) => ParseResult<[string, string, string]>,
+  warnings: string[]
+): FieldNpc[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    warnings.push(`${path} は配列が必要です（無視します）: ${JSON.stringify(raw)}`)
+    return []
+  }
+  const out: FieldNpc[] = []
+  const seen = new Set<string>()
+  for (let i = 0; i < raw.length; i++) {
+    const p = `${path}[${i}]`
+    const skip = (why: string): void => {
+      warnings.push(`${p} ${why}（この NPC は無視します）`)
+    }
+    const n: unknown = raw[i]
+    if (!isObj(n)) {
+      skip('はオブジェクトが必要です')
+      continue
+    }
+    // スペルミス（例: `heigth`）が黙って無視されないよう、未知のキーは警告する（NPC は残す）
+    for (const k of Object.keys(n))
+      if (!NPC_KEYS.includes(k))
+        warnings.push(`${p}.${k} は未知のキーです（無視します。スペルを確認してください）`)
+    if (typeof n.id !== 'string' || !n.id.trim()) {
+      skip('.id は空でない文字列が必要です')
+      continue
+    }
+    if (seen.has(n.id)) {
+      skip(`.id "${n.id}" が重複しています`)
+      continue
+    }
+    if (typeof n.name !== 'string' || !n.name.trim()) {
+      skip('.name は空でない文字列が必要です')
+      continue
+    }
+    if (
+      typeof n.x !== 'number' ||
+      typeof n.y !== 'number' ||
+      !Number.isFinite(n.x) ||
+      !Number.isFinite(n.y)
+    ) {
+      skip('.x / .y は数値が必要です')
+      continue
+    }
+    if (typeof n.line !== 'string' || !n.line.trim()) {
+      skip('.line（台詞 1 行）は空でない文字列が必要です')
+      continue
+    }
+    let facing: Facing = 'down'
+    if (n.facing !== undefined) {
+      if (!FACINGS.includes(n.facing as Facing)) {
+        skip(`.facing は up/down/left/right: ${JSON.stringify(n.facing)}`)
+        continue
+      }
+      facing = n.facing as Facing
+    }
+    let height: number | undefined
+    if (n.height !== undefined) {
+      if (typeof n.height !== 'number' || !Number.isFinite(n.height) || n.height <= 0) {
+        skip(`.height は 0 より大きい数値: ${JSON.stringify(n.height)}`)
+        continue
+      }
+      height = n.height
+    }
+    if ((n.sprite === undefined) === (n.sprites === undefined)) {
+      skip('は .sprite（単一画像）か .sprites（4 方向 × 3 コマ）のどちらか 1 つが必要です')
+      continue
+    }
+    let sprite: string | undefined
+    let sprites: FieldNpc['sprites']
+    if (n.sprite !== undefined) {
+      const u = url(n.sprite, `${p}.sprite`)
+      if (!u.ok) {
+        skip(`: ${u.error}`)
+        continue
+      }
+      sprite = u.value
+    } else {
+      if (!isObj(n.sprites)) {
+        skip('.sprites はオブジェクトが必要です')
+        continue
+      }
+      const ss = {} as NonNullable<FieldNpc['sprites']>
+      let bad: string | null = null
+      for (const f of FACINGS) {
+        const r = parseFrames(n.sprites[f], `${p}.sprites.${f}`)
+        if (!r.ok) {
+          bad = r.error
+          break
+        }
+        ss[f] = r.value
+      }
+      if (bad) {
+        skip(`: ${bad}`)
+        continue
+      }
+      sprites = ss
+    }
+    seen.add(n.id)
+    out.push({
+      id: n.id,
+      name: n.name,
+      x: n.x,
+      y: n.y,
+      ...(sprites ? { sprites } : {}),
+      ...(sprite ? { sprite } : {}),
+      ...(height !== undefined ? { height } : {}),
+      facing,
+      line: n.line,
+    })
+  }
+  return out
 }
 
 /** 全角の数字・x を半角へ（parser/src/master.rs の `to_halfwidth` と同じ範囲。`×` はそのまま） */

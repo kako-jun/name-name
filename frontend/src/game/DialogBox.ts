@@ -592,6 +592,11 @@ export class DialogBox extends Container {
     return this.showing
   }
 
+  /** 背景の箱が実際に描画対象か（検証用の読み取り。会話外で出っぱなしになっていないかの確認に使う） */
+  get isBackgroundVisible(): boolean {
+    return this.bg.visible
+  }
+
   /**
    * 直前の `show()` から `guardMs` ミリ秒以内なら true を返す。
    * 「タップによってダイアログを開いた瞬間の同一ジェスチャに含まれる二重発火 tap で
@@ -1236,6 +1241,19 @@ export class DialogBox extends Container {
           // フォントロード失敗時はルビなしで継続（クラッシュ防止）
         })
     }
+  }
+
+  /**
+   * adv 下部バーの箱の高さ (px) を切り替える (#841)。画面の大きさが変わる呼び出し側（一枚絵フィールド）用。
+   * adv 専用: novel / split_layout / 2窓 では使わない（それらは redraw が領域から boxH を決める）。
+   * 配置の取り直しは続けて redraw(screenWidth, screenHeight) を呼ぶ。コンストラクタの boxHeight と同じ意味。
+   */
+  setBoxHeight(height: number): void {
+    const next = Math.max(1, Math.round(height))
+    // 同値でも boxH は揃える（他経路で boxH だけずれていても、次の redraw 前に整合させる）
+    this.advBoxHeight = next
+    this.boxH = next
+    // 配置は呼び出し側の redraw（画面サイズ変更と同時）で取り直す
   }
 
   /**

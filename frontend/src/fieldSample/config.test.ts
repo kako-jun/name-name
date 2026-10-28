@@ -1433,3 +1433,131 @@ describe('emotionsUrl 感情吹き出しの外部 JSON (#946)', () => {
     }
   })
 })
+
+describe('scenes.<id>.npcs (#841 段階1)', () => {
+  const npc = (extra: Raw = {}): Raw => ({
+    id: 'oba',
+    name: 'おばあさん',
+    x: 300,
+    y: 400,
+    sprite: 'oba.png',
+    line: 'こんにちは。',
+    ...extra,
+  })
+  const withNpcs = (npcs: unknown): Raw =>
+    mutated((c) => {
+      c.scenes.a.npcs = npcs
+    })
+  const frames = (d: string) => [`${d}1.png`, `${d}2.png`, `${d}3.png`]
+
+  it('未指定は npcs キーも警告も無し（従来と完全に同じ）', () => {
+    const c = ok(minimal())
+    expect('npcs' in c.scenes.a).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('空配列も npcs キーを作らない', () => {
+    const c = ok(withNpcs([]))
+    expect('npcs' in c.scenes.a).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('単一画像 sprite の NPC を読む（URL は設定 JSON 基準で解決・facing 既定は down）', () => {
+    const c = ok(withNpcs([npc()]))
+    expect(c.scenes.a.npcs).toEqual([
+      {
+        id: 'oba',
+        name: 'おばあさん',
+        x: 300,
+        y: 400,
+        sprite: 'https://example.com/field/oba.png',
+        facing: 'down',
+        line: 'こんにちは。',
+      },
+    ])
+    expect(c.warnings).toBeUndefined()
+  })
+  it('4 方向 × 3 コマの sprites と height・facing を読む', () => {
+    const c = ok(
+      withNpcs([
+        npc({
+          sprite: undefined,
+          sprites: {
+            up: frames('u'),
+            down: frames('d'),
+            left: frames('l'),
+            right: frames('r'),
+          },
+          height: 120,
+          facing: 'left',
+        }),
+      ])
+    )
+    const n = c.scenes.a.npcs![0]
+    expect(n.sprites?.left[1]).toBe('https://example.com/field/l2.png')
+    expect(n.sprite).toBeUndefined()
+    expect(n.height).toBe(120)
+    expect(n.facing).toBe('left')
+  })
+  it('npcs が配列でなければ警告して無視（読み込みは成功）', () => {
+    const c = ok(withNpcs({ oba: npc() }))
+    expect('npcs' in c.scenes.a).toBe(false)
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scenes.a.npcs')
+  })
+  it('不正な NPC はその 1 件だけ警告して読み飛ばし、正しい NPC は残る', () => {
+    const bads: unknown[] = [
+      npc({ id: '' }),
+      npc({ id: 5 }),
+      npc({ name: '' }),
+      npc({ x: 'a' }),
+      npc({ y: Infinity }),
+      npc({ line: '  ' }),
+      npc({ facing: 'upLeft' }),
+      npc({ height: 0 }),
+      npc({ height: -3 }),
+      npc({ sprite: undefined }),
+      npc({ sprites: { up: frames('u') } }),
+      npc({ sprite: 123 }),
+      npc({ sprite: undefined, sprites: 'x' }),
+      'string',
+      null,
+    ]
+    for (const bad of bads) {
+      const c = ok(withNpcs([bad, npc({ id: 'good' })]))
+      expect(c.scenes.a.npcs?.map((n) => n.id)).toEqual(['good'])
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('scenes.a.npcs[0]')
+    }
+  })
+  it('sprite と sprites の同時指定は不正', () => {
+    const c = ok(
+      withNpcs([
+        npc({
+          sprites: { up: frames('u'), down: frames('d'), left: frames('l'), right: frames('r') },
+        }),
+      ])
+    )
+    expect('npcs' in c.scenes.a).toBe(false)
+    expect(c.warnings).toHaveLength(1)
+  })
+  it('id が重複したら後のほうを警告して捨てる', () => {
+    const c = ok(withNpcs([npc(), npc({ name: 'べつ' })]))
+    expect(c.scenes.a.npcs).toHaveLength(1)
+    expect(c.scenes.a.npcs![0].name).toBe('おばあさん')
+    expect(c.warnings?.[0]).toContain('重複')
+  })
+  it('未知のキー（スペルミス）は警告するが NPC は残す', () => {
+    const c = ok(withNpcs([npc({ heigth: 100 })]))
+    expect(c.scenes.a.npcs).toHaveLength(1)
+    expect(c.scenes.a.npcs![0]).not.toHaveProperty('heigth')
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scenes.a.npcs[0].heigth')
+  })
+  it('既知のキーだけなら警告なし（height・facing も）', () => {
+    const c = ok(withNpcs([npc({ height: 120, facing: 'left' })]))
+    expect(c.warnings).toBeUndefined()
+  })
+  it('警告は configNotice の表示にも出る', () => {
+    const c = ok(withNpcs([npc({ line: '' })]))
+    expect(configNotice(c)).toContain('scenes.a.npcs[0]')
+  })
+})

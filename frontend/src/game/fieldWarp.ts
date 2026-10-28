@@ -75,6 +75,8 @@ export interface FieldBusyState {
   battle: boolean
   transition: boolean
   warping: boolean
+  /** NPC と会話中 (#841)。省略 = 会話していない */
+  talking?: boolean
 }
 
 /**
@@ -82,5 +84,5 @@ export interface FieldBusyState {
  * ワープ中に戦闘を始めると、戦闘とワープが同時に走って暗転が戻らなくなる。
  */
 export function canStartBattleNow(s: FieldBusyState): boolean {
-  return !s.battle && !s.transition && !s.warping
+  return !s.battle && !s.transition && !s.warping && !s.talking
 }

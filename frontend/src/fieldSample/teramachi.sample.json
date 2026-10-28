@@ -63,6 +63,39 @@
           "to": "canal"
         }
       ],
+      "npcs": [
+        {
+          "id": "neighbor-kid",
+          "name": "近所の子",
+          "x": 760,
+          "y": 540,
+          "sprites": {
+            "up": [
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-up-1.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-up-2.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-up-3.webp"
+            ],
+            "down": [
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-down-1.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-down-2.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-down-3.webp"
+            ],
+            "left": [
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-left-1.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-left-2.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-left-3.webp"
+            ],
+            "right": [
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-right-1.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-right-2.webp",
+              "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-right-3.webp"
+            ]
+          },
+          "height": 140,
+          "facing": "left",
+          "line": "この通りは、ゆるい坂の上まで続いているよ。"
+        }
+      ],
       "encounter": {
         "rate": 0,
         "groups": []
