@@ -1150,48 +1150,58 @@ export class CharacterLayer extends Container {
   }
 
   /**
-   * 板フリップ (#707) を開始する。sprite を不可視にし、同じ texture の PerspectiveMesh を
-   * sprite と同じ位置（z-order）に置く。実際の角度・四隅・alpha の更新は ticker が毎フレーム行う。
+   * 新ポーズの板（`in`）の板フリップ (#707) を開始する。`startMs` を省略すると今。
    * `in` 側の state は alpha 0 で作られているので 1 に戻す（フェードが張られていればそちらに任せる）。
-   * `out` 側は alpha に触らない（フェードイン途中なら sprite の alpha をそのまま mesh へ写す）。
-   *
-   * `in` の途中（可視）で `out` を始める場合（A→B→C の連続ポーズ変更）は、B の現在角度から回し続ける。
-   * B がまだ不可視（in の前半）なら一度も見えていないので、回さず次の tick で破棄し、
-   * B の in の開始時刻を戻り値で返す（呼び出し側が次の板 C の in に `startMsOverride` で渡し、
-   * A が消える瞬間に C を現して空白を作らない）。
-   * その場合は B の in の開始時刻を戻り値で返す（`startMsOverride` で次の板の in に渡す）。
-   *
-   * 呼び出し側は sprite が layer に attach 済みであることを保証する（未 attach の旧 state は
-   * 一度も画面に出ていないので回さない）。
+   * `startMs` には、直前の `startFlipOut` が返した「B の in の開始時刻」を渡せる（下記参照）。
    */
-  private startFlip(
-    state: CharacterState,
-    role: BoardFlipRole,
-    startMsOverride?: number
-  ): number | undefined {
+  private startFlipIn(state: CharacterState, startMs: number = this.elapsedMs): void {
+    if (state.sprite.destroyed) return
+    if (!state.fadeAnimation) state.sprite.alpha = 1
+    this.beginFlip(state, 'in', startMs, 0)
+  }
+
+  /**
+   * 旧ポーズの板（`out`）の板フリップ (#707) を開始する。`alpha` には触らない（フェードイン途中なら
+   * sprite の alpha をそのまま mesh へ写す）。呼び出し側は sprite が layer に attach 済みであることを
+   * 保証する（未 attach の旧 state は一度も画面に出ていないので回さない）。
+   *
+   * `in` の途中（可視）で呼ばれた場合（A→B→C の連続ポーズ変更）は、B の現在角度から回し続ける。
+   * B がまだ不可視（in の前半）なら一度も見えていないので回さず、次の tick で破棄する。その場合は
+   * B の in の開始時刻（= A の out と同時）を返し、呼び出し側が C の `startFlipIn` に渡すことで、
+   * A が消える瞬間に C が現れて A→C が継ぎ目なしになる（総時間も延びない）。それ以外は undefined。
+   */
+  private startFlipOut(state: CharacterState): number | undefined {
     if (state.sprite.destroyed) return undefined
-    let fromAngleRad = 0
-    let startMs = startMsOverride ?? this.elapsedMs
-    let inheritedStartMs: number | undefined
     const prev = state.flipAnimation
-    if (prev && prev.role === 'in' && role === 'out') {
+    if (prev && prev.role === 'in') {
       const f = computeBoardFlipFrame('in', this.elapsedMs - prev.startMs, prev.durationMs)
       if (f.visible) {
-        fromAngleRad = f.angleRad
-      } else {
-        // 一度も見えていない板は即終了扱い。戻り値で B の in の開始時刻を返し、呼び出し側が次の板
-        // （C）の in にその時刻を引き継ぐ。A（B と同時に始まった out）が消える瞬間に C が現れ、
-        // A→C が継ぎ目なしになる（総時間も延びない）。
-        startMs = this.elapsedMs - prev.durationMs
-        inheritedStartMs = prev.startMs
+        this.beginFlip(state, 'out', this.elapsedMs, f.angleRad)
+        return undefined
       }
+      // 即完了扱いにするため、開始を durationMs 前に置く。ticker は完了判定（elapsed>=duration）で
+      // state ごと破棄する。このフレームに作られる mesh は不可視（out の経過 >= half）のまま。
+      const inheritedStartMs = prev.startMs
+      this.beginFlip(state, 'out', this.elapsedMs - prev.durationMs, 0)
+      return inheritedStartMs
     }
+    this.beginFlip(state, 'out', this.elapsedMs, 0)
+    return undefined
+  }
+
+  /** `startFlipIn` / `startFlipOut` の共通部。sprite を不可視にし、同じ texture の PerspectiveMesh を
+   *  sprite と同じ位置（z-order）に置く。角度・四隅・alpha の更新は ticker が毎フレーム行う。 */
+  private beginFlip(
+    state: CharacterState,
+    role: BoardFlipRole,
+    startMs: number,
+    fromAngleRad: number
+  ): void {
     this.clearFlip(state)
     const mesh = new PerspectiveMesh({ texture: state.sprite.texture })
     const index =
       state.sprite.parent === this ? this.getChildIndex(state.sprite) : this.children.length
     this.addChildAt(mesh, index)
-    if (role === 'in' && !state.fadeAnimation) state.sprite.alpha = 1
     state.sprite.visible = false
     state.flipAnimation = {
       role,
@@ -1203,7 +1213,6 @@ export class CharacterLayer extends Container {
     this.applySpriteFilters(state)
     this.updateFlipFrame(state, state.flipAnimation)
     this.ensureTicker()
-    return inheritedStartMs
   }
 
   /** 板フリップの mesh を破棄し、sprite を可視に戻す。geometry は mesh.destroy() では破棄されない。 */
@@ -1807,13 +1816,13 @@ export class CharacterLayer extends Container {
             // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
             let inheritedStartMs: number | undefined
             if (existing.sprite.parent === this) {
-              inheritedStartMs = this.startFlip(existing, 'out')
+              inheritedStartMs = this.startFlipOut(existing)
             } else {
               // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
               // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
               this.startFade(existing, existing.sprite.alpha, 0, true)
             }
-            this.startFlip(nextState, 'in', inheritedStartMs)
+            this.startFlipIn(nextState, inheritedStartMs)
           } else {
             this.startFade(existing, existing.sprite.alpha, 0, true)
             this.startFade(nextState, 0, 1, false)

@@ -40,7 +40,7 @@ interface StateLike {
 }
 interface Internals {
   characters: Map<string, StateLike>
-  animTicker: { update: (t?: number) => void; lastTime: number; stop: () => void } | null
+  animTicker: { update: (t?: number) => void; lastTime: number; speed: number } | null
   elapsedMs: number
 }
 const internals = (l: CharacterLayer): Internals => l as unknown as Internals
@@ -48,14 +48,18 @@ const internals = (l: CharacterLayer): Internals => l as unknown as Internals
 /**
  * 仮想時間を ms だけ進めて ticker を 1 回回す。
  * Ticker.start() を無効化しているので実時間の rAF は走らない（beforeEach）。さらに
- * `update(lastTime + 1e-6)` で ticker 自身の deltaMS を実質 0 に固定し（lastTime と同値だと listener が呼ばれない）、elapsedMs への実時間混入をなくす
+ * `ticker.speed = 0` で ticker 自身の deltaMS を厳密に 0 に固定し（listener は `update(lastTime+1)` で
+ * 呼ぶ。lastTime と同値だと listener が呼ばれない）、elapsedMs への上乗せを一切なくす
  * （混入すると角度の許容を超えて不安定になる）。時間の進みは `elapsedMs += ms` だけ。
  */
 function advance(layer: CharacterLayer, ms: number): void {
   const i = internals(layer)
   i.elapsedMs += ms
   const t = i.animTicker
-  if (t) t.update(t.lastTime + 1e-6)
+  if (t) {
+    t.speed = 0
+    t.update(t.lastTime + 1)
+  }
 }
 
 function makeTexture(w: number, h: number): Texture {
@@ -352,7 +356,7 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
     const c = internals(layer).characters.get('hero')!
     expect(c).not.toBe(b)
     expect(b.flipAnimation?.role).toBe('out')
-    expect(b.flipAnimation?.fromAngleRad).toBeCloseTo(angleB, 6)
+    expect(b.flipAnimation?.fromAngleRad).toBeCloseTo(angleB, 12)
     // out 開始直後の B の四隅は B の現在角（angleB）の板と一致する（0° に跳ばない）。
     const sp = b.sprite
     const exp = computeBoardFlipCorners(
@@ -512,5 +516,16 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
     for (let i = 0; i < 6; i++) advance(layer, 250)
     expect(internals(layer).characters.size).toBe(0)
     expect(meshCount(layer)).toBe(0)
+  })
+
+  it('S-1: 経過がちょうど half の瞬間も、旧板が消えて新板が現れ、空白フレームにならない', async () => {
+    const { layer, oldState, newState } = await setupPoseChange('Theater')
+    advance(layer, 500) // 厳密に half（ticker の上乗せは 0）
+    expect(internals(layer).elapsedMs).toBe(500)
+    expect(oldState.flipAnimation!.mesh.visible).toBe(false)
+    expect(newState.flipAnimation!.mesh.visible).toBe(true)
+    for (const v of newState.flipAnimation!.mesh.geometry.positions) {
+      expect(Number.isFinite(v)).toBe(true)
+    }
   })
 })
