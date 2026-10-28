@@ -6,7 +6,7 @@
  * 会話ダイアログを表示する。RPG プレイモードのデフォルトビュー。
  */
 
-import { Application, Container, Graphics, Sprite } from 'pixi.js'
+import { Application, Assets, Container, Graphics, Sprite, Texture } from 'pixi.js'
 import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import type { MonsterDef, PartyMemberDef } from '../types'
 import { DialogBox } from './DialogBox'
@@ -28,7 +28,7 @@ import {
 } from './touchInput'
 import { TouchMenuOverlay, DQ4_COMMANDS, type Dq4CommandId } from './TouchMenuOverlay'
 import { rollEncounter } from './encounter'
-import { EventRunner, type NpcMover } from './eventRunner'
+import { EventRunner, type EventEmotionHost, type NpcMover } from './eventRunner'
 import type { BattleScreen } from './BattleScreen'
 import type { BattleEntity } from './spellDsl'
 import type { BattleResult } from './loot'
@@ -44,6 +44,15 @@ import {
 } from './fieldBattle'
 import type { BattleEffects } from './battleEffects'
 import { loadBattleEffects } from './battleEffectsLoader'
+import { FieldEmotionLayer } from './FieldEmotionLayer'
+import { createFieldEmotionHost } from './fieldScript'
+import { EMOTION_DEFAULT_DURATION_MS, type EmotionSheets, type EmotionTarget } from './fieldEmotion'
+import {
+  canShowTopDownEmotion,
+  loadTopDownEmotionSheets,
+  topDownEmotionContext,
+  topDownEmotionHeads,
+} from './topDownEmotion'
 import { battleTransitionParams, isBattleTransitionEnabled } from './battleTransition'
 import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 
@@ -61,6 +70,27 @@ interface NPC {
   phaseOffset: number
   /** 現在の向き（data.direction または 'down'） */
   direction: Direction
+}
+
+/** 読み込み中に溜める `[感情:]` の上限 (#943) */
+const MAX_PENDING_EMOTIONS = 32
+
+/** 感情吹き出しの絵を読み込む。読めなかった種類は null（その種類は出さない。ゲームは止めない） (#943) */
+async function loadEmotionTextures(sheets: EmotionSheets): Promise<Map<string, Texture | null>> {
+  const textures = new Map<string, Texture | null>()
+  await Promise.all(
+    [...new Set(Object.values(sheets).map((sheet) => sheet.image))].map(async (image) => {
+      try {
+        textures.set(image, (await Assets.load(image)) as Texture)
+      } catch (e) {
+        console.warn(
+          `[name-name] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
+        )
+        textures.set(image, null)
+      }
+    })
+  )
+  return textures
 }
 
 /** once=true トリガーの発火済みフラグを localStorage に保存するキーを生成する (#198) */
@@ -135,6 +165,15 @@ export class TopDownRenderer {
   /** `battle_effects` (#941) の読み込み済み宣言と、再 load で古い読み込みを捨てるための世代 */
   private battleEffects: BattleEffects | undefined = undefined
   private battleEffectsToken = 0
+  /** 感情吹き出し (#943)。`field_emotions` の宣言が読めたときだけ層を持つ（無ければ null＝`[感情:]` は警告して読み飛ばし）。再 load で古い読み込みを捨てる世代 */
+  private emotionSheets: EmotionSheets | undefined = undefined
+  private emotionLayer: FieldEmotionLayer | null = null
+  private emotionToken = 0
+  /** `field_emotions` の読み込み中か。読み込み中の `[感情:]` は `pendingEmotions` に溜める（上限 `MAX_PENDING_EMOTIONS`） */
+  private emotionLoading = false
+  private pendingEmotions: { target: string; kind: string; durationMs?: number; at: number }[] = []
+  /** 吹き出しの絵の読み込み（テストで差し替える） */
+  private loadEmotionTextures = loadEmotionTextures
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
   private battleScreen: BattleScreen | null = null
   /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` / `ff-mosaic` のときだけ使う。演出中の状態はここが private で持つ */
@@ -192,10 +231,7 @@ export class TopDownRenderer {
     const npcMover: NpcMover = {
       moveNpcTo: (name, x, y, speed) => this.moveNpcTo(name, x, y, speed),
     }
-    this.eventRunner = new EventRunner(this.dialogBox, npcMover, {
-      startBattle: (id) => this.startScriptedBattle(id),
-      findEvent: (name) => this.gameData?.rpgEvents?.find((e) => e.name === name)?.commands,
-    })
+    this.eventRunner = this.createEventRunner(this.dialogBox, npcMover)
 
     // ミニマップは raycast 専用 (#149)。topdown は元々全体俯瞰で見えているので不要。
 
@@ -324,6 +360,7 @@ export class TopDownRenderer {
     void loadBattleEffects(gameData.battleEffects, this.assetBaseUrl).then((e) => {
       if (effectsToken === this.battleEffectsToken) this.battleEffects = e
     })
+    this.startEmotionLoad(gameData.fieldEmotions)
     this.encounterCooldown = 0
     this.deferredStepTrigger = null
     this.pendingSwipe = null
@@ -380,6 +417,7 @@ export class TopDownRenderer {
   destroy(): void {
     this.closeBattle()
     this.battleEffectsToken++ // 読み込み中の battle_effects の結果を捨てる (#941)
+    this.resetEmotions() // 読み込み中の field_emotions の結果も捨てる (#943)
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
@@ -1055,6 +1093,7 @@ export class TopDownRenderer {
       this.transition.tick(dt * 1000) // 開始・終了の画面遷移 (#830)
     }
     this.updateNpcAnimations(now)
+    this.tickEmotions(dt * 1000)
     if (!this.isMoving) return
     const t = Math.min(1, (now - this.moveStart) / this.moveDuration)
     const x = this.moveFromX + (this.moveToX - this.moveFromX) * t
@@ -1078,6 +1117,129 @@ export class TopDownRenderer {
         this.pendingSwipe = null
       }
     }
+  }
+
+  /** NPC イベントの実行器。`emotionHost` の配線（#943）もここ（テストから担保できるよう init から切り出している） */
+  private createEventRunner(dialogBox: DialogBox, npcMover: NpcMover): EventRunner {
+    return new EventRunner(
+      dialogBox,
+      npcMover,
+      {
+        startBattle: (id) => this.startScriptedBattle(id),
+        findEvent: (name) => this.gameData?.rpgEvents?.find((e) => e.name === name)?.commands,
+      },
+      this.createEmotionHost()
+    )
+  }
+
+  /** 感情吹き出しの層を捨てて世代を進める（再 load・destroy）。NPC の吹き出しはマップごとに消える (#943) */
+  private resetEmotions(): void {
+    this.emotionToken++
+    this.emotionLayer?.destroy()
+    this.emotionLayer = null
+    this.emotionSheets = undefined
+    this.emotionLoading = false
+    this.pendingEmotions = []
+  }
+
+  /**
+   * `field_emotions` を読んで層を作る (#943)。読み込み中に出た `[感情:]`（マップ進入時の auto トリガーなど）は
+   * `pendingEmotions` に溜め、層ができた時点で残りの持続で再生する。失敗・宣言なしは溜めた分を捨てて警告を 1 回だけ出す
+   */
+  private startEmotionLoad(path: string | undefined): void {
+    this.resetEmotions()
+    if (!path) return
+    const token = this.emotionToken
+    this.emotionLoading = true
+    const fail = (): void => {
+      const dropped = this.pendingEmotions.length
+      this.emotionLoading = false
+      this.pendingEmotions = []
+      if (dropped > 0)
+        console.warn(
+          `[name-name] field_emotions を読み込めなかったため、読み込み中の [感情:] ${dropped} 件を出せません`
+        )
+    }
+    void loadTopDownEmotionSheets(path, this.assetBaseUrl).then(async (sheets) => {
+      if (token !== this.emotionToken) return
+      if (!sheets) return fail()
+      const textures = await this.loadEmotionTextures(sheets)
+      // 読み込み中に再 load・destroy されたら捨てる
+      if (token !== this.emotionToken || !this.initialized) return
+      this.emotionSheets = sheets
+      this.emotionLayer = new FieldEmotionLayer(sheets, textures)
+      this.world.addChild(this.emotionLayer)
+      this.emotionLoading = false
+      const pending = this.pendingEmotions
+      this.pendingEmotions = []
+      const host = this.createEmotionHost()
+      const now = performance.now()
+      for (const q of pending) {
+        const base = q.durationMs ?? sheets[q.kind]?.durationMs ?? EMOTION_DEFAULT_DURATION_MS
+        const remaining = Math.floor(base - (now - q.at))
+        if (remaining > 0) host.showEmotion(q.target, q.kind, remaining)
+      }
+    })
+  }
+
+  /** EventRunner の `emotionHost`。対象名は「主人公／このマップの NPC の名前」で解決する (#943) */
+  private createEmotionHost(): EventEmotionHost {
+    const host = createFieldEmotionHost(
+      () =>
+        topDownEmotionContext(
+          this.emotionSheets ?? {},
+          this.gameData?.protagonist,
+          this.npcs.map((n) => ({ id: n.data.id, name: n.data.name }))
+        ),
+      (target, kind, durationMs) => this.showEmotion(target as EmotionTarget, kind, durationMs),
+      undefined,
+      '[name-name]'
+    )
+    return {
+      showEmotion: (target, kind, durationMs) => {
+        // 読み込み中は宣言が分からない（「未宣言」と誤警告しない）。溜めて、層ができたら再生する
+        if (this.emotionLoading) {
+          if (this.pendingEmotions.length < MAX_PENDING_EMOTIONS)
+            this.pendingEmotions.push({ target, kind, durationMs, at: performance.now() })
+          return
+        }
+        host.showEmotion(target, kind, durationMs)
+      },
+    }
+  }
+
+  /** 脚本の `[感情:]` の出し口。戦闘中・同行者（TopDown に居ない）・別マップの NPC・絵が読めない種類は false */
+  private showEmotion(target: EmotionTarget, kind: string, durationMs?: number): boolean {
+    if (!this.emotionLayer) return false
+    const npcIds = new Set(this.npcs.map((n) => n.data.id))
+    if (!canShowTopDownEmotion(target, { battleBusy: this.battleBusy, npcIds })) return false
+    return this.emotionLayer.show(target, kind, durationMs)
+  }
+
+  /** 吹き出しの時間を進めて人物の頭上に置き直す。戦闘中は消す。設定オーバーレイ中は他の進行と同じく止める */
+  private tickEmotions(dtMs: number): void {
+    const layer = this.emotionLayer
+    if (!layer) return
+    if (this.battleBusy) {
+      layer.clear()
+      return
+    }
+    if (this.inputGate.isSuspended) return
+    const size = this.tileSize - 4
+    layer.tick(
+      dtMs,
+      topDownEmotionHeads(
+        this.playerContainer
+          ? { x: this.playerContainer.x, y: this.playerContainer.y, height: size }
+          : null,
+        this.npcs.map((n) => ({
+          id: n.data.id,
+          x: n.container.x,
+          y: n.container.y,
+          height: n.sprite ? n.sprite.height : size,
+        }))
+      )
+    )
   }
 
   /** NPC アニメ: アイドル足踏みだけ。位相オフセットで画一感を防ぐ */
