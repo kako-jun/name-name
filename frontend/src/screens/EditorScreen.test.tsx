@@ -56,7 +56,13 @@ vi.mock('../components/CanvasEditor', () => ({
     <button data-testid="edit-doc" onClick={() => props.onDocChange(editedDoc)} />
   ),
 }))
-vi.mock('../components/MapEditor', () => ({ default: () => <div /> }))
+const mapEditorProps: Array<Record<string, unknown>> = []
+vi.mock('../components/MapEditor', () => ({
+  default: (props: Record<string, unknown>) => {
+    mapEditorProps.push(props)
+    return <div data-testid="map-editor" />
+  },
+}))
 vi.mock('../components/NPCEditor', () => ({ default: () => <div /> }))
 const rpgPlayerProps: Array<Record<string, unknown>> = []
 vi.mock('../components/RPGPlayer', () => ({
@@ -1270,6 +1276,7 @@ describe('EditorScreen: play タブは収まらない群を検証して外す (#
 
   beforeEach(() => {
     rpgPlayerProps.length = 0
+    mapEditorProps.length = 0
     playerProps.length = 0
     parsedByMarkdown.clear()
     localStorage.clear()
@@ -1277,6 +1284,22 @@ describe('EditorScreen: play タブは収まらない群を検証して外す (#
     getContentsMock.mockImplementation(async () => ({ content: '# x', sha: 'sha' }))
     listScriptsMock.mockReset()
     listScriptsMock.mockImplementation(async () => [])
+  })
+
+  it('#840: frontmatter dialog_style: ff が、プレイタブの RPGPlayer と MapEditor（プレビュー用）に渡る', async () => {
+    parsed = { ...gridDoc(), dialog_style: 'ff' } as unknown as EventDocument
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      renderEditor()
+      fireEvent.click(await screen.findByRole('tab', { name: 'RPG' }))
+      await waitFor(() => expect(mapEditorProps.length).toBeGreaterThan(0))
+      expect(mapEditorProps[mapEditorProps.length - 1].dialogStyle).toBe('ff')
+      fireEvent.click(await screen.findByRole('button', { name: 'プレイ' }))
+      await waitFor(() => expect(rpgPlayerProps.length).toBeGreaterThan(0))
+      expect(rpgPlayerProps[rpgPlayerProps.length - 1].dialogStyle).toBe('ff')
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('RPGPlayer に渡る project は群が検証済み（3x3 の wide は 6x2 に入らず外れる）', async () => {
