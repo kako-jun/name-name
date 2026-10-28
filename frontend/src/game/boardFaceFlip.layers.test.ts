@@ -270,6 +270,8 @@ describe.each([
       await flush()
       expect(kinds(layer)).toEqual(['sprite'])
       expect(layer.children[0]).toBe(sprA)
+      // 取り消された面のスライドインなどのタイマーも立てない。
+      expect(timersOf(time)).toHaveLength(0)
       deferred['C.png'].resolve(texFor('C.png'))
       await flush()
       // A→C の回転。B は一度も現れない。
@@ -332,7 +334,7 @@ describe.each([
     })
 
     it('ロード待ち中の撤去 (clear) で旧面も消え、後からロードが終わっても何も出ない', async () => {
-      const { layer, deferred } = await withFront('Theater', ['B.png'])
+      const { layer, time, deferred } = await withFront('Theater', ['B.png'])
       const sprA = layer.children[0] as Sprite
       layer.replace('B.png', 0, 'A.png', '/a')
       layer.clear()
@@ -342,6 +344,7 @@ describe.each([
       await flush()
       expect(layer.children).toHaveLength(0)
       expect(layer.getState()).toEqual([])
+      expect(timersOf(time)).toHaveLength(0)
     })
 
     it('新しい面の読み込みに失敗したら旧面も残さない（宣言は新しい面）', async () => {
