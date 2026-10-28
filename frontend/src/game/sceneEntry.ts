@@ -71,7 +71,7 @@ export type SceneEntryResult =
  * 新しく持ち越す状態を足すときは、この型に1項目足して `carryPolicyFor` の表を埋めるだけで済む。
  */
 export interface CarryPolicy {
-  /** 背景・背景板・大道具・幕・紙人形輪郭を持ち越す（立ち絵は遷移用の退場になる）。 */
+  /** 背景・背景板・壁・大道具・幕・紙人形輪郭を持ち越す（立ち絵は遷移用の退場になる）。 */
   preserveBackgroundForTransition: boolean
   /** BGM を持ち越す (#724)。 */
   carryBgm: boolean

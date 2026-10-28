@@ -47,6 +47,16 @@ fn default_npc_move_speed() -> u32 {
     3
 }
 
+/// serde の既定値 `true`（`Event::Wall` のループ・ミュート)。
+fn default_true() -> bool {
+    true
+}
+
+/// serde の `skip_serializing_if` 用。既定値 `true` のときは JSON に出さない。
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(target_arch = "wasm32", derive(Tsify))]
 #[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
@@ -980,6 +990,32 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         flip_ms: Option<u32>,
     },
+    /// 舞台の壁 (#703)。背景板（`BackgroundBoard`）よりさらに奥に置く、画面いっぱいの単一スロットの
+    /// 画像または動画。照明の模様やプロジェクションマッピング風の映像を流す用途。
+    /// 新しい `[壁:]` は前の壁を置換する（単一スロット）。解除は [`Event::WallExit`]（`[壁: なし]`）。
+    ///
+    /// 画像と動画は拡張子で判別する（動画: `mp4`/`webm`/`ogv`/`mov`/`m4v`。それ以外は画像）。判別は
+    /// フロント側が行う。画像は `images/`、動画は `videos/` 以下から読む（背景板・`[動画:]` と同じ）。
+    ///
+    /// Markdown 構文: `[壁: 光.webp]` / `[壁: 星空.webm]` / `[壁: 映像.webm, ループ=false, ミュート=false]`。
+    /// kv は `[動画:]` と同じ `=` 区切りで、`ループ`/`loop` と `ミュート`/`mute` だけを受ける
+    /// （動画のときだけ意味を持つ。未知のキーは無視）。**既定はループ・ミュート**（`true`）。
+    /// `[場面転換]` でクリアされる。
+    Wall {
+        path: String,
+        /// 動画をループ再生するか。既定 `true`。
+        #[serde(
+            rename = "loop",
+            default = "default_true",
+            skip_serializing_if = "is_true"
+        )]
+        loop_: bool,
+        /// 動画の音声をミュートするか。既定 `true`（壁は映像のみ）。
+        #[serde(default = "default_true", skip_serializing_if = "is_true")]
+        mute: bool,
+    },
+    /// 壁をクリアする (#703)。Markdown 構文: `[壁: なし]`。
+    WallExit,
     /// 動画入力レイヤ (#252)。立ち絵/背景と同じ枠組みで動画ファイルをレイヤとして配置・再生する。
     /// 背景と同じく単一スロット意味論: 新しい `[動画:]` は前の動画を置換する。
     /// 音声トラックがある動画は既定でミックス再生する（`mute=true` で無音化）。

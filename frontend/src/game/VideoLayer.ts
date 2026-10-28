@@ -318,6 +318,16 @@ export class VideoLayer extends Container {
     }
   }
 
+  /** 表示中の動画が再生を終えて最終フレームで止まっているか（動画なし・再生中は false） */
+  hasEnded(): boolean {
+    return this.videoEl?.ended === true
+  }
+
+  /** 表示中の動画が読み込み・デコードに失敗しているか（動画なし・正常は false。読み取り専用） */
+  hasError(): boolean {
+    return this.videoEl?.error != null
+  }
+
   /** 終わりのある動画（loop でない）が再生中か (#780 書き出しの停滞判定用) */
   isPlayingToEnd(): boolean {
     const el = this.videoEl

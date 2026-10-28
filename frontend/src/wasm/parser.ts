@@ -216,6 +216,12 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         Emotion: { target: em.target, kind: em.kind, duration_ms: em.duration_ms ?? null },
       }
     }
+    if ('Wall' in event) {
+      // #703: Rust 側は既定値（loop/mute とも true）を JSON に載せない（skip_serializing_if）ため、
+      // 型上は optional のまま届く。利用側が毎回 `?? true` を書かずに済むよう、ここで boolean に揃える。
+      const wall = event.Wall
+      return { Wall: { path: wall.path, loop: wall.loop ?? true, mute: wall.mute ?? true } }
+    }
     if ('BackgroundBoard' in event) {
       // #683: Rust 側は `depth: f32`（Option ではないが #[serde(default)] のため tsify の型上は
       // optional）。実運用では常に値が入るはずだが、他の #[serde(default)] フィールドと同じ

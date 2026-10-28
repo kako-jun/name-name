@@ -18,6 +18,7 @@ import {
   EventImageState,
   SpotlightState,
   VideoState,
+  WallState,
 } from './GameState'
 import type { PaperDollOutlineConfig } from './outlineFilter'
 
@@ -68,6 +69,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined は空配列（板なし）扱い。
    */
   backgroundBoards?: Array<{ path: string; depth: number }>
+  /**
+   * 舞台の壁 (#703)。
+   * 後方互換: 古いセーブデータには無い → undefined/null は壁なし扱い。
+   */
+  wall?: WallState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。
    * 後方互換: 古いセーブデータには無い → undefined は空配列（大道具なし）扱い。

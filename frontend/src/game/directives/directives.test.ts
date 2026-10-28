@@ -40,6 +40,7 @@ function fake() {
     layers: {
       video: port('video'),
       backgroundBoard: port('bboard'),
+      wall: port('wall'),
       prop: port('prop'),
       curtain: port('curtain'),
       lighting: port('lighting'),
@@ -222,13 +223,14 @@ describe('ハンドラ単体', () => {
     expect(calls).toEqual(['audio.stopBgm', 'hooks.setCurrentBgmPath'])
   })
 
-  it('SceneTransition: クリア順は 背景→動画→背景板→大道具→幕→照明→動画→イベント絵→…→暗転解除→scrim', () => {
+  it('SceneTransition: クリア順は 背景→動画→背景板→壁→大道具→幕→照明→動画→イベント絵→…→暗転解除→scrim', () => {
     const { ctx, calls } = fake()
     dispatchDirective(E('SceneTransition'), ctx)
     expect(calls).toEqual([
       'bg.clearBackground',
       'video.remove',
       'bboard.clear',
+      'wall.clear',
       'prop.clear',
       'curtain.clear',
       'hooks.setCurtainZOrder',

@@ -483,6 +483,28 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&format!("[背景色: {color}]\n"));
                 prev_was_dialog_or_text = false;
             }
+            Event::Wall { path, loop_, mute } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #703: 既定値（ループ・ミュートとも true）は round-trip 安定のため無出力にする。
+                let mut kv = String::new();
+                if !*loop_ {
+                    kv.push_str(", ループ=false");
+                }
+                if !*mute {
+                    kv.push_str(", ミュート=false");
+                }
+                out.push_str(&format!("[壁: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::WallExit => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[壁: なし]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Video {
                 path,
                 position,

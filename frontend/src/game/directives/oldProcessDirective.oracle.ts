@@ -26,6 +26,7 @@ export interface OldWorld {
   stage: any
   videoLayer: any
   backgroundBoardLayer: any
+  wallLayer: any
   propLayer: any
   curtainLayer: any
   lightingLayer: any
@@ -53,12 +54,19 @@ export interface OldWorld {
 }
 
 /** 旧 processDirective が（フロー制御系を除いて）処理していた文字列イベント。 */
-export const OLD_STRING_KEYS = ['SceneTransition', 'VideoExit', 'SpotlightOff', 'CurtainUp']
+export const OLD_STRING_KEYS = [
+  'SceneTransition',
+  'VideoExit',
+  'WallExit',
+  'SpotlightOff',
+  'CurtainUp',
+]
 
 /** 旧 processDirective が（フロー制御系を除いて）処理していたオブジェクトイベントのキー。 */
 export const OLD_OBJECT_KEYS = [
   'Background',
   'BackgroundBoard',
+  'Wall',
   'Prop',
   'BackgroundColor',
   'Video',
@@ -94,6 +102,7 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
       w.background.clearBackground()
       w.videoLayer.remove()
       w.backgroundBoardLayer.clear()
+      w.wallLayer.clear()
       w.propLayer.clear()
       w.curtainLayer.clear()
       w.hooks.setCurtainZOrder(false)
@@ -108,6 +117,10 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
     }
     if (event === 'VideoExit') {
       w.videoLayer.remove()
+      return true
+    }
+    if (event === 'WallExit') {
+      w.wallLayer.clear()
       return true
     }
     if (event === 'SpotlightOff') {
@@ -137,6 +150,11 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   if ('BackgroundBoard' in event) {
     const board = event.BackgroundBoard
     w.backgroundBoardLayer.add(board.path, board.depth ?? 0, w.env.assetBaseUrl)
+    return true
+  }
+  if ('Wall' in event) {
+    const wall = event.Wall
+    w.wallLayer.show(wall.path, { loop: wall.loop, mute: wall.mute }, w.env.assetBaseUrl)
     return true
   }
   if ('Prop' in event) {

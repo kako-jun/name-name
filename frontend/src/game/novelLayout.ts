@@ -1021,6 +1021,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   backgroundBrightness = data.backgroundBrightness ?? null  // 古いセーブには無い → 原画のまま
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
  *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
+ *   wall           = data.wall ?? null       // 古いセーブには無い → 壁なし (#703)
  *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
  *   spotlight      = data.spotlight ?? null  // 古いセーブには無い → 消灯 (#693)
  *   curtain        = data.curtain ?? null    // 古いセーブには無い → 幕なし (#697)
@@ -1064,6 +1065,10 @@ export function saveSlotToGameState(
     eventImage: data.eventImage ?? null,
     // シアターモード舞台構造の背景板 (#683)。古いセーブには無い → ?? [] で板なしに倒す。
     backgroundBoards: data.backgroundBoards ?? [],
+    // 舞台の壁 (#703)。古いセーブには無い → ?? null で壁なしに倒す。loop/mute の欠落は既定（true）に倒す。
+    wall: data.wall
+      ? { ...data.wall, loop: data.wall.loop !== false, mute: data.wall.mute !== false }
+      : null,
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
     // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1125,6 +1130,7 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
     video: snapshot.video,
     eventImage: snapshot.eventImage,
     backgroundBoards: snapshot.backgroundBoards,
+    wall: snapshot.wall,
     props: snapshot.props,
     spotlight: snapshot.spotlight,
     curtain: snapshot.curtain,
@@ -1545,6 +1551,19 @@ export function computeBoardPlacement(
     width: fit.width * projection.scale,
     height: fit.height * projection.scale,
   }
+}
+
+const WALL_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v'])
+
+/**
+ * 壁 (#703) の path が動画かを、拡張子（クエリ・フラグメントは無視、大小無視）で判別する純粋関数。
+ * 動画拡張子以外（拡張子なしを含む）はすべて画像として扱う。
+ */
+export function isWallVideoPath(path: string): boolean {
+  const clean = path.split(/[?#]/)[0]
+  const dot = clean.lastIndexOf('.')
+  if (dot < 0) return false
+  return WALL_VIDEO_EXTENSIONS.has(clean.slice(dot + 1).toLowerCase())
 }
 
 /** 背景板 (#683) の「上から降りてくる」スライドインアニメーションの所要時間 (ms)。 */

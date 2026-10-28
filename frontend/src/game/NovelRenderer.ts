@@ -34,6 +34,7 @@ import {
 import { AudioManager } from './AudioManager'
 import { GameState, NovelGameState, StartFromOptions, Step, entryFromState } from './GameState'
 import { VideoLayer } from './VideoLayer'
+import { WallLayer } from './WallLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -618,12 +619,17 @@ export class NovelRenderer {
   )
 
   /**
-   * シアターモードのカメラズーム (#702)。背景板・スポットライト・大道具・立ち絵のコンテナに
+   * シアターモードのカメラズーム (#702)。壁・背景板・スポットライト・大道具・立ち絵のコンテナに
    * 共通の scale/position を掛ける。状態（`cameraZoom`）の正本は `stage`、ここは描画反映だけを担う。
    */
   private readonly cameraZoom = new CameraZoomController(
     {
-      getLayers: () => [this.backgroundBoardLayer, this.lightingLayer, this.propLayer],
+      getLayers: () => [
+        this.wallLayer,
+        this.backgroundBoardLayer,
+        this.lightingLayer,
+        this.propLayer,
+      ],
       applyCharacterPose: (pose) => this.characterLayer.setZoomPose(pose),
       getFocus: (target) => this.characterLayer.getZoomFocus(target),
       getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
@@ -658,6 +664,9 @@ export class NovelRenderer {
       layers: {
         get video() {
           return r.videoLayer
+        },
+        get wall() {
+          return r.wallLayer
         },
         get backgroundBoard() {
           return r.backgroundBoardLayer
@@ -759,6 +768,11 @@ export class NovelRenderer {
    * 既存の単一スロット背景（bgContainer / setBackground）とは完全に独立。
    */
   private backgroundBoardLayer: BackgroundBoardLayer
+  /**
+   * 舞台の壁 (#703)。背景板よりさらに奥の単一スロット（画像または動画）。settled state は
+   * `NovelGameState.wall`。カメラ・ズームは背景板と同じ経路で受ける。
+   */
+  private wallLayer: WallLayer
 
   /**
    * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
@@ -884,6 +898,8 @@ export class NovelRenderer {
     this.audioManager = new AudioManager(this.time)
     // 動画入力レイヤ (#252)。音声ミックスのため audioManager を注入する。
     this.videoLayer = new VideoLayer(this.screenWidth, this.screenHeight, this.audioManager)
+    // 舞台の壁レイヤー (#703)。動画の壁は VideoLayer と同じ AudioManager 経由で音をミックスする。
+    this.wallLayer = new WallLayer(this.screenWidth, this.screenHeight, this.audioManager)
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
     // 選択肢の確定音／ホバー音を AudioManager で鳴らせるように注入 (#146)
     this.choiceOverlay.setAudioManager(this.audioManager)
@@ -939,6 +955,9 @@ export class NovelRenderer {
     // 下地ベタ（既定色・#409）と背景画像コンテナ。frontmatter `background_color:` の既定色（未指定なら黒）で
     // 全面を塗る。最初の背景絵はこの地色の上に alpha 0→1 で重なってフェードインする（コールドスタート）。
     this.stage.attachBackground(this.app.stage)
+
+    // 舞台の壁レイヤー (#703)。背景板よりさらに奥——単一スロット背景の直後・背景板の手前（下）に置く。
+    this.app.stage.addChild(this.wallLayer)
 
     // 舞台構造の背景板レイヤー (#683)。既存の単一スロット背景の直後・動画/立ち絵より下
     // （舞台の書割は背景と同じ「奥の情景」なので、動画・キャラより手前には出さない）。
@@ -1157,6 +1176,8 @@ export class NovelRenderer {
     this.eventImageLayer.disposeTextures()
     // 背景板レイヤーのテクスチャも同じ理由で解放する (#683、eventImageLayer と同じ流儀)。
     this.backgroundBoardLayer.disposeTextures()
+    // 壁レイヤーのテクスチャも同じ理由で解放する (#703、backgroundBoardLayer と同じ流儀)。
+    this.wallLayer.disposeTextures()
     // 大道具レイヤーのテクスチャも同じ理由で解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.disposeTextures()
     // 幕レイヤーのテクスチャも同じ理由で解放する (#697、backgroundBoardLayer と同じ流儀)。
@@ -1395,6 +1416,8 @@ export class NovelRenderer {
     this.background.forgetBackground()
     this.background.clearBackgroundColor()
     this.videoLayer.remove()
+    // 壁 (#703) も動画を持ちうるので終劇で止める（ミュート=false の壁が終劇後も鳴り続けない）。
+    this.wallLayer.clear()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
     // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
@@ -1672,7 +1695,7 @@ export class NovelRenderer {
       textIndex: this.cursor.textIndex,
       sentenceIndex: this.cursor.sentenceIndex,
       waitMs,
-      videoPlaying: this.videoLayer.isPlayingToEnd(),
+      videoPlaying: this.videoLayer.isPlayingToEnd() || this.wallLayer.isPlayingToEnd(),
     }
   }
 
@@ -1787,6 +1810,8 @@ export class NovelRenderer {
    */
   async prepareVideosForExport(): Promise<void> {
     await this.videoLayer.prepareForExport()
+    // 動画の壁 (#703) も同じく頭出しする。
+    await this.wallLayer.prepareForExport()
   }
 
   /**
@@ -1884,6 +1909,8 @@ export class NovelRenderer {
       // （preserveBackgroundForTransition=true）では持ち越し、この非 preserve 分岐（新しい
       // イベント列の最初の開始・setEvents() 経由）と明示的な `[場面転換]` でのみクリアする。
       this.backgroundBoardLayer.clear()
+      // 壁 (#703) も背景板と同じ持続規律にする。
+      this.wallLayer.clear()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
@@ -2905,6 +2932,9 @@ export class NovelRenderer {
     // 背景板レイヤーも破棄・テクスチャ解放する (#683、eventImageLayer と同じ流儀)。
     this.backgroundBoardLayer.clear()
     this.backgroundBoardLayer.disposeTextures()
+    // 壁レイヤーも破棄・テクスチャ解放する (#703、backgroundBoardLayer と同じ流儀)。
+    this.wallLayer.clear()
+    this.wallLayer.disposeTextures()
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
@@ -2955,6 +2985,7 @@ export class NovelRenderer {
       video: this.videoLayer.getState(),
       eventImage: this.eventImageLayer.getState(),
       backgroundBoards: this.backgroundBoardLayer.getState(),
+      wall: this.wallLayer.getState(),
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
       curtain: this.curtainLayer.getState(),
@@ -3377,6 +3408,10 @@ export class NovelRenderer {
     // （`stage.restore` が `applyCamera` で済ませてある）。
     this.backgroundBoardLayer.restore(state.backgroundBoards, this.assetBaseUrl)
 
+    // 舞台の壁復元 (#703)。壁はカメラ射影を受けない（ズームはレイヤー自身に掛かる）。同じ壁が表示中なら流し続け、
+    // 異なる・表示できていない・非ループ動画が再生し終えているときは差し替える（動画は頭から再生）。
+    this.wallLayer.restore(state.wall, this.assetBaseUrl)
+
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順
     // （カメラは `stage.restore` で同期済み）。
     this.propLayer.restore(state.props, this.assetBaseUrl)
@@ -3562,6 +3597,7 @@ export class NovelRenderer {
     const hide = this.eventImageLayer.shouldHideBackLayer()
     this.background.setVisible(!hide)
     this.backgroundBoardLayer.visible = !hide
+    this.wallLayer.visible = !hide
     this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
     this.lightingLayer.visible = !hide
@@ -3803,7 +3839,7 @@ export class NovelRenderer {
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
    *   webp/png の複数候補）、`Background` の背景画像、`BackgroundBoard` の背景板 (#683)、
-   *   `EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
+   *   `Wall` の壁 (#703, 画像の壁のみ。動画の壁は対象外)、`EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
    *   `resolveAssetUrl`）(#621)。Video 等
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。

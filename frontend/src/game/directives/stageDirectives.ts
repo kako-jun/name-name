@@ -19,6 +19,8 @@ const sceneTransition: DirectiveHandler = (_event, ctx) => {
   layers.video.remove()
   // 舞台構造の背景板 (#683) も既存の単一スロット背景と同じタイミングでクリアする。
   layers.backgroundBoard.clear()
+  // 舞台の壁 (#703) も背景板と同じタイミングでクリアする。
+  layers.wall.clear()
   // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
   layers.prop.clear()
   // 幕 (#697) も背景板・大道具と同じ単一スロット持続規律（[場面転換] でクリア、
@@ -48,6 +50,11 @@ export const stageSignalDirectives: DirectiveTable = {
   // [動画退場] で動画レイヤをクリア (#252)
   VideoExit: (_event, ctx) => {
     ctx.layers.video.remove()
+  },
+
+  // [壁: なし] で壁をクリア (#703)
+  WallExit: (_event, ctx) => {
+    ctx.layers.wall.clear()
   },
 
   // スポットライト消灯 (#693)。settled state（fire-and-forget ではない）。
@@ -94,6 +101,12 @@ export const stageDirectives: ObjectDirectiveTable = {
     } else {
       ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
     }
+  }),
+
+  // 舞台の壁 (#703)。背景板より奥の単一スロット（新しい [壁:] が前の壁を置換）。
+  Wall: on<'Wall'>((event, ctx) => {
+    const wall = event.Wall
+    ctx.layers.wall.show(wall.path, { loop: wall.loop, mute: wall.mute }, ctx.env.assetBaseUrl)
   }),
 
   // 舞台構造の大道具 (#692)。背景板とは独立した加算的レイヤー。

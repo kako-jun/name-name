@@ -1370,6 +1370,10 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("感情:") {
         return parse_emotion_directive(rest);
     }
+    // [壁: path] / [壁: なし] — 背景板よりさらに奥の壁 (#703)。他の既存タグと prefix 衝突しない。
+    if let Some(rest) = content.strip_prefix("壁:") {
+        return parse_wall_directive(rest);
+    }
     // [動画退場] — 動画レイヤをクリア (#252)。「動画:」より先に完全一致で判定する。
     if content == "動画退場" {
         return Some(Event::VideoExit);
@@ -1961,6 +1965,45 @@ fn parse_board_args(content: &str) -> (String, f32, Option<String>, Option<u32>)
         }
     }
     (path, depth, flip_from, flip_ms)
+}
+
+/// `[壁: path]` / `[壁: path, ループ=false, ミュート=false]` / `[壁: なし]` の本体を分解する (#703)。
+/// - path が `なし` → [`Event::WallExit`]（壁の解除）
+/// - path が空 → 不正な行としてイベントにしない（`None`）
+/// - kv は `[動画:]` と同じ `=` 区切り。`ループ`/`loop` と `ミュート`/`mute` だけを受け、
+///   bool 以外・未知のキーは無視（既定の `true` のまま）。複数指定時は後勝ち。
+fn parse_wall_directive(content: &str) -> Option<Event> {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if path == "なし" {
+        return Some(Event::WallExit);
+    }
+
+    let mut loop_ = true;
+    let mut mute = true;
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            if let Some((k, v)) = raw.trim().split_once('=') {
+                let value = parse_bool_kv(v);
+                match k.trim() {
+                    "ループ" | "loop" => loop_ = value.unwrap_or(loop_),
+                    "ミュート" | "mute" => mute = value.unwrap_or(mute),
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(Event::Wall {
+        path: path.to_string(),
+        loop_,
+        mute,
+    })
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`

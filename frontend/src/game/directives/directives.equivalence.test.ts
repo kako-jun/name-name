@@ -122,6 +122,7 @@ function makeWorld(o: EnvOptions) {
   const layers = {
     video: recorder(rec, 'video'),
     backgroundBoard: recorder(rec, 'bboard'),
+    wall: recorder(rec, 'wall'),
     prop: recorder(rec, 'prop'),
     curtain: recorder(rec, 'curtain'),
     lighting: recorder(rec, 'lighting'),
@@ -139,6 +140,7 @@ function makeWorld(o: EnvOptions) {
     stage,
     videoLayer: layers.video,
     backgroundBoardLayer: layers.backgroundBoard,
+    wallLayer: layers.wall,
     propLayer: layers.prop,
     curtainLayer: layers.curtain,
     lightingLayer: layers.lighting,
@@ -174,6 +176,7 @@ const E = (e: unknown): Event => e as Event
 const CASES: Array<[string, Event]> = [
   ['SceneTransition', 'SceneTransition'],
   ['VideoExit', 'VideoExit'],
+  ['WallExit', 'WallExit'],
   ['SpotlightOff', 'SpotlightOff'],
   ['CurtainUp', 'CurtainUp'],
   [
@@ -192,6 +195,8 @@ const CASES: Array<[string, Event]> = [
   ['Background(省略)', E({ Background: { path: 'bg/b.png' } })],
   ['BackgroundBoard(depth)', E({ BackgroundBoard: { path: 'b/1.png', depth: 3 } })],
   ['BackgroundBoard(depth省略)', E({ BackgroundBoard: { path: 'b/2.png' } })],
+  ['Wall(既定)', E({ Wall: { path: 'w/1.webp', loop: true, mute: true } })],
+  ['Wall(ループ/ミュートなし)', E({ Wall: { path: 'w/2.webm', loop: false, mute: false } })],
   ['Prop(depth)', E({ Prop: { path: 'p/1.png', depth: 2 } })],
   ['Prop(depth省略)', E({ Prop: { path: 'p/2.png' } })],
   ['BackgroundColor', E({ BackgroundColor: { color: '#112233' } })],
