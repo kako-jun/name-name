@@ -14,6 +14,7 @@ import {
   hasBattleEffects,
   parseBattleEffects,
   planEventEffects,
+  planHitEffects,
   type BattleEffects,
   type BattleEffectSheet,
 } from './battleEffects'
@@ -190,6 +191,27 @@ describe('effectAnchorPoint', () => {
   it('hand は相手側へ寄る: 味方は左へ、敵は右へ', () => {
     expect(effectAnchorPoint('hand', { side: 'party', ...base }, screen).x).toBeLessThan(100)
     expect(effectAnchorPoint('hand', { side: 'enemy', ...base }, screen).x).toBeGreaterThan(100)
+  })
+})
+
+describe('planHitEffects', () => {
+  it('hits の一部だけを渡すと、その命中の分だけが出る（時刻は命中の順番どおり）', () => {
+    const e = ev({ hits: [hit(0), hit(1), hit(2)] })
+    const at = ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS
+    expect(planHitEffects(e, [e.hits[1]], ALL, slashy)).toEqual([
+      { kind: 'slash', atMs: at, target: { side: 'enemy', index: 1 } },
+    ])
+    expect(planHitEffects(e, [e.hits[0], e.hits[2]], ALL, noSlash)).toEqual([
+      { kind: 'impact', atMs: at, target: { side: 'enemy', index: 0 } },
+      { kind: 'impact', atMs: at, target: { side: 'enemy', index: 2 } },
+    ])
+  })
+
+  it('空の hits・宣言なしは何も出さない。ミスと回復は渡されても出さない', () => {
+    const e = ev({ hits: [hit(0), hit(1, { kind: 'miss' }), hit(2, { kind: 'heal' })] })
+    expect(planHitEffects(e, [], ALL, slashy)).toEqual([])
+    expect(planHitEffects(e, e.hits, undefined, slashy)).toEqual([])
+    expect(planHitEffects(e, e.hits, ALL, slashy).map((p) => p.target.index)).toEqual([0])
   })
 })
 

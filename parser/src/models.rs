@@ -2042,6 +2042,11 @@ pub struct Document {
     /// 未指定・空は None（従来どおり吹き出しなし）。GUI 専用（TUI は読まない）。frontmatter `field_emotions:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_emotions: Option<String>,
+    /// 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。assets 相対パスを生文字列で透過する（`field_emotions` と
+    /// 同じ流儀）。読み込み・検証は frontend（`parseBattleEffects`。不正は警告して無視）。
+    /// 未指定・空は None（従来どおりエフェクトなし）。GUI 専用（TUI は読まない）。frontmatter `battle_effects:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_effects: Option<String>,
     /// RPG 戦闘（`battle_layout: side`）の敵の見えないグリッド (#839)。`列数x行数`（例 `6x2`、半角 x / × 可）。
     /// 値は parser でバリデーションせず生文字列で透過し、runtime 側（`normalizeEnemyGrid`）で列 1〜12・行 1〜4 に丸める。
     /// 不正値・未指定は無効＝従来の配置。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_grid:` から流す。

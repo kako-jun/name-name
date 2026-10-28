@@ -228,6 +228,8 @@ export interface RPGProject {
   battleLogTypewriter?: 'on' | 'off'
   /** 戦闘の演出方式 (#745)。frontmatter `battle_presentation:` 由来。未指定は `'dq'`（現行の見た目・挙動のまま） */
   battlePresentation?: 'dq' | 'ff'
+  /** 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。frontmatter `battle_effects:` 由来。未指定は undefined（エフェクトなし・従来どおり）。読み込みは描画側 */
+  battleEffects?: string
   /**
    * 戦闘画面の奥行き (#747)。frontmatter `battle_horizon:`（地平線の高さ・画面比）/ `battle_perspective:`（遠近の強さ）由来。
    * `battle_perspective` が 0 超のときだけ値を持つ。未指定は undefined（平面・現行どおり）

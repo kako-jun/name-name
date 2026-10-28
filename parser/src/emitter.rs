@@ -184,6 +184,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("field_emotions: \"{sanitized}\"\n"));
         }
+        // battle_effects (#941)。同じ流儀
+        if let Some(ref v) = doc.battle_effects {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_effects: \"{sanitized}\"\n"));
+        }
         // battle_horizon / battle_perspective / battle_foreground (#747)。同じ流儀
         if let Some(ref v) = doc.battle_horizon {
             let sanitized = v.replace('"', "");
@@ -2032,6 +2037,7 @@ mod tests {
             battle_commands: None,
             battle_transition: None,
             field_emotions: None,
+            battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
             chapters: vec![Chapter {
@@ -2500,6 +2506,7 @@ mod tests {
             battle_commands: None,
             battle_transition: None,
             field_emotions: None,
+            battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
             chapters: vec![Chapter {

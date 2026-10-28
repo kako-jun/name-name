@@ -1103,6 +1103,8 @@ export interface EventDocument {
   battle_presentation?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（フィールドサンプルの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */
   field_emotions?: string | null
+  /** 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。frontmatter `battle_effects:` から流す。中身は種類名 → シート宣言（戦闘画面サンプルの `effects` と同じ検証）。不正は警告して無視、未指定はエフェクトなし。GUI 専用。 */
+  battle_effects?: string | null
   /** RPG 戦闘のコマンド窓の配置 (#204)。`"grid"`（既定・2x2）/ `"cross"`（十字）。frontmatter `battle_command_layout:` から流す。GUI 専用。 */
   battle_command_layout?: string | null
   /** RPG 戦闘のコマンド表示名の上書き (#204)。`attack=斬る, spell=魔石` 形式の生文字列。frontmatter `battle_command_labels:` から流す。GUI 専用。 */

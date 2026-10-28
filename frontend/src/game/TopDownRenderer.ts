@@ -42,6 +42,8 @@ import {
   type FieldBattleSettings,
   type ScriptedBattleSetup,
 } from './fieldBattle'
+import type { BattleEffects } from './battleEffects'
+import { loadBattleEffects } from './battleEffectsLoader'
 import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
@@ -129,6 +131,9 @@ export class TopDownRenderer {
   private scriptedResolve: ((result: BattleResult | null) => void) | null = null
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
+  /** `battle_effects` (#941) の読み込み済み宣言と、再 load で古い読み込みを捨てるための世代 */
+  private battleEffects: BattleEffects | undefined = undefined
+  private battleEffectsToken = 0
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
   private battleScreen: BattleScreen | null = null
   /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` のときだけ使う。演出中の状態はここが private で持つ */
@@ -311,6 +316,13 @@ export class TopDownRenderer {
     this.masterJobs = gameData.jobs
     this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
+    // エフェクト重ね (#941)。JSON は非同期に読む（読み終わる前に始まった戦闘はエフェクトなし）
+    this.battleEffects = undefined
+    const effectsToken = ++this.battleEffectsToken
+    // 古い読み込み（再 load・destroy 後に届いた結果）は世代トークンで捨てる。判定はここ 1 か所
+    void loadBattleEffects(gameData.battleEffects, this.assetBaseUrl).then((e) => {
+      if (effectsToken === this.battleEffectsToken) this.battleEffects = e
+    })
     this.encounterCooldown = 0
     this.deferredStepTrigger = null
     this.pendingSwipe = null
@@ -366,6 +378,7 @@ export class TopDownRenderer {
   /** リソース解放 */
   destroy(): void {
     this.closeBattle()
+    this.battleEffectsToken++ // 読み込み中の battle_effects の結果を捨てる (#941)
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
     window.removeEventListener('resize', this.handleResize)
@@ -786,6 +799,7 @@ export class TopDownRenderer {
         ...(scripted ? { scripted } : {}),
         gate: this.inputGate,
         assetBaseUrl: this.assetBaseUrl,
+        ...(this.battleEffects ? { effects: this.battleEffects } : {}),
         transition: this.transition,
         onClosed: (outcome, result) => {
           this.battleScreen = null

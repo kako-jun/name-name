@@ -4,7 +4,7 @@
  *
  * - 設定（`battle.effects`）は種類ごとのシート宣言。宣言した種類だけが再生され、1 つも宣言しないゲームでは何も起きない（従来と同一）
  * - 何をいつ・どこへ出すかは、行動の記録（`BattleActionEvent`）から `planEventEffects` が導く。エンジンの状態・乱数は読まず・変えない
- * - 種類の拡張点: `BATTLE_EFFECT_KINDS` と `planEventEffects`（属性ごとのヒット素材の出し分けなどは今後ここへ足す）
+ * - 種類の拡張点: `BATTLE_EFFECT_KINDS` と `planEventEffects` / `planHitEffects`（属性ごとのヒット素材の出し分けなどは今後ここへ足す）
  */
 import type { BattleActionEvent, BattleActorRef, BattleHit } from './battleEngine'
 import { eventTimeline, hitRound, hitTimeOf } from './battleMotion'

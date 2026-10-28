@@ -5344,6 +5344,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_commands: None,
         battle_transition: None,
         field_emotions: None,
+        battle_effects: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         chapters: vec![Chapter {
@@ -10534,6 +10535,7 @@ fn telop_test_doc_base() -> Document {
         battle_commands: None,
         battle_transition: None,
         field_emotions: None,
+        battle_effects: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         chapters: vec![],
@@ -12224,6 +12226,26 @@ fn test_monster_loot_lines_are_raw_strings_and_roundtrip() {
         doc.chapters[0].scenes[0].events,
         doc2.chapters[0].scenes[0].events
     );
+}
+
+// ---- #941: battle_effects ----
+
+#[test]
+fn test_battle_effects_frontmatter_parses_and_roundtrips() {
+    let doc = parser::parse(&battle_doc("battle_effects: \"data/effects.json\"\n"));
+    assert_eq!(doc.battle_effects.as_deref(), Some("data/effects.json"));
+    assert_eq!(
+        parser::parse(&battle_doc("battle_effects:\n")).battle_effects,
+        None
+    );
+    assert_eq!(parser::parse(&battle_doc("")).battle_effects, None);
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_effects: \"data/effects.json\"\n"),
+        "{emitted}"
+    );
+    assert_eq!(parser::parse(&emitted).battle_effects, doc.battle_effects);
+    assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_effects"));
 }
 
 // ---- #943: field_emotions / [感情:] ----

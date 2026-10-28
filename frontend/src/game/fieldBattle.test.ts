@@ -20,6 +20,7 @@ import {
 import type { PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import type { BattleEntity } from './spellDsl'
+import type { BattleEffects } from './battleEffects'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { DIALOG_JUST_SHOWN_GUARD_MS, attachTouchInput } from './touchInput'
 
@@ -279,6 +280,7 @@ describe('openFieldBattle', () => {
       gate?: FieldInputGate
       enemies?: BattleEntity[]
       assetBaseUrl?: string
+      effects?: BattleEffects
     } = {}
   ) {
     const stage = new Container()
@@ -293,6 +295,7 @@ describe('openFieldBattle', () => {
       enemies: over.enemies ?? [enemy()],
       gate,
       assetBaseUrl: over.assetBaseUrl,
+      ...(over.effects ? { effects: over.effects } : {}),
       onClosed,
     })
     const s = screen as unknown as {
@@ -309,6 +312,16 @@ describe('openFieldBattle', () => {
       'https://x.example/raw'
     )
     expect(open().s.opts.assetBaseUrl).toBeUndefined()
+  })
+
+  it('effects は BattleScreen の opts にそのまま転送される（未指定は載らない） (#941)', () => {
+    const effects: BattleEffects = {
+      impact: { image: 'a.png', frames: 2, columns: 2, frameMs: 100, anchor: 'center', scale: 1 },
+    }
+    expect(open({ effects, settings: { layout: 'side', presentation: 'ff' } }).s.opts.effects).toBe(
+      effects
+    )
+    expect('effects' in open().s.opts).toBe(false)
   })
 
   it('presentation は BattleScreen の opts に転送される（既定は dq） (#745)', () => {
