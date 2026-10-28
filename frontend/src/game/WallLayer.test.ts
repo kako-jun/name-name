@@ -7,8 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Sprite, type Texture } from 'pixi.js'
-import { THEATER_ELEVATION_OFFSET_PER_DEPTH, computeCameraProjection } from './cameraProjection'
-import { WALL_DEPTH, WallLayer, computeWallFrame } from './WallLayer'
+import { WallLayer } from './WallLayer'
 
 const videoMock = vi.hoisted(() => {
   const instances: Array<{
@@ -73,8 +72,7 @@ const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(r
 function make() {
   const layer = new WallLayer(SCREEN_W, SCREEN_H)
   const video = videoMock.instances[videoMock.instances.length - 1]
-  const frame = layer.children[0] as import('pixi.js').Container
-  return { layer, video, frame }
+  return { layer, video }
 }
 
 beforeEach(() => {
@@ -156,13 +154,13 @@ describe('WallLayer 画像と動画の判別', () => {
 describe('WallLayer 単一スロット', () => {
   it('新しい壁が前の壁を置換する（画像→画像）', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
-    const { layer, frame } = make()
+    const { layer } = make()
     layer.show('a.webp', {}, '/assets')
     await flushPromises()
-    const first = frame.children.find((c) => c instanceof Sprite)
+    const first = layer.children.find((c) => c instanceof Sprite)
     layer.show('b.webp', {}, '/assets')
     await flushPromises()
-    const sprites = frame.children.filter((c) => c instanceof Sprite)
+    const sprites = layer.children.filter((c) => c instanceof Sprite)
     expect(sprites).toHaveLength(1)
     expect(sprites[0]).not.toBe(first)
     expect(first?.destroyed).toBe(true)
@@ -171,11 +169,11 @@ describe('WallLayer 単一スロット', () => {
 
   it('画像→動画で画像 Sprite が消え、動画→画像で VideoLayer.remove される', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
-    const { layer, video, frame } = make()
+    const { layer, video } = make()
     layer.show('a.webp', {}, '/assets')
     await flushPromises()
     layer.show('b.webm', {}, '/assets')
-    expect(frame.children.some((c) => c instanceof Sprite)).toBe(false)
+    expect(layer.children.some((c) => c instanceof Sprite)).toBe(false)
     expect(layer.hasVideo()).toBe(true)
     const removedBefore = video.removed
     layer.show('c.webp', {}, '/assets')
@@ -199,13 +197,13 @@ describe('WallLayer 単一スロット', () => {
     const pendingA = new Promise<Texture>((r) => (resolveA = r))
     vi.spyOn(Assets, 'load').mockImplementation(((url: string) =>
       url.endsWith('a.webp') ? pendingA : Promise.resolve(mockTexture())) as never)
-    const { layer, frame } = make()
+    const { layer } = make()
     layer.show('a.webp', {}, '/assets')
     layer.show('b.webp', {}, '/assets')
     await flushPromises()
     resolveA(mockTexture())
     await flushPromises()
-    expect(frame.children.filter((c) => c instanceof Sprite)).toHaveLength(1)
+    expect(layer.children.filter((c) => c instanceof Sprite)).toHaveLength(1)
     expect(layer.getState()?.path).toBe('b.webp')
   })
 
@@ -233,13 +231,13 @@ describe('WallLayer 単一スロット', () => {
   })
 })
 
-describe('WallLayer 配置（最奥の画面いっぱい）', () => {
+describe('WallLayer 配置（画面いっぱい）', () => {
   it('画像は cover-fit で画面中央に敷く（アスペクト違いは長辺側で覆う）', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture(400, 400) as never)
-    const { layer, frame } = make()
+    const { layer } = make()
     layer.show('sq.webp', {}, '/assets')
     await flushPromises()
-    const sprite = frame.children.find((c) => c instanceof Sprite) as Sprite
+    const sprite = layer.children.find((c) => c instanceof Sprite) as Sprite
     expect(sprite.x).toBe(SCREEN_W / 2)
     expect(sprite.y).toBe(SCREEN_H / 2)
     expect(sprite.width).toBe(SCREEN_W)
@@ -251,66 +249,6 @@ describe('WallLayer 配置（最奥の画面いっぱい）', () => {
   it('WallLayer 自身はクリックを受けない', () => {
     const { layer } = make()
     expect(layer.eventMode).toBe('none')
-  })
-})
-
-describe('WallLayer カメラ', () => {
-  it('ノベルは原寸（identity）', () => {
-    const { layer, frame } = make()
-    layer.setCamera('Novel', 'Audience', null)
-    expect(frame.scale.x).toBe(1)
-    expect(frame.position.x).toBe(SCREEN_W / 2)
-    expect(frame.position.y).toBe(SCREEN_H / 2)
-    expect(frame.pivot.x).toBe(SCREEN_W / 2)
-    expect(frame.pivot.y).toBe(SCREEN_H / 2)
-  })
-
-  it('シアター×仰角は computeCameraProjection(WALL_DEPTH) の scale/verticalOffset をそのまま frame に掛ける', () => {
-    const { layer, frame } = make()
-    for (const elevation of ['LookUp', 'LookDown', null] as const) {
-      layer.setCamera('Theater', 'Audience', elevation)
-      const p = computeCameraProjection('Theater', 'Audience', elevation, WALL_DEPTH)
-      expect(frame.scale.x).toBe(p.scale)
-      expect(frame.scale.y).toBe(p.scale)
-      expect(frame.position.y).toBe(SCREEN_H / 2 + p.verticalOffset)
-    }
-  })
-
-  it('壁は画面全体を覆い続ける（シアターでも縮小して縁が見えない）', () => {
-    const { layer, frame } = make()
-    layer.setCamera('Theater', 'Audience', null)
-    expect(frame.scale.x).toBeGreaterThanOrEqual(1)
-  })
-
-  it('computeWallFrame は純粋関数: 画面サイズから中心を求め、ノベルは仰角を無視する', () => {
-    expect(computeWallFrame('Novel', 'Audience', 'LookUp', 800, 450)).toEqual({
-      x: 400,
-      y: 225,
-      scale: 1,
-    })
-    const f = computeWallFrame('Theater', 'Stage', 'LookDown', 1000, 600)
-    const p = computeCameraProjection('Theater', 'Stage', 'LookDown', WALL_DEPTH)
-    expect(f).toEqual({ x: 500, y: 300 + p.verticalOffset, scale: p.scale })
-    expect(THEATER_ELEVATION_OFFSET_PER_DEPTH).toBeGreaterThan(0)
-  })
-
-  it('カメラを後から切り替えても以前の状態を引きずらない（シアター→ノベルで戻る）', () => {
-    const { layer, frame } = make()
-    layer.setCamera('Theater', 'Audience', 'LookUp')
-    layer.setCamera('Novel', 'Audience', null)
-    expect(frame.scale.x).toBe(1)
-    expect(frame.position.y).toBe(SCREEN_H / 2)
-  })
-
-  it('画像ロード完了後にカメラが変わっても frame が射影を持つ（sprite 側は常に cover-fit のまま）', async () => {
-    vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
-    const { layer, frame } = make()
-    layer.setCamera('Theater', 'Audience', 'LookUp')
-    layer.show('a.webp', {}, '/assets')
-    await flushPromises()
-    const sprite = frame.children.find((c) => c instanceof Sprite) as Sprite
-    expect(sprite.width).toBe(SCREEN_W)
-    expect(sprite.y).toBe(SCREEN_H / 2)
   })
 })
 
@@ -344,6 +282,50 @@ describe('WallLayer 状態・復元', () => {
     expect(video.shown[video.shown.length - 1].opts).not.toHaveProperty('playhead')
   })
 
+  it('同一の壁（path・loop・mute が同じ）の restore は clear→再 show せず、動画を差し替えない', () => {
+    const { layer, video } = make()
+    layer.show('a.webm', { loop: false, mute: false }, '/assets')
+    const shown = video.shown.length
+    const removed = video.removed
+    layer.restore({ path: 'a.webm', loop: false, mute: false }, '/assets')
+    expect(video.shown).toHaveLength(shown)
+    expect(video.removed).toBe(removed)
+    expect(layer.hasVideo()).toBe(true)
+  })
+
+  it('同一の画像の壁の restore も Sprite を作り直さない', async () => {
+    const load = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const { layer } = make()
+    layer.show('a.webp', {}, '/assets')
+    await flushPromises()
+    const sprite = layer.children.find((c) => c instanceof Sprite)
+    layer.restore({ path: 'a.webp', loop: true, mute: true }, '/assets')
+    await flushPromises()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(layer.children.find((c) => c instanceof Sprite)).toBe(sprite)
+    expect(sprite?.destroyed).toBe(false)
+  })
+
+  it.each([
+    ['path', { path: 'b.webm', loop: true, mute: true }],
+    ['loop', { path: 'a.webm', loop: false, mute: true }],
+    ['mute', { path: 'a.webm', loop: true, mute: false }],
+  ])('%s が異なる restore は従来どおり差し替える（remove→show）', (_n, next) => {
+    const { layer, video } = make()
+    layer.show('a.webm', {}, '/assets')
+    const removed = video.removed
+    layer.restore(next, '/assets')
+    expect(video.removed).toBeGreaterThan(removed)
+    expect(video.shown[video.shown.length - 1].path).toBe(next.path)
+    expect(layer.getState()).toEqual(next)
+  })
+
+  it('壁が無い状態からの restore(state) は show する', () => {
+    const { layer, video } = make()
+    layer.restore({ path: 'a.webm', loop: true, mute: true }, '/assets')
+    expect(video.shown).toHaveLength(1)
+  })
+
   it('getState → restore の往復で同じ状態に戻る', () => {
     const a = make()
     a.layer.show('x.webm', { loop: false }, '/assets')
@@ -365,10 +347,10 @@ describe('WallLayer 状態・復元', () => {
 describe('WallLayer 後始末（リーク）', () => {
   it('clear() は VideoLayer.remove（video 要素・テクスチャの解放）と画像 Sprite の destroy を行う', async () => {
     vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
-    const { layer, video, frame } = make()
+    const { layer, video } = make()
     layer.show('a.webp', {}, '/assets')
     await flushPromises()
-    const sprite = frame.children.find((c) => c instanceof Sprite) as Sprite
+    const sprite = layer.children.find((c) => c instanceof Sprite) as Sprite
     const destroy = vi.spyOn(sprite, 'destroy')
     const removedBefore = video.removed
     layer.clear()
@@ -376,7 +358,7 @@ describe('WallLayer 後始末（リーク）', () => {
     // texture は Assets キャッシュの持ち物なので Sprite の destroy で壊さない（引数なし）。
     expect(destroy.mock.calls[0]).toEqual([])
     expect(video.removed).toBe(removedBefore + 1)
-    expect(frame.children.some((c) => c instanceof Sprite)).toBe(false)
+    expect(layer.children.some((c) => c instanceof Sprite)).toBe(false)
   })
 
   it('disposeTextures は読み込んだ画像 URL だけを Assets.unload し、二重解放しない', async () => {

@@ -12,8 +12,6 @@ import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import type { NovelGameState } from './GameState'
 import { gameStateToSaveSlot, saveSlotToGameState } from './novelLayout'
-import { computeCameraProjection } from './cameraProjection'
-import { WALL_DEPTH } from './WallLayer'
 import { internals, internalsOf, type RendererInternals } from '../test/rendererInternals'
 
 function narration(...lines: string[]): Event {
@@ -446,44 +444,44 @@ describe('NovelRenderer 壁 のカメラ・ズーム (#703/#702)', () => {
     expect(p.wallLayer.scale.x).toBe(2)
   })
 
-  it('[カメラ:] のたびに壁へカメラ状態が届く（背景板・大道具と同じ applyCamera 経路）', () => {
-    const { r, p } = make([wall('glow.webp'), narration('one')])
-    const spy = vi.spyOn(
-      p.wallLayer as unknown as { setCamera(...a: unknown[]): void },
-      'setCamera'
-    )
-    internals(r).processDirective(cam('Theater', { elevation: 'LookUp' }))
-    expect(spy).toHaveBeenLastCalledWith('Theater', 'Audience', 'LookUp')
-    internals(r).processDirective(cam('Novel'))
-    expect(spy).toHaveBeenLastCalledWith('Novel', 'Audience', null)
-  })
-
-  it('シーン間ジャンプでカメラが既定へリセットされるとき、持ち越した壁へもノベルのカメラが届く', () => {
+  it('シアターの仰角 LookUp/LookDown でも壁は縮小・オフセットされない（カメラ射影を受けない）', async () => {
     const r = new NovelRenderer()
+    muteAudio(r)
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 800,
+      height: 450,
+      source: {},
+    } as unknown as Texture as never)
+    r.setAssetBaseUrl('/assets')
+    await initRenderer(r)
     r.setScenes([
-      scene('a', [cam('Theater', { elevation: 'LookDown' }), wall('glow.webp'), narration('one')]),
-      scene('b', [narration('two')]),
+      scene('a', [cam('Theater', { elevation: 'LookUp' }), wall('glow.webp'), narration('one')]),
     ])
-    const p = internalsOf<LocalInternals>(r)
-    const spy = vi.spyOn(
-      p.wallLayer as unknown as { setCamera(...a: unknown[]): void },
-      'setCamera'
-    )
-    r.jumpToScene('b')
-    expect(spy).toHaveBeenLastCalledWith('Novel', 'Audience', null)
-    expect(r.getSnapshot().wall?.path).toBe('glow.webp')
+    await flushPromises()
+    const p = internals<LocalInternals>(r)
+    for (const elevation of ['LookUp', 'LookDown']) {
+      internals(r).processDirective(cam('Theater', { elevation }))
+      const sprite = p.wallLayer.children.find((c) => (c as { anchor?: unknown }).anchor) as {
+        x: number
+        y: number
+        width: number
+        height: number
+      }
+      expect(sprite).toBeDefined()
+      expect(p.wallLayer.scale.x).toBe(1)
+      expect(p.wallLayer.position.x).toBe(0)
+      expect(p.wallLayer.position.y).toBe(0)
+      expect([sprite.x, sprite.y, sprite.width, sprite.height]).toEqual([400, 225, 800, 450])
+    }
+    cleanupRenderer(r)
   })
 
-  it('壁の frame は computeCameraProjection(WALL_DEPTH) の結果と一致し、ノベルへ戻ると原寸', () => {
-    const { r, p } = make([
-      cam('Theater', { elevation: 'LookUp' }),
-      wall('glow.webp'),
-      narration('one'),
-    ])
-    const frame = p.wallLayer.children[0] as { scale: { x: number }; position: { y: number } }
-    const proj = computeCameraProjection('Theater', 'Audience', 'LookUp', WALL_DEPTH)
-    expect(frame.scale.x).toBe(proj.scale)
-    internals(r).processDirective(cam('Novel'))
-    expect(frame.scale.x).toBe(1)
+  it('終劇で壁もクリアされる（動画が鳴り続けない）', () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [wall('a.webm', true, false), narration('one')])])
+    const clear = vi.spyOn(internals<LocalInternals>(r).wallLayer, 'clear')
+    internalsOf<{ endStory(): void }>(r).endStory()
+    expect(clear).toHaveBeenCalled()
+    expect(r.getSnapshot().wall).toBeNull()
   })
 })
