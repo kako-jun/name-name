@@ -323,6 +323,11 @@ export class VideoLayer extends Container {
     return this.videoEl?.ended === true
   }
 
+  /** 表示中の動画が読み込み・デコードに失敗しているか（動画なし・正常は false。読み取り専用） */
+  hasError(): boolean {
+    return this.videoEl?.error != null
+  }
+
   /** 終わりのある動画（loop でない）が再生中か (#780 書き出しの停滞判定用) */
   isPlayingToEnd(): boolean {
     const el = this.videoEl

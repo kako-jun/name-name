@@ -10,8 +10,8 @@
  *   （動画のライフサイクルを新しく書き起こさない）。壁の既定はループ・ミュート。
  * - 壁は画面全体を覆う面で depth を持たず、カメラ射影（depth 縮小・仰角オフセット）は受けない。
  *   受けるのはズーム（`CameraZoomController` がこのレイヤー自身のコンテナに掛ける scale/position）だけ。
- * - 保存状態（`getState`）は「パス＋設定」だけ。動画の再生位置は持たない。復元は常に頭から再生する最終状態
- *   （ADR-0002）。スライドイン等の演出もない。
+ * - 保存状態（`getState`）は「パス＋設定」だけ。動画の再生位置は持たない（ADR-0002）。
+ *   復元は最終状態で、同じ壁（表示中・再生が終わっていない）なら流し続け、それ以外は頭から再生し直す。スライドイン等の演出もない。
  */
 import { Assets, Container, Sprite, type Texture } from 'pixi.js'
 import type { AudioManager } from './AudioManager'
@@ -129,7 +129,13 @@ export class WallLayer extends Container {
       return false
     }
     if (!assetBaseUrl || assetBaseUrl !== this.shownBaseUrl) return false
-    if (isWallVideoPath(cur.path)) return this.videoLayer.hasVideo() && !this.videoLayer.hasEnded()
+    // 動画の読み込み失敗（404・デコード失敗）も表示できていない扱いにして再読み込みする。
+    // restore はイベント時（goBack・seek・復元）にしか呼ばれないので、失敗が続いても無限にリロードはしない。
+    if (isWallVideoPath(cur.path)) {
+      return (
+        this.videoLayer.hasVideo() && !this.videoLayer.hasEnded() && !this.videoLayer.hasError()
+      )
+    }
     return this.sprite !== null || this.loading
   }
 
