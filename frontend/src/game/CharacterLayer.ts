@@ -1642,6 +1642,48 @@ export class CharacterLayer extends Container {
     this.ensureTicker()
   }
 
+  /** 退場フェード中・退場 walk 中か (#952)。 */
+  private isExiting(state: CharacterState): boolean {
+    return state.fadeAnimation?.destroyOnComplete === true || state.stageMotion?.kind === 'exit'
+  }
+
+  /**
+   * 同じキャラの `character__transition_*` のうち、誰にも片付けられない孤児の旧ポーズを落とす (#952)。
+   *
+   * 孤児 = 旧 state として退避済み（snapshotHidden）で、フェードも板フリップも張られていないもの。
+   * A→B→C と読み込み完了前に重ねて変えると、B の `.then` は「自分が最新でない」ため何も張らずに
+   * 抜け、B が退避させた A に誰もフェード／flip を張らなくなる。最新の遷移だけが自分の旧 state
+   * （`keep`）を片付けるので、`keep` 以外の未アニメの旧 state はすべて落としてよい。
+   * 誰かが誰かを引き継ぐ仕組みではなく、単に落とすだけ（B と同じ退場演出）。
+   * `keep` を省略した呼び出し（`remove()`）は、そのキャラの旧 state すべてが対象。
+   */
+  private retireOrphanTransitions(
+    character: string,
+    keep: CharacterState | undefined,
+    instant: boolean,
+    durationMs: number = this.characterFadeMs
+  ): void {
+    const prefix = `${character}__transition_`
+    const orphans: string[] = []
+    for (const [key, state] of this.characters) {
+      if (!key.startsWith(prefix) || state === keep) continue
+      if (!state.snapshotHidden || state.fadeAnimation || state.flipAnimation) continue
+      orphans.push(key)
+    }
+    for (const key of orphans) {
+      const state = this.characters.get(key)!
+      if (instant || durationMs <= 0) {
+        this.destroyCharacterState(state)
+        this.characters.delete(key)
+      } else if (this.cameraMode === 'Theater' && state.sprite.parent === this) {
+        this.startFlipOut(state)
+      } else {
+        this.startFade(state, state.sprite.alpha, 0, true, undefined, durationMs)
+      }
+    }
+    if (orphans.length > 0 && (instant || durationMs <= 0)) this.maybeStopTicker()
+  }
+
   private nextTransitionName(character: string): string {
     this.transitionSerial += 1
     return `${character}__transition_${this.transitionSerial}`
@@ -1800,8 +1842,15 @@ export class CharacterLayer extends Container {
           fit,
           onReady
         ).then((loaded) => {
+          // この遷移が最新でなければ（A→B→C の B など）何もしない。B が張り損ねた旧ポーズ A の
+          // 片付けは最新の遷移（C）が引き受ける (#952)。
           if (this.characters.get(character) !== nextState) return
           if (this.characters.get(oldKey) !== existing) return
+          // 読み込み待ちの間に退場へ入った（[退場]・衝突退場）新 state は入場させない。
+          // 退場時に孤児も片付け済み（remove）。
+          if (this.isExiting(nextState)) return
+          // 最新の遷移として、旧 state（existing）以外の孤児を片付ける (#952)。
+          this.retireOrphanTransitions(character, existing, false)
           if (!loaded && assetBaseUrl) {
             this.destroyCharacterState(nextState)
             this.characters.delete(character)
@@ -1812,10 +1861,14 @@ export class CharacterLayer extends Container {
             this.characters.set(character, existing)
             return
           }
+          // 退場フェードが既に張られている旧 state（退場で片付け中）には演出を重ねない。
+          const existingRetiring = existing.fadeAnimation?.destroyOnComplete === true
           if (this.cameraMode === 'Theater') {
             // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
             let inheritedStartMs: number | undefined
-            if (existing.sprite.parent === this) {
+            if (existingRetiring) {
+              // そのまま退場フェードで消える。
+            } else if (existing.sprite.parent === this) {
               inheritedStartMs = this.startFlipOut(existing)
             } else {
               // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
@@ -1824,7 +1877,7 @@ export class CharacterLayer extends Container {
             }
             this.startFlipIn(nextState, inheritedStartMs)
           } else {
-            this.startFade(existing, existing.sprite.alpha, 0, true)
+            if (!existingRetiring) this.startFade(existing, existing.sprite.alpha, 0, true)
             this.startFade(nextState, 0, 1, false)
           }
         })
@@ -1920,6 +1973,9 @@ export class CharacterLayer extends Container {
       if (entranceStarted) return
       if (!collidersGone || !textureReady) return
       if (this.characters.get(character) !== state) return
+      // 未 attach のまま退場に入った state を入場フェードで復活させない (#952)。再 show されれば
+      // reviveFromExitFade が退場を取り消すのでここを通る。
+      if (this.isExiting(state)) return
       if (!textureLoaded && assetBaseUrl) return
       attachEntrance()
     }
@@ -3775,6 +3831,14 @@ export class CharacterLayer extends Container {
       return
     }
     const instant = options?.instant === true
+    // 読み込み待ちの間に孤児化した同キャラの旧ポーズも一緒に落とす (#952)。最新の遷移の `.then` は
+    // この退場で新 state が退場中になると何もしなくなるため、ここで片付ける。
+    this.retireOrphanTransitions(
+      character,
+      undefined,
+      instant,
+      options?.durationMsOverride ?? this.characterFadeMs
+    )
     if (state.idleIntervalId) {
       this.time.clearInterval(state.idleIntervalId)
       state.idleIntervalId = undefined
