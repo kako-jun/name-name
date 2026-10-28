@@ -246,6 +246,9 @@ describe('BattleScreen: 被弾モザイク (#953)', () => {
     for (let i = 1; i < a.length; i++) expect(Math.abs(a[i] - a[i - 1])).toBeLessThanOrEqual(2)
     expect(Math.max(...a)).toBe(S.hitMosaicMaxSize)
     expect(a[a.length - 1]).toBeLessThanOrEqual(2)
+    // 最後の山は短い（行動の残りが少ない）ので、終わり際に急に跳ね上がらない（最後の 40ms は単調に下がる）
+    const tail = a.slice(-40)
+    for (let i = 1; i < tail.length; i++) expect(tail[i]).toBeLessThanOrEqual(tail[i - 1])
   })
 
   it('miss・回復では付かない', () => {

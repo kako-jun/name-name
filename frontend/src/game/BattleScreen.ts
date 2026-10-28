@@ -632,7 +632,7 @@ export class BattleScreen extends Container {
   private partyViews: EntityView[] = []
   /** 行動の時間割の使い回し（timelineOf） */
   private timelineCache: {
-    seq: number
+    event: BattleActionEvent
     timing: MotionTiming
     tl: ReturnType<typeof eventTimeline>
   } | null = null
@@ -3105,12 +3105,12 @@ export class BattleScreen extends Container {
     apply('party', this.partyViews)
   }
 
-  /** 行動の時間割。同じ行動の間は同じ値なので seq で使い回す（毎フレーム・全員ぶん組み直さない） */
+  /** 行動の時間割。同じ行動の間は同じ値なので 同じ event オブジェクトの間は使い回す（毎フレーム・全員ぶん組み直さない） */
   private timelineOf(ev: BattleActionEvent): ReturnType<typeof eventTimeline> {
     const c = this.timelineCache
-    if (c && c.seq === ev.seq && c.timing === this.motionTiming) return c.tl
+    if (c && c.event === ev && c.timing === this.motionTiming) return c.tl
     const tl = eventTimeline(ev, this.motionTiming)
-    this.timelineCache = { seq: ev.seq, timing: this.motionTiming, tl }
+    this.timelineCache = { event: ev, timing: this.motionTiming, tl }
     return tl
   }
 
