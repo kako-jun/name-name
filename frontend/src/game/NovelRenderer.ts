@@ -35,6 +35,7 @@ import { AudioManager } from './AudioManager'
 import { GameState, NovelGameState, StartFromOptions, Step, entryFromState } from './GameState'
 import { VideoLayer } from './VideoLayer'
 import { WallLayer } from './WallLayer'
+import { StageFrontLayer } from './StageFrontLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -668,6 +669,9 @@ export class NovelRenderer {
         get wall() {
           return r.wallLayer
         },
+        get stageFront() {
+          return r.stageFrontLayer
+        },
         get backgroundBoard() {
           return r.backgroundBoardLayer
         },
@@ -773,6 +777,12 @@ export class NovelRenderer {
    * `NovelGameState.wall`。カメラ・ズームは背景板と同じ経路で受ける。
    */
   private wallLayer: WallLayer
+  /**
+   * 舞台前面 (#705)。画面最下部に下端揃え・横幅フィットで置く単一スロットの透過画像（エプロンの段差・手前の客席）。
+   * 画面空間のオーバーレイでカメラのズーム・射影は受けない（`cameraZoom.getLayers` に入れない）。
+   * stage 上はイベント絵の直後・画面効果（スクリム・暗転）より奥。settled state は `NovelGameState.stageFront`。
+   */
+  private stageFrontLayer: StageFrontLayer
 
   /**
    * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
@@ -900,6 +910,8 @@ export class NovelRenderer {
     this.videoLayer = new VideoLayer(this.screenWidth, this.screenHeight, this.audioManager)
     // 舞台の壁レイヤー (#703)。動画の壁は VideoLayer と同じ AudioManager 経由で音をミックスする。
     this.wallLayer = new WallLayer(this.screenWidth, this.screenHeight, this.audioManager)
+    // 舞台前面レイヤー (#705)。画像のみ・画面空間のオーバーレイ。
+    this.stageFrontLayer = new StageFrontLayer(this.screenWidth, this.screenHeight)
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
     // 選択肢の確定音／ホバー音を AudioManager で鳴らせるように注入 (#146)
     this.choiceOverlay.setAudioManager(this.audioManager)
@@ -998,6 +1010,11 @@ export class NovelRenderer {
     // イベント絵レイヤー (#351)。z 順はテキストより背面・全背面レイヤー
     // （背景・背景板・動画・立ち絵・大道具）より前面（novelScrim/ダイアログより前）。
     this.app.stage.addChild(this.eventImageLayer)
+
+    // 舞台前面レイヤー (#705)。キャラ・小道具・イベント絵・幕より手前、暗転・画面効果・会話窓・テロップより奥。
+    // 画面空間のオーバーレイなので、イベント絵の背面隠し（applyEventImageVisibility）の対象にも入れない。
+    // 暗転はこの上に重なるので、暗転中は前面も暗くなる。
+    this.app.stage.addChild(this.stageFrontLayer)
 
     // novel スクリム (#283, z 順は立ち絵の上) → 暗転 → 画面効果オーバーレイ (#143, blackout より上・dialog より下)。
     // 3枚は連続して積む。実体は ScreenEffectsController (#828 7b)。
@@ -1178,6 +1195,8 @@ export class NovelRenderer {
     this.backgroundBoardLayer.disposeTextures()
     // 壁レイヤーのテクスチャも同じ理由で解放する (#703、backgroundBoardLayer と同じ流儀)。
     this.wallLayer.disposeTextures()
+    // 舞台前面レイヤーのテクスチャも同じ理由で解放する (#705、wallLayer と同じ流儀)。
+    this.stageFrontLayer.disposeTextures()
     // 大道具レイヤーのテクスチャも同じ理由で解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.disposeTextures()
     // 幕レイヤーのテクスチャも同じ理由で解放する (#697、backgroundBoardLayer と同じ流儀)。
@@ -1418,6 +1437,8 @@ export class NovelRenderer {
     this.videoLayer.remove()
     // 壁 (#703) も動画を持ちうるので終劇で止める（ミュート=false の壁が終劇後も鳴り続けない）。
     this.wallLayer.clear()
+    // 舞台前面 (#705) も終劇で片付ける（終劇後の画面に前面だけ残らない。保存状態も終端どおり null）。
+    this.stageFrontLayer.clear()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
     // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
@@ -1911,6 +1932,8 @@ export class NovelRenderer {
       this.backgroundBoardLayer.clear()
       // 壁 (#703) も背景板と同じ持続規律にする。
       this.wallLayer.clear()
+      // 舞台前面 (#705) も背景板と同じ持続規律にする。
+      this.stageFrontLayer.clear()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
@@ -2050,6 +2073,10 @@ export class NovelRenderer {
     this.cameraZoom.setSuppressed('title', true)
     this.seekBar.setTitleScreenHidden(true)
     this.eventImageLayer.visible = false
+    // 舞台前面 (#705) はイベント絵より手前の画面空間オーバーレイで、タイトル画面（titleScreenOverlay）より
+    // 上に積まれる。冒頭の `[舞台前面:]` がタイトルのボタンに重ならないよう、イベント絵と同じく隠す。
+    // 壁 (#703) は titleScreenOverlay より奥（不透明背景の下）なので隠す必要がない。
+    this.stageFrontLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     this.titleScreenSavedCharacterSplitRegion = this.characterLayer.getSplitLayoutRegion()
     if (this.titleScreenSavedCharacterSplitRegion) {
@@ -2115,6 +2142,7 @@ export class NovelRenderer {
     this.cameraZoom.setSuppressed('title', false)
     this.seekBar.setTitleScreenHidden(false)
     this.eventImageLayer.visible = true
+    this.stageFrontLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     if (this.titleScreenSavedCharacterSplitRegion) {
       this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)
@@ -2935,6 +2963,9 @@ export class NovelRenderer {
     // 壁レイヤーも破棄・テクスチャ解放する (#703、backgroundBoardLayer と同じ流儀)。
     this.wallLayer.clear()
     this.wallLayer.disposeTextures()
+    // 舞台前面レイヤーも破棄・テクスチャ解放する (#705、wallLayer と同じ流儀)。
+    this.stageFrontLayer.clear()
+    this.stageFrontLayer.disposeTextures()
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
@@ -2986,6 +3017,7 @@ export class NovelRenderer {
       eventImage: this.eventImageLayer.getState(),
       backgroundBoards: this.backgroundBoardLayer.getState(),
       wall: this.wallLayer.getState(),
+      stageFront: this.stageFrontLayer.getState(),
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
       curtain: this.curtainLayer.getState(),
@@ -3411,6 +3443,10 @@ export class NovelRenderer {
     // 舞台の壁復元 (#703)。壁はカメラ射影を受けない（ズームはレイヤー自身に掛かる）。同じ壁が表示中なら流し続け、
     // 異なる・表示できていない・非ループ動画が再生し終えているときは差し替える（動画は頭から再生）。
     this.wallLayer.restore(state.wall, this.assetBaseUrl)
+
+    // 舞台前面復元 (#705)。画面空間のオーバーレイでカメラ射影・ズームを受けない。同じ前面が表示中（または
+    // ロード進行中）なら再読み込みせず、異なる・表示できていないときだけ差し替える。
+    this.stageFrontLayer.restore(state.stageFront, this.assetBaseUrl)
 
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順
     // （カメラは `stage.restore` で同期済み）。
@@ -3839,7 +3875,7 @@ export class NovelRenderer {
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
    *   webp/png の複数候補）、`Background` の背景画像、`BackgroundBoard` の背景板 (#683)、
-   *   `Wall` の壁 (#703, 画像の壁のみ。動画の壁は対象外)、`EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
+   *   `Wall` の壁 (#703, 画像の壁のみ。動画の壁は対象外)、`StageFront` の舞台前面 (#705)、`EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
    *   `resolveAssetUrl`）(#621)。Video 等
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。

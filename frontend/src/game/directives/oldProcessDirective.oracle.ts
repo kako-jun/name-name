@@ -27,6 +27,7 @@ export interface OldWorld {
   videoLayer: any
   backgroundBoardLayer: any
   wallLayer: any
+  stageFrontLayer: any
   propLayer: any
   curtainLayer: any
   lightingLayer: any
@@ -58,6 +59,7 @@ export const OLD_STRING_KEYS = [
   'SceneTransition',
   'VideoExit',
   'WallExit',
+  'StageFrontExit',
   'SpotlightOff',
   'CurtainUp',
 ]
@@ -67,6 +69,7 @@ export const OLD_OBJECT_KEYS = [
   'Background',
   'BackgroundBoard',
   'Wall',
+  'StageFront',
   'Prop',
   'BackgroundColor',
   'Video',
@@ -103,6 +106,7 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
       w.videoLayer.remove()
       w.backgroundBoardLayer.clear()
       w.wallLayer.clear()
+      w.stageFrontLayer.clear()
       w.propLayer.clear()
       w.curtainLayer.clear()
       w.hooks.setCurtainZOrder(false)
@@ -121,6 +125,10 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
     }
     if (event === 'WallExit') {
       w.wallLayer.clear()
+      return true
+    }
+    if (event === 'StageFrontExit') {
+      w.stageFrontLayer.clear()
       return true
     }
     if (event === 'SpotlightOff') {
@@ -155,6 +163,10 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   if ('Wall' in event) {
     const wall = event.Wall
     w.wallLayer.show(wall.path, { loop: wall.loop, mute: wall.mute }, w.env.assetBaseUrl)
+    return true
+  }
+  if ('StageFront' in event) {
+    w.stageFrontLayer.show(event.StageFront.path, w.env.assetBaseUrl)
     return true
   }
   if ('Prop' in event) {

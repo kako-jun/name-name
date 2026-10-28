@@ -28,7 +28,7 @@ export const PRELOAD_MAX_TEXT_EVENTS = Infinity
  * 配列末尾までに現れるアセット URL を、近い順・重複除去済みで返す。
  *
  * - 収集対象: `Dialog` / `ExpressionChange` / `Enter` の立ち絵（`resolveCharacterImageUrls`、webp/png の
- *   複数候補）、`Background` / `BackgroundBoard` / `Wall`（画像の壁のみ）/ `Prop` / `EventImage` / `Image`（`resolveAssetUrl`）。
+ *   複数候補）、`Background` / `BackgroundBoard` / `Wall`（画像の壁のみ）/ `StageFront` / `Prop` / `EventImage` / `Image`（`resolveAssetUrl`）。
  *   Dialog / Enter の立ち絵は実表示ガード（expression / position / character が全て truthy）に揃える。
  *   ExpressionChange は position を持たないので expression / character の truthy だけを見る。
  * - 分岐 / 緩い上限: 分岐に当たったら打ち切る。Jump (#725) も分岐扱い。テキストイベントが
@@ -103,6 +103,9 @@ export function collectUpcomingAssetUrls(
       if (!isWallVideoPath(event.Wall.path)) {
         urls.push(resolveAssetUrl(assetBaseUrl, 'images', event.Wall.path))
       }
+    } else if ('StageFront' in event) {
+      // 舞台前面 (#705) の画像も背景板と同じ Assets.load 遅延ロード経路（StageFrontLayer.show）を通るため先読み対象にする。
+      urls.push(resolveAssetUrl(assetBaseUrl, 'images', event.StageFront.path))
     } else if ('Prop' in event) {
       // 舞台構造の大道具 (#692) も背景板と同じ Assets.load 遅延ロード経路（PropLayer.add）
       // を通るため、同じく先読み対象にする。
