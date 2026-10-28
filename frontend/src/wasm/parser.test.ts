@@ -2905,3 +2905,70 @@ describe('wasm parseMarkdown: 天候 (#706)', () => {
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// 床 (#706 第2弾)。wasm → normalizeEvents 経路で、`[床: …]` が Floor に（高さは必ず number に正規化・f32 丸め）、
+// 解除 `[床: なし]` が 'FloorExit' になり、emit が往復することを縛る。
+describe('wasm parseMarkdown: 床 (#706 第2弾)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[床: wood.png]',
+    '[床: wood.png, 高さ=0.3]',
+    '[床: stone.png, height=0.5]',
+    '[床: a.png, 高さ=99]',
+    '[床: a.png, 高さ=0.01]',
+    '[床: a.png, 高さ=abc]',
+    '[床: a.png, 高さ=0.6, 高さ=bad]',
+    '[床: a.png, 高さ=0.1, 高さ=0.7]',
+    '[床:]',
+    '[床: なし]',
+    '',
+  ].join('\n')
+
+  it('path・高さは Floor に（高さ省略は 0.25）、解除は FloorExit、空 path は捨てられ、高さはクランプ・不正値は既定・最後の有効値', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events).toEqual([
+      { Floor: { path: 'wood.png', height: 0.25 } },
+      // f32 を f64 に広げた 0.30000001192092896 ではなく、見た目どおりの 0.3 になる
+      { Floor: { path: 'wood.png', height: 0.3 } },
+      { Floor: { path: 'stone.png', height: 0.5 } },
+      { Floor: { path: 'a.png', height: 1 } },
+      { Floor: { path: 'a.png', height: 0.05 } },
+      { Floor: { path: 'a.png', height: 0.25 } },
+      { Floor: { path: 'a.png', height: 0.6 } },
+      { Floor: { path: 'a.png', height: 0.7 } },
+      'FloorExit',
+    ])
+  })
+
+  it('高さが null / undefined でも高さ 0 にならず既定の 0.25 になる', () => {
+    expect(
+      normalizeEvents(
+        [{ Floor: { path: 'a.png', height: null } }, { Floor: { path: 'a.png' } }] as never,
+        'Fade'
+      )
+    ).toEqual([
+      { Floor: { path: 'a.png', height: 0.25 } },
+      { Floor: { path: 'a.png', height: 0.25 } },
+    ])
+  })
+
+  it('round-trip: 既定の高さは出力せず、非既定は 高さ= を出し、解除は [床: なし]', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[床: wood.png]\n')
+    expect(emitted).toContain('[床: wood.png, 高さ=0.3]\n')
+    expect(emitted).toContain('[床: stone.png, 高さ=0.5]\n')
+    expect(emitted).toContain('[床: a.png, 高さ=1]\n')
+    expect(emitted).toContain('[床: a.png, 高さ=0.05]\n')
+    expect(emitted).toContain('[床: なし]\n')
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

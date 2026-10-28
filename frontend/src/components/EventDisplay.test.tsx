@@ -43,6 +43,7 @@ describe('EventDisplay', () => {
   it.each([
     ['WallExit', '壁: なし'],
     ['StageFrontExit', '舞台前面: なし'],
+    ['FloorExit', '床: なし'],
     ['WeatherExit', '天候: なし'],
     ['VideoExit', '動画: 退場'],
     ['PageBreak', '改頁'],
@@ -70,6 +71,15 @@ describe('EventDisplay', () => {
   ])('renders Weather %j (#706)', (ev, label) => {
     const { container } = renderEvent(ev)
     expect(container.textContent).toBe(label)
+  })
+
+  it('renders Floor with path and non-default height (#706 第2弾)', () => {
+    const a = renderEvent({ Floor: { path: 'floor/wood.png', height: 0.25 } })
+    expect(a.container.textContent).toBe('床: floor/wood.png')
+    const b = renderEvent({ Floor: { path: 'floor/wood.png', height: 0.3 } })
+    expect(b.container.textContent).toBe('床: floor/wood.png, 高さ=0.3')
+    const c = renderEvent({ Floor: { path: 'floor/wood.png' } })
+    expect(c.container.textContent).toBe('床: floor/wood.png')
   })
 
   it('renders StageFront with path (#705)', () => {

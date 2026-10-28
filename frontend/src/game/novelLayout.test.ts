@@ -2,6 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   isWallVideoPath,
   computeStageFrontPlacement,
+  computeFloorPlacement,
+  clampFloorHeight,
+  FLOOR_HEIGHT_DEFAULT,
+  FLOOR_HEIGHT_MIN,
+  FLOOR_HEIGHT_MAX,
   computeCoverFit,
   computeDynamicRenderResolution,
   MAX_RENDER_BACKBUFFER_DIMENSION_PX,
@@ -1220,6 +1225,7 @@ describe('saveSlotToGameState', () => {
       // 舞台前面 (#705)。古いセーブには無い → ?? null で舞台前面なしに倒す。
       stageFront: data.stageFront ?? null,
       weather: data.weather ?? null,
+      floor: data.floor ?? null,
       // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
       props: data.props ?? [],
       // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1268,6 +1274,7 @@ describe('saveSlotToGameState', () => {
       wall: null,
       stageFront: null,
       weather: null,
+      floor: null,
       props: [],
       spotlight: null,
       curtain: null,
@@ -3767,5 +3774,141 @@ describe('saveSlotToGameState / gameStateToSaveSlot: stageFront (#705)', () => {
       saveSlotToGameState({ ...base, stageFront: { path: 'a.png' } }, null).stageFront
     ).toEqual({ path: 'a.png' })
     expect(saveSlotToGameState({ ...base, stageFront: null }, null).stageFront).toBeNull()
+  })
+})
+
+describe('clampFloorHeight (#706 第2弾)', () => {
+  it('範囲内はそのまま、境界は据え置き', () => {
+    expect(clampFloorHeight(0.3)).toBe(0.3)
+    expect(clampFloorHeight(FLOOR_HEIGHT_MIN)).toBe(0.05)
+    expect(clampFloorHeight(FLOOR_HEIGHT_MAX)).toBe(1)
+  })
+
+  it('下限未満（正の値）は 0.05 へ、上限超えは 1.0 へ寄せる', () => {
+    expect(clampFloorHeight(0.05 - 1e-9)).toBe(0.05)
+    expect(clampFloorHeight(0.0001)).toBe(0.05)
+    expect(clampFloorHeight(1 + 1e-9)).toBe(1)
+    expect(clampFloorHeight(99)).toBe(1)
+  })
+
+  it.each([0, -1, -0.3, NaN, Infinity, -Infinity, '0.3', null, undefined, {}])(
+    '不正値 %p は既定（0.25）',
+    (v) => {
+      expect(clampFloorHeight(v)).toBe(FLOOR_HEIGHT_DEFAULT)
+    }
+  )
+})
+
+describe('computeFloorPlacement (#706 第2弾)', () => {
+  it('帯の高さ = 画面高さ × 高さ比、下端揃え・横幅フィット、tileScale で画像の高さを帯に合わせる', () => {
+    const p = computeFloorPlacement(64, 32, 800, 400, 0.25)!
+    expect(p.x).toBe(0)
+    expect(p.width).toBe(800)
+    expect(p.height).toBe(100)
+    expect(p.y).toBe(300)
+    expect(p.y + p.height).toBe(400)
+    // 画像 32px 高 → 帯 100px 高: 3.125 倍
+    expect(p.tileScale).toBe(100 / 32)
+    // 横方向に並ぶタイル数 = 画面幅 / (画像幅 × tileScale) = 800 / 200
+    expect(p.tilesAcross).toBe(4)
+  })
+
+  it('高さ比が大きいほど帯は厚く、タイル（縦横比を保つ）は大きくなり、数は減る', () => {
+    const a = computeFloorPlacement(64, 64, 800, 400, 0.25)!
+    const b = computeFloorPlacement(64, 64, 800, 400, 0.5)!
+    expect(b.height).toBe(200)
+    expect(b.y).toBe(200)
+    expect(b.height).toBeGreaterThan(a.height)
+    expect(b.tileScale).toBe(2 * a.tileScale)
+    expect(b.tilesAcross).toBe(a.tilesAcross / 2)
+  })
+
+  it('高さ比 1.0 は画面全体を覆う（y=0）', () => {
+    const p = computeFloorPlacement(10, 10, 800, 400, 1)!
+    expect(p.y).toBe(0)
+    expect(p.height).toBe(400)
+  })
+
+  it('範囲外・不正な高さ比は clampFloorHeight で寄せてから配置する', () => {
+    expect(computeFloorPlacement(10, 10, 800, 400, 99)!.height).toBe(400)
+    expect(computeFloorPlacement(10, 10, 800, 400, 0.001)!.height).toBeCloseTo(20, 10)
+    expect(computeFloorPlacement(10, 10, 800, 400, NaN)!.height).toBe(100)
+    expect(computeFloorPlacement(10, 10, 800, 400, -1)!.height).toBe(100)
+  })
+
+  it.each([
+    ['横長 1280x720', 1280, 720],
+    ['横長 800x450', 800, 450],
+    ['縦長 360x640', 360, 640],
+    ['縦長 720x1280', 720, 1280],
+  ])('%s: 下端は画面の最下部、横幅は画面幅、高さは画面高さ比', (_n, sw, sh) => {
+    const p = computeFloorPlacement(128, 64, sw, sh, 0.3)!
+    expect(p.x).toBe(0)
+    expect(p.width).toBe(sw)
+    expect(p.height).toBeCloseTo(sh * 0.3, 10)
+    expect(p.y + p.height).toBeCloseTo(sh, 10)
+    // タイルは縦横比を保つ（帯の高さ / 画像高 = tileScale）
+    expect(p.tileScale).toBeCloseTo((sh * 0.3) / 64, 10)
+    expect(p.tilesAcross).toBeCloseTo(sw / (128 * p.tileScale), 10)
+  })
+
+  it('画面サイズを変えると同じ画像でも配置・タイル数が追従する', () => {
+    const a = computeFloorPlacement(64, 64, 800, 450, 0.25)!
+    const b = computeFloorPlacement(64, 64, 400, 700, 0.25)!
+    expect(a).not.toEqual(b)
+    expect(a.y + a.height).toBe(450)
+    expect(b.y + b.height).toBe(700)
+  })
+
+  it.each([
+    [0, 100, 800, 450],
+    [800, 0, 800, 450],
+    [800, 100, 0, 450],
+    [800, 100, 800, 0],
+    [-1, 100, 800, 450],
+    [NaN, 100, 800, 450],
+    [800, Infinity, 800, 450],
+  ])('寸法が不正（%p,%p,%p,%p）なら null', (tw, th, sw, sh) => {
+    expect(computeFloorPlacement(tw, th, sw, sh, 0.25)).toBeNull()
+  })
+})
+
+describe('saveSlotToGameState / gameStateToSaveSlot: floor (#706 第2弾)', () => {
+  const base = {
+    sceneId: 's',
+    eventIndex: 0,
+    textIndex: 0,
+    flags: {},
+    backgroundPath: null,
+    isBlackout: false,
+    characters: [],
+    currentBgmPath: null,
+  } as unknown as Parameters<typeof saveSlotToGameState>[0]
+
+  it('floor が往復し、古いセーブ（無し）・null は床なし', () => {
+    expect(saveSlotToGameState(base, null).floor).toBeNull()
+    expect(saveSlotToGameState({ ...base, floor: null }, null).floor).toBeNull()
+    expect(
+      saveSlotToGameState({ ...base, floor: { path: 'wood.png', height: 0.4 } }, null).floor
+    ).toEqual({ path: 'wood.png', height: 0.4 })
+  })
+
+  it('壊れた高さ（範囲外・NaN・負・欠落）は範囲／既定へ寄せる', () => {
+    const load = (height: unknown) =>
+      saveSlotToGameState({ ...base, floor: { path: 'a.png', height } as never }, null).floor
+        ?.height
+    expect(load(99)).toBe(1)
+    expect(load(0.001)).toBe(0.05)
+    expect(load(-2)).toBe(0.25)
+    expect(load(NaN)).toBe(0.25)
+    expect(load(undefined)).toBe(0.25)
+  })
+
+  it('path が壊れている（空・非文字列）セーブは床なしに倒す', () => {
+    for (const path of ['', 5, null]) {
+      expect(
+        saveSlotToGameState({ ...base, floor: { path, height: 0.3 } as never }, null).floor
+      ).toBeNull()
+    }
   })
 })

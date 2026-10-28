@@ -35,6 +35,9 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     if (event === 'WeatherExit') {
       return <div className={`text-xs italic ml-2 ${meta}`}>天候: なし</div>
     }
+    if (event === 'FloorExit') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>床: なし</div>
+    }
     if (event === 'StageFrontExit') {
       return <div className={`text-xs italic ml-2 ${meta}`}>舞台前面: なし</div>
     }
@@ -72,6 +75,16 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
       <div className={`text-xs italic ml-2 ${meta}`}>
         天候: {name}
         {w.intensity !== undefined && w.intensity !== 1 ? `, 強さ=${w.intensity}` : ''}
+      </div>
+    )
+  }
+
+  if ('Floor' in event) {
+    const f = event.Floor
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        床: {f.path}
+        {f.height !== undefined && f.height !== 0.25 ? `, 高さ=${f.height}` : ''}
       </div>
     )
   }

@@ -37,6 +37,7 @@ import { VideoLayer } from './VideoLayer'
 import { WallLayer } from './WallLayer'
 import { StageFrontLayer } from './StageFrontLayer'
 import { WeatherLayer } from './WeatherLayer'
+import { FloorLayer } from './FloorLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -629,6 +630,7 @@ export class NovelRenderer {
       getLayers: () => [
         this.wallLayer,
         this.backgroundBoardLayer,
+        this.floorLayer,
         this.lightingLayer,
         this.propLayer,
       ],
@@ -675,6 +677,9 @@ export class NovelRenderer {
         },
         get weather() {
           return r.weatherLayer
+        },
+        get floor() {
+          return r.floorLayer
         },
         get backgroundBoard() {
           return r.backgroundBoardLayer
@@ -793,6 +798,13 @@ export class NovelRenderer {
    * stage 上は舞台前面の直後・画面効果（スクリム・暗転）より奥。settled state は `NovelGameState.weather`（種類＋強さ）。
    */
   private weatherLayer: WeatherLayer
+  /**
+   * 床 (#706 第2弾)。画面の下部に下端揃え・横幅フィットで置く単一スロットのタイル画像の帯（高さ = 画面高さ × 高さ比）。
+   * stage 上は動画の直後・タイトル画面と立ち絵より奥（背景板より手前、大道具・キャラより奥）。カメラのズームは
+   * 背景板・壁と同じに受ける（`cameraZoom.getLayers` に入れる）が、射影（depth 縮小・仰角）は受けない。
+   * settled state は `NovelGameState.floor`（パス＋高さ）。
+   */
+  private floorLayer: FloorLayer
 
   /**
    * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
@@ -924,6 +936,8 @@ export class NovelRenderer {
     this.stageFrontLayer = new StageFrontLayer(this.screenWidth, this.screenHeight)
     // 天候レイヤー (#706)。アンビエント演出と同じ TimeController の時計で粒を動かす。
     this.weatherLayer = new WeatherLayer(this.screenWidth, this.screenHeight, this.time)
+    // 床レイヤー (#706 第2弾)。画像のみ・タイル帯。
+    this.floorLayer = new FloorLayer(this.screenWidth, this.screenHeight)
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
     // 選択肢の確定音／ホバー音を AudioManager で鳴らせるように注入 (#146)
     this.choiceOverlay.setAudioManager(this.audioManager)
@@ -989,6 +1003,10 @@ export class NovelRenderer {
 
     // 動画入力レイヤー (#252)。背景の直後・立ち絵の下に配置（背景の上、キャラの下）。
     this.app.stage.addChild(this.videoLayer)
+
+    // 床レイヤー (#706 第2弾)。背景板・動画より手前、大道具・キャラより奥——舞台の地面でキャラの足元の下。
+    // 背面スタックの一部なのでイベント絵の背面隠し（applyEventImageVisibility）の対象に入れる。
+    this.app.stage.addChild(this.floorLayer)
 
     // タイトル画面オーバーレイ (#628 フェーズ2b)。ゲーム開始前に画面全体を覆う不透明背景＋
     // ボタンを描く。z 順は背景/動画レイヤーより上・立ち絵レイヤーより下——タイトルロゴは
@@ -1213,6 +1231,8 @@ export class NovelRenderer {
     this.wallLayer.disposeTextures()
     // 舞台前面レイヤーのテクスチャも同じ理由で解放する (#705、wallLayer と同じ流儀)。
     this.stageFrontLayer.disposeTextures()
+    // 床レイヤーのテクスチャも同じ理由で解放する (#706 第2弾、stageFrontLayer と同じ流儀)。
+    this.floorLayer.disposeTextures()
     // 大道具レイヤーのテクスチャも同じ理由で解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.disposeTextures()
     // 幕レイヤーのテクスチャも同じ理由で解放する (#697、backgroundBoardLayer と同じ流儀)。
@@ -1457,6 +1477,8 @@ export class NovelRenderer {
     this.stageFrontLayer.clear()
     // 天候 (#706) も終劇で片付ける（終劇後の画面に粒だけ降り続けない。保存状態も終端どおり null）。
     this.weatherLayer.clear()
+    // 床 (#706 第2弾) も終劇で片付ける（終劇後の画面に床だけ残らない。保存状態も終端どおり null）。
+    this.floorLayer.clear()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
     // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
@@ -1956,6 +1978,8 @@ export class NovelRenderer {
       this.stageFrontLayer.clear()
       // 天候 (#706) も背景板と同じ持続規律にする。
       this.weatherLayer.clear()
+      // 床 (#706 第2弾) も背景板と同じ持続規律にする。
+      this.floorLayer.clear()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
@@ -2101,6 +2125,8 @@ export class NovelRenderer {
     this.stageFrontLayer.visible = false
     // 天候 (#706) も舞台前面と同じ理由で隠す（タイトル画面より上に積まれるため）。
     this.weatherLayer.visible = false
+    // 床 (#706 第2弾) は titleScreenOverlay より奥だが、タイトル中は舞台の絵を一切見せない方針で同じく隠す。
+    this.floorLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     this.titleScreenSavedCharacterSplitRegion = this.characterLayer.getSplitLayoutRegion()
     if (this.titleScreenSavedCharacterSplitRegion) {
@@ -2168,6 +2194,7 @@ export class NovelRenderer {
     this.eventImageLayer.visible = true
     this.stageFrontLayer.visible = true
     this.weatherLayer.visible = true
+    this.floorLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     if (this.titleScreenSavedCharacterSplitRegion) {
       this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)
@@ -2993,6 +3020,9 @@ export class NovelRenderer {
     this.stageFrontLayer.disposeTextures()
     // 天候レイヤーも破棄する (#706)。タイマーと粒の Graphics を片付ける（テクスチャは持たない）。
     this.weatherLayer.clear()
+    // 床レイヤーも破棄・テクスチャ解放する (#706 第2弾、stageFrontLayer と同じ流儀)。
+    this.floorLayer.clear()
+    this.floorLayer.disposeTextures()
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
@@ -3046,6 +3076,7 @@ export class NovelRenderer {
       wall: this.wallLayer.getState(),
       stageFront: this.stageFrontLayer.getState(),
       weather: this.weatherLayer.getState(),
+      floor: this.floorLayer.getState(),
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
       curtain: this.curtainLayer.getState(),
@@ -3480,6 +3511,10 @@ export class NovelRenderer {
     // 同じ天候が降っていれば流し続け、違うときだけ経過 0 から降らせ直す。
     this.weatherLayer.restore(state.weather ?? null)
 
+    // 床復元 (#706 第2弾)。ズームは背景板と同じに受けるが射影は受けない。同じ床（パス・高さ・assetBaseUrl が同一）が
+    // 表示中（またはロード進行中）なら再読み込みせず、異なる・表示できていないときだけ差し替える。
+    this.floorLayer.restore(state.floor ?? null, this.assetBaseUrl)
+
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順
     // （カメラは `stage.restore` で同期済み）。
     this.propLayer.restore(state.props, this.assetBaseUrl)
@@ -3666,6 +3701,7 @@ export class NovelRenderer {
     this.background.setVisible(!hide)
     this.backgroundBoardLayer.visible = !hide
     this.wallLayer.visible = !hide
+    this.floorLayer.visible = !hide
     this.videoLayer.visible = !hide
     this.characterLayer.visible = !hide
     this.lightingLayer.visible = !hide

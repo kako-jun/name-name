@@ -225,6 +225,13 @@ export function normalizeEvents(events: Event[], defaultTransition: EventImageTr
       const intensity = w.intensity == null ? 1 : Number(Math.fround(w.intensity).toPrecision(7))
       return { Weather: { kind: w.kind, intensity } }
     }
+    if ('Floor' in event) {
+      // #706 第2弾: Rust 側は既定の高さ（0.25）を JSON に載せないため型上は optional のまま届く。ここで number に揃える。
+      // f32 は serde_wasm_bindgen で f64 に広げられる（0.3 → 0.30000001192092896）ので、Weather.intensity と同様に f32 の有効桁（7桁）へ丸める。
+      const f = event.Floor
+      const height = f.height == null ? 0.25 : Number(Math.fround(f.height).toPrecision(7))
+      return { Floor: { path: f.path, height } }
+    }
     if ('Wall' in event) {
       // #703: Rust 側は既定値（loop/mute とも true）を JSON に載せない（skip_serializing_if）ため、
       // 型上は optional のまま届く。利用側が毎回 `?? true` を書かずに済むよう、ここで boolean に揃える。

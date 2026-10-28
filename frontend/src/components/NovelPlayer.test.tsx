@@ -1942,6 +1942,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     wall: null,
     stageFront: null,
     weather: null,
+    floor: null,
     props: [],
     spotlight: null,
     curtain: null,

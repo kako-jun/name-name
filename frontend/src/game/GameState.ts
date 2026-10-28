@@ -121,6 +121,17 @@ export interface StageFrontState {
 }
 
 /**
+ * 床の settled state (#706 第2弾)。`[床: path]` / `[床: path, 高さ=0.3]` / `[床: なし]` で更新する単一スロット。
+ * `null` = 床なし（既定）。保存するのは「パス＋高さ（画面高さに対する帯の比）」だけ（ADR-0002）。
+ * 画面の下部に下端揃え・横幅フィットで置くタイル画像で、位置・大きさ・タイル数は画面サイズから毎回決まるので保存しない。
+ */
+export interface FloorState {
+  path: string
+  /** 画面高さに対する床の帯の比（既定 0.25。`clampFloorHeight` の範囲 0.05〜1.0） */
+  height: number
+}
+
+/**
  * 天候の settled state (#706)。`[天候: 雨|雪|桜]` / `[天候: なし]` で更新する単一スロット。
  * `null` = 天候なし（既定）。保存するのは「種類＋強さ」だけで、粒の位置は保存しない（ADR-0002）。
  * 粒の位置は描画側が経過時間から決定論的に出す。
@@ -202,6 +213,12 @@ export interface NovelGameState {
    * `[天候: なし]`・`[場面転換]`・新規開始・終劇でクリアされる（`WeatherState` 参照）。
    */
   weather: WeatherState | null
+  /**
+   * 床 (#706 第2弾)。`[床: path]` の単一スロット settled state。`null` = 床なし（既定）。
+   * 背景板より手前・大道具とキャラより奥の、画面下部のタイル帯。カメラのズームは背景板と同じに受けるが射影は受けない。
+   * `[床: なし]`・`[場面転換]`・新規開始・終劇でクリアされる（`FloorState` 参照）。
+   */
+  floor: FloorState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。`[大道具: path, depth: N]` の加算的な蓄積状態
    * （`backgroundBoards` と同じ扱い）。背景板・キャラとは独立した PixiJS レイヤーで、キャラより
