@@ -179,6 +179,7 @@ describe('[戦闘: id] を含む [イベント] の再生', () => {
         show: (_n: string, t: string) => shown.push(t),
         isTyping: () => false,
         skipTypewriter: () => {},
+        nextPage: () => false,
         setMsPerChar: () => {},
       } as object),
     } as Internals['dialogBox']

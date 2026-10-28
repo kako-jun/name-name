@@ -1,3 +1,5 @@
+import type { Container } from 'pixi.js'
+
 /**
  * world コンテナの描画順 (奥 → 手前)。順序を変えると前面レイヤー (#866) が主人公の手前に
  * 来なくなるため、main.ts はこの並びのまま addChild し、layers.test.ts で順序を固定する。
@@ -54,3 +56,35 @@ export const companionZ = feetDepthZ
 
 /** NPC の zIndex（足元 y の式。同行者と共通） */
 export const npcZ = feetDepthZ
+
+/**
+ * 感情吹き出しの層を置く先 (#840)。通常は world 内（`WORLD_Z.emotion`）。
+ * FF 風の会話窓は stage 直下で world の手前に出るため、窓を出している会話中だけ吹き出しを窓より前（stage の最前面）へ出す。
+ * 非 ff の窓・会話していないときは world のまま（描画順は変えない）。
+ */
+export function emotionLayerHost(ffWindow: boolean, talking: boolean): 'world' | 'stage' {
+  return ffWindow && talking ? 'stage' : 'world'
+}
+
+/**
+ * 感情吹き出しの層を `emotionLayerHost` の置き先へ付け替え、stage 側の揺れ（y）を world に合わせる (#840)。
+ * main.ts が毎フレーム呼ぶ。置き先（'world' | 'stage'）を返すので、検証用の `state()` はこれを出して配線を固定する。
+ */
+export function syncEmotionLayerHost(args: {
+  ffWindow: boolean
+  talking: boolean
+  layer: Container
+  world: Container
+  top: Container
+}): 'world' | 'stage' {
+  const host = emotionLayerHost(args.ffWindow, args.talking)
+  const target = host === 'stage' ? args.top : args.world
+  if (args.layer.parent !== target) target.addChild(args.layer)
+  args.top.y = args.world.y
+  return host
+}
+
+/** 感情吹き出しの層がいま stage（窓の手前）にあるか world にあるか（検証用の読み取り） */
+export function emotionHostOf(layer: Container, top: Container): 'world' | 'stage' {
+  return layer.parent === top ? 'stage' : 'world'
+}

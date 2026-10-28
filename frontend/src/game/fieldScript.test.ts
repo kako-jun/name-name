@@ -57,6 +57,7 @@ function fakeDialog() {
     skipTypewriter: () => {
       typing = false
     },
+    nextPage: () => false,
   }
 }
 

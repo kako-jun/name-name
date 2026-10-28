@@ -142,6 +142,7 @@ describe('実パーサ経路: parseMarkdown → rpgProjectFromDoc → EventRunne
     const dialog = {
       isTyping: () => false,
       skipTypewriter() {},
+      nextPage: () => false,
       isShowing: false,
       show() {},
       hide() {},
@@ -268,6 +269,7 @@ describe('TopDownRenderer: 読み込み中の [感情:]・世代・配線 (#943 
   const dialog = () => ({
     isTyping: () => false,
     skipTypewriter() {},
+    nextPage: () => false,
     isShowing: false,
     show() {},
     hide() {},

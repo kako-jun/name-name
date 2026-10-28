@@ -172,7 +172,10 @@ export function createFieldEmotionHost(
 }
 
 /** 会話窓。DialogBox のうち会話に使う口だけ（テストでは偽物を渡す） */
-export type TalkDialog = Pick<DialogBox, 'show' | 'hide' | 'isTyping' | 'skipTypewriter'>
+export type TalkDialog = Pick<
+  DialogBox,
+  'show' | 'hide' | 'isTyping' | 'skipTypewriter' | 'nextPage'
+>
 
 /**
  * 1 回の会話。脚本のイベント（EventRunner）か、固定の 1 行（`line`）のどちらか。
@@ -211,7 +214,7 @@ export class FieldConversation {
     this.onEnd = undefined
   }
 
-  /** 送り: 表示中なら全文表示、済んでいれば次の台詞（最後なら閉じる） */
+  /** 送り: 表示中なら全文表示、済んでいて続きのページがあれば次のページ、最終ページなら次の台詞（最後なら閉じる） */
   advance(): void {
     if (this.runner.isRunning) {
       this.runner.advance()
@@ -219,7 +222,9 @@ export class FieldConversation {
     }
     if (!this.lineActive) return
     if (this.dialog.isTyping()) this.dialog.skipTypewriter()
-    else {
+    else if (this.dialog.nextPage()) {
+      // FF 風の窓の改ページ (#840): 続きのページがあれば次のページへ（会話は閉じない）
+    } else {
       this.dialog.hide()
       this.lineActive = false
       this.finish()

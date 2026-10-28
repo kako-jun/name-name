@@ -4,7 +4,14 @@
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { createFlagStore } from './flagStore'
-import { WORLD_Z, companionZ, npcZ, orderedLayers } from './layers'
+import {
+  WORLD_Z,
+  companionZ,
+  emotionHostOf,
+  npcZ,
+  orderedLayers,
+  syncEmotionLayerHost,
+} from './layers'
 import { BattleEngine } from '../game/battleEngine'
 import { BattleScreen } from '../game/BattleScreen'
 import {
@@ -90,6 +97,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
+import { fieldDialogOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -473,10 +481,23 @@ async function main(): Promise<void> {
     bgColor: 0x000033,
     nameColor: 0xffe066,
     nameSeparateBox: false,
+    // FF 風の窓 (#840)。未指定は従来の下部の窓（msPerChar も DialogBox の既定のまま）
+    ...fieldDialogOptions(config),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()
-  app.stage.addChild(world, fade, dialogBox)
+  // ff の窓を出している会話中だけ、感情吹き出しを窓より前へ出す（stage 最前面。揺れは world.y と同期） (#840)
+  const emotionTop = new Container()
+  app.stage.addChild(world, fade, dialogBox, emotionTop)
+  const syncEmotionHost = (): void => {
+    syncEmotionLayerHost({
+      ffWindow: config.dialogStyle === 'ff',
+      talking: !!talking,
+      layer: emotionLayerBox,
+      world,
+      top: emotionTop,
+    })
+  }
   /** シーン（画面）の大きさが変わったら、会話窓の箱の高さ・文字サイズも合わせる */
   const applyDialogMetrics = (width: number, height: number): void => {
     const m = dialogMetricsFor(height)
@@ -1144,6 +1165,7 @@ async function main(): Promise<void> {
     // 揺れ (#864): 描画だけを上下に揺らす。足元・マスク判定は動かない
     const shake = config.scenes[sceneId].shake
     world.y = shake ? shakeOffset(shake, clockMs) : 0
+    syncEmotionHost()
     const scrollCfg = config.scenes[sceneId].scroll
     if (scrollCfg && scene.scroll)
       scrollSprite.tilePosition.x = scrollOffset(scrollCfg.speed, clockMs, scene.scroll.width)
@@ -1236,7 +1258,18 @@ async function main(): Promise<void> {
         showing: dialogBox.isShowing,
         bgVisible: dialogBox.isBackgroundVisible,
         text: dialogBox.getVisibleText(),
+        /** 文字送り中か（ff は 1 文字ずつ。全文表示済みなら false） */
+        typing: dialogBox.isTyping(),
+        /** 窓の矩形（検証用。ff は画面上部に固定） */
+        rect: dialogBox.getBoxRect(),
+        /** 台詞の何ページ目か・全部で何ページか（ff の改ページ。1 始まり。ff 以外・会話外は 0/0） */
+        page: dialogBox.getPageInfo().page,
+        pages: dialogBox.getPageInfo().pages,
+        /** 次のページを待って ▼ を点滅している（文字が出きっていて最終ページではない） */
+        awaitingPage: dialogBox.isAwaitingPage(),
       },
+      /** 感情吹き出しの層の置き先。ff の窓で会話中だけ 'stage'（窓の手前）、それ以外は 'world' (#840) */
+      emotionHost: emotionHostOf(emotionLayerBox, emotionTop),
       npcs: currentNpcs().map((n) => ({ id: n.id, x: n.x, y: n.y, facing: n.facing })),
       /** 橙のラッチの状態（検証用） */
       assist: { latched: assistRt.latched, walked: assistRt.walked },

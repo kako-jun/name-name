@@ -28,6 +28,19 @@ import {
   type DestroyOptions,
 } from 'pixi.js'
 import { wordwrap } from './wordwrap'
+import {
+  FF_CURSOR_SIZE_RATIO,
+  FF_DIALOG_LINE_HEIGHT_RATIO,
+  computeFfDialogRect,
+  ffCursorReserve,
+  ffCursorVisible,
+  ffLinesPerPage,
+  pageIndexAtOffset,
+  pageStartOffset,
+  paginateLines,
+  wrapParagraphs,
+} from './ffDialog'
+import { FF_BLUE_PANEL_ALPHA, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
 import { ensureFontLoaded } from './FontLoader'
@@ -151,6 +164,14 @@ export interface DialogBoxConfig {
    * false にするとウィンドウ内上部にインライン表示する（RPG スタイル）。
    */
   nameSeparateBox?: boolean
+  /**
+   * FF 風の窓（デフォルト: false = 従来の下部の窓）(#840)。
+   * true のとき窓を画面上部に固定し（`computeFfDialogRect`）、戦闘窓と同じ ff-blue の帯状グラデーション＋
+   * 白枠＋黒い影の文字にする。typewriter の速度は `msPerChar`（未指定は従来と同じ 30ms）。
+   * 発話者名は出さない（名札・インライン名とも無し。台詞本文だけ）。
+   * novel / split_layout / 2窓モードとは併用しない（それらが優先される）。
+   */
+  ffWindow?: boolean
 }
 
 /** typewriter のデフォルト速度（ms/char） */
@@ -247,6 +268,15 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
 export class DialogBox extends Container {
   // --- 背景・枠 ---
   private bg: Graphics
+  /** ffWindow の帯（ff-blue グラデーション）と、それを角丸に切り抜く mask。bg は枠線だけを描く */
+  private ffBands: Graphics | null = null
+  private ffMask: Graphics | null = null
+  /** ffWindow の改ページ (#840 2本目): 折り返し済みの行をページに分けたもの・いま出しているページ。会話外は空。GameState には持たない（窓の中の表示状態） */
+  private ffPages: string[][] = []
+  private ffPageIndex = 0
+  /** 次のページがあるときに右下で点滅する ▼ と、点滅の経過時間（ページ待ちに入るたびに 0 から） */
+  private ffCursor: Text | null = null
+  private ffCursorElapsed = 0
   // --- 話者名（separate box モード） ---
   private nameBox: Graphics
   private nameText: Text
@@ -314,6 +344,7 @@ export class DialogBox extends Container {
   private bgColor: number
   private nameColor: number
   private nameSeparateBox: boolean
+  private readonly ffWindow: boolean
   /**
    * 本文テキスト色 (#305)。既定は純白 0xffffff。NovelRenderer が話者ごと（主人公=暖アイボリー /
    * 住人=白）に `setBodyTextColor` で切り替える。本文 (`dialogText`) とルビ (`rubyEntries`) の両方に当てる。
@@ -407,6 +438,7 @@ export class DialogBox extends Container {
       bgColor = 0x000000,
       nameColor = 0xffffff,
       nameSeparateBox = true,
+      ffWindow = false,
     } = config
 
     this.padding = padding
@@ -417,6 +449,7 @@ export class DialogBox extends Container {
     this.bgColor = bgColor
     this.nameColor = nameColor
     this.nameSeparateBox = nameSeparateBox
+    this.ffWindow = ffWindow
     this.marginX = marginX
     this.marginBottom = marginBottom
     this.screenWidth = screenWidth
@@ -426,8 +459,16 @@ export class DialogBox extends Container {
     this.advBoxHeight = boxHeight
     this.boxX = marginX
     this.boxY = screenHeight - boxHeight - marginBottom
+    if (this.ffWindow) this.applyFfGeometry()
 
     // --- 背景 ---
+    // ff は帯 → mask → 枠（bg）の順（mask は描画されず、帯だけを切り抜く）
+    if (this.ffWindow) {
+      this.ffBands = new Graphics()
+      this.ffMask = new Graphics()
+      this.ffBands.mask = this.ffMask
+      this.addChild(this.ffBands, this.ffMask)
+    }
     this.bg = new Graphics()
     if (!this.borderless) {
       this.drawBackground()
@@ -511,6 +552,15 @@ export class DialogBox extends Container {
     this.indicator.y = this.indicatorBaseY
     this.addChild(this.indicator)
 
+    // ffWindow: 次のページがあるときの ▼（既存の indicator とは別。ページ待ちのときだけ ticker が点滅させる）
+    if (this.ffWindow) {
+      this.ffCursor = new Text({ text: '▼', style: this.makeFfCursorStyle() })
+      this.ffCursor.anchor.set(1, 1)
+      this.ffCursor.visible = false
+      this.addChild(this.ffCursor)
+      this.positionFfCursor()
+    }
+
     // --- ticker ---
     this.ticker = new Ticker()
     this.ticker.add(() => {
@@ -538,6 +588,7 @@ export class DialogBox extends Container {
         }
       }
 
+      this.tickFfCursor(this.ticker.deltaMS)
       this.applyIndicatorContainerVisibility()
     })
     this.ticker.start()
@@ -577,7 +628,7 @@ export class DialogBox extends Container {
 
   hide(): void {
     this.showing = false
-    this.bg.visible = false
+    this.setBackgroundVisible(false)
     this.nameBox.visible = false
     this.nameText.visible = false
     if (this.inlineNameText) this.inlineNameText.visible = false
@@ -586,10 +637,24 @@ export class DialogBox extends Container {
     this.hidePortrait()
     this.typewriter = makeInitialTypewriterState()
     this.onTypingDone = null
+    this.ffPages = []
+    this.ffPageIndex = 0
+    this.ffCursorElapsed = 0
+    if (this.ffCursor) this.ffCursor.visible = false
   }
 
   get isShowing(): boolean {
     return this.showing
+  }
+
+  /** 窓の矩形（検証用の読み取り） */
+  getBoxRect(): { x: number; y: number; width: number; height: number } {
+    return { x: this.boxX, y: this.boxY, width: this.boxW, height: this.boxH }
+  }
+
+  private setBackgroundVisible(visible: boolean): void {
+    this.bg.visible = visible
+    if (this.ffBands) this.ffBands.visible = visible
   }
 
   /** 背景の箱が実際に描画対象か（検証用の読み取り。会話外で出っぱなしになっていないかの確認に使う） */
@@ -810,6 +875,9 @@ export class DialogBox extends Container {
     } else if (this.splitLayoutRegion) {
       // split_layout (#442): adv でも下部バーではなくテキスト領域へ固定する（dialog_style 非依存）。
       this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
+    } else if (this.ffWindow) {
+      // FF 風 (#840): 画面上部に固定（画面サイズに追従。キャラ・話者の位置には依存しない）
+      this.applyFfGeometry()
     } else {
       // adv 下部バー: split_layout 解除直後は boxH が直前の applySplitLayoutBoxGeometry による
       // split 由来の値のまま残っているため、advBoxHeight へ確実にリセットしてから boxY を
@@ -822,6 +890,8 @@ export class DialogBox extends Container {
 
     // 背景再描画
     this.bg.clear()
+    this.ffBands?.clear()
+    this.ffMask?.clear()
     if (!this.effectiveBorderless()) this.drawBackground()
 
     // テキスト位置更新
@@ -857,6 +927,10 @@ export class DialogBox extends Container {
         this.beginPortraitLoad(this.currentPortrait, false)
       }
     }
+
+    // ffWindow: 窓の大きさ・文字の大きさが変わったら、表示中の本文を折り返し直してページも取り直す
+    this.positionFfCursor()
+    if (this.ffWindow && this.showing && this.currentText) this.ffRelayout()
   }
 
   // ---------------------------------------------------------------------------
@@ -886,7 +960,7 @@ export class DialogBox extends Container {
     }
     this.currentText = text
     this.showing = true
-    this.bg.visible = !this.effectiveBorderless()
+    this.setBackgroundVisible(!this.effectiveBorderless())
 
     // 話者名
     this.updateNameDisplay(name)
@@ -897,11 +971,20 @@ export class DialogBox extends Container {
     const maxTextWidth = this.maxTextWidth()
     const runs = parseRubyText(text)
     const plainText = stripRubyMarkup(text)
-    const lines = wordwrap(plainText, maxTextWidth, font)
+    // ffWindow は台詞を段落ごとに折り返してページに分け、最初のページだけを出す（ルビは field の show() が除去済み）
+    let lines: string[]
+    if (this.ffWindow) {
+      this.ffPages = this.ffLayout(plainText)
+      this.ffPageIndex = 0
+      this.ffCursorElapsed = 0
+      lines = this.ffPages[0]
+    } else {
+      lines = wordwrap(plainText, maxTextWidth, font)
+    }
     this.typewriter = startTypewriter(lines.join('\n'))
     this.setVisibleDialogText('')
     this.indicator.visible = false
-    this.rubyPlacements = computeRubyPlacements(runs, lines)
+    this.rubyPlacements = computeRubyPlacements(this.ffWindow ? [] : runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
     ensureFontLoaded(this.fontFamily)
@@ -958,7 +1041,7 @@ export class DialogBox extends Container {
     }
     this.currentText = cumulativeText
     this.showing = true
-    this.bg.visible = !this.effectiveBorderless()
+    this.setBackgroundVisible(!this.effectiveBorderless())
 
     // 話者名（novel = borderless で updateNameDisplay は名札を出さないが、経路は揃える）
     this.updateNameDisplay(name)
@@ -1014,8 +1097,99 @@ export class DialogBox extends Container {
     this.setVisibleDialogText('')
     this.currentText = ''
     this.onTypingDone = null
+    this.ffPages = []
+    this.ffPageIndex = 0
     this.novelWrappedLines = []
     this.clearRubyEntries()
+  }
+
+  /** ffWindow: 次のページの出を待って ▼ を点滅している状態（文字が出きっていて、最終ページではない） */
+  isAwaitingPage(): boolean {
+    return (
+      this.ffWindow &&
+      this.showing &&
+      !isTypingActive(this.typewriter) &&
+      this.ffPageIndex < this.ffPages.length - 1
+    )
+  }
+
+  /** 台詞の何ページ目か・全部で何ページか（1 始まり。ff 以外・会話外は 0/0。検証用の読み取り） */
+  getPageInfo(): { page: number; pages: number } {
+    if (!this.ffWindow || !this.showing || this.ffPages.length === 0) return { page: 0, pages: 0 }
+    return { page: this.ffPageIndex + 1, pages: this.ffPages.length }
+  }
+
+  /**
+   * 決定操作のページ送り。ページ待ち（`isAwaitingPage`）なら前のページの文字を消して次のページを 1 文字ずつ出し始め、true。
+   * それ以外（表示中・最終ページ・ff 以外）は何もせず false — 呼び出し側は従来どおり全文表示 / 次の台詞へ進む。
+   */
+  nextPage(): boolean {
+    if (!this.isAwaitingPage()) return false
+    this.ffPageIndex += 1
+    this.ffCursorElapsed = 0
+    this.ffShowPage(0)
+    return true
+  }
+
+  /** ffWindow: 段落ごとに折り返し、窓に入る行数でページに分ける（ルビなしの plain を渡す） */
+  private ffLayout(plainText: string): string[][] {
+    const font = `${this.fontSize}px ${this.fontFamily}`
+    const width = Math.max(1, this.maxTextWidth() - ffCursorReserve(this.fontSize))
+    const lines = wrapParagraphs(plainText, (p) => wordwrap(p, width, font))
+    return paginateLines(lines, ffLinesPerPage(this.boxH, this.padding, this.lineHeight()))
+  }
+
+  /** 現在のページを先頭から（`fromCount` 文字は出した状態で）出し直す */
+  private ffShowPage(fromCount: number): void {
+    const lines = this.ffPages[this.ffPageIndex] ?? []
+    const full = lines.join('\n')
+    this.typewriter = startTypewriterFrom(full, fromCount)
+    this.setVisibleDialogText(this.visibleDialogText(this.typewriter))
+    this.rubyPlacements = []
+    this.rubyBuildToken += 1
+    this.clearRubyEntries()
+    this.onTypingDone = null
+  }
+
+  /** ffWindow: 窓・文字の大きさが変わったとき。ページ分割が変わるなら、読んでいた位置を含むページから出し直す */
+  private ffRelayout(): void {
+    const pages = this.ffLayout(stripRubyMarkup(this.currentText))
+    if (JSON.stringify(pages) === JSON.stringify(this.ffPages)) return
+    const offset = pageStartOffset(this.ffPages, this.ffPageIndex)
+    const wasTyping = isTypingActive(this.typewriter)
+    const shown = this.typewriter.displayedCharCount
+    this.ffPages = pages
+    this.ffPageIndex = pageIndexAtOffset(pages, offset)
+    const len = (pages[this.ffPageIndex] ?? []).join('\n').length
+    this.ffCursorElapsed = 0
+    this.ffShowPage(wasTyping ? Math.min(shown, len) : len)
+  }
+
+  private makeFfCursorStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: Math.max(8, Math.round(this.fontSize * FF_CURSOR_SIZE_RATIO)),
+      fill: 0xffffff,
+      dropShadow: { ...FF_BLUE_TEXT_SHADOW },
+    })
+  }
+
+  /** ▼ は窓の右下（パディングの内側）に置く */
+  private positionFfCursor(): void {
+    if (!this.ffCursor) return
+    this.ffCursor.x = this.boxX + this.boxW - this.padding
+    this.ffCursor.y = this.boxY + this.boxH - this.padding
+  }
+
+  private tickFfCursor(deltaMs: number): void {
+    if (!this.ffCursor) return
+    if (this.isAwaitingPage()) {
+      this.ffCursorElapsed += deltaMs
+      this.ffCursor.visible = ffCursorVisible(this.ffCursorElapsed)
+    } else {
+      this.ffCursorElapsed = 0
+      this.ffCursor.visible = false
+    }
   }
 
   skipTypewriter(): void {
@@ -1115,6 +1289,8 @@ export class DialogBox extends Container {
     if (this.borderless === borderless) return
     this.borderless = borderless
     this.bg.clear()
+    this.ffBands?.clear()
+    this.ffMask?.clear()
     if (!this.effectiveBorderless()) {
       this.drawBackground()
     }
@@ -1301,7 +1477,12 @@ export class DialogBox extends Container {
 
     // 表示中テキストがあれば新フォントサイズで再 wordwrap・再レイアウトする。
     // font lazy load は不要なので setFontFamily の .then を待たず同期で再構築する。
-    if (this.currentText) {
+    // ffWindow は上の redraw が折り返し・ページ取り直しまで行う（段落・ページを考慮するのでここでは触らない）
+    if (this.ffCursor) {
+      this.ffCursor.style = this.makeFfCursorStyle()
+      this.positionFfCursor()
+    }
+    if (this.currentText && !this.ffWindow) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.maxTextWidth()
       const runs = parseRubyText(this.currentText)
@@ -1680,7 +1861,7 @@ export class DialogBox extends Container {
   }
 
   private textStartY(): number {
-    if (!this.nameSeparateBox && this.inlineNameText) {
+    if (!this.ffWindow && !this.nameSeparateBox && this.inlineNameText) {
       // インライン名の下
       return this.boxY + this.padding + (this.fontSize - 4) + 4
     }
@@ -1695,7 +1876,8 @@ export class DialogBox extends Container {
   }
 
   private updateNameDisplay(name: string | null): void {
-    if (this.effectiveBorderless() || !name) {
+    // FF 風の窓は発話者名を出さない（渡されても無視。名前分の余白も取らない）(#840)
+    if (this.ffWindow || this.effectiveBorderless() || !name) {
       this.nameBox.visible = false
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false
@@ -1718,7 +1900,35 @@ export class DialogBox extends Container {
     }
   }
 
+  /** ffWindow の窓の矩形・余白を画面サイズから決める (#840)。文字・箱は画面（シーン）サイズに追従する */
+  private applyFfGeometry(): void {
+    const r = computeFfDialogRect(this.screenWidth, this.screenHeight)
+    this.boxX = r.x
+    this.boxY = r.y
+    this.boxW = r.width
+    this.boxH = r.height
+    this.padding = r.padding
+  }
+
   private drawBackground(): void {
+    if (this.ffWindow && this.ffBands && this.ffMask) {
+      // 戦闘窓 (#744) と同じ ff-blue: 帯状グラデーションを角丸で切り抜き、その上に白枠
+      this.ffMask
+        .clear()
+        .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
+        .fill({ color: 0xffffff })
+      this.ffBands.clear()
+      for (const band of computeBands(this.boxH)) {
+        this.ffBands
+          .rect(this.boxX, this.boxY + band.y, this.boxW, band.h)
+          .fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
+      }
+      this.bg
+        .clear()
+        .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
+        .stroke({ color: 0xffffff, width: 2 })
+      return
+    }
     this.bg.clear()
     this.bg.roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 8)
     this.bg.fill({ color: this.bgColor, alpha: 0.92 })
@@ -1749,7 +1959,11 @@ export class DialogBox extends Container {
       // 本文色 (#305): 既定は白。主人公セリフのときだけ NovelRenderer が暖アイボリーに切り替える。
       fill: this.bodyTextColor,
       lineHeight: this.lineHeight(),
-      dropShadow: this.effectiveBorderless() ? BORDERLESS_DROP_SHADOW : false,
+      dropShadow: this.effectiveBorderless()
+        ? BORDERLESS_DROP_SHADOW
+        : this.ffWindow
+          ? { ...FF_BLUE_TEXT_SHADOW }
+          : false,
     })
   }
 
@@ -1801,7 +2015,7 @@ export class DialogBox extends Container {
   }
 
   private lineHeight(): number {
-    return this.fontSize * 1.6
+    return this.fontSize * FF_DIALOG_LINE_HEIGHT_RATIO
   }
 
   private rubyFontSize(): number {
