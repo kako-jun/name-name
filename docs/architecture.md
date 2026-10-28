@@ -449,6 +449,7 @@ interface NovelGameState {
   backgroundBrightness: number | null; // 背景の明るさ 0.0〜1.0（同一画像をシーン毎に減光。sprite.tint 乗算。null=原画。復元対象）
   eventImage: EventImageState | null; // イベント絵レイヤー（#351）。{path, back: 'Hide'|'Keep', effects?: AmbientEffects}。effects は#582アンビエント演出フラグ、全false時はキー省略。テキストより背面・全背面レイヤー（背景・壁・背景板・動画・立ち絵・大道具）より前面の画面ぴったり単一スロット画像。null=非表示
   wall: WallState | null; // 舞台の壁（#703）。{path, loop, mute}。背景板より奥の単一スロットの画像または動画。再生位置は持たない（ADR 0002）。null=壁なし。復元対象、[場面転換]・新規開始でクリア
+  stageFront: StageFrontState | null; // 舞台前面（#705）。{path}。画面最下部に下端揃え・横幅フィットで置く単一スロットの透過画像（エプロンの段差・手前の客席）。位置・大きさは画面サイズから毎回決まるのでパスだけ保存（ADR 0002）。null=舞台前面なし。復元対象、[場面転換]・新規開始・終劇でクリア
   isBlackout: boolean; // 暗転中か
   characters: Array<{ name: string; expression: string; position: string }>; // 立ち絵のみ。タイトル/ラベル/画像は演出表示(renderOnly)で除外(#274)
   currentBgmPath: string | null; // 再生中のBGM
@@ -1289,6 +1290,7 @@ MapEditor/NPCEditor の変更
 - シアターモードでは depth に応じて `scale` が縮小し、遠近法で奥行き差が見える（depth が大きいほど画面中心を基準に小さく表示される）
 - **大道具 (#692/#695)** も同じ仕組みで実装済み: `[大道具: path, depth: N]`（`Event::Prop`）・`NovelGameState.props`・`PropLayer`（`BackgroundBoardLayer` を複製した独立レイヤー）。ただし数値 depth の空間は背景板・キャラと共有せず、レイヤー自体が背景板・キャラより手前、イベント絵/UIより奥に固定される（下記「レイヤーモデル」節、`docs/spec/markdown-v0.1.md`「大道具（舞台構造）」節参照）
 
+- **舞台前面 (#705)**: 画面最下部の下端揃え・横幅フィットの前面オーバーレイ（エプロンの段差・手前の客席）。キャラより手前・会話窓より奥、ズーム非対象。詳細は下記「レイヤーモデル」節
 - **壁 (#703)**: `[壁: path]` / `[壁: なし]`（`Event::Wall { path, loop_, mute }` / `Event::WallExit`）・`NovelGameState.wall`・`WallLayer`（`frontend/src/game/WallLayer.ts`）。背景板より奥の画面いっぱいの**単一スロット**（画像または動画。照明の模様やプロジェクションマッピング風の映像を流す用途）で、stage 上は単一スロット背景の上・`BackgroundBoardLayer` の直前に積む（`奥 ← 壁 ← 背景板 ← キャラ …`）。画像か動画かは拡張子で判別し（`novelLayout.isWallVideoPath`）、**動画は既存の `VideoLayer` を1つ内包して委譲する**（再生・音声ミックス・解放・書き出しの頭出しは `VideoLayer` のまま。動画のライフサイクルを新規に書き起こさない。既定はループ・ミュート）。画像は `BackgroundBoardLayer` と同じ `Assets.load` 遅延ロード＋ cover-fit の Sprite で、世代カウンタで古いロード応答を捨てる。壁は画面全体を覆う面で depth を持たず、カメラ射影（depth 縮小・仰角オフセット）は受けない（以前は固定深さ 0 の射影を通していたが常に identity で意味がないため外した）。受けるのはズーム（#702）だけで、`CameraZoomController.getLayers()` に壁を加え、背景板と同じ倍率・平行移動をレイヤー自身に掛ける。ノベル・シアターの両方で機能する（背景板と同じ扱い）。保存状態は `{ path, loop, mute }` だけで、動画の再生位置は持たない（ADR 0002）。クリアは `[壁: なし]`・`[場面転換]`・新規開始（`resetAndStartEvents` の非 preserve 分岐、背景板と同じ持続規律）・終劇（`endStory`、`videoLayer.remove()` と同じく動画を止める）。復元（`restore`）は現在表示中の壁と path・loop・mute・assetBaseUrl が同一で、実際に表示できて（動画は表示中かつ再生終了でない、画像は Sprite がある／ロード進行中）いれば clear→再 show せず流し続け、異なる・壁なし・表示できていない・非ループ動画が再生し終えているときは差し替える。**既知の制限**: テクスチャのロード中に `disposeTextures()` が走ると、遅れて届いた応答の URL は `loadedUrls` に入らず解放されない（`BackgroundBoardLayer` と同じ既存の流儀）。`NovelRenderer` は書き出しの頭出し（`prepareVideosForExport`）と停滞判定（`videoPlaying`）にも壁の動画を含め、画像の壁は先読み（`preloadPlan`）の対象にする。構文は `docs/spec/markdown-v0.1.md`「壁（舞台構造）」節
 
 ### 大道具・背景板の面の切り替え（実装済み・#704）
@@ -1332,13 +1334,14 @@ MapEditor/NPCEditor の変更
 ### レイヤーモデル
 
 ```
-奥 ← 壁 ← 背景板（depth複数）← キャラ ← スポットライト ← 大道具 ← 幕（既定） ← 手前
+奥 ← 壁 ← 背景板（depth複数）← キャラ ← スポットライト ← 大道具 ← 幕（既定） ← イベント絵 ← 舞台前面 ← （暗転・画面効果・会話窓・テロップ） ← 手前
                     └─ 幕（手前にキャラ指定時）
                            └─ 表情（差分）
                            └─ 服（差分）
                            └─ 小道具（差分）
 ```
 
+- **舞台前面は画面空間のオーバーレイとして、イベント絵の直後に固定される（実装済み・#705）**: `Event::StageFront { path }` / `[舞台前面: path]` / `Event::StageFrontExit` / `[舞台前面: なし]`・`NovelGameState.stageFront`・`StageFrontLayer`（`frontend/src/game/StageFrontLayer.ts`）。画面の最下部に下端揃え・画面の横幅フィットで置く**単一スロット**の透過画像で、舞台エプロンの段差と手前にちらっと見える観客席を作者が1枚に描く前提。stage 上は `EventImageLayer` の直後・暗転/画面効果/会話窓/テロップの手前（奥）に積み、キャラ・スポットライト・大道具・イベント絵・幕（既定位置でも、カーテンコール位置でも）より手前に出る。イベント絵の背面隠し（`applyEventImageVisibility`）の対象には入れない。配置は `novelLayout.computeStageFrontPlacement`（横幅 = 画面幅、高さ = 画像比率、y = 画面高 − 高さ。画面の縦横比が違っても同じ規則）。depth もカメラ射影も持たず、`CameraZoomController.getLayers()` にも入れない（手前の固定物がズームで拡大・移動すると不自然になるため）。幕と同じくカメラモードに依存せず、ノベル・シアターの両方で機能する。**会場（芝生公園・ホール・お笑いライブ会場・寄席）の組み込みプリセットは持たず**、会場ごとの絵は作者が path で切り替える（アセット制作はコードの外）。保存状態は `{ path }` だけ（ADR 0002）。クリアは `[舞台前面: なし]`・`[場面転換]`・新規開始（`resetAndStartEvents` の非 preserve 分岐、背景板・壁と同じ持続規律）・終劇（`endStory`）。復元（`restore`）は現在表示中（またはロード進行中）の同一 path・同一 assetBaseUrl なら再読み込みせず、異なる・表示できていない（読み込み失敗・assetBaseUrl 未設定／差し替え）ときに読み直す。画像のロード競合は世代カウンタで古い応答を捨てる（`WallLayer` と同じ）。テクスチャは `disposeTextures()`（破棄・`setEvents` の入口）で `Assets.unload`、画像の先読み（`preloadPlan`）の対象。構文は `docs/spec/markdown-v0.1.md`「舞台前面（舞台構造）」節
 - **幕は z 位置を2つ持つ（実装済み・#697）**: `Event::Curtain { path, characters_in_front }` / `[幕: path]` / `[幕: path, 手前にキャラ]` / `Event::CurtainUp` / `[幕: 上げる]`。既定（`characters_in_front: false`）は `PropLayer` の直後（最前面、`EventImageLayer` の手前）で舞台全体を覆う通常の閉幕。`characters_in_front: true`（カーテンコール）は `BackgroundBoardLayer` の直後・`CharacterLayer` の手前で、キャラ・スポットライト・大道具が幕より手前に見える。`CurtainLayer`（`frontend/src/game/CurtainLayer.ts`）は大道具・背景板と異なり depth 配置・カメラ射影を持たない単一スロットの全画面カバーフィット画像で、`NovelRenderer` が `stage.setChildIndex()` 相当（`removeChild` + `addChildAt`）で2つの位置を動的に切り替える（このコードベースで唯一の動的 z-order 差し替え）。詳細は下記「幕」節参照
 - キャラが持つ小道具（マイク、扇子、剣など）は**キャラの差分レイヤー**。表情や服と同じ扱いで、depth はキャラと同一（シアターモードでもキャラから浮かない）
 - **追うスポットライトは光源として独立したレイヤーに固定される（実装済み・#693）**: `Event::Spotlight { target, color, radius }` / `[スポットライト: 対象=名前, color=..., radius=...]`。`LightingLayer`（`frontend/src/game/LightingLayer.ts`）が stage 上で `CharacterLayer` の直後・`PropLayer` の前に配置される。大道具・背景板と違い数値 depth の空間は持たない（レイヤー自体の描画順が「キャラより手前・大道具より奥」を固定する）。詳細は下記「照明」節参照
