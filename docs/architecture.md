@@ -1300,6 +1300,15 @@ MapEditor/NPCEditor の変更
 
 背景板・大道具・キャラの depth 配置はそのまま使い、カメラの投影パラメータだけが変わる。
 
+### カメラのズーム（実装済み・#702）
+
+向き・仰角に並ぶ第3の独立軸。今しゃべっているキャラへ寄ることで観客の視線を誘導する。`[カメラ: シアター, ズーム: キャラ名, 強さ: 1.5]` で寄り、`ズーム: 全景`（またはズームを省略した `[カメラ: シアター]`）で全景に戻る。構文と省略時の挙動は `docs/spec/markdown-v0.1.md`「カメラ」節。
+
+- **2D のスケール＋パンで実装**（#700 の決着: 別レンダラは入れず既存の2D射影路線を継続）。`computeZoomPose`（`frontend/src/game/cameraZoom.ts`、純粋関数）が、対象キャラの現在位置（`CharacterLayer.getCurrentPosition`）を画面中心へ寄せる scale/position を返し、`CameraZoomController` が背景板・スポットライト・大道具の `Container`、および立ち絵レイヤー（`CharacterLayer.setZoomPose`。split_layout の変換とは「ズームが外側・split が内側」で合成される）へ共通に適用する。既存の `computeCameraProjection`（depth 縮小・仰角オフセット）の結果の上に重ねるだけで、各レイヤーの再配置ロジックは変えない。
+- **状態は決定論的**（ADR 0002）: settled state は `NovelGameState.cameraZoom: { target, strength } | null`（`Event::CameraMode` の `zoom`/`zoom_strength` に対応）だけ。Stage が `cameraMode`/`cameraOrientation`/`cameraElevation` と同じ経路で保持し、`getSnapshot`・セーブ（`SaveSlotData.cameraZoom`、古いセーブは全景に倒す）・seek/任意局面起動・動画書き出しの復元で戻る。通常再生の寄り・戻りは 450ms の補間（`TimeController` 駆動）だが、スキップ・復元・リセットは `snap` で最終ポーズへ即時スナップし、補間途中のポーズは保存しない。場面転換（reset）で全景に戻る。
+- **フォールバック**: ノベルモードでは常に全景（`cameraZoom` は null に正規化）。存在しない・未表示のキャラ名は例外にせず全景のまま＋コンソール警告（1回）。倍率は 1〜4 にクランプ、省略時 1.6。
+- **未対応（スコープ外）**: 発話者への自動追従（明示指定のみ）、吹き出し（`BubbleLayer`）はズームに追従しない。
+
 ### レイヤーモデル
 
 ```
