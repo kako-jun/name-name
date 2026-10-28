@@ -14,6 +14,7 @@
  *    AudioContext が無いため、その経路を通すテストでは ensureContext を no-op spy にする。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import type { CharacterLayer } from './CharacterLayer'
 import { NovelRenderer } from './NovelRenderer'
 import { internals, type RendererInternals } from '../test/rendererInternals'
 
@@ -110,6 +111,19 @@ describe('NovelRenderer SeekBar 二重 advance 抑止 (#350 D 群)', () => {
   it('D-5: setExporting(true/false) が seekBar.setExportSuppressed(true/false) へ伝播する', () => {
     const r = new NovelRenderer()
     const spy = vi.spyOn(internals<SeekAdvanceInternals>(r).seekBar, 'setExportSuppressed')
+    r.setExporting(true)
+    expect(spy).toHaveBeenNthCalledWith(1, true)
+    r.setExporting(false)
+    expect(spy).toHaveBeenNthCalledWith(2, false)
+  })
+
+  // #701: setExporting が CharacterLayer（板の揺らぎの無効化）へ伝播する。
+  it('D-6: setExporting(true/false) が characterLayer.setExporting(true/false) へ伝播する (#701)', () => {
+    const r = new NovelRenderer()
+    const spy = vi.spyOn(
+      (r as unknown as { characterLayer: CharacterLayer }).characterLayer,
+      'setExporting'
+    )
     r.setExporting(true)
     expect(spy).toHaveBeenNthCalledWith(1, true)
     r.setExporting(false)

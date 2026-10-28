@@ -1797,6 +1797,7 @@ export class NovelRenderer {
    */
   setExporting(exporting: boolean): void {
     this.exporting = exporting
+    this.characterLayer.setExporting(exporting)
     this.seekBar.setExportSuppressed(exporting)
   }
 
