@@ -53,6 +53,8 @@ interface TitleScreenInternals extends RendererInternals {
   dialogBox: { visible: boolean }
   seekBar: { visible: boolean; setTitleScreenHidden: (hidden: boolean) => void }
   eventImageLayer: { visible: boolean }
+  stageFrontLayer: { visible: boolean }
+  wallLayer: { visible: boolean }
   characterLayer: {
     getSplitLayoutRegion(): LayoutRect | null
     setSplitLayoutRegion(region: LayoutRect | null): void
@@ -105,6 +107,17 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     const r = new NovelRenderer()
     r.showTitleScreen(makeTitleScreenOpts())
     expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
+  })
+
+  it('舞台前面 (#705): showTitleScreen() で隠れ、hideTitleScreen() で戻る。壁（titleScreenOverlay より奥）は触らない', () => {
+    const r = new NovelRenderer()
+    const ri = internals<TitleScreenInternals>(r)
+    expect(ri.stageFrontLayer.visible).toBe(true)
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(ri.stageFrontLayer.visible).toBe(false)
+    expect(ri.wallLayer.visible).toBe(true)
+    r.hideTitleScreen()
+    expect(ri.stageFrontLayer.visible).toBe(true)
   })
 
   it('TC26: showTitleScreen() で seekBar.setTitleScreenHidden(true) 相当（seekBar.visible が false）になる', () => {

@@ -505,6 +505,20 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[壁: なし]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::StageFront { path } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[舞台前面: {path}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::StageFrontExit => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[舞台前面: なし]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Video {
                 path,
                 position,

@@ -1022,6 +1022,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   video          = data.video ?? null      // 古いセーブには無い → 動画なし
  *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
  *   wall           = data.wall ?? null       // 古いセーブには無い → 壁なし (#703)
+ *   stageFront     = data.stageFront ?? null // 古いセーブには無い → 舞台前面なし (#705)
  *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
  *   spotlight      = data.spotlight ?? null  // 古いセーブには無い → 消灯 (#693)
  *   curtain        = data.curtain ?? null    // 古いセーブには無い → 幕なし (#697)
@@ -1069,6 +1070,8 @@ export function saveSlotToGameState(
     wall: data.wall
       ? { ...data.wall, loop: data.wall.loop !== false, mute: data.wall.mute !== false }
       : null,
+    // 舞台前面 (#705)。古いセーブには無い → ?? null で舞台前面なしに倒す。
+    stageFront: data.stageFront ?? null,
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
     // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1131,6 +1134,7 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
     eventImage: snapshot.eventImage,
     backgroundBoards: snapshot.backgroundBoards,
     wall: snapshot.wall,
+    stageFront: snapshot.stageFront,
     props: snapshot.props,
     spotlight: snapshot.spotlight,
     curtain: snapshot.curtain,
@@ -1564,6 +1568,23 @@ export function isWallVideoPath(path: string): boolean {
   const dot = clean.lastIndexOf('.')
   if (dot < 0) return false
   return WALL_VIDEO_EXTENSIONS.has(clean.slice(dot + 1).toLowerCase())
+}
+
+/**
+ * 舞台前面 (#705) の配置。画像を画面の横幅にぴったり合わせ（縦横比は保つ）、画面の最下部に下端揃えで置く
+ * 純粋関数。anchor (0,0) 前提の左上座標を返す。画像の高さが画面より高くなる縦長画像は、下端を保ったまま
+ * 上へはみ出す（画面外は描画されない）。画像や画面の寸法が 0 以下・非有限のときは null（置かない）。
+ */
+export function computeStageFrontPlacement(
+  textureWidth: number,
+  textureHeight: number,
+  screenWidth: number,
+  screenHeight: number
+): { x: number; y: number; width: number; height: number } | null {
+  const valid = (n: number) => Number.isFinite(n) && n > 0
+  if (![textureWidth, textureHeight, screenWidth, screenHeight].every(valid)) return null
+  const height = (textureHeight * screenWidth) / textureWidth
+  return { x: 0, y: screenHeight - height, width: screenWidth, height }
 }
 
 /** 背景板 (#683) の「上から降りてくる」スライドインアニメーションの所要時間 (ms)。 */

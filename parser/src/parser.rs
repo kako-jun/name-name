@@ -1374,6 +1374,10 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("壁:") {
         return parse_wall_directive(rest);
     }
+    // [舞台前面: path] / [舞台前面: なし] — 画面最下部の前面画像 (#705)。他の既存タグと prefix 衝突しない。
+    if let Some(rest) = content.strip_prefix("舞台前面:") {
+        return parse_stage_front_directive(rest);
+    }
     // [動画退場] — 動画レイヤをクリア (#252)。「動画:」より先に完全一致で判定する。
     if content == "動画退場" {
         return Some(Event::VideoExit);
@@ -2003,6 +2007,23 @@ fn parse_wall_directive(content: &str) -> Option<Event> {
         path: path.to_string(),
         loop_,
         mute,
+    })
+}
+
+/// `[舞台前面: path]` / `[舞台前面: なし]` の本体を分解する (#705)。
+/// - path が `なし` → [`Event::StageFrontExit`]（解除）
+/// - path が空 → 不正な行としてイベントにしない（`None`）
+/// - path の後ろのカンマ以降（kv）は受けず無視する（`[壁:]` と違い設定項目を持たない）
+fn parse_stage_front_directive(content: &str) -> Option<Event> {
+    let path = content.split(',').next().unwrap_or("").trim();
+    if path.is_empty() {
+        return None;
+    }
+    if path == "なし" {
+        return Some(Event::StageFrontExit);
+    }
+    Some(Event::StageFront {
+        path: path.to_string(),
     })
 }
 
