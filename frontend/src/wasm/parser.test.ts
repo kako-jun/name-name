@@ -2472,6 +2472,21 @@ describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が
     expect(none.battle_enemy_list).toBeNull()
   })
 
+  it('battle_enemy_list (#954) と [感情:] (#943 / #946) が同じ wasm で両方通る', async () => {
+    const doc = await parseMarkdown(
+      docWith(
+        ['battle_enemy_list: window', 'field_emotions: data/emotions.json'],
+        ['[感情: 主人公, びっくり]', '']
+      )
+    )
+    expect(doc.battle_enemy_list).toBe('window')
+    expect(doc.field_emotions).toBe('data/emotions.json')
+    const emotions = doc.chapters[0].scenes[0].events.filter(
+      (e) => typeof e === 'object' && 'Emotion' in e
+    )
+    expect(emotions).toHaveLength(1)
+  })
+
   it('パーティ・モンスター定義の ポーズ: が poses として残る', async () => {
     const doc = await parseMarkdown(
       docWith(

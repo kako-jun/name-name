@@ -10,9 +10,37 @@
 import { effectFrameRect, EFFECT_MAX_FRAMES, EFFECT_MAX_FRAME_MS } from './battleEffects'
 import { hasOwn } from './ownProperty'
 
-/** 出す先の人物: 主人公 / 同行者 */
+/** 出す先の固定の人物: 主人公 / 同行者 */
 export const EMOTION_TARGETS = ['player', 'companion'] as const
-export type EmotionTarget = (typeof EMOTION_TARGETS)[number]
+export type FixedEmotionTarget = (typeof EMOTION_TARGETS)[number]
+
+/** NPC の対象キーの接頭辞（#946）。NPC は `npc:<id>`（id は設定の NPC の id） */
+export const EMOTION_NPC_PREFIX = 'npc:'
+/** 出す先の人物: 主人公 / 同行者 / NPC (`npc:<id>`) */
+export type EmotionTarget = FixedEmotionTarget | `npc:${string}`
+
+/** NPC の id から対象キーを作る */
+export function npcEmotionTarget(id: string): EmotionTarget {
+  return `${EMOTION_NPC_PREFIX}${id}`
+}
+
+/** 対象キーとして有効か（固定の人物、または id が空でない `npc:<id>`） */
+export function isEmotionTarget(target: string): target is EmotionTarget {
+  return (
+    (EMOTION_TARGETS as readonly string[]).includes(target) ||
+    (target.startsWith(EMOTION_NPC_PREFIX) && target.length > EMOTION_NPC_PREFIX.length)
+  )
+}
+
+/**
+ * 表示時間の上書きの正規化（`resolveEmotion` と `startEmotion` で共通）: 有限の数を floor し、1 以上のときだけ採用して
+ * `EMOTION_MAX_DURATION_MS` に収める。0 以下・非数・floor して 0（0<d<1）・省略は undefined（＝宣言どおり）
+ */
+export function normalizeEmotionDuration(d: unknown): number | undefined {
+  if (typeof d !== 'number' || !Number.isFinite(d)) return undefined
+  const n = Math.floor(d)
+  return n > 0 ? Math.min(n, EMOTION_MAX_DURATION_MS) : undefined
+}
 
 /** 出現の動き: none = 出してそのまま / pop = 小さい所から跳ねるように大きくなる */
 export const EMOTION_MOTIONS = ['none', 'pop'] as const
@@ -210,7 +238,7 @@ export interface ActiveEmotion {
   durationMs?: number
 }
 
-/** 人物ごとの進行中の吹き出し（1 人物につき最大 1 件） */
+/** 人物ごとの進行中の吹き出し（1 人物につき最大 1 件。NPC は `npc:<id>` キー） */
 export type EmotionState = Partial<Record<EmotionTarget, ActiveEmotion>>
 
 export const INITIAL_EMOTION_STATE: EmotionState = {}
@@ -218,7 +246,7 @@ export const INITIAL_EMOTION_STATE: EmotionState = {}
 /**
  * 人物に吹き出しを出す。同じ人物の古い吹き出しは置き換える（時間も 0 から）。
  * 宣言の無い種類・未知の人物は何もしない（state をそのまま返す）。
- * `durationMs` はこの 1 回だけ宣言の表示時間を上書きする。`EMOTION_MAX_DURATION_MS` を超えれば上限に収め、0 以下・非有限・省略は宣言どおり。
+ * `durationMs` はこの 1 回だけ宣言の表示時間を上書きする（`normalizeEmotionDuration`: floor して 1 以上のときだけ採用、`EMOTION_MAX_DURATION_MS` を超えれば上限に収め、それ以外は宣言どおり）。
  */
 export function startEmotion(
   state: EmotionState,
@@ -227,12 +255,24 @@ export function startEmotion(
   emotions: EmotionSheets | undefined,
   durationMs?: number
 ): EmotionState {
-  if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return state
+  if (!isEmotionTarget(target)) return state
   if (!emotions || !hasOwn(emotions, kind)) return state
   const active: ActiveEmotion = { kind, elapsed: 0 }
-  if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0)
-    active.durationMs = Math.min(durationMs, EMOTION_MAX_DURATION_MS)
+  const dur = normalizeEmotionDuration(durationMs)
+  if (dur !== undefined) active.durationMs = dur
   return { ...state, [target]: active }
+}
+
+/**
+ * NPC (`npc:<id>`) の吹き出しだけ消す（シーン遷移用）。NPC はシーンごとに別の人物なので、遷移後に同じ id の別シーンの NPC へ
+ * 乗り移らないようにする。主人公・同行者の吹き出しは持ち越す。消すものが無ければ state をそのまま返す
+ */
+export function clearNpcEmotions(state: EmotionState): EmotionState {
+  const keys = Object.keys(state) as EmotionTarget[]
+  if (!keys.some((k) => k.startsWith(EMOTION_NPC_PREFIX))) return state
+  const next: EmotionState = {}
+  for (const k of keys) if (!k.startsWith(EMOTION_NPC_PREFIX)) next[k] = state[k]
+  return next
 }
 
 /** dt ms 進め、表示時間を過ぎた吹き出しを消す。負・非有限の dt は 0 として扱う */
@@ -243,7 +283,7 @@ export function stepEmotions(
 ): EmotionState {
   const d = Number.isFinite(dt) ? Math.max(0, dt) : 0
   const next: EmotionState = {}
-  for (const target of EMOTION_TARGETS) {
+  for (const target of Object.keys(state) as EmotionTarget[]) {
     const a = state[target]
     if (!a) continue
     if (!emotions || !hasOwn(emotions, a.kind)) continue

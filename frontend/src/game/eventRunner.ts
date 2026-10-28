@@ -24,6 +24,14 @@ export interface EventBattleHost {
   findEvent?(name: string): EventCommand[] | undefined
 }
 
+/**
+ * 脚本の `[感情: 対象, 種類(, 持続=ms)]` (#946) を表示するためのホスト側の口。渡さないときの `Emotion` コマンドは読み飛ばして次へ進む。
+ * 表示は見た目だけで、ランナーは待たない（呼んだらすぐ次のコマンドへ）。対象・種類の解決と未宣言の警告はホスト側の責務
+ */
+export interface EventEmotionHost {
+  showEmotion(target: string, kind: string, durationMs?: number): void
+}
+
 /** `次=` の分岐の連鎖の上限（イベント → 戦闘 → 次のイベント → 戦闘 … が際限なく続くのを止める安全弁） */
 export const MAX_BATTLE_BRANCH_DEPTH = 32
 
@@ -34,14 +42,21 @@ export class EventRunner {
   private npcMover: NpcMover
   private onComplete: (() => void) | undefined
   private battleHost: EventBattleHost | undefined
+  private emotionHost: EventEmotionHost | undefined
   /** `run` ごとに進める世代。戦闘の待ちの間に `destroy` / 次の `run` があったら、古い待ちの続きを捨てる */
   private generation = 0
   private branchDepth = 0
 
-  constructor(dialogBox: DialogBox, npcMover: NpcMover, battleHost?: EventBattleHost) {
+  constructor(
+    dialogBox: DialogBox,
+    npcMover: NpcMover,
+    battleHost?: EventBattleHost,
+    emotionHost?: EventEmotionHost
+  ) {
     this.dialogBox = dialogBox
     this.npcMover = npcMover
     this.battleHost = battleHost
+    this.emotionHost = emotionHost
   }
 
   get isRunning(): boolean {
@@ -110,6 +125,17 @@ export class EventRunner {
 
     if (cmd.type === 'Battle') {
       this.runBattle(cmd.id)
+      return
+    }
+
+    if (cmd.type === 'Emotion') {
+      // 口が無ければ読み飛ばし。あっても表示するだけで待たない。ホストの例外で実行を止めない
+      try {
+        this.emotionHost?.showEmotion(cmd.target, cmd.kind, cmd.duration_ms ?? undefined)
+      } catch (e) {
+        console.warn('[EventRunner] 感情の表示で例外', e)
+      }
+      this.step()
       return
     }
 

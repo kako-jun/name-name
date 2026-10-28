@@ -33,6 +33,14 @@ pub enum EventCommand {
     Narration { text: Vec<String> },
     /// 脚本制御の戦闘 (`[戦闘 <id>]`、#741) を始め、終わるまで待つ。`[戦闘: noto_water]`
     Battle { id: String },
+    /// フィールドの感情吹き出し (#946)。`[感情: 対象, 種類(, 持続=ms)]`。`Event::Emotion` (#943) と同じ中身で、
+    /// 表示後すぐ次のコマンドへ進む（待たない）。対象・種類は生文字列で透過し、解決は frontend の `emotionHost` 側。
+    Emotion {
+        target: String,
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
+    },
 }
 
 fn default_npc_move_speed() -> u32 {

@@ -1391,6 +1391,17 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         EventCommand::Battle { id } => {
                             out.push_str(&format!("[戦闘: {id}]\n"));
                         }
+                        EventCommand::Emotion {
+                            target,
+                            kind,
+                            duration_ms,
+                        } => {
+                            let kv = match duration_ms {
+                                Some(n) => format!(", 持続={n}"),
+                                None => String::new(),
+                            };
+                            out.push_str(&format!("[感情: {target}, {kind}{kv}]\n"));
+                        }
                     }
                 }
                 out.push_str("[/イベント]\n");
