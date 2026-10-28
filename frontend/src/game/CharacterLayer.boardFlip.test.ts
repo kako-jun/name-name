@@ -32,6 +32,7 @@ interface StateLike {
   flipAnimation?: {
     role: 'out' | 'in'
     mesh: PerspectiveMesh
+    startMs: number
     durationMs: number
     fromAngleRad?: number
   }
@@ -483,7 +484,7 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
     const flip = oldState.flipAnimation!
     const frame = computeBoardFlipFrame(
       'out',
-      internals(layer).elapsedMs - (flip as unknown as { startMs: number }).startMs,
+      internals(layer).elapsedMs - flip.startMs,
       flip.durationMs,
       flip.fromAngleRad
     )
