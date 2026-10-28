@@ -324,6 +324,13 @@ describe('openFieldBattle', () => {
     expect('effects' in open().s.opts).toBe(false)
   })
 
+  it('motion は BattleScreen の opts に転送される（既定は default） (#956)', () => {
+    expect(
+      open({ settings: { presentation: 'ff', layout: 'side', motion: 'snappy' } }).s.opts.motion
+    ).toBe('snappy')
+    expect(open().s.opts.motion).toBe('default')
+  })
+
   it('presentation は BattleScreen の opts に転送される（既定は dq） (#745)', () => {
     expect(open({ settings: { presentation: 'ff', layout: 'side' } }).s.opts.presentation).toBe(
       'ff'
@@ -429,6 +436,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       backgroundDof: 'off',
       logTypewriter: 'off',
       presentation: 'dq',
+      motion: 'default',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -455,6 +463,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       battleCommandLayout: 'cross',
       battleCommandLabels: { attack: '斬る' },
       battlePresentation: 'ff',
+      battleMotion: 'snappy',
       battleTransition: 'ff',
     })
     expect(readFieldBattleSettings(p)).toEqual({
@@ -466,6 +475,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       backgroundDof: 'on',
       logTypewriter: 'on',
       presentation: 'ff',
+      motion: 'snappy',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,

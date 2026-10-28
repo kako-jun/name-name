@@ -35,7 +35,7 @@ import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
 import type { BattleLogTypewriterMode } from './battleLogTypewriter'
-import { posesField, type BattlePresentation } from './battleMotion'
+import { posesField, type BattleMotionPreset, type BattlePresentation } from './battleMotion'
 import type { BattleAtbConfig } from './battleAtb'
 import type { EnemyGridSize } from './enemyGrid'
 import type { CommandId, CommandLabels, CommandLayout } from './battleCommands'
@@ -69,6 +69,8 @@ export interface FieldBattleSettings {
   logTypewriter: BattleLogTypewriterMode
   /** `battle_presentation` (#745)。`dq`（既定）/ `ff` */
   presentation: BattlePresentation
+  /** `battle_motion` (#956)。`default`（現行）/ `snappy`。`presentation: ff` のときだけ効く */
+  motion: BattleMotionPreset
   /** `battle_horizon` / `battle_perspective` (#747) */
   depth: BattleDepth | null
   /** `battle_foreground` (#747) */
@@ -101,6 +103,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   backgroundDof: 'off',
   logTypewriter: 'off',
   presentation: 'dq',
+  motion: 'default',
   depth: null,
   foreground: undefined,
   pixelArt: false,
@@ -125,6 +128,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     backgroundDof: gameData.battleBackgroundDof ?? d.backgroundDof,
     logTypewriter: gameData.battleLogTypewriter ?? d.logTypewriter,
     presentation: gameData.battlePresentation ?? d.presentation,
+    motion: gameData.battleMotion ?? d.motion,
     depth: gameData.battleDepth ?? d.depth,
     foreground: gameData.battleForeground,
     pixelArt: gameData.pixelArt === true,
@@ -525,6 +529,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     backgroundDof: settings.backgroundDof,
     logTypewriter: settings.logTypewriter,
     presentation: settings.presentation,
+    motion: settings.motion,
     depth: settings.depth,
     foreground: settings.foreground,
     pixelArt: settings.pixelArt,

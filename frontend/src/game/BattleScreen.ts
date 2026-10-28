@@ -108,6 +108,10 @@ import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayou
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
   sampleSummonCue,
+  motionTimingFor,
+  normalizeBattleMotion,
+  type BattleMotionPreset,
+  type MotionTiming,
   MOTION_EXTENT_PAD,
   MOTION_SCREEN_MARGIN,
   clampMotionDx,
@@ -382,6 +386,11 @@ export interface BattleScreenOptions {
    */
   presentation?: BattlePresentation
   /**
+   * 戦闘モーションの時間・距離のプリセット (#956)。`default`（現行）/ `snappy`（キビキビ）。`presentation: ff` のときだけ効く。
+   * 未指定・不正値は `default`。
+   */
+  motion?: BattleMotionPreset
+  /**
    * 奥行き (#747)。指定して perspective が 0 超なら、`side` で行ごとの縮尺・床の高さを付け、奥→手前の順に描く。
    * 未指定・null は平面（現行どおり）。`front` は敵・味方の画像を描かないので影響しない。
    */
@@ -556,6 +565,8 @@ export class BattleScreen extends Container {
   private logTicker: Ticker | null = null
   /** 演出方式 (#745)。`ff` は `side` のときだけ。ff の間の再生状態・浮いている数字・窓の言葉は画面が持つ（GameState には持たない） */
   private presentation: BattlePresentation
+  /** `motion` (#956) から引いた時間・距離の組。ff の再生・サンプリングはすべてこれを通す */
+  private motionTiming: MotionTiming
   private playback: PlaybackState = emptyPlayback()
   /** 取り込み済みの行動の累計数（`BattleState.eventTotal`）。作り直した画面は過去の行動を再生しない */
   private seenEventTotal = 0
@@ -691,6 +702,7 @@ export class BattleScreen extends Container {
     this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.presentation = opts.presentation === 'ff' && this.layoutMode === 'side' ? 'ff' : 'dq'
+    this.motionTiming = motionTimingFor(normalizeBattleMotion(opts.motion))
     // FF 式の窓は一度に全文を出す。1 文字ずつ表示 (#755) は DQ 式のログ用で、ff では使わない
     this.logTypewriter = opts.logTypewriter === 'on' && this.presentation === 'dq' ? 'on' : 'off'
     // 描画（battleLayout の effectiveCommandLayout）と同じ判定にそろえる: cross は side かつ 4 コマンドのときだけ
@@ -2598,7 +2610,7 @@ export class BattleScreen extends Container {
   private advancePresentation(dt: number): void {
     const wasBusy = isPlaybackBusy(this.playback)
     if (!wasBusy && this.popups.length === 0 && this.effectInstances.length === 0) return
-    const r = advancePlayback(this.playback, dt)
+    const r = advancePlayback(this.playback, dt, this.motionTiming)
     this.playback = r.state
     let changed = false
     for (const fire of r.fires) {
@@ -2685,7 +2697,7 @@ export class BattleScreen extends Container {
       this.summonCuedSeq = active.event.seq
       this.opts.onSummonCue?.(cue)
     }
-    const s = sampleSummonCue(active.elapsed)
+    const s = sampleSummonCue(active.elapsed, this.motionTiming)
     layer.visible = true
     // 想像の層: 全面の暗い寒色。大きさが変わったときだけ描き直す
     const veilSize = `${w}x${h}`
@@ -2790,9 +2802,11 @@ export class BattleScreen extends Container {
     const active = this.playback.active
     if (active && active.event.seq !== this.effectPlanSeq) {
       this.effectPlanSeq = active.event.seq
-      this.effectPending = planEventEffects(active.event, this.opts.effects).filter(
-        (p) => p.kind === 'cast' || p.kind === 'summon'
-      )
+      this.effectPending = planEventEffects(
+        active.event,
+        this.opts.effects,
+        this.motionTiming
+      ).filter((p) => p.kind === 'cast' || p.kind === 'summon')
     } else if (!active) {
       this.effectPending = []
     }
@@ -2808,7 +2822,7 @@ export class BattleScreen extends Container {
       this.effectPending = rest
     }
     for (const fire of fires) {
-      const plans = planHitEffects(fire.event, fire.hits, this.opts.effects)
+      const plans = planHitEffects(fire.event, fire.hits, this.opts.effects, this.motionTiming)
       for (const p of plans) this.spawnEffect(p, fire.sinceHit)
     }
     this.effectInstances = this.effectInstances.filter((inst) => {
@@ -2906,7 +2920,7 @@ export class BattleScreen extends Container {
   }
 
   private updatePopup(p: DamagePopup): boolean {
-    const s = sampleDamagePopup(p.elapsed)
+    const s = sampleDamagePopup(p.elapsed, this.motionTiming)
     // redraw で枠が動いたら新しい座標へ移す
     const view = this.viewOf(p.side, p.index)
     if (view && view.unit > 0) {
@@ -2969,13 +2983,13 @@ export class BattleScreen extends Container {
     if (!active) return out
     const ev = active.event
     if (ev.actor.side === side && ev.actor.index === index) {
-      const a = sampleActor(ev.kind, active.elapsed)
+      const a = sampleActor(ev.kind, active.elapsed, this.motionTiming)
       // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
       const downed = out.downProgress > 0
       out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
-    const tl = eventTimeline(ev)
+    const tl = eventTimeline(ev, this.motionTiming)
     let latest: { sinceHit: number; downs: boolean } | null = null
     for (const hit of ev.hits) {
       if (hit.target.side !== side || hit.target.index !== index || hit.kind !== 'damage') continue
@@ -2984,7 +2998,7 @@ export class BattleScreen extends Container {
       if (!latest || sinceHit <= latest.sinceHit) latest = { sinceHit, downs: hit.hpAfter <= 0 }
     }
     if (latest) {
-      const t = sampleTarget('damage', latest.sinceHit, latest.downs)
+      const t = sampleTarget('damage', latest.sinceHit, latest.downs, this.motionTiming)
       out = { ...out, recoil: t.recoil, pose: t.pose, downProgress: t.downProgress }
     }
     return out

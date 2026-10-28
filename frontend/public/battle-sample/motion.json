@@ -1,0 +1,22 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "motion": "snappy",
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 600, "mp": 40, "atk": 22, "def": 4, "agi": 6 },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 400,
+      "mp": 40,
+      "atk": 14,
+      "def": 2,
+      "agi": 5,
+      "row": "back"
+    }
+  ],
+  "enemies": [
+    { "id": "tako", "name": "タコ", "hp": 400, "atk": 12, "def": 2, "agi": 3 },
+    { "id": "ika", "name": "イカ", "hp": 400, "atk": 10, "def": 2, "agi": 3 }
+  ]
+}
