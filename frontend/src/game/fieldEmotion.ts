@@ -206,6 +206,8 @@ export interface ActiveEmotion {
   kind: string
   /** 出してから経った ms */
   elapsed: number
+  /** この 1 回だけの表示時間（ms。0 超〜`EMOTION_MAX_DURATION_MS`）。無ければ宣言の `durationMs` */
+  durationMs?: number
 }
 
 /** 人物ごとの進行中の吹き出し（1 人物につき最大 1 件） */
@@ -216,16 +218,21 @@ export const INITIAL_EMOTION_STATE: EmotionState = {}
 /**
  * 人物に吹き出しを出す。同じ人物の古い吹き出しは置き換える（時間も 0 から）。
  * 宣言の無い種類・未知の人物は何もしない（state をそのまま返す）。
+ * `durationMs` はこの 1 回だけ宣言の表示時間を上書きする。`EMOTION_MAX_DURATION_MS` を超えれば上限に収め、0 以下・非有限・省略は宣言どおり。
  */
 export function startEmotion(
   state: EmotionState,
   target: EmotionTarget,
   kind: string,
-  emotions: EmotionSheets | undefined
+  emotions: EmotionSheets | undefined,
+  durationMs?: number
 ): EmotionState {
   if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return state
   if (!emotions || !hasOwn(emotions, kind)) return state
-  return { ...state, [target]: { kind, elapsed: 0 } }
+  const active: ActiveEmotion = { kind, elapsed: 0 }
+  if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0)
+    active.durationMs = Math.min(durationMs, EMOTION_MAX_DURATION_MS)
+  return { ...state, [target]: active }
 }
 
 /** dt ms 進め、表示時間を過ぎた吹き出しを消す。負・非有限の dt は 0 として扱う */
@@ -241,8 +248,8 @@ export function stepEmotions(
     if (!a) continue
     if (!emotions || !hasOwn(emotions, a.kind)) continue
     const elapsed = a.elapsed + d
-    if (elapsed >= emotions[a.kind].durationMs) continue
-    next[target] = { kind: a.kind, elapsed }
+    if (elapsed >= (a.durationMs ?? emotions[a.kind].durationMs)) continue
+    next[target] = a.durationMs === undefined ? { kind: a.kind, elapsed } : { ...a, elapsed }
   }
   return next
 }

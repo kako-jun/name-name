@@ -1390,3 +1390,46 @@ describe('emotions 感情吹き出し (#937)', () => {
     expect(c.warnings).toHaveLength(1)
   })
 })
+
+describe('emotionsUrl 感情吹き出しの外部 JSON (#946)', () => {
+  it('未指定は emotionsSource キーが無い（従来と同一）', () => {
+    const c = ok(minimal())
+    expect('emotionsSource' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('URL は assetBaseUrl（images 配下）基準で解決し、中の画像 URL も同じ規則で解決できる', () => {
+    const c = ok(
+      mutated((c) => {
+        c.assetBaseUrl = 'https://cdn.example.com/g'
+        c.emotionsUrl = 'field_emotions.json'
+      })
+    )
+    expect(c.emotionsSource?.url).toBe('https://cdn.example.com/g/images/field_emotions.json')
+    expect(c.emotionsSource?.resolveImage('em/bang.png')).toBe(
+      'https://cdn.example.com/g/images/em/bang.png'
+    )
+    expect(c.warnings).toBeUndefined()
+  })
+  it('インラインの emotions と併存できる', () => {
+    const c = ok(
+      mutated((c) => {
+        c.emotions = { '?': { image: 'q.png' } }
+        c.emotionsUrl = 'https://example.com/e.json'
+      })
+    )
+    expect(Object.keys(c.emotions ?? {})).toEqual(['?'])
+    expect(c.emotionsSource?.url).toBe('https://example.com/e.json')
+  })
+  it('文字列でない・空は警告して無視（読み込みは成功のまま）', () => {
+    for (const bad of [123, '', '  ', null, {}]) {
+      const c = ok(
+        mutated((c) => {
+          c.emotionsUrl = bad
+        })
+      )
+      expect('emotionsSource' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('emotionsUrl')
+    }
+  })
+})

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { parseMarkdown } from '../wasm/parser'
 import type { Event } from '../types'
 import { EMOTION_MAX_DURATION_MS } from './fieldEmotion'
-import { parseFieldEmotionsText, resolveEmotion } from './fieldEmotionScript'
+import { mergeEmotionSheets, parseFieldEmotionsText, resolveEmotion } from './fieldEmotionScript'
 
 function md(frontmatterExtra: string, body: string): string {
   return `---\nengine: name-name\nchapter: 1\ntitle: t\n${frontmatterExtra}---\n\n## 1-1: s\n\n${body}\n`
@@ -86,5 +86,33 @@ describe('resolveEmotion: Object.prototype のキーは未宣言として弾く'
       expect(r.command, kind).toBeNull()
       expect(r.warnings[0], kind).toContain('宣言')
     }
+  })
+})
+
+describe('mergeEmotionSheets (#946)', () => {
+  const sheet = (image: string) => ({
+    image,
+    frames: 1,
+    columns: 1,
+    frameMs: 120,
+    durationMs: 1000,
+    offset: { x: 0, y: 0 },
+    scale: 1,
+    motion: 'none' as const,
+  })
+  it('同名はインラインが優先、別名は両方残る', () => {
+    const m = mergeEmotionSheets(
+      { '!': sheet('inline.png') },
+      { '!': sheet('external.png'), '?': sheet('q.png') }
+    )
+    expect(m?.['!'].image).toBe('inline.png')
+    expect(m?.['?'].image).toBe('q.png')
+    expect(Object.keys(m ?? {}).sort()).toEqual(['!', '?'])
+  })
+  it('片方だけでも使える。どちらも空・未指定なら undefined', () => {
+    expect(mergeEmotionSheets(undefined, { '?': sheet('q.png') })?.['?'].image).toBe('q.png')
+    expect(mergeEmotionSheets({ '!': sheet('a.png') }, undefined)?.['!'].image).toBe('a.png')
+    expect(mergeEmotionSheets(undefined, undefined)).toBeUndefined()
+    expect(mergeEmotionSheets({}, {})).toBeUndefined()
   })
 })

@@ -2375,8 +2375,15 @@ steal ぶんどる=8..14 type=fire         # 盗みと同時に攻撃（damage �
 - frontmatter `field_emotions: <JSONパス>`。JSON は種類名 → 宣言のオブジェクト（`emotions` と同じ検証。不正は警告して無視）。parser は生文字列で透過する。
 - 脚本ディレクティブ `[感情: 対象, 種類]` / `[感情: 対象, 種類, 持続=1200]`（`Event::Emotion { target, kind, duration_ms }`）。対象は話者名か `主人公`、種類は設定 JSON のキー。`持続` は ms の正の整数（0・非数値は未指定扱い＝設定の `durationMs`。反映時は 0 超〜`EMOTION_MAX_DURATION_MS` に収める）。区切りは半角 `,` に加え全角 `，` `、` も受ける（`持続 = 1200` のように `=` 前後の空白も可）。対象・種類が欠けた不正な行は、イベントにならず捨てられる（本文にもならない）。日本語ディレクティブのみ（EN エイリアスなし）。round-trip は `[感情: 対象, 種類, 持続=N]` に正規化して出す。
 - 解決は純粋関数 `frontend/src/game/fieldEmotionScript.ts`（`parseFieldEmotionsText` / `resolveEmotion`）。`主人公`・frontmatter `protagonist` の名前 → `player`、同行者の話者名 → `companion`。解決できない対象・未宣言の種類は警告して無視する。
-- **実行文脈**: 通常のノベル再生（`NovelRenderer`）にはフィールドが無く、`[感情:]` は何も起きない（開発ビルドでコンソール警告）。フィールドの `showEmotion` に届く脚本実行経路は現状なく（フィールドサンプルは脚本を走らせない別ページ）、接続は未着手。`field_emotions` の JSON も、読み込み側が現状ない。
+- **実行文脈**: 通常のノベル再生（`NovelRenderer`）にはフィールドが無く、`[感情:]` は何も起きない（開発ビルドでコンソール警告）。フィールドの `showEmotion` に届く脚本実行経路は現状なく（フィールドサンプルは脚本を走らせない別ページ）、接続は未着手。`field_emotions` の JSON を読む口は、フィールドサンプルの設定の `emotionsUrl`（下の「#946」）だけ。
 
+
+**#946: 外部 JSON（`emotionsUrl`）と 1 回ごとの持続**
+
+- フィールドサンプルの設定 JSON のトップレベル `emotionsUrl`（文字列。`field_emotions` と同じ形の JSON のパス）。相対パスは他のアセットと同じ規則（`assetBaseUrl` があれば images 配下、なければ設定 JSON 基準）で解決し、JSON 中の `image` も同じ規則で解決する。起動時に fetch → `parseFieldEmotionsText`（`parseEmotions` と同じ検証）。
+- **マージの優先順**: インラインの `emotions` と外部 JSON で同名の種類があれば**インラインが優先**（設定ファイル側で個別に上書きできる）。別名は両方使える（純粋関数 `mergeEmotionSheets`）。
+- 取得失敗・JSON として不正・`emotionsUrl` が文字列でない場合は警告して無視し、インラインだけで続ける。`emotionsUrl` を書かなければ従来と完全に同じ。
+- `showEmotion(target, kind, durationMs?)` の第 3 引数（`[感情: …, 持続=N]` の `持続` に当たる）で、その 1 回だけ宣言の `durationMs` を上書きする。0 超〜`EMOTION_MAX_DURATION_MS`（10000）に収め（超えれば 10000）、0 以下・非数・省略は宣言どおり。次に出す吹き出しへは持ち越さない。
 ```json
 "emotions": {
   "!":   { "image": "emotion-bang.png", "durationMs": 900, "offset": { "x": 0, "y": -4 }, "motion": "pop" },

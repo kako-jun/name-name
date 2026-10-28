@@ -13,6 +13,7 @@ import {
   emotionView,
   startEmotion,
   stepEmotions,
+  type ActiveEmotion,
   type EmotionSheet,
   type EmotionSheets,
   type EmotionState,
@@ -45,11 +46,11 @@ export class FieldEmotionLayer extends Container {
     this.label = 'FieldEmotionLayer'
   }
 
-  /** 人物に吹き出しを出す（同じ人物の古い吹き出しは置き換える）。出せたら true。未宣言の種類・画像が読めない種類は false */
-  show(target: EmotionTarget, kind: string): boolean {
+  /** 人物に吹き出しを出す（同じ人物の古い吹き出しは置き換える）。出せたら true。未宣言の種類・画像が読めない種類は false。`durationMs` はこの 1 回だけ表示時間を上書き（`startEmotion` 参照。省略は宣言どおり） */
+  show(target: EmotionTarget, kind: string, durationMs?: number): boolean {
     const sheet = hasOwn(this.emotions, kind) ? this.emotions[kind] : undefined
     if (!sheet || !this.textures.get(sheet.image)) return false
-    const next = startEmotion(this.state, target, kind, this.emotions)
+    const next = startEmotion(this.state, target, kind, this.emotions, durationMs)
     if (next === this.state) return false
     this.state = next
     return true
@@ -62,8 +63,8 @@ export class FieldEmotionLayer extends Container {
   }
 
   /** 進行中の吹き出し（検証用の読み取り） */
-  active(): Partial<Record<EmotionTarget, { kind: string; elapsed: number }>> {
-    const out: Partial<Record<EmotionTarget, { kind: string; elapsed: number }>> = {}
+  active(): Partial<Record<EmotionTarget, ActiveEmotion>> {
+    const out: Partial<Record<EmotionTarget, ActiveEmotion>> = {}
     for (const t of EMOTION_TARGETS) {
       const a = this.state[t]
       if (a) out[t] = { ...a }
