@@ -616,6 +616,171 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
       expect(a.sprite.destroyed).toBe(true)
     })
 
+    /** 表情名に含まれる gate 名（slowB / slowC）の読み込みだけを release(name) まで保留する。 */
+    function mockLoadGates(): { release: (name: 'slowB' | 'slowC') => void } {
+      const gates: Record<string, { p: Promise<void>; r: () => void }> = {}
+      for (const n of ['slowB', 'slowC']) {
+        let r: () => void = () => {}
+        const p = new Promise<void>((resolve) => (r = resolve))
+        gates[n] = { p, r }
+      }
+      vi.spyOn(Assets, 'load').mockImplementation((async (url: string) => {
+        for (const n of Object.keys(gates)) if (String(url).includes(n)) await gates[n].p
+        return TEX_A
+      }) as never)
+      return { release: (name) => gates[name].r() }
+    }
+    const settle = async (layer: CharacterLayer, ms: number): Promise<void> => {
+      for (let t = 0; t < ms; t += 250) {
+        advance(layer, 250)
+        await flushPromises()
+      }
+    }
+    const newLayer = (mode: 'Theater' | 'Novel'): CharacterLayer => {
+      const layer = new CharacterLayer(800, 450)
+      layer.setCharacterFadeMs(1000)
+      layer.setCamera(mode, 'Front' as never, null)
+      return layer
+    }
+
+    describe.each(['Theater', 'Novel'] as const)('%s: 引き継ぎ・安全網の状態遷移', (mode) => {
+      it('場面転換で A が退場中でも、あとから読み込み完了した C は出る（引き継がない）', async () => {
+        const g = mockLoadGates()
+        const layer = newLayer(mode)
+        layer.show('hero', 'a', '中央', '/assets', { instant: true })
+        await flushPromises()
+        layer.show('hero', 'slowB', '中央', '/assets', {})
+        layer.clearForSceneTransition()
+        layer.show('hero', 'slowC', '中央', '/assets', {})
+        await settle(layer, 1250) // A の退場フェードが完了
+        g.release('slowB')
+        g.release('slowC')
+        await flushPromises()
+        await flushPromises()
+        await settle(layer, 3000)
+        expect(keysOf(layer)).toEqual(['hero'])
+        const c = internals(layer).characters.get('hero') as Anim
+        expect(c.expression).toBe('slowC')
+        expect(c.sprite.alpha).toBe(1)
+        expect(c.sprite.visible).toBe(true)
+        expect(meshCount(layer)).toBe(0)
+      })
+
+      it.each([
+        ['C の読み込みが fade より速い', 0],
+        ['C の読み込みが fade より遅い', 1500],
+      ])('位置変更で A が衝突退場に巻き込まれない（%s）', async (_n, delay) => {
+        const g = mockLoadGates()
+        const layer = newLayer(mode)
+        layer.show('hero', 'a', '左', '/assets', { instant: true })
+        await flushPromises()
+        const a = internals(layer).characters.get('hero') as Anim
+        layer.show('hero', 'slowB', '中央', '/assets', {})
+        layer.show('hero', 'slowC', '左', '/assets', {})
+        expect(a.fadeAnimation).toBeNull() // 自分自身の旧ポーズは位置の衝突退場の対象外
+        await settle(layer, delay)
+        g.release('slowB')
+        g.release('slowC')
+        await flushPromises()
+        await flushPromises()
+        await settle(layer, 3000)
+        expect(keysOf(layer)).toEqual(['hero'])
+        const c = internals(layer).characters.get('hero') as Anim
+        expect(c.expression).toBe('slowC')
+        expect(c.sprite.alpha).toBe(1)
+        expect(c.sprite.visible).toBe(true)
+        expect(a.sprite.destroyed).toBe(true)
+        expect(meshCount(layer)).toBe(0)
+      })
+
+      it('A 左→B 中央→C 左（位置を戻す連続変更）で A→C に直接つながる', async () => {
+        mockLoadOk()
+        const layer = newLayer(mode)
+        layer.show('hero', 'a', '左', '/assets', { instant: true })
+        await flushPromises()
+        const a = internals(layer).characters.get('hero') as Anim
+        layer.show('hero', 'b', '中央', '/assets', {})
+        layer.show('hero', 'third', '左', '/assets', {})
+        await flushPromises()
+        expect(keysOf(layer).sort()).toEqual(['hero', 'hero__transition_1'])
+        if (mode === 'Theater') {
+          expect(a.flipAnimation?.role).toBe('out')
+          expect(a.fadeAnimation).toBeNull()
+        } else {
+          expect(a.fadeAnimation).not.toBeNull()
+        }
+        await settle(layer, 3000)
+        expect(keysOf(layer)).toEqual(['hero'])
+        const c = internals(layer).characters.get('hero') as Anim
+        expect(c.expression).toBe('third')
+        expect(c.sprite.alpha).toBe(1)
+        expect(meshCount(layer)).toBe(0)
+      })
+
+      it('A→B(読み込み待ち)→A に戻すと遷移せず A がそのまま残る', async () => {
+        mockLoadGates()
+        const layer = newLayer(mode)
+        layer.show('hero', 'a', '中央', '/assets', { instant: true })
+        await flushPromises()
+        const a = internals(layer).characters.get('hero') as Anim
+        layer.show('hero', 'slowB', '中央', '/assets', {})
+        const b = internals(layer).characters.get('hero') as Anim
+        layer.show('hero', 'a', '中央', '/assets', {})
+        await flushPromises()
+        expect(keysOf(layer)).toEqual(['hero'])
+        expect(internals(layer).characters.get('hero')).toBe(a)
+        expect(a.snapshotHidden).toBe(false)
+        expect(a.flipAnimation).toBeUndefined()
+        expect(a.fadeAnimation).toBeNull()
+        expect(a.sprite.visible).toBe(true)
+        expect(b.sprite.destroyed).toBe(true)
+        expect(meshCount(layer)).toBe(0)
+      })
+
+      it('読み込み待ちの間に nextState が退場中になっても、読み込み完了で復活しない', async () => {
+        const g = mockLoadGates()
+        const layer = newLayer(mode)
+        layer.show('hero', 'a', '中央', '/assets', { instant: true })
+        await flushPromises()
+        layer.show('hero', 'slowB', '中央', '/assets', {})
+        layer.clearForSceneTransition()
+        await settle(layer, 250)
+        g.release('slowB')
+        await flushPromises()
+        await flushPromises()
+        await settle(layer, 3000)
+        expect(keysOf(layer)).toEqual([])
+        expect(meshCount(layer)).toBe(0)
+      })
+
+      it('安全網は旧ポーズ A 自身の退場フェード（onComplete 付き）を上書きしない', async () => {
+        const g = mockLoadGates()
+        const layer = newLayer(mode)
+        layer.show('hero', 'a', '中央', '/assets', { instant: true })
+        await flushPromises()
+        const a = internals(layer).characters.get('hero') as Anim
+        layer.show('hero', 'slowB', '中央', '/assets', {})
+        let done = 0
+        ;(layer as unknown as { startFade: (...x: unknown[]) => void }).startFade(
+          a,
+          1,
+          0,
+          true,
+          () => done++,
+          3000
+        )
+        const fade = a.fadeAnimation
+        layer.remove('hero', { instant: true }) // B が消える
+        g.release('slowB')
+        await flushPromises()
+        await flushPromises()
+        expect(a.fadeAnimation).toBe(fade)
+        await settle(layer, 3250)
+        expect(done).toBe(1)
+        expect(keysOf(layer)).toEqual([])
+      })
+    })
+
     it('読み込み待ちの間に即時 [退場] されても、旧ポーズ A は残らず退場する', async () => {
       const { release } = mockLoadGated()
       const layer = new CharacterLayer(800, 450)
