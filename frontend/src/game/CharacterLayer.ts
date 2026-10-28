@@ -480,13 +480,6 @@ interface CharacterState {
    * NovelGameState に持たない）。完了で mesh を破棄し、`out` は state ごと破棄、`in` は sprite を戻す。
    */
   flipAnimation?: FlipAnimation
-  /**
-   * 同一人物のポーズ変更 (#337/#707) の読み込み待ちの間だけ持つ、旧ポーズ（`${name}__transition_N`
-   * キー）。読み込み完了前にさらにポーズが変わったとき、この旧ポーズを新しい変更へ引き継ぐ (#952)。
-   */
-  pendingFrom?: string
-  /** 引き継ぎで捨てられた読み込み待ちの state。完了時の .then は何もしない (#952)。 */
-  abandoned?: boolean
   /** 円形マスク用 Graphics (#274)。`[画像: 円形]` のとき sprite.mask に設定する。退場で破棄する。 */
   maskGraphics?: Graphics
   /** ラベルの水平 anchor (#275)。左=0 / 中央=0.5 / 右=1。label.anchor.x と一致させて保持する。
@@ -1649,11 +1642,6 @@ export class CharacterLayer extends Container {
     this.ensureTicker()
   }
 
-  /** 退場中（退場フェード or 方向モーション退場）か。引き継ぎ・安全網がこの state を復活/上書きしない判定に使う。 */
-  private isLeaving(state: CharacterState): boolean {
-    return state.fadeAnimation?.destroyOnComplete === true || state.stageMotion?.kind === 'exit'
-  }
-
   private nextTransitionName(character: string): string {
     this.transitionSerial += 1
     return `${character}__transition_${this.transitionSerial}`
@@ -1784,47 +1772,10 @@ export class CharacterLayer extends Container {
           existing.idleIntervalId = undefined
         }
 
-        // `existing` が「直前の変更 A→B の読み込み待ち（まだ一度も表示されていない B）」なら、
-        // B を捨てて A（B の predecessor）を旧ポーズとして引き継ぎ、A→C に直接つなぐ (#952)。
-        // B を旧側にすると、B の読み込み完了時の .then が「現在の state ではない」で早期 return し、
-        // A がフェード/回転で退場されないまま snapshotHidden で残り続けていた。
-        const adoptedKey = existing.pendingFrom
-        const predecessor = adoptedKey ? this.characters.get(adoptedKey) : undefined
-        let base: CharacterState = existing
-        let oldKey: string
-        if (adoptedKey && predecessor && !this.isLeaving(predecessor)) {
-          // 引き継ぎは「A が退場中でない」ときだけ。退場中（衝突退場・場面転換・歩行退場）の A を
-          // 引き継ぐと、A が自分のフェード完了で消えたあと C を出す契機が無くなる。退場中の A は
-          // 退場させるのが evictCollidersAt / clearForSceneTransition の意図なので復活させず、
-          // 従来経路（B を旧側にして C へ）に落とす。
-          existing.abandoned = true
-          existing.pendingFrom = undefined
-          this.destroyCharacterState(existing)
-          this.characters.delete(character)
-          if (
-            predecessor.expression === expression &&
-            predecessor.fit === fit &&
-            predecessor.depth === depth &&
-            predecessor.position === normalizedPosition &&
-            Math.abs(predecessor.sprite.x - targetX) < CharacterLayer.SAME_POSITION_EPSILON
-          ) {
-            // A→B(読み込み待ち)→A（戻す）: 戻り先が A と同じなら遷移は要らない。B を捨てて A を
-            // character キーへ戻すだけ（読み込み失敗のロールバックと同じ操作）。
-            predecessor.snapshotHidden = false
-            this.characters.delete(adoptedKey)
-            this.characters.set(character, predecessor)
-            onReady?.()
-            return
-          }
-          base = predecessor
-          oldKey = adoptedKey
-        } else {
-          existing.pendingFrom = undefined
-          oldKey = this.nextTransitionName(character)
-          existing.snapshotHidden = true
-          this.characters.delete(character)
-          this.characters.set(oldKey, existing)
-        }
+        const oldKey = this.nextTransitionName(character)
+        existing.snapshotHidden = true
+        this.characters.delete(character)
+        this.characters.set(oldKey, existing)
 
         const nextState = this.createPortraitState(
           character,
@@ -1839,8 +1790,6 @@ export class CharacterLayer extends Container {
         )
         this.attachCharacterState(nextState)
         this.characters.set(character, nextState)
-        // 読み込み完了までの間、旧ポーズ（oldKey）の持ち主を覚えておく（上記の引き継ぎ用）。
-        nextState.pendingFrom = oldKey
 
         void this.loadTexture(
           nextState.sprite,
@@ -1851,57 +1800,31 @@ export class CharacterLayer extends Container {
           fit,
           onReady
         ).then((loaded) => {
-          // 引き継ぎで捨てられた B（上記 abandoned）は何もしない。旧ポーズ A は C が引き継いでいる。
-          if (nextState.abandoned) return
-          const baseAlive = this.characters.get(oldKey) === base && !base.sprite.destroyed
-          // 旧ポーズが自分で退場中なら触らない（onComplete 付きの退場フェードを上書きしない）。
-          const retireBase = (): void => {
-            if (baseAlive && !this.isLeaving(base)) {
-              this.startFade(base, base.sprite.alpha, 0, true)
-            }
-          }
-          if (this.characters.get(character) !== nextState) {
-            // 読み込み待ちの間に即時 [退場] 等で nextState が消えた。旧ポーズ（base）は誰にも
-            // 片付けられず残るので、ここでフェードアウトして破棄する (#952)。
-            retireBase()
-            return
-          }
-          nextState.pendingFrom = undefined
-          if (this.isLeaving(nextState)) {
-            // 読み込み待ちの間に nextState 自身が退場中になった（場面転換・衝突退場）。出さずに、
-            // 旧ポーズだけ退場させる（退場フェードを入場で上書きして復活させない）。
-            retireBase()
-            return
-          }
+          if (this.characters.get(character) !== nextState) return
+          if (this.characters.get(oldKey) !== existing) return
           if (!loaded && assetBaseUrl) {
             this.destroyCharacterState(nextState)
             this.characters.delete(character)
-            if (baseAlive && !this.isLeaving(base)) {
-              base.fadeAnimation = null
-              base.snapshotHidden = false
-              base.sprite.alpha = 1
-              this.characters.delete(oldKey)
-              this.characters.set(character, base)
-            }
+            existing.fadeAnimation = null
+            existing.snapshotHidden = false
+            existing.sprite.alpha = 1
+            this.characters.delete(oldKey)
+            this.characters.set(character, existing)
             return
           }
-          // base が先に消えていた（衝突退場の即時破棄など）/退場中なら、C だけを出す。
-          const baseUsable = baseAlive && !this.isLeaving(base)
           if (this.cameraMode === 'Theater') {
             // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
             let inheritedStartMs: number | undefined
-            if (baseUsable) {
-              if (base.sprite.parent === this) {
-                inheritedStartMs = this.startFlipOut(base)
-              } else {
-                // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
-                // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
-                this.startFade(base, base.sprite.alpha, 0, true)
-              }
+            if (existing.sprite.parent === this) {
+              inheritedStartMs = this.startFlipOut(existing)
+            } else {
+              // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
+              // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
+              this.startFade(existing, existing.sprite.alpha, 0, true)
             }
             this.startFlipIn(nextState, inheritedStartMs)
           } else {
-            if (baseUsable) this.startFade(base, base.sprite.alpha, 0, true)
+            this.startFade(existing, existing.sprite.alpha, 0, true)
             this.startFade(nextState, 0, 1, false)
           }
         })
@@ -3805,10 +3728,6 @@ export class CharacterLayer extends Container {
       // 同じく退場対象にしない。自分の回転完了で必ず消えるスナップショットで、ここで退場フェードを
       // 重ねても完了待ち合わせ（onComplete）が旧板の破棄に巻き込まれて失われるため。
       if (state.flipAnimation?.role === 'out') continue
-      // 同じキャラ自身の旧ポーズ（`${keepName}__transition_N`）は別人ではない。ポーズ変更（クロスフェード/
-      // 板フリップ）が自分で片付けるので、位置変更の衝突退場の対象にしない（退場フェードを張ると、
-      // 読み込み待ちの新ポーズが旧ポーズの退場完了後に出せなくなる）。
-      if (name.startsWith(`${keepName}__transition_`)) continue
       // 歩行入場中は「これから立つ予定」の最終目標位置（baseX）で判定する (#684 should-1)。
       const effectiveX =
         state.stageMotion?.kind === 'enter' ? state.stageMotion.baseX : state.sprite.x
