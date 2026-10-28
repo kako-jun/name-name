@@ -2771,3 +2771,40 @@ describe('computeSideBattleLayout: enemyList (#954)', () => {
     )
   })
 })
+
+describe('enemyList: status の compact 境界 (#954)', () => {
+  it('窓が置かれたとき status は compact にならない（窓のせいで MP 列が消えない）', () => {
+    for (const [w, h] of [...SWEEP_SIZES, [1280, 720] as [number, number]]) {
+      const L = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 3,
+        enemyList: true,
+      })
+      if (L.enemyList) expect(L.statusCompact).toBe(false)
+    }
+  })
+  it('640x360 では窓が置かれ、status は compact ではない', () => {
+    const L = computeSideBattleLayout({
+      width: 640,
+      height: 360,
+      partyCount: 4,
+      enemyCount: 3,
+      enemyList: true,
+    })
+    expect(L.enemyList).not.toBeNull()
+    expect(L.statusCompact).toBe(false)
+  })
+  it('窓なしで既に compact の画面では窓を置かない', () => {
+    const off = computeSideBattleLayout({ width: 568, height: 320, partyCount: 4, enemyCount: 3 })
+    const on = computeSideBattleLayout({
+      width: 568,
+      height: 320,
+      partyCount: 4,
+      enemyCount: 3,
+      enemyList: true,
+    })
+    if (off.statusCompact) expect(on.enemyList).toBeNull()
+  })
+})

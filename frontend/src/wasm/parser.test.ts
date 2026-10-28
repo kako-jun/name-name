@@ -2463,6 +2463,15 @@ describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が
     expect(none.battle_presentation).toBeNull()
   })
 
+  it('battle_motion / battle_enemy_list (#956 / #954) も実 WASM パーサ経由で残り、未指定は null', async () => {
+    const doc = await parseMarkdown(docWith(['battle_motion: snappy', 'battle_enemy_list: window']))
+    expect(doc.battle_motion).toBe('snappy')
+    expect(doc.battle_enemy_list).toBe('window')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_motion).toBeNull()
+    expect(none.battle_enemy_list).toBeNull()
+  })
+
   it('パーティ・モンスター定義の ポーズ: が poses として残る', async () => {
     const doc = await parseMarkdown(
       docWith(

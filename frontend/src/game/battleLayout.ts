@@ -159,8 +159,6 @@ const SIDE_COMMAND_WIDTH_RATIO = 0.4
 const SIDE_ENEMY_LIST_WIDTH_RATIO = 0.2
 export const SIDE_ENEMY_LIST_MIN_WIDTH = 96
 const SIDE_ENEMY_LIST_MAX_WIDTH = 180
-/** 敵名窓が有効なとき、status に残す最小幅（command の最小幅は従来どおり SIDE_COMMAND_MIN_WIDTH） */
-export const SIDE_STATUS_MIN_WIDTH_WITH_ENEMY_LIST = 150
 /** `cross` はコマンドがちょうどこの数のときだけ有効（上・左・右・下に 1 つずつ） */
 const SIDE_COMMAND_CROSS_COUNT = 4
 /** `cross` のセルの段数（上 / 左右 / 下） */
@@ -172,6 +170,11 @@ export const SIDE_STATUS_ROW_HEIGHT = 26
 const SIDE_STATUS_VERTICAL_PADDING = 12
 /** status 幅がこれ未満なら MP を省略（compact） */
 export const SIDE_STATUS_COMPACT_WIDTH = 260
+/**
+ * 敵名窓 (#954) が有効なとき、status に残す最小幅。窓のせいで status が compact（MP 列が消える）にならないよう
+ * compact の境界と同じにする。これを残せない画面では窓を置かず従来の 2 枚構成に戻す
+ */
+export const SIDE_STATUS_MIN_WIDTH_WITH_ENEMY_LIST = SIDE_STATUS_COMPACT_WIDTH
 /** スプライト 1 体の最大一辺 */
 export const SIDE_MAX_SPRITE_SIZE = 160
 /** 同じ側の体数がこれを超えたら最低 2 列に並べる */

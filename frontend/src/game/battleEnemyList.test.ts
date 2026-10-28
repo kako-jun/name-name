@@ -5,6 +5,7 @@ import {
   ENEMY_LIST_MAX_FONT,
   ENEMY_LIST_MIN_FONT,
   ENEMY_LIST_PADDING,
+  enemyListLines,
   enemyListRowText,
   fitEnemyListFont,
   fitEnemyListRowText,
@@ -85,6 +86,21 @@ describe('fitEnemyListFont', () => {
   it('0 行・負の高さで落ちない', () => {
     expect(fitEnemyListFont(0, 100).visibleRows).toBe(0)
     expect(fitEnemyListFont(3, -5).visibleRows).toBe(0)
+  })
+})
+
+describe('enemyListLines', () => {
+  const rows = Array.from({ length: 20 }, (_, i) => ({ name: `E${i}`, count: 1 }))
+  it('収まらないときは最後に出せた行を「…」にする', () => {
+    const fit = fitEnemyListFont(rows.length, 60)
+    const lines = enemyListLines(rows, fit, 160)
+    expect(lines).toHaveLength(fit.visibleRows)
+    expect(lines[lines.length - 1]).toBe('…')
+    expect(lines[0]).toBe('E0')
+  })
+  it('全行が収まるなら「…」は出さない', () => {
+    const few = rows.slice(0, 2)
+    expect(enemyListLines(few, fitEnemyListFont(2, 200), 160)).toEqual(['E0', 'E1'])
   })
 })
 

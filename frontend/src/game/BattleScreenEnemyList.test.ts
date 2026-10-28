@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import { MULTI_HIT_INTERVAL_MS, eventTimeline } from './battleMotion'
 import type { BattleEntity } from './spellDsl'
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -103,6 +104,47 @@ describe('BattleScreen: 敵名ウィンドウ (#954)', () => {
     expect(shown(s)).toEqual(['スライム ×2'])
     engine.selectAttack('s2')
     settle(s)
+    expect(shown(s)).toEqual(['スライム'])
+  })
+
+  it('命中の瞬間まで古い HP で数える（確定 HP では数えない）', () => {
+    const { s, engine } = setup({ enemyList: 'window' })
+    engine.selectAttack('s1')
+    I(s).refresh()
+    // エンジン上はもう倒れているが、演出が命中するまで窓は ×3 のまま
+    expect(engine.getState().enemies[0].hp).toBe(0)
+    expect(shown(s)).toEqual(['スライム ×3', 'イカ'])
+    const hitAt = eventTimeline(engine.getState().events[0]).hitAt
+    for (let t = 0; t < hitAt - 5; t++) s.tick(1)
+    expect(shown(s)).toEqual(['スライム ×3', 'イカ'])
+    for (let t = 0; t < 40; t++) s.tick(1)
+    expect(shown(s)).toEqual(['スライム ×2', 'イカ'])
+  })
+
+  it('複数ヒットは、倒すヒットが命中した瞬間に個数が減る', () => {
+    const engine = new BattleEngine(
+      [entity('hero', { mp: 99, maxMp: 99, agi: 99 })],
+      [
+        entity('a', { name: 'スライム', hp: 15, maxHp: 15, atk: 0 }),
+        entity('b', { name: 'スライム', hp: 999, maxHp: 999, atk: 0 }),
+      ],
+      { rng: () => 0.5 }
+    )
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      enemyList: 'window',
+    })
+    created.push(s)
+    engine.selectSpell({ name: 'れんぞく', mp: 1, target: '敵単体', effect: 'damage 10 回数=2' })
+    I(s).refresh()
+    const hitAt = eventTimeline(engine.getState().events[0]).hitAt
+    expect(shown(s)).toEqual(['スライム ×2'])
+    for (let t = 0; t < hitAt + 5; t++) s.tick(1)
+    // 1 ヒット目（HP 5 残り）ではまだ ×2
+    expect(shown(s)).toEqual(['スライム ×2'])
+    for (let t = 0; t < MULTI_HIT_INTERVAL_MS + 10; t++) s.tick(1)
+    // 2 ヒット目で倒れて ×1（名前のみ）
     expect(shown(s)).toEqual(['スライム'])
   })
 })

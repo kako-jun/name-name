@@ -74,6 +74,22 @@ export function fitEnemyListFont(rowCount: number, windowHeight: number): EnemyL
   return { fontSize: font, lineHeight, visibleRows }
 }
 
+/**
+ * 窓に出す行の文字列。収まらない行が消えるときは、最後に出せる行を「…」にして溢れが分かるようにする
+ * （その行の名前は出ない）。全行が収まるときは各行を幅に合わせて返す
+ */
+export function enemyListLines(
+  rows: readonly EnemyListRow[],
+  fit: EnemyListFit,
+  windowWidth: number
+): string[] {
+  const lines = rows
+    .slice(0, fit.visibleRows)
+    .map((r) => fitEnemyListRowText(r, windowWidth, fit.fontSize))
+  if (rows.length > fit.visibleRows && lines.length > 0) lines[lines.length - 1] = '…'
+  return lines
+}
+
 /** 窓の幅に収まるよう末尾を省略した行文字列（「×N」は残し、名前側を削る） */
 export function fitEnemyListRowText(
   row: EnemyListRow,

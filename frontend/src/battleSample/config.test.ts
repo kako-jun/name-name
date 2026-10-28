@@ -646,6 +646,14 @@ describe('initialView / resolveSize', () => {
 })
 
 describe('buildBattleSetup', () => {
+  it('enemyList は BattleScreen のオプションへ渡る (#954)', () => {
+    expect(
+      buildBattleSetup(defaultConfig(), view({ presentation: 'ff', enemyList: 'window' })).options
+        .enemyList
+    ).toBe('window')
+    expect(buildBattleSetup(defaultConfig(), view()).options.enemyList).toBe('off')
+  })
+
   const BG = 'https://example.com/b.png'
 
   it.each([
