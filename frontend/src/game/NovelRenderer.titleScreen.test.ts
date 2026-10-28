@@ -54,6 +54,7 @@ interface TitleScreenInternals extends RendererInternals {
   seekBar: { visible: boolean; setTitleScreenHidden: (hidden: boolean) => void }
   eventImageLayer: { visible: boolean }
   stageFrontLayer: { visible: boolean }
+  floorLayer: { visible: boolean }
   weatherLayer: { visible: boolean }
   wallLayer: { visible: boolean }
   characterLayer: {
@@ -108,6 +109,28 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     const r = new NovelRenderer()
     r.showTitleScreen(makeTitleScreenOpts())
     expect(internals<TitleScreenInternals>(r).dialogBox.visible).toBe(false)
+  })
+
+  it('床 (#706 第2弾): showTitleScreen() で隠れ、hideTitleScreen() で戻る', () => {
+    const r = new NovelRenderer()
+    const ri = internals<TitleScreenInternals>(r)
+    expect(ri.floorLayer.visible).toBe(true)
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(ri.floorLayer.visible).toBe(false)
+    r.hideTitleScreen()
+    expect(ri.floorLayer.visible).toBe(true)
+  })
+
+  it('床 (#706 第2弾): イベント絵の背面隠し中は hideTitleScreen() でも床を強制表示しない', () => {
+    const r = new NovelRenderer()
+    const ri = internals<TitleScreenInternals>(r)
+    vi.spyOn(
+      (ri as unknown as { eventImageLayer: { shouldHideBackLayer(): boolean } }).eventImageLayer,
+      'shouldHideBackLayer'
+    ).mockReturnValue(true)
+    r.showTitleScreen(makeTitleScreenOpts())
+    r.hideTitleScreen()
+    expect(ri.floorLayer.visible).toBe(false)
   })
 
   it('舞台前面 (#705): showTitleScreen() で隠れ、hideTitleScreen() で戻る。壁（titleScreenOverlay より奥）は触らない', () => {

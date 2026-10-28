@@ -81,6 +81,7 @@ interface LocalInternals extends RendererInternals {
   eventImageLayer: unknown
   stageFrontLayer: unknown
   weatherLayer: unknown
+  floorLayer: unknown
   novelScrim: unknown
   app: {
     init: (...args: unknown[]) => Promise<void>
@@ -105,7 +106,7 @@ function stubDestroyableApp(r: NovelRenderer): void {
 }
 
 describe('NovelRenderer Prop 配線 (#692)', () => {
-  it('init() 後の親レイヤー順は背景板 < 動画 < タイトル < キャラ < スポットライト < 大道具 < 幕 < イベント絵 < 舞台前面 < 天候 < スクリムになる (#695, #693, #697)', async () => {
+  it('init() 後の親レイヤー順は背景板 < 動画 < 床 < タイトル < キャラ < スポットライト < 大道具 < 幕 < イベント絵 < 舞台前面 < 天候 < スクリムになる (#695, #693, #697)', async () => {
     const r = new NovelRenderer()
     const renderer = internals<LocalInternals>(r)
     const canvas = document.createElement('canvas')
@@ -123,6 +124,7 @@ describe('NovelRenderer Prop 配線 (#692)', () => {
     const expectedParentLayers = [
       renderer.backgroundBoardLayer,
       renderer.videoLayer,
+      renderer.floorLayer,
       renderer.titleScreenOverlay,
       renderer.characterLayer,
       renderer.lightingLayer,

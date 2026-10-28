@@ -19,6 +19,7 @@ import {
   SpotlightState,
   VideoState,
   StageFrontState,
+  FloorState,
   WeatherState,
   WallState,
 } from './GameState'
@@ -86,6 +87,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined/null は天候なし扱い。
    */
   weather?: WeatherState | null
+  /**
+   * 床 (#706 第2弾)。
+   * 後方互換: 古いセーブデータには無い → undefined/null は床なし扱い。
+   */
+  floor?: FloorState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。
    * 後方互換: 古いセーブデータには無い → undefined は空配列（大道具なし）扱い。

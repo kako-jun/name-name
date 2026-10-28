@@ -305,3 +305,33 @@ describe('collectUpcomingAssetUrls: 舞台前面 (#705)', () => {
     expect(collectUpcomingAssetUrls([frontEvent('a.png')], 0, '')).toEqual([])
   })
 })
+
+describe('collectUpcomingAssetUrls: 床 (#706 第2弾)', () => {
+  const floorEvent = (path: string): Event => ({ Floor: { path, height: 0.25 } })
+
+  it('床は images/ の URL を先読み対象に積む', () => {
+    expect(collectUpcomingAssetUrls([floorEvent('wood.png'), narr()], 0, BASE)).toEqual([
+      `${BASE}/images/wood.png`,
+    ])
+  })
+
+  it('解除 FloorExit は先読み対象でも打ち切りでもない。前後の背景は積む', () => {
+    expect(
+      collectUpcomingAssetUrls([bg('a.png'), 'FloorExit' as Event, bg('b.png')], 0, BASE)
+    ).toEqual([`${BASE}/images/a.png`, `${BASE}/images/b.png`])
+  })
+
+  it('同じ画像の床と背景板は重複除去される', () => {
+    expect(
+      collectUpcomingAssetUrls(
+        [floorEvent('x.png'), { BackgroundBoard: { path: 'x.png', depth: 1 } }],
+        0,
+        BASE
+      )
+    ).toEqual([`${BASE}/images/x.png`])
+  })
+
+  it('assetBaseUrl が空なら何も積まない', () => {
+    expect(collectUpcomingAssetUrls([floorEvent('a.png')], 0, '')).toEqual([])
+  })
+})

@@ -548,6 +548,19 @@ export type Event =
     }
   | 'WeatherExit'
   | {
+      /**
+       * 床材質 (#706 第2弾)。画面の下部に下端揃え・横幅フィットで置く単一スロットのタイル画像の帯。
+       * 新しい `Floor` は前の床を置換する。解除は `'FloorExit'`（`[床: なし]`）。画像のみ。
+       */
+      Floor: {
+        path: string
+        /** 画面高さに対する帯の比。wasm は既定値（0.25）を出力に載せないため型上は optional。
+         *  `parseMarkdown()` の正規化（wasm/parser.ts）が後で必ず number に揃える。 */
+        height?: number
+      }
+    }
+  | 'FloorExit'
+  | {
       Video: {
         path: string
         /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */

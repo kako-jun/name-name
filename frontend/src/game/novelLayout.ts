@@ -1025,6 +1025,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   wall           = data.wall ?? null       // 古いセーブには無い → 壁なし (#703)
  *   stageFront     = data.stageFront ?? null // 古いセーブには無い → 舞台前面なし (#705)
  *   weather        = data.weather ?? null    // 古いセーブには無い → 天候なし (#706)
+ *   floor          = data.floor ?? null      // 古いセーブには無い → 床なし (#706 第2弾)
  *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
  *   spotlight      = data.spotlight ?? null  // 古いセーブには無い → 消灯 (#693)
  *   curtain        = data.curtain ?? null    // 古いセーブには無い → 幕なし (#697)
@@ -1081,6 +1082,11 @@ export function saveSlotToGameState(
         data.weather.kind === 'Snow' ||
         data.weather.kind === 'Sakura')
         ? { kind: data.weather.kind, intensity: clampWeatherIntensity(data.weather.intensity) }
+        : null,
+    // 床 (#706 第2弾)。古いセーブには無い → ?? null で床なしに倒す。高さは範囲へクランプする。
+    floor:
+      data.floor && typeof data.floor.path === 'string' && data.floor.path
+        ? { path: data.floor.path, height: clampFloorHeight(data.floor.height) }
         : null,
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
@@ -1146,6 +1152,7 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
     wall: snapshot.wall,
     stageFront: snapshot.stageFront,
     weather: snapshot.weather,
+    floor: snapshot.floor,
     props: snapshot.props,
     spotlight: snapshot.spotlight,
     curtain: snapshot.curtain,
@@ -1596,6 +1603,51 @@ export function computeStageFrontPlacement(
   if (![textureWidth, textureHeight, screenWidth, screenHeight].every(valid)) return null
   const height = (textureHeight * screenWidth) / textureWidth
   return { x: 0, y: screenHeight - height, width: screenWidth, height }
+}
+
+/** 床の帯の高さ（画面高さに対する比）の既定値・下限・上限 (#706 第2弾)。parser/src/models.rs の FLOOR_HEIGHT_* と揃える。 */
+export const FLOOR_HEIGHT_DEFAULT = 0.25
+export const FLOOR_HEIGHT_MIN = 0.05
+export const FLOOR_HEIGHT_MAX = 1.0
+
+/** 床の高さ比を範囲へ寄せる。非数・非有限・0 以下は既定（0.25）、それ以外は 0.05〜1.0 にクランプ。 */
+export function clampFloorHeight(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return FLOOR_HEIGHT_DEFAULT
+  }
+  return Math.min(FLOOR_HEIGHT_MAX, Math.max(FLOOR_HEIGHT_MIN, value))
+}
+
+/**
+ * 床 (#706 第2弾) の配置。画面の下部に下端揃え・横幅フィットの帯（高さ = 画面高さ × 高さ比）として置き、
+ * 画像は帯の高さに合わせて横方向にタイルする純粋関数。anchor (0,0) 前提の左上座標を返す。
+ * `tileScale` は画像の高さを帯の高さに合わせる倍率（縦横比は保つ。横方向の端のタイルは途中で切れる）。画像や画面の寸法が 0 以下・非有限のときは null（置かない）。
+ * 高さ比は `clampFloorHeight` で範囲に寄せる。
+ */
+export function computeFloorPlacement(
+  textureWidth: number,
+  textureHeight: number,
+  screenWidth: number,
+  screenHeight: number,
+  heightRatio: number
+): {
+  x: number
+  y: number
+  width: number
+  height: number
+  tileScale: number
+} | null {
+  const valid = (n: number) => Number.isFinite(n) && n > 0
+  if (![textureWidth, textureHeight, screenWidth, screenHeight].every(valid)) return null
+  const height = Math.max(1, Math.round(screenHeight * clampFloorHeight(heightRatio)))
+  const tileScale = height / textureHeight
+  return {
+    x: 0,
+    y: screenHeight - height,
+    width: screenWidth,
+    height,
+    tileScale,
+  }
 }
 
 /** 背景板 (#683) の「上から降りてくる」スライドインアニメーションの所要時間 (ms)。 */

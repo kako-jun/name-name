@@ -25,6 +25,8 @@ const sceneTransition: DirectiveHandler = (_event, ctx) => {
   layers.stageFront.clear()
   // 天候 (#706) も背景板と同じタイミングでクリアする。
   layers.weather.clear()
+  // 床 (#706 第2弾) も背景板と同じタイミングでクリアする。
+  layers.floor.clear()
   // 舞台構造の大道具 (#692) も背景板と同じタイミングでクリアする。
   layers.prop.clear()
   // 幕 (#697) も背景板・大道具と同じ単一スロット持続規律（[場面転換] でクリア、
@@ -69,6 +71,11 @@ export const stageSignalDirectives: DirectiveTable = {
   // [天候: なし] で天候をクリア (#706)
   WeatherExit: (_event, ctx) => {
     ctx.layers.weather.clear()
+  },
+
+  // [床: なし] で床をクリア (#706 第2弾)
+  FloorExit: (_event, ctx) => {
+    ctx.layers.floor.clear()
   },
 
   // スポットライト消灯 (#693)。settled state（fire-and-forget ではない）。
@@ -131,6 +138,11 @@ export const stageDirectives: ObjectDirectiveTable = {
   // 天候 (#706)。画面空間の単一スロット（新しい [天候:] が前のを置換）。
   Weather: on<'Weather'>((event, ctx) => {
     ctx.layers.weather.set(event.Weather.kind, event.Weather.intensity ?? 1)
+  }),
+
+  // 床 (#706 第2弾)。画面下部の単一スロット帯（新しい [床:] が前のを置換）。
+  Floor: on<'Floor'>((event, ctx) => {
+    ctx.layers.floor.show(event.Floor.path, event.Floor.height, ctx.env.assetBaseUrl)
   }),
 
   // 舞台構造の大道具 (#692)。背景板とは独立した加算的レイヤー。

@@ -544,6 +544,26 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[天候: なし]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::Floor { path, height } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #706 第2弾: 既定の高さ（0.25）は round-trip 安定のため無出力にする。
+                let kv = if *height == FLOOR_HEIGHT_DEFAULT {
+                    String::new()
+                } else {
+                    format!(", 高さ={height}")
+                };
+                out.push_str(&format!("[床: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::FloorExit => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[床: なし]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Video {
                 path,
                 position,
