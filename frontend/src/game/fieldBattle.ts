@@ -49,6 +49,8 @@ import { applyMemberMagicite, summonEntries } from './magicite'
 import { resolveMemberEquipment, type EquipmentRoster } from './equipment'
 import type { BattleTransitionMode } from './battleTransition'
 import type { FieldBattleTransition } from './fieldBattleTransition'
+import type { BattleEffects } from './battleEffects'
+import { loadBattleEffects } from './battleEffectsLoader'
 
 /** 戦闘画面の設定（frontmatter 由来）。未指定の既定値は `readFieldBattleSettings` が正本 */
 export interface FieldBattleSettings {
@@ -447,6 +449,8 @@ export interface OpenFieldBattleArgs {
   assetBaseUrl?: string
   /** `battle_transition: ff` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
   transition?: FieldBattleTransition
+  /** `battle_effects` (#941) を読み込み済みのエフェクト宣言。undefined = エフェクトなし（従来どおり） */
+  effects?: BattleEffects
   /** 脚本制御の戦闘 (#741)。渡すと、`enemies` の代わりにこの組み立て結果の敵・初期編成・脚本で戦う（`enemies` は無視） */
   scripted?: ScriptedBattleSetup
   /** 戦闘画面を畳んだ直後に呼ぶ（クールダウンのセットや移動キーの破棄など、レンダラー固有の後始末）。`closeFieldBattle` で強制的に畳んだときは呼ばれない */
@@ -485,6 +489,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     enemies,
     gate,
     assetBaseUrl,
+    effects,
     transition,
     scripted,
     onClosed,
@@ -524,6 +529,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     depth: settings.depth,
     foreground: settings.foreground,
     pixelArt: settings.pixelArt,
+    ...(effects ? { effects } : {}),
     ...(settings.enemyGrid ? { enemyGrid: settings.enemyGrid } : {}),
     ...(settings.enemyWindowOverlap !== undefined
       ? { enemyWindowOverlap: settings.enemyWindowOverlap }
@@ -560,4 +566,17 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   })
   stage.addChild(screen)
   return screen
+}
+
+/**
+ * `battle_effects` (#941) の JSON を読み込む。レンダラーの `load()` から呼び、戻り値を `openFieldBattle` の `effects` に渡す。
+ * `isCurrent` が false を返す（再 load された）結果は捨てる。読めない・不正は警告して undefined（従来どおり）
+ */
+export async function loadFieldBattleEffects(
+  path: string | undefined,
+  assetBaseUrl: string | undefined,
+  isCurrent: () => boolean
+): Promise<BattleEffects | undefined> {
+  const effects = await loadBattleEffects(path, assetBaseUrl)
+  return isCurrent() ? effects : undefined
 }

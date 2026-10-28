@@ -213,12 +213,20 @@ describe('BattleScreen エフェクト重ね', () => {
     }
     const a = make(undefined)
     const b = make({ impact: sh(), slash: sh(), cast: sh(), magic: sh() })
-    for (const t of [a, b]) {
+    // 宣言あり側で重ねられたエフェクトの最大同時数（行動の再生中に数える）
+    const maxInstances = { a: 0, b: 0 }
+    for (const [key, t] of [
+      ['a', a],
+      ['b', b],
+    ] as const) {
       for (let turn = 0; turn < 6; turn++) {
         if (turn % 2 === 0) t.engine.selectAttack()
         else t.engine.selectSpell(fire)
         sync(t.s)
-        run(t.s, 1500)
+        for (let left = 1500; left > 0; left -= 10) {
+          t.s.tick(Math.min(10, left))
+          maxInstances[key] = Math.max(maxInstances[key], I(t.s).effectInstances.length)
+        }
       }
     }
     const snap = (e: BattleEngine) => {
@@ -231,7 +239,8 @@ describe('BattleScreen エフェクト重ね', () => {
     }
     expect(snap(a.engine).length).toBeGreaterThan(200)
     expect(snap(b.engine)).toBe(snap(a.engine))
-    // 宣言あり側では実際にエフェクトが出ていた（比較が空振りでない）
-    expect(JSON.stringify(a.engine.getState().events)).toContain('"attack"')
+    // 宣言あり側では実際にエフェクトが重なっていた（比較が空振りでない）。宣言なし側は層ごと無い
+    expect(maxInstances.b).toBeGreaterThan(0)
+    expect(maxInstances.a).toBe(0)
   })
 })

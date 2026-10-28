@@ -1008,6 +1008,12 @@ export interface Document {
      */
     field_emotions?: string;
     /**
+     * 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。assets 相対パスを生文字列で透過する（`field_emotions` と
+     * 同じ流儀）。読み込み・検証は frontend（`parseBattleEffects`。不正は警告して無視）。
+     * 未指定・空は None（従来どおりエフェクトなし）。GUI 専用（TUI は読まない）。frontmatter `battle_effects:` から流す。
+     */
+    battle_effects?: string;
+    /**
      * RPG 戦闘（`battle_layout: side`）の敵の見えないグリッド (#839)。`列数x行数`（例 `6x2`、半角 x / × 可）。
      * 値は parser でバリデーションせず生文字列で透過し、runtime 側（`normalizeEnemyGrid`）で列 1〜12・行 1〜4 に丸める。
      * 不正値・未指定は無効＝従来の配置。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_grid:` から流す。

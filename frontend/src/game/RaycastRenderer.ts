@@ -65,8 +65,10 @@ import {
   closeFieldBattle,
   openFieldBattle,
   readFieldBattleSettings,
+  loadFieldBattleEffects,
   type FieldBattleSettings,
 } from './fieldBattle'
+import type { BattleEffects } from './battleEffects'
 import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 export { rollEncounter } from './encounter'
 
@@ -150,6 +152,9 @@ export class RaycastRenderer {
   private battleEndHandler: ((result: BattleResult) => void) | undefined
   /** 戦闘画面の設定（frontmatter 由来）。読み方と既定値は fieldBattle.ts が正本 (#784) */
   private battleSettings: FieldBattleSettings = { ...DEFAULT_FIELD_BATTLE_SETTINGS }
+  /** `battle_effects` (#941) の読み込み済み宣言と、再 load で古い読み込みを捨てるための世代 */
+  private battleEffects: BattleEffects | undefined = undefined
+  private battleEffectsToken = 0
   /** プロジェクトのアセットのベース URL (#746)。NPC スプライト・NPC 顔・戦闘の画像パス解決に使う。未設定ならパスをそのまま読む */
   private assetBaseUrl: string | undefined = undefined
   private stepCounter: number = 0
@@ -417,6 +422,16 @@ export class RaycastRenderer {
     this.masterJobs = gameData.jobs
     this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
+    // エフェクト重ね (#941)。JSON は非同期に読む（読み終わる前に始まった戦闘はエフェクトなし）
+    this.battleEffects = undefined
+    const effectsToken = ++this.battleEffectsToken
+    void loadFieldBattleEffects(
+      gameData.battleEffects,
+      this.assetBaseUrl,
+      () => effectsToken === this.battleEffectsToken
+    ).then((e) => {
+      if (effectsToken === this.battleEffectsToken) this.battleEffects = e
+    })
     this.stepCounter = 0
     this.encounterCooldown = 0
     this.prevTileInitialized = false
@@ -895,6 +910,7 @@ export class RaycastRenderer {
         enemies,
         gate: this.inputGate,
         assetBaseUrl: this.assetBaseUrl,
+        ...(this.battleEffects ? { effects: this.battleEffects } : {}),
         transition: this.transition,
         onClosed: (_outcome, result) => {
           this.keys.clear()

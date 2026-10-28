@@ -59,6 +59,7 @@ pub fn parse(input: &str) -> Document {
     let mut battle_commands: Option<String> = None;
     let mut battle_transition: Option<String> = None;
     let mut field_emotions: Option<String> = None;
+    let mut battle_effects: Option<String> = None;
     let mut battle_enemy_grid: Option<String> = None;
     let mut battle_enemy_window_overlap: Option<String> = None;
 
@@ -331,6 +332,13 @@ pub fn parse(input: &str) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     field_emotions = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_effects:") {
+                // 戦闘のエフェクト重ね設定 JSON のパス (#941)。assets 相対パスを生文字列で透過し、
+                // 読み込み・検証・不正値の警告は frontend 側で行う（`field_emotions` と同じ流儀）。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_effects = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_enemy_window_overlap:") {
                 // 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5。値は生文字列で透過し、runtime 側で丸める。
@@ -1231,6 +1239,7 @@ pub fn parse(input: &str) -> Document {
         battle_commands,
         battle_transition,
         field_emotions,
+        battle_effects,
         battle_enemy_grid,
         battle_enemy_window_overlap,
         chapters: vec![Chapter {
