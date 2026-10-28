@@ -776,6 +776,8 @@ export class CharacterLayer extends Container {
   private transitionSerial = 0
   /** show/changeExpression から起動した立ち絵 texture load の未完数。 */
   private pendingPortraitLoads = 0
+  /** #960: sprite ごとの最新 loadTexture 呼び出し（世代番号とその結果 Promise）。 */
+  private portraitLoadGen = new WeakMap<Sprite, { gen: number; promise: Promise<boolean> }>()
   /** アニメーション駆動用 ticker。動いているキャラがいないときは停止しておく */
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
@@ -4028,9 +4030,6 @@ export class CharacterLayer extends Container {
    * `characterName` (#364): character_height_ratios の per-character override 解決に使う
    * キャラクター表示名。`this.characters` の key と同じ値を渡す（呼び出し側の `character` 変数）。
    */
-  /** #960: sprite ごとの最新 loadTexture 呼び出し（世代番号とその結果 Promise）。 */
-  private portraitLoadGen = new WeakMap<Sprite, { gen: number; promise: Promise<boolean> }>()
-
   private loadTexture(
     sprite: Sprite,
     characterName: string,
