@@ -181,7 +181,7 @@ export interface NovelGameState {
   /**
    * 舞台前面 (#705)。`[舞台前面: path]` の単一スロット settled state。`null` = 舞台前面なし（既定）。
    * キャラ・小道具・イベント絵・幕より手前、テロップ・会話窓より奥の画面空間オーバーレイ。
-   * `[場面転換]` でクリアされる（`StageFrontState` 参照）。
+   * `[舞台前面: なし]`・`[場面転換]`・新規開始・終劇でクリアされる（`StageFrontState` 参照）。
    */
   stageFront: StageFrontState | null
   /**

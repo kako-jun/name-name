@@ -40,6 +40,29 @@ describe('EventDisplay', () => {
     expect(container.textContent).not.toContain('場面転換')
   })
 
+  it.each([
+    ['WallExit', '壁: なし'],
+    ['StageFrontExit', '舞台前面: なし'],
+    ['VideoExit', '動画: 退場'],
+    ['PageBreak', '改頁'],
+  ] as const)('renders %s as its own label, not SceneTransition (#705)', (ev, label) => {
+    const { container } = renderEvent(ev)
+    expect(container.textContent).toContain(label)
+    expect(container.textContent).not.toContain('場面転換')
+  })
+
+  it('renders Wall with path and non-default kv (#703)', () => {
+    const a = renderEvent({ Wall: { path: 'glow.webp', loop: true, mute: true } })
+    expect(a.container.textContent).toBe('壁: glow.webp')
+    const b = renderEvent({ Wall: { path: 'a.webm', loop: false, mute: false } })
+    expect(b.container.textContent).toBe('壁: a.webm, ループ=false, ミュート=false')
+  })
+
+  it('renders StageFront with path (#705)', () => {
+    const { container } = renderEvent({ StageFront: { path: 'venue/hall.png' } })
+    expect(container.textContent).toBe('舞台前面: venue/hall.png')
+  })
+
   it('renders Dialog with voice and font badges (#144 / #147)', () => {
     const { container } = renderEvent({
       Dialog: {

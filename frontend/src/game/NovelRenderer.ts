@@ -2073,6 +2073,10 @@ export class NovelRenderer {
     this.cameraZoom.setSuppressed('title', true)
     this.seekBar.setTitleScreenHidden(true)
     this.eventImageLayer.visible = false
+    // 舞台前面 (#705) はイベント絵より手前の画面空間オーバーレイで、タイトル画面（titleScreenOverlay）より
+    // 上に積まれる。冒頭の `[舞台前面:]` がタイトルのボタンに重ならないよう、イベント絵と同じく隠す。
+    // 壁 (#703) は titleScreenOverlay より奥（不透明背景の下）なので隠す必要がない。
+    this.stageFrontLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     this.titleScreenSavedCharacterSplitRegion = this.characterLayer.getSplitLayoutRegion()
     if (this.titleScreenSavedCharacterSplitRegion) {
@@ -2138,6 +2142,7 @@ export class NovelRenderer {
     this.cameraZoom.setSuppressed('title', false)
     this.seekBar.setTitleScreenHidden(false)
     this.eventImageLayer.visible = true
+    this.stageFrontLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     if (this.titleScreenSavedCharacterSplitRegion) {
       this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)

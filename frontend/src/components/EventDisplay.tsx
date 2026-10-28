@@ -29,7 +29,34 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     if (event === 'CurtainUp') {
       return <div className={`text-xs italic ml-2 ${meta}`}>幕: 上げる</div>
     }
+    if (event === 'WallExit') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>壁: なし</div>
+    }
+    if (event === 'StageFrontExit') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>舞台前面: なし</div>
+    }
+    if (event === 'VideoExit') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>動画: 退場</div>
+    }
+    if (event === 'PageBreak') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>改頁</div>
+    }
     return <div className={`text-sm italic ml-2 ${accent}`}>[場面転換]</div>
+  }
+
+  if ('Wall' in event) {
+    const w = event.Wall
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        壁: {w.path}
+        {w.loop === false ? ', ループ=false' : ''}
+        {w.mute === false ? ', ミュート=false' : ''}
+      </div>
+    )
+  }
+
+  if ('StageFront' in event) {
+    return <div className={`text-xs italic ml-2 ${meta}`}>舞台前面: {event.StageFront.path}</div>
   }
 
   if ('Dialog' in event) {
