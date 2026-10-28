@@ -474,6 +474,13 @@ interface CharacterState {
   /** 同一人物クロスフェード用の旧 sprite。描画・待機対象だが NovelGameState には入れない。 */
   snapshotHidden?: boolean
   /**
+   * 読み込み完了待ちの遷移 (#952)。遷移が作った新 state に付き、その `.then`（読み込み完了処理）が
+   * 走り始めたら外す。値は、この遷移が `.then` で処理する旧 state（`from`）。最新の遷移が読み込み失敗で
+   * ロールバックするとき、戻り先の新 state の `.then` がまだ走っていなければ、その旧 state の片付けは
+   * 戻り先の `.then` に任せる（片付け手を 1 つに保つ）。
+   */
+  pendingTransition?: { from: CharacterState }
+  /**
    * シアターモードの板フリップ (#707) の進行状態。ポーズ変更時にクロスフェードの代わりに張る。
    * 進行中は sprite を不可視にして、同じ texture の `PerspectiveMesh` を Y 軸回転させて描く。
    * 角度・四隅は `boardFlip.ts` の純粋関数が毎フレーム経過時間から求める（中間値は
@@ -1179,10 +1186,16 @@ export class CharacterLayer extends Container {
         this.beginFlip(state, 'out', this.elapsedMs, f.angleRad, durationMs)
         return undefined
       }
-      // 即完了扱いにするため、開始を durationMs 前に置く。ticker は完了判定（elapsed>=duration）で
+      // 即完了扱いにするため、開始を out の長さ（durationMs 上書きを含む）前に置く。ticker は完了判定（elapsed>=duration）で
       // state ごと破棄する。このフレームに作られる mesh は不可視（out の経過 >= half）のまま。
       const inheritedStartMs = prev.startMs
-      this.beginFlip(state, 'out', this.elapsedMs - prev.durationMs, 0, durationMs)
+      this.beginFlip(
+        state,
+        'out',
+        this.elapsedMs - (durationMs ?? this.characterFadeMs),
+        0,
+        durationMs
+      )
       return inheritedStartMs
     }
     this.beginFlip(state, 'out', this.elapsedMs, 0, durationMs)
@@ -1690,6 +1703,12 @@ export class CharacterLayer extends Container {
     }
   }
 
+  /** 旧 state が無い入場（遷移の旧 state が読み込み待ちの間に消えた場合）(#952)。 */
+  private enterWithoutOld(state: CharacterState): void {
+    if (this.cameraMode === 'Theater') this.startFlipIn(state)
+    else this.startFade(state, 0, 1, false)
+  }
+
   private nextTransitionName(character: string): string {
     this.transitionSerial += 1
     return `${character}__transition_${this.transitionSerial}`
@@ -1838,6 +1857,7 @@ export class CharacterLayer extends Container {
         )
         this.attachCharacterState(nextState)
         this.characters.set(character, nextState)
+        nextState.pendingTransition = { from: existing }
 
         void this.loadTexture(
           nextState.sprite,
@@ -1848,15 +1868,24 @@ export class CharacterLayer extends Container {
           fit,
           onReady
         ).then((loaded) => {
+          nextState.pendingTransition = undefined
           // この遷移が最新でなければ（A→B→C の B など）何もしない。B が張り損ねた旧ポーズ A の
           // 片付けは最新の遷移（C）が引き受ける (#952)。
           if (this.characters.get(character) !== nextState) return
-          if (this.characters.get(oldKey) !== existing) return
           // 読み込み待ちの間に退場へ入った（[退場]・衝突退場）新 state は入場させない。
           // 退場時に孤児も片付け済み（remove）。
           if (this.isExiting(nextState)) return
-          // 最新の遷移として、旧 state（existing）以外の孤児を片付ける (#952)。
-          this.retireOrphanTransitions(character, existing, false)
+          if (this.characters.get(oldKey) !== existing) {
+            // 旧 state が先に消えた（別キャラの衝突退場など）。孤児を落とし、旧 state 無しで入場させる。
+            this.retireOrphanTransitions(character, undefined, false)
+            if (!loaded && assetBaseUrl) {
+              this.destroyCharacterState(nextState)
+              this.characters.delete(character)
+              return
+            }
+            this.enterWithoutOld(nextState)
+            return
+          }
           if (!loaded && assetBaseUrl) {
             this.destroyCharacterState(nextState)
             this.characters.delete(character)
@@ -1865,15 +1894,21 @@ export class CharacterLayer extends Container {
             existing.sprite.alpha = 1
             this.characters.delete(oldKey)
             this.characters.set(character, existing)
+            // 戻った旧 state（existing）の `.then` がまだ走っていなければ、その旧 state（from）は
+            // そちらが処理する。走り終えて何もしなかった場合だけ、ここで孤児として落とす。
+            this.retireOrphanTransitions(character, existing.pendingTransition?.from, false)
             return
           }
-          // 退場フェードが既に張られている旧 state（退場で片付け中）には演出を重ねない。
-          const existingRetiring = existing.fadeAnimation?.destroyOnComplete === true
+          // 最新の遷移として、旧 state（existing）以外の孤児を片付ける (#952)。
+          this.retireOrphanTransitions(character, existing, false)
+          // 退場の途中の旧 state（退場フェード・退場 walk・板フリップ out）には演出を重ねない。
+          const existingRetiring =
+            this.isExiting(existing) || existing.flipAnimation?.role === 'out'
           if (this.cameraMode === 'Theater') {
             // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
             let inheritedStartMs: number | undefined
             if (existingRetiring) {
-              // そのまま退場フェードで消える。
+              // そのまま退場で消える。
             } else if (existing.sprite.parent === this) {
               inheritedStartMs = this.startFlipOut(existing)
             } else {

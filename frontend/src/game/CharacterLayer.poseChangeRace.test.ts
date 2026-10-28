@@ -528,7 +528,7 @@ describe.each(['Theater', 'Novel'] as const)(
     })
 
     it('⑦b: A→B(待ち)→C(読み込み失敗) でも、ロールバックで孤児（A）が残らない', async () => {
-      await showA()
+      const a = await showA()
       const gb = loader.hold('b')
       const gc = loader.hold('c')
       vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -539,6 +539,11 @@ describe.each(['Theater', 'Novel'] as const)(
       await flushPromises()
       time.tick(1000)
       await flushPromises()
+      // B の読み込み前: A は見え続け、退場演出は B の完了処理が始めるまで張られない。
+      expect(a.sprite.visible).toBe(true)
+      expect(a.sprite.alpha).toBe(1)
+      expect(a.fadeAnimation).toBeNull()
+      expect(a.flipAnimation).toBeUndefined()
       gb.resolve()
       await settle(layer)
       // 戻るのは C の旧 state（B）。A は落ちている。
@@ -631,6 +636,142 @@ describe.each(['Theater', 'Novel'] as const)(
       slowB.resolve()
       await settle(layer)
       expect(chars(layer).size).toBe(0)
+    })
+
+    it('M1-2b: B が in の後半（可視）で孤児になる場合も、現在角度から回って消え、最終は D だけ', async () => {
+      await showA()
+      showCounted(layer, 'b')
+      await flushPromises()
+      advance(layer, 600)
+      const b = chars(layer).get('hero')!
+      const slowC = loader.hold('c')
+      showCounted(layer, 'c')
+      showCounted(layer, 'd')
+      await flushPromises()
+      if (mode === 'Theater') expect(b.flipAnimation?.role).toBe('out')
+      slowC.resolve()
+      await settle(layer)
+      expect(b.sprite.destroyed).toBe(true)
+      expectSettledTo(layer, 'd')
+    })
+
+    it('S1: A→B(待ち)→C(失敗)。B が届くまで A は表示され続け（画面が空かない・A が回り直さない）、B 到着後に通常の遷移', async () => {
+      const a = await showA()
+      const gb = loader.hold('b')
+      const gc = loader.hold('c')
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      showCounted(layer, 'b')
+      showCounted(layer, 'c')
+      gc.reject()
+      await flushPromises()
+      time.tick(1000)
+      for (let i = 0; i < 10; i++) await flushPromises()
+      advance(layer, 600)
+      // B の読み込み前: A はまだ見え続け、退場演出は始まっていない（片付けは B の完了処理が行う）。
+      expect(a.fadeAnimation).toBeNull()
+      expect(a.flipAnimation).toBeUndefined()
+      expect(a.sprite.alpha).toBe(1)
+      expect(a.sprite.visible).toBe(true)
+      gb.resolve()
+      for (let i = 0; i < 10; i++) await flushPromises()
+      // B 到着で A の退場が今始まる（開始時刻は現在）。
+      if (mode === 'Theater') {
+        expect(a.flipAnimation?.role).toBe('out')
+        expect(a.flipAnimation?.startMs).toBe(internals(layer).elapsedMs)
+      } else {
+        expect(a.fadeAnimation?.destroyOnComplete).toBe(true)
+      }
+      expect(chars(layer).get('hero')!.expression).toBe('b')
+      await settle(layer)
+      expect(a.sprite.destroyed).toBe(true)
+      expectSettledTo(layer, 'b')
+    })
+
+    it('S1b: B の読み込みが先に終わって（早期 return 済み）から C が失敗した場合は、その時点で A を落とす', async () => {
+      const a = await showA()
+      const gb = loader.hold('b')
+      const gc = loader.hold('c')
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      showCounted(layer, 'b')
+      showCounted(layer, 'c')
+      gb.resolve()
+      await flushPromises()
+      gc.reject()
+      await flushPromises()
+      time.tick(1000)
+      for (let i = 0; i < 10; i++) await flushPromises()
+      expect(a.fadeAnimation !== null || a.flipAnimation !== undefined).toBe(true)
+      await settle(layer)
+      expect(a.sprite.destroyed).toBe(true)
+      expect([...chars(layer).keys()]).toEqual(['hero'])
+      expect(spriteCount(layer)).toBe(1)
+    })
+
+    it('S2: 見えない in の段階の旧 state を durationMsOverride 付きの remove で落としても、突然現れない', async () => {
+      await showA()
+      showCounted(layer, 'b')
+      await flushPromises()
+      advance(layer, 100)
+      const slowC = loader.hold('c')
+      showCounted(layer, 'c')
+      layer.remove('hero', { durationMsOverride: 3000 })
+      advance(layer, 16)
+      const bs = [...chars(layer).values()].filter((st) => st.expression === 'b')
+      for (const st of bs) {
+        const mesh = (st.flipAnimation as { mesh?: { visible: boolean } } | undefined)?.mesh
+        expect(mesh?.visible ?? false).toBe(false)
+      }
+      slowC.resolve()
+      await settle(layer)
+      expect(chars(layer).size).toBe(0)
+    })
+
+    it('Q1: 旧 state が読み込み待ちの間に別キャラの衝突退場で消えても、孤児が残らず最新のポーズが現れる', async () => {
+      await showA('a', '左')
+      const gb = loader.hold('b')
+      const gc = loader.hold('c')
+      showCounted(layer, 'b', { position: '右' })
+      showCounted(layer, 'c', { position: '中央' })
+      showCounted(layer, 'x1', { position: '右', name: 'x' })
+      advance(layer, 1100)
+      gb.resolve()
+      gc.resolve()
+      await settle(layer)
+      expect([...chars(layer).keys()].sort()).toEqual(['hero', 'x'])
+      const h = chars(layer).get('hero')!
+      expect(h.expression).toBe('c')
+      expect(h.sprite.alpha).toBe(1)
+      expect(h.sprite.visible).toBe(true)
+      expect(spriteCount(layer)).toBe(2)
+      expect(meshCount(layer)).toBe(0)
+    })
+
+    it('Q1b: 遷移が 1 段でも、旧 state（A）が衝突退場で消えたら C は旧無しで入場する', async () => {
+      await showA('a', '左')
+      const gc = loader.hold('c')
+      showCounted(layer, 'c', { position: '中央' })
+      showCounted(layer, 'x1', { position: '左', name: 'x' })
+      advance(layer, 1100)
+      gc.resolve()
+      await settle(layer)
+      expect([...chars(layer).keys()].sort()).toEqual(['hero', 'x'])
+      expect(chars(layer).get('hero')!.sprite.alpha).toBe(1)
+      expect(spriteCount(layer)).toBe(2)
+    })
+
+    it('Q1c: 旧 state が消え、かつ最新の読み込みも失敗したら hero は残らない', async () => {
+      await showA('a', '左')
+      const gc = loader.hold('c')
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      showCounted(layer, 'c', { position: '中央' })
+      showCounted(layer, 'x1', { position: '左', name: 'x' })
+      advance(layer, 1100)
+      gc.reject()
+      await flushPromises()
+      time.tick(1000)
+      await settle(layer)
+      expect([...chars(layer).keys()]).toEqual(['x'])
+      expect(spriteCount(layer)).toBe(1)
     })
 
     it('A→B→C→D を矢継ぎ早に変えても最終的に D だけが残り、全 show の onReady が 1 回ずつ', async () => {
