@@ -629,6 +629,7 @@ export class NovelRenderer {
       getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
       isSplitLayoutActive: () => this.characterLayer.getSplitLayoutRegion() !== null,
       isSkipMode: () => this.skipMode,
+      hasCharacter: (target) => this.characterLayer.hasCharacter(target),
     },
     this.time
   )

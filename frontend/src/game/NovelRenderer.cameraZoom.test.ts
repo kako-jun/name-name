@@ -38,6 +38,7 @@ interface Priv {
   time: TimeController
   characterLayer: {
     getZoomFocus(n: string): { x: number; y: number } | null
+    hasCharacter(n: string): boolean
     scale: { x: number }
     position: { x: number; y: number }
   }
@@ -55,6 +56,7 @@ function make(
   p.time.setMode('live')
   p.time.setMode('virtual')
   vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation(() => focus)
+  vi.spyOn(p.characterLayer, 'hasCharacter').mockImplementation(() => true)
   return { r, p }
 }
 
@@ -286,6 +288,22 @@ describe('復元・シーク・リセット (#702)', () => {
     focus = { x: 100, y: 100 }
     p.time.tick(16)
     expect(p.cameraZoom.getPose().scale).toBe(2)
+  })
+
+  it('M1: 復元時に対象が未登場（立ち絵なし）なら、後から登場したとき補間して寄る', () => {
+    const { snap } = zoomed()
+    const { r, p } = make([narration('one')])
+    let focus: { x: number; y: number } | null = null
+    vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation(() => focus)
+    vi.spyOn(p.characterLayer, 'hasCharacter').mockImplementation(() => false)
+    internals(r).applyState({ ...snap, characters: [] })
+    p.time.tick(160)
+    focus = { x: 100, y: 100 }
+    p.time.tick(16)
+    p.time.tick(96)
+    const s = p.cameraZoom.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
   })
 
   it('55: 復元時に対象キャラが未登場でも例外・warn なし（全景のまま）', () => {

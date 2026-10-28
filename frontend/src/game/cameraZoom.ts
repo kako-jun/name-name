@@ -85,6 +85,8 @@ export interface CameraZoomHost {
   isSplitLayoutActive(): boolean
   /** スキップ中か。スキップ中は登場・退場でも補間せず即時に最終ポーズへ切り替える。 */
   isSkipMode(): boolean
+  /** 対象の立ち絵が CharacterLayer に存在するか（テクスチャが未読み込みでもよい）。 */
+  hasCharacter(target: string): boolean
 }
 
 function samePose(a: ZoomPose, b: ZoomPose): boolean {
@@ -151,7 +153,10 @@ export class CameraZoomController {
     }
     const target = this.targetPose()
     this.hadFocus = this.hasFocus()
-    this.pendingSnap = snap && this.zoom !== null && !this.hadFocus
+    // スナップ待ちは「立ち絵は既に舞台に居て、テクスチャだけ未読み込み」のときに限る。未登場の対象が
+    // 後から登場するときは通常どおり補間して寄る。
+    this.pendingSnap =
+      snap && this.zoom !== null && !this.hadFocus && this.host.hasCharacter(this.zoom.target)
     if (snap) {
       this.tweening = false
       this.apply(target)
@@ -175,6 +180,9 @@ export class CameraZoomController {
     if (suppressed) this.suppressedBy.add(reason)
     else this.suppressedBy.delete(reason)
     this.tweening = false
+    // 同期の意図: 無効状態の変化は即時に apply 済みなので、次の tick が「無効状態が変わった」と
+    // 誤検知して登場の補間を即時化しないようにする（冗長に見えるが、tick を挟まずに解除→set する
+    // 経路でも古い値を残さない）。
     this.wasDisabled = this.isDisabled()
     this.apply(this.targetPose())
   }
@@ -230,6 +238,10 @@ export class CameraZoomController {
     if (disabledChanged) {
       this.wasDisabled = disabled
       this.tweening = false
+    }
+    // スナップ待ちの対象が退場・破棄されたらフラグを下ろす（以後の登場は通常の補間）。
+    if (this.pendingSnap && (!this.zoom || !this.host.hasCharacter(this.zoom.target))) {
+      this.pendingSnap = false
     }
     const focused = this.hasFocus()
     if (focused !== this.hadFocus) {

@@ -3998,6 +3998,12 @@ export class CharacterLayer extends Container {
     return { x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 }
   }
 
+  /** 指定キャラの立ち絵が存在するか（テクスチャ未読み込みでもよい。破棄済みは除く）。カメラズーム (#702) 用。 */
+  hasCharacter(name: string): boolean {
+    const state = this.characters.get(name)
+    return !!state && !state.sprite.destroyed
+  }
+
   /**
    * カメラズーム (#702) のフォーカス点。`getCurrentPosition` と同じだが、テクスチャ未読み込み
    * （`Texture.EMPTY` のまま）または読み込み失敗の間は null を返す。読み込み前は体の中心が足元に倒れ、読み込み完了で

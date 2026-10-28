@@ -144,6 +144,8 @@ function fakeLayer(): FakeLayer {
 
 function makeHarness(opts: { screen?: { width: number; height: number }; split?: boolean } = {}) {
   const state = { split: opts.split ?? false, skip: false }
+  // 立ち絵は舞台に居るがテクスチャ未読み込み（フォーカス無し）の対象。フォーカスがある対象も「居る」。
+  const present = new Set<string>()
   const time = new TimeController()
   time.setMode('virtual')
   const layers = [fakeLayer(), fakeLayer()]
@@ -158,10 +160,11 @@ function makeHarness(opts: { screen?: { width: number; height: number }; split?:
       getScreenSize: () => opts.screen ?? { width: W, height: H },
       isSplitLayoutActive: () => state.split,
       isSkipMode: () => state.skip,
+      hasCharacter: (t) => present.has(t) || focuses.has(t),
     },
     time
   )
-  return { time, layers, charPoses, focuses, ctrl, state }
+  return { time, layers, charPoses, focuses, present, ctrl, state }
 }
 
 const ZOOM_A = { target: 'A', strength: 2 }
@@ -433,8 +436,9 @@ describe('CameraZoomController (#702)', () => {
     expect(h.ctrl.getPose().scale).toBe(2)
   })
 
-  it('スナップ待ち: snap で set された未登場の対象は、最初にフォーカスが得られた tick で補間せず最終ポーズ', () => {
+  it('スナップ待ち: snap で set された「居るが未読み込み」の対象は、最初にフォーカスが得られた tick で補間せず最終ポーズ', () => {
     const h = makeHarness()
+    h.present.add('Late')
     h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true) // 復元・リセット・スキップ由来
     h.time.tick(160)
     expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
@@ -443,12 +447,57 @@ describe('CameraZoomController (#702)', () => {
     expect(h.ctrl.getPose().scale).toBe(2) // 途中倍率を映さない
   })
 
+  it('M1(i): 対象が未登場のまま snap で set し、その後に登場させると補間する（即ジャンプしない）', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true) // 未登場（hasCharacter false）
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
+  })
+
+  it('M1: スナップ待ちの最中に対象が破棄されたらフラグを下ろし、後の登場は補間する', () => {
+    const h = makeHarness()
+    h.present.add('Late')
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+    h.time.tick(32)
+    h.present.delete('Late') // 破棄
+    h.time.tick(32)
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
+  })
+
+  it('S3: snap 時に既にフォーカスがある対象は、フォーカスを失って再び得たとき補間する（スナップ待ちにならない）', () => {
+    const h = makeHarness()
+    h.present.add('A') // フォーカスだけ一時的に失う（例: テクスチャ差し替え）状況を再現
+    h.ctrl.set('Theater', ZOOM_A, true) // フォーカスあり → スナップ待ちは立たない
+    expect(h.ctrl.getPose().scale).toBe(2)
+    const f = h.focuses.get('A')!
+    h.focuses.delete('A')
+    h.time.tick(16)
+    h.time.tick(ZOOM_TWEEN_MS + 50)
+    h.focuses.set('A', f)
+    h.time.tick(16)
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
+  })
+
   it('スナップ待ちは 1 回で下りる: 退場後に再び現れたときは補間する', () => {
     const h = makeHarness()
+    h.present.add('Late')
     h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
     h.focuses.set('Late', { x: 400, y: 250 })
     h.time.tick(16)
     h.focuses.delete('Late')
+    h.present.add('Late')
     h.time.tick(16)
     h.time.tick(ZOOM_TWEEN_MS + 50)
     h.focuses.set('Late', { x: 400, y: 250 })
@@ -488,12 +537,27 @@ describe('CameraZoomController (#702)', () => {
   it('N-A: 無効状態が変わった tick にフォーカスが現れても補間せず即時に最終ポーズ', () => {
     const h = makeHarness()
     h.state.split = true
-    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, false) // スナップ待ちではない通常再生
     h.time.tick(16)
     h.state.split = false
     h.focuses.set('Late', { x: 400, y: 250 })
     h.time.tick(16)
     expect(h.ctrl.getPose().scale).toBe(2)
+  })
+
+  it('S2: split の変化を tick に拾わせた後、split が true のまま set で ticker を止め、split を戻して set すると補間する（set 側の同期）', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', ZOOM_A, true)
+    h.state.split = true
+    h.time.tick(32) // tick が無効状態の変化を拾う（wasDisabled = true）
+    h.ctrl.set('Theater', null, true) // split は true のまま: ticker が止まる
+    h.state.split = false
+    h.ctrl.set('Theater', ZOOM_A, false) // wasDisabled が set で同期されていなければ誤検知する
+    h.time.tick(16)
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
   })
 
   it('N-1: 補間中に split が有効になると補間を打ち切って次の tick で全景へ即時切り替え', () => {

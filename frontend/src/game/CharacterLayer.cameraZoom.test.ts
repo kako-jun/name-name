@@ -100,6 +100,16 @@ describe('CharacterLayer.getZoomFocus (#702)', () => {
     ;(l as unknown as { characters: Map<string, unknown> }).characters.set(name, { sprite })
   }
 
+  it('hasCharacter: 未登場・破棄済みは false、未読み込み（Texture.EMPTY）でも居れば true', () => {
+    const l = layer()
+    expect(l.hasCharacter('A')).toBe(false)
+    const sprite = new Sprite()
+    withSprite(l, 'A', sprite)
+    expect(l.hasCharacter('A')).toBe(true)
+    sprite.destroy()
+    expect(l.hasCharacter('A')).toBe(false)
+  })
+
   it('未登場は null', () => {
     expect(layer().getZoomFocus('A')).toBeNull()
   })
