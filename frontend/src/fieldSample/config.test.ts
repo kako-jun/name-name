@@ -1710,6 +1710,7 @@ describe('dialogStyle / dialogMsPerChar (#840)', () => {
       expect('dialogMsPerChar' in c).toBe(false)
       expect(c.warnings).toHaveLength(1)
       expect(c.warnings?.[0]).toContain('dialogMsPerChar')
+      expect(c.warnings?.[0]).toContain('1000') // 上限を明記
     }
   })
 })

@@ -772,7 +772,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     dialogMsPerChar = normalizeMsPerChar(raw.dialogMsPerChar)
     if (dialogMsPerChar === undefined)
       warnings.push(
-        `dialogMsPerChar は 0 以上の数値（ミリ秒/文字）である必要があります: ${JSON.stringify(raw.dialogMsPerChar)}（無視します）`
+        `dialogMsPerChar は 0 以上 1000 以下の数値（ミリ秒/文字）である必要があります: ${JSON.stringify(raw.dialogMsPerChar)}（無視します）`
       )
   }
   // scriptUrl が無いのに scene を書いた NPC は、固定の line で話す（読み込み時に気づけるよう警告）

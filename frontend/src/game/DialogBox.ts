@@ -28,7 +28,18 @@ import {
   type DestroyOptions,
 } from 'pixi.js'
 import { wordwrap } from './wordwrap'
-import { computeFfDialogRect } from './ffDialog'
+import {
+  FF_CURSOR_SIZE_RATIO,
+  FF_DIALOG_LINE_HEIGHT_RATIO,
+  computeFfDialogRect,
+  ffCursorReserve,
+  ffCursorVisible,
+  ffLinesPerPage,
+  pageIndexAtOffset,
+  pageStartOffset,
+  paginateLines,
+  wrapParagraphs,
+} from './ffDialog'
 import { FF_BLUE_PANEL_ALPHA, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
@@ -260,6 +271,12 @@ export class DialogBox extends Container {
   /** ffWindow の帯（ff-blue グラデーション）と、それを角丸に切り抜く mask。bg は枠線だけを描く */
   private ffBands: Graphics | null = null
   private ffMask: Graphics | null = null
+  /** ffWindow の改ページ (#840 2本目): 折り返し済みの行をページに分けたもの・いま出しているページ。会話外は空。GameState には持たない（窓の中の表示状態） */
+  private ffPages: string[][] = []
+  private ffPageIndex = 0
+  /** 次のページがあるときに右下で点滅する ▼ と、点滅の経過時間（ページ待ちに入るたびに 0 から） */
+  private ffCursor: Text | null = null
+  private ffCursorElapsed = 0
   // --- 話者名（separate box モード） ---
   private nameBox: Graphics
   private nameText: Text
@@ -535,6 +552,15 @@ export class DialogBox extends Container {
     this.indicator.y = this.indicatorBaseY
     this.addChild(this.indicator)
 
+    // ffWindow: 次のページがあるときの ▼（既存の indicator とは別。ページ待ちのときだけ ticker が点滅させる）
+    if (this.ffWindow) {
+      this.ffCursor = new Text({ text: '▼', style: this.makeFfCursorStyle() })
+      this.ffCursor.anchor.set(1, 1)
+      this.ffCursor.visible = false
+      this.addChild(this.ffCursor)
+      this.positionFfCursor()
+    }
+
     // --- ticker ---
     this.ticker = new Ticker()
     this.ticker.add(() => {
@@ -562,6 +588,7 @@ export class DialogBox extends Container {
         }
       }
 
+      this.tickFfCursor(this.ticker.deltaMS)
       this.applyIndicatorContainerVisibility()
     })
     this.ticker.start()
@@ -610,6 +637,10 @@ export class DialogBox extends Container {
     this.hidePortrait()
     this.typewriter = makeInitialTypewriterState()
     this.onTypingDone = null
+    this.ffPages = []
+    this.ffPageIndex = 0
+    this.ffCursorElapsed = 0
+    if (this.ffCursor) this.ffCursor.visible = false
   }
 
   get isShowing(): boolean {
@@ -896,6 +927,10 @@ export class DialogBox extends Container {
         this.beginPortraitLoad(this.currentPortrait, false)
       }
     }
+
+    // ffWindow: 窓の大きさ・文字の大きさが変わったら、表示中の本文を折り返し直してページも取り直す
+    this.positionFfCursor()
+    if (this.ffWindow && this.showing && this.currentText) this.ffRelayout()
   }
 
   // ---------------------------------------------------------------------------
@@ -936,11 +971,20 @@ export class DialogBox extends Container {
     const maxTextWidth = this.maxTextWidth()
     const runs = parseRubyText(text)
     const plainText = stripRubyMarkup(text)
-    const lines = wordwrap(plainText, maxTextWidth, font)
+    // ffWindow は台詞を段落ごとに折り返してページに分け、最初のページだけを出す（ルビは field の show() が除去済み）
+    let lines: string[]
+    if (this.ffWindow) {
+      this.ffPages = this.ffLayout(plainText)
+      this.ffPageIndex = 0
+      this.ffCursorElapsed = 0
+      lines = this.ffPages[0]
+    } else {
+      lines = wordwrap(plainText, maxTextWidth, font)
+    }
     this.typewriter = startTypewriter(lines.join('\n'))
     this.setVisibleDialogText('')
     this.indicator.visible = false
-    this.rubyPlacements = computeRubyPlacements(runs, lines)
+    this.rubyPlacements = computeRubyPlacements(this.ffWindow ? [] : runs, lines)
     this.rubyBuildToken += 1
     const rubyToken = this.rubyBuildToken
     ensureFontLoaded(this.fontFamily)
@@ -1053,8 +1097,99 @@ export class DialogBox extends Container {
     this.setVisibleDialogText('')
     this.currentText = ''
     this.onTypingDone = null
+    this.ffPages = []
+    this.ffPageIndex = 0
     this.novelWrappedLines = []
     this.clearRubyEntries()
+  }
+
+  /** ffWindow: 次のページの出を待って ▼ を点滅している状態（文字が出きっていて、最終ページではない） */
+  isAwaitingPage(): boolean {
+    return (
+      this.ffWindow &&
+      this.showing &&
+      !isTypingActive(this.typewriter) &&
+      this.ffPageIndex < this.ffPages.length - 1
+    )
+  }
+
+  /** 台詞の何ページ目か・全部で何ページか（1 始まり。ff 以外・会話外は 0/0。検証用の読み取り） */
+  getPageInfo(): { page: number; pages: number } {
+    if (!this.ffWindow || !this.showing || this.ffPages.length === 0) return { page: 0, pages: 0 }
+    return { page: this.ffPageIndex + 1, pages: this.ffPages.length }
+  }
+
+  /**
+   * 決定操作のページ送り。ページ待ち（`isAwaitingPage`）なら前のページの文字を消して次のページを 1 文字ずつ出し始め、true。
+   * それ以外（表示中・最終ページ・ff 以外）は何もせず false — 呼び出し側は従来どおり全文表示 / 次の台詞へ進む。
+   */
+  nextPage(): boolean {
+    if (!this.isAwaitingPage()) return false
+    this.ffPageIndex += 1
+    this.ffCursorElapsed = 0
+    this.ffShowPage(0)
+    return true
+  }
+
+  /** ffWindow: 段落ごとに折り返し、窓に入る行数でページに分ける（ルビなしの plain を渡す） */
+  private ffLayout(plainText: string): string[][] {
+    const font = `${this.fontSize}px ${this.fontFamily}`
+    const width = Math.max(1, this.maxTextWidth() - ffCursorReserve(this.fontSize))
+    const lines = wrapParagraphs(plainText, (p) => wordwrap(p, width, font))
+    return paginateLines(lines, ffLinesPerPage(this.boxH, this.padding, this.lineHeight()))
+  }
+
+  /** 現在のページを先頭から（`fromCount` 文字は出した状態で）出し直す */
+  private ffShowPage(fromCount: number): void {
+    const lines = this.ffPages[this.ffPageIndex] ?? []
+    const full = lines.join('\n')
+    this.typewriter = startTypewriterFrom(full, fromCount)
+    this.setVisibleDialogText(this.visibleDialogText(this.typewriter))
+    this.rubyPlacements = []
+    this.rubyBuildToken += 1
+    this.clearRubyEntries()
+    this.onTypingDone = null
+  }
+
+  /** ffWindow: 窓・文字の大きさが変わったとき。ページ分割が変わるなら、読んでいた位置を含むページから出し直す */
+  private ffRelayout(): void {
+    const pages = this.ffLayout(stripRubyMarkup(this.currentText))
+    if (JSON.stringify(pages) === JSON.stringify(this.ffPages)) return
+    const offset = pageStartOffset(this.ffPages, this.ffPageIndex)
+    const wasTyping = isTypingActive(this.typewriter)
+    const shown = this.typewriter.displayedCharCount
+    this.ffPages = pages
+    this.ffPageIndex = pageIndexAtOffset(pages, offset)
+    const len = (pages[this.ffPageIndex] ?? []).join('\n').length
+    this.ffCursorElapsed = 0
+    this.ffShowPage(wasTyping ? Math.min(shown, len) : len)
+  }
+
+  private makeFfCursorStyle(): TextStyle {
+    return new TextStyle({
+      fontFamily: this.fontFamily,
+      fontSize: Math.max(8, Math.round(this.fontSize * FF_CURSOR_SIZE_RATIO)),
+      fill: 0xffffff,
+      dropShadow: { ...FF_BLUE_TEXT_SHADOW },
+    })
+  }
+
+  /** ▼ は窓の右下（パディングの内側）に置く */
+  private positionFfCursor(): void {
+    if (!this.ffCursor) return
+    this.ffCursor.x = this.boxX + this.boxW - this.padding
+    this.ffCursor.y = this.boxY + this.boxH - this.padding
+  }
+
+  private tickFfCursor(deltaMs: number): void {
+    if (!this.ffCursor) return
+    if (this.isAwaitingPage()) {
+      this.ffCursorElapsed += deltaMs
+      this.ffCursor.visible = ffCursorVisible(this.ffCursorElapsed)
+    } else {
+      this.ffCursorElapsed = 0
+      this.ffCursor.visible = false
+    }
   }
 
   skipTypewriter(): void {
@@ -1342,7 +1477,12 @@ export class DialogBox extends Container {
 
     // 表示中テキストがあれば新フォントサイズで再 wordwrap・再レイアウトする。
     // font lazy load は不要なので setFontFamily の .then を待たず同期で再構築する。
-    if (this.currentText) {
+    // ffWindow は上の redraw が折り返し・ページ取り直しまで行う（段落・ページを考慮するのでここでは触らない）
+    if (this.ffCursor) {
+      this.ffCursor.style = this.makeFfCursorStyle()
+      this.positionFfCursor()
+    }
+    if (this.currentText && !this.ffWindow) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.maxTextWidth()
       const runs = parseRubyText(this.currentText)
@@ -1875,7 +2015,7 @@ export class DialogBox extends Container {
   }
 
   private lineHeight(): number {
-    return this.fontSize * 1.6
+    return this.fontSize * FF_DIALOG_LINE_HEIGHT_RATIO
   }
 
   private rubyFontSize(): number {

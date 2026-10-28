@@ -12,6 +12,7 @@ function makeDialogBox(): DialogBox {
   return {
     isTyping: vi.fn(() => false),
     skipTypewriter: vi.fn(),
+    nextPage: vi.fn(() => false),
     isShowing: false,
     show: vi.fn(),
     hide: vi.fn(),

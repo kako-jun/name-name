@@ -13,6 +13,7 @@ function makeRunner(host?: EventBattleHost) {
     hide: vi.fn(),
     isTyping: () => false,
     skipTypewriter: vi.fn(),
+    nextPage: vi.fn(() => false),
     isShowing: true,
   } as unknown as DialogBox
   const runner = new EventRunner(dialogBox, { moveNpcTo: () => Promise.resolve() }, host)
