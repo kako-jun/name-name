@@ -85,6 +85,9 @@ interface PropEntry {
    * 回転（または即時切替）の開始で手放す。通常の追加では null。
    */
   pendingOld: Sprite | null
+  /** `pendingOld` の元テクスチャ寸法（ロード待ち中のカメラ変更で再配置するため）。 */
+  pendingOldTextureWidth: number
+  pendingOldTextureHeight: number
   /** この差し替えをスキップ前進中に受けたか（回転を出さず即時切替）。 */
   flipSkip: boolean
   /** 回転の所要時間（ms）。差し替え時に確定する。 */
@@ -132,13 +135,38 @@ export class PropLayer extends Container {
     orientation: CameraOrientation,
     elevation: CameraElevation | null
   ): void {
+    // mode・向き・仰角が変わったときだけ回転を打ち切る。ズームだけの変更は setCamera の引数が
+    // 変わらず、ズームはレイヤーのコンテナに掛かって mesh にも効くので、回転は続ける。
+    const changed =
+      mode !== this.cameraMode ||
+      orientation !== this.cameraOrientation ||
+      elevation !== this.cameraElevation
     this.cameraMode = mode
     this.cameraOrientation = orientation
     this.cameraElevation = elevation
     for (const entry of this.entries) {
       // 回転中にカメラが変わったら回転を打ち切って最終状態へ（旧面の配置を追従させない）。
-      if (entry.run) this.finishFlip(entry)
+      if (changed && entry.run) this.finishFlip(entry)
       if (entry.sprite) this.layoutProp(entry)
+      // ロード待ちの旧面（pendingOld）も新しいカメラの射影位置へ置き直す。
+      if (entry.pendingOld && entry.pendingOldTextureWidth > 0) {
+        const placement = computeBoardPlacement(
+          entry.pendingOldTextureWidth,
+          entry.pendingOldTextureHeight,
+          this.screenWidth,
+          this.screenHeight,
+          computeCameraProjection(
+            this.cameraMode,
+            this.cameraOrientation,
+            this.cameraElevation,
+            entry.depth
+          )
+        )
+        entry.pendingOld.width = placement.width
+        entry.pendingOld.height = placement.height
+        entry.pendingOld.x = placement.x
+        entry.pendingOld.y = placement.y
+      }
     }
   }
 
@@ -217,8 +245,17 @@ export class PropLayer extends Container {
     // 旧い面を引き継ぐ。回転中なら打ち切って新面側の sprite を、ロード待ちなら待っている旧面を。
     if (old.run) this.finishFlip(old)
     const oldFace = old.sprite ?? old.pendingOld
+    const oldTexW = old.sprite ? old.textureWidth : old.pendingOldTextureWidth
+    const oldTexH = old.sprite ? old.textureHeight : old.pendingOldTextureHeight
     old.pendingOld = null
     old.disposed = true
+    // スライドイン中の旧面は宙の位置で固まらないよう、最終配置へスナップしてから止める。
+    if (old.interval != null && old.sprite) {
+      old.sprite.width = old.targetWidth
+      old.sprite.height = old.targetHeight
+      old.sprite.x = old.targetX
+      old.sprite.y = old.targetY
+    }
     this.stopInterval(old)
     if (old.sprite) {
       // 引き継いだ sprite は新しい entry の pendingOld になる（destroy しない）。
@@ -226,6 +263,8 @@ export class PropLayer extends Container {
     }
     const entry = this.createEntry(path, depth)
     entry.pendingOld = oldFace
+    entry.pendingOldTextureWidth = oldTexW
+    entry.pendingOldTextureHeight = oldTexH
     entry.flipSkip = opts?.skip === true
     entry.flipDurationMs = clampFadeMs(opts?.flipMs, this.flipDefaultMs)
     this.entries[index] = entry
@@ -250,6 +289,8 @@ export class PropLayer extends Container {
       interval: null,
       phaseStartedAtMs: this.time.now(),
       pendingOld: null,
+      pendingOldTextureWidth: 0,
+      pendingOldTextureHeight: 0,
       flipSkip: false,
       flipDurationMs: this.flipDefaultMs,
       run: null,
