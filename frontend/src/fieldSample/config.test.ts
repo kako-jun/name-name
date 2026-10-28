@@ -1561,3 +1561,62 @@ describe('scenes.<id>.npcs (#841 段階1)', () => {
     expect(configNotice(c)).toContain('scenes.a.npcs[0]')
   })
 })
+
+describe('scriptUrl と npcs.scene (#841 段階2)', () => {
+  const npcRaw = (extra: Raw = {}): Raw => ({
+    id: 'oba',
+    name: 'おばあさん',
+    x: 300,
+    y: 400,
+    sprite: 'oba.png',
+    line: 'こんにちは。',
+    ...extra,
+  })
+  const withNpcs = (npcs: unknown): Raw =>
+    mutated((c) => {
+      c.scenes.a.npcs = npcs
+    })
+
+  it('未指定は scriptUrl キーも scene キーも警告も無し（従来と同一）', () => {
+    const c = ok(withNpcs([npcRaw()]))
+    expect('scriptUrl' in c).toBe(false)
+    expect('scene' in c.scenes.a.npcs![0]).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('scriptUrl は assetBaseUrl（images 配下）基準で解決する', () => {
+    const c = ok(
+      mutated((c) => {
+        c.assetBaseUrl = 'https://cdn.example.com/g'
+        c.scriptUrl = 'npc.md'
+      })
+    )
+    expect(c.scriptUrl).toBe('https://cdn.example.com/g/images/npc.md')
+    expect(c.warnings).toBeUndefined()
+  })
+  it('scriptUrl が文字列でない・空は警告して無視（読み込みは成功のまま）', () => {
+    for (const bad of [123, '', '  ', null, {}]) {
+      const c = ok(
+        mutated((c) => {
+          c.scriptUrl = bad
+        })
+      )
+      expect('scriptUrl' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('scriptUrl')
+    }
+  })
+  it('NPC の scene を読む（前後の空白は除く）', () => {
+    const c = ok(withNpcs([npcRaw({ scene: ' 老婆の話 ' })]))
+    expect(c.scenes.a.npcs![0].scene).toBe('老婆の話')
+    expect(c.warnings).toBeUndefined()
+  })
+  it('scene が不正（空・文字列でない）は警告して scene だけ無視（NPC は残る）', () => {
+    for (const bad of ['', '  ', 5, null]) {
+      const c = ok(withNpcs([npcRaw({ scene: bad })]))
+      expect(c.scenes.a.npcs).toHaveLength(1)
+      expect('scene' in c.scenes.a.npcs![0]).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('.scene')
+    }
+  })
+})

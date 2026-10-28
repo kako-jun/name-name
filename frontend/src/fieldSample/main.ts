@@ -89,6 +89,15 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
+import { EventRunner } from '../game/eventRunner'
+import {
+  FieldConversation,
+  createFieldBattleHost,
+  createFieldNpcMover,
+  loadFieldScript,
+  resolveNpcCommands,
+  type FieldScriptEvents,
+} from '../game/fieldScript'
 import { hasOwn } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
@@ -303,6 +312,24 @@ async function loadEmotionSheets(config: FieldSampleConfig): Promise<EmotionShee
   return mergeEmotionSheets(config.emotions, external)
 }
 
+/**
+ * NPC の脚本 `.md` (`scriptUrl`、#841 段階2)。取得・パースの失敗は警告して無視（NPC は固定の `line` で話す）。
+ * wasm パーサは scriptUrl があるときだけ遅延 import する（無い設定では wasm を読まない）
+ */
+async function loadNpcScript(config: FieldSampleConfig): Promise<FieldScriptEvents | undefined> {
+  const url = config.scriptUrl
+  if (!url) return undefined
+  return loadFieldScript(
+    url,
+    async (u) => {
+      const res = await fetch(u)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.text()
+    },
+    async (md) => (await import('../wasm/parser')).parseMarkdown(md)
+  )
+}
+
 async function main(): Promise<void> {
   const config = await loadConfig()
   const cache = new Map<string, Promise<LoadedScene>>()
@@ -372,6 +399,7 @@ async function main(): Promise<void> {
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionSheets = await loadEmotionSheets(config)
+  const scriptEvents = await loadNpcScript(config)
   const emotionTextures = new Map<string, Texture | null>()
   await Promise.all(
     [...new Set(Object.values(emotionSheets ?? {}).map((sheet) => sheet.image))].map(
@@ -532,6 +560,11 @@ async function main(): Promise<void> {
     approach = null
     movingMs = 0
   }
+  // 会話の実行器 (#841 段階2)。NpcMove / Battle は fieldSample では未対応（警告して読み飛ばす）
+  const conversation = new FieldConversation(
+    dialogBox,
+    new EventRunner(dialogBox, createFieldNpcMover(), createFieldBattleHost())
+  )
   const startTalk = (npc: NpcRuntime): void => {
     if (!canStartTalk(talkState())) return
     releaseWalkInput()
@@ -539,16 +572,19 @@ async function main(): Promise<void> {
     facing = facingFromVector({ x: npc.x - pos.x, y: npc.y - pos.y }, facing, diagonalWalk)
     npc.facing = facingToward(npc, pos)
     talking = npc
-    dialogBox.show(npc.def.name, npc.def.line)
+    conversation.start(
+      npc.def.name,
+      npc.def.line,
+      resolveNpcCommands(npc.def.scene, scriptEvents),
+      () => {
+        talking = null
+      }
+    )
   }
   /** 会話の送り: 表示中なら全文表示、済んでいれば閉じて歩行へ戻る */
   const advanceTalk = (): void => {
     if (!talking) return
-    if (dialogBox.isTyping()) dialogBox.skipTypewriter()
-    else {
-      dialogBox.hide()
-      talking = null
-    }
+    conversation.advance()
   }
   const startBattle = (enemies: BattleEntity[]): void => {
     // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
@@ -1167,7 +1203,11 @@ async function main(): Promise<void> {
       /** 会話中の NPC の id（会話していなければ null）と、このシーンの NPC の足元・向き（検証用） */
       talking: talking ? talking.id : null,
       /** 会話窓（検証用）。会話外は showing / bgVisible とも false */
-      dialog: { showing: dialogBox.isShowing, bgVisible: dialogBox.isBackgroundVisible },
+      dialog: {
+        showing: dialogBox.isShowing,
+        bgVisible: dialogBox.isBackgroundVisible,
+        text: dialogBox.getVisibleText(),
+      },
       npcs: currentNpcs().map((n) => ({ id: n.id, x: n.x, y: n.y, facing: n.facing })),
       /** 橙のラッチの状態（検証用） */
       assist: { latched: assistRt.latched, walked: assistRt.walked },
