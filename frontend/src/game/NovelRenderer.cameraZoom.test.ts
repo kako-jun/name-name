@@ -276,6 +276,18 @@ describe('復元・シーク・リセット (#702)', () => {
     expect(p.characterLayer.scale.x).toBe(2)
   })
 
+  it('復元直後に立ち絵が未読み込みでも、読み込み完了の tick で補間せず最終ポーズ（途中倍率を映さない）', () => {
+    const { snap } = zoomed()
+    const { r, p } = make([narration('one')])
+    let focus: { x: number; y: number } | null = null
+    vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation(() => focus)
+    internals(r).applyState(snap)
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    focus = { x: 100, y: 100 }
+    p.time.tick(16)
+    expect(p.cameraZoom.getPose().scale).toBe(2)
+  })
+
   it('55: 復元時に対象キャラが未登場でも例外・warn なし（全景のまま）', () => {
     const { snap } = zoomed()
     const { r, p } = make([narration('one')], null)

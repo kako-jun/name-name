@@ -357,7 +357,7 @@ describe('CameraZoomController (#702)', () => {
   describe('登場・退場の補間 (S3)', () => {
     it('登場: 後から現れたキャラへ現在のポーズ（全景）から補間して寄る（飛ばない）', () => {
       const h = makeHarness()
-      h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+      h.ctrl.set('Theater', { target: 'Late', strength: 2 }, false)
       expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
       h.focuses.set('Late', { x: 400, y: 250 })
       h.time.tick(16) // 補間の起点
@@ -431,6 +431,43 @@ describe('CameraZoomController (#702)', () => {
     expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
     h.ctrl.setSuppressed('ending', false)
     expect(h.ctrl.getPose().scale).toBe(2)
+  })
+
+  it('スナップ待ち: snap で set された未登場の対象は、最初にフォーカスが得られた tick で補間せず最終ポーズ', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true) // 復元・リセット・スキップ由来
+    h.time.tick(160)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    expect(h.ctrl.getPose().scale).toBe(2) // 途中倍率を映さない
+  })
+
+  it('スナップ待ちは 1 回で下りる: 退場後に再び現れたときは補間する', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    h.focuses.delete('Late')
+    h.time.tick(16)
+    h.time.tick(ZOOM_TWEEN_MS + 50)
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
+  })
+
+  it('通常再生（snap=false）で後から登場する対象は従来どおり補間する', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, false)
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    h.time.tick(96)
+    const s = h.ctrl.getPose().scale
+    expect(s).toBeGreaterThan(1)
+    expect(s).toBeLessThan(2)
   })
 
   it('S-A: 抑制中に ticker が回った後、tick を挟まず解除→リセットしても、次の通常 set は補間される（即ジャンプしない）', () => {

@@ -113,6 +113,12 @@ export class CameraZoomController {
   /** 一時無効の理由（'title' / 'ending'）。いずれか立っている間は全景。 */
   private readonly suppressedBy = new Set<string>()
   private wasDisabled = false
+  /**
+   * スナップ待ち: snap で set されたが対象キャラが未読み込み・未登場で全景のまま待っている間 true。
+   * 最初にフォーカスが得られた tick では補間せず最終ポーズへ即時 apply して下ろす（復元・リセット・
+   * スキップ由来のズームが途中倍率を映さない。通常再生の「後から登場したキャラへ寄る」は補間）。
+   */
+  private pendingSnap = false
 
   constructor(
     private readonly host: CameraZoomHost,
@@ -145,6 +151,7 @@ export class CameraZoomController {
     }
     const target = this.targetPose()
     this.hadFocus = this.hasFocus()
+    this.pendingSnap = snap && this.zoom !== null && !this.hadFocus
     if (snap) {
       this.tweening = false
       this.apply(target)
@@ -229,8 +236,10 @@ export class CameraZoomController {
       // 登場・退場: 現在のポーズから補間し直す（飛ばない）。無効状態が変わった tick と重なるときは
       // 補間を始めず即時に反映する。
       this.hadFocus = focused
-      if (disabledChanged || this.host.isSkipMode()) this.tweening = false
-      else this.startTween()
+      if (disabledChanged || this.host.isSkipMode() || (focused && this.pendingSnap)) {
+        this.tweening = false
+      } else this.startTween()
+      if (focused) this.pendingSnap = false
     }
     this.checkMissing()
     const target = this.targetPose()
