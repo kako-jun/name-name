@@ -1,7 +1,7 @@
 /**
  * NovelRenderer × カメラズーム (#702) の配線・セーブ/復元・シーク・スキップ。
  *
- * 対象キャラの位置は characterLayer.getCurrentPosition をスタブして与える（実画像を読まない）。
+ * 対象キャラの位置は characterLayer.getZoomFocus をスタブして与える（実画像を読まない）。
  * 時間は renderer の TimeController を virtual にして `tick` で進める。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -37,7 +37,7 @@ interface Priv {
   cameraZoom: CameraZoomController
   time: TimeController
   characterLayer: {
-    getCurrentPosition(n: string): { x: number; y: number } | null
+    getZoomFocus(n: string): { x: number; y: number } | null
     scale: { x: number }
     position: { x: number; y: number }
   }
@@ -54,7 +54,7 @@ function make(
   // time は共有インスタンス。前のテストの追従 ticker を持ち越さないよう一度 live に戻して仮想時刻をリセットする。
   p.time.setMode('live')
   p.time.setMode('virtual')
-  vi.spyOn(p.characterLayer, 'getCurrentPosition').mockImplementation(() => focus)
+  vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation(() => focus)
   return { r, p }
 }
 
@@ -148,6 +148,26 @@ describe('stageDirectives [カメラ:] ズーム (#702)', () => {
     expect(warn.mock.calls.filter((c) => String(c[0]).includes('split_layout'))).toHaveLength(1)
   })
 
+  it('タイトル画面の表示中はズームが無効（補間なし）、閉じると戻る', () => {
+    const { r, p } = make()
+    internals(r).processDirective(cam('Theater', ZOOM_EVT))
+    p.time.tick(2000)
+    expect(p.cameraZoom.getPose().scale).toBe(2)
+    r.showTitleScreen({
+      title: 't',
+      hasSaveData: false,
+      onNewGame: () => {},
+      onContinue: () => {},
+      onOpenSettings: () => {},
+      onBack: () => {},
+    })
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    p.time.tick(2000)
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    r.hideTitleScreen()
+    expect(p.cameraZoom.getPose().scale).toBe(2)
+  })
+
   it('57: スキップ中の [カメラ:] は即時スナップ（tick を進める前に最終ポーズ）', () => {
     const { r, p } = make()
     p.skipMode = true
@@ -211,7 +231,7 @@ describe('復元・シーク・リセット (#702)', () => {
     vi.spyOn(p.characterLayer, 'show' as never).mockImplementation(((name: string) => {
       present.add(name)
     }) as never)
-    vi.spyOn(p.characterLayer, 'getCurrentPosition').mockImplementation((n: string) =>
+    vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation((n: string) =>
       present.has(n) ? { x: 100, y: 100 } : null
     )
     internals(r).applyState(withChar)
@@ -229,7 +249,7 @@ describe('復元・シーク・リセット (#702)', () => {
     expect(warn).not.toHaveBeenCalled()
     expect(err).not.toHaveBeenCalled()
     // その後キャラが現れたら追従する
-    vi.spyOn(p.characterLayer, 'getCurrentPosition').mockImplementation(() => ({ x: 100, y: 100 }))
+    vi.spyOn(p.characterLayer, 'getZoomFocus').mockImplementation(() => ({ x: 100, y: 100 }))
     p.time.tick(16)
     p.time.tick(ZOOM_TWEEN_MS + 50)
     expect(p.cameraZoom.getPose().scale).toBe(2)

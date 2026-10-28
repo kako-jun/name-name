@@ -625,9 +625,10 @@ export class NovelRenderer {
     {
       getLayers: () => [this.backgroundBoardLayer, this.lightingLayer, this.propLayer],
       applyCharacterPose: (pose) => this.characterLayer.setZoomPose(pose),
-      getFocus: (target) => this.characterLayer.getCurrentPosition(target),
+      getFocus: (target) => this.characterLayer.getZoomFocus(target),
       getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
       isSplitLayoutActive: () => this.characterLayer.getSplitLayoutRegion() !== null,
+      isSkipMode: () => this.skipMode,
     },
     this.time
   )
@@ -2013,6 +2014,8 @@ export class NovelRenderer {
     showExitButton?: boolean
   }): void {
     this.dialogBox.visible = false
+    // タイトル画面中は立ち絵レイヤーにロゴを載せるので、カメラズームを一時的に無効にする (#702)。
+    this.cameraZoom.setSuppressed(true)
     this.seekBar.setTitleScreenHidden(true)
     this.eventImageLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
@@ -2077,6 +2080,7 @@ export class NovelRenderer {
     this.characterLayer.remove(NovelRenderer.TITLE_LOGO_IMAGE_ID, { instant: true })
     // showTitleScreen() で隠した層を復元する（上記 JSDoc 参照）。
     this.dialogBox.visible = true
+    this.cameraZoom.setSuppressed(false)
     this.seekBar.setTitleScreenHidden(false)
     this.eventImageLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
@@ -3413,15 +3417,15 @@ export class NovelRenderer {
       this.currentBgmPath = null
     }
 
+    // カメラズームの再スナップ (#702)。`stage.restore` 内のスナップは立ち絵の復元より前に走るため、
+    // 対象キャラの位置が未確定で全景に倒れる。立ち絵復元後にもう一度最終ポーズへ即時スナップする。
+    this.cameraZoom.set(this.stage.cameraMode, this.stage.cameraZoom, true)
+
     // Jump 位置への復元 (#733): 宣言的復元は現在位置のディレクティブを再実行しないため、
     // eventIndex が Jump を指していると遷移の予約が無く行き止まりになる（startFrom の eventIndex 指定・
     // 古いセーブ等）。到達時と同じ経路で再予約する。[条件:] 内の Jump は resolvedEvents（復元後のフラグで
     // 展開済み）の現在イベントで判定するので、条件が偽なら Jump はここに現れず再予約もしない。
     // 遷移先不在なら通常到達時と同じく warn して stalled に戻る。
-    // カメラズームの再スナップ (#702)。`stage.restore` 内のスナップは立ち絵の復元より前に走るため、
-    // 対象キャラの位置が未確定で全景に倒れる。立ち絵復元後にもう一度最終ポーズへ即時スナップする。
-    this.cameraZoom.set(this.stage.cameraMode, this.stage.cameraZoom, true)
-
     this.rearmJumpAtCurrentPosition()
   }
 

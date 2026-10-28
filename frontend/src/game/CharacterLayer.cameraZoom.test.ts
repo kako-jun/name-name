@@ -93,3 +93,22 @@ describe('CharacterLayer zoom × split_layout (#702)', () => {
     expect(l.scale.y * p.y + l.position.y).toBeCloseTo(expectY, 9)
   })
 })
+
+describe('CharacterLayer.getZoomFocus (#702)', () => {
+  function withState(
+    l: CharacterLayer,
+    name: string,
+    sprite: { x: number; y: number; height: number }
+  ) {
+    ;(l as unknown as { characters: Map<string, unknown> }).characters.set(name, { sprite })
+  }
+
+  it('未登場・テクスチャ未読み込み（高さ 0）は null、読み込み後は体の中心', () => {
+    const l = layer()
+    expect(l.getZoomFocus('A')).toBeNull()
+    withState(l, 'A', { x: 10, y: 100, height: 0 })
+    expect(l.getZoomFocus('A')).toBeNull()
+    withState(l, 'A', { x: 10, y: 100, height: 60 })
+    expect(l.getZoomFocus('A')).toEqual({ x: 10, y: 70 })
+  })
+})

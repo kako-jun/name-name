@@ -83,6 +83,8 @@ export interface CameraZoomHost {
    * 縮小されるのでフォーカス座標とテキスト領域の扱いが成立しないため。
    */
   isSplitLayoutActive(): boolean
+  /** スキップ中か。スキップ中は登場・退場でも補間せず即時に最終ポーズへ切り替える。 */
+  isSkipMode(): boolean
 }
 
 function samePose(a: ZoomPose, b: ZoomPose): boolean {
@@ -108,6 +110,7 @@ export class CameraZoomController {
   private warnedTarget: string | null = null
   private warnedSplit = false
   private disposed = false
+  private suppressed = false
 
   constructor(
     private readonly host: CameraZoomHost,
@@ -152,6 +155,17 @@ export class CameraZoomController {
     else this.stopTicker()
   }
 
+  /**
+   * 一時的にズームを無効にする（タイトル画面表示中など）。状態は保ったまま、切り替えは補間なしで
+   * 即時に反映する。
+   */
+  setSuppressed(suppressed: boolean): void {
+    if (this.disposed || this.suppressed === suppressed) return
+    this.suppressed = suppressed
+    this.tweening = false
+    this.apply(this.targetPose())
+  }
+
   /** ticker を破棄する（renderer destroy 用）。以後の `set` は無視される。 */
   dispose(): void {
     this.disposed = true
@@ -169,7 +183,7 @@ export class CameraZoomController {
   }
 
   private targetPose(): ZoomPose {
-    if (this.host.isSplitLayoutActive()) return IDENTITY_ZOOM_POSE
+    if (this.suppressed || this.host.isSplitLayoutActive()) return IDENTITY_ZOOM_POSE
     const { width, height } = this.host.getScreenSize()
     const focus = this.zoom ? this.host.getFocus(this.zoom.target) : null
     return computeZoomPose(this.mode, this.zoom, focus, width, height)
@@ -197,7 +211,8 @@ export class CameraZoomController {
     if (focused !== this.hadFocus) {
       // 登場・退場: 現在のポーズから補間し直す（飛ばない）。
       this.hadFocus = focused
-      this.startTween()
+      if (this.host.isSkipMode()) this.tweening = false
+      else this.startTween()
     }
     this.checkMissing()
     const target = this.targetPose()

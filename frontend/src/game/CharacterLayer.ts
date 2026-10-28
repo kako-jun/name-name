@@ -3999,6 +3999,17 @@ export class CharacterLayer extends Container {
   }
 
   /**
+   * カメラズーム (#702) のフォーカス点。`getCurrentPosition` と同じだが、テクスチャ未読み込み
+   * （sprite の高さが 0）の間は null を返す。読み込み前は体の中心が足元に倒れ、読み込み完了で
+   * y が補間なしに飛んで背景が跳ねるため、読み込み完了を「登場」として扱い補間して寄せる。
+   */
+  getZoomFocus(name: string): { x: number; y: number } | null {
+    const state = this.characters.get(name)
+    if (!state || state.sprite.height <= 0) return null
+    return this.getCurrentPosition(name)
+  }
+
+  /**
    * 全キャラクターを削除する
    */
   clear(): void {

@@ -143,7 +143,7 @@ function fakeLayer(): FakeLayer {
 }
 
 function makeHarness(opts: { screen?: { width: number; height: number }; split?: boolean } = {}) {
-  const state = { split: opts.split ?? false }
+  const state = { split: opts.split ?? false, skip: false }
   const time = new TimeController()
   time.setMode('virtual')
   const layers = [fakeLayer(), fakeLayer()]
@@ -157,6 +157,7 @@ function makeHarness(opts: { screen?: { width: number; height: number }; split?:
       getFocus: (t) => focuses.get(t) ?? null,
       getScreenSize: () => opts.screen ?? { width: W, height: H },
       isSplitLayoutActive: () => state.split,
+      isSkipMode: () => state.skip,
     },
     time
   )
@@ -383,15 +384,50 @@ describe('CameraZoomController (#702)', () => {
     })
   })
 
-  it('N2: 開始ポーズと最終ポーズが同じなら補間せず、全景のままなら ticker も残さない', () => {
+  it('N2: 開始ポーズと最終ポーズが同じなら補間（開始時刻の取得）を起こさず、全景のままなら ticker も残さない', () => {
     const h = makeHarness()
     h.ctrl.set('Theater', null, false)
     expect(h.time.getPendingTimerCount()).toBe(0)
     h.ctrl.set('Theater', ZOOM_A, true)
-    const calls = h.layers[0].position.set.mock.calls.length
-    h.ctrl.set('Theater', ZOOM_A, false) // 既に最終ポーズ
-    h.time.tick(ZOOM_TWEEN_MS)
-    expect(h.layers[0].position.set.mock.calls.length).toBe(calls)
+    const now = vi.spyOn(h.time, 'now')
+    h.ctrl.set('Theater', ZOOM_A, false) // 既に最終ポーズ: 補間を始めない（startTween は now() を読む）
+    expect(now).not.toHaveBeenCalled()
+    h.ctrl.set('Theater', null, false) // 最終ポーズが違えば補間を始める
+    expect(now).toHaveBeenCalled()
+  })
+
+  it('S-1: スキップ中の登場・退場は補間せず tick 1 回で最終ポーズ', () => {
+    const h = makeHarness()
+    h.state.skip = true
+    h.ctrl.set('Theater', { target: 'Late', strength: 2 }, true)
+    h.focuses.set('Late', { x: 400, y: 250 })
+    h.time.tick(16)
+    expect(h.ctrl.getPose().scale).toBe(2)
+    h.focuses.delete('Late')
+    h.time.tick(16)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+  })
+
+  it('タイトル画面: setSuppressed(true) で補間なしに全景、解除で補間なしに戻る。状態は保つ', () => {
+    const h = makeHarness()
+    h.ctrl.set('Theater', ZOOM_A, true)
+    h.ctrl.setSuppressed(true)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    h.time.tick(1000)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    expect(h.ctrl.getZoom()).toEqual(ZOOM_A)
+    h.ctrl.setSuppressed(false)
+    expect(h.ctrl.getPose().scale).toBe(2)
+  })
+
+  it('split_layout が途中から有効になっても警告は出ず、次の tick で補間なしに全景へ切り替わる', () => {
+    const h = makeHarness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    h.ctrl.set('Theater', ZOOM_A, true)
+    h.state.split = true
+    h.time.tick(16)
+    expect(h.ctrl.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('N3: dispose 後の set は何もしない（ticker も作らない）', () => {
