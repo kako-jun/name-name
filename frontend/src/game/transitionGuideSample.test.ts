@@ -13,8 +13,11 @@ function guideScript(): string {
   const head = md.indexOf('**画面遷移を見比べる手順')
   expect(head).toBeGreaterThan(-1)
   const open = md.indexOf('```markdown\n', head)
-  const close = md.indexOf('\n```', open + 12)
-  return md.slice(open + '```markdown\n'.length, close + 1)
+  expect(open).toBeGreaterThan(head)
+  const fence = '```markdown\n'
+  const close = md.indexOf('\n```', open + fence.length)
+  expect(close).toBeGreaterThan(open)
+  return md.slice(open + fence.length, close + 1)
 }
 
 afterEach(() => vi.restoreAllMocks())
