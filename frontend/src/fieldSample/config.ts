@@ -30,6 +30,7 @@ import type { BattlePresentation } from '../game/battleMotion'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
 import type { WindowStyle } from '../game/windowStyle'
+import { normalizeDialogStyle, normalizeMsPerChar, type DialogStyle } from '../game/ffDialog'
 import { parseCommandIds, type CommandId, type CommandLayout } from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import type { BattleItemEntry, BattleSkillEntry, BattleSpellEntry } from '../game/battleMenu'
@@ -196,6 +197,12 @@ export interface FieldSampleConfig {
    * NPC の会話を書いた脚本 `.md` の URL (#841 段階2)。`scriptUrl`。解決済みの URL。読み込み（fetch・パース）は main.ts の責務。未指定は undefined
    */
   scriptUrl?: string
+  /**
+   * 会話窓のスタイル (#840)。`dialogStyle`: `ff` = 画面上部に固定・ff-blue・1 文字ずつ。未指定は undefined＝従来の下部の窓。不正な値は警告して無視
+   */
+  dialogStyle?: DialogStyle
+  /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
+  dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
   encounter: EncounterStepConfig
   /** エンカウントで使うモンスターのマスター (#809) */
@@ -751,6 +758,23 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `scriptUrl は URL 文字列である必要があります: ${JSON.stringify(raw.scriptUrl)}（無視します）`
       )
   }
+  // 会話窓のスタイル・速度 (#840)。不正は警告して無視（従来の窓・既定の速度で動く）
+  let dialogStyle: DialogStyle | undefined
+  if (raw.dialogStyle !== undefined) {
+    dialogStyle = normalizeDialogStyle(raw.dialogStyle)
+    if (!dialogStyle)
+      warnings.push(
+        `dialogStyle は "ff" のみ指定できます: ${JSON.stringify(raw.dialogStyle)}（無視します）`
+      )
+  }
+  let dialogMsPerChar: number | undefined
+  if (raw.dialogMsPerChar !== undefined) {
+    dialogMsPerChar = normalizeMsPerChar(raw.dialogMsPerChar)
+    if (dialogMsPerChar === undefined)
+      warnings.push(
+        `dialogMsPerChar は 0 以上の数値（ミリ秒/文字）である必要があります: ${JSON.stringify(raw.dialogMsPerChar)}（無視します）`
+      )
+  }
   // scriptUrl が無いのに scene を書いた NPC は、固定の line で話す（読み込み時に気づけるよう警告）
   if (!scriptUrl)
     for (const [sid, sc] of Object.entries(scenes))
@@ -817,6 +841,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(hasEmotions(em.emotions) ? { emotions: em.emotions } : {}),
       ...(emotionsSource ? { emotionsSource } : {}),
       ...(scriptUrl ? { scriptUrl } : {}),
+      ...(dialogStyle ? { dialogStyle } : {}),
+      ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,

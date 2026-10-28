@@ -90,6 +90,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
+import { FF_DIALOG_MS_PER_CHAR } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -473,6 +474,13 @@ async function main(): Promise<void> {
     bgColor: 0x000033,
     nameColor: 0xffe066,
     nameSeparateBox: false,
+    // FF 風の窓 (#840)。未指定は従来の下部の窓（msPerChar も DialogBox の既定のまま）
+    ...(config.dialogStyle === 'ff' ? { ffWindow: true } : {}),
+    ...(config.dialogMsPerChar !== undefined
+      ? { msPerChar: config.dialogMsPerChar }
+      : config.dialogStyle === 'ff'
+        ? { msPerChar: FF_DIALOG_MS_PER_CHAR }
+        : {}),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()
@@ -1236,6 +1244,10 @@ async function main(): Promise<void> {
         showing: dialogBox.isShowing,
         bgVisible: dialogBox.isBackgroundVisible,
         text: dialogBox.getVisibleText(),
+        /** 文字送り中か（ff は 1 文字ずつ。全文表示済みなら false） */
+        typing: dialogBox.isTyping(),
+        /** 窓の矩形（検証用。ff は画面上部に固定） */
+        rect: dialogBox.getBoxRect(),
       },
       npcs: currentNpcs().map((n) => ({ id: n.id, x: n.x, y: n.y, facing: n.facing })),
       /** 橙のラッチの状態（検証用） */

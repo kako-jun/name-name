@@ -28,6 +28,12 @@ import {
   type DestroyOptions,
 } from 'pixi.js'
 import { wordwrap } from './wordwrap'
+import { computeFfDialogRect } from './ffDialog'
+import {
+  FF_BLUE_PANEL_ALPHA,
+  FF_BLUE_TEXT_SHADOW,
+  computeBands,
+} from './windowStyle'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
 import { ensureFontLoaded } from './FontLoader'
@@ -151,6 +157,13 @@ export interface DialogBoxConfig {
    * false にするとウィンドウ内上部にインライン表示する（RPG スタイル）。
    */
   nameSeparateBox?: boolean
+  /**
+   * FF 風の窓（デフォルト: false = 従来の下部の窓）(#840)。
+   * true のとき窓を画面上部に固定し（`computeFfDialogRect`）、戦闘窓と同じ ff-blue の帯状グラデーション＋
+   * 白枠＋黒い影の文字にする。typewriter の速度は `msPerChar`（未指定は従来と同じ 30ms）。
+   * novel / split_layout / 2窓モードとは併用しない（それらが優先される）。
+   */
+  ffWindow?: boolean
 }
 
 /** typewriter のデフォルト速度（ms/char） */
@@ -247,6 +260,9 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
 export class DialogBox extends Container {
   // --- 背景・枠 ---
   private bg: Graphics
+  /** ffWindow の帯（ff-blue グラデーション）と、それを角丸に切り抜く mask。bg は枠線だけを描く */
+  private ffBands: Graphics
+  private ffMask: Graphics
   // --- 話者名（separate box モード） ---
   private nameBox: Graphics
   private nameText: Text
@@ -314,6 +330,7 @@ export class DialogBox extends Container {
   private bgColor: number
   private nameColor: number
   private nameSeparateBox: boolean
+  private readonly ffWindow: boolean
   /**
    * 本文テキスト色 (#305)。既定は純白 0xffffff。NovelRenderer が話者ごと（主人公=暖アイボリー /
    * 住人=白）に `setBodyTextColor` で切り替える。本文 (`dialogText`) とルビ (`rubyEntries`) の両方に当てる。
@@ -407,6 +424,7 @@ export class DialogBox extends Container {
       bgColor = 0x000000,
       nameColor = 0xffffff,
       nameSeparateBox = true,
+      ffWindow = false,
     } = config
 
     this.padding = padding
@@ -417,6 +435,7 @@ export class DialogBox extends Container {
     this.bgColor = bgColor
     this.nameColor = nameColor
     this.nameSeparateBox = nameSeparateBox
+    this.ffWindow = ffWindow
     this.marginX = marginX
     this.marginBottom = marginBottom
     this.screenWidth = screenWidth
@@ -426,8 +445,14 @@ export class DialogBox extends Container {
     this.advBoxHeight = boxHeight
     this.boxX = marginX
     this.boxY = screenHeight - boxHeight - marginBottom
+    if (this.ffWindow) this.applyFfGeometry()
 
     // --- 背景 ---
+    // ff は帯 → mask → 枠（bg）の順（mask は描画されず、帯だけを切り抜く）
+    this.ffBands = new Graphics()
+    this.ffMask = new Graphics()
+    this.ffBands.mask = this.ffMask
+    this.addChild(this.ffBands, this.ffMask)
     this.bg = new Graphics()
     if (!this.borderless) {
       this.drawBackground()
@@ -577,7 +602,7 @@ export class DialogBox extends Container {
 
   hide(): void {
     this.showing = false
-    this.bg.visible = false
+    this.setBackgroundVisible(false)
     this.nameBox.visible = false
     this.nameText.visible = false
     if (this.inlineNameText) this.inlineNameText.visible = false
@@ -590,6 +615,16 @@ export class DialogBox extends Container {
 
   get isShowing(): boolean {
     return this.showing
+  }
+
+  /** 窓の矩形（検証用の読み取り） */
+  getBoxRect(): { x: number; y: number; width: number; height: number } {
+    return { x: this.boxX, y: this.boxY, width: this.boxW, height: this.boxH }
+  }
+
+  private setBackgroundVisible(visible: boolean): void {
+    this.bg.visible = visible
+    this.ffBands.visible = visible
   }
 
   /** 背景の箱が実際に描画対象か（検証用の読み取り。会話外で出っぱなしになっていないかの確認に使う） */
@@ -810,6 +845,9 @@ export class DialogBox extends Container {
     } else if (this.splitLayoutRegion) {
       // split_layout (#442): adv でも下部バーではなくテキスト領域へ固定する（dialog_style 非依存）。
       this.applySplitLayoutBoxGeometry(this.splitLayoutRegion)
+    } else if (this.ffWindow) {
+      // FF 風 (#840): 画面上部に固定（画面サイズに追従。キャラ・話者の位置には依存しない）
+      this.applyFfGeometry()
     } else {
       // adv 下部バー: split_layout 解除直後は boxH が直前の applySplitLayoutBoxGeometry による
       // split 由来の値のまま残っているため、advBoxHeight へ確実にリセットしてから boxY を
@@ -822,6 +860,8 @@ export class DialogBox extends Container {
 
     // 背景再描画
     this.bg.clear()
+    this.ffBands.clear()
+    this.ffMask.clear()
     if (!this.effectiveBorderless()) this.drawBackground()
 
     // テキスト位置更新
@@ -886,7 +926,7 @@ export class DialogBox extends Container {
     }
     this.currentText = text
     this.showing = true
-    this.bg.visible = !this.effectiveBorderless()
+    this.setBackgroundVisible(!this.effectiveBorderless())
 
     // 話者名
     this.updateNameDisplay(name)
@@ -958,7 +998,7 @@ export class DialogBox extends Container {
     }
     this.currentText = cumulativeText
     this.showing = true
-    this.bg.visible = !this.effectiveBorderless()
+    this.setBackgroundVisible(!this.effectiveBorderless())
 
     // 話者名（novel = borderless で updateNameDisplay は名札を出さないが、経路は揃える）
     this.updateNameDisplay(name)
@@ -1115,6 +1155,8 @@ export class DialogBox extends Container {
     if (this.borderless === borderless) return
     this.borderless = borderless
     this.bg.clear()
+    this.ffBands.clear()
+    this.ffMask.clear()
     if (!this.effectiveBorderless()) {
       this.drawBackground()
     }
@@ -1718,7 +1760,35 @@ export class DialogBox extends Container {
     }
   }
 
+  /** ffWindow の窓の矩形・余白を画面サイズから決める (#840)。文字・箱は画面（シーン）サイズに追従する */
+  private applyFfGeometry(): void {
+    const r = computeFfDialogRect(this.screenWidth, this.screenHeight)
+    this.boxX = r.x
+    this.boxY = r.y
+    this.boxW = r.width
+    this.boxH = r.height
+    this.padding = r.padding
+  }
+
   private drawBackground(): void {
+    if (this.ffWindow) {
+      // 戦闘窓 (#744) と同じ ff-blue: 帯状グラデーションを角丸で切り抜き、その上に白枠
+      this.ffMask
+        .clear()
+        .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
+        .fill({ color: 0xffffff })
+      this.ffBands.clear()
+      for (const band of computeBands(this.boxH)) {
+        this.ffBands
+          .rect(this.boxX, this.boxY + band.y, this.boxW, band.h)
+          .fill({ color: band.color, alpha: FF_BLUE_PANEL_ALPHA })
+      }
+      this.bg
+        .clear()
+        .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
+        .stroke({ color: 0xffffff, width: 2 })
+      return
+    }
     this.bg.clear()
     this.bg.roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 8)
     this.bg.fill({ color: this.bgColor, alpha: 0.92 })
@@ -1749,7 +1819,11 @@ export class DialogBox extends Container {
       // 本文色 (#305): 既定は白。主人公セリフのときだけ NovelRenderer が暖アイボリーに切り替える。
       fill: this.bodyTextColor,
       lineHeight: this.lineHeight(),
-      dropShadow: this.effectiveBorderless() ? BORDERLESS_DROP_SHADOW : false,
+      dropShadow: this.effectiveBorderless()
+        ? BORDERLESS_DROP_SHADOW
+        : this.ffWindow
+          ? { ...FF_BLUE_TEXT_SHADOW }
+          : false,
     })
   }
 
