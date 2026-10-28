@@ -2146,6 +2146,10 @@ fn parse_event_image_exit_directive(content: &str) -> Event {
 /// `仰角:` があっても無視し常に `None`）。`仰角: 見上げ` は `Some(CameraElevation::LookUp)`、
 /// `仰角: 見下ろし` は `Some(CameraElevation::LookDown)`。それ以外（`仰角: 水平`・省略・未知値）は
 /// `None`（= 水平相当、既定）にフォールバックする。
+///
+/// zoom (#702): `ズーム: <キャラ名>` で対象キャラへ寄る。`mode` が `Theater` のときだけ解釈する。
+/// 空値・`全景`・省略は `None`（全景）。`強さ: <倍率>`（有限かつ正の数）は対象指定があるときだけ
+/// `zoom_strength` に保持され、省略時は `None`（ランタイム既定倍率）。
 fn parse_camera_mode_directive(content: &str) -> Event {
     let mut parts = content.split(',');
     let mode = match parts.next().unwrap_or("").trim() {
@@ -2155,6 +2159,8 @@ fn parse_camera_mode_directive(content: &str) -> Event {
 
     let mut orientation = None;
     let mut elevation = None;
+    let mut zoom: Option<String> = None;
+    let mut zoom_strength: Option<f32> = None;
     if mode == CameraMode::Theater {
         for part in parts {
             let trimmed = part.trim();
@@ -2168,14 +2174,33 @@ fn parse_camera_mode_directive(content: &str) -> Event {
                     "見下ろし" => elevation = Some(CameraElevation::LookDown),
                     _ => {}
                 }
+            } else if let Some(v) = trimmed.strip_prefix("ズーム:") {
+                // #702: 空値・`全景` は全景（None）。それ以外はキャラ名として保持する。
+                let name = v.trim();
+                if !name.is_empty() && name != "全景" {
+                    zoom = Some(name.to_string());
+                }
+            } else if let Some(v) = trimmed.strip_prefix("強さ:") {
+                // #702: 有限かつ正の値のみ受理（範囲のクランプはランタイム）。不正値は無視して既定倍率。
+                if let Ok(n) = v.trim().parse::<f32>() {
+                    if n.is_finite() && n > 0.0 {
+                        zoom_strength = Some(n);
+                    }
+                }
             }
         }
+    }
+    // 強さは対象指定があるときだけ意味を持つ（全景に強さだけ残る非対称 round-trip を避ける）。
+    if zoom.is_none() {
+        zoom_strength = None;
     }
 
     Event::CameraMode {
         mode,
         orientation,
         elevation,
+        zoom,
+        zoom_strength,
     }
 }
 
@@ -6474,6 +6499,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6482,6 +6509,8 @@ title: "test"
                 mode: CameraMode::Novel,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6490,6 +6519,8 @@ title: "test"
                 mode: CameraMode::Novel,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6508,6 +6539,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6516,6 +6549,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: Some(CameraOrientation::Stage),
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6524,6 +6559,8 @@ title: "test"
                 mode: CameraMode::Novel,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6551,6 +6588,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6569,6 +6608,8 @@ title: "test"
                 mode: CameraMode::Novel,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6604,11 +6645,15 @@ title: "test"
             mode: CameraMode::Novel,
             orientation: Some(CameraOrientation::Stage),
             elevation: None,
+            zoom: None,
+            zoom_strength: None,
         });
         let text_with_none = emit_single_camera_event(Event::CameraMode {
             mode: CameraMode::Novel,
             orientation: None,
             elevation: None,
+            zoom: None,
+            zoom_strength: None,
         });
 
         assert_eq!(
@@ -6629,6 +6674,8 @@ title: "test"
                 mode: CameraMode::Novel,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
         let re_emitted = emit(&reparsed);
@@ -6652,6 +6699,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6660,6 +6709,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: Some(CameraElevation::LookUp),
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6668,6 +6719,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: Some(CameraElevation::LookDown),
+                zoom: None,
+                zoom_strength: None,
             }
         );
         assert_eq!(
@@ -6676,6 +6729,8 @@ title: "test"
                 mode: CameraMode::Novel,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6693,8 +6748,50 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: Some(CameraOrientation::Stage),
                 elevation: Some(CameraElevation::LookUp),
+                zoom: None,
+                zoom_strength: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_camera_mode_zoom() {
+        // ズーム (#702)。全景・空値・Novel モードは None、強さは対象があるときだけ保持。
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, ズーム: ミナ]\n[カメラ: シアター, ズーム: ミナ, 強さ: 2.5]\n[カメラ: シアター, ズーム: 全景, 強さ: 2]\n[カメラ: シアター, ズーム:]\n[カメラ: シアター, ズーム: ミナ, 強さ: 謎]\n[カメラ: ノベル, ズーム: ミナ]\n";
+        let doc = parse(input);
+        let got: Vec<_> = doc.chapters[0].scenes[0]
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::CameraMode {
+                    zoom,
+                    zoom_strength,
+                    ..
+                } => Some((zoom.clone(), *zoom_strength)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (Some("ミナ".to_string()), None),
+                (Some("ミナ".to_string()), Some(2.5)),
+                (None, None),
+                (None, None),
+                (Some("ミナ".to_string()), None),
+                (None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn camera_mode_zoom_roundtrip() {
+        use crate::emitter::emit;
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## 1-1: t\n\n[カメラ: シアター, 仰角: 見上げ, ズーム: ミナ, 強さ: 1.5]\n[カメラ: シアター, ズーム: ミナ]\n[カメラ: シアター]\n";
+        let doc1 = parse(input);
+        let doc2 = parse(&emit(&doc1));
+        assert_eq!(doc1, doc2, "camera zoom round-trip should be stable");
+        assert!(emit(&doc1).contains("[カメラ: シアター]\n"), "全景は無出力");
     }
 
     #[test]
@@ -6726,11 +6823,15 @@ title: "test"
             mode: CameraMode::Novel,
             orientation: None,
             elevation: Some(CameraElevation::LookUp),
+            zoom: None,
+            zoom_strength: None,
         });
         let text_with_none = emit_single_camera_event(Event::CameraMode {
             mode: CameraMode::Novel,
             orientation: None,
             elevation: None,
+            zoom: None,
+            zoom_strength: None,
         });
 
         assert_eq!(
@@ -6758,6 +6859,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6777,6 +6880,8 @@ title: "test"
                 mode: CameraMode::Theater,
                 orientation: None,
                 elevation: None,
+                zoom: None,
+                zoom_strength: None,
             }
         );
     }
@@ -6796,6 +6901,8 @@ title: "test"
             mode: CameraMode::Theater,
             orientation: Some(CameraOrientation::Stage),
             elevation: Some(CameraElevation::LookUp),
+            zoom: None,
+            zoom_strength: None,
         };
         assert_eq!(
             doc_elevation_first.chapters[0].scenes[0].events[0],

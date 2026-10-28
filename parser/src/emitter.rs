@@ -671,6 +671,8 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 mode,
                 orientation,
                 elevation,
+                zoom,
+                zoom_strength,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -696,8 +698,27 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     (CameraMode::Theater, Some(CameraElevation::LookDown)) => ", 仰角: 見下ろし",
                     _ => "",
                 };
+                // #702: ズームも同じ非対称 round-trip 対策（mode と zoom の組で判定）。全景（None）は
+                // 無出力。強さは対象があるときだけ、指定されたときだけ出力する。空文字・`全景`・
+                // カンマや前後空白を含む名前は再パースで同一に戻らないので、出力しない側に倒す。
+                let zoom_suffix = match (mode, zoom.as_deref()) {
+                    (CameraMode::Theater, Some(name))
+                        if !name.is_empty()
+                            && name.trim() == name
+                            && name != "全景"
+                            && !name.contains(',') =>
+                    {
+                        match zoom_strength {
+                            Some(s) if s.is_finite() && *s > 0.0 => {
+                                format!(", ズーム: {name}, 強さ: {s}")
+                            }
+                            _ => format!(", ズーム: {name}"),
+                        }
+                    }
+                    _ => String::new(),
+                };
                 out.push_str(&format!(
-                    "[カメラ: {mode_token}{orientation_suffix}{elevation_suffix}]\n"
+                    "[カメラ: {mode_token}{orientation_suffix}{elevation_suffix}{zoom_suffix}]\n"
                 ));
                 prev_was_dialog_or_text = false;
             }
