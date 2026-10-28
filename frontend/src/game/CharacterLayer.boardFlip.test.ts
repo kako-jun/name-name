@@ -9,14 +9,32 @@
  * texture は実 Texture.WHITE を返す Assets.load モックで供給する（plain object だと mesh が作れない）。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { Assets, PerspectiveMesh, Texture } from 'pixi.js'
+import { Assets, BufferImageSource, PerspectiveMesh, Texture } from 'pixi.js'
 import { CharacterLayer } from './CharacterLayer'
+import { computeBoardFlipCorners, computeBoardFlipFrame } from './boardFlip'
 
 const flushPromises = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 interface StateLike {
-  sprite: { visible: boolean; alpha: number; filters: unknown[] | null; destroyed: boolean }
-  flipAnimation?: { role: 'out' | 'in'; mesh: PerspectiveMesh; durationMs: number }
+  sprite: {
+    visible: boolean
+    alpha: number
+    filters: unknown[] | null
+    destroyed: boolean
+    x: number
+    y: number
+    scale: { x: number; y: number }
+    texture: Texture
+    parent: unknown
+  }
+  label?: { alpha: number }
+  attached?: boolean
+  flipAnimation?: {
+    role: 'out' | 'in'
+    mesh: PerspectiveMesh
+    durationMs: number
+    fromAngleRad?: number
+  }
   fadeAnimation: unknown
 }
 interface Internals {
@@ -32,24 +50,40 @@ function advance(layer: CharacterLayer, ms: number): void {
   i.animTicker?.update()
 }
 
+function makeTexture(w: number, h: number): Texture {
+  return new Texture({
+    source: new BufferImageSource({ resource: new Uint8Array(w * h * 4), width: w, height: h }),
+  })
+}
+// 1x1 の WHITE だと四隅の検証が意味を持たないので、非正方形の実寸テクスチャを使う。
+const TEX_A = makeTexture(40, 80)
+const TEX_THIRD = makeTexture(60, 100)
+
 function mockLoadOk(): void {
-  vi.spyOn(Assets, 'load').mockResolvedValue(Texture.WHITE as never)
+  vi.spyOn(Assets, 'load').mockImplementation((async (url: string) =>
+    String(url).includes('third') ? TEX_THIRD : TEX_A) as never)
 }
 
 /** hero を normal で出し、load 完了まで進めてから surprised に変える。 */
 async function setupPoseChange(
   mode: 'Theater' | 'Novel',
   fadeMs = 1000,
-  instantSecond = false
+  instantSecond = false,
+  opts: { position?: string; depth?: number; fit?: boolean } = {}
 ): Promise<{ layer: CharacterLayer; oldState: StateLike; newState: StateLike }> {
   mockLoadOk()
   const layer = new CharacterLayer(800, 450)
   layer.setCharacterFadeMs(fadeMs)
   layer.setCamera(mode, 'Front' as never, null)
-  layer.show('hero', 'normal', '中央', '/assets', { instant: true })
+  const position = opts.position ?? '中央'
+  const base = { depth: opts.depth, fit: opts.fit }
+  layer.show('hero', 'normal', position, '/assets', { instant: true, ...base })
   await flushPromises()
   const oldState = internals(layer).characters.get('hero')!
-  layer.show('hero', 'surprised', '中央', '/assets', instantSecond ? { instant: true } : {})
+  layer.show('hero', 'surprised', position, '/assets', {
+    ...(instantSecond ? { instant: true } : {}),
+    ...base,
+  })
   await flushPromises()
   const newState = internals(layer).characters.get('hero')!
   return { layer, oldState, newState }
@@ -190,5 +224,208 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
     expect(m1.destroyed).toBe(true)
     expect(m2.destroyed).toBe(true)
     expect(meshCount(layer)).toBe(0)
+  })
+
+  it('S4-1: 角度0の板の四隅が sprite の実範囲（depth>0 の縮尺・verticalOffset・fit 含む）と一致する', async () => {
+    for (const opts of [{ depth: 10 }, { depth: 10, fit: true }, {}]) {
+      const { layer, oldState } = await setupPoseChange('Theater', 1000, false, opts)
+      const sp = oldState.sprite
+      const w = sp.texture.width * Math.abs(sp.scale.x)
+      const h = sp.texture.height * Math.abs(sp.scale.y)
+      // depth>0 の Theater では縮小される（射影が実際に効いている前提の確認）。
+      if (opts.depth) expect(sp.scale.y).toBeLessThan(1)
+      const expected = computeBoardFlipCorners(sp.x, sp.y, w, h, 0)
+      const c = oldState.flipAnimation!.mesh.geometry.corners
+      expect(c[0]).toBeCloseTo(sp.x - w / 2, 3)
+      expect(c[1]).toBeCloseTo(sp.y - h, 3)
+      expect(c[2]).toBeCloseTo(sp.x + w / 2, 3)
+      expect(c[3]).toBeCloseTo(sp.y - h, 3)
+      expect(c[4]).toBeCloseTo(sp.x + w / 2, 3)
+      expect(c[5]).toBeCloseTo(sp.y, 3)
+      expect(c[6]).toBeCloseTo(sp.x - w / 2, 3)
+      expect(c[7]).toBeCloseTo(sp.y, 3)
+      expect(c[0]).toBeCloseTo(expected.x0, 3)
+      layer.clear()
+    }
+  })
+
+  it('S2: 回転中の全フレームで mesh の頂点が有限値（half ちょうど・MAX 角を含む）', async () => {
+    const { layer, oldState, newState } = await setupPoseChange('Theater')
+    const steps = [0, 100, 249, 1, 250, 1, 250, 1, 1, 400]
+    for (const ms of steps) {
+      advance(layer, ms)
+      for (const st of [oldState, newState]) {
+        const mesh = st.flipAnimation?.mesh
+        if (!mesh || mesh.destroyed) continue
+        for (const v of mesh.geometry.positions) expect(Number.isFinite(v)).toBe(true)
+      }
+    }
+  })
+
+  it('M1: 旧ポーズの板が回っている最中に同じ位置へ別キャラを通常速度で出しても、そのキャラが表示される', async () => {
+    const { layer } = await setupPoseChange('Theater')
+    const hero = internals(layer)
+    const oldBoard = [...hero.characters.values()].find((st) => st.flipAnimation?.role === 'out')!
+    layer.show('villain', 'normal', '中央', '/assets', {})
+    await flushPromises()
+    // 回り去る旧板は退場対象にならず、退場フェードも重ならない。
+    expect(oldBoard.fadeAnimation).toBeNull()
+    for (let i = 0; i < 12; i++) {
+      advance(layer, 250)
+      await flushPromises()
+    }
+    const villain = internals(layer).characters.get('villain')
+    expect(villain).toBeDefined()
+    expect(villain!.attached).toBe(true)
+    expect(villain!.sprite.parent).toBe(layer)
+    expect(villain!.sprite.alpha).toBe(1)
+    expect(meshCount(layer)).toBe(0)
+  })
+
+  it('M1: 旧板の out が退場フェードの完了より先に終わっても、フェードの onComplete が呼ばれる', async () => {
+    const { layer, oldState } = await setupPoseChange('Theater')
+    // 回転中の旧板に退場フェードを直接張る（evict 以外の経路: clearForSceneTransition 等を模す）。
+    let called = 0
+    ;(layer as unknown as { startFade: (...a: unknown[]) => void }).startFade(
+      oldState,
+      1,
+      0,
+      true,
+      () => called++,
+      5000
+    )
+    advance(layer, 1100) // out の回転(1000ms)が退場フェード(5000ms)より先に完了して破棄される
+    expect(called).toBe(1)
+    expect(oldState.sprite.destroyed).toBe(true)
+  })
+
+  it('M2: オフスクリーン位置の名前ラベルは回転の段階に合わせて旧が消え新が現れる', async () => {
+    // jsdom には canvas が無く Text の幅計測が落ちるため、ラベル幅合わせだけ無効化する。
+    vi.spyOn(CharacterLayer.prototype as never, 'fitLabelToSprite').mockImplementation(() => {})
+    const { layer, oldState, newState } = await setupPoseChange('Theater', 1000, false, {
+      position: 'off_right',
+    })
+    expect(oldState.label).toBeDefined()
+    expect(newState.label).toBeDefined()
+    expect(oldState.label!.alpha).toBe(1)
+    expect(newState.label!.alpha).toBe(0)
+    advance(layer, 300)
+    expect(oldState.label!.alpha).toBe(1)
+    expect(newState.label!.alpha).toBe(0)
+    advance(layer, 300) // 600ms: 後半
+    expect(oldState.label!.alpha).toBe(0)
+    expect(newState.label!.alpha).toBe(1)
+    advance(layer, 500) // 完了
+    expect(newState.label!.alpha).toBe(1)
+  })
+
+  it('S1: 回転中の通常速度 remove で mesh の alpha が sprite の alpha に追従する', async () => {
+    const { layer, newState } = await setupPoseChange('Theater')
+    layer.remove('hero')
+    advance(layer, 600)
+    const mesh = newState.flipAnimation!.mesh
+    expect(newState.sprite.alpha).toBeLessThan(1)
+    expect(newState.sprite.alpha).toBeGreaterThan(0)
+    expect(mesh.alpha).toBeCloseTo(newState.sprite.alpha, 6)
+  })
+
+  it('S4-4/S5: A→B→C の連続変更で B は現在角度から回し続け、最終的に C だけが残る', async () => {
+    const { layer, newState: b } = await setupPoseChange('Theater')
+    advance(layer, 750) // B は in の後半で可視
+    const angleB = computeBoardFlipFrame('in', 750, 1000).angleRad
+    expect(angleB).toBeLessThan(0)
+    layer.show('hero', 'third', '中央', '/assets', {})
+    await flushPromises()
+    const c = internals(layer).characters.get('hero')!
+    expect(c).not.toBe(b)
+    expect(b.flipAnimation?.role).toBe('out')
+    expect(b.flipAnimation?.fromAngleRad).toBeCloseTo(angleB, 1)
+    // out 開始直後の B の四隅は B の現在角（angleB）の板と一致する（0° に跳ばない）。
+    const sp = b.sprite
+    const exp = computeBoardFlipCorners(
+      sp.x,
+      sp.y,
+      sp.texture.width * sp.scale.x,
+      sp.texture.height * sp.scale.y,
+      angleB
+    )
+    const cc = b.flipAnimation!.mesh.geometry.corners
+    expect(cc[0]).toBeCloseTo(exp.x0, 0)
+    expect(cc[2]).toBeCloseTo(exp.x1, 0)
+    for (let i = 0; i < 8; i++) {
+      advance(layer, 400)
+      await flushPromises()
+    }
+    expect(internals(layer).characters.size).toBe(1)
+    expect(internals(layer).characters.get('hero')).toBe(c)
+    expect(c.sprite.visible).toBe(true)
+    expect(b.sprite.destroyed).toBe(true)
+    expect(meshCount(layer)).toBe(0)
+  })
+
+  it('S5: まだ見えていない B（in の前半）は C への変更で回さず即破棄される', async () => {
+    const { layer, newState: b } = await setupPoseChange('Theater')
+    advance(layer, 200)
+    layer.show('hero', 'third', '中央', '/assets', {})
+    await flushPromises()
+    advance(layer, 16)
+    expect(b.sprite.destroyed).toBe(true)
+    expect(b.flipAnimation).toBeUndefined()
+  })
+
+  it('S5: 回転中の instant で表情が変わると mesh の texture も追従する', async () => {
+    const { layer, newState } = await setupPoseChange('Theater')
+    layer.show('hero', 'third', '中央', '/assets', { instant: true })
+    await flushPromises()
+    advance(layer, 600)
+    expect(newState.sprite.texture).toBe(TEX_THIRD)
+    expect(newState.flipAnimation!.mesh.texture).toBe(TEX_THIRD)
+  })
+
+  it('S4-6: mesh は対応する sprite の直前（同じ z-order）に入る', async () => {
+    const { layer, oldState, newState } = await setupPoseChange('Theater')
+    for (const st of [oldState, newState]) {
+      const mesh = st.flipAnimation!.mesh
+      const i = layer.children.indexOf(mesh)
+      expect(i).toBeGreaterThanOrEqual(0)
+      expect(layer.children.indexOf(st.sprite as never)).toBe(i + 1)
+    }
+  })
+
+  it('N3: 衝突退場待ちで未 attach の旧 state は回さない（最前面に突然現れない）', async () => {
+    mockLoadOk()
+    const layer = new CharacterLayer(800, 450)
+    layer.setCharacterFadeMs(1000)
+    layer.setCamera('Theater', 'Front' as never, null)
+    layer.show('villain', 'normal', '右', '/assets', { instant: true })
+    await flushPromises()
+    layer.show('hero', 'normal', '右', '/assets', {})
+    await flushPromises()
+    const oldHero = internals(layer).characters.get('hero')!
+    expect(oldHero.attached).toBeFalsy() // villain の退場待ちで未 attach
+    layer.show('hero', 'surprised', '右', '/assets', {})
+    await flushPromises()
+    expect(oldHero.flipAnimation).toBeUndefined()
+    expect(meshCount(layer)).toBe(1) // 新板の in だけ
+  })
+
+  it('N2: 完了した板の geometry も破棄される（mesh.destroy() だけでは残る）', async () => {
+    const { layer, oldState, newState } = await setupPoseChange('Theater')
+    const spies = [oldState, newState].map((st) =>
+      vi.spyOn(st.flipAnimation!.mesh.geometry, 'destroy')
+    )
+    advance(layer, 1100)
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('S4-1: 縦横の拡大率が違う sprite でも四隅の高さ・幅は scale.y / scale.x を別々に反映する', async () => {
+    const { layer, oldState } = await setupPoseChange('Theater')
+    const sp = oldState.sprite
+    sp.scale.x = 1.5
+    sp.scale.y = 2.5
+    advance(layer, 1) // 回転角はほぼ 0
+    const c = oldState.flipAnimation!.mesh.geometry.corners
+    expect(c[2] - c[0]).toBeCloseTo(sp.texture.width * 1.5, 0)
+    expect(c[7] - c[1]).toBeCloseTo(sp.texture.height * 2.5, 0)
   })
 })
