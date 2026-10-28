@@ -17,6 +17,7 @@ import {
 } from 'pixi.js'
 import { PixelateFilter } from 'pixi-filters'
 import type { OutlineFilter } from 'pixi-filters'
+import { computeBoardSway, isBoardSwayEnabled } from './boardSway'
 import { computeBoardFlipCorners, computeBoardFlipFrame, type BoardFlipRole } from './boardFlip'
 import { createPaperDollOutlineFilter, type PaperDollOutlineConfig } from './outlineFilter'
 import type {
@@ -833,6 +834,8 @@ export class CharacterLayer extends Container {
    * （NovelRenderer 側のカメラ状態フィールドとは独立、setCamera 呼び出しで明示的に同期する設計）。
    */
   private cameraMode: CameraMode = 'Novel'
+  /** 動画書き出し中 (#350)。true の間は板の揺らぎ (#701) を無効にする（NovelRenderer.setExporting から）。 */
+  private swayExporting = false
   private cameraOrientation: CameraOrientation = 'Audience'
   private cameraElevation: CameraElevation | null = null
   /** カメラズーム (#702) のポーズ。identity = 全景。 */
@@ -1124,6 +1127,37 @@ export class CharacterLayer extends Container {
       // sprite 幅が変わったので名札も追従して収め直す（縮んだ立ち絵から名札がはみ出さない #360）。
       this.fitLabelToSprite(state.sprite, state.label)
     }
+  }
+
+  /** 動画書き出しの開始/終了を通知する (#701)。書き出し中は板の揺らぎを出さず最終ポーズで動かす。 */
+  setExporting(exporting: boolean): void {
+    this.swayExporting = exporting
+    if (exporting) {
+      for (const state of this.characters.values()) this.resetSway(state)
+    }
+  }
+
+  /** 板の揺らぎ (#701) を今出してよいか（シアター限定・書き出し中と prefers-reduced-motion では無効）。 */
+  private isSwayEnabled(): boolean {
+    let reducedMotion = false
+    try {
+      reducedMotion =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    } catch {
+      reducedMotion = false
+    }
+    return isBoardSwayEnabled({
+      isTheater: this.cameraMode === 'Theater',
+      exporting: this.swayExporting,
+      reducedMotion,
+    })
+  }
+
+  /** 板の揺らぎ (#701) の傾きを 0 に戻す。移動 tween の終了・取り消し時に必ず呼ぶ。 */
+  private resetSway(state: CharacterState): void {
+    if (!state.sprite.destroyed && state.sprite.skew.x !== 0) state.sprite.skew.x = 0
   }
 
   /**
@@ -1617,6 +1651,7 @@ export class CharacterLayer extends Container {
    */
   private reviveFromInProgressStageMotion(existing: CharacterState): void {
     if (!existing.stageMotion) return
+    this.resetSway(existing)
     existing.sprite.x = existing.stageMotion.baseX
     if (existing.label) existing.label.x = existing.sprite.x
     existing.stageMotion = null
@@ -3645,6 +3680,7 @@ export class CharacterLayer extends Container {
         if (sm) {
           const tm = (this.elapsedMs - sm.startMs) / sm.durationMs
           if (tm >= 1) {
+            this.resetSway(state)
             state.stageMotion = null
             const onComplete = sm.onComplete
             if (sm.kind === 'exit') {
@@ -3670,6 +3706,10 @@ export class CharacterLayer extends Container {
               this.screenWidth
             )
             state.sprite.x = sm.baseX + offset
+            // シアターの歩行中だけ板が揺れる (#701)。無効条件では 0 のまま（最終ポーズと同じ）。
+            state.sprite.skew.x = this.isSwayEnabled()
+              ? computeBoardSway(this.elapsedMs - sm.startMs, sm.durationMs)
+              : 0
           }
         }
 
@@ -3935,6 +3975,7 @@ export class CharacterLayer extends Container {
     // 続け、tween 完了時に baseX へスナップする視覚グリッチになる。sprite.x はクリア時点の値の
     // まま凍結され、以後は fadeAnimation（alpha のみ）に一本化される。
     if (state.stageMotion) {
+      this.resetSway(state)
       state.stageMotion = null
     }
     this.startFade(state, state.sprite.alpha, 0, true, options?.onComplete, durationMs)
