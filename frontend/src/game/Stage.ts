@@ -17,7 +17,7 @@
  * それらへ伝える（伝える順序は旧実装どおり、輪郭は 立ち絵→大道具、カメラは 背景板→大道具→立ち絵）。
  */
 import type { Container } from 'pixi.js'
-import type { CameraElevation, CameraMode, CameraOrientation } from '../types'
+import type { CameraElevation, CameraMode, CameraOrientation, CameraZoom } from '../types'
 import { BackgroundController, type BackgroundHost } from './BackgroundController'
 import type { NovelGameState } from './GameState'
 import type { PaperDollOutlineConfig } from './outlineFilter'
@@ -31,7 +31,9 @@ export interface StageHost extends BackgroundHost, ScreenEffectsHost {
   applyCamera(
     mode: CameraMode,
     orientation: CameraOrientation,
-    elevation: CameraElevation | null
+    elevation: CameraElevation | null,
+    zoom: CameraZoom | null,
+    snap: boolean
   ): void
   /** 紙人形輪郭を立ち絵・大道具へ伝える（この順）。 */
   applyPaperDollOutline(config: PaperDollOutlineConfig | null): void
@@ -48,6 +50,7 @@ export type StageState = Pick<
   | 'cameraMode'
   | 'cameraOrientation'
   | 'cameraElevation'
+  | 'cameraZoom'
   | 'paperDollOutline'
 >
 
@@ -58,6 +61,7 @@ export class Stage {
   private _cameraMode: CameraMode = 'Novel'
   private _cameraOrientation: CameraOrientation = 'Audience'
   private _cameraElevation: CameraElevation | null = null
+  private _cameraZoom: CameraZoom | null = null
   private _paperDollOutline: PaperDollOutlineConfig | null = null
 
   constructor(
@@ -80,6 +84,9 @@ export class Stage {
   get cameraElevation(): CameraElevation | null {
     return this._cameraElevation
   }
+  get cameraZoom(): CameraZoom | null {
+    return this._cameraZoom
+  }
   get paperDollOutline(): PaperDollOutlineConfig | null {
     return this._paperDollOutline
   }
@@ -90,12 +97,15 @@ export class Stage {
   setCamera(
     mode: CameraMode,
     orientation: CameraOrientation,
-    elevation: CameraElevation | null
+    elevation: CameraElevation | null,
+    zoom: CameraZoom | null = null,
+    snap = true
   ): void {
     this._cameraMode = mode
     this._cameraOrientation = orientation
     this._cameraElevation = elevation
-    this.host.applyCamera(mode, orientation, elevation)
+    this._cameraZoom = mode === 'Theater' ? zoom : null
+    this.host.applyCamera(mode, orientation, elevation, this._cameraZoom, snap)
   }
 
   /** 紙人形輪郭を更新し、立ち絵・大道具へ伝える（`[紙人形輪郭:]` ディレクティブ・reset・restore 共通）。 */
@@ -140,7 +150,7 @@ export class Stage {
       this.setPaperDollOutline(null)
     }
     this.effects.setBlackout(false)
-    this.setCamera('Novel', 'Audience', null)
+    this.setCamera('Novel', 'Audience', null, null, true)
     this.effects.resetNovelScrimState()
   }
 
@@ -152,6 +162,7 @@ export class Stage {
       cameraMode: this._cameraMode,
       cameraOrientation: this._cameraOrientation,
       cameraElevation: this._cameraElevation,
+      cameraZoom: this._cameraZoom,
       paperDollOutline: this._paperDollOutline,
     }
   }
@@ -168,7 +179,13 @@ export class Stage {
     this.background.restore(state)
     this.effects.restore(state)
     this.setPaperDollOutline(state.paperDollOutline)
-    this.setCamera(state.cameraMode, state.cameraOrientation, state.cameraElevation)
+    this.setCamera(
+      state.cameraMode,
+      state.cameraOrientation,
+      state.cameraElevation,
+      state.cameraZoom ?? null,
+      true
+    )
   }
 
   // --- 破棄 ---

@@ -37,6 +37,7 @@ function referenceBuild(
     cameraMode: 'Novel',
     cameraOrientation: 'Audience',
     cameraElevation: null,
+    cameraZoom: null,
     paperDollOutline: null,
     storyEnded: false,
   }
@@ -66,6 +67,7 @@ describe('buildFreshPositionState (#822)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      cameraZoom: null,
       paperDollOutline: null,
       storyEnded: false,
       // 入場時 flags (#799)。flags 省略は {}

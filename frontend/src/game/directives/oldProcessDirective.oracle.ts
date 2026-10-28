@@ -229,7 +229,11 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
     w.stage.setCamera(
       event.CameraMode.mode,
       event.CameraMode.orientation ?? 'Audience',
-      event.CameraMode.elevation ?? null
+      event.CameraMode.elevation ?? null,
+      event.CameraMode.zoom
+        ? { target: event.CameraMode.zoom, strength: event.CameraMode.zoom_strength ?? null }
+        : null,
+      w.env.skipMode
     )
     return true
   }

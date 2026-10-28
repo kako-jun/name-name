@@ -1139,6 +1139,16 @@ pub enum Event {
         orientation: Option<CameraOrientation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elevation: Option<CameraElevation>,
+        /// ズーム対象のキャラ名 (#702)。`[カメラ: シアター, ズーム: ミナ]`。`mode == Theater` の
+        /// ときだけ意味を持つ。`None` = 全景（既定・省略/`全景`/空値/`Novel` モード時の正規形）。
+        /// 存在しないキャラ名はパーサでは判定せず保持し、ランタイム側が全景扱い＋警告にフォールバックする。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom: Option<String>,
+        /// ズームの強さ（拡大倍率、`強さ: 1.5`）(#702)。`zoom` が `Some` のときだけ保持する
+        /// （`zoom == None` なら常に `None`）。`None` = ランタイム既定倍率。有限かつ正の値のみ受理し、
+        /// 範囲のクランプはランタイム側で行う。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom_strength: Option<f32>,
     },
     SceneTransition,
     /// 手動改頁マーカー (#292 Phase 2)。本文中の単独行 `---` から生成される。

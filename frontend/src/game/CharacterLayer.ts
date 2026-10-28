@@ -290,8 +290,9 @@ export interface SplitLayoutTransform {
  * `computeCoverFit`/`computePortraitContainFit`（novelLayout.ts / DialogBox.ts）は個々の
  * テクスチャを矩形に収めるが、これは **CharacterLayer Container 全体**（内部の個々の立ち絵の
  * 座標計算には一切触れない）を丸ごと 1 つの矩形へ射影する点が異なる。適用側
- * （`CharacterLayer.setSplitLayoutRegion`）は `this.scale.set(scale)` / `this.position.set(x, y)`
- * を呼ぶだけで、個々のキャラの位置・スケール計算は完全に無傷（screenWidth/screenHeight 基準の
+ * （`CharacterLayer.setSplitLayoutRegion` → `applyLayerTransform`）は Container の
+ * `scale` / `position` にこの結果を設定する（カメラズーム #702 のポーズとも同じ経路で合成されるが、
+ * split_layout 有効中はズームが無効なので実際には split の値だけが入る）だけで、個々のキャラの位置・スケール計算は完全に無傷（screenWidth/screenHeight 基準の
  * まま）に保てる — 単一責務・変更範囲の最小化（doctrine 規律4）。
  *
  * `scale = min(region.width / nativeWidth, region.height / nativeHeight)`（contain。はみ出さない）。
@@ -834,6 +835,8 @@ export class CharacterLayer extends Container {
   private cameraMode: CameraMode = 'Novel'
   private cameraOrientation: CameraOrientation = 'Audience'
   private cameraElevation: CameraElevation | null = null
+  /** カメラズーム (#702) のポーズ。identity = 全景。 */
+  private zoomPose = { scale: 1, x: 0, y: 0 }
 
   /**
    * 紙人形風の輪郭 (#699)。`setPaperDollOutline()`（`[紙人形輪郭:]` イベント処理 / applyState
@@ -905,14 +908,31 @@ export class CharacterLayer extends Container {
    */
   setSplitLayoutRegion(region: LayoutRect | null): void {
     this.splitLayoutRegion = region
-    if (region) {
-      const t = computeCharacterLayerSplitTransform(this.screenWidth, this.screenHeight, region)
-      this.scale.set(t.scale)
-      this.position.set(t.x, t.y)
-    } else {
-      this.scale.set(1)
-      this.position.set(0, 0)
-    }
+    this.applyLayerTransform()
+  }
+
+  /**
+   * カメラズーム (#702) のポーズを設定する。split_layout の変換（Container 全体の scale/position）と
+   * 合成する（`p' = z.s * (split.s * p + split.t) + z.t`）。ただし split_layout 有効中は
+   * `CameraZoomController` がズームを無効にして identity しか渡さないため、実際の表示では
+   * 常にどちらか一方だけが効く。ズーム無し（identity）では従来どおりの split 変換のみ（後方互換）。
+   */
+  setZoomPose(pose: { scale: number; x: number; y: number }): void {
+    this.zoomPose = pose
+    this.applyLayerTransform()
+  }
+
+  private applyLayerTransform(): void {
+    const split = this.splitLayoutRegion
+      ? computeCharacterLayerSplitTransform(
+          this.screenWidth,
+          this.screenHeight,
+          this.splitLayoutRegion
+        )
+      : { scale: 1, x: 0, y: 0 }
+    const z = this.zoomPose
+    this.scale.set(z.scale * split.scale)
+    this.position.set(z.scale * split.x + z.x, z.scale * split.y + z.y)
   }
 
   /** 現在の split_layout キャラ画像領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */
@@ -3976,6 +3996,26 @@ export class CharacterLayer extends Container {
     const state = this.characters.get(name)
     if (!state) return null
     return { x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 }
+  }
+
+  /** 指定キャラの立ち絵が存在するか（テクスチャ未読み込みでもよい。破棄済みは除く）。カメラズーム (#702) 用。 */
+  hasCharacter(name: string): boolean {
+    const state = this.characters.get(name)
+    return !!state && !state.sprite.destroyed
+  }
+
+  /**
+   * カメラズーム (#702) のフォーカス点。`getCurrentPosition` と同じだが、テクスチャ未読み込み
+   * （`Texture.EMPTY` のまま）または読み込み失敗の間は null を返す。読み込み前は体の中心が足元に倒れ、読み込み完了で
+   * y が補間なしに飛んで背景が跳ねるため、読み込み完了を「登場」として扱い補間して寄せる。
+   */
+  getZoomFocus(name: string): { x: number; y: number } | null {
+    const state = this.characters.get(name)
+    if (!state || state.sprite.destroyed) return null
+    // 未読み込み・読み込み失敗の sprite は共有の Texture.EMPTY を持つ（`hasLoadedTexture` と同じ基準）。
+    const texture = state.sprite.texture
+    if (!texture || texture === Texture.EMPTY || texture.height <= 0) return null
+    return this.getCurrentPosition(name)
   }
 
   /**

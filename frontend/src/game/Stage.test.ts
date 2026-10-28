@@ -106,6 +106,7 @@ describe('Stage.reset(policy) (#828 7c)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      cameraZoom: null,
       paperDollOutline: null,
     })
     expect(s.state.cameraCalls).toEqual([['Novel', 'Audience', null]])
@@ -126,6 +127,7 @@ describe('Stage.reset(policy) (#828 7c)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      cameraZoom: null,
       paperDollOutline: { color: '#abcdef', thickness: 3 },
     })
     expect(s.state.cameraCalls).toEqual([['Novel', 'Audience', null]])
@@ -226,6 +228,7 @@ describe('Stage.capture / restore (#828 7c)', () => {
         'backgroundFade',
         'backgroundPath',
         'cameraElevation',
+        'cameraZoom',
         'cameraMode',
         'cameraOrientation',
         'isBlackout',
@@ -296,6 +299,7 @@ describe('Stage.capture / restore (#828 7c)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      cameraZoom: null,
       paperDollOutline: null,
     })
     const c = s.stage.capture()

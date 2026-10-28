@@ -164,6 +164,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      cameraZoom: null,
       paperDollOutline: null,
       storyEnded: true,
     }
@@ -223,6 +224,7 @@ describe('NovelRenderer 終劇オーバーレイ (#630)', () => {
       cameraMode: 'Novel',
       cameraOrientation: 'Audience',
       cameraElevation: null,
+      cameraZoom: null,
       paperDollOutline: null,
       storyEnded: true,
     }

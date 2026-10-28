@@ -28,6 +28,13 @@ export type StageDirection = 'Kamite' | 'Shimote'
  *  アングル、俯瞰・儚さ）。`向き`（客席/舞台）とは独立した第2軸。`CameraMode` が 'Novel'
  *  のときは意味を持たない。 */
 export type CameraElevation = 'LookUp' | 'LookDown'
+/** シアターモードのカメラズーム (#702)。`[カメラ: シアター, ズーム: キャラ名, 強さ: 1.5]` の settled state。
+ *  `target` はズーム先のキャラ名、`strength` は拡大倍率（null = ランタイム既定倍率）。
+ *  全景（ズームなし）は状態としては `null` で表す。`向き`・`仰角` とは独立した第3軸。 */
+export interface CameraZoom {
+  target: string
+  strength: number | null
+}
 /** イベント絵の背面（背景・立ち絵）扱い (#351)。既定は 'Hide' */
 export type EventImageBack = 'Hide' | 'Keep'
 /** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
@@ -843,6 +850,11 @@ export type Event =
         mode: CameraMode
         orientation?: CameraOrientation | null
         elevation?: CameraElevation | null
+        /** ズーム対象のキャラ名 (#702)。`ズーム: キャラ名`。null/undefined = 全景（既定）。
+         *  `mode === 'Theater'` のときだけ意味を持つ。存在しないキャラ名は全景扱い＋警告。 */
+        zoom?: string | null
+        /** ズームの強さ（拡大倍率）(#702)。null/undefined = ランタイム既定倍率。 */
+        zoom_strength?: number | null
       }
     }
   | {

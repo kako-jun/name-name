@@ -237,9 +237,9 @@ describe('NovelRenderer × Stage 配線 (#828 7c)', () => {
     p.processDirective({ CameraMode: { mode: 'Theater' } } as Event)
     p.processDirective({ CameraMode: { mode: 'Novel' } } as Event)
     expect(cam.mock.calls).toEqual([
-      ['Theater', 'Stage', 'LookDown'],
-      ['Theater', 'Audience', null],
-      ['Novel', 'Audience', null],
+      ['Theater', 'Stage', 'LookDown', null, false],
+      ['Theater', 'Audience', null, null, false],
+      ['Novel', 'Audience', null, null, false],
     ])
     p.processDirective({
       PaperDollOutline: { enabled: true, color: '#111111', thickness: 4 },
@@ -280,8 +280,8 @@ describe('NovelRenderer × Stage 配線 (#828 7c)', () => {
     for (const [k, v] of Object.entries(c)) {
       expect((snap as unknown as Record<string, unknown>)[k]).toEqual(v)
     }
-    // 演出フィールド9個すべてがスナップショットに載っている
-    expect(Object.keys(c)).toHaveLength(9)
+    // 演出フィールド10個すべてがスナップショットに載っている
+    expect(Object.keys(c)).toHaveLength(10)
   })
 
   it('destroy: stage.cancelAllTimers は動画破棄より前、stage.release は app.destroy より前で、タイマーは残らない', () => {

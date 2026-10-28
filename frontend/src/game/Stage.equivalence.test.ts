@@ -193,6 +193,7 @@ function makeOldRig(): Rig {
         cameraMode,
         cameraOrientation,
         cameraElevation,
+        cameraZoom: null,
         paperDollOutline,
       }
     },
@@ -363,6 +364,7 @@ const SAVED: StageState = {
   cameraMode: 'Theater',
   cameraOrientation: 'Stage',
   cameraElevation: 'LookDown',
+  cameraZoom: null,
   paperDollOutline: { color: '#010203', thickness: 5 },
 }
 const SAVED_PLAIN: StageState = {
@@ -374,6 +376,7 @@ const SAVED_PLAIN: StageState = {
   cameraMode: 'Novel',
   cameraOrientation: 'Audience',
   cameraElevation: null,
+  cameraZoom: null,
   paperDollOutline: null,
 }
 

@@ -11,6 +11,7 @@
  * - SE: 単発再生（複数同時可）
  */
 
+import { CameraZoomController } from './cameraZoom'
 import { Application, Text as PixiText, TextStyle } from 'pixi.js'
 import {
   CharacterLayer,
@@ -304,7 +305,8 @@ export class NovelRenderer {
    * `characterLayer.getSplitLayoutRegion()` の退避値 (#628 フェーズ2b)。タイトル画面は
    * ゲーム画面（split_layout の画像/テキスト分割）の外側にある全画面 UI のため、ロゴは画面
    * 中央に出したい。しかし `characterLayer.setSplitLayoutRegion()` は Container 全体の
-   * scale/position を書き換える設計（`CharacterLayer.setSplitLayoutRegion` 参照）で、
+   * scale/position を書き換える設計（`CharacterLayer.setSplitLayoutRegion` 参照。カメラズームの
+   * ポーズと合成する `applyLayerTransform` 経由）で、
    * `showImage()` の x/y 比率はそのまま「領域内での比率」に射影されてしまう——結果、
    * `[選択: x=0.5]` のつもりのロゴが split_layout のキャラ領域（画面半分）の中央に寄って
    * 見えてしまう（実機検証で発覚。gymnasia で確認）。`showTitleScreen()` は分割を一時解除して
@@ -599,16 +601,35 @@ export class NovelRenderer {
         this.dialogBox.alpha = alpha
       },
       setSeekBarBlackoutHidden: (hidden) => this.seekBar.setBlackoutHidden(hidden),
-      applyCamera: (mode, orientation, elevation) => {
+      applyCamera: (mode, orientation, elevation, zoom, snap) => {
         // 背景板 → 大道具 → 立ち絵の順（#683/#692/#694。各レイヤーはカメラ状態を自前で保持する）。
         this.backgroundBoardLayer.setCamera(mode, orientation, elevation)
         this.propLayer.setCamera(mode, orientation, elevation)
         this.characterLayer.setCamera(mode, orientation, elevation)
+        // ズーム (#702)。復元・リセット・スキップは snap で最終ポーズへ即時スナップする。
+        this.cameraZoom.set(mode, zoom, snap)
       },
       applyPaperDollOutline: (config) => {
         this.characterLayer.setPaperDollOutline(config)
         this.propLayer.setPaperDollOutline(config)
       },
+    },
+    this.time
+  )
+
+  /**
+   * シアターモードのカメラズーム (#702)。背景板・スポットライト・大道具・立ち絵のコンテナに
+   * 共通の scale/position を掛ける。状態（`cameraZoom`）の正本は `stage`、ここは描画反映だけを担う。
+   */
+  private readonly cameraZoom = new CameraZoomController(
+    {
+      getLayers: () => [this.backgroundBoardLayer, this.lightingLayer, this.propLayer],
+      applyCharacterPose: (pose) => this.characterLayer.setZoomPose(pose),
+      getFocus: (target) => this.characterLayer.getZoomFocus(target),
+      getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
+      isSplitLayoutActive: () => this.characterLayer.getSplitLayoutRegion() !== null,
+      isSkipMode: () => this.skipMode,
+      hasCharacter: (target) => this.characterLayer.hasCharacter(target),
     },
     this.time
   )
@@ -1994,6 +2015,8 @@ export class NovelRenderer {
     showExitButton?: boolean
   }): void {
     this.dialogBox.visible = false
+    // タイトル画面中は立ち絵レイヤーにロゴを載せるので、カメラズームを一時的に無効にする (#702)。
+    this.cameraZoom.setSuppressed('title', true)
     this.seekBar.setTitleScreenHidden(true)
     this.eventImageLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
@@ -2058,6 +2081,7 @@ export class NovelRenderer {
     this.characterLayer.remove(NovelRenderer.TITLE_LOGO_IMAGE_ID, { instant: true })
     // showTitleScreen() で隠した層を復元する（上記 JSDoc 参照）。
     this.dialogBox.visible = true
+    this.cameraZoom.setSuppressed('title', false)
     this.seekBar.setTitleScreenHidden(false)
     this.eventImageLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
@@ -2082,6 +2106,8 @@ export class NovelRenderer {
       resolveFontFamily(null, this.gameDefaultFontFamily, NovelRenderer.RUNTIME_DEFAULT_FONT_FAMILY)
     )
     this.endingOverlay.show()
+    // 終劇ロゴも立ち絵レイヤーに載るので、タイトル画面と同様にカメラズームを一時無効にする (#702)。
+    this.cameraZoom.setSuppressed('ending', true)
     // 旧 DOM 版と同じく `assetBaseUrl` が無ければロゴ表示自体を試みない（404 ログを増やさない。
     // `showTitleScreen()` は常に呼ぶ設計だが、あちらはフォールバックテキストを持つため無条件で
     // 呼んでも実害が無い——終劇ロゴはフォールバックが無い仕様のため、ここでガードする）。
@@ -2108,6 +2134,7 @@ export class NovelRenderer {
   /** 終劇オーバーレイを非表示にする (#630)。ロゴは `hideTitleScreen()` と同じく即時破棄する。 */
   private hideEndingOverlay(): void {
     this.endingOverlay.hide()
+    this.cameraZoom.setSuppressed('ending', false)
     this.characterLayer.remove(NovelRenderer.ENDING_LOGO_IMAGE_ID, { instant: true })
   }
 
@@ -2855,6 +2882,7 @@ export class NovelRenderer {
       this.skipTimer = null
     }
     this.stage.cancelAllTimers()
+    this.cameraZoom.dispose()
     if (this.toastTimer) {
       this.time.clearTimeout(this.toastTimer)
       this.toastTimer = null
@@ -2929,6 +2957,7 @@ export class NovelRenderer {
       cameraMode: stage.cameraMode,
       cameraOrientation: stage.cameraOrientation,
       cameraElevation: stage.cameraElevation,
+      cameraZoom: stage.cameraZoom,
       paperDollOutline: stage.paperDollOutline,
       storyEnded: this.storyEnded,
       // 入場時 flags (#799)。元列に `[条件:]` が無い脚本では何も足さない（JSON は従来のまま）。末尾に足して既存のキー順を保つ。
@@ -3391,6 +3420,10 @@ export class NovelRenderer {
       this.audioManager.stopBgm(0)
       this.currentBgmPath = null
     }
+
+    // カメラズームの再スナップ (#702)。`stage.restore` 内のスナップは立ち絵の復元より前に走るため、
+    // 対象キャラの位置が未確定で全景に倒れる。立ち絵復元後にもう一度最終ポーズへ即時スナップする。
+    this.cameraZoom.set(this.stage.cameraMode, this.stage.cameraZoom, true)
 
     // Jump 位置への復元 (#733): 宣言的復元は現在位置のディレクティブを再実行しないため、
     // eventIndex が Jump を指していると遷移の予約が無く行き止まりになる（startFrom の eventIndex 指定・
