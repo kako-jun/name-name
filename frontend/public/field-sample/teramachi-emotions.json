@@ -2,21 +2,21 @@
   "びっくり": {
     "image": "http://localhost:8765/assets/images/effects/field-emotion/field-emotion-exclaim.png",
     "durationMs": 1200,
-    "scale": 0.5,
+    "scale": 0.4,
     "offset": { "x": 0, "y": -4 },
     "motion": "pop"
   },
   "はてな": {
     "image": "http://localhost:8765/assets/images/effects/field-emotion/field-emotion-question.png",
     "durationMs": 1200,
-    "scale": 0.5,
+    "scale": 0.4,
     "offset": { "x": 0, "y": -4 },
     "motion": "pop"
   },
   "沈黙": {
     "image": "http://localhost:8765/assets/images/effects/field-emotion/field-emotion-dots.png",
     "durationMs": 1200,
-    "scale": 0.5,
+    "scale": 0.4,
     "offset": { "x": 0, "y": -4 },
     "motion": "pop"
   }
