@@ -35,6 +35,7 @@ import {
   type BattleMotionPreset,
   type BattlePresentation,
 } from '../game/battleMotion'
+import type { BattleEnemyListMode } from '../game/battleEnemyList'
 import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import {
@@ -124,6 +125,8 @@ export interface BattleSampleConfig {
   presentation: BattlePresentation
   /** 戦闘モーションのプリセット (#956)。既定 default（現行）。snappy はキビキビ。presentation ff のときだけ効く */
   motion: BattleMotionPreset
+  /** 敵名ウィンドウ (#954)。既定 off（足元ラベル）。window は presentation ff かつ layout side のときだけ効く */
+  enemyList: BattleEnemyListMode
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。既定 wait（コマンド選択中は時間停止） */
@@ -189,6 +192,8 @@ export interface BattleSampleView {
   presentation: BattlePresentation
   /** 戦闘モーションのプリセット (#956)。ff のときだけ効く */
   motion: BattleMotionPreset
+  /** 敵名ウィンドウ (#954)。ff かつ side のときだけ効く */
+  enemyList: BattleEnemyListMode
   /** ATB 方式 (#205)。既定 off（従来ターン制） */
   atb: 'on' | 'off'
   /** ATB の進行方式 (#205)。atb が on のときだけ効く */
@@ -276,6 +281,7 @@ export function defaultConfig(): BattleSampleConfig {
     logTypewriter: 'off',
     presentation: 'dq',
     motion: 'default',
+    enemyList: 'off',
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
@@ -800,6 +806,16 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     motion = raw.motion
   }
+  let enemyList = def.enemyList
+  if (raw.enemyList !== undefined) {
+    if (raw.enemyList !== 'off' && raw.enemyList !== 'window') {
+      return {
+        ok: false,
+        error: `enemyList は "off" か "window": ${JSON.stringify(raw.enemyList)}`,
+      }
+    }
+    enemyList = raw.enemyList
+  }
   let atb = def.atb
   if (raw.atb !== undefined) {
     if (raw.atb !== 'on' && raw.atb !== 'off') {
@@ -940,6 +956,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       logTypewriter,
       presentation,
       motion,
+      enemyList,
       atb,
       atbMode,
       commandLayout,
@@ -993,6 +1010,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
     logTypewriter: config.logTypewriter,
     presentation: config.presentation,
     motion: config.motion,
+    enemyList: config.enemyList,
     atb: config.atb,
     atbMode: config.atbMode,
     commandLayout: config.commandLayout,
@@ -1059,6 +1077,7 @@ export function buildBattleSetup(
     logTypewriter: BattleLogTypewriterMode
     presentation: BattlePresentation
     motion: BattleMotionPreset
+    enemyList: BattleEnemyListMode
     commandLayout: CommandLayout
     commandLabels: CommandLabels
     /** コマンドの構成と順序 (#889)。未指定は既定の 4 つ */
@@ -1123,6 +1142,7 @@ export function buildBattleSetup(
       logTypewriter: view.logTypewriter,
       presentation: view.presentation,
       motion: view.motion,
+      enemyList: view.enemyList,
       commandLayout: view.commandLayout,
       commandLabels: config.commandLabels,
       ...(config.commands ? { commands: [...config.commands] } : {}),
@@ -1200,6 +1220,7 @@ export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
     a.logTypewriter === b.logTypewriter &&
     a.presentation === b.presentation &&
     a.motion === b.motion &&
+    a.enemyList === b.enemyList &&
     a.atb === b.atb &&
     a.atbMode === b.atbMode &&
     a.commandLayout === b.commandLayout &&
@@ -1253,6 +1274,10 @@ export function describeView(
     // motion は ff のときだけ効く。default は既定なので出さない
     ...(view.presentation === 'ff' && view.layout === 'side' && view.motion !== 'default'
       ? [`motion=${view.motion}`]
+      : []),
+    // enemyList は ff かつ side のときだけ効く。off は既定なので出さない
+    ...(view.presentation === 'ff' && view.layout === 'side' && view.enemyList === 'window'
+      ? ['enemyList=window']
       : []),
     // cross は side のときだけ効く（front では無視される）ので、効く場合だけ出す
     ...(view.commandLayout === 'cross' && view.layout === 'side' ? ['commandLayout=cross'] : []),

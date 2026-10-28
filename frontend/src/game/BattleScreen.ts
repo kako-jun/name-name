@@ -104,6 +104,14 @@ import {
   type MenuStack,
   type TargetSide,
 } from './battleMenu'
+import {
+  aggregateEnemyList,
+  ENEMY_LIST_MAX_FONT,
+  ENEMY_LIST_PADDING,
+  fitEnemyListFont,
+  enemyListLines,
+  type BattleEnemyListMode,
+} from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
@@ -395,6 +403,11 @@ export interface BattleScreenOptions {
    */
   motion?: BattleMotionPreset
   /**
+   * 敵名ウィンドウ (#954)。`window` なら、`presentation: ff` かつ `side` のとき、コマンド窓と status 窓の間に敵名の窓を出し、
+   * 同名の敵を「名前 ×N」にまとめて並べる（足元ラベルは出さない）。未指定・不正値は `off`（従来どおり足元ラベル）。
+   */
+  enemyList?: BattleEnemyListMode
+  /**
    * 奥行き (#747)。指定して perspective が 0 超なら、`side` で行ごとの縮尺・床の高さを付け、奥→手前の順に描く。
    * 未指定・null は平面（現行どおり）。`front` は敵・味方の画像を描かないので影響しない。
    */
@@ -576,6 +589,13 @@ export class BattleScreen extends Container {
   private presentation: BattlePresentation
   /** `motion` (#956) から引いた時間・距離の組。ff の再生・サンプリングはすべてこれを通す */
   private motionTiming: MotionTiming
+  /** 敵名ウィンドウ (#954) を使う設定か（ff かつ side のときだけ true）。実際に置けたかは enemyListRect */
+  private enemyListEnabled: boolean
+  private enemyListPanel: Container
+  /** 行の Text。必要な数だけ作り、余りは visible=false で残す（破棄は Container.destroy に任せる） */
+  private enemyListTexts: PixiText[] = []
+  /** layoutSide が決めた窓の矩形。null は未配置（無効・狭すぎ。そのときは足元ラベルを出す） */
+  private enemyListRect: { x: number; y: number; w: number; h: number } | null = null
   private playback: PlaybackState = emptyPlayback()
   /** 取り込み済みの行動の累計数（`BattleState.eventTotal`）。作り直した画面は過去の行動を再生しない */
   private seenEventTotal = 0
@@ -718,6 +738,8 @@ export class BattleScreen extends Container {
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.presentation = opts.presentation === 'ff' && this.layoutMode === 'side' ? 'ff' : 'dq'
     this.motionTiming = motionTimingFor(normalizeBattleMotion(opts.motion))
+    this.enemyListEnabled =
+      opts.enemyList === 'window' && this.presentation === 'ff' && this.layoutMode === 'side'
     // FF 式の窓は一度に全文を出す。1 文字ずつ表示 (#755) は DQ 式のログ用で、ff では使わない
     this.logTypewriter = opts.logTypewriter === 'on' && this.presentation === 'dq' ? 'on' : 'off'
     // 描画（battleLayout の effectiveCommandLayout）と同じ判定にそろえる: cross は side かつ 4 コマンドのときだけ
@@ -734,6 +756,7 @@ export class BattleScreen extends Container {
     this.dim = new Graphics()
     this.statsPanel = this.makePanel()
     this.commandPanel = this.makePanel()
+    this.enemyListPanel = this.makePanel()
     this.logPanel = this.makePanel()
     this.enemyNameText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_NAME) })
     this.enemyHpText = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_HP) })
@@ -745,6 +768,7 @@ export class BattleScreen extends Container {
     this.addChild(this.statsPanel)
     this.addChild(this.heroStatsText)
     this.addChild(this.commandPanel)
+    this.addChild(this.enemyListPanel)
     this.addChild(this.logPanel)
     if (this.logTypewriter === 'on') {
       // ログ帯のタップでもタイプ中の行を即時表示できる (#755)
@@ -1720,6 +1744,7 @@ export class BattleScreen extends Container {
       // 敵の立ち絵の縦横比 (#760)。未読み込み・色四角は undefined（正方形扱い）
       enemyAspects: this.enemyViews.map((v) => this.layoutAspect(v)),
       depth: this.opts.depth,
+      enemyList: this.enemyListEnabled,
       // アクスタの板（枠の外へ広がる）を含めて、隣の板と重ならない列ピッチ・窓との重なりが許容量以内になるよう配置する (#838)
       enemyAcrylic: this.acrylicParams,
       // 敵グリッド (#839 段4): 有効なときだけグリッド配置（enemyAspects / enemyAcrylic の窓フィットは使われない）
@@ -1758,6 +1783,11 @@ export class BattleScreen extends Container {
     }
     this.messageRect = { x: L.log.x, y: L.log.y, w: L.log.w, h: L.log.h }
     this.summonPlateFloorY = Math.min(L.command.y, L.status.y)
+
+    // 敵名ウィンドウ (#954)。置けたときだけ出し、足元ラベルは placeEntityView が隠す
+    this.enemyListRect = L.enemyList
+    this.enemyListPanel.visible = L.enemyList !== null
+    if (L.enemyList) panel(L.enemyList, this.enemyListPanel)
 
     // 敵・味方スプライト
     for (let i = 0; i < this.enemyViews.length; i++) {
@@ -1862,6 +1892,7 @@ export class BattleScreen extends Container {
       this.drawAtbBars()
     }
     this.sideLabelWidths = L.enemies.map((e) => e.label?.w ?? 0)
+    this.refreshEnemyList()
     if (this.presentation === 'ff') {
       this.updateMessageWindow()
       this.applyMotionFrame()
@@ -1965,7 +1996,7 @@ export class BattleScreen extends Container {
     }
     if (view.label) {
       // ラベル位置は純粋関数が返す矩形（画面絶対）。縮尺・位置の追従は slot に含まれる。置けない枠では隠す
-      view.label.visible = !!slot.label
+      view.label.visible = !!slot.label && this.enemyListRect === null
       if (slot.label) {
         view.labelBaseX = slot.label.x + slot.label.w / 2
         view.labelBaseY = slot.label.y
@@ -2112,6 +2143,52 @@ export class BattleScreen extends Container {
     return { cx: g0.sprite.x + g0.sprite.width / 2, top: g0.sprite.y - platePad }
   }
 
+  /**
+   * 敵名ウィンドウの行を作り直す (#954)。ff は命中の瞬間まで古い HP を見せる（shownHp）ので、名前の個数が減るのも命中の瞬間。
+   * 行の Text は使い回し、窓に収まる行数・文字サイズ・幅は純粋関数（battleEnemyList.ts）が決める。
+   */
+  private refreshEnemyList(): void {
+    const rect = this.enemyListRect
+    if (!rect) {
+      for (const t of this.enemyListTexts) t.visible = false
+      return
+    }
+    const s = this.engine.getState()
+    const rows = aggregateEnemyList(
+      s.enemies.map((e, i) => ({ name: e.name, hp: this.shownHp('enemy', i, e.hp) }))
+    )
+    const fit = fitEnemyListFont(rows.length, rect.h, { rows, windowWidth: rect.w })
+    const lines = enemyListLines(rows, fit, rect.w)
+    while (this.enemyListTexts.length < fit.visibleRows) {
+      const t = new PixiText({
+        text: '',
+        style: this.themedStyle(
+          new TextStyle({
+            fontFamily: "'Noto Sans JP', sans-serif",
+            fontSize: ENEMY_LIST_MAX_FONT,
+            fill: TEXT_COLOR,
+          })
+        ),
+      })
+      this.enemyListTexts.push(t)
+      this.addChild(t)
+      // 候補窓は常に最前面（新しい Text に追い越されない）
+      if (this.menuLayer) this.addChild(this.menuLayer)
+    }
+    this.enemyListTexts.forEach((t, i) => {
+      const row = rows[i]
+      if (!row || i >= fit.visibleRows) {
+        t.visible = false
+        return
+      }
+      t.visible = true
+      if (t.style.fontSize !== fit.fontSize) t.style.fontSize = fit.fontSize
+      t.text = lines[i]
+      t.x = rect.x + ENEMY_LIST_PADDING
+      t.y = rect.y + ENEMY_LIST_PADDING + i * fit.lineHeight + (fit.lineHeight - fit.fontSize) / 2
+    })
+  }
+
   /** サイドビューのテキスト・生死表示を更新する (#736) */
   private refreshSide(): void {
     const s = this.engine.getState()
@@ -2138,6 +2215,7 @@ export class BattleScreen extends Container {
           fitHpLabel(e.hp, e.maxHp, w, SIDE_LABEL_FONT_SIZE)
       }
     }
+    this.refreshEnemyList()
     for (let i = 0; i < this.partyViews.length; i++) {
       const p = s.party[i]
       if (!p || ff) continue

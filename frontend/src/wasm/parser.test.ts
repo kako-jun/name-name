@@ -2463,6 +2463,30 @@ describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が
     expect(none.battle_presentation).toBeNull()
   })
 
+  it('battle_motion / battle_enemy_list (#956 / #954) も実 WASM パーサ経由で残り、未指定は null', async () => {
+    const doc = await parseMarkdown(docWith(['battle_motion: snappy', 'battle_enemy_list: window']))
+    expect(doc.battle_motion).toBe('snappy')
+    expect(doc.battle_enemy_list).toBe('window')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_motion).toBeNull()
+    expect(none.battle_enemy_list).toBeNull()
+  })
+
+  it('battle_enemy_list (#954) と [感情:] (#943 / #946) が同じ wasm で両方通る', async () => {
+    const doc = await parseMarkdown(
+      docWith(
+        ['battle_enemy_list: window', 'field_emotions: data/emotions.json'],
+        ['[感情: 主人公, びっくり]', '']
+      )
+    )
+    expect(doc.battle_enemy_list).toBe('window')
+    expect(doc.field_emotions).toBe('data/emotions.json')
+    const emotions = doc.chapters[0].scenes[0].events.filter(
+      (e) => typeof e === 'object' && 'Emotion' in e
+    )
+    expect(emotions).toHaveLength(1)
+  })
+
   it('パーティ・モンスター定義の ポーズ: が poses として残る', async () => {
     const doc = await parseMarkdown(
       docWith(

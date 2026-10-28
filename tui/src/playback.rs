@@ -2371,6 +2371,7 @@ mod tests {
             battle_commands: None,
             battle_transition: None,
             battle_motion: None,
+            battle_enemy_list: None,
             field_emotions: None,
             battle_effects: None,
             battle_enemy_grid: None,

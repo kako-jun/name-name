@@ -1008,6 +1008,12 @@ export interface Document {
      */
     battle_motion?: string;
     /**
+     * RPG 戦闘の敵名ウィンドウ (#954)。`\"window\"` のとき、FF 風戦闘（`battle_layout: side` + `battle_presentation: ff`）で
+     * コマンド窓の右隣に敵名の窓を出す。未指定・空は None（無効）。値は parser でバリデーションせず生文字列で透過し、
+     * runtime 側で未知値は警告して無効にする。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_list:` から流す。
+     */
+    battle_enemy_list?: string;
+    /**
      * フィールドの感情吹き出しの設定 JSON のパス (#943)。assets 相対パスを生文字列で透過する（`battle_background` と
      * 同じ流儀）。読み込み・検証は frontend（フィールドサンプルの `emotions` と同じ検証。不正は警告して無視）。
      * 未指定・空は None（従来どおり吹き出しなし）。GUI 専用（TUI は読まない）。frontmatter `field_emotions:` から流す。

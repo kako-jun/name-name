@@ -5344,6 +5344,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_commands: None,
         battle_transition: None,
         battle_motion: None,
+        battle_enemy_list: None,
         field_emotions: None,
         battle_effects: None,
         battle_enemy_grid: None,
@@ -10536,6 +10537,7 @@ fn telop_test_doc_base() -> Document {
         battle_commands: None,
         battle_transition: None,
         battle_motion: None,
+        battle_enemy_list: None,
         field_emotions: None,
         battle_effects: None,
         battle_enemy_grid: None,
@@ -12398,6 +12400,36 @@ fn test_battle_motion_parses_default_none_and_roundtrips() {
     assert!(emitted.contains("battle_motion: \"snappy\"\n"), "{emitted}");
     assert_eq!(parser::parse(&emitted).battle_motion, doc.battle_motion);
     assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_motion"));
+}
+
+// ---- #954: battle_enemy_list ----
+
+#[test]
+fn test_battle_enemy_list_parses_default_none_and_roundtrips() {
+    let doc = parser::parse(&battle_doc("battle_enemy_list: window\n"));
+    assert_eq!(doc.battle_enemy_list.as_deref(), Some("window"));
+    assert_eq!(
+        parser::parse(&battle_doc("battle_enemy_list:\n")).battle_enemy_list,
+        None
+    );
+    assert_eq!(parser::parse(&battle_doc("")).battle_enemy_list, None);
+    // 不正値もそのまま透過する（runtime 側で無効に倒す）
+    assert_eq!(
+        parser::parse(&battle_doc("battle_enemy_list: bogus\n"))
+            .battle_enemy_list
+            .as_deref(),
+        Some("bogus")
+    );
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_enemy_list: \"window\"\n"),
+        "{emitted}"
+    );
+    assert_eq!(
+        parser::parse(&emitted).battle_enemy_list,
+        doc.battle_enemy_list
+    );
+    assert!(!emitter::emit(&parser::parse(&battle_doc(""))).contains("battle_enemy_list"));
 }
 
 // ---- #946: [イベント] 内の [感情:] → EventCommand::Emotion ----

@@ -235,6 +235,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_motion: \"{sanitized}\"\n"));
         }
+        // battle_enemy_list (#954)。同じ流儀
+        if let Some(ref v) = doc.battle_enemy_list {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_enemy_list: \"{sanitized}\"\n"));
+        }
         // battle_enemy_grid / battle_enemy_window_overlap (#839)。同じ流儀
         if let Some(ref v) = doc.battle_enemy_grid {
             let sanitized = v.replace('"', "");
@@ -2053,6 +2058,7 @@ mod tests {
             battle_commands: None,
             battle_transition: None,
             battle_motion: None,
+            battle_enemy_list: None,
             field_emotions: None,
             battle_effects: None,
             battle_enemy_grid: None,
@@ -2523,6 +2529,7 @@ mod tests {
             battle_commands: None,
             battle_transition: None,
             battle_motion: None,
+            battle_enemy_list: None,
             field_emotions: None,
             battle_effects: None,
             battle_enemy_grid: None,

@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_enemy_grid`, `battle_enemy_window_overlap`, `battle_command_layout`, `battle_command_labels`, `battle_transition`, `battle_motion`, `field_emotions`, `battle_effects`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_enemy_grid`, `battle_enemy_window_overlap`, `battle_command_layout`, `battle_command_labels`, `battle_transition`, `battle_motion`, `battle_enemy_list`, `field_emotions`, `battle_effects`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -458,6 +458,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     battle_commands: nullIfEmpty(doc.battle_commands),
     battle_transition: nullIfEmpty(doc.battle_transition),
     battle_motion: nullIfEmpty(doc.battle_motion),
+    battle_enemy_list: nullIfEmpty(doc.battle_enemy_list),
     chapters: doc.chapters.map((chapter) => ({
       ...chapter,
       default_bgm: chapter.default_bgm ?? null,

@@ -56,6 +56,7 @@ function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
     logTypewriter: 'off',
     presentation: 'dq',
     motion: 'default',
+    enemyList: 'off',
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
@@ -645,6 +646,14 @@ describe('initialView / resolveSize', () => {
 })
 
 describe('buildBattleSetup', () => {
+  it('enemyList は BattleScreen のオプションへ渡る (#954)', () => {
+    expect(
+      buildBattleSetup(defaultConfig(), view({ presentation: 'ff', enemyList: 'window' })).options
+        .enemyList
+    ).toBe('window')
+    expect(buildBattleSetup(defaultConfig(), view()).options.enemyList).toBe('off')
+  })
+
   const BG = 'https://example.com/b.png'
 
   it.each([
@@ -1505,6 +1514,26 @@ describe('presentation / poses (#745)', () => {
     expect(describeView(view({ presentation: 'ff' }), 1, size)).not.toContain('motion=')
     expect(describeView(view({ presentation: 'dq', motion: 'snappy' }), 1, size)).not.toContain(
       'motion='
+    )
+  })
+
+  it('enemyList は off / window だけ。既定 off。不正値はエラー (#954)', () => {
+    expect(parseOk({}).enemyList).toBe('off')
+    expect(parseOk({ enemyList: 'window' }).enemyList).toBe('window')
+    expect(parseConfig({ enemyList: 'x' }, BASE).ok).toBe(false)
+    expect(parseConfig({ enemyList: true }, BASE).ok).toBe(false)
+  })
+
+  it('enemyList は initialView / viewsEqual / describeView に反映され、ff（side）のときだけ表示 (#954)', () => {
+    expect(initialView(parseOk({ enemyList: 'window' })).enemyList).toBe('window')
+    expect(viewsEqual(view(), view({ enemyList: 'window' }))).toBe(false)
+    const size = { width: 800, height: 450 }
+    expect(describeView(view({ presentation: 'ff', enemyList: 'window' }), 1, size)).toContain(
+      'enemyList=window'
+    )
+    expect(describeView(view({ presentation: 'ff' }), 1, size)).not.toContain('enemyList')
+    expect(describeView(view({ presentation: 'dq', enemyList: 'window' }), 1, size)).not.toContain(
+      'enemyList'
     )
   })
 

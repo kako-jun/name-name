@@ -35,6 +35,8 @@ import {
   computePartyDiagonal,
   computeSideBattleLayout,
   computeSideLogHeight,
+  SIDE_ENEMY_LIST_MIN_WIDTH,
+  SIDE_STATUS_MIN_WIDTH_WITH_ENEMY_LIST,
   computeStatusColumns,
   SIDE_STATUS_COLUMN_GAP,
   SIDE_STATUS_FONT_SIZE,
@@ -2671,5 +2673,133 @@ describe('fitEnemyLabelWithStatus (#870)', () => {
     expect(narrow.startsWith('ながい')).toBe(true)
     expect(narrow.length).toBeLessThanOrEqual('ながいなまえのボス [しのせんこく…]'.length)
     expect(fitEnemyLabelWithStatus('ながいなまえのボス', ['どく'], 50, F)).not.toContain('[どく')
+  })
+})
+
+// ---- #954: 敵名ウィンドウ ----
+
+describe('computeSideBattleLayout: enemyList (#954)', () => {
+  const inBounds = (r: Rect, w: number, h: number) =>
+    r.x >= -EPS &&
+    r.y >= -EPS &&
+    r.x + r.w <= w + EPS &&
+    r.y + r.h <= h + EPS &&
+    r.w >= 0 &&
+    r.h >= 0
+
+  it('無効（未指定・false）は enemyList null で、従来の 2 枚構成と完全に同一', () => {
+    for (const [w, h] of SWEEP_SIZES) {
+      const input = { width: w, height: h, partyCount: 4, enemyCount: 3 }
+      const a = computeSideBattleLayout(input)
+      const b = computeSideBattleLayout({ ...input, enemyList: false })
+      expect(a.enemyList).toBeNull()
+      expect(b).toEqual(a)
+    }
+  })
+
+  it('有効: command | 敵名窓 | status が左から並び、非重複・画面内・同じ高さ・隣と SIDE_GAP', () => {
+    const L = computeSideBattleLayout({
+      width: 800,
+      height: 450,
+      partyCount: 4,
+      enemyCount: 3,
+      enemyList: true,
+    })
+    const list = L.enemyList as Rect
+    expect(list).not.toBeNull()
+    expect(list.x).toBeCloseTo(L.command.x + L.command.w + SIDE_GAP)
+    expect(L.status.x).toBeCloseTo(list.x + list.w + SIDE_GAP)
+    expect(list.y).toBeCloseTo(L.command.y)
+    expect(list.h).toBeCloseTo(L.command.h)
+    expect(list.w).toBeGreaterThanOrEqual(SIDE_ENEMY_LIST_MIN_WIDTH)
+    expect(L.status.x + L.status.w).toBeCloseTo(800 - SIDE_PADDING)
+  })
+
+  it('有効でも command / ステージ / 敵・味方の枠は無効時と同じ', () => {
+    const input = { width: 800, height: 450, partyCount: 4, enemyCount: 3 }
+    const off = computeSideBattleLayout(input)
+    const on = computeSideBattleLayout({ ...input, enemyList: true })
+    expect(on.command).toEqual(off.command)
+    expect(on.commandCells).toEqual(off.commandCells)
+    expect(on.stage).toEqual(off.stage)
+    expect(on.enemies).toEqual(off.enemies)
+    expect(on.party).toEqual(off.party)
+    expect(on.log).toEqual(off.log)
+  })
+
+  it('不変条件: 全画面サイズ・人数で 画面内・非負・非重複、status は最小幅以上、窓が無いときは従来どおり', () => {
+    const sizes: Array<[number, number]> = [...SWEEP_SIZES, [200, 300], [100, 100], [1920, 1080]]
+    for (const [w, h] of sizes) {
+      for (const n of [0, 1, 4, 6]) {
+        const off = computeSideBattleLayout({ width: w, height: h, partyCount: n, enemyCount: 3 })
+        const L = computeSideBattleLayout({
+          width: w,
+          height: h,
+          partyCount: n,
+          enemyCount: 3,
+          enemyList: true,
+        })
+        // command は無効時から動かない（最小幅を侵さない）
+        expect(L.command).toEqual(off.command)
+        if (!L.enemyList) {
+          expect(L.status).toEqual(off.status)
+          continue
+        }
+        expect(inBounds(L.enemyList, w, h)).toBe(true)
+        expect(L.enemyList.w).toBeGreaterThanOrEqual(SIDE_ENEMY_LIST_MIN_WIDTH)
+        expect(L.status.w).toBeGreaterThanOrEqual(SIDE_STATUS_MIN_WIDTH_WITH_ENEMY_LIST - EPS)
+        expect(inBounds(L.status, w, h)).toBe(true)
+        expect(overlaps(L.enemyList, L.command)).toBe(false)
+        expect(overlaps(L.enemyList, L.status)).toBe(false)
+        expect(overlaps(L.enemyList, L.log)).toBe(false)
+        expect(overlaps(L.enemyList, L.stage)).toBe(false)
+      }
+    }
+  })
+
+  it('狭い画面では窓を置かず null（command / status は従来のまま）', () => {
+    const L = computeSideBattleLayout({
+      width: 320,
+      height: 240,
+      partyCount: 4,
+      enemyCount: 2,
+      enemyList: true,
+    })
+    expect(L.enemyList).toBeNull()
+    expect(L.status).toEqual(
+      computeSideBattleLayout({ width: 320, height: 240, partyCount: 4, enemyCount: 2 }).status
+    )
+  })
+})
+
+describe('enemyList: status の compact 境界 (#954)', () => {
+  it('窓が置かれたとき status は compact にならない（窓のせいで MP 列が消えない）', () => {
+    for (const [w, h] of [...SWEEP_SIZES, [1280, 720] as [number, number]]) {
+      const L = computeSideBattleLayout({
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 3,
+        enemyList: true,
+      })
+      if (L.enemyList) expect(L.statusCompact).toBe(false)
+    }
+  })
+  it('640x360 では窓が置かれ、status は compact ではない', () => {
+    const L = computeSideBattleLayout({
+      width: 640,
+      height: 360,
+      partyCount: 4,
+      enemyCount: 3,
+      enemyList: true,
+    })
+    expect(L.enemyList).not.toBeNull()
+    expect(L.statusCompact).toBe(false)
+  })
+  it('窓なしで既に compact の画面では窓を置かない', () => {
+    const size = { width: 480, height: 270, partyCount: 4, enemyCount: 3 }
+    const off = computeSideBattleLayout(size)
+    expect(off.statusCompact).toBe(true)
+    expect(computeSideBattleLayout({ ...size, enemyList: true }).enemyList).toBeNull()
   })
 })

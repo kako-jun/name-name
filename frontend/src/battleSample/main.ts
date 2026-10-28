@@ -250,6 +250,13 @@ async function main(): Promise<void> {
     (v) => change({ motion: v }),
     { default: 'default（現行）', snappy: 'snappy（キビキビ）' }
   )
+  const enemyListSel = select(
+    '敵名窓',
+    'tb-enemy-list',
+    ['off', 'window'] as const,
+    (v) => change({ enemyList: v }),
+    { off: 'off（足元ラベル）', window: 'window（敵名ウィンドウ）' }
+  )
   const atbLabel = document.createElement('label')
   const atbChk = document.createElement('input')
   atbChk.type = 'checkbox'
@@ -350,6 +357,9 @@ async function main(): Promise<void> {
     // モーションは ff（side）のときだけ効く (#956)
     motionSel.value = v.motion
     motionSel.disabled = !(v.presentation === 'ff' && v.layout === 'side')
+    // 敵名窓も ff（side）のときだけ効く (#954)
+    enemyListSel.value = v.enemyList
+    enemyListSel.disabled = !(v.presentation === 'ff' && v.layout === 'side')
     atbChk.checked = v.atb === 'on'
     atbModeSel.value = v.atbMode
     atbModeSel.disabled = v.atb !== 'on'

@@ -1,0 +1,24 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "enemyList": "window",
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 600, "mp": 40, "atk": 60, "def": 4, "agi": 6 },
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 400,
+      "mp": 40,
+      "atk": 14,
+      "def": 2,
+      "agi": 5,
+      "row": "back"
+    }
+  ],
+  "enemies": [
+    { "id": "slime1", "name": "スライム", "hp": 40, "atk": 8, "def": 1, "agi": 3 },
+    { "id": "slime2", "name": "スライム", "hp": 40, "atk": 8, "def": 1, "agi": 3 },
+    { "id": "slime3", "name": "スライム", "hp": 40, "atk": 8, "def": 1, "agi": 3 },
+    { "id": "ika", "name": "イカ", "hp": 400, "atk": 10, "def": 2, "agi": 3 }
+  ]
+}
