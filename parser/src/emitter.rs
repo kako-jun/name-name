@@ -179,6 +179,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_presentation: \"{sanitized}\"\n"));
         }
+        // field_emotions (#943)。同じ流儀
+        if let Some(ref v) = doc.field_emotions {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("field_emotions: \"{sanitized}\"\n"));
+        }
         // battle_horizon / battle_perspective / battle_foreground (#747)。同じ流儀
         if let Some(ref v) = doc.battle_horizon {
             let sanitized = v.replace('"', "");
@@ -402,6 +407,21 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     kv.push_str(&format!(", 明るさ={b}"));
                 }
                 out.push_str(&format!("[背景: {path}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::Emotion {
+                target,
+                kind,
+                duration_ms,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut kv = String::new();
+                if let Some(n) = duration_ms {
+                    kv.push_str(&format!(", 持続={n}"));
+                }
+                out.push_str(&format!("[感情: {target}, {kind}{kv}]\n"));
                 prev_was_dialog_or_text = false;
             }
             Event::BackgroundBoard { path, depth } => {
@@ -2011,6 +2031,7 @@ mod tests {
             battle_command_labels: None,
             battle_commands: None,
             battle_transition: None,
+            field_emotions: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
             chapters: vec![Chapter {
@@ -2478,6 +2499,7 @@ mod tests {
             battle_command_labels: None,
             battle_commands: None,
             battle_transition: None,
+            field_emotions: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
             chapters: vec![Chapter {
