@@ -37,6 +37,7 @@ export function buildFreshPositionState(
     cameraMode: 'Novel',
     cameraOrientation: 'Audience',
     cameraElevation: null,
+    cameraZoom: null,
     paperDollOutline: null,
     storyEnded: false,
     // 入場時 flags (#799)。指定した flags が展開の入場条件（これが無いと旧セーブ扱いの静的展開になる）。

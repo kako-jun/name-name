@@ -834,6 +834,8 @@ export class CharacterLayer extends Container {
   private cameraMode: CameraMode = 'Novel'
   private cameraOrientation: CameraOrientation = 'Audience'
   private cameraElevation: CameraElevation | null = null
+  /** カメラズーム (#702) のポーズ。identity = 全景。 */
+  private zoomPose = { scale: 1, x: 0, y: 0 }
 
   /**
    * 紙人形風の輪郭 (#699)。`setPaperDollOutline()`（`[紙人形輪郭:]` イベント処理 / applyState
@@ -905,14 +907,30 @@ export class CharacterLayer extends Container {
    */
   setSplitLayoutRegion(region: LayoutRect | null): void {
     this.splitLayoutRegion = region
-    if (region) {
-      const t = computeCharacterLayerSplitTransform(this.screenWidth, this.screenHeight, region)
-      this.scale.set(t.scale)
-      this.position.set(t.x, t.y)
-    } else {
-      this.scale.set(1)
-      this.position.set(0, 0)
-    }
+    this.applyLayerTransform()
+  }
+
+  /**
+   * カメラズーム (#702) のポーズを設定する。split_layout の変換（Container 全体の scale/position）と
+   * 合成する: ズームが外側、split が内側（`p' = z.s * (split.s * p + split.t) + z.t`）。
+   * ズーム無し（identity）では従来どおりの split 変換のみ（後方互換）。
+   */
+  setZoomPose(pose: { scale: number; x: number; y: number }): void {
+    this.zoomPose = pose
+    this.applyLayerTransform()
+  }
+
+  private applyLayerTransform(): void {
+    const split = this.splitLayoutRegion
+      ? computeCharacterLayerSplitTransform(
+          this.screenWidth,
+          this.screenHeight,
+          this.splitLayoutRegion
+        )
+      : { scale: 1, x: 0, y: 0 }
+    const z = this.zoomPose
+    this.scale.set(z.scale * split.scale)
+    this.position.set(z.scale * split.x + z.x, z.scale * split.y + z.y)
   }
 
   /** 現在の split_layout キャラ画像領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */

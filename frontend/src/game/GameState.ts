@@ -8,6 +8,7 @@
 import {
   AmbientEffects,
   CameraElevation,
+  CameraZoom,
   CameraMode,
   CameraOrientation,
   Event,
@@ -188,6 +189,13 @@ export interface NovelGameState {
    * 新しいシーン開始時は null（水平）に戻る（cameraOrientation と同じ規律）。
    */
   cameraElevation: CameraElevation | null
+  /**
+   * シアターモードのカメラズーム (#702)。null（既定・全景）/ `{ target, strength }`（対象キャラへ寄る）。
+   * `cameraElevation` と同じく `cameraMode` が 'Novel' のときは意味を持たない。settled state のみ保持し、
+   * 寄り・戻りの補間途中のポーズは保存しない（復元は最終状態へ即時スナップ、ADR-0002）。
+   * 新しいシーン開始時は null（全景）に戻る。
+   */
+  cameraZoom: CameraZoom | null
   /**
    * 紙人形風の輪郭 (#699)。`[紙人形輪郭: オン]` / `[紙人形輪郭: オフ]` で更新する。
    * `cameraMode` と同じく宣言的な settled state（save/seek/任意局面起動で復元可能）だが、

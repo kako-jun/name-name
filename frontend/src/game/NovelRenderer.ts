@@ -11,6 +11,7 @@
  * - SE: 単発再生（複数同時可）
  */
 
+import { CameraZoomController } from './cameraZoom'
 import { Application, Text as PixiText, TextStyle } from 'pixi.js'
 import {
   CharacterLayer,
@@ -599,16 +600,33 @@ export class NovelRenderer {
         this.dialogBox.alpha = alpha
       },
       setSeekBarBlackoutHidden: (hidden) => this.seekBar.setBlackoutHidden(hidden),
-      applyCamera: (mode, orientation, elevation) => {
+      applyCamera: (mode, orientation, elevation, zoom, snap) => {
         // 背景板 → 大道具 → 立ち絵の順（#683/#692/#694。各レイヤーはカメラ状態を自前で保持する）。
         this.backgroundBoardLayer.setCamera(mode, orientation, elevation)
         this.propLayer.setCamera(mode, orientation, elevation)
         this.characterLayer.setCamera(mode, orientation, elevation)
+        // ズーム (#702)。復元・リセット・スキップは snap で最終ポーズへ即時スナップする。
+        this.cameraZoom.set(mode, zoom, snap)
+        if (!snap) this.cameraZoom.warnIfMissing()
       },
       applyPaperDollOutline: (config) => {
         this.characterLayer.setPaperDollOutline(config)
         this.propLayer.setPaperDollOutline(config)
       },
+    },
+    this.time
+  )
+
+  /**
+   * シアターモードのカメラズーム (#702)。背景板・スポットライト・大道具・立ち絵のコンテナに
+   * 共通の scale/position を掛ける。状態（`cameraZoom`）の正本は `stage`、ここは描画反映だけを担う。
+   */
+  private readonly cameraZoom = new CameraZoomController(
+    {
+      getLayers: () => [this.backgroundBoardLayer, this.lightingLayer, this.propLayer],
+      applyCharacterPose: (pose) => this.characterLayer.setZoomPose(pose),
+      getFocus: (target) => this.characterLayer.getCurrentPosition(target),
+      getScreenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
     },
     this.time
   )
@@ -2855,6 +2873,7 @@ export class NovelRenderer {
       this.skipTimer = null
     }
     this.stage.cancelAllTimers()
+    this.cameraZoom.dispose()
     if (this.toastTimer) {
       this.time.clearTimeout(this.toastTimer)
       this.toastTimer = null
@@ -2929,6 +2948,7 @@ export class NovelRenderer {
       cameraMode: stage.cameraMode,
       cameraOrientation: stage.cameraOrientation,
       cameraElevation: stage.cameraElevation,
+      cameraZoom: stage.cameraZoom,
       paperDollOutline: stage.paperDollOutline,
       storyEnded: this.storyEnded,
       // 入場時 flags (#799)。元列に `[条件:]` が無い脚本では何も足さない（JSON は従来のまま）。末尾に足して既存のキー順を保つ。

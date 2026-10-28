@@ -198,7 +198,12 @@ export const stageDirectives: ObjectDirectiveTable = {
     ctx.stage.setCamera(
       event.CameraMode.mode,
       event.CameraMode.orientation ?? 'Audience',
-      event.CameraMode.elevation ?? null
+      event.CameraMode.elevation ?? null,
+      event.CameraMode.zoom
+        ? { target: event.CameraMode.zoom, strength: event.CameraMode.zoom_strength ?? null }
+        : null,
+      // スキップ中は寄り・戻りの補間を飛ばして最終状態へ即時スナップする (#702、ADR-0002)。
+      ctx.env.skipMode
     )
   }),
 

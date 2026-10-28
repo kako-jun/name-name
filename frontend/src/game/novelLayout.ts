@@ -1030,6 +1030,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   cameraMode        = data.cameraMode ?? 'Novel'  // 古いセーブには無い (#681)
  *   cameraOrientation = data.cameraOrientation ?? 'Audience'  // 古いセーブには無い (#681)
  *   cameraElevation   = data.cameraElevation ?? null  // 古いセーブには無い (#682)
+ *   cameraZoom        = data.cameraZoom ?? null  // 古いセーブには無い → 全景 (#702)
  *   paperDollOutline  = data.paperDollOutline ?? null  // 古いセーブには無い (#699)
  *   entryFlags / entryResumeIndex / entryRawIndex = data の値（無ければ付けない）  // 入場時 flags (#799)。無い → 保存位置までを静的展開、後ろを逐次評価
  *   storyEnded     = false  // SaveSlotData 未対応 (#386)。セーブ/ロードは常に「終劇していない」扱い
@@ -1078,6 +1079,8 @@ export function saveSlotToGameState(
     cameraOrientation: data.cameraOrientation ?? 'Audience',
     // カメラ仰角 (#682)。古いセーブには無い → ?? で水平（既定）にフォールバック。
     cameraElevation: data.cameraElevation ?? null,
+    // カメラズーム (#702)。古いセーブには無い → ?? で全景（既定）にフォールバック。
+    cameraZoom: data.cameraZoom ?? null,
     // 紙人形風の輪郭 (#699)。古いセーブには無い → ?? null で通常表示（既定）に倒す。
     paperDollOutline: data.paperDollOutline ?? null,
     // 終劇状態 (#386) はセーブデータに持たせない（SaveSlotData 未対応・古いセーブにも無い）。
@@ -1131,6 +1134,7 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
     cameraMode: snapshot.cameraMode,
     cameraOrientation: snapshot.cameraOrientation,
     cameraElevation: snapshot.cameraElevation,
+    cameraZoom: snapshot.cameraZoom,
     paperDollOutline: snapshot.paperDollOutline,
     // 入場時 flags (#799)。スナップショットが持つときだけ書く（元列に `[条件:]` が無い脚本では JSON は従来のまま）。
     ...(snapshot.entryFlags !== undefined ? { entryFlags: snapshot.entryFlags } : {}),

@@ -11,7 +11,7 @@
  * 私的プロジェクトのため、既存セーブが消えても許容範囲）。
  */
 
-import { CameraElevation, CameraMode, CameraOrientation, FlagValue } from '../types'
+import { CameraElevation, CameraMode, CameraOrientation, CameraZoom, FlagValue } from '../types'
 import {
   BackgroundFade,
   CurtainState,
@@ -108,6 +108,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined は null（水平・既定）扱い。
    */
   cameraElevation?: CameraElevation | null
+  /**
+   * シアターモードのカメラズーム (#702)。
+   * 後方互換: 古いセーブデータには無い → undefined は null（全景・既定）扱い。
+   */
+  cameraZoom?: CameraZoom | null
   /**
    * 紙人形風の輪郭 (#699)。
    * 後方互換: 古いセーブデータには無い → undefined/null は通常表示（既定）扱い。
