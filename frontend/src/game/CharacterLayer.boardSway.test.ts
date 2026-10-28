@@ -129,7 +129,7 @@ describe('CharacterLayer 板の揺らぎ (#701)', () => {
 
   it('prefers-reduced-motion: reduce では揺れない', async () => {
     vi.stubGlobal('window', {
-      matchMedia: (q: string) => ({ matches: q.includes('prefers-reduced-motion') }),
+      matchMedia: (q: string) => ({ matches: q === '(prefers-reduced-motion: reduce)' }),
     })
     const layer = await enterWalking(true)
     const base = internals(layer).elapsedMs
@@ -172,6 +172,7 @@ describe('CharacterLayer 板の揺らぎ (#701)', () => {
     expect(skewOf(layer)).toBe(0)
   })
 
+  // 構造的な保証（skew は filters に触れない）の確認であり、変異検出力は目的でない。
   it('紙人形輪郭フィルタと共存する（揺れ中も filters が保たれる）', async () => {
     const layer = await enterWalking(true)
     layer.setPaperDollOutline({ color: 0xffffff, thickness: 4 } as never)
@@ -181,5 +182,27 @@ describe('CharacterLayer 板の揺らぎ (#701)', () => {
     advanceTo(layer, base + 700 + QUARTER)
     expect(skewOf(layer)).not.toBe(0)
     expect(internals(layer).characters.get('hero')!.sprite.filters).toBe(before)
+  })
+
+  it('入場walk中に方向指定の退場へ張り直されると傾きを 0 に戻してから新しい歩行を始める', async () => {
+    const layer = await enterWalking(true)
+    const base = internals(layer).elapsedMs
+    advanceTo(layer, base + 700 + QUARTER)
+    expect(skewOf(layer)).not.toBe(0)
+    layer.remove('hero', { exitDirection: 'Shimote' })
+    expect(skewOf(layer)).toBe(0)
+  })
+
+  it('render-only（Label）への方向指定の退場は揺らさない（足元支点でないため）', async () => {
+    mockTexture()
+    const layer = new CharacterLayer(800, 450)
+    layer.setCamera('Theater', 'Audience', null)
+    layer.showLabel({ id: 'lbl', text: 'x', fontFamily: 'sans-serif', instant: true })
+    layer.remove('lbl', { exitDirection: 'Shimote' })
+    const st = internals(layer).characters.get('lbl')!
+    expect(st.stageMotion).toBeTruthy()
+    const base = internals(layer).elapsedMs
+    advanceTo(layer, base + 700 + QUARTER)
+    expect(st.sprite.skew.x).toBe(0)
   })
 })
