@@ -154,6 +154,15 @@ describe('RPGPlayer: アセットのベース URL を renderer に渡す (#746)'
 
 // #840 3本目: frontmatter `dialog_style:` の値が、窓を作る init() より前に renderer へ渡る
 describe('RPGPlayer の dialogStyle (#840)', () => {
+  it('dialogStyle が adv → ff に変わると renderer を作り直し、新しい renderer に ff が渡る（窓は init で作るため）', () => {
+    topdownSetDialogStyle.mockClear()
+    const { rerender } = render(<RPGPlayer dialogStyle="adv" />)
+    expect(topdownSetDialogStyle).toHaveBeenLastCalledWith('adv')
+    const before = topdownSetDialogStyle.mock.calls.length
+    rerender(<RPGPlayer dialogStyle="ff" />)
+    expect(topdownSetDialogStyle.mock.calls.length).toBe(before + 1)
+    expect(topdownSetDialogStyle).toHaveBeenLastCalledWith('ff')
+  })
   it('TopDown: dialogStyle="ff" が init より前に setDialogStyle へ渡る', async () => {
     topdownSetDialogStyle.mockClear()
     topdownInit.mockClear()

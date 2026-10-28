@@ -21,6 +21,16 @@ vi.mock('./wordwrap', async () => {
       actual.wrapTextWithMeasure(text, maxWidth, (s) => s.length * 10),
   }
 })
+// init が作る周辺 UI は jsdom で文字幅を測れず落ちるので、会話窓の配線に関係ない部分は空の Container にする
+vi.mock('./TouchMenuOverlay', async () => {
+  const { Container } = await import('pixi.js')
+  const actual = await vi.importActual<typeof import('./TouchMenuOverlay')>('./TouchMenuOverlay')
+  return { ...actual, TouchMenuOverlay: class extends Container {} }
+})
+vi.mock('./MinimapOverlay', async () => {
+  const { Container } = await import('pixi.js')
+  return { MinimapOverlay: class extends Container {} }
+})
 import { DialogBox } from './DialogBox'
 import { TopDownRenderer } from './TopDownRenderer'
 import { RaycastRenderer } from './RaycastRenderer'
@@ -176,6 +186,50 @@ describe.each(makers)('%s の dialog_style: ff (#840)', (_name, make) => {
     box.dispose()
   })
 })
+
+// init() が窓を作る配線そのもの（setDialogStyle → fieldDialogOptions → new DialogBox）を固定する。
+// pixi の Application は jsdom で init できないので、init が触る最小の面だけの偽物に差し替える
+describe.each([
+  ['TopDownRenderer', () => new TopDownRenderer()],
+  ['RaycastRenderer', () => new RaycastRenderer()],
+] as Array<[string, () => TopDownRenderer | RaycastRenderer]>)(
+  '%s.init が作る会話窓の dialog_style (#840)',
+  (_name, create) => {
+    async function initWith(style: string | null | undefined, set = true): Promise<DialogBox> {
+      const r = create()
+      const i = r as unknown as Internals
+      i.app = {
+        init: async () => {},
+        canvas: document.createElement('canvas'),
+        stage: new Container(),
+        ticker: { add: vi.fn(), remove: vi.fn() },
+        destroy: vi.fn(),
+      } as unknown as Internals['app']
+      if (set) r.setDialogStyle(style)
+      await r.init(document.createElement('div'))
+      const box = i.dialogBox!
+      ;(box as unknown as { ticker: Ticker }).ticker.stop()
+      box.show('', 'こんにちは')
+      return box
+    }
+
+    it("'ff' なら FF 風の窓（ページ情報がある・上部固定）", async () => {
+      const box = await initWith('ff')
+      expect(box.getPageInfo().pages).toBeGreaterThan(0)
+      box.dispose()
+    })
+    it("'adv'・'novel'・未知値・null・未指定は従来の窓（ff にならない）", async () => {
+      for (const v of ['adv', 'novel', 'toheart', null, undefined]) {
+        const box = await initWith(v)
+        expect(box.getPageInfo()).toEqual({ page: 0, pages: 0 })
+        box.dispose()
+      }
+      const box = await initWith(undefined, false) // setDialogStyle を呼ばない
+      expect(box.getPageInfo()).toEqual({ page: 0, pages: 0 })
+      box.dispose()
+    })
+  }
+)
 
 describe('NovelRenderer は dialog_style: ff を adv 相当として扱う (#840)', () => {
   it('ff は novel ではなく、DialogBox も novel モード・ff 窓にならない', () => {

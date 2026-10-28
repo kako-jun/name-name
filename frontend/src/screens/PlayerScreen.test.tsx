@@ -1369,6 +1369,54 @@ describe('PlayerScreen', () => {
     )
   })
 
+  it('#840: frontmatter dialog_style: ff の RPG 作品は RPGPlayer に dialogStyle="ff" が渡る（未指定は null）', async () => {
+    const rpgDoc = (extra: Record<string, unknown>) => ({
+      engine: 'name-name',
+      ...extra,
+      chapters: [
+        {
+          id: 'c1',
+          title: 'rpg chapter',
+          default_bgm: null,
+          scenes: [
+            {
+              id: 'rpg-map',
+              title: 'rpg scene',
+              events: [
+                {
+                  RpgMap: {
+                    width: 1,
+                    height: 1,
+                    tile_size: 16,
+                    tiles: [[0]],
+                    wall_heights: null,
+                    floor_heights: null,
+                    ceiling_heights: null,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    listProjectsMock.mockResolvedValue([{ name: 'demo', title: 'demo', repo: 'kako-jun/demo' }])
+    getContentsMock.mockResolvedValue({ path: 'script.md', sha: 'sha2', content: '# rpg' })
+    parseMarkdownMock.mockResolvedValue(rpgDoc({ dialog_style: 'ff' }))
+    const { unmount } = render(
+      <PlayerScreen projectName="demo" apiBaseUrl="http://api.test" onBack={() => {}} />
+    )
+    await waitFor(() => expect(screen.getByTestId('rpg-player')).toBeInTheDocument())
+    expect(rpgPlayerProps).toHaveBeenLastCalledWith(expect.objectContaining({ dialogStyle: 'ff' }))
+    unmount()
+
+    rpgPlayerProps.mockReset()
+    parseMarkdownMock.mockResolvedValue(rpgDoc({}))
+    render(<PlayerScreen projectName="demo" apiBaseUrl="http://api.test" onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('rpg-player')).toBeInTheDocument())
+    expect(rpgPlayerProps).toHaveBeenLastCalledWith(expect.objectContaining({ dialogStyle: null }))
+  })
+
   it('#284: listScripts が 0 件のときは「準備中」案内を表示する', async () => {
     listProjectsMock.mockResolvedValue([
       { name: 'missing', title: 'まだ無いゲーム', repo: 'kako-jun/missing' },

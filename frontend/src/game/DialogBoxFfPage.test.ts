@@ -5,6 +5,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { Ticker } from 'pixi.js'
 
+// フォント読み込み完了「後」に文字幅が変わる状況を作る（null = フォント名で決める）
+const wrapState = vi.hoisted(() => ({ px: null as number | null }))
 vi.mock('./FontLoader', () => ({
   ensureFontLoaded: vi.fn().mockResolvedValue(undefined),
   extractPrimaryFamily: (f: string) => f.split(',')[0]?.trim() ?? f,
@@ -21,11 +23,12 @@ vi.mock('./wordwrap', async () => {
       actual.wrapTextWithMeasure(
         text,
         maxWidth,
-        (s) => s.length * (font.includes('wide') ? 20 : 10)
+        (s) => s.length * (wrapState.px ?? (font.includes('wide') ? 20 : 10))
       ),
   }
 })
 import { DialogBox } from './DialogBox'
+import { ensureFontLoaded } from './FontLoader'
 import { FF_CURSOR_BLINK_MS, FF_DIALOG_MS_PER_CHAR } from './ffDialog'
 import { FieldConversation } from './fieldScript'
 import { EventRunner } from './eventRunner'
@@ -258,6 +261,37 @@ describe('DialogBox ff のフォント変更・予約幅・▼の位置 (#840 3�
     typeOut(box)
     expect(box.isAwaitingPage()).toBe(true)
     expect(box.nextPage()).toBe(true)
+    box.dispose()
+  })
+  it('setFontFamily: 変更後に最後まで出しても、見えるのは 1 ページ分（従来の折り返しへ落ちて全ページ分が溢れない）', () => {
+    const box = make(true)
+    box.show('', LONG)
+    typeOut(box)
+    box.setFontFamily('wide, sans-serif')
+    typeOut(box)
+    expect(box.getPageInfo().pages).toBeGreaterThan(2)
+    expect(box.getVisibleText().split('\n').length).toBeLessThanOrEqual(4) // 800x600 の ff は 1 ページ 4 行
+    expect(box.getVisibleText().replace(/\n/g, '').length).toBeLessThan(LONG.length)
+    box.dispose()
+  })
+  it('setFontFamily: フォントの読み込みが終わって文字幅が変わったら、折り返しとページを取り直す', async () => {
+    const box = make(true)
+    box.show('', LONG)
+    typeOut(box)
+    expect(box.getPageInfo().pages).toBe(2)
+    let done!: () => void
+    vi.mocked(ensureFontLoaded).mockReturnValueOnce(new Promise<void>((r) => (done = r)))
+    try {
+      box.setFontFamily('later, sans-serif') // 読み込み前の文字幅 (10px) では 2 ページのまま
+      expect(box.getPageInfo().pages).toBe(2)
+      wrapState.px = 20 // 読み込みが終わると文字幅が変わる
+      done()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(box.getPageInfo().pages).toBeGreaterThan(2)
+    } finally {
+      wrapState.px = null
+    }
     box.dispose()
   })
   it('▼の予約幅 (ffCursorReserve) が折り返し幅から引かれる: ちょうど満杯の行は ▼ を避けて折り返す', () => {
