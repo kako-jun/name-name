@@ -18,6 +18,7 @@ const videoMock = vi.hoisted(() => {
     export: number
     playingToEnd: boolean
     ended: boolean
+    error: boolean
   }> = []
   return { instances }
 })
@@ -33,6 +34,7 @@ vi.mock('./VideoLayer', async () => {
       export: 0,
       playingToEnd: false,
       ended: false,
+      error: false,
     }
     constructor() {
       super()
@@ -54,6 +56,9 @@ vi.mock('./VideoLayer', async () => {
     }
     async prepareForExport() {
       this.rec.export++
+    }
+    hasError() {
+      return this.rec.error
     }
     hasEnded() {
       return this.rec.ended
@@ -392,6 +397,32 @@ describe('WallLayer 状態・復元', () => {
     video.ended = false
     layer.restore({ path: 'a.webm', loop: false, mute: true }, '/assets')
     expect(video.shown).toHaveLength(2)
+  })
+
+  it('動画の読み込み失敗（error）後の同一 restore は読み直す', () => {
+    const { layer, video } = make()
+    layer.show('a.webm', {}, '/assets')
+    video.error = true
+    layer.restore({ path: 'a.webm', loop: true, mute: true }, '/assets')
+    expect(video.shown).toHaveLength(2)
+  })
+
+  it('旧ロードの失敗が新ロード進行中に届いても loading を下ろさず、同一 restore で二重ロードしない', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let rejectA!: (e: Error) => void
+    const load = vi
+      .spyOn(Assets, 'load')
+      .mockImplementation(((url: string) =>
+        url.endsWith('a.webp')
+          ? new Promise((_r, rej) => (rejectA = rej))
+          : new Promise(() => {})) as never)
+    const { layer } = make()
+    layer.show('a.webp', {}, '/assets')
+    layer.show('b.webp', {}, '/assets')
+    rejectA(new Error('late'))
+    await flushPromises()
+    layer.restore({ path: 'b.webp', loop: true, mute: true }, '/assets')
+    expect(load).toHaveBeenCalledTimes(2)
   })
 
   it('getState → restore の往復で同じ状態に戻る', () => {

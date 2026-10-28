@@ -401,7 +401,9 @@ describe('NovelRenderer 壁 の終劇後の復元・最初から・同一壁の 
     expect(before.wall?.path).toBe('a.webp')
     internalsOf<{ endStory(): void }>(r).endStory()
     expect(r.getSnapshot().wall).toBeNull()
+    const show = vi.spyOn(internals<LocalInternals>(r).wallLayer, 'show')
     ;(r as unknown as { applyState(s: NovelGameState): void }).applyState(before)
+    expect(show).toHaveBeenCalledWith('a.webp', { loop: true, mute: true }, expect.any(String))
     expect(r.getSnapshot().wall).toEqual({ path: 'a.webp', loop: true, mute: true })
   })
 
@@ -444,9 +446,11 @@ describe('NovelRenderer 壁 の終劇後の復元・最初から・同一壁の 
     expect(show).toHaveBeenCalledTimes(1)
     await r.playScript([{ type: 'advance' }, { type: 'advance' }]) // -> wall b.webm
     expect(r.getSnapshot().wall?.path).toBe('b.webm')
+    const n = show.mock.calls.length
     r.goBack() // b -> a の状態へ
     expect(r.getSnapshot().wall?.path).toBe('a.webm')
-    expect(show.mock.calls.length).toBeGreaterThan(1)
+    expect(show.mock.calls.length).toBe(n + 1)
+    expect(show.mock.calls[n][0]).toBe('a.webm')
   })
 })
 
