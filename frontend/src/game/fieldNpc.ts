@@ -156,20 +156,30 @@ export function nearestTalkableNpc(
 ): string | null {
   const f = FACING_VEC[facing]
   const cosMin = Math.cos((coneDeg * Math.PI) / 180)
-  let best: string | null = null
-  let bestD = Infinity
+  // 円錐内を先に選ぶ（背後で円に触れているだけの NPC が、円錐内の少し遠い NPC より優先されないように）。円錐内が無ければ触れている NPC
+  let bestCone: string | null = null
+  let bestConeD = Infinity
+  let bestTouch: string | null = null
+  let bestTouchD = Infinity
   for (const n of npcs) {
     const d = dist(n, pos)
     if (d > reach) continue
     const inCone = d < 1e-6 || ((n.x - pos.x) * f.x + (n.y - pos.y) * f.y) / d >= cosMin - 1e-9
+    if (inCone) {
+      if (d < bestConeD) {
+        bestCone = n.id
+        bestConeD = d
+      }
+      continue
+    }
     // 円に触れている（stepMoveAroundNpcs は円周 + 1e-6 で止めるので余裕を持たせる）なら向きによらず話せる
-    if (!inCone && d > NPC_BLOCK_RADIUS + NPC_TOUCH_SLACK) continue
-    if (d < bestD) {
-      best = n.id
-      bestD = d
+    if (d > NPC_BLOCK_RADIUS + NPC_TOUCH_SLACK) continue
+    if (d < bestTouchD) {
+      bestTouch = n.id
+      bestTouchD = d
     }
   }
-  return best
+  return bestCone ?? bestTouch
 }
 
 /** クリックで近づく先に着いたか（足元どうしが NPC_APPROACH_STOP 以内） */

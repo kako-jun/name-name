@@ -1,4 +1,5 @@
 {
+  "scriptUrl": "field-sample/teramachi-npc.md",
   "startScene": "shrine-street",
   "start": {
     "x": 300,
@@ -93,7 +94,17 @@
           },
           "height": 140,
           "facing": "left",
-          "line": "この通りは、ゆるい坂の上まで続いているよ。"
+          "line": "この通りは、ゆるい坂の上まで続いているよ。",
+          "scene": "近所の子の話"
+        },
+        {
+          "id": "gatekeeper",
+          "name": "門番",
+          "x": 520,
+          "y": 560,
+          "sprite": "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-down-1.webp",
+          "height": 140,
+          "line": "scene を書かない NPC は、固定の 1 行で話すよ。"
         }
       ],
       "encounter": {

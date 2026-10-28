@@ -95,8 +95,10 @@ export interface FieldNpc {
   height?: number
   /** 最初に向く向き。省略 = down（`sprite` 単一画像のときは向きの見た目は変わらない） */
   facing: Facing
-  /** 話しかけたとき DialogBox に出す 1 行 */
+  /** 話しかけたとき DialogBox に出す 1 行（`scene` が無い・見つからないときの台詞） */
   line: string
+  /** 脚本 `.md`（設定の `scriptUrl`）の `[イベント <name>]` の名前 (#841 段階2)。省略 = 固定の `line` だけ */
+  scene?: string
 }
 
 export interface FieldSceneConfig {
@@ -188,6 +190,10 @@ export interface FieldSampleConfig {
    * 読み込み（fetch）は main.ts の責務。未指定は undefined
    */
   emotionsSource?: { url: string; resolveImage: (u: string) => string | null }
+  /**
+   * NPC の会話を書いた脚本 `.md` の URL (#841 段階2)。`scriptUrl`。解決済みの URL。読み込み（fetch・パース）は main.ts の責務。未指定は undefined
+   */
+  scriptUrl?: string
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
   encounter: EncounterStepConfig
   /** エンカウントで使うモンスターのマスター (#809) */
@@ -720,6 +726,27 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `emotionsUrl は URL 文字列である必要があります: ${JSON.stringify(raw.emotionsUrl)}（無視します）`
       )
   }
+  // NPC の脚本 (#841 段階2)。emotionsUrl と同じ規則。不正は警告して無視（固定の line で動く）
+  let scriptUrl: string | undefined
+  if (raw.scriptUrl !== undefined) {
+    const su =
+      typeof raw.scriptUrl === 'string' && raw.scriptUrl.trim()
+        ? resolveUrl(resolveRpgImagePath(assetBase, raw.scriptUrl.trim()), baseUrl)
+        : null
+    if (su) scriptUrl = su
+    else
+      warnings.push(
+        `scriptUrl は URL 文字列である必要があります: ${JSON.stringify(raw.scriptUrl)}（無視します）`
+      )
+  }
+  // scriptUrl が無いのに scene を書いた NPC は、固定の line で話す（読み込み時に気づけるよう警告）
+  if (!scriptUrl)
+    for (const [sid, sc] of Object.entries(scenes))
+      for (const n of sc.npcs ?? [])
+        if (n.scene !== undefined)
+          warnings.push(
+            `scenes.${sid}.npcs の ${n.id} は scene "${n.scene}" を指していますが scriptUrl がありません（固定の line で話します）`
+          )
   const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -777,6 +804,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       companion,
       ...(hasEmotions(em.emotions) ? { emotions: em.emotions } : {}),
       ...(emotionsSource ? { emotionsSource } : {}),
+      ...(scriptUrl ? { scriptUrl } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,
@@ -815,6 +843,7 @@ const NPC_KEYS: readonly string[] = [
   'height',
   'facing',
   'line',
+  'scene',
 ]
 
 /**
@@ -873,6 +902,15 @@ function parseNpcs(
     if (typeof n.line !== 'string' || !n.line.trim()) {
       skip('.line（台詞 1 行）は空でない文字列が必要です')
       continue
+    }
+    // scene は任意。不正（空・文字列でない）は警告してその項目だけ無視する（NPC は固定の line で残す）
+    let scene: string | undefined
+    if (n.scene !== undefined) {
+      if (typeof n.scene === 'string' && n.scene.trim()) scene = n.scene.trim()
+      else
+        warnings.push(
+          `${p}.scene は空でない文字列が必要です（無視します。固定の line で話します）: ${JSON.stringify(n.scene)}`
+        )
     }
     let facing: Facing = 'down'
     if (n.facing !== undefined) {
@@ -935,6 +973,7 @@ function parseNpcs(
       ...(height !== undefined ? { height } : {}),
       facing,
       line: n.line,
+      ...(scene !== undefined ? { scene } : {}),
     })
   }
   return out

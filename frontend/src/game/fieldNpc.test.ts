@@ -404,3 +404,19 @@ describe('npcPlacementWarnings (#841)', () => {
     expect(npcPlacementWarnings(m, [npc('ok', 10, 10)], 'a')).toEqual([])
   })
 })
+
+describe('nearestTalkableNpc: 円錐内を先に選ぶ (#841 段階2)', () => {
+  const me = { x: 300, y: 300 }
+  it('背後で円に触れている NPC より、円錐内の少し遠い NPC を優先する', () => {
+    // behind は背後の距離 30（円に触れている・距離は近い）、front は前方 70
+    const n = [npc('behind', 270, 300), npc('front', 370, 300)]
+    expect(nearestTalkableNpc(n, me, 'right')).toBe('front')
+  })
+  it('円錐内が無ければ、円に触れている NPC に話せる（従来の例外）', () => {
+    expect(nearestTalkableNpc([npc('behind', 270, 300)], me, 'right')).toBe('behind')
+  })
+  it('円錐内どうしは近いほう', () => {
+    const n = [npc('far', 380, 300), npc('near', 350, 300), npc('behind', 270, 300)]
+    expect(nearestTalkableNpc(n, me, 'right')).toBe('near')
+  })
+})
