@@ -106,6 +106,17 @@
           "sprite": "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-down-1.webp",
           "height": 140,
           "line": "scene を書かない NPC は、固定の 1 行で話すよ。"
+        },
+        {
+          "id": "girl-next-door",
+          "name": "近所の女の子",
+          "x": 1020,
+          "y": 590,
+          "sprite": "http://localhost:8765/assets/images/characters/shared/anonymous-kid-girl-short.webp",
+          "height": 138,
+          "facing": "left",
+          "line": "ねえ、あっちの坂、のぼってみた？",
+          "scene": "近所の女の子の話"
         }
       ],
       "encounter": {
