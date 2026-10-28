@@ -774,6 +774,45 @@ describe.each(['Theater', 'Novel'] as const)(
       expect(spriteCount(layer)).toBe(1)
     })
 
+    it('A→B→C→D で D・C が失敗して A が退場中のとき、B が届いても A の退場は回り直されない', async () => {
+      await showA()
+      const gb = loader.hold('b')
+      const gc = loader.hold('c')
+      const gd = loader.hold('d')
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      showCounted(layer, 'b')
+      showCounted(layer, 'c')
+      showCounted(layer, 'd')
+      // 全候補の失敗と瞬断リトライの待機を仮想時間で越える。
+      const failAll = async (): Promise<void> => {
+        for (const ms of [1000, 5000, 20000]) {
+          time.tick(ms)
+          for (let i = 0; i < 10; i++) await flushPromises()
+        }
+      }
+      gd.reject()
+      await failAll()
+      gc.reject()
+      await failAll()
+      advance(layer, 300)
+      const a = [...chars(layer).entries()].find(([k]) => k.endsWith('__transition_1'))?.[1]
+      expect(a).toBeDefined()
+      // A は C 失敗のロールバックの掃除で既に退場中（Theater は板フリップ out、ノベルは退場フェード）。
+      const outStart = a!.flipAnimation?.startMs
+      const fade = a!.fadeAnimation
+      if (mode === 'Theater') expect(a!.flipAnimation?.role).toBe('out')
+      else expect(fade?.destroyOnComplete).toBe(true)
+      gb.resolve()
+      for (let i = 0; i < 10; i++) await flushPromises()
+      advance(layer, 16)
+      // B の遷移が A を自分の旧 state として演出し直さない（開始時刻・フェードが同一のまま）。
+      if (mode === 'Theater') expect(a!.flipAnimation?.startMs).toBe(outStart)
+      else expect(a!.fadeAnimation).toBe(fade)
+      await settle(layer)
+      expect(a!.sprite.destroyed).toBe(true)
+      expectSettledTo(layer, 'b')
+    })
+
     it('A→B→C→D を矢継ぎ早に変えても最終的に D だけが残り、全 show の onReady が 1 回ずつ', async () => {
       const a = await showA()
       const gb = loader.hold('b')
