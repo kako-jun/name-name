@@ -1395,7 +1395,12 @@ depth 指定の実例（#694）:
 
 - 対象は `cameraMode === 'Theater'` のときの `CharacterLayer.show()` の同一人物 texture 変更経路のみ。ノベルモード、`instant`（seek/save-load 復元）、`character_fade_ms` が 0 の経路は従来どおり（クロスフェード/即時差し替え）で、回転は再生しない
 - 描画は pixi.js 標準の `PerspectiveMesh`（Three.js は使わない）。回転中は sprite を不可視にし、同じ texture の mesh を sprite と同じ z-order に置いて `setCorners` で四隅を毎フレーム更新する。紙人形輪郭（#699）は `applySpriteFilters()` が mesh にも同じフィルタを渡すため、回転中も付く
-- 角度・四隅の計算は純粋関数 `frontend/src/game/boardFlip.ts`（`computeBoardFlipFrame` / `computeBoardFlipCorners`）。`Math.random` 不使用で、入力は TimeController 駆動の経過時間のみ。進行状態は `CharacterState.flipAnimation`（描画側の一時状態）に持ち、`NovelGameState` には中間値を持たない（ADR 0002）
+- 角度・四隅の計算は純粋関数 `frontend/src/game/boardFlip.ts`（`computeBoardFlipFrame` / `computeBoardFlipCorners`）。`Math.random` 不使用で、入力は経過時間のみ。時計は `CharacterLayer` の `elapsedMs`（pixi Ticker の `deltaMS` 累計）で、TimeController とは別の時計（フェード・stageMotion と同じ流儀）。進行状態は `CharacterState.flipAnimation`（描画側の一時状態）に持ち、`NovelGameState` には中間値を持たない（ADR 0002）
+- 角度は `±BOARD_FLIP_MAX_ANGLE_RAD`（π/2 - 0.01）で丸める。ちょうど 90° だと四隅が線に潰れて `PerspectivePlaneGeometry.setCorners` の頂点が非有限値になるため。`in` は前半（half ちょうどを含む）は不可視
+- 回転中の板は sprite の alpha を毎フレーム mesh に写す（フェードイン途中・回転中の通常速度 `[退場]` に追従）。名前ラベル（オフスクリーン登場）は板が見えている間だけ sprite の alpha で表示し、旧板は回転の前半、新板は後半に出る。mesh の texture は sprite に追従する（回転中の skip で表情が変わっても古い絵を回さない）
+- 回り去る旧ポーズの板（`flipAnimation.role === 'out'`）は 1 位置 1 キャラの衝突退場（`evictCollidersAt`）の対象にしない。自分の回転完了で必ず消えるスナップショットで、退場フェードを重ねると完了待ち合わせが旧板の破棄に巻き込まれて失われるため。退場フェードが先に張られていた場合も、out 完了時にその `onComplete` を必ず呼ぶ
+- 連続変更（A→B→C）: B が `in` の途中（可視）なら、B は現在角度から回し続けて消える（`fromAngleRad`）。B がまだ不可視（`in` の前半）なら一度も見えていないので回さず破棄する。この場合 A の旧板が消えてから C の新板が現れるまで、最大で半周期分、板が何も見えない間が空く（既知の制約）。衝突退場待ちで未 attach の旧 state は回さず従来のフェードで片付ける（最前面に突然現れるのを避ける）
+- **回転中の板は `sprite.rotation`（`[アニメ]` の傾き）と `sprite.mask` を反映しない**（mesh が sprite の代わりに描くため）。回転は短時間で、ポーズ変更と `[アニメ]` の傾きを同時に使う想定はプロトタイプのスコープ外
 - 待機判定（`hasActivePortraitTransition` / `hasActiveAnimation`）は `flipAnimation` も進行中として扱う
 
 ### 幕（実装済み・#697）
