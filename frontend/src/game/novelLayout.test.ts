@@ -3809,8 +3809,6 @@ describe('computeFloorPlacement (#706 第2弾)', () => {
     expect(p.y + p.height).toBe(400)
     // 画像 32px 高 → 帯 100px 高: 3.125 倍
     expect(p.tileScale).toBe(100 / 32)
-    // 横方向に並ぶタイル数 = 画面幅 / (画像幅 × tileScale) = 800 / 200
-    expect(p.tilesAcross).toBe(4)
   })
 
   it('高さ比が大きいほど帯は厚く、タイル（縦横比を保つ）は大きくなり、数は減る', () => {
@@ -3820,7 +3818,6 @@ describe('computeFloorPlacement (#706 第2弾)', () => {
     expect(b.y).toBe(200)
     expect(b.height).toBeGreaterThan(a.height)
     expect(b.tileScale).toBe(2 * a.tileScale)
-    expect(b.tilesAcross).toBe(a.tilesAcross / 2)
   })
 
   it('高さ比 1.0 は画面全体を覆う（y=0）', () => {
@@ -3849,7 +3846,6 @@ describe('computeFloorPlacement (#706 第2弾)', () => {
     expect(p.y + p.height).toBeCloseTo(sh, 10)
     // タイルは縦横比を保つ（帯の高さ / 画像高 = tileScale）
     expect(p.tileScale).toBeCloseTo((sh * 0.3) / 64, 10)
-    expect(p.tilesAcross).toBeCloseTo(sw / (128 * p.tileScale), 10)
   })
 
   it('画面サイズを変えると同じ画像でも配置・タイル数が追従する', () => {

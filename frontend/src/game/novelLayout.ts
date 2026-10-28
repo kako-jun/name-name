@@ -1621,8 +1621,7 @@ export function clampFloorHeight(value: unknown): number {
 /**
  * 床 (#706 第2弾) の配置。画面の下部に下端揃え・横幅フィットの帯（高さ = 画面高さ × 高さ比）として置き、
  * 画像は帯の高さに合わせて横方向にタイルする純粋関数。anchor (0,0) 前提の左上座標を返す。
- * `tileScale` は画像の高さを帯の高さに合わせる倍率（縦横比は保つ）、`tilesAcross` は横方向に並ぶタイルの数
- * （端数あり。最後のタイルは途中で切れる）。画像や画面の寸法が 0 以下・非有限のときは null（置かない）。
+ * `tileScale` は画像の高さを帯の高さに合わせる倍率（縦横比は保つ。横方向の端のタイルは途中で切れる）。画像や画面の寸法が 0 以下・非有限のときは null（置かない）。
  * 高さ比は `clampFloorHeight` で範囲に寄せる。
  */
 export function computeFloorPlacement(
@@ -1637,11 +1636,10 @@ export function computeFloorPlacement(
   width: number
   height: number
   tileScale: number
-  tilesAcross: number
 } | null {
   const valid = (n: number) => Number.isFinite(n) && n > 0
   if (![textureWidth, textureHeight, screenWidth, screenHeight].every(valid)) return null
-  const height = screenHeight * clampFloorHeight(heightRatio)
+  const height = Math.max(1, Math.round(screenHeight * clampFloorHeight(heightRatio)))
   const tileScale = height / textureHeight
   return {
     x: 0,
@@ -1649,7 +1647,6 @@ export function computeFloorPlacement(
     width: screenWidth,
     height,
     tileScale,
-    tilesAcross: screenWidth / (textureWidth * tileScale),
   }
 }
 

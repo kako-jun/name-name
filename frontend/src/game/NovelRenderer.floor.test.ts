@@ -385,11 +385,13 @@ describe('NovelRenderer 床 のレイヤー順・可視性・破棄 (#706 第2�
     cleanupRenderer(r)
   })
 
-  it('カーテンコール配置（幕を背景板の直後へ差し替え）でも床は幕・キャラより奥のまま', async () => {
+  it('通常の幕（最前面）は床より手前。カーテンコール配置では幕が背景板の直後へ移り床は幕より手前、キャラより奥', async () => {
     const r = new NovelRenderer()
     muteAudio(r)
     await initRenderer(r)
     const ri = internals<LocalInternals>(r)
+    const chInit = ri.app.stage.children
+    expect(chInit.indexOf(ri.floorLayer)).toBeLessThan(chInit.indexOf(ri.curtainLayer))
     r.setScenes([
       scene('a', [
         { Curtain: { path: 'c.png', characters_in_front: true } } as Event,
@@ -397,8 +399,9 @@ describe('NovelRenderer 床 のレイヤー順・可視性・破棄 (#706 第2�
       ]),
     ])
     const ch = ri.app.stage.children
+    expect(ch.indexOf(ri.floorLayer)).toBeGreaterThan(ch.indexOf(ri.curtainLayer))
     expect(ch.indexOf(ri.floorLayer)).toBeLessThan(ch.indexOf(ri.characterLayer))
-    expect(ch.indexOf(ri.floorLayer)).toBeGreaterThan(ch.indexOf(ri.backgroundBoardLayer))
+    expect(ch.indexOf(ri.curtainLayer)).toBeGreaterThan(ch.indexOf(ri.backgroundBoardLayer))
     cleanupRenderer(r)
   })
 

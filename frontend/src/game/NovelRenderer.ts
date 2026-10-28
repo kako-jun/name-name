@@ -1481,7 +1481,7 @@ export class NovelRenderer {
     this.floorLayer.clear()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
-    // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
+    // 元の全背面レイヤー（背景・壁・背景板・床・動画・立ち絵・大道具）が一瞬見える。
     // 終劇専用の黒フェードで画面を覆い切った後に片付ける。
     this.background.fadeOutBackgroundEntries(eraseBackgroundFadeMs)
     this.characterLayer.clearForSceneTransition(eraseCharacterFadeMs)
@@ -2194,7 +2194,8 @@ export class NovelRenderer {
     this.eventImageLayer.visible = true
     this.stageFrontLayer.visible = true
     this.weatherLayer.visible = true
-    this.floorLayer.visible = true
+    // 床は背面スタックの一部（イベント絵の背面隠しの対象）なので、強制表示せず背面隠しの状態に従う。
+    this.floorLayer.visible = !this.eventImageLayer.shouldHideBackLayer()
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     if (this.titleScreenSavedCharacterSplitRegion) {
       this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)
