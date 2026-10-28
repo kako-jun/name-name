@@ -161,6 +161,7 @@ export interface DialogBoxConfig {
    * FF 風の窓（デフォルト: false = 従来の下部の窓）(#840)。
    * true のとき窓を画面上部に固定し（`computeFfDialogRect`）、戦闘窓と同じ ff-blue の帯状グラデーション＋
    * 白枠＋黒い影の文字にする。typewriter の速度は `msPerChar`（未指定は従来と同じ 30ms）。
+   * 発話者名は出さない（名札・インライン名とも無し。台詞本文だけ）。
    * novel / split_layout / 2窓モードとは併用しない（それらが優先される）。
    */
   ffWindow?: boolean
@@ -1722,7 +1723,7 @@ export class DialogBox extends Container {
   }
 
   private textStartY(): number {
-    if (!this.nameSeparateBox && this.inlineNameText) {
+    if (!this.ffWindow && !this.nameSeparateBox && this.inlineNameText) {
       // インライン名の下
       return this.boxY + this.padding + (this.fontSize - 4) + 4
     }
@@ -1737,7 +1738,8 @@ export class DialogBox extends Container {
   }
 
   private updateNameDisplay(name: string | null): void {
-    if (this.effectiveBorderless() || !name) {
+    // FF 風の窓は発話者名を出さない（渡されても無視。名前分の余白も取らない）(#840)
+    if (this.ffWindow || this.effectiveBorderless() || !name) {
       this.nameBox.visible = false
       this.nameText.visible = false
       if (this.inlineNameText) this.inlineNameText.visible = false

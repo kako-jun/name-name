@@ -18,7 +18,10 @@ import { FF_BLUE_TEXT_SHADOW } from './windowStyle'
 
 interface Internals {
   ticker: Ticker
-  dialogText: { text: string; style: { dropShadow: unknown } }
+  dialogText: { text: string; x: number; y: number; style: { dropShadow: unknown } }
+  inlineNameText: { text: string; visible: boolean } | null
+  nameText: { visible: boolean }
+  nameBox: { visible: boolean }
   ffBands: { visible: boolean }
   bg: { visible: boolean }
 }
@@ -149,6 +152,59 @@ describe('DialogBox ffWindow (#840)', () => {
     expect(internals(box).ffBands.visible).toBe(false)
     expect(box.isBackgroundVisible).toBe(false)
     box.dispose()
+  })
+})
+
+describe('DialogBox ff は発話者名を出さない (#840)', () => {
+  it('名前を渡しても名札・インライン名とも出ない', () => {
+    const box = make(true)
+    box.show('おばあさん', 'こんにちは')
+    const i = internals(box)
+    expect(i.inlineNameText?.visible).toBe(false)
+    expect(i.inlineNameText?.text ?? '').toBe('')
+    expect(i.nameText.visible).toBe(false)
+    expect(i.nameBox.visible).toBe(false)
+    box.dispose()
+  })
+  it('名前ありでも名前なしでも本文の位置・折り返しが同じ（名前分の余白なし）', () => {
+    const named = make(true)
+    const anon = make(true)
+    const text = 'ながいながい台詞です。'.repeat(8)
+    named.show('おばあさん', text)
+    anon.show('', text)
+    named.skipTypewriter()
+    anon.skipTypewriter()
+    expect(internals(named).dialogText.x).toBe(internals(anon).dialogText.x)
+    expect(internals(named).dialogText.y).toBe(internals(anon).dialogText.y)
+    expect(named.getVisibleText()).toBe(anon.getVisibleText())
+    // 本文は窓の上端 + パディングから始まる（名前 1 行分の余白を取らない）
+    const r = computeFfDialogRect(800, 600)
+    expect(internals(named).dialogText.y).toBe(r.y + r.padding)
+    named.dispose()
+    anon.dispose()
+  })
+  it('固定 1 行・ナレーション（名前なし）・脚本の台詞のどの経路でも名前は出ない', () => {
+    const box = make(true)
+    const runner = { run: vi.fn(), advance: vi.fn(), isRunning: false, destroy: vi.fn() }
+    new FieldConversation(box, runner).start('近所の子', '固定の一行', undefined, () => {})
+    expect(internals(box).inlineNameText?.visible).toBe(false)
+    box.show('', 'ナレーション')
+    expect(internals(box).inlineNameText?.visible).toBe(false)
+    box.show('近所の子', '台詞')
+    expect(internals(box).inlineNameText?.visible).toBe(false)
+    box.dispose()
+  })
+  it('未指定（従来の窓）では名前が出て、本文は名前の下から始まる', () => {
+    const box = make(false)
+    box.show('おばあさん', 'こんにちは')
+    const i = internals(box)
+    expect(i.inlineNameText?.visible).toBe(true)
+    expect(i.inlineNameText?.text).toBe('おばあさん')
+    const anon = make(false)
+    anon.show('', 'こんにちは')
+    expect(i.dialogText.y).toBe(internals(anon).dialogText.y) // 既存: 余白は名前の有無で変わらない
+    box.dispose()
+    anon.dispose()
   })
 })
 
