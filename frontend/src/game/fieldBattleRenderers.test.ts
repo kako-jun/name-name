@@ -146,6 +146,55 @@ describe.each([
     expect(dq.battleScreen!.opts.presentation).toBe('dq')
   })
 
+  describe('battle_effects の読み込みと配線 (#941)', () => {
+    const json = (name: string) =>
+      JSON.stringify({ impact: { image: `${name}.png`, frames: 2, frameMs: 100 } })
+    const resp = (body: string) => Promise.resolve(new Response(body, { status: 200 }))
+    const flush = async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    const imageOf = (f: Field): string | undefined =>
+      (f.battleScreen!.opts.effects as { impact?: { image: string } } | undefined)?.impact?.image
+    afterEach(() => vi.unstubAllGlobals())
+
+    it('宣言があれば読み込み後の戦闘の opts.effects に届き、宣言なしは載らない', async () => {
+      vi.stubGlobal('fetch', () => resp(json('a')))
+      const f = make({ battleEffects: 'e.json' })
+      await flush()
+      f.startBattle([enemy()])
+      expect(imageOf(f)).toBe('a.png')
+      const none = make()
+      none.startBattle([enemy()])
+      expect('effects' in none.battleScreen!.opts).toBe(false)
+    })
+
+    it('読み込みが終わる前に load() し直すと、古い結果は捨てて新しい方を使う', async () => {
+      let release: (r: Response) => void = () => {}
+      const slow = new Promise<Response>((r) => (release = r))
+      const calls = [slow, resp(json('b'))]
+      vi.stubGlobal('fetch', () => calls.shift())
+      const f = make({ battleEffects: 'old.json' })
+      f.load(project(view, { battleEffects: 'new.json' }))
+      await flush()
+      release(new Response(json('a'), { status: 200 }))
+      await flush()
+      f.startBattle([enemy()])
+      expect(imageOf(f)).toBe('b.png')
+    })
+
+    it('destroy() 後に届いた結果は反映しない', async () => {
+      let release: (r: Response) => void = () => {}
+      vi.stubGlobal('fetch', () => new Promise<Response>((r) => (release = r)))
+      const f = make({ battleEffects: 'e.json' })
+      f.initialized = false // PixiJS Application の実体は無いので app.destroy 側は通さない
+      f.destroy()
+      release(new Response(json('a'), { status: 200 }))
+      await flush()
+      expect((f as unknown as { battleEffects: unknown }).battleEffects).toBeUndefined()
+    })
+  })
+
   it('戦闘中に load() し直すと戦闘画面が畳まれ、古い onClose が新しいマップのクールダウンを上書きしない', () => {
     const f = make()
     f.startBattle([enemy()])

@@ -50,7 +50,6 @@ import { resolveMemberEquipment, type EquipmentRoster } from './equipment'
 import type { BattleTransitionMode } from './battleTransition'
 import type { FieldBattleTransition } from './fieldBattleTransition'
 import type { BattleEffects } from './battleEffects'
-import { loadBattleEffects } from './battleEffectsLoader'
 
 /** 戦闘画面の設定（frontmatter 由来）。未指定の既定値は `readFieldBattleSettings` が正本 */
 export interface FieldBattleSettings {
@@ -566,17 +565,4 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   })
   stage.addChild(screen)
   return screen
-}
-
-/**
- * `battle_effects` (#941) の JSON を読み込む。レンダラーの `load()` から呼び、戻り値を `openFieldBattle` の `effects` に渡す。
- * `isCurrent` が false を返す（再 load された）結果は捨てる。読めない・不正は警告して undefined（従来どおり）
- */
-export async function loadFieldBattleEffects(
-  path: string | undefined,
-  assetBaseUrl: string | undefined,
-  isCurrent: () => boolean
-): Promise<BattleEffects | undefined> {
-  const effects = await loadBattleEffects(path, assetBaseUrl)
-  return isCurrent() ? effects : undefined
 }
