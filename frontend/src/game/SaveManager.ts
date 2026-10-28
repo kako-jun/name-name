@@ -19,6 +19,7 @@ import {
   SpotlightState,
   VideoState,
   StageFrontState,
+  WeatherState,
   WallState,
 } from './GameState'
 import type { PaperDollOutlineConfig } from './outlineFilter'
@@ -80,6 +81,11 @@ export interface SaveSlotData {
    * 後方互換: 古いセーブデータには無い → undefined/null は舞台前面なし扱い。
    */
   stageFront?: StageFrontState | null
+  /**
+   * 天候 (#706)。
+   * 後方互換: 古いセーブデータには無い → undefined/null は天候なし扱い。
+   */
+  weather?: WeatherState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。
    * 後方互換: 古いセーブデータには無い → undefined は空配列（大道具なし）扱い。

@@ -56,6 +56,7 @@ function craftSnapshot(over: Partial<NovelGameState>): NovelGameState {
     backgroundBoards: [],
     wall: null,
     stageFront: null,
+    weather: null,
     props: [],
     spotlight: null,
     curtain: null,

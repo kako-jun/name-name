@@ -40,6 +40,8 @@ export type EventImageBack = 'Hide' | 'Keep'
 /** イベント絵の遷移モード (#583)。既定は 'Fade'（既存の透明度フェード、非回帰）。
  *  'Pixelate' はドットが段階的に荒くなる→切り替わる→段階的に細かく戻る。 */
 export type EventImageTransition = 'Fade' | 'Pixelate'
+/** 天候演出の種類 (#706)。`[天候: 雨|雪|桜]`。 */
+export type WeatherKind = 'Rain' | 'Snow' | 'Sakura'
 /** テロップ表示位置 (#674)。既定は 'BottomRight'（画面右下）。 */
 export type TelopPosition = 'TopLeft' | 'TopRight' | 'BottomRight' | 'BottomLeft'
 
@@ -532,6 +534,19 @@ export type Event =
       StageFront: { path: string }
     }
   | 'StageFrontExit'
+  | {
+      /**
+       * 天候演出 (#706)。雨・雪・桜吹雪の粒を画面空間のオーバーレイとして降らせる単一スロット。
+       * 新しい `Weather` は前の天候を置換する。解除は `'WeatherExit'`（`[天候: なし]`）。
+       */
+      Weather: {
+        kind: WeatherKind
+        /** 粒の密度の倍率。wasm は既定値（1.0）を出力に載せないため型上は optional。
+         *  `parseMarkdown()` の正規化（wasm/parser.ts）が後で必ず number に揃える。 */
+        intensity?: number
+      }
+    }
+  | 'WeatherExit'
   | {
       Video: {
         path: string

@@ -2837,3 +2837,48 @@ describe('wasm parseMarkdown: 舞台前面 (#705)', () => {
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// 天候 (#706)。wasm → normalizeEvents 経路で、`[天候: …]` が Weather に（強さは必ず number に正規化）、
+// 解除 `[天候: なし]` が 'WeatherExit' になり、emit が往復することを縛る。
+describe('wasm parseMarkdown: 天候 (#706)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[天候: 雨]',
+    '[天候: snow, intensity=1.5]',
+    '[天候: 桜, 強さ=99]',
+    '[天候: 雨, 強さ=abc]',
+    '[天候: 霧]',
+    '[天候: なし]',
+    '',
+  ].join('\n')
+
+  it('種類・強さは Weather に（強さ省略は 1）、解除は WeatherExit、未知の種類は捨てられ、強さはクランプ・不正値は既定', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events).toEqual([
+      { Weather: { kind: 'Rain', intensity: 1 } },
+      { Weather: { kind: 'Snow', intensity: 1.5 } },
+      { Weather: { kind: 'Sakura', intensity: 3 } },
+      { Weather: { kind: 'Rain', intensity: 1 } },
+      'WeatherExit',
+    ])
+  })
+
+  it('round-trip: 既定の強さは出力せず、非既定は 強さ= を出し、解除は [天候: なし]', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[天候: 雨]\n')
+    expect(emitted).toContain('[天候: 雪, 強さ=1.5]\n')
+    expect(emitted).toContain('[天候: 桜, 強さ=3]\n')
+    expect(emitted).toContain('[天候: なし]\n')
+    expect(emitted).not.toContain('霧')
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

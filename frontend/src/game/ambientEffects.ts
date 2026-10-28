@@ -27,7 +27,7 @@ export function computeWobbleOffset(elapsedMs: number): { x: number; y: number }
  * 三角関数ベース計算と同じく PixiJS/DOM に依存しない純粋関数）。ろうそく揺れの
  * 「数コマ単位のステップ」ごとに異なるが再現可能な値を得るための小さなハッシュとして使う。
  */
-function mulberry32(seed: number): number {
+export function mulberry32(seed: number): number {
   let a = seed >>> 0
   a |= 0
   a = (a + 0x6d2b79f5) | 0

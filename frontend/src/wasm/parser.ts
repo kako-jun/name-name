@@ -216,6 +216,11 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
         Emotion: { target: em.target, kind: em.kind, duration_ms: em.duration_ms ?? null },
       }
     }
+    if ('Weather' in event) {
+      // #706: Rust 側は既定の強さ（1.0）を JSON に載せないため型上は optional のまま届く。ここで number に揃える。
+      const w = event.Weather
+      return { Weather: { kind: w.kind, intensity: w.intensity ?? 1 } }
+    }
     if ('Wall' in event) {
       // #703: Rust 側は既定値（loop/mute とも true）を JSON に載せない（skip_serializing_if）ため、
       // 型上は optional のまま届く。利用側が毎回 `?? true` を書かずに済むよう、ここで boolean に揃える。

@@ -1219,6 +1219,7 @@ describe('saveSlotToGameState', () => {
         : null,
       // 舞台前面 (#705)。古いセーブには無い → ?? null で舞台前面なしに倒す。
       stageFront: data.stageFront ?? null,
+      weather: data.weather ?? null,
       // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
       props: data.props ?? [],
       // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1266,6 +1267,7 @@ describe('saveSlotToGameState', () => {
       backgroundBoards: [],
       wall: null,
       stageFront: null,
+      weather: null,
       props: [],
       spotlight: null,
       curtain: null,
@@ -3706,6 +3708,37 @@ describe('computeStageFrontPlacement (#705)', () => {
     [800, Infinity, 800, 450],
   ])('寸法が不正（%p,%p,%p,%p）なら null', (tw, th, sw, sh) => {
     expect(computeStageFrontPlacement(tw, th, sw, sh)).toBeNull()
+  })
+})
+
+describe('saveSlotToGameState / gameStateToSaveSlot: weather (#706)', () => {
+  const base = {
+    sceneId: 's',
+    eventIndex: 0,
+    textIndex: 0,
+    flags: {},
+    backgroundPath: null,
+    isBlackout: false,
+    characters: [],
+    currentBgmPath: null,
+  } as unknown as Parameters<typeof saveSlotToGameState>[0]
+
+  it('weather が往復し、古いセーブ（無し）・null は天候なし', () => {
+    expect(saveSlotToGameState(base, null).weather).toBeNull()
+    expect(saveSlotToGameState({ ...base, weather: null }, null).weather).toBeNull()
+    expect(
+      saveSlotToGameState({ ...base, weather: { kind: 'Rain', intensity: 1.5 } }, null).weather
+    ).toEqual({ kind: 'Rain', intensity: 1.5 })
+  })
+
+  it('壊れた強さ（範囲外・NaN・負）は範囲へ寄せる', () => {
+    const load = (intensity: number) =>
+      saveSlotToGameState({ ...base, weather: { kind: 'Snow', intensity } }, null).weather
+        ?.intensity
+    expect(load(99)).toBe(3)
+    expect(load(0.01)).toBe(0.1)
+    expect(load(-2)).toBe(1)
+    expect(load(NaN)).toBe(1)
   })
 })
 

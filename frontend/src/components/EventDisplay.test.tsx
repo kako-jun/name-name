@@ -43,6 +43,7 @@ describe('EventDisplay', () => {
   it.each([
     ['WallExit', '壁: なし'],
     ['StageFrontExit', '舞台前面: なし'],
+    ['WeatherExit', '天候: なし'],
     ['VideoExit', '動画: 退場'],
     ['PageBreak', '改頁'],
   ] as const)('renders %s as its own label, not SceneTransition (#705)', (ev, label) => {
@@ -56,6 +57,15 @@ describe('EventDisplay', () => {
     expect(a.container.textContent).toBe('壁: glow.webp')
     const b = renderEvent({ Wall: { path: 'a.webm', loop: false, mute: false } })
     expect(b.container.textContent).toBe('壁: a.webm, ループ=false, ミュート=false')
+  })
+
+  it.each([
+    [{ Weather: { kind: 'Rain' as const } }, '天候: 雨'],
+    [{ Weather: { kind: 'Snow' as const, intensity: 1 } }, '天候: 雪'],
+    [{ Weather: { kind: 'Sakura' as const, intensity: 1.5 } }, '天候: 桜, 強さ=1.5'],
+  ])('renders Weather %j (#706)', (ev, label) => {
+    const { container } = renderEvent(ev)
+    expect(container.textContent).toBe(label)
   })
 
   it('renders StageFront with path (#705)', () => {

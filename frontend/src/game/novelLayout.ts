@@ -16,6 +16,7 @@ import type { SaveSlotData } from './SaveManager'
 import type { EventScene, StageDirection, TelopPosition } from '../types'
 import { MIDLINE_RULE } from './textCanonical'
 import { hasOwn } from './ownProperty'
+import { clampWeatherIntensity } from './weatherParticles'
 import type { CameraProjection } from './cameraProjection'
 import { easeIn, easeOut } from './easing'
 import { effectProgress } from './screenEffects'
@@ -1023,6 +1024,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   backgroundBoards = data.backgroundBoards ?? []  // 古いセーブには無い → 板なし (#683)
  *   wall           = data.wall ?? null       // 古いセーブには無い → 壁なし (#703)
  *   stageFront     = data.stageFront ?? null // 古いセーブには無い → 舞台前面なし (#705)
+ *   weather        = data.weather ?? null    // 古いセーブには無い → 天候なし (#706)
  *   props          = data.props ?? []        // 古いセーブには無い → 大道具なし (#692)
  *   spotlight      = data.spotlight ?? null  // 古いセーブには無い → 消灯 (#693)
  *   curtain        = data.curtain ?? null    // 古いセーブには無い → 幕なし (#697)
@@ -1072,6 +1074,10 @@ export function saveSlotToGameState(
       : null,
     // 舞台前面 (#705)。古いセーブには無い → ?? null で舞台前面なしに倒す。
     stageFront: data.stageFront ?? null,
+    // 天候 (#706)。古いセーブには無い → ?? null で天候なしに倒す。強さは範囲へクランプする。
+    weather: data.weather
+      ? { kind: data.weather.kind, intensity: clampWeatherIntensity(data.weather.intensity) }
+      : null,
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
     // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1135,6 +1141,7 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
     backgroundBoards: snapshot.backgroundBoards,
     wall: snapshot.wall,
     stageFront: snapshot.stageFront,
+    weather: snapshot.weather,
     props: snapshot.props,
     spotlight: snapshot.spotlight,
     curtain: snapshot.curtain,

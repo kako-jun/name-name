@@ -36,6 +36,7 @@ import { GameState, NovelGameState, StartFromOptions, Step, entryFromState } fro
 import { VideoLayer } from './VideoLayer'
 import { WallLayer } from './WallLayer'
 import { StageFrontLayer } from './StageFrontLayer'
+import { WeatherLayer } from './WeatherLayer'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -672,6 +673,9 @@ export class NovelRenderer {
         get stageFront() {
           return r.stageFrontLayer
         },
+        get weather() {
+          return r.weatherLayer
+        },
         get backgroundBoard() {
           return r.backgroundBoardLayer
         },
@@ -783,6 +787,12 @@ export class NovelRenderer {
    * stage 上はイベント絵の直後・画面効果（スクリム・暗転）より奥。settled state は `NovelGameState.stageFront`。
    */
   private stageFrontLayer: StageFrontLayer
+  /**
+   * 天候 (#706)。雨・雪・桜吹雪の粒を降らせる単一スロットの画面空間オーバーレイ。粒の位置は保存せず経過時間から
+   * 決定論的に出す。カメラのズーム・射影は受けない（`cameraZoom.getLayers` に入れない）。
+   * stage 上は舞台前面の直後・画面効果（スクリム・暗転）より奥。settled state は `NovelGameState.weather`（種類＋強さ）。
+   */
+  private weatherLayer: WeatherLayer
 
   /**
    * 舞台構造の大道具レイヤー (#692)。`[大道具: path, depth: N]` の加算的な蓄積を管理する。
@@ -912,6 +922,8 @@ export class NovelRenderer {
     this.wallLayer = new WallLayer(this.screenWidth, this.screenHeight, this.audioManager)
     // 舞台前面レイヤー (#705)。画像のみ・画面空間のオーバーレイ。
     this.stageFrontLayer = new StageFrontLayer(this.screenWidth, this.screenHeight)
+    // 天候レイヤー (#706)。アンビエント演出と同じ TimeController の時計で粒を動かす。
+    this.weatherLayer = new WeatherLayer(this.screenWidth, this.screenHeight, this.time)
     this.choiceOverlay = new ChoiceOverlay(this.screenWidth, this.screenHeight)
     // 選択肢の確定音／ホバー音を AudioManager で鳴らせるように注入 (#146)
     this.choiceOverlay.setAudioManager(this.audioManager)
@@ -1015,6 +1027,10 @@ export class NovelRenderer {
     // 画面空間のオーバーレイなので、イベント絵の背面隠し（applyEventImageVisibility）の対象にも入れない。
     // 暗転はこの上に重なるので、暗転中は前面も暗くなる。
     this.app.stage.addChild(this.stageFrontLayer)
+
+    // 天候レイヤー (#706)。舞台前面の直後——キャラ・小道具・舞台前面・イベント絵・幕より手前、暗転・画面効果・
+    // 会話窓・テロップより奥。画面空間のオーバーレイなのでイベント絵の背面隠しの対象にも、カメラズームの対象にも入れない。
+    this.app.stage.addChild(this.weatherLayer)
 
     // novel スクリム (#283, z 順は立ち絵の上) → 暗転 → 画面効果オーバーレイ (#143, blackout より上・dialog より下)。
     // 3枚は連続して積む。実体は ScreenEffectsController (#828 7b)。
@@ -1439,6 +1455,8 @@ export class NovelRenderer {
     this.wallLayer.clear()
     // 舞台前面 (#705) も終劇で片付ける（終劇後の画面に前面だけ残らない。保存状態も終端どおり null）。
     this.stageFrontLayer.clear()
+    // 天候 (#706) も終劇で片付ける（終劇後の画面に粒だけ降り続けない。保存状態も終端どおり null）。
+    this.weatherLayer.clear()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
     // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
@@ -1847,6 +1865,8 @@ export class NovelRenderer {
     // 大道具・背景板の面の切り替え (#704) も書き出し中は回さない。
     this.backgroundBoardLayer.setExporting(exporting)
     this.propLayer.setExporting(exporting)
+    // 天候 (#706) は書き出し中、reduced-motion でも降らせる（作品として出力するため）。
+    this.weatherLayer.setExporting(exporting)
     this.seekBar.setExportSuppressed(exporting)
   }
 
@@ -1934,6 +1954,8 @@ export class NovelRenderer {
       this.wallLayer.clear()
       // 舞台前面 (#705) も背景板と同じ持続規律にする。
       this.stageFrontLayer.clear()
+      // 天候 (#706) も背景板と同じ持続規律にする。
+      this.weatherLayer.clear()
       // 大道具 (#692) も背景板と同じ持続規律にする。
       this.propLayer.clear()
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
@@ -2077,6 +2099,8 @@ export class NovelRenderer {
     // 上に積まれる。冒頭の `[舞台前面:]` がタイトルのボタンに重ならないよう、イベント絵と同じく隠す。
     // 壁 (#703) は titleScreenOverlay より奥（不透明背景の下）なので隠す必要がない。
     this.stageFrontLayer.visible = false
+    // 天候 (#706) も舞台前面と同じ理由で隠す（タイトル画面より上に積まれるため）。
+    this.weatherLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     this.titleScreenSavedCharacterSplitRegion = this.characterLayer.getSplitLayoutRegion()
     if (this.titleScreenSavedCharacterSplitRegion) {
@@ -2143,6 +2167,7 @@ export class NovelRenderer {
     this.seekBar.setTitleScreenHidden(false)
     this.eventImageLayer.visible = true
     this.stageFrontLayer.visible = true
+    this.weatherLayer.visible = true
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     if (this.titleScreenSavedCharacterSplitRegion) {
       this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)
@@ -2966,6 +2991,8 @@ export class NovelRenderer {
     // 舞台前面レイヤーも破棄・テクスチャ解放する (#705、wallLayer と同じ流儀)。
     this.stageFrontLayer.clear()
     this.stageFrontLayer.disposeTextures()
+    // 天候レイヤーも破棄する (#706)。タイマーと粒の Graphics を片付ける（テクスチャは持たない）。
+    this.weatherLayer.clear()
     // 大道具レイヤーも破棄・テクスチャ解放する (#692、backgroundBoardLayer と同じ流儀)。
     this.propLayer.clear()
     this.propLayer.disposeTextures()
@@ -3018,6 +3045,7 @@ export class NovelRenderer {
       backgroundBoards: this.backgroundBoardLayer.getState(),
       wall: this.wallLayer.getState(),
       stageFront: this.stageFrontLayer.getState(),
+      weather: this.weatherLayer.getState(),
       props: this.propLayer.getState(),
       spotlight: this.lightingLayer.getState(),
       curtain: this.curtainLayer.getState(),
@@ -3447,6 +3475,10 @@ export class NovelRenderer {
     // 舞台前面復元 (#705)。画面空間のオーバーレイでカメラ射影・ズームを受けない。同じ前面が表示中（または
     // ロード進行中）なら再読み込みせず、異なる・表示できていないときだけ差し替える。
     this.stageFrontLayer.restore(state.stageFront, this.assetBaseUrl)
+
+    // 天候復元 (#706)。画面空間のオーバーレイでカメラ射影・ズームを受けない。粒の位置は保存しないので、
+    // 同じ天候が降っていれば流し続け、違う・止まっているときだけ経過 0 から降らせ直す。
+    this.weatherLayer.restore(state.weather ?? null)
 
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順
     // （カメラは `stage.restore` で同期済み）。
