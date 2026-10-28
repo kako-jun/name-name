@@ -54,6 +54,7 @@ interface TitleScreenInternals extends RendererInternals {
   seekBar: { visible: boolean; setTitleScreenHidden: (hidden: boolean) => void }
   eventImageLayer: { visible: boolean }
   stageFrontLayer: { visible: boolean }
+  weatherLayer: { visible: boolean }
   wallLayer: { visible: boolean }
   characterLayer: {
     getSplitLayoutRegion(): LayoutRect | null
@@ -118,6 +119,16 @@ describe('NovelRenderer.showTitleScreen() / hideTitleScreen() (#628 フェーズ
     expect(ri.wallLayer.visible).toBe(true)
     r.hideTitleScreen()
     expect(ri.stageFrontLayer.visible).toBe(true)
+  })
+
+  it('天候 (#706): showTitleScreen() で隠れ、hideTitleScreen() で戻る（titleScreenOverlay より上に積まれるため）', () => {
+    const r = new NovelRenderer()
+    const ri = internals<TitleScreenInternals>(r)
+    expect(ri.weatherLayer.visible).toBe(true)
+    r.showTitleScreen(makeTitleScreenOpts())
+    expect(ri.weatherLayer.visible).toBe(false)
+    r.hideTitleScreen()
+    expect(ri.weatherLayer.visible).toBe(true)
   })
 
   it('TC26: showTitleScreen() で seekBar.setTitleScreenHidden(true) 相当（seekBar.visible が false）になる', () => {

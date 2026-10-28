@@ -32,6 +32,9 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     if (event === 'WallExit') {
       return <div className={`text-xs italic ml-2 ${meta}`}>壁: なし</div>
     }
+    if (event === 'WeatherExit') {
+      return <div className={`text-xs italic ml-2 ${meta}`}>天候: なし</div>
+    }
     if (event === 'StageFrontExit') {
       return <div className={`text-xs italic ml-2 ${meta}`}>舞台前面: なし</div>
     }
@@ -51,6 +54,24 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
         壁: {w.path}
         {w.loop === false ? ', ループ=false' : ''}
         {w.mute === false ? ', ミュート=false' : ''}
+      </div>
+    )
+  }
+
+  if ('Weather' in event) {
+    const w = event.Weather
+    const name =
+      w.kind === 'Rain'
+        ? '雨'
+        : w.kind === 'Snow'
+          ? '雪'
+          : w.kind === 'Sakura'
+            ? '桜'
+            : String(w.kind)
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        天候: {name}
+        {w.intensity !== undefined && w.intensity !== 1 ? `, 強さ=${w.intensity}` : ''}
       </div>
     )
   }

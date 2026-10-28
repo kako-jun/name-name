@@ -42,6 +42,7 @@ function fake() {
       backgroundBoard: port('bboard'),
       wall: port('wall'),
       stageFront: port('stageFront'),
+      weather: port('weather'),
       prop: port('prop'),
       curtain: port('curtain'),
       lighting: port('lighting'),
@@ -224,7 +225,7 @@ describe('ハンドラ単体', () => {
     expect(calls).toEqual(['audio.stopBgm', 'hooks.setCurrentBgmPath'])
   })
 
-  it('SceneTransition: クリア順は 背景→動画→背景板→壁→舞台前面→大道具→幕→照明→動画→イベント絵→…→暗転解除→scrim', () => {
+  it('SceneTransition: クリア順は 背景→動画→背景板→壁→舞台前面→天候→大道具→幕→照明→動画→イベント絵→…→暗転解除→scrim', () => {
     const { ctx, calls } = fake()
     dispatchDirective(E('SceneTransition'), ctx)
     expect(calls).toEqual([
@@ -233,6 +234,7 @@ describe('ハンドラ単体', () => {
       'bboard.clear',
       'wall.clear',
       'stageFront.clear',
+      'weather.clear',
       'prop.clear',
       'curtain.clear',
       'hooks.setCurtainZOrder',

@@ -57,7 +57,7 @@ function nullIfEmpty(s: string | null | undefined): string | null {
  * フォールバック先に使う。Rust parser は `遷移=` 未指定タグを既にこの値へ解決済みなので、
  * 通常は各イベントの `transition` が常にこの値と整合している。
  */
-function normalizeEvents(events: Event[], defaultTransition: EventImageTransition): Event[] {
+export function normalizeEvents(events: Event[], defaultTransition: EventImageTransition): Event[] {
   return events.map((event) => {
     if (typeof event === 'string') return event
     if ('Dialog' in event) {
@@ -215,6 +215,15 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
       return {
         Emotion: { target: em.target, kind: em.kind, duration_ms: em.duration_ms ?? null },
       }
+    }
+    if ('Weather' in event) {
+      // #706: Rust 側は既定の強さ（1.0）を JSON に載せないため型上は optional のまま届く。ここで number に揃える。
+      const w = event.Weather
+      // serde_wasm_bindgen は f32 を f64 に広げる（1.2 → 1.2000000476837158）ので、f32 の有効桁（7桁）に丸める。
+      // 丸めているのは Weather.intensity だけ（エディタが `強さ=` を表示するため）。他の f32 フィールドは未対応で、
+      // 表示に出す必要が出たら同様に丸める。null/undefined は既定の 1（強さ 0 にならない）。
+      const intensity = w.intensity == null ? 1 : Number(Math.fround(w.intensity).toPrecision(7))
+      return { Weather: { kind: w.kind, intensity } }
     }
     if ('Wall' in event) {
       // #703: Rust 側は既定値（loop/mute とも true）を JSON に載せない（skip_serializing_if）ため、

@@ -30,6 +30,7 @@ export function buildFreshPositionState(
     backgroundBoards: [],
     wall: null,
     stageFront: null,
+    weather: null,
     props: [],
     spotlight: null,
     curtain: null,

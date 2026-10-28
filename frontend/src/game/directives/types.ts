@@ -25,6 +25,7 @@ import type { TelopLayer } from '../TelopLayer'
 import type { VideoLayer } from '../VideoLayer'
 import type { WallLayer } from '../WallLayer'
 import type { StageFrontLayer } from '../StageFrontLayer'
+import type { WeatherLayer } from '../WeatherLayer'
 import type { EventImageTransition } from '../../types'
 
 /** ステージ系ハンドラが触る演出レイヤー。必要なメソッドだけを `Pick` で切り出す。 */
@@ -33,6 +34,7 @@ export interface DirectiveLayers {
   readonly backgroundBoard: Pick<BackgroundBoardLayer, 'add' | 'replace' | 'clear'>
   readonly wall: Pick<WallLayer, 'show' | 'clear'>
   readonly stageFront: Pick<StageFrontLayer, 'show' | 'clear'>
+  readonly weather: Pick<WeatherLayer, 'set' | 'clear'>
   readonly prop: Pick<PropLayer, 'add' | 'replace' | 'clear'>
   readonly curtain: Pick<CurtainLayer, 'show' | 'raise' | 'clear'>
   readonly lighting: Pick<LightingLayer, 'set' | 'clear'>

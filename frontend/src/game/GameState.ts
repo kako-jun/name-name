@@ -13,6 +13,7 @@ import {
   CameraOrientation,
   Event,
   FlagValue,
+  WeatherKind,
 } from '../types'
 import { safeAssign } from './ownProperty'
 import type { PaperDollOutlineConfig } from './outlineFilter'
@@ -120,6 +121,17 @@ export interface StageFrontState {
 }
 
 /**
+ * 天候の settled state (#706)。`[天候: 雨|雪|桜]` / `[天候: なし]` で更新する単一スロット。
+ * `null` = 天候なし（既定）。保存するのは「種類＋強さ」だけで、粒の位置は保存しない（ADR-0002）。
+ * 粒の位置は描画側が経過時間から決定論的に出す。
+ */
+export interface WeatherState {
+  kind: WeatherKind
+  /** 粒の密度の倍率（既定 1.0。`clampWeatherIntensity` の範囲） */
+  intensity: number
+}
+
+/**
  * 幕の settled state (#697)。`[幕: path]` / `[幕: path, 手前にキャラ]` / `[幕: 上げる]` で
  * 更新する。`backgroundBoards`/`props` と異なり単一スロット（幕は1枚のみ、加算的な蓄積は
  * しない）。`null` = 幕なし（既定、`[幕: 上げる]` 後もこの値になる）。
@@ -184,6 +196,12 @@ export interface NovelGameState {
    * `[舞台前面: なし]`・`[場面転換]`・新規開始・終劇でクリアされる（`StageFrontState` 参照）。
    */
   stageFront: StageFrontState | null
+  /**
+   * 天候 (#706)。`[天候: 雨|雪|桜]` の単一スロット settled state。`null` = 天候なし（既定）。
+   * キャラ・小道具・舞台前面より手前、暗転・画面効果・会話窓・テロップより奥の画面空間オーバーレイ。
+   * `[天候: なし]`・`[場面転換]`・新規開始・終劇でクリアされる（`WeatherState` 参照）。
+   */
+  weather: WeatherState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。`[大道具: path, depth: N]` の加算的な蓄積状態
    * （`backgroundBoards` と同じ扱い）。背景板・キャラとは独立した PixiJS レイヤーで、キャラより

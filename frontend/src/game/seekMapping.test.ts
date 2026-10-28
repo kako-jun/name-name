@@ -28,6 +28,7 @@ function makeState(eventIndex: number): NovelGameState {
     backgroundBoards: [],
     wall: null,
     stageFront: null,
+    weather: null,
     props: [],
     spotlight: null,
     curtain: null,

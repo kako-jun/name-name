@@ -28,6 +28,7 @@ export interface OldWorld {
   backgroundBoardLayer: any
   wallLayer: any
   stageFrontLayer: any
+  weatherLayer: any
   propLayer: any
   curtainLayer: any
   lightingLayer: any
@@ -60,6 +61,7 @@ export const OLD_STRING_KEYS = [
   'VideoExit',
   'WallExit',
   'StageFrontExit',
+  'WeatherExit',
   'SpotlightOff',
   'CurtainUp',
 ]
@@ -70,6 +72,7 @@ export const OLD_OBJECT_KEYS = [
   'BackgroundBoard',
   'Wall',
   'StageFront',
+  'Weather',
   'Prop',
   'BackgroundColor',
   'Video',
@@ -107,6 +110,7 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
       w.backgroundBoardLayer.clear()
       w.wallLayer.clear()
       w.stageFrontLayer.clear()
+      w.weatherLayer.clear()
       w.propLayer.clear()
       w.curtainLayer.clear()
       w.hooks.setCurtainZOrder(false)
@@ -129,6 +133,10 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
     }
     if (event === 'StageFrontExit') {
       w.stageFrontLayer.clear()
+      return true
+    }
+    if (event === 'WeatherExit') {
+      w.weatherLayer.clear()
       return true
     }
     if (event === 'SpotlightOff') {
@@ -167,6 +175,10 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   }
   if ('StageFront' in event) {
     w.stageFrontLayer.show(event.StageFront.path, w.env.assetBaseUrl)
+    return true
+  }
+  if ('Weather' in event) {
+    w.weatherLayer.set(event.Weather.kind, event.Weather.intensity ?? 1)
     return true
   }
   if ('Prop' in event) {
