@@ -275,3 +275,12 @@ describe('MotionTiming: 各関数に timing が通る（配線） (#956)', () =>
     expect(multiHitIntervalFor(5000, S)).toBe(S.multiHitMinIntervalMs)
   })
 })
+
+describe('hitMosaic (#953)', () => {
+  it('default は無効（0）、snappy は有効', async () => {
+    const m = await import('./battleMotion')
+    expect(m.DEFAULT_MOTION_TIMING.hitMosaicMs).toBe(0)
+    expect(m.SNAPPY_MOTION_TIMING.hitMosaicMs).toBeGreaterThan(0)
+    expect(m.SNAPPY_MOTION_TIMING.hitMosaicMaxSize).toBeGreaterThan(1)
+  })
+})

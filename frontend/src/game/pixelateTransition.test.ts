@@ -10,6 +10,7 @@ import {
   computeSwapAtMs,
   isCoarsenComplete,
   isRefineComplete,
+  samplePixelatePulse,
   PIXELATE_TRANSITION_MAX_SIZE,
 } from './pixelateTransition'
 
@@ -168,5 +169,33 @@ describe('isRefineComplete の境界(remainingMs-1/remainingMs/remainingMs+1)', 
 
   it('境界+1(101ms)も完了のまま', () => {
     expect(isRefineComplete(101, 100)).toBe(true)
+  })
+})
+
+describe('samplePixelatePulse (#953)', () => {
+  it('端点は 1、中央がピーク、終端で done', () => {
+    expect(samplePixelatePulse(0, 260, 16)).toEqual({ size: 1, done: false })
+    expect(samplePixelatePulse(130, 260, 16)).toEqual({ size: 16, done: false })
+    expect(samplePixelatePulse(260, 260, 16)).toEqual({ size: 1, done: true })
+    expect(samplePixelatePulse(999, 260, 16).done).toBe(true)
+  })
+  it('山形（左右対称・単調）', () => {
+    const a = samplePixelatePulse(65, 260, 16).size
+    const b = samplePixelatePulse(195, 260, 16).size
+    expect(a).toBe(b)
+    expect(a).toBeGreaterThan(1)
+    expect(a).toBeLessThan(16)
+  })
+  it('不正入力は安全', () => {
+    for (const e of [NaN, -5, Infinity, -Infinity]) {
+      const r = samplePixelatePulse(e, 260, 16)
+      expect(Number.isFinite(r.size)).toBe(true)
+    }
+    expect(samplePixelatePulse(NaN, 260, 16)).toEqual({ size: 1, done: false })
+    expect(samplePixelatePulse(10, 0, 16)).toEqual({ size: 1, done: true })
+    expect(samplePixelatePulse(10, -1, 16).done).toBe(true)
+    expect(samplePixelatePulse(10, NaN, 16).done).toBe(true)
+    // maxSize が NaN・1 未満なら等倍のまま
+    for (const m of [NaN, 0, -3, 0.5]) expect(samplePixelatePulse(130, 260, m).size).toBe(1)
   })
 })

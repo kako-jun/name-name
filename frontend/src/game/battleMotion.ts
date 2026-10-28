@@ -152,6 +152,9 @@ export interface MotionTiming {
   popupFadeMs: number
   /** ダメージ数字を 1 桁ずつ時間差で跳ねさせるときの、桁ごとの開始遅れ（ms）。0 は数字全体を 1 つで跳ねさせる（従来） (#955) */
   digitStaggerMs: number
+  /** 敵→味方の被弾で、被弾した味方がほわっとモザイク状に粗くなって戻る時間（ms）と最大の粗さ（PixelateFilter.size）。0 は出さない（従来） (#953) */
+  hitMosaicMs: number
+  hitMosaicMaxSize: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -187,6 +190,8 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   popupHoldMs: 240,
   popupFadeMs: 200,
   digitStaggerMs: 0,
+  hitMosaicMs: 0,
+  hitMosaicMaxSize: 16,
 }
 
 /**
@@ -196,6 +201,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
  * - 距離は少し下げる（踏み出し 0.7→0.55、のけぞり 0.12→0.10）。動きが短いぶん、大きいと「ひゅっ」と飛んで見えるため
  * - のけぞり・倒れ・ダメージ数字・呪文・複数ヒットは default の約 0.75 倍の長さに揃える（動きだけ速く数字が遅いと間延びするため）
  * - ダメージ・回復の数字は 1 桁ずつ 50ms 差で跳ねさせる (#955)。FF の「ぱらぱらと着地する」リズムを出すため（桁数が多くても合計 150ms まで）
+ * - 被弾した味方に 260ms のほわっとモザイク (#953)。山の長さは `min(260ms, 行動の残り)`（のけぞり 200ms + 行動間 40ms で行動は命中から約 240ms 後に終わるので、実際は約 240ms 以内に等倍へ戻り切る。行動の長さは変えない）。最大 16 は絵の切り替えモザイク（24）より控えめ（キャラが読めなくならないよう。等倍(1)→最大→等倍の山でスワップなし）。連続ヒットは各ヒットの山の包絡で繋ぐ。default は 0（出さない）
  */
 export const SNAPPY_MOTION_TIMING: MotionTiming = {
   attackStepMs: 130,
@@ -227,6 +233,8 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   popupHoldMs: 180,
   popupFadeMs: 150,
   digitStaggerMs: 50,
+  hitMosaicMs: 260,
+  hitMosaicMaxSize: 16,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'
