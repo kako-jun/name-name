@@ -1887,12 +1887,6 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
     }
 }
 
-/// ラベル本文を round-trip 安定に emit する (#275)。
-///
-/// parser は bare な text を `trim()` する（`extract_label_text`）。そのため前後スペースを
-/// 持つ text（`"$ "` のプロンプト記号など）はクオート無しで出すと再 parse で消える。
-/// 前後に空白がある場合だけ `"..."` で囲んで前後スペースを保持する。通常 text（前後空白なし）
-/// はクオート無しのまま出す。クオート内カンマは非対応（parser の `split(',')` 制約）。
 /// 背景板・大道具の面の切り替え (#704) の kv を `kv` に足す。既定（None）は無出力にして round-trip を安定させる。
 fn push_flip_kv(kv: &mut String, flip_from: &Option<String>, flip_ms: &Option<u32>) {
     if let Some(from) = flip_from {
@@ -1903,6 +1897,12 @@ fn push_flip_kv(kv: &mut String, flip_from: &Option<String>, flip_ms: &Option<u3
     }
 }
 
+/// ラベル本文を round-trip 安定に emit する (#275)。
+///
+/// parser は bare な text を `trim()` する（`extract_label_text`）。そのため前後スペースを
+/// 持つ text（`"$ "` のプロンプト記号など）はクオート無しで出すと再 parse で消える。
+/// 前後に空白がある場合だけ `"..."` で囲んで前後スペースを保持する。通常 text（前後空白なし）
+/// はクオート無しのまま出す。クオート内カンマは非対応（parser の `split(',')` 制約）。
 fn quote_label_text_if_needed(text: &str) -> String {
     let needs_quote = text != text.trim();
     if needs_quote {
