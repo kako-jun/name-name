@@ -55,7 +55,8 @@ function clamp01(v: number): number {
  *
  * `out` は加速（ease-in）、`in` は減速（ease-out）にして、回転が切り替わりの一瞬で最も速く
  * 見えるようにする。角度は `±BOARD_FLIP_MAX_ANGLE_RAD` で丸め、退化角（ちょうど 90°）を返さない。
- * `in` は half ちょうどでは不可視（edge-on の瞬間を描かない）、half を超えてから可視。
+ * `in` は elapsed>=half で可視（half ちょうどから。角度は MAX 丸めで退化しない）、`out` は elapsed>=half で不可視。
+ * 境界 half ちょうどでは `out` が消えて `in` が現れる（どちらも不可視の空白フレームを作らない）。
  * `fromAngleRad` は `out` の開始角（既定 0）。`in` の途中（例 -60°）でさらにポーズが変わったとき、
  * 現在角度から回し続けて自然につなぐために使う。開始角が負のときは `in` の角速度を引き継ぐ
  * 初速を持たせ、一瞬止まって再加速して見えないようにする。
@@ -85,7 +86,9 @@ export function computeBoardFlipFrame(
     const s = from < 0 ? (2 * Math.sqrt(max * -from)) / (max - from) : 0
     return { visible: true, angleRad: from + (max - from) * (s * p + (1 - s) * p * p) }
   }
-  if (elapsedMs <= half) return { visible: false, angleRad: -max }
+  // half ちょうどは `in` が受け持つ（`out` は elapsed>=half で不可視）。ちょうどで両方不可視になって
+  // 空白フレームが出ないよう、境界は排他的に一方へ倒す。角度は MAX で丸め済みなので頂点は有限。
+  if (elapsedMs < half) return { visible: false, angleRad: -max }
   const p = clamp01((elapsedMs - half) / half)
   const remaining = 1 - p
   return { visible: true, angleRad: -max * remaining * remaining }

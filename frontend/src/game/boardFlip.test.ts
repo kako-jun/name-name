@@ -42,10 +42,10 @@ describe('computeBoardFlipFrame', () => {
   })
 
   it('in: half 以降は可視で単調増加し total で 0', () => {
-    // half ちょうどは edge-on の退化角なので描かない（setCorners が非有限値になる）。
-    expect(computeBoardFlipFrame('in', 500, 1000)).toEqual({ visible: false, angleRad: -MAX })
+    // half ちょうどは `in` が受け持つ（out は不可視）。角度は MAX 丸めなので頂点は有限。
+    expect(computeBoardFlipFrame('in', 500, 1000)).toEqual({ visible: true, angleRad: -MAX })
     let prev = -Infinity
-    for (const t of [501, 600, 700, 800, 900, 999]) {
+    for (const t of [500, 600, 700, 800, 900, 999]) {
       const f = computeBoardFlipFrame('in', t, 1000)
       expect(f.visible).toBe(true)
       expect(f.angleRad).toBeGreaterThanOrEqual(prev)
@@ -122,6 +122,17 @@ describe('computeBoardFlipFrame', () => {
     // 開始角 0 は従来どおり初速 0（p²）。
     const v0 = computeBoardFlipFrame('out', 0.01, total, 0).angleRad / 0.01
     expect(v0).toBeCloseTo(0, 3)
+  })
+
+  it('境界は排他的: half ちょうどを含む全時刻で out と in の可視はちょうど一方だけ', () => {
+    for (const total of [1000, 700, 333]) {
+      const half = total / 2
+      for (const t of [0, 1, half - 1, half - 1e-9, half, half + 1e-9, half + 1, total - 1]) {
+        const o = computeBoardFlipFrame('out', t, total).visible
+        const i = computeBoardFlipFrame('in', t, total).visible
+        expect(o !== i).toBe(true)
+      }
+    }
   })
 
   it('elapsed が負・NaN は 0 にクランプされる', () => {
