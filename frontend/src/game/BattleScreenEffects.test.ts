@@ -101,8 +101,8 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(I(s).effectInstances).toEqual([])
   })
 
-  it('通常攻撃: 命中の瞬間に対象の位置へ重なり、コマが進み、終われば消える（打撃: slash ポーズ無し）', () => {
-    const { s, engine } = setup({ impact: sh() })
+  it('通常攻撃: 命中の瞬間に対象の位置へ重なり、コマが進み、終われば消える（味方の攻撃: 斬撃）', () => {
+    const { s, engine } = setup({ slash: sh() })
     I(s).effectTextures.set('sheet.png', sheetTexture(4))
     engine.selectAttack()
     sync(s)
@@ -111,7 +111,7 @@ describe('BattleScreen エフェクト重ね', () => {
     run(s, 60)
     const inst = I(s).effectInstances
     expect(inst).toHaveLength(1)
-    expect(inst[0].kind).toBe('impact')
+    expect(inst[0].kind).toBe('slash')
     expect(inst[0].side).toBe('enemy')
     // 位置は対象の枠の中。大きさは 16px セル×（枠の一辺 × 1）
     expect(inst[0].sprite.x).toBeGreaterThan(0)
@@ -125,20 +125,23 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(I(s).effectLayer!.children).toHaveLength(0)
   })
 
-  it('slash ポーズを持つ使い手は斬撃のシートを使う', () => {
-    const { s, engine } = setup(
-      { impact: sh({ image: 'i.png' }), slash: sh({ image: 's.png' }) },
-      {},
-      {
-        poses: { slash: 'slash.png' },
-      }
-    )
+  it('味方の通常攻撃は slash ポーズを持たなくても斬撃のシートを使う（打撃は使わない）', () => {
+    const { s, engine } = setup({ impact: sh({ image: 'i.png' }), slash: sh({ image: 's.png' }) })
     I(s).effectTextures.set('i.png', sheetTexture(4))
     I(s).effectTextures.set('s.png', sheetTexture(4))
     engine.selectAttack()
     sync(s)
     run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 30)
     expect(I(s).effectInstances.map((e) => e.kind)).toEqual(['slash'])
+  })
+
+  it('呪文の命中は magic 未宣言なら打撃のシートで代用する', () => {
+    const { s, engine } = setup({ impact: sh({ image: 'i.png' }) })
+    I(s).effectTextures.set('i.png', sheetTexture(4))
+    engine.selectSpell(fire)
+    sync(s)
+    run(s, CAST_HIT_MS + 30)
+    expect(I(s).effectInstances.map((e) => e.kind)).toEqual(['impact'])
   })
 
   it('呪文: 発動で詠唱が使い手（味方）の位置に出て、命中で魔法ヒットが対象（敵）に出る', () => {
@@ -164,7 +167,7 @@ describe('BattleScreen エフェクト重ね', () => {
   })
 
   it('画像が読めなかった（null）種類は出さず、戦闘は進む', () => {
-    const { s, engine } = setup({ impact: sh() })
+    const { s, engine } = setup({ slash: sh() })
     I(s).effectTextures.set('sheet.png', null)
     engine.selectAttack()
     sync(s)
@@ -174,7 +177,7 @@ describe('BattleScreen エフェクト重ね', () => {
   })
 
   it('1 回の dt が行動の終わりをまたいでも、数字が出るヒットには効果も出る', () => {
-    const { s, engine } = setup({ impact: sh({ frameMs: 2000 }) })
+    const { s, engine } = setup({ slash: sh({ frameMs: 2000 }) })
     I(s).effectTextures.set('sheet.png', sheetTexture(4))
     engine.selectAttack()
     sync(s)
@@ -188,7 +191,7 @@ describe('BattleScreen エフェクト重ね', () => {
     // タブ復帰などで大きく遅れた 1 tick: 命中も行動の終わりも 1 回で越える
     s.tick(ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 600)
     expect(popups).toBeGreaterThan(0)
-    expect(I(s).effectInstances.map((e) => e.kind)).toEqual(['impact'])
+    expect(I(s).effectInstances.map((e) => e.kind)).toEqual(['slash'])
   })
 
   it('エンジンの状態・イベントはエフェクトの有無で変わらない（攻撃・呪文を数手、変化する乱数列で）', () => {

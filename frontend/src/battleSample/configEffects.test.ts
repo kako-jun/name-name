@@ -109,7 +109,7 @@ describe('effects: 設定 JSON', () => {
     expect(engine.selectSummon(entry as BattleSummonEntry)).toBe(true)
     const ev = engine.getState().events[engine.getState().events.length - 1]
     expect(ev?.summon).toBeDefined()
-    const plans = planEventEffects(ev!, r.value.effects, { usesSlashPose: () => false })
+    const plans = planEventEffects(ev!, r.value.effects)
     expect(plans.map((p) => p.kind)).toContain('summon')
   })
 })
