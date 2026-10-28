@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   isWallVideoPath,
+  computeStageFrontPlacement,
   computeCoverFit,
   computeDynamicRenderResolution,
   MAX_RENDER_BACKBUFFER_DIMENSION_PX,
@@ -1216,6 +1217,8 @@ describe('saveSlotToGameState', () => {
       wall: data.wall
         ? { ...data.wall, loop: data.wall.loop !== false, mute: data.wall.mute !== false }
         : null,
+      // 舞台前面 (#705)。古いセーブには無い → ?? null で舞台前面なしに倒す。
+      stageFront: data.stageFront ?? null,
       // 舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
       props: data.props ?? [],
       // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。
@@ -1262,6 +1265,7 @@ describe('saveSlotToGameState', () => {
       eventImage: null,
       backgroundBoards: [],
       wall: null,
+      stageFront: null,
       props: [],
       spotlight: null,
       curtain: null,
@@ -3644,5 +3648,83 @@ describe('saveSlotToGameState / gameStateToSaveSlot: wall (#703)', () => {
       saveSlotToGameState({ ...base, wall: { path: 'a.webm' } } as typeof base, null).wall
     ).toEqual({ path: 'a.webm', loop: true, mute: true })
     expect(saveSlotToGameState({ ...base, wall: null }, null).wall).toBeNull()
+  })
+})
+
+describe('computeStageFrontPlacement (#705)', () => {
+  it('画面幅に合わせ、縦横比を保って下端を画面の最下部に揃える', () => {
+    expect(computeStageFrontPlacement(800, 100, 800, 450)).toEqual({
+      x: 0,
+      y: 350,
+      width: 800,
+      height: 100,
+    })
+    // 画像が画面幅の半分 → 2 倍に拡大される。
+    expect(computeStageFrontPlacement(400, 50, 800, 450)).toEqual({
+      x: 0,
+      y: 350,
+      width: 800,
+      height: 100,
+    })
+  })
+
+  it.each([
+    [1280, 720],
+    [800, 450],
+    [720, 1280],
+    [360, 640],
+    [1920, 1080],
+  ])('画面 %ix%i でも下端は画面の最下部・横幅は画面幅', (sw, sh) => {
+    const p = computeStageFrontPlacement(1000, 160, sw, sh)!
+    expect(p.x).toBe(0)
+    expect(p.width).toBe(sw)
+    expect(p.height).toBeCloseTo((160 * sw) / 1000, 10)
+    expect(p.y + p.height).toBeCloseTo(sh, 10)
+  })
+
+  it('画面サイズを変えると同じ画像でも配置が追従する', () => {
+    const a = computeStageFrontPlacement(1000, 200, 800, 450)!
+    const b = computeStageFrontPlacement(1000, 200, 400, 700)!
+    expect(a).not.toEqual(b)
+    expect(a.y + a.height).toBe(450)
+    expect(b.y + b.height).toBe(700)
+  })
+
+  it('画像が画面より高くなると上へはみ出す（y が負）', () => {
+    const p = computeStageFrontPlacement(100, 100, 400, 300)!
+    expect(p.y + p.height).toBe(300)
+    expect(p.y).toBe(-100)
+  })
+
+  it.each([
+    [0, 100, 800, 450],
+    [800, 0, 800, 450],
+    [800, 100, 0, 450],
+    [800, 100, 800, 0],
+    [-1, 100, 800, 450],
+    [NaN, 100, 800, 450],
+    [800, Infinity, 800, 450],
+  ])('寸法が不正（%p,%p,%p,%p）なら null', (tw, th, sw, sh) => {
+    expect(computeStageFrontPlacement(tw, th, sw, sh)).toBeNull()
+  })
+})
+
+describe('saveSlotToGameState / gameStateToSaveSlot: stageFront (#705)', () => {
+  it('stageFront が往復し、古いセーブ（無し）は null', () => {
+    const base = {
+      sceneId: 's',
+      eventIndex: 0,
+      textIndex: 0,
+      flags: {},
+      backgroundPath: null,
+      isBlackout: false,
+      characters: [],
+      currentBgmPath: null,
+    } as unknown as Parameters<typeof saveSlotToGameState>[0]
+    expect(saveSlotToGameState(base, null).stageFront).toBeNull()
+    expect(
+      saveSlotToGameState({ ...base, stageFront: { path: 'a.png' } }, null).stageFront
+    ).toEqual({ path: 'a.png' })
+    expect(saveSlotToGameState({ ...base, stageFront: null }, null).stageFront).toBeNull()
   })
 })

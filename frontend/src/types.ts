@@ -524,6 +524,15 @@ export type Event =
     }
   | 'WallExit'
   | {
+      /**
+       * 舞台前面 (#705)。画面最下部に下端揃え・画面の横幅に合わせて置く単一スロットの透過画像
+       * （舞台エプロンの段差や手前の客席を作者が1枚に描く）。新しい `StageFront` は前の舞台前面を置換する。
+       * 解除は `'StageFrontExit'`（`[舞台前面: なし]`）。画像のみ（動画は対象外）。
+       */
+      StageFront: { path: string }
+    }
+  | 'StageFrontExit'
+  | {
       Video: {
         path: string
         /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */

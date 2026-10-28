@@ -275,3 +275,33 @@ describe('collectUpcomingAssetUrls: 壁 (#703)', () => {
     expect(collectUpcomingAssetUrls([wallEvent('a.png')], 0, '')).toEqual([])
   })
 })
+
+describe('collectUpcomingAssetUrls: 舞台前面 (#705)', () => {
+  const frontEvent = (path: string): Event => ({ StageFront: { path } })
+
+  it('舞台前面は images/ の URL を先読み対象に積む', () => {
+    expect(collectUpcomingAssetUrls([frontEvent('hall.png'), narr()], 0, BASE)).toEqual([
+      `${BASE}/images/hall.png`,
+    ])
+  })
+
+  it('解除 StageFrontExit は先読み対象でも打ち切りでもない。前後の背景は積む', () => {
+    expect(
+      collectUpcomingAssetUrls([bg('a.png'), 'StageFrontExit' as Event, bg('b.png')], 0, BASE)
+    ).toEqual([`${BASE}/images/a.png`, `${BASE}/images/b.png`])
+  })
+
+  it('同じ画像の舞台前面と背景板は重複除去される', () => {
+    expect(
+      collectUpcomingAssetUrls(
+        [frontEvent('x.png'), { BackgroundBoard: { path: 'x.png', depth: 1 } }],
+        0,
+        BASE
+      )
+    ).toEqual([`${BASE}/images/x.png`])
+  })
+
+  it('assetBaseUrl が空なら何も積まない', () => {
+    expect(collectUpcomingAssetUrls([frontEvent('a.png')], 0, '')).toEqual([])
+  })
+})

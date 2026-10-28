@@ -111,6 +111,15 @@ export interface WallState {
 }
 
 /**
+ * 舞台前面の settled state (#705)。`[舞台前面: path]` / `[舞台前面: なし]` で更新する単一スロット。
+ * `null` = 舞台前面なし（既定）。保存するのは「パス」だけ（ADR-0002）。画面最下部に下端揃え・
+ * 画面の横幅に合わせて置く透過画像で、位置・大きさは画面サイズから毎回決まるので保存しない。
+ */
+export interface StageFrontState {
+  path: string
+}
+
+/**
  * 幕の settled state (#697)。`[幕: path]` / `[幕: path, 手前にキャラ]` / `[幕: 上げる]` で
  * 更新する。`backgroundBoards`/`props` と異なり単一スロット（幕は1枚のみ、加算的な蓄積は
  * しない）。`null` = 幕なし（既定、`[幕: 上げる]` 後もこの値になる）。
@@ -169,6 +178,12 @@ export interface NovelGameState {
    * 背景板よりさらに奥。`[場面転換]` でクリアされる（`WallState` 参照）。
    */
   wall: WallState | null
+  /**
+   * 舞台前面 (#705)。`[舞台前面: path]` の単一スロット settled state。`null` = 舞台前面なし（既定）。
+   * キャラ・小道具・イベント絵・幕より手前、テロップ・会話窓より奥の画面空間オーバーレイ。
+   * `[場面転換]` でクリアされる（`StageFrontState` 参照）。
+   */
+  stageFront: StageFrontState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。`[大道具: path, depth: N]` の加算的な蓄積状態
    * （`backgroundBoards` と同じ扱い）。背景板・キャラとは独立した PixiJS レイヤーで、キャラより

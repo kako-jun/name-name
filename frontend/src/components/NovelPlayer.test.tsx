@@ -1940,6 +1940,7 @@ describe('NovelPlayer fluidモードのResizeObserver駆動renderer再マウン�
     eventImage: null,
     backgroundBoards: [],
     wall: null,
+    stageFront: null,
     props: [],
     spotlight: null,
     curtain: null,

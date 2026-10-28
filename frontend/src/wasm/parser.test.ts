@@ -2797,3 +2797,43 @@ describe('wasm parseMarkdown: 壁 (#703)', () => {
     expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// 舞台前面 (#705)。wasm → normalizeEvents 経路で、`[舞台前面: path]` が StageFront に、
+// 解除 `[舞台前面: なし]` が 'StageFrontExit' になり、emit が往復することを縛る。
+describe('wasm parseMarkdown: 舞台前面 (#705)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[舞台前面: 客席.png]',
+    '[舞台前面: ホール.png, スケール=2]',
+    '[舞台前面: なし]',
+    '[舞台前面:]',
+    '',
+  ].join('\n')
+
+  it('path は StageFront に、解除は StageFrontExit に、空 path は捨てられ、余計な kv は無視される', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events).toEqual([
+      { StageFront: { path: '客席.png' } },
+      { StageFront: { path: 'ホール.png' } },
+      'StageFrontExit',
+    ])
+  })
+
+  it('round-trip: path だけを出力し、解除は [舞台前面: なし]', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[舞台前面: 客席.png]\n')
+    expect(emitted).toContain('[舞台前面: ホール.png]\n')
+    expect(emitted).not.toContain('スケール')
+    expect(emitted).toContain('[舞台前面: なし]\n')
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})
