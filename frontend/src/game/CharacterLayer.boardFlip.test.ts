@@ -528,4 +528,114 @@ describe('CharacterLayer シアターモード板フリップ (#707)', () => {
       expect(Number.isFinite(v)).toBe(true)
     }
   })
+
+  describe('#952: 読み込み待ちの B をはさむ A→B→C（実ゲームの連続 [登場]）', () => {
+    /** 'slowB' の読み込みだけ release() まで保留する。 */
+    function mockLoadGated(): { release: () => void } {
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => (release = resolve))
+      vi.spyOn(Assets, 'load').mockImplementation((async (url: string) => {
+        if (String(url).includes('slowB')) await gate
+        return String(url).includes('third') ? TEX_THIRD : TEX_A
+      }) as never)
+      return { release }
+    }
+    type Anim = StateLike & { snapshotHidden?: boolean; expression: string }
+    const keysOf = (layer: CharacterLayer): string[] => [...internals(layer).characters.keys()]
+
+    async function setupAbc(
+      mode: 'Theater' | 'Novel',
+      gated: boolean,
+      fadeMs = 2000
+    ): Promise<{ layer: CharacterLayer; a: Anim; release: () => void }> {
+      const gate = gated ? mockLoadGated() : { release: () => {} }
+      if (!gated) mockLoadOk()
+      const layer = new CharacterLayer(800, 450)
+      layer.setCharacterFadeMs(fadeMs)
+      layer.setCamera(mode, 'Front' as never, null)
+      layer.show('hero', 'a', '中央', '/assets', { instant: true })
+      await flushPromises()
+      const a = internals(layer).characters.get('hero') as Anim
+      layer.show('hero', gated ? 'slowB' : 'b', '中央', '/assets', {})
+      layer.show('hero', 'third', '中央', '/assets', {}) // B の読み込み完了前に C
+      await flushPromises()
+      return { layer, a, release: gate.release }
+    }
+
+    it.each(['Theater', 'Novel'] as const)(
+      '%s: B の読み込みが C より遅くても A は退場し、C だけが残る',
+      async (mode) => {
+        const { layer, a, release } = await setupAbc(mode, true)
+        release()
+        await flushPromises()
+        await flushPromises()
+        for (let i = 0; i < 12; i++) {
+          advance(layer, 250)
+          await flushPromises()
+        }
+        expect(keysOf(layer)).toEqual(['hero'])
+        expect(a.sprite.destroyed).toBe(true)
+        const c = internals(layer).characters.get('hero') as Anim
+        expect(c.expression).toBe('third')
+        expect(c.sprite.alpha).toBe(1)
+        expect(c.sprite.visible).toBe(true)
+        expect(meshCount(layer)).toBe(0)
+      }
+    )
+
+    it('Theater: A が回って消え、C が回って現れる（A は正面のまま残らない）', async () => {
+      const { layer, a } = await setupAbc('Theater', false)
+      // B は捨てられ、A が直接 out、C が in になる。
+      expect(keysOf(layer).sort()).toEqual(['hero', 'hero__transition_1'])
+      expect(a.flipAnimation?.role).toBe('out')
+      expect(a.fadeAnimation).toBeNull() // B の読み込み完了が A を巻き込んでフェードさせない
+      const c = internals(layer).characters.get('hero')!
+      expect(c.flipAnimation?.role).toBe('in')
+      advance(layer, 400)
+      expect(a.flipAnimation!.mesh.visible).toBe(true) // A は回転中（正面の静止絵ではない）
+      expect(a.sprite.visible).toBe(false)
+      const ac = a.flipAnimation!.mesh.geometry.corners
+      expect(ac[0]).not.toBeCloseTo(a.sprite.x - (a.sprite.texture.width * a.sprite.scale.x) / 2, 1)
+      expect(c.flipAnimation!.mesh.visible).toBe(false)
+      advance(layer, 700) // 1100ms: A の板は見えなくなり、C は現れて回っている
+      expect(a.flipAnimation!.mesh.visible).toBe(false)
+      expect(c.flipAnimation!.mesh.visible).toBe(true)
+      advance(layer, 1000)
+      expect(keysOf(layer)).toEqual(['hero'])
+      expect(a.sprite.destroyed).toBe(true)
+      expect(c.sprite.visible).toBe(true)
+      expect(meshCount(layer)).toBe(0)
+    })
+
+    it('Novel: A はクロスフェードで消え、C だけが残る', async () => {
+      const { layer, a } = await setupAbc('Novel', false)
+      expect(keysOf(layer).sort()).toEqual(['hero', 'hero__transition_1']) // B は捨てられる
+      expect(a.fadeAnimation).not.toBeNull()
+      for (let i = 0; i < 10; i++) advance(layer, 250)
+      expect(keysOf(layer)).toEqual(['hero'])
+      expect(a.sprite.destroyed).toBe(true)
+    })
+
+    it('読み込み待ちの間に即時 [退場] されても、旧ポーズ A は残らず退場する', async () => {
+      const { release } = mockLoadGated()
+      const layer = new CharacterLayer(800, 450)
+      layer.setCharacterFadeMs(1000)
+      layer.setCamera('Theater', 'Front' as never, null)
+      layer.show('hero', 'a', '中央', '/assets', { instant: true })
+      await flushPromises()
+      const a = internals(layer).characters.get('hero') as Anim
+      layer.show('hero', 'slowB', '中央', '/assets', {})
+      layer.remove('hero', { instant: true })
+      expect(keysOf(layer)).toEqual(['hero__transition_1'])
+      release()
+      await flushPromises()
+      await flushPromises()
+      for (let i = 0; i < 6; i++) {
+        advance(layer, 250)
+        await flushPromises()
+      }
+      expect(keysOf(layer)).toEqual([])
+      expect(a.sprite.destroyed).toBe(true)
+    })
+  })
 })

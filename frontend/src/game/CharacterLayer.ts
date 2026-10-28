@@ -480,6 +480,13 @@ interface CharacterState {
    * NovelGameState に持たない）。完了で mesh を破棄し、`out` は state ごと破棄、`in` は sprite を戻す。
    */
   flipAnimation?: FlipAnimation
+  /**
+   * 同一人物のポーズ変更 (#337/#707) の読み込み待ちの間だけ持つ、旧ポーズ（`${name}__transition_N`
+   * キー）。読み込み完了前にさらにポーズが変わったとき、この旧ポーズを新しい変更へ引き継ぐ (#952)。
+   */
+  pendingFrom?: string
+  /** 引き継ぎで捨てられた読み込み待ちの state。完了時の .then は何もしない (#952)。 */
+  abandoned?: boolean
   /** 円形マスク用 Graphics (#274)。`[画像: 円形]` のとき sprite.mask に設定する。退場で破棄する。 */
   maskGraphics?: Graphics
   /** ラベルの水平 anchor (#275)。左=0 / 中央=0.5 / 右=1。label.anchor.x と一致させて保持する。
@@ -1772,10 +1779,27 @@ export class CharacterLayer extends Container {
           existing.idleIntervalId = undefined
         }
 
-        const oldKey = this.nextTransitionName(character)
-        existing.snapshotHidden = true
-        this.characters.delete(character)
-        this.characters.set(oldKey, existing)
+        // `existing` が「直前の変更 A→B の読み込み待ち（まだ一度も表示されていない B）」なら、
+        // B を捨てて A（B の predecessor）を旧ポーズとして引き継ぎ、A→C に直接つなぐ (#952)。
+        // B を旧側にすると、B の読み込み完了時の .then が「現在の state ではない」で早期 return し、
+        // A がフェード/回転で退場されないまま snapshotHidden で残り続けていた。
+        const adoptedKey = existing.pendingFrom
+        const predecessor = adoptedKey ? this.characters.get(adoptedKey) : undefined
+        let base: CharacterState = existing
+        let oldKey: string
+        if (adoptedKey && predecessor) {
+          existing.abandoned = true
+          existing.pendingFrom = undefined
+          this.destroyCharacterState(existing)
+          this.characters.delete(character)
+          base = predecessor
+          oldKey = adoptedKey
+        } else {
+          oldKey = this.nextTransitionName(character)
+          existing.snapshotHidden = true
+          this.characters.delete(character)
+          this.characters.set(oldKey, existing)
+        }
 
         const nextState = this.createPortraitState(
           character,
@@ -1790,6 +1814,8 @@ export class CharacterLayer extends Container {
         )
         this.attachCharacterState(nextState)
         this.characters.set(character, nextState)
+        // 読み込み完了までの間、旧ポーズ（oldKey）の持ち主を覚えておく（上記の引き継ぎ用）。
+        nextState.pendingFrom = oldKey
 
         void this.loadTexture(
           nextState.sprite,
@@ -1800,31 +1826,41 @@ export class CharacterLayer extends Container {
           fit,
           onReady
         ).then((loaded) => {
-          if (this.characters.get(character) !== nextState) return
-          if (this.characters.get(oldKey) !== existing) return
+          // 引き継ぎで捨てられた B（上記 abandoned）は何もしない。旧ポーズ A は C が引き継いでいる。
+          if (nextState.abandoned) return
+          if (this.characters.get(character) !== nextState) {
+            // 読み込み待ちの間に即時 [退場] 等で nextState が消えた。旧ポーズ（base）は誰にも
+            // 片付けられず残るので、ここでフェードアウトして破棄する (#952)。
+            if (this.characters.get(oldKey) === base) {
+              this.startFade(base, base.sprite.alpha, 0, true)
+            }
+            return
+          }
+          nextState.pendingFrom = undefined
+          if (this.characters.get(oldKey) !== base) return
           if (!loaded && assetBaseUrl) {
             this.destroyCharacterState(nextState)
             this.characters.delete(character)
-            existing.fadeAnimation = null
-            existing.snapshotHidden = false
-            existing.sprite.alpha = 1
+            base.fadeAnimation = null
+            base.snapshotHidden = false
+            base.sprite.alpha = 1
             this.characters.delete(oldKey)
-            this.characters.set(character, existing)
+            this.characters.set(character, base)
             return
           }
           if (this.cameraMode === 'Theater') {
             // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
             let inheritedStartMs: number | undefined
-            if (existing.sprite.parent === this) {
-              inheritedStartMs = this.startFlipOut(existing)
+            if (base.sprite.parent === this) {
+              inheritedStartMs = this.startFlipOut(base)
             } else {
               // 衝突退場待ちで未 attach の旧 state は一度も画面に出ていない。回すと最前面に
               // 突然現れるので、従来どおり（見えないまま）フェードで片付ける。
-              this.startFade(existing, existing.sprite.alpha, 0, true)
+              this.startFade(base, base.sprite.alpha, 0, true)
             }
             this.startFlipIn(nextState, inheritedStartMs)
           } else {
-            this.startFade(existing, existing.sprite.alpha, 0, true)
+            this.startFade(base, base.sprite.alpha, 0, true)
             this.startFade(nextState, 0, 1, false)
           }
         })
