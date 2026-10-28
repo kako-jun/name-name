@@ -53,6 +53,20 @@ describe('FieldEmotionLayer', () => {
     expect(l.active()).toEqual({})
   })
 
+  it('show の第3引数で 1 回だけ持続を上書きし、省略は宣言どおり（#946）', () => {
+    const l = setup({ '!': sh() }, new Map([['a.png', sheetTexture(1)]])) // 宣言は 1000ms
+    expect(l.show('player', '!', 300)).toBe(true)
+    l.tick(299, heads)
+    expect(l.active().player?.durationMs).toBe(300)
+    l.tick(1, heads)
+    expect(l.active()).toEqual({})
+    l.show('player', '!')
+    l.tick(999, heads)
+    expect(l.active().player?.kind).toBe('!')
+    l.tick(1, heads)
+    expect(l.active()).toEqual({})
+  })
+
   it('人物が動けば追従する（毎フレームの頭の位置に置き直す）', () => {
     const l = setup({ '!': sh() }, new Map([['a.png', sheetTexture(1)]]))
     l.show('player', '!')

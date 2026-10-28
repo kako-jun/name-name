@@ -12,11 +12,24 @@
  */
 import {
   EMOTION_MAX_DURATION_MS,
+  hasEmotions,
   parseEmotions,
   type EmotionSheets,
   type EmotionTarget,
 } from './fieldEmotion'
 import { hasOwn } from './ownProperty'
+
+/**
+ * 設定のインライン `emotions` と外部 JSON（`emotionsUrl`、#946）の種類をマージする。同名はインラインが優先。
+ * どちらも空なら undefined（吹き出しなし＝層を作らない）
+ */
+export function mergeEmotionSheets(
+  inline: EmotionSheets | undefined,
+  external: EmotionSheets | undefined
+): EmotionSheets | undefined {
+  const merged: EmotionSheets = { ...(external ?? {}), ...(inline ?? {}) }
+  return hasEmotions(merged) ? merged : undefined
+}
 
 /** 脚本中の主人公を指す固定の対象名 */
 export const EMOTION_PROTAGONIST_TARGET = '主人公'

@@ -59,7 +59,13 @@ import {
 } from '../game/fieldAssist'
 import { scrollOffset, shakeOffset } from '../game/fieldMotion'
 import { FieldEmotionLayer, type EmotionHeads } from '../game/FieldEmotionLayer'
-import { EMOTION_TARGETS, isCompanionShown, type EmotionTarget } from '../game/fieldEmotion'
+import {
+  EMOTION_TARGETS,
+  isCompanionShown,
+  type EmotionSheets,
+  type EmotionTarget,
+} from '../game/fieldEmotion'
+import { mergeEmotionSheets, parseFieldEmotionsText } from '../game/fieldEmotionScript'
 import {
   WARP_COLOR,
   WARP_LOAD_TIMEOUT_MS,
@@ -245,6 +251,29 @@ function holdFor(config: FieldSampleConfig, id: string, mask: WalkMask): Uint8Ar
   return findLatchHoldWhite(mask, safe, edges)
 }
 
+/**
+ * 感情吹き出しの種類を集める (#946)。設定のインライン `emotions` と、`emotionsUrl` の外部 JSON をマージする（同名はインラインが優先）。
+ * 外部 JSON の取得失敗・不正は警告して無視（インラインだけで続ける）。どちらも無ければ undefined＝層を作らない（従来と同一）
+ */
+async function loadEmotionSheets(config: FieldSampleConfig): Promise<EmotionSheets | undefined> {
+  let external: EmotionSheets = {}
+  const src = config.emotionsSource
+  if (src) {
+    try {
+      const res = await fetch(src.url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const parsed = parseFieldEmotionsText(await res.text(), src.resolveImage)
+      for (const w of parsed.warnings) console.warn(`[field-sample] emotionsUrl: ${w}`)
+      external = parsed.emotions
+    } catch (e) {
+      console.warn(
+        `[field-sample] emotionsUrl を読めません（無視します）: ${src.url} ${e instanceof Error ? e.message : String(e)}`
+      )
+    }
+  }
+  return mergeEmotionSheets(config.emotions, external)
+}
+
 async function main(): Promise<void> {
   const config = await loadConfig()
   const cache = new Map<string, Promise<LoadedScene>>()
@@ -284,9 +313,10 @@ async function main(): Promise<void> {
     for (const f of FACINGS) companionTex[f] = await loadFrames(config.companion.sprites[f])
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
+  const emotionSheets = await loadEmotionSheets(config)
   const emotionTextures = new Map<string, Texture | null>()
   await Promise.all(
-    [...new Set(Object.values(config.emotions ?? {}).map((sheet) => sheet.image))].map(
+    [...new Set(Object.values(emotionSheets ?? {}).map((sheet) => sheet.image))].map(
       async (image) => {
         try {
           emotionTextures.set(image, Texture.from(await loadBitmap(image)))
@@ -299,9 +329,7 @@ async function main(): Promise<void> {
       }
     )
   )
-  const emotionLayer = config.emotions
-    ? new FieldEmotionLayer(config.emotions, emotionTextures)
-    : null
+  const emotionLayer = emotionSheets ? new FieldEmotionLayer(emotionSheets, emotionTextures) : null
 
   let scene = await ensureScene(config.startScene)
   let sceneId = config.startScene
@@ -929,9 +957,10 @@ async function main(): Promise<void> {
     getFlags: () => ({ ...flags }),
     /**
      * 感情吹き出し (#937)。人物（player / companion）の頭上に、宣言した種類（"!" "?" など）を出す。見た目だけで歩行には関与しない。
-     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中・同行者が出ていないとき（companion 指定時）は false。同じ人物に続けて出すと置き換わる
+     * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中・同行者が出ていないとき（companion 指定時）は false。同じ人物に続けて出すと置き換わる。
+     * `durationMs`（任意・#946）はこの 1 回だけ表示時間を上書きする（0 超〜10000ms。超えれば 10000 に収め、0 以下・非数・省略は宣言の `durationMs`）
      */
-    showEmotion: (target: EmotionTarget, kind: string): boolean => {
+    showEmotion: (target: EmotionTarget, kind: string, durationMs?: number): boolean => {
       if (!emotionLayer || battle) return false
       // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
       if (
@@ -940,7 +969,7 @@ async function main(): Promise<void> {
       )
         return false
       if (!(EMOTION_TARGETS as readonly string[]).includes(target)) return false
-      return emotionLayer.show(target, kind)
+      return emotionLayer.show(target, kind, durationMs)
     },
     /** 進行中の吹き出し（検証用の読み取り） */
     emotions: () => emotionLayer?.active() ?? {},
@@ -961,7 +990,7 @@ async function main(): Promise<void> {
   }
   // 感情吹き出しのボタン (#937。開発用。脚本の代わりに手で出す)
   const emotionBox = $('tb-emotions')
-  for (const kind of Object.keys(config.emotions ?? {})) {
+  for (const kind of Object.keys(emotionSheets ?? {})) {
     for (const target of config.companion ? EMOTION_TARGETS : (['player'] as const)) {
       const b = document.createElement('button')
       b.type = 'button'

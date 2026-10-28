@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   EMOTION_DEFAULT_DURATION_MS,
   EMOTION_DEFAULT_FRAME_MS,
+  EMOTION_MAX_DURATION_MS,
   EMOTION_POP_MS,
   INITIAL_EMOTION_STATE,
   emotionAnchor,
@@ -187,6 +188,34 @@ describe('startEmotion / stepEmotions', () => {
     expect(startEmotion(st, 'nobody' as 'player', '!', sheets)).toBe(st)
     expect(startEmotion(st, 'player', '!', undefined)).toBe(st)
     expect(startEmotion(st, 'player', '!', {})).toBe(st)
+  })
+
+  it('持続を渡すと 1 回だけ宣言の durationMs を上書きする（#946）', () => {
+    let st = startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, 300) // 宣言は 1000ms
+    expect(st).toEqual({ player: { kind: '!', elapsed: 0, durationMs: 300 } })
+    st = stepEmotions(st, 299, sheets)
+    expect(st.player).toBeDefined()
+    expect(stepEmotions(st, 1, sheets)).toEqual({})
+    // 宣言より長くもできる
+    let long = startEmotion(INITIAL_EMOTION_STATE, 'player', '?', sheets, 2000) // 宣言は 500ms
+    long = stepEmotions(long, 1999, sheets)
+    expect(long.player?.durationMs).toBe(2000)
+    expect(stepEmotions(long, 1, sheets)).toEqual({})
+  })
+
+  it('持続は上限に収め、0 以下・非有限・省略は宣言どおり（キーも付かない）', () => {
+    const over = startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, 999999)
+    expect(over.player?.durationMs).toBe(EMOTION_MAX_DURATION_MS)
+    for (const bad of [0, -5, NaN, Infinity, undefined, '300' as unknown as number]) {
+      const st = startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, bad)
+      expect(st).toEqual({ player: { kind: '!', elapsed: 0 } })
+      expect('durationMs' in st.player!).toBe(false)
+    }
+    // 上書きは次に出した吹き出しへ持ち越さない
+    let st = startEmotion(INITIAL_EMOTION_STATE, 'player', '!', sheets, 300)
+    st = startEmotion(st, 'player', '!', sheets)
+    expect(st.player?.durationMs).toBeUndefined()
+    expect(stepEmotions(stepEmotions(st, 300, sheets), 600, sheets).player).toBeDefined()
   })
 
   it('元の state は書き換えない', () => {
