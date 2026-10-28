@@ -1671,7 +1671,10 @@ export class CharacterLayer extends Container {
    * 抜け、B が退避させた A に誰もフェード／flip を張らなくなる。最新の遷移だけが自分の旧 state
    * （`keep`）を片付けるので、`keep` 以外の退場中でない旧 state はすべて落としてよい。
    * 誰かが誰かを引き継ぐ仕組みではなく、単に落とすだけ（B と同じ退場演出）。
-   * `keep` を省略した呼び出し（`remove()`）は、そのキャラの旧 state すべてが対象。
+   * `keep` は「別の主体が処理するので落とさない旧 state」。通常は最新の遷移の旧 state（`existing`）、
+   * ロールバックでは戻り先の `.then` がまだ走っていなければその旧 state。誰も処理しない呼び出し
+   * （`remove()`、旧 state が消えた入場、戻り先の `.then` が実行済みのロールバック）は `undefined` を渡し、
+   * そのキャラの退場中でない旧 state すべてが対象になる。
    */
   private retireOrphanTransitions(
     character: string,
