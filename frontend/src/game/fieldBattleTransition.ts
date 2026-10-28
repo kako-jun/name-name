@@ -197,9 +197,13 @@ export class FieldBattleTransition {
       this.removeInterlude(run.interlude)
       run.interlude = undefined
     }
+    if (s.phase === 'black') {
+      // 黒の間は幕が不透明で見た目が変わらないので、モザイクは外す（追加画面 #831 まで粗くしない）。フィルタは作らない
+      if (this.overlay) this.overlay.alpha = s.alpha
+      this.clearMosaic()
+      return
+    }
     this.setAlpha(s.alpha)
-    // 黒の間は幕が不透明で見た目が変わらないので、モザイクは外す（追加画面 #831 まで粗くしない）
-    if (s.phase === 'black') this.clearMosaic()
   }
 
   private finish(): void {

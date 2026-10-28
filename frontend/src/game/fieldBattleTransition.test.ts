@@ -455,6 +455,25 @@ describe('モザイクの補足 (#953 レビュー対応)', () => {
     expect(filtersOf(stage).length).toBe(1)
   })
 
+  it('黒の間は PixelateFilter を作っては捨てない（destroy が増えない）', () => {
+    const { stage, t } = make()
+    t.setParams(battleTransitionParams('ff-mosaic'))
+    const destroy = vi.spyOn(PixelateFilter.prototype, 'destroy')
+    t.playExit(
+      800,
+      600,
+      'victory',
+      () => {},
+      () => {}
+    )
+    tick(t, P.exitFadeOutMs + 48) // 黒に入って mosaic を外した
+    expect(filtersOf(stage)).toHaveLength(0)
+    const n = destroy.mock.calls.length
+    for (let e = 0; e < P.exitBlackMs - 80; e += 16) t.tick(16)
+    expect(destroy.mock.calls.length).toBe(n)
+    destroy.mockRestore()
+  })
+
   it('size が 2 未満の間は付けない（終了の開始直後・最後付近）', () => {
     const { stage, t } = make()
     t.setParams(battleTransitionParams('ff-mosaic'))
