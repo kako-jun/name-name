@@ -17,6 +17,7 @@ const videoMock = vi.hoisted(() => {
     active: boolean
     export: number
     playingToEnd: boolean
+    ended: boolean
   }> = []
   return { instances }
 })
@@ -31,6 +32,7 @@ vi.mock('./VideoLayer', async () => {
       active: false,
       export: 0,
       playingToEnd: false,
+      ended: false,
     }
     constructor() {
       super()
@@ -52,6 +54,9 @@ vi.mock('./VideoLayer', async () => {
     }
     async prepareForExport() {
       this.rec.export++
+    }
+    hasEnded() {
+      return this.rec.ended
     }
     isPlayingToEnd() {
       return this.rec.playingToEnd
@@ -324,6 +329,69 @@ describe('WallLayer 状態・復元', () => {
     const { layer, video } = make()
     layer.restore({ path: 'a.webm', loop: true, mute: true }, '/assets')
     expect(video.shown).toHaveLength(1)
+  })
+
+  it('S1: 画像のロード失敗後の同一 restore は読み込み直す', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const load = vi.spyOn(Assets, 'load').mockRejectedValueOnce(new Error('404'))
+    const { layer } = make()
+    layer.show('a.webp', {}, '/assets')
+    await flushPromises()
+    load.mockResolvedValue(mockTexture() as never)
+    layer.restore({ path: 'a.webp', loop: true, mute: true }, '/assets')
+    await flushPromises()
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(layer.hasImage()).toBe(true)
+  })
+
+  it('S1: assetBaseUrl が空で show した後の同一 restore は（baseUrl が入れば）読み込む（画像・動画）', async () => {
+    const load = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const { layer, video } = make()
+    layer.show('a.webp', {}, '')
+    layer.restore({ path: 'a.webp', loop: true, mute: true }, '/assets')
+    await flushPromises()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(layer.hasImage()).toBe(true)
+    layer.show('b.webm', {}, '')
+    layer.restore({ path: 'b.webm', loop: true, mute: true }, '/assets')
+    expect(video.shown).toHaveLength(1)
+  })
+
+  it('S1: assetBaseUrl が差し替わったら同一の壁でも読み直す', async () => {
+    const load = vi.spyOn(Assets, 'load').mockResolvedValue(mockTexture() as never)
+    const { layer } = make()
+    layer.show('a.webp', {}, '/assets')
+    await flushPromises()
+    layer.restore({ path: 'a.webp', loop: true, mute: true }, '/cdn')
+    await flushPromises()
+    expect(load).toHaveBeenLastCalledWith('/cdn/images/a.webp')
+  })
+
+  it('S1: 画像のロードが進行中なら同一 restore は二重にロードしない', async () => {
+    const load = vi.spyOn(Assets, 'load').mockReturnValue(new Promise(() => {}) as never)
+    const { layer } = make()
+    layer.show('a.webp', {}, '/assets')
+    layer.restore({ path: 'a.webp', loop: true, mute: true }, '/assets')
+    expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('S1: 動画が実際に表示されていない（hasVideo=false）なら同一 restore は show し直す', () => {
+    const { layer, video } = make()
+    layer.show('a.webm', {}, '/assets')
+    video.active = false
+    layer.restore({ path: 'a.webm', loop: true, mute: true }, '/assets')
+    expect(video.shown).toHaveLength(2)
+  })
+
+  it('Q1: 非ループ動画が再生し終えて止まっていたら、同一 restore は頭から再生し直す', () => {
+    const { layer, video } = make()
+    layer.show('a.webm', { loop: false }, '/assets')
+    video.ended = true
+    layer.restore({ path: 'a.webm', loop: false, mute: true }, '/assets')
+    expect(video.shown).toHaveLength(2)
+    video.ended = false
+    layer.restore({ path: 'a.webm', loop: false, mute: true }, '/assets')
+    expect(video.shown).toHaveLength(2)
   })
 
   it('getState → restore の往復で同じ状態に戻る', () => {

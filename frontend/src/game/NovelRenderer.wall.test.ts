@@ -4,7 +4,7 @@
  * WallLayer 自体の画像/動画の振り分け・配置・後始末は WallLayer.test.ts、ディレクティブ→layer の
  * 受け渡しは directives.wall.test.ts でカバー済み。ここでは NovelRenderer 側の配線だけを見る:
  * settled state の蓄積と置換、`[壁: なし]`、`[場面転換]`・新規開始でのクリア、シーン間ジャンプでの持ち越し、
- * goBack / セーブ復元（最終状態）、レイヤー順（最奥）、ズームの共通適用、イベント絵での可視性、破棄。
+ * goBack / セーブ復元（最終状態）、レイヤー順（背景板より奥）、ズームの共通適用、イベント絵での可視性、破棄。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Assets, type Texture } from 'pixi.js'
@@ -303,7 +303,7 @@ describe('NovelRenderer 壁 のセーブ・復元 (#703)', () => {
 })
 
 describe('NovelRenderer 壁 のレイヤー順・可視性・破棄 (#703)', () => {
-  it('stage 上で単一スロット背景の上・背景板の直前（最奥の板）、立ち絵・大道具・幕よりずっと奥', async () => {
+  it('stage 上で単一スロット背景の上・背景板の直前（背景板より奥の板）、立ち絵・大道具・幕よりずっと奥', async () => {
     const r = new NovelRenderer()
     muteAudio(r)
     await initRenderer(r)
@@ -390,6 +390,63 @@ describe('NovelRenderer 壁 のレイヤー順・可視性・破棄 (#703)', () 
     await flushPromises()
     r.setEvents([narration('two')])
     expect(unload.mock.calls.map((c) => c[0])).toContain('/assets/images/glow.webp')
+  })
+})
+
+describe('NovelRenderer 壁 の終劇後の復元・最初から・同一壁の goBack (#703)', () => {
+  it('終劇で壁が消えた後、goBack（復元）で壁が戻る', async () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [wall('a.webp'), narration('one'), narration('two')])])
+    const before = r.getSnapshot()
+    expect(before.wall?.path).toBe('a.webp')
+    internalsOf<{ endStory(): void }>(r).endStory()
+    expect(r.getSnapshot().wall).toBeNull()
+    ;(r as unknown as { applyState(s: NovelGameState): void }).applyState(before)
+    expect(r.getSnapshot().wall).toEqual({ path: 'a.webp', loop: true, mute: true })
+  })
+
+  it('「最初から」（新規開始）では壁なしから始まる', async () => {
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [wall('a.webp'), narration('one')])])
+    expect(r.getSnapshot().wall?.path).toBe('a.webp')
+    r.setEvents([narration('fresh')])
+    expect(r.getSnapshot().wall).toBeNull()
+  })
+
+  it('同じ壁の goBack では動画要素を差し替えない（remove/show されない）。壁が変わっていれば差し替える', async () => {
+    const r = new NovelRenderer()
+    r.setAssetBaseUrl('/assets')
+    r.setScenes([
+      scene('a', [
+        wall('a.webm'),
+        narration('one'),
+        narration('two'),
+        wall('b.webm'),
+        narration('three'),
+      ]),
+    ])
+    const layer = internals<LocalInternals>(r).wallLayer as unknown as {
+      videoLayer: { show(...a: unknown[]): void; remove(): void; hasVideo(): boolean }
+    }
+    let active = false
+    const show = vi.spyOn(layer.videoLayer, 'show').mockImplementation(() => {
+      active = true
+    })
+    vi.spyOn(layer.videoLayer, 'remove').mockImplementation(() => {
+      active = false
+    })
+    vi.spyOn(layer.videoLayer, 'hasVideo').mockImplementation(() => active)
+    // 現在の壁を（偽の）表示中状態にしてから進める。
+    internals<LocalInternals>(r).wallLayer.show('a.webm', {}, '/assets')
+    expect(show).toHaveBeenCalledTimes(1)
+    await r.playScript([{ type: 'advance' }]) // one -> two
+    r.goBack() // two -> one（壁は a.webm のまま）
+    expect(show).toHaveBeenCalledTimes(1)
+    await r.playScript([{ type: 'advance' }, { type: 'advance' }]) // -> wall b.webm
+    expect(r.getSnapshot().wall?.path).toBe('b.webm')
+    r.goBack() // b -> a の状態へ
+    expect(r.getSnapshot().wall?.path).toBe('a.webm')
+    expect(show.mock.calls.length).toBeGreaterThan(1)
   })
 })
 
