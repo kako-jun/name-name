@@ -4,7 +4,7 @@
  * 技法は CharacterLayer.poseChangeRace.test.ts と同じ（ticker 停止・仮想時間・Assets.load 保留）。
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { Assets, BufferImageSource, PerspectiveMesh, Sprite, Texture, Ticker } from 'pixi.js'
+import { Assets, BufferImageSource, Sprite, Texture, Ticker } from 'pixi.js'
 import { CharacterLayer } from './CharacterLayer'
 import { TimeController } from './TimeController'
 
@@ -94,8 +94,13 @@ function installLoader(): {
 
 const chars = (l: CharacterLayer): Map<string, StateLike> => internals(l).characters
 
-async function settle(layer: CharacterLayer): Promise<void> {
+async function settle(layer: CharacterLayer, time?: TimeController): Promise<void> {
   await flushPromises()
+  // 読み込み失敗のリトライ待機 (#389) は TimeController 経由なので仮想時間を進めて解く
+  if (time) {
+    time.tick(1000)
+    await flushPromises()
+  }
   for (let i = 0; i < 6; i++) advance(layer, 1000)
   await flushPromises()
 }
@@ -103,11 +108,12 @@ async function settle(layer: CharacterLayer): Promise<void> {
 describe.each(['Theater', 'Novel'] as const)('#960 instant show と遅着 texture [%s]', (mode) => {
   let loader: ReturnType<typeof installLoader>
   let layer: CharacterLayer
+  let time: TimeController
 
   beforeEach(() => {
     vi.spyOn(Ticker.prototype, 'start').mockImplementation(() => {})
     loader = installLoader()
-    const time = new TimeController()
+    time = new TimeController()
     time.setMode('virtual')
     layer = new CharacterLayer(800, 450, time)
     layer.setCharacterFadeMs(1000)
@@ -176,12 +182,43 @@ describe.each(['Theater', 'Novel'] as const)('#960 instant show と遅着 textur
     layer.show('hero', 'c', '中央', '/assets', { instant: true })
     await flushPromises()
     slowB.reject()
-    await settle(layer)
+    await settle(layer, time)
 
     const st = chars(layer).get('hero')
     expect(st?.expression).toBe('c')
     expect(st?.sprite.destroyed).toBe(false)
     expect(nameOf(st!.sprite.texture)).toBe('c')
     expect(visibleTextures()).toEqual(['c'])
+  })
+
+  it('stale の B が先に reject し C も reject: 例外なく、重なって残らず hero が 1 体だけ残る', async () => {
+    await showA()
+    const slowB = loader.hold('b')
+    layer.show('hero', 'b', '中央', '/assets', {})
+    await flushPromises()
+    const slowC = loader.hold('c')
+    layer.show('hero', 'c', '中央', '/assets', { instant: true })
+    await flushPromises()
+    slowB.reject()
+    await settle(layer, time)
+    slowC.reject()
+    await settle(layer, time)
+    expect(chars(layer).get('hero')?.sprite.destroyed).not.toBe(true)
+    expect(visibleTextures()).toHaveLength(1)
+  })
+
+  it('onReady は stale 呼び出しも含め各 show につき 1 回ずつ（二重・欠落なし）', async () => {
+    await showA()
+    const slowB = loader.hold('b')
+    const readyB = vi.fn()
+    const readyC = vi.fn()
+    layer.show('hero', 'b', '中央', '/assets', { onReady: readyB })
+    await flushPromises()
+    layer.show('hero', 'c', '中央', '/assets', { instant: true, onReady: readyC })
+    await flushPromises()
+    slowB.resolve()
+    await settle(layer, time)
+    expect(readyB).toHaveBeenCalledTimes(1)
+    expect(readyC).toHaveBeenCalledTimes(1)
   })
 })
