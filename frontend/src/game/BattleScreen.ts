@@ -2157,7 +2157,7 @@ export class BattleScreen extends Container {
     const rows = aggregateEnemyList(
       s.enemies.map((e, i) => ({ name: e.name, hp: this.shownHp('enemy', i, e.hp) }))
     )
-    const fit = fitEnemyListFont(rows.length, rect.h)
+    const fit = fitEnemyListFont(rows.length, rect.h, { rows, windowWidth: rect.w })
     const lines = enemyListLines(rows, fit, rect.w)
     while (this.enemyListTexts.length < fit.visibleRows) {
       const t = new PixiText({

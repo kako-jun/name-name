@@ -2797,14 +2797,9 @@ describe('enemyList: status の compact 境界 (#954)', () => {
     expect(L.statusCompact).toBe(false)
   })
   it('窓なしで既に compact の画面では窓を置かない', () => {
-    const off = computeSideBattleLayout({ width: 568, height: 320, partyCount: 4, enemyCount: 3 })
-    const on = computeSideBattleLayout({
-      width: 568,
-      height: 320,
-      partyCount: 4,
-      enemyCount: 3,
-      enemyList: true,
-    })
-    if (off.statusCompact) expect(on.enemyList).toBeNull()
+    const size = { width: 480, height: 270, partyCount: 4, enemyCount: 3 }
+    const off = computeSideBattleLayout(size)
+    expect(off.statusCompact).toBe(true)
+    expect(computeSideBattleLayout({ ...size, enemyList: true }).enemyList).toBeNull()
   })
 })

@@ -60,14 +60,30 @@ export interface EnemyListFit {
   visibleRows: number
 }
 
-/** 行数が窓高に収まる最大のフォントサイズ（最小サイズまで縮小）。0 行は上限サイズ */
-export function fitEnemyListFont(rowCount: number, windowHeight: number): EnemyListFit {
+/**
+ * 文字サイズを決める。まず行数が窓高に収まる最大サイズ（上限 ENEMY_LIST_MAX_FONT）を求め、
+ * `width` を渡したときはそこから `ENEMY_LIST_MIN_FONT` まで、全行が窓の幅に収まる最大サイズまで縮める。
+ * 最小サイズでも収まらないものは、高さなら行を出さず（`visibleRows`）、幅なら名前を「…」で省略する。
+ * 0 行は上限サイズ
+ */
+export function fitEnemyListFont(
+  rowCount: number,
+  windowHeight: number,
+  width?: { rows: readonly EnemyListRow[]; windowWidth: number }
+): EnemyListFit {
   const inner = Math.max(0, windowHeight - ENEMY_LIST_PADDING * 2)
   const rows = Math.max(0, Math.floor(rowCount))
   let font = ENEMY_LIST_MAX_FONT
   if (rows > 0) {
     font = Math.min(ENEMY_LIST_MAX_FONT, Math.floor(inner / rows / ENEMY_LIST_LINE_RATIO))
     font = Math.max(ENEMY_LIST_MIN_FONT, font)
+  }
+  if (width && width.rows.length > 0) {
+    const innerW = Math.max(0, width.windowWidth - ENEMY_LIST_PADDING * 2)
+    const texts = width.rows.map(enemyListRowText)
+    while (font > ENEMY_LIST_MIN_FONT && texts.some((t) => estimateTextWidth(t, font) > innerW)) {
+      font--
+    }
   }
   const lineHeight = Math.ceil(font * ENEMY_LIST_LINE_RATIO)
   const visibleRows = Math.min(rows, Math.max(0, Math.floor(inner / lineHeight)))

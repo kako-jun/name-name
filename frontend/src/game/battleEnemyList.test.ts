@@ -104,6 +104,39 @@ describe('enemyListLines', () => {
   })
 })
 
+describe('fitEnemyListFont: 幅で縮める', () => {
+  const row = (name: string, count = 1) => ({ name, count })
+  it('幅 96 で「スライム ×3」は省略されずに出る（13px まで縮む）', () => {
+    const rows = [row('スライム', 3), row('イカ')]
+    const fit = fitEnemyListFont(rows.length, 120, { rows, windowWidth: 96 })
+    expect(fit.fontSize).toBeLessThan(ENEMY_LIST_MAX_FONT)
+    expect(fit.fontSize).toBeGreaterThanOrEqual(ENEMY_LIST_MIN_FONT)
+    expect(enemyListLines(rows, fit, 96)).toEqual(['スライム ×3', 'イカ'])
+  })
+  it('幅 96 で「メタルスライム」も縮んで収まる', () => {
+    const rows = [row('メタルスライム')]
+    const fit = fitEnemyListFont(1, 120, { rows, windowWidth: 96 })
+    expect(enemyListLines(rows, fit, 96)).toEqual(['メタルスライム'])
+  })
+  it('幅が十分なら上限サイズのまま', () => {
+    const rows = [row('スライム', 3)]
+    expect(fitEnemyListFont(1, 120, { rows, windowWidth: 200 }).fontSize).toBe(ENEMY_LIST_MAX_FONT)
+  })
+  it('最小サイズでも入らない名前は省略（フォントは最小）', () => {
+    const rows = [row('ABCDEFGHIJKLMNOPQRSTUVWXYZ')]
+    const fit = fitEnemyListFont(1, 120, { rows, windowWidth: 96 })
+    expect(fit.fontSize).toBe(ENEMY_LIST_MIN_FONT)
+    expect(enemyListLines(rows, fit, 96)[0].endsWith('…')).toBe(true)
+  })
+  it('高さ起因の縮小を超えて大きくはしない・行あふれの「…」は従来どおり', () => {
+    const rows = Array.from({ length: 20 }, (_, i) => row(`E${i}`))
+    const fit = fitEnemyListFont(20, 60, { rows, windowWidth: 160 })
+    expect(fit.fontSize).toBe(ENEMY_LIST_MIN_FONT)
+    const lines = enemyListLines(rows, fit, 160)
+    expect(lines[lines.length - 1]).toBe('…')
+  })
+})
+
 describe('normalizeBattleEnemyList', () => {
   afterEach(() => vi.restoreAllMocks())
   it('window / 前後空白・大文字 → window', () => {
