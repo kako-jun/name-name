@@ -2711,3 +2711,44 @@ describe('parseMarkdown: 説明用 Markdown 全文が一定時間内に読める
     expect(Date.now() - t).toBeLessThan(5_000)
   }, 10_000)
 })
+
+// 面の切り替え（回転）(#704)。wasm → normalizeEvent 経路で flip_from / flip_ms が欠落・変質せず、
+// 指定のないイベントの形は従来と同じ（フィールドが付かない）ことを縛る。
+describe('wasm parseMarkdown: 大道具・背景板の面の切り替え (#704)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[大道具: 裏.png, depth: 3, 回転: 表.png, 時間: 900]',
+    '[背景板: 空2.png, 回転: 空1.png]',
+    '[大道具: 机.png]',
+    '[背景板: 山.png, 回転: , 時間: 500]',
+    '',
+  ].join('\n')
+
+  it('回転元・時間が載り、指定のない（または回転元が空の）イベントには付かない', async () => {
+    const doc = await parseMarkdown(markdown)
+    const events = doc.chapters[0].scenes[0].events
+    expect(events).toEqual([
+      { Prop: { path: '裏.png', depth: 3, flip_from: '表.png', flip_ms: 900 } },
+      { BackgroundBoard: { path: '空2.png', depth: 0, flip_from: '空1.png' } },
+      { Prop: { path: '机.png', depth: 0 } },
+      { BackgroundBoard: { path: '山.png', depth: 0 } },
+    ])
+  })
+
+  it('round-trip で回転指定が保たれ、既定は無出力', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[大道具: 裏.png, depth: 3, 回転: 表.png, 時間: 900]')
+    expect(emitted).toContain('[背景板: 空2.png, 回転: 空1.png]')
+    expect(emitted).toContain('[大道具: 机.png]\n')
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})
