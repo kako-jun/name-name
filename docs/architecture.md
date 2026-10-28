@@ -1295,9 +1295,10 @@ MapEditor/NPCEditor の変更
 - 構文は既存の板の記法に任意引数を足しただけ: `[大道具: 裏.png, depth: 3, 回転: 表.png, 時間: 900]`。`回転: 旧パス` が「同じ depth の旧パスの板をこの板へ差し替える」、`時間: N` が所要時間（省略は `character_fade_ms`）。選んだ理由: 板には id が無く加算的に蓄積されるので、差し替え先を指す手段が要る（旧パス＋depth で足りる）／独立ディレクティブ（`[大道具回転:]`）にすると新しい行種とパーサー分岐が増える／`depth:` と同じコロン kv 記法で、`Event::Prop` / `Event::BackgroundBoard` にフィールド（`flip_from` / `flip_ms`、既定 `None` は emit も JSON も無出力）を足すだけで済む
 - 描画: 純粋ロジックは `frontend/src/game/boardFaceFlip.ts`（回してよいかの判定 `isBoardFaceFlipEnabled`、経過時間→旧面/新面の可視と四隅 `computeBoardFaceFlipFrames`、2 枚の `PerspectiveMesh` を持つ実行体 `BoardFaceFlipRun`）。`BackgroundBoardLayer.replace()` / `PropLayer.replace()` が配線する。回転中は新しい面の sprite を画面に出さず、旧面・新面の mesh を同じ depth 順の位置に置く。時計は両レイヤーが元から使っている `TimeController`（16ms interval、`now()` との差だけが入力）
 - 差し替えは**加算ではなく置換**: `entries` の同じ位置が新しい面になり、`getState()`（`NovelGameState.backgroundBoards` / `props`）は差し替えた瞬間から新しい面。回転途中の値は保存状態に持たない（ADR 0002）。該当する旧い面が無ければ通常の `add`（スライドイン）にフォールバックする
-- 即時切替になる条件（`isBoardFaceFlipEnabled`）: ノベルモード、スキップ中に受けた差し替え、動画書き出し中（`NovelRenderer.setExporting` → 両レイヤー）、`prefers-reduced-motion: reduce`、所要時間 0。復元（`restore()`＝goBack/seekTo/セーブ復元/任意局面起動）は差し替えイベントを再生せず最終状態をそのまま積むので回らない。回転中にカメラが変わる・書き出しが始まると回転は打ち切られて最終状態になる
+- 即時切替になる条件（`isBoardFaceFlipEnabled`）: ノベルモード、スキップ中に受けた差し替え、動画書き出し中（`NovelRenderer.setExporting` → 両レイヤー）、`prefers-reduced-motion: reduce`、所要時間 0。復元（`restore()`＝goBack/seekTo/セーブ復元/任意局面起動）は差し替えイベントを再生せず最終状態をそのまま積むので回らない。回転中にカメラの mode・向き・仰角が変わる、または書き出しが始まると回転は打ち切られて最終状態になる（ズームだけの変更は `setCamera` の引数が変わらずコンテナに掛かるだけなので回転は続く）。ロード待ち中のカメラ変更では、待機中の旧面も新しいカメラの位置へ置き直す
 - 競合: 新しい面のロード完了までは旧い面が画面に残り（`pendingOld`）、ロード中にさらに差し替えると旧い面を引き継いで最後の面だけが残る（A→B→C で B は現れない）。回転中の再差し替えは今の回転を畳んで新しい面から回し直す。撤去（`clear()`）は mesh・旧い面・タイマーをすべて破棄する。新しい面の読み込み失敗時は旧い面も残さない（宣言は新しい面のため）。ロード競合の考え方は立ち絵ポーズ変更の #952 と同じ
 - 共存: 背景板・大道具は depth・カメラのズーム（#702）の射影で配置された位置・大きさのまま回る（mesh は配置済みの sprite の位置・寸法から四隅を求める）。紙人形輪郭（#699）は大道具の mesh にも付く
+- 既知の制限（既存の add→clear 競合と同じ延長で、今回の退行ではない）: 取り消された面のテクスチャは `loadedUrls` に載らず `disposeTextures` で unload されない。`PropLayer` と `BackgroundBoardLayer` は約 200 行の処理が重複している（共通化は別途）
 - **回転舞台（舞台全体が回る）は未実装**。拡張余地: 面の切り替えは「ある板の旧面→新面」の実行体（`BoardFaceFlipRun`）として独立しているので、将来は舞台上の全板（背景板・大道具）に対して同じ開始時刻・同じ所要時間で一斉に `replace` を適用する薄いディレクティブ（例: `[回転舞台: …]`）で表現できる。ただし全板の旧面/新面ペア（裏側の舞台）の宣言の仕方が別途必要なので、別 Issue で設計する
 
 ### カメラの向き・仰角
