@@ -2674,3 +2674,21 @@ describe('parseMarkdown + normalizeDocument: battle_commands / わざ が生き�
     expect(party.mage.abilities).toBeUndefined()
   })
 })
+
+// #969: docs/guide/controls.md 全文（説明用 Markdown）を実 wasm に渡すと、話者行のあとに
+// `**太字**` 始まりの非話者行が来る箇所でパーサが無限ループし、ワーカーが戻らなかった。
+describe('parseMarkdown: 説明用 Markdown 全文が一定時間内に読める (#969)', () => {
+  it('話者行のあとの `**太字**` 始まりの行で止まらない', async () => {
+    const d = await parseMarkdown(
+      '---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n\n続き\n'
+    )
+    expect(d.chapters[0].scenes[0].events.length).toBeGreaterThan(0)
+  }, 10_000)
+
+  it('docs/guide/controls.md 全文を 10 秒以内に parse できる', async () => {
+    const { default: md } = await import('../../../docs/guide/controls.md?raw')
+    const t = Date.now()
+    await parseMarkdown(md)
+    expect(Date.now() - t).toBeLessThan(5_000)
+  }, 10_000)
+})

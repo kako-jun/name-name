@@ -12587,3 +12587,38 @@ fn test_emotion_duration_rejects_plus_sign() {
         );
     }
 }
+
+/// #969: 話者行の後に、話者行ではない `**太字**` 始まりの行（docs の説明文など）が来ても、
+/// パーサが無限ループせず終わること。ワーカースレッドで走らせ、5 秒で戻らなければ失敗にする。
+#[test]
+fn test_non_speaker_bold_line_after_dialog_does_not_hang() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let input = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n**カコ** (a, 左):\nこんにちは\n\n**F5** キーで進む。\n\n[未知のディレクティブ]\n\n続きの本文\n";
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let doc = parser::parse(input);
+        let _ = tx.send(doc);
+    });
+    let doc = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("parse が 5 秒以内に戻ること (#969 無限ループ)");
+    let events = &doc.chapters[0].scenes[0].events;
+    assert!(matches!(&events[0], Event::Dialog { text, .. } if text == &vec!["こんにちは".to_string()]));
+}
+
+/// #969: 説明用 Markdown（docs/guide/controls.md 全文）が一定時間内に parse できること。
+#[test]
+fn test_parse_controls_guide_finishes() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let input = include_str!("../../docs/guide/controls.md");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(parser::parse(input));
+    });
+    rx.recv_timeout(Duration::from_secs(10))
+        .expect("controls.md の parse が 10 秒以内に戻ること (#969)");
+}
