@@ -1389,6 +1389,15 @@ depth 指定の実例（#694）:
 - `CharacterLayer` は `[画像:]` のピクセレート遷移（#628）用 `PixelateFilter` と `sprite.filters` を共有するため、`applySpriteFilters()` に代入箇所を集約し両フィルタが共存できるようにしている。`PropLayer` のスプライトには他にフィルタ運用が無いため直代入でよい
 - ノベルモード・シアターモード両方で機能する（カメラモードと独立した要素）
 
+### 立ち絵ポーズ変更の板フリップ（プロトタイプ実装・#707）
+
+シアターモードで同一人物のポーズ・表情・fit が変わるとき、従来のクロスフェード（#337）の代わりに、立ち絵の板を Y 軸回りにくるっと回して切り替える。旧ポーズの板が 0°→90° まで回って消え、続けて新ポーズの板が -90°→0° まで回って現れる（合計時間は `character_fade_ms`、前半が旧・後半が新）。新しい構文は無い。
+
+- 対象は `cameraMode === 'Theater'` のときの `CharacterLayer.show()` の同一人物 texture 変更経路のみ。ノベルモード、`instant`（seek/save-load 復元）、`character_fade_ms` が 0 の経路は従来どおり（クロスフェード/即時差し替え）で、回転は再生しない
+- 描画は pixi.js 標準の `PerspectiveMesh`（Three.js は使わない）。回転中は sprite を不可視にし、同じ texture の mesh を sprite と同じ z-order に置いて `setCorners` で四隅を毎フレーム更新する。紙人形輪郭（#699）は `applySpriteFilters()` が mesh にも同じフィルタを渡すため、回転中も付く
+- 角度・四隅の計算は純粋関数 `frontend/src/game/boardFlip.ts`（`computeBoardFlipFrame` / `computeBoardFlipCorners`）。`Math.random` 不使用で、入力は TimeController 駆動の経過時間のみ。進行状態は `CharacterState.flipAnimation`（描画側の一時状態）に持ち、`NovelGameState` には中間値を持たない（ADR 0002）
+- 待機判定（`hasActivePortraitTransition` / `hasActiveAnimation`）は `flipAnimation` も進行中として扱う
+
 ### 幕（実装済み・#697）
 
 演劇/漫才の幕の昇降演出。指定画像でスライドダウン演出しながら幕を降ろし、幕より手前にキャラを立てる配置（カーテンコール等）にも対応する。
