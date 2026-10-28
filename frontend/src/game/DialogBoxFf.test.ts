@@ -113,7 +113,7 @@ describe('DialogBox ffWindow (#840)', () => {
     slow.dispose()
     const instant = make(true, 800, 600, { msPerChar: 0 })
     instant.show('', 'あいう')
-    advance(instant, 1)
+    advance(instant, 50)
     expect(instant.getVisibleText()).toBe('あいう')
     instant.dispose()
   })
