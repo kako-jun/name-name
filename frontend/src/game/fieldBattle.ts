@@ -459,7 +459,7 @@ export interface OpenFieldBattleArgs {
   gate: FieldInputGate
   /** プロジェクトのアセットのベース URL (#746)。レンダラーの状態なので設定ではなく引数で受ける。未設定ならパスをそのまま読む */
   assetBaseUrl?: string
-  /** `battle_transition: ff` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
+  /** `battle_transition: ff` / `ff-mosaic` (#830) のとき、終了の演出（黒を経由して戻る）を再生するレンダラーの再生機。無ければ（または `none`）即座に畳む */
   transition?: FieldBattleTransition
   /** `battle_effects` (#941) を読み込み済みのエフェクト宣言。undefined = エフェクトなし（従来どおり） */
   effects?: BattleEffects

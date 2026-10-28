@@ -427,3 +427,96 @@ describe('openFieldBattle の終了で ff-mosaic のモザイクが効く (#953)
     expect(stage.filters ?? []).toHaveLength(0)
   })
 })
+
+describe('モザイクの補足 (#953 レビュー対応)', () => {
+  const filtersOf = (stage: Container) => stage.filters ?? []
+  const tick = (t: FieldBattleTransition, ms: number) => run(t, ms)
+
+  it('ff-mosaic の終了: 黒の間（追加画面あり）は stage.filters が空。フェードアウト中・フェードイン中は付く', () => {
+    const { stage, t } = make()
+    t.setParams(battleTransitionParams('ff-mosaic'))
+    const extra = new Container()
+    t.hooks = { interlude: () => ({ container: extra, durationMs: 500 }) }
+    t.playExit(
+      800,
+      600,
+      'victory',
+      () => {},
+      () => {}
+    )
+    tick(t, P.exitFadeOutMs - 50)
+    expect(filtersOf(stage).length).toBe(1)
+    tick(t, 100) // 黒に入った
+    for (let e = 0; e < 400; e += 16) {
+      tick(t, 16)
+      expect(filtersOf(stage)).toHaveLength(0)
+    }
+    tick(t, 250) // フェードイン
+    expect(filtersOf(stage).length).toBe(1)
+  })
+
+  it('size が 2 未満の間は付けない（終了の開始直後・最後付近）', () => {
+    const { stage, t } = make()
+    t.setParams(battleTransitionParams('ff-mosaic'))
+    t.playExit(
+      800,
+      600,
+      'victory',
+      () => {},
+      () => {}
+    )
+    expect(filtersOf(stage)).toHaveLength(0) // alpha 0
+    for (let e = 0; e < 3000 && t.active; e += 16) {
+      t.tick(16)
+      for (const f of filtersOf(stage))
+        expect((f as PixelateFilter).sizeX).toBeGreaterThanOrEqual(2)
+    }
+    t.playEnter(
+      800,
+      600,
+      () => ({ x: 0, y: 0 }),
+      () => {}
+    )
+    expect(filtersOf(stage)).toHaveLength(0)
+  })
+
+  it('ff-mosaic のあとの ff の終了（同じ transition・fieldBattle 経由）では stage にフィルタが付かない', () => {
+    const { stage, t } = make()
+    t.setParams(battleTransitionParams('ff-mosaic')) // 前の戦闘の持ち越し
+    const screen = openFieldBattle({
+      stage,
+      width: 800,
+      height: 600,
+      settings: { ...DEFAULT_FIELD_BATTLE_SETTINGS, transition: 'ff' },
+      roster: {
+        party: { hero: { id: 'hero', name: 'hero', hp: 20, mp: 5, atk: 400, def: 2, agi: 3 } },
+        order: ['hero'],
+        items: {},
+      },
+      enemies: [
+        {
+          id: 'slime',
+          name: 'スライム',
+          hp: 5,
+          maxHp: 5,
+          mp: 0,
+          maxMp: 0,
+          atk: 1,
+          def: 0,
+          agi: 1,
+          exp: 1,
+          gold: 1,
+        },
+      ],
+      gate: new FieldInputGate(),
+      transition: t,
+      onClosed: () => {},
+    }) as unknown as { handleCommand(id: string): void; tick(ms: number): void }
+    screen.handleCommand('attack')
+    screen.tick(RESULT_HOLD_DQ_MS)
+    for (let e = 0; e < 3000 && t.active; e += 16) {
+      t.tick(16)
+      expect(filtersOf(stage)).toHaveLength(0)
+    }
+  })
+})

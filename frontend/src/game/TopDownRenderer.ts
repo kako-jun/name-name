@@ -226,7 +226,7 @@ export class TopDownRenderer {
 
   /**
    * 戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）を受け取るハンドラを登録する。
-   * 戦闘画面を畳んだ直後（`battle_transition: ff` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
+   * 戦闘画面を畳んだ直後（`battle_transition: ff` / `ff-mosaic` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
    * エンジンは所持品を持たないので、反映や戦利品の画面を出すのはホスト側。強制終了（`load` / `destroy`）では呼ばない
    */
   setBattleEndHandler(handler: ((result: BattleResult) => void) | undefined): void {

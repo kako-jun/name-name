@@ -198,6 +198,8 @@ export class FieldBattleTransition {
       run.interlude = undefined
     }
     this.setAlpha(s.alpha)
+    // 黒の間は幕が不透明で見た目が変わらないので、モザイクは外す（追加画面 #831 まで粗くしない）
+    if (s.phase === 'black') this.clearMosaic()
   }
 
   private finish(): void {

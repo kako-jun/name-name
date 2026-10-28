@@ -262,6 +262,27 @@ describe.each([
     expect(f.app.stage.filters ?? []).toHaveLength(0)
   })
 
+  it('同じレンダラーで ff-mosaic → load(ff) の順に戦っても、ff の戦闘にモザイクを持ち越さない (#953)', () => {
+    const f = make({ battleTransition: 'ff-mosaic' })
+    f.startBattle([enemy()])
+    let max = 1
+    for (let e = 0; e < 3000 && f.transition.active; e += 16) {
+      f.transition.tick(16)
+      const pf = (f.app.stage.filters ?? [])[0] as { sizeX?: number } | undefined
+      if (pf?.sizeX) max = Math.max(max, pf.sizeX)
+    }
+    expect(max).toBeGreaterThan(5)
+    f.load(
+      project(f instanceof TopDownRenderer ? 'topdown' : 'raycast', { battleTransition: 'ff' })
+    )
+    f.startBattle([enemy()])
+    expect(f.transition.active).toBe(true)
+    for (let e = 0; e < 3000 && f.transition.active; e += 16) {
+      f.transition.tick(16)
+      expect(f.app.stage.filters ?? []).toHaveLength(0)
+    }
+  })
+
   it('ff ではモザイクは付かない (#953)', () => {
     const f = make({ battleTransition: 'ff' })
     f.startBattle([enemy()])
