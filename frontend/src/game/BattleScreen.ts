@@ -2778,13 +2778,6 @@ export class BattleScreen extends Container {
     return frames[frame] ?? null
   }
 
-  /** 使い手が `slash` ポーズの絵を持つか（打撃と斬撃の出し分け）。エンジンの状態は読むだけ */
-  private usesSlashPose(actor: { side: 'party' | 'enemy'; index: number }): boolean {
-    const s = this.engine.getState()
-    const e = (actor.side === 'party' ? s.party : s.enemies)[actor.index]
-    return !!e?.poses?.slash
-  }
-
   /**
    * エフェクト重ね (#936): 詠唱（行動の開始に出す）は再生中の行動の予定（`planEventEffects`）から、
    * ヒットはダメージ数字と同じ発火（`fires`）から、対象の位置に出し、コマを送る。
@@ -2797,9 +2790,9 @@ export class BattleScreen extends Container {
     const active = this.playback.active
     if (active && active.event.seq !== this.effectPlanSeq) {
       this.effectPlanSeq = active.event.seq
-      this.effectPending = planEventEffects(active.event, this.opts.effects, {
-        usesSlashPose: (a) => this.usesSlashPose(a),
-      }).filter((p) => p.kind === 'cast' || p.kind === 'summon')
+      this.effectPending = planEventEffects(active.event, this.opts.effects).filter(
+        (p) => p.kind === 'cast' || p.kind === 'summon'
+      )
     } else if (!active) {
       this.effectPending = []
     }
@@ -2815,9 +2808,7 @@ export class BattleScreen extends Container {
       this.effectPending = rest
     }
     for (const fire of fires) {
-      const plans = planHitEffects(fire.event, fire.hits, this.opts.effects, {
-        usesSlashPose: (a) => this.usesSlashPose(a),
-      })
+      const plans = planHitEffects(fire.event, fire.hits, this.opts.effects)
       for (const p of plans) this.spawnEffect(p, fire.sinceHit)
     }
     this.effectInstances = this.effectInstances.filter((inst) => {
