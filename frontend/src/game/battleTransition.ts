@@ -8,13 +8,23 @@
  * ここ以外に数値を置かない。演出の経過時間はレンダラー（`FieldBattleTransition`）の private で、GameState には載せない（ADR 0002）。
  */
 
-/** `battle_transition`。`none`（既定・現行の挙動）/ `ff` */
-export type BattleTransitionMode = 'none' | 'ff'
+/** `battle_transition`。`none`（既定・現行の挙動）/ `ff` / `ff-mosaic`（`ff` に暗さと連動するモザイクを足す #953） */
+export type BattleTransitionMode = 'none' | 'ff' | 'ff-mosaic'
 
-/** frontmatter の生文字列 → モード。`ff` 以外（未指定・空・未知値）は `none` */
+/** frontmatter の生文字列 → モード。`ff` / `ff-mosaic` 以外（未指定・空・未知値）は `none`（大小・前後空白は無視） */
 export function normalizeBattleTransition(raw: string | null | undefined): BattleTransitionMode {
-  return typeof raw === 'string' && raw.trim().toLowerCase() === 'ff' ? 'ff' : 'none'
+  if (typeof raw !== 'string') return 'none'
+  const v = raw.trim().toLowerCase()
+  return v === 'ff' || v === 'ff-mosaic' ? v : 'none'
 }
+
+/** 画面遷移（ズーム・暗転）を再生するモードか。`ff` と `ff-mosaic`。`mode === 'ff'` の直接比較は取りこぼすので、判定はこれを使う */
+export function isBattleTransitionEnabled(mode: BattleTransitionMode | undefined): boolean {
+  return mode === 'ff' || mode === 'ff-mosaic'
+}
+
+/** `ff-mosaic` の最大ブロックサイズ（px）。既存の切替モザイク（`PIXELATE_TRANSITION_MAX_SIZE` = 24）より控えめ */
+export const TRANSITION_MOSAIC_MAX_SIZE = 12
 
 /** ズームの 1 段 */
 export interface EnterStage {
@@ -42,6 +52,8 @@ export interface BattleTransitionParams {
   exitBlackMs: number
   /** 終了: フェードイン（フィールドへ） */
   exitFadeInMs: number
+  /** 暗転に連動するモザイクの最大ブロックサイズ（px）。0 = 無効（従来どおり）#953 */
+  mosaicMaxSize: number
 }
 
 /** 仮の値。#803 の測定値で差し替える */
@@ -56,11 +68,32 @@ export const DEFAULT_BATTLE_TRANSITION_PARAMS: Readonly<BattleTransitionParams> 
   exitFadeOutMs: 300,
   exitBlackMs: 100,
   exitFadeInMs: 300,
+  mosaicMaxSize: 0,
+}
+
+/** モードに応じた遷移パラメータ。`ff-mosaic` だけモザイクが有効 */
+export function battleTransitionParams(
+  mode: BattleTransitionMode | undefined
+): BattleTransitionParams {
+  return mode === 'ff-mosaic'
+    ? { ...DEFAULT_BATTLE_TRANSITION_PARAMS, mosaicMaxSize: TRANSITION_MOSAIC_MAX_SIZE }
+    : DEFAULT_BATTLE_TRANSITION_PARAMS
 }
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
 const easeOutCubic = (t: number): number => 1 - Math.pow(1 - clamp01(t), 3)
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
+
+/**
+ * 幕の濃さ alpha（0 = 透明 〜 1 = 真っ黒）から、遷移中のモザイクのブロックサイズを返す (#953)。
+ * alpha 0 → 1（等倍）、alpha 1 → maxSize へ線形・単調。丸め・下限は `computeCoarsenSize` と同じ（size 1 = 等倍）。
+ * NaN・範囲外の alpha は 0〜1 に丸め、maxSize が非有限・1 以下なら常に 1。
+ */
+export function transitionMosaicSize(alpha: number, maxSize: number): number {
+  const a = Number.isFinite(alpha) ? clamp01(alpha) : 0
+  const m = Number.isFinite(maxSize) && maxSize > 1 ? maxSize : 1
+  return Math.max(1, Math.round(1 + a * (m - 1)))
+}
 
 /** 開始演出のある時刻の状態 */
 export interface EnterSample {

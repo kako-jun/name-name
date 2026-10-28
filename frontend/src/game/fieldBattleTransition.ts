@@ -10,10 +10,12 @@
  */
 
 import { Container, Graphics } from 'pixi.js'
+import { PixelateFilter } from 'pixi-filters'
 import {
   DEFAULT_BATTLE_TRANSITION_PARAMS,
   sampleEnter,
   sampleExit,
+  transitionMosaicSize,
   type BattleTransitionParams,
 } from './battleTransition'
 import type { BattleOutcome } from './loot'
@@ -53,6 +55,8 @@ type Run =
 export class FieldBattleTransition {
   private run: Run | null = null
   private overlay: Graphics | null = null
+  /** 幕の濃さに連動するモザイク (#953)。付けている間だけ持つ（stage.filters に入っている自分の分） */
+  private mosaic: PixelateFilter | null = null
   private focus: () => { x: number; y: number } = () => ({ x: 0, y: 0 })
   private width = 0
   private height = 0
@@ -60,8 +64,13 @@ export class FieldBattleTransition {
 
   constructor(
     private readonly getStage: () => Container,
-    private readonly params: BattleTransitionParams = DEFAULT_BATTLE_TRANSITION_PARAMS
+    private params: BattleTransitionParams = DEFAULT_BATTLE_TRANSITION_PARAMS
   ) {}
+
+  /** `battle_transition` のモードに応じたパラメータへ差し替える。演出の再生前に呼ぶ（再生中は呼ばない） */
+  setParams(params: BattleTransitionParams): void {
+    this.params = params
+  }
 
   private get stage(): Container {
     return this.getStage()
@@ -131,6 +140,7 @@ export class FieldBattleTransition {
     if (!run && !this.overlay) return
     this.run = null
     this.resetStage()
+    this.clearMosaic()
     if (run?.kind === 'exit') this.removeInterlude(run.interlude)
     if (this.overlay) {
       this.stage.removeChild(this.overlay)
@@ -194,6 +204,7 @@ export class FieldBattleTransition {
     const run = this.run
     this.run = null
     this.resetStage()
+    this.clearMosaic()
     if (run?.kind === 'exit') this.removeInterlude(run.interlude)
     if (this.overlay) {
       this.stage.removeChild(this.overlay)
@@ -234,5 +245,31 @@ export class FieldBattleTransition {
 
   private setAlpha(a: number): void {
     if (this.overlay) this.overlay.alpha = a
+    this.applyMosaic(a)
+  }
+
+  /** 幕の濃さに連動して size を更新する。size が 2 未満の間・無効（max 0）なら付けない（他のフィルタには触れない） */
+  private applyMosaic(alpha: number): void {
+    const size = transitionMosaicSize(alpha, this.params.mosaicMaxSize)
+    if (this.params.mosaicMaxSize <= 0 || size < 2) {
+      this.clearMosaic()
+      return
+    }
+    if (!this.mosaic) {
+      const f = new PixelateFilter(1)
+      f.resolution = 'inherit'
+      this.mosaic = f
+      this.stage.filters = [...(this.stage.filters ?? []), f]
+    }
+    this.mosaic.size = size
+  }
+
+  private clearMosaic(): void {
+    const f = this.mosaic
+    if (!f) return
+    this.mosaic = null
+    const rest = (this.stage.filters ?? []).filter((x) => x !== f)
+    this.stage.filters = rest.length > 0 ? rest : null
+    f.destroy()
   }
 }

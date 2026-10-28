@@ -69,6 +69,7 @@ import {
 } from './fieldBattle'
 import type { BattleEffects } from './battleEffects'
 import { loadBattleEffects } from './battleEffectsLoader'
+import { battleTransitionParams, isBattleTransitionEnabled } from './battleTransition'
 import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 export { rollEncounter } from './encounter'
 
@@ -130,7 +131,7 @@ export class RaycastRenderer {
   private menuOverlay: TouchMenuOverlay | null = null
   private minimap: MinimapOverlay | null = null
   private battleScreen: BattleScreen | null = null
-  /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` のときだけ使う。演出中の状態はここが private で持つ */
+  /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` / `ff-mosaic` のときだけ使う。演出中の状態はここが private で持つ */
   private transition: FieldBattleTransition
   private detachTouchInput: (() => void) | null = null
   /** 確率エンカウント (#172) */
@@ -919,7 +920,8 @@ export class RaycastRenderer {
         },
       })
     }
-    if (this.battleSettings.transition === 'ff') {
+    if (isBattleTransitionEnabled(this.battleSettings.transition)) {
+      this.transition.setParams(battleTransitionParams(this.battleSettings.transition))
       // 開始の演出 (#830): 一人称は操作キャラ＝画面の中心付近へ 2 段ズームして暗転 → 戦闘画面
       this.transition.playEnter(
         this.screenWidth,

@@ -48,7 +48,11 @@ import type {
 } from './battleMenu'
 import { applyMemberMagicite, summonEntries } from './magicite'
 import { resolveMemberEquipment, type EquipmentRoster } from './equipment'
-import type { BattleTransitionMode } from './battleTransition'
+import {
+  battleTransitionParams,
+  isBattleTransitionEnabled,
+  type BattleTransitionMode,
+} from './battleTransition'
 import type { FieldBattleTransition } from './fieldBattleTransition'
 import type { BattleEffects } from './battleEffects'
 
@@ -92,7 +96,7 @@ export interface FieldBattleSettings {
   commandLabels: CommandLabels | undefined
   /** `battle_commands` (#873)。undefined = 既定の attack / spell / item / escape */
   commands: CommandId[] | undefined
-  /** `battle_transition` (#830)。`none`（既定・現行の挙動）/ `ff`（開始=2段ズームして暗転、終了=黒を経由して戻る） */
+  /** `battle_transition` (#830)。`none`（既定・現行の挙動）/ `ff`（開始=2段ズームして暗転、終了=黒を経由して戻る）/ `ff-mosaic`（`ff` + 暗さ連動のモザイク #953） */
   transition: BattleTransitionMode
 }
 
@@ -562,7 +566,8 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
         closeFieldBattle(stage, screen)
         onClosed(outcome, result)
       }
-      if (settings.transition === 'ff' && transition) {
+      if (isBattleTransitionEnabled(settings.transition) && transition) {
+        transition.setParams(battleTransitionParams(settings.transition))
         // 勝敗待機 (#745) のあと、黒を経由して畳む (#830)。畳むのは真っ暗になった瞬間。
         // フェードイン中に押された矢印キーも、離すまで移動に使わない (#779)
         transition.playExit(width, height, outcome, finishClose, () => {

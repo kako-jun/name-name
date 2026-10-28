@@ -245,6 +245,32 @@ describe.each([
     for (let e = 0; e < ms; e += 16) f.transition.tick(16)
   }
 
+  it('ff-mosaic でも ff と同様に演出が先に走り、モザイクの size が付いて終わると外れる (#953)', () => {
+    const f = make({ battleTransition: 'ff-mosaic' })
+    f.startBattle([enemy()])
+    expect(f.battleScreen).toBeNull()
+    expect(f.transition.active).toBe(true)
+    let max = 1
+    for (let e = 0; e < 3000 && f.transition.active; e += 16) {
+      f.transition.tick(16)
+      const pf = (f.app.stage.filters ?? [])[0] as { sizeX?: number } | undefined
+      if (pf?.sizeX) max = Math.max(max, pf.sizeX)
+    }
+    expect(max).toBeGreaterThan(5)
+    expect(f.battleScreen).not.toBeNull()
+    expect(f.app.stage.scale.x).toBe(1)
+    expect(f.app.stage.filters ?? []).toHaveLength(0)
+  })
+
+  it('ff ではモザイクは付かない (#953)', () => {
+    const f = make({ battleTransition: 'ff' })
+    f.startBattle([enemy()])
+    for (let e = 0; e < 3000 && f.transition.active; e += 16) {
+      f.transition.tick(16)
+      expect(f.app.stage.filters ?? []).toHaveLength(0)
+    }
+  })
+
   it('既定（none）は演出なしで即座に戦闘画面が開く', () => {
     const f = make()
     f.startBattle([enemy()])
