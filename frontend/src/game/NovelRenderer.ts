@@ -619,7 +619,7 @@ export class NovelRenderer {
   )
 
   /**
-   * シアターモードのカメラズーム (#702)。背景板・スポットライト・大道具・立ち絵のコンテナに
+   * シアターモードのカメラズーム (#702)。壁・背景板・スポットライト・大道具・立ち絵のコンテナに
    * 共通の scale/position を掛ける。状態（`cameraZoom`）の正本は `stage`、ここは描画反映だけを担う。
    */
   private readonly cameraZoom = new CameraZoomController(
@@ -3408,7 +3408,8 @@ export class NovelRenderer {
     // （`stage.restore` が `applyCamera` で済ませてある）。
     this.backgroundBoardLayer.restore(state.backgroundBoards, this.assetBaseUrl)
 
-    // 舞台の壁復元 (#703)。背景板と同じ理由（カメラは `stage.restore` で同期済み）。動画は頭から再生し直す。
+    // 舞台の壁復元 (#703)。壁はカメラ射影を受けない（ズームはレイヤー自身に掛かる）。同じ壁が表示中なら流し続け、
+    // 異なる・表示できていない・非ループ動画が再生し終えているときは差し替える（動画は頭から再生）。
     this.wallLayer.restore(state.wall, this.assetBaseUrl)
 
     // 舞台構造の大道具復元 (#692)。backgroundBoardLayer と同じ理由・同じ手順

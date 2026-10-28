@@ -23,6 +23,10 @@ export class WallLayer extends Container {
   private readonly videoLayer: VideoLayer
   private sprite: Sprite | null = null
   private current: WallState | null = null
+  /** show() で使った assetBaseUrl（同一判定用。空なら読み込んでいない）。 */
+  private shownBaseUrl = ''
+  /** 画像のロードが進行中か（現世代）。 */
+  private loading = false
   /** 非同期ロードの世代。show()/clear() ごとに進め、古いロード完了を無視する。 */
   private generation = 0
   /** これまでにロードした画像 URL（GPU テクスチャのリーク防止用。BackgroundBoardLayer.loadedUrls と同じ流儀）。 */
@@ -49,6 +53,7 @@ export class WallLayer extends Container {
     const loop = opts.loop !== false
     const mute = opts.mute !== false
     this.current = { path, loop, mute }
+    this.shownBaseUrl = assetBaseUrl
     if (!assetBaseUrl) return
 
     const gen = this.generation
@@ -58,10 +63,12 @@ export class WallLayer extends Container {
       return
     }
     const url = resolveAssetUrl(assetBaseUrl, 'images', path)
+    this.loading = true
     Assets.load(url)
       .then((texture: Texture) => {
         // 読み込み中に clear() や次の show() が来ていたら無視する（古い応答の race 防止）。
         if (gen !== this.generation) return
+        this.loading = false
         this.loadedUrls.add(url)
         const placement = computeBoardPlacement(
           texture.width,
@@ -80,6 +87,7 @@ export class WallLayer extends Container {
         this.addChild(sprite)
       })
       .catch((err: unknown) => {
+        if (gen === this.generation) this.loading = false
         console.warn('[name-name] 壁の読み込みに失敗: ' + url, err)
       })
   }
@@ -95,6 +103,8 @@ export class WallLayer extends Container {
       this.sprite = null
     }
     this.current = null
+    this.shownBaseUrl = ''
+    this.loading = false
   }
 
   /**
@@ -106,13 +116,21 @@ export class WallLayer extends Container {
       this.clear()
       return
     }
-    // 表示中の壁と path・設定が同一なら、clear→再 show せずそのまま流し続ける（動画を頭出ししない）。
-    // 保存状態は最終状態のまま（ADR-0002 に反しない）。
-    const cur = this.current
-    if (cur && cur.path === state.path && cur.loop === state.loop && cur.mute === state.mute) {
-      return
-    }
+    // 表示中の壁と同一なら、clear→再 show せずそのまま流し続ける（動画を頭出ししない）。保存状態は最終状態のまま
+    // （ADR-0002 に反しない）。宣言（path・設定）が同じでも、実際に表示できていない（assetBaseUrl が空だった・
+    // 読み込み失敗・assetBaseUrl が差し替わった・非ループ動画が再生し終えた）ときは従来どおり show し直す。
+    if (this.isShowing(state, assetBaseUrl)) return
     this.show(state.path, { loop: state.loop, mute: state.mute }, assetBaseUrl)
+  }
+
+  private isShowing(state: WallState, assetBaseUrl: string): boolean {
+    const cur = this.current
+    if (!cur || cur.path !== state.path || cur.loop !== state.loop || cur.mute !== state.mute) {
+      return false
+    }
+    if (!assetBaseUrl || assetBaseUrl !== this.shownBaseUrl) return false
+    if (isWallVideoPath(cur.path)) return this.videoLayer.hasVideo() && !this.videoLayer.hasEnded()
+    return this.sprite !== null || this.loading
   }
 
   /** 現在の壁を settled state として返す。ロードの成否に関わらず宣言された事実を返す（ADR-0002）。 */
