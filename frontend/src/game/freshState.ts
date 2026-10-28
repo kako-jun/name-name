@@ -28,6 +28,7 @@ export function buildFreshPositionState(
     video: null,
     eventImage: null,
     backgroundBoards: [],
+    wall: null,
     props: [],
     spotlight: null,
     curtain: null,

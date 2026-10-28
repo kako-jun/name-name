@@ -98,6 +98,19 @@ export interface SpotlightState {
 }
 
 /**
+ * 壁の settled state (#703)。`[壁: path]` / `[壁: なし]` で更新する単一スロット。`null` = 壁なし（既定）。
+ * 背景板よりさらに奥の画面いっぱいの画像または動画。保存するのは「パス＋設定」だけで、動画の再生位置は
+ * 保存しない（ADR-0002: 復元は常に頭から再生する最終状態）。画像か動画かは path の拡張子で判別する。
+ */
+export interface WallState {
+  path: string
+  /** 動画をループ再生するか（既定 true）。画像では意味を持たない */
+  loop: boolean
+  /** 動画の音声をミュートするか（既定 true）。画像では意味を持たない */
+  mute: boolean
+}
+
+/**
  * 幕の settled state (#697)。`[幕: path]` / `[幕: path, 手前にキャラ]` / `[幕: 上げる]` で
  * 更新する。`backgroundBoards`/`props` と異なり単一スロット（幕は1枚のみ、加算的な蓄積は
  * しない）。`null` = 幕なし（既定、`[幕: 上げる]` 後もこの値になる）。
@@ -151,6 +164,11 @@ export interface NovelGameState {
    * `BackgroundBoardLayer` だけが一時的なアニメーション位相を保持する）。
    */
   backgroundBoards: Array<{ path: string; depth: number }>
+  /**
+   * 舞台の壁 (#703)。`[壁: path]` の単一スロット settled state。`null` = 壁なし（既定）。
+   * 背景板よりさらに奥。`[場面転換]` でクリアされる（`WallState` 参照）。
+   */
+  wall: WallState | null
   /**
    * シアターモード舞台構造の大道具 (#692)。`[大道具: path, depth: N]` の加算的な蓄積状態
    * （`backgroundBoards` と同じ扱い）。背景板・キャラとは独立した PixiJS レイヤーで、キャラより

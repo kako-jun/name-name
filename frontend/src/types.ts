@@ -508,6 +508,22 @@ export type Event =
       }
     }
   | {
+      /**
+       * 舞台の壁 (#703)。背景板（`BackgroundBoard`）よりさらに奥に置く、画面いっぱいの単一スロットの
+       * 画像または動画（照明の模様・プロジェクションマッピング風の映像）。新しい `Wall` は前の壁を置換する。
+       * 画像と動画は path の拡張子で判別する（`isWallVideoPath`）。解除は `'WallExit'`（`[壁: なし]`）。
+       */
+      Wall: {
+        path: string
+        /** 動画をループ再生するか。wasm は既定値（true）を出力に載せないため型上は optional。
+         *  `parseMarkdown()` の正規化（wasm/parser.ts）が後で必ず boolean に揃える。 */
+        loop?: boolean
+        /** 動画の音声をミュートするか。既定 true（`loop` と同様に正規化される）。 */
+        mute?: boolean
+      }
+    }
+  | 'WallExit'
+  | {
       Video: {
         path: string
         /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */
