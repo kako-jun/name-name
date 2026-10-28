@@ -28,8 +28,8 @@ import type { EventImageTransition } from '../../types'
 /** ステージ系ハンドラが触る演出レイヤー。必要なメソッドだけを `Pick` で切り出す。 */
 export interface DirectiveLayers {
   readonly video: Pick<VideoLayer, 'show' | 'remove'>
-  readonly backgroundBoard: Pick<BackgroundBoardLayer, 'add' | 'clear'>
-  readonly prop: Pick<PropLayer, 'add' | 'clear'>
+  readonly backgroundBoard: Pick<BackgroundBoardLayer, 'add' | 'replace' | 'clear'>
+  readonly prop: Pick<PropLayer, 'add' | 'replace' | 'clear'>
   readonly curtain: Pick<CurtainLayer, 'show' | 'raise' | 'clear'>
   readonly lighting: Pick<LightingLayer, 'set' | 'clear'>
   readonly eventImage: Pick<EventImageLayer, 'show' | 'remove'>

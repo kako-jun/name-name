@@ -483,6 +483,11 @@ export type Event =
          *  wasm は #[serde(default)] のため型上は optional だが、実際の parse_markdown()
          *  出力では常に数値が入る（省略/非数値は parser 側で 0.0 にフォールバック済み）。 */
         depth?: number
+        /** 面の切り替え (#704)。同じ depth の `flip_from` の板をこの板へ差し替える（加算しない）。
+         *  シアターは Y 軸回転、ノベル等は即時。該当する板が無ければ通常の追加。 */
+        flip_from?: string | null
+        /** 回転の所要時間（ms）の上書き (#704)。未指定は `character_fade_ms`。 */
+        flip_ms?: number | null
       }
     }
   | {
@@ -496,6 +501,10 @@ export type Event =
         path: string
         /** 非負の任意単位。BackgroundBoard.depth と同じ規約。 */
         depth?: number
+        /** 面の切り替え (#704)。`BackgroundBoard.flip_from` と同じ。 */
+        flip_from?: string | null
+        /** 回転の所要時間（ms）の上書き (#704)。 */
+        flip_ms?: number | null
       }
     }
   | {

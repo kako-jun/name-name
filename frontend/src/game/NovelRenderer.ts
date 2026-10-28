@@ -1798,6 +1798,9 @@ export class NovelRenderer {
   setExporting(exporting: boolean): void {
     this.exporting = exporting
     this.characterLayer.setExporting(exporting)
+    // 大道具・背景板の面の切り替え (#704) も書き出し中は回さない。
+    this.backgroundBoardLayer.setExporting(exporting)
+    this.propLayer.setExporting(exporting)
     this.seekBar.setExportSuppressed(exporting)
   }
 
@@ -2463,6 +2466,9 @@ export class NovelRenderer {
    */
   setCharacterFadeMs(ms: number | null | undefined): void {
     this.characterLayer.setCharacterFadeMs(ms ?? null)
+    // 大道具・背景板の面の切り替え (#704) の既定の所要時間も同じ値にそろえる。
+    this.backgroundBoardLayer.setFlipDefaultMs(ms ?? null)
+    this.propLayer.setFlipDefaultMs(ms ?? null)
   }
 
   /**
