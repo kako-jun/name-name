@@ -1074,10 +1074,14 @@ export function saveSlotToGameState(
       : null,
     // 舞台前面 (#705)。古いセーブには無い → ?? null で舞台前面なしに倒す。
     stageFront: data.stageFront ?? null,
-    // 天候 (#706)。古いセーブには無い → ?? null で天候なしに倒す。強さは範囲へクランプする。
-    weather: data.weather
-      ? { kind: data.weather.kind, intensity: clampWeatherIntensity(data.weather.intensity) }
-      : null,
+    // 天候 (#706)。古いセーブには無い → ?? null で天候なしに倒す。強さは範囲へクランプし、未知の種類は天候なしに倒す。
+    weather:
+      data.weather &&
+      (data.weather.kind === 'Rain' ||
+        data.weather.kind === 'Snow' ||
+        data.weather.kind === 'Sakura')
+        ? { kind: data.weather.kind, intensity: clampWeatherIntensity(data.weather.intensity) }
+        : null,
     // シアターモード舞台構造の大道具 (#692)。古いセーブには無い → ?? [] で大道具なしに倒す。
     props: data.props ?? [],
     // 追うスポットライト (#693)。古いセーブには無い → ?? null で消灯に倒す。

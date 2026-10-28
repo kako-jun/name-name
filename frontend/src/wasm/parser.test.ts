@@ -2855,6 +2855,9 @@ describe('wasm parseMarkdown: 天候 (#706)', () => {
     '[天候: 桜, 強さ=99]',
     '[天候: 雨, 強さ=abc]',
     '[天候: 霧]',
+    '[天候: 雪, 強さ=1.2]',
+    '[天候: 雪, 強さ=0.05]',
+    '[天候: 雪, 強さ=0.7, 強さ=bad]',
     '[天候: なし]',
     '',
   ].join('\n')
@@ -2866,6 +2869,10 @@ describe('wasm parseMarkdown: 天候 (#706)', () => {
       { Weather: { kind: 'Snow', intensity: 1.5 } },
       { Weather: { kind: 'Sakura', intensity: 3 } },
       { Weather: { kind: 'Rain', intensity: 1 } },
+      // f32 を f64 に広げた 1.2000000476837158 ではなく、見た目どおりの 1.2 になる
+      { Weather: { kind: 'Snow', intensity: 1.2 } },
+      { Weather: { kind: 'Snow', intensity: 0.1 } },
+      { Weather: { kind: 'Snow', intensity: 0.7 } },
       'WeatherExit',
     ])
   })

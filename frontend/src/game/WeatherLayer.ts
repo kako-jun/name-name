@@ -11,7 +11,7 @@
  *   毎フレームは x/y/rotation/scale/alpha を書き換えるだけ（`clear()` や再描画をしないので毎フレームのジオメトリ生成・GC が出ない）。
  * - 画面空間のオーバーレイ。depth もカメラ射影も持たず、`CameraZoomController` のズームも受けない（`getLayers` に入れない）。
  * - 保存状態（`getState`）は「種類＋強さ」だけ（ADR-0002）。粒の位置・時計は保存しない。復元は同じ天候なら時計を
- *   巻き戻さず流し続け、違う・止まっている（タイマーが失われた）ときは経過 0 から降らせ直す。
+ *   巻き戻さず流し続け、違うときは経過 0 から降らせ直す。
  * - `prefers-reduced-motion: reduce` では降らせない（粒を隠す）。ただし動画書き出し中は視聴者の設定ではなく作品として
  *   出力するので降らせる。状態（`getState`）は設定に関わらず宣言どおり保つ。
  */
@@ -52,8 +52,6 @@ export class WeatherLayer extends Container {
   private readonly frame: WeatherParticleFrame = { x: 0, y: 0, rotation: 0, scale: 1, alpha: 1 }
   /** 天候を張った時刻（`time.now()` 基準）。経過時間の起点。 */
   private startMs = 0
-  /** 起点を取ったときの時間モード。live↔virtual の切替（動画書き出し）で時計がずれたら起点を取り直す。 */
-  private armedMode: ReturnType<TimeController['getMode']> | null = null
   private timer: number | null = null
   private exporting = false
 
@@ -78,7 +76,7 @@ export class WeatherLayer extends Container {
       this.current !== null &&
       this.current.kind === next.kind &&
       this.current.intensity === next.intensity
-    if (same && this.isArmed()) return
+    if (same) return
     this.arm(next)
   }
 
@@ -88,7 +86,6 @@ export class WeatherLayer extends Container {
     this.destroySprites()
     this.params = []
     this.current = null
-    this.armedMode = null
   }
 
   /**
@@ -134,10 +131,6 @@ export class WeatherLayer extends Container {
     return this.timer !== null
   }
 
-  private isArmed(): boolean {
-    return this.timer !== null && this.armedMode === this.time.getMode()
-  }
-
   private arm(next: WeatherState): void {
     const sameKind = this.current?.kind === next.kind
     this.stopTimer()
@@ -148,7 +141,6 @@ export class WeatherLayer extends Container {
     }
     this.resizePool(next)
     this.startMs = this.time.now()
-    this.armedMode = this.time.getMode()
     this.timer = this.time.setInterval(() => this.updateFrame(), WEATHER_FRAME_MS)
     this.updateFrame()
   }
@@ -193,12 +185,6 @@ export class WeatherLayer extends Container {
     const hidden = !this.exporting && prefersReducedMotion()
     this.particleBox.visible = !hidden
     if (hidden) return
-    // 時間モードが切り替わっていたら（書き出しの開始・終了）、時計の起点を取り直す。
-    const mode = this.time.getMode()
-    if (this.armedMode !== mode) {
-      this.armedMode = mode
-      this.startMs = this.time.now()
-    }
     const elapsed = this.time.now() - this.startMs
     const f = this.frame
     for (let i = 0; i < this.sprites.length; i++) {

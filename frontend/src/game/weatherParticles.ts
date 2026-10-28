@@ -189,7 +189,7 @@ export function evaluateWeatherParticle(
 
   if (kind === 'Rain') {
     // 縦線を落下方向（流れ込む向き）に傾ける。画面の縦横比が違っても実際の落下方向に沿う。
-    out.rotation = Math.atan2(-m.drift * w, m.fall * h)
+    out.rotation = Math.atan2(-m.drift * w, m.fall * spanY)
   } else if (kind === 'Sakura') out.rotation = p.rot0 + p.spinDir * m.spin * t
   else out.rotation = 0
   out.scale = m.size * p.size

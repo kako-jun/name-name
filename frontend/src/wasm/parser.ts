@@ -219,7 +219,10 @@ function normalizeEvents(events: Event[], defaultTransition: EventImageTransitio
     if ('Weather' in event) {
       // #706: Rust 側は既定の強さ（1.0）を JSON に載せないため型上は optional のまま届く。ここで number に揃える。
       const w = event.Weather
-      return { Weather: { kind: w.kind, intensity: w.intensity ?? 1 } }
+      // serde_wasm_bindgen は f32 を f64 に広げる（1.2 → 1.2000000476837158）ので、f32 の有効桁（7桁）に丸める。
+      const intensity =
+        w.intensity === undefined ? 1 : Number(Math.fround(w.intensity).toPrecision(7))
+      return { Weather: { kind: w.kind, intensity } }
     }
     if ('Wall' in event) {
       // #703: Rust 側は既定値（loop/mute とも true）を JSON に載せない（skip_serializing_if）ため、

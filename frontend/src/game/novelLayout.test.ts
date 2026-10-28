@@ -3731,6 +3731,14 @@ describe('saveSlotToGameState / gameStateToSaveSlot: weather (#706)', () => {
     ).toEqual({ kind: 'Rain', intensity: 1.5 })
   })
 
+  it('未知の種類（壊れたセーブ）は天候なしに倒す', () => {
+    for (const kind of ['Fog', '', 5, null]) {
+      expect(
+        saveSlotToGameState({ ...base, weather: { kind, intensity: 1 } as never }, null).weather
+      ).toBeNull()
+    }
+  })
+
   it('壊れた強さ（範囲外・NaN・負）は範囲へ寄せる', () => {
     const load = (intensity: number) =>
       saveSlotToGameState({ ...base, weather: { kind: 'Snow', intensity } }, null).weather

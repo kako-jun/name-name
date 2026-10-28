@@ -60,7 +60,14 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
 
   if ('Weather' in event) {
     const w = event.Weather
-    const name = w.kind === 'Rain' ? '雨' : w.kind === 'Snow' ? '雪' : '桜'
+    const name =
+      w.kind === 'Rain'
+        ? '雨'
+        : w.kind === 'Snow'
+          ? '雪'
+          : w.kind === 'Sakura'
+            ? '桜'
+            : String(w.kind)
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         天候: {name}

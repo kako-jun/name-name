@@ -84,6 +84,20 @@ describe('createWeatherParticleParams（固定シード）', () => {
     }
     expect(spy).not.toHaveBeenCalled()
   })
+  it('時計（Date.now / performance.now）にも依存しない', () => {
+    const d = vi.spyOn(Date, 'now').mockImplementation(() => {
+      throw new Error('Date.now は使わない')
+    })
+    const p = vi.spyOn(performance, 'now').mockImplementation(() => {
+      throw new Error('performance.now は使わない')
+    })
+    for (const k of KINDS) {
+      createWeatherParticleParams(k, 3)
+      computeWeatherParticle(k, 3, 1234, W, H)
+    }
+    expect(d).not.toHaveBeenCalled()
+    expect(p).not.toHaveBeenCalled()
+  })
   it('粒ごと・種類ごとに別の値になる（全粒が同じ位置に重ならない）', () => {
     const xs = new Set<number>()
     for (let i = 0; i < 30; i++) xs.add(createWeatherParticleParams('Rain', i).x0)
@@ -277,6 +291,8 @@ describe('computeWeatherParticle（時間→位置）', () => {
     expect(a).toBe(b)
     expect(a).toBeGreaterThan(0)
     expect(a).toBeLessThan(0.5)
+    // 傾きは実際の落下距離（高さ + 上下の余白）に対する横流れの比
+    expect(a).toBeCloseTo(Math.atan2(0.25 * W, 1.4 * (H + WEATHER_WRAP_MARGIN * 2)), 10)
   })
 
   it('入力契約: 負・NaN・Infinity の時刻は 0 扱い、不正な画面寸法でも NaN を返さない', () => {

@@ -63,6 +63,10 @@ describe('EventDisplay', () => {
     [{ Weather: { kind: 'Rain' as const } }, '天候: 雨'],
     [{ Weather: { kind: 'Snow' as const, intensity: 1 } }, '天候: 雪'],
     [{ Weather: { kind: 'Sakura' as const, intensity: 1.5 } }, '天候: 桜, 強さ=1.5'],
+    [{ Weather: { kind: 'Snow' as const, intensity: 1.2 } }, '天候: 雪, 強さ=1.2'],
+    [{ Weather: { kind: 'Snow' as const, intensity: 0.1 } }, '天候: 雪, 強さ=0.1'],
+    // 未知の種類を「桜」と誤表示しない
+    [{ Weather: { kind: 'Fog' as never } }, '天候: Fog'],
   ])('renders Weather %j (#706)', (ev, label) => {
     const { container } = renderEvent(ev)
     expect(container.textContent).toBe(label)

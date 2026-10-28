@@ -196,19 +196,6 @@ describe('WeatherLayer 単一スロット・復元', () => {
     expect(positions(layer)).toEqual(before)
   })
 
-  it('時間モードが切り替わってタイマーが失われた後の restore は経過 0 から降らせ直す（書き出し開始）', () => {
-    const time = new TimeController()
-    const layer = new WeatherLayer(W, H, time) // live
-    layer.set('Snow', 1)
-    time.setMode('virtual') // タイマー全消去 + 仮想時間 0
-    layer.restore({ kind: 'Snow', intensity: 1 })
-    expect(layer.isRunning()).toBe(true)
-    time.tick(1600)
-    const f = computeWeatherParticle('Snow', 3, 1600, W, H)
-    expect(layer.getParticleGraphics()[3].y).toBeCloseTo(f.y, 6)
-    layer.clear()
-  })
-
   it('getState() はコピーを返す（外から書き換えても内部状態は変わらない）', () => {
     const { layer } = make()
     layer.set('Rain', 1)
@@ -259,6 +246,18 @@ describe('WeatherLayer クリア・破棄（リークしない）', () => {
     const { layer, time } = make()
     layer.set('Sakura', 1)
     layer.destroy()
+    expect(layer.isRunning()).toBe(false)
+    expect(time.getPendingTimerCount()).toBe(0)
+  })
+
+  it('restore を繰り返してもタイマーは高々 1 つ。clear 後は 0', () => {
+    const { layer, time } = make()
+    for (let i = 0; i < 4; i++) {
+      layer.restore({ kind: 'Rain', intensity: 1 })
+      layer.restore({ kind: 'Snow', intensity: 2 })
+      expect(time.getPendingTimerCount()).toBe(1)
+    }
+    layer.restore(null)
     expect(time.getPendingTimerCount()).toBe(0)
   })
 
