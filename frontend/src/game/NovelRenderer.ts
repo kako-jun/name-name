@@ -604,7 +604,6 @@ export class NovelRenderer {
       setSeekBarBlackoutHidden: (hidden) => this.seekBar.setBlackoutHidden(hidden),
       applyCamera: (mode, orientation, elevation, zoom, snap) => {
         // 背景板 → 大道具 → 立ち絵の順（#683/#692/#694。各レイヤーはカメラ状態を自前で保持する）。
-        this.wallLayer.setCamera(mode, orientation, elevation)
         this.backgroundBoardLayer.setCamera(mode, orientation, elevation)
         this.propLayer.setCamera(mode, orientation, elevation)
         this.characterLayer.setCamera(mode, orientation, elevation)
@@ -1417,6 +1416,8 @@ export class NovelRenderer {
     this.background.forgetBackground()
     this.background.clearBackgroundColor()
     this.videoLayer.remove()
+    // 壁 (#703) も動画を持ちうるので終劇で止める（ミュート=false の壁が終劇後も鳴り続けない）。
+    this.wallLayer.clear()
     // 見た目のフェード演出（既存の背景クロスフェード / 立ち絵退場フェードの仕組みをそのまま流用）。
     // イベント絵はここで消さない。back=Hide のイベント絵を即 remove() すると背面可視性が戻り、
     // 元の全背面レイヤー（背景・背景板・動画・立ち絵・大道具）が一瞬見える。
@@ -3837,7 +3838,7 @@ export class NovelRenderer {
    *     仕様として境界扱いを明示しておく（防御的・非回帰）。
    * - 収集対象: `Dialog` / `ExpressionChange` の立ち絵（`resolveCharacterImageUrls`、
    *   webp/png の複数候補）、`Background` の背景画像、`BackgroundBoard` の背景板 (#683)、
-   *   `EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
+   *   `Wall` の壁 (#703, 画像の壁のみ。動画の壁は対象外)、`EventImage` のイベント絵、単独画像 `[画像:]`（#274, `Image`）（いずれも
    *   `resolveAssetUrl`）(#621)。Video 等
    *   `Assets.load` 経路でないものは対象外。Dialog の立ち絵は実表示ガード（`showCharacterFromDialog`:
    *   `expression` / `position` / `character` が全て truthy）に揃え、空文字・position 欠落は積まない。
