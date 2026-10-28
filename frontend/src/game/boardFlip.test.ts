@@ -94,6 +94,36 @@ describe('computeBoardFlipFrame', () => {
     expect(computeBoardFlipFrame('out', 0, 1000, NaN).angleRad).toBe(0)
   })
 
+  it('out(fromAngleRad<0): in の終端速度から角速度が連続し、単調増加で MAX に届く', () => {
+    const total = 1000
+    const half = total / 2
+    const dt = 0.01
+    // in の p 地点（経過 = half + p*half）の数値微分と、そこから始めた out の初速を比べる。
+    for (const p of [0.2, 0.5, 0.8]) {
+      const e = half + p * half
+      const a0 = computeBoardFlipFrame('in', e, total).angleRad
+      const vIn =
+        (computeBoardFlipFrame('in', e + dt, total).angleRad -
+          computeBoardFlipFrame('in', e - dt, total).angleRad) /
+        (2 * dt)
+      const vOut =
+        (computeBoardFlipFrame('out', dt, total, a0).angleRad -
+          computeBoardFlipFrame('out', 0, total, a0).angleRad) /
+        dt
+      expect(vOut).toBeCloseTo(vIn, 4)
+      let prev = a0 - 1e-9
+      for (let t = 0; t < half; t += 5) {
+        const f = computeBoardFlipFrame('out', t, total, a0)
+        expect(f.angleRad).toBeGreaterThan(prev)
+        expect(f.angleRad).toBeLessThanOrEqual(MAX)
+        prev = f.angleRad
+      }
+    }
+    // 開始角 0 は従来どおり初速 0（p²）。
+    const v0 = computeBoardFlipFrame('out', 0.01, total, 0).angleRad / 0.01
+    expect(v0).toBeCloseTo(0, 3)
+  })
+
   it('elapsed が負・NaN は 0 にクランプされる', () => {
     expect(computeBoardFlipFrame('out', -50, 1000)).toEqual(computeBoardFlipFrame('out', 0, 1000))
     const nanOut = computeBoardFlipFrame('out', NaN, 1000)

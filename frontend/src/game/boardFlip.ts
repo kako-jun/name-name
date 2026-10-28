@@ -57,7 +57,8 @@ function clamp01(v: number): number {
  * 見えるようにする。角度は `±BOARD_FLIP_MAX_ANGLE_RAD` で丸め、退化角（ちょうど 90°）を返さない。
  * `in` は half ちょうどでは不可視（edge-on の瞬間を描かない）、half を超えてから可視。
  * `fromAngleRad` は `out` の開始角（既定 0）。`in` の途中（例 -60°）でさらにポーズが変わったとき、
- * 現在角度から回し続けて自然につなぐために使う。
+ * 現在角度から回し続けて自然につなぐために使う。開始角が負のときは `in` の角速度を引き継ぐ
+ * 初速を持たせ、一瞬止まって再加速して見えないようにする。
  *
  * `totalMs` が 0 以下・非有限のときは `out` は不可視、`in` は可視で角度 0 に倒す
  * （呼び出し側は totalMs<=0 でこの演出を使わないが、0 除算で NaN にならないよう守る）。
@@ -77,7 +78,12 @@ export function computeBoardFlipFrame(
     if (elapsedMs >= half) return { visible: false, angleRad: max }
     const from = Math.min(max, Math.max(-max, Number.isFinite(fromAngleRad) ? fromAngleRad : 0))
     const p = clamp01(elapsedMs / half)
-    return { visible: true, angleRad: from + (max - from) * p * p }
+    // 開始角が負（`in` の途中から移る）なら、`in` の終端速度に初速を合わせて角速度を連続にする。
+    // `in` は angle=-max(1-q)²（q: in の進行度）なので、開始角 a0 での角速度は 2√(max|a0|)/half。
+    // out を from+(max-from)*(s*p+(1-s)p²) とすると初速は (max-from)*s/half なので、
+    // s=2√(max|a0|)/(max-a0)（AM-GM より常に 0..1。開始角 0 なら s=0＝従来の p²）。
+    const s = from < 0 ? (2 * Math.sqrt(max * -from)) / (max - from) : 0
+    return { visible: true, angleRad: from + (max - from) * (s * p + (1 - s) * p * p) }
   }
   if (elapsedMs <= half) return { visible: false, angleRad: -max }
   const p = clamp01((elapsedMs - half) / half)
