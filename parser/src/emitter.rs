@@ -519,6 +519,31 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[舞台前面: なし]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::Weather { kind, intensity } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let name = match kind {
+                    WeatherKind::Rain => "雨",
+                    WeatherKind::Snow => "雪",
+                    WeatherKind::Sakura => "桜",
+                };
+                // #706: 既定の強さ（1.0）は round-trip 安定のため無出力にする。
+                let kv = if *intensity == WEATHER_INTENSITY_DEFAULT {
+                    String::new()
+                } else {
+                    format!(", 強さ={intensity}")
+                };
+                out.push_str(&format!("[天候: {name}{kv}]\n"));
+                prev_was_dialog_or_text = false;
+            }
+            Event::WeatherExit => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str("[天候: なし]\n");
+                prev_was_dialog_or_text = false;
+            }
             Event::Video {
                 path,
                 position,

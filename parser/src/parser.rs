@@ -1378,6 +1378,10 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("舞台前面:") {
         return parse_stage_front_directive(rest);
     }
+    // [天候: 雨|雪|桜|なし] — 天候演出 (#706)。他の既存タグと prefix 衝突しない。
+    if let Some(rest) = content.strip_prefix("天候:") {
+        return parse_weather_directive(rest);
+    }
     // [動画退場] — 動画レイヤをクリア (#252)。「動画:」より先に完全一致で判定する。
     if content == "動画退場" {
         return Some(Event::VideoExit);
@@ -2025,6 +2029,52 @@ fn parse_stage_front_directive(content: &str) -> Option<Event> {
     Some(Event::StageFront {
         path: path.to_string(),
     })
+}
+
+/// `[天候: 雨]` / `[天候: 雪, 強さ=1.5]` / `[天候: なし]` の本体を分解する (#706)。
+/// - 種類が `なし`（`none` も可）→ [`Event::WeatherExit`]（解除。後ろの kv は無視）
+/// - 種類が空 → 不正な行としてイベントにしない（`None`）
+/// - 未知の種類 → 警告を出してイベントにしない（`None`）。typo が無言で消えないようにする
+/// - `強さ`/`intensity` は有限かつ正の数だけ採用し、0.1〜3.0 にクランプ。それ以外は既定 1.0。後勝ち。
+///   未知のキーは無視。
+fn parse_weather_directive(content: &str) -> Option<Event> {
+    let (kind_part, kv_part) = match content.split_once(',') {
+        Some((k, rest)) => (k, Some(rest)),
+        None => (content, None),
+    };
+    let name = kind_part.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let kind = match name.to_lowercase().as_str() {
+        "なし" | "none" => return Some(Event::WeatherExit),
+        "雨" | "rain" => WeatherKind::Rain,
+        "雪" | "snow" => WeatherKind::Snow,
+        "桜" | "桜吹雪" | "sakura" => WeatherKind::Sakura,
+        _ => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [天候: {name}] は未知の種類のため捨てた（雨/雪/桜/なし）"
+            ));
+            return None;
+        }
+    };
+    let mut intensity = WEATHER_INTENSITY_DEFAULT;
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            if let Some((k, v)) = raw.trim().split_once(['=', '＝']) {
+                if matches!(k.trim(), "強さ" | "intensity") {
+                    intensity = v
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite() && *n > 0.0)
+                        .map(|n| n.clamp(WEATHER_INTENSITY_MIN, WEATHER_INTENSITY_MAX))
+                        .unwrap_or(WEATHER_INTENSITY_DEFAULT);
+                }
+            }
+        }
+    }
+    Some(Event::Weather { kind, intensity })
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
@@ -8104,5 +8154,26 @@ mod discard_warning_tests {
         assert_eq!(t.chars().count(), WARNING_LINE_MAX_CHARS + 1);
         assert!(t.ends_with('…'));
         assert_eq!(truncate_for_warning("短い"), "短い");
+    }
+}
+
+#[cfg(test)]
+mod weather_warning_tests {
+    use super::*;
+
+    /// #706: 未知の天候の種類は警告つきで捨てる（typo が無言で消えない）。既知の種類・解除は警告しない。
+    #[test]
+    fn unknown_weather_kind_warns_but_known_kinds_do_not() {
+        let _ = take_test_warnings();
+        assert_eq!(parse_weather_directive(" 霧"), None);
+        let w = take_test_warnings();
+        assert!(
+            w.iter().any(|m| m.contains("天候") && m.contains("霧")),
+            "{w:?}"
+        );
+        for ok in [" 雨", " 雪, 強さ=2", " 桜", " なし"] {
+            assert!(parse_weather_directive(ok).is_some(), "{ok}");
+        }
+        assert!(take_test_warnings().is_empty());
     }
 }

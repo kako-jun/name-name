@@ -160,6 +160,35 @@ pub enum EventImageTransition {
     Pixelate,
 }
 
+/// 天候演出の種類 (#706)。`[天候: 雨]` / `[天候: 雪]` / `[天候: 桜]`。
+/// 粒は物理演算せず、経過時間から決定論的に位置を出す（描画側の責務。保存状態は種類と強さだけ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum WeatherKind {
+    /// 雨。速い直線落下の細長い線。
+    Rain,
+    /// 雪。ゆっくり落下しながら周期的に左右へ揺れる丸い粒。
+    Snow,
+    /// 桜吹雪。ゆっくり落下・大きめの左右揺れ・回転する花びら。
+    Sakura,
+}
+
+/// 天候の強さ（粒の密度の倍率）の既定値 (#706)。
+pub const WEATHER_INTENSITY_DEFAULT: f32 = 1.0;
+/// 天候の強さの下限・上限 (#706)。範囲外はこの範囲へクランプする。
+pub const WEATHER_INTENSITY_MIN: f32 = 0.1;
+pub const WEATHER_INTENSITY_MAX: f32 = 3.0;
+
+fn default_weather_intensity() -> f32 {
+    WEATHER_INTENSITY_DEFAULT
+}
+
+/// serde の `skip_serializing_if` 用。既定の強さ（1.0）のときは JSON に出さない。
+fn is_default_weather_intensity(value: &f32) -> bool {
+    *value == WEATHER_INTENSITY_DEFAULT
+}
+
 /// イベント絵のアンビエント演出フラグ (#582)。Gymnasia の「暗闇+オレンジ色のろうそく光+
 /// ゆらぎ+ビネット」ルックを画像単位でオンにするための宣言的フラグ集合。既定は全て `false`
 /// （既存脚本は非回帰・#582 適用方式: 画面全体への一律適用ではなく画像ごとの明示オプトイン）。
@@ -1030,6 +1059,24 @@ pub enum Event {
     },
     /// 舞台前面をクリアする (#705)。Markdown 構文: `[舞台前面: なし]`。
     StageFrontExit,
+    /// 天候演出 (#706)。雨・雪・桜吹雪の粒を画面空間のオーバーレイとして降らせる単一スロット。
+    /// 新しい `[天候:]` は前の天候を置換する。解除は [`Event::WeatherExit`]（`[天候: なし]`）。
+    ///
+    /// Markdown 構文: `[天候: 雨]` / `[天候: 雪, 強さ=1.5]` / `[天候: 桜]`。種類は `雨`/`雪`/`桜`
+    /// （英語 alias `rain`/`snow`/`sakura`、`桜吹雪` も可）。未知の種類は警告つきで読み捨てる。
+    /// `強さ`（alias `intensity`）は粒の密度の倍率で、既定 1.0。0.1〜3.0 にクランプし、
+    /// 数値でない・0 以下・非有限は既定に倒す。複数指定は後勝ち。既定の強さは JSON にも emit にも出ない。
+    /// 粒の位置は保存せず、描画側が経過時間から決定論的に出す（ADR 0002）。
+    Weather {
+        kind: WeatherKind,
+        #[serde(
+            default = "default_weather_intensity",
+            skip_serializing_if = "is_default_weather_intensity"
+        )]
+        intensity: f32,
+    },
+    /// 天候をクリアする (#706)。Markdown 構文: `[天候: なし]`。
+    WeatherExit,
     /// 動画入力レイヤ (#252)。立ち絵/背景と同じ枠組みで動画ファイルをレイヤとして配置・再生する。
     /// 背景と同じく単一スロット意味論: 新しい `[動画:]` は前の動画を置換する。
     /// 音声トラックがある動画は既定でミックス再生する（`mute=true` で無音化）。
