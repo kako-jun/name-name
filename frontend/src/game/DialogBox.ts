@@ -1381,6 +1381,27 @@ export class DialogBox extends Container {
       })
     }
     this.indicatorGlyph.style = this.makeIndicatorGlyphStyle()
+    if (this.ffCursor) {
+      this.ffCursor.style = this.makeFfCursorStyle()
+      this.positionFfCursor()
+    }
+    if (this.ffWindow) {
+      // ffWindow は段落・ページを考慮して折り返し直す（setFontSize と同じ ffRelayout）。
+      // フォントの読み込み前後で文字幅が変わりうるので、読み込み完了後にもう一度取り直す
+      if (this.showing && this.currentText) {
+        this.ffRelayout()
+        const family = this.fontFamily
+        ensureFontLoaded(family)
+          .then(() => {
+            if (family !== this.fontFamily) return
+            if (this.showing && this.currentText) this.ffRelayout()
+          })
+          .catch(() => {
+            // フォントロード失敗時は現状の折り返しのまま継続
+          })
+      }
+      return
+    }
     if (this.currentText) {
       const font = `${this.fontSize}px ${this.fontFamily}`
       const maxTextWidth = this.maxTextWidth()

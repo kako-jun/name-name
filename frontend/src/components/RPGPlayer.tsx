@@ -17,6 +17,8 @@ type RendererLike = {
   setInputSuspended?(suspended: boolean): void
   /** プロジェクトのアセットのベース URL。`load()` より前に渡す (#746) */
   setAssetBaseUrl?(url: string | undefined): void
+  /** 会話窓のスタイル（frontmatter `dialog_style:` の値、#840）。`init()` より前に渡す（窓は init で作る） */
+  setDialogStyle?(style: string | null | undefined): void
   /** 戦闘の結果（経験値・ゴールド・戦利品、#831）を受け取るハンドラ。戦闘画面を畳んだ直後に呼ばれる */
   setBattleEndHandler?(handler: ((result: BattleResult) => void) | undefined): void
 }
@@ -26,6 +28,11 @@ interface RPGPlayerProps {
   view?: 'topdown' | 'raycast'
   /** プロジェクトのアセットのベース URL（例 `${apiBaseUrl}/api/projects/${name}/assets/raw`）。相対の画像パスを `${base}/images/...` に解決する (#746) */
   assetBaseUrl?: string
+  /**
+   * 会話窓のスタイル (#840)。frontmatter `dialog_style:` の値。`ff` のときだけ FF 風の窓（画面上部・名前なし・改ページ）、
+   * 未指定・`adv`・`novel`・その他は従来の下部の窓（RPG モードに novel の窓は無い）。窓は init で作るので、変わると renderer を作り直す
+   */
+  dialogStyle?: string | null
   /**
    * 戦闘が終わって画面を畳んだ直後に、結果（経験値・ゴールド・獲得した戦利品）を受け取る (#831)。
    * エンジンは所持品を持たないので、反映や戦利品の画面はホスト側が作る（`battle_transition: ff` / `ff-mosaic` では暗転の間に呼ばれる）
@@ -78,7 +85,13 @@ interface RPGPlayerProps {
  */
 const RPG_SETTINGS_SLIDER_COLOR = '#53eafd'
 
-function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl, onBattleEnd }: RPGPlayerProps) {
+function RPGPlayer({
+  gameData,
+  view = 'topdown',
+  assetBaseUrl,
+  dialogStyle,
+  onBattleEnd,
+}: RPGPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rendererRef = useRef<RendererLike | null>(null)
   // renderer が作り直されても設定オーバーレイの開閉状態を引き継ぐための ref (#204)
@@ -99,6 +112,7 @@ function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl, onBattleEnd }: RP
     const renderer: RendererLike =
       view === 'raycast' ? new RaycastRenderer() : new TopDownRenderer()
     rendererRef.current = renderer
+    renderer.setDialogStyle?.(dialogStyle)
     let cancelled = false
 
     renderer
@@ -126,7 +140,7 @@ function RPGPlayer({ gameData, view = 'topdown', assetBaseUrl, onBattleEnd }: RP
       rendererRef.current = null
       renderer.destroy()
     }
-  }, [gameData, view, assetBaseUrl])
+  }, [gameData, view, assetBaseUrl, dialogStyle])
 
   // 設定変更を renderer に反映 + 永続化 (#138) — debounced
   useEffect(() => {

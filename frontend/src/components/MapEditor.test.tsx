@@ -133,3 +133,21 @@ describe('MapEditor プレビュー (#746)', () => {
     )
   })
 })
+
+describe('MapEditor のプレビュー (#840)', () => {
+  it('dialogStyle がプレビューの RPGPlayer に渡る', () => {
+    rpgPlayerProps.mockClear()
+    const map = makeMap()
+    render(
+      <MapEditor
+        mapData={map}
+        rpgProject={makeProject(map)}
+        onChange={vi.fn()}
+        isDark={false}
+        dialogStyle="ff"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '見下ろしでプレビュー' }))
+    expect(rpgPlayerProps).toHaveBeenLastCalledWith(expect.objectContaining({ dialogStyle: 'ff' }))
+  })
+})

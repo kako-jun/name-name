@@ -31,7 +31,7 @@ choice_style: "default"
 | `choice_style` | string | No | 選択肢ボタンのスタイル名。`"default"` / `"soft"` / `"monochrome"` / `"pixel"`（省略時は `"default"`、不明値も `"default"` にフォールバック）。詳細は [選択肢のスタイル](#選択肢のスタイル) を参照 (#146) |
 | `font_family` | string | No | per-game デフォルトのテキストフォント（CSS の `font-family` 文字列）。例: `"Klee One, cursive"`。省略時は runtime 既定 `'Noto Sans JP', sans-serif`。詳細は [フォント切替](#フォント切替) を参照 (#147) |
 | `font_size` | number | No | per-game デフォルトの本文フォントサイズ（px）。例: `26`（9:16 ノベル向け）。省略時は runtime 既定 `40`。引用符なしの数値で書く（`font_size: 26`）。詳細は [フォントサイズ](#フォントサイズ) を参照 (#283) |
-| `dialog_style` | string | No | 会話の描画スタイル。`"adv"`（下部 ADV 箱）/ `"novel"`（全画面ノベル）の対等 2 択。「正規デフォルト」は持たず作品ごとに明示するが、未指定・不明値は `adv` 描画にフォールバックする（壊さないため）。詳細は [会話の描画スタイル](#会話の描画スタイル) を参照 (#283) |
+| `dialog_style` | string | No | 会話の描画スタイル。`"adv"`（下部 ADV 箱）/ `"novel"`（全画面ノベル）の対等 2 択。「正規デフォルト」は持たず作品ごとに明示するが、未指定・不明値は `adv` 描画にフォールバックする（壊さないため）。**`ff`（#840）は RPG モード（RPGPlayer）の会話窓専用**: 画面上部に固定した FF 風の青い窓・発話者名なし・窓に入りきらない台詞は改ページ（▼で待って決定で続き）。ノベル再生（NovelPlayer）では `ff` は `adv` 相当で、`novel` / `adv` の挙動と TUI は変わらない。詳細は [会話の描画スタイル](#会話の描画スタイル) を参照 (#283) |
 | `protagonist` | string | No | 質問役（主人公）の話者名。`dialog_style: "novel"` の立ち絵左右配置に使う per-game 設定。話者がこの名前と一致したら質問役＝左、それ以外（住人）は回答役＝右に振る。省略時は従来配置（脚本の position トークンのまま）＝後方互換。`adv` では使わない。詳細は [立ち絵：配置と話者表示](#立ち絵配置と話者表示) を参照 (#286) |
 | `character_y_ratio` | number | No | 立ち絵の足元（下辺アンカー）の縦位置を screenHeight に対する比率で指定する per-game 設定。`1.0`=足が画面下端（既定）、`>1.0`（例 `1.05`）=足が画面下端より下＝靴が画面外に切れる（ToHeart 式）、`<1.0`=足が上に浮く。`[0, 2]` にクランプし、未指定・非数値・`NaN`/`Infinity` は `1.0` にフォールバック（後方互換）。引用符なしの数値で書く（`character_y_ratio: 1.05`）。`dialog_style` 非依存（adv/novel 共通）(#308) |
 | `character_height_ratio` | number | No | 立ち絵の目標表示高さを screenHeight に対する比率で指定する per-game 設定。設定時は sprite を `scale = (character_height_ratio × screenHeight) / textureHeight` で uniform スケールし（幅はアスペクト比で追従）、**元画像の解像度に依らず画面上の高さが一定**になる（高解像度で描き直しても大きさは不変・鮮明さだけ上がる）。未指定は原寸（`scale=1`）＝後方互換。`[0.05, 2]` にクランプし、非数値・`NaN`/`Infinity` は未指定（原寸）扱い。対象は立ち絵（`show`）のみで Title/Label/画像（render-only）は非対象。話者行に `フィット`/`fit`（#294）を書いた立ち絵はそちらが優先（フィット > character_height_ratio > 原寸）。引用符なしの数値で書く（`character_height_ratio: 0.88`）(#360) |
@@ -1088,6 +1088,7 @@ frontmatter の `dialog_style` で会話の描画スタイルを作品単位で�
 |---|---|
 | `adv` | 従来どおりの下部 ADV 箱。話者名ボックス（名札）あり、タイプライタ表示。未指定・不明値もこれにフォールバック |
 | `novel` | 全画面ノベル（ToHeart 式）。全画面の半透明黒スクリム + 白文字（既存 borderless 描画を流用）、**名札なし**、テキスト領域を画面の大半に拡張（ADV 箱の固定高さを解除） |
+| `ff` | RPG モード（RPGPlayer の TopDown / Raycast）だけの FF 風の会話窓 (#840)。画面上部に固定・戦闘窓と同じ青い帯・白枠・**発話者名なし**・1 文字ずつ表示。窓に入りきらない台詞は改ページし、右下の ▼ が点滅して待つ。決定操作は 文字送り中=全文表示 → ページ待ち=次のページ → 最終ページ済=閉じる／次のコマンド。ノベル再生では `adv` 相当 |
 
 `novel` の挙動:
 

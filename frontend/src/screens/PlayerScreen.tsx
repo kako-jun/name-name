@@ -771,7 +771,12 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         ) : rpgProject !== null ? (
           // RPG シーンを含むプロジェクトは RPGPlayer を優先する。
           // ノベル+RPG の遷移制御は #108 本統合で扱う。
-          <RPGPlayer gameData={rpgProject} view={rpgProject.view} assetBaseUrl={assetBaseUrl} />
+          <RPGPlayer
+            gameData={rpgProject}
+            view={rpgProject.view}
+            assetBaseUrl={assetBaseUrl}
+            dialogStyle={doc?.dialog_style ?? null}
+          />
         ) : (
           <NovelPlayer
             ref={novelPlayerRef}
