@@ -1432,7 +1432,7 @@ depth 指定の実例（#694）:
 - 実装は `sprite.skew.x` の傾き（`PerspectiveMesh` ではない）。紙人形輪郭（#699、sprite のフィルタ）・ズーム/depth 射影（#694/#702、scale と y）・`[アニメ]` の rotation と同じプロパティを触らないので、共存のための特別な処理が要らない。板フリップ（#707）は mesh が sprite の代わりに描くため、フリップ中は揺れが見えない
 - 傾きは純粋関数 `frontend/src/game/boardSway.ts` の `computeBoardSway(elapsedMs, durationMs)`。釣り鐘型の包絡 sin(πt) に周期 380ms の振動を掛けるので、歩行の開始・終了で連続に 0 へ収束し、最終ポーズに傾きが残らない。振幅上限 0.06rad（約 3.4°）。`Math.random` 不使用で入力は経過時間のみ。時計は歩行 tween と同じ `CharacterLayer` の `elapsedMs`（TimeController とは別）。揺れの値は `NovelGameState` に持たない（ADR 0002）
 - 対象は `stageMotion`（上手/下手の入退場）の進行中のみ。`[アニメ]` による移動や将来の立ち位置変更（#694 の位置 tween）は、同じ `stageMotion` 経路に載らない限り対象外
-- 無効になる場面（`isBoardSwayEnabled`）: ノベルモード（`cameraMode !== 'Theater'`）、動画書き出し中（`NovelRenderer.setExporting` → `CharacterLayer.setExporting`。実時間駆動のため揺れずに歩行だけ進む）、OS の `prefers-reduced-motion: reduce`。スキップ・セーブ復元・シークは `instant` で `stageMotion` 自体が張られないので揺れない。歩行が途中で取り消された場合（同キャラの再 `show`、方向未指定の `[退場]`）は `resetSway` で傾きを 0 に戻す
+- 無効になる場面（`isBoardSwayEnabled`）: ノベルモード（`cameraMode !== 'Theater'`）、動画書き出し中（`NovelRenderer.setExporting` → `CharacterLayer.setExporting`。実時間駆動のため揺れずに歩行だけ進む）、OS の `prefers-reduced-motion: reduce`。スキップ中に新たに始まる歩行は `instant` で `stageMotion` が張られないので揺れない。すでに進行中の歩行はスキップ開始後も最後まで続き、その間は揺れる（#684 からの既存挙動で、スキップ開始時に進行中の歩行を確定させる仕様は別件）。セーブ復元・シークは `clear()` で進行中の歩行ごと破棄される。render-only の Label/Image（anchor が中心で足元支点でない）は `[退場: id, 上手へ]` で歩行しても揺らさない。歩行が途中で取り消された場合（同キャラの再 `show`、方向未指定の `[退場]`）は `resetSway` で傾きを 0 に戻す
 
 ### 幕（実装済み・#697）
 
