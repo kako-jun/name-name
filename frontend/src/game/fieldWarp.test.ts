@@ -93,3 +93,12 @@ describe('withTimeout / WARP_LOAD_TIMEOUT_MS (#864 レビュー: 読み込みが
     await assertion
   })
 })
+
+describe('canStartBattleNow: 会話中 (#841)', () => {
+  const idle = { battle: false, transition: false, warping: false }
+  it('会話中は不可・会話していない（省略・false）なら従来どおり', () => {
+    expect(canStartBattleNow({ ...idle, talking: true })).toBe(false)
+    expect(canStartBattleNow({ ...idle, talking: false })).toBe(true)
+    expect(canStartBattleNow(idle)).toBe(true)
+  })
+})

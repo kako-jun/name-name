@@ -2367,6 +2367,33 @@ steal ぶんどる=8..14 type=fire         # 盗みと同時に攻撃（damage �
 
 これで書ききれない振る舞い（ターン跨ぎ状態 / マップ状態参照 / 確率成功率など）は `builtin: <slug>` でランタイム実装（`BUILTIN_SPELLS` / `BUILTIN_ITEMS` レジストリ）に逃がす。詳細は memory `name-name の RPG データ設計` を参照。
 
+### フィールドの NPC (#841 段階1)
+
+一枚絵フィールドの設定 JSON（Markdown ではない。parser・wasm は変えない）で、シーンに NPC を置く。`[NPC]` ブロック（`TopDownRenderer` 用）とは別系統で、段階1は台詞が固定の 1 行（脚本・分岐・`EventRunner` への接続は段階2以降）。
+
+```json
+"scenes": {
+  "shrine-street": {
+    "background": "...", "mask": "...",
+    "npcs": [
+      {
+        "id": "neighbor-kid", "name": "近所の子",
+        "x": 760, "y": 540,
+        "sprites": { "up": ["u1.webp", "u2.webp", "u3.webp"], "down": ["..."], "left": ["..."], "right": ["..."] },
+        "height": 140, "facing": "left",
+        "line": "この通りは、ゆるい坂の上まで続いているよ。"
+      }
+    ]
+  }
+}
+```
+
+- 必須: `id`（シーン内で一意）・`name`・`x` / `y`（足元。背景ピクセル）・`line`（空でない 1 行）・見た目 `sprite`（単一画像）か `sprites`（`up/down/left/right` × 3 コマ。立ち止まりは 1 コマ目）のどちらか 1 つ。任意: `height`（0 より大きい数。省略 = そのシーンの主人公と同じ高さ）・`facing`（`up/down/left/right`。省略 = `down`）。
+- 不正な NPC は警告して**その NPC だけ**無視（読み込みは成功）。`npcs` が配列でなければ警告して全体を無視。`npcs` 未指定は従来と完全に同じ。
+- 描画は主人公・同行者と同じ奥行き（足元 y）。主人公は NPC の足元を中心とする半径 32 の円に入れない（通り抜け不可）。
+- 話しかけ: 決定キー（Space / Enter / Z）で向いた方向の近傍 NPC、またはクリック・タップで近づいて。台詞は `DialogBox` に出し、Enter / Space / Z かタップで送って閉じる。会話中は歩行入力・エンカウント・ワープ・端リンクが止まる。
+- 操作の詳細と純粋関数の置き場所は `docs/guide/debugger.md`（一枚絵フィールドサンプルページ）と `docs/architecture.md`。
+
 ### フィールドの感情吹き出し (#937 段階1)
 
 一枚絵フィールドで、人物の頭上に「！」「？」「…」などの絵を一定時間だけ出して消す**見た目だけ**の演出。歩行・当たり判定・移動速度・エンカウント・乱数には関与しない（出ている間も歩ける）。**段階1は Markdown の宣言・脚本のイベントを持たない**（parser・wasm は変えない）。フィールドサンプルの設定 JSON のトップレベル `emotions` で種類を宣言し、TypeScript の `showEmotion(target, kind)`（フィールドサンプルでは `window.fieldSample.showEmotion` とツールバーのボタン）で出す。RPG モード（frontmatter・脚本のイベント）からの呼び出しは #943 で扱う（NPC・本番素材・効果音は未着手）。
