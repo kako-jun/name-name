@@ -836,6 +836,8 @@ export class CharacterLayer extends Container {
   private cameraMode: CameraMode = 'Novel'
   /** 動画書き出し中 (#350)。true の間は板の揺らぎ (#701) を無効にする（NovelRenderer.setExporting から）。 */
   private swayExporting = false
+  /** `prefers-reduced-motion: reduce` の MediaQueryList（初回に 1 回だけ取得して `.matches` を読む）。 */
+  private reducedMotionQuery: MediaQueryList | null | undefined
   private cameraOrientation: CameraOrientation = 'Audience'
   private cameraElevation: CameraElevation | null = null
   /** カメラズーム (#702) のポーズ。identity = 全景。 */
@@ -1139,15 +1141,17 @@ export class CharacterLayer extends Container {
 
   /** 板の揺らぎ (#701) を今出してよいか（シアター限定・書き出し中と prefers-reduced-motion では無効）。 */
   private isSwayEnabled(): boolean {
-    let reducedMotion = false
-    try {
-      reducedMotion =
-        typeof window !== 'undefined' &&
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    } catch {
-      reducedMotion = false
+    if (this.reducedMotionQuery === undefined) {
+      try {
+        this.reducedMotionQuery =
+          typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+            ? window.matchMedia('(prefers-reduced-motion: reduce)')
+            : null
+      } catch {
+        this.reducedMotionQuery = null
+      }
     }
+    const reducedMotion = this.reducedMotionQuery?.matches === true
     return isBoardSwayEnabled({
       isTheater: this.cameraMode === 'Theater',
       exporting: this.swayExporting,
@@ -1555,6 +1559,8 @@ export class CharacterLayer extends Container {
     baseX: number,
     onComplete?: () => void
   ): void {
+    // 進行中の歩行から新しい歩行へ張り直すとき、傾きが 1 フレームで 0 へ飛ばないよう先に戻す。
+    this.resetSway(state)
     state.stageMotion = {
       kind,
       direction,
@@ -3707,9 +3713,11 @@ export class CharacterLayer extends Container {
             )
             state.sprite.x = sm.baseX + offset
             // シアターの歩行中だけ板が揺れる (#701)。無効条件では 0 のまま（最終ポーズと同じ）。
-            state.sprite.skew.x = this.isSwayEnabled()
-              ? computeBoardSway(this.elapsedMs - sm.startMs, sm.durationMs)
-              : 0
+            // render-only（Label/Image）は anchor が中心で足元支点でないので揺らさない。
+            state.sprite.skew.x =
+              !state.renderOnly && this.isSwayEnabled()
+                ? computeBoardSway(this.elapsedMs - sm.startMs, sm.durationMs)
+                : 0
           }
         }
 
