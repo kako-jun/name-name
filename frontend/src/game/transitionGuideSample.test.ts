@@ -2,15 +2,14 @@
  * docs/guide/controls.md「画面遷移を見比べる手順」の脚本が、貼ってそのまま戦闘に入れることの確認 (#953)。
  * docs の脚本そのものを読むので、docs と乖離しない。
  */
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import controlsMd from '../../../docs/guide/controls.md?raw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseMarkdown } from '../wasm/parser'
 import { rpgProjectFromDoc } from './rpgProjectFromDoc'
 import type { EventDocument } from '../types'
 
 function guideScript(): string {
-  const md = readFileSync(resolve(__dirname, '../../../docs/guide/controls.md'), 'utf8')
+  const md = controlsMd
   const head = md.indexOf('**画面遷移を見比べる手順')
   expect(head).toBeGreaterThan(-1)
   const open = md.indexOf('```markdown\n', head)
