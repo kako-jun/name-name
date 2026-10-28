@@ -4,9 +4,20 @@
  * PixiJS Container 上でキャラクター立ち絵の表示・表情変更・退場を管理する。
  */
 
-import { Assets, Container, Graphics, Sprite, Text, Texture, TextStyle, Ticker } from 'pixi.js'
+import {
+  Assets,
+  Container,
+  Graphics,
+  PerspectiveMesh,
+  Sprite,
+  Text,
+  Texture,
+  TextStyle,
+  Ticker,
+} from 'pixi.js'
 import { PixelateFilter } from 'pixi-filters'
 import type { OutlineFilter } from 'pixi-filters'
+import { computeBoardFlipCorners, computeBoardFlipFrame, type BoardFlipRole } from './boardFlip'
 import { createPaperDollOutlineFilter, type PaperDollOutlineConfig } from './outlineFilter'
 import type {
   CameraElevation,
@@ -407,6 +418,14 @@ const CHARACTER_HEIGHT_RATIO_MIN = 0.05
  *  character_y_ratio (#308) と同じく安全側にクランプする。 */
 const CHARACTER_HEIGHT_RATIO_MAX = 2
 
+interface FlipAnimation {
+  role: BoardFlipRole
+  startMs: number
+  /** out（前半）+ in（後半）の合計時間。 */
+  durationMs: number
+  mesh: PerspectiveMesh
+}
+
 interface CharacterState {
   sprite: Sprite
   /** 立ち絵の上に表示する名前ラベル（off_right/off_left で登場したとき自動付与）。
@@ -452,6 +471,13 @@ interface CharacterState {
   renderOnly?: boolean
   /** 同一人物クロスフェード用の旧 sprite。描画・待機対象だが NovelGameState には入れない。 */
   snapshotHidden?: boolean
+  /**
+   * シアターモードの板フリップ (#707) の進行状態。ポーズ変更時にクロスフェードの代わりに張る。
+   * 進行中は sprite を不可視にして、同じ texture の `PerspectiveMesh` を Y 軸回転させて描く。
+   * 角度・四隅は `boardFlip.ts` の純粋関数が毎フレーム経過時間から求める（中間値は
+   * NovelGameState に持たない）。完了で mesh を破棄し、`out` は state ごと破棄、`in` は sprite を戻す。
+   */
+  flipAnimation?: FlipAnimation
   /** 円形マスク用 Graphics (#274)。`[画像: 円形]` のとき sprite.mask に設定する。退場で破棄する。 */
   maskGraphics?: Graphics
   /** ラベルの水平 anchor (#275)。左=0 / 中央=0.5 / 右=1。label.anchor.x と一致させて保持する。
@@ -1112,7 +1138,61 @@ export class CharacterLayer extends Container {
     const filters: Array<OutlineFilter | PixelateFilter> = []
     if (this.paperDollOutlineFilter) filters.push(this.paperDollOutlineFilter)
     if (state.pixelateState && state.pixelateFilter) filters.push(state.pixelateFilter)
-    state.sprite.filters = filters.length > 0 ? filters : null
+    const applied = filters.length > 0 ? filters : null
+    state.sprite.filters = applied
+    // 板フリップ中 (#707) は sprite が不可視で mesh が代わりに描かれる。輪郭が回転中も付くよう同じ
+    // フィルタを mesh にも渡す（sprite.filters への代入はここに一本化されているので追従漏れしない）。
+    if (state.flipAnimation && !state.flipAnimation.mesh.destroyed) {
+      state.flipAnimation.mesh.filters = applied
+    }
+  }
+
+  /**
+   * 板フリップ (#707) を開始する。sprite を不可視にし、同じ texture の PerspectiveMesh を
+   * sprite と同じ位置（z-order）に置く。実際の角度・四隅の更新は ticker が毎フレーム行う。
+   * `in` 側の state は alpha 0 で作られているので 1 に戻す（フェードは使わない）。
+   */
+  private startFlip(state: CharacterState, role: BoardFlipRole): void {
+    if (state.sprite.destroyed) return
+    this.clearFlip(state)
+    const mesh = new PerspectiveMesh({ texture: state.sprite.texture })
+    const index =
+      state.sprite.parent === this ? this.getChildIndex(state.sprite) : this.children.length
+    this.addChildAt(mesh, index)
+    state.sprite.alpha = 1
+    state.sprite.visible = false
+    state.flipAnimation = { role, startMs: this.elapsedMs, durationMs: this.characterFadeMs, mesh }
+    this.applySpriteFilters(state)
+    this.updateFlipFrame(state, state.flipAnimation)
+    this.ensureTicker()
+  }
+
+  /** 板フリップの mesh を破棄し、sprite を可視に戻す。 */
+  private clearFlip(state: CharacterState): void {
+    const flip = state.flipAnimation
+    if (!flip) return
+    state.flipAnimation = undefined
+    if (!flip.mesh.destroyed) {
+      flip.mesh.removeFromParent()
+      flip.mesh.destroy()
+    }
+    if (!state.sprite.destroyed) state.sprite.visible = true
+  }
+
+  /** 経過時間から板の可視・四隅を求めて mesh に反映する (#707)。 */
+  private updateFlipFrame(state: CharacterState, flip: FlipAnimation): void {
+    const frame = computeBoardFlipFrame(flip.role, this.elapsedMs - flip.startMs, flip.durationMs)
+    flip.mesh.visible = frame.visible
+    if (!frame.visible) return
+    const sprite = state.sprite
+    const c = computeBoardFlipCorners(
+      sprite.x,
+      sprite.y,
+      sprite.texture.width * Math.abs(sprite.scale.x),
+      sprite.texture.height * Math.abs(sprite.scale.y),
+      frame.angleRad
+    )
+    flip.mesh.setCorners(c.x0, c.y0, c.x1, c.y1, c.x2, c.y2, c.x3, c.y3)
   }
 
   /**
@@ -1295,6 +1375,7 @@ export class CharacterLayer extends Container {
     this.clearUnderline(state)
     this.clearMask(state)
     this.clearImagePixelateState(state)
+    this.clearFlip(state)
     state.sprite.removeFromParent()
     state.sprite.destroy()
     if (state.label) {
@@ -1614,7 +1695,8 @@ export class CharacterLayer extends Container {
       const textureChanged = existing.expression !== expression || existing.fit !== fit
       if (textureChanged && !instant && this.characterFadeMs > 0) {
         // 同一人物の表情・ポーズ/fit 変更は旧 sprite を即 texture 差し替えせず、
-        // 旧 sprite と新 sprite を重ねて同時クロスフェードする (#337)。
+        // 旧 sprite と新 sprite を重ねて同時クロスフェードする (#337)。シアターモードでは
+        // クロスフェードの代わりに板フリップ (#707)（旧 0→90°、新 -90°→0）で切り替える。
         if (positionChanged || overrideXChanged) {
           this.evictCollidersAt(targetX, character, instant)
         }
@@ -1663,8 +1745,14 @@ export class CharacterLayer extends Container {
             this.characters.set(character, existing)
             return
           }
-          this.startFade(existing, existing.sprite.alpha, 0, true)
-          this.startFade(nextState, 0, 1, false)
+          if (this.cameraMode === 'Theater') {
+            // シアターモード (#707): クロスフェードの代わりに板をくるっと回して切り替える。
+            this.startFlip(existing, 'out')
+            this.startFlip(nextState, 'in')
+          } else {
+            this.startFade(existing, existing.sprite.alpha, 0, true)
+            this.startFade(nextState, 0, 1, false)
+          }
         })
         return
       }
@@ -3262,7 +3350,14 @@ export class CharacterLayer extends Container {
   /** 進行中アニメーション（transform / fade / stageMotion / textEffect / underline いずれか）を持つキャラがいるか */
   hasActiveAnimation(): boolean {
     for (const s of this.characters.values()) {
-      if (s.animation || s.fadeAnimation || s.stageMotion || s.poseNudge || s.pixelateState) {
+      if (
+        s.animation ||
+        s.fadeAnimation ||
+        s.flipAnimation ||
+        s.stageMotion ||
+        s.poseNudge ||
+        s.pixelateState
+      ) {
         return true
       }
       if (s.textEffect && this.isTextEffectActive(s.textEffect)) return true
@@ -3282,7 +3377,9 @@ export class CharacterLayer extends Container {
   hasActivePortraitTransition(): boolean {
     for (const s of this.characters.values()) {
       if (s.renderOnly) continue
-      if (s.animation || s.fadeAnimation || s.stageMotion || s.poseNudge) return true
+      if (s.animation || s.fadeAnimation || s.flipAnimation || s.stageMotion || s.poseNudge) {
+        return true
+      }
     }
     return false
   }
@@ -3400,6 +3497,23 @@ export class CharacterLayer extends Container {
             anyActive = true
             state.sprite.alpha = f.fromAlpha + (f.toAlpha - f.fromAlpha) * tf
             if (state.label) state.label.alpha = state.sprite.alpha
+          }
+        }
+
+        // シアターモードの板フリップ (#707) を毎フレーム純粋計算で駆動する。
+        const flip = state.flipAnimation
+        if (flip) {
+          if (this.elapsedMs - flip.startMs >= flip.durationMs) {
+            if (flip.role === 'out') {
+              // 旧ポーズの板は回り切って消える。state ごと破棄（mesh も clearFlip で破棄される）。
+              this.destroyCharacterState(state)
+              this.characters.delete(name)
+              continue
+            }
+            this.clearFlip(state)
+          } else {
+            anyActive = true
+            this.updateFlipFrame(state, flip)
           }
         }
 
