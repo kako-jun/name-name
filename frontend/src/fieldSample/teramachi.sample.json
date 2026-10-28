@@ -106,6 +106,17 @@
           "sprite": "http://localhost:8765/assets/images/characters/C003/walk/C003-elementary-walk-down-1.webp",
           "height": 140,
           "line": "scene を書かない NPC は、固定の 1 行で話すよ。"
+        },
+        {
+          "id": "elder-woman",
+          "name": "高齢女性",
+          "x": 1000,
+          "y": 600,
+          "sprite": "http://localhost:8765/assets/images/characters/shared/anonymous-elder-woman.webp",
+          "height": 165,
+          "facing": "left",
+          "line": "おや、見かけない顔だねえ。",
+          "scene": "高齢女性の話"
         }
       ],
       "encounter": {
