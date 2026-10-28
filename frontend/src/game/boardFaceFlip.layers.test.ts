@@ -484,6 +484,33 @@ describe.each([
     })
   })
 
+  describe('スナップの対象', () => {
+    it('スライドイン中にカメラで target が動いても、差し替えで x・幅・高さ・y が新しい target へスナップされる', async () => {
+      const { layer } = await setup()
+      layer.add('A.png', 5, '/a')
+      await flush()
+      const entryA = entriesOf(layer)[0]
+      const sprA = entryA.sprite!
+      expect(entryA.interval).not.toBeNull()
+      // Novel は scale=1 なので、シアター depth 5 の縮小した配置とは x/幅/高さ/y が変わる。
+      layer.setCamera('Novel', 'Audience', null)
+      const t = entryA as unknown as {
+        targetX: number
+        targetY: number
+        targetWidth: number
+        targetHeight: number
+      }
+      expect(sprA.width).not.toBeCloseTo(t.targetWidth, 1)
+      // x はカメラが変わっても中央で動かないので、ずれた状態を作ってスナップを確かめる。
+      sprA.x = 123
+      layer.replace('B.png', 5, 'A.png', '/a')
+      expect(sprA.x).toBe(t.targetX)
+      expect(sprA.y).toBe(t.targetY)
+      expect(sprA.width).toBe(t.targetWidth)
+      expect(sprA.height).toBe(t.targetHeight)
+    })
+  })
+
   describe('カメラ変更', () => {
     it('ロード待ち中にカメラが変わると、旧面は新しいカメラの位置へ置き直される', async () => {
       const { layer, deferred } = await setup('Theater', ['B.png'])
@@ -506,6 +533,26 @@ describe.each([
       deferred['B.png'].resolve(texFor('B.png'))
       await flush()
       expect(entriesOf(layer).find((e) => e.run)).toBeDefined()
+    })
+
+    it('B・C ともロード待ちの A→B→C でも、旧面 A は A の寸法で新しいカメラの位置へ置き直される', async () => {
+      const { layer } = await setup('Theater', ['B.png', 'C.png'])
+      layer.add('A.png', 5, '/a', { instant: true })
+      await flush()
+      const sprA = layer.children[0] as Sprite
+      layer.replace('B.png', 5, 'A.png', '/a')
+      layer.replace('C.png', 5, 'B.png', '/a')
+      layer.setCamera('Theater', 'Audience', 'LookUp')
+      const expected = computeBoardPlacement(
+        800,
+        450,
+        W,
+        H,
+        computeCameraProjection('Theater', 'Audience', 'LookUp', 5)
+      )
+      expect(sprA.y).toBeCloseTo(expected.y, 3)
+      expect(sprA.width).toBeCloseTo(expected.width, 3)
+      expect(sprA.height).toBeCloseTo(expected.height, 3)
     })
 
     it('回転中に同じ mode・向き・仰角で setCamera（ズームだけの変更）しても回転は続く', async () => {
