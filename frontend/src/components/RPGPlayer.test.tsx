@@ -17,20 +17,25 @@ import { sampleRpgData } from '../game/sampleRpgData'
 // applySettings を持つ最小スタブに差し替える。
 // アロー関数は [[Construct]] を持たず `new` できないため、`function` 式で構築可能なモックにする。
 const topdownSetAssetBaseUrl = vi.fn()
+const topdownSetDialogStyle = vi.fn()
+const topdownInit = vi.fn().mockResolvedValue(undefined)
 vi.mock('../game/TopDownRenderer', () => ({
   TopDownRenderer: vi.fn().mockImplementation(function () {
     return {
-      init: vi.fn().mockResolvedValue(undefined),
+      init: topdownInit,
       load: vi.fn(),
       destroy: vi.fn(),
       applySettings: vi.fn(),
       setAssetBaseUrl: topdownSetAssetBaseUrl,
+      setDialogStyle: topdownSetDialogStyle,
     }
   }),
 }))
 const raycastInstances: Array<{
   setInputSuspended: ReturnType<typeof vi.fn>
   setAssetBaseUrl: ReturnType<typeof vi.fn>
+  setDialogStyle: ReturnType<typeof vi.fn>
+  init: ReturnType<typeof vi.fn>
   load: ReturnType<typeof vi.fn>
   destroy: ReturnType<typeof vi.fn>
 }> = []
@@ -43,6 +48,7 @@ vi.mock('../game/RaycastRenderer', () => ({
       applySettings: vi.fn(),
       setInputSuspended: vi.fn(),
       setAssetBaseUrl: vi.fn(),
+      setDialogStyle: vi.fn(),
     }
     raycastInstances.push(inst)
     return inst
@@ -143,5 +149,25 @@ describe('RPGPlayer: アセットのベース URL を renderer に渡す (#746)'
     render(<RPGPlayer assetBaseUrl="/api/projects/g/assets/raw" />)
     await new Promise((r) => setTimeout(r, 0))
     expect(topdownSetAssetBaseUrl).toHaveBeenCalledWith('/api/projects/g/assets/raw')
+  })
+})
+
+// #840 3本目: frontmatter `dialog_style:` の値が、窓を作る init() より前に renderer へ渡る
+describe('RPGPlayer の dialogStyle (#840)', () => {
+  it('TopDown: dialogStyle="ff" が init より前に setDialogStyle へ渡る', async () => {
+    topdownSetDialogStyle.mockClear()
+    topdownInit.mockClear()
+    render(<RPGPlayer dialogStyle="ff" />)
+    expect(topdownSetDialogStyle).toHaveBeenCalledWith('ff')
+    expect(topdownSetDialogStyle.mock.invocationCallOrder[0]).toBeLessThan(
+      topdownInit.mock.invocationCallOrder[0]
+    )
+  })
+  it('Raycast: dialogStyle が setDialogStyle へ渡る（未指定は undefined）', () => {
+    const before = raycastInstances.length
+    render(<RPGPlayer view="raycast" dialogStyle="ff" />)
+    expect(raycastInstances[before].setDialogStyle).toHaveBeenCalledWith('ff')
+    render(<RPGPlayer view="raycast" />)
+    expect(raycastInstances[before + 1].setDialogStyle).toHaveBeenCalledWith(undefined)
   })
 })

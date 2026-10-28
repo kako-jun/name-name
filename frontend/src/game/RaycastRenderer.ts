@@ -9,6 +9,7 @@
 import { Application, Container, Graphics, Rectangle, Sprite, Texture } from 'pixi.js'
 import { UiNpcData, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import { DialogBox } from './DialogBox'
+import { fieldDialogOptions, normalizeDialogStyle, type DialogStyle } from './ffDialog'
 import { isEditableTarget } from './inputGuards'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import { resolveRpgImagePath } from './novelLayout'
@@ -128,6 +129,8 @@ export class RaycastRenderer {
   private stepWallSpritesContainer: Container
   private npcLayer: Container
   private dialogBox: DialogBox | null = null
+  /** 会話窓のスタイル (#840)。frontmatter `dialog_style:` の値。`init()` より前に渡す（窓は init で作る）。未指定・`ff` 以外は従来の窓 */
+  private dialogStyle: DialogStyle | undefined = undefined
   private menuOverlay: TouchMenuOverlay | null = null
   private minimap: MinimapOverlay | null = null
   private battleScreen: BattleScreen | null = null
@@ -337,6 +340,8 @@ export class RaycastRenderer {
       bgColor: 0x000033,
       nameColor: 0xffe066,
       nameSeparateBox: false,
+      // frontmatter `dialog_style: ff` の作品だけ FF 風の窓（上部固定・名前なし・改ページ）(#840)。未指定は従来の下部の窓
+      ...fieldDialogOptions({ dialogStyle: this.dialogStyle }),
     })
     this.app.stage.addChild(this.dialogBox)
 
@@ -375,6 +380,11 @@ export class RaycastRenderer {
    */
   setBattleEndHandler(handler: ((result: BattleResult) => void) | undefined): void {
     this.battleEndHandler = handler
+  }
+
+  /** 会話窓のスタイル (#840)。frontmatter `dialog_style:` の値（`ff` のみ有効、他は従来の窓）。`init()` より前に呼ぶ */
+  setDialogStyle(style: string | null | undefined): void {
+    this.dialogStyle = normalizeDialogStyle(style)
   }
 
   /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
@@ -661,6 +671,8 @@ export class RaycastRenderer {
         // typewriter 表示中なら全文表示にスキップ、完了済みなら閉じる (#150)
         if (this.dialogBox.isTyping()) {
           this.dialogBox.skipTypewriter()
+        } else if (this.dialogBox.nextPage()) {
+          // ff の窓: ページ待ち(▼)なら次のページへ。続きが無ければ下の hide (#840)
         } else {
           this.dialogBox.hide()
         }
@@ -1001,6 +1013,8 @@ export class RaycastRenderer {
       }
       if (this.dialogBox.isTyping()) {
         this.dialogBox.skipTypewriter()
+      } else if (this.dialogBox.nextPage()) {
+        // ff の窓: ページ待ち(▼)なら次のページへ。続きが無ければ下の hide (#840)
       } else {
         this.dialogBox.hide()
       }

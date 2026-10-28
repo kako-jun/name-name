@@ -16,8 +16,13 @@ vi.mock('./wordwrap', async () => {
   const actual = await vi.importActual<typeof import('./wordwrap')>('./wordwrap')
   return {
     ...actual,
-    wordwrap: (text: string, maxWidth: number) =>
-      actual.wrapTextWithMeasure(text, maxWidth, (s) => s.length * 10),
+    // フォント名に wide を含むと 1 文字 20px（フォント変更で折り返しが変わる状況を作る）
+    wordwrap: (text: string, maxWidth: number, font: string) =>
+      actual.wrapTextWithMeasure(
+        text,
+        maxWidth,
+        (s) => s.length * (font.includes('wide') ? 20 : 10)
+      ),
   }
 })
 import { DialogBox } from './DialogBox'
@@ -208,6 +213,73 @@ describe('DialogBox ff の改ページ (#840)', () => {
     typeOut(box)
     box.setFontSize(48) // 行が高くなり 1 ページの行数が減る
     expect(box.getPageInfo().pages).toBeGreaterThan(3)
+    box.dispose()
+  })
+})
+
+describe('DialogBox ff のフォント変更・予約幅・▼の位置 (#840 3本目)', () => {
+  interface Geo {
+    boxX: number
+    boxY: number
+    boxW: number
+    boxH: number
+    padding: number
+    ffCursor: { x: number; y: number; style: { fontSize: number; fontFamily: string } }
+    maxTextWidth(): number
+  }
+  const geo = (b: DialogBox): Geo => b as unknown as Geo
+  // 窓の幅で何行にも折り返される 1 段落（10px/文字なら 5 行 = 2 ページ、20px/文字なら 9 行 = 3 ページ）
+  const LONG = 'あ'.repeat(300)
+  const cursorAtCorner = (b: DialogBox): void => {
+    const g = geo(b)
+    expect(g.ffCursor.x).toBe(g.boxX + g.boxW - g.padding)
+    expect(g.ffCursor.y).toBe(g.boxY + g.boxH - g.padding)
+  }
+
+  it('setFontFamily: 表示中の本文を折り返し直してページを取り直す（全文を 1 ページに出さない）', () => {
+    const box = make(true)
+    box.show('', LONG)
+    typeOut(box)
+    expect(box.getPageInfo()).toEqual({ page: 1, pages: 2 })
+    box.setFontFamily('wide, sans-serif') // 1 文字が 20px になる = 折り返しが増える
+    expect(box.getPageInfo().pages).toBeGreaterThan(2)
+    // 出ているのは 1 ページ分だけで、全文ではない
+    expect(box.getVisibleText().replace(/\n/g, '').length).toBeLessThan(LONG.length)
+    expect(box.getVisibleText().split('\n').length).toBeLessThanOrEqual(4)
+    // ▼ のフォントも追従する
+    expect(geo(box).ffCursor.style.fontFamily).toBe('wide, sans-serif')
+    box.dispose()
+  })
+  it('setFontFamily: 変更後もページ待ち・ページ送りが働く', () => {
+    const box = make(true)
+    box.show('', LONG)
+    typeOut(box)
+    box.setFontFamily('wide, sans-serif')
+    typeOut(box)
+    expect(box.isAwaitingPage()).toBe(true)
+    expect(box.nextPage()).toBe(true)
+    box.dispose()
+  })
+  it('▼の予約幅 (ffCursorReserve) が折り返し幅から引かれる: ちょうど満杯の行は ▼ を避けて折り返す', () => {
+    const box = make(true)
+    const full = 'あ'.repeat(Math.floor(geo(box).maxTextWidth() / 10)) // 本文幅いっぱい（予約なしなら 1 行に収まる）
+    box.show('', full)
+    typeOut(box)
+    expect(box.getVisibleText()).toContain('\n')
+    box.dispose()
+  })
+  it('▼は redraw・setFontSize の後も窓の右下（パディングの内側）にある', () => {
+    const box = make(true)
+    cursorAtCorner(box)
+    box.redraw(640, 360)
+    cursorAtCorner(box)
+    box.show('', TEN_TEXT)
+    typeOut(box)
+    box.setFontSize(30)
+    cursorAtCorner(box)
+    expect(geo(box).ffCursor.style.fontSize).toBe(Math.round(30 * 0.6))
+    box.redraw(1024, 768)
+    cursorAtCorner(box)
     box.dispose()
   })
 })

@@ -10,6 +10,7 @@ import { Application, Assets, Container, Graphics, Sprite, Texture } from 'pixi.
 import { UiNpcData, UiRpgTrigger, RPGProject, TILE_COLORS_HEX, TileType } from '../types/rpg'
 import type { MonsterDef, PartyMemberDef } from '../types'
 import { DialogBox } from './DialogBox'
+import { fieldDialogOptions, normalizeDialogStyle, type DialogStyle } from './ffDialog'
 import { resolveNpcPortrait, stripExpressionDirectives } from './npcDialog'
 import { resolveRpgImagePath } from './novelLayout'
 import {
@@ -105,6 +106,8 @@ export class TopDownRenderer {
   private playerLayer: Container
   private world: Container
   private dialogBox: DialogBox | null = null
+  /** 会話窓のスタイル (#840)。frontmatter `dialog_style:` の値。`init()` より前に渡す（窓は init で作る）。未指定・`ff` 以外は従来の窓 */
+  private dialogStyle: DialogStyle | undefined = undefined
   private menuOverlay: TouchMenuOverlay | null = null
   private eventRunner: EventRunner | null = null
   private inputLocked = false
@@ -224,6 +227,8 @@ export class TopDownRenderer {
       bgColor: 0x000033,
       nameColor: 0xffe066,
       nameSeparateBox: false,
+      // frontmatter `dialog_style: ff` の作品だけ FF 風の窓（上部固定・名前なし・改ページ）(#840)。未指定は従来の下部の窓
+      ...fieldDialogOptions({ dialogStyle: this.dialogStyle }),
     })
     this.app.stage.addChild(this.dialogBox)
 
@@ -305,6 +310,11 @@ export class TopDownRenderer {
         resolve(null)
       }
     })
+  }
+
+  /** 会話窓のスタイル (#840)。frontmatter `dialog_style:` の値（`ff` のみ有効、他は従来の窓）。`init()` より前に呼ぶ */
+  setDialogStyle(style: string | null | undefined): void {
+    this.dialogStyle = normalizeDialogStyle(style)
   }
 
   /** アセットのベース URL を設定する (#746)。`load()` より前に呼ぶ */
@@ -636,6 +646,8 @@ export class TopDownRenderer {
         } else if (this.dialogBox.isTyping()) {
           // typewriter 表示中なら全文表示にスキップ、完了済みなら閉じる (#150)
           this.dialogBox.skipTypewriter()
+        } else if (this.dialogBox.nextPage()) {
+          // ff の窓: ページ待ち(▼)なら次のページへ。続きが無ければ下の hide (#840)
         } else {
           this.dialogBox.hide()
         }
@@ -994,6 +1006,8 @@ export class TopDownRenderer {
         this.eventRunner.advance()
       } else if (this.dialogBox.isTyping()) {
         this.dialogBox.skipTypewriter()
+      } else if (this.dialogBox.nextPage()) {
+        // ff の窓: ページ待ち(▼)なら次のページへ。続きが無ければ下の hide (#840)
       } else {
         this.dialogBox.hide()
       }

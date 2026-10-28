@@ -1441,6 +1441,7 @@ function EditorScreen({
                       onChange={handleMapChange}
                       isDark={isDark}
                       assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
+                      dialogStyle={doc?.dialog_style ?? null}
                     />
                   )}
                   {rpgSubTab === 'npc' && (
@@ -1458,6 +1459,7 @@ function EditorScreen({
                       gameData={rpgPlayProject ?? undefined}
                       view={rpgPlayProject?.view}
                       assetBaseUrl={`${apiBaseUrl}/api/projects/${projectName}/assets/raw`}
+                      dialogStyle={doc?.dialog_style ?? null}
                     />
                   )}
                 </>
