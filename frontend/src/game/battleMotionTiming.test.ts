@@ -19,12 +19,15 @@ import {
   eventTimeline,
   motionTimingFor,
   normalizeBattleMotion,
+  multiHitIntervalFor,
   sampleActor,
   sampleDamagePopup,
+  sampleSummonCue,
   sampleTarget,
   type MotionTiming,
 } from './battleMotion'
 import type { BattleActionEvent } from './battleEngine'
+import { planEventEffects, type BattleEffectSheet } from './battleEffects'
 
 const attackEvent = (seq: number, hpAfter = 3): BattleActionEvent => ({
   seq,
@@ -201,5 +204,74 @@ describe('normalizeBattleMotion / motionTimingFor (#956)', () => {
     expect(motionTimingFor('snappy')).toBe(SNAPPY_MOTION_TIMING)
     expect(motionTimingFor('default')).toBe(DEFAULT_MOTION_TIMING)
     expect(motionTimingFor(undefined)).toBe(DEFAULT_MOTION_TIMING)
+  })
+})
+
+describe('MotionTiming: 各関数に timing が通る（配線） (#956)', () => {
+  const S = SNAPPY_MOTION_TIMING
+  const D = DEFAULT_MOTION_TIMING
+  const sheet: BattleEffectSheet = {
+    image: 'a.png',
+    frames: 2,
+    columns: 2,
+    frameMs: 100,
+    anchor: 'center',
+    scale: 1,
+  }
+
+  it('planEventEffects: ヒットの時刻は渡した timing の命中時刻（省略は default）', () => {
+    const ev = attackEvent(1)
+    const effects = { slash: sheet }
+    expect(planEventEffects(ev, effects, S)[0].atMs).toBe(S.attackStepMs + S.attackSlashHitMs)
+    expect(planEventEffects(ev, effects, D)[0].atMs).toBe(D.attackStepMs + D.attackSlashHitMs)
+    expect(planEventEffects(ev, effects)[0].atMs).toBe(D.attackStepMs + D.attackSlashHitMs)
+  })
+
+  it('planEventEffects: 召喚の命中は summonHitMs、複数ヒットは snappy の間隔で並ぶ', () => {
+    const summon: BattleActionEvent = {
+      seq: 1,
+      actor: { side: 'party', index: 0 },
+      kind: 'skill',
+      summon: { id: 'S1', name: 'x' },
+      hits: [
+        { target: { side: 'enemy', index: 0 }, kind: 'damage', amount: 5, hpBefore: 9, hpAfter: 4 },
+      ],
+    }
+    const plans = planEventEffects(summon, { summon: sheet, magic: sheet }, S)
+    expect(plans.find((p) => p.kind === 'magic')?.atMs).toBe(S.summonHitMs)
+
+    const multi: BattleActionEvent = {
+      seq: 2,
+      actor: { side: 'party', index: 0 },
+      kind: 'spell',
+      hits: [0, 1, 2].map((round) => ({
+        target: { side: 'enemy' as const, index: 0 },
+        kind: 'damage' as const,
+        amount: 5,
+        hpBefore: 99,
+        hpAfter: 90,
+        round,
+      })),
+    }
+    const at = planEventEffects(multi, { magic: sheet }, S).map((p) => p.atMs)
+    expect(at).toEqual([0, 1, 2].map((r) => S.castHitMs + r * S.multiHitIntervalMs))
+  })
+
+  it('sampleSummonCue: 登場・保持・退場の長さは渡した timing', () => {
+    const total = S.summonAppearMs + S.summonHoldMs + S.summonLeaveMs
+    expect(sampleSummonCue(S.summonAppearMs, S)).toEqual({ alpha: 1, veil: 1, rise: 0 })
+    expect(sampleSummonCue(S.summonAppearMs + S.summonHoldMs, S).alpha).toBe(1)
+    expect(sampleSummonCue(total, S).alpha).toBe(0)
+    // default ではまだ登場の途中の時刻
+    expect(sampleSummonCue(S.summonAppearMs, D).alpha).toBeLessThan(1)
+    expect(sampleSummonCue(total, D).alpha).toBeGreaterThan(0)
+  })
+
+  it('multiHitIntervalFor: 総時間・下限は渡した timing（22 ヒット超で縮む）', () => {
+    expect(multiHitIntervalFor(5, S)).toBe(S.multiHitIntervalMs)
+    expect(multiHitIntervalFor(30, S)).toBe(S.multiHitTotalMs / 30)
+    expect(multiHitIntervalFor(30, D)).toBeCloseTo(D.multiHitTotalMs / 30, 10)
+    expect(multiHitIntervalFor(30, S)).not.toBe(multiHitIntervalFor(30, D))
+    expect(multiHitIntervalFor(5000, S)).toBe(S.multiHitMinIntervalMs)
   })
 })

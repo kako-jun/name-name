@@ -324,6 +324,13 @@ describe('openFieldBattle', () => {
     expect('effects' in open().s.opts).toBe(false)
   })
 
+  it('motion は BattleScreen の opts に転送される（既定は default） (#956)', () => {
+    expect(
+      open({ settings: { presentation: 'ff', layout: 'side', motion: 'snappy' } }).s.opts.motion
+    ).toBe('snappy')
+    expect(open().s.opts.motion).toBe('default')
+  })
+
   it('presentation は BattleScreen の opts に転送される（既定は dq） (#745)', () => {
     expect(open({ settings: { presentation: 'ff', layout: 'side' } }).s.opts.presentation).toBe(
       'ff'
