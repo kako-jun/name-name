@@ -180,6 +180,21 @@ pub const WEATHER_INTENSITY_DEFAULT: f32 = 1.0;
 pub const WEATHER_INTENSITY_MIN: f32 = 0.1;
 pub const WEATHER_INTENSITY_MAX: f32 = 3.0;
 
+/// 床の帯の高さ（画面高さに対する比）の既定値 (#706 第2弾)。
+pub const FLOOR_HEIGHT_DEFAULT: f32 = 0.25;
+/// 床の帯の高さ比の下限・上限 (#706 第2弾)。範囲外はこの範囲へクランプする。
+pub const FLOOR_HEIGHT_MIN: f32 = 0.05;
+pub const FLOOR_HEIGHT_MAX: f32 = 1.0;
+
+fn default_floor_height() -> f32 {
+    FLOOR_HEIGHT_DEFAULT
+}
+
+/// serde の `skip_serializing_if` 用。既定の高さ（0.25）のときは JSON に出さない。
+fn is_default_floor_height(value: &f32) -> bool {
+    *value == FLOOR_HEIGHT_DEFAULT
+}
+
 fn default_weather_intensity() -> f32 {
     WEATHER_INTENSITY_DEFAULT
 }
@@ -1077,6 +1092,25 @@ pub enum Event {
     },
     /// 天候をクリアする (#706)。Markdown 構文: `[天候: なし]`。
     WeatherExit,
+    /// 床材質 (#706 第2弾)。画面の下部に下端揃え・横幅フィットの帯として置く、単一スロットのタイル画像。
+    /// 画像は帯の高さに合わせて横方向にタイル（継ぎ目なしのテクスチャを想定）。新しい `[床:]` は前の床を置換する。
+    /// 解除は [`Event::FloorExit`]（`[床: なし]`）。
+    ///
+    /// Markdown 構文: `[床: 木目.png]` / `[床: 木目.png, 高さ=0.3]`。画像のみ（パスは `images/` 以下）。
+    /// `高さ`（alias `height`）は画面高さに対する帯の比で、既定 0.25。0.05〜1.0 にクランプし、
+    /// 数値でない・0 以下・非有限は無視する（有効な値が無ければ既定）。複数指定は最後の有効値が勝つ。
+    /// 既定の高さは JSON にも emit にも出ない。背景板より手前・大道具とキャラより奥。ズームは受け、射影は受けない。
+    /// `[床: なし]`・`[場面転換]`・新規開始・終劇でクリアされる。
+    Floor {
+        path: String,
+        #[serde(
+            default = "default_floor_height",
+            skip_serializing_if = "is_default_floor_height"
+        )]
+        height: f32,
+    },
+    /// 床をクリアする (#706 第2弾)。Markdown 構文: `[床: なし]`。
+    FloorExit,
     /// 動画入力レイヤ (#252)。立ち絵/背景と同じ枠組みで動画ファイルをレイヤとして配置・再生する。
     /// 背景と同じく単一スロット意味論: 新しい `[動画:]` は前の動画を置換する。
     /// 音声トラックがある動画は既定でミックス再生する（`mute=true` で無音化）。

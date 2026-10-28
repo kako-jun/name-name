@@ -1382,6 +1382,10 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("天候:") {
         return parse_weather_directive(rest);
     }
+    // [床: path] / [床: path, 高さ=0.3] / [床: なし] — 床材質 (#706 第2弾)。他の既存タグと prefix 衝突しない。
+    if let Some(rest) = content.strip_prefix("床:") {
+        return parse_floor_directive(rest);
+    }
     // [動画退場] — 動画レイヤをクリア (#252)。「動画:」より先に完全一致で判定する。
     if content == "動画退場" {
         return Some(Event::VideoExit);
@@ -2077,6 +2081,47 @@ fn parse_weather_directive(content: &str) -> Option<Event> {
         }
     }
     Some(Event::Weather { kind, intensity })
+}
+
+/// `[床: path]` / `[床: path, 高さ=0.3]` / `[床: なし]` の本体を分解する (#706 第2弾)。
+/// - path が `なし` → [`Event::FloorExit`]（解除。後ろの kv は無視）
+/// - path が空 → 不正な行としてイベントにしない（`None`）
+/// - `高さ`/`height` は有限かつ正の数だけ採用し、0.05〜1.0 にクランプ。それ以外は無視（有効な値が無ければ既定 0.25）。
+///   複数あれば最後の有効値。未知のキーは無視。
+fn parse_floor_directive(content: &str) -> Option<Event> {
+    let (path_part, kv_part) = match content.split_once(',') {
+        Some((p, rest)) => (p, Some(rest)),
+        None => (content, None),
+    };
+    let path = path_part.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if path == "なし" {
+        return Some(Event::FloorExit);
+    }
+    let mut height = FLOOR_HEIGHT_DEFAULT;
+    if let Some(kv) = kv_part {
+        for raw in kv.split(',') {
+            if let Some((k, v)) = raw.trim().split_once(['=', '＝']) {
+                if matches!(k.trim(), "高さ" | "height") {
+                    // 有効な値だけ採用する（最後の有効値が勝つ。無効な値は直前の値を壊さない）。
+                    if let Some(n) = v
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite() && *n > 0.0)
+                    {
+                        height = n.clamp(FLOOR_HEIGHT_MIN, FLOOR_HEIGHT_MAX);
+                    }
+                }
+            }
+        }
+    }
+    Some(Event::Floor {
+        path: path.to_string(),
+        height,
+    })
 }
 
 /// `[動画: path]` / `[動画: path, 位置=中央, スケール=1.0, ループ=true, ミュート=false, フェード上=40, ...]`
