@@ -225,7 +225,7 @@ describe('ハンドラ単体', () => {
     expect(calls).toEqual(['audio.stopBgm', 'hooks.setCurrentBgmPath'])
   })
 
-  it('SceneTransition: クリア順は 背景→動画→背景板→壁→舞台前面→大道具→幕→照明→動画→イベント絵→…→暗転解除→scrim', () => {
+  it('SceneTransition: クリア順は 背景→動画→背景板→壁→舞台前面→天候→大道具→幕→照明→動画→イベント絵→…→暗転解除→scrim', () => {
     const { ctx, calls } = fake()
     dispatchDirective(E('SceneTransition'), ctx)
     expect(calls).toEqual([

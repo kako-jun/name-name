@@ -65,7 +65,7 @@ const MOTION: Record<WeatherKind, KindMotion> = {
   Rain: {
     fall: 1.4,
     speedJitter: 0.18,
-    drift: -0.4,
+    drift: -0.25,
     swayAmp: 0,
     swayHz: 0,
     spin: 0,
