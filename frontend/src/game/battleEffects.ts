@@ -241,15 +241,13 @@ export interface EffectPlan {
  *
  * 割り当て:
  * - 詠唱: 呪文（`spell`）の発動時に `cast` を使い手へ。召喚獣の演出（`summon`）のある行動は `summon` を使い手へ
- * - 打撃・斬撃: 通常攻撃（`attack`）の命中時（ダメージのヒット）に対象へ。使い手が `slash` ポーズの絵を持てば `slash`、無ければ `impact`
- *   （記録に武器・技の種類が無いので、絵の宣言で分ける暫定。属性・武器での出し分けは今後）
- * - 魔法ヒット: 呪文と召喚獣の演出のある行動の、ダメージのヒットに対象へ `magic`。回復・ミスには出さない
+ * - 打撃・斬撃: 通常攻撃（`attack`）の命中時（ダメージのヒット）に対象へ。攻撃の側で決める: 味方の攻撃は `slash`（武器は刀）、敵の攻撃は `impact`
+ * - 魔法ヒット: 呪文と召喚獣の演出のある行動の、ダメージのヒットに対象へ `magic`（`magic` が未宣言なら `impact` に落とす）。回復・ミスには出さない
  * - アイテム・状態・知らせ・召喚獣の演出の無い特技には出さない
  */
 export function planEventEffects(
   event: BattleActionEvent,
-  effects: BattleEffects | undefined,
-  opts: { usesSlashPose: (actor: BattleActorRef) => boolean }
+  effects: BattleEffects | undefined
 ): EffectPlan[] {
   if (!hasBattleEffects(effects)) return []
   const plans: EffectPlan[] = []
@@ -259,7 +257,7 @@ export function planEventEffects(
   if (castKind && effects?.[castKind]) {
     plans.push({ kind: castKind, atMs: 0, target: event.actor })
   }
-  plans.push(...planHitEffects(event, event.hits, effects, opts))
+  plans.push(...planHitEffects(event, event.hits, effects))
   return plans
 }
 
@@ -270,14 +268,13 @@ export function planEventEffects(
 export function planHitEffects(
   event: BattleActionEvent,
   hits: readonly BattleHit[],
-  effects: BattleEffects | undefined,
-  opts: { usesSlashPose: (actor: BattleActorRef) => boolean }
+  effects: BattleEffects | undefined
 ): EffectPlan[] {
   if (!hasBattleEffects(effects)) return []
   let hitKind: BattleEffectKind | null = null
-  if (event.kind === 'attack') hitKind = opts.usesSlashPose(event.actor) ? 'slash' : 'impact'
+  if (event.kind === 'attack') hitKind = event.actor.side === 'party' ? 'slash' : 'impact'
   else if (event.kind === 'spell' || (event.summon !== undefined && event.kind === 'skill')) {
-    hitKind = 'magic'
+    hitKind = effects?.magic ? 'magic' : 'impact'
   }
   if (!hitKind || !effects?.[hitKind]) return []
   const tl = eventTimeline(event)
