@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { companionZ, layerIndex, npcZ, orderedLayers, WORLD_LAYER_ORDER, WORLD_Z } from './layers'
+import {
+  companionZ,
+  emotionLayerHost,
+  layerIndex,
+  npcZ,
+  orderedLayers,
+  WORLD_LAYER_ORDER,
+  WORLD_Z,
+} from './layers'
 
 describe('world の描画順', () => {
   it('景色 → 背景 → オーバーレイ → 同行者 → 主人公 → 前面 → 感情吹き出し → マーカーの順', () => {
@@ -78,5 +86,14 @@ describe('world の描画順', () => {
     expect(npcZ(150, 200, 600)).toBeGreaterThan(companionZ(100, 200, 600))
     // 手前側の同行者(下)と奥側の NPC(上)
     expect(companionZ(300, 200, 600)).toBeGreaterThan(npcZ(250, 300, 600))
+  })
+})
+
+describe('感情吹き出しの層の置き先 (#840)', () => {
+  it('ff の窓で会話中だけ stage（窓の手前）。それ以外は world のまま', () => {
+    expect(emotionLayerHost(true, true)).toBe('stage')
+    expect(emotionLayerHost(true, false)).toBe('world')
+    expect(emotionLayerHost(false, true)).toBe('world')
+    expect(emotionLayerHost(false, false)).toBe('world')
   })
 })

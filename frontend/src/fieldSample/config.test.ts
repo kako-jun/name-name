@@ -1660,3 +1660,56 @@ describe('scriptUrl と npcs.scene (#841 段階2)', () => {
     }
   })
 })
+
+describe('dialogStyle / dialogMsPerChar (#840)', () => {
+  it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
+    const c = ok(mutated(() => {}))
+    expect('dialogStyle' in c).toBe(false)
+    expect('dialogMsPerChar' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it("dialogStyle: 'ff' を読む", () => {
+    const c = ok(
+      mutated((c) => {
+        c.dialogStyle = 'ff'
+      })
+    )
+    expect(c.dialogStyle).toBe('ff')
+    expect(c.warnings).toBeUndefined()
+  })
+  it('dialogStyle が不正は警告して無視（読み込みは成功・従来の窓）', () => {
+    for (const bad of ['dark', 'ff-blue', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.dialogStyle = bad
+        })
+      )
+      expect('dialogStyle' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('dialogStyle')
+    }
+  })
+  it('dialogMsPerChar は 0 以上の数値を読む（0 = 即時表示）', () => {
+    for (const v of [0, 45, 12.5]) {
+      const c = ok(
+        mutated((c) => {
+          c.dialogMsPerChar = v
+        })
+      )
+      expect(c.dialogMsPerChar).toBe(v)
+      expect(c.warnings).toBeUndefined()
+    }
+  })
+  it('dialogMsPerChar が不正（負・数値でない）は警告して無視', () => {
+    for (const bad of [-1, 1001, '30', null, NaN]) {
+      const c = ok(
+        mutated((c) => {
+          c.dialogMsPerChar = bad
+        })
+      )
+      expect('dialogMsPerChar' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('dialogMsPerChar')
+    }
+  })
+})

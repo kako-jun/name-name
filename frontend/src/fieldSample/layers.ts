@@ -54,3 +54,12 @@ export const companionZ = feetDepthZ
 
 /** NPC の zIndex（足元 y の式。同行者と共通） */
 export const npcZ = feetDepthZ
+
+/**
+ * 感情吹き出しの層を置く先 (#840)。通常は world 内（`WORLD_Z.emotion`）。
+ * FF 風の会話窓は stage 直下で world の手前に出るため、窓を出している会話中だけ吹き出しを窓より前（stage の最前面）へ出す。
+ * 非 ff の窓・会話していないときは world のまま（描画順は変えない）。
+ */
+export function emotionLayerHost(ffWindow: boolean, talking: boolean): 'world' | 'stage' {
+  return ffWindow && talking ? 'stage' : 'world'
+}
