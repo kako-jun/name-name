@@ -28,7 +28,7 @@ interface RPGPlayerProps {
   assetBaseUrl?: string
   /**
    * 戦闘が終わって画面を畳んだ直後に、結果（経験値・ゴールド・獲得した戦利品）を受け取る (#831)。
-   * エンジンは所持品を持たないので、反映や戦利品の画面はホスト側が作る（`battle_transition: ff` では暗転の間に呼ばれる）
+   * エンジンは所持品を持たないので、反映や戦利品の画面はホスト側が作る（`battle_transition: ff` / `ff-mosaic` では暗転の間に呼ばれる）
    */
   onBattleEnd?: (result: BattleResult) => void
 }

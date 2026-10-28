@@ -323,7 +323,7 @@ pub fn parse(input: &str) -> Document {
                     battle_commands = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_transition:") {
-                // RPG 戦闘の開始・終了の画面遷移 (#830)。none / ff。値は生文字列で透過し、runtime 側で未知値は none に倒す。
+                // RPG 戦闘の開始・終了の画面遷移 (#830)。none / ff / ff-mosaic。値は生文字列で透過し、runtime 側で未知値は none に倒す。
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_transition = Some(v);

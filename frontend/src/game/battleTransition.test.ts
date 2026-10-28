@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_BATTLE_TRANSITION_PARAMS as P,
+  battleTransitionParams,
+  isBattleTransitionEnabled,
   normalizeBattleTransition,
+  TRANSITION_MOSAIC_MAX_SIZE,
+  transitionMosaicSize,
   sampleEnter,
   sampleExit,
 } from './battleTransition'
@@ -10,6 +14,10 @@ describe('normalizeBattleTransition (#830)', () => {
   it.each([
     ['ff', 'ff'],
     [' FF ', 'ff'],
+    ['ff-mosaic', 'ff-mosaic'],
+    ['  FF-Mosaic ', 'ff-mosaic'],
+    ['ff_mosaic', 'none'],
+    ['mosaic', 'none'],
     ['none', 'none'],
     ['', 'none'],
     [null, 'none'],
@@ -114,5 +122,44 @@ describe('sampleExit (#830)', () => {
 
   it('負の追加画面の長さは 0 として扱う', () => {
     expect(sampleExit(P.exitFadeOutMs + P.exitBlackMs + 1, P, -300).phase).toBe('fadeIn')
+  })
+})
+
+describe('transitionMosaicSize (#953)', () => {
+  it('alpha 0 は等倍(1)、alpha 1 は最大', () => {
+    expect(transitionMosaicSize(0, 12)).toBe(1)
+    expect(transitionMosaicSize(1, 12)).toBe(12)
+  })
+  it('alpha に対して単調（非減少）', () => {
+    let prev = 0
+    for (let i = 0; i <= 100; i++) {
+      const v = transitionMosaicSize(i / 100, 12)
+      expect(v).toBeGreaterThanOrEqual(prev)
+      prev = v
+    }
+  })
+  it('範囲外・NaN の alpha は 0〜1 に収める', () => {
+    expect(transitionMosaicSize(-3, 12)).toBe(1)
+    expect(transitionMosaicSize(5, 12)).toBe(12)
+    expect(transitionMosaicSize(NaN, 12)).toBe(1)
+    expect(transitionMosaicSize(Infinity, 12)).toBe(1)
+  })
+  it('maxSize が異常値（0・負・NaN・1）なら常に 1', () => {
+    for (const m of [0, -4, NaN, Infinity, 1]) expect(transitionMosaicSize(1, m)).toBe(1)
+  })
+})
+
+describe('isBattleTransitionEnabled / battleTransitionParams (#953)', () => {
+  it('ff と ff-mosaic だけ遷移が有効', () => {
+    expect(isBattleTransitionEnabled('ff')).toBe(true)
+    expect(isBattleTransitionEnabled('ff-mosaic')).toBe(true)
+    expect(isBattleTransitionEnabled('none')).toBe(false)
+    expect(isBattleTransitionEnabled(undefined)).toBe(false)
+  })
+  it('モザイクは ff-mosaic だけ有効。ff・none は 0（従来と同一）', () => {
+    expect(battleTransitionParams('ff-mosaic').mosaicMaxSize).toBe(TRANSITION_MOSAIC_MAX_SIZE)
+    expect(battleTransitionParams('ff')).toBe(P)
+    expect(battleTransitionParams('none')).toBe(P)
+    expect(P.mosaicMaxSize).toBe(0)
   })
 })

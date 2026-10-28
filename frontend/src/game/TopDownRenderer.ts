@@ -44,6 +44,7 @@ import {
 } from './fieldBattle'
 import type { BattleEffects } from './battleEffects'
 import { loadBattleEffects } from './battleEffectsLoader'
+import { battleTransitionParams, isBattleTransitionEnabled } from './battleTransition'
 import { FieldBattleTransition, type FieldBattleTransitionHooks } from './fieldBattleTransition'
 
 type Direction = 'up' | 'down' | 'left' | 'right'
@@ -136,7 +137,7 @@ export class TopDownRenderer {
   private battleEffectsToken = 0
   /** 戦闘画面。非 null の間はフィールドの入力・移動・エンカウント判定を止める (#784) */
   private battleScreen: BattleScreen | null = null
-  /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` のときだけ使う。演出中の状態はここが private で持つ */
+  /** 戦闘の開始・終了の画面遷移 (#830)。`battle_transition: ff` / `ff-mosaic` のときだけ使う。演出中の状態はここが private で持つ */
   private transition: FieldBattleTransition
   /** 戦闘をまたぐキー入力状態（押下中の矢印キー・離すまで無視・設定中の停止）(#204 / #784) */
   private inputGate = new FieldInputGate()
@@ -225,7 +226,7 @@ export class TopDownRenderer {
 
   /**
    * 戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）を受け取るハンドラを登録する。
-   * 戦闘画面を畳んだ直後（`battle_transition: ff` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
+   * 戦闘画面を畳んだ直後（`battle_transition: ff` / `ff-mosaic` では暗転の最も暗い瞬間）に 1 戦闘につき 1 回呼ぶ。
    * エンジンは所持品を持たないので、反映や戦利品の画面を出すのはホスト側。強制終了（`load` / `destroy`）では呼ばない
    */
   setBattleEndHandler(handler: ((result: BattleResult) => void) | undefined): void {
@@ -819,7 +820,8 @@ export class TopDownRenderer {
         },
       })
     }
-    if (this.battleSettings.transition === 'ff') {
+    if (isBattleTransitionEnabled(this.battleSettings.transition)) {
+      this.transition.setParams(battleTransitionParams(this.battleSettings.transition))
       // 開始の演出 (#830): 操作キャラの画面上の位置を中心に 2 段ズームして暗転 → 戦闘画面
       // 発火は歩き出しの瞬間なので、歩いている間も追従するよう毎フレーム計算する
       const focus = (): { x: number; y: number } =>

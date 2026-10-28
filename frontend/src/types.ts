@@ -1111,7 +1111,7 @@ export interface EventDocument {
   battle_command_labels?: string | null
   /** RPG 戦闘のコマンドの構成と順序 (#873)。`skill, spell, item, escape` 形式の生文字列。frontmatter `battle_commands:` から流す。GUI 専用。 */
   battle_commands?: string | null
-  /** RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、終了=黒を経由してフェードで戻る）。frontmatter `battle_transition:` から流す。GUI 専用（TUI は読まない）。 */
+  /** RPG 戦闘の開始・終了の画面遷移 (#830)。`"none"`（既定・現行の挙動）/ `"ff"`（開始=操作キャラ付近を2段でズームして暗転、終了=黒を経由してフェードで戻る）/ `"ff-mosaic"`（`ff` に暗さ連動のモザイクを足す）。frontmatter `battle_transition:` から流す。GUI 専用（TUI は読まない）。 */
   battle_transition?: string | null
   /** RPG 戦闘モーションのプリセット (#956)。`"default"`（現行）/ `"snappy"`（キビキビ）。生文字列で透過し、不正値は frontend が警告して default に倒す。`battle_presentation: ff` のときだけ効く。frontmatter `battle_motion:` から流す。GUI 専用。 */
   battle_motion?: string | null
