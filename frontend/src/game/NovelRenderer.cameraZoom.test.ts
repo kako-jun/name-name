@@ -5,6 +5,7 @@
  * 時間は renderer の TimeController を virtual にして `tick` で進める。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Texture, TextureSource, type Sprite } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import type { NovelGameState } from './GameState'
@@ -254,6 +255,37 @@ describe('復元・シーク・リセット (#702)', () => {
     expect(p.cameraZoom.getPose().scale).toBe(2) // tick 前
     expect(p.characterLayer.scale.x).toBe(2)
     expect(p.stage.cameraZoom).toEqual({ target: 'ミナ', strength: 2 })
+  })
+
+  it('N-c: 実 CharacterLayer（モックなし）で復元した立ち絵は、読み込み前は全景、読み込み完了の tick で補間なしに最終ポーズ', () => {
+    const { snap } = zoomed()
+    const withChar: NovelGameState = {
+      ...snap,
+      characters: [{ name: 'ミナ', expression: 'x', position: 'Left', depth: 0 }],
+    }
+    const r = new NovelRenderer()
+    r.setScenes([scene('a', [narration('one')]), scene('b', [narration('next')])])
+    const p = internalsOf<Priv>(r)
+    p.time.setMode('live')
+    p.time.setMode('virtual')
+    // 実 CharacterLayer: applyState の show() が立ち絵（未読み込み = Texture.EMPTY）を作る
+    internals(r).applyState(withChar)
+    const layer = p.characterLayer as unknown as {
+      hasCharacter(n: string): boolean
+      getZoomFocus(n: string): { x: number; y: number } | null
+      characters: Map<string, { sprite: Sprite }>
+    }
+    expect(layer.hasCharacter('ミナ')).toBe(true) // 復元後の再スナップ時点で居る（順序の固定）
+    expect(layer.getZoomFocus('ミナ')).toBeNull() // 未読み込み
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    p.time.tick(160)
+    expect(p.cameraZoom.getPose()).toEqual(IDENTITY_ZOOM_POSE)
+    // 読み込み完了を模す: sprite に実テクスチャを与える
+    const sprite = layer.characters.get('ミナ')!.sprite
+    sprite.texture = new Texture({ source: new TextureSource({ width: 20, height: 60 }) })
+    expect(layer.getZoomFocus('ミナ')).not.toBeNull()
+    p.time.tick(16)
+    expect(p.cameraZoom.getPose().scale).toBe(2) // 補間なし（途中倍率を映さない）
   })
 
   it('55: 復元の最終ポーズは立ち絵の復元後に確定する（対象キャラの実在に依存、再スナップの順序）', () => {

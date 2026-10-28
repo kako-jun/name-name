@@ -497,7 +497,7 @@ describe('CameraZoomController (#702)', () => {
     h.focuses.set('Late', { x: 400, y: 250 })
     h.time.tick(16)
     h.focuses.delete('Late')
-    h.present.add('Late')
+    h.present.add('Late') // 意図的なモデル化: 舞台には居るがフォーカスだけ失う（テクスチャ差し替え等）
     h.time.tick(16)
     h.time.tick(ZOOM_TWEEN_MS + 50)
     h.focuses.set('Late', { x: 400, y: 250 })
