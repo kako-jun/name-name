@@ -2961,16 +2961,16 @@ export class BattleScreen extends Container {
     // 縮んだ数字は基本サイズの段の中で上下中央に置く（4 文字以下は 0 で従来位置）
     const centerDy = popupCenterOffset(popupFontSize(p.unit), p.fontSize)
     if (p.digits) {
-      // 桁ごとの跳ね (#955): 束ねた箱は置き位置に固定し、桁の Text が自分の時間軸で縦に動く。全桁が終われば done
+      // 桁ごとの跳ね (#955): 束ねた箱は置き位置に固定し、桁の Text が自分の時間軸で縦に動く。最後の桁の done で終わり
       p.text.position.set(p.x, p.y - stackDy - centerDy)
-      let allDone = true
+      const n = p.digits.length
       p.digits.forEach((d, i) => {
-        const ds = sampleDigitPopup(p.elapsed, i, p.digits!.length, this.motionTiming)
+        const ds = sampleDigitPopup(p.elapsed, i, n, this.motionTiming)
         d.position.y = ds.dy * p.unit
         d.alpha = ds.alpha
-        if (!ds.done) allDone = false
       })
-      return allDone
+      // 保持・フェードは全桁共通で、done は最後の桁の時間軸（= どの桁から取っても同じ）
+      return sampleDigitPopup(p.elapsed, n - 1, n, this.motionTiming).done
     }
     const s = sampleDamagePopup(p.elapsed, this.motionTiming)
     p.text.position.set(p.x, p.y + s.dy * p.unit - stackDy - centerDy)

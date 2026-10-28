@@ -3,6 +3,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
+import {
+  popupCenterOffset,
+  popupFontSize,
+  fitPopupFontSize,
+  POPUP_STACK_STEP,
+  SNAPPY_MOTION_TIMING,
+  sampleDigitPopup,
+} from './battleMotion'
 import type { BattleEntity } from './spellDsl'
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -23,7 +31,9 @@ function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 }
 interface Internals {
   commands: { id: string; hit: Container }[]
-  popups: { text: Text | Container; digits?: Text[] }[]
+  popups: { text: Text | Container; digits?: Text[]; unit: number; fontSize: number; y: number }[]
+  spawnPopup: (hit: unknown, sinceHit: number, stack?: number) => void
+  enemyViews: { unit: number }[]
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
 const created: BattleScreen[] = []
@@ -87,5 +97,76 @@ describe('BattleScreen 桁ごとのダメージ数字 (#955)', () => {
     expect(I(s).popups).toHaveLength(0)
     expect(p.text.destroyed).toBe(true)
     for (const t of p.digits!) expect(t.destroyed).toBe(true)
+  })
+
+  const hit = (kind: 'damage' | 'heal' | 'miss', amount: number) => ({
+    kind,
+    amount,
+    target: { side: 'enemy', index: 0 },
+  })
+
+  it('snappy: MISS と 1 桁は従来の Text 1 個', () => {
+    const s = setup({ motion: 'snappy' })
+    I(s).spawnPopup(hit('miss', 0), 0)
+    I(s).spawnPopup(hit('damage', 7), 0)
+    expect(I(s).popups).toHaveLength(2)
+    for (const p of I(s).popups) expect(p.digits).toBeUndefined()
+    expect(I(s).popups.map((p) => (p.text as Text).text)).toEqual(['MISS', '7'])
+  })
+
+  it('snappy: stack 1 の箱は stack 0 より popupFontSize*0.85 上', () => {
+    const s = setup({ motion: 'snappy' })
+    I(s).spawnPopup(hit('damage', 123), 0, 0)
+    I(s).spawnPopup(hit('damage', 123), 0, 1)
+    const [a, b] = I(s).popups
+    expect(a.digits && b.digits).toBeTruthy()
+    const unit = a.unit
+    expect(a.text.y - b.text.y).toBeCloseTo(popupFontSize(unit) * POPUP_STACK_STEP, 5)
+  })
+
+  it('snappy: 5 桁以上の回復は縮小ぶん (centerDy) 箱が上がる', () => {
+    const s = setup({ motion: 'snappy' })
+    I(s).spawnPopup(hit('damage', 123), 0)
+    I(s).spawnPopup(hit('heal', 12345), 0)
+    const [a, b] = I(s).popups
+    expect(b.digits).toHaveLength(5)
+    const base = popupFontSize(a.unit)
+    expect(b.fontSize).toBe(fitPopupFontSize('12345', base))
+    expect(a.text.y - b.text.y).toBeCloseTo(popupCenterOffset(base, b.fontSize), 5)
+    expect(b.fontSize).toBeLessThan(base)
+  })
+
+  it('snappy: 先頭桁の終了後も末尾桁が残り、フェード中は全桁の alpha が同じ', () => {
+    const s = setup({ motion: 'snappy' })
+    I(s).spawnPopup(hit('damage', 1234), 0)
+    const p = I(s).popups[0]
+    // 跳ね 320ms + 保持 180 の後 = フェード開始は末尾桁の遅れ(150ms)込みで 650ms
+    run(s, 600)
+    expect(p.digits!.map((d) => d.alpha)).toEqual([1, 1, 1, 1])
+    run(s, 60)
+    const al = p.digits!.map((d) => d.alpha)
+    expect(al[0]).toBeLessThan(1)
+    expect(al[0]).toBeGreaterThan(0)
+    for (const a of al) expect(a).toBe(al[0])
+    // 先頭桁単独の寿命(650ms)を過ぎても全体はまだ残る
+    run(s, 80)
+    expect(I(s).popups).toHaveLength(1)
+    expect(p.digits![3].alpha).toBeGreaterThan(0)
+    run(s, 200)
+    expect(I(s).popups).toHaveLength(0)
+  })
+
+  it('snappy: 桁の y は dy*unit、redraw で枠が動いたら箱が追従する', () => {
+    const s = setup({ motion: 'snappy' })
+    I(s).spawnPopup(hit('damage', 123), 0)
+    const p = I(s).popups[0]
+    run(s, 40)
+    const ds = sampleDigitPopup(40, 0, 3, SNAPPY_MOTION_TIMING)
+    expect(ds.dy).toBeLessThan(0)
+    expect(p.digits![0].y).toBeCloseTo(ds.dy * p.unit, 5)
+    const x0 = p.text.x
+    s.redraw(1200, 450)
+    s.tick(1)
+    expect(p.text.x).not.toBeCloseTo(x0, 1)
   })
 })

@@ -195,6 +195,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
  * - 命中を早め（斬り開始 50ms）、行動間を 120→40ms に詰めてテンポを上げる
  * - 距離は少し下げる（踏み出し 0.7→0.55、のけぞり 0.12→0.10）。動きが短いぶん、大きいと「ひゅっ」と飛んで見えるため
  * - のけぞり・倒れ・ダメージ数字・呪文・複数ヒットは default の約 0.75 倍の長さに揃える（動きだけ速く数字が遅いと間延びするため）
+ * - ダメージ・回復の数字は 1 桁ずつ 50ms 差で跳ねさせる (#955)。FF の「ぱらぱらと着地する」リズムを出すため（桁数が多くても合計 150ms まで）
  */
 export const SNAPPY_MOTION_TIMING: MotionTiming = {
   attackStepMs: 130,
@@ -712,11 +713,27 @@ export function sampleDamagePopup(
   return { dy: 0, alpha: 1 - clamp01((t3 - T.popupHoldMs) / T.popupFadeMs), done: false }
 }
 
+/** 桁ごとの開始遅れの合計（最後の桁の遅れ）の上限（ms）。桁数が多い数字で寿命が延びすぎないようにする (#955) */
+export const POPUP_DIGIT_STAGGER_TOTAL_MAX_MS = 150
+
+/** 実際に使う桁ごとの遅れ（ms）: `min(digitStaggerMs, 上限 / (桁数 - 1))`。1 桁・非有限・負は 0 */
+export function effectiveDigitStagger(
+  count: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): number {
+  const n = Number.isFinite(count) ? Math.floor(count) : 1
+  const base = Number.isFinite(timing.digitStaggerMs) ? Math.max(0, timing.digitStaggerMs) : 0
+  if (n <= 1) return 0
+  return Math.min(base, POPUP_DIGIT_STAGGER_TOTAL_MAX_MS / (n - 1))
+}
+
 /**
- * 数字を 1 桁ずつ跳ねさせる (#955)。桁 index は `index * digitStaggerMs` だけ遅れて始まり、桁ごとに自分の時間軸で
- * `sampleDamagePopup` と同じ跳ね・保持・フェードを行う（done も桁ごと。全桁が done になった時点で数字全体が終わり）。
- * `digitStaggerMs` が 0 のときは全桁が `sampleDamagePopup` と完全に一致する。
- * 遅れる前（まだ始まっていない桁）は置き位置に alpha 1 で待つ（done ではない）。範囲外の index・非有限値は安全側（index 0 / 遅れなし）に倒す。
+ * 数字を 1 桁ずつ跳ねさせる (#955)。跳ね（dy）だけ桁ごとに `index * 実効遅れ` ずつ遅れ、自分の時間軸で
+ * `sampleDamagePopup` と同じ 2 回跳ねを行う。保持・フェード（alpha）と done は数字全体で共通で、最後の桁の時間軸
+ * （最後の桁の跳ねが終わってから保持・フェード）から取る。全桁が同時に消え、最後の桁の done が全体の done。
+ * 実効遅れは `effectiveDigitStagger`（桁数が多くても合計 150ms まで）。`digitStaggerMs` が 0 のときは全桁が
+ * `sampleDamagePopup` と完全に一致する。
+ * 遅れる前（まだ始まっていない桁）は置き位置で待つ。範囲外の index・非有限値は安全側（index 0 / 遅れなし）に倒す。
  */
 export function sampleDigitPopup(
   elapsed: number,
@@ -727,13 +744,18 @@ export function sampleDigitPopup(
   const t = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
   const n = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1
   const i = Number.isFinite(index) ? Math.min(n - 1, Math.max(0, Math.floor(index))) : 0
-  const stagger = Number.isFinite(timing.digitStaggerMs) ? Math.max(0, timing.digitStaggerMs) : 0
-  return sampleDamagePopup(t - i * stagger, timing)
+  const stagger = effectiveDigitStagger(n, timing)
+  const own = sampleDamagePopup(t - i * stagger, timing)
+  const last = sampleDamagePopup(t - (n - 1) * stagger, timing)
+  return { dy: own.dy, alpha: last.alpha, done: last.done }
 }
 
-/** 1 桁ぶんの幅（固定ピッチ・px）。桁を同じ幅で並べ、数字の幅の違い（1 と 0 など）で跳ねの位置がぶれないようにする */
+/**
+ * 1 桁ぶんの幅（固定ピッチ・px）。Noto Sans JP Bold の数字の送り幅（約 0.557em。数字は等幅）に合わせ、
+ * 1 個の Text で出したときと同じ幅で並べる。
+ */
 export function popupDigitPitch(fontSize: number): number {
-  return Math.max(1, fontSize) * 0.62
+  return Math.max(1, fontSize) * 0.557
 }
 
 /** ダメージ白・回復緑・ミスは薄い灰（FF5 の色分けに倣う） */
