@@ -776,6 +776,8 @@ export class CharacterLayer extends Container {
   private transitionSerial = 0
   /** show/changeExpression から起動した立ち絵 texture load の未完数。 */
   private pendingPortraitLoads = 0
+  /** #960: sprite ごとの最新 loadTexture 呼び出し（世代番号とその結果 Promise）。 */
+  private portraitLoadGen = new WeakMap<Sprite, { gen: number; promise: Promise<boolean> }>()
   /** アニメーション駆動用 ticker。動いているキャラがいないときは停止しておく */
   private animTicker: Ticker | null = null
   /** ticker.deltaMS の累計を保持してアニメ進行に使う */
@@ -4047,7 +4049,14 @@ export class CharacterLayer extends Container {
     const urls = resolveCharacterImageUrls(assetBaseUrl, cleanExpression)
     this.pendingPortraitLoads += 1
 
-    return (
+    // #960: sprite 単位の世代管理。最新でない呼び出しは texture/scale 等を一切適用せず、最新呼び出しの
+    // 結果（loaded の真偽）を待って返す。onReady は各呼び出しにつき 1 回、最新の結果が出た後に発火する。
+    const gen = (this.portraitLoadGen.get(sprite)?.gen ?? 0) + 1
+    const isStale = (): boolean => this.portraitLoadGen.get(sprite)?.gen !== gen
+    const latestResult = (): Promise<boolean> =>
+      this.portraitLoadGen.get(sprite)?.promise ?? Promise.resolve(false)
+
+    const result: Promise<boolean> =
       // リトライ待機は this.time (TimeController) 経由に通す（生 setTimeout を使わない）。
       // 全タイマーを TimeController に集約する規律に従い、仮想時間エクスポートと整合させる (#389)。
       loadFirstAvailableTexture(
@@ -4058,6 +4067,7 @@ export class CharacterLayer extends Container {
           // destroy 後に解決した場合は反映しない（UAF 防止）。ただし ready 通知 (#293) は
           // finally で発火させ、テキスト側の待ちを必ず解く（sprite が消えても永久待ちにしない）。
           if (sprite.destroyed) return false
+          if (isStale()) return latestResult()
           // ドット絵の拡大縮小フィルタ (#466)。既定 linear（滑らか）を pixel_art: true で
           // nearest-neighbor に切り替え、拡大表示してもブロック状のドットを保つ。
           // `texture.source` の null ガードは reapplyPixelArt() の JSDoc 参照。
@@ -4128,6 +4138,7 @@ export class CharacterLayer extends Container {
           return true
         })
         .catch((err) => {
+          if (isStale()) return latestResult()
           console.warn('[name-name] 立ち絵の読み込みに失敗: ' + urls.join(' , '), err)
           return false
         })
@@ -4137,6 +4148,7 @@ export class CharacterLayer extends Container {
           this.pendingPortraitLoads = Math.max(0, this.pendingPortraitLoads - 1)
           onReady?.()
         })
-    )
+    this.portraitLoadGen.set(sprite, { gen, promise: result })
+    return result
   }
 }
