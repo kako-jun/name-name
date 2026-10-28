@@ -17,19 +17,28 @@ import { Assets, BufferImageSource, PerspectiveMesh, Sprite, Texture } from 'pix
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { PropLayer } from './PropLayer'
 import { TimeController } from './TimeController'
+import { computeCameraProjection } from './cameraProjection'
+import { computeBoardPlacement } from './novelLayout'
 
 const W = 800
 const H = 450
 
-function tex(): Texture {
+function tex(w = W, h = H): Texture {
   return new Texture({
-    source: new BufferImageSource({ resource: new Uint8Array(4), width: W, height: H }),
+    source: new BufferImageSource({ resource: new Uint8Array(4), width: w, height: h }),
   })
 }
 
+// 旧面と新面の取り違え（寸法・位置）を検出できるよう、A/B/C は寸法を変えておく。
+const SIZES: Record<string, [number, number]> = {
+  'A.png': [800, 450],
+  'B.png': [400, 800],
+  'C.png': [1600, 450],
+}
 const TEXTURES: Record<string, Texture> = {}
 function texFor(path: string): Texture {
-  return (TEXTURES[path] ??= tex())
+  const [w, h] = SIZES[path] ?? [W, H]
+  return (TEXTURES[path] ??= tex(w, h))
 }
 
 const mq = { matches: false }
@@ -419,6 +428,110 @@ describe.each([
       expect(kinds(layer)).toEqual(['sprite'])
       time.tick(2000)
       expect(timersOf(time)).toHaveLength(0)
+    })
+  })
+  describe('回転の幾何（旧面・新面の取り違えを検出）', () => {
+    const corners = (m: PerspectiveMesh): number[] =>
+      Array.from((m.geometry as unknown as { corners: ArrayLike<number> }).corners)
+    const bounds = (s: Sprite): number[] => [
+      s.x - s.width / 2,
+      s.y - s.height / 2,
+      s.x + s.width / 2,
+      s.y - s.height / 2,
+      s.x + s.width / 2,
+      s.y + s.height / 2,
+      s.x - s.width / 2,
+      s.y + s.height / 2,
+    ]
+
+    it('開始直後は旧 sprite の bounds、終了直前は最終 sprite の bounds（depth あり・寸法違い）', async () => {
+      const { layer, time } = await setup()
+      layer.add('A.png', 5, '/a', { instant: true })
+      await flush()
+      const oldBounds = bounds(layer.children[0] as Sprite)
+      layer.replace('B.png', 5, 'A.png', '/a', { flipMs: 1000 })
+      await flush()
+      const entry = entriesOf(layer)[0]
+      const run = entry.run!
+      const finalBounds = bounds(entry.sprite!)
+      // 旧面と新面の配置は実際に違う（違わないとこのテストは取り違えを検出できない）。
+      expect(finalBounds[5] - finalBounds[1]).not.toBeCloseTo(oldBounds[5] - oldBounds[1], 0)
+      const c0 = corners(run.oldMesh)
+      for (let i = 0; i < 8; i++) expect(Math.abs(c0[i] - oldBounds[i])).toBeLessThan(0.5)
+      time.tick(980)
+      const c1 = corners(run.newMesh)
+      for (let i = 0; i < 8; i++) expect(Math.abs(c1[i] - finalBounds[i])).toBeLessThan(2)
+    })
+
+    it('スライドイン中の旧面を差し替えても、旧面は最終配置へスナップされて回る', async () => {
+      const { layer } = await setup()
+      layer.add('A.png', 5, '/a')
+      await flush()
+      const entryA = entriesOf(layer)[0]
+      expect(entryA.interval).not.toBeNull()
+      const sprA = entryA.sprite!
+      const target = { y: (entryA as unknown as { targetY: number }).targetY }
+      const halfH = sprA.height / 2
+      expect(sprA.y).not.toBe(target.y)
+      layer.replace('B.png', 5, 'A.png', '/a', { flipMs: 1000 })
+      // ロード待ちの間も旧面は最終位置にある。
+      expect(sprA.y).toBe(target.y)
+      await flush()
+      const run = entriesOf(layer)[0].run!
+      const c0 = corners(run.oldMesh)
+      expect(Math.abs(c0[1] - (target.y - halfH))).toBeLessThan(0.5)
+      expect(Math.abs(c0[5] - (target.y + halfH))).toBeLessThan(0.5)
+    })
+  })
+
+  describe('カメラ変更', () => {
+    it('ロード待ち中にカメラが変わると、旧面は新しいカメラの位置へ置き直される', async () => {
+      const { layer, deferred } = await setup('Theater', ['B.png'])
+      layer.add('A.png', 5, '/a', { instant: true })
+      await flush()
+      const sprA = layer.children[0] as Sprite
+      const before = sprA.y
+      layer.replace('B.png', 5, 'A.png', '/a')
+      layer.setCamera('Theater', 'Audience', 'LookUp')
+      const expected = computeBoardPlacement(
+        800,
+        450,
+        W,
+        H,
+        computeCameraProjection('Theater', 'Audience', 'LookUp', 5)
+      )
+      expect(sprA.y).toBeCloseTo(expected.y, 3)
+      expect(sprA.width).toBeCloseTo(expected.width, 3)
+      expect(sprA.y).not.toBeCloseTo(before, 1)
+      deferred['B.png'].resolve(texFor('B.png'))
+      await flush()
+      expect(entriesOf(layer).find((e) => e.run)).toBeDefined()
+    })
+
+    it('回転中に同じ mode・向き・仰角で setCamera（ズームだけの変更）しても回転は続く', async () => {
+      const { layer, time } = await withFront()
+      layer.replace('B.png', 0, 'A.png', '/a')
+      await flush()
+      time.tick(100)
+      const run = entriesOf(layer)[0].run
+      layer.setCamera('Theater', 'Audience', null)
+      expect(entriesOf(layer)[0].run).toBe(run)
+      expect(kinds(layer)).toEqual(['mesh', 'mesh'])
+      time.tick(2000)
+      expect(kinds(layer)).toEqual(['sprite'])
+    })
+
+    it.each([
+      ['mode', 'Novel', 'Audience', null],
+      ['向き', 'Theater', 'Stage', null],
+      ['仰角', 'Theater', 'Audience', 'LookUp'],
+    ] as const)('%s が変わると回転は打ち切られる', async (_n, mode, orient, elev) => {
+      const { layer } = await withFront()
+      layer.replace('B.png', 0, 'A.png', '/a')
+      await flush()
+      layer.setCamera(mode, orient, elev)
+      expect(entriesOf(layer)[0].run).toBeNull()
+      expect(kinds(layer)).toEqual(['sprite'])
     })
   })
 })
