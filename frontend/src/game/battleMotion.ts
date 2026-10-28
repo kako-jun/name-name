@@ -150,6 +150,8 @@ export interface MotionTiming {
   popupArc2Height: number
   popupHoldMs: number
   popupFadeMs: number
+  /** ダメージ数字を 1 桁ずつ時間差で跳ねさせるときの、桁ごとの開始遅れ（ms）。0 は数字全体を 1 つで跳ねさせる（従来） (#955) */
+  digitStaggerMs: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -184,6 +186,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   popupArc2Height: 0.09,
   popupHoldMs: 240,
   popupFadeMs: 200,
+  digitStaggerMs: 0,
 }
 
 /**
@@ -222,6 +225,7 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   popupArc2Height: 0.08,
   popupHoldMs: 180,
   popupFadeMs: 150,
+  digitStaggerMs: 50,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'
@@ -706,6 +710,30 @@ export function sampleDamagePopup(
   const t3 = t2 - T.popupArc2Ms
   if (t3 < T.popupHoldMs) return { dy: 0, alpha: 1, done: false }
   return { dy: 0, alpha: 1 - clamp01((t3 - T.popupHoldMs) / T.popupFadeMs), done: false }
+}
+
+/**
+ * 数字を 1 桁ずつ跳ねさせる (#955)。桁 index は `index * digitStaggerMs` だけ遅れて始まり、桁ごとに自分の時間軸で
+ * `sampleDamagePopup` と同じ跳ね・保持・フェードを行う（done も桁ごと。全桁が done になった時点で数字全体が終わり）。
+ * `digitStaggerMs` が 0 のときは全桁が `sampleDamagePopup` と完全に一致する。
+ * 遅れる前（まだ始まっていない桁）は置き位置に alpha 1 で待つ（done ではない）。範囲外の index・非有限値は安全側（index 0 / 遅れなし）に倒す。
+ */
+export function sampleDigitPopup(
+  elapsed: number,
+  index: number,
+  count: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): PopupSample {
+  const t = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
+  const n = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1
+  const i = Number.isFinite(index) ? Math.min(n - 1, Math.max(0, Math.floor(index))) : 0
+  const stagger = Number.isFinite(timing.digitStaggerMs) ? Math.max(0, timing.digitStaggerMs) : 0
+  return sampleDamagePopup(t - i * stagger, timing)
+}
+
+/** 1 桁ぶんの幅（固定ピッチ・px）。桁を同じ幅で並べ、数字の幅の違い（1 と 0 など）で跳ねの位置がぶれないようにする */
+export function popupDigitPitch(fontSize: number): number {
+  return Math.max(1, fontSize) * 0.62
 }
 
 /** ダメージ白・回復緑・ミスは薄い灰（FF5 の色分けに倣う） */
