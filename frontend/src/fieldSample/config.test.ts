@@ -873,6 +873,12 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
     c.battle = { motion: 'snappy' }
     expect(ok(c).warnings?.[0]).toContain('motion')
+    // ff でも layout が front なら効かない（警告する）。presentation の警告とは別に motion の警告が出る
+    c.battle = { presentation: 'ff', layout: 'front', motion: 'snappy' }
+    expect(ok(c).warnings?.some((w) => w.includes('battle.motion'))).toBe(true)
+    // ff かつ side（明示）は効くので警告しない
+    c.battle = { presentation: 'ff', layout: 'side', motion: 'snappy' }
+    expect(ok(c).warnings).toBeUndefined()
   })
 
   it('battle.commands と skills を読む。未指定は commands キーなし・skills 空 (#873)', () => {
