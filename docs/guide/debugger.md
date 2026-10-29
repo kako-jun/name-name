@@ -246,7 +246,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 
 切り替えるたびに `BattleScreen` を作り直す（戦闘の進行はリセットされる）。**スペースキー**（またはボタン）で、現在の設定とひとつ前の設定を即座に入れ替える。「1秒ごとに自動交互」をオンにすると 1 秒間隔で交互に表示する。見た目が変わる変更をライブ A/B で判定するための機能。ひとつ前の設定が無い間（起動直後）は、切替ボタンと自動交互は無効で、画面にその旨を案内する。表示中の設定・論理サイズ・`window.devicePixelRatio`・`renderer.resolution`・物理ピクセル数は画面上に表示される。
 
-**解像度の差**: 本編の `app.init`（`RaycastRenderer`）は `resolution` を指定しない（= 1）。サンプルの既定も本編相当の 1 にしてあり、`実DPR` に切り替えると `devicePixelRatio` 倍の解像度で描く（高 DPI 端末でくっきり見えるが、本編の見た目とは異なる）。見た目を本編と比較するときは既定の `本編相当(1)` を使う。`実DPR` は描き直しのたびに `devicePixelRatio` を読み直すだけで、ブラウザのズームやモニター移動には、次に設定を変えるまで追従しない。
+**解像度の差**: 本編の `app.init`（`RaycastRenderer` / `TopDownRenderer`）は `resolution` を指定しない（= 1）。一方 field-sample（`/field-sample.html`）は別で、`resolution=devicePixelRatio`（上限 2・裏バッファ長辺 8192px 以内）＋`autoDensity` で描く（下の field-sample 節）。この節のサンプル（battle-sample）の既定は本編相当の 1。サンプルの既定も本編相当の 1 にしてあり、`実DPR` に切り替えると `devicePixelRatio` 倍の解像度で描く（高 DPI 端末でくっきり見えるが、本編の見た目とは異なる）。見た目を本編と比較するときは既定の `本編相当(1)` を使う。`実DPR` は描き直しのたびに `devicePixelRatio` を読み直すだけで、ブラウザのズームやモニター移動には、次に設定を変えるまで追従しない。
 
 **front の味方人数**: 本編は `layout=front` のとき先頭 1 人（hero）だけを戦闘エンジンに渡す（`fieldBattle.ts` の `openFieldBattle`）。サンプルも同じ条件にし、`layout=front` では味方人数の選択を無効にして常に 1 人で表示する。`side` は選択どおりの人数を渡す。
 
@@ -309,6 +309,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 
 一枚絵の上を主人公が歩き、絵の端で隣の絵へ移る「一枚絵フィールド」の試作を確認する独立ページ。ビルド成果物の `field-sample.html` として出力される（本編からはリンクしない・既存の `TopDownRenderer` とは別モードで、MD パイプラインにも組み込んでいない。設定は JSON で持つ）。
 
+- 描画解像度 (sit-by-me#53): `Application.init` に `resolution=devicePixelRatio`（実用上限 2。大きいシーンは裏バッファ長辺が 8192px に収まるよう頭打ち。純関数は `fieldSample/renderResolution.ts`）＋`autoDensity: true`。本編の RPG レンダラ（`TopDownRenderer` / `RaycastRenderer`）は `resolution` 未指定＝1 のまま。DPR は起動時（と起動シーンの大きさ）で固定し、実行中のモニター移動・ブラウザのズームには追随しない（再読み込みで反映）。戦闘も同じ `Application` に載るため、戦闘の canvas も DPR 倍の裏バッファになる（CSS 表示サイズは変わらない）。
 - 開発サーバー: `http://localhost:7374/field-sample.html`。ビルド後は `dist/field-sample.html` を静的配信して開く
 - 設定 JSON は `?config=<URL>`（なければ `frontend/src/fieldSample/teramachi.sample.json`＝sit-by-me の寺町 4 枚（`fields/legacy/TRM-07〜10.webp` と `fields/legacy/masks/TRM-07〜10-mask.webp`。山門の通り→用水沿い→銭湯→緩い坂を端のリンクでつないだ例。背景は台帳の主路 TRM-07→08→09→10）。主人公はナム（C002）の小学生・車椅子の 8 方向歩行、敵は `enemies/M001`・`M008`、味方立ち絵は `characters/C00x/poses/`、戦闘背景は `battle-backgrounds/BG001.webp`。素材のパスは `assets/images/...webp` の現行構成。画像はコピーせず URL で指す。sit-by-me のリポジトリのルートを CORS 付きで配信する前提（例: ルートで `python3 -m http.server 8765` に `Access-Control-Allow-Origin: *` を付けたもの。サンプルの URL は `http://localhost:8765/...`）。画像は fetch で取得するので CORS が必須
 - 操作: 矢印キー / WASD（斜めを含む 8 方向）、またはキャンバスを押し続ける（ドラッグ）と足元から指の方向へ連続した向きで歩く。操作の案内は画面に常に出る。「歩行マスクと足元を表示」で歩ける領域（緑）と足元の点（赤）を重ねる
