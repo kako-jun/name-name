@@ -192,7 +192,7 @@ export class BackgroundBoardLayer extends Container {
   /**
    * 背景板を1つ追加する（既存のものは消さない。加算的）。
    * `assetBaseUrl` が空なら何もしない（他レイヤーの同種ガードと同じ）。
-   * `opts.instant`（復元専用、goBack/seekTo/セーブ復元/任意局面起動）はスライドインを起こさず
+   * `opts.instant`（goBack/seekTo/セーブ復元/任意局面起動の復元、およびスキップ中の再生 #996）はスライドインを起こさず
    * 即座に最終位置へ配置する（ADR-0002: 演出の中間状態を復元しない）。
    */
   add(path: string, depth: number, assetBaseUrl: string, opts?: { instant?: boolean }): void {
@@ -238,7 +238,7 @@ export class BackgroundBoardLayer extends Container {
       return
     }
     if (index < 0) {
-      this.add(path, depth, assetBaseUrl)
+      this.add(path, depth, assetBaseUrl, { instant: opts?.skip === true })
       return
     }
     const old = this.entries[index]
