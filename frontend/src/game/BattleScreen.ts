@@ -3115,7 +3115,9 @@ export class BattleScreen extends Container {
       const a = sampleActor(ev.kind, active.elapsed, this.motionTiming)
       // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
       const downed = out.downProgress > 0
-      out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
+      // 敵の攻撃は敵を踏み出させない (sit-by-me #63/#64)。通知は自己モザイク (enemyAttackMosaicSize) が担う
+      const forward = side === 'enemy' || downed ? 0 : a.forward
+      out = { ...out, forward, pose: downed ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
     const tl = this.timelineOf(ev)
@@ -3176,7 +3178,10 @@ export class BattleScreen extends Container {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
           sh.alpha = view.container.alpha
         }
-        if (side === 'party') this.applyHitMosaic(view, this.hitMosaicSize(index))
+        this.applyHitMosaic(
+          view,
+          side === 'party' ? this.hitMosaicSize(index) : this.enemyAttackMosaicSize(index)
+        )
       })
     }
     apply('enemy', this.enemyViews)
@@ -3218,6 +3223,24 @@ export class BattleScreen extends Container {
       if (best === null || pulse.size > best) best = pulse.size
     }
     return best
+  }
+
+  /**
+   * 敵の攻撃通知 (sit-by-me #64): 攻撃する敵 index 自身のアクスタが、行動の頭で一瞬粗いモザイクになって戻る。
+   * 敵は踏み出さない。山の長さは `min(hitMosaicMs, 行動の長さ)`、最大は hitMosaicMaxSize（被弾モザイクと同じ既存値）。
+   * 敵の通常攻撃（attack）で、倒れていない間だけ。無ければ null
+   */
+  private enemyAttackMosaicSize(index: number): number | null {
+    const T = this.motionTiming
+    if (T.hitMosaicMs <= 0) return null
+    const active = this.playback.active
+    if (!active) return null
+    const ev = active.event
+    if (ev.kind !== 'attack' || ev.actor.side !== 'enemy' || ev.actor.index !== index) return null
+    if (this.sampleEntity('enemy', index).downProgress > 0) return null
+    const len = Math.min(T.hitMosaicMs, this.timelineOf(ev).duration)
+    const pulse = samplePixelatePulse(active.elapsed, len, T.hitMosaicMaxSize)
+    return pulse.done ? null : pulse.size
   }
 
   /** size が 2 以上の間だけ自分のフィルタを足し、size を更新する。1 以下・null なら外す（他のフィルタには触れない） */
