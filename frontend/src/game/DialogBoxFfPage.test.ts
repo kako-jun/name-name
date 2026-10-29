@@ -67,7 +67,8 @@ function advance(box: DialogBox, ms: number): void {
 /**
  * 基準時刻を現在の clock に揃え、以降の update の経過時間を 0 から数える。
  * Ticker の lastTime は構築時の performance.now() なので、揃えないと最初の update で
- * 実時間との差（maxElapsedMS=100ms で頭打ち）ぶん typewriter が進み、実行環境の速さで結果が変わる。
+ * 偽の clock と構築時の performance.now() との差（clock が先にあるときだけ、maxElapsedMS=100ms で頭打ち
+ * のぶん）typewriter が進み、実行環境の速さで結果が変わる。
  */
 function prime(box: DialogBox): void {
   const ticker = internals(box).ticker
