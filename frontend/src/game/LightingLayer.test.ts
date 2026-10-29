@@ -17,7 +17,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LightingLayer, type SpotlightLayerState } from './LightingLayer'
 import { TimeController } from './TimeController'
-import type { CharacterLayer } from './CharacterLayer'
+import { CharacterLayer } from './CharacterLayer'
 
 const SCREEN_W = 800
 const SCREEN_H = 450
@@ -104,7 +104,7 @@ describe('追従対象の解決 (#693)', () => {
     layer.set('alice', '#ffffff', 0.2)
     time.tick(48) // 16ms ticker を3回分進める
 
-    expect(getCurrentPosition).toHaveBeenCalledWith('alice')
+    expect(getCurrentPosition).toHaveBeenCalledWith('alice', { excludeExiting: true })
     expect(getCurrentPosition.mock.calls.length).toBeGreaterThanOrEqual(3)
   })
 
@@ -205,5 +205,306 @@ describe('状態遷移・復元 / ticker 管理 (#693)', () => {
 
     expect(setIntervalSpy).toHaveBeenCalledTimes(2)
     expect(internals(layer).tickerId).not.toBeNull()
+  })
+})
+
+describe('対象不在時の光の位置 (#992)', () => {
+  const CENTER = { x: SCREEN_W / 2, y: SCREEN_H / 2 }
+
+  function setup(initial: { x: number; y: number } | null) {
+    const ref = { pos: initial }
+    const characterLayer = mockCharacterLayer(() => (ref.pos ? { ...ref.pos } : null))
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, characterLayer, time)
+    return { ref, time, layer }
+  }
+
+  it('先に光: 対象が未登場の間は中央、登場したら追従を始める', () => {
+    const { ref, time, layer } = setup(null)
+    layer.set('alice', '#ffffff', 0.2)
+    time.tick(32)
+    expect(layer.getLightPosition()).toEqual(CENTER)
+    ref.pos = { x: 100, y: 50 }
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual({ x: 100, y: 50 })
+    ref.pos = { x: 120, y: 60 }
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual({ x: 120, y: 60 })
+  })
+
+  it('退場後: 最後にいた位置に光が残り、自動では消えない', () => {
+    const { ref, time, layer } = setup({ x: 100, y: 50 })
+    layer.set('alice', '#ffffff', 0.2)
+    time.tick(16)
+    ref.pos = { x: 700, y: 40 }
+    time.tick(16)
+    ref.pos = null
+    time.tick(160)
+    expect(layer.getLightPosition()).toEqual({ x: 700, y: 40 })
+    expect(layer.getState()).not.toBeNull()
+  })
+
+  it('再登場: 退場後に同じ対象が戻ると再び追従する', () => {
+    const { ref, time, layer } = setup({ x: 100, y: 50 })
+    layer.set('alice', '#ffffff', 0.2)
+    time.tick(16)
+    ref.pos = null
+    time.tick(32)
+    ref.pos = { x: 300, y: 200 }
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual({ x: 300, y: 200 })
+  })
+
+  it('光だけ: 対象なしは中央固定', () => {
+    const { time, layer } = setup({ x: 1, y: 2 })
+    layer.set(null, '#ffffff', 0.2)
+    time.tick(48)
+    expect(layer.getLightPosition()).toEqual(CENTER)
+  })
+
+  it('消灯: clear() のみで消える（位置も null）', () => {
+    const { ref, time, layer } = setup({ x: 100, y: 50 })
+    layer.set('alice', '#ffffff', 0.2)
+    time.tick(16)
+    ref.pos = null
+    time.tick(32)
+    layer.clear()
+    expect(layer.getState()).toBeNull()
+    expect(layer.getLightPosition()).toBeNull()
+  })
+
+  it('復元: 対象不在なら最後の位置は不明なので中央にフォールバックし、登場すれば追従する', () => {
+    const { ref, time, layer } = setup(null)
+    layer.restore({ target: 'alice', color: '#ffffff', radius: 0.2 })
+    expect(layer.getLightPosition()).toEqual(CENTER)
+    ref.pos = { x: 10, y: 20 }
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual({ x: 10, y: 20 })
+  })
+
+  it('別の [スポットライト:] で点け直すと、前の対象の最後の位置は引き継がない', () => {
+    const { ref, time, layer } = setup({ x: 100, y: 50 })
+    layer.set('alice', '#ffffff', 0.2)
+    time.tick(16)
+    ref.pos = null
+    time.tick(16)
+    layer.set('bob', '#ffffff', 0.2)
+    expect(layer.getLightPosition()).toEqual(CENTER)
+  })
+})
+
+describe('点け直しでの最後の位置の扱い (#992)', () => {
+  const CENTER = { x: SCREEN_W / 2, y: SCREEN_H / 2 }
+  function remain() {
+    const ref = { pos: { x: 100, y: 50 } as { x: number; y: number } | null }
+    const time = virtualTime()
+    const layer = new LightingLayer(
+      SCREEN_W,
+      SCREEN_H,
+      mockCharacterLayer(() => ref.pos),
+      time
+    )
+    layer.set('alice', '#ffffff', 0.2)
+    time.tick(16)
+    ref.pos = null
+    time.tick(32)
+    return { layer, time, ref }
+  }
+
+  it('同じ対象のまま色・半径を書き直しても、残っている光の位置を保つ', () => {
+    const { layer } = remain()
+    layer.set('alice', '#ff0000', 0.4)
+    expect(layer.getLightPosition()).toEqual({ x: 100, y: 50 })
+  })
+
+  it('消灯後の点け直しでは位置を破棄する（対象不在なら中央）', () => {
+    const { layer } = remain()
+    layer.clear()
+    layer.set('alice', '#ffffff', 0.2)
+    expect(layer.getLightPosition()).toEqual(CENTER)
+  })
+
+  it('対象を null（光だけ）に変えると位置を破棄して中央になる', () => {
+    const { layer } = remain()
+    layer.set(null, '#ffffff', 0.2)
+    expect(layer.getLightPosition()).toEqual(CENTER)
+  })
+
+  it('restore() は同じ対象でも位置を引き継がず、対象不在なら中央にする', () => {
+    const { layer } = remain()
+    layer.restore({ target: 'alice', color: '#ffffff', radius: 0.2 })
+    expect(layer.getLightPosition()).toEqual(CENTER)
+  })
+})
+
+describe('実 CharacterLayer との結合 (#992)', () => {
+  it('即時退場: 退場直前の位置に光が残り、同じキャラが再登場すると追従を再開する', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual({ x: SCREEN_W / 2, y: SCREEN_H / 2 }) // 先に光（未登場）
+
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    time.tick(16)
+    const onStage = chars.getCurrentPosition('hero')!
+    expect(layer.getLightPosition()).toEqual(onStage)
+
+    chars.remove('hero', { instant: true })
+    time.tick(32)
+    expect(chars.getCurrentPosition('hero')).toBeNull()
+    expect(layer.getLightPosition()).toEqual(onStage) // 退場後も最後の位置
+
+    chars.show('hero', 'normal', '左', '/assets', { instant: true })
+    time.tick(16)
+    const again = chars.getCurrentPosition('hero')!
+    expect(again.x).not.toBe(onStage.x)
+    expect(layer.getLightPosition()).toEqual(again)
+  })
+
+  it('フェード退場: 退場アニメ中は追従し、削除完了後はその最後の位置に残る', async () => {
+    vi.useFakeTimers()
+    try {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const time = virtualTime()
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+      chars.show('hero', 'normal', '中央', '/assets', { instant: true })
+      layer.set('hero', '#ffffff', 0.2)
+      time.tick(16)
+      const before = chars.getCurrentPosition('hero')!
+      chars.remove('hero')
+      await vi.advanceTimersByTimeAsync(5000)
+      time.tick(32)
+      expect(chars.getCurrentPosition('hero')).toBeNull() // 前提: 退場完了で Map から消えた
+      expect(layer.getLightPosition()).toEqual(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('歩行退場: 退場中は追従を更新せず、立っていた位置に残る（画面外に出ない・完了後も同じ）', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const standing = chars.getCurrentPosition('hero')!
+    expect(layer.getLightPosition()).toEqual(standing)
+
+    chars.remove('hero', { exitDirection: 'Shimote' })
+    const internal = chars as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    const walked = (ms: number) => {
+      internal.elapsedMs += ms
+      internal.animTicker?.update()
+      time.tick(16)
+    }
+    walked(700) // 歩行の途中: sprite は動いているが光は動かない
+    expect(chars.getCurrentPosition('hero')!.x).not.toBe(standing.x)
+    expect(layer.getLightPosition()).toEqual(standing)
+    walked(2000) // 歩行完了（Map から削除）
+    expect(chars.getCurrentPosition('hero')).toBeNull()
+    const p = layer.getLightPosition()!
+    expect(p).toEqual(standing)
+    expect(p.x).toBeGreaterThanOrEqual(0)
+    expect(p.x).toBeLessThanOrEqual(SCREEN_W)
+  })
+
+  describe('退場開始の位置を同期で確定する（スキップ相当・tick を回さない）', () => {
+    it('同じ同期区間の「show → 即時 remove」でも、光は登場位置に残る（点灯時は未登場）', () => {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, virtualTime())
+      layer.set('hero', '#ffffff', 0.2) // 未登場 → 中央
+      chars.show('hero', 'normal', '右', '/assets', { instant: true })
+      const standing = chars.getCurrentPosition('hero')!
+      chars.remove('hero', { instant: true })
+      expect(layer.getLightPosition()).toEqual(standing)
+      expect(standing.x).not.toBe(SCREEN_W / 2)
+    })
+
+    it('同じ同期区間の「位置変更 → 即時 remove」でも、光は変更後の位置に残る', () => {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const time = virtualTime()
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+      chars.show('hero', 'normal', '左', '/assets', { instant: true })
+      layer.set('hero', '#ffffff', 0.2)
+      time.tick(16)
+      const left = chars.getCurrentPosition('hero')!
+      chars.show('hero', 'normal', '右', '/assets', { instant: true })
+      const right = chars.getCurrentPosition('hero')!
+      expect(right.x).not.toBe(left.x)
+      chars.remove('hero', { instant: true }) // tick は回さない
+      expect(layer.getLightPosition()).toEqual(right)
+    })
+
+    it('別のキャラの退場には反応しない', () => {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, virtualTime())
+      layer.set('hero', '#ffffff', 0.2)
+      chars.show('other', 'normal', '右', '/assets', { instant: true })
+      chars.remove('other', { instant: true })
+      expect(layer.getLightPosition()).toEqual({ x: SCREEN_W / 2, y: SCREEN_H / 2 })
+    })
+  })
+
+  it('入場の歩行中に方向未指定で退場しても、光は退場開始時点の位置に残る', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    layer.set('hero', '#ffffff', 0.2)
+    chars.show('hero', 'normal', '右', '/assets', { enterDirection: 'Kamite' })
+    const internal = chars as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 500
+    internal.animTicker?.update()
+    time.tick(16)
+    const mid = chars.getCurrentPosition('hero')!
+    chars.remove('hero') // 方向未指定 → フェード退場（x は凍結）
+    time.tick(64)
+    expect(layer.getLightPosition()).toEqual(mid)
+  })
+
+  it('退場フェード中に同じキャラが再 show されたら、追従を再開する', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    chars.show('hero', 'normal', '左', '/assets', { instant: true })
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const left = chars.getCurrentPosition('hero')!
+    chars.remove('hero') // フェード退場開始（Map には残る）
+    time.tick(32)
+    expect(layer.getLightPosition()).toEqual(left)
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    time.tick(16)
+    const right = chars.getCurrentPosition('hero')!
+    expect(right.x).not.toBe(left.x)
+    expect(layer.getLightPosition()).toEqual(right)
+  })
+
+  it('歩行退場の途中で再度 remove（即時）されても、光は最初の退場開始位置のまま', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const standing = chars.getCurrentPosition('hero')!
+    chars.remove('hero', { exitDirection: 'Shimote' })
+    const internal = chars as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 700
+    internal.animTicker?.update()
+    expect(chars.getCurrentPosition('hero')!.x).not.toBe(standing.x)
+    chars.remove('hero', { instant: true }) // 退場中の再 remove（スキップ等）
+    expect(layer.getLightPosition()).toEqual(standing)
   })
 })

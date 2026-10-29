@@ -18,8 +18,9 @@
  *
  * 対象キャラの現在座標は毎フレーム `CharacterLayer.getCurrentPosition()` に問い合わせる
  * （キャラの入場退場モーション #684・将来の立ち位置変更に追従するため、生成時点の座標を
- * 固定で保持しない、Issue #693 方針）。`target` が未指定、または対象キャラが現在表示されて
- * いない場合は画面中央に固定表示する。
+ * 固定で保持しない、Issue #693 方針）。`target` が未指定なら画面中央に固定表示する。対象が
+ * 未登場の間は中央、退場後は最後に観測した位置に光を残し、再登場したら追従を再開する (#992)。
+ * 光は `[スポットライト消灯]` でのみ消える。
  *
  * カメラモード非依存（`CameraMode` に関わらず機能する、#693 方針）。レイヤー順は
  * `CharacterLayer` の直後・`PropLayer` の前（docs/architecture.md「シアターモード構想」→
@@ -75,6 +76,12 @@ export class LightingLayer extends Container {
   private readonly sprite: Sprite | null
   private state: SpotlightLayerState | null = null
   private tickerId: number | null = null
+  /**
+   * 対象を最後に観測した位置 (#992)。対象が退場して不在になっても光をそこに残すための実行時の値。
+   * settled state には持たせない（ADR-0002: 保存するのは最終状態だけ）。点け直し・復元・消灯で破棄し、
+   * 復元時に対象が不在なら中央にフォールバックする。
+   */
+  private lastTargetPos: { x: number; y: number } | null = null
 
   constructor(
     private readonly screenWidth: number,
@@ -85,6 +92,12 @@ export class LightingLayer extends Container {
     super()
     // 光の演出は入力を奪わない（誤タップで本文が進むのを防ぐ、他の演出レイヤーと同じ規律）。
     this.eventMode = 'none'
+    // 対象が退場を始めた時点の立ち位置を CharacterLayer から同期で受け取る (#992)。16ms tick の
+    // 取りこぼし（スキップで登場→退場が 1 tick 内に済む等）に左右されず、光を立っていた位置に残す。
+    // モック CharacterLayer（単体テスト）は持たないので存在確認する。
+    characterLayer.setExitStartListener?.((name, pos) => {
+      if (this.state && this.state.target === name) this.lastTargetPos = { x: pos.x, y: pos.y }
+    })
     const canvas = buildSpotlightGradientCanvas()
     if (canvas) {
       const sprite = new Sprite(Texture.from(canvas))
@@ -107,6 +120,9 @@ export class LightingLayer extends Container {
    * フロント側の最終防御。`BackgroundBoard`/`Prop` の depth クランプと同じ方針）。
    */
   set(target: string | null, color: string, radius: number): void {
+    // 直前が消灯中、または対象が変わるときだけ最後の位置を破棄する (#992)。同じ対象のまま
+    // 色・半径だけ書き直したなら、残っている光の位置を保つ。
+    if (!this.state || this.state.target !== target) this.lastTargetPos = null
     this.state = {
       target,
       color: color || '#ffffff',
@@ -120,6 +136,7 @@ export class LightingLayer extends Container {
   /** 消灯する（`[スポットライト消灯]`）。 */
   clear(): void {
     this.state = null
+    this.lastTargetPos = null
     this.stopTicker()
     if (this.sprite) this.sprite.visible = false
   }
@@ -130,6 +147,8 @@ export class LightingLayer extends Container {
    * と同じ役割）。`null` は消灯。
    */
   restore(state: SpotlightLayerState | null): void {
+    // 最後の位置は保存しない（ADR-0002）ので、復元では必ず破棄して対象不在なら中央に倒す (#992)。
+    this.lastTargetPos = null
     if (state) {
       this.set(state.target, state.color, state.radius)
     } else {
@@ -162,14 +181,34 @@ export class LightingLayer extends Container {
    */
   private redraw(): void {
     if (!this.state) return
-    const pos = this.state.target ? this.characterLayer.getCurrentPosition(this.state.target) : null
-    const cx = pos ? pos.x : this.screenWidth / 2
-    const cy = pos ? pos.y : this.screenHeight / 2
+    const { x: cx, y: cy } = this.resolvePosition()
     if (!this.sprite) return
     this.sprite.tint = parseHexColor(this.state.color)
     this.sprite.position.set(cx, cy)
     const diameterPx = Math.max(2, this.state.radius * this.screenWidth * 2)
     this.sprite.width = diameterPx
     this.sprite.height = diameterPx
+  }
+
+  /**
+   * 光が今いる位置（レイヤー座標）。消灯中は `null`。**テスト用**の副作用のない読み取りで、
+   * ticker/`set()`/退場通知が最後に解決した位置を返す（本番コードは使わない）。tick の後に対象が
+   * 動いた場合は次の tick まで古い値を返す。
+   */
+  getLightPosition(): { x: number; y: number } | null {
+    if (!this.state) return null
+    return this.lastTargetPos ?? { x: this.screenWidth / 2, y: this.screenHeight / 2 }
+  }
+
+  private resolvePosition(): { x: number; y: number } {
+    const pos = this.state?.target
+      ? this.characterLayer.getCurrentPosition(this.state.target, { excludeExiting: true })
+      : null
+    if (pos) {
+      this.lastTargetPos = { x: pos.x, y: pos.y }
+      return this.lastTargetPos
+    }
+    // 対象が未登場・退場済み (#992): 最後に観測した位置に光を残す。一度も観測していなければ中央。
+    return this.lastTargetPos ?? { x: this.screenWidth / 2, y: this.screenHeight / 2 }
   }
 }

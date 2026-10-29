@@ -3978,6 +3978,13 @@ export class CharacterLayer extends Container {
       return
     }
     const instant = options?.instant === true
+    // 退場を始める時点の立ち位置を同期で通知する (#992)。スポットライトは自前の 16ms tick ではなく
+    // これで「最後に立っていた位置」を確定する（スキップで 1 tick の間に登場→退場が済んでも、
+    // 歩行・フェード・即時のどれでも同じ位置になる）。既に退場中の再 remove は通知しない。
+    if (this.exitStartListener && !state.renderOnly && !this.isExiting(state)) {
+      const pos = this.getCurrentPosition(character)
+      if (pos) this.exitStartListener(character, pos)
+    }
     // 読み込み待ちの間に孤児化した同キャラの旧ポーズも一緒に落とす (#952)。最新の遷移の `.then` は
     // この退場で新 state が退場中になると何もしなくなるため、ここで片付ける。
     this.retireOrphanTransitions(
@@ -4058,6 +4065,15 @@ export class CharacterLayer extends Container {
     return result
   }
 
+  /** 退場開始の通知先 (#992)。`LightingLayer` が登録する（1 つだけ）。 */
+  private exitStartListener: ((name: string, pos: { x: number; y: number }) => void) | null = null
+
+  setExitStartListener(
+    listener: ((name: string, pos: { x: number; y: number }) => void) | null
+  ): void {
+    this.exitStartListener = listener
+  }
+
   /**
    * 指定 identifier の現在の表示位置を返す (#693 追うスポットライト用)。
    *
@@ -4072,11 +4088,17 @@ export class CharacterLayer extends Container {
    * （`LightingLayer` が毎フレーム呼ぶことでキャラの移動に追従する、Issue #693 方針）。
    *
    * 対象が現在表示されていない（show されていない、または退場完了で Map から削除済み）場合は
-   * `null` を返す。
+   * `null` を返す。`excludeExiting` 指定時は退場中（フェード・walk）も `null`。
    */
-  getCurrentPosition(name: string): { x: number; y: number } | null {
+  getCurrentPosition(
+    name: string,
+    options?: { excludeExiting?: boolean }
+  ): { x: number; y: number } | null {
     const state = this.characters.get(name)
     if (!state) return null
+    // 退場中（退場フェード・退場 walk）は「立っている」位置ではない (#992)。スポットライトは
+    // 退場開始前の立ち位置に光を残したいので、退場中を不在として扱わせる。
+    if (options?.excludeExiting && this.isExiting(state)) return null
     return { x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 }
   }
 
