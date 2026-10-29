@@ -20,6 +20,7 @@ import {
   snapToWalkable,
   stepMove,
   walkFrame,
+  fieldFrames,
   type Edge,
   type FieldLink,
   type WalkMask,
@@ -516,9 +517,36 @@ describe('walkFrame の周期と停止コマ (sit-by-me#59)', () => {
     expect(walkFrame(false, 0, F)).toBe(0)
   })
 
-  it('同行者も同じ関数・同じ周期で同じコマになる', () => {
-    for (let i = 0; i < 8; i++)
-      expect(walkFrame(true, i * F, F, STAND, 1)).toBe(STAND[i % STAND.length])
+  it('周期に範囲外・非整数のコマ番号があれば idleFrame に倒れる', () => {
+    expect(walkFrame(true, 0, F, [3], 1)).toBe(1)
+    expect(walkFrame(true, 0, F, [-1], 1)).toBe(1)
+    expect(walkFrame(true, 0, F, [1.5], 1)).toBe(1)
+  })
+})
+
+describe('fieldFrames: 主人公と同行者は別の周期 (sit-by-me#59)', () => {
+  const F = 140
+  const STAND = { cycle: [0, 1, 2, 1], idleFrame: 1 }
+
+  it('同行者の指定が無ければ主人公が立位でも同行者は従来の [0,1,2]・停止 0', () => {
+    const seq = [0, 1, 2, 3].map((i) => fieldFrames(true, i * F, F, STAND, null))
+    expect(seq.map((x) => x.player)).toEqual([0, 1, 2, 1])
+    expect(seq.map((x) => x.companion)).toEqual([0, 1, 2, 0])
+    expect(fieldFrames(false, 0, F, STAND, undefined)).toEqual({ player: 1, companion: 0 })
+  })
+
+  it('主人公は従来（車椅子）・同行者は立位、の組み合わせ', () => {
+    const seq = [0, 1, 2, 3].map((i) => fieldFrames(true, i * F, F, {}, STAND))
+    expect(seq.map((x) => x.player)).toEqual([0, 1, 2, 0])
+    expect(seq.map((x) => x.companion)).toEqual([0, 1, 2, 1])
+    expect(fieldFrames(false, 0, F, {}, STAND)).toEqual({ player: 0, companion: 1 })
+  })
+
+  it('それぞれが自分の周期を使う', () => {
+    const p = { cycle: [2, 2], idleFrame: 2 }
+    const c = { cycle: [1, 0], idleFrame: 1 }
+    expect(fieldFrames(true, F, F, p, c)).toEqual({ player: 2, companion: 0 })
+    expect(fieldFrames(false, 0, F, p, c)).toEqual({ player: 2, companion: 1 })
   })
 })
 

@@ -39,14 +39,14 @@ confinement は外れる（後勝ち。別ファイルの `debug_scene` 内の�
 `debug_scene: <id> → not found (fallback to entry)` と表示する（`?scene=` が解決済みなら
 `not found (ignored)`）。デバッグ指定がある起動では、クイックセーブの自動ロードは行わない。
 
-| クエリ | 意味 | 例 |
-|---|---|---|
-| `debug_scene` | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移） | `?debug_scene=1-2` |
-| `debug_flags` | 開始時に立てるフラグ（`key:val` をカンマ区切り）。その訪問の `[条件:]` を入場時に評価する flags（入場時 flags）にもなる（#799）。ブロック内で `[フラグ:]` が同じフラグを変えても、入場済みのブロックの残りは流れる | `&debug_flags=saw_characters:true,gold:100` |
-| `debug_eventIndex` | 開始イベント index（省略時 0）。`[ジャンプ:]` を指すと、そこから遷移を再予約して先へ進む（遷移先不在なら警告して停止、#733） | `&debug_eventIndex=3` |
-| `debug_textIndex` | 開始テキスト index（省略時 0） | `&debug_textIndex=2` |
-| `debug_script` | クリック操作列を自動再生（カンマ区切り） | `?debug_script=advance,advance,choice:2-1` |
-| `debug_unlock_all` | `1` で全選択肢の `[条件: flag]` ロックを強制解放（#652） | `?debug_unlock_all=1` |
+| クエリ             | 意味                                                                                                                                                                                                               | 例                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| `debug_scene`      | 開始シーン ID（confinement なし。ファイル境界を無視して直接遷移）                                                                                                                                                  | `?debug_scene=1-2`                          |
+| `debug_flags`      | 開始時に立てるフラグ（`key:val` をカンマ区切り）。その訪問の `[条件:]` を入場時に評価する flags（入場時 flags）にもなる（#799）。ブロック内で `[フラグ:]` が同じフラグを変えても、入場済みのブロックの残りは流れる | `&debug_flags=saw_characters:true,gold:100` |
+| `debug_eventIndex` | 開始イベント index（省略時 0）。`[ジャンプ:]` を指すと、そこから遷移を再予約して先へ進む（遷移先不在なら警告して停止、#733）                                                                                       | `&debug_eventIndex=3`                       |
+| `debug_textIndex`  | 開始テキスト index（省略時 0）                                                                                                                                                                                     | `&debug_textIndex=2`                        |
+| `debug_script`     | クリック操作列を自動再生（カンマ区切り）                                                                                                                                                                           | `?debug_script=advance,advance,choice:2-1`  |
+| `debug_unlock_all` | `1` で全選択肢の `[条件: flag]` ロックを強制解放（#652）                                                                                                                                                           | `?debug_unlock_all=1`                       |
 
 ### 全ルート強制解放（`debug_unlock_all`）
 
@@ -75,11 +75,11 @@ http://localhost:5173/play/<id>?debug_unlock_all=1
 
 クリック相当の操作を順に自動再生する。`startFrom`（状態指定）より**優先**される。ただし空・全トークン無効で 0 件になった場合は `debug_scene` 指定にフォールスルーする（空 script が有効な scene 指定を握り潰さない）。
 
-| トークン | 動作 |
-|---|---|
-| `advance` | 次のテキスト／次のイベントへ進む（クリック1回相当） |
+| トークン        | 動作                                                                                                                                                                                                             |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `advance`       | 次のテキスト／次のイベントへ進む（クリック1回相当）                                                                                                                                                              |
 | `choice:<jump>` | 選択肢表示をスキップして `<jump>` 先シーンへ直接遷移。未ロードのサブ MD のシーンなら、遅延ロードの完了を待ってから次のトークンへ進む。遷移できなかったら（不在・ロード失敗など）残りのトークンは実行せず打ち切る |
-| `wait:<ms>` | `<ms>` ミリ秒待つ（将来の非同期イベント用） |
+| `wait:<ms>`     | `<ms>` ミリ秒待つ（将来の非同期イベント用）                                                                                                                                                                      |
 
 `[ジャンプ:]` (#725) に到達した `advance`／`choice` の直後は、遷移（次の macrotask）を、Jump のみの中継シーンを含めて自動で待ち切ってから次のトークンへ進むので、Jump の後に `wait` を挟む必要はない（遷移先が見つからず停止した場合は、以降の `advance` は無視される）。
 
@@ -109,23 +109,23 @@ URL クエリは、内部的に `NovelRenderer` の 2 つの public API を呼�
 クリック操作列を決定論的に再生する。再生中は `msPerChar=0`（タイプライタ演出を飛ばす）、再入ガードつき。完了・例外時に状態を復元する。
 
 ```ts
-import type { Step } from '../game/GameState'
+import type { Step } from "../game/GameState";
 
 const steps: Step[] = [
-  { type: 'advance' },
-  { type: 'advance' },
-  { type: 'choice', jump: '2-1' },
-]
-await renderer.playScript(steps)
+  { type: "advance" },
+  { type: "advance" },
+  { type: "choice", jump: "2-1" },
+];
+await renderer.playScript(steps);
 ```
 
 `Step` は `GameState.ts` 定義の判別共用体:
 
 ```ts
 type Step =
-  | { type: 'advance' }            // 次のテキスト／イベントへ
-  | { type: 'choice'; jump: string } // jump 先シーンへ
-  | { type: 'wait'; ms: number }   // ms ミリ秒待つ
+  | { type: "advance" } // 次のテキスト／イベントへ
+  | { type: "choice"; jump: string } // jump 先シーンへ
+  | { type: "wait"; ms: number }; // ms ミリ秒待つ
 ```
 
 ### `startFrom(opts: StartFromOptions): Promise<SceneEntryResult>`
@@ -140,28 +140,28 @@ type Step =
 - 遅延ロードの往復中は、`advance`・セーブ・ロード・`goBack` などが受け付けられない（入場中ゲート）
 
 ```ts
-import type { StartFromOptions } from '../game/GameState'
+import type { StartFromOptions } from "../game/GameState";
 
 const result = await renderer.startFrom({
-  sceneId: '1-2',
+  sceneId: "1-2",
   flags: { saw_characters: { Bool: true } },
   eventIndex: 0,
   textIndex: 0,
-})
-if (result.status !== 'entered') console.warn('入場できなかった', result)
+});
+if (result.status !== "entered") console.warn("入場できなかった", result);
 
 // エントリ（ハブ）の先頭から。進めたルートの flags を保って始め直すなら flags を渡す
-await renderer.startFrom({ flags: savedFlags })
+await renderer.startFrom({ flags: savedFlags });
 ```
 
 ```ts
 interface StartFromOptions {
-  sceneId?: string                         // 開始シーン ID（省略するとエントリ文書の先頭から）
-  flags?: Record<string, FlagValue>        // 置換セマンティクス（省略時クリア）
-  eventIndex?: number                      // 省略時 0
-  textIndex?: number                       // 省略時 0
-  sentenceIndex?: number                   // 省略時 0（novel の現ページ内の文）
-  confinedSceneIds?: string[] | null       // 在圏一覧（省略・null は解除）
+  sceneId?: string; // 開始シーン ID（省略するとエントリ文書の先頭から）
+  flags?: Record<string, FlagValue>; // 置換セマンティクス（省略時クリア）
+  eventIndex?: number; // 省略時 0
+  textIndex?: number; // 省略時 0
+  sentenceIndex?: number; // 省略時 0（novel の現ページ内の文）
+  confinedSceneIds?: string[] | null; // 在圏一覧（省略・null は解除）
 }
 ```
 
@@ -172,10 +172,10 @@ URL からの初期入場は1回だけで、`?debug_scene=` → `?scene=` → �
 Web 版の `debug_scene`/`debug_unlock_all` と対称の CLI フラグを TUI 版にも用意している
 （[操作ガイド](./controls.md) の起動オプション一覧も参照）。
 
-| フラグ | 意味 | 例 |
-|---|---|---|
-| `--debug-scene <sceneId>` | 開始シーン ID（confinement 概念自体が TUI に無いため常にファイル境界を無視して直接遷移） | `--debug-scene 1-2` |
-| `--debug-unlock-all` | 選択肢の `[条件: flag]` ロックを強制解放（値を取らないブールフラグ） | `--debug-unlock-all` |
+| フラグ                    | 意味                                                                                     | 例                   |
+| ------------------------- | ---------------------------------------------------------------------------------------- | -------------------- |
+| `--debug-scene <sceneId>` | 開始シーン ID（confinement 概念自体が TUI に無いため常にファイル境界を無視して直接遷移） | `--debug-scene 1-2`  |
+| `--debug-unlock-all`      | 選択肢の `[条件: flag]` ロックを強制解放（値を取らないブールフラグ）                     | `--debug-unlock-all` |
 
 ```bash
 # シーン 1-2 から、全選択肢のロックを解除した状態で起動する
@@ -220,29 +220,29 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 
 ### ツールバーとブリンク比較
 
-| 項目 | 内容 |
-|---|---|
-| layout | `front` / `side` |
-| spriteStyle | `none` / `acrylic` |
-| windowStyle | `dark` / `ff-blue`（パネルの配色テーマ。ブリンク比較の対象に含まれる） |
-| 背景を落とす | `on`（既定）/ `off`。背景スプライトにだけ彩度・明度を落とすフィルタ（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。ブリンク比較の対象に含まれる |
-| 被写界深度（手前ぼかし） | `on` / `off`（既定）。背景スプライトにだけ、画面の下側ほど強くぼかす縦グラデーション（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。「背景を落とす」とは独立。ブリンク比較の対象に含まれる |
-| ドット絵（nearest） | `on` / `off`（既定）。`on` で戦闘のテクスチャ（背景・前景・味方・敵）を nearest のまま使う（本編の frontmatter `pixel_art: true`・#466 と同じ）。`off` は mipmap＋linear で縮小をなめらかにする（#760）。`Assets` のキャッシュは mipmap の有無ごと使い回されるため、**この値が前回から変わったときだけ**、背景・前景・味方・敵の画像を unload して読み直してから描き直す（他のトグルでは unload しない。ブリンク比較で切り替わるときも同様。本編と同じ「最初からその設定で読み込んだ」見た目になる）。ブリンク比較の対象に含まれる |
-| ログを1文字ずつ表示 | `on` / `off`（既定）。演出が `ff`（`layout=side`）のときは使わないので無効になる。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない。ただし ATB が `on` のときはコマンドのタップで全文表示せずそのまま実行し、全文表示はログ帯のタップだけ）。ブリンク比較の対象に含まれる |
-| モーション | `default（現行）`（既定）/ `snappy（キビキビ）`。`presentation=ff` かつ `layout=side` のときだけ効く（それ以外では選べない）。踏み出し・戻り・のけぞり・ダメージ数字・呪文の構え・複数ヒットの間隔の時間・距離のプリセット（`snappy` は 2 桁以上のダメージ・回復の数字が桁ごとに時間差で跳ねる #955）(#956。JSON の `motion`、値は `"default"` / `"snappy"`、不正値は読み込みエラー。本編の frontmatter `battle_motion` は不正値を警告して `default` に落とす。この違いは意図的で、`presentation` など既存の項目と同じ流儀)。切り替えると戦闘が最初からやり直しになる。例は `/battle-sample.html?config=/battle-sample/motion.json` | `snappy` は敵→味方の被弾でほわっとモザイク（等倍→最大 size 16→等倍。長さは 260ms か行動の残りの短い方）が出る (#953)。
-| 敵名窓 | `off（足元ラベル）`（既定）/ `window（敵名ウィンドウ）`。`presentation=ff` かつ `layout=side` のときだけ効く（それ以外では選べない）。コマンド窓の右隣に敵名の窓を出し、同名の敵を「名前 ×N」にまとめて並べる。倒れた敵は個数から引き、全滅した名前は行ごと消える。出ている間は敵の足元の名前・HP ラベルを出さない (#954。JSON の `enemyList`、値は `"off"` / `"window"`、不正値は読み込みエラー。本編の frontmatter `battle_enemy_list` は不正値を警告して無効にする。`motion` と同じ流儀)。切り替えると戦闘が最初からやり直しになる。例は `/battle-sample.html?config=/battle-sample/enemy-list.json` | 画面が狭く窓を置けないときは自動で足元ラベルに戻る |
-| 演出 | `dq（ログ・動かない）`（既定）/ `ff（モーション・ダメージ数字）`。`ff` は `layout=side` のときだけ効く（#745。`layout=front` では選べない）。たたかう等で、行動する側が踏み出して斬って戻り、対象がのけぞり（HP 0 なら倒れ）、対象の位置にダメージ数字が跳ねて消える。数字は 5 桁以上（回復など。ダメージ・吸収は最大 9999）になると、4 桁の幅に収まるよう文字が縮む（#877）。即死は数字を出さず、倒れる演出だけ。上のログ帯には呪文・アイテムの名前だけが中央寄せで出て、通常攻撃では窓ごと出ない。従来ターン制では演出が終わるまで次の行動・コマンドは受けない。ATB が `on` なら演出中もゲージが進み、敵の行動は順に再生され、行動可能な味方は演出中でも入力できる。各キャラの `poses`（下記）があればポーズごとに絵が差し替わる。ブリンク比較の対象に含まれる。切り替えると戦闘が最初からやり直しになる |
-| ATB（ゲージ順に行動） | `on` / `off`（既定）。`on` のとき味方・敵にゲージが付き、AGI に比例して溜まり、満タンの順に行動する（#205）。各ステータス行の右端の短い棒（数文字ぶんの幅）がゲージで、番の味方は名前の左に「▶」（ウィンドウの枠から離して置く）が付いて黄色になり、アクスタの頭上にも白い下向き三角「▼」が付く。時間はこのページの ticker から `BattleScreen.tick` で渡す。切り替えると戦闘が最初からやり直しになる。ブリンク比較の対象に含まれる |
-| commandLayout | `grid（2x2）`（既定）/ `cross（十字・矢印キー）`。`cross` は `side` のとき、コマンド窓を十字（上=たたかう・左=じゅもん・右=どうぐ・下=にげる）にし、矢印キー 1 押しでその方向を決定する（#204）。`cross` では「じゅもん」「どうぐ」で設定 JSON の `spells` / `items`（省略は内蔵既定。メテオは MP 不足でグレーになる）の一覧が重なって開き（Enter / Z で決定・Escape / Backspace / X か窓の外のタップで一つ戻る）、決定すると手のカーソルで対象を選ぶ。ATB の待機はこの窓を開いている間だけ止まる。ブリンク比較の対象に含まれる。切替直後にフォーム部品へフォーカスが残らないよう自動で外す |
-| ATB 進行 | `待機（コマンド選択中は停止）`（既定）/ `アクティブ（止めない）`。ATB が `on` のときだけ選べる（#205）。ブリンク比較の対象に含まれる |
-| 戦闘をやり直す | 現在の設定のまま戦闘を最初からやり直す（ATB は決着がつくと進まなくなるため） |
-| 奥行き（行ごとの縮尺） | `on` / `off`（既定）。`on` のとき設定 JSON の `horizon`（既定 0.3）と `perspective`（既定 0.8）で、奥の行ほど小さく・上に描く（#747）。`layout=side` のときだけ見た目が変わる。ブリンク比較の対象に含まれる |
-| 前景あり | 設定 JSON に `foreground` があるときだけ切り替え可（#747）。ブリンク比較の対象に含まれる |
-| 隊列 | `設定どおり`（既定。`party[].row`）/ `全員前衛` / `後ろ半分を後衛`（前衛が人数の半分（切り上げ）で、残りが後衛。1 人=後衛なし / 2 人=1 人 / 3 人=1 人 / 4 人=2 人）（#747）。後衛は斜め一列の位置から右寄りに半歩下がり、たたかうのダメージが半分になる（従来ターン制の BattleEngine は攻撃側・被弾側とも `firstAlive(party)` の 1 人だけなので、後衛のダメージ半減は**先頭の生存者が後衛のときだけ**見える。ATB オン（#205）なら全員が行動し敵の狙いもランダムなので、常に見える。）。`layout=front` では隊列を使わない。ブリンク比較の対象に含まれる |
-| 背景あり | 設定 JSON に `background` があるときだけ切り替え可 |
-| 味方 / 敵 | 1〜4 人（設定の件数を超えたぶんは内蔵既定で補う）。`layout=front` のときは味方人数を選べない（下記） |
-| 画面サイズ | `360x640` / `800x450` / `1280x720` / `640x360`（論理サイズ） |
-| 解像度 | `本編相当(1)`（既定）/ `実DPR`。ブリンク比較の対象に含まれる |
+| 項目                     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| layout                   | `front` / `side`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| spriteStyle              | `none` / `acrylic`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| windowStyle              | `dark` / `ff-blue`（パネルの配色テーマ。ブリンク比較の対象に含まれる）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 背景を落とす             | `on`（既定）/ `off`。背景スプライトにだけ彩度・明度を落とすフィルタ（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 被写界深度（手前ぼかし） | `on` / `off`（既定）。背景スプライトにだけ、画面の下側ほど強くぼかす縦グラデーション（#753）をかけるかどうか。背景ありのときだけ見た目が変わる。「背景を落とす」とは独立。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ドット絵（nearest）      | `on` / `off`（既定）。`on` で戦闘のテクスチャ（背景・前景・味方・敵）を nearest のまま使う（本編の frontmatter `pixel_art: true`・#466 と同じ）。`off` は mipmap＋linear で縮小をなめらかにする（#760）。`Assets` のキャッシュは mipmap の有無ごと使い回されるため、**この値が前回から変わったときだけ**、背景・前景・味方・敵の画像を unload して読み直してから描き直す（他のトグルでは unload しない。ブリンク比較で切り替わるときも同様。本編と同じ「最初からその設定で読み込んだ」見た目になる）。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                         |
+| ログを1文字ずつ表示      | `on` / `off`（既定）。演出が `ff`（`layout=side`）のときは使わないので無効になる。戦闘ログの新しく積まれた行だけを 1 文字ずつ表示する（#755）。たたかう等でログが積まれると確認できる。タイプ中にコマンドかログ帯をタップすると全文を即時表示（そのタップではコマンドは実行しない。ただし ATB が `on` のときはコマンドのタップで全文表示せずそのまま実行し、全文表示はログ帯のタップだけ）。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                   |
+| モーション               | `default（現行）`（既定）/ `snappy（キビキビ）`。`presentation=ff` かつ `layout=side` のときだけ効く（それ以外では選べない）。踏み出し・戻り・のけぞり・ダメージ数字・呪文の構え・複数ヒットの間隔の時間・距離のプリセット（`snappy` は 2 桁以上のダメージ・回復の数字が桁ごとに時間差で跳ねる #955）(#956。JSON の `motion`、値は `"default"` / `"snappy"`、不正値は読み込みエラー。本編の frontmatter `battle_motion` は不正値を警告して `default` に落とす。この違いは意図的で、`presentation` など既存の項目と同じ流儀)。切り替えると戦闘が最初からやり直しになる。例は `/battle-sample.html?config=/battle-sample/motion.json`                                                                                                                                                                        | `snappy` は敵→味方の被弾でほわっとモザイク（等倍→最大 size 16→等倍。長さは 260ms か行動の残りの短い方）が出る (#953)。 |
+| 敵名窓                   | `off（足元ラベル）`（既定）/ `window（敵名ウィンドウ）`。`presentation=ff` かつ `layout=side` のときだけ効く（それ以外では選べない）。コマンド窓の右隣に敵名の窓を出し、同名の敵を「名前 ×N」にまとめて並べる。倒れた敵は個数から引き、全滅した名前は行ごと消える。出ている間は敵の足元の名前・HP ラベルを出さない (#954。JSON の `enemyList`、値は `"off"` / `"window"`、不正値は読み込みエラー。本編の frontmatter `battle_enemy_list` は不正値を警告して無効にする。`motion` と同じ流儀)。切り替えると戦闘が最初からやり直しになる。例は `/battle-sample.html?config=/battle-sample/enemy-list.json`                                                                                                                                                                                                    | 画面が狭く窓を置けないときは自動で足元ラベルに戻る                                                                     |
+| 演出                     | `dq（ログ・動かない）`（既定）/ `ff（モーション・ダメージ数字）`。`ff` は `layout=side` のときだけ効く（#745。`layout=front` では選べない）。たたかう等で、行動する側が踏み出して斬って戻り、対象がのけぞり（HP 0 なら倒れ）、対象の位置にダメージ数字が跳ねて消える。数字は 5 桁以上（回復など。ダメージ・吸収は最大 9999）になると、4 桁の幅に収まるよう文字が縮む（#877）。即死は数字を出さず、倒れる演出だけ。上のログ帯には呪文・アイテムの名前だけが中央寄せで出て、通常攻撃では窓ごと出ない。従来ターン制では演出が終わるまで次の行動・コマンドは受けない。ATB が `on` なら演出中もゲージが進み、敵の行動は順に再生され、行動可能な味方は演出中でも入力できる。各キャラの `poses`（下記）があればポーズごとに絵が差し替わる。ブリンク比較の対象に含まれる。切り替えると戦闘が最初からやり直しになる |
+| ATB（ゲージ順に行動）    | `on` / `off`（既定）。`on` のとき味方・敵にゲージが付き、AGI に比例して溜まり、満タンの順に行動する（#205）。各ステータス行の右端の短い棒（数文字ぶんの幅）がゲージで、番の味方は名前の左に「▶」（ウィンドウの枠から離して置く）が付いて黄色になり、アクスタの頭上にも白い下向き三角「▼」が付く。時間はこのページの ticker から `BattleScreen.tick` で渡す。切り替えると戦闘が最初からやり直しになる。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                        |
+| commandLayout            | `grid（2x2）`（既定）/ `cross（十字・矢印キー）`。`cross` は `side` のとき、コマンド窓を十字（上=たたかう・左=じゅもん・右=どうぐ・下=にげる）にし、矢印キー 1 押しでその方向を決定する（#204）。`cross` では「じゅもん」「どうぐ」で設定 JSON の `spells` / `items`（省略は内蔵既定。メテオは MP 不足でグレーになる）の一覧が重なって開き（Enter / Z で決定・Escape / Backspace / X か窓の外のタップで一つ戻る）、決定すると手のカーソルで対象を選ぶ。ATB の待機はこの窓を開いている間だけ止まる。ブリンク比較の対象に含まれる。切替直後にフォーム部品へフォーカスが残らないよう自動で外す                                                                                                                                                                                                                |
+| ATB 進行                 | `待機（コマンド選択中は停止）`（既定）/ `アクティブ（止めない）`。ATB が `on` のときだけ選べる（#205）。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 戦闘をやり直す           | 現在の設定のまま戦闘を最初からやり直す（ATB は決着がつくと進まなくなるため）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 奥行き（行ごとの縮尺）   | `on` / `off`（既定）。`on` のとき設定 JSON の `horizon`（既定 0.3）と `perspective`（既定 0.8）で、奥の行ほど小さく・上に描く（#747）。`layout=side` のときだけ見た目が変わる。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 前景あり                 | 設定 JSON に `foreground` があるときだけ切り替え可（#747）。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 隊列                     | `設定どおり`（既定。`party[].row`）/ `全員前衛` / `後ろ半分を後衛`（前衛が人数の半分（切り上げ）で、残りが後衛。1 人=後衛なし / 2 人=1 人 / 3 人=1 人 / 4 人=2 人）（#747）。後衛は斜め一列の位置から右寄りに半歩下がり、たたかうのダメージが半分になる（従来ターン制の BattleEngine は攻撃側・被弾側とも `firstAlive(party)` の 1 人だけなので、後衛のダメージ半減は**先頭の生存者が後衛のときだけ**見える。ATB オン（#205）なら全員が行動し敵の狙いもランダムなので、常に見える。）。`layout=front` では隊列を使わない。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                     |
+| 背景あり                 | 設定 JSON に `background` があるときだけ切り替え可                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 味方 / 敵                | 1〜4 人（設定の件数を超えたぶんは内蔵既定で補う）。`layout=front` のときは味方人数を選べない（下記）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 画面サイズ               | `360x640` / `800x450` / `1280x720` / `640x360`（論理サイズ）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 解像度                   | `本編相当(1)`（既定）/ `実DPR`。ブリンク比較の対象に含まれる                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 切り替えるたびに `BattleScreen` を作り直す（戦闘の進行はリセットされる）。**スペースキー**（またはボタン）で、現在の設定とひとつ前の設定を即座に入れ替える。「1秒ごとに自動交互」をオンにすると 1 秒間隔で交互に表示する。見た目が変わる変更をライブ A/B で判定するための機能。ひとつ前の設定が無い間（起動直後）は、切替ボタンと自動交互は無効で、画面にその旨を案内する。表示中の設定・論理サイズ・`window.devicePixelRatio`・`renderer.resolution`・物理ピクセル数は画面上に表示される。
 
@@ -270,21 +270,80 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
   "commandLayout": "grid",
   "commandLabels": { "spell": "魔石" },
   "spells": [
-    { "id": "fire", "name": "ほのお", "mp": 3, "target": "敵単体", "effect": "damage 8..14 type=fire" },
-    { "id": "heal", "name": "ヒール", "mp": 2, "target": "味方単体", "effect": "heal 15..25" }
+    {
+      "id": "fire",
+      "name": "ほのお",
+      "mp": 3,
+      "target": "敵単体",
+      "effect": "damage 8..14 type=fire"
+    },
+    {
+      "id": "heal",
+      "name": "ヒール",
+      "mp": 2,
+      "target": "味方単体",
+      "effect": "heal 15..25"
+    }
   ],
-  "items": [{ "id": "potion", "name": "ポーション", "effect": "heal 20..30", "count": 3 }],
+  "items": [
+    {
+      "id": "potion",
+      "name": "ポーション",
+      "effect": "heal 20..30",
+      "count": 3
+    }
+  ],
   "horizon": 0.3,
   "perspective": 0.8,
   "foreground": "battle/foreground.png",
   "background": "battle/background.png",
   "party": [
-    { "id": "a", "name": "アリス", "hp": 30, "maxHp": 30, "mp": 8, "maxMp": 8, "atk": 8, "def": 4, "agi": 6, "sprite": "battle/party-a.png",
-      "poses": { "idle": "battle/a-idle.png", "step": "battle/a-step.png", "slash": "battle/a-slash.png", "hurt": "battle/a-hurt.png", "down": "battle/a-down.png", "victory": "battle/a-victory.png" } },
-    { "id": "b", "name": "ボブ", "hp": 28, "maxHp": 28, "mp": 4, "maxMp": 4, "atk": 9, "def": 5, "agi": 4, "sprite": "battle/party-b.png" }
+    {
+      "id": "a",
+      "name": "アリス",
+      "hp": 30,
+      "maxHp": 30,
+      "mp": 8,
+      "maxMp": 8,
+      "atk": 8,
+      "def": 4,
+      "agi": 6,
+      "sprite": "battle/party-a.png",
+      "poses": {
+        "idle": "battle/a-idle.png",
+        "step": "battle/a-step.png",
+        "slash": "battle/a-slash.png",
+        "hurt": "battle/a-hurt.png",
+        "down": "battle/a-down.png",
+        "victory": "battle/a-victory.png"
+      }
+    },
+    {
+      "id": "b",
+      "name": "ボブ",
+      "hp": 28,
+      "maxHp": 28,
+      "mp": 4,
+      "maxMp": 4,
+      "atk": 9,
+      "def": 5,
+      "agi": 4,
+      "sprite": "battle/party-b.png"
+    }
   ],
   "enemies": [
-    { "id": "dragon", "name": "ドラゴン", "hp": 120, "maxHp": 120, "mp": 0, "maxMp": 0, "atk": 14, "def": 8, "agi": 5, "sprite": "battle/enemy-dragon.png" }
+    {
+      "id": "dragon",
+      "name": "ドラゴン",
+      "hp": 120,
+      "maxHp": 120,
+      "mp": 0,
+      "maxMp": 0,
+      "atk": 14,
+      "def": 8,
+      "agi": 5,
+      "sprite": "battle/enemy-dragon.png"
+    }
   ]
 }
 ```
@@ -335,7 +394,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 戦闘のエフェクト重ね（RPG モードの frontmatter `battle_effects: <JSONパス>`、#941）: JSON は戦闘画面サンプルの `effects` と同じ書式（トップレベルが種類名 → シート宣言）。パスは `assetBaseUrl` 直下からの相対で、読めない・不正は警告（`[name-name] battle_effects: …`）して無視する。`battle_layout: side` と `battle_presentation: ff` のときだけ出る。JSON は `load()` から非同期に読むので、直後に始まる戦闘にはまだ出ないことがある
 - 戦闘のエフェクト重ね（`battle.effects`、#936）: 戦闘画面サンプルの `effects` と同じ書式（画像の相対 URL は `assetBaseUrl` の images 配下）。`presentation: "ff"` のときだけ効き、`dq` で書くと効かない警告が出る。不正な種類は警告して無視（読み込みは成功）
 - 感情吹き出し（トップレベルの `emotions`、#937）: 種類名（`"!"` `"?"` `"..."` など自由。1〜16 文字。絵文字は 1 文字）ごとに `{ "image", "frames", "columns", "frameMs", "durationMs", "offset", "scale", "motion" }`。`image` だけ必須（`frames` 既定 1 = 1 枚絵。コマ割りシートは `frames` と `columns` で切り出し、`frameMs` ごとにコマを送り、表示時間のほうが長ければ繰り返す）。`durationMs` 既定 1200（経つと消える）、`offset` 既定 `{ "x": 0, "y": 0 }`（人物の頭の真上に吹き出しの下端中央を置いた位置からのずらし。y が負で上）、`scale` 既定 1（1 = 画像のコマの大きさのまま）、`motion` は `none`（既定）/ `pop`（小さい所から跳ねて大きくなる）。画像の相対 URL は `assetBaseUrl` の images 配下。種類は別ファイルの JSON にも書け、設定のトップレベル `emotionsUrl`（`field_emotions` と同じ形。相対パスは他のアセットと同じ規則）に指すと起動時に読み込んでインラインの `emotions` とマージする（同名は**インライン優先**。取得失敗・不正は警告して無視、未指定は従来どおり）。不正な種類は警告して無視、画像が読めない種類は警告して出さない（フィールドは止まらない）。見た目だけで歩行・エンカウントには関与しない。出す口は、ツールバーの種類ボタン（同行者がいれば「同行者 …」も）と、ブラウザのコンソールから `window.fieldSample.showEmotion("player" | "companion" | "npc:<id>", "!", 300)`（第 3 引数の持続 ms は任意で、その 1 回だけ宣言の `durationMs` を上書き。小数は切り捨てて 1 以上のときだけ採用し、10000 を超えれば 10000 に収め、0 以下・0 超 1 未満・非数・省略は宣言どおり。出せたら true。同行者が出ていないとき・未宣言の種類・戦闘中は false。同じ人物に続けて出すと置き換わる。同行者の吹き出しは同行者の不透明度に合わせて薄くなる。シーン遷移・ワープでは、主人公・同行者の吹き出しは消えず持ち越す（NPC の吹き出しは遷移で消える。別シーンの同 id の NPC に乗り移らない）。同行者が消えている間は見えず時間だけ進み、再び現れたときに残り時間があれば出る）。`window.fieldSample.emotions()` で進行中の吹き出しを読める。`?fixture=dummy` は単色の ！ ？ …（3 コマ）を持つ。脚本からは、NPC の `[イベント]` の中の `[感情: 対象, 種類(, 持続=ms)]`（#946）でも出せる（対象は `主人公` / 同行者〔設定 `companion.name` か固定名 `同行者`〕/ そのシーンの NPC の話者名。未宣言の種類・対象不明はコンソールに警告して無視。台詞は止まらず出したらすぐ次へ進む）。`showEmotion` の第 1 引数に NPC は `"npc:<id>"`（設定の NPC の `id`）で指せる。同梱の寺町サンプルは、sit-by-me で採用された吹き出し 3 種（びっくり=！、はてな=？、沈黙=…。各 256x256 の透過 PNG を `scale` 0.4 で表示）を `emotionsUrl`（= `public/field-sample/teramachi-emotions.json`）で宣言し、近所の子に話しかけると近所の子の頭上に「びっくり」が（途中で主人公にも「びっくり」が出る）。近所の女の子に話しかけると、女の子の頭上に「はてな」・途中で主人公に「沈黙」・最後に女の子に「びっくり」が出る。素材は他の寺町サンプルと同じく `http://localhost:8765/assets/images/...` から読む（sit-by-me の assets を配信しておく）。通常のノベル再生では `[感情:]` は無視され、開発ビルドではコンソールに警告が出る
-- 設定 JSON の主なキー: `startScene` / `start`（初期の足元）/ `speed`（背景ピクセル/秒）/ `edgeThreshold` / `assetBaseUrl`（指定時は RPG の画像と同じく `${base}/images/...` に解決 #746）/ `player.sprites`（`up|down|left|right` それぞれ 3 コマの URL。斜めの `upLeft|upRight|downLeft|downRight` と `mirrorOf` は optional、下の項）・`height`（主人公の表示高さ・背景ピクセル。既定 96。足元＝スプライト下端中心は大きさで変わらない）・`frameMs` / `cycle`（歩行周期。コマ番号 0〜2 を 1〜16 個並べた配列。既定 `[0, 1, 2]`。コマ 1・3 が接地、コマ 2 が通過の立位素材は `[0, 1, 2, 1]` で左右交互になる。同行者も同じ周期。sit-by-me#59）/ `idleFrame`（止まっているときのコマ番号 0〜2。既定 0。立位は 1＝通過コマ。不正な `cycle`・`idleFrame` は警告して既定に戻す）/ `scenes.<id>`（`background`・`mask`・`foreground`＝前面レイヤー（#866）・`shake` / `scroll`（#864）・`links[]`＝`{ edge, range, to }`・`playerHeight`＝そのシーンだけの表示高さ。未指定は全体の `player.height`。大きさを変えても足元・歩行マスク判定・端リンク判定・移動速度は変わらない #810）
+- 設定 JSON の主なキー: `startScene` / `start`（初期の足元）/ `speed`（背景ピクセル/秒）/ `edgeThreshold` / `assetBaseUrl`（指定時は RPG の画像と同じく `${base}/images/...` に解決 #746）/ `player.sprites`（`up|down|left|right` それぞれ 3 コマの URL。斜めの `upLeft|upRight|downLeft|downRight` と `mirrorOf` は optional、下の項）・`height`（主人公の表示高さ・背景ピクセル。既定 96。足元＝スプライト下端中心は大きさで変わらない）・`frameMs` / `cycle`（主人公の歩行周期。コマ番号 0〜2 を 1〜16 個並べた配列。既定 `[0, 1, 2]`。コマ 1・3 が接地、コマ 2 が通過の立位素材は `[0, 1, 2, 1]` で左右交互になる。車椅子の主人公のようにこぐ 3 コマの素材には書かない。sit-by-me#59）/ `idleFrame`（止まっているときのコマ番号 0〜2。既定 0。立位は 1＝通過コマ。`cycle` と `idleFrame` は組で書く＝`cycle` だけだと停止は 0 のままなので警告が出る。不正な値は警告して既定に戻す。同行者には引き継がれず、同行者は `companion.cycle` / `companion.idleFrame` に同じ書式で別に書く＝未指定は従来の `[0, 1, 2]`・停止 0）/ `scenes.<id>`（`background`・`mask`・`foreground`＝前面レイヤー（#866）・`shake` / `scroll`（#864）・`links[]`＝`{ edge, range, to }`・`playerHeight`＝そのシーンだけの表示高さ。未指定は全体の `player.height`。大きさを変えても足元・歩行マスク判定・端リンク判定・移動速度は変わらない #810）
 - NPC の脚本（#841 段階2、optional）: トップレベル `scriptUrl`（脚本 `.md` の URL。相対パスは `emotionsUrl` と同じ規則）と、NPC の `scene`（`[イベント <name>]` の名前）。起動時に脚本を fetch → wasm の `parseMarkdown`（`scriptUrl` があるときだけ動的 import）→ `[イベント]` を集め、話しかけた NPC の `scene` のイベントを `EventRunner` で実行する（台詞・ナレーション・待機。`[NPC移動:]` `[戦闘:]` は警告して読み飛ばす）。複数行の台詞は Enter / Space / Z かタップで 1 行ずつ送り、最後で閉じて移動再開（`[待機:]` の間も会話中）。`scene` 未指定・脚本やイベントが無い・取得失敗の NPC は固定の `line`（読めないときはコンソールに警告）。`scriptUrl` / `scene` が無ければ従来と同一（`?fixture=dummy` も不変）。同梱の `teramachi.sample.json` は `public/field-sample/teramachi-npc.md` を指し、近所の子と近所の女の子（単一画像 `sprite` に `scene` を付けた例）が脚本で、門番（単一画像 `sprite` の NPC の例）が固定の 1 行で話す。`scene` と脚本の照合は起動時（脚本の読み込み後）に 1 回だけ行い、見つからない `scene`・台詞（Dialog / Narration）が 1 つも無いイベント・`scriptUrl` が無いのに `scene` を書いた NPC を、コンソールと画面上部の通知に警告する（話しかけるたびには出さない）。脚本は起動時に直列で読み込み、タイムアウトは無い（画像の読み込み `loadBitmap` と同じ方針）。書式は spec の「脚本 `.md` で書く」、純粋関数は `game/fieldScript.ts`、設定の検証は `config.ts`（`scriptUrl` / `parseNpcs` の `scene`）。
 - 会話窓のスタイル（#840 1本目、optional）: トップレベル `dialogStyle`（`"ff"` のみ）と `dialogMsPerChar`（1 文字あたり ms。0 = 即時表示、上限 1000）。`ff` は窓を画面上部（上端 4%・高さ 34%＝上半分に収まる。画面サイズに追従）に固定し、戦闘窓と同じ ff-blue（帯状グラデーション・白枠・黒い影の文字）で 1 文字ずつ出す。発話者名は表示しない（名札もインライン名も無し。台詞本文だけ）。会話中は感情吹き出しを窓より手前に出す。窓に入りきらない台詞は改ページする（#840 2本目）: 窓の高さ・文字サイズから 1 ページの行数を決め、ページ末で右下の ▼ を点滅して止まり、決定操作で次のページへ（最終ページに ▼ は出ない・自動送りなし）。台詞は改行で段落に分けてから折り返す（従来の窓の折り返しは変えない）。速度の既定は戦闘ログと同じ 30ms。未指定は従来の下部の窓（変化なし）。不正な値は警告して無視。`window.fieldSample.state().dialog` に `typing`（文字送り中か）と `rect`（窓の矩形）、`page` / `pages`（台詞の何ページ目か・全部で何ページか。1 始まり、ff 以外・会話外は 0/0）、`awaitingPage`（次のページを待って ▼ を点滅中か）が加わる。`state().emotionHost` は感情吹き出しの層の置き先（ff の窓の会話中だけ `'stage'`＝窓の手前、それ以外は `'world'`）。寺町サンプルの設定には `dialogStyle` を書かない（A/B は設定を書き換えて確認）。
 - NPC（#841 段階1、optional）: シーンの `npcs: [{ id, name, x, y, sprite | sprites, height?, facing?, line, scene? }]`（`scene` は段階2の脚本。上の項目）。`x` / `y` は足元（背景ピクセル）。見た目は `sprite`（単一画像。向きで絵は変わらない）か `sprites`（`player.sprites` と同じ `up/down/left/right` × 3 コマの歩行絵。立ち止まりは 1 コマ目で、向きに応じて切り替わる）のどちらか 1 つ（両方・どちらも無しは不正）。`height`（背景ピクセル。省略 = そのシーンの主人公と同じ高さ）、`facing`（`up/down/left/right`。省略 = `down`）、`line` は話しかけたとき DialogBox に出す**固定の 1 行**（空は不正）、`id` はシーン内で一意、`name` は DialogBox の名前欄。不正な NPC は読み込みを止めず、画面とコンソールに警告を出してその NPC だけ無視する（`npcs` が配列でない場合は全体を無視）。**未知のキー**（スペルミス。例 `heigth`）は警告して無視するが NPC は残す。**足元が歩行マスク外**（歩けない位置）の NPC は、そのシーンに初めて入ったときコンソールに警告するだけで残す（話しかけが届かない・近づけない恐れがあるため位置を見直す）。`npcs` を書かなければ従来と完全に同じ。**描画**: 主人公・同行者・NPC は**足元 y の同じ式**（`feetDepthZ`）で前後が決まる（主人公は z=10 固定。足元が主人公より下なら 10.5〜10.9、同じか上なら 9.5〜9.9。同じ側では足元 y が大きいほど手前。前面レイヤー #866=z 20 より常に奥）。**当たり判定**: NPC の足元を中心とする半径 32（背景ピクセル）の円に主人公の足元は入れず、斜めに押しつけると円周へ射影されて円に沿って滑り（止まらない・円の中には入らない。正面でも円周ぴったりまで寄れる）、射影先が歩行マスク外・別の NPC の円内ならその歩みだけ止まる（歩行マスクの判定と併用。「歩行マスクと足元を表示」でシアンの円で見える）。**話しかけ**: 決定キー（Space / Enter / Z）で、向いた方向（左右 60 度以内）の足元どうし 90 以内の最寄りの NPC に話しかける（円錐内の最寄りを優先。円錐内に誰もいなければ、NPC の円に触れていれば向きによらず）。NPC をクリック・タップすると、その NPC の 72 以内まで近づいてから話しかける（途中でキー入力・別の場所のクリックをすると取り消し、阻まれて 0.6 秒動けなければ、届く距離なら話しかけ、届かなければ諦める）。話しかけると主人公と NPC が向き合う。**会話中**: 既存の `DialogBox`（TopDown と同じ見た目）で名前と台詞を表示し、Enter / Space / Z かタップで、表示中なら全文表示・済んでいれば閉じる（開いた直後の同じタップでは閉じない）。会話中は歩行入力（キー・ポインタ）・クリックで近づく動き・エンカウント・端リンク・ワープ（`window.fieldSample.warp` は false）・ツールバーの「今すぐエンカウント」を止め、閉じると移動を再開する。`window.fieldSample.state()` の `talking`（会話中の NPC の id・無ければ null）・`dialog`（会話窓の `showing`〔表示中か〕/ `bgVisible`〔背景の箱が見えているか〕/ `text`〔いま見えている本文〕）・`npcs`（このシーンの NPC の足元・向き）で読める。**段階1の範囲外**: 分岐・NPC への感情吹き出しは段階3以降（#841。脚本の接続は上の段階2）。parser・wasm は変えない。純粋関数は `frontend/src/game/fieldNpc.ts`（当たり `stepMoveAroundNpcs`・話しかけ対象 `nearestTalkableNpc`・決定キーの判定 `decideTalkKey`〔npcs 無し・向いた先に NPC がいないときは `ignore` で、フォーカス中のボタンを Space で押せる。話しかけ成立・会話中だけフォーカスを外す〕・クリックで近づく途中の取り消し/着いた/stuck 判定 `approachBeforeMove` / `approachAfterMove`・入力停止の判定 `acceptsWalkInput` / `canStartTalk` / `canStartWarp`・会話窓の大きさ `dialogMetricsFor`・置き場所の点検 `npcPlacementWarnings`。奥行きの `feetDepthZ`〔`npcZ` / `companionZ`〕は `fieldSample/layers.ts`）、設定の検証は `fieldSample/config.ts` の `parseNpcs`、配線は `main.ts`。同梱の `teramachi.sample.json` の山門の通り（shrine-street）に、ナム・オトンとは別の子（C003 の小学生の歩行絵）を置いた例がある。

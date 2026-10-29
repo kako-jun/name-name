@@ -81,6 +81,10 @@ export interface FieldCompanion {
   height?: number
   /** 脚本の `[感情: <name>, …]` で同行者を指す話者名 (#946)。省略時は固定の対象名 `同行者` だけで指せる */
   name?: string
+  /** 歩行周期（`player.cycle` と同じ書式）。未指定は undefined＝従来の [0, 1, 2]。主人公の周期は引き継がない */
+  cycle?: number[]
+  /** 止まっているときのコマ番号 (0..2)。未指定は undefined＝従来の 0 */
+  idleFrame?: number
 }
 
 /**
@@ -229,6 +233,43 @@ export interface FieldSampleConfig {
   warnings?: string[]
 }
 
+/**
+ * 歩行周期 `cycle`（0〜2 の整数を 1〜16 個）と停止コマ `idleFrame`（0〜2）の検証 (sit-by-me#59)。
+ * 主人公（player）と同行者（companion）で共通。不正な項目は警告して落とす（既定へ戻る）。
+ * `cycle` だけ書いて `idleFrame` を省くと停止は 0 のまま（立位は 2 つを組で書く）ので、その旨も警告する
+ */
+export function parseGait(
+  obj: Obj,
+  path: string,
+  warnings: string[]
+): { cycle?: number[]; idleFrame?: number } {
+  const out: { cycle?: number[]; idleFrame?: number } = {}
+  if (obj.cycle !== undefined) {
+    const c = obj.cycle
+    if (
+      Array.isArray(c) &&
+      c.length >= 1 &&
+      c.length <= 16 &&
+      c.every((n) => Number.isInteger(n) && n >= 0 && n <= 2)
+    )
+      out.cycle = c as number[]
+    else
+      warnings.push(
+        `${path}.cycle は 0〜2 の整数を 1〜16 個並べた配列が必要です（無視して既定の [0, 1, 2] を使います）`
+      )
+  }
+  if (obj.idleFrame !== undefined) {
+    const i = obj.idleFrame
+    if (typeof i === 'number' && Number.isInteger(i) && i >= 0 && i <= 2) out.idleFrame = i
+    else warnings.push(`${path}.idleFrame は 0〜2 の整数が必要です（無視して既定の 0 を使います）`)
+  }
+  if (out.cycle && out.idleFrame === undefined && obj.idleFrame === undefined)
+    warnings.push(
+      `${path}.cycle だけで ${path}.idleFrame がありません（止まっているときは 0 コマ目になります。立位は cycle と idleFrame を組で書いてください）`
+    )
+  return out
+}
+
 export const DEFAULTS = {
   speed: 260,
   edgeThreshold: 6,
@@ -354,28 +395,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!frameMs.ok) return frameMs
   // 歩行周期（任意）。不正なら設定を落とさず警告して既定へ戻す
   const walkWarnings: string[] = []
-  let cycle: number[] | undefined
-  if (raw.player.cycle !== undefined) {
-    const c = raw.player.cycle
-    if (
-      Array.isArray(c) &&
-      c.length >= 1 &&
-      c.length <= 16 &&
-      c.every((n) => Number.isInteger(n) && n >= 0 && n <= 2)
-    )
-      cycle = c as number[]
-    else
-      walkWarnings.push(
-        'player.cycle は 0〜2 の整数を 1〜16 個並べた配列が必要です（無視して既定の [0, 1, 2] を使います）'
-      )
-  }
-  let idleFrame: number | undefined
-  if (raw.player.idleFrame !== undefined) {
-    const i = raw.player.idleFrame
-    if (Number.isInteger(i) && (i as number) >= 0 && (i as number) <= 2) idleFrame = i as number
-    else
-      walkWarnings.push('player.idleFrame は 0〜2 の整数が必要です（無視して既定の 0 を使います）')
-  }
+  const playerGait = parseGait(raw.player, 'player', walkWarnings)
 
   const scenes: Record<string, FieldSceneConfig> = {}
   /** NPC の不正（その NPC だけ読み飛ばす）の警告 (#841)。後で warnings へ合流する */
@@ -521,6 +541,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       sprites: cs,
       ...(ch !== undefined ? { height: ch } : {}),
       ...(cn !== undefined ? { name: cn } : {}),
+      ...parseGait(c, 'companion', walkWarnings),
     }
   }
   let assist: AssistConfig | null = null
@@ -866,8 +887,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         mirrorOf,
         height: height.value,
         frameMs: frameMs.value,
-        ...(cycle ? { cycle } : {}),
-        ...(idleFrame !== undefined ? { idleFrame } : {}),
+        ...playerGait,
       },
       scenes,
       warps,
