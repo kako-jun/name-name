@@ -75,7 +75,7 @@ export interface FieldWarp {
   timing: WarpTiming
 }
 
-/** 同行者 (#862)。条件付き通行で主人公の後ろに現れて押す。歩行絵は主人公と同じ 4 方向×3 コマ（#861 でアクスタ化するまでの暫定の見た目） */
+/** 同行者 (#862)。条件付き通行で主人公の後ろに現れて押す。歩行絵は主人公と同じ 4 方向×3 コマ（見せ方は最上位の `spriteStyle`: 未指定は歩行絵そのまま、`"acrylic"` でアクスタ） */
 export interface FieldCompanion {
   sprites: Record<Facing, [string, string, string]>
   /** 表示高さ（背景ピクセル）。省略 = 主人公と同じ高さ */
@@ -216,6 +216,11 @@ export interface FieldSampleConfig {
    * 会話窓のスタイル (#840)。`dialogStyle`: `ff` = 画面上部に固定・ff-blue・1 文字ずつ。未指定は undefined＝従来の下部の窓。不正な値は警告して無視
    */
   dialogStyle?: DialogStyle
+  /**
+   * 主人公・同行者の歩行スプライトの見せ方 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` = 足元に透明アクリルの板・台座・影を付ける（戦闘の `battle.spriteStyle` と同じ見た目。戦闘側の設定とは独立）。
+   * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC には効かない
+   */
+  spriteStyle?: 'acrylic'
   /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
   dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
@@ -844,6 +849,14 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `dialogStyle は "ff" のみ指定できます: ${JSON.stringify(raw.dialogStyle)}（無視します）`
       )
   }
+  let fieldSpriteStyle: 'acrylic' | undefined
+  if (raw.spriteStyle !== undefined) {
+    if (raw.spriteStyle === 'acrylic') fieldSpriteStyle = 'acrylic'
+    else if (raw.spriteStyle !== 'none')
+      warnings.push(
+        `spriteStyle は "none" か "acrylic" のみ指定できます: ${JSON.stringify(raw.spriteStyle)}（無視します）`
+      )
+  }
   let dialogMsPerChar: number | undefined
   if (raw.dialogMsPerChar !== undefined) {
     dialogMsPerChar = normalizeMsPerChar(raw.dialogMsPerChar)
@@ -926,6 +939,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(emotionsSource ? { emotionsSource } : {}),
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
+      ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
