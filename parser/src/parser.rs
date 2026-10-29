@@ -3,6 +3,14 @@ use crate::models::*;
 
 /// Parse a name-name Markdown document into a Document struct.
 pub fn parse(input: &str) -> Document {
+    parse_with_line_base(input, 0)
+}
+
+/// `parse` の本体。`line_base` は警告に出す行番号へ足すオフセット（#1001）。
+/// `[条件:]` ブロックの中身は擬似ドキュメントに包んで再帰 parse するため、そのままだと警告の
+/// 行番号が擬似ドキュメント基準になる。呼び出し側が「擬似ドキュメントの n 行目 = 元ファイルの
+/// n + line_base 行目」になる値（負になりうる）を渡して、元ファイルの行番号に直す。
+fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let lines: Vec<&str> = input.lines().collect();
     let len = lines.len();
     let mut pos = 0;
@@ -887,6 +895,16 @@ pub fn parse(input: &str) -> Document {
                             pos += 1;
                             continue;
                         }
+                        // 上のどの分岐にも消費されなかった `[...]` 行は読み捨てる。頭が未知のものは
+                        // トップレベルと同じく警告を出す (#1001)。既知の頭（書式が不正な [待機: abc]、
+                        // イベント内では解釈しない [ジャンプ: …] など）は従来どおり黙って捨てる。
+                        if !is_known_directive_head(cmd_line) {
+                            emit_warning(&format!(
+                                "[name-name-parser] warning: {} 行目は未知のディレクティブのため読み捨てた: {}",
+                                pos as i64 + 1 + line_base,
+                                truncate_for_warning(cmd_line)
+                            ));
+                        }
                         pos += 1;
                     }
                     // flush pending dialog at end
@@ -1001,7 +1019,7 @@ pub fn parse(input: &str) -> Document {
                 // 各パーサが個別に警告するか従来どおり黙って捨てるので、ここでは二重に警告しない。
                 emit_warning(&format!(
                     "[name-name-parser] warning: {} 行目は未知のディレクティブのため読み捨てた: {}",
-                    pos + 1,
+                    pos as i64 + 1 + line_base,
                     truncate_for_warning(trimmed)
                 ));
             }
@@ -1059,6 +1077,8 @@ pub fn parse(input: &str) -> Document {
             if let Some(flag) = rest.strip_suffix(']') {
                 let flag = flag.trim().to_string();
                 pos += 1;
+                // 中身の先頭行の、元ファイルでの行番号（1 始まり）。警告の行番号補正に使う (#1001)
+                let inner_first_line = pos as i64 + 1 + line_base;
                 let mut inner_lines: Vec<String> = Vec::new();
                 let mut depth = 1;
                 while pos < len && depth > 0 {
@@ -1080,7 +1100,8 @@ pub fn parse(input: &str) -> Document {
                 }
                 // Recursively parse inner content
                 let inner_text = inner_lines.join("\n");
-                let inner_events = parse_events_only(&inner_text, event_image_transition);
+                let inner_events =
+                    parse_events_only(&inner_text, event_image_transition, inner_first_line);
                 current_events.push(Event::Condition {
                     flag,
                     events: inner_events,
@@ -1236,7 +1257,7 @@ pub fn parse(input: &str) -> Document {
                 // ならないので警告つきで 1 行読み捨てる（黙って本文が消えないようにする）。
                 emit_warning(&format!(
                     "[name-name-parser] warning: {} 行目は話者行でも本文でもないため読み捨てた: {}",
-                    pos + 1,
+                    pos as i64 + 1 + line_base,
                     truncate_for_warning(trimmed)
                 ));
                 pos += 1;
@@ -1329,7 +1350,15 @@ pub fn parse(input: &str) -> Document {
 /// 再帰的に `parse()` するため、内側の `[イベント絵:]`（`遷移=` 未指定）にも外側と同じ
 /// デフォルトが効くよう fake frontmatter に埋め込んで伝播する（省略すると内側だけ `Fade` に
 /// 逆戻りしてしまう）。
-fn parse_events_only(input: &str, default_transition: EventImageTransition) -> Vec<Event> {
+///
+/// `first_line` は `input` の先頭行が元ファイルで何行目（1 始まり）かを表す。擬似ドキュメントの
+/// 付加行数を差し引いた `line_base` を作って再帰 parse に渡し、警告の行番号を元ファイルの行番号に揃える
+/// （外側が自身も条件ブロックの中なら `first_line` は既に元ファイルの行番号なので、ネストでもずれない）。
+fn parse_events_only(
+    input: &str,
+    default_transition: EventImageTransition,
+    first_line: i64,
+) -> Vec<Event> {
     // Wrap in a fake document so we can reuse parsing logic
     let transition_line = match default_transition {
         EventImageTransition::Pixelate => "event_image_transition: \"pixelate\"\n",
@@ -1338,7 +1367,8 @@ fn parse_events_only(input: &str, default_transition: EventImageTransition) -> V
     let fake = format!(
         "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n{transition_line}---\n\n## tmp-1: tmp\n\n{input}"
     );
-    let doc = parse(&fake);
+    let header_lines = fake[..fake.len() - input.len()].matches('\n').count() as i64;
+    let doc = parse_with_line_base(&fake, first_line - 1 - header_lines);
     if let Some(chapter) = doc.chapters.first() {
         if let Some(scene) = chapter.scenes.first() {
             return scene.events.clone();
@@ -8516,11 +8546,130 @@ mod unknown_directive_warning_tests {
             "[NPC移動: x",
             "[壁高さ",
             "[フォント: x",
+            "[アニメ: target=x]",
+            "[underline: 色=red]",
+            "[label: x",
+            "[image: ]",
+            "[ボイス: ]",
+            "[フォント解除: x]",
         ] {
             let _ = take_test_warnings();
             let _ = parse(&format!("{HEAD}**カコ** (a, 左):\nこんにちは\n{line}\n"));
             assert!(unknown_warnings().is_empty(), "{line}");
         }
+    }
+
+    /// #1001: `[条件:]` ブロック内の警告の行番号は、ブロック基準でなく元ファイルの行番号で出る。
+    #[test]
+    fn warning_line_numbers_inside_condition_blocks_are_original_file_lines() {
+        // HEAD は 8 行。9 話者 / 10 台詞 / 11 空 / 12 [条件: f] / 13 話者 / 14 台詞 / 15 [笑] / 16 [/条件]
+        let src = format!(
+            "{HEAD}**カコ** (a, 左):\nこんにちは\n\n[条件: f]\n**カコ** (a, 左):\nやあ\n[笑]\n[/条件]\n"
+        );
+        let pix = src.replacen(
+            "title: t\n",
+            "title: t\nevent_image_transition: \"pixelate\"\n",
+            1,
+        );
+        // pixelate は frontmatter が 1 行増えるので元ファイルでは 16 行目
+        for (label, text, expect) in [("fade", src, "15 行目"), ("pixelate", pix, "16 行目")] {
+            let _ = take_test_warnings();
+            let _ = parse(&text);
+            let w = unknown_warnings();
+            assert_eq!(w.len(), 1, "{label}: {w:?}");
+            assert!(w[0].contains(expect), "{label}: {w:?}");
+        }
+    }
+
+    #[test]
+    fn warning_line_numbers_nested_and_odd_blocks_are_original_file_lines() {
+        let cases: Vec<(&str, String, Vec<&str>)> = vec![
+            // ネスト 2 段: 9 [条件: a] / 10 [条件: b] / 11 [笑]
+            (
+                "nest2",
+                format!("{HEAD}[条件: a]\n[条件: b]\n[笑]\n[/条件]\n[/条件]\n"),
+                vec!["11 行目"],
+            ),
+            // ネスト 3 段 + 外側にも未知行: 9 a / 10 外 / 11 b / 12 空 / 13 c / 14 奥
+            (
+                "nest3",
+                format!("{HEAD}[条件: a]\n[外]\n[条件: b]\n\n[条件: c]\n[奥]\n[/条件]\n[/条件]\n[/条件]\n"),
+                vec!["10 行目", "14 行目"],
+            ),
+            // 全角・タブ・空行: 9 [条件] / 10 空 / 11 全角台詞 / 12 空 / 13 [笑]
+            (
+                "wide",
+                format!("{HEAD}[条件: f]\n\n\t全角　台詞\n\n\t[笑]\n[/条件]\n"),
+                vec!["13 行目"],
+            ),
+            // 閉じタグなし: 9 [条件] / 10 空 / 11 [笑]
+            (
+                "unclosed",
+                format!("{HEAD}[条件: f]\n\n[笑]\n"),
+                vec!["11 行目"],
+            ),
+            // [選択] の後ろの条件: 9 [選択] / 10 / 11 [/選択] / 12 [条件] / 13 [笑]
+            (
+                "after_choice",
+                format!("{HEAD}[選択]\n- A → x\n[/選択]\n[条件: f]\n[笑]\n[/条件]\n"),
+                vec!["13 行目"],
+            ),
+            // #969 の警告（話者行でも本文でもない太字行）も条件ブロック内で元の行番号: 9 空 / 10 [条件] / 11 話者 / 12 台詞 / 13 空 / 14 **F5**
+            (
+                "stray_close",
+                format!(
+                    "{HEAD}\n[条件: f]\n**カコ** (a, 左):\nやあ\n\n**F5** キーで進む。\n[/条件]\n"
+                ),
+                vec!["14 行目"],
+            ),
+        ];
+        for (label, text, expects) in cases {
+            let _ = take_test_warnings();
+            let _ = parse(&text);
+            let w: Vec<String> = take_test_warnings()
+                .into_iter()
+                .filter(|m| m.contains("行目"))
+                .collect();
+            assert_eq!(w.len(), expects.len(), "{label}: {w:?}");
+            for (m, e) in w.iter().zip(expects.iter()) {
+                assert!(m.contains(e), "{label}: want {e} in {m}");
+            }
+        }
+    }
+
+    /// #1001: `[イベント 名前]` ブロック内の未知の `[...]` も警告つきで読み捨てる（元ファイルの行番号つき）。
+    #[test]
+    fn unknown_directive_inside_event_block_warns() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!(
+            "{HEAD}[イベント e]\n**カコ** (a, 左):\nやあ\n[笑]\n[/イベント]\n"
+        ));
+        let w = unknown_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("12 行目") && w[0].contains("[笑]"), "{w:?}");
+        let dump = format!("{doc:?}");
+        assert!(!dump.contains("笑"), "{dump}");
+    }
+
+    #[test]
+    fn known_directives_inside_event_block_do_not_warn() {
+        let _ = take_test_warnings();
+        let _ = parse(&format!(
+            "{HEAD}[イベント e]\n[NPC移動: x → @1,2]\n[待機: 500]\n[戦闘: g]\n[感情: 主人公, ？]\n[ジャンプ: z]\n[ボイス: a.wav]\n[フォント: x]\n[待機: abc]\n[NPC移動: x\n> ナレ\n**カコ** (a, 左):\nやあ\n[/イベント]\n"
+        ));
+        assert!(unknown_warnings().is_empty());
+    }
+
+    /// 条件ブロック内のイベントブロックでも行番号は元ファイル基準。
+    #[test]
+    fn unknown_directive_inside_event_in_condition_uses_original_line() {
+        let _ = take_test_warnings();
+        let _ = parse(&format!(
+            "{HEAD}[条件: f]\n[イベント e]\n[笑]\n[/イベント]\n[/条件]\n"
+        ));
+        let w = unknown_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("11 行目"), "{w:?}");
     }
 
     /// 台詞本文の行頭エスケープ (#973/#989): `\[笑]` は警告なしで本文になり、

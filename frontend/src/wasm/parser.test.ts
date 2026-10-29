@@ -2652,6 +2652,41 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
   })
 })
 
+describe('parseMarkdown: 読み捨て警告の行番号は元ファイルの行番号 (#1001)', () => {
+  it('[条件:] の中の未知の [笑] は、条件ブロック基準でなく元ファイルの行番号で警告する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const src = [
+        '---',
+        'engine: name-name',
+        'chapter: 1',
+        'title: "t"',
+        '---',
+        '',
+        '## 1-1: s',
+        '',
+        '**カコ** (a, 左):',
+        'こんにちは',
+        '',
+        '[条件: f]',
+        '**カコ** (a, 左):',
+        'やあ',
+        '[笑]',
+        '[/条件]',
+        '',
+      ].join('\n')
+      await parseMarkdown(src)
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      const hit = msgs.filter((m) => m.includes('未知のディレクティブ'))
+      expect(hit).toHaveLength(1)
+      expect(hit[0]).toContain('15 行目')
+      expect(hit[0]).toContain('[笑]')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: battle_commands / わざ が生き残る (#873)', () => {
   const doc = (fm: string, body = '') =>
     `---\nengine: name-name\nchapter: 1\ntitle: "t"\n${fm}---\n## data: マスター\n${body}\n`
