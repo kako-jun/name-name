@@ -89,6 +89,15 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('StageTurn' in event) {
+    const ms = event.StageTurn.duration_ms
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        舞台回転{ms != null ? `: 時間=${ms}` : ''}
+      </div>
+    )
+  }
+
   if ('StageFront' in event) {
     return <div className={`text-xs italic ml-2 ${meta}`}>舞台前面: {event.StageFront.path}</div>
   }

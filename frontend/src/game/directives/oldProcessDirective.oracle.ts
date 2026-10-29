@@ -76,6 +76,7 @@ export const OLD_OBJECT_KEYS = [
   'StageFront',
   'Weather',
   'Floor',
+  'StageTurn',
   'Prop',
   'BackgroundColor',
   'Video',
@@ -193,6 +194,11 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   }
   if ('Floor' in event) {
     w.floorLayer.show(event.Floor.path, event.Floor.height, w.env.assetBaseUrl)
+    return true
+  }
+  if ('StageTurn' in event) {
+    // 回転舞台 (#704 第2弾) は旧実装に無い。新しい表との対応を保つため範囲を開く呼び出しだけを写す。
+    w.hooks.beginStageTurn(event.StageTurn.duration_ms)
     return true
   }
   if ('Prop' in event) {

@@ -13,9 +13,42 @@
  * - 保存状態（`getState`）は「パス＋高さ」だけ（ADR-0002）。復元は最終状態で、同じ床（パス・高さ・assetBaseUrl が同一で
  *   表示中またはロード進行中）なら再読み込みせず、それ以外（失敗・baseUrl 差し替え・床なし→あり・高さ違い）は読み直す。
  */
-import { Assets, Container, TilingSprite, type Texture } from 'pixi.js'
+import { Assets, Container, Texture, TilingSprite } from 'pixi.js'
 import type { FloorState } from './GameState'
 import { clampFloorHeight, computeFloorPlacement, resolveAssetUrl } from './novelLayout'
+import { LayerTurn, type StageTurnRun } from './stageTurn'
+
+/**
+ * 床のタイル（`TilingSprite`）を、回転舞台 (#704 第2弾) の mesh に貼れる 1 枚のテクスチャへ焼く。
+ * 描画可能な元画像（ブラウザの画像・ImageBitmap・canvas）でなければ null（呼び出し側は元テクスチャで代用する）。
+ */
+export function bakeFloorTexture(
+  texture: Texture,
+  width: number,
+  height: number,
+  tileScale: number
+): Texture | null {
+  try {
+    if (typeof document === 'undefined') return null
+    const resource = texture.source?.resource as unknown
+    if (!resource || ArrayBuffer.isView(resource)) return null
+    const k = 2
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.ceil(width * k))
+    canvas.height = Math.max(1, Math.ceil(height * k))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    const tileW = texture.width * tileScale * k
+    const tileH = texture.height * tileScale * k
+    if (!(tileW > 0) || !(tileH > 0)) return null
+    for (let x = 0; x < canvas.width; x += tileW) {
+      ctx.drawImage(resource as CanvasImageSource, x, 0, tileW, tileH)
+    }
+    return Texture.from(canvas)
+  } catch {
+    return null
+  }
+}
 
 export class FloorLayer extends Container {
   private sprite: TilingSprite | null = null
@@ -28,6 +61,8 @@ export class FloorLayer extends Container {
   private generation = 0
   /** これまでにロードした画像 URL（GPU テクスチャのリーク防止用。StageFrontLayer.loadedUrls と同じ流儀）。 */
   private loadedUrls: Set<string> = new Set()
+  /** 回転舞台 (#704 第2弾) への参加。 */
+  private readonly turn = new LayerTurn(this, () => this.endStageTurn())
 
   constructor(
     private readonly screenWidth: number,
@@ -52,6 +87,8 @@ export class FloorLayer extends Container {
 
     const gen = this.generation
     const url = resolveAssetUrl(assetBaseUrl, 'images', path)
+    // 回転舞台 (#704 第2弾) の裏側の指定なら新面として予約する（ロードが終わるまで回転は始まらない）。
+    this.turn.expectSlot()
     this.loading = true
     Assets.load(url)
       .then((texture: Texture) => {
@@ -66,7 +103,10 @@ export class FloorLayer extends Container {
           this.screenHeight,
           h
         )
-        if (!placement) return
+        if (!placement) {
+          this.turn.failSlot()
+          return
+        }
         const sprite = new TilingSprite({
           texture,
           width: placement.width,
@@ -76,16 +116,48 @@ export class FloorLayer extends Container {
         sprite.x = placement.x
         sprite.y = placement.y
         this.sprite = sprite
+        const run = this.turn.run
+        const host = this.turn.host
+        const token = run && host ? this.turn.takeSlot() : null
+        if (token != null && run && host) {
+          // 回転舞台の新面。回転が終わるまで sprite は載せず、焼いたタイルを mesh の素材として run へ渡す。
+          const baked = bakeFloorTexture(
+            texture,
+            placement.width,
+            placement.height,
+            placement.tileScale
+          )
+          run.resolveNew(
+            token,
+            host,
+            baked ?? texture,
+            {
+              x: placement.x + placement.width / 2,
+              y: placement.y + placement.height / 2,
+              width: placement.width,
+              height: placement.height,
+            },
+            0,
+            { ownedTexture: baked }
+          )
+          return
+        }
         this.addChild(sprite)
       })
       .catch((err: unknown) => {
-        if (gen === this.generation) this.loading = false
+        if (gen === this.generation) {
+          this.loading = false
+          this.turn.failSlot()
+        }
         console.warn('[name-name] 床の読み込みに失敗: ' + url, err)
       })
   }
 
   /** 床を消す（`[床: なし]` / `[場面転換]` / 新規開始 / 終劇 / 破棄）。Sprite を解放する。 */
   clear(): void {
+    // 回転舞台 (#704 第2弾) の最中なら打ち切る（場面転換・復元・新規開始は最終状態へ即時）。
+    this.turn.interrupt()
+    this.turn.failSlot()
     this.generation++
     if (this.sprite) {
       this.sprite.removeFromParent()
@@ -105,6 +177,8 @@ export class FloorLayer extends Container {
    * 差し替わった）ときは show し直す。
    */
   restore(state: FloorState | null, assetBaseUrl: string): void {
+    // 復元は最終状態へ即時（進行中の回転舞台 (#704 第2弾) は畳む）。
+    this.turn.interrupt()
     if (!state) {
       this.clear()
       return
@@ -122,6 +196,37 @@ export class FloorLayer extends Container {
     // 読み込み失敗（404・デコード失敗）は sprite も loading も無い → 表示できていない扱いで再読み込みする。
     // restore はイベント時（goBack・seek・復元）にしか呼ばれないので、失敗が続いても無限にリロードはしない。
     return this.sprite !== null || this.loading
+  }
+
+  /**
+   * 回転舞台 `[舞台回転]` (#704 第2弾)。いま表示している床（旧面）を `run` に渡して空になる。
+   * 以後の `show()` は新面で、ロードが終わるまで・回転が終わるまで画面に載せない。
+   */
+  beginStageTurn(run: StageTurnRun): void {
+    const host = this.turn.begin(run)
+    const sprite = this.sprite
+    if (sprite) {
+      const width = sprite.width
+      const height = sprite.height
+      const geometry = { x: sprite.x + width / 2, y: sprite.y + height / 2, width, height }
+      const baked = bakeFloorTexture(sprite.texture, width, height, sprite.tileScale.y)
+      run.addOld(host, baked ?? sprite.texture, geometry, 0, { ownedTexture: baked })
+    }
+    // 旧い床と読み込み中の床を手放す。
+    this.generation++
+    if (sprite) {
+      sprite.removeFromParent()
+      sprite.destroy()
+    }
+    this.sprite = null
+    this.current = null
+    this.shownBaseUrl = ''
+    this.loading = false
+  }
+
+  /** 回転が終わった／打ち切られた。新面の sprite を載せる（ロード中のものは完了時に即座に載る）。 */
+  private endStageTurn(): void {
+    if (this.sprite && !this.sprite.parent) this.addChild(this.sprite)
   }
 
   /** 現在の床を settled state として返す。ロードの成否に関わらず宣言された事実を返す（ADR-0002）。 */

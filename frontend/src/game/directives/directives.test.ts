@@ -72,6 +72,10 @@ function fake() {
       setCurtainZOrder: () => calls.push('hooks.setCurtainZOrder'),
       resolveNovelRoleXRatio: () => undefined,
       setCurrentBgmPath: () => calls.push('hooks.setCurrentBgmPath'),
+      // 回転舞台 (#704 第2弾): 範囲外（ためない）の既定。回転舞台の動作は directives.stageTurn.test.ts。
+      beginStageTurn: () => calls.push('hooks.beginStageTurn'),
+      deferToStageTurn: () => false,
+      cancelStageTurn: () => {},
     },
   } as unknown as DirectiveContext
   return { ctx, calls }

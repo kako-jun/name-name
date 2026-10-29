@@ -13,6 +13,7 @@ function ctxWith(assetBaseUrl = '/a') {
   const ctx = {
     layers: { floor },
     env: { assetBaseUrl },
+    hooks: { deferToStageTurn: () => false },
   } as unknown as DirectiveContext
   return { ctx, floor }
 }

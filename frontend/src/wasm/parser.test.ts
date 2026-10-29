@@ -2973,6 +2973,64 @@ describe('wasm parseMarkdown: 床 (#706 第2弾)', () => {
   })
 })
 
+// 回転舞台 (#704 第2弾)。wasm → normalizeEvents 経路で、`[舞台回転]` が StageTurn に（時間は 0〜5000 にクランプ・
+// 不正値は null）、emit が往復し、裏側の 4 種の並び順が保たれることを縛る。
+describe('wasm parseMarkdown: 回転舞台 (#704 第2弾)', () => {
+  const markdown = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## s:',
+    '',
+    '[舞台回転]',
+    '[壁: b.png]',
+    '[舞台回転: 時間=900]',
+    '[床: なし]',
+    '[舞台回転: duration=99999]',
+    '[舞台回転: 時間=99999999999]',
+    '[舞台回転: 時間=abc]',
+    '[舞台回転: 時間=0]',
+    '[大道具: p.png, depth: 2, 回転: o.png]',
+    '',
+  ].join('\n')
+
+  it('StageTurn に正規化される（時間は number|null、クランプ、不正値は null、並び順は保たれる）', async () => {
+    const doc = await parseMarkdown(markdown)
+    expect(doc.chapters[0].scenes[0].events).toEqual([
+      { StageTurn: { duration_ms: null } },
+      { Wall: { path: 'b.png', loop: true, mute: true } },
+      { StageTurn: { duration_ms: 900 } },
+      'FloorExit',
+      { StageTurn: { duration_ms: 5000 } },
+      { StageTurn: { duration_ms: 5000 } },
+      { StageTurn: { duration_ms: null } },
+      { StageTurn: { duration_ms: 0 } },
+      { Prop: { path: 'p.png', depth: 2, flip_from: 'o.png' } },
+    ])
+  })
+
+  it('旧 JSON（duration_ms 無し）も null に正規化される', () => {
+    expect(
+      normalizeEvents([{ StageTurn: {} }, { StageTurn: { duration_ms: 300 } }] as never, 'Fade')
+    ).toEqual([{ StageTurn: { duration_ms: null } }, { StageTurn: { duration_ms: 300 } }])
+  })
+
+  it('round-trip: 既定は [舞台回転]、時間指定は 時間=N、クランプ後の値で往復する', async () => {
+    const doc = await parseMarkdown(markdown)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[舞台回転]\n')
+    expect(emitted).toContain('[舞台回転: 時間=900]\n')
+    expect(emitted).toContain('[舞台回転: 時間=5000]\n')
+    expect(emitted).toContain('[舞台回転: 時間=0]\n')
+    expect(emitted).not.toContain('duration')
+    const doc2 = await parseMarkdown(emitted)
+    expect(doc2.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})
+
 // #973: 台詞本文の行頭エスケープ。実 WASM を通した往復で、行頭が構文記号の台詞が消えない。
 describe('emitMarkdown/parseMarkdown: 台詞本文の行頭エスケープ (#973)', () => {
   const lines = ['**F5** で進む', '[/選択]', '> 引用', '---', '[笑]', '\\x', ' [笑]']
@@ -3005,6 +3063,37 @@ describe('emitMarkdown/parseMarkdown: 台詞本文の行頭エスケープ (#973
       if (typeof d !== 'object' || !('Dialog' in d)) throw new Error('Dialog expected')
       expect(d.Dialog.text).toEqual(['はじめ', kept(line)])
       expect(await emitMarkdown(back)).toBe(emitted)
+    }
+  })
+})
+
+describe('parseMarkdown: 未知の [...] ディレクティブは警告つきで読み捨てる (#995)', () => {
+  const doc = (body: string) =>
+    `---\nengine: name-name\nchapter: 1\ntitle: "t"\n---\n## 1-1: s\n\n${body}\n`
+
+  it('未知の [笑] は wasm 経由で console.warn（行番号つき）が出て、イベントにならない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const parsed = await parseMarkdown(doc('**カコ** (a, 左):\nこんにちは\n[笑]\n続き'))
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      const hit = msgs.filter((m) => m.includes('未知のディレクティブ'))
+      expect(hit).toHaveLength(1)
+      expect(hit[0]).toContain('[笑]')
+      expect(hit[0]).toContain('行目')
+      expect(JSON.stringify(parsed)).not.toContain('笑')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('既知のディレクティブと、エスケープした \\[笑] では警告が出ない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await parseMarkdown(doc('[暗転]\n[BGM: a.ogg]\n**カコ** (a, 左):\n\\[笑]\n[待機: 100]'))
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs.filter((m) => m.includes('未知のディレクティブ'))).toHaveLength(0)
+    } finally {
+      warn.mockRestore()
     }
   })
 })

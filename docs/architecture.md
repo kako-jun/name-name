@@ -349,7 +349,7 @@ Rust で実装。wasm-bindgen + tsify-next で TypeScript 型を自動生成す�
 - `Enter` — 無言の立ち絵登場（character, expression?, position?, fit?・#401）。`[登場: 名前 (sprite/表情, 位置)]` で本文なしに立ち絵を出す。話者タグの立ち絵指定と同書式・同じ配置/フェード/衝突退場ロジック（`CharacterLayer.show` を流用）だが、テキストと話者継続状態を持たない。非テキストイベントなので `processUntilNextTextEvent` が冒頭で実行し、`?scene=` ディープリンク（#399）開始直後にキャストを立てられる。冪等（同一 name/expression/position/fit の再宣言は show 側の no-op ガードで無効）
 - `ExpressionChange` — 表情変更（character, expression）
 - `Wait` — 固定時間待機（ms）
-- `WaitDisplayComplete` — 表示完了待機。`[待機: 表示完了]` で、その時点の背景ロード/フェードと立ち絵ロード/フェード/移動が完了するまで待つ
+- `WaitDisplayComplete` — 表示完了待機。`[待機: 表示完了]` で、その時点の背景ロード/フェードと立ち絵ロード/フェード/移動、回転舞台（`StageTurnController.run`、新面のロード待ちを含む）と大道具・背景板の面の切り替え（回転中・新面のロード待ち、`hasPendingFlip`）が完了するまで待つ
 - `Flag` — フラグ設定（name, value）
 - `Condition` — 条件分岐（flag, events: Event[]）
 - `Jump` — 無条件ジャンプ（target: シーンID。`[ジャンプ: シーンID]`、#725）。選択肢確定と同じ遷移経路（GUI は `jumpToScene`、confinement・`missingSceneResolver` 遅延ロードを再利用）。`[条件:]` 内にも書け、先読み（`preloadUpcomingAssets`）は `Choice`/`Condition` と同様にここで打ち切る。遷移先不在・循環上限（連続 100 回）では停止する（GUI は `[待機]` 用の `waitingForWait` とは独立した `jumpState: 'idle' | 'pending' | 'stalled'` で持ち、遷移予約は `armJump`、停止は `stallJump`。TUI は `pending_jump` の予約保持）。`jumpState` は GameState に載せず、`applyState`（goBack・seekTo・startFrom・quickLoad・セーブロード・restoreSnapshot の全復元経路）で `idle` に戻して、復元後の `eventIndex` が Jump を指していれば `armJump` で再予約する（停止は復元をまたいで持ち越さず、遷移先不在なら再び警告して停止する）。詳細は spec のジャンプ節
@@ -659,7 +659,7 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 - `Flag` — フラグ設定
 - `Exit` / `ExpressionChange` — 立ち絵制御
 - `Wait` — 固定時間待機
-- `WaitDisplayComplete` — 表示完了待機（ユーザー操作は待たず、視覚演出完了後に自動進行）
+- `WaitDisplayComplete` — 表示完了待機（ユーザー操作は待たず、視覚演出完了後に自動進行。回転舞台 `StageTurnController.run` と大道具・背景板の面の切り替え `hasPendingFlip` の回転も待つ）
 
 `Dialog` と `Narration` のみユーザー操作（クリック/キー）で進行する。
 
@@ -1314,7 +1314,23 @@ MapEditor/NPCEditor の変更
 - 共存: 背景板・大道具は depth・カメラのズーム（#702）の射影で配置された位置・大きさのまま回る（mesh は配置済みの sprite の位置・寸法から四隅を求める）。紙人形輪郭（#699）は大道具の mesh にも付く
 - スキップとの関係: スキップに入った時点で進行中の回転は畳まず、所要時間ぶん続いて自然に終わる（#701 の歩行と同じ既存方針）。スキップ中に新たに受けた差し替えは即時に入れ替わる
 - 既知の制限（既存の add→clear 競合と同じ延長で、今回の退行ではない）: 取り消された面のテクスチャは `loadedUrls` に載らず `disposeTextures` で unload されない。`PropLayer` と `BackgroundBoardLayer` は約 200 行の処理が重複している（共通化は別途）
-- **回転舞台（舞台全体が回る）は未実装**。拡張余地: 面の切り替えは「ある板の旧面→新面」の実行体（`BoardFaceFlipRun`）として独立しているので、将来は舞台上の全板（背景板・大道具）に対して同じ開始時刻・同じ所要時間で一斉に `replace` を適用する薄いディレクティブ（例: `[回転舞台: …]`）で表現できる。ただし全板の旧面/新面ペア（裏側の舞台）の宣言の仕方が別途必要なので、別 Issue で設計する
+- 回転舞台（舞台全体が回る）は次節「回転舞台」で実装済み（#704 第2弾）。個別の面の切り替え（上記）とは別の仕組みで、同じ数式・同じ即時化条件を使う
+
+### 回転舞台（実装済み・#704 第2弾）
+
+シアターモードで、舞台全体（壁・背景板・大道具・床）を 1 枚の板のように回して、裏側の舞台へ一斉に切り替える。旧い舞台が 0°→90° で消え、裏側の舞台が -90°→0° で現れる。伝統的な「回り舞台」。
+
+- 構文は 1 つだけ: `[舞台回転]` / `[舞台回転: 時間=900]`（`Event::StageTurn { duration_ms }`、`None` は emit も JSON も無出力）。直後から次の「進行を止めるイベント」までに書かれた `[壁:]` `[背景板:]` `[大道具:]` `[床:]`（`なし` を含む）が裏側の舞台。選んだ理由: 裏側を宣言する専用の構文（`[裏舞台: …]` のようなブロック）にすると、壁・背景板・大道具・床それぞれの既存の書式を二重に持つことになる。「回すよ」の合図 1 行と、いつもの書き方の並びだけで済み、パーサーは合図のイベントを 1 つ足すだけ（裏側の指定は既存のイベントのまま）
+- **収集範囲の判定は再生ループが持つ**（パーサーではなく実行時）。`NovelRenderer.processUntilNextTextEvent` は「本文（台詞・ナレーション）・選択肢・待機・ジャンプ予約に着くまで」ディレクティブを順に流す同期ループで、これが既存の「1 ステップ」の境界。`[舞台回転]` が来ると `StageTurnController`（`frontend/src/game/stageTurn.ts`）が範囲を開き、範囲の間に来た 4 種はレイヤーを触らずためる（`stageDirectives.ts` の `deferToStageTurn`）。ループが終わる `finally` で範囲を閉じ（`flush()`）、ためた指定を流し込む。`[場面転換]` は範囲を捨てる（転換が全部消すため）。パーサーで範囲を求めない理由: 範囲の終端は `[条件:]` 展開・選択肢・ジャンプ予約など実行時の流れで決まり、静的に切ると再生と食い違う。裏側が空の `[舞台回転]` は実行時に警告して何も回さない
+- **回転軸は個々の板の中心ではなく画面中央の鉛直軸**。第1弾の `computeBoardFlipCorners` は板ごとの中心軸だが、`computeStageTurnCorners` は軸 x・消失点 y・カメラ距離を `StageTurnView`（画面サイズから 1 組だけ決まる）として全板で共有し、板の中心を軸からのずれ付きで回す。これにより左右に離れた板も同じ剛体の一部として回る。角度の時間変化は `boardFlip.ts`（`computeBoardFlipFrame`）をそのまま使う
+- 実行体 `StageTurnRun` が旧面・新面の `PerspectiveMesh` を所有して毎フレーム更新する（`TimeController` の 16ms interval）。各レイヤー（`WallLayer` / `BackgroundBoardLayer` / `FloorLayer` / `PropLayer`）は `beginStageTurn(run)` で旧面を `run` に渡して空になり、以後に足された板は新面として `run.expectNew()` で予約される。ロード完了で `resolveNew`、失敗・assetBaseUrl 空で `failNew`。**全ての新面がそろうまで回転は始まらず**、その間は旧面が角度 0 のまま残る（第1弾の `pendingOld` と同じ考えを全板に拡張）。mesh は各レイヤー内の最前に置く `LayerTurn` の host（`sortableChildren`、zIndex = -depth）に載り、各レイヤーのコンテナに掛かるズームを受ける
+- 回さないもの: 立ち絵・舞台前面・天候・照明（スポットライト）・幕・背景（単一スロット）・イベント絵。コントローラが触るのは上の 4 レイヤーだけ（立ち絵は舞台の上に立ち続ける登場人物、舞台前面は客席側の固定物）
+- 保存状態は回転後の最終状態: `[舞台回転]` は `NovelGameState` に何も足さない。流し込んだ指定がそのまま `props` / `backgroundBoards` / `wall` / `floor` になり、回転途中の値は持たない（ADR 0002）。裏側の指定が一部のレイヤーだけでも、旧い舞台は全体が回って消え、指定の無いレイヤーは空になる（舞台全体の入れ替えのため）
+- 即時になる条件は第1弾と同じ `isBoardFaceFlipEnabled`（ノベル・スキップ中・動画書き出し中・`prefers-reduced-motion`・時間 0）。即時のときは 4 レイヤーを全消去してから裏側の指定を流し込む（最終状態は回る場合と同じ）。復元（`applyState`＝goBack/seekTo/セーブ復元）は `[舞台回転]` を再生せず最終状態を積むので回らず、進行中の回転は各レイヤーの `clear()`/`restore()` が畳む
+- 割り込み: 回転中の `[舞台回転]` 再指定・範囲外の `add`/`show`/`replace`・各レイヤーの `clear()`・書き出し開始・カメラの mode/向き/仰角の変化は、`run.finish()` で全レイヤーの mesh を破棄して最終状態へ畳む（どのレイヤーから打ち切っても全レイヤーが揃って終わる）。ズームだけの変更は `setCamera` の引数が変わらないので続く。連続する `[舞台回転]` は後勝ち
+- 第1弾の `回転:`（個別の面の切り替え）との共存: 裏側の指定に `回転:` が書かれていても**舞台回転が優先され、個別の回転は無視される**（旧舞台は `beginStageTurn` で既に回転へ渡されて空なので、`replace` は該当板なしの通常 `add` に落ちる。同じ範囲で足した板への `回転:` は単なる置き換え）。所要時間も舞台回転の値を使う
+- 動画の壁は mesh に載せない（再生を止めずに回すのが難しい）。旧い動画の壁は回転の中間まで残り、新しい動画の壁は中間から現れる（`run.onHalf`）。床のタイル（`TilingSprite`）は回転の開始時に canvas へ焼いて 1 枚のテクスチャにしてから mesh に貼る（`bakeFloorTexture`。描画できる元画像でなければ元テクスチャで代用）
+- 既知の制限: 新面のロードが遅いと回転の開始が遅れる（旧い舞台が見え続けるだけで進行は止まらない）。待つ上限は `STAGE_TURN_MAX_WAIT_MS`（3 秒）で、超えて着かない面は `failNew` と同じ扱いで回し始め、遅れて着いた面は回転の終わり（`endTurn`）に現れる。`PropLayer` と `BackgroundBoardLayer` の重複（約 200 行）は引き続き未共通化（回転舞台の参加処理 `beginStageTurn` / `endStageTurn` なども二重に持つ）。`[待機: 表示完了]` は `StageTurnController.run`（と両レイヤーの `hasPendingFlip`）を待つ。スキップ判定は範囲を開く時点の値も見る（待機・選択肢の到達で `skipMode` が解除されても、スキップ中に開いた範囲は即時）。終劇（`endStory`）は開いた範囲を捨てる。動画の壁だけを入れ替える `[舞台回転]`（回すものが他に無い）は回らず即時に入れ替わる
 
 ### カメラの向き・仰角
 
