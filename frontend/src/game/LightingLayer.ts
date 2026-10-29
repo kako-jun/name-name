@@ -196,6 +196,7 @@ export class LightingLayer extends Container {
    * 光が今いる位置（レイヤー座標）。消灯中は `null`。**テスト用**の副作用のない読み取りで、
    * ticker/`set()`/退場通知が最後に解決した位置を返す（本番コードは使わない）。tick の後に対象が
    * 動いた場合は次の tick まで古い値を返す。
+   * split_layout の変換は読み取り時に最新の領域で掛ける（切替は呼んだ瞬間に反映される。スプライト自体は次の tick で追従する）。
    */
   getLightPosition(): { x: number; y: number } | null {
     if (!this.state) return null
