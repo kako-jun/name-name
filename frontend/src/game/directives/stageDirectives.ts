@@ -121,7 +121,10 @@ export const stageDirectives: ObjectDirectiveTable = {
         { flipMs: board.flip_ms, skip: ctx.env.skipMode }
       )
     } else {
-      ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
+      // スキップ中はスライドインを起こさず最終位置へ即時配置する (#996)。
+      ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl, {
+        instant: ctx.env.skipMode,
+      })
     }
   }),
 
@@ -156,7 +159,9 @@ export const stageDirectives: ObjectDirectiveTable = {
         skip: ctx.env.skipMode,
       })
     } else {
-      ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl)
+      ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl, {
+        instant: ctx.env.skipMode,
+      })
     }
   }),
 
