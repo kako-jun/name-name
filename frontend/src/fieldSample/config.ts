@@ -172,6 +172,8 @@ export interface FieldSampleConfig {
   speed: number
   /** 端のしきい値（背景ピクセル） */
   edgeThreshold: number
+  /** 端リンクの接触判定。'body' = キャラの身体の外縁（top は頭、left/right は左右の縁、bottom は足元）、'foot' = 足元の 1 点（従来）。既定 'body' */
+  edgeContact: 'body' | 'foot'
   player: {
     /** 向きごとに 3 コマの画像 URL。斜め 4 方向 (#811) は optional（`mirrorOf` で埋めた分は含まない） */
     sprites: Record<Facing, [string, string, string]> &
@@ -278,6 +280,7 @@ export function parseGait(
 export const DEFAULTS = {
   speed: 260,
   edgeThreshold: 6,
+  edgeContact: 'body' as 'body' | 'foot',
   height: 96,
   frameMs: 140,
   stepDistance: 80,
@@ -337,6 +340,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!speed.ok) return speed
   const edgeThreshold = positive(raw.edgeThreshold, DEFAULTS.edgeThreshold, 'edgeThreshold')
   if (!edgeThreshold.ok) return edgeThreshold
+  if (raw.edgeContact !== undefined && raw.edgeContact !== 'body' && raw.edgeContact !== 'foot')
+    return fail(`edgeContact は "body" か "foot": ${JSON.stringify(raw.edgeContact)}`)
+  const edgeContact: 'body' | 'foot' = raw.edgeContact ?? DEFAULTS.edgeContact
 
   if (!isObj(raw.player) || !isObj(raw.player.sprites)) return fail('player.sprites が必要です')
   const parseFrames = (v: unknown, path: string): ParseResult<[string, string, string]> => {
@@ -903,6 +909,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       start: { x: s.x, y: s.y },
       speed: speed.value,
       edgeThreshold: edgeThreshold.value,
+      edgeContact,
       player: {
         sprites,
         mirrorOf,

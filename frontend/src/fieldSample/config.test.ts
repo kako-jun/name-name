@@ -351,6 +351,7 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     expect(c.start).toEqual({ x: 10, y: 20 })
     expect(c.speed).toBe(DEFAULTS.speed)
     expect(c.edgeThreshold).toBe(DEFAULTS.edgeThreshold)
+    expect(c.edgeContact).toBe('body')
     expect(c.player.height).toBe(DEFAULTS.height)
     expect(c.player.frameMs).toBe(DEFAULTS.frameMs)
     expect(c.encounter).toEqual({
@@ -397,6 +398,10 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
       expect(urls.length).toBeGreaterThan(0)
       for (const u of urls) expect(u).toMatch(/^http:\/\/localhost:8765\/assets\/images\/.+\.webp$/)
     }
+  })
+
+  it('edgeContact: "foot" を受け付ける', () => {
+    expect(ok(mutated((r) => (r.edgeContact = 'foot'))).edgeContact).toBe('foot')
   })
 
   it('相対 URL は baseUrl を基準に解決される', () => {
@@ -570,6 +575,7 @@ describe('parseConfig 異常系 (Issue #807/#809)', () => {
     ['speed が負', (c) => (c.speed = -1)],
     ['speed が NaN', (c) => (c.speed = NaN)],
     ['speed が文字列', (c) => (c.speed = '260')],
+    ['edgeContact が不正', (c) => (c.edgeContact = 'head')],
     ['edgeThreshold が 0', (c) => (c.edgeThreshold = 0)],
     ['edgeThreshold が負', (c) => (c.edgeThreshold = -3)],
     ['edgeThreshold が NaN', (c) => (c.edgeThreshold = NaN)],

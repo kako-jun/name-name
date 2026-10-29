@@ -263,6 +263,7 @@ export function buildDummyFixture(): Record<string, unknown> {
     start: { x: 320, y: 300 },
     speed: 260,
     edgeThreshold: 6,
+    edgeContact: 'body',
     player: { sprites: walk, height: 64, frameMs: 140 },
     scenes: {
       meadow: {
