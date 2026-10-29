@@ -3008,3 +3008,34 @@ describe('emitMarkdown/parseMarkdown: 台詞本文の行頭エスケープ (#973
     }
   })
 })
+
+describe('parseMarkdown: 未知の [...] ディレクティブは警告つきで読み捨てる (#995)', () => {
+  const doc = (body: string) =>
+    `---\nengine: name-name\nchapter: 1\ntitle: "t"\n---\n## 1-1: s\n\n${body}\n`
+
+  it('未知の [笑] は wasm 経由で console.warn（行番号つき）が出て、イベントにならない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const parsed = await parseMarkdown(doc('**カコ** (a, 左):\nこんにちは\n[笑]\n続き'))
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      const hit = msgs.filter((m) => m.includes('未知のディレクティブ'))
+      expect(hit).toHaveLength(1)
+      expect(hit[0]).toContain('[笑]')
+      expect(hit[0]).toContain('行目')
+      expect(JSON.stringify(parsed)).not.toContain('笑')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('既知のディレクティブと、エスケープした \\[笑] では警告が出ない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await parseMarkdown(doc('[暗転]\n[BGM: a.ogg]\n**カコ** (a, 左):\n\\[笑]\n[待機: 100]'))
+      const msgs = warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs.filter((m) => m.includes('未知のディレクティブ'))).toHaveLength(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
