@@ -1714,3 +1714,89 @@ describe('dialogStyle / dialogMsPerChar (#840)', () => {
     }
   })
 })
+
+describe('player.cycle / idleFrame (sit-by-me#59)', () => {
+  const parse = (player: Raw) => {
+    const raw = minimal()
+    Object.assign(raw.player, player)
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+
+  it('省略は undefined（従来どおり）', () => {
+    const c = parse({})
+    expect(c.player.cycle).toBeUndefined()
+    expect(c.player.idleFrame).toBeUndefined()
+  })
+
+  it('立位の周期と停止コマを受け取る', () => {
+    const c = parse({ cycle: [0, 1, 2, 1], idleFrame: 1 })
+    expect(c.player.cycle).toEqual([0, 1, 2, 1])
+    expect(c.player.idleFrame).toBe(1)
+  })
+
+  it('不正な cycle / idleFrame は警告して既定へ戻す', () => {
+    const c = parse({ cycle: [0, 3], idleFrame: 5 })
+    expect(c.player.cycle).toBeUndefined()
+    expect(c.player.idleFrame).toBeUndefined()
+    expect(c.warnings?.some((w) => w.includes('player.cycle'))).toBe(true)
+    expect(c.warnings?.some((w) => w.includes('player.idleFrame'))).toBe(true)
+  })
+
+  it('境界: 16 要素は可・17 要素 / 空 / 小数 / 負数 / null / 文字列は不可', () => {
+    expect(parse({ cycle: Array(16).fill(1) }).player.cycle).toHaveLength(16)
+    for (const bad of [Array(17).fill(1), [], [0, 1.5], [0, -1], null, 'x'])
+      expect(parse({ cycle: bad }).player.cycle).toBeUndefined()
+    for (const bad of [1.5, -1, 3, null, '1'])
+      expect(parse({ idleFrame: bad }).player.idleFrame).toBeUndefined()
+  })
+
+  it('cycle だけで idleFrame が無いと組で書くよう警告する（値は有効なので cycle は効く）', () => {
+    const c = parse({ cycle: [0, 1, 2, 1] })
+    expect(c.player.cycle).toEqual([0, 1, 2, 1])
+    expect(c.warnings?.some((w) => w.includes('idleFrame がありません'))).toBe(true)
+    expect(parse({ cycle: [0, 1, 2, 1], idleFrame: 1 }).warnings).toBeUndefined()
+  })
+})
+
+describe('companion.cycle / idleFrame (sit-by-me#59)', () => {
+  const parse = (player: Raw, companion?: Raw) => {
+    const raw = minimal()
+    Object.assign(raw.player, player)
+    raw.flags = { w: false }
+    raw.assist = { requires: 'w' }
+    const f = (d: string) => [`${d}1.png`, `${d}2.png`, `${d}3.png`]
+    raw.companion = {
+      sprites: { up: f('cu'), down: f('cd'), left: f('cl'), right: f('cr') },
+      ...companion,
+    }
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+
+  it('省略は undefined。player の指定は同行者に引き継がれない', () => {
+    const c = parse({ cycle: [0, 1, 2, 1], idleFrame: 1 })
+    expect(c.companion?.cycle).toBeUndefined()
+    expect(c.companion?.idleFrame).toBeUndefined()
+    expect(c.player.cycle).toEqual([0, 1, 2, 1])
+  })
+
+  it('同行者の周期は別に指定できる', () => {
+    const c = parse({}, { cycle: [0, 1, 2, 1], idleFrame: 1 })
+    expect(c.companion?.cycle).toEqual([0, 1, 2, 1])
+    expect(c.companion?.idleFrame).toBe(1)
+    expect(c.player.cycle).toBeUndefined()
+  })
+
+  it('不正は companion. つきの警告で既定へ戻す', () => {
+    for (const bad of [Array(17).fill(1), [], [0, 1.5], [0, -1], null])
+      expect(parse({}, { cycle: bad }).companion?.cycle).toBeUndefined()
+    const c = parse({}, { cycle: [0, 3], idleFrame: 5 })
+    expect(c.companion?.cycle).toBeUndefined()
+    expect(c.companion?.idleFrame).toBeUndefined()
+    expect(c.warnings?.some((w) => w.includes('companion.cycle'))).toBe(true)
+    expect(c.warnings?.some((w) => w.includes('companion.idleFrame'))).toBe(true)
+  })
+})

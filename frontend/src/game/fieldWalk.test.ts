@@ -20,6 +20,7 @@ import {
   snapToWalkable,
   stepMove,
   walkFrame,
+  fieldFrames,
   type Edge,
   type FieldLink,
   type WalkMask,
@@ -484,6 +485,68 @@ describe('walkFrame (Issue #807)', () => {
     expect(walkFrame(true, Infinity, F)).toBe(0)
     expect(walkFrame(true, 500, NaN)).toBe(0)
     expect(walkFrame(true, 500, Infinity)).toBe(0)
+  })
+})
+
+describe('walkFrame の周期と停止コマ (sit-by-me#59)', () => {
+  const F = 140
+  const STAND = [0, 1, 2, 1]
+
+  it('立位周期は 接地A→通過→接地B→通過 を繰り返し、左右交互になる', () => {
+    const seq = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => walkFrame(true, i * F, F, STAND, 1))
+    expect(seq).toEqual([0, 1, 2, 1, 0, 1, 2, 1])
+    // 接地コマ (0 と 2) は必ず交互に現れる
+    expect(seq.filter((f) => f !== 1)).toEqual([0, 2, 0, 2])
+  })
+
+  it('停止は idleFrame（通過コマ）', () => {
+    expect(walkFrame(false, 0, F, STAND, 1)).toBe(1)
+    expect(walkFrame(false, 5 * F, F, STAND, 1)).toBe(1)
+  })
+
+  it('不正入力は idleFrame に倒れる', () => {
+    expect(walkFrame(true, NaN, F, STAND, 1)).toBe(1)
+    expect(walkFrame(true, -1, F, STAND, 1)).toBe(1)
+    expect(walkFrame(true, 500, 0, STAND, 1)).toBe(1)
+    expect(walkFrame(true, 500, F, [], 1)).toBe(1)
+  })
+
+  it('車椅子など cycle 未指定は従来の [0,1,2] と停止 0 のまま', () => {
+    const seq = [0, 1, 2, 3, 4, 5].map((i) => walkFrame(true, i * F, F))
+    expect(seq).toEqual([0, 1, 2, 0, 1, 2])
+    expect(walkFrame(false, 0, F)).toBe(0)
+  })
+
+  it('周期に範囲外・非整数のコマ番号があれば idleFrame に倒れる', () => {
+    expect(walkFrame(true, 0, F, [3], 1)).toBe(1)
+    expect(walkFrame(true, 0, F, [-1], 1)).toBe(1)
+    expect(walkFrame(true, 0, F, [1.5], 1)).toBe(1)
+  })
+})
+
+describe('fieldFrames: 主人公と同行者は別の周期 (sit-by-me#59)', () => {
+  const F = 140
+  const STAND = { cycle: [0, 1, 2, 1], idleFrame: 1 }
+
+  it('同行者の指定が無ければ主人公が立位でも同行者は従来の [0,1,2]・停止 0', () => {
+    const seq = [0, 1, 2, 3].map((i) => fieldFrames(true, i * F, F, STAND, null))
+    expect(seq.map((x) => x.player)).toEqual([0, 1, 2, 1])
+    expect(seq.map((x) => x.companion)).toEqual([0, 1, 2, 0])
+    expect(fieldFrames(false, 0, F, STAND, undefined)).toEqual({ player: 1, companion: 0 })
+  })
+
+  it('主人公は従来（車椅子）・同行者は立位、の組み合わせ', () => {
+    const seq = [0, 1, 2, 3].map((i) => fieldFrames(true, i * F, F, {}, STAND))
+    expect(seq.map((x) => x.player)).toEqual([0, 1, 2, 0])
+    expect(seq.map((x) => x.companion)).toEqual([0, 1, 2, 1])
+    expect(fieldFrames(false, 0, F, {}, STAND)).toEqual({ player: 0, companion: 1 })
+  })
+
+  it('それぞれが自分の周期を使う', () => {
+    const p = { cycle: [2, 2], idleFrame: 2 }
+    const c = { cycle: [1, 0], idleFrame: 1 }
+    expect(fieldFrames(true, F, F, p, c)).toEqual({ player: 2, companion: 0 })
+    expect(fieldFrames(false, 0, F, p, c)).toEqual({ player: 2, companion: 1 })
   })
 })
 
