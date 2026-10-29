@@ -1432,9 +1432,10 @@ depth 指定の実例（#694）:
 
 - パーサー内部では `Event::Spotlight { target: Option<String>, color, radius }` / `Event::SpotlightOff`（unit variant）で表現される。`target` 省略時は画面中央に固定表示する（キャラに追従しない、実装時に決めた既定挙動）。
 - `LightingLayer`（`frontend/src/game/LightingLayer.ts`、上記レイヤーモデル節参照）が対象キャラの**現在の**表示位置を毎フレーム追従する。座標は新設の `CharacterLayer.getCurrentPosition(name)` が返す——`show()`/`Enter` で表示中の立ち絵はもちろん、`Underline`/`Animate`/`TextEffect` と同じく render-only（Title/Label/Image）の identifier も区別なく対象にできる。返す座標はアンカー `(0.5, 1)`（足元）から、スプライト高さの半分だけ上（体の中心付近）に補正した点。生成時点の座標を固定で保持しないため、入場退場モーション（#684）や将来の立ち位置変更でも追従できる。
+- **対象が不在のとき (#992)**: 光は `[スポットライト消灯]`・`[場面転換]`・新規開始・終劇でしか消えない。退場中（フェード・歩行）の対象は `getCurrentPosition(name, { excludeExiting: true })` で不在として扱い、`lastTargetPos` を更新しない（光は退場開始前の立ち位置に残る）。退場開始の位置は 16ms tick ではなく、`CharacterLayer.remove()`（`clearForSceneTransition` 経由を含む）が退場を始める瞬間に `setExitStartListener` で同期通知する。LightingLayer の tick と CharacterLayer の ticker は別の時計で、スキップでは 1 tick の間に登場→退場が済むことがあるため、tick の観測には頼らない）。同じ対象のまま `set()` し直したときは `lastTargetPos` を保ち、対象が変わる・消灯後の点け直し・`restore()` では破棄する。`LightingLayer` は対象を最後に観測した座標を実行時の private 値（`lastTargetPos`）として持ち、対象が未登場なら中央、退場後ならその最後の座標に光を残し、再登場で追従を再開する。`lastTargetPos` は settled state（`NovelGameState.spotlight` = `target/color/radius`）には持たせない（ADR-0002: 保存するのは最終状態だけ）。そのため `set()`（点け直し）・`restore()`（セーブ復元・シーク・戻る）・`clear()` で破棄され、復元時に対象が不在なら画面中央にフォールバックする。
 - 描画は Canvas 2D で1枚だけ生成した「白の中心から外周へ透明にフェードする」正方形テクスチャを `Sprite`（`blendMode: 'add'`、`tint` で色付け、`width`/`height` で直径を伸縮）として使い回す（`ambientEffects.buildDisplacementNoiseCanvas` と同じパターン）。PixiJS v8 の `FillGradient`（radial）+ `Graphics.fill()` も検討したが、fill 時に即座に `CanvasRenderingContext2D.createRadialGradient` を呼ぶため、jsdom（`canvas` npm パッケージ未導入、`getContext('2d')` が `null`）のテスト環境で例外を投げることが判明し不採用にした。`buildSpotlightGradientCanvas` は `getContext('2d')` が `null` のとき例外を投げず `null` を返す（描画だけ諦める、state 管理は継続）。
 - カメラモード非依存（`CameraMode::Novel`/`Theater` どちらでも機能する）。
-- 新しいシーンの開始・`[場面転換]`・`endStory()` で自動的に消灯する（`isBlackout`/`cameraMode` と同じ規律。シーンをまたいで暗黙に持ち越さない）。
+- 背景板・大道具・幕と同じ持続規律 (#992): `[場面転換]`・新規開始（`resetAndStartEvents` の非 preserve 分岐）・`endStory()` で消灯し、通常のシーン間ジャンプ（preserve 分岐）では持ち越す。
 
 ### 紙人形風の輪郭（実装済み・#699）
 
@@ -1448,7 +1449,7 @@ depth 指定の実例（#694）:
 
 - パーサー内部では `Event::PaperDollOutline { enabled: bool, color: Option<String>, thickness: Option<f32> }` で表現される。`color`（既定 `#ffffff`）・`width`（既定 `2`）は `オン` のときだけ任意指定できる（`オフ` のときは無視され、emitter は素の `[紙人形輪郭: オフ]` に正規化する）
 - **スコープはキャラクター個別ではなくシナリオ（.md）全体**。一度オンにすると、そのシナリオ内で以降表示される**全てのキャラクター・大道具**に常時輪郭が付く（話者ごとの指定ではない）。別の .md では輪郭なし（通常表示）のままでよい
-- `NovelGameState.paperDollOutline`（settled state、`cameraMode` と同じく save/seek/任意局面起動で復元可能）に持たせるが、`cameraMode`/`spotlight` と異なり**場面転換（同シナリオ内のシーン間ジャンプ）・`endStory()` では自動クリアしない**。新しいエントリ文書の開始（`setEvents()`）・新規開始（`startFrom({})`）のときだけ通常表示にリセットされる（`NovelRenderer.resetAndStartEvents` の non-preserve 経路）
+- `NovelGameState.paperDollOutline`（settled state、`cameraMode` と同じく save/seek/任意局面起動で復元可能）に持たせるが、`cameraMode` と異なり**場面転換（同シナリオ内のシーン間ジャンプ）・`endStory()` では自動クリアしない**。新しいエントリ文書の開始（`setEvents()`）・新規開始（`startFrom({})`）のときだけ通常表示にリセットされる（`NovelRenderer.resetAndStartEvents` の non-preserve 経路）
 - 対象は `CharacterLayer`（立ち絵）・`PropLayer`（大道具）の両方。共通の輪郭フィルタ生成ロジックは `frontend/src/game/outlineFilter.ts`（`pixi-filters` の `OutlineFilter` をラップ）に切り出し、両レイヤーがそれぞれ `setPaperDollOutline(config)` メソッドで自分のスプライトへ反映する
 - `CharacterLayer` は `[画像:]` のピクセレート遷移（#628）用 `PixelateFilter` と `sprite.filters` を共有するため、`applySpriteFilters()` に代入箇所を集約し両フィルタが共存できるようにしている。`PropLayer` のスプライトには他にフィルタ運用が無いため直代入でよい
 - ノベルモード・シアターモード両方で機能する（カメラモードと独立した要素）

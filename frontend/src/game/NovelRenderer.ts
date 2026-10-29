@@ -2029,6 +2029,9 @@ export class NovelRenderer {
       // 幕 (#697) も背景板・大道具と同じ持続規律にする。z-order も既定位置へ戻す。
       this.curtainLayer.clear()
       this.setCurtainZOrder(false)
+      // 追うスポットライト (#693) も背景板・大道具・幕と同じ持続規律にする (#992): `[スポットライト消灯]`
+      // で明示的に消すまで残し、通常のシーン間ジャンプでは持ち越す。
+      this.lightingLayer.clear()
     }
     if (carry.preserveBackgroundForTransition) {
       this.characterLayer.clearForSceneTransition()
@@ -2068,10 +2071,6 @@ export class NovelRenderer {
     if (!carry.carryBgm) {
       this.currentBgmPath = null
     }
-    // 追うスポットライト (#693) も新しいシーンの開始で常に消灯する。isBlackout/cameraMode と
-    // 同じ規律: target キャラは次シーンに存在するとは限らないため、シーンをまたいで暗黙に
-    // 持ち越さず、そのシーンで必要なら明示的に [スポットライト:] を書く。
-    this.lightingLayer.clear()
     // シーン遷移時にダイアログを明示的にクリアする（前シーンの残留テキスト防止 #217）
     this.dialogBox.clearText()
     // 吹き出しも DialogBox と同じ一時的な本文表示であり、シーン/イベント列の境界をまたいで

@@ -42,7 +42,7 @@ const sceneTransition: DirectiveHandler = (_event, ctx) => {
   // 通常のシーン間ジャンプでは持ち越し）。z-order も既定位置へ戻す。
   layers.curtain.clear()
   hooks.setCurtainZOrder(false)
-  // 追うスポットライト (#693) も同じタイミングで消灯する（resetAndStartEvents と同じ規律）。
+  // 追うスポットライト (#693) も同じタイミングで消灯する（新規開始と同じ規律。通常のシーン間ジャンプでは持ち越す）。
   layers.lighting.clear()
   // 場面転換では動画レイヤも背景と同じ扱いでクリアする (#252)
   layers.video.remove()
