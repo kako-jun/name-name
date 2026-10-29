@@ -114,7 +114,9 @@ export class LightingLayer extends Container {
    * フロント側の最終防御。`BackgroundBoard`/`Prop` の depth クランプと同じ方針）。
    */
   set(target: string | null, color: string, radius: number): void {
-    this.lastTargetPos = null
+    // 直前が消灯中、または対象が変わるときだけ最後の位置を破棄する (#992)。同じ対象のまま
+    // 色・半径だけ書き直したなら、残っている光の位置を保つ。
+    if (!this.state || this.state.target !== target) this.lastTargetPos = null
     this.state = {
       target,
       color: color || '#ffffff',
@@ -139,6 +141,8 @@ export class LightingLayer extends Container {
    * と同じ役割）。`null` は消灯。
    */
   restore(state: SpotlightLayerState | null): void {
+    // 最後の位置は保存しない（ADR-0002）ので、復元では必ず破棄して対象不在なら中央に倒す (#992)。
+    this.lastTargetPos = null
     if (state) {
       this.set(state.target, state.color, state.radius)
     } else {
@@ -180,14 +184,18 @@ export class LightingLayer extends Container {
     this.sprite.height = diameterPx
   }
 
-  /** 光が今いる位置（レイヤー座標）。消灯中は `null`。テストと redraw の共通解決点。 */
+  /**
+   * 光が今いる位置（レイヤー座標）。消灯中は `null`。**テスト用**の副作用のない読み取りで、
+   * ticker/`set()` が最後に解決した位置を返す（本番コードは使わない）。
+   */
   getLightPosition(): { x: number; y: number } | null {
-    return this.state ? this.resolvePosition() : null
+    if (!this.state) return null
+    return this.lastTargetPos ?? { x: this.screenWidth / 2, y: this.screenHeight / 2 }
   }
 
   private resolvePosition(): { x: number; y: number } {
     const pos = this.state?.target
-      ? this.characterLayer.getCurrentPosition(this.state.target)
+      ? this.characterLayer.getCurrentPosition(this.state.target, { excludeExiting: true })
       : null
     if (pos) {
       this.lastTargetPos = { x: pos.x, y: pos.y }

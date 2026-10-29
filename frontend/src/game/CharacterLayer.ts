@@ -4072,11 +4072,17 @@ export class CharacterLayer extends Container {
    * （`LightingLayer` が毎フレーム呼ぶことでキャラの移動に追従する、Issue #693 方針）。
    *
    * 対象が現在表示されていない（show されていない、または退場完了で Map から削除済み）場合は
-   * `null` を返す。
+   * `null` を返す。`excludeExiting` 指定時は退場中（フェード・walk）も `null`。
    */
-  getCurrentPosition(name: string): { x: number; y: number } | null {
+  getCurrentPosition(
+    name: string,
+    options?: { excludeExiting?: boolean }
+  ): { x: number; y: number } | null {
     const state = this.characters.get(name)
     if (!state) return null
+    // 退場中（退場フェード・退場 walk）は「立っている」位置ではない (#992)。スポットライトは
+    // 退場開始前の立ち位置に光を残したいので、退場中を不在として扱わせる。
+    if (options?.excludeExiting && this.isExiting(state)) return null
     return { x: state.sprite.x, y: state.sprite.y - state.sprite.height / 2 }
   }
 
