@@ -3115,7 +3115,11 @@ export class BattleScreen extends Container {
       const a = sampleActor(ev.kind, active.elapsed, this.motionTiming)
       // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
       const downed = out.downProgress > 0
-      out = { ...out, forward: downed ? 0 : a.forward, pose: downed ? out.pose : a.pose }
+      // 自己モザイクが有効な敵の通常攻撃は、踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。
+      // 通知は自己モザイク (enemyAttackMosaicSize) が担う。無効（default）なら従来どおり踏み出して攻撃ポーズ
+      const selfMosaic = side === 'enemy' && ev.kind === 'attack' && this.enemySelfMosaicEnabled()
+      const forward = downed || selfMosaic ? 0 : a.forward
+      out = { ...out, forward, pose: downed || selfMosaic ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
     const tl = this.timelineOf(ev)
@@ -3176,7 +3180,12 @@ export class BattleScreen extends Container {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
           sh.alpha = view.container.alpha
         }
-        if (side === 'party') this.applyHitMosaic(view, this.hitMosaicSize(index))
+        this.applyHitMosaic(
+          view,
+          side === 'party'
+            ? this.hitMosaicSize(index)
+            : this.enemyAttackMosaicSize(index, m.downProgress)
+        )
       })
     }
     apply('enemy', this.enemyViews)
@@ -3218,6 +3227,31 @@ export class BattleScreen extends Container {
       if (best === null || pulse.size > best) best = pulse.size
     }
     return best
+  }
+
+  /** 敵の自己モザイクが有効か（hitMosaicMs と最大サイズが共に有効。default は hitMosaicMs=0 で無効） */
+  private enemySelfMosaicEnabled(): boolean {
+    const T = this.motionTiming
+    return T.hitMosaicMs > 0 && T.hitMosaicMaxSize >= 2
+  }
+
+  /**
+   * 敵の攻撃通知 (sit-by-me #64): 攻撃する敵 index 自身のアクスタが、行動の頭で一瞬粗いモザイクになって戻る。
+   * 敵は踏み出さない。山の長さは `min(hitMosaicMs, 行動の長さ)`、最大は hitMosaicMaxSize（被弾モザイクと同じ既存値）。
+   * 敵の通常攻撃（attack）で、倒れていない間だけ（miss でも出る）。無効（default）・該当なしは null。
+   * downProgress は applyMotionFrame が計算済みの値を受け取る（sampleEntity を二重に計算しない）
+   */
+  private enemyAttackMosaicSize(index: number, downProgress: number): number | null {
+    if (!this.enemySelfMosaicEnabled()) return null
+    const T = this.motionTiming
+    const active = this.playback.active
+    if (!active) return null
+    const ev = active.event
+    if (ev.kind !== 'attack' || ev.actor.side !== 'enemy' || ev.actor.index !== index) return null
+    if (downProgress > 0) return null
+    const len = Math.min(T.hitMosaicMs, this.timelineOf(ev).duration)
+    const pulse = samplePixelatePulse(active.elapsed, len, T.hitMosaicMaxSize)
+    return pulse.done ? null : pulse.size
   }
 
   /** size が 2 以上の間だけ自分のフィルタを足し、size を更新する。1 以下・null なら外す（他のフィルタには触れない） */
