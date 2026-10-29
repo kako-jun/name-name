@@ -881,6 +881,18 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(ok(c).warnings).toBeUndefined()
   })
 
+  it('battle.transition を読む。未指定はキーなし(=none)・不正値はエラー (sit-by-me#55)', () => {
+    const c = withEncounter()
+    for (const m of ['none', 'ff', 'ff-mosaic']) {
+      c.battle = { transition: m }
+      expect(ok(c).battle.transition).toBe(m)
+    }
+    c.battle = {}
+    expect('transition' in ok(c).battle).toBe(false)
+    c.battle = { transition: 'wipe' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
   it('battle.commands と skills を読む。未指定は commands キーなし・skills 空 (#873)', () => {
     const c = withEncounter()
     c.battle = { commands: ['skill', 'spell', 'item', 'escape'] }

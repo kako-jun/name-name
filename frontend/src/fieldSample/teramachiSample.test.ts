@@ -130,3 +130,11 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(motionTimingFor(b.motion).digitStaggerMs).toBeGreaterThan(0)
   })
 })
+
+describe('寺町サンプルの戦闘遷移 (sit-by-me#55)', () => {
+  it('battle.transition は ff-mosaic', () => {
+    const r = parseConfig(JSON.parse(sampleText), 'http://localhost:8780/field-sample/')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.battle.transition).toBe('ff-mosaic')
+  })
+})

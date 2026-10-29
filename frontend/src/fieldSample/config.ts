@@ -25,6 +25,7 @@ import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter
 import type { MonsterDef } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
+import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
 import type { BattleMotionPreset, BattlePresentation } from '../game/battleMotion'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
@@ -159,6 +160,8 @@ export interface FieldBattleConfig {
   atb?: BattleAtbConfig
   /** 戦闘のエフェクト重ね (#936)。`battle.effects`（戦闘サンプルの `effects` と同じ書式）。不正な種類は警告して無視。`presentation: "ff"` のときだけ効く。未指定は undefined＝エフェクトなし */
   effects?: BattleEffects
+  /** 戦闘の開始・終了の画面遷移 (sit-by-me#55)。`battle.transition`: `none` / `ff` / `ff-mosaic`（エンジンの `battle_transition` と同じ）。未指定は undefined＝`none`（従来どおり演出なしで即切替） */
+  transition?: BattleTransitionMode
 }
 
 export interface FieldSampleConfig {
@@ -752,6 +755,15 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   }
   if (b.motion !== undefined && b.motion !== 'default' && b.motion !== 'snappy')
     return fail(`battle.motion は "default" か "snappy": ${JSON.stringify(b.motion)}`)
+  if (
+    b.transition !== undefined &&
+    b.transition !== 'none' &&
+    b.transition !== 'ff' &&
+    b.transition !== 'ff-mosaic'
+  )
+    return fail(
+      `battle.transition は "none" か "ff" か "ff-mosaic": ${JSON.stringify(b.transition)}`
+    )
   if (b.atb !== undefined && b.atb !== 'on' && b.atb !== 'off')
     return fail(`battle.atb は "on" か "off": ${JSON.stringify(b.atb)}`)
   if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
@@ -925,6 +937,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),
+        ...(b.transition ? { transition: b.transition } : {}),
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),

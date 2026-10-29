@@ -128,6 +128,12 @@ import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
+import { FieldBattleTransition } from '../game/fieldBattleTransition'
+import {
+  beginBattleWithTransition,
+  buildTalkState,
+  endBattleWithTransition,
+} from './encounterTransition'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -556,18 +562,22 @@ async function main(): Promise<void> {
   // ---- ランダムエンカウント・戦闘 (#809) ----
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
+  /** 戦闘の開始・終了の画面遷移 (sit-by-me#55)。`battle.transition` が none なら使われない。演出中は入力・移動・エンカウントを止める */
+  const battleTransition = new FieldBattleTransition(() => app.stage)
   let lastOutcome = '-'
   // ---- NPC・会話 (#841) ----
   /** 会話中の NPC。会話中は歩行入力・ポインタ移動・エンカウント・ワープ・端リンクを止める */
   let talking: NpcRuntime | null = null
   /** クリックした NPC へ近づいている最中（着いたら話しかける。キー入力・別の場所のクリックで取り消す） */
   let approach: { id: string; stuckMs: number } | null = null
-  const talkState = () => ({
-    battle: !!battle,
-    talking: !!talking,
-    transition: !!transition,
-    warping: !!warpRun,
-  })
+  const talkState = () =>
+    buildTalkState({
+      battle: !!battle,
+      battleTransitionActive: battleTransition.active,
+      talking: !!talking,
+      transition: !!transition,
+      warping: !!warpRun,
+    })
   /** 歩きの入力を全部捨てる。押しっぱなしの pointer capture も解放する（戦闘・ワープの開始時） */
   const releaseWalkInput = (): void => {
     keys.up = keys.down = keys.left = keys.right = false
@@ -580,7 +590,7 @@ async function main(): Promise<void> {
   }
   /** 感情吹き出しを出す (#937/#946)。`api.showEmotion` と脚本の `[感情:]`（emotionHost）の共通の入口 */
   const showEmotion = (target: string, kind: string, durationMs?: number): boolean => {
-    if (!emotionLayer || battle) return false
+    if (!emotionLayer || battle || battleTransition.active) return false
     if (!isEmotionTarget(target)) return false
     // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
     if (
@@ -634,29 +644,50 @@ async function main(): Promise<void> {
     conversation.advance()
   }
   const startBattle = (enemies: BattleEntity[]): void => {
+    // 演出中（開始・終了とも）の二重エンカウントは無視する
+    if (battleTransition.active) return
     // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
     releaseWalkInput()
     emotionLayer?.clear()
     const b = config.battle
     const menu = buildBattleMenu(config)
     const bg = config.scenes[sceneId].encounter?.background ?? b.background
-    const engine = new BattleEngine(
-      config.party.map((p) => ({ ...p })),
-      enemies.map((e) => ({ ...e })),
-      buildBattleEngineOptions(b)
-    )
-    world.visible = false
-    fade.visible = false
-    app.renderer.resize(b.width, b.height)
-    battle = new BattleScreen(engine, b.width, b.height, {
-      // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
-      ...buildBattleScreenOptions(b, { background: bg, menu }),
-      onClose: (outcome) => {
-        lastOutcome = outcome
-        endBattle()
-      },
+    const open = (): void => {
+      const engine = new BattleEngine(
+        config.party.map((p) => ({ ...p })),
+        enemies.map((e) => ({ ...e })),
+        buildBattleEngineOptions(b)
+      )
+      world.visible = false
+      fade.visible = false
+      app.renderer.resize(b.width, b.height)
+      battle = new BattleScreen(engine, b.width, b.height, {
+        // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
+        ...buildBattleScreenOptions(b, { background: bg, menu }),
+        onClose: (outcome) => {
+          lastOutcome = outcome
+          // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
+          endBattleWithTransition({
+            mode: b.transition,
+            player: battleTransition,
+            width: b.width,
+            height: b.height,
+            outcome,
+            close: endBattle,
+          })
+        },
+      })
+      app.stage.addChild(battle)
+    }
+    // 開始の演出: 操作キャラ付近へ 2 段ズームして暗転 → 戦闘画面
+    beginBattleWithTransition({
+      mode: b.transition,
+      player: battleTransition,
+      width: scene.mask.width,
+      height: scene.mask.height,
+      focus: () => ({ x: world.x + pos.x, y: world.y + pos.y - player.height / 2 }),
+      open,
     })
-    app.stage.addChild(battle)
   }
   const endBattle = (): void => {
     if (!battle) return
@@ -665,6 +696,7 @@ async function main(): Promise<void> {
     battle = null
     // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
     app.renderer.resize(scene.mask.width, scene.mask.height)
+    battleTransition.resize(scene.mask.width, scene.mask.height)
     applyDialogMetrics(scene.mask.width, scene.mask.height)
     world.visible = true
     fade.visible = true
@@ -828,7 +860,7 @@ async function main(): Promise<void> {
   }
   const onKey = (down: boolean) => (ev: KeyboardEvent) => {
     const k = KEYMAP[ev.code]
-    if (battle || !k || ev.ctrlKey || ev.altKey || ev.metaKey) return
+    if (battle || battleTransition.active || !k || ev.ctrlKey || ev.altKey || ev.metaKey) return
     ev.preventDefault()
     // 会話中は歩きの入力を受けない（離すほうは受ける）
     if (down && !acceptsWalkInput({ battle: false, talking: !!talking })) return
@@ -899,7 +931,7 @@ async function main(): Promise<void> {
       return { id: n.id, left: n.x - w / 2, right: n.x + w / 2, top: n.y - h, bottom: n.y }
     })
   const onPointerDown = (ev: PointerEvent) => {
-    if (battle) return
+    if (battle || battleTransition.active) return
     // 会話中のタップは会話を送る（開いた直後の同じ操作では閉じない）
     if (talking) {
       if (!dialogBox.isJustShown(250)) advanceTalk()
@@ -946,15 +978,7 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (
-      !canStartBattleNow({
-        battle: !!battle,
-        transition: !!transition,
-        warping: !!warpRun,
-        talking: !!talking,
-      })
-    )
-      return
+    if (!canStartBattleNow(talkState())) return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
     const r = advanceEncounter(
@@ -977,6 +1001,12 @@ async function main(): Promise<void> {
   // ---- フレーム更新 ----
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS, 50)
+    if (battleTransition.active) {
+      // 戦闘の開始・終了の演出中: 演出だけ進める（入力・移動・エンカウント・戦闘の時間は止める）
+      battleTransition.tick(dt)
+      $('info').textContent = `戦闘遷移中  scene=${sceneId}`
+      return
+    }
     if (battle) {
       // 戦闘の時間を進める。勝敗の待機（#745）・ATB・ff の演出は tick に依存する。onClose で battle が null になりうる
       battle.tick(dt)
@@ -1337,6 +1367,7 @@ async function main(): Promise<void> {
   // HMR・ページ離脱での二重登録を防ぐ
   const dispose = (): void => {
     disposed = true
+    battleTransition.cancel()
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
     window.removeEventListener('keydown', onTalkKey)
