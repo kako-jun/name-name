@@ -15,6 +15,7 @@ function ctxWith(skipMode: boolean) {
   const ctx = {
     layers: { prop, backgroundBoard },
     env: { skipMode, assetBaseUrl: '/a' },
+    hooks: { deferToStageTurn: () => false },
   } as unknown as DirectiveContext
   return { ctx, prop, backgroundBoard }
 }

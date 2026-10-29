@@ -104,6 +104,10 @@ function makeWorld(o: EnvOptions) {
       return c === 'A' ? 0.25 : c === 'B' ? 0.75 : undefined
     },
     setCurrentBgmPath: (p: string | null) => hooksRec.setCurrentBgmPath(p),
+    // 回転舞台 (#704 第2弾) は旧実装に無い。範囲外（ためない）で記録しない。
+    beginStageTurn: (ms: number | null | undefined) => hooksRec.beginStageTurn(ms),
+    deferToStageTurn: () => false,
+    cancelStageTurn: () => {},
   }
   const env = {
     skipMode: o.skipMode,
@@ -209,6 +213,8 @@ const CASES: Array<[string, Event]> = [
   ['Weather(強さ省略)', E({ Weather: { kind: 'Rain' } })],
   ['Floor(高さ指定)', E({ Floor: { path: 'floor/wood.png', height: 0.4 } })],
   ['Floor(高さ省略)', E({ Floor: { path: 'floor/wood.png' } })],
+  ['StageTurn(時間指定)', E({ StageTurn: { duration_ms: 900 } })],
+  ['StageTurn(時間省略)', E({ StageTurn: {} })],
   ['Wall(既定)', E({ Wall: { path: 'w/1.webp', loop: true, mute: true } })],
   ['Wall(ループ/ミュートなし)', E({ Wall: { path: 'w/2.webm', loop: false, mute: false } })],
   ['Prop(depth)', E({ Prop: { path: 'p/1.png', depth: 2 } })],

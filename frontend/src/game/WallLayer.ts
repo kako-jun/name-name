@@ -17,6 +17,7 @@ import { Assets, Container, Sprite, type Texture } from 'pixi.js'
 import type { AudioManager } from './AudioManager'
 import type { WallState } from './GameState'
 import { computeBoardPlacement, isWallVideoPath, resolveAssetUrl } from './novelLayout'
+import { LayerTurn, type StageTurnRun } from './stageTurn'
 import { VideoLayer } from './VideoLayer'
 
 export class WallLayer extends Container {
@@ -31,6 +32,16 @@ export class WallLayer extends Container {
   private generation = 0
   /** これまでにロードした画像 URL（GPU テクスチャのリーク防止用。BackgroundBoardLayer.loadedUrls と同じ流儀）。 */
   private loadedUrls: Set<string> = new Set()
+  /** 回転舞台 (#704 第2弾) への参加。 */
+  private readonly turn = new LayerTurn(this, () => this.endStageTurn())
+  /** 回転舞台の新面（画像の壁）として予約したトークン。 */
+  private turnToken: number | null = null
+  /**
+   * 回転舞台の新しい壁が動画のとき、回転の中間（旧面が消える瞬間）まで開始を待つ指定。
+   * 動画の壁は mesh に載せず回さない（旧い動画の壁は中間まで残り、新しい動画の壁は中間から現れる）。
+   */
+  private pendingVideo: { path: string; loop: boolean; mute: boolean; baseUrl: string } | null =
+    null
 
   constructor(
     private readonly screenWidth: number,
@@ -58,11 +69,17 @@ export class WallLayer extends Container {
 
     const gen = this.generation
     if (isWallVideoPath(path)) {
+      if (this.turn.active) {
+        this.pendingVideo = { path, loop, mute, baseUrl: assetBaseUrl }
+        return
+      }
       this.videoLayer.setAssetBaseUrl(assetBaseUrl)
       this.videoLayer.show(path, { position: 'center', loop, mute })
       return
     }
     const url = resolveAssetUrl(assetBaseUrl, 'images', path)
+    // 回転舞台 (#704 第2弾) の裏側の指定なら新面として予約する（ロードが終わるまで回転は始まらない）。
+    this.turnToken = this.turn.run?.expectNew() ?? null
     this.loading = true
     Assets.load(url)
       .then((texture: Texture) => {
@@ -84,18 +101,41 @@ export class WallLayer extends Container {
         sprite.x = placement.x
         sprite.y = placement.y
         this.sprite = sprite
+        const run = this.turn.run
+        const host = this.turn.host
+        if (this.turnToken != null && run && host) {
+          // 回転舞台の新面。回転が終わるまで sprite は載せず、mesh の素材として run へ渡す。
+          const token = this.turnToken
+          this.turnToken = null
+          run.resolveNew(
+            token,
+            host,
+            texture,
+            { x: placement.x, y: placement.y, width: placement.width, height: placement.height },
+            0
+          )
+          return
+        }
         this.addChild(sprite)
       })
       .catch((err: unknown) => {
-        if (gen === this.generation) this.loading = false
+        if (gen === this.generation) {
+          this.loading = false
+          this.failTurnToken()
+        }
         console.warn('[name-name] 壁の読み込みに失敗: ' + url, err)
       })
   }
 
   /** 壁を消す（`[壁: なし]` / `[場面転換]` / 新規開始 / 破棄）。video 要素・Sprite を解放する。 */
   clear(): void {
+    // 回転舞台 (#704 第2弾) の最中なら打ち切る（場面転換・復元・新規開始は最終状態へ即時）。
+    this.turn.interrupt()
+    this.failTurnToken()
+    this.pendingVideo = null
     this.generation++
-    this.videoLayer.remove()
+    // 回転舞台の裏側の指定を流し込んでいる間は、旧い動画の壁を回転の中間まで残す。
+    if (!this.turn.active) this.videoLayer.remove()
     if (this.sprite) {
       this.sprite.removeFromParent()
       // texture は PixiJS の Assets キャッシュが保有するので破棄しない（BackgroundBoardLayer.clear と同じ流儀）。
@@ -137,6 +177,57 @@ export class WallLayer extends Container {
       )
     }
     return this.sprite !== null || this.loading
+  }
+
+  /**
+   * 回転舞台 `[舞台回転]` (#704 第2弾)。いま表示している壁（旧面）を `run` に渡して空になる。
+   * 画像の壁は mesh で回り、動画の壁は回さず回転の中間で入れ替わる。以後の `show()` は新面。
+   */
+  beginStageTurn(run: StageTurnRun): void {
+    const host = this.turn.begin(run)
+    const sprite = this.sprite
+    if (sprite) {
+      run.addOld(
+        host,
+        sprite.texture,
+        { x: sprite.x, y: sprite.y, width: sprite.width, height: sprite.height },
+        0
+      )
+      sprite.removeFromParent()
+      sprite.destroy()
+      this.sprite = null
+    }
+    this.generation++
+    this.current = null
+    this.shownBaseUrl = ''
+    this.loading = false
+    this.turnToken = null
+    this.pendingVideo = null
+    // 旧い動画の壁は中間まで残し、そこで新しい動画の壁（あれば）に入れ替える。
+    run.onHalf(() => this.applyVideoHalf())
+  }
+
+  private applyVideoHalf(): void {
+    this.videoLayer.remove()
+    const v = this.pendingVideo
+    this.pendingVideo = null
+    if (v) {
+      this.videoLayer.setAssetBaseUrl(v.baseUrl)
+      this.videoLayer.show(v.path, { position: 'center', loop: v.loop, mute: v.mute })
+    }
+  }
+
+  /** 回転が終わった／打ち切られた。新面の sprite を載せる（ロード中のものは完了時に即座に載る）。 */
+  private endStageTurn(): void {
+    this.turnToken = null
+    if (this.sprite && !this.sprite.parent) this.addChild(this.sprite)
+  }
+
+  private failTurnToken(): void {
+    if (this.turnToken == null) return
+    const token = this.turnToken
+    this.turnToken = null
+    this.turn.run?.failNew(token)
   }
 
   /** 現在の壁を settled state として返す。ロードの成否に関わらず宣言された事実を返す（ADR-0002）。 */

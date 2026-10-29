@@ -38,6 +38,7 @@ import { WallLayer } from './WallLayer'
 import { StageFrontLayer } from './StageFrontLayer'
 import { WeatherLayer } from './WeatherLayer'
 import { FloorLayer } from './FloorLayer'
+import { StageTurnController } from './stageTurn'
 import { EventImageLayer } from './EventImageLayer'
 import { TelopLayer } from './TelopLayer'
 import { ChoiceOverlay } from './ChoiceOverlay'
@@ -653,6 +654,31 @@ export class NovelRenderer {
   )
 
   /**
+   * 回転舞台 `[舞台回転]` (#704 第2弾)。直後から「進行を止めるイベント」までの壁・背景板・大道具・床の指定を
+   * 裏側の舞台としてため、`processUntilNextTextEvent` のループ終端で回転（または即時切替）を起こす。
+   * 立ち絵・舞台前面・天候・照明・幕には触れない。保存状態は持たない（ADR 0002）。
+   */
+  private readonly stageTurn = new StageTurnController(
+    {
+      layers: () => ({
+        wall: this.wallLayer,
+        backgroundBoard: this.backgroundBoardLayer,
+        floor: this.floorLayer,
+        prop: this.propLayer,
+      }),
+      isTheater: () => this.stage.cameraMode === 'Theater',
+      isSkip: () => this.skipMode,
+      isExporting: () => this.exporting,
+      defaultMs: () => this.stageTurnDefaultMs,
+      screenSize: () => ({ width: this.screenWidth, height: this.screenHeight }),
+    },
+    this.time
+  )
+
+  /** `[舞台回転]` の既定の所要時間（`character_fade_ms` と同じ値。第1弾の面の切り替えと同じ）。 */
+  private stageTurnDefaultMs = 700
+
+  /**
    * ディレクティブのハンドラ（`directives/`）に渡す最小ポート (#829)。値は getter で毎回最新を返す
    * （設定値は `setXxx` で後から差し替わるため getter が必須。レイヤーや Stage は代入がコンストラクタでの1回だけだが、
    * このフィールド初期化はその代入より前に走るので、生成時には未代入であり、getter で遅延評価する）。
@@ -760,6 +786,9 @@ export class NovelRenderer {
         setCurrentBgmPath: (path) => {
           r.currentBgmPath = path
         },
+        beginStageTurn: (ms) => r.stageTurn.begin(ms),
+        deferToStageTurn: (fn) => r.stageTurn.defer(fn),
+        cancelStageTurn: () => r.stageTurn.cancel(),
       },
     }
   }
@@ -1573,6 +1602,10 @@ export class NovelRenderer {
       for (let i = startIndex; i < events.length; i++) {
         const event = events[i]
         const textEvt = getTextEvent(event)
+        // 回転舞台 (#704 第2弾) の範囲は本文・待機で閉じる（本編と同じ）。
+        if (textEvt || (typeof event === 'object' && event !== null && 'Wait' in event)) {
+          this.stageTurn.flush()
+        }
         if (textEvt) {
           const name = textEvt.type === 'dialog' ? textEvt.character : null
           const text = textEvt.text.join('\n')
@@ -1626,6 +1659,7 @@ export class NovelRenderer {
         this.processDirective(event)
       }
     } finally {
+      this.stageTurn.flush()
       this.eventImageFadeMs = previousEventImageFadeMs
     }
   }
@@ -2579,6 +2613,7 @@ export class NovelRenderer {
     // 大道具・背景板の面の切り替え (#704) の既定の所要時間も同じ値にそろえる。
     this.backgroundBoardLayer.setFlipDefaultMs(ms ?? null)
     this.propLayer.setFlipDefaultMs(ms ?? null)
+    this.stageTurnDefaultMs = clampFadeMs(ms, 700)
   }
 
   /**
@@ -3952,6 +3987,20 @@ export class NovelRenderer {
    * 非テキストイベントを実行しながら次のテキストイベントまで進む
    */
   private processUntilNextTextEvent(): void {
+    try {
+      this.runDirectivesUntilStop()
+    } finally {
+      // 回転舞台 `[舞台回転]` (#704 第2弾) の範囲は「進行を止めるイベント」（台詞・ナレーション・選択肢・待機・
+      // ジャンプ）か終端で閉じる。ためた裏側の指定をここで流し込み、回転（または即時切替）を起こす。
+      this.stageTurn.flush()
+    }
+    // 次に出る立ち絵・背景をバックグラウンドで先読みする (#389)。
+    // advance / setScenes / jumpToScene は全てここを通るので、この 1 箇所で全トリガーを覆う。
+    // 走査は同期・実ダウンロードは backgroundPreload に投げっぱなし（await しない＝本編を待たせない）。
+    this.preloadUpcomingAssets()
+  }
+
+  private runDirectivesUntilStop(): void {
     while (this.cursor.eventIndex < this.cursor.resolvedEvents.length) {
       if (getTextEvent(this.cursor.resolvedEvents[this.cursor.eventIndex])) break
       const directive = this.cursor.resolvedEvents[this.cursor.eventIndex]
@@ -3970,10 +4019,6 @@ export class NovelRenderer {
         break
       this.cursor.skipDirective()
     }
-    // 次に出る立ち絵・背景をバックグラウンドで先読みする (#389)。
-    // advance / setScenes / jumpToScene は全てここを通るので、この 1 箇所で全トリガーを覆う。
-    // 走査は同期・実ダウンロードは backgroundPreload に投げっぱなし（await しない＝本編を待たせない）。
-    this.preloadUpcomingAssets()
   }
 
   /**

@@ -24,7 +24,7 @@
  * 復元（`restore()`、goBack/seekTo/セーブ復元/任意局面起動）は演出の中間状態を持たない
  * （ADR-0002）ため、スライドインを起こさず即座に最終位置へ配置する。
  */
-import { Assets, Container, Sprite, type Texture } from 'pixi.js'
+import { Assets, Container, Sprite, type Filter, type Texture } from 'pixi.js'
 import type { CameraElevation, CameraMode, CameraOrientation } from '../types'
 import { computeCameraProjection } from './cameraProjection'
 import {
@@ -41,6 +41,7 @@ import {
   prefersReducedMotion,
   type BoardFaceGeometry,
 } from './boardFaceFlip'
+import { LayerTurn, type StageTurnRun } from './stageTurn'
 
 /** `getState()` の1要素。`NovelGameState.backgroundBoards` と同形（settled state）。 */
 export interface BackgroundBoardState {
@@ -92,6 +93,12 @@ interface BoardEntry {
   /** 回転中のみ非 null。旧面・新面の mesh を持ち、`sprite` は回転が終わるまで画面に出さない。 */
   run: BoardFaceFlipRun | null
   flipInterval: number | null
+  /** 回転舞台 (#704 第2弾) の新面として予約したトークン。ロード完了で `run.resolveNew`、失敗で `failNew`。 */
+  turnToken: number | null
+  /** 回転舞台の新面としてロード済み。回転が終わるまで画面（layer の子）に載せない。 */
+  turnHold: boolean
+  /** 回転舞台が先に終わった／打ち切られた。ロード完了時にスライドインを付けず即座に置く。 */
+  instantOnLoad: boolean
 }
 
 export class BackgroundBoardLayer extends Container {
@@ -105,6 +112,8 @@ export class BackgroundBoardLayer extends Container {
   private flipDefaultMs = 700
   /** 動画書き出し中か (#350)。書き出し中は回さない。 */
   private exporting = false
+  /** 回転舞台 (#704 第2弾) への参加。旧面を `run` に渡して空になり、新面のロード完了を `run` に伝える。 */
+  private readonly turn = new LayerTurn(this, () => this.endStageTurn())
 
   constructor(
     private readonly screenWidth: number,
@@ -137,6 +146,8 @@ export class BackgroundBoardLayer extends Container {
     this.cameraMode = mode
     this.cameraOrientation = orientation
     this.cameraElevation = elevation
+    // 回転舞台 (#704 第2弾) もカメラ（mode/向き/仰角）が変わると打ち切って最終状態へ。ズームだけなら続ける。
+    if (changed) this.turn.finish()
     for (const entry of this.entries) {
       // 回転中にカメラが変わったら回転を打ち切って最終状態へ（旧面の配置を追従させない）。
       if (changed && entry.run) this.finishFlip(entry)
@@ -172,6 +183,7 @@ export class BackgroundBoardLayer extends Container {
   setExporting(exporting: boolean): void {
     this.exporting = exporting
     if (!exporting) return
+    this.turn.finish()
     for (const entry of this.entries) {
       if (entry.run) this.finishFlip(entry)
     }
@@ -184,7 +196,11 @@ export class BackgroundBoardLayer extends Container {
    * 即座に最終位置へ配置する（ADR-0002: 演出の中間状態を復元しない）。
    */
   add(path: string, depth: number, assetBaseUrl: string, opts?: { instant?: boolean }): void {
+    // 回転舞台の最中の再指定は先の回転を最終状態へ畳む（裏側の指定の流し込み中だけは畳まない）。
+    this.turn.interrupt()
     const entry = this.createEntry(path, depth)
+    // 回転舞台 (#704 第2弾) の裏側の指定なら新面として予約する（ロードが終わるまで回転は始まらない）。
+    entry.turnToken = this.turn.run?.expectNew() ?? null
     this.entries.push(entry)
     this.load(entry, assetBaseUrl, opts?.instant === true)
   }
@@ -205,6 +221,7 @@ export class BackgroundBoardLayer extends Container {
     assetBaseUrl: string,
     opts?: { flipMs?: number | null; skip?: boolean }
   ): void {
+    this.turn.interrupt()
     const clampedDepth = Number.isFinite(depth) ? Math.max(0, depth) : 0
     let index = -1
     for (let i = this.entries.length - 1; i >= 0; i--) {
@@ -213,6 +230,12 @@ export class BackgroundBoardLayer extends Container {
         index = i
         break
       }
+    }
+    if (index >= 0 && this.turn.active) {
+      // 回転舞台の最中の `回転:` は個別の面の切り替えにしない。同じ舞台の裏側で指定済みの板を差し替えるだけ。
+      this.dropEntry(index)
+      this.add(path, depth, assetBaseUrl)
+      return
     }
     if (index < 0) {
       this.add(path, depth, assetBaseUrl)
@@ -248,6 +271,88 @@ export class BackgroundBoardLayer extends Container {
     this.load(entry, assetBaseUrl, false)
   }
 
+  /**
+   * 回転舞台 `[舞台回転]` (#704 第2弾)。いま表示している板（旧面）を全て `run` に渡して空になる。
+   * 以後 `add()` された板は新面で、ロードが終わるまで・回転が終わるまで画面に載せない。
+   */
+  beginStageTurn(run: StageTurnRun): void {
+    const host = this.turn.begin(run)
+    const filters = this.turnFilters()
+    for (const entry of this.entries) {
+      if (entry.run) this.finishFlip(entry)
+      const sprite = entry.sprite
+      const face = sprite ?? entry.pendingOld
+      if (face && !entry.disposed) {
+        // スライドイン中は最終位置を旧面の配置とする（宙の位置で固めない）。
+        const geometry = sprite
+          ? {
+              x: entry.targetX,
+              y: entry.targetY,
+              width: entry.targetWidth,
+              height: entry.targetHeight,
+            }
+          : { x: face.x, y: face.y, width: face.width, height: face.height }
+        run.addOld(host, face.texture, geometry, entry.depth, { filters })
+      }
+      this.releaseEntry(entry)
+    }
+    this.entries = []
+    this.removeChildren()
+    this.addChild(host)
+  }
+
+  /** 回転が終わった／打ち切られた。新面の sprite を載せ、まだロード中の板は即座に置くようにする。 */
+  private endStageTurn(): void {
+    for (const entry of this.entries) {
+      entry.turnHold = false
+      if (entry.turnToken != null) {
+        entry.turnToken = null
+        entry.instantOnLoad = true
+      }
+    }
+    this.insertSorted()
+  }
+
+  private failTurnToken(entry: BoardEntry): void {
+    if (entry.turnToken == null) return
+    const token = entry.turnToken
+    entry.turnToken = null
+    this.turn.run?.failNew(token)
+  }
+
+  /** 回転舞台の最中に、裏側で指定済みの板を取り除く（同じ舞台の中での差し替え）。 */
+  private dropEntry(index: number): void {
+    const [entry] = this.entries.splice(index, 1)
+    if (entry.turnToken != null) {
+      const token = entry.turnToken
+      entry.turnToken = null
+      this.turn.run?.cancelNew(token)
+    }
+    this.releaseEntry(entry)
+    this.insertSorted()
+  }
+
+  /** 板の sprite・タイマーを手放す（texture は Assets キャッシュが持つので破棄しない）。 */
+  private releaseEntry(entry: BoardEntry): void {
+    this.stopInterval(entry)
+    this.stopFlipInterval(entry)
+    entry.disposed = true
+    entry.run?.dispose()
+    entry.run = null
+    for (const sprite of [entry.pendingOld, entry.sprite]) {
+      if (sprite) {
+        sprite.removeFromParent()
+        sprite.destroy()
+      }
+    }
+    entry.pendingOld = null
+    entry.sprite = null
+  }
+
+  private turnFilters(): Filter[] | null {
+    return null
+  }
+
   private createEntry(path: string, depth: number): BoardEntry {
     // 非有限値・負値はフロント側の最終防御としてクランプする（parser 側は非数値を 0.0 に
     // フォールバック済みだが、二重に守る）。
@@ -272,11 +377,17 @@ export class BackgroundBoardLayer extends Container {
       flipDurationMs: this.flipDefaultMs,
       run: null,
       flipInterval: null,
+      turnToken: null,
+      turnHold: false,
+      instantOnLoad: false,
     }
   }
 
   private load(entry: BoardEntry, assetBaseUrl: string, instant: boolean): void {
-    if (!assetBaseUrl) return
+    if (!assetBaseUrl) {
+      this.failTurnToken(entry)
+      return
+    }
 
     const url = resolveAssetUrl(assetBaseUrl, 'images', entry.path)
     Assets.load(url)
@@ -291,6 +402,26 @@ export class BackgroundBoardLayer extends Container {
         sprite.anchor.set(0.5, 0.5)
         entry.sprite = sprite
         this.layoutBoard(entry)
+        if (entry.turnToken != null && this.turn.run && this.turn.host) {
+          // 回転舞台 (#704 第2弾) の新面。回転が終わるまで sprite は載せず、mesh の素材として run へ渡す。
+          const token = entry.turnToken
+          entry.turnToken = null
+          entry.turnHold = true
+          this.turn.run.resolveNew(
+            token,
+            this.turn.host,
+            texture,
+            {
+              x: entry.targetX,
+              y: entry.targetY,
+              width: entry.targetWidth,
+              height: entry.targetHeight,
+            },
+            entry.depth,
+            { filters: this.turnFilters() }
+          )
+          return
+        }
         const old = entry.pendingOld
         entry.pendingOld = null
         if (old) {
@@ -298,7 +429,7 @@ export class BackgroundBoardLayer extends Container {
           this.swapFace(entry, old, texture)
         } else {
           this.insertSorted()
-          if (instant) {
+          if (instant || entry.instantOnLoad) {
             sprite.y = entry.targetY
           } else {
             entry.phaseStartedAtMs = this.time.now()
@@ -308,6 +439,7 @@ export class BackgroundBoardLayer extends Container {
       })
       .catch((err: unknown) => {
         console.warn('[name-name] 背景板の読み込みに失敗: ' + url, err)
+        this.failTurnToken(entry)
         // 新しい面が読めなかったら旧い面も残さない（宣言上は新しい面に差し替わっている）。
         if (!entry.disposed && entry.pendingOld) {
           entry.pendingOld.removeFromParent()
@@ -403,6 +535,8 @@ export class BackgroundBoardLayer extends Container {
    * （Issue #683 のスコープはスライドイン＝追加時の演出のみ）。
    */
   clear(): void {
+    // 回転舞台 (#704 第2弾) の最中なら打ち切る（場面転換・復元・新規開始は最終状態へ即時）。
+    this.turn.interrupt()
     for (const entry of this.entries) {
       this.stopInterval(entry)
       this.stopFlipInterval(entry)
@@ -500,7 +634,7 @@ export class BackgroundBoardLayer extends Container {
    */
   private insertSorted(): void {
     const sorted = [...this.entries]
-      .filter((e) => (e.sprite !== null || e.pendingOld !== null) && !e.disposed)
+      .filter((e) => (e.sprite !== null || e.pendingOld !== null) && !e.disposed && !e.turnHold)
       .sort((a, b) => b.depth - a.depth)
     this.removeChildren()
     for (const e of sorted) {
@@ -514,6 +648,8 @@ export class BackgroundBoardLayer extends Container {
         this.addChild(e.pendingOld)
       }
     }
+    // 回転舞台 (#704 第2弾) の mesh は常に最前（このレイヤーの内側）に載せる。
+    if (this.turn.host) this.addChild(this.turn.host)
   }
 
   private startSlideIn(entry: BoardEntry): void {

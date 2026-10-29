@@ -9,11 +9,20 @@ import {
   DEFAULT_PAPER_DOLL_OUTLINE_COLOR,
   DEFAULT_PAPER_DOLL_OUTLINE_THICKNESS,
 } from '../outlineFilter'
-import { on, type DirectiveHandler, type DirectiveTable, type ObjectDirectiveTable } from './types'
+import type { Event } from '../../types'
+import {
+  on,
+  type DirectiveContext,
+  type DirectiveHandler,
+  type DirectiveTable,
+  type ObjectDirectiveTable,
+} from './types'
 
 /** 場面転換 `[場面転換]`。クリア対象と順序は旧 processDirective の SceneTransition 分岐と同じ（新規開始の `resetAndStartEvents` よりクリア対象は狭い）。 */
 const sceneTransition: DirectiveHandler = (_event, ctx) => {
   const { stage, layers, hooks } = ctx
+  // 回転舞台 (#704 第2弾) の範囲は場面転換で閉じる。裏側の指定は転換で消えるので捨てる。
+  hooks.cancelStageTurn()
   stage.background.clearBackground()
   // 動画レイヤも背景と同じ扱いでクリアする (#252)。
   layers.video.remove()
@@ -49,6 +58,38 @@ const sceneTransition: DirectiveHandler = (_event, ctx) => {
   stage.effects.retreatNovelScrim()
 }
 
+type BoardEvent = Extract<Event, { BackgroundBoard: unknown }>['BackgroundBoard']
+type PropEvent = Extract<Event, { Prop: unknown }>['Prop']
+
+/** 背景板の追加・面の切り替え (#683 / #704)。回転舞台の流し込み (#704 第2弾) からも呼ばれる。 */
+function applyBackgroundBoard(board: BoardEvent, ctx: DirectiveContext): void {
+  if (board.flip_from) {
+    // 面の切り替え (#704): 同じ depth の旧い面を差し替える（シアターは回転、それ以外は即時）。
+    ctx.layers.backgroundBoard.replace(
+      board.path,
+      board.depth ?? 0,
+      board.flip_from,
+      ctx.env.assetBaseUrl,
+      { flipMs: board.flip_ms, skip: ctx.env.skipMode }
+    )
+  } else {
+    ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
+  }
+}
+
+/** 大道具の追加・面の切り替え (#692 / #704)。回転舞台の流し込み (#704 第2弾) からも呼ばれる。 */
+function applyProp(prop: PropEvent, ctx: DirectiveContext): void {
+  if (prop.flip_from) {
+    // 面の切り替え (#704): 背景板と同じ。
+    ctx.layers.prop.replace(prop.path, prop.depth ?? 0, prop.flip_from, ctx.env.assetBaseUrl, {
+      flipMs: prop.flip_ms,
+      skip: ctx.env.skipMode,
+    })
+  } else {
+    ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl)
+  }
+}
+
 /** 文字列イベント（引数なしの合図）。表のキーは `Event` の文字列そのもの。 */
 export const stageSignalDirectives: DirectiveTable = {
   SceneTransition: sceneTransition,
@@ -60,6 +101,7 @@ export const stageSignalDirectives: DirectiveTable = {
 
   // [壁: なし] で壁をクリア (#703)
   WallExit: (_event, ctx) => {
+    if (ctx.hooks.deferToStageTurn(() => ctx.layers.wall.clear())) return
     ctx.layers.wall.clear()
   },
 
@@ -75,6 +117,7 @@ export const stageSignalDirectives: DirectiveTable = {
 
   // [床: なし] で床をクリア (#706 第2弾)
   FloorExit: (_event, ctx) => {
+    if (ctx.hooks.deferToStageTurn(() => ctx.layers.floor.clear())) return
     ctx.layers.floor.clear()
   },
 
@@ -110,24 +153,18 @@ export const stageDirectives: ObjectDirectiveTable = {
   // 同じシーン内で複数回発火すれば、それぞれ別の板として蓄積される。
   BackgroundBoard: on<'BackgroundBoard'>((event, ctx) => {
     const board = event.BackgroundBoard
-    if (board.flip_from) {
-      // 面の切り替え (#704): 同じ depth の旧い面を差し替える（シアターは回転、それ以外は即時）。
-      ctx.layers.backgroundBoard.replace(
-        board.path,
-        board.depth ?? 0,
-        board.flip_from,
-        ctx.env.assetBaseUrl,
-        { flipMs: board.flip_ms, skip: ctx.env.skipMode }
-      )
-    } else {
-      ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
-    }
+    // 回転舞台 (#704 第2弾) の範囲内なら裏側の指定としてため、範囲が閉じたときに流し込む。
+    if (ctx.hooks.deferToStageTurn(() => applyBackgroundBoard(board, ctx))) return
+    applyBackgroundBoard(board, ctx)
   }),
 
   // 舞台の壁 (#703)。背景板より奥の単一スロット（新しい [壁:] が前の壁を置換）。
   Wall: on<'Wall'>((event, ctx) => {
     const wall = event.Wall
-    ctx.layers.wall.show(wall.path, { loop: wall.loop, mute: wall.mute }, ctx.env.assetBaseUrl)
+    const show = (): void =>
+      ctx.layers.wall.show(wall.path, { loop: wall.loop, mute: wall.mute }, ctx.env.assetBaseUrl)
+    if (ctx.hooks.deferToStageTurn(show)) return
+    show()
   }),
 
   // 舞台前面 (#705)。画面最下部の単一スロット画像（新しい [舞台前面:] が前のを置換）。
@@ -142,21 +179,24 @@ export const stageDirectives: ObjectDirectiveTable = {
 
   // 床 (#706 第2弾)。画面下部の単一スロット帯（新しい [床:] が前のを置換）。
   Floor: on<'Floor'>((event, ctx) => {
-    ctx.layers.floor.show(event.Floor.path, event.Floor.height, ctx.env.assetBaseUrl)
+    const floor = event.Floor
+    const show = (): void => ctx.layers.floor.show(floor.path, floor.height, ctx.env.assetBaseUrl)
+    if (ctx.hooks.deferToStageTurn(show)) return
+    show()
   }),
 
   // 舞台構造の大道具 (#692)。背景板とは独立した加算的レイヤー。
   Prop: on<'Prop'>((event, ctx) => {
     const prop = event.Prop
-    if (prop.flip_from) {
-      // 面の切り替え (#704): 背景板と同じ。
-      ctx.layers.prop.replace(prop.path, prop.depth ?? 0, prop.flip_from, ctx.env.assetBaseUrl, {
-        flipMs: prop.flip_ms,
-        skip: ctx.env.skipMode,
-      })
-    } else {
-      ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl)
-    }
+    // 回転舞台 (#704 第2弾) の範囲内なら裏側の指定としてため、範囲が閉じたときに流し込む。
+    if (ctx.hooks.deferToStageTurn(() => applyProp(prop, ctx))) return
+    applyProp(prop, ctx)
+  }),
+
+  // 回転舞台 (#704 第2弾)。ここから範囲が閉じるまでの壁・背景板・大道具・床の指定が裏側の舞台になる。
+  // 範囲を閉じる（回転を起こす）のは NovelRenderer.processUntilNextTextEvent のループ終端。
+  StageTurn: on<'StageTurn'>((event, ctx) => {
+    ctx.hooks.beginStageTurn(event.StageTurn.duration_ms)
   }),
 
   // 単色地色 (#273)。背景画像と同じ永続状態（snapshot / applyState / セーブ復元で復元）。
