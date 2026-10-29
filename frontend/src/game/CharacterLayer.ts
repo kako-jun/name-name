@@ -880,6 +880,12 @@ export class CharacterLayer extends Container {
   /** タイトル抑止中 (#982) に隠さない画像 state の id（タイトルロゴ）。null = 抑止していない。 */
   private titleSuppressedExceptId: string | null = null
 
+  /**
+   * 注意（順序依存）: `showImage()` は `addChild(sprite)` を `characters.set()` より先に行うため、抑止中に
+   * 追加されたロゴは `childAdded` の時点では免除対象を見つけられず、いったん非描画になる。呼び出し側
+   * （`NovelRenderer.showTitleScreen` 末尾の `applyStageLayerVisibility` → `setTitleSuppressed`）が全子を
+   * 再計算して直すことを前提にしている。
+   */
   private isTitleExempt(child: Container): boolean {
     const id = this.titleSuppressedExceptId
     if (id === null) return true

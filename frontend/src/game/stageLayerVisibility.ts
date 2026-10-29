@@ -32,10 +32,13 @@ export type StageLayerKey =
 /**
  * タイトル表示中に隠す手段。
  *  - 'visible': `visible` を落とす（レイヤー自身は他に visible を触らない）
- *  - 'renderable': `renderable` を落とす（レイヤー自身が show()/hide() で visible を管理しているため、
- *    その状態を壊さず描画だけ止める。吹き出し・テロップ）
+ *  - 'renderable': `renderable` を落とす（吹き出しは自身の show()/hide() が visible を
+ *    管理しているため、その状態を壊さず描画だけ止める。テロップは visible を書かないが、吹き出しと同じ手段に
+ *    揃える。どちらも背面隠しの対象外）
  *  - 'children': レイヤー内のタイトルロゴ以外の子だけ `renderable` を落とす（立ち絵レイヤーはタイトルロゴを
- *    載せるため、レイヤーごと隠せない）
+ *    載せるため、レイヤーごと隠せない。
+ *    タイトル中は背面隠しでもレイヤーの visible を落とさない: ロゴが一緒に消えるため。背面レイヤーは overlay
+ *    の不透明背景が覆うので隠さなくてよい）
  *  - 'none': タイトル中も隠さない（`titleScreenOverlay` より奥で、不透明背景の下に入るもの）
  */
 export type TitleHideMode = 'visible' | 'renderable' | 'children' | 'none'
@@ -80,8 +83,10 @@ export function computeStageLayerState(
   const rule = STAGE_LAYER_RULES[key]
   const backHidden = rule.backStack && input.hideBack
   const titleHides = input.titleActive && rule.title !== 'none'
+  // 'children'（立ち絵）はタイトル中、背面隠しでも visible を保つ（ロゴを載せているため。子の抑止で足りる）
+  const keepVisibleForLogo = titleHides && rule.title === 'children'
   return {
-    visible: !backHidden && !(titleHides && rule.title === 'visible'),
+    visible: keepVisibleForLogo || (!backHidden && !(titleHides && rule.title === 'visible')),
     titleSuppressed: titleHides && (rule.title === 'renderable' || rule.title === 'children'),
   }
 }

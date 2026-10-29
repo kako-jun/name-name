@@ -123,7 +123,9 @@ describe('computeStageLayerState（規則の純粋関数）', () => {
   it('renderable / children モードは visible を背面隠しだけで決め、タイトルは titleSuppressed に出す', () => {
     expect(key('bubble', true, true)).toEqual({ visible: true, titleSuppressed: true })
     expect(key('telop', false, false)).toEqual({ visible: true, titleSuppressed: false })
-    expect(key('character', true, true)).toEqual({ visible: false, titleSuppressed: true })
+    // タイトル中は背面隠しでも visible を保つ（ロゴを載せているため）
+    expect(key('character', true, true)).toEqual({ visible: true, titleSuppressed: true })
+    expect(key('character', false, true)).toEqual({ visible: false, titleSuppressed: false })
     expect(key('character', true, false)).toEqual({ visible: true, titleSuppressed: true })
   })
 })
@@ -232,32 +234,72 @@ describe('NovelRenderer 舞台レイヤーの可視性 (#982)', () => {
     expect(targets.wall.visible).toBe(true)
   })
 
-  it('hide の三経路（続ける・タイトルなし mount・dark 変更）で同じ結果になる', () => {
+  it('hide の三経路（続ける・タイトルなし mount・dark 変更）で同じ結果になる', async () => {
     mockHideBack(true)
     // 続ける: show → hide
     r.showTitleScreen(titleOpts())
     r.hideTitleScreen()
     const viaContinue = snapshot(ri)
-    // タイトルなし mount: show せずに hide
     const r2 = new NovelRenderer()
-    return initRenderer(r2).then((ri2) => {
+    const r3 = new NovelRenderer()
+    try {
+      // タイトルなし mount: show せずに hide
+      const ri2 = await initRenderer(r2)
       vi.spyOn(ri2.eventImageLayer, 'shouldHideBackLayer').mockReturnValue(true)
       r2.hideTitleScreen()
-      const viaMount = snapshot(ri2)
       // dark 変更: show → show（再実行）→ hide
-      const r3 = new NovelRenderer()
-      return initRenderer(r3).then((ri3) => {
-        vi.spyOn(ri3.eventImageLayer, 'shouldHideBackLayer').mockReturnValue(true)
-        r3.showTitleScreen({ ...titleOpts(), dark: false })
-        r3.showTitleScreen({ ...titleOpts(), dark: true })
-        r3.hideTitleScreen()
-        const viaDark = snapshot(ri3)
-        expect(viaMount).toEqual(viaContinue)
-        expect(viaDark).toEqual(viaContinue)
-        cleanupRenderer(r2)
-        cleanupRenderer(r3)
-      })
+      const ri3 = await initRenderer(r3)
+      vi.spyOn(ri3.eventImageLayer, 'shouldHideBackLayer').mockReturnValue(true)
+      r3.showTitleScreen({ ...titleOpts(), dark: false })
+      r3.showTitleScreen({ ...titleOpts(), dark: true })
+      r3.hideTitleScreen()
+      expect(snapshot(ri2)).toEqual(viaContinue)
+      expect(snapshot(ri3)).toEqual(viaContinue)
+    } finally {
+      cleanupRenderer(r2)
+      cleanupRenderer(r3)
+    }
+  })
+
+  it('背面=hide のイベント絵が冒頭にあっても、タイトル中は立ち絵レイヤーが visible のままロゴだけ描画される (#982 M1)', () => {
+    mockHideBack(true)
+    r.showTitleScreen(titleOpts())
+    const layer = ri.characterLayer
+    expect(layer.visible).toBe(true)
+    expect(layer.children.filter((c) => c.renderable)).toHaveLength(1)
+    // 手前の他レイヤーは隠れたまま、奥の背面スタックは背面隠しのまま
+    expect(ri.stageLayerTargets().prop.visible).toBe(false)
+    r.hideTitleScreen()
+    // 閉じたら背面隠しに従う（立ち絵レイヤーは隠れる）
+    expect(layer.visible).toBe(false)
+  })
+
+  it('ロゴを remove せずに show → hide → 再 show しても、ロゴは描画される (#982 S2)', () => {
+    r.showTitleScreen(titleOpts())
+    r.hideTitleScreen()
+    r.showTitleScreen(titleOpts())
+    expect(ri.characterLayer.children.filter((c) => c.renderable)).toHaveLength(1)
+    // ロゴが残っている状態（抑止中に追加 → childAdded で一度非描画 → 再計算で復帰）でも同じ
+    r.showTitleScreen(titleOpts())
+    expect(ri.characterLayer.children.filter((c) => c.renderable)).toHaveLength(1)
+  })
+
+  it('setTitleSuppressed は立ち絵の alpha・visible を変えない (#982 N2)', () => {
+    ri.characterLayer.showImage({
+      id: 'img',
+      path: 'a.png',
+      x: 0.2,
+      y: 0.5,
+      assetBaseUrl: 'http://x',
+      instant: true,
     })
+    const before = ri.characterLayer.children.map((c) => [c.alpha, c.visible])
+    r.showTitleScreen(titleOpts())
+    const kids = ri.characterLayer.children
+    // ロゴは showImage 由来で alpha が別（フェードイン中）なので、既存の子だけ比較する
+    expect(kids.slice(0, before.length).map((c) => [c.alpha, c.visible])).toEqual(before)
+    r.hideTitleScreen()
+    expect(ri.characterLayer.children.map((c) => [c.alpha, c.visible])).toEqual(before)
   })
 
   it('二重 show / 二重 hide でも状態が壊れない', () => {
@@ -278,7 +320,7 @@ describe('NovelRenderer 舞台レイヤーの可視性 (#982)', () => {
     expect(targets.prop.visible).toBe(true)
   })
 
-  it('stage 上で titleScreenOverlay より手前の Container は、規則の対象か意図的な除外のどちらかに入っている', () => {
+  function assertStageCovered(): void {
     const stage = ri.app.stage.children
     const overlayIndex = stage.indexOf(ri.titleScreenOverlay)
     expect(overlayIndex).toBeGreaterThanOrEqual(0)
@@ -322,5 +364,14 @@ describe('NovelRenderer 舞台レイヤーの可視性 (#982)', () => {
         .filter((k) => k !== 'background')
         .sort()
     )
+  }
+
+  it('stage 上で titleScreenOverlay より手前の Container は、規則の対象か意図的な除外のどちらかに入っている', () => {
+    assertStageCovered()
+  })
+
+  it('カーテンコール配置（setCurtainZOrder(true)）後の順序でも漏れがない (#982 N3)', () => {
+    ;(r as unknown as { setCurtainZOrder(v: boolean): void }).setCurtainZOrder(true)
+    assertStageCovered()
   })
 })

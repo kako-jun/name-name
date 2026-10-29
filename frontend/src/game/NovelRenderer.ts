@@ -3729,7 +3729,8 @@ export class NovelRenderer {
         )
         continue
       }
-      // 'renderable' のレイヤー（吹き出し・テロップ）は自身の show()/hide() が visible を管理するため触らない。
+      // 'renderable' のレイヤー: 吹き出しは自身の show()/hide() が visible を管理するため触らない。テロップは
+      // visible を書かないが、吹き出しと同じ手段に揃える。
       if (STAGE_LAYER_RULES[key].title === 'renderable') {
         layer.renderable = !state.titleSuppressed
       } else {
