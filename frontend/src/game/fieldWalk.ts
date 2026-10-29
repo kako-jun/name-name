@@ -373,8 +373,36 @@ function alongEdge(edge: Edge, p: Vec): number {
   return edge === 'left' || edge === 'right' ? p.y : p.x
 }
 
+/** キャラの身体の範囲（背景ピクセル）。足元（スプライト下端中心）から上へ height、左右へ halfWidth */
+export interface BodyExtent {
+  height: number
+  halfWidth: number
+}
+
+/** 表示高さとテクスチャの縦横から身体の範囲を求める（スプライトは下端中心の原点） */
+export function bodyExtent(displayHeight: number, texW: number, texH: number): BodyExtent {
+  const aspect = texH > 0 ? Math.abs(texW) / texH : 0
+  return { height: displayHeight, halfWidth: (displayHeight * aspect) / 2 }
+}
+
+/** 辺ごとの、足元から身体の外縁までの距離。着地点をこの分だけ内側にずらすのにも使う（bottom は足元が外縁） */
+export function bodyReach(edge: Edge, body: BodyExtent | undefined): number {
+  if (!body) return 0
+  switch (edge) {
+    case 'top':
+      return body.height
+    case 'left':
+    case 'right':
+      return body.halfWidth
+    case 'bottom':
+      return 0
+  }
+}
+
 /**
- * 足元が端のしきい値内で、リンクのある区間に入り、かつその端へ向かって進んでいれば、そのリンクを返す。
+ * キャラが端のしきい値内に触れ、リンクのある区間に入り、かつその端へ向かって進んでいれば、そのリンクを返す。
+ * 区間（range）は足元の辺に沿った座標で見る。端への距離は body があれば身体の外縁（top=頭、left/right=左右の縁、
+ * bottom=足元）で、無ければ足元の 1 点（従来）。
  * disarmed: 到着直後に折り返さないよう、いま無効にしているリンク（呼び出し側が、その端へ向かう入力が
  * 途切れたら解除する）。
  */
@@ -384,18 +412,20 @@ export function detectEdgeLink(
   links: readonly FieldLink[],
   threshold: number,
   vec: Vec,
-  disarmed: FieldLink | null = null
+  disarmed: FieldLink | null = null,
+  body?: BodyExtent
 ): FieldLink | null {
   for (const link of links) {
     if (link === disarmed) continue
     if (!isOutward(link.edge, vec)) continue
+    const reach = bodyReach(link.edge, body)
     const dist =
       link.edge === 'left'
-        ? pos.x
+        ? pos.x - reach
         : link.edge === 'right'
-          ? size.width - 1 - pos.x
+          ? size.width - 1 - (pos.x + reach)
           : link.edge === 'top'
-            ? pos.y
+            ? pos.y - reach
             : size.height - 1 - pos.y
     if (dist > threshold) continue
     const c = alongEdge(link.edge, pos)
@@ -440,7 +470,7 @@ export function arrivalPosition(
 
 /**
  * 主人公の表示高さ（背景ピクセル）を決める (#810)。シーンの `playerHeight` があればそれ、無ければ全体の値。
- * 表示の大きさだけを決める。足元（スプライト下端中心）・歩行マスク判定・端リンク判定・移動速度は大きさに依存しない
+ * 表示の大きさだけを決める。足元（スプライト下端中心）・歩行マスク判定・移動速度は大きさに依存しない。端リンク判定は edgeContact "foot" なら依存せず、"body" では表示高さ・半幅（身体の範囲）が効く
  */
 export function resolvePlayerHeight(sceneHeight: number | undefined, globalHeight: number): number {
   return sceneHeight !== undefined && Number.isFinite(sceneHeight) && sceneHeight > 0

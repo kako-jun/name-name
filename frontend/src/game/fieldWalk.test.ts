@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   arrivalPosition,
+  bodyExtent,
+  bodyReach,
   detectEdgeLink,
   FACING_HYSTERESIS_DEG,
   SECTOR_HALF_DEG,
@@ -21,6 +23,7 @@ import {
   stepMove,
   walkFrame,
   fieldFrames,
+  type BodyExtent,
   type Edge,
   type FieldLink,
   type WalkMask,
@@ -973,5 +976,193 @@ describe('3 値マスク: 橙 = 条件付き (#862)', () => {
     expect(stuck.pos.x).toBeLessThan(1)
     const pass = stepMove(maskWithAssist(m), { x: 0.5, y: 0.5 }, { x: 1, y: 0 }, 100, 100, 0.1)
     expect(pass.pos.x).toBeGreaterThan(1)
+  })
+})
+
+describe('edge link は身体の接触で発火する (sit-by-me#61)', () => {
+  const W = 400
+  const H = 300
+  const T = 6
+  const size = { width: W, height: H }
+  // 表示高さ 100・横幅 60（半幅 30）
+  const body = bodyExtent(100, 48, 80)
+  const opp: Record<Edge, Edge> = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' }
+
+  /** 60fps 相当の 16ms ずつ歩き、各フレームで判定する（最初に発火したリンクと位置を返す） */
+  function walk(
+    mask: WalkMask,
+    start: { x: number; y: number },
+    vec: { x: number; y: number },
+    links: FieldLink[],
+    b: BodyExtent | undefined
+  ) {
+    let pos = start
+    for (let i = 0; i < 600; i++) {
+      pos = stepMove(mask, pos, vec, 260, 16).pos
+      const hit = detectEdgeLink(pos, size, links, T, vec, null, b)
+      if (hit) return { hit, pos }
+    }
+    return { hit: null, pos }
+  }
+
+  const cases: [Edge, FieldLink, { x: number; y: number }, { x: number; y: number }][] = [
+    ['left', { edge: 'left', range: [100, 200], to: 'b' }, { x: 200, y: 150 }, { x: -1, y: 0 }],
+    ['right', { edge: 'right', range: [100, 200], to: 'b' }, { x: 200, y: 150 }, { x: 1, y: 0 }],
+    ['top', { edge: 'top', range: [100, 300], to: 'b' }, { x: 200, y: 250 }, { x: 0, y: -1 }],
+    ['bottom', { edge: 'bottom', range: [100, 300], to: 'b' }, { x: 200, y: 150 }, { x: 0, y: 1 }],
+  ]
+
+  it('bodyExtent: 高さはそのまま、半幅は縦横比から', () => {
+    expect(body).toEqual({ height: 100, halfWidth: 30 })
+    expect(bodyExtent(100, -48, 80).halfWidth).toBe(30)
+    expect(bodyReach('top', body)).toBe(100)
+    expect(bodyReach('left', body)).toBe(30)
+    expect(bodyReach('right', body)).toBe(30)
+    expect(bodyReach('bottom', body)).toBe(0)
+    expect(bodyReach('top', undefined)).toBe(0)
+  })
+
+  it('top は頭が上端のしきい値内に触れた時点（foot.y <= 高さ + T）、足元の位置は T 以内ではない', () => {
+    const top = cases[2][1]
+    const v = { x: 0, y: -1 }
+    expect(detectEdgeLink({ x: 200, y: 100 + T }, size, [top], T, v, null, body)).toBe(top)
+    expect(detectEdgeLink({ x: 200, y: 100 + T + 1 }, size, [top], T, v, null, body)).toBeNull()
+    // 足元の 1 点判定（従来）では同じ位置は発火しない
+    expect(detectEdgeLink({ x: 200, y: 100 + T }, size, [top], T, v)).toBeNull()
+  })
+
+  it('left / right は半幅の分だけ手前（縁が触れた時点）、bottom は足元のまま', () => {
+    const left = cases[0][1]
+    const right = cases[1][1]
+    const bottom = cases[3][1]
+    expect(
+      detectEdgeLink({ x: 30 + T, y: 150 }, size, [left], T, { x: -1, y: 0 }, null, body)
+    ).toBe(left)
+    expect(
+      detectEdgeLink({ x: 30 + T + 1, y: 150 }, size, [left], T, { x: -1, y: 0 }, null, body)
+    ).toBeNull()
+    expect(
+      detectEdgeLink({ x: W - 1 - 30 - T, y: 150 }, size, [right], T, { x: 1, y: 0 }, null, body)
+    ).toBe(right)
+    expect(
+      detectEdgeLink(
+        { x: W - 1 - 30 - T - 1, y: 150 },
+        size,
+        [right],
+        T,
+        { x: 1, y: 0 },
+        null,
+        body
+      )
+    ).toBeNull()
+    expect(
+      detectEdgeLink({ x: 200, y: H - 1 - T }, size, [bottom], T, { x: 0, y: 1 }, null, body)
+    ).toBe(bottom)
+    expect(
+      detectEdgeLink({ x: 200, y: H - 1 - T - 1 }, size, [bottom], T, { x: 0, y: 1 }, null, body)
+    ).toBeNull()
+  })
+
+  it.each(cases)(
+    '%s: 歩いて身体が触れた時点で発火し、足元はまだ端に届いていない（body）',
+    (edge, link, start, vec) => {
+      const { hit, pos } = walk(openMask(W, H), start, vec, [link], body)
+      expect(hit).toBe(link)
+      const foot =
+        edge === 'left'
+          ? pos.x
+          : edge === 'right'
+            ? W - 1 - pos.x
+            : edge === 'top'
+              ? pos.y
+              : H - 1 - pos.y
+      const reach = bodyReach(edge, body)
+      expect(foot - reach).toBeLessThanOrEqual(T)
+      expect(foot - reach).toBeGreaterThan(T - 5) // 1 フレーム（約 4px）以上は行き過ぎない
+    }
+  )
+
+  it.each(cases)(
+    '%s: edgeContact foot（body 未指定）は従来どおり足元が T 以内で発火',
+    (edge, link, start, vec) => {
+      const { hit, pos } = walk(openMask(W, H), start, vec, [link], undefined)
+      expect(hit).toBe(link)
+      const foot =
+        edge === 'left'
+          ? pos.x
+          : edge === 'right'
+            ? W - 1 - pos.x
+            : edge === 'top'
+              ? pos.y
+              : H - 1 - pos.y
+      expect(foot).toBeLessThanOrEqual(T)
+      expect(foot).toBeGreaterThan(0)
+    }
+  )
+
+  it.each(cases)('%s: range の外を端まで歩いても発火しない', (edge, link, _start, vec) => {
+    const along = edge === 'left' || edge === 'right' ? { x: 200, y: 250 } : { x: 50, y: 150 }
+    expect(walk(openMask(W, H), along, vec, [link], body).hit).toBeNull()
+  })
+
+  it.each(cases)('%s: 端が黒（歩けない）なら発火しない', (_edge, link, start, vec) => {
+    // 端から 60px を黒にする（身体の範囲を考えても触れない）
+    const rows = Array.from({ length: H }, (_, y) =>
+      Array.from({ length: W }, (_, x) =>
+        x < 60 || x >= W - 60 || y < 120 || y >= H - 60 ? '#' : '.'
+      ).join('')
+    )
+    expect(walk(maskOf(rows), start, vec, [link], body).hit).toBeNull()
+  })
+
+  it.each(cases)(
+    '%s: 着地点（身体の分 + edgeThreshold の 3 倍内側）では、その端へ押し続けても即座には発火せず、画面内に身体が収まる',
+    (edge, link, _start, vec) => {
+      const back: FieldLink = { ...link, range: [0, 300] }
+      const inset = T * 3 + bodyReach(edge, body)
+      const pos = arrivalPosition(
+        { ...link, edge: opp[edge] },
+        edge === 'left' || edge === 'right' ? { x: 0, y: 150 } : { x: 150, y: 0 },
+        back,
+        openMask(W, H),
+        inset
+      )!
+      expect(pos).not.toBeNull()
+      expect(detectEdgeLink(pos, size, [back], T, vec, null, body)).toBeNull()
+      // 頭・左右の縁が画面内
+      expect(pos.y - (edge === 'top' ? body.height : 0)).toBeGreaterThanOrEqual(0)
+      expect(pos.x - (edge === 'left' ? body.halfWidth : 0)).toBeGreaterThanOrEqual(0)
+      expect(pos.x + (edge === 'right' ? body.halfWidth : 0)).toBeLessThanOrEqual(W - 1)
+      // 身体の分を足さない着地（足元 inset だけ）では top / left / right は即座に発火してしまう
+      if (edge !== 'bottom') {
+        const naive = arrivalPosition(
+          { ...link, edge: opp[edge] },
+          { x: 0, y: 150 },
+          back,
+          openMask(W, H),
+          T * 3
+        )!
+        expect(detectEdgeLink(naive, size, [back], T, vec, null, body)).toBe(back)
+      }
+    }
+  )
+
+  it('斜め入力でも、外向き成分があり身体が触れていれば発火する', () => {
+    const right: FieldLink = { edge: 'right', range: [100, 200], to: 'b' }
+    const { hit } = walk(openMask(W, H), { x: 200, y: 120 }, { x: 0.98, y: 0.2 }, [right], body)
+    expect(hit).toBe(right)
+  })
+
+  it('斜め入力が range 外の角へ滑っていくだけなら発火しない', () => {
+    const right: FieldLink = { edge: 'right', range: [100, 150], to: 'b' }
+    const { hit } = walk(openMask(W, H), { x: 200, y: 160 }, { x: 0.7, y: 0.7 }, [right], body)
+    expect(hit).toBeNull()
+  })
+
+  it('入力なしでは発火しない', () => {
+    const right: FieldLink = { edge: 'right', range: [100, 200], to: 'b' }
+    expect(
+      detectEdgeLink({ x: W - 1, y: 150 }, size, [right], T, { x: 0, y: 0 }, null, body)
+    ).toBeNull()
   })
 })

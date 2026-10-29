@@ -22,6 +22,8 @@ import {
 } from '../game/fieldEncounter'
 import type { BattleEntity } from '../game/spellDsl'
 import {
+  bodyExtent,
+  bodyReach,
   detectEdgeLink,
   foregroundCoverage,
   foregroundFromRgba,
@@ -545,6 +547,13 @@ async function main(): Promise<void> {
     )
   let pos: Vec = startSnap ?? config.start
   let facing: Facing8 = 'down'
+  /** 指定シーンでの主人公の身体の範囲（端リンクの接触判定・着地の置き場所用。表示と同じ高さ・縦横比） */
+  const playerBody = (id: string) =>
+    bodyExtent(
+      resolvePlayerHeight(config.scenes[id].playerHeight, config.player.height),
+      player.texture.width,
+      player.texture.height
+    )
   let movingMs = 0
   let disarmed: FieldLink | null = null
   let debug = false
@@ -1043,7 +1052,12 @@ async function main(): Promise<void> {
                 srcPos: pos,
                 base: dst.mask,
                 assisted: dst.maskAssist,
-                inset: config.edgeThreshold * ARRIVAL_INSET_FACTOR,
+                // 着地直後にキャラが画面内に見えるよう、遷移先の端から身体の分も内側に置く（'foot' は従来どおり足元だけ）
+                inset:
+                  config.edgeThreshold * ARRIVAL_INSET_FACTOR +
+                  (back && config.edgeContact === 'body'
+                    ? bodyReach(back.edge, playerBody(link.to))
+                    : 0),
                 // ラッチ中（橙の途中で通れない状態になって渡り切った）なら、橙の上にも着地できる
                 passable: edgeArrivalPassable(passableNow, assistRt, scene.mask, pos, scene.hold),
                 edgeBand: config.edgeThreshold,
@@ -1163,7 +1177,8 @@ async function main(): Promise<void> {
         config.scenes[sceneId].links,
         config.edgeThreshold,
         vec,
-        disarmed
+        disarmed,
+        config.edgeContact === 'body' ? playerBody(sceneId) : undefined
       )
       // 歩いた距離でエンカウント抽選（壁に押しつけて動けていないときは距離が進まない）
       const enc = advanceEncounter(
