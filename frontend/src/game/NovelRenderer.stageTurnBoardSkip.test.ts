@@ -24,6 +24,11 @@ const narration = (...lines: string[]): Event => ({ Narration: { text: lines } }
 const turn = (ms?: number): Event => ({ StageTurn: ms == null ? {} : { duration_ms: ms } }) as Event
 const prop = (path: string, depth = 2): Event => ({ Prop: { path, depth } }) as Event
 const board = (path: string, depth = 3): Event => ({ BackgroundBoard: { path, depth } }) as Event
+const boardFlip = (path: string, from: string, depth = 3): Event =>
+  ({ BackgroundBoard: { path, depth, flip_from: from } }) as Event
+const propFlip = (path: string, from: string, depth = 2): Event =>
+  ({ Prop: { path, depth, flip_from: from } }) as Event
+const wait = (ms: number): Event => ({ Wait: { ms } }) as Event
 const theater = { CameraMode: { mode: 'Theater' } } as Event
 const novelCam = { CameraMode: { mode: 'Novel' } } as Event
 const scene = (events: Event[]): EventScene => ({ id: 'a', title: 'a', view: 'TopDown', events })
@@ -98,6 +103,41 @@ describe('回転舞台の流し込み: スキップ中に開いた範囲が、�
     expect(settled(li(r).propLayer, 'Y.png')).toBe(true)
   })
 
+  it('(a) 実経路: スキップ中に [舞台回転][背景板][大道具][待機] を進める（待機がスキップを解除してから範囲が閉じる）', async () => {
+    const r = make([
+      ...OLD,
+      narration('one'),
+      turn(1000),
+      board('X.png', 4),
+      prop('Y.png', 5),
+      wait(10),
+      narration('two'),
+    ])
+    await flush()
+    setSkip(r, true)
+    await advance(r)
+    expect((r as unknown as { skipMode: boolean }).skipMode).toBe(false) // 待機で解除済み
+    expect(hosts(li(r).propLayer)).toBe(0)
+    expect(settled(li(r).backgroundBoardLayer, 'X.png')).toBe(true)
+    expect(settled(li(r).propLayer, 'Y.png')).toBe(true)
+  })
+
+  it('(a) 流し込まれる 回転: 付きの板・大道具も、スキップ中に開いて解除後に閉じれば即時（旧面は clear 済みのフォールバック）', async () => {
+    const r = make([...OLD, narration('one')])
+    await flush()
+    await advance(r)
+    setSkip(r, true)
+    li(r).processDirective(turn(1000))
+    li(r).processDirective(boardFlip('X.png', 'A.png'))
+    li(r).processDirective(propFlip('Y.png', 'A.png'))
+    setSkip(r, false)
+    li(r).stageTurn.flush()
+    await flush()
+    expect(hosts(li(r).propLayer)).toBe(0)
+    expect(settled(li(r).backgroundBoardLayer, 'X.png')).toBe(true)
+    expect(settled(li(r).propLayer, 'Y.png')).toBe(true)
+  })
+
   it('(a) 範囲を開いた時点でスキップでなければ（シアター通常）回転し、板は回転後に最終位置', async () => {
     const r = make([...OLD, narration('one')])
     await flush()
@@ -112,6 +152,9 @@ describe('回転舞台の流し込み: スキップ中に開いた範囲が、�
     li(r).time.tick(1500)
     expect(hosts(li(r).propLayer)).toBe(0)
     expect(sliding(li(r).propLayer, 'Y.png')).toBe(false)
+    // 回す経路の新面は回転後に現れるので、add の instant の値（fn(false)）は結果に効かない（fn(true) でも同じ最終状態）。
+    expect(settled(li(r).propLayer, 'Y.png')).toBe(true)
+    expect(settled(li(r).backgroundBoardLayer, 'X.png')).toBe(true)
   })
 })
 
@@ -142,6 +185,21 @@ describe('回転舞台の流し込み: 回転せず即時の経路ではため�
     await flush()
     await advance(r)
     expectInstant(r)
+  })
+  it('ノベルのカメラ: 回転: 付きの流し込みも即時', async () => {
+    const r = make([
+      novelCam,
+      ...OLD.slice(1),
+      narration('one'),
+      turn(1000),
+      boardFlip('X.png', 'A.png'),
+      propFlip('Y.png', 'A.png'),
+      narration('two'),
+    ])
+    await flush()
+    await advance(r)
+    expect(settled(li(r).backgroundBoardLayer, 'X.png')).toBe(true)
+    expect(settled(li(r).propLayer, 'Y.png')).toBe(true)
   })
   it('時間=0', async () => {
     const r = make([...OLD, narration('one'), turn(0), ...BACK, narration('two')])
