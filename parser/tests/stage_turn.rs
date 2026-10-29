@@ -52,8 +52,20 @@ fn duration_clamp_boundaries() {
     assert_eq!(single("[舞台回転: 時間=5000]"), turn(Some(5000)));
     assert_eq!(single("[舞台回転: 時間=5001]"), turn(Some(5000)));
     assert_eq!(single("[舞台回転: 時間=99999999]"), turn(Some(5000)));
-    // u32 を超える値は不正値として既定に倒す（panic しない）。
-    assert_eq!(single("[舞台回転: 時間=99999999999999]"), turn(None));
+    // u32 / u64 を超える値も上限へクランプする（panic しない）。
+    assert_eq!(single("[舞台回転: 時間=99999999999]"), turn(Some(5000)));
+    assert_eq!(single("[舞台回転: 時間=99999999999999]"), turn(Some(5000)));
+    assert_eq!(
+        single("[舞台回転: 時間=99999999999999999999999999]"),
+        turn(Some(5000))
+    );
+    assert_eq!(
+        single("[舞台回転: 時間=+99999999999999999999999999]"),
+        turn(Some(5000))
+    );
+    // 先頭の + は第1弾の `時間:`（u32 の parse）と同じく受理する。
+    assert_eq!(single("[舞台回転: 時間=+900]"), turn(Some(900)));
+    assert_eq!(single("[舞台回転: 時間=+]"), turn(None));
 }
 
 #[test]

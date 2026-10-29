@@ -2093,13 +2093,23 @@ fn parse_weather_directive(content: &str) -> Option<Event> {
 /// `[舞台回転: 時間=900]` の本体を分解する (#704 第2弾)。
 /// `時間`/`duration` は `=`（全角 `＝` も可）または `:` 区切りの非負整数（ms）。0〜5000 にクランプし、
 /// 数値でない・負値・小数・空は無視（既定 = `None`）。複数あれば最後の有効値。未知のキーは無視。
+/// 先頭の `+` を許す、数字だけの文字列か（`u32::from_str` / `u64::from_str` が受け入れる範囲と同じ）。
+fn is_unsigned_digits(t: &str) -> bool {
+    let d = t.strip_prefix('+').unwrap_or(t);
+    !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn parse_stage_turn_directive(content: &str) -> Event {
     let mut duration_ms: Option<u32> = None;
     for raw in content.split(',') {
         if let Some((k, v)) = raw.trim().split_once(['=', '＝', ':']) {
             if matches!(k.trim(), "時間" | "duration") {
-                if let Ok(n) = v.trim().parse::<u32>() {
-                    duration_ms = Some(n.min(STAGE_TURN_MAX_MS));
+                let t = v.trim();
+                match t.parse::<u64>() {
+                    Ok(n) => duration_ms = Some(n.min(u64::from(STAGE_TURN_MAX_MS)) as u32),
+                    // u64 を超える桁数の非負整数もクランプ（上限）として扱う。
+                    Err(_) if is_unsigned_digits(t) => duration_ms = Some(STAGE_TURN_MAX_MS),
+                    Err(_) => {}
                 }
             }
         }
