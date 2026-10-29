@@ -8491,7 +8491,7 @@ mod unknown_directive_warning_tests {
         {
             let _ = take_test_warnings();
             let doc = parse(&format!(
-                "{HEAD}**カコ** (a, 左):\nこんにちは\n{line}\n続き\n"
+                "{HEAD}**カコ** (a, 左):\nこんにちは\n{line}\n続き\n[NPC 本物 @3,4]\nやあ\n[/NPC]\n"
             ));
             let all = take_test_warnings();
             assert_eq!(all.len(), 1, "{line}: {all:?}");
@@ -8502,11 +8502,25 @@ mod unknown_directive_warning_tests {
                     && !all[0].contains("未知"),
                 "{all:?}"
             );
-            let dump = format!("{:?}", doc.chapters[0].scenes[0].events);
-            assert!(
-                !dump.contains("村人") && !dump.contains("RpgBattle"),
-                "{dump}"
-            );
+            // イベント列そのものを検査する: 前後の Dialog が残り、専用警告の行は何も生まず、
+            // 後続の本物の NPC ブロックが NPC として読める（NPC 判定が行を飲み込むと崩れる）。
+            let evs = &doc.chapters[0].scenes[0].events;
+            assert_eq!(evs.len(), 3, "{line}: {evs:?}");
+            for (ev, want) in evs[..2].iter().zip(["こんにちは", "続き"]) {
+                match ev {
+                    Event::Dialog { text, .. } => {
+                        assert_eq!(text, &vec![want.to_string()], "{line}")
+                    }
+                    other => panic!("{line}: {other:?}"),
+                }
+            }
+            match &evs[2] {
+                Event::Npc(npc) => {
+                    assert_eq!((npc.name.as_str(), npc.x, npc.y), ("本物", 3, 4), "{line}");
+                    assert_eq!(npc.message, vec!["やあ".to_string()], "{line}");
+                }
+                other => panic!("{line}: {other:?}"),
+            }
         }
         // 話者行の前（本文位置でない所）でも同じ
         let _ = take_test_warnings();

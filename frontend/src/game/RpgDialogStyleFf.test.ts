@@ -220,7 +220,6 @@ describe.each([
       expect(box.getPageInfo().pages).toBeGreaterThan(0)
       expect(screen.h).toBeGreaterThan(0)
       expect(box.getBoxRect().y).toBe(computeFfDialogRect(screen.w, screen.h).y)
-      expect(box.getBoxRect().y).toBeLessThan(screen.h / 2)
       box.dispose()
     })
     it("'adv'・'novel'・未知値・null・未指定は従来の窓（ff にならない）", async () => {

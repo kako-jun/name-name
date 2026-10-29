@@ -163,12 +163,17 @@ fn narration_body_is_not_escaped() {
 }
 
 /// 本文が `## `（末尾に空白）のとき、trim で `##` になるため 1 回目の emit→parse で `##` に
-/// 変わり、emit は 2 回目で初めて安定する（空白のみ・末尾空白は落ちる仕様の範囲）。
+/// 変わる（末尾空白は落ちる仕様の範囲）。落ちた後は安定し、2 回目以降の emit→parse は変わらない。
 #[test]
-fn heading_with_trailing_space_is_known_non_idempotent() {
+fn heading_with_trailing_space_loses_space_then_is_stable() {
     let md = emit(&doc_with(vec![dialog("カコ", &["## "])]));
     let back = parse(&md);
     assert_eq!(events_of(&back), vec![dialog("カコ", &["##"])]);
+
+    let md2 = emit(&back);
+    let back2 = parse(&md2);
+    assert_eq!(events_of(&back2), events_of(&back));
+    assert_eq!(emit(&back2), md2);
 }
 
 #[test]
