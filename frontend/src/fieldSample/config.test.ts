@@ -861,6 +861,20 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(b.atb).toEqual({ mode: 'active' })
   })
 
+  it('battle.motion を読む。未指定はキーなし・不正値はエラー・dq では警告 (#62/#65)', () => {
+    const c = withEncounter()
+    c.battle = { presentation: 'ff', motion: 'snappy' }
+    const v = ok(c)
+    expect(v.battle.motion).toBe('snappy')
+    expect(v.warnings).toBeUndefined()
+    c.battle = { presentation: 'ff' }
+    expect('motion' in ok(c).battle).toBe(false)
+    c.battle = { motion: 'turbo' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+    c.battle = { motion: 'snappy' }
+    expect(ok(c).warnings?.[0]).toContain('motion')
+  })
+
   it('battle.commands と skills を読む。未指定は commands キーなし・skills 空 (#873)', () => {
     const c = withEncounter()
     c.battle = { commands: ['skill', 'spell', 'item', 'escape'] }
@@ -1052,10 +1066,11 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     }
   })
 
-  it('同梱の寺町サンプルは従来どおり（グリッドなし・errors なし）', () => {
+  it('同梱の寺町サンプルは敵グリッド有効で、全群が収まる（groupErrors なし・warnings なし）', () => {
     const c = ok(JSON.parse(teramachiSample))
-    expect(c.battle.enemyGrid).toBeUndefined()
+    expect(c.battle.enemyGrid).toBeDefined()
     expect(c.groupErrors).toBeUndefined()
+    expect(c.warnings).toBeUndefined()
   })
 })
 

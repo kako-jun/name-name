@@ -6,6 +6,9 @@ import scriptText from '../../public/field-sample/teramachi-npc.md?raw'
 import { parseFieldEmotionsText } from '../game/fieldEmotionScript'
 import { collectFieldEvents } from '../game/fieldScript'
 import { parseMarkdown } from '../wasm/parser'
+import { parseConfig } from './config'
+import { effectiveCommandLayout } from '../game/battleLayout'
+import { motionTimingFor } from '../game/battleMotion'
 
 describe('寺町サンプルの感情吹き出し', () => {
   it('同梱の teramachi-emotions.json は実物の parseEmotions を警告 0 で通り、3 種を宣言する', () => {
@@ -31,5 +34,47 @@ describe('寺町サンプルの感情吹き出し', () => {
       .flatMap((n) => (n.scene ? [n.scene] : []))
     expect(scenes.length).toBeGreaterThan(1)
     for (const sc of scenes) expect(events.has(sc)).toBe(true)
+  })
+})
+
+// #54 #56 #57 #62 #65: 統合サンプル（寺町）が戦闘サンプルと同等の機能を実際に使っていること。
+// 設定を外すと、実機で気づかないまま従来表示（先頭固定・格子なし・桁バウンスなし）へ戻るため、ここで固定する。
+describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同等性）', () => {
+  const load = () => {
+    const r = parseConfig(JSON.parse(sampleText), 'http://localhost/field-sample/')
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+
+  it('スキーマ検証が通り、警告も群エラーも出ない', () => {
+    const c = load()
+    expect(c.warnings).toBeUndefined()
+    expect(c.groupErrors).toBeUndefined()
+  })
+
+  it('#57 ATB が有効（全員が満タン順に行動する）', () => {
+    expect(load().battle.atb).toEqual({ mode: 'wait' })
+  })
+
+  it('#56 十字コマンドが実効になる（cross かつコマンド 4 つ）', () => {
+    const b = load().battle
+    expect(b.commandLayout).toBe('cross')
+    expect(b.commands).toHaveLength(4)
+    expect(effectiveCommandLayout(b.commandLayout, b.commands?.length ?? 0)).toBe('cross')
+  })
+
+  it('#54 敵グリッドと、2 マス以上の敵の size がある', () => {
+    const c = load()
+    expect(c.battle.enemyGrid).toBeDefined()
+    const sizes = Object.values(c.monsters).map((m) => m.size)
+    expect(sizes.every((s) => s !== undefined)).toBe(true)
+    expect(sizes.some((s) => s && s.w * s.h >= 2)).toBe(true)
+  })
+
+  it('#62 motion プリセットが ff 演出で有効になり、桁バウンスが付く', () => {
+    const b = load().battle
+    expect(b.presentation).toBe('ff')
+    expect(b.motion).toBe('snappy')
+    expect(motionTimingFor(b.motion).digitStaggerMs).toBeGreaterThan(0)
   })
 })

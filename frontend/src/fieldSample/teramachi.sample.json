@@ -193,6 +193,7 @@
       "agi": 5,
       "exp": 20,
       "gold": 30,
+      "size": "1x1",
       "sprite": "http://localhost:8765/assets/images/enemies/M001.webp"
     },
     "shachihoko": {
@@ -203,6 +204,7 @@
       "agi": 8,
       "exp": 8,
       "gold": 10,
+      "size": "1x2",
       "sprite": "http://localhost:8765/assets/images/enemies/M008.webp"
     }
   },
@@ -248,6 +250,13 @@
   ],
   "battle": {
     "layout": "side",
+    "presentation": "ff",
+    "windowStyle": "ff-blue",
+    "commandLayout": "cross",
+    "commands": ["skill", "spell", "item", "escape"],
+    "atb": "on",
+    "enemyGrid": "4x2",
+    "motion": "snappy",
     "width": 800,
     "height": 450,
     "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
