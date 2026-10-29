@@ -195,10 +195,17 @@ import {
   type GridCell,
 } from './enemyGrid'
 import { getSharedDofMask, quantizeDofRamp } from './dofMaskCache'
-import { createAcrylicPlateTexture, type AcrylicPlate } from './acrylicPlateTexture'
-import { computeSlitY } from './acrylicBase'
-import { computeShadowTransform } from './acrylicShadow'
-import { getAcrylicBaseTexture, type AcrylicBaseTexture } from './acrylicBaseTexture'
+import type { AcrylicPlate } from './acrylicPlateTexture'
+import type { AcrylicBaseTexture } from './acrylicBaseTexture'
+import {
+  AcrylicPlateCache,
+  attachAcrylicLayers,
+  emptyAcrylicParts,
+  layoutAcrylicParts,
+  makeAcrylicBase,
+  makeAcrylicPlate,
+  type AcrylicParts,
+} from './acrylicParts'
 import {
   computeAcrylicGeometry,
   resolveAcrylicParams,
@@ -274,8 +281,6 @@ const PANEL_GAP = 6
 /** 画像が無い（未指定・読み込み失敗）ときの色四角 (#736)。敵=赤系 / 味方=青系 */
 const FALLBACK_ENEMY_COLOR = 0xcc5555
 const FALLBACK_PARTY_COLOR = 0x5588cc
-/** acrylic の台座の色 (#737)。黒に近い円形台座 */
-const ACRYLIC_BASE_COLOR = 0x111111
 const DEAD_ALPHA = 0.3
 /** 敵ラベルの縁取り。写真背景（dim なし）でも読めるよう、背景指定の有無にかかわらず付ける (#736) */
 export const SIDE_LABEL_STROKE_COLOR = 0x000000
@@ -475,24 +480,12 @@ export interface BattleScreenOptions {
 }
 
 /** サイドビューの 1 体ぶんの表示物 */
-interface EntityView {
+/** acrylic の部品（acrylicBack ほか）は AcrylicParts から継承する。acrylicBack は fallback の直上に積む */
+interface EntityView extends AcrylicParts {
   container: Container
   fallback: Graphics
   color: number
   sprite: Sprite | null
-  /** acrylic のとき: 台座・影を描く Graphics（fallback の直上）と、スプライトの直下に敷く板のスプライト (#760)。画像読み込み成功まで null/非表示。板は canvas が使えない環境では null */
-  acrylicBack: Graphics | null
-  acrylicPlate: Sprite | null
-  /** 透明アクリルの台座・影のスプライト (#760)。canvas が使えない環境では null（acrylicBack の Graphics で描く） */
-  acrylicBase: Sprite | null
-  /** 地面に落とす本体の影 (#760)。全キャラの下の層（shadowLayer）に置く。板を作れない環境では null */
-  acrylicShadow: Sprite | null
-  acrylicShadowFoot: { x: number; y: number }
-  /** 板テクスチャの 1px が元画像の何 px か（板は縮小した解像度で作る） */
-  acrylicPlateScale: number
-  /** 板テクスチャ上で元画像の左上がある位置(px)。配置時にこのぶん左上へずらす */
-  acrylicPlatePad: number
-  acrylicBaseLayout: AcrylicBaseTexture['layout'] | null
   /** 敵のみ: 名前 + HP ラベル */
   label: PixiText | null
   /** 「選択中」の印 ▼ (#805)。container の子なので板・台座ごと動く（踏み出し演出にも追従）。出し入れは updateSelectMarks */
@@ -580,7 +573,7 @@ export class BattleScreen extends Container {
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   /** 板・影のテクスチャを tex.source ごとに共有するキャッシュ (#760)。destroy で解放 */
-  private plateCache = new Map<unknown, AcrylicPlate | null>()
+  private plateCache = new AcrylicPlateCache((tex) => this.makeAcrylicPlate(tex))
   /** 戦闘ログのタイプ表示 (#755)。`off` のとき tracker / ticker は使わない */
   private logTypewriter: BattleLogTypewriterMode
   private logTracker: BattleLogTracker = makeBattleLogTracker()
@@ -799,24 +792,17 @@ export class BattleScreen extends Container {
 
   /** 透明アクリルの台座テクスチャ (#760)。共有キャッシュ。canvas が使えないときは null（Graphics へフォールバック） */
   protected makeAcrylicBase(): AcrylicBaseTexture | null {
-    return this.acrylicParams ? getAcrylicBaseTexture(this.acrylicParams) : null
+    return this.acrylicParams ? makeAcrylicBase(this.acrylicParams) : null
   }
 
   /** アクリル板テクスチャを作る (#760)。canvas が使えない・読み出せないときは null（テストで差し替えられるよう分けてある） */
   protected makeAcrylicPlate(tex: Texture): AcrylicPlate | null {
-    return this.acrylicParams ? createAcrylicPlateTexture(tex, this.acrylicParams) : null
+    return this.acrylicParams ? makeAcrylicPlate(tex, this.acrylicParams) : null
   }
 
-  /**
-   * 同じ画像（tex.source 単位）の板・影は 1 回だけ作って共有する (#760)。同じ敵が複数いても生成と GPU メモリは 1 組。
-   * 作れなかった（null）結果も覚えて、同じ画像で作り直さない。解放は destroy でまとめて行う。
-   */
+  /** 同じ画像の板・影は 1 回だけ作って共有する (#760)（AcrylicPlateCache） */
   private getAcrylicPlate(tex: Texture): AcrylicPlate | null {
-    const key = tex.source
-    if (this.plateCache.has(key)) return this.plateCache.get(key) ?? null
-    const plate = this.makeAcrylicPlate(tex)
-    this.plateCache.set(key, plate)
-    return plate
+    return this.plateCache.get(tex)
   }
 
   /**
@@ -837,11 +823,7 @@ export class BattleScreen extends Container {
       v.acrylicShadow = null
       v.acrylicPlate = null
     }
-    for (const plate of this.plateCache.values()) {
-      plate?.texture.destroy(true)
-      plate?.shadow?.destroy(true)
-    }
-    this.plateCache.clear()
+    this.plateCache.destroy()
     this.backgroundToneFilter?.destroy()
     this.backgroundToneFilter = null
     this.disposeBackgroundDof()
@@ -1177,14 +1159,7 @@ export class BattleScreen extends Container {
       fallback,
       color,
       sprite: null,
-      acrylicBack,
-      acrylicPlate: null,
-      acrylicBase: null,
-      acrylicShadow: null,
-      acrylicShadowFoot: { x: 0, y: 0 },
-      acrylicPlateScale: 1,
-      acrylicPlatePad: 0,
-      acrylicBaseLayout: null,
+      ...emptyAcrylicParts(acrylicBack),
       label,
       selectMark,
       slotRef: null,
@@ -1218,36 +1193,18 @@ export class BattleScreen extends Container {
       const sprite = new Sprite(tex)
       view.sprite = sprite
       if (view.acrylicBack) {
-        // アクリル板 (#760): 長辺 192px の作業解像度で 1 回だけ作り（同じ画像は共有）、mipmap で拡縮してスプライトの直下に敷く。作れない環境では板なし
-        let idx = 2
-        let basePlate: AcrylicPlate | null = null
-        const base = this.makeAcrylicBase()
-        if (base) {
-          view.acrylicBase = new Sprite(base.texture)
-          view.acrylicBaseLayout = base.layout
-          view.container.addChildAt(view.acrylicBase, idx++)
-        }
-        const plate = this.getAcrylicPlate(tex)
-        basePlate = plate
-        if (plate) {
-          const plateSprite = new Sprite(plate.texture)
-          view.acrylicPlate = plateSprite
-          view.acrylicPlatePad = plate.pad
-          view.acrylicPlateScale = plate.scale ?? 1
-          if (plate.shadow && this.shadowLayer) {
-            const sh = new Sprite(plate.shadow)
-            view.acrylicShadow = sh
-            view.acrylicShadowFoot = plate.foot ?? { x: 0, y: 0 }
-            sh.pivot.set(view.acrylicShadowFoot.x, view.acrylicShadowFoot.y)
-            this.shadowLayer.addChild(sh)
-          }
-          // 板を台座のスリットの高さで水平に切る mask (#760)。v8 では Sprite に子を足せないので、
-          // 板の直後の兄弟として置く（座標は container と同じ）
-          const mask = new Graphics()
-          plateSprite.mask = mask
-          view.container.addChildAt(plateSprite, idx++)
-          view.container.addChildAt(mask, idx++)
-        }
+        // 台座・板・板の mask・影を積む (#760)。作れない環境では板なし
+        const att = attachAcrylicLayers({
+          container: view.container,
+          parts: view,
+          tex,
+          startIndex: 2,
+          makeBase: () => this.makeAcrylicBase(),
+          plateFor: (t) => this.getAcrylicPlate(t),
+          shadowLayer: this.shadowLayer,
+        })
+        const idx = att.nextIndex
+        const basePlate = att.plate
         view.container.addChildAt(sprite, idx)
         view.acrylicBack.visible = true
         view.baseVisual = { texture: tex, plate: basePlate }
@@ -2070,68 +2027,13 @@ export class BattleScreen extends Container {
     sprite.position.set(g.sprite.x, g.sprite.y)
     sprite.width = g.sprite.width
     sprite.height = g.sprite.height
-    back.clear()
-    const baseSprite = view.acrylicBase
-    if (baseSprite && view.acrylicBaseLayout) {
-      // 透明アクリルの台座と柔らかい影 (#760): 高解像度の共有テクスチャを縮小して敷く。影の幅が幾何の影に一致する
-      const L = view.acrylicBaseLayout
-      const ref = g.shadow
-      baseSprite.visible = !!(g.base && ref)
-      if (g.base && ref) {
-        const k = ref.rx / L.shadowRx
-        baseSprite.scale.set(k)
-        baseSprite.position.set(g.base.cx - L.cx * k, g.base.cy - L.cyTop * k)
-      }
-    } else {
-      if (g.shadow) {
-        back
-          .ellipse(g.shadow.cx, g.shadow.cy, g.shadow.rx, g.shadow.ry)
-          .fill({ color: 0x000000, alpha: params.shadowAlpha })
-      }
-      if (g.base) {
-        back.ellipse(g.base.cx, g.base.cy, g.base.rx, g.base.ry).fill(ACRYLIC_BASE_COLOR)
-      }
-      if (g.highlight) {
-        back
-          .ellipse(g.highlight.cx, g.highlight.cy, g.highlight.rx, g.highlight.ry)
-          .fill({ color: 0xffffff, alpha: params.highlightAlpha })
-      }
-    }
-    const plate = view.acrylicPlate
-    if (plate) {
-      // 板はスプライトと同じ倍率で縮小する（縮小した解像度で作った板を mipmap 付きで拡縮）。外へ pad ぶん広がる
-      const k = sprite.texture.width > 0 ? g.sprite.width / sprite.texture.width : 0
-      const ks = k * view.acrylicPlateScale
-      plate.scale.set(ks)
-      plate.position.set(
-        g.sprite.x - view.acrylicPlatePad * ks,
-        g.sprite.y - view.acrylicPlatePad * ks
-      )
-      plate.visible = k > 0 && g.linePx > 0 && params.lineAlpha > 0
-      // 板は台座に差し込まれているので、スリットの高さより下は見えない。スリットと同じ純粋関数の値で水平に切る (#760)。
-      // スプライト本体の足元はクリップしない（mask は板だけ）
-      const mask = (plate.mask ?? null) as Graphics | null
-      if (mask) {
-        const w = plate.texture.width * ks
-        const fullH = plate.texture.height * ks
-        // 台座が無い（hasBase=false）・縮尺 0 のときは切らない。mask は container 座標
-        const clipY = g.base ? computeSlitY(g.base.cy, g.base.ry) : Infinity
-        const h = ks > 0 ? Math.min(fullH, Math.max(0, clipY - plate.y)) : fullH
-        mask.clear().rect(plate.x, plate.y, w, h).fill(0xffffff)
-      }
-    }
+    const laid = layoutAcrylicParts(view, params, g, sprite.texture.width)
     const shadow = view.acrylicShadow
-    if (shadow) {
-      // 本体の影 (#760): 足元（スプライト下端の中央）を基点に、縦につぶして右へ傾ける。座標は shadowLayer（= 画面）基準
-      const k = sprite.texture.width > 0 ? g.sprite.width / sprite.texture.width : 0
-      const t = computeShadowTransform(params, k * view.acrylicPlateScale)
-      shadow.scale.set(t.scaleX, t.scaleY)
-      shadow.skew.x = t.skewX
-      // 基準位置はモーションのずれを足す前の値（container.x は動いていることがある）。ずれは applyMotionFrame が足す (#745)
-      view.shadowBaseX = view.baseX + g.sprite.x + g.sprite.width / 2
-      view.shadowBaseY = view.baseY + g.sprite.y + g.sprite.height + g.liftPx
+    if (shadow && laid) {
+      // 基準位置はモーションのずれを足す前の値（container.x は動いていることがある）。ずれは applyMotionFrame が足す (#745)。座標は shadowLayer（= 画面）基準
+      view.shadowBaseX = view.baseX + laid.foot.x
+      view.shadowBaseY = view.baseY + laid.foot.y
       shadow.position.set(view.shadowBaseX, view.shadowBaseY)
-      shadow.visible = k > 0 && params.castAlpha > 0
     }
     // 画像のある枠だけ台座・影を出す（読み込み前・失敗時は色四角のまま）
     back.visible = true
