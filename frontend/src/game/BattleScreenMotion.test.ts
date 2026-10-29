@@ -269,10 +269,66 @@ describe('BattleScreen: 被弾モザイク (#953)', () => {
     expect(attached(r2.enemy)).toEqual([])
   })
 
-  it('敵→敵のダメージでは、被弾側のモザイクは付かない（付くのは攻撃した敵自身の通知モザイクだけ）', () => {
-    const r = playSynthetic([ev('enemy', [hit({ target: { side: 'enemy', index: 0 } })])])
-    expect(attached(r.party)).toEqual([])
-    expect(attached(r.enemy).length).toBeGreaterThan(50) // actor=target=敵0 の自己モザイク
+  it('敵0→敵1 のダメージでは、被弾側の敵1にも味方にも付かない（付くのは攻撃した敵0の通知モザイクだけ）', () => {
+    const engine = new BattleEngine(
+      [entity('hero')],
+      [entity('a', { atk: 0 }), entity('b', { atk: 0 })],
+      {
+        rng: () => 0.5,
+        skills: {},
+      }
+    )
+    const sc = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      motion: 'snappy',
+    })
+    created.push(sc)
+    ;(sc as unknown as { playback: unknown }).playback = {
+      queue: [ev('enemy', [hit({ target: { side: 'enemy', index: 1 } })])],
+      active: null,
+    }
+    const v = sc as unknown as {
+      enemyViews: { container: Container }[]
+      partyViews: { container: Container }[]
+    }
+    let e0 = 0
+    for (let t = 0; t < 1500; t++) {
+      sc.tick(1)
+      if (sizeOf(v.enemyViews[0].container) !== null) e0++
+      expect(sizeOf(v.enemyViews[1].container)).toBeNull()
+      expect(sizeOf(v.partyViews[0].container)).toBeNull()
+    }
+    expect(e0).toBeGreaterThan(50)
+  })
+
+  it('敵0→味方の攻撃で、攻撃していない敵1にはモザイクが付かない', () => {
+    const engine = new BattleEngine(
+      [entity('hero')],
+      [entity('a', { atk: 0 }), entity('b', { atk: 0 })],
+      {
+        rng: () => 0.5,
+        skills: {},
+      }
+    )
+    const sc = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      motion: 'snappy',
+    })
+    created.push(sc)
+    ;(sc as unknown as { playback: unknown }).playback = {
+      queue: [ev('enemy', [hit()])],
+      active: null,
+    }
+    const v = sc as unknown as { enemyViews: { container: Container }[] }
+    let e0 = 0
+    for (let t = 0; t < 1500; t++) {
+      sc.tick(1)
+      if (sizeOf(v.enemyViews[0].container) !== null) e0++
+      expect(sizeOf(v.enemyViews[1].container)).toBeNull()
+    }
+    expect(e0).toBeGreaterThan(50)
   })
 })
 
@@ -281,16 +337,20 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     const f = c.filters as unknown as { sizeX: number }[] | null
     return f && f.length ? f[0].sizeX : null
   }
-  function playEnemyAttack(motion: 'snappy' | 'default', kind: 'attack' | 'spell' = 'attack') {
-    const engine = new BattleEngine([entity('hero')], [entity('boss', { atk: 0 })], {
+  function playEnemyAttack(
+    motion: 'snappy' | 'default',
+    kind: 'attack' | 'spell' = 'attack',
+    bossHp = 999
+  ) {
+    const engine = new BattleEngine([entity('hero')], [entity('boss', { atk: 0, hp: bossHp })], {
       rng: () => 0.5,
       skills: {},
     })
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
     const v = s as unknown as {
-      partyViews: { container: Container }[]
       enemyViews: { container: Container; baseX: number }[]
+      sampleEntity(side: 'enemy', i: number): { pose: string }
     }
     const event: BattleActionEvent = {
       seq: 0,
@@ -309,20 +369,20 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     ;(s as unknown as { playback: unknown }).playback = { queue: [event], active: null }
     const ex: number[] = []
     const esize: (number | null)[] = []
-    const px: number[] = []
-    const px0 = v.partyViews[0].container.x
+    const poses = new Set<string>()
     for (let t = 0; t < 1500; t++) {
       s.tick(1)
       ex.push(v.enemyViews[0].container.x - v.enemyViews[0].baseX)
       esize.push(sizeOf(v.enemyViews[0].container))
-      px.push(v.partyViews[0].container.x - px0)
+      poses.add(v.sampleEntity('enemy', 0).pose)
     }
-    return { ex, esize, px }
+    return { ex, esize, poses }
   }
 
-  it('snappy: 敵は一度も横にずれず、自己モザイクが 最大まで上がって外れる', () => {
+  it('snappy: 敵は一度も横にずれず攻撃ポーズにも替わらず、自己モザイクが最大まで上がって外れる', () => {
     const r = playEnemyAttack('snappy')
     expect(r.ex.every((x) => x === 0)).toBe(true)
+    expect([...r.poses]).toEqual(['idle'])
     const a = r.esize.filter((x): x is number => x !== null)
     expect(a.length).toBeGreaterThan(50)
     expect(Math.max(...a)).toBe(S.hitMosaicMaxSize)
@@ -330,9 +390,11 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     expect(r.esize[r.esize.length - 1]).toBeNull()
   })
 
-  it('default: 敵は踏み出さず、モザイクは付かない（hitMosaicMs=0）', () => {
+  it('default（モザイク無効）: 従来どおり敵が踏み出し、攻撃ポーズも再生し、モザイクは付かない', () => {
     const r = playEnemyAttack('default')
-    expect(r.ex.every((x) => x === 0)).toBe(true)
+    expect(Math.max(...r.ex.map(Math.abs))).toBeGreaterThan(1)
+    expect(r.poses.has('step')).toBe(true)
+    expect(r.poses.has('slash')).toBe(true)
     expect(r.esize.every((x) => x === null)).toBe(true)
   })
 
@@ -341,7 +403,12 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     expect(r.esize.every((x) => x === null)).toBe(true)
   })
 
-  it('味方の攻撃では、味方は従来どおり踏み出し、敵にモザイクは付かない', () => {
+  it('倒れた敵の行動（死亡時の行動）では自己モザイクを出さない', () => {
+    const r = playEnemyAttack('snappy', 'attack', 0)
+    expect(r.esize.every((x) => x === null)).toBe(true)
+  })
+
+  it('味方の踏み出しの間（命中まで）、味方は従来どおり踏み出し、敵にモザイクは付かない', () => {
     const engine = new BattleEngine([entity('hero')], [entity('boss', { atk: 0 })], {
       rng: () => 0.5,
       skills: {},
