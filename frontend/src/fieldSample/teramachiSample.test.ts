@@ -8,7 +8,7 @@ import { collectFieldEvents } from '../game/fieldScript'
 import { parseMarkdown } from '../wasm/parser'
 import { parseConfig } from './config'
 import { buildBattleMenu } from './battleMenu'
-import { buildBattleScreenOptions } from './battleOptions'
+import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { effectiveCommandLayout } from '../game/battleLayout'
 import { motionTimingFor } from '../game/battleMotion'
 
@@ -39,7 +39,7 @@ describe('寺町サンプルの感情吹き出し', () => {
   })
 })
 
-// sit-by-me#54 #56 #57 #62 #65: 統合サンプル（寺町）が戦闘サンプルと同等の機能を実際に使っていること。
+// sit-by-me#54 / sit-by-me#56 / sit-by-me#57 / sit-by-me#62 / sit-by-me#65: 統合サンプル（寺町）が戦闘サンプルと同等の機能を実際に使っていること。
 // 設定を外すと、実機で気づかないまま従来表示（先頭固定・格子なし・桁バウンスなし）へ戻るため、ここで固定する。
 describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同等性）', () => {
   const load = () => {
@@ -85,6 +85,8 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
         : !!rows && Object.values(rows).every((r) => (r as unknown[]).length > 0)
     const commands = c.battle.commands ?? []
     expect(commands.length).toBe(4)
+    // たたかうを落とした退行の形を直接固定する
+    expect(commands).toContain('attack')
     for (const id of commands) {
       if (id === 'attack' || id === 'escape') continue
       if (id === 'spell') expect(has(menu?.spells)).toBe(true)
@@ -106,6 +108,11 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(o.windowStyle).toBe('ff-blue')
     expect(o.enemyGrid).toEqual(b.enemyGrid)
     expect(o.background).toBe('bg.webp')
+  })
+
+  it('ATB の設定が BattleEngine のオプションへ渡る（未指定はターン制）', () => {
+    expect(buildBattleEngineOptions(load().battle)).toEqual({ atb: { mode: 'wait' } })
+    expect(buildBattleEngineOptions({})).toEqual({})
   })
 
   it('buildBattleScreenOptions: 未指定のキーは出さない（従来の既定）', () => {

@@ -300,11 +300,50 @@ export function facingFromVector(vec: Vec, prev: Facing8, diagonal = false): Fac
 
 export const WALK_FRAMES = 3
 
-/** 歩行アニメのコマ番号 (0..2)。止まっているときは 0（1 コマ目）。moving の間 frameMs ごとに 0→1→2 を繰り返す */
-export function walkFrame(moving: boolean, movingElapsedMs: number, frameMs: number): number {
+/** 歩行周期の既定。コマを 0→1→2 と順に送る（車椅子など、コマが「ハンドリムをこぐ 3 コマ」の素材向け） */
+export const DEFAULT_WALK_CYCLE: readonly number[] = [0, 1, 2]
+
+/**
+ * 歩行アニメのコマ番号 (0..2)。moving の間、frameMs ごとに cycle の要素を順に繰り返す。
+ * 止まっているとき・入力が不正なとき・cycle の要素が 0..2 の整数でないときは idleFrame。cycle / idleFrame の既定は [0, 1, 2] / 0（従来どおり）。
+ * 立位の歩行素材（コマ 0・2 が接地、コマ 1 が通過）は cycle = [0, 1, 2, 1]・idleFrame = 1 で、左右交互に歩き通過コマで止まる。
+ */
+export function walkFrame(
+  moving: boolean,
+  movingElapsedMs: number,
+  frameMs: number,
+  cycle: readonly number[] = DEFAULT_WALK_CYCLE,
+  idleFrame = 0
+): number {
   if (!moving || !(frameMs > 0) || !(movingElapsedMs >= 0) || !Number.isFinite(movingElapsedMs))
-    return 0
-  return Math.floor(movingElapsedMs / frameMs) % WALK_FRAMES
+    return idleFrame
+  if (cycle.length === 0) return idleFrame
+  const f = cycle[Math.floor(movingElapsedMs / frameMs) % cycle.length]
+  // コマ番号は 0..2 のみ有効。範囲外・非整数は idleFrame に倒す
+  return Number.isInteger(f) && f >= 0 && f < WALK_FRAMES ? f : idleFrame
+}
+
+/** 歩行周期の指定（`player` / `companion` の cycle・idleFrame）。未指定は従来の [0, 1, 2]・停止 0 */
+export interface Gait {
+  cycle?: number[]
+  idleFrame?: number
+}
+
+/**
+ * 主人公と同行者の表示コマ。同行者は主人公の周期を引き継がず、自分の指定だけを使う
+ * （同行者は車椅子の主人公を押す立位の人で、主人公と歩き方が違うため）
+ */
+export function fieldFrames(
+  moving: boolean,
+  movingElapsedMs: number,
+  frameMs: number,
+  player: Gait,
+  companion?: Gait | null
+): { player: number; companion: number } {
+  return {
+    player: walkFrame(moving, movingElapsedMs, frameMs, player.cycle, player.idleFrame),
+    companion: walkFrame(moving, movingElapsedMs, frameMs, companion?.cycle, companion?.idleFrame),
+  }
 }
 
 // ---- 端のリンク ----

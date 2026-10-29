@@ -35,7 +35,7 @@ import {
   pointerToVector,
   resolvePlayerHeight,
   snapToWalkable,
-  walkFrame,
+  fieldFrames,
   type DirectionKeys,
   type Facing,
   type Facing8,
@@ -125,7 +125,7 @@ import {
 } from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 import { buildBattleMenu } from './battleMenu'
-import { buildBattleScreenOptions } from './battleOptions'
+import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -639,7 +639,7 @@ async function main(): Promise<void> {
     const engine = new BattleEngine(
       config.party.map((p) => ({ ...p })),
       enemies.map((e) => ({ ...e })),
-      b.atb ? { atb: b.atb } : {}
+      buildBattleEngineOptions(b)
     )
     world.visible = false
     fade.visible = false
@@ -1158,7 +1158,14 @@ async function main(): Promise<void> {
     const scrollCfg = config.scenes[sceneId].scroll
     if (scrollCfg && scene.scroll)
       scrollSprite.tilePosition.x = scrollOffset(scrollCfg.speed, clockMs, scene.scroll.width)
-    const tex = walkTex[facing]![walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
+    const frames = fieldFrames(
+      movingMs > 0,
+      movingMs,
+      config.player.frameMs,
+      config.player,
+      config.companion
+    )
+    const tex = walkTex[facing]![frames.player]
     player.texture = tex
     const s = playerScale(
       resolvePlayerHeight(config.scenes[sceneId].playerHeight, config.player.height),
@@ -1196,7 +1203,7 @@ async function main(): Promise<void> {
       isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
     ) {
       const g = evalAssist(config.assist, flags).ghost
-      const ct = ctex[walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
+      const ct = ctex[frames.companion]
       companionSprite.texture = ct
       const cs = playerScale(
         config.companion.height ??

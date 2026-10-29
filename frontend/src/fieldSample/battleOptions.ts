@@ -3,6 +3,7 @@
  * 設定の `battle` ブロックの値を、指定があるものだけ BattleScreen のオプションへ渡す（未指定のキーは出さない＝従来の既定）。
  */
 import type { BattleScreenOptions } from '../game/BattleScreen'
+import type { BattleEngineOptions } from '../game/battleEngine'
 import type { BattleMenuData } from '../game/battleMenu'
 import type { FieldBattleConfig } from './config'
 
@@ -26,4 +27,9 @@ export function buildBattleScreenOptions(
       ? { enemyWindowOverlap: b.enemyWindowOverlap }
       : {}),
   }
+}
+
+/** BattleEngine に渡すオプション。ATB が有効なときだけ `atb` を渡す（未指定はターン制） */
+export function buildBattleEngineOptions(b: Pick<FieldBattleConfig, 'atb'>): BattleEngineOptions {
+  return b.atb ? { atb: b.atb } : {}
 }
