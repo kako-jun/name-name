@@ -125,6 +125,7 @@ import {
 } from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 import { buildBattleMenu } from './battleMenu'
+import { buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -644,21 +645,8 @@ async function main(): Promise<void> {
     fade.visible = false
     app.renderer.resize(b.width, b.height)
     battle = new BattleScreen(engine, b.width, b.height, {
-      layout: b.layout,
-      spriteStyle: b.spriteStyle,
-      ...(b.presentation ? { presentation: b.presentation } : {}),
-      ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
-      ...(b.motion ? { motion: b.motion } : {}),
-      ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
-      ...(b.commands ? { commands: b.commands } : {}),
-      ...(b.effects ? { effects: b.effects } : {}),
-      ...(bg ? { background: bg } : {}),
-      // 候補窓 (#890)。戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
-      ...(menu ? { menu } : {}),
-      ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
-      ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
-        ? { enemyWindowOverlap: b.enemyWindowOverlap }
-        : {}),
+      // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
+      ...buildBattleScreenOptions(b, { background: bg, menu }),
       onClose: (outcome) => {
         lastOutcome = outcome
         endBattle()

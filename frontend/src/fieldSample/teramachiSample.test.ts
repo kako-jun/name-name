@@ -7,6 +7,8 @@ import { parseFieldEmotionsText } from '../game/fieldEmotionScript'
 import { collectFieldEvents } from '../game/fieldScript'
 import { parseMarkdown } from '../wasm/parser'
 import { parseConfig } from './config'
+import { buildBattleMenu } from './battleMenu'
+import { buildBattleScreenOptions } from './battleOptions'
 import { effectiveCommandLayout } from '../game/battleLayout'
 import { motionTimingFor } from '../game/battleMotion'
 
@@ -37,7 +39,7 @@ describe('寺町サンプルの感情吹き出し', () => {
   })
 })
 
-// #54 #56 #57 #62 #65: 統合サンプル（寺町）が戦闘サンプルと同等の機能を実際に使っていること。
+// sit-by-me#54 #56 #57 #62 #65: 統合サンプル（寺町）が戦闘サンプルと同等の機能を実際に使っていること。
 // 設定を外すと、実機で気づかないまま従来表示（先頭固定・格子なし・桁バウンスなし）へ戻るため、ここで固定する。
 describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同等性）', () => {
   const load = () => {
@@ -52,26 +54,69 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(c.groupErrors).toBeUndefined()
   })
 
-  it('#57 ATB が有効（全員が満タン順に行動する）', () => {
+  it('sit-by-me#57 ATB が有効（全員が満タン順に行動する）', () => {
     expect(load().battle.atb).toEqual({ mode: 'wait' })
   })
 
-  it('#56 十字コマンドが実効になる（cross かつコマンド 4 つ）', () => {
+  it('sit-by-me#56 十字コマンドが実効になる（cross かつコマンド 4 つ）', () => {
     const b = load().battle
     expect(b.commandLayout).toBe('cross')
     expect(b.commands).toHaveLength(4)
     expect(effectiveCommandLayout(b.commandLayout, b.commands?.length ?? 0)).toBe('cross')
   })
 
-  it('#54 敵グリッドと、2 マス以上の敵の size がある', () => {
+  it('sit-by-me#54 敵グリッドと、2 マス以上の敵の size がある', () => {
     const c = load()
     expect(c.battle.enemyGrid).toBeDefined()
     const sizes = Object.values(c.monsters).map((m) => m.size)
     expect(sizes.every((s) => s !== undefined)).toBe(true)
     expect(sizes.some((s) => s && s.w * s.h >= 2)).toBe(true)
+    // sit-by-me docs/monsters.md §3-7 の gridClass（M001=1x1, M008=1x2）
+    expect(c.monsters.dragon.size).toEqual({ w: 1, h: 1 })
+    expect(c.monsters.shachihoko.size).toEqual({ w: 1, h: 2 })
   })
 
-  it('#62 motion プリセットが ff 演出で有効になり、桁バウンスが付く', () => {
+  it('sit-by-me#65 commands の全コマンドが実際に機能する（死んだボタンがない）', () => {
+    const c = load()
+    const menu = buildBattleMenu(c)
+    const has = (rows: Record<string, readonly unknown[]> | readonly unknown[] | undefined) =>
+      Array.isArray(rows)
+        ? rows.length > 0
+        : !!rows && Object.values(rows).every((r) => (r as unknown[]).length > 0)
+    const commands = c.battle.commands ?? []
+    expect(commands.length).toBe(4)
+    for (const id of commands) {
+      if (id === 'attack' || id === 'escape') continue
+      if (id === 'spell') expect(has(menu?.spells)).toBe(true)
+      else if (id === 'item') expect(has(menu?.items)).toBe(true)
+      else if (id === 'skill') expect(has(menu?.skills)).toBe(true)
+      else throw new Error(`サンプルが機能を用意していないコマンド: ${id}`)
+    }
+    // 全味方が呪文を持つ
+    expect(Object.keys(menu?.spells ?? {})).toHaveLength(c.party.length)
+  })
+
+  it('BattleScreen のオプションへ atb 以外の戦闘設定が漏れなく渡る', () => {
+    const b = load().battle
+    const o = buildBattleScreenOptions(b, { background: 'bg.webp' })
+    expect(o.motion).toBe('snappy')
+    expect(o.commandLayout).toBe('cross')
+    expect(o.commands).toEqual(b.commands)
+    expect(o.presentation).toBe('ff')
+    expect(o.windowStyle).toBe('ff-blue')
+    expect(o.enemyGrid).toEqual(b.enemyGrid)
+    expect(o.background).toBe('bg.webp')
+  })
+
+  it('buildBattleScreenOptions: 未指定のキーは出さない（従来の既定）', () => {
+    const o = buildBattleScreenOptions(
+      { layout: 'side', spriteStyle: 'none', width: 800, height: 450 },
+      {}
+    )
+    expect(Object.keys(o).sort()).toEqual(['layout', 'spriteStyle'])
+  })
+
+  it('sit-by-me#62 motion プリセットが ff 演出で有効になり、桁バウンスが付く', () => {
     const b = load().battle
     expect(b.presentation).toBe('ff')
     expect(b.motion).toBe('snappy')

@@ -143,7 +143,7 @@ export interface FieldBattleConfig {
   enemyWindowOverlap?: number
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
-  /** 戦闘モーションのプリセット (#956/#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
+  /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
   motion?: BattleMotionPreset
   /** 窓の配色 (#883)。`battle.windowStyle`: `dark` / `ff-blue`。未指定は undefined＝既定（dark） */
   windowStyle?: WindowStyle

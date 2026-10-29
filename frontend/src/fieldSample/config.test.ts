@@ -861,7 +861,7 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(b.atb).toEqual({ mode: 'active' })
   })
 
-  it('battle.motion を読む。未指定はキーなし・不正値はエラー・dq では警告 (#62/#65)', () => {
+  it('battle.motion を読む。未指定はキーなし・不正値はエラー・dq では警告 (sit-by-me#62 #65)', () => {
     const c = withEncounter()
     c.battle = { presentation: 'ff', motion: 'snappy' }
     const v = ok(c)
@@ -1184,10 +1184,10 @@ describe('parseConfig spells / items (#890)', () => {
     expect(c.items).toEqual([])
   })
 
-  it('teramachi.sample.json は ok で spells / items が空', () => {
+  it('teramachi.sample.json は ok で spells / items を持つ（commands の spell / item を機能させる）', () => {
     const c = ok(JSON.parse(teramachiSample))
-    expect(c.spells).toEqual([])
-    expect(c.items).toEqual([])
+    expect(c.spells.length).toBeGreaterThan(0)
+    expect(c.items.length).toBeGreaterThan(0)
   })
 
   it('指定した spells / items を保持する（呪文は mp と target、アイテムは count）', () => {
