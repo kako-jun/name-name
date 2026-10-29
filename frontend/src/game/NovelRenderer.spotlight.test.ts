@@ -5,8 +5,8 @@
  * `LightingLayer.test.ts` でカバー済み。ここでは `NovelRenderer.cameraMode.test.ts` と同じ
  * 「isBlackout と同種の宣言的 settled state」としての配線だけを検証する:
  *  - `[スポットライト: ...]`/`[スポットライト消灯]` イベントで点灯・消灯する
- *  - シーン遷移（jumpToScene 経由の resetAndStartEvents／マルチMD連結の 'SceneTransition'
- *    イベント、この2つは実装上別のクリア呼び出し箇所 #693 参照）・endStory・destroy で自動消灯する
+ *  - 通常のシーン間ジャンプ（jumpToScene）では持ち越し、新規開始・マルチMD連結の 'SceneTransition'
+ *    イベント（実装上別のクリア呼び出し箇所 #693 参照）・endStory・destroy で消灯する (#992)
  *  - goBack（スナップショットベースの宣言的復元）・save/load で復元される
  *  - 任意局面起動（`?debug_scene=` 相当・startFrom の eventIndex 指定経路）は
  *    イベント再生ではなく最小合成 state を使うため、常に消灯した状態で始まる
@@ -135,7 +135,7 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
     expect(r.getSnapshot().spotlight).toBeNull()
   })
 
-  it('3: シーン遷移（jumpToScene、resetAndStartEvents 経由）で既定値（消灯）にリセットされる', async () => {
+  it('3: 通常のシーン間ジャンプ（jumpToScene）では光を持ち越す（背景板・大道具・幕と同じ持続規律、#992）', async () => {
     const r = makeRenderer([
       scene('a', [narration('one'), spotlight('alice', '#ffffff', 0.2), narration('two')]),
       scene('b', [narration('three')]),
@@ -146,6 +146,19 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
     expect(r.getSnapshot().spotlight).not.toBeNull()
 
     r.jumpToScene('b')
+
+    expect(r.getSnapshot().spotlight).toEqual({ target: 'alice', color: '#ffffff', radius: 0.2 })
+  })
+
+  it('3b: 新規開始（startFrom）は文脈を捨てるので、点灯中でも消灯して始まる', async () => {
+    const r = makeRenderer([
+      scene('a', [narration('one'), spotlight('alice', '#ffffff', 0.2), narration('two')]),
+    ])
+    r.startFrom({ sceneId: 'a' })
+    await r.playScript([{ type: 'advance' }])
+    expect(r.getSnapshot().spotlight).not.toBeNull()
+
+    r.startFrom({ sceneId: 'a' })
 
     expect(r.getSnapshot().spotlight).toBeNull()
   })
@@ -275,7 +288,7 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
       expect(r.getSnapshot().spotlight).toBeNull()
     })
 
-    it('seekTo / goBack で対象不在のまま点灯状態が最終状態として復元される', async () => {
+    it('goBack で対象不在のまま点灯状態が最終状態として復元される', async () => {
       const r = makeRenderer(absent())
       r.startFrom({ sceneId: 'a' })
       await r.playScript([{ type: 'advance' }, { type: 'advance' }, { type: 'advance' }])
