@@ -975,3 +975,118 @@ describe('3 値マスク: 橙 = 条件付き (#862)', () => {
     expect(pass.pos.x).toBeGreaterThan(1)
   })
 })
+
+describe('edge link は端への接触で一度だけ発火する (sit-by-me#61)', () => {
+  const W = 400
+  const H = 300
+  const T = 6
+  /** 歩行マスクの端まで歩く（60fps 相当の 16ms を繰り返し、各フレームで判定。最初に発火したリンクと位置を返す） */
+  function walk(
+    mask: WalkMask,
+    start: { x: number; y: number },
+    vec: { x: number; y: number },
+    links: FieldLink[],
+    disarmed: FieldLink | null = null
+  ) {
+    let pos = start
+    for (let i = 0; i < 400; i++) {
+      pos = stepMove(mask, pos, vec, 260, 16).pos
+      const hit = detectEdgeLink(pos, { width: W, height: H }, links, T, vec, disarmed)
+      if (hit) return { hit, pos }
+    }
+    return { hit: null, pos }
+  }
+
+  const cases: [Edge, FieldLink, { x: number; y: number }, { x: number; y: number }][] = [
+    ['left', { edge: 'left', range: [100, 200], to: 'b' }, { x: 200, y: 150 }, { x: -1, y: 0 }],
+    ['right', { edge: 'right', range: [100, 200], to: 'b' }, { x: 200, y: 150 }, { x: 1, y: 0 }],
+    ['top', { edge: 'top', range: [100, 300], to: 'b' }, { x: 200, y: 150 }, { x: 0, y: -1 }],
+    ['bottom', { edge: 'bottom', range: [100, 300], to: 'b' }, { x: 200, y: 150 }, { x: 0, y: 1 }],
+  ]
+
+  it.each(cases)(
+    '%s: 歩行マスクが端まで続くなら、端に押し込む前（しきい値内に入った時点）で発火する',
+    (edge, link, start, vec) => {
+      const { hit, pos } = walk(openMask(W, H), start, vec, [link])
+      expect(hit).toBe(link)
+      const dist =
+        edge === 'left'
+          ? pos.x
+          : edge === 'right'
+            ? W - 1 - pos.x
+            : edge === 'top'
+              ? pos.y
+              : H - 1 - pos.y
+      // 端（距離 0）まで進み切らず、しきい値内に入った時点で止まる（1 フレームは約 4px）
+      expect(dist).toBeLessThanOrEqual(T)
+      expect(dist).toBeGreaterThan(0)
+    }
+  )
+
+  it.each(cases)('%s: range の外を端まで歩いても発火しない', (edge, link, _start, vec) => {
+    const along = edge === 'left' || edge === 'right' ? { x: 200, y: 250 } : { x: 50, y: 150 }
+    const { hit } = walk(openMask(W, H), along, vec, [link])
+    expect(hit).toBeNull()
+  })
+
+  it.each(cases)(
+    '%s: 端が黒（歩けない）なら、しきい値内に入れないので発火しない',
+    (_edge, link, start, vec) => {
+      // 端から 20px を黒にする（edgeThreshold 6 より厚い）
+      const rows = Array.from({ length: H }, (_, y) =>
+        Array.from({ length: W }, (_, x) =>
+          x < 20 || x >= W - 20 || y < 20 || y >= H - 20 ? '#' : '.'
+        ).join('')
+      )
+      const { hit, pos } = walk(maskOf(rows), start, vec, [link])
+      expect(hit).toBeNull()
+      expect(Math.min(pos.x, W - 1 - pos.x, pos.y, H - 1 - pos.y)).toBeGreaterThan(T)
+    }
+  )
+
+  it.each(cases)(
+    '%s: 着地点（edgeThreshold の 3 倍内側）では、その端へ押し続けても即座には逆遷移しない',
+    (edge, link, _start, vec) => {
+      const back: FieldLink = { ...link, range: [0, 300] }
+      const pos = arrivalPosition(
+        {
+          ...link,
+          edge:
+            edge === 'left'
+              ? 'right'
+              : edge === 'right'
+                ? 'left'
+                : edge === 'top'
+                  ? 'bottom'
+                  : 'top',
+        },
+        edge === 'left' || edge === 'right' ? { x: 0, y: 150 } : { x: 150, y: 0 },
+        back,
+        openMask(W, H),
+        T * 3
+      )
+      expect(pos).not.toBeNull()
+      // 着地した瞬間（同じ入力のまま）は、しきい値の外なので発火しない
+      expect(detectEdgeLink(pos!, { width: W, height: H }, [back], T, vec)).toBeNull()
+    }
+  )
+
+  it('斜め入力でも、外向き成分があり足元がしきい値内なら発火する（辺に沿って滑ってきても）', () => {
+    const right: FieldLink = { edge: 'right', range: [100, 200], to: 'b' }
+    const { hit } = walk(openMask(W, H), { x: 200, y: 120 }, { x: 0.98, y: 0.2 }, [right])
+    expect(hit).toBe(right)
+  })
+
+  it('斜め入力が range 外の角へ滑っていくだけなら発火しない', () => {
+    const right: FieldLink = { edge: 'right', range: [100, 150], to: 'b' }
+    const { hit } = walk(openMask(W, H), { x: 200, y: 160 }, { x: 0.7, y: 0.7 }, [right])
+    expect(hit).toBeNull()
+  })
+
+  it('発火後に止まった入力（外向き成分なし）では発火しない', () => {
+    const right: FieldLink = { edge: 'right', range: [100, 200], to: 'b' }
+    expect(
+      detectEdgeLink({ x: W - 1, y: 150 }, { width: W, height: H }, [right], T, { x: 0, y: 0 })
+    ).toBeNull()
+  })
+})
