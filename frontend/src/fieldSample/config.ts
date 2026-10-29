@@ -26,7 +26,7 @@ import type { MonsterDef } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { SpriteStyle } from '../game/spriteStyle'
-import type { BattlePresentation } from '../game/battleMotion'
+import type { BattleMotionPreset, BattlePresentation } from '../game/battleMotion'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
 import type { WindowStyle } from '../game/windowStyle'
@@ -147,6 +147,8 @@ export interface FieldBattleConfig {
   enemyWindowOverlap?: number
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
+  /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
+  motion?: BattleMotionPreset
   /** 窓の配色 (#883)。`battle.windowStyle`: `dark` / `ff-blue`。未指定は undefined＝既定（dark） */
   windowStyle?: WindowStyle
   /** コマンド窓の配置 (#883)。`battle.commandLayout`: `grid` / `cross`。未指定は undefined＝既定（grid） */
@@ -748,6 +750,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `battle.commands は attack / skill / summon / spell / item / escape を重複なく並べてください: ${JSON.stringify(b.commands)}`
       )
   }
+  if (b.motion !== undefined && b.motion !== 'default' && b.motion !== 'snappy')
+    return fail(`battle.motion は "default" か "snappy": ${JSON.stringify(b.motion)}`)
   if (b.atb !== undefined && b.atb !== 'on' && b.atb !== 'off')
     return fail(`battle.atb は "on" か "off": ${JSON.stringify(b.atb)}`)
   if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
@@ -764,6 +768,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
       )
   }
+  if (b.motion !== undefined && b.presentation !== 'ff')
+    warnings.push('battle.motion は presentation "ff" のときだけ効きます（"dq" では無視されます）')
   warnings.push(...walkWarnings)
   warnings.push(...npcWarnings)
   // エフェクト重ね (#936)。不正な種類は読み込みを止めず警告にする（画像 URL は他の画像と同じく assetBaseUrl 基準）
@@ -915,6 +921,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(enemyWindowOverlap !== undefined ? { enemyWindowOverlap } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
+        ...(b.motion ? { motion: b.motion } : {}),
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),

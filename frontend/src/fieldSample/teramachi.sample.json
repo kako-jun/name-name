@@ -193,6 +193,7 @@
       "agi": 5,
       "exp": 20,
       "gold": 30,
+      "size": "1x1",
       "sprite": "http://localhost:8765/assets/images/enemies/M001.webp"
     },
     "shachihoko": {
@@ -203,6 +204,7 @@
       "agi": 8,
       "exp": 8,
       "gold": 10,
+      "size": "1x2",
       "sprite": "http://localhost:8765/assets/images/enemies/M008.webp"
     }
   },
@@ -246,8 +248,46 @@
       "row": "back"
     }
   ],
+  "spells": [
+    {
+      "id": "sit_fire_burst_single",
+      "name": "ほのお",
+      "mp": 3,
+      "target": "敵単体",
+      "effect": "damage 12..18"
+    },
+    {
+      "id": "sit_spark_wave_all",
+      "name": "いなずま",
+      "mp": 6,
+      "target": "敵全体",
+      "effect": "damage 8..12"
+    },
+    {
+      "id": "sit_heal_light_single",
+      "name": "ヒール",
+      "mp": 2,
+      "target": "味方単体",
+      "effect": "heal 15..25"
+    }
+  ],
+  "items": [
+    {
+      "id": "sit_herb_tea_heal",
+      "name": "ハーブティー",
+      "effect": "heal 20..30",
+      "count": 3
+    }
+  ],
   "battle": {
     "layout": "side",
+    "presentation": "ff",
+    "windowStyle": "ff-blue",
+    "commandLayout": "cross",
+    "commands": ["attack", "spell", "item", "escape"],
+    "atb": "on",
+    "enemyGrid": "4x2",
+    "motion": "snappy",
     "width": 800,
     "height": 450,
     "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
