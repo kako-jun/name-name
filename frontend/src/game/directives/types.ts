@@ -74,8 +74,11 @@ export interface DirectiveHooks {
   setCurtainZOrder(charactersInFront: boolean): void
   /** `[舞台回転]` (#704 第2弾)。直後から範囲が閉じるまでの壁・背景板・大道具・床の指定を、回転の裏側としてためる。 */
   beginStageTurn(durationMs: number | null | undefined): void
-  /** 回転舞台の範囲が開いていれば指定をためて true（呼び出し側は即時実行しない）。開いていなければ false。 */
-  deferToStageTurn(fn: () => void): boolean
+  /**
+   * 回転舞台の範囲が開いていれば指定をためて true（呼び出し側は即時実行しない）。開いていなければ false。
+   * 流し込み時に `instant`（範囲を開いた時点のスキップ・流し込み時点のスキップ・回転せず即時で流す経路）が渡る (#996)。
+   */
+  deferToStageTurn(fn: (instant: boolean) => void): boolean
   /** 回転舞台の範囲を捨てる（場面転換）。 */
   cancelStageTurn(): void
   /** novel の役割配置 (#286) の xRatio。adv / protagonist 未指定は undefined。 */

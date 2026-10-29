@@ -174,7 +174,9 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   }
   if ('BackgroundBoard' in event) {
     const board = event.BackgroundBoard
-    w.backgroundBoardLayer.add(board.path, board.depth ?? 0, w.env.assetBaseUrl)
+    w.backgroundBoardLayer.add(board.path, board.depth ?? 0, w.env.assetBaseUrl, {
+      instant: w.env.skipMode,
+    })
     return true
   }
   if ('Wall' in event) {
@@ -201,7 +203,7 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   }
   if ('Prop' in event) {
     const prop = event.Prop
-    w.propLayer.add(prop.path, prop.depth ?? 0, w.env.assetBaseUrl)
+    w.propLayer.add(prop.path, prop.depth ?? 0, w.env.assetBaseUrl, { instant: w.env.skipMode })
     return true
   }
   if ('BackgroundColor' in event) {
