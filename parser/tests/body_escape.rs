@@ -106,6 +106,71 @@ fn continuation_dialog_same_speaker() {
     }
 }
 
+/// 行頭に空白（半角・全角・タブ）がある危険な行。parser は trim してから判定するので、
+/// emitter も trim 後で判定して `\\` + trim 後の本文で出す。空白は落ちる（仕様）が、
+/// 消えない・別構文に化けない・emit が冪等であることを確認する。
+const WS_CASES: &[(&str, &str)] = &[
+    (" [笑]", "[笑]"),
+    ("　**x", "**x"),
+    ("　**F5** で進む", "**F5** で進む"),
+    ("--- ", "---"),
+    (">　", ">"),
+    ("\t[BGM: a]", "[BGM: a]"),
+    (" > 引用", "> 引用"),
+    (" \\x", "\\x"),
+];
+
+fn assert_trimmed_roundtrip(events: Vec<Event>, expected: Vec<Event>, label: &str) {
+    let doc = doc_with(events);
+    let md = emit(&doc);
+    let back = parse(&md);
+    assert_eq!(events_of(&back), expected, "{label}\n--- emitted ---\n{md}");
+    assert_eq!(emit(&back), md, "emit 冪等でない: {label}");
+}
+
+#[test]
+fn leading_whitespace_dangerous_lines_do_not_vanish_or_change_syntax() {
+    for (src, kept) in WS_CASES {
+        assert_trimmed_roundtrip(
+            vec![dialog("カコ", &[src])],
+            vec![dialog("カコ", &[kept])],
+            &format!("1行目 {src:?}"),
+        );
+        assert_trimmed_roundtrip(
+            vec![dialog("カコ", &["前", src])],
+            vec![dialog("カコ", &["前", kept])],
+            &format!("2行目 {src:?}"),
+        );
+        assert_trimmed_roundtrip(
+            vec![dialog("カコ", &["前"]), dialog("カコ", &[src])],
+            vec![dialog("カコ", &["前"]), dialog("カコ", &[kept])],
+            &format!("継続 {src:?}"),
+        );
+    }
+}
+
+#[test]
+fn narration_body_is_not_escaped() {
+    let nar = Event::Narration {
+        text: vec!["**x".into(), "[笑]".into(), "\\x".into()],
+        voice_path: None,
+        font_family: None,
+        bubble_style: None,
+    };
+    let md = emit(&doc_with(vec![nar]));
+    assert!(md.contains("> **x\n> [笑]\n> \\x\n"), "{md}");
+    assert!(!md.contains("\\["), "{md}");
+}
+
+/// 本文が `## `（末尾に空白）のとき、trim で `##` になるため 1 回目の emit→parse で `##` に
+/// 変わり、emit は 2 回目で初めて安定する（空白のみ・末尾空白は落ちる仕様の範囲）。
+#[test]
+fn heading_with_trailing_space_is_known_non_idempotent() {
+    let md = emit(&doc_with(vec![dialog("カコ", &["## "])]));
+    let back = parse(&md);
+    assert_eq!(events_of(&back), vec![dialog("カコ", &["##"])]);
+}
+
 #[test]
 fn no_warnings_on_escaped_bodies() {
     // 警告は stderr 出力のみで検査しづらいため、読み捨て(イベント消失)が無いことで代替する。

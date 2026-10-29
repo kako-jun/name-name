@@ -2975,7 +2975,8 @@ describe('wasm parseMarkdown: 床 (#706 第2弾)', () => {
 
 // #973: 台詞本文の行頭エスケープ。実 WASM を通した往復で、行頭が構文記号の台詞が消えない。
 describe('emitMarkdown/parseMarkdown: 台詞本文の行頭エスケープ (#973)', () => {
-  const lines = ['**F5** で進む', '[/選択]', '> 引用', '---', '[笑]', '\\x']
+  const lines = ['**F5** で進む', '[/選択]', '> 引用', '---', '[笑]', '\\x', ' [笑]']
+  const kept = (l: string) => l.trim()
 
   it('行頭が構文記号の本文が往復で保たれ、2 回目の emit が一致する', async () => {
     const md = [
@@ -3002,7 +3003,7 @@ describe('emitMarkdown/parseMarkdown: 台詞本文の行頭エスケープ (#973
       expect(events).toHaveLength(1)
       const d = events[0]
       if (typeof d !== 'object' || !('Dialog' in d)) throw new Error('Dialog expected')
-      expect(d.Dialog.text).toEqual(['はじめ', line])
+      expect(d.Dialog.text).toEqual(['はじめ', kept(line)])
       expect(await emitMarkdown(back)).toBe(emitted)
     }
   })

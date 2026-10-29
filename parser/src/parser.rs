@@ -8236,38 +8236,36 @@ mod weather_warning_tests {
 mod body_escape_warning_tests {
     use super::*;
 
-    /// #973: エスケープされた本文行は警告なしで往復する（読み捨てが起きない）。
+    /// #973: 手書きでエスケープした本文行は、警告なしで読み捨てられず、生の本文になる。
+    /// 期待値は生の本文で直接書く（emit を経由しない）。
     #[test]
-    fn escaped_body_lines_roundtrip_without_warnings() {
+    fn escaped_body_lines_parse_to_raw_text_without_warnings() {
         let head = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
-        for c in [
-            "**F5** で進む",
-            "**a** → b:",
-            "[/選択]",
-            "[/条件]",
-            "[条件: f",
-            "[笑]",
-            "[選択]",
-            "[BGM: a]",
-            "## 見出し",
-            "> 引用",
-            ">",
-            "---",
-            "\\",
-            "\\**x",
-            "ふつう",
-        ] {
+        let cases: [(&str, &str); 12] = [
+            ("\\**F5** で進む", "**F5** で進む"),
+            ("\\**a** → b:", "**a** → b:"),
+            ("\\[/選択]", "[/選択]"),
+            ("\\[/条件]", "[/条件]"),
+            ("\\[条件: f", "[条件: f"),
+            ("\\[笑]", "[笑]"),
+            ("\\[BGM: a]", "[BGM: a]"),
+            ("\\## 見出し", "## 見出し"),
+            ("\\> 引用", "> 引用"),
+            ("\\>", ">"),
+            ("\\---", "---"),
+            ("\\\\x", "\\x"),
+        ];
+        for (src, raw) in cases {
             let _ = take_test_warnings();
-            let doc = parse(&format!("{head}**カコ**:\n{c}\n"));
-            let md = crate::emitter::emit(&doc);
-            let _ = take_test_warnings();
-            let back = parse(&md);
+            let doc = parse(&format!("{head}**カコ**:\n{src}\n"));
             let w = take_test_warnings();
-            assert!(w.is_empty(), "{c:?}: {w:?}\n{md}");
-            assert_eq!(
-                back.chapters[0].scenes[0].events, doc.chapters[0].scenes[0].events,
-                "{c:?}\n{md}"
-            );
+            assert!(w.is_empty(), "{src:?}: {w:?}");
+            let evs = &doc.chapters[0].scenes[0].events;
+            assert_eq!(evs.len(), 1, "{src:?}: {evs:?}");
+            match &evs[0] {
+                Event::Dialog { text, .. } => assert_eq!(text, &vec![raw.to_string()], "{src:?}"),
+                other => panic!("{src:?}: {other:?}"),
+            }
         }
     }
 }
