@@ -1477,6 +1477,7 @@ depth 指定の実例（#694）:
 - `手前にキャラ`（カーテンコール用）: 幕は降りているが、キャラクター・スポットライト・大道具より**奥**（キャラより手前に立てる配置）になる。省略時は舞台全体を覆う通常の閉幕として最前面に配置される
 - `NovelGameState.curtain`（単一スロットの settled state、save/seek/任意局面起動で復元可能）に保持する。`BackgroundBoard`/`Prop` と同じく `[場面転換]`（`Event::SceneTransition`）でクリアされ、専用のクリアディレクティブは無い。それらと異なり単一スロット（幕は1枚のみ、加算的な蓄積はしない）
 - 昇降アニメーションは背景板の「上から降りてくる」演出（`novelLayout.computeBoardSlideInOffset`、#683）と同じ設計パターン。降ろす＝上から降りてくる（`computeBoardSlideInOffset`、easeOut）をそのまま流用し、上げる＝上へ消えていく（`novelLayout.computeCurtainRiseOffset`、easeIn。昇降の見た目に差を付けるため異なるイージングを使う）。復元（goBack/seekTo/セーブ復元/任意局面起動）は演出の中間状態を持たない（ADR-0002）ため、アニメーションを起こさず即座に最終位置へ配置する
+- スキップ中の昇降も即時（#991）: `stageDirectives` の `Curtain`/`CurtainUp` が `ctx.env.skipMode` を `show(…, { instant })` / `raise({ instant })` で渡す（立ち絵・板回転と同じ「directive から skip を渡す」流儀）。`instant` の `show` は最終位置へ配置して補間タイマーを立てず、`raise` は即座に幕を消す。スキップ開始前から進行中の昇降は畳まず最後まで続く（立ち絵の歩行と同じ。`CurtainLayer` にスキップ切替の通知は行かない）。旧 `processDirective` オラクル（`oldProcessDirective.oracle.ts`）も同じ引数に追従させている
 - `CurtainLayer`（`frontend/src/game/CurtainLayer.ts`）は `BackgroundBoardLayer`/`PropLayer` と異なり depth 配置・カメラ射影を持たない全画面カバーフィット画像（`novelLayout.computeCoverFit`、単一スロット背景と同じ配置方式）。`characters_in_front` に応じた z-order の切り替え（`propLayer` の直後 or `backgroundBoardLayer` の直後）は `NovelRenderer.setCurtainZOrder()` が `stage.setChildIndex()` 相当（`removeChild` + `addChildAt`）で行う（詳細は上記「レイヤーモデル」節参照）
 - パーサー内部では `Event::Curtain { path: String, characters_in_front: bool }` / `Event::CurtainUp`（unit variant）で表現される。TUI版（`tui/`）はこれらのイベントを解釈しない（無視される。`Spotlight`/`BackgroundBoard`/`Prop` と同じ理由）
 
