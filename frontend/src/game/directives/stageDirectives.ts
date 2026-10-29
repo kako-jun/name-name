@@ -128,8 +128,9 @@ export const stageSignalDirectives: DirectiveTable = {
 
   // 幕を上げる (#697)。settled state は raise() 内で即座に null になる（上昇アニメーション自体は
   // 演出の中間状態、ADR-0002）。z-order はそのままでよい（次の [幕:] の setCurtainZOrder で改めて決まる）。
+  // スキップ中は上昇アニメーションを起こさず即座に消す (#991)。
   CurtainUp: (_event, ctx) => {
-    ctx.layers.curtain.raise()
+    ctx.layers.curtain.raise({ instant: ctx.env.skipMode })
   },
 }
 
@@ -332,7 +333,10 @@ export const stageDirectives: ObjectDirectiveTable = {
   Curtain: on<'Curtain'>((event, ctx) => {
     const curtain = event.Curtain
     ctx.hooks.setCurtainZOrder(curtain.characters_in_front)
-    ctx.layers.curtain.show(curtain.path, curtain.characters_in_front, ctx.env.assetBaseUrl)
+    // スキップ中は降下アニメーションを起こさず最終位置へ即時配置する (#991)。
+    ctx.layers.curtain.show(curtain.path, curtain.characters_in_front, ctx.env.assetBaseUrl, {
+      instant: ctx.env.skipMode,
+    })
   }),
 
   // 追うスポットライト点灯 (#693)。settled state（fire-and-forget ではない）。

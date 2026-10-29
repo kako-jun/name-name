@@ -281,6 +281,28 @@ pub fn emit(doc: &Document) -> String {
     trimmed + "\n"
 }
 
+/// 台詞本文の行頭が構文記号 (`**` `[` `## ` `> ` `>` 単独 `---`) か `\` のとき、行頭に `\` を
+/// 1 つ前置する (#973)。parser の `unescape_body_line` が 1 つ剥がして生の本文に戻す。
+/// parser は行を `trim()`（半角・全角空白・タブ）してから判定するので、危険判定も `trim()` 後の
+/// 文字列で行う。危険な行は前後の空白も落として `\` + trim 後の本文で出す（parser が落とす分を
+/// 先に落とすことで、消えない・別構文に化けない・emit が冪等になる）。
+/// 対象外の本文は 1 バイトも変えない。
+fn escape_body_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let t = line.trim();
+    let dangerous = t.starts_with("**")
+        || t.starts_with('[')
+        || t.starts_with("## ")
+        || t.starts_with("> ")
+        || t == ">"
+        || t == "---"
+        || t.starts_with('\\');
+    if dangerous {
+        std::borrow::Cow::Owned(format!("\\{t}"))
+    } else {
+        std::borrow::Cow::Borrowed(line)
+    }
+}
+
 /// `default_transition` は frontmatter `event_image_transition`（#599）の実効デフォルト。
 /// `Event::EventImage.transition` がこれと一致する場合は `遷移=` kv を省略する（round-trip 安定。
 /// 既定 Fade のプロジェクトでは従来どおり `遷移=pixelate` のときだけ出力し、既定 Pixelate の
@@ -363,7 +385,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
 
                 for line in text {
-                    out.push_str(line);
+                    out.push_str(&escape_body_line(line));
                     out.push('\n');
                 }
 

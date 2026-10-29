@@ -75,8 +75,8 @@ export class CurtainLayer extends Container {
   /**
    * 幕を降ろす（`[幕: path]` / `[幕: path, 手前にキャラ]`）。既存の幕があれば即座に置き換える
    * （単一スロット）。`assetBaseUrl` が空なら何もしない（他レイヤーの同種ガードと同じ）。
-   * `opts.instant`（復元専用、goBack/seekTo/セーブ復元/任意局面起動）はスライドダウンを起こさず
-   * 即座に最終位置へ配置する（ADR-0002: 演出の中間状態を復元しない）。
+   * `opts.instant`（goBack/seekTo/セーブ復元/任意局面起動の復元、およびスキップ中の再生 #991）は
+   * スライドダウンを起こさず即座に最終位置へ配置する（ADR-0002: 演出の中間状態を復元しない）。
    */
   show(
     path: string,
@@ -130,12 +130,22 @@ export class CurtainLayer extends Container {
    * 降下アニメーション未完了（`sprite.y` がまだ `targetY` に達していない）の状態で呼ばれても、
    * その時点の実際の `sprite.y` から現在オフセットを算出して上昇の開始点に使うため、
    * 「完全に降りた位置」へ一旦ジャンプしてから上昇を始めることはない（#697 バグ修正）。
+   *
+   * `opts.instant`（スキップ中の再生 #991）は上昇アニメーションを起こさず即座に幕を消す
+   * （`clear()` と同じ）。スキップ開始時点ですでに進行中の昇降は畳まず最後まで続ける
+   * （立ち絵の歩行と同じ方針）が、その後に来る `show()`/`raise()` が単一スロットを置き換える。
    */
-  raise(): void {
+  raise(opts?: { instant?: boolean }): void {
     this.state = null
     const sprite = this.sprite
+    // 進行中のロードを無効化する（sprite が未生成＝読み込み待ちでも先に世代を進めないと、
+    // 読み込み完了後に幕が降りてくる幽霊幕になる）。
+    ++this.generation
+    if (opts?.instant) {
+      this.disposeCurrentSprite()
+      return
+    }
     if (!sprite) return
-    ++this.generation // 進行中のロードを無効化する
     this.stopInterval()
     this.phaseStartedAtMs = this.time.now()
     // raise() 呼び出し時点の実際の位置を現在オフセット（概ね -1〜0）へ変換し、
