@@ -323,6 +323,9 @@ export class NovelRenderer {
    * 影響を残さない。null（split_layout 未使用/解除中）ならそもそも何もしない。
    */
   private titleScreenSavedCharacterSplitRegion: LayoutRect | null = null
+  /** 直近の本文が吹き出し表示か (#982/#714)。`hideTitleScreen()` が会話窓を戻すときに、吹き出し本文の裏へ
+   *  会話窓を二重に出さないために使う（本文の表示方法は render() が決める）。 */
+  private textDisplayIsBubble = false
 
   /**
    * 終劇オーバーレイ (#630)。旧 DOM 版 `NovelPlayer.tsx` の "to be continued..." 表示の PixiJS 版。
@@ -2038,6 +2041,7 @@ export class NovelRenderer {
     // 吹き出しも DialogBox と同じ一時的な本文表示であり、シーン/イベント列の境界をまたいで
     // 残してはならない。
     this.bubbleLayer.hide()
+    this.textDisplayIsBubble = false
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
     // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用する
@@ -2188,7 +2192,7 @@ export class NovelRenderer {
     this.titleScreenOverlay.hide()
     this.characterLayer.remove(NovelRenderer.TITLE_LOGO_IMAGE_ID, { instant: true })
     // showTitleScreen() で隠した層を復元する（上記 JSDoc 参照）。
-    this.dialogBox.visible = true
+    this.dialogBox.visible = !this.textDisplayIsBubble
     this.cameraZoom.setSuppressed('title', false)
     this.seekBar.setTitleScreenHidden(false)
     // 強制 true にせず、背面隠し（イベント絵）を含む「あるべき可視性」へ戻す (#982)。上の overlay.hide() で
@@ -4709,6 +4713,7 @@ export class NovelRenderer {
       // 空イベント列・終端へ切り替わった後に、直前の本文吹き出しだけが残るのを防ぐ。
       this.dialogBox.clearText()
       this.bubbleLayer.hide()
+      this.textDisplayIsBubble = false
       return
     }
 
@@ -4718,6 +4723,7 @@ export class NovelRenderer {
     if (!textEvt) {
       this.dialogBox.clearText()
       this.bubbleLayer.hide()
+      this.textDisplayIsBubble = false
       return
     }
 
@@ -4889,6 +4895,7 @@ export class NovelRenderer {
     // タイトルボタンの裏でシナリオ1行目が表示される回帰があった。handleAdvance() 等が使う
     // titleScreenOverlay.visible ガードをここにも適用する。
     const textDisplay = resolveTextDisplay(bubbleStyle, line)
+    this.textDisplayIsBubble = textDisplay === 'bubble'
     this.dialogBox.visible = !this.titleScreenOverlay.visible && textDisplay === 'dialogBox'
     if (textDisplay === 'bubble' && bubbleStyle) {
       const dialog =
