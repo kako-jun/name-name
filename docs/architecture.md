@@ -1416,10 +1416,10 @@ depth 指定の実例（#694）:
 
 - パーサー内部では `Event::Spotlight { target: Option<String>, color, radius }` / `Event::SpotlightOff`（unit variant）で表現される。`target` 省略時は画面中央に固定表示する（キャラに追従しない、実装時に決めた既定挙動）。
 - `LightingLayer`（`frontend/src/game/LightingLayer.ts`、上記レイヤーモデル節参照）が対象キャラの**現在の**表示位置を毎フレーム追従する。座標は新設の `CharacterLayer.getCurrentPosition(name)` が返す——`show()`/`Enter` で表示中の立ち絵はもちろん、`Underline`/`Animate`/`TextEffect` と同じく render-only（Title/Label/Image）の identifier も区別なく対象にできる。返す座標はアンカー `(0.5, 1)`（足元）から、スプライト高さの半分だけ上（体の中心付近）に補正した点。生成時点の座標を固定で保持しないため、入場退場モーション（#684）や将来の立ち位置変更でも追従できる。
-- **対象が不在のとき (#992)**: 光は `[スポットライト消灯]`（と場面転換）でしか消えない。`LightingLayer` は対象を最後に観測した座標を実行時の private 値（`lastTargetPos`）として持ち、対象が未登場なら中央、退場後ならその最後の座標に光を残し、再登場で追従を再開する。`lastTargetPos` は settled state（`NovelGameState.spotlight` = `target/color/radius`）には持たせない（ADR-0002: 保存するのは最終状態だけ）。そのため `set()`（点け直し）・`restore()`（セーブ復元・シーク・戻る）・`clear()` で破棄され、復元時に対象が不在なら画面中央にフォールバックする。
+- **対象が不在のとき (#992)**: 光は `[スポットライト消灯]`・`[場面転換]`・新規開始・終劇でしか消えない。退場中（フェード・歩行）の対象は `getCurrentPosition(name, { excludeExiting: true })` で不在として扱い、`lastTargetPos` を更新しない（光は退場開始前の立ち位置に残る。LightingLayer の 16ms tick と CharacterLayer の ticker は別の時計なので、歩行途中の座標を拾わないため）。同じ対象のまま `set()` し直したときは `lastTargetPos` を保ち、対象が変わる・消灯後の点け直し・`restore()` では破棄する。`LightingLayer` は対象を最後に観測した座標を実行時の private 値（`lastTargetPos`）として持ち、対象が未登場なら中央、退場後ならその最後の座標に光を残し、再登場で追従を再開する。`lastTargetPos` は settled state（`NovelGameState.spotlight` = `target/color/radius`）には持たせない（ADR-0002: 保存するのは最終状態だけ）。そのため `set()`（点け直し）・`restore()`（セーブ復元・シーク・戻る）・`clear()` で破棄され、復元時に対象が不在なら画面中央にフォールバックする。
 - 描画は Canvas 2D で1枚だけ生成した「白の中心から外周へ透明にフェードする」正方形テクスチャを `Sprite`（`blendMode: 'add'`、`tint` で色付け、`width`/`height` で直径を伸縮）として使い回す（`ambientEffects.buildDisplacementNoiseCanvas` と同じパターン）。PixiJS v8 の `FillGradient`（radial）+ `Graphics.fill()` も検討したが、fill 時に即座に `CanvasRenderingContext2D.createRadialGradient` を呼ぶため、jsdom（`canvas` npm パッケージ未導入、`getContext('2d')` が `null`）のテスト環境で例外を投げることが判明し不採用にした。`buildSpotlightGradientCanvas` は `getContext('2d')` が `null` のとき例外を投げず `null` を返す（描画だけ諦める、state 管理は継続）。
 - カメラモード非依存（`CameraMode::Novel`/`Theater` どちらでも機能する）。
-- 新しいシーンの開始・`[場面転換]`・`endStory()` で自動的に消灯する（`isBlackout`/`cameraMode` と同じ規律。シーンをまたいで暗黙に持ち越さない）。
+- 背景板・大道具・幕と同じ持続規律 (#992): `[場面転換]`・新規開始（`resetAndStartEvents` の非 preserve 分岐）・`endStory()` で消灯し、通常のシーン間ジャンプ（preserve 分岐）では持ち越す。
 
 ### 紙人形風の輪郭（実装済み・#699）
 
