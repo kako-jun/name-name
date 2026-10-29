@@ -74,6 +74,8 @@ export class VideoLayer extends Container {
 
   /** 現在表示中の動画要素。なければ null */
   private videoEl: HTMLVideoElement | null = null
+  /** video の error リスナー（失敗を黙って黒くしないための警告用。remove() で外す） */
+  private errorListener: (() => void) | null = null
   private sprite: Sprite | null = null
   private maskSprite: Sprite | null = null
 
@@ -140,6 +142,20 @@ export class VideoLayer extends Container {
     videoEl.preload = 'auto'
     this.videoEl = videoEl
 
+    // 読み込み・デコード失敗（404・コーデック非対応など）は画面が黒いままになるだけで気づけないため警告する (#980)。
+    // hasError() と同じ video.error を見る。
+    const errorListener = () => {
+      console.warn(
+        '[name-name] 動画の読み込み・デコードに失敗: ' +
+          url +
+          ' (error code: ' +
+          videoEl.error?.code +
+          ')'
+      )
+    }
+    this.errorListener = errorListener
+    videoEl.addEventListener('error', errorListener)
+
     // PixiJS v8 VideoSource で HTMLVideoElement をテクスチャ化する。
     // autoPlay=false にして再生開始は明示的に video.play() で行う（export 頭出し制御のため）。
     const source = new VideoSource({
@@ -150,7 +166,10 @@ export class VideoLayer extends Container {
       muted: mute,
       crossorigin: true,
     })
-    const texture = new Texture({ source })
+    // dynamic: true が必須 (#980)。Sprite は dynamic なテクスチャの 'update'（サイズ確定＝source の resize）しか
+    // 購読しない（毎フレームの更新負荷が増えるわけではない）。false のままだと、メタデータ到着前（0x0）に描画された Sprite が再描画対象に戻らず黒いまま止まる
+    // （キャッシュが無い初回読み込みで起きる）。
+    const texture = new Texture({ source, dynamic: true })
     const sprite = new Sprite(texture)
     sprite.anchor.set(0.5, 0.5)
     this.sprite = sprite
@@ -246,6 +265,10 @@ export class VideoLayer extends Container {
   remove(): void {
     if (this.videoEl) {
       const el = this.videoEl
+      if (this.errorListener) {
+        el.removeEventListener('error', this.errorListener)
+        this.errorListener = null
+      }
       // AudioManager から切り離す
       if (this.audioManager) {
         this.audioManager.detachVideoElement(el)
