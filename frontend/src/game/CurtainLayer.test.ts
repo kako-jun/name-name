@@ -335,3 +335,140 @@ describe('CurtainLayer interval リーク防止', () => {
     expect(layer.getState()).toEqual({ path: 'a.png', charactersInFront: false })
   })
 })
+
+// スキップ中の再生は昇降アニメーションを起こさず最終位置へ即時にする (#991)。
+describe('CurtainLayer スキップ中の即時化 (#991)', () => {
+  it('show(instant) は降下アニメーションを起こさず最終位置・可視で置く（補間タイマーが立たない）', async () => {
+    mockAssetsLoadResolved()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, virtualTime())
+    layer.show('a.png', false, '/assets', { instant: true })
+    await flushPromises()
+
+    expect(internals(layer).sprite?.y).toBe(0)
+    expect(internals(layer).interval).toBeNull()
+    expect(layer.children.length).toBe(1)
+    expect(layer.getState()).toEqual({ path: 'a.png', charactersInFront: false })
+  })
+
+  it('show(instant) は手前にキャラ（カーテンコール配置）でも即時で、state に charactersInFront が残る', async () => {
+    mockAssetsLoadResolved()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, virtualTime())
+    layer.show('a.png', true, '/assets', { instant: true })
+    await flushPromises()
+
+    expect(internals(layer).sprite?.y).toBe(0)
+    expect(internals(layer).interval).toBeNull()
+    expect(layer.getState()).toEqual({ path: 'a.png', charactersInFront: true })
+  })
+
+  it('raise(instant) は上昇アニメーションを起こさず即座に幕が消え、タイマーも立たない', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
+    layer.show('a.png', false, '/assets', { instant: true })
+    await flushPromises()
+
+    layer.raise({ instant: true })
+
+    expect(internals(layer).interval).toBeNull()
+    expect(internals(layer).sprite).toBeNull()
+    expect(layer.children.length).toBe(0)
+    expect(layer.getState()).toBeNull()
+  })
+
+  it('instant 指定なしの通常再生はこれまで通りアニメーションする（退行なし）', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
+    layer.show('a.png', false, '/assets', { instant: false })
+    await flushPromises()
+
+    expect(internals(layer).interval).not.toBeNull()
+    expect(internals(layer).sprite?.y).toBe(-SCREEN_H)
+    time.tick(BOARD_SLIDE_IN_MS / 2)
+    expect(internals(layer).sprite?.y).not.toBe(0)
+    time.tick(BOARD_SLIDE_IN_MS)
+    expect(internals(layer).sprite?.y).toBe(0)
+    expect(internals(layer).interval).toBeNull()
+
+    layer.raise({ instant: false })
+    expect(internals(layer).interval).not.toBeNull()
+    expect(layer.children.length).toBe(1)
+    time.tick(BOARD_SLIDE_IN_MS + 32)
+    expect(internals(layer).sprite).toBeNull()
+  })
+
+  it('スキップ → 解除後の通常再生は再びアニメーションする', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
+    layer.show('a.png', false, '/assets', { instant: true })
+    await flushPromises()
+    layer.raise({ instant: true })
+
+    layer.show('b.png', true, '/assets', { instant: false })
+    await flushPromises()
+    expect(internals(layer).sprite?.y).toBe(-SCREEN_H)
+    expect(internals(layer).interval).not.toBeNull()
+  })
+
+  it('降下の進行中にスキップへ入っても進行中の降下は畳まず最後まで続く（立ち絵の歩行と同じ方針）', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
+    layer.show('a.png', false, '/assets')
+    await flushPromises()
+    time.tick(BOARD_SLIDE_IN_MS / 2)
+    // この間にスキップへ入っても CurtainLayer へは何も通知されない。降下は完了まで続く。
+    expect(internals(layer).interval).not.toBeNull()
+    time.tick(BOARD_SLIDE_IN_MS)
+    expect(internals(layer).sprite?.y).toBe(0)
+    expect(internals(layer).interval).toBeNull()
+  })
+
+  it('降下の進行中にスキップ中の raise(instant) が来ると、その幕は即座に消えタイマーも止まる', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
+    layer.show('a.png', false, '/assets')
+    await flushPromises()
+    time.tick(BOARD_SLIDE_IN_MS / 2)
+
+    layer.raise({ instant: true })
+
+    expect(internals(layer).interval).toBeNull()
+    expect(internals(layer).sprite).toBeNull()
+    time.tick(BOARD_SLIDE_IN_MS * 2) // 後から古いタイマーが sprite を触らない
+    expect(layer.children.length).toBe(0)
+  })
+
+  it('降下の進行中にスキップ中の show(instant) が来ると、新しい幕が最終位置へ即時置換される', async () => {
+    mockAssetsLoadResolved()
+    const time = virtualTime()
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
+    layer.show('a.png', false, '/assets')
+    await flushPromises()
+    time.tick(BOARD_SLIDE_IN_MS / 2)
+
+    layer.show('b.png', true, '/assets', { instant: true })
+    await flushPromises()
+
+    expect(internals(layer).sprite?.y).toBe(0)
+    expect(internals(layer).interval).toBeNull()
+    expect(layer.children.length).toBe(1)
+    expect(layer.getState()).toEqual({ path: 'b.png', charactersInFront: true })
+  })
+
+  it('スキップ中の raise(instant) の後に pending だった load が解決しても幽霊幕は出ない / dispose できる', async () => {
+    let resolve!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>((r) => (resolve = r)) as never)
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, virtualTime())
+    layer.show('a.png', false, '/assets', { instant: true })
+    layer.raise({ instant: true })
+    resolve(mockTexture())
+    await flushPromises()
+    expect(layer.children.length).toBe(0)
+    expect(internals(layer).sprite).toBeNull()
+    expect(() => layer.disposeTextures()).not.toThrow()
+  })
+})

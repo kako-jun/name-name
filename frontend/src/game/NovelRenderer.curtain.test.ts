@@ -325,3 +325,53 @@ describe('NovelRenderer 幕: goBack/seekToの宣言的復元 (#697)', () => {
     expect(r.getSnapshot().curtain).toBeNull()
   })
 })
+
+describe('NovelRenderer 幕: スキップ中は昇降を即時にする (#991)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function setup() {
+    const r = makeRenderer([scene('a', [narration('one')])])
+    const layer = (r as unknown as { curtainLayer: CurtainLayerForTest & { raise: unknown } })
+      .curtainLayer
+    const show = vi.spyOn(layer, 'show')
+    const raise = vi.spyOn(
+      layer as unknown as { raise: (o?: { instant?: boolean }) => void },
+      'raise'
+    )
+    return { r, show, raise }
+  }
+  const proc = (r: NovelRenderer, e: Event) =>
+    (r as unknown as { processDirective: (e: Event) => void }).processDirective(e)
+  const setSkip = (r: NovelRenderer, on: boolean) => {
+    ;(r as unknown as { skipMode: boolean }).skipMode = on
+  }
+
+  it('通常再生では instant:false、スキップ中は instant:true で show/raise が呼ばれる', () => {
+    const { r, show, raise } = setup()
+    proc(r, curtain('a.png', true))
+    proc(r, CURTAIN_UP)
+    expect(show).toHaveBeenLastCalledWith('a.png', true, expect.any(String), { instant: false })
+    expect(raise).toHaveBeenLastCalledWith({ instant: false })
+
+    setSkip(r, true)
+    proc(r, curtain('b.png'))
+    proc(r, CURTAIN_UP)
+    expect(show).toHaveBeenLastCalledWith('b.png', false, expect.any(String), { instant: true })
+    expect(raise).toHaveBeenLastCalledWith({ instant: true })
+
+    setSkip(r, false)
+    proc(r, curtain('c.png'))
+    expect(show).toHaveBeenLastCalledWith('c.png', false, expect.any(String), { instant: false })
+  })
+
+  it('スキップ中でも保存状態（settled state）は変わらない', () => {
+    const { r } = setup()
+    setSkip(r, true)
+    proc(r, curtain('b.png', true))
+    expect(r.getSnapshot().curtain).toEqual({ path: 'b.png', charactersInFront: true })
+    proc(r, CURTAIN_UP)
+    expect(r.getSnapshot().curtain).toBeNull()
+  })
+})
