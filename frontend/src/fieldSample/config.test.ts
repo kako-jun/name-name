@@ -1714,3 +1714,36 @@ describe('dialogStyle / dialogMsPerChar (#840)', () => {
     }
   })
 })
+
+describe('player.cycle / idleFrame (sit-by-me#59)', () => {
+  const parse = (player: Raw) => {
+    const raw = minimal()
+    Object.assign(raw.player, player)
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+
+  it('省略は undefined（従来どおり）', () => {
+    const c = parse({})
+    expect(c.player.cycle).toBeUndefined()
+    expect(c.player.idleFrame).toBeUndefined()
+  })
+
+  it('立位の周期と停止コマを受け取る', () => {
+    const c = parse({ cycle: [0, 1, 2, 1], idleFrame: 1 })
+    expect(c.player.cycle).toEqual([0, 1, 2, 1])
+    expect(c.player.idleFrame).toBe(1)
+  })
+
+  it('不正な cycle / idleFrame は警告して既定へ戻す', () => {
+    const c = parse({ cycle: [0, 3], idleFrame: 5 })
+    expect(c.player.cycle).toBeUndefined()
+    expect(c.player.idleFrame).toBeUndefined()
+    expect(c.warnings?.some((w) => w.includes('player.cycle'))).toBe(true)
+    expect(c.warnings?.some((w) => w.includes('player.idleFrame'))).toBe(true)
+    expect(parse({ cycle: [] }).player.cycle).toBeUndefined()
+    expect(parse({ cycle: 'x' }).player.cycle).toBeUndefined()
+    expect(parse({ idleFrame: 1.5 }).player.idleFrame).toBeUndefined()
+  })
+})

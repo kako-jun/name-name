@@ -487,6 +487,41 @@ describe('walkFrame (Issue #807)', () => {
   })
 })
 
+describe('walkFrame の周期と停止コマ (sit-by-me#59)', () => {
+  const F = 140
+  const STAND = [0, 1, 2, 1]
+
+  it('立位周期は 接地A→通過→接地B→通過 を繰り返し、左右交互になる', () => {
+    const seq = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => walkFrame(true, i * F, F, STAND, 1))
+    expect(seq).toEqual([0, 1, 2, 1, 0, 1, 2, 1])
+    // 接地コマ (0 と 2) は必ず交互に現れる
+    expect(seq.filter((f) => f !== 1)).toEqual([0, 2, 0, 2])
+  })
+
+  it('停止は idleFrame（通過コマ）', () => {
+    expect(walkFrame(false, 0, F, STAND, 1)).toBe(1)
+    expect(walkFrame(false, 5 * F, F, STAND, 1)).toBe(1)
+  })
+
+  it('不正入力は idleFrame に倒れる', () => {
+    expect(walkFrame(true, NaN, F, STAND, 1)).toBe(1)
+    expect(walkFrame(true, -1, F, STAND, 1)).toBe(1)
+    expect(walkFrame(true, 500, 0, STAND, 1)).toBe(1)
+    expect(walkFrame(true, 500, F, [], 1)).toBe(1)
+  })
+
+  it('車椅子など cycle 未指定は従来の [0,1,2] と停止 0 のまま', () => {
+    const seq = [0, 1, 2, 3, 4, 5].map((i) => walkFrame(true, i * F, F))
+    expect(seq).toEqual([0, 1, 2, 0, 1, 2])
+    expect(walkFrame(false, 0, F)).toBe(0)
+  })
+
+  it('同行者も同じ関数・同じ周期で同じコマになる', () => {
+    for (let i = 0; i < 8; i++)
+      expect(walkFrame(true, i * F, F, STAND, 1)).toBe(STAND[i % STAND.length])
+  })
+})
+
 describe('isOutward (Issue #807)', () => {
   it.each([
     // [edge, vec, expected]

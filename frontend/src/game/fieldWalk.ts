@@ -300,11 +300,25 @@ export function facingFromVector(vec: Vec, prev: Facing8, diagonal = false): Fac
 
 export const WALK_FRAMES = 3
 
-/** 歩行アニメのコマ番号 (0..2)。止まっているときは 0（1 コマ目）。moving の間 frameMs ごとに 0→1→2 を繰り返す */
-export function walkFrame(moving: boolean, movingElapsedMs: number, frameMs: number): number {
+/** 歩行周期の既定。コマを 0→1→2 と順に送る（車椅子など、コマが「ハンドリムをこぐ 3 コマ」の素材向け） */
+export const DEFAULT_WALK_CYCLE: readonly number[] = [0, 1, 2]
+
+/**
+ * 歩行アニメのコマ番号 (0..2)。moving の間、frameMs ごとに cycle の要素を順に繰り返す。
+ * 止まっているとき・入力が不正なときは idleFrame。cycle / idleFrame の既定は [0, 1, 2] / 0（従来どおり）。
+ * 立位の歩行素材（コマ 0・2 が接地、コマ 1 が通過）は cycle = [0, 1, 2, 1]・idleFrame = 1 で、左右交互に歩き通過コマで止まる。
+ */
+export function walkFrame(
+  moving: boolean,
+  movingElapsedMs: number,
+  frameMs: number,
+  cycle: readonly number[] = DEFAULT_WALK_CYCLE,
+  idleFrame = 0
+): number {
   if (!moving || !(frameMs > 0) || !(movingElapsedMs >= 0) || !Number.isFinite(movingElapsedMs))
-    return 0
-  return Math.floor(movingElapsedMs / frameMs) % WALK_FRAMES
+    return idleFrame
+  if (cycle.length === 0) return idleFrame
+  return cycle[Math.floor(movingElapsedMs / frameMs) % cycle.length]
 }
 
 // ---- 端のリンク ----

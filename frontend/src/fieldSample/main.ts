@@ -1169,7 +1169,16 @@ async function main(): Promise<void> {
     const scrollCfg = config.scenes[sceneId].scroll
     if (scrollCfg && scene.scroll)
       scrollSprite.tilePosition.x = scrollOffset(scrollCfg.speed, clockMs, scene.scroll.width)
-    const tex = walkTex[facing]![walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
+    const tex =
+      walkTex[facing]![
+        walkFrame(
+          movingMs > 0,
+          movingMs,
+          config.player.frameMs,
+          config.player.cycle,
+          config.player.idleFrame
+        )
+      ]
     player.texture = tex
     const s = playerScale(
       resolvePlayerHeight(config.scenes[sceneId].playerHeight, config.player.height),
@@ -1207,7 +1216,16 @@ async function main(): Promise<void> {
       isCompanionShown(!!config.assist, !!config.companion, companionAlpha)
     ) {
       const g = evalAssist(config.assist, flags).ghost
-      const ct = ctex[walkFrame(movingMs > 0, movingMs, config.player.frameMs)]
+      const ct =
+        ctex[
+          walkFrame(
+            movingMs > 0,
+            movingMs,
+            config.player.frameMs,
+            config.player.cycle,
+            config.player.idleFrame
+          )
+        ]
       companionSprite.texture = ct
       const cs = playerScale(
         config.companion.height ??

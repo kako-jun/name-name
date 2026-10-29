@@ -176,6 +176,10 @@ export interface FieldSampleConfig {
     height: number
     /** 1 コマの長さ(ms) */
     frameMs: number
+    /** 歩行周期（コマ番号 0..2 の並び）。未指定は undefined＝従来の [0, 1, 2]。立位は [0, 1, 2, 1]（接地→通過→接地→通過） */
+    cycle?: number[]
+    /** 止まっているときのコマ番号 (0..2)。未指定は undefined＝従来の 0。立位は 1（通過コマ） */
+    idleFrame?: number
   }
   scenes: Record<string, FieldSceneConfig>
   /** ワープ先 (#864)。省略 = なし */
@@ -348,6 +352,30 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!height.ok) return height
   const frameMs = positive(raw.player.frameMs, DEFAULTS.frameMs, 'player.frameMs')
   if (!frameMs.ok) return frameMs
+  // 歩行周期（任意）。不正なら設定を落とさず警告して既定へ戻す
+  const walkWarnings: string[] = []
+  let cycle: number[] | undefined
+  if (raw.player.cycle !== undefined) {
+    const c = raw.player.cycle
+    if (
+      Array.isArray(c) &&
+      c.length >= 1 &&
+      c.length <= 16 &&
+      c.every((n) => Number.isInteger(n) && n >= 0 && n <= 2)
+    )
+      cycle = c as number[]
+    else
+      walkWarnings.push(
+        'player.cycle は 0〜2 の整数を 1〜16 個並べた配列が必要です（無視して既定の [0, 1, 2] を使います）'
+      )
+  }
+  let idleFrame: number | undefined
+  if (raw.player.idleFrame !== undefined) {
+    const i = raw.player.idleFrame
+    if (Number.isInteger(i) && (i as number) >= 0 && (i as number) <= 2) idleFrame = i as number
+    else
+      walkWarnings.push('player.idleFrame は 0〜2 の整数が必要です（無視して既定の 0 を使います）')
+  }
 
   const scenes: Record<string, FieldSceneConfig> = {}
   /** NPC の不正（その NPC だけ読み飛ばす）の警告 (#841)。後で warnings へ合流する */
@@ -715,6 +743,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
       )
   }
+  warnings.push(...walkWarnings)
   warnings.push(...npcWarnings)
   // エフェクト重ね (#936)。不正な種類は読み込みを止めず警告にする（画像 URL は他の画像と同じく assetBaseUrl 基準）
   const fx = parseBattleEffects(b.effects, (u) =>
@@ -832,7 +861,14 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       start: { x: s.x, y: s.y },
       speed: speed.value,
       edgeThreshold: edgeThreshold.value,
-      player: { sprites, mirrorOf, height: height.value, frameMs: frameMs.value },
+      player: {
+        sprites,
+        mirrorOf,
+        height: height.value,
+        frameMs: frameMs.value,
+        ...(cycle ? { cycle } : {}),
+        ...(idleFrame !== undefined ? { idleFrame } : {}),
+      },
       scenes,
       warps,
       flags,
