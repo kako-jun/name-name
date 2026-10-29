@@ -19,7 +19,13 @@ import { PropLayer } from './PropLayer'
 import { VideoLayer } from './VideoLayer'
 import { WallLayer } from './WallLayer'
 import { TimeController } from './TimeController'
-import { StageTurnController, computeStageTurnCorners, computeStageTurnView } from './stageTurn'
+import {
+  STAGE_TURN_MAX_WAIT_MS,
+  StageTurnController,
+  StageTurnRun,
+  computeStageTurnCorners,
+  computeStageTurnView,
+} from './stageTurn'
 import { computeStageTurnAngles } from './stageTurn'
 
 const W = 800
@@ -401,7 +407,7 @@ describe('シアター: 舞台全体が一斉に回る', () => {
     await s.turn(1000)
     // B.png が全レイヤーでロード待ち。回転は始まらない。
     expect(s.ctrl.run?.started).toBe(false)
-    s.time.tick(5000)
+    s.time.tick(2500)
     expect(s.ctrl.run?.started).toBe(false)
     for (const h of hosts(s)) {
       const m = meshesIn(h)
@@ -426,7 +432,7 @@ describe('シアター: 舞台全体が一斉に回る', () => {
     }) as never)
     await s.turn(1000)
     expect(calls).toHaveLength(4)
-    s.time.tick(3000)
+    s.time.tick(2500)
     calls.slice(0, 3).forEach((r) => r(texFor('B.png')))
     await flush()
     expect(s.ctrl.run?.started).toBe(false)
@@ -651,6 +657,142 @@ describe('回転中の範囲外の再指定', () => {
   })
 })
 
+describe('スキップ判定は範囲を開く時点の値も見る', () => {
+  it('スキップ中に開いた範囲は、閉じる時点でスキップが解除されていても即時（待機・選択肢の到達で解除される）', async () => {
+    const s = await setup()
+    s.flags.skip = true
+    s.ctrl.begin(1000)
+    s.back()
+    s.flags.skip = false // [待機] / 選択肢が setSkipMode(false) した後
+    s.ctrl.flush()
+    expect(s.ctrl.run).toBeNull()
+    expect(hosts(s).every((h) => h === undefined)).toBe(true)
+    await flush()
+    expect(stateOf(s)).toEqual(NEW_STATE)
+  })
+
+  it('スキップでない範囲は従来どおり回る（開く時点で false なら閉じる時点が true でも、閉じる時点の値で即時）', async () => {
+    const s = await setup()
+    s.ctrl.begin(1000)
+    s.back()
+    s.ctrl.flush()
+    expect(s.ctrl.run).not.toBeNull()
+    const t = await setup()
+    t.ctrl.begin(1000)
+    t.back()
+    t.flags.skip = true
+    t.ctrl.flush()
+    expect(t.ctrl.run).toBeNull()
+  })
+
+  it('連続する [舞台回転] の途中でスキップに入っても即時（|| で保持）', async () => {
+    const s = await setup()
+    s.flags.skip = true
+    s.ctrl.begin(1000)
+    s.flags.skip = false
+    s.ctrl.begin(1000)
+    s.back()
+    s.ctrl.flush()
+    expect(s.ctrl.run).toBeNull()
+  })
+})
+
+describe('流し込み中の例外', () => {
+  it('裏側の指定が例外を投げても run は seal され、回転が始まる（旧面が残り続けない）', async () => {
+    const s = await setup()
+    s.ctrl.begin(1000)
+    s.ctrl.defer(() => s.prop.add('B.png', 2, '/a'))
+    s.ctrl.defer(() => {
+      throw new Error('boom')
+    })
+    expect(() => s.ctrl.flush()).toThrow('boom')
+    await flush()
+    expect(s.ctrl.run?.started).toBe(true)
+    s.time.tick(2000)
+    expect(s.ctrl.run).toBeNull()
+    expect(hosts(s).every((h) => h === undefined)).toBe(true)
+    expect(sprites(s.prop).map((x) => x.texture)).toEqual([texFor('B.png')])
+  })
+})
+
+describe('新面のロード待ちの上限', () => {
+  it('着かない新面は上限で見切って回り始め、遅れて着いた面は回転の終わりに現れる。タイマーは残らない', async () => {
+    const s = await setup({ defer: ['B.png'] })
+    await s.turn(1000)
+    expect(s.ctrl.run?.started).toBe(false)
+    expect(STAGE_TURN_MAX_WAIT_MS).toBe(3000)
+    s.time.tick(2900)
+    expect(s.ctrl.run?.started).toBe(false)
+    s.time.tick(200)
+    expect(s.ctrl.run?.started).toBe(true)
+    // 着いていない新面なしで回る（旧面だけが見え、後半は何も見えない）。
+    for (const h of hosts(s)) expect(meshesIn(h)).toHaveLength(1)
+    s.time.tick(2000)
+    expect(s.ctrl.run).toBeNull()
+    expect((s.time as unknown as { timers: unknown[] }).timers).toHaveLength(0)
+    // 遅れて着く（run は終了済み）。落ちず、最終状態に出る。
+    s.deferred['B.png'].resolve(texFor('B.png'))
+    await flush()
+    expect(hosts(s).every((h) => h === undefined)).toBe(true)
+  })
+
+  it('上限より前に全て着けば待ちタイマーは解除される。打ち切り・clear でも残らない', async () => {
+    const s = await setup()
+    await s.turn(1000)
+    s.time.tick(3000)
+    expect((s.time as unknown as { timers: unknown[] }).timers).toHaveLength(0)
+    const t = await setup({ defer: ['B.png'] })
+    await t.turn(1000)
+    t.prop.clear()
+    expect(t.ctrl.run).toBeNull()
+    expect((t.time as unknown as { timers: unknown[] }).timers).toHaveLength(0)
+    t.time.tick(10000)
+  })
+
+  it('ロード待ち中に次の [舞台回転] が来ても、先の run は畳まれ、遅れて着いた面は無視される（競合）', async () => {
+    const s = await setup({ defer: ['B.png'] })
+    await s.turn(1000, 'B.png')
+    expect(s.ctrl.run?.started).toBe(false)
+    const first = s.ctrl.run
+    await s.turn(1000, 'C.png')
+    expect(first?.ended).toBe(true)
+    expect(s.ctrl.run).not.toBe(first)
+    s.deferred['B.png'].resolve(texFor('B.png'))
+    await flush()
+    expect(stateOf(s).wall?.path).toBe('C.png')
+    expect(stateOf(s).prop).toEqual([{ path: 'C.png', depth: 2 }])
+    s.time.tick(3000)
+    expect(s.ctrl.run).toBeNull()
+    expect(sprites(s.prop).map((x) => x.texture)).toEqual([texFor('C.png')])
+    expect((s.time as unknown as { timers: unknown[] }).timers).toHaveLength(0)
+  })
+})
+
+describe('StageTurnRun の後始末', () => {
+  it('終わった run への addOld / resolveNew は、渡された焼き込みテクスチャを破棄する', () => {
+    const time = new TimeController()
+    time.setMode('virtual')
+    const run = new StageTurnRun(time, computeStageTurnView(W, H), 100)
+    const token = run.expectNew()
+    run.seal()
+    run.finish()
+    const owned1 = texFor('D.png')
+    const owned2 = tex(10, 10)
+    const d1 = vi.spyOn(owned1, 'destroy').mockImplementation(() => {})
+    const d2 = vi.spyOn(owned2, 'destroy').mockImplementation(() => {})
+    const host = new Container()
+    run.addOld(host, texFor('A.png'), { x: 0, y: 0, width: 1, height: 1 }, 0, {
+      ownedTexture: owned1,
+    })
+    run.resolveNew(token, host, texFor('A.png'), { x: 0, y: 0, width: 1, height: 1 }, 0, {
+      ownedTexture: owned2,
+    })
+    expect(d1).toHaveBeenCalledWith(true)
+    expect(d2).toHaveBeenCalledWith(true)
+    expect(host.children).toHaveLength(0)
+  })
+})
+
 describe('第1弾の `回転:`（個別の面の切り替え）との共存', () => {
   it('裏側に `回転: 旧` が書かれていても個別の回転にはならず、舞台全体の回転が優先される', async () => {
     const s = await setup()
@@ -687,6 +829,21 @@ describe('第1弾の `回転:`（個別の面の切り替え）との共存', ()
     const m = meshesIn(hostOf(s.prop))
     expect(m).toHaveLength(2) // 旧舞台の A + 新 C
     expect(m.map((x) => x.texture)).toEqual([texFor('A.png'), texFor('C.png')])
+  })
+
+  it('個別の面の切り替え（第1弾）の回転・ロード待ちは hasPendingFlip（[待機: 表示完了] が待つ）で見える', async () => {
+    for (const layer of ['prop', 'board'] as const) {
+      const s = await setup({ defer: ['B.png'] })
+      const l = s[layer]
+      expect(l.hasPendingFlip()).toBe(false)
+      l.replace('B.png', layer === 'prop' ? 2 : 3, 'A.png', '/a', { flipMs: 500 })
+      expect(l.hasPendingFlip()).toBe(true) // 新面のロード待ち（旧面を残している）
+      s.deferred['B.png'].resolve(texFor('B.png'))
+      await flush()
+      expect(l.hasPendingFlip()).toBe(true) // 回転中
+      s.time.tick(1000)
+      expect(l.hasPendingFlip()).toBe(false)
+    }
   })
 
   it('舞台回転が無い通常の `回転:` は従来どおり（個別の面の切り替え、舞台 host は作られない）', async () => {

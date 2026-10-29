@@ -24,7 +24,7 @@
  * 復元（`restore()`、goBack/seekTo/セーブ復元/任意局面起動）は演出の中間状態を持たない
  * （ADR-0002）ため、スライドインを起こさず即座に最終位置へ配置する。
  */
-import { Assets, Container, Sprite, type Filter, type Texture } from 'pixi.js'
+import { Assets, Container, Sprite, type Texture } from 'pixi.js'
 import type { CameraElevation, CameraMode, CameraOrientation } from '../types'
 import { computeCameraProjection } from './cameraProjection'
 import {
@@ -277,7 +277,6 @@ export class BackgroundBoardLayer extends Container {
    */
   beginStageTurn(run: StageTurnRun): void {
     const host = this.turn.begin(run)
-    const filters = this.turnFilters()
     for (const entry of this.entries) {
       if (entry.run) this.finishFlip(entry)
       const sprite = entry.sprite
@@ -292,13 +291,18 @@ export class BackgroundBoardLayer extends Container {
               height: entry.targetHeight,
             }
           : { x: face.x, y: face.y, width: face.width, height: face.height }
-        run.addOld(host, face.texture, geometry, entry.depth, { filters })
+        run.addOld(host, face.texture, geometry, entry.depth)
       }
       this.releaseEntry(entry)
     }
     this.entries = []
     this.removeChildren()
     this.addChild(host)
+  }
+
+  /** 面の切り替え (#704 第1弾) の回転中、または新しい面のロード待ちの板があるか（`[待機: 表示完了]` が待つ）。 */
+  hasPendingFlip(): boolean {
+    return this.entries.some((e) => !e.disposed && (e.run !== null || e.pendingOld !== null))
   }
 
   /** 回転が終わった／打ち切られた。新面の sprite を載せ、まだロード中の板は即座に置くようにする。 */
@@ -326,7 +330,7 @@ export class BackgroundBoardLayer extends Container {
     if (entry.turnToken != null) {
       const token = entry.turnToken
       entry.turnToken = null
-      this.turn.run?.cancelNew(token)
+      this.turn.run?.failNew(token)
     }
     this.releaseEntry(entry)
     this.insertSorted()
@@ -347,10 +351,6 @@ export class BackgroundBoardLayer extends Container {
     }
     entry.pendingOld = null
     entry.sprite = null
-  }
-
-  private turnFilters(): Filter[] | null {
-    return null
   }
 
   private createEntry(path: string, depth: number): BoardEntry {
@@ -417,8 +417,7 @@ export class BackgroundBoardLayer extends Container {
               width: entry.targetWidth,
               height: entry.targetHeight,
             },
-            entry.depth,
-            { filters: this.turnFilters() }
+            entry.depth
           )
           return
         }
@@ -537,25 +536,7 @@ export class BackgroundBoardLayer extends Container {
   clear(): void {
     // 回転舞台 (#704 第2弾) の最中なら打ち切る（場面転換・復元・新規開始は最終状態へ即時）。
     this.turn.interrupt()
-    for (const entry of this.entries) {
-      this.stopInterval(entry)
-      this.stopFlipInterval(entry)
-      entry.disposed = true
-      entry.run?.dispose()
-      entry.run = null
-      if (entry.pendingOld) {
-        entry.pendingOld.removeFromParent()
-        entry.pendingOld.destroy()
-        entry.pendingOld = null
-      }
-      if (entry.sprite) {
-        entry.sprite.removeFromParent()
-        // texture は PixiJS の Assets キャッシュが保有するので破棄しない
-        // （EventImageLayer.destroySprite / NovelRenderer.destroyBackgroundEntry と同じ流儀）。
-        entry.sprite.destroy()
-        entry.sprite = null
-      }
-    }
+    for (const entry of this.entries) this.releaseEntry(entry)
     this.entries = []
   }
 

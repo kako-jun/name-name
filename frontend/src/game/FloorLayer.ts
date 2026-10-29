@@ -63,8 +63,6 @@ export class FloorLayer extends Container {
   private loadedUrls: Set<string> = new Set()
   /** 回転舞台 (#704 第2弾) への参加。 */
   private readonly turn = new LayerTurn(this, () => this.endStageTurn())
-  /** 回転舞台の新面として予約したトークン。 */
-  private turnToken: number | null = null
 
   constructor(
     private readonly screenWidth: number,
@@ -90,7 +88,7 @@ export class FloorLayer extends Container {
     const gen = this.generation
     const url = resolveAssetUrl(assetBaseUrl, 'images', path)
     // 回転舞台 (#704 第2弾) の裏側の指定なら新面として予約する（ロードが終わるまで回転は始まらない）。
-    this.turnToken = this.turn.run?.expectNew() ?? null
+    this.turn.expectSlot()
     this.loading = true
     Assets.load(url)
       .then((texture: Texture) => {
@@ -106,7 +104,7 @@ export class FloorLayer extends Container {
           h
         )
         if (!placement) {
-          this.failTurnToken()
+          this.turn.failSlot()
           return
         }
         const sprite = new TilingSprite({
@@ -120,10 +118,9 @@ export class FloorLayer extends Container {
         this.sprite = sprite
         const run = this.turn.run
         const host = this.turn.host
-        if (this.turnToken != null && run && host) {
+        const token = run && host ? this.turn.takeSlot() : null
+        if (token != null && run && host) {
           // 回転舞台の新面。回転が終わるまで sprite は載せず、焼いたタイルを mesh の素材として run へ渡す。
-          const token = this.turnToken
-          this.turnToken = null
           const baked = bakeFloorTexture(
             texture,
             placement.width,
@@ -150,7 +147,7 @@ export class FloorLayer extends Container {
       .catch((err: unknown) => {
         if (gen === this.generation) {
           this.loading = false
-          this.failTurnToken()
+          this.turn.failSlot()
         }
         console.warn('[name-name] 床の読み込みに失敗: ' + url, err)
       })
@@ -160,7 +157,7 @@ export class FloorLayer extends Container {
   clear(): void {
     // 回転舞台 (#704 第2弾) の最中なら打ち切る（場面転換・復元・新規開始は最終状態へ即時）。
     this.turn.interrupt()
-    this.failTurnToken()
+    this.turn.failSlot()
     this.generation++
     if (this.sprite) {
       this.sprite.removeFromParent()
@@ -225,20 +222,11 @@ export class FloorLayer extends Container {
     this.current = null
     this.shownBaseUrl = ''
     this.loading = false
-    this.turnToken = null
   }
 
   /** 回転が終わった／打ち切られた。新面の sprite を載せる（ロード中のものは完了時に即座に載る）。 */
   private endStageTurn(): void {
-    this.turnToken = null
     if (this.sprite && !this.sprite.parent) this.addChild(this.sprite)
-  }
-
-  private failTurnToken(): void {
-    if (this.turnToken == null) return
-    const token = this.turnToken
-    this.turnToken = null
-    this.turn.run?.failNew(token)
   }
 
   /** 現在の床を settled state として返す。ロードの成否に関わらず宣言された事実を返す（ADR-0002）。 */

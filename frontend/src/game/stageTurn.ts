@@ -30,6 +30,9 @@ import type { TimeController } from './TimeController'
 /** `[舞台回転]` の所要時間の上限（ms）。パーサの `STAGE_TURN_MAX_MS` と同じ。 */
 export const STAGE_TURN_MAX_MS = 5000
 
+/** 新面のロードを待つ上限（ms）。超えても着かない新面は読み込み失敗と同じ扱いで、回転を始める。 */
+export const STAGE_TURN_MAX_WAIT_MS = 3000
+
 /** 板 1 面の配置（中心 `x, y` と幅・高さ。`anchor=0.5` の Sprite と同じ）。 */
 export interface StageTurnGeometry {
   x: number
@@ -142,6 +145,7 @@ export class StageTurnRun {
   private sealed = false
   private startMs: number | null = null
   private timer: number | null = null
+  private waitTimer: number | null = null
   private halfFired = false
   private _ended = false
   /** コントローラが裏側の指定を流し込んでいる間だけ true（この間のレイヤーの `clear()` は回転を打ち切らない）。 */
@@ -178,11 +182,14 @@ export class StageTurnRun {
     depth: number,
     opts?: { filters?: Filter[] | null; ownedTexture?: Texture | null }
   ): void {
-    if (this._ended) return
+    if (this._ended) {
+      opts?.ownedTexture?.destroy(true)
+      return
+    }
     this.addMesh('old', host, texture, geometry, depth, opts)
   }
 
-  /** 新面の登場を予約する。戻り値のトークンで `resolveNew` / `failNew` / `cancelNew` する。 */
+  /** 新面の登場を予約する。戻り値のトークンで `resolveNew` / `failNew` する。 */
   expectNew(): number {
     const token = this.nextToken++
     this.pending.add(token)
@@ -207,21 +214,24 @@ export class StageTurnRun {
     this.maybeStart()
   }
 
-  /** 新面のロードに失敗した（新面なしとして回転を進める）。 */
+  /** 新面のロードに失敗した・差し替え／撤去された（新面なしとして回転を進める）。 */
   failNew(token: number): void {
     if (this._ended) return
     if (this.pending.delete(token)) this.maybeStart()
   }
 
-  /** 予約した新面が差し替え・撤去された。 */
-  cancelNew(token: number): void {
-    this.failNew(token)
-  }
-
   /** 裏側の指定を流し終えた。以後、新面が出そろっていれば回転を始める。 */
   seal(): void {
-    if (this._ended) return
+    if (this._ended || this.sealed) return
     this.sealed = true
+    if (this.startMs === null && this.pending.size > 0) {
+      // 新面のロードが済まなくても、上限で見切って回し始める（未着の新面は読み込み失敗と同じ扱い）。
+      this.waitTimer = this.time.setTimeout(() => {
+        this.waitTimer = null
+        this.pending.clear()
+        this.maybeStart()
+      }, STAGE_TURN_MAX_WAIT_MS)
+    }
     this.maybeStart()
   }
 
@@ -259,6 +269,10 @@ export class StageTurnRun {
 
   private maybeStart(): void {
     if (this._ended || this.startMs !== null || !this.sealed || this.pending.size > 0) return
+    if (this.waitTimer !== null) {
+      this.time.clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
     if (this.meshes.length === 0) {
       // 回すものが何も無い（旧面も新面も無い）。
       this.finish()
@@ -305,6 +319,10 @@ export class StageTurnRun {
   finish(): void {
     if (this._ended) return
     this._ended = true
+    if (this.waitTimer !== null) {
+      this.time.clearTimeout(this.waitTimer)
+      this.waitTimer = null
+    }
     if (this.timer !== null) {
       this.time.clearInterval(this.timer)
       this.timer = null
@@ -364,7 +382,8 @@ export interface StageTurnHost {
  *   ジャンプ）。`cancel()` は場面転換などで範囲ごと捨てるとき。
  */
 export class StageTurnController {
-  private pending: { durationMs: number | null; queue: Array<() => void> } | null = null
+  private pending: { durationMs: number | null; skip: boolean; queue: Array<() => void> } | null =
+    null
   private active: StageTurnRun | null = null
 
   constructor(
@@ -374,11 +393,14 @@ export class StageTurnController {
 
   /** `[舞台回転]`。連続して来たら後勝ち（所要時間は最後の指定）。 */
   begin(durationMs: number | null | undefined): void {
+    // スキップ中かは範囲を開く時点で控える。範囲を閉じる時点では、待機・選択肢の到達で解除済みのことがある。
+    const skip = this.host.isSkip()
     if (this.pending) {
       this.pending.durationMs = durationMs ?? null
+      this.pending.skip ||= skip
       return
     }
-    this.pending = { durationMs: durationMs ?? null, queue: [] }
+    this.pending = { durationMs: durationMs ?? null, skip, queue: [] }
   }
 
   /** 範囲の中なら指定をためて true を返す（呼び出し側は即時実行しない）。 */
@@ -398,7 +420,7 @@ export class StageTurnController {
     return this.active && !this.active.ended ? this.active : null
   }
 
-  /** 範囲ごと捨てる（場面転換・復元・破棄）。進行中の回転は触らない（各レイヤーの clear が打ち切る）。 */
+  /** 範囲ごと捨てる（場面転換・終劇）。進行中の回転は触らない（各レイヤーの clear が打ち切る）。 */
   cancel(): void {
     this.pending = null
   }
@@ -422,7 +444,7 @@ export class StageTurnController {
     const durationMs = resolveStageTurnDuration(pending.durationMs, this.host.defaultMs())
     const enabled = isBoardFaceFlipEnabled({
       isTheater: this.host.isTheater(),
-      skip: this.host.isSkip(),
+      skip: pending.skip || this.host.isSkip(),
       exporting: this.host.isExporting(),
       reducedMotion: prefersReducedMotion(),
       durationMs,
@@ -442,8 +464,9 @@ export class StageTurnController {
       for (const fn of pending.queue) fn()
     } finally {
       run.replaying = false
+      // 流し込み中に例外が出ても、回転が始まらないまま旧面が残らないよう必ず seal する。
+      run.seal()
     }
-    run.seal()
   }
 }
 
@@ -454,6 +477,7 @@ export class StageTurnController {
 export class LayerTurn implements StageTurnParticipant {
   private _run: StageTurnRun | null = null
   private _host: Container | null = null
+  private slotToken: number | null = null
 
   constructor(
     private readonly layer: Container,
@@ -483,8 +507,27 @@ export class LayerTurn implements StageTurnParticipant {
     this.layer.addChild(host)
     this._host = host
     this._run = run
+    this.slotToken = null
     run.register(this)
     return host
+  }
+
+  /** 単一スロット（壁・床）の新面を予約する。回転中でなければ予約しない。 */
+  expectSlot(): void {
+    this.slotToken = this.run?.expectNew() ?? null
+  }
+
+  /** 予約済みの新面のトークンを取り出す（以後は resolve する側が持つ）。無ければ null。 */
+  takeSlot(): number | null {
+    const token = this.slotToken
+    this.slotToken = null
+    return token
+  }
+
+  /** 予約済みの新面を失敗（または取り消し）として run に伝える。 */
+  failSlot(): void {
+    const token = this.takeSlot()
+    if (token != null) this.run?.failNew(token)
   }
 
   /** 回転を打ち切って最終状態にする（`replaying` 中は打ち切らない）。 */
@@ -502,6 +545,7 @@ export class LayerTurn implements StageTurnParticipant {
     const host = this._host
     this._host = null
     this._run = null
+    this.slotToken = null
     if (host) {
       host.removeFromParent()
       host.destroy()

@@ -15,6 +15,7 @@ import { NovelRenderer } from './NovelRenderer'
 import type { Event, EventScene } from '../types'
 import type { NovelGameState } from './GameState'
 import { internals, type RendererInternals } from '../test/rendererInternals'
+import { confineForTest } from '../test/confinement'
 
 const mq = { matches: false }
 beforeAll(() => {
@@ -416,5 +417,134 @@ describe('NovelRenderer: カメラ', () => {
       CameraMode: { mode: 'Theater', orientation: 'Stage' },
     } as Event)
     expect(hostCount(r)).toBe(0)
+  })
+})
+
+describe('NovelRenderer: スキップ中に開いた範囲（待機・選択肢で閉じる）', () => {
+  const closers: Array<[string, Event]> = [
+    ['[待機]', { Wait: { ms: 300 } } as Event],
+    ['[待機: 表示完了]', 'WaitDisplayComplete' as Event],
+    ['選択肢', { Choice: { options: [{ text: 'x', jump: 'a' }] } } as Event],
+  ]
+  it.each(closers)('%s で閉じてもスキップ中なので回らず即時', async (_n, closer) => {
+    const r = make([
+      scene('a', [...OLD, narration('one'), turn(1000), prop('B.png'), wall('B.png'), closer]),
+    ])
+    await flush()
+    ;(r as unknown as { skipMode: boolean }).skipMode = true
+    await advance(r)
+    expect(hostCount(r)).toBe(0)
+    expect(r.getSnapshot().props).toEqual([{ path: 'B.png', depth: 2 }])
+    expect(r.getSnapshot().floor).toBeNull()
+  })
+
+  it.each(closers)('%s で閉じても、スキップでなければ回る', async (_n, closer) => {
+    const r = make([
+      scene('a', [...OLD, narration('one'), turn(1000), prop('B.png'), wall('B.png'), closer]),
+    ])
+    await flush()
+    await advance(r)
+    expect(hostCount(r)).toBe(4)
+  })
+})
+
+describe('NovelRenderer: 範囲が終劇・ジャンプ・表示完了待ちで閉じる', () => {
+  it('範囲が開いたまま終劇（全選択肢が圏外）に入ると、ためた壁・床は出ず、保存状態にも載らない', async () => {
+    const r = make([
+      scene('a', [
+        ...OLD,
+        narration('one'),
+        turn(1000),
+        wall('X.png'),
+        floor('Y.png'),
+        { Choice: { options: [{ text: 'x', jump: 'out' }] } } as Event,
+      ]),
+      scene('out', [narration('out')]),
+    ])
+    confineForTest(r, ['a'])
+    await flush()
+    await advance(r)
+    await flush()
+    expect(r.getSnapshot().storyEnded).toBe(true)
+    expect(hostCount(r)).toBe(0)
+    expect(r.getSnapshot().wall).toBeNull()
+    expect(r.getSnapshot().floor).toBeNull()
+    li(r).time.tick(3000)
+    expect(r.getSnapshot().wall).toBeNull()
+    expect(r.getSnapshot().floor).toBeNull()
+  })
+
+  it('[ジャンプ:] で範囲が閉じる（予約中でも回転が始まる）', async () => {
+    const r = make([
+      scene('a', [
+        ...OLD,
+        narration('one'),
+        turn(1000),
+        prop('B.png'),
+        { Jump: { target: 'b' } } as Event,
+      ]),
+      scene('b', [narration('bb')]),
+    ])
+    await flush()
+    r.advance()
+    await flush()
+    expect(meshes(li(r).propLayer)).toBeGreaterThanOrEqual(1)
+    expect(r.getSnapshot().props).toEqual([{ path: 'B.png', depth: 2 }])
+  })
+
+  it('[待機: 表示完了] は回転舞台が終わるまで待つ（hasPendingVisualTransition が回転中は true）', async () => {
+    const r = make([
+      scene('a', [
+        ...OLD,
+        narration('one'),
+        turn(1000),
+        prop('B.png'),
+        'WaitDisplayComplete' as Event,
+        narration('two'),
+      ]),
+    ])
+    await flush()
+    await advance(r)
+    expect(hostCount(r)).toBe(4)
+    // 待機（[待機: 表示完了]）が見る集約点: 回転中は待ち、終われば待たない。
+    const pending = (): boolean =>
+      (r as unknown as { hasPendingVisualTransition(): boolean }).hasPendingVisualTransition()
+    expect((internals(r) as unknown as { waitingForWait: boolean }).waitingForWait).toBe(true)
+    expect(pending()).toBe(true)
+    li(r).time.tick(500)
+    expect(pending()).toBe(true)
+    li(r).time.tick(1500)
+    expect(hostCount(r)).toBe(0)
+    expect(pending()).toBe(false)
+  })
+
+  it('[待機: 表示完了] は第1弾の大道具の面の切り替え（回転:）の回転も待つ', async () => {
+    const r = make([
+      scene('a', [
+        ...OLD,
+        narration('one'),
+        { Prop: { path: 'B.png', depth: 2, flip_from: 'A.png', flip_ms: 800 } } as Event,
+        narration('two'),
+      ]),
+    ])
+    await flush()
+    await advance(r)
+    const pending = (): boolean =>
+      (r as unknown as { hasPendingVisualTransition(): boolean }).hasPendingVisualTransition()
+    expect(pending()).toBe(true)
+    li(r).time.tick(1500)
+    expect(pending()).toBe(false)
+  })
+
+  it('intermission タブローでも本文・待機で範囲が閉じて回転が起きる', async () => {
+    const r = make([scene('a', [...OLD, narration('one')])])
+    await flush()
+    ;(r as unknown as { renderIntermissionTableau(e: Event[]): void }).renderIntermissionTableau([
+      turn(1000),
+      prop('B.png'),
+      narration('end'),
+    ])
+    await flush()
+    expect(meshes(li(r).propLayer)).toBeGreaterThanOrEqual(1)
   })
 })

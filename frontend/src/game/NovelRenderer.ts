@@ -1451,6 +1451,8 @@ export class NovelRenderer {
    */
   private endStory(): void {
     if (this.storyEnded) return // 二重発火防止（連打等でフェード/コールバックを重複させない）
+    // 回転舞台 (#704 第2弾) の範囲が開いたまま終劇に入ったら捨てる（ためた壁・床が終劇後に出ないように。終劇は全クリア）。
+    this.stageTurn.cancel()
     this.storyEnded = true
     this.syncSeekBarEnabled()
     // skipMode を宣言的にリセットする (#424 セルフレビュー must)。通常の Choice 表示は
@@ -4212,7 +4214,11 @@ export class NovelRenderer {
       this.background.hasPendingBackgroundLoad() ||
       this.background.hasActiveBackgroundFade() ||
       this.characterLayer.hasPendingVisualTransition() ||
-      this.eventImageLayer.hasPendingVisualTransition()
+      this.eventImageLayer.hasPendingVisualTransition() ||
+      // 回転舞台 (#704 第2弾) と、大道具・背景板の面の切り替え（第1弾）の回転も待つ。
+      this.stageTurn.run !== null ||
+      this.propLayer.hasPendingFlip() ||
+      this.backgroundBoardLayer.hasPendingFlip()
     )
   }
 

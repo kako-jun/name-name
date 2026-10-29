@@ -331,6 +331,11 @@ export class PropLayer extends Container {
     this.addChild(host)
   }
 
+  /** 面の切り替え (#704 第1弾) の回転中、または新しい面のロード待ちの板があるか（`[待機: 表示完了]` が待つ）。 */
+  hasPendingFlip(): boolean {
+    return this.entries.some((e) => !e.disposed && (e.run !== null || e.pendingOld !== null))
+  }
+
   /** 回転が終わった／打ち切られた。新面の sprite を載せ、まだロード中の板は即座に置くようにする。 */
   private endStageTurn(): void {
     for (const entry of this.entries) {
@@ -356,7 +361,7 @@ export class PropLayer extends Container {
     if (entry.turnToken != null) {
       const token = entry.turnToken
       entry.turnToken = null
-      this.turn.run?.cancelNew(token)
+      this.turn.run?.failNew(token)
     }
     this.releaseEntry(entry)
     this.insertSorted()
@@ -569,24 +574,7 @@ export class PropLayer extends Container {
   clear(): void {
     // 回転舞台 (#704 第2弾) の最中なら打ち切る（場面転換・復元・新規開始は最終状態へ即時）。
     this.turn.interrupt()
-    for (const entry of this.entries) {
-      this.stopInterval(entry)
-      this.stopFlipInterval(entry)
-      entry.disposed = true
-      entry.run?.dispose()
-      entry.run = null
-      if (entry.pendingOld) {
-        entry.pendingOld.removeFromParent()
-        entry.pendingOld.destroy()
-        entry.pendingOld = null
-      }
-      if (entry.sprite) {
-        entry.sprite.removeFromParent()
-        // texture は PixiJS の Assets キャッシュが保有するので破棄しない。
-        entry.sprite.destroy()
-        entry.sprite = null
-      }
-    }
+    for (const entry of this.entries) this.releaseEntry(entry)
     this.entries = []
   }
 
