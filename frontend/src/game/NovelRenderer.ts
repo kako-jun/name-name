@@ -2098,12 +2098,12 @@ export class NovelRenderer {
    *
    * z 順の制約 (#628 フェーズ2b): `titleScreenOverlay` は立ち絵レイヤーより下に置かれている
    * （ロゴ Sprite が `characterLayer` 経由で描かれ、不透明背景より上に見える必要があるため）。
-   * その結果、立ち絵レイヤーより上の層（`eventImageLayer`/`dialogBox`/`seekBar`）はタイトル
-   * 背景で隠れない。旧 DOM 版は canvas 全体を不透明 div で覆っていたためこれらは完全に不可視
-   * だった——同じ見た目を再現するため、ここで明示的に非表示にし `hideTitleScreen()` で復元する
-   * （`waitingForChoice`/`storyEnded` 等の他状態がこれらを自発的に隠す既存経路とは独立。復元時に
-   * 無条件で true に戻すのは、タイトル表示前は常にゲーム未開始＝いずれも表示されているべき
-   * 状態だったため、非破壊）。
+   * その結果、立ち絵レイヤーより上の層はタイトル背景で隠れない。旧 DOM 版は canvas 全体を不透明 div で
+   * 覆っていたためこれらは完全に不可視だった——同じ見た目を再現するため、ここで明示的に隠し
+   * `hideTitleScreen()` で戻す。舞台レイヤー（立ち絵・照明・大道具・幕・イベント絵・舞台前面・天候・
+   * 吹き出し・テロップ・床）の可視性は `stageLayerVisibility.ts` の1つの規則で決め
+   * `applyStageLayerVisibility()` が適用する (#982)。復元時も強制 true にせず、背面隠し等の
+   * 「あるべき可視性」に従う。会話窓とシークバーはここで個別に切り替える。
    *
    * 実機検証で発覚した実バグ (#628 フェーズ2b): エントリスクリプトは NovelPlayer マウント時点で
    * 既に最初の text event まで自動進行済み（PlayerScreen 側コメント参照）——`[イベント絵:]`
