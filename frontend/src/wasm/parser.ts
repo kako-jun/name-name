@@ -232,6 +232,10 @@ export function normalizeEvents(events: Event[], defaultTransition: EventImageTr
       const height = f.height == null ? 0.25 : Number(Math.fround(f.height).toPrecision(7))
       return { Floor: { path: f.path, height } }
     }
+    if ('StageTurn' in event) {
+      // #704 第2弾: Rust 側 Option<u32> は WASM 経由で undefined になるため null に正規化する。
+      return { StageTurn: { duration_ms: event.StageTurn.duration_ms ?? null } }
+    }
     if ('Wall' in event) {
       // #703: Rust 側は既定値（loop/mute とも true）を JSON に載せない（skip_serializing_if）ため、
       // 型上は optional のまま届く。利用側が毎回 `?? true` を書かずに済むよう、ここで boolean に揃える。

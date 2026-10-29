@@ -1382,6 +1382,13 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("天候:") {
         return parse_weather_directive(rest);
     }
+    // [舞台回転] / [舞台回転: 時間=900] — 回転舞台 (#704 第2弾)。他の既存タグと prefix 衝突しない。
+    if content == "舞台回転" {
+        return Some(Event::StageTurn { duration_ms: None });
+    }
+    if let Some(rest) = content.strip_prefix("舞台回転:") {
+        return Some(parse_stage_turn_directive(rest));
+    }
     // [床: path] / [床: path, 高さ=0.3] / [床: なし] — 床材質 (#706 第2弾)。他の既存タグと prefix 衝突しない。
     if let Some(rest) = content.strip_prefix("床:") {
         return parse_floor_directive(rest);
@@ -2081,6 +2088,23 @@ fn parse_weather_directive(content: &str) -> Option<Event> {
         }
     }
     Some(Event::Weather { kind, intensity })
+}
+
+/// `[舞台回転: 時間=900]` の本体を分解する (#704 第2弾)。
+/// `時間`/`duration` は `=`（全角 `＝` も可）または `:` 区切りの非負整数（ms）。0〜5000 にクランプし、
+/// 数値でない・負値・小数・空は無視（既定 = `None`）。複数あれば最後の有効値。未知のキーは無視。
+fn parse_stage_turn_directive(content: &str) -> Event {
+    let mut duration_ms: Option<u32> = None;
+    for raw in content.split(',') {
+        if let Some((k, v)) = raw.trim().split_once(['=', '＝', ':']) {
+            if matches!(k.trim(), "時間" | "duration") {
+                if let Ok(n) = v.trim().parse::<u32>() {
+                    duration_ms = Some(n.min(STAGE_TURN_MAX_MS));
+                }
+            }
+        }
+    }
+    Event::StageTurn { duration_ms }
 }
 
 /// `[床: path]` / `[床: path, 高さ=0.3]` / `[床: なし]` の本体を分解する (#706 第2弾)。

@@ -561,6 +561,18 @@ export type Event =
     }
   | 'FloorExit'
   | {
+      /**
+       * 回転舞台 (#704 第2弾)。直後から次の「進行を止めるイベント」（台詞・ナレーション・選択肢・待機・ジャンプ・
+       * 場面転換）までに書かれた `Wall` / `BackgroundBoard` / `Prop` / `Floor`（`WallExit` / `FloorExit` を含む）が
+       * 裏側の舞台になり、それまでの壁・背景板・大道具・床の全体が画面中央の鉛直軸まわりに回って切り替わる。
+       * シアター限定の演出（ノベル・スキップ・復元・書き出し・動きを減らす設定では最終状態へ即時）。
+       */
+      StageTurn: {
+        /** 回転の所要時間（ms、0〜5000）。省略時は `character_fade_ms`。wasm は未指定を出力に載せない。 */
+        duration_ms?: number | null
+      }
+    }
+  | {
       Video: {
         path: string
         /** #252 配置位置（左/中央/右、英語 alias left/center/right）。未指定は中央 */

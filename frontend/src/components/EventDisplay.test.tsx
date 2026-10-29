@@ -82,6 +82,17 @@ describe('EventDisplay', () => {
     expect(c.container.textContent).toBe('床: floor/wood.png')
   })
 
+  it('renders StageTurn with and without duration (#704 第2弾)', () => {
+    expect(renderEvent({ StageTurn: {} }).container.textContent).toBe('舞台回転')
+    expect(renderEvent({ StageTurn: { duration_ms: null } }).container.textContent).toBe('舞台回転')
+    expect(renderEvent({ StageTurn: { duration_ms: 900 } }).container.textContent).toBe(
+      '舞台回転: 時間=900'
+    )
+    expect(renderEvent({ StageTurn: { duration_ms: 0 } }).container.textContent).toBe(
+      '舞台回転: 時間=0'
+    )
+  })
+
   it('renders StageFront with path (#705)', () => {
     const { container } = renderEvent({ StageFront: { path: 'venue/hall.png' } })
     expect(container.textContent).toBe('舞台前面: venue/hall.png')

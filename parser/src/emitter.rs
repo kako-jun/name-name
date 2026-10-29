@@ -564,6 +564,17 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str("[床: なし]\n");
                 prev_was_dialog_or_text = false;
             }
+            Event::StageTurn { duration_ms } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                // #704 第2弾: 時間の既定（None）は round-trip 安定のため無出力にする。
+                match duration_ms {
+                    Some(ms) => out.push_str(&format!("[舞台回転: 時間={ms}]\n")),
+                    None => out.push_str("[舞台回転]\n"),
+                }
+                prev_was_dialog_or_text = false;
+            }
             Event::Video {
                 path,
                 position,
