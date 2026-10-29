@@ -12,7 +12,7 @@
  */
 
 import { CameraZoomController } from './cameraZoom'
-import { Application, Text as PixiText, TextStyle } from 'pixi.js'
+import { Application, Text as PixiText, TextStyle, type Container } from 'pixi.js'
 import {
   CharacterLayer,
   CHARACTER_X_RATIO,
@@ -106,6 +106,11 @@ import {
   computeTelopBottomReserveHeight,
   resolveCharacterXRatio,
 } from './novelLayout'
+import {
+  STAGE_LAYER_RULES,
+  computeStageLayerState,
+  type StageLayerKey,
+} from './stageLayerVisibility'
 import { stripRubyMarkup, mapSentencesToRubyPreservedText } from './ruby'
 import { resolveVoiceSpatialization } from './voiceSpatialization'
 
@@ -318,6 +323,9 @@ export class NovelRenderer {
    * 影響を残さない。null（split_layout 未使用/解除中）ならそもそも何もしない。
    */
   private titleScreenSavedCharacterSplitRegion: LayoutRect | null = null
+  /** 直近の本文が吹き出し表示か (#982/#714)。`hideTitleScreen()` が会話窓を戻すときに、吹き出し本文の裏へ
+   *  会話窓を二重に出さないために使う（本文の表示方法は render() が決める）。 */
+  private textDisplayIsBubble = false
 
   /**
    * 終劇オーバーレイ (#630)。旧 DOM 版 `NovelPlayer.tsx` の "to be continued..." 表示の PixiJS 版。
@@ -1012,9 +1020,9 @@ export class NovelRenderer {
     // ボタンを描く。z 順は背景/動画レイヤーより上・立ち絵レイヤーより下——タイトルロゴは
     // `characterLayer.showImage()`（#628 フェーズ2a）に委譲するため、ロゴ Sprite が
     // このオーバーレイの不透明背景より確実に上に来るよう立ち絵レイヤーの直前に置く。
-    // ダイアログボックス/シークバー等（立ち絵レイヤーより上の層）はタイトル表示中に見えて
-    // しまわないよう `showTitleScreen`/`hideTitleScreen` 側で個別に visible を切り替える
-    // （下記コメント・当該メソッド参照）。ボタンは非インタラクティブな立ち絵 Sprite（eventMode
+    // 立ち絵レイヤーより上の舞台レイヤーはタイトル表示中に見えてしまわないよう、可視性規則
+    // （stageLayerVisibility.ts）で一括して隠す (#982)。ダイアログボックス/シークバーは
+    // `showTitleScreen`/`hideTitleScreen` 側で個別に切り替える（当該メソッド参照）。ボタンは非インタラクティブな立ち絵 Sprite（eventMode
     // 未設定=既定で非インタラクティブ）に隠れてもヒットテストには影響しない。
     this.app.stage.addChild(this.titleScreenOverlay)
 
@@ -2033,6 +2041,7 @@ export class NovelRenderer {
     // 吹き出しも DialogBox と同じ一時的な本文表示であり、シーン/イベント列の境界をまたいで
     // 残してはならない。
     this.bubbleLayer.hide()
+    this.textDisplayIsBubble = false
     // per-scene [枠なし]/[枠あり] はシーン遷移でデフォルト値にリセット
     this.dialogBox.setBorderless(this.defaultDialogBorderless)
     // novel (#283): setBorderless が borderless を上書きしたので novel 幾何を再適用する
@@ -2089,12 +2098,12 @@ export class NovelRenderer {
    *
    * z 順の制約 (#628 フェーズ2b): `titleScreenOverlay` は立ち絵レイヤーより下に置かれている
    * （ロゴ Sprite が `characterLayer` 経由で描かれ、不透明背景より上に見える必要があるため）。
-   * その結果、立ち絵レイヤーより上の層（`eventImageLayer`/`dialogBox`/`seekBar`）はタイトル
-   * 背景で隠れない。旧 DOM 版は canvas 全体を不透明 div で覆っていたためこれらは完全に不可視
-   * だった——同じ見た目を再現するため、ここで明示的に非表示にし `hideTitleScreen()` で復元する
-   * （`waitingForChoice`/`storyEnded` 等の他状態がこれらを自発的に隠す既存経路とは独立。復元時に
-   * 無条件で true に戻すのは、タイトル表示前は常にゲーム未開始＝いずれも表示されているべき
-   * 状態だったため、非破壊）。
+   * その結果、立ち絵レイヤーより上の層はタイトル背景で隠れない。旧 DOM 版は canvas 全体を不透明 div で
+   * 覆っていたためこれらは完全に不可視だった——同じ見た目を再現するため、ここで明示的に隠し
+   * `hideTitleScreen()` で戻す。舞台レイヤー（立ち絵・照明・大道具・幕・イベント絵・舞台前面・天候・
+   * 吹き出し・テロップ・床）の可視性は `stageLayerVisibility.ts` の1つの規則で決め
+   * `applyStageLayerVisibility()` が適用する (#982)。復元時も強制 true にせず、背面隠し等の
+   * 「あるべき可視性」に従う。会話窓とシークバーはここで個別に切り替える。
    *
    * 実機検証で発覚した実バグ (#628 フェーズ2b): エントリスクリプトは NovelPlayer マウント時点で
    * 既に最初の text event まで自動進行済み（PlayerScreen 側コメント参照）——`[イベント絵:]`
@@ -2118,15 +2127,6 @@ export class NovelRenderer {
     // タイトル画面中は立ち絵レイヤーにロゴを載せるので、カメラズームを一時的に無効にする (#702)。
     this.cameraZoom.setSuppressed('title', true)
     this.seekBar.setTitleScreenHidden(true)
-    this.eventImageLayer.visible = false
-    // 舞台前面 (#705) はイベント絵より手前の画面空間オーバーレイで、タイトル画面（titleScreenOverlay）より
-    // 上に積まれる。冒頭の `[舞台前面:]` がタイトルのボタンに重ならないよう、イベント絵と同じく隠す。
-    // 壁 (#703) は titleScreenOverlay より奥（不透明背景の下）なので隠す必要がない。
-    this.stageFrontLayer.visible = false
-    // 天候 (#706) も舞台前面と同じ理由で隠す（タイトル画面より上に積まれるため）。
-    this.weatherLayer.visible = false
-    // 床 (#706 第2弾) は titleScreenOverlay より奥だが、タイトル中は舞台の絵を一切見せない方針で同じく隠す。
-    this.floorLayer.visible = false
     // split_layout の一時解除（上記 titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     this.titleScreenSavedCharacterSplitRegion = this.characterLayer.getSplitLayoutRegion()
     if (this.titleScreenSavedCharacterSplitRegion) {
@@ -2174,6 +2174,10 @@ export class NovelRenderer {
     if (this.characterLayer.hasLoadedTexture(NovelRenderer.TITLE_LOGO_IMAGE_ID)) {
       this.titleScreenOverlay.hideFallbackText()
     }
+    // タイトルより手前に積まれる舞台レイヤー（大道具・照明・幕・立ち絵・イベント絵・舞台前面・天候・吹き出し・
+    // テロップ）と、タイトル中は見せない床を、1か所の規則（stageLayerVisibility.ts）で隠す (#982)。
+    // ロゴ sprite が登録された後（立ち絵レイヤーはロゴだけ免除する）に呼ぶ。
+    this.applyStageLayerVisibility()
   }
 
   /**
@@ -2188,14 +2192,12 @@ export class NovelRenderer {
     this.titleScreenOverlay.hide()
     this.characterLayer.remove(NovelRenderer.TITLE_LOGO_IMAGE_ID, { instant: true })
     // showTitleScreen() で隠した層を復元する（上記 JSDoc 参照）。
-    this.dialogBox.visible = true
+    this.dialogBox.visible = !this.textDisplayIsBubble
     this.cameraZoom.setSuppressed('title', false)
     this.seekBar.setTitleScreenHidden(false)
-    this.eventImageLayer.visible = true
-    this.stageFrontLayer.visible = true
-    this.weatherLayer.visible = true
-    // 床は背面スタックの一部（イベント絵の背面隠しの対象）なので、強制表示せず背面隠しの状態に従う。
-    this.floorLayer.visible = !this.eventImageLayer.shouldHideBackLayer()
+    // 強制 true にせず、背面隠し（イベント絵）を含む「あるべき可視性」へ戻す (#982)。上の overlay.hide() で
+    // titleScreenOverlay.visible が false になっているので、規則は titleActive=false で評価される。
+    this.applyStageLayerVisibility()
     // split_layout の一時解除を復元する（titleScreenSavedCharacterSplitRegion の JSDoc 参照）。
     if (this.titleScreenSavedCharacterSplitRegion) {
       this.characterLayer.setSplitLayoutRegion(this.titleScreenSavedCharacterSplitRegion)
@@ -3698,16 +3700,62 @@ export class NovelRenderer {
    * （event image の前面に追加レイヤーだけ透けて見える事故を防ぐ）。
    */
   private applyEventImageVisibility(): void {
-    const hide = this.eventImageLayer.shouldHideBackLayer()
-    this.background.setVisible(!hide)
-    this.backgroundBoardLayer.visible = !hide
-    this.wallLayer.visible = !hide
-    this.floorLayer.visible = !hide
-    this.videoLayer.visible = !hide
-    this.characterLayer.visible = !hide
-    this.lightingLayer.visible = !hide
-    this.propLayer.visible = !hide
-    this.curtainLayer.visible = !hide
+    this.applyStageLayerVisibility()
+  }
+
+  /**
+   * 舞台レイヤー全部の可視性を `stageLayerVisibility.ts` の規則から再計算して適用する (#982)。
+   * 入力は「タイトル表示中か（titleScreenOverlay.visible）」と「イベント絵の背面隠し」の2つだけ。
+   * 状態（キャラ・アニメ・ticker・ボイス）は触らず、visible / renderable だけを書く。冪等。
+   */
+  private applyStageLayerVisibility(): void {
+    const input = {
+      titleActive: this.titleScreenOverlay.visible,
+      hideBack: this.eventImageLayer.shouldHideBackLayer(),
+    }
+    const targets = this.stageLayerTargets()
+    for (const key of Object.keys(STAGE_LAYER_RULES) as StageLayerKey[]) {
+      const state = computeStageLayerState(key, input)
+      if (key === 'background') {
+        this.background.setVisible(state.visible)
+        continue
+      }
+      const layer = targets[key]
+      if (key === 'character') {
+        this.characterLayer.visible = state.visible
+        this.characterLayer.setTitleSuppressed(
+          state.titleSuppressed,
+          NovelRenderer.TITLE_LOGO_IMAGE_ID
+        )
+        continue
+      }
+      // 'renderable' のレイヤー: 吹き出しは自身の show()/hide() が visible を管理するため触らない。テロップは
+      // visible を書かないが、吹き出しと同じ手段に揃える。
+      if (STAGE_LAYER_RULES[key].title === 'renderable') {
+        layer.renderable = !state.titleSuppressed
+      } else {
+        layer.visible = state.visible
+      }
+    }
+  }
+
+  /** 可視性規則の対象レイヤー（背景は BackgroundController 経由なので含まない）。テストの網羅チェックも使う。 */
+  private stageLayerTargets(): Record<Exclude<StageLayerKey, 'background'>, Container> {
+    return {
+      wall: this.wallLayer,
+      backgroundBoard: this.backgroundBoardLayer,
+      video: this.videoLayer,
+      floor: this.floorLayer,
+      character: this.characterLayer,
+      lighting: this.lightingLayer,
+      prop: this.propLayer,
+      curtain: this.curtainLayer,
+      eventImage: this.eventImageLayer,
+      stageFront: this.stageFrontLayer,
+      weather: this.weatherLayer,
+      bubble: this.bubbleLayer,
+      telop: this.telopLayer,
+    }
   }
 
   /**
@@ -4666,6 +4714,7 @@ export class NovelRenderer {
       // 空イベント列・終端へ切り替わった後に、直前の本文吹き出しだけが残るのを防ぐ。
       this.dialogBox.clearText()
       this.bubbleLayer.hide()
+      this.textDisplayIsBubble = false
       return
     }
 
@@ -4675,6 +4724,7 @@ export class NovelRenderer {
     if (!textEvt) {
       this.dialogBox.clearText()
       this.bubbleLayer.hide()
+      this.textDisplayIsBubble = false
       return
     }
 
@@ -4846,6 +4896,7 @@ export class NovelRenderer {
     // タイトルボタンの裏でシナリオ1行目が表示される回帰があった。handleAdvance() 等が使う
     // titleScreenOverlay.visible ガードをここにも適用する。
     const textDisplay = resolveTextDisplay(bubbleStyle, line)
+    this.textDisplayIsBubble = textDisplay === 'bubble'
     this.dialogBox.visible = !this.titleScreenOverlay.visible && textDisplay === 'dialogBox'
     if (textDisplay === 'bubble' && bubbleStyle) {
       const dialog =

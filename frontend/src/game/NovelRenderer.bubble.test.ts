@@ -143,7 +143,7 @@ interface LocalInternals extends RendererInternals {
     setDialog: (name: string, text: string) => void
     skipTypewriter: () => void
   }
-  bubbleLayer: { visible: boolean; x: number; getVisibleText: () => string }
+  bubbleLayer: { visible: boolean; renderable: boolean; x: number; getVisibleText: () => string }
 }
 
 function makeRenderer(): {
@@ -209,5 +209,50 @@ describe('NovelRenderer bubble display wiring (#698)', () => {
     })
     expect(internals<LocalInternals>(renderer).bubbleLayer.visible).toBe(false)
     expect(internals<LocalInternals>(renderer).dialogBox.visible).toBe(true)
+  })
+
+  it('タイトル表示中は吹き出しも隠れ（#714）、閉じると吹き出し本文の裏へ会話窓を二重に出さず吹き出しが戻る (#982)', async () => {
+    const { renderer } = makeRenderer()
+    renderer.setScenes([scene('a', [dialog('吹き出し', '叫び')])])
+    await Promise.resolve()
+    const inner = internals<LocalInternals>(renderer)
+    expect(inner.bubbleLayer.visible).toBe(true)
+    expect(inner.bubbleLayer.renderable).toBe(true)
+
+    renderer.showTitleScreen({
+      title: 'T',
+      hasSaveData: false,
+      onNewGame: () => {},
+      onContinue: () => {},
+      onOpenSettings: () => {},
+      onBack: () => {},
+    })
+    // 吹き出し自身の visible は本文の状態として保ったまま、描画だけが止まる
+    expect(inner.bubbleLayer.visible).toBe(true)
+    expect(inner.bubbleLayer.renderable).toBe(false)
+    expect(inner.dialogBox.visible).toBe(false)
+
+    renderer.hideTitleScreen()
+    expect(inner.bubbleLayer.renderable).toBe(true)
+    expect(inner.bubbleLayer.visible).toBe(true)
+    expect(inner.dialogBox.visible).toBe(false)
+  })
+
+  it('通常本文でタイトルを閉じると会話窓が戻る (#982)', async () => {
+    const { renderer } = makeRenderer()
+    renderer.setScenes([scene('a', [narration('通常本文')])])
+    await Promise.resolve()
+    const inner = internals<LocalInternals>(renderer)
+    renderer.showTitleScreen({
+      title: 'T',
+      hasSaveData: false,
+      onNewGame: () => {},
+      onContinue: () => {},
+      onOpenSettings: () => {},
+      onBack: () => {},
+    })
+    expect(inner.dialogBox.visible).toBe(false)
+    renderer.hideTitleScreen()
+    expect(inner.dialogBox.visible).toBe(true)
   })
 })

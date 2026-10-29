@@ -871,6 +871,39 @@ export class CharacterLayer extends Container {
       off_left: screenWidth * CHARACTER_X_RATIO.off_left,
       off_right: screenWidth * CHARACTER_X_RATIO.off_right,
     }
+    // タイトル抑止中 (#982) に後から足された子（シナリオ進行・復元・シーンジャンプで出た立ち絵）も隠す。
+    this.on('childAdded', (child) => {
+      if (this.titleSuppressedExceptId !== null) child.renderable = this.isTitleExempt(child)
+    })
+  }
+
+  /** タイトル抑止中 (#982) に隠さない画像 state の id（タイトルロゴ）。null = 抑止していない。 */
+  private titleSuppressedExceptId: string | null = null
+
+  /**
+   * 注意（順序依存）: `showImage()` は `addChild(sprite)` を `characters.set()` より先に行うため、抑止中に
+   * 追加されたロゴは `childAdded` の時点では免除対象を見つけられず、いったん非描画になる。呼び出し側
+   * （`NovelRenderer.showTitleScreen` 末尾の `applyStageLayerVisibility` → `setTitleSuppressed`）が全子を
+   * 再計算して直すことを前提にしている。
+   */
+  private isTitleExempt(child: Container): boolean {
+    const id = this.titleSuppressedExceptId
+    if (id === null) return true
+    const state = this.characters.get(id)
+    return !!state && (child === state.sprite || child === state.label)
+  }
+
+  /**
+   * タイトル画面表示中 (#982): 画像 `exceptId`（タイトルロゴ）以外の子の描画だけを止める/戻す。
+   * 立ち絵レイヤーはタイトルロゴを載せるためレイヤーごと `visible=false` にできない。状態・アニメ・
+   * ticker・ボイスは触らず `renderable` だけを切り替える（`visible` は各表示経路が管理しているので触らない）。
+   * `showImage(exceptId)` の後に呼ぶこと（ロゴ sprite が登録済みでないと免除対象が見つからない）。
+   */
+  setTitleSuppressed(suppressed: boolean, exceptId: string): void {
+    this.titleSuppressedExceptId = suppressed ? exceptId : null
+    for (const child of this.children) {
+      child.renderable = suppressed ? this.isTitleExempt(child) : true
+    }
   }
 
   /**
