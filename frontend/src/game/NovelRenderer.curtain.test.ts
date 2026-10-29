@@ -7,6 +7,7 @@
  * 片方だけ実装漏れになる）の再発防止を検証する（NovelRenderer.spotlight.test.ts と同形）。
  */
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
+import { Assets, type Texture } from 'pixi.js'
 import { NovelRenderer } from './NovelRenderer'
 import { SaveManager, type SaveSlotData } from './SaveManager'
 import type { Event, EventScene } from '../types'
@@ -344,9 +345,7 @@ describe('NovelRenderer 幕: スキップ中は昇降を即時にする (#991)',
   }
   const proc = (r: NovelRenderer, e: Event) =>
     (r as unknown as { processDirective: (e: Event) => void }).processDirective(e)
-  const setSkip = (r: NovelRenderer, on: boolean) => {
-    ;(r as unknown as { skipMode: boolean }).skipMode = on
-  }
+  const setSkip = (r: NovelRenderer, on: boolean) => r.setSkipMode(on)
 
   it('通常再生では instant:false、スキップ中は instant:true で show/raise が呼ばれる', () => {
     const { r, show, raise } = setup()
@@ -373,5 +372,47 @@ describe('NovelRenderer 幕: スキップ中は昇降を即時にする (#991)',
     expect(r.getSnapshot().curtain).toEqual({ path: 'b.png', charactersInFront: true })
     proc(r, CURTAIN_UP)
     expect(r.getSnapshot().curtain).toBeNull()
+  })
+
+  it('降下の進行中に setSkipMode(true) しても curtainLayer の降下は畳まれず完了まで進む', async () => {
+    vi.spyOn(Assets, 'load').mockResolvedValue({
+      width: 1280,
+      height: 720,
+      source: { scaleMode: 'linear' },
+    } as never)
+    const r = makeRenderer([scene('a', [narration('one')])])
+    r.setAssetBaseUrl('/assets')
+    const layer = (
+      r as unknown as {
+        curtainLayer: { sprite: { y: number } | null; interval: number | null }
+      }
+    ).curtainLayer
+    proc(r, curtain('a.png'))
+    await new Promise((res) => setTimeout(res, 50))
+    expect(layer.interval).not.toBeNull()
+    const yAtStart = layer.sprite?.y as number
+
+    setSkip(r, true)
+
+    // スキップへ入っても進行中の降下（補間タイマー）は残る
+    expect(layer.interval).not.toBeNull()
+    expect(layer.sprite?.y).toBe(yAtStart)
+    await new Promise((res) => setTimeout(res, 900))
+    expect(layer.interval).toBeNull()
+    expect((layer.sprite?.y as number) > yAtStart).toBe(true)
+  })
+
+  it('読み込み待ちの show の後に通常再生の raise が来ても、読み込み完了後に幽霊幕が降りない', async () => {
+    let resolve!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>((r) => (resolve = r)) as never)
+    const r = makeRenderer([scene('a', [narration('one')])])
+    r.setAssetBaseUrl('/assets')
+    proc(r, curtain('a.png'))
+    proc(r, CURTAIN_UP)
+    resolve({ width: 1280, height: 720, source: { scaleMode: 'linear' } } as unknown as Texture)
+    await new Promise((res) => setTimeout(res, 50))
+    expect(
+      (r as unknown as { curtainLayer: { children: unknown[] } }).curtainLayer.children.length
+    ).toBe(0)
   })
 })

@@ -412,17 +412,29 @@ describe('CurtainLayer スキップ中の即時化 (#991)', () => {
     expect(internals(layer).interval).not.toBeNull()
   })
 
-  it('降下の進行中にスキップへ入っても進行中の降下は畳まず最後まで続く（立ち絵の歩行と同じ方針）', async () => {
+  it('通常再生の降下は何も呼ばなければ完了まで進む（CurtainLayer はスキップの切替を知らない＝通知経路が無いことの記録。スキップ切替で畳まれないことの検証は NovelRenderer.curtain.test.ts）', async () => {
     mockAssetsLoadResolved()
     const time = virtualTime()
     const layer = new CurtainLayer(SCREEN_W, SCREEN_H, time)
     layer.show('a.png', false, '/assets')
     await flushPromises()
     time.tick(BOARD_SLIDE_IN_MS / 2)
-    // この間にスキップへ入っても CurtainLayer へは何も通知されない。降下は完了まで続く。
     expect(internals(layer).interval).not.toBeNull()
     time.tick(BOARD_SLIDE_IN_MS)
     expect(internals(layer).sprite?.y).toBe(0)
+    expect(internals(layer).interval).toBeNull()
+  })
+
+  it('読み込み待ちの show の後に通常の raise() が来ると、読み込み完了後も幕は出ない（幽霊幕防止）', async () => {
+    let resolve!: (t: Texture) => void
+    vi.spyOn(Assets, 'load').mockReturnValue(new Promise<Texture>((r) => (resolve = r)) as never)
+    const layer = new CurtainLayer(SCREEN_W, SCREEN_H, virtualTime())
+    layer.show('a.png', false, '/assets')
+    layer.raise()
+    resolve(mockTexture())
+    await flushPromises()
+    expect(layer.children.length).toBe(0)
+    expect(internals(layer).sprite).toBeNull()
     expect(internals(layer).interval).toBeNull()
   })
 
