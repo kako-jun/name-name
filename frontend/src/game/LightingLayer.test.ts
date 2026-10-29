@@ -413,4 +413,98 @@ describe('実 CharacterLayer との結合 (#992)', () => {
     expect(p.x).toBeGreaterThanOrEqual(0)
     expect(p.x).toBeLessThanOrEqual(SCREEN_W)
   })
+
+  describe('退場開始の位置を同期で確定する（スキップ相当・tick を回さない）', () => {
+    it('同じ同期区間の「show → 即時 remove」でも、光は登場位置に残る（点灯時は未登場）', () => {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, virtualTime())
+      layer.set('hero', '#ffffff', 0.2) // 未登場 → 中央
+      chars.show('hero', 'normal', '右', '/assets', { instant: true })
+      const standing = chars.getCurrentPosition('hero')!
+      chars.remove('hero', { instant: true })
+      expect(layer.getLightPosition()).toEqual(standing)
+      expect(standing.x).not.toBe(SCREEN_W / 2)
+    })
+
+    it('同じ同期区間の「位置変更 → 即時 remove」でも、光は変更後の位置に残る', () => {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const time = virtualTime()
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+      chars.show('hero', 'normal', '左', '/assets', { instant: true })
+      layer.set('hero', '#ffffff', 0.2)
+      time.tick(16)
+      const left = chars.getCurrentPosition('hero')!
+      chars.show('hero', 'normal', '右', '/assets', { instant: true })
+      const right = chars.getCurrentPosition('hero')!
+      expect(right.x).not.toBe(left.x)
+      chars.remove('hero', { instant: true }) // tick は回さない
+      expect(layer.getLightPosition()).toEqual(right)
+    })
+
+    it('別のキャラの退場には反応しない', () => {
+      const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+      const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, virtualTime())
+      layer.set('hero', '#ffffff', 0.2)
+      chars.show('other', 'normal', '右', '/assets', { instant: true })
+      chars.remove('other', { instant: true })
+      expect(layer.getLightPosition()).toEqual({ x: SCREEN_W / 2, y: SCREEN_H / 2 })
+    })
+  })
+
+  it('入場の歩行中に方向未指定で退場しても、光は退場開始時点の位置に残る', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    layer.set('hero', '#ffffff', 0.2)
+    chars.show('hero', 'normal', '右', '/assets', { enterDirection: 'Kamite' })
+    const internal = chars as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 500
+    internal.animTicker?.update()
+    time.tick(16)
+    const mid = chars.getCurrentPosition('hero')!
+    chars.remove('hero') // 方向未指定 → フェード退場（x は凍結）
+    time.tick(64)
+    expect(layer.getLightPosition()).toEqual(mid)
+  })
+
+  it('退場フェード中に同じキャラが再 show されたら、追従を再開する', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    chars.show('hero', 'normal', '左', '/assets', { instant: true })
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const left = chars.getCurrentPosition('hero')!
+    chars.remove('hero') // フェード退場開始（Map には残る）
+    time.tick(32)
+    expect(layer.getLightPosition()).toEqual(left)
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    time.tick(16)
+    const right = chars.getCurrentPosition('hero')!
+    expect(right.x).not.toBe(left.x)
+    expect(layer.getLightPosition()).toEqual(right)
+  })
+
+  it('歩行退場の途中で再度 remove（即時）されても、光は最初の退場開始位置のまま', () => {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const standing = chars.getCurrentPosition('hero')!
+    chars.remove('hero', { exitDirection: 'Shimote' })
+    const internal = chars as unknown as {
+      animTicker: { update: () => void } | null
+      elapsedMs: number
+    }
+    internal.elapsedMs += 700
+    internal.animTicker?.update()
+    expect(chars.getCurrentPosition('hero')!.x).not.toBe(standing.x)
+    chars.remove('hero', { instant: true }) // 退場中の再 remove（スキップ等）
+    expect(layer.getLightPosition()).toEqual(standing)
+  })
 })

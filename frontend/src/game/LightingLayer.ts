@@ -92,6 +92,12 @@ export class LightingLayer extends Container {
     super()
     // 光の演出は入力を奪わない（誤タップで本文が進むのを防ぐ、他の演出レイヤーと同じ規律）。
     this.eventMode = 'none'
+    // 対象が退場を始めた時点の立ち位置を CharacterLayer から同期で受け取る (#992)。16ms tick の
+    // 取りこぼし（スキップで登場→退場が 1 tick 内に済む等）に左右されず、光を立っていた位置に残す。
+    // モック CharacterLayer（単体テスト）は持たないので存在確認する。
+    characterLayer.setExitStartListener?.((name, pos) => {
+      if (this.state && this.state.target === name) this.lastTargetPos = { x: pos.x, y: pos.y }
+    })
     const canvas = buildSpotlightGradientCanvas()
     if (canvas) {
       const sprite = new Sprite(Texture.from(canvas))
@@ -186,7 +192,8 @@ export class LightingLayer extends Container {
 
   /**
    * 光が今いる位置（レイヤー座標）。消灯中は `null`。**テスト用**の副作用のない読み取りで、
-   * ticker/`set()` が最後に解決した位置を返す（本番コードは使わない）。
+   * ticker/`set()`/退場通知が最後に解決した位置を返す（本番コードは使わない）。tick の後に対象が
+   * 動いた場合は次の tick まで古い値を返す。
    */
   getLightPosition(): { x: number; y: number } | null {
     if (!this.state) return null

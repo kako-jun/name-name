@@ -145,9 +145,23 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
     await r.playScript([{ type: 'advance' }])
     expect(r.getSnapshot().spotlight).not.toBeNull()
 
+    // 対象が立っている状態から遷移（clearForSceneTransition で退場）しても、光は最後の位置に残る
+    const ri = internals<
+      RendererInternals & {
+        characterLayer: {
+          show(...args: unknown[]): void
+          getCurrentPosition(name: string): { x: number; y: number } | null
+        }
+        lightingLayer: { getLightPosition(): { x: number; y: number } | null }
+      }
+    >(r)
+    ri.characterLayer.show('alice', 'normal', '右', '/assets', { instant: true })
+    const standing = ri.characterLayer.getCurrentPosition('alice')!
+
     r.jumpToScene('b')
 
     expect(r.getSnapshot().spotlight).toEqual({ target: 'alice', color: '#ffffff', radius: 0.2 })
+    expect(ri.lightingLayer.getLightPosition()).toEqual(standing)
   })
 
   it('3b: 新規開始（startFrom）は文脈を捨てるので、点灯中でも消灯して始まる', async () => {

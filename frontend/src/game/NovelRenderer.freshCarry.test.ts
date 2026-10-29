@@ -148,7 +148,7 @@ describe('startFrom: carryPolicyFor の表の全項目（進行は持ち越し�
     expect(s.paperDollOutline).toEqual({ color: '#abcdef', thickness: 3 })
     expect(s.currentBgmPath).toBe('bgm.mp3')
     // スポットライトは背景板・大道具・幕と同じ持続規律で持ち越す (#992)。カメラは進行でも既定へ戻る
-    expect(s.spotlight).not.toBeNull()
+    expect(s.spotlight).toEqual({ target: 'せお', color: '#ffffff', radius: 0.3 })
     expect(s.cameraMode).toBe('Novel')
   })
 

@@ -3978,6 +3978,13 @@ export class CharacterLayer extends Container {
       return
     }
     const instant = options?.instant === true
+    // 退場を始める時点の立ち位置を同期で通知する (#992)。スポットライトは自前の 16ms tick ではなく
+    // これで「最後に立っていた位置」を確定する（スキップで 1 tick の間に登場→退場が済んでも、
+    // 歩行・フェード・即時のどれでも同じ位置になる）。既に退場中の再 remove は通知しない。
+    if (this.exitStartListener && !state.renderOnly && !this.isExiting(state)) {
+      const pos = this.getCurrentPosition(character)
+      if (pos) this.exitStartListener(character, pos)
+    }
     // 読み込み待ちの間に孤児化した同キャラの旧ポーズも一緒に落とす (#952)。最新の遷移の `.then` は
     // この退場で新 state が退場中になると何もしなくなるため、ここで片付ける。
     this.retireOrphanTransitions(
@@ -4056,6 +4063,15 @@ export class CharacterLayer extends Container {
       })
     }
     return result
+  }
+
+  /** 退場開始の通知先 (#992)。`LightingLayer` が登録する（1 つだけ）。 */
+  private exitStartListener: ((name: string, pos: { x: number; y: number }) => void) | null = null
+
+  setExitStartListener(
+    listener: ((name: string, pos: { x: number; y: number }) => void) | null
+  ): void {
+    this.exitStartListener = listener
   }
 
   /**
