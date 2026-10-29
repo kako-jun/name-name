@@ -166,8 +166,8 @@ export class VideoLayer extends Container {
       muted: mute,
       crossorigin: true,
     })
-    // dynamic: true が必須 (#980)。Sprite は dynamic なテクスチャの 'update'（動画のサイズ確定・フレーム更新）しか
-    // 購読しない。false のままだと、メタデータ到着前（0x0）に描画された Sprite が再描画対象に戻らず黒いまま止まる
+    // dynamic: true が必須 (#980)。Sprite は dynamic なテクスチャの 'update'（サイズ確定＝source の resize）しか
+    // 購読しない（毎フレームの更新負荷が増えるわけではない）。false のままだと、メタデータ到着前（0x0）に描画された Sprite が再描画対象に戻らず黒いまま止まる
     // （キャッシュが無い初回読み込みで起きる）。
     const texture = new Texture({ source, dynamic: true })
     const sprite = new Sprite(texture)
