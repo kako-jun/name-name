@@ -1391,6 +1391,13 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
     if let Some(rest) = content.strip_prefix("天候:") {
         return parse_weather_directive(rest);
     }
+    // [舞台回転] / [舞台回転: 時間=900] — 回転舞台 (#704 第2弾)。他の既存タグと prefix 衝突しない。
+    if content == "舞台回転" {
+        return Some(Event::StageTurn { duration_ms: None });
+    }
+    if let Some(rest) = content.strip_prefix("舞台回転:") {
+        return Some(parse_stage_turn_directive(rest));
+    }
     // [床: path] / [床: path, 高さ=0.3] / [床: なし] — 床材質 (#706 第2弾)。他の既存タグと prefix 衝突しない。
     if let Some(rest) = content.strip_prefix("床:") {
         return parse_floor_directive(rest);
@@ -2090,6 +2097,33 @@ fn parse_weather_directive(content: &str) -> Option<Event> {
         }
     }
     Some(Event::Weather { kind, intensity })
+}
+
+/// 先頭の `+` を許す、数字だけの文字列か（`u32::from_str` / `u64::from_str` が受け入れる範囲と同じ）。
+fn is_unsigned_digits(t: &str) -> bool {
+    let d = t.strip_prefix('+').unwrap_or(t);
+    !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `[舞台回転: 時間=900]` の本体を分解する (#704 第2弾)。
+/// `時間`/`duration` は `=`（全角 `＝` も可）または `:` 区切りの非負整数（ms）。0〜5000 にクランプし、
+/// 数値でない・負値・小数・空は無視（既定 = `None`）。複数あれば最後の有効値。未知のキーは無視。
+fn parse_stage_turn_directive(content: &str) -> Event {
+    let mut duration_ms: Option<u32> = None;
+    for raw in content.split(',') {
+        if let Some((k, v)) = raw.trim().split_once(['=', '＝', ':']) {
+            if matches!(k.trim(), "時間" | "duration") {
+                let t = v.trim();
+                match t.parse::<u64>() {
+                    Ok(n) => duration_ms = Some(n.min(u64::from(STAGE_TURN_MAX_MS)) as u32),
+                    // u64 を超える桁数の非負整数もクランプ（上限）として扱う。
+                    Err(_) if is_unsigned_digits(t) => duration_ms = Some(STAGE_TURN_MAX_MS),
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+    Event::StageTurn { duration_ms }
 }
 
 /// `[床: path]` / `[床: path, 高さ=0.3]` / `[床: なし]` の本体を分解する (#706 第2弾)。
@@ -3806,6 +3840,7 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     "舞台前面",
     "天候",
     "床",
+    "舞台回転",
     "動画退場",
     "動画",
     "イベント絵終了",
