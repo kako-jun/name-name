@@ -152,6 +152,8 @@ export class WallLayer extends Container {
    * 現在と異なる壁・壁なしからの復元では動画を頭から再生し直す（再生位置は保存しない、ADR-0002）。同一の壁ならそのまま流し続ける。
    */
   restore(state: WallState | null, assetBaseUrl: string): void {
+    // 復元は最終状態へ即時（進行中の回転舞台 (#704 第2弾) は畳む）。
+    this.turn.interrupt()
     if (!state) {
       this.clear()
       return

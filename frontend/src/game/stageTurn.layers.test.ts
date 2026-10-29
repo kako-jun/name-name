@@ -555,6 +555,20 @@ describe('割り込み', () => {
     expect(s.wall.hasImage()).toBe(true)
   })
 
+  it('壁・床の restore は、同じ状態への復元でも回転を畳む（再読み込みはしない）', async () => {
+    for (const act of [
+      (s: Stage) => s.wall.restore({ path: 'B.png', loop: true, mute: true }, '/a'),
+      (s: Stage) => s.floor.restore({ path: 'B.png', height: 0.25 }, '/a'),
+    ]) {
+      const s = await setup()
+      await s.turn(1000)
+      s.time.tick(200)
+      act(s)
+      expect(s.ctrl.run).toBeNull()
+      expect(hosts(s).every((h) => h === undefined)).toBe(true)
+    }
+  })
+
   it('動画書き出しの開始で最終状態へ畳む（タイマーも止まる）', async () => {
     const s = await setup()
     await s.turn(1000)

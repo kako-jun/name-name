@@ -180,6 +180,8 @@ export class FloorLayer extends Container {
    * 差し替わった）ときは show し直す。
    */
   restore(state: FloorState | null, assetBaseUrl: string): void {
+    // 復元は最終状態へ即時（進行中の回転舞台 (#704 第2弾) は畳む）。
+    this.turn.interrupt()
     if (!state) {
       this.clear()
       return
