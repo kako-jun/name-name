@@ -54,9 +54,16 @@ function advance(box: DialogBox, ms: number): void {
     internals(box).ticker.update(clock)
   }
 }
+/**
+ * 基準時刻を現在の clock に揃え、以降の update の経過時間を 0 から数える。
+ * Ticker の lastTime は構築時の performance.now() なので、揃えないと最初の update で
+ * 実時間との差（maxElapsedMS=100ms で頭打ち）ぶん typewriter が進み、実行環境の速さで結果が変わる。
+ */
 function prime(box: DialogBox): void {
+  const ticker = internals(box).ticker
   clock += 1000
-  internals(box).ticker.update(clock) // 初回の巨大 delta を捨てる
+  ticker.lastTime = clock
+  ticker.update(clock)
   const t = (box as unknown as { typewriter: { acc: number } }).typewriter
   t.acc = 0
 }

@@ -35,7 +35,7 @@ import { DialogBox } from './DialogBox'
 import { TopDownRenderer } from './TopDownRenderer'
 import { RaycastRenderer } from './RaycastRenderer'
 import { NovelRenderer } from './NovelRenderer'
-import { FF_DIALOG_MS_PER_CHAR } from './ffDialog'
+import { FF_DIALOG_MS_PER_CHAR, computeFfDialogRect } from './ffDialog'
 import type { Ticker } from 'pixi.js'
 
 interface Internals {
@@ -195,6 +195,7 @@ describe.each([
 ] as Array<[string, () => TopDownRenderer | RaycastRenderer]>)(
   '%s.init が作る会話窓の dialog_style (#840)',
   (_name, create) => {
+    let screen = { w: 0, h: 0 }
     async function initWith(style: string | null | undefined, set = true): Promise<DialogBox> {
       const r = create()
       const i = r as unknown as Internals
@@ -208,6 +209,7 @@ describe.each([
       if (set) r.setDialogStyle(style)
       await r.init(document.createElement('div'))
       const box = i.dialogBox!
+      screen = { w: i.screenWidth, h: i.screenHeight }
       ;(box as unknown as { ticker: Ticker }).ticker.stop()
       box.show('', 'こんにちは')
       return box
@@ -216,6 +218,9 @@ describe.each([
     it("'ff' なら FF 風の窓（ページ情報がある・上部固定）", async () => {
       const box = await initWith('ff')
       expect(box.getPageInfo().pages).toBeGreaterThan(0)
+      expect(screen.h).toBeGreaterThan(0)
+      expect(box.getBoxRect().y).toBe(computeFfDialogRect(screen.w, screen.h).y)
+      expect(box.getBoxRect().y).toBeLessThan(screen.h / 2)
       box.dispose()
     })
     it("'adv'・'novel'・未知値・null・未指定は従来の窓（ff にならない）", async () => {
