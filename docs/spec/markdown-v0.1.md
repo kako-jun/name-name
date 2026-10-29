@@ -791,6 +791,7 @@ TUI版も `[場面転換]` で暗転を解除する。ただしTUI版は背景�
 - **単一スロット**（幕は1枚のみ）。`BackgroundBoard`/`Prop` のような加算的な蓄積はしない——新しい `[幕: ...]` は既存の幕を即座に置き換える。
 - 昇降アニメーション（既定 600ms）は背景板の「上から降りてくる」演出（#683）と同じ設計パターン: 降ろす＝上から降りてくる（`novelLayout.computeBoardSlideInOffset`、easeOut）をそのまま流用し、上げる＝上へ消えていく（`novelLayout.computeCurtainRiseOffset`、easeIn。昇降で異なるイージングを使い見た目に差を付ける）。goBack/seekTo/セーブ復元/任意局面起動時の復元はこのアニメーションを起こさず、即座に最終位置へ配置する（ADR-0002: 演出の中間状態を復元しない）。
 - **スキップ中は昇降も即時**（#991）: スキップ（Skip ボタン）中に処理される幕の降ろす・上げる・手前にキャラ（カーテンコール配置）は、アニメーションを起こさず、降ろしは最終位置へ即時に置き、上げるは即座に消す。他の演出（立ち絵の入退場・板回転）のスキップ即時化と同じ流儀。通常再生のアニメーションは変わらない。スキップに入った時点ですでに進行中だった昇降は畳まず最後まで続く（立ち絵の歩行と同じ。ただし直後にスキップ中の幕が来ればその幕が単一スロットを即時に置き換える）。保存される状態（`curtain`）は変わらない。
+- 即時化するのはスキップ中だけ。prefers-reduced-motion・動画書き出し中でも、幕は通常どおり昇降する（板回転と違い即時化しない）。ノベルモードでも昇降する。
 - クリアは既存 `[場面転換]`（`Event::SceneTransition`）にまとめる。専用のクリアディレクティブは無く、通常のシーン間ジャンプ（選択肢の `jump:` 等）では持ち越される（`BackgroundBoard`/`Prop` と同じ規律）。
 - 配置は depth 配置・カメラ射影を持たない全画面カバーフィット（`novelLayout.computeCoverFit`、単一スロット背景と同じ配置方式）。`BackgroundBoard`/`Prop` の中心アンカー・カメラ射影込み配置（`computeBoardPlacement`）とは異なる。
 - レイヤー順（z-order）は `characters_in_front` に応じて2値: `false`（既定）は `PropLayer` の直後・`EventImageLayer` の手前（最前面）、`true` は `BackgroundBoardLayer` の直後・`CharacterLayer` の手前。`NovelRenderer` が directive 処理のたびに `stage.setChildIndex()` 相当の操作で位置を差し替える（`docs/architecture.md`「シアターモード構想」→「レイヤーモデル」節参照）。
