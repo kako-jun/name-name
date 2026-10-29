@@ -138,13 +138,14 @@ export class CurtainLayer extends Container {
   raise(opts?: { instant?: boolean }): void {
     this.state = null
     const sprite = this.sprite
+    // 進行中のロードを無効化する（sprite が未生成＝読み込み待ちでも先に世代を進めないと、
+    // 読み込み完了後に幕が降りてくる幽霊幕になる）。
+    ++this.generation
     if (opts?.instant) {
-      ++this.generation
       this.disposeCurrentSprite()
       return
     }
     if (!sprite) return
-    ++this.generation // 進行中のロードを無効化する
     this.stopInterval()
     this.phaseStartedAtMs = this.time.now()
     // raise() 呼び出し時点の実際の位置を現在オフセット（概ね -1〜0）へ変換し、
