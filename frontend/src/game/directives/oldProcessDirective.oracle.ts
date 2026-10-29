@@ -152,7 +152,7 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
       return true
     }
     if (event === 'CurtainUp') {
-      w.curtainLayer.raise()
+      w.curtainLayer.raise({ instant: w.env.skipMode })
       return true
     }
     return false
@@ -305,7 +305,9 @@ export function oldProcessDirective(event: Event, w: OldWorld): boolean {
   if ('Curtain' in event) {
     const curtain = event.Curtain
     w.hooks.setCurtainZOrder(curtain.characters_in_front)
-    w.curtainLayer.show(curtain.path, curtain.characters_in_front, w.env.assetBaseUrl)
+    w.curtainLayer.show(curtain.path, curtain.characters_in_front, w.env.assetBaseUrl, {
+      instant: w.env.skipMode,
+    })
     return true
   }
   if ('Bgm' in event) {
