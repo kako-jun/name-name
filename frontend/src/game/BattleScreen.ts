@@ -328,7 +328,7 @@ interface CommandButton {
 
 /**
  * 戦闘で使うテクスチャの縮小・拡大フィルタを設定する (#760)。
- * RPG の Pixi は antialias:false・resolution 1 で、400px 級の画像をミップマップ無しで小さく縮小するとギザギザになる。
+ * 本編の RPG の Pixi は antialias:false・resolution 1（field-sample は DPR 対応だが縮小の事情は同じ）で、400px 級の画像をミップマップ無しで小さく縮小するとギザギザになる。
  * 既定は mipmap 生成＋linear で縮小をなめらかにする。`pixelArt`（frontmatter `pixel_art`・#466）なら nearest のまま
  * （ドット絵を保つ。mipmap も作らない）。GPU へ初回アップロードされる前（Assets.load 直後）に呼ぶこと。
  * フィールドのレイキャストのテクスチャには触れない。

@@ -125,6 +125,7 @@ import {
 } from './config'
 import defaultConfigText from './teramachi.sample.json?raw'
 import { buildBattleMenu } from './battleMenu'
+import { fieldRenderResolution } from './renderResolution'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
@@ -433,6 +434,9 @@ async function main(): Promise<void> {
     height: scene.mask.height,
     background: 0x000000,
     antialias: false,
+    // #53: 高 DPR で canvas が CSS 拡大されてぼやけないよう、描画解像度を表示密度に合わせる（上限あり。起動時の DPR・起動シーンの大きさで固定）
+    resolution: fieldRenderResolution(window.devicePixelRatio, scene.mask.width, scene.mask.height),
+    autoDensity: true,
   })
   $('stage').appendChild(app.canvas as HTMLCanvasElement)
 

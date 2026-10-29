@@ -780,8 +780,11 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         'battle.commandLayout "cross" は layout "side" のときだけ効きます（"front" では無視されます）'
       )
   }
-  if (b.motion !== undefined && b.presentation !== 'ff')
-    warnings.push('battle.motion は presentation "ff" のときだけ効きます（"dq" では無視されます）')
+  // motion は ff かつ side のときだけ効く。layout 未指定は side 扱い
+  if (b.motion !== undefined && (b.presentation !== 'ff' || b.layout === 'front'))
+    warnings.push(
+      'battle.motion は presentation "ff" かつ layout "side" のときだけ効きます（それ以外では無視されます）'
+    )
   warnings.push(...walkWarnings)
   warnings.push(...npcWarnings)
   // エフェクト重ね (#936)。不正な種類は読み込みを止めず警告にする（画像 URL は他の画像と同じく assetBaseUrl 基準）
