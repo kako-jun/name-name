@@ -13,6 +13,7 @@ import {
   type BattleTransitionMode,
 } from '../game/battleTransition'
 import type { BattleOutcome } from '../game/loot'
+import type { FieldTalkState } from '../game/fieldNpc'
 
 /** `FieldBattleTransition` のうち配線が使う部分（テストで差し替えられるように切り出す） */
 export interface EncounterTransitionPlayer {
@@ -72,4 +73,23 @@ export function endBattleWithTransition(args: {
   }
   player.setParams(battleTransitionParams(mode))
   player.playExit(width, height, outcome, close, () => {})
+}
+
+/**
+ * 会話・ワープ・決定キー・吹き出しの「取り込み中」判定用の状態。戦闘の開始・終了の演出中は戦闘画面が無い間も
+ * 「戦闘中」として扱い、その間に会話やワープが始まらないようにする (sit-by-me#55)。
+ */
+export function buildTalkState(s: {
+  battle: boolean
+  battleTransitionActive: boolean
+  talking: boolean
+  transition: boolean
+  warping: boolean
+}): FieldTalkState {
+  return {
+    battle: s.battle || s.battleTransitionActive,
+    talking: s.talking,
+    transition: s.transition,
+    warping: s.warping,
+  }
 }

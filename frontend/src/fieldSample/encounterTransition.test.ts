@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { beginBattleWithTransition, endBattleWithTransition } from './encounterTransition'
+import {
+  beginBattleWithTransition,
+  buildTalkState,
+  endBattleWithTransition,
+} from './encounterTransition'
+import { canStartTalk, canStartWarp, decideTalkKey } from '../game/fieldNpc'
+import { canStartBattleNow } from '../game/fieldWarp'
 import type { EncounterTransitionPlayer } from './encounterTransition'
 import { TRANSITION_MOSAIC_MAX_SIZE } from '../game/battleTransition'
 
@@ -98,7 +104,51 @@ describe('endBattleWithTransition (sit-by-me#55)', () => {
     const close = vi.fn()
     endBattleWithTransition({ ...base, mode: 'ff-mosaic', player, outcome: 'escaped', close })
     expect(close).not.toHaveBeenCalled()
+    expect(player.params[0].mosaicMaxSize).toBe(TRANSITION_MOSAIC_MAX_SIZE)
     player.exits[0]()
     expect(close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('buildTalkState: 演出中は会話・ワープ・決定キー・強制エンカウントを始めない (sit-by-me#55)', () => {
+  const idle = { battle: false, talking: false, transition: false, warping: false }
+  const npc = { id: 'gate', x: 10, y: 20 }
+
+  it('演出中は battle 扱いで取り込み中になる', () => {
+    const s = buildTalkState({ ...idle, battleTransitionActive: true })
+    expect(canStartTalk(s)).toBe(false)
+    expect(canStartWarp(s)).toBe(false)
+    expect(canStartBattleNow(s)).toBe(false)
+  })
+
+  it('演出中でなければ従来どおり暇', () => {
+    const s = buildTalkState({ ...idle, battleTransitionActive: false })
+    expect(canStartTalk(s)).toBe(true)
+    expect(canStartWarp(s)).toBe(true)
+    expect(canStartBattleNow(s)).toBe(true)
+  })
+
+  it('演出中は NPC 正面の決定キーでも会話が始まらない', () => {
+    const base = {
+      code: 'Space',
+      ctrl: false,
+      alt: false,
+      meta: false,
+      repeat: false,
+      focus: 'other' as const,
+      npcs: [npc],
+      pos: { x: 10, y: 40 },
+      facing: 'up' as const,
+    }
+    const busy = decideTalkKey({
+      ...base,
+      state: buildTalkState({ ...idle, battleTransitionActive: true }),
+    })
+    expect(busy).toEqual({ action: 'ignore' })
+    const free = decideTalkKey({
+      ...base,
+      state: buildTalkState({ ...idle, battleTransitionActive: false }),
+    })
+    expect(free).toEqual({ action: 'start', npcId: 'gate' })
   })
 })

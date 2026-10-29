@@ -128,7 +128,11 @@ import { buildBattleMenu } from './battleMenu'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
-import { beginBattleWithTransition, endBattleWithTransition } from './encounterTransition'
+import {
+  beginBattleWithTransition,
+  buildTalkState,
+  endBattleWithTransition,
+} from './encounterTransition'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -562,12 +566,14 @@ async function main(): Promise<void> {
   let talking: NpcRuntime | null = null
   /** クリックした NPC へ近づいている最中（着いたら話しかける。キー入力・別の場所のクリックで取り消す） */
   let approach: { id: string; stuckMs: number } | null = null
-  const talkState = () => ({
-    battle: !!battle,
-    talking: !!talking,
-    transition: !!transition,
-    warping: !!warpRun,
-  })
+  const talkState = () =>
+    buildTalkState({
+      battle: !!battle,
+      battleTransitionActive: battleTransition.active,
+      talking: !!talking,
+      transition: !!transition,
+      warping: !!warpRun,
+    })
   /** 歩きの入力を全部捨てる。押しっぱなしの pointer capture も解放する（戦闘・ワープの開始時） */
   const releaseWalkInput = (): void => {
     keys.up = keys.down = keys.left = keys.right = false
@@ -580,7 +586,7 @@ async function main(): Promise<void> {
   }
   /** 感情吹き出しを出す (#937/#946)。`api.showEmotion` と脚本の `[感情:]`（emotionHost）の共通の入口 */
   const showEmotion = (target: string, kind: string, durationMs?: number): boolean => {
-    if (!emotionLayer || battle) return false
+    if (!emotionLayer || battle || battleTransition.active) return false
     if (!isEmotionTarget(target)) return false
     // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
     if (
@@ -968,16 +974,7 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (
-      !canStartBattleNow({
-        battle: !!battle,
-        transition: !!transition,
-        warping: !!warpRun,
-        talking: !!talking,
-      }) ||
-      battleTransition.active
-    )
-      return
+    if (!canStartBattleNow(talkState())) return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
     const r = advanceEncounter(
