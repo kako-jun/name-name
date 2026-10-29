@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Texture, TextureSource } from 'pixi.js'
-import { FieldAcrylicFigure, fitAcrylicGeometry } from './acrylicFigure'
+import { FieldAcrylicFigure, createFieldStands, fitAcrylicGeometry } from './acrylicFigure'
 import { resolveAcrylicParams } from '../game/spriteStyle'
 
 const sized = (w: number, h: number): Texture =>
@@ -40,6 +40,26 @@ describe('fitAcrylicGeometry', () => {
       }
     }
   })
+  it('台座・影の大きさは表示高さだけで決まる（横長のコマでも縦長と同一）', () => {
+    for (const target of [48, 96]) {
+      const ref = fitAcrylicGeometry(32, 48, target, params)!
+      for (const [w, h] of [
+        [48, 48],
+        [400, 300],
+        [500, 300],
+        [900, 300],
+      ]) {
+        const fit = fitAcrylicGeometry(w, h, target, params)!
+        expect(fit.size).toBeCloseTo(ref.size, 10)
+        expect(fit.geometry.base).toEqual(ref.geometry.base)
+        expect(fit.geometry.shadow).toEqual(ref.geometry.shadow)
+        // 絵の高さ・足元（下端）も同じで、幅だけ縦横比どおり
+        expect(fit.geometry.sprite.height).toBeCloseTo(ref.geometry.sprite.height, 10)
+        expect(fit.geometry.sprite.y).toBeCloseTo(ref.geometry.sprite.y, 10)
+        expect(fit.geometry.sprite.width).toBeCloseTo((w / h) * fit.geometry.sprite.height, 10)
+      }
+    }
+  })
   it('寸法・高さが不正なら null', () => {
     expect(fitAcrylicGeometry(0, 48, 64, params)).toBeNull()
     expect(fitAcrylicGeometry(32, 48, 0, params)).toBeNull()
@@ -68,6 +88,31 @@ describe('FieldAcrylicFigure', () => {
     expect(L.acrylicPlate!.visible).toBe(true)
   })
 
+  it('足元の位置合わせ: pivot は絵の下端中央、影は足元に置く', () => {
+    const f = make()
+    const tex = sized(32, 48)
+    f.update(tex, 64, false, 300, 200)
+    const fit = fitAcrylicGeometry(32, 48, 64, resolveAcrylicParams())!
+    const g = fit.geometry
+    expect(f.display.pivot.x).toBeCloseTo(fit.size / 2, 10)
+    expect(f.display.pivot.y).toBeCloseTo(g.sprite.y + g.sprite.height, 10)
+    const sh = f.layers.acrylicShadow!
+    expect(sh.position.x).toBeCloseTo(g.sprite.x + g.sprite.width / 2, 10)
+    expect(sh.position.y).toBeCloseTo(g.sprite.y + g.sprite.height + g.liftPx, 10)
+    // 台座は絵の下端（足元）より下に出る
+    expect(g.base!.cy).toBeGreaterThan(g.sprite.y + g.sprite.height)
+  })
+
+  it('横長のコマに変わっても台座の大きさ・位置は変わらない', () => {
+    const f = make()
+    f.update(sized(32, 48), 96, false, 0, 0)
+    const w0 = f.layers.acrylicBase!.width
+    const x0 = f.layers.acrylicBase!.x
+    f.update(sized(500, 300), 96, false, 0, 0)
+    expect(f.layers.acrylicBase!.width).toBeCloseTo(w0, 10)
+    expect(f.layers.acrylicBase!.x).toBeCloseTo(x0, 10)
+  })
+
   it('左右反転では全体が足元で反転し、影は光の向き（右）に倒れたまま', () => {
     const f = make()
     f.update(sized(32, 48), 64, false, 100, 100)
@@ -90,6 +135,36 @@ describe('FieldAcrylicFigure', () => {
     expect(f.layers.acrylicPlate!.texture).not.toBe(first)
   })
 
+  it('新しい絵の板が作れなければ、前の絵の板・影を残さず隠す。後のコマで作れたら出す', () => {
+    const bad = sized(10, 20)
+    const f = new FieldAcrylicFigure(undefined, {
+      makePlate: (t) => (t === bad ? null : fakePlate(t)),
+      makeBase: fakeBase as never,
+    })
+    f.update(sized(32, 48), 64, false, 0, 0)
+    expect(f.layers.acrylicPlate!.visible).toBe(true)
+    expect(f.layers.acrylicShadow!.visible).toBe(true)
+    f.update(bad, 64, false, 0, 0)
+    expect(f.layers.acrylicPlate!.visible).toBe(false)
+    expect(f.layers.acrylicShadow!.visible).toBe(false)
+    f.update(sized(32, 48), 64, false, 0, 0)
+    expect(f.layers.acrylicPlate!.visible).toBe(true)
+    expect(f.layers.acrylicShadow!.visible).toBe(true)
+  })
+
+  it('最初の絵で板が作れなくても、後のコマで板・影が作られる', () => {
+    const bad = sized(10, 20)
+    const f = new FieldAcrylicFigure(undefined, {
+      makePlate: (t) => (t === bad ? null : fakePlate(t)),
+      makeBase: fakeBase as never,
+    })
+    f.update(bad, 64, false, 0, 0)
+    expect(f.layers.acrylicPlate).toBeNull()
+    f.update(sized(32, 48), 64, false, 0, 0)
+    expect(f.layers.acrylicPlate!.visible).toBe(true)
+    expect(f.layers.acrylicShadow!.visible).toBe(true)
+  })
+
   it('板・台座を作れない環境でも例外なく Graphics で台座を描く', () => {
     const f = new FieldAcrylicFigure(undefined, { makePlate: () => null, makeBase: () => null })
     f.update(sized(32, 48), 64, false, 50, 50)
@@ -103,5 +178,17 @@ describe('FieldAcrylicFigure', () => {
     f.update(sized(32, 48), 64, false, 50, 50)
     f.update(sized(32, 48), 0, false, 50, 50)
     expect(f.display.visible).toBe(false)
+  })
+})
+
+describe('createFieldStands（main.ts の配線）', () => {
+  it('未指定は何も作らない（従来描画）', () => {
+    expect(createFieldStands(undefined, true)).toEqual({ player: null, companion: null })
+  })
+  it('acrylic は主人公を作り、同行者は設定があるときだけ作る', () => {
+    const a = createFieldStands('acrylic', false)
+    expect(a.player).toBeInstanceOf(FieldAcrylicFigure)
+    expect(a.companion).toBeNull()
+    expect(createFieldStands('acrylic', true).companion).toBeInstanceOf(FieldAcrylicFigure)
   })
 })

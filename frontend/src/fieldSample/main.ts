@@ -3,7 +3,7 @@
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
-import { FieldAcrylicFigure } from './acrylicFigure'
+import { createFieldStands } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
 import {
   WORLD_Z,
@@ -479,9 +479,9 @@ async function main(): Promise<void> {
   // 同行者は主人公の後ろ（y が大きければ手前）に並べ替える。前面・マーカーは常に上
   world.sortableChildren = true
   // アクスタ (sit-by-me#58): `spriteStyle: "acrylic"` のときだけ、絵の直前（同じ zIndex なら奥）に板・台座・影の層を挿す。未指定は何も足さない（従来の描画）
-  const playerStand = config.spriteStyle === 'acrylic' ? new FieldAcrylicFigure() : null
-  const companionStand =
-    config.spriteStyle === 'acrylic' && config.companion ? new FieldAcrylicFigure() : null
+  const stands = createFieldStands(config.spriteStyle, !!config.companion)
+  const playerStand = stands.player
+  const companionStand = stands.companion
   if (playerStand) world.addChildAt(playerStand.display, world.getChildIndex(player))
   if (companionStand) world.addChildAt(companionStand.display, world.getChildIndex(companionSprite))
   scrollSprite.zIndex = WORLD_Z.scroll
@@ -1386,6 +1386,8 @@ async function main(): Promise<void> {
   const dispose = (): void => {
     disposed = true
     battleTransition.cancel()
+    playerStand?.destroy()
+    companionStand?.destroy()
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
     window.removeEventListener('keydown', onTalkKey)
