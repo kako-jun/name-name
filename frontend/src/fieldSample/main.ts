@@ -427,6 +427,9 @@ async function main(): Promise<void> {
     height: scene.mask.height,
     background: 0x000000,
     antialias: false,
+    // #53: 高 DPR で canvas が CSS 拡大されてぼやけないよう、描画解像度を表示密度に合わせる
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true,
   })
   $('stage').appendChild(app.canvas as HTMLCanvasElement)
 
