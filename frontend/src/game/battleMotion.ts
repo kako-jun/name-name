@@ -12,7 +12,7 @@
  * 距離はすべて「その枠の一辺」を 1 とする比（px は画面側が掛ける）。前後の向きも持たない:
  * `forward` は「相手陣営へ向かう」正の量、`recoil` は「相手陣営から離れる」正の量で、
  * 左右への写像（味方=右陣営は forward が -x、敵は +x）は画面側が決める。
- * 敵の通常攻撃だけは、被弾モザイク（hitMosaicMs > 0）が有効なとき踏み出さず自己モザイクで知らせる（BattleScreen が決める。無効なら従来どおり踏み出す）。
+ * 敵の通常攻撃だけは、被弾モザイク（hitMosaicMs > 0 かつ hitMosaicMaxSize >= 2）が有効なとき踏み出さず自己モザイクで知らせる（BattleScreen が決める。無効なら従来どおり踏み出す）。
  */
 import type { BattleActionEvent, BattleHit, BattleHitKind } from './battleEngine'
 
