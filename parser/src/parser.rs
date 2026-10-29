@@ -653,6 +653,21 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             continue;
         }
 
+        // `[イベント]` ブロックの外に書かれた `[NPC移動: …]` `[戦闘: …]`（ブロック内専用のコロン付きコマンド）。
+        // 頭が既知なので「未知」にはならないが、トップレベルでは解釈されず消える。ブロック内専用の別文言で
+        // 警告して 1 行読み捨てる (#1001)。コロンなしの `[戦闘 id]`（マスターデータのブロック）は対象外。
+        // 下の NPC ブロック判定（`[NPC` 始まり）が `[NPC移動: x → @1,2]` を名前「移動: x →」の NPC と
+        // 誤読して [/NPC] まで飲み込むので、それより前で止める。
+        if let Some(cmd) = event_only_command(trimmed) {
+            emit_warning(&format!(
+                "[name-name-parser] warning: {} 行目は [イベント] ブロック内専用の [{cmd}:] のため読み捨てた: {}",
+                pos as i64 + 1 + line_base,
+                truncate_for_warning(trimmed)
+            ));
+            pos += 1;
+            continue;
+        }
+
         // NPC block: [NPC name @x,y 色=#rrggbb (id=xxx)? (sprite=path)? (frames=N)?] ... [/NPC]
         if let Some(header) = trimmed.strip_prefix("[NPC") {
             if header.ends_with(']') {
@@ -704,6 +719,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             if header.ends_with(']') {
                 let name = header.trim_end_matches(']').trim().to_string();
                 if !name.is_empty() {
+                    let event_open_line = pos as i64 + 1 + line_base;
                     pos += 1;
                     let mut commands: Vec<EventCommand> = Vec::new();
                     let mut pending_dialog_char: Option<String> = None;
@@ -925,9 +941,9 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                     if pos < len {
                         pos += 1; // skip [/イベント]
                     } else {
-                        eprintln!(
-                            "[name-name] 警告: [イベント {name}] に対応する [/イベント] がありません"
-                        );
+                        emit_warning(&format!(
+                            "[name-name-parser] warning: {event_open_line} 行目の [イベント {name}] に対応する [/イベント] がありません"
+                        ));
                     }
                     current_events.push(Event::RpgEvent { name, commands });
                     continue;
@@ -1364,10 +1380,11 @@ fn parse_events_only(
         EventImageTransition::Pixelate => "event_image_transition: \"pixelate\"\n",
         EventImageTransition::Fade => "",
     };
-    let fake = format!(
-        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n{transition_line}---\n\n## tmp-1: tmp\n\n{input}"
+    let prefix = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"tmp\"\n{transition_line}---\n\n## tmp-1: tmp\n\n"
     );
-    let header_lines = fake[..fake.len() - input.len()].matches('\n').count() as i64;
+    let header_lines = prefix.matches('\n').count() as i64;
+    let fake = format!("{prefix}{input}");
     let doc = parse_with_line_base(&fake, first_line - 1 - header_lines);
     if let Some(chapter) = doc.chapters.first() {
         if let Some(scene) = chapter.scenes.first() {
@@ -3936,6 +3953,15 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     "ジョブ",
     "パーティ",
 ];
+
+/// `[イベント]` ブロック内でだけ解釈されるコロン付きコマンド（`[NPC移動: …]` `[戦闘: …]`）なら、その名前を返す。
+/// コロンなしの `[戦闘 id]`（マスターデータのブロック）や `[NPC …]`（NPC ブロック）は含まない。
+fn event_only_command(line: &str) -> Option<&'static str> {
+    let rest = line.strip_prefix('[')?;
+    ["NPC移動", "戦闘"]
+        .into_iter()
+        .find(|name| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
+}
 
 fn is_known_directive_head(line: &str) -> bool {
     let Some(rest) = line.strip_prefix('[') else {
@@ -8450,6 +8476,115 @@ mod unknown_directive_warning_tests {
             .collect()
     }
 
+    fn event_only_warnings() -> Vec<String> {
+        take_test_warnings()
+            .into_iter()
+            .filter(|m| m.contains("ブロック内専用"))
+            .collect()
+    }
+
+    /// #1001: トップレベルのコロン付き `[NPC移動: …]` `[戦闘: …]` は「未知」ではなく
+    /// 「[イベント] ブロック内専用」の別文言で警告し、読み捨てる（二重警告なし・行番号つき・60 文字切り）。
+    #[test]
+    fn top_level_event_only_commands_warn_with_dedicated_message() {
+        for (line, name) in [("[NPC移動: 村人 → @1,2]", "NPC移動"), ("[戦闘: g]", "戦闘")]
+        {
+            let _ = take_test_warnings();
+            let doc = parse(&format!(
+                "{HEAD}**カコ** (a, 左):\nこんにちは\n{line}\n続き\n"
+            ));
+            let all = take_test_warnings();
+            assert_eq!(all.len(), 1, "{line}: {all:?}");
+            assert!(
+                all[0].contains("11 行目")
+                    && all[0].contains(&format!("[イベント] ブロック内専用の [{name}:]"))
+                    && all[0].contains(line)
+                    && !all[0].contains("未知"),
+                "{all:?}"
+            );
+            let dump = format!("{:?}", doc.chapters[0].scenes[0].events);
+            assert!(
+                !dump.contains("村人") && !dump.contains("RpgBattle"),
+                "{dump}"
+            );
+        }
+        // 話者行の前（本文位置でない所）でも同じ
+        let _ = take_test_warnings();
+        let _ = parse(&format!("{HEAD}[戦闘: g]\n"));
+        let w = event_only_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("9 行目"), "{w:?}");
+        // 60 文字切り
+        let long = format!("[NPC移動: {}]", "あ".repeat(80));
+        let _ = take_test_warnings();
+        let _ = parse(&format!("{HEAD}{long}\n"));
+        let w = event_only_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].ends_with(&format!("{}…", long.chars().take(60).collect::<String>())),
+            "{w:?}"
+        );
+    }
+
+    /// コロンなしの `[戦闘 id]`（マスターデータのブロック）・NPC ブロック・イベント内では出ない。
+    #[test]
+    fn event_only_warning_has_no_false_positives() {
+        let blocks = [
+            "[戦闘 g]\n敵: a\n味方: b\n[/戦闘]",
+            "[NPC 村人 @1,1 sprite=a]\n[/NPC]",
+            "[イベント e]\n[NPC移動: 村人 → @1,1 速度=2]\n[戦闘: g]\n[/イベント]",
+            "[条件: f]\n[イベント e]\n[NPC移動: 村人 → @1,1]\n[戦闘: g]\n[/イベント]\n[/条件]",
+        ];
+        for b in blocks {
+            let _ = take_test_warnings();
+            let _ = parse(&format!("{HEAD}{b}\n"));
+            let w = event_only_warnings();
+            assert!(w.is_empty(), "{b}: {w:?}");
+        }
+    }
+
+    /// `[条件:]` ブロック内のトップレベル相当の行は警告対象で、行番号は元ファイル基準（ネスト・pixelate でも）。
+    #[test]
+    fn event_only_warning_inside_condition_uses_original_line() {
+        let src = format!("{HEAD}[条件: f]\n[条件: g]\n[戦闘: g]\n[/条件]\n[/条件]\n");
+        let pix = src.replacen(
+            "title: t\n",
+            "title: t\nevent_image_transition: \"pixelate\"\n",
+            1,
+        );
+        for (label, text, expect) in [("fade", src, "11 行目"), ("pixelate", pix, "12 行目")] {
+            let _ = take_test_warnings();
+            let _ = parse(&text);
+            let w = event_only_warnings();
+            assert_eq!(w.len(), 1, "{label}: {w:?}");
+            assert!(w[0].contains(expect), "{label}: {w:?}");
+        }
+    }
+
+    /// `[/イベント]` が無いとき、行番号つきの警告が emit_warning 経由で出る（条件ブロック内でも元ファイル基準）。
+    #[test]
+    fn missing_event_close_warns_with_line_number() {
+        let _ = take_test_warnings();
+        let _ = parse(&format!("{HEAD}[イベント e]\n> ナレ\n"));
+        let w: Vec<_> = take_test_warnings()
+            .into_iter()
+            .filter(|m| m.contains("[/イベント]"))
+            .collect();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("9 行目") && w[0].contains("[イベント e]"),
+            "{w:?}"
+        );
+        let _ = take_test_warnings();
+        let _ = parse(&format!("{HEAD}[条件: f]\n[イベント e]\n> ナレ\n[/条件]\n"));
+        let w: Vec<_> = take_test_warnings()
+            .into_iter()
+            .filter(|m| m.contains("[/イベント]"))
+            .collect();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("10 行目"), "{w:?}");
+    }
+
     /// #995: 未知の `[...]` は警告つきで読み捨てられる（行番号つき・挙動は従来どおり捨てる）。
     #[test]
     fn unknown_directives_warn_with_line_number_and_are_dropped() {
@@ -8550,7 +8685,9 @@ mod unknown_directive_warning_tests {
             "[underline: 色=red]",
             "[label: x",
             "[image: ]",
-            "[ボイス: ]",
+            // `[ボイス: ]` はトップレベルでは `[ボイス:` 専用分岐が先に消費して KNOWN の判定まで届かないので
+            // ここでは何も守らない。`ボイス` を一覧に残す保証はイベント内のテスト
+            // （`known_directives_inside_event_block_do_not_warn`）が担う。
             "[フォント解除: x]",
         ] {
             let _ = take_test_warnings();
@@ -8782,7 +8919,11 @@ mod unknown_directive_warning_tests {
                 scripts += 1;
                 let _ = take_test_warnings();
                 let _ = parse(&s);
-                let w = unknown_warnings();
+                // 「未知」と「[イベント] ブロック内専用」(#1001) のどちらの警告も 0 件であること
+                let w: Vec<String> = take_test_warnings()
+                    .into_iter()
+                    .filter(|m| m.contains("未知のディレクティブ") || m.contains("ブロック内専用"))
+                    .collect();
                 if !w.is_empty() {
                     offenders.push(format!("{}: {w:?}", f.display()));
                 }

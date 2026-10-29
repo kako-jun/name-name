@@ -2687,6 +2687,49 @@ describe('parseMarkdown: 読み捨て警告の行番号は元ファイルの行�
   })
 })
 
+describe('parseMarkdown: ブロック内専用コマンドのトップレベル警告 (#1001)', () => {
+  const head = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: "t"',
+    '---',
+    '',
+    '## 1-1: s',
+    '',
+  ].join('\n')
+
+  it('トップレベルの [戦闘: g] は「ブロック内専用」の警告を console.warn に出し、[イベント] 内では出ない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await parseMarkdown(`${head}\n[戦闘: g]\n`)
+      let msgs = warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs.filter((m) => m.includes('ブロック内専用'))).toHaveLength(1)
+      expect(msgs.join('\n')).toContain('9 行目')
+      expect(msgs.join('\n')).not.toContain('未知のディレクティブ')
+
+      warn.mockClear()
+      await parseMarkdown(`${head}\n[イベント e]\n[戦闘: g]\n[/イベント]\n`)
+      msgs = warn.mock.calls.map((c) => String(c[0]))
+      expect(msgs.filter((m) => m.includes('ブロック内専用'))).toHaveLength(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('[/イベント] が無いと、行番号つきの警告が console.warn に出る', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await parseMarkdown(`${head}\n[イベント e]\n> ナレ\n`)
+      const msgs = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('[/イベント]'))
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0]).toContain('9 行目')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe('parseMarkdown + normalizeDocument: battle_commands / わざ が生き残る (#873)', () => {
   const doc = (fm: string, body = '') =>
     `---\nengine: name-name\nchapter: 1\ntitle: "t"\n${fm}---\n## data: マスター\n${body}\n`
