@@ -1826,3 +1826,36 @@ describe('companion.cycle / idleFrame (sit-by-me#59)', () => {
     expect(c.warnings?.some((w) => w.includes('companion.idleFrame'))).toBe(true)
   })
 })
+
+describe('spriteStyle 歩行スプライトのアクスタ化 (sit-by-me#58 / #861)', () => {
+  it('未指定・"none" はキーが出ず、警告も無い（従来と同一）', () => {
+    const none = ok(mutated(() => {}))
+    expect('spriteStyle' in none).toBe(false)
+    expect(none.warnings).toBeUndefined()
+    const explicit = ok(
+      mutated((c) => {
+        c.spriteStyle = 'none'
+      })
+    )
+    expect('spriteStyle' in explicit).toBe(false)
+    expect(explicit.warnings).toBeUndefined()
+  })
+  it('"acrylic" を読む（戦闘の battle.spriteStyle とは独立）', () => {
+    const c = ok(
+      mutated((c) => {
+        c.spriteStyle = 'acrylic'
+      })
+    )
+    expect(c.spriteStyle).toBe('acrylic')
+    expect(c.battle.spriteStyle).toBe('none')
+  })
+  it('不正な値は警告して無視する（キーは出ない）', () => {
+    const c = ok(
+      mutated((c) => {
+        c.spriteStyle = 'glass'
+      })
+    )
+    expect('spriteStyle' in c).toBe(false)
+    expect(c.warnings?.some((w) => w.includes('spriteStyle'))).toBe(true)
+  })
+})

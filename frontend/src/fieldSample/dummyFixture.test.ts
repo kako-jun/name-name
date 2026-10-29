@@ -56,6 +56,16 @@ describe('buildDummyFixture (#890)', () => {
     expect(Object.keys(c.flags)).toContain(c.assist!.requires[0])
   })
 
+  it('spriteStyle (sit-by-me#58): 既定はキーが出ない。acrylic を指定すると主人公・同行者のアクスタ化が有効になる', () => {
+    expect('spriteStyle' in parsed()).toBe(false)
+    const r = parseConfig(
+      buildDummyFixture({ spriteStyle: 'acrylic' }),
+      'http://localhost/field-sample.html'
+    )
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.spriteStyle).toBe('acrylic')
+  })
+
   it('斜め 4 方向を 8 方向で持つ: 右側は自前の絵、左側は mirrorOf（左右反転）(#811)', () => {
     const c = parsed()
     for (const f of ['up', 'down', 'left', 'right', 'upRight', 'downRight'] as const)

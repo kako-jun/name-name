@@ -3,6 +3,7 @@
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
+import { FieldAcrylicFigure } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
 import {
   WORLD_Z,
@@ -260,7 +261,8 @@ async function loadConfig(): Promise<FieldSampleConfig> {
   let textBase = base
   // 素材なしフィクスチャ (#890)。`?fixture=dummy`。?config= が同時にあれば config が優先
   if (dummy) {
-    text = JSON.stringify(buildDummyFixture())
+    const acrylic = new URLSearchParams(location.search).get('spriteStyle') === 'acrylic'
+    text = JSON.stringify(buildDummyFixture(acrylic ? { spriteStyle: 'acrylic' } : {}))
   }
   if (url) {
     try {
@@ -359,7 +361,7 @@ async function main(): Promise<void> {
     }
   }
   const diagonalWalk = DIAGONAL_FACINGS.every((f) => walkTex[f])
-  // 条件付き通行の同行者 (#862)。#861（アクスタ化）までの暫定で、歩行絵のスプライトで出す
+  // 条件付き通行の同行者 (#862)。歩行絵のスプライトで出す（`spriteStyle: "acrylic"` のときは足元にアクスタの部品を付ける）
   const companionTex = {} as Partial<Record<Facing, Texture[]>>
   if (config.companion)
     for (const f of FACINGS) companionTex[f] = await loadFrames(config.companion.sprites[f])
@@ -476,6 +478,12 @@ async function main(): Promise<void> {
   )
   // 同行者は主人公の後ろ（y が大きければ手前）に並べ替える。前面・マーカーは常に上
   world.sortableChildren = true
+  // アクスタ (sit-by-me#58): `spriteStyle: "acrylic"` のときだけ、絵の直前（同じ zIndex なら奥）に板・台座・影の層を挿す。未指定は何も足さない（従来の描画）
+  const playerStand = config.spriteStyle === 'acrylic' ? new FieldAcrylicFigure() : null
+  const companionStand =
+    config.spriteStyle === 'acrylic' && config.companion ? new FieldAcrylicFigure() : null
+  if (playerStand) world.addChildAt(playerStand.display, world.getChildIndex(player))
+  if (companionStand) world.addChildAt(companionStand.display, world.getChildIndex(companionSprite))
   scrollSprite.zIndex = WORLD_Z.scroll
   bgSprite.zIndex = WORLD_Z.background
   overlaySprite.zIndex = WORLD_Z.overlay
@@ -1207,6 +1215,10 @@ async function main(): Promise<void> {
     )
     player.scale.set(flipped.has(facing) ? -s : s, s)
     player.position.set(pos.x, pos.y)
+    if (playerStand) {
+      playerStand.display.zIndex = player.zIndex
+      playerStand.update(tex, tex.height * s, flipped.has(facing), pos.x, pos.y)
+    }
     // NPC (#841): 足元 y で主人公との前後を決める（同行者と同じ考え方）。立ち止まりは 1 コマ目
     for (const n of currentNpcs()) {
       const ntex = n.textures[n.facing]
@@ -1250,9 +1262,15 @@ async function main(): Promise<void> {
       companionSprite.alpha = companionDisplayAlpha(companionAlpha, g, config.assist.ghostAlpha)
       companionSprite.zIndex = companionZ(cp.y, pos.y, h)
       companionSprite.visible = true
+      if (companionStand) {
+        companionStand.display.zIndex = companionSprite.zIndex
+        companionStand.display.alpha = companionSprite.alpha
+        companionStand.update(ct, ct.height * cs, false, cp.x, cp.y)
+      }
       heads.companion = { x: cp.x, y: cp.y - ct.height * cs, alpha: companionSprite.alpha }
     } else {
       companionSprite.visible = false
+      if (companionStand) companionStand.display.visible = false
     }
     emotionLayer?.tick(dt, heads)
     overlaySprite.visible = debug
