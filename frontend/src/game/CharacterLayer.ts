@@ -973,6 +973,24 @@ export class CharacterLayer extends Container {
     this.position.set(z.scale * split.x + z.x, z.scale * split.y + z.y)
   }
 
+  /**
+   * 立ち絵レイヤーのローカル座標（`getCurrentPosition` の返す座標系）を、**ズーム適用前の stage 座標**
+   * （split_layout の変換だけを掛けた座標）へ写す (#1000)。`p' = split.s * p + split.t`。
+   * `LightingLayer` は stage 直下でカメラズームだけを自分の Container で受け、split_layout の変換は
+   * 受けないため、光の位置はこの座標で置く（ズームは光自身の Container が掛ける）。
+   * split 無効時は恒等。split の有効/無効の切替・タイトル画面での一時解除（#982）のたびに最新の領域で
+   * 評価されるので、呼び出し側は「ローカル座標」を保存して読むたびにこれを通すこと。
+   */
+  toStagePosition(local: { x: number; y: number }): { x: number; y: number } {
+    if (!this.splitLayoutRegion) return { x: local.x, y: local.y }
+    const split = computeCharacterLayerSplitTransform(
+      this.screenWidth,
+      this.screenHeight,
+      this.splitLayoutRegion
+    )
+    return { x: split.scale * local.x + split.x, y: split.scale * local.y + split.y }
+  }
+
   /** 現在の split_layout キャラ画像領域 (#442)。null = 従来どおり全画面。テスト・配線検証用。 */
   getSplitLayoutRegion(): LayoutRect | null {
     return this.splitLayoutRegion
