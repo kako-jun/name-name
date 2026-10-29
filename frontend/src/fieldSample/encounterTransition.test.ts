@@ -121,6 +121,13 @@ describe('buildTalkState: 演出中は会話・ワープ・決定キー・強制
     expect(canStartBattleNow(s)).toBe(false)
   })
 
+  it('戦闘中(演出外)は従来どおり会話・ワープ・強制エンカウント不可', () => {
+    const s = buildTalkState({ ...idle, battle: true, battleTransitionActive: false })
+    expect(canStartTalk(s)).toBe(false)
+    expect(canStartWarp(s)).toBe(false)
+    expect(canStartBattleNow(s)).toBe(false)
+  })
+
   it('演出中でなければ従来どおり暇', () => {
     const s = buildTalkState({ ...idle, battleTransitionActive: false })
     expect(canStartTalk(s)).toBe(true)
