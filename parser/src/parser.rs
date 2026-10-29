@@ -1133,7 +1133,7 @@ pub fn parse(input: &str) -> Document {
                 {
                     break;
                 }
-                text_lines.push(next_trimmed.to_string());
+                text_lines.push(unescape_body_line(next_trimmed));
                 pos += 1;
             }
             // body が空でも Dialog を発行する (立ち絵だけ登場させて台詞は無し、
@@ -1204,7 +1204,7 @@ pub fn parse(input: &str) -> Document {
                 {
                     break;
                 }
-                text_lines.push(next_trimmed.to_string());
+                text_lines.push(unescape_body_line(next_trimmed));
                 pos += 1;
             }
             if !text_lines.is_empty() {
@@ -3186,6 +3186,13 @@ fn parse_flag_value(s: &str) -> FlagValue {
         return FlagValue::Number(n);
     }
     FlagValue::String(unquote(s))
+}
+
+/// 台詞本文の行頭エスケープを外す (#973)。行頭の `\` を 1 つだけ剥がして生の本文に戻す。
+/// emitter 側 (`escape_body_line`) が、本文行頭が構文記号 (`**` `[` `## ` `> ` `>` `---` `\`) の
+/// ときに `\` を 1 つ前置する。`\` 始まりの行は打ち切り判定にもトップレベル分岐にも当たらない。
+fn unescape_body_line(line: &str) -> String {
+    line.strip_prefix('\\').unwrap_or(line).to_string()
 }
 
 fn is_speaker_line(line: &str) -> bool {
@@ -8222,5 +8229,45 @@ mod weather_warning_tests {
             assert!(parse_weather_directive(ok).is_some(), "{ok}");
         }
         assert!(take_test_warnings().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod body_escape_warning_tests {
+    use super::*;
+
+    /// #973: エスケープされた本文行は警告なしで往復する（読み捨てが起きない）。
+    #[test]
+    fn escaped_body_lines_roundtrip_without_warnings() {
+        let head = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+        for c in [
+            "**F5** で進む",
+            "**a** → b:",
+            "[/選択]",
+            "[/条件]",
+            "[条件: f",
+            "[笑]",
+            "[選択]",
+            "[BGM: a]",
+            "## 見出し",
+            "> 引用",
+            ">",
+            "---",
+            "\\",
+            "\\**x",
+            "ふつう",
+        ] {
+            let _ = take_test_warnings();
+            let doc = parse(&format!("{head}**カコ**:\n{c}\n"));
+            let md = crate::emitter::emit(&doc);
+            let _ = take_test_warnings();
+            let back = parse(&md);
+            let w = take_test_warnings();
+            assert!(w.is_empty(), "{c:?}: {w:?}\n{md}");
+            assert_eq!(
+                back.chapters[0].scenes[0].events, doc.chapters[0].scenes[0].events,
+                "{c:?}\n{md}"
+            );
+        }
     }
 }

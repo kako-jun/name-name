@@ -285,6 +285,24 @@ pub fn emit(doc: &Document) -> String {
 /// `Event::EventImage.transition` がこれと一致する場合は `遷移=` kv を省略する（round-trip 安定。
 /// 既定 Fade のプロジェクトでは従来どおり `遷移=pixelate` のときだけ出力し、既定 Pixelate の
 /// プロジェクトでは逆に `遷移=fade` のときだけ出力する）。
+/// 台詞本文の行頭が構文記号 (`**` `[` `## ` `> ` `>` 単独 `---`) か `\` のとき、行頭に `\` を
+/// 1 つ前置する (#973)。parser の `unescape_body_line` が 1 つ剥がして生の本文に戻す。
+/// 対象外の本文は 1 バイトも変えない。
+fn escape_body_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let dangerous = line.starts_with("**")
+        || line.starts_with('[')
+        || line.starts_with("## ")
+        || line.starts_with("> ")
+        || line == ">"
+        || line == "---"
+        || line.starts_with('\\');
+    if dangerous {
+        std::borrow::Cow::Owned(format!("\\{line}"))
+    } else {
+        std::borrow::Cow::Borrowed(line)
+    }
+}
+
 fn emit_events(out: &mut String, events: &[Event], default_transition: EventImageTransition) {
     let mut prev_was_dialog_or_text = false;
 
@@ -363,7 +381,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
 
                 for line in text {
-                    out.push_str(line);
+                    out.push_str(&escape_body_line(line));
                     out.push('\n');
                 }
 
