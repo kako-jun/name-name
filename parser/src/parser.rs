@@ -2090,15 +2090,15 @@ fn parse_weather_directive(content: &str) -> Option<Event> {
     Some(Event::Weather { kind, intensity })
 }
 
-/// `[舞台回転: 時間=900]` の本体を分解する (#704 第2弾)。
-/// `時間`/`duration` は `=`（全角 `＝` も可）または `:` 区切りの非負整数（ms）。0〜5000 にクランプし、
-/// 数値でない・負値・小数・空は無視（既定 = `None`）。複数あれば最後の有効値。未知のキーは無視。
 /// 先頭の `+` を許す、数字だけの文字列か（`u32::from_str` / `u64::from_str` が受け入れる範囲と同じ）。
 fn is_unsigned_digits(t: &str) -> bool {
     let d = t.strip_prefix('+').unwrap_or(t);
     !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// `[舞台回転: 時間=900]` の本体を分解する (#704 第2弾)。
+/// `時間`/`duration` は `=`（全角 `＝` も可）または `:` 区切りの非負整数（ms）。0〜5000 にクランプし、
+/// 数値でない・負値・小数・空は無視（既定 = `None`）。複数あれば最後の有効値。未知のキーは無視。
 fn parse_stage_turn_directive(content: &str) -> Event {
     let mut duration_ms: Option<u32> = None;
     for raw in content.split(',') {

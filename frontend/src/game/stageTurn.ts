@@ -133,7 +133,7 @@ interface TurnMesh {
  * 進行中の 1 回の回転。旧面・新面の `PerspectiveMesh` を所有する。
  *
  * 旧面は `addOld` で渡された時点から（角度 0 で）表示され、全ての新面が `resolveNew`（または
- * `failNew` / `cancelNew`）で出そろってから回転が始まる（新面のロード中は旧面を残す）。
+ * `failNew`）で出そろってから回転が始まる（新面のロード中は旧面を残す）。
  * `finish()` は冪等で、全 mesh を破棄して各レイヤーの `endTurn()` を呼ぶ。
  */
 export class StageTurnRun {

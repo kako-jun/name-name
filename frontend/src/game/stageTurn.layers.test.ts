@@ -12,7 +12,15 @@
  * を縛る。テクスチャは実 Texture（PerspectiveMesh が必要とする）。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { Assets, BufferImageSource, Container, PerspectiveMesh, Sprite, Texture } from 'pixi.js'
+import {
+  Assets,
+  BufferImageSource,
+  CanvasSource,
+  Container,
+  PerspectiveMesh,
+  Sprite,
+  Texture,
+} from 'pixi.js'
 import { BackgroundBoardLayer } from './BackgroundBoardLayer'
 import { FloorLayer } from './FloorLayer'
 import { PropLayer } from './PropLayer'
@@ -685,6 +693,24 @@ describe('スキップ判定は範囲を開く時点の値も見る', () => {
     expect(t.ctrl.run).toBeNull()
   })
 
+  it('スキップ中の範囲の直後に来る、スキップでない範囲は回る（スキップ状態は範囲ごと）', async () => {
+    const s = await setup()
+    s.flags.skip = true
+    s.ctrl.begin(1000)
+    s.back('B.png')
+    s.flags.skip = false
+    s.ctrl.flush()
+    expect(s.ctrl.run).toBeNull()
+    await flush()
+    s.ctrl.begin(1000)
+    s.back('C.png')
+    s.ctrl.flush()
+    expect(s.ctrl.run).not.toBeNull()
+    await flush()
+    expect(s.ctrl.run?.started).toBe(true)
+    expect(hostOf(s.prop)).toBeDefined()
+  })
+
   it('連続する [舞台回転] の途中でスキップに入っても即時（|| で保持）', async () => {
     const s = await setup()
     s.flags.skip = true
@@ -765,6 +791,89 @@ describe('新面のロード待ちの上限', () => {
     expect(s.ctrl.run).toBeNull()
     expect(sprites(s.prop).map((x) => x.texture)).toEqual([texFor('C.png')])
     expect((s.time as unknown as { timers: unknown[] }).timers).toHaveLength(0)
+  })
+})
+
+describe('上限で回り始めたあと、回転の途中に遅れた新面が届く', () => {
+  it('壁・背景板・大道具: resolveNew は拒否され mesh は増えず、新面は回転の終わりに現れる', async () => {
+    const s = await setup()
+    const pendingLoads: Array<(t: Texture) => void> = []
+    vi.spyOn(Assets, 'load').mockImplementation(((url: string) => {
+      const name = String(url).split('/').pop()!
+      if (name === 'B.png') return new Promise<Texture>((r) => pendingLoads.push(r))
+      return Promise.resolve(texFor(name))
+    }) as never)
+    await s.turn(1000)
+    expect(pendingLoads).toHaveLength(4)
+    s.time.tick(3000) // 上限で回り始める
+    expect(s.ctrl.run?.started).toBe(true)
+    s.time.tick(200) // 回転の途中
+    const before = [s.wall, s.board, s.prop].map((l) => meshesIn(hostOf(l)).length)
+    pendingLoads.forEach((r) => r(texFor('B.png')))
+    await flush()
+    expect(s.ctrl.run?.started).toBe(true)
+    // 遅れた面は mesh にならない（旧面の mesh だけが残る）。
+    expect([s.wall, s.board, s.prop].map((l) => meshesIn(hostOf(l)).length)).toEqual(before)
+    // 回転が終わると、大道具・壁・背景板は sprite として現れる。
+    s.time.tick(2000)
+    expect(s.ctrl.run).toBeNull()
+    expect(sprites(s.prop).map((x) => x.texture)).toEqual([texFor('B.png')])
+    expect(sprites(s.board).map((x) => x.texture)).toEqual([texFor('B.png')])
+    expect(sprites(s.wall).map((x) => x.texture)).toEqual([texFor('B.png')])
+    expect(s.floor.hasImage()).toBe(true)
+  })
+
+  it('大道具: 遅れた面は turnHold のまま回転の最中は載らず、終わりで載る', async () => {
+    const s = await setup()
+    const pendingLoads: Array<(t: Texture) => void> = []
+    vi.spyOn(Assets, 'load').mockImplementation(((url: string) => {
+      const name = String(url).split('/').pop()!
+      if (name === 'B.png') return new Promise<Texture>((r) => pendingLoads.push(r))
+      return Promise.resolve(texFor(name))
+    }) as never)
+    await s.turn(1000)
+    s.time.tick(3200)
+    pendingLoads.forEach((r) => r(texFor('B.png')))
+    await flush()
+    const entries = (s.prop as unknown as { entries: Array<{ turnHold: boolean }> }).entries
+    expect(entries[0].turnHold).toBe(true)
+    expect(sprites(s.prop)).toHaveLength(0)
+    s.time.tick(2000)
+    expect(entries[0].turnHold).toBe(false)
+    expect(sprites(s.prop)).toHaveLength(1)
+  })
+
+  it('床: 遅れて届いた面の焼き込みテクスチャは破棄される', async () => {
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation((() => ({ drawImage: () => {} })) as never)
+    const s = await setup({ oldStage: false })
+    const canvasTex = (): Texture =>
+      new Texture({
+        source: new CanvasSource({ resource: document.createElement('canvas') }),
+      })
+    const FLOOR = canvasTex()
+    let late: ((t: Texture) => void) | null = null
+    vi.spyOn(Assets, 'load').mockImplementation(((url: string) => {
+      const name = String(url).split('/').pop()!
+      if (name === 'B.png') return new Promise<Texture>((r) => (late = r))
+      return Promise.resolve(texFor(name))
+    }) as never)
+    s.ctrl.begin(1000)
+    s.ctrl.defer(() => s.floor.show('B.png', 0.25, '/a'))
+    s.ctrl.defer(() => s.prop.add('A.png', 2, '/a'))
+    s.ctrl.flush()
+    await flush()
+    s.time.tick(3200)
+    expect(s.ctrl.run?.started).toBe(true)
+    const destroy = vi.spyOn(Texture.prototype, 'destroy')
+    FLOOR.source.width = 64
+    FLOOR.source.height = 64
+    late!(FLOOR)
+    await flush()
+    // 焼き込んだテクスチャ（resolveNew が拒否した分）が destroy(true) で破棄されている。
+    expect(destroy.mock.calls.some((c) => c[0] === true)).toBe(true)
+    getContext.mockRestore()
   })
 })
 

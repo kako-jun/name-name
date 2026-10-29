@@ -349,7 +349,7 @@ Rust で実装。wasm-bindgen + tsify-next で TypeScript 型を自動生成す�
 - `Enter` — 無言の立ち絵登場（character, expression?, position?, fit?・#401）。`[登場: 名前 (sprite/表情, 位置)]` で本文なしに立ち絵を出す。話者タグの立ち絵指定と同書式・同じ配置/フェード/衝突退場ロジック（`CharacterLayer.show` を流用）だが、テキストと話者継続状態を持たない。非テキストイベントなので `processUntilNextTextEvent` が冒頭で実行し、`?scene=` ディープリンク（#399）開始直後にキャストを立てられる。冪等（同一 name/expression/position/fit の再宣言は show 側の no-op ガードで無効）
 - `ExpressionChange` — 表情変更（character, expression）
 - `Wait` — 固定時間待機（ms）
-- `WaitDisplayComplete` — 表示完了待機。`[待機: 表示完了]` で、その時点の背景ロード/フェードと立ち絵ロード/フェード/移動が完了するまで待つ
+- `WaitDisplayComplete` — 表示完了待機。`[待機: 表示完了]` で、その時点の背景ロード/フェードと立ち絵ロード/フェード/移動、回転舞台（`StageTurnController.run`、新面のロード待ちを含む）と大道具・背景板の面の切り替え（回転中・新面のロード待ち、`hasPendingFlip`）が完了するまで待つ
 - `Flag` — フラグ設定（name, value）
 - `Condition` — 条件分岐（flag, events: Event[]）
 - `Jump` — 無条件ジャンプ（target: シーンID。`[ジャンプ: シーンID]`、#725）。選択肢確定と同じ遷移経路（GUI は `jumpToScene`、confinement・`missingSceneResolver` 遅延ロードを再利用）。`[条件:]` 内にも書け、先読み（`preloadUpcomingAssets`）は `Choice`/`Condition` と同様にここで打ち切る。遷移先不在・循環上限（連続 100 回）では停止する（GUI は `[待機]` 用の `waitingForWait` とは独立した `jumpState: 'idle' | 'pending' | 'stalled'` で持ち、遷移予約は `armJump`、停止は `stallJump`。TUI は `pending_jump` の予約保持）。`jumpState` は GameState に載せず、`applyState`（goBack・seekTo・startFrom・quickLoad・セーブロード・restoreSnapshot の全復元経路）で `idle` に戻して、復元後の `eventIndex` が Jump を指していれば `armJump` で再予約する（停止は復元をまたいで持ち越さず、遷移先不在なら再び警告して停止する）。詳細は spec のジャンプ節
@@ -659,7 +659,7 @@ NovelRenderer (PixiJS)          ← 1イベントずつ描画
 - `Flag` — フラグ設定
 - `Exit` / `ExpressionChange` — 立ち絵制御
 - `Wait` — 固定時間待機
-- `WaitDisplayComplete` — 表示完了待機（ユーザー操作は待たず、視覚演出完了後に自動進行）
+- `WaitDisplayComplete` — 表示完了待機（ユーザー操作は待たず、視覚演出完了後に自動進行。回転舞台 `StageTurnController.run` と大道具・背景板の面の切り替え `hasPendingFlip` の回転も待つ）
 
 `Dialog` と `Narration` のみユーザー操作（クリック/キー）で進行する。
 
