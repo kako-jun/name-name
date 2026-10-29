@@ -26,8 +26,14 @@ describe.each([
   it('flip_from が無ければ add（従来どおり）。replace は呼ばない', () => {
     const c = ctxWith(false)
     dispatchDirective(E({ [key]: { path: 'a.png', depth: 2 } }), c.ctx)
-    expect(c[layerKey].add).toHaveBeenCalledWith('a.png', 2, '/a')
+    expect(c[layerKey].add).toHaveBeenCalledWith('a.png', 2, '/a', { instant: false })
     expect(c[layerKey].replace).not.toHaveBeenCalled()
+  })
+
+  it('flip_from が無くスキップ中なら add に instant:true を渡す (#996)', () => {
+    const c = ctxWith(true)
+    dispatchDirective(E({ [key]: { path: 'a.png', depth: 2 } }), c.ctx)
+    expect(c[layerKey].add).toHaveBeenCalledWith('a.png', 2, '/a', { instant: true })
   })
 
   it('flip_from が null / 空文字なら add', () => {
