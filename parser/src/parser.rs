@@ -995,6 +995,15 @@ pub fn parse(input: &str) -> Document {
                 pending_font_family = None;
                 pending_bubble_style = None;
                 current_events.push(event);
+            } else if !is_known_directive_head(trimmed) {
+                // 未知の `[...]` 行は読み捨てる（挙動は従来どおり）。黙って消えると作者が気づけないので
+                // 警告を出す (#995)。既知の頭を持つ行（不正な値で None になった [天候: 謎] など）は
+                // 各パーサが個別に警告するか従来どおり黙って捨てるので、ここでは二重に警告しない。
+                emit_warning(&format!(
+                    "[name-name-parser] warning: {} 行目は未知のディレクティブのため読み捨てた: {}",
+                    pos + 1,
+                    truncate_for_warning(trimmed)
+                ));
             }
             pos += 1;
             continue;
@@ -3780,6 +3789,99 @@ fn emit_map_close_missing_warning(width: u32, height: u32, collected_rows: usize
     emit_warning(&format!(
         "[name-name-parser] warning: [/マップ] が見つからないうちに別ブロックが開始されました — 宣言 {width}x{height}, 収集済み {collected_rows} 行"
     ));
+}
+
+/// parser が（どこかの経路で）解釈する `[...]` ディレクティブの頭（`:` か空白の手前。閉じタグは `/` を除く）。
+/// `parse_directive` が None を返すのは「未知」だけでなく「既知だが値が不正」の場合もあるため、
+/// 未知の読み捨て警告 (#995) はこの一覧に無い頭のときだけ出す。新しいディレクティブを足したら
+/// ここにも足す（`known_directive_heads_cover_spec` テストが spec との差分を検出する）。
+const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
+    // parse_directive
+    "背景色",
+    "背景板",
+    "大道具",
+    "背景",
+    "感情",
+    "壁",
+    "舞台前面",
+    "天候",
+    "床",
+    "動画退場",
+    "動画",
+    "イベント絵終了",
+    "イベント絵",
+    "テロップ",
+    "BGM停止",
+    "BGM",
+    "SE",
+    "暗転",
+    "暗転解除",
+    "カメラ",
+    "場面転換",
+    "登場",
+    "退場",
+    "待機",
+    "ジャンプ",
+    "フラグ",
+    "アニメ",
+    "文字演出",
+    "下線",
+    "underline",
+    "ラベル",
+    "label",
+    "画像",
+    "image",
+    "タイトル",
+    "枠なし",
+    "枠あり",
+    "シェイク",
+    "フラッシュ",
+    "フェード",
+    "スポットライト消灯",
+    "スポットライト",
+    "紙人形輪郭",
+    "幕",
+    // 本文ループの別経路・消費済み前処理
+    "ボイス",
+    "フォント",
+    "フォント解除",
+    "吹き出し",
+    "選択",
+    "条件",
+    "イベント",
+    "トリガー",
+    "プレイヤー",
+    "NPC",
+    "NPC移動",
+    "マップ",
+    "壁高さ",
+    "床高さ",
+    "天井高さ",
+    "エンカウント率",
+    "エンカウント群",
+    "戦闘",
+    // マスターデータブロック (master.rs)
+    "モンスター",
+    "アイテム",
+    "呪文",
+    "特技",
+    "状態",
+    "魔石",
+    "召喚獣",
+    "ジョブ",
+    "パーティ",
+];
+
+fn is_known_directive_head(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix('[') else {
+        return false;
+    };
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let head = rest
+        .split(|c: char| c == ':' || c == ']' || c.is_whitespace())
+        .next()
+        .unwrap_or("");
+    KNOWN_DIRECTIVE_HEADS.contains(&head)
 }
 
 /// 警告に載せる行の最大文字数（chars 単位。超えたら `…` で切る）。
@@ -8267,5 +8369,245 @@ mod body_escape_warning_tests {
                 other => panic!("{src:?}: {other:?}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod unknown_directive_warning_tests {
+    use super::*;
+
+    const HEAD: &str = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+
+    fn unknown_warnings() -> Vec<String> {
+        take_test_warnings()
+            .into_iter()
+            .filter(|m| m.contains("未知のディレクティブ"))
+            .collect()
+    }
+
+    /// #995: 未知の `[...]` は警告つきで読み捨てられる（行番号つき・挙動は従来どおり捨てる）。
+    #[test]
+    fn unknown_directives_warn_with_line_number_and_are_dropped() {
+        for (line, shown) in [
+            ("[笑]", "[笑]"),
+            ("[foo: bar]", "[foo: bar]"),
+            ("[/foo]", "[/foo]"),
+            ("[笑] あとに文字が続く", "[笑] あとに文字が続く"),
+        ] {
+            let _ = take_test_warnings();
+            let input = format!("{HEAD}**カコ** (a, 左):\nこんにちは\n{line}\n続き\n");
+            let doc = parse(&input);
+            let w = unknown_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(w[0].contains("11 行目") && w[0].contains(shown), "{w:?}");
+            // 読み捨て: 台詞は「こんにちは」だけで、`[...]` 行は本文にもイベントにもならない
+            let dump = format!("{:?}", doc.chapters[0].scenes[0].events);
+            assert!(!dump.contains("笑") && !dump.contains("foo"), "{dump}");
+        }
+    }
+
+    #[test]
+    fn unknown_directive_at_top_level_before_speaker_also_warns() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!("{HEAD}[笑]\n"));
+        let w = unknown_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("9 行目"), "{w:?}");
+        assert!(doc.chapters[0].scenes[0].events.is_empty());
+    }
+
+    #[test]
+    fn unknown_directive_warning_truncates_to_60_chars() {
+        let _ = take_test_warnings();
+        let long = format!("[{}]", "あ".repeat(100));
+        let _ = parse(&format!("{HEAD}{long}\n"));
+        let w = unknown_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        let shown: String = long.chars().take(WARNING_LINE_MAX_CHARS).collect();
+        assert!(w[0].ends_with(&format!("{shown}…")), "{w:?}");
+        assert!(!w[0].contains(&long), "{w:?}");
+    }
+
+    /// 既知のディレクティブ（正しい書式）は警告なし。parse_directive が扱うもの・別経路で読むもの・
+    /// ブロック系を網羅する。
+    #[test]
+    fn known_directives_do_not_warn() {
+        let blocks: &[&str] = &[
+            "[背景色: #f5f0e8]", "[背景板: a.png]", "[大道具: a.png]", "[背景: a.png]",
+            "[感情: 主人公, びっくり]", "[壁: a.png]", "[舞台前面: a.png]", "[天候: 雨]", "[床: a.png]",
+            "[動画退場]", "[動画: a.mp4]", "[イベント絵終了]", "[イベント絵: a.png]", "[テロップ: x]",
+            "[BGM停止]", "[BGM: a.ogg]", "[SE: a.ogg]", "[暗転]", "[暗転解除]", "[カメラ: シアター]",
+            "[場面転換]", "[登場: カコ (a, 左)]", "[退場: カコ]", "[待機: 500]", "[待機: 表示完了]",
+            "[ジャンプ: 1-2]", "[フラグ: f=true]", "[アニメ: target=ナレーター, duration=100]",
+            "[文字演出: Title, 効果=爆発]", "[下線: Title]", "[underline: Title]", "[ラベル: x]",
+            "[label: x]", "[画像: a.png]", "[image: a.png]", "[タイトル: T]", "[枠なし]", "[枠あり]",
+            "[シェイク: intensity=10, duration=500]", "[フラッシュ: duration=300]",
+            "[フェード: duration=500]", "[スポットライト消灯]", "[スポットライト: 対象=カコ]",
+            "[紙人形輪郭: オン]", "[幕: a.png]", "[ボイス: a.ogg]", "[フォント: serif]", "[フォント解除]",
+            "[吹き出し: 叫び]",
+            "[選択]\n- a → 1-2\n[/選択]",
+            "[条件: f]\nx\n[/条件]",
+            "[マップ 2x2 タイル=16]\n..\n..\n[/マップ]\n[壁高さ]\n1,1\n1,1\n[/壁高さ]",
+            "[プレイヤー @1,1 向き=下]", "[トリガー auto scene=1-2]",
+            "[NPC 村人 @1,1 sprite=a]\n[/NPC]",
+            "[イベント e]\n[NPC移動: 村人 → @1,1 速度=2]\n[待機: 100]\n[戦闘: g]\n[感情: 村人, ？]\n[/イベント]",
+            "[エンカウント率: 1/16]", "[エンカウント群: g]",
+            "[モンスター m]\nname: x\nhp: 1\n[/モンスター]",
+            "[アイテム i]\nname: x\n[/アイテム]",
+        ];
+        for b in blocks {
+            let _ = take_test_warnings();
+            let _ = parse(&format!("{HEAD}**カコ** (a, 左):\nこんにちは\n{b}\n続き\n"));
+            let w = unknown_warnings();
+            assert!(w.is_empty(), "{b}: {w:?}");
+            let _ = parse(&format!("{HEAD}{b}\n"));
+            let w = unknown_warnings();
+            assert!(w.is_empty(), "{b} (top): {w:?}");
+        }
+    }
+
+    /// 既知の名前で値が不正なもの（parse_directive が None を返す）は「未知」ではないので、
+    /// この警告を重ねて出さない（二重警告・誤検出の防止）。
+    #[test]
+    fn known_head_with_bad_value_is_not_reported_as_unknown() {
+        for line in [
+            "[待機: abc]",
+            "[ジャンプ: ]",
+            "[フラグ: x]",
+            "[感情: 主人公]",
+            "[天候: 謎]",
+            "[登場:]",
+            "[トリガー foo",
+            "[NPC移動: x",
+            "[壁高さ",
+            "[フォント: x",
+        ] {
+            let _ = take_test_warnings();
+            let _ = parse(&format!("{HEAD}**カコ** (a, 左):\nこんにちは\n{line}\n"));
+            assert!(unknown_warnings().is_empty(), "{line}");
+        }
+    }
+
+    /// 台詞本文の行頭エスケープ (#973/#989): `\[笑]` は警告なしで本文になり、
+    /// emit が `[笑]` に付けた `\` で往復しても警告は出ない。
+    #[test]
+    fn escaped_unknown_directive_text_round_trips_without_warning() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!("{HEAD}**カコ** (a, 左):\n\\[笑]\n"));
+        assert!(unknown_warnings().is_empty());
+        let events = &doc.chapters[0].scenes[0].events;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Dialog { text, .. } if text == &vec!["[笑]".to_string()])));
+        let emitted = crate::emitter::emit(&doc);
+        assert!(emitted.contains("\n\\[笑]\n"), "{emitted}");
+        let _ = take_test_warnings();
+        let doc2 = parse(&emitted);
+        assert!(take_test_warnings().is_empty());
+        assert_eq!(
+            doc2.chapters[0].scenes[0].events,
+            doc.chapters[0].scenes[0].events
+        );
+    }
+
+    /// 一覧の同期チェック: spec に載っている行頭 `[名前` / `[/名前` はすべて既知の頭として登録されている。
+    #[test]
+    fn known_directive_heads_cover_spec() {
+        let spec = std::fs::read_to_string(repo_root().join("docs/spec/markdown-v0.1.md")).unwrap();
+        let mut missing = std::collections::BTreeSet::new();
+        for line in spec.lines() {
+            let t = line.trim();
+            // NPC message 内の `[expression=…]` は NPC ブロック内の専用構文でトップレベルのディレクティブではない
+            if t.starts_with('[') && !t.starts_with("[expression") && !is_known_directive_head(t) {
+                // `[...]` を含む説明文（`[x]` など）は行全体が `[` で始まる場合のみ対象。
+                // 見出しなどの文中の例は拾わない。
+                if t.ends_with(']') {
+                    missing.insert(t.to_string());
+                }
+            }
+        }
+        assert!(missing.is_empty(), "spec にあるが未登録の頭: {missing:?}");
+    }
+
+    fn repo_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
+    fn collect_md(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if p.is_dir() {
+                if matches!(
+                    name.as_str(),
+                    "node_modules" | "target" | ".git" | "pkg" | "dist"
+                ) {
+                    continue;
+                }
+                collect_md(&p, out);
+            } else if name.ends_with(".md") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// 誤検出がないことの一括検査: リポジトリ内で脚本（frontmatter に `engine: name-name`）として
+    /// 書かれた .md 全件を parse して、未知ディレクティブ警告が 0 件であること。
+    /// docs/ の説明文書は脚本ではない（散文中に `[…]` の記法例がある）ため対象外で、
+    /// 代わりに spec と docs/guide の ``` フェンス内のうち脚本として完結しているもの
+    /// （frontmatter つき）を同様に検査する。
+    #[test]
+    fn repo_scripts_and_doc_samples_have_no_unknown_directive_warnings() {
+        let mut files = Vec::new();
+        collect_md(&repo_root(), &mut files);
+        let mut scripts = 0;
+        let mut offenders = Vec::new();
+        for f in &files {
+            let Ok(text) = std::fs::read_to_string(f) else {
+                continue;
+            };
+            let mut samples: Vec<String> = Vec::new();
+            if text.trim_start().starts_with("---") && text.contains("engine: name-name") {
+                samples.push(text.clone());
+            }
+            // フェンス内サンプル（frontmatter つきで始まるもの）
+            let mut cur: Option<String> = None;
+            for line in text.lines() {
+                if line.trim_start().starts_with("```") {
+                    if let Some(block) = cur.take() {
+                        if block.trim_start().starts_with("---")
+                            && block.contains("engine: name-name")
+                        {
+                            samples.push(block);
+                        }
+                    } else {
+                        cur = Some(String::new());
+                    }
+                } else if let Some(b) = cur.as_mut() {
+                    b.push_str(line);
+                    b.push('\n');
+                }
+            }
+            for s in samples {
+                scripts += 1;
+                let _ = take_test_warnings();
+                let _ = parse(&s);
+                let w = unknown_warnings();
+                if !w.is_empty() {
+                    offenders.push(format!("{}: {w:?}", f.display()));
+                }
+            }
+        }
+        assert!(
+            scripts >= 3,
+            "対象の脚本が少なすぎる（探索が壊れている）: {scripts}"
+        );
+        assert!(offenders.is_empty(), "{offenders:#?}");
     }
 }
