@@ -508,3 +508,77 @@ describe('実 CharacterLayer との結合 (#992)', () => {
     expect(layer.getLightPosition()).toEqual(standing)
   })
 })
+
+describe('split_layout との位置の一致 (#1000)', () => {
+  const REGION = { x: 0, y: 0, width: SCREEN_W / 2, height: SCREEN_H }
+  /** split の変換（`p' = s*p + t`）を独立に再計算する期待値。 */
+  const expected = (local: { x: number; y: number }) => {
+    const s = Math.min(REGION.width / SCREEN_W, REGION.height / SCREEN_H)
+    const tx = REGION.x + (REGION.width - SCREEN_W * s) / 2
+    const ty = REGION.y + (REGION.height - SCREEN_H * s) / 2
+    return { x: s * local.x + tx, y: s * local.y + ty }
+  }
+  function setup() {
+    const chars = new CharacterLayer(SCREEN_W, SCREEN_H)
+    const time = virtualTime()
+    const layer = new LightingLayer(SCREEN_W, SCREEN_H, chars, time)
+    chars.show('hero', 'normal', '右', '/assets', { instant: true })
+    return { chars, time, layer }
+  }
+
+  it('split 無効なら従来どおりローカル座標のまま、有効なら立ち絵の stage 座標（split 変換後）に一致する', () => {
+    const { chars, time, layer } = setup()
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const local = chars.getCurrentPosition('hero')!
+    expect(layer.getLightPosition()).toEqual(local)
+
+    chars.setSplitLayoutRegion(REGION)
+    time.tick(16)
+    const pos = layer.getLightPosition()!
+    expect(pos).toEqual(expected(local))
+    expect(pos.x).not.toBe(local.x) // 変換が実際に効いている
+    // 立ち絵の実位置（Container の scale/position を掛けた stage 座標）とも一致する
+    const st = (
+      chars as unknown as {
+        characters: Map<string, { sprite: { x: number; y: number; height: number } }>
+      }
+    ).characters.get('hero')!
+    const g = chars.toGlobal({ x: st.sprite.x, y: st.sprite.y - st.sprite.height / 2 })
+    expect(pos.x).toBeCloseTo(g.x)
+    expect(pos.y).toBeCloseTo(g.y)
+  })
+
+  it('ズーム（Container の scale/position）が掛かっても、光に渡す座標はズーム適用前の stage 座標（光自身の Container がズームを掛ける）', () => {
+    const { chars, time, layer } = setup()
+    chars.setSplitLayoutRegion(REGION)
+    chars.setZoomPose({ scale: 2, x: -50, y: -20 })
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual(expected(chars.getCurrentPosition('hero')!))
+  })
+
+  it('対象が退場しても、最後の位置は split の切替・一時解除に追従して立ち絵の最後の位置に残る', () => {
+    const { chars, time, layer } = setup()
+    chars.setSplitLayoutRegion(REGION)
+    layer.set('hero', '#ffffff', 0.2)
+    time.tick(16)
+    const local = chars.getCurrentPosition('hero')!
+    chars.remove('hero', { instant: true })
+    time.tick(32)
+    expect(layer.getLightPosition()).toEqual(expected(local))
+
+    chars.setSplitLayoutRegion(null) // タイトル画面での一時解除 (#982) / 動的な無効化
+    expect(layer.getLightPosition()).toEqual(local)
+    chars.setSplitLayoutRegion(REGION) // 復帰
+    expect(layer.getLightPosition()).toEqual(expected(local))
+  })
+
+  it('対象不在の中央フォールバックは split 変換を受けない（従来どおり画面中央）', () => {
+    const { chars, time, layer } = setup()
+    chars.setSplitLayoutRegion(REGION)
+    layer.set(null, '#ffffff', 0.2)
+    time.tick(16)
+    expect(layer.getLightPosition()).toEqual({ x: SCREEN_W / 2, y: SCREEN_H / 2 })
+  })
+})

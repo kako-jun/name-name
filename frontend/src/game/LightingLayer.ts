@@ -80,6 +80,8 @@ export class LightingLayer extends Container {
    * 対象を最後に観測した位置 (#992)。対象が退場して不在になっても光をそこに残すための実行時の値。
    * settled state には持たせない（ADR-0002: 保存するのは最終状態だけ）。点け直し・復元・消灯で破棄し、
    * 復元時に対象が不在なら中央にフォールバックする。
+   * 座標系は **立ち絵レイヤーのローカル座標**（`getCurrentPosition` と同じ）。split_layout (#1000) の
+   * 変換は描画の直前に `toStagePosition` で掛けるので、split の切替・一時解除・resize 後も立ち絵と一致する。
    */
   private lastTargetPos: { x: number; y: number } | null = null
 
@@ -194,21 +196,26 @@ export class LightingLayer extends Container {
    * 光が今いる位置（レイヤー座標）。消灯中は `null`。**テスト用**の副作用のない読み取りで、
    * ticker/`set()`/退場通知が最後に解決した位置を返す（本番コードは使わない）。tick の後に対象が
    * 動いた場合は次の tick まで古い値を返す。
+   * split_layout の変換は読み取り時に最新の領域で掛ける（切替は呼んだ瞬間に反映される。スプライト自体は次の tick で追従する）。
    */
   getLightPosition(): { x: number; y: number } | null {
     if (!this.state) return null
-    return this.lastTargetPos ?? { x: this.screenWidth / 2, y: this.screenHeight / 2 }
+    return this.toStage(this.lastTargetPos)
+  }
+
+  /** ローカル座標（null は画面中央）を、光を置く stage 座標へ写す。中央のフォールバックは変換しない。 */
+  private toStage(local: { x: number; y: number } | null): { x: number; y: number } {
+    if (!local) return { x: this.screenWidth / 2, y: this.screenHeight / 2 }
+    // モック CharacterLayer（単体テスト）は持たないので存在確認する。
+    return this.characterLayer.toStagePosition?.(local) ?? { x: local.x, y: local.y }
   }
 
   private resolvePosition(): { x: number; y: number } {
     const pos = this.state?.target
       ? this.characterLayer.getCurrentPosition(this.state.target, { excludeExiting: true })
       : null
-    if (pos) {
-      this.lastTargetPos = { x: pos.x, y: pos.y }
-      return this.lastTargetPos
-    }
+    if (pos) this.lastTargetPos = { x: pos.x, y: pos.y }
     // 対象が未登場・退場済み (#992): 最後に観測した位置に光を残す。一度も観測していなければ中央。
-    return this.lastTargetPos ?? { x: this.screenWidth / 2, y: this.screenHeight / 2 }
+    return this.toStage(this.lastTargetPos)
   }
 }
