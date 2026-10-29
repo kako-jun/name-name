@@ -253,4 +253,47 @@ describe('NovelRenderer 追うスポットライト配線 (#693)', () => {
     expect(r.getSnapshot().spotlight).toBeNull()
     expect(r.getSnapshot().eventIndex).toBe(1)
   })
+
+  describe('対象不在でも明示消灯まで残る (#992)', () => {
+    const absent = (): EventScene[] => [
+      scene('a', [
+        narration('one'),
+        spotlight('ghost', '#ffcc00', 0.3),
+        narration('two'),
+        narration('three'),
+        SPOTLIGHT_OFF,
+        narration('four'),
+      ]),
+    ]
+
+    it('対象が一度も登場しなくても、進行しても消灯しない（[スポットライト消灯] でだけ消える）', async () => {
+      const r = makeRenderer(absent())
+      r.startFrom({ sceneId: 'a' })
+      await r.playScript([{ type: 'advance' }, { type: 'advance' }])
+      expect(r.getSnapshot().spotlight).toEqual({ target: 'ghost', color: '#ffcc00', radius: 0.3 })
+      await r.playScript([{ type: 'advance' }])
+      expect(r.getSnapshot().spotlight).toBeNull()
+    })
+
+    it('seekTo / goBack で対象不在のまま点灯状態が最終状態として復元される', async () => {
+      const r = makeRenderer(absent())
+      r.startFrom({ sceneId: 'a' })
+      await r.playScript([{ type: 'advance' }, { type: 'advance' }, { type: 'advance' }])
+      expect(r.getSnapshot().spotlight).toBeNull()
+      r.goBack() // four -> three（消灯前）
+      expect(r.getSnapshot().spotlight).toEqual({ target: 'ghost', color: '#ffcc00', radius: 0.3 })
+      const ri = internals<
+        RendererInternals & {
+          lightingLayer: {
+            screenWidth: number
+            screenHeight: number
+            getLightPosition(): { x: number; y: number } | null
+          }
+        }
+      >(r)
+      const lc = ri.lightingLayer
+      // 対象不在の復元では最後の位置が不明なので画面中央にフォールバックする
+      expect(lc.getLightPosition()).toEqual({ x: lc.screenWidth / 2, y: lc.screenHeight / 2 })
+    })
+  })
 })

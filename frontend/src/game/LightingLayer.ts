@@ -18,8 +18,9 @@
  *
  * 対象キャラの現在座標は毎フレーム `CharacterLayer.getCurrentPosition()` に問い合わせる
  * （キャラの入場退場モーション #684・将来の立ち位置変更に追従するため、生成時点の座標を
- * 固定で保持しない、Issue #693 方針）。`target` が未指定、または対象キャラが現在表示されて
- * いない場合は画面中央に固定表示する。
+ * 固定で保持しない、Issue #693 方針）。`target` が未指定なら画面中央に固定表示する。対象が
+ * 未登場の間は中央、退場後は最後に観測した位置に光を残し、再登場したら追従を再開する (#992)。
+ * 光は `[スポットライト消灯]` でのみ消える。
  *
  * カメラモード非依存（`CameraMode` に関わらず機能する、#693 方針）。レイヤー順は
  * `CharacterLayer` の直後・`PropLayer` の前（docs/architecture.md「シアターモード構想」→
@@ -75,6 +76,12 @@ export class LightingLayer extends Container {
   private readonly sprite: Sprite | null
   private state: SpotlightLayerState | null = null
   private tickerId: number | null = null
+  /**
+   * 対象を最後に観測した位置 (#992)。対象が退場して不在になっても光をそこに残すための実行時の値。
+   * settled state には持たせない（ADR-0002: 保存するのは最終状態だけ）。点け直し・復元・消灯で破棄し、
+   * 復元時に対象が不在なら中央にフォールバックする。
+   */
+  private lastTargetPos: { x: number; y: number } | null = null
 
   constructor(
     private readonly screenWidth: number,
@@ -107,6 +114,7 @@ export class LightingLayer extends Container {
    * フロント側の最終防御。`BackgroundBoard`/`Prop` の depth クランプと同じ方針）。
    */
   set(target: string | null, color: string, radius: number): void {
+    this.lastTargetPos = null
     this.state = {
       target,
       color: color || '#ffffff',
@@ -120,6 +128,7 @@ export class LightingLayer extends Container {
   /** 消灯する（`[スポットライト消灯]`）。 */
   clear(): void {
     this.state = null
+    this.lastTargetPos = null
     this.stopTicker()
     if (this.sprite) this.sprite.visible = false
   }
@@ -162,14 +171,29 @@ export class LightingLayer extends Container {
    */
   private redraw(): void {
     if (!this.state) return
-    const pos = this.state.target ? this.characterLayer.getCurrentPosition(this.state.target) : null
-    const cx = pos ? pos.x : this.screenWidth / 2
-    const cy = pos ? pos.y : this.screenHeight / 2
+    const { x: cx, y: cy } = this.resolvePosition()
     if (!this.sprite) return
     this.sprite.tint = parseHexColor(this.state.color)
     this.sprite.position.set(cx, cy)
     const diameterPx = Math.max(2, this.state.radius * this.screenWidth * 2)
     this.sprite.width = diameterPx
     this.sprite.height = diameterPx
+  }
+
+  /** 光が今いる位置（レイヤー座標）。消灯中は `null`。テストと redraw の共通解決点。 */
+  getLightPosition(): { x: number; y: number } | null {
+    return this.state ? this.resolvePosition() : null
+  }
+
+  private resolvePosition(): { x: number; y: number } {
+    const pos = this.state?.target
+      ? this.characterLayer.getCurrentPosition(this.state.target)
+      : null
+    if (pos) {
+      this.lastTargetPos = { x: pos.x, y: pos.y }
+      return this.lastTargetPos
+    }
+    // 対象が未登場・退場済み (#992): 最後に観測した位置に光を残す。一度も観測していなければ中央。
+    return this.lastTargetPos ?? { x: this.screenWidth / 2, y: this.screenHeight / 2 }
   }
 }
