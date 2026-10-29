@@ -382,8 +382,11 @@ export interface StageTurnHost {
  *   ジャンプ）。`cancel()` は場面転換などで範囲ごと捨てるとき。
  */
 export class StageTurnController {
-  private pending: { durationMs: number | null; skip: boolean; queue: Array<() => void> } | null =
-    null
+  private pending: {
+    durationMs: number | null
+    skip: boolean
+    queue: Array<(instant: boolean) => void>
+  } | null = null
   private active: StageTurnRun | null = null
 
   constructor(
@@ -404,7 +407,7 @@ export class StageTurnController {
   }
 
   /** 範囲の中なら指定をためて true を返す（呼び出し側は即時実行しない）。 */
-  defer(fn: () => void): boolean {
+  defer(fn: (instant: boolean) => void): boolean {
     if (!this.pending) return false
     this.pending.queue.push(fn)
     return true
@@ -452,7 +455,8 @@ export class StageTurnController {
     if (!enabled) {
       // 即時: 旧い舞台を全消去してから裏側の指定を流し込む（最終状態は回転の場合と同じ）。
       for (const layer of list) layer.clear()
-      for (const fn of pending.queue) fn()
+      // 板・大道具のスライドインも起こさない（回転しない経路は最終状態を即時に置く。#996）。
+      for (const fn of pending.queue) fn(true)
       return
     }
     const { width, height } = this.host.screenSize()
@@ -461,7 +465,8 @@ export class StageTurnController {
     run.replaying = true
     try {
       for (const layer of list) layer.beginStageTurn(run)
-      for (const fn of pending.queue) fn()
+      // 回転する経路の新面は回転が終わってから現れるので instant の値は効かない。
+      for (const fn of pending.queue) fn(false)
     } finally {
       run.replaying = false
       // 流し込み中に例外が出ても、回転が始まらないまま旧面が残らないよう必ず seal する。

@@ -62,7 +62,11 @@ type BoardEvent = Extract<Event, { BackgroundBoard: unknown }>['BackgroundBoard'
 type PropEvent = Extract<Event, { Prop: unknown }>['Prop']
 
 /** 背景板の追加・面の切り替え (#683 / #704)。回転舞台の流し込み (#704 第2弾) からも呼ばれる。 */
-function applyBackgroundBoard(board: BoardEvent, ctx: DirectiveContext): void {
+function applyBackgroundBoard(
+  board: BoardEvent,
+  ctx: DirectiveContext,
+  instant: boolean = ctx.env.skipMode
+): void {
   if (board.flip_from) {
     // 面の切り替え (#704): 同じ depth の旧い面を差し替える（シアターは回転、それ以外は即時）。
     ctx.layers.backgroundBoard.replace(
@@ -70,23 +74,28 @@ function applyBackgroundBoard(board: BoardEvent, ctx: DirectiveContext): void {
       board.depth ?? 0,
       board.flip_from,
       ctx.env.assetBaseUrl,
-      { flipMs: board.flip_ms, skip: ctx.env.skipMode }
+      { flipMs: board.flip_ms, skip: instant }
     )
   } else {
-    ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl)
+    // スキップ中・回転舞台を回さず即時にする流し込みでは、スライドインを起こさず最終位置へ置く (#996)。
+    ctx.layers.backgroundBoard.add(board.path, board.depth ?? 0, ctx.env.assetBaseUrl, { instant })
   }
 }
 
 /** 大道具の追加・面の切り替え (#692 / #704)。回転舞台の流し込み (#704 第2弾) からも呼ばれる。 */
-function applyProp(prop: PropEvent, ctx: DirectiveContext): void {
+function applyProp(
+  prop: PropEvent,
+  ctx: DirectiveContext,
+  instant: boolean = ctx.env.skipMode
+): void {
   if (prop.flip_from) {
     // 面の切り替え (#704): 背景板と同じ。
     ctx.layers.prop.replace(prop.path, prop.depth ?? 0, prop.flip_from, ctx.env.assetBaseUrl, {
       flipMs: prop.flip_ms,
-      skip: ctx.env.skipMode,
+      skip: instant,
     })
   } else {
-    ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl)
+    ctx.layers.prop.add(prop.path, prop.depth ?? 0, ctx.env.assetBaseUrl, { instant })
   }
 }
 
@@ -155,7 +164,7 @@ export const stageDirectives: ObjectDirectiveTable = {
   BackgroundBoard: on<'BackgroundBoard'>((event, ctx) => {
     const board = event.BackgroundBoard
     // 回転舞台 (#704 第2弾) の範囲内なら裏側の指定としてため、範囲が閉じたときに流し込む。
-    if (ctx.hooks.deferToStageTurn(() => applyBackgroundBoard(board, ctx))) return
+    if (ctx.hooks.deferToStageTurn((instant) => applyBackgroundBoard(board, ctx, instant))) return
     applyBackgroundBoard(board, ctx)
   }),
 
@@ -190,7 +199,7 @@ export const stageDirectives: ObjectDirectiveTable = {
   Prop: on<'Prop'>((event, ctx) => {
     const prop = event.Prop
     // 回転舞台 (#704 第2弾) の範囲内なら裏側の指定としてため、範囲が閉じたときに流し込む。
-    if (ctx.hooks.deferToStageTurn(() => applyProp(prop, ctx))) return
+    if (ctx.hooks.deferToStageTurn((instant) => applyProp(prop, ctx, instant))) return
     applyProp(prop, ctx)
   }),
 
