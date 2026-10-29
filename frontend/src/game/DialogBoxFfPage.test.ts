@@ -64,10 +64,16 @@ function advance(box: DialogBox, ms: number): void {
     internals(box).ticker.update(clock)
   }
 }
-/** 初回の巨大な経過時間を捨てる。show の前に呼ぶ（show 後だと最初の tick で数文字進んでしまう） */
+/**
+ * 基準時刻を現在の clock に揃え、以降の update の経過時間を 0 から数える。
+ * Ticker の lastTime は構築時の performance.now() なので、揃えないと最初の update で
+ * 実時間との差（maxElapsedMS=100ms で頭打ち）ぶん typewriter が進み、実行環境の速さで結果が変わる。
+ */
 function prime(box: DialogBox): void {
+  const ticker = internals(box).ticker
   clock += 1000
-  internals(box).ticker.update(clock)
+  ticker.lastTime = clock
+  ticker.update(clock)
 }
 /** いまのページを最後まで出す（時間で進める） */
 function typeOut(box: DialogBox): void {
