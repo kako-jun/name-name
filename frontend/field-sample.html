@@ -66,15 +66,15 @@
         display: none;
       }
       body.battle-contain #stage {
+        /* 文書の流れから外す（#error の警告などで下へ押し出されて下端が切れない）。canvas の寸法は main.ts の BattleContain が px で与える */
+        position: fixed;
+        inset: 0;
+        z-index: 10;
         display: flex;
         align-items: center;
         justify-content: center;
-        height: 100dvh;
         padding: 0;
         background: #000;
-      }
-      body.battle-contain #stage canvas {
-        max-height: 100dvh;
       }
       #stage canvas {
         display: block;

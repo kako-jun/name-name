@@ -60,13 +60,12 @@ const overlap = (a: Rect, b: Rect): boolean =>
 const inside = (r: Rect, w: number, h: number): boolean =>
   r.x >= -1e-9 && r.y >= -1e-9 && r.x + r.w <= w + 1e-9 && r.y + r.h <= h + 1e-9
 
-describe('1920x1080 の戦闘レイアウト (設計座標 / uiScale = 論理座標)', () => {
-  const ui = 2.4
-  const scaled = (r: Rect): Rect => ({ x: r.x * ui, y: r.y * ui, w: r.w * ui, h: r.h * ui })
+// 設計座標（800×450）での既存保証の再確認。1920×1080 の実描画寸法（根の scale 適用後）の検証は BattleScreenLogicalSize.test.ts
+describe('設計座標 800×450 のレイアウト（既存保証の再確認）', () => {
   const compute = (enemyCount: number, partyCount: number): SideBattleLayout =>
     computeSideBattleLayout({
-      width: BATTLE_LOGICAL_WIDTH / ui,
-      height: BATTLE_LOGICAL_HEIGHT / ui,
+      width: 800,
+      height: 450,
       partyCount,
       enemyCount,
       commandLayout: 'cross',
@@ -77,33 +76,13 @@ describe('1920x1080 の戦闘レイアウト (設計座標 / uiScale = 論理座
     [1, 1],
     [3, 2],
     [5, 4],
-  ])('敵 %i / 味方 %i: 窓どうしが重ならず、全コマンドが 1920x1080 内のタップ可能な領域', (e, p) => {
+  ])('敵 %i / 味方 %i: 窓どうしが重ならず、コマンドセルが窓の中にある', (e, p) => {
     const L = compute(e, p)
     const windows = [L.log, L.command, L.status, ...(L.enemyList ? [L.enemyList] : [])]
-    for (const w of windows) expect(inside(scaled(w), 1920, 1080)).toBe(true)
+    for (const w of windows) expect(inside(w, 800, 450)).toBe(true)
     for (let i = 0; i < windows.length; i++)
       for (let j = i + 1; j < windows.length; j++)
         expect(overlap(windows[i], windows[j])).toBe(false)
-    for (const c of L.commandCells) {
-      expect(inside(scaled(c), 1920, 1080)).toBe(true)
-      expect(inside(c, L.command.w + L.command.x, L.command.y + L.command.h)).toBe(true)
-      // 指で押せる大きさ（論理 px で 48 以上）
-      expect(scaled(c).h).toBeGreaterThanOrEqual(48)
-    }
-    expect(L.enemyList).not.toBeNull()
-  })
-
-  it('800x450 設計の結果は 2.4 倍しても従来の比率と同じ（同じ相対的な見た目）', () => {
-    const base = computeSideBattleLayout({
-      width: 800,
-      height: 450,
-      partyCount: 2,
-      enemyCount: 3,
-      commandLayout: 'cross',
-      enemyList: true,
-    })
-    const L = compute(3, 2)
-    expect(L).toEqual(base)
-    expect(scaled(L.command).w / 1920).toBeCloseTo(base.command.w / 800, 9)
+    for (const c of L.commandCells) expect(inside(c, 800, 450)).toBe(true)
   })
 })

@@ -129,6 +129,7 @@ import {
 import defaultConfigText from './teramachi.sample.json?raw'
 import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
+import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
@@ -660,12 +661,16 @@ async function main(): Promise<void> {
     if (!talking) return
     conversation.advance()
   }
-  /** 戦闘が論理サイズ固定のとき、canvas の最大幅を「幅 100% と viewport 高さ分の 16:9 幅」の小さい方にし、ツールバー等を隠す（CSS `battle-contain`）。null で解除 */
-  const containCanvas = (size: { w: number; h: number } | null): void => {
-    const el = app.canvas as HTMLCanvasElement
-    el.style.maxWidth = size ? `min(100%, calc(100dvh * ${size.w} / ${size.h}))` : ''
-    document.body.classList.toggle('battle-contain', size !== null)
-  }
+  /** 論理サイズ固定の戦闘 (sit-by-me#52): 16:9 を viewport へ等比 contain し、ツールバー等を隠す（終了・dispose・例外で必ず外す） */
+  const contain = new BattleContain({
+    body: document.body,
+    canvas: app.canvas as HTMLCanvasElement,
+    viewport: () => ({ w: window.innerWidth, h: window.innerHeight }),
+    onResize: (cb) => {
+      window.addEventListener('resize', cb)
+      return () => window.removeEventListener('resize', cb)
+    },
+  })
   const startBattle = (enemies: BattleEntity[]): void => {
     // 演出中（開始・終了とも）の二重エンカウントは無視する
     if (battleTransition.active) return
@@ -685,28 +690,34 @@ async function main(): Promise<void> {
       fade.visible = false
       app.renderer.resize(b.width, b.height)
       // 論理サイズ固定 (sit-by-me#52): 16:9 を viewport の高さにも収める（等比 contain・crop しない）
-      containCanvas(b.logicalSize ? { w: b.width, h: b.height } : null)
-      battle = new BattleScreen(engine, b.width, b.height, {
-        // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
-        ...buildBattleScreenOptions(b, {
-          background: bg,
-          menu,
-          renderResolution: app.renderer.resolution,
-        }),
-        onClose: (outcome) => {
-          lastOutcome = outcome
-          // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
-          endBattleWithTransition({
-            mode: b.transition,
-            player: battleTransition,
-            width: b.width,
-            height: b.height,
-            outcome,
-            close: endBattle,
-          })
-        },
-      })
-      app.stage.addChild(battle)
+      contain.enter(b.logicalSize ? { w: b.width, h: b.height } : null)
+      try {
+        battle = new BattleScreen(engine, b.width, b.height, {
+          // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
+          ...buildBattleScreenOptions(b, {
+            background: bg,
+            menu,
+            renderResolution: app.renderer.resolution,
+          }),
+          onClose: (outcome) => {
+            lastOutcome = outcome
+            // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
+            endBattleWithTransition({
+              mode: b.transition,
+              player: battleTransition,
+              width: b.width,
+              height: b.height,
+              outcome,
+              close: endBattle,
+            })
+          },
+        })
+        app.stage.addChild(battle)
+      } catch (e) {
+        battle = null
+        contain.leave()
+        throw e
+      }
     }
     // 開始の演出: 操作キャラ付近へ 2 段ズームして暗転 → 戦闘画面
     beginBattleWithTransition({
@@ -724,8 +735,9 @@ async function main(): Promise<void> {
     battle.destroy({ children: true })
     battle = null
     // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
+    // contain を先に外す（保存しておいた canvas の表示寸法へ戻してから、フィールドの大きさへ resize する）
+    contain.leave()
     app.renderer.resize(scene.mask.width, scene.mask.height)
-    containCanvas(null)
     battleTransition.resize(scene.mask.width, scene.mask.height)
     applyDialogMetrics(scene.mask.width, scene.mask.height)
     world.visible = true
@@ -1413,6 +1425,7 @@ async function main(): Promise<void> {
   // HMR・ページ離脱での二重登録を防ぐ
   const dispose = (): void => {
     disposed = true
+    contain.dispose()
     battleTransition.cancel()
     playerStand?.destroy()
     companionStand?.destroy()

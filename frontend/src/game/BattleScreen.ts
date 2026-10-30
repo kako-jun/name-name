@@ -1352,9 +1352,14 @@ export class BattleScreen extends Container {
    * 状態が変わった（ログ・フェーズ・コマンド待ちの顔ぶれ）ときだけ全表示を更新し、毎回ゲージ棒だけ描き直す。
    */
   tick(deltaMS: number): void {
-    if (this.destroyedFlag || this.closedFlag) return
-    if (this.uiScale !== 1)
+    this.tickInner(deltaMS)
+    // 拡大中は文字の resolution を揃える。tick の中で作られた Text（ダメージ数字など）も描画前に同じ密度にする
+    if (this.uiScale !== 1 && !this.destroyedFlag)
       syncTextResolution(this, (this.opts.renderResolution ?? 1) * this.uiScale)
+  }
+
+  private tickInner(deltaMS: number): void {
+    if (this.destroyedFlag || this.closedFlag) return
     // 勝敗の待機は演出方式・ATB に関わらず時間を進める (#745)
     if (this.resultElapsed !== null) {
       this.resultElapsed = advanceResultElapsed(this.resultElapsed, deltaMS)

@@ -12,6 +12,7 @@ export function buildBattleScreenOptions(
   b: FieldBattleConfig,
   extra: { background?: string; menu?: BattleMenuData; renderResolution?: number }
 ): Omit<BattleScreenOptions, 'onClose'> {
+  const frame = resolveBattleFrame(b.logicalSize)
   return {
     layout: b.layout,
     spriteStyle: b.spriteStyle,
@@ -24,9 +25,9 @@ export function buildBattleScreenOptions(
     ...(extra.background ? { background: extra.background } : {}),
     ...(extra.menu ? { menu: extra.menu } : {}),
     // 論理サイズ指定 (sit-by-me#52) のときだけ UI スケールを渡す（未指定は従来どおり 1 倍＝キー自体を出さない）
-    ...(resolveBattleFrame(b.logicalSize)
+    ...(frame
       ? {
-          uiScale: resolveBattleFrame(b.logicalSize)?.uiScale,
+          uiScale: frame.uiScale,
           ...(extra.renderResolution ? { renderResolution: extra.renderResolution } : {}),
         }
       : {}),
