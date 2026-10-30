@@ -76,7 +76,7 @@ describe('設計座標 800×450 のレイアウト（既存保証の再確認）
     [1, 1],
     [3, 2],
     [5, 4],
-  ])('敵 %i / 味方 %i: 窓どうしが重ならず、コマンドセルが窓の中にある', (e, p) => {
+  ])('敵 %i / 味方 %i: 窓どうしが重ならず、コマンドセルが 800×450 の画面内にある', (e, p) => {
     const L = compute(e, p)
     const windows = [L.log, L.command, L.status, ...(L.enemyList ? [L.enemyList] : [])]
     for (const w of windows) expect(inside(w, 800, 450)).toBe(true)

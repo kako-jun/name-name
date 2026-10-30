@@ -735,7 +735,7 @@ async function main(): Promise<void> {
     battle.destroy({ children: true })
     battle = null
     // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
-    // contain を先に外す（保存しておいた canvas の表示寸法へ戻してから、フィールドの大きさへ resize する）
+    // contain を先に外す（付ける前に保存した canvas の寸法＝戦闘サイズへ戻る。直後の resize でフィールドの大きさに上書きされる）
     contain.leave()
     app.renderer.resize(scene.mask.width, scene.mask.height)
     battleTransition.resize(scene.mask.width, scene.mask.height)
