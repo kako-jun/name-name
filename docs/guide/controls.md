@@ -316,6 +316,8 @@ Raycast モードで DQ4 メニューの **「しらべる」** をタップす�
 
 **一枚絵フィールド（`/field-sample.html`）の遷移（sit-by-me#55）**: 設定 JSON の `battle.transition`（`none` / `ff` / `ff-mosaic`。未指定は `none`＝従来どおり即切替）で、上と同じ遷移がエンカウント（「今すぐエンカウント」ボタン含む）から戦闘への開始と、戦闘終了からフィールドへの復帰の両方に入る。演出中は歩行・タップ・決定キー（会話）・ワープ・吹き出し・二重エンカウントを受け付けない。同梱の寺町サンプルは `ff-mosaic`。不正値は読み込みエラー。
 
+**一枚絵フィールドの戦闘の論理サイズ（sit-by-me#52）**: 設定 JSON の `battle.logicalSize: "1920x1080"` を書くと、戦闘をフィールドと同じ 1920×1080（16:9）の唯一の論理キャンバスに固定する（`battle.width` / `battle.height` は 1920 / 1080 に上書きされ、食い違う指定は警告）。レイアウトの px 定数（文字・窓・ゲージなど）は高さ 450 基準の設計値なので、BattleScreen の根を `uiScale = 1080 / 450 = 2.4` 倍して同じ相対的な見た目にする（`BattleScreenOptions.uiScale` / `renderResolution`。文字は `renderer.resolution × uiScale` で描き直してぼやけを防ぐ。純関数は `game/battleLogicalSize.ts`）。表示は 16:9 の等比 contain（crop・背景延長なし。余白は黒帯）で、戦闘中はツールバー等を隠して viewport いっぱいに収める。未指定は従来どおり `width` × `height`（既定 800×450）の可変レイアウトで挙動不変。同梱の寺町サンプルは `1920x1080`。不正値は読み込みエラー。
+
 **画面遷移を見比べる手順（#953）**: 寺町サンプルのフィールド（`/field-sample.html`）は設定 JSON の `battle.transition`（上記）で同じ遷移が出る。エディタの RPG タブで見るなら、新規ドキュメントに次の脚本を貼り、RPG タブの「プレイ」（または「見下ろしでプレビュー」「Raycastでプレビュー」）を開いて歩くと、毎歩エンカウントして戦闘に入る（`[エンカウント率: 1]`）。frontmatter の `battle_transition:` を `none` / `ff` / `ff-mosaic` に書き換えて同じ手順を繰り返すと、遷移の違い（`ff-mosaic` だけ暗転に合わせて画面が粗く・細かくなる）を目で比べられる。戦闘は「にげる」で終わらせると終了の遷移も見られる。
 
 ```markdown

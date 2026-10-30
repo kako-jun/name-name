@@ -1865,3 +1865,45 @@ describe('spriteStyle 歩行スプライトのアクスタ化 (sit-by-me#58 / #8
     expect(c.warnings?.some((w) => w.includes('spriteStyle'))).toBe(true)
   })
 })
+
+describe('battle.logicalSize (sit-by-me#52)', () => {
+  it('省略は従来: width/height は battle の指定どおり・logicalSize なし・警告なし', () => {
+    const raw = minimal()
+    raw.battle = { width: 640, height: 360 }
+    const c = ok(raw)
+    expect(c.battle.width).toBe(640)
+    expect(c.battle.height).toBe(360)
+    expect(c.battle.logicalSize).toBeUndefined()
+    expect(c.warnings).toBeUndefined()
+    const d = ok(minimal())
+    expect(d.battle.width).toBe(DEFAULTS.battleWidth)
+    expect(d.battle.height).toBe(DEFAULTS.battleHeight)
+  })
+
+  it('"1920x1080" は width/height を 1920x1080 に固定する', () => {
+    const raw = minimal()
+    raw.battle = { logicalSize: '1920x1080' }
+    const c = ok(raw)
+    expect(c.battle.logicalSize).toBe('1920x1080')
+    expect([c.battle.width, c.battle.height]).toEqual([1920, 1080])
+    expect(c.warnings).toBeUndefined()
+  })
+
+  it('width/height と食い違う指定は 1920x1080 を優先し、警告する', () => {
+    const raw = minimal()
+    raw.battle = { logicalSize: '1920x1080', width: 800, height: 450 }
+    const c = ok(raw)
+    expect([c.battle.width, c.battle.height]).toEqual([1920, 1080])
+    expect(c.warnings?.some((w) => w.includes('battle.logicalSize'))).toBe(true)
+  })
+
+  it('不正値はパスつきエラー', () => {
+    for (const bad of ['1536x1024', 1920, '']) {
+      const raw = minimal()
+      raw.battle = { logicalSize: bad }
+      const r = parseConfig(raw, BASE)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('battle.logicalSize')
+    }
+  })
+})

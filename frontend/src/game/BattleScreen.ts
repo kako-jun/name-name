@@ -113,6 +113,8 @@ import {
   type BattleEnemyListMode,
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
+import { normalizeUiScale } from './battleLogicalSize'
+import { syncTextResolution } from './textResolution'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
   sampleSummonCue,
@@ -439,6 +441,13 @@ export interface BattleScreenOptions {
    */
   commandLayout?: CommandLayout
   /**
+   * UI スケール (sit-by-me#52)。1920×1080 の論理キャンバスに置くとき、設計値（高さ 450 基準の px・文字・窓）を `uiScale` 倍する（既定 1 = 従来）。
+   * コンストラクタ / `redraw` に渡す `screenWidth/Height` は論理キャンバス（1920×1080）の値で、内部のレイアウトは `/ uiScale` した設計座標で計算し、根の scale で拡大する
+   */
+  uiScale?: number
+  /** ホストの `renderer.resolution`。`uiScale` > 1 のとき文字の解像度を `renderResolution × uiScale` に揃えてぼやけを防ぐ（既定 1） */
+  renderResolution?: number
+  /**
    * 戦闘開始の時点で押されていたキー（`KeyboardEvent.key`）。`cross` の矢印キーは、これらが一度 keyup されるまで無視する
    * （エンカウント直後に歩行で押しっぱなしだった矢印キーで、いきなりコマンドが決定されるのを防ぐ）(#204)
    */
@@ -555,6 +564,8 @@ export class BattleScreen extends Container {
   private engine: BattleEngine
   private screenWidth: number
   private screenHeight: number
+  /** UI スケール (sit-by-me#52)。1 = 従来。screenWidth/Height は設計座標（論理サイズ / uiScale） */
+  private readonly uiScale: number
   private opts: BattleScreenOptions
 
   private layoutMode: BattleLayoutMode
@@ -721,8 +732,10 @@ export class BattleScreen extends Container {
   ) {
     super()
     this.engine = engine
-    this.screenWidth = screenWidth
-    this.screenHeight = screenHeight
+    this.uiScale = normalizeUiScale(opts.uiScale)
+    if (this.uiScale !== 1) this.scale.set(this.uiScale)
+    this.screenWidth = screenWidth / this.uiScale
+    this.screenHeight = screenHeight / this.uiScale
     this.opts = opts
     this.layoutMode = opts.layout === 'side' ? 'side' : 'front'
     this.spriteStyle = opts.spriteStyle === 'acrylic' ? 'acrylic' : 'none'
@@ -1222,10 +1235,10 @@ export class BattleScreen extends Container {
   }
 
   redraw(screenWidth: number, screenHeight: number): void {
-    this.screenWidth = screenWidth
-    this.screenHeight = screenHeight
+    this.screenWidth = screenWidth / this.uiScale
+    this.screenHeight = screenHeight / this.uiScale
     // 全画面のタップ領域は勝敗の待機中だけ（通常時に持つと子のコマンドボタンへのタップを奪う）
-    if (this.resultTapArmed) this.hitArea = new Rectangle(0, 0, screenWidth, screenHeight)
+    if (this.resultTapArmed) this.hitArea = new Rectangle(0, 0, this.screenWidth, this.screenHeight)
     this.layout()
     this.refresh()
   }
@@ -1339,6 +1352,13 @@ export class BattleScreen extends Container {
    * 状態が変わった（ログ・フェーズ・コマンド待ちの顔ぶれ）ときだけ全表示を更新し、毎回ゲージ棒だけ描き直す。
    */
   tick(deltaMS: number): void {
+    this.tickInner(deltaMS)
+    // 拡大中は文字の resolution を揃える。tick の中で作られた Text（ダメージ数字など）も描画前に同じ密度にする
+    if (this.uiScale !== 1 && !this.destroyedFlag)
+      syncTextResolution(this, (this.opts.renderResolution ?? 1) * this.uiScale)
+  }
+
+  private tickInner(deltaMS: number): void {
     if (this.destroyedFlag || this.closedFlag) return
     // 勝敗の待機は演出方式・ATB に関わらず時間を進める (#745)
     if (this.resultElapsed !== null) {
@@ -3168,7 +3188,7 @@ export class BattleScreen extends Container {
       view.hitMosaic = f
       view.container.filters = [...(view.container.filters ?? []), f]
     }
-    view.hitMosaic.size = size
+    view.hitMosaic.size = size * this.uiScale
   }
 
   private clearHitMosaic(view: EntityView): void {

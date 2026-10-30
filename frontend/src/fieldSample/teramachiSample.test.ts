@@ -123,6 +123,24 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(Object.keys(o).sort()).toEqual(['layout', 'spriteStyle'])
   })
 
+  it('sit-by-me#52 寺町サンプルは 1920x1080 論理サイズで、UI スケール 2.4 が BattleScreen に渡る', () => {
+    const b = load().battle
+    expect(b.logicalSize).toBe('1920x1080')
+    expect([b.width, b.height]).toEqual([1920, 1080])
+    const o = buildBattleScreenOptions(b, { renderResolution: 2 })
+    expect(o.uiScale).toBe(2.4)
+    expect(o.renderResolution).toBe(2)
+  })
+
+  it('sit-by-me#52 logicalSize 未指定は uiScale / renderResolution を出さない（従来）', () => {
+    const o = buildBattleScreenOptions(
+      { layout: 'side', spriteStyle: 'none', width: 800, height: 450 },
+      { renderResolution: 2 }
+    )
+    expect(o).not.toHaveProperty('uiScale')
+    expect(o).not.toHaveProperty('renderResolution')
+  })
+
   it('sit-by-me#62 motion プリセットが ff 演出で有効になり、桁バウンスが付く', () => {
     const b = load().battle
     expect(b.presentation).toBe('ff')

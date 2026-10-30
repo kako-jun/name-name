@@ -56,6 +56,26 @@
       #stage {
         padding: 8px 12px;
       }
+      /* 論理サイズ固定の戦闘 (sit-by-me#52): ツールバー等を隠し、16:9 を viewport へ等比 contain（crop なし・余白は黒） */
+      body.battle-contain {
+        overflow: hidden;
+      }
+      body.battle-contain #toolbar,
+      body.battle-contain #guide,
+      body.battle-contain #info {
+        display: none;
+      }
+      body.battle-contain #stage {
+        /* 文書の流れから外す（#error の警告などで下へ押し出されて下端が切れない）。canvas の寸法は main.ts の BattleContain が px で与える */
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        background: #000;
+      }
       #stage canvas {
         display: block;
         max-width: 100%;
