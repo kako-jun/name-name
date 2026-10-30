@@ -289,8 +289,7 @@
     "enemyGrid": "4x2",
     "motion": "snappy",
     "transition": "ff-mosaic",
-    "width": 800,
-    "height": 450,
+    "logicalSize": "1920x1080",
     "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
   }
 }

@@ -660,6 +660,12 @@ async function main(): Promise<void> {
     if (!talking) return
     conversation.advance()
   }
+  /** 戦闘が論理サイズ固定のとき、canvas の最大幅を「幅 100% と viewport 高さ分の 16:9 幅」の小さい方にし、ツールバー等を隠す（CSS `battle-contain`）。null で解除 */
+  const containCanvas = (size: { w: number; h: number } | null): void => {
+    const el = app.canvas as HTMLCanvasElement
+    el.style.maxWidth = size ? `min(100%, calc(100dvh * ${size.w} / ${size.h}))` : ''
+    document.body.classList.toggle('battle-contain', size !== null)
+  }
   const startBattle = (enemies: BattleEntity[]): void => {
     // 演出中（開始・終了とも）の二重エンカウントは無視する
     if (battleTransition.active) return
@@ -678,9 +684,15 @@ async function main(): Promise<void> {
       world.visible = false
       fade.visible = false
       app.renderer.resize(b.width, b.height)
+      // 論理サイズ固定 (sit-by-me#52): 16:9 を viewport の高さにも収める（等比 contain・crop しない）
+      containCanvas(b.logicalSize ? { w: b.width, h: b.height } : null)
       battle = new BattleScreen(engine, b.width, b.height, {
         // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
-        ...buildBattleScreenOptions(b, { background: bg, menu }),
+        ...buildBattleScreenOptions(b, {
+          background: bg,
+          menu,
+          renderResolution: app.renderer.resolution,
+        }),
         onClose: (outcome) => {
           lastOutcome = outcome
           // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
@@ -713,6 +725,7 @@ async function main(): Promise<void> {
     battle = null
     // 同じシーン・同じ位置に戻る（pos / facing / sceneId は戦闘中ずっと保持している）
     app.renderer.resize(scene.mask.width, scene.mask.height)
+    containCanvas(null)
     battleTransition.resize(scene.mask.width, scene.mask.height)
     applyDialogMetrics(scene.mask.width, scene.mask.height)
     world.visible = true

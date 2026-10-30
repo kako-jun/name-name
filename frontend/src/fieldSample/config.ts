@@ -34,6 +34,11 @@ import type { WindowStyle } from '../game/windowStyle'
 import { normalizeDialogStyle, normalizeMsPerChar, type DialogStyle } from '../game/ffDialog'
 import { parseCommandIds, type CommandId, type CommandLayout } from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
+import {
+  parseBattleLogicalSize,
+  resolveBattleFrame,
+  type BattleLogicalSize,
+} from '../game/battleLogicalSize'
 import type { BattleItemEntry, BattleSkillEntry, BattleSpellEntry } from '../game/battleMenu'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
@@ -142,6 +147,11 @@ export interface FieldBattleConfig {
   /** 戦闘中の画面の大きさ（戦闘サンプルの 800x450 と同じ既定） */
   width: number
   height: number
+  /**
+   * 戦闘の論理キャンバス (sit-by-me#52)。`battle.logicalSize: "1920x1080"` で戦闘をフィールドと同じ 1920×1080（16:9）に固定する
+   * （`width` / `height` は 1920 / 1080 になり、UI は高さ 450 基準の設計値を 2.4 倍する）。未指定は undefined＝従来の可変レイアウト（`width` / `height` のまま）
+   */
+  logicalSize?: BattleLogicalSize
   /** 敵の見えないグリッド (#839)。`battle.enemyGrid: "6x2"`。不正値・未指定は undefined＝従来の配置 */
   enemyGrid?: EnemyGridSize
   /** 敵の絵と窓の重なり許容量 (#838/#839)。`battle.enemyWindowOverlap`（0〜0.5 に丸める）。未指定は既定 */
@@ -873,10 +883,25 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
           warnings.push(
             `scenes.${sid}.npcs の ${n.id} は scene "${n.scene}" を指していますが scriptUrl がありません（固定の line で話します）`
           )
-  const bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
+  let bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
-  const bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
+  let bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
   if (!bh.ok) return bh
+  const logicalSize = parseBattleLogicalSize(b.logicalSize)
+  if (b.logicalSize !== undefined && logicalSize === undefined)
+    return fail(`battle.logicalSize は "1920x1080": ${JSON.stringify(b.logicalSize)}`)
+  const frame = resolveBattleFrame(logicalSize)
+  if (frame) {
+    if (
+      (b.width !== undefined && b.width !== frame.width) ||
+      (b.height !== undefined && b.height !== frame.height)
+    )
+      warnings.push(
+        `battle.logicalSize "1920x1080" のため battle.width / battle.height は無視して ${frame.width}x${frame.height} にします`
+      )
+    bw = { ok: true, value: frame.width }
+    bh = { ok: true, value: frame.height }
+  }
   let battleBg: string | undefined
   if (b.background !== undefined) {
     const u = url(b.background, 'battle.background')
@@ -953,6 +978,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(battleBg ? { background: battleBg } : {}),
         width: bw.value,
         height: bh.value,
+        ...(logicalSize ? { logicalSize } : {}),
         ...(enemyGrid ? { enemyGrid } : {}),
         ...(enemyWindowOverlap !== undefined ? { enemyWindowOverlap } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
