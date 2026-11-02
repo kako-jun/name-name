@@ -48,7 +48,7 @@
     }
   ],
   "party": [
-    { "id": "hero", "name": "オトン", "hp": 999, "mp": 99, "atk": 40, "def": 4, "agi": 6 },
+    { "id": "hero", "name": "オットン", "hp": 999, "mp": 99, "atk": 40, "def": 4, "agi": 6 },
     { "id": "nam", "name": "ナム", "hp": 999, "mp": 99, "atk": 30, "def": 4, "agi": 8 }
   ],
   "enemies": [
