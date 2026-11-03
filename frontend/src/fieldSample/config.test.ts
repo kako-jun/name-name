@@ -1846,6 +1846,31 @@ describe('tiltShift 最終合成の上下チルトシフト (#885)', () => {
   })
 })
 
+describe('tiltShift 不正値の網羅 (#885)', () => {
+  it('"on" 以外の文字列・大文字・空文字・数値・真偽・null・配列は警告 1 件でキーが出ない', () => {
+    for (const v of ['ON', 'On', ' on', 'on ', '', 'true', 1, 0, true, false, null, ['on'], {}]) {
+      const r = ok(mutated((c) => void (c.tiltShift = v)))
+      expect('tiltShift' in r, JSON.stringify(v)).toBe(false)
+      expect(r.warnings?.length, JSON.stringify(v)).toBe(1)
+      expect(r.warnings?.[0]).toContain('tiltShift')
+    }
+  })
+  it('"off" は警告なし。"on" でも他の警告は増えない', () => {
+    expect(ok(mutated((c) => void (c.tiltShift = 'on'))).warnings).toBeUndefined()
+    expect(ok(mutated((c) => void (c.tiltShift = 'off'))).warnings).toBeUndefined()
+  })
+  it('tiltShift は spriteStyle と独立（併用できる）', () => {
+    const r = ok(
+      mutated((c) => {
+        c.tiltShift = 'on'
+        c.spriteStyle = 'acrylic'
+      })
+    )
+    expect(r.tiltShift).toBe('on')
+    expect(r.spriteStyle).toBe('acrylic')
+  })
+})
+
 describe('spriteStyle 歩行スプライトのアクスタ化 (sit-by-me#58 / #861)', () => {
   it('未指定・"none" はキーが出ず、警告も無い（従来と同一）', () => {
     const none = ok(mutated(() => {}))

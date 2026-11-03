@@ -66,6 +66,18 @@ describe('buildDummyFixture (#890)', () => {
     expect(r.value.spriteStyle).toBe('acrylic')
   })
 
+  it('tiltShift (#885): 既定はキーが出ない。on を指定すると有効、spriteStyle と併用できる', () => {
+    expect('tiltShift' in parsed()).toBe(false)
+    expect('tiltShift' in (buildDummyFixture() as object)).toBe(false)
+    const r = parseConfig(
+      buildDummyFixture({ tiltShift: 'on', spriteStyle: 'acrylic' }),
+      'http://localhost/field-sample.html'
+    )
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.tiltShift).toBe('on')
+    expect(r.value.spriteStyle).toBe('acrylic')
+  })
+
   it('斜め 4 方向を 8 方向で持つ: 右側は自前の絵、左側は mirrorOf（左右反転）(#811)', () => {
     const c = parsed()
     for (const f of ['up', 'down', 'left', 'right', 'upRight', 'downRight'] as const)
