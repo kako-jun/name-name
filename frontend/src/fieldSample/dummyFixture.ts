@@ -239,7 +239,9 @@ function poses(prefix: string, w: number, h: number, colors: Record<string, stri
 }
 
 /** 設定 JSON のオブジェクトを作る */
-export function buildDummyFixture(opts: { spriteStyle?: 'acrylic' } = {}): Record<string, unknown> {
+export function buildDummyFixture(
+  opts: { spriteStyle?: 'acrylic'; tiltShift?: 'on' } = {}
+): Record<string, unknown> {
   const W = 640
   const H = 400
   const walk = {
@@ -261,6 +263,8 @@ export function buildDummyFixture(opts: { spriteStyle?: 'acrylic' } = {}): Recor
   return {
     // アクスタ (sit-by-me#58): `?fixture=dummy&spriteStyle=acrylic` で主人公・同行者の足元に板・台座・影を付ける。未指定はキーを出さない
     ...(opts.spriteStyle === 'acrylic' ? { spriteStyle: 'acrylic' } : {}),
+    // チルトシフト (#885): `?fixture=dummy&tiltShift=on`。未指定はキーを出さない
+    ...(opts.tiltShift === 'on' ? { tiltShift: 'on' } : {}),
     startScene: 'meadow',
     start: { x: 320, y: 300 },
     speed: 260,

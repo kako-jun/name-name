@@ -231,6 +231,11 @@ export interface FieldSampleConfig {
    * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC には効かない
    */
   spriteStyle?: 'acrylic'
+  /**
+   * 最終合成（背景・キャラ・前景・感情吹き出しを描いた world）への上下チルトシフト (#885)。`tiltShift: "on"` = 画面中央は鮮明のまま、上端・下端ほど強くぼかす。
+   * 未指定・`"off"` は undefined＝従来の描画（キーが出ない）。不正な値は警告して無視。会話窓・フェード・戦闘画面はぼかさない
+   */
+  tiltShift?: 'on'
   /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
   dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
@@ -867,6 +872,14 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `spriteStyle は "none" か "acrylic" のみ指定できます: ${JSON.stringify(raw.spriteStyle)}（無視します）`
       )
   }
+  let tiltShift: 'on' | undefined
+  if (raw.tiltShift !== undefined) {
+    if (raw.tiltShift === 'on') tiltShift = 'on'
+    else if (raw.tiltShift !== 'off')
+      warnings.push(
+        `tiltShift は "on" か "off" のみ指定できます: ${JSON.stringify(raw.tiltShift)}（無視します）`
+      )
+  }
   let dialogMsPerChar: number | undefined
   if (raw.dialogMsPerChar !== undefined) {
     dialogMsPerChar = normalizeMsPerChar(raw.dialogMsPerChar)
@@ -965,6 +978,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
+      ...(tiltShift ? { tiltShift } : {}),
       ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,

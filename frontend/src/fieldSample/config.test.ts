@@ -1833,6 +1833,19 @@ describe('companion.cycle / idleFrame (sit-by-me#59)', () => {
   })
 })
 
+describe('tiltShift 最終合成の上下チルトシフト (#885)', () => {
+  it('未指定・"off" はキーが出ず警告も無い。"on" を読む。不正は警告して無視', () => {
+    expect('tiltShift' in ok(mutated(() => {}))).toBe(false)
+    const off = ok(mutated((c) => void (c.tiltShift = 'off')))
+    expect('tiltShift' in off).toBe(false)
+    expect(off.warnings).toBeUndefined()
+    expect(ok(mutated((c) => void (c.tiltShift = 'on'))).tiltShift).toBe('on')
+    const bad = ok(mutated((c) => void (c.tiltShift = 'yes')))
+    expect('tiltShift' in bad).toBe(false)
+    expect(bad.warnings?.length).toBe(1)
+  })
+})
+
 describe('spriteStyle 歩行スプライトのアクスタ化 (sit-by-me#58 / #861)', () => {
   it('未指定・"none" はキーが出ず、警告も無い（従来と同一）', () => {
     const none = ok(mutated(() => {}))
