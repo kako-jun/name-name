@@ -2,8 +2,8 @@
  * 一枚絵フィールドサンプルページ (#807) のブラウザ側エントリ。本編からはリンクしない開発用ページ。
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
-import { Application, Container, Graphics, Rectangle, Sprite, Texture, TilingSprite } from 'pixi.js'
-import { TiltShiftFilter } from '../game/TiltShiftFilter'
+import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
+import { buildFieldComposite } from './fieldComposite'
 import { createFieldStands } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
 import {
@@ -520,17 +520,11 @@ async function main(): Promise<void> {
   const emotionTop = new Container()
   // 最終合成 (#885): world（背景・キャラ・前景・感情吹き出し）を 1 つの箱に束ね、`tiltShift: "on"` のときだけそこへチルトシフトを 1 回掛ける。
   // world は揺れ（world.y）で動くので、フィルタ領域は揺れない外側の箱に画面固定で持つ。会話窓・フェード・戦闘画面は箱の外
-  const fieldComposite = new Container()
-  fieldComposite.addChild(world)
-  const syncTiltShiftArea = (): void => {
-    if (fieldComposite.filters) {
-      fieldComposite.filterArea = new Rectangle(0, 0, app.screen.width, app.screen.height)
-    }
-  }
-  if (config.tiltShift === 'on') {
-    fieldComposite.filters = [new TiltShiftFilter()]
-    syncTiltShiftArea()
-  }
+  const { composite: fieldComposite, syncArea: syncTiltShiftArea } = buildFieldComposite(
+    world,
+    config.tiltShift === 'on',
+    app.screen
+  )
   app.stage.addChild(fieldComposite, fade, dialogBox, emotionTop)
   const syncEmotionHost = (): void => {
     syncEmotionLayerHost({

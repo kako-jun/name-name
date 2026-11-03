@@ -34,6 +34,21 @@ function field(w: number, h: number, color: string, label: string): string {
   if (!g) throw new Error('2D canvas を作れません')
   g.fillStyle = color
   g.fillRect(0, 0, w, h)
+  // ぼかし等の画面端の効果を目視できるよう、全面（下端含む）に薄い格子を引く
+  g.strokeStyle = 'rgba(255,255,255,0.18)'
+  g.lineWidth = 2
+  for (let x = 0; x <= w; x += 32) {
+    g.beginPath()
+    g.moveTo(x, 0)
+    g.lineTo(x, h)
+    g.stroke()
+  }
+  for (let y = 0; y <= h; y += 32) {
+    g.beginPath()
+    g.moveTo(0, y)
+    g.lineTo(w, y)
+    g.stroke()
+  }
   g.fillStyle = 'rgba(255,255,255,0.35)'
   g.font = 'bold 28px sans-serif'
   g.fillText(label, 16, 36)
