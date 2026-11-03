@@ -3,6 +3,7 @@
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
+import { buildFieldComposite } from './fieldComposite'
 import { createFieldStands } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
 import {
@@ -264,8 +265,15 @@ async function loadConfig(): Promise<FieldSampleConfig> {
   let textBase = base
   // 素材なしフィクスチャ (#890)。`?fixture=dummy`。?config= が同時にあれば config が優先
   if (dummy) {
-    const acrylic = new URLSearchParams(location.search).get('spriteStyle') === 'acrylic'
-    text = JSON.stringify(buildDummyFixture(acrylic ? { spriteStyle: 'acrylic' } : {}))
+    const q = new URLSearchParams(location.search)
+    const acrylic = q.get('spriteStyle') === 'acrylic'
+    const tilt = q.get('tiltShift') === 'on'
+    text = JSON.stringify(
+      buildDummyFixture({
+        ...(acrylic ? { spriteStyle: 'acrylic' as const } : {}),
+        ...(tilt ? { tiltShift: 'on' as const } : {}),
+      })
+    )
   }
   if (url) {
     try {
@@ -510,7 +518,14 @@ async function main(): Promise<void> {
   dialogBox.hide()
   // ff の窓を出している会話中だけ、感情吹き出しを窓より前へ出す（stage 最前面。揺れは world.y と同期） (#840)
   const emotionTop = new Container()
-  app.stage.addChild(world, fade, dialogBox, emotionTop)
+  // 最終合成 (#885): world（背景・キャラ・前景・感情吹き出し）を 1 つの箱に束ね、`tiltShift: "on"` のときだけそこへチルトシフトを 1 回掛ける。
+  // world は揺れ（world.y）で動くので、フィルタ領域は揺れない外側の箱に画面固定で持つ。会話窓・フェード・戦闘画面は箱の外
+  const { composite: fieldComposite, syncArea: syncTiltShiftArea } = buildFieldComposite(
+    world,
+    config.tiltShift === 'on',
+    app.screen
+  )
+  app.stage.addChild(fieldComposite, fade, dialogBox, emotionTop)
   const syncEmotionHost = (): void => {
     syncEmotionLayerHost({
       ffWindow: config.dialogStyle === 'ff',
@@ -689,6 +704,7 @@ async function main(): Promise<void> {
       world.visible = false
       fade.visible = false
       app.renderer.resize(b.width, b.height)
+      syncTiltShiftArea()
       // 論理サイズ固定 (sit-by-me#52): 16:9 を viewport の高さにも収める（等比 contain・crop しない）
       contain.enter(b.logicalSize ? { w: b.width, h: b.height } : null)
       try {
@@ -738,6 +754,7 @@ async function main(): Promise<void> {
     // contain を先に外す（付ける前に保存した canvas の寸法＝戦闘サイズへ戻る。直後の resize でフィールドの大きさに上書きされる）
     contain.leave()
     app.renderer.resize(scene.mask.width, scene.mask.height)
+    syncTiltShiftArea()
     battleTransition.resize(scene.mask.width, scene.mask.height)
     applyDialogMetrics(scene.mask.width, scene.mask.height)
     world.visible = true
@@ -872,6 +889,7 @@ async function main(): Promise<void> {
     }
     if (app.renderer.width !== s.mask.width || app.renderer.height !== s.mask.height)
       app.renderer.resize(s.mask.width, s.mask.height)
+    syncTiltShiftArea()
     applyDialogMetrics(s.mask.width, s.mask.height)
     // NPC はそのシーンの分だけ出す（クリックで近づく途中の取り消しも）
     approach = null
