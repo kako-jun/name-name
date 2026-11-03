@@ -3,12 +3,15 @@
  * 半径の式は `tiltShift.ts` の `tiltShiftBlurRadius` と同じ（中心からの距離 |2y-1| を smoothstep）。
  * 頂点シェーダは `VignetteFilter.ts` と同じ PixiJS フィルタ共通のパススルー実装。
  *
- * フィルタの入力は filterArea（画面全体に固定する）なので、vTextureCoord.y がそのまま画面の縦位置になる。
+ * フィルタの入力は filterArea（画面全体に固定する）。入力テクスチャが出力フレームより大きいことがあるので、
+ * 縦位置は vTextureCoord ではなく「フレーム内の 0..1」（vTextureCoord / (uOutputFrame.zw * uInputSize.zw)）で取る。
  */
 import { Filter, GlProgram, GpuProgram } from 'pixi.js'
 import {
   TILT_SHIFT_DEFAULT_PARAMS,
+  TILT_SHIFT_GOLDEN_ANGLE,
   TILT_SHIFT_SAMPLE_COUNT,
+  clampFocusRatio,
   type TiltShiftParams,
 } from './tiltShift'
 
@@ -88,15 +91,19 @@ out vec4 finalColor;
 
 uniform sampler2D uTexture;
 uniform vec4 uInputSize;
+uniform vec4 uOutputFrame;
 uniform float uFocus;
 uniform float uMaxBlur;
 
 const int SAMPLES = ${TILT_SHIFT_SAMPLE_COUNT};
-const float GOLDEN = 2.399963229728653;
+const float GOLDEN = ${TILT_SHIFT_GOLDEN_ANGLE};
 
 void main()
 {
-    float d = abs(2.0 * vTextureCoord.y - 1.0);
+    // 純関数 tiltShiftBlurRadius との差: radius < 0.05（サブピクセル）は等倍サンプルで早期 return する（純関数は微小な正の値を返す）
+    // 入力テクスチャが出力フレームより大きいことがある（プールの丸め）ので、uv ではなくフレーム内の縦位置 0..1 で距離を取る
+    vec2 frameSize = uOutputFrame.zw * uInputSize.zw;
+    float d = abs(2.0 * (vTextureCoord.y / frameSize.y) - 1.0);
     float radius = uMaxBlur * smoothstep(uFocus, 1.0, d);
     if (radius < 0.05) {
         finalColor = texture(uTexture, vTextureCoord);
@@ -107,7 +114,7 @@ void main()
         float r = sqrt((float(i) + 0.5) / float(SAMPLES));
         float a = float(i) * GOLDEN;
         vec2 off = vec2(cos(a), sin(a)) * r * radius * uInputSize.zw;
-        sum += texture(uTexture, clamp(vTextureCoord + off, vec2(0.0), vec2(1.0)));
+        sum += texture(uTexture, clamp(vTextureCoord + off, 0.5 * uInputSize.zw, frameSize - 0.5 * uInputSize.zw));
     }
     finalColor = sum / float(SAMPLES);
 }
@@ -136,18 +143,19 @@ fn mainFragment(
   @location(0) uv: vec2<f32>,
   @builtin(position) position: vec4<f32>
 ) -> @location(0) vec4<f32> {
-  let d = abs(2.0 * uv.y - 1.0);
+  let frameSize = gfu.uOutputFrame.zw * gfu.uInputSize.zw;
+  let d = abs(2.0 * (uv.y / frameSize.y) - 1.0);
   let radius = tilt.uMaxBlur * smoothstep(tilt.uFocus, 1.0, d);
   if (radius < 0.05) {
-    return textureSample(uTexture, uSampler, uv);
+    return textureSampleLevel(uTexture, uSampler, uv, 0.0);
   }
   var sum = vec4<f32>(0.0);
   let n = ${TILT_SHIFT_SAMPLE_COUNT};
   for (var i = 0; i < n; i++) {
     let r = sqrt((f32(i) + 0.5) / f32(n));
-    let a = f32(i) * 2.399963229728653;
+    let a = f32(i) * ${TILT_SHIFT_GOLDEN_ANGLE};
     let off = vec2<f32>(cos(a), sin(a)) * r * radius * gfu.uInputSize.zw;
-    sum += textureSampleLevel(uTexture, uSampler, clamp(uv + off, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
+    sum += textureSampleLevel(uTexture, uSampler, clamp(uv + off, 0.5 * gfu.uInputSize.zw, frameSize - 0.5 * gfu.uInputSize.zw), 0.0);
   }
   return sum / f32(n);
 }
@@ -166,7 +174,7 @@ export class TiltShiftFilter extends Filter {
       glProgram,
       resources: {
         tiltUniforms: {
-          uFocus: { value: params.focusRatio, type: 'f32' },
+          uFocus: { value: clampFocusRatio(params.focusRatio), type: 'f32' },
           uMaxBlur: { value: params.maxBlurPx, type: 'f32' },
         },
       },

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   TILT_SHIFT_DEFAULT_PARAMS,
+  TILT_SHIFT_GOLDEN_ANGLE,
+  clampFocusRatio,
   TILT_SHIFT_SAMPLE_COUNT,
   smoothstep,
   tiltShiftBlurRadius,
@@ -33,7 +35,7 @@ describe('tiltShift (#885)', () => {
   })
 })
 
-describe('tiltShift 追加観点 (#885)', () => {
+describe('tiltShift 境界値・不正値・サンプル配置 (#885)', () => {
   it('smoothstep は GLSL と同じ。端で 0/1、中点で 0.5、edge0>=edge1 は階段', () => {
     expect(smoothstep(0, 1, 0)).toBe(0)
     expect(smoothstep(0, 1, 1)).toBe(1)
@@ -109,5 +111,20 @@ describe('tiltShift 追加観点 (#885)', () => {
     const cx = s.reduce((a, p) => a + p.x, 0) / s.length
     const cy = s.reduce((a, p) => a + p.y, 0) / s.length
     expect(Math.hypot(cx, cy)).toBeLessThan(0.1)
+  })
+  it('黄金角の値がシェーダへ埋め込まれる定数と一致し、サンプル角度の式に使われる', () => {
+    expect(TILT_SHIFT_GOLDEN_ANGLE).toBeCloseTo(2.399963229728653, 12)
+    const s = tiltShiftSampleOffsets(8)
+    s.forEach((p, i) => {
+      const r = Math.sqrt((i + 0.5) / 8)
+      expect(p.x).toBeCloseTo(Math.cos(i * TILT_SHIFT_GOLDEN_ANGLE) * r, 12)
+      expect(p.y).toBeCloseTo(Math.sin(i * TILT_SHIFT_GOLDEN_ANGLE) * r, 12)
+    })
+  })
+  it('clampFocusRatio は 0〜1 にクランプ（NaN は 0）', () => {
+    expect(clampFocusRatio(-1)).toBe(0)
+    expect(clampFocusRatio(2)).toBe(1)
+    expect(clampFocusRatio(NaN)).toBe(0)
+    expect(clampFocusRatio(0.45)).toBe(0.45)
   })
 })

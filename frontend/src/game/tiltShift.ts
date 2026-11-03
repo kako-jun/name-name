@@ -20,6 +20,11 @@ export const TILT_SHIFT_MAX_BLUR_PX = 9
 /** ぼかしのサンプル数（黄金角のスパイラル。多いほど滑らか、重い） */
 export const TILT_SHIFT_SAMPLE_COUNT = 24
 
+/** focusRatio を 0〜1 にクランプ（NaN は 0）。純関数とフィルタで同じ扱いにする */
+export function clampFocusRatio(n: number): number {
+  return clamp01(n)
+}
+
 export interface TiltShiftParams {
   focusRatio: number
   maxBlurPx: number
@@ -29,6 +34,9 @@ export const TILT_SHIFT_DEFAULT_PARAMS: TiltShiftParams = {
   focusRatio: TILT_SHIFT_FOCUS_RATIO,
   maxBlurPx: TILT_SHIFT_MAX_BLUR_PX,
 }
+
+/** 黄金角（rad）。シェーダと tiltShiftSampleOffsets で共有する */
+export const TILT_SHIFT_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
 
 function clamp01(n: number): number {
   return Number.isNaN(n) ? 0 : Math.min(1, Math.max(0, n))
@@ -51,7 +59,7 @@ export function tiltShiftBlurRatio(
 ): number {
   const y = clamp01(yRatio)
   const d = Math.abs(2 * y - 1)
-  return smoothstep(clamp01(params.focusRatio), 1, d)
+  return smoothstep(clampFocusRatio(params.focusRatio), 1, d)
 }
 
 /** 縦位置 yRatio でのぼかし半径（px）。最大半径は 0 以上（NaN は 0） */
@@ -71,7 +79,7 @@ export function tiltShiftSampleOffsets(
   count: number = TILT_SHIFT_SAMPLE_COUNT
 ): { x: number; y: number }[] {
   const n = Math.max(1, Math.floor(count) || 1)
-  const golden = Math.PI * (3 - Math.sqrt(5))
+  const golden = TILT_SHIFT_GOLDEN_ANGLE
   const out: { x: number; y: number }[] = []
   for (let i = 0; i < n; i++) {
     const r = Math.sqrt((i + 0.5) / n)
