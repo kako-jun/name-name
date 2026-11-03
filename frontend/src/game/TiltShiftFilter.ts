@@ -100,6 +100,7 @@ const float GOLDEN = ${TILT_SHIFT_GOLDEN_ANGLE};
 
 void main()
 {
+    // クランプ下限 0.5*texel は filterArea の左上が (0,0) であることが前提（syncArea が常に (0,0) 起点で領域を作る）
     // 純関数 tiltShiftBlurRadius との差: radius < 0.05（サブピクセル）は等倍サンプルで早期 return する（純関数は微小な正の値を返す）
     // 入力テクスチャが出力フレームより大きいことがある（プールの丸め）ので、uv ではなくフレーム内の縦位置 0..1 で距離を取る
     vec2 frameSize = uOutputFrame.zw * uInputSize.zw;
@@ -179,7 +180,7 @@ export class TiltShiftFilter extends Filter {
         },
       },
     })
-    // フィルタ領域の端でカーネルが欠けないよう、最大半径ぶんの余白は取らず画面端はクランプで受ける
+    // 画面外の内容は取り込まず（最大半径ぶんの余白は取らない）、端ピクセルへクランプする設計
     this.padding = 0
   }
 }
