@@ -442,7 +442,7 @@ export function computeStemFlare(
   const shift =
     Math.sign(tipCx - rect.cx) * Math.min(Math.abs(tipCx - rect.cx), Math.max(0, maxShift))
   const cx = Math.min(w - halfWidth, Math.max(halfWidth, rect.cx + shift))
-  if (Math.abs(cx - rect.cx) <= rect.halfWidth - halfWidth) return null
+  // 先が帯の外（outside > 0）なら shift > rect.halfWidth - halfWidth となり、cx が帯の縁の内側に収まることは無い（到達不能ガードは置かない）
   return { cx, halfWidth, top }
 }
 

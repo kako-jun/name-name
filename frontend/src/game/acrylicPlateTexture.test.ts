@@ -209,8 +209,21 @@ describe('createAcrylicPlateTexture: stemRef（基本の絵の換算）(#853)', 
       height: logicalH,
       source: { resource: {}, pixelWidth: pw, pixelHeight: ph },
     }) as unknown as Texture
-  const lastStemRef = (): unknown =>
-    (vi.mocked(renderAcrylicPlate).mock.calls.at(-1)![3] as { stemRef?: unknown }).stemRef
+  /** stemRef を取ったら重い描画に進まず中断（createAcrylicPlateTexture は try/catch で null を返す）して、値が違ったときのハングを避ける */
+  let captured: unknown
+  beforeEach(() => {
+    captured = undefined
+    vi.mocked(renderAcrylicPlate).mockImplementationOnce(((
+      _a: unknown,
+      _w: number,
+      _h: number,
+      p: { stemRef?: unknown }
+    ) => {
+      captured = p.stemRef
+      throw new Error('captured')
+    }) as never)
+  })
+  const lastStemRef = (): unknown => captured
 
   it('baseTex 無しは stemRef なし', () => {
     createAcrylicPlateTexture(srcTexture(400, 800), P)

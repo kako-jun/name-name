@@ -42,6 +42,7 @@ import {
 } from './battleLayout'
 import type { SpriteSlot } from './battleLayout'
 import { computeSlitY } from './acrylicBase'
+import { createAcrylicPlateTexture } from './acrylicPlateTexture'
 import { computeShadowTransform } from './acrylicShadow'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
 import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
@@ -135,6 +136,11 @@ afterEach(() => {
     if (!internals(s).destroyed) s.destroy({ children: true })
   }
   vi.restoreAllMocks()
+})
+
+vi.mock('./acrylicPlateTexture', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./acrylicPlateTexture')>()
+  return { ...actual, createAcrylicPlateTexture: vi.fn(actual.createAcrylicPlateTexture) }
 })
 
 describe('BattleScreen: front（従来）', () => {
@@ -3354,17 +3360,28 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     s.redraw(800, 450)
   }
 
-  it('ポーズの板は基本の絵（baseVisual のテクスチャ）を付けて作り、基本の絵自身は付けない (#853)', async () => {
-    const make1 = vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate') as unknown as {
-      mock: { calls: Array<[Texture, Texture | undefined]> }
-    }
+  it('ポーズの板は基本の絵（baseVisual のテクスチャ）を createAcrylicPlateTexture の第 3 引数まで渡して作り、基本の絵自身には渡さない (#853)', async () => {
+    ;(
+      BattleScreen.prototype as never as { makeAcrylicPlate: { mockRestore(): void } }
+    ).makeAcrylicPlate.mockRestore()
+    const create = vi.mocked(createAcrylicPlateTexture)
+    create.mockClear()
+    create.mockImplementation(
+      (tex: Texture) =>
+        ({
+          texture: sized(tex.width + 16, tex.height + 16),
+          pad: 8,
+          shadow: sized(64, 32),
+          foot: { x: 32, y: 16 },
+        }) as never
+    )
     const { s } = await setup()
     const v = pv(s)
     const baseTex = textures.get('img/hero.webp')!
-    const callFor = (t: Texture) => make1.mock.calls.find((c) => c[0] === t)!
-    expect(callFor(baseTex)[1]).toBeUndefined()
+    const callFor = (t: Texture) => create.mock.calls.find((c) => c[0] === t)!
+    expect(callFor(baseTex)[2]).toBeUndefined()
     for (const key of ['idle', 'slash', 'down']) {
-      expect(callFor(v.poseVisuals[key].texture)[1]).toBe(baseTex)
+      expect(callFor(v.poseVisuals[key].texture)[2]).toBe(baseTex)
     }
   })
 

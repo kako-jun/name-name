@@ -60,6 +60,7 @@ export function createAcrylicPlateTexture(
       ...params,
       spriteLiftRatio: params.hasBase ? params.spriteLiftRatio : 0,
       stemWidthRatio: params.hasBase ? params.stemWidthRatio : 0,
+      // 前提: 基本の絵とポーズの絵は同じ resolution（同じ物理 px の単位）で読まれる。ws はポーズ画像の縮小率なので基本の絵にも同じ倍率をかける
       // 板を作る画像は pixelWidth（物理 px）で縮小しているので、基本の絵も同じ物理 px で測る（論理寸法の width は解像度で変わる）
       stemRef: baseTex
         ? computeStemRef(
