@@ -585,11 +585,14 @@ export function sampleActor(
   const followthrough = available['swing-followthrough'] !== undefined
   if (time < T.attackStepMs) {
     // 5 段 (#1026): 踏み出しの前半は ready、終わりの attackWindupMs が swing-windup
+    // 前半は ready（無ければ step、さらに idle に落ちる。ready の絵が無い者が idle に退行しないように）
     const pose: BattlePose = !windup
       ? 'step'
-      : time >= T.attackStepMs - Math.min(T.attackWindupMs, T.attackStepMs)
+      : time >= T.attackStepMs - T.attackWindupMs
         ? 'swing-windup'
-        : 'ready'
+        : available.ready !== undefined || available.step === undefined
+          ? 'ready'
+          : 'step'
     return { forward: T.attackStepDistance * easeOutQuad(time / T.attackStepMs), pose }
   }
   const afterStep = time - T.attackStepMs
@@ -602,7 +605,7 @@ export function sampleActor(
     // 5 段 (#1026): 戻りの始めの attackFollowthroughMs が swing-followthrough、残りは ready（絵が無ければ従来の step）
     const pose: BattlePose = !followthrough
       ? 'step'
-      : afterSlash < Math.min(T.attackFollowthroughMs, T.attackReturnMs)
+      : afterSlash < T.attackFollowthroughMs
         ? 'swing-followthrough'
         : 'ready'
     return {

@@ -105,6 +105,32 @@ describe('新ポーズ special / swing-windup / swing-followthrough (#1026)', ()
       expect(sampleActor('attack', t, T, a).forward).toBe(sampleActor('attack', t, T).forward)
   })
 
+  it('windup だけ持ち ready が無い者は、前半を step にする（idle に退行しない）', () => {
+    expect(seq('attack', attackLen, T, { 'swing-windup': 1, step: 1 })).toEqual([
+      'step',
+      'swing-windup',
+      'slash',
+      'step',
+      'idle',
+    ])
+    // ready があれば ready。どちらも無ければ ready（resolvePose が idle に落とす）
+    expect(seq('attack', attackLen, T, { 'swing-windup': 1, step: 1, ready: 1 })[0]).toBe('ready')
+    expect(seq('attack', attackLen, T, { 'swing-windup': 1 })[0]).toBe('ready')
+    expect(resolvePose('ready', { step: 1 })?.pose).not.toBe('step') // ready 自体の代替は従来どおり
+  })
+
+  it('窓が踏み出し・戻りより長い設定は、その長さにクランプされる', () => {
+    const L = { ...T, attackWindupMs: 9999, attackFollowthroughMs: 9999 }
+    const a = { 'swing-windup': 1, 'swing-followthrough': 1 }
+    // windup は踏み出しの先頭から（ready の区間なし）、followthrough は戻りの終わりまで
+    expect(seq('attack', attackLen, L, a)).toEqual([
+      'swing-windup',
+      'slash',
+      'swing-followthrough',
+      'idle',
+    ])
+  })
+
   it('special は特技（skill）の構え。spell は cast、item は ready', () => {
     expect(sampleActor('skill', 10, T).pose).toBe('special')
     expect(sampleActor('spell', 10, T).pose).toBe('cast')
