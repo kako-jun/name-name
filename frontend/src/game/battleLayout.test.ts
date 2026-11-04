@@ -2113,7 +2113,27 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
                   plain.enemies[i].size + 1e-6
                 )
               )
+            // どの敵も縮んでいない組み合わせでは旧配置と一致する（板を含む中央寄せぶんの x の微差は size の 5% までは許す）
+            if (withPlate.enemies.every((e, i) => Math.abs(e.size - plain.enemies[i].size) < 1e-6))
+              withPlate.enemies.forEach((e, i) => {
+                const tag = `${W}x${H} n${n} a${a} #${i} unchanged`
+                expect(e.y, tag).toBeCloseTo(plain.enemies[i].y, 6)
+                expect(e.width, tag).toBeCloseTo(plain.enemies[i].width, 6)
+                expect(Math.abs(e.x - plain.enemies[i].x), tag).toBeLessThan(0.05 * e.size)
+              })
           }
+  })
+
+  it('味方の板（4 人・縦横比 1）が画面内に収まる（画面サイズ総当たり）', () => {
+    for (const W of WIDTHS)
+      for (const H of HEIGHTS) {
+        const L = computeSideBattleLayout({ width: W, height: H, partyCount: 4, enemyCount: 2 })
+        for (const s of L.party) {
+          const r = computeEnemyPlateRect(s, 1, PARAMS)
+          expect(r.x, `${W}x${H}`).toBeGreaterThanOrEqual(-1e-6)
+          expect(r.x + r.w, `${W}x${H}`).toBeLessThanOrEqual(W + 1e-6)
+        }
+      }
   })
 
   it.each(WIDTHS)(
