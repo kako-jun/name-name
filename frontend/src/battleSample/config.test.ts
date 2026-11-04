@@ -2193,3 +2193,38 @@ describe('設定 JSON: 脚本の 付与: (#875)', () => {
     expect(skills).toBeUndefined()
   })
 })
+
+describe('設定 JSON: ジョブの変換 (#876)', () => {
+  const base = (over: Record<string, unknown> = {}) => ({
+    jobs: [{ id: 'thief', name: '盗賊', conversions: ['ぬすむ => 回数=2', '火 => type=fire'] }],
+    skills: [{ id: 'steal1', name: 'ぬすむ', effect: 'steal', tags: ['ぬすむ'] }],
+    spells: [{ id: 'fire', name: 'ほのお', mp: 1, effect: 'damage 5..9', tags: ['火'] }],
+    party: [{ id: 'hero', jobs: ['thief'], job: 'thief', abilities: ['steal1'] }],
+    ...over,
+  })
+  const menu = (raw: unknown) => {
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    return buildBattleSetup(r.value, view()).options.menu
+  }
+  it('就いているジョブの変換が、わざ・呪文の候補の効果に効き、印が付く', () => {
+    const m = menu(base())
+    expect(m.skills?.hero[0]).toMatchObject({ effect: 'steal 回数=2', convertedBy: '盗賊' })
+    expect(m.spells?.hero[0]).toMatchObject({
+      effect: 'damage 5..9 type=fire',
+      convertedBy: '盗賊',
+    })
+  })
+  it('ジョブ無し（job: ""）では変換されない', () => {
+    const m = menu(
+      base({ party: [{ id: 'hero', jobs: ['thief'], job: '', abilities: ['steal1'] }] })
+    )
+    expect(m.skills?.hero[0].effect).toBe('steal')
+    expect('convertedBy' in (m.skills?.hero[0] ?? {})).toBe(false)
+    expect(m.spells?.hero[0].effect).toBe('damage 5..9')
+  })
+  it('conversions が文字列の配列でなければ読み込みエラー', () => {
+    const r = parseConfig(base({ jobs: [{ id: 'j', name: 'J', conversions: 'x' }] }), BASE)
+    expect(r.ok).toBe(false)
+  })
+})

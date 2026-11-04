@@ -762,6 +762,7 @@ export class BattleEngine {
         ? this.evalEffectDsl(spell.effect, ctx)
         : ['(呪文に効果定義なし)']
     for (const line of lines) this.appendLog(line)
+    if (spell.convertedBy) this.appendLog(`(${spell.convertedBy}ジョブの 効果)`)
     this.recordEffect(
       'spell',
       caster,
@@ -954,6 +955,7 @@ export class BattleEngine {
         ? this.evalEffectDsl(skill.effect, ctx)
         : []
     for (const line of lines) this.appendLog(line)
+    if (skill.convertedBy) this.appendLog(`(${skill.convertedBy}ジョブの 効果)`)
     this.recordEffect(
       'skill',
       caster,
@@ -2559,6 +2561,10 @@ export interface SpellExecution {
   multiTarget?: boolean
   effect?: string
   builtin?: string
+  /** ジョブの変換 (#876) が効果を変えたときのジョブの名前。あれば使ったときのログに「(〇〇ジョブの 効果)」を足す。無ければ従来どおり */
+  convertedBy?: string
+  /** タグ (#876)。変換の目印で、エンジンは読まない（設定 JSON の戦闘サンプルが持ち回る） */
+  tags?: string[]
 }
 
 /**
@@ -2574,6 +2580,10 @@ export interface SkillExecution {
   message?: string
   /** 予兆の文言（P2 #836）。使用時に `message` のあとへ出す。`{user}` は使った側の名前に置き換わる */
   telegraph?: string
+  /** ジョブの変換 (#876) が効果を変えたときのジョブの名前。あれば使ったときのログに「(〇〇ジョブの 効果)」を足す（味方のわざ・呪文だけ）。無ければ従来どおり */
+  convertedBy?: string
+  /** タグ (#876)。変換の目印で、エンジンは読まない（設定 JSON の戦闘サンプルが持ち回る） */
+  tags?: string[]
   /** 召喚獣の演出 (#750)。あれば行動の記録（`BattleActionEvent.summon`）に載る。魔石 (#889) の召喚と、味方の「わざ」（`召喚獣id` を持つ特技）が付ける。敵が使う特技の `cue` は無視される */
   cue?: SummonCue
 }

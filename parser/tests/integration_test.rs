@@ -12692,3 +12692,75 @@ fn test_monster_level_parse_and_roundtrip() {
     let out = emitter::emit(&parser::parse(src));
     assert!(out.contains("レベル: 15\n"), "{out}");
 }
+
+// ---- #876: タグ / 変換 ----
+
+fn master_blocks(body: &str) -> name_name_parser::models::Document {
+    let src = format!(
+        "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n{body}"
+    );
+    parser::parse(&src)
+}
+
+#[test]
+fn test_tags_and_job_conversions_parse_and_roundtrip() {
+    use name_name_parser::models::Event;
+    let doc = master_blocks(
+        "[特技 steal1]\n名前: ぬすむ\n効果: steal\nタグ: ぬすむ, 物理\nタグ: ぬすむ, 技\n[/特技]\n\n[呪文 fire]\n名前: ファイア\nMP: 3\n効果: damage 5..9\ntags: 火\n[/呪文]\n\n[ジョブ thief]\n名前: 盗賊\n変換: ぬすむ => 回数=2\n変換: 火 => type=fire 確率=50\n変換:\n[/ジョブ]\n\n[特技 plain]\n名前: たいあたり\n効果: damage 1..2\n[/特技]\n",
+    );
+    let events = &doc.chapters[0].scenes[0].events;
+    let skill = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Skill(s) if s.id == "steal1" => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        skill.tags.as_deref(),
+        Some(&["ぬすむ".to_string(), "物理".to_string(), "技".to_string()][..])
+    );
+    let plain = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Skill(s) if s.id == "plain" => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(plain.tags, None);
+    let spell = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Spell(s) => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(spell.tags.as_deref(), Some(&["火".to_string()][..]));
+    let job = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Job(j) => Some(j),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        job.conversions.as_deref(),
+        Some(
+            &[
+                "ぬすむ => 回数=2".to_string(),
+                "火 => type=fire 確率=50".to_string()
+            ][..]
+        )
+    );
+    let out = emitter::emit(&doc);
+    assert!(out.contains("タグ: ぬすむ, 物理, 技\n"), "{out}");
+    assert!(
+        out.contains("変換: ぬすむ => 回数=2\n変換: 火 => type=fire 確率=50\n"),
+        "{out}"
+    );
+    let again = parser::parse(&out);
+    assert_eq!(
+        again.chapters[0].scenes[0].events,
+        doc.chapters[0].scenes[0].events
+    );
+}

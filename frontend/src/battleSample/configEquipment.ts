@@ -9,6 +9,7 @@
  *   本編と同じ `equipment.ts` で能力値・耐性・通常攻撃の属性を味方に反映し、候補窓の「しょうかん」と「わざ」の行を作る
  */
 import type { ItemDef, JobDef, MagiciteDef } from '../types'
+import { convertForJob } from '../game/jobConversion'
 import type { BattleSkillEntry, BattleSummonEntry } from '../game/battleMenu'
 import type { SkillExecution } from '../game/battleEngine'
 import { normalizeAttrId } from '../game/affinity'
@@ -99,6 +100,10 @@ export function parseJobs(raw: unknown): ParseResult<Record<string, JobDef>> {
         return { ok: false, error: `${path}.${f} は空でない文字列である必要があります` }
       }
     }
+    // 変換ルール (#876)。`[ジョブ]` の `変換:` と同じ書式の文字列の配列（書いた順）
+    if (r.conversions !== undefined && !stringList(r.conversions)) {
+      return { ok: false, error: `${path}.conversions は文字列の配列である必要があります` }
+    }
     for (const f of ['description', 'equipBonus'] as const) {
       if (r[f] !== undefined && typeof r[f] !== 'string') {
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }
@@ -129,6 +134,9 @@ export function parseJobs(raw: unknown): ParseResult<Record<string, JobDef>> {
       ...(text('description') !== undefined ? { description: text('description') } : {}),
       ...(text('equipBonus') !== undefined ? { equipBonus: text('equipBonus') } : {}),
       ...(elements.length > 0 ? { elements } : {}),
+      ...(r.conversions !== undefined && (stringList(r.conversions) ?? []).length > 0
+        ? { conversions: stringList(r.conversions) as string[] }
+        : {}),
     }
   }
   return { ok: true, value: out }
@@ -140,6 +148,8 @@ export interface PartyEquipmentMenus {
   summons: Record<string, BattleSummonEntry[]>
   /** 味方 id → 「わざ」の行 (#207。`party[].abilities` の固定のわざ＋装備中のアイテムの `わざ`） */
   skills: Record<string, BattleSkillEntry[]>
+  /** 味方 id → 就いているジョブ (#876)。変換ルールを呪文にも当てるために持ち回る。ジョブを持たない味方は入らない */
+  jobs: Record<string, JobDef>
 }
 
 /**
@@ -158,7 +168,7 @@ export function applyPartyEquipment(
     jobs?: Record<string, JobDef>
   }
 ): ParseResult<PartyEquipmentMenus> {
-  const menus: PartyEquipmentMenus = { summons: {}, skills: {} }
+  const menus: PartyEquipmentMenus = { summons: {}, skills: {}, jobs: {} }
   if (!Array.isArray(rawParty)) return { ok: true, value: menus }
   for (let i = 0; i < Math.min(rawParty.length, party.length); i++) {
     const r: unknown = rawParty[i]
@@ -222,8 +232,12 @@ export function applyPartyEquipment(
     for (const id of ids) {
       if (!Object.prototype.hasOwnProperty.call(masters.skills, id)) continue
       if (rows.some((e) => e.id === id)) continue
-      rows.push({ id, ...masters.skills[id] })
+      // ジョブの変換 (#876): 就いているジョブがこのタグの効果に効くときだけ、効果を変換して印を付ける
+      const sk = masters.skills[id]
+      const conv = convertForJob(resolved.job, sk.tags, sk.effect, `特技 '${id}'`)
+      rows.push({ id, ...sk, ...(conv ?? {}) })
     }
+    if (resolved.job) menus.jobs[entity.id] = resolved.job
     if (rows.length > 0) menus.skills[entity.id] = rows
   }
   return { ok: true, value: menus }

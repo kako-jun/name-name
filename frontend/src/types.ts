@@ -264,6 +264,8 @@ export interface JobDef {
   equipBonus?: string
   /** このジョブの間だけ持つ属性防御の属性 id（parser が小文字・半角に正規化・重複排除済み。最大 2 つ） */
   elements?: string[]
+  /** 変換ルール (#876。`変換: <タグ> => <効果の修飾トークン>` を書いた順の生文字列)。解釈・警告は `game/jobConversion.ts`。無ければ従来どおり */
+  conversions?: string[]
 }
 
 /**
@@ -317,6 +319,8 @@ export interface SpellDef {
   school?: string
   /** 全体化できるか (#895。`全体化: 可`)。対象が敵単体の呪文だけ、戦闘中の対象窓で「全体」に切り替えられる。書かなければ偽（従来どおり） */
   multiTarget?: boolean
+  /** タグ (#876。`タグ: ぬすむ`)。ジョブの変換ルールが当てる目印。書かなければ無し */
+  tags?: string[]
 }
 
 /**
@@ -338,6 +342,8 @@ export interface SkillDef {
   summonId?: string
   /** 解決済みの召喚獣の演出 (#750)。**parser は出さない**。`resolveSummonRefs` が `summonId` から作る（宣言に無い id は付かない） */
   cue?: SummonCue
+  /** タグ (#876。`タグ: ぬすむ`)。`SpellDef.tags` と同じ。書かなければ無し */
+  tags?: string[]
 }
 
 /**

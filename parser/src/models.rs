@@ -684,6 +684,10 @@ pub struct SpellDef {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub multi_target: bool,
+    /// タグ (#876。`タグ: ぬすむ, 物理`)。ジョブの変換ルール（`[ジョブ]` の `変換:`）が「このタグの特技・呪文」に当てるための目印で、
+    /// それ以外の意味は無い。カンマ区切り・複数行可・重複なし。書かない呪文は None（タグ無し＝従来どおり）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// 特技定義 (#834、敵の行動パターン P0 / 親 #832)。
@@ -716,6 +720,9 @@ pub struct SkillDef {
     /// 特技が自分の `効果`/`builtin` を持たないときは、召喚獣の中身を使う。解決は runtime（`summons.ts`）。JSON / TS 側のキーは `summonId`。
     #[serde(default, rename = "summonId", skip_serializing_if = "Option::is_none")]
     pub summon_id: Option<String>,
+    /// タグ (#876。`タグ: ぬすむ`)。`SpellDef.tags` と同じ。書かない特技は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。
@@ -839,6 +846,10 @@ pub struct JobDef {
     /// このジョブの間だけ持つ属性防御の属性 id（`属性:`。parser が小文字・半角に正規化済み・重複排除済み）。最大 2 つ。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elements: Vec<String>,
+    /// 変換ルール (#876。`変換: ぬすむ => 回数=2`)。書いた順の生文字列（`<タグ> => <効果の修飾トークン>`）で、解釈と不正な行の警告は runtime（`jobConversion.ts`）。
+    /// このジョブの間、そのタグの特技・呪文の効果にトークンを足す・上書きする。書かないジョブは None（従来どおり）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversions: Option<Vec<String>>,
 }
 
 /// 状態定義 (#870、状態異常システム)。`[状態 <id>] ... [/状態]` ブロックで書く。

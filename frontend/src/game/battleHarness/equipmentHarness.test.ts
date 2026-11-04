@@ -82,6 +82,7 @@ describe('equipmentScenarios: 生成', () => {
       'enemy-row',
       'enemy-level',
       'script-grant',
+      'job-conversion',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

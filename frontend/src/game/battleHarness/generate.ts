@@ -12,6 +12,7 @@ import { applyMemberMagicite, resolveMemberMagicite } from '../magicite'
 import { resolveMemberEquipment } from '../equipment'
 import { lcg } from './rng'
 import type { Op, Scenario } from './scenario'
+import { convertForJob } from '../jobConversion'
 
 export type Family =
   | 'effect-matrix'
@@ -1456,6 +1457,86 @@ export function enemyLevelScenarios(): Scenario[] {
           })
         }
       }
+    }
+  }
+  return out
+}
+
+/** ジョブの変換 (#876)。わざの効果（steal / 通常ダメージ / 回復 / 即死 / 効果なし）、タグ、ジョブの変換ルール（なし・正常・壊れ・当たらない） */
+const JOB_CONV_EFFECTS: ReadonlyArray<string | undefined> = [
+  'steal',
+  'steal 確率=60',
+  'damage 5..9',
+  'heal 5..9',
+  'damage_full',
+  undefined,
+]
+const JOB_CONV_TAGS: ReadonlyArray<string[] | undefined> = [
+  undefined,
+  ['ぬすむ'],
+  ['火'],
+  ['ぬすむ', '火'],
+]
+const JOB_CONV_JOBS: ReadonlyArray<{ name: string; conversions?: string[] } | undefined> = [
+  undefined,
+  { name: 'empty' },
+  { name: 'steal2', conversions: ['ぬすむ => 回数=2'] },
+  { name: 'both', conversions: ['ぬすむ => 回数=2', '火 => type=fire'] },
+  { name: 'stack', conversions: ['ぬすむ => 回数=2', 'ぬすむ => 確率=90'] },
+  { name: 'badtoken', conversions: ['ぬすむ => 倍 回数=3'] },
+  { name: 'badline', conversions: ['これは変換ではない', 'ぬすむ =>'] },
+  { name: 'badvalue', conversions: ['ぬすむ => 確率=abc', '火 => 回数=2'] },
+]
+
+/**
+ * ジョブの変換 (#876)。わざの効果 × タグ × ジョブの変換ルール × ターン制/ATB。変換は戦闘への組み立て時（`convertForJob`）にわざの効果へ
+ * 足され、変換した特技だけ `convertedBy` が付く。味方がそのわざを 3 回使い、不変条件は `job-conversion-invariant`（`run.ts` の `checkJobConversion`）。
+ * 効果が壊れる（解釈できない）変換は組み立て側が捨てるので、どの組み合わせでも戦闘は壊れない
+ */
+export function jobConversionScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  for (const atb of [false, true]) {
+    for (const effect of JOB_CONV_EFFECTS) {
+      JOB_CONV_TAGS.forEach((tags, ti) => {
+        for (const job of JOB_CONV_JOBS) {
+          const conv = convertForJob(
+            job
+              ? { id: job.name, name: `${job.name}ジョブ名`, conversions: job.conversions }
+              : undefined,
+            tags,
+            effect,
+            'harness'
+          )
+          const ability = {
+            name: 'わざ',
+            target: '相手単体',
+            ...((conv?.effect ?? effect) !== undefined ? { effect: conv?.effect ?? effect } : {}),
+            ...(conv ? { convertedBy: conv.convertedBy } : {}),
+          }
+          const op: Op = { t: 'ability', k: 0, target: 's' }
+          out.push({
+            id: `job-conversion/${atb ? 'atb' : 'turn'}/${effect?.replace(/ /g, '_') ?? 'none'}/t${ti}/${job?.name ?? 'nojob'}`,
+            seed: 160_000 + out.length,
+            party: [entity('a', { hp: 9999, maxHp: 9999 })],
+            enemies: [
+              foe('s', {
+                atk: 1,
+                hp: 500,
+                maxHp: 500,
+                loot: { steal: ['potion', 'potion', 'potion'], stealLimit: '3' },
+              }),
+              foe('t', { atk: 1, hp: 500, maxHp: 500 }),
+            ],
+            atb: atb ? { mode: 'active' } : undefined,
+            spells: [],
+            items: [],
+            abilities: [ability],
+            ops: atb ? [tick, op, tick, op, tick, op] : [op, op, op],
+            checkJobConversion: true,
+          })
+        }
+      })
     }
   }
   return out

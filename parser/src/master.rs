@@ -706,6 +706,8 @@ fn build_job_def(id: String, entries: &[(String, String)]) -> Option<JobDef> {
         "elements",
         "装備時",
         "equip",
+        "変換",
+        "convert",
     ];
     for (k, _) in entries {
         if !KNOWN.contains(&k.as_str()) {
@@ -719,6 +721,7 @@ fn build_job_def(id: String, entries: &[(String, String)]) -> Option<JobDef> {
         elements: collect_elements(&format!("ジョブ {id}"), entries),
         description: value(&["説明", "description"]),
         equip_bonus: value(&["装備時", "equip"]),
+        conversions: collect_values(entries, &["変換", "convert"]),
         id,
         name,
     })
@@ -831,6 +834,7 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
         builtin: lookup_master_string(entries, &["builtin"]),
         school: lookup_master_string(entries, &["系統", "school"]),
         multi_target,
+        tags: collect_id_list(entries, &["タグ", "tags", "tag"]),
     })
 }
 
@@ -958,6 +962,7 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
         telegraph: lookup_master_string(entries, &["予兆", "telegraph"]),
         summon_id: lookup_master_string(entries, &["召喚獣id", "summon_id", "summonId"])
             .filter(|v| !v.is_empty()),
+        tags: collect_id_list(entries, &["タグ", "tags", "tag"]),
     })
 }
 
