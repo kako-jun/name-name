@@ -16,7 +16,8 @@ import {
 } from './acrylicPlate'
 import { resolveAcrylicParams } from './spriteStyle'
 
-const P = resolveAcrylicParams()
+// ピクセル位置を決め打ちで見るテストが多いので、既定の余白（#1086 で 0.06）に依存させず旧値 0.03 に固定する
+const P = resolveAcrylicParams({ marginRatio: 0.03 })
 
 /** 中央に size x size の不透明な正方形がある n x n の alpha */
 function square(n: number, size: number): Uint8Array {
@@ -461,7 +462,12 @@ describe('computeStem / stampStem: 浮く絵を台座へつなぐ帯 (#848)', ()
   it('地面に立つ絵は帯の有無で rgba が変わらない（既定の見た目は不変）', () => {
     const a = blob(99)
     const on = renderAcrylicPlate(a, w, h, P)
-    const off = renderAcrylicPlate(a, w, h, resolveAcrylicParams({ stemWidthRatio: 0 }))
+    const off = renderAcrylicPlate(
+      a,
+      w,
+      h,
+      resolveAcrylicParams({ marginRatio: 0.03, stemWidthRatio: 0 })
+    )
     expect(Array.from(on.rgba)).toEqual(Array.from(off.rgba))
   })
 })
@@ -725,5 +731,14 @@ describe('帯の縮尺換算と裾の広がり (#853)', () => {
     expect(at(none, 28, 92)).toBe(0)
     expect(at(withFlare, 28, 92)).toBe(1)
     expect(at(withFlare, 50, 80)).toBe(1)
+  })
+})
+
+describe('#1086 板の広がり（既定 B）', () => {
+  it('既定の広がりは長辺の (0.06 + 0.02) 倍、大きな板でも比率のまま（px 上限は枠側の余白）', () => {
+    const p = resolveAcrylicParams()
+    const l = computePlateLayout(400, 800, p)
+    expect(l.spread).toBeCloseTo(0.08 * 800)
+    expect(l.rim).toBeCloseTo(0.02 * 800)
   })
 })

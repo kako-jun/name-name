@@ -2092,7 +2092,7 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
     expect(into).toBeGreaterThan(0) // 許容量内の重なりは仕様なので、あえて詰めない
   })
 
-  it('許容量内なら何も変えない（enemyAcrylic なしと同じ配置）— 縦横比 0.5 / 1', () => {
+  it('許容量内なら何も変えない（enemyAcrylic なしと同じ配置）— 縦横比 1。縦長 0.5 は余白拡大 (#1086) で板が枠より横へ広がるため、変わるとしても縮むだけ', () => {
     for (const a of [0.5, 1])
       for (const W of WIDTHS)
         for (const H of HEIGHTS)
@@ -2106,8 +2106,34 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
             }
             const plain = computeSideBattleLayout(input)
             const withPlate = computeSideBattleLayout({ ...input, enemyAcrylic: PARAMS })
-            expect(withPlate.enemies, `${W}x${H} n${n} a${a}`).toEqual(plain.enemies)
+            if (a === 1) expect(withPlate.enemies, `${W}x${H} n${n} a${a}`).toEqual(plain.enemies)
+            else
+              withPlate.enemies.forEach((e, i) =>
+                expect(e.size, `${W}x${H} n${n} a${a} #${i}`).toBeLessThanOrEqual(
+                  plain.enemies[i].size + 1e-6
+                )
+              )
+            // どの敵も縮んでいない組み合わせでは旧配置と一致する（板を含む中央寄せぶんの x の微差は size の 5% までは許す）
+            if (withPlate.enemies.every((e, i) => Math.abs(e.size - plain.enemies[i].size) < 1e-6))
+              withPlate.enemies.forEach((e, i) => {
+                const tag = `${W}x${H} n${n} a${a} #${i} unchanged`
+                expect(e.y, tag).toBeCloseTo(plain.enemies[i].y, 6)
+                expect(e.width, tag).toBeCloseTo(plain.enemies[i].width, 6)
+                expect(Math.abs(e.x - plain.enemies[i].x), tag).toBeLessThan(0.05 * e.size)
+              })
           }
+  })
+
+  it('味方の板（4 人・縦横比 1）が画面内に収まる（画面サイズ総当たり）', () => {
+    for (const W of WIDTHS)
+      for (const H of HEIGHTS) {
+        const L = computeSideBattleLayout({ width: W, height: H, partyCount: 4, enemyCount: 2 })
+        for (const s of L.party) {
+          const r = computeEnemyPlateRect(s, 1, PARAMS)
+          expect(r.x, `${W}x${H}`).toBeGreaterThanOrEqual(-1e-6)
+          expect(r.x + r.w, `${W}x${H}`).toBeLessThanOrEqual(W + 1e-6)
+        }
+      }
   })
 
   it.each(WIDTHS)(
