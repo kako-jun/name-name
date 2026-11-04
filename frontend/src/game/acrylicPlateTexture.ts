@@ -7,7 +7,7 @@
  * canvas が使えない環境（jsdom 等）・画像が読み出せない（CORS で汚染された canvas など）ときは null（板なしで描く）。
  */
 import { Texture } from 'pixi.js'
-import { renderAcrylicPlate } from './acrylicPlate'
+import { computeStemRef, renderAcrylicPlate } from './acrylicPlate'
 import { renderGroundShadow } from './acrylicShadow'
 import type { AcrylicParams } from './spriteStyle'
 
@@ -26,9 +26,14 @@ export interface AcrylicPlate {
 /** 板を作る作業解像度の長辺(px)。板は輪郭のぼかしなので、これ以上高くしても見た目は変わらず時間だけかかる */
 export const PLATE_WORK_MAX_SIDE = 192
 
+/**
+ * `baseTex` はポーズの絵のときの基本の絵 (#853)。ポーズの絵は基本の絵の縮尺のまま足元中央を揃えて置かれるので、
+ * 帯のスリット幅は基本の絵を枠に収めた縮尺で換算する（`stemRef`）。基本の絵自身・省略時はこの画像自身で換算（従来どおり）。
+ */
 export function createAcrylicPlateTexture(
   tex: Texture,
-  params: AcrylicParams
+  params: AcrylicParams,
+  baseTex?: Texture
 ): AcrylicPlate | null {
   try {
     const source = tex.source
@@ -55,6 +60,15 @@ export function createAcrylicPlateTexture(
       ...params,
       spriteLiftRatio: params.hasBase ? params.spriteLiftRatio : 0,
       stemWidthRatio: params.hasBase ? params.stemWidthRatio : 0,
+      // 板を作る画像は pixelWidth（物理 px）で縮小するので、基本の絵も物理 px で測り（論理寸法の width は解像度で変わる）、
+      // ポーズの縮小率 ws を同じ倍率でかける（前提: 基本の絵とポーズの絵は同じ resolution で読まれる）
+      stemRef: baseTex
+        ? computeStemRef(
+            baseTex.source?.pixelWidth ?? baseTex.width,
+            baseTex.source?.pixelHeight ?? baseTex.height,
+            ws
+          )
+        : undefined,
     }
     const raster = renderAcrylicPlate(alpha, ww, wh, plateParams)
     const dst = document.createElement('canvas')

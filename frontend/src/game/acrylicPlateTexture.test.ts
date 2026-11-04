@@ -4,9 +4,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Texture } from 'pixi.js'
-import { computePlateExtend } from './acrylicPlate'
+import { computePlateExtend, renderAcrylicPlate } from './acrylicPlate'
 import { PLATE_WORK_MAX_SIDE, createAcrylicPlateTexture } from './acrylicPlateTexture'
 import { resolveAcrylicParams } from './spriteStyle'
+
+vi.mock('./acrylicPlate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./acrylicPlate')>()
+  return { ...actual, renderAcrylicPlate: vi.fn(actual.renderAcrylicPlate) }
+})
 
 class FakeImageData {
   constructor(
@@ -194,5 +199,45 @@ describe('createAcrylicPlateTexture: 帯（ステム）は台座があるとき�
     const on = plateRgba(resolveAcrylicParams({ hasBase: true }))
     const off = plateRgba(resolveAcrylicParams({ hasBase: true, stemWidthRatio: 0 }))
     expect(on).not.toEqual(off)
+  })
+})
+
+describe('createAcrylicPlateTexture: stemRef（基本の絵の換算）(#853)', () => {
+  const baseTexOf = (pw: number, ph: number, logicalW = 1, logicalH = 1): Texture =>
+    ({
+      width: logicalW,
+      height: logicalH,
+      source: { resource: {}, pixelWidth: pw, pixelHeight: ph },
+    }) as unknown as Texture
+  /** stemRef を取ったら重い描画に進まず中断（createAcrylicPlateTexture は try/catch で null を返す）して、値が違ったときのハングを避ける */
+  let captured: unknown
+  beforeEach(() => {
+    captured = undefined
+    vi.mocked(renderAcrylicPlate).mockImplementationOnce(((
+      _a: unknown,
+      _w: number,
+      _h: number,
+      p: { stemRef?: unknown }
+    ) => {
+      captured = p.stemRef
+      throw new Error('captured')
+    }) as never)
+  })
+  const lastStemRef = (): unknown => captured
+
+  it('baseTex 無しは stemRef なし', () => {
+    createAcrylicPlateTexture(srcTexture(400, 800), P)
+    expect(lastStemRef()).toBeUndefined()
+  })
+  it('stemRef は基本の絵の物理 px × 作業倍率 ws（ポーズの縮小率）', () => {
+    const ws = 192 / 800
+    createAcrylicPlateTexture(srcTexture(400, 800), P, baseTexOf(200, 600))
+    const ref = lastStemRef() as { width: number; height: number }
+    expect(ref.width).toBeCloseTo(200 * ws, 9)
+    expect(ref.height).toBeCloseTo(600 * ws, 9)
+  })
+  it('論理寸法（width/height）でなく pixelWidth/pixelHeight を使う', () => {
+    createAcrylicPlateTexture(srcTexture(100, 50), P, baseTexOf(80, 40, 999, 999))
+    expect(lastStemRef()).toEqual({ width: 80, height: 40 })
   })
 })
