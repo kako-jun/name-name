@@ -358,6 +358,9 @@ async function main(): Promise<void> {
   if (resume.kind === 'error')
     showError(`セーブから再開できません（設定の開始位置から始めます）\n${resume.message}`)
   for (const w of resumed?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
+  // 解決時の警告（設定に無いシーン・敵・アイテム・味方）は画面にも出す（見落としてセーブが黙って欠けるのを防ぐ）
+  if (resumed && resumed.warnings.length > 0)
+    showError(`セーブの一部を反映できませんでした\n${resumed.warnings.join('\n')}`)
   /** 再開の開始シーン・位置・向き（セーブに現在地が無ければ設定の開始位置） */
   const startSceneId = resumed?.field?.sceneId ?? config.startScene
   const startPoint = resumed?.field ? { x: resumed.field.x, y: resumed.field.y } : config.start

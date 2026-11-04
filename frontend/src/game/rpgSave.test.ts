@@ -92,6 +92,41 @@ describe('parseRpgSave', () => {
     ],
     ['battle.enemies が空', (s: Record<string, unknown>) => (s.battle = { enemies: [] })],
     [
+      'enemyMemory に null',
+      (s: Record<string, unknown>) =>
+        (s.battle = { enemies: [{ id: 'slime' }], enemyMemory: [null] }),
+    ],
+    [
+      'enemyMemory.acted が不正',
+      (s: Record<string, unknown>) =>
+        (s.battle = { enemies: [{ id: 'slime' }], enemyMemory: [{ acted: 'x' }] }),
+    ],
+    [
+      'enemyMemory.used に非数',
+      (s: Record<string, unknown>) =>
+        (s.battle = { enemies: [{ id: 'slime' }], enemyMemory: [{ acted: 1, used: { a: 'z' } }] }),
+    ],
+    [
+      'party.buffs に非数',
+      (s: Record<string, unknown>) => (s.party = [{ id: 'a', buffs: { atk: 'x' } }]),
+    ],
+    [
+      'script.fired に非数',
+      (s: Record<string, unknown>) =>
+        (s.battle = {
+          enemies: [{ id: 'slime' }],
+          script: { turn: 1, fired: ['0'], joined: [], fled: [] },
+        }),
+    ],
+    [
+      'script.fled に負数',
+      (s: Record<string, unknown>) =>
+        (s.battle = {
+          enemies: [{ id: 'slime' }],
+          script: { turn: 1, fired: [], joined: [], fled: [-1] },
+        }),
+    ],
+    [
       'atb.queue が配列でない',
       (s: Record<string, unknown>) =>
         (s.battle = {

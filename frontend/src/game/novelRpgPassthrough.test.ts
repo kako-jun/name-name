@@ -57,6 +57,16 @@ describe('RPG 状態の持ち回し', () => {
     expect('rpg' in r.getSnapshot()).toBe(false)
   })
 
+  it('検証に通らない rpg を渡した startFrom は invalid-rpg で失敗し、状態を変えない', async () => {
+    const r = new NovelRenderer()
+    r.setScenes(scenes)
+    await r.startFrom({ sceneId: 'start', rpg })
+    const bad = { ...rpg, gold: -1 } as RpgSaveState
+    const res = await r.startFrom({ sceneId: 'start', rpg: bad })
+    expect(res).toEqual({ status: 'failed', reason: 'invalid-rpg' })
+    expect(r.getSnapshot().rpg).toEqual(rpg)
+  })
+
   it('入場に失敗した startFrom は rpg を変えない', async () => {
     const r = new NovelRenderer()
     r.setScenes(scenes)

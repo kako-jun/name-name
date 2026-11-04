@@ -33,7 +33,7 @@ import {
 } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
 import { GameState, NovelGameState, StartFromOptions, Step, entryFromState } from './GameState'
-import type { RpgSaveState } from './rpgSave'
+import { parseRpgSave, type RpgSaveState } from './rpgSave'
 import { VideoLayer } from './VideoLayer'
 import { WallLayer } from './WallLayer'
 import { StageFrontLayer } from './StageFrontLayer'
@@ -4647,8 +4647,18 @@ export class NovelRenderer {
    */
   startFrom(opts: StartFromOptions = {}): Promise<SceneEntryResult> {
     // RPG 状態 (#1021): 入場が確定したときだけ置き換える（失敗では状態を一切変えない）。省略は持ち越さない。
+    // 渡された rpg はセーブと同じ検証（parseRpgSave）を通す。通らなければ状態を変えず failed
+    let rpg: RpgSaveState | null = null
+    if (opts.rpg) {
+      const parsed = parseRpgSave(opts.rpg)
+      if (!parsed.ok) {
+        console.warn(`[name-name] startFrom: ${parsed.error}`)
+        return Promise.resolve({ status: 'failed', reason: 'invalid-rpg' })
+      }
+      rpg = parsed.value
+    }
     return this.entry.startFrom(opts).then((r) => {
-      if (r.status === 'entered') this.rpgState = opts.rpg ? structuredClone(opts.rpg) : null
+      if (r.status === 'entered') this.rpgState = rpg
       return r
     })
   }

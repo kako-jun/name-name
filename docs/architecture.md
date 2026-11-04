@@ -461,6 +461,7 @@ interface NovelGameState {
   entryFlags?: Record<string, FlagValue>; // このシーン訪問に入った瞬間の flags（#799）。[条件:] の入場時評価の入力。元列に [条件:] を含むときだけ。無い旧セーブは保存位置に達するまでを flags で静的に、位置から後ろを逐次に展開して復元
   entryResumeIndex?: number; // 旧セーブから復元した訪問だけ。再開位置（保存時の eventIndex）。展開後の列がこの長さに達するまでは [条件:] を entryFlags で静的に評価し、達した後は [フラグ:] を適用しながら逐次評価する
   entryRawIndex?: number; // 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置（#799。非0のときだけ）
+  rpg?: RpgSaveState; // RPG 状態（#1021。パーティ・所持品・装備・所持金・フィールド現在地・戦闘中状態。ノベル側は解釈せず持ち回す。持つときだけキーを出す）
 }
 ```
 
@@ -733,6 +734,7 @@ interface SaveSlotData {
   isBlackout: boolean;
   characters: Array<{ name: string; expression: string; position: string }>;
   currentBgmPath: string | null;
+  rpg?: RpgSaveState; // RPG 状態（#1021。形式は game/rpgSave.ts、手順は docs/guide/resume-demo.md）
   savedAt: string; // ISO 8601
   sceneName: string | null; // 表示用シーン名
 }

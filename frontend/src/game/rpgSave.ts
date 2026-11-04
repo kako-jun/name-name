@@ -102,6 +102,11 @@ function checkEntity(e: unknown, where: string, requireStats: boolean): string |
   }
   if (requireStats && !isStr(e.name)) return `${where}.name がありません`
   if (e.name !== undefined && !isStr(e.name)) return `${where}.name は文字列が必要です`
+  if (e.buffs !== undefined) {
+    if (!isObj(e.buffs)) return `${where}.buffs はオブジェクトが必要です`
+    for (const [k, v] of Object.entries(e.buffs))
+      if (!isNum(v)) return `${where}.buffs.${k} は数が必要です`
+  }
   if (e.status !== undefined) {
     if (!isObj(e.status)) return `${where}.status はオブジェクトが必要です`
     for (const [k, v] of Object.entries(e.status))
@@ -168,13 +173,31 @@ export function parseRpgSave(raw: unknown): RpgParseResult {
       if (!isObj(s)) return fail('battle.script はオブジェクトが必要です')
       if (!isNum(s.turn)) return fail('battle.script.turn は数が必要です')
       for (const k of ['fired', 'fled'] as const)
-        if (!Array.isArray(s[k]) || !(s[k] as unknown[]).every(isNum))
-          return fail(`battle.script.${k} は数の配列が必要です`)
+        if (
+          !Array.isArray(s[k]) ||
+          !(s[k] as unknown[]).every((n) => isNum(n) && Number.isInteger(n) && n >= 0)
+        )
+          return fail(`battle.script.${k} は 0 以上の整数の配列が必要です`)
       if (!Array.isArray(s.joined) || !(s.joined as unknown[]).every(isStr))
         return fail('battle.script.joined は文字列の配列が必要です')
     }
-    if (b.enemyMemory !== undefined && !Array.isArray(b.enemyMemory))
-      return fail('battle.enemyMemory は配列が必要です')
+    if (b.enemyMemory !== undefined) {
+      if (!Array.isArray(b.enemyMemory)) return fail('battle.enemyMemory は配列が必要です')
+      for (let i = 0; i < b.enemyMemory.length; i++) {
+        const m = b.enemyMemory[i]
+        const w = `battle.enemyMemory[${i}]`
+        if (!isObj(m)) return fail(`${w} はオブジェクトが必要です`)
+        if (!isNum(m.acted) || !Number.isInteger(m.acted) || m.acted < 0)
+          return fail(`${w}.acted は 0 以上の整数が必要です`)
+        for (const k of ['rule', 'pos'] as const)
+          if (m[k] !== undefined && !isNum(m[k])) return fail(`${w}.${k} は数が必要です`)
+        if (m.used !== undefined) {
+          if (!isObj(m.used)) return fail(`${w}.used はオブジェクトが必要です`)
+          for (const [k, v] of Object.entries(m.used))
+            if (!isNum(v)) return fail(`${w}.used.${k} は数が必要です`)
+        }
+      }
+    }
     if (b.background !== undefined && !isStr(b.background))
       return fail('battle.background は文字列が必要です')
   }
