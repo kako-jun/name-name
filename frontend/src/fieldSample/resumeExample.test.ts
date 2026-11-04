@@ -11,12 +11,9 @@ import { BattleEngine } from '../game/battleEngine'
 import { expandedTeramachiText } from './teramachiExpanded'
 import exampleText from '../../../docs/guide/examples/teramachi-bathhouse-battle.save.json?raw'
 import demoConfigText from '../../../docs/guide/examples/teramachi-enemy-level.config.json?raw'
-import demoMotionConfig from '../../../docs/guide/examples/demo-motion.config.json?raw'
-import demoMotionSave from '../../../docs/guide/examples/demo-motion.save.json?raw'
+import sampleText from './teramachi.sample.json?raw'
 import demoEnemyListConfig from '../../../docs/guide/examples/demo-enemy-list.config.json?raw'
 import demoEnemyListSave from '../../../docs/guide/examples/demo-enemy-list.save.json?raw'
-import demoEffectsConfig from '../../../docs/guide/examples/demo-effects.config.json?raw'
-import demoEffectsSave from '../../../docs/guide/examples/demo-effects.save.json?raw'
 import demoStatusesConfig from '../../../docs/guide/examples/demo-statuses.config.json?raw'
 import demoStatusesSave from '../../../docs/guide/examples/demo-statuses.save.json?raw'
 import manifestText from '../../public/field-sample/sit-character-forms.json?raw'
@@ -84,44 +81,51 @@ describe('敵レベルとレベル即死の確認用設定（#1043）', () => {
   })
 })
 
-describe('motion / 敵名窓 / エフェクトの確認用設定（#1051）', () => {
-  const parseText = (text: string) => {
-    const m = parseCharacterFormsManifest(JSON.parse(manifestText))
-    if (!m.ok) throw new Error(m.error)
-    const raw = expandCharacterForms(JSON.parse(text), m.value, {}).raw
-    return parseConfigText(JSON.stringify(raw), 'http://localhost/')
+const parseText = (text: string) => {
+  const m = parseCharacterFormsManifest(JSON.parse(manifestText))
+  if (!m.ok) throw new Error(m.error)
+  const raw = expandCharacterForms(JSON.parse(text), m.value, {}).raw
+  return parseConfigText(JSON.stringify(raw), 'http://localhost/')
+}
+const expandedRaw = (text: string) => {
+  const m = parseCharacterFormsManifest(JSON.parse(manifestText))
+  if (!m.ok) throw new Error(m.error)
+  return expandCharacterForms(JSON.parse(text), m.value, {}).raw as Record<string, unknown>
+}
+/** 2 つの展開済み設定で、値が違うトップレベルのキー（`battle` は 1 段下まで見て `battle.<キー>` で返す） */
+const diffKeys = (a: Record<string, unknown>, b: Record<string, unknown>): string[] => {
+  const out: string[] = []
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (JSON.stringify(a[k]) === JSON.stringify(b[k])) continue
+    if (k === 'battle') {
+      const ba = a.battle as Record<string, unknown>
+      const bb = b.battle as Record<string, unknown>
+      for (const kk of new Set([...Object.keys(ba), ...Object.keys(bb)])) {
+        if (JSON.stringify(ba[kk]) !== JSON.stringify(bb[kk])) out.push(`battle.${kk}`)
+      }
+    } else out.push(k)
   }
-  const resume = (cfgText: string, saveText: string) => {
-    const cfg = parseText(cfgText)
-    if (!cfg.ok) throw new Error(cfg.error)
-    expect(cfg.value.warnings ?? []).toEqual([])
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, JSON.parse(saveText) as SaveSlotData)
-    const r = loadResume('?resume=0', cfg.value)
-    if (r.kind !== 'ok') throw new Error('resume failed')
-    expect(r.resolved.warnings).toEqual([])
-    expect(r.resolved.battle).toBeTruthy()
-    return { cfg: cfg.value, resolved: r.resolved }
-  }
+  return out.sort()
+}
+const REAL_PARTY = ['ナム', 'オットン', 'シャー', 'ペー子']
+const resume = (cfgText: string, saveText: string) => {
+  const cfg = parseText(cfgText)
+  if (!cfg.ok) throw new Error(cfg.error)
+  expect(cfg.value.warnings ?? []).toEqual([])
+  new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, JSON.parse(saveText) as SaveSlotData)
+  const r = loadResume('?resume=0', cfg.value)
+  if (r.kind !== 'ok') throw new Error('resume failed')
+  expect(r.resolved.warnings).toEqual([])
+  expect(r.resolved.battle).toBeTruthy()
+  expect(r.resolved.party.map((m) => m.name)).toEqual(REAL_PARTY)
+  return { cfg: cfg.value, resolved: r.resolved }
+}
+const teramachiRaw = () => expandedRaw(sampleText)
 
-  it('motion: snappy が反映され、戦闘中状態に解決する', () => {
-    const { cfg, resolved } = resume(demoMotionConfig, demoMotionSave)
+describe('寺町の実際の設定+実際のセーブで motion / エフェクト（#1051）', () => {
+  it('motion=snappy と effects 4 種が解決する', () => {
+    const { cfg } = resume(sampleText, exampleText)
     expect(cfg.battle.motion).toBe('snappy')
-    expect(resolved.battle!.enemies.map((e) => e.name)).toEqual(['凍った水たまり', 'ライター'])
-  })
-
-  it('敵名窓: window が反映され、同名の敵が複数並ぶ', () => {
-    const { cfg, resolved } = resume(demoEnemyListConfig, demoEnemyListSave)
-    expect(cfg.battle.enemyList).toBe('window')
-    expect(resolved.battle!.enemies.map((e) => e.name)).toEqual([
-      '扇風機・換気扇の羽根',
-      '扇風機・換気扇の羽根',
-      '扇風機・換気扇の羽根',
-      'ライター',
-    ])
-  })
-
-  it('エフェクト: cast / impact / slash / magic の 4 種類が解決する', () => {
-    const { cfg } = resume(demoEffectsConfig, demoEffectsSave)
     expect(Object.keys(cfg.battle.effects ?? {}).sort()).toEqual([
       'cast',
       'impact',
@@ -131,39 +135,51 @@ describe('motion / 敵名窓 / エフェクトの確認用設定（#1051）', ()
   })
 })
 
+describe('敵名窓の確認用設定（#1051）', () => {
+  it('寺町の設定との差分は battle.enemyList だけ', () => {
+    expect(diffKeys(teramachiRaw(), expandedRaw(demoEnemyListConfig))).toEqual(['battle.enemyList'])
+  })
+
+  it('window が反映され、実際の 4 人と台帳の敵（同名 3 体）に解決する', () => {
+    const { cfg, resolved } = resume(demoEnemyListConfig, demoEnemyListSave)
+    expect(cfg.battle.enemyList).toBe('window')
+    expect(resolved.battle!.enemies.map((e) => e.name)).toEqual([
+      '扇風機・換気扇の羽根',
+      '扇風機・換気扇の羽根',
+      '扇風機・換気扇の羽根',
+      'ライター',
+    ])
+  })
+})
+
 describe('状態異常の確認用設定（#1051 段階3）', () => {
-  const parseText = (text: string) => {
-    const m = parseCharacterFormsManifest(JSON.parse(manifestText))
-    if (!m.ok) throw new Error(m.error)
-    const raw = expandCharacterForms(JSON.parse(text), m.value, {}).raw
-    return parseConfigText(JSON.stringify(raw), 'http://localhost/')
-  }
   const setup = () => {
-    const cfg = parseText(demoStatusesConfig)
-    if (!cfg.ok) throw new Error(cfg.error)
-    expect(cfg.value.warnings ?? []).toEqual([])
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, JSON.parse(demoStatusesSave) as SaveSlotData)
-    const r = loadResume('?resume=0', cfg.value)
-    if (r.kind !== 'ok') throw new Error('resume failed')
-    expect(r.resolved.warnings).toEqual([])
-    const saved = r.resolved.battle!
+    const { cfg, resolved } = resume(demoStatusesConfig, demoStatusesSave)
+    const saved = resolved.battle!
     const engine = new BattleEngine(
-      r.resolved.party.map((p) => structuredClone(p)),
+      resolved.party.map((p) => structuredClone(p)),
       saved.enemies.map((e) => ({ ...e })),
-      resumeBattleEngineOptions(
-        buildBattleEngineOptions(cfg.value.battle, cfg.value.statuses),
-        saved
-      )
+      resumeBattleEngineOptions(buildBattleEngineOptions(cfg.battle, cfg.statuses), saved)
     )
-    return { cfg: cfg.value, engine }
+    return { cfg, engine }
   }
 
-  it('parse ok・警告なし。statuses が読まれ、セーブ再開で敵（同名 2 体）に解決する', () => {
+  it('寺町の設定との差分は statuses と spells だけ（寺町の呪文は残る）', () => {
+    expect(diffKeys(teramachiRaw(), expandedRaw(demoStatusesConfig))).toEqual([
+      'spells',
+      'statuses',
+    ])
+    const t = (teramachiRaw().spells as { id: string }[]).map((s) => s.id)
+    const d = (expandedRaw(demoStatusesConfig).spells as { id: string }[]).map((s) => s.id)
+    expect(d.slice(0, t.length)).toEqual(t)
+  })
+
+  it('statuses が読まれ、実際の 4 人と台帳の敵に解決する', () => {
     const { cfg, engine } = setup()
     expect(Object.keys(cfg.statuses)).toEqual(['poison', 'sleep', 'confusion', 'zombie', 'doom'])
     expect(engine.getState().enemies.map((e) => e.name)).toEqual([
       '扇風機・換気扇の羽根',
-      '扇風機・換気扇の羽根',
+      '石油ストーブ',
     ])
   })
 
@@ -173,5 +189,18 @@ describe('状態異常の確認用設定（#1051 段階3）', () => {
     const target = engine.getState().enemies[0]
     engine.selectSpell(spell, target.id)
     expect(engine.getState().enemies[0].status).toHaveProperty('poison')
+  })
+})
+
+describe('デモ設定にダミー名を残さない', () => {
+  it('demo_* の敵・ゆうしゃ等を使っていない', () => {
+    for (const t of [
+      demoEnemyListConfig,
+      demoEnemyListSave,
+      demoStatusesConfig,
+      demoStatusesSave,
+    ]) {
+      expect(t).not.toMatch(/demo_|ゆうしゃ|まほうつかい/)
+    }
   })
 })
