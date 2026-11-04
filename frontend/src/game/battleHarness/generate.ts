@@ -1323,3 +1323,87 @@ export function multiTargetScenarios(): Scenario[] {
   }
   return out
 }
+
+/** 敵の前列・後列 (#896)。敵の配置・宣言の変種。`at` は群の配置指定と同じ（0 始まりの列・行）。HP は前列が 1 発で落ちる小さい値も混ぜて繰り上がりを見る */
+const ENEMY_ROW_LAYOUTS: ReadonlyArray<{
+  name: string
+  grid?: { cols: number; rows: number }
+  enemies: Array<Partial<BattleEntity>>
+}> = [
+  {
+    name: 'three-cols',
+    grid: { cols: 3, rows: 2 },
+    enemies: [at(2, 0), at(1, 0), at(0, 0)],
+  },
+  {
+    name: 'front-fragile',
+    grid: { cols: 3, rows: 2 },
+    enemies: [{ ...at(2, 0), hp: 30, maxHp: 30 }, at(1, 0), at(0, 0)],
+  },
+  {
+    name: 'same-col',
+    grid: { cols: 3, rows: 2 },
+    enemies: [{ ...at(2, 0), hp: 30, maxHp: 30 }, at(2, 1), at(0, 0)],
+  },
+  {
+    name: 'auto-place',
+    grid: { cols: 3, rows: 1 },
+    enemies: [{ hp: 30, maxHp: 30 }, {}, {}],
+  },
+  {
+    name: 'wide',
+    grid: { cols: 3, rows: 2 },
+    enemies: [{ layout: { w: 2, h: 1, scale: 1, at: { col: 0, row: 0 } } }, at(2, 1), at(1, 1)],
+  },
+  {
+    name: 'declared-mix',
+    grid: { cols: 3, rows: 2 },
+    enemies: [{ ...at(2, 0), formationRow: 'back' }, { ...at(1, 0), hp: 30, maxHp: 30 }, at(0, 0)],
+  },
+  {
+    name: 'declared-no-grid',
+    enemies: [{ formationRow: 'back' }, { formationRow: 'front' }, {}],
+  },
+  { name: 'plain', enemies: [{}, {}, {}] },
+]
+
+function at(col: number, row: number): Partial<BattleEntity> {
+  return { layout: { w: 1, h: 1, scale: 1, at: { col, row } } }
+}
+
+/**
+ * 敵の前列・後列 (#896)。配置・宣言の変種 × 防御力（端数・最低 1 を見る）× 有効/無効 × ターン制/ATB。
+ * 味方 1 人が敵を順に通常攻撃し、不変条件は `enemy-row-invariant`（`run.ts` の `checkEnemyRow`）。
+ */
+export function enemyRowScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  for (const atb of [false, true]) {
+    for (const lay of ENEMY_ROW_LAYOUTS) {
+      for (const def of [0, 7, 100]) {
+        for (const on of [true, false]) {
+          const attacks: Op[] = []
+          for (const target of ['s0', 's1', 's2', 's0', 's1', 's2', 's0']) {
+            if (atb) attacks.push(tick)
+            attacks.push({ t: 'attack', target })
+          }
+          out.push({
+            id: `enemy-row/${atb ? 'atb' : 'turn'}/${lay.name}/def${def}/${on ? 'on' : 'off'}`,
+            seed: 130_000 + out.length,
+            party: [entity('a', { hp: 9999, maxHp: 9999, atk: 40, def: 50 })],
+            enemies: lay.enemies.map((o, i) =>
+              foe(`s${i}`, { atk: 1, def, hp: 500, maxHp: 500, ...o })
+            ),
+            atb: atb ? { mode: 'active' } : undefined,
+            spells: [],
+            items: [],
+            ops: attacks,
+            ...(on ? { enemyRow: lay.grid ? { grid: { ...lay.grid } } : {} } : {}),
+            checkEnemyRow: true,
+          })
+        }
+      }
+    }
+  }
+  return out
+}

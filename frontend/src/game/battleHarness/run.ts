@@ -15,6 +15,7 @@ import {
 } from './detect'
 import { budgetRng, DEFAULT_RNG_BUDGET_PER_OP, RngBudgetExceeded } from './rng'
 import { parseLootSpec } from '../loot'
+import { placeEnemies } from '../enemyGrid'
 import { parseBattleScript } from '../battleScript'
 import {
   applyOp,
@@ -230,7 +231,9 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
       op.t === 'summon' ? scenario.summons?.[op.m]?.cue : undefined,
       spell && op.t === 'spell' && scenario.checkSpread
         ? (fresh) => checkMultiTarget(spell, op.scope, aliveBefore, fresh, i)
-        : undefined
+        : op.t === 'attack' && scenario.checkEnemyRow
+          ? (fresh) => checkEnemyRow(scenario, aliveBefore, fresh, i)
+          : undefined
     )
     metrics.opsRun = i + 1
   }
@@ -368,6 +371,71 @@ function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
 
 function describe(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+}
+
+/**
+ * 敵の前列・後列 (#896) の不変条件。味方の通常攻撃（`attack` イベント）が敵に与えた量が、その敵の「操作前の列」に応じた範囲に収まる。
+ * 範囲は DQ 式の通常攻撃（`base = max(1, atk - floor(def/2))`、`base` 〜 `base + floor(atk/4)`）で、後列なら 1 回半分（切り捨て・最低 1）。
+ * 敵の列はエンジンと別に求める: 宣言（`formationRow`）→ `enemyRow` の無いシナリオなら全員前列 → グリッドの右端の列（占有セルの右端。
+ * 隊列を宣言していない生存者の中で最も手前なら前列）。味方は 1 人・敵は耐性・相性・状態を持たない前提
+ */
+function checkEnemyRow(
+  scenario: Scenario,
+  aliveBefore: readonly boolean[],
+  fresh: readonly BattleActionEvent[],
+  opIndex: number
+): Violation[] {
+  const out: Violation[] = []
+  const grid = scenario.enemyRow?.grid
+  const edges = new Map<number, number>()
+  if (scenario.enemyRow && grid) {
+    const placed = placeEnemies(
+      grid,
+      scenario.enemies.map((e) => ({
+        w: e.layout?.w ?? 1,
+        h: e.layout?.h ?? 1,
+        ...(e.layout?.at ? { at: e.layout.at } : {}),
+      }))
+    )
+    placed.cells.forEach((c, i) => {
+      if (c) edges.set(i, c.col + (scenario.enemies[i].layout?.w ?? 1) - 1)
+    })
+  }
+  let front = -1
+  scenario.enemies.forEach((e, i) => {
+    const edge = edges.get(i)
+    if (aliveBefore[i] && !e.formationRow && edge !== undefined) front = Math.max(front, edge)
+  })
+  const hero = scenario.party[0]
+  for (const ev of fresh) {
+    if (ev.kind !== 'attack' || ev.actor.side !== 'party') continue
+    for (const h of ev.hits) {
+      if (h.target.side !== 'enemy' || h.kind !== 'damage') continue
+      const i = h.target.index
+      const def = scenario.enemies[i]
+      let back: boolean
+      if (!scenario.enemyRow) back = def.row === 'back'
+      else if (def.formationRow) back = def.formationRow === 'back'
+      else {
+        const edge = edges.get(i)
+        back = edge !== undefined ? edge < front : def.row === 'back'
+      }
+      let lo = Math.max(1, hero.atk - Math.floor(def.def / 2))
+      let hi = lo + Math.floor(hero.atk / 4)
+      if (back) {
+        lo = Math.max(1, Math.floor(lo / 2))
+        hi = Math.max(1, Math.floor(hi / 2))
+      }
+      if (h.amount < lo || h.amount > hi) {
+        out.push({
+          kind: 'enemy-row-invariant',
+          detail: `敵 #${i}（${back ? '後列' : '前列'}）への通常攻撃のダメージ ${h.amount} が範囲 ${lo}〜${hi} の外`,
+          opIndex,
+        })
+      }
+    }
+  }
+  return out
 }
 
 /**

@@ -33,6 +33,37 @@ CHARACTERS = ["C001", "C002", "C003", "C004"]
 # plain（-character でない版）に、刀・斬撃の軌跡を絵へ焼き込んだ版が混じり得る人物。目録に plainBaked: true を付け、
 # name-name は人物単体版が揃った形態だけ使う（C001。sit-by-me の旧一体版削除 PR #223 の後も、adult/teen/midlife-wheelchair に plain が残る）
 PLAIN_BAKED = {"C001"}
+# 寺町サンプルで持たせる既定の刀（刀の最終割り当ては KJ 未決。各人物の候補の先頭＝sit-by-me docs の既定）。
+# 刀を載せない人物は書かない（目録に weapon が無い人物は刀なし）。
+# 刀の画像は assets/images/weapons/{C}/、カタログは同ディレクトリの {C}-blade-candidates.json、layers JSON は人物の battle-layers.json
+DEFAULT_WEAPON = {
+    "C001": "C001-odenta-mitsuyo-candidate.webp",
+    "C002": "C002-muramasa-candidate.webp",
+    "C003": "C003-nagasone-kotetsu-candidate.webp",
+    "C004": "C004-shichishito-candidate.webp",
+}
+
+
+# 刀カタログ側にだけ候補刀別の変換の上書き（shared_pose_transforms の candidate_overrides）がある人物（C001 の slash。sit-by-me docs/assets-policy.md の C001 の例外）。
+# true の人物は、設定側で weapon-overrides にカタログを指す
+CATALOG_OVERRIDES = {"C001"}
+
+
+def weapon_entry(root: Path, cid: str) -> dict | None:
+    """刀の項目。layers JSON・刀カタログ・既定の刀の絵が実在するときだけ作る（無ければ None＝刀なし）。"""
+    default = DEFAULT_WEAPON.get(cid)
+    if not default:
+        return None
+    wdir = root / "assets/images/weapons" / cid
+    images = sorted(f.name for f in wdir.glob(f"{cid}-*-candidate.webp"))
+    ok = (
+        default in images
+        and (root / "assets/images/characters" / cid / "battle-layers.json").is_file()
+        and (wdir / f"{cid}-blade-candidates.json").is_file()
+    )
+    if not ok:
+        return None
+    return {"default": default, "images": images, **({"catalogOverrides": True} if cid in CATALOG_OVERRIDES else {})}
 
 
 def main() -> None:
@@ -66,7 +97,12 @@ def main() -> None:
         for entry in forms.values():
             for variant in list(entry["poses"]):
                 entry["poses"][variant].sort(key=POSES.index)
-        characters[cid] = {**({"plainBaked": True} if cid in PLAIN_BAKED else {}), "forms": dict(sorted(forms.items()))}
+        weapon = weapon_entry(root, cid)
+        characters[cid] = {
+            **({"plainBaked": True} if cid in PLAIN_BAKED else {}),
+            **({"weapon": weapon} if weapon else {}),
+            "forms": dict(sorted(forms.items())),
+        }
     doc = {
         "_generated": "frontend/scripts/gen_sit_character_forms.py が sit-by-me の人物素材から生成。手で編集しない（#1020）",
         "characters": characters,

@@ -188,6 +188,15 @@ export interface MotionTiming {
   vanishMosaicMaxSize: number
   /** 候補窓（呪文・アイテム一覧）の開閉アニメーションの長さ（ms。開くときも閉じるときも同じ）。0 は即座に開閉（従来） (#745) */
   menuMs: number
+  /**
+   * 登場スライド (#1037): 戦闘開始時に、敵は画面左端の外から、味方は画面右端の外から所定の位置へ滑り込む長さ（ms）。0 は無効（登場なし・従来）。
+   * ff かつ side のときだけ効く。登場中は入力を塞ぎ、ATB は時間を止める
+   */
+  entranceMs: number
+  /** 登場のイージング（outQuad は出だしが速く、止まり際がゆっくり） */
+  entranceEase: 'inOutQuad' | 'outQuad'
+  /** 味方の登場の開始遅れ（ms）。0 は敵と同時。entranceMs が 0 のときは無視 */
+  entrancePartyDelayMs: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -232,6 +241,9 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   vanishMs: 320,
   vanishMosaicMaxSize: 24,
   menuMs: 0,
+  entranceMs: 0,
+  entranceEase: 'outQuad',
+  entrancePartyDelayMs: 0,
 }
 
 /**
@@ -284,6 +296,10 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   vanishMs: 240,
   vanishMosaicMaxSize: 24,
   menuMs: 120,
+  // 登場スライド (#1037): 暫定値（#803 の実作品の測定待ち。200ms・同時は根拠のある数値ではない）
+  entranceMs: 200,
+  entranceEase: 'outQuad',
+  entrancePartyDelayMs: 0,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'
@@ -1036,4 +1052,46 @@ export function clampMotionDx(
   const lo = Math.min(0, minX - left)
   const hi = Math.max(0, maxX - right)
   return Math.min(hi, Math.max(lo, dx))
+}
+
+// ---------------------------------------------------------------------------
+// 登場スライド (#1037)
+// ---------------------------------------------------------------------------
+
+/** 登場の全体の長さ（ms）。無効（entranceMs <= 0）は 0。味方の開始遅れを含む */
+export function entranceTotalMs(timing: MotionTiming = DEFAULT_MOTION_TIMING): number {
+  if (!(timing.entranceMs > 0)) return 0
+  return timing.entranceMs + Math.max(0, timing.entrancePartyDelayMs || 0)
+}
+
+/**
+ * 登場スライドの水平オフセット (#1037)。経過時間（登場の開始から）→ 本来の位置に足す dx（論理 px）。
+ * 敵は枠の右端が画面左端 (x=0) の外（dx = -slotRight）、味方は枠の左端が画面右端の外（dx = screenWidth - slotLeft）から出発し、
+ * イージングで 0 へ収束する。味方は entrancePartyDelayMs の間は開始位置のまま。
+ * 呼び出し側がグループの最右（敵の slotRight）／最左（味方の slotLeft）の枠を渡すと、グループ全体が同じ dx で動き編隊（間隔）が保たれる。
+ * 枠ごとに呼ぶと出発時に全員が同じ端へ重なるので、陣営で 1 つの値を使うこと。
+ * entranceMs <= 0 は無効（{0, true}）。非有限の入力も {0, true}（画面外に置いたままにしない）。
+ */
+export function sampleEntrance(
+  elapsed: number,
+  side: 'party' | 'enemy',
+  slotLeft: number,
+  slotRight: number,
+  screenWidth: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): { dx: number; done: boolean } {
+  if (!(timing.entranceMs > 0)) return { dx: 0, done: true }
+  if (
+    !Number.isFinite(elapsed) ||
+    !Number.isFinite(slotLeft) ||
+    !Number.isFinite(slotRight) ||
+    !Number.isFinite(screenWidth)
+  )
+    return { dx: 0, done: true }
+  const start = side === 'enemy' ? -slotRight : screenWidth - slotLeft
+  const delay = side === 'party' ? Math.max(0, timing.entrancePartyDelayMs || 0) : 0
+  const u = (elapsed - delay) / timing.entranceMs
+  if (u >= 1) return { dx: 0, done: true }
+  const ease = timing.entranceEase === 'inOutQuad' ? easeInOutQuad : easeOutQuad
+  return { dx: start * (1 - ease(Math.max(0, u))), done: false }
 }

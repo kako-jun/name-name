@@ -79,6 +79,7 @@ describe('equipmentScenarios: 生成', () => {
     // 重い族は skip で省いて、末尾に足されることだけを確かめる（既存族のバイト一致は npm run test:battle-harness の出力比較で見る）
     const heavy = [
       'multi-target',
+      'enemy-row',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

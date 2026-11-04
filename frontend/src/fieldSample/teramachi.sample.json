@@ -10,6 +10,7 @@
   "edgeThreshold": 6,
   "characterForms": {
     "root": "http://localhost:8765/assets/images/characters",
+    "weaponRoot": "http://localhost:8765/assets/images/weapons",
     "manifestUrl": "field-sample/sit-character-forms.json"
   },
   "spriteStyle": "acrylic",

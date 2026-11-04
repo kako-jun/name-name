@@ -71,6 +71,7 @@ describe('jobScenarios: 生成', () => {
   it('SweepFamily `job` は buildSweep に足され（末尾は multi-target）、skip で除ける。直前の族のシナリオは変わらない', () => {
     const heavy = [
       'multi-target',
+      'enemy-row',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

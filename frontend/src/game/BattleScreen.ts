@@ -132,6 +132,8 @@ import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './
 import {
   sampleSummonCue,
   motionTimingFor,
+  entranceTotalMs,
+  sampleEntrance,
   normalizeBattleMotion,
   type BattleMotionPreset,
   type MotionTiming,
@@ -264,6 +266,8 @@ import {
   type BattleLogTypewriterMode,
 } from './battleLogTypewriter'
 
+/** 登場スライド (#1037): 絵の読み込みが終わらなくても、tick の積算がこの ms に達したら見切って開始する */
+const ENTRANCE_LOAD_TIMEOUT_MS = 1500
 const BG_DIM_ALPHA = 0.55
 const PANEL_BG = 0x000000
 const PANEL_BG_ALPHA = 0.85
@@ -644,6 +648,16 @@ export class BattleScreen extends Container {
   private dofLevels: DofLevelView[] = []
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
+  /** 登場スライド (#1037) が有効で、まだ終わっていない間 true（開始待ちを含む）。ff かつ side かつ entranceTotalMs>0 のときだけ true から始まる */
+  private entranceActive = false
+  /** 登場の経過 ms。null は開始待ち（絵の読み込み待ち。この間は出発位置に置く） */
+  private entranceElapsed: number | null = null
+  /** 開始待ちで積算した ms。ENTRANCE_LOAD_TIMEOUT_MS で見切って開始する */
+  private entranceWaitedMs = 0
+  /** 絵の読み込みが全部 settled したか */
+  private entranceLoadsSettled = false
+  /** 登場の開始待ちに使う、敵・味方の絵の読み込みの Promise */
+  private entranceLoads: Promise<unknown>[] = []
   /** 板・影のテクスチャを tex.source ごとに共有するキャッシュ (#760)。destroy で解放 */
   private plateCache = new AcrylicPlateCache((tex, baseTex) => this.makeAcrylicPlate(tex, baseTex))
   /** 戦闘ログのタイプ表示 (#755)。`off` のとき tracker / ticker は使わない */
@@ -820,6 +834,7 @@ export class BattleScreen extends Container {
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.presentation = opts.presentation === 'ff' && this.layoutMode === 'side' ? 'ff' : 'dq'
     this.motionTiming = motionTimingFor(normalizeBattleMotion(opts.motion))
+    this.entranceActive = this.presentation === 'ff' && entranceTotalMs(this.motionTiming) > 0
     this.enemyListEnabled =
       opts.enemyList === 'window' && this.presentation === 'ff' && this.layoutMode === 'side'
     // FF 式の窓は一度に全文を出す。1 文字ずつ表示 (#755) は DQ 式のログ用で、ff では使わない
@@ -873,6 +888,13 @@ export class BattleScreen extends Container {
       initial.events.length === initial.eventTotal &&
       initial.events.every((e) => e.line)
     this.seenEventTotal = introOnly ? 0 : initial.eventTotal
+    if (this.entranceActive) {
+      // 絵の読み込みが全部 settled してから登場の時計を回す (#1037)。それまでは画面外に置く（ポップインさせない）
+      void Promise.allSettled(this.entranceLoads).then(() => {
+        this.entranceLoadsSettled = true
+      })
+      this.entranceLoads = []
+    }
     if (opts.background) void this.loadBackground(opts.background)
     if (opts.foreground && this.layoutMode === 'side') void this.loadForeground(opts.foreground)
     this.layout()
@@ -1269,11 +1291,13 @@ export class BattleScreen extends Container {
       weapon: null,
     }
     if (spritePath) {
-      void this.loadEntitySprite(view, spritePath).then(async () => {
+      const loading = this.loadEntitySprite(view, spritePath).then(async () => {
         if (this.presentation === 'ff' && entity.poses)
           await this.loadPoseVisuals(view, entity.poses)
         if (this.presentation === 'ff' && entity.weapon) await this.loadWeapon(view, entity.weapon)
       })
+      // 登場中に作られるビュー（途中参戦）は entranceLoads を戻した後なので誰にも待たれない。待たれなくても害はない（entranceDx が毎回 slotRef から計算するので、他のビューと同じ dx で動く）
+      if (this.entranceActive) this.entranceLoads.push(loading)
     }
     return view
   }
@@ -1451,17 +1475,67 @@ export class BattleScreen extends Container {
       return
     }
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
-    if (ff) this.advancePresentation(deltaMS)
+    // 登場スライド (#1037): 終わるまでは位置だけ毎フレーム更新し、ATB の時間も演出キューの再生も進めない
+    // （開始時に積まれたイベント＝scripted の開始台詞・従来ターン制の初手が、スライド中に流れない）。
+    // 終了フレームは advanceEntrance が entranceActive を落とすので、同じ tick から再生が始まる
+    if (this.entranceActive) this.advanceEntrance(deltaMS)
+    if (ff && !this.entranceActive) this.advancePresentation(deltaMS)
     this.menuLayer?.tick(deltaMS)
     if (atb) {
       // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される。
       // ただし再生待ちが溜まりすぎたら、追いつくまで時間を止める（キューが伸び続けない。#745）
-      if (!(ff && isPlaybackBackedUp(this.playback))) this.engine.tick(deltaMS)
+      if (!this.entranceActive && !(ff && isPlaybackBackedUp(this.playback)))
+        this.engine.tick(deltaMS)
       const sig = this.computeAtbSignature()
       if (sig !== this.atbSignature) this.refresh()
       else this.drawAtbBars()
     }
     this.closeIfOver()
+  }
+
+  /**
+   * 登場スライドの時計を進める (#1037)。絵の読み込みが済む（または積算 ENTRANCE_LOAD_TIMEOUT_MS で見切る）まで開始せず、
+   * 開始後は経過を積んで位置を更新する。全員が着いたら終了して最終位置を反映し、1 度 refresh する（入力・ATB はここから動く）
+   */
+  private advanceEntrance(deltaMS: number): void {
+    if (this.entranceElapsed === null) {
+      this.entranceWaitedMs += deltaMS
+      if (!this.entranceLoadsSettled && this.entranceWaitedMs < ENTRANCE_LOAD_TIMEOUT_MS) return
+      this.entranceElapsed = 0
+    } else {
+      this.entranceElapsed += deltaMS
+    }
+    if (this.entranceElapsed >= entranceTotalMs(this.motionTiming)) {
+      this.entranceActive = false
+      this.applyMotionFrame()
+      this.refresh()
+      return
+    }
+    this.applyMotionFrame()
+  }
+
+  /** 登場スライドの、陣営ごと（グループ共通）の水平オフセット。無効・終了後は 0。開始待ちは出発位置（elapsed 0） */
+  private entranceDx(side: 'party' | 'enemy'): number {
+    if (!this.entranceActive) return 0
+    // 編隊を保つため、グループ共通のオフセットにする: 敵は全敵の枠の右端の最大、味方は全味方の枠の左端の最小を渡す。
+    // 毎回 views の slotRef から計算するので、再配置・途中参戦でも破綻しない
+    const views = side === 'enemy' ? this.enemyViews : this.partyViews
+    let left = Infinity
+    let right = -Infinity
+    for (const v of views) {
+      if (!v.slotRef) continue
+      left = Math.min(left, v.slotRef.x)
+      right = Math.max(right, v.slotRef.x + v.slotRef.width)
+    }
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return 0
+    return sampleEntrance(
+      this.entranceElapsed ?? 0,
+      side,
+      left,
+      right,
+      this.screenWidth,
+      this.motionTiming
+    ).dx
   }
 
   private computeAtbSignature(): string {
@@ -2673,8 +2747,10 @@ export class BattleScreen extends Container {
     return this.hpOverride.get(this.entityKey(side, index)) ?? current
   }
 
-  /** ff の従来ターン制だけ、演出が終わるまで入力を塞ぐ。ATB は演出中も入力できる */
+  /** ff の従来ターン制だけ、演出が終わるまで入力を塞ぐ。ATB は演出中も入力できる。ただし登場スライド中 (#1037) は ATB も塞ぐ */
   private isInputBlockedByPresentation(): boolean {
+    // 登場スライド中 (#1037) は ATB でも入力を塞ぐ（開始待ちを含む）
+    if (this.entranceActive) return true
     return this.isPresenting() && !this.engine.getState().atb
   }
 
@@ -3230,13 +3306,15 @@ export class BattleScreen extends Container {
         const slot = view.slotRef
         const pad = view.unit * MOTION_EXTENT_PAD
         const rawDx = (m.forward * dir - m.recoil * dir) * view.unit
-        const dx = clampMotionDx(
-          rawDx,
-          slot.x - pad,
-          slot.x + slot.width + pad,
-          MOTION_SCREEN_MARGIN,
-          this.screenWidth - MOTION_SCREEN_MARGIN
-        )
+        // 登場スライド (#1037) の dx は、画面外から出発するのでクランプの後で足す
+        const dx =
+          clampMotionDx(
+            rawDx,
+            slot.x - pad,
+            slot.x + slot.width + pad,
+            MOTION_SCREEN_MARGIN,
+            this.screenWidth - MOTION_SCREEN_MARGIN
+          ) + this.entranceDx(side)
         // アクスタ表示 (#953): 足元（スプライト下端中央）を支点に傾く。被弾は山形に倒れ気味、死亡は fallDeg まで倒れる。
         // 向きはのけぞりと同じ（攻撃側と反対）。倒れた絵（down）がある者は絵の差し替えで倒れを表すので、死ぬ被弾でも傾けない（生き残る被弾の傾きは付く）。
         // 倒れの絵が無い者は、従来の沈み込みでなく回転で倒れる
