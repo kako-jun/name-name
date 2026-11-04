@@ -83,7 +83,7 @@ export function isRefineComplete(elapsedMs: number, remainingMs: number): boolea
 }
 
 /**
- * 被弾モザイク (#953): 山形（1→maxSize→1、画像のスワップなし）の `PixelateFilter.size` と終了判定。
+ * 自己モザイク (#953): 山形（1→maxSize→1、画像のスワップなし）の `PixelateFilter.size` と終了判定。
  * 切り替えのコルセン/リファイン（`computeCoarsenSize`/`computeRefineSize`）と同じ丸め・下限（size 1=等倍）。
  * 山は sin の半周期（中央がピーク）。
  *

@@ -152,17 +152,24 @@ describe('sampleActor: フェーズの切れ目', () => {
 describe('sampleTarget: 境界と非有限', () => {
   it('命中の瞬間（sinceHit=0）から hurt。-1 は立っている', () => {
     expect(sampleTarget('damage', -1, false)).toEqual(STANDING)
-    expect(sampleTarget('damage', 0, false)).toEqual({ recoil: 0, pose: 'hurt', downProgress: 0 })
+    expect(sampleTarget('damage', 0, false)).toMatchObject({
+      recoil: 0,
+      pose: 'hurt',
+      downProgress: 0,
+      tilt: 0,
+    })
   })
   it('生存: のけぞり終端の 1ms 前は hurt、ちょうどで idle', () => {
     expect(sampleTarget('damage', RECOIL_MS - 1, false).pose).toBe('hurt')
     expect(sampleTarget('damage', RECOIL_MS, false).pose).toBe('idle')
   })
   it('倒れ: のけぞり終端ちょうどで down ポーズ・進み 0、倒れ終端の後も 1 のまま', () => {
-    expect(sampleTarget('damage', RECOIL_MS, true)).toEqual({
+    expect(sampleTarget('damage', RECOIL_MS, true)).toMatchObject({
       recoil: 0,
       pose: 'down',
       downProgress: 0,
+      tilt: 18, // 被弾の傾きのピークで保ち、そこから連続して倒れる (#953)
+      vanish: 0,
     })
     expect(sampleTarget('damage', RECOIL_MS + DOWN_MS + 10000, true).downProgress).toBe(1)
   })

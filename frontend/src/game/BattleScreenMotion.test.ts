@@ -26,6 +26,7 @@ function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 
 interface Internals {
   partyViews: { container: Container }[]
+  enemyViews: { container: Container }[]
   playback: { active: { event: { seq: number }; elapsed: number } | null }
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
@@ -95,10 +96,13 @@ describe('BattleScreen: motion の配線 (#956)', () => {
   })
 })
 
-describe('BattleScreen: 被弾モザイク (#953)', () => {
+describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の自己モザイクは出る (#953)', () => {
   type Mv = { container: Container & { filters: unknown } }
+  // 味方（被弾側）にはモザイクが掛からない。フィルタを持つのは攻撃した敵自身だけ
+  const partyFilt = (h: ReturnType<typeof setup>, i = 0) =>
+    (I(h.s).partyViews[i] as unknown as Mv).container.filters
   const filt = (h: ReturnType<typeof setup>, i = 0) => {
-    const f = (I(h.s).partyViews[i] as unknown as Mv).container.filters as unknown as
+    const f = (I(h.s).enemyViews[i] as unknown as Mv).container.filters as unknown as
       | { sizeX: number; destroy: () => void }[]
       | null
     return f && f.length ? f[0] : null
@@ -107,6 +111,7 @@ describe('BattleScreen: 被弾モザイク (#953)', () => {
     const sizes: number[] = []
     for (let t = 0; t < limit; t++) {
       h.s.tick(1)
+      expect(partyFilt(h)).toBeFalsy()
       const f = filt(h)
       if (f) sizes.push(f.sizeX)
     }
@@ -128,12 +133,12 @@ describe('BattleScreen: 被弾モザイク (#953)', () => {
     return { s, engine, restX: I(s).partyViews[0].container.x }
   }
 
-  it('snappy: 敵の攻撃命中で味方にフィルタが付き、size が 1→最大→1 と動いて終わると外れる', () => {
+  it('snappy: 敵の攻撃で、味方には付かず攻撃した敵自身に size が 1→最大→1 と動いて終わると外れる', () => {
     const h = enemyAttackSetup('snappy')
     const sizes = runUntilFilter(h)
     expect(sizes.length).toBeGreaterThan(50)
     const max = Math.max(...sizes)
-    expect(max).toBe(S.hitMosaicMaxSize)
+    expect(max).toBe(S.selfMosaicMaxSize)
     expect(sizes[0]).toBeLessThan(max)
     expect(filt(h)).toBeNull()
   })
@@ -213,44 +218,22 @@ describe('BattleScreen: 被弾モザイク (#953)', () => {
   })
   const attached = (a: (number | null)[]) => a.filter((x): x is number => x !== null)
 
-  it('終わる直前の size は 1〜2（粗いまま一瞬で素に戻らない）', () => {
-    const r = playSynthetic([ev('enemy', [hit()])])
-    const a = attached(r.party)
-    expect(a.length).toBeGreaterThan(50)
-    expect(a[a.length - 1]).toBeLessThanOrEqual(2)
-    expect(Math.min(...a)).toBeGreaterThanOrEqual(2) // 等倍(1)の間は付けない
-    expect(r.party[r.party.length - 1]).toBeNull()
+  it('敵の damage 命中（単発・倒れる・4 連撃）でも、被弾した味方にモザイクは一度も付かない', () => {
+    for (const hits of [
+      [hit()],
+      [hit({ hpAfter: 0 })],
+      [0, 1, 2, 3].map((round) => hit({ round })),
+    ]) {
+      const r = playSynthetic([ev('enemy', hits)])
+      expect(attached(r.party)).toEqual([])
+      // 攻撃した敵自身の自己モザイクは従来どおり（最大まで上がり、終わりに外れる）
+      const e = attached(r.enemy)
+      expect(Math.max(...e)).toBe(S.selfMosaicMaxSize)
+      expect(r.enemy[r.enemy.length - 1]).toBeNull()
+    }
   })
 
-  it('倒れる（行動が長い）ときも、山のあとフィルタは外れる', () => {
-    const r = playSynthetic([ev('enemy', [hit({ hpAfter: 0 })])])
-    const a = attached(r.party)
-    expect(a.length).toBeGreaterThan(50)
-    expect(a[a.length - 1]).toBeLessThanOrEqual(2)
-    expect(r.party[r.party.length - 1]).toBeNull()
-  })
-
-  it('4 連撃（間隔 75ms）は size が途切れず滑らかに繋がる', () => {
-    const r = playSynthetic([
-      ev(
-        'enemy',
-        [0, 1, 2, 3].map((round) => hit({ round }))
-      ),
-    ])
-    const first = r.party.findIndex((x) => x !== null)
-    const last = r.party.length - 1 - [...r.party].reverse().findIndex((x) => x !== null)
-    const span = r.party.slice(first, last + 1)
-    expect(span.every((x) => x !== null)).toBe(true)
-    const a = attached(span)
-    for (let i = 1; i < a.length; i++) expect(Math.abs(a[i] - a[i - 1])).toBeLessThanOrEqual(2)
-    expect(Math.max(...a)).toBe(S.hitMosaicMaxSize)
-    expect(a[a.length - 1]).toBeLessThanOrEqual(2)
-    // 最後の山は短い（行動の残りが少ない）ので、終わり際に急に跳ね上がらない（最後の 40ms は単調に下がる）
-    const tail = a.slice(-40)
-    for (let i = 1; i < tail.length; i++) expect(tail[i]).toBeLessThanOrEqual(tail[i - 1])
-  })
-
-  it('miss・回復では付かない', () => {
+  it('miss・回復でも味方には付かない', () => {
     for (const h of [
       hit({ kind: 'miss', amount: 0, hpAfter: 999 }),
       hit({ kind: 'heal', hpBefore: 500, hpAfter: 510 }),
@@ -385,7 +368,7 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     expect([...r.poses]).toEqual(['idle'])
     const a = r.esize.filter((x): x is number => x !== null)
     expect(a.length).toBeGreaterThan(50)
-    expect(Math.max(...a)).toBe(S.hitMosaicMaxSize)
+    expect(Math.max(...a)).toBe(S.selfMosaicMaxSize)
     expect(Math.min(...a)).toBeGreaterThanOrEqual(2)
     expect(r.esize[r.esize.length - 1]).toBeNull()
   })

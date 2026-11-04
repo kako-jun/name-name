@@ -12,7 +12,7 @@
  * 距離はすべて「その枠の一辺」を 1 とする比（px は画面側が掛ける）。前後の向きも持たない:
  * `forward` は「相手陣営へ向かう」正の量、`recoil` は「相手陣営から離れる」正の量で、
  * 左右への写像（味方=右陣営は forward が -x、敵は +x）は画面側が決める。
- * 敵の通常攻撃だけは、被弾モザイク（hitMosaicMs > 0 かつ hitMosaicMaxSize >= 2）が有効なとき踏み出さず自己モザイクで知らせる（BattleScreen が決める。無効なら従来どおり踏み出す）。
+ * 敵の通常攻撃だけは、自己モザイク（selfMosaicMs > 0 かつ selfMosaicMaxSize >= 2）が有効なとき踏み出さず自己モザイクで知らせる（BattleScreen が決める。無効なら従来どおり踏み出す）。
  */
 import type { BattleActionEvent, BattleHit, BattleHitKind } from './battleEngine'
 
@@ -153,9 +153,20 @@ export interface MotionTiming {
   popupFadeMs: number
   /** ダメージ数字を 1 桁ずつ時間差で跳ねさせるときの、桁ごとの開始遅れ（ms）。0 は数字全体を 1 つで跳ねさせる（従来） (#955) */
   digitStaggerMs: number
-  /** 敵→味方の被弾で、被弾した味方がほわっとモザイク状に粗くなって戻る時間（ms）と最大の粗さ（PixelateFilter.size）。0 は出さない（従来） (#953)。敵の通常攻撃では、攻撃した敵自身にも同じ値で自己モザイクを出し（miss でも）、そのとき敵は踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。0 のときは従来どおり敵も踏み出す */
-  hitMosaicMs: number
-  hitMosaicMaxSize: number
+  /** 敵の自己モザイク（攻撃通知）の時間（ms）と最大の粗さ（PixelateFilter.size）。0 は出さない（従来）。味方の被弾にはモザイクを掛けない（味方の被弾は のけぞり＋アクスタの傾き #953）。敵の通常攻撃では、攻撃した敵自身に（miss でも）同じ値で自己モザイクを出し、そのとき敵は踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。0 のときは従来どおり敵も踏み出す */
+  selfMosaicMs: number
+  selfMosaicMaxSize: number
+  /**
+   * アクスタ表示（spriteStyle acrylic）の被弾・死亡の倒れ (#953)。アクスタでない従来表示は使わない。
+   * 被弾（のけぞり recoilMs の間）に足元を支点に傾く最大角（度。のけぞりと同じ向き＝攻撃側と反対へ倒れ気味）。0 で傾けない
+   */
+  hurtTiltDeg: number
+  /** 死亡で倒れ切る角度（度。約 90＝真横）。倒れる時間は downMs */
+  fallDeg: number
+  /** 死んだ敵が、倒れ切ったあとモザイクで消えるまでの時間（ms）。0 は倒れ切った瞬間に消える。味方は消えない */
+  vanishMs: number
+  /** 消えるときのモザイクの最大の粗さ（PixelateFilter.size） */
+  vanishMosaicMaxSize: number
   /** 候補窓（呪文・アイテム一覧）の開閉アニメーションの長さ（ms。開くときも閉じるときも同じ）。0 は即座に開閉（従来） (#745) */
   menuMs: number
 }
@@ -193,8 +204,12 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   popupHoldMs: 240,
   popupFadeMs: 200,
   digitStaggerMs: 0,
-  hitMosaicMs: 0,
-  hitMosaicMaxSize: 16,
+  selfMosaicMs: 0,
+  selfMosaicMaxSize: 16,
+  hurtTiltDeg: 18,
+  fallDeg: 90,
+  vanishMs: 320,
+  vanishMosaicMaxSize: 24,
   menuMs: 0,
 }
 
@@ -207,7 +222,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
  * - ダメージ・回復の数字は 1 桁ずつ 50ms 差で跳ねさせる (#955)。FF の「ぱらぱらと着地する」リズムを出すため（桁数が多くても合計 150ms まで）
  * - 敵の通常攻撃では、攻撃した敵自身にも同じ 260ms・最大 16 の自己モザイクを出し、敵は踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)
  * - 候補窓（呪文・アイテム一覧）は 120ms の短い scale / alpha で開閉する (#745)。default は 0（即座に開閉）
- * - 被弾した味方に 260ms のほわっとモザイク (#953)。山の長さは `min(260ms, 行動の残り)`（のけぞり 200ms + 行動間 40ms で行動は命中から約 240ms 後に終わるので、実際は約 240ms 以内に等倍へ戻り切る。行動の長さは変えない）。最大 16 は絵の切り替えモザイク（24）より控えめ（キャラが読めなくならないよう。等倍(1)→最大→等倍の山でスワップなし）。連続ヒットは各ヒットの山の包絡で繋ぐ。default は 0（出さない）
+ * - 攻撃する敵の自己モザイク 260ms (sit-by-me #64)。山の長さは `min(260ms, 行動の長さ)`。最大 16 は絵の切り替えモザイク（24）より控えめ（キャラが読めなくならないよう。等倍(1)→最大→等倍の山でスワップなし）。default は 0（出さない）
  */
 export const SNAPPY_MOTION_TIMING: MotionTiming = {
   attackStepMs: 130,
@@ -239,8 +254,12 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   popupHoldMs: 180,
   popupFadeMs: 150,
   digitStaggerMs: 50,
-  hitMosaicMs: 260,
-  hitMosaicMaxSize: 16,
+  selfMosaicMs: 260,
+  selfMosaicMaxSize: 16,
+  hurtTiltDeg: 18,
+  fallDeg: 90,
+  vanishMs: 240,
+  vanishMosaicMaxSize: 24,
   menuMs: 120,
 }
 
@@ -393,6 +412,8 @@ export function buildActionTimeline(
     lastDownRound?: number
     /** 種別を問わない最大 round。この round の命中まで行動を終わらせない */
     lastRound?: number
+    /** 倒れ切ったあとに足す時間（ms）。アクスタ表示で敵が倒れたときのモザイク消滅 (#953)。無ければ 0（従来と同じ） */
+    extraDownMs?: number
     /** 召喚獣の登場 (#750)。`skill` のときだけ効き、登場の長さ・命中の瞬間が召喚用になる。無ければ従来と同じ */
     summon?: boolean
   } = {},
@@ -433,7 +454,10 @@ export function buildActionTimeline(
   if (opts.downs)
     end = Math.max(
       end,
-      hitTimeOf(hitAt, opts.lastDownRound ?? 0, hitInterval) + T.recoilMs + T.downMs
+      hitTimeOf(hitAt, opts.lastDownRound ?? 0, hitInterval) +
+        T.recoilMs +
+        T.downMs +
+        (opts.extraDownMs ?? 0)
     )
   // heal・miss だけの round も取りこぼさない（最大 round が 0 なら何もしない = 従来と同じ）
   if ((opts.lastRound ?? 0) > 0)
@@ -444,7 +468,9 @@ export function buildActionTimeline(
 /** 行動の記録から時間割を作る。HP が減る対象がいればのけぞり、HP 0 になる対象がいれば倒れ切るまで含める */
 export function eventTimeline(
   event: BattleActionEvent,
-  timing: MotionTiming = DEFAULT_MOTION_TIMING
+  timing: MotionTiming = DEFAULT_MOTION_TIMING,
+  /** 倒れ切ったあとに足す時間（ms）。呼び出し側が「アクスタ表示で敵が倒れる行動」のときだけ渡す (#953) */
+  extraDownMs = 0
 ): ActionTimeline {
   // 脚本制御の戦闘 (#741) の台詞・知らせは、字数に応じて読める長さだけ見せる（短い知らせの固定時間では読み切れない）。復活の回復数字は最初に出る
   if (event.kind === 'notice' && event.line) {
@@ -473,6 +499,7 @@ export function eventTimeline(
       lastDamageRound,
       lastDownRound,
       lastRound,
+      ...(extraDownMs > 0 ? { extraDownMs } : {}),
       ...(event.summon ? { summon: true } : {}),
     },
     timing
@@ -551,12 +578,32 @@ export interface TargetSample {
   pose: BattlePose
   /** 倒れた進み具合（0=立っている〜1=倒れ切り）。1 のとき画面は down ポーズ、無ければ沈み込みで表す */
   downProgress: number
+  /** アクスタ表示用 (#953): 足元を支点にした傾き（度。正=のけぞりと同じ向き＝攻撃側と反対へ倒れる）。被弾で山形、死亡は被弾の傾きのピーク→fallDeg */
+  tilt: number
+  /** この姿が「倒れる被弾（HP 0）」か、倒れ済みか (#953)。down の絵で倒れを表す者は、被弾から傾けない（絵の差し替えと矛盾しないため） */
+  dying: boolean
+  /** アクスタ表示の敵用 (#953): 倒れ切ったあとのモザイク消滅の進み具合（0=見えている〜1=消えた） */
+  vanish: number
 }
 
 /** 立っている状態（何も起きていない） */
-export const STANDING: TargetSample = { recoil: 0, pose: 'idle', downProgress: 0 }
-/** 倒れ切った状態 */
-export const FALLEN: TargetSample = { recoil: 0, pose: 'down', downProgress: 1 }
+export const STANDING: TargetSample = {
+  recoil: 0,
+  pose: 'idle',
+  downProgress: 0,
+  tilt: 0,
+  vanish: 0,
+  dying: false,
+}
+/** 倒れ切った状態（傾きは既定の fallDeg） */
+export const FALLEN: TargetSample = {
+  recoil: 0,
+  pose: 'down',
+  downProgress: 1,
+  tilt: DEFAULT_MOTION_TIMING.fallDeg,
+  vanish: 1,
+  dying: true,
+}
 
 /**
  * 行動を受ける側の、命中から sinceHit ms 時点の姿。命中前（sinceHit < 0）は立っている。
@@ -572,21 +619,42 @@ export function sampleTarget(
   if (kind !== 'damage' || !Number.isFinite(sinceHit) || sinceHit < 0) return STANDING
   const recoilU = clamp01(sinceHit / timing.recoilMs)
   const recoil = timing.recoilDistance * Math.sin(Math.PI * recoilU)
+  const tilt = timing.hurtTiltDeg * Math.sin(Math.PI * recoilU)
   if (!downs) {
-    return { recoil, pose: sinceHit < timing.recoilMs ? 'hurt' : 'idle', downProgress: 0 }
+    return {
+      recoil,
+      pose: sinceHit < timing.recoilMs ? 'hurt' : 'idle',
+      downProgress: 0,
+      tilt,
+      vanish: 0,
+      dying: false,
+    }
   }
-  if (sinceHit < timing.recoilMs) return { recoil, pose: 'hurt', downProgress: 0 }
+  // 倒れる者は、被弾の傾きが戻らず（ピークで保ち）そこから連続して倒れる
+  if (sinceHit < timing.recoilMs) {
+    const lean = timing.hurtTiltDeg * easeOutQuad(recoilU)
+    return { recoil, pose: 'hurt', downProgress: 0, tilt: lean, vanish: 0, dying: true }
+  }
+  const downProgress = easeOutQuad((sinceHit - timing.recoilMs) / timing.downMs)
+  const sinceDown = sinceHit - timing.recoilMs - timing.downMs
+  const vanish = timing.vanishMs > 0 ? clamp01(sinceDown / timing.vanishMs) : sinceDown >= 0 ? 1 : 0
   return {
     recoil: 0,
     pose: 'down',
-    downProgress: easeOutQuad((sinceHit - timing.recoilMs) / timing.downMs),
+    downProgress,
+    tilt: timing.hurtTiltDeg + (timing.fallDeg - timing.hurtTiltDeg) * downProgress,
+    vanish,
+    dying: true,
   }
 }
 
 /** 何も再生していないときの姿: 戦闘に勝って生きている味方は victory、倒れていれば down、それ以外は idle */
-export function restingSample(opts: { down: boolean; victory: boolean }): TargetSample {
-  if (opts.down) return FALLEN
-  return opts.victory ? { recoil: 0, pose: 'victory', downProgress: 0 } : STANDING
+export function restingSample(
+  opts: { down: boolean; victory: boolean },
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): TargetSample {
+  if (opts.down) return { ...FALLEN, tilt: timing.fallDeg }
+  return opts.victory ? { ...STANDING, pose: 'victory' } : STANDING
 }
 
 // ---------------------------------------------------------------------------
@@ -700,7 +768,9 @@ const MAX_ADVANCE_STEPS = 200
 export function advancePlayback(
   pb: PlaybackState,
   dt: number,
-  timing: MotionTiming = DEFAULT_MOTION_TIMING
+  timing: MotionTiming = DEFAULT_MOTION_TIMING,
+  /** 行動ごとに、倒れ切ったあとへ足す時間（ms）。アクスタ表示の敵のモザイク消滅用 (#953)。省略は 0 */
+  extraDownMs: (event: BattleActionEvent) => number = () => 0
 ): { state: PlaybackState; fires: HitFire[] } {
   if (!Number.isFinite(dt) || dt <= 0) return { state: pb, fires: [] }
   let queue = pb.queue
@@ -714,7 +784,7 @@ export function advancePlayback(
       queue = queue.slice(1)
       active = { event: next, elapsed: 0, firedRounds: 0 }
     }
-    const tl = eventTimeline(active.event, timing)
+    const tl = eventTimeline(active.event, timing, extraDownMs(active.event))
     const step = Math.min(rest, tl.duration - active.elapsed)
     active.elapsed += step
     rest -= step

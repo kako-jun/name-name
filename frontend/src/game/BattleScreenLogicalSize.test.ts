@@ -92,20 +92,20 @@ describe('BattleScreen uiScale (sit-by-me#52)', () => {
   })
 
   it('被ヒットのモザイク size は uiScale 倍（画面の見た目の粗さを設計値どおりに保つ）', () => {
-    const view = { container: new Container(), hitMosaic: null as { size: number } | null }
+    const view = { container: new Container(), selfMosaic: null as { size: number } | null }
     const big = make(1920, 1080, { uiScale: 2.4 })
-    ;(big as unknown as { applyHitMosaic(v: unknown, s: number | null): void }).applyHitMosaic(
+    ;(big as unknown as { applySelfMosaic(v: unknown, s: number | null): void }).applySelfMosaic(
       view,
       5
     )
-    expect(sizeOf(view.hitMosaic)).toBeCloseTo(12, 5)
+    expect(sizeOf(view.selfMosaic)).toBeCloseTo(12, 5)
     const base = make(800, 450)
-    const view2 = { container: new Container(), hitMosaic: null as { size: number } | null }
-    ;(base as unknown as { applyHitMosaic(v: unknown, s: number | null): void }).applyHitMosaic(
+    const view2 = { container: new Container(), selfMosaic: null as { size: number } | null }
+    ;(base as unknown as { applySelfMosaic(v: unknown, s: number | null): void }).applySelfMosaic(
       view2,
       5
     )
-    expect(sizeOf(view2.hitMosaic)).toBeCloseTo(5, 5)
+    expect(sizeOf(view2.selfMosaic)).toBeCloseTo(5, 5)
   })
 
   it('1920×1080 の実描画寸法（根の scale 適用後）で、窓どうしが重ならず画面内に収まる', () => {

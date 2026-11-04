@@ -128,7 +128,7 @@ describe('sampleTarget', () => {
   it('HP 0 はのけぞりのあと倒れ切る', () => {
     expect(sampleTarget('damage', RECOIL_MS - 1, true).downProgress).toBe(0)
     expect(sampleTarget('damage', RECOIL_MS + DOWN_MS / 2, true).downProgress).toBeGreaterThan(0)
-    expect(sampleTarget('damage', RECOIL_MS + DOWN_MS, true)).toEqual({
+    expect(sampleTarget('damage', RECOIL_MS + DOWN_MS, true)).toMatchObject({
       recoil: 0,
       pose: 'down',
       downProgress: 1,
