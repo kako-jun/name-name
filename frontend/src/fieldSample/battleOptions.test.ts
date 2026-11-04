@@ -47,7 +47,7 @@ describe('statuses が BattleEngine に渡り、付与の効果で状態が付�
   })
 })
 
-// 旧 teramachiSample.test.ts のエンジン配線の検査 (#896 / #880 / #954 / sit-by-me#52 / #62)。
+// 戦闘設定の配線の検査 (#896 / #880 / #954 / sit-by-me#52 / #62。#1066 でサンプル設定を削除した際に最小の inline 設定へ移した)。
 // 入力は parseConfig で作る最小のインライン設定（特定の作品データには依存しない）
 describe('battle 設定がエンジン・BattleScreen のオプションへ渡る（配線）', () => {
   const BASE = 'http://localhost/field/'
@@ -124,6 +124,7 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
 
   it('十字コマンドが実効になる（cross かつコマンド 4 つ）', () => {
     const b = full()
+    expect(b.commands).toHaveLength(4)
     expect(b.commandLayout).toBe('cross')
     expect(effectiveCommandLayout(b.commandLayout, b.commands?.length ?? 0)).toBe('cross')
   })
