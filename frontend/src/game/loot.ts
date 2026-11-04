@@ -118,6 +118,11 @@ export interface BattleResult {
   items: { itemId: string; count: number }[]
   /** 脚本制御の戦闘 (#741) のとき、その結果（結果フラグ・次のイベント）。普通の戦闘には付かない */
   script?: BattleScriptResult
+  /**
+   * パーティ共通の習得済みの呪文 id (#882 ラーニング)。戦闘の初期値（`learning.initial`）に、この戦闘で食らって覚えたものを足した全体（覚えた順）。
+   * 1 つも無ければ付かない（ホストが保存する。保存は #738 の領分）
+   */
+  learnedSpells?: string[]
 }
 
 /** `loot` をアイテム id ごとの個数に集計する（初めて出た順） */

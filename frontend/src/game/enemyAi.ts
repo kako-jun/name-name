@@ -646,6 +646,7 @@ export function toSkillExecutions(
       ...(s.message !== undefined ? { message: s.message } : {}),
       ...(s.telegraph !== undefined ? { telegraph: s.telegraph } : {}),
       ...(s.cue !== undefined ? { cue: s.cue } : {}),
+      ...(s.learns !== undefined ? { learns: s.learns } : {}),
     }
   }
   return out

@@ -72,6 +72,7 @@ describe('buildSweep: 族 summon', () => {
       'enemy-level',
       'script-grant',
       'job-conversion',
+      'learning',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

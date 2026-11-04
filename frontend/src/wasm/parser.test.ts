@@ -3223,3 +3223,35 @@ describe('parseMarkdown: 未知の [...] ディレクティブは警告つきで
     }
   })
 })
+
+describe('[特技] の 覚える: (#882) が実 WASM パーサ経由で残る', () => {
+  it('覚える: が SkillDef.learns に入り、書かなければ無し。emit → parse で保たれる', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## data: マスター',
+      '',
+      '[特技 breath]',
+      '名前: ほのおのいき',
+      '効果: damage 5..9',
+      '覚える: flame',
+      '[/特技]',
+      '',
+      '[特技 plain]',
+      '名前: たいあたり',
+      '効果: damage 1..2',
+      '[/特技]',
+      '',
+    ].join('\n')
+    const doc = await parseMarkdown(md)
+    const m = collectMasterData(doc)
+    expect(m.skills.breath.learns).toBe('flame')
+    expect('learns' in m.skills.plain).toBe(false)
+    const again = collectMasterData(await parseMarkdown(await emitMarkdown(doc)))
+    expect(again.skills.breath.learns).toBe('flame')
+  })
+})

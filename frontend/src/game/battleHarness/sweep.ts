@@ -9,6 +9,7 @@ import {
   enemyRowScenarios,
   enemyLevelScenarios,
   jobConversionScenarios,
+  learningScenarios,
   jobScenarios,
   lootMatrix,
   effectMatrix,
@@ -64,6 +65,7 @@ export type SweepFamily =
   | 'enemy-level'
   | 'script-grant'
   | 'job-conversion'
+  | 'learning'
 
 /** 族 `script-force` のランダム合成の件数（固定。決定論） */
 export const FORCE_RANDOM_COUNT = 400
@@ -117,6 +119,8 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('script-grant') ? [] : grantMatrix()),
     // ジョブの変換 (#876)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
     ...(skip.has('job-conversion') ? [] : jobConversionScenarios()),
+    // ラーニング (#882)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
+    ...(skip.has('learning') ? [] : learningScenarios()),
   ]
 }
 
