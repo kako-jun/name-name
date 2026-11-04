@@ -8,7 +8,7 @@
  */
 import { Container, Graphics, Rectangle, Sprite, Text as PixiText, type Texture } from 'pixi.js'
 import { FieldAcrylicFigure } from '../fieldSample/acrylicFigure'
-import { HAND_HEIGHT, HAND_PIXEL, handCells } from './battleMenuLayout'
+import { createHandCursor } from './HandCursor'
 import {
   CLOSED_MENU,
   MENU_BACK_LABEL,
@@ -120,6 +120,8 @@ export interface FieldMenuOpenData {
   settings?: Readonly<Record<string, number>>
   /** 一覧に出す画像（`MenuEntry.image` の URL → 読み込んだ絵）。読めなかった・未読み込みは null か無し（文字だけで出す） */
   images?: Readonly<Record<string, Texture | null>>
+  /** 手のカーソルの画像 (#1067)。未指定・読めなかったは null か無し（従来のドット手） */
+  handTexture?: Texture | null
 }
 
 export interface FieldMenuScreenOptions {
@@ -989,19 +991,9 @@ export class FieldMenuScreen extends Container {
     return t
   }
 
-  /** 手の形カーソル (#744)。戦闘の手と同じドット絵（右向き）を行の高さに合わせて拡大する */
-  private hand(x: number, cy: number, height: number): Graphics {
-    const rows = HAND_HEIGHT / HAND_PIXEL
-    const unit = height / rows
-    const cells = handCells('right')
-    const g = new Graphics()
-    g.eventMode = 'none'
-    const top = cy - height / 2
-    const k = unit / HAND_PIXEL
-    for (const c of cells)
-      g.rect(x + c.x * k - 1, top + c.y * k - 1, unit + 2, unit + 2).fill({ color: 0x000000 })
-    for (const c of cells) g.rect(x + c.x * k, top + c.y * k, unit, unit).fill({ color: WHITE })
-    return g
+  /** 手の形カーソル (#744・#1067)。戦闘の手と同じ共通部品（右向き）を行の高さに合わせて拡大する。画像があれば画像、無ければドット絵 */
+  private hand(x: number, cy: number, height: number): Container {
+    return createHandCursor(x, cy - height / 2, height, 'right', this.data?.handTexture ?? null)
   }
 
   override destroy(options?: Parameters<Container['destroy']>[0]): void {

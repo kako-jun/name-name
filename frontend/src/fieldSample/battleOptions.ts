@@ -6,6 +6,7 @@ import type { BattleScreenOptions } from '../game/BattleScreen'
 import type { AtbMode, BattleEngineOptions } from '../game/battleEngine'
 import type { BattleMenuData } from '../game/battleMenu'
 import type { StatusDef } from '../types'
+import type { UiImagesConfig } from '../game/uiImages'
 import type { FieldBattleConfig } from './config'
 import { resolveBattleFrame } from '../game/battleLogicalSize'
 
@@ -17,6 +18,8 @@ export function buildBattleScreenOptions(
     renderResolution?: number
     /** 候補窓のカーソル記憶 (#880)。渡したときだけ（せってい「カーソル = メモリ」） */
     cursorMemory?: Map<string, number>
+    /** UI 部品の画像 (#1067・#1087)。設定の `ui`。指定があるときだけ渡す */
+    uiImages?: UiImagesConfig
   }
 ): Omit<BattleScreenOptions, 'onClose'> {
   const frame = resolveBattleFrame(b.logicalSize)
@@ -33,6 +36,7 @@ export function buildBattleScreenOptions(
     ...(extra.background ? { background: extra.background } : {}),
     ...(extra.menu ? { menu: extra.menu } : {}),
     ...(extra.cursorMemory ? { cursorMemory: extra.cursorMemory } : {}),
+    ...(extra.uiImages ? { uiImages: extra.uiImages } : {}),
     // 論理サイズ指定 (sit-by-me#52) のときだけ UI スケールを渡す（未指定は従来どおり 1 倍＝キー自体を出さない）
     ...(frame
       ? {

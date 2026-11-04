@@ -131,6 +131,7 @@ import {
   type BattleEnemyListMode,
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
+import { computeSelectMarkImageRect, loadUiTexture, type UiImagesConfig } from './uiImages'
 import { normalizeUiScale } from './battleLogicalSize'
 import { syncTextResolution } from './textResolution'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
@@ -453,6 +454,11 @@ export interface BattleScreenOptions {
    */
   assetBaseUrl?: string
   /**
+   * UI 部品の画像 (#1067・#1087)。`handImage` = 手のカーソル、`selectMarkImage` = 「選択中」の円錐（`markScale` 倍）。
+   * 未指定・読み込み失敗は従来のドット手・白い三角。読み込み完了後に差し替わる
+   */
+  uiImages?: UiImagesConfig
+  /**
    * ドット絵モード (#466 / #760)。`true` なら戦闘のテクスチャ（スプライト・敵・背景・前景）を nearest のまま使う。
    * 未指定・false は mipmap＋linear で縮小をなめらかにする。
    */
@@ -528,6 +534,8 @@ interface EntityView extends AcrylicParts {
   label: PixiText | null
   /** 「選択中」の印 ▼ (#805)。container の子なので板・台座ごと動く（踏み出し演出にも追従）。出し入れは updateSelectMarks */
   selectMark: Graphics
+  /** 「選択中」の印の円錐の画像 (#1087)。画像を読めたときだけ作る（三角の selectMark は空にして、こちらを出す） */
+  selectMarkImage: Sprite | null
   /** 演出 (#745): 最後に placeEntityView が置いた枠。ポーズ差し替え時の再配置に使う */
   slotRef: SpriteSlot | null
   /** 演出 (#745): placeEntityView が置いた container の基準位置（モーションのずれを足す前）と、枠の一辺（距離の単位） */
@@ -828,6 +836,9 @@ export class BattleScreen extends Container {
   private menuStack: MenuStack = EMPTY_STACK
   private menuActorIndex = -1
   private menuLayer: BattleMenuLayer | null = null
+  /** UI 画像 (#1067・#1087)。読み込めたものだけ入る（null = 従来のドット手・三角） */
+  private handTexture: Texture | null = null
+  private markTexture: Texture | null = null
   private menuGeometry: MenuGeometry | null = null
 
   constructor(
@@ -912,6 +923,7 @@ export class BattleScreen extends Container {
       this.entranceLoads = []
     }
     if (opts.background) void this.loadBackground(opts.background)
+    if (opts.uiImages) void this.loadUiImages(opts.uiImages)
     if (opts.foreground && this.layoutMode === 'side') void this.loadForeground(opts.foreground)
     this.layout()
     this.refresh()
@@ -977,6 +989,19 @@ export class BattleScreen extends Container {
     } catch (e) {
       console.warn(`[BattleScreen] failed to load foreground "${path}":`, e)
     }
+  }
+
+  /** 手のカーソル・選択中の印の画像を読み、読めたものだけ反映する (#1067・#1087)。失敗は警告して従来の描画のまま */
+  private async loadUiImages(ui: UiImagesConfig): Promise<void> {
+    const [hand, mark] = await Promise.all([
+      loadUiTexture(ui.handImage, '手のカーソル'),
+      loadUiTexture(ui.selectMarkImage, '選択中の印'),
+    ])
+    if (this.destroyedFlag) return
+    this.handTexture = hand
+    this.markTexture = mark
+    if (hand) this.syncMenu()
+    if (mark) this.layout()
   }
 
   /** 背景画像を読み込んで cover で敷く (#736)。失敗時は半透明黒のまま */
@@ -1290,6 +1315,7 @@ export class BattleScreen extends Container {
       ...emptyAcrylicParts(acrylicBack),
       label,
       selectMark,
+      selectMarkImage: null,
       slotRef: null,
       baseX: 0,
       baseY: 0,
@@ -2198,17 +2224,39 @@ export class BattleScreen extends Container {
    * 三角の形・大きさは純粋関数 computeSelectMarkTriangle（枠の一辺に比例＝画面スケールに追従）
    */
   private layoutSelectMark(view: EntityView, head: { cx: number; top: number }): void {
+    // 上のログ窓（画面基準）の下端＋隙間を container 座標へ。窓の下に隠れないよう印を下げる
+    const minTop = this.messageRect.y + this.messageRect.h + SELECT_MARK_LOG_GAP - view.baseY
+    const tex = this.markTexture
+    const rect =
+      tex && this.opts.uiImages
+        ? computeSelectMarkImageRect(
+            head.cx,
+            head.top,
+            view.unit,
+            tex.width,
+            tex.height,
+            this.opts.uiImages.markScale,
+            minTop
+          )
+        : null
+    if (rect && tex) {
+      // 円錐の画像 (#1087)。三角は空にして、位置は三角と同じ規則（computeSelectMarkImageRect）
+      view.selectMark.clear()
+      if (!view.selectMarkImage) {
+        view.selectMarkImage = new Sprite(tex)
+        view.selectMarkImage.visible = view.selectMark.visible
+        view.container.addChild(view.selectMarkImage)
+      }
+      view.selectMarkImage.texture = tex
+      view.selectMarkImage.position.set(rect.x, rect.y)
+      view.selectMarkImage.width = rect.w
+      view.selectMarkImage.height = rect.h
+      return
+    }
+    if (view.selectMarkImage) view.selectMarkImage.visible = false
     view.selectMark
       .clear()
-      .poly(
-        computeSelectMarkTriangle(
-          head.cx,
-          head.top,
-          view.unit,
-          // 上のログ窓（画面基準）の下端＋隙間を container 座標へ。窓の下に隠れないよう三角を下げる
-          this.messageRect.y + this.messageRect.h + SELECT_MARK_LOG_GAP - view.baseY
-        )
-      )
+      .poly(computeSelectMarkTriangle(head.cx, head.top, view.unit, minTop))
       .fill(SELECT_MARK_FILL)
       .stroke({ color: SELECT_MARK_OUTLINE, width: 1 })
   }
@@ -2228,8 +2276,12 @@ export class BattleScreen extends Container {
       ctx ? ctx.actorIndex : this.actorIndex(),
       ctx ? w : undefined
     )
-    this.partyViews.forEach((v, i) => (v.selectMark.visible = marks.party[i] ?? false))
-    this.enemyViews.forEach((v, i) => (v.selectMark.visible = marks.enemy[i] ?? false))
+    const show = (v: EntityView, on: boolean): void => {
+      v.selectMark.visible = on
+      if (v.selectMarkImage) v.selectMarkImage.visible = on
+    }
+    this.partyViews.forEach((v, i) => show(v, marks.party[i] ?? false))
+    this.enemyViews.forEach((v, i) => show(v, marks.enemy[i] ?? false))
   }
 
   /**
@@ -2562,6 +2614,7 @@ export class BattleScreen extends Container {
       makePanel: () => this.makePanel(),
       drawPanel: (c, x, y, w, h, opaque) => this.drawPanel(c, x, y, w, h, opaque),
       textStyle: () => this.themedStyle(TEXT_STYLE_COMMAND),
+      handTexture: () => this.handTexture,
       onRowTap: (i) => {
         const ctx = this.menuContext()
         if (!ctx) return

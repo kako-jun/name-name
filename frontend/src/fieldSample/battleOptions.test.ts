@@ -177,3 +177,32 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect('cursorMemory' in buildBattleScreenOptions(b, {})).toBe(false)
   })
 })
+
+describe('uiImages の配線 (#1067・#1087)', () => {
+  const cfg = (ui?: Record<string, unknown>) => {
+    const r = parseConfig(
+      {
+        startScene: 'a',
+        start: { x: 10, y: 20 },
+        player: {
+          sprites: Object.fromEntries(
+            ['up', 'down', 'left', 'right'].map((d) => [d, [`${d}1.png`, `${d}2.png`, `${d}3.png`]])
+          ),
+        },
+        scenes: { a: { background: 'a.png', mask: 'a-mask.png' } },
+        battle: { layout: 'side' },
+        ...(ui ? { ui } : {}),
+      },
+      'http://localhost/field/'
+    )
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  it('設定の ui が指定のあるときだけ BattleScreen のオプションへ渡る（未指定はキーなし）', () => {
+    const none = cfg()
+    expect(buildBattleScreenOptions(none.battle, {})).not.toHaveProperty('uiImages')
+    const c = cfg({ handImage: 'ui/h.webp', markScale: 3 })
+    const o = buildBattleScreenOptions(c.battle, { uiImages: c.ui })
+    expect(o.uiImages).toEqual({ handImage: 'http://localhost/field/ui/h.webp', markScale: 3 })
+  })
+})

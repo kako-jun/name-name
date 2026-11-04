@@ -161,6 +161,7 @@ import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
 import { ensureFontLoaded } from '../game/FontLoader'
+import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
@@ -933,6 +934,7 @@ async function main(): Promise<void> {
             background: bg,
             menu,
             renderResolution: app.renderer.resolution,
+            ...(config.ui ? { uiImages: config.ui } : {}),
             // せってい「カーソル = メモリ」(#880): 前回選んだ行を戦闘をまたいで覚える
             ...(menuRuntime &&
             applySettings(menuRuntime.currentSettings, { dialogMs: dialogDefaultMs }).cursorMemory
@@ -1309,21 +1311,27 @@ async function main(): Promise<void> {
               }))
             )
             const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
-            // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む
+            // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む。
+            // 手のカーソルの画像 (#1067。読めなければ null = 従来のドット手) も並列に待つ
             const images: Record<string, Texture | null> = {}
-            // 上限つき（応答が返らない画像で開かなくならないよう、超えたら読めた分だけで開く）
+            const hand: { tex: Texture | null } = { tex: null }
+            // 上限つき・共有（応答が返らない画像で開かなくならないよう、超えたら読めた分だけで開く）
             await waitUpTo(
-              Promise.all(
-                (config.gearShop?.entries ?? []).map(async (e) => {
+              Promise.all([
+                ...(config.gearShop?.entries ?? []).map(async (e) => {
                   if (e.image !== undefined)
                     safeAssign(images, e.image, await partyTexture(e.image))
-                })
-              ),
+                }),
+                loadUiTexture(config.ui?.handImage, '手のカーソル').then((t) => {
+                  hand.tex = t
+                }),
+              ]),
               MENU_IMAGE_TIMEOUT_MS
             )
             return {
               party,
               images,
+              handTexture: hand.tex,
               slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
                 slotSummary(saved[i] ?? null)
               ),

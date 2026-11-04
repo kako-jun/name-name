@@ -12,7 +12,7 @@ import {
   ColorMatrixFilter,
   type Container,
   Graphics,
-  type Sprite,
+  Sprite,
   Texture,
   TextureSource,
   type Text,
@@ -41,6 +41,7 @@ import {
   estimateTextWidth,
 } from './battleLayout'
 import type { SpriteSlot } from './battleLayout'
+import { computeSelectMarkImageRect, resetUiTextureFailures } from './uiImages'
 import { computeSlitY } from './acrylicBase'
 import { createAcrylicPlateTexture } from './acrylicPlateTexture'
 import { computeShadowTransform } from './acrylicShadow'
@@ -3891,5 +3892,155 @@ describe('BattleScreen: ff の踏み出し・のけぞりと選択中の印 ▼ 
     expect(v.selectMark.parent).toBe(v.container)
     const after = v.selectMark.getLocalBounds()
     expect({ x: after.x, y: after.y, width: after.width, height: after.height }).toEqual(ptsRect)
+  })
+})
+
+describe('BattleScreen: 選択中の印の円錐の画像と手のカーソルの画像 (#1087・#1067)', () => {
+  const sized = (w: number, h: number): Texture =>
+    new Texture({ source: new TextureSource({ width: w, height: h }) })
+  interface Mv {
+    container: Container
+    sprite: Sprite | null
+    acrylicPlate: Sprite | null
+    selectMark: Graphics
+    selectMarkImage: Sprite | null
+    unit: number
+    baseY: number
+  }
+  const views = (s: BattleScreen): Mv[] =>
+    (s as unknown as Record<string, Mv[]>)['partyViews'].concat(
+      (s as unknown as Record<string, Mv[]>)['enemyViews']
+    )
+  const acrylic: BattleScreenOptions = { layout: 'side', spriteStyle: 'acrylic' }
+  const ent = (id: string): BattleEntity => entity(id, { sprite: `img/${id}.webp` })
+  const CONE = 'http://x/cone.webp'
+  const HAND = 'http://x/hand.webp'
+  const cone = sized(256, 335)
+  const hand = sized(512, 285)
+  const mockLoad = (fail: string[] = []): void => {
+    vi.spyOn(Assets, 'load').mockImplementation(((u: string) => {
+      if (fail.includes(u)) return Promise.reject(new Error('404'))
+      if (u === CONE) return Promise.resolve(cone)
+      if (u === HAND) return Promise.resolve(hand)
+      return Promise.resolve(sized(100, 50))
+    }) as never)
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation((() => ({
+      texture: sized(116, 66),
+      pad: 8,
+    })) as never)
+  }
+  afterEach(() => {
+    vi.restoreAllMocks()
+    resetUiTextureFailures()
+  })
+
+  it('画像未指定は従来の三角のまま（画像の Sprite を作らない）', async () => {
+    mockLoad()
+    const s = track(make([ent('p')], [ent('e')], acrylic))
+    await flushPromises()
+    for (const v of views(s)) {
+      expect(v.selectMarkImage).toBeNull()
+      expect(v.selectMark.getLocalBounds().width).toBeGreaterThan(0)
+    }
+  })
+
+  it('円錐の画像: 三角は空になり、頂点が三角の先端と同じ位置・markScale 倍の高さで置かれる', async () => {
+    mockLoad()
+    const opts = { ...acrylic, uiImages: { selectMarkImage: CONE, markScale: 2 } }
+    const s = track(make([ent('p')], [ent('e')], opts))
+    await flushPromises()
+    for (const v of views(s)) {
+      expect(v.selectMark.getLocalBounds().width).toBe(0)
+      const img = v.selectMarkImage!
+      expect(img.parent).toBe(v.container)
+      const sp = v.sprite!
+      const top = Math.min(sp.y, v.acrylicPlate!.y)
+      const m = (s as unknown as { messageRect: { y: number; h: number } }).messageRect
+      const minTop = m.y + m.h + SELECT_MARK_LOG_GAP - v.baseY
+      const e = computeSelectMarkImageRect(sp.x + sp.width / 2, top, v.unit, 256, 335, 2, minTop)!
+      expect(img.x).toBeCloseTo(e.x)
+      expect(img.y).toBeCloseTo(e.y)
+      expect(img.width).toBeCloseTo(e.w)
+      expect(img.height).toBeCloseTo(e.h)
+    }
+  })
+
+  it('markScale が大きいほど大きい', async () => {
+    mockLoad()
+    const h = async (scale: number): Promise<number> => {
+      const s = track(
+        make([ent('p')], [ent('e')], {
+          ...acrylic,
+          uiImages: { selectMarkImage: CONE, markScale: scale },
+        })
+      )
+      await flushPromises()
+      return views(s)[0].selectMarkImage!.height
+    }
+    const [a, b, c] = [await h(1.5), await h(2), await h(3)]
+    expect(a).toBeLessThan(b)
+    expect(b).toBeLessThan(c)
+    expect(c / b).toBeCloseTo(1.5)
+  })
+
+  it('読み込み失敗は警告して三角のまま', async () => {
+    mockLoad([CONE, HAND])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const opts = { ...acrylic, uiImages: { selectMarkImage: CONE, handImage: HAND, markScale: 2 } }
+    const s = track(make([ent('p')], [ent('e')], opts))
+    await flushPromises()
+    for (const v of views(s)) {
+      expect(v.selectMarkImage).toBeNull()
+      expect(v.selectMark.getLocalBounds().width).toBeGreaterThan(0)
+    }
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('手の画像: loadUiImages → host.handTexture → BattleMenuLayer の手が Sprite になる（失敗時はドット手）', async () => {
+    mockLoad()
+    const menu = { items: [{ id: 'i', name: 'きずぐすり', count: 1, effect: 'heal 10..10' }] }
+    const withHand = track(
+      make([ent('p')], [ent('e')], {
+        ...acrylic,
+        menu: menu as never,
+        uiImages: { handImage: HAND, markScale: 2 },
+      })
+    )
+    await flushPromises()
+    const layerOf = (s: BattleScreen) =>
+      (
+        s as unknown as {
+          menuLayer: { host: { handTexture?: () => Texture | null }; hand(p: object): unknown }
+        }
+      ).menuLayer
+    const l = layerOf(withHand)
+    expect(l.host.handTexture?.()).toBe(hand)
+    expect(l.hand({ x: 0, y: 0, facing: 'right' })).toBeInstanceOf(Sprite)
+    resetUiTextureFailures()
+    mockLoad([HAND])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const noHand = track(
+      make([ent('p')], [ent('e')], {
+        ...acrylic,
+        menu: menu as never,
+        uiImages: { handImage: HAND, markScale: 2 },
+      })
+    )
+    await flushPromises()
+    const l2 = layerOf(noHand)
+    expect(l2.host.handTexture?.()).toBeNull()
+    expect(l2.hand({ x: 0, y: 0, facing: 'right' })).toBeInstanceOf(Graphics)
+  })
+
+  it('出し入れ: 画像の表示は updateSelectMarks に従う（三角と同じ）', async () => {
+    mockLoad()
+    const s = track(
+      make([ent('p')], [ent('e')], {
+        ...acrylic,
+        uiImages: { selectMarkImage: CONE, markScale: 2 },
+      })
+    )
+    await flushPromises()
+    for (const v of views(s)) expect(v.selectMarkImage!.visible).toBe(v.selectMark.visible)
   })
 })

@@ -25,8 +25,10 @@ class FakeScreen implements FieldMenuScreenLike {
     }
     return ['KeyX', 'Escape', 'KeyZ', 'ArrowDown'].includes(code)
   }
-  open(): void {
+  opened: unknown[] = []
+  open(d?: unknown): void {
     this.isOpen = true
+    this.opened.push(d)
   }
   resize = vi.fn()
   setTimed = vi.fn()
@@ -402,5 +404,21 @@ describe('開くときの項目・せってい（#880）', () => {
     t.release()
     await p2
     expect(opened[1].settings).toEqual({ keys: 1 })
+  })
+})
+
+describe('手のカーソルの画像を開くデータへ渡す (#1067)', () => {
+  const tex = { width: 1, height: 1 } as never
+  it('prepare が返した handTexture は screen.open に渡る。無ければキーを出さない', async () => {
+    const a = setup({
+      prepare: async () => ({ party: [], slots: [null, null, null], handTexture: tex }),
+    })
+    await a.host.open()
+    expect((a.screen.opened[0] as { handTexture?: unknown }).handTexture).toBe(tex)
+    const b = setup({
+      prepare: async () => ({ party: [], slots: [null, null, null], handTexture: null }),
+    })
+    await b.host.open()
+    expect('handTexture' in (b.screen.opened[0] as object)).toBe(false)
   })
 })

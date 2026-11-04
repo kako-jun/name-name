@@ -3,12 +3,19 @@
  * ここは渡された `MenuView` を PixiJS に描くだけ（毎回作り直す。窓は数枚・行は数十なので十分軽い）。
  * パネルの見た目（dark / ff-blue）と文字スタイルは BattleScreen から借りる（`BattleMenuHost`）。
  */
-import { Container, Graphics, Rectangle, Text as PixiText, type TextStyle } from 'pixi.js'
 import {
-  HAND_PIXEL,
+  Container,
+  Graphics,
+  Rectangle,
+  Text as PixiText,
+  type Texture,
+  type TextStyle,
+} from 'pixi.js'
+import { createHandCursor } from './HandCursor'
+import {
+  HAND_HEIGHT,
   MENU_FONT_SIZE,
   MENU_PADDING_X,
-  handCells,
   type HandPlacement,
   type MenuListView,
   type MenuScopeToggleView,
@@ -25,6 +32,8 @@ export interface BattleMenuHost {
   /** `opaque` なら背景を不透明にする（下のコマンド窓の文字が透けないように） */
   drawPanel(panel: Container, x: number, y: number, w: number, h: number, opaque?: boolean): void
   textStyle(): TextStyle
+  /** 手のカーソルの画像 (#1067)。無い・読み込み前・失敗は null / 未定義＝従来のドット手 */
+  handTexture?(): Texture | null
   /** 一覧の行がタップされた（index は候補全体での位置） */
   onRowTap(index: number): void
   /** 一覧の上端・下端の▲▼がタップされた（delta = -1 で上、+1 で下へ 1 行スクロール） */
@@ -37,8 +46,6 @@ export interface BattleMenuHost {
   onCancelTap(): void
 }
 
-const HAND_FILL = 0xffffff
-const HAND_OUTLINE = 0x000000
 const ROW_COLOR = 0xffffff
 const ROW_DISABLED_COLOR = 0x808080
 /** 一番上でない窓（下に隠れた一覧）を暗く描く */
@@ -437,20 +444,8 @@ export class BattleMenuLayer extends Container {
     return s
   }
 
-  /** 手のドット絵。黒い縁（1 ドットぶん外へ広げた塗り）の上に白を重ねる */
-  private hand(p: HandPlacement): Graphics {
-    const g = new Graphics()
-    // 手はタップを受けない（行・対象の判定へ通す。親が static だと手が当たり判定に参加して止めてしまう）
-    g.eventMode = 'none'
-    const cells = handCells(p.facing)
-    for (const c of cells) {
-      g.rect(p.x + c.x - 1, p.y + c.y - 1, HAND_PIXEL + 2, HAND_PIXEL + 2).fill({
-        color: HAND_OUTLINE,
-      })
-    }
-    for (const c of cells) {
-      g.rect(p.x + c.x, p.y + c.y, HAND_PIXEL, HAND_PIXEL).fill({ color: HAND_FILL })
-    }
-    return g
+  /** 手のカーソル（画像があれば画像、無ければドット絵。共通部品 createHandCursor）。高さは従来のドット手と同じ `HAND_HEIGHT` */
+  private hand(p: HandPlacement): Container {
+    return createHandCursor(p.x, p.y, HAND_HEIGHT, p.facing, this.host.handTexture?.() ?? null)
   }
 }
