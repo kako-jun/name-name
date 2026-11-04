@@ -47,6 +47,11 @@ import { computeShadowTransform } from './acrylicShadow'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
 import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
 
+vi.mock('./acrylicPlateTexture', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./acrylicPlateTexture')>()
+  return { ...actual, createAcrylicPlateTexture: vi.fn(actual.createAcrylicPlateTexture) }
+})
+
 const DEAD_ALPHA = 0.3
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -136,11 +141,6 @@ afterEach(() => {
     if (!internals(s).destroyed) s.destroy({ children: true })
   }
   vi.restoreAllMocks()
-})
-
-vi.mock('./acrylicPlateTexture', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./acrylicPlateTexture')>()
-  return { ...actual, createAcrylicPlateTexture: vi.fn(actual.createAcrylicPlateTexture) }
 })
 
 describe('BattleScreen: front（従来）', () => {
@@ -3366,6 +3366,7 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     ).makeAcrylicPlate.mockRestore()
     const create = vi.mocked(createAcrylicPlateTexture)
     create.mockClear()
+    const original = create.getMockImplementation()
     create.mockImplementation(
       (tex: Texture) =>
         ({
@@ -3375,13 +3376,17 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
           foot: { x: 32, y: 16 },
         }) as never
     )
-    const { s } = await setup()
-    const v = pv(s)
-    const baseTex = textures.get('img/hero.webp')!
-    const callFor = (t: Texture) => create.mock.calls.find((c) => c[0] === t)!
-    expect(callFor(baseTex)[2]).toBeUndefined()
-    for (const key of ['idle', 'slash', 'down']) {
-      expect(callFor(v.poseVisuals[key].texture)[2]).toBe(baseTex)
+    try {
+      const { s } = await setup()
+      const v = pv(s)
+      const baseTex = textures.get('img/hero.webp')!
+      const callFor = (t: Texture) => create.mock.calls.find((c) => c[0] === t)!
+      expect(callFor(baseTex)[2]).toBeUndefined()
+      for (const key of ['idle', 'slash', 'down']) {
+        expect(callFor(v.poseVisuals[key].texture)[2]).toBe(baseTex)
+      }
+    } finally {
+      create.mockImplementation(original!)
     }
   })
 
