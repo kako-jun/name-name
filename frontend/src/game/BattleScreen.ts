@@ -1296,7 +1296,7 @@ export class BattleScreen extends Container {
           await this.loadPoseVisuals(view, entity.poses)
         if (this.presentation === 'ff' && entity.weapon) await this.loadWeapon(view, entity.weapon)
       })
-      // 登場中に作られるビュー（途中参戦）は entranceLoads を戻した後なので誰にも待たれない。動かない（枠が確定するまで出発位置に居ない）ので害はない
+      // 登場中に作られるビュー（途中参戦）は entranceLoads を戻した後なので誰にも待たれない。待たれなくても害はない（entranceDx が毎回 slotRef から計算するので、他のビューと同じ dx で動く）
       if (this.entranceActive) this.entranceLoads.push(loading)
     }
     return view
