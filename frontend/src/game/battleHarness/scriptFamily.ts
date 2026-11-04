@@ -583,3 +583,47 @@ const FORCE_RULE_POOL: readonly string[] = [
 export function randomForceScenarios(seed: number, count: number): Scenario[] {
   return randomScriptScenarios(seed, count, FORCE_RULE_POOL, 'random-script-force')
 }
+
+/** 一時付与 `付与:` (#875) の行の変種。エンジンは読まない（候補窓への足し込みは `fieldBattle.ts`）ので、どの行を書いても戦闘は変わらない */
+const GRANT_LINES: ReadonlyArray<{ name: string; lines: string[] }> = [
+  { name: 'ability', lines: ['付与: 味方=hero わざ=slash'] },
+  { name: 'spell', lines: ['付与: 味方=hero 魔法=fire'] },
+  { name: 'both', lines: ['付与: 味方=hero わざ=slash,heal 魔法=fire,ice'] },
+  {
+    name: 'many',
+    lines: ['付与: 味方=hero わざ=a', '付与: 味方=ally わざ=b', '付与: 味方=hero 魔法=c'],
+  },
+  { name: 'unknown-ally', lines: ['付与: 味方=ghost わざ=slash'] },
+  {
+    name: 'broken',
+    lines: ['付与: 味方=hero', '付与: わざ=slash', '付与: 味方=hero 技=slash', '付与:'],
+  },
+]
+
+/** 付与の行 × 勝敗固定 × 戦闘方式。付与の行が他のルールの数・発動・決着を変えず、固定した結果で終わる */
+export function grantMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  for (const g of GRANT_LINES) {
+    for (const fx of FIXED) {
+      for (const mode of MODES) {
+        out.push({
+          id: `script-grant/${g.name}/${fx.word}/${mode}`,
+          seed: 150_000 + out.length,
+          party: [entity('hero', STRENGTHS[0].party)],
+          enemies: [foe('boss', STRENGTHS[0].enemy)],
+          atb: atbOf(mode),
+          spells: [],
+          items: [],
+          ops: [],
+          script: {
+            id: 'gr',
+            rules: [...g.lines, `固定: 結果=${fx.word} 上限ターン=3`],
+            joiners: { ally: entity('ally', { hp: 40, maxHp: 40, atk: 7, agi: 10 }) },
+          },
+          scriptExpect: { ends: fx.ends, maxTurn: 3 },
+        })
+      }
+    }
+  }
+  return out
+}

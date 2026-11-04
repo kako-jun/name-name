@@ -12,6 +12,7 @@
  * - `HP[id]` の id は味方（先頭から）→ 敵の順に最初に見つかった者。いなければ不成立
  * - 台詞 / 参戦 / 復活 / 逃走 / 終了 のルールは**1 回だけ**発動する（繰り返しは条件の `ターン=N` で書く）。成立したルールが複数なら宣言順に 1 つずつ
  *   - `台詞: [条件=…] [話者=名前] 文=本文`（`文=` は最後に書く。行末までが本文で、本文の中の `HP=` などはキーとして読まない）
+ *   - `付与: 味方=<id> わざ=<特技id>[,…] 魔法=<呪文id>[,…]`（#875。その戦闘だけ味方のわざ・呪文の候補に足す。戦闘後は残さない。ルールではないので条件・発動はない）
  *   - `参戦: [条件=…] 対象=<味方id> [文=…]` / `復活: [条件=…] 対象=<味方id> [HP=N|P%] [MP=N|P%] [付与=<状態id>] [文=…]`（対象が HP0 のときに発動。既定は HP 全回復。復活は 1 回きりのイベントで、あとの勝敗はユーザーの操作次第。付与= は `[状態]` に宣言した id だけ）
  *   - `強制: [条件=…] 対象=<id> [HP=N|P%] [MP=N|P%] [付与=<状態id>] [解除=<状態id>] [文=…]`（#741 段階 2。**生きている者**〈味方・敵とも〉の HP / MP を指定値に書き換え、状態を付け外しする一般形。
  *     HP は 0〜最大 HP に収め、`下限` が効いている間はそれを下回らない。倒れた者・逃げた敵は対象外〈条件が真でも保留〉。倒れた者を起こせるのは `復活` だけ。HP=0 は通常の戦闘不能と同じ扱い〈敵なら `死亡時:`・経験値あり〉。
@@ -108,6 +109,16 @@ export type ScriptRule =
   | { kind: 'end'; conds: Condition[]; result: ScriptEndResult; text?: string }
   | { kind: 'floor'; conds: Condition[]; target: FloorTarget; hp: number }
 
+/**
+ * 戦闘単位の一時付与 (#875)。`付与: 味方=<id> わざ=<特技id>[,…] 魔法=<呪文id>[,…]`。その戦闘の対象の味方のわざ・呪文の候補に足すだけ
+ * （戦闘後は残さない・ルールではないので発動条件も `fired` も持たない）。ids の存在検査は呼び出し側（`fieldBattle.ts` の `applyScriptGrants`）
+ */
+export interface ScriptGrant {
+  target: string
+  abilities: string[]
+  spells: string[]
+}
+
 export interface ParsedBattleScript {
   /** 解釈できたルール（宣言順。`固定` は floor と end に展開済み）。`fired` の index はこの配列の添字 */
   rules: ScriptRule[]
@@ -116,6 +127,8 @@ export interface ParsedBattleScript {
   noEscape: boolean
   /** 不正な行・値、膠着の恐れの警告 */
   warnings: string[]
+  /** 一時付与 (#875)。`付与:` を書いたときだけある（書かない戦闘はキーも無い） */
+  grants?: ScriptGrant[]
 }
 
 /** エンジンが渡す、戦闘の状態の写し（ルールの判定に必要な数字だけ） */
@@ -186,6 +199,7 @@ const RULE_KINDS = [
   '中断時',
   '逃走時',
   'にげる',
+  '付与',
 ] as const
 const OP = '(<=|>=|<|>|==|=)'
 const TURN_RE = new RegExp(`^ターン\\s*${OP}\\s*(\\d+)$`)
@@ -347,6 +361,33 @@ export function parseScriptFlags(raw: string): {
   return { flags, warnings }
 }
 
+/** `付与:` の本文 `味方=<id> わざ=a,b 魔法=c`。不正なら理由の文字列 */
+function parseGrant(body: string): ScriptGrant | string {
+  let target = ''
+  const abilities: string[] = []
+  const spells: string[] = []
+  const ids = (v: string): string[] =>
+    v
+      .split(/[,、，]/)
+      .map((s) => s.trim())
+      .filter((s) => s !== '')
+  for (const tok of body
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t !== '')) {
+    const eq = tok.indexOf('=')
+    const key = eq > 0 ? tok.slice(0, eq) : ''
+    const value = eq > 0 ? tok.slice(eq + 1) : ''
+    if (key === '味方') target = value
+    else if (key === 'わざ') abilities.push(...ids(value))
+    else if (key === '魔法') spells.push(...ids(value))
+    else return `'${tok}' は 味方= わざ= 魔法= のどれでもありません`
+  }
+  if (target === '') return '味方= がありません'
+  if (abilities.length === 0 && spells.length === 0) return 'わざ= か 魔法= がありません'
+  return { target, abilities, spells }
+}
+
 function splitKindLine(line: string): { kind: string; body: string } | null {
   const m = /^\s*([^:：\s]+)\s*[:：]\s*(.*)$/s.exec(line)
   return m ? { kind: m[1], body: m[2] } : null
@@ -360,6 +401,7 @@ export function parseBattleScript(lines: readonly string[]): ParsedBattleScript 
   const rules: ScriptRule[] = []
   const results: Partial<Record<ScriptOutcome, ScriptOutcomeResult>> = {}
   const warnings: string[] = []
+  const grants: ScriptGrant[] = []
   let noEscape = false
   let fixedCount = 0
   const warn = (line: string, why: string): void => {
@@ -374,6 +416,12 @@ export function parseBattleScript(lines: readonly string[]): ParsedBattleScript 
     }
     if (!(RULE_KINDS as readonly string[]).includes(kl.kind)) {
       warn(line, `未対応のキー '${kl.kind}' です`)
+      continue
+    }
+    if (kl.kind === '付与') {
+      const g = parseGrant(kl.body)
+      if (typeof g === 'string') warn(line, g)
+      else grants.push(g)
       continue
     }
     if (kl.kind === 'にげる') {
@@ -589,7 +637,7 @@ export function parseBattleScript(lines: readonly string[]): ParsedBattleScript 
       '下限: を使っていますが、終了: / 逃走: / 固定: がありません。倒せない・倒れない者がいると決着しない恐れがあります'
     )
   }
-  return { rules, results, noEscape, warnings }
+  return { rules, results, noEscape, warnings, ...(grants.length > 0 ? { grants } : {}) }
 }
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ import { BattleEngine, type BattleScriptOptions } from './battleEngine'
 import { buildEnemyEntities } from './encounter'
 import { parseEncounterGroup, resolveEncounterGroup } from './enemyGroup'
 import { toSkillExecutions } from './enemyAi'
+import { parseBattleScript } from './battleScript'
+import { hasOwn } from './ownProperty'
 import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
 import { normalizeBattleRow } from './battleLayout'
@@ -454,6 +456,43 @@ export function buildScriptedBattle(
   }
 }
 
+/**
+ * 脚本制御の戦闘の一時付与 (#875)。`付与:` の対象の味方に、`わざ=` の特技 id と `魔法=` の呪文 id を足した**複製の**ロスターを返す
+ * （渡したロスターは書き換えない＝戦闘後に残らない）。特技・呪文のマスターにない id と、`[パーティ]` にない味方は警告して無視する。
+ * 呪文はレベル 1 で覚えている扱い（`learns`）にするので、レベルに関係なく候補窓に出る。`付与:` が無ければ渡したロスターをそのまま返す
+ */
+export function applyScriptGrants(
+  roster: FieldBattleRoster,
+  rules: readonly string[],
+  battleId: string
+): FieldBattleRoster {
+  const grants = parseBattleScript(rules).grants
+  if (!grants) return roster
+  const party = { ...roster.party }
+  const warn = (msg: string): void => console.warn(`[name-name] 戦闘 '${battleId}' の付与: ${msg}`)
+  for (const g of grants) {
+    const def = hasOwn(party, g.target) ? party[g.target] : undefined
+    if (!def) {
+      warn(`味方 '${g.target}' は [パーティ] に無い（無視した）`)
+      continue
+    }
+    const abilities = [...(def.abilities ?? [])]
+    const learns = [...(def.learns ?? [])]
+    for (const id of g.abilities) {
+      if (!roster.skills || !hasOwn(roster.skills, id))
+        warn(`特技 '${id}' は [特技] に無い（無視した）`)
+      else if (!abilities.includes(id)) abilities.push(id)
+    }
+    for (const id of g.spells) {
+      if (!roster.spells || !hasOwn(roster.spells, id))
+        warn(`呪文 '${id}' は [呪文] に無い（無視した）`)
+      else if (!learns.some((l) => l.spell === id)) learns.push({ level: 1, spell: id })
+    }
+    party[g.target] = { ...def, abilities, learns }
+  }
+  return { ...roster, party }
+}
+
 export interface OpenFieldBattleArgs {
   stage: Container
   width: number
@@ -561,7 +600,11 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     commandLabels: settings.commandLabels,
     commands: settings.commands,
     // 途中参戦する味方（#741）の呪文・わざも、参戦したときに選べるよう最初から用意する
-    menu: buildBattleMenuData(roster, [...party, ...Object.values(scripted?.script.joiners ?? {})]),
+    // 脚本の `付与:` (#875) は、その戦闘の候補窓にだけ足す（ロスター自体は書き換えない）
+    menu: buildBattleMenuData(
+      scripted ? applyScriptGrants(roster, scripted.script.rules, scripted.script.id) : roster,
+      [...party, ...Object.values(scripted?.script.joiners ?? {})]
+    ),
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
     onClose: (outcome, result) => {
