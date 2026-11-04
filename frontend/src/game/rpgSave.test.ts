@@ -326,3 +326,85 @@ describe('party[].form（#1020）', () => {
     expect(snap.party[0]).toEqual({ id: 'a', form: 'teen' })
   })
 })
+
+describe('playMs / steps（#880）', () => {
+  const withStats = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    ...declared(),
+    ...extra,
+  })
+
+  it('旧セーブ（playMs / steps なし）はそのまま通り、解決後も省略（0 扱い）', () => {
+    const r = parseRpgSave(declared())
+    expect(r.ok).toBe(true)
+    const resolved = resolveRpg(declared(), base)
+    expect('playMs' in resolved).toBe(false)
+    expect('steps' in resolved).toBe(false)
+  })
+
+  it('正常値（0 を含む）は通り、解決でそのまま運ばれる', () => {
+    for (const [playMs, steps] of [
+      [0, 0],
+      [123456.5, 98],
+    ]) {
+      const r = parseRpgSave(withStats({ playMs, steps }))
+      expect(r.ok).toBe(true)
+      const resolved = resolveRpg(withStats({ playMs, steps }) as unknown as RpgSaveState, base)
+      expect(resolved.playMs).toBe(playMs)
+      expect(resolved.steps).toBe(steps)
+    }
+  })
+
+  it.each([
+    ['playMs 負', { playMs: -1 }, /playMs/],
+    ['playMs が文字列', { playMs: '5' }, /playMs/],
+    ['playMs が NaN', { playMs: NaN }, /playMs/],
+    ['steps 負', { steps: -1 }, /steps/],
+    ['steps が小数', { steps: 1.5 }, /steps/],
+    ['steps が文字列', { steps: '5' }, /steps/],
+  ])('不正（%s）は理由つきで失敗', (_n, extra, re) => {
+    const r = parseRpgSave(withStats(extra))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(re)
+  })
+
+  it('スナップショットのラウンドトリップ: playMs は整数に切り捨て、steps はそのまま', () => {
+    const resolved = resolveRpg(
+      withStats({ playMs: 5000, steps: 42 }) as unknown as RpgSaveState,
+      base
+    )
+    const snap = snapshotRpg(
+      {
+        party: resolved.party,
+        inventory: resolved.inventory,
+        equipment: resolved.equipment,
+        gold: resolved.gold,
+        playMs: resolved.playMs,
+        steps: resolved.steps,
+      },
+      base
+    )
+    expect(snap.playMs).toBe(5000)
+    expect(snap.steps).toBe(42)
+    expect(parseRpgSave(snap).ok).toBe(true)
+    const frac = snapshotRpg(
+      { party: resolved.party, inventory: {}, equipment: {}, gold: 0, playMs: 1234.9, steps: 3 },
+      base
+    )
+    expect(frac.playMs).toBe(1234)
+  })
+
+  it('スナップショットに統計を渡さなければキーを出さない（旧形式と同じ）', () => {
+    const snap = snapshotRpg({ party: base.party, inventory: {}, equipment: {}, gold: 0 }, base)
+    expect('playMs' in snap).toBe(false)
+    expect('steps' in snap).toBe(false)
+  })
+
+  it('0 は省略でなく 0 として残る', () => {
+    const snap = snapshotRpg(
+      { party: base.party, inventory: {}, equipment: {}, gold: 0, playMs: 0, steps: 0 },
+      base
+    )
+    expect(snap.playMs).toBe(0)
+    expect(snap.steps).toBe(0)
+  })
+})
