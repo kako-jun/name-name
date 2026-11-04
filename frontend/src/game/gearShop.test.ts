@@ -11,6 +11,7 @@ import {
   parseGearShopConfig,
   priceOf,
   resolveGear,
+  skillsForMember,
   type GearShopConfig,
   type GearState,
 } from './gearShop'
@@ -445,6 +446,54 @@ describe('parseGearShopConfig', () => {
     })
     expect(r.value?.multiplier).toBe(2)
     expect(r.value?.entries).toEqual([{ id: 'b', kind: 'armor' }])
+  })
+})
+
+describe('parseGearShopConfig: abilities (#881 段階3)', () => {
+  it('刀の abilities を読む（重複は除く）。防具・不正は警告して捨てる', () => {
+    const r = parseGearShopConfig({
+      entries: [
+        { id: 'a1', kind: 'blade', owner: 'p1', abilities: ['A', 'A', 'B'] },
+        { id: 'a2', kind: 'blade', owner: 'p1', abilities: 'A' },
+        { id: 'v', kind: 'armor', abilities: ['A'] },
+      ],
+    })
+    expect(r.value?.entries[0].abilities).toEqual(['A', 'B'])
+    expect(r.value?.entries[1].abilities).toBeUndefined()
+    expect(r.value?.entries[2].abilities).toBeUndefined()
+    expect(r.warnings.filter((w) => w.includes('abilities'))).toHaveLength(2)
+  })
+})
+
+describe('skillsForMember (#881 段階3)', () => {
+  const sk = (id: string) => ({ id })
+  const skills = [sk('fixed'), sk('X'), sk('Y')]
+  const shared: GearShopConfig = {
+    multiplier: 2,
+    entries: [
+      { id: 'a1', kind: 'blade', owner: 'p1', abilities: ['X'] },
+      { id: 'b1', kind: 'blade', owner: 'p2', abilities: ['X'] }, // 同じ特技が別の刀にも
+      { id: 'a2', kind: 'blade', owner: 'p1', abilities: [] },
+      { id: 'a3', kind: 'blade', owner: 'p1', abilities: ['Y'] },
+    ],
+  }
+  const ids = (st: GearState, m: string) => skillsForMember(skills, shared, st, m).map((s) => s.id)
+  it('同じ特技が複数の刀に挙がっていても、各自が自分の刀を装備したときだけ出る', () => {
+    const st: GearState = { owned: { p1: ['a1'], p2: ['b1'] }, blade: { p1: 'a1' } }
+    expect(ids(st, 'p1')).toEqual(['fixed', 'X'])
+    expect(ids(st, 'p2')).toEqual(['fixed']) // 購入済みでも装備していない
+    expect(ids({ ...st, blade: { p1: 'a1', p2: 'b1' } }, 'p2')).toEqual(['fixed', 'X'])
+  })
+  it('abilities: [] の刀を装備すると刀のわざは出ない（固定のわざだけ）', () => {
+    const st: GearState = { owned: { p1: ['a2'] }, blade: { p1: 'a2' } }
+    expect(ids(st, 'p1')).toEqual(['fixed'])
+  })
+  it('刀に abilities の宣言が無ければ skills そのまま', () => {
+    const plain: GearShopConfig = {
+      multiplier: 2,
+      entries: [{ id: 'a1', kind: 'blade', owner: 'p1' }],
+    }
+    expect(skillsForMember(skills, plain, { owned: {}, blade: {} }, 'p1')).toEqual(skills)
   })
 })
 

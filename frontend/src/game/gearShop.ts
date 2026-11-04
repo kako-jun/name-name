@@ -7,6 +7,7 @@
  * - 状態 `GearState`（`RpgSaveState.gear`）: `owned`（人物 id → 購入済みの品 id の集合）と `blade`（人物 id → 装備中の刀 id）。
  *   売却なし（購入済みは戻らない）。他人の刀（`owner` が別の人物）は買えず・装備できない。購入解禁は定義側のフラグ `unlockFlag`（解禁前は購入不可＋理由）。
  * - 装備列（`RpgSaveState.equipment`）の計算は `equipment.ts` の `equipItem` を再利用する（`equipBlade`）。ここで重複実装しない。
+ * - 刀の `abilities`（段階3）: 装備中の刀の特技 id だけが戦闘の「わざ」に出る（`skillsForMember`。仕様上は 1 刀 1 アビリティで、配列は一般化）。
  *
  * 売り物の宣言が無いゲーム・メニューを使わないゲームは、この仕組みを通らず従来どおり（セーブにも `gear` キーを書かない）。
  */
@@ -41,6 +42,8 @@ export interface GearEntry {
   name?: string
   /** 解禁前（`unlockFlag` が立つまで）に説明バーへ出す文。省略は「まだ買えません」。解禁条件が分かる文を書ける */
   lockedMessage?: string
+  /** 刀を装備している間だけ戦闘の「わざ」に出る特技の id（設定 JSON の `skills` の id。段階3 #881）。刀だけが持つ（防具は属性防御だけ）。省略 = 刀のアビリティなし。仕様上は 1 刀 1 アビリティ（配列は一般化） */
+  abilities?: string[]
 }
 
 export interface GearShopConfig {
@@ -349,6 +352,33 @@ export function resolveGear(
   return { state, equipment: cleaned, warnings }
 }
 
+// ---- 戦闘への反映 (#881 段階3) ----
+
+/**
+ * 戦闘の「わざ」のうち、その人物に出すもの。`skills`（わざの候補の一覧。順を保つ）から、
+ * 「どれかの刀のアビリティに挙がっている特技」は**その人物が装備中の刀（`state.blade`。購入済みの自分の刀）が持つものだけ**を残し、
+ * どの刀にも挙がっていない特技（刀と無関係の固定のわざ）はそのまま残す。刀を持ち替えれば結果が変わる（純関数。戦闘中の持ち替えは無い）。
+ * 他人の刀・未購入の刀・防具のアビリティは出ない。刀にアビリティを宣言していない定義では `skills` と同じ（従来どおり）
+ */
+export function skillsForMember<T extends { id: string }>(
+  skills: readonly T[],
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string
+): T[] {
+  const gated = new Set<string>()
+  for (const e of cfg.entries)
+    if (e.kind === 'blade') for (const a of e.abilities ?? []) gated.add(a)
+  if (gated.size === 0) return [...skills]
+  const id = equippedBlade(state, member)
+  const e = id === undefined ? undefined : findEntry(cfg, id)
+  const granted =
+    e && e.kind === 'blade' && e.owner === member && isOwned(state, member, e.id)
+      ? new Set(e.abilities ?? [])
+      : new Set<string>()
+  return skills.filter((s) => !gated.has(s.id) || granted.has(s.id))
+}
+
 // ---- 設定 JSON ----
 
 export interface ParsedGearShop {
@@ -361,7 +391,7 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /**
- * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, equipBonus?, name?, lockedMessage? }] }`。
+ * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, equipBonus?, name?, lockedMessage?, abilities? }] }`。
  * 不正な項目は警告して捨てる。`gearShop` が無い（undefined / false / null）はキーなし＝従来どおり。
  * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
  */
@@ -454,6 +484,20 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
       } else
         warnings.push(
           `${where}.equipBonus は文字列（例: atk+5）にしてください（能力値なしにします）`
+        )
+    }
+    // 刀のアビリティ（戦闘の「わざ」に出る特技 id）。刀以外・不正は警告して捨てる
+    if (it.abilities !== undefined) {
+      if (it.kind !== 'blade')
+        warnings.push(`${where}.abilities は刀だけが持てます（防具では無視します）`)
+      else if (
+        Array.isArray(it.abilities) &&
+        it.abilities.every((a) => typeof a === 'string' && a !== '')
+      ) {
+        if (it.abilities.length > 0) entry.abilities = [...new Set(it.abilities as string[])]
+      } else
+        warnings.push(
+          `${where}.abilities は特技 id（文字列）の配列にしてください（アビリティなしにします）`
         )
     }
     seen.add(it.id)

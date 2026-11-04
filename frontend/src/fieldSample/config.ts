@@ -934,6 +934,23 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   warnings.push(...menuParsed.warnings)
   const gearShopParsed = parseGearShopConfig(raw.gearShop)
   warnings.push(...gearShopParsed.warnings)
+  // 刀のアビリティの突き合わせ: `skills` に無い特技を指していたら、また刀のアビリティがあるのにどの刀にも挙がっていない `skills` があれば知らせる（書き漏れ）
+  const bladeEntries = (gearShopParsed.value?.entries ?? []).filter((e) => e.kind === 'blade')
+  const gated = new Set<string>()
+  for (const e of bladeEntries)
+    for (const a of e.abilities ?? []) {
+      gated.add(a)
+      if (!skills.value.some((s) => s.id === a))
+        warnings.push(
+          `gearShop の刀 "${e.id}" の abilities "${a}" は skills に無い特技です（戦闘のわざには出ません）`
+        )
+    }
+  if (gated.size > 0)
+    for (const s of skills.value)
+      if (!gated.has(s.id))
+        warnings.push(
+          `skills の "${s.id}" は gearShop のどの刀の abilities にも挙がっていません（刀のアビリティを使うゲームでは、全員に常に出る固定のわざになります。意図でなければ刀に割り当ててください）`
+        )
   let tiltShift: 'on' | undefined
   if (raw.tiltShift !== undefined) {
     if (raw.tiltShift === 'on') tiltShift = 'on'
