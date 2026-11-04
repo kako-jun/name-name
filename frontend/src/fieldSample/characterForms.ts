@@ -112,7 +112,7 @@ export function parseCharacterFormsManifest(
  * 人物単体版（character）か plain かを、形態ごとに丸ごと 1 つ選ぶ。
  * 優先: 基本 8 ポーズが揃った character → 基本 8 ポーズが揃った plain → 実在ポーズの多い方（同数は plain）。
  * 版を混ぜない（同じ戦闘で味方の絵の方式が揃わなくなるため）。無ければ undefined。
- * `plainBaked`（plain に刀・軌跡の焼き込み版が混じり得る人物）は、plain へ降格しない: 8 ポーズ揃った character だけ、無ければ undefined
+ * `plainBaked`（plain に刀・軌跡の焼き込み版が混じり得る人物）は、plain へ降格しない: 基本 8 ポーズ（CORE_POSES）が揃った character だけ、無ければ undefined
  */
 export function pickPoseVariant(
   entry: FormEntry,
@@ -138,7 +138,7 @@ export function explainNoPoses(
   if (!entry) return null
   const baked = !!manifest.characters[character].plainBaked
   if (baked && pickPoseVariant(entry, { plainBaked: true }) === undefined)
-    return '人物単体版（-character）が 8 ポーズ揃っておらず、焼き込み版（plain）は使いません'
+    return '人物単体版（-character）の基本 8 ポーズ（CORE_POSES）が揃っておらず、焼き込み版（plain）は使いません'
   return pickPoseVariant(entry) === undefined ? '戦闘ポーズの絵がありません' : null
 }
 

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import manifestText from '../../public/field-sample/sit-character-forms.json?raw'
 import {
+  CORE_POSES,
   DERIVED_POSES,
   deriveWalkSprites,
   explainNoPoses,
@@ -16,6 +17,8 @@ import {
 
 const ROOT = 'http://h/assets/images/characters/'
 const ALL = [...DERIVED_POSES]
+const CORE = [...CORE_POSES]
+const EXTRA = DERIVED_POSES.filter((x) => !CORE.includes(x)) // special・swing-*
 
 /** 小さな合成の目録: a=人物単体版が揃う、b=plain だけ、c=人物単体版が欠ける（plain が揃う）、d=character の方が多いが不完全 */
 const manifest: CharacterFormsManifest = {
@@ -27,6 +30,7 @@ const manifest: CharacterFormsManifest = {
         full: { poses: { plain: ALL, character: ALL }, walk: true },
         partial: { poses: { plain: ALL, character: ['idle', 'ready'] }, walk: true },
         onlyPlain: { poses: { plain: ALL }, walk: true },
+        coreOnly: { poses: { plain: ALL, character: CORE }, walk: true },
       },
     },
     C9: {
@@ -35,6 +39,8 @@ const manifest: CharacterFormsManifest = {
         b: { poses: { plain: ALL }, walk: false },
         c: { poses: { plain: ALL, character: ['idle', 'ready'] }, walk: true },
         d: { poses: { plain: ['idle'], character: ['idle', 'ready', 'slash'] }, walk: false },
+        coreOnly: { poses: { plain: ALL, character: CORE }, walk: true },
+        plainCore: { poses: { plain: CORE, character: [...CORE.slice(1), ...EXTRA] }, walk: true },
         'e-wheelchair': { poses: { plain: ['idle', 'hurt'] }, walk: true },
       },
     },
@@ -50,6 +56,15 @@ describe('pickPoseVariant（人物単体版の優先ルール）', () => {
     expect(pickPoseVariant(manifest.characters.C9.forms.c)).toBe('plain'))
   it('どちらも不完全なら実在ポーズの多い方', () =>
     expect(pickPoseVariant(manifest.characters.C9.forms.d)).toBe('character'))
+  it('基本 8 ポーズだけ（special・swing 無し）の character も揃っている扱いで character を選ぶ', () =>
+    expect(pickPoseVariant(manifest.characters.C9.forms.coreOnly)).toBe('character'))
+  it('基本 8 ポーズの欠けは special・swing で個数が 8 以上になっても揃っていない扱い（plain が揃えば plain）', () => {
+    const e = manifest.characters.C9.forms.plainCore
+    expect(e.poses.character!.length).toBeGreaterThanOrEqual(8)
+    expect(pickPoseVariant(e)).toBe('plain')
+  })
+  it('基本 8 ポーズだけの plain も揃っている扱い', () =>
+    expect(pickPoseVariant({ poses: { plain: CORE }, walk: false })).toBe('plain'))
   it('絵が 1 枚も無ければ undefined', () =>
     expect(pickPoseVariant({ poses: {}, walk: false })).toBeUndefined())
 })
@@ -58,6 +73,8 @@ describe('plainBaked（焼き込み版が混じり得る人物は plain へ降�
   const forms = manifest.characters.CB.forms
   it('8 ポーズ揃った character は使う', () =>
     expect(pickPoseVariant(forms.full, { plainBaked: true })).toBe('character'))
+  it('基本 8 ポーズだけの character も降格せず character', () =>
+    expect(pickPoseVariant(forms.coreOnly, { plainBaked: true })).toBe('character'))
   it('character が不完全・無いなら、plain が揃っていても導出しない', () => {
     expect(pickPoseVariant(forms.partial, { plainBaked: true })).toBeUndefined()
     expect(pickPoseVariant(forms.onlyPlain, { plainBaked: true })).toBeUndefined()
