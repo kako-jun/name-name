@@ -56,7 +56,7 @@ beforeEach(() => localStorage.clear())
 describe('loadResume', () => {
   it('?resume= が無ければ none（従来どおり）', () => {
     expect(loadResume('', config)).toEqual({ kind: 'none' })
-    expect(loadResume('?fixture=dummy', config)).toEqual({ kind: 'none' })
+    expect(loadResume('?foo=bar', config)).toEqual({ kind: 'none' })
   })
 
   it('スロットのセーブを設定に重ねて返す（ラウンドトリップ）', () => {
