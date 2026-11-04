@@ -133,6 +133,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
 
   let seenEvents = engine.getState().eventTotal
+  const learnHits = new Set<string>()
   // 召喚 (#889): 同じ味方が 2 回召喚してはならず、召喚した味方には印が立っている。
   // 数えるのは「召喚の操作（`summon`）を実行した 1 操作の間に増えた、味方の演出イベントのうちラベルがその召喚獣の名前のもの」だけ。
   // 召喚の演出イベントは特技と同じ `kind: 'skill'` で区別できないため、操作の種類で絞って、同じ名前の特技・呪文が別の場面で
@@ -202,6 +203,14 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
               opIndex,
             },
           ])
+        }
+      }
+    }
+    // ラーニング (#882): 味方に当たった敵の特技の名前を集める（終了時の習得済みの検査に使う）
+    if (scenario.checkLearning) {
+      for (const ev of fresh) {
+        if (ev.kind === 'skill' && ev.actor.side === 'enemy' && ev.label !== undefined) {
+          if (ev.hits.some((h) => h.target.side === 'party')) learnHits.add(ev.label)
         }
       }
     }
@@ -293,7 +302,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
   metrics.ended = engine.isOver()
   metrics.finalPhase = engine.getState().phase
-  if (alive && scenario.checkLearning) add(checkLearning(scenario, engine))
+  if (alive && scenario.checkLearning) add(checkLearning(scenario, engine, learnHits))
   if (alive) checkScriptExpect(scenario, engine, o.driveLimit, add)
   return { id: scenario.id, violations, metrics }
 }
@@ -389,34 +398,43 @@ function describe(e: unknown): string {
 }
 
 /**
- * ラーニング (#882) の不変条件。戦闘が終わっていれば `getResult().learnedSpells` を見る:
- * - `learning` を渡さないシナリオには習得済みが出ない
- * - 重複せず、初期の習得済みを先頭にそのまま含み、残りは「味方に当たりうる敵の特技（相手単体・相手全体）の `learns`」のどれか
- *   （敵が仲間・自分へ使う技は覚えない）
+ * ラーニング (#882) の不変条件。戦闘が終わっていれば `getResult().learnedSpells`（パーティ共通の習得済み）を見る（勝敗・逃走を問わない）:
+ * - **覚える: を持つ敵の特技を味方が食らった（その特技の行動記録に味方への hit がある）なら、その呪文が含まれる**
+ * - 重複せず、初期の習得済みを先頭にそのまま含み、残りは宣言した `learns` のどれか（味方に当たりうる向きの特技だけ。敵が仲間・自分へ使う技では覚えない）
+ * - 初期も `learns` も無い戦闘には習得済みが出ない
+ * `hitSkills` は、シナリオを通して「味方に当たった敵の特技の名前」（`run` が各操作の記録から集める）
  */
-function checkLearning(scenario: Scenario, engine: HarnessEngine): Violation[] {
-  const result = engine.getState().phase && engine.isOver() ? engine.getResult?.() : null
+function checkLearning(
+  scenario: Scenario,
+  engine: HarnessEngine,
+  hitSkills: ReadonlySet<string>
+): Violation[] {
+  const result = engine.isOver() ? engine.getResult?.() : null
   if (!result) return []
   const out: Violation[] = []
   const bad = (detail: string): void => {
     out.push({ kind: 'learning-invariant', detail, opIndex: scenario.ops.length })
   }
-  const got = result.learnedSpells
-  if (!scenario.learning) {
-    if (got !== undefined) bad(`learning を渡していないのに習得済み ${JSON.stringify(got)} が出た`)
-    return out
-  }
-  const initial = scenario.learning.initial ?? []
+  const initial = scenario.learning?.initial ?? []
+  const decl = Object.values(scenario.skills ?? {}).filter((sk) => sk.learns)
   const allowed = new Set(initial)
-  for (const sk of Object.values(scenario.skills ?? {})) {
-    if (sk.learns && (sk.target === '相手単体' || sk.target === '相手全体')) allowed.add(sk.learns)
+  for (const sk of decl) {
+    if (sk.target === '相手単体' || sk.target === '相手全体') allowed.add(sk.learns as string)
   }
-  const list = got ?? []
+  const list = result.learnedSpells ?? []
   if (new Set(list).size !== list.length) bad(`習得済みが重複している ${JSON.stringify(list)}`)
-  if (JSON.stringify(list.slice(0, initial.length)) !== JSON.stringify([...new Set(initial)])) {
+  const head = [...new Set(initial)]
+  if (JSON.stringify(list.slice(0, head.length)) !== JSON.stringify(head)) {
     bad(`初期の習得済み ${JSON.stringify(initial)} が先頭に残っていない ${JSON.stringify(list)}`)
   }
   for (const id of list) if (!allowed.has(id)) bad(`覚えるはずのない呪文 '${id}' が入った`)
+  for (const sk of decl) {
+    if (hitSkills.has(sk.name) && !list.includes(sk.learns as string)) {
+      bad(
+        `${sk.name} を味方が食らったのに ${sk.learns} が習得済みに入っていない ${JSON.stringify(list)}`
+      )
+    }
+  }
   return out
 }
 

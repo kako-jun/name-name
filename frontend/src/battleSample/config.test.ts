@@ -2229,30 +2229,25 @@ describe('設定 JSON: ラーニング (#882)', () => {
       { id: 'ice', name: 'こおり', mp: 1, effect: 'damage 9..9' },
     ],
   }
-  it('覚える呪文は最初は候補に出ず、覚えると全員に足される。learning を渡す', () => {
-    const r = parseConfig(raw, BASE)
+  const ids = (cfg: unknown) => {
+    const r = parseConfig(cfg, BASE)
     if (!r.ok) throw new Error(r.error)
     const setup = buildBattleSetup(r.value, view())
-    expect(setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id)).toEqual(['ice'])
-    expect(setup.learning?.names.flame).toBe('ほのお')
-    setup.learning?.onLearn('flame')
-    setup.learning?.onLearn('flame')
-    expect(setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id)).toEqual([
-      'ice',
-      'flame',
-    ])
+    return { setup, spells: setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id) }
+  }
+  it('覚える呪文は習得済み（learnedSpells）のときだけ全員の候補に出る。エンジンへも渡す', () => {
+    expect(ids(raw).spells).toEqual(['ice'])
+    expect(ids(raw).setup.learnedSpells).toBeUndefined()
+    const learned = ids({ ...raw, learnedSpells: ['flame'] })
+    expect(learned.spells).toEqual(['flame', 'ice'])
+    expect(learned.setup.learnedSpells).toEqual(['flame'])
   })
-  it('learns を書かなければ従来どおり（全部出る・learning なし）', () => {
-    const r = parseConfig(
-      { ...raw, skills: [{ id: 'breath', name: 'x', effect: 'damage 1..2' }] },
-      BASE
-    )
-    if (!r.ok) throw new Error(r.error)
-    const setup = buildBattleSetup(r.value, view())
-    expect(setup.learning).toBeUndefined()
-    expect(setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id)).toEqual([
-      'flame',
-      'ice',
-    ])
+  it('learns を書かなければ従来どおり（全部出る）', () => {
+    const r = ids({ ...raw, skills: [{ id: 'breath', name: 'x', effect: 'damage 1..2' }] })
+    expect(r.spells).toEqual(['flame', 'ice'])
+  })
+  it('learnedSpells が文字列の配列でなければ読み込みエラー', () => {
+    expect(parseConfig({ ...raw, learnedSpells: 'flame' }, BASE).ok).toBe(false)
+    expect(parseConfig({ ...raw, learnedSpells: [1] }, BASE).ok).toBe(false)
   })
 })

@@ -93,7 +93,8 @@ export function describeBattleResult(
   const script = result.script
     ? `  脚本: ${result.script.id} フラグ=${JSON.stringify(result.script.flags)}${result.script.next !== undefined ? ` 次=${result.script.next}` : ''}`
     : ''
-  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}${script}`
+  const learned = result.learnedSpells ? `  習得済み: ${result.learnedSpells.join(', ')}` : ''
+  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}${learned}${script}`
 }
 
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
@@ -168,6 +169,8 @@ export interface BattleSampleConfig {
   gear: Record<string, ItemDef>
   /** ジョブの宣言 (#740)。設定 JSON の `jobs`（`[ジョブ]` と同じキー）。`party[].jobs` が就けるジョブ、`party[].job` が現在のジョブ。既定は空 */
   jobs: Record<string, JobDef>
+  /** 習得済みの呪文 id (#882)。設定 JSON の `learnedSpells`（前の戦闘の結果 `learnedSpells` をそのまま書ける）。敵の特技の `learns` に書かれた呪文は、ここにあるときだけ候補に出る。既定は空 */
+  learnedSpells: string[]
   /** 味方 id → 就いているジョブ (#876)。呪文の候補にもジョブの変換ルールを当てる。ジョブを持たない味方は入らない。既定は空 */
   memberJobs: Record<string, JobDef>
   /** 味方の「わざ」の行 (#207)（味方 id → 行）。`party[].abilities` と装備中の `gear` の `abilities` から、`skills` を引いて作る。既定は空 */
@@ -311,6 +314,7 @@ export function defaultConfig(): BattleSampleConfig {
     jobs: {},
     abilities: {},
     memberJobs: {},
+    learnedSpells: [],
     itemNames: {},
     script: null,
     effects: {},
@@ -895,6 +899,15 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     enemyList = raw.enemyList
   }
+  let learnedSpells = def.learnedSpells
+  if (raw.learnedSpells !== undefined) {
+    if (!Array.isArray(raw.learnedSpells) || raw.learnedSpells.some((i) => typeof i !== 'string')) {
+      return { ok: false, error: 'learnedSpells は文字列（呪文 id）の配列である必要があります' }
+    }
+    learnedSpells = [
+      ...new Set((raw.learnedSpells as string[]).map((i) => i.trim()).filter((i) => i !== '')),
+    ]
+  }
   let enemyGrid = def.enemyGrid
   if (raw.enemyGrid !== undefined) {
     const g = typeof raw.enemyGrid === 'string' ? normalizeEnemyGrid(raw.enemyGrid) : undefined
@@ -1067,6 +1080,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       jobs: jobs.value,
       abilities: equipped.value.skills,
       memberJobs: equipped.value.jobs,
+      learnedSpells,
       itemNames,
       script: script.value,
       effects: effects.effects,
@@ -1188,8 +1202,8 @@ export function buildBattleSetup(
   atb?: BattleAtbConfig
   /** BattleEngine に渡す敵の最前列 (#896)。side かつ設定 JSON に `enemyGrid` があるときだけ付く（無ければ従来どおり） */
   enemyRow?: { grid?: EnemyGridSize }
-  /** BattleEngine に渡すラーニング (#882)。敵の特技に `learns` があるときだけ付く */
-  learning?: { names: Record<string, string>; onLearn: (spellId: string) => void }
+  /** BattleEngine に渡す習得済みの呪文 (#882)。設定 JSON の `learnedSpells`。無ければ付かない */
+  learnedSpells?: string[]
   /** BattleEngine に渡す敵の特技 (#835) */
   skills: Record<string, SkillExecution>
   /** BattleEngine に渡す状態の宣言 (#870) */
@@ -1213,12 +1227,14 @@ export function buildBattleSetup(
   }
   const { width, height } = resolveSize(view.sizeId)
   const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
-  // ラーニング (#882): 敵の特技の `learns`（呪文 id）に書かれた呪文は、覚えるまで候補に出さない（覚えると全員の候補に足す）
+  // ラーニング (#882): 敵の特技の `learns` に書かれた呪文は「覚えるもの」で、習得済み（設定 JSON の `learnedSpells`）のときだけ全員の候補に出る
+  // （本編で呪文のマスターにあるが誰の `習得:` にも無い呪文が、習得済みの入力で出るのと同じ）
   const learnable = new Set(
     Object.values(config.skills)
       .map((s) => s.learns)
       .filter((l): l is string => typeof l === 'string')
   )
+  const learnedSet = new Set(config.learnedSpells)
   const spellRow = (p: BattleEntity, e: BattleSpellEntry): BattleSpellEntry => ({
     ...e,
     // ジョブの変換 (#876): 就いているジョブがこのタグの効果に効くときだけ、効果を変換して印を付ける
@@ -1228,7 +1244,9 @@ export function buildBattleSetup(
     [...party, ...Object.values(config.script?.joiners ?? {})].map((p) => [
       p.id,
       // 呪文は味方全員が同じものを使える（複製して渡す。BattleScreen は読むだけだが、設定を共有しない）
-      config.spells.filter((e) => !learnable.has(e.id)).map((e) => spellRow(p, e)),
+      config.spells
+        .filter((e) => !learnable.has(e.id) || learnedSet.has(e.id))
+        .map((e) => spellRow(p, e)),
     ])
   )
   // 脚本の一時付与 (#875): `付与:` の `わざ=` の特技 id（設定 JSON の `skills`）を、対象の味方のわざの行に足す。魔法は味方全員が同じ呪文を使うので足すものが無い
@@ -1250,22 +1268,7 @@ export function buildBattleSetup(
     skills: config.skills,
     statuses: config.statuses,
     itemNames: config.itemNames,
-    // ラーニング (#882): 敵の特技に `learns` があるときだけ。覚えた呪文を全員の候補に足す
-    ...(learnable.size > 0
-      ? {
-          learning: {
-            names: Object.fromEntries(config.spells.map((e) => [e.id, e.name])),
-            onLearn: (id: string) => {
-              const sp = config.spells.find((e) => e.id === id)
-              if (!sp) return
-              for (const p of [...party, ...Object.values(config.script?.joiners ?? {})]) {
-                const list = (menuSpells[p.id] ??= [])
-                if (!list.some((e) => e.id === id)) list.push(spellRow(p, sp))
-              }
-            },
-          },
-        }
-      : {}),
+    ...(config.learnedSpells.length > 0 ? { learnedSpells: [...config.learnedSpells] } : {}),
     // 脚本は戦闘ごとに複製を渡す（エンジンも複製するが、設定を共有しない）
     ...(config.script
       ? { script: JSON.parse(JSON.stringify(config.script)) as BattleScriptOptions }

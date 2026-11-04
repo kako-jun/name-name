@@ -12731,7 +12731,7 @@ fn test_tags_and_job_conversions_parse_and_roundtrip() {
 fn test_skill_learns_parse_and_roundtrip() {
     use name_name_parser::models::Event;
     let doc = master_blocks(
-        "[特技 breath]\n名前: ほのおのいき\n効果: damage 5..9\n覚える: flame\n[/特技]\n\n[特技 en]\n名前: x\nlearn: ice\n[/特技]\n\n[特技 plain]\n名前: たいあたり\n[/特技]\n\n[特技 empty]\n名前: e\n覚える:\n[/特技]\n",
+        "[特技 breath]\n名前: ほのおのいき\n効果: damage 5..9\n覚える: flame\n[/特技]\n\n[特技 en]\n名前: x\nlearns: ice\n[/特技]\n\n[特技 plain]\n名前: たいあたり\n[/特技]\n\n[特技 empty]\n名前: e\n覚える:\n[/特技]\n",
     );
     let get = |id: &str| {
         doc.chapters[0].scenes[0]

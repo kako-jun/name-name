@@ -1526,7 +1526,7 @@ export function jobConversionScenarios(): Scenario[] {
   return out
 }
 
-/** ラーニング (#882)。敵の特技の向き（味方へ当たる・敵の仲間へ・自分へ・耐性で無効）、覚える呪文（なし・1 つ・2 つ）、初期の習得済み */
+/** ラーニング (#882)。敵の特技の向き（味方へ当たる・敵の仲間へ・自分へ・耐性で無効） */
 const LEARNING_SKILLS: ReadonlyArray<{ name: string; target: string; affinity?: boolean }> = [
   { name: 'opp-single', target: '相手単体' },
   { name: 'opp-all', target: '相手全体' },
@@ -1535,61 +1535,87 @@ const LEARNING_SKILLS: ReadonlyArray<{ name: string; target: string; affinity?: 
   { name: 'nullified', target: '相手単体', affinity: true },
 ]
 
+/** 決着のさせ方（勝利・全滅・逃走・決着させない）と、味方の構成（1 人・2 人・戦闘不能が混じる） */
+const LEARNING_ENDINGS: ReadonlyArray<{
+  name: string
+  enemyHp: number
+  partyHp: number
+  escape?: true
+}> = [
+  { name: 'victory', enemyHp: 60, partyHp: 400 },
+  { name: 'defeat', enemyHp: 2000, partyHp: 8 },
+  { name: 'escape', enemyHp: 2000, partyHp: 400, escape: true },
+]
+const LEARNING_PARTIES: ReadonlyArray<{ name: string; downed: boolean; size: number }> = [
+  { name: 'p1', downed: false, size: 1 },
+  { name: 'p2', downed: false, size: 2 },
+  { name: 'p3down', downed: true, size: 3 },
+]
+
 /**
- * ラーニング (#882)。敵の特技の向き × 覚える呪文（なし・1 つ・2 つ）× 初期の習得済み（なし・あり・同じ呪文）× 味方の人数 × ターン制/ATB。
- * 敵が特技を繰り返し使い、決着まで進める。不変条件は `learning-invariant`（`run.ts` の `checkLearning`）。
- * `learning` を渡さない対照のシナリオも各向きに 1 つ（習得済みが出ないこと）
+ * ラーニング (#882)。敵の特技の向き × 覚える呪文（なし・1 つ・2 つ）× 初期の習得済み（なし・空・2 つ）× 決着（勝利・全滅・逃走）
+ * × 味方の構成（1 人・2 人・戦闘不能が混じる 3 人）× ターン制/ATB。不変条件は `learning-invariant`（`run.ts` の `checkLearning`）:
+ * 覚える: を持つ敵の特技を味方が食らったなら、終了時の `BattleResult.learnedSpells` にその呪文が含まれる（勝敗を問わない）
  */
 export function learningScenarios(): Scenario[] {
   const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
   for (const atb of [false, true]) {
     for (const sk of LEARNING_SKILLS) {
       for (const learnCount of [0, 1, 2]) {
-        for (const initial of [undefined, [], ['flame'], ['ice', 'flame']] as const) {
-          for (const partySize of [1, 2]) {
-            const learns = learnCount === 0 ? [] : learnCount === 1 ? ['flame'] : ['flame', 'ice']
-            const skills = Object.fromEntries(
-              (learns.length === 0 ? [undefined] : learns).map((l, i) => [
-                `sk${i}`,
-                {
-                  name: `技${i}`,
-                  target: sk.target,
-                  effect:
-                    sk.target === '仲間単体' || sk.target === '自分'
-                      ? 'heal 5..5'
-                      : 'damage 3..3 type=fire',
-                  ...(l ? { learns: l } : {}),
-                },
-              ])
-            )
-            out.push({
-              id: `learning/${atb ? 'atb' : 'turn'}/${sk.name}/l${learnCount}/${initial ? initial.join('+') || 'empty' : 'off'}/p${partySize}`,
-              seed: 170_000 + out.length,
-              party: Array.from({ length: partySize }, (_, i) =>
+        for (const initial of [undefined, [], ['ice', 'flame']] as const) {
+          for (const end of LEARNING_ENDINGS) {
+            for (const pt of LEARNING_PARTIES) {
+              const learns = learnCount === 0 ? [] : learnCount === 1 ? ['flame'] : ['flame', 'ice']
+              const skills = Object.fromEntries(
+                (learns.length === 0 ? [undefined] : learns).map((l, i) => [
+                  `sk${i}`,
+                  {
+                    name: `技${i}`,
+                    target: sk.target,
+                    effect:
+                      sk.target === '仲間単体' || sk.target === '自分'
+                        ? 'heal 5..5'
+                        : 'damage 3..3 type=fire',
+                    ...(l ? { learns: l } : {}),
+                  },
+                ])
+              )
+              const party = Array.from({ length: pt.size }, (_, i) =>
                 entity(`a${i}`, {
-                  hp: 400,
-                  maxHp: 400,
+                  hp: pt.downed && i === 0 ? 0 : end.partyHp,
+                  maxHp: end.partyHp,
                   atk: 30,
                   ...(sk.affinity ? { affinity: { nullify: ['fire'] } } : {}),
                 })
-              ),
-              enemies: [
-                foe('s', {
-                  hp: 300,
-                  maxHp: 300,
-                  atk: 1,
-                  agi: 9,
-                  actions: [`候補=${Object.keys(skills).join(' | ')}`],
-                }),
-              ],
-              atb: atb ? { mode: 'active' } : undefined,
-              skills,
-              spells: [],
-              items: [],
-              ops: [],
-              ...(initial ? { learning: { initial: [...initial] } } : {}),
-              checkLearning: true,
-            })
+              )
+              const ops: Op[] = end.escape
+                ? atb
+                  ? [tick, { t: 'escape' }, tick, { t: 'escape' }]
+                  : [{ t: 'escape' }, { t: 'escape' }]
+                : []
+              out.push({
+                id: `learning/${atb ? 'atb' : 'turn'}/${sk.name}/l${learnCount}/${initial ? initial.join('+') || 'empty' : 'off'}/${end.name}/${pt.name}`,
+                seed: 170_000 + out.length,
+                party,
+                enemies: [
+                  foe('s', {
+                    hp: end.enemyHp,
+                    maxHp: end.enemyHp,
+                    atk: 1,
+                    agi: 9,
+                    actions: [`候補=${Object.keys(skills).join(' | ')}`],
+                  }),
+                ],
+                atb: atb ? { mode: 'active' } : undefined,
+                skills,
+                spells: [],
+                items: [],
+                ops,
+                ...(initial ? { learning: { initial: [...initial] } } : {}),
+                checkLearning: true,
+              })
+            }
           }
         }
       }

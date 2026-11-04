@@ -52,7 +52,7 @@ export interface Scenario {
   checkEnemyLevel?: true
   /** わざの操作ごとに、ジョブの変換 (#876) のログ「(〇〇ジョブの 効果)」が、変換した特技のときだけ 1 回出ることを検査する（族 `job-conversion` だけ）。無いシナリオは従来どおり */
   checkJobConversion?: true
-  /** ラーニング (#882)。あれば `BattleEngine` の `learning`（`initial` は戦闘の初期の習得済み）として渡し、終了時の `BattleResult.learnedSpells` を検査する（族 `learning` だけ）。無いシナリオは従来どおり */
+  /** ラーニング (#882)。あれば `BattleEngine` の `learnedSpells`（`initial` は戦闘の初期の習得済み）として渡す（族 `learning` だけ）。無いシナリオは従来どおり */
   learning?: { initial?: string[] }
   /** 終了時の習得済みの結果を検査する (#882)（族 `learning` だけ）。無いシナリオは従来どおり */
   checkLearning?: true
@@ -71,7 +71,7 @@ export interface Scenario {
 export interface HarnessEngine {
   getState(): Readonly<BattleState>
   /** 戦闘の結果 (#831)。終わっていなければ null。ラーニングの検査 (#882) だけが使う（合成エンジンは持たなくてよい） */
-  getResult?(): { learnedSpells?: string[] } | null
+  getResult?(): { outcome?: string; learnedSpells?: string[] } | null
   isOver(): boolean
   tick(ms: number): void
   selectAttack(targetId?: string): void
@@ -94,7 +94,7 @@ export const realEngineFactory: EngineFactory = (scenario, rng) =>
     // 敵の最前列 (#896)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
     ...(scenario.enemyRow ? { enemyRow: clone(scenario.enemyRow) } : {}),
     // ラーニング (#882)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
-    ...(scenario.learning ? { learning: { initial: scenario.learning.initial ?? [] } } : {}),
+    ...(scenario.learning ? { learnedSpells: [...(scenario.learning.initial ?? [])] } : {}),
     skills: scenario.skills ? clone(scenario.skills) : undefined,
     statuses: scenario.statuses ? clone(scenario.statuses) : undefined,
     script: scenario.script ? clone(scenario.script) : undefined,
