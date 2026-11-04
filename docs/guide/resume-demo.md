@@ -118,7 +118,7 @@ ff の勝利で、固定の「しょうり！」ではなく結果のメッセ�
 | motion・エフェクト | 寺町の実際の設定（同梱の `teramachi.sample.json`。`?config=` を付けない既定） | [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) | `battle.motion: "snappy"`の横スライド登場・キビキビした踏み出し・桁ごとに跳ねるダメージ数字。`battle.effects` の `cast` / `magic`（「じゅもん」から）、`slash` / `impact`（通常攻撃の命中と被弾） |
 | 敵名窓 | [`demo-enemy-list.config.json`](./examples/demo-enemy-list.config.json) | [`demo-enemy-list.save.json`](./examples/demo-enemy-list.save.json) | 寺町の設定の完全な写し。**差分は `battle.enemyList: "window"` の 1 点だけ**（テストで固定）。敵は M147（扇風機・換気扇の羽根）×3 と M150（ライター）。コマンド窓の右隣に敵名窓が出て、同名の敵が「扇風機・換気扇の羽根 ×3」にまとまる（倒すと個数が減り、全滅した行は消える） |
 
-motion とエフェクトは、寺町の実際の設定と実際のセーブで確認する。cast / magic は「じゅもん」から、slash / impact は通常攻撃と被弾で出る。操作可能までの待ち時間は snappy の登場で約 4〜5 秒（それ以前の入力は効かない）。コマンドは 4 つ（たたかう・じゅもん・どうぐ・にげる）で `cross` が有効なので、矢印キー（↑=たたかう・←=じゅもん など）が効く（実測の手順は「敵レベルとレベル条件即死の確認」を参照）。
+motion とエフェクトは、寺町の実際の設定と実際のセーブで確認する。cast / magic は「じゅもん」から、slash / impact は通常攻撃と被弾で出る。操作可能までの待ち時間は snappy の登場で約 4〜5 秒（それ以前の入力は効かない）。コマンドは 4 つ（たたかう・じゅもん・どうぐ・にげる）で `cross` が有効なので、矢印キー（↑=たたかう・←=じゅもん など）が効く（実測の手順は「敵レベルとレベル条件即死の確認」を参照）。sit-by-me を 8765 以外で配信するときは、同梱設定がビルド済み JS に埋まっていて置換できないので、同梱の `teramachi.sample.json` の写しの `8765` を置換して `?config=` で渡す（手順は [「刀の確認」の手順 1](#刀の確認寺町サンプルの味方の刀1035)）。
 
 手順は「敵レベルとレベル条件即死の確認」と同じ:
 
@@ -139,7 +139,7 @@ motion とエフェクトは、寺町の実際の設定と実際のセーブで�
 |---|---|---|
 | [`demo-statuses.config.json`](./examples/demo-statuses.config.json) | [`demo-statuses.save.json`](./examples/demo-statuses.save.json) | 「じゅもん」の「どくのこな」「スリプル」「メダパニ」「デスぜんこく」で敵に状態が付く（敵は名前の後ろに `[どく]` のように出る）。「ケアル」「エスナ」「ゾンビのこな」は味方に使う。「ゾンビのこな」で味方がゾンビになると、敵の攻撃が回復になる |
 
-手順は「motion / 敵名窓 / エフェクトの確認」と同じ（設定は `demo-statuses.config.json`、`field-sample.html?resume=0&config=demo-statuses.config.json`）。コマンドは寺町と同じ 4 つ・`cross` なので矢印キーが効く。「じゅもん」は窓から呪文を選んでターゲットを選ぶ。
+手順は「motion / 敵名窓 / エフェクトの確認」と同じ（設定は `demo-statuses.config.json`、`field-sample.html?resume=0&config=demo-statuses.config.json`）。コマンドは寺町と同じ 4 つ・`cross` なので矢印キーが効く。最初のキー入力は操作可能になる約 4〜5 秒後から（3.5 秒だと登場演出中で無視される。実測。「motion / 敵名窓 / エフェクトの確認」の待ち時間と同じ）。「じゅもん」は窓から呪文を選んでターゲットを選ぶ。
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
