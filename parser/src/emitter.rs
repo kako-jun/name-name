@@ -2506,10 +2506,10 @@ mod tests {
     #[test]
     fn round_trip_battle_script_block_and_event_command() {
         // [戦闘] (#741): 敵・味方・ルール行（書いた順）と、[イベント] の [戦闘: id] が parse → emit → parse で安定する
-        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[戦闘 noto]\n名前: 能登の海\n敵: boss\n味方: hero\n味方: ally, ally2\n固定: 結果=敗北 上限ターン=8\n台詞: 条件=開始 話者=水 文=……\n勝利時: フラグ=won=true 次=after\n[/戦闘]\n\n## map: m\n\n[イベント go]\n開始だ。\n[戦闘: noto]\n終わった。\n[/イベント]\n";
+        let input = "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n\n## data: マスター\n\n[戦闘 noto]\n名前: 能登の海\n敵: boss\n味方: hero\n味方: ally, ally2\n強制: 条件=ターン>=2 対象=boss HP=50% 付与=doom 文=ふんばった\n固定: 結果=敗北 上限ターン=8\n台詞: 条件=開始 話者=水 文=……\n勝利時: フラグ=won=true 次=after\n[/戦闘]\n\n## map: m\n\n[イベント go]\n開始だ。\n[戦闘: noto]\n終わった。\n[/イベント]\n";
         let doc1 = crate::parser::parse(input);
         let emitted = emit(&doc1);
-        assert!(emitted.contains("[戦闘 noto]\n名前: 能登の海\n敵: boss\n味方: hero\n味方: ally, ally2\n固定: 結果=敗北 上限ターン=8\n台詞: 条件=開始 話者=水 文=……\n勝利時: フラグ=won=true 次=after\n[/戦闘]"));
+        assert!(emitted.contains("[戦闘 noto]\n名前: 能登の海\n敵: boss\n味方: hero\n味方: ally, ally2\n強制: 条件=ターン>=2 対象=boss HP=50% 付与=doom 文=ふんばった\n固定: 結果=敗北 上限ターン=8\n台詞: 条件=開始 話者=水 文=……\n勝利時: フラグ=won=true 次=after\n[/戦闘]"));
         assert!(emitted.contains("[戦闘: noto]\n"));
         let doc2 = crate::parser::parse(&emitted);
         assert_eq!(doc1, doc2, "battle script round-trip should be stable");

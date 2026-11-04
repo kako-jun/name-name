@@ -1,13 +1,25 @@
 /** 検証ハーネスの脚本制御の族と `script-*` の検出 (#741 / #863) */
 import { describe, expect, it } from 'vitest'
-import { checkState, fingerprint, isBroken, type DetectOptions } from './detect'
+import {
+  checkRevival,
+  checkState,
+  downedKeys,
+  fingerprint,
+  isBroken,
+  type DetectOptions,
+} from './detect'
 import { entity } from './generate'
-import { randomScriptScenarios, scriptMatrix } from './scriptFamily'
+import {
+  forceMatrix,
+  randomForceScenarios,
+  randomScriptScenarios,
+  scriptMatrix,
+} from './scriptFamily'
 import { runScenario } from './run'
-import { buildSweep } from './sweep'
+import { buildSweep, FORCE_RANDOM_COUNT } from './sweep'
 import { baseState, fakeFactory, scenarioOf } from './testing'
-import type { EngineFactory } from './scenario'
-import type { BattleState } from '../battleEngine'
+import { realEngineFactory, type EngineFactory, type Scenario } from './scenario'
+import type { BattleEngine, BattleState } from '../battleEngine'
 
 const OPTS: DetectOptions = { maxDamage: 9999, script: { ruleCount: 3 } }
 const PLAIN: DetectOptions = { maxDamage: 9999 }
@@ -220,5 +232,104 @@ describe('脚本の族（本物のエンジン）', () => {
     expect(
       skipped.some((s) => s.id.startsWith('script/') || s.id.startsWith('random-script/'))
     ).toBe(false)
+  })
+})
+
+describe('強制 (#741 段階 2): 不変条件と族 script-force', () => {
+  it('checkRevival: 倒れていた者が HP > 0 に戻れば違反。復活: を宣言した脚本・倒れたままは許す', () => {
+    const before = scripted()
+    before.party[0].hp = 0
+    before.enemies[0].hp = 0
+    const prev = downedKeys(before)
+    expect(prev).toEqual(new Set(['party:0:hero', 'enemy:0:boss']))
+    const back = scripted()
+    back.party[0].hp = 7
+    back.enemies[0].hp = 0
+    const v = checkRevival(prev, back, 3, OPTS)
+    expect(v).toHaveLength(1)
+    expect(v[0]).toMatchObject({ kind: 'script-invariant', opIndex: 3 })
+    expect(v[0].detail).toContain('HERO')
+    // 敵が戻っても検出する
+    const enemyBack = scripted()
+    enemyBack.party[0].hp = 0
+    enemyBack.enemies[0].hp = 5
+    expect(checkRevival(prev, enemyBack, 0, OPTS)).toHaveLength(1)
+    // 倒れたまま・復活: 宣言あり・脚本なしは違反にしない
+    expect(checkRevival(prev, before, 0, OPTS)).toEqual([])
+    expect(
+      checkRevival(prev, back, 0, { ...OPTS, script: { ruleCount: 3, allowRevive: true } })
+    ).toEqual([])
+    expect(checkRevival(prev, back, 0, PLAIN)).toEqual([])
+  })
+
+  it('runScenario: 強制を書いていない脚本で倒れた者が戻れば script-invariant（合成エンジン）', () => {
+    const factory = ((sc, rng) => {
+      const e = fakeFactory((state, n) => {
+        if (n === 0) state.party[0].hp = 0
+        if (n === 1) state.party[0].hp = 3
+      })(sc, rng)
+      const st = e.getState() as BattleState
+      st.script = { id: 's', turn: 0, fired: [], joined: [], fled: [] }
+      return e
+    }) as EngineFactory
+    const run = (rules: string[]) =>
+      runScenario(scenarioOf({ script: { id: 's', rules } }), {
+        engineFactory: factory,
+        driveLimit: 0,
+      }).violations.filter((v) => v.detail.includes('生き返った'))
+    expect(run(['強制: 対象=hero HP=1'])).toHaveLength(1)
+    expect(run(['復活: 対象=hero'])).toEqual([])
+  })
+
+  it('総当たり・ランダム合成は全件が決着し壊れ 0。id は一意で script-force / random-script-force', () => {
+    const all = [...forceMatrix(), ...randomForceScenarios(1, 200)]
+    expect(new Set(all.map((s) => s.id)).size).toBe(all.length)
+    for (const s of all) {
+      expect(s.id.startsWith('script-force/') || s.id.startsWith('random-script-force/')).toBe(true)
+      expect(JSON.parse(JSON.stringify(s))).toEqual(s)
+    }
+    const results = all.map((s) => runScenario(s))
+    const broken = results.filter((r) => r.violations.some(isBroken))
+    expect(broken.map((r) => `${r.id}: ${r.violations[0].detail}`)).toEqual([])
+    expect(results.every((r) => r.metrics.ended)).toBe(true)
+  })
+
+  it('強制の族が実際に強制を発動させている（空振りの族にしない）', () => {
+    const hits = forceMatrix().filter((s) => {
+      const e = realEngineFactory(s, () => 0.5) as BattleEngine
+      return (e.getState().script?.fired.length ?? 0) > 0 || s.id.includes('/down/')
+    })
+    expect(hits.length).toBeGreaterThan(0)
+    // HP 0 指定 + 下限なし: 敵は倒れ、味方も倒れる
+    const kill = forceMatrix().find((s) => s.id === 'script-force/hp/boss/hp0/turn/nofloor')
+    expect(kill).toBeDefined()
+    const r = runScenario(kill as Scenario)
+    expect(r.metrics.finalPhase).toBe('victory')
+  })
+
+  it('buildSweep: script-force は末尾に足され、skip で外すと従来の並びになる', () => {
+    const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0, randomScriptCount: 0 }
+    const heavy = [
+      'effect-matrix',
+      'enemy-skill',
+      'stack-order',
+      'reaction-chain',
+      'random',
+      'status-matrix',
+      'random-status',
+      'damage-condition',
+      'magicite',
+      'script',
+      'random-script',
+      'summon',
+      'equipment',
+      'job',
+    ] as const
+    const only = buildSweep({ ...cfg, skip: [...heavy] })
+    expect(only.length).toBeGreaterThan(0)
+    expect(only.every((s) => s.id.startsWith('loot/') || s.id.includes('script-force/'))).toBe(true)
+    const without = buildSweep({ ...cfg, skip: [...heavy, 'script-force'] })
+    expect(only.slice(0, without.length)).toEqual(without)
+    expect(only.length - without.length).toBe(forceMatrix().length + FORCE_RANDOM_COUNT)
   })
 })

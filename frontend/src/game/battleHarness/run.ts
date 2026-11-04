@@ -4,7 +4,14 @@
  */
 import type { BattleActionEvent } from '../battleEngine'
 import { MAX_DAMAGE } from '../battleLimits'
-import { checkState, fingerprint, type DetectOptions, type Violation } from './detect'
+import {
+  checkRevival,
+  checkState,
+  downedKeys,
+  fingerprint,
+  type DetectOptions,
+  type Violation,
+} from './detect'
 import { budgetRng, DEFAULT_RNG_BUDGET_PER_OP, RngBudgetExceeded } from './rng'
 import { parseLootSpec } from '../loot'
 import { parseBattleScript } from '../battleScript'
@@ -81,7 +88,13 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     ...summonCueDeclarations(scenario),
     // 脚本制御の戦闘 (#741)。脚本のあるシナリオだけ、`state.script` の整合を検査し、脚本が決めた勝敗を許す
     ...(scenario.script
-      ? { script: { ruleCount: parseBattleScript(scenario.script.rules).rules.length } }
+      ? {
+          script: {
+            ruleCount: parseBattleScript(scenario.script.rules).rules.length,
+            // 復活: を宣言した脚本は、倒れた味方が戻ってよい（強制では戻らない、の検査を外す）
+            allowRevive: scenario.script.rules.some((r) => /^\s*復活\s*[:：]/.test(r)),
+          },
+        }
       : {}),
   }
   const factory = options.engineFactory ?? realEngineFactory
@@ -124,6 +137,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   // 使われても数えないようにしている（限界: 召喚の操作の最中に同じ名前の味方の特技が同時に起きるシナリオは想定しない）
   const summonCount = new Map<number, number>()
   add(checkState(engine.getState(), [], -1, detect))
+  let prevDown = downedKeys(engine.getState())
 
   /** 1 操作を実行して検査する。続行不能（例外・予算超過）なら false */
   const step = (
@@ -195,6 +209,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
       }
     }
     add(checkState(s, fresh, opIndex, detect))
+    add(checkRevival(prevDown, s, opIndex, detect))
+    prevDown = downedKeys(s)
     return true
   }
 

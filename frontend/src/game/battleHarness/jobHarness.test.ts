@@ -81,6 +81,7 @@ describe('jobScenarios: 生成', () => {
       'magicite',
       'script',
       'random-script',
+      'script-force',
       'equipment',
       'summon',
     ] as const
