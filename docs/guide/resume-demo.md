@@ -2,7 +2,7 @@
 
 任意の局面（パーティ・所持品・装備・所持金・フィールドの現在地・戦闘中の状態）を**セーブデータとして先に用意し、そこから再開して起動する**ための手順。デモ・不具合の再現・見た目の確認は、すべてこの一通りで行う（専用のサンプルマップや状態の作り方は持たない。#1021）。
 
-- 従来のデモの入口（`?fixture=dummy`）は無い。戦闘画面の機能別サンプル `battle-sample.html` は、一枚絵フィールドの設定に未搭載の機能（状態異常・ジョブ・魔石・脚本等）のため暫定で残る
+- 従来のデモの入口（`?fixture=dummy`）は無い。戦闘画面の機能別サンプル `battle-sample.html` は、一枚絵フィールドの設定に未搭載の機能（ジョブ・魔石・脚本・敵の行動パターンや耐性等。状態異常の宣言と付与は搭載済み）のため暫定で残る
 - 状態の与え方は **localStorage のセーブ（JSON）を先に作ってから、`?resume=` で開く** の一通り
 - セーブ形式が正（`frontend/src/game/rpgSave.ts` の `RpgSaveState`）。`startFrom({ rpg })` も同じ形式を受ける（[デバッガガイド](./debugger.md) / [ADR 0002 §6](../adr/0002-deterministic-state-and-debuggability.md)）
 - 再開できるのは一枚絵フィールド（`field-sample.html`）。ノベル側（`NovelRenderer`）は `rpg` を解釈せず持ち回すだけ
@@ -97,6 +97,37 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 5. レベル条件の即死: 味方に「ほろび」（`damage_full レベル倍数=5`。MP 1）を使わせる（操作は ←（じゅもん窓）→ ↓ を 3 回で「ほろび」→ Enter → ターゲットを↑↓で選ぶ → Enter。窓の先頭は「ほのお」で、MP が足りない呪文は灰色表示）。Lv50 の `M149`（50 は 5 の倍数）は倒れ、Lv3 の `M147`（5 の倍数でない）は `きかなかった` で HP が変わらない。レベルを持たない敵（この設定では `M145`。「今すぐエンカウント」の抽選に入っている）にも効かない。つまりレベル条件の即死は、レベルを持つ敵のうち倍数のものにだけ効く
 
 **見た目の最終判断（ダメージ表示・「きかなかった」の読みやすさ）は KJ の実機で行う**。この手順は値の確認までで、見た目の合格判定ではない。
+
+## motion / 敵名窓 / エフェクトの確認（#1051）
+
+戦闘サンプル（`battle-sample.html`）で見ていた 3 機能を、実際のゲームと同じ形式の設定（`battle.motion` / `battle.enemyList` / `battle.effects`。書式は [デバッガガイド](./debugger.md)）で確かめる手順。確認用の設定は、寺町とは別の最小の一枚絵世界（シーン 1 つ・敵はデモ用の名前と数値。寺町の同梱設定には足さない）。
+
+| 機能 | 設定 | セーブ | 見えるもの |
+|---|---|---|---|
+| motion | [`demo-motion.config.json`](./examples/demo-motion.config.json) | [`demo-motion.save.json`](./examples/demo-motion.save.json) | `battle.motion: "snappy"`。戦闘開始の横スライド登場・キビキビした踏み出し・桁ごとに跳ねるダメージ数字 |
+| 敵名窓 | [`demo-enemy-list.config.json`](./examples/demo-enemy-list.config.json) | [`demo-enemy-list.save.json`](./examples/demo-enemy-list.save.json) | `battle.enemyList: "window"`。コマンド窓の右隣に敵名窓が出て、同名の敵が「扇風機・換気扇の羽根 ×3」にまとまる（倒すと個数が減り、全滅した行は消える） |
+| エフェクト | [`demo-effects.config.json`](./examples/demo-effects.config.json) | [`demo-effects.save.json`](./examples/demo-effects.save.json) | `battle.effects` の `cast` / `impact` / `slash` / `magic`。通常攻撃の命中で `slash`（味方）・`impact`（敵）、「じゅもん」の「ひかり」で `cast` と `magic` |
+
+手順は「敵レベルとレベル条件即死の確認」と同じ（`<名前>` は上表の機能名 `motion` / `enemy-list` / `effects`）:
+
+1. 本番ビルドして静的配信する（手順 1）
+2. `demo-<名前>.config.json` を `<出力先>` の直下にコピーする（手順 2）
+3. sit-by-me を CORS 付きで配信し、コピーした設定とセーブの `8765` を置き換える（手順 3。**配信するのは歩行絵が揃った sit-by-me の最新 main**。古いブランチだと歩行スプライトが 404 で起動しない。この設定は感情吹き出しを使わないので `teramachi-emotions.json` の置換は要らない）
+4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（敵名窓・エフェクト・motion の 3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はない）。操作できるまでは、敵名窓・エフェクトは約 1 秒、motion は `snappy` の横スライド登場が終わる約 4〜5 秒（それ以前のクリックは効かない）。3 つともコマンドが 3 つ（たたかう・じゅもん・にげる。状態異常の設定も同じ）で、`commandLayout: "cross"` は 4 コマンドのときだけ有効なため `grid` 配置になり、矢印キーでは操作できない。コマンドはクリック（タップ）で選ぶ。「たたかう」はクリックでターゲットが自動で決まり、すぐ始まる。「じゅもん」は窓から呪文を選んでターゲットをクリックする（敵名窓・エフェクト・motion の設定は「ひかり」。状態異常の設定は次節）
+
+**見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
+
+## 状態異常の確認（#1051）
+
+戦闘サンプル（`battle-sample.html`）の状態異常（毒・眠り・混乱・ゾンビ・死の宣告）を、実際のゲームと同じ形式の設定（トップレベルの `statuses`。書式は [デバッガガイド](./debugger.md)）で確かめる手順。確認用の設定は、寺町とは別の最小の一枚絵世界（シーン 1 つ・敵は同名の通常攻撃だけの「扇風機・換気扇の羽根」2 体。寺町の同梱設定には足さない）。敵の行動パターン・耐性は未搭載なので、どくのりゅうのような特技を使う敵は出ない。
+
+| 設定 | セーブ | 見えるもの |
+|---|---|---|
+| [`demo-statuses.config.json`](./examples/demo-statuses.config.json) | [`demo-statuses.save.json`](./examples/demo-statuses.save.json) | 「じゅもん」の「どくのこな」「スリプル」「メダパニ」「デスぜんこく」で敵に状態が付く（敵は名前の後ろに `[どく]` のように出る）。「ケアル」「エスナ」「ゾンビのこな」は味方に使う。「ゾンビのこな」で味方がゾンビになると、敵の攻撃が回復になる |
+
+手順は「motion / 敵名窓 / エフェクトの確認」と同じ（`<名前>` は `statuses`）。手順 4 の `demo-<名前>.save.json` を localStorage に入れ、`field-sample.html?resume=0&config=demo-statuses.config.json` を開く。コマンドは 3 つ（たたかう・じゅもん・にげる）で `grid` 配置のため矢印キーでは操作できず、コマンドはクリック（タップ）で選ぶ。「じゅもん」は窓から呪文を選んでターゲットをクリックする。操作できるまでは、読み込みから約 2 秒以内（導入演出なし。`transition` 未指定）。
+
+**見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
 ## 保存先の判断（localStorage のまま・IndexedDB へは移さない）
 

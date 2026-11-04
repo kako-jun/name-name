@@ -2037,3 +2037,34 @@ describe('敵のレベル monsters.<id>.level (#1043)', () => {
     expect(parseConfig(raw, BASE).ok).toBe(false)
   })
 })
+
+describe('parseConfig statuses (#1051 段階3)', () => {
+  it('未指定は空（従来の設定は変わらない）', () => {
+    expect(ok(minimal()).statuses).toEqual({})
+  })
+
+  it('指定した statuses を戦闘サンプルと同じ書式で読む（name 省略は id、duration は数値でも可）', () => {
+    const c = ok(
+      mutated((r) => {
+        r.statuses = [
+          { id: 'poison', name: 'どく', duration: 5, tickDamage: '1/16' },
+          { id: 'doom', expire: '戦闘不能' },
+        ]
+      })
+    )
+    expect(c.statuses.poison).toMatchObject({ name: 'どく', duration: '5', tickDamage: '1/16' })
+    expect(c.statuses.doom).toMatchObject({ id: 'doom', name: 'doom', expire: '戦闘不能' })
+  })
+
+  it('不正な値はエラー（配列でない・id が空・欄が文字列でない）', () => {
+    for (const bad of ['x', [{ id: '' }], [{ id: 'a', tickDamage: 1 }], [1]]) {
+      const r = parseConfig(
+        mutated((raw) => {
+          raw.statuses = bad
+        }),
+        BASE
+      )
+      expect(r.ok).toBe(false)
+    }
+  })
+})

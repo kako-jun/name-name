@@ -281,16 +281,16 @@ describe('せってい（#880）の上書きが戦闘のオプションへ渡る
   }
   it('ATB の戦闘だけ mode と speed を上書きする。等倍の speed は渡さない', () => {
     const b = load().battle
-    expect(buildBattleEngineOptions(b, { atbMode: 'active', atbSpeed: 2 }).atb).toEqual({
+    expect(buildBattleEngineOptions(b, undefined, { atbMode: 'active', atbSpeed: 2 }).atb).toEqual({
       mode: 'active',
       speed: 2,
     })
-    expect(buildBattleEngineOptions(b, { atbSpeed: 1 }).atb).toEqual({ mode: 'wait' })
-    expect(buildBattleEngineOptions(b, undefined).atb).toEqual({ mode: 'wait' })
+    expect(buildBattleEngineOptions(b, undefined, { atbSpeed: 1 }).atb).toEqual({ mode: 'wait' })
+    expect(buildBattleEngineOptions(b, undefined, undefined).atb).toEqual({ mode: 'wait' })
   })
   it('ターン制（atb なし）には上書きを渡さない', () => {
     expect(
-      buildBattleEngineOptions({ layout: 'side' }, { atbMode: 'active', atbSpeed: 2 })
+      buildBattleEngineOptions({ layout: 'side' }, undefined, { atbMode: 'active', atbSpeed: 2 })
     ).toEqual({})
   })
   it('cursorMemory は渡したときだけ BattleScreen のオプションへ', () => {

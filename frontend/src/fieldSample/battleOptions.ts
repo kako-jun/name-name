@@ -5,6 +5,7 @@
 import type { BattleScreenOptions } from '../game/BattleScreen'
 import type { AtbMode, BattleEngineOptions } from '../game/battleEngine'
 import type { BattleMenuData } from '../game/battleMenu'
+import type { StatusDef } from '../types'
 import type { FieldBattleConfig } from './config'
 import { resolveBattleFrame } from '../game/battleLogicalSize'
 
@@ -52,10 +53,13 @@ export function buildBattleScreenOptions(
  */
 export function buildBattleEngineOptions(
   b: Pick<FieldBattleConfig, 'atb' | 'layout' | 'enemyGrid'>,
+  statuses?: Record<string, StatusDef>,
   /** 全画面メニュー「せってい」(#880) の上書き。ATB の戦闘だけに効く（ターン制では無視） */
   overrides?: { atbMode?: AtbMode; atbSpeed?: number }
 ): BattleEngineOptions {
   return {
+    // 状態の宣言 (#870)。空なら渡さない（戦闘サンプルと同じ条件）
+    ...(statuses && Object.keys(statuses).length > 0 ? { statuses } : {}),
     ...(b.atb
       ? {
           atb: {

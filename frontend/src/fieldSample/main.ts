@@ -896,6 +896,7 @@ async function main(): Promise<void> {
         resumeBattleEngineOptions(
           buildBattleEngineOptions(
             b,
+            config.statuses,
             // せってい (#880): ATB の戦闘だけに バトルモード・バトルスピード が効く
             menuRuntime
               ? (() => {
