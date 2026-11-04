@@ -139,6 +139,7 @@ import {
   enqueueEvents,
   fitPopupFontSize,
   groupHitsByRound,
+  isPlaybackBackedUp,
   isPlaybackBusy,
   messageWindowText,
   popupCenterOffset,
@@ -1377,9 +1378,11 @@ export class BattleScreen extends Container {
     }
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
     if (ff) this.advancePresentation(deltaMS)
+    this.menuLayer?.tick(deltaMS)
     if (atb) {
-      // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される
-      this.engine.tick(deltaMS)
+      // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される。
+      // ただし再生待ちが溜まりすぎたら、追いつくまで時間を止める（キューが伸び続けない。#745）
+      if (!(ff && isPlaybackBackedUp(this.playback))) this.engine.tick(deltaMS)
       const sig = this.computeAtbSignature()
       if (sig !== this.atbSignature) this.refresh()
       else this.drawAtbBars()
@@ -2377,6 +2380,8 @@ export class BattleScreen extends Container {
       },
       onCancelTap: () => this.cancelMenu(),
     })
+    // 開閉アニメーションは ff のときだけ（tick が回らない dq では途中で止まるので使わない）
+    this.menuLayer.setTransitionMs(this.presentation === 'ff' ? this.motionTiming.menuMs : 0)
     this.addChild(this.menuLayer)
     this.engine.setAtbWaitScope('menu')
   }

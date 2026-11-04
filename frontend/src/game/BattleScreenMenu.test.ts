@@ -1358,3 +1358,75 @@ describe('grid でも候補窓が使える・操作の案内 (#806)', () => {
     expect(hintText(s)).toEqual([])
   })
 })
+
+describe('候補窓の開閉アニメーション (#745)', () => {
+  const body = (s: BattleScreen) =>
+    (I(s).menuLayer as unknown as { body: Container }).body as Container & {
+      alpha: number
+      scale: { x: number }
+    }
+  const advance = (s: BattleScreen, ms: number) => {
+    for (let left = ms; left > 0; left -= 10) s.tick(Math.min(10, left))
+  }
+
+  it('default: 開閉は即座（alpha 1・scale 1 のまま。閉じれば中身は即座に消える）', () => {
+    const { s } = build({ presentation: 'ff' })
+    const n0 = body(s).children.length // 窓が無いときは案内の文字だけ
+    press('ArrowLeft')
+    expect(body(s).alpha).toBe(1)
+    expect(body(s).scale.x).toBe(1)
+    expect(body(s).children.length).toBeGreaterThan(n0)
+    press('Escape')
+    expect(body(s).children).toHaveLength(n0)
+  })
+
+  it('snappy + ff: 開くと alpha 0 から 120ms で 1 へ、閉じると中身を残したまま 120ms で薄れて消える', () => {
+    const { s } = build({ presentation: 'ff', motion: 'snappy' })
+    const n0 = body(s).children.length
+    press('ArrowLeft')
+    expect(body(s).alpha).toBe(0)
+    expect(body(s).scale.x).toBeCloseTo(0.92)
+    advance(s, 60)
+    expect(body(s).alpha).toBeGreaterThan(0.5)
+    expect(body(s).alpha).toBeLessThan(1)
+    advance(s, 80)
+    expect(body(s).alpha).toBe(1)
+    expect(body(s).scale.x).toBe(1)
+    // 閉じる: 中身は残り、窓の外のタップ受けは外れる
+    press('Escape')
+    expect(types(s)).toEqual([])
+    expect(body(s).children.length).toBeGreaterThan(n0)
+    expect(body(s).interactiveChildren).toBe(false)
+    expect(I(s).menuLayer!.visible).toBe(true)
+    advance(s, 60)
+    expect(body(s).alpha).toBeLessThan(1)
+    expect(body(s).alpha).toBeGreaterThan(0)
+    advance(s, 80)
+    expect(body(s).children).toHaveLength(n0)
+  })
+
+  it('snappy: 閉じている最中にもう一度開くと、開く動きをやり直す（窓は残る）', () => {
+    const { s } = build({ presentation: 'ff', motion: 'snappy' })
+    const n0 = body(s).children.length
+    press('ArrowLeft')
+    advance(s, 200)
+    press('Escape')
+    advance(s, 40)
+    press('ArrowLeft')
+    expect(types(s)).toEqual(['list'])
+    expect(body(s).alpha).toBe(0)
+    expect(body(s).interactiveChildren).toBe(true)
+    advance(s, 200)
+    expect(body(s).alpha).toBe(1)
+    expect(body(s).children.length).toBeGreaterThan(n0)
+  })
+
+  it('dq では snappy でもアニメーションしない（tick が回らず途中で止まらない）', () => {
+    const { s } = build({ presentation: 'dq', motion: 'snappy' })
+    const n0 = body(s).children.length
+    press('ArrowLeft')
+    expect(body(s).alpha).toBe(1)
+    press('Escape')
+    expect(body(s).children).toHaveLength(n0)
+  })
+})

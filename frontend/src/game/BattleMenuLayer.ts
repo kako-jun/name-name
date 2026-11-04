@@ -16,6 +16,7 @@ import {
 } from './battleMenuLayout'
 import type { TargetSide } from './battleMenu'
 import { estimateTextWidth } from './battleLayout'
+import { sampleMenuTransition, DEFAULT_MOTION_TIMING } from './battleMotion'
 
 /** BattleScreen が提供する、見た目の共通部品と入力の通知先 */
 export interface BattleMenuHost {
@@ -111,6 +112,11 @@ export class BattleMenuLayer extends Container {
   private host: BattleMenuHost
   private backdrop = new Graphics()
   private body = new Container()
+  /** 開閉アニメーション (#745): 長さ（0 = なし）・今の動き・開いた状態か・閉じ切ったあとに描く案内 */
+  private transitionMs = 0
+  private anim: { kind: 'open' | 'close'; elapsed: number } | null = null
+  private opened = false
+  private pendingClosed: { width: number; height: number; hint: string } | null = null
 
   constructor(host: BattleMenuHost) {
     super()
@@ -122,17 +128,75 @@ export class BattleMenuLayer extends Container {
     this.addChild(this.backdrop, this.body)
   }
 
-  /** 窓を描き直す。`view` が空なら全体を隠し、入力も通す */
+  /**
+   * 開閉アニメーションの長さ（ms。0 は即座に開閉＝従来）(#745)。窓が閉じたあとの状態を直接 `update` で描き直す経路は
+   * アニメーションと独立（アニメーション中でも `view` が来れば開いた状態へ戻す）
+   */
+  setTransitionMs(ms: number): void {
+    this.transitionMs = Number.isFinite(ms) && ms > 0 ? ms : 0
+    if (this.transitionMs === 0) this.settleOpen()
+  }
+
+  /** 開閉の進み。`dt` ms 進め、閉じ切ったら窓の中身を片付けて案内だけ描く */
+  tick(dt: number): void {
+    if (this.anim === null) return
+    this.anim.elapsed += Number.isFinite(dt) ? Math.max(0, dt) : 0
+    const timing = { ...DEFAULT_MOTION_TIMING, menuMs: this.transitionMs }
+    const sample = sampleMenuTransition(this.anim.kind, this.anim.elapsed, timing)
+    if (!sample.done) {
+      this.applyTransform(sample.alpha, sample.scale)
+      return
+    }
+    const kind = this.anim.kind
+    this.anim = null
+    if (kind === 'open') {
+      this.settleOpen()
+      return
+    }
+    // 閉じ切った: 窓の中身を捨て、閉じている間に来た案内（あれば）を描く
+    const pending = this.pendingClosed
+    this.pendingClosed = null
+    this.clearBody()
+    this.settleOpen()
+    this.opened = false
+    this.visible = !!pending && pending.hint !== ''
+    if (pending) this.drawHint(pending.hint, pending.width, pending.height, [])
+  }
+
+  /** 窓を描き直す。`view` が空なら全体を隠し、入力も通す（開閉アニメーションが有効なら、閉じる動きのあとで隠す） */
   update(view: MenuView, width: number, height: number, hint = ''): void {
-    for (const c of this.body.removeChildren()) c.destroy({ children: true })
-    this.visible = view.length > 0 || hint !== ''
+    const open = view.length > 0
+    if (!open && this.anim?.kind === 'close') {
+      // 閉じている最中に来た更新: 動きは続け、終わったあとに出す案内だけ差し替える
+      this.pendingClosed = { width, height, hint }
+      return
+    }
+    if (!open && this.transitionMs > 0 && this.opened && this.body.children.length > 0) {
+      // 開いていた窓を、中身を残したまま閉じる動きへ。入力は通す（backdrop を外し、行のタップも受けない）
+      this.backdrop.clear()
+      this.backdrop.hitArea = null
+      this.backdrop.eventMode = 'none'
+      this.body.interactiveChildren = false
+      this.pendingClosed = { width, height, hint }
+      this.anim = { kind: 'close', elapsed: 0 }
+      this.opened = false
+      this.visible = true
+      return
+    }
+    this.clearBody()
+    this.visible = open || hint !== ''
     this.backdrop.clear()
-    if (view.length === 0) {
+    if (!open) {
+      this.anim = null
+      this.opened = false
+      this.settleOpen()
       this.backdrop.hitArea = null
       this.drawHint(hint, width, height, [])
       return
     }
     // 窓の外のタップは全面で受けてキャンセルにする（下のコマンドに漏らさない）
+    this.backdrop.eventMode = 'static'
+    this.body.interactiveChildren = true
     this.backdrop.rect(0, 0, width, height).fill({ color: 0x000000, alpha: 0.001 })
     this.backdrop.hitArea = new Rectangle(0, 0, width, height)
     for (const v of view) {
@@ -145,6 +209,62 @@ export class BattleMenuLayer extends Container {
       height,
       view.flatMap((v) => (v.type === 'list' ? [v.rect] : []))
     )
+    // 閉じている状態（または閉じる途中）から開いたときだけ、開く動きを始める。開いている最中の描き直しでは動きを続ける
+    if (this.transitionMs > 0 && (!this.opened || this.anim?.kind === 'close')) {
+      this.centerOf(view)
+      this.anim = { kind: 'open', elapsed: 0 }
+      const first = sampleMenuTransition('open', 0, {
+        ...DEFAULT_MOTION_TIMING,
+        menuMs: this.transitionMs,
+      })
+      this.applyTransform(first.alpha, first.scale)
+    } else if (this.anim?.kind === 'open') {
+      this.centerOf(view)
+      const timing = { ...DEFAULT_MOTION_TIMING, menuMs: this.transitionMs }
+      const cur = sampleMenuTransition('open', this.anim.elapsed, timing)
+      this.applyTransform(cur.alpha, cur.scale)
+    } else {
+      this.settleOpen()
+    }
+    this.opened = true
+    this.pendingClosed = null
+  }
+
+  private clearBody(): void {
+    for (const c of this.body.removeChildren()) c.destroy({ children: true })
+  }
+
+  /** 拡大・縮小の中心を、一覧窓の外接矩形の中心にする（一覧が無ければ原点のまま＝alpha だけ効く） */
+  private centerOf(view: MenuView): void {
+    const lists = view.flatMap((v) => (v.type === 'list' ? [v.rect] : []))
+    if (lists.length === 0) {
+      this.body.pivot.set(0, 0)
+      this.body.position.set(0, 0)
+      return
+    }
+    const x0 = Math.min(...lists.map((r) => r.x))
+    const y0 = Math.min(...lists.map((r) => r.y))
+    const x1 = Math.max(...lists.map((r) => r.x + r.w))
+    const y1 = Math.max(...lists.map((r) => r.y + r.h))
+    const cx = (x0 + x1) / 2
+    const cy = (y0 + y1) / 2
+    this.body.pivot.set(cx, cy)
+    this.body.position.set(cx, cy)
+  }
+
+  private applyTransform(alpha: number, scale: number): void {
+    this.body.alpha = alpha
+    this.body.scale.set(scale)
+  }
+
+  /** 開き切った（動きのない）状態に戻す */
+  private settleOpen(): void {
+    this.body.alpha = 1
+    this.body.scale.set(1)
+    if (this.anim === null) {
+      this.body.pivot.set(0, 0)
+      this.body.position.set(0, 0)
+    }
   }
 
   /**

@@ -156,6 +156,8 @@ export interface MotionTiming {
   /** 敵→味方の被弾で、被弾した味方がほわっとモザイク状に粗くなって戻る時間（ms）と最大の粗さ（PixelateFilter.size）。0 は出さない（従来） (#953)。敵の通常攻撃では、攻撃した敵自身にも同じ値で自己モザイクを出し（miss でも）、そのとき敵は踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。0 のときは従来どおり敵も踏み出す */
   hitMosaicMs: number
   hitMosaicMaxSize: number
+  /** 候補窓（呪文・アイテム一覧）の開閉アニメーションの長さ（ms。開くときも閉じるときも同じ）。0 は即座に開閉（従来） (#745) */
+  menuMs: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -193,6 +195,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   digitStaggerMs: 0,
   hitMosaicMs: 0,
   hitMosaicMaxSize: 16,
+  menuMs: 0,
 }
 
 /**
@@ -203,6 +206,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
  * - のけぞり・倒れ・ダメージ数字・呪文・複数ヒットは default の約 0.75 倍の長さに揃える（動きだけ速く数字が遅いと間延びするため）
  * - ダメージ・回復の数字は 1 桁ずつ 50ms 差で跳ねさせる (#955)。FF の「ぱらぱらと着地する」リズムを出すため（桁数が多くても合計 150ms まで）
  * - 敵の通常攻撃では、攻撃した敵自身にも同じ 260ms・最大 16 の自己モザイクを出し、敵は踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)
+ * - 候補窓（呪文・アイテム一覧）は 120ms の短い scale / alpha で開閉する (#745)。default は 0（即座に開閉）
  * - 被弾した味方に 260ms のほわっとモザイク (#953)。山の長さは `min(260ms, 行動の残り)`（のけぞり 200ms + 行動間 40ms で行動は命中から約 240ms 後に終わるので、実際は約 240ms 以内に等倍へ戻り切る。行動の長さは変えない）。最大 16 は絵の切り替えモザイク（24）より控えめ（キャラが読めなくならないよう。等倍(1)→最大→等倍の山でスワップなし）。連続ヒットは各ヒットの山の包絡で繋ぐ。default は 0（出さない）
  */
 export const SNAPPY_MOTION_TIMING: MotionTiming = {
@@ -237,6 +241,7 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   digitStaggerMs: 50,
   hitMosaicMs: 260,
   hitMosaicMaxSize: 16,
+  menuMs: 120,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'
@@ -610,6 +615,50 @@ export function enqueueEvents(
   events: readonly BattleActionEvent[]
 ): PlaybackState {
   return events.length === 0 ? pb : { queue: [...pb.queue, ...events], active: pb.active }
+}
+
+/** 候補窓の開閉アニメーションで、最小まで縮む倍率（開くとき 0.92 → 1、閉じるとき 1 → 0.92。alpha は 0 ↔ 1） */
+export const MENU_TRANSITION_MIN_SCALE = 0.92
+
+export interface MenuTransitionSample {
+  alpha: number
+  scale: number
+  /** 終わった（開き切った・閉じ切った） */
+  done: boolean
+}
+
+/**
+ * 候補窓の開閉 (#745)。開く = alpha 0 → 1・scale 0.92 → 1、閉じる = その逆。イージングは easeOutQuad（出だしが速く、
+ * 開くときは素早く現れ、閉じるときは素早く薄れる）。`menuMs` が 0 以下・非有限なら即座に終わる（開いた状態 / 閉じた状態）。
+ * 負・非有限の elapsed は 0 として扱う
+ */
+export function sampleMenuTransition(
+  kind: 'open' | 'close',
+  elapsed: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): MenuTransitionSample {
+  const ms = timing.menuMs
+  const t = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
+  const p = !Number.isFinite(ms) || ms <= 0 ? 1 : Math.min(1, t / ms)
+  const e = 1 - (1 - p) * (1 - p)
+  const k = kind === 'open' ? e : 1 - e
+  return {
+    alpha: k,
+    scale: MENU_TRANSITION_MIN_SCALE + (1 - MENU_TRANSITION_MIN_SCALE) * k,
+    done: p >= 1,
+  }
+}
+
+/**
+ * ATB active で演出の再生待ちの行動がこの数に達したら、再生が追いつくまで ATB の時間（ゲージ・敵の行動）を止める (#745)。
+ * エンジンは行動を即時に確定し表示だけが演出キューで遅れて追うので、敵が高速・多数だと待ちが伸び続けるのを防ぐ。
+ * 暫定値（1 行動 0.5〜1 秒として、最大で数秒ぶんの遅れに収める。KJ の実機判定で調整）
+ */
+export const ATB_PLAYBACK_QUEUE_MAX = 6
+
+/** 演出の再生待ち（再生中を除く）が `ATB_PLAYBACK_QUEUE_MAX` に達しているか */
+export function isPlaybackBackedUp(pb: PlaybackState): boolean {
+  return pb.queue.length >= ATB_PLAYBACK_QUEUE_MAX
 }
 
 /** 再生すべきものが残っているか（演出が終わるまで次の行動・入力を待たせる判定に使う） */
