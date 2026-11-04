@@ -35,6 +35,7 @@ import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
 import {
   normalizePoses,
+  posesField,
   type BattleMotionPreset,
   type BattlePresentation,
 } from '../game/battleMotion'
@@ -745,7 +746,11 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     for (let i = 0; i < raw.party.length; i++) {
       const e = parseEntity(raw.party[i], `party${i + 1}`, `party[${i}]`, url)
       if (!e.ok) return e
-      party.push(e.value)
+      // 味方は BattleEntity そのもの: poses に同居する刀の予約キー (#1027) をここで刀の指定（weapon）へ分ける（残すと絵として読みに行く #1035）
+      const { poses, ...rest } = e.value
+      party.push(
+        poses ? { ...rest, ...posesField(poses as unknown as Record<string, string>) } : e.value
+      )
     }
   }
   if (party.length === 0) {

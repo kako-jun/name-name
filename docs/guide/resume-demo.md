@@ -74,6 +74,17 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 - 所持品の残数・所持金（勝利時の獲得分）・味方の HP / MP / 状態異常は戦闘のあとも持ち越す（以前の「戦闘のたびに設定へ戻る」ことはしない）
 - 敗北のときだけ味方を戦闘前（その戦闘を始めた時点。戦闘中のセーブから再開した戦闘ではセーブ時点）に戻す（全滅のまま次へ進めなくなるのを防ぐ）。所持品・所持金は戻さない
 
+## 刀の確認（寺町サンプルの味方の刀。#1035）
+
+寺町サンプルの味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順:
+
+1. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する（寺町の設定の URL は `http://localhost:8765/...`。別ポートで配信するときは設定 JSON をコピーして `8765` を置き換え、`?config=<そのURL>` で渡す。セーブの `battle.background` の URL も同様）
+2. `cd frontend && npx vite build --outDir <出力先>` の本番ビルドを静的配信する（`field-sample.html`）
+3. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れて `field-sample.html?resume=0` を開く。味方の並びは party1=ナム C002（車椅子）・party2=オットン C001・party3=シャー C003・party4=ペー子 C004（HP 0 なので、確かめるときはセーブの `party4` の `hp` を上げ、`battle.atb.partyGauge` を確かめたい者だけ 1000・`queue` をその添字にする）
+4. 「たたかう」を選ぶ（攻撃は数百 ms で終わるので、目視では追えない。playwright なら `requestAnimationFrame` / `performance.now` を差し替えた仮想時計で 30 ms ずつ進めてコマ撮りする）。5 段で、手元に刀が付き、ready の構え・windup の振りかぶり・slash の突き出し・followthrough の振り抜きに追従すること
+
+実測（2026-11-04、本番ビルド・chromium + swiftshader のコマ撮り）: C001〜C004 の 4 人とも 5 段で刀が手元に付き、読み込み警告なし。C001 の swing も巨大表示にならない（#165 解消後）。被弾の傾き・死亡の回転への追従はこの手順では確かめていない（同じ container の子なので追従する設計。#1027 で確認済み）。刀の位置・見た目の最終判断は人の実機で行う。
+
 ## 保存先の判断（localStorage のまま・IndexedDB へは移さない）
 
 実測（`frontend/src` の型どおりに組んだ JSON の文字数。localStorage の上限は 1 オリジン 5 MiB ≒ UTF-16 で約 262 万文字を安全側に採用）:
