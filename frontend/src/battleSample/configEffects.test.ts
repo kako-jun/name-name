@@ -4,13 +4,7 @@ import { BattleEngine } from '../game/battleEngine'
 import { planEventEffects } from '../game/battleEffects'
 import type { BattleSummonEntry } from '../game/battleMenu'
 import effectsSample from './__fixtures__/effects.json?raw'
-import {
-  buildBattleSetup,
-  initialView,
-  parseConfig,
-  parseConfigText,
-  assetsToUnload,
-} from './config'
+import { buildBattleSetup, initialView, parseConfig, parseConfigText } from './config'
 
 const BASE = 'https://example.com/dir/x.json'
 const HERO = { id: 'hero', name: 'H', hp: 100, atk: 10, def: 1, agi: 5 }
@@ -66,14 +60,6 @@ describe('effects: 設定 JSON', () => {
     expect(r.ok && r.value.effects).toEqual({})
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockRestore()
-  })
-
-  it('pixelArt の切り替えで、シート画像も解放の対象になる', () => {
-    const r = parseConfig({ effects: { cast: { image: 'c.png', frames: 2 } } }, BASE)
-    if (!r.ok) throw new Error('parse')
-    const view = initialView(r.value)
-    const urls = assetsToUnload('off', { ...view, pixelArt: 'on' }, r.value)
-    expect(urls).toContain('https://example.com/dir/c.png')
   })
 
   it('同梱サンプル effects.json は ok で 5 種類すべてを宣言している（宣言の確認。実際に出るかは次のテスト）', () => {

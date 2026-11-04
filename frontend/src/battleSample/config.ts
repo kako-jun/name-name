@@ -1,5 +1,6 @@
 /**
- * 戦闘設定 JSON（戦闘サンプルページは #1051 で削除済み。現在はフィールドサンプルとテストが使う共有部品）の検証・補完・URL 解決の純粋関数。
+ * 戦闘設定 JSON（戦闘サンプルページは #1051 で削除済み）の検証・補完・URL 解決の純粋関数。一枚絵フィールドが parseMenuList / parsePosesRecord / resolveUrl / parseStatuses を共有する。
+ * `parseConfig` / `buildBattleSetup` / `initialView` は、テスト用ハーネス（戦闘エンジン入力の組み立て）として config*.test.ts が使う。
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import { MAX_LEVEL, type BattleEntity } from '../game/spellDsl'
@@ -12,7 +13,6 @@ import type {
   StatusDef,
   SummonDef,
 } from '../types'
-import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import { applyPartyEquipment, parseGear, parseJobs } from './configEquipment'
 import { parseBeasts, parseMagicites } from './configMagicite'
@@ -70,32 +70,6 @@ export type ScreenSizeId = (typeof SCREEN_SIZES)[number]['id']
  * 既定は main（本編と同じ見た目を確認するため）。
  */
 export type ResolutionMode = 'main' | 'dpr'
-/**
- * 戦闘の結果（経験値・ゴールド・戦利品、#831）を 1 つの文にする。ホストが `onClose` で受け取る `BattleResult` の確認用（確認用）。
- * 戦利品は獲得順に `品 ×個数（ドロップ / ぬすむ / ぬすむ〔レア〕・元の敵）`、無ければ「なし」
- */
-export function describeBattleResult(
-  result: BattleResult,
-  names: Readonly<Record<string, string>> = {}
-): string {
-  const name = (id: string): string =>
-    Object.prototype.hasOwnProperty.call(names, id) ? names[id] : id
-  const loot =
-    result.loot.length === 0
-      ? 'なし'
-      : result.loot
-          .map((l) => {
-            const via = l.via === 'drop' ? 'ドロップ' : l.rare ? 'ぬすむ・レア' : 'ぬすむ'
-            return `${name(l.itemId)} ×${l.count}（${via}・${l.enemyName}）`
-          })
-          .join(' / ')
-  const script = result.script
-    ? `  脚本: ${result.script.id} フラグ=${JSON.stringify(result.script.flags)}${result.script.next !== undefined ? ` 次=${result.script.next}` : ''}`
-    : ''
-  const learned = result.learnedSpells ? `  習得済み: ${result.learnedSpells.join(', ')}` : ''
-  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}${learned}${script}`
-}
-
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 
 /**
@@ -190,7 +164,7 @@ export interface BattleSampleConfig {
   enemies: BattleEntity[]
 }
 
-/** ツールバーで切り替える表示状態（ブリンク比較の単位） */
+/** 戦闘エンジン入力の組み立て用の表示状態（テスト用ハーネス。かつてのサンプルページのツールバー相当） */
 export interface BattleSampleView {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
@@ -1103,7 +1077,7 @@ export function parseConfigText(text: string, baseUrl: string): ParseResult<Batt
   return parseConfig(raw, baseUrl)
 }
 
-/** 設定から、ツールバーの初期表示状態を作る */
+/** 設定から、初期表示状態を作る */
 export function initialView(config: BattleSampleConfig): BattleSampleView {
   return {
     layout: config.layout,
@@ -1132,7 +1106,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
 
 /**
  * 実際にエンジンへ渡す味方人数。front は本編（RaycastRenderer.startBattle）と同じく
- * hero 1 人だけを渡すので、ツールバーの味方人数に関わらず 1。side は選択どおり（1〜MAX_PARTY）。
+ * hero 1 人だけを渡すので、view.partyCount に関わらず 1。side は選択どおり（1〜MAX_PARTY）。
  */
 export function effectivePartyCount(view: BattleSampleView): number {
   if (view.layout === 'front') return 1
@@ -1323,26 +1297,4 @@ export function buildBattleSetup(
     width,
     height,
   }
-}
-
-/**
- * pixelArt (#760) が前回の描画から変わったときだけ、解放すべき画像の URL（背景・前景・味方・敵のスプライト）を返す。
- * `Assets` のキャッシュは mipmap の有無・scaleMode ごと使い回されるので、nearest↔linear を切り替えたら
- * unload してから読み直す必要がある（v8 は mipLevelCount をアップロード時に決める）。他のトグルでは何も返さない。
- * `previous` が null（初回）なら空。重複は除く。
- */
-export function assetsToUnload(
-  previous: 'on' | 'off' | null,
-  view: BattleSampleView,
-  config: BattleSampleConfig
-): string[] {
-  if (previous === null || previous === view.pixelArt) return []
-  const urls = [
-    config.background,
-    config.foreground,
-    ...Object.values(config.effects).map((e) => e.image),
-    ...config.party.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
-    ...config.enemies.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
-  ]
-  return [...new Set(urls.filter((u): u is string => typeof u === 'string' && u !== ''))]
 }

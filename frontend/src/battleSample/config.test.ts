@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { BattleEntity } from '../game/spellDsl'
+import debuggerGuide from '../../../docs/guide/debugger.md?raw'
 import enemyActionsSample from './__fixtures__/enemy-actions.json?raw'
 import enemyOrderOmenSample from './__fixtures__/enemy-order-omen.json?raw'
 import enemyCounterSample from './__fixtures__/enemy-counter.json?raw'
@@ -14,14 +15,12 @@ import {
   SAMPLE_DEFAULT_PERSPECTIVE,
   SCREEN_SIZES,
   applyFormation,
-  assetsToUnload,
   buildBattleSetup,
   defaultConfig,
   defaultItems,
   defaultSpells,
   defaultEnemies,
   defaultParty,
-  describeBattleResult,
   effectivePartyCount,
   initialView,
   parseConfig,
@@ -538,6 +537,23 @@ describe('parseConfigText', () => {
     const r = parseConfigText('null', BASE)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('ルートはオブジェクト')
+  })
+})
+
+describe('docs/guide/debugger.md の設定例', () => {
+  it('JSON 例が parseConfigText を通り、件数と背景の絶対化が docs の記述どおり', () => {
+    const md = debuggerGuide
+    const blocks = [...md.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1])
+    const sample = blocks.find((b) => b.includes('"spriteStyle"'))
+    expect(sample).toBeDefined()
+    const r = parseConfigText(sample as string, 'https://example.com/cfg/battle.json')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.layout).toBe('side')
+    expect(r.value.spriteStyle).toBe('acrylic')
+    expect(r.value.background).toBe('https://example.com/cfg/battle/background.png')
+    expect(r.value.party).toHaveLength(2)
+    expect(r.value.enemies).toHaveLength(1)
   })
 })
 
@@ -1074,50 +1090,6 @@ describe('pixelArt (#760)', () => {
   })
 })
 
-describe('assetsToUnload: pixelArt が変わったときだけ画像を解放する (#760)', () => {
-  const cfg = (): BattleSampleConfig => {
-    const r = parseConfig(
-      {
-        background: 'bg.png',
-        foreground: 'fg.png',
-        party: [{ id: 'a', name: 'a', hp: 1, sprite: 'p.png' }],
-        enemies: [
-          { id: 'e', name: 'e', hp: 1, sprite: 'e.png' },
-          { id: 'f', name: 'f', hp: 1, sprite: 'e.png' },
-        ],
-      },
-      'http://x/s.json'
-    )
-    if (!r.ok) throw new Error(r.error)
-    return r.value
-  }
-  it('初回（previous=null）・変化なしは空', () => {
-    expect(assetsToUnload(null, view({ pixelArt: 'on' }), cfg())).toEqual([])
-    expect(assetsToUnload('off', view({ pixelArt: 'off' }), cfg())).toEqual([])
-    expect(assetsToUnload('on', view({ pixelArt: 'on' }), cfg())).toEqual([])
-  })
-  it('off→on・on→off では背景・前景・味方・敵の URL を重複なく返す', () => {
-    for (const [prev, now] of [
-      ['off', 'on'],
-      ['on', 'off'],
-    ] as const) {
-      const urls = assetsToUnload(prev, view({ pixelArt: now }), cfg())
-      expect(urls).toHaveLength(4)
-      expect(urls.some((u) => u.endsWith('bg.png'))).toBe(true)
-      expect(urls.some((u) => u.endsWith('fg.png'))).toBe(true)
-      expect(urls.some((u) => u.endsWith('p.png'))).toBe(true)
-      expect(urls.filter((u) => u.endsWith('e.png'))).toHaveLength(1)
-    }
-  })
-  it('他のトグル（spriteStyle など）だけの変化では返さない', () => {
-    const v = view({ pixelArt: 'on', spriteStyle: 'acrylic', depth: 'on' })
-    expect(assetsToUnload('on', v, cfg())).toEqual([])
-  })
-  it('画像のない設定（背景・前景・スプライトなし）は空', () => {
-    expect(assetsToUnload('off', view({ pixelArt: 'on' }), defaultConfig())).toEqual([])
-  })
-})
-
 describe('commandLayout / commandLabels (#204)', () => {
   it.each(['cross', 'grid'] as const)('commandLayout %j は通る', (v) => {
     expect(parseOk({ commandLayout: v }).commandLayout).toBe(v)
@@ -1215,12 +1187,6 @@ describe('presentation / poses (#745)', () => {
   it('poses が不正なら理由つきでエラー', () => {
     expect(parseConfig({ party: [{ poses: [] }] }, BASE).ok).toBe(false)
     expect(parseConfig({ party: [{ poses: { idle: 3 } }] }, BASE).ok).toBe(false)
-  })
-
-  it('assetsToUnload は pixelArt が変わったとき、ポーズの画像も解放対象に含める', () => {
-    const cfg = parseOk({ party: [{ sprite: 's.png', poses: { idle: 'i.png' } }] })
-    const urls = assetsToUnload('off', view({ pixelArt: 'on' }), cfg)
-    expect(urls).toContain('https://example.com/dir/i.png')
   })
 })
 
@@ -1698,41 +1664,6 @@ describe('同梱の例 __fixtures__/loot.json (#831)', () => {
     expect(r.value.enemies[1].loot?.stealLimit).toBe('3')
     expect(r.value.spells.filter((s) => s.effect?.startsWith('steal')).length).toBe(5)
     expect(r.value.itemNames.potion).toBe('ポーション')
-  })
-})
-
-describe('describeBattleResult (#831)', () => {
-  const entry = (over: Record<string, unknown>) => ({
-    itemId: 'potion',
-    count: 1,
-    via: 'drop' as const,
-    rare: false,
-    enemyId: 's',
-    enemyName: 'スライム',
-    ...over,
-  })
-
-  it('戦利品なし・あり（表示名・ドロップ / ぬすむ / ぬすむ・レア）', () => {
-    expect(describeBattleResult({ outcome: 'escaped', exp: 0, gold: 0, loot: [], items: [] })).toBe(
-      '結果: escaped  exp=0  gold=0  戦利品: なし'
-    )
-    const text = describeBattleResult(
-      {
-        outcome: 'victory',
-        exp: 5,
-        gold: 3,
-        loot: [
-          entry({ via: 'steal', rare: true, itemId: 'elixir' }),
-          entry({ count: 2 }),
-          entry({ via: 'steal' }),
-        ],
-        items: [],
-      },
-      { potion: 'ポーション' }
-    )
-    expect(text).toBe(
-      '結果: victory  exp=5  gold=3  戦利品: elixir ×1（ぬすむ・レア・スライム） / ポーション ×2（ドロップ・スライム） / ポーション ×1（ぬすむ・スライム）'
-    )
   })
 })
 

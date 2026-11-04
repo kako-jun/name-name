@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { BattleEngine } from '../game/battleEngine'
 import {
   buildBattleSetup,
-  describeBattleResult,
   initialView,
   parseConfig,
   parseConfigText,
@@ -93,15 +92,6 @@ describe('parseConfig: script', () => {
     expect(setup.script).not.toBe(c.script)
     expect(setup.script?.joiners?.ally).not.toBe(c.script?.joiners?.ally)
     expect(Object.keys(setup.options.menu.spells ?? {})).toContain('ally')
-  })
-
-  it('describeBattleResult: 脚本の結果（フラグ・次）を出す。脚本の無い結果は従来の文字列のまま', () => {
-    const base = { outcome: 'victory' as const, exp: 1, gold: 2, loot: [], items: [] }
-    expect(describeBattleResult(base)).toBe('結果: victory  exp=1  gold=2  戦利品: なし')
-    expect(
-      describeBattleResult({ ...base, script: { id: 's', flags: { a: true }, next: 'ev' } })
-    ).toBe('結果: victory  exp=1  gold=2  戦利品: なし  脚本: s フラグ={"a":true} 次=ev')
-    expect(describeBattleResult({ ...base, script: { id: 's', flags: {} } })).toContain('フラグ={}')
   })
 })
 
