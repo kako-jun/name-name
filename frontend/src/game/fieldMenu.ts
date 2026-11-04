@@ -21,6 +21,7 @@ import {
   type ScreenCtx,
   type ScreenKind,
   type ScreenNav,
+  type ScreenUse,
 } from './fieldMenuScreens'
 import { normalizeTransitionTiming, type MenuTransitionTiming } from './fieldMenuTransition'
 import { TIME_LIMIT_AREA, formatClock } from './fieldTimeLimit'
@@ -283,6 +284,10 @@ export type FieldMenuEffect =
   | 'notice'
   | 'save'
   | 'setting'
+  /** どうぐ・まほうを使う要求（呼び出し側が実状態に適用する） */
+  | 'use'
+  /** せいとん（並べ替え）の要求 */
+  | 'sort'
 
 export interface FieldMenuStep {
   state: FieldMenuState
@@ -291,6 +296,8 @@ export interface FieldMenuStep {
   save?: number
   /** effect = 'setting' の変更 */
   setting?: { key: string; value: number }
+  /** effect = 'use' / 'sort' の要求 */
+  use?: ScreenUse
 }
 
 /** 遷移の入力（開いているメニューの外から決まる値） */
@@ -355,6 +362,7 @@ export function stepFieldMenu(
     }
     if (r.save !== undefined) out.save = r.save
     if (r.setting) out.setting = r.setting
+    if (r.use) out.use = r.use
     return out
   }
   if (ev.type === 'back') return { state: CLOSED_MENU, effect: 'closed' }
@@ -397,8 +405,17 @@ export function isMenuOpenKey(code: string): boolean {
   return MENU_OPEN_KEYS.includes(code)
 }
 
-/** メニュー内のキー → 入力。M は開く専用なのでメニュー内では無効。対象外のキーは null */
-export function menuKeyEvent(code: string): FieldMenuEvent | null {
+/**
+ * キー割当（PC）の選択肢。`せってい` の `keys`（選択肢 index）。0 = Z 決定・X 戻る（既定）、1 = X 決定・Z 戻る。
+ * Enter / Space は決定、Esc は戻るで固定。メニュー内だけに効く（フィールドの会話送り・戦闘は未接続）
+ */
+export const KEY_SCHEME_SWAPPED = 1
+
+/** メニュー内のキー → 入力。M は開く専用なのでメニュー内では無効。対象外のキーは null。`keyScheme` はせっていの `keys` の値 */
+export function menuKeyEvent(code: string, keyScheme = 0): FieldMenuEvent | null {
+  const swapped = keyScheme === KEY_SCHEME_SWAPPED
+  if (code === 'KeyZ') return swapped ? { type: 'back' } : { type: 'confirm' }
+  if (code === 'KeyX') return swapped ? { type: 'confirm' } : { type: 'back' }
   switch (code) {
     case 'ArrowUp':
     case 'KeyW':
@@ -412,11 +429,9 @@ export function menuKeyEvent(code: string): FieldMenuEvent | null {
     case 'ArrowRight':
     case 'KeyD':
       return { type: 'move', dx: 1, dy: 0 }
-    case 'KeyZ':
     case 'Enter':
     case 'Space':
       return { type: 'confirm' }
-    case 'KeyX':
     case 'Escape':
       return { type: 'back' }
     default:
@@ -432,12 +447,20 @@ export function menuKeyEvent(code: string): FieldMenuEvent | null {
 export const MENU_HINT_TOP = '決定: Z / Enter / タップ　戻る(閉じる): X / Esc / 右クリック / ◀戻る'
 export const MENU_HINT_SCREEN =
   '選ぶ: 矢印 / タップ　決定: Z / Enter　戻る: X / Esc / 右クリック / ◀戻る'
+/** キー割当を入れ替えたとき（`KEY_SCHEME_SWAPPED`）の案内 */
+export const MENU_HINT_TOP_SWAPPED =
+  '決定: X / Enter / タップ　戻る(閉じる): Z / Esc / 右クリック / ◀戻る'
+export const MENU_HINT_SCREEN_SWAPPED =
+  '選ぶ: 矢印 / タップ　決定: X / Enter　戻る: Z / Esc / 右クリック / ◀戻る'
 export const MENU_BACK_LABEL = '◀戻る'
 /** 項目画面の一覧が空のとき枠の中に出す文言 */
 export const MENU_EMPTY_BODY = 'なにもありません'
 
 export function menuHint(state: FieldMenuState): string {
-  return state.open && state.screen !== TOP_SCREEN ? MENU_HINT_SCREEN : MENU_HINT_TOP
+  const swapped = state.open && state.settings.keys === KEY_SCHEME_SWAPPED
+  const inScreen = state.open && state.screen !== TOP_SCREEN
+  if (swapped) return inScreen ? MENU_HINT_SCREEN_SWAPPED : MENU_HINT_TOP_SWAPPED
+  return inScreen ? MENU_HINT_SCREEN : MENU_HINT_TOP
 }
 
 export interface FieldMenuInfo {

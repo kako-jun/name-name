@@ -254,6 +254,16 @@ export type AtbWaitScope = 'command' | 'menu'
 export const ATB_GAUGE_MAX = 1000
 /** AGI 1 あたり、1ms ごとに溜まるゲージ量。AGI に比例（AGI 5 で 5 秒、AGI 10 で 2.5 秒で満タン）。目視で調整する値 */
 export const ATB_FILL_PER_AGI_MS = 0.04
+/** ATB の速さの倍率の範囲 (#880) */
+export const ATB_SPEED_MIN = 0.1
+export const ATB_SPEED_MAX = 10
+
+/** 倍率の正規化。未指定・非有限・0 以下は 1、それ以外は `ATB_SPEED_MIN`〜`ATB_SPEED_MAX` に収める */
+export function normalizeAtbSpeed(v: number | undefined): number {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return 1
+  return Math.min(ATB_SPEED_MAX, Math.max(ATB_SPEED_MIN, v))
+}
+
 /** `tick(ms)` 1 回で進める時間の上限（ms）。タブ復帰などで巨大な値が来ても暴走しないための安全弁 */
 export const ATB_MAX_TICK_MS = 10_000
 
@@ -286,6 +296,11 @@ export interface BattleEngineOptions {
      * 候補窓を開いているかは表示側が `setAtbHold` で教える（エンジンは窓を知らない）。active では無関係
      */
     waitScope?: AtbWaitScope
+    /**
+     * ゲージが溜まる速さの倍率 (#880。全画面メニュー「せってい」のバトルスピード)。未指定・非有限・0 以下は 1（従来どおり）。
+     * 0.1〜10 に収める。味方・敵の両方に同じ倍率が掛かる
+     */
+    speed?: number
     initialGauges?: { party?: number[]; enemies?: number[] }
   }
   /**
@@ -314,6 +329,8 @@ export interface BattleEngineOptions {
    * 無い id は id をそのまま表示する（戦利品の id はゲームが決める不透明な文字列で、アイテムマスターに無くてもよい）
    */
   itemNames?: Record<string, string>
+  /** 呪文の表示名 (#1039)。戦闘後リザルトの「〇〇を おぼえた！」に使う id → 名前（マスターの呪文定義から作る）。無い id は id のまま */
+  spellNames?: Record<string, string>
   /**
    * 通貨名 (#881)。勝利ログ（「N ゴールドを てに いれた！」）と効果 DSL `gold` のログが共通で使う。省略は従来の「ゴールド」（既存の挙動は不変）。
    * sit-by-me は「円」を指定する。空文字は既定に落とす
@@ -359,6 +376,8 @@ export class BattleEngine {
   /** wait / menu のとき、表示側が候補窓を開いている間 true（画面の一時的な状態なので BattleState には持たない） */
   private atbHold = false
   private atbWaitScope: AtbWaitScope = 'command'
+  /** ATB ゲージの速さの倍率 (#880)。1 = 従来どおり */
+  private atbSpeed = 1
   private skills: Record<string, SkillExecution>
   /** 敵の最前列 (#896)。有効なときだけ Some。`edges` は敵ごとの占有セルの右端の列、`front` はその最大（戦闘開始時に 1 回配置して決める） */
   private enemyRowRule: { edges: Map<BattleEntity, number>; front: number } | null = null
@@ -385,6 +404,9 @@ export class BattleEngine {
   private stolenCounts = new Map<BattleEntity, number>()
   private itemNames: Record<string, string>
   private currencyName: string
+  private spellNames: Record<string, string>
+  /** ラーニング (#882) の初期値（この戦闘で新たに覚えた分を出すための基準。#1039） */
+  private initialLearned: string[] = []
   /** ラーニング (#882)。パーティ共通の習得済み（初期値＋食らって覚えた順）。結果 `BattleResult.learnedSpells` に載る */
   private learned: string[] = []
   /** ドロップを抽選した印（勝利は 1 度だけ） */
@@ -420,7 +442,9 @@ export class BattleEngine {
     }
     this.itemNames = opts.itemNames ?? {}
     this.currencyName = opts.currencyName || DEFAULT_CURRENCY_NAME
+    this.spellNames = opts.spellNames ?? {}
     for (const id of opts.learnedSpells ?? []) if (!this.learned.includes(id)) this.learned.push(id)
+    this.initialLearned = [...this.learned]
     for (const e of enemies) {
       const spec = parseLootSpec(e.loot)
       if (!spec) continue
@@ -460,6 +484,7 @@ export class BattleEngine {
     if (opts.atb) {
       this.initAtb(opts.atb)
       this.atbWaitScope = opts.atb.waitScope === 'menu' ? 'menu' : 'command'
+      this.atbSpeed = normalizeAtbSpeed(opts.atb.speed)
       this.restoreAtbQueue(opts.restore?.atbQueue)
     }
     if (opts.script) {
@@ -1139,7 +1164,7 @@ export class BattleEngine {
   private atbRate(entity: BattleEntity): number {
     // AGI に比例。0 以下・非有限でも最低 1 で進める（永久に溜まらないと戦闘が止まるため）
     const agi = Number.isFinite(entity.agi) ? Math.max(1, entity.agi) : 1
-    return agi * ATB_FILL_PER_AGI_MS
+    return agi * ATB_FILL_PER_AGI_MS * this.atbSpeed
   }
 
   /** 次にゲージが満タンになるまでの ms（remaining を上限とする）。進めるゲージが無ければ null */
@@ -1481,6 +1506,18 @@ export class BattleEngine {
         this.appendLog(`${this.lootLabel(line.itemId, line.count)} を てに いれた！`)
       }
     }
+  }
+
+  /** 戦利品の表示名（個数なし。名前が分からない id は id のまま。戦闘後リザルト #1039） */
+  itemDisplayName(itemId: string): string {
+    return hasOwn(this.itemNames, itemId) ? this.itemNames[itemId] : itemId
+  }
+
+  /** この戦闘で新たに覚えた呪文の表示名（覚えた順。初期値は含まない。戦闘後リザルト #1039） */
+  newlyLearnedSpellNames(): string[] {
+    return this.learned
+      .filter((id) => !this.initialLearned.includes(id))
+      .map((id) => (hasOwn(this.spellNames, id) ? this.spellNames[id] : id))
   }
 
   /** 戦利品の表示名（`名前` または `名前 ×N`）。名前が分からない id は id のまま */

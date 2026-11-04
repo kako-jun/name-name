@@ -68,6 +68,10 @@ import {
   canSkipResultHold,
   isResultHoldDone,
   resultHoldMs,
+  buildResultMessages,
+  resultMessageIndex,
+  isVictoryFlipOn,
+  resultMessageText,
   resultOutcomeOf,
   windowWord,
 } from './battleResult'
@@ -97,6 +101,7 @@ import {
   menuHint,
   menuKeyAction,
   moveCursor as moveMenuCursor,
+  cursorMemoryKey,
   openList,
   refitList,
   scrollList,
@@ -493,6 +498,12 @@ export interface BattleScreenOptions {
    */
   menu?: BattleMenuData
   /**
+   * 候補窓のカーソル記憶 (#880。全画面メニュー「せってい」のカーソル = メモリ)。渡すと、窓を開くとき同じ味方・同じ種類で前回選んだ行にカーソルを合わせ、
+   * 選ぶたびに書き戻す。キーは `cursorMemoryKey`（味方の id と窓の種類）、値は選んだ行の index。戦闘をまたいで持ち越すためホストが持つ（セッション内のみ。セーブしない）。
+   * 未指定は従来どおり（毎回最初に選べる行から）
+   */
+  cursorMemory?: Map<string, number>
+  /**
    * 召喚獣の登場 (#750) が始まるたびに 1 回呼ぶ（効果音を鳴らすのはホストの領分。画面は音を鳴らさない）。`ff` の演出のときだけ。
    * 未指定は何もしない
    */
@@ -769,6 +780,11 @@ export class BattleScreen extends Container {
   private closedFlag = false
   /** 勝敗が決まって演出・ダメージ数字・ログのタイプ表示が終わったあと、閉じるまでに読ませている経過時間 (ms)。null = まだ待機を始めていない (#745) */
   private resultElapsed: number | null = null
+  /** ff の勝利リザルトのメッセージ (#1039)。待機の開始時に決める。それ以外（dq・全滅）は空 */
+  private resultMessages: string[] = []
+  /** 待機中に最後に描いたメッセージ index・勝利コマ（変わったときだけ描き直す） */
+  private resultShownIndex = -2
+  private resultShownFlip = true
   /** 勝敗の待機中だけ画面全体のタップを受けているか (#745) */
   private resultTapArmed = false
   /** 待機に入る前の eventMode（閉じる時に戻す） */
@@ -1385,7 +1401,7 @@ export class BattleScreen extends Container {
     if (this.closedFlag || this.resultElapsed === null || !canSkipResultHold(this.resultElapsed))
       return
     if (this.opts.isInputSuspended?.()) return
-    this.resultElapsed = resultHoldMs(this.presentation)
+    this.resultElapsed = resultHoldMs(this.presentation, this.resultMessages.length)
     this.closeIfOver()
   }
 
@@ -1426,6 +1442,31 @@ export class BattleScreen extends Container {
     this.resultKeyListener = null
   }
 
+  /** ff の勝利リザルトのメッセージ一覧 (#1039)。ff の勝利以外は空（従来どおり） */
+  private buildResultMessageList(): string[] {
+    if (this.presentation !== 'ff' || this.engine.getState().phase !== 'victory') return []
+    const r = this.engine.getResult()
+    if (!r) return []
+    return buildResultMessages({
+      gold: r.gold,
+      exp: r.exp,
+      learnedSpellNames: this.engine.newlyLearnedSpellNames(),
+      lootNames: r.items.map((i) => this.engine.itemDisplayName(i.itemId)),
+    })
+  }
+
+  /** 待機中、メッセージの送り・勝利ポーズの交互が変わった瞬間だけ窓と姿を描き直す (#1039)。再生中の演出は advancePresentation が担う */
+  private advanceResultPresentation(): void {
+    if (this.presentation !== 'ff' || this.resultElapsed === null || this.closedFlag) return
+    const idx = resultMessageIndex(this.resultElapsed, this.resultMessages.length)
+    const flip = isVictoryFlipOn(this.resultElapsed)
+    if (idx === this.resultShownIndex && flip === this.resultShownFlip) return
+    this.resultShownIndex = idx
+    this.resultShownFlip = flip
+    this.updateMessageWindow()
+    this.applyMotionFrame()
+  }
+
   /** 戦闘が終わっていれば onClose を 1 回だけ呼ぶ */
   private closeIfOver(): void {
     if (this.closedFlag || !this.engine.isOver()) return
@@ -1436,10 +1477,17 @@ export class BattleScreen extends Container {
       if (this.logTypewriter === 'on' && isBattleLogTyping(this.logTracker)) return
       if (this.resultElapsed === null) {
         this.resultElapsed = 0
+        this.resultMessages = this.buildResultMessageList()
         this.attachResultSkip()
         this.refresh() // メッセージ窓（ff）と victory ポーズを出す
       }
-      if (!isResultHoldDone(this.resultElapsed, resultHoldMs(this.presentation))) return
+      if (
+        !isResultHoldDone(
+          this.resultElapsed,
+          resultHoldMs(this.presentation, this.resultMessages.length)
+        )
+      )
+        return
     }
     this.closedFlag = true
     this.detachResultSkip()
@@ -1467,6 +1515,7 @@ export class BattleScreen extends Container {
     // 勝敗の待機は演出方式・ATB に関わらず時間を進める (#745)
     if (this.resultElapsed !== null) {
       this.resultElapsed = advanceResultElapsed(this.resultElapsed, deltaMS)
+      this.advanceResultPresentation()
     }
     const ff = this.presentation === 'ff'
     const atb = !!this.engine.getState().atb
@@ -2587,7 +2636,12 @@ export class BattleScreen extends Container {
     if (this.menuStack.length > 0) return true
     const ctx = this.menuContext(kind)
     if (!ctx) return false
-    const next = openList(this.menuStack, kind, ctx)
+    const actorId = this.engine.getState().party[ctx.actorIndex]?.id
+    const remembered =
+      this.opts.cursorMemory && actorId !== undefined
+        ? this.opts.cursorMemory.get(cursorMemoryKey(actorId, kind))
+        : undefined
+    const next = openList(this.menuStack, kind, ctx, remembered)
     if (next === this.menuStack) return false
     this.menuActorIndex = ctx.actorIndex
     this.setMenuStack(next)
@@ -2661,6 +2715,9 @@ export class BattleScreen extends Container {
 
   private executeMenuAction(action: MenuAction, ctx: MenuContext): void {
     const entry = ctx.entries[action.entryIndex]
+    const actorId = this.engine.getState().party[ctx.actorIndex]?.id
+    if (this.opts.cursorMemory && actorId !== undefined)
+      this.opts.cursorMemory.set(cursorMemoryKey(actorId, action.kind), action.entryIndex)
     if (entry) {
       if (action.kind === 'spell') {
         this.engine.selectSpell(
@@ -3215,9 +3272,15 @@ export class BattleScreen extends Container {
     if (!m) return
     const resultOutcome =
       this.resultElapsed !== null ? resultOutcomeOf(this.engine.getState().phase) : null
+    // 勝利: メッセージ列の現在の 1 件（0 件なら窓なし）。全滅: 固定の言葉 (#1039)
+    let resultWord: string | null = null
+    if (resultOutcome === 'victory' && this.resultElapsed !== null) {
+      const i = resultMessageIndex(this.resultElapsed, this.resultMessages.length)
+      resultWord = i >= 0 ? this.resultMessages[i] : null
+    } else if (resultOutcome) resultWord = resultMessageText(resultOutcome)
     const word = windowWord(
       messageWindowText(this.playback.active?.event.omen ?? this.playback.active?.event.label),
-      resultOutcome
+      resultWord
     )
     this.logPanel.visible = word !== null
     m.visible = word !== null
@@ -3238,7 +3301,21 @@ export class BattleScreen extends Container {
       !isPlaybackBusy(this.playback) &&
       (side === 'party' ? s.phase === 'victory' : s.phase === 'defeat')
     let out: TargetSample & { forward: number } = {
-      ...restingSample({ down: hp <= 0, victory: won && hp > 0 }, this.motionTiming),
+      // 勝利の待機中、味方の生き残りは通常と victory を交互に繰り返す (#1039。最初のコマは victory)。敵の勝ち（defeat）は従来どおり固定
+      ...restingSample(
+        {
+          down: hp <= 0,
+          victory:
+            won &&
+            hp > 0 &&
+            !(
+              side === 'party' &&
+              this.resultElapsed !== null &&
+              !isVictoryFlipOn(this.resultElapsed)
+            ),
+        },
+        this.motionTiming
+      ),
       forward: 0,
     }
     const active = this.playback.active

@@ -84,3 +84,20 @@ describe('buildBattleMenu: わざ (#873)', () => {
     expect(buildBattleMenu({ party, spells: [], items: [], skills: [] })).toBeUndefined()
   })
 })
+
+describe('buildBattleMenu: たいせつなもの（#880 key）', () => {
+  const party = [member('a')]
+  it('key のアイテムは戦闘の候補窓に出さない', () => {
+    const m = buildBattleMenu({
+      party,
+      spells: [],
+      items: [item('potion', 1), { ...item('key', 1), key: true }],
+    })
+    expect(m?.items?.map((i) => i.id)).toEqual(['potion'])
+  })
+  it('たいせつなものしか無ければ menu 無し', () => {
+    expect(
+      buildBattleMenu({ party, spells: [], items: [{ ...item('key', 1), key: true }] })
+    ).toBeUndefined()
+  })
+})

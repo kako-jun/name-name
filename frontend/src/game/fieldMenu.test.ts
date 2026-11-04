@@ -715,3 +715,35 @@ describe('人物の選択は表示枠（4）を超えない', () => {
     expect(st.open && st.nav?.party).toBe(0)
   })
 })
+
+describe('キー割当の入れ替え（#880 せってい keys）', () => {
+  it('入れ替えると X / Z の決定・戻るが逆になる（Enter / Space / Esc は固定）', () => {
+    expect(menuKeyEvent('KeyZ', 1)).toEqual({ type: 'back' })
+    expect(menuKeyEvent('KeyX', 1)).toEqual({ type: 'confirm' })
+    expect(menuKeyEvent('Enter', 1)).toEqual({ type: 'confirm' })
+    expect(menuKeyEvent('Space', 1)).toEqual({ type: 'confirm' })
+    expect(menuKeyEvent('Escape', 1)).toEqual({ type: 'back' })
+    expect(menuKeyEvent('ArrowUp', 1)).toEqual({ type: 'move', dx: 0, dy: -1 })
+  })
+  it('未指定・0・未知の値は従来どおり', () => {
+    for (const k of [undefined, 0, 7]) {
+      expect(menuKeyEvent('KeyZ', k)).toEqual({ type: 'confirm' })
+      expect(menuKeyEvent('KeyX', k)).toEqual({ type: 'back' })
+    }
+  })
+  it('案内の文も入れ替えに追従する', () => {
+    const s = openMenuState({ keys: 1 })
+    expect(menuHint(s)).toContain('決定: X')
+    expect(menuHint(s)).toContain('戻る(閉じる): Z')
+    expect(menuHint(openMenuState({}))).toContain('決定: Z')
+    expect(menuHint(openMenuState({ keys: 0 }))).toContain('決定: Z')
+  })
+  it('項目画面でも入れ替えの案内', () => {
+    const s = {
+      ...(openMenuState({ keys: 1 }) as Extract<ReturnType<typeof openMenuState>, { open: true }>),
+      screen: 'item',
+    }
+    expect(menuHint(s)).toContain('決定: X')
+    expect(menuHint(s)).toContain('戻る: Z')
+  })
+})

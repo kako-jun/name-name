@@ -7,7 +7,9 @@ import { timeLimitRect } from './fieldTimeLimit'
 import {
   SAVE_SLOT_COUNT,
   baseFocus,
+  clampNav,
   computeScreenLayout,
+  entryForUse,
   initialNav,
   listCount,
   listEntries,
@@ -17,6 +19,7 @@ import {
   scrollStart,
   screenDescription,
   stepScreen,
+  tabAction,
   type FieldMenuContentDef,
   type Rect,
   type ScreenCtx,
@@ -68,6 +71,218 @@ describe('resolveContent / 既定', () => {
   it('定義の空 tabs / options は既定にフォールバック', () => {
     expect(resolveContent('x', 'item', { tabs: [] }).tabs).toHaveLength(3)
     expect(resolveContent('x', 'config', { options: [] }).options).toHaveLength(7)
+  })
+})
+
+describe('どうぐ・まほうの使う流れ (#880)', () => {
+  const itemDef: FieldMenuContentDef = {
+    tabs: [
+      { label: 'つかう', entries: [E('ポ', { id: 'potion', target: 'single' })], action: 'use' },
+      { label: 'せいとん', entries: [E('ポ', { id: 'potion' })], action: 'sort' },
+      {
+        label: 'たいせつ',
+        entries: [E('鍵', { id: 'key', description: 'ドアを開ける' })],
+        action: 'info',
+      },
+    ],
+  }
+  it('せいとんタブを決定すると sort の要求を出して一覧へ入る', () => {
+    const r = stepScreen(nav('item', { tab: 1 }), { type: 'confirm' }, ctx('item', itemDef))
+    expect(r.effect).toBe('sort')
+    expect(r.nav.focus).toBe('list')
+  })
+  it('たいせつなもの（info）の行は使えず説明バーに説明だけ', () => {
+    const r = stepScreen(
+      nav('item', { tab: 2, focus: 'list' }),
+      { type: 'confirm' },
+      ctx('item', itemDef)
+    )
+    expect(r.effect).toBe('notice')
+    expect(r.notice).toBe('ドアを開ける')
+    expect(r.nav.focus).toBe('list')
+  })
+  it('せいとんタブの行は使う相手選びに進まない', () => {
+    const r = stepScreen(
+      nav('item', { tab: 1, focus: 'list' }),
+      { type: 'confirm' },
+      ctx('item', itemDef)
+    )
+    expect(r.effect).toBe('notice')
+  })
+  it('action 未指定のタブは先頭だけ use（従来どおり）', () => {
+    const def = {
+      tabs: [
+        { label: 'a', entries: [E('x')] },
+        { label: 'b', entries: [E('y')] },
+      ],
+    }
+    expect(tabAction(resolveContent('x', 'item', def), 0)).toBe('use')
+    expect(tabAction(resolveContent('x', 'item', def), 1)).toBeUndefined()
+    expect(tabAction(resolveContent('x', 'party-list', undefined), 0)).toBeUndefined()
+  })
+  it('target を移動（上下で回り込む）・戻ると一覧へ', () => {
+    const c = ctx('item', itemDef)
+    const down = stepScreen(nav('item', { focus: 'target' }), { type: 'move', dx: 0, dy: 1 }, c)
+    expect(down.nav.target).toBe(1)
+    const wrap = stepScreen(
+      nav('item', { focus: 'target', target: 1 }),
+      { type: 'move', dx: 0, dy: 1 },
+      c
+    )
+    expect(wrap.nav.target).toBe(0)
+    const none = stepScreen(nav('item', { focus: 'target' }), { type: 'move', dx: 1, dy: 0 }, c)
+    expect(none.effect).toBe('none')
+    const back = stepScreen(nav('item', { focus: 'target' }), { type: 'back' }, c)
+    expect(back.nav.focus).toBe('list')
+    expect(back.effect).toBe('moved')
+  })
+  it('target の最中に一覧・タブのタップは無視', () => {
+    const c = ctx('item', itemDef)
+    expect(
+      stepScreen(nav('item', { focus: 'target' }), { type: 'select', target: 'list', index: 0 }, c)
+        .effect
+    ).toBe('none')
+  })
+
+  const magicDef: FieldMenuContentDef = {
+    entriesByParty: {
+      a: [
+        E('ヒール', { id: 'heal', target: 'single' }),
+        E('ケアル', { id: 'all', target: 'all' }),
+        E('じこ', { id: 'self', target: 'self' }),
+        E('ほのお', { id: 'fire', enabled: false, description: 'ここでは使えません' }),
+        E('むせんたく', { id: 'legacy' }),
+      ],
+    },
+  }
+  const mctx = (): ScreenCtx => ctx('party-list', magicDef, { partyIds: ['a', 'b'] })
+  it('まほう: 単体は対象選びへ（初期は使い手）、全体・本人は即「使う」', () => {
+    const single = stepScreen(
+      nav('party-list', { focus: 'list', party: 1, list: 0 }),
+      { type: 'confirm' },
+      ctx(
+        'party-list',
+        { entriesByParty: { b: magicDef.entriesByParty!.a } },
+        { partyIds: ['a', 'b'] }
+      )
+    )
+    expect(single.nav.focus).toBe('target')
+    expect(single.nav.target).toBe(1)
+    const all = stepScreen(
+      nav('party-list', { focus: 'list', list: 1 }),
+      { type: 'confirm' },
+      mctx()
+    )
+    expect(all.effect).toBe('use')
+    expect(all.use).toEqual({ tab: 0, list: 1, caster: 0 })
+    expect(all.nav.focus).toBe('list')
+    const self = stepScreen(
+      nav('party-list', { focus: 'list', list: 2 }),
+      { type: 'confirm' },
+      mctx()
+    )
+    expect(self.use?.list).toBe(2)
+    expect(self.use?.target).toBeUndefined()
+  })
+  it('まほう: 使えない行は理由の通知。target 未指定の行は従来の通知', () => {
+    const off = stepScreen(
+      nav('party-list', { focus: 'list', list: 3 }),
+      { type: 'confirm' },
+      mctx()
+    )
+    expect(off.effect).toBe('notice')
+    expect(off.notice).toBe('ここでは使えません')
+    const legacy = stepScreen(
+      nav('party-list', { focus: 'list', list: 4 }),
+      { type: 'confirm' },
+      mctx()
+    )
+    expect(legacy.effect).toBe('notice')
+    expect(legacy.notice).toContain('まだありません')
+  })
+  it('まほう: 対象選びの決定は使い手つきの要求', () => {
+    const r = stepScreen(
+      nav('party-list', { focus: 'target', party: 1, list: 0, target: 0 }),
+      { type: 'confirm' },
+      ctx(
+        'party-list',
+        { entriesByParty: { b: magicDef.entriesByParty!.a } },
+        { partyIds: ['a', 'b'] }
+      )
+    )
+    expect(r.use).toEqual({ tab: 0, list: 0, caster: 1, target: 0 })
+  })
+  it('entryForUse: どうぐはタブの行、まほうは使い手の一覧の行', () => {
+    expect(
+      entryForUse(resolveContent('x', 'item', itemDef), undefined, { tab: 2, list: 0, caster: -1 })
+        ?.id
+    ).toBe('key')
+    expect(
+      entryForUse(resolveContent('x', 'party-list', magicDef), ['a', 'b'], {
+        tab: 0,
+        list: 1,
+        caster: 0,
+      })?.id
+    ).toBe('all')
+    expect(
+      entryForUse(resolveContent('x', 'party-list', magicDef), ['a', 'b'], {
+        tab: 0,
+        list: 9,
+        caster: 0,
+      })
+    ).toBeUndefined()
+  })
+  it('clampNav: 一覧が縮んだら選択位置を収める（空は 0）', () => {
+    const c = ctx('item', itemDef)
+    expect(clampNav(nav('item', { tab: 0, list: 5 }), c).list).toBe(0)
+    const empty = ctx('item', { tabs: [{ label: 'a', entries: [] }] })
+    expect(clampNav(nav('item', { list: 3 }), empty).list).toBe(0)
+    const same = nav('item', { list: 0 })
+    expect(clampNav(same, c)).toBe(same)
+  })
+})
+
+describe('せってい・ステータスの content (#880)', () => {
+  it('行にカーソルがあるとき説明バーに option の description を出す', () => {
+    const c = ctx('config', {
+      options: [{ key: 'a', label: 'A', choices: ['0', '1'], description: '効く範囲の説明' }],
+    })
+    expect(screenDescription(nav('config', { focus: 'list' }), c, null)).toBe('効く範囲の説明')
+    expect(screenDescription(nav('config', { focus: 'list' }), ctx('config'), null)).toBe(
+      '設定を変えます'
+    )
+  })
+  it('parseContentDef: id・target・action・option.description・statusByParty', () => {
+    const w: string[] = []
+    const d = parseContentDef(
+      {
+        tabs: [{ label: 'a', action: 'sort', entries: [{ label: 'x', id: 'i', target: 'all' }] }],
+        options: [{ key: 'k', label: 'K', choices: ['a'], description: '説' }],
+        statusByParty: { p: [{ label: '固有素質', value: 'V' }, { label: 'x' }] },
+      },
+      'c',
+      w
+    )
+    expect(d?.tabs?.[0].action).toBe('sort')
+    expect(d?.tabs?.[0].entries[0]).toMatchObject({ id: 'i', target: 'all' })
+    expect(d?.options?.[0].description).toBe('説')
+    expect(d?.statusByParty).toEqual({ p: [{ label: '固有素質', value: 'V' }] })
+    expect(w).toHaveLength(1)
+    // 不正な action・target は無視
+    const d2 = parseContentDef(
+      { tabs: [{ label: 'a', action: 'zzz', entries: [{ label: 'x', target: 'q' }] }] },
+      'c',
+      []
+    )
+    expect(d2?.tabs?.[0].action).toBeUndefined()
+    expect(d2?.tabs?.[0].entries[0].target).toBeUndefined()
+    const bad = parseContentDef({ statusByParty: [] }, 'c', w)
+    expect(bad?.statusByParty).toBeUndefined()
+  })
+  it('既定のキー割当は2択', () => {
+    expect(
+      resolveContent('x', 'config', undefined).options.find((o) => o.key === 'keys')?.choices
+    ).toHaveLength(2)
   })
 })
 
@@ -252,10 +467,23 @@ describe('stepScreen: 決定', () => {
       'list'
     )
   })
-  it('item の使う相手の決定は「処理はまだありません」の通知', () => {
-    const r = stepScreen(nav('item', { focus: 'party' }), { type: 'confirm' }, ctx('item'))
-    expect(r.effect).toBe('notice')
-    expect(r.notice).toContain('まだありません')
+  it('item の使う相手の決定は「使う」の要求（対象 index つき）で、一覧へ戻る', () => {
+    const r = stepScreen(
+      nav('item', { focus: 'target', target: 1, list: 2 }),
+      { type: 'confirm' },
+      ctx('item')
+    )
+    expect(r.effect).toBe('use')
+    expect(r.use).toEqual({ tab: 0, list: 2, caster: -1, target: 1 })
+    expect(r.nav.focus).toBe('list')
+  })
+  it('人物0人の使う相手の決定は何も起きない', () => {
+    const r = stepScreen(
+      nav('item', { focus: 'target' }),
+      { type: 'confirm' },
+      ctx('item', undefined, { partyCount: 0 })
+    )
+    expect(r.effect).toBe('none')
   })
   it('一覧の行: 空は「なにもありません」、無効は理由、有効は説明', () => {
     const empty = stepScreen(nav('empty'), { type: 'confirm' }, ctx('empty'))
@@ -284,7 +512,7 @@ describe('stepScreen: 決定', () => {
     }
     const c = ctx('item', def)
     const r = stepScreen(nav('item', { focus: 'list' }), { type: 'confirm' }, c)
-    expect(r.nav.focus).toBe('party')
+    expect(r.nav.focus).toBe('target')
     expect(r.notice).toBe('使う相手を選んでください')
     const other = stepScreen(nav('item', { focus: 'list', tab: 1 }), { type: 'confirm' }, c)
     expect(other.effect).toBe('notice')
@@ -406,10 +634,18 @@ describe('stepScreen: select（1タップ決定）の受理条件', () => {
       stepScreen(nav('item', { focus: 'tab' }), { type: 'select', target: 'party', index: 0 }, c)
         .effect
     ).toBe('none')
+    const r = stepScreen(
+      nav('item', { focus: 'target' }),
+      { type: 'select', target: 'party', index: 1 },
+      c
+    )
+    expect(r.effect).toBe('use')
+    expect(r.use?.target).toBe(1)
+    // 範囲外は無視
     expect(
-      stepScreen(nav('item', { focus: 'party' }), { type: 'select', target: 'party', index: 0 }, c)
+      stepScreen(nav('item', { focus: 'target' }), { type: 'select', target: 'party', index: 2 }, c)
         .effect
-    ).toBe('notice')
+    ).toBe('none')
   })
   it('list: party 選択中は無視。範囲外は無視。save はスロットを1タップで決定', () => {
     const c = ctx('save')
