@@ -9,12 +9,15 @@ import { estimateTextWidth, fitLabel } from './battleLayout'
 /** 窓の設定値 (#954)。`window` のときだけ窓を出す。未指定・空・不正値は `off` */
 export type BattleEnemyListMode = 'off' | 'window'
 
-/** frontmatter `battle_enemy_list` / sample JSON `enemyList` の正規化。不正値は警告して `off` */
-export function normalizeBattleEnemyList(raw: string | null | undefined): BattleEnemyListMode {
+/** frontmatter `battle_enemy_list` / sample JSON `enemyList` の正規化。不正値は警告して `off`（`warn=false` は警告だけ止める。効かない組み合わせのとき） */
+export function normalizeBattleEnemyList(
+  raw: string | null | undefined,
+  warn = true
+): BattleEnemyListMode {
   if (typeof raw !== 'string' || raw.trim() === '') return 'off'
   const v = raw.trim().toLowerCase()
   if (v === 'window') return 'window'
-  console.warn(`battle_enemy_list '${raw}' は window ではないため無効にした`)
+  if (warn) console.warn(`battle_enemy_list '${raw}' は window ではないため無効にした`)
   return 'off'
 }
 

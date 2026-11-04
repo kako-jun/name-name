@@ -28,6 +28,7 @@ import type { BattleLayoutMode } from '../game/battleLayout'
 import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
 import type { BattleMotionPreset, BattlePresentation } from '../game/battleMotion'
+import type { BattleEnemyListMode } from '../game/battleEnemyList'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
 import type { WindowStyle } from '../game/windowStyle'
@@ -160,6 +161,8 @@ export interface FieldBattleConfig {
   presentation?: BattlePresentation
   /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
   motion?: BattleMotionPreset
+  /** 敵名ウィンドウ (#954)。`battle.enemyList`: `off` / `window`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝窓なし（従来の 2 枚構成・足元ラベル） */
+  enemyList?: BattleEnemyListMode
   /** 窓の配色 (#883)。`battle.windowStyle`: `dark` / `ff-blue`。未指定は undefined＝既定（dark） */
   windowStyle?: WindowStyle
   /** コマンド窓の配置 (#883)。`battle.commandLayout`: `grid` / `cross`。未指定は undefined＝既定（grid） */
@@ -781,6 +784,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   }
   if (b.motion !== undefined && b.motion !== 'default' && b.motion !== 'snappy')
     return fail(`battle.motion は "default" か "snappy": ${JSON.stringify(b.motion)}`)
+  if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
+    return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
     b.transition !== undefined &&
     b.transition !== 'none' &&
@@ -810,6 +815,11 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (b.motion !== undefined && (b.presentation !== 'ff' || b.layout === 'front'))
     warnings.push(
       'battle.motion は presentation "ff" かつ layout "side" のときだけ効きます（それ以外では無視されます）'
+    )
+  // enemyList も ff かつ side のときだけ効く（"off" は何もしないので警告しない）
+  if (b.enemyList === 'window' && (b.presentation !== 'ff' || b.layout === 'front'))
+    warnings.push(
+      'battle.enemyList は presentation "ff" かつ layout "side" のときだけ効きます（それ以外では無視されます）'
     )
   warnings.push(...walkWarnings)
   warnings.push(...npcWarnings)
@@ -998,6 +1008,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),
+        ...(b.enemyList ? { enemyList: b.enemyList } : {}),
         ...(b.transition ? { transition: b.transition } : {}),
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),

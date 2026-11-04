@@ -110,6 +110,12 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(o.background).toBe('bg.webp')
   })
 
+  it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
+    const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
+    expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')
+    expect('enemyList' in buildBattleScreenOptions(base, {})).toBe(false)
+  })
+
   it('ATB の設定が BattleEngine のオプションへ渡る（未指定はターン制）', () => {
     expect(buildBattleEngineOptions(load().battle)).toEqual({ atb: { mode: 'wait' } })
     expect(buildBattleEngineOptions({})).toEqual({})

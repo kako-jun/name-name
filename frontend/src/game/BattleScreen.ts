@@ -43,6 +43,7 @@ import {
   Rectangle,
   Sprite,
   Text as PixiText,
+  CanvasTextMetrics,
   TextStyle,
   Texture,
   Ticker,
@@ -2908,17 +2909,16 @@ export class BattleScreen extends Container {
     if (!view || !this.popupLayer) return
     const label = popupText(hit)
     const fontSize = fitPopupFontSize(label, popupFontSize(view.unit))
-    const makeText = (str: string) => {
-      const t = new PixiText({
-        text: str,
-        style: new TextStyle({
-          fontFamily: "'Noto Sans JP', sans-serif",
-          fontSize,
-          fontWeight: 'bold',
-          fill: POPUP_COLORS[hit.kind],
-          stroke: { color: 0x000000, width: 4 },
-        }),
+    const makeStyle = () =>
+      new TextStyle({
+        fontFamily: "'Noto Sans JP', sans-serif",
+        fontSize,
+        fontWeight: 'bold',
+        fill: POPUP_COLORS[hit.kind],
+        stroke: { color: 0x000000, width: 4 },
       })
+    const makeText = (str: string) => {
+      const t = new PixiText({ text: str, style: makeStyle() })
       t.anchor.set(0.5, 1)
       return t
     }
@@ -2930,7 +2930,14 @@ export class BattleScreen extends Container {
     let digits: PixiText[] | undefined
     if (perDigit) {
       const box = new Container()
-      const pitch = popupDigitPitch(fontSize)
+      // 桁ピッチは実フォントで '0' を測った送り幅（縁取りを含まない）。測れない環境は 0.557em に倒す (#955)
+      let advance: number | undefined
+      try {
+        advance = CanvasTextMetrics.measureText('0', makeStyle()).maxLineWidth
+      } catch {
+        advance = undefined
+      }
+      const pitch = popupDigitPitch(fontSize, advance)
       digits = chars.map((ch, i) => {
         const d = makeText(ch)
         d.position.set((i - (chars.length - 1) / 2) * pitch, 0)

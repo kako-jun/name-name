@@ -1,5 +1,6 @@
 /** ダメージ数字の桁ごとの跳ね (#955) */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CanvasTextMetrics } from 'pixi.js'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
@@ -67,6 +68,34 @@ describe('BattleScreen 桁ごとのダメージ数字 (#955)', () => {
     const p = I(s).popups[0]
     expect(p.digits).toBeUndefined()
     expect((p.text as Text).text).toMatch(/^\d{3,}$/)
+  })
+
+  it('桁ピッチは measureText("0") で測った送り幅（数字幅の広いフォントでも重ならない）。測れなければ 0.557em', () => {
+    const spy = vi
+      .spyOn(CanvasTextMetrics, 'measureText')
+      .mockReturnValue({ maxLineWidth: 31 } as unknown as CanvasTextMetrics)
+    try {
+      const s = setup({ motion: 'snappy' })
+      tap(s, 'attack')
+      run(s, 232)
+      const d = I(s).popups.find((x) => x.digits)!.digits!
+      expect(spy).toHaveBeenCalledWith('0', expect.anything())
+      expect(d[1].x - d[0].x).toBeCloseTo(31, 5)
+    } finally {
+      spy.mockRestore()
+    }
+    const bad = vi.spyOn(CanvasTextMetrics, 'measureText').mockImplementation(() => {
+      throw new Error('no 2d context')
+    })
+    try {
+      const s = setup({ motion: 'snappy' })
+      tap(s, 'attack')
+      run(s, 232)
+      const p = I(s).popups.find((x) => x.digits)!
+      expect(p.digits![1].x - p.digits![0].x).toBeCloseTo(p.fontSize * 0.557, 5)
+    } finally {
+      bad.mockRestore()
+    }
   })
 
   it('snappy: 桁ごとに Text が生成され固定ピッチで並び、時間差で動く', () => {

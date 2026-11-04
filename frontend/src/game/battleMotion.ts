@@ -248,13 +248,17 @@ export const BATTLE_MOTION_PRESETS: Readonly<Record<BattleMotionPreset, MotionTi
 
 /**
  * frontmatter `battle_motion` の値を正規化する。未指定・空は `default`（黙って）。`default` / `snappy`（大小・前後空白は無視）以外は
- * 警告して `default` にフォールバックする。
+ * 警告して `default` にフォールバックする。`warn=false` は警告だけ止める（効かない組み合わせ＝演出が dq のときの不正値。値は同じく `default`）。
  */
-export function normalizeBattleMotion(raw: string | null | undefined): BattleMotionPreset {
+export function normalizeBattleMotion(
+  raw: string | null | undefined,
+  warn = true
+): BattleMotionPreset {
   if (typeof raw !== 'string' || raw.trim() === '') return 'default'
   const v = raw.trim().toLowerCase()
   if (v === 'default' || v === 'snappy') return v
-  console.warn(`battle_motion '${raw}' は default / snappy のどちらでもないため default にした`)
+  if (warn)
+    console.warn(`battle_motion '${raw}' は default / snappy のどちらでもないため default にした`)
   return 'default'
 }
 
@@ -761,10 +765,13 @@ export function sampleDigitPopup(
 }
 
 /**
- * 1 桁ぶんの幅（固定ピッチ・px）。Noto Sans JP Bold の数字の送り幅（約 0.557em。数字は等幅）に合わせ、
- * 1 個の Text で出したときと同じ幅で並べる。
+ * 1 桁ぶんの幅（固定ピッチ・px）。`digitAdvance`（実フォントで '0' を測った送り幅・px。数字は等幅として扱う）が
+ * 渡されたらそれを使い、数字幅の広いフォント（代替フォント）でも桁が重ならないようにする。測れないとき（未指定・
+ * 非有限・0 以下）は Noto Sans JP Bold の数字の送り幅（約 0.557em）に倒す。
  */
-export function popupDigitPitch(fontSize: number): number {
+export function popupDigitPitch(fontSize: number, digitAdvance?: number): number {
+  if (typeof digitAdvance === 'number' && Number.isFinite(digitAdvance) && digitAdvance > 0)
+    return Math.max(1, digitAdvance)
   return Math.max(1, fontSize) * 0.557
 }
 
