@@ -55,6 +55,8 @@ import {
   resolveAffinityMulti,
 } from './affinity'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
+import { enemyRightEdges, resolveEnemyRow } from './enemyRow'
+import type { EnemyGridSize } from './enemyGrid'
 import { isReviveEntry } from './battleMenu'
 import {
   chooseEnemyAction,
@@ -286,6 +288,12 @@ export interface BattleEngineOptions {
     initialGauges?: { party?: number[]; enemies?: number[] }
   }
   /**
+   * 敵の前列・後列 (#896)。渡したときだけ、後列の敵への通常攻撃（近接物理）のダメージが半分になる（味方の後衛と同じ係数）。
+   * 敵の列は `formationRow`（`隊列:`）→ `grid` 上の位置（生存している敵の中で最も手前の列が前列。倒れたら繰り上がる）→ 前列、の優先順（`enemyRow.ts`）。
+   * `grid` は `BattleScreen` に渡すものと同じ（敵の `layout` から同じ配置を引く）。渡さない戦闘は従来どおり（乱数の消費順も変わらない）
+   */
+  enemyRow?: { grid?: EnemyGridSize }
+  /**
    * 敵が使える特技 (#835)。`行動:` の候補の id → 特技の実行内容（マスターの `[特技]` から `toSkillExecutions` で作る）。
    * 候補の id がここに無ければ、その行動は通常攻撃になる。エンジンはマスター参照を持たないので呼び出し側が渡す
    */
@@ -341,6 +349,8 @@ export class BattleEngine {
   private atbHold = false
   private atbWaitScope: AtbWaitScope = 'command'
   private skills: Record<string, SkillExecution>
+  /** 敵の前列・後列 (#896)。有効なときだけ Some。`edges` は敵ごとの占有セルの右端の列（戦闘開始時に 1 回配置して決める） */
+  private enemyRowRule: { edges: Map<BattleEntity, number> } | null = null
   /** 見つからない特技 id の警告を出した印（1 戦闘に 1 度だけ） */
   private warnedSkills = new Set<string>()
   /** 状態の規則 (#870)。`statuses` を解釈したもの。空なら状態異常の処理は一切走らない（従来どおり） */
@@ -389,6 +399,9 @@ export class BattleEngine {
     }
     this.rng = opts.rng ?? Math.random
     this.skills = opts.skills ?? {}
+    if (opts.enemyRow) {
+      this.enemyRowRule = { edges: enemyRightEdges(opts.enemyRow.grid, enemies) }
+    }
     this.itemNames = opts.itemNames ?? {}
     for (const e of enemies) {
       const spec = parseLootSpec(e.loot)
@@ -2432,6 +2445,13 @@ export class BattleEngine {
   }
 
   private computeAttackDamage(attacker: BattleEntity, defender: BattleEntity): number {
+    // 敵の前列・後列 (#896): 有効なとき、守る側が敵なら今の列（隊列の宣言 → グリッドの位置から導出）で補正する。
+    // 乱数の消費は変わらない（`computeAttackDamage` の 1 回だけ）
+    const rule = this.enemyRowRule
+    if (rule && this.state.enemies.includes(defender)) {
+      const row = resolveEnemyRow(defender, this.state.enemies, rule.edges) ?? defender.row
+      return computeRowAttackDamage(attacker, defender, this.rng, row)
+    }
     return computeRowAttackDamage(attacker, defender, this.rng)
   }
 }
@@ -2476,12 +2496,14 @@ export function applyRowToPhysicalDamage(
 export function computeRowAttackDamage(
   attacker: BattleEntity,
   defender: BattleEntity,
-  rng: () => number
+  rng: () => number,
+  /** 守る側の列の上書き (#896 敵の前列・後列)。省略は `defender.row` */
+  defenderRow: BattleRow | undefined = defender.row
 ): number {
   return applyRowToPhysicalDamage(
     computeAttackDamage(attacker, defender, rng),
     attacker.row,
-    defender.row
+    defenderRow
   )
 }
 

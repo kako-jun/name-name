@@ -311,6 +311,7 @@ describe('強制 (#741 段階 2): 不変条件と族 script-force', () => {
     const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0, randomScriptCount: 0 }
     const heavy = [
       'multi-target',
+      'enemy-row',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

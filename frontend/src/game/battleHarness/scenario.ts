@@ -44,6 +44,10 @@ export interface Scenario {
   /** 「わざ」(#873 / #207)。`Op` の `ability` の `k` が添字（装備中の武器のわざなど）。無いシナリオは従来どおり */
   abilities?: SkillExecution[]
   ops: Op[]
+  /** 敵の前列・後列 (#896)。あれば `BattleEngine` の `enemyRow` として渡す（`grid` は敵のグリッド）。無いシナリオは従来どおり */
+  enemyRow?: { grid?: { cols: number; rows: number } }
+  /** 通常攻撃のダメージを、敵の列の規則（#896）と操作ごとに突き合わせる（族 `enemy-row` だけ。味方は 1 人・耐性・相性・状態を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
+  checkEnemyRow?: true
   /** 魔法の全体化 (#895) の割り算の規則を操作ごとに検査する（族 `multi-target` だけ。耐性・相性を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
   checkSpread?: true
   /** 脚本制御の戦闘 (#741 / #863)。`[戦闘]` の宣言（`rules`）と、途中参戦できる味方。無いシナリオは従来どおり */
@@ -77,6 +81,8 @@ export const realEngineFactory: EngineFactory = (scenario, rng) =>
   new BattleEngine(clone(scenario.party), clone(scenario.enemies), {
     rng,
     atb: scenario.atb ? { mode: scenario.atb.mode } : undefined,
+    // 敵の前列・後列 (#896)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
+    ...(scenario.enemyRow ? { enemyRow: clone(scenario.enemyRow) } : {}),
     skills: scenario.skills ? clone(scenario.skills) : undefined,
     statuses: scenario.statuses ? clone(scenario.statuses) : undefined,
     script: scenario.script ? clone(scenario.script) : undefined,

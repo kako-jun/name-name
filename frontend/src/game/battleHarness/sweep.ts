@@ -6,6 +6,7 @@ import {
   equipmentScenarios,
   summonScenarios,
   multiTargetScenarios,
+  enemyRowScenarios,
   jobScenarios,
   lootMatrix,
   effectMatrix,
@@ -56,6 +57,7 @@ export type SweepFamily =
   | 'job'
   | 'script-force'
   | 'multi-target'
+  | 'enemy-row'
 
 /** 族 `script-force` のランダム合成の件数（固定。決定論） */
 export const FORCE_RANDOM_COUNT = 400
@@ -101,6 +103,8 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
       : [...forceMatrix(), ...randomForceScenarios(cfg.randomSeed, FORCE_RANDOM_COUNT)]),
     // 魔法の全体化 (#895)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
     ...(skip.has('multi-target') ? [] : multiTargetScenarios()),
+    // 敵の前列・後列 (#896)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
+    ...(skip.has('enemy-row') ? [] : enemyRowScenarios()),
   ]
 }
 
