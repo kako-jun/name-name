@@ -675,6 +675,9 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }
       }
     }
+    if (key === 'spells' && r.multiTarget !== undefined && typeof r.multiTarget !== 'boolean') {
+      return { ok: false, error: `${path}.multiTarget は true / false である必要があります` }
+    }
     const base = {
       id: typeof r.id === 'string' && r.id ? r.id : `${key}-${i + 1}`,
       name: r.name.trim(),
@@ -697,6 +700,8 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
         ...base,
         mp: num(r.mp, 0),
         target: typeof r.target === 'string' ? r.target : '敵単体',
+        // 全体化 (#895): `multiTarget: true` の呪文だけ対象窓で「全体」に切り替えられる（マスターの `全体化: 可` と同じ）
+        ...(r.multiTarget === true ? { multiTarget: true } : {}),
       } as T)
     } else {
       out.push({

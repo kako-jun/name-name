@@ -1,7 +1,8 @@
 // #943: 同梱の寺町サンプルの吹き出し宣言 JSON と脚本 .md の整合。
 import { describe, expect, it } from 'vitest'
 import emotionsText from '../../public/field-sample/teramachi-emotions.json?raw'
-import sampleText from './teramachi.sample.json?raw'
+import rawSampleText from './teramachi.sample.json?raw'
+import { expandedTeramachiText } from './teramachiExpanded'
 import scriptText from '../../public/field-sample/teramachi-npc.md?raw'
 import { parseFieldEmotionsText } from '../game/fieldEmotionScript'
 import { collectFieldEvents } from '../game/fieldScript'
@@ -11,6 +12,8 @@ import { buildBattleMenu } from './battleMenu'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { effectiveCommandLayout } from '../game/battleLayout'
 import { motionTimingFor } from '../game/battleMotion'
+
+const sampleText = expandedTeramachiText()
 
 describe('寺町サンプルの感情吹き出し', () => {
   it('同梱の teramachi-emotions.json は実物の parseEmotions を警告 0 で通り、3 種を宣言する', () => {
@@ -71,9 +74,10 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     const sizes = Object.values(c.monsters).map((m) => m.size)
     expect(sizes.every((s) => s !== undefined)).toBe(true)
     expect(sizes.some((s) => s && s.w * s.h >= 2)).toBe(true)
-    // sit-by-me docs/monsters.md §3-7 の gridClass（M001=1x1, M008=1x2）
-    expect(c.monsters.dragon.size).toEqual({ w: 1, h: 1 })
-    expect(c.monsters.shachihoko.size).toEqual({ w: 1, h: 2 })
+    // sit-by-me ledger/敵サイズ.yaml の グリッド種別（M149=1x1, M150=1x2, M148=2x1）
+    expect(c.monsters.M149.size).toEqual({ w: 1, h: 1 })
+    expect(c.monsters.M150.size).toEqual({ w: 1, h: 2 })
+    expect(c.monsters.M148.size).toEqual({ w: 2, h: 1 })
   })
 
   it('sit-by-me#65 commands の全コマンドが実際に機能する（死んだボタンがない）', () => {
@@ -160,5 +164,95 @@ describe('寺町サンプルの戦闘遷移 (sit-by-me#55)', () => {
     const r = parseConfig(JSON.parse(sampleText), 'http://localhost:8780/field-sample/')
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.value.battle.transition).toBe('ff-mosaic')
+  })
+})
+
+// #1020: 寺町の再開で、味方はアクスタ・poses つき、敵は寺町の台帳の敵だけ（汎用の試験敵を持ち込まない）
+describe('寺町サンプルの人物・敵（#1020）', () => {
+  const load = () => {
+    const r = parseConfig(JSON.parse(sampleText), 'http://localhost/field-sample/')
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  const CORE = ['idle', 'ready', 'step', 'slash', 'cast', 'hurt', 'down', 'victory']
+
+  it('歩行・戦闘とも spriteStyle acrylic', () => {
+    const c = load()
+    expect(c.spriteStyle).toBe('acrylic')
+    expect(c.battle.spriteStyle).toBe('acrylic')
+  })
+
+  it('設定 JSON 自体に poses・歩行絵・味方の sprite を手書きしない（目録から導く）', () => {
+    const raw = JSON.parse(rawSampleText) as {
+      player: Record<string, unknown>
+      party: Record<string, unknown>[]
+    }
+    expect(raw.player.sprites).toBeUndefined()
+    for (const m of raw.party) {
+      expect(m.poses).toBeUndefined()
+      expect(m.sprite).toBeUndefined()
+    }
+  })
+
+  it('味方 4 人の poses が 8 ポーズ全部そろう。人物単体版（-character）がある形態はそちらを使う', () => {
+    const c = load()
+    expect(c.party.map((m) => m.name)).toEqual(['ナム', 'オットン', 'シャー', 'ペー子'])
+    // 基本 8 ポーズは必ずある（special・swing-* は絵のある形態だけ追加で入る）
+    for (const m of c.party)
+      expect(Object.keys(m.poses ?? {})).toEqual(expect.arrayContaining(CORE))
+    const url = (i: number) => c.party[i].poses!.slash!
+    expect(url(0)).toMatch(/C002\/poses\/C002-elementary-wheelchair-slash\.webp$/) // C002 に -character は無い
+    expect(url(1)).toMatch(/C001\/poses\/C001-elementary-character-slash\.webp$/)
+  })
+
+  it('主人公（ナム C002 の小学生・車椅子）の歩行絵が 8 方向 3 コマ。車椅子なので歩行周期は既定のまま', () => {
+    const c = load()
+    expect(Object.keys(c.player.sprites)).toHaveLength(8)
+    expect(c.player.sprites.up[0]).toMatch(
+      /C002\/walk\/C002-elementary-wheelchair-walk-up-1\.webp$/
+    )
+    expect(c.player.cycle).toBeUndefined()
+    expect(c.player.idleFrame).toBeUndefined()
+  })
+
+  it('エンカウントの敵は寺町の台帳の敵（M108/M148=well-merge、M145/M147/M149/M150/M151=sento）だけ', () => {
+    const c = load()
+    expect(Object.keys(c.monsters).sort()).toEqual(
+      ['M108', 'M145', 'M147', 'M148', 'M149', 'M150', 'M151'].sort()
+    )
+    expect(c.monsters.dragon).toBeUndefined()
+    expect(c.monsters.shachihoko).toBeUndefined()
+    const ids = (scene: string) =>
+      [...new Set(c.scenes[scene].encounter!.groups.flatMap((g) => g.split(/[+x×]/)))].sort()
+    expect(ids('canal')).toEqual(['M108', 'M148'])
+    expect(ids('bathhouse')).toEqual(['M145', 'M147', 'M149', 'M150', 'M151'])
+    // barrier-free-ramp（TRM-10）は台帳でエンカウント 0
+    expect(c.scenes.slope.encounter!.groups).toEqual([])
+    for (const m of Object.values(c.monsters)) expect(m.sprite).toMatch(/\/enemies\/M\d+\.webp$/)
+  })
+
+  it('戦闘エフェクト（cast / impact / slash / magic）が配線されている', () => {
+    expect(Object.keys(load().battle.effects ?? {}).sort()).toEqual(
+      ['cast', 'impact', 'magic', 'slash'].sort()
+    )
+  })
+
+  it('セーブの form で時期・車椅子が変わると、poses と歩行絵がその形態になり、立位は歩行周期が [0,1,2,1]', () => {
+    const r = parseConfig(
+      JSON.parse(expandedTeramachiText({ party1: 'teen-wheelchair', party2: 'uniform' })),
+      'http://localhost/field-sample/'
+    )
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.party[0].poses!.idle).toMatch(/C002-teen-wheelchair-idle\.webp$/)
+    expect(r.value.party[1].poses!.idle).toMatch(/C001-uniform-character-idle\.webp$/)
+    expect(r.value.player.sprites.down[1]).toMatch(/C002-teen-wheelchair-walk-down-2\.webp$/)
+    // 立位への切り替え（C002 の elementary は車椅子でない）
+    const s = parseConfig(
+      JSON.parse(expandedTeramachiText({ party1: 'elementary' })),
+      'http://localhost/field-sample/'
+    )
+    if (!s.ok) throw new Error(s.error)
+    expect(s.value.player.cycle).toEqual([0, 1, 2, 1])
+    expect(s.value.player.idleFrame).toBe(1)
   })
 })

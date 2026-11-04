@@ -11,10 +11,11 @@ import {
   type FieldSampleConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
-import teramachiSample from './teramachi.sample.json?raw'
+import { expandedTeramachiText } from './teramachiExpanded'
 import diagonalSample from './diagonal-walk.sample.json?raw'
 
 const BASE = 'https://example.com/field/config.json'
+const teramachiSample = expandedTeramachiText()
 
 /** 1 項目ずつ壊すための、最小の有効設定（毎回新しいオブジェクトを返す） */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -396,7 +397,9 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     for (const raw of [teramachiSample, diagonalSample]) {
       const urls = [...raw.matchAll(/"(http:\/\/localhost:8765\/[^"]+)"/g)].map((m) => m[1])
       expect(urls.length).toBeGreaterThan(0)
-      for (const u of urls) expect(u).toMatch(/^http:\/\/localhost:8765\/assets\/images\/.+\.webp$/)
+      // characterForms.root は人物素材のディレクトリ（ファイルではない。導出後の URL は .webp。戦闘エフェクトは候補の .png）
+      for (const u of urls)
+        expect(u).toMatch(/^http:\/\/localhost:8765\/assets\/images\/(characters$|.+\.(webp|png)$)/)
     }
   })
 

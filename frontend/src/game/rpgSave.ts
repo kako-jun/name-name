@@ -102,6 +102,7 @@ function checkEntity(e: unknown, where: string, requireStats: boolean): string |
   }
   if (requireStats && !isStr(e.name)) return `${where}.name がありません`
   if (e.name !== undefined && !isStr(e.name)) return `${where}.name は文字列が必要です`
+  if (e.form !== undefined && !isStr(e.form)) return `${where}.form は文字列が必要です`
   if (e.buffs !== undefined) {
     if (!isObj(e.buffs)) return `${where}.buffs はオブジェクトが必要です`
     for (const [k, v] of Object.entries(e.buffs))

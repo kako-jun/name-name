@@ -290,3 +290,39 @@ describe('buildRpgSaveSlot / parseResumeParam', () => {
     expect(parseResumeParam('-1')).toBeNull()
   })
 })
+
+// #1020: 味方の形態（時期・車椅子）。エンジンは解釈せず、セーブ形式として検証・往復する
+describe('party[].form（#1020）', () => {
+  const base = (form: unknown): unknown => ({
+    version: RPG_SAVE_VERSION,
+    party: [{ id: 'a', form }],
+    items: {},
+    equipment: {},
+    gold: 0,
+  })
+  it('文字列は通る', () => expect(parseRpgSave(base('elementary-wheelchair')).ok).toBe(true))
+  it('文字列でなければ理由つきで失敗', () => {
+    const r = parseRpgSave(base(3))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(/party\[0\]\.form は文字列/)
+  })
+  it('設定に無い form はマスターとの差分としてスナップショットに残る（往復）', () => {
+    const def = hero('a')
+    const resolved = resolveRpg(
+      {
+        version: RPG_SAVE_VERSION,
+        party: [{ id: 'a', form: 'teen' }],
+        items: {},
+        equipment: {},
+        gold: 0,
+      },
+      { party: [def], items: [], flags: {}, enemy: () => undefined }
+    )
+    expect(resolved.party[0].form).toBe('teen')
+    const snap = snapshotRpg(
+      { party: resolved.party, inventory: {}, equipment: {}, gold: 0 },
+      { party: [def], enemy: () => undefined }
+    )
+    expect(snap.party[0]).toEqual({ id: 'a', form: 'teen' })
+  })
+})

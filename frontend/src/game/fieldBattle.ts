@@ -228,6 +228,7 @@ export function buildBattleMenuData(
         name: sp.name,
         mp: sp.mp,
         target: sp.target,
+        ...(sp.multiTarget === true ? { multiTarget: true } : {}),
         ...(sp.effect !== undefined ? { effect: sp.effect } : {}),
         ...(sp.builtin !== undefined ? { builtin: sp.builtin } : {}),
       })

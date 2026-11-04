@@ -8,49 +8,14 @@
   },
   "speed": 260,
   "edgeThreshold": 6,
+  "characterForms": {
+    "root": "http://localhost:8765/assets/images/characters",
+    "manifestUrl": "field-sample/sit-character-forms.json"
+  },
+  "spriteStyle": "acrylic",
   "player": {
-    "sprites": {
-      "up": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-up-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-up-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-up-3.webp"
-      ],
-      "down": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-down-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-down-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-down-3.webp"
-      ],
-      "left": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-left-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-left-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-left-3.webp"
-      ],
-      "right": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-right-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-right-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-right-3.webp"
-      ],
-      "upLeft": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upleft-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upleft-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upleft-3.webp"
-      ],
-      "upRight": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upright-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upright-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-upright-3.webp"
-      ],
-      "downLeft": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downleft-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downleft-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downleft-3.webp"
-      ],
-      "downRight": [
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downright-1.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downright-2.webp",
-        "http://localhost:8765/assets/images/characters/C002/walk/C002-elementary-wheelchair-walk-downright-3.webp"
-      ]
-    },
+    "character": "C002",
+    "form": "elementary-wheelchair",
     "height": 150,
     "frameMs": 140
   },
@@ -141,7 +106,7 @@
       ],
       "encounter": {
         "rate": 8,
-        "groups": ["dragon", "shachihoko", "shachihoko+shachihoko"]
+        "groups": ["M108", "M148", "M108+M148"]
       }
     },
     "bathhouse": {
@@ -161,7 +126,7 @@
       ],
       "encounter": {
         "rate": 6,
-        "groups": ["shachihoko", "dragon+shachihoko"]
+        "groups": ["M149", "M147", "M150", "M145", "M151", "M149+M147", "M150+M145"]
       }
     },
     "slope": {
@@ -175,8 +140,8 @@
         }
       ],
       "encounter": {
-        "rate": 3,
-        "groups": ["dragon", "shachihoko+shachihoko", "dragon+shachihoko"]
+        "rate": 0,
+        "groups": []
       }
     }
   },
@@ -185,27 +150,82 @@
     "minSteps": 3
   },
   "monsters": {
-    "dragon": {
-      "name": "段ボールのドラゴン",
-      "hp": 40,
-      "atk": 9,
-      "def": 4,
-      "agi": 5,
-      "exp": 20,
-      "gold": 30,
+    "M108": {
+      "name": "蓋の開いたマンホール",
+      "hp": 22,
+      "atk": 8,
+      "def": 3,
+      "agi": 4,
+      "exp": 10,
+      "gold": 12,
       "size": "1x1",
-      "sprite": "http://localhost:8765/assets/images/enemies/M001.webp"
+      "sprite": "http://localhost:8765/assets/images/enemies/M108.webp"
     },
-    "shachihoko": {
-      "name": "シャチホコ",
-      "hp": 18,
+    "M148": {
+      "name": "凍った水たまり",
+      "hp": 26,
       "atk": 7,
       "def": 2,
-      "agi": 8,
-      "exp": 8,
-      "gold": 10,
+      "agi": 5,
+      "exp": 12,
+      "gold": 14,
+      "size": "2x1",
+      "sprite": "http://localhost:8765/assets/images/enemies/M148.webp"
+    },
+    "M149": {
+      "name": "石油ストーブ",
+      "hp": 30,
+      "atk": 10,
+      "def": 4,
+      "agi": 5,
+      "exp": 18,
+      "gold": 20,
+      "size": "1x1",
+      "sprite": "http://localhost:8765/assets/images/enemies/M149.webp"
+    },
+    "M150": {
+      "name": "ライター",
+      "hp": 24,
+      "atk": 9,
+      "def": 2,
+      "agi": 9,
+      "exp": 16,
+      "gold": 16,
       "size": "1x2",
-      "sprite": "http://localhost:8765/assets/images/enemies/M008.webp"
+      "sprite": "http://localhost:8765/assets/images/enemies/M150.webp"
+    },
+    "M145": {
+      "name": "割れた酒瓶",
+      "hp": 28,
+      "atk": 9,
+      "def": 3,
+      "agi": 6,
+      "exp": 14,
+      "gold": 15,
+      "size": "2x1",
+      "sprite": "http://localhost:8765/assets/images/enemies/M145.webp"
+    },
+    "M147": {
+      "name": "扇風機・換気扇の羽根",
+      "hp": 20,
+      "atk": 8,
+      "def": 2,
+      "agi": 10,
+      "exp": 12,
+      "gold": 12,
+      "size": "1x1",
+      "sprite": "http://localhost:8765/assets/images/enemies/M147.webp"
+    },
+    "M151": {
+      "name": "古いたこ足配線",
+      "hp": 34,
+      "atk": 11,
+      "def": 4,
+      "agi": 7,
+      "exp": 24,
+      "gold": 28,
+      "size": "2x1",
+      "sprite": "http://localhost:8765/assets/images/enemies/M151.webp"
     }
   },
   "party": [
@@ -216,7 +236,8 @@
       "atk": 10,
       "def": 5,
       "agi": 6,
-      "sprite": "http://localhost:8765/assets/images/characters/C002/poses/C002-elementary-wheelchair-ready.webp"
+      "character": "C002",
+      "form": "elementary-wheelchair"
     },
     {
       "name": "オットン",
@@ -225,7 +246,8 @@
       "atk": 11,
       "def": 6,
       "agi": 7,
-      "sprite": "http://localhost:8765/assets/images/characters/C001/poses/C001-elementary-ready.webp"
+      "character": "C001",
+      "form": "elementary"
     },
     {
       "name": "シャー",
@@ -234,8 +256,9 @@
       "atk": 12,
       "def": 7,
       "agi": 5,
-      "sprite": "http://localhost:8765/assets/images/characters/C003/poses/C003-elementary-ready.webp",
-      "row": "front"
+      "row": "front",
+      "character": "C003",
+      "form": "elementary"
     },
     {
       "name": "ペー子",
@@ -244,8 +267,9 @@
       "atk": 8,
       "def": 4,
       "agi": 8,
-      "sprite": "http://localhost:8765/assets/images/characters/C004/poses/C004-elementary-ready.webp",
-      "row": "back"
+      "row": "back",
+      "character": "C004",
+      "form": "elementary"
     }
   ],
   "spells": [
@@ -290,6 +314,37 @@
     "motion": "snappy",
     "transition": "ff-mosaic",
     "logicalSize": "1920x1080",
-    "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
+    "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp",
+    "spriteStyle": "acrylic",
+    "effects": {
+      "cast": {
+        "image": "http://localhost:8765/assets/images/effects/candidates/cast-magic-v1.png",
+        "frames": 6,
+        "frameMs": 80,
+        "anchor": "hand",
+        "scale": 1.6
+      },
+      "impact": {
+        "image": "http://localhost:8765/assets/images/effects/candidates/hit-impact-v1.png",
+        "frames": 6,
+        "frameMs": 50,
+        "anchor": "center",
+        "scale": 1.2
+      },
+      "slash": {
+        "image": "http://localhost:8765/assets/images/effects/candidates/hit-slash-v1.png",
+        "frames": 6,
+        "frameMs": 50,
+        "anchor": "center",
+        "scale": 1.2
+      },
+      "magic": {
+        "image": "http://localhost:8765/assets/images/effects/candidates/cast-magic-v1.png",
+        "frames": 6,
+        "frameMs": 60,
+        "anchor": "center",
+        "scale": 1.4
+      }
+    }
   }
 }

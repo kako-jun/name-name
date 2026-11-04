@@ -68,8 +68,9 @@ describe('jobScenarios: 生成', () => {
     expect(all.some((s) => s.ops.some((o) => o.t === 'escape'))).toBe(true)
   })
 
-  it('SweepFamily `job` は buildSweep の最後に足され、skip で除ける。直前の族のシナリオは変わらない', () => {
+  it('SweepFamily `job` は buildSweep に足され（末尾は multi-target）、skip で除ける。直前の族のシナリオは変わらない', () => {
     const heavy = [
+      'multi-target',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

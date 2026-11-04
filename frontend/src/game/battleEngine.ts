@@ -38,7 +38,7 @@
  */
 
 import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
-import { applyEffect, parseEffect, rollRange } from './spellDsl'
+import { applyEffect, isSpreadableSpell, parseEffect, rollRange } from './spellDsl'
 import type { StatusDef, SummonCue } from '../types'
 import {
   activeStatusRules,
@@ -71,7 +71,13 @@ import {
   type HitSource,
 } from './enemyAi'
 import { hasOwn, safeAssign } from './ownProperty'
-import { applyDamageToHp, clampDamage, clampHp, knockOutHp } from './battleLimits'
+import {
+  applyDamageToHp,
+  clampDamage,
+  clampHp,
+  knockOutHp,
+  multiTargetDivisor,
+} from './battleLimits'
 import {
   computeFloors,
   nextScriptAction,
@@ -693,7 +699,7 @@ export class BattleEngine {
    *
    * 注: 呪文定義は呼び出し側が解決して渡す（このエンジンはマスター参照を持たない）。
    */
-  selectSpell(spell: SpellExecution, targetId?: string): void {
+  selectSpell(spell: SpellExecution, targetId?: string, scope: SpellScope = 'single'): void {
     if (this.state.phase !== 'party-input') return
     if (this.refuseIfBlocked()) return
     const caster = this.currentActor()
@@ -706,7 +712,11 @@ export class BattleEngine {
     caster.mp -= spell.mp
     this.appendLog(`${caster.name} は ${spell.name} を となえた！`)
 
-    const targets = this.resolveSpellTargets(spell, targetId)
+    // 全体化 (#895): `全体化: 可` の敵単体の呪文だけ、scope=all で生存している敵全員に当たる（MP は不変）
+    const spread = scope === 'all' && isSpreadableSpell(spell)
+    const targets = spread
+      ? this.state.enemies.filter((e) => e.hp > 0)
+      : this.resolveSpellTargets(spell, targetId)
     const amounts = new Map<BattleEntity, ComputedAmount>()
     const multi: MultiHit[] = []
     const ctx: EffectContext = {
@@ -717,6 +727,7 @@ export class BattleEngine {
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
       steal: this.stealHook(caster),
       pool: this.poolOf(caster, targets),
+      ...(spread ? { spreadDivisor: multiTargetDivisor(targets.length) } : {}),
       onAmount: (t, kind, amount, reversed) =>
         amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
       onKill: (t) => amounts.set(t, { kind: 'damage', amount: 0, kill: true }),
@@ -2511,11 +2522,16 @@ function spellDamageType(spell: { builtin?: string; effect?: string }): string |
   return parsed && parsed.kind === 'damage' ? parsed.type : undefined
 }
 
+/** 呪文の範囲 (#895)。`single` = 呪文の `target` どおり（既定）/ `all` = 全体化（`SpellExecution.multiTarget` が真の敵単体の呪文だけ生存している敵全員に当たる） */
+export type SpellScope = 'single' | 'all'
+
 /** 呪文発動の引数。マスターからの解決は呼び出し側で行う */
 export interface SpellExecution {
   name: string
   mp: number
   target: string // "味方単体" / "敵全体" 等
+  /** 全体化できるか (#895)。魔法定義の `全体化: 可`。真かつ対象が敵単体のときだけ `selectSpell` の `scope: 'all'` が効く。無ければ従来どおり */
+  multiTarget?: boolean
   effect?: string
   builtin?: string
 }

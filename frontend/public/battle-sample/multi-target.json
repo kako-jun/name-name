@@ -1,0 +1,65 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "commandLayout": "cross",
+  "statuses": [
+    { "id": "sleep", "name": "ねむり", "duration": "3", "action": "不能", "cure": "被ダメージ" }
+  ],
+  "spells": [
+    {
+      "id": "fire",
+      "name": "ファイア",
+      "mp": 3,
+      "target": "敵単体",
+      "multiTarget": true,
+      "effect": "damage 60..60 type=fire"
+    },
+    {
+      "id": "ice",
+      "name": "ブリザド",
+      "mp": 3,
+      "target": "敵単体",
+      "effect": "damage 60..60 type=ice"
+    },
+    {
+      "id": "death",
+      "name": "デス",
+      "mp": 6,
+      "target": "敵単体",
+      "multiTarget": true,
+      "effect": "damage_full"
+    },
+    {
+      "id": "sleepel",
+      "name": "スリプル",
+      "mp": 3,
+      "target": "敵単体",
+      "multiTarget": true,
+      "effect": "status sleep 確率=80"
+    },
+    {
+      "id": "meteor",
+      "name": "メテオ",
+      "mp": 8,
+      "target": "敵全体",
+      "multiTarget": true,
+      "effect": "damage 60..60"
+    }
+  ],
+  "party": [
+    {
+      "id": "mage",
+      "name": "まほうつかい",
+      "hp": 300,
+      "mp": 80,
+      "atk": 12,
+      "def": 2,
+      "agi": 6
+    }
+  ],
+  "enemies": [
+    { "id": "imp1", "name": "こあくま", "hp": 300, "atk": 2, "def": 0, "agi": 2 },
+    { "id": "imp2", "name": "こあくま", "hp": 300, "atk": 2, "def": 0, "agi": 2 },
+    { "id": "imp3", "name": "こあくま", "hp": 300, "atk": 2, "def": 0, "agi": 2 }
+  ]
+}

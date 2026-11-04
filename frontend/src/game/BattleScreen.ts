@@ -101,6 +101,7 @@ import {
   refitList,
   scrollList,
   setListCursor,
+  setTargetAll,
   setTargetCursor,
   selectMarkTargets,
   type BattleItemEntry,
@@ -2450,6 +2451,7 @@ export class BattleScreen extends Container {
         this.setMenuStack(setTargetCursor(this.menuStack, side, i, ctx))
         this.confirmMenu()
       },
+      onScopeTap: (all) => this.setMenuStack(setTargetAll(this.menuStack, all)),
       onScroll: (delta) => {
         const ctx = this.menuContext()
         if (ctx) this.setMenuStack(scrollList(this.menuStack, delta, ctx))
@@ -2587,7 +2589,11 @@ export class BattleScreen extends Container {
     const entry = ctx.entries[action.entryIndex]
     if (entry) {
       if (action.kind === 'spell') {
-        this.engine.selectSpell(entry as BattleSpellEntry, action.targetId)
+        this.engine.selectSpell(
+          entry as BattleSpellEntry,
+          action.targetId,
+          action.scope === 'all' ? 'all' : 'single'
+        )
       } else if (action.kind === 'skill') {
         this.engine.selectSkill(entry as BattleSkillEntry, action.targetId)
       } else if (action.kind === 'summon') {
