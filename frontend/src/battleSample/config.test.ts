@@ -2272,3 +2272,34 @@ describe('parseMenuList: 全画面メニュー用の任意項目（#880）', () 
     expect(r).toEqual({ ok: true, value: [{ id: 'items-1', name: 'a' }] })
   })
 })
+
+describe('設定 JSON: ラーニング (#882)', () => {
+  const raw = {
+    skills: [{ id: 'breath', name: 'ほのおのいき', effect: 'damage 5..5', learns: 'flame' }],
+    spells: [
+      { id: 'flame', name: 'ほのお', mp: 1, effect: 'damage 9..9' },
+      { id: 'ice', name: 'こおり', mp: 1, effect: 'damage 9..9' },
+    ],
+  }
+  const ids = (cfg: unknown) => {
+    const r = parseConfig(cfg, BASE)
+    if (!r.ok) throw new Error(r.error)
+    const setup = buildBattleSetup(r.value, view())
+    return { setup, spells: setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id) }
+  }
+  it('覚える呪文は習得済み（learnedSpells）のときだけ全員の候補に出る。エンジンへも渡す', () => {
+    expect(ids(raw).spells).toEqual(['ice'])
+    expect(ids(raw).setup.learnedSpells).toBeUndefined()
+    const learned = ids({ ...raw, learnedSpells: ['flame'] })
+    expect(learned.spells).toEqual(['flame', 'ice'])
+    expect(learned.setup.learnedSpells).toEqual(['flame'])
+  })
+  it('learns を書かなければ従来どおり（全部出る）', () => {
+    const r = ids({ ...raw, skills: [{ id: 'breath', name: 'x', effect: 'damage 1..2' }] })
+    expect(r.spells).toEqual(['flame', 'ice'])
+  })
+  it('learnedSpells が文字列の配列でなければ読み込みエラー', () => {
+    expect(parseConfig({ ...raw, learnedSpells: 'flame' }, BASE).ok).toBe(false)
+    expect(parseConfig({ ...raw, learnedSpells: [1] }, BASE).ok).toBe(false)
+  })
+})

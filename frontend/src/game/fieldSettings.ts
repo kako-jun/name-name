@@ -1,7 +1,12 @@
 /**
  * 全画面メニュー「せってい」(#880) の値 → 実際の挙動への変換。DOM / PixiJS に触れない純粋関数だけを持つ。
  *
- * 値は `FieldMenuState.settings`（key → 選択肢 index）。キーと選択肢は `DEFAULT_CONFIG_OPTIONS`（`fieldMenuScreens.ts`）。
+ * 値は `FieldMenuState.settings`（key → 選択肢 index）。表示する項目は既定が `DEFAULT_CONFIG_OPTIONS`（`fieldMenuScreens.ts`）で、
+ * セーブ・復元で許可するキーと選択肢数は**実際に使う options**（定義側の独自 options を含む。`normalizeSettings`）で決まる。
+ *
+ * 注意: `settingIndex` / 既定 index / 選択肢数の判定（`battleModeOf` `battleSpeedFactor` `messageMsPerChar` など標準キーの解釈）は
+ * `DEFAULT_CONFIG_OPTIONS` の選択肢数を前提にする。定義側が標準キー（`messageSpeed` など）を別の選択肢数で再利用すると、
+ * 範囲外の値は既定に落ちる等、表示と挙動が食い違う。標準キーは既定の選択肢数のまま使い、別の意味の項目は独自キーにすること。
  * 値が無いキーは「設定の既定」（ATB の方式はゲーム設定の `battle.atbMode`、速さ・メッセージは 3 = 等倍）のまま動く。
  *
  * 接続先（2026-11 時点）:

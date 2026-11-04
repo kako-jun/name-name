@@ -934,6 +934,7 @@ fn build_skill_def(id: String, entries: &[(String, String)]) -> Option<SkillDef>
         summon_id: lookup_master_string(entries, &["召喚獣id", "summon_id", "summonId"])
             .filter(|v| !v.is_empty()),
         tags: collect_id_list(entries, &["タグ", "tags", "tag"]),
+        learns: lookup_master_string(entries, &["覚える", "learns"]).filter(|v| !v.is_empty()),
     })
 }
 

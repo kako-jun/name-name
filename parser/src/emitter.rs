@@ -1364,6 +1364,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(t) = &sk.tags {
                     out.push_str(&format!("タグ: {}\n", t.join(", ")));
                 }
+                if let Some(l) = &sk.learns {
+                    out.push_str(&format!("覚える: {l}\n"));
+                }
                 out.push_str("[/特技]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -2422,6 +2425,7 @@ mod tests {
             telegraph: None,
             summon_id: Some("ink_beast".to_string()),
             tags: Some(vec!["ぬすむ".to_string()]),
+            learns: Some("flame".to_string()),
         }));
         let out = emit(&doc);
         assert!(out.contains("[特技 ink]"));
@@ -2429,7 +2433,7 @@ mod tests {
         assert!(out.contains("対象: 相手全体"));
         assert!(out.contains("効果: damage 3..5"));
         assert!(out.contains("メッセージ: {user}は 墨を はいた！"));
-        assert!(out.contains("召喚獣id: ink_beast\nタグ: ぬすむ\n[/特技]"));
+        assert!(out.contains("召喚獣id: ink_beast\nタグ: ぬすむ\n覚える: flame\n[/特技]"));
         assert!(!out.contains("MP:"));
         assert!(out.contains("[/特技]"));
     }

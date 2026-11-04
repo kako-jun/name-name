@@ -315,6 +315,7 @@ describe('強制 (#741 段階 2): 不変条件と族 script-force', () => {
       'enemy-level',
       'script-grant',
       'job-conversion',
+      'learning',
       'effect-matrix',
       'enemy-skill',
       'stack-order',
