@@ -1321,6 +1321,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(s) = &sp.school {
                     out.push_str(&format!("系統: {s}\n"));
                 }
+                if sp.multi_target {
+                    out.push_str("全体化: 可\n");
+                }
                 if let Some(e) = &sp.effect {
                     out.push_str(&format!("効果: {e}\n"));
                 }
@@ -2362,6 +2365,7 @@ mod tests {
             effect: None,
             builtin: Some("zaraki".to_string()),
             school: None,
+            multi_target: false,
         }));
         let out = emit(&doc);
         assert!(out.contains("[呪文 ザラキ]"));
@@ -2369,6 +2373,22 @@ mod tests {
         assert!(out.contains("対象: 敵全体"));
         assert!(out.contains("builtin: zaraki"));
         assert!(out.contains("[/呪文]"));
+    }
+
+    #[test]
+    fn emits_spell_block_with_multi_target() {
+        let doc = make_doc_with_event(Event::Spell(SpellDef {
+            id: "メラ".to_string(),
+            name: "メラ".to_string(),
+            mp: 2,
+            target: "敵単体".to_string(),
+            effect: Some("damage 8..14".to_string()),
+            builtin: None,
+            school: None,
+            multi_target: true,
+        }));
+        let out = emit(&doc);
+        assert!(out.contains("対象: 敵単体\n全体化: 可\n効果: damage 8..14\n[/呪文]"));
     }
 
     #[test]

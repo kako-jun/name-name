@@ -759,6 +759,9 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
     }
     let target =
         lookup_master_string(entries, &["対象", "target"]).unwrap_or_else(|| "敵単体".to_string());
+    let multi_target = lookup_master_value(entries, &["全体化", "multi_target", "multiTarget"])
+        .map(|v| parse_multi_target_flag(&id, v))
+        .unwrap_or(false);
     Some(SpellDef {
         id,
         name,
@@ -767,7 +770,23 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
         effect: lookup_master_string(entries, &["効果", "effect"]),
         builtin: lookup_master_string(entries, &["builtin"]),
         school: lookup_master_string(entries, &["系統", "school"]),
+        multi_target,
     })
+}
+
+/// `全体化:` の真偽（可 / はい / true / yes / on / 1 / 有効 = 真、不可 / いいえ / false / no / off / 0 / 無効 / 空 = 偽）(#895)。
+/// 読めない値は警告して偽（全体化しない = 従来どおり）。
+fn parse_multi_target_flag(id: &str, raw: &str) -> bool {
+    match raw.trim().to_lowercase().as_str() {
+        "可" | "はい" | "true" | "yes" | "on" | "1" | "有効" => true,
+        "不可" | "いいえ" | "false" | "no" | "off" | "0" | "無効" | "" => false,
+        other => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [呪文 {id}] の 全体化 `{other}` は読めないため 不可 にした（可 / 不可）"
+            ));
+            false
+        }
+    }
 }
 
 /// `想像:` の真偽（はい / true / on / 1 / 有効 = 真、いいえ / false / off / 0 / 無効 = 偽）。読めない値は警告して偽。

@@ -667,6 +667,14 @@ pub struct SpellDef {
     /// 系統（"fire" / "ice" / "holy" / "breath" 等、耐性計算用）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub school: Option<String>,
+    /// 全体化できるか（`全体化: 可`、#895）。対象が `敵単体` の呪文だけ、戦闘中の対象窓で「全体」に切り替えられる。
+    /// 書かない・`不可` は偽（従来どおり）。
+    #[serde(
+        default,
+        rename = "multiTarget",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub multi_target: bool,
 }
 
 /// 特技定義 (#834、敵の行動パターン P0 / 親 #832)。

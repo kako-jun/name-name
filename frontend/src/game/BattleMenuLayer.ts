@@ -11,6 +11,7 @@ import {
   handCells,
   type HandPlacement,
   type MenuListView,
+  type MenuScopeToggleView,
   type MenuTargetView,
   type MenuView,
 } from './battleMenuLayout'
@@ -30,6 +31,8 @@ export interface BattleMenuHost {
   onScroll(delta: number): void
   /** 対象がタップされた */
   onTargetTap(side: TargetSide, index: number): void
+  /** 全体化の たんたい / ぜんたい の行がタップされた (#895。`all` = ぜんたい) */
+  onScopeTap(all: boolean): void
   /** 窓の外（背景）がタップされた = キャンセル */
   onCancelTap(): void
 }
@@ -385,6 +388,36 @@ export class BattleMenuLayer extends Container {
     }
     for (const h of v.hands) layer.addChild(this.hand(h))
     this.body.addChild(layer)
+    if (v.toggle) this.drawScopeToggle(v.toggle)
+  }
+
+  /** 全体化の切り替え窓 (#895)。隠れた一覧窓の位置に「たんたい / ぜんたい」の 2 行を常に出す。行のタップでも切り替わる */
+  private drawScopeToggle(t: MenuScopeToggleView): void {
+    const win = new Container()
+    // 窓の中のタップは背景（キャンセル）へ届かせない
+    win.eventMode = 'static'
+    const panel = this.host.makePanel()
+    win.addChild(panel)
+    this.host.drawPanel(panel, t.rect.x, t.rect.y, t.rect.w, t.rect.h, true)
+    for (const row of t.rows) {
+      const label = new PixiText({
+        text: row.label,
+        style: this.styled(row.selected ? ROW_COLOR : ROW_DISABLED_COLOR),
+      })
+      label.anchor.set(0, 0.5)
+      label.eventMode = 'none'
+      label.x = row.rect.x
+      label.y = row.rect.y + row.rect.h / 2
+      win.addChild(label)
+      const hit = new Container()
+      hit.eventMode = 'static'
+      hit.cursor = 'pointer'
+      hit.hitArea = new Rectangle(t.rect.x, row.rect.y, t.rect.w, row.rect.h)
+      hit.on('pointertap', () => this.host.onScopeTap(row.all))
+      win.addChild(hit)
+    }
+    win.addChild(this.hand(t.hand))
+    this.body.addChild(win)
   }
 
   private moreMark(mark: string, x: number, y: number, anchorY: number): PixiText {

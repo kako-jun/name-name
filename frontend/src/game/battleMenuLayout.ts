@@ -7,7 +7,7 @@
  * - 手のカーソルは 1 コマ 2px のドット絵。敵は右側から左向き、味方は左側から右向き、一覧は行の左から右向き
  */
 import type { MenuRow, MenuStack, MenuContext, MenuKind, TargetSide } from './battleMenu'
-import { targetHands } from './battleMenu'
+import { targetHands, targetScopeOf } from './battleMenu'
 import { estimateTextWidth, fitLabel, SIDE_GAP, SIDE_PADDING, type Rect } from './battleLayout'
 
 export const MENU_ROW_HEIGHT = 28
@@ -166,12 +166,25 @@ export interface MenuListView {
   active: boolean
 }
 
+/** 全体化の切り替え窓 (#895)。「たんたい」「ぜんたい」の 2 行。対象窓のあいだ、隠れた一覧窓の位置に常に出す */
+export interface MenuScopeToggleView {
+  rect: Rect
+  rows: Array<{ label: string; all: boolean; selected: boolean; rect: Rect }>
+  /** 選択中の行の左の手 */
+  hand: HandPlacement
+}
+
 export interface MenuTargetView {
   type: 'target'
   hands: HandPlacement[]
   /** タップで対象を選ぶ当たり判定 */
   hits: Array<{ side: TargetSide; index: number; rect: Rect }>
+  /** 全体化できる呪文のときだけ付く (#895)。たんたい / ぜんたい の切り替え窓 */
+  toggle?: MenuScopeToggleView
 }
+
+/** 全体化の切り替え窓の行の表示名 (#895)。UI は絵文字を使わずテキスト */
+export const SCOPE_TOGGLE_LABELS = { single: 'たんたい', all: 'ぜんたい' } as const
 
 export type MenuView = Array<MenuListView | MenuTargetView>
 
@@ -240,21 +253,50 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
       list.forEach((e, index) => {
         const r = slotOf(side, index)
         if (!r) return
-        if (w.spec.scope === 'single') {
+        const scope = targetScopeOf(w)
+        if (scope === 'single') {
           // target が示す側の、指せる者（生存者。蘇生は倒れた味方）だけ
           if (side !== w.side) return
           if (w.spec.revive ? e.hp > 0 : e.hp <= 0) return
           hits.push({ side, index, rect: r })
-        } else if (w.spec.scope === 'all' && side === w.spec.side && e.hp > 0) {
+        } else if (scope === 'all' && side === w.spec.side && e.hp > 0) {
           hits.push({ side, index, rect: r })
-        } else if (w.spec.scope === 'self' && side === 'party' && index === ctx.actorIndex) {
+        } else if (scope === 'self' && side === 'party' && index === ctx.actorIndex) {
           hits.push({ side, index, rect: r })
         }
       })
     }
     candidates('enemy', ctx.enemies)
     candidates('party', ctx.party)
-    out.push({ type: 'target', hands, hits })
+    const view: MenuTargetView = { type: 'target', hands, hits }
+    if (w.spec.multiAllowed) {
+      // 全体化の切り替え窓 (#895)。隠れた一覧窓と同じ位置・幅（行は 2 つ）に出し、手が今の状態の行を指す
+      const labels = [
+        { label: SCOPE_TOGGLE_LABELS.single, all: false },
+        { label: SCOPE_TOGGLE_LABELS.all, all: true },
+      ]
+      const { rect } = computeListWindowRect(
+        g,
+        labels.map((l) => ({ label: l.label, cost: '', disabled: false }))
+      )
+      const rowRect = (i: number): Rect => ({
+        x: rect.x + MENU_PADDING_X + MENU_HAND_SLOT,
+        y: rect.y + MENU_PADDING_Y + i * MENU_ROW_HEIGHT,
+        w: Math.max(0, rect.w - MENU_PADDING_X * 2 - MENU_HAND_SLOT),
+        h: MENU_ROW_HEIGHT,
+      })
+      const cur = w.all === true ? 1 : 0
+      view.toggle = {
+        rect,
+        rows: labels.map((l, i) => ({ ...l, selected: i === cur, rect: rowRect(i) })),
+        hand: {
+          x: rect.x + MENU_PADDING_X,
+          y: rowRect(cur).y + MENU_ROW_HEIGHT / 2 - HAND_HEIGHT / 2,
+          facing: 'right',
+        },
+      }
+    }
+    out.push(view)
   })
   return out
 }

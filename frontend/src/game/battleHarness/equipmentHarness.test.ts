@@ -78,6 +78,7 @@ describe('equipmentScenarios: 生成', () => {
   it('SweepFamily `equipment` は buildSweep の `job` の前に足され、skip で除ける。直前の族のシナリオは変わらない', () => {
     // 重い族は skip で省いて、末尾に足されることだけを確かめる（既存族のバイト一致は npm run test:battle-harness の出力比較で見る）
     const heavy = [
+      'multi-target',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

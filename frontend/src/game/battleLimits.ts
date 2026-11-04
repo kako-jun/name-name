@@ -80,3 +80,31 @@ export function knockOutHp(entity: { hp: number; hpFloor?: number }): boolean {
   entity.hp = Math.min(entity.hp, floor)
   return entity.hp <= 0
 }
+
+/**
+ * 全体化 (#895) の「割り方」の唯一の口。単体を狙う魔法（`全体化: 可`）を戦闘中に「全体」へ切り替えたとき、
+ * ダメージの基礎値と即死・状態付与の成功率を、この関数が返す数で割る。引数は全体化した瞬間の生存対象数。
+ * 現行: 生存対象数そのもの（kako-jun 原文『ダメージも敵の数で割り算・確率はその分下がる』）。
+ * FF6 の「複数対象は ×1/2」方式に替えるなら、ここを `return aliveTargets >= 2 ? 2 : 1` に替えるだけでよい（ダメージ・成功率の両方が追従する）。
+ * 1 未満・非有限は 1（割らない）。
+ */
+export function multiTargetDivisor(aliveTargets: number): number {
+  return Number.isFinite(aliveTargets) && aliveTargets >= 1 ? Math.floor(aliveTargets) : 1
+}
+
+/**
+ * 全体化したときのダメージ基礎値（属性相性・耐性を掛ける前）。`divisor` で割って端数切り捨て、**最低 1**。
+ * 0 以下の基礎値（`damage 0..0` や負値）は触らない。有限でない値（即死の Infinity）も触らない。`divisor` が 1 以下なら素通し
+ */
+export function spreadDamageBase(base: number, divisor: number): number {
+  if (divisor <= 1 || !Number.isFinite(base) || base <= 0) return base
+  return Math.max(1, Math.floor(base / divisor))
+}
+
+/**
+ * 全体化したときの即死・状態付与の成功率（0〜1。相性補正・成長の加算・`MAX_STATUS_CHANCE` の頭打ちのあと）。`divisor` で割る。
+ * 割るだけなので `MAX_STATUS_CHANCE` を超えない。`divisor` が 1 以下なら素通し
+ */
+export function spreadSuccessRate(rate: number, divisor: number): number {
+  return divisor <= 1 ? rate : rate / divisor
+}

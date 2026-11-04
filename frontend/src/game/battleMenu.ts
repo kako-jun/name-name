@@ -12,7 +12,7 @@
  * - 対象は呪文の `target` 文字列（味方単体 / 敵全体 など）から決まる。単体は手が 1 本、全体は対象の全員に同時に手が立つ
  */
 import type { ItemExecution, SkillExecution, SpellExecution, SummonExecution } from './battleEngine'
-import { parseEffect, type BattleEntity } from './spellDsl'
+import { isSpreadableSpell, parseEffect, type BattleEntity } from './spellDsl'
 
 export type MenuKind = 'spell' | 'item' | 'skill' | 'summon'
 export type TargetSide = 'enemy' | 'party'
@@ -24,6 +24,8 @@ export interface TargetSpec {
   scope: TargetScope
   /** single のとき、指せるのが倒れた味方だけ（蘇生）か。それ以外は生きている者だけ。蘇生の呪文・アイテムだけ true */
   revive?: boolean
+  /** single のとき、対象窓で「全体」に切り替えられるか (#895)。`全体化: 可` の敵単体の呪文だけ true（もともと全体の呪文は単体化しない） */
+  multiAllowed?: boolean
 }
 
 /** 呪文の候補。`SpellExecution`（エンジンへ渡す形）に一覧用の id を足したもの */
@@ -159,7 +161,17 @@ export function targetSpecOf(kind: MenuKind, entry: BattleMenuEntry): TargetSpec
       : kind === 'skill' || kind === 'summon'
         ? parseSkillTarget((entry as BattleSkillEntry).target)
         : ITEM_TARGET
-  return spec.scope === 'single' && isReviveEntry(kind, entry) ? { ...spec, revive: true } : spec
+  if (spec.scope === 'single' && isReviveEntry(kind, entry)) return { ...spec, revive: true }
+  // 全体化 (#895): `全体化: 可` の敵単体の呪文だけ、対象窓で「全体」へ切り替えられる
+  if (kind === 'spell' && spec.scope === 'single' && isSpreadableSpell(entry as BattleSpellEntry)) {
+    return { ...spec, multiAllowed: true }
+  }
+  return spec
+}
+
+/** 対象窓の実効の範囲 (#895)。全体化中（`all`）は、もとが single でも all として扱う */
+export function targetScopeOf(w: TargetWindow): TargetScope {
+  return w.all === true && w.spec.multiAllowed === true ? 'all' : w.spec.scope
 }
 
 /**
@@ -194,6 +206,8 @@ export interface TargetWindow {
   side: TargetSide
   /** single のとき手が指している index（side の配列の index）。all / self では使わない */
   cursor: number
+  /** 全体化中か (#895)。`spec.multiAllowed` のときだけ立てられる（`setTargetAll`）。立っている間は all と同じに扱う */
+  all?: boolean
 }
 
 export type MenuWindow = ListWindow | TargetWindow
@@ -207,6 +221,8 @@ export interface MenuAction {
   kind: MenuKind
   entryIndex: number
   targetId?: string
+  /** 全体化して確定した (#895)。無ければ呪文の `target` どおり（単体は `targetId` を持つ） */
+  scope?: 'all'
 }
 
 export interface MenuResult {
@@ -315,9 +331,10 @@ export function targetHands(
   enemies: readonly BattleEntity[],
   actorIndex: number
 ): Array<{ side: TargetSide; index: number }> {
-  if (w.spec.scope === 'single') return [{ side: w.side, index: w.cursor }]
-  if (w.spec.scope === 'self') return [{ side: 'party', index: actorIndex }]
-  if (w.spec.scope === 'all') {
+  const scope = targetScopeOf(w)
+  if (scope === 'single') return [{ side: w.side, index: w.cursor }]
+  if (scope === 'self') return [{ side: 'party', index: actorIndex }]
+  if (scope === 'all') {
     const list = w.spec.side === 'enemy' ? enemies : party
     return aliveIndexes(list).map((index) => ({ side: w.spec.side, index }))
   }
@@ -341,7 +358,11 @@ export function moveCursor(stack: MenuStack, dir: MenuDirection, ctx: MenuContex
       { ...w, cursor, top: scrollTopFor(cursor, w.top, n, ctx.maxRows) },
     ]
   }
-  if (w.spec.scope !== 'single') return stack
+  // 全体化できる呪文は、左右キーで たんたい / ぜんたい を切り替える (#895)
+  if (w.spec.multiAllowed && (dir === 'left' || dir === 'right')) {
+    return setTargetAll(stack, w.all !== true)
+  }
+  if (targetScopeOf(w) !== 'single') return stack
   if (dir === 'left' || dir === 'right') return stack
   const cands = singleCandidates(w.side, ctx.party, ctx.enemies, w.spec.revive)
   if (cands.length === 0) return stack
@@ -369,9 +390,19 @@ export function setTargetCursor(
   ctx: MenuContext
 ): MenuStack {
   const w = stack[stack.length - 1]
-  if (!w || w.type !== 'target' || w.spec.scope !== 'single' || side !== w.side) return stack
+  if (!w || w.type !== 'target' || targetScopeOf(w) !== 'single' || side !== w.side) return stack
   if (!singleCandidates(side, ctx.party, ctx.enemies, w.spec.revive).includes(index)) return stack
   return [...stack.slice(0, -1), { ...w, cursor: index }]
+}
+
+/**
+ * 対象窓の たんたい / ぜんたい を指定する (#895。キーの左右・タップ共通)。`multiAllowed` の対象窓だけ。
+ * そうでない・すでにその状態のときは今のまま（同じ stack を返す）。全体 → 単体へ戻したときの手は直前の位置のまま
+ */
+export function setTargetAll(stack: MenuStack, all: boolean): MenuStack {
+  const w = stack[stack.length - 1]
+  if (!w || w.type !== 'target' || !w.spec.multiAllowed || (w.all === true) === all) return stack
+  return [...stack.slice(0, -1), { ...w, all }]
 }
 
 /**
@@ -434,6 +465,12 @@ export function confirm(stack: MenuStack, ctx: MenuContext): MenuResult {
     }
   }
   const action: MenuAction = { kind: w.kind, entryIndex: w.entryIndex }
+  if (targetScopeOf(w) === 'all' && w.spec.scope === 'single') {
+    // 全体化 (#895): 生きている敵が 1 体もいなければ空撃ちしない
+    if (aliveIndexes(ctx.enemies).length === 0) return { stack, blocked: 'empty' }
+    action.scope = 'all'
+    return { stack: EMPTY_STACK, action }
+  }
   if (w.spec.scope === 'single') {
     const list = w.side === 'enemy' ? ctx.enemies : ctx.party
     const target = list[w.cursor]
@@ -512,6 +549,16 @@ export function menuHint(
   } else if (w.type === 'list') {
     long = '↑↓: えらぶ  Enter・タップ: けってい  Esc・そとをタップ: もどる'
     short = '↑↓ えらぶ  Enter けってい  Esc もどる'
+  } else if (w.spec.multiAllowed) {
+    // 全体化できる呪文 (#895): たんたい / ぜんたい の切り替えを案内する（窓の「たんたい / ぜんたい」の行をタップでも切り替わる）
+    if (w.all === true) {
+      long = '←→: たんたいにする  Enter・タップ: けってい  Esc・そとをタップ: もどる'
+      short = '←→ たんたい  Enter けってい  Esc もどる'
+    } else {
+      long =
+        '↑↓: たいしょう  ←→: ぜんたいにする  Enter・タップ: けってい  Esc・そとをタップ: もどる'
+      short = '↑↓ たいしょう  ←→ ぜんたい  Enter けってい  Esc もどる'
+    }
   } else if (w.spec.scope === 'single') {
     long = '↑↓: たいしょう  Enter・タップ: けってい  Esc・そとをタップ: もどる'
     short = '↑↓ たいしょう  Enter けってい  Esc もどる'

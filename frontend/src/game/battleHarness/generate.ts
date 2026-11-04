@@ -1247,3 +1247,79 @@ export function jobScenarios(): Scenario[] {
   }
   return out
 }
+
+/**
+ * 魔法の全体化 (#895): 呪文の種類（全体化: 可の敵単体 / 可でない敵単体 / 可の敵全体 / 可の味方単体）× 効果 × 範囲（単体 / 全体）× 敵の並び（全員生存・倒れた敵が混じる・生存 1 体・多数）
+ * × ターン制 / ATB。呪文を 3 回撃つ。割り算の規則（基礎値を生存数で割り、端数切り捨て・最低 1）が全体化した可の敵単体にだけ効くこと、
+ * 可でない呪文・敵全体・味方単体は範囲に関わらず従来どおりであることを `multi-target-invariant`（run.ts）で見る。
+ * 耐性・相性は持たせない（割った基礎値の範囲を厳密に検査するため。相性との掛け合わせは単体テストが持つ）
+ */
+export const MULTI_TARGET_SPELLS: ReadonlyArray<{
+  name: string
+  target: string
+  multiTarget: boolean
+}> = [
+  { name: 'single-opt-in', target: '敵単体', multiTarget: true },
+  { name: 'single-plain', target: '敵単体', multiTarget: false },
+  { name: 'all-opt-in', target: '敵全体', multiTarget: true },
+  { name: 'ally-opt-in', target: '味方単体', multiTarget: true },
+]
+
+export const MULTI_TARGET_EFFECTS: readonly string[] = [
+  'damage 30..60',
+  'damage 1..1',
+  'damage 7..9 回数=3',
+  'damage_full',
+  'status poison 確率=50',
+  'status poison',
+  'heal 5..5',
+]
+
+const MULTI_TARGET_ENEMIES: ReadonlyArray<{ name: string; alive: readonly boolean[] }> = [
+  { name: 'three', alive: [true, true, true] },
+  { name: 'one-dead', alive: [true, false, true] },
+  { name: 'only-one', alive: [false, true, false] },
+  { name: 'eight', alive: [true, true, true, true, true, true, true, true] },
+]
+
+export function multiTargetScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  for (const atb of [false, true]) {
+    for (const sp of MULTI_TARGET_SPELLS) {
+      MULTI_TARGET_EFFECTS.forEach((effect, ei) => {
+        for (const scope of ['single', 'all'] as const) {
+          for (const en of MULTI_TARGET_ENEMIES) {
+            const op: Op = {
+              t: 'spell',
+              s: 0,
+              ...(scope === 'all' ? { scope: 'all' as const } : {}),
+            }
+            out.push({
+              id: `multi-target/${atb ? 'atb' : 'turn'}/${sp.name}/e${ei}/${scope}/${en.name}`,
+              seed: 120_000 + out.length,
+              party: [entity('a', { hp: 300, maxHp: 300 }), entity('b', { hp: 300, maxHp: 300 })],
+              enemies: en.alive.map((a, i) =>
+                foe(`s${i}`, a ? { hp: 400, maxHp: 400 } : { hp: 0, maxHp: 400 })
+              ),
+              atb: atb ? { mode: 'active' } : undefined,
+              spells: [
+                {
+                  name: 'まほう',
+                  mp: 1,
+                  target: sp.target,
+                  ...(sp.multiTarget ? { multiTarget: true } : {}),
+                  effect,
+                },
+              ],
+              items: [],
+              ops: [op, tick, op, tick, op],
+              checkSpread: true,
+            })
+          }
+        }
+      })
+    }
+  }
+  return out
+}
