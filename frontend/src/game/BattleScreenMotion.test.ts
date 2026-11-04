@@ -1,6 +1,6 @@
 /** BattleScreen の `motion` (#956) の配線: ff の再生・サンプリングが選んだ時間の組 (default / snappy) で動く */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Container } from 'pixi.js'
+import { Assets, Texture, TextureSource, type Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
@@ -467,5 +467,318 @@ describe('BattleScreen: 登場スライド (#1037)', () => {
     expect(
       (q.s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
     ).toBe(false)
+  })
+})
+
+describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
+  const sized = (w: number, h: number): Texture =>
+    new Texture({ source: new TextureSource({ width: w, height: h }) })
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+  const total = S.entranceMs + S.entrancePartyDelayMs
+
+  /** Assets.load を手で解決できるようにする（解決しない・失敗する読み込みも作れる） */
+  let pending: { resolve: () => void; reject: () => void }[] = []
+  type LoadMode = 'manual' | 'instant'
+  function mockLoad(mode: LoadMode = 'manual') {
+    pending = []
+    vi.spyOn(Assets, 'load').mockImplementation(((): Promise<Texture> => {
+      if (mode === 'instant') return Promise.resolve(sized(40, 80))
+      return new Promise<Texture>((resolve, reject) => {
+        pending.push({
+          resolve: () => resolve(sized(40, 80)),
+          reject: () => reject(new Error('x')),
+        })
+      })
+    }) as never)
+    vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate').mockImplementation(((
+      tex: Texture
+    ) => ({
+      texture: sized(tex.width + 16, tex.height + 16),
+      pad: 8,
+      shadow: sized(64, 32),
+      foot: { x: 32, y: 16 },
+    })) as never)
+  }
+  afterEach(() => {
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  interface V {
+    container: Container
+    baseX: number
+    baseY: number
+    label: Container | null
+    labelBaseX: number
+    acrylicShadow: Container | null
+    shadowBaseX: number
+  }
+  const views = (s: BattleScreen) =>
+    s as unknown as { partyViews: V[]; enemyViews: V[]; entranceActive: boolean }
+  const blocked = (s: BattleScreen) =>
+    (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+
+  function build(
+    over: Partial<BattleEntity> = {},
+    opts: BattleScreenOptions = {},
+    engineOpts: ConstructorParameters<typeof BattleEngine>[2] = { rng: () => 0.5, skills: {} }
+  ) {
+    const engine = new BattleEngine(
+      [entity('hero', { sprite: 'img/h.webp', ...over })],
+      [entity('boss', { atk: 0, sprite: 'img/b.webp' })],
+      engineOpts
+    )
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      motion: 'snappy',
+      ...opts,
+    })
+    created.push(s)
+    return { s, engine }
+  }
+  const press = (key: string) =>
+    globalThis.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+
+  it('読み込みが settled しない: 1499ms は開始待ちで出発位置のまま、1500ms で見切って開始、+登場時間で終了', async () => {
+    mockLoad('manual')
+    const { s } = build()
+    const v = views(s)
+    await flush()
+    const startE = v.enemyViews[0].container.x
+    const startP = v.partyViews[0].container.x
+    expect(pending.length).toBeGreaterThan(0)
+    s.tick(1499)
+    expect(v.enemyViews[0].container.x).toBe(startE)
+    expect(v.partyViews[0].container.x).toBe(startP)
+    expect(blocked(s)).toBe(true)
+    s.tick(1) // 見切り: 時計は 0 から
+    expect(blocked(s)).toBe(true)
+    s.tick(total / 2)
+    expect(v.enemyViews[0].container.x).toBeGreaterThan(startE)
+    expect(blocked(s)).toBe(true)
+    s.tick(total)
+    expect(blocked(s)).toBe(false)
+    expect(v.entranceActive).toBe(false)
+  })
+
+  it('読み込みが全部済めば 1500ms を待たず、次の tick から開始する（失敗した読み込みも settled 扱い）', async () => {
+    mockLoad('manual')
+    const { s } = build()
+    const v = views(s)
+    await flush()
+    const startE = v.enemyViews[0].container.x
+    pending[0].resolve()
+    pending.slice(1).forEach((p) => p.reject())
+    await flush()
+    await flush()
+    s.tick(1) // 開始待ちの最後の tick（elapsed 0 で開始）
+    s.tick(total / 2)
+    expect(v.enemyViews[0].container.x).toBeGreaterThan(startE)
+    s.tick(total)
+    expect(blocked(s)).toBe(false)
+  })
+
+  it('一部だけ settled・残りは未解決なら、まだ開始しない', async () => {
+    mockLoad('manual')
+    const { s } = build()
+    const v = views(s)
+    await flush()
+    pending[0].resolve()
+    await flush()
+    await flush()
+    const startE = v.enemyViews[0].container.x // 絵の読み込みで再配置されるので、解決のあとで取る
+    s.tick(500)
+    expect(v.enemyViews[0].container.x).toBe(startE)
+    expect(blocked(s)).toBe(true)
+  })
+
+  it('destroy のあとで読み込み Promise が解決・失敗しても例外が出ない', async () => {
+    mockLoad('manual')
+    const { s } = build()
+    await flush()
+    s.destroy({ children: true })
+    expect(() => {
+      pending.forEach((p, i) => (i % 2 ? p.reject() : p.resolve()))
+    }).not.toThrow()
+    await flush()
+    await flush()
+    expect(() => s.tick(16)).not.toThrow()
+  })
+
+  it('全員同時に着く（遅れ 0）: 終了の 1ms 前は敵も味方も途中、終了の tick で同時に元の位置', async () => {
+    mockLoad('instant')
+    const rest = build({}, { motion: 'default' })
+    await flush()
+    const restE = views(rest.s).enemyViews[0].container.x
+    const restP = views(rest.s).partyViews[0].container.x
+    const { s } = build()
+    const v = views(s)
+    await flush()
+    s.tick(1)
+    s.tick(total - 1)
+    expect(v.enemyViews[0].container.x).not.toBe(restE)
+    expect(v.partyViews[0].container.x).not.toBe(restP)
+    s.tick(1)
+    expect(v.enemyViews[0].container.x).toBe(restE)
+    expect(v.partyViews[0].container.x).toBe(restP)
+  })
+
+  it('水平のみ: 登場中の全 tick で y・回転・フィルタ（モザイク）は動かない（アクスタ表示）', async () => {
+    mockLoad('instant')
+    const { s } = build({}, { spriteStyle: 'acrylic' })
+    const v = views(s)
+    await flush()
+    await flush()
+    for (let t = 0; t <= total + 20; t += 10) {
+      for (const view of [...v.enemyViews, ...v.partyViews]) {
+        expect(view.container.y).toBe(view.baseY)
+        expect(view.container.rotation).toBe(0)
+        expect(view.container.filters ?? []).toHaveLength(0)
+        expect(view.container.alpha).toBe(1)
+      }
+      s.tick(10)
+    }
+    expect(blocked(s)).toBe(false)
+  })
+
+  it('名前ラベルと影は本体と同じ dx で動き、終了後は基準位置に戻る', async () => {
+    mockLoad('instant')
+    const { s } = build({}, { spriteStyle: 'acrylic' })
+    const v = views(s)
+    await flush()
+    await flush()
+    s.tick(1)
+    s.tick(total / 2)
+    const e = v.enemyViews[0]
+    const dx = e.container.x - e.baseX
+    expect(Math.abs(dx)).toBeGreaterThan(1)
+    expect(e.label).not.toBeNull()
+    expect(e.label!.x - e.labelBaseX).toBeCloseTo(dx, 6)
+    expect(e.acrylicShadow).not.toBeNull()
+    expect(e.acrylicShadow!.x - e.shadowBaseX).toBeCloseTo(dx, 6)
+    const p = v.partyViews[0]
+    const pdx = p.container.x - p.baseX
+    expect(Math.abs(pdx)).toBeGreaterThan(1)
+    expect(p.acrylicShadow).not.toBeNull()
+    expect(p.acrylicShadow!.x - p.shadowBaseX).toBeCloseTo(pdx, 6)
+    s.tick(total)
+    expect(e.label!.x).toBeCloseTo(e.labelBaseX, 6)
+    expect(e.acrylicShadow!.x).toBeCloseTo(e.shadowBaseX, 6)
+    expect(p.acrylicShadow!.x).toBeCloseTo(p.shadowBaseX, 6)
+  })
+
+  describe('ATB と入力', () => {
+    const ATB = {
+      atb: { mode: 'wait' as const, initialGauges: { party: [1000], enemies: [1000] } },
+      rng: () => 0.5,
+    }
+    const MENU = {
+      spells: {
+        hero: [{ id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' }],
+      },
+      items: [],
+    }
+
+    it('登場中は engine.tick が止まる（ゲージが進まず・敵も行動しない）。登場後は動き出す', async () => {
+      mockLoad('instant')
+      const { s, engine } = build(
+        {},
+        {},
+        { ...ATB, atb: { mode: 'wait', initialGauges: { party: [0], enemies: [1000] } } }
+      )
+      await flush()
+      const snap = () => JSON.stringify([engine.getState().atb, engine.getState().eventTotal])
+      const before = snap()
+      s.tick(1)
+      s.tick(total / 2)
+      s.tick(total / 4)
+      expect(snap()).toBe(before)
+      s.tick(total) // 登場終了
+      expect(blocked(s)).toBe(false)
+      s.tick(500)
+      expect(snap()).not.toBe(before)
+    })
+
+    it('開始待ち（読み込み未了）の間も ATB は止まったまま', async () => {
+      mockLoad('manual')
+      const { s, engine } = build({}, {}, ATB)
+      await flush()
+      const before = JSON.stringify(engine.getState().atb)
+      s.tick(1400)
+      expect(JSON.stringify(engine.getState().atb)).toBe(before)
+    })
+
+    it('登場中は handleCommand / isCommandEnabled / 十字キー / confirmMenu が塞がり、登場後に解禁される', async () => {
+      mockLoad('instant')
+      const { s, engine } = build(
+        {},
+        { commandLayout: 'cross', menu: structuredClone(MENU) as never },
+        ATB
+      )
+      await flush()
+      const I2 = s as unknown as {
+        isCommandEnabled(id: string): boolean
+        handleCommand(id: string): void
+        confirmMenu(): void
+        menuContext(): unknown
+        menuStack: unknown[]
+      }
+      const ctxSpy = vi.spyOn(I2 as never, 'menuContext')
+      s.tick(1)
+      s.tick(total / 2)
+      expect(blocked(s)).toBe(true)
+      expect(I2.isCommandEnabled('attack')).toBe(false)
+      expect(I2.isCommandEnabled('escape')).toBe(false)
+      const logBefore = engine.getState().logTotal
+      I2.handleCommand('attack')
+      I2.handleCommand('escape')
+      press('ArrowLeft') // じゅもん窓
+      press('ArrowRight')
+      press('ArrowUp')
+      press('ArrowDown')
+      I2.confirmMenu()
+      expect(I2.menuStack).toHaveLength(0)
+      expect(engine.getState().logTotal).toBe(logBefore)
+      expect(ctxSpy).not.toHaveBeenCalled()
+      s.tick(total)
+      expect(I2.isCommandEnabled('attack')).toBe(true)
+      expect(I2.isCommandEnabled('escape')).toBe(true)
+      press('ArrowLeft')
+      expect(I2.menuStack).toHaveLength(1)
+      I2.confirmMenu()
+      expect(ctxSpy).toHaveBeenCalled()
+    })
+  })
+
+  describe('登場しない構成', () => {
+    it('default・dq・front: 位置は従来どおり（基準位置と一致）、入力は塞がらず ATB も動く', async () => {
+      mockLoad('instant')
+      const ATB = {
+        atb: { mode: 'wait' as const, initialGauges: { party: [0], enemies: [0] } },
+        rng: () => 0.5,
+      }
+      const cases: BattleScreenOptions[] = [
+        { motion: 'default' },
+        { presentation: 'dq' },
+        { layout: 'front' },
+      ]
+      for (const opts of cases) {
+        const { s, engine } = build({}, opts, ATB)
+        const v = views(s)
+        await flush()
+        expect(v.entranceActive).toBe(false)
+        expect(blocked(s)).toBe(false)
+        for (const view of [...v.enemyViews, ...v.partyViews]) {
+          expect(view.container.x).toBe(view.baseX)
+        }
+        const g0 = JSON.stringify(engine.getState().atb)
+        s.tick(200)
+        expect(JSON.stringify(engine.getState().atb)).not.toBe(g0)
+        for (const view of [...v.enemyViews, ...v.partyViews]) {
+          expect(view.container.x).toBe(view.baseX)
+        }
+      }
+    })
   })
 })
