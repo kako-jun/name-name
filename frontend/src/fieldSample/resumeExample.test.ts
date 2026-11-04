@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { SaveManager, type SaveSlotData } from '../game/SaveManager'
 import { parseConfigText } from './config'
 import { FIELD_SAMPLE_DOC_KEY, loadResume } from './fieldResume'
-import teramachi from './teramachi.sample.json?raw'
+import { expandedTeramachiText } from './teramachiExpanded'
 import exampleText from '../../../docs/guide/examples/teramachi-bathhouse-battle.save.json?raw'
 
 const example = JSON.parse(exampleText) as SaveSlotData
@@ -15,7 +15,7 @@ beforeEach(() => localStorage.clear())
 
 describe('寺町の途中局面（銭湯前・戦闘中）の例', () => {
   it('localStorage に書いて ?resume=0 で読むと、パーティ・所持品・現在地・戦闘中状態に解決する', () => {
-    const cfg = parseConfigText(teramachi, 'http://localhost/')
+    const cfg = parseConfigText(expandedTeramachiText(), 'http://localhost/')
     expect(cfg.ok).toBe(true)
     if (!cfg.ok) return
     new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, example)
@@ -34,8 +34,8 @@ describe('寺町の途中局面（銭湯前・戦闘中）の例', () => {
     expect(resolved.gold).toBe(120)
     expect(resolved.field).toMatchObject({ sceneId: 'bathhouse', x: 768, y: 716, facing: 'up' })
     expect(resolved.battle!.enemies.map((e) => [e.name, e.hp, e.maxHp])).toEqual([
-      ['段ボールのドラゴン', 31, 40],
-      ['シャチホコ', 18, 18],
+      ['石油ストーブ', 21, 30],
+      ['扇風機・換気扇の羽根', 20, 20],
     ])
     expect(resolved.battle!.enemies[1].status).toEqual({ sleep: 2 })
     expect(resolved.battle!.atb!.queue).toEqual([0])

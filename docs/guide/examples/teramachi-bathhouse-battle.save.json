@@ -13,8 +13,8 @@
   "rpg": {
     "version": 1,
     "party": [
-      { "id": "party1", "hp": 22, "mp": 4 },
-      { "id": "party2", "hp": 9 },
+      { "id": "party1", "hp": 22, "mp": 4, "form": "elementary-wheelchair" },
+      { "id": "party2", "hp": 9, "form": "elementary" },
       { "id": "party3" },
       { "id": "party4", "hp": 0, "mp": 14 }
     ],
@@ -24,8 +24,8 @@
     "field": { "sceneId": "bathhouse", "x": 768, "y": 716, "facing": "up" },
     "battle": {
       "enemies": [
-        { "id": "dragon", "hp": 31 },
-        { "id": "shachihoko", "hp": 18, "status": { "sleep": 2 } }
+        { "id": "M149", "hp": 21 },
+        { "id": "M147", "hp": 20, "status": { "sleep": 2 } }
       ],
       "atb": {
         "partyGauge": [1000, 620, 300, 0],
