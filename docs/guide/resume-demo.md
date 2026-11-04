@@ -98,6 +98,25 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 **見た目の最終判断（ダメージ表示・「きかなかった」の読みやすさ）は KJ の実機で行う**。この手順は値の確認までで、見た目の合格判定ではない。
 
+## motion / 敵名窓 / エフェクトの確認（#1051）
+
+戦闘サンプル（`battle-sample.html`）で見ていた 3 機能を、実際のゲームと同じ形式の設定（`battle.motion` / `battle.enemyList` / `battle.effects`。書式は [デバッガガイド](./debugger.md)）で確かめる手順。確認用の設定は、寺町とは別の最小の一枚絵世界（シーン 1 つ・敵はデモ用の名前と数値。寺町の同梱設定には足さない）。
+
+| 機能 | 設定 | セーブ | 見えるもの |
+|---|---|---|---|
+| motion | [`demo-motion.config.json`](./examples/demo-motion.config.json) | [`demo-motion.save.json`](./examples/demo-motion.save.json) | `battle.motion: "snappy"`。戦闘開始の横スライド登場・キビキビした踏み出し・桁ごとに跳ねるダメージ数字 |
+| 敵名窓 | [`demo-enemy-list.config.json`](./examples/demo-enemy-list.config.json) | [`demo-enemy-list.save.json`](./examples/demo-enemy-list.save.json) | `battle.enemyList: "window"`。コマンド窓の右隣に敵名窓が出て、同名の敵が「扇風機・換気扇の羽根 ×3」にまとまる（倒すと個数が減り、全滅した行は消える） |
+| エフェクト | [`demo-effects.config.json`](./examples/demo-effects.config.json) | [`demo-effects.save.json`](./examples/demo-effects.save.json) | `battle.effects` の `cast` / `impact` / `slash` / `magic`。通常攻撃の命中で `slash`（味方）・`impact`（敵）、「じゅもん」の「ひかり」で `cast` と `magic` |
+
+手順は「敵レベルとレベル条件即死の確認」と同じ（`<名前>` は上表の機能名 `motion` / `enemy-list` / `effects`）:
+
+1. 本番ビルドして静的配信する（手順 1）
+2. `demo-<名前>.config.json` を `<出力先>` の直下にコピーする（手順 2）
+3. sit-by-me を CORS 付きで配信し、コピーした設定とセーブの `8765` を置き換える（手順 3。この設定は感情吹き出しを使わないので `teramachi-emotions.json` の置換は要らない）
+4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はない）。操作できるまでは、敵名窓・エフェクトは約 1 秒、motion は `snappy` の横スライド登場が終わる約 4〜5 秒（それ以前のクリックは効かない）。3 つともコマンドが 3 つ（たたかう・じゅもん・にげる）で、`commandLayout: "cross"` は 4 コマンドのときだけ有効なため `grid` 配置になり、矢印キーでは操作できない。コマンドはクリック（タップ）で選ぶ。「たたかう」はクリックでターゲットが自動で決まり、すぐ始まる。「じゅもん」は窓から「ひかり」を選んでターゲットをクリックする
+
+**見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
+
 ## 保存先の判断（localStorage のまま・IndexedDB へは移さない）
 
 実測（`frontend/src` の型どおりに組んだ JSON の文字数。localStorage の上限は 1 オリジン 5 MiB ≒ UTF-16 で約 262 万文字を安全側に採用）:
