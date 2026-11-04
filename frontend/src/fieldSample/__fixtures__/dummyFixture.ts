@@ -1,7 +1,7 @@
 /**
- * 素材なしで動くフィールド＋戦闘のフィクスチャ (#890)。単色背景・矩形スプライトを canvas で作って data URI にする
- * （画像ファイルを repo に置かない・外部アセットサーバ不要）。`field-sample.html?fixture=dummy` で読む。
- * 設定の形は通常の設定 JSON と同じ（parseConfig に渡す）。ブラウザ（canvas）が要るので main.ts からだけ呼ぶ。
+ * テスト用フィクスチャ (#890。`?fixture=dummy` の入口は #1051 で廃止)。単色背景・矩形スプライトを canvas で作って data URI にする
+ * （画像ファイルを repo に置かない・外部アセットサーバ不要）。
+ * 設定の形は通常の設定 JSON と同じ（parseConfig に渡す）。ブラウザ（canvas）が要る（テストでは canvas を stub する）。
  */
 
 /** 色つき矩形＋ラベルの PNG data URI */
@@ -276,11 +276,11 @@ export function buildDummyFixture(
     mirrorOf: { upLeft: 'upRight', downLeft: 'downRight' },
   }
   return {
-    // アクスタ (sit-by-me#58): `?fixture=dummy&spriteStyle=acrylic` で主人公・同行者の足元に板・台座・影を付ける。未指定はキーを出さない
+    // アクスタ (sit-by-me#58): 主人公・同行者の足元に板・台座・影を付ける。未指定はキーを出さない
     ...(opts.spriteStyle === 'acrylic' ? { spriteStyle: 'acrylic' } : {}),
-    // チルトシフト (#885): `?fixture=dummy&tiltShift=on`。未指定はキーを出さない
+    // チルトシフト (#885): 未指定はキーを出さない
     ...(opts.tiltShift === 'on' ? { tiltShift: 'on' } : {}),
-    // 全画面メニュー (#880): `?fixture=dummy&menu=on`。既定の9項目。未指定はキーを出さない
+    // 全画面メニュー (#880): 既定の9項目。未指定はキーを出さない
     ...(opts.menu ? { menu: true } : {}),
     startScene: 'meadow',
     start: { x: 320, y: 300 },
