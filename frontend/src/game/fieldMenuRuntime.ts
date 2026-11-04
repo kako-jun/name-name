@@ -27,7 +27,7 @@ import { DEFAULT_CONFIG_OPTIONS, type MenuOption } from './fieldMenuScreens'
 import type { AtbMode } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { RpgMenuState } from './rpgSave'
-import { changeGear, purchase, type GearMenuContext } from './gearMenu'
+import { changeGear, purchase, type GearMenuContext, type MemberDefLike } from './gearMenu'
 import type { GearShopConfig, GearState } from './gearShop'
 
 /** 刀・防具の購入・持ち替えの接続 (#881)。`gearShop` を設定したゲームだけ渡す。正本（状態・所持金・装備列）は呼び出し側 */
@@ -43,6 +43,10 @@ export interface FieldMenuGearDeps {
   setEquipment(member: string, equipment: string[]): void
   /** 通貨名（設定の `battle.currencyName`。省略は「円」） */
   currencyName?: string
+  /** 人物 id → 人物の定義（`equipmentSlots` など。装備の枠の計算に使う）。省略・無い人物は既定の枠 */
+  memberDefs?(): Readonly<Record<string, MemberDefLike>>
+  /** 店の外の装備の id → 種別（武器・防具・盾・兜）。装備列の店の外の品を同じ種類の枠に数える。省略は数えない */
+  otherKinds?(): Readonly<Record<string, string>>
 }
 
 export interface FieldMenuRuntimeDeps {
@@ -111,6 +115,8 @@ export class FieldMenuRuntime {
       names,
       descriptions,
       ...(g.currencyName ? { currencyName: g.currencyName } : {}),
+      ...(g.memberDefs ? { defs: g.memberDefs() } : {}),
+      ...(g.otherKinds ? { otherKinds: g.otherKinds() } : {}),
       equipment: this.d.getEquipment(),
       members: this.d.getParty().map((p) => p.id),
     }

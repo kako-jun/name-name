@@ -354,6 +354,19 @@ describe('parseGearShopConfig', () => {
     )
     expect(r.warnings.some((w) => w.includes('entries[4].equipBonus は文字列'))).toBe(true)
   })
+  it('name・lockedMessage (#881 レビュー): 読まれ、空・不正は警告して無視', () => {
+    const r = parseGearShopConfig({
+      entries: [
+        { id: 'a', kind: 'armor', name: ' 赤糸威 ', lockedMessage: '香林坊で' },
+        { id: 'b', kind: 'armor', name: '', lockedMessage: 3 },
+      ],
+    })
+    const [a, b] = r.value!.entries
+    expect(a).toMatchObject({ name: '赤糸威', lockedMessage: '香林坊で' })
+    expect('name' in b).toBe(false)
+    expect('lockedMessage' in b).toBe(false)
+    expect(r.warnings.filter((w) => w.includes('entries[1]'))).toHaveLength(2)
+  })
   it('画像: image が読まれ、無ければキーなし・不正は警告して画像なし。別名 画像 は読まない', () => {
     const r = parseGearShopConfig({
       entries: [

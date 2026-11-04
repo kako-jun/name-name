@@ -462,9 +462,15 @@ export function applyLiveContent(
       return { ...d, content: { ...c, tabs: buildItemTabs(input.rpg) } }
     if (d.id === 'magic' && kind === 'party-list' && !c?.entries && !c?.entriesByParty)
       return { ...d, content: { ...c, entriesByParty: buildMagicByParty(input.rpg) } }
-    if (kind === 'appstore' && input.rpg.gear && !(c?.tabs && c.tabs.length > 0))
+    // 定義側が中身を書いていれば差し込まない（空配列・空オブジェクトは「書いていない」）
+    const authoredTabs = !!c?.tabs?.some(
+      (t) => t.entries.length > 0 || t.entriesByParty !== undefined
+    )
+    const authoredEquip =
+      (c?.entries?.length ?? 0) > 0 || Object.keys(c?.entriesByParty ?? {}).length > 0
+    if (kind === 'appstore' && input.rpg.gear && !authoredTabs)
       return { ...d, content: { ...c, tabs: buildAppStoreTabs(input.rpg.gear) } }
-    if (kind === 'equip' && input.rpg.gear && !c?.entries && !c?.entriesByParty)
+    if (kind === 'equip' && input.rpg.gear && !authoredEquip)
       return { ...d, content: { ...c, ...buildEquipContent(input.rpg.gear) } }
     if (kind === 'status')
       return {

@@ -34,6 +34,7 @@ import {
 } from './fieldMenu'
 import {
   MAX_PARTY_SLOTS,
+  appstoreHasParty,
   clampNav,
   computeScreenLayout,
   entryForUse,
@@ -143,7 +144,10 @@ export interface FieldMenuScreenOptions {
   onSort?(): FieldMenuRefresh | null
 }
 
-const FONT_FAMILY = "'Noto Sans JP', sans-serif"
+export const MENU_FONT_FAMILY = "'Noto Sans JP', sans-serif"
+/** メニューの文字（情報帯・案内）に使う字を含む見本。フォントの字の分割ファイルを開く前に読むため */
+export const MENU_FONT_SAMPLE = '現在地円時間歩数決定戻る選ぶ矢印タップ右クリックabc0123456789'
+const FONT_FAMILY = MENU_FONT_FAMILY
 const WHITE = 0xffffff
 const GRAY = 0x808080
 const NOTICE_COLOR = 0xffee66
@@ -445,6 +449,7 @@ export class FieldMenuScreen extends Container {
       reserveTimer: this.timed,
       confirmOpen: open && nav.focus === 'confirm',
       prevRowStart: this.scrolls.get(screen) ?? 0,
+      perParty: c.kind === 'appstore' && appstoreHasParty(c),
       headerCount:
         c.kind === 'equip'
           ? (c.headerByParty[this.data?.party[nav.party]?.id ?? '']?.length ?? 0)
@@ -615,7 +620,7 @@ export class FieldMenuScreen extends Container {
     // 本体の窓の中身
     if (k === 'status') this.drawStatus(C, nav, sl, lay, interactive, content)
     else {
-      if (k === 'appstore')
+      if (k === 'appstore' && appstoreHasParty(content))
         this.drawPersonNav(C, sl, lay, interactive, this.data?.party[nav.party]?.name ?? '')
       if (k === 'equip') this.drawEquipHeader(C, nav, sl, content)
       this.drawList(C, nav, ctx, sl, interactive)

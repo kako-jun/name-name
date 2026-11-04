@@ -57,10 +57,31 @@ export interface GearMenuContext {
   equipment: Readonly<Record<string, readonly string[]>>
   /** 人物の id（表示順） */
   members: readonly string[]
+  /** 人物 id → 人物の定義（`equipmentSlots` など装備の枠の計算に要るもの）。無い人物は id だけ（既定の枠: 武器・防具・盾・兜が各 1） */
+  defs?: Readonly<Record<string, MemberDefLike>>
+  /** 店の外の装備の id → 種別（`武器` / `防具` / `盾` / `兜`）。装備列にある店の外の品を同じ種類の枠に数え、持ち替えで入れ替える（無い id は種類が分からず枠に数えない） */
+  otherKinds?: Readonly<Record<string, string>>
 }
 
-const nameOf = (ctx: Pick<GearMenuContext, 'names'>, id: string): string =>
-  hasOwn(ctx.names, id) ? ctx.names[id] : id
+/** 装備の計算に渡す人物の定義（`PartyMemberDef` の装備まわり） */
+export type MemberDefLike = Pick<
+  PartyMemberDef,
+  'id' | 'magicites' | 'magiciteSlots' | 'equipment' | 'equipmentSlots' | 'jobs'
+>
+
+/** 品の表示名: 定義の `name` → `[アイテム]` の名前 → id の順 */
+function displayName(
+  cfg: GearShopConfig,
+  names: Readonly<Record<string, string>>,
+  id: string
+): string {
+  const own = cfg.entries.find((e) => e.id === id)?.name
+  if (own !== undefined) return own
+  return hasOwn(names, id) ? names[id] : id
+}
+
+const nameOf = (ctx: Pick<GearMenuContext, 'cfg' | 'names'>, id: string): string =>
+  displayName(ctx.cfg, ctx.names, id)
 
 /** 金額の文字（3 桁区切り＋通貨名）。不正な値は 0 */
 export function formatPrice(amount: number, currencyName = DEFAULT_CURRENCY_NAME): string {
@@ -107,13 +128,21 @@ export function formatDelta(delta: StatBonus): string {
 /** 装備の計算に渡す品のマスター。刀は 武器・防具は 防具 の枠。刀は持ち主だけ・防具は持ち主指定があればその人だけが装備できる */
 export function gearRoster(
   cfg: GearShopConfig,
-  names: Readonly<Record<string, string>>
+  names: Readonly<Record<string, string>>,
+  otherKinds: Readonly<Record<string, string>> = {}
 ): EquipmentRoster {
   const items: Record<string, ItemDef> = {}
+  // 店の外の装備（種類が分かるものだけ）。店の品が同じ id なら店の宣言を優先する
+  for (const id of Object.keys(otherKinds))
+    safeAssign(items, id, {
+      id,
+      name: hasOwn(names, id) ? names[id] : id,
+      kind: otherKinds[id],
+    } as ItemDef)
   for (const e of cfg.entries) {
     const def: ItemDef = {
       id: e.id,
-      name: hasOwn(names, e.id) ? names[e.id] : e.id,
+      name: displayName(cfg, names, e.id),
       kind: e.kind === 'blade' ? '武器' : '防具',
       ...(e.equipBonus !== undefined ? { equipBonus: e.equipBonus } : {}),
       ...(e.owner !== undefined ? { equippableBy: [e.owner] } : {}),
@@ -123,14 +152,12 @@ export function gearRoster(
   return { items }
 }
 
-/** 装備の計算に渡す人物の定義（装備の列は呼び出し側が明示的に渡すので、id だけでよい） */
+/** 装備の計算に渡す人物の定義。`defs` にあればそれ（枠の数など）、無ければ id だけ（装備の列は呼び出し側が明示的に渡す） */
 export function memberDef(
-  id: string
-): Pick<
-  PartyMemberDef,
-  'id' | 'magicites' | 'magiciteSlots' | 'equipment' | 'equipmentSlots' | 'jobs'
-> {
-  return { id }
+  id: string,
+  defs?: Readonly<Record<string, MemberDefLike>>
+): MemberDefLike {
+  return defs !== undefined && hasOwn(defs, id) ? { ...defs[id], id } : { id }
 }
 
 /** 装備列の能力値ボーナスの合計（店の品だけ。`equipBonus` を読む） */
@@ -285,7 +312,7 @@ export function changeGear(
   ctx: GearMenuContext,
   member: string,
   id: string,
-  roster: EquipmentRoster = gearRoster(ctx.cfg, ctx.names)
+  roster: EquipmentRoster = gearRoster(ctx.cfg, ctx.names, ctx.otherKinds)
 ): GearChange {
   const before = [...(hasOwn(ctx.equipment, member) ? ctx.equipment[member] : [])]
   const fail = (notice: string): GearChange => ({
@@ -299,7 +326,7 @@ export function changeGear(
   if (!e) return fail('売っていない品です')
   if (e.owner !== undefined && e.owner !== member) return fail('他の人の品は使えません')
   if (!isOwned(ctx.state, member, id)) return fail('まだ買っていません')
-  const def = memberDef(member)
+  const def = memberDef(member, ctx.defs)
   if (e.kind === 'blade') {
     if (equippedBlade(ctx.state, member) === id && before.includes(id))
       return fail(`${name} は すでに装備しています`)
@@ -335,18 +362,22 @@ export function changeGear(
   }
 }
 
-/** 装備中の品の id（店の品のうち、その種類で装備列にあるもの）。無ければ undefined */
-function equippedOfKind(
-  ctx: GearMenuContext,
-  member: string,
-  kind: GearEntry['kind']
-): string | undefined {
+/** 装備中の店の品の id（その種類で、装備列にあり、その人が購入済みで使える品。枠が複数なら複数）。無ければ空 */
+function equippedOfKind(ctx: GearMenuContext, member: string, kind: GearEntry['kind']): string[] {
   const eq = hasOwn(ctx.equipment, member) ? ctx.equipment[member] : []
   if (kind === 'blade') {
     const b = equippedBlade(ctx.state, member)
-    return b !== undefined && eq.includes(b) ? b : undefined
+    return b !== undefined && eq.includes(b) ? [b] : []
   }
-  return eq.find((id) => ctx.cfg.entries.some((e) => e.id === id && e.kind === 'armor'))
+  return eq.filter((id) =>
+    ctx.cfg.entries.some(
+      (e) =>
+        e.id === id &&
+        e.kind === 'armor' &&
+        (e.owner === undefined || e.owner === member) &&
+        isOwned(ctx.state, member, id)
+    )
+  )
 }
 
 /**
@@ -359,7 +390,7 @@ export function buildEquipContent(ctx: GearMenuContext): {
 } {
   const entriesByParty: Record<string, MenuEntry[]> = {}
   const headerByParty: Record<string, StatusRow[]> = {}
-  const roster = gearRoster(ctx.cfg, ctx.names)
+  const roster = gearRoster(ctx.cfg, ctx.names, ctx.otherKinds)
   for (const m of ctx.members) {
     const owned = ownedIds(ctx.state, m)
     const rows: MenuEntry[] = []
@@ -367,7 +398,7 @@ export function buildEquipContent(ctx: GearMenuContext): {
       for (const e of entriesOfKind(ctx.cfg, kind, m)) {
         if (!owned.includes(e.id)) continue
         const name = nameOf(ctx, e.id)
-        const equipped = equippedOfKind(ctx, m, kind) === e.id
+        const equipped = equippedOfKind(ctx, m, kind).includes(e.id)
         const change = changeGear(ctx, m, e.id, roster)
         const delta = change.ok ? formatDelta(change.delta ?? {}) : change.notice
         rows.push({
@@ -384,10 +415,10 @@ export function buildEquipContent(ctx: GearMenuContext): {
       }
     safeAssign(entriesByParty, m, rows)
     const slot = (kind: GearEntry['kind']): string => {
-      const id = equippedOfKind(ctx, m, kind)
-      return id === undefined ? EMPTY_SLOT_TEXT : nameOf(ctx, id)
+      const ids = equippedOfKind(ctx, m, kind)
+      return ids.length === 0 ? EMPTY_SLOT_TEXT : ids.map((id) => nameOf(ctx, id)).join('、')
     }
-    safeAssign(headerByParty, m, [
+    safeAssign<StatusRow[]>(headerByParty, m, [
       { label: EQUIP_SLOT_LABELS.blade, value: slot('blade') },
       { label: EQUIP_SLOT_LABELS.armor, value: slot('armor') },
     ])

@@ -316,3 +316,75 @@ describe('購入・持ち替え後のセーブ往復', () => {
     expect('gear' in resolveRpg(old as never, base)).toBe(false)
   })
 })
+
+describe('レビュー対応 (#881 段階2)', () => {
+  it('表示名: 定義の name → [アイテム] の名前 → id の順（アプリストア・そうび・購入通知）', () => {
+    const c = ctx({
+      cfg: {
+        multiplier: 2,
+        entries: [
+          { id: 'x1', kind: 'blade', owner: 'p1', basePrice: 10, name: '独自名' },
+          { id: 'x2', kind: 'blade', owner: 'p1', basePrice: 10 },
+          { id: 'x3', kind: 'blade', owner: 'p1', basePrice: 10 },
+        ],
+      },
+      names: { x1: '無視される', x2: 'アイテム名' },
+    })
+    const labels = buildAppStoreTabs(c)[0].entriesByParty!.p1.map((e) => e.label)
+    expect(labels).toEqual(['独自名', 'アイテム名', 'x3'])
+    expect(purchase(c, 'p1', 'x1').notice).toContain('独自名')
+    expect(gearRoster(c.cfg, c.names).items!.x1.name).toBe('独自名')
+  })
+  it('人物の定義の枠: 武器枠が 2 つなら刀を足しても店の外の武器が残る（枠の計算に定義を使う）', () => {
+    const c = ctx({
+      state: have(['a1']),
+      equipment: { p1: ['oldsword'] },
+      otherKinds: { oldsword: '武器' },
+      defs: { p1: { id: 'p1', equipmentSlots: ['武器', '武器', '防具'] } },
+    })
+    const r = changeGear(c, 'p1', 'a1')
+    expect(r.ok).toBe(true)
+    expect(r.equipment).toEqual(['oldsword', 'a1'])
+  })
+  it('店の外の武器は同じ種類の枠に数えられ、枠 1 つなら入れ替わる（武器が 2 本並ばない）', () => {
+    const c = ctx({
+      state: have(['a1']),
+      equipment: { p1: ['oldsword'] },
+      otherKinds: { oldsword: '武器' },
+    })
+    expect(changeGear(c, 'p1', 'a1').equipment).toEqual(['a1'])
+    // 種類を知らせない（従来）と枠に数えられない
+    expect(changeGear({ ...c, otherKinds: undefined }, 'p1', 'a1').equipment).toEqual([
+      'oldsword',
+      'a1',
+    ])
+  })
+  it('装備中の防具の判定は購入済みだけ（未購入の防具が装備列に居ても見出しに出さない）。複数枠は並べる', () => {
+    const c = ctx({ state: have([], []), equipment: { p1: ['vest'] } })
+    expect(buildEquipContent(c).headerByParty.p1[1].value).toBe('なし')
+    const two = ctx({
+      state: have(['vest', 'vest2']),
+      equipment: { p1: ['vest', 'vest2'] },
+      defs: { p1: { id: 'p1', equipmentSlots: ['武器', '防具', '防具'] } },
+    })
+    expect(buildEquipContent(two).headerByParty.p1[1].value).toBe('赤糸威、紫糸威')
+  })
+  it('解禁前の理由は定義側の文を書ける（既定は「まだ買えません」）', () => {
+    const cfg2: GearShopConfig = {
+      multiplier: 2,
+      entries: [
+        {
+          id: 'l1',
+          kind: 'armor',
+          price: 10,
+          unlockFlag: 'f',
+          lockedMessage: '香林坊で話を聞くと買えます',
+        },
+        { id: 'l2', kind: 'armor', price: 10, unlockFlag: 'f' },
+      ],
+    }
+    const e = buildAppStoreTabs(ctx({ cfg: cfg2 }))[1].entriesByParty!.p1
+    expect(e[0].description).toContain('香林坊で話を聞くと買えます')
+    expect(e[1].description).toContain('まだ買えません')
+  })
+})

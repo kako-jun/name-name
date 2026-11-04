@@ -145,7 +145,13 @@ import {
   resumeBattleEngineOptions,
 } from './fieldResume'
 import { SaveManager } from '../game/SaveManager'
-import { FieldMenuScreen, drawMenuButton, type FieldMenuPartyView } from '../game/FieldMenuScreen'
+import {
+  FieldMenuScreen,
+  MENU_FONT_FAMILY,
+  MENU_FONT_SAMPLE,
+  drawMenuButton,
+  type FieldMenuPartyView,
+} from '../game/FieldMenuScreen'
 import { TimeLimitLayer } from '../game/TimeLimitLayer'
 import { placeNameOf } from '../game/fieldMenu'
 import { FieldMenuHost } from '../game/fieldMenuHost'
@@ -155,6 +161,7 @@ import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
+import { ensureFontLoaded } from '../game/FontLoader'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
@@ -1161,10 +1168,9 @@ async function main(): Promise<void> {
     if (!url) return Promise.resolve(null)
     let p = partyTextures.get(url)
     if (!p) {
-      p = loadBitmap(url).then(
-        (b) => Texture.from(b),
-        () => null
-      )
+      p = loadBitmap(url)
+        .then((b) => Texture.from(b))
+        .catch(() => null)
       partyTextures.set(url, p)
     }
     return p
@@ -1272,6 +1278,12 @@ async function main(): Promise<void> {
             releaseWalkInput()
             approach = null
             emotionLayer?.clear()
+            // 文字の幅の計測（OffscreenCanvas）と描画（ページの lang=ja を受ける canvas）が、未ロードの総称フォント（sans-serif）だと
+            // 食い違って情報帯の末尾が切れるので、メニューの文字フォントを先に読む。失敗（オフライン）は握る（従来の表示のまま）
+            await ensureFontLoaded(MENU_FONT_FAMILY).catch(() => undefined)
+            await document.fonts
+              ?.load(`16px ${MENU_FONT_FAMILY}`, MENU_FONT_SAMPLE)
+              .catch(() => undefined)
             const party: FieldMenuPartyView[] = await Promise.all(
               partyState.map(async (p) => ({
                 id: p.id,

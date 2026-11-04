@@ -39,6 +39,11 @@ export const SCREEN_KINDS: readonly ScreenKind[] = [
 ]
 
 /** 既定の項目 id → 画面の種類。それ以外の id（定義側が足した項目）は `empty`（`kind` で指定できる） */
+/** アプリストアのどれかのタブが人物別の一覧（`entriesByParty`）を持つか。持つときだけ人物の切り替え（帯・上下キー・案内）を出す */
+export function appstoreHasParty(content: Pick<ResolvedContent, 'tabs'>): boolean {
+  return content.tabs.some((t) => t.entriesByParty !== undefined)
+}
+
 export function defaultScreenKind(id: string): ScreenKind {
   switch (id) {
     case 'item':
@@ -152,11 +157,14 @@ export const SAVE_SLOT_COUNT = 3
 /** 画面に並べる人物の枠の最大数（wireframe: 4人配置固定）。それ以上は選択も表示も先頭からここまで */
 export const MAX_PARTY_SLOTS = 4
 
+/** 人物別の一覧を持つアプリストアの既定の説明（人物の切り替えの案内を常に出す） */
+const APPSTORE_PARTY_DESCRIPTION = 'アプリを選んでください（上下 / ◀前・次▶: 人物の切り替え）'
+
 const DEFAULT_DESCRIPTION: Record<ScreenKind, string> = {
   item: 'つかう・せいとん・たいせつなもの から選びます',
   'party-list': '人物を選んでください',
   equip: 'そうびを変える人物を選んでください',
-  appstore: 'アプリを選んでください（上下 / ◀前・次▶: 人物の切り替え）',
+  appstore: 'アプリを選んでください',
   status: '人物ごとの能力を見ます',
   save: 'セーブするスロットを選んでください',
   config: '設定を変えます',
@@ -192,7 +200,11 @@ export function resolveContent(
         : []
   return {
     kind,
-    description: def?.description ?? (DEFAULT_DESCRIPTION[kind] || label),
+    description:
+      def?.description ??
+      (kind === 'appstore' && appstoreHasParty({ tabs })
+        ? APPSTORE_PARTY_DESCRIPTION
+        : DEFAULT_DESCRIPTION[kind] || label),
     tabs,
     entries: def?.entries ?? [],
     entriesByParty: def?.entriesByParty ?? {},
@@ -616,7 +628,13 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
     }
     if (nav.focus === 'tab') {
       // アプリストアは上下で人物を切り替える（人物ごとに一覧が違う。画面の人物の行に案内を常に出す）
-      if (k === 'appstore' && dx === 0 && dy !== 0 && ctx.partyCount > 0)
+      if (
+        k === 'appstore' &&
+        appstoreHasParty(ctx.content) &&
+        dx === 0 &&
+        dy !== 0 &&
+        ctx.partyCount > 0
+      )
         return {
           nav: { ...nav, party: wrap(nav.party + (dy < 0 ? -1 : 1), ctx.partyCount), list: 0 },
           effect: 'moved',
@@ -668,7 +686,11 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
     return decideConfirm(ctx, { ...nav, confirm: index })
   }
   if (target === 'prev' || target === 'next') {
-    if ((k !== 'status' && k !== 'appstore') || ctx.partyCount === 0) return { nav, effect: 'none' }
+    if (
+      (k !== 'status' && !(k === 'appstore' && appstoreHasParty(ctx.content))) ||
+      ctx.partyCount === 0
+    )
+      return { nav, effect: 'none' }
     return {
       nav: {
         ...nav,
@@ -759,6 +781,8 @@ export interface ScreenLayoutInput {
   prevRowStart?: number
   /** そうび画面の見出し行の数（一覧の上に並べる。省略は 0） */
   headerCount?: number
+  /** アプリストアが人物別の一覧を持つか（人物の切り替え帯を出す）。省略は false */
+  perParty?: boolean
 }
 
 /** 見える先頭 index。カーソルが常に範囲に入るよう、必要最小限だけ送る */
@@ -813,7 +837,8 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
   const pad = 0.015 * H
   // 一覧の上に取る帯: アプリストアは人物の切り替え行、そうびは 2 枠の見出し行
   const headerN = kind === 'equip' ? Math.max(0, Math.floor(i.headerCount ?? 0)) : 0
-  const topBand = kind === 'appstore' ? 0.09 * H : headerN > 0 ? headerN * rowH + pad : 0
+  const personBar = kind === 'appstore' && i.perParty === true
+  const topBand = personBar ? 0.09 * H : headerN > 0 ? headerN * rowH + pad : 0
   const header: Rect[] = []
   for (let h = 0; h < headerN; h++)
     header.push({ x: primary.x, y: primary.y + pad + h * rowH, w: primary.w, h: rowH })
@@ -835,7 +860,7 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
     }
   }
   const statusNav =
-    kind === 'status' || kind === 'appstore'
+    kind === 'status' || personBar
       ? {
           prev: { x: primary.x + 0.01 * W, y: primary.y + 0.01 * H, w: 0.12 * W, h: 0.08 * H },
           next: {

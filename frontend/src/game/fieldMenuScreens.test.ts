@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { timeLimitRect } from './fieldTimeLimit'
 import {
   SAVE_SLOT_COUNT,
+  appstoreHasParty,
   baseFocus,
   clampNav,
   computeScreenLayout,
@@ -941,6 +942,7 @@ describe('アプリストア（#881 段階2）: 人物ごとの一覧・人物�
       cursor: 0,
       reserveTimer: false,
       confirmOpen: false,
+      perParty: true,
     })
     expect(l.statusNav).not.toBeNull()
     expect(l.rows[0].y).toBeGreaterThanOrEqual(l.statusNav!.prev.y + l.statusNav!.prev.h)
@@ -1018,5 +1020,45 @@ describe('そうび（#881 段階2）', () => {
     )
     expect(out?.entries?.[0].image).toBe('a.png')
     expect(out?.entries?.[1].image).toBeUndefined()
+  })
+})
+
+describe('アプリストアの人物の切り替えは、人物別の一覧があるときだけ (#881 レビュー)', () => {
+  const flat = () =>
+    ctx(
+      'appstore',
+      { tabs: [{ label: '刀', entries: [E('はがねの刀')] }] },
+      { partyIds: ['a', 'b'] }
+    )
+  it('人物別が無い（静的な一覧）では上下キー・前次ボタンで人物は変わらず、既定の説明に案内を足さない', () => {
+    const c = flat()
+    expect(appstoreHasParty(c.content)).toBe(false)
+    expect(c.content.description).toBe('アプリを選んでください')
+    const up = stepScreen(nav('appstore', { focus: 'tab' }), { type: 'move', dx: 0, dy: 1 }, c)
+    expect(up.effect).toBe('none')
+    const next = stepScreen(nav('appstore'), { type: 'select', target: 'next', index: 0 }, c)
+    expect(next.effect).toBe('none')
+  })
+  it('人物別が無いレイアウトは帯を出さず、一覧は従来の位置（上端の続き）から始まる', () => {
+    const base = {
+      kind: 'appstore' as const,
+      base: { x: 0, y: 0, w: 1920, h: 1080 },
+      partyCount: 2,
+      tabCount: 2,
+      listCount: 3,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+    }
+    const flatL = computeScreenLayout(base)
+    expect(flatL.statusNav).toBeNull()
+    const perL = computeScreenLayout({ ...base, perParty: true })
+    expect(perL.statusNav).not.toBeNull()
+    expect(flatL.rows[0].y).toBeLessThan(perL.rows[0].y)
+  })
+  it('人物別があれば案内つきの既定の説明', () => {
+    const c = ctx('appstore', { tabs: [{ label: '刀', entries: [], entriesByParty: { a: [] } }] })
+    expect(appstoreHasParty(c.content)).toBe(true)
+    expect(c.content.description).toContain('人物の切り替え')
   })
 })

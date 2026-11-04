@@ -1047,11 +1047,17 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
             // 一覧の画像のパスは他の画像と同じ規則で URL にする（アプリストアの品。派生画像は未作成で、無ければ文字だけ）
             gearShop: {
               ...gearShopParsed.value,
-              entries: gearShopParsed.value.entries.map((e) =>
-                e.image !== undefined
-                  ? { ...e, image: resolveUrl(resolveRpgImagePath(assetBase, e.image), baseUrl) }
-                  : e
-              ),
+              entries: gearShopParsed.value.entries.map((e) => {
+                if (e.image === undefined) return e
+                const url = resolveUrl(resolveRpgImagePath(assetBase, e.image), baseUrl)
+                if (url !== null) return { ...e, image: url }
+                warnings.push(
+                  `gearShop の品 '${e.id}' の image '${e.image}' を URL にできません（画像なしにします）`
+                )
+                const { image: _drop, ...rest } = e
+                void _drop
+                return rest
+              }),
             },
           }
         : {}),
