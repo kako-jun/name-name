@@ -445,9 +445,9 @@ export interface FieldMenuInfo {
   place: string
   /** 所持金（円） */
   gold: number
-  /** プレイ時間(ms)。メニュー中は進まない */
+  /** プレイ時間(ms)。メニュー中・戦闘中も常に進む */
   playMs: number
-  /** 歩数（`fieldPlayStats.ts` の定義）。メニュー中は進まない */
+  /** 歩数（`fieldPlayStats.ts` の定義）。歩行時のみ加算（メニュー中・戦闘中は加算しない） */
   steps: number
 }
 
