@@ -209,6 +209,35 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(I(s).effectInstances).toHaveLength(0)
   })
 
+  it('読み込みが終わらないまま終わる長さを過ぎたら待ちから捨てる。再生が空になっても待ちは進み、遅れて古い位置に出ない (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    const inner = s as unknown as { effectDeferred: unknown[]; playback: { active: unknown } }
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 60)
+    expect(inner.effectDeferred).toHaveLength(1)
+    // 再生が終わるまで進め、さらに終わる長さ（4 コマ×100ms）を過ぎるまで読み込みは終わらない
+    run(s, 3000)
+    expect(inner.playback.active).toBeNull()
+    expect(inner.effectDeferred).toHaveLength(0)
+    // その後に読み込みが終わっても出ない
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 100)
+    expect(I(s).effectInstances).toHaveLength(0)
+  })
+
+  it('再生が空になったあとに読み込みが終わっても、残りの長さがあるうちは出る (#941)', () => {
+    const { s, engine } = setup({ slash: sh({ frameMs: 5000 }) })
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 60)
+    run(s, 1500) // 再生は終わっているが、エフェクトの長さ（20 秒）は残っている
+    expect((s as unknown as { playback: { active: unknown } }).playback.active).toBeNull()
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 20)
+    expect(I(s).effectInstances).toHaveLength(1)
+  })
+
   it('読み込み中にエフェクトを待たせている間に読めなかった（null）ら、捨てて戦闘は進む (#941)', () => {
     const { s, engine } = setup({ slash: sh() })
     engine.selectAttack()

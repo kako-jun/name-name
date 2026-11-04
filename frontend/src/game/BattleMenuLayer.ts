@@ -112,6 +112,8 @@ export class BattleMenuLayer extends Container {
   private host: BattleMenuHost
   private backdrop = new Graphics()
   private body = new Container()
+  /** 操作の案内の置き場。窓（body）の開閉の動きには連動させず、窓が閉じ始めたらすぐ差し替える */
+  private hintBox = new Container()
   /** 開閉アニメーション (#745): 長さ（0 = なし）・今の動き・開いた状態か・閉じ切ったあとに描く案内 */
   private transitionMs = 0
   private anim: { kind: 'open' | 'close'; elapsed: number } | null = null
@@ -125,7 +127,7 @@ export class BattleMenuLayer extends Container {
     this.eventMode = 'passive'
     this.backdrop.eventMode = 'static'
     this.backdrop.on('pointertap', () => this.host.onCancelTap())
-    this.addChild(this.backdrop, this.body)
+    this.addChild(this.backdrop, this.body, this.hintBox)
   }
 
   /**
@@ -156,19 +158,20 @@ export class BattleMenuLayer extends Container {
     // 閉じ切った: 窓の中身を捨て、閉じている間に来た案内（あれば）を描く
     const pending = this.pendingClosed
     this.pendingClosed = null
-    this.clearBody()
+    for (const c of this.body.removeChildren()) c.destroy({ children: true }) // 案内は閉じ始めに描き済みなので残す
     this.settleOpen()
     this.opened = false
     this.visible = !!pending && pending.hint !== ''
-    if (pending) this.drawHint(pending.hint, pending.width, pending.height, [])
   }
 
   /** 窓を描き直す。`view` が空なら全体を隠し、入力も通す（開閉アニメーションが有効なら、閉じる動きのあとで隠す） */
   update(view: MenuView, width: number, height: number, hint = ''): void {
     const open = view.length > 0
     if (!open && this.anim?.kind === 'close') {
-      // 閉じている最中に来た更新: 動きは続け、終わったあとに出す案内だけ差し替える
+      // 閉じている最中に来た更新: 動きは続け、案内だけ差し替える
       this.pendingClosed = { width, height, hint }
+      this.clearHint()
+      this.drawHint(hint, width, height, [])
       return
     }
     if (!open && this.transitionMs > 0 && this.opened && this.body.children.length > 0) {
@@ -178,9 +181,12 @@ export class BattleMenuLayer extends Container {
       this.backdrop.eventMode = 'none'
       this.body.interactiveChildren = false
       this.pendingClosed = { width, height, hint }
-      this.anim = { kind: 'close', elapsed: 0 }
+      // 開く途中で閉じるときは、今の alpha から閉じ始める（飛ばない）。案内は窓の動きを待たずにすぐ差し替える
+      this.anim = { kind: 'close', elapsed: this.continuedElapsed('close') }
       this.opened = false
       this.visible = true
+      this.clearHint()
+      this.drawHint(hint, width, height, [])
       return
     }
     this.clearBody()
@@ -212,8 +218,10 @@ export class BattleMenuLayer extends Container {
     // 閉じている状態（または閉じる途中）から開いたときだけ、開く動きを始める。開いている最中の描き直しでは動きを続ける
     if (this.transitionMs > 0 && (!this.opened || this.anim?.kind === 'close')) {
       this.centerOf(view)
-      this.anim = { kind: 'open', elapsed: 0 }
-      const first = sampleMenuTransition('open', 0, {
+      // 閉じる途中から開き直すときは、今の alpha から続ける（alpha 0 へ飛ばない）
+      const from = this.continuedElapsed('open')
+      this.anim = { kind: 'open', elapsed: from }
+      const first = sampleMenuTransition('open', from, {
         ...DEFAULT_MOTION_TIMING,
         menuMs: this.transitionMs,
       })
@@ -232,6 +240,19 @@ export class BattleMenuLayer extends Container {
 
   private clearBody(): void {
     for (const c of this.body.removeChildren()) c.destroy({ children: true })
+    this.clearHint()
+  }
+
+  private clearHint(): void {
+    for (const c of this.hintBox.removeChildren()) c.destroy({ children: true })
+  }
+
+  /** 今の動きの途中の alpha から続けるための、動きの経過 ms（イージングの逆算。動きが無ければ始点 0） */
+  private continuedElapsed(kind: 'open' | 'close'): number {
+    if (this.anim === null) return 0
+    const a = Math.min(1, Math.max(0, this.body.alpha))
+    const p = kind === 'open' ? 1 - Math.sqrt(1 - a) : 1 - Math.sqrt(a)
+    return p * this.transitionMs
   }
 
   /** 拡大・縮小の中心を、一覧窓の外接矩形の中心にする（一覧が無ければ原点のまま＝alpha だけ効く） */
@@ -293,7 +314,7 @@ export class BattleMenuLayer extends Container {
     }
     t.x = at.cx
     t.y = at.bottom
-    this.body.addChild(t)
+    this.hintBox.addChild(t)
   }
 
   private drawList(v: MenuListView): void {

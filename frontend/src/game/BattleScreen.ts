@@ -2656,7 +2656,13 @@ export class BattleScreen extends Container {
    */
   private advancePresentation(dt: number): void {
     const wasBusy = isPlaybackBusy(this.playback)
-    if (!wasBusy && this.popups.length === 0 && this.effectInstances.length === 0) return
+    if (
+      !wasBusy &&
+      this.popups.length === 0 &&
+      this.effectInstances.length === 0 &&
+      this.effectDeferred.length === 0
+    )
+      return
     const r = advancePlayback(this.playback, dt, this.motionTiming, (e) => this.extraDownMsFor(e))
     this.playback = r.state
     let changed = false
