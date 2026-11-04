@@ -601,6 +601,7 @@ function parseSkills(
       'message',
       'telegraph',
       'summonId',
+      'learns',
     ] as const) {
       if (r[f] !== undefined && typeof r[f] !== 'string') {
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }
@@ -617,6 +618,10 @@ function parseSkills(
         ...(typeof r.message === 'string' ? { message: r.message } : {}),
         ...(typeof r.telegraph === 'string' ? { telegraph: r.telegraph } : {}),
         ...(tagsOf(r.tags) ? { tags: tagsOf(r.tags) } : {}),
+        // ラーニング (#882)。`[特技]` の `覚える:` と同じ（呪文 id）
+        ...(typeof r.learns === 'string' && r.learns.trim() !== ''
+          ? { learns: r.learns.trim() }
+          : {}),
         // 召喚獣の参照 (#750)。`beasts` を引き当てる前の印で、解決後の特技には演出の元（cue）が付く
         ...(typeof r.summonId === 'string' && r.summonId.trim() !== ''
           ? { summonId: r.summonId.trim() }
@@ -1183,6 +1188,8 @@ export function buildBattleSetup(
   atb?: BattleAtbConfig
   /** BattleEngine に渡す敵の最前列 (#896)。side かつ設定 JSON に `enemyGrid` があるときだけ付く（無ければ従来どおり） */
   enemyRow?: { grid?: EnemyGridSize }
+  /** BattleEngine に渡すラーニング (#882)。敵の特技に `learns` があるときだけ付く */
+  learning?: { names: Record<string, string>; onLearn: (spellId: string) => void }
   /** BattleEngine に渡す敵の特技 (#835) */
   skills: Record<string, SkillExecution>
   /** BattleEngine に渡す状態の宣言 (#870) */
@@ -1206,6 +1213,24 @@ export function buildBattleSetup(
   }
   const { width, height } = resolveSize(view.sizeId)
   const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
+  // ラーニング (#882): 敵の特技の `learns`（呪文 id）に書かれた呪文は、覚えるまで候補に出さない（覚えると全員の候補に足す）
+  const learnable = new Set(
+    Object.values(config.skills)
+      .map((s) => s.learns)
+      .filter((l): l is string => typeof l === 'string')
+  )
+  const spellRow = (p: BattleEntity, e: BattleSpellEntry): BattleSpellEntry => ({
+    ...e,
+    // ジョブの変換 (#876): 就いているジョブがこのタグの効果に効くときだけ、効果を変換して印を付ける
+    ...(convertForJob(config.memberJobs[p.id], e.tags, e.effect, `呪文 '${e.id}'`) ?? {}),
+  })
+  const menuSpells: Record<string, BattleSpellEntry[]> = Object.fromEntries(
+    [...party, ...Object.values(config.script?.joiners ?? {})].map((p) => [
+      p.id,
+      // 呪文は味方全員が同じものを使える（複製して渡す。BattleScreen は読むだけだが、設定を共有しない）
+      config.spells.filter((e) => !learnable.has(e.id)).map((e) => spellRow(p, e)),
+    ])
+  )
   // 脚本の一時付与 (#875): `付与:` の `わざ=` の特技 id（設定 JSON の `skills`）を、対象の味方のわざの行に足す。魔法は味方全員が同じ呪文を使うので足すものが無い
   const menuMembers = [...party, ...Object.values(config.script?.joiners ?? {})]
   const abilityRows: Record<string, BattleSkillEntry[]> = { ...config.abilities }
@@ -1225,6 +1250,22 @@ export function buildBattleSetup(
     skills: config.skills,
     statuses: config.statuses,
     itemNames: config.itemNames,
+    // ラーニング (#882): 敵の特技に `learns` があるときだけ。覚えた呪文を全員の候補に足す
+    ...(learnable.size > 0
+      ? {
+          learning: {
+            names: Object.fromEntries(config.spells.map((e) => [e.id, e.name])),
+            onLearn: (id: string) => {
+              const sp = config.spells.find((e) => e.id === id)
+              if (!sp) return
+              for (const p of [...party, ...Object.values(config.script?.joiners ?? {})]) {
+                const list = (menuSpells[p.id] ??= [])
+                if (!list.some((e) => e.id === id)) list.push(spellRow(p, sp))
+              }
+            },
+          },
+        }
+      : {}),
     // 脚本は戦闘ごとに複製を渡す（エンジンも複製するが、設定を共有しない）
     ...(config.script
       ? { script: JSON.parse(JSON.stringify(config.script)) as BattleScriptOptions }
@@ -1254,16 +1295,7 @@ export function buildBattleSetup(
       ...(config.commands ? { commands: [...config.commands] } : {}),
       menu: {
         // 呪文は味方全員が同じものを使える（複製して渡す。BattleScreen は読むだけだが、設定を共有しない）
-        spells: Object.fromEntries(
-          [...party, ...Object.values(config.script?.joiners ?? {})].map((p) => [
-            p.id,
-            // ジョブの変換 (#876): 就いているジョブがこのタグの効果に効くときだけ、効果を変換して印を付ける
-            config.spells.map((e) => ({
-              ...e,
-              ...(convertForJob(config.memberJobs[p.id], e.tags, e.effect, `呪文 '${e.id}'`) ?? {}),
-            })),
-          ])
-        ),
+        spells: menuSpells,
         items: config.items.map((e) => ({ ...e })),
         // わざ (#207): 固定のわざ（`party[].abilities`）と装備中の `gear` の `abilities`、脚本の `付与:` (#875) を持つ味方だけ。画面に出る味方の分だけ複製する
         ...(menuMembers.some((p) => abilityRows[p.id])

@@ -293,6 +293,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   }
   metrics.ended = engine.isOver()
   metrics.finalPhase = engine.getState().phase
+  if (alive && scenario.checkLearning) add(checkLearning(scenario, engine))
   if (alive) checkScriptExpect(scenario, engine, o.driveLimit, add)
   return { id: scenario.id, violations, metrics }
 }
@@ -385,6 +386,38 @@ function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
 
 function describe(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+}
+
+/**
+ * ラーニング (#882) の不変条件。戦闘が終わっていれば `getResult().learnedSpells` を見る:
+ * - `learning` を渡さないシナリオには習得済みが出ない
+ * - 重複せず、初期の習得済みを先頭にそのまま含み、残りは「味方に当たりうる敵の特技（相手単体・相手全体）の `learns`」のどれか
+ *   （敵が仲間・自分へ使う技は覚えない）
+ */
+function checkLearning(scenario: Scenario, engine: HarnessEngine): Violation[] {
+  const result = engine.getState().phase && engine.isOver() ? engine.getResult?.() : null
+  if (!result) return []
+  const out: Violation[] = []
+  const bad = (detail: string): void => {
+    out.push({ kind: 'learning-invariant', detail, opIndex: scenario.ops.length })
+  }
+  const got = result.learnedSpells
+  if (!scenario.learning) {
+    if (got !== undefined) bad(`learning を渡していないのに習得済み ${JSON.stringify(got)} が出た`)
+    return out
+  }
+  const initial = scenario.learning.initial ?? []
+  const allowed = new Set(initial)
+  for (const sk of Object.values(scenario.skills ?? {})) {
+    if (sk.learns && (sk.target === '相手単体' || sk.target === '相手全体')) allowed.add(sk.learns)
+  }
+  const list = got ?? []
+  if (new Set(list).size !== list.length) bad(`習得済みが重複している ${JSON.stringify(list)}`)
+  if (JSON.stringify(list.slice(0, initial.length)) !== JSON.stringify([...new Set(initial)])) {
+    bad(`初期の習得済み ${JSON.stringify(initial)} が先頭に残っていない ${JSON.stringify(list)}`)
+  }
+  for (const id of list) if (!allowed.has(id)) bad(`覚えるはずのない呪文 '${id}' が入った`)
+  return out
 }
 
 /**

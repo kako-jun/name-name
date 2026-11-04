@@ -2220,3 +2220,39 @@ describe('設定 JSON: ジョブの変換 (#876)', () => {
     expect(r.ok).toBe(false)
   })
 })
+
+describe('設定 JSON: ラーニング (#882)', () => {
+  const raw = {
+    skills: [{ id: 'breath', name: 'ほのおのいき', effect: 'damage 5..5', learns: 'flame' }],
+    spells: [
+      { id: 'flame', name: 'ほのお', mp: 1, effect: 'damage 9..9' },
+      { id: 'ice', name: 'こおり', mp: 1, effect: 'damage 9..9' },
+    ],
+  }
+  it('覚える呪文は最初は候補に出ず、覚えると全員に足される。learning を渡す', () => {
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    const setup = buildBattleSetup(r.value, view())
+    expect(setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id)).toEqual(['ice'])
+    expect(setup.learning?.names.flame).toBe('ほのお')
+    setup.learning?.onLearn('flame')
+    setup.learning?.onLearn('flame')
+    expect(setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id)).toEqual([
+      'ice',
+      'flame',
+    ])
+  })
+  it('learns を書かなければ従来どおり（全部出る・learning なし）', () => {
+    const r = parseConfig(
+      { ...raw, skills: [{ id: 'breath', name: 'x', effect: 'damage 1..2' }] },
+      BASE
+    )
+    if (!r.ok) throw new Error(r.error)
+    const setup = buildBattleSetup(r.value, view())
+    expect(setup.learning).toBeUndefined()
+    expect(setup.options.menu.spells?.[setup.party[0].id].map((e) => e.id)).toEqual([
+      'flame',
+      'ice',
+    ])
+  })
+})

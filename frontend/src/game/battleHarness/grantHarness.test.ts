@@ -21,8 +21,11 @@ describe('grantMatrix', () => {
   })
 
   it('総当たりの末尾に足され、skip で外せる（他の族の並びは変わらない）', () => {
-    const withIt = buildSweep({ ...NO_RANDOM, skip: ['job-conversion'] })
-    const without = buildSweep({ ...NO_RANDOM, skip: ['script-grant', 'job-conversion'] })
+    const withIt = buildSweep({ ...NO_RANDOM, skip: ['job-conversion', 'learning'] })
+    const without = buildSweep({
+      ...NO_RANDOM,
+      skip: ['script-grant', 'job-conversion', 'learning'],
+    })
     expect(withIt.length - without.length).toBe(54)
     expect(withIt.slice(0, without.length).map((s) => s.id)).toEqual(without.map((s) => s.id))
     expect(withIt.slice(without.length).map((s) => s.id)).toEqual(all.map((s) => s.id))

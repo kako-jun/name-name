@@ -1525,3 +1525,75 @@ export function jobConversionScenarios(): Scenario[] {
   }
   return out
 }
+
+/** ラーニング (#882)。敵の特技の向き（味方へ当たる・敵の仲間へ・自分へ・耐性で無効）、覚える呪文（なし・1 つ・2 つ）、初期の習得済み */
+const LEARNING_SKILLS: ReadonlyArray<{ name: string; target: string; affinity?: boolean }> = [
+  { name: 'opp-single', target: '相手単体' },
+  { name: 'opp-all', target: '相手全体' },
+  { name: 'ally-single', target: '仲間単体' },
+  { name: 'self', target: '自分' },
+  { name: 'nullified', target: '相手単体', affinity: true },
+]
+
+/**
+ * ラーニング (#882)。敵の特技の向き × 覚える呪文（なし・1 つ・2 つ）× 初期の習得済み（なし・あり・同じ呪文）× 味方の人数 × ターン制/ATB。
+ * 敵が特技を繰り返し使い、決着まで進める。不変条件は `learning-invariant`（`run.ts` の `checkLearning`）。
+ * `learning` を渡さない対照のシナリオも各向きに 1 つ（習得済みが出ないこと）
+ */
+export function learningScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  for (const atb of [false, true]) {
+    for (const sk of LEARNING_SKILLS) {
+      for (const learnCount of [0, 1, 2]) {
+        for (const initial of [undefined, [], ['flame'], ['ice', 'flame']] as const) {
+          for (const partySize of [1, 2]) {
+            const learns = learnCount === 0 ? [] : learnCount === 1 ? ['flame'] : ['flame', 'ice']
+            const skills = Object.fromEntries(
+              (learns.length === 0 ? [undefined] : learns).map((l, i) => [
+                `sk${i}`,
+                {
+                  name: `技${i}`,
+                  target: sk.target,
+                  effect:
+                    sk.target === '仲間単体' || sk.target === '自分'
+                      ? 'heal 5..5'
+                      : 'damage 3..3 type=fire',
+                  ...(l ? { learns: l } : {}),
+                },
+              ])
+            )
+            out.push({
+              id: `learning/${atb ? 'atb' : 'turn'}/${sk.name}/l${learnCount}/${initial ? initial.join('+') || 'empty' : 'off'}/p${partySize}`,
+              seed: 170_000 + out.length,
+              party: Array.from({ length: partySize }, (_, i) =>
+                entity(`a${i}`, {
+                  hp: 400,
+                  maxHp: 400,
+                  atk: 30,
+                  ...(sk.affinity ? { affinity: { nullify: ['fire'] } } : {}),
+                })
+              ),
+              enemies: [
+                foe('s', {
+                  hp: 300,
+                  maxHp: 300,
+                  atk: 1,
+                  agi: 9,
+                  actions: [`候補=${Object.keys(skills).join(' | ')}`],
+                }),
+              ],
+              atb: atb ? { mode: 'active' } : undefined,
+              skills,
+              spells: [],
+              items: [],
+              ops: [],
+              ...(initial ? { learning: { initial: [...initial] } } : {}),
+              checkLearning: true,
+            })
+          }
+        }
+      }
+    }
+  }
+  return out
+}

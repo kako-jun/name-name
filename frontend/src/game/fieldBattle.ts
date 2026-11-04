@@ -170,6 +170,8 @@ export interface FieldBattleRoster extends EquipmentRoster {
   skills?: Record<string, SkillDef>
   /** 状態のマスター (#870)。`[状態]` の宣言。あれば戦闘エンジンの `statuses` に渡す（継続ダメージ・行動不能・回復の反転などが働く） */
   statuses?: Record<string, StatusDef>
+  /** ラーニング (#882): パーティ共通の習得済みの呪文 id（ホストが保存した分。`BattleResult.learnedSpells` で返ったもの）。全員の呪文の候補の最後に出る。保存は #738 の領分 */
+  learnedSpells?: string[]
   /** アイテムのマスター (#831)。戦利品のログ（「〇〇 を てにいれた！」）の表示名と、装備品 (#207) の宣言（`種別` が 武器 / 防具 / 盾 / 兜 のもの）に使う。所持品の保存は持たない */
   items?: Record<string, ItemDef>
 }
@@ -181,6 +183,50 @@ export interface FieldBattleRoster extends EquipmentRoster {
  * 「わざ」(#873) は `PartyMemberDef.abilities`（`わざ:` の特技 id）に、装備中のアイテムの `わざ` (#207) を重複なく後ろへ足した列のうち、
  * 特技マスター（`roster.skills`）にあるものを並べて作る。
  */
+/** 呪文のマスターから候補の 1 行を作る（ジョブの変換 #876 を含む） */
+function spellEntry(
+  sp: SpellDef,
+  job: ReturnType<typeof resolveMemberJob>['job']
+): BattleSpellEntry {
+  const conv = convertForJob(job, sp.tags, sp.effect, `呪文 '${sp.id}'`)
+  return {
+    id: sp.id,
+    name: sp.name,
+    mp: sp.mp,
+    target: sp.target,
+    ...(sp.multiTarget === true ? { multiTarget: true } : {}),
+    ...(conv ? { effect: conv.effect, convertedBy: conv.convertedBy } : {}),
+    ...(!conv && sp.effect !== undefined ? { effect: sp.effect } : {}),
+    ...(sp.builtin !== undefined ? { builtin: sp.builtin } : {}),
+  }
+}
+
+/**
+ * ラーニング (#882): 戦闘中に覚えた呪文を、全員の呪文の候補（`menu.spells`）の最後に足す。候補窓は開くたびにこの一覧を引くので、
+ * 以後その戦闘から全員が使える。マスターに無い id・すでにある呪文は何もしない。`menu` が無い戦闘（呪文もアイテムも無い）では足せない
+ */
+export function addLearnedSpellToMenu(
+  menu: BattleMenuData | undefined,
+  roster: FieldBattleRoster,
+  party: readonly BattleEntity[],
+  spellId: string
+): void {
+  const sp = roster.spells && hasOwn(roster.spells, spellId) ? roster.spells[spellId] : undefined
+  if (!menu || !sp) return
+  const spells = (menu.spells ??= {}) as Record<string, BattleSpellEntry[]>
+  for (const member of party) {
+    const def = roster.party[member.id]
+    const list = (spells[member.id] ??= [])
+    if (list.some((e) => e.id === sp.id)) continue
+    list.push(
+      spellEntry(
+        sp,
+        def && (roster.jobs || roster.currentJobs) ? resolveMemberJob(def, roster).job : undefined
+      )
+    )
+  }
+}
+
 export function buildBattleMenuData(
   roster: FieldBattleRoster,
   party: readonly BattleEntity[]
@@ -229,23 +275,18 @@ export function buildBattleMenuData(
       }
       if (sl.length > 0) skills[member.id] = sl
     }
-    if (!def?.learns) continue
+    if (!def) continue
     const level = def.level ?? 1
     const list: BattleSpellEntry[] = []
-    for (const l of def.learns) {
+    for (const l of def.learns ?? []) {
       const sp = Object.prototype.hasOwnProperty.call(master, l.spell) ? master[l.spell] : undefined
       if (!sp || l.level > level || list.some((e) => e.id === sp.id)) continue
-      const conv = convertForJob(jobOf(def), sp.tags, sp.effect, `呪文 '${sp.id}'`)
-      list.push({
-        id: sp.id,
-        name: sp.name,
-        mp: sp.mp,
-        target: sp.target,
-        ...(sp.multiTarget === true ? { multiTarget: true } : {}),
-        ...(conv ? { effect: conv.effect, convertedBy: conv.convertedBy } : {}),
-        ...(!conv && sp.effect !== undefined ? { effect: sp.effect } : {}),
-        ...(sp.builtin !== undefined ? { builtin: sp.builtin } : {}),
-      })
+      list.push(spellEntry(sp, jobOf(def)))
+    }
+    // ラーニング (#882): パーティ共通の習得済み（`roster.learnedSpells`）は、全員の候補の最後に足す（装備枠なし・レベル不問）
+    for (const id of roster.learnedSpells ?? []) {
+      const sp = Object.prototype.hasOwnProperty.call(master, id) ? master[id] : undefined
+      if (sp && !list.some((e) => e.id === sp.id)) list.push(spellEntry(sp, jobOf(def)))
     }
     if (list.length > 0) spells[member.id] = list
   }
@@ -579,7 +620,30 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
       ? buildPartyBattleEntities(roster, settings.layout)
       : [buildHeroBattleEntity(roster, settings.layout)]
   const battleEnemies = scripted ? scripted.enemies : enemies
+  // 途中参戦する味方（#741）の呪文・わざも、参戦したときに選べるよう最初から用意する
+  // 脚本の `付与:` (#875) は、その戦闘の候補窓にだけ足す（ロスター自体は書き換えない）
+  const menuRoster = scripted
+    ? applyScriptGrants(roster, scripted.script.rules, scripted.script.id)
+    : roster
+  const menuParty = [...party, ...Object.values(scripted?.script.joiners ?? {})]
+  const menuData = buildBattleMenuData(menuRoster, menuParty)
+  // ラーニング (#882): 敵の特技（`覚える:`）か保存済みの習得済みがあるときだけ渡す（無ければ従来どおり）
+  const learnable =
+    (roster.learnedSpells?.length ?? 0) > 0 ||
+    Object.values(roster.skills ?? {}).some((s) => s.learns !== undefined)
   const engine = new BattleEngine(party, battleEnemies, {
+    ...(learnable
+      ? {
+          learning: {
+            ...(roster.learnedSpells ? { initial: roster.learnedSpells } : {}),
+            names: Object.fromEntries(
+              Object.entries(roster.spells ?? {}).map(([id, sp]) => [id, sp.name])
+            ),
+            // 覚えた呪文は全員の候補に足す（候補窓は開くたびに一覧を引くので、以後その戦闘から使える）
+            onLearn: (id) => addLearnedSpellToMenu(menuData, menuRoster, menuParty, id),
+          },
+        }
+      : {}),
     ...(scripted ? { script: scripted.script } : {}),
     ...(settings.atb ? { atb: settings.atb } : {}),
     // 敵の最前列 (#896)。設定は無く、side かつ敵グリッドがあるときだけ（front は敵の列を描かない）。グリッドは BattleScreen と同じものを渡す
@@ -613,12 +677,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
     commands: settings.commands,
-    // 途中参戦する味方（#741）の呪文・わざも、参戦したときに選べるよう最初から用意する
-    // 脚本の `付与:` (#875) は、その戦闘の候補窓にだけ足す（ロスター自体は書き換えない）
-    menu: buildBattleMenuData(
-      scripted ? applyScriptGrants(roster, scripted.script.rules, scripted.script.id) : roster,
-      [...party, ...Object.values(scripted?.script.joiners ?? {})]
-    ),
+    menu: menuData,
     initialHeldKeys: gate.heldKeys(),
     isInputSuspended: () => gate.isSuspended,
     onClose: (outcome, result) => {

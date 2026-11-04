@@ -22,11 +22,11 @@ describe('enemyRowScenarios', () => {
   it('総当たりの末尾に足され、skip で外せる（他の族の並びは変わらない）', () => {
     const withIt = buildSweep({
       ...NO_RANDOM,
-      skip: ['enemy-level', 'script-grant', 'job-conversion'],
+      skip: ['enemy-level', 'script-grant', 'job-conversion', 'learning'],
     })
     const without = buildSweep({
       ...NO_RANDOM,
-      skip: ['enemy-row', 'enemy-level', 'script-grant', 'job-conversion'],
+      skip: ['enemy-row', 'enemy-level', 'script-grant', 'job-conversion', 'learning'],
     })
     expect(withIt.length - without.length).toBe(30)
     expect(withIt.slice(0, without.length).map((s) => s.id)).toEqual(without.map((s) => s.id))

@@ -294,6 +294,16 @@ export interface BattleEngineOptions {
    */
   enemyRow?: { grid?: EnemyGridSize }
   /**
+   * ラーニング (#882)。敵の特技（`learns` を持つもの）を味方が食らうと、その呪文をパーティ共通の習得済みに入れる（`BattleResult.learnedSpells`）。
+   * `initial` は戦闘の初期の習得済み（ホストの保存分）、`names` は呪文 id → 表示名（ログ用。無い id は id のまま）、
+   * `onLearn` は新しく覚えたときの通知（表示側が候補の一覧に足すために使う）。渡さない戦闘は従来どおり（特技に `learns` があっても何も覚えない）
+   */
+  learning?: {
+    initial?: readonly string[]
+    names?: Readonly<Record<string, string>>
+    onLearn?: (spellId: string) => void
+  }
+  /**
    * 敵が使える特技 (#835)。`行動:` の候補の id → 特技の実行内容（マスターの `[特技]` から `toSkillExecutions` で作る）。
    * 候補の id がここに無ければ、その行動は通常攻撃になる。エンジンはマスター参照を持たないので呼び出し側が渡す
    */
@@ -373,6 +383,9 @@ export class BattleEngine {
   /** 敵ごとに盗めた回数 (#831)。`ぬすむ回数` に達した敵は空になる */
   private stolenCounts = new Map<BattleEntity, number>()
   private itemNames: Record<string, string>
+  /** ラーニング (#882)。パーティ共通の習得済み（覚えた順）。`learning` を渡した戦闘だけ使う */
+  private learned: string[] = []
+  private learning: BattleEngineOptions['learning']
   /** ドロップを抽選した印（勝利は 1 度だけ） */
   private dropsRolled = false
   /** 脚本制御の戦闘 (#741)。解釈済みの宣言。渡さない戦闘は null（脚本の処理は一切走らない） */
@@ -405,6 +418,10 @@ export class BattleEngine {
       if (edges.size > 0) this.enemyRowRule = { edges, front: Math.max(...edges.values()) }
     }
     this.itemNames = opts.itemNames ?? {}
+    this.learning = opts.learning
+    if (opts.learning?.initial) {
+      for (const id of opts.learning.initial) if (!this.learned.includes(id)) this.learned.push(id)
+    }
     for (const e of enemies) {
       const spec = parseLootSpec(e.loot)
       if (!spec) continue
@@ -958,6 +975,11 @@ export class BattleEngine {
         : []
     for (const line of lines) this.appendLog(line)
     if (skill.convertedBy) this.appendLog(`(${skill.convertedBy}ジョブの 効果)`)
+    // ラーニング (#882): 敵の特技が味方に対象として当たったら（MISS・無効でも、対象に解決された時点で）その呪文を覚える
+    if (skill.learns && user.side === 'enemy') {
+      const victim = targets.find((t) => this.state.party.includes(t))
+      if (victim) this.learnSpell(skill.learns, victim)
+    }
     this.recordEffect(
       'skill',
       caster,
@@ -974,6 +996,18 @@ export class BattleEngine {
   }
 
   // ===== 内部 =====
+
+  /** ラーニング (#882): 呪文をパーティ共通の習得済みに入れる。`learning` を渡していない戦闘・すでに覚えている呪文は何もしない */
+  private learnSpell(spellId: string, learner: BattleEntity): void {
+    if (!this.learning || this.learned.includes(spellId)) return
+    this.learned.push(spellId)
+    const name =
+      this.learning.names && hasOwn(this.learning.names, spellId)
+        ? this.learning.names[spellId]
+        : spellId
+    this.appendLog(`${learner.name} は ${name} を おぼえた！`)
+    this.learning.onLearn?.(spellId)
+  }
 
   private evalEffectDsl(effectStr: string, ctx: EffectContext): string[] {
     const parsed = parseEffect(effectStr)
@@ -1538,6 +1572,8 @@ export class BattleEngine {
       gold: this.state.earnedGold,
       loot,
       items: summarizeLoot(loot),
+      // ラーニング (#882): 習得済みがあるときだけ（書かない戦闘の結果は従来と同一）
+      ...(this.learned.length > 0 ? { learnedSpells: [...this.learned] } : {}),
       // 脚本制御の戦闘 (#741): 結果フラグ・次のイベントをホストへ返す（宣言が無い終わり方も、脚本の戦闘だったことは伝える）
       ...(script
         ? {
@@ -2585,6 +2621,8 @@ export interface SkillExecution {
   telegraph?: string
   /** ジョブの変換 (#876) が効果を変えたときのジョブの名前。あれば使ったときのログに「(〇〇ジョブの 効果)」を足す（味方のわざ・呪文だけ）。無ければ従来どおり */
   convertedBy?: string
+  /** ラーニング (#882)。`[特技]` の `覚える:` の呪文 id。敵が使ったとき、食らった味方がこの呪文をパーティ共通で覚える。無ければ従来どおり */
+  learns?: string
   /** タグ (#876)。変換の目印で、エンジンは読まない（設定 JSON の戦闘サンプルが持ち回る） */
   tags?: string[]
   /** 召喚獣の演出 (#750)。あれば行動の記録（`BattleActionEvent.summon`）に載る。魔石 (#889) の召喚と、味方の「わざ」（`召喚獣id` を持つ特技）が付ける。敵が使う特技の `cue` は無視される */

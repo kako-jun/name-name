@@ -52,6 +52,10 @@ export interface Scenario {
   checkEnemyLevel?: true
   /** わざの操作ごとに、ジョブの変換 (#876) のログ「(〇〇ジョブの 効果)」が、変換した特技のときだけ 1 回出ることを検査する（族 `job-conversion` だけ）。無いシナリオは従来どおり */
   checkJobConversion?: true
+  /** ラーニング (#882)。あれば `BattleEngine` の `learning`（`initial` は戦闘の初期の習得済み）として渡し、終了時の `BattleResult.learnedSpells` を検査する（族 `learning` だけ）。無いシナリオは従来どおり */
+  learning?: { initial?: string[] }
+  /** 終了時の習得済みの結果を検査する (#882)（族 `learning` だけ）。無いシナリオは従来どおり */
+  checkLearning?: true
   /** 魔法の全体化 (#895) の割り算の規則を操作ごとに検査する（族 `multi-target` だけ。耐性・相性を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
   checkSpread?: true
   /** 脚本制御の戦闘 (#741 / #863)。`[戦闘]` の宣言（`rules`）と、途中参戦できる味方。無いシナリオは従来どおり */
@@ -66,6 +70,8 @@ export interface Scenario {
 /** ハーネスがエンジンに要求する最小の口。`BattleEngine` はこれを満たす（検出器のテストでは合成エンジンを差し込む） */
 export interface HarnessEngine {
   getState(): Readonly<BattleState>
+  /** 戦闘の結果 (#831)。終わっていなければ null。ラーニングの検査 (#882) だけが使う（合成エンジンは持たなくてよい） */
+  getResult?(): { learnedSpells?: string[] } | null
   isOver(): boolean
   tick(ms: number): void
   selectAttack(targetId?: string): void
@@ -87,6 +93,8 @@ export const realEngineFactory: EngineFactory = (scenario, rng) =>
     atb: scenario.atb ? { mode: scenario.atb.mode } : undefined,
     // 敵の最前列 (#896)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
     ...(scenario.enemyRow ? { enemyRow: clone(scenario.enemyRow) } : {}),
+    // ラーニング (#882)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
+    ...(scenario.learning ? { learning: { initial: scenario.learning.initial ?? [] } } : {}),
     skills: scenario.skills ? clone(scenario.skills) : undefined,
     statuses: scenario.statuses ? clone(scenario.statuses) : undefined,
     script: scenario.script ? clone(scenario.script) : undefined,

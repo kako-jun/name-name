@@ -718,6 +718,10 @@ pub struct SkillDef {
     /// タグ (#876。`タグ: ぬすむ`)。`SpellDef.tags` と同じ。書かない特技は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// ラーニング (#882。`覚える: <呪文id>`)。味方が敵のこの特技を食らうと、その呪文をパーティ共通の習得済みに入れる（以後、全員の呪文の候補に出る）。
+    /// `[呪文 id]` の id を書いた生文字列で、解決は runtime。書かない特技は None（従来どおり何も覚えない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learns: Option<String>,
 }
 
 /// 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。
