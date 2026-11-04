@@ -24,6 +24,7 @@ import {
   WallState,
 } from './GameState'
 import type { PaperDollOutlineConfig } from './outlineFilter'
+import type { RpgSaveState } from './rpgSave'
 
 const SLOT_COUNT = 3
 const STORAGE_PREFIX = 'name-name-save-'
@@ -153,6 +154,11 @@ export interface SaveSlotData {
   entryResumeIndex?: number
   /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。無い・0 は先頭から。 */
   entryRawIndex?: number
+  /**
+   * RPG 状態 (#1021)。パーティ・所持品・装備・所持金・フィールド現在地・戦闘中状態。
+   * 後方互換: 古いセーブデータには無い → undefined は RPG 状態なし扱い。ノベル側は中身を解釈せず持ち回すだけ。
+   */
+  rpg?: RpgSaveState
   savedAt: string // ISO 8601
   sceneName: string | null
 }

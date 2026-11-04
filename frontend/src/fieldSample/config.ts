@@ -247,7 +247,7 @@ export interface FieldSampleConfig {
   battle: FieldBattleConfig
   /**
    * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘サンプルと同じ書式）。`items`: 試作用の所持品（`count` が所持数。
-   * 本編の inventory とは無関係で、戦闘のたびに設定の値から始まる）。どちらも `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。
+   * 本編の inventory とは無関係。初期値は設定の値で、戦闘が終わると残数を持ち越す（#1021）。`?resume=` で再開したときはセーブの値から始まる）。どちらも `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。
    * 未指定は空＝じゅもん・どうぐの窓が開かない（従来どおり）
    */
   spells: BattleSpellEntry[]

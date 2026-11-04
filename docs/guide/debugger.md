@@ -162,8 +162,11 @@ interface StartFromOptions {
   textIndex?: number                       // 省略時 0
   sentenceIndex?: number                   // 省略時 0（novel の現ページ内の文）
   confinedSceneIds?: string[] | null       // 在圏一覧（省略・null は解除）
+  rpg?: RpgSaveState                       // RPG 状態（#1021。セーブの `rpg` と同じ形。ノベル側は解釈せず持ち回す。省略は持たない）
 }
 ```
+
+**RPG 状態（#1021）**: パーティ・所持品・装備・所持金・フィールド現在地（絵・座標・向き）・戦闘中状態は `SaveSlotData.rpg`（型は `game/rpgSave.ts` の `RpgSaveState`）に載る。ノベルのレンダラは中身を解釈せず、セーブ/ロード/`startFrom({ rpg })` で持ち回すだけ（入場が確定したあと `getSnapshot().rpg` で読める。`startFrom` に渡さなければ持ち越さない）。この状態を消費して再開するのは一枚絵フィールド（下の「セーブから再開」）で、手順は [状態を用意して起動する](./resume-demo.md) にまとめてある。
 
 URL からの初期入場は1回だけで、`?debug_scene=` → `?scene=` → クイックセーブの自動ロード（debug 指定も `?scene=` も無いときだけ）→ エントリの順に、入場できなかったときだけ次へ進む（詳細は仕様書の「初期入場」）。`?debug_scene=` が存在しない ID を指していても、`?scene=` の在圏はそのまま保たれる。
 
@@ -360,8 +363,9 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 ### 戦闘の候補窓・ポーズ・素材なしの確認（#890）
 
 - `monsters.<id>.poses` / `party[].poses`: 戦闘ポーズ別スプライト。`{ "idle": "...", "hurt": "...", "down": "..." }` のように URL 文字列で部分指定できる（戦闘サンプルと同じ検証。未知のポーズ名は無視し、空白だけの URL は読み飛ばす。値が文字列でない・URL を解決できないときは `monsters.slime.poses.idle` のような path つきの読み込みエラー）。`presentation: "ff"` で表示に使われる
-- `spells`: 味方全員が使える呪文の配列。書式は戦闘サンプルと同じ（`name` 必須・`id` 省略は連番・`mp`・`target`・`effect` / `builtin`）。`items`: 試作用の所持品の配列（`name` 必須・`effect` / `builtin`・`count`）。`count` は所持数で、小数は切り捨て・負数は 0、省略すると所持数の管理なし（無限・「×」表示なし）。`count` が 0 のアイテムはグレーで、決定すると「もっていない！」と出て窓は閉じない。使うたびに戦闘中だけ 1 減り、次の戦闘は設定の値から始まる（本編の inventory とは連動しない）
+- `spells`: 味方全員が使える呪文の配列。書式は戦闘サンプルと同じ（`name` 必須・`id` 省略は連番・`mp`・`target`・`effect` / `builtin`）。`items`: 試作用の所持品の配列（`name` 必須・`effect` / `builtin`・`count`）。`count` は所持数で、小数は切り捨て・負数は 0、省略すると所持数の管理なし（無限・「×」表示なし）。`count` が 0 のアイテムはグレーで、決定すると「もっていない！」と出て窓は閉じない。使うたびに 1 減り、戦闘が終わると残数を持ち越す（#1021。初期値は設定の `count`、`?resume=` で再開したときはセーブの値。本編の inventory とは連動しない）
 - `skills`（#873）: 「わざ」の候補の配列（味方全員共通。`name` 必須・`id` 省略は連番・`target`〔特技の相対表現: `相手単体`（既定）/ `相手全体` / `仲間単体` / `仲間全体` / `自分`〕・`effect` / `builtin`）。MP は持たない。`battle.commands`: `["skill", "spell", "item", "escape"]` のようにコマンドの構成と順序を指定する（id は `attack` / `skill` / `spell` / `item` / `escape`。重複・未知の id・空配列は読み込みエラー。未指定は従来の attack / spell / item / escape）。順序が配置順で、`cross` の十字キーも位置で決まる
 - 候補窓は `layout: "side"` のとき `battle.commandLayout` が `grid` でも `cross` でも出る（コマンドの矢印キー決定は `cross` のときだけ）。十字キーは並びの位置で決まる（既定の並びなら 上=たたかう・左=じゅもん・右=どうぐ・下=にげる）。未指定は空＝じゅもん・どうぐの窓は開かない（従来どおり）。MP 不足の呪文はグレーで、決定すると「MPが たりない！」。指せる対象がいない（敵が全員倒れている・手の指す敵が倒れている）ときは「たいしょうがいない！」と出て、窓は閉じず MP・所持数も減らない
+- セーブから再開する (#1021): `field-sample.html?resume=<0|1|2|quick>`。localStorage のセーブ（キー `name-name-save-field-sample-<slot>`）の `rpg` を読み、パーティ・所持品・所持金・現在地（絵・座標・向き・フラグ）・戦闘中状態（敵・HP・状態異常・ATB ゲージ・コマンド待ちの順・敵の記憶）をその局面から再開する。書き方・例・実機の手順は [状態を用意して起動する](./resume-demo.md)。`window.fieldSample.rpg()` が今の局面をセーブ形式で返し、`saveRpg(slot)` が書き込む（同じ形式で読み戻せる）
 - 素材なしで一通り試す: `http://localhost:7374/field-sample.html?fixture=dummy`（主人公・同行者をアクスタ表示にするなら `&spriteStyle=acrylic` を足す）。画像ファイルを使わず、canvas で作った単色の矩形（背景・歩行・モンスター・味方・ポーズ）でフィールドと戦闘を組む。歩行は斜めも持つ 8 方向で、左側の斜め 2 方向は `mirrorOf` による左右反転なので、8 方向と `mirrorOf` の両方を試せる。野原を歩く → エンカウント（ツールバーの「今すぐエンカウント」でも可）→ わざ（きる・なぎはらい。このフィクスチャは `battle.commands` で「たたかう」を外した sit-by-me 型の構成）・じゅもん（ほのお・いなずま・ヒール、メテオは全員 MP 不足でグレー）・どうぐ（ポーション、エーテルは所持数 0 でグレー）・にげる を確認できる。`?config=` を同時に付けた場合は `?config=` が優先される
 - 構成: フィクスチャは `frontend/src/fieldSample/dummyFixture.ts`、候補窓データの組み立ては `frontend/src/fieldSample/battleMenu.ts`（`buildBattleMenu`）

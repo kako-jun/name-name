@@ -133,6 +133,17 @@ import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import { buildDummyFixture } from './dummyFixture'
+import {
+  FIELD_SAMPLE_DOC_KEY,
+  baseConfigOf,
+  loadResume,
+  mergeFlags,
+  resumeBackground,
+  resumeBattleEngineOptions,
+} from './fieldResume'
+import { SaveManager } from '../game/SaveManager'
+import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
+import type { BattleItemEntry } from '../game/battleMenu'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
 import {
   beginBattleWithTransition,
@@ -341,6 +352,15 @@ async function loadNpcScript(config: FieldSampleConfig): Promise<FieldScriptEven
 
 async function main(): Promise<void> {
   const config = await loadConfig()
+  // セーブからの途中再開 (#1021)。`?resume=<0|1|2|quick>`。状態は localStorage のセーブ（`SaveSlotData.rpg`）で与える
+  const resume = loadResume(location.search, config)
+  const resumed = resume.kind === 'ok' ? resume.resolved : null
+  if (resume.kind === 'error')
+    showError(`セーブから再開できません（設定の開始位置から始めます）\n${resume.message}`)
+  for (const w of resumed?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
+  /** 再開の開始シーン・位置・向き（セーブに現在地が無ければ設定の開始位置） */
+  const startSceneId = resumed?.field?.sceneId ?? config.startScene
+  const startPoint = resumed?.field ? { x: resumed.field.x, y: resumed.field.y } : config.start
   const cache = new Map<string, Promise<LoadedScene>>()
   const ensureScene = (id: string): Promise<LoadedScene> => {
     let p = cache.get(id)
@@ -438,8 +458,8 @@ async function main(): Promise<void> {
   )
   const emotionLayer = emotionSheets ? new FieldEmotionLayer(emotionSheets, emotionTextures) : null
 
-  let scene = await ensureScene(config.startScene)
-  let sceneId = config.startScene
+  let scene = await ensureScene(startSceneId)
+  let sceneId = startSceneId
 
   const app = new Application()
   await app.init({
@@ -558,19 +578,25 @@ async function main(): Promise<void> {
         `[field-sample] ${what} (${p.x}, ${p.y}) は橙の上ですが、いまは通れない状態なので近い白へずらします。橙を避けた位置にしてください`
       )
   }
+  const startFlags = mergeFlags(config.flags, resumed?.field?.flags)
   warnOrangeShifted(
     'start',
     scene,
-    config.start,
-    config.assist ? evalAssist(config.assist, config.flags).passable : false
+    startPoint,
+    config.assist ? evalAssist(config.assist, startFlags).passable : false
   )
-  const startSnap = snapToWalkable(landingMask(scene, config.flags), config.start, 80)
+  const startSnap = snapToWalkable(landingMask(scene, startFlags), startPoint, 80)
   if (!startSnap)
     showError(
-      `start (${config.start.x}, ${config.start.y}) の近くに歩ける点がありません。マスクか start を確認してください`
+      `start (${startPoint.x}, ${startPoint.y}) の近くに歩ける点がありません。マスクか start を確認してください`
     )
-  let pos: Vec = startSnap ?? config.start
-  let facing: Facing8 = 'down'
+  let pos: Vec = startSnap ?? startPoint
+  // 向き。斜めの絵が揃っていない設定へ斜めの向きを復元するときは近い 4 方向へ寄せる
+  let facing: Facing8 = resumed?.field
+    ? (DIAGONAL_FACINGS as readonly string[]).includes(resumed.field.facing) && !diagonalWalk
+      ? facing4(resumed.field.facing)
+      : resumed.field.facing
+    : 'down'
   /** 指定シーンでの主人公の身体の範囲（端リンクの接触判定・着地の置き場所用。表示と同じ高さ・縦横比） */
   const playerBody = (id: string) =>
     bodyExtent(
@@ -582,7 +608,7 @@ async function main(): Promise<void> {
   let disarmed: FieldLink | null = null
   let debug = false
   // ---- フラグ・条件付き通行 (#862) ----
-  const flagStore = createFlagStore(config.flags)
+  const flagStore = createFlagStore(startFlags)
   const flags = flagStore.flags
   const setFlag = (name: string, value: boolean): boolean => {
     const ok = flagStore.set(name, value)
@@ -595,6 +621,68 @@ async function main(): Promise<void> {
   // ---- ランダムエンカウント・戦闘 (#809) ----
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
+  // ---- RPG 状態 (#1021)。セーブ形式（game/rpgSave.ts）と同じ中身を実行時に持つ。戦闘のたびに設定へ戻さず、持ち越す ----
+  const rpgBase = baseConfigOf(config)
+  let partyState = resumed ? resumed.party : config.party.map((p) => structuredClone(p))
+  const inventory: Record<string, number> = resumed
+    ? { ...resumed.inventory }
+    : Object.fromEntries(config.items.map((it) => [it.id, it.count ?? 0]))
+  const equipment: Record<string, string[]> = resumed ? structuredClone(resumed.equipment) : {}
+  let gold = resumed ? resumed.gold : 0
+  /** 戦闘中だけ入る。エンジン・候補窓（アイテムの残数）・背景。保存のための読み取り元 */
+  let battleRun: {
+    engine: BattleEngine
+    menu: ReturnType<typeof buildBattleMenu>
+    background: string | undefined
+  } | null = null
+  /** 実行時の状態からセーブ形式を作る（戦闘中なら戦闘中状態も含む） */
+  const snapshotRpgNow = () => {
+    let battleState: RpgResolvedBattle | undefined
+    if (battleRun && !battleRun.engine.isOver()) {
+      const st = battleRun.engine.getState()
+      battleState = {
+        enemies: structuredClone(st.enemies) as BattleEntity[],
+        ...(st.atb
+          ? {
+              atb: {
+                partyGauge: [...st.atb.partyGauge],
+                enemyGauge: [...st.atb.enemyGauge],
+                queue: [...st.atb.queue],
+              },
+            }
+          : {}),
+        ...(st.script
+          ? {
+              script: {
+                turn: st.script.turn,
+                fired: [...st.script.fired],
+                joined: [...st.script.joined],
+                fled: [...st.script.fled],
+              },
+            }
+          : {}),
+        ...(st.enemyMemory ? { enemyMemory: structuredClone(st.enemyMemory) } : {}),
+        ...(battleRun.background ? { background: battleRun.background } : {}),
+      }
+    }
+    const inBattle = battleRun !== null && battleState !== undefined
+    const items = inBattle
+      ? Object.fromEntries(
+          (battleRun!.menu?.items ?? []).map((it) => [it.id, (it as BattleItemEntry).count ?? 0])
+        )
+      : inventory
+    return snapshotRpg(
+      {
+        party: inBattle ? battleRun!.engine.getState().party : partyState,
+        inventory: items,
+        equipment,
+        gold,
+        field: { sceneId, x: pos.x, y: pos.y, facing, flags: { ...flags } },
+        ...(battleState ? { battle: battleState } : {}),
+      },
+      rpgBase
+    )
+  }
   /** 戦闘の開始・終了の画面遷移 (sit-by-me#55)。`battle.transition` が none なら使われない。演出中は入力・移動・エンカウントを止める */
   const battleTransition = new FieldBattleTransition(() => app.stage)
   let lastOutcome = '-'
@@ -686,21 +774,33 @@ async function main(): Promise<void> {
       return () => window.removeEventListener('resize', cb)
     },
   })
-  const startBattle = (enemies: BattleEntity[]): void => {
+  const startBattle = (
+    enemies: BattleEntity[],
+    savedBattle: RpgResolvedBattle | null = null
+  ): void => {
     // 演出中（開始・終了とも）の二重エンカウントは無視する
     if (battleTransition.active) return
     // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
     releaseWalkInput()
     emotionLayer?.clear()
     const b = config.battle
-    const menu = buildBattleMenu(config)
-    const bg = config.scenes[sceneId].encounter?.background ?? b.background
+    // 候補窓の所持数は持ち越した所持品から（戦闘の終わりに残数を書き戻す）
+    const menu = buildBattleMenu({
+      ...config,
+      party: partyState,
+      items: config.items.map((it) => ({ ...it, count: inventory[it.id] ?? 0 })),
+    })
+    const bg = resumeBackground(
+      savedBattle,
+      config.scenes[sceneId].encounter?.background ?? b.background
+    )
     const open = (): void => {
       const engine = new BattleEngine(
-        config.party.map((p) => ({ ...p })),
+        partyState.map((p) => structuredClone(p)),
         enemies.map((e) => ({ ...e })),
-        buildBattleEngineOptions(b)
+        resumeBattleEngineOptions(buildBattleEngineOptions(b), savedBattle)
       )
+      battleRun = { engine, menu, background: bg }
       world.visible = false
       fade.visible = false
       app.renderer.resize(b.width, b.height)
@@ -715,8 +815,9 @@ async function main(): Promise<void> {
             menu,
             renderResolution: app.renderer.resolution,
           }),
-          onClose: (outcome) => {
+          onClose: (outcome, result) => {
             lastOutcome = outcome
+            carryOverBattle(outcome, result.gold)
             // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
             endBattleWithTransition({
               mode: b.transition,
@@ -731,9 +832,15 @@ async function main(): Promise<void> {
         app.stage.addChild(battle)
       } catch (e) {
         battle = null
+        battleRun = null
         contain.leave()
         throw e
       }
+    }
+    // 保存された戦闘中から再開するときは、遷移の演出を挟まず戦闘画面を直接開く
+    if (savedBattle) {
+      open()
+      return
     }
     // 開始の演出: 操作キャラ付近へ 2 段ズームして暗転 → 戦闘画面
     beginBattleWithTransition({
@@ -745,7 +852,20 @@ async function main(): Promise<void> {
       open,
     })
   }
+  /**
+   * 戦闘の結果を持ち越す (#1021)。所持品の残数・所持金・味方の HP/MP/状態異常を書き戻す。
+   * 敗北では味方を戦闘前に戻す（全滅のまま次の戦闘へ進めなくなるのを防ぐ。所持品・所持金は戻さない）
+   */
+  const carryOverBattle = (outcome: string, earnedGold: number): void => {
+    const run = battleRun
+    if (!run) return
+    for (const it of run.menu?.items ?? [])
+      inventory[it.id] = (it as BattleItemEntry).count ?? inventory[it.id] ?? 0
+    gold += earnedGold
+    if (outcome !== 'defeat') partyState = structuredClone(run.engine.getState().party)
+  }
   const endBattle = (): void => {
+    battleRun = null
     if (!battle) return
     app.stage.removeChild(battle)
     battle.destroy({ children: true })
@@ -1344,7 +1464,7 @@ async function main(): Promise<void> {
       ? foregroundCoverage(scene.foreground.mask, pos, Math.abs(tex.width * s), tex.height * s)
       : 0
     $('info').textContent =
-      `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}${scene.foreground ? `  前面に隠れる=${(hidden * 100).toFixed(0)}%` : ''}`
+      `scene=${sceneId}  foot=(${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})  facing=${facing}  encounter=${encState.distance.toFixed(0)}/${config.encounter.stepDistance} 抑制=${encState.stepsSinceBattle}/${config.encounter.minSteps}  lastBattle=${lastOutcome}  gold=${gold} party=${partyState.map((m) => `${m.name}${m.hp}/${m.maxHp}`).join(',')}${scene.foreground ? `  前面に隠れる=${(hidden * 100).toFixed(0)}%` : ''}`
   })
 
   // ワープの呼び出し口 (#864)。脚本・出口ゾーン(#842)・テストが id だけでワープを起こす。開発用ページ専用
@@ -1389,6 +1509,31 @@ async function main(): Promise<void> {
     /** フラグを立てる・下ろす (#862)。宣言していない名前は false を返して何もしない */
     setFlag,
     getFlags: () => ({ ...flags }),
+    /** いまの RPG 状態をセーブ形式（`SaveSlotData.rpg`、game/rpgSave.ts）で返す。戦闘中なら戦闘中状態も含む (#1021) */
+    rpg: snapshotRpgNow,
+    /**
+     * いまの局面を localStorage のセーブに書く (#1021)。スロット 0〜2 / 'quick'。同じ形式を `?resume=` で読み戻せる。
+     * 書けたら true（スロット範囲外・容量超過は false）
+     */
+    saveRpg: (slot: number | 'quick'): boolean => {
+      const saves = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+      const data = buildRpgSaveSlot(snapshotRpgNow(), {
+        slot: slot === 'quick' ? -1 : slot,
+        savedAt: new Date().toISOString(),
+        sceneName: sceneId,
+      })
+      try {
+        if (slot === 'quick') saves.quickSave(data)
+        else {
+          if (slot < 0 || slot > 2) return false
+          saves.save(slot, data)
+        }
+        return true
+      } catch (e) {
+        console.warn('[field-sample] セーブできません', e)
+        return false
+      }
+    },
     /**
      * 感情吹き出し (#937)。人物（player / companion / NPC は `npc:<id>`）の頭上に、宣言した種類（"!" "?" など）を出す。見た目だけで歩行には関与しない。
      * 出せたら true。未宣言の種類・画像が読めない種類・戦闘中・同行者が出ていないとき（companion 指定時）・いまのシーンにいない NPC は false。同じ人物に続けて出すと置き換わる。
@@ -1462,6 +1607,8 @@ async function main(): Promise<void> {
   }
   window.addEventListener('pagehide', onPageHide)
   import.meta.hot?.dispose(dispose)
+  // 戦闘中のセーブから再開した場合は、保存された戦闘中の局面をそのまま開く (#1021)
+  if (resumed?.battle) startBattle(resumed.battle.enemies, resumed.battle)
 }
 
 main().catch((e) => {
