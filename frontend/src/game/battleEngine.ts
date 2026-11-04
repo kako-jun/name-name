@@ -1996,19 +1996,23 @@ export class BattleEngine {
     ])
   }
 
-  /** 脚本が者に状態を付ける。宣言（[状態]）の無い id は付けない（生のキーを書き込まない）。警告は id ごとに 1 度だけ */
-  private scriptGrantStatus(m: BattleEntity, status: string, label: string): void {
+  /**
+   * 脚本が者に状態を付ける。宣言（[状態]）の無い id は付けない（生のキーを書き込まない）。警告は id ごとに 1 度だけ。
+   * 実際に付けた（すでに付いていても寿命を上書きした）なら true、未宣言で無視したなら false
+   */
+  private scriptGrantStatus(m: BattleEntity, status: string, label: string): boolean {
     const ruleId = resolveRuleId(this.statusRules, status)
     if (ruleId === null) {
       if (!this.warnedStatuses.has(status)) {
         this.warnedStatuses.add(status)
         console.warn(`[name-name] ${label} '${status}' は [状態] に宣言が無い（付与は無視した）`)
       }
-      return
+      return false
     }
     if (!m.status) m.status = {}
     safeAssign(m.status, ruleId, this.statusRules[ruleId].duration)
     this.noteStatus(m, m, ruleId)
+    return true
   }
 
   /** 脚本が者から状態を外す。宣言の無い id は警告して無視（付与と同じ）。付いていなければ何も起きない */
@@ -2041,14 +2045,12 @@ export class BattleEngine {
     const index = pi !== -1 ? pi : ei
     const m = pi !== -1 ? this.state.party[pi] : this.state.enemies[ei]
     const hpBefore = m.hp
+    const mpBefore = m.mp
     let changed = false
     if (a.hp) m.hp = resolveForcedHp(a.hp, m.hp, m.maxHp, m.hpFloor)
     if (a.mp) m.mp = resolveAmount(a.mp, m.maxMp, 0)
-    if (m.hp !== hpBefore || a.mp !== undefined) changed = true
-    if (a.status) {
-      this.scriptGrantStatus(m, a.status, '強制の 付与=')
-      changed = true
-    }
+    if (m.hp !== hpBefore || m.mp !== mpBefore) changed = true
+    if (a.status && this.scriptGrantStatus(m, a.status, '強制の 付与=')) changed = true
     if (a.clear && this.scriptClearStatus(m, a.clear)) changed = true
     if (a.text !== undefined || changed) {
       const hits: BattleHit[] =

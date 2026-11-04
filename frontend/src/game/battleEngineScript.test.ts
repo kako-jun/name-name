@@ -1118,3 +1118,65 @@ describe('強制: 生きている者のパラメーターの書き換え (#741 �
     expect(st.phase).not.toBe('defeat')
   })
 })
+
+describe('強制: 実際に変わったときだけ知らせる / ATB の後始末 (#741 段階 2)', () => {
+  const STAT = { poison: { id: 'poison', name: 'どく', duration: '3' } }
+  const noop = (rules: string[], over: Partial<BattleEntity> = {}) =>
+    make([hero({ mp: 5, maxMp: 9, ...over })], [boss({ atk: 0 })], rules, { statuses: STAT })
+
+  it('未宣言の付与だけ（効果なし）: ログもイベントも増えず、発動済みにはなる', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = noop([])
+    const e = noop(['強制: 条件=開始 対象=hero 付与=ghost'])
+    expect(e.getState().log).toEqual(base.getState().log)
+    expect(e.getState().eventTotal).toBe(base.getState().eventTotal)
+    expect(e.getState().script?.fired).toEqual([0])
+    warn.mockRestore()
+  })
+
+  it('MP が同値（現在値と同じ・最大超えで同値）: 何も出さない。変われば出す', () => {
+    const base = noop([])
+    const same = noop(['強制: 条件=開始 対象=hero MP=5'])
+    expect(same.getState().eventTotal).toBe(base.getState().eventTotal)
+    const capped = noop(['強制: 条件=開始 対象=hero MP=999'], { mp: 9 })
+    expect(capped.getState().eventTotal).toBe(base.getState().eventTotal)
+    const changed = noop(['強制: 条件=開始 対象=hero MP=9'])
+    expect(changed.getState().eventTotal).toBe(base.getState().eventTotal + 1)
+    expect(changed.getState().party[0].mp).toBe(9)
+  })
+
+  it('すでに付いている状態の再付与は持続を上書きするので、変わった扱いで知らせる', () => {
+    const e = noop(
+      ['強制: 条件=開始 対象=hero 付与=poison', '強制: 条件=ターン>=1 対象=hero 付与=poison'],
+      {}
+    )
+    const before = e.getState().eventTotal
+    e.selectAttack()
+    expect(e.getState().script?.fired).toEqual([0, 1])
+    expect(e.getState().party[0].status?.poison).toBeGreaterThan(0)
+    // 2 回目の付与でも notice が 1 件増えている（攻撃・敵の行動のイベントに加えて）
+    const notices = e.getState().events.filter((x) => x.kind === 'notice' && x.line)
+    expect(notices.length).toBeGreaterThanOrEqual(2)
+    expect(e.getState().eventTotal).toBeGreaterThan(before)
+  })
+
+  it('ATB: 強制で HP=0 にされた、コマンド待ちの列にいる味方は、キューとゲージから外れる', () => {
+    const e = make(
+      [
+        hero({ hp: 50, maxHp: 50, atk: 30, agi: 10 }),
+        ent({ id: 'b', name: 'B', hp: 50, maxHp: 50, agi: 10, exp: undefined }),
+      ],
+      [boss({ atk: 0, agi: 1, hp: 100, maxHp: 100, def: 0 })],
+      ['強制: 条件=HP[boss]<=90% 対象=b HP=0 文=Bが たおれた'],
+      { atb: { mode: 'wait' } }
+    )
+    for (let i = 0; i < 100 && (e.getState().atb?.queue.length ?? 0) < 2; i++) e.tick(500)
+    expect(e.getState().atb?.queue).toEqual([0, 1])
+    e.selectAttack()
+    const st = e.getState()
+    expect(st.script?.fired).toEqual([0])
+    expect(st.party[1].hp).toBe(0)
+    expect(st.atb?.queue).not.toContain(1)
+    expect(st.atb?.partyGauge[1]).toBe(0)
+  })
+})
