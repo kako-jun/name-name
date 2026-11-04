@@ -78,6 +78,7 @@ import {
   SCRIPT_STEP_SLACK,
   parseBattleScript,
   resolveAmount,
+  resolveForcedHp,
   resultFor,
   type ParsedBattleScript,
   type ScriptAction,
@@ -1935,6 +1936,9 @@ export class BattleEngine {
       case 'revive':
         this.scriptRevive(a)
         return
+      case 'force':
+        this.scriptForce(a)
+        return
       case 'flee':
         this.scriptFlee(a.target, a.text)
         return
@@ -1985,26 +1989,91 @@ export class BattleEngine {
     const hpBefore = m.hp
     m.hp = resolveAmount(a.hp, m.maxHp, 1)
     if (a.mp) m.mp = resolveAmount(a.mp, m.maxMp, 0)
-    if (a.status) {
-      const ruleId = resolveRuleId(this.statusRules, a.status)
-      if (ruleId === null) {
-        // 宣言（[状態]）の無い id は付けない（生のキーを書き込まない）。警告は id ごとに 1 度だけ
-        if (!this.warnedStatuses.has(a.status)) {
-          this.warnedStatuses.add(a.status)
-          console.warn(
-            `[name-name] 復活の 付与= '${a.status}' は [状態] に宣言が無い（付与は無視した）`
-          )
-        }
-      } else {
-        if (!m.status) m.status = {}
-        safeAssign(m.status, ruleId, this.statusRules[ruleId].duration)
-        this.noteStatus(m, m, ruleId)
-      }
-    }
+    if (a.status) this.scriptGrantStatus(m, a.status, '復活の 付与=')
     const ref: BattleActorRef = { side: 'party', index: idx }
     this.emitScriptLine(undefined, a.text ?? `${m.name} は ふっかつした！`, [
       { target: ref, kind: 'heal', amount: m.hp - hpBefore, hpBefore, hpAfter: m.hp },
     ])
+  }
+
+  /** 脚本が者に状態を付ける。宣言（[状態]）の無い id は付けない（生のキーを書き込まない）。警告は id ごとに 1 度だけ */
+  private scriptGrantStatus(m: BattleEntity, status: string, label: string): void {
+    const ruleId = resolveRuleId(this.statusRules, status)
+    if (ruleId === null) {
+      if (!this.warnedStatuses.has(status)) {
+        this.warnedStatuses.add(status)
+        console.warn(`[name-name] ${label} '${status}' は [状態] に宣言が無い（付与は無視した）`)
+      }
+      return
+    }
+    if (!m.status) m.status = {}
+    safeAssign(m.status, ruleId, this.statusRules[ruleId].duration)
+    this.noteStatus(m, m, ruleId)
+  }
+
+  /** 脚本が者から状態を外す。宣言の無い id は警告して無視（付与と同じ）。付いていなければ何も起きない */
+  private scriptClearStatus(m: BattleEntity, status: string): boolean {
+    const ruleId = resolveRuleId(this.statusRules, status)
+    if (ruleId === null) {
+      const key = `解除:${status}`
+      if (!this.warnedStatuses.has(key)) {
+        this.warnedStatuses.add(key)
+        console.warn(`[name-name] 強制の 解除= '${status}' は [状態] に宣言が無い（無視した）`)
+      }
+      return false
+    }
+    if (!m.status || !hasOwn(m.status, ruleId)) return false
+    delete m.status[ruleId]
+    this.noteStatus(m, m, ruleId, 'cure')
+    return true
+  }
+
+  /**
+   * 強制 (#741 段階 2): **生きている**者（味方 → 敵の順に最初の生存者）の HP / MP を指定値に書き換え、状態を付け外しする。乱数は使わない。
+   * HP は 0〜最大 HP、`下限` が効いていればそれ未満にしない。HP=0 は通常の戦闘不能（味方は ATB のキュー・ゲージから外し、
+   * 敵は `死亡時:` が走る。経験値は勝利のとき通常どおり入る）。HP が変わらない・文が無い・何も変わらないときは何も出さない
+   */
+  private scriptForce(a: Extract<ScriptAction, { kind: 'force' }>): void {
+    const pi = this.state.party.findIndex((p) => p.id === a.target && p.hp > 0)
+    const ei = pi === -1 ? this.state.enemies.findIndex((e) => e.id === a.target && e.hp > 0) : -1
+    if (pi === -1 && ei === -1) return
+    const side = pi !== -1 ? 'party' : 'enemy'
+    const index = pi !== -1 ? pi : ei
+    const m = pi !== -1 ? this.state.party[pi] : this.state.enemies[ei]
+    const hpBefore = m.hp
+    let changed = false
+    if (a.hp) m.hp = resolveForcedHp(a.hp, m.hp, m.maxHp, m.hpFloor)
+    if (a.mp) m.mp = resolveAmount(a.mp, m.maxMp, 0)
+    if (m.hp !== hpBefore || a.mp !== undefined) changed = true
+    if (a.status) {
+      this.scriptGrantStatus(m, a.status, '強制の 付与=')
+      changed = true
+    }
+    if (a.clear && this.scriptClearStatus(m, a.clear)) changed = true
+    if (a.text !== undefined || changed) {
+      const hits: BattleHit[] =
+        m.hp !== hpBefore
+          ? [
+              {
+                target: { side, index },
+                kind: m.hp > hpBefore ? 'heal' : 'damage',
+                amount: Math.abs(m.hp - hpBefore),
+                hpBefore,
+                hpAfter: m.hp,
+              },
+            ]
+          : []
+      this.emitScriptLine(undefined, a.text ?? `${m.name} に ふしぎな ちからが はたらいた！`, hits)
+    }
+    if (m.hp > 0) return
+    // 倒れた: 通常の戦闘不能の後始末（味方は ATB のキュー・ゲージから外す。敵は死亡時の行動を実行する）
+    this.appendLog(side === 'enemy' ? `${m.name} を たおした！` : `${m.name} は たおれた！`)
+    const atb = this.state.atb
+    if (side === 'enemy') {
+      if (atb) atb.enemyGauge[index] = 0
+      this.resolveDeaths()
+    }
+    if (atb) this.pruneDownedParty(atb)
   }
 
   /** 脚本の `逃走` で戦闘から消えた敵か (#741) */

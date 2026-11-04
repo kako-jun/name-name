@@ -61,7 +61,7 @@ export interface DetectOptions {
    * 脚本制御の戦闘 (#741) のシナリオ。あれば `BattleState.script` の整合（ターン・発動済み・参戦・逃走・hpFloor）を検査し、
    * 脚本が決めた勝敗（生存者と食い違う victory / defeat、interrupted）を許す。`ruleCount` は解釈済みルールの数（発動済み index の範囲）
    */
-  script?: { ruleCount: number }
+  script?: { ruleCount: number; allowRevive?: boolean }
   /**
    * シナリオが宣言した召喚獣の演出の id (#750。`cue.id`)。イベントの `summon` はこの id のものだけが許され、
    * 宣言の無いシナリオ（undefined）は `summon` が 1 件でも付いたら違反（召喚獣を使わない戦闘は従来と同じイベントの形、の検査）
@@ -294,6 +294,46 @@ function checkPhase(push: Push, s: BattleState, scripted: boolean): void {
       push('phase-mismatch', 'victory なのに敵が生きている')
     if (s.phase === 'defeat' && partyAlive) push('phase-mismatch', 'defeat なのに味方が生きている')
   }
+}
+
+/** 倒れている者（HP 0）の目印（側・添字・id）。`checkRevival` が、次の状態と突き合わせる */
+export function downedKeys(s: Readonly<BattleState>): Set<string> {
+  const out = new Set<string>()
+  s.party.forEach((e, i) => {
+    if (e.hp <= 0) out.add(`party:${i}:${e.id}`)
+  })
+  s.enemies.forEach((e, i) => {
+    if (e.hp <= 0) out.add(`enemy:${i}:${e.id}`)
+  })
+  return out
+}
+
+/**
+ * 脚本の「強制」(#741 段階 2) の不変条件: **倒れた者は強制で生き返らない**（起こせるのは `復活` だけ）。
+ * 直前の状態で倒れていた者が HP > 0 に戻っていたら違反。`復活` を宣言した脚本（`script.allowRevive`）は許す
+ */
+export function checkRevival(
+  prev: ReadonlySet<string>,
+  s: Readonly<BattleState>,
+  opIndex: number,
+  opts: DetectOptions
+): Violation[] {
+  if (!opts.script || opts.script.allowRevive) return []
+  const out: Violation[] = []
+  const check = (side: 'party' | 'enemy', list: readonly BattleEntity[]): void => {
+    list.forEach((e, i) => {
+      if (e.hp > 0 && prev.has(`${side}:${i}:${e.id}`)) {
+        out.push({
+          kind: 'script-invariant',
+          detail: `倒れていた ${side}[${i}] ${e.name} が HP ${e.hp} に戻った（復活: 無しで生き返った）`,
+          opIndex,
+        })
+      }
+    })
+  }
+  check('party', s.party)
+  check('enemy', s.enemies)
+  return out
 }
 
 /** 脚本の進行の不変条件 (#741)。`opts.script` が無い（脚本の無い戦闘）なら、脚本の状態・hpFloor・interrupted が無いことを見る */

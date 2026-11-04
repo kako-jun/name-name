@@ -1,0 +1,26 @@
+{
+  "layout": "side",
+  "presentation": "dq",
+  "statuses": [{ "id": "guard_up", "name": "まもりの かご", "duration": 3 }],
+  "spells": [
+    {
+      "id": "flame",
+      "name": "ほのお",
+      "mp": 4,
+      "target": "敵単体",
+      "effect": "damage 40..50 type=fire"
+    }
+  ],
+  "script": {
+    "id": "force-demo",
+    "rules": [
+      "台詞: 条件=開始 話者=ボス 文=ここから さきには いかせん",
+      "強制: 条件=ターン>=1 対象=hero MP=100% 付与=guard_up 文=ふしぎな ちからで MPが みなぎった！",
+      "強制: 条件=HP[boss]<=40% 対象=boss HP=100% 文=ボスは ちからを とりもどした！",
+      "強制: 条件=ターン>=4 対象=hero 解除=guard_up 文=まもりの かごが とけた",
+      "勝利時: フラグ=force_demo_won=true"
+    ]
+  },
+  "party": [{ "id": "hero", "name": "ぼく", "hp": 80, "mp": 20, "atk": 22, "def": 3, "agi": 6 }],
+  "enemies": [{ "id": "boss", "name": "ボス", "hp": 100, "atk": 7, "def": 2, "agi": 5 }]
+}

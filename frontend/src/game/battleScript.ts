@@ -13,6 +13,9 @@
  * - 台詞 / 参戦 / 復活 / 逃走 / 終了 のルールは**1 回だけ**発動する（繰り返しは条件の `ターン=N` で書く）。成立したルールが複数なら宣言順に 1 つずつ
  *   - `台詞: [条件=…] [話者=名前] 文=本文`（`文=` は最後に書く。行末までが本文で、本文の中の `HP=` などはキーとして読まない）
  *   - `参戦: [条件=…] 対象=<味方id> [文=…]` / `復活: [条件=…] 対象=<味方id> [HP=N|P%] [MP=N|P%] [付与=<状態id>] [文=…]`（対象が HP0 のときに発動。既定は HP 全回復。復活は 1 回きりのイベントで、あとの勝敗はユーザーの操作次第。付与= は `[状態]` に宣言した id だけ）
+ *   - `強制: [条件=…] 対象=<id> [HP=N|P%] [MP=N|P%] [付与=<状態id>] [解除=<状態id>] [文=…]`（#741 段階 2。**生きている者**〈味方・敵とも〉の HP / MP を指定値に書き換え、状態を付け外しする一般形。
+ *     HP は 0〜最大 HP に収め、`下限` が効いている間はそれを下回らない。倒れた者・逃げた敵は対象外〈条件が真でも保留〉。倒れた者を起こせるのは `復活` だけ。HP=0 は通常の戦闘不能と同じ扱い〈敵なら `死亡時:`・経験値あり〉。
+ *     `復活` は「倒れた味方」に限った糖衣として残る）
  *   - `逃走: [条件=…] 対象=<敵id> [文=…]`（その敵が戦闘から消える。経験値・ドロップなし）/ `終了: [条件=…] 結果=勝利|敗北|中断 [文=…]`
  * - 下限 は発動でなく**状態**: `下限: [条件=…] 対象=<id>|味方全員|敵全員 HP=N` は、条件が真の間その者の HP を N 未満にしない（すでに N 未満の者は上げない）
  * - `固定: 結果=勝利|敗北|中断 [上限ターン=N]` は「勝利＝味方全員 HP 下限 1 / 敗北＝敵全員 HP 下限 1 / 中断＝両方」と
@@ -91,6 +94,16 @@ export type ScriptRule =
       status?: string
       text?: string
     }
+  | {
+      kind: 'force'
+      conds: Condition[]
+      target: string
+      hp?: ScriptAmount
+      mp?: ScriptAmount
+      status?: string
+      clear?: string
+      text?: string
+    }
   | { kind: 'flee'; conds: Condition[]; target: string; text?: string }
   | { kind: 'end'; conds: Condition[]; result: ScriptEndResult; text?: string }
   | { kind: 'floor'; conds: Condition[]; target: FloorTarget; hp: number }
@@ -127,6 +140,16 @@ export type ScriptAction =
       status?: string
       text?: string
     }
+  | {
+      index: number
+      kind: 'force'
+      target: string
+      hp?: ScriptAmount
+      mp?: ScriptAmount
+      status?: string
+      clear?: string
+      text?: string
+    }
   | { index: number; kind: 'flee'; target: string; text?: string }
   | { index: number; kind: 'end'; result: ScriptEndResult; text?: string }
 
@@ -142,6 +165,7 @@ const PARAM_KEYS = [
   'HP',
   'MP',
   '付与',
+  '解除',
   '結果',
   '上限ターン',
   'フラグ',
@@ -152,6 +176,7 @@ const RULE_KINDS = [
   '台詞',
   '参戦',
   '復活',
+  '強制',
   '下限',
   '逃走',
   '終了',
@@ -433,6 +458,47 @@ export function parseBattleScript(lines: readonly string[]): ParsedBattleScript 
         })
         break
       }
+      case '強制': {
+        const t = needTarget()
+        if (t === null) break
+        let hp: ScriptAmount | undefined
+        let mp: ScriptAmount | undefined
+        const hpRaw = params.get('HP')
+        const mpRaw = params.get('MP')
+        if (hpRaw !== undefined) {
+          const a = parseAmount('HP', hpRaw)
+          if (typeof a === 'string') {
+            warn(line, a)
+            break
+          }
+          hp = a
+        }
+        if (mpRaw !== undefined) {
+          const a = parseAmount('MP', mpRaw)
+          if (typeof a === 'string') {
+            warn(line, a)
+            break
+          }
+          mp = a
+        }
+        const status = params.get('付与')
+        const clear = params.get('解除')
+        if (!hp && !mp && !status && !clear) {
+          warn(line, 'HP= MP= 付与= 解除= のいずれかが必要です（メッセージだけなら 台詞: です）')
+          break
+        }
+        rules.push({
+          kind: 'force',
+          conds,
+          target: t,
+          ...(hp ? { hp } : {}),
+          ...(mp ? { mp } : {}),
+          ...(status ? { status } : {}),
+          ...(clear ? { clear } : {}),
+          ...(text ? { text } : {}),
+        })
+        break
+      }
       case '逃走': {
         const t = needTarget()
         if (t === null) break
@@ -608,6 +674,21 @@ export function nextScriptAction(
           ...(rule.text !== undefined ? { text: rule.text } : {}),
         }
       }
+      case 'force': {
+        // 生きている者だけが対象（味方 → 敵の順に最初の生存者）。倒れた者・逃げた敵（HP 0）は、条件が真でも保留する
+        const alive = [...view.party, ...view.enemies].some((e) => e.id === rule.target && e.hp > 0)
+        if (!alive) continue
+        return {
+          index,
+          kind: 'force',
+          target: rule.target,
+          ...(rule.hp ? { hp: rule.hp } : {}),
+          ...(rule.mp ? { mp: rule.mp } : {}),
+          ...(rule.status ? { status: rule.status } : {}),
+          ...(rule.clear ? { clear: rule.clear } : {}),
+          ...(rule.text !== undefined ? { text: rule.text } : {}),
+        }
+      }
       case 'flee': {
         const alive = view.enemies.some((e) => e.id === rule.target && e.hp > 0)
         if (!alive) continue
@@ -661,6 +742,21 @@ export function resultFor(
   outcome: ScriptOutcome
 ): ScriptOutcomeResult | undefined {
   return hasOwn(parsed.results, outcome) ? parsed.results[outcome] : undefined
+}
+
+/**
+ * `強制` の HP の量。0〜最大 HP に収め（HP=0 は戦闘不能）、`hpFloor`（`下限`）が有れば
+ * 「元の HP と下限の小さいほう」を下回らない（`applyDamageToHp` と同じ規則。すでに下限未満の者は上げも下げもしない側に倒す）
+ */
+export function resolveForcedHp(
+  a: ScriptAmount,
+  hp: number,
+  maxHp: number,
+  hpFloor: number | undefined
+): number {
+  const next = resolveAmount(a, maxHp, 0)
+  if (hpFloor !== undefined && hpFloor > 0) return Math.max(next, Math.min(hp, hpFloor))
+  return next
 }
 
 /** `復活` の HP / MP の量（最大値に対する指定を実数にする）。HP は 1 以上・最大値以下に収める */
