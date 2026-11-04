@@ -94,7 +94,10 @@ export function computeSelectMarkImageRect(
   return { x: cx - w / 2, y: tipY - h, w, h, flipX: false }
 }
 
-/** 読み込みに失敗した URL。同じ URL は警告・再要求を繰り返さない（URL が変われば再試行）。 */
+/**
+ * 読み込みに失敗した URL。同じ URL は警告・再要求を繰り返さない（URL が変われば再試行）。
+ * トレードオフ: 記憶はセッション全体で続くので、一時的なネットワーク失敗の後はリロードするまで再試行されない（リロードで回復する）。
+ */
 const failedUrls = new Set<string>()
 /** テスト用: 失敗の記憶を消す */
 export function resetUiTextureFailures(): void {
@@ -105,7 +108,8 @@ export function resetUiTextureFailures(): void {
  * UI 画像を読む。読めなかった・URL が空なら警告して null（従来の描画へフォールバック）。
  * 失敗した URL は覚え、以降は警告も再要求もせず null（メニューを開くたび・戦闘のたびに繰り返さない）。
  * `label` は警告に出す部品名。Assets のキャッシュに載るので同じ URL は 1 回だけ読まれる。
- * 元絵（数百 px）を十数分の一に縮めて出すので、戦闘の他のテクスチャと同じく mipmap の自動生成＋線形補間を、初回の GPU アップロード前に立てる
+ * UI 画像は元絵（数百 px）を十数分の一に縮めて出すので、pixelArt モードでも常に linear＋mipmap の自動生成にする（例外。戦闘の他のテクスチャは pixelArt では nearest）。
+ * 設定は初回の GPU アップロード前に立てる
  */
 export async function loadUiTexture(
   url: string | undefined,

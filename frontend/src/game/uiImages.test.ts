@@ -147,6 +147,37 @@ describe('ドット手の座標が従来と一致する (#1067 共通部品へ�
     expect(fills.length).toBe(e.n)
     expect(fills.slice(0, e.n / 2).every((f) => f.data.style.color === 0x000000)).toBe(true)
     expect(fills.slice(e.n / 2).every((f) => f.data.style.color === 0xffffff)).toBe(true)
+    // 先頭の矩形（縁の最初・塗りの最初）の位置・寸法
+    const first = handCells(facing)[0]
+    const u = HAND_PIXEL * k
+    const rectOf = (f: unknown) =>
+      (
+        f as {
+          data: {
+            path: {
+              shapePath: {
+                shapePrimitives: Array<{
+                  shape: { x: number; y: number; width: number; height: number }
+                }>
+              }
+            }
+          }
+        }
+      ).data.path.shapePath.shapePrimitives[0].shape
+    const edge = rectOf(fills[0])
+    expect([edge.x, edge.y, edge.width, edge.height]).toEqual([
+      x + first.x * k - 1,
+      y + first.y * k - 1,
+      u + 2,
+      u + 2,
+    ])
+    const fill = rectOf(fills[e.n / 2])
+    expect([fill.x, fill.y, fill.width, fill.height]).toEqual([
+      x + first.x * k,
+      y + first.y * k,
+      u,
+      u,
+    ])
   })
 })
 
@@ -179,7 +210,9 @@ describe('loadUiTexture (#1067・#1087)', () => {
   })
   it('読めた texture には mipmap の自動生成と線形補間を立てる', async () => {
     const t = tex(512, 285)
+    // 既定が linear なので、読み込み前に nearest にして「コードが実際に立てる」ことを確かめる
     t.source.autoGenerateMipmaps = false
+    t.source.scaleMode = 'nearest'
     vi.spyOn(Assets, 'load').mockResolvedValueOnce(t as never)
     await loadUiTexture('http://x/m.webp', '手')
     expect(t.source.autoGenerateMipmaps).toBe(true)
