@@ -18,14 +18,14 @@
       { "id": "party3" },
       { "id": "party4", "hp": 0, "mp": 14 }
     ],
-    "items": { "sit_herb_tea_heal": 1 },
-    "equipment": { "party2": ["heshikiri-hasebe"] },
+    "items": {},
+    "equipment": {},
     "gold": 120,
     "field": { "sceneId": "bathhouse", "x": 768, "y": 716, "facing": "up" },
     "battle": {
       "enemies": [
         { "id": "M149", "hp": 21 },
-        { "id": "M147", "hp": 20, "status": { "sleep": 2 } }
+        { "id": "M147", "hp": 20 }
       ],
       "atb": {
         "partyGauge": [1000, 620, 300, 0],
