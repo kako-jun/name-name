@@ -3354,6 +3354,20 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     s.redraw(800, 450)
   }
 
+  it('ポーズの板は基本の絵（baseVisual のテクスチャ）を付けて作り、基本の絵自身は付けない (#853)', async () => {
+    const make1 = vi.spyOn(BattleScreen.prototype as never, 'makeAcrylicPlate') as unknown as {
+      mock: { calls: Array<[Texture, Texture | undefined]> }
+    }
+    const { s } = await setup()
+    const v = pv(s)
+    const baseTex = textures.get('img/hero.webp')!
+    const callFor = (t: Texture) => make1.mock.calls.find((c) => c[0] === t)!
+    expect(callFor(baseTex)[1]).toBeUndefined()
+    for (const key of ['idle', 'slash', 'down']) {
+      expect(callFor(v.poseVisuals[key].texture)[1]).toBe(baseTex)
+    }
+  })
+
   it('ポーズが読み込まれ、縦横比の違う slash に替わっても枠（slotRef）と基準位置は動かない', async () => {
     const { s, engine } = await setup()
     const v = pv(s)

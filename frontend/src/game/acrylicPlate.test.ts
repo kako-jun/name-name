@@ -683,6 +683,19 @@ describe('帯の縮尺換算と裾の広がり (#853)', () => {
       expect(edgeDist).toBeCloseTo(dy * 1.2, 6)
       expect(f.cx).toBeGreaterThan(5)
     })
+    it('広い先の裾の半幅は帯の半幅の 1.5 倍で頭打ち', () => {
+      const f = computeStemFlare(tip(0, 60), w, h, 99, rect, 6)!
+      expect(f).not.toBeNull()
+      expect(f.halfWidth).toBeCloseTo(rect.halfWidth * 1.5, 9)
+      // 狭い先は先の幅・最小幅の大きい方
+      expect(computeStemFlare(tip(5, 12), w, h, 99, rect, 6)!.halfWidth).toBeCloseTo(4, 9)
+      expect(computeStemFlare(tip(5, 6), w, h, 99, rect, 20)!.halfWidth).toBeCloseTo(10, 9)
+    })
+    it('先が帯のすぐ外（1px はみ出す）でも裾が付き、帯の外へ動く', () => {
+      const f = computeStemFlare(tip(61, 61), w, h, 99, rect, 6)!
+      expect(f).not.toBeNull()
+      expect(f.cx).toBeGreaterThan(rect.cx + rect.halfWidth - f.halfWidth)
+    })
     it('絵が無い・最下端が範囲外なら null', () => {
       expect(computeStemFlare(new Uint8Array(w * h), w, h, 99, rect, 6)).toBeNull()
       expect(computeStemFlare(tip(5, 12), w, h, -1, rect, 6)).toBeNull()

@@ -267,8 +267,9 @@ export function computeStemScale(
   params: Partial<AcrylicParams> = {},
   ref?: StemRef
 ): { slitHalf: number; minWidth: number } {
-  const rw = ref && ref.width > 0 && ref.height > 0 ? ref.width : w
-  const rh = ref && ref.width > 0 && ref.height > 0 ? ref.height : h
+  const valid = !!ref && ref.width > 0 && ref.height > 0
+  const rw = valid ? ref.width : w
+  const rh = valid ? ref.height : h
   const g = computeAcrylicGeometry(
     rw,
     rh,

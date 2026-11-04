@@ -60,7 +60,14 @@ export function createAcrylicPlateTexture(
       ...params,
       spriteLiftRatio: params.hasBase ? params.spriteLiftRatio : 0,
       stemWidthRatio: params.hasBase ? params.stemWidthRatio : 0,
-      stemRef: baseTex ? computeStemRef(baseTex.width, baseTex.height, ws) : undefined,
+      // 板を作る画像は pixelWidth（物理 px）で縮小しているので、基本の絵も同じ物理 px で測る（論理寸法の width は解像度で変わる）
+      stemRef: baseTex
+        ? computeStemRef(
+            baseTex.source?.pixelWidth ?? baseTex.width,
+            baseTex.source?.pixelHeight ?? baseTex.height,
+            ws
+          )
+        : undefined,
     }
     const raster = renderAcrylicPlate(alpha, ww, wh, plateParams)
     const dst = document.createElement('canvas')
