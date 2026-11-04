@@ -342,6 +342,8 @@ export interface SkillDef {
   cue?: SummonCue
   /** タグ (#876。`タグ: ぬすむ`)。`SpellDef.tags` と同じ。書かなければ無し */
   tags?: string[]
+  /** ラーニング (#882。`覚える: <呪文id>`)。味方が敵のこの特技を食らうと、その呪文をパーティ共通の習得済みに入れる。書かなければ何も覚えない */
+  learns?: string
 }
 
 /**

@@ -116,6 +116,7 @@ async function main(): Promise<void> {
       const engine = new BattleEngine(setup.party, setup.enemies, {
         ...(setup.atb ? { atb: setup.atb } : {}),
         ...(setup.enemyRow ? { enemyRow: setup.enemyRow } : {}),
+        ...(setup.learnedSpells ? { learnedSpells: setup.learnedSpells } : {}),
         ...(Object.keys(setup.skills).length > 0 ? { skills: setup.skills } : {}),
         ...(Object.keys(setup.statuses).length > 0 ? { statuses: setup.statuses } : {}),
         ...(Object.keys(setup.itemNames).length > 0 ? { itemNames: setup.itemNames } : {}),
