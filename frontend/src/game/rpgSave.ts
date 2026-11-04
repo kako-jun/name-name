@@ -75,6 +75,10 @@ export interface RpgSaveState {
   field?: RpgFieldState
   /** 戦闘中の状態。ある場合は戦闘中の局面から再開する。省略はフィールド（歩行中） */
   battle?: RpgBattleState
+  /** プレイ時間(ms)の累計 (#880)。省略は 0。定義は `fieldPlayStats.ts` */
+  playMs?: number
+  /** 歩数の累計 (#880)。省略は 0。定義は `fieldPlayStats.ts` */
+  steps?: number
 }
 
 type Obj = Record<string, unknown>
@@ -139,6 +143,13 @@ export function parseRpgSave(raw: unknown): RpgParseResult {
   for (const [k, v] of Object.entries(raw.equipment))
     if (!Array.isArray(v) || !v.every(isStr)) return fail(`equipment.${k} は文字列の配列が必要です`)
   if (!isNum(raw.gold) || raw.gold < 0) return fail('gold は 0 以上の数が必要です')
+  if (raw.playMs !== undefined && (!isNum(raw.playMs) || raw.playMs < 0))
+    return fail('playMs は 0 以上の数が必要です')
+  if (
+    raw.steps !== undefined &&
+    (!isNum(raw.steps) || raw.steps < 0 || !Number.isInteger(raw.steps))
+  )
+    return fail('steps は 0 以上の整数が必要です')
   if (raw.field !== undefined) {
     const f = raw.field
     if (!isObj(f)) return fail('field はオブジェクトが必要です')
@@ -227,6 +238,10 @@ export interface RpgResolved {
   gold: number
   field?: RpgFieldState
   battle?: RpgResolvedBattle
+  /** プレイ時間(ms)（セーブに無ければ省略 = 0 扱い） */
+  playMs?: number
+  /** 歩数（セーブに無ければ省略 = 0 扱い） */
+  steps?: number
   warnings: string[]
 }
 
@@ -258,6 +273,8 @@ export function resolveRpg(rpg: RpgSaveState, base: RpgBaseConfig): RpgResolved 
     gold: rpg.gold,
     warnings,
   }
+  if (rpg.playMs !== undefined) out.playMs = rpg.playMs
+  if (rpg.steps !== undefined) out.steps = rpg.steps
   if (rpg.field) out.field = cloneJson(rpg.field)
   if (rpg.battle) {
     const enemies: BattleEntity[] = []
@@ -309,6 +326,8 @@ export function snapshotRpg(
     gold: number
     field?: RpgFieldState
     battle?: RpgResolvedBattle
+    playMs?: number
+    steps?: number
   },
   base: Pick<RpgBaseConfig, 'party' | 'enemy'>
 ): RpgSaveState {
@@ -325,6 +344,8 @@ export function snapshotRpg(
     gold: s.gold,
   }
   if (s.field) out.field = cloneJson(s.field)
+  if (s.playMs !== undefined) out.playMs = Math.floor(s.playMs)
+  if (s.steps !== undefined) out.steps = s.steps
   if (s.battle) {
     // 敵のマスターは id だけで引ける満タン無傷の者。配置（col / row）は差分として残る
     out.battle = {
