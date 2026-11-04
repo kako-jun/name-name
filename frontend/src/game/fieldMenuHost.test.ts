@@ -343,3 +343,64 @@ describe('open 失敗後の ≡ ボタン', () => {
     warn.mockRestore()
   })
 })
+
+describe('開くときの項目・せってい（#880）', () => {
+  it('items() を渡すとそれで開き、無ければ config.items のまま', async () => {
+    const opened: unknown[] = []
+    const t = setup({ items: () => [{ id: 'item', label: 'どうぐ（実状態）' }] })
+    t.screen.open = ((d: unknown) => {
+      opened.push(d)
+      t.screen.isOpen = true
+    }) as never
+    const p = t.host.open()
+    t.release()
+    await p
+    expect((opened[0] as { items: { label: string }[] }).items[0].label).toBe('どうぐ（実状態）')
+    const t2 = setup()
+    t2.screen.open = ((d: unknown) => {
+      opened.push(d)
+      t2.screen.isOpen = true
+    }) as never
+    const p2 = t2.host.open()
+    t2.release()
+    await p2
+    expect((opened[1] as { items: unknown[] }).items).toHaveLength(DEFAULT_FIELD_MENU_ITEMS.length)
+  })
+  it('settings() を渡すと開くたびにそれを使う。無ければ前回閉じたときの値を持ち越す', async () => {
+    const opened: { settings: Record<string, number> }[] = []
+    let live = { cursor: 1 }
+    const t = setup({ settings: () => live })
+    t.screen.open = ((d: { settings: Record<string, number> }) => {
+      opened.push(d)
+      t.screen.isOpen = true
+    }) as never
+    const p = t.host.open()
+    t.release()
+    await p
+    expect(opened[0].settings).toEqual({ cursor: 1 })
+    live = { cursor: 0 }
+    t.screen.settings = { keys: 1 }
+    t.screen.closeByPointer()
+    const p2 = t.host.open()
+    t.release()
+    await p2
+    expect(opened[1].settings).toEqual({ cursor: 0 })
+  })
+  it('settings() が無いときは画面が持つ前回値を持ち越す', async () => {
+    const opened: { settings: Record<string, number> }[] = []
+    const t = setup()
+    t.screen.open = ((d: { settings: Record<string, number> }) => {
+      opened.push(d)
+      t.screen.isOpen = true
+    }) as never
+    const p = t.host.open()
+    t.release()
+    await p
+    t.screen.settings = { keys: 1 }
+    t.screen.closeByPointer()
+    const p2 = t.host.open()
+    t.release()
+    await p2
+    expect(opened[1].settings).toEqual({ keys: 1 })
+  })
+})

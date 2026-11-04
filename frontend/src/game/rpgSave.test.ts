@@ -408,3 +408,51 @@ describe('playMs / steps（#880）', () => {
     expect(snap.steps).toBe(0)
   })
 })
+
+describe('menu（#880 せってい・せいとんの持ち越し）', () => {
+  const withMenu = (menu: unknown): Record<string, unknown> => ({ ...declared(), menu })
+
+  it('旧セーブ（menu なし）は通り、解決後も menu キーが出ない', () => {
+    expect(parseRpgSave(declared()).ok).toBe(true)
+    expect('menu' in resolveRpg(declared(), base)).toBe(false)
+  })
+
+  it('正常な menu は通り、解決・スナップショットで運ばれる', () => {
+    const menu = { settings: { battleMode: 1, cursor: 0 }, itemOrder: ['ether', 'potion'] }
+    expect(parseRpgSave(withMenu(menu)).ok).toBe(true)
+    const resolved = resolveRpg(withMenu(menu) as unknown as RpgSaveState, base)
+    expect(resolved.menu).toEqual(menu)
+    const snap = snapshotRpg(
+      {
+        party: resolved.party,
+        inventory: resolved.inventory,
+        equipment: resolved.equipment,
+        gold: resolved.gold,
+        menu: resolved.menu,
+      },
+      base
+    )
+    expect(snap.menu).toEqual(menu)
+  })
+
+  it('menu を渡さないスナップショットにはキーが出ない', () => {
+    const snap = snapshotRpg(
+      { party: base.party as BattleEntity[], inventory: {}, equipment: {}, gold: 0 },
+      base
+    )
+    expect('menu' in snap).toBe(false)
+  })
+
+  it.each([
+    ['menu が配列', [], /menu/],
+    ['settings が配列', { settings: [] }, /menu.settings/],
+    ['settings の値が負', { settings: { a: -1 } }, /menu.settings.a/],
+    ['settings の値が小数', { settings: { a: 1.5 } }, /menu.settings.a/],
+    ['itemOrder が文字列', { itemOrder: 'x' }, /menu.itemOrder/],
+    ['itemOrder に数値', { itemOrder: ['a', 1] }, /menu.itemOrder/],
+  ])('不正（%s）は理由つきで失敗', (_n, menu, re) => {
+    const r = parseRpgSave(withMenu(menu))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(re)
+  })
+})

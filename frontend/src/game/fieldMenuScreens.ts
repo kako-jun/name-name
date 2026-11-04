@@ -64,10 +64,25 @@ export interface MenuEntry {
   enabled?: boolean
   /** 説明バーに出す文 */
   description?: string
+  /** 実行時の元データへの対応（所持品・魔法の id）。使う処理（`onUse`）へ渡る */
+  id?: string
+  /**
+   * 使うときの対象の取り方。`single` = 左のパーティから1人選ぶ / `all` = 全員（選ばない）/ `self` = 使い手本人（選ばない）。
+   * 未指定は従来どおり（まほう等では選んでも説明バーの通知だけ。どうぐの「つかう」は `single`）
+   */
+  target?: 'single' | 'all' | 'self'
 }
+/** タブの働き。`use` = 選んで使う / `sort` = 選ぶと並べ替える / `info` = 一覧と説明バーだけ（使用・整理不可）。未指定のどうぐは先頭を `use`、他は通知だけ */
+export type MenuTabAction = 'use' | 'sort' | 'info'
 export interface MenuTab {
   label: string
   entries: MenuEntry[]
+  action?: MenuTabAction
+}
+/** ステータス画面に足す1行（固有素質など、定義側が人物ごとに差し込む） */
+export interface StatusRow {
+  label: string
+  value: string
 }
 export interface MenuOption {
   key: string
@@ -75,6 +90,8 @@ export interface MenuOption {
   choices: string[]
   /** 初期の選択肢 index（既定 0） */
   initial?: number
+  /** その行にカーソルがあるとき説明バーに出す文（効く範囲・未接続の注記など） */
+  description?: string
 }
 export interface FieldMenuContentDef {
   description?: string
@@ -83,6 +100,8 @@ export interface FieldMenuContentDef {
   /** 人物ごとの一覧（人物の id → entries）。人物を選ぶ画面（まほう・そうび等）で、選んだ人物のものを出す。無い人物は `entries` */
   entriesByParty?: Record<string, MenuEntry[]>
   options?: MenuOption[]
+  /** 人物ごとのステータス画面の追加行（人物の id → 行）。無い項目は出さない */
+  statusByParty?: Record<string, StatusRow[]>
 }
 
 export interface ResolvedContent {
@@ -92,6 +111,7 @@ export interface ResolvedContent {
   entries: MenuEntry[]
   entriesByParty: Record<string, MenuEntry[]>
   options: MenuOption[]
+  statusByParty: Record<string, StatusRow[]>
 }
 
 /** 「せってい」の既定項目（wireframe §3-5。ウィンドウ色は固定なので無い）。値の実効化は呼び出し側 */
@@ -107,7 +127,7 @@ export const DEFAULT_CONFIG_OPTIONS: readonly MenuOption[] = [
   { key: 'cursor', label: 'カーソル', choices: ['メモリ', 'リセット'] },
   { key: 'bgm', label: 'BGM音量', choices: ['0', '1', '2', '3', '4', '5'], initial: 4 },
   { key: 'se', label: 'SE音量', choices: ['0', '1', '2', '3', '4', '5'], initial: 4 },
-  { key: 'keys', label: 'キー割当（PC）', choices: ['Z 決定 / X 戻る'] },
+  { key: 'keys', label: 'キー割当（PC）', choices: ['Z決定 X戻る', 'X決定 Z戻る'] },
 ]
 
 export const SAVE_SLOT_COUNT = 3
@@ -135,9 +155,9 @@ export function resolveContent(
   if (!tabs || tabs.length === 0) {
     if (kind === 'item')
       tabs = [
-        { label: 'つかう', entries: [] },
-        { label: 'せいとん', entries: [] },
-        { label: 'たいせつなもの', entries: [] },
+        { label: 'つかう', entries: [], action: 'use' },
+        { label: 'せいとん', entries: [], action: 'sort' },
+        { label: 'たいせつなもの', entries: [], action: 'info' },
       ]
     else if (kind === 'appstore')
       tabs = [
@@ -159,6 +179,7 @@ export function resolveContent(
     entries: def?.entries ?? [],
     entriesByParty: def?.entriesByParty ?? {},
     options,
+    statusByParty: def?.statusByParty ?? {},
   }
 }
 
@@ -192,6 +213,9 @@ export function parseContentDef(
       if (typeof x.detail === 'string') entry.detail = x.detail
       if (x.enabled === false) entry.enabled = false
       if (typeof x.description === 'string') entry.description = x.description
+      if (typeof x.id === 'string') entry.id = x.id
+      if (x.target === 'single' || x.target === 'all' || x.target === 'self')
+        entry.target = x.target
       list.push(entry)
     })
     return list
@@ -210,6 +234,38 @@ export function parseContentDef(
       out.entriesByParty = { ...by }
     }
   }
+  if (o.statusByParty !== undefined) {
+    const v = o.statusByParty
+    if (typeof v !== 'object' || v === null || Array.isArray(v))
+      warnings.push(
+        `${where}.statusByParty はオブジェクト（人物 id → 行の配列）にしてください（無視します）`
+      )
+    else {
+      const by: Record<string, StatusRow[]> = Object.create(null) as Record<string, StatusRow[]>
+      for (const [k, list] of Object.entries(v)) {
+        if (!Array.isArray(list)) {
+          warnings.push(`${where}.statusByParty.${k} は配列にしてください（無視します）`)
+          continue
+        }
+        const rows: StatusRow[] = []
+        list.forEach((r, i) => {
+          const x = r as Record<string, unknown> | null
+          if (
+            !x ||
+            typeof x !== 'object' ||
+            typeof x.label !== 'string' ||
+            typeof x.value !== 'string'
+          )
+            warnings.push(
+              `${where}.statusByParty.${k}[${i}] は label・value（文字列）が必要です（省きます）`
+            )
+          else rows.push({ label: x.label, value: x.value })
+        })
+        by[k] = rows
+      }
+      out.statusByParty = { ...by }
+    }
+  }
   if (o.tabs !== undefined) {
     if (!Array.isArray(o.tabs)) warnings.push(`${where}.tabs は配列にしてください（無視します）`)
     else {
@@ -220,10 +276,12 @@ export function parseContentDef(
           warnings.push(`${where}.tabs[${i}] は label（文字列）が必要です（省きます）`)
           return
         }
-        tabs.push({
+        const tab: MenuTab = {
           label: x.label,
           entries: x.entries === undefined ? [] : entries(x.entries, `${where}.tabs[${i}].entries`),
-        })
+        }
+        if (x.action === 'use' || x.action === 'sort' || x.action === 'info') tab.action = x.action
+        tabs.push(tab)
       })
       out.tabs = tabs
     }
@@ -250,6 +308,7 @@ export function parseContentDef(
           return
         }
         const opt: MenuOption = { key: x.key, label: x.label, choices: x.choices as string[] }
+        if (typeof x.description === 'string') opt.description = x.description
         if (
           typeof x.initial === 'number' &&
           Number.isInteger(x.initial) &&
@@ -269,13 +328,15 @@ export function parseContentDef(
 // フォーカスと状態遷移
 // ---------------------------------------------------------------------------
 
-export type NavFocus = 'tab' | 'party' | 'list' | 'confirm'
+export type NavFocus = 'tab' | 'party' | 'list' | 'target' | 'confirm'
 
 export interface ScreenNav {
   focus: NavFocus
   tab: number
   party: number
   list: number
+  /** 使う対象（左のパーティの index）。`target` フォーカスで動く */
+  target: number
   /** 確認窓の選択（0 = はい/買う、1 = いいえ/やめる） */
   confirm: number
   /** 確認窓を開いた元のフォーカス（戻ると・閉じるとここへ） */
@@ -297,7 +358,15 @@ export function baseFocus(kind: ScreenKind): NavFocus {
 }
 
 export function initialNav(kind: ScreenKind): ScreenNav {
-  return { focus: baseFocus(kind), tab: 0, party: 0, list: 0, confirm: 0, confirmFrom: 'list' }
+  return {
+    focus: baseFocus(kind),
+    tab: 0,
+    party: 0,
+    list: 0,
+    target: 0,
+    confirm: 0,
+    confirmFrom: 'list',
+  }
 }
 
 export type ScreenEvent =
@@ -322,7 +391,23 @@ export interface ScreenCtx {
   settings: Readonly<Record<string, number>>
 }
 
-export type ScreenEffect = 'none' | 'moved' | 'back-to-top' | 'notice' | 'save' | 'setting'
+export type ScreenEffect =
+  | 'none'
+  | 'moved'
+  | 'back-to-top'
+  | 'notice'
+  | 'save'
+  | 'setting'
+  | 'use'
+  | 'sort'
+
+/** 「使う」の要求（どうぐ・まほう）。`caster` は使い手の party index（どうぐは -1）、`target` は左のパーティの index（全体・本人は undefined） */
+export interface ScreenUse {
+  tab: number
+  list: number
+  caster: number
+  target?: number
+}
 
 export interface ScreenStep {
   nav: ScreenNav
@@ -331,6 +416,7 @@ export interface ScreenStep {
   notice?: string
   save?: number
   setting?: { key: string; value: number }
+  use?: ScreenUse
 }
 
 const wrap = (i: number, n: number): number => (n <= 0 ? 0 : ((i % n) + n) % n)
@@ -361,22 +447,35 @@ export function optionValue(ctx: ScreenCtx, o: MenuOption): number {
 
 const NOTHING = 'なにもありません'
 
+/** そのタブの働き。定義が `action` を書かなければ、どうぐの先頭タブだけ `use`（従来どおり）。それ以外は undefined */
+export function tabAction(c: ResolvedContent, tab: number): MenuTabAction | undefined {
+  if (c.kind !== 'item') return undefined
+  return c.tabs[tab]?.action ?? (tab === 0 ? 'use' : undefined)
+}
+
 function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
   const k = ctx.content.kind
   const n = nav
   if (n.focus === 'tab') {
     if (ctx.content.tabs.length === 0) return { nav: n, effect: 'none' }
-    return { nav: { ...n, focus: 'list', list: 0 }, effect: 'moved', notice: undefined }
+    const toList: ScreenNav = { ...n, focus: 'list', list: 0 }
+    // 「せいとん」は選んだ時点で並べ替える（結果の一覧がそのまま下に見える）
+    if (tabAction(ctx.content, n.tab) === 'sort')
+      return { nav: toList, effect: 'sort', use: { tab: n.tab, list: 0, caster: -1 } }
+    return { nav: toList, effect: 'moved', notice: undefined }
   }
   if (n.focus === 'party') {
     if (k === 'status' || ctx.partyCount === 0) return { nav: n, effect: 'none' }
-    if (k === 'item')
-      return {
-        nav: n,
-        effect: 'notice',
-        notice: '「つかう」の処理はまだありません',
-      }
     return { nav: { ...n, focus: 'list', list: 0 }, effect: 'moved' }
+  }
+  if (n.focus === 'target') {
+    if (ctx.partyCount === 0) return { nav: n, effect: 'none' }
+    const target = Math.min(Math.max(n.target, 0), ctx.partyCount - 1)
+    return {
+      nav: { ...n, focus: 'list' },
+      effect: 'use',
+      use: { tab: n.tab, list: n.list, caster: k === 'item' ? -1 : n.party, target },
+    }
   }
   if (n.focus === 'list') {
     if (k === 'config') {
@@ -400,8 +499,23 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
     if (e.enabled === false)
       return { nav: n, effect: 'notice', notice: e.description ?? 'いまは選べません' }
     if (k === 'appstore') return { nav: { ...n, focus: 'confirm', confirm: 0 }, effect: 'moved' }
-    if (k === 'item' && n.tab === 0 && ctx.partyCount > 0)
-      return { nav: { ...n, focus: 'party' }, effect: 'moved', notice: '使う相手を選んでください' }
+    const kind = k === 'item' ? tabAction(ctx.content, n.tab) : undefined
+    // 使い手は、どうぐは居ない（-1）、まほうは選んだ人物
+    const caster = k === 'item' ? -1 : n.party
+    const scope: MenuEntry['target'] =
+      k === 'item' ? (kind === 'use' ? (e.target ?? 'single') : undefined) : e.target
+    if (scope === 'single' && ctx.partyCount > 0)
+      return {
+        nav: { ...n, focus: 'target', target: k === 'item' ? 0 : Math.max(0, n.party) },
+        effect: 'moved',
+        notice: '使う相手を選んでください',
+      }
+    if (scope === 'all' || scope === 'self')
+      return {
+        nav: n,
+        effect: 'use',
+        use: { tab: n.tab, list: n.list, caster },
+      }
     return {
       nav: n,
       effect: 'notice',
@@ -422,6 +536,26 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
   return { nav: { ...n, focus: 'list' }, effect: 'moved' }
 }
 
+/** 「使う」の要求が指す一覧の行。どうぐは選んだタブの行、まほうは使い手の一覧の行。見つからなければ undefined */
+export function entryForUse(
+  content: ResolvedContent,
+  partyIds: readonly string[] | undefined,
+  use: ScreenUse
+): MenuEntry | undefined {
+  if (content.kind === 'item') return content.tabs[use.tab]?.entries[use.list]
+  const id = partyIds?.[use.caster]
+  if (id !== undefined && Object.prototype.hasOwnProperty.call(content.entriesByParty, id))
+    return content.entriesByParty[id][use.list]
+  return content.entries[use.list]
+}
+
+/** 一覧の中身が変わった（所持数が減った・並べ替えた）あとの選択位置の収め直し。一覧の範囲に収める */
+export function clampNav(nav: ScreenNav, ctx: ScreenCtx): ScreenNav {
+  const n = listCount(ctx, nav)
+  const list = n <= 0 ? 0 : Math.min(Math.max(nav.list, 0), n - 1)
+  return list === nav.list ? nav : { ...nav, list }
+}
+
 /** 項目画面の中での1つの入力に対する状態遷移（純粋）。「戻る」は1階層ずつで、最初の階層で戻るとメニュー最上位へ */
 export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): ScreenStep {
   const k = ctx.content.kind
@@ -429,7 +563,7 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
     if (nav.focus === 'confirm') return { nav: { ...nav, focus: 'list' }, effect: 'moved' }
     if (nav.focus === baseFocus(k)) return { nav, effect: 'back-to-top' }
     if (nav.focus === 'list') return { nav: { ...nav, focus: baseFocus(k) }, effect: 'moved' }
-    // item のターゲット選択（party）→ 一覧
+    // 使う相手の選択（target）→ 一覧
     return { nav: { ...nav, focus: 'list' }, effect: 'moved' }
   }
   if (ev.type === 'confirm') return decideConfirm(ctx, nav)
@@ -446,6 +580,13 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
       if (d === 0 || ctx.content.tabs.length === 0) return { nav, effect: 'none' }
       return {
         nav: { ...nav, tab: wrap(nav.tab + (d < 0 ? -1 : 1), ctx.content.tabs.length), list: 0 },
+        effect: 'moved',
+      }
+    }
+    if (nav.focus === 'target') {
+      if (dy === 0 || ctx.partyCount === 0) return { nav, effect: 'none' }
+      return {
+        nav: { ...nav, target: wrap(nav.target + (dy < 0 ? -1 : 1), ctx.partyCount) },
         effect: 'moved',
       }
     }
@@ -493,16 +634,18 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
     return decideConfirm(ctx, { ...nav, focus: 'tab', tab: index })
   }
   if (target === 'party') {
+    if (nav.focus === 'target') {
+      if (index < 0 || index >= ctx.partyCount) return { nav, effect: 'none' }
+      return decideConfirm(ctx, { ...nav, target: index })
+    }
     const ok =
-      (k === 'item' && nav.focus === 'party') ||
-      (k === 'party-list' && (nav.focus === 'party' || nav.focus === 'list')) ||
-      k === 'status'
+      (k === 'party-list' && (nav.focus === 'party' || nav.focus === 'list')) || k === 'status'
     if (!ok || index < 0 || index >= ctx.partyCount) return { nav, effect: 'none' }
     if (k === 'status') return { nav: { ...nav, party: index }, effect: 'moved' }
     return decideConfirm(ctx, { ...nav, focus: 'party', party: index })
   }
   if (target === 'list') {
-    if (nav.focus === 'party') return { nav, effect: 'none' }
+    if (nav.focus === 'party' || nav.focus === 'target') return { nav, effect: 'none' }
     if (index < 0 || index >= listCount(ctx, nav)) return { nav, effect: 'none' }
     return decideConfirm(ctx, { ...nav, focus: 'list', list: index })
   }
@@ -513,6 +656,10 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
 export function screenDescription(nav: ScreenNav, ctx: ScreenCtx, notice: string | null): string {
   if (notice) return notice
   const k = ctx.content.kind
+  if (nav.focus === 'list' && k === 'config') {
+    const d = ctx.content.options[nav.list]?.description
+    if (d) return d
+  }
   if (nav.focus === 'list' && k !== 'save' && k !== 'config') {
     const e = listEntries(ctx, nav)[nav.list]
     if (e?.description) return e.description
