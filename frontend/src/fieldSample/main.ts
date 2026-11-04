@@ -882,7 +882,7 @@ async function main(): Promise<void> {
       const engine = new BattleEngine(
         partyState.map((p) => structuredClone(p)),
         enemies.map((e) => ({ ...e })),
-        resumeBattleEngineOptions(buildBattleEngineOptions(b), savedBattle)
+        resumeBattleEngineOptions(buildBattleEngineOptions(b, config.statuses), savedBattle)
       )
       battleRun = { engine, menu, background: bg }
       world.visible = false
