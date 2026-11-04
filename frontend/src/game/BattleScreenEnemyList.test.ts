@@ -5,6 +5,9 @@ import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { MULTI_HIT_INTERVAL_MS, eventTimeline } from './battleMotion'
 import type { BattleEntity } from './spellDsl'
+import type { StatusDef } from '../types'
+import { ENEMY_LIST_MAX_FONT, ENEMY_LIST_PADDING } from './battleEnemyList'
+import { estimateTextWidth } from './battleLayout'
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -28,6 +31,7 @@ interface Internals {
   enemyListTexts: Text[]
   enemyListPanel: { visible: boolean }
   enemyListRect: { x: number; y: number; w: number; h: number } | null
+  statusTexts: Text[]
   refresh(): void
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
@@ -146,5 +150,53 @@ describe('BattleScreen: 敵名ウィンドウ (#954)', () => {
     for (let t = 0; t < MULTI_HIT_INTERVAL_MS + 10; t++) s.tick(1)
     // 2 ヒット目で倒れて ×1（名前のみ）
     expect(shown(s)).toEqual(['スライム'])
+  })
+})
+
+describe('BattleScreen: 敵名ウィンドウの後続 (#954)', () => {
+  const STATUSES: Record<string, StatusDef> = {
+    poison: { id: 'poison', name: 'どく', tickDamage: '1' },
+  }
+  function withEnemies(enemies: BattleEntity[], width = 800) {
+    const engine = new BattleEngine([entity('hero', { agi: 99 })], enemies, {
+      rng: () => 0.5,
+      skills: {},
+      statuses: STATUSES,
+    })
+    const s = new BattleScreen(engine, width, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      enemyList: 'window',
+    })
+    created.push(s)
+    I(s).refresh()
+    return s
+  }
+
+  it('状態異常の敵は窓の行に [状態] が付き、同名でも状態が違えば別の行になる', () => {
+    const s = withEnemies([
+      entity('a', { name: 'スライム', hp: 5, maxHp: 5, status: { poison: 3 } }),
+      entity('b', { name: 'スライム', hp: 5, maxHp: 5 }),
+      entity('c', { name: 'スライム', hp: 5, maxHp: 5 }),
+    ])
+    expect(shown(s)).toEqual(['[どく] スライム', 'スライム ×2'])
+  })
+
+  it('窓の 1 行目の文字は status 窓の 1 行目と同じ高さ（y が約 2px ずれない）', () => {
+    const s = withEnemies([entity('a', { name: 'スライム', hp: 5, maxHp: 5 })])
+    const first = I(s).enemyListTexts.find((t) => t.visible)!
+    expect(first.style.fontSize).toBe(ENEMY_LIST_MAX_FONT)
+    expect(first.y).toBeCloseTo(I(s).statusTexts[0].y, 5)
+  })
+
+  it('窓の幅が BattleScreen から渡る: 狭い窓では長い名前のために文字が縮み、行は窓の幅に収まる', () => {
+    const name = 'メタルスライムのなかま'
+    const s = withEnemies([entity('a', { name, hp: 5, maxHp: 5 })], 640)
+    const rect = I(s).enemyListRect!
+    const t = I(s).enemyListTexts.find((x) => x.visible)!
+    expect(t.style.fontSize).toBeLessThan(ENEMY_LIST_MAX_FONT)
+    expect(estimateTextWidth(t.text, Number(t.style.fontSize))).toBeLessThanOrEqual(
+      rect.w - ENEMY_LIST_PADDING * 2
+    )
   })
 })

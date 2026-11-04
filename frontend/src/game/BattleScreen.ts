@@ -111,6 +111,7 @@ import {
   ENEMY_LIST_PADDING,
   fitEnemyListFont,
   enemyListLines,
+  enemyListTextTop,
   type BattleEnemyListMode,
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
@@ -2078,10 +2079,16 @@ export class BattleScreen extends Container {
     }
     const s = this.engine.getState()
     const rows = aggregateEnemyList(
-      s.enemies.map((e, i) => ({ name: e.name, hp: this.shownHp('enemy', i, e.hp) }))
+      s.enemies.map((e, i) => ({
+        name: e.name,
+        hp: this.shownHp('enemy', i, e.hp),
+        status: this.statusLabelsOf('enemy', i, e),
+      }))
     )
     const fit = fitEnemyListFont(rows.length, rect.h, { rows, windowWidth: rect.w })
     const lines = enemyListLines(rows, fit, rect.w)
+    // 1 行目の文字の高さを status 窓の 1 行目にそろえる（#954 後続）
+    const top = enemyListTextTop(rect.h, fit)
     while (this.enemyListTexts.length < fit.visibleRows) {
       const t = new PixiText({
         text: '',
@@ -2108,7 +2115,7 @@ export class BattleScreen extends Container {
       if (t.style.fontSize !== fit.fontSize) t.style.fontSize = fit.fontSize
       t.text = lines[i]
       t.x = rect.x + ENEMY_LIST_PADDING
-      t.y = rect.y + ENEMY_LIST_PADDING + i * fit.lineHeight + (fit.lineHeight - fit.fontSize) / 2
+      t.y = rect.y + top + i * fit.lineHeight + (fit.lineHeight - fit.fontSize) / 2
     })
   }
 
