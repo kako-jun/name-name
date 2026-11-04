@@ -68,6 +68,7 @@ describe('buildSweep: 族 summon', () => {
   it('buildSweep に足され（末尾は multi-target）、skip で除ける。直前の族のシナリオは変わらない', () => {
     const heavy = [
       'multi-target',
+      'enemy-row',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

@@ -2045,3 +2045,63 @@ describe('describeBattleResult (#831)', () => {
     )
   })
 })
+
+describe('設定 JSON: enemyGrid / enemyRow / enemies[].formationRow / at (#896)', () => {
+  const parse = (extra: Record<string, unknown>, enemies?: unknown[]) =>
+    parseConfig(
+      {
+        ...extra,
+        ...(enemies ? { enemies } : {}),
+      },
+      BASE
+    )
+
+  it('未指定の既定は enemyGrid なし・enemyRow off（BattleScreen / エンジンへ何も渡さない）', () => {
+    const r = parse({})
+    expect(r.ok && r.value.enemyGrid).toBeUndefined()
+    expect(r.ok && r.value.enemyRow).toBe(false)
+    const setup = buildBattleSetup(defaultConfig(), view())
+    expect(setup.enemyRow).toBeUndefined()
+    expect('enemyGrid' in setup.options).toBe(false)
+  })
+
+  it('有効な設定は side のとき BattleScreen とエンジンへ同じグリッドで渡る。front では渡さない', () => {
+    const r = parse({ enemyGrid: '3x2', enemyRow: 'on' })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.enemyGrid).toEqual({ cols: 3, rows: 2 })
+    const side = buildBattleSetup(r.value, view({ layout: 'side' }))
+    expect(side.enemyRow).toEqual({ grid: { cols: 3, rows: 2 } })
+    expect(side.options.enemyGrid).toEqual({ cols: 3, rows: 2 })
+    const front = buildBattleSetup(r.value, view({ layout: 'front' }))
+    expect(front.enemyRow).toBeUndefined()
+    expect('enemyGrid' in front.options).toBe(false)
+  })
+
+  it('formationRow は敵だけに書け、at は layout.at になる', () => {
+    const r = parse({ enemyGrid: '3x2' }, [
+      { id: 'a', formationRow: '後衛', at: 'C1' },
+      { id: 'b', formationRow: 'front' },
+    ])
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.enemies[0].formationRow).toBe('back')
+    expect(r.value.enemies[0].layout).toEqual({ w: 1, h: 1, scale: 1, at: { col: 2, row: 0 } })
+    expect(r.value.enemies[1].formationRow).toBe('front')
+    expect('layout' in r.value.enemies[1]).toBe(false)
+  })
+
+  it.each([
+    [{ enemyRow: 'yes' }, undefined, 'enemyRow は'],
+    [{ enemyGrid: 'big' }, undefined, 'enemyGrid は'],
+    [{}, [{ id: 'a', formationRow: 3 }], 'formationRow は'],
+    [{}, [{ id: 'a', at: 'Z' }], 'at は'],
+  ])('不正値は読み込みエラー %j', (extra, enemies, msg) => {
+    const r = parse(extra, enemies as unknown[] | undefined)
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toContain(msg)
+  })
+
+  it('味方に formationRow / at は書けない', () => {
+    const r = parseConfig({ party: [{ id: 'p', formationRow: 'back' }] }, BASE)
+    expect(r.ok).toBe(false)
+  })
+})

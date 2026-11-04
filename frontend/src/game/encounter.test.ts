@@ -339,3 +339,26 @@ describe('rollEncounter: サイズ・倍率・配置を BattleEntity.layout に�
     expect(layout.at).not.toBe(at)
   })
 })
+
+describe('rollEncounter: 隊列を BattleEntity.formationRow に写す (#896)', () => {
+  const roll = (masters: Record<string, MonsterDef>) =>
+    rollEncounter({ rate: 1, groups: ['slime+ghost'], masters, rng: () => 0 })!
+
+  it('隊列を書かない敵は formationRow なし（従来どおりキーも増えない）', () => {
+    for (const e of roll({ slime, ghost })) expect('formationRow' in e).toBe(false)
+  })
+
+  it('後衛・前衛・英語・前列/後列を front/back に写す', () => {
+    const [a, b] = roll({ slime: { ...slime, row: '後衛' }, ghost: { ...ghost, row: 'front' } })
+    expect(a.formationRow).toBe('back')
+    expect(b.formationRow).toBe('front')
+    const [c, d] = roll({ slime: { ...slime, row: '後列' }, ghost: { ...ghost, row: '前列' } })
+    expect(c.formationRow).toBe('back')
+    expect(d.formationRow).toBe('front')
+  })
+
+  it('`row`（味方・戦闘エンジンの汎用フィールド）には触れない', () => {
+    const [a] = roll({ slime: { ...slime, row: '後衛' }, ghost })
+    expect('row' in a).toBe(false)
+  })
+})

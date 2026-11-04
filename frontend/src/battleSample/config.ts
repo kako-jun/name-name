@@ -36,6 +36,7 @@ import {
   type BattlePresentation,
 } from '../game/battleMotion'
 import type { BattleEnemyListMode } from '../game/battleEnemyList'
+import { normalizeEnemyGrid, parseCellRef, type EnemyGridSize } from '../game/enemyGrid'
 import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import {
@@ -133,6 +134,10 @@ export interface BattleSampleConfig {
   atbMode: AtbMode
   /** コマンド窓の配置 (#204)。既定 grid（2x2）。cross は side のとき十字配置＋矢印キー */
   commandLayout: CommandLayout
+  /** 敵の見えないグリッド (#839)。設定 JSON の （）。（）で位置を固定できる。既定は無し（従来の配置）。side のときだけ効く */
+  enemyGrid: EnemyGridSize | undefined
+  /** 敵の前列・後列 (#896)。設定 JSON の 。on のとき後列の敵への通常攻撃は半分（ の宣言 → グリッドの位置から導出）。既定 off。side のときだけ効く */
+  enemyRow: boolean
   /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
   commandLabels: CommandLabels
   /** 候補窓の呪文 (#204)。味方全員が使える（grid でも cross でも「じゅもん」で開く）。MP が足りないものはグレー */
@@ -285,6 +290,8 @@ export function defaultConfig(): BattleSampleConfig {
     atb: 'off',
     atbMode: 'wait',
     commandLayout: 'grid',
+    enemyGrid: undefined,
+    enemyRow: false,
     commandLabels: {},
     spells: defaultSpells(),
     items: defaultItems(),
@@ -392,6 +399,36 @@ function parseEntity(
       return { ok: false, error: `${path}.row は "front" か "back": ${JSON.stringify(raw.row)}` }
     }
     if (normalizeBattleRow(raw.row) === 'back') entity.row = 'back'
+  }
+  if (raw.formationRow !== undefined) {
+    // 敵の隊列の宣言 (#896)。`[モンスター]` の `隊列:` と同じ（`front` / `back`、`前衛` / `後衛`）。`enemyRow: "on"` のときだけ効く
+    if (path.startsWith('party[')) {
+      return {
+        ok: false,
+        error: `${path}.formationRow: 隊列の宣言は enemies[] だけに書けます（味方は row）`,
+      }
+    }
+    if (typeof raw.formationRow !== 'string' || raw.formationRow.trim() === '') {
+      return {
+        ok: false,
+        error: `${path}.formationRow は "front" か "back": ${JSON.stringify(raw.formationRow)}`,
+      }
+    }
+    entity.formationRow = normalizeBattleRow(raw.formationRow)
+  }
+  if (raw.at !== undefined) {
+    // 敵の配置指定 (#839)。群の `@C1` と同じ（列は左から A,B,C…・行は上から 1,2…）。`enemyGrid` が無いと描画に効かない
+    if (path.startsWith('party[')) {
+      return { ok: false, error: `${path}.at: 配置指定は enemies[] だけに書けます` }
+    }
+    const cell = typeof raw.at === 'string' ? parseCellRef(raw.at) : null
+    if (!cell) {
+      return {
+        ok: false,
+        error: `${path}.at は "C1" のようなセルの指定: ${JSON.stringify(raw.at)}`,
+      }
+    }
+    entity.layout = { w: 1, h: 1, scale: 1, at: cell }
   }
   if (typeof raw.sprite === 'string' && raw.sprite.trim()) {
     const url = resolveUrl(raw.sprite.trim(), baseUrl)
@@ -821,6 +858,24 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
     }
     enemyList = raw.enemyList
   }
+  let enemyGrid = def.enemyGrid
+  if (raw.enemyGrid !== undefined) {
+    const g = typeof raw.enemyGrid === 'string' ? normalizeEnemyGrid(raw.enemyGrid) : undefined
+    if (!g) {
+      return {
+        ok: false,
+        error: `enemyGrid は "6x2" のような 列数x行数: ${JSON.stringify(raw.enemyGrid)}`,
+      }
+    }
+    enemyGrid = g
+  }
+  let enemyRow = def.enemyRow
+  if (raw.enemyRow !== undefined) {
+    if (raw.enemyRow !== 'on' && raw.enemyRow !== 'off') {
+      return { ok: false, error: `enemyRow は "on" か "off": ${JSON.stringify(raw.enemyRow)}` }
+    }
+    enemyRow = raw.enemyRow === 'on'
+  }
   let atb = def.atb
   if (raw.atb !== undefined) {
     if (raw.atb !== 'on' && raw.atb !== 'off') {
@@ -965,6 +1020,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       atb,
       atbMode,
       commandLayout,
+      enemyGrid,
+      enemyRow,
       commandLabels: commandLabels.value,
       spells: spells.value,
       items: items.value,
@@ -1083,6 +1140,8 @@ export function buildBattleSetup(
     presentation: BattlePresentation
     motion: BattleMotionPreset
     enemyList: BattleEnemyListMode
+    /** 敵グリッド (#839)。side かつ設定 JSON に `enemyGrid` があるときだけ付く */
+    enemyGrid?: EnemyGridSize
     commandLayout: CommandLayout
     commandLabels: CommandLabels
     /** コマンドの構成と順序 (#889)。未指定は既定の 4 つ */
@@ -1097,6 +1156,8 @@ export function buildBattleSetup(
   }
   /** BattleEngine に渡す ATB 設定 (#205)。undefined = 従来ターン制 */
   atb?: BattleAtbConfig
+  /** BattleEngine に渡す敵の前列・後列 (#896)。side かつ設定 JSON が `enemyRow: "on"` のときだけ付く（無ければ従来どおり） */
+  enemyRow?: { grid?: EnemyGridSize }
   /** BattleEngine に渡す敵の特技 (#835) */
   skills: Record<string, SkillExecution>
   /** BattleEngine に渡す状態の宣言 (#870) */
@@ -1122,6 +1183,9 @@ export function buildBattleSetup(
   const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
   return {
     ...(view.atb === 'on' ? { atb: { mode: view.atbMode } } : {}),
+    ...(view.layout === 'side' && config.enemyRow
+      ? { enemyRow: { ...(config.enemyGrid ? { grid: config.enemyGrid } : {}) } }
+      : {}),
     skills: config.skills,
     statuses: config.statuses,
     itemNames: config.itemNames,
@@ -1148,6 +1212,7 @@ export function buildBattleSetup(
       presentation: view.presentation,
       motion: view.motion,
       enemyList: view.enemyList,
+      ...(view.layout === 'side' && config.enemyGrid ? { enemyGrid: config.enemyGrid } : {}),
       commandLayout: view.commandLayout,
       commandLabels: config.commandLabels,
       ...(config.commands ? { commands: [...config.commands] } : {}),

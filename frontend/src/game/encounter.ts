@@ -16,6 +16,7 @@ import { hasOwn } from './ownProperty'
 import { posesField } from './battleMotion'
 import { affinityField } from './affinity'
 import { lootField } from './loot'
+import { formationRowField } from './enemyRow'
 import { parseEncounterGroup, pickGroupIndex, resolveEncounterGroup } from './enemyGroup'
 
 /**
@@ -102,6 +103,7 @@ export function buildEnemyEntities(
       ...affinityField(def.affinity),
       ...lootField(def.loot),
       ...enemyLayoutField(def, at),
+      ...formationRowField(def.row),
     })
   }
   return enemies

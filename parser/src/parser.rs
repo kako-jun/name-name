@@ -72,6 +72,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut battle_effects: Option<String> = None;
     let mut battle_enemy_grid: Option<String> = None;
     let mut battle_enemy_window_overlap: Option<String> = None;
+    let mut battle_enemy_row: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -367,6 +368,12 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_enemy_window_overlap = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_enemy_row:") {
+                // 敵の前列・後列 (#896)。on / off。値は生文字列で透過し、runtime 側で解釈する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_enemy_row = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_enemy_grid:") {
                 // 敵の見えないグリッド (#839)。`列数x行数`。値は生文字列で透過し、runtime 側で丸める。
@@ -1349,6 +1356,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         battle_effects,
         battle_enemy_grid,
         battle_enemy_window_overlap,
+        battle_enemy_row,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,
