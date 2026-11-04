@@ -176,6 +176,50 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(engine.getState().enemies[0].hp).toBeLessThan(999)
   })
 
+  it('読み込み前に出す時刻になったエフェクトは、読み込み完了後に待った時間ぶん進めて出る (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    // textures に無い = 読み込み中（コンストラクタの先読みはテスト中は終わらない）
+    expect(I(s).effectTextures.has('sheet.png')).toBe(false)
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 250)
+    expect(I(s).effectInstances).toHaveLength(0)
+    // 読み込みが終わる（命中から 250ms 待ち。シートは 4 コマ×100ms = 400ms）
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 10)
+    const inst = I(s).effectInstances
+    expect(inst).toHaveLength(1)
+    expect(inst[0].kind).toBe('slash')
+    // 待った分だけ進んだコマ（0 コマ目ではない）から始まる
+    const frame0 = (
+      s as unknown as { effectFrameTexture(sheet: BattleEffectSheet, f: number): Texture | null }
+    ).effectFrameTexture(sh(), 0)
+    expect(inst[0].sprite.texture).not.toBe(frame0)
+    run(s, 400)
+    expect(I(s).effectInstances).toHaveLength(0)
+  })
+
+  it('読み込みを待つうちにエフェクトが終わる長さを過ぎたら、遅れて出さない (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 700)
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 50)
+    expect(I(s).effectInstances).toHaveLength(0)
+  })
+
+  it('読み込み中にエフェクトを待たせている間に読めなかった（null）ら、捨てて戦闘は進む (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 60)
+    I(s).effectTextures.set('sheet.png', null)
+    run(s, 800)
+    expect(I(s).effectInstances).toEqual([])
+    expect(engine.getState().enemies[0].hp).toBeLessThan(999)
+  })
+
   it('1 回の dt が行動の終わりをまたいでも、数字が出るヒットには効果も出る', () => {
     const { s, engine } = setup({ slash: sh({ frameMs: 2000 }) })
     I(s).effectTextures.set('sheet.png', sheetTexture(4))

@@ -711,6 +711,19 @@ describe("GET /api/projects/:name/assets/raw/*path (#404 md content-type)", () =
     expect(res.headers.get("content-type")).toBe(expected);
   });
 
+  it("returns content-type: application/json for assets/**/*.json (#941 battle_effects)", async () => {
+    const body = '{"slash":{"image":"effects/slash.png","frames":4}}';
+    globalThis.fetch = vi.fn(async () => contentsFileResponse({ content: body })) as typeof fetch;
+
+    const req = new Request(
+      "https://name-name-api.workers.dev/api/projects/ogurasia/assets/raw/effects/effects.json",
+    );
+    const res = await worker.fetch(req, ENV, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(await res.text()).toBe(body);
+  });
+
   it("returns application/octet-stream for an unknown extension", async () => {
     globalThis.fetch = vi.fn(async () =>
       contentsFileResponse({ content: "???" }),

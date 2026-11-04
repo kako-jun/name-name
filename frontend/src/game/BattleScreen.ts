@@ -638,6 +638,8 @@ export class BattleScreen extends Container {
   /** いま再生中の行動（通し番号）のエフェクトの予定のうち、まだ出していないもの */
   private effectPlanSeq = -1
   private effectPending: EffectPlan[] = []
+  /** 画像の読み込み中に出す時刻になったエフェクト（読み込みが終わったら、待った時間ぶん進めて出す。終わる長さを過ぎたら捨てる） (#941) */
+  private effectDeferred: { plan: EffectPlan; sinceStart: number }[] = []
   /** FF 式メッセージ窓の言葉と、窓（ログ帯）の矩形。layoutSide が更新 */
   private messageText: PixiText | null = null
   private messageRect = { x: 0, y: 0, w: 0, h: 0 }
@@ -845,6 +847,7 @@ export class BattleScreen extends Container {
     this.disposeLogTicker()
     this.popups = []
     this.effectInstances = []
+    this.effectDeferred = []
     for (const frames of this.effectFrames.values()) for (const t of frames) t.destroy(false)
     this.effectFrames.clear()
     this.playback = emptyPlayback()
@@ -2845,6 +2848,7 @@ export class BattleScreen extends Container {
       }
       this.effectPending = rest
     }
+    this.flushDeferredEffects(dt)
     for (const fire of fires) {
       const plans = planHitEffects(fire.event, fire.hits, this.opts.effects, this.motionTiming)
       for (const p of plans) this.spawnEffect(p, fire.sinceHit)
@@ -2858,6 +2862,25 @@ export class BattleScreen extends Container {
     })
   }
 
+  /**
+   * 読み込み待ちのエフェクトを進める (#941)。読めたら待った時間ぶん進めて出し、読めなかった・終わる長さを過ぎたものは捨てる。
+   * まだ読み込み中なら次の tick まで持ち越す（戦闘は止めない）
+   */
+  private flushDeferredEffects(dt: number): void {
+    if (this.effectDeferred.length === 0) return
+    const keep: { plan: EffectPlan; sinceStart: number }[] = []
+    for (const d of this.effectDeferred) {
+      const sheet = this.opts.effects?.[d.plan.kind]
+      if (!sheet) continue
+      d.sinceStart += dt
+      if (effectFrameAt(sheet, d.sinceStart) === null) continue // 待つうちに終わった
+      if (!this.effectTextures.has(sheet.image))
+        keep.push(d) // まだ読み込み中
+      else this.spawnEffect(d.plan, d.sinceStart) // 読めた（null＝読めなかった画像は spawnEffect が省く）
+    }
+    this.effectDeferred = keep
+  }
+
   private spawnEffect(plan: EffectPlan, sinceStart: number): void {
     const layer = this.effectLayer
     const sheet = this.opts.effects?.[plan.kind]
@@ -2865,8 +2888,13 @@ export class BattleScreen extends Container {
     if (!this.effectTextures.has(sheet.image)) void this.loadEffectTexture(sheet.image)
     const frame = effectFrameAt(sheet, sinceStart)
     if (frame === null) return // もう終わっている長さ（大きく遅れたとき）
+    // 読み込み中は後で出す（読み込みが終わった時点で、待った時間ぶん進めて出す）。読めなかった（null）画像は省く
+    if (!this.effectTextures.has(sheet.image)) {
+      this.effectDeferred.push({ plan, sinceStart })
+      return
+    }
     const tex = this.effectFrameTexture(sheet, frame)
-    if (!tex) return // 読み込み中・読めなかった画像は省く
+    if (!tex) return
     const sprite = new Sprite(tex)
     sprite.anchor.set(0.5)
     layer.addChild(sprite)
