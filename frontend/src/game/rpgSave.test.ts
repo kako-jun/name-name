@@ -456,3 +456,44 @@ describe('menu（#880 せってい・せいとんの持ち越し）', () => {
     if (!r.ok) expect(r.error).toMatch(re)
   })
 })
+
+describe('menu と gear の併存（#880 / #881）', () => {
+  const menu = { settings: { battleMode: 1 }, itemOrder: ['ether', 'potion'] }
+  const gear = { owned: { party1: ['blade-a'] }, blade: { party1: 'blade-a' } }
+  const roundTrip = (extra: Record<string, unknown>) => {
+    const raw = { ...declared(), ...extra }
+    const parsed = parseRpgSave(raw)
+    if (!parsed.ok) throw new Error(parsed.error)
+    const resolved = resolveRpg(parsed.value, base)
+    return snapshotRpg(
+      {
+        party: resolved.party,
+        inventory: resolved.inventory,
+        equipment: resolved.equipment,
+        gold: resolved.gold,
+        menu: resolved.menu,
+        gear: resolved.gear,
+      },
+      base
+    )
+  }
+
+  it('両方を持つセーブは parse → resolve → snapshot で両方保たれる', () => {
+    const snap = roundTrip({ menu, gear })
+    expect(snap.menu).toEqual(menu)
+    expect(snap.gear).toEqual(gear)
+  })
+  it('片方だけなら、もう片方のキーは書かない', () => {
+    const onlyMenu = roundTrip({ menu })
+    expect(onlyMenu.menu).toEqual(menu)
+    expect('gear' in onlyMenu).toBe(false)
+    const onlyGear = roundTrip({ gear })
+    expect(onlyGear.gear).toEqual(gear)
+    expect('menu' in onlyGear).toBe(false)
+  })
+  it('どちらも無い旧セーブは、どちらのキーも書かない', () => {
+    const snap = roundTrip({})
+    expect('menu' in snap).toBe(false)
+    expect('gear' in snap).toBe(false)
+  })
+})
