@@ -1,12 +1,12 @@
 /** 設定 JSON の `menu` (#880) が parseConfig / 同梱サンプル / ダミー fixture でどう扱われるか */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseConfig, parseConfigText } from './config'
-import { buildDummyFixture } from './dummyFixture'
+import { buildDummyFixture } from './__fixtures__/dummyFixture'
 import { expandedTeramachiText } from './teramachiExpanded'
 
 const BASE = 'https://example.com/field/config.json'
 
-// jsdom の canvas は未実装。dummyFixture の描画は検証対象外なので最小限の stub を置く（dummyFixture.test.ts と同じ）
+// jsdom の canvas は未実装。dummyFixture の描画は検証対象外なので最小限の stub を置く（__fixtures__/dummyFixture.test.ts と同じ）
 beforeEach(() => {
   const ctx = new Proxy({}, { get: () => () => undefined, set: () => true })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
