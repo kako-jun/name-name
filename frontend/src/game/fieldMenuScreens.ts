@@ -38,12 +38,12 @@ export const SCREEN_KINDS: readonly ScreenKind[] = [
   'empty',
 ]
 
-/** 既定の項目 id → 画面の種類。それ以外の id（定義側が足した項目）は `empty`（`kind` で指定できる） */
-/** アプリストアのどれかのタブが人物別の一覧（`entriesByParty`）を持つか。持つときだけ人物の切り替え（帯・上下キー・案内）を出す */
+/** アプリストアのどれかのタブが人物別の一覧（`entriesByParty`。空オブジェクトは「無い」）を持つか。持つときだけ人物の切り替え（帯・上下キー・案内）を出す */
 export function appstoreHasParty(content: Pick<ResolvedContent, 'tabs'>): boolean {
-  return content.tabs.some((t) => t.entriesByParty !== undefined)
+  return content.tabs.some((t) => Object.keys(t.entriesByParty ?? {}).length > 0)
 }
 
+/** 既定の項目 id → 画面の種類。それ以外の id（定義側が足した項目）は `empty`（`kind` で指定できる） */
 export function defaultScreenKind(id: string): ScreenKind {
   switch (id) {
     case 'item':

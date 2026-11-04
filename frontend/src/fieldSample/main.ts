@@ -153,7 +153,7 @@ import {
   type FieldMenuPartyView,
 } from '../game/FieldMenuScreen'
 import { TimeLimitLayer } from '../game/TimeLimitLayer'
-import { placeNameOf } from '../game/fieldMenu'
+import { formatInfoBand, placeNameOf } from '../game/fieldMenu'
 import { FieldMenuHost } from '../game/fieldMenuHost'
 import { FieldMenuRuntime } from '../game/fieldMenuRuntime'
 import { applySettings } from '../game/fieldSettings'
@@ -162,6 +162,7 @@ import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
 import { ensureFontLoaded } from '../game/FontLoader'
+import { loadMenuFont } from '../game/menuFont'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
@@ -1280,10 +1281,18 @@ async function main(): Promise<void> {
             emotionLayer?.clear()
             // 文字の幅の計測（OffscreenCanvas）と描画（ページの lang=ja を受ける canvas）が、未ロードの総称フォント（sans-serif）だと
             // 食い違って情報帯の末尾が切れるので、メニューの文字フォントを先に読む。失敗（オフライン）は握る（従来の表示のまま）
-            await ensureFontLoaded(MENU_FONT_FAMILY).catch(() => undefined)
-            await document.fonts
-              ?.load(`16px ${MENU_FONT_FAMILY}`, MENU_FONT_SAMPLE)
-              .catch(() => undefined)
+            // 上限つき（応答が返らない回線でメニューが開かなくならないよう、超えたら従来の表示で開く）。
+            // 固定の見本に、そのとき出す情報帯の字（現在地名・通貨名・数字記号）を足して、字の分割ファイルまで読む
+            const bandText = formatInfoBand(menuInfo()) + (config.battle.currencyName ?? '')
+            await loadMenuFont(
+              {
+                ensure: ensureFontLoaded,
+                load: (font, text) => document.fonts?.load(font, text) ?? Promise.resolve(),
+              },
+              MENU_FONT_FAMILY,
+              MENU_FONT_SAMPLE,
+              bandText
+            )
             const party: FieldMenuPartyView[] = await Promise.all(
               partyState.map(async (p) => ({
                 id: p.id,

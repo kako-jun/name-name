@@ -331,6 +331,37 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     expect(by(rt, 'appstore').content?.tabs?.[0].entries[0].label).toBe('固定')
     expect(Object.keys(by(rt, 'equip').content?.entriesByParty ?? {})).toEqual(['a', 'b'])
   })
+  it('appstore の tabs が空の entriesByParty だけなら「書いていない」扱いで中身を差し込む', () => {
+    const g = {
+      state: emptyGearState() as GearState,
+      gold: 1000,
+      equipment: {} as Record<string, string[]>,
+    }
+    const { rt } = setup({
+      menu: {
+        items: [
+          {
+            id: 'appstore',
+            label: 'ア',
+            content: { tabs: [{ label: '刀', entries: [], entriesByParty: {} }] },
+          },
+        ],
+        transition: { ...DEFAULT_MENU_TRANSITION },
+      },
+      getEquipment: () => g.equipment,
+      gear: {
+        cfg,
+        getState: () => g.state,
+        setState: (s) => (g.state = s),
+        getGold: () => g.gold,
+        setGold: (n) => (g.gold = n),
+        getFlags: () => ({}),
+        setEquipment: (m, l) => (g.equipment[m] = l),
+      },
+    })
+    const tab = rt.items().find((d) => d.id === 'appstore')!.content!.tabs![0]
+    expect(Object.keys(tab.entriesByParty ?? {})).toEqual(['a', 'b'])
+  })
   it('売り物の定義がないゲームでは appstore・equip の使用要求は null（従来どおり）', () => {
     const { rt } = setup()
     expect(rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })).toBeNull()

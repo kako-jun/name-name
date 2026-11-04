@@ -1062,3 +1062,11 @@ describe('アプリストアの人物の切り替えは、人物別の一覧が�
     expect(c.content.description).toContain('人物の切り替え')
   })
 })
+
+describe('appstoreHasParty: 空オブジェクトは「無い」 (#881)', () => {
+  it('entriesByParty が {} だけなら人物別ではない', () => {
+    const c = ctx('appstore', { tabs: [{ label: '刀', entries: [], entriesByParty: {} }] })
+    expect(appstoreHasParty(c.content)).toBe(false)
+    expect(c.content.description).toBe('アプリを選んでください')
+  })
+})

@@ -464,7 +464,7 @@ export function applyLiveContent(
       return { ...d, content: { ...c, entriesByParty: buildMagicByParty(input.rpg) } }
     // 定義側が中身を書いていれば差し込まない（空配列・空オブジェクトは「書いていない」）
     const authoredTabs = !!c?.tabs?.some(
-      (t) => t.entries.length > 0 || t.entriesByParty !== undefined
+      (t) => t.entries.length > 0 || Object.keys(t.entriesByParty ?? {}).length > 0
     )
     const authoredEquip =
       (c?.entries?.length ?? 0) > 0 || Object.keys(c?.entriesByParty ?? {}).length > 0
