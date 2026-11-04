@@ -276,11 +276,60 @@ describe('MotionTiming: 各関数に timing が通る（配線） (#956)', () =>
   })
 })
 
-describe('hitMosaic (#953)', () => {
+describe('selfMosaic (#953)', () => {
   it('default は無効（0）、snappy は有効', async () => {
     const m = await import('./battleMotion')
-    expect(m.DEFAULT_MOTION_TIMING.hitMosaicMs).toBe(0)
-    expect(m.SNAPPY_MOTION_TIMING.hitMosaicMs).toBeGreaterThan(0)
-    expect(m.SNAPPY_MOTION_TIMING.hitMosaicMaxSize).toBeGreaterThan(1)
+    expect(m.DEFAULT_MOTION_TIMING.selfMosaicMs).toBe(0)
+    expect(m.SNAPPY_MOTION_TIMING.selfMosaicMs).toBeGreaterThan(0)
+    expect(m.SNAPPY_MOTION_TIMING.selfMosaicMaxSize).toBeGreaterThan(1)
+  })
+})
+
+describe('アクスタの被弾の傾き・倒れ・消滅 (#953)', () => {
+  it('被弾: 傾きは 0→hurtTiltDeg→0 の山で、のけぞり後は 0', async () => {
+    const m = await import('./battleMotion')
+    const T = m.SNAPPY_MOTION_TIMING
+    expect(m.sampleTarget('damage', 0, false, T).tilt).toBe(0)
+    expect(m.sampleTarget('damage', T.recoilMs / 2, false, T).tilt).toBeCloseTo(T.hurtTiltDeg, 6)
+    expect(m.sampleTarget('damage', T.recoilMs, false, T).tilt).toBeCloseTo(0, 6)
+    expect(m.sampleTarget('heal', T.recoilMs / 2, false, T).tilt).toBe(0)
+  })
+  it('死亡: 傾きが 0→fallDeg（約90）に倒れ、その後 vanishMs でモザイク消滅 0→1', async () => {
+    const m = await import('./battleMotion')
+    const T = m.SNAPPY_MOTION_TIMING
+    const at = (t: number) => m.sampleTarget('damage', t, true, T)
+    expect(T.fallDeg).toBe(90)
+    expect(at(T.recoilMs + T.downMs).tilt).toBeCloseTo(90, 6)
+    expect(at(T.recoilMs + T.downMs).vanish).toBe(0)
+    expect(at(T.recoilMs + T.downMs + T.vanishMs / 2).vanish).toBeCloseTo(0.5, 6)
+    expect(at(T.recoilMs + T.downMs + T.vanishMs).vanish).toBe(1)
+    expect(m.restingSample({ down: true, victory: false }, T)).toMatchObject({
+      tilt: 90,
+      vanish: 1,
+    })
+  })
+  it('時間割: extraDownMs ぶんだけ倒れる行動が長くなる（無ければ従来どおり）', async () => {
+    const m = await import('./battleMotion')
+    const ev = {
+      seq: 0,
+      actor: { side: 'party', index: 0 },
+      kind: 'attack',
+      hits: [
+        { target: { side: 'enemy', index: 0 }, kind: 'damage', amount: 9, hpBefore: 1, hpAfter: 0 },
+      ],
+    } as never
+    const base = m.eventTimeline(ev, m.SNAPPY_MOTION_TIMING).duration
+    expect(m.eventTimeline(ev, m.SNAPPY_MOTION_TIMING, 100).duration).toBe(base + 100)
+  })
+  it('死亡: 被弾の傾きは戻らず、ピークから連続して単調に倒れる', async () => {
+    const m = await import('./battleMotion')
+    const T = m.SNAPPY_MOTION_TIMING
+    let prev = 0
+    for (let t = 0; t <= T.recoilMs + T.downMs; t += 2) {
+      const tilt = m.sampleTarget('damage', t, true, T).tilt
+      expect(tilt).toBeGreaterThanOrEqual(prev - 1e-9)
+      prev = tilt
+    }
+    expect(m.sampleTarget('damage', T.recoilMs, true, T).tilt).toBeCloseTo(T.hurtTiltDeg, 6)
   })
 })

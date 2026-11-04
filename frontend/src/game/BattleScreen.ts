@@ -518,8 +518,8 @@ interface EntityView extends AcrylicParts {
   baseVisual: PoseVisual | null
   shownVisual: PoseVisual | null
   poseVisuals: Partial<Record<BattlePose, PoseVisual>>
-  /** 被弾モザイク (#953): 付けている間だけ持つ PixelateFilter（container.filters に入っている）。終わる・破棄で外して destroy */
-  hitMosaic?: PixelateFilter | null
+  /** 自己モザイク (#953/sit-by-me #64): 付けている間だけ持つ PixelateFilter（container.filters に入っている）。終わる・破棄で外して destroy */
+  selfMosaic?: PixelateFilter | null
 }
 
 /** 再生中のエフェクト 1 つ (#936)。画面が持つ演出の途中状態（エンジンには持たない） */
@@ -654,6 +654,19 @@ export class BattleScreen extends Container {
   /** 敵グリッド (#839 段4): 戦闘開始時に `placeEnemies` で 1 回決めた配置と、敵ごとの占有（enemyViews と同じ index。置けなかった敵は null）。グリッドなしは null */
   private enemyFootprints: (EnemyFootprint | null)[] | null = null
   private partyViews: EntityView[] = []
+  /** アクスタ表示（spriteStyle acrylic）か (#953)。被弾の傾き・倒れ・敵のモザイク消滅はこのときだけ（従来表示は不変） */
+  private isAcrylicStand(): boolean {
+    return this.acrylicParams !== null
+  }
+
+  /** アクスタ表示で敵が倒れる行動は、倒れ切ったあとのモザイク消滅ぶん長くする (#953)。それ以外は 0（従来と同じ） */
+  private extraDownMsFor(ev: BattleActionEvent): number {
+    return this.isAcrylicStand() &&
+      ev.hits.some((h) => h.kind === 'damage' && h.hpAfter <= 0 && h.target.side === 'enemy')
+      ? this.motionTiming.vanishMs
+      : 0
+  }
+
   /** 行動の時間割の使い回し（timelineOf） */
   private timelineCache: {
     event: BattleActionEvent
@@ -830,7 +843,7 @@ export class BattleScreen extends Container {
     if (this.menuEnabled) this.engine.setAtbWaitScope('command')
     this.detachResultSkip()
     for (const v of [...this.enemyViews, ...this.partyViews]) {
-      this.clearHitMosaic(v)
+      this.clearSelfMosaic(v)
       v.acrylicPlate?.destroy()
       v.acrylicShadow?.destroy()
       v.acrylicShadow = null
@@ -1946,6 +1959,8 @@ export class BattleScreen extends Container {
     view.anchorX = slot.x + slot.width / 2
     // ダメージ数字の出る高さ: 既定は枠（グリッド敵は倍率で縮めた箱）の上端から 35%。味方は配置後に、実際の絵の矩形の上端から 35% へ置き直す（下）
     view.anchorY = fy + fh * 0.35
+    view.container.pivot.set(0, 0)
+    view.container.rotation = 0
     view.container.position.set(view.baseX, view.baseY)
     const fb = computeFallbackRect(box)
     const fbX = acrylic ? fb.x : size > 0 ? fw * (fb.x / fh) : 0
@@ -2626,7 +2641,7 @@ export class BattleScreen extends Container {
   private advancePresentation(dt: number): void {
     const wasBusy = isPlaybackBusy(this.playback)
     if (!wasBusy && this.popups.length === 0 && this.effectInstances.length === 0) return
-    const r = advancePlayback(this.playback, dt, this.motionTiming)
+    const r = advancePlayback(this.playback, dt, this.motionTiming, (e) => this.extraDownMsFor(e))
     this.playback = r.state
     let changed = false
     for (const fire of r.fires) {
@@ -3027,7 +3042,7 @@ export class BattleScreen extends Container {
       !isPlaybackBusy(this.playback) &&
       (side === 'party' ? s.phase === 'victory' : s.phase === 'defeat')
     let out: TargetSample & { forward: number } = {
-      ...restingSample({ down: hp <= 0, victory: won && hp > 0 }),
+      ...restingSample({ down: hp <= 0, victory: won && hp > 0 }, this.motionTiming),
       forward: 0,
     }
     const active = this.playback.active
@@ -3054,7 +3069,14 @@ export class BattleScreen extends Container {
     }
     if (latest) {
       const t = sampleTarget('damage', latest.sinceHit, latest.downs, this.motionTiming)
-      out = { ...out, recoil: t.recoil, pose: t.pose, downProgress: t.downProgress }
+      out = {
+        ...out,
+        recoil: t.recoil,
+        pose: t.pose,
+        downProgress: t.downProgress,
+        tilt: t.tilt,
+        vanish: t.vanish,
+      }
     }
     return out
   }
@@ -3087,11 +3109,37 @@ export class BattleScreen extends Container {
           MOTION_SCREEN_MARGIN,
           this.screenWidth - MOTION_SCREEN_MARGIN
         )
-        const dy = hasDownVisual ? 0 : m.downProgress * SINK_DISTANCE * view.unit
-        view.container.position.set(view.baseX + dx, view.baseY + dy)
+        // アクスタ表示 (#953): 足元（スプライト下端中央）を支点に傾く。被弾は山形に倒れ気味、死亡は fallDeg まで倒れる。
+        // 向きはのけぞりと同じ（攻撃側と反対）。倒れた絵（down）がある者は絵の差し替えで倒れを表すので、死ぬ被弾でも傾けない（生き残る被弾の傾きは付く）。
+        // 倒れの絵が無い者は、従来の沈み込みでなく回転で倒れる
+        const stand = this.isAcrylicStand() && !!view.acrylicBack
+        // down の絵で倒れを表す者（死ぬ被弾を含む）は、絵が切り替わる瞬間に傾きが 0 へ跳ばないよう、被弾からも傾けない
+        const angleDeg = stand ? (m.dying && view.poseVisuals.down ? 0 : m.tilt) : 0
+        const dy = hasDownVisual || stand ? 0 : m.downProgress * SINK_DISTANCE * view.unit
+        let mosaic: number | null = null
+        if (stand && angleDeg !== 0 && view.sprite) {
+          const px = view.sprite.x + view.sprite.width / 2
+          const py = view.sprite.y + view.sprite.height
+          view.container.pivot.set(px, py)
+          view.container.position.set(view.baseX + dx + px, view.baseY + dy + py)
+          view.container.rotation = ((-dir * angleDeg) / 180) * Math.PI
+        } else {
+          view.container.pivot.set(0, 0)
+          view.container.rotation = 0
+          view.container.position.set(view.baseX + dx, view.baseY + dy)
+        }
         // 倒れた絵があるなら味方は不透明のまま（敵は他と同じく薄くする）。無ければ沈みながら薄くする
-        const fade = side === 'party' && hasDownVisual ? 0 : m.downProgress
+        // アクスタの敵は薄くせず、倒れ切ったあとモザイクで消える（vanish 1 で消える）。アクスタの味方は倒れたまま残る
+        const fade = stand || (side === 'party' && hasDownVisual) ? 0 : m.downProgress
         view.container.alpha = 1 - (1 - DEAD_ALPHA) * fade
+        if (stand && side === 'enemy' && m.vanish > 0) {
+          if (m.vanish >= 1) view.container.alpha = 0
+          else
+            mosaic = Math.max(
+              1,
+              Math.round(1 + m.vanish * (this.motionTiming.vanishMosaicMaxSize - 1))
+            )
+        }
         // 敵の名前・HP ラベルも本体の横ずれと薄れに追従させる (#745)
         if (view.label) {
           view.label.position.set(view.labelBaseX + dx, view.labelBaseY)
@@ -3100,13 +3148,14 @@ export class BattleScreen extends Container {
         const sh = view.acrylicShadow
         if (sh) {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
+          // アクスタの傾き (#953): 影の pivot は足元なので、絵と同じ角度で回せば同じ足元を支点に絵と一緒に傾く
+          sh.rotation = view.container.rotation
           sh.alpha = view.container.alpha
         }
-        this.applyHitMosaic(
+        // モザイクは敵の攻撃の通知（自己モザイク）だけ。味方の被弾は hurt ポーズ絵 + のけぞりで表す
+        this.applySelfMosaic(
           view,
-          side === 'party'
-            ? this.hitMosaicSize(index)
-            : this.enemyAttackMosaicSize(index, m.downProgress)
+          side === 'enemy' ? (mosaic ?? this.enemyAttackMosaicSize(index, m.downProgress)) : null
         )
       })
     }
@@ -3118,48 +3167,20 @@ export class BattleScreen extends Container {
   private timelineOf(ev: BattleActionEvent): ReturnType<typeof eventTimeline> {
     const c = this.timelineCache
     if (c && c.event === ev && c.timing === this.motionTiming) return c.tl
-    const tl = eventTimeline(ev, this.motionTiming)
+    const tl = eventTimeline(ev, this.motionTiming, this.extraDownMsFor(ev))
     this.timelineCache = { event: ev, timing: this.motionTiming, tl }
     return tl
   }
 
-  /**
-   * 被弾モザイク (#953): 敵の行動で味方 index に命中した damage ヒット全部の山の包絡（最大）の size。
-   * 各ヒットの山の長さは `min(hitMosaicMs, 行動の残り)` に縮め、行動が終わる前に必ず等倍(1)まで戻す
-   * （行動の長さは変えない）。包絡にするので連続ヒットでも size が 1 に落ちずに繋がる。
-   * 無ければ null（miss/heal・味方の行動・未命中・再生なし）
-   */
-  private hitMosaicSize(index: number): number | null {
-    const T = this.motionTiming
-    if (T.hitMosaicMs <= 0) return null
-    const active = this.playback.active
-    if (!active || active.event.actor.side !== 'enemy') return null
-    const ev = active.event
-    const tl = this.timelineOf(ev)
-    let best: number | null = null
-    for (const hit of ev.hits) {
-      if (hit.target.side !== 'party' || hit.target.index !== index || hit.kind !== 'damage')
-        continue
-      const at = hitTimeOf(tl.hitAt, hitRound(hit), tl.hitInterval)
-      const since = active.elapsed - at
-      if (since < 0) continue
-      const len = Math.min(T.hitMosaicMs, tl.duration - at)
-      const pulse = samplePixelatePulse(since, len, T.hitMosaicMaxSize)
-      if (pulse.done) continue
-      if (best === null || pulse.size > best) best = pulse.size
-    }
-    return best
-  }
-
-  /** 敵の自己モザイクが有効か（hitMosaicMs と最大サイズが共に有効。default は hitMosaicMs=0 で無効） */
+  /** 敵の自己モザイクが有効か（selfMosaicMs と最大サイズが共に有効。default は selfMosaicMs=0 で無効） */
   private enemySelfMosaicEnabled(): boolean {
     const T = this.motionTiming
-    return T.hitMosaicMs > 0 && T.hitMosaicMaxSize >= 2
+    return T.selfMosaicMs > 0 && T.selfMosaicMaxSize >= 2
   }
 
   /**
    * 敵の攻撃通知 (sit-by-me #64): 攻撃する敵 index 自身のアクスタが、行動の頭で一瞬粗いモザイクになって戻る。
-   * 敵は踏み出さない。山の長さは `min(hitMosaicMs, 行動の長さ)`、最大は hitMosaicMaxSize（被弾モザイクと同じ既存値）。
+   * 敵は踏み出さない。山の長さは `min(selfMosaicMs, 行動の長さ)`、最大は selfMosaicMaxSize。
    * 敵の通常攻撃（attack）で、倒れていない間だけ（miss でも出る）。無効（default）・該当なしは null。
    * downProgress は applyMotionFrame が計算済みの値を受け取る（sampleEntity を二重に計算しない）
    */
@@ -3171,30 +3192,30 @@ export class BattleScreen extends Container {
     const ev = active.event
     if (ev.kind !== 'attack' || ev.actor.side !== 'enemy' || ev.actor.index !== index) return null
     if (downProgress > 0) return null
-    const len = Math.min(T.hitMosaicMs, this.timelineOf(ev).duration)
-    const pulse = samplePixelatePulse(active.elapsed, len, T.hitMosaicMaxSize)
+    const len = Math.min(T.selfMosaicMs, this.timelineOf(ev).duration)
+    const pulse = samplePixelatePulse(active.elapsed, len, T.selfMosaicMaxSize)
     return pulse.done ? null : pulse.size
   }
 
   /** size が 2 以上の間だけ自分のフィルタを足し、size を更新する。1 以下・null なら外す（他のフィルタには触れない） */
-  private applyHitMosaic(view: EntityView, size: number | null): void {
+  private applySelfMosaic(view: EntityView, size: number | null): void {
     if (size === null || size < 2) {
-      this.clearHitMosaic(view)
+      this.clearSelfMosaic(view)
       return
     }
-    if (!view.hitMosaic) {
+    if (!view.selfMosaic) {
       const f = new PixelateFilter(1)
       f.resolution = 'inherit'
-      view.hitMosaic = f
+      view.selfMosaic = f
       view.container.filters = [...(view.container.filters ?? []), f]
     }
-    view.hitMosaic.size = size * this.uiScale
+    view.selfMosaic.size = size * this.uiScale
   }
 
-  private clearHitMosaic(view: EntityView): void {
-    const f = view.hitMosaic
+  private clearSelfMosaic(view: EntityView): void {
+    const f = view.selfMosaic
     if (!f) return
-    view.hitMosaic = null
+    view.selfMosaic = null
     const rest = (view.container.filters ?? []).filter((x) => x !== f)
     view.container.filters = rest.length > 0 ? rest : null
     f.destroy()
