@@ -1,0 +1,108 @@
+{
+  "startScene": "stage",
+  "start": {
+    "x": 300,
+    "y": 500
+  },
+  "speed": 260,
+  "edgeThreshold": 6,
+  "characterForms": {
+    "root": "http://localhost:8765/assets/images/characters",
+    "weaponRoot": "http://localhost:8765/assets/images/weapons",
+    "manifestUrl": "field-sample/sit-character-forms.json"
+  },
+  "spriteStyle": "acrylic",
+  "player": {
+    "character": "C001",
+    "form": "elementary",
+    "height": 150,
+    "frameMs": 140
+  },
+  "scenes": {
+    "stage": {
+      "background": "http://localhost:8765/assets/images/fields/legacy/TRM-09.webp",
+      "mask": "http://localhost:8765/assets/images/fields/legacy/masks/TRM-09-mask.webp",
+      "links": [],
+      "encounter": {
+        "rate": 0,
+        "groups": []
+      }
+    }
+  },
+  "encounter": {
+    "stepDistance": 80,
+    "minSteps": 3
+  },
+  "monsters": {
+    "demo_puddle": {
+      "name": "凍った水たまり",
+      "hp": 400,
+      "atk": 12,
+      "def": 2,
+      "agi": 4,
+      "exp": 5,
+      "gold": 5,
+      "size": "2x1",
+      "sprite": "http://localhost:8765/assets/images/enemies/M148.webp"
+    },
+    "demo_lighter": {
+      "name": "ライター",
+      "hp": 400,
+      "atk": 10,
+      "def": 2,
+      "agi": 4,
+      "exp": 5,
+      "gold": 5,
+      "size": "1x2",
+      "sprite": "http://localhost:8765/assets/images/enemies/M150.webp"
+    }
+  },
+  "party": [
+    {
+      "name": "ゆうしゃ",
+      "hp": 600,
+      "mp": 40,
+      "atk": 22,
+      "def": 4,
+      "agi": 6,
+      "character": "C001",
+      "form": "elementary"
+    },
+    {
+      "name": "まほうつかい",
+      "hp": 400,
+      "mp": 40,
+      "atk": 14,
+      "def": 4,
+      "agi": 6,
+      "character": "C004",
+      "form": "elementary",
+      "row": "back"
+    }
+  ],
+  "spells": [
+    {
+      "id": "demo_spark",
+      "name": "ひかり",
+      "mp": 2,
+      "target": "敵単体",
+      "effect": "damage 12..12"
+    }
+  ],
+  "battle": {
+    "layout": "side",
+    "presentation": "ff",
+    "windowStyle": "ff-blue",
+    "commandLayout": "cross",
+    "commands": [
+      "attack",
+      "spell",
+      "escape"
+    ],
+    "atb": "off",
+    "logicalSize": "1920x1080",
+    "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp",
+    "spriteStyle": "acrylic",
+    "motion": "snappy"
+  }
+}
