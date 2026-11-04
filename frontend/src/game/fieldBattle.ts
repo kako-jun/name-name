@@ -487,6 +487,12 @@ export function applyScriptGrants(
       if (!roster.spells || !hasOwn(roster.spells, id))
         warn(`呪文 '${id}' は [呪文] に無い（無視した）`)
       else if (!learns.some((l) => l.spell === id)) learns.push({ level: 1, spell: id })
+      else {
+        // すでに高いレベルで覚える宣言がある呪文も、付与ではレベルに関係なく出す（複製の learns 上で 1 にする。元は書き換えない）
+        for (let i = 0; i < learns.length; i++) {
+          if (learns[i].spell === id && learns[i].level > 1) learns[i] = { ...learns[i], level: 1 }
+        }
+      }
     }
     party[g.target] = { ...def, abilities, learns }
   }

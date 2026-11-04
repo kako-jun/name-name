@@ -79,6 +79,18 @@ describe('applyScriptGrants (#875)', () => {
     expect(g.party.mage.learns?.map((l) => l.spell)).toEqual(['fire', 'ice'])
   })
 
+  it('高いレベルで覚える宣言がある呪文も、付与ではレベル不足でも出る（元の宣言は変わらない）', () => {
+    const r = roster()
+    r.party.hero = { ...r.party.hero, level: 3, learns: [{ level: 10, spell: 'fire' }] } as never
+    const before = JSON.stringify(r)
+    const g = applyScriptGrants(r, ['付与: 味方=hero 魔法=fire'], 'b')
+    expect(JSON.stringify(r)).toBe(before)
+    const ent = { id: 'hero', name: 'h', hp: 1, maxHp: 1, mp: 5, maxMp: 5, atk: 1, def: 1, agi: 1 }
+    expect(buildBattleMenuData(g, [ent])?.spells?.hero.map((s) => s.id)).toEqual(['fire'])
+    // 付与しなければレベル不足で出ない
+    expect(buildBattleMenuData(r, [ent])).toBeUndefined()
+  })
+
   it('未知の味方・[特技] [呪文] に無い id は警告して無視する（ほかは生きる）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const g = applyScriptGrants(
