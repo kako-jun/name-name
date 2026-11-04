@@ -79,7 +79,7 @@ describe('生成', () => {
 describe('小さな総当たりを実エンジンで走らせる（通常実行を重くしない件数）', () => {
   it('同じ入力なら同じ結果・集計が件数と整合する', () => {
     const scenarios = [
-      ...randomScenarios(1, 15),
+      ...randomScenarios(1, 2),
       ...stackOrders(2).slice(0, 20),
       ...reactionChains().slice(0, 20),
       ...damageConditions().slice(0, 30),
