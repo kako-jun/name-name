@@ -41,10 +41,22 @@ export interface FormEntry {
   walk: boolean
 }
 
+/** 人物が持てる刀（sit-by-me の `assets/images/weapons/{C}/`）。layers JSON・刀カタログのパスは命名規則で導く（目録には載せない） */
+export interface WeaponEntry {
+  /** 既定の刀の絵のファイル名 */
+  default: string
+  /** 選べる刀の絵のファイル名（default を含む） */
+  images: string[]
+  /** 候補刀別の変換の上書きが刀カタログ側にだけある人物（C001 の slash）。true なら `weapon-overrides` にカタログを指す */
+  catalogOverrides?: boolean
+}
+
 export interface CharacterFormsManifest {
   characters: Record<
     string,
     {
+      /** 刀の指定を導ける人物だけ持つ（無い人物は刀なし。`gen_sit_character_forms.py` の `DEFAULT_WEAPON`） */
+      weapon?: WeaponEntry
       /**
        * plain（`-character` でない版）に、刀・斬撃の軌跡を絵へ焼き込んだ版が混じり得る人物（C001）。
        * true の人物は plain を使わない（人物単体版が 8 ポーズ揃った形態だけ導出する）。無い・false は plain も使える
@@ -103,7 +115,33 @@ export function parseCharacterFormsManifest(
     }
     if (c.plainBaked !== undefined && typeof c.plainBaked !== 'boolean')
       return { ok: false, error: `characters.${cid}.plainBaked は真偽値が必要です` }
-    characters[cid] = { ...(c.plainBaked ? { plainBaked: true } : {}), forms }
+    let weapon: WeaponEntry | undefined
+    if (c.weapon !== undefined) {
+      const w = c.weapon
+      if (
+        !isObj(w) ||
+        typeof w.default !== 'string' ||
+        !Array.isArray(w.images) ||
+        !w.images.every((x) => typeof x === 'string') ||
+        !w.images.includes(w.default)
+      )
+        return {
+          ok: false,
+          error: `characters.${cid}.weapon は { default, images（default を含む文字列の配列） } が必要です`,
+        }
+      if (w.catalogOverrides !== undefined && typeof w.catalogOverrides !== 'boolean')
+        return { ok: false, error: `characters.${cid}.weapon.catalogOverrides は真偽値が必要です` }
+      weapon = {
+        default: w.default,
+        images: w.images as string[],
+        ...(w.catalogOverrides ? { catalogOverrides: true } : {}),
+      }
+    }
+    characters[cid] = {
+      ...(c.plainBaked ? { plainBaked: true } : {}),
+      ...(weapon ? { weapon } : {}),
+      forms,
+    }
   }
   return { ok: true, value: { characters } }
 }
@@ -164,6 +202,43 @@ export function derivePoses(
   return out
 }
 
+/**
+ * 刀の指定（`poses` の予約キー。#1035）を、人物と形態から導く。
+ * - 刀の絵: `{weaponRoot}/{C}/{刀のファイル名}`。`weapon` は既定の刀か、刀の slug / ファイル名の一部（例 `muramasa`）で選ぶ（候補に無ければ undefined＝呼び側で警告して既定へ）
+ * - `weapon-layers`: `{root}/{C}/battle-layers.json`（人物の変換値）、`weapon-catalog`: `{weaponRoot}/{C}/{C}-blade-candidates.json`（柄アンカー）
+ * - `weapon-overrides`: 目録で `catalogOverrides` の人物（C001）だけ、カタログと同じファイル（slash の刀別上書き）
+ * - `weapon-structure`: 車椅子の形態は wheelchair、それ以外は standing（車椅子の step は layers 側で刀なし）
+ * 目録に刀の項目が無い人物は {}（刀なし）。契約の正本は sit-by-me の docs/assets-policy.md「戦闘人物と刀の合成」
+ */
+export function deriveWeaponKeys(
+  manifest: CharacterFormsManifest,
+  root: string,
+  weaponRoot: string,
+  character: string,
+  form: string,
+  weapon?: string
+): Record<string, string> | undefined {
+  if (!hasOwn(manifest.characters, character)) return {}
+  const w = manifest.characters[character].weapon
+  if (!w) return {}
+  let image = w.default
+  if (weapon !== undefined && weapon !== '') {
+    const found = w.images.find((f) => f === weapon || f.includes(`-${weapon}-`))
+    if (!found) return undefined
+    image = found
+  }
+  const wdir = `${trimSlash(weaponRoot)}/${character}`
+  return {
+    weapon: `${wdir}/${image}`,
+    'weapon-structure': isWheelchair(form) ? 'wheelchair' : 'standing',
+    'weapon-layers': `${trimSlash(root)}/${character}/battle-layers.json`,
+    'weapon-catalog': `${wdir}/${character}-blade-candidates.json`,
+    ...(w.catalogOverrides
+      ? { 'weapon-overrides': `${wdir}/${character}-blade-candidates.json` }
+      : {}),
+  }
+}
+
 /** 歩行 8 方向×3 コマの URL。歩行絵が揃っていない形態は undefined */
 export function deriveWalkSprites(
   manifest: CharacterFormsManifest,
@@ -220,6 +295,7 @@ export interface ExpandResult {
  * 生の設定 JSON に、導出した `party[].poses` と `player.sprites`（+ cycle / idleFrame）を埋める。入力は書き換えない。
  * - `characterForms` が無い設定は何もしない（従来どおり）
  * - `party[].character`（人物 ID）を持つ者に、`form`（既定）またはセーブの指定の形態の poses を入れる。手書きの `poses` / `sprite` は導出で置き換える
+ * - `characterForms.weaponRoot`（刀の素材ディレクトリ URL）があり、目録の人物が刀を持つなら、poses に刀の予約キーも導く（#1035。`party[].weapon` で刀を選べる。無ければ既定の刀）
  * - `player.character` を持ち `player.sprites` が無いとき、同じ人物の味方の形態（無ければ `player.form`）で歩行絵を導く
  * - 目録に無い形態・絵の足りない形態は警告し、その者は導出しない（セーブの指定が不正なら既定の形態に戻す）
  */
@@ -235,6 +311,11 @@ export function expandCharacterForms(
     warnings.push('characterForms.root は URL 文字列が必要です（人物の形態の導出をしません）')
     return { raw: rawConfig, warnings }
   }
+  const weaponRoot =
+    typeof rawConfig.characterForms.weaponRoot === 'string' &&
+    rawConfig.characterForms.weaponRoot.trim() !== ''
+      ? rawConfig.characterForms.weaponRoot
+      : undefined
   const out: Obj = { ...rawConfig }
   // 味方（既定の id は parseConfig と同じ party1, party2, …）。人物 ID → 実効の形態
   const effectiveForm: Record<string, string> = {}
@@ -260,9 +341,21 @@ export function expandCharacterForms(
         form = declared as string
       }
       effectiveForm[m.character] ??= form
-      const { sprite: _sprite, ...rest } = m
+      const { sprite: _sprite, weapon: wantedWeapon, ...rest } = m
       void _sprite
-      return { ...rest, poses: tryForm(form) }
+      let weaponKeys: Record<string, string> = {}
+      if (weaponRoot !== undefined) {
+        const want = typeof wantedWeapon === 'string' ? wantedWeapon : undefined
+        let keys = deriveWeaponKeys(manifest, root, weaponRoot, m.character as string, form, want)
+        if (!keys) {
+          warnings.push(
+            `party[${i}] (${id}) の刀 ${want} は ${m.character} の候補にありません（既定の刀にします）`
+          )
+          keys = deriveWeaponKeys(manifest, root, weaponRoot, m.character as string, form)
+        }
+        weaponKeys = keys ?? {}
+      }
+      return { ...rest, poses: { ...tryForm(form), ...weaponKeys } }
     })
   }
   // 主人公の歩行絵

@@ -397,9 +397,11 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     for (const raw of [teramachiSample, diagonalSample]) {
       const urls = [...raw.matchAll(/"(http:\/\/localhost:8765\/[^"]+)"/g)].map((m) => m[1])
       expect(urls.length).toBeGreaterThan(0)
-      // characterForms.root は人物素材のディレクトリ（ファイルではない。導出後の URL は .webp。戦闘エフェクトは候補の .png）
+      // characterForms.root / weaponRoot は素材のディレクトリ（ファイルではない。導出後の URL は .webp。戦闘エフェクトは候補の .png）
       for (const u of urls)
-        expect(u).toMatch(/^http:\/\/localhost:8765\/assets\/images\/(characters$|.+\.(webp|png)$)/)
+        expect(u).toMatch(
+          /^http:\/\/localhost:8765\/assets\/images\/(characters$|weapons$|.+\.(webp|png|json)$)/
+        )
     }
   })
 
@@ -1328,6 +1330,33 @@ describe('parseConfig monsters / party の poses (#890)', () => {
     expect(err(withMonster({ poses: [] }))).toContain('monsters.slime.poses')
     expect(err(withMonster({ poses: 'x' }))).toContain('monsters.slime.poses')
     expect(err(withMonster({ poses: { idle: 3 } }))).toContain('monsters.slime.poses.idle')
+  })
+
+  it('party の poses に同居する刀の予約キーは weapon（刀の指定）に分かれ、poses には絵だけが残る (#1035)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.party = [
+          {
+            name: 'ナム',
+            hp: 10,
+            poses: {
+              idle: 'h.png',
+              weapon: 'w/m.webp',
+              'weapon-structure': 'wheelchair',
+              'weapon-layers': 'l.json',
+              'weapon-catalog': 'c.json',
+            },
+          },
+        ]
+      })
+    )
+    expect(c.party[0].poses).toEqual({ idle: 'https://example.com/field/h.png' })
+    expect(c.party[0].weapon).toMatchObject({
+      image: 'https://example.com/field/w/m.webp',
+      structure: 'wheelchair',
+      layers: 'https://example.com/field/l.json',
+      catalog: 'https://example.com/field/c.json',
+    })
   })
 
   it('party の poses も同じ規則で通る', () => {
