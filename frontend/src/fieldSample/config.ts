@@ -23,6 +23,7 @@ import {
   type ParseResult,
 } from '../battleSample/config'
 import { pickWeaponKeys } from '../game/battleWeapon'
+import { parseMarkScale, type UiImagesConfig } from '../game/uiImages'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
 import { WARP_DEFAULTS, type WarpEffectKind, type WarpTiming } from '../game/fieldWarp'
 import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
@@ -266,6 +267,13 @@ export interface FieldSampleConfig {
    * 未指定・不正は undefined＝キーなし（従来どおり）。UI（アプリストア）は #881 段階2
    */
   gearShop?: GearShopConfig
+  /**
+   * UI 部品の画像 (#1067・#1087)。`ui: { handImage?, selectMarkImage?, markScale? }`（URL は他の画像と同じく assetBaseUrl 基準）。
+   * `handImage` = 手のカーソル（右向きの絵。フィールドメニューと戦闘メニュー共通）、`selectMarkImage` = 「選択中」の円錐（頂点が下）、
+   * `markScale` = 円錐の拡大率（既定 2。従来の三角の枠に収めた大きさへの倍率）。画像を 1 つも指定しないときはキーが出ない＝従来のドット手・白い三角。
+   * 不正な値は警告して無視（その画像は従来の描画）。読み込み失敗は実行時に警告して従来の描画へ
+   */
+  ui?: UiImagesConfig
   /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
   dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
@@ -930,6 +938,28 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `spriteStyle は "none" か "acrylic" のみ指定できます: ${JSON.stringify(raw.spriteStyle)}（無視します）`
       )
   }
+  let ui: UiImagesConfig | undefined
+  if (raw.ui !== undefined) {
+    if (!isObj(raw.ui)) warnings.push(`ui はオブジェクトである必要があります（無視します）`)
+    else {
+      const img = (key: 'handImage' | 'selectMarkImage'): string | undefined => {
+        if (raw.ui === undefined || !isObj(raw.ui) || raw.ui[key] === undefined) return undefined
+        const r = url(raw.ui[key], `ui.${key}`)
+        if (r.ok) return r.value
+        warnings.push(`${r.error}（無視します）`)
+        return undefined
+      }
+      const handImage = img('handImage')
+      const selectMarkImage = img('selectMarkImage')
+      const markScale = parseMarkScale(raw.ui.markScale, warnings)
+      if (handImage || selectMarkImage)
+        ui = {
+          ...(handImage ? { handImage } : {}),
+          ...(selectMarkImage ? { selectMarkImage } : {}),
+          markScale,
+        }
+    }
+  }
   const menuParsed = parseFieldMenuConfig(raw.menu)
   warnings.push(...menuParsed.warnings)
   const gearShopParsed = parseGearShopConfig(raw.gearShop)
@@ -1058,6 +1088,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(dialogStyle ? { dialogStyle } : {}),
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(tiltShift ? { tiltShift } : {}),
+      ...(ui ? { ui } : {}),
       ...(menuParsed.value ? { menu: menuParsed.value } : {}),
       ...(gearShopParsed.value
         ? {

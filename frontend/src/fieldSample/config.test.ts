@@ -2065,3 +2065,52 @@ describe('実運用に近い一式の設定 (battle / menu / emotions / npcs / s
     expect(c.scenes.a.npcs).toHaveLength(1)
   })
 })
+
+describe('ui 手のカーソル・選択中の印の画像 (#1067・#1087)', () => {
+  it('未指定・画像なしはキーが出ず警告も無い（従来のドット手・三角）', () => {
+    expect('ui' in ok(mutated(() => {}))).toBe(false)
+    const none = ok(mutated((c) => void (c.ui = {})))
+    expect('ui' in none).toBe(false)
+    expect(none.warnings).toBeUndefined()
+  })
+  it('画像の URL は他の画像と同じく解決され、markScale の既定は 2', () => {
+    const r = ok(
+      mutated((c) => {
+        c.ui = { handImage: 'ui/hand.webp', selectMarkImage: 'ui/cone.webp' }
+      })
+    )
+    expect(r.ui).toEqual({
+      handImage: 'https://example.com/field/ui/hand.webp',
+      selectMarkImage: 'https://example.com/field/ui/cone.webp',
+      markScale: 2,
+    })
+    expect(r.warnings).toBeUndefined()
+  })
+  it('片方だけでも読める。markScale を読む', () => {
+    const r = ok(
+      mutated((c) => {
+        c.ui = { handImage: 'ui/hand.webp', markScale: 1.5 }
+      })
+    )
+    expect(r.ui?.handImage).toBeDefined()
+    expect('selectMarkImage' in (r.ui ?? {})).toBe(false)
+    expect(r.ui?.markScale).toBe(1.5)
+  })
+  it('不正は警告して無視（その画像は従来の描画）。markScale 不正は既定へ', () => {
+    const r = ok(
+      mutated((c) => {
+        c.ui = { handImage: 5, selectMarkImage: 'ui/cone.webp', markScale: -1 }
+      })
+    )
+    expect('handImage' in (r.ui ?? {})).toBe(false)
+    expect(r.ui?.selectMarkImage).toBeDefined()
+    expect(r.ui?.markScale).toBe(2)
+    expect(r.warnings?.some((w) => w.includes('ui.handImage'))).toBe(true)
+    expect(r.warnings?.some((w) => w.includes('ui.markScale'))).toBe(true)
+    for (const v of ['x', 1, null, true, ['a']]) {
+      const q = ok(mutated((c) => void (c.ui = v)))
+      expect('ui' in q).toBe(false)
+      expect(q.warnings?.length).toBe(1)
+    }
+  })
+})

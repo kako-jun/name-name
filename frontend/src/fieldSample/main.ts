@@ -161,6 +161,7 @@ import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
 import { ensureFontLoaded } from '../game/FontLoader'
+import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
@@ -933,6 +934,7 @@ async function main(): Promise<void> {
             background: bg,
             menu,
             renderResolution: app.renderer.resolution,
+            ...(config.ui ? { uiImages: config.ui } : {}),
             // せってい「カーソル = メモリ」(#880): 前回選んだ行を戦闘をまたいで覚える
             ...(menuRuntime &&
             applySettings(menuRuntime.currentSettings, { dialogMs: dialogDefaultMs }).cursorMemory
@@ -1321,9 +1323,18 @@ async function main(): Promise<void> {
               ),
               MENU_IMAGE_TIMEOUT_MS
             )
+            // 手のカーソルの画像 (#1067)。読めなければ null（従来のドット手）。上限つき
+            const hand: { tex: Texture | null } = { tex: null }
+            await waitUpTo(
+              loadUiTexture(config.ui?.handImage, '手のカーソル').then((t) => {
+                hand.tex = t
+              }),
+              MENU_IMAGE_TIMEOUT_MS
+            )
             return {
               party,
               images,
+              handTexture: hand.tex,
               slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
                 slotSummary(saved[i] ?? null)
               ),
