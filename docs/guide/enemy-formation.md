@@ -205,4 +205,4 @@ FF のように、**最前列でない敵への通常攻撃（近接物理）の
 
 `field-sample.html`（[デバッグガイド](./debugger.md)）の設定 JSON でも、`monsters.<id>` の `size`（`"2x1"`）/ `scale` と `battle` の `enemyGrid`（`"6x2"`）/ `enemyWindowOverlap` で同じことができる。`enemyGrid` を書くと群の検証も走り、収まらない群は抽選から外れて、コンソールと画面のエラー表示に一覧が出る。詳しくはデバッグガイドの該当節を参照。
 
-同じ設定 JSON の `monsters.<id>.poses`（戦闘ポーズ別の画像）や `spells` / `items`（戦闘の候補窓）、素材なしで動かす `?fixture=dummy` も、デバッグガイドの「戦闘の候補窓・ポーズ・素材なしの確認」にまとめてある。
+同じ設定 JSON の `monsters.<id>.poses`（戦闘ポーズ別の画像）や `spells` / `items`（戦闘の候補窓）も、デバッグガイドの「戦闘の候補窓・ポーズの確認」にまとめてある。

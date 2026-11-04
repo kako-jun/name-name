@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { parseConfig } from './config'
+import { parseConfig } from '../config'
 import { buildDummyFixture } from './dummyFixture'
-import { buildMenuRows } from '../game/battleMenu'
+import { buildMenuRows } from '../../game/battleMenu'
 
 // jsdom の canvas は未実装（getContext が null・console.error）。描画は検証対象外なので最小限の stub を置く
 function stubCanvas(ctx: unknown) {
@@ -49,7 +49,7 @@ describe('buildDummyFixture (#890)', () => {
     expect(c.emotions!['!'].motion).toBe('pop')
   })
 
-  it('条件付き通行 (#862): assist・companion・フラグを持つ（?fixture=dummy で橙の階段を試せる）', () => {
+  it('条件付き通行 (#862): assist・companion・フラグを持つ（橙の階段）', () => {
     const c = parsed()
     expect(c.assist).not.toBeNull()
     expect(c.companion).not.toBeNull()

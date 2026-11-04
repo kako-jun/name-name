@@ -2,6 +2,7 @@
 
 任意の局面（パーティ・所持品・装備・所持金・フィールドの現在地・戦闘中の状態）を**セーブデータとして先に用意し、そこから再開して起動する**ための手順。デモ・不具合の再現・見た目の確認は、すべてこの一通りで行う（専用のサンプルマップや状態の作り方は持たない。#1021）。
 
+- 従来のデモの入口（`?fixture=dummy`）は無い。戦闘画面の機能別サンプル `battle-sample.html` は、一枚絵フィールドの設定に未搭載の機能（状態異常・ジョブ・魔石・脚本等）のため暫定で残る
 - 状態の与え方は **localStorage のセーブ（JSON）を先に作ってから、`?resume=` で開く** の一通り
 - セーブ形式が正（`frontend/src/game/rpgSave.ts` の `RpgSaveState`）。`startFrom({ rpg })` も同じ形式を受ける（[デバッガガイド](./debugger.md) / [ADR 0002 §6](../adr/0002-deterministic-state-and-debuggability.md)）
 - 再開できるのは一枚絵フィールド（`field-sample.html`）。ノベル側（`NovelRenderer`）は `rpg` を解釈せず持ち回すだけ

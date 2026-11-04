@@ -132,7 +132,6 @@ import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
-import { buildDummyFixture } from './dummyFixture'
 import {
   FIELD_SAMPLE_DOC_KEY,
   baseConfigOf,
@@ -329,24 +328,10 @@ async function expandFormsInText(text: string, textBase: string): Promise<string
 
 async function loadConfig(): Promise<FieldSampleConfig> {
   const base = location.href
-  const { configParam: raw, dummy } = pickConfigSource(location.search)
+  const raw = pickConfigSource(location.search)
   const url = raw ? resolveUrl(raw, base) : null
   let text = defaultConfigText
   let textBase = base
-  // 素材なしフィクスチャ (#890)。`?fixture=dummy`。?config= が同時にあれば config が優先
-  if (dummy) {
-    const q = new URLSearchParams(location.search)
-    const acrylic = q.get('spriteStyle') === 'acrylic'
-    const tilt = q.get('tiltShift') === 'on'
-    const menu = q.get('menu') === 'on'
-    text = JSON.stringify(
-      buildDummyFixture({
-        ...(acrylic ? { spriteStyle: 'acrylic' as const } : {}),
-        ...(tilt ? { tiltShift: 'on' as const } : {}),
-        ...(menu ? { menu: true } : {}),
-      })
-    )
-  }
   if (url) {
     try {
       const res = await fetch(url)

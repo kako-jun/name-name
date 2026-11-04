@@ -12,7 +12,7 @@ import {
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
 import { expandedTeramachiText } from './teramachiExpanded'
-import diagonalSample from './diagonal-walk.sample.json?raw'
+import diagonalSample from './__fixtures__/diagonal-walk.sample.json?raw'
 
 const BASE = 'https://example.com/field/config.json'
 const teramachiSample = expandedTeramachiText()
@@ -1386,26 +1386,28 @@ describe('parseConfig monsters / party の poses (#890)', () => {
   })
 })
 
-describe('pickConfigSource (#890)', () => {
-  it('?fixture=dummy だけなら dummy', () => {
-    expect(pickConfigSource('?fixture=dummy')).toEqual({ configParam: undefined, dummy: true })
+describe('pickConfigSource (#890, #1051)', () => {
+  it('?config= の値を返す。空白だけ・無指定は undefined', () => {
+    expect(pickConfigSource('?config=a.json')).toBe('a.json')
+    expect(pickConfigSource('?config=%20')).toBeUndefined()
+    expect(pickConfigSource('')).toBeUndefined()
   })
 
-  it('?config= があれば fixture=dummy より優先（dummy にならない）', () => {
-    expect(pickConfigSource('?config=a.json&fixture=dummy')).toEqual({
-      configParam: 'a.json',
-      dummy: false,
-    })
+  it('境界: 空値・前後空白・URL エンコード・複数 config', () => {
+    expect(pickConfigSource('?config=')).toBeUndefined()
+    expect(pickConfigSource('?config=%20%09%20')).toBeUndefined()
+    expect(pickConfigSource('?config=%20a.json%20')).toBe('a.json')
+    expect(pickConfigSource('?config=a%2Fb%20c.json')).toBe('a/b c.json')
+    expect(pickConfigSource('?config=https%3A%2F%2Fx.test%2Fc.json%3Fk%3D1')).toBe(
+      'https://x.test/c.json?k=1'
+    )
+    expect(pickConfigSource('?config=a.json&config=b.json')).toBe('a.json')
+    expect(pickConfigSource('?config=&config=b.json')).toBeUndefined()
   })
 
-  it('解決できない ?config= でも dummy に化けない', () => {
-    expect(pickConfigSource('?config=http://&fixture=dummy').dummy).toBe(false)
-  })
-
-  it('空白だけの ?config= は無指定扱い。fixture が dummy 以外なら dummy でない', () => {
-    expect(pickConfigSource('?config=%20&fixture=dummy').dummy).toBe(true)
-    expect(pickConfigSource('?fixture=x').dummy).toBe(false)
-    expect(pickConfigSource('').dummy).toBe(false)
+  it('?fixture=dummy は無視される（入口は #1051 で廃止）', () => {
+    expect(pickConfigSource('?fixture=dummy')).toBeUndefined()
+    expect(pickConfigSource('?config=a.json&fixture=dummy')).toBe('a.json')
   })
 })
 
