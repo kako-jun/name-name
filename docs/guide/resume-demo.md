@@ -113,7 +113,7 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 1. 本番ビルドして静的配信する（手順 1）
 2. `demo-<名前>.config.json` を `<出力先>` の直下にコピーする（手順 2）
 3. sit-by-me を CORS 付きで配信し、コピーした設定とセーブの `8765` を置き換える（手順 3。この設定は感情吹き出しを使わないので `teramachi-emotions.json` の置換は要らない）
-4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はなく、すぐ操作できる。`motion` の `snappy` の横スライド登場は戦闘画面内の演出で、これは出る）。3 つとも `commandLayout: "cross"`（`layout: "side"`）なので、キーで操作できる（↑=たたかう・←=じゅもん・↑↓=ターゲット選択・Enter=決定。Enter だけでは何も起きない。先に↑でコマンドを選ぶ）
+4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はない）。操作できるまでは、敵名窓・エフェクトは約 1 秒、motion は `snappy` の横スライド登場が終わる約 4〜5 秒（それ以前のクリックは効かない）。3 つともコマンドが 3 つ（たたかう・じゅもん・にげる）で、`commandLayout: "cross"` は 4 コマンドのときだけ有効なため `grid` 配置になり、矢印キーでは操作できない。コマンドはクリック（タップ）で選ぶ。「たたかう」はクリックでターゲットが自動で決まり、すぐ始まる。「じゅもん」は窓から「ひかり」を選んでターゲットをクリックする
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
