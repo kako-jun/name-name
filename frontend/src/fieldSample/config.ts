@@ -16,7 +16,13 @@ import {
   type EnemyGridSize,
 } from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
-import { parseMenuList, parsePoses, resolveUrl, type ParseResult } from '../battleSample/config'
+import {
+  parseMenuList,
+  parsePosesRecord,
+  resolveUrl,
+  type ParseResult,
+} from '../battleSample/config'
+import { pickWeaponKeys } from '../game/battleWeapon'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
 import { WARP_DEFAULTS, type WarpEffectKind, type WarpTiming } from '../game/fieldWarp'
 import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
@@ -27,7 +33,11 @@ import type { BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
-import type { BattleMotionPreset, BattlePresentation } from '../game/battleMotion'
+import {
+  normalizePoses,
+  type BattleMotionPreset,
+  type BattlePresentation,
+} from '../game/battleMotion'
 import type { BattleEnemyListMode } from '../game/battleEnemyList'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
@@ -1257,12 +1267,14 @@ function parseEntity(
     e.sprite = u.value
   }
   if (raw.poses !== undefined) {
-    const poses = parsePoses(raw.poses, `${path}.poses`, (v) => {
+    const rec = parsePosesRecord(raw.poses, `${path}.poses`, (v) => {
       const r = url(v, `${path}.poses`)
       return r.ok ? r.value : null
     })
-    if (!poses.ok) return poses
-    if (poses.value) e.poses = poses.value
+    if (!rec.ok) return rec
+    // ポーズ（正規化済み）と、武器レイヤー (#1027) の予約キー（生）を同じ poses に持ち回る。解釈は戦闘への組み立て時（posesField）
+    const merged = { ...(normalizePoses(rec.value) ?? {}), ...pickWeaponKeys(rec.value) }
+    if (Object.keys(merged).length > 0) e.poses = merged
   }
   return { ok: true, value: e }
 }

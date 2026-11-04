@@ -15,6 +15,7 @@
  * 敵の通常攻撃だけは、自己モザイク（selfMosaicMs > 0 かつ selfMosaicMaxSize >= 2）が有効なとき踏み出さず自己モザイクで知らせる（BattleScreen が決める。無効なら従来どおり踏み出す）。
  */
 import type { BattleActionEvent, BattleHit, BattleHitKind } from './battleEngine'
+import { weaponField, type BattleWeaponSpec } from './battleWeapon'
 
 // ---------------------------------------------------------------------------
 // 設定
@@ -69,12 +70,16 @@ export function normalizePoses(
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-/** マスタ定義の `poses` を BattleEntity に写すときのスプレッド用。正規化して、無ければ何も足さない */
+/**
+ * マスタ定義の `poses` を BattleEntity に写すときのスプレッド用。正規化して、無ければ何も足さない。
+ * 同じ `poses` の予約キー（`weapon` ほか）から刀の指定 (#1027) も写す（`battleWeapon.ts`。無ければ足さない）
+ */
 export function posesField(raw: Readonly<Record<string, string>> | null | undefined): {
   poses?: BattlePoseSprites
+  weapon?: BattleWeaponSpec
 } {
   const poses = normalizePoses(raw)
-  return poses ? { poses } : {}
+  return { ...(poses ? { poses } : {}), ...weaponField(raw) }
 }
 
 /** ポーズごとの代替の優先順（指定が無いポーズは、近い絵に落とす） */
