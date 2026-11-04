@@ -85,18 +85,17 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 実測（2026-11-04、本番ビルド・chromium + swiftshader のコマ撮り）: C001〜C004 の 4 人とも 5 段で刀が手元に付き、読み込み警告なし。C001 の swing も巨大表示にならない（#165 解消後）。被弾の傾き・死亡の回転への追従はこの手順では確かめていない（同じ container の子なので追従する設計。#1027 で確認済み）。刀の位置・見た目の最終判断は人の実機で行う。
 
-## 敵の前列・後列とレベル即死の確認（#1043）
+## 敵レベルとレベル条件即死の確認（#1043）
 
-一枚絵フィールドの設定 JSON の `battle.enemyRow: "on"`・`monsters.<id>.formationRow`・`monsters.<id>.level`（書式は [デバッガガイド](./debugger.md)）が、戦闘に効くことを確かめる手順。確認用の設定は [`examples/teramachi-enemy-row-level.config.json`](./examples/teramachi-enemy-row-level.config.json)（寺町の同梱設定 `teramachi.sample.json` と同じ素材・敵・味方で、差分は `battle.enemyRow: "on"`、銭湯の敵 `M149`=前列・Lv50 / `M147`=後列・Lv3 / `M145`=後列・レベルなし、呪文「ほろび」＝`damage_full レベル倍数=5` の追加だけ。寺町の本編相当の設定は変えない）。
+一枚絵フィールドの設定 JSON の `monsters.<id>.level`（書式は [デバッガガイド](./debugger.md)）が、戦闘に効くことを確かめる手順。確認用の設定は [`examples/teramachi-enemy-level.config.json`](./examples/teramachi-enemy-level.config.json)（寺町の同梱設定 `teramachi.sample.json` と同じ素材・敵・味方で、差分は銭湯の敵 `M149`=Lv50 / `M147`=Lv3 / `M145`=レベルなし、呪文「ほろび」＝`damage_full レベル倍数=5` の追加だけ。寺町の本編相当の設定は変えない）。
 
 1. 本番ビルドして静的配信する。`cd frontend && npx vite build --outDir <出力先>` のあと、`<出力先>` を静的配信する（空きポートを使う。他のプロセスは止めない）
 2. 確認用の設定を `<出力先>` の直下（`field-sample.html` と同じ場所）にコピーする。設定内の相対 URL（`scriptUrl` など `field-sample/...`）は設定ファイル自身の位置から解決されるため、ここに置くと壊れない
 3. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する。設定の素材 URL は `http://localhost:8765/...` なので、別ポートで配信するときは、コピーした設定の `8765` を置き換える（「刀の確認」と同じ。セーブの `battle.background` の URL も同様）。感情吹き出しの `field-sample/teramachi-emotions.json`（`8765` が 3 箇所）も、「刀の確認」の手順1と同じく置き換える（置換しないと CORS の console error と警告が出る。非致命）
-4. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=teramachi-enemy-row-level.config.json` を開く。敵は `M149`（前列・Lv50）と `M147`（後列・Lv3）の戦闘中で再開する。`ff-mosaic` の導入演出で、操作できるまで約 8〜12 秒かかる。操作は `cross` レイアウトで、矢印↑=たたかう・←=じゅもん、↑↓=ターゲット選択、Enter=決定（Enter だけ押しても何も起きない。先に↑でコマンドを選ぶ）
-5. 前列・後列: 通常攻撃は、ターゲット未指定だと最初の生存敵（`M149`）に当たる。まず `M149`（前列）を通常攻撃したときのダメージを `window.fieldSample.rpg().battle.enemies` の HP の減りで読み（実測の目安は約 9）、`M149` を倒したあとで `M147`（後列）を通常攻撃したときのダメージを読む（約 5〜7。前列の約半分。防御差・乱数の幅があるので複数回測る。軽減は半分ごとに切り捨て・最低 1）。`M147` は `back` と宣言してあるので、`M149` が倒れても後列のまま半減が続く（宣言した敵は固定。`formationRow` を書かない敵だけ、`enemyGrid` の列から導出されて前列が全滅すると繰り上がる）。`battle.enemyRow` を `"off"` にした同じ設定では `M147` も等倍（約 9）
-6. レベル条件の即死: 味方に「ほろび」（`damage_full レベル倍数=5`。MP 1）を使わせる（操作は ←（じゅもん窓）→ ↓ を 3 回で「ほろび」→ Enter → ターゲットを↑↓で選ぶ → Enter。窓の先頭は「ほのお」で、MP が足りない呪文は灰色表示）。Lv50 の `M149`（50 は 5 の倍数）は倒れ、Lv3 の `M147`（5 の倍数でない）は `きかなかった` で HP が変わらない。レベルを持たない敵（この設定では `M145`。「今すぐエンカウント」の抽選に入っている）にも効かない。つまりレベル条件の即死は、レベルを持つ敵のうち倍数のものにだけ効く
+4. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=teramachi-enemy-level.config.json` を開く。敵は `M149`（Lv50）と `M147`（Lv3）の戦闘中で再開する。`ff-mosaic` の導入演出で、操作できるまで約 8〜12 秒かかる。操作は `cross` レイアウトで、矢印↑=たたかう・←=じゅもん、↑↓=ターゲット選択、Enter=決定（Enter だけ押しても何も起きない。先に↑でコマンドを選ぶ）
+5. レベル条件の即死: 味方に「ほろび」（`damage_full レベル倍数=5`。MP 1）を使わせる（操作は ←（じゅもん窓）→ ↓ を 3 回で「ほろび」→ Enter → ターゲットを↑↓で選ぶ → Enter。窓の先頭は「ほのお」で、MP が足りない呪文は灰色表示）。Lv50 の `M149`（50 は 5 の倍数）は倒れ、Lv3 の `M147`（5 の倍数でない）は `きかなかった` で HP が変わらない。レベルを持たない敵（この設定では `M145`。「今すぐエンカウント」の抽選に入っている）にも効かない。つまりレベル条件の即死は、レベルを持つ敵のうち倍数のものにだけ効く
 
-**見た目の最終判断（後列の敵の見え方・ダメージ表示の読みやすさ）は KJ の実機で行う**。この手順は値の確認までで、見た目の合格判定ではない。
+**見た目の最終判断（ダメージ表示・「きかなかった」の読みやすさ）は KJ の実機で行う**。この手順は値の確認までで、見た目の合格判定ではない。
 
 ## 保存先の判断（localStorage のまま・IndexedDB へは移さない）
 

@@ -8,7 +8,7 @@ import { parseConfigText } from './config'
 import { FIELD_SAMPLE_DOC_KEY, loadResume } from './fieldResume'
 import { expandedTeramachiText } from './teramachiExpanded'
 import exampleText from '../../../docs/guide/examples/teramachi-bathhouse-battle.save.json?raw'
-import demoConfigText from '../../../docs/guide/examples/teramachi-enemy-row-level.config.json?raw'
+import demoConfigText from '../../../docs/guide/examples/teramachi-enemy-level.config.json?raw'
 import manifestText from '../../public/field-sample/sit-character-forms.json?raw'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 
@@ -45,7 +45,7 @@ describe('寺町の途中局面（銭湯前・戦闘中）の例', () => {
   })
 })
 
-describe('敵の前列・後列とレベル即死の確認用設定（#1043）', () => {
+describe('敵レベルとレベル即死の確認用設定（#1043）', () => {
   const parseDemo = () => {
     const m = parseCharacterFormsManifest(JSON.parse(manifestText))
     if (!m.ok) throw new Error(m.error)
@@ -53,17 +53,16 @@ describe('敵の前列・後列とレベル即死の確認用設定（#1043）',
     return parseConfigText(JSON.stringify(raw), 'http://localhost/')
   }
 
-  it('parseConfig を通り、enemyRow・隊列・レベルが解決する', () => {
+  it('parseConfig を通り、レベルが解決する', () => {
     const cfg = parseDemo()
     expect(cfg.ok).toBe(true)
     if (!cfg.ok) return
     expect(cfg.value.warnings ?? []).toEqual([])
-    expect(cfg.value.battle.enemyRow).toBe(true)
     expect(cfg.value.battle.layout).toBe('side')
     const m = cfg.value.monsters
-    expect([m.M149.row, m.M149.level]).toEqual(['front', 50])
-    expect([m.M147.row, m.M147.level]).toEqual(['back', 3])
-    expect([m.M145.row, m.M145.level]).toEqual(['back', undefined])
+    expect(m.M149.level).toBe(50)
+    expect(m.M147.level).toBe(3)
+    expect(m.M145.level).toBeUndefined()
   })
 
   it('銭湯のセーブ例の敵（M149・M147）が、この設定でも解決する', () => {

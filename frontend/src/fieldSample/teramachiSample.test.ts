@@ -125,12 +125,8 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(buildBattleEngineOptions({})).toEqual({})
   })
 
-  it('#1043 同梱の寺町設定は enemyRow を持たず、モンスターに隊列・レベルも無い（本編相当は既定のまま）', () => {
-    const c = load()
-    expect(c.battle.enemyRow).toBeUndefined()
-    expect(buildBattleEngineOptions(c.battle).enemyRow).toBeUndefined()
-    for (const m of Object.values(c.monsters)) {
-      expect('row' in m).toBe(false)
+  it('#1043 同梱の寺町設定のモンスターに level は無い（本編相当は既定のまま）', () => {
+    for (const m of Object.values(load().monsters)) {
       expect('level' in m).toBe(false)
     }
   })

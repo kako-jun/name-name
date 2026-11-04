@@ -27,7 +27,10 @@
       "links": [
         {
           "edge": "right",
-          "range": [385, 635],
+          "range": [
+            385,
+            635
+          ],
           "to": "canal"
         }
       ],
@@ -96,18 +99,28 @@
       "links": [
         {
           "edge": "left",
-          "range": [378, 585],
+          "range": [
+            378,
+            585
+          ],
           "to": "shrine-street"
         },
         {
           "edge": "right",
-          "range": [622, 739],
+          "range": [
+            622,
+            739
+          ],
           "to": "bathhouse"
         }
       ],
       "encounter": {
         "rate": 8,
-        "groups": ["M108", "M148", "M108+M148"]
+        "groups": [
+          "M108",
+          "M148",
+          "M108+M148"
+        ]
       }
     },
     "bathhouse": {
@@ -116,12 +129,18 @@
       "links": [
         {
           "edge": "left",
-          "range": [505, 642],
+          "range": [
+            505,
+            642
+          ],
           "to": "canal"
         },
         {
           "edge": "bottom",
-          "range": [930, 1535],
+          "range": [
+            930,
+            1535
+          ],
           "to": "slope"
         }
       ],
@@ -144,7 +163,10 @@
       "links": [
         {
           "edge": "top",
-          "range": [1024, 1420],
+          "range": [
+            1024,
+            1420
+          ],
           "to": "bathhouse"
         }
       ],
@@ -191,7 +213,6 @@
       "gold": 20,
       "size": "1x1",
       "sprite": "http://localhost:8765/assets/images/enemies/M149.webp",
-      "formationRow": "front",
       "level": 50
     },
     "M150": {
@@ -214,8 +235,7 @@
       "exp": 14,
       "gold": 15,
       "size": "2x1",
-      "sprite": "http://localhost:8765/assets/images/enemies/M145.webp",
-      "formationRow": "back"
+      "sprite": "http://localhost:8765/assets/images/enemies/M145.webp"
     },
     "M147": {
       "name": "扇風機・換気扇の羽根",
@@ -227,7 +247,6 @@
       "gold": 12,
       "size": "1x1",
       "sprite": "http://localhost:8765/assets/images/enemies/M147.webp",
-      "formationRow": "back",
       "level": 3
     },
     "M151": {
@@ -329,7 +348,12 @@
     "presentation": "ff",
     "windowStyle": "ff-blue",
     "commandLayout": "cross",
-    "commands": ["attack", "spell", "item", "escape"],
+    "commands": [
+      "attack",
+      "spell",
+      "item",
+      "escape"
+    ],
     "atb": "on",
     "enemyGrid": "4x2",
     "motion": "snappy",
@@ -366,7 +390,6 @@
         "anchor": "center",
         "scale": 1.4
       }
-    },
-    "enemyRow": "on"
+    }
   }
 }

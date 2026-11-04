@@ -39,18 +39,7 @@ export function buildBattleScreenOptions(
   }
 }
 
-/**
- * BattleEngine に渡すオプション。ATB が有効なときだけ `atb`、side かつ enemyRow のときだけ `enemyRow` を渡す（未指定は従来どおり）。
- * layout 未指定は side 扱い
- */
-export function buildBattleEngineOptions(
-  b: Pick<FieldBattleConfig, 'atb'> &
-    Partial<Pick<FieldBattleConfig, 'enemyRow' | 'layout' | 'enemyGrid'>>
-): BattleEngineOptions {
-  return {
-    ...(b.atb ? { atb: b.atb } : {}),
-    ...((b.layout ?? 'side') === 'side' && b.enemyRow
-      ? { enemyRow: { ...(b.enemyGrid ? { grid: b.enemyGrid } : {}) } }
-      : {}),
-  }
+/** BattleEngine に渡すオプション。ATB が有効なときだけ `atb` を渡す（未指定はターン制） */
+export function buildBattleEngineOptions(b: Pick<FieldBattleConfig, 'atb'>): BattleEngineOptions {
+  return b.atb ? { atb: b.atb } : {}
 }

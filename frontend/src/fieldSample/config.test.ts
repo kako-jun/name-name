@@ -1997,7 +1997,7 @@ describe('battle.logicalSize (sit-by-me#52)', () => {
   })
 })
 
-describe('敵の隊列・レベル monsters.<id>.formationRow / level (#1043)', () => {
+describe('敵のレベル monsters.<id>.level (#1043)', () => {
   const withMonster = (extra: Raw): Raw =>
     mutated((c) => {
       c.monsters = { slime: { name: 'スライム', hp: 10, ...extra } }
@@ -2007,15 +2007,6 @@ describe('敵の隊列・レベル monsters.<id>.formationRow / level (#1043)', 
     if (r.ok) throw new Error('失敗するはずが成功')
     return r.error
   }
-
-  it.each([
-    ['front', 'front'],
-    ['back', 'back'],
-    ['前衛', 'front'],
-    ['後衛', 'back'],
-  ])('formationRow %s は MonsterDef.row %s になる', (v, row) => {
-    expect(ok(withMonster({ formationRow: v })).monsters.slime.row).toBe(row)
-  })
 
   it.each([
     [1, 1],
@@ -2032,55 +2023,15 @@ describe('敵の隊列・レベル monsters.<id>.formationRow / level (#1043)', 
     expect(err(withMonster({ level: v }))).toContain('monsters.slime.level')
   })
 
-  it('文字列でない formationRow は読み込みエラー', () => {
-    expect(err(withMonster({ formationRow: 3 }))).toContain('monsters.slime.formationRow')
-  })
-
   it('未指定ならキー自体が MonsterDef に現れない（後方互換）', () => {
     const m = ok(withMonster({})).monsters.slime
-    expect('row' in m).toBe(false)
     expect('level' in m).toBe(false)
   })
 
-  it('party に level / formationRow を書くとエラー（味方には無い設定）', () => {
-    for (const extra of [{ level: 5 }, { formationRow: 'back' }]) {
-      const raw = mutated((c) => {
-        c.party = [{ name: 'ゆうしゃ', hp: 30, ...extra }]
-      })
-      const r = parseConfig(raw, BASE)
-      expect(r.ok).toBe(false)
-    }
-  })
-})
-
-describe('battle.enemyRow (#1043)', () => {
-  const withBattle = (b: Raw): Raw =>
-    mutated((c) => {
-      c.battle = b
+  it('party に level を書くとエラー（味方には無い設定）', () => {
+    const raw = mutated((c) => {
+      c.party = [{ name: 'ゆうしゃ', hp: 30, level: 5 }]
     })
-
-  it('"on" は true、"off"・未指定は undefined（キー自体なし）', () => {
-    expect(ok(withBattle({ enemyRow: 'on' })).battle.enemyRow).toBe(true)
-    for (const raw of [withBattle({ enemyRow: 'off' }), minimal()]) {
-      const b = ok(raw).battle
-      expect(b.enemyRow).toBeUndefined()
-      expect('enemyRow' in b).toBe(false)
-    }
-  })
-
-  it.each(['yes', true, 1, ''])('不正値 %j は読み込みエラー', (v) => {
-    const r = parseConfig(withBattle({ enemyRow: v }), BASE)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toContain('battle.enemyRow は "on" か "off"')
-  })
-
-  it('layout "front" で on は警告（読み込みは成功・enemyRow は true のまま）', () => {
-    const v = ok(withBattle({ layout: 'front', enemyRow: 'on' }))
-    expect(v.warnings?.join('\n')).toContain('battle.enemyRow')
-  })
-
-  it('layout "side" で on は警告なし', () => {
-    const v = ok(withBattle({ layout: 'side', enemyRow: 'on' }))
-    expect((v.warnings ?? []).join('\n')).not.toContain('enemyRow')
+    expect(parseConfig(raw, BASE).ok).toBe(false)
   })
 })

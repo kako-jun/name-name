@@ -218,17 +218,15 @@ ATK: 8
 2. 書かない敵は、`battle_enemy_grid` があれば**グリッドの列から導出**する。生存している敵のうち、占有セルの右端の列が最も手前（右）の敵が前列、それ以外は後列
 3. グリッドも `隊列:` も無い敵は前列（軽減なし）
 
-- 倒れた敵が出ると、攻撃のたびに最前列を引き直す。**`隊列:` を書かない敵だけ**、最前列の敵を全員倒すと次の列が前列になって等倍で通る。`隊列:` を書いた敵は宣言が最優先で、前列が全滅しても後衛と書いた敵は後列のまま（半減が続く）
+- 倒れた敵が出ると、攻撃のたびに最前列を引き直す。最前列の敵を全員倒すと、次の列が前列になって等倍で通る
 - `サイズ: 2x1` の敵は占有セルの右端の列（左端の列＋幅−1）で数える
 - `隊列:` を書いた敵は、「最も手前の列」の判定に加えない（右端に `後衛` と書いた敵がいても、他の敵が後列にならない）
 - 軽減は半分ごとに切り捨て・最低 1。敵から味方への攻撃は変わらない（敵自身が後列でも与えるダメージは同じ）
 - 戦闘中の列変更は未対応（#887）
-- 確認用の戦闘サンプル: `battle-sample.html?config=battle-sample/enemy-row.json`（`enemyGrid` / `enemyRow` / `enemies[].formationRow` / `enemies[].at`。[デバッグガイド](./debugger.md)）。一枚絵フィールドサンプル（`field-sample.html`）の設定 JSON も同じことができる（下の「一枚絵フィールドサンプルでの指定」。#1043）
+- 確認用の戦闘サンプル: `battle-sample.html?config=battle-sample/enemy-row.json`（`enemyGrid` / `enemyRow` / `enemies[].formationRow` / `enemies[].at`。[デバッグガイド](./debugger.md)）。一枚絵フィールドサンプル（`field-sample.html`）の設定 JSON は未対応
 
 ## 一枚絵フィールドサンプルでの指定
 
 `field-sample.html`（[デバッグガイド](./debugger.md)）の設定 JSON でも、`monsters.<id>` の `size`（`"2x1"`）/ `scale` と `battle` の `enemyGrid`（`"6x2"`）/ `enemyWindowOverlap` で同じことができる。`enemyGrid` を書くと群の検証も走り、収まらない群は抽選から外れて、コンソールと画面のエラー表示に一覧が出る。詳しくはデバッグガイドの該当節を参照。
 
 同じ設定 JSON の `monsters.<id>.poses`（戦闘ポーズ別の画像）や `spells` / `items`（戦闘の候補窓）、素材なしで動かす `?fixture=dummy` も、デバッグガイドの「戦闘の候補窓・ポーズ・素材なしの確認」にまとめてある。
-
-敵の前列・後列とレベル (#1043): `monsters.<id>.formationRow`（`front` / `back`、`前衛` / `後衛` も可。`[モンスター]` の `隊列:` 相当）、`monsters.<id>.level`（整数。1〜99 に丸める。`レベル:` 相当）と、`battle.enemyRow`（`"on"` / `"off"`、既定 `off`。不正値は読み込みエラー）を書ける。`enemyRow: "on"` のとき後列の敵への通常攻撃のダメージが半分になる。**`layout: "side"` のときだけ効く**（`front` に `on` を書くと警告して無視）。`monsters.<id>.formationRow` を書かない敵は、`battle.enemyGrid` があればグリッドの列から導出し、無ければ前列（軽減なし）。`level` は、レベル条件の即死 `damage_full レベル倍数=N` と調整 `level +N|-N|=N`（#898）が使う。レベルを持たない敵にはレベル条件の即死は効かない。確認の手順は [状態を用意して起動する](./resume-demo.md) の「敵の前列・後列とレベル即死の確認」
