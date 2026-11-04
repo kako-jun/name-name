@@ -209,8 +209,8 @@ describe('dq / front は従来どおり (#1039)', () => {
     expect(closed).toEqual(['victory'])
   })
 
-  it('front: ff 以外なのでメッセージ列は空・待機は dq と同じ', () => {
-    const { s, closed } = setup({ presentation: 'front' })
+  it('front: ff を指定しても layout front なら dq 扱いで、メッセージ列は空・待機は dq と同じ', () => {
+    const { s, closed } = setup({ presentation: 'ff', layout: 'front' })
     tap(s, 'attack')
     expect(I(s).resultMessages).toEqual([])
     s.tick(RESULT_HOLD_DQ_MS - 1)
