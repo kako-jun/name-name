@@ -160,6 +160,9 @@ function computePrice(
   if (!e) return 'unset'
   if (e.kind === 'armor') return isValidPrice(e.price) ? e.price : 'unset'
   if (!isValidPrice(e.basePrice)) return 'unset'
+  // 倍率は数で 1 以上の有限値だけ（型を破った定義の文字列 '2' なども拒否して、暗黙の型変換に頼らない）
+  if (typeof cfg.multiplier !== 'number' || !Number.isFinite(cfg.multiplier) || cfg.multiplier < 1)
+    return 'overflow'
   const p = Math.floor(e.basePrice * Math.pow(cfg.multiplier, ownedBladeCount(cfg, state, member)))
   return Number.isSafeInteger(p) && p >= 0 ? p : 'overflow'
 }

@@ -237,16 +237,18 @@ describe('新しい挙動 (#881 レビュー)', () => {
     expect(r).toMatchObject({ ok: false, reason: 'uncomputable', message: '値段を計算できません' })
     expect(r.message).not.toBe(canBuy(cfg, emptyGearState(), 'p1', 'nobase', 1).message)
   })
-  it('multiplier が文字列のまま（型を破った定義）でも購入は NaN 価格にならず通る/落ちる', () => {
+  it("multiplier が数でない・非有限・1 未満（型を破った定義）は文字列 '2' も含め uncomputable で拒否", () => {
     const c = { multiplier: '2' as unknown as number, entries: cfg.entries }
-    const r = canBuy(c, own(['a1']), 'p1', 'a2', 99999)
-    // 文字列の '2' は Math.pow で数に変換されるため 200。NaN になった場合は uncomputable で拒否される
-    expect(r.ok ? r.price : r.reason).toBe(200)
-    const bad = { multiplier: 'x' as unknown as number, entries: cfg.entries }
-    expect(canBuy(bad, own(['a1']), 'p1', 'a2', 99999)).toMatchObject({
+    expect(canBuy(c, own(['a1']), 'p1', 'a2', 99999)).toMatchObject({
       ok: false,
       reason: 'uncomputable',
     })
+    for (const m of ['x', NaN, Infinity, 0.5, 0, -2, null]) {
+      const bad = { multiplier: m as unknown as number, entries: cfg.entries }
+      expect(canBuy(bad, own(['a1']), 'p1', 'a2', 99999).reason).toBe('uncomputable')
+    }
+    // 防具は倍率を使わないので影響されない
+    expect(canBuy(c, emptyGearState(), 'p1', 'vest', 99999).ok).toBe(true)
   })
   const items: Record<string, ItemDef> = {
     a1: { id: 'a1', name: 'A1', kind: '武器' },
@@ -388,9 +390,15 @@ describe('parseGearShopConfig', () => {
     ['刀に price', { entries: [{ id: 'a', kind: 'blade', owner: 'p', price: 5 }] }, /price/],
     ['unlockFlag が数', { entries: [{ id: 'a', kind: 'armor', unlockFlag: 3 }] }, /unlockFlag/],
     ['倍率が 1 未満', { multiplier: 0.5, entries: [] }, /multiplier/],
+    ['倍率が文字列', { multiplier: '2', entries: [] }, /multiplier/],
   ])('不正（%s）は警告する', (_n, raw, re) => {
     const r = parseGearShopConfig(raw)
     expect(r.warnings.some((w) => re.test(w))).toBe(true)
+  })
+  it("倍率が文字列 '2' は警告つきで既定の 2 に戻る", () => {
+    const r = parseGearShopConfig({ multiplier: '2', entries: [] })
+    expect(r.value?.multiplier).toBe(2)
+    expect(r.warnings.some((w) => /multiplier/.test(w))).toBe(true)
   })
   it('不正な項目は捨て、不正な値段は値段なし（購入不可）で残す', () => {
     const r = parseGearShopConfig({

@@ -686,6 +686,16 @@ async function main(): Promise<void> {
     ? resolveGear(resumed?.gear, config.gearShop, resumed?.equipment)
     : undefined
   for (const w of gearResolved?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
+  // 装備列から刀を外すのは見える変化なので、resume の他の警告と同じく画面にも出す（先の通知に続けて並べる）
+  if (gearResolved && gearResolved.warnings.length > 0)
+    setResumeNotice(
+      [
+        resumeNotice,
+        `刀・防具のセーブの一部を反映できませんでした\n${gearResolved.warnings.join('\n')}`,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    )
   const gear = gearResolved?.state
   const equipment: Record<string, string[]> = gearResolved?.equipment
     ? structuredClone(gearResolved.equipment)
