@@ -433,3 +433,36 @@ describe('resolveForcedHp', () => {
     expect(resolveForcedHp(abs(9), 10, 20, 5)).toBe(9)
   })
 })
+
+describe('parseBattleScript: 付与 (#875)', () => {
+  it('付与は grants に入り、ルールには入らない（書かなければ grants のキーも無い）', () => {
+    const p = parseBattleScript([
+      '付与: 味方=hero わざ=slash,heal 魔法=fire',
+      '付与: 味方=mage 魔法=ice,thunder',
+      '台詞: 文=やあ',
+    ])
+    expect(p.warnings).toEqual([])
+    expect(p.grants).toEqual([
+      { target: 'hero', abilities: ['slash', 'heal'], spells: ['fire'] },
+      { target: 'mage', abilities: [], spells: ['ice', 'thunder'] },
+    ])
+    expect(p.rules).toHaveLength(1)
+    expect('grants' in parseBattleScript(['台詞: 文=やあ'])).toBe(false)
+  })
+  it('全角読点区切りも受ける', () => {
+    expect(parseBattleScript(['付与: 味方=hero わざ=a、b']).grants).toEqual([
+      { target: 'hero', abilities: ['a', 'b'], spells: [] },
+    ])
+  })
+  it.each([
+    ['付与: わざ=slash', '味方= がありません'],
+    ['付与: 味方=hero', 'わざ= か 魔法= がありません'],
+    ['付与: 味方=hero わざ=', 'わざ= か 魔法= がありません'],
+    ['付与: 味方=hero 技=slash', "'技=slash' は"],
+    ['付与: 味方=hero slash', "'slash' は"],
+  ])('不正な行 %s は警告して無視する', (line, why) => {
+    const p = parseBattleScript([line])
+    expect(p.grants).toBeUndefined()
+    expect(p.warnings.join()).toContain(why)
+  })
+})

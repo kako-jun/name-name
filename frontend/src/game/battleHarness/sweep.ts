@@ -21,6 +21,7 @@ import {
 } from './generate'
 import {
   forceMatrix,
+  grantMatrix,
   randomForceScenarios,
   randomScriptScenarios,
   scriptMatrix,
@@ -60,6 +61,7 @@ export type SweepFamily =
   | 'multi-target'
   | 'enemy-row'
   | 'enemy-level'
+  | 'script-grant'
 
 /** 族 `script-force` のランダム合成の件数（固定。決定論） */
 export const FORCE_RANDOM_COUNT = 400
@@ -109,6 +111,8 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('enemy-row') ? [] : enemyRowScenarios()),
     // 敵のレベル (#898)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
     ...(skip.has('enemy-level') ? [] : enemyLevelScenarios()),
+    // 戦闘単位の一時付与 (#875)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
+    ...(skip.has('script-grant') ? [] : grantMatrix()),
   ]
 }
 

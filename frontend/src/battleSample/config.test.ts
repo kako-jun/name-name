@@ -2158,3 +2158,30 @@ describe('設定 JSON: enemies[].level (#898)', () => {
     expect(parseConfig({ party: [{ id: 'p', level: 3 }] }, BASE).ok).toBe(false)
   })
 })
+
+describe('設定 JSON: 脚本の 付与: (#875)', () => {
+  const skill = { id: 'slash', name: 'きりさく', target: '相手単体', effect: 'damage 5..5' }
+  const parse = (rules: string[]) => {
+    const r = parseConfig(
+      {
+        skills: [skill, { id: 'heal', name: 'いやす', target: '味方単体', effect: 'heal 5..5' }],
+        script: { rules },
+        party: [{ id: 'hero' }, { id: 'mage' }],
+      },
+      BASE
+    )
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  it('付与した特技が対象の味方のわざの行に足され、ほかの味方・付与なしでは付かない', () => {
+    const skills = buildBattleSetup(parse(['付与: 味方=hero わざ=slash,heal']), view()).options.menu
+      .skills
+    expect(skills?.hero.map((e) => e.id)).toEqual(['slash', 'heal'])
+    expect(skills?.mage).toBeUndefined()
+    expect(buildBattleSetup(parse(['台詞: 文=やあ']), view()).options.menu.skills).toBeUndefined()
+  })
+  it('未宣言の特技 id は足されない', () => {
+    const skills = buildBattleSetup(parse(['付与: 味方=hero わざ=zzz']), view()).options.menu.skills
+    expect(skills).toBeUndefined()
+  })
+})

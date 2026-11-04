@@ -19,6 +19,7 @@ import { parseBeasts, parseMagicites } from './configMagicite'
 import { resolveSummonRefs, warnSummonOnce } from '../game/summons'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { toSkillExecutions } from '../game/enemyAi'
+import { parseBattleScript } from '../game/battleScript'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -1188,6 +1189,19 @@ export function buildBattleSetup(
   }
   const { width, height } = resolveSize(view.sizeId)
   const party = fill(config.party, defaultParty(), effectivePartyCount(view), 'party')
+  // 脚本の一時付与 (#875): `付与:` の `わざ=` の特技 id（設定 JSON の `skills`）を、対象の味方のわざの行に足す。魔法は味方全員が同じ呪文を使うので足すものが無い
+  const menuMembers = [...party, ...Object.values(config.script?.joiners ?? {})]
+  const abilityRows: Record<string, BattleSkillEntry[]> = { ...config.abilities }
+  for (const g of config.script ? (parseBattleScript(config.script.rules).grants ?? []) : []) {
+    const rows = [...(abilityRows[g.target] ?? [])]
+    for (const id of g.abilities) {
+      const sk = Object.prototype.hasOwnProperty.call(config.skills, id)
+        ? config.skills[id]
+        : undefined
+      if (sk && !rows.some((r) => r.id === id)) rows.push({ id, ...sk })
+    }
+    if (rows.length > 0) abilityRows[g.target] = rows
+  }
   return {
     ...(view.atb === 'on' ? { atb: { mode: view.atbMode } } : {}),
     ...(view.layout === 'side' && config.enemyGrid ? { enemyRow: { grid: config.enemyGrid } } : {}),
@@ -1230,13 +1244,13 @@ export function buildBattleSetup(
           ])
         ),
         items: config.items.map((e) => ({ ...e })),
-        // わざ (#207): 固定のわざ（`party[].abilities`）と装備中の `gear` の `abilities` を持つ味方だけ。画面に出る味方の分だけ複製する
-        ...(party.some((p) => config.abilities[p.id])
+        // わざ (#207): 固定のわざ（`party[].abilities`）と装備中の `gear` の `abilities`、脚本の `付与:` (#875) を持つ味方だけ。画面に出る味方の分だけ複製する
+        ...(menuMembers.some((p) => abilityRows[p.id])
           ? {
               skills: Object.fromEntries(
-                party
-                  .filter((p) => config.abilities[p.id])
-                  .map((p) => [p.id, config.abilities[p.id].map((e) => ({ ...e }))])
+                menuMembers
+                  .filter((p) => abilityRows[p.id])
+                  .map((p) => [p.id, abilityRows[p.id].map((e) => ({ ...e }))])
               ),
             }
           : {}),

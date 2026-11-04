@@ -313,6 +313,7 @@ describe('強制 (#741 段階 2): 不変条件と族 script-force', () => {
       'multi-target',
       'enemy-row',
       'enemy-level',
+      'script-grant',
       'effect-matrix',
       'enemy-skill',
       'stack-order',
