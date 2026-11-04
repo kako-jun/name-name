@@ -167,7 +167,7 @@ describe('状態異常の確認用設定（#1051 段階3）', () => {
     ])
   })
 
-  it('エンジンに statuses が渡り、どくのこなで敵に毒が付き、継続ダメージが入る', () => {
+  it('エンジンに statuses が渡り、どくのこなで敵に毒の状態が付く', () => {
     const { cfg, engine } = setup()
     const spell = cfg.spells.find((s) => s.id === 'poisona')!
     const target = engine.getState().enemies[0]

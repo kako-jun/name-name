@@ -112,8 +112,8 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 1. 本番ビルドして静的配信する（手順 1）
 2. `demo-<名前>.config.json` を `<出力先>` の直下にコピーする（手順 2）
-3. sit-by-me を CORS 付きで配信し、コピーした設定とセーブの `8765` を置き換える（手順 3。この設定は感情吹き出しを使わないので `teramachi-emotions.json` の置換は要らない）
-4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はない）。操作できるまでは、敵名窓・エフェクトは約 1 秒、motion は `snappy` の横スライド登場が終わる約 4〜5 秒（それ以前のクリックは効かない）。3 つともコマンドが 3 つ（たたかう・じゅもん・にげる）で、`commandLayout: "cross"` は 4 コマンドのときだけ有効なため `grid` 配置になり、矢印キーでは操作できない。コマンドはクリック（タップ）で選ぶ。「たたかう」はクリックでターゲットが自動で決まり、すぐ始まる。「じゅもん」は窓から「ひかり」を選んでターゲットをクリックする
+3. sit-by-me を CORS 付きで配信し、コピーした設定とセーブの `8765` を置き換える（手順 3。**配信するのは歩行絵が揃った sit-by-me の最新 main**。古いブランチだと歩行スプライトが 404 で起動しない。この設定は感情吹き出しを使わないので `teramachi-emotions.json` の置換は要らない）
+4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（敵名窓・エフェクト・motion の 3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はない）。操作できるまでは、敵名窓・エフェクトは約 1 秒、motion は `snappy` の横スライド登場が終わる約 4〜5 秒（それ以前のクリックは効かない）。3 つともコマンドが 3 つ（たたかう・じゅもん・にげる。状態異常の設定も同じ）で、`commandLayout: "cross"` は 4 コマンドのときだけ有効なため `grid` 配置になり、矢印キーでは操作できない。コマンドはクリック（タップ）で選ぶ。「たたかう」はクリックでターゲットが自動で決まり、すぐ始まる。「じゅもん」は窓から呪文を選んでターゲットをクリックする（敵名窓・エフェクト・motion の設定は「ひかり」。状態異常の設定は次節）
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
@@ -125,7 +125,7 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 |---|---|---|
 | [`demo-statuses.config.json`](./examples/demo-statuses.config.json) | [`demo-statuses.save.json`](./examples/demo-statuses.save.json) | 「じゅもん」の「どくのこな」「スリプル」「メダパニ」「デスぜんこく」で敵に状態が付く（敵は名前の後ろに `[どく]` のように出る）。「ケアル」「エスナ」「ゾンビのこな」は味方に使う。「ゾンビのこな」で味方がゾンビになると、敵の攻撃が回復になる |
 
-手順は「motion / 敵名窓 / エフェクトの確認」と同じ（`<名前>` は `statuses`）。手順 4 の `demo-<名前>.save.json` を localStorage に入れ、`field-sample.html?resume=0&config=demo-statuses.config.json` を開く。コマンドは 3 つ（たたかう・じゅもん・にげる）で `grid` 配置のため矢印キーでは操作できず、コマンドはクリック（タップ）で選ぶ。「じゅもん」は窓から呪文を選んでターゲットをクリックする。
+手順は「motion / 敵名窓 / エフェクトの確認」と同じ（`<名前>` は `statuses`）。手順 4 の `demo-<名前>.save.json` を localStorage に入れ、`field-sample.html?resume=0&config=demo-statuses.config.json` を開く。コマンドは 3 つ（たたかう・じゅもん・にげる）で `grid` 配置のため矢印キーでは操作できず、コマンドはクリック（タップ）で選ぶ。「じゅもん」は窓から呪文を選んでターゲットをクリックする。操作できるまでは、読み込みから約 2 秒以内（導入演出なし。`transition` 未指定）。
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
