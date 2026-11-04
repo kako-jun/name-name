@@ -12,6 +12,7 @@
  * 売り物の宣言が無いゲーム・メニューを使わないゲームは、この仕組みを通らず従来どおり（セーブにも `gear` キーを書かない）。
  */
 import { equipItem, unequipItem, type EquipmentRoster } from './equipment'
+import { parseStatBonus } from './magicite'
 import { hasOwn, safeAssign } from './ownProperty'
 import type { PartyMemberDef } from '../types'
 
@@ -35,6 +36,12 @@ export interface GearEntry {
   unlockFlag?: string
   /** 一覧に出す画像のパス（任意の文字列。sit-by-me の刀マスターから切り出した派生画像を指す想定だが、派生画像は未作成）。省略 = 画像なし（文字のみ）。読み込み・表示は段階2の UI */
   image?: string
+  /** 装備している間だけ能力値に足す分（`atk+5, def+2` 形式。魔石・アイテムの `装備時` と同じ書式）。そうび画面の変更前後の差分に使う。省略 = 能力値は変わらない（値は仮・未決） */
+  equipBonus?: string
+  /** 表示名（アプリストア・そうびの一覧）。省略は `[アイテム]` の name、それも無ければ id。売り物のためだけの品は `[アイテム]` に書かなくてよい（戦闘のアイテム窓に出ない） */
+  name?: string
+  /** 解禁前（`unlockFlag` が立つまで）に説明バーへ出す文。省略は「まだ買えません」。解禁条件が分かる文を書ける */
+  lockedMessage?: string
   /** 刀を装備している間だけ戦闘の「わざ」に出る特技の id（設定 JSON の `skills` の id。段階3 #881）。刀だけが持つ（防具は属性防御だけ）。省略 = 刀のアビリティなし。仕様上は 1 刀 1 アビリティ（配列は一般化） */
   abilities?: string[]
 }
@@ -194,8 +201,13 @@ export function canBuy(
   const price = computePrice(cfg, state, member, id)
   if (price === 'unset') return block('unbuyable')
   if (price === 'overflow') return block('uncomputable')
-  if (e.unlockFlag !== undefined && !(hasOwn(flags, e.unlockFlag) && flags[e.unlockFlag] === true))
-    return block('locked', price)
+  if (
+    e.unlockFlag !== undefined &&
+    !(hasOwn(flags, e.unlockFlag) && flags[e.unlockFlag] === true)
+  ) {
+    const b = block('locked', price)
+    return e.lockedMessage !== undefined ? { ...b, message: e.lockedMessage } : b
+  }
   if (!(Number.isFinite(gold) && gold >= price)) return block('notEnoughGold', price)
   return { ok: true, price }
 }
@@ -379,7 +391,7 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /**
- * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, abilities? }] }`。
+ * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, equipBonus?, name?, lockedMessage?, abilities? }] }`。
  * 不正な項目は警告して捨てる。`gearShop` が無い（undefined / false / null）はキーなし＝従来どおり。
  * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
  */
@@ -457,6 +469,22 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
     if (imageRaw !== undefined) {
       if (typeof imageRaw === 'string' && imageRaw.trim()) entry.image = imageRaw.trim()
       else warnings.push(`${where}.image は文字列のパスにしてください（画像なしにします）`)
+    }
+    for (const key of ['name', 'lockedMessage'] as const) {
+      const v = it[key]
+      if (v === undefined) continue
+      if (typeof v === 'string' && v.trim()) entry[key] = v.trim()
+      else warnings.push(`${where}.${key} は空でない文字列にしてください（無視します）`)
+    }
+    if (it.equipBonus !== undefined) {
+      if (typeof it.equipBonus === 'string' && it.equipBonus.trim()) {
+        entry.equipBonus = it.equipBonus.trim()
+        for (const w of parseStatBonus(entry.equipBonus).warnings)
+          warnings.push(`${where}.equipBonus: ${w}`)
+      } else
+        warnings.push(
+          `${where}.equipBonus は文字列（例: atk+5）にしてください（能力値なしにします）`
+        )
     }
     // 刀のアビリティ（戦闘の「わざ」に出る特技 id）。刀以外・不正は警告して捨てる
     if (it.abilities !== undefined) {

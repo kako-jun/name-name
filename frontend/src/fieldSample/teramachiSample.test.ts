@@ -80,6 +80,18 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(c.monsters.M148.size).toEqual({ w: 2, h: 1 })
   })
 
+  it('#881: 同梱の gearShop（仮）は警告なしで読まれ、静的な appstore の一覧は無い（実状態から中身が入る）', () => {
+    const c = load()
+    expect(c.gearShop?.entries.length).toBeGreaterThanOrEqual(4)
+    expect(c.gearShop?.entries.filter((e) => e.kind === 'blade').map((e) => e.owner)).toContain(
+      'party1'
+    )
+    expect(c.menu?.items.find((i) => i.id === 'appstore')?.content).toBeUndefined()
+    const r = parseConfig(JSON.parse(sampleText), 'http://localhost/field-sample/')
+    if (!r.ok) throw new Error(r.error)
+    expect((r.value.warnings ?? []).filter((w) => w.includes('gearShop'))).toEqual([])
+  })
+
   it('sit-by-me#65 commands の全コマンドが実際に機能する（死んだボタンがない）', () => {
     const c = load()
     const menu = buildBattleMenu(c)

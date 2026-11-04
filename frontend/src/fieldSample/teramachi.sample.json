@@ -278,22 +278,7 @@
         }
       },
       { "id": "equip", "label": "そうび" },
-      {
-        "id": "appstore",
-        "label": "アプリストア",
-        "content": {
-          "tabs": [
-            {
-              "label": "刀",
-              "entries": [
-                { "label": "はがねの刀", "detail": "1,200 円" },
-                { "label": "ほそ身の刀", "detail": "800 円" }
-              ]
-            },
-            { "label": "防具", "entries": [{ "label": "かわの胴当て", "detail": "600 円" }] }
-          ]
-        }
-      },
+      { "id": "appstore", "label": "アプリストア" },
       {
         "id": "magicite",
         "label": "ませき",
@@ -383,6 +368,55 @@
       "effect": "heal 15..25"
     }
   ],
+  "gearShop": {
+    "_comment": "仮: 基準額・防具の価格・能力値（equipBonus）・刀 id と持ち主の対応は未決の仮値（kako-jun が決める）。画像は sit-by-me の派生画像（未作成のため文字だけで出る）を指す仮のパス",
+    "multiplier": 2,
+    "entries": [
+      {
+        "id": "sample-blade-muramasa",
+        "kind": "blade",
+        "owner": "party1",
+        "name": "村正",
+        "basePrice": 100,
+        "equipBonus": "atk+4",
+        "image": "http://localhost:8765/assets/images/weapons/app-store/muramasa-appstore-v1.webp"
+      },
+      {
+        "id": "sample-blade-honebami",
+        "kind": "blade",
+        "owner": "party1",
+        "name": "骨喰藤四郎",
+        "basePrice": 100,
+        "equipBonus": "atk+6",
+        "image": "http://localhost:8765/assets/images/weapons/app-store/honebami-toshiro-appstore-v1.webp"
+      },
+      {
+        "id": "sample-blade-juzumaru",
+        "kind": "blade",
+        "owner": "party2",
+        "name": "数珠丸恒次",
+        "basePrice": 100,
+        "equipBonus": "atk+5",
+        "image": "http://localhost:8765/assets/images/weapons/app-store/juzumaru-tsunetsugu-appstore-v1.webp"
+      },
+      {
+        "id": "sample-blade-mikazuki",
+        "kind": "blade",
+        "owner": "party2",
+        "name": "三日月宗近",
+        "basePrice": 100,
+        "equipBonus": "atk+7",
+        "image": "http://localhost:8765/assets/images/weapons/app-store/mikazuki-munechika-appstore-v1.webp"
+      },
+      {
+        "id": "sample-armor-akaito",
+        "kind": "armor",
+        "name": "赤糸威",
+        "price": 300,
+        "equipBonus": "def+3"
+      }
+    ]
+  },
   "items": [
     {
       "id": "sit_herb_tea_heal",
