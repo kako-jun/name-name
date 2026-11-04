@@ -499,6 +499,7 @@
       {
         "id": "bladeA",
         "kind": "blade",
+        "name": "刀A",
         "owner": "party1",
         "basePrice": 100,
         "abilities": ["slashA"]
@@ -506,6 +507,7 @@
       {
         "id": "bladeB",
         "kind": "blade",
+        "name": "刀B",
         "owner": "party1",
         "basePrice": 100,
         "abilities": ["slashB"]
@@ -513,6 +515,7 @@
       {
         "id": "bladeD",
         "kind": "blade",
+        "name": "刀D",
         "owner": "party1",
         "basePrice": 100,
         "abilities": ["slashD"]
@@ -520,6 +523,7 @@
       {
         "id": "bladeC",
         "kind": "blade",
+        "name": "刀C",
         "owner": "party2",
         "basePrice": 100,
         "abilities": ["slashC"]

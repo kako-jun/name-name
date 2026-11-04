@@ -40,3 +40,25 @@ export async function loadMenuFont(
     clearTimeout(timer)
   }
 }
+
+/** 画像の読み込み待ちの上限（ms）。超えたら読めた分だけ（残りは画像なし＝文字だけ）で開く */
+export const MENU_IMAGE_TIMEOUT_MS = 1500
+
+/** `work` の完了を `timeoutMs` まで待つ。超えたら待たずに戻る（`work` は裏で続く。失敗も握る） */
+export async function waitUpTo(work: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const limit = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs)
+  })
+  try {
+    await Promise.race([
+      work.then(
+        () => undefined,
+        () => undefined
+      ),
+      limit,
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}

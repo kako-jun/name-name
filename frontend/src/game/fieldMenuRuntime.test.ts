@@ -362,6 +362,16 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     const tab = rt.items().find((d) => d.id === 'appstore')!.content!.tabs![0]
     expect(Object.keys(tab.entriesByParty ?? {})).toEqual(['a', 'b'])
   })
+  it('まほうの content が空の entries・空の entriesByParty だけなら「書いていない」扱いで差し込む', () => {
+    const { rt } = setup({
+      menu: {
+        items: [{ id: 'magic', label: 'ま', content: { entries: [], entriesByParty: {} } }],
+        transition: { ...DEFAULT_MENU_TRANSITION },
+      },
+    })
+    const m = rt.items().find((d) => d.id === 'magic')!
+    expect(Object.keys(m.content?.entriesByParty ?? {})).toEqual(['a', 'b'])
+  })
   it('売り物の定義がないゲームでは appstore・equip の使用要求は null（従来どおり）', () => {
     const { rt } = setup()
     expect(rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })).toBeNull()

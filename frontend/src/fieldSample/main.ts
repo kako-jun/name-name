@@ -162,7 +162,7 @@ import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
 import { resolveGear, type GearState } from '../game/gearShop'
 import { ensureFontLoaded } from '../game/FontLoader'
-import { loadMenuFont } from '../game/menuFont'
+import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
@@ -1313,10 +1313,15 @@ async function main(): Promise<void> {
             const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
             // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む
             const images: Record<string, Texture | null> = {}
-            await Promise.all(
-              (config.gearShop?.entries ?? []).map(async (e) => {
-                if (e.image !== undefined) safeAssign(images, e.image, await partyTexture(e.image))
-              })
+            // 上限つき（応答が返らない画像で開かなくならないよう、超えたら読めた分だけで開く）
+            await waitUpTo(
+              Promise.all(
+                (config.gearShop?.entries ?? []).map(async (e) => {
+                  if (e.image !== undefined)
+                    safeAssign(images, e.image, await partyTexture(e.image))
+                })
+              ),
+              MENU_IMAGE_TIMEOUT_MS
             )
             return {
               party,

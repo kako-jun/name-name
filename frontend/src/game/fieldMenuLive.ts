@@ -460,7 +460,12 @@ export function applyLiveContent(
     const c = d.content
     if (kind === 'item' && !(c?.tabs && c.tabs.length > 0))
       return { ...d, content: { ...c, tabs: buildItemTabs(input.rpg) } }
-    if (d.id === 'magic' && kind === 'party-list' && !c?.entries && !c?.entriesByParty)
+    if (
+      d.id === 'magic' &&
+      kind === 'party-list' &&
+      (c?.entries?.length ?? 0) === 0 &&
+      Object.keys(c?.entriesByParty ?? {}).length === 0
+    )
       return { ...d, content: { ...c, entriesByParty: buildMagicByParty(input.rpg) } }
     // 定義側が中身を書いていれば差し込まない（空配列・空オブジェクトは「書いていない」）
     const authoredTabs = !!c?.tabs?.some(

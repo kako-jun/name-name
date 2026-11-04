@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MENU_FONT_TIMEOUT_MS, loadMenuFont } from './menuFont'
+import { MENU_FONT_TIMEOUT_MS, loadMenuFont, waitUpTo } from './menuFont'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
@@ -47,5 +47,21 @@ describe('loadMenuFont (#881)', () => {
       '寺町円0'
     )
     expect(load).toHaveBeenCalledWith("16px 'F', sans-serif", '現在地寺町円0')
+  })
+})
+
+describe('waitUpTo（画像の読み込み待ちの上限）', () => {
+  it('決着しない読み込みでも上限で戻る', async () => {
+    let done = false
+    const p = waitUpTo(new Promise(() => undefined), 1500).then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(1499)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(2)
+    await p
+    expect(done).toBe(true)
+  })
+  it('先に終われば待たない。reject も握る', async () => {
+    await expect(waitUpTo(Promise.resolve(1), 1500)).resolves.toBeUndefined()
+    await expect(waitUpTo(Promise.reject(new Error('x')), 1500)).resolves.toBeUndefined()
   })
 })
