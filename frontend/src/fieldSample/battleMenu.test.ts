@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { BattleEntity } from '../game/spellDsl'
 import type { BattleItemEntry, BattleSpellEntry } from '../game/battleMenu'
 import { buildBattleMenu } from './battleMenu'
+import { equipBlade, resolveGear, type GearShopConfig, type GearState } from '../game/gearShop'
+import type { EquipmentRoster } from '../game/equipment'
+import type { ItemDef } from '../types'
+import { parseRpgSave, snapshotRpg } from '../game/rpgSave'
+import { EMPTY_STACK, buildMenuRows, openList, type MenuContext } from '../game/battleMenu'
 
 const member = (id: string): BattleEntity => ({
   id,
@@ -99,5 +104,126 @@ describe('buildBattleMenu: たいせつなもの（#880 key）', () => {
     expect(
       buildBattleMenu({ party, spells: [], items: [{ ...item('key', 1), key: true }] })
     ).toBeUndefined()
+  })
+})
+
+describe('buildBattleMenu: 装備中の刀のアビリティ (#881 段階3)', () => {
+  const party = [member('p1'), member('p2')]
+  const sk = (id: string) => ({ id, name: id, target: '相手単体' })
+  // 刀 a1 = わざ A、a2 = わざ B（p1 の刀）。b1 = わざ C（p2 の刀）。`common` はどの刀にも属さない固定のわざ
+  const skills = [sk('common'), sk('A'), sk('B'), sk('C')]
+  const shop: GearShopConfig = {
+    multiplier: 2,
+    entries: [
+      { id: 'a1', kind: 'blade', owner: 'p1', basePrice: 100, abilities: ['A'] },
+      { id: 'a2', kind: 'blade', owner: 'p1', basePrice: 100, abilities: ['B'] },
+      { id: 'b1', kind: 'blade', owner: 'p2', basePrice: 100, abilities: ['C'] },
+    ],
+  }
+  const items: Record<string, ItemDef> = Object.fromEntries(
+    shop.entries.map((e) => [
+      e.id,
+      { id: e.id, name: e.id, kind: '武器', equippableBy: [e.owner!] },
+    ])
+  )
+  const def = { id: 'p1' }
+  const roster: EquipmentRoster = { items }
+  const ids = (m: ReturnType<typeof buildBattleMenu>, who: string) =>
+    (m?.skills?.[who] ?? []).map((s) => s.id)
+  const menu = (state: GearState) =>
+    buildBattleMenu({ party, spells: [], items: [], skills, gear: { shop, state } })
+
+  it('刀A装備 → Aが出る → 刀Bへ持ち替え → BになりAは出ない', () => {
+    let st: GearState = { owned: { p1: ['a1', 'a2'] }, blade: {} }
+    let eq: string[] = []
+    const r1 = equipBlade(shop, st, def, roster, eq, 'a1')
+    expect(r1.ok).toBe(true)
+    st = r1.state
+    eq = r1.equipment
+    expect(ids(menu(st), 'p1')).toEqual(['common', 'A'])
+    const r2 = equipBlade(shop, st, def, roster, eq, 'a2')
+    expect(r2.ok).toBe(true)
+    expect(ids(menu(r2.state), 'p1')).toEqual(['common', 'B'])
+  })
+  it('他人の刀・未購入の刀・装備していない刀は出ない（他人はそれぞれ自分の刀）', () => {
+    const st: GearState = { owned: { p1: ['a1', 'a2'], p2: ['b1'] }, blade: { p1: 'a1', p2: 'b1' } }
+    const m = menu(st)
+    expect(ids(m, 'p1')).toEqual(['common', 'A']) // 購入済みでも装備していない a2(B) は出ない
+    expect(ids(m, 'p2')).toEqual(['common', 'C']) // p1 の刀 A・B は p2 に出ない
+    // 他人の刀を装備中と書かれても反映しない／未購入の刀を装備中と書かれても反映しない
+    expect(ids(menu({ owned: { p1: [] }, blade: { p1: 'a1', p2: 'a1' } }), 'p1')).toEqual([
+      'common',
+    ])
+    expect(ids(menu({ owned: { p1: ['a1'] }, blade: { p2: 'a1' } }), 'p2')).toEqual(['common'])
+  })
+  it('刀を装備していない人物は刀のわざが無い・固定のわざだけ（刀しかわざが無ければ skills キーなし）', () => {
+    const m = menu({ owned: {}, blade: {} })
+    expect(ids(m, 'p1')).toEqual(['common'])
+    const only = buildBattleMenu({
+      party,
+      spells: [],
+      items: [],
+      skills: [sk('A')],
+      gear: { shop, state: { owned: {}, blade: {} } },
+    })
+    expect(only).toBeUndefined()
+  })
+  it('gear なし・刀にアビリティの宣言なしは従来と同一', () => {
+    const base = buildBattleMenu({ party, spells: [], items: [], skills })
+    expect(ids(base, 'p1')).toEqual(['common', 'A', 'B', 'C'])
+    const plain: GearShopConfig = {
+      multiplier: 2,
+      entries: [{ id: 'a1', kind: 'blade', owner: 'p1', basePrice: 100 }],
+    }
+    const withGear = buildBattleMenu({
+      party,
+      spells: [],
+      items: [],
+      skills,
+      gear: { shop: plain, state: { owned: { p1: ['a1'] }, blade: { p1: 'a1' } } },
+    })
+    expect(withGear).toEqual(base)
+  })
+  it('セーブ → 再開で装備中の刀のわざが保たれる（持ち替えた後の刀）', () => {
+    const rpgBase = { party: [member('p1')], enemy: () => undefined }
+    const st: GearState = { owned: { p1: ['a1', 'a2'] }, blade: { p1: 'a2' } }
+    const snap = snapshotRpg(
+      { party: [member('p1')], inventory: {}, equipment: { p1: ['a2'] }, gold: 0, gear: st },
+      rpgBase
+    )
+    const parsed = parseRpgSave(JSON.parse(JSON.stringify(snap)))
+    if (!parsed.ok) throw new Error(parsed.error)
+    const resolved = resolveGear(parsed.value.gear, shop, parsed.value.equipment)
+    expect(resolved.warnings).toEqual([])
+    expect(ids(menu(resolved.state), 'p1')).toEqual(['common', 'B'])
+  })
+  it('カーソル記憶: 持ち替えでわざ一覧が短くなり記憶位置が範囲外でも、先頭の選べる行から始まる', () => {
+    const st: GearState = { owned: { p1: ['a1'] }, blade: { p1: 'a1' } }
+    const rows = menu(st)!.skills!.p1 // common, A の 2 行
+    const ctx: MenuContext = {
+      rows: buildMenuRows('skill', rows, party[0]),
+      maxRows: 4,
+      entries: rows,
+      party,
+      enemies: [],
+      actorIndex: 0,
+    }
+    const opened = openList(EMPTY_STACK, 'skill', ctx, 3) // 以前の刀では 4 行目を選んでいた
+    expect(opened[0]).toMatchObject({ type: 'list', cursor: 0 })
+  })
+  it('カーソル記憶: 記憶位置がグレーの行でも使わず、先頭の選べる行から始まる', () => {
+    const rows = [sk('x'), sk('y'), sk('z')]
+    const ctx: MenuContext = {
+      rows: buildMenuRows('skill', rows, party[0]).map((r, i) =>
+        i === 1 ? { ...r, disabled: true } : r
+      ),
+      maxRows: 4,
+      entries: rows,
+      party,
+      enemies: [],
+      actorIndex: 0,
+    }
+    expect(openList(EMPTY_STACK, 'skill', ctx, 1)[0]).toMatchObject({ type: 'list', cursor: 0 })
+    expect(openList(EMPTY_STACK, 'skill', ctx, 2)[0]).toMatchObject({ type: 'list', cursor: 2 })
   })
 })

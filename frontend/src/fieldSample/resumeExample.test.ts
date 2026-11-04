@@ -16,7 +16,11 @@ import demoEnemyListConfig from '../../../docs/guide/examples/demo-enemy-list.co
 import demoEnemyListSave from '../../../docs/guide/examples/demo-enemy-list.save.json?raw'
 import demoStatusesConfig from '../../../docs/guide/examples/demo-statuses.config.json?raw'
 import demoStatusesSave from '../../../docs/guide/examples/demo-statuses.save.json?raw'
+import demoGearConfig from '../../../docs/guide/examples/demo-gear.config.json?raw'
+import demoGearSave from '../../../docs/guide/examples/demo-gear.save.json?raw'
 import manifestText from '../../public/field-sample/sit-character-forms.json?raw'
+import { buildBattleMenu } from './battleMenu'
+import type { GearState } from '../game/gearShop'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 
 const example = JSON.parse(exampleText) as SaveSlotData
@@ -192,6 +196,37 @@ describe('状態異常の確認用設定（#1051 段階3）', () => {
   })
 })
 
+describe('刀のアビリティの確認用設定（#881 段階3）', () => {
+  it('警告なしで読め、セーブ再開で装備中の刀のわざだけが出る。持ち替えで変わる', () => {
+    const m = parseCharacterFormsManifest(JSON.parse(manifestText))
+    if (!m.ok) throw new Error(m.error)
+    const raw = expandCharacterForms(JSON.parse(demoGearConfig), m.value, {}).raw
+    const cfg = parseConfigText(JSON.stringify(raw), 'http://localhost/')
+    if (!cfg.ok) throw new Error(cfg.error)
+    expect(cfg.value.warnings ?? []).toEqual([])
+    const save = JSON.parse(demoGearSave) as SaveSlotData
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, save)
+    const r = loadResume('?resume=0', cfg.value)
+    if (r.kind !== 'ok') throw new Error('resume failed')
+    expect(r.resolved.warnings).toEqual([])
+    const shop = cfg.value.gearShop!
+    const ids = (state: GearState, who: string) =>
+      buildBattleMenu({
+        party: r.resolved.party,
+        spells: [],
+        items: [],
+        skills: cfg.value.skills,
+        gear: { shop, state },
+      })?.skills?.[who]?.map((s) => s.id)
+    const gear = r.resolved.gear!
+    expect(ids(gear, 'party1')).toEqual(['slashA'])
+    expect(ids(gear, 'party2')).toEqual(['slashC'])
+    expect(ids({ ...gear, blade: { ...gear.blade, party1: 'bladeB' } }, 'party1')).toEqual([
+      'slashB',
+    ])
+  })
+})
+
 describe('デモ設定にダミー名を残さない', () => {
   it('demo_* の敵・ゆうしゃ等を使っていない', () => {
     for (const t of [
@@ -199,6 +234,8 @@ describe('デモ設定にダミー名を残さない', () => {
       demoEnemyListSave,
       demoStatusesConfig,
       demoStatusesSave,
+      demoGearConfig,
+      demoGearSave,
     ]) {
       expect(t).not.toMatch(/demo_|ゆうしゃ|まほうつかい/)
     }

@@ -143,6 +143,14 @@ motion とエフェクトは、寺町の実際の設定と実際のセーブで�
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
+## 刀のアビリティの確認（#881 段階3）
+
+装備中の刀のアビリティだけが戦闘の「わざ」に出ることを確かめる。設定 [`demo-gear.config.json`](./examples/demo-gear.config.json)（刀 4 本。ナム（party1）=刀A・刀B・刀D、オットン（party2）=刀C。それぞれ `abilities` に 1 つずつ特技を持ち、特技は全部どれかの刀に割り当て。値段は**仮**。刀 id と持ち主の割り当ては仮で、画像は付けていない）とセーブ [`demo-gear.save.json`](./examples/demo-gear.save.json)（ナム=刀A・刀B を購入済みで刀A を装備、オットン=刀C を購入済みで装備、刀D は未購入、所持金 500）。
+
+- 手順は冒頭の「手順」のとおり（`demo-gear.save.json` を localStorage のスロット 0 に入れ、`field-sample.html?resume=0&config=demo-gear.config.json` を開く）。戦闘中から再開し、コマンドは「たたかう・わざ・どうぐ・にげる」
+- 見えるもの: ナムの「わざ」は「きりさく（刀A）」だけ（購入済みでも装備していない刀B・未購入の刀D のわざ、オットンの刀C のわざは出ない）。オットンは「つらぬく（刀C）」だけ
+- 持ち替えの確認: セーブの `gear.blade.party1` を `bladeB`（と `equipment.party1` を `["bladeB"]`）に書き換えて再度読み込むと、ナムのわざが「なぎはらう（刀B）」に変わる。画面（そうび）での持ち替えは段階2の PR（#1060）のマージ後に確認する（このデモは画面を使わない）
+
 ## 保存先の判断（localStorage のまま・IndexedDB へは移さない）
 
 実測（`frontend/src` の型どおりに組んだ JSON の文字数。localStorage の上限は 1 オリジン 5 MiB ≒ UTF-16 で約 262 万文字を安全側に採用）:

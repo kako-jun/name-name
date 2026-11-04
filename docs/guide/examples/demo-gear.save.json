@@ -1,0 +1,69 @@
+{
+  "slot": 0,
+  "sceneId": null,
+  "eventIndex": 0,
+  "textIndex": 0,
+  "flags": {},
+  "backgroundPath": null,
+  "isBlackout": false,
+  "characters": [],
+  "currentBgmPath": null,
+  "savedAt": "2026-11-04T00:00:00.000Z",
+  "sceneName": "bathhouse",
+  "rpg": {
+    "version": 1,
+    "party": [
+      {
+        "id": "party1",
+        "form": "elementary-wheelchair",
+        "mp": 30
+      },
+      {
+        "id": "party2",
+        "form": "elementary",
+        "mp": 30
+      },
+      {
+        "id": "party3",
+        "mp": 30
+      },
+      {
+        "id": "party4",
+        "mp": 30
+      }
+    ],
+    "items": {},
+    "equipment": {
+      "party1": ["bladeA"],
+      "party2": ["bladeC"]
+    },
+    "gold": 500,
+    "field": {
+      "sceneId": "bathhouse",
+      "x": 768,
+      "y": 716,
+      "facing": "up"
+    },
+    "battle": {
+      "enemies": [
+        {
+          "id": "M147"
+        },
+        {
+          "id": "M149"
+        }
+      ],
+      "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
+    },
+    "gear": {
+      "owned": {
+        "party1": ["bladeA", "bladeB"],
+        "party2": ["bladeC"]
+      },
+      "blade": {
+        "party1": "bladeA",
+        "party2": "bladeC"
+      }
+    }
+  }
+}

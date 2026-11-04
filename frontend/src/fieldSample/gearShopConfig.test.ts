@@ -47,6 +47,41 @@ describe('parseConfig の gearShop (#881)', () => {
   })
 })
 
+describe('parseConfig の gearShop 刀のアビリティの突き合わせ (#881 段階3)', () => {
+  const withShop = (abilities: string[], skillIds: string[]) => ({
+    ...buildDummyFixture(),
+    skills: skillIds.map((id) => ({ id, name: id })),
+    gearShop: {
+      entries: [{ id: 'b1', kind: 'blade', owner: 'party1', basePrice: 100, abilities }],
+    },
+  })
+  const warns = (raw: unknown) => {
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    return r.value.warnings ?? []
+  }
+  it('skills に無い特技を刀が指すと警告', () => {
+    expect(
+      warns(withShop(['ghost'], ['A'])).some(
+        (w) => w.includes('"ghost"') && w.includes('skills に無い')
+      )
+    ).toBe(true)
+  })
+  it('刀のアビリティがあるのにどの刀にも挙がっていない skills は警告', () => {
+    const w = warns(withShop(['A'], ['A', 'B']))
+    expect(w.some((x) => x.includes('"B"') && x.includes('どの刀'))).toBe(true)
+    expect(w.some((x) => x.includes('"A"') && x.includes('どの刀'))).toBe(false)
+  })
+  it('全部割り当て済み・刀にアビリティ無しなら警告なし', () => {
+    expect(
+      warns(withShop(['A', 'B'], ['A', 'B'])).filter(
+        (x) => x.includes('gearShop') || x.includes('どの刀')
+      )
+    ).toEqual([])
+    expect(warns(withShop([], ['A'])).filter((x) => x.includes('どの刀'))).toEqual([])
+  })
+})
+
 describe('parseConfig の battle.currencyName (#881)', () => {
   const withBattle = (currencyName: unknown) => {
     const base = buildDummyFixture() as Record<string, unknown>
