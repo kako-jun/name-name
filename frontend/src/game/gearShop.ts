@@ -7,6 +7,7 @@
  * - 状態 `GearState`（`RpgSaveState.gear`）: `owned`（人物 id → 購入済みの品 id の集合）と `blade`（人物 id → 装備中の刀 id）。
  *   売却なし（購入済みは戻らない）。他人の刀（`owner` が別の人物）は買えず・装備できない。購入解禁は定義側のフラグ `unlockFlag`（解禁前は購入不可＋理由）。
  * - 装備列（`RpgSaveState.equipment`）の計算は `equipment.ts` の `equipItem` を再利用する（`equipBlade`）。ここで重複実装しない。
+ * - 刀の `abilities`（段階3）: 装備中の刀の特技 id だけが戦闘の「わざ」に出る（`skillsForMember`。仕様上は 1 刀 1 アビリティで、配列は一般化）。
  *
  * 売り物の宣言が無いゲーム・メニューを使わないゲームは、この仕組みを通らず従来どおり（セーブにも `gear` キーを書かない）。
  */
@@ -34,7 +35,7 @@ export interface GearEntry {
   unlockFlag?: string
   /** 一覧に出す画像のパス（任意の文字列。sit-by-me の刀マスターから切り出した派生画像を指す想定だが、派生画像は未作成）。省略 = 画像なし（文字のみ）。読み込み・表示は段階2の UI */
   image?: string
-  /** 刀を装備している間だけ戦闘の「わざ」に出る特技の id（設定 JSON の `skills` の id。段階3 #881）。刀だけが持つ（防具は属性防御だけ）。省略 = 刀のアビリティなし */
+  /** 刀を装備している間だけ戦闘の「わざ」に出る特技の id（設定 JSON の `skills` の id。段階3 #881）。刀だけが持つ（防具は属性防御だけ）。省略 = 刀のアビリティなし。仕様上は 1 刀 1 アビリティ（配列は一般化） */
   abilities?: string[]
 }
 
@@ -378,7 +379,7 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /**
- * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image? }] }`。
+ * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, abilities? }] }`。
  * 不正な項目は警告して捨てる。`gearShop` が無い（undefined / false / null）はキーなし＝従来どおり。
  * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
  */

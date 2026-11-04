@@ -6,6 +6,7 @@ import { equipBlade, resolveGear, type GearShopConfig, type GearState } from '..
 import type { EquipmentRoster } from '../game/equipment'
 import type { ItemDef } from '../types'
 import { parseRpgSave, snapshotRpg } from '../game/rpgSave'
+import { EMPTY_STACK, buildMenuRows, openList, type MenuContext } from '../game/battleMenu'
 
 const member = (id: string): BattleEntity => ({
   id,
@@ -184,12 +185,7 @@ describe('buildBattleMenu: 装備中の刀のアビリティ (#881 段階3)', ()
     expect(withGear).toEqual(base)
   })
   it('セーブ → 再開で装備中の刀のわざが保たれる（持ち替えた後の刀）', () => {
-    const rpgBase = {
-      party: [member('p1')],
-      items: [],
-      equipment: {},
-      gold: 0,
-    } as unknown as Parameters<typeof snapshotRpg>[1]
+    const rpgBase = { party: [member('p1')], enemy: () => undefined }
     const st: GearState = { owned: { p1: ['a1', 'a2'] }, blade: { p1: 'a2' } }
     const snap = snapshotRpg(
       { party: [member('p1')], inventory: {}, equipment: { p1: ['a2'] }, gold: 0, gear: st },
@@ -200,5 +196,19 @@ describe('buildBattleMenu: 装備中の刀のアビリティ (#881 段階3)', ()
     const resolved = resolveGear(parsed.value.gear, shop, parsed.value.equipment)
     expect(resolved.warnings).toEqual([])
     expect(ids(menu(resolved.state), 'p1')).toEqual(['common', 'B'])
+  })
+  it('カーソル記憶: 持ち替えでわざ一覧が短くなり記憶位置が範囲外でも、先頭の選べる行から始まる', () => {
+    const st: GearState = { owned: { p1: ['a1'] }, blade: { p1: 'a1' } }
+    const rows = menu(st)!.skills!.p1 // common, A の 2 行
+    const ctx: MenuContext = {
+      rows: buildMenuRows('skill', rows, party[0]),
+      maxRows: 4,
+      entries: rows,
+      party,
+      enemies: [],
+      actorIndex: 0,
+    }
+    const opened = openList(EMPTY_STACK, 'skill', ctx, 3) // 以前の刀では 4 行目を選んでいた
+    expect(opened[0]).toMatchObject({ type: 'list', cursor: 0 })
   })
 })
