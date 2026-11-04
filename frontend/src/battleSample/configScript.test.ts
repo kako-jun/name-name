@@ -1,4 +1,4 @@
-/** 戦闘サンプルの設定 JSON の `script` (#741 / #863) と、同梱の脚本サンプル 4 本の通しの確認 */
+/** 戦闘設定 JSON の `script` (#741 / #863) と、同梱の脚本サンプル 4 本の通しの確認 */
 import { describe, expect, it } from 'vitest'
 import { BattleEngine } from '../game/battleEngine'
 import {
@@ -9,13 +9,13 @@ import {
   parseConfigText,
   type BattleSampleConfig,
 } from './config'
-import loseEvent from '../../public/battle-sample/scripted-lose-event.json?raw'
-import interrupt from '../../public/battle-sample/scripted-interrupt.json?raw'
-import revive from '../../public/battle-sample/scripted-revive.json?raw'
-import flee from '../../public/battle-sample/scripted-flee.json?raw'
-import force from '../../public/battle-sample/scripted-force.json?raw'
+import loseEvent from './__fixtures__/scripted-lose-event.json?raw'
+import interrupt from './__fixtures__/scripted-interrupt.json?raw'
+import revive from './__fixtures__/scripted-revive.json?raw'
+import flee from './__fixtures__/scripted-flee.json?raw'
+import force from './__fixtures__/scripted-force.json?raw'
 
-const BASE = 'https://example.com/battle-sample/x.json'
+const BASE = 'https://example.com/battle/x.json'
 
 function parse(text: string): BattleSampleConfig {
   const r = parseConfigText(text, BASE)

@@ -49,7 +49,7 @@
 
 ## 5. 検証
 
-- 純粋関数（`loot.ts`）・DSL（`spellDslSteal.test.ts`）・エンジン（`battleEngineLoot.test.ts`）・配線（`fieldBattleLoot.test.ts`）・サンプル設定（`public/battle-sample/loot.json`）
+- 純粋関数（`loot.ts`）・DSL（`spellDslSteal.test.ts`）・エンジン（`battleEngineLoot.test.ts`）・配線（`fieldBattleLoot.test.ts`）・サンプル設定（`frontend/src/battleSample/__fixtures__/loot.json`）
 - 検証ハーネスの族 `loot`（`steal` の全パラメータ × 敵の宣言 × 使い手の加算 × 敵の HP × ターン制/ATB）と不変条件 `loot-invariant`（宣言した品だけ・枠の印・盗めた回数の上限・個数・ドロップは勝利のみ・順序）。`HARNESS_SKIP=loot` で既存族の `report.md` / `failures.json` が従来とバイト一致
 
 ## 6. 段階2 以降（#831 に残す）

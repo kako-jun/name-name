@@ -1,6 +1,6 @@
-/** 戦闘画面サンプルの設定 JSON の装備 (#207): `gear` / `party[].equipment` / `party[].equipmentSlots` / `party[].abilities` */
+/** 戦闘設定 JSON の装備 (#207): `gear` / `party[].equipment` / `party[].equipmentSlots` / `party[].abilities` */
 import { describe, it, expect } from 'vitest'
-import equipmentSample from '../../public/battle-sample/equipment.json?raw'
+import equipmentSample from './__fixtures__/equipment.json?raw'
 import {
   buildBattleSetup,
   defaultConfig,
@@ -186,9 +186,9 @@ describe('party[] の装備の反映', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/equipment.json (#207)', () => {
+describe('同梱の例 __fixtures__/equipment.json (#207)', () => {
   const load = () => {
-    const r = parseConfigText(equipmentSample, 'https://example.com/battle-sample/equipment.json')
+    const r = parseConfigText(equipmentSample, 'https://example.com/battle/equipment.json')
     if (!r.ok) throw new Error(r.error)
     return r.value
   }

@@ -1,9 +1,9 @@
-/** 戦闘画面サンプルの設定 JSON のエフェクト重ね (#936): effects の検証（不正は警告して無視）、URL 解決、未宣言で従来と同一 */
+/** 戦闘設定 JSON のエフェクト重ね (#936): effects の検証（不正は警告して無視）、URL 解決、未宣言で従来と同一 */
 import { describe, expect, it, vi } from 'vitest'
 import { BattleEngine } from '../game/battleEngine'
 import { planEventEffects } from '../game/battleEffects'
 import type { BattleSummonEntry } from '../game/battleMenu'
-import effectsSample from '../../public/battle-sample/effects.json?raw'
+import effectsSample from './__fixtures__/effects.json?raw'
 import {
   buildBattleSetup,
   initialView,
@@ -78,7 +78,7 @@ describe('effects: 設定 JSON', () => {
 
   it('同梱サンプル effects.json は ok で 5 種類すべてを宣言している（宣言の確認。実際に出るかは次のテスト）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const r = parseConfigText(effectsSample, 'http://localhost:7374/battle-sample/effects.json')
+    const r = parseConfigText(effectsSample, 'http://localhost:7374/battle/effects.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(Object.keys(r.value.effects).sort()).toEqual([
@@ -94,7 +94,7 @@ describe('effects: 設定 JSON', () => {
   })
 
   it('同梱サンプルの召喚: 魔石の召喚獣で summon が実際に出る行動を起こせる（ATB オンで なぐり も行動する）', () => {
-    const r = parseConfigText(effectsSample, 'http://localhost:7374/battle-sample/effects.json')
+    const r = parseConfigText(effectsSample, 'http://localhost:7374/battle/effects.json')
     if (!r.ok) throw new Error('parse')
     const setup = buildBattleSetup(r.value, initialView(r.value))
     expect(setup.atb).toBeDefined()

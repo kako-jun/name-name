@@ -1,6 +1,6 @@
-/** 戦闘画面サンプルの設定 JSON の `statuses` (#870) */
+/** 戦闘設定 JSON の `statuses` (#870) */
 import { describe, it, expect } from 'vitest'
-import statusSample from '../../public/battle-sample/status-effects.json?raw'
+import statusSample from './__fixtures__/status-effects.json?raw'
 import {
   buildBattleSetup,
   defaultConfig,
@@ -73,9 +73,9 @@ describe('statuses の読み込み', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/status-effects.json (#870)', () => {
+describe('同梱の例 __fixtures__/status-effects.json (#870)', () => {
   it('parseConfigText で読め、状態 5 種・状態を付ける呪文と特技・メテオが入っている', () => {
-    const r = parseConfigText(statusSample, 'https://example.com/battle-sample/status-effects.json')
+    const r = parseConfigText(statusSample, 'https://example.com/battle/status-effects.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(Object.keys(r.value.statuses)).toEqual([
@@ -90,7 +90,7 @@ describe('同梱の例 public/battle-sample/status-effects.json (#870)', () => {
   })
 
   it('例のゾンビ + メテオ: ゾンビになった味方は全滅級の攻撃で回復し、ならなかった味方は倒れる', () => {
-    const r = parseConfigText(statusSample, 'https://example.com/battle-sample/status-effects.json')
+    const r = parseConfigText(statusSample, 'https://example.com/battle/status-effects.json')
     if (!r.ok) throw new Error(r.error)
     const setup = buildBattleSetup(r.value, initialView(r.value))
     const [hero, mage] = setup.party
