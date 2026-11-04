@@ -226,6 +226,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     const aliveBefore = engine.getState().enemies.map((e) => e.hp > 0)
     // 敵のレベル (#898): 操作前の HP とレベルを控える
     const before = engine.getState().enemies.map((e) => ({ hp: e.hp, level: e.level }))
+    const logBefore = engine.getState().logTotal
     alive = step(
       i,
       () => applyOp(engine, scenario, op),
@@ -237,7 +238,16 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
           ? (fresh) => checkEnemyRow(scenario, fresh, i)
           : spell && op.t === 'spell' && scenario.checkEnemyLevel
             ? (fresh) => checkEnemyLevel(spell, op.target, before, engine.getState(), fresh, i)
-            : undefined
+            : op.t === 'ability' && scenario.checkJobConversion
+              ? (fresh) =>
+                  checkJobConversion(
+                    scenario.abilities?.[op.k],
+                    logBefore,
+                    engine.getState(),
+                    fresh,
+                    i
+                  )
+              : undefined
     )
     metrics.opsRun = i + 1
   }
@@ -375,6 +385,42 @@ function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
 
 function describe(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+}
+
+/**
+ * ジョブの変換 (#876) の不変条件。わざの 1 回の行動（味方の `skill` イベントのうちラベルがわざの名前のもの）が出た操作だけ見る。
+ * その行動のログに「(〇〇ジョブの 効果)」が、変換した特技（`convertedBy` あり）なら名前つきでちょうど 1 回、変換していない特技なら 0 回出る
+ */
+function checkJobConversion(
+  ability: { name: string; convertedBy?: string } | undefined,
+  logBefore: number,
+  after: Readonly<BattleState>,
+  fresh: readonly BattleActionEvent[],
+  opIndex: number
+): Violation[] {
+  if (!ability) return []
+  if (
+    !fresh.some(
+      (ev) => ev.kind === 'skill' && ev.actor.side === 'party' && ev.label === ability.name
+    )
+  ) {
+    return []
+  }
+  const added = after.logTotal - logBefore
+  const lines = after.log
+    .slice(-Math.min(added, after.log.length))
+    .filter((l) => l.includes('ジョブの 効果'))
+  const want = ability.convertedBy ? [`(${ability.convertedBy}ジョブの 効果)`] : []
+  if (JSON.stringify(lines) !== JSON.stringify(want)) {
+    return [
+      {
+        kind: 'job-conversion-invariant',
+        detail: `${ability.name}（変換${ability.convertedBy ? 'あり' : 'なし'}）のログの「ジョブの 効果」が ${JSON.stringify(lines)}（期待 ${JSON.stringify(want)}）`,
+        opIndex,
+      },
+    ]
+  }
+  return []
 }
 
 /**

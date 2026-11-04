@@ -50,6 +50,8 @@ import type {
 } from './battleMenu'
 import { applyMemberMagicite, summonEntries } from './magicite'
 import { resolveMemberEquipment, type EquipmentRoster } from './equipment'
+import { resolveMemberJob } from './job'
+import { convertForJob } from './jobConversion'
 import {
   battleTransitionParams,
   isBattleTransitionEnabled,
@@ -187,6 +189,9 @@ export function buildBattleMenuData(
   const spells: Record<string, BattleSpellEntry[]> = {}
   const skills: Record<string, BattleSkillEntry[]> = {}
   const summons: Record<string, BattleSummonEntry[]> = {}
+  /** 味方の現在のジョブ (#876)。ジョブを持たない・解決できない味方は undefined（従来と同一） */
+  const jobOf = (d: PartyMemberDef) =>
+    roster.jobs || roster.currentJobs ? resolveMemberJob(d, roster).job : undefined
   for (const member of party) {
     const def = roster.party[member.id]
     // 装備 (#207 / #889): 装備中の魔石とアイテム。何も宣言していないゲームでは空
@@ -206,11 +211,16 @@ export function buildBattleMenuData(
       for (const id of abilityIds) {
         const sk = Object.prototype.hasOwnProperty.call(sm, id) ? sm[id] : undefined
         if (!sk || sl.some((e) => e.id === sk.id)) continue
+        // ジョブの変換 (#876): 就いているジョブの変換ルールがこのタグの効果に効くときだけ、効果を変換して印を付ける
+        const conv = def
+          ? convertForJob(jobOf(def), sk.tags, sk.effect, `特技 '${sk.id}'`)
+          : undefined
         sl.push({
           id: sk.id,
           name: sk.name,
           target: sk.target,
-          ...(sk.effect !== undefined ? { effect: sk.effect } : {}),
+          ...(conv ? { effect: conv.effect, convertedBy: conv.convertedBy } : {}),
+          ...(!conv && sk.effect !== undefined ? { effect: sk.effect } : {}),
           ...(sk.builtin !== undefined ? { builtin: sk.builtin } : {}),
           ...(sk.message !== undefined ? { message: sk.message } : {}),
           ...(sk.telegraph !== undefined ? { telegraph: sk.telegraph } : {}),
@@ -225,13 +235,15 @@ export function buildBattleMenuData(
     for (const l of def.learns) {
       const sp = Object.prototype.hasOwnProperty.call(master, l.spell) ? master[l.spell] : undefined
       if (!sp || l.level > level || list.some((e) => e.id === sp.id)) continue
+      const conv = convertForJob(jobOf(def), sp.tags, sp.effect, `呪文 '${sp.id}'`)
       list.push({
         id: sp.id,
         name: sp.name,
         mp: sp.mp,
         target: sp.target,
         ...(sp.multiTarget === true ? { multiTarget: true } : {}),
-        ...(sp.effect !== undefined ? { effect: sp.effect } : {}),
+        ...(conv ? { effect: conv.effect, convertedBy: conv.convertedBy } : {}),
+        ...(!conv && sp.effect !== undefined ? { effect: sp.effect } : {}),
         ...(sp.builtin !== undefined ? { builtin: sp.builtin } : {}),
       })
     }

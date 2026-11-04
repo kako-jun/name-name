@@ -20,6 +20,7 @@ import { resolveSummonRefs, warnSummonOnce } from '../game/summons'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { toSkillExecutions } from '../game/enemyAi'
 import { parseBattleScript } from '../game/battleScript'
+import { convertForJob } from '../game/jobConversion'
 import {
   DEPTH_DEFAULT_HORIZON,
   normalizeBattleRow,
@@ -167,6 +168,8 @@ export interface BattleSampleConfig {
   gear: Record<string, ItemDef>
   /** ジョブの宣言 (#740)。設定 JSON の `jobs`（`[ジョブ]` と同じキー）。`party[].jobs` が就けるジョブ、`party[].job` が現在のジョブ。既定は空 */
   jobs: Record<string, JobDef>
+  /** 味方 id → 就いているジョブ (#876)。呪文の候補にもジョブの変換ルールを当てる。ジョブを持たない味方は入らない。既定は空 */
+  memberJobs: Record<string, JobDef>
   /** 味方の「わざ」の行 (#207)（味方 id → 行）。`party[].abilities` と装備中の `gear` の `abilities` から、`skills` を引いて作る。既定は空 */
   abilities: Record<string, BattleSkillEntry[]>
   /** 戦利品のログ用の表示名 (#831)。設定 JSON の `itemNames`（アイテム id → 名前）。既定は空（id をそのまま表示） */
@@ -307,6 +310,7 @@ export function defaultConfig(): BattleSampleConfig {
     gear: {},
     jobs: {},
     abilities: {},
+    memberJobs: {},
     itemNames: {},
     script: null,
     effects: {},
@@ -612,6 +616,7 @@ function parseSkills(
         ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
         ...(typeof r.message === 'string' ? { message: r.message } : {}),
         ...(typeof r.telegraph === 'string' ? { telegraph: r.telegraph } : {}),
+        ...(tagsOf(r.tags) ? { tags: tagsOf(r.tags) } : {}),
         // 召喚獣の参照 (#750)。`beasts` を引き当てる前の印で、解決後の特技には演出の元（cue）が付く
         ...(typeof r.summonId === 'string' && r.summonId.trim() !== ''
           ? { summonId: r.summonId.trim() }
@@ -679,6 +684,15 @@ function parseStatuses(raw: unknown): ParseResult<Record<string, StatusDef>> {
   return { ok: true, value: Object.fromEntries(entries) }
 }
 
+/** 設定 JSON の `tags`（文字列の配列）(#876)。空・文字列の配列でない値は無し */
+function tagsOf(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const tags = raw
+    .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+    .map((t) => t.trim())
+  return tags.length > 0 ? tags : undefined
+}
+
 /** 設定 JSON の spells / items (#204) と skills（わざ、#873。MP なし・`target` は特技の相対表現で既定 `相手単体`）を検証する。`name` は必須、`id` 省略は連番、`effect` / `builtin` は文字列 */
 export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | BattleSkillEntry>(
   raw: unknown,
@@ -732,6 +746,8 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
         target: typeof r.target === 'string' ? r.target : '敵単体',
         // 全体化 (#895): `multiTarget: true` の呪文だけ対象窓で「全体」に切り替えられる（マスターの `全体化: 可` と同じ）
         ...(r.multiTarget === true ? { multiTarget: true } : {}),
+        // タグ (#876)。ジョブの変換ルールの目印
+        ...(tagsOf(r.tags) ? { tags: tagsOf(r.tags) } : {}),
       } as T)
     } else {
       out.push({
@@ -1045,6 +1061,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
       gear: gear.value,
       jobs: jobs.value,
       abilities: equipped.value.skills,
+      memberJobs: equipped.value.jobs,
       itemNames,
       script: script.value,
       effects: effects.effects,
@@ -1240,7 +1257,11 @@ export function buildBattleSetup(
         spells: Object.fromEntries(
           [...party, ...Object.values(config.script?.joiners ?? {})].map((p) => [
             p.id,
-            config.spells.map((e) => ({ ...e })),
+            // ジョブの変換 (#876): 就いているジョブがこのタグの効果に効くときだけ、効果を変換して印を付ける
+            config.spells.map((e) => ({
+              ...e,
+              ...(convertForJob(config.memberJobs[p.id], e.tags, e.effect, `呪文 '${e.id}'`) ?? {}),
+            })),
           ])
         ),
         items: config.items.map((e) => ({ ...e })),

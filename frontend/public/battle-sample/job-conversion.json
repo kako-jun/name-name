@@ -1,0 +1,57 @@
+{
+  "layout": "side",
+  "presentation": "dq",
+  "commands": ["attack", "skill", "spell", "escape"],
+  "jobs": [
+    {
+      "id": "thief",
+      "name": "盗賊",
+      "conversions": ["ぬすむ => 回数=2", "火 => 回数=2"]
+    }
+  ],
+  "skills": [
+    {
+      "id": "steal1",
+      "name": "ぬすむ",
+      "target": "相手単体",
+      "effect": "steal",
+      "tags": ["ぬすむ"]
+    }
+  ],
+  "spells": [
+    {
+      "id": "fire",
+      "name": "ほのお",
+      "mp": 3,
+      "target": "敵単体",
+      "effect": "damage 20..20 type=fire",
+      "tags": ["火"]
+    }
+  ],
+  "party": [
+    {
+      "id": "hero",
+      "name": "ゆうしゃ",
+      "hp": 999,
+      "mp": 30,
+      "atk": 10,
+      "def": 4,
+      "agi": 50,
+      "jobs": ["thief"],
+      "job": "thief",
+      "abilities": ["steal1"]
+    }
+  ],
+  "enemies": [
+    {
+      "id": "slime",
+      "name": "スライム",
+      "hp": 30,
+      "atk": 1,
+      "def": 0,
+      "agi": 1,
+      "loot": { "steal": ["potion"], "stealLimit": "5" }
+    }
+  ],
+  "itemNames": { "potion": "ポーション" }
+}

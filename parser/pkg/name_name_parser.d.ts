@@ -158,6 +158,11 @@ export interface JobDef {
      * このジョブの間だけ持つ属性防御の属性 id（`属性:`。parser が小文字・半角に正規化済み・重複排除済み）。最大 2 つ。
      */
     elements?: string[];
+    /**
+     * 変換ルール (#876。`変換: ぬすむ => 回数=2`)。書いた順の生文字列（`<タグ> => <効果の修飾トークン>`）で、解釈と不正な行の警告は runtime（`jobConversion.ts`）。
+     * このジョブの間、そのタグの特技・呪文の効果にトークンを足す・上書きする。書かないジョブは None（従来どおり）。
+     */
+    conversions?: string[];
 }
 
 /**
@@ -425,6 +430,11 @@ export interface SpellDef {
      * 書かない・`不可` は偽（従来どおり）。
      */
     multiTarget?: boolean;
+    /**
+     * タグ (#876。`タグ: ぬすむ, 物理`)。ジョブの変換ルール（`[ジョブ]` の `変換:`）が「このタグの特技・呪文」に当てるための目印で、
+     * それ以外の意味は無い。カンマ区切り・複数行可・重複なし。書かない呪文は None（タグ無し＝従来どおり）。
+     */
+    tags?: string[];
 }
 
 /**
@@ -502,6 +512,10 @@ export interface SkillDef {
      * 特技が自分の `効果`/`builtin` を持たないときは、召喚獣の中身を使う。解決は runtime（`summons.ts`）。JSON / TS 側のキーは `summonId`。
      */
     summonId?: string;
+    /**
+     * タグ (#876。`タグ: ぬすむ`)。`SpellDef.tags` と同じ。書かない特技は None。
+     */
+    tags?: string[];
 }
 
 /**

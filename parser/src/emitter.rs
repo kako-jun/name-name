@@ -1333,6 +1333,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(b) = &sp.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
+                if let Some(t) = &sp.tags {
+                    out.push_str(&format!("タグ: {}\n", t.join(", ")));
+                }
                 out.push_str("[/呪文]\n");
                 prev_was_dialog_or_text = false;
             }
@@ -1357,6 +1360,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(v) = &sk.summon_id {
                     out.push_str(&format!("召喚獣id: {v}\n"));
+                }
+                if let Some(t) = &sk.tags {
+                    out.push_str(&format!("タグ: {}\n", t.join(", ")));
                 }
                 out.push_str("[/特技]\n");
                 prev_was_dialog_or_text = false;
@@ -1477,6 +1483,11 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(v) = &j.equip_bonus {
                     out.push_str(&format!("装備時: {v}\n"));
+                }
+                if let Some(c) = &j.conversions {
+                    for line in c {
+                        out.push_str(&format!("変換: {line}\n"));
+                    }
                 }
                 out.push_str("[/ジョブ]\n");
                 prev_was_dialog_or_text = false;
@@ -2370,6 +2381,7 @@ mod tests {
             builtin: Some("zaraki".to_string()),
             school: None,
             multi_target: false,
+            tags: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[呪文 ザラキ]"));
@@ -2390,9 +2402,12 @@ mod tests {
             builtin: None,
             school: None,
             multi_target: true,
+            tags: Some(vec!["火".to_string(), "魔法".to_string()]),
         }));
         let out = emit(&doc);
-        assert!(out.contains("対象: 敵単体\n全体化: 可\n効果: damage 8..14\n[/呪文]"));
+        assert!(
+            out.contains("対象: 敵単体\n全体化: 可\n効果: damage 8..14\nタグ: 火, 魔法\n[/呪文]")
+        );
     }
 
     #[test]
@@ -2406,6 +2421,7 @@ mod tests {
             message: Some("{user}は 墨を はいた！".to_string()),
             telegraph: None,
             summon_id: Some("ink_beast".to_string()),
+            tags: Some(vec!["ぬすむ".to_string()]),
         }));
         let out = emit(&doc);
         assert!(out.contains("[特技 ink]"));
@@ -2413,7 +2429,7 @@ mod tests {
         assert!(out.contains("対象: 相手全体"));
         assert!(out.contains("効果: damage 3..5"));
         assert!(out.contains("メッセージ: {user}は 墨を はいた！"));
-        assert!(out.contains("召喚獣id: ink_beast\n[/特技]"));
+        assert!(out.contains("召喚獣id: ink_beast\nタグ: ぬすむ\n[/特技]"));
         assert!(!out.contains("MP:"));
         assert!(out.contains("[/特技]"));
     }
@@ -2426,10 +2442,14 @@ mod tests {
             description: Some("守りに強い".to_string()),
             equip_bonus: Some("def+3".to_string()),
             elements: vec!["water".to_string()],
+            conversions: Some(vec![
+                "ぬすむ => 回数=2".to_string(),
+                "火 => type=fire".to_string(),
+            ]),
         }));
         let out = emit(&doc);
         assert!(out.contains(
-            "[ジョブ nurse]\n名前: 看護師\n説明: 守りに強い\n属性: water\n装備時: def+3\n[/ジョブ]"
+            "[ジョブ nurse]\n名前: 看護師\n説明: 守りに強い\n属性: water\n装備時: def+3\n変換: ぬすむ => 回数=2\n変換: 火 => type=fire\n[/ジョブ]"
         ));
     }
 
