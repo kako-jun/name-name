@@ -5,6 +5,7 @@ import {
   buildMenuRows,
   cancel,
   confirm,
+  cursorMemoryKey,
   isReviveEntry,
   menuHint,
   menuKeyAction,
@@ -509,5 +510,28 @@ describe('menuHint: 常に出す操作の案内 (#806)', () => {
     expect(short).not.toBe('')
     expect(short.length).toBeLessThan(long.length)
     expect(menuHint(list, true, () => false)).toBe('')
+  })
+})
+
+describe('カーソル記憶（#880）', () => {
+  it('cursorMemoryKey は味方の id と窓の種類', () => {
+    expect(cursorMemoryKey('hero', 'spell')).toBe('hero:spell')
+    expect(cursorMemoryKey('hero', 'item')).not.toBe(cursorMemoryKey('hero', 'spell'))
+  })
+  it('preferred が範囲内で選べる行ならそこから開く', () => {
+    const st = openList(EMPTY_STACK, 'spell', ctxOf(), 2)
+    expect(st[0]).toMatchObject({ type: 'list', cursor: 2 })
+  })
+  it('範囲外・グレーの行・非整数・負は記憶を使わず最初に選べる行', () => {
+    const ctx = ctxOf()
+    const first = (openList(EMPTY_STACK, 'spell', ctx)[0] as { cursor: number }).cursor
+    for (const p of [99, -1, 1.5, NaN, undefined]) {
+      expect((openList(EMPTY_STACK, 'spell', ctx, p)[0] as { cursor: number }).cursor).toBe(first)
+    }
+    const disabled = ctxOf({
+      rows: ctx.rows.map((r, i) => (i === 1 ? { ...r, disabled: true } : r)),
+    })
+    const f2 = (openList(EMPTY_STACK, 'spell', disabled)[0] as { cursor: number }).cursor
+    expect((openList(EMPTY_STACK, 'spell', disabled, 1)[0] as { cursor: number }).cursor).toBe(f2)
   })
 })

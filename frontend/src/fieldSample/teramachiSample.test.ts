@@ -272,3 +272,31 @@ describe('寺町サンプルの人物・敵（#1020）', () => {
     expect(s.value.player.idleFrame).toBe(1)
   })
 })
+
+describe('せってい（#880）の上書きが戦闘のオプションへ渡る', () => {
+  const load = () => {
+    const r = parseConfig(JSON.parse(sampleText), 'http://localhost/field-sample/')
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  it('ATB の戦闘だけ mode と speed を上書きする。等倍の speed は渡さない', () => {
+    const b = load().battle
+    expect(buildBattleEngineOptions(b, { atbMode: 'active', atbSpeed: 2 }).atb).toEqual({
+      mode: 'active',
+      speed: 2,
+    })
+    expect(buildBattleEngineOptions(b, { atbSpeed: 1 }).atb).toEqual({ mode: 'wait' })
+    expect(buildBattleEngineOptions(b, undefined).atb).toEqual({ mode: 'wait' })
+  })
+  it('ターン制（atb なし）には上書きを渡さない', () => {
+    expect(
+      buildBattleEngineOptions({ layout: 'side' }, { atbMode: 'active', atbSpeed: 2 })
+    ).toEqual({})
+  })
+  it('cursorMemory は渡したときだけ BattleScreen のオプションへ', () => {
+    const b = load().battle
+    const mem = new Map<string, number>()
+    expect(buildBattleScreenOptions(b, { cursorMemory: mem }).cursorMemory).toBe(mem)
+    expect('cursorMemory' in buildBattleScreenOptions(b, {})).toBe(false)
+  })
+})

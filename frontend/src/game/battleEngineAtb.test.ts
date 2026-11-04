@@ -861,3 +861,34 @@ describe('呪文の target の前後の空白 (#204)', () => {
     expect(e.getState().enemies.every((x) => x.hp === 995)).toBe(true)
   })
 })
+
+describe('ATB: 速さの倍率 speed（#880 バトルスピード）', () => {
+  it('speed 2 は AGI5 が 2500ms で満タン（倍速）・0.5 は 10000ms', () => {
+    const fast = mk([hero('a', { agi: 5 })], [foe('s')], { speed: 2 })
+    fast.tick(2499)
+    expect(atbOf(fast).queue).toEqual([])
+    fast.tick(1)
+    expect(atbOf(fast).queue).toEqual([0])
+    const slow = mk([hero('a', { agi: 5 })], [foe('s')], { speed: 0.5 })
+    slow.tick(9999)
+    expect(atbOf(slow).queue).toEqual([])
+    slow.tick(1)
+    expect(atbOf(slow).queue).toEqual([0])
+  })
+  it('未指定・0・負・NaN・文字列は等倍（5000ms）', () => {
+    for (const speed of [undefined, 0, -3, NaN, 'x' as unknown as number]) {
+      const e = mk([hero('a', { agi: 5 })], [foe('s')], { speed })
+      e.tick(4999)
+      expect(atbOf(e).queue).toEqual([])
+      e.tick(1)
+      expect(atbOf(e).queue).toEqual([0])
+    }
+  })
+  it('範囲外は 0.1〜10 に収める（1000 は 10 倍 = 500ms）', () => {
+    const e = mk([hero('a', { agi: 5 })], [foe('s')], { speed: 1000 })
+    e.tick(499)
+    expect(atbOf(e).queue).toEqual([])
+    e.tick(1)
+    expect(atbOf(e).queue).toEqual([0])
+  })
+})

@@ -2220,3 +2220,57 @@ describe('設定 JSON: ジョブの変換 (#876)', () => {
     expect(r.ok).toBe(false)
   })
 })
+
+describe('parseMenuList: 全画面メニュー用の任意項目（#880）', () => {
+  it('items: description・category・fieldUse・key を読む。無ければキー自体を出さない', () => {
+    const r = parseMenuList(
+      [
+        { name: 'a', description: '説', category: 'heal', fieldUse: true, key: true },
+        { name: 'b' },
+      ],
+      [],
+      'items'
+    )
+    expect(r).toEqual({
+      ok: true,
+      value: [
+        {
+          id: 'items-1',
+          name: 'a',
+          description: '説',
+          category: 'heal',
+          fieldUse: true,
+          key: true,
+        },
+        { id: 'items-2', name: 'b' },
+      ],
+    })
+  })
+  it('spells: description・fieldUse を読む（category・key は読まない）', () => {
+    const r = parseMenuList(
+      [{ name: 'a', description: '説', fieldUse: false, category: 'x', key: true }],
+      [],
+      'spells'
+    )
+    expect(r).toEqual({
+      ok: true,
+      value: [
+        { id: 'spells-1', name: 'a', mp: 0, target: '敵単体', description: '説', fieldUse: false },
+      ],
+    })
+  })
+  it('key: false・空の description は出さない', () => {
+    const r = parseMenuList([{ name: 'a', key: false, description: '' }], [], 'items')
+    expect(r).toEqual({ ok: true, value: [{ id: 'items-1', name: 'a' }] })
+  })
+  it.each([
+    ['description が数値', { name: 'a', description: 1 }, /description/],
+    ['category が数値', { name: 'a', category: 1 }, /category/],
+    ['fieldUse が文字列', { name: 'a', fieldUse: 'yes' }, /fieldUse/],
+    ['key が文字列', { name: 'a', key: 'yes' }, /key/],
+  ])('不正（%s）はエラー', (_n, entry, re) => {
+    const r = parseMenuList([entry], [], 'items')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(re)
+  })
+})
