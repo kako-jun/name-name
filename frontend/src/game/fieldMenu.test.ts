@@ -671,7 +671,7 @@ describe('画面種の既定', () => {
     expect(DEFAULT_FIELD_MENU_ITEMS.map((d) => screenKindOfItem(d))).toEqual([
       'item',
       'party-list',
-      'party-list',
+      'equip',
       'appstore',
       'party-list',
       'party-list',

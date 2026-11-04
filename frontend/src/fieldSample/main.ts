@@ -113,7 +113,7 @@ import {
   resolveNpcCommands,
   type FieldScriptEvents,
 } from '../game/fieldScript'
-import { hasOwn } from '../game/ownProperty'
+import { hasOwn, safeAssign } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
   DIAGONAL_FACINGS,
@@ -145,16 +145,24 @@ import {
   resumeBattleEngineOptions,
 } from './fieldResume'
 import { SaveManager } from '../game/SaveManager'
-import { FieldMenuScreen, drawMenuButton, type FieldMenuPartyView } from '../game/FieldMenuScreen'
+import {
+  FieldMenuScreen,
+  MENU_FONT_FAMILY,
+  MENU_FONT_SAMPLE,
+  drawMenuButton,
+  type FieldMenuPartyView,
+} from '../game/FieldMenuScreen'
 import { TimeLimitLayer } from '../game/TimeLimitLayer'
-import { placeNameOf } from '../game/fieldMenu'
+import { formatInfoBand, placeNameOf } from '../game/fieldMenu'
 import { FieldMenuHost } from '../game/fieldMenuHost'
 import { FieldMenuRuntime } from '../game/fieldMenuRuntime'
 import { applySettings } from '../game/fieldSettings'
 import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
-import { resolveGear } from '../game/gearShop'
+import { resolveGear, type GearState } from '../game/gearShop'
+import { ensureFontLoaded } from '../game/FontLoader'
+import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
@@ -698,7 +706,7 @@ async function main(): Promise<void> {
         .filter(Boolean)
         .join('\n')
     )
-  const gear = gearResolved?.state
+  let gear = gearResolved?.state
   const equipment: Record<string, string[]> = gearResolved?.equipment
     ? structuredClone(gearResolved.equipment)
     : resumed
@@ -1163,10 +1171,9 @@ async function main(): Promise<void> {
     if (!url) return Promise.resolve(null)
     let p = partyTextures.get(url)
     if (!p) {
-      p = loadBitmap(url).then(
-        (b) => Texture.from(b),
-        () => null
-      )
+      p = loadBitmap(url)
+        .then((b) => Texture.from(b))
+        .catch(() => null)
       partyTextures.set(url, p)
     }
     return p
@@ -1204,6 +1211,29 @@ async function main(): Promise<void> {
             inventory = inv
           },
           getEquipment: () => equipment,
+          // アプリストア・そうび (#881)。売り物の定義があるゲームだけ（購入・持ち替えの結果は gear・gold・equipment の正本へ戻す）
+          ...(config.gearShop && gear
+            ? {
+                gear: {
+                  cfg: config.gearShop,
+                  getState: () => gear as GearState,
+                  setState: (s: GearState) => {
+                    gear = s
+                  },
+                  getGold: () => gold,
+                  setGold: (g: number) => {
+                    gold = g
+                  },
+                  getFlags: () => flags,
+                  setEquipment: (member: string, list: string[]) => {
+                    safeAssign(equipment, member, list)
+                  },
+                  ...(config.battle.currencyName
+                    ? { currencyName: config.battle.currencyName }
+                    : {}),
+                },
+              }
+            : {}),
           onSettingsChanged: applyMenuSettings,
         },
         resumed?.menu
@@ -1251,6 +1281,20 @@ async function main(): Promise<void> {
             releaseWalkInput()
             approach = null
             emotionLayer?.clear()
+            // 文字の幅の計測（OffscreenCanvas）と描画（ページの lang=ja を受ける canvas）が、未ロードの総称フォント（sans-serif）だと
+            // 食い違って情報帯の末尾が切れるので、メニューの文字フォントを先に読む。失敗（オフライン）は握る（従来の表示のまま）
+            // 上限つき（応答が返らない回線でメニューが開かなくならないよう、超えたら従来の表示で開く）。
+            // 固定の見本に、そのとき出す情報帯の字（現在地名・通貨名・数字記号）を足して、字の分割ファイルまで読む
+            const bandText = formatInfoBand(menuInfo()) + (config.battle.currencyName ?? '')
+            await loadMenuFont(
+              {
+                ensure: ensureFontLoaded,
+                load: (font, text) => document.fonts?.load(font, text) ?? Promise.resolve(),
+              },
+              MENU_FONT_FAMILY,
+              MENU_FONT_SAMPLE,
+              bandText
+            )
             const party: FieldMenuPartyView[] = await Promise.all(
               partyState.map(async (p) => ({
                 id: p.id,
@@ -1267,8 +1311,21 @@ async function main(): Promise<void> {
               }))
             )
             const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
+            // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む
+            const images: Record<string, Texture | null> = {}
+            // 上限つき（応答が返らない画像で開かなくならないよう、超えたら読めた分だけで開く）
+            await waitUpTo(
+              Promise.all(
+                (config.gearShop?.entries ?? []).map(async (e) => {
+                  if (e.image !== undefined)
+                    safeAssign(images, e.image, await partyTexture(e.image))
+                })
+              ),
+              MENU_IMAGE_TIMEOUT_MS
+            )
             return {
               party,
+              images,
               slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
                 slotSummary(saved[i] ?? null)
               ),

@@ -17,11 +17,20 @@ export interface Rect {
   h: number
 }
 
-export type ScreenKind = 'item' | 'party-list' | 'appstore' | 'status' | 'save' | 'config' | 'empty'
+export type ScreenKind =
+  | 'item'
+  | 'party-list'
+  | 'equip'
+  | 'appstore'
+  | 'status'
+  | 'save'
+  | 'config'
+  | 'empty'
 
 export const SCREEN_KINDS: readonly ScreenKind[] = [
   'item',
   'party-list',
+  'equip',
   'appstore',
   'status',
   'save',
@@ -29,16 +38,22 @@ export const SCREEN_KINDS: readonly ScreenKind[] = [
   'empty',
 ]
 
+/** アプリストアのどれかのタブが人物別の一覧（`entriesByParty`。空オブジェクトは「無い」）を持つか。持つときだけ人物の切り替え（帯・上下キー・案内）を出す */
+export function appstoreHasParty(content: Pick<ResolvedContent, 'tabs'>): boolean {
+  return content.tabs.some((t) => Object.keys(t.entriesByParty ?? {}).length > 0)
+}
+
 /** 既定の項目 id → 画面の種類。それ以外の id（定義側が足した項目）は `empty`（`kind` で指定できる） */
 export function defaultScreenKind(id: string): ScreenKind {
   switch (id) {
     case 'item':
       return 'item'
     case 'magic':
-    case 'equip':
     case 'magicite':
     case 'job':
       return 'party-list'
+    case 'equip':
+      return 'equip'
     case 'appstore':
       return 'appstore'
     case 'status':
@@ -64,8 +79,10 @@ export interface MenuEntry {
   enabled?: boolean
   /** 説明バーに出す文 */
   description?: string
-  /** 実行時の元データへの対応（所持品・魔法の id）。使う処理（`onUse`）へ渡る */
+  /** 実行時の元データへの対応（所持品・魔法・店の品の id）。使う処理（`onUse`）へ渡る */
   id?: string
+  /** 一覧に小さく出す画像の URL（アプリストアの品）。省略・読み込み失敗は文字だけ */
+  image?: string
   /**
    * 使うときの対象の取り方。`single` = 左のパーティから1人選ぶ / `all` = 全員（選ばない）/ `self` = 使い手本人（選ばない）。
    * 未指定は従来どおり（まほう等では選んでも説明バーの通知だけ。どうぐの「つかう」は `single`）
@@ -78,6 +95,8 @@ export interface MenuTab {
   label: string
   entries: MenuEntry[]
   action?: MenuTabAction
+  /** 人物ごとの一覧（人物の id → entries）。アプリストアの刀のように、タブの中身が選んだ人物で変わるとき。無い人物は `entries` */
+  entriesByParty?: Record<string, MenuEntry[]>
 }
 /** ステータス画面に足す1行（固有素質など、定義側が人物ごとに差し込む） */
 export interface StatusRow {
@@ -102,6 +121,8 @@ export interface FieldMenuContentDef {
   options?: MenuOption[]
   /** 人物ごとのステータス画面の追加行（人物の id → 行）。無い項目は出さない */
   statusByParty?: Record<string, StatusRow[]>
+  /** そうび画面の見出し行（人物の id → 行。2 枠の現在の装備）。実状態から作る値で、定義 JSON には書かない */
+  headerByParty?: Record<string, StatusRow[]>
 }
 
 export interface ResolvedContent {
@@ -112,6 +133,7 @@ export interface ResolvedContent {
   entriesByParty: Record<string, MenuEntry[]>
   options: MenuOption[]
   statusByParty: Record<string, StatusRow[]>
+  headerByParty: Record<string, StatusRow[]>
 }
 
 /** 「せってい」の既定項目（wireframe §3-5。ウィンドウ色は固定なので無い）。値の実効化は呼び出し側 */
@@ -135,9 +157,13 @@ export const SAVE_SLOT_COUNT = 3
 /** 画面に並べる人物の枠の最大数（wireframe: 4人配置固定）。それ以上は選択も表示も先頭からここまで */
 export const MAX_PARTY_SLOTS = 4
 
+/** 人物別の一覧を持つアプリストアの既定の説明（人物の切り替えの案内を常に出す） */
+const APPSTORE_PARTY_DESCRIPTION = 'アプリを選んでください（上下 / ◀前・次▶: 人物の切り替え）'
+
 const DEFAULT_DESCRIPTION: Record<ScreenKind, string> = {
   item: 'つかう・せいとん・たいせつなもの から選びます',
   'party-list': '人物を選んでください',
+  equip: 'そうびを変える人物を選んでください',
   appstore: 'アプリを選んでください',
   status: '人物ごとの能力を見ます',
   save: 'セーブするスロットを選んでください',
@@ -174,12 +200,17 @@ export function resolveContent(
         : []
   return {
     kind,
-    description: def?.description ?? (DEFAULT_DESCRIPTION[kind] || label),
+    description:
+      def?.description ??
+      (kind === 'appstore' && appstoreHasParty({ tabs })
+        ? APPSTORE_PARTY_DESCRIPTION
+        : DEFAULT_DESCRIPTION[kind] || label),
     tabs,
     entries: def?.entries ?? [],
     entriesByParty: def?.entriesByParty ?? {},
     options,
     statusByParty: def?.statusByParty ?? {},
+    headerByParty: def?.headerByParty ?? {},
   }
 }
 
@@ -214,6 +245,7 @@ export function parseContentDef(
       if (x.enabled === false) entry.enabled = false
       if (typeof x.description === 'string') entry.description = x.description
       if (typeof x.id === 'string') entry.id = x.id
+      if (typeof x.image === 'string' && x.image) entry.image = x.image
       if (x.target === 'single' || x.target === 'all' || x.target === 'self')
         entry.target = x.target
       list.push(entry)
@@ -350,6 +382,7 @@ export function baseFocus(kind: ScreenKind): NavFocus {
     case 'appstore':
       return 'tab'
     case 'party-list':
+    case 'equip':
     case 'status':
       return 'party'
     default:
@@ -423,13 +456,26 @@ const wrap = (i: number, n: number): number => (n <= 0 ? 0 : ((i % n) + n) % n)
 
 /** その画面で現在の一覧の行（item / appstore はタブの中身、party-list・empty は entries） */
 export function listEntries(ctx: ScreenCtx, nav: ScreenNav): MenuEntry[] {
-  const c = ctx.content
-  if (c.kind === 'item' || c.kind === 'appstore') return c.tabs[nav.tab]?.entries ?? []
-  if (c.kind === 'party-list') {
-    const id = ctx.partyIds?.[nav.party]
-    if (id !== undefined && Object.prototype.hasOwnProperty.call(c.entriesByParty, id))
-      return c.entriesByParty[id]
+  return entriesAt(ctx.content, ctx.partyIds, nav.tab, nav.party)
+}
+
+/** 一覧の行（タブと人物の位置から）。アプリストアはタブの人物別の一覧（`MenuTab.entriesByParty`）、人物を選ぶ画面は `entriesByParty` を引く */
+function entriesAt(
+  c: ResolvedContent,
+  partyIds: readonly string[] | undefined,
+  tab: number,
+  party: number
+): MenuEntry[] {
+  const id = partyIds?.[party]
+  const has = (o: Record<string, MenuEntry[]> | undefined): o is Record<string, MenuEntry[]> =>
+    id !== undefined && o !== undefined && Object.prototype.hasOwnProperty.call(o, id)
+  if (c.kind === 'item' || c.kind === 'appstore') {
+    const t = c.tabs[tab]
+    if (c.kind === 'appstore' && has(t?.entriesByParty)) return t.entriesByParty[id as string]
+    return t?.entries ?? []
   }
+  if ((c.kind === 'party-list' || c.kind === 'equip') && has(c.entriesByParty))
+    return c.entriesByParty[id as string]
   return c.entries
 }
 
@@ -498,7 +544,11 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
     if (!e) return { nav: n, effect: 'notice', notice: NOTHING }
     if (e.enabled === false)
       return { nav: n, effect: 'notice', notice: e.description ?? 'いまは選べません' }
-    if (k === 'appstore') return { nav: { ...n, focus: 'confirm', confirm: 0 }, effect: 'moved' }
+    // 買う確認の既定は「やめる」（誤タップで買わない）
+    if (k === 'appstore') return { nav: { ...n, focus: 'confirm', confirm: 1 }, effect: 'moved' }
+    // そうび: 選んだ人物の品へ持ち替える（確認なし。防具は装備中を選ぶと外す）。使い手 = 選んだ人物
+    if (k === 'equip')
+      return { nav: n, effect: 'use', use: { tab: n.tab, list: n.list, caster: n.party } }
     const kind = k === 'item' ? tabAction(ctx.content, n.tab) : undefined
     // 使い手は、どうぐは居ない（-1）、まほうは選んだ人物
     const caster = k === 'item' ? -1 : n.party
@@ -531,7 +581,12 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
         save: n.list,
         notice: `スロット${n.list + 1}に上書きしました`,
       }
-    return { nav: { ...n, focus: 'list' }, effect: 'notice', notice: '購入の処理はまだありません' }
+    // 購入。実処理は呼び出し側（`onUse`。`caster` = 買う人物）
+    return {
+      nav: { ...n, focus: 'list' },
+      effect: 'use',
+      use: { tab: n.tab, list: n.list, caster: n.party },
+    }
   }
   return { nav: { ...n, focus: 'list' }, effect: 'moved' }
 }
@@ -542,11 +597,7 @@ export function entryForUse(
   partyIds: readonly string[] | undefined,
   use: ScreenUse
 ): MenuEntry | undefined {
-  if (content.kind === 'item') return content.tabs[use.tab]?.entries[use.list]
-  const id = partyIds?.[use.caster]
-  if (id !== undefined && Object.prototype.hasOwnProperty.call(content.entriesByParty, id))
-    return content.entriesByParty[id][use.list]
-  return content.entries[use.list]
+  return entriesAt(content, partyIds, use.tab, use.caster)[use.list]
 }
 
 /** 一覧の中身が変わった（所持数が減った・並べ替えた）あとの選択位置の収め直し。一覧の範囲に収める */
@@ -576,6 +627,18 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
         : { nav: { ...nav, confirm: wrap(nav.confirm + (d < 0 ? -1 : 1), 2) }, effect: 'moved' }
     }
     if (nav.focus === 'tab') {
+      // アプリストアは上下で人物を切り替える（人物ごとに一覧が違う。画面の人物の行に案内を常に出す）
+      if (
+        k === 'appstore' &&
+        appstoreHasParty(ctx.content) &&
+        dx === 0 &&
+        dy !== 0 &&
+        ctx.partyCount > 0
+      )
+        return {
+          nav: { ...nav, party: wrap(nav.party + (dy < 0 ? -1 : 1), ctx.partyCount), list: 0 },
+          effect: 'moved',
+        }
       const d = dx !== 0 ? dx : 0
       if (d === 0 || ctx.content.tabs.length === 0) return { nav, effect: 'none' }
       return {
@@ -623,9 +686,18 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
     return decideConfirm(ctx, { ...nav, confirm: index })
   }
   if (target === 'prev' || target === 'next') {
-    if (k !== 'status' || ctx.partyCount === 0) return { nav, effect: 'none' }
+    if (
+      (k !== 'status' && !(k === 'appstore' && appstoreHasParty(ctx.content))) ||
+      ctx.partyCount === 0
+    )
+      return { nav, effect: 'none' }
     return {
-      nav: { ...nav, party: wrap(nav.party + (target === 'prev' ? -1 : 1), ctx.partyCount) },
+      nav: {
+        ...nav,
+        party: wrap(nav.party + (target === 'prev' ? -1 : 1), ctx.partyCount),
+        // アプリストアは人物が変わると一覧が変わるので先頭へ戻す
+        ...(k === 'appstore' ? { list: 0 } : {}),
+      },
       effect: 'moved',
     }
   }
@@ -639,7 +711,8 @@ export function stepScreen(nav: ScreenNav, ev: ScreenEvent, ctx: ScreenCtx): Scr
       return decideConfirm(ctx, { ...nav, target: index })
     }
     const ok =
-      (k === 'party-list' && (nav.focus === 'party' || nav.focus === 'list')) || k === 'status'
+      ((k === 'party-list' || k === 'equip') && (nav.focus === 'party' || nav.focus === 'list')) ||
+      k === 'status'
     if (!ok || index < 0 || index >= ctx.partyCount) return { nav, effect: 'none' }
     if (k === 'status') return { nav: { ...nav, party: index }, effect: 'moved' }
     return decideConfirm(ctx, { ...nav, focus: 'party', party: index })
@@ -685,8 +758,10 @@ export interface ScreenLayout {
   rowStart: number
   /** 確認窓の外枠と選択肢 */
   confirm: { frame: Rect; message: Rect; options: Rect[] } | null
-  /** ステータスの前・次ボタン */
-  statusNav: { prev: Rect; next: Rect } | null
+  /** ステータス・アプリストアの人物の前・次ボタン（アプリストアは中央に人物名の枠 `label` も） */
+  statusNav: { prev: Rect; next: Rect; label: Rect } | null
+  /** そうび画面の見出し行（2 枠の現在の装備）の矩形。そうび以外は空 */
+  header: Rect[]
   /** 文字の大きさ (px) */
   fonts: { row: number; desc: number; tab: number; small: number }
 }
@@ -704,6 +779,10 @@ export interface ScreenLayoutInput {
   confirmOpen: boolean
   /** 前回の一覧の見える先頭（カーソルが範囲内ならそのまま保つ。省略は 0） */
   prevRowStart?: number
+  /** そうび画面の見出し行の数（一覧の上に並べる。省略は 0） */
+  headerCount?: number
+  /** アプリストアが人物別の一覧を持つか（人物の切り替え帯を出す）。省略は false */
+  perParty?: boolean
 }
 
 /** 見える先頭 index。カーソルが常に範囲に入るよう、必要最小限だけ送る */
@@ -730,7 +809,7 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
   const descX = 0.02 + reserveW
   const desc: Rect = { x: X(descX), y: Y(0.02), w: (0.98 - descX) * W, h: 0.08 * H }
   const bottom = 0.9
-  const hasParty = kind === 'item' || kind === 'party-list'
+  const hasParty = kind === 'item' || kind === 'party-list' || kind === 'equip'
   const rightX = hasParty ? 0.35 : 0.02
   const rightW = 0.98 - rightX
   const hasTabs = kind === 'item' || kind === 'appstore'
@@ -756,11 +835,18 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
   }
   const rowH = (kind === 'save' ? 0.16 : kind === 'config' ? 0.09 : 0.07) * H
   const pad = 0.015 * H
-  const visible = Math.max(1, Math.floor((primary.h - pad * 2) / rowH))
+  // 一覧の上に取る帯: アプリストアは人物の切り替え行、そうびは 2 枠の見出し行
+  const headerN = kind === 'equip' ? Math.max(0, Math.floor(i.headerCount ?? 0)) : 0
+  const personBar = kind === 'appstore' && i.perParty === true
+  const topBand = personBar ? 0.09 * H : headerN > 0 ? headerN * rowH + pad : 0
+  const header: Rect[] = []
+  for (let h = 0; h < headerN; h++)
+    header.push({ x: primary.x, y: primary.y + pad + h * rowH, w: primary.w, h: rowH })
+  const visible = Math.max(1, Math.floor((primary.h - pad * 2 - topBand) / rowH))
   const rowStart = scrollStart(i.listCount, i.cursor, visible, i.prevRowStart ?? 0)
   const rows: Rect[] = []
   for (let r = 0; r < Math.min(visible, Math.max(0, i.listCount - rowStart)); r++)
-    rows.push({ x: primary.x, y: primary.y + pad + r * rowH, w: primary.w, h: rowH })
+    rows.push({ x: primary.x, y: primary.y + pad + topBand + r * rowH, w: primary.w, h: rowH })
   let confirm: ScreenLayout['confirm'] = null
   if (i.confirmOpen) {
     const cw = 0.4 * W
@@ -774,13 +860,19 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
     }
   }
   const statusNav =
-    kind === 'status'
+    kind === 'status' || personBar
       ? {
           prev: { x: primary.x + 0.01 * W, y: primary.y + 0.01 * H, w: 0.12 * W, h: 0.08 * H },
           next: {
             x: primary.x + primary.w - 0.13 * W,
             y: primary.y + 0.01 * H,
             w: 0.12 * W,
+            h: 0.08 * H,
+          },
+          label: {
+            x: primary.x + 0.14 * W,
+            y: primary.y + 0.01 * H,
+            w: primary.w - 0.28 * W,
             h: 0.08 * H,
           },
         }
@@ -794,6 +886,7 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
     rowStart,
     confirm,
     statusNav,
+    header,
     fonts: { row: 0.04 * H, desc: 0.04 * H, tab: 0.036 * H, small: 0.03 * H },
   }
 }

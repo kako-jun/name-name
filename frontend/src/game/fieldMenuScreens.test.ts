@@ -6,9 +6,11 @@ import { describe, expect, it } from 'vitest'
 import { timeLimitRect } from './fieldTimeLimit'
 import {
   SAVE_SLOT_COUNT,
+  appstoreHasParty,
   baseFocus,
   clampNav,
   computeScreenLayout,
+  defaultScreenKind,
   entryForUse,
   initialNav,
   listCount,
@@ -523,16 +525,19 @@ describe('stepScreen: 決定', () => {
     )
     expect(noParty.effect).toBe('notice')
   })
-  it('appstore の有効行は確認窓（買う=0）→ はいで購入未実装の通知、いいえで一覧', () => {
+  it('appstore の有効行は確認窓（既定は「やめる」）→ 買うで購入要求、やめるで一覧', () => {
     const c = ctx('appstore', { tabs: [{ label: 'a', entries: [E('刀')] }] })
-    const r = stepScreen(nav('appstore', { focus: 'list' }), { type: 'confirm' }, c)
-    expect(r.nav).toMatchObject({ focus: 'confirm', confirm: 0 })
-    const yes = stepScreen(r.nav, { type: 'confirm' }, c)
-    expect(yes.nav.focus).toBe('list')
-    expect(yes.notice).toBe('購入の処理はまだありません')
-    const no = stepScreen({ ...r.nav, confirm: 1 }, { type: 'confirm' }, c)
+    const r = stepScreen(nav('appstore', { focus: 'list', party: 1 }), { type: 'confirm' }, c)
+    expect(r.nav).toMatchObject({ focus: 'confirm', confirm: 1 })
+    // 既定のまま決定 = やめる（購入しない）
+    const no = stepScreen(r.nav, { type: 'confirm' }, c)
     expect(no.effect).toBe('moved')
     expect(no.nav.focus).toBe('list')
+    // 「買う」を選んで決定: 買う人物（caster = 選んだ人物の index）つきの要求
+    const yes = stepScreen({ ...r.nav, confirm: 0 }, { type: 'confirm' }, c)
+    expect(yes.nav.focus).toBe('list')
+    expect(yes.effect).toBe('use')
+    expect(yes.use).toEqual({ tab: 0, list: 0, caster: 1 })
   })
   it('appstore の無効行は確認窓を開かない', () => {
     const c = ctx('appstore', { tabs: [{ label: 'a', entries: [E('刀', { enabled: false })] }] })
@@ -859,5 +864,209 @@ describe('一覧のスクロール位置の保持（prevRowStart）', () => {
     const vis = lay({}).rows.length
     expect(lay({ cursor: 5, prevRowStart: 3 }).rowStart).toBe(3)
     expect(lay({ cursor: 3 + vis, prevRowStart: 3 }).rowStart).toBe(4)
+  })
+})
+
+describe('アプリストア（#881 段階2）: 人物ごとの一覧・人物の切り替え', () => {
+  const tabs = [
+    {
+      label: '刀',
+      entries: [],
+      entriesByParty: {
+        a: [E('正宗', { id: 'm' })],
+        b: [E('村正', { id: 'v' }), E('菊一', { id: 'k' })],
+      },
+    },
+    { label: '防具', entries: [E('赤糸威', { id: 'r' })] },
+  ]
+  const c = () => ctx('appstore', { tabs }, { partyIds: ['a', 'b'] })
+
+  it('一覧は選んだ人物の分（人物別が無いタブは共通の entries）', () => {
+    expect(listEntries(c(), nav('appstore', { party: 0 })).map((e) => e.label)).toEqual(['正宗'])
+    expect(listEntries(c(), nav('appstore', { party: 1 })).map((e) => e.label)).toEqual([
+      '村正',
+      '菊一',
+    ])
+    expect(listEntries(c(), nav('appstore', { tab: 1, party: 1 })).map((e) => e.label)).toEqual([
+      '赤糸威',
+    ])
+    expect(listCount(c(), nav('appstore', { party: 1 }))).toBe(2)
+  })
+  it('タブにいるとき上下で人物が回り、一覧は先頭に戻る', () => {
+    const r = stepScreen(
+      nav('appstore', { focus: 'tab', list: 1 }),
+      { type: 'move', dx: 0, dy: 1 },
+      c()
+    )
+    expect(r.nav).toMatchObject({ party: 1, list: 0, focus: 'tab' })
+    const back = stepScreen(r.nav, { type: 'move', dx: 0, dy: 1 }, c())
+    expect(back.nav.party).toBe(0)
+    const up = stepScreen(nav('appstore', { focus: 'tab' }), { type: 'move', dx: 0, dy: -1 }, c())
+    expect(up.nav.party).toBe(1)
+  })
+  it('左右はタブの切り替えのまま（人物は変えない）', () => {
+    const r = stepScreen(
+      nav('appstore', { focus: 'tab', party: 1 }),
+      { type: 'move', dx: 1, dy: 0 },
+      c()
+    )
+    expect(r.nav).toMatchObject({ tab: 1, party: 1 })
+  })
+  it('前・次ボタンで人物が変わり、一覧は先頭へ。人物が 0 人なら何も起きない', () => {
+    const r = stepScreen(
+      nav('appstore', { focus: 'list', list: 1 }),
+      { type: 'select', target: 'next', index: 0 },
+      c()
+    )
+    expect(r.nav).toMatchObject({ party: 1, list: 0 })
+    const none = stepScreen(
+      nav('appstore'),
+      { type: 'select', target: 'next', index: 0 },
+      { ...c(), partyCount: 0 }
+    )
+    expect(none.effect).toBe('none')
+  })
+  it('人物を切り替えると別の人物の刀に買う要求が向く（entryForUse）', () => {
+    const cc = c()
+    expect(entryForUse(cc.content, ['a', 'b'], { tab: 0, list: 1, caster: 1 })?.label).toBe('菊一')
+    expect(entryForUse(cc.content, ['a', 'b'], { tab: 0, list: 0, caster: 0 })?.label).toBe('正宗')
+    expect(entryForUse(cc.content, ['a', 'b'], { tab: 0, list: 1, caster: 0 })).toBeUndefined()
+  })
+  it('前・次の人物の切り替えと人物名の枠を含むレイアウト。一覧は人物の行の下から始まる', () => {
+    const l = computeScreenLayout({
+      kind: 'appstore',
+      base: { x: 0, y: 0, w: 1920, h: 1080 },
+      partyCount: 2,
+      tabCount: 2,
+      listCount: 3,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+      perParty: true,
+    })
+    expect(l.statusNav).not.toBeNull()
+    expect(l.rows[0].y).toBeGreaterThanOrEqual(l.statusNav!.prev.y + l.statusNav!.prev.h)
+    expect(l.statusNav!.label.w).toBeGreaterThan(0)
+    expect(l.party).toEqual([])
+  })
+})
+
+describe('そうび（#881 段階2）', () => {
+  const content = {
+    entriesByParty: { a: [E('正宗', { id: 'm' })], b: [] },
+    headerByParty: { a: [{ label: 'スマホ（刀）', value: '正宗' }] },
+  }
+  const c = () => ctx('equip', content, { partyIds: ['a', 'b'] })
+  it('画面種は equip・既定は人物選択から', () => {
+    expect(defaultScreenKind('equip')).toBe('equip')
+    expect(baseFocus('equip')).toBe('party')
+    expect(resolveContent('x', 'equip', content).headerByParty.a).toHaveLength(1)
+    expect(resolveContent('x', 'equip', undefined).headerByParty).toEqual({})
+  })
+  it('人物を選ぶと人物の一覧になり、一覧で決定すると選んだ人物への持ち替え要求', () => {
+    const toList = stepScreen(nav('equip', { party: 0 }), { type: 'confirm' }, c())
+    expect(toList.nav.focus).toBe('list')
+    expect(listEntries(c(), toList.nav).map((e) => e.label)).toEqual(['正宗'])
+    const use = stepScreen(toList.nav, { type: 'confirm' }, c())
+    expect(use.effect).toBe('use')
+    expect(use.use).toEqual({ tab: 0, list: 0, caster: 0 })
+  })
+  it('一覧が空の人物では決定しても「なにもありません」', () => {
+    const r = stepScreen(nav('equip', { party: 1, focus: 'list' }), { type: 'confirm' }, c())
+    expect(r.effect).toBe('notice')
+  })
+  it('人物の枠の 1 タップで人物を選んで一覧へ', () => {
+    const r = stepScreen(nav('equip'), { type: 'select', target: 'party', index: 1 }, c())
+    expect(r.nav).toMatchObject({ focus: 'list', party: 1 })
+  })
+  it('レイアウトは人物の枠＋見出し行。一覧は見出し行の下から始まる', () => {
+    const l = computeScreenLayout({
+      kind: 'equip',
+      base: { x: 0, y: 0, w: 1920, h: 1080 },
+      partyCount: 2,
+      tabCount: 0,
+      listCount: 2,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+      headerCount: 2,
+    })
+    expect(l.party).toHaveLength(2)
+    expect(l.header).toHaveLength(2)
+    expect(l.rows[0].y).toBeGreaterThanOrEqual(l.header[1].y + l.header[1].h)
+    const none = computeScreenLayout({
+      kind: 'equip',
+      base: { x: 0, y: 0, w: 1920, h: 1080 },
+      partyCount: 2,
+      tabCount: 0,
+      listCount: 2,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+    })
+    expect(none.header).toEqual([])
+  })
+  it('画像のパスは entries の parse で通る（文字列だけ）', () => {
+    const w: string[] = []
+    const out = parseContentDef(
+      {
+        entries: [
+          { label: 'x', image: 'a.png' },
+          { label: 'y', image: 3 },
+        ],
+      },
+      'c',
+      w
+    )
+    expect(out?.entries?.[0].image).toBe('a.png')
+    expect(out?.entries?.[1].image).toBeUndefined()
+  })
+})
+
+describe('アプリストアの人物の切り替えは、人物別の一覧があるときだけ (#881 レビュー)', () => {
+  const flat = () =>
+    ctx(
+      'appstore',
+      { tabs: [{ label: '刀', entries: [E('はがねの刀')] }] },
+      { partyIds: ['a', 'b'] }
+    )
+  it('人物別が無い（静的な一覧）では上下キー・前次ボタンで人物は変わらず、既定の説明に案内を足さない', () => {
+    const c = flat()
+    expect(appstoreHasParty(c.content)).toBe(false)
+    expect(c.content.description).toBe('アプリを選んでください')
+    const up = stepScreen(nav('appstore', { focus: 'tab' }), { type: 'move', dx: 0, dy: 1 }, c)
+    expect(up.effect).toBe('none')
+    const next = stepScreen(nav('appstore'), { type: 'select', target: 'next', index: 0 }, c)
+    expect(next.effect).toBe('none')
+  })
+  it('人物別が無いレイアウトは帯を出さず、一覧は従来の位置（上端の続き）から始まる', () => {
+    const base = {
+      kind: 'appstore' as const,
+      base: { x: 0, y: 0, w: 1920, h: 1080 },
+      partyCount: 2,
+      tabCount: 2,
+      listCount: 3,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+    }
+    const flatL = computeScreenLayout(base)
+    expect(flatL.statusNav).toBeNull()
+    const perL = computeScreenLayout({ ...base, perParty: true })
+    expect(perL.statusNav).not.toBeNull()
+    expect(flatL.rows[0].y).toBeLessThan(perL.rows[0].y)
+  })
+  it('人物別があれば案内つきの既定の説明', () => {
+    const c = ctx('appstore', { tabs: [{ label: '刀', entries: [], entriesByParty: { a: [] } }] })
+    expect(appstoreHasParty(c.content)).toBe(true)
+    expect(c.content.description).toContain('人物の切り替え')
+  })
+})
+
+describe('appstoreHasParty: 空オブジェクトは「無い」 (#881)', () => {
+  it('entriesByParty が {} だけなら人物別ではない', () => {
+    const c = ctx('appstore', { tabs: [{ label: '刀', entries: [], entriesByParty: {} }] })
+    expect(appstoreHasParty(c.content)).toBe(false)
+    expect(c.content.description).toBe('アプリを選んでください')
   })
 })

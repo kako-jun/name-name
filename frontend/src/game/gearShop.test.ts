@@ -333,6 +333,41 @@ describe('parseGearShopConfig', () => {
       unlockFlag: 'phone',
     })
   })
+  it('equipBonus (#881 段階2): 文字列が読まれ、読めない項目・不正な型は警告する（能力値は仮）', () => {
+    const r = parseGearShopConfig({
+      entries: [
+        { id: 'a', kind: 'blade', owner: 'p', equipBonus: ' atk+5, def-1 ' },
+        { id: 'b', kind: 'blade', owner: 'p' },
+        { id: 'c', kind: 'blade', owner: 'p', equipBonus: 5 },
+        { id: 'd', kind: 'armor', equipBonus: 'xxx+1' },
+        { id: 'e', kind: 'armor', equipBonus: '' },
+      ],
+    })
+    const [a, b, c, d, e] = r.value!.entries
+    expect(a.equipBonus).toBe('atk+5, def-1')
+    expect('equipBonus' in b).toBe(false)
+    expect('equipBonus' in c).toBe(false)
+    expect(d.equipBonus).toBe('xxx+1')
+    expect('equipBonus' in e).toBe(false)
+    expect(r.warnings.some((w) => w.includes('entries[2].equipBonus は文字列'))).toBe(true)
+    expect(r.warnings.some((w) => w.includes('entries[3].equipBonus') && w.includes('xxx+1'))).toBe(
+      true
+    )
+    expect(r.warnings.some((w) => w.includes('entries[4].equipBonus は文字列'))).toBe(true)
+  })
+  it('name・lockedMessage (#881 レビュー): 読まれ、空・不正は警告して無視', () => {
+    const r = parseGearShopConfig({
+      entries: [
+        { id: 'a', kind: 'armor', name: ' 赤糸威 ', lockedMessage: '香林坊で' },
+        { id: 'b', kind: 'armor', name: '', lockedMessage: 3 },
+      ],
+    })
+    const [a, b] = r.value!.entries
+    expect(a).toMatchObject({ name: '赤糸威', lockedMessage: '香林坊で' })
+    expect('name' in b).toBe(false)
+    expect('lockedMessage' in b).toBe(false)
+    expect(r.warnings.filter((w) => w.includes('entries[1]'))).toHaveLength(2)
+  })
   it('画像: image が読まれ、無ければキーなし・不正は警告して画像なし。別名 画像 は読まない', () => {
     const r = parseGearShopConfig({
       entries: [

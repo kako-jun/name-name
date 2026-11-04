@@ -22,10 +22,32 @@ import {
   type LiveRpg,
 } from './fieldMenuLive'
 import { buildConfigOptions, normalizeSettings } from './fieldSettings'
+import { safeAssign } from './ownProperty'
 import { DEFAULT_CONFIG_OPTIONS, type MenuOption } from './fieldMenuScreens'
 import type { AtbMode } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { RpgMenuState } from './rpgSave'
+import { changeGear, purchase, type GearMenuContext, type MemberDefLike } from './gearMenu'
+import type { GearShopConfig, GearState } from './gearShop'
+
+/** 刀・防具の購入・持ち替えの接続 (#881)。`gearShop` を設定したゲームだけ渡す。正本（状態・所持金・装備列）は呼び出し側 */
+export interface FieldMenuGearDeps {
+  cfg: GearShopConfig
+  getState(): GearState
+  setState(state: GearState): void
+  getGold(): number
+  setGold(gold: number): void
+  /** 解禁フラグの現在値 */
+  getFlags(): Readonly<Record<string, boolean>>
+  /** 人物の装備列を書き換える（持ち替えの結果） */
+  setEquipment(member: string, equipment: string[]): void
+  /** 通貨名（設定の `battle.currencyName`。省略は「円」） */
+  currencyName?: string
+  /** 人物 id → 人物の定義（`equipmentSlots` など。装備の枠の計算に使う）。省略・無い人物は既定の枠 */
+  memberDefs?(): Readonly<Record<string, MemberDefLike>>
+  /** 店の外の装備の id → 種別（武器・防具・盾・兜）。装備列の店の外の品を同じ種類の枠に数える。省略は数えない */
+  otherKinds?(): Readonly<Record<string, string>>
+}
 
 export interface FieldMenuRuntimeDeps {
   menu: FieldMenuConfig
@@ -41,6 +63,8 @@ export interface FieldMenuRuntimeDeps {
   getInventory(): Record<string, number>
   setInventory(inv: Record<string, number>): void
   getEquipment(): Record<string, string[]>
+  /** 刀・防具の売り物と購入・持ち替え (#881)。無いゲームは渡さない（アプリストア・そうびは枠だけ） */
+  gear?: FieldMenuGearDeps
   /** 設定が変わったあとに呼ぶ（会話窓の速さなど、すぐ反映するもの） */
   onSettingsChanged?(settings: Readonly<Record<string, number>>): void
   rng?: () => number
@@ -73,8 +97,35 @@ export class FieldMenuRuntime {
     return Object.keys(out).length > 0 ? out : undefined
   }
 
-  private rpg(): LiveRpg {
+  /** アプリストア・そうびの入力（売り物の定義があるときだけ） */
+  private gearCtx(): GearMenuContext | undefined {
+    const g = this.d.gear
+    if (!g) return undefined
+    const names: Record<string, string> = {}
+    const descriptions: Record<string, string> = {}
+    for (const it of this.d.items) {
+      safeAssign(names, it.id, it.name)
+      if (it.description) safeAssign(descriptions, it.id, it.description)
+    }
     return {
+      cfg: g.cfg,
+      state: g.getState(),
+      gold: g.getGold(),
+      flags: g.getFlags(),
+      names,
+      descriptions,
+      ...(g.currencyName ? { currencyName: g.currencyName } : {}),
+      ...(g.memberDefs ? { defs: g.memberDefs() } : {}),
+      ...(g.otherKinds ? { otherKinds: g.otherKinds() } : {}),
+      equipment: this.d.getEquipment(),
+      members: this.d.getParty().map((p) => p.id),
+    }
+  }
+
+  private rpg(): LiveRpg {
+    const gear = this.gearCtx()
+    return {
+      ...(gear ? { gear } : {}),
       party: this.d.getParty(),
       items: this.d.items,
       inventory: this.d.getInventory(),
@@ -125,6 +176,26 @@ export class FieldMenuRuntime {
   use(req: FieldUseRequest): FieldUseOutcome | null {
     const def = this.d.menu.items.find((i) => i.id === req.screen)
     if (!def || req.entryId === undefined) return null
+    const kind = screenKindOfItem(def)
+    const g = this.d.gear
+    if (g && (kind === 'appstore' || kind === 'equip')) {
+      if (req.casterId === undefined) return null
+      const ctx = this.gearCtx() as GearMenuContext
+      if (kind === 'appstore') {
+        const r = purchase(ctx, req.casterId, req.entryId)
+        if (r.ok) {
+          g.setState(r.state)
+          g.setGold(r.gold)
+        }
+        return { ok: r.ok, notice: r.notice, items: this.items(), party: this.partyStats() }
+      }
+      const r = changeGear(ctx, req.casterId, req.entryId)
+      if (r.ok) {
+        g.setState(r.state)
+        g.setEquipment(req.casterId, r.equipment)
+      }
+      return { ok: r.ok, notice: r.notice, items: this.items(), party: this.partyStats() }
+    }
     const rpg = this.rpg()
     const rng = this.d.rng ?? Math.random
     if (screenKindOfItem(def) === 'item')

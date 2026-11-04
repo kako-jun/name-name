@@ -101,6 +101,8 @@ const diffKeys = (a: Record<string, unknown>, b: Record<string, unknown>): strin
   const out: string[] = []
   for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
     if (JSON.stringify(a[k]) === JSON.stringify(b[k])) continue
+    // 寺町のメニュー・売り物（仮の gearShop #881）は確認用設定には複製していない（これらのデモはメニューを使わない）
+    if (k === 'menu' || k === 'gearShop') continue
     if (k === 'battle') {
       const ba = a.battle as Record<string, unknown>
       const bb = b.battle as Record<string, unknown>

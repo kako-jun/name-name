@@ -39,6 +39,23 @@ describe('parseConfig の gearShop (#881)', () => {
     expect(r.value.gearShop?.entries).toHaveLength(1)
   })
 
+  it('image は他の画像と同じ規則で URL になる（アプリストアの一覧の画像）', () => {
+    const raw = {
+      ...buildDummyFixture(),
+      gearShop: {
+        entries: [
+          { id: 'blade1', kind: 'blade', owner: 'party1', basePrice: 100, image: 'gear/a.png' },
+          { id: 'blade2', kind: 'blade', owner: 'party1', basePrice: 100 },
+        ],
+      },
+    }
+    const r = parseConfig(raw, BASE)
+    if (!r.ok) throw new Error(r.error)
+    const [a, b] = r.value.gearShop!.entries
+    expect(a.image).toMatch(/^https:\/\/example\.com\/.*gear\/a\.png$/)
+    expect('image' in b).toBe(false)
+  })
+
   it('不正は警告に出るがパースは失敗しない', () => {
     const r = parseConfig({ ...buildDummyFixture(), gearShop: 'yes' }, BASE)
     if (!r.ok) throw new Error(r.error)
