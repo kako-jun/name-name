@@ -128,6 +128,16 @@ describe('applyEffect gold', () => {
     expect(run('gold_all', 500)).toMatchObject({ gold: 0, log: ['おかねを ぜんぶ つかった！'] })
     expect(run('gold_all', 0)).toMatchObject({ gold: 0, log: ['しかし おかねが なかった！'] })
   })
+  it('通貨名が空文字なら既定に落とす', () => {
+    const ctx: EffectContext = {
+      caster: ent('a'),
+      targets: [ent('t')],
+      rng: () => 0,
+      currencyName: '',
+      gold: (c) => ({ delta: applyGoldChange(10, c).delta }),
+    }
+    expect(applyEffect(parseEffect('gold +5')!, ctx)).toEqual(['5 ゴールドを てに いれた！'])
+  })
   it('通貨名を差し替えられる（既定は ゴールド）', () => {
     expect(run('gold +5', 0).log).toEqual(['5 ゴールドを てに いれた！'])
     const ctx: EffectContext = {
@@ -140,8 +150,9 @@ describe('applyEffect gold', () => {
     expect(applyEffect(parseEffect('gold +5')!, ctx)).toEqual(['5 円を てに いれた！'])
     expect(applyEffect(parseEffect('gold -3')!, ctx)).toEqual(['3 円を うしなった！'])
   })
-  it('gold -0 は増えなかった扱い', () => {
-    expect(run('gold -0', 5).log).toEqual(['しかし おかねは ふえなかった！'])
+  it('gold -0 / gold +0 は増減なし（頭打ちとは別の語）', () => {
+    expect(run('gold -0', 5).log).toEqual(['しかし なにも おこらなかった！'])
+    expect(run('gold +0', 5).log).toEqual(['しかし なにも おこらなかった！'])
   })
   it('頭打ちで増えないとき', () => {
     expect(run(`gold +5`, MAX_GOLD).log).toEqual(['しかし おかねは ふえなかった！'])

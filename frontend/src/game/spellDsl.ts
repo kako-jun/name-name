@@ -1042,12 +1042,16 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
       if (change.mode === 'all') {
         log.push(delta < 0 ? 'おかねを ぜんぶ つかった！' : 'しかし おかねが なかった！')
       } else if (delta > 0) {
-        log.push(gainedCurrencyLog(delta, ctx.currencyName ?? DEFAULT_CURRENCY_NAME))
+        log.push(gainedCurrencyLog(delta, ctx.currencyName || DEFAULT_CURRENCY_NAME))
       } else if (delta < 0) {
-        log.push(lostCurrencyLog(-delta, ctx.currencyName ?? DEFAULT_CURRENCY_NAME))
+        log.push(lostCurrencyLog(-delta, ctx.currencyName || DEFAULT_CURRENCY_NAME))
       } else {
         log.push(
-          change.amount < 0 ? 'しかし おかねが なかった！' : 'しかし おかねは ふえなかった！'
+          change.amount < 0
+            ? 'しかし おかねが なかった！'
+            : change.amount > 0
+              ? 'しかし おかねは ふえなかった！'
+              : 'しかし なにも おこらなかった！'
         )
       }
       return log

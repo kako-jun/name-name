@@ -34,6 +34,21 @@ describe('戦闘エンジン × gold 効果', () => {
     }
   )
 
+  it('特技・アイテム経由でも警告だけで、例外も状態変化も起きない', () => {
+    const foe = ent('foe')
+    const hero = ent('hero')
+    const eng = new BattleEngine([hero], [foe, ent('b')], { rng: () => 0.5, currencyName: '円' })
+    expect(() =>
+      eng.selectSkill({ name: 'おかね', target: '敵単体', effect: 'gold +10' }, 'foe')
+    ).not.toThrow()
+    expect(eng.getState().log).toContain('(警告: 所持金はこの場面では使えない)')
+    expect(foe.hp).toBe(100)
+    const eng2 = new BattleEngine([hero], [foe, ent('b')], { rng: () => 0.5, currencyName: '円' })
+    expect(() => eng2.selectItem({ name: 'さいふ', effect: 'gold_all' }, 'hero')).not.toThrow()
+    expect(eng2.getState().log).toContain('(警告: 所持金はこの場面では使えない)')
+    expect(foe.hp).toBe(100)
+  })
+
   it('勝利ログの通貨名は既定が ゴールド、currencyName で差し替えられる', () => {
     const win = (opts: { currencyName?: string }) => {
       const eng = new BattleEngine([ent('hero', { atk: 999 })], [ent('foe', { hp: 1 })], {
