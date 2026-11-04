@@ -89,3 +89,15 @@ describe('timeLimitFontPx', () => {
     expect(timeLimitFontPx(3840, 2160)).toBeGreaterThanOrEqual(timeLimitFontPx(1920, 1080))
   })
 })
+
+describe('timeLimitFontPx の css px 下限', () => {
+  it('canvas が縮小表示（cssScale<1）でも表示上 16 css px 以上になる', () => {
+    expect(timeLimitFontPx(200, 100, 0.5) * 0.5).toBeGreaterThanOrEqual(TIME_LIMIT_MIN_FONT_PX)
+    expect(timeLimitFontPx(200, 100, 0.5)).toBe(2 * TIME_LIMIT_MIN_FONT_PX)
+  })
+  it('cssScale の不正値は 1 とみなす。十分広い面では面基準の値のまま', () => {
+    expect(timeLimitFontPx(200, 100, 0)).toBe(timeLimitFontPx(200, 100, 1))
+    expect(timeLimitFontPx(200, 100, NaN)).toBe(timeLimitFontPx(200, 100))
+    expect(timeLimitFontPx(1920, 1080, 1)).toBeGreaterThan(TIME_LIMIT_MIN_FONT_PX)
+  })
+})

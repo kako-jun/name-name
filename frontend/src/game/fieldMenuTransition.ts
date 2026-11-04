@@ -102,6 +102,8 @@ const ratio = (num: number, den: number): number =>
  * 経過時間 → 枠の矩形と文字の表示度。`from` / `to` は順再生の始点・終点（from = 浅い画面、to = 深い画面）の枠。
  * `reverse` = 戻る遷移。同じ時間軸を逆に再生する（to の文字が消え → 枠が to から from へ戻り → from の文字が現れる）。
  * 経過時間は 0..全長にクランプする。
+ * 注: 逆再生は時間軸を反転するだけなので、戻りの最初の段階（to の文字が消える）の長さは順再生の最後の段階 `textInMs`、
+ * 最後の段階（from の文字が現れる）の長さは `textOutMs` になる（段階の長さは対称ではなく、時間軸ごと反転した結果）。
  */
 export function sampleMenuTransition(
   elapsedMs: number,

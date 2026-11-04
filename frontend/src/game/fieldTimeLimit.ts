@@ -59,10 +59,12 @@ export function advanceTimeLimit(
 
 /**
  * 文字の大きさ (px)。面の高さの 4% を上限に、予約領域の幅（`残り mm:ss` ≒ 5.2 字ぶん。停止マークの分は右に空ける）と
- * 高さ（1行）へ収める。16px を下回るほど狭い面では 16px（領域からはみ出す側を取る）
+ * 高さ（1行）へ収める。表示上 16 css px を下回るほど狭い面では 16 css px 相当（`cssScale` = canvas の CSS 幅 / 論理幅。領域からはみ出す側を取る）
  */
-export function timeLimitFontPx(faceW: number, faceH: number): number {
+export function timeLimitFontPx(faceW: number, faceH: number, cssScale = 1): number {
   const r = timeLimitRect(faceW, faceH)
   const fit = Math.min(0.04 * faceH, (r.w * 0.62) / 5.2, r.h / 1.25)
-  return Math.max(TIME_LIMIT_MIN_FONT_PX, Math.round(fit))
+  // 下限は表示上（css px）で 16 以上。canvas が縮小表示されていれば論理 px はその分大きくする
+  const scale = Number.isFinite(cssScale) && cssScale > 0 ? cssScale : 1
+  return Math.max(Math.ceil(TIME_LIMIT_MIN_FONT_PX / scale), Math.round(fit))
 }

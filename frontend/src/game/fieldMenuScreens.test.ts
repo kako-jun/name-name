@@ -9,6 +9,7 @@ import {
   computeScreenLayout,
   initialNav,
   listCount,
+  listEntries,
   optionValue,
   parseContentDef,
   resolveContent,
@@ -536,5 +537,65 @@ describe('computeScreenLayout', () => {
   })
   it('tabCount 0 のとき item でもタブ矩形は出さない', () => {
     expect(computeScreenLayout(input({ tabCount: 0 })).tabs).toEqual([])
+  })
+})
+
+describe('entriesByParty（人物ごとの一覧）', () => {
+  const def: FieldMenuContentDef = {
+    entries: [E('共通')],
+    entriesByParty: { p2: [E('二人目の技')] },
+  }
+  it('選択人物のものを出し、無い人物は entries', () => {
+    const c = ctx('party-list', def, { partyIds: ['p1', 'p2'] })
+    expect(listCount(c, nav('party-list', { party: 1 }))).toBe(1)
+    expect(listEntries(c, nav('party-list', { party: 1 }))[0].label).toBe('二人目の技')
+    expect(listEntries(c, nav('party-list', { party: 0 }))[0].label).toBe('共通')
+  })
+  it('partyIds が無ければ entries（後方互換）。party-list 以外では効かない', () => {
+    expect(listEntries(ctx('party-list', def), nav('party-list', { party: 1 }))[0].label).toBe(
+      '共通'
+    )
+    expect(
+      listEntries(ctx('empty', def, { partyIds: ['p1', 'p2'] }), nav('empty', { party: 1 }))[0]
+        .label
+    ).toBe('共通')
+  })
+  it('prototype のキーで引かない（toString 等の人物 id）', () => {
+    const c = ctx('party-list', def, { partyIds: ['toString'] })
+    expect(listEntries(c, nav('party-list'))[0].label).toBe('共通')
+  })
+  it('パース: 正常・不正（配列/非オブジェクト）・中の不正項目', () => {
+    const w: string[] = []
+    expect(
+      parseContentDef({ entriesByParty: { a: [{ label: 'x' }, { nolabel: 1 }] } }, 'c', w)
+        ?.entriesByParty
+    ).toEqual({ a: [{ label: 'x' }] })
+    expect(w.some((m) => m.includes('entriesByParty.a[1]'))).toBe(true)
+    const w2: string[] = []
+    expect(parseContentDef({ entriesByParty: [] }, 'c', w2)?.entriesByParty).toBeUndefined()
+    expect(w2.some((m) => m.includes('entriesByParty'))).toBe(true)
+  })
+  it('resolveContent は既定で空オブジェクト', () => {
+    expect(resolveContent('x', 'party-list', undefined).entriesByParty).toEqual({})
+  })
+})
+
+describe('一覧のスクロール位置の保持（prevRowStart）', () => {
+  const lay = (over: Partial<ScreenLayoutInput>) =>
+    computeScreenLayout({
+      kind: 'party-list',
+      base: { x: 0, y: 0, w: 1920, h: 1080 },
+      partyCount: 2,
+      tabCount: 0,
+      listCount: 30,
+      cursor: 0,
+      reserveTimer: false,
+      confirmOpen: false,
+      ...over,
+    })
+  it('カーソルが範囲内なら前回位置のまま。範囲外へ出たら最小限だけ送る', () => {
+    const vis = lay({}).rows.length
+    expect(lay({ cursor: 5, prevRowStart: 3 }).rowStart).toBe(3)
+    expect(lay({ cursor: 3 + vis, prevRowStart: 3 }).rowStart).toBe(4)
   })
 })

@@ -33,6 +33,7 @@ import {
   type Rect,
 } from './fieldMenu'
 import {
+  MAX_PARTY_SLOTS,
   computeScreenLayout,
   listCount,
   listEntries,
@@ -132,7 +133,11 @@ export class FieldMenuScreen extends Container {
   private readonly timing: MenuTransitionTiming
   private readonly staticLayer = new Container()
   /** 絵（アクスタ・立ち絵）。再描画しても作り直さない */
-  private readonly artLayer = new Container()
+  private readonly artTop = new Container()
+  /** 項目画面側の絵。top / deep それぞれ窓の文字と一緒に遷移フェードする */
+  private readonly artDeep = new Container()
+  /** 項目画面ごとの一覧の見える先頭（FF 風に前回位置を保つ） */
+  private readonly scrolls = new Map<string, number>()
   private readonly figures: FieldAcrylicFigure[] = []
   private readonly sprites: Sprite[] = []
   private readonly useAcrylic: boolean
@@ -148,7 +153,7 @@ export class FieldMenuScreen extends Container {
     this.hitArea = new Rectangle(0, 0, this.w, this.h)
     // 右クリック = 戻る（フィールド上では何もしない。メニュー内だけ）
     this.on('rightdown', () => this.dispatch({ type: 'back' }))
-    this.addChild(this.staticLayer, this.artLayer)
+    this.addChild(this.staticLayer, this.artTop, this.artDeep)
   }
 
   get isOpen(): boolean {
@@ -173,9 +178,23 @@ export class FieldMenuScreen extends Container {
     return {
       items: this.itemViews(),
       contents: this.contents,
-      partyCount: this.data?.party.length ?? 0,
+      partyCount: this.partyCount(),
+      partyIds: this.data?.party.map((p) => p.id) ?? [],
       slotFilled: this.slots.map((s) => s !== null),
     }
+  }
+
+  /** 画面に出る人物の数（枠は最大 `MAX_PARTY_SLOTS`。選択はこの範囲に収める） */
+  private partyCount(): number {
+    return Math.min(this.data?.party.length ?? 0, MAX_PARTY_SLOTS)
+  }
+
+  /** 情報帯の内容（現在地・円・プレイ時間・歩数）を更新する。文字が変わらなければ再描画しない */
+  setInfo(info: FieldMenuInfo): void {
+    if (!this.data) return
+    if (formatInfoBand(info) === formatInfoBand(this.data.info)) return
+    this.data = { ...this.data, info }
+    this.dirty = true
   }
 
   /** 時間制限中か。セーブなど `blockedWhileTimed` の項目が灰色になり、左上の残り時間の予約領域を避ける配置になる */
@@ -284,7 +303,8 @@ export class FieldMenuScreen extends Container {
   private screenCtx(content: ResolvedContent): ScreenCtx {
     return {
       content,
-      partyCount: this.data?.party.length ?? 0,
+      partyCount: this.partyCount(),
+      partyIds: this.data?.party.map((p) => p.id) ?? [],
       slotFilled: this.slots.map((s) => s !== null),
       settings: this.state.open ? this.state.settings : {},
     }
@@ -301,16 +321,19 @@ export class FieldMenuScreen extends Container {
       this.timed
     )
     const ctx = this.screenCtx(c)
-    return computeScreenLayout({
+    const layout = computeScreenLayout({
       kind: c.kind,
       base: top.base,
-      partyCount: this.data?.party.length ?? 0,
+      partyCount: this.partyCount(),
       tabCount: c.tabs.length,
       listCount: listCount(ctx, nav),
       cursor: nav.list,
       reserveTimer: this.timed,
       confirmOpen: open && nav.focus === 'confirm',
+      prevRowStart: this.scrolls.get(screen) ?? 0,
     })
+    this.scrolls.set(screen, layout.rowStart)
+    return layout
   }
 
   private redraw(): void {
@@ -319,7 +342,8 @@ export class FieldMenuScreen extends Container {
     const st = this.state
     if (!data) return
     for (const c of this.staticLayer.removeChildren()) c.destroy({ children: true })
-    this.artLayer.removeChildren()
+    this.artTop.removeChildren()
+    this.artDeep.removeChildren()
     for (const f of this.figures) f.display.visible = false
     this.artIndex = 0
     const S = this.staticLayer
@@ -367,11 +391,10 @@ export class FieldMenuScreen extends Container {
       this.drawScreenContents(deep, deepId, deepNav, sl, lay, interactive)
       S.addChild(deep)
     }
-    this.drawBand(S, st, lay, data, deepId && deepNav ? this.screenCtxFor(deepId, deepNav) : null)
-  }
-
-  private screenCtxFor(id: string, nav: ScreenNav): { ctx: ScreenCtx; nav: ScreenNav } {
-    return { ctx: this.screenCtx(this.contents[id]), nav }
+    // 絵も窓の文字と一緒にフェードする
+    this.artTop.alpha = topAlpha
+    this.artDeep.alpha = deepAlpha
+    this.drawBand(S, st, lay, data)
   }
 
   private drawTopContents(
@@ -385,7 +408,9 @@ export class FieldMenuScreen extends Container {
     // 左のパーティ（項目選択中は何も強調しない）
     data.party
       .slice(0, lay.partySlots.length)
-      .forEach((p, i) => this.drawPartySlot(C, p, lay.partySlots[i], lay, false))
+      .forEach((p, i) =>
+        this.drawPartySlot(C, p, lay.partySlots[i], lay, false, false, this.artTop)
+      )
     items.forEach((it, i) => {
       const r = lay.itemRows[i]
       C.addChild(
@@ -440,7 +465,7 @@ export class FieldMenuScreen extends Container {
       if (!p) return
       const emphasize =
         i === nav.party && (nav.focus === 'party' || (k === 'party-list' && nav.focus === 'list'))
-      this.drawPartySlot(C, p, r, lay, emphasize, true)
+      this.drawPartySlot(C, p, r, lay, emphasize, true, this.artDeep)
       if (interactive)
         this.hit(C, r, (e) => {
           if (e.button !== 2) this.dispatch({ type: 'select', target: 'party', index: i })
@@ -596,7 +621,7 @@ export class FieldMenuScreen extends Container {
     line('こゆうそしつ  --', GRAY)
     line('そうび  --', GRAY)
     line('おもいのやいば  --', GRAY)
-    this.placeArt(p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
+    this.placeArt(this.artDeep, p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
   }
 
   private artIndex = 0
@@ -607,12 +632,13 @@ export class FieldMenuScreen extends Container {
     r: Rect,
     lay: MenuLayout,
     emphasize: boolean,
-    compact = false
+    compact: boolean,
+    art: Container
   ): void {
     this.panel(C, r, lay, emphasize)
     if (emphasize)
       C.addChild(new Graphics().rect(r.x, r.y, r.w, r.h).fill({ color: WHITE, alpha: 0.16 }))
-    this.placeArt(p.texture, r.h * 0.86, r.x + r.h * 0.65, r.y + r.h * 0.94)
+    this.placeArt(art, p.texture, r.h * 0.86, r.x + r.h * 0.65, r.y + r.h * 0.94)
     const tx = r.x + r.h * 1.4
     const size = compact ? lay.fonts.party * 0.8 : lay.fonts.party
     const right = r.x + r.w - r.h * 0.3
@@ -637,7 +663,13 @@ export class FieldMenuScreen extends Container {
   }
 
   /** アクスタ姿（足元 (x, y)、高さ height）。絵が無ければ何もしない */
-  private placeArt(tex: Texture | null, height: number, x: number, y: number): void {
+  private placeArt(
+    layer: Container,
+    tex: Texture | null,
+    height: number,
+    x: number,
+    y: number
+  ): void {
     if (!tex) return
     const idx = this.artIndex++
     if (this.useAcrylic) {
@@ -647,7 +679,7 @@ export class FieldMenuScreen extends Container {
         this.figures[idx] = fig
       }
       fig.update(tex, height, false, x, y)
-      this.artLayer.addChild(fig.display)
+      layer.addChild(fig.display)
     }
     let sp = this.sprites[idx]
     if (!sp) {
@@ -658,15 +690,14 @@ export class FieldMenuScreen extends Container {
     sp.texture = tex
     sp.scale.set(height / tex.height)
     sp.position.set(x, y)
-    this.artLayer.addChild(sp)
+    layer.addChild(sp)
   }
 
   private drawBand(
     S: Container,
     st: FieldMenuState,
     lay: MenuLayout,
-    data: FieldMenuOpenData,
-    deep: { ctx: ScreenCtx; nav: ScreenNav } | null
+    data: FieldMenuOpenData
   ): void {
     const b = lay.backButton
     // 「◀戻る」ボタン（情報帯の左端。1タップで1階層戻る）
@@ -684,7 +715,6 @@ export class FieldMenuScreen extends Container {
     )
     // 案内は常に出す。通知（選べない項目の理由など）があるときは理由に替える
     const notice = st.open ? st.notice : null
-    void deep
     const msg = notice ?? menuHint(st)
     S.addChild(
       this.text(

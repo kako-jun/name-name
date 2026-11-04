@@ -21,6 +21,7 @@ import {
   menuHint,
   menuKeyEvent,
   openMenuState,
+  placeNameOf,
   parseFieldMenuConfig,
   pointInRect,
   resolveMenuItems,
@@ -667,5 +668,34 @@ describe('画面種の既定', () => {
     expect(screenKindOfItem({ id: 'item', label: 'x', kind: 'status' })).toBe('status')
     expect(screenKindOfItem({ id: 'zzz', label: 'x' })).toBe('empty')
     expect(defaultScreenKind('zzz')).toBe('empty')
+  })
+})
+
+describe('placeNames（現在地の表示名）', () => {
+  it('parse: 正常・不正値は警告して落とす・空は undefined', () => {
+    const r = parseFieldMenuConfig({ placeNames: { a: '甲', b: '', c: 3 } })
+    expect(r.value?.placeNames).toEqual({ a: '甲' })
+    expect(r.warnings.filter((w) => w.includes('placeNames'))).toHaveLength(2)
+    expect(parseFieldMenuConfig({ placeNames: {} }).value?.placeNames).toBeUndefined()
+    const bad = parseFieldMenuConfig({ placeNames: 'x' })
+    expect(bad.value?.placeNames).toBeUndefined()
+    expect(bad.warnings.some((w) => w.includes('placeNames'))).toBe(true)
+  })
+  it('placeNameOf は無い場面・prototype のキーで id のまま', () => {
+    const c = { placeNames: { a: '甲' } }
+    expect(placeNameOf(c, 'a')).toBe('甲')
+    expect(placeNameOf(c, 'zzz')).toBe('zzz')
+    expect(placeNameOf(c, 'toString')).toBe('toString')
+    expect(placeNameOf({}, 'a')).toBe('a')
+  })
+})
+
+describe('人物の選択は表示枠（4）を超えない', () => {
+  it('5人以上でも status の人物切替は 4 で回り込む', () => {
+    const idx = itemIndex('status')
+    const c = { ...ctxFor(DEFAULT_FIELD_MENU_ITEMS, { partyCount: 6 }) }
+    let st = stepFieldMenu(open(idx), { type: 'confirm' }, c).state
+    for (let i = 0; i < 4; i++) st = stepFieldMenu(st, { type: 'move', dx: 1, dy: 0 }, c).state
+    expect(st.open && st.nav?.party).toBe(0)
   })
 })

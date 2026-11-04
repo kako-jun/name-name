@@ -1,7 +1,8 @@
 /**
  * 残り時間の最前面オーバーレイ (#880)。フィールド・メニュー・戦闘のどこでも同じ位置（`fieldTimeLimit.ts` の予約領域）に出す。
- * 呼び出し側は stage の最前面に置き（`zIndex` を大きく）、`update` で状態と画面の大きさを渡す。時間制限なしなら非表示。
- * 停止中は暗い色・「停止中」付きで見せる。
+ * 呼び出し側は stage の最前面に置き（`zIndex` を大きく）、`update` で状態と画面の大きさ（と表示倍率 `cssScale`）を渡す。時間制限なしなら非表示。
+ * 制限時間は戦闘中も進む（止めるのはメニュー中だけ）。停止中（`paused`）は暗い色と停止マークで見せる。
+ * 戦闘画面側のレイアウトがこの予約領域を避けるかは戦闘側の範囲で、未接続（本レイヤーは最前面に重なるだけ）。
  */
 import { Container, Graphics, Text as PixiText } from 'pixi.js'
 import {
@@ -32,18 +33,18 @@ export class TimeLimitLayer extends Container {
     this.addChild(this.bg, this.caption)
   }
 
-  update(state: TimeLimitState, faceW: number, faceH: number): void {
+  update(state: TimeLimitState, faceW: number, faceH: number, cssScale = 1): void {
     const text = timeLimitText(state)
     if (text === null) {
       this.visible = false
       return
     }
     this.visible = true
-    const key = `${text}|${state.paused}|${faceW}|${faceH}`
+    const key = `${text}|${state.paused}|${faceW}|${faceH}|${cssScale}`
     if (key === this.key) return
     this.key = key
     const r = timeLimitRect(faceW, faceH)
-    const font = timeLimitFontPx(faceW, faceH)
+    const font = timeLimitFontPx(faceW, faceH, cssScale)
     this.bg
       .clear()
       .roundRect(r.x, r.y, r.w, r.h, r.h * 0.2)

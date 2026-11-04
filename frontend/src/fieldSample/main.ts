@@ -148,7 +148,8 @@ import {
 import { SaveManager } from '../game/SaveManager'
 import { FieldMenuScreen, drawMenuButton, type FieldMenuPartyView } from '../game/FieldMenuScreen'
 import { TimeLimitLayer } from '../game/TimeLimitLayer'
-import { canOpenMenu, computeMenuButtonRect, isMenuOpenKey, pointInRect } from '../game/fieldMenu'
+import { placeNameOf } from '../game/fieldMenu'
+import { FieldMenuHost } from '../game/fieldMenuHost'
 import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
@@ -695,7 +696,9 @@ async function main(): Promise<void> {
     : Object.fromEntries(config.items.map((it) => [it.id, it.count ?? 0]))
   const equipment: Record<string, string[]> = resumed ? structuredClone(resumed.equipment) : {}
   let gold = resumed ? resumed.gold : 0
-  // プレイ時間・歩数 (#880)。保存対象（rpgSave の playMs / steps）。メニュー中・戦闘中は進まない
+  // プレイ時間・歩数 (#880)。保存対象（rpgSave の playMs / steps。全画面メニューを設定したゲームだけ書く）。
+  // プレイ時間は FF 同様メニュー中・戦闘中も進み、歩数は歩いたときだけ増える
+  const menuCfg = config.menu
   let stats = initialPlayStats(resumed ?? undefined)
   /** 制限時間の残り(ms)。null = 時間制限なし（開発用 API `setTimeLimit` で与える） */
   let timeLimitMs: number | null = null
@@ -747,8 +750,8 @@ async function main(): Promise<void> {
         inventory: items,
         equipment,
         gold,
-        playMs: stats.playMs,
-        steps: stats.steps,
+        // プレイ時間・歩数は全画面メニュー (#880) を設定したゲームだけ書く（無いゲームのセーブは従来どおり）
+        ...(menuCfg ? { playMs: stats.playMs, steps: stats.steps } : {}),
         field: { sceneId, x: pos.x, y: pos.y, facing, flags: { ...flags } },
         ...(battleState ? { battle: battleState } : {}),
       },
@@ -783,7 +786,7 @@ async function main(): Promise<void> {
   }
   /** 感情吹き出しを出す (#937/#946)。`api.showEmotion` と脚本の `[感情:]`（emotionHost）の共通の入口 */
   const showEmotion = (target: string, kind: string, durationMs?: number): boolean => {
-    if (!emotionLayer || battle || battleTransition.active) return false
+    if (!emotionLayer || battle || battleTransition.active || menuBusy()) return false
     if (!isEmotionTarget(target)) return false
     // 同行者が出ていないときは出せない（見えないまま時間だけ進むのを防ぐ）
     if (
@@ -986,7 +989,7 @@ async function main(): Promise<void> {
   }
   /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
   const startWarp = (id: string): boolean => {
-    if (!canStartWarp(talkState())) return false
+    if (!canStartWarp(talkState()) || menuBusy()) return false
     if (!hasOwn(config.warps, id)) {
       console.warn(`[field-sample] 未知のワープ id: ${id}`)
       return false
@@ -1106,28 +1109,10 @@ async function main(): Promise<void> {
 
   // ---- 入力 ----
   // ---- 全画面メニュー (#880)。設定に `menu` があるときだけ。無ければ何も足さない（従来どおり） ----
-  const menuCfg = config.menu
-  const menuScreen = menuCfg
-    ? new FieldMenuScreen({
-        width: app.screen.width,
-        height: app.screen.height,
-        acrylic: config.spriteStyle === 'acrylic',
-        transition: menuCfg.transition,
-        onClose: () => leaveMenu(),
-        onSave: (slot) => {
-          const ok = api.saveRpg(slot)
-          return ok
-            ? slotSummary(new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()[slot] ?? null)
-            : null
-        },
-      })
-    : null
+  // 開閉・≡ ボタン・キー振り分け・入力の遮断は game/fieldMenuHost.ts（狭い依存だけを受ける。ここは実物を渡す配線）
   const menuButton = new Graphics()
   menuButton.visible = false
   menuButton.eventMode = 'none'
-  let menuOpening = false
-  let menuSettings: Record<string, number> = {}
-  if (menuScreen) app.stage.addChild(menuButton, menuScreen)
   const slotSummary = (d: { sceneName: string | null; savedAt: string } | null): string | null =>
     d ? `${d.sceneName ?? '-'}  ${new Date(d.savedAt).toLocaleString('ja-JP')}` : null
   const partyTextures = new Map<string, Promise<Texture | null>>()
@@ -1143,128 +1128,104 @@ async function main(): Promise<void> {
     }
     return p
   }
-  const canOpenNow = (): boolean =>
-    !!menuScreen &&
-    !menuScreen.isOpen &&
-    !menuOpening &&
-    canOpenMenu({
-      battle: !!battle,
-      battleTransition: battleTransition.active,
-      talking: !!talking,
-      transition: !!transition,
-      warp: !!warpRun,
-    })
-  const openMenu = async (): Promise<void> => {
-    if (!menuScreen || !menuCfg || !canOpenNow()) return
-    menuOpening = true
-    try {
-      releaseWalkInput()
-      approach = null
-      emotionLayer?.clear()
-      const party: FieldMenuPartyView[] = await Promise.all(
-        partyState.map(async (p) => ({
-          id: p.id,
-          name: p.name,
-          hp: p.hp,
-          maxHp: p.maxHp,
-          mp: p.mp,
-          maxMp: p.maxMp,
-          atk: p.atk,
-          def: p.def,
-          agi: p.agi,
-          texture: await partyTexture(p.sprite),
-        }))
-      )
-      // 読み込み中に会話・戦闘などが始まったら開かない
-      if (
-        disposed ||
-        !canOpenMenu({
-          battle: !!battle,
-          battleTransition: battleTransition.active,
-          talking: !!talking,
-          transition: !!transition,
-          warp: !!warpRun,
-        })
-      )
-        return
-      const w = app.screen.width
-      const h = app.screen.height
-      menuScreen.resize(w, h)
-      menuScreen.setTimed(timeLimitMs !== null)
-      fieldComposite.visible = false
-      fade.visible = false
-      menuButton.visible = false
-      contain.enter({ w, h })
-      const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
-      menuScreen.open({
-        items: menuCfg.items,
-        party,
-        info: { place: sceneId, gold, playMs: stats.playMs, steps: stats.steps },
-        slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) => slotSummary(saved[i] ?? null)),
-        settings: menuSettings,
+  const menuInfo = () => ({
+    place: menuCfg ? placeNameOf(menuCfg, sceneId) : sceneId,
+    gold,
+    playMs: stats.playMs,
+    steps: stats.steps,
+  })
+  const menuScreen = menuCfg
+    ? new FieldMenuScreen({
+        width: app.screen.width,
+        height: app.screen.height,
+        acrylic: config.spriteStyle === 'acrylic',
+        transition: menuCfg.transition,
+        onClose: () => menuHost?.onScreenClosed(),
+        onSave: (slot) => {
+          const ok = api.saveRpg(slot)
+          return ok
+            ? slotSummary(new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()[slot] ?? null)
+            : null
+        },
       })
-    } finally {
-      menuOpening = false
-    }
-  }
-  /** メニューを閉じたあと、フィールドの表示を戻す */
-  const leaveMenu = (): void => {
-    if (menuScreen) menuSettings = menuScreen.settings
-    contain.leave()
-    fieldComposite.visible = true
-    fade.visible = true
-  }
+    : null
+  if (menuScreen) app.stage.addChild(menuButton, menuScreen)
+  const faceOf = () => ({
+    w: app.screen.width,
+    h: app.screen.height,
+    cssScale: canvas.getBoundingClientRect().width / app.screen.width,
+  })
+  const menuHost =
+    menuScreen && menuCfg
+      ? new FieldMenuHost({
+          screen: menuScreen,
+          config: menuCfg,
+          face: faceOf,
+          fieldState: () => ({
+            battle: !!battle,
+            battleTransition: battleTransition.active,
+            talking: !!talking,
+            transition: !!transition,
+            warp: !!warpRun,
+          }),
+          prepare: async () => {
+            releaseWalkInput()
+            approach = null
+            emotionLayer?.clear()
+            const party: FieldMenuPartyView[] = await Promise.all(
+              partyState.map(async (p) => ({
+                id: p.id,
+                name: p.name,
+                hp: p.hp,
+                maxHp: p.maxHp,
+                mp: p.mp,
+                maxMp: p.maxMp,
+                atk: p.atk,
+                def: p.def,
+                agi: p.agi,
+                texture: await partyTexture(p.sprite),
+              }))
+            )
+            const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
+            return {
+              party,
+              slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
+                slotSummary(saved[i] ?? null)
+              ),
+            }
+          },
+          info: menuInfo,
+          timed: () => timeLimitMs !== null,
+          enterView: (f) => {
+            fieldComposite.visible = false
+            fade.visible = false
+            contain.enter({ w: f.w, h: f.h })
+          },
+          leaveView: () => {
+            contain.leave()
+            fieldComposite.visible = true
+            fade.visible = true
+          },
+          drawButton: (r) => {
+            menuButton.visible = r !== null
+            if (r) drawMenuButton(menuButton, r)
+          },
+          disposed: () => disposed,
+        })
+      : null
+  /** メニューが開き始めてから閉じ切るまで。この間フィールドは入力を受けず、時間も進めない（dev API も同様） */
+  const menuBusy = (): boolean => !!menuHost?.busy
+  /** 文字入力にフォーカスがあるか。メニューを開くキーがこれを奪わないようにする */
   const onMenuKey = (ev: KeyboardEvent): void => {
-    if (!menuScreen || ev.ctrlKey || ev.altKey || ev.metaKey) return
-    if (menuScreen.isOpen) {
-      // メニュー内のキーはメニューだけが受ける（歩き・会話へ渡さない）。長押しの繰り返しは移動だけ
-      const moving = [
-        'ArrowUp',
-        'ArrowDown',
-        'ArrowLeft',
-        'ArrowRight',
-        'KeyW',
-        'KeyA',
-        'KeyS',
-        'KeyD',
-      ].includes(ev.code)
-      if (ev.repeat && !moving) {
-        ev.preventDefault()
-        return
-      }
-      if (menuScreen.handleKey(ev.code)) {
-        ev.preventDefault()
-        ev.stopImmediatePropagation()
-      }
-      return
-    }
-    if (!isMenuOpenKey(ev.code) || ev.repeat || isTypingFocus() || !canOpenNow()) return
-    ev.preventDefault()
-    void openMenu()
+    if (!menuHost) return
+    const r = menuHost.onKeyDown(ev, isTypingFocus())
+    if (r.handled) ev.preventDefault()
+    if (r.stop) ev.stopImmediatePropagation()
   }
-  /** ≡ ボタンの位置を更新する（画面の表示倍率に応じて 24 css px を下回らない）。出せる状態のときだけ見せる */
-  let menuButtonKey = ''
-  const syncMenuButton = (): void => {
-    if (!menuScreen) return
-    const visible = canOpenNow()
-    menuButton.visible = visible
-    if (!visible) return
-    const w = app.screen.width
-    const h = app.screen.height
-    const css = canvas.getBoundingClientRect().width / w
-    const r = computeMenuButtonRect(w, h, css)
-    const key = `${r.x}|${r.y}|${r.w}|${r.h}`
-    if (key === menuButtonKey) return
-    menuButtonKey = key
-    drawMenuButton(menuButton, r)
-  }
-  const menuButtonHit = (p: Vec): boolean => {
-    if (!menuButton.visible) return false
-    const css = canvas.getBoundingClientRect().width / scene.mask.width
-    return pointInRect(computeMenuButtonRect(app.screen.width, app.screen.height, css), p.x, p.y)
-  }
+  /** pointerdown の始まり（window の capture）。Pixi がメニューを閉じる前に「塞がれていたか」を記録する */
+  const onPointerBegin = (): void => menuHost?.beginPointer()
   const onMenuContext = (ev: Event): void => {
-    if (menuScreen?.isOpen) ev.preventDefault()
+    if (menuHost?.onContextMenu()) ev.preventDefault()
   }
 
   const keys: DirectionKeys = { up: false, down: false, left: false, right: false }
@@ -1281,7 +1242,7 @@ async function main(): Promise<void> {
   const onKey = (down: boolean) => (ev: KeyboardEvent) => {
     const k = KEYMAP[ev.code]
     if (battle || battleTransition.active || !k || ev.ctrlKey || ev.altKey || ev.metaKey) return
-    if (menuScreen?.isOpen || menuOpening) return
+    if (menuBusy()) return
     ev.preventDefault()
     // 会話中は歩きの入力を受けない（離すほうは受ける）
     if (down && !acceptsWalkInput({ battle: false, talking: !!talking })) return
@@ -1299,7 +1260,7 @@ async function main(): Promise<void> {
   }
   /** 決定キー (Space / Enter / Z): 向いた方向の近傍 NPC に話しかける。会話中は送る・閉じる */
   const onTalkKey = (ev: KeyboardEvent): void => {
-    if (menuScreen?.isOpen || menuOpening) return
+    if (menuBusy()) return
     // 文字入力（text 系 input・textarea・select）にフォーカスがあるときは、そちらの操作を邪魔しない。
     // checkbox / radio / button 以外の input（range・color・file・submit 等も含む）は text 扱い＝安全側で無視する
     const a = document.activeElement
@@ -1336,6 +1297,7 @@ async function main(): Promise<void> {
     approach = null
   }
   window.addEventListener('keydown', onMenuKey)
+  window.addEventListener('pointerdown', onPointerBegin, true)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('keydown', onTalkKey)
@@ -1361,18 +1323,15 @@ async function main(): Promise<void> {
     })
   const onPointerDown = (ev: PointerEvent) => {
     if (battle || battleTransition.active) return
-    // メニュー中の操作はメニュー（Pixi の当たり）が受ける
-    if (menuScreen?.isOpen || menuOpening) return
+    // メニュー中・閉じた同じ操作はメニュー（Pixi の当たり）が受ける。フィールドへ抜けさせない
+    if (menuHost?.isMenuBlocked) return
     // 会話中のタップは会話を送る（開いた直後の同じ操作では閉じない）
     if (talking) {
       if (!dialogBox.isJustShown(250)) advanceTalk()
       return
     }
     // 右上の ≡ ボタン（会話中は出ない・効かない）
-    if (menuButtonHit(toScene(ev))) {
-      void openMenu()
-      return
-    }
+    if (menuHost?.tapButton(toScene(ev))) return
     // NPC をクリック・タップ: 近づいて話しかける（歩きの入力は採用しない）
     if (activePointerId === null && canStartTalk(talkState())) {
       const hit = npcAtPoint(npcRects(), toScene(ev))
@@ -1415,7 +1374,7 @@ async function main(): Promise<void> {
   })
 
   $('tb-force-battle').addEventListener('click', () => {
-    if (!canStartBattleNow(talkState())) return
+    if (!canStartBattleNow(talkState()) || menuBusy()) return
     const groups = forceBattleCandidates(config, sceneId)
     if (groups.length === 0) return
     const r = advanceEncounter(
@@ -1438,19 +1397,21 @@ async function main(): Promise<void> {
   // ---- フレーム更新 ----
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS, 50)
-    // 制限時間のレイヤー: どの画面でも同じ位置。メニュー中・戦闘中は止まっている見た目（進めるのはフィールド歩行中だけ）
+    // 制限時間: FF 同様、フィールド・戦闘・遷移のどこでも進む。止めるのはメニュー中（開き始めから閉じ切るまで）だけ。
+    // プレイ時間もメニュー中・戦闘中を含めて進む（歩数だけは歩いたときに加算するので、メニュー中・戦闘中は増えない）
+    const menuStopped = menuBusy()
+    stats = advancePlayTime(stats, dt)
+    timeLimitMs = advanceTimeLimit(timeLimitMs, dt, menuStopped)
+    // 制限時間のレイヤー: どの画面でも同じ位置・最前面。メニュー中は停止の見た目
+    const face = faceOf()
     timeLimitLayer.update(
-      {
-        remainingMs: timeLimitMs,
-        paused: !!menuScreen?.isOpen || !!battle || battleTransition.active,
-      },
-      app.screen.width,
-      app.screen.height
+      { remainingMs: timeLimitMs, paused: menuStopped },
+      face.w,
+      face.h,
+      face.cssScale
     )
-    syncMenuButton()
-    if (menuScreen?.isOpen || menuScreen?.transitioning) {
-      // メニュー中: フィールドの時間（移動・エンカウント・制限時間・プレイ時間・歩数）は全部止める
-      menuScreen.tick(dt)
+    if (menuHost?.tick(dt)) {
+      // メニュー中: フィールドの時間（移動・エンカウント・歩数）は全部止める。メニュー画面だけ進む
       $('info').textContent = `メニュー中  scene=${sceneId}`
       return
     }
@@ -1472,8 +1433,6 @@ async function main(): Promise<void> {
     const h = scene.mask.height
 
     clockMs += dt
-    stats = advancePlayTime(stats, dt)
-    timeLimitMs = advanceTimeLimit(timeLimitMs, dt, false)
     if (warpRun) {
       // ワープ中は入力・移動・エンカウントを止める（描画の時計だけ進む）
       tickWarp(dt)
@@ -1816,15 +1775,14 @@ async function main(): Promise<void> {
      * `durationMs`（任意・#946）はこの 1 回だけ表示時間を上書きする（floor して 1 以上のときだけ採用、10000ms を超えれば 10000 に収め、それ以外は宣言の `durationMs`）
      */
     showEmotion,
-    /** 制限時間の残り(ms)を与える・消す (#880)。null = 時間制限なし。フィールド歩行中だけ減り、メニュー中・戦闘中は止まる（最前面の左上レイヤーに出る） */
+    /** 制限時間の残り(ms)を与える・消す (#880)。null = 時間制限なし。FF 同様、戦闘中・演出中も減り、止まるのはメニュー中だけ（最前面の左上レイヤーに出る。戦闘画面側の予約領域の回避は戦闘側の範囲で未接続） */
     setTimeLimit: (ms: number | null): void => {
       timeLimitMs = ms !== null && Number.isFinite(ms) && ms >= 0 ? ms : null
       menuScreen?.setTimed(timeLimitMs !== null)
     },
     /** 全画面メニューを開く・閉じる状態（検証用）。開けないとき（メニュー未定義・会話中・戦闘中など）は false */
     openMenu: async (): Promise<boolean> => {
-      await openMenu()
-      return !!menuScreen?.isOpen
+      return (await menuHost?.open()) ?? false
     },
     menuState: () => ({
       open: !!menuScreen?.isOpen,
@@ -1886,6 +1844,7 @@ async function main(): Promise<void> {
     playerStand?.destroy()
     companionStand?.destroy()
     window.removeEventListener('keydown', onMenuKey)
+    window.removeEventListener('pointerdown', onPointerBegin, true)
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
     window.removeEventListener('keydown', onTalkKey)

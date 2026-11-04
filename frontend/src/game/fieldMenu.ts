@@ -11,6 +11,7 @@ import { containRect } from './battleLogicalSize'
 import {
   defaultScreenKind,
   initialNav,
+  MAX_PARTY_SLOTS,
   parseContentDef,
   stepScreen,
   SCREEN_KINDS,
@@ -53,6 +54,8 @@ export interface FieldMenuConfig {
   items: FieldMenuItemDef[]
   /** 画面遷移（枠スライド）の速さ。既定は `DEFAULT_MENU_TRANSITION` */
   transition: MenuTransitionTiming
+  /** 場面 id → 情報帯に出す現在地の表示名。無い場面は id のまま */
+  placeNames?: Record<string, string>
 }
 
 export const DEFAULT_DISABLED_REASON = 'まだ使えません'
@@ -78,6 +81,27 @@ export const DEFAULT_FIELD_MENU_ITEMS: readonly FieldMenuItemDef[] = [
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
+/** `menu.placeNames`（場面 id → 表示名）の検証。不正な項目は警告して落とす。空なら undefined */
+function parsePlaceNames(raw: unknown, warnings: string[]): Record<string, string> | undefined {
+  if (raw === undefined) return undefined
+  if (!isObj(raw)) {
+    warnings.push('menu.placeNames はオブジェクト（場面 id → 表示名）にしてください（無視します）')
+    return undefined
+  }
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string' && v) out[k] = v
+    else warnings.push(`menu.placeNames.${k} は空でない文字列にしてください（無視します）`)
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 場面 id → 現在地の表示名（`menu.placeNames` に無ければ id のまま） */
+export function placeNameOf(config: Pick<FieldMenuConfig, 'placeNames'>, sceneId: string): string {
+  const n = config.placeNames
+  return n && Object.prototype.hasOwnProperty.call(n, sceneId) ? n[sceneId] : sceneId
+}
+
 export interface ParsedFieldMenu {
   /** undefined = メニュー無し（設定に `menu` が無い・`false`） */
   value?: FieldMenuConfig
@@ -92,11 +116,13 @@ export interface ParsedFieldMenu {
 export function parseFieldMenuConfig(raw: unknown): ParsedFieldMenu {
   const warnings: string[] = []
   if (raw === undefined || raw === false || raw === null) return { warnings }
+  const placeNames = parsePlaceNames(isObj(raw) ? raw.placeNames : undefined, warnings)
   const tr = normalizeTransitionTiming(isObj(raw) ? raw.transition : undefined)
   warnings.push(...tr.warnings)
   const defaults = (): FieldMenuConfig => ({
     items: DEFAULT_FIELD_MENU_ITEMS.map((x) => ({ ...x })),
     transition: tr.timing,
+    ...(placeNames ? { placeNames } : {}),
   })
   if (raw === true) return { value: defaults(), warnings }
   if (!isObj(raw)) {
@@ -148,7 +174,10 @@ export function parseFieldMenuConfig(raw: unknown): ParsedFieldMenu {
     warnings.push('menu.items に有効な項目がありません（既定の項目を使います）')
     return { value: defaults(), warnings }
   }
-  return { value: { items, transition: tr.timing }, warnings }
+  return {
+    value: { items, transition: tr.timing, ...(placeNames ? { placeNames } : {}) },
+    warnings,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +299,8 @@ export interface FieldMenuCtx {
   /** 項目 id → 画面の中身 */
   contents: Readonly<Record<string, ResolvedContent>>
   partyCount: number
+  /** 人物の id（表示順）。省略は空 */
+  partyIds?: readonly string[]
   slotFilled: readonly boolean[]
 }
 
@@ -300,7 +331,8 @@ export function stepFieldMenu(
     }
     const sctx: ScreenCtx = {
       content,
-      partyCount: ctx.partyCount,
+      partyCount: Math.min(ctx.partyCount, MAX_PARTY_SLOTS),
+      partyIds: ctx.partyIds,
       slotFilled: ctx.slotFilled,
       settings: state.settings,
     }

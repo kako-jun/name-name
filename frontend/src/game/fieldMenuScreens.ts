@@ -80,6 +80,8 @@ export interface FieldMenuContentDef {
   description?: string
   tabs?: MenuTab[]
   entries?: MenuEntry[]
+  /** 人物ごとの一覧（人物の id → entries）。人物を選ぶ画面（まほう・そうび等）で、選んだ人物のものを出す。無い人物は `entries` */
+  entriesByParty?: Record<string, MenuEntry[]>
   options?: MenuOption[]
 }
 
@@ -88,6 +90,7 @@ export interface ResolvedContent {
   description: string
   tabs: MenuTab[]
   entries: MenuEntry[]
+  entriesByParty: Record<string, MenuEntry[]>
   options: MenuOption[]
 }
 
@@ -108,6 +111,9 @@ export const DEFAULT_CONFIG_OPTIONS: readonly MenuOption[] = [
 ]
 
 export const SAVE_SLOT_COUNT = 3
+
+/** 画面に並べる人物の枠の最大数（wireframe: 4人配置固定）。それ以上は選択も表示も先頭からここまで */
+export const MAX_PARTY_SLOTS = 4
 
 const DEFAULT_DESCRIPTION: Record<ScreenKind, string> = {
   item: 'つかう・せいとん・たいせつなもの から選びます',
@@ -151,6 +157,7 @@ export function resolveContent(
     description: def?.description ?? (DEFAULT_DESCRIPTION[kind] || label),
     tabs,
     entries: def?.entries ?? [],
+    entriesByParty: def?.entriesByParty ?? {},
     options,
   }
 }
@@ -190,6 +197,19 @@ export function parseContentDef(
     return list
   }
   if (o.entries !== undefined) out.entries = entries(o.entries, `${where}.entries`)
+  if (o.entriesByParty !== undefined) {
+    const v = o.entriesByParty
+    if (typeof v !== 'object' || v === null || Array.isArray(v))
+      warnings.push(
+        `${where}.entriesByParty はオブジェクト（人物 id → entries）にしてください（無視します）`
+      )
+    else {
+      const by: Record<string, MenuEntry[]> = Object.create(null) as Record<string, MenuEntry[]>
+      for (const [k, list] of Object.entries(v))
+        by[k] = entries(list, `${where}.entriesByParty.${k}`)
+      out.entriesByParty = { ...by }
+    }
+  }
   if (o.tabs !== undefined) {
     if (!Array.isArray(o.tabs)) warnings.push(`${where}.tabs は配列にしてください（無視します）`)
     else {
@@ -294,6 +314,8 @@ export type ScreenEvent =
 export interface ScreenCtx {
   content: ResolvedContent
   partyCount: number
+  /** 人物の id（表示順）。`entriesByParty` を引くのに使う。省略は空 */
+  partyIds?: readonly string[]
   /** セーブスロットごとに既存のデータがあるか（上書き確認の判定） */
   slotFilled: readonly boolean[]
   /** せっていの選択値（key → 選択肢 index）。無ければ initial */
@@ -317,6 +339,11 @@ const wrap = (i: number, n: number): number => (n <= 0 ? 0 : ((i % n) + n) % n)
 export function listEntries(ctx: ScreenCtx, nav: ScreenNav): MenuEntry[] {
   const c = ctx.content
   if (c.kind === 'item' || c.kind === 'appstore') return c.tabs[nav.tab]?.entries ?? []
+  if (c.kind === 'party-list') {
+    const id = ctx.partyIds?.[nav.party]
+    if (id !== undefined && Object.prototype.hasOwnProperty.call(c.entriesByParty, id))
+      return c.entriesByParty[id]
+  }
   return c.entries
 }
 
@@ -528,6 +555,8 @@ export interface ScreenLayoutInput {
   /** 残り時間の予約領域（左上）を避けるか */
   reserveTimer: boolean
   confirmOpen: boolean
+  /** 前回の一覧の見える先頭（カーソルが範囲内ならそのまま保つ。省略は 0） */
+  prevRowStart?: number
 }
 
 /** 見える先頭 index。カーソルが常に範囲に入るよう、必要最小限だけ送る */
@@ -571,16 +600,16 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
   if (hasParty) {
     const top = i.reserveTimer ? 0.09 : 0.12
     const gap = 0.006 * H
-    const n = Math.max(1, Math.min(i.partyCount, 4))
+    const n = Math.max(1, Math.min(i.partyCount, MAX_PARTY_SLOTS))
     const colH = (bottom - top) * H
     const slotH = Math.min(0.21 * H, (colH - gap * (n - 1)) / n)
-    for (let p = 0; p < Math.min(i.partyCount, 4); p++)
+    for (let p = 0; p < Math.min(i.partyCount, MAX_PARTY_SLOTS); p++)
       party.push({ x: X(0.02), y: Y(top) + p * (slotH + gap), w: 0.3 * W, h: slotH })
   }
   const rowH = (kind === 'save' ? 0.16 : kind === 'config' ? 0.09 : 0.07) * H
   const pad = 0.015 * H
   const visible = Math.max(1, Math.floor((primary.h - pad * 2) / rowH))
-  const rowStart = scrollStart(i.listCount, i.cursor, visible)
+  const rowStart = scrollStart(i.listCount, i.cursor, visible, i.prevRowStart ?? 0)
   const rows: Rect[] = []
   for (let r = 0; r < Math.min(visible, Math.max(0, i.listCount - rowStart)); r++)
     rows.push({ x: primary.x, y: primary.y + pad + r * rowH, w: primary.w, h: rowH })
