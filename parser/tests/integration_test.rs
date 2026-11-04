@@ -5349,7 +5349,6 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_effects: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
-        battle_enemy_row: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10543,7 +10542,6 @@ fn telop_test_doc_base() -> Document {
         battle_effects: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
-        battle_enemy_row: None,
         chapters: vec![],
     }
 }
@@ -12634,44 +12632,6 @@ fn test_parse_controls_guide_finishes() {
     });
     rx.recv_timeout(Duration::from_secs(10))
         .expect("controls.md の parse が 10 秒以内に戻ること (#969)");
-}
-
-// ---- #896: battle_enemy_row / モンスターの 隊列 ----
-
-#[test]
-fn test_battle_enemy_row_parse_default_none_and_roundtrip() {
-    let doc = parser::parse(&battle_doc("battle_enemy_row: on\n"));
-    assert_eq!(doc.battle_enemy_row.as_deref(), Some("on"));
-    // 値は検証せず生文字列で透過する（解釈は runtime）
-    let weird = parser::parse(&battle_doc("battle_enemy_row: maybe\n"));
-    assert_eq!(weird.battle_enemy_row.as_deref(), Some("maybe"));
-    assert_eq!(
-        parser::parse(&battle_doc("battle_enemy_row:\n")).battle_enemy_row,
-        None
-    );
-    let none = parser::parse(&battle_doc(""));
-    assert_eq!(none.battle_enemy_row, None);
-    let emitted = emitter::emit(&doc);
-    assert!(emitted.contains("battle_enemy_row: \"on\"\n"), "{emitted}");
-    assert_eq!(
-        parser::parse(&emitted).battle_enemy_row,
-        doc.battle_enemy_row
-    );
-    assert!(!emitter::emit(&none).contains("battle_enemy_row"));
-}
-
-#[test]
-fn test_monster_row_parse_and_roundtrip() {
-    assert_eq!(monster_with("").row, None);
-    assert_eq!(monster_with("隊列: 後衛\n").row.as_deref(), Some("後衛"));
-    assert_eq!(monster_with("row: front\n").row.as_deref(), Some("front"));
-    // 空・不正値は None（不正値は警告）
-    assert_eq!(monster_with("隊列:\n").row, None);
-    assert_eq!(monster_with("隊列: 中衛\n").row, None);
-    // 往復
-    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\n隊列: 後衛\n[/モンスター]\n";
-    let out = emitter::emit(&parser::parse(src));
-    assert!(out.contains("隊列: 後衛\n"), "{out}");
 }
 
 // ---- #898: モンスターの レベル ----

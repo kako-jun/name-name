@@ -2472,46 +2472,6 @@ describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が
     expect(none.battle_enemy_list).toBeNull()
   })
 
-  it('battle_enemy_row (#896) とモンスターの 隊列: が実 WASM パーサ経由で残る', async () => {
-    const md = (front: string[], body: string[]) =>
-      [
-        '---',
-        'engine: name-name',
-        'chapter: 1',
-        'title: t',
-        ...front,
-        '---',
-        '',
-        '## data: マスター',
-        '',
-        '[モンスター m]',
-        '名前: M',
-        'HP: 5',
-        ...body,
-        '[/モンスター]',
-        '',
-      ].join('\n')
-    const monsterOf = (doc: Awaited<ReturnType<typeof parseMarkdown>>) => {
-      const ev = doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
-      const m = ev.find((x) => typeof x === 'object' && 'Monster' in x)
-      return m && 'Monster' in m ? m.Monster : undefined
-    }
-    const doc = await parseMarkdown(md(['battle_enemy_row: on'], ['隊列: 後衛']))
-    expect(doc.battle_enemy_row).toBe('on')
-    expect(monsterOf(doc)?.row).toBe('後衛')
-    const none = await parseMarkdown(md([], []))
-    expect(none.battle_enemy_row).toBeNull()
-    expect(monsterOf(none)?.row).toBeUndefined()
-    // 不正値の隊列は無視される（警告は parser が console.warn へ）
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      expect(monsterOf(await parseMarkdown(md([], ['隊列: 中衛'])))?.row).toBeUndefined()
-      expect(warn.mock.calls.some((c) => String(c[0]).includes('invalid monster row'))).toBe(true)
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
   it('モンスターの レベル: (#898) が実 WASM パーサ経由で残る（不正値は警告して無し）', async () => {
     const md = (body: string[]) =>
       [

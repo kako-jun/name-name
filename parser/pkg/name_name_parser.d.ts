@@ -336,12 +336,6 @@ export interface MonsterDef {
      */
     scale?: number;
     /**
-     * 敵の隊列 (#896)。`隊列: 前衛` / `後衛`（英 `front` / `back`、`前列` / `後列` も可。味方の `[パーティ]` の `隊列:` と同じキー）。
-     * 生文字列で透過し、runtime が `battle_enemy_row: on` のときだけ使う（後衛の敵への通常攻撃は半分）。
-     * 書かない・空・不正値（警告を出す）は None＝グリッドの列から導出（グリッドが無ければ前列）。
-     */
-    row?: string;
-    /**
      * 敵のレベル (#898)。`レベル: 5`（別名 `level` / `Lv`、全角数字可）。**1〜99 に丸める**。レベル条件の即死（効果 DSL `damage_full レベル倍数=N`）と
      * レベル調整（`level +N|-N|=N`）が使う。書かない・空・不正値（警告を出す）は None＝レベル無し（条件付き即死は効かず、調整も効かない）。
      */
@@ -1072,12 +1066,6 @@ export interface Document {
      * 値は生文字列で透過し、runtime 側で丸める（不正は既定）。GUI 専用。frontmatter `battle_enemy_window_overlap:` から流す。
      */
     battle_enemy_window_overlap?: string;
-    /**
-     * RPG 戦闘（`battle_layout: side`）の敵の前列・後列 (#896)。`on` のとき、後列の敵への通常攻撃（近接物理）のダメージが半分になる。
-     * 値は生文字列で透過し、runtime 側（`normalizeBattleEnemyRow`）で解釈する（`on` 以外・不正値は警告して無効）。
-     * 未指定・空は None＝従来どおり（既定 off）。GUI 専用（TUI は読まない）。frontmatter `battle_enemy_row:` から流す。
-     */
-    battle_enemy_row?: string;
     chapters: Chapter[];
 }
 

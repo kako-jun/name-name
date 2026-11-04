@@ -459,7 +459,7 @@ export class FieldMenuScreen extends Container {
         'left'
       )
     )
-    // 左の人物（どうぐ・まほう・そうび・まいし・ジョブ）。選んでいる段階に入ってから強調する
+    // 左の人物（どうぐ・まほう・そうび・ませき・ジョブ）。選んでいる段階に入ってから強調する
     sl.party.forEach((r, i) => {
       const p = data.party[i]
       if (!p) return
