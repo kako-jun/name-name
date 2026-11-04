@@ -8,6 +8,7 @@ import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { buildActionTimeline, POPUP_TOTAL_MS } from './battleMotion'
+import { resultHoldMs } from './battleResult'
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -180,7 +181,7 @@ describe('BattleScreen presentation', () => {
     const tl = buildActionTimeline('attack', { damages: true, downs: true })
     run(s, tl.duration - 50)
     expect(closed).toHaveLength(0)
-    run(s, POPUP_TOTAL_MS + tl.duration)
+    run(s, POPUP_TOTAL_MS + tl.duration + resultHoldMs('ff', 2)) // 待機は取得メッセージ（ギル・経験値の2件）ぶん伸びる (#1039)
     expect(closed).toEqual(['victory'])
   })
 

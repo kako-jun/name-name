@@ -22,16 +22,71 @@ export const RESULT_HOLD_FF_MS = 1500
  */
 export const RESULT_SKIP_GUARD_MS = 250
 
+/** ff の勝利リザルト (#1039): メッセージ 1 件を出しておく時間（ms）。暫定 */
+export const RESULT_MESSAGE_STEP_MS = 1000
+/** ff の勝利リザルト (#1039): 生き残りの味方が通常と victory を入れ替える間隔（ms）。暫定 */
+export const RESULT_VICTORY_FLIP_MS = 400
+
+/**
+ * お金の単位（暫定、#1039）。FF5 は『ギル』。sit-by-me の通貨名が未決（U-2929）なので仮に『ギル』を置く。
+ * 決まったらここ 1 か所だけ差し替える。
+ */
+export const RESULT_GOLD_UNIT = 'ギル'
+
+/** 勝利リザルトの文言（語の区切りは半角スペース。全角スペースは使わない） */
+export const RESULT_TEXT = {
+  gold: (gold: number): string => `${gold}${RESULT_GOLD_UNIT} てにいれた`,
+  exp: (exp: number): string => `${exp} けいけんち かくとく`,
+  learned: (name: string): string => `${name}をおぼえた！`,
+  loot: (name: string): string => `${name}を てにいれた`,
+  defeat: 'ぜんめつ…',
+} as const
+
+/** 勝利リザルトの材料（名前は呼び出し側が解決済み） */
+export interface ResultMessageInput {
+  gold: number
+  exp: number
+  /** この戦闘で新たに覚えた呪文の名前（覚えた順） */
+  learnedSpellNames: readonly string[]
+  /** 戦利品の名前（獲得順、個数は出さない） */
+  lootNames: readonly string[]
+}
+
+/**
+ * 勝利リザルトのメッセージ配列 (#1039)。順: お金 → 経験値 → 覚えた呪文 → 戦利品（最後）。0 の行は出さない。
+ * AP・レベルアップなどは本作に仕組みが無いので出さない（項目を足すときはここに順番どおり差し込む）。
+ */
+export function buildResultMessages(input: ResultMessageInput): string[] {
+  const out: string[] = []
+  if (input.gold > 0) out.push(RESULT_TEXT.gold(input.gold))
+  if (input.exp > 0) out.push(RESULT_TEXT.exp(input.exp))
+  for (const n of input.learnedSpellNames) out.push(RESULT_TEXT.learned(n))
+  for (const n of input.lootNames) out.push(RESULT_TEXT.loot(n))
+  return out
+}
+
+/** 経過時間から、いま出すメッセージの index（件数 0 は -1） */
+export function resultMessageIndex(elapsed: number, count: number): number {
+  if (count <= 0) return -1
+  return Math.min(count - 1, Math.floor(Math.max(0, elapsed) / RESULT_MESSAGE_STEP_MS))
+}
+
+/** 経過時間から、生き残りの味方がいま victory ポーズか（最初のコマは victory。それ以外は通常） */
+export function isVictoryFlipOn(elapsed: number): boolean {
+  return Math.floor(Math.max(0, elapsed) / RESULT_VICTORY_FLIP_MS) % 2 === 0
+}
+
 export type ResultOutcome = 'victory' | 'defeat'
 
 /** 勝敗が決まった後に読ませる時間（ms） */
-export function resultHoldMs(presentation: BattlePresentation): number {
-  return presentation === 'ff' ? RESULT_HOLD_FF_MS : RESULT_HOLD_DQ_MS
+export function resultHoldMs(presentation: BattlePresentation, messageCount = 0): number {
+  if (presentation !== 'ff') return RESULT_HOLD_DQ_MS
+  return Math.max(RESULT_HOLD_FF_MS, messageCount * RESULT_MESSAGE_STEP_MS)
 }
 
-/** ff のメッセージ窓に出す短い言葉 */
-export function resultMessageText(outcome: ResultOutcome): string {
-  return outcome === 'victory' ? 'しょうり！' : 'ぜんめつ…'
+/** 全滅のときだけ出す固定の言葉（勝利は `buildResultMessages` のメッセージ列。固定の言葉は無い） */
+export function resultMessageText(outcome: ResultOutcome): string | null {
+  return outcome === 'defeat' ? RESULT_TEXT.defeat : null
 }
 
 /** engine の phase が読ませる対象の勝敗か（逃走・進行中は null） */
@@ -54,11 +109,7 @@ export function canSkipResultHold(elapsed: number): boolean {
   return elapsed >= RESULT_SKIP_GUARD_MS
 }
 
-/** ff のメッセージ窓の言葉: 再生中の行動の名前があればそれ、無く勝敗待機中ならその言葉、どちらも無ければ null */
-export function windowWord(
-  actionWord: string | null,
-  resultOutcome: ResultOutcome | null
-): string | null {
-  if (actionWord !== null) return actionWord
-  return resultOutcome ? resultMessageText(resultOutcome) : null
+/** ff のメッセージ窓の言葉: 再生中の行動の名前があればそれ、無ければ勝敗待機中の言葉（無ければ null） */
+export function windowWord(actionWord: string | null, resultWord: string | null): string | null {
+  return actionWord !== null ? actionWord : resultWord
 }

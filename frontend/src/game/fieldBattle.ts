@@ -276,6 +276,13 @@ export function buildBattleMenuData(
   }
 }
 
+/** 呪文マスターから表示名（id → 名前）を作る（戦闘後リザルトの「〇〇を おぼえた！」用 #1039） */
+function spellNamesOf(spells: Record<string, SpellDef>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [id, def] of Object.entries(spells)) if (def?.name) out[id] = def.name
+  return out
+}
+
 /** PartyMemberDef → BattleEntity。隊列 (#747) は side のときだけ反映する（front は隊列を描かない） */
 export function partyDefToBattleEntity(
   def: PartyMemberDef,
@@ -607,6 +614,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
     ...(roster.statuses ? { statuses: roster.statuses } : {}),
     ...(itemNamesOf(roster.items) ? { itemNames: itemNamesOf(roster.items) } : {}),
+    ...(roster.spells ? { spellNames: spellNamesOf(roster.spells) } : {}),
   })
   const screen: BattleScreen = new BattleScreen(engine, width, height, {
     layout: settings.layout,
