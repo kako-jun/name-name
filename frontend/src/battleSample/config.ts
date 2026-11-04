@@ -2,7 +2,7 @@
  * 戦闘画面サンプルページ (#749) の設定まわりの純粋関数。
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
-import type { BattleEntity } from '../game/spellDsl'
+import { MAX_LEVEL, type BattleEntity } from '../game/spellDsl'
 import type {
   ItemDef,
   JobDef,
@@ -435,6 +435,16 @@ function parseEntity(
       }
     }
     entity.formationRow = normalizeBattleRow(raw.formationRow)
+  }
+  if (raw.level !== undefined) {
+    // 敵のレベル (#898)。`[モンスター]` の `レベル:` と同じ（整数。1〜99 に丸める）。敵だけに書ける
+    if (path.startsWith('party[')) {
+      return { ok: false, error: `${path}.level: レベルは enemies[] だけに書けます` }
+    }
+    if (typeof raw.level !== 'number' || !Number.isInteger(raw.level)) {
+      return { ok: false, error: `${path}.level は整数: ${JSON.stringify(raw.level)}` }
+    }
+    entity.level = Math.min(MAX_LEVEL, Math.max(1, raw.level))
   }
   if (raw.at !== undefined) {
     // 敵の配置指定 (#839)。群の `@C1` と同じ（列は左から A,B,C…・行は上から 1,2…）。`enemyGrid` が無いと描画に効かない

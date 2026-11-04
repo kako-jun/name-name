@@ -738,6 +738,7 @@ export class BattleEngine {
       rng: this.rng,
       statusRules: this.statusRules,
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
+      onTouch: (t) => this.statusTouched.add(t),
       steal: this.stealHook(caster),
       pool: this.poolOf(caster, targets),
       ...(spread ? { spreadDivisor: multiTargetDivisor(targets.length) } : {}),
@@ -839,6 +840,7 @@ export class BattleEngine {
       rng: this.rng,
       statusRules: this.statusRules,
       onStatus: (t, key, change) => this.noteStatus(user, t, key, change),
+      onTouch: (t) => this.statusTouched.add(t),
       steal: this.stealHook(user),
       pool: this.poolOf(user, targets),
       onAmount: (t, kind, amount, reversed) =>
@@ -927,6 +929,7 @@ export class BattleEngine {
       rng: this.rng,
       statusRules: this.statusRules,
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
+      onTouch: (t) => this.statusTouched.add(t),
       steal: this.stealHook(caster),
       pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount, reversed) =>

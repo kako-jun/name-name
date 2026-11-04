@@ -80,6 +80,7 @@ describe('equipmentScenarios: 生成', () => {
     const heavy = [
       'multi-target',
       'enemy-row',
+      'enemy-level',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

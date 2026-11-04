@@ -78,6 +78,7 @@ export type EffectKind =
   | 'steal'
   | 'escape_battle'
   | 'escape_dungeon'
+  | 'level'
 
 export type StatKey = 'hp' | 'mp' | 'atk' | 'def' | 'agi'
 
@@ -111,6 +112,13 @@ export interface ParsedEffect {
    * 無い = 必中（従来と同じ。耐性が無ければ乱数も使わない）
    */
   chance?: number
+  /**
+   * damage_full の「レベル倍数」条件 (#898。`レベル倍数=N`、N は 1 以上の整数)。対象の敵のレベルが N の倍数のときだけ成功し、
+   * 倍数でない・レベルを持たない敵には効かない（MISS）。死の耐性（`death` の相性）は従来どおり重ねて効く。無い = 条件なし（従来の即死）
+   */
+  levelMultiple?: number
+  /** level（敵のレベル調整 #898）: `+N`（`add`）/ `-N`（`add` の負数）/ `=N`（`set`）。調整後は 1〜`MAX_LEVEL` に収める */
+  levelAdjust?: { mode: 'add' | 'set'; value: number }
   /** steal のレア枠に回る割合（%、`レア率=P`）(#831)。無ければ枠ごとの既定（`loot.ts`） */
   rareRate?: number
   /** steal の狙う枠（`枠=`）。無ければ両方 */
@@ -143,6 +151,16 @@ export function parseEffect(input: string): ParsedEffect | null {
   ) {
     parsed.warnings = [...(parsed.warnings ?? []), '回数= は damage 専用のため無視した']
   }
+  // `レベル倍数=` は damage_full 専用 (#898)
+  if (
+    parsed.kind !== 'damage_full' &&
+    input
+      .trim()
+      .split(/\s+/)
+      .some((t) => t.startsWith('レベル倍数='))
+  ) {
+    parsed.warnings = [...(parsed.warnings ?? []), 'レベル倍数= は damage_full 専用のため無視した']
+  }
   // `確率=` は status 専用 (#870)
   if (
     parsed.kind !== 'status' &&
@@ -163,6 +181,12 @@ const CHANCE_KEY = '確率'
 /** `damage` の「ヒット数」キー (#879)。`hits` は敵 AI の被弾記憶と被るので使わない */
 const COUNT_KEY = '回数'
 
+/** `damage_full` の「レベル倍数」キー (#898) */
+const LEVEL_MULTIPLE_KEY = 'レベル倍数'
+
+/** 敵のレベルの上限 (#898)。調整・`レベル:` の指定はここに収める（下限は 1） */
+export const MAX_LEVEL = 99
+
 /** `steal` のレア枠へ回る割合・狙う枠・ぶんどるのキー (#831) */
 const RARE_RATE_KEY = 'レア率'
 const SLOT_KEY = '枠'
@@ -175,8 +199,25 @@ function parseEffectInner(input: string): ParsedEffect | null {
   // 単独動詞のキーワード
   if (trimmed === 'heal_full') return { kind: 'heal_full' }
   if (trimmed === 'damage_full') return { kind: 'damage_full' }
-  // `damage_full 回数=3` は回数を無視（警告は parseEffect が付ける）。回数以外の余計な語は従来どおり不正
-  if (/^damage_full(\s+回数=\S*)+$/.test(trimmed)) return { kind: 'damage_full' }
+  // `damage_full 回数=3` は回数を無視（警告は parseEffect が付ける）。`レベル倍数=N` (#898) は条件。それ以外の余計な語は従来どおり不正
+  if (/^damage_full(\s+(回数|レベル倍数)=\S*)+$/.test(trimmed)) {
+    let levelMultiple: number | undefined
+    for (const t of trimmed.split(/\s+/).slice(1)) {
+      const [k, v] = splitKv(t)
+      if (k !== LEVEL_MULTIPLE_KEY) continue
+      // 不正値（整数でない・0 以下）は書式エラー。黙って無条件の即死にしない
+      if (
+        v === undefined ||
+        !/^\d+$/.test(v) ||
+        Number(v) < 1 ||
+        !Number.isSafeInteger(Number(v))
+      ) {
+        return null
+      }
+      levelMultiple = Number(v)
+    }
+    return { kind: 'damage_full', ...(levelMultiple !== undefined ? { levelMultiple } : {}) }
+  }
   if (trimmed === 'escape_battle') return { kind: 'escape_battle' }
   if (trimmed === 'escape_dungeon') return { kind: 'escape_dungeon' }
 
@@ -222,6 +263,17 @@ function parseEffectInner(input: string): ParsedEffect | null {
     if (stat === undefined || delta === undefined || !Number.isFinite(delta)) return null
     if (verb === 'debuff' && delta > 0) delta = -delta
     return { kind: verb, stat, delta, duration }
+  }
+  if (verb === 'level') {
+    // `level +1` / `level -2` / `level =5` (#898)。符号か `=` が必須の整数 1 つだけ。それ以外は書式エラー
+    const m = rest.length === 1 ? /^([+-]|=)(\d+)$/.exec(rest[0]) : null
+    if (!m || !Number.isSafeInteger(Number(m[2]))) return null
+    const n = Number(m[2])
+    return {
+      kind: 'level',
+      levelAdjust:
+        m[1] === '=' ? { mode: 'set', value: n } : { mode: 'add', value: m[1] === '-' ? -n : n },
+    }
   }
   if (verb === 'revive') {
     let hp: 'full' | 'half' = 'full'
@@ -479,6 +531,10 @@ export interface EffectContext {
    */
   onStatus?: (target: BattleEntity, key: string, change?: 'apply' | 'cure') => void
   /**
+   * HP が動かない効果が対象に効いた通知 (#898。`level` の調整)。戦闘側は、HP が変わらなくてもその対象を MISS にしない
+   */
+  onTouch?: (target: BattleEntity) => void
+  /**
    * `steal` で敵 1 体にぬすむを 1 回試みる (#831)。エンジンが渡す（敵の戦利品の宣言・盗めた回数・獲得の記録を持つのはエンジン）。
    * 戻りは戦闘ログの行と結果（`empty` = もう盗めない。複数回の途中で出たらそこで打ち切る）。
    * 無ければ `steal` は「この場面では使えない」警告だけで何もしない
@@ -567,6 +623,11 @@ export interface BattleEntity {
    * 未指定は前衛（現行どおり）。味方・敵のどちらに付けても補正は効く（汎用エンジンとして敵の後衛も認める。配置の描画は味方側のみ）。
    */
   row?: BattleRow
+  /**
+   * 敵のレベル (#898)。`MonsterDef.level`（`レベル:`）を戦闘への組み立て時に写す。無い敵は付かない（従来どおりキーも増えない）。
+   * `damage_full レベル倍数=N` の条件と、効果 `level +N|-N|=N` の調整が使う（1〜`MAX_LEVEL`）。通常攻撃・ダメージ計算は読まない
+   */
+  level?: number
   /**
    * 敵の隊列の宣言 (#896)。`MonsterDef.row`（`隊列: 前衛 | 後衛`）を戦闘への組み立て時に写す。無い敵は付かない（従来どおりキーも増えない）。
    * エンジンは `battle_enemy_row: on` のときだけ読み、後衛の敵への通常攻撃のダメージを半分にする（`enemyRow.ts`）。off の戦闘では読まない
@@ -662,6 +723,15 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
       /** 対象 1 体への 1 ヒット。`base` は計算済みの基礎ダメージ（damage_full は Infinity）、`round` はヒット番号 */
       const spreadN = ctx.spreadDivisor ?? 1
       const hitOne = (t: BattleEntity, rawBase: number, round: number): void => {
+        // レベル条件の即死 (#898): 対象のレベルが倍数でない・レベルを持たないなら効かない（乱数は使わない。HP は動かず MISS）
+        if (
+          effect.kind === 'damage_full' &&
+          effect.levelMultiple !== undefined &&
+          (t.level === undefined || t.level % effect.levelMultiple !== 0)
+        ) {
+          log.push(`${t.name} には きかなかった！`)
+          return
+        }
         // 全体化 (#895): 基礎値を割る（相性・耐性の前。即死の Infinity は割らず、成功率の側で割る）
         const base = spreadDamageBase(rawBase, spreadN)
         // ダメージの反転 (#870): 属性相性・耐性を通した最終値が回復になる。即死は全回復。倒れている者は生き返らない
@@ -798,6 +868,29 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           }
           hitOne(current, rollRange(min, max, ctx.rng), round)
         }
+      }
+      return log
+    }
+    case 'level': {
+      // 敵のレベル調整 (#898)。レベルを持たない者（レベル無しの敵・味方）には効かない。1〜MAX_LEVEL に収める
+      const adj = effect.levelAdjust
+      if (!adj) return ['(警告: level のパラメータ不正)']
+      for (const t of ctx.targets) {
+        if (t.level === undefined || t.hp <= 0) {
+          log.push(`${t.name} には きかなかった！`)
+          continue
+        }
+        const before = t.level
+        const next = adj.mode === 'set' ? adj.value : before + adj.value
+        t.level = Math.min(MAX_LEVEL, Math.max(1, next))
+        ctx.onTouch?.(t)
+        log.push(
+          t.level > before
+            ? `${t.name} の レベルが ${t.level} に あがった！`
+            : t.level < before
+              ? `${t.name} の レベルが ${t.level} に さがった！`
+              : `${t.name} の レベルは ${t.level} のまま！`
+        )
       }
       return log
     }

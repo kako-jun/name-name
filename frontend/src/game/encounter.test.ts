@@ -362,3 +362,18 @@ describe('rollEncounter: 隊列を BattleEntity.formationRow に写す (#896)', 
     expect('row' in a).toBe(false)
   })
 })
+
+describe('rollEncounter: レベルを BattleEntity.level に写す (#898)', () => {
+  const roll = (masters: Record<string, MonsterDef>) =>
+    rollEncounter({ rate: 1, groups: ['slime+ghost'], masters, rng: () => 0 })!
+
+  it('レベルを書かない敵は level なし（従来どおりキーも増えない）', () => {
+    for (const e of roll({ slime, ghost })) expect('level' in e).toBe(false)
+  })
+
+  it('書いたレベルをそのまま写す', () => {
+    const [a, b] = roll({ slime: { ...slime, level: 25 }, ghost })
+    expect(a.level).toBe(25)
+    expect('level' in b).toBe(false)
+  })
+})

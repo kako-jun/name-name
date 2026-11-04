@@ -2512,6 +2512,41 @@ describe('parseMarkdown + normalizeDocument: battle_presentation / ポーズ が
     }
   })
 
+  it('モンスターの レベル: (#898) が実 WASM パーサ経由で残る（不正値は警告して無し）', async () => {
+    const md = (body: string[]) =>
+      [
+        '---',
+        'engine: name-name',
+        'chapter: 1',
+        'title: t',
+        '---',
+        '',
+        '## data: マスター',
+        '',
+        '[モンスター m]',
+        '名前: M',
+        'HP: 5',
+        ...body,
+        '[/モンスター]',
+        '',
+      ].join('\n')
+    const levelOf = (doc: Awaited<ReturnType<typeof parseMarkdown>>) => {
+      const ev = doc.chapters.flatMap((c) => c.scenes.flatMap((s) => s.events))
+      const m = ev.find((x) => typeof x === 'object' && 'Monster' in x)
+      return m && 'Monster' in m ? m.Monster.level : undefined
+    }
+    expect(levelOf(await parseMarkdown(md(['レベル: 25'])))).toBe(25)
+    expect(levelOf(await parseMarkdown(md(['Lv: 500'])))).toBe(99)
+    expect(levelOf(await parseMarkdown(md([])))).toBeUndefined()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(levelOf(await parseMarkdown(md(['レベル: 高い'])))).toBeUndefined()
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('invalid monster level'))).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('battle_enemy_list (#954) と [感情:] (#943 / #946) が同じ wasm で両方通る', async () => {
     const doc = await parseMarkdown(
       docWith(

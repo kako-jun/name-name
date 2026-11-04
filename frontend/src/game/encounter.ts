@@ -104,6 +104,7 @@ export function buildEnemyEntities(
       ...lootField(def.loot),
       ...enemyLayoutField(def, at),
       ...formationRowField(def.row),
+      ...(def.level !== undefined ? { level: def.level } : {}),
     })
   }
   return enemies

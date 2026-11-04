@@ -1407,3 +1407,56 @@ export function enemyRowScenarios(): Scenario[] {
   }
   return out
 }
+
+/** 敵のレベル (#898)。敵のレベル（レベル無し・境界・倍数のもの・倍数でないもの） */
+const ENEMY_LEVELS: ReadonlyArray<number | undefined> = [undefined, 1, 4, 5, 10, 25, 98, 99]
+/** レベル調整の効果 `level ...`（境界・クランプ・大きな値を含む） */
+const LEVEL_ADJUSTS: readonly string[] = [
+  'level +1',
+  'level -1',
+  'level =5',
+  'level =10',
+  'level +200',
+  'level -200',
+  'level =0',
+]
+/** レベル条件の即死の倍数（1 は全レベル・5 は FF5 のレベル5デス） */
+const LEVEL_MULTIPLES: readonly number[] = [1, 2, 5, 10]
+
+/**
+ * 敵のレベル (#898)。敵のレベル × レベル条件の即死の倍数 × レベル調整の効果 × ターン制/ATB。
+ * 味方が「即死 → 調整 → 即死 → 調整 → 即死」と同じ敵（s0。HP 大・死の耐性なし）へ撃つ。不変条件は `enemy-level-invariant`（`run.ts` の `checkEnemyLevel`）。
+ */
+export function enemyLevelScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const tick: Op = { t: 'tick', ms: 3000 }
+  for (const atb of [false, true]) {
+    for (const level of ENEMY_LEVELS) {
+      for (const n of LEVEL_MULTIPLES) {
+        for (const adjust of LEVEL_ADJUSTS) {
+          const death: Op = { t: 'spell', s: 0, target: 's0' }
+          const adj: Op = { t: 'spell', s: 1, target: 's0' }
+          const seq = [death, adj, death, adj, death]
+          out.push({
+            id: `enemy-level/${atb ? 'atb' : 'turn'}/lv${level ?? 'none'}/x${n}/${adjust.replace(/ /g, '')}`,
+            seed: 140_000 + out.length,
+            party: [entity('a', { hp: 9999, maxHp: 9999 })],
+            enemies: [
+              foe('s0', { atk: 1, hp: 500, maxHp: 500, ...(level !== undefined ? { level } : {}) }),
+              foe('s1', { atk: 1, hp: 500, maxHp: 500 }),
+            ],
+            atb: atb ? { mode: 'active' } : undefined,
+            spells: [
+              { name: 'デス', mp: 1, target: '敵単体', effect: `damage_full レベル倍数=${n}` },
+              { name: '調整', mp: 1, target: '敵単体', effect: adjust },
+            ],
+            items: [],
+            ops: atb ? seq.flatMap((o) => [tick, o]) : seq,
+            checkEnemyLevel: true,
+          })
+        }
+      }
+    }
+  }
+  return out
+}
