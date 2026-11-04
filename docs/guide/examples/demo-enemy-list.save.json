@@ -32,16 +32,16 @@
     "battle": {
       "enemies": [
         {
-          "id": "demo_slime"
+          "id": "demo_fan"
         },
         {
-          "id": "demo_slime"
+          "id": "demo_fan"
         },
         {
-          "id": "demo_slime"
+          "id": "demo_fan"
         },
         {
-          "id": "demo_ika"
+          "id": "demo_lighter"
         }
       ],
       "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"

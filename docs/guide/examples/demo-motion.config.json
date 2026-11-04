@@ -34,8 +34,8 @@
     "minSteps": 3
   },
   "monsters": {
-    "demo_tako": {
-      "name": "タコ",
+    "demo_puddle": {
+      "name": "凍った水たまり",
       "hp": 400,
       "atk": 12,
       "def": 2,
@@ -45,8 +45,8 @@
       "size": "2x1",
       "sprite": "http://localhost:8765/assets/images/enemies/M148.webp"
     },
-    "demo_ika": {
-      "name": "イカ",
+    "demo_lighter": {
+      "name": "ライター",
       "hp": 400,
       "atk": 10,
       "def": 2,

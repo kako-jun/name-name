@@ -102,17 +102,17 @@ describe('motion / 敵名窓 / エフェクトの確認用設定（#1051）', ()
   it('motion: snappy が反映され、戦闘中状態に解決する', () => {
     const { cfg, resolved } = resume(demoMotionConfig, demoMotionSave)
     expect(cfg.battle.motion).toBe('snappy')
-    expect(resolved.battle!.enemies.map((e) => e.name)).toEqual(['タコ', 'イカ'])
+    expect(resolved.battle!.enemies.map((e) => e.name)).toEqual(['凍った水たまり', 'ライター'])
   })
 
   it('敵名窓: window が反映され、同名の敵が複数並ぶ', () => {
     const { cfg, resolved } = resume(demoEnemyListConfig, demoEnemyListSave)
     expect(cfg.battle.enemyList).toBe('window')
     expect(resolved.battle!.enemies.map((e) => e.name)).toEqual([
-      'スライム',
-      'スライム',
-      'スライム',
-      'イカ',
+      '扇風機・換気扇の羽根',
+      '扇風機・換気扇の羽根',
+      '扇風機・換気扇の羽根',
+      'ライター',
     ])
   })
 

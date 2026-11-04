@@ -32,7 +32,7 @@
     "battle": {
       "enemies": [
         {
-          "id": "demo_boss"
+          "id": "demo_bottle"
         }
       ],
       "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"

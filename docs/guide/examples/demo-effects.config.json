@@ -34,8 +34,8 @@
     "minSteps": 3
   },
   "monsters": {
-    "demo_boss": {
-      "name": "かわのぬし",
+    "demo_bottle": {
+      "name": "割れた酒瓶",
       "hp": 900,
       "atk": 4,
       "def": 2,

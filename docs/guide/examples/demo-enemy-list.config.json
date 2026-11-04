@@ -34,8 +34,8 @@
     "minSteps": 3
   },
   "monsters": {
-    "demo_slime": {
-      "name": "スライム",
+    "demo_fan": {
+      "name": "扇風機・換気扇の羽根",
       "hp": 40,
       "atk": 8,
       "def": 2,
@@ -45,8 +45,8 @@
       "size": "1x1",
       "sprite": "http://localhost:8765/assets/images/enemies/M147.webp"
     },
-    "demo_ika": {
-      "name": "イカ",
+    "demo_lighter": {
+      "name": "ライター",
       "hp": 400,
       "atk": 10,
       "def": 2,
