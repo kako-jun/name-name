@@ -126,7 +126,7 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
       atb: { mode: 'wait' },
       enemyRow: { grid: { cols: 4, rows: 2 } },
     })
-    expect(buildBattleEngineOptions({})).toEqual({})
+    expect(buildBattleEngineOptions({ layout: 'side' })).toEqual({})
     // front レイアウト・グリッド無しでは enemyRow を渡さない
     const b = load().battle
     expect(buildBattleEngineOptions({ ...b, layout: 'front' })).toEqual({ atb: { mode: 'wait' } })
