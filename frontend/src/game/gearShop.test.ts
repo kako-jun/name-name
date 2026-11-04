@@ -413,6 +413,22 @@ describe('parseGearShopConfig', () => {
   })
 })
 
+describe('parseGearShopConfig: abilities (#881 段階3)', () => {
+  it('刀の abilities を読む（重複は除く）。防具・不正は警告して捨てる', () => {
+    const r = parseGearShopConfig({
+      entries: [
+        { id: 'a1', kind: 'blade', owner: 'p1', abilities: ['A', 'A', 'B'] },
+        { id: 'a2', kind: 'blade', owner: 'p1', abilities: 'A' },
+        { id: 'v', kind: 'armor', abilities: ['A'] },
+      ],
+    })
+    expect(r.value?.entries[0].abilities).toEqual(['A', 'B'])
+    expect(r.value?.entries[1].abilities).toBeUndefined()
+    expect(r.value?.entries[2].abilities).toBeUndefined()
+    expect(r.warnings.filter((w) => w.includes('abilities'))).toHaveLength(2)
+  })
+})
+
 describe('checkGearState', () => {
   it('正常は null', () => {
     expect(checkGearState({ owned: {}, blade: {} })).toBeNull()

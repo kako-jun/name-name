@@ -884,6 +884,8 @@ async function main(): Promise<void> {
       ...config,
       party: partyState,
       items: itemsWithCounts(config.items, inventory),
+      // 装備中の刀のアビリティだけが「わざ」に出る (#881)。売り物の定義が無いゲームは従来どおり
+      ...(config.gearShop && gear ? { gear: { shop: config.gearShop, state: gear } } : {}),
     })
     const bg = resumeBackground(
       savedBattle,

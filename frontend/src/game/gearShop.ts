@@ -34,6 +34,8 @@ export interface GearEntry {
   unlockFlag?: string
   /** 一覧に出す画像のパス（任意の文字列。sit-by-me の刀マスターから切り出した派生画像を指す想定だが、派生画像は未作成）。省略 = 画像なし（文字のみ）。読み込み・表示は段階2の UI */
   image?: string
+  /** 刀を装備している間だけ戦闘の「わざ」に出る特技の id（設定 JSON の `skills` の id。段階3 #881）。刀だけが持つ（防具は属性防御だけ）。省略 = 刀のアビリティなし */
+  abilities?: string[]
 }
 
 export interface GearShopConfig {
@@ -337,6 +339,33 @@ export function resolveGear(
   return { state, equipment: cleaned, warnings }
 }
 
+// ---- 戦闘への反映 (#881 段階3) ----
+
+/**
+ * 戦闘の「わざ」のうち、その人物に出すもの。`skills`（わざの候補の一覧。順を保つ）から、
+ * 「どれかの刀のアビリティに挙がっている特技」は**その人物が装備中の刀（`state.blade`。購入済みの自分の刀）が持つものだけ**を残し、
+ * どの刀にも挙がっていない特技（刀と無関係の固定のわざ）はそのまま残す。刀を持ち替えれば結果が変わる（純関数。戦闘中の持ち替えは無い）。
+ * 他人の刀・未購入の刀・防具のアビリティは出ない。刀にアビリティを宣言していない定義では `skills` と同じ（従来どおり）
+ */
+export function skillsForMember<T extends { id: string }>(
+  skills: readonly T[],
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string
+): T[] {
+  const gated = new Set<string>()
+  for (const e of cfg.entries)
+    if (e.kind === 'blade') for (const a of e.abilities ?? []) gated.add(a)
+  if (gated.size === 0) return [...skills]
+  const id = equippedBlade(state, member)
+  const e = id === undefined ? undefined : findEntry(cfg, id)
+  const granted =
+    e && e.kind === 'blade' && e.owner === member && isOwned(state, member, e.id)
+      ? new Set(e.abilities ?? [])
+      : new Set<string>()
+  return skills.filter((s) => !gated.has(s.id) || granted.has(s.id))
+}
+
 // ---- 設定 JSON ----
 
 export interface ParsedGearShop {
@@ -427,6 +456,20 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
     if (imageRaw !== undefined) {
       if (typeof imageRaw === 'string' && imageRaw.trim()) entry.image = imageRaw.trim()
       else warnings.push(`${where}.image は文字列のパスにしてください（画像なしにします）`)
+    }
+    // 刀のアビリティ（戦闘の「わざ」に出る特技 id）。刀以外・不正は警告して捨てる
+    if (it.abilities !== undefined) {
+      if (it.kind !== 'blade')
+        warnings.push(`${where}.abilities は刀だけが持てます（防具では無視します）`)
+      else if (
+        Array.isArray(it.abilities) &&
+        it.abilities.every((a) => typeof a === 'string' && a !== '')
+      ) {
+        if (it.abilities.length > 0) entry.abilities = [...new Set(it.abilities as string[])]
+      } else
+        warnings.push(
+          `${where}.abilities は特技 id（文字列）の配列にしてください（アビリティなしにします）`
+        )
     }
     seen.add(it.id)
     entries.push(entry)

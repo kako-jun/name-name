@@ -934,6 +934,13 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   warnings.push(...menuParsed.warnings)
   const gearShopParsed = parseGearShopConfig(raw.gearShop)
   warnings.push(...gearShopParsed.warnings)
+  // 刀のアビリティが、設定の `skills` に無い特技を指していたら知らせる（戦闘のわざには出ない）
+  for (const e of gearShopParsed.value?.entries ?? [])
+    for (const a of e.abilities ?? [])
+      if (!skills.value.some((s) => s.id === a))
+        warnings.push(
+          `gearShop の刀 "${e.id}" の abilities "${a}" は skills に無い特技です（戦闘のわざには出ません）`
+        )
   let tiltShift: 'on' | undefined
   if (raw.tiltShift !== undefined) {
     if (raw.tiltShift === 'on') tiltShift = 'on'

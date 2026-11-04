@@ -3,6 +3,7 @@
  */
 import type { BattleMenuData, BattleSkillEntry } from '../game/battleMenu'
 import type { FieldSampleConfig } from './config'
+import { skillsForMember, type GearShopConfig, type GearState } from '../game/gearShop'
 
 /**
  * 呪文・わざ (#873) は味方全員共通なので味方 id ごとに別インスタンスで複製し、アイテムは戦闘ごとに複製する
@@ -13,23 +14,24 @@ import type { FieldSampleConfig } from './config'
 export function buildBattleMenu(
   config: Pick<FieldSampleConfig, 'party' | 'spells' | 'items'> & {
     skills?: readonly BattleSkillEntry[]
+    /** 刀の売り物の定義と、持ち越した購入済み・装備中の刀 (#881 段階3)。あれば「わざ」は味方ごとに装備中の刀のアビリティで絞る。省略は従来どおり全員同じ */
+    gear?: { shop: GearShopConfig; state: GearState }
   }
 ): BattleMenuData | undefined {
   const skills = config.skills ?? []
+  const skillsOf = (id: string): BattleSkillEntry[] =>
+    config.gear ? skillsForMember(skills, config.gear.shop, config.gear.state, id) : [...skills]
+  const skillRows = config.party
+    .map((p) => [p.id, skillsOf(p.id).map((x) => ({ ...x }))] as const)
+    .filter(([, rows]) => rows.length > 0)
   // たいせつなもの (#880 `key: true`) は戦闘の候補窓に出さない
   const items = config.items.filter((x) => !x.key)
-  if (config.spells.length === 0 && items.length === 0 && skills.length === 0) return undefined
+  if (config.spells.length === 0 && items.length === 0 && skillRows.length === 0) return undefined
   return {
     spells: Object.fromEntries(
       config.party.map((p) => [p.id, config.spells.map((x) => ({ ...x }))])
     ),
-    ...(skills.length > 0
-      ? {
-          skills: Object.fromEntries(
-            config.party.map((p) => [p.id, skills.map((x) => ({ ...x }))])
-          ),
-        }
-      : {}),
+    ...(skillRows.length > 0 ? { skills: Object.fromEntries(skillRows) } : {}),
     items: items.map((x) => ({ ...x })),
   }
 }
