@@ -31,7 +31,7 @@ export interface AcrylicParams {
   lineWidthRatio: number
   /** 枠線の最小太さ(px)。スプライトが小さくても線が潰れないようにする */
   minLinePx: number
-  /** 余白の上限(論理 px)。これを超える指定は切り詰める（細い部分の隙間から線が余白に漏れるため。ハード上限 6） */
+  /** 余白の上限(論理 px)。これを超える指定は切り詰める（細い部分の隙間から線が余白に漏れるため。ハード上限 10。#1086 で既定 6→10） */
   maxMarginPx: number
   /** 枠線の太さの上限(論理 px)。ハード上限 4 */
   maxLinePx: number
@@ -84,11 +84,11 @@ export interface AcrylicParams {
 }
 
 export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
-  marginRatio: 0.03,
+  marginRatio: 0.06,
   minMarginPx: 2,
   lineWidthRatio: 0.02,
   minLinePx: 1.5,
-  maxMarginPx: 6,
+  maxMarginPx: 10,
   maxLinePx: 4,
   lineColor: 0xe6f3ff,
   lineAlpha: 0.85,
@@ -280,7 +280,10 @@ export function computeAcrylicGeometry(
   return { sprite, marginPx, linePx, base, highlight, shadow, liftPx }
 }
 
-/** 余白の上限(論理 px)。これを超えると細い部分の隙間から線が余白の内側に漏れる (#737) */
-export const EDGE_MAX_MARGIN_PX = 6
+/**
+ * 余白の上限(論理 px)。これを超えると細い部分の隙間から線が余白の内側に漏れる (#737)。
+ * 既定の `maxMarginPx`（#1086 で 10）を切らない最小値。上げるなら既定と一緒に見直す。
+ */
+export const EDGE_MAX_MARGIN_PX = 10
 /** 線の太さの上限(論理 px) */
 export const EDGE_MAX_LINE_PX = 4

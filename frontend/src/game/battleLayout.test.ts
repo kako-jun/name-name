@@ -2092,7 +2092,7 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
     expect(into).toBeGreaterThan(0) // 許容量内の重なりは仕様なので、あえて詰めない
   })
 
-  it('許容量内なら何も変えない（enemyAcrylic なしと同じ配置）— 縦横比 0.5 / 1', () => {
+  it('許容量内なら何も変えない（enemyAcrylic なしと同じ配置）— 縦横比 1。縦長 0.5 は余白拡大 (#1086) で板が枠より横へ広がるため、変わるとしても縮むだけ', () => {
     for (const a of [0.5, 1])
       for (const W of WIDTHS)
         for (const H of HEIGHTS)
@@ -2106,7 +2106,13 @@ describe('アクスタの敵: 隣の板と重ならず、窓との重なりは�
             }
             const plain = computeSideBattleLayout(input)
             const withPlate = computeSideBattleLayout({ ...input, enemyAcrylic: PARAMS })
-            expect(withPlate.enemies, `${W}x${H} n${n} a${a}`).toEqual(plain.enemies)
+            if (a === 1) expect(withPlate.enemies, `${W}x${H} n${n} a${a}`).toEqual(plain.enemies)
+            else
+              withPlate.enemies.forEach((e, i) =>
+                expect(e.size, `${W}x${H} n${n} a${a} #${i}`).toBeLessThanOrEqual(
+                  plain.enemies[i].size + 1e-6
+                )
+              )
           }
   })
 

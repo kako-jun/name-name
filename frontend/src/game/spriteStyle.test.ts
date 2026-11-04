@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeSlitY } from './acrylicBase'
 import {
+  EDGE_MAX_MARGIN_PX,
   DEFAULT_ACRYLIC_PARAMS,
   computeAcrylicGeometry,
   normalizeSpriteStyle,
@@ -35,11 +36,11 @@ describe('normalizeSpriteStyle', () => {
 describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
   it('仕様値: 既定パラメータはリテラルで固定（定数参照にしない）', () => {
     expect(DEFAULT_ACRYLIC_PARAMS).toEqual({
-      marginRatio: 0.03,
+      marginRatio: 0.06,
       minMarginPx: 2,
       lineWidthRatio: 0.02,
       minLinePx: 1.5,
-      maxMarginPx: 6,
+      maxMarginPx: 10,
       maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
@@ -69,11 +70,11 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
 
   it.each([[undefined], [{}]])('引数 %j は既定値と一致する（仕様値）', (arg) => {
     expect(resolveAcrylicParams(arg as Partial<AcrylicParams> | undefined)).toEqual({
-      marginRatio: 0.03,
+      marginRatio: 0.06,
       minMarginPx: 2,
       lineWidthRatio: 0.02,
       minLinePx: 1.5,
-      maxMarginPx: 6,
+      maxMarginPx: 10,
       maxLinePx: 4,
       lineColor: 0xe6f3ff,
       lineAlpha: 0.85,
@@ -131,11 +132,11 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         shadowScale: bad,
       })
       expect(r).toEqual({
-        marginRatio: 0.03,
+        marginRatio: 0.06,
         minMarginPx: 2,
         lineWidthRatio: 0.02,
         minLinePx: 1.5,
-        maxMarginPx: 6,
+        maxMarginPx: 10,
         maxLinePx: 4,
         lineColor: 0xe6f3ff,
         lineAlpha: 0.85,
@@ -178,7 +179,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
     ['minMarginPx', 0, 32],
     ['lineWidthRatio', 0, 0.1],
     ['minLinePx', 0, 16],
-    ['maxMarginPx', 0, 6],
+    ['maxMarginPx', 0, 10],
     ['maxLinePx', 0, 4],
     ['lineColor', 0, 0xffffff],
     ['lineAlpha', 0, 1],
@@ -201,7 +202,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
     expect(resolveAcrylicParams({ minMarginPx: 33 }).minMarginPx).toBe(32)
     expect(resolveAcrylicParams({ lineWidthRatio: 0.11 }).lineWidthRatio).toBe(0.1)
     expect(resolveAcrylicParams({ minLinePx: 17 }).minLinePx).toBe(16)
-    expect(resolveAcrylicParams({ maxMarginPx: 6.1 }).maxMarginPx).toBe(6)
+    expect(resolveAcrylicParams({ maxMarginPx: 10.1 }).maxMarginPx).toBe(10)
     expect(resolveAcrylicParams({ maxLinePx: 4.1 }).maxLinePx).toBe(4)
     expect(resolveAcrylicParams({ baseWidthRatio: 0.09 }).baseWidthRatio).toBe(0.1)
     expect(resolveAcrylicParams({ baseHeightRatio: 0.04 }).baseHeightRatio).toBe(0.05)
@@ -259,13 +260,13 @@ describe('computeAcrylicGeometry', () => {
 
   it('hasBase=false のスプライトは枠の下端から余白+線ぶん上に足元が来る（足元は台座中心ではない）', () => {
     const g = computeAcrylicGeometry(100, 100, 200, resolveAcrylicParams({ hasBase: false }))
-    // size=200: margin=6, line=4 → 領域は [10, 190]²。足元 190
-    expect(g.sprite).toEqual({ x: 10, y: 10, width: 180, height: 180 })
+    // size=200: margin=10, line=4 → 領域は [14, 186]²。足元 186
+    expect(g.sprite).toEqual({ x: 14, y: 14, width: 172, height: 172 })
   })
 
   it('仕様値: 正準寸法（size=200, texture 100x100）のスナップショット', () => {
     const g = computeAcrylicGeometry(100, 100, 200)
-    expect(g.marginPx).toBeCloseTo(6, 9)
+    expect(g.marginPx).toBeCloseTo(10, 9)
     expect(g.linePx).toBeCloseTo(4, 9)
     expect(g.base!.cx).toBeCloseTo(100, 9)
     expect(g.base!.rx).toBeCloseTo(70, 9)
@@ -278,14 +279,14 @@ describe('computeAcrylicGeometry', () => {
       g.shadow!.cy + g.shadow!.ry + g.base!.ry * DEFAULT_ACRYLIC_PARAMS.baseThicknessRatio
     ).toBeCloseTo(200, 9) // 台座の厚み分は下に予約 (#760)
     expect(g.base!.cy).toBeCloseTo(172.952, 9)
-    // 下端は差し込み線 slitY = 172.952 - 19.6*0.28 = 167.464。領域は x:[10,190] × y:[10,167.464]（高さ 157.464）
-    // スプライト高さ + 浮き(0.03×高さ) = 領域の高さ → 高さ = 157.464 / 1.03
+    // 下端は差し込み線 slitY = 172.952 - 19.6*0.28 = 167.464。領域は x:[14,186] × y:[14,167.464]（高さ 153.464）
+    // スプライト高さ + 浮き(0.03×高さ) = 領域の高さ → 高さ = 153.464 / 1.03
     const slitY = 167.464
-    const h = 157.464 / 1.03
+    const h = 153.464 / 1.03
     expect(g.sprite.width).toBeCloseTo(h, 9)
     expect(g.sprite.height).toBeCloseTo(h, 9)
     expect(g.sprite.x).toBeCloseTo((200 - h) / 2, 9)
-    expect(g.sprite.y).toBeCloseTo(10, 9)
+    expect(g.sprite.y).toBeCloseTo(14, 9)
     expect(g.liftPx).toBeCloseTo(h * 0.03, 9)
     expect(g.sprite.y + g.sprite.height).toBeCloseTo(slitY - g.liftPx, 9)
   })
@@ -300,20 +301,20 @@ describe('computeAcrylicGeometry', () => {
 
   it('縦長 400x100 は幅いっぱい・縦横比 4:1 を保つ（size と width の取り違えを検知）', () => {
     const g = computeAcrylicGeometry(400, 100, 200)
-    expect(g.sprite.width).toBeCloseTo(180, 9)
-    expect(g.sprite.height).toBeCloseTo(45, 9)
-    expect(g.sprite.x).toBeCloseTo(10, 9)
-    // 足元は差し込み線（167.464）から浮き量（45×0.03）だけ上
-    expect(g.sprite.y + g.sprite.height).toBeCloseTo(167.464 - 45 * 0.03, 9)
+    expect(g.sprite.width).toBeCloseTo(172, 9)
+    expect(g.sprite.height).toBeCloseTo(43, 9)
+    expect(g.sprite.x).toBeCloseTo(14, 9)
+    // 足元は差し込み線（167.464）から浮き量（43×0.03）だけ上
+    expect(g.sprite.y + g.sprite.height).toBeCloseTo(167.464 - 43 * 0.03, 9)
   })
 
   it('横長 100x400 は高さいっぱい・縦横比 1:4 を保つ', () => {
     const g = computeAcrylicGeometry(100, 400, 200)
-    const h = 157.464 / 1.03 // 高さ + 浮き = 領域の高さ
+    const h = 153.464 / 1.03 // 高さ + 浮き = 領域の高さ
     expect(g.sprite.height).toBeCloseTo(h, 9)
     expect(g.sprite.width).toBeCloseTo(h / 4, 9) // 縦横比 1:4 を保つ
     expect(g.sprite.x).toBeCloseTo((200 - h / 4) / 2, 9)
-    expect(g.sprite.y).toBeCloseTo(10, 9)
+    expect(g.sprite.y).toBeCloseTo(14, 9)
   })
 
   it.each([
@@ -324,18 +325,18 @@ describe('computeAcrylicGeometry', () => {
     [0, 0],
   ])('テクスチャ寸法 %s x %s は領域いっぱいに置く', (w, h) => {
     const g = computeAcrylicGeometry(w, h, 200)
-    expect(g.sprite.x).toBeCloseTo(10, 9)
-    expect(g.sprite.y).toBeCloseTo(10, 9)
-    expect(g.sprite.width).toBeCloseTo(180, 9)
-    expect(g.sprite.height).toBeCloseTo(157.464 / 1.03, 9) // 浮き量ぶん縮む
+    expect(g.sprite.x).toBeCloseTo(14, 9)
+    expect(g.sprite.y).toBeCloseTo(14, 9)
+    expect(g.sprite.width).toBeCloseTo(172, 9)
+    expect(g.sprite.height).toBeCloseTo(153.464 / 1.03, 9) // 浮き量ぶん縮む
   })
 
-  // minMarginPx(2) と marginRatio*size = 0.03*size の切替: size=66.67 で等しい。minLinePx(1.5) と 0.02*size は size=75 で等しい。
+  // minMarginPx(2) と marginRatio*size = 0.06*size の切替: size=33.33 で等しい（上限 10 は size=166.67）。minLinePx(1.5) と 0.02*size は size=75 で等しい。
   it.each([
-    [50, 2, 1.5], // 比率 1.5 / 1.0 → 両方とも最小値が勝つ
-    [66, 2, 1.5],
-    [75, 2.25, 1.5], // 線は 0.02*75=1.5 ちょうど（最小値と同値）
-    [100, 3, 2], // 比率が勝つ
+    [30, 2, 1.5], // 余白は最小値が勝つ（0.06*30=1.8）。線も 0.6 → 最小値
+    [50, 3, 1.5], // 余白は比率が勝つ・線は最小値
+    [75, 4.5, 1.5], // 線は 0.02*75=1.5 ちょうど（最小値と同値）
+    [100, 6, 2], // 比率が勝つ
   ])(
     '仕様値: size=%s の余白は %s px・線は %s px（最小値と比率の切替境界）',
     (size, margin, line) => {
@@ -345,9 +346,9 @@ describe('computeAcrylicGeometry', () => {
     }
   )
 
-  it('size=66 は余白が最小値 2（0.03*66=1.98）、size=67 は比率 2.01 が勝つ', () => {
-    expect(computeAcrylicGeometry(100, 100, 66).marginPx).toBeCloseTo(2, 9)
-    expect(computeAcrylicGeometry(100, 100, 67).marginPx).toBeCloseTo(2.01, 9)
+  it('size=33 は余白が最小値 2（0.06*33=1.98）、size=34 は比率 2.04 が勝つ', () => {
+    expect(computeAcrylicGeometry(100, 100, 33).marginPx).toBeCloseTo(2, 9)
+    expect(computeAcrylicGeometry(100, 100, 34).marginPx).toBeCloseTo(2.04, 9)
   })
 
   it('size=75 の線は 1.5、size=76 は比率 1.52 が勝つ', () => {
@@ -358,7 +359,7 @@ describe('computeAcrylicGeometry', () => {
   it('余白と線を取り違えない（余白>線の既定で marginPx と linePx が別の値）', () => {
     const g = computeAcrylicGeometry(100, 100, 200)
     expect(g.marginPx).not.toBe(g.linePx)
-    // スプライトの内側余白は marginPx+linePx の合計: 上端 y = 6 + 4
+    // スプライトの内側余白は marginPx+linePx の合計: 上端 y = 10 + 4
     expect(g.sprite.y).toBeCloseTo(g.marginPx + g.linePx, 9)
   })
 
@@ -508,15 +509,15 @@ describe('computeAcrylicGeometry: スイープ不変条件', () => {
 })
 
 describe('computeAcrylicGeometry: 余白・線の上限', () => {
-  it('仕様値: 大きな枠でも余白は 6px・線は 4px で頭打ち（比率×size が上限を超えても）', () => {
+  it('仕様値: 大きな枠でも余白は 10px・線は 4px で頭打ち（比率×size が上限を超えても）', () => {
     const g = computeAcrylicGeometry(100, 100, 1000)
-    expect(g.marginPx).toBe(6) // 0.03*1000 = 30 → 6
+    expect(g.marginPx).toBe(10) // 0.06*1000 = 60 → 10
     expect(g.linePx).toBe(4) // 0.02*1000 = 20 → 4
   })
 
   it('上限の手前は比率のまま（上限 clamp が小さな値を潰さない）', () => {
     const g = computeAcrylicGeometry(100, 100, 100)
-    expect(g.marginPx).toBe(3) // 0.03*100
+    expect(g.marginPx).toBe(6) // 0.06*100
     expect(g.linePx).toBe(2) // 0.02*100
   })
 
@@ -531,13 +532,13 @@ describe('computeAcrylicGeometry: 余白・線の上限', () => {
     expect(g.linePx).toBe(1)
   })
 
-  it('maxMarginPx にハード上限（6）を超える値を渡しても 6', () => {
+  it('maxMarginPx にハード上限（10）を超える値を渡しても 10', () => {
     const g = computeAcrylicGeometry(100, 100, 1000, {
       ...DEFAULT_ACRYLIC_PARAMS,
       maxMarginPx: 99,
       maxLinePx: 99,
     })
-    expect(g.marginPx).toBe(6)
+    expect(g.marginPx).toBe(10)
     expect(g.linePx).toBe(4)
   })
 })
@@ -686,7 +687,7 @@ describe('computeAcrylicGeometry: スプライトの浮き (#802)', () => {
       resolveAcrylicParams({ hasBase: false, spriteLiftRatio: r })
     )
     expect(g.liftPx).toBe(0)
-    expect(g.sprite).toEqual({ x: 10, y: 10, width: 180, height: 180 })
+    expect(g.sprite).toEqual({ x: 14, y: 14, width: 172, height: 172 })
   })
 
   it('liftPx / sprite.height は texture 100x100 と 100x400 で等しい（高さに比例）', () => {
@@ -753,5 +754,23 @@ describe('resolveAcrylicParams: ステム (#848)', () => {
     expect(resolveAcrylicParams({ stemMinGapRatio: 0 }).stemMinGapRatio).toBe(0.01)
     expect(resolveAcrylicParams({ stemMinGapRatio: 5 }).stemMinGapRatio).toBe(1)
     expect(resolveAcrylicParams({ stemMinGapRatio: NaN }).stemMinGapRatio).toBe(0.06)
+  })
+})
+
+describe('#1086 余白の拡大（B）', () => {
+  it('既定: 余白は枠の 6%・上限 10px・線は据え置き（2%・上限 4px）', () => {
+    expect(DEFAULT_ACRYLIC_PARAMS.marginRatio).toBe(0.06)
+    expect(DEFAULT_ACRYLIC_PARAMS.maxMarginPx).toBe(10)
+    expect(DEFAULT_ACRYLIC_PARAMS.lineWidthRatio).toBe(0.02)
+    expect(DEFAULT_ACRYLIC_PARAMS.maxLinePx).toBe(4)
+  })
+  it('EDGE の頭打ちは既定の上限（10）を切らず、10 を超える上書きは 10 に丸める', () => {
+    expect(EDGE_MAX_MARGIN_PX).toBe(10)
+    expect(resolveAcrylicParams({}).maxMarginPx).toBe(10)
+    expect(resolveAcrylicParams({ maxMarginPx: 11 }).maxMarginPx).toBe(10)
+  })
+  it('余白の境界: size=166 は比率（9.96）、size=167 以上は上限 10', () => {
+    expect(computeAcrylicGeometry(100, 100, 166).marginPx).toBeCloseTo(9.96, 9)
+    expect(computeAcrylicGeometry(100, 100, 167).marginPx).toBe(10)
   })
 })
