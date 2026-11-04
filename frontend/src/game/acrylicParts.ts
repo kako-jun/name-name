@@ -54,24 +54,35 @@ export function emptyAcrylicParts(back: Graphics | null): AcrylicParts {
  * 作れなかった（null）結果も覚えて、同じ画像で作り直さない。解放は destroy でまとめて行う。
  */
 export class AcrylicPlateCache {
-  private cache = new Map<unknown, AcrylicPlate | null>()
+  /** 画像（tex.source）→ 基本の絵（baseTex.source。基本の絵自身・指定なしは null）→ 板 */
+  private cache = new Map<unknown, Map<unknown, AcrylicPlate | null>>()
 
-  constructor(private readonly make: (tex: Texture) => AcrylicPlate | null) {}
+  constructor(private readonly make: (tex: Texture, baseTex?: Texture) => AcrylicPlate | null) {}
 
-  get(tex: Texture): AcrylicPlate | null {
-    const key = tex.source
-    if (this.cache.has(key)) return this.cache.get(key) ?? null
-    const plate = this.make(tex)
-    this.cache.set(key, plate)
+  /**
+   * `baseTex` はポーズの絵のときの基本の絵 (#853)。帯のスリット幅をポーズ自身でなく基本の絵の縮尺で換算するために板の生成へ渡す
+   * （同じポーズ画像でも基本の絵が違えば別の板）。基本の絵自身・省略時は従来どおり。
+   */
+  get(tex: Texture, baseTex?: Texture): AcrylicPlate | null {
+    const baseKey = baseTex && baseTex.source !== tex.source ? baseTex.source : null
+    let byBase = this.cache.get(tex.source)
+    if (!byBase) {
+      byBase = new Map()
+      this.cache.set(tex.source, byBase)
+    }
+    if (byBase.has(baseKey)) return byBase.get(baseKey) ?? null
+    const plate = this.make(tex, baseKey ? baseTex : undefined)
+    byBase.set(baseKey, plate)
     return plate
   }
 
   /** 板・影のテクスチャは自前で作ったものなので、TextureSource ごと（GPU・canvas）解放する */
   destroy(): void {
-    for (const plate of this.cache.values()) {
-      plate?.texture.destroy(true)
-      plate?.shadow?.destroy(true)
-    }
+    for (const byBase of this.cache.values())
+      for (const plate of byBase.values()) {
+        plate?.texture.destroy(true)
+        plate?.shadow?.destroy(true)
+      }
     this.cache.clear()
   }
 }
@@ -80,8 +91,12 @@ export class AcrylicPlateCache {
 export function makeAcrylicBase(params: AcrylicParams): AcrylicBaseTexture | null {
   return getAcrylicBaseTexture(params)
 }
-export function makeAcrylicPlate(tex: Texture, params: AcrylicParams): AcrylicPlate | null {
-  return createAcrylicPlateTexture(tex, params)
+export function makeAcrylicPlate(
+  tex: Texture,
+  params: AcrylicParams,
+  baseTex?: Texture
+): AcrylicPlate | null {
+  return createAcrylicPlateTexture(tex, params, baseTex)
 }
 
 export interface AttachAcrylicLayersArgs {
