@@ -136,6 +136,9 @@ import { buildDummyFixture } from './dummyFixture'
 import {
   FIELD_SAMPLE_DOC_KEY,
   baseConfigOf,
+  carryOverBattleResult,
+  composeNotice,
+  itemsWithCounts,
   loadResume,
   mergeFlags,
   resumeBackground,
@@ -157,10 +160,23 @@ const FADE_MS = 180
 const POINTER_DEADZONE = 10
 const ARRIVAL_INSET_FACTOR = 3
 
-function showError(msg: string | null): void {
+/** 通常のエラー表示（置換方式。後の呼び出しが前を消す）と、セーブ再開の通知（#1021。どの経路の showError でも消えない）を分けて持つ */
+let baseNotice: string | null = null
+let resumeNotice: string | null = null
+function renderNotice(): void {
+  const text = composeNotice(baseNotice, resumeNotice)
   const el = $('error')
-  el.textContent = msg ?? ''
-  el.hidden = !msg
+  el.textContent = text
+  el.hidden = !text
+}
+function showError(msg: string | null): void {
+  baseNotice = msg
+  renderNotice()
+}
+/** セーブ再開の通知を出す。ほかの showError（設定の警告・歩けない開始位置・ワープ失敗・クリア）で消えず、並べて表示する */
+function setResumeNotice(msg: string | null): void {
+  resumeNotice = msg
+  renderNotice()
 }
 
 /**
@@ -356,11 +372,11 @@ async function main(): Promise<void> {
   const resume = loadResume(location.search, config)
   const resumed = resume.kind === 'ok' ? resume.resolved : null
   if (resume.kind === 'error')
-    showError(`セーブから再開できません（設定の開始位置から始めます）\n${resume.message}`)
+    setResumeNotice(`セーブから再開できません（設定の開始位置から始めます）\n${resume.message}`)
   for (const w of resumed?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
   // 解決時の警告（設定に無いシーン・敵・アイテム・味方）は画面にも出す（見落としてセーブが黙って欠けるのを防ぐ）
   if (resumed && resumed.warnings.length > 0)
-    showError(`セーブの一部を反映できませんでした\n${resumed.warnings.join('\n')}`)
+    setResumeNotice(`セーブの一部を反映できませんでした\n${resumed.warnings.join('\n')}`)
   /** 再開の開始シーン・位置・向き（セーブに現在地が無ければ設定の開始位置） */
   const startSceneId = resumed?.field?.sceneId ?? config.startScene
   const startPoint = resumed?.field ? { x: resumed.field.x, y: resumed.field.y } : config.start
@@ -627,7 +643,7 @@ async function main(): Promise<void> {
   // ---- RPG 状態 (#1021)。セーブ形式（game/rpgSave.ts）と同じ中身を実行時に持つ。戦闘のたびに設定へ戻さず、持ち越す ----
   const rpgBase = baseConfigOf(config)
   let partyState = resumed ? resumed.party : config.party.map((p) => structuredClone(p))
-  const inventory: Record<string, number> = resumed
+  let inventory: Record<string, number> = resumed
     ? { ...resumed.inventory }
     : Object.fromEntries(config.items.map((it) => [it.id, it.count ?? 0]))
   const equipment: Record<string, string[]> = resumed ? structuredClone(resumed.equipment) : {}
@@ -791,7 +807,7 @@ async function main(): Promise<void> {
     const menu = buildBattleMenu({
       ...config,
       party: partyState,
-      items: config.items.map((it) => ({ ...it, count: inventory[it.id] ?? 0 })),
+      items: itemsWithCounts(config.items, inventory),
     })
     const bg = resumeBackground(
       savedBattle,
@@ -862,10 +878,16 @@ async function main(): Promise<void> {
   const carryOverBattle = (outcome: string, earnedGold: number): void => {
     const run = battleRun
     if (!run) return
-    for (const it of run.menu?.items ?? [])
-      inventory[it.id] = (it as BattleItemEntry).count ?? inventory[it.id] ?? 0
-    gold += earnedGold
-    if (outcome !== 'defeat') partyState = structuredClone(run.engine.getState().party)
+    const next = carryOverBattleResult({
+      outcome,
+      earnedGold,
+      menuItems: run.menu?.items ?? [],
+      partyAfter: run.engine.getState().party,
+      before: { inventory, gold, party: partyState },
+    })
+    inventory = next.inventory
+    gold = next.gold
+    partyState = next.party
   }
   const endBattle = (): void => {
     battleRun = null

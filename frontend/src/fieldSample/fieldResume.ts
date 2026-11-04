@@ -115,3 +115,38 @@ export function resumeBackground(
 ): string | undefined {
   return saved?.background ?? fallback
 }
+
+/** 画面に出す通知の組み立て。通常のエラーとセーブ再開の通知を、どちらかが消えることなく改行でつなぐ（空・null は出さない） */
+export function composeNotice(base: string | null, resume: string | null): string {
+  return [base, resume].filter((x): x is string => !!x).join('\n')
+}
+
+/** 候補窓に渡すアイテム（設定の定義に、持ち越した所持数を count として入れる）。設定そのものは書き換えない */
+export function itemsWithCounts<T extends { id: string; count?: number }>(
+  items: readonly T[],
+  inventory: Readonly<Record<string, number>>
+): T[] {
+  return items.map((it) => ({ ...it, count: inventory[it.id] ?? 0 }))
+}
+
+/**
+ * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換える
+ * （敗北では戦闘前のまま。全滅のまま次へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。渡した値は書き換えない
+ */
+export function carryOverBattleResult<P>(input: {
+  outcome: string
+  earnedGold: number
+  menuItems: ReadonlyArray<{ id: string; count?: number }>
+  partyAfter: readonly P[]
+  before: { inventory: Readonly<Record<string, number>>; gold: number; party: readonly P[] }
+}): { inventory: Record<string, number>; gold: number; party: P[] } {
+  const inventory = { ...input.before.inventory }
+  for (const it of input.menuItems) inventory[it.id] = it.count ?? inventory[it.id] ?? 0
+  return {
+    inventory,
+    gold: input.before.gold + input.earnedGold,
+    party: structuredClone(
+      (input.outcome === 'defeat' ? input.before.party : input.partyAfter) as P[]
+    ),
+  }
+}

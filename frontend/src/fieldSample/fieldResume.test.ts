@@ -13,6 +13,9 @@ import {
   mergeFlags,
   resumeBackground,
   resumeBattleEngineOptions,
+  composeNotice,
+  carryOverBattleResult,
+  itemsWithCounts,
 } from './fieldResume'
 
 const hero = (id: string): BattleEntity => ({
@@ -169,5 +172,71 @@ describe('補助関数', () => {
     expect(resumeBackground({ enemies: [], background: 'a' }, 'b')).toBe('a')
     expect(resumeBackground({ enemies: [] }, 'b')).toBe('b')
     expect(resumeBackground(null, undefined)).toBeUndefined()
+  })
+})
+
+describe('composeNotice', () => {
+  it('通常のエラーと再開の通知を両方残す。片方だけ・両方なしも扱う', () => {
+    expect(composeNotice('設定が不正', '再開できません')).toBe('設定が不正\n再開できません')
+    expect(composeNotice(null, '再開できません')).toBe('再開できません')
+    expect(composeNotice('設定が不正', null)).toBe('設定が不正')
+    expect(composeNotice(null, null)).toBe('')
+    expect(composeNotice('', '')).toBe('')
+  })
+})
+
+describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
+  const before = {
+    inventory: { potion: 3, ether: 1 },
+    gold: 10,
+    party: [{ id: 'a', hp: 20 }],
+  }
+  const after = [{ id: 'a', hp: 5 }]
+
+  it('itemsWithCounts は持ち越した所持数を count に入れ、設定は書き換えない。無い id は 0', () => {
+    const items = [{ id: 'potion', count: 3 }, { id: 'bomb' }]
+    const out = itemsWithCounts(items, { potion: 1 })
+    expect(out).toEqual([
+      { id: 'potion', count: 1 },
+      { id: 'bomb', count: 0 },
+    ])
+    expect(items[0].count).toBe(3)
+  })
+
+  it('勝利: 残数・獲得金・戦闘後の味方を持ち越す。渡した値は変えない', () => {
+    const r = carryOverBattleResult({
+      outcome: 'victory',
+      earnedGold: 30,
+      menuItems: [{ id: 'potion', count: 1 }],
+      partyAfter: after,
+      before,
+    })
+    expect(r).toEqual({ inventory: { potion: 1, ether: 1 }, gold: 40, party: [{ id: 'a', hp: 5 }] })
+    expect(before.inventory.potion).toBe(3)
+    expect(r.party[0]).not.toBe(after[0])
+  })
+
+  it('逃走も戦闘後の味方を持ち越す', () => {
+    expect(
+      carryOverBattleResult({
+        outcome: 'escaped',
+        earnedGold: 0,
+        menuItems: [],
+        partyAfter: after,
+        before,
+      }).party
+    ).toEqual([{ id: 'a', hp: 5 }])
+  })
+
+  it('敗北: 味方は戦闘前に戻し、所持品の消費は戻さない', () => {
+    const r = carryOverBattleResult({
+      outcome: 'defeat',
+      earnedGold: 0,
+      menuItems: [{ id: 'potion', count: 0 }],
+      partyAfter: after,
+      before,
+    })
+    expect(r.party).toEqual([{ id: 'a', hp: 20 }])
+    expect(r.inventory.potion).toBe(0)
   })
 })
