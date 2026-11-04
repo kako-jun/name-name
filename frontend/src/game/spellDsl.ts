@@ -43,6 +43,7 @@ import {
   MAX_STATUS_TURNS,
 } from './battleLimits'
 import type { BattlePoseSprites } from './battleMotion'
+import type { BattleWeaponSpec } from './battleWeapon'
 import {
   applyAffinityToDamage,
   DEATH_ATTRIBUTE,
@@ -545,6 +546,10 @@ export interface BattleEntity {
    * `battle_presentation: ff` のときだけ画面が局面ごとに差し替える（dq では読まない）。部分指定可、無いポーズは `sprite` のまま。
    */
   poses?: BattlePoseSprites
+  /**
+   * 武器レイヤー (#1027)。`poses` の予約キー（`weapon` ほか）から写した刀の指定。`battle_presentation: ff` のときだけ画面が人物の上に重ねる。無ければ従来どおり
+   */
+  weapon?: BattleWeaponSpec
   /**
    * 戦闘の隊列 (#747)。`'back'` = 後衛（受ける物理ダメージ・与える近接物理ダメージが半分。魔法相当は影響なし）。
    * 未指定は前衛（現行どおり）。味方・敵のどちらに付けても補正は効く（汎用エンジンとして敵の後衛も認める。配置の描画は味方側のみ）。

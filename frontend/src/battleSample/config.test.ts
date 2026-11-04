@@ -1867,6 +1867,40 @@ describe('parsePoses 単体（フィールドサンプルと共有 #890）', () 
   })
 })
 
+describe('武器レイヤーの予約キー (#1027)', () => {
+  it('parseConfig: weapon 系のキーは URL 解決して entity.weapon に入り、poses には混ざらない（構造・アンカーは解決しない）', () => {
+    const r = parseConfig(
+      {
+        party: [
+          {
+            poses: {
+              idle: 'a.png',
+              weapon: 'w.webp',
+              'weapon-layers': 'l.json',
+              'weapon-structure': 'wheelchair',
+              'weapon-anchor': '0.8 0.8',
+            },
+          },
+        ],
+      },
+      BASE
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.party[0].poses).toEqual({ idle: 'https://example.com/dir/a.png' })
+    expect(r.value.party[0].weapon).toEqual({
+      image: 'https://example.com/dir/w.webp',
+      structure: 'wheelchair',
+      anchor: { x: 0.8, y: 0.8 },
+      layers: 'https://example.com/dir/l.json',
+    })
+  })
+  it('刀のキーが無ければ weapon は付かない（従来不変）', () => {
+    const r = parseConfig({ party: [{ poses: { idle: 'a.png' } }] }, BASE)
+    expect(r.ok && r.value.party[0].weapon).toBeFalsy()
+  })
+})
+
 describe('parseMenuList の挙動（export 化後も不変 #890）', () => {
   it('undefined は fallback をそのまま返す', () => {
     const fb: never[] = []

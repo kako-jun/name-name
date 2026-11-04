@@ -80,6 +80,16 @@ import {
 } from './battleCommands'
 import type { BattleEntity } from './spellDsl'
 import {
+  alphaBoundsFraction,
+  buildWeaponRig,
+  computeWeaponPlacement,
+  firstCatalogImage,
+  resolveWeaponForPose,
+  type BattleWeaponSpec,
+  type WeaponRig,
+} from './battleWeapon'
+import { resolveRpgDataPath } from './battleEffectsLoader'
+import {
   EMPTY_STACK,
   buildMenuRows,
   cancel as cancelMenuWindow,
@@ -521,8 +531,20 @@ interface EntityView extends AcrylicParts {
   baseVisual: PoseVisual | null
   shownVisual: PoseVisual | null
   poseVisuals: Partial<Record<BattlePose, PoseVisual>>
+  /** 表示中の絵のポーズ（`resolvePose` で代替した後。武器レイヤーの変換はこのポーズで引く） (#1027) */
+  shownPose: BattlePose
+  /** 武器レイヤー (#1027): 人物の絵の上に重ねる刀。`entity.weapon` があり ff のときだけ。container の子（板・台座ごと動き、傾き・倒れにも追従） */
+  weapon: WeaponView | null
   /** 自己モザイク (#953/sit-by-me #64): 付けている間だけ持つ PixelateFilter（container.filters に入っている）。終わる・破棄で外して destroy */
   selfMosaic?: PixelateFilter | null
+}
+
+/** 武器レイヤー 1 体ぶん (#1027) */
+interface WeaponView {
+  sprite: Sprite
+  rig: WeaponRig
+  /** いま人物の前に積んでいるか（ポーズごとの重ね順で入れ替える） */
+  front: boolean
 }
 
 /** 再生中のエフェクト 1 つ (#936)。画面が持つ演出の途中状態（エンジンには持たない） */
@@ -561,6 +583,41 @@ interface DamagePopup {
   fontSize: number
   /** 同じ対象への連続ヒット (#879) で何段目か。数字の高さぶん縦にずらす（単発は 0） */
   stack: number
+}
+
+const opaqueBoundsCache = new WeakMap<Texture, { x: number; y: number; w: number; h: number }>()
+const FULL_BOUNDS = { x: 0, y: 0, w: 1, h: 1 }
+
+/**
+ * 人物の絵の不透明部分の範囲（比） (#1027)。武器の変換の座標は透過を切り詰めた人物の絵が基準なので、
+ * 切り詰められていない絵（大きな一枚絵の swing 系など）も同じ基準にそろえる。画素が読めなければ全体（切り詰め済みとみなす）。
+ */
+function opaqueBounds(tex: Texture): { x: number; y: number; w: number; h: number } {
+  const cached = opaqueBoundsCache.get(tex)
+  if (cached) return cached
+  let out = FULL_BOUNDS
+  try {
+    const res = tex.source?.resource as CanvasImageSource | undefined
+    const w0 = tex.width
+    const h0 = tex.height
+    if (res && w0 > 0 && h0 > 0 && typeof document !== 'undefined') {
+      const k = Math.min(1, 256 / Math.max(w0, h0))
+      const w = Math.max(1, Math.round(w0 * k))
+      const h = Math.max(1, Math.round(h0 * k))
+      const cv = document.createElement('canvas')
+      cv.width = w
+      cv.height = h
+      const ctx = cv.getContext('2d', { willReadFrequently: true })
+      if (ctx) {
+        ctx.drawImage(res, 0, 0, w, h)
+        out = alphaBoundsFraction(ctx.getImageData(0, 0, w, h).data, w, h)
+      }
+    }
+  } catch {
+    out = FULL_BOUNDS
+  }
+  opaqueBoundsCache.set(tex, out)
+  return out
 }
 
 export class BattleScreen extends Container {
@@ -1207,11 +1264,14 @@ export class BattleScreen extends Container {
       baseVisual: null,
       shownVisual: null,
       poseVisuals: {},
+      shownPose: 'idle',
+      weapon: null,
     }
     if (spritePath) {
-      void this.loadEntitySprite(view, spritePath).then(() => {
+      void this.loadEntitySprite(view, spritePath).then(async () => {
         if (this.presentation === 'ff' && entity.poses)
-          void this.loadPoseVisuals(view, entity.poses)
+          await this.loadPoseVisuals(view, entity.poses)
+        if (this.presentation === 'ff' && entity.weapon) await this.loadWeapon(view, entity.weapon)
       })
     }
     return view
@@ -2005,6 +2065,7 @@ export class BattleScreen extends Container {
       }
     }
     this.layoutSelectMark(view, head)
+    this.updateWeapon(view)
   }
 
   /**
@@ -3152,8 +3213,11 @@ export class BattleScreen extends Container {
         // ポーズの絵に差し替える。無ければ 1 枚絵のまま（down は無ければ沈み込みで表す）
         const resolved = resolvePose(m.pose, view.poseVisuals)
         const vis = resolved?.value ?? view.baseVisual
+        view.shownPose = resolved?.pose ?? 'idle'
         const hasDownVisual = m.pose === 'down' && resolved?.pose === 'down'
         if (vis && vis !== view.shownVisual) this.showVisual(view, vis)
+        // 武器レイヤー (#1027): 絵が変わらない間（placeEntityView が呼ばれない）も、ポーズの変換を当て直す
+        this.updateWeapon(view)
         // 前（相手陣営）は味方が左・敵が右。のけぞりは逆向き
         const dir = side === 'party' ? -1 : 1
         // 横のずれは、動いた後の枠（板・台座のはみ出し込み）が画面端から余白を引いた範囲に収まるよう止める
@@ -3277,6 +3341,100 @@ export class BattleScreen extends Container {
     const rest = (view.container.filters ?? []).filter((x) => x !== f)
     view.container.filters = rest.length > 0 ? rest : null
     f.destroy()
+  }
+
+  /** 武器レイヤーの JSON は同じパスを何度も読まない（味方ごとに同じ catalog を指すため） */
+  private weaponJson = new Map<string, Promise<unknown>>()
+
+  private fetchWeaponJson(path: string | undefined): Promise<unknown> {
+    if (!path) return Promise.resolve(undefined)
+    const url = resolveRpgDataPath(this.opts.assetBaseUrl, path)
+    let p = this.weaponJson.get(url)
+    if (!p) {
+      p = fetch(url)
+        .then((r) => (r.ok ? r.json() : undefined))
+        .catch((e) => {
+          console.warn(`[BattleScreen] failed to load weapon json "${url}":`, e)
+          return undefined
+        })
+      this.weaponJson.set(url, p)
+    }
+    return p
+  }
+
+  /** 刀の絵と JSON を読み込んで武器レイヤーを作る (#1027)。読めない・柄アンカーが決まらないときは警告して刀なし（従来どおり） */
+  private async loadWeapon(view: EntityView, spec: BattleWeaponSpec): Promise<void> {
+    try {
+      const [layers, catalog, overrides] = await Promise.all([
+        this.fetchWeaponJson(spec.layers),
+        this.fetchWeaponJson(spec.catalog),
+        this.fetchWeaponJson(spec.overrides),
+      ])
+      // 刀の絵の指定が無ければ catalog の先頭の刀
+      const image =
+        spec.image ?? (spec.catalog ? firstCatalogImage(catalog, spec.catalog) : undefined)
+      if (!image) {
+        console.warn('[BattleScreen] weapon: 刀の絵が決まりません（刀なし）')
+        return
+      }
+      spec = { ...spec, image }
+      const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, image))) as Texture
+      if (this.destroyedFlag || view.container.destroyed || !view.sprite) return
+      applyBattleTextureFilter(tex, !!this.opts.pixelArt)
+      const rig = buildWeaponRig(spec, layers, catalog, overrides)
+      if (!rig) {
+        console.warn(`[BattleScreen] weapon "${image}": 柄アンカーが決まりません（刀なし）`)
+        return
+      }
+      const sprite = new Sprite(tex)
+      sprite.visible = false
+      view.container.addChildAt(sprite, view.container.getChildIndex(view.sprite) + 1)
+      view.weapon = { sprite, rig, front: true }
+      this.updateWeapon(view)
+    } catch (e) {
+      console.warn(`[BattleScreen] failed to load weapon "${spec.image ?? '(catalog 先頭)'}":`, e)
+    }
+  }
+
+  /**
+   * 武器レイヤーを、表示中のポーズの変換で置き直す (#1027)。人物の絵（透過を切り詰めた範囲）に対する比で置くので、
+   * 縮尺・アクスタの配置・傾きに依らない（container の子）。ポーズに刀が無ければ隠す。
+   */
+  private updateWeapon(view: EntityView): void {
+    const w = view.weapon
+    const sprite = view.sprite
+    if (!w || w.sprite.destroyed) return
+    if (!sprite) {
+      w.sprite.visible = false
+      return
+    }
+    const found = resolveWeaponForPose(w.rig, view.shownPose)
+    if (!found) {
+      w.sprite.visible = false
+      return
+    }
+    if (w.front !== found.front) {
+      view.container.removeChild(w.sprite)
+      const i = view.container.getChildIndex(sprite)
+      view.container.addChildAt(w.sprite, found.front ? i + 1 : i)
+      w.front = found.front
+    }
+    const b = opaqueBounds(sprite.texture)
+    const pl = computeWeaponPlacement(
+      found.transform,
+      { width: w.sprite.texture.width, height: w.sprite.texture.height },
+      {
+        x: sprite.x + b.x * sprite.width,
+        y: sprite.y + b.y * sprite.height,
+        width: b.w * sprite.width,
+        height: b.h * sprite.height,
+      }
+    )
+    w.sprite.anchor.set(w.rig.anchor.x, w.rig.anchor.y)
+    w.sprite.position.set(pl.x, pl.y)
+    w.sprite.scale.set(pl.scaleX, pl.scaleY)
+    w.sprite.rotation = pl.rotation
+    w.sprite.visible = true
   }
 
   /** スプライトの絵（と acrylic の板・影）を差し替えて、その絵で置き直す */

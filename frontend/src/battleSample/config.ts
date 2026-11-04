@@ -35,6 +35,7 @@ import {
   type BattleMotionPreset,
   type BattlePresentation,
 } from '../game/battleMotion'
+import { WEAPON_NON_URL_KEYS, normalizeWeaponSpec } from '../game/battleWeapon'
 import type { BattleEnemyListMode } from '../game/battleEnemyList'
 import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
@@ -342,6 +343,21 @@ export function parsePoses(
   path: string,
   resolve: (url: string) => string | null
 ): ParseResult<BattleEntity['poses'] | undefined> {
+  const r = parsePosesRecord(raw, path, resolve)
+  if (!r.ok) return r
+  return { ok: true, value: normalizePoses(r.value) }
+}
+
+/**
+ * `parsePoses` の前半: 値を検証して URL に解決した Record をそのまま返す（正規化前）。武器レイヤー (#1027) の予約キー
+ * （`weapon` ほか）も同じ `poses` に書くので、呼び出し側はここから `normalizePoses`（ポーズ）と `normalizeWeaponSpec`（刀）を取り出す。
+ * 刀の予約キーのうち URL でないもの（`weapon-structure` / `weapon-anchor`）は URL 解決しない
+ */
+export function parsePosesRecord(
+  raw: unknown,
+  path: string,
+  resolve: (url: string) => string | null
+): ParseResult<Record<string, string>> {
   if (!isRecord(raw)) return { ok: false, error: `${path} はオブジェクトである必要があります` }
   const resolved: Record<string, string> = {}
   for (const [k, v] of Object.entries(raw)) {
@@ -349,11 +365,15 @@ export function parsePoses(
       return { ok: false, error: `${path}.${k} は URL 文字列である必要があります` }
     }
     if (!v.trim()) continue
+    if (WEAPON_NON_URL_KEYS.includes(k.trim().toLowerCase())) {
+      resolved[k] = v.trim()
+      continue
+    }
     const url = resolve(v.trim())
     if (!url) return { ok: false, error: `${path}.${k} の URL を解決できません: ${v}` }
     resolved[k] = url
   }
-  return { ok: true, value: normalizePoses(resolved) }
+  return { ok: true, value: resolved }
 }
 
 function parseEntity(
@@ -399,9 +419,12 @@ function parseEntity(
     entity.sprite = url
   }
   if (raw.poses !== undefined) {
-    const poses = parsePoses(raw.poses, `${path}.poses`, (u) => resolveUrl(u, baseUrl))
-    if (!poses.ok) return poses
-    if (poses.value) entity.poses = poses.value
+    const rec = parsePosesRecord(raw.poses, `${path}.poses`, (u) => resolveUrl(u, baseUrl))
+    if (!rec.ok) return rec
+    const poses = normalizePoses(rec.value)
+    if (poses) entity.poses = poses
+    const weapon = normalizeWeaponSpec(rec.value)
+    if (weapon) entity.weapon = weapon
   }
   if (raw.actions !== undefined) {
     // 敵の行動ルール (#835)。`行動:` の値と同じ書式の文字列の配列（書いた順）。解釈は enemyAi.ts（不正な行は戦闘側で警告して無視）
