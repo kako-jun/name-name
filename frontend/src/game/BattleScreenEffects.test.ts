@@ -238,6 +238,40 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(I(s).effectInstances).toHaveLength(1)
   })
 
+  it('再生・数字・エフェクトが全部空でも、待たせたエフェクトは tick で進み、期限切れで捨てられ、読めたら出る (#941)', () => {
+    const mk = () => {
+      const { s } = setup({ slash: sh() }) // 4 コマ×100ms = 400ms
+      const inner = s as unknown as {
+        effectDeferred: { plan: unknown; sinceStart: number }[]
+        popups: unknown[]
+        playback: { active: unknown; queue: unknown[] }
+      }
+      inner.effectDeferred.push({
+        plan: { kind: 'slash', atMs: 0, target: { side: 'enemy', index: 0 } },
+        sinceStart: 0,
+      })
+      expect(inner.popups).toHaveLength(0)
+      expect(inner.playback.active).toBeNull()
+      expect(inner.playback.queue).toHaveLength(0)
+      expect(I(s).effectInstances).toHaveLength(0)
+      return { s, inner }
+    }
+    // 読み込み中のまま期限（400ms）を過ぎる → 捨てられる
+    const a = mk()
+    a.s.tick(100)
+    expect(a.inner.effectDeferred).toHaveLength(1)
+    expect(a.inner.effectDeferred[0].sinceStart).toBe(100)
+    a.s.tick(400)
+    expect(a.inner.effectDeferred).toHaveLength(0)
+    // 期限内に読めた → 出る
+    const b = mk()
+    b.s.tick(100)
+    I(b.s).effectTextures.set('sheet.png', sheetTexture(4))
+    b.s.tick(10)
+    expect(b.inner.effectDeferred).toHaveLength(0)
+    expect(I(b.s).effectInstances).toHaveLength(1)
+  })
+
   it('読み込み中にエフェクトを待たせている間に読めなかった（null）ら、捨てて戦闘は進む (#941)', () => {
     const { s, engine } = setup({ slash: sh() })
     engine.selectAttack()
