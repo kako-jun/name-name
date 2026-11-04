@@ -5436,6 +5436,7 @@ title: "test"
 にげる: 不可
 台詞: 条件=開始 話者=水の召喚獣 文=……:こんにちは
 参戦: 条件=HP[hero]<=1 対象=ally
+付与: 味方=hero わざ=slash 魔法=fire,ice
 強制: 条件=ターン>=2 対象=boss HP=50% 解除=poison 文=ボスが ふんばった
 未知のキー: 何か
 下限:
@@ -5474,6 +5475,7 @@ enemies: x
                 "にげる: 不可".to_string(),
                 "台詞: 条件=開始 話者=水の召喚獣 文=……:こんにちは".to_string(),
                 "参戦: 条件=HP[hero]<=1 対象=ally".to_string(),
+                "付与: 味方=hero わざ=slash 魔法=fire,ice".to_string(),
                 "強制: 条件=ターン>=2 対象=boss HP=50% 解除=poison 文=ボスが ふんばった"
                     .to_string(),
                 "固定: 結果=敗北 上限ターン=8".to_string(),
