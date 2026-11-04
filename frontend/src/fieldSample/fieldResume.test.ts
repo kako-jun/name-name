@@ -296,3 +296,23 @@ describe('敵レベルの再開 (#1043)', () => {
     })
   })
 })
+
+describe('状態異常の再開 (#1051)', () => {
+  it('戦闘中セーブの敵の status（残ターン）が resolved.battle.enemies に解決される', () => {
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+      0,
+      buildRpgSaveSlot(rpg({ battle: { enemies: [{ id: 'slime', hp: 4, status: { x: 2 } }] } }))
+    )
+    const r = loadResume('?resume=0', config)
+    expect(r.kind === 'ok' && r.resolved.battle?.enemies[0].status).toEqual({ x: 2 })
+  })
+
+  it('味方の status も解決される', () => {
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+      0,
+      buildRpgSaveSlot(rpg({ party: [{ id: 'party1', hp: 10, status: { x: 3 } }] }))
+    )
+    const r = loadResume('?resume=0', config)
+    expect(r.kind === 'ok' && r.resolved.party[0].status).toEqual({ x: 3 })
+  })
+})
