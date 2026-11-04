@@ -127,7 +127,6 @@ import {
   type FieldSampleConfig,
   type FieldWarp,
 } from './config'
-import defaultConfigText from './teramachi.sample.json?raw'
 import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
@@ -335,26 +334,26 @@ async function expandFormsInText(text: string, textBase: string): Promise<string
   }
 }
 
-async function loadConfig(): Promise<FieldSampleConfig> {
+/** 設定 JSON を読む。`?config=<URL>` が無い・読めない・不正のときはエラーを出して null（起動しない） */
+async function loadConfig(): Promise<FieldSampleConfig | null> {
   const base = location.href
   const raw = pickConfigSource(location.search)
   const url = raw ? resolveUrl(raw, base) : null
-  let text = defaultConfigText
-  let textBase = base
-  if (url) {
-    try {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      text = await res.text()
-      textBase = url
-    } catch (e) {
-      showError(
-        `設定 JSON を読み込めません（内蔵既定で表示します）\n${url}\n${e instanceof Error ? e.message : String(e)}`
-      )
-    }
+  if (!url) {
+    showError('`?config=<URL>` で設定 JSON を指定してください')
+    return null
   }
-  text = await expandFormsInText(text, textBase)
-  const parsed = parseConfigText(text, textBase)
+  let text: string
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    text = await res.text()
+  } catch (e) {
+    showError(`設定 JSON を読み込めません\n${url}\n${e instanceof Error ? e.message : String(e)}`)
+    return null
+  }
+  text = await expandFormsInText(text, url)
+  const parsed = parseConfigText(text, url)
   if (parsed.ok) {
     // 群エラー (#839 段5。console.error は parseConfig が出している) と警告 (#883) は 1 回でまとめて出す
     // （showError は置換なので別々に呼ぶと後が前を消す）
@@ -364,9 +363,7 @@ async function loadConfig(): Promise<FieldSampleConfig> {
     return parsed.value
   }
   showError(`設定 JSON が不正です\n${parsed.error}`)
-  const fallback = parseConfigText(defaultConfigText, base)
-  if (!fallback.ok) throw new Error(fallback.error)
-  return fallback.value
+  return null
 }
 
 /**
@@ -408,6 +405,7 @@ async function loadNpcScript(config: FieldSampleConfig): Promise<FieldScriptEven
 
 async function main(): Promise<void> {
   const config = await loadConfig()
+  if (!config) return
   // セーブからの途中再開 (#1021)。`?resume=<0|1|2|quick>`。状態は localStorage のセーブ（`SaveSlotData.rpg`）で与える
   const resume = loadResume(location.search, config)
   const resumed = resume.kind === 'ok' ? resume.resolved : null

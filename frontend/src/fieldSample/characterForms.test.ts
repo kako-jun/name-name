@@ -162,7 +162,7 @@ describe('目録 JSON の検証', () => {
     expect(r.ok).toBe(true)
     if (r.ok) expect(Object.keys(r.value.characters)).toEqual(['C001', 'C002', 'C003', 'C004'])
   })
-  it('同梱の目録: 寺町サンプルの 4 人（C002 小学生車椅子・C001/C003/C004 小学生）は 8 ポーズ揃い、C001 は人物単体版', () => {
+  it('同梱の目録: 寺町の 4 人（C002 小学生車椅子・C001/C003/C004 小学生）は 8 ポーズ揃い、C001 は人物単体版', () => {
     const r = parseCharacterFormsManifest(JSON.parse(manifestText))
     if (!r.ok) throw new Error(r.error)
     for (const [c, f] of [

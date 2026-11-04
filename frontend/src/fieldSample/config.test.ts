@@ -11,11 +11,8 @@ import {
   type FieldSampleConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
-import { expandedTeramachiText } from './teramachiExpanded'
-import diagonalSample from './__fixtures__/diagonal-walk.sample.json?raw'
 
 const BASE = 'https://example.com/field/config.json'
-const teramachiSample = expandedTeramachiText()
 
 /** 1 項目ずつ壊すための、最小の有効設定（毎回新しいオブジェクトを返す） */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -367,42 +364,6 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     })
     expect(c.scenes.a.links).toEqual([])
     expect(c.monsters).toEqual({})
-  })
-
-  it('同梱のサンプル teramachi.sample.json が ok', () => {
-    const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
-    if (!r.ok) throw new Error(r.error)
-    expect(Object.keys(r.value.scenes).length).toBeGreaterThan(0)
-  })
-
-  it('寺町サンプルは emotionsUrl と scriptUrl を持つ (#946)', () => {
-    const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
-    if (!r.ok) throw new Error(r.error)
-    expect(r.value.emotionsSource?.url).toBe(
-      'http://localhost:8780/field-sample/teramachi-emotions.json'
-    )
-    expect(r.value.scriptUrl).toBe('http://localhost:8780/field-sample/teramachi-npc.md')
-  })
-
-  it('寺町サンプルの銭湯の下端リンクは歩ける幅いっぱい [930,1535]、坂の上端は [1024,1420] (#938)', () => {
-    const r = parseConfigText(teramachiSample, 'http://localhost:8780/teramachi.sample.json')
-    if (!r.ok) throw new Error(r.error)
-    const bottom = r.value.scenes.bathhouse.links.find((l) => l.edge === 'bottom')
-    const top = r.value.scenes.slope.links.find((l) => l.edge === 'top')
-    expect(bottom?.range).toEqual([930, 1535])
-    expect(top?.range).toEqual([1024, 1420])
-  })
-
-  it('同梱サンプルの素材 URL は sit-by-me の現行パスの形（assets/images/...webp）をしている。パスの形だけを確かめ、ファイルの実在は確かめない (#938)', () => {
-    for (const raw of [teramachiSample, diagonalSample]) {
-      const urls = [...raw.matchAll(/"(http:\/\/localhost:8765\/[^"]+)"/g)].map((m) => m[1])
-      expect(urls.length).toBeGreaterThan(0)
-      // characterForms.root / weaponRoot は素材のディレクトリ（ファイルではない。導出後の URL は .webp。戦闘エフェクトは候補の .png）
-      for (const u of urls)
-        expect(u).toMatch(
-          /^http:\/\/localhost:8765\/assets\/images\/(characters$|weapons$|.+\.(webp|png|json)$)/
-        )
-    }
   })
 
   it('edgeContact: "foot" を受け付ける', () => {
@@ -1203,8 +1164,8 @@ describe('parseConfig 斜め 4 方向 (Issue #811)', () => {
     }
   })
 
-  it('同梱の斜めサンプル（diagonal-walk.sample.json）が ok で、8 方向すべてが自前の 3 コマ', () => {
-    const c = ok(JSON.parse(diagonalSample))
+  it('斜め 4 方向すべてを自前の 3 コマで指定すると 8 方向すべてが 3 コマ（mirrorOf は空）', () => {
+    const c = ok(withDiag(() => {}))
     expect(c.player.mirrorOf).toEqual({})
     for (const f of ['up', 'down', 'left', 'right', ...DIAGONAL_FACINGS] as const) {
       expect(c.player.sprites[f]).toHaveLength(3)
@@ -1225,10 +1186,17 @@ describe('parseConfig spells / items (#890)', () => {
     expect(c.items).toEqual([])
   })
 
-  it('teramachi.sample.json は ok で spells / items を持つ（commands の spell / item を機能させる）', () => {
-    const c = ok(JSON.parse(teramachiSample))
+  it('spells / items と commands の spell / item を同時に持つ設定が ok', () => {
+    const c = ok(
+      mutated((r) => {
+        r.spells = [{ id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' }]
+        r.items = [{ id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 }]
+        r.battle = { commands: ['skill', 'spell', 'item', 'escape'] }
+      })
+    )
     expect(c.spells.length).toBeGreaterThan(0)
     expect(c.items.length).toBeGreaterThan(0)
+    expect(c.battle?.commands).toEqual(['skill', 'spell', 'item', 'escape'])
   })
 
   it('指定した spells / items を保持する（呪文は mp と target、アイテムは count）', () => {
