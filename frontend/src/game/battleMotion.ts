@@ -31,13 +31,17 @@ export function normalizeBattlePresentation(raw: string | null | undefined): Bat
 // ポーズ（差し替え用スプライトの組）
 // ---------------------------------------------------------------------------
 
-// special（必殺技）は必殺技の配線時に足す。今はポーズ名として受け付けない
+// swing-windup / swing-followthrough は通常攻撃の 5 段 (ready → swing-windup → slash → swing-followthrough → ready) の振りかぶり・振り抜き (#1026)。
+// special は特技・わざ・召喚獣（ActionKind 'skill'）の構え。呪文（spell）は cast のまま
 export const BATTLE_POSES = [
   'idle',
   'ready',
   'step',
+  'swing-windup',
   'slash',
+  'swing-followthrough',
   'cast',
+  'special',
   'hurt',
   'down',
   'victory',
@@ -78,8 +82,12 @@ const POSE_FALLBACK: Record<BattlePose, readonly BattlePose[]> = {
   idle: ['idle'],
   ready: ['ready', 'idle'],
   step: ['step', 'ready', 'idle'],
+  'swing-windup': ['swing-windup', 'ready', 'idle'],
   slash: ['slash', 'step', 'ready', 'idle'],
+  'swing-followthrough': ['swing-followthrough', 'slash', 'step', 'ready', 'idle'],
   cast: ['cast', 'ready', 'idle'],
+  // special が無ければ従来の特技の構え（cast）に落ちる（既存挙動不変）
+  special: ['special', 'cast', 'ready', 'idle'],
   hurt: ['hurt', 'idle'],
   down: ['down'],
   victory: ['victory', 'idle'],
@@ -116,6 +124,12 @@ export interface MotionTiming {
   attackReturnMs: number
   /** 戻りのイージング（default は easeInOutQuad、snappy は easeOutQuad で出だしを速く） */
   attackReturnEase: 'inOutQuad' | 'outQuad'
+  /**
+   * 通常攻撃の 5 段 (#1026): 踏み出しの終わりの swing-windup（振りかぶり）の長さと、戻りの始めの swing-followthrough（振り抜き）の長さ（ms）。
+   * それぞれの絵を持つ者だけに効き、踏み出し・戻りの時間の内側で切り替える（行動の長さ・命中時刻は変わらない）。絵が無ければ従来のポーズ
+   */
+  attackWindupMs: number
+  attackFollowthroughMs: number
   /** 斬りの開始から、命中（対象がのけぞり・数字が出る）までの ms */
   attackSlashHitMs: number
   /** 踏み出しの距離 */
@@ -177,6 +191,8 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   attackSlashMs: 180,
   attackReturnMs: 220,
   attackReturnEase: 'inOutQuad',
+  attackWindupMs: 110,
+  attackFollowthroughMs: 110,
   attackSlashHitMs: 70,
   attackStepDistance: 0.7,
   castMs: 560,
@@ -229,6 +245,8 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   attackSlashMs: 120,
   attackReturnMs: 130,
   attackReturnEase: 'outQuad',
+  attackWindupMs: 65,
+  attackFollowthroughMs: 65,
   attackSlashHitMs: 50,
   attackStepDistance: 0.55,
   castMs: 420,
@@ -542,20 +560,40 @@ export interface ActorSample {
 export function sampleActor(
   kind: ActionKind,
   t: number,
-  timing: MotionTiming = DEFAULT_MOTION_TIMING
+  timing: MotionTiming = DEFAULT_MOTION_TIMING,
+  /** 行動する者が持つポーズの絵（キーだけ見る）。swing-windup / swing-followthrough があるときだけ通常攻撃が 5 段になる (#1026)。省略は従来 */
+  available: Readonly<Partial<Record<BattlePose, unknown>>> = {}
 ): ActorSample {
   const T = timing
   const time = Number.isFinite(t) ? Math.max(0, t) : 0
   if (kind === 'notice' || kind === 'status') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
-    // 呪文の構えは cast、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
+    // 呪文の構えは cast、特技・わざ・召喚獣は special（無ければ cast に落ちる）、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
     return {
       forward: 0,
-      pose: time < T.castMs ? (kind === 'spell' || kind === 'skill' ? 'cast' : 'ready') : 'idle',
+      pose:
+        time < T.castMs
+          ? kind === 'spell'
+            ? 'cast'
+            : kind === 'skill'
+              ? 'special'
+              : 'ready'
+          : 'idle',
     }
   }
+  const windup = available['swing-windup'] !== undefined
+  const followthrough = available['swing-followthrough'] !== undefined
   if (time < T.attackStepMs) {
-    return { forward: T.attackStepDistance * easeOutQuad(time / T.attackStepMs), pose: 'step' }
+    // 5 段 (#1026): 踏み出しの前半は ready、終わりの attackWindupMs が swing-windup
+    // 前半は ready（無ければ step、さらに idle に落ちる。ready の絵が無い者が idle に退行しないように）
+    const pose: BattlePose = !windup
+      ? 'step'
+      : time >= T.attackStepMs - T.attackWindupMs
+        ? 'swing-windup'
+        : available.ready !== undefined || available.step === undefined
+          ? 'ready'
+          : 'step'
+    return { forward: T.attackStepDistance * easeOutQuad(time / T.attackStepMs), pose }
   }
   const afterStep = time - T.attackStepMs
   if (afterStep < T.attackSlashMs) {
@@ -564,9 +602,15 @@ export function sampleActor(
   const afterSlash = afterStep - T.attackSlashMs
   if (afterSlash < T.attackReturnMs) {
     const ease = T.attackReturnEase === 'outQuad' ? easeOutQuad : easeInOutQuad
+    // 5 段 (#1026): 戻りの始めの attackFollowthroughMs が swing-followthrough、残りは ready（絵が無ければ従来の step）
+    const pose: BattlePose = !followthrough
+      ? 'step'
+      : afterSlash < T.attackFollowthroughMs
+        ? 'swing-followthrough'
+        : 'ready'
     return {
       forward: T.attackStepDistance * (1 - ease(afterSlash / T.attackReturnMs)),
-      pose: 'step',
+      pose,
     }
   }
   return { forward: 0, pose: 'idle' }

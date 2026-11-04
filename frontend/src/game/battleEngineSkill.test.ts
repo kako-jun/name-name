@@ -299,12 +299,12 @@ describe('performSkill: ログと演出イベント (#834)', () => {
     ])
   })
 
-  it('演出の時間割: skill は構えの時間（呪文と同じ）・使い手は cast ポーズ', () => {
+  it('演出の時間割: skill は構えの時間（呪文と同じ）・使い手は special ポーズ (#1026。special の絵が無ければ cast に落ちる)', () => {
     const { engine } = setup()
     engine.performSkill({ side: 'enemy', index: 0 }, dmg('相手単体'))
     const tl = eventTimeline(engine.getState().events[0])
     expect(tl.duration).toBeGreaterThan(0)
-    expect(sampleActor('skill', 0).pose).toBe('cast')
+    expect(sampleActor('skill', 0).pose).toBe('special')
   })
 
   it('決定論的: 同じ状態・同じ rng 列なら同じ結果', () => {
