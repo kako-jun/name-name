@@ -16,7 +16,8 @@ import type { StatusDef } from '../../types'
 /** 操作列の 1 要素。`s` / `i` は `Scenario.spells` / `Scenario.items` の添字 */
 export type Op =
   | { t: 'attack'; target?: string }
-  | { t: 'spell'; s: number; target?: string }
+  /** `scope: 'all'` は全体化 (#895)。無ければ従来どおり単体 */
+  | { t: 'spell'; s: number; target?: string; scope?: 'all' }
   | { t: 'item'; i: number; target?: string }
   | { t: 'summon'; m: number; target?: string }
   | { t: 'ability'; k: number; target?: string }
@@ -43,6 +44,8 @@ export interface Scenario {
   /** 「わざ」(#873 / #207)。`Op` の `ability` の `k` が添字（装備中の武器のわざなど）。無いシナリオは従来どおり */
   abilities?: SkillExecution[]
   ops: Op[]
+  /** 魔法の全体化 (#895) の割り算の規則を操作ごとに検査する（族 `multi-target` だけ。耐性・相性を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
+  checkSpread?: true
   /** 脚本制御の戦闘 (#741 / #863)。`[戦闘]` の宣言（`rules`）と、途中参戦できる味方。無いシナリオは従来どおり */
   script?: { id: string; rules: string[]; joiners?: Record<string, BattleEntity> }
   /**
@@ -58,7 +61,7 @@ export interface HarnessEngine {
   isOver(): boolean
   tick(ms: number): void
   selectAttack(targetId?: string): void
-  selectSpell(spell: SpellExecution, targetId?: string): void
+  selectSpell(spell: SpellExecution, targetId?: string, scope?: 'single' | 'all'): void
   selectItem(item: ItemExecution, targetId?: string): boolean
   /** 召喚 (#889)。召喚を使わない合成エンジンは持たなくてよい */
   selectSummon?(summon: SummonExecution, targetId?: string): boolean
@@ -91,7 +94,11 @@ export function applyOp(engine: HarnessEngine, scenario: Scenario, op: Op): void
       return
     case 'spell': {
       const spell = scenario.spells[op.s]
-      if (spell) engine.selectSpell(clone(spell), op.target)
+      if (spell) {
+        // 全体化 (#895) の操作だけ範囲を渡す（他の族は従来と同じ呼び出し）
+        if (op.scope) engine.selectSpell(clone(spell), op.target, op.scope)
+        else engine.selectSpell(clone(spell), op.target)
+      }
       return
     }
     case 'item': {

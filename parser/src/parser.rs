@@ -5305,9 +5305,29 @@ builtin: zaraki
                 assert_eq!(sp.builtin.as_deref(), Some("zaraki"));
                 assert_eq!(sp.effect, None);
                 assert_eq!(sp.school, None);
+                assert!(!sp.multi_target);
             }
             other => panic!("expected Spell, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_spell_multi_target_flag() {
+        let spell = |extra: &str| {
+            let input = format!(
+                "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n## data: マスター\n\n[呪文 メラ]\n名前: メラ\nMP: 2\n対象: 敵単体\n{extra}効果: damage 8..14\n[/呪文]\n"
+            );
+            let doc = parse(&input);
+            match &doc.chapters[0].scenes[0].events[0] {
+                Event::Spell(sp) => sp.clone(),
+                other => panic!("expected Spell, got {other:?}"),
+            }
+        };
+        assert!(spell("全体化: 可\n").multi_target);
+        assert!(spell("全体化: はい\n").multi_target);
+        assert!(!spell("全体化: 不可\n").multi_target);
+        assert!(!spell("全体化: ほげ\n").multi_target);
+        assert!(!spell("").multi_target);
     }
 
     #[test]

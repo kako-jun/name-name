@@ -2751,6 +2751,19 @@ describe('parseMarkdown + normalizeDocument: battle_commands / わざ が生き�
     expect(party.hero.abilities).toEqual(['slash', 'sweep'])
     expect(party.mage.abilities).toBeUndefined()
   })
+
+  it('呪文の 全体化: 可 は multiTarget: true として届く。書かない・不可は付かない (#895)', async () => {
+    const d = await parseMarkdown(
+      doc(
+        '',
+        '[呪文 fire]\n名前: ほのお\nMP: 3\n対象: 敵単体\n全体化: 可\n効果: damage 8..14\n[/呪文]\n[呪文 ice]\n名前: こおり\nMP: 3\n対象: 敵単体\n効果: damage 8..14\n[/呪文]\n[呪文 wind]\n名前: かぜ\nMP: 3\n対象: 敵単体\n全体化: 不可\n効果: damage 8..14\n[/呪文]\n'
+      )
+    )
+    const { spells } = collectMasterData(d)
+    expect(spells.fire.multiTarget).toBe(true)
+    expect(spells.ice.multiTarget).toBeUndefined()
+    expect(spells.wind.multiTarget).toBeUndefined()
+  })
 })
 
 // #969: docs/guide/controls.md 全文（説明用 Markdown）を実 wasm に渡すと、話者行のあとに

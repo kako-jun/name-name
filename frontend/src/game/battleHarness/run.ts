@@ -2,7 +2,8 @@
  * 検証ハーネスの実行 (#877 段階 3)。シナリオ 1 件を決定論的に動かし、検出器で見て、結果（違反と指標）を返す。
  * 検出のみ。エンジンの挙動は変えない。
  */
-import type { BattleActionEvent } from '../battleEngine'
+import type { BattleActionEvent, SpellExecution } from '../battleEngine'
+import { isSpreadableSpell, parseEffect } from '../spellDsl'
 import { MAX_DAMAGE } from '../battleLimits'
 import {
   checkRevival,
@@ -144,7 +145,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     opIndex: number,
     run: () => void,
     summonName?: string,
-    summonCue?: { id: string }
+    summonCue?: { id: string },
+    after?: (fresh: BattleActionEvent[]) => Violation[]
   ): boolean => {
     rng.reset()
     const t0 = performance.now()
@@ -202,6 +204,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
         }
       }
     }
+    if (after) add(after(fresh))
     for (const e of [...s.party, ...s.enemies]) {
       for (const v of Object.values(e.buffs ?? {})) {
         if (Number.isFinite(v))
@@ -217,11 +220,17 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
   let alive = true
   for (let i = 0; i < scenario.ops.length && alive; i++) {
     const op = scenario.ops[i]
+    // 魔法の全体化 (#895): 呪文の操作の前に、生きている敵を控えて、記録（ヒット）と割り算の規則を突き合わせる
+    const spell = op.t === 'spell' ? scenario.spells[op.s] : undefined
+    const aliveBefore = engine.getState().enemies.map((e) => e.hp > 0)
     alive = step(
       i,
       () => applyOp(engine, scenario, op),
       op.t === 'summon' ? scenario.summons?.[op.m]?.name : undefined,
-      op.t === 'summon' ? scenario.summons?.[op.m]?.cue : undefined
+      op.t === 'summon' ? scenario.summons?.[op.m]?.cue : undefined,
+      spell && op.t === 'spell' && scenario.checkSpread
+        ? (fresh) => checkMultiTarget(spell, op.scope, aliveBefore, fresh, i)
+        : undefined
     )
     metrics.opsRun = i + 1
   }
@@ -359,4 +368,77 @@ function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
 
 function describe(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+}
+
+/**
+ * 魔法の全体化 (#895) の不変条件。呪文 1 回の記録（味方の `spell` イベントのうち `label` が呪文名のもの）の、敵へのヒットを見る。
+ * - 全体化できる呪文（`全体化: 可` の敵単体）を `scope: 'all'` で撃った: 当たるのは操作前に生きていた敵だけ。単純なダメージ（`damage a..b`・属性なし・回数なし）なら
+ *   生きていた敵の全員に当たり、量は割った範囲（生存数 n >= 2 なら `max(1, floor(a / n))`〜`max(1, floor(b / n))`、n = 1 なら a〜b）に収まる
+ * - それ以外（可でない・範囲が単体・敵全体・味方単体）: 敵単体の呪文は当たる敵が 1 体以下、単純なダメージの量は割らない範囲 a〜b
+ * このハーネスのシナリオは敵に耐性・相性を持たせない前提（持たせると量の範囲が広がる）
+ */
+function checkMultiTarget(
+  spell: SpellExecution,
+  scope: 'all' | undefined,
+  aliveBefore: readonly boolean[],
+  fresh: readonly BattleActionEvent[],
+  opIndex: number
+): Violation[] {
+  const out: Violation[] = []
+  const bad = (detail: string): void => {
+    out.push({ kind: 'multi-target-invariant', detail, opIndex })
+  }
+  const parsed = spell.effect ? parseEffect(spell.effect) : null
+  const simple =
+    parsed !== null &&
+    parsed.kind === 'damage' &&
+    parsed.type === undefined &&
+    parsed.count === undefined &&
+    parsed.min !== undefined &&
+    parsed.max !== undefined
+  const lo = simple ? Math.min(parsed.min ?? 0, parsed.max ?? 0) : 0
+  const hi = simple ? Math.max(parsed.min ?? 0, parsed.max ?? 0) : 0
+  const aliveIdx = aliveBefore.flatMap((a, i) => (a ? [i] : []))
+  const spread = scope === 'all' && isSpreadableSpell(spell)
+  const n = aliveIdx.length
+  const target = spell.target.trim()
+  for (const ev of fresh) {
+    if (ev.kind !== 'spell' || ev.actor.side !== 'party' || ev.label !== spell.name) continue
+    const enemyHits = ev.hits.filter((h) => h.target.side === 'enemy')
+    const hit = new Set(enemyHits.map((h) => h.target.index))
+    const damaged = enemyHits.filter((h) => h.kind === 'damage')
+    const tag = `${spell.name}(${spell.target}${spell.multiTarget ? '・全体化可' : ''}, scope=${scope ?? 'single'}, 生存${n})`
+    if (spread) {
+      for (const i of hit) if (!aliveBefore[i]) bad(`${tag}: 倒れていた敵 #${i} に当たった`)
+      if (simple) {
+        const damagedIdx = new Set(damaged.map((h) => h.target.index))
+        for (const i of aliveIdx) {
+          if (!damagedIdx.has(i)) bad(`${tag}: 生きていた敵 #${i} にダメージが出ていない`)
+        }
+        const dmin = n >= 2 ? Math.max(1, Math.floor(lo / n)) : lo
+        const dmax = n >= 2 ? Math.max(1, Math.floor(hi / n)) : hi
+        for (const h of damaged) {
+          if (h.amount < dmin || h.amount > dmax) {
+            bad(
+              `${tag}: 敵 #${h.target.index} へのダメージ ${h.amount} が割った範囲 ${dmin}〜${dmax} の外`
+            )
+          }
+        }
+      }
+      continue
+    }
+    if ((target === '敵単体' || target === '') && hit.size > 1) {
+      bad(`${tag}: 全体化していないのに敵 ${hit.size} 体に当たった`)
+    }
+    if (simple && (target === '敵単体' || target === '敵全体')) {
+      for (const h of damaged) {
+        if (h.amount < lo || h.amount > hi) {
+          bad(
+            `${tag}: 敵 #${h.target.index} へのダメージ ${h.amount} が割らない範囲 ${lo}〜${hi} の外`
+          )
+        }
+      }
+    }
+  }
+  return out
 }

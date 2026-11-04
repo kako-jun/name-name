@@ -2112,6 +2112,7 @@ builtin: zaraki
 | `MP` | `mp` | No (default 0) | 消費 MP |
 | `対象` | `target` | No (default `敵単体`) | `味方単体` / `敵単体` / `味方全体` / `敵全体` / `自分` / `マップ` 等 |
 | `系統` | `school` | No | 耐性計算用の系統（`fire` / `ice` / `holy` / `breath` 等）。敵の属性相性（`弱点:` 等）は `効果:` の `damage ... type=` を見る（`系統` ではない） |
+| `全体化` | `multi_target` / `multiTarget` | No (default 不可) | `可`（`はい` / `true` / `yes` / `on` / `1` / `有効` も可）にすると、**対象が `敵単体` の呪文に限り**、戦闘中の対象窓で「ぜんたい」に切り替えられる (#895)。書かない・`不可`・読めない値（警告して不可）は従来どおり。もともと `敵全体` の呪文は単体化も全体化もしない。MP は単体のときと同じ。全体化すると、生きている敵全員に当たり、効果 DSL の `damage` の基礎値（属性相性・耐性を掛ける前）と `damage_full`（即死）・`status` の成功率を**全体化した時点の生存している敵の数で割る**（ダメージは端数切り捨て・最低 1。成功率は相性補正・成長の加算・上限 99% のあとで割る。確率を書かない付与も 1/n になる。生存 1 体なら割らない）。`builtin` の呪文には割り算が掛からない（全体にだけなる）。割り方は `battleLimits.ts` の `multiTargetDivisor`（FF6 の「複数対象は ×1/2」に替えるならここ 1 か所）。エンジンの入口は `BattleEngine.selectSpell(spell, targetId, scope)`（`scope: 'single' \| 'all'`、既定 `single`）。戦闘サンプル（`battle-sample`）の JSON では呪文に `"multiTarget": true` を書く |
 | `効果` | `effect` | No | 宣言的効果 DSL。`builtin` と排他 |
 | `builtin` | — | No | 専用関数 ID |
 

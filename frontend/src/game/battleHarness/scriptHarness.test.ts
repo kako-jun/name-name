@@ -307,9 +307,10 @@ describe('強制 (#741 段階 2): 不変条件と族 script-force', () => {
     expect(r.metrics.finalPhase).toBe('victory')
   })
 
-  it('buildSweep: script-force は末尾に足され、skip で外すと従来の並びになる', () => {
+  it('buildSweep: script-force は multi-target の前に足され、skip で外すと従来の並びになる', () => {
     const cfg = { randomSeed: 1, randomCount: 0, randomStatusCount: 0, randomScriptCount: 0 }
     const heavy = [
+      'multi-target',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

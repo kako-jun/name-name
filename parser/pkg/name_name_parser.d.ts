@@ -415,6 +415,11 @@ export interface SpellDef {
      * 系統（\"fire\" / \"ice\" / \"holy\" / \"breath\" 等、耐性計算用）。
      */
     school?: string;
+    /**
+     * 全体化できるか（`全体化: 可`、#895）。対象が `敵単体` の呪文だけ、戦闘中の対象窓で「全体」に切り替えられる。
+     * 書かない・`不可` は偽（従来どおり）。
+     */
+    multiTarget?: boolean;
 }
 
 /**

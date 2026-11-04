@@ -41,6 +41,8 @@ import {
   MAX_HITS_PER_ACTION,
   MAX_STATUS_CHANCE,
   MAX_STATUS_TURNS,
+  spreadDamageBase,
+  spreadSuccessRate,
 } from './battleLimits'
 import type { BattlePoseSprites } from './battleMotion'
 import {
@@ -427,6 +429,11 @@ export interface EffectContext {
   targets: BattleEntity[]
   rng: () => number
   /**
+   * 全体化 (#895) の割る数（`multiTargetDivisor`）。2 以上のとき、`damage` の基礎値と `damage_full` / `status` の成功率をこの数で割る
+   * （`spreadDamageBase` / `spreadSuccessRate`）。未指定・1 以下は従来どおり（rng 消費も変わらない）。エンジンが全体化した呪文だけに渡す
+   */
+  spreadDivisor?: number
+  /**
    * 計算上のダメージ・回復量の通知 (#745)。FF 式のダメージ数字は、HP が実際に減った・増えた量ではなく
    * 計算した量（オーバーキル・回復の上限切りを含む）を出すので、効果の評価側が 1 対象ごとに知らせる。
    * 通知しない効果（builtin など）は呼び出し側が HP の前後差で代用する。
@@ -638,7 +645,10 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
       // （基礎値の抽選は 1 回・rng 消費・ログとも不変）
       const multi = effect.kind === 'damage' && (effect.count ?? 1) > 1
       /** 対象 1 体への 1 ヒット。`base` は計算済みの基礎ダメージ（damage_full は Infinity）、`round` はヒット番号 */
-      const hitOne = (t: BattleEntity, base: number, round: number): void => {
+      const spreadN = ctx.spreadDivisor ?? 1
+      const hitOne = (t: BattleEntity, rawBase: number, round: number): void => {
+        // 全体化 (#895): 基礎値を割る（相性・耐性の前。即死の Infinity は割らず、成功率の側で割る）
+        const base = spreadDamageBase(rawBase, spreadN)
         // ダメージの反転 (#870): 属性相性・耐性を通した最終値が回復になる。即死は全回復。倒れている者は生き返らない
         const reverse = reversalOf(t, ctx.statusRules).damage
         /** 反転: `amount` だけ回復する（最大 HP で止まる。0 以下・倒れている者は何も起きない＝MISS） */
@@ -669,7 +679,7 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
           effect.kind === 'damage_full' ? DEATH_ATTRIBUTE : effect.type
         )
         if (effect.kind === 'damage_full') {
-          if (!rollDeath(deathSuccessRate(kind, 1), ctx.rng)) {
+          if (!rollDeath(spreadSuccessRate(deathSuccessRate(kind, 1), spreadN), ctx.rng)) {
             log.push(`${t.name} には きかなかった！`)
             return
           }
@@ -809,10 +819,14 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
         // 付与の成功判定 (#870)。`確率=` が無く耐性も無ければ必中で乱数を使わない（従来と同じ）。
         // 耐性は属性相性の欄に書いた状態 id（無効・吸収 0 / 半減 ×0.5 / 弱点 ×2〈上限 99%〉）。
         // 宣言の無い印には耐性を当てない（従来どおり、`確率=` だけで判定する）
-        const rate = statusSuccessRate(
-          rule && ruleId !== null ? resolveAffinity(t.affinity, ruleId) : 'normal',
-          effect.chance,
-          ctx.caster.statusChanceBonus
+        // 全体化 (#895) は相性補正のあとで成功率を割る（必中の付与も 1/n になる）
+        const rate = spreadSuccessRate(
+          statusSuccessRate(
+            rule && ruleId !== null ? resolveAffinity(t.affinity, ruleId) : 'normal',
+            effect.chance,
+            ctx.caster.statusChanceBonus
+          ),
+          ctx.spreadDivisor ?? 1
         )
         if (!rollDeath(rate, ctx.rng)) {
           log.push(`${t.name} には きかなかった！`)
@@ -911,4 +925,22 @@ export function rollRange(min: number, max: number, rng: () => number): number {
   // Math.random() は [0, 1) なので通常 max+1 にはならないが、
   // テストや差し替え rng で 1.0 を渡された場合に備えて Math.min(max, ...) で堅牢化。
   return Math.min(max, Math.floor(min + r * (max - min + 1)))
+}
+
+/**
+ * 全体化 (#895) できる呪文か。魔法定義が `全体化: 可`（`multiTarget`）で、対象が `敵単体`（未指定・未知の対象も既定の敵単体）のもの。
+ * もともと `敵全体` / 味方側 / 自分 / マップの呪文は単体化も全体化もしない。エンジンの `resolveSpellTargets` と候補窓の対象窓が共有する
+ */
+export function isSpreadableSpell(spell: { target?: string; multiTarget?: boolean }): boolean {
+  if (spell.multiTarget !== true) return false
+  switch (typeof spell.target === 'string' ? spell.target.trim() : '') {
+    case '味方単体':
+    case '味方全体':
+    case '敵全体':
+    case '自分':
+    case 'マップ':
+      return false
+    default:
+      return true
+  }
 }

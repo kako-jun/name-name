@@ -65,8 +65,9 @@ describe('summonScenarios: 生成', () => {
 })
 
 describe('buildSweep: 族 summon', () => {
-  it('buildSweep の最後に足され、skip で除ける。直前の族のシナリオは変わらない', () => {
+  it('buildSweep に足され（末尾は multi-target）、skip で除ける。直前の族のシナリオは変わらない', () => {
     const heavy = [
+      'multi-target',
       'effect-matrix',
       'enemy-skill',
       'stack-order',
