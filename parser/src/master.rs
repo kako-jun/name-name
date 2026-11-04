@@ -888,6 +888,7 @@ const BATTLE_SCRIPT_RULE_KEYS: &[&str] = &[
     "台詞",
     "参戦",
     "復活",
+    "強制",
     "下限",
     "逃走",
     "終了",

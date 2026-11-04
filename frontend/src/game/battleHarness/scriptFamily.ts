@@ -325,14 +325,19 @@ const RANDOM_RULE_POOL: readonly string[] = [
  * seed 固定のランダム合成。ルールを 1〜5 個選び、**必ず終了条件（上限ターンの終了か固定）を 1 つ足す**ので、どの組み合わせでも決着する（壊れていなければ）。
  * 期待は「どれかで終わる」（個別の固定の食い合いは期待にしない）。脚本の状態の整合・床・ターン上限・ロックは検出器が見る
  */
-export function randomScriptScenarios(seed: number, count: number): Scenario[] {
+export function randomScriptScenarios(
+  seed: number,
+  count: number,
+  pool: readonly string[] = RANDOM_RULE_POOL,
+  idPrefix = 'random-script'
+): Scenario[] {
   const rnd = lcg(seed)
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]
   const out: Scenario[] = []
   for (let i = 0; i < count; i++) {
     const n = 1 + Math.floor(rnd() * 5)
     const rules: string[] = []
-    for (let k = 0; k < n; k++) rules.push(pick(RANDOM_RULE_POOL))
+    for (let k = 0; k < n; k++) rules.push(pick(pool))
     rules.push('終了: 条件=ターン>=12 結果=中断')
     const mode = pick(MODES)
     const ops: Op[] = []
@@ -342,7 +347,7 @@ export function randomScriptScenarios(seed: number, count: number): Scenario[] {
     }
     const effect = pick([...BREAKING_EFFECTS, 'heal 50..80', 'damage 5..9'])
     out.push({
-      id: `random-script/${i}`,
+      id: `${idPrefix}/${i}`,
       seed: seed * 1000 + i,
       party: [
         entity('hero', {
@@ -381,4 +386,200 @@ export function randomScriptScenarios(seed: number, count: number): Scenario[] {
     })
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// 強制 (#741 段階 2): 生きている者の HP / MP / 状態の書き換え
+// ---------------------------------------------------------------------------
+
+/** 強制の HP 指定の境界（0 = 戦闘不能・% の 0 と 100・1・最大超え） */
+const FORCE_HPS = ['0', '0%', '1', '50%', '100%', '9999'] as const
+
+/** 強制 × 対象（味方・敵）× HP 指定 × 戦闘方式 × 下限の有無。HP は 0〜最大に収まり、決着する（下限があれば倒れない） */
+function forceHpMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  for (const target of ['hero', 'boss'] as const) {
+    for (const hp of FORCE_HPS) {
+      for (const mode of MODES) {
+        for (const floor of [true, false]) {
+          out.push({
+            id: `script-force/hp/${target}/hp${hp}/${mode}/${floor ? 'floor' : 'nofloor'}`,
+            seed: 97_000 + out.length,
+            party: [
+              entity('hero', { hp: 20, maxHp: 20, atk: 6, agi: 10 }),
+              entity('ally', { hp: 20, maxHp: 20, atk: 6, agi: 10 }),
+            ],
+            enemies: [foe('boss', { hp: 100, maxHp: 100, atk: 9, agi: 10 })],
+            atb: atbOf(mode),
+            spells: [],
+            items: [],
+            ops: [],
+            script: {
+              id: 'fh',
+              rules: [
+                ...(floor ? [`下限: 対象=${target} HP=1`] : []),
+                `強制: 条件=ターン>=1 対象=${target} HP=${hp} 文=ぐっ`,
+                END_CAP,
+              ],
+            },
+            scriptExpect: { ends: ANY_END, maxTurn: 30 },
+          })
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** 倒れた者・逃げた敵が対象のとき: 強制では生き返らない（検出器の `checkRevival`）。復活: を書かないので戻れば違反 */
+function forceDownMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  for (const mode of MODES) {
+    out.push({
+      id: `script-force/down/party/${mode}`,
+      seed: 97_500 + out.length,
+      party: [
+        entity('hero', { hp: 1, maxHp: 20, atk: 5, agi: 10 }),
+        entity('ally', { hp: 60, maxHp: 60, atk: 5, agi: 10 }),
+      ],
+      enemies: [foe('boss', { hp: 500, maxHp: 500, atk: 50, agi: 10 })],
+      atb: atbOf(mode),
+      spells: [],
+      items: [],
+      ops: [],
+      script: {
+        id: 'fd',
+        rules: ['強制: 条件=倒れた[hero] 対象=hero HP=100% MP=100% 文=おきろ', END_CAP],
+      },
+      scriptExpect: { ends: ANY_END, maxTurn: 30 },
+    })
+    out.push({
+      id: `script-force/down/enemy/${mode}`,
+      seed: 97_500 + out.length,
+      party: [entity('hero', { hp: 5000, maxHp: 5000, atk: 99_999, agi: 10 })],
+      enemies: [
+        foe('imp', { hp: 3, maxHp: 3, atk: 0, agi: 5 }),
+        foe('boss', { hp: 100_000, maxHp: 100_000, atk: 1, agi: 5 }),
+      ],
+      atb: atbOf(mode),
+      spells: [],
+      items: [],
+      ops: [],
+      script: {
+        id: 'fe',
+        rules: [
+          '逃走: 条件=開始 対象=boss',
+          '強制: 条件=倒れた[boss] 対象=boss HP=100% 文=もどれ',
+          '強制: 条件=倒れた[imp] 対象=imp HP=100% 文=もどれ',
+          END_CAP,
+        ],
+      },
+      scriptExpect: { ends: ANY_END, maxTurn: 30 },
+    })
+  }
+  return out
+}
+
+/** 状態の付与・解除（宣言済み・未宣言）× 対象 × 戦闘方式。死の宣告（戦闘不能になる状態）も混ぜる */
+function forceStatusMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  for (const target of ['hero', 'boss'] as const) {
+    for (const mode of MODES) {
+      for (const status of ['doom', 'ghost'] as const) {
+        out.push({
+          id: `script-force/status/${target}/${status}/${mode}`,
+          seed: 98_000 + out.length,
+          party: [
+            entity('hero', { hp: 30, maxHp: 30, atk: 6, agi: 10 }),
+            entity('ally', { hp: 30, maxHp: 30, atk: 6, agi: 10 }),
+          ],
+          enemies: [foe('boss', { hp: 60, maxHp: 60, atk: 5, agi: 10 })],
+          atb: atbOf(mode),
+          statuses: DOOM,
+          spells: [],
+          items: [],
+          ops: [],
+          script: {
+            id: 'fs',
+            rules: [
+              `強制: 条件=開始 対象=${target} 付与=${status}`,
+              `強制: 条件=ターン>=1 対象=${target} 解除=${status} MP=0 文=とけた`,
+              END_CAP,
+            ],
+          },
+          scriptExpect: { ends: ANY_END, maxTurn: 30 },
+        })
+      }
+    }
+  }
+  return out
+}
+
+/** 敵を強制で倒す: 死亡時: が走り、残りを倒せば報酬つきで勝利（味方が全滅しても進行する） */
+function forceKillMatrix(): Scenario[] {
+  const out: Scenario[] = []
+  for (const mode of MODES) {
+    for (const partyHp of [5, 500]) {
+      out.push({
+        id: `script-force/kill/${mode}/party${partyHp}`,
+        seed: 99_000 + out.length,
+        party: [entity('hero', { hp: partyHp, maxHp: partyHp, atk: 30, agi: 10 })],
+        enemies: [
+          foe('cell', { hp: 30, maxHp: 30, atk: 0, agi: 5, onDeath: '候補=burst' }),
+          foe('boss', { hp: 80, maxHp: 80, atk: 3, agi: 5 }),
+        ],
+        atb: atbOf(mode),
+        skills: { burst: { name: 'じばく', target: '相手全体', effect: 'damage 9..9' } },
+        spells: [],
+        items: [],
+        ops: [],
+        script: {
+          id: 'fk',
+          rules: ['強制: 条件=ターン>=1 対象=cell HP=0 文=はじけた', END_CAP],
+        },
+        scriptExpect: { ends: ANY_END, maxTurn: 30 },
+      })
+    }
+  }
+  return out
+}
+
+/** 強制の総当たり。ランダム合成 `randomForceScenarios` は別 */
+export function forceMatrix(): Scenario[] {
+  return [...forceHpMatrix(), ...forceDownMatrix(), ...forceStatusMatrix(), ...forceKillMatrix()]
+}
+
+const FORCE_RULE_POOL: readonly string[] = [
+  '強制: 条件=ターン>=1 対象=boss HP=30%',
+  '強制: 条件=開始 対象=boss HP=1 文=ふんばった',
+  '強制: 条件=HP[boss]<=50% 対象=boss HP=100% 文=いきかえった',
+  '強制: 条件=HP[hero]<=3 対象=hero HP=100% MP=100%',
+  '強制: 条件=ターン>=2 対象=hero HP=0',
+  '強制: 条件=ターン>=2 対象=imp HP=0',
+  '強制: 条件=倒れた[hero] 対象=hero HP=100% 文=おきろ',
+  '強制: 条件=倒れた[imp] 対象=imp HP=50%',
+  '強制: 対象=ally HP=10 文=ぐっ',
+  '強制: 条件=開始 対象=hero 付与=doom',
+  '強制: 条件=ターン>=1 対象=hero 解除=doom',
+  '強制: 条件=ターン>=1 対象=boss 付与=ghost 解除=ghost MP=0',
+  '強制: 対象=boss HP=9999',
+  '参戦: 条件=HP[hero]<=3 対象=ally',
+  '復活: 条件=倒れた[ally] 対象=ally HP=1',
+  '下限: 対象=hero HP=1',
+  '下限: 対象=boss HP=1 条件=!倒れた[imp]',
+  '逃走: 条件=ターン>=3 対象=imp',
+  '固定: 結果=勝利 上限ターン=7',
+  '固定: 結果=敗北 上限ターン=7',
+  // 壊れた行（無視されて、ほかの行は生きる）
+  '強制: 対象=hero HP=abc',
+  '強制: 対象=hero',
+  '強制: HP=1',
+]
+
+/**
+ * 強制を中心にしたランダム合成（seed 固定）。`randomScriptScenarios` と同じ組み立て（終了条件を必ず足す）で、
+ * ルールの母集団だけが強制中心。既存の `random-script` の出力は変えない
+ */
+export function randomForceScenarios(seed: number, count: number): Scenario[] {
+  return randomScriptScenarios(seed, count, FORCE_RULE_POOL, 'random-script-force')
 }

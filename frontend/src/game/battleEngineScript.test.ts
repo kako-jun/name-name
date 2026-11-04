@@ -876,3 +876,307 @@ describe('逃げた敵は倒れたことにならない（死亡時・反撃・�
     expect(e.getState().enemies[1].hp).toBeGreaterThan(0)
   })
 })
+
+describe('強制: 生きている者のパラメーターの書き換え (#741 段階 2)', () => {
+  const DOOM = { poison: { id: 'poison', name: 'どく', duration: '3' } }
+
+  it('敵の HP を指定値に書き換え、文がログと notice(line) と HP のヒットで出る。1 回だけ', () => {
+    const e = make(
+      [hero()],
+      [boss({ hp: 100, maxHp: 100 })],
+      ['強制: 条件=開始 対象=boss HP=30 文=ボスが ふんばった']
+    )
+    const st = e.getState()
+    expect(st.enemies[0].hp).toBe(30)
+    expect(st.log).toContain('ボスが ふんばった')
+    const ev = st.events.find((x) => x.line && x.hits.length > 0)
+    expect(ev?.hits[0]).toMatchObject({
+      target: { side: 'enemy', index: 0 },
+      kind: 'damage',
+      amount: 70,
+      hpBefore: 100,
+      hpAfter: 30,
+    })
+    expect(st.script?.fired).toEqual([0])
+    // 1 回だけ（HP が戻っても再発動しない）
+    st.enemies[0].hp = 99
+    e.selectAttack()
+    expect(e.getState().log.filter((l) => l === 'ボスが ふんばった')).toHaveLength(1)
+  })
+
+  it('味方の HP を増やす（heal のヒット）。MP は 0〜最大に収める。% は切り捨て', () => {
+    const e = make(
+      [hero({ hp: 3, maxHp: 21, mp: 0, maxMp: 9 })],
+      [boss({ atk: 0, def: 99 })],
+      ['強制: 条件=開始 対象=hero HP=50% MP=999']
+    )
+    const m = e.getState().party[0]
+    expect(m.hp).toBe(10)
+    expect(m.mp).toBe(9)
+    const ev = e.getState().events.find((x) => x.line)
+    expect(ev?.hits[0]).toMatchObject({ kind: 'heal', amount: 7 })
+  })
+
+  it('HP は最大 HP を超えない・0 未満にならない（境界）', () => {
+    const e = make(
+      [hero({ hp: 5, maxHp: 20 })],
+      [boss({ hp: 50, maxHp: 50, atk: 0 })],
+      ['強制: 条件=開始 対象=hero HP=9999', '強制: 条件=開始 対象=boss HP=100%'],
+      {}
+    )
+    expect(e.getState().party[0].hp).toBe(20)
+    expect(e.getState().enemies[0].hp).toBe(50)
+  })
+
+  it('HP が変わらず文も無ければ何も出さない（ログ・イベントを増やさない）', () => {
+    const base = make([hero()], [boss({ atk: 0 })], [])
+    const e = make([hero()], [boss({ atk: 0 })], ['強制: 条件=開始 対象=hero HP=100%'])
+    expect(e.getState().log).toEqual(base.getState().log)
+    expect(e.getState().eventTotal).toBe(base.getState().eventTotal)
+    expect(e.getState().script?.fired).toEqual([0])
+  })
+
+  it('下限が効いている間は下限を下回らない（HP=0 でも下限で止まる）。下限が無ければ 0', () => {
+    const withFloor = make(
+      [hero({ hp: 20, maxHp: 20 })],
+      [boss({ atk: 0 })],
+      ['下限: 対象=hero HP=5', '強制: 条件=開始 対象=hero HP=0', '終了: 条件=ターン>=9 結果=中断']
+    )
+    expect(withFloor.getState().party[0].hp).toBe(5)
+    expect(withFloor.getState().phase).toBe('party-input')
+    const noFloor = make(
+      [hero(), hero({ id: 'b' })],
+      [boss({ atk: 0 })],
+      ['強制: 条件=開始 対象=hero HP=0']
+    )
+    expect(noFloor.getState().party[0].hp).toBe(0)
+  })
+
+  it('倒れた味方は対象外（強制では生き返らない）。復活だけが起こす', () => {
+    const e = make(
+      [hero({ hp: 1, maxHp: 20 }), ent({ id: 'b', name: 'B', hp: 99, maxHp: 99, exp: undefined })],
+      [boss({ atk: 50, def: 99 })],
+      ['強制: 条件=倒れた[hero] 対象=hero HP=100%']
+    )
+    e.selectAttack()
+    e.selectAttack()
+    const st = e.getState()
+    expect(st.party[0].hp).toBe(0)
+    expect(st.script?.fired).toEqual([])
+    // 同じ条件で復活なら起こせる
+    const r = make(
+      [hero({ hp: 1, maxHp: 20 }), ent({ id: 'b', name: 'B', hp: 99, maxHp: 99, exp: undefined })],
+      [boss({ atk: 50, def: 99 })],
+      ['復活: 条件=倒れた[hero] 対象=hero HP=100%']
+    )
+    r.selectAttack()
+    expect(r.getState().party[0].hp).toBe(20)
+  })
+
+  it('逃げた敵は対象外（HP は 0 のまま・発動を保留）', () => {
+    const e = make(
+      [hero()],
+      [boss(), ent({ id: 'cell', name: 'さいぼう', hp: 5, maxHp: 5, atk: 0 })],
+      ['逃走: 条件=開始 対象=cell', '強制: 対象=cell HP=100% 文=もどった']
+    )
+    e.selectAttack('boss')
+    const st = e.getState()
+    expect(st.enemies[1].hp).toBe(0)
+    expect(st.script?.fired).toEqual([0])
+    expect(st.log).not.toContain('もどった')
+  })
+
+  it('敵の HP を 0 にすると通常の倒れ方: 死亡時: が走り、勝利なら経験値・ゴールドが入る', () => {
+    const burst: SkillExecution = { name: 'じばく', target: '相手全体', effect: 'damage 4..4' }
+    const e = make(
+      [hero({ hp: 100, maxHp: 100 })],
+      [
+        ent({
+          id: 'cell',
+          name: 'さいぼう',
+          hp: 30,
+          maxHp: 30,
+          atk: 0,
+          exp: 40,
+          gold: 7,
+          onDeath: '候補=burst',
+        }),
+        boss({ hp: 100, maxHp: 100, atk: 0, exp: 5, gold: 5 }),
+      ],
+      ['強制: 条件=開始 対象=cell HP=0 文=さいぼうが はじけた'],
+      { skills: { burst } }
+    )
+    let st = e.getState()
+    expect(st.enemies[0].hp).toBe(0)
+    expect(st.log).toContain('さいぼう を たおした！')
+    expect(st.log.join('\n')).toContain('じばく')
+    expect(st.party[0].hp).toBe(96)
+    expect(e.isOver()).toBe(false)
+    // 残りの敵も 0 にして勝利。経験値は倒した敵の分も入る
+    for (let i = 0; i < 99 && !e.isOver(); i++) e.selectAttack('boss')
+    st = e.getState()
+    expect(st.phase).toBe('victory')
+    expect(e.getResult()).toMatchObject({ exp: 45, gold: 12 })
+  })
+
+  it('敵を全員 HP=0 にすれば、その場で勝利（報酬あり）', () => {
+    const e = make([hero()], [boss({ exp: 11, gold: 2 })], ['強制: 条件=開始 対象=boss HP=0'])
+    expect(e.getState().phase).toBe('victory')
+    expect(e.getResult()).toMatchObject({ outcome: 'victory', exp: 11, gold: 2 })
+  })
+
+  it('味方を全員 HP=0 にすれば、通常の全滅（敗北）', () => {
+    const e = make([hero()], [boss()], ['強制: 条件=開始 対象=hero HP=0'])
+    expect(e.getState().phase).toBe('defeat')
+  })
+
+  it('状態の付与・解除（宣言済みの id）。付いていない状態の解除は何も起きない', () => {
+    const e = make(
+      [hero()],
+      [boss({ atk: 0 })],
+      [
+        '強制: 条件=開始 対象=boss 付与=poison',
+        '強制: 条件=ターン>=1 対象=boss 解除=poison 文=どくが ぬけた',
+        '強制: 条件=ターン>=1 対象=hero 解除=poison',
+      ],
+      { statuses: DOOM }
+    )
+    expect(e.getState().enemies[0].status).toEqual({ poison: 3 })
+    e.selectAttack()
+    const st = e.getState()
+    expect(st.enemies[0].status ?? {}).toEqual({})
+    expect(st.log).toContain('どくが ぬけた')
+    // 付いていない hero への解除は発動済みだが何も出ない
+    expect(st.script?.fired).toEqual([0, 1, 2])
+  })
+
+  it('未宣言の状態の 付与= / 解除= は警告して無視する（id ごとに 1 度だけ）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const e = make(
+      [hero()],
+      [boss({ atk: 0 })],
+      ['強制: 条件=開始 対象=boss 付与=ghost', '強制: 条件=開始 対象=hero 付与=ghost 解除=ghost2'],
+      { statuses: DOOM }
+    )
+    expect(e.getState().enemies[0].status ?? {}).toEqual({})
+    expect(e.getState().party[0].status ?? {}).toEqual({})
+    const msgs = warn.mock.calls.map((c) => String(c[0]))
+    expect(msgs.filter((m) => m.includes("'ghost'"))).toHaveLength(1)
+    expect(msgs.filter((m) => m.includes("'ghost2'"))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('乱数は使わない（HP に影響しない強制の前後で、乱数の消費回数が同じ）', () => {
+    const run = (rules: string[]) => {
+      const c = counted(0.4)
+      const e = make([hero()], [boss({ atk: 3 })], rules, { rng: c.rng })
+      for (let i = 0; i < 3; i++) e.selectAttack()
+      return c.calls()
+    }
+    expect(run(['強制: 条件=ターン>=1 対象=hero MP=0 文=x'])).toBe(run([]))
+  })
+
+  it('ATB: HP を変えてもゲージ・キューは維持される', () => {
+    const e = make(
+      [hero({ hp: 20, maxHp: 20, agi: 10 })],
+      [boss({ atk: 0, agi: 1 })],
+      ['強制: 条件=ターン>=1 対象=hero HP=1 文=ぐっ'],
+      { atb: { mode: 'wait' } }
+    )
+    for (let i = 0; i < 100 && e.getState().phase !== 'party-input'; i++) e.tick(500)
+    expect(e.getState().atb?.queue).toEqual([0])
+    e.selectAttack()
+    for (let i = 0; i < 100 && e.getState().phase !== 'party-input'; i++) e.tick(500)
+    // 強制が発動（HP=1）しても、コマンド待ちの列にいて、ゲージは満タンのまま
+    const st = e.getState()
+    expect(st.script?.fired).toEqual([0])
+    expect(st.party[0].hp).toBe(1)
+    expect(st.atb?.queue).toEqual([0])
+    expect(st.atb?.partyGauge[0]).toBe(ATB_GAUGE_MAX)
+  })
+
+  it('ATB: HP=0 にされた味方はキューとゲージから外れる（通常の戦闘不能と同じ）', () => {
+    const e = make(
+      [
+        hero({ hp: 20, maxHp: 20, agi: 10 }),
+        ent({ id: 'b', name: 'B', hp: 20, maxHp: 20, agi: 10, exp: undefined }),
+      ],
+      [boss({ atk: 0, agi: 1 })],
+      ['強制: 条件=ターン>=1 対象=hero HP=0 文=ゆうしゃが たおれた'],
+      { atb: { mode: 'wait' } }
+    )
+    for (let i = 0; i < 100 && e.getState().phase !== 'party-input'; i++) e.tick(500)
+    e.selectAttack()
+    for (let i = 0; i < 100 && e.getState().script?.fired.length === 0; i++) {
+      if (e.getState().phase === 'party-input') e.selectAttack()
+      else e.tick(500)
+    }
+    const st = e.getState()
+    expect(st.party[0].hp).toBe(0)
+    expect(st.atb?.queue).not.toContain(0)
+    expect(st.atb?.partyGauge[0]).toBe(0)
+    expect(st.phase).not.toBe('defeat')
+  })
+})
+
+describe('強制: 実際に変わったときだけ知らせる / ATB の後始末 (#741 段階 2)', () => {
+  const STAT = { poison: { id: 'poison', name: 'どく', duration: '3' } }
+  const noop = (rules: string[], over: Partial<BattleEntity> = {}) =>
+    make([hero({ mp: 5, maxMp: 9, ...over })], [boss({ atk: 0 })], rules, { statuses: STAT })
+
+  it('未宣言の付与だけ（効果なし）: ログもイベントも増えず、発動済みにはなる', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = noop([])
+    const e = noop(['強制: 条件=開始 対象=hero 付与=ghost'])
+    expect(e.getState().log).toEqual(base.getState().log)
+    expect(e.getState().eventTotal).toBe(base.getState().eventTotal)
+    expect(e.getState().script?.fired).toEqual([0])
+    warn.mockRestore()
+  })
+
+  it('MP が同値（現在値と同じ・最大超えで同値）: 何も出さない。変われば出す', () => {
+    const base = noop([])
+    const same = noop(['強制: 条件=開始 対象=hero MP=5'])
+    expect(same.getState().eventTotal).toBe(base.getState().eventTotal)
+    const capped = noop(['強制: 条件=開始 対象=hero MP=999'], { mp: 9 })
+    expect(capped.getState().eventTotal).toBe(base.getState().eventTotal)
+    const changed = noop(['強制: 条件=開始 対象=hero MP=9'])
+    expect(changed.getState().eventTotal).toBe(base.getState().eventTotal + 1)
+    expect(changed.getState().party[0].mp).toBe(9)
+  })
+
+  it('すでに付いている状態の再付与は持続を上書きするので、変わった扱いで知らせる', () => {
+    const e = noop(
+      ['強制: 条件=開始 対象=hero 付与=poison', '強制: 条件=ターン>=1 対象=hero 付与=poison'],
+      {}
+    )
+    const before = e.getState().eventTotal
+    e.selectAttack()
+    expect(e.getState().script?.fired).toEqual([0, 1])
+    expect(e.getState().party[0].status?.poison).toBeGreaterThan(0)
+    // 2 回目の付与でも notice が 1 件増えている（攻撃・敵の行動のイベントに加えて）
+    const notices = e.getState().events.filter((x) => x.kind === 'notice' && x.line)
+    expect(notices.length).toBeGreaterThanOrEqual(2)
+    expect(e.getState().eventTotal).toBeGreaterThan(before)
+  })
+
+  it('ATB: 強制で HP=0 にされた、コマンド待ちの列にいる味方は、キューとゲージから外れる', () => {
+    const e = make(
+      [
+        hero({ hp: 50, maxHp: 50, atk: 30, agi: 10 }),
+        ent({ id: 'b', name: 'B', hp: 50, maxHp: 50, agi: 10, exp: undefined }),
+      ],
+      [boss({ atk: 0, agi: 1, hp: 100, maxHp: 100, def: 0 })],
+      ['強制: 条件=HP[boss]<=90% 対象=b HP=0 文=Bが たおれた'],
+      { atb: { mode: 'wait' } }
+    )
+    for (let i = 0; i < 100 && (e.getState().atb?.queue.length ?? 0) < 2; i++) e.tick(500)
+    expect(e.getState().atb?.queue).toEqual([0, 1])
+    e.selectAttack()
+    const st = e.getState()
+    expect(st.script?.fired).toEqual([0])
+    expect(st.party[1].hp).toBe(0)
+    expect(st.atb?.queue).not.toContain(1)
+    expect(st.atb?.partyGauge[1]).toBe(0)
+  })
+})

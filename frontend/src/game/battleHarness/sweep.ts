@@ -16,7 +16,12 @@ import {
   stackOrders,
   statusMatrix,
 } from './generate'
-import { randomScriptScenarios, scriptMatrix } from './scriptFamily'
+import {
+  forceMatrix,
+  randomForceScenarios,
+  randomScriptScenarios,
+  scriptMatrix,
+} from './scriptFamily'
 import { runScenario, type RunOptions, type ScenarioResult } from './run'
 import type { Scenario } from './scenario'
 
@@ -48,6 +53,10 @@ export type SweepFamily =
   | 'equipment'
   | 'summon'
   | 'job'
+  | 'script-force'
+
+/** 族 `script-force` のランダム合成の件数（固定。決定論） */
+export const FORCE_RANDOM_COUNT = 400
 
 export const DEFAULT_SWEEP: SweepConfig = {
   randomSeed: 1,
@@ -84,6 +93,10 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('equipment') ? [] : equipmentScenarios()),
     ...(skip.has('job') ? [] : jobScenarios()),
     ...(skip.has('summon') ? [] : summonScenarios()),
+    // 強制 (#741 段階 2)。末尾に足すので、これより前の族の並び・出力は変わらない
+    ...(skip.has('script-force')
+      ? []
+      : [...forceMatrix(), ...randomForceScenarios(cfg.randomSeed, FORCE_RANDOM_COUNT)]),
   ]
 }
 

@@ -7,6 +7,7 @@ import {
   parseBattleScript,
   parseScriptFlags,
   resolveAmount,
+  resolveForcedHp,
   resultFor,
   SCRIPT_DEFAULT_MAX_TURNS,
   SCRIPT_MAX_TURNS,
@@ -348,5 +349,87 @@ describe('resolveAmount', () => {
     expect(resolveAmount({ value: 999, percent: false }, 20, 1)).toBe(20)
     expect(resolveAmount({ value: 7.9, percent: false }, 20, 1)).toBe(7)
     expect(resolveAmount(undefined, 0, 1)).toBe(0)
+  })
+})
+
+describe('強制: の解釈 (#741 段階 2)', () => {
+  it('HP / MP / 付与 / 解除 / 文 / 条件を読む（文は最後）', () => {
+    const p = parseBattleScript([
+      '強制: 条件=ターン>=2 対象=boss HP=50% MP=3 付与=poison 解除=sleep 文=ボスが ふんばった HP=1',
+    ])
+    expect(p.warnings).toEqual([])
+    expect(p.rules).toHaveLength(1)
+    expect(p.rules[0]).toMatchObject({
+      kind: 'force',
+      target: 'boss',
+      hp: { value: 50, percent: true },
+      mp: { value: 3, percent: false },
+      status: 'poison',
+      clear: 'sleep',
+      text: 'ボスが ふんばった HP=1',
+    })
+  })
+
+  it('HP=0 は有効（戦闘不能にする）。数でも % でもない値・100% 超は警告して捨てる', () => {
+    expect(parseBattleScript(['強制: 対象=boss HP=0']).rules).toHaveLength(1)
+    for (const bad of [
+      '強制: 対象=boss HP=abc',
+      '強制: 対象=boss HP=101%',
+      '強制: 対象=boss MP=x',
+    ]) {
+      const p = parseBattleScript([bad])
+      expect(p.rules).toHaveLength(0)
+      expect(p.warnings).toHaveLength(1)
+    }
+  })
+
+  it('対象なし・効果なし（HP MP 付与 解除 のどれも無い）は警告して捨てる。文だけは 台詞 を使う', () => {
+    for (const bad of ['強制: HP=1', '強制: 対象=boss', '強制: 対象=boss 文=x']) {
+      const p = parseBattleScript([bad])
+      expect(p.rules).toHaveLength(0)
+      expect(p.warnings).toHaveLength(1)
+    }
+  })
+
+  it('解除= は 台詞 の文の中に書いてもキーと取り違えない（文は行末まで）', () => {
+    const p = parseBattleScript(['台詞: 文=ふくろの 解除=ほうほう'])
+    expect(p.warnings).toEqual([])
+    expect(p.rules[0]).toMatchObject({ kind: 'line', text: 'ふくろの 解除=ほうほう' })
+  })
+})
+
+describe('強制: の発動の決定', () => {
+  it('生きている者（味方・敵とも）が対象。倒れた者は条件が真でも保留する', () => {
+    const p = parseBattleScript(['強制: 対象=boss HP=1', '強制: 対象=hero MP=0'])
+    const a = nextScriptAction(p, { fired: [] }, view())
+    expect(a).toMatchObject({ kind: 'force', target: 'boss', index: 0 })
+    const b = nextScriptAction(p, { fired: [0] }, view())
+    expect(b).toMatchObject({ kind: 'force', target: 'hero', index: 1 })
+    const dead = view({
+      party: [{ id: 'hero', hp: 0, maxHp: 20 }],
+      enemies: [{ id: 'boss', hp: 0, maxHp: 9 }],
+    })
+    expect(nextScriptAction(p, { fired: [] }, dead)).toBeNull()
+    expect(nextScriptAction(p, { fired: [] }, view({ enemies: [] }))).toMatchObject({
+      target: 'hero',
+    })
+  })
+})
+
+describe('resolveForcedHp', () => {
+  const pct = (value: number) => ({ value, percent: true })
+  const abs = (value: number) => ({ value, percent: false })
+  it('0〜最大 HP に収める（0 は戦闘不能、超過は最大）', () => {
+    expect(resolveForcedHp(abs(0), 10, 20, undefined)).toBe(0)
+    expect(resolveForcedHp(pct(0), 10, 20, undefined)).toBe(0)
+    expect(resolveForcedHp(abs(999), 10, 20, undefined)).toBe(20)
+    expect(resolveForcedHp(pct(100), 10, 20, undefined)).toBe(20)
+    expect(resolveForcedHp(pct(50), 10, 21, undefined)).toBe(10)
+  })
+  it('下限が有れば下回らない。現在の HP が下限未満なら現在の HP を下回らない', () => {
+    expect(resolveForcedHp(abs(0), 10, 20, 1)).toBe(1)
+    expect(resolveForcedHp(abs(2), 10, 20, 5)).toBe(5)
+    expect(resolveForcedHp(abs(0), 3, 20, 5)).toBe(3)
+    expect(resolveForcedHp(abs(9), 10, 20, 5)).toBe(9)
   })
 })

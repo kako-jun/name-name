@@ -13,6 +13,7 @@ import loseEvent from '../../public/battle-sample/scripted-lose-event.json?raw'
 import interrupt from '../../public/battle-sample/scripted-interrupt.json?raw'
 import revive from '../../public/battle-sample/scripted-revive.json?raw'
 import flee from '../../public/battle-sample/scripted-flee.json?raw'
+import force from '../../public/battle-sample/scripted-force.json?raw'
 
 const BASE = 'https://example.com/battle-sample/x.json'
 
@@ -190,14 +191,45 @@ describe('同梱の脚本サンプル（ターン制・ATB の両方で通しで
     }
   )
 
-  it('同梱の 4 本はすべて、読み込み時の警告（宣言の誤り）が無い', () => {
-    for (const text of [loseEvent, interrupt, revive, flee]) {
+  it.each([false, true])(
+    'scripted-force: 生きているボスの HP を戻し、味方の MP と状態を書き換える (atb=%s)',
+    (atb) => {
+      const e = engineOf(parse(force), atb)
+      let healed = false
+      let mpForced = false
+      for (let i = 0; i < 400 && !e.isOver(); i++) {
+        const before = e.getState().enemies[0].hp
+        if (e.getState().phase === 'party-input') e.selectAttack()
+        else e.tick(500)
+        // rules の 2 番目（index 1）は味方の MP と状態の強制。ログは古い行から捨てられるので、発動した直後に見る
+        if (!mpForced && e.getState().script?.fired.includes(1)) {
+          mpForced = true
+          expect(e.getState().log).toContain('ふしぎな ちからで MPが みなぎった！')
+          expect(e.getState().party[0].status).toEqual({ guard_up: 3 })
+          expect(e.getState().party[0].mp).toBe(e.getState().party[0].maxMp)
+        }
+        // rules の 3 番目（index 2）がボスの HP を最大へ戻す強制（0 番目は台詞、1 番目は MP の強制）
+        if (!healed && e.getState().script?.fired.includes(2)) {
+          healed = true
+          expect(e.getState().enemies[0].hp).toBe(e.getState().enemies[0].maxHp)
+          expect(before).toBeLessThan(e.getState().enemies[0].maxHp)
+          expect(e.getState().log).toContain('ボスは ちからを とりもどした！')
+        }
+      }
+      expect(healed).toBe(true)
+      expect(mpForced).toBe(true)
+      expect(e.isOver()).toBe(true)
+    }
+  )
+
+  it('同梱の 5 本はすべて、読み込み時の警告（宣言の誤り）が無い', () => {
+    for (const text of [loseEvent, interrupt, revive, flee, force]) {
       const c = parse(text)
       const e = engineOf(c)
       expect(e.getState().script).toBeDefined()
     }
     // rules の解釈で警告が出ない（誤記のサンプルを同梱しない）
-    for (const text of [loseEvent, interrupt, revive, flee]) {
+    for (const text of [loseEvent, interrupt, revive, flee, force]) {
       const rules = parse(text).script?.rules ?? []
       const r = parseConfig({ script: { rules } }, BASE)
       expect(r.ok).toBe(true)
