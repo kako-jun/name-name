@@ -94,18 +94,33 @@ export function computeSelectMarkImageRect(
   return { x: cx - w / 2, y: tipY - h, w, h, flipX: false }
 }
 
+/** 読み込みに失敗した URL。同じ URL は警告・再要求を繰り返さない（URL が変われば再試行）。 */
+const failedUrls = new Set<string>()
+/** テスト用: 失敗の記憶を消す */
+export function resetUiTextureFailures(): void {
+  failedUrls.clear()
+}
+
 /**
  * UI 画像を読む。読めなかった・URL が空なら警告して null（従来の描画へフォールバック）。
- * `label` は警告に出す部品名。Assets のキャッシュに載るので同じ URL は 1 回だけ読まれる
+ * 失敗した URL は覚え、以降は警告も再要求もせず null（メニューを開くたび・戦闘のたびに繰り返さない）。
+ * `label` は警告に出す部品名。Assets のキャッシュに載るので同じ URL は 1 回だけ読まれる。
+ * 元絵（数百 px）を十数分の一に縮めて出すので、戦闘の他のテクスチャと同じく mipmap の自動生成＋線形補間を、初回の GPU アップロード前に立てる
  */
 export async function loadUiTexture(
   url: string | undefined,
   label: string
 ): Promise<Texture | null> {
-  if (!url) return null
+  if (!url || failedUrls.has(url)) return null
   try {
-    return (await Assets.load(url)) as Texture
+    const tex = (await Assets.load(url)) as Texture
+    if (tex.source) {
+      tex.source.autoGenerateMipmaps = true
+      tex.source.scaleMode = 'linear'
+    }
+    return tex
   } catch (e) {
+    failedUrls.add(url)
     console.warn(`[ui] ${label}の画像を読めませんでした（従来の描画にします）: ${url}`, e)
     return null
   }

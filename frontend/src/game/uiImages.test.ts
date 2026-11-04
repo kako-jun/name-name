@@ -7,16 +7,20 @@ import {
   computeSelectMarkImageRect,
   loadUiTexture,
   parseMarkScale,
+  resetUiTextureFailures,
 } from './uiImages'
 import { computeSelectMarkTriangle } from './battleLayout'
-import { HAND_HEIGHT, HAND_WIDTH } from './battleMenuLayout'
+import { HAND_HEIGHT, HAND_PIXEL, HAND_WIDTH, handCells } from './battleMenuLayout'
 import { createHandCursor } from './HandCursor'
 import { Graphics, Sprite } from 'pixi.js'
 
 const tex = (w: number, h: number): Texture =>
   new Texture({ source: new TextureSource({ width: w, height: h }) })
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  resetUiTextureFailures()
+})
 
 describe('parseMarkScale (#1087)', () => {
   it('未指定は既定 2.0。正常値はそのまま', () => {
@@ -109,6 +113,43 @@ describe('computeSelectMarkImageRect (#1087)', () => {
   })
 })
 
+describe('ドット手の座標が従来と一致する (#1067 共通部品への移行の退行検知)', () => {
+  /** 従来の描き方: 黒い縁（セルを 1px 外へ広げた塗り）→ 白（セル） */
+  const expectedBounds = (x: number, y: number, k: number, facing: 'left' | 'right') => {
+    const cells = handCells(facing)
+    const u = HAND_PIXEL * k
+    return {
+      n: cells.length * 2,
+      l: x + Math.min(...cells.map((c) => c.x * k)) - 1,
+      t: y + Math.min(...cells.map((c) => c.y * k)) - 1,
+      r: x + Math.max(...cells.map((c) => c.x * k)) + u + 1,
+      b: y + Math.max(...cells.map((c) => c.y * k)) + u + 1,
+    }
+  }
+  it.each([
+    [10, 20, 1, 'right'],
+    [10, 20, 1, 'left'],
+    [100, 50, 2, 'right'],
+    [3, 7, 1.5, 'right'],
+  ] as const)('x=%i y=%i 倍率 %f %s: 縁つきの外接矩形・矩形数が一致', (x, y, k, facing) => {
+    const g = createHandCursor(x, y, HAND_HEIGHT * k, facing, null) as Graphics
+    const e = expectedBounds(x, y, k, facing)
+    const b = g.getLocalBounds()
+    expect(b.x).toBeCloseTo(e.l)
+    expect(b.y).toBeCloseTo(e.t)
+    expect(b.x + b.width).toBeCloseTo(e.r)
+    expect(b.y + b.height).toBeCloseTo(e.b)
+    const ins = g.context.instructions as unknown as Array<{
+      action: string
+      data: { style: { color: number } }
+    }>
+    const fills = ins.filter((i) => i.action === 'fill')
+    expect(fills.length).toBe(e.n)
+    expect(fills.slice(0, e.n / 2).every((f) => f.data.style.color === 0x000000)).toBe(true)
+    expect(fills.slice(e.n / 2).every((f) => f.data.style.color === 0xffffff)).toBe(true)
+  })
+})
+
 describe('createHandCursor (#1067)', () => {
   it('画像なしは従来のドット手（Graphics）', () => {
     expect(createHandCursor(0, 0, HAND_HEIGHT, 'right', null)).toBeInstanceOf(Graphics)
@@ -135,6 +176,26 @@ describe('loadUiTexture (#1067・#1087)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await loadUiTexture(undefined, 'x')).toBeNull()
     expect(warn).not.toHaveBeenCalled()
+  })
+  it('読めた texture には mipmap の自動生成と線形補間を立てる', async () => {
+    const t = tex(512, 285)
+    t.source.autoGenerateMipmaps = false
+    vi.spyOn(Assets, 'load').mockResolvedValueOnce(t as never)
+    await loadUiTexture('http://x/m.webp', '手')
+    expect(t.source.autoGenerateMipmaps).toBe(true)
+    expect(t.source.scaleMode).toBe('linear')
+  })
+  it('失敗した URL は覚え、警告も再要求も 1 回だけ。URL が変われば再試行する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const load = vi.spyOn(Assets, 'load').mockRejectedValue(new Error('404'))
+    expect(await loadUiTexture('http://x/f.webp', '手')).toBeNull()
+    expect(await loadUiTexture('http://x/f.webp', '手')).toBeNull()
+    expect(await loadUiTexture('http://x/f.webp', '手')).toBeNull()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    await loadUiTexture('http://x/g.webp', '手')
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledTimes(2)
   })
   it('読めたらその texture。失敗は警告して null', async () => {
     const t = tex(10, 10)

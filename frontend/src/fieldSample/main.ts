@@ -1311,24 +1311,21 @@ async function main(): Promise<void> {
               }))
             )
             const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
-            // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む
+            // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む。
+            // 手のカーソルの画像 (#1067。読めなければ null = 従来のドット手) も並列に待つ
             const images: Record<string, Texture | null> = {}
-            // 上限つき（応答が返らない画像で開かなくならないよう、超えたら読めた分だけで開く）
+            const hand: { tex: Texture | null } = { tex: null }
+            // 上限つき・共有（応答が返らない画像で開かなくならないよう、超えたら読めた分だけで開く）
             await waitUpTo(
-              Promise.all(
-                (config.gearShop?.entries ?? []).map(async (e) => {
+              Promise.all([
+                ...(config.gearShop?.entries ?? []).map(async (e) => {
                   if (e.image !== undefined)
                     safeAssign(images, e.image, await partyTexture(e.image))
-                })
-              ),
-              MENU_IMAGE_TIMEOUT_MS
-            )
-            // 手のカーソルの画像 (#1067)。読めなければ null（従来のドット手）。上限つき
-            const hand: { tex: Texture | null } = { tex: null }
-            await waitUpTo(
-              loadUiTexture(config.ui?.handImage, '手のカーソル').then((t) => {
-                hand.tex = t
-              }),
+                }),
+                loadUiTexture(config.ui?.handImage, '手のカーソル').then((t) => {
+                  hand.tex = t
+                }),
+              ]),
               MENU_IMAGE_TIMEOUT_MS
             )
             return {

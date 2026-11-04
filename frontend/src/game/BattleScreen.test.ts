@@ -12,7 +12,7 @@ import {
   ColorMatrixFilter,
   type Container,
   Graphics,
-  type Sprite,
+  Sprite,
   Texture,
   TextureSource,
   type Text,
@@ -41,7 +41,7 @@ import {
   estimateTextWidth,
 } from './battleLayout'
 import type { SpriteSlot } from './battleLayout'
-import { computeSelectMarkImageRect } from './uiImages'
+import { computeSelectMarkImageRect, resetUiTextureFailures } from './uiImages'
 import { computeSlitY } from './acrylicBase'
 import { createAcrylicPlateTexture } from './acrylicPlateTexture'
 import { computeShadowTransform } from './acrylicShadow'
@@ -3929,7 +3929,10 @@ describe('BattleScreen: 選択中の印の円錐の画像と手のカーソル�
       pad: 8,
     })) as never)
   }
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    resetUiTextureFailures()
+  })
 
   it('画像未指定は従来の三角のまま（画像の Sprite を作らない）', async () => {
     mockLoad()
@@ -3991,6 +3994,42 @@ describe('BattleScreen: 選択中の印の円錐の画像と手のカーソル�
       expect(v.selectMark.getLocalBounds().width).toBeGreaterThan(0)
     }
     expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('手の画像: loadUiImages → host.handTexture → BattleMenuLayer の手が Sprite になる（失敗時はドット手）', async () => {
+    mockLoad()
+    const menu = { items: [{ id: 'i', name: 'きずぐすり', count: 1, effect: 'heal 10..10' }] }
+    const withHand = track(
+      make([ent('p')], [ent('e')], {
+        ...acrylic,
+        menu: menu as never,
+        uiImages: { handImage: HAND, markScale: 2 },
+      })
+    )
+    await flushPromises()
+    const layerOf = (s: BattleScreen) =>
+      (
+        s as unknown as {
+          menuLayer: { host: { handTexture?: () => Texture | null }; hand(p: object): unknown }
+        }
+      ).menuLayer
+    const l = layerOf(withHand)
+    expect(l.host.handTexture?.()).toBe(hand)
+    expect(l.hand({ x: 0, y: 0, facing: 'right' })).toBeInstanceOf(Sprite)
+    resetUiTextureFailures()
+    mockLoad([HAND])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const noHand = track(
+      make([ent('p')], [ent('e')], {
+        ...acrylic,
+        menu: menu as never,
+        uiImages: { handImage: HAND, markScale: 2 },
+      })
+    )
+    await flushPromises()
+    const l2 = layerOf(noHand)
+    expect(l2.host.handTexture?.()).toBeNull()
+    expect(l2.hand({ x: 0, y: 0, facing: 'right' })).toBeInstanceOf(Graphics)
   })
 
   it('出し入れ: 画像の表示は updateSelectMarks に従う（三角と同じ）', async () => {
