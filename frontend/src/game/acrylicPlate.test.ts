@@ -3,6 +3,8 @@ import {
   computePlateExtend,
   computePlateLayout,
   computeStem,
+  computeStemFlare,
+  computeStemRef,
   computeStemScale,
   computeStemSlitHalfWidth,
   STEM_MIN_WIDTH_RATIO,
@@ -595,5 +597,133 @@ describe('帯: 接地の抑制・独立したリム (#848)', () => {
     for (let y = 10; y <= 60; y++) for (let x = 45; x < 75; x++) a[y * w + x] = 255
     for (let y = 100; y < h; y++) for (let x = 2; x < 20; x++) a[y * w + x] = 255
     expect(computeStem(a, w, h, 6, P3)).not.toBeNull()
+  })
+})
+
+describe('帯の縮尺換算と裾の広がり (#853)', () => {
+  const w = 100
+  const h = 100
+  const sp = { stemWidthRatio: 0.28, stemMinGapRatio: 0.08 }
+  const blob = (bottomY: number): Uint8Array => {
+    const a = new Uint8Array(w * h)
+    for (let y = 10; y <= bottomY; y++) for (let x = 20; x <= 79; x++) a[y * w + x] = 255
+    return a
+  }
+
+  it('STEM_MIN_WIDTH_RATIO は 0.18', () => {
+    expect(STEM_MIN_WIDTH_RATIO).toBe(0.18)
+  })
+
+  it('computeStemRef: 基本の絵の寸法 × 作業倍率。不正な入力は undefined', () => {
+    expect(computeStemRef(100, 50, 2)).toEqual({ width: 200, height: 100 })
+    expect(computeStemRef(0, 50, 2)).toBeUndefined()
+    expect(computeStemRef(100, -1, 2)).toBeUndefined()
+    expect(computeStemRef(100, 50, 0)).toBeUndefined()
+    expect(computeStemRef(100, 50, Infinity)).toBeUndefined()
+    expect(computeStemRef(100, 50, NaN)).toBeUndefined()
+  })
+
+  it('ref 無し・自身と同寸の ref・不正な ref は従来と同一値', () => {
+    const base = computeStemScale(w, h, P)
+    expect(computeStemScale(w, h, P, { width: w, height: h })).toEqual(base)
+    expect(computeStemScale(w, h, P, { width: 0, height: 10 })).toEqual(base)
+    expect(computeStemScale(w, h, P, undefined)).toEqual(base)
+  })
+
+  it('基本の絵と異なる寸法のポーズ画像では、スリット半幅・最小幅が ref の縮尺で換算される', () => {
+    const base = computeStemScale(w, h, P)
+    const doubled = computeStemScale(w, h, P, { width: w * 2, height: h * 2 })
+    expect(doubled.slitHalf).toBeCloseTo(base.slitHalf * 2, 6)
+    expect(doubled.minWidth).toBeCloseTo(base.minWidth * 2, 6)
+    // ポーズ自身の寸法は使われない
+    expect(computeStemScale(300, 50, P, { width: w, height: h })).toEqual(base)
+  })
+
+  it('computeStem は stemRef 無しなら従来と同一・stemRef があれば帯の幅が換算される', () => {
+    const plain = computeStem(blob(60), w, h, 3, sp)!
+    expect(computeStem(blob(60), w, h, 3, { ...sp, stemRef: { width: w, height: h } })).toEqual(
+      plain
+    )
+    const thin = new Uint8Array(w * h)
+    for (let y = 10; y <= 50; y++) for (let x = 48; x < 52; x++) thin[y * w + x] = 255
+    const s1 = computeStem(thin, w, h, 3, sp)!
+    const s2 = computeStem(thin, w, h, 3, { ...sp, stemRef: { width: w * 2, height: h * 2 } })!
+    expect(s2.halfWidth).toBeGreaterThan(s1.halfWidth)
+  })
+
+  describe('computeStemFlare', () => {
+    const tip = (x0: number, x1: number): Uint8Array => {
+      const a = new Uint8Array(w * h)
+      for (let y = 90; y <= 99; y++) for (let x = x0; x <= x1; x++) a[y * w + x] = 255
+      return a
+    }
+    const rect = { cx: 50, halfWidth: 10, bottom: 103 }
+
+    it('羽根の先が帯幅の中なら null', () => {
+      expect(computeStemFlare(tip(45, 55), w, h, 99, rect, 6)).toBeNull()
+      expect(computeStemFlare(tip(42, 58), w, h, 99, rect, 6)).toBeNull()
+    })
+    it('先が帯幅の外にあるときだけ付く（先の側へ）', () => {
+      const f = computeStemFlare(tip(5, 12), w, h, 99, rect, 6)!
+      expect(f).not.toBeNull()
+      expect(f.cx).toBeLessThan(rect.cx)
+      expect(f.top).toBeLessThanOrEqual(99)
+      const right = computeStemFlare(tip(88, 95), w, h, 99, rect, 6)!
+      expect(right.cx).toBeGreaterThan(rect.cx)
+    })
+    it('先が近ければ先の中心まで届く', () => {
+      const f = computeStemFlare(tip(34, 41), w, h, 99, rect, 6)!
+      expect(f).not.toBeNull()
+      expect(f.cx).toBeCloseTo(38, 6)
+    })
+    it('傾きは 1.2 が上限（遠い先には近づけるだけ）', () => {
+      const f = computeStemFlare(tip(2, 8), w, h, 99, rect, 6)!
+      const dy = rect.bottom - f.top
+      const edgeDist = rect.cx - rect.halfWidth - (f.cx - f.halfWidth)
+      expect(edgeDist).toBeCloseTo(dy * 1.2, 6)
+      expect(f.cx).toBeGreaterThan(5)
+    })
+    it('広い先の裾の半幅は帯の半幅の 1.5 倍で頭打ち', () => {
+      const f = computeStemFlare(tip(0, 60), w, h, 99, rect, 6)!
+      expect(f).not.toBeNull()
+      expect(f.halfWidth).toBeCloseTo(rect.halfWidth * 1.5, 9)
+      // 狭い先は先の幅・最小幅の大きい方
+      expect(computeStemFlare(tip(5, 12), w, h, 99, rect, 6)!.halfWidth).toBeCloseTo(4, 9)
+      expect(computeStemFlare(tip(5, 6), w, h, 99, rect, 20)!.halfWidth).toBeCloseTo(10, 9)
+    })
+    it('先が帯のすぐ外（1px はみ出す）でも裾が付き、帯の外へ動く', () => {
+      const f = computeStemFlare(tip(61, 61), w, h, 99, rect, 6)!
+      expect(f).not.toBeNull()
+      expect(f.cx).toBeGreaterThan(rect.cx + rect.halfWidth - f.halfWidth)
+    })
+    it('絵が無い・最下端が範囲外なら null', () => {
+      expect(computeStemFlare(new Uint8Array(w * h), w, h, 99, rect, 6)).toBeNull()
+      expect(computeStemFlare(tip(5, 12), w, h, -1, rect, 6)).toBeNull()
+      expect(computeStemFlare(tip(5, 12), w, h, h, rect, 6)).toBeNull()
+    })
+  })
+
+  it('computeStem: スリットの外の左端に羽根の先があると flare が付き、中央なら付かない', () => {
+    const a = blob(60)
+    for (let y = 60; y < h; y++) for (let x = 2; x < 5; x++) a[y * w + x] = 255
+    const s = computeStem(a, w, h, 3, sp)!
+    expect(s.flare).toBeDefined()
+    expect(s.flare!.cx).toBeLessThan(s.cx)
+    expect(computeStem(blob(60), w, h, 3, sp)!.flare).toBeUndefined()
+  })
+
+  it('stampStem: flare があると先の真下にも帯が書かれ、無ければ書かれない', () => {
+    const W = 120
+    const H = 120
+    const pad = 10
+    const rect = { cx: 50, halfWidth: 8, top: 60, bottom: 100, radius: 4 }
+    const none = new Float32Array(W * H)
+    stampStem(none, W, pad, rect)
+    const withFlare = new Float32Array(W * H)
+    stampStem(withFlare, W, pad, { ...rect, flare: { cx: 20, halfWidth: 4, top: 90 } })
+    const at = (m: Float32Array, x: number, y: number): number => m[(y + pad) * W + x + pad]
+    expect(at(none, 28, 92)).toBe(0)
+    expect(at(withFlare, 28, 92)).toBe(1)
+    expect(at(withFlare, 50, 80)).toBe(1)
   })
 })

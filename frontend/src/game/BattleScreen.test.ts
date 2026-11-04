@@ -42,9 +42,15 @@ import {
 } from './battleLayout'
 import type { SpriteSlot } from './battleLayout'
 import { computeSlitY } from './acrylicBase'
+import { createAcrylicPlateTexture } from './acrylicPlateTexture'
 import { computeShadowTransform } from './acrylicShadow'
 import { computeAcrylicGeometry, resolveAcrylicParams } from './spriteStyle'
 import { FF_BLUE_BAND_COUNT, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
+
+vi.mock('./acrylicPlateTexture', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./acrylicPlateTexture')>()
+  return { ...actual, createAcrylicPlateTexture: vi.fn(actual.createAcrylicPlateTexture) }
+})
 
 const DEAD_ALPHA = 0.3
 
@@ -3353,6 +3359,36 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     engine.selectAttack()
     s.redraw(800, 450)
   }
+
+  it('ポーズの板は基本の絵（baseVisual のテクスチャ）を createAcrylicPlateTexture の第 3 引数まで渡して作り、基本の絵自身には渡さない (#853)', async () => {
+    ;(
+      BattleScreen.prototype as never as { makeAcrylicPlate: { mockRestore(): void } }
+    ).makeAcrylicPlate.mockRestore()
+    const create = vi.mocked(createAcrylicPlateTexture)
+    create.mockClear()
+    const original = create.getMockImplementation()
+    create.mockImplementation(
+      (tex: Texture) =>
+        ({
+          texture: sized(tex.width + 16, tex.height + 16),
+          pad: 8,
+          shadow: sized(64, 32),
+          foot: { x: 32, y: 16 },
+        }) as never
+    )
+    try {
+      const { s } = await setup()
+      const v = pv(s)
+      const baseTex = textures.get('img/hero.webp')!
+      const callFor = (t: Texture) => create.mock.calls.find((c) => c[0] === t)!
+      expect(callFor(baseTex)[2]).toBeUndefined()
+      for (const key of ['idle', 'slash', 'down']) {
+        expect(callFor(v.poseVisuals[key].texture)[2]).toBe(baseTex)
+      }
+    } finally {
+      create.mockImplementation(original!)
+    }
+  })
 
   it('ポーズが読み込まれ、縦横比の違う slash に替わっても枠（slotRef）と基準位置は動かない', async () => {
     const { s, engine } = await setup()

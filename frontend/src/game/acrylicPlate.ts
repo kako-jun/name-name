@@ -132,7 +132,10 @@ type PlateParams = Pick<
   | 'stemFillAlpha'
   | 'stemMinGapRatio'
 > &
-  Partial<AcrylicParams>
+  Partial<AcrylicParams> & {
+    /** ポーズの絵のとき、スリット幅の換算に使う基本の絵の寸法 (#853) */
+    stemRef?: StemRef
+  }
 
 /** 足元の帯の高さ（画像高さに対する比率）。この帯に触れる列だけを下へ伸ばす（腕など上の部位は伸ばさない） */
 const FOOT_BAND_RATIO = 0.06
@@ -206,6 +209,12 @@ export interface StemRect {
   bottom: number
   /** 角丸の半径 */
   radius: number
+  /**
+   * スリットの外で下端に届く羽根の先などを受ける裾の広がり (#853)。帯は台座のスリットにしか刺さらないので、
+   * 帯の中心はスリットの中に制約される。羽根の先が帯の真下から外れるとき、先の真下（`cx`・`halfWidth`・`top`）から
+   * 帯（下端の矩形）へ向けて台形に絞る。無ければ矩形のみ
+   */
+  flare?: { cx: number; halfWidth: number; top: number }
 }
 
 /**
@@ -227,23 +236,48 @@ export function computeStemSlitHalfWidth(
   return computeStemScale(w, h, params).slitHalf
 }
 
-/** 帯の最小幅 / 枠一辺 (#848)。小さい画面でも帯が読める下限（スリットの全幅は枠の約 0.35 倍） */
-export const STEM_MIN_WIDTH_RATIO = 0.14
+/** 帯の最小幅 / 枠一辺 (#848)。小さい画面（360x640 の 2x2 配置で枠が約 50 論理 px）でも帯が読める下限（スリットの全幅は枠の約 0.35 倍）。#853 で 0.14 から引き上げ */
+export const STEM_MIN_WIDTH_RATIO = 0.18
 
-/** 元画像 px で見た、スリットの半幅と帯の最小幅 */
+/**
+ * スリット幅の換算の基準にする絵の寸法（板を作る画像と同じ px 単位）(#853)。ポーズの絵は基本の絵の縮尺のまま
+ * 足元中央を揃えて置かれる（BattleScreen.poseRectOnBase）ので、台座のスリットは「基本の絵を枠に収めた縮尺」で決まる。
+ * 省略時は板を作る画像自身を基準にする（基本の絵・フィールドの図形）。
+ */
+export interface StemRef {
+  width: number
+  height: number
+}
+
+/** 基本の絵 `baseW x baseH`（元解像度の px）を、板を作る解像度（元解像度の `workScale` 倍）へ直した換算基準 */
+export function computeStemRef(
+  baseW: number,
+  baseH: number,
+  workScale: number
+): StemRef | undefined {
+  if (!(baseW > 0) || !(baseH > 0) || !(workScale > 0) || !Number.isFinite(workScale))
+    return undefined
+  return { width: baseW * workScale, height: baseH * workScale }
+}
+
+/** 元画像 px で見た、スリットの半幅と帯の最小幅。`ref` があればその絵の縮尺で換算する (#853) */
 export function computeStemScale(
   w: number,
   h: number,
-  params: Partial<AcrylicParams> = {}
+  params: Partial<AcrylicParams> = {},
+  ref?: StemRef
 ): { slitHalf: number; minWidth: number } {
+  const valid = !!ref && ref.width > 0 && ref.height > 0
+  const rw = valid ? ref.width : w
+  const rh = valid ? ref.height : h
   const g = computeAcrylicGeometry(
-    w,
-    h,
+    rw,
+    rh,
     STEM_REF_SIZE,
     resolveAcrylicParams({ ...params, hasBase: true })
   )
   if (!g.base || !(g.sprite.width > 0)) return { slitHalf: 0, minWidth: 0 }
-  const pxPerSize = w / g.sprite.width
+  const pxPerSize = rw / g.sprite.width
   return {
     slitHalf: g.base.rx * 0.5 * pxPerSize,
     minWidth: STEM_MIN_WIDTH_RATIO * STEM_REF_SIZE * pxPerSize,
@@ -266,11 +300,12 @@ export function computeStem(
   w: number,
   h: number,
   extend: number,
-  params: Pick<AcrylicParams, 'stemWidthRatio' | 'stemMinGapRatio'> & Partial<AcrylicParams>
+  params: Pick<AcrylicParams, 'stemWidthRatio' | 'stemMinGapRatio'> &
+    Partial<AcrylicParams> & { stemRef?: StemRef }
 ): StemRect | null {
   if (!(w > 0) || !(h > 0) || alpha.length < w * h) return null
   if (!(params.stemWidthRatio > 0)) return null
-  const { slitHalf, minWidth } = computeStemScale(w, h, params)
+  const { slitHalf, minWidth } = computeStemScale(w, h, params, params.stemRef)
   if (!(slitHalf > 0)) return null
   const slitCx = w / 2
   const cx0 = Math.max(0, Math.ceil(slitCx - slitHalf))
@@ -356,13 +391,59 @@ export function computeStem(
     Math.max(halfWidth, Math.min(slitCx + reach, Math.max(slitCx - reach, target)))
   )
   const overlap = Math.max(1, Math.round(h * STEM_OVERLAP_RATIO))
-  return {
+  const stemBottom = h + Math.max(0, extend)
+  const rect: StemRect = {
     cx,
     halfWidth,
     top: Math.max(0, bottom - overlap),
-    bottom: h + Math.max(0, extend),
+    bottom: stemBottom,
     radius: halfWidth * 0.5,
   }
+  const flare = computeStemFlare(alpha, w, h, gBottom, rect, minWidth)
+  if (flare) rect.flare = flare
+  return rect
+}
+
+/** 裾の広がりの傾き（水平:垂直）の上限。これより寝た台形にはしない（長い横棒に見えるのを避ける） */
+const STEM_FLARE_MAX_SLOPE = 1.2
+
+/**
+ * 絵の最下端（`gBottom` の行）の先が帯の矩形の外にあるとき、その先の真下から帯へ絞る裾の広がりを求める (#853)。純粋関数。
+ * 先が矩形の幅の中なら null（従来どおり）。傾きは STEM_FLARE_MAX_SLOPE で頭打ち（先まで届かないときは近づけるだけ）。
+ */
+export function computeStemFlare(
+  alpha: ArrayLike<number>,
+  w: number,
+  h: number,
+  gBottom: number,
+  rect: Pick<StemRect, 'cx' | 'halfWidth' | 'bottom'>,
+  minWidth: number
+): { cx: number; halfWidth: number; top: number } | null {
+  if (gBottom < 0 || gBottom >= h) return null
+  const tipBand = Math.max(1, Math.round(h * FOOT_BAND_RATIO))
+  let tMin = w
+  let tMax = -1
+  for (let y = Math.max(0, gBottom - tipBand); y <= gBottom; y++)
+    for (let x = 0; x < w; x++)
+      if (alpha[y * w + x] >= STEM_ALPHA_MIN) {
+        if (x < tMin) tMin = x
+        if (x > tMax) tMax = x
+      }
+  if (tMax < 0) return null
+  const tipCx = (tMin + tMax + 1) / 2
+  const outside = Math.abs(tipCx - rect.cx) - rect.halfWidth
+  if (outside <= 0) return null
+  const top = Math.max(0, gBottom - tipBand)
+  const dy = rect.bottom - top
+  if (!(dy > 0)) return null
+  const halfWidth = Math.max(minWidth / 2, Math.min((tMax - tMin + 1) / 2, rect.halfWidth * 1.5))
+  // 傾きの上限: 帯の縁から先の縁までの水平距離 <= 垂直距離 x 上限
+  const maxShift = rect.halfWidth + dy * STEM_FLARE_MAX_SLOPE - halfWidth
+  const shift =
+    Math.sign(tipCx - rect.cx) * Math.min(Math.abs(tipCx - rect.cx), Math.max(0, maxShift))
+  const cx = Math.min(w - halfWidth, Math.max(halfWidth, rect.cx + shift))
+  // 先が帯の外（outside > 0）なら shift > rect.halfWidth - halfWidth となり、cx が帯の縁の内側に収まることは無い（到達不能ガードは置かない）
+  return { cx, halfWidth, top }
 }
 
 /** ステムの角丸矩形を mask（幅 `W`・画像の左上が (pad, pad)）へ書き込む。既存値より小さくならない (#848) */
@@ -384,6 +465,25 @@ export function stampStem(mask: Float32Array, W: number, pad: number, stem: Stem
       const dx = Math.max(x0 + r - xc, xc - (x1 - r), 0)
       const dy = Math.max(stem.top + r - yc, 0)
       if (dx * dx + dy * dy > r * r) continue
+      const i = py * W + px
+      if (mask[i] < 1) mask[i] = 1
+    }
+  }
+  const f = stem.flare
+  if (!f) return
+  const span = stem.bottom - f.top
+  if (!(span > 0)) return
+  for (let y = Math.floor(f.top); y < Math.ceil(stem.bottom); y++) {
+    const py = y + pad
+    if (py < 0 || py >= H) continue
+    const t = Math.min(1, Math.max(0, (y + 0.5 - f.top) / span))
+    const c = f.cx + (stem.cx - f.cx) * t
+    const hw = f.halfWidth + (stem.halfWidth - f.halfWidth) * t
+    for (let x = Math.floor(c - hw); x < Math.ceil(c + hw); x++) {
+      const px = x + pad
+      if (px < 0 || px >= W) continue
+      const xc = x + 0.5
+      if (xc < c - hw || xc > c + hw) continue
       const i = py * W + px
       if (mask[i] < 1) mask[i] = 1
     }

@@ -584,7 +584,7 @@ export class BattleScreen extends Container {
   private acrylicParams: AcrylicParams | null
   private destroyedFlag = false
   /** 板・影のテクスチャを tex.source ごとに共有するキャッシュ (#760)。destroy で解放 */
-  private plateCache = new AcrylicPlateCache((tex) => this.makeAcrylicPlate(tex))
+  private plateCache = new AcrylicPlateCache((tex, baseTex) => this.makeAcrylicPlate(tex, baseTex))
   /** 戦闘ログのタイプ表示 (#755)。`off` のとき tracker / ticker は使わない */
   private logTypewriter: BattleLogTypewriterMode
   private logTracker: BattleLogTracker = makeBattleLogTracker()
@@ -822,13 +822,13 @@ export class BattleScreen extends Container {
   }
 
   /** アクリル板テクスチャを作る (#760)。canvas が使えない・読み出せないときは null（テストで差し替えられるよう分けてある） */
-  protected makeAcrylicPlate(tex: Texture): AcrylicPlate | null {
-    return this.acrylicParams ? makeAcrylicPlate(tex, this.acrylicParams) : null
+  protected makeAcrylicPlate(tex: Texture, baseTex?: Texture): AcrylicPlate | null {
+    return this.acrylicParams ? makeAcrylicPlate(tex, this.acrylicParams, baseTex) : null
   }
 
   /** 同じ画像の板・影は 1 回だけ作って共有する (#760)（AcrylicPlateCache） */
-  private getAcrylicPlate(tex: Texture): AcrylicPlate | null {
-    return this.plateCache.get(tex)
+  private getAcrylicPlate(tex: Texture, baseTex?: Texture): AcrylicPlate | null {
+    return this.plateCache.get(tex, baseTex)
   }
 
   /**
@@ -3251,7 +3251,10 @@ export class BattleScreen extends Container {
           )) as Texture
           applyBattleTextureFilter(tex, !!this.opts.pixelArt)
           if (this.destroyedFlag || view.container.destroyed) return
-          const plate = view.acrylicBack ? this.getAcrylicPlate(tex) : null
+          // ポーズの板は基本の絵の縮尺で帯を作る (#853)。基本の絵が先に読めていなければ（まれ）従来どおり自身の縮尺
+          const plate = view.acrylicBack
+            ? this.getAcrylicPlate(tex, view.baseVisual?.texture)
+            : null
           view.poseVisuals[key] = { texture: tex, plate }
         } catch (e) {
           console.warn(`[BattleScreen] failed to load pose "${key}" "${path}":`, e)
