@@ -129,6 +129,8 @@ export class FieldMenuHost {
       // 準備・表示の失敗は握る（unhandled rejection にしない）。開き始めを取り消し、フィールドの表示へ戻す
       console.warn('[field-menu] メニューを開けませんでした', e)
       if (entered) this.d.leaveView()
+      // open の途中で隠した ≡ ボタンを、次の syncButton で描き直す（同じ位置でも再描画させる）
+      this.lastButtonKey = ''
       return false
     } finally {
       this.opening = false

@@ -323,3 +323,23 @@ describe('open の失敗と pointer 記録の使い切り', () => {
     expect(t.host.onContextMenu()).toBe(false)
   })
 })
+
+describe('open 失敗後の ≡ ボタン', () => {
+  it('表示を隠した後で失敗しても隠れたままにならず、次の syncButton で同じ位置に描き直す', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = setup()
+    t.screen.open = () => {
+      throw new Error('boom')
+    }
+    t.host.syncButton()
+    const r = t.buttons[t.buttons.length - 1]
+    expect(r).not.toBeNull()
+    void t.host.open()
+    t.release()
+    await flush()
+    expect(t.buttons[t.buttons.length - 1]).toBeNull() // open の途中で隠した
+    t.host.syncButton()
+    expect(t.buttons[t.buttons.length - 1]).toEqual(r)
+    warn.mockRestore()
+  })
+})
