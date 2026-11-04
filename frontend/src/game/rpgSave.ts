@@ -11,6 +11,7 @@ import type { ScriptState } from './battleScript'
 import type { EnemyMemory } from './enemyAi'
 import type { SaveSlotData } from './SaveManager'
 import { hasOwn } from './ownProperty'
+import { checkGearState, type GearState } from './gearShop'
 
 export const RPG_SAVE_VERSION = 1
 
@@ -79,6 +80,8 @@ export interface RpgSaveState {
   playMs?: number
   /** 歩数の累計 (#880)。省略は 0。定義は `fieldPlayStats.ts` */
   steps?: number
+  /** 刀・防具の購入済みと装備中の刀 (#881)。省略可（メニューの購入を使わないゲームは書かない・旧セーブは無し）。定義は `gearShop.ts` */
+  gear?: GearState
 }
 
 type Obj = Record<string, unknown>
@@ -150,6 +153,10 @@ export function parseRpgSave(raw: unknown): RpgParseResult {
     (!isNum(raw.steps) || raw.steps < 0 || !Number.isInteger(raw.steps))
   )
     return fail('steps は 0 以上の整数が必要です')
+  if (raw.gear !== undefined) {
+    const err = checkGearState(raw.gear)
+    if (err) return fail(err)
+  }
   if (raw.field !== undefined) {
     const f = raw.field
     if (!isObj(f)) return fail('field はオブジェクトが必要です')
@@ -242,6 +249,8 @@ export interface RpgResolved {
   playMs?: number
   /** 歩数（セーブに無ければ省略 = 0 扱い） */
   steps?: number
+  /** 刀・防具の購入済みと装備中の刀（セーブに無ければ省略）。定義との突き合わせは `resolveGear` */
+  gear?: GearState
   warnings: string[]
 }
 
@@ -275,6 +284,7 @@ export function resolveRpg(rpg: RpgSaveState, base: RpgBaseConfig): RpgResolved 
   }
   if (rpg.playMs !== undefined) out.playMs = rpg.playMs
   if (rpg.steps !== undefined) out.steps = rpg.steps
+  if (rpg.gear !== undefined) out.gear = cloneJson(rpg.gear)
   if (rpg.field) out.field = cloneJson(rpg.field)
   if (rpg.battle) {
     const enemies: BattleEntity[] = []
@@ -328,6 +338,7 @@ export function snapshotRpg(
     battle?: RpgResolvedBattle
     playMs?: number
     steps?: number
+    gear?: GearState
   },
   base: Pick<RpgBaseConfig, 'party' | 'enemy'>
 ): RpgSaveState {
@@ -346,6 +357,7 @@ export function snapshotRpg(
   if (s.field) out.field = cloneJson(s.field)
   if (s.playMs !== undefined) out.playMs = Math.floor(s.playMs)
   if (s.steps !== undefined) out.steps = s.steps
+  if (s.gear !== undefined) out.gear = cloneJson(s.gear)
   if (s.battle) {
     // 敵のマスターは id だけで引ける満タン無傷の者。配置（col / row）は差分として残る
     out.battle = {
