@@ -16,8 +16,20 @@
 import { BATTLE_POSES, type BattlePose } from '../game/battleMotion'
 import { hasOwn } from '../game/ownProperty'
 
-/** 導出に使うポーズ（エンジンが受理する 8 種。special・swing は #1026 で足す） */
+/** 導出に使うポーズ（エンジンが受理する全種。special・swing-* は #1026） */
 export const DERIVED_POSES: readonly BattlePose[] = BATTLE_POSES
+
+/** 「揃っている」の基準になる基本の 8 ポーズ。special・swing-* は無くても揃っている扱い（あれば導出に含め、無ければエンジンが近い絵に落とす） */
+export const CORE_POSES: readonly BattlePose[] = [
+  'idle',
+  'ready',
+  'step',
+  'slash',
+  'cast',
+  'hurt',
+  'down',
+  'victory',
+]
 
 /** 人物単体版（-character）か、そうでない版（plain）か */
 export type PoseVariant = 'character' | 'plain'
@@ -98,7 +110,7 @@ export function parseCharacterFormsManifest(
 
 /**
  * 人物単体版（character）か plain かを、形態ごとに丸ごと 1 つ選ぶ。
- * 優先: 8 ポーズが揃った character → 8 ポーズが揃った plain → 実在ポーズの多い方（同数は plain）。
+ * 優先: 基本 8 ポーズが揃った character → 基本 8 ポーズが揃った plain → 実在ポーズの多い方（同数は plain）。
  * 版を混ぜない（同じ戦闘で味方の絵の方式が揃わなくなるため）。無ければ undefined。
  * `plainBaked`（plain に刀・軌跡の焼き込み版が混じり得る人物）は、plain へ降格しない: 8 ポーズ揃った character だけ、無ければ undefined
  */
@@ -108,10 +120,10 @@ export function pickPoseVariant(
 ): PoseVariant | undefined {
   const c = entry.poses.character ?? []
   const p = entry.poses.plain ?? []
-  const all = DERIVED_POSES.length
-  if (c.length === all) return 'character'
+  const complete = (list: readonly BattlePose[]) => CORE_POSES.every((x) => list.includes(x))
+  if (complete(c)) return 'character'
   if (opts.plainBaked) return undefined
-  if (p.length === all) return 'plain'
+  if (complete(p)) return 'plain'
   if (c.length === 0 && p.length === 0) return undefined
   return c.length > p.length ? 'character' : 'plain'
 }

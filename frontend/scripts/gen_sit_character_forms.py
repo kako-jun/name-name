@@ -14,8 +14,20 @@ import re
 import sys
 from pathlib import Path
 
-# エンジンが受理するポーズ（frontend/src/game/battleMotion.ts の BATTLE_POSES と同じ並び）
-POSES = ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"]
+# エンジンが受理するポーズ（frontend/src/game/battleMotion.ts の BATTLE_POSES と同じ並び。#1026 で special・swing を追加）
+POSES = [
+    "idle",
+    "ready",
+    "step",
+    "swing-windup",
+    "slash",
+    "swing-followthrough",
+    "cast",
+    "special",
+    "hurt",
+    "down",
+    "victory",
+]
 DIRS = ["up", "down", "left", "right", "upleft", "upright", "downleft", "downright"]
 CHARACTERS = ["C001", "C002", "C003", "C004"]
 # plain（-character でない版）に、刀・斬撃の軌跡を絵へ焼き込んだ版が混じり得る人物。目録に plainBaked: true を付け、
@@ -34,11 +46,11 @@ def main() -> None:
     for cid in CHARACTERS:
         base = root / "assets/images/characters" / cid
         forms: dict[str, dict] = {}
-        pose_re = re.compile(rf"^{cid}-(?P<form>.+?)(?P<char>-character)?-(?P<pose>[a-z]+)\.webp$")
+        pose_re = re.compile(rf"^{cid}-(?P<form>.+?)(?P<char>-character)?-(?P<pose>swing-windup|swing-followthrough|[a-z]+)\.webp$")
         for f in sorted((base / "poses").glob(f"{cid}-*.webp")):
             m = pose_re.match(f.name)
             if not m or m["pose"] not in POSES:
-                continue  # special / swing-* などエンジン未受理のポーズは含めない
+                continue  # エンジン未受理のポーズ名は含めない
             entry = forms.setdefault(m["form"], {"poses": {}, "walk": False})
             variant = "character" if m["char"] else "plain"
             entry["poses"].setdefault(variant, []).append(m["pose"])

@@ -197,7 +197,9 @@ describe('寺町サンプルの人物・敵（#1020）', () => {
   it('味方 4 人の poses が 8 ポーズ全部そろう。人物単体版（-character）がある形態はそちらを使う', () => {
     const c = load()
     expect(c.party.map((m) => m.name)).toEqual(['ナム', 'オットン', 'シャー', 'ペー子'])
-    for (const m of c.party) expect(Object.keys(m.poses ?? {}).sort()).toEqual([...CORE].sort())
+    // 基本 8 ポーズは必ずある（special・swing-* は絵のある形態だけ追加で入る）
+    for (const m of c.party)
+      expect(Object.keys(m.poses ?? {})).toEqual(expect.arrayContaining(CORE))
     const url = (i: number) => c.party[i].poses!.slash!
     expect(url(0)).toMatch(/C002\/poses\/C002-elementary-wheelchair-slash\.webp$/) // C002 に -character は無い
     expect(url(1)).toMatch(/C001\/poses\/C001-elementary-character-slash\.webp$/)
