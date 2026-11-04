@@ -1,6 +1,6 @@
-/** 戦闘画面サンプルの設定 JSON の召喚獣 (#750): beasts の検証、魔石・特技の summonId の引き当て、素材の URL 解決 */
+/** 戦闘設定 JSON の召喚獣 (#750): beasts の検証、魔石・特技の summonId の引き当て、素材の URL 解決 */
 import { describe, expect, it, vi } from 'vitest'
-import summonSample from '../../public/battle-sample/summon.json?raw'
+import summonSample from './__fixtures__/summon.json?raw'
 import { buildBattleSetup, initialView, parseConfig, parseConfigText } from './config'
 import { BattleEngine } from '../game/battleEngine'
 
@@ -160,7 +160,7 @@ describe('summonId の引き当て', () => {
 
 describe('サンプル summon.json', () => {
   it('読み込めて、魔石・特技が召喚獣を引き当て、素材の URL は設定の位置から解決される', () => {
-    const r = parseConfigText(summonSample, 'https://example.com/battle-sample/summon.json')
+    const r = parseConfigText(summonSample, 'https://example.com/battle/summon.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     const c = r.value
@@ -168,7 +168,7 @@ describe('サンプル summon.json', () => {
     expect(c.magicites['sea-stone'].cue).toMatchObject({
       id: 'sea',
       imaginary: true,
-      image: 'https://example.com/battle-sample/summon-wave.svg',
+      image: 'https://example.com/battle/summon-wave.svg',
     })
     expect(c.magicites['gate-stone'].cue?.imaginary).toBeUndefined()
     expect(c.magicites['plain-stone']).not.toHaveProperty('cue')
@@ -176,7 +176,7 @@ describe('サンプル summon.json', () => {
   })
 
   it('実エンジンで召喚（味方）が演出つきの記録になり、敵は召喚獣を呼ばない', () => {
-    const r = parseConfigText(summonSample, 'https://example.com/battle-sample/summon.json')
+    const r = parseConfigText(summonSample, 'https://example.com/battle/summon.json')
     if (!r.ok) throw new Error(r.error)
     const view = initialView(r.value)
     const setup = buildBattleSetup(r.value, view)

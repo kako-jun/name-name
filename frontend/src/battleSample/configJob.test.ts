@@ -1,6 +1,6 @@
-/** 戦闘画面サンプルの設定 JSON のジョブ (#740): `jobs` / `party[].jobs` / `party[].job` */
+/** 戦闘設定 JSON のジョブ (#740): `jobs` / `party[].jobs` / `party[].job` */
 import { describe, it, expect } from 'vitest'
-import jobsSample from '../../public/battle-sample/jobs.json?raw'
+import jobsSample from './__fixtures__/jobs.json?raw'
 import {
   buildBattleSetup,
   defaultConfig,
@@ -114,7 +114,7 @@ describe('party[] のジョブの反映', () => {
 
 describe('サンプル jobs.json', () => {
   const load = () => {
-    const r = parseConfigText(jobsSample, 'https://example.com/battle-sample/jobs.json')
+    const r = parseConfigText(jobsSample, 'https://example.com/battle/jobs.json')
     if (!r.ok) throw new Error(r.error)
     return r.value
   }

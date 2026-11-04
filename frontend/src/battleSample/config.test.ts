@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import type { BattleEntity } from '../game/spellDsl'
 import debuggerGuide from '../../../docs/guide/debugger.md?raw'
-import enemyActionsSample from '../../public/battle-sample/enemy-actions.json?raw'
-import enemyOrderOmenSample from '../../public/battle-sample/enemy-order-omen.json?raw'
-import enemyCounterSample from '../../public/battle-sample/enemy-counter.json?raw'
-import enemyDamageParitySample from '../../public/battle-sample/enemy-damage-parity.json?raw'
-import enemyAffinitySample from '../../public/battle-sample/enemy-affinity.json?raw'
-import lootSample from '../../public/battle-sample/loot.json?raw'
+import enemyActionsSample from './__fixtures__/enemy-actions.json?raw'
+import enemyOrderOmenSample from './__fixtures__/enemy-order-omen.json?raw'
+import enemyCounterSample from './__fixtures__/enemy-counter.json?raw'
+import enemyDamageParitySample from './__fixtures__/enemy-damage-parity.json?raw'
+import enemyAffinitySample from './__fixtures__/enemy-affinity.json?raw'
+import lootSample from './__fixtures__/loot.json?raw'
 import {
   DEFAULT_RESOLUTION_MODE,
   DEFAULT_SIZE_ID,
@@ -15,31 +15,22 @@ import {
   SAMPLE_DEFAULT_PERSPECTIVE,
   SCREEN_SIZES,
   applyFormation,
-  assetsToUnload,
   buildBattleSetup,
   defaultConfig,
   defaultItems,
   defaultSpells,
   defaultEnemies,
   defaultParty,
-  describeBattleResult,
-  describeView,
   effectivePartyCount,
-  extractConfigUrl,
   initialView,
   parseConfig,
   parseConfigText,
   parseMenuList,
   parsePoses,
-  pushView,
-  resolveResolution,
   resolveSize,
   resolveUrl,
-  swapView,
-  viewsEqual,
   type BattleSampleConfig,
   type BattleSampleView,
-  type BlinkHistory,
   type ScreenSizeId,
 } from './config'
 
@@ -207,42 +198,6 @@ describe('resolveUrl', () => {
     expect(resolveUrl('画像/背.png', BASE)).toBe(
       'https://example.com/dir/%E7%94%BB%E5%83%8F/%E8%83%8C.png'
     )
-  })
-})
-
-describe('extractConfigUrl', () => {
-  it('?config=x.json を基準 URL で解決する', () => {
-    expect(extractConfigUrl('?config=x.json', BASE)).toBe('https://example.com/dir/x.json')
-  })
-
-  it('config パラメータがなければ null', () => {
-    expect(extractConfigUrl('?other=1', BASE)).toBeNull()
-  })
-
-  it('?config= （空）なら null', () => {
-    expect(extractConfigUrl('?config=', BASE)).toBeNull()
-  })
-
-  it('?config=%20%20（空白のみ）なら null', () => {
-    expect(extractConfigUrl('?config=%20%20', BASE)).toBeNull()
-  })
-
-  it('config が複数あれば先頭を使う', () => {
-    expect(extractConfigUrl('?config=a.json&config=b.json', BASE)).toBe(
-      'https://example.com/dir/a.json'
-    )
-  })
-
-  it('他のパラメータが混在していても取り出せる', () => {
-    expect(extractConfigUrl('?x=1&config=c.json&y=2', BASE)).toBe('https://example.com/dir/c.json')
-  })
-
-  it('search が空文字なら null', () => {
-    expect(extractConfigUrl('', BASE)).toBeNull()
-  })
-
-  it('%2F はデコードされてパス区切りになる', () => {
-    expect(extractConfigUrl('?config=a%2Fb.json', BASE)).toBe('https://example.com/dir/a/b.json')
   })
 })
 
@@ -771,193 +726,10 @@ describe('buildBattleSetup', () => {
   })
 })
 
-describe('viewsEqual', () => {
-  it('front では partyCount だけ違っても同一扱い', () => {
-    expect(
-      viewsEqual(view({ layout: 'front', partyCount: 1 }), view({ layout: 'front', partyCount: 3 }))
-    ).toBe(true)
-  })
-
-  it('side では partyCount が違えば別扱い', () => {
-    expect(
-      viewsEqual(view({ layout: 'side', partyCount: 1 }), view({ layout: 'side', partyCount: 3 }))
-    ).toBe(false)
-  })
-
-  it('全フィールド同一なら true', () => {
-    expect(viewsEqual(view(), view())).toBe(true)
-  })
-
-  it('windowStyle も含めて同一なら true', () => {
-    expect(viewsEqual(view({ windowStyle: 'ff-blue' }), view({ windowStyle: 'ff-blue' }))).toBe(
-      true
-    )
-  })
-
-  it.each([
-    ['layout', { layout: 'front' }],
-    ['spriteStyle', { spriteStyle: 'acrylic' }],
-    ['windowStyle', { windowStyle: 'ff-blue' }],
-    ['logTypewriter', { logTypewriter: 'on' }],
-    ['backgroundOn', { backgroundOn: true }],
-    ['partyCount', { partyCount: 3 }],
-    ['enemyCount', { enemyCount: 3 }],
-    ['sizeId', { sizeId: '360x640' }],
-    ['resolutionMode', { resolutionMode: 'dpr' }],
-  ] as [string, Partial<BattleSampleView>][])('%s だけ違えば false', (_k, over) => {
-    expect(viewsEqual(view(), view(over))).toBe(false)
-  })
-})
-
-describe('pushView / swapView', () => {
-  const A = view({ layout: 'side' })
-  const B = view({ layout: 'front' })
-  const C = view({ layout: 'front', spriteStyle: 'acrylic' })
-
-  it('異なる view を push すると current=新, previous=旧', () => {
-    const h = pushView({ current: A, previous: null }, B)
-    expect(h.current).toBe(B)
-    expect(h.previous).toBe(A)
-  })
-
-  it('同一内容を push すると同一参照を返す', () => {
-    const h: BlinkHistory = { current: A, previous: null }
-    expect(pushView(h, view())).toBe(h)
-  })
-
-  it('A→B→C と push すると current=C, previous=B', () => {
-    const h = pushView(pushView({ current: A, previous: null }, B), C)
-    expect(h.current).toBe(C)
-    expect(h.previous).toBe(B)
-  })
-
-  it('previous が null の swap は同一参照を返す', () => {
-    const h: BlinkHistory = { current: A, previous: null }
-    expect(swapView(h)).toBe(h)
-  })
-
-  it('swap は current と previous を入れ替える', () => {
-    const h = swapView({ current: B, previous: A })
-    expect(h.current).toBe(A)
-    expect(h.previous).toBe(B)
-  })
-
-  it('swap を 2 回で元に戻る', () => {
-    const h = swapView(swapView({ current: B, previous: A }))
-    expect(h.current).toBe(B)
-    expect(h.previous).toBe(A)
-  })
-
-  it('cur=B, prev=A で A を push すると cur=A, prev=B', () => {
-    const h = pushView({ current: B, previous: A }, A)
-    expect(h.current).toBe(A)
-    expect(h.previous).toBe(B)
-  })
-
-  it('freeze 済みの履歴・view でも例外なく動く', () => {
-    const fa = Object.freeze({ ...A })
-    const fb = Object.freeze({ ...B })
-    const h = Object.freeze({ current: fa, previous: fb })
-    expect(() => swapView(h)).not.toThrow()
-    expect(() => pushView(h, C)).not.toThrow()
-  })
-
-  it('windowStyle だけ違う view を push すると履歴に積まれる', () => {
-    const dark = view()
-    const blue = view({ windowStyle: 'ff-blue' })
-    const h = pushView({ current: dark, previous: null }, blue)
-    expect(h.current).toBe(blue)
-    expect(h.previous).toBe(dark)
-  })
-
-  it('windowStyle が同じ view を push しても積まれない', () => {
-    const h: BlinkHistory = { current: view({ windowStyle: 'ff-blue' }), previous: null }
-    expect(pushView(h, view({ windowStyle: 'ff-blue' }))).toBe(h)
-  })
-
-  it('windowStyle の違う 2 view を swap で往復できる', () => {
-    const dark = view()
-    const blue = view({ windowStyle: 'ff-blue' })
-    const h1 = swapView({ current: blue, previous: dark })
-    expect(h1.current.windowStyle).toBe('dark')
-    expect(h1.previous?.windowStyle).toBe('ff-blue')
-    const h2 = swapView(h1)
-    expect(h2.current.windowStyle).toBe('ff-blue')
-    expect(h2.previous?.windowStyle).toBe('dark')
-  })
-})
-
-describe('describeView', () => {
-  it('ff-blue 版の完全一致文字列', () => {
-    expect(
-      describeView(view({ sizeId: '360x640', windowStyle: 'ff-blue' }), 2, {
-        width: 360,
-        height: 640,
-      })
-    ).toBe(
-      'layout=side  spriteStyle=none  windowStyle=ff-blue  backgroundTone=on  backgroundDof=off  pixelArt=off  logTypewriter=off  background=off  depth=off  foreground=off  formation=config  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
-    )
-  })
-
-  it('DPR=2・360x640 の完全一致文字列', () => {
-    expect(describeView(view({ sizeId: '360x640' }), 2, { width: 360, height: 640 })).toBe(
-      'layout=side  spriteStyle=none  windowStyle=dark  backgroundTone=on  backgroundDof=off  pixelArt=off  logTypewriter=off  background=off  depth=off  foreground=off  formation=config  party=4  enemies=4  size=360x640  logical=360x640  DPR=2  physical=720x1280'
-    )
-  })
-
-  it('backgroundOn=true は background=on 表記', () => {
-    expect(describeView(view({ backgroundOn: true }), 1, { width: 800, height: 450 })).toContain(
-      'background=on'
-    )
-  })
-
-  it('backgroundOn=false は background=off 表記', () => {
-    expect(describeView(view(), 1, { width: 800, height: 450 })).toContain('background=off')
-  })
-
-  it('DPR=1.5 の物理サイズは 540x960', () => {
-    expect(describeView(view(), 1.5, { width: 360, height: 640 })).toContain('physical=540x960')
-  })
-
-  it('丸め境界 0.5×801=400.5 は 401（Math.round）', () => {
-    expect(describeView(view(), 0.5, { width: 801, height: 450 })).toContain('physical=401x225')
-  })
-
-  it('DPR=1 では論理サイズ = 物理サイズ', () => {
-    const s = describeView(view(), 1, { width: 1280, height: 720 })
-    expect(s).toContain('logical=1280x720')
-    expect(s).toContain('physical=1280x720')
-  })
-})
-
 describe('解像度モード (S2)', () => {
   it('既定は本編相当 (main)', () => {
     expect(DEFAULT_RESOLUTION_MODE).toBe('main')
     expect(initialView(defaultConfig()).resolutionMode).toBe('main')
-  })
-
-  it.each([
-    ['main', 2, 1],
-    ['main', 1.5, 1],
-    ['dpr', 2, 2],
-    ['dpr', 1.5, 1.5],
-    ['dpr', 0, 1],
-    ['dpr', NaN, 1],
-  ] as const)('mode=%s DPR=%s は resolution=%s', (mode, dpr, exp) => {
-    expect(resolveResolution(mode, dpr)).toBe(exp)
-  })
-
-  it('describeView は DPR と renderer.resolution を併記し、physical は resolution 基準', () => {
-    const s = describeView(view({ resolutionMode: 'main' }), 2, { width: 360, height: 640 }, 1)
-    expect(s).toContain('DPR=2')
-    expect(s).toContain('resolution=main(renderer.resolution=1)')
-    expect(s).toContain('physical=360x640')
-  })
-
-  it('describeView dpr モードは physical が DPR 倍', () => {
-    const s = describeView(view({ resolutionMode: 'dpr' }), 2, { width: 360, height: 640 }, 2)
-    expect(s).toContain('resolution=dpr(renderer.resolution=2)')
-    expect(s).toContain('physical=720x1280')
   })
 })
 
@@ -980,12 +752,6 @@ describe('front は味方 1 人 (N2)', () => {
     expect(effectivePartyCount(view({ layout: 'side', partyCount: 3 }))).toBe(3)
     expect(effectivePartyCount(view({ layout: 'side', partyCount: 9 }))).toBe(4)
   })
-
-  it('describeView の party= は実効人数', () => {
-    expect(
-      describeView(view({ layout: 'front', partyCount: 4 }), 1, { width: 1, height: 1 })
-    ).toContain('party=1 ')
-  })
 })
 
 describe('backgroundTone (#753)', () => {
@@ -999,12 +765,10 @@ describe('backgroundTone (#753)', () => {
     const bad = parseConfig({ backgroundTone: 'x' }, base)
     expect(bad.ok).toBe(false)
   })
-  it('view から options に反映され、viewsEqual / describeView に含まれる', () => {
+  it('view から options に反映される', () => {
     const v = initialView(defaultConfig())
     const off = { ...v, backgroundTone: 'off' as const }
     expect(buildBattleSetup(defaultConfig(), off).options.backgroundTone).toBe('off')
-    expect(viewsEqual(v, off)).toBe(false)
-    expect(describeView(off, 1, { width: 800, height: 450 })).toContain('backgroundTone=off')
   })
 })
 
@@ -1018,13 +782,11 @@ describe('backgroundDof (#753)', () => {
     }
     expect(parseConfig({ backgroundDof: 'x' }, base).ok).toBe(false)
   })
-  it('view から options に反映され、viewsEqual / describeView に含まれ、彩度明度と独立', () => {
+  it('view から options に反映され、彩度明度と独立', () => {
     const v = initialView(defaultConfig())
     const on = { ...v, backgroundDof: 'on' as const }
     expect(buildBattleSetup(defaultConfig(), on).options.backgroundDof).toBe('on')
     expect(buildBattleSetup(defaultConfig(), on).options.backgroundTone).toBe('on')
-    expect(viewsEqual(v, on)).toBe(false)
-    expect(describeView(on, 1, { width: 800, height: 450 })).toContain('backgroundDof=on')
   })
 })
 
@@ -1065,11 +827,9 @@ describe('logTypewriter (#755)', () => {
     expect(parseConfig({ logTypewriter: 'x' }, BASE).ok).toBe(false)
   })
 
-  it('view / setup / viewsEqual / describeView に反映される', () => {
+  it('view / setup に反映される', () => {
     const on = { ...view(), logTypewriter: 'on' as const }
     expect(buildBattleSetup(defaultConfig(), on).options.logTypewriter).toBe('on')
-    expect(viewsEqual(view(), on)).toBe(false)
-    expect(describeView(on, 1, { width: 800, height: 450 })).toContain('logTypewriter=on')
   })
 })
 
@@ -1099,12 +859,6 @@ describe('logTypewriter: 追加の観点 (#755 QA)', () => {
       const s = buildBattleSetup(defaultConfig(), view({ backgroundOn: false, logTypewriter: v }))
       expect(s.options.logTypewriter).toBe(v)
     }
-  })
-
-  it('describeView は on / off を出し分ける', () => {
-    const size = { width: 800, height: 450 }
-    expect(describeView(view({ logTypewriter: 'on' }), 1, size)).toContain('logTypewriter=on')
-    expect(describeView(view({ logTypewriter: 'off' }), 1, size)).toContain('logTypewriter=off')
   })
 })
 
@@ -1283,24 +1037,7 @@ describe('buildBattleSetup: 奥行き・前景・隊列 (#747)', () => {
   })
 })
 
-describe('viewsEqual / initialView: 奥行き・前景・隊列 (#747)', () => {
-  it('depth の差で false', () => {
-    expect(viewsEqual(view({ depth: 'on' }), view({ depth: 'off' }))).toBe(false)
-  })
-  it('foregroundOn の差で false', () => {
-    expect(viewsEqual(view({ foregroundOn: true }), view({ foregroundOn: false }))).toBe(false)
-  })
-  it('formation の差で false', () => {
-    expect(viewsEqual(view({ formation: 'front' }), view({ formation: 'backHalf' }))).toBe(false)
-  })
-  it('同一 view は true', () => {
-    expect(
-      viewsEqual(
-        view({ depth: 'on', formation: 'front' }),
-        view({ depth: 'on', formation: 'front' })
-      )
-    ).toBe(true)
-  })
+describe('initialView: 奥行き・前景・隊列 (#747)', () => {
   it('initialView の既定: depth off・formation config', () => {
     const v = initialView(defaultConfig())
     expect(v.depth).toBe('off')
@@ -1331,11 +1068,6 @@ describe('ATB (#205)', () => {
       mode: 'active',
     })
   })
-
-  it('atb / atbMode の違いはブリンク比較の別状態になる', () => {
-    expect(viewsEqual(view(), view({ atb: 'on' }))).toBe(false)
-    expect(viewsEqual(view(), view({ atbMode: 'active' }))).toBe(false)
-  })
 })
 
 describe('pixelArt (#760)', () => {
@@ -1352,57 +1084,9 @@ describe('pixelArt (#760)', () => {
     expect(buildBattleSetup(defaultConfig(), view()).options.pixelArt).toBe(false)
     expect(buildBattleSetup(defaultConfig(), view({ pixelArt: 'on' })).options.pixelArt).toBe(true)
   })
-  it('initialView は設定から・describeView に出る・viewsEqual の比較対象（ブリンク比較の対象）', () => {
+  it('initialView は設定から', () => {
     const c = parseConfig({ pixelArt: 'on' }, base)
     expect(c.ok && initialView(c.value).pixelArt).toBe('on')
-    expect(describeView(view({ pixelArt: 'on' }), 1, { width: 800, height: 450 })).toContain(
-      'pixelArt=on'
-    )
-    expect(viewsEqual(view(), view({ pixelArt: 'on' }))).toBe(false)
-  })
-})
-
-describe('assetsToUnload: pixelArt が変わったときだけ画像を解放する (#760)', () => {
-  const cfg = (): BattleSampleConfig => {
-    const r = parseConfig(
-      {
-        background: 'bg.png',
-        foreground: 'fg.png',
-        party: [{ id: 'a', name: 'a', hp: 1, sprite: 'p.png' }],
-        enemies: [
-          { id: 'e', name: 'e', hp: 1, sprite: 'e.png' },
-          { id: 'f', name: 'f', hp: 1, sprite: 'e.png' },
-        ],
-      },
-      'http://x/s.json'
-    )
-    if (!r.ok) throw new Error(r.error)
-    return r.value
-  }
-  it('初回（previous=null）・変化なしは空', () => {
-    expect(assetsToUnload(null, view({ pixelArt: 'on' }), cfg())).toEqual([])
-    expect(assetsToUnload('off', view({ pixelArt: 'off' }), cfg())).toEqual([])
-    expect(assetsToUnload('on', view({ pixelArt: 'on' }), cfg())).toEqual([])
-  })
-  it('off→on・on→off では背景・前景・味方・敵の URL を重複なく返す', () => {
-    for (const [prev, now] of [
-      ['off', 'on'],
-      ['on', 'off'],
-    ] as const) {
-      const urls = assetsToUnload(prev, view({ pixelArt: now }), cfg())
-      expect(urls).toHaveLength(4)
-      expect(urls.some((u) => u.endsWith('bg.png'))).toBe(true)
-      expect(urls.some((u) => u.endsWith('fg.png'))).toBe(true)
-      expect(urls.some((u) => u.endsWith('p.png'))).toBe(true)
-      expect(urls.filter((u) => u.endsWith('e.png'))).toHaveLength(1)
-    }
-  })
-  it('他のトグル（spriteStyle など）だけの変化では返さない', () => {
-    const v = view({ pixelArt: 'on', spriteStyle: 'acrylic', depth: 'on' })
-    expect(assetsToUnload('on', v, cfg())).toEqual([])
-  })
-  it('画像のない設定（背景・前景・スプライトなし）は空', () => {
-    expect(assetsToUnload('off', view({ pixelArt: 'on' }), defaultConfig())).toEqual([])
   })
 })
 
@@ -1450,28 +1134,6 @@ describe('commandLayout / commandLabels (#204)', () => {
     expect(buildBattleSetup(cfg, view()).options.commandLayout).toBe('grid')
   })
 
-  it('viewsEqual: commandLayout だけ違う view は不一致', () => {
-    expect(viewsEqual(view({ commandLayout: 'grid' }), view({ commandLayout: 'cross' }))).toBe(
-      false
-    )
-    expect(viewsEqual(view({ commandLayout: 'cross' }), view({ commandLayout: 'cross' }))).toBe(
-      true
-    )
-  })
-
-  it('describeView: side で cross のときだけ commandLayout=cross を出す（front では効かないので出さない）', () => {
-    const size = { width: 800, height: 450 }
-    expect(describeView(view({ layout: 'side', commandLayout: 'cross' }), 1, size)).toContain(
-      'commandLayout=cross'
-    )
-    expect(describeView(view({ layout: 'front', commandLayout: 'cross' }), 1, size)).not.toContain(
-      'commandLayout'
-    )
-    expect(describeView(view({ layout: 'side', commandLayout: 'grid' }), 1, size)).not.toContain(
-      'commandLayout'
-    )
-  })
-
   it('initialView は config.commandLayout を引き継ぐ', () => {
     expect(initialView(parseOk({ commandLayout: 'cross' })).commandLayout).toBe('cross')
     expect(initialView(parseOk({})).commandLayout).toBe('grid')
@@ -1485,16 +1147,9 @@ describe('presentation / poses (#745)', () => {
     expect(parseConfig({ presentation: 'x' }, BASE).ok).toBe(false)
   })
 
-  it('initialView / viewsEqual / describeView に反映される。ff は side のときだけ表示', () => {
+  it('initialView に反映される (#745)', () => {
     const cfg = parseOk({ presentation: 'ff' })
     expect(initialView(cfg).presentation).toBe('ff')
-    expect(viewsEqual(view(), view({ presentation: 'ff' }))).toBe(false)
-    const size = { width: 800, height: 450 }
-    expect(describeView(view({ presentation: 'ff' }), 1, size)).toContain('presentation=ff')
-    expect(describeView(view({ presentation: 'ff', layout: 'front' }), 1, size)).not.toContain(
-      'presentation=ff'
-    )
-    expect(describeView(view(), 1, size)).not.toContain('presentation=')
   })
 
   it('motion は default / snappy だけ。既定 default。不正値はエラー (#956)', () => {
@@ -1504,17 +1159,8 @@ describe('presentation / poses (#745)', () => {
     expect(parseConfig({ motion: 1 }, BASE).ok).toBe(false)
   })
 
-  it('motion は initialView / viewsEqual / describeView に反映され、ff（side）のときだけ表示 (#956)', () => {
+  it('motion は initialView に反映される (#956)', () => {
     expect(initialView(parseOk({ presentation: 'ff', motion: 'snappy' })).motion).toBe('snappy')
-    expect(viewsEqual(view(), view({ motion: 'snappy' }))).toBe(false)
-    const size = { width: 800, height: 450 }
-    expect(describeView(view({ presentation: 'ff', motion: 'snappy' }), 1, size)).toContain(
-      'motion=snappy'
-    )
-    expect(describeView(view({ presentation: 'ff' }), 1, size)).not.toContain('motion=')
-    expect(describeView(view({ presentation: 'dq', motion: 'snappy' }), 1, size)).not.toContain(
-      'motion='
-    )
   })
 
   it('enemyList は off / window だけ。既定 off。不正値はエラー (#954)', () => {
@@ -1524,17 +1170,8 @@ describe('presentation / poses (#745)', () => {
     expect(parseConfig({ enemyList: true }, BASE).ok).toBe(false)
   })
 
-  it('enemyList は initialView / viewsEqual / describeView に反映され、ff（side）のときだけ表示 (#954)', () => {
+  it('enemyList は initialView に反映される (#954)', () => {
     expect(initialView(parseOk({ enemyList: 'window' })).enemyList).toBe('window')
-    expect(viewsEqual(view(), view({ enemyList: 'window' }))).toBe(false)
-    const size = { width: 800, height: 450 }
-    expect(describeView(view({ presentation: 'ff', enemyList: 'window' }), 1, size)).toContain(
-      'enemyList=window'
-    )
-    expect(describeView(view({ presentation: 'ff' }), 1, size)).not.toContain('enemyList')
-    expect(describeView(view({ presentation: 'dq', enemyList: 'window' }), 1, size)).not.toContain(
-      'enemyList'
-    )
   })
 
   it('poses: 部分指定を URL 解決して保持し、未知のキーは捨て、無ければ poses なし', () => {
@@ -1550,12 +1187,6 @@ describe('presentation / poses (#745)', () => {
   it('poses が不正なら理由つきでエラー', () => {
     expect(parseConfig({ party: [{ poses: [] }] }, BASE).ok).toBe(false)
     expect(parseConfig({ party: [{ poses: { idle: 3 } }] }, BASE).ok).toBe(false)
-  })
-
-  it('assetsToUnload は pixelArt が変わったとき、ポーズの画像も解放対象に含める', () => {
-    const cfg = parseOk({ party: [{ sprite: 's.png', poses: { idle: 'i.png' } }] })
-    const urls = assetsToUnload('off', view({ pixelArt: 'on' }), cfg)
-    expect(urls).toContain('https://example.com/dir/i.png')
   })
 })
 
@@ -1678,12 +1309,9 @@ describe('parseConfig 敵の行動: actions と skills (#835)', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/enemy-actions.json (#835)', () => {
+describe('同梱の例 __fixtures__/enemy-actions.json (#835)', () => {
   it('parseConfigText で読め、行動: を持つ敵と特技が入っている', () => {
-    const r = parseConfigText(
-      enemyActionsSample,
-      'https://example.com/battle-sample/enemy-actions.json'
-    )
+    const r = parseConfigText(enemyActionsSample, 'https://example.com/battle/enemy-actions.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(Object.keys(r.value.skills)).toEqual(['ink', 'tentacle'])
@@ -1691,11 +1319,11 @@ describe('同梱の例 public/battle-sample/enemy-actions.json (#835)', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/enemy-order-omen.json (#836)', () => {
+describe('同梱の例 __fixtures__/enemy-order-omen.json (#836)', () => {
   it('parseConfigText で読め、順番・予兆つきの敵と特技の telegraph が入っている', () => {
     const r = parseConfigText(
       enemyOrderOmenSample,
-      'https://example.com/battle-sample/enemy-order-omen.json'
+      'https://example.com/battle/enemy-order-omen.json'
     )
     expect(r.ok).toBe(true)
     if (!r.ok) return
@@ -1706,7 +1334,7 @@ describe('同梱の例 public/battle-sample/enemy-order-omen.json (#836)', () =>
 })
 
 describe('parseConfig 敵の反撃・死亡時: counters と onDeath (#837)', () => {
-  const base = 'https://example.com/battle-sample/x.json'
+  const base = 'https://example.com/battle/x.json'
 
   it('enemies[].counters は文字列の配列（trim・空要素は捨てる）、onDeath は trim した文字列', () => {
     const r = parseConfig(
@@ -1738,12 +1366,9 @@ describe('parseConfig 敵の反撃・死亡時: counters と onDeath (#837)', ()
   })
 })
 
-describe('同梱の例 public/battle-sample/enemy-counter.json (#837)', () => {
+describe('同梱の例 __fixtures__/enemy-counter.json (#837)', () => {
   it('parseConfigText で読め、反撃を持つ敵と死亡時の行動を持つ敵が入っている', () => {
-    const r = parseConfigText(
-      enemyCounterSample,
-      'https://example.com/battle-sample/enemy-counter.json'
-    )
+    const r = parseConfigText(enemyCounterSample, 'https://example.com/battle/enemy-counter.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(Object.keys(r.value.skills)).toEqual(['frost_lance', 'self_burst'])
@@ -1752,11 +1377,11 @@ describe('同梱の例 public/battle-sample/enemy-counter.json (#837)', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/enemy-damage-parity.json (#871)', () => {
+describe('同梱の例 __fixtures__/enemy-damage-parity.json (#871)', () => {
   it('parseConfigText で読め、ダメージ条件の反撃を持つ敵と固定ダメージの呪文が入っている', () => {
     const r = parseConfigText(
       enemyDamageParitySample,
-      'https://example.com/battle-sample/enemy-damage-parity.json'
+      'https://example.com/battle/enemy-damage-parity.json'
     )
     expect(r.ok).toBe(true)
     if (!r.ok) return
@@ -1767,7 +1392,7 @@ describe('同梱の例 public/battle-sample/enemy-damage-parity.json (#871)', ()
 })
 
 describe('parseConfig 属性相性: affinity (#872)', () => {
-  const base = 'https://example.com/battle-sample/x.json'
+  const base = 'https://example.com/battle/x.json'
 
   it('enemies[].affinity の 4 欄は文字列の配列（trim・小文字・空要素は捨てる）', () => {
     const r = parseConfig(
@@ -1808,12 +1433,9 @@ describe('parseConfig 属性相性: affinity (#872)', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/enemy-affinity.json (#872)', () => {
+describe('同梱の例 __fixtures__/enemy-affinity.json (#872)', () => {
   it('parseConfigText で読め、相性を持つ敵 2 体と持たない敵 1 体が入っている', () => {
-    const r = parseConfigText(
-      enemyAffinitySample,
-      'https://example.com/battle-sample/enemy-affinity.json'
-    )
+    const r = parseConfigText(enemyAffinitySample, 'https://example.com/battle/enemy-affinity.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.enemies.map((e) => 'affinity' in e)).toEqual([true, true, false])
@@ -1859,7 +1481,7 @@ describe('parsePoses 単体（フィールドサンプルと共有 #890）', () 
     })
   })
 
-  it('battle-sample の parseConfig 経由でもエラー文言が変わらない', () => {
+  it('戦闘設定 JSON の parseConfig 経由でもエラー文言が変わらない', () => {
     const r = parseConfig({ party: [{ poses: { idle: 3 } }] }, BASE)
     expect(r).toEqual({ ok: false, error: 'party[0].poses.idle は URL 文字列である必要があります' })
     const r2 = parseConfig({ party: [{ poses: [] }] }, BASE)
@@ -1940,7 +1562,7 @@ describe('parseMenuList の挙動（export 化後も不変 #890）', () => {
 })
 
 describe('parseConfig 属性相性: party[].affinity は読み込みエラー (#872)', () => {
-  const base = 'https://example.com/battle-sample/x.json'
+  const base = 'https://example.com/battle/x.json'
   it('party[i].affinity を指定するとエラー（空オブジェクトでも）', () => {
     for (const aff of [{ weak: ['fire'] }, {}]) {
       const r = parseConfig({ party: [{}, { affinity: aff }] }, base)
@@ -1962,7 +1584,7 @@ describe('parseConfig 属性相性: 全角の属性 id は parser と同じ表�
   it('weak: ["ＦＩＲＥ"] は fire、半角カナ・丸数字は変えない', () => {
     const r = parseConfig(
       { enemies: [{ affinity: { weak: ['ＦＩＲＥ', 'ﾎﾉｵ'], halve: ['①'] } }] },
-      'https://example.com/battle-sample/x.json'
+      'https://example.com/battle/x.json'
     )
     expect(r.ok).toBe(true)
     if (!r.ok) return
@@ -1971,7 +1593,7 @@ describe('parseConfig 属性相性: 全角の属性 id は parser と同じ表�
 })
 
 describe('parseConfig 敵の戦利品: loot と itemNames (#831)', () => {
-  const base = 'https://example.com/battle-sample/x.json'
+  const base = 'https://example.com/battle/x.json'
 
   it('enemies[].loot は drops / steal / stealRare の文字列配列（trim・空要素は捨てる）と stealLimit（数も文字列にする）', () => {
     const r = parseConfig(
@@ -2033,50 +1655,15 @@ describe('parseConfig 敵の戦利品: loot と itemNames (#831)', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/loot.json (#831)', () => {
+describe('同梱の例 __fixtures__/loot.json (#831)', () => {
   it('parseConfigText で読め、戦利品を持つ敵・ぬすむの呪文・アイテム名が入っている', () => {
-    const r = parseConfigText(lootSample, 'https://example.com/battle-sample/loot.json')
+    const r = parseConfigText(lootSample, 'https://example.com/battle/loot.json')
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.value.enemies.map((e) => 'loot' in e)).toEqual([true, true, false])
     expect(r.value.enemies[1].loot?.stealLimit).toBe('3')
     expect(r.value.spells.filter((s) => s.effect?.startsWith('steal')).length).toBe(5)
     expect(r.value.itemNames.potion).toBe('ポーション')
-  })
-})
-
-describe('describeBattleResult (#831)', () => {
-  const entry = (over: Record<string, unknown>) => ({
-    itemId: 'potion',
-    count: 1,
-    via: 'drop' as const,
-    rare: false,
-    enemyId: 's',
-    enemyName: 'スライム',
-    ...over,
-  })
-
-  it('戦利品なし・あり（表示名・ドロップ / ぬすむ / ぬすむ・レア）', () => {
-    expect(describeBattleResult({ outcome: 'escaped', exp: 0, gold: 0, loot: [], items: [] })).toBe(
-      '結果: escaped  exp=0  gold=0  戦利品: なし'
-    )
-    const text = describeBattleResult(
-      {
-        outcome: 'victory',
-        exp: 5,
-        gold: 3,
-        loot: [
-          entry({ via: 'steal', rare: true, itemId: 'elixir' }),
-          entry({ count: 2 }),
-          entry({ via: 'steal' }),
-        ],
-        items: [],
-      },
-      { potion: 'ポーション' }
-    )
-    expect(text).toBe(
-      '結果: victory  exp=5  gold=3  戦利品: elixir ×1（ぬすむ・レア・スライム） / ポーション ×2（ドロップ・スライム） / ポーション ×1（ぬすむ・スライム）'
-    )
   })
 })
 

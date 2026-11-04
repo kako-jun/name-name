@@ -1,6 +1,6 @@
-/** 戦闘画面サンプルの設定 JSON の魔石 (#889): `magicites` / `party[].magicites` / `commands` */
+/** 戦闘設定 JSON の魔石 (#889): `magicites` / `party[].magicites` / `commands` */
 import { describe, it, expect } from 'vitest'
-import magiciteSample from '../../public/battle-sample/magicite.json?raw'
+import magiciteSample from './__fixtures__/magicite.json?raw'
 import {
   buildBattleSetup,
   defaultConfig,
@@ -220,9 +220,9 @@ describe('party[].magicites の反映', () => {
   })
 })
 
-describe('同梱の例 public/battle-sample/magicite.json (#889)', () => {
+describe('同梱の例 __fixtures__/magicite.json (#889)', () => {
   const load = () => {
-    const r = parseConfigText(magiciteSample, 'https://example.com/battle-sample/magicite.json')
+    const r = parseConfigText(magiciteSample, 'https://example.com/battle/magicite.json')
     if (!r.ok) throw new Error(r.error)
     return r.value
   }

@@ -1,5 +1,6 @@
 /**
- * 戦闘画面サンプルページ (#749) の設定まわりの純粋関数。
+ * 戦闘設定 JSON（戦闘サンプルページは #1051 で削除済み）の検証・補完・URL 解決の純粋関数。一枚絵フィールドが parseMenuList / parsePosesRecord / resolveUrl / parseStatuses を共有する。
+ * `parseConfig` / `buildBattleSetup` / `initialView` は、テスト用ハーネス（戦闘エンジン入力の組み立て）として config*.test.ts が使う。
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
 import { MAX_LEVEL, type BattleEntity } from '../game/spellDsl'
@@ -12,7 +13,6 @@ import type {
   StatusDef,
   SummonDef,
 } from '../types'
-import type { BattleResult } from '../game/loot'
 import { normalizeAttrId, type BattleAffinity } from '../game/affinity'
 import { applyPartyEquipment, parseGear, parseJobs } from './configEquipment'
 import { parseBeasts, parseMagicites } from './configMagicite'
@@ -69,34 +69,7 @@ export type ScreenSizeId = (typeof SCREEN_SIZES)[number]['id']
  * 描画解像度。main = 本編相当（本編の app.init は resolution 未指定 = 1）、dpr = 実 DPR。
  * 既定は main（本編と同じ見た目を確認するため）。
  */
-export const RESOLUTION_MODES = ['main', 'dpr'] as const
-export type ResolutionMode = (typeof RESOLUTION_MODES)[number]
-/**
- * 戦闘の結果（経験値・ゴールド・戦利品、#831）を 1 つの文にする。ホストが `onClose` で受け取る `BattleResult` の確認用（サンプルページの表示）。
- * 戦利品は獲得順に `品 ×個数（ドロップ / ぬすむ / ぬすむ〔レア〕・元の敵）`、無ければ「なし」
- */
-export function describeBattleResult(
-  result: BattleResult,
-  names: Readonly<Record<string, string>> = {}
-): string {
-  const name = (id: string): string =>
-    Object.prototype.hasOwnProperty.call(names, id) ? names[id] : id
-  const loot =
-    result.loot.length === 0
-      ? 'なし'
-      : result.loot
-          .map((l) => {
-            const via = l.via === 'drop' ? 'ドロップ' : l.rare ? 'ぬすむ・レア' : 'ぬすむ'
-            return `${name(l.itemId)} ×${l.count}（${via}・${l.enemyName}）`
-          })
-          .join(' / ')
-  const script = result.script
-    ? `  脚本: ${result.script.id} フラグ=${JSON.stringify(result.script.flags)}${result.script.next !== undefined ? ` 次=${result.script.next}` : ''}`
-    : ''
-  const learned = result.learnedSpells ? `  習得済み: ${result.learnedSpells.join(', ')}` : ''
-  return `結果: ${result.outcome}  exp=${result.exp}  gold=${result.gold}  戦利品: ${loot}${learned}${script}`
-}
-
+export type ResolutionMode = 'main' | 'dpr'
 export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 
 /**
@@ -191,7 +164,7 @@ export interface BattleSampleConfig {
   enemies: BattleEntity[]
 }
 
-/** ツールバーで切り替える表示状態（ブリンク比較の単位） */
+/** 戦闘エンジン入力の組み立て用の表示状態（テスト用ハーネス。かつてのサンプルページのツールバー相当） */
 export interface BattleSampleView {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
@@ -330,13 +303,6 @@ export function resolveUrl(raw: string, baseUrl: string): string | null {
   } catch {
     return null
   }
-}
-
-/** location.search から `config` パラメータ（設定 JSON の URL）を取り出し、基準 URL で解決する */
-export function extractConfigUrl(search: string, baseUrl: string): string | null {
-  const raw = new URLSearchParams(search).get('config')
-  if (!raw || !raw.trim()) return null
-  return resolveUrl(raw.trim(), baseUrl)
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -1111,7 +1077,7 @@ export function parseConfigText(text: string, baseUrl: string): ParseResult<Batt
   return parseConfig(raw, baseUrl)
 }
 
-/** 設定から、ツールバーの初期表示状態を作る */
+/** 設定から、初期表示状態を作る */
 export function initialView(config: BattleSampleConfig): BattleSampleView {
   return {
     layout: config.layout,
@@ -1138,15 +1104,9 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
   }
 }
 
-/** 解像度モードから renderer.resolution の値を決める（dpr は呼び出し側が毎回読んだ window.devicePixelRatio） */
-export function resolveResolution(mode: ResolutionMode, devicePixelRatio: number): number {
-  if (mode === 'main') return 1
-  return Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
-}
-
 /**
  * 実際にエンジンへ渡す味方人数。front は本編（RaycastRenderer.startBattle）と同じく
- * hero 1 人だけを渡すので、ツールバーの味方人数に関わらず 1。side は選択どおり（1〜MAX_PARTY）。
+ * hero 1 人だけを渡すので、view.partyCount に関わらず 1。side は選択どおり（1〜MAX_PARTY）。
  */
 export function effectivePartyCount(view: BattleSampleView): number {
   if (view.layout === 'front') return 1
@@ -1337,115 +1297,4 @@ export function buildBattleSetup(
     width,
     height,
   }
-}
-
-/**
- * pixelArt (#760) が前回の描画から変わったときだけ、解放すべき画像の URL（背景・前景・味方・敵のスプライト）を返す。
- * `Assets` のキャッシュは mipmap の有無・scaleMode ごと使い回されるので、nearest↔linear を切り替えたら
- * unload してから読み直す必要がある（v8 は mipLevelCount をアップロード時に決める）。他のトグルでは何も返さない。
- * `previous` が null（初回）なら空。重複は除く。
- */
-export function assetsToUnload(
-  previous: 'on' | 'off' | null,
-  view: BattleSampleView,
-  config: BattleSampleConfig
-): string[] {
-  if (previous === null || previous === view.pixelArt) return []
-  const urls = [
-    config.background,
-    config.foreground,
-    ...Object.values(config.effects).map((e) => e.image),
-    ...config.party.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
-    ...config.enemies.flatMap((e) => [e.sprite, ...Object.values(e.poses ?? {})]),
-  ]
-  return [...new Set(urls.filter((u): u is string => typeof u === 'string' && u !== ''))]
-}
-
-export function viewsEqual(a: BattleSampleView, b: BattleSampleView): boolean {
-  return (
-    a.layout === b.layout &&
-    a.spriteStyle === b.spriteStyle &&
-    a.windowStyle === b.windowStyle &&
-    a.backgroundTone === b.backgroundTone &&
-    a.backgroundDof === b.backgroundDof &&
-    a.pixelArt === b.pixelArt &&
-    a.logTypewriter === b.logTypewriter &&
-    a.presentation === b.presentation &&
-    a.motion === b.motion &&
-    a.enemyList === b.enemyList &&
-    a.atb === b.atb &&
-    a.atbMode === b.atbMode &&
-    a.commandLayout === b.commandLayout &&
-    a.backgroundOn === b.backgroundOn &&
-    a.depth === b.depth &&
-    a.foregroundOn === b.foregroundOn &&
-    a.formation === b.formation &&
-    effectivePartyCount(a) === effectivePartyCount(b) &&
-    a.enemyCount === b.enemyCount &&
-    a.sizeId === b.sizeId &&
-    a.resolutionMode === b.resolutionMode
-  )
-}
-
-/** ブリンク比較の履歴。現在とひとつ前を保持する */
-export interface BlinkHistory {
-  current: BattleSampleView
-  previous: BattleSampleView | null
-}
-
-/** 設定を変更したとき: 現在をひとつ前に送る（同一内容なら履歴は変えない） */
-export function pushView(h: BlinkHistory, next: BattleSampleView): BlinkHistory {
-  if (viewsEqual(h.current, next)) return h
-  return { current: next, previous: h.current }
-}
-
-/** スペース等: 現在とひとつ前を入れ替える（ひとつ前がなければ何もしない） */
-export function swapView(h: BlinkHistory): BlinkHistory {
-  return h.previous ? { current: h.previous, previous: h.current } : h
-}
-
-/** 画面表示用の 1 行サマリ */
-export function describeView(
-  view: BattleSampleView,
-  dpr: number,
-  size: { width: number; height: number },
-  /** 実際に適用中の app.renderer.resolution。渡すと DPR と別項目で併記し、physical はこちらで計算する */
-  rendererResolution?: number
-): string {
-  const physRes = rendererResolution ?? dpr
-  return [
-    `layout=${view.layout}`,
-    `spriteStyle=${view.spriteStyle}`,
-    `windowStyle=${view.windowStyle}`,
-    `backgroundTone=${view.backgroundTone}`,
-    `backgroundDof=${view.backgroundDof}`,
-    `pixelArt=${view.pixelArt}`,
-    `logTypewriter=${view.logTypewriter}`,
-    // ff は side のときだけ効く（front では無視される）ので、効く場合だけ出す
-    ...(view.presentation === 'ff' && view.layout === 'side' ? ['presentation=ff'] : []),
-    // motion は ff のときだけ効く。default は既定なので出さない
-    ...(view.presentation === 'ff' && view.layout === 'side' && view.motion !== 'default'
-      ? [`motion=${view.motion}`]
-      : []),
-    // enemyList は ff かつ side のときだけ効く。off は既定なので出さない
-    ...(view.presentation === 'ff' && view.layout === 'side' && view.enemyList === 'window'
-      ? ['enemyList=window']
-      : []),
-    // cross は side のときだけ効く（front では無視される）ので、効く場合だけ出す
-    ...(view.commandLayout === 'cross' && view.layout === 'side' ? ['commandLayout=cross'] : []),
-    ...(view.atb === 'on' ? ['atb=on', `atbMode=${view.atbMode}`] : []),
-    `background=${view.backgroundOn ? 'on' : 'off'}`,
-    `depth=${view.depth}`,
-    `foreground=${view.foregroundOn ? 'on' : 'off'}`,
-    `formation=${view.formation}`,
-    `party=${effectivePartyCount(view)}`,
-    `enemies=${view.enemyCount}`,
-    `size=${view.sizeId}`,
-    `logical=${size.width}x${size.height}`,
-    `DPR=${dpr}`,
-    ...(rendererResolution === undefined
-      ? []
-      : [`resolution=${view.resolutionMode}(renderer.resolution=${rendererResolution})`]),
-    `physical=${Math.round(size.width * physRes)}x${Math.round(size.height * physRes)}`,
-  ].join('  ')
 }

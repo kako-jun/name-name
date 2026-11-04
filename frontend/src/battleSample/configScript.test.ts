@@ -1,21 +1,20 @@
-/** 戦闘サンプルの設定 JSON の `script` (#741 / #863) と、同梱の脚本サンプル 4 本の通しの確認 */
+/** 戦闘設定 JSON の `script` (#741 / #863) と、同梱の脚本サンプル 4 本の通しの確認 */
 import { describe, expect, it } from 'vitest'
 import { BattleEngine } from '../game/battleEngine'
 import {
   buildBattleSetup,
-  describeBattleResult,
   initialView,
   parseConfig,
   parseConfigText,
   type BattleSampleConfig,
 } from './config'
-import loseEvent from '../../public/battle-sample/scripted-lose-event.json?raw'
-import interrupt from '../../public/battle-sample/scripted-interrupt.json?raw'
-import revive from '../../public/battle-sample/scripted-revive.json?raw'
-import flee from '../../public/battle-sample/scripted-flee.json?raw'
-import force from '../../public/battle-sample/scripted-force.json?raw'
+import loseEvent from './__fixtures__/scripted-lose-event.json?raw'
+import interrupt from './__fixtures__/scripted-interrupt.json?raw'
+import revive from './__fixtures__/scripted-revive.json?raw'
+import flee from './__fixtures__/scripted-flee.json?raw'
+import force from './__fixtures__/scripted-force.json?raw'
 
-const BASE = 'https://example.com/battle-sample/x.json'
+const BASE = 'https://example.com/battle/x.json'
 
 function parse(text: string): BattleSampleConfig {
   const r = parseConfigText(text, BASE)
@@ -93,15 +92,6 @@ describe('parseConfig: script', () => {
     expect(setup.script).not.toBe(c.script)
     expect(setup.script?.joiners?.ally).not.toBe(c.script?.joiners?.ally)
     expect(Object.keys(setup.options.menu.spells ?? {})).toContain('ally')
-  })
-
-  it('describeBattleResult: 脚本の結果（フラグ・次）を出す。脚本の無い結果は従来の文字列のまま', () => {
-    const base = { outcome: 'victory' as const, exp: 1, gold: 2, loot: [], items: [] }
-    expect(describeBattleResult(base)).toBe('結果: victory  exp=1  gold=2  戦利品: なし')
-    expect(
-      describeBattleResult({ ...base, script: { id: 's', flags: { a: true }, next: 'ev' } })
-    ).toBe('結果: victory  exp=1  gold=2  戦利品: なし  脚本: s フラグ={"a":true} 次=ev')
-    expect(describeBattleResult({ ...base, script: { id: 's', flags: {} } })).toContain('フラグ={}')
   })
 })
 

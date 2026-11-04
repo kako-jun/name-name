@@ -99,7 +99,7 @@ battle_enemy_window_overlap: 0.25
 - 並び順は敵の並び順（最初に現れた順）。行が窓の高さに収まらないとき、また名前が窓の幅に収まらないときは文字が小さくなり（9px まで。幅が足りなければ名前が「…」で省略される）、それでも収まらない行は出さずに最後の行が「…」になる
 - 窓が出ている間は足元ラベルが出ないので、敵の状態異常（「[どく]」など）は窓の行の先頭に `[どく] スライム` の形で付く。同名でも状態が違う敵は別の行になり（`[どく] スライム` と `スライム ×2`）、状態が付く・治ると行が変わる
 - `battle_layout: side` かつ `ff` のときだけ効く。未指定・不正値は従来どおり足元ラベル。画面が狭くて窓を置けないとき（status 窓の幅を 260px 以上に保てないとき）も足元ラベルのまま
-- 仕様は [仕様書](../spec/markdown-v0.1.md) の `battle_enemy_list`、戦闘画面サンプルは `/battle-sample.html?config=/battle-sample/enemy-list.json`
+- 仕様は [仕様書](../spec/markdown-v0.1.md) の `battle_enemy_list`
 
 ## 動く例
 
@@ -199,7 +199,7 @@ FF のように、**最前列でない敵への通常攻撃（近接物理）の
 - グリッドに収まらず置けなかった敵、グリッドが無い戦闘（`front` レイアウトを含む）は軽減しない
 - 軽減は半分ごとに切り捨て・最低 1。敵から味方への攻撃は変わらない
 - 戦闘中の配置変更は未対応（#887）
-- 確認用の戦闘サンプル: `battle-sample.html?config=battle-sample/enemy-row.json`（`enemyGrid` / `enemies[].at`。[デバッグガイド](./debugger.md)）。一枚絵フィールドサンプル（`field-sample.html`）も、`battle.layout: "side"` で `battle.enemyGrid` を書けば同じルールが効く
+- 確認用: 一枚絵フィールドサンプル（`field-sample.html`。[デバッグガイド](./debugger.md)）では、`battle.layout: "side"` で `battle.enemyGrid` を書けば同じルールが効く
 
 ## 一枚絵フィールドサンプルでの指定
 
