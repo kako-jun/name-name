@@ -528,6 +528,11 @@ export interface BattleEntity {
   statusChanceBonus?: number
   /** buff / debuff の累積値（atk+5 等）。残ターン管理は将来 Issue */
   buffs?: Partial<Record<StatKey, number>>
+  /**
+   * 人物の形態（時期・車椅子。例 `elementary-wheelchair`）(#1020)。味方だけ。戦闘エンジンは解釈しない。
+   * セーブ（`rpg.party[].form`）に書くと、一枚絵フィールドが再開時にその形態の戦闘ポーズ・歩行絵を選ぶ（`fieldSample/characterForms.ts`）
+   */
+  form?: string
   /** 倒したときに得られる経験値（敵側のみ、味方は undefined） */
   exp?: number
   /** 倒したときに落とすゴールド（敵側のみ） */

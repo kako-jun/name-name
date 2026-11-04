@@ -10,6 +10,7 @@ import {
   FIELD_SAMPLE_DOC_KEY,
   baseConfigOf,
   loadResume,
+  savedFormsFromResume,
   mergeFlags,
   resumeBackground,
   resumeBattleEngineOptions,
@@ -238,5 +239,28 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
     })
     expect(r.party).toEqual([{ id: 'a', hp: 20 }])
     expect(r.inventory.potion).toBe(0)
+  })
+})
+
+// #1020: 設定を読む前に、セーブの form（時期・車椅子）だけを先に読む
+describe('savedFormsFromResume', () => {
+  it('?resume= が無い・空スロットは空', () => {
+    expect(savedFormsFromResume('')).toEqual({})
+    expect(savedFormsFromResume('?resume=0')).toEqual({})
+    expect(savedFormsFromResume('?resume=9')).toEqual({})
+  })
+  it('スロットの party[].form を id → form で返す。形態の無い者は出さない', () => {
+    const state = rpg({
+      party: [{ id: 'party1', hp: 10, form: 'teen-wheelchair' }, { id: 'party2' }],
+    })
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(1, buildRpgSaveSlot(state, { slot: 1 }))
+    expect(savedFormsFromResume('?resume=1')).toEqual({ party1: 'teen-wheelchair' })
+  })
+  it('form を持つセーブは loadResume でも解決され、form が味方に残る（snapshot で書き戻せる）', () => {
+    const state = rpg({ party: [{ id: 'party1', form: 'uniform' }] })
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, buildRpgSaveSlot(state))
+    const r = loadResume('?resume=0', config)
+    expect(r.kind).toBe('ok')
+    if (r.kind === 'ok') expect(r.resolved.party[0].form).toBe('uniform')
   })
 })

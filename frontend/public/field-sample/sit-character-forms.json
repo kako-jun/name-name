@@ -1,0 +1,451 @@
+{
+  "_generated": "frontend/scripts/gen_sit_character_forms.py が sit-by-me の人物素材から生成。手で編集しない（#1020）",
+  "characters": {
+    "C001": {
+      "plainBaked": true,
+      "forms": {
+        "adult-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "slash",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ],
+            "character": ["swing-windup", "swing-followthrough"]
+          },
+          "walk": true
+        },
+        "elementary": {
+          "poses": {
+            "character": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "elementary-wheelchair": {
+          "poses": {
+            "character": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "kindergarten": {
+          "poses": {
+            "character": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        },
+        "midlife-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "slash",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ],
+            "character": ["swing-windup", "swing-followthrough"]
+          },
+          "walk": true
+        },
+        "teen-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "slash",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ],
+            "character": ["swing-windup", "swing-followthrough"]
+          },
+          "walk": true
+        },
+        "uniform": {
+          "poses": {
+            "character": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        }
+      }
+    },
+    "C002": {
+      "forms": {
+        "adult": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        },
+        "adult-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "elementary": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "elementary-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "midlife": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        },
+        "midlife-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "teen": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        },
+        "teen-wheelchair": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "uniform": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        }
+      }
+    },
+    "C003": {
+      "forms": {
+        "adult": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "elementary": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "teen": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "uniform": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        }
+      }
+    },
+    "C004": {
+      "forms": {
+        "adult": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "elementary": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "teen": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": true
+        },
+        "uniform": {
+          "poses": {
+            "plain": [
+              "idle",
+              "ready",
+              "step",
+              "swing-windup",
+              "slash",
+              "swing-followthrough",
+              "cast",
+              "special",
+              "hurt",
+              "down",
+              "victory"
+            ]
+          },
+          "walk": false
+        }
+      }
+    }
+  }
+}

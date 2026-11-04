@@ -18,6 +18,7 @@ import { buildEnemyEntities } from '../game/encounter'
 import { hasOwn } from '../game/ownProperty'
 import type { BattleEngineOptions } from '../game/battleEngine'
 import type { FieldBattleConfig, FieldSampleConfig } from './config'
+import { savedFormsOf } from './characterForms'
 
 /** セーブのキーの名前空間 (#578)。実キーは `name-name-save-field-sample-<slot>` / `…-quick` */
 export const FIELD_SAMPLE_DOC_KEY = 'field-sample'
@@ -72,6 +73,21 @@ export function loadResume(
     delete resolved.field
   }
   return { kind: 'ok', slot, resolved }
+}
+
+/**
+ * `?resume=` のセーブから、味方の形態（時期・車椅子）の指定（メンバー id → form）だけを先に読む (#1020)。
+ * 形態は絵（poses・歩行絵）の導出に使うので、設定を読み込む前に要る。`?resume=` が無い・読めない・形態の指定が無いときは空
+ */
+export function savedFormsFromResume(
+  search: string,
+  saves: SaveManager = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+): Record<string, string> {
+  const raw = new URLSearchParams(search).get('resume')
+  const slot = parseResumeParam(raw)
+  if (slot === null) return {}
+  const data = slot === 'quick' ? saves.quickLoad() : saves.load(slot)
+  return savedFormsOf(data?.rpg)
 }
 
 /** 宣言済みのフラグだけを、設定の初期値に重ねる（未宣言の名前は無視） */

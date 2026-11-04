@@ -136,6 +136,7 @@ import { buildDummyFixture } from './dummyFixture'
 import {
   FIELD_SAMPLE_DOC_KEY,
   baseConfigOf,
+  savedFormsFromResume,
   carryOverBattleResult,
   composeNotice,
   itemsWithCounts,
@@ -145,6 +146,7 @@ import {
   resumeBattleEngineOptions,
 } from './fieldResume'
 import { SaveManager } from '../game/SaveManager'
+import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
@@ -284,6 +286,38 @@ async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedS
   }
 }
 
+/**
+ * 人物の形態から絵を導く (#1020)。設定 JSON に `characterForms` があるときだけ、目録（`manifestUrl`）を fetch して
+ * `party[].poses` / `player.sprites` を埋めた JSON 文字列を返す。形態はセーブ（`?resume=`）の指定が設定の既定に優先する。
+ * 目録の取得・検証に失敗したら理由を画面に出し、手を入れない（絵が足りなければ後段の設定検証が落ちる）
+ */
+async function expandFormsInText(text: string, textBase: string): Promise<string> {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    return text // 後段の parseConfigText が理由つきで失敗にする
+  }
+  const cf = (raw as { characterForms?: { manifestUrl?: unknown } } | null)?.characterForms
+  if (!cf) return text
+  try {
+    const mu = typeof cf.manifestUrl === 'string' ? resolveUrl(cf.manifestUrl, textBase) : null
+    if (!mu) throw new Error('characterForms.manifestUrl の URL を解決できません')
+    const res = await fetch(mu)
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${mu}`)
+    const manifest = parseCharacterFormsManifest(await res.json())
+    if (!manifest.ok) throw new Error(`${mu}: ${manifest.error}`)
+    const out = expandCharacterForms(raw, manifest.value, savedFormsFromResume(location.search))
+    for (const w of out.warnings) console.warn(`[field-sample] characterForms: ${w}`)
+    return JSON.stringify(out.raw)
+  } catch (e) {
+    showError(
+      `人物の形態の目録を読み込めません（絵の導出をしません）\n${e instanceof Error ? e.message : String(e)}`
+    )
+    return text
+  }
+}
+
 async function loadConfig(): Promise<FieldSampleConfig> {
   const base = location.href
   const { configParam: raw, dummy } = pickConfigSource(location.search)
@@ -314,6 +348,7 @@ async function loadConfig(): Promise<FieldSampleConfig> {
       )
     }
   }
+  text = await expandFormsInText(text, textBase)
   const parsed = parseConfigText(text, textBase)
   if (parsed.ok) {
     // 群エラー (#839 段5。console.error は parseConfig が出している) と警告 (#883) は 1 回でまとめて出す
