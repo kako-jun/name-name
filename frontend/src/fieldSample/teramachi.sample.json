@@ -400,6 +400,7 @@
     "atb": "on",
     "enemyGrid": "4x2",
     "motion": "snappy",
+    "enemyList": "window",
     "transition": "ff-mosaic",
     "logicalSize": "1920x1080",
     "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp",
