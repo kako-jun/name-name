@@ -731,11 +731,14 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
     if (key === 'spells' && r.multiTarget !== undefined && typeof r.multiTarget !== 'boolean') {
       return { ok: false, error: `${path}.multiTarget は true / false である必要があります` }
     }
+    // description / category / fieldUse / key は全画面メニュー (#880) の任意項目。型が違うものは無視する（以前は未知のキーとして素通りしていたので、新しいエラーにしない）
     const base = {
       id: typeof r.id === 'string' && r.id ? r.id : `${key}-${i + 1}`,
       name: r.name.trim(),
       ...(typeof r.effect === 'string' ? { effect: r.effect } : {}),
       ...(typeof r.builtin === 'string' ? { builtin: r.builtin } : {}),
+      // 全画面メニュー (#880) の表示用。戦闘は読まない
+      ...(typeof r.description === 'string' && r.description ? { description: r.description } : {}),
     }
     if (key === 'skills') {
       if (typeof r.target !== 'undefined' && typeof r.target !== 'string') {
@@ -757,10 +760,14 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
         ...(r.multiTarget === true ? { multiTarget: true } : {}),
         // タグ (#876)。ジョブの変換ルールの目印
         ...(tagsOf(r.tags) ? { tags: tagsOf(r.tags) } : {}),
+        ...(typeof r.fieldUse === 'boolean' ? { fieldUse: r.fieldUse } : {}),
       } as T)
     } else {
       out.push({
         ...base,
+        ...(typeof r.category === 'string' && r.category ? { category: r.category } : {}),
+        ...(typeof r.fieldUse === 'boolean' ? { fieldUse: r.fieldUse } : {}),
+        ...(r.key === true ? { key: true } : {}),
         ...(typeof r.count === 'number' && Number.isFinite(r.count)
           ? { count: Math.max(0, Math.floor(r.count)) }
           : {}),

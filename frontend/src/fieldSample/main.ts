@@ -149,6 +149,8 @@ import { FieldMenuScreen, drawMenuButton, type FieldMenuPartyView } from '../gam
 import { TimeLimitLayer } from '../game/TimeLimitLayer'
 import { placeNameOf } from '../game/fieldMenu'
 import { FieldMenuHost } from '../game/fieldMenuHost'
+import { FieldMenuRuntime } from '../game/fieldMenuRuntime'
+import { applySettings } from '../game/fieldSettings'
 import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
@@ -707,6 +709,8 @@ async function main(): Promise<void> {
   // プレイ時間は FF 同様メニュー中・戦闘中も進み、歩数は歩いたときだけ増える
   const menuCfg = config.menu
   let stats = initialPlayStats(resumed ?? undefined)
+  /** 戦闘の候補窓のカーソル記憶 (#880)。戦闘をまたいで持ち越す（せってい「カーソル = メモリ」のときだけ戦闘へ渡す） */
+  const battleCursorMemory = new Map<string, number>()
   /** 制限時間の残り(ms)。null = 時間制限なし（開発用 API `setTimeLimit` で与える） */
   let timeLimitMs: number | null = null
   /** 戦闘中だけ入る。エンジン・候補窓（アイテムの残数）・背景。保存のための読み取り元 */
@@ -747,10 +751,15 @@ async function main(): Promise<void> {
     }
     const inBattle = battleRun !== null && battleState !== undefined
     const items = inBattle
-      ? Object.fromEntries(
-          (battleRun!.menu?.items ?? []).map((it) => [it.id, (it as BattleItemEntry).count ?? 0])
-        )
+      ? {
+          // たいせつなもの（戦闘の候補窓に出さない）の所持数も落とさない
+          ...inventory,
+          ...Object.fromEntries(
+            (battleRun!.menu?.items ?? []).map((it) => [it.id, (it as BattleItemEntry).count ?? 0])
+          ),
+        }
       : inventory
+    const menuSave = menuRuntime?.saveState()
     return snapshotRpg(
       {
         party: inBattle ? battleRun!.engine.getState().party : partyState,
@@ -759,6 +768,8 @@ async function main(): Promise<void> {
         gold,
         // プレイ時間・歩数は全画面メニュー (#880) を設定したゲームだけ書く（無いゲームのセーブは従来どおり）
         ...(menuCfg ? { playMs: stats.playMs, steps: stats.steps } : {}),
+        // せってい・せいとんの並び (#880)（変えていなければキーを足さない）
+        ...(menuSave ? { menu: menuSave } : {}),
         // 刀・防具 (#881)。売り物の定義があるゲームだけ書く
         ...(gear ? { gear } : {}),
         field: { sceneId, x: pos.x, y: pos.y, facing, flags: { ...flags } },
@@ -882,7 +893,23 @@ async function main(): Promise<void> {
       const engine = new BattleEngine(
         partyState.map((p) => structuredClone(p)),
         enemies.map((e) => ({ ...e })),
-        resumeBattleEngineOptions(buildBattleEngineOptions(b, config.statuses), savedBattle)
+        resumeBattleEngineOptions(
+          buildBattleEngineOptions(
+            b,
+            config.statuses,
+            // せってい (#880): ATB の戦闘だけに バトルモード・バトルスピード が効く
+            menuRuntime
+              ? (() => {
+                  const a = applySettings(menuRuntime.currentSettings, {
+                    dialogMs: dialogDefaultMs,
+                    atbMode: b.atb?.mode,
+                  }).atb
+                  return a ? { atbMode: a.mode, atbSpeed: a.speed } : undefined
+                })()
+              : undefined
+          ),
+          savedBattle
+        )
       )
       battleRun = { engine, menu, background: bg }
       world.visible = false
@@ -898,6 +925,11 @@ async function main(): Promise<void> {
             background: bg,
             menu,
             renderResolution: app.renderer.resolution,
+            // せってい「カーソル = メモリ」(#880): 前回選んだ行を戦闘をまたいで覚える
+            ...(menuRuntime &&
+            applySettings(menuRuntime.currentSettings, { dialogMs: dialogDefaultMs }).cursorMemory
+              ? { cursorMemory: battleCursorMemory }
+              : {}),
           }),
           onClose: (outcome, result) => {
             lastOutcome = outcome
@@ -1143,6 +1175,39 @@ async function main(): Promise<void> {
     playMs: stats.playMs,
     steps: stats.steps,
   })
+  // どうぐ・まほう・せいとん・せってい (#880)。持ち物の正本はここ（partyState / inventory）で、メニューは読んで書き戻すだけ
+  // 会話窓の既定（ゲーム設定を反映した、メニューが何も変える前の値）。最初に 1 回だけ捕捉する（変更済みの値から倍率を掛けると積み重なる）
+  const dialogDefaultMs = dialogBox.getMsPerChar()
+  const applyMenuSettings = (s: Readonly<Record<string, number>>): void => {
+    dialogBox.setMsPerChar(
+      applySettings(s, { dialogMs: dialogDefaultMs, atbMode: config.battle.atb?.mode })
+        .dialogMsPerChar
+    )
+  }
+  const menuRuntime = menuCfg
+    ? new FieldMenuRuntime(
+        {
+          menu: menuCfg,
+          items: config.items,
+          spells: config.spells,
+          skills: config.skills,
+          ...(config.battle.atb ? { atb: config.battle.atb } : {}),
+          audio: false,
+          getParty: () => partyState,
+          setParty: (p) => {
+            partyState = p
+          },
+          getInventory: () => inventory,
+          setInventory: (inv) => {
+            inventory = inv
+          },
+          getEquipment: () => equipment,
+          onSettingsChanged: applyMenuSettings,
+        },
+        resumed?.menu
+      )
+    : null
+  if (menuRuntime) applyMenuSettings(menuRuntime.currentSettings)
   const menuScreen = menuCfg
     ? new FieldMenuScreen({
         width: app.screen.width,
@@ -1150,6 +1215,9 @@ async function main(): Promise<void> {
         acrylic: config.spriteStyle === 'acrylic',
         transition: menuCfg.transition,
         onClose: () => menuHost?.onScreenClosed(),
+        onUse: (req) => menuRuntime?.use(req) ?? null,
+        onSort: () => menuRuntime?.sort() ?? null,
+        onSetting: (key, value) => menuRuntime?.setSetting(key, value),
         onSave: (slot) => {
           const ok = api.saveRpg(slot)
           return ok
@@ -1192,6 +1260,7 @@ async function main(): Promise<void> {
                 atk: p.atk,
                 def: p.def,
                 agi: p.agi,
+                ...(p.level !== undefined ? { level: p.level } : {}),
                 texture: await partyTexture(p.sprite),
               }))
             )
@@ -1204,6 +1273,9 @@ async function main(): Promise<void> {
             }
           },
           info: menuInfo,
+          ...(menuRuntime
+            ? { items: () => menuRuntime.items(), settings: () => menuRuntime.currentSettings }
+            : {}),
           timed: () => timeLimitMs !== null,
           enterView: (f) => {
             fieldComposite.visible = false
@@ -1802,6 +1874,9 @@ async function main(): Promise<void> {
       transitioning: !!menuScreen?.transitioning,
       state: menuScreen?.current ?? null,
     }),
+    /** メニューのせってい・所持品（検証用の読み取り） (#880) */
+    menuSettings: () => menuRuntime?.currentSettings ?? {},
+    inventory: () => ({ ...inventory }),
     /** プレイ時間(ms)・歩数 (#880) */
     stats: () => ({ playMs: stats.playMs, steps: stats.steps }),
     /** 進行中の吹き出し（検証用の読み取り） */

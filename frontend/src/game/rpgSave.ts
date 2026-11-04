@@ -80,8 +80,16 @@ export interface RpgSaveState {
   playMs?: number
   /** 歩数の累計 (#880)。省略は 0。定義は `fieldPlayStats.ts` */
   steps?: number
+  /** 全画面メニューの持ち越し (#880)。「せってい」の選択値（key → 選択肢 index。意味は `fieldSettings.ts`）と、せいとんで並べた所持品の順（アイテム id） */
+  menu?: RpgMenuState
   /** 刀・防具の購入済みと装備中の刀 (#881)。省略可（メニューの購入を使わないゲームは書かない・旧セーブは無し）。定義は `gearShop.ts` */
   gear?: GearState
+}
+
+/** 全画面メニューの持ち越し (#880) */
+export interface RpgMenuState {
+  settings?: Record<string, number>
+  itemOrder?: string[]
 }
 
 type Obj = Record<string, unknown>
@@ -153,6 +161,19 @@ export function parseRpgSave(raw: unknown): RpgParseResult {
     (!isNum(raw.steps) || raw.steps < 0 || !Number.isInteger(raw.steps))
   )
     return fail('steps は 0 以上の整数が必要です')
+  if (raw.menu !== undefined) {
+    const m = raw.menu
+    if (!isObj(m)) return fail('menu はオブジェクトが必要です')
+    if (m.settings !== undefined) {
+      if (!isObj(m.settings))
+        return fail('menu.settings はオブジェクト（key → 選択肢 index）が必要です')
+      for (const [k, v] of Object.entries(m.settings))
+        if (!isNum(v) || v < 0 || !Number.isInteger(v))
+          return fail(`menu.settings.${k} は 0 以上の整数が必要です`)
+    }
+    if (m.itemOrder !== undefined && (!Array.isArray(m.itemOrder) || !m.itemOrder.every(isStr)))
+      return fail('menu.itemOrder は文字列の配列が必要です')
+  }
   if (raw.gear !== undefined) {
     const err = checkGearState(raw.gear)
     if (err) return fail(err)
@@ -249,6 +270,8 @@ export interface RpgResolved {
   playMs?: number
   /** 歩数（セーブに無ければ省略 = 0 扱い） */
   steps?: number
+  /** 全画面メニューの持ち越し (#880)。セーブに無ければ省略 */
+  menu?: RpgMenuState
   /** 刀・防具の購入済みと装備中の刀（セーブに無ければ省略）。定義との突き合わせは `resolveGear` */
   gear?: GearState
   warnings: string[]
@@ -284,6 +307,7 @@ export function resolveRpg(rpg: RpgSaveState, base: RpgBaseConfig): RpgResolved 
   }
   if (rpg.playMs !== undefined) out.playMs = rpg.playMs
   if (rpg.steps !== undefined) out.steps = rpg.steps
+  if (rpg.menu) out.menu = cloneJson(rpg.menu)
   if (rpg.gear !== undefined) out.gear = cloneJson(rpg.gear)
   if (rpg.field) out.field = cloneJson(rpg.field)
   if (rpg.battle) {
@@ -338,6 +362,7 @@ export function snapshotRpg(
     battle?: RpgResolvedBattle
     playMs?: number
     steps?: number
+    menu?: RpgMenuState
     gear?: GearState
   },
   base: Pick<RpgBaseConfig, 'party' | 'enemy'>
@@ -357,6 +382,7 @@ export function snapshotRpg(
   if (s.field) out.field = cloneJson(s.field)
   if (s.playMs !== undefined) out.playMs = Math.floor(s.playMs)
   if (s.steps !== undefined) out.steps = s.steps
+  if (s.menu) out.menu = cloneJson(s.menu)
   if (s.gear !== undefined) out.gear = cloneJson(s.gear)
   if (s.battle) {
     // 敵のマスターは id だけで引ける満タン無傷の者。配置（col / row）は差分として残る

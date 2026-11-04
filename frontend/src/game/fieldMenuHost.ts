@@ -16,6 +16,7 @@ import {
   pointInRect,
   type FieldMenuConfig,
   type FieldMenuInfo,
+  type FieldMenuItemDef,
   type Rect,
 } from './fieldMenu'
 import type { FieldMenuOpenData } from './FieldMenuScreen'
@@ -56,6 +57,10 @@ export interface FieldMenuHostDeps {
   /** 開き始めの準備（歩き入力の破棄など）と、パーティ・スロットの組み立て（テクスチャ待ちを含む） */
   prepare(): Promise<Pick<FieldMenuOpenData, 'party' | 'slots'>>
   info(): FieldMenuInfo
+  /** 開くときの項目定義（実状態から作った content 込み）。省略は `config.items` のまま */
+  items?(): readonly FieldMenuItemDef[]
+  /** 開くときのせってい（key → 選択肢 index）。省略はホストが前回閉じたときの値を持ち越す */
+  settings?(): Record<string, number>
   timed(): boolean
   /** フィールドの表示を隠して contain する・戻す */
   enterView(face: FieldMenuFace): void
@@ -118,11 +123,11 @@ export class FieldMenuHost {
       this.d.enterView(face)
       entered = true
       this.d.screen.open({
-        items: this.d.config.items,
+        items: this.d.items ? this.d.items() : this.d.config.items,
         party: prepared.party,
         slots: prepared.slots,
         info: this.d.info(),
-        settings: this.settings,
+        settings: this.d.settings ? this.d.settings() : this.settings,
       })
       return true
     } catch (e) {

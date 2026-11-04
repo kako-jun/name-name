@@ -101,6 +101,7 @@ import {
   menuHint,
   menuKeyAction,
   moveCursor as moveMenuCursor,
+  cursorMemoryKey,
   openList,
   refitList,
   scrollList,
@@ -496,6 +497,12 @@ export interface BattleScreenOptions {
    * 未指定・空は従来どおり（じゅもん・どうぐは何も起きない）。有効なとき、ATB の wait は候補窓を開いている間だけ止まる
    */
   menu?: BattleMenuData
+  /**
+   * 候補窓のカーソル記憶 (#880。全画面メニュー「せってい」のカーソル = メモリ)。渡すと、窓を開くとき同じ味方・同じ種類で前回選んだ行にカーソルを合わせ、
+   * 選ぶたびに書き戻す。キーは `cursorMemoryKey`（味方の id と窓の種類）、値は選んだ行の index。戦闘をまたいで持ち越すためホストが持つ（セッション内のみ。セーブしない）。
+   * 未指定は従来どおり（毎回最初に選べる行から）
+   */
+  cursorMemory?: Map<string, number>
   /**
    * 召喚獣の登場 (#750) が始まるたびに 1 回呼ぶ（効果音を鳴らすのはホストの領分。画面は音を鳴らさない）。`ff` の演出のときだけ。
    * 未指定は何もしない
@@ -2629,7 +2636,12 @@ export class BattleScreen extends Container {
     if (this.menuStack.length > 0) return true
     const ctx = this.menuContext(kind)
     if (!ctx) return false
-    const next = openList(this.menuStack, kind, ctx)
+    const actorId = this.engine.getState().party[ctx.actorIndex]?.id
+    const remembered =
+      this.opts.cursorMemory && actorId !== undefined
+        ? this.opts.cursorMemory.get(cursorMemoryKey(actorId, kind))
+        : undefined
+    const next = openList(this.menuStack, kind, ctx, remembered)
     if (next === this.menuStack) return false
     this.menuActorIndex = ctx.actorIndex
     this.setMenuStack(next)
@@ -2703,6 +2715,9 @@ export class BattleScreen extends Container {
 
   private executeMenuAction(action: MenuAction, ctx: MenuContext): void {
     const entry = ctx.entries[action.entryIndex]
+    const actorId = this.engine.getState().party[ctx.actorIndex]?.id
+    if (this.opts.cursorMemory && actorId !== undefined)
+      this.opts.cursorMemory.set(cursorMemoryKey(actorId, action.kind), action.entryIndex)
     if (entry) {
       if (action.kind === 'spell') {
         this.engine.selectSpell(

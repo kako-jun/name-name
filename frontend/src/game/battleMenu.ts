@@ -31,12 +31,24 @@ export interface TargetSpec {
 /** 呪文の候補。`SpellExecution`（エンジンへ渡す形）に一覧用の id を足したもの */
 export interface BattleSpellEntry extends SpellExecution {
   id: string
+  /** 全画面メニュー (#880) の説明バーの文。戦闘は読まない */
+  description?: string
+  /** 全画面メニュー (#880) のフィールドで使えるか。未指定は効果から決まる（回復・蘇生・状態解除だけ使える。`fieldMenuLive.ts`） */
+  fieldUse?: boolean
 }
 
 /** アイテムの候補。`count` を渡すと「×n」を表示し、0 ならグレー。使うと BattleScreen がこの entry の count を書き換えるので、呼び出し側は戦闘ごとに複製を渡すこと */
 export interface BattleItemEntry extends ItemExecution {
   id: string
   count?: number
+  /** 全画面メニュー (#880) の説明バーの文。戦闘は読まない */
+  description?: string
+  /** 全画面メニュー (#880) の種類（せいとんの並べ替え・一覧の区分）。未指定は効果から決まる（`fieldMenuLive.ts`） */
+  category?: string
+  /** 全画面メニュー (#880) のフィールドで使えるか。未指定は効果から決まる */
+  fieldUse?: boolean
+  /** true = たいせつなもの（進行に必須のイベント用。メニューでは一覧と説明のみ、使用・並べ替えの対象外。戦闘には出さない） */
+  key?: boolean
 }
 
 /** 「わざ」(#873) の候補。`SkillExecution`（エンジンへ渡す形）に一覧用の id を足したもの。MP は持たない */
@@ -263,11 +275,30 @@ export function scrollTopFor(
   return Math.max(0, Math.min(t, maxTop))
 }
 
-/** 一覧窓を開く。候補がない・すでに窓が開いているときは今のまま。カーソルは最初に選べる行 */
-export function openList(stack: MenuStack, kind: MenuKind, ctx: MenuContext): MenuStack {
+/** カーソル記憶 (#880) のキー（味方の id と窓の種類） */
+export function cursorMemoryKey(actorId: string, kind: MenuKind): string {
+  return `${actorId}:${kind}`
+}
+
+/**
+ * 一覧窓を開く。候補がない・すでに窓が開いているときは今のまま。カーソルは最初に選べる行。
+ * `preferred`（カーソル記憶 #880）が範囲内で選べる行なら、そこから始める（範囲外・グレーの行なら記憶は使わない）
+ */
+export function openList(
+  stack: MenuStack,
+  kind: MenuKind,
+  ctx: MenuContext,
+  preferred?: number
+): MenuStack {
   if (stack.length > 0 || ctx.rows.length === 0) return stack
   const first = ctx.rows.findIndex((r) => !r.disabled)
-  const cursor = first === -1 ? 0 : first
+  const usable =
+    typeof preferred === 'number' &&
+    Number.isInteger(preferred) &&
+    preferred >= 0 &&
+    preferred < ctx.rows.length &&
+    !ctx.rows[preferred].disabled
+  const cursor = usable ? (preferred as number) : first === -1 ? 0 : first
   return [
     { type: 'list', kind, cursor, top: scrollTopFor(cursor, 0, ctx.rows.length, ctx.maxRows) },
   ]

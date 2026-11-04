@@ -408,3 +408,92 @@ describe('playMs / steps（#880）', () => {
     expect(snap.steps).toBe(0)
   })
 })
+
+describe('menu（#880 せってい・せいとんの持ち越し）', () => {
+  const withMenu = (menu: unknown): Record<string, unknown> => ({ ...declared(), menu })
+
+  it('旧セーブ（menu なし）は通り、解決後も menu キーが出ない', () => {
+    expect(parseRpgSave(declared()).ok).toBe(true)
+    expect('menu' in resolveRpg(declared(), base)).toBe(false)
+  })
+
+  it('正常な menu は通り、解決・スナップショットで運ばれる', () => {
+    const menu = { settings: { battleMode: 1, cursor: 0 }, itemOrder: ['ether', 'potion'] }
+    expect(parseRpgSave(withMenu(menu)).ok).toBe(true)
+    const resolved = resolveRpg(withMenu(menu) as unknown as RpgSaveState, base)
+    expect(resolved.menu).toEqual(menu)
+    const snap = snapshotRpg(
+      {
+        party: resolved.party,
+        inventory: resolved.inventory,
+        equipment: resolved.equipment,
+        gold: resolved.gold,
+        menu: resolved.menu,
+      },
+      base
+    )
+    expect(snap.menu).toEqual(menu)
+  })
+
+  it('menu を渡さないスナップショットにはキーが出ない', () => {
+    const snap = snapshotRpg(
+      { party: base.party as BattleEntity[], inventory: {}, equipment: {}, gold: 0 },
+      base
+    )
+    expect('menu' in snap).toBe(false)
+  })
+
+  it.each([
+    ['menu が配列', [], /menu/],
+    ['settings が配列', { settings: [] }, /menu.settings/],
+    ['settings の値が負', { settings: { a: -1 } }, /menu.settings.a/],
+    ['settings の値が小数', { settings: { a: 1.5 } }, /menu.settings.a/],
+    ['itemOrder が文字列', { itemOrder: 'x' }, /menu.itemOrder/],
+    ['itemOrder に数値', { itemOrder: ['a', 1] }, /menu.itemOrder/],
+  ])('不正（%s）は理由つきで失敗', (_n, menu, re) => {
+    const r = parseRpgSave(withMenu(menu))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(re)
+  })
+})
+
+describe('menu と gear の併存（#880 / #881）', () => {
+  const menu = { settings: { battleMode: 1 }, itemOrder: ['ether', 'potion'] }
+  const gear = { owned: { party1: ['blade-a'] }, blade: { party1: 'blade-a' } }
+  const roundTrip = (extra: Record<string, unknown>) => {
+    const raw = { ...declared(), ...extra }
+    const parsed = parseRpgSave(raw)
+    if (!parsed.ok) throw new Error(parsed.error)
+    const resolved = resolveRpg(parsed.value, base)
+    return snapshotRpg(
+      {
+        party: resolved.party,
+        inventory: resolved.inventory,
+        equipment: resolved.equipment,
+        gold: resolved.gold,
+        menu: resolved.menu,
+        gear: resolved.gear,
+      },
+      base
+    )
+  }
+
+  it('両方を持つセーブは parse → resolve → snapshot で両方保たれる', () => {
+    const snap = roundTrip({ menu, gear })
+    expect(snap.menu).toEqual(menu)
+    expect(snap.gear).toEqual(gear)
+  })
+  it('片方だけなら、もう片方のキーは書かない', () => {
+    const onlyMenu = roundTrip({ menu })
+    expect(onlyMenu.menu).toEqual(menu)
+    expect('gear' in onlyMenu).toBe(false)
+    const onlyGear = roundTrip({ gear })
+    expect(onlyGear.gear).toEqual(gear)
+    expect('menu' in onlyGear).toBe(false)
+  })
+  it('どちらも無い旧セーブは、どちらのキーも書かない', () => {
+    const snap = roundTrip({})
+    expect('menu' in snap).toBe(false)
+    expect('gear' in snap).toBe(false)
+  })
+})

@@ -253,6 +253,16 @@ export type AtbWaitScope = 'command' | 'menu'
 export const ATB_GAUGE_MAX = 1000
 /** AGI 1 あたり、1ms ごとに溜まるゲージ量。AGI に比例（AGI 5 で 5 秒、AGI 10 で 2.5 秒で満タン）。目視で調整する値 */
 export const ATB_FILL_PER_AGI_MS = 0.04
+/** ATB の速さの倍率の範囲 (#880) */
+export const ATB_SPEED_MIN = 0.1
+export const ATB_SPEED_MAX = 10
+
+/** 倍率の正規化。未指定・非有限・0 以下は 1、それ以外は `ATB_SPEED_MIN`〜`ATB_SPEED_MAX` に収める */
+export function normalizeAtbSpeed(v: number | undefined): number {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return 1
+  return Math.min(ATB_SPEED_MAX, Math.max(ATB_SPEED_MIN, v))
+}
+
 /** `tick(ms)` 1 回で進める時間の上限（ms）。タブ復帰などで巨大な値が来ても暴走しないための安全弁 */
 export const ATB_MAX_TICK_MS = 10_000
 
@@ -285,6 +295,11 @@ export interface BattleEngineOptions {
      * 候補窓を開いているかは表示側が `setAtbHold` で教える（エンジンは窓を知らない）。active では無関係
      */
     waitScope?: AtbWaitScope
+    /**
+     * ゲージが溜まる速さの倍率 (#880。全画面メニュー「せってい」のバトルスピード)。未指定・非有限・0 以下は 1（従来どおり）。
+     * 0.1〜10 に収める。味方・敵の両方に同じ倍率が掛かる
+     */
+    speed?: number
     initialGauges?: { party?: number[]; enemies?: number[] }
   }
   /**
@@ -355,6 +370,8 @@ export class BattleEngine {
   /** wait / menu のとき、表示側が候補窓を開いている間 true（画面の一時的な状態なので BattleState には持たない） */
   private atbHold = false
   private atbWaitScope: AtbWaitScope = 'command'
+  /** ATB ゲージの速さの倍率 (#880)。1 = 従来どおり */
+  private atbSpeed = 1
   private skills: Record<string, SkillExecution>
   /** 敵の最前列 (#896)。有効なときだけ Some。`edges` は敵ごとの占有セルの右端の列、`front` はその最大（戦闘開始時に 1 回配置して決める） */
   private enemyRowRule: { edges: Map<BattleEntity, number>; front: number } | null = null
@@ -459,6 +476,7 @@ export class BattleEngine {
     if (opts.atb) {
       this.initAtb(opts.atb)
       this.atbWaitScope = opts.atb.waitScope === 'menu' ? 'menu' : 'command'
+      this.atbSpeed = normalizeAtbSpeed(opts.atb.speed)
       this.restoreAtbQueue(opts.restore?.atbQueue)
     }
     if (opts.script) {
@@ -1135,7 +1153,7 @@ export class BattleEngine {
   private atbRate(entity: BattleEntity): number {
     // AGI に比例。0 以下・非有限でも最低 1 で進める（永久に溜まらないと戦闘が止まるため）
     const agi = Number.isFinite(entity.agi) ? Math.max(1, entity.agi) : 1
-    return agi * ATB_FILL_PER_AGI_MS
+    return agi * ATB_FILL_PER_AGI_MS * this.atbSpeed
   }
 
   /** 次にゲージが満タンになるまでの ms（remaining を上限とする）。進めるゲージが無ければ null */

@@ -16,8 +16,9 @@ export function buildBattleMenu(
   }
 ): BattleMenuData | undefined {
   const skills = config.skills ?? []
-  if (config.spells.length === 0 && config.items.length === 0 && skills.length === 0)
-    return undefined
+  // たいせつなもの (#880 `key: true`) は戦闘の候補窓に出さない
+  const items = config.items.filter((x) => !x.key)
+  if (config.spells.length === 0 && items.length === 0 && skills.length === 0) return undefined
   return {
     spells: Object.fromEntries(
       config.party.map((p) => [p.id, config.spells.map((x) => ({ ...x }))])
@@ -29,6 +30,6 @@ export function buildBattleMenu(
           ),
         }
       : {}),
-    items: config.items.map((x) => ({ ...x })),
+    items: items.map((x) => ({ ...x })),
   }
 }

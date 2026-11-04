@@ -34,7 +34,9 @@ import {
 } from './fieldMenu'
 import {
   MAX_PARTY_SLOTS,
+  clampNav,
   computeScreenLayout,
+  entryForUse,
   listCount,
   listEntries,
   optionValue,
@@ -44,6 +46,7 @@ import {
   type ScreenCtx,
   type ScreenLayout,
   type ScreenNav,
+  type ScreenUse,
 } from './fieldMenuScreens'
 import {
   DEFAULT_MENU_TRANSITION,
@@ -77,6 +80,35 @@ export interface FieldMenuPartyView {
   texture: Texture | null
 }
 
+/** 表示だけ更新する人物の数値（使ったあとの HP・MP など）。id で突き合わせて `FieldMenuPartyView` に重ねる */
+export type FieldMenuPartyStat = { id: string } & Partial<
+  Pick<FieldMenuPartyView, 'hp' | 'maxHp' | 'mp' | 'maxMp' | 'level' | 'atk' | 'def' | 'agi'>
+>
+
+/** 項目画面の中身・人物の数値の差し替え（使った・並べ替えたあと） */
+export interface FieldMenuRefresh {
+  /** メニュー項目の定義（content 込み）。渡すと中身を作り直す */
+  items?: readonly FieldMenuItemDef[]
+  party?: readonly FieldMenuPartyStat[]
+}
+
+/** 「使う」の要求（どうぐ・まほう）。中身の組み立てと同じ id（`MenuEntry.id`・人物の id）で渡す */
+export interface FieldUseRequest {
+  /** 項目の id（`item` / `magic` など） */
+  screen: string
+  entryId?: string
+  /** まほうの使い手 */
+  casterId?: string
+  /** 対象の人物。全体・本人のときは undefined */
+  targetId?: string
+}
+
+export interface FieldUseOutcome extends FieldMenuRefresh {
+  ok: boolean
+  /** 説明バーに出す文 */
+  notice: string
+}
+
 export interface FieldMenuOpenData {
   items: readonly FieldMenuItemDef[]
   party: readonly FieldMenuPartyView[]
@@ -103,6 +135,10 @@ export interface FieldMenuScreenOptions {
   onSave?(slot: number): string | null
   /** せっていが変わった */
   onSetting?(key: string, value: number): void
+  /** どうぐ・まほうを使う。null（または未指定）= 使う処理が無い（説明バーに「まだありません」） */
+  onUse?(req: FieldUseRequest): FieldUseOutcome | null
+  /** せいとん（種類別の並べ替え）。null（または未指定）= 処理が無い */
+  onSort?(): FieldMenuRefresh | null
 }
 
 const FONT_FAMILY = "'Noto Sans JP', sans-serif"
@@ -252,7 +288,7 @@ export class FieldMenuScreen extends Container {
   /** キー入力。メニューが開いていて対象のキーなら true（呼び出し側は既定動作を止める） */
   handleKey(code: string): boolean {
     if (!this.state.open) return false
-    const ev = menuKeyEvent(code)
+    const ev = menuKeyEvent(code, this.state.settings.keys)
     if (!ev) return false
     this.dispatch(ev)
     return true
@@ -287,10 +323,86 @@ export class FieldMenuScreen extends Container {
       case 'setting':
         if (step.setting) this.opts.onSetting?.(step.setting.key, step.setting.value)
         break
+      case 'use':
+        if (step.use) this.runUse(step.use)
+        break
+      case 'sort':
+        this.runSort()
+        break
       default:
         break
     }
-    if (step.state !== prev || step.effect === 'save') this.dirty = true
+    if (step.state !== prev || step.effect === 'save' || step.effect === 'use') this.dirty = true
+  }
+
+  /** どうぐ・まほうを使う。実処理は呼び出し側（`onUse`）。結果の文は説明バーに出し、中身・人物の数値を差し替える */
+  private runUse(use: ScreenUse): void {
+    const st = this.state
+    if (!st.open || !this.data) return
+    const content = this.contents[st.screen]
+    if (!content) return
+    const ids = this.data.party.map((p) => p.id)
+    const entry = entryForUse(content, ids, use)
+    const out = entry
+      ? this.opts.onUse?.({
+          screen: st.screen,
+          ...(entry.id !== undefined ? { entryId: entry.id } : {}),
+          ...(use.caster >= 0 && ids[use.caster] !== undefined
+            ? { casterId: ids[use.caster] }
+            : {}),
+          ...(use.target !== undefined && ids[use.target] !== undefined
+            ? { targetId: ids[use.target] }
+            : {}),
+        })
+      : null
+    if (!out) {
+      this.state = {
+        ...st,
+        notice: entry?.description ?? `「${entry?.label ?? ''}」の処理はまだありません`,
+      }
+      return
+    }
+    this.applyRefresh(out)
+    if (this.state.open) this.state = { ...this.state, notice: out.notice }
+  }
+
+  private runSort(): void {
+    const st = this.state
+    if (!st.open) return
+    const out = this.opts.onSort?.() ?? null
+    if (!out) {
+      this.state = { ...st, notice: '「せいとん」の処理はまだありません' }
+      return
+    }
+    this.applyRefresh(out)
+    if (this.state.open) this.state = { ...this.state, notice: 'しゅるいべつに ならべかえました' }
+  }
+
+  /** 中身（項目の定義）と人物の数値を差し替え、選択位置を一覧の範囲に収め直す */
+  private applyRefresh(r: FieldMenuRefresh): void {
+    if (!this.data) return
+    let data = this.data
+    if (r.party && r.party.length > 0) {
+      data = {
+        ...data,
+        party: data.party.map((p) => {
+          const s = r.party?.find((x) => x.id === p.id)
+          return s ? { ...p, ...s } : p
+        }),
+      }
+    }
+    if (r.items) {
+      data = { ...data, items: r.items }
+      for (const d of r.items)
+        this.contents[d.id] = resolveContent(d.label, screenKindOfItem(d), d.content)
+    }
+    this.data = data
+    const st = this.state
+    if (st.open && st.nav) {
+      const c = this.contents[st.screen]
+      if (c) this.state = { ...st, nav: clampNav(st.nav, this.screenCtx(c)) }
+    }
+    this.dirty = true
   }
 
   private startTransition(screen: string, nav: ScreenNav, reverse: boolean): void {
@@ -463,9 +575,11 @@ export class FieldMenuScreen extends Container {
     sl.party.forEach((r, i) => {
       const p = data.party[i]
       if (!p) return
-      const emphasize =
-        i === nav.party && (nav.focus === 'party' || (k === 'party-list' && nav.focus === 'list'))
-      this.drawPartySlot(C, p, r, lay, emphasize, true, this.artDeep)
+      const targeting = nav.focus === 'target'
+      const emphasize = targeting
+        ? i === nav.target
+        : i === nav.party && (nav.focus === 'party' || (k === 'party-list' && nav.focus === 'list'))
+      this.drawPartySlot(C, p, r, lay, emphasize, true, this.artDeep, targeting ? '対象' : '選択中')
       if (interactive)
         this.hit(C, r, (e) => {
           if (e.button !== 2) this.dispatch({ type: 'select', target: 'party', index: i })
@@ -492,7 +606,7 @@ export class FieldMenuScreen extends Container {
         })
     })
     // 本体の窓の中身
-    if (k === 'status') this.drawStatus(C, nav, sl, lay, interactive)
+    if (k === 'status') this.drawStatus(C, nav, sl, lay, interactive, content)
     else this.drawList(C, nav, ctx, sl, interactive)
     // 確認窓
     if (sl.confirm) {
@@ -585,7 +699,8 @@ export class FieldMenuScreen extends Container {
     nav: ScreenNav,
     sl: ScreenLayout,
     lay: MenuLayout,
-    interactive: boolean
+    interactive: boolean,
+    content: ResolvedContent
   ): void {
     const p = this.data!.party[nav.party]
     const P = sl.primary
@@ -618,9 +733,8 @@ export class FieldMenuScreen extends Container {
     line(`HP  ${p.hp} / ${p.maxHp}`)
     if (p.mp !== undefined) line(`MP  ${p.mp} / ${p.maxMp ?? p.mp}`)
     line(`ちから ${p.atk ?? '--'} まもり ${p.def ?? '--'} すばやさ ${p.agi ?? '--'}`)
-    line('こゆうそしつ  --', GRAY)
-    line('そうび  --', GRAY)
-    line('おもいのやいば  --', GRAY)
+    // 定義側・実状態にある項目だけ出す（無い項目は出さない）
+    for (const row of content.statusByParty[p.id] ?? []) line(`${row.label}  ${row.value}`)
     this.placeArt(this.artDeep, p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
   }
 
@@ -633,7 +747,8 @@ export class FieldMenuScreen extends Container {
     lay: MenuLayout,
     emphasize: boolean,
     compact: boolean,
-    art: Container
+    art: Container,
+    markLabel = '選択中'
   ): void {
     this.panel(C, r, lay, emphasize)
     if (emphasize)
@@ -645,7 +760,7 @@ export class FieldMenuScreen extends Container {
     const lv = p.level === undefined ? 'Lv --' : `Lv ${p.level}`
     const hp = `HP  ${p.hp} / ${p.maxHp}`
     // 「いま選択中」の表示（矢印でなくアクスタ側に出す。戦闘と同じ見方）
-    const mark = emphasize ? '選択中' : null
+    const mark = emphasize ? markLabel : null
     if (compact) {
       // 狭い枠: 名前 / Lv（と選択中）/ HP の3段
       C.addChild(this.text(p.name, size, WHITE, tx, r.y + r.h * 0.22, 'left'))
