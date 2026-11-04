@@ -1398,7 +1398,9 @@ describe('pickConfigSource (#890, #1051)', () => {
     expect(pickConfigSource('?config=%20%09%20')).toBeUndefined()
     expect(pickConfigSource('?config=%20a.json%20')).toBe('a.json')
     expect(pickConfigSource('?config=a%2Fb%20c.json')).toBe('a/b c.json')
-    expect(pickConfigSource('?config=https%3A%2F%2Fx.test%2Fc.json%3Fk%3D1')).toBe('https://x.test/c.json?k=1')
+    expect(pickConfigSource('?config=https%3A%2F%2Fx.test%2Fc.json%3Fk%3D1')).toBe(
+      'https://x.test/c.json?k=1'
+    )
     expect(pickConfigSource('?config=a.json&config=b.json')).toBe('a.json')
     expect(pickConfigSource('?config=&config=b.json')).toBeUndefined()
   })
