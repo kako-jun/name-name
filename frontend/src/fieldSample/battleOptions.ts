@@ -5,6 +5,7 @@
 import type { BattleScreenOptions } from '../game/BattleScreen'
 import type { BattleEngineOptions } from '../game/battleEngine'
 import type { BattleMenuData } from '../game/battleMenu'
+import type { StatusDef } from '../types'
 import type { FieldBattleConfig } from './config'
 import { resolveBattleFrame } from '../game/battleLogicalSize'
 
@@ -44,9 +45,12 @@ export function buildBattleScreenOptions(
  * side かつ敵グリッドがあるときは `enemyRow`（最前列でない敵への通常攻撃は半分 #896。設定は無い。BattleScreen に渡すグリッドと同じもの）も渡す
  */
 export function buildBattleEngineOptions(
-  b: Pick<FieldBattleConfig, 'atb' | 'layout' | 'enemyGrid'>
+  b: Pick<FieldBattleConfig, 'atb' | 'layout' | 'enemyGrid'>,
+  statuses?: Record<string, StatusDef>
 ): BattleEngineOptions {
   return {
+    // 状態の宣言 (#870)。空なら渡さない（戦闘サンプルと同じ条件）
+    ...(statuses && Object.keys(statuses).length > 0 ? { statuses } : {}),
     ...(b.atb ? { atb: b.atb } : {}),
     ...(b.layout === 'side' && b.enemyGrid ? { enemyRow: { grid: b.enemyGrid } } : {}),
   }

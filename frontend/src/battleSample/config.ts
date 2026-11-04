@@ -663,7 +663,7 @@ function resolveSampleSummons(
  * 設定 JSON の statuses (#870) を検証する。`[{ id, name?, duration?, tickDamage?, action?, reverse?, cure?, expire? }]`。
  * `id` は必須。値は `[状態]` と同じ書式の文字列（解釈は `game/statusEffects.ts`）。`name` 省略は id
  */
-function parseStatuses(raw: unknown): ParseResult<Record<string, StatusDef>> {
+export function parseStatuses(raw: unknown): ParseResult<Record<string, StatusDef>> {
   if (raw === undefined) return { ok: true, value: {} }
   if (!Array.isArray(raw)) return { ok: false, error: 'statuses は配列である必要があります' }
   const entries: [string, StatusDef][] = []

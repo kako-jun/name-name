@@ -53,6 +53,8 @@ import {
   resolveBattleFrame,
   type BattleLogicalSize,
 } from '../game/battleLogicalSize'
+import { parseStatuses } from '../battleSample/config'
+import type { StatusDef } from '../types'
 import type { BattleItemEntry, BattleSkillEntry, BattleSpellEntry } from '../game/battleMenu'
 
 export const EDGES: readonly Edge[] = ['top', 'bottom', 'left', 'right']
@@ -280,6 +282,8 @@ export interface FieldSampleConfig {
   items: BattleItemEntry[]
   /** 「わざ」の候補 (#873)。味方全員共通（`id` / `name` / `target`〔特技の相対表現。既定 `相手単体`〕/ `effect` / `builtin`）。MP なし。`battle.commands` に `skill` があると `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。未指定は空 */
   skills: BattleSkillEntry[]
+  /** 状態の宣言 (#870)。戦闘サンプルと同じ `statuses`（`[{ id, name?, duration?, tickDamage?, action?, reverse?, cure?, expire? }]`）。戦闘の BattleEngine へ渡る。未指定は空＝状態異常の処理は走らない（従来どおり） */
+  statuses: Record<string, StatusDef>
   /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
   groupErrors?: EncounterGroupError[]
   /** 設定は読めたが効かない組み合わせの警告 (#883)。`layout: "front"` と `presentation: "ff"`／`commandLayout: "cross"` など。無ければ省略 */
@@ -790,6 +794,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (!items.ok) return items
   const skills = parseMenuList<BattleSkillEntry>(raw.skills, [], 'skills')
   if (!skills.ok) return skills
+  const statuses = parseStatuses(raw.statuses)
+  if (!statuses.ok) return statuses
 
   const b = raw.battle === undefined ? {} : raw.battle
   if (!isObj(b)) return fail('battle はオブジェクトが必要です')
@@ -1033,6 +1039,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       spells: spells.value,
       items: items.value,
       skills: skills.value,
+      statuses: statuses.value,
       battle: {
         layout: b.layout ?? 'side',
         spriteStyle: b.spriteStyle ?? 'none',

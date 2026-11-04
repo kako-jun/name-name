@@ -1,0 +1,44 @@
+{
+  "slot": 0,
+  "sceneId": null,
+  "eventIndex": 0,
+  "textIndex": 0,
+  "flags": {},
+  "backgroundPath": null,
+  "isBlackout": false,
+  "characters": [],
+  "currentBgmPath": null,
+  "savedAt": "2026-11-04T00:00:00.000Z",
+  "sceneName": "stage",
+  "rpg": {
+    "version": 1,
+    "party": [
+      {
+        "id": "party1"
+      },
+      {
+        "id": "party2"
+      }
+    ],
+    "items": {},
+    "equipment": {},
+    "gold": 0,
+    "field": {
+      "sceneId": "stage",
+      "x": 300,
+      "y": 500,
+      "facing": "down"
+    },
+    "battle": {
+      "enemies": [
+        {
+          "id": "demo_fan"
+        },
+        {
+          "id": "demo_fan"
+        }
+      ],
+      "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
+    }
+  }
+}
