@@ -9,7 +9,7 @@
   "characters": [],
   "currentBgmPath": null,
   "savedAt": "2026-11-04T00:00:00.000Z",
-  "sceneName": "stage",
+  "sceneName": "bathhouse",
   "rpg": {
     "version": 1,
     "party": [
@@ -18,32 +18,55 @@
       },
       {
         "id": "party2"
+      },
+      {
+        "id": "party3"
+      },
+      {
+        "id": "party4"
       }
     ],
     "items": {},
     "equipment": {},
     "gold": 0,
     "field": {
-      "sceneId": "stage",
-      "x": 300,
-      "y": 500,
-      "facing": "down"
+      "sceneId": "bathhouse",
+      "x": 768,
+      "y": 716,
+      "facing": "up"
     },
     "battle": {
       "enemies": [
         {
-          "id": "demo_fan"
+          "id": "M147"
         },
         {
-          "id": "demo_fan"
+          "id": "M147"
         },
         {
-          "id": "demo_fan"
+          "id": "M147"
         },
         {
-          "id": "demo_lighter"
+          "id": "M150"
         }
       ],
+      "atb": {
+        "partyGauge": [
+          1000,
+          0,
+          0,
+          0
+        ],
+        "enemyGauge": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "queue": [
+          0
+        ]
+      },
       "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
     }
   }

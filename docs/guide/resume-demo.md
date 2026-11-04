@@ -111,32 +111,35 @@ ff の勝利で、固定の「しょうり！」ではなく結果のメッセ�
 
 ## motion / 敵名窓 / エフェクトの確認（#1051）
 
-戦闘サンプル（`battle-sample.html`）で見ていた 3 機能を、実際のゲームと同じ形式の設定（`battle.motion` / `battle.enemyList` / `battle.effects`。書式は [デバッガガイド](./debugger.md)）で確かめる手順。確認用の設定は、寺町とは別の最小の一枚絵世界（シーン 1 つ・敵はデモ用の名前と数値。寺町の同梱設定には足さない）。
+戦闘サンプル（`battle-sample.html`）で見ていた 3 機能を、実際のゲームで確かめる手順。**デモ専用の世界は作らない**。味方は寺町の実際の 4 人（ナム・オットン・シャー・ペー子）、敵は台帳の敵（M147・M149・M150 など）、背景は BG001 で、実際の設定とセーブをロードするだけ。書式は [デバッガガイド](./debugger.md)。
 
 | 機能 | 設定 | セーブ | 見えるもの |
 |---|---|---|---|
-| motion | [`demo-motion.config.json`](./examples/demo-motion.config.json) | [`demo-motion.save.json`](./examples/demo-motion.save.json) | `battle.motion: "snappy"`。戦闘開始の横スライド登場・キビキビした踏み出し・桁ごとに跳ねるダメージ数字 |
-| 敵名窓 | [`demo-enemy-list.config.json`](./examples/demo-enemy-list.config.json) | [`demo-enemy-list.save.json`](./examples/demo-enemy-list.save.json) | `battle.enemyList: "window"`。コマンド窓の右隣に敵名窓が出て、同名の敵が「扇風機・換気扇の羽根 ×3」にまとまる（倒すと個数が減り、全滅した行は消える） |
-| エフェクト | [`demo-effects.config.json`](./examples/demo-effects.config.json) | [`demo-effects.save.json`](./examples/demo-effects.save.json) | `battle.effects` の `cast` / `impact` / `slash` / `magic`。通常攻撃の命中で `slash`（味方）・`impact`（敵）、「じゅもん」の「ひかり」で `cast` と `magic` |
+| motion・エフェクト | 寺町の実際の設定（同梱の `teramachi.sample.json`。`?config=` を付けない既定） | [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) | `battle.motion: "snappy"`の横スライド登場・キビキビした踏み出し・桁ごとに跳ねるダメージ数字。`battle.effects` の `cast` / `magic`（「じゅもん」から）、`slash` / `impact`（通常攻撃の命中と被弾） |
+| 敵名窓 | [`demo-enemy-list.config.json`](./examples/demo-enemy-list.config.json) | [`demo-enemy-list.save.json`](./examples/demo-enemy-list.save.json) | 寺町の設定の完全な写し。**差分は `battle.enemyList: "window"` の 1 点だけ**（テストで固定）。敵は M147（扇風機・換気扇の羽根）×3 と M150（ライター）。コマンド窓の右隣に敵名窓が出て、同名の敵が「扇風機・換気扇の羽根 ×3」にまとまる（倒すと個数が減り、全滅した行は消える） |
 
-手順は「敵レベルとレベル条件即死の確認」と同じ（`<名前>` は上表の機能名 `motion` / `enemy-list` / `effects`）:
+motion とエフェクトは、寺町の実際の設定と実際のセーブで確認する。cast / magic は「じゅもん」から、slash / impact は通常攻撃と被弾で出る。操作可能までの待ち時間は snappy の登場で約 4〜5 秒（それ以前の入力は効かない）。コマンドは 4 つ（たたかう・じゅもん・どうぐ・にげる）で `cross` が有効なので、矢印キー（↑=たたかう・←=じゅもん など）が効く（実測の手順は「敵レベルとレベル条件即死の確認」を参照）。
+
+手順は「敵レベルとレベル条件即死の確認」と同じ:
 
 1. 本番ビルドして静的配信する（手順 1）
-2. `demo-<名前>.config.json` を `<出力先>` の直下にコピーする（手順 2）
-3. sit-by-me を CORS 付きで配信し、コピーした設定とセーブの `8765` を置き換える（手順 3。**配信するのは歩行絵が揃った sit-by-me の最新 main**。古いブランチだと歩行スプライトが 404 で起動しない。この設定は感情吹き出しを使わないので `teramachi-emotions.json` の置換は要らない）
-4. `demo-<名前>.save.json` を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=demo-<名前>.config.json` を開く。戦闘中のセーブの再開は、`battle.transition` の設定に関わらず遷移の演出を挟まず戦闘画面を開く（敵名窓・エフェクト・motion の 3 つの設定とも `transition` は未指定＝`none`。敵レベル節の `ff-mosaic` のような約 8〜12 秒の導入演出はない）。操作できるまでは、敵名窓・エフェクトは約 1 秒、motion は `snappy` の横スライド登場が終わる約 4〜5 秒（それ以前のクリックは効かない）。3 つともコマンドが 3 つ（たたかう・じゅもん・にげる。状態異常の設定も同じ）で、`commandLayout: "cross"` は 4 コマンドのときだけ有効なため `grid` 配置になり、矢印キーでは操作できない。コマンドはクリック（タップ）で選ぶ。「たたかう」はクリックでターゲットが自動で決まり、すぐ始まる。「じゅもん」は窓から呪文を選んでターゲットをクリックする（敵名窓・エフェクト・motion の設定は「ひかり」。状態異常の設定は次節）
+2. 敵名窓だけ `demo-enemy-list.config.json` を `<出力先>` の直下にコピーする（手順 2。motion・エフェクトは既定の寺町設定なのでコピー不要）
+3. sit-by-me を CORS 付きで配信する（手順 3。**配信するのは歩行絵が揃った sit-by-me の最新 main**。古いブランチだと歩行スプライトが 404 で起動しない）
+4. セーブを localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0`（敵名窓は `&config=demo-enemy-list.config.json` を付ける）を開く。戦闘中のセーブの再開は `battle.transition` に関わらず遷移の演出を挟まず戦闘画面を開く。「たたかう」はクリックでターゲットが自動で決まり、「じゅもん」は窓から呪文を選んでターゲットを選ぶ
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
 ## 状態異常の確認（#1051）
 
-戦闘サンプル（`battle-sample.html`）の状態異常（毒・眠り・混乱・ゾンビ・死の宣告）を、実際のゲームと同じ形式の設定（トップレベルの `statuses`。書式は [デバッガガイド](./debugger.md)）で確かめる手順。確認用の設定は、寺町とは別の最小の一枚絵世界（シーン 1 つ・敵は同名の通常攻撃だけの「扇風機・換気扇の羽根」2 体。寺町の同梱設定には足さない）。敵の行動パターン・耐性は未搭載なので、どくのりゅうのような特技を使う敵は出ない。
+戦闘サンプル（`battle-sample.html`）の状態異常（毒・眠り・混乱・ゾンビ・死の宣告）を、トップレベルの `statuses`（書式は [デバッガガイド](./debugger.md)）で確かめる手順。味方は実際の 4 人、敵は台帳の敵（M147・M149）、背景は BG001。
+
+**デモ用の追加はこの 2 点だけ**: 寺町の台帳・設定には状態異常の宣言も、状態異常を付ける呪文も無いので、トップレベルの `statuses`（5 種。元は戦闘サンプルの `status-effects.json`）と、状態異常・回復を試す呪文（どくのこな・スリプル・メダパニ・デスぜんこく・ケアル・エスナ・ゾンビのこな）だけを寺町の設定に足した。寺町の既存の呪文は残してあり、それ以外は寺町の設定の完全な写し（差分が `statuses` と `spells` だけであることはテストで固定）。敵の行動パターン・耐性は未搭載なので、どくのりゅうのような特技を使う敵は出ない。
 
 | 設定 | セーブ | 見えるもの |
 |---|---|---|
 | [`demo-statuses.config.json`](./examples/demo-statuses.config.json) | [`demo-statuses.save.json`](./examples/demo-statuses.save.json) | 「じゅもん」の「どくのこな」「スリプル」「メダパニ」「デスぜんこく」で敵に状態が付く（敵は名前の後ろに `[どく]` のように出る）。「ケアル」「エスナ」「ゾンビのこな」は味方に使う。「ゾンビのこな」で味方がゾンビになると、敵の攻撃が回復になる |
 
-手順は「motion / 敵名窓 / エフェクトの確認」と同じ（`<名前>` は `statuses`）。手順 4 の `demo-<名前>.save.json` を localStorage に入れ、`field-sample.html?resume=0&config=demo-statuses.config.json` を開く。コマンドは 3 つ（たたかう・じゅもん・にげる）で `grid` 配置のため矢印キーでは操作できず、コマンドはクリック（タップ）で選ぶ。「じゅもん」は窓から呪文を選んでターゲットをクリックする。操作できるまでは、読み込みから約 2 秒以内（導入演出なし。`transition` 未指定）。
+手順は「motion / 敵名窓 / エフェクトの確認」と同じ（設定は `demo-statuses.config.json`、`field-sample.html?resume=0&config=demo-statuses.config.json`）。コマンドは寺町と同じ 4 つ・`cross` なので矢印キーが効く。「じゅもん」は窓から呪文を選んでターゲットを選ぶ。
 
 **見た目の最終判断は KJ の実機で行う**。この手順は値が反映されることの確認までで、見た目の合格判定ではない。
 
