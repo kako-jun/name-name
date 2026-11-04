@@ -331,6 +331,9 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     })
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
+    // snappy の登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
+    s.tick(1500)
+    s.tick(200)
     const v = s as unknown as {
       enemyViews: { container: Container; baseX: number }[]
       sampleEntity(side: 'enemy', i: number): { pose: string }
@@ -416,5 +419,53 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
       expect(sizeOf(v.enemyViews[0].container)).toBeNull()
     }
     expect(maxStep).toBeGreaterThan(0)
+  })
+})
+
+describe('BattleScreen: 登場スライド (#1037)', () => {
+  function entranceSetup(motion: 'snappy' | 'default', presentation: 'ff' | 'dq' = 'ff') {
+    const engine = new BattleEngine([entity('hero')], [entity('boss', { atk: 0 })], {
+      rng: () => 0.5,
+      skills: {},
+    })
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation, motion })
+    created.push(s)
+    return { s, engine }
+  }
+  const dxOf = (s: BattleScreen) => ({
+    party: I(s).partyViews[0].container.x,
+    enemy: I(s).enemyViews[0].container.x,
+  })
+
+  it('snappy: 開始前は画面外、登場後に元の位置へ。入力は登場中ずっと塞がる', async () => {
+    const { s } = entranceSetup('snappy')
+    const rest = entranceSetup('default')
+    const restPos = dxOf(rest.s)
+    expect(dxOf(s).enemy).toBeLessThan(0)
+    expect(dxOf(s).party).toBeGreaterThanOrEqual(800)
+    expect(
+      (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+    ).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    s.tick(1) // 読み込み済みなので開始
+    s.tick(S.entranceMs / 2)
+    expect(dxOf(s).enemy).toBeLessThan(restPos.enemy)
+    s.tick(S.entranceMs)
+    expect(dxOf(s)).toEqual(restPos)
+    expect(
+      (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+    ).toBe(false)
+  })
+
+  it('default と dq では登場しない', () => {
+    const d = entranceSetup('default')
+    expect(
+      (d.s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+    ).toBe(false)
+    const q = entranceSetup('snappy', 'dq')
+    expect(
+      (q.s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+    ).toBe(false)
   })
 })
