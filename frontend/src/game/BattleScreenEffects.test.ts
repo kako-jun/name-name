@@ -176,6 +176,113 @@ describe('BattleScreen エフェクト重ね', () => {
     expect(engine.getState().enemies[0].hp).toBeLessThan(999)
   })
 
+  it('読み込み前に出す時刻になったエフェクトは、読み込み完了後に待った時間ぶん進めて出る (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    // textures に無い = 読み込み中（コンストラクタの先読みはテスト中は終わらない）
+    expect(I(s).effectTextures.has('sheet.png')).toBe(false)
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 250)
+    expect(I(s).effectInstances).toHaveLength(0)
+    // 読み込みが終わる（命中から 250ms 待ち。シートは 4 コマ×100ms = 400ms）
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 10)
+    const inst = I(s).effectInstances
+    expect(inst).toHaveLength(1)
+    expect(inst[0].kind).toBe('slash')
+    // 待った分だけ進んだコマ（0 コマ目ではない）から始まる
+    const frame0 = (
+      s as unknown as { effectFrameTexture(sheet: BattleEffectSheet, f: number): Texture | null }
+    ).effectFrameTexture(sh(), 0)
+    expect(inst[0].sprite.texture).not.toBe(frame0)
+    run(s, 400)
+    expect(I(s).effectInstances).toHaveLength(0)
+  })
+
+  it('読み込みを待つうちにエフェクトが終わる長さを過ぎたら、遅れて出さない (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 700)
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 50)
+    expect(I(s).effectInstances).toHaveLength(0)
+  })
+
+  it('読み込みが終わらないまま終わる長さを過ぎたら待ちから捨てる。再生が空になっても待ちは進み、遅れて古い位置に出ない (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    const inner = s as unknown as { effectDeferred: unknown[]; playback: { active: unknown } }
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 60)
+    expect(inner.effectDeferred).toHaveLength(1)
+    // 再生が終わるまで進め、さらに終わる長さ（4 コマ×100ms）を過ぎるまで読み込みは終わらない
+    run(s, 3000)
+    expect(inner.playback.active).toBeNull()
+    expect(inner.effectDeferred).toHaveLength(0)
+    // その後に読み込みが終わっても出ない
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 100)
+    expect(I(s).effectInstances).toHaveLength(0)
+  })
+
+  it('再生が空になったあとに読み込みが終わっても、残りの長さがあるうちは出る (#941)', () => {
+    const { s, engine } = setup({ slash: sh({ frameMs: 5000 }) })
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 60)
+    run(s, 1500) // 再生は終わっているが、エフェクトの長さ（20 秒）は残っている
+    expect((s as unknown as { playback: { active: unknown } }).playback.active).toBeNull()
+    I(s).effectTextures.set('sheet.png', sheetTexture(4))
+    run(s, 20)
+    expect(I(s).effectInstances).toHaveLength(1)
+  })
+
+  it('再生・数字・エフェクトが全部空でも、待たせたエフェクトは tick で進み、期限切れで捨てられ、読めたら出る (#941)', () => {
+    const mk = () => {
+      const { s } = setup({ slash: sh() }) // 4 コマ×100ms = 400ms
+      const inner = s as unknown as {
+        effectDeferred: { plan: unknown; sinceStart: number }[]
+        popups: unknown[]
+        playback: { active: unknown; queue: unknown[] }
+      }
+      inner.effectDeferred.push({
+        plan: { kind: 'slash', atMs: 0, target: { side: 'enemy', index: 0 } },
+        sinceStart: 0,
+      })
+      expect(inner.popups).toHaveLength(0)
+      expect(inner.playback.active).toBeNull()
+      expect(inner.playback.queue).toHaveLength(0)
+      expect(I(s).effectInstances).toHaveLength(0)
+      return { s, inner }
+    }
+    // 読み込み中のまま期限（400ms）を過ぎる → 捨てられる
+    const a = mk()
+    a.s.tick(100)
+    expect(a.inner.effectDeferred).toHaveLength(1)
+    expect(a.inner.effectDeferred[0].sinceStart).toBe(100)
+    a.s.tick(400)
+    expect(a.inner.effectDeferred).toHaveLength(0)
+    // 期限内に読めた → 出る
+    const b = mk()
+    b.s.tick(100)
+    I(b.s).effectTextures.set('sheet.png', sheetTexture(4))
+    b.s.tick(10)
+    expect(b.inner.effectDeferred).toHaveLength(0)
+    expect(I(b.s).effectInstances).toHaveLength(1)
+  })
+
+  it('読み込み中にエフェクトを待たせている間に読めなかった（null）ら、捨てて戦闘は進む (#941)', () => {
+    const { s, engine } = setup({ slash: sh() })
+    engine.selectAttack()
+    sync(s)
+    run(s, ATTACK_STEP_MS + ATTACK_SLASH_HIT_MS + 60)
+    I(s).effectTextures.set('sheet.png', null)
+    run(s, 800)
+    expect(I(s).effectInstances).toEqual([])
+    expect(engine.getState().enemies[0].hp).toBeLessThan(999)
+  })
+
   it('1 回の dt が行動の終わりをまたいでも、数字が出るヒットには効果も出る', () => {
     const { s, engine } = setup({ slash: sh({ frameMs: 2000 }) })
     I(s).effectTextures.set('sheet.png', sheetTexture(4))

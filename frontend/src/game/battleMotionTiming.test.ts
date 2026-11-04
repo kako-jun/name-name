@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   ACTION_GAP_MS,
+  ATB_PLAYBACK_QUEUE_MAX,
+  MENU_TRANSITION_MIN_SCALE,
   ATTACK_RETURN_MS,
   ATTACK_SLASH_HIT_MS,
   ATTACK_SLASH_MS,
@@ -13,6 +15,8 @@ import {
   RECOIL_MS,
   SNAPPY_MOTION_TIMING,
   advancePlayback,
+  isPlaybackBackedUp,
+  sampleMenuTransition,
   buildActionTimeline,
   enqueueEvents,
   emptyPlayback,
@@ -331,5 +335,71 @@ describe('アクスタの被弾の傾き・倒れ・消滅 (#953)', () => {
       prev = tilt
     }
     expect(m.sampleTarget('damage', T.recoilMs, true, T).tilt).toBeCloseTo(T.hurtTiltDeg, 6)
+  })
+})
+
+describe('候補窓の開閉 sampleMenuTransition (#745)', () => {
+  it('default は menuMs 0（即座）、snappy は 120ms', () => {
+    expect(DEFAULT_MOTION_TIMING.menuMs).toBe(0)
+    expect(SNAPPY_MOTION_TIMING.menuMs).toBe(120)
+  })
+  it('default（menuMs 0）は開いても閉じても即座に終わる（開いた状態 / 閉じた状態）', () => {
+    expect(sampleMenuTransition('open', 0, DEFAULT_MOTION_TIMING)).toEqual({
+      alpha: 1,
+      scale: 1,
+      done: true,
+    })
+    expect(sampleMenuTransition('close', 0, DEFAULT_MOTION_TIMING)).toEqual({
+      alpha: 0,
+      scale: MENU_TRANSITION_MIN_SCALE,
+      done: true,
+    })
+  })
+  it('開く: alpha 0→1・scale 0.92→1（easeOutQuad）。境界は 0・menuMs・それ以降', () => {
+    const T = SNAPPY_MOTION_TIMING
+    expect(sampleMenuTransition('open', 0, T)).toEqual({
+      alpha: 0,
+      scale: MENU_TRANSITION_MIN_SCALE,
+      done: false,
+    })
+    const half = sampleMenuTransition('open', T.menuMs / 2, T)
+    expect(half.alpha).toBeCloseTo(0.75) // easeOutQuad(0.5)
+    expect(half.scale).toBeCloseTo(
+      MENU_TRANSITION_MIN_SCALE + (1 - MENU_TRANSITION_MIN_SCALE) * 0.75
+    )
+    expect(half.done).toBe(false)
+    expect(sampleMenuTransition('open', T.menuMs, T)).toEqual({ alpha: 1, scale: 1, done: true })
+    expect(sampleMenuTransition('open', 9999, T).done).toBe(true)
+  })
+  it('閉じる: 開くの逆（alpha 1→0・scale 1→0.92）', () => {
+    const T = SNAPPY_MOTION_TIMING
+    expect(sampleMenuTransition('close', 0, T)).toEqual({ alpha: 1, scale: 1, done: false })
+    const end = sampleMenuTransition('close', T.menuMs, T)
+    expect(end.alpha).toBe(0)
+    expect(end.scale).toBeCloseTo(MENU_TRANSITION_MIN_SCALE)
+    expect(end.done).toBe(true)
+  })
+  it('負・NaN・Infinity の elapsed、不正な menuMs を安全に扱う', () => {
+    const T = SNAPPY_MOTION_TIMING
+    expect(sampleMenuTransition('open', -5, T).alpha).toBe(0)
+    expect(sampleMenuTransition('open', NaN, T).alpha).toBe(0)
+    expect(sampleMenuTransition('open', Infinity, T).alpha).toBe(0)
+    expect(sampleMenuTransition('open', 10, { ...T, menuMs: NaN }).done).toBe(true)
+    expect(sampleMenuTransition('open', 10, { ...T, menuMs: -1 }).done).toBe(true)
+  })
+})
+
+describe('ATB の再生待ち上限 isPlaybackBackedUp (#745)', () => {
+  const ev = (seq: number) => ({ seq }) as never
+  it('再生待ち（再生中を除く）が ATB_PLAYBACK_QUEUE_MAX 未満なら false、以上なら true', () => {
+    const q = (n: number) =>
+      enqueueEvents(
+        emptyPlayback(),
+        Array.from({ length: n }, (_, i) => ev(i))
+      )
+    expect(isPlaybackBackedUp(emptyPlayback())).toBe(false)
+    expect(isPlaybackBackedUp(q(ATB_PLAYBACK_QUEUE_MAX - 1))).toBe(false)
+    expect(isPlaybackBackedUp(q(ATB_PLAYBACK_QUEUE_MAX))).toBe(true)
+    expect(isPlaybackBackedUp(q(ATB_PLAYBACK_QUEUE_MAX + 3))).toBe(true)
   })
 })

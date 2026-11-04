@@ -6,11 +6,13 @@ import {
   EMOTION_DEFAULT_DURATION_MS,
   EMOTION_DEFAULT_FRAME_MS,
   EMOTION_MAX_DURATION_MS,
+  EMOTION_FADE_MS,
   EMOTION_POP_MS,
   INITIAL_EMOTION_STATE,
   emotionAnchor,
   emotionFrameAt,
   emotionFrameRect,
+  emotionMotionAlpha,
   emotionMotionScale,
   emotionView,
   clearNpcEmotions,
@@ -177,9 +179,47 @@ describe('emotionMotionScale / emotionView', () => {
   })
   it('view: コマと拡大（宣言の scale × 動き）', () => {
     const s = sheet({ frames: 2, columns: 2, frameMs: 50, scale: 2, motion: 'pop' })
-    expect(emotionView({ kind: '!', elapsed: 0 }, s)).toEqual({ frame: 0, scale: 2 * 0.4 })
-    expect(emotionView({ kind: '!', elapsed: 500 }, s)).toEqual({ frame: 0, scale: 2 })
+    expect(emotionView({ kind: '!', elapsed: 0 }, s)).toEqual({
+      frame: 0,
+      scale: 2 * 0.4,
+      alpha: 1,
+    })
+    expect(emotionView({ kind: '!', elapsed: 500 }, s)).toEqual({ frame: 0, scale: 2, alpha: 1 })
     expect(emotionView({ kind: '!', elapsed: 60 }, s).frame).toBe(1)
+  })
+})
+
+describe('fade（フェードアウト #943）', () => {
+  const D = 1000
+  it('表示時間の最後の EMOTION_FADE_MS で 1 → 0 へ線形に薄くなる。それより前は 1', () => {
+    expect(emotionMotionAlpha('fade', 0, D)).toBe(1)
+    expect(emotionMotionAlpha('fade', D - EMOTION_FADE_MS, D)).toBe(1)
+    expect(emotionMotionAlpha('fade', D - EMOTION_FADE_MS / 2, D)).toBeCloseTo(0.5)
+    expect(emotionMotionAlpha('fade', D, D)).toBe(0)
+    expect(emotionMotionAlpha('fade', D + 500, D)).toBe(0)
+  })
+  it('表示時間が EMOTION_FADE_MS より短いときは表示時間いっぱいで薄くなる', () => {
+    expect(emotionMotionAlpha('fade', 0, 100)).toBe(1)
+    expect(emotionMotionAlpha('fade', 50, 100)).toBeCloseTo(0.5)
+    expect(emotionMotionAlpha('fade', 100, 100)).toBe(0)
+  })
+  it('none・pop は常に 1。負・非有限の t は 0、非有限・0 以下の表示時間は薄くしない', () => {
+    expect(emotionMotionAlpha('none', 990, D)).toBe(1)
+    expect(emotionMotionAlpha('pop', 990, D)).toBe(1)
+    expect(emotionMotionAlpha('fade', -5, D)).toBe(1)
+    expect(emotionMotionAlpha('fade', NaN, D)).toBe(1)
+    expect(emotionMotionAlpha('fade', 500, NaN)).toBe(1)
+    expect(emotionMotionAlpha('fade', 500, 0)).toBe(1)
+  })
+  it('view: 1 回だけの持続の上書き（durationMs）を基準に薄くなる。宣言の motion は parse で受け付ける', () => {
+    const s = sheet({ motion: 'fade', durationMs: 2000 })
+    expect(emotionView({ kind: '!', elapsed: 1000 }, s).alpha).toBe(1)
+    expect(emotionView({ kind: '!', elapsed: 800, durationMs: 900 }, s).alpha).toBeCloseTo(
+      1 - (800 - 600) / 300
+    )
+    const r = parseEmotions({ '!': { image: 'a.png', motion: 'fade' } }, (u) => u)
+    expect(r.warnings).toEqual([])
+    expect(r.emotions['!'].motion).toBe('fade')
   })
 })
 

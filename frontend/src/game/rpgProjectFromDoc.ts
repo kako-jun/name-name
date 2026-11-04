@@ -379,6 +379,10 @@ export function rpgProjectFromDoc(
     }
   }
 
+  const battleLayout = normalizeBattleLayout(doc.battle_layout)
+  const battlePresentation = normalizeBattlePresentation(doc.battle_presentation)
+  const battleFf = battlePresentation === 'ff'
+  const battleSide = battleLayout === 'side'
   return {
     name: projectName,
     version: '1.0.0',
@@ -402,14 +406,14 @@ export function rpgProjectFromDoc(
     ...(Object.keys(master.jobs).length > 0 ? { jobs: master.jobs } : {}),
     party: master.party,
     partyOrder: master.partyOrder,
-    battleLayout: normalizeBattleLayout(doc.battle_layout),
+    battleLayout,
     battleBackground: doc.battle_background ?? undefined,
     spriteStyle: normalizeSpriteStyle(doc.sprite_style),
     windowStyle: normalizeWindowStyle(doc.window_style),
     battleBackgroundTone: normalizeBackgroundTone(doc.battle_background_tone),
     battleBackgroundDof: normalizeBackgroundDof(doc.battle_background_dof),
     battleLogTypewriter: normalizeBattleLogTypewriter(doc.battle_log_typewriter),
-    battlePresentation: normalizeBattlePresentation(doc.battle_presentation),
+    battlePresentation,
     battleEffects: doc.battle_effects || undefined,
     fieldEmotions: doc.field_emotions || undefined,
     protagonist: doc.protagonist || undefined,
@@ -423,8 +427,9 @@ export function rpgProjectFromDoc(
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),
     battleTransition: normalizeBattleTransition(doc.battle_transition),
-    battleMotion: normalizeBattleMotion(doc.battle_motion),
-    battleEnemyList: normalizeBattleEnemyList(doc.battle_enemy_list),
+    // ff（かつ side）のときだけ効く設定。dq（効かない）では不正値でも警告を出さない（値は同じく既定に倒す）
+    battleMotion: normalizeBattleMotion(doc.battle_motion, battleFf),
+    battleEnemyList: normalizeBattleEnemyList(doc.battle_enemy_list, battleFf && battleSide),
     rpgEvents: rpgEvents.length > 0 ? rpgEvents : undefined,
     triggers: triggers.length > 0 ? triggers : undefined,
     ...(encounterGroupErrors ? { encounterGroupErrors } : {}),

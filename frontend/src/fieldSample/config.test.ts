@@ -887,6 +887,25 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(ok(c).warnings).toBeUndefined()
   })
 
+  it('battle.enemyList を読む。未指定はキーなし・不正値はエラー・ff かつ side 以外の window は警告 (#954)', () => {
+    const c = withEncounter()
+    c.battle = { presentation: 'ff', layout: 'side', enemyList: 'window' }
+    const v = ok(c)
+    expect(v.battle.enemyList).toBe('window')
+    expect(v.warnings).toBeUndefined()
+    c.battle = { presentation: 'ff' }
+    expect('enemyList' in ok(c).battle).toBe(false)
+    c.battle = { enemyList: 'bogus' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+    c.battle = { enemyList: 'window' }
+    expect(ok(c).warnings?.some((w) => w.includes('battle.enemyList'))).toBe(true)
+    c.battle = { presentation: 'ff', layout: 'front', enemyList: 'window' }
+    expect(ok(c).warnings?.some((w) => w.includes('battle.enemyList'))).toBe(true)
+    // off は何も起きないので警告しない
+    c.battle = { enemyList: 'off' }
+    expect(ok(c).warnings).toBeUndefined()
+  })
+
   it('battle.transition を読む。未指定はキーなし(=none)・不正値はエラー (sit-by-me#55)', () => {
     const c = withEncounter()
     for (const m of ['none', 'ff', 'ff-mosaic']) {

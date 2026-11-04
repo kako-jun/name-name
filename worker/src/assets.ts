@@ -151,6 +151,8 @@ export async function handleRawAsset(
       // intermission.md (#404) 等の assets/scripts/*.md をテキストとして取得できるようにする。
       // markdown 専用 MIME は厳密に用意する必要がなく、text/plain で十分（fetch().text() で読む）。
       md: "text/plain",
+      // 戦闘エフェクト設定 (#936 / #941 `battle_effects`) などの assets/**/*.json。fetch().json() で読む。
+      json: "application/json",
     };
     const contentType = mimeMap[ext] ?? "application/octet-stream";
 

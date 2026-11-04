@@ -42,8 +42,8 @@ export function normalizeEmotionDuration(d: unknown): number | undefined {
   return n > 0 ? Math.min(n, EMOTION_MAX_DURATION_MS) : undefined
 }
 
-/** 出現の動き: none = 出してそのまま / pop = 小さい所から跳ねるように大きくなる */
-export const EMOTION_MOTIONS = ['none', 'pop'] as const
+/** 出現・消え際の動き: none = 出してそのまま / pop = 小さい所から跳ねるように大きくなる / fade = 表示時間の終わりに向けて薄くなって消える (#943) */
+export const EMOTION_MOTIONS = ['none', 'pop', 'fade'] as const
 export type EmotionMotion = (typeof EMOTION_MOTIONS)[number]
 
 /** 1 種類の吹き出しの宣言（検証済み・URL 解決済み） */
@@ -76,6 +76,8 @@ export const EMOTION_MAX_OFFSET = 2000
 export const EMOTION_MAX_KEY_LENGTH = 16
 /** pop の長さ（ms） */
 export const EMOTION_POP_MS = 160
+/** fade の長さ（ms。表示時間の終わりの部分。表示時間がこれより短ければ表示時間いっぱいで薄くなる） */
+export const EMOTION_FADE_MS = 300
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -229,6 +231,20 @@ export function emotionMotionScale(motion: EmotionMotion, t: number): number {
   return p < 0.6 ? 0.4 + (0.8 * p) / 0.6 : 1.2 - (0.2 * (p - 0.6)) / 0.4
 }
 
+/**
+ * 消え際の動きによる不透明度（fade: 表示時間の最後の `EMOTION_FADE_MS`（表示時間が短ければ全体）で 1 → 0 へ線形）。
+ * none・pop・fade の手前は 1。`durationMs` は表示時間（ms）。負・非有限の t は 0 として、非有限・0 以下の表示時間は薄くしない
+ */
+export function emotionMotionAlpha(motion: EmotionMotion, t: number, durationMs: number): number {
+  if (motion !== 'fade') return 1
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return 1
+  const time = Number.isFinite(t) ? Math.max(0, t) : 0
+  const fade = Math.min(EMOTION_FADE_MS, durationMs)
+  const start = durationMs - fade
+  if (time <= start) return 1
+  return Math.max(0, 1 - (time - start) / fade)
+}
+
 /** 進行中の吹き出し 1 件 */
 export interface ActiveEmotion {
   kind: string
@@ -294,14 +310,15 @@ export function stepEmotions(
   return next
 }
 
-/** 描画に要る値: コマ・拡大の倍率（動き込み） */
+/** 描画に要る値: コマ・拡大の倍率・不透明度（動き込み。不透明度は fade のときだけ 1 未満） */
 export function emotionView(
   active: ActiveEmotion,
   sheet: EmotionSheet
-): { frame: number; scale: number } {
+): { frame: number; scale: number; alpha: number } {
   return {
     frame: emotionFrameAt(sheet, active.elapsed),
     scale: sheet.scale * emotionMotionScale(sheet.motion, active.elapsed),
+    alpha: emotionMotionAlpha(sheet.motion, active.elapsed, active.durationMs ?? sheet.durationMs),
   }
 }
 

@@ -8,6 +8,7 @@ import type { Container, Graphics, Text } from 'pixi.js'
 import { BattleScreen, STAGE_PADDING, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
+import { ATB_PLAYBACK_QUEUE_MAX } from './battleMotion'
 import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
 
 import type { BattleEntity } from './spellDsl'
@@ -585,5 +586,53 @@ describe('BattleScreen ATB: アクスタ頭上の ▼ の出し入れ (#805)', (
     const { s } = build([ent('a'), ent('b')], [ent('s')], ATB({ party: [1000, 0] }))
     expect(I(s).atbMarkers.map((m) => m.visible)).toEqual([true, false])
     expect(marks(s)).toEqual([true, false])
+  })
+})
+
+describe('BattleScreen ATB active: 演出の再生待ちの上限 (#745)', () => {
+  interface PlaybackInternals {
+    playback: { queue: unknown[]; active: unknown }
+  }
+  const fastEnemies = () =>
+    Array.from({ length: 5 }, (_, i) => ent(`e${i}`, { agi: 200, atk: 0, hp: 9999, maxHp: 9999 }))
+
+  it('ff の再生待ちが上限に達している間は ATB の時間が止まり（敵が行動を積まない）、追いつくと再開する', () => {
+    const { s, engine } = build(
+      [ent('hero', { hp: 9999, maxHp: 9999 })],
+      fastEnemies(),
+      ATB({}, 'active'),
+      { layout: 'side', presentation: 'ff' }
+    )
+    const pb = () => (s as unknown as PlaybackInternals).playback
+    let backedUp = 0
+    let maxQueue = 0
+    let resumed = false
+    for (let i = 0; i < 4000; i++) {
+      const wasBacked = pb().queue.length >= ATB_PLAYBACK_QUEUE_MAX
+      const before = engine.getState().eventTotal
+      s.tick(10)
+      if (wasBacked) {
+        backedUp++
+        expect(engine.getState().eventTotal).toBe(before)
+      } else if (backedUp > 0 && engine.getState().eventTotal > before) {
+        resumed = true
+      }
+      maxQueue = Math.max(maxQueue, pb().queue.length)
+    }
+    expect(backedUp).toBeGreaterThan(0)
+    expect(resumed).toBe(true)
+    // 1 tick で複数の敵が同時に行動してもその分（敵の数）を超えて溜まらない
+    expect(maxQueue).toBeLessThan(ATB_PLAYBACK_QUEUE_MAX + 5)
+  })
+
+  it('dq（演出キューを使わない）の ATB は上限の影響を受けず、従来どおり進む', () => {
+    const { s, engine } = build(
+      [ent('hero', { hp: 9999, maxHp: 9999 })],
+      fastEnemies(),
+      ATB({}, 'active'),
+      { layout: 'side' }
+    )
+    for (let i = 0; i < 200; i++) s.tick(10)
+    expect(engine.getState().eventTotal).toBeGreaterThan(ATB_PLAYBACK_QUEUE_MAX)
   })
 })

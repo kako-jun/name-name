@@ -6,12 +6,19 @@ import {
   ENEMY_LIST_MIN_FONT,
   ENEMY_LIST_PADDING,
   enemyListLines,
+  enemyListStatusPrefix,
+  enemyListTextTop,
   enemyListRowText,
   fitEnemyListFont,
   fitEnemyListRowText,
   normalizeBattleEnemyList,
 } from './battleEnemyList'
-import { estimateTextWidth } from './battleLayout'
+import {
+  SIDE_STATUS_FONT_SIZE,
+  SIDE_STATUS_ROW_HEIGHT,
+  SIDE_STATUS_VERTICAL_PADDING,
+  estimateTextWidth,
+} from './battleLayout'
 
 const e = (name: string, hp = 10) => ({ name, hp })
 
@@ -134,6 +141,80 @@ describe('fitEnemyListFont: 幅で縮める', () => {
     expect(fit.fontSize).toBe(ENEMY_LIST_MIN_FONT)
     const lines = enemyListLines(rows, fit, 160)
     expect(lines[lines.length - 1]).toBe('…')
+  })
+})
+
+describe('fitEnemyListFont: 出ない行は幅の計算に入れない (#954 後続)', () => {
+  const row = (name: string, count = 1) => ({ name, count })
+  it('高さあふれで出ない（「…」に置き換わる）長い名前の行のために、他の行を縮めない', () => {
+    // 3 行で窓高 71: 14px では 2 行しか出ず、最後の行は出ない。出ない行が長くても 14px のまま
+    const rows = [row('A0'), row('A1'), row('ながいなまえのてきがいる')]
+    const fit = fitEnemyListFont(3, 71, { rows, windowWidth: 96 })
+    expect(fit.visibleRows).toBe(2)
+    expect(fit.fontSize).toBe(ENEMY_LIST_MAX_FONT)
+    expect(enemyListLines(rows, fit, 96)).toEqual(['A0', '…'])
+  })
+  it('出る行が長ければ従来どおり縮める', () => {
+    const rows = [row('ながいなまえのてきがいる'), row('A1'), row('A2')]
+    const fit = fitEnemyListFont(3, 71, { rows, windowWidth: 96 })
+    expect(fit.fontSize).toBeLessThan(ENEMY_LIST_MAX_FONT)
+  })
+})
+
+describe('状態異常つきの行 (#954 後続)', () => {
+  it('同名でも状態が違えば別の行。状態は先頭に [..] で付く', () => {
+    const rows = aggregateEnemyList([
+      { name: 'スライム', hp: 5, status: ['どく'] },
+      { name: 'スライム', hp: 5 },
+      { name: 'スライム', hp: 5 },
+      { name: 'スライム', hp: 5, status: ['どく'] },
+    ])
+    expect(rows.map(enemyListRowText)).toEqual(['[どく] スライム ×2', 'スライム ×2'])
+  })
+  it('状態つきの敵が倒れたら、その行ごと消える', () => {
+    const rows = aggregateEnemyList([
+      { name: 'スライム', hp: 0, status: ['どく'] },
+      { name: 'スライム', hp: 5 },
+    ])
+    expect(rows.map(enemyListRowText)).toEqual(['スライム'])
+  })
+  it('複数の状態は「・」でつなぐ。状態なし・空配列は前置きなし', () => {
+    expect(enemyListStatusPrefix({ name: 'a', count: 1, status: ['どく', 'ねむり'] })).toBe(
+      '[どく・ねむり] '
+    )
+    expect(enemyListStatusPrefix({ name: 'a', count: 1, status: [] })).toBe('')
+    expect(enemyListStatusPrefix({ name: 'a', count: 1 })).toBe('')
+  })
+  it('狭いときは名前を省略して、先頭の状態と ×N を残す', () => {
+    const row = { name: 'ABCDEFGHIJKLMNOP', count: 2, status: ['どく'] }
+    const t = fitEnemyListRowText(row, 120, 14)
+    expect(t.startsWith('[どく] ')).toBe(true)
+    expect(t.endsWith(' ×2')).toBe(true)
+    expect(t).toContain('…')
+    expect(estimateTextWidth(t, 14)).toBeLessThanOrEqual(120 - ENEMY_LIST_PADDING * 2)
+  })
+})
+
+describe('enemyListTextTop: 1 行目を status 窓の 1 行目にそろえる (#954 後続)', () => {
+  it('14px・1 行目の文字の y が status 窓の 1 行目の文字と一致する', () => {
+    const fit = fitEnemyListFont(2, 120)
+    const statusFirstY =
+      SIDE_STATUS_VERTICAL_PADDING / 2 + (SIDE_STATUS_ROW_HEIGHT - SIDE_STATUS_FONT_SIZE) / 2
+    const listFirstY = enemyListTextTop(120, fit) + (fit.lineHeight - fit.fontSize) / 2
+    expect(fit.fontSize).toBe(14)
+    expect(listFirstY).toBe(statusFirstY)
+  })
+  it('行ブロックが窓の下余白を食うときは上へ詰め、上余白は ENEMY_LIST_PADDING を割らない', () => {
+    for (const h of [40, 60, 71, 90, 120, 200]) {
+      for (const n of [1, 3, 6, 12]) {
+        const fit = fitEnemyListFont(n, h)
+        const top = enemyListTextTop(h, fit)
+        expect(top).toBeGreaterThanOrEqual(ENEMY_LIST_PADDING)
+        expect(top + fit.visibleRows * fit.lineHeight).toBeLessThanOrEqual(
+          h - ENEMY_LIST_PADDING + 1e-9
+        )
+      }
+    }
   })
 })
 
