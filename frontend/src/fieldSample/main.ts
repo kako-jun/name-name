@@ -152,6 +152,7 @@ import { FieldMenuHost } from '../game/fieldMenuHost'
 import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
+import { resolveGear } from '../game/gearShop'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
@@ -679,7 +680,18 @@ async function main(): Promise<void> {
   let inventory: Record<string, number> = resumed
     ? { ...resumed.inventory }
     : Object.fromEntries(config.items.map((it) => [it.id, it.count ?? 0]))
-  const equipment: Record<string, string[]> = resumed ? structuredClone(resumed.equipment) : {}
+  // 刀・防具の購入済み・装備中の刀 (#881)。売り物の定義 `gearShop` があるゲームだけ持ち、保存し直しでも書き戻す（無いゲームは従来どおり書かない）。
+  // 定義と合わない分（消えた刀・持ち主違い）は警告して捨て、装備列からも外す
+  const gearResolved = config.gearShop
+    ? resolveGear(resumed?.gear, config.gearShop, resumed?.equipment)
+    : undefined
+  for (const w of gearResolved?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
+  const gear = gearResolved?.state
+  const equipment: Record<string, string[]> = gearResolved?.equipment
+    ? structuredClone(gearResolved.equipment)
+    : resumed
+      ? structuredClone(resumed.equipment)
+      : {}
   let gold = resumed ? resumed.gold : 0
   // プレイ時間・歩数 (#880)。保存対象（rpgSave の playMs / steps。全画面メニューを設定したゲームだけ書く）。
   // プレイ時間は FF 同様メニュー中・戦闘中も進み、歩数は歩いたときだけ増える
@@ -737,6 +749,8 @@ async function main(): Promise<void> {
         gold,
         // プレイ時間・歩数は全画面メニュー (#880) を設定したゲームだけ書く（無いゲームのセーブは従来どおり）
         ...(menuCfg ? { playMs: stats.playMs, steps: stats.steps } : {}),
+        // 刀・防具 (#881)。売り物の定義があるゲームだけ書く
+        ...(gear ? { gear } : {}),
         field: { sceneId, x: pos.x, y: pos.y, facing, flags: { ...flags } },
         ...(battleState ? { battle: battleState } : {}),
       },

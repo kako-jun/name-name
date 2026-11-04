@@ -211,13 +211,81 @@ describe('equipBlade（equipItem を再利用）', () => {
       reason: 'otherOwner',
       equipment: [],
     })
-    expect(equipBlade(cfg, st, def, roster, [], 'vest').reason).toBe('unknown')
+    expect(equipBlade(cfg, st, def, roster, [], 'vest')).toMatchObject({
+      reason: 'notBlade',
+      message: '刀ではありません',
+    })
     expect(equipBlade(cfg, st, def, roster, [], 'zzz').reason).toBe('unknown')
   })
   it('equipItem が拒否したら（アイテム宣言なし）失敗し、装備中も変えない', () => {
     const r = equipBlade(cfg, st, def, { items: {} }, ['a1'], 'a2')
     expect(r).toMatchObject({ ok: false, reason: 'equipFailed', equipment: ['a1'] })
     expect(r.state.blade).toEqual({})
+  })
+})
+
+describe('新しい挙動 (#881 レビュー)', () => {
+  it('購入済みには値段を付けない', () => {
+    expect(canBuy(cfg, own(['a1']), 'p1', 'a1', 9999).price).toBeUndefined()
+  })
+  it('桁あふれは uncomputable（unbuyable と文言が違う）', () => {
+    const c: GearShopConfig = {
+      multiplier: 1e300,
+      entries: [{ id: 'x', kind: 'blade', owner: 'p1', basePrice: 1e300 }],
+    }
+    const r = canBuy(c, emptyGearState(), 'p1', 'x', Infinity)
+    expect(r).toMatchObject({ ok: false, reason: 'uncomputable', message: '値段を計算できません' })
+    expect(r.message).not.toBe(canBuy(cfg, emptyGearState(), 'p1', 'nobase', 1).message)
+  })
+  it('multiplier が文字列のまま（型を破った定義）でも購入は NaN 価格にならず通る/落ちる', () => {
+    const c = { multiplier: '2' as unknown as number, entries: cfg.entries }
+    const r = canBuy(c, own(['a1']), 'p1', 'a2', 99999)
+    // 文字列の '2' は Math.pow で数に変換されるため 200。NaN になった場合は uncomputable で拒否される
+    expect(r.ok ? r.price : r.reason).toBe(200)
+    const bad = { multiplier: 'x' as unknown as number, entries: cfg.entries }
+    expect(canBuy(bad, own(['a1']), 'p1', 'a2', 99999)).toMatchObject({
+      ok: false,
+      reason: 'uncomputable',
+    })
+  })
+  const items: Record<string, ItemDef> = {
+    a1: { id: 'a1', name: 'A1', kind: '武器' },
+    a2: { id: 'a2', name: 'A2', kind: '武器' },
+    outside: { id: 'outside', name: 'O', kind: '武器' },
+  }
+  it('同じ刀の再装備（prev === id）は変更なしで ok', () => {
+    const st = own(['a1'])
+    const r1 = equipBlade(cfg, st, { id: 'p1' }, { items }, [], 'a1')
+    const r2 = equipBlade(cfg, r1.state, { id: 'p1' }, { items }, r1.equipment, 'a1')
+    expect(r2).toMatchObject({ ok: true, equipment: ['a1'] })
+    expect(equippedBlade(r2.state, 'p1')).toBe('a1')
+  })
+  it('店の外の武器を押し出す持ち替えは replaced に出る', () => {
+    const r = equipBlade(cfg, own(['a1']), { id: 'p1' }, { items }, ['outside'], 'a1')
+    expect(r).toMatchObject({ ok: true, equipment: ['a1'], replaced: 'outside' })
+  })
+  it('直前の刀からの持ち替えでは replaced は出ない', () => {
+    const st = own(['a1', 'a2'])
+    const r1 = equipBlade(cfg, st, { id: 'p1' }, { items }, [], 'a1')
+    const r2 = equipBlade(cfg, r1.state, { id: 'p1' }, { items }, r1.equipment, 'a2')
+    expect('replaced' in r2).toBe(false)
+  })
+  it('resolveGear: 装備列から外した刀を除く（定義から消えた・持ち主違い・未購入）。刀以外は残す', () => {
+    const saved: GearState = {
+      owned: { p1: ['a1', 'gone'], p2: ['a2'] },
+      blade: { p1: 'gone', p2: 'a2' },
+    }
+    const equipment = { p1: ['gone', 'vest', 'a1', 'x'], p2: ['a2', 'b1'], p3: ['a1'] }
+    const r = resolveGear(saved, cfg, equipment)
+    expect(r.equipment).toEqual({ p1: ['vest', 'a1', 'x'], p2: [], p3: [] })
+    expect(r.state.blade).toEqual({})
+    expect(equipment.p1).toEqual(['gone', 'vest', 'a1', 'x']) // 入力は変えない
+    expect(r.warnings.some((w) => w.startsWith('equipment.p1'))).toBe(true)
+  })
+  it('resolveGear: 購入済みで装備中の正常な刀は装備列に残り、equipment を渡さなければ返さない', () => {
+    const saved: GearState = { owned: { p1: ['a1'] }, blade: { p1: 'a1' } }
+    expect(resolveGear(saved, cfg, { p1: ['a1'] }).equipment).toEqual({ p1: ['a1'] })
+    expect('equipment' in resolveGear(saved, cfg)).toBe(false)
   })
 })
 
@@ -262,7 +330,7 @@ describe('parseGearShopConfig', () => {
       unlockFlag: 'phone',
     })
   })
-  it('画像: image / 画像 のどちらでも読まれ、無ければキーなし・不正は警告して画像なし', () => {
+  it('画像: image が読まれ、無ければキーなし・不正は警告して画像なし。別名 画像 は読まない', () => {
     const r = parseGearShopConfig({
       entries: [
         { id: 'a', kind: 'blade', owner: 'p', image: 'dummy/blade-a.png' }, // 仮パス（マスターからの派生画像は未作成）
@@ -273,10 +341,22 @@ describe('parseGearShopConfig', () => {
     })
     const e = r.value!.entries
     expect(e[0].image).toBe('dummy/blade-a.png')
-    expect(e[1].image).toBe('dummy/b.png')
+    expect('image' in e[1]).toBe(false)
     expect('image' in e[2]).toBe(false)
     expect('image' in e[3]).toBe(false)
     expect(r.warnings.filter((w) => /image/.test(w))).toHaveLength(1)
+  })
+  it('同じ owner の刀の basePrice が食い違うと警告（揃っていれば・別人なら出ない）', () => {
+    const mk = (a: number, b: number, owner2 = 'p') =>
+      parseGearShopConfig({
+        entries: [
+          { id: 'x', kind: 'blade', owner: 'p', basePrice: a },
+          { id: 'y', kind: 'blade', owner: owner2, basePrice: b },
+        ],
+      })
+    expect(mk(100, 200).warnings.some((w) => /basePrice が食い違/.test(w))).toBe(true)
+    expect(mk(100, 100).warnings).toEqual([])
+    expect(mk(100, 200, 'q').warnings).toEqual([])
   })
   it('基準額なしの刀は値段キーなしで読まれる（購入不可）', () => {
     const r = parseGearShopConfig({ entries: [{ id: 'a1', kind: 'blade', owner: 'p1' }] })
@@ -384,6 +464,34 @@ describe('セーブ往復（RpgSaveState.gear）', () => {
     )
     expect(snap.gear).toEqual(gear)
     expect(parseRpgSave(JSON.parse(JSON.stringify(snap))).ok).toBe(true)
+  })
+  it('__proto__ キーの人物も往復で失われず、プロトタイプも汚れない', () => {
+    const raw = JSON.parse(
+      JSON.stringify({
+        ...declared(),
+        gear: { owned: { ['__proto__']: ['a1'] }, blade: { ['__proto__']: 'a1' } },
+      })
+    )
+    const text = JSON.stringify(raw)
+    expect(text).toContain('"__proto__"')
+    const parsed = parseRpgSave(JSON.parse(text))
+    expect(parsed.ok).toBe(true)
+    const g = resolveRpg(JSON.parse(text), base).gear!
+    expect(Object.keys(g.owned)).toEqual(['__proto__'])
+    const c: GearShopConfig = {
+      multiplier: 2,
+      entries: [{ id: 'a1', kind: 'blade', owner: '__proto__', basePrice: 10 }],
+    }
+    const r = resolveGear(g, c, { ['__proto__']: ['a1'] })
+    expect(Object.keys(r.state.owned)).toEqual(['__proto__'])
+    expect(Object.keys(r.state.blade)).toEqual(['__proto__'])
+    expect(Object.keys(r.equipment!)).toEqual(['__proto__'])
+    expect(({} as Record<string, unknown>).a1).toBeUndefined()
+    const snap = snapshotRpg(
+      { party: [], inventory: {}, equipment: {}, gold: 0, gear: r.state },
+      base
+    )
+    expect(Object.keys(JSON.parse(JSON.stringify(snap)).gear.owned)).toEqual(['__proto__'])
   })
   it('不正な gear は理由つきで失敗', () => {
     const r = parseRpgSave(declared({ gear: { owned: { p1: [3] }, blade: {} } }))

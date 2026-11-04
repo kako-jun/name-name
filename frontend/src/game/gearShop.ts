@@ -30,7 +30,7 @@ export interface GearEntry {
   basePrice?: number
   /** 防具の固定価格（円）。無ければ購入不可（未決） */
   price?: number
-  /** 購入解禁のフラグ名。省略 = 常に解禁。そのフラグが true になるまで購入不可 */
+  /** 購入解禁のフラグ名。省略 = 常に解禁。そのフラグが true になるまで購入不可（仕様では 2 本目以降は解禁制ではないので、刀には使わない前提。防具・将来用） */
   unlockFlag?: string
   /** 一覧に出す画像のパス（任意の文字列。sit-by-me の刀マスターから切り出した派生画像を指す想定だが、派生画像は未作成）。省略 = 画像なし（文字のみ）。読み込み・表示は段階2の UI */
   image?: string
@@ -58,7 +58,9 @@ export type GearBlockReason =
   | 'unknown' // 売り物にない id
   | 'otherOwner' // 他人の刀
   | 'owned' // 購入済み
-  | 'unbuyable' // 値段が未決（基準額・価格なし、または計算できない）
+  | 'unbuyable' // 値段が未決（基準額・価格なし）
+  | 'uncomputable' // 値段を計算できない（桁あふれ）
+  | 'notBlade' // 刀ではない品（刀の持ち替えのみ）
   | 'locked' // 解禁前
   | 'notEnoughGold' // 所持金不足
   | 'notOwned' // 未購入の品は装備できない（装備のみ）
@@ -85,6 +87,8 @@ const MESSAGES: Record<GearBlockReason, string> = {
   otherOwner: '他の人の刀は使えません',
   owned: '購入済み',
   unbuyable: '値段が決まっていないため買えません',
+  uncomputable: '値段を計算できません',
+  notBlade: '刀ではありません',
   locked: 'まだ買えません',
   notEnoughGold: '所持金が足りません',
   notOwned: 'まだ買っていません',
@@ -132,7 +136,8 @@ export function equippedBlade(state: GearState, member: string): string | undefi
 
 /**
  * いま買うときの値段（円）。刀は `basePrice × multiplier^購入済みの刀の本数`（整数に切り捨て）、防具は固定の `price`。
- * 値段が未決（基準額・価格なし）・計算結果が有限の 0 以上の整数にならない（桁あふれ）は undefined
+ * 値段が未決（基準額・価格なし）・計算結果が有限の 0 以上の整数にならない（桁あふれ）は undefined。
+ * 「何本目か」は所有数で数える（イベントでもらった刀も 1 本と数える。**仮。仕様では未決**）
  */
 export function priceOf(
   cfg: GearShopConfig,
@@ -140,12 +145,23 @@ export function priceOf(
   member: string,
   id: string
 ): number | undefined {
+  const p = computePrice(cfg, state, member, id)
+  return typeof p === 'number' ? p : undefined
+}
+
+/** 値段の計算。数なら値段、`'unset'` は基準額・価格なし（未決。売り物にない id も）、`'overflow'` は計算結果が使えない（桁あふれ） */
+function computePrice(
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string,
+  id: string
+): number | 'unset' | 'overflow' {
   const e = findEntry(cfg, id)
-  if (!e) return undefined
-  if (e.kind === 'armor') return isValidPrice(e.price) ? e.price : undefined
-  if (!isValidPrice(e.basePrice)) return undefined
+  if (!e) return 'unset'
+  if (e.kind === 'armor') return isValidPrice(e.price) ? e.price : 'unset'
+  if (!isValidPrice(e.basePrice)) return 'unset'
   const p = Math.floor(e.basePrice * Math.pow(cfg.multiplier, ownedBladeCount(cfg, state, member)))
-  return Number.isSafeInteger(p) && p >= 0 ? p : undefined
+  return Number.isSafeInteger(p) && p >= 0 ? p : 'overflow'
 }
 
 const isValidPrice = (v: unknown): v is number =>
@@ -167,9 +183,11 @@ export function canBuy(
   if (!e) return block('unknown')
   if (e.kind === 'blade' && e.owner !== member) return block('otherOwner')
   if (e.kind === 'armor' && e.owner !== undefined && e.owner !== member) return block('otherOwner')
-  const price = priceOf(cfg, state, member, id)
-  if (isOwned(state, member, id)) return block('owned', price)
-  if (price === undefined) return block('unbuyable')
+  // 購入済みには次の値段を付けない（その品はもう買えない）
+  if (isOwned(state, member, id)) return block('owned')
+  const price = computePrice(cfg, state, member, id)
+  if (price === 'unset') return block('unbuyable')
+  if (price === 'overflow') return block('uncomputable')
   if (e.unlockFlag !== undefined && !(hasOwn(flags, e.unlockFlag) && flags[e.unlockFlag] === true))
     return block('locked', price)
   if (!(Number.isFinite(gold) && gold >= price)) return block('notEnoughGold', price)
@@ -199,6 +217,8 @@ export interface EquipBladeResult {
   state: GearState
   /** 変更後の装備列（`RpgSaveState.equipment` の当該人物の値）。失敗時は入力のまま */
   equipment: string[]
+  /** 枠が埋まっていて `equipItem` が入れ替えた品の id（店の外の武器など。直前の刀は列から先に外すのでここには出ない） */
+  replaced?: string
   reason?: GearBlockReason | 'equipFailed'
   message?: string
 }
@@ -228,7 +248,8 @@ export function equipBlade(
     message,
   })
   const e = findEntry(cfg, id)
-  if (!e || e.kind !== 'blade') return fail('unknown', MESSAGES.unknown)
+  if (!e) return fail('unknown', MESSAGES.unknown)
+  if (e.kind !== 'blade') return fail('notBlade', MESSAGES.notBlade)
   if (e.owner !== member) return fail('otherOwner', MESSAGES.otherOwner)
   if (!isOwned(state, member, id)) return fail('notOwned', MESSAGES.notOwned)
   // 直前の刀を外してから付ける（武器枠が複数あっても「持ち替え」は 1 本だけが装備中）
@@ -238,30 +259,51 @@ export function equipBlade(
   if (!r.ok) return fail('equipFailed', r.reason ?? `'${id}' は装備できません`)
   const next = cloneState(state)
   safeAssign(next.blade, member, id)
-  return { ok: true, state: next, equipment: r.equipment }
+  return {
+    ok: true,
+    state: next,
+    equipment: r.equipment,
+    ...(r.replaced !== undefined ? { replaced: r.replaced } : {}),
+  }
 }
 
 /** 解決の結果（セーブから読んだ状態を定義と突き合わせたもの） */
 export interface ResolvedGear {
   state: GearState
+  /** 掃除済みの装備列（人物 id → 装備の id の列）。`equipment` を渡したときだけ。外した刀の id を除いてある */
+  equipment?: Record<string, string[]>
   warnings: string[]
 }
 
 /**
  * セーブから読んだ状態を定義と突き合わせる。定義にない品・他人の刀・重複は警告して捨て、
- * 未購入の刀を「装備中」にしているものは装備中を外す（警告）
+ * 未購入の刀を「装備中」にしているものは装備中を外す（警告）。
+ * 装備列 `equipment`（`RpgSaveState.equipment`）を渡すと、外した刀（定義から消えた・持ち主が変わった・未購入）の id を
+ * その人物の列からも除いた `equipment` を返す（入力は変えない）。刀以外の id は触らない
  */
-export function resolveGear(saved: GearState | undefined, cfg: GearShopConfig): ResolvedGear {
+export function resolveGear(
+  saved: GearState | undefined,
+  cfg: GearShopConfig,
+  equipment?: Readonly<Record<string, string[]>>
+): ResolvedGear {
   const warnings: string[] = []
   const state = emptyGearState()
-  if (!saved) return { state, warnings }
-  for (const member of Object.keys(saved.owned)) {
+  // 外す刀: 人物 id → 装備列から除く id（定義にもう無い id は、`blade` に記録された装備中の刀だけが手掛かり）
+  const dropped: Record<string, string[]> = {}
+  const drop = (member: string, id: string) => {
+    const list = hasOwn(dropped, member) ? dropped[member] : []
+    if (!list.includes(id)) safeAssign(dropped, member, [...list, id])
+  }
+  const savedOwned = saved?.owned ?? {}
+  const savedBlade = saved?.blade ?? {}
+  for (const member of Object.keys(savedOwned)) {
     const kept: string[] = []
-    for (const id of saved.owned[member]) {
+    for (const id of savedOwned[member]) {
       const e = findEntry(cfg, id)
       if (!e) warnings.push(`gear.owned.${member} '${id}' は売り物の定義にありません（無視）`)
       else if (e.owner !== undefined && e.owner !== member)
         warnings.push(`gear.owned.${member} '${id}' は他の人の品です（無視）`)
+      // 防御: パースは owner なしの刀を捨てるので通常は届かない（手で組んだ定義のため残す）
       else if (e.kind === 'blade' && e.owner === undefined)
         warnings.push(`gear.owned.${member} '${id}' は持ち主のない刀です（無視）`)
       else if (kept.includes(id)) warnings.push(`gear.owned.${member} '${id}' が重複しています`)
@@ -269,13 +311,27 @@ export function resolveGear(saved: GearState | undefined, cfg: GearShopConfig): 
     }
     safeAssign(state.owned, member, kept)
   }
-  for (const member of Object.keys(saved.blade)) {
-    const id = saved.blade[member]
-    if (findEntry(cfg, id)?.kind !== 'blade' || !isOwned(state, member, id))
+  for (const member of Object.keys(savedBlade)) {
+    const id = savedBlade[member]
+    if (findEntry(cfg, id)?.kind !== 'blade' || !isOwned(state, member, id)) {
       warnings.push(`gear.blade.${member} '${id}' は購入済みの刀ではありません（装備中を外す）`)
-    else safeAssign(state.blade, member, id)
+      drop(member, id)
+    } else safeAssign(state.blade, member, id)
   }
-  return { state, warnings }
+  if (!equipment) return { state, warnings }
+  const cleaned: Record<string, string[]> = {}
+  for (const member of Object.keys(equipment)) {
+    const out = equipment[member].filter((id) => {
+      const e = findEntry(cfg, id)
+      const bad =
+        (hasOwn(dropped, member) && dropped[member].includes(id)) ||
+        (e?.kind === 'blade' && (e.owner !== member || !isOwned(state, member, id)))
+      if (bad) warnings.push(`equipment.${member} '${id}' は使えない刀のため装備列から外した`)
+      return !bad
+    })
+    safeAssign(cleaned, member, out)
+  }
+  return { state, equipment: cleaned, warnings }
 }
 
 // ---- 設定 JSON ----
@@ -292,7 +348,7 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 /**
  * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image? }] }`。
  * 不正な項目は警告して捨てる。`gearShop` が無い（undefined / false / null）はキーなし＝従来どおり。
- * 値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
+ * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
  */
 export function parseGearShopConfig(raw: unknown): ParsedGearShop {
   const warnings: string[] = []
@@ -363,8 +419,8 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
       if (typeof it.unlockFlag === 'string' && it.unlockFlag) entry.unlockFlag = it.unlockFlag
       else warnings.push(`${where}.unlockFlag は文字列にしてください（常に解禁として扱います）`)
     }
-    // 画像: `image`（`画像` でも可）。空・文字列以外は警告して画像なし
-    const imageRaw = it.image !== undefined ? it.image : it['画像']
+    // 画像: 空・文字列以外は警告して画像なし
+    const imageRaw = it.image
     if (imageRaw !== undefined) {
       if (typeof imageRaw === 'string' && imageRaw.trim()) entry.image = imageRaw.trim()
       else warnings.push(`${where}.image は文字列のパスにしてください（画像なしにします）`)
@@ -372,6 +428,18 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
     seen.add(it.id)
     entries.push(entry)
   })
+  // 仕様の「人物ごとの 1 本目の基準額」は人物内で揃える前提。食い違いは意図かもしれないので警告だけ
+  const basePrices: Record<string, Set<number>> = {}
+  for (const e of entries) {
+    if (e.kind !== 'blade' || e.owner === undefined || e.basePrice === undefined) continue
+    if (!hasOwn(basePrices, e.owner)) safeAssign(basePrices, e.owner, new Set<number>())
+    basePrices[e.owner].add(e.basePrice)
+  }
+  for (const owner of Object.keys(basePrices))
+    if (basePrices[owner].size > 1)
+      warnings.push(
+        `gearShop: ${owner} の刀の basePrice が食い違っています（仕様では人物ごとの 1 本目の基準額に揃える前提です）`
+      )
   return { value: { multiplier, entries }, warnings }
 }
 
