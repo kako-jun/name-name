@@ -3409,7 +3409,7 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     expect(v.acrylicShadow!.x - v.shadowBaseX).toBeCloseTo(v.container.x - v.baseX, 6)
   })
 
-  it('down の絵がある味方は倒れても沈まず不透明、無ければ沈んで薄くなる', async () => {
+  it('down の絵がある味方は倒れても沈まず不透明、無ければ（アクスタは）真横に倒れて残る', async () => {
     const a = await setup({ hp: 1, maxHp: 1 }, 999, true)
     const va = pv(a.s)
     act(a.s, a.engine)
@@ -3421,8 +3421,170 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
     const vb = pv(b.s)
     act(b.s, b.engine)
     run(b.s, 5000)
-    expect(vb.container.y).toBeGreaterThan(vb.baseY)
-    expect(vb.container.alpha).toBeLessThan(1)
+    // アクスタ表示 (#953): 倒れの絵が無い者は沈み込みでなく、足元支点に約 90° 倒れたまま残る（薄くならない）
+    expect(Math.abs((vb.container.rotation * 180) / Math.PI)).toBeCloseTo(90, 0)
+    expect(vb.container.alpha).toBe(1)
+  })
+
+  describe('アクスタの被弾の傾き・倒れ・敵のモザイク消滅 (#953)', () => {
+    interface RV {
+      container: Container
+      sprite: Sprite
+      baseX: number
+      baseY: number
+    }
+    const views = (s: BattleScreen) => s as unknown as { partyViews: RV[]; enemyViews: RV[] }
+    async function mk(opts: {
+      spriteStyle?: 'acrylic' | 'none'
+      partyHp?: number
+      enemyHp?: number
+      motion?: 'snappy' | 'default'
+    }) {
+      const hero = entity('hero', {
+        sprite: 'img/hero.webp',
+        hp: opts.partyHp ?? 20,
+        maxHp: 20,
+        agi: 99,
+      })
+      const slime = entity('slime', {
+        sprite: 'img/slime.webp',
+        atk: 1,
+        hp: opts.enemyHp ?? 999,
+        maxHp: opts.enemyHp ?? 999,
+        agi: 1,
+      })
+      const engine = new BattleEngine([hero], [slime], { rng: () => 0.5 })
+      const s = track(
+        new BattleScreen(engine, 800, 450, {
+          layout: 'side',
+          spriteStyle: opts.spriteStyle ?? 'acrylic',
+          presentation: 'ff',
+          motion: opts.motion ?? 'snappy',
+        })
+      )
+      await flushPromises()
+      await flushPromises()
+      await flushPromises()
+      return { s, engine, v: views(s) }
+    }
+    const deg = (c: Container) => (c.rotation * 180) / Math.PI
+    function track2(s: BattleScreen, side: 'party' | 'enemy', ms: number) {
+      const rot: number[] = []
+      const mosaic: number[] = []
+      const alpha: number[] = []
+      for (let t = 0; t < ms; t += 4) {
+        s.tick(4)
+        const c = views(s)[side === 'party' ? 'partyViews' : 'enemyViews'][0].container
+        rot.push(deg(c))
+        alpha.push(c.alpha)
+        const f = c.filters as unknown as { sizeX: number }[] | null
+        mosaic.push(f && f.length ? f[0].sizeX : 0)
+      }
+      return { rot, mosaic, alpha }
+    }
+
+    it('敵の被弾: 足元支点で傾いて戻る（向きは味方と反対＝のけぞりと同じ側）、モザイクなし', async () => {
+      const { s, engine, v } = await mk({})
+      engine.selectAttack()
+      s.redraw(800, 450)
+      const r = track2(s, 'enemy', 420)
+      const peak = Math.max(...r.rot.map(Math.abs))
+      expect(peak).toBeCloseTo(18, 0)
+      expect(Math.sign(r.rot.find((x) => Math.abs(x) > 5) ?? 0)).toBe(-1) // 敵は逆向き（味方 +）
+      expect(r.mosaic.every((m) => m === 0)).toBe(true)
+      expect(Math.abs(deg(v.enemyViews[0].container))).toBeLessThan(0.5)
+      // 足元が動かない: pivot は絵の下端中央、container の画面位置 = base + pivot
+      const sp = v.enemyViews[0].sprite
+      expect(v.enemyViews[0].container.pivot.y).toBeCloseTo(0, 6) // 戻った後は pivot を外す
+      void sp
+    })
+
+    it('味方の被弾: 傾いて戻る・モザイクなし・向きは敵と反対', async () => {
+      const { s, v } = await mk({})
+      v.partyViews[0].container.rotation = 0
+      // 敵の行動を進める: 味方の行動を飛ばして敵の攻撃を再生
+      const eng = (s as unknown as { engine: BattleEngine }).engine
+      eng.selectAttack()
+      s.redraw(800, 450)
+      const r = track2(s, 'party', 3000)
+      expect(r.mosaic.every((m) => m === 0)).toBe(true)
+      const first = r.rot.find((x) => Math.abs(x) > 5)
+      if (first !== undefined) expect(Math.sign(first)).toBe(1)
+    })
+
+    it('敵の死亡: 傾き → 約90° 真横 → モザイクで消える（薄くして消さない）', async () => {
+      const { s, engine, v } = await mk({ enemyHp: 1 })
+      engine.selectAttack()
+      s.redraw(800, 450)
+      const r = track2(s, 'enemy', 1500)
+      const peak = Math.max(...r.rot.map(Math.abs))
+      expect(peak).toBeCloseTo(90, 0)
+      expect(Math.max(...r.mosaic)).toBeGreaterThan(8)
+      // 倒れ切る前に半透明にならない（従来の薄れ表現は使わない）。消える最後だけ 0
+      const lyingIdx = r.rot.findIndex((x) => Math.abs(x) > 85)
+      expect(r.alpha.slice(0, lyingIdx).every((a) => a === 1)).toBe(true)
+      expect(r.alpha.slice(lyingIdx).every((a) => a === 1 || a === 0)).toBe(true)
+      expect(v.enemyViews[0].container.alpha).toBe(0)
+      expect(v.enemyViews[0].container.filters ?? []).toHaveLength(0)
+    })
+
+    it('味方の死亡: 約90° 真横に倒れたまま残る（消えない・薄くならない）', async () => {
+      const { s, engine, v } = await mk({ partyHp: 1 })
+      void engine
+      // 敵が先に動くよう agi を入れ替えず、味方の行動のあと敵の反撃を待つ
+      engine.selectAttack()
+      s.redraw(800, 450)
+      const r = track2(s, 'party', 4000)
+      expect(Math.max(...r.rot.map(Math.abs))).toBeCloseTo(90, 0)
+      const c = v.partyViews[0].container
+      expect(Math.abs(deg(c))).toBeCloseTo(90, 0)
+      expect(c.alpha).toBe(1)
+      expect(c.filters ?? []).toHaveLength(0)
+    })
+
+    it('アクスタでない従来表示は回転も消滅モザイクも付かず、薄れて消える従来のまま', async () => {
+      const { s, engine, v } = await mk({ spriteStyle: 'none', enemyHp: 1 })
+      engine.selectAttack()
+      s.redraw(800, 450)
+      const r = track2(s, 'enemy', 1500)
+      expect(r.rot.every((x) => x === 0)).toBe(true)
+      expect(r.mosaic.every((m) => m === 0)).toBe(true)
+      expect(v.enemyViews[0].container.alpha).toBeLessThan(1)
+    })
+  })
+
+  describe('味方の被弾 (#953): モザイクでなく hurt ポーズ絵 + のけぞり', () => {
+    const withHurt = { ...poses, hurt: 'img/hurt.webp' }
+    async function hitRun(poseSet: Record<string, string>) {
+      const { s, engine } = await setup({ poses: poseSet })
+      const v = pv(s)
+      engine.selectAttack()
+      s.redraw(800, 450)
+      const shown = new Set<Texture>()
+      let maxRecoil = 0
+      let filtered = false
+      for (let t = 0; t < 4000; t += 4) {
+        s.tick(4)
+        if (v.shownVisual) shown.add(v.shownVisual.texture)
+        maxRecoil = Math.max(maxRecoil, Math.abs(v.container.x - v.baseX))
+        if (v.container.filters && v.container.filters.length > 0) filtered = true
+      }
+      return { v, shown, maxRecoil, filtered }
+    }
+
+    it('hurt の絵がある味方: 被弾の間 hurt に替わり、モザイクは付かず、終われば idle に戻る', async () => {
+      const r = await hitRun(withHurt)
+      expect(r.shown.has(r.v.poseVisuals.hurt.texture)).toBe(true)
+      expect(r.filtered).toBe(false)
+      expect(r.v.shownVisual!.texture).toBe(r.v.poseVisuals.idle.texture)
+    })
+
+    it('hurt の絵が無い味方: 絵は替わらず（モザイクで代用せず）のけぞるだけ', async () => {
+      const r = await hitRun(poses)
+      expect(r.filtered).toBe(false)
+      expect(r.maxRecoil).toBeGreaterThan(1)
+      expect(r.shown.has(r.v.poseVisuals.slash.texture)).toBe(true) // 自分の攻撃の slash だけ。hurt 由来の絵は無い
+    })
   })
 })
 
