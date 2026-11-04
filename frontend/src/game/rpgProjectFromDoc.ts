@@ -32,7 +32,6 @@ import { normalizeBackgroundDof } from './depthOfField'
 import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
 import { normalizeBattleMotion, normalizeBattlePresentation } from './battleMotion'
 import { normalizeBattleEnemyList } from './battleEnemyList'
-import { normalizeBattleEnemyRow } from './enemyRow'
 import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb } from './battleAtb'
 import { normalizeEnemyGrid, normalizeEnemyWindowOverlapSetting } from './enemyGrid'
@@ -424,10 +423,6 @@ export function rpgProjectFromDoc(
     battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
     battleEnemyGrid,
     battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
-    // side のときだけ効く設定（front は敵の列を描かない）。front では不正値でも警告を出さない
-    ...(normalizeBattleEnemyRow(doc.battle_enemy_row, battleSide)
-      ? { battleEnemyRow: true as const }
-      : {}),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),

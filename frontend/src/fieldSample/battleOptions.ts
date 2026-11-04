@@ -39,7 +39,15 @@ export function buildBattleScreenOptions(
   }
 }
 
-/** BattleEngine に渡すオプション。ATB が有効なときだけ `atb` を渡す（未指定はターン制） */
-export function buildBattleEngineOptions(b: Pick<FieldBattleConfig, 'atb'>): BattleEngineOptions {
-  return b.atb ? { atb: b.atb } : {}
+/**
+ * BattleEngine に渡すオプション。ATB が有効なときだけ `atb` を渡す（未指定はターン制）。
+ * side かつ敵グリッドがあるときは `enemyRow`（最前列でない敵への通常攻撃は半分 #896。設定は無い。BattleScreen に渡すグリッドと同じもの）も渡す
+ */
+export function buildBattleEngineOptions(
+  b: Pick<FieldBattleConfig, 'atb' | 'layout' | 'enemyGrid'>
+): BattleEngineOptions {
+  return {
+    ...(b.atb ? { atb: b.atb } : {}),
+    ...(b.layout === 'side' && b.enemyGrid ? { enemyRow: { grid: b.enemyGrid } } : {}),
+  }
 }

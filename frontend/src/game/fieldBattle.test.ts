@@ -102,11 +102,6 @@ describe('readFieldBattleSettings', () => {
     expect(readFieldBattleSettings(minimalProject()).pixelArt).toBe(false)
   })
 
-  it('敵の前列・後列 (#896) は true のときだけ true（未指定は undefined）', () => {
-    expect(readFieldBattleSettings(minimalProject({ battleEnemyRow: true })).enemyRow).toBe(true)
-    expect(readFieldBattleSettings(minimalProject()).enemyRow).toBeUndefined()
-  })
-
   it('敵グリッド・窓との重なり許容量 (#839) は RPGProject の値がそのまま入り、未指定は undefined', () => {
     const s = readFieldBattleSettings(
       minimalProject({ battleEnemyGrid: { cols: 6, rows: 2 }, battleEnemyWindowOverlap: 0.3 })
@@ -329,7 +324,7 @@ describe('openFieldBattle', () => {
     expect('effects' in open().s.opts).toBe(false)
   })
 
-  describe('敵の前列・後列 (#896)', () => {
+  describe('敵の最前列 (#896)', () => {
     const at = (col: number) => ({ layout: { w: 1, h: 1, scale: 1, at: { col, row: 0 } } })
     /** 勇者（atk 4・rng 0）が奥の敵 b を通常攻撃して減った HP。手前の敵 a は右端の列 */
     const hitBack = (over: Partial<FieldBattleSettings>, layout: 'side' | 'front' = 'side') => {
@@ -345,26 +340,16 @@ describe('openFieldBattle', () => {
       return 99 - b.hp
     }
 
-    it('side で有効 + グリッドあり: 奥の列の敵への通常攻撃は半分（既定 off は等倍）', () => {
-      const full = hitBack({})
-      expect(full).toBe(4)
-      expect(hitBack({ enemyRow: true })).toBe(2)
+    it('side + グリッドあり: 設定なしで、最前列でない敵への通常攻撃は半分', () => {
+      expect(hitBack({})).toBe(2)
     })
 
-    it('front レイアウトでは有効にしても効かない（敵の列を描かない）', () => {
-      expect(hitBack({ enemyRow: true }, 'front')).toBe(4)
+    it('front レイアウトでは効かない（敵の列を描かない）', () => {
+      expect(hitBack({}, 'front')).toBe(4)
     })
 
-    it('グリッド無し + 宣言なしは全員前列（効かない）', () => {
-      vi.spyOn(Math, 'random').mockReturnValue(0)
-      const b = enemy({ id: 'b', hp: 99, maxHp: 99 })
-      const { s } = open({
-        ids: ['hero'],
-        enemies: [enemy({ id: 'a' }), b],
-        settings: { layout: 'side', enemyRow: true },
-      })
-      ;(s.engine as unknown as { selectAttack(id: string): void }).selectAttack('b')
-      expect(99 - b.hp).toBe(4)
+    it('グリッドが無ければ効かない', () => {
+      expect(hitBack({ enemyGrid: undefined })).toBe(4)
     })
   })
 

@@ -175,8 +175,6 @@ export interface MonsterDef {
   size?: { w: number; h: number }
   /** 敵の表示倍率 (#839)。`倍率:` の値（parser が 0.25〜1 に丸め済み。不正は警告して未指定＝1）。占有領域の中で絵を縮める比 */
   scale?: number
-  /** 敵の隊列 (#896)。`隊列: 前衛 | 後衛`（parser が前衛/後衛/前列/後列/front/back だけ通す生文字列。不正は警告して未指定）。`battle_enemy_row: on` のときだけ効く。無ければ `battle_enemy_grid` の列から導出（グリッドも無ければ前列）。解釈は `game/enemyRow.ts` */
-  row?: string
   /** 敵のレベル (#898)。`レベル: N`（別名 `level` / `Lv`。parser が 1〜99 に丸め済み。不正は警告して未指定）。無ければレベル無し。レベル条件の即死（`damage_full レベル倍数=N`）と調整（`level +N|-N|=N`）が使う */
   level?: number
   /** 属性相性 (#872)。`弱点:` / `半減:` / `無効:` / `吸収:` の属性 id（parser が小文字・半角に正規化済み。優先順位 吸収 > 無効 > 半減 > 弱点で重複排除済み）。4 欄とも空なら無い。解釈・倍率は `game/affinity.ts` */
@@ -1191,8 +1189,6 @@ export interface EventDocument {
   battle_enemy_grid?: string | null
   /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5 の数値文字列。frontmatter `battle_enemy_window_overlap:` から流す。不正値・未指定は既定 0.25。GUI 専用。 */
   battle_enemy_window_overlap?: string | null
-  /** RPG 戦闘（`battle_layout: side`）の敵の前列・後列 (#896)。`on` のとき、後列の敵への通常攻撃（近接物理）のダメージが半分になる。生文字列で透過し、`on` 以外・不正値は frontend が警告して無効にする。解釈は `game/enemyRow.ts` の `normalizeBattleEnemyRow`。frontmatter `battle_enemy_row:` から流す。既定 off。GUI 専用。 */
-  battle_enemy_row?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（フィールドサンプルの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */

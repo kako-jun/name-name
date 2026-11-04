@@ -121,8 +121,18 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
   })
 
   it('ATB の設定が BattleEngine のオプションへ渡る（未指定はターン制）', () => {
-    expect(buildBattleEngineOptions(load().battle)).toEqual({ atb: { mode: 'wait' } })
+    // 寺町は side + enemyGrid 4x2 なので、最前列でない敵への通常攻撃の半減 (#896) の enemyRow も渡る
+    expect(buildBattleEngineOptions(load().battle)).toEqual({
+      atb: { mode: 'wait' },
+      enemyRow: { grid: { cols: 4, rows: 2 } },
+    })
     expect(buildBattleEngineOptions({})).toEqual({})
+    // front レイアウト・グリッド無しでは enemyRow を渡さない
+    const b = load().battle
+    expect(buildBattleEngineOptions({ ...b, layout: 'front' })).toEqual({ atb: { mode: 'wait' } })
+    expect(buildBattleEngineOptions({ ...b, enemyGrid: undefined })).toEqual({
+      atb: { mode: 'wait' },
+    })
   })
 
   it('#1043 同梱の寺町設定のモンスターに level は無い（本編相当は既定のまま）', () => {

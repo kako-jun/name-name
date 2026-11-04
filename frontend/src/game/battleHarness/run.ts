@@ -234,7 +234,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
       spell && op.t === 'spell' && scenario.checkSpread
         ? (fresh) => checkMultiTarget(spell, op.scope, aliveBefore, fresh, i)
         : op.t === 'attack' && scenario.checkEnemyRow
-          ? (fresh) => checkEnemyRow(scenario, aliveBefore, fresh, i)
+          ? (fresh) => checkEnemyRow(scenario, fresh, i)
           : spell && op.t === 'spell' && scenario.checkEnemyLevel
             ? (fresh) => checkEnemyLevel(spell, op.target, before, engine.getState(), fresh, i)
             : undefined
@@ -433,14 +433,13 @@ function checkEnemyLevel(
 }
 
 /**
- * 敵の前列・後列 (#896) の不変条件。味方の通常攻撃（`attack` イベント）が敵に与えた量が、その敵の「操作前の列」に応じた範囲に収まる。
- * 範囲は DQ 式の通常攻撃（`base = max(1, atk - floor(def/2))`、`base` 〜 `base + floor(atk/4)`）で、後列なら 1 回半分（切り捨て・最低 1）。
- * 敵の列はエンジンと別に求める: 宣言（`formationRow`）→ `enemyRow` の無いシナリオなら全員前列 → グリッドの右端の列（占有セルの右端。
- * 隊列を宣言していない生存者の中で最も手前なら前列）。味方は 1 人・敵は耐性・相性・状態を持たない前提
+ * 敵の最前列 (#896) の不変条件。味方の通常攻撃（`attack` イベント）が敵に与えた量が、その敵の列に応じた範囲に収まる。
+ * 範囲は DQ 式の通常攻撃（`base = max(1, atk - floor(def/2))`、`base` 〜 `base + floor(atk/4)`）で、最前列でない敵なら 1 回半分（切り捨て・最低 1）。
+ * 最前列はエンジンと別に求める: `enemyRow` とグリッドがあるとき、占有セルの右端の列が最も右の列（戦闘開始時の配置で決まる。倒れても変わらない）。
+ * グリッドの位置が無い敵・`enemyRow` の無いシナリオは（`row: back` を除き）軽減しない。味方は 1 人・敵は耐性・相性・状態を持たない前提
  */
 function checkEnemyRow(
   scenario: Scenario,
-  aliveBefore: readonly boolean[],
   fresh: readonly BattleActionEvent[],
   opIndex: number
 ): Violation[] {
@@ -460,11 +459,7 @@ function checkEnemyRow(
       if (c) edges.set(i, c.col + (scenario.enemies[i].layout?.w ?? 1) - 1)
     })
   }
-  let front = -1
-  scenario.enemies.forEach((e, i) => {
-    const edge = edges.get(i)
-    if (aliveBefore[i] && !e.formationRow && edge !== undefined) front = Math.max(front, edge)
-  })
+  const front = Math.max(-1, ...edges.values())
   const hero = scenario.party[0]
   for (const ev of fresh) {
     if (ev.kind !== 'attack' || ev.actor.side !== 'party') continue
@@ -472,13 +467,8 @@ function checkEnemyRow(
       if (h.target.side !== 'enemy' || h.kind !== 'damage') continue
       const i = h.target.index
       const def = scenario.enemies[i]
-      let back: boolean
-      if (!scenario.enemyRow) back = def.row === 'back'
-      else if (def.formationRow) back = def.formationRow === 'back'
-      else {
-        const edge = edges.get(i)
-        back = edge !== undefined ? edge < front : def.row === 'back'
-      }
+      const edge = edges.get(i)
+      const back = (edge !== undefined && edge < front) || def.row === 'back'
       let lo = Math.max(1, hero.atk - Math.floor(def.def / 2))
       let hi = lo + Math.floor(hero.atk / 4)
       if (back) {
@@ -488,7 +478,7 @@ function checkEnemyRow(
       if (h.amount < lo || h.amount > hi) {
         out.push({
           kind: 'enemy-row-invariant',
-          detail: `敵 #${i}（${back ? '後列' : '前列'}）への通常攻撃のダメージ ${h.amount} が範囲 ${lo}〜${hi} の外`,
+          detail: `敵 #${i}（${back ? '最前列でない' : '最前列'}）への通常攻撃のダメージ ${h.amount} が範囲 ${lo}〜${hi} の外`,
           opIndex,
         })
       }

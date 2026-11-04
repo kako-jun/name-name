@@ -44,9 +44,9 @@ export interface Scenario {
   /** 「わざ」(#873 / #207)。`Op` の `ability` の `k` が添字（装備中の武器のわざなど）。無いシナリオは従来どおり */
   abilities?: SkillExecution[]
   ops: Op[]
-  /** 敵の前列・後列 (#896)。あれば `BattleEngine` の `enemyRow` として渡す（`grid` は敵のグリッド）。無いシナリオは従来どおり */
+  /** 最前列でない敵への通常攻撃の半減 (#896)。あれば `BattleEngine` の `enemyRow` として渡す（`grid` は敵のグリッド）。無いシナリオは従来どおり */
   enemyRow?: { grid?: { cols: number; rows: number } }
-  /** 通常攻撃のダメージを、敵の列の規則（#896）と操作ごとに突き合わせる（族 `enemy-row` だけ。味方は 1 人・耐性・相性・状態を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
+  /** 通常攻撃のダメージを、最前列の規則（#896）と操作ごとに突き合わせる（族 `enemy-row` だけ。味方は 1 人・耐性・相性・状態を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
   checkEnemyRow?: true
   /** 呪文の操作ごとに、敵のレベル条件の即死・レベル調整（#898）の結果を規則と突き合わせる（族 `enemy-level` だけ。敵は死の耐性・状態・下限を持たない前提のシナリオに限る）。無いシナリオは従来どおり */
   checkEnemyLevel?: true
@@ -83,7 +83,7 @@ export const realEngineFactory: EngineFactory = (scenario, rng) =>
   new BattleEngine(clone(scenario.party), clone(scenario.enemies), {
     rng,
     atb: scenario.atb ? { mode: scenario.atb.mode } : undefined,
-    // 敵の前列・後列 (#896)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
+    // 敵の最前列 (#896)。無いシナリオはキーも渡さない（従来と同じ呼び出し）
     ...(scenario.enemyRow ? { enemyRow: clone(scenario.enemyRow) } : {}),
     skills: scenario.skills ? clone(scenario.skills) : undefined,
     statuses: scenario.statuses ? clone(scenario.statuses) : undefined,

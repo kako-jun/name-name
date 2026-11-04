@@ -629,11 +629,6 @@ export interface BattleEntity {
    */
   level?: number
   /**
-   * 敵の隊列の宣言 (#896)。`MonsterDef.row`（`隊列: 前衛 | 後衛`）を戦闘への組み立て時に写す。無い敵は付かない（従来どおりキーも増えない）。
-   * エンジンは `battle_enemy_row: on` のときだけ読み、後衛の敵への通常攻撃のダメージを半分にする（`enemyRow.ts`）。off の戦闘では読まない
-   */
-  formationRow?: BattleRow
-  /**
    * 敵の行動ルール (#835)。`MonsterDef.actions` を戦闘への組み立て時に写す生文字列（書いた順）。
    * 解釈・選択は `enemyAi.ts` の `chooseEnemyAction`。無い（または空の）敵は従来どおり通常攻撃だけで、乱数の消費も変わらない
    */

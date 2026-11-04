@@ -249,11 +249,6 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_enemy_window_overlap: \"{sanitized}\"\n"));
         }
-        // battle_enemy_row (#896)。同じ流儀
-        if let Some(ref v) = doc.battle_enemy_row {
-            let sanitized = v.replace('"', "");
-            out.push_str(&format!("battle_enemy_row: \"{sanitized}\"\n"));
-        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -1196,9 +1191,6 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(sc) = m.scale {
                     out.push_str(&format!("倍率: {sc}\n"));
-                }
-                if let Some(r) = &m.row {
-                    out.push_str(&format!("隊列: {r}\n"));
                 }
                 if let Some(l) = m.level {
                     out.push_str(&format!("レベル: {l}\n"));
@@ -2234,7 +2226,6 @@ mod tests {
             battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
-            battle_enemy_row: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -2292,7 +2283,6 @@ mod tests {
             on_death: Some("候補=自爆".to_string()),
             size: Some(MonsterSize { w: 2, h: 1 }),
             scale: Some(0.5),
-            row: Some("後衛".to_string()),
             level: Some(25),
             affinity: Some(MonsterAffinity {
                 weak: vec!["ice".to_string(), "water".to_string()],
@@ -2312,7 +2302,7 @@ mod tests {
         assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("反撃: 条件=受けた=物理 候補=こうげき\n死亡時: 候補=自爆\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
-        assert!(out.contains("サイズ: 2x1\n倍率: 0.5\n隊列: 後衛\nレベル: 25\n"));
+        assert!(out.contains("サイズ: 2x1\n倍率: 0.5\nレベル: 25\n"));
         assert!(out.contains("弱点: ice, water\n無効: wind\n吸収: thunder\n"));
         assert!(!out.contains("半減:"));
         assert!(out.contains("[モンスター slime]"));
@@ -2725,7 +2715,6 @@ mod tests {
             battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
-            battle_enemy_row: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),
