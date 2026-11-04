@@ -714,7 +714,7 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
         return { ok: false, error: `${path}.${f} は数値である必要があります` }
       }
     }
-    for (const f of ['effect', 'builtin', 'id', 'description', 'category'] as const) {
+    for (const f of ['effect', 'builtin', 'id'] as const) {
       if (r[f] !== undefined && typeof r[f] !== 'string') {
         return { ok: false, error: `${path}.${f} は文字列である必要があります` }
       }
@@ -722,11 +722,7 @@ export function parseMenuList<T extends BattleSpellEntry | BattleItemEntry | Bat
     if (key === 'spells' && r.multiTarget !== undefined && typeof r.multiTarget !== 'boolean') {
       return { ok: false, error: `${path}.multiTarget は true / false である必要があります` }
     }
-    for (const f of ['fieldUse', 'key'] as const) {
-      if (r[f] !== undefined && typeof r[f] !== 'boolean') {
-        return { ok: false, error: `${path}.${f} は true / false である必要があります` }
-      }
-    }
+    // description / category / fieldUse / key は全画面メニュー (#880) の任意項目。型が違うものは無視する（以前は未知のキーとして素通りしていたので、新しいエラーにしない）
     const base = {
       id: typeof r.id === 'string' && r.id ? r.id : `${key}-${i + 1}`,
       name: r.name.trim(),

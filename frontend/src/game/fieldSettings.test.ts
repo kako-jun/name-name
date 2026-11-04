@@ -4,6 +4,7 @@ import {
   BATTLE_SPEED_FACTORS,
   MESSAGE_MS_FACTORS,
   battleModeOf,
+  applySettings,
   battleSpeedFactor,
   buildConfigOptions,
   cursorMemoryOn,
@@ -45,27 +46,60 @@ describe('battleSpeedFactor', () => {
 })
 
 describe('messageMsPerChar', () => {
-  it('既定のままで窓の指定も無ければ undefined（何もしない）', () => {
-    expect(messageMsPerChar(undefined, {}, 30)).toBeUndefined()
+  it('等倍の 3（既定）は base のまま', () => {
+    expect(messageMsPerChar(40, {})).toBe(40)
+    expect(messageMsPerChar(30, { messageSpeed: 2 })).toBe(30)
   })
-  it('既定のままでも窓の指定（base）があればそのまま', () => {
-    expect(messageMsPerChar(40, {}, 30)).toBe(40)
-  })
-  it('番号が大きいほど速い（ms は小さい）。base 未指定は窓の既定から。等倍の 3 は変更なし', () => {
-    const ms = [0, 1, 2, 3, 4].map((i) => messageMsPerChar(undefined, { messageSpeed: i }, 30))
-    expect(ms[2]).toBeUndefined()
-    expect(ms[0]).toBe(60)
-    expect(ms[1]).toBe(45)
-    expect(ms[3]).toBe(18)
-    expect(ms[4]).toBe(8)
-    expect(ms[0]!).toBeGreaterThan(ms[1]!)
-    expect(ms[1]!).toBeGreaterThan(ms[3]!)
-    expect(ms[3]!).toBeGreaterThan(ms[4]!)
+  it('番号が大きいほど速い（ms は小さい）', () => {
+    const ms = [0, 1, 2, 3, 4].map((i) => messageMsPerChar(30, { messageSpeed: i }))
+    expect(ms).toEqual([60, 45, 30, 18, 8])
     expect(MESSAGE_MS_FACTORS[2]).toBe(1)
   })
   it('0（即時表示）は倍率に関係なく 0。最小は 1ms', () => {
-    expect(messageMsPerChar(0, { messageSpeed: 0 }, 30)).toBe(0)
-    expect(messageMsPerChar(1, { messageSpeed: 4 }, 30)).toBe(1)
+    expect(messageMsPerChar(0, { messageSpeed: 0 })).toBe(0)
+    expect(messageMsPerChar(1, { messageSpeed: 4 })).toBe(1)
+  })
+  it('設定を連続変更しても複利にならない（毎回 既定 x 倍率。5 -> 3 で既定へ戻る）', () => {
+    const base = 30
+    const seq = [4, 2, 4, 0, 2, 1, 2]
+    const got = seq.map((i) => messageMsPerChar(base, { messageSpeed: i }))
+    expect(got).toEqual([8, 30, 8, 60, 30, 45, 30])
+  })
+})
+
+describe('applySettings（配線の純関数）', () => {
+  const base = { dialogMs: 30, atbMode: 'wait' as const }
+  it('既定の設定は既定の値（会話窓は既定のまま・ATB は設定どおり・メモリ・音量 0.8）', () => {
+    expect(applySettings({}, base)).toEqual({
+      dialogMsPerChar: 30,
+      atb: { mode: 'wait', speed: 1 },
+      cursorMemory: true,
+      bgmVolume: 0.8,
+      seVolume: 0.8,
+    })
+  })
+  it('各設定が値に反映される', () => {
+    const a = applySettings(
+      { messageSpeed: 4, battleMode: 1, battleSpeed: 4, cursor: 1, bgm: 0, se: 5 },
+      base
+    )
+    expect(a).toEqual({
+      dialogMsPerChar: 8,
+      atb: { mode: 'active', speed: 2 },
+      cursorMemory: false,
+      bgmVolume: 0,
+      seVolume: 1,
+    })
+  })
+  it('ターン制（atbMode なし）は atb を出さない', () => {
+    expect('atb' in applySettings({ battleMode: 1 }, { dialogMs: 30 })).toBe(false)
+  })
+  it('繰り返し変更しても前回に依存しない（同じ settings は同じ結果）', () => {
+    const a = applySettings({ messageSpeed: 4, battleSpeed: 0 }, base)
+    applySettings({ messageSpeed: 0, battleSpeed: 4, battleMode: 1 }, base)
+    applySettings({}, base)
+    expect(applySettings({ messageSpeed: 4, battleSpeed: 0 }, base)).toEqual(a)
+    expect(applySettings({}, base).dialogMsPerChar).toBe(30)
   })
 })
 
@@ -96,6 +130,14 @@ describe('normalizeSettings', () => {
     const out = normalizeSettings(raw)
     expect(out).toEqual({ battleMode: 1 })
     expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+  })
+})
+
+describe('normalizeSettings: 定義側の独自 options', () => {
+  const opts = [{ key: 'custom', choices: ['a', 'b', 'c'] }]
+  it('渡した options のキー・選択肢数で検証する（既定のキーは捨てる）', () => {
+    expect(normalizeSettings({ custom: 2, battleMode: 1 }, opts)).toEqual({ custom: 2 })
+    expect(normalizeSettings({ custom: 3 }, opts)).toEqual({})
   })
 })
 

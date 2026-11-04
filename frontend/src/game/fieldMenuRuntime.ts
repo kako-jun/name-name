@@ -22,6 +22,7 @@ import {
   type LiveRpg,
 } from './fieldMenuLive'
 import { buildConfigOptions, normalizeSettings } from './fieldSettings'
+import { DEFAULT_CONFIG_OPTIONS, type MenuOption } from './fieldMenuScreens'
 import type { AtbMode } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { RpgMenuState } from './rpgSave'
@@ -53,8 +54,10 @@ export class FieldMenuRuntime {
     private readonly d: FieldMenuRuntimeDeps,
     saved?: RpgMenuState
   ) {
-    this.settings = normalizeSettings(saved?.settings)
+    // options() が itemOrder を読むので先に入れる
+    this.settings = {}
     this.itemOrder = Array.isArray(saved?.itemOrder) ? [...saved.itemOrder] : []
+    this.settings = normalizeSettings(saved?.settings, this.options())
   }
 
   /** いまのせってい（key → 選択肢 index）。コピーを返す */
@@ -91,6 +94,12 @@ export class FieldMenuRuntime {
         this.d.atb?.mode ?? 'wait'
       ),
     })
+  }
+
+  /** 実際に使う「せってい」の項目（定義側の独自 options を含む）。値の許可キー・選択肢数はこれで決める */
+  private options(): readonly MenuOption[] {
+    const cfg = this.items().find((d) => screenKindOfItem(d) === 'config')
+    return cfg?.content?.options ?? DEFAULT_CONFIG_OPTIONS
   }
 
   private partyStats(): FieldMenuPartyStat[] {
@@ -133,7 +142,7 @@ export class FieldMenuRuntime {
 
   /** せっていが変わった */
   setSetting(key: string, value: number): void {
-    const next = normalizeSettings({ ...this.settings, [key]: value })
+    const next = normalizeSettings({ ...this.settings, [key]: value }, this.options())
     this.settings = next
     this.d.onSettingsChanged?.(this.settings)
   }

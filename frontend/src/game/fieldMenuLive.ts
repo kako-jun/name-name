@@ -209,7 +209,10 @@ function summarize(
   return `${userName} は ${name} を つかった！ ${targets.length}人に こうかがあった`
 }
 
-/** どうぐを使う。対象 `targetId` に効果があったときだけ所持数を 1 減らす */
+/**
+ * どうぐを使う。対象 `targetId` に効果があったときだけ所持数を 1 減らす。
+ * 効果の使用者（`caster`）は「先頭の生存者」とみなす（どうぐに使用者の選択は無い。回復・蘇生・解除は使用者を読まない）
+ */
 export function useFieldItem(
   rpg: Pick<LiveRpg, 'party' | 'items' | 'inventory'>,
   itemId: string,
@@ -402,7 +405,7 @@ export function buildMagicByParty(rpg: LiveRpg): Record<string, MenuEntry[]> {
   return out
 }
 
-/** ステータス画面に足す行。データのある項目だけ（装備・想像の刃）。固有素質は定義側の `statusByParty` に書かれたものを足す */
+/** ステータス画面に足す行。データのある項目だけ（そうび・わざ）。固有素質・想像の刃は人物ごとなので、定義側の `statusByParty` に書かれたものを足す */
 export function buildStatusRows(rpg: LiveRpg): Record<string, StatusRow[]> {
   const out: Record<string, StatusRow[]> = {}
   const nameOf = (id: string): string => rpg.items.find((i) => i.id === id)?.name ?? id
@@ -410,8 +413,9 @@ export function buildStatusRows(rpg: LiveRpg): Record<string, StatusRow[]> {
     const rows: StatusRow[] = []
     const eq = hasOwn(rpg.equipment, m.id) ? rpg.equipment[m.id] : []
     if (eq.length > 0) rows.push({ label: 'そうび', value: eq.map(nameOf).join('、') })
+    // 設定の `skills`（わざ）は全員共通の一覧。人物ごとの「そうぞうのやいば」などは定義側が `statusByParty` で差し込む
     if (rpg.skills.length > 0)
-      rows.push({ label: '想像の刃', value: rpg.skills.map((s) => s.name).join('、') })
+      rows.push({ label: 'わざ', value: rpg.skills.map((s) => s.name).join('、') })
     out[m.id] = rows
   }
   return out

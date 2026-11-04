@@ -51,18 +51,48 @@ export function battleSpeedFactor(settings: MenuSettings): number {
 export const MESSAGE_MS_FACTORS: readonly number[] = [2, 1.5, 1, 0.6, 0.25]
 
 /**
- * 会話窓の 1 文字あたり ms。`base` はゲーム設定の値（未指定 = 窓の既定）。0（即時表示）は倍率に関係なく 0。
- * 設定が既定のままで `base` も無いときは undefined（呼び出し側は何もしない＝従来どおり）
+ * 会話窓の 1 文字あたり ms。`base` は窓の既定（ゲーム設定を反映した、メニューが何も変える前の値。**最初に 1 回だけ捕捉して**毎回渡す。
+ * 変更済みの現在値を渡すと設定のたびに倍率が積み重なる）。0（即時表示）は倍率に関係なく 0。倍率 1（既定の 3）は `base` に戻る
  */
-export function messageMsPerChar(
-  base: number | undefined,
-  settings: MenuSettings,
-  windowDefault: number
-): number | undefined {
+export function messageMsPerChar(base: number, settings: MenuSettings): number {
   const factor = MESSAGE_MS_FACTORS[settingIndex(settings, 'messageSpeed')]
-  if (base === undefined && factor === 1) return undefined
-  const b = base ?? windowDefault
-  return b <= 0 ? 0 : Math.max(1, Math.round(b * factor))
+  return base <= 0 ? 0 : Math.max(1, Math.round(base * factor))
+}
+
+/** せっていが実際の挙動に与える値（配線は `fieldSample/main.ts`。ここは計算だけ） */
+export interface AppliedSettings {
+  /** 会話窓の 1 文字あたり ms */
+  dialogMsPerChar: number
+  /** 戦闘の ATB。ターン制（`base.atbMode` が無い）では undefined */
+  atb?: { mode: AtbMode; speed: number }
+  /** 戦闘の候補窓のカーソル記憶（メモリ）。セッション内のみ（セーブしない） */
+  cursorMemory: boolean
+  bgmVolume: number
+  seVolume: number
+}
+
+/**
+ * せってい → 実際の挙動の値。`base.dialogMs` は窓の既定（最初に 1 回捕捉）、`base.atbMode` はゲーム設定の ATB の方式（ターン制は undefined）。
+ * 何度呼んでも、同じ settings には同じ値を返す（前回の結果に依存しない）
+ */
+export function applySettings(
+  settings: MenuSettings,
+  base: { dialogMs: number; atbMode?: AtbMode }
+): AppliedSettings {
+  return {
+    dialogMsPerChar: messageMsPerChar(base.dialogMs, settings),
+    ...(base.atbMode
+      ? {
+          atb: {
+            mode: battleModeOf(settings, base.atbMode),
+            speed: battleSpeedFactor(settings),
+          },
+        }
+      : {}),
+    cursorMemory: cursorMemoryOn(settings),
+    bgmVolume: volumeOf(settings, 'bgm'),
+    seVolume: volumeOf(settings, 'se'),
+  }
 }
 
 /** カーソル。0 = メモリ（既定）/ 1 = リセット */
@@ -75,11 +105,17 @@ export function volumeOf(settings: MenuSettings, key: 'bgm' | 'se'): number {
   return settingIndex(settings, key) / 5
 }
 
-/** セーブに書く・読む設定の検証。既知のキーで範囲内の整数だけ残す（不正なものは捨てる） */
-export function normalizeSettings(raw: unknown): Record<string, number> {
+/**
+ * セーブに書く・読む設定の検証。`options`（実際に使う項目。定義側の独自項目を含む。省略は既定の項目）の
+ * キーで、範囲内の整数だけ残す（不正なものは捨てる）
+ */
+export function normalizeSettings(
+  raw: unknown,
+  options: readonly Pick<MenuOption, 'key' | 'choices'>[] = DEFAULT_CONFIG_OPTIONS
+): Record<string, number> {
   const out: Record<string, number> = {}
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return out
-  for (const o of DEFAULT_CONFIG_OPTIONS) {
+  for (const o of options) {
     const v = (raw as Record<string, unknown>)[o.key]
     if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < o.choices.length)
       out[o.key] = v
@@ -109,7 +145,7 @@ export function buildConfigOptions(conn: SettingsConnection, atbMode: AtbMode): 
     battleSpeed: conn.atb ? 'ATB ゲージが溜まる速さ（1 遅い〜5 速い）' : turnBased,
     messageSpeed: '会話窓の文字が出る速さ（1 遅い〜5 速い）。戦闘のメッセージにはまだ効きません',
     cursor:
-      'メモリ = 戦闘の じゅもん・どうぐ の窓で前回選んだ行から始める / リセット = 毎回先頭から',
+      'メモリ = 戦闘の じゅもん・どうぐ・わざ の窓で前回選んだ行から始める（セーブはしません）/ リセット = 毎回先頭から',
     bgm: conn.audio ? 'BGM の音量' : noAudio,
     se: conn.audio ? 'SE の音量' : noAudio,
     keys: 'メニュー内の 決定 / 戻る の Z・X を入れ替える。会話送り・戦闘にはまだ効きません',

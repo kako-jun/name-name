@@ -2263,14 +2263,12 @@ describe('parseMenuList: 全画面メニュー用の任意項目（#880）', () 
     const r = parseMenuList([{ name: 'a', key: false, description: '' }], [], 'items')
     expect(r).toEqual({ ok: true, value: [{ id: 'items-1', name: 'a' }] })
   })
-  it.each([
-    ['description が数値', { name: 'a', description: 1 }, /description/],
-    ['category が数値', { name: 'a', category: 1 }, /category/],
-    ['fieldUse が文字列', { name: 'a', fieldUse: 'yes' }, /fieldUse/],
-    ['key が文字列', { name: 'a', key: 'yes' }, /key/],
-  ])('不正（%s）はエラー', (_n, entry, re) => {
-    const r = parseMenuList([entry], [], 'items')
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toMatch(re)
+  it('型が違う任意項目はエラーにせず無視する（既存の設定を壊さない）', () => {
+    const r = parseMenuList(
+      [{ name: 'a', description: 1, category: 1, fieldUse: 'yes', key: 'yes' }],
+      [],
+      'items'
+    )
+    expect(r).toEqual({ ok: true, value: [{ id: 'items-1', name: 'a' }] })
   })
 })

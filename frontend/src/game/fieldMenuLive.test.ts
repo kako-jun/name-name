@@ -330,15 +330,15 @@ describe('buildMagicByParty / useFieldSpell', () => {
 })
 
 describe('buildStatusRows', () => {
-  it('装備・想像の刃（わざ）はデータがあるときだけ出す', () => {
+  it('装備・わざはデータがあるときだけ出す', () => {
     const none = buildStatusRows(rpg({ skills: [], equipment: {} }))
     expect(none.a).toEqual([])
     const some = buildStatusRows(rpg({ equipment: { a: ['potion', 'zzz'] } }))
     expect(some.a).toEqual([
       { label: 'そうび', value: 'ポーション、zzz' },
-      { label: '想像の刃', value: 'きる' },
+      { label: 'わざ', value: 'きる' },
     ])
-    expect(some.b).toEqual([{ label: '想像の刃', value: 'きる' }])
+    expect(some.b).toEqual([{ label: 'わざ', value: 'きる' }])
   })
 })
 
@@ -397,7 +397,7 @@ describe('applyLiveContent', () => {
     const out = applyLiveContent(own, kindOf, { rpg: rpg(), configOptions: opts })
     const by = out[0].content?.statusByParty ?? {}
     expect(by.a[0]).toEqual({ label: '固有素質', value: 'V' })
-    expect(by.a[by.a.length - 1]?.label).toBe('想像の刃')
+    expect(by.a[by.a.length - 1]?.label).toBe('わざ')
     expect(by.ghost).toEqual([{ label: 'G', value: '1' }])
   })
   it('configOptions が無ければ config は触らない', () => {

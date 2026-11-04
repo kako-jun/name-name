@@ -151,12 +151,7 @@ import { TimeLimitLayer } from '../game/TimeLimitLayer'
 import { placeNameOf } from '../game/fieldMenu'
 import { FieldMenuHost } from '../game/fieldMenuHost'
 import { FieldMenuRuntime } from '../game/fieldMenuRuntime'
-import {
-  battleModeOf,
-  battleSpeedFactor,
-  cursorMemoryOn,
-  messageMsPerChar,
-} from '../game/fieldSettings'
+import { applySettings } from '../game/fieldSettings'
 import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
@@ -757,6 +752,7 @@ async function main(): Promise<void> {
           ),
         }
       : inventory
+    const menuSave = menuRuntime?.saveState()
     return snapshotRpg(
       {
         party: inBattle ? battleRun!.engine.getState().party : partyState,
@@ -766,7 +762,7 @@ async function main(): Promise<void> {
         // プレイ時間・歩数は全画面メニュー (#880) を設定したゲームだけ書く（無いゲームのセーブは従来どおり）
         ...(menuCfg ? { playMs: stats.playMs, steps: stats.steps } : {}),
         // せってい・せいとんの並び (#880)（変えていなければキーを足さない）
-        ...(menuRuntime?.saveState() ? { menu: menuRuntime.saveState() } : {}),
+        ...(menuSave ? { menu: menuSave } : {}),
         field: { sceneId, x: pos.x, y: pos.y, facing, flags: { ...flags } },
         ...(battleState ? { battle: battleState } : {}),
       },
@@ -893,10 +889,13 @@ async function main(): Promise<void> {
             b,
             // せってい (#880): ATB の戦闘だけに バトルモード・バトルスピード が効く
             menuRuntime
-              ? {
-                  atbMode: battleModeOf(menuRuntime.currentSettings, b.atb?.mode ?? 'wait'),
-                  atbSpeed: battleSpeedFactor(menuRuntime.currentSettings),
-                }
+              ? (() => {
+                  const a = applySettings(menuRuntime.currentSettings, {
+                    dialogMs: dialogDefaultMs,
+                    atbMode: b.atb?.mode,
+                  }).atb
+                  return a ? { atbMode: a.mode, atbSpeed: a.speed } : undefined
+                })()
               : undefined
           ),
           savedBattle
@@ -917,7 +916,8 @@ async function main(): Promise<void> {
             menu,
             renderResolution: app.renderer.resolution,
             // せってい「カーソル = メモリ」(#880): 前回選んだ行を戦闘をまたいで覚える
-            ...(menuRuntime && cursorMemoryOn(menuRuntime.currentSettings)
+            ...(menuRuntime &&
+            applySettings(menuRuntime.currentSettings, { dialogMs: dialogDefaultMs }).cursorMemory
               ? { cursorMemory: battleCursorMemory }
               : {}),
           }),
@@ -1166,11 +1166,13 @@ async function main(): Promise<void> {
     steps: stats.steps,
   })
   // どうぐ・まほう・せいとん・せってい (#880)。持ち物の正本はここ（partyState / inventory）で、メニューは読んで書き戻すだけ
-  const dialogBaseMs = fieldDialogOptions(config).msPerChar
+  // 会話窓の既定（ゲーム設定を反映した、メニューが何も変える前の値）。最初に 1 回だけ捕捉する（変更済みの値から倍率を掛けると積み重なる）
+  const dialogDefaultMs = dialogBox.getMsPerChar()
   const applyMenuSettings = (s: Readonly<Record<string, number>>): void => {
-    // メッセージスピード: 会話窓の 1 文字あたり ms（設定が既定のままで窓の指定も無ければ何もしない＝従来どおり）
-    const ms = messageMsPerChar(dialogBaseMs, s, dialogBox.getMsPerChar())
-    if (ms !== undefined) dialogBox.setMsPerChar(ms)
+    dialogBox.setMsPerChar(
+      applySettings(s, { dialogMs: dialogDefaultMs, atbMode: config.battle.atb?.mode })
+        .dialogMsPerChar
+    )
   }
   const menuRuntime = menuCfg
     ? new FieldMenuRuntime(

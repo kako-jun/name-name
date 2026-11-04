@@ -495,7 +495,7 @@ export interface BattleScreenOptions {
   menu?: BattleMenuData
   /**
    * 候補窓のカーソル記憶 (#880。全画面メニュー「せってい」のカーソル = メモリ)。渡すと、窓を開くとき同じ味方・同じ種類で前回選んだ行にカーソルを合わせ、
-   * 選ぶたびに書き戻す。キーは `cursorMemoryKey`（味方の id と窓の種類）、値は選んだ行の index。戦闘をまたいで持ち越すためホストが持つ。
+   * 選ぶたびに書き戻す。キーは `cursorMemoryKey`（味方の id と窓の種類）、値は選んだ行の index。戦闘をまたいで持ち越すためホストが持つ（セッション内のみ。セーブしない）。
    * 未指定は従来どおり（毎回最初に選べる行から）
    */
   cursorMemory?: Map<string, number>

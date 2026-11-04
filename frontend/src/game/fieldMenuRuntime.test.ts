@@ -175,3 +175,33 @@ describe('setSetting', () => {
     expect(rt.currentSettings.cursor).toBe(1)
   })
 })
+
+describe('定義側の独自 options の値（再オープン・セーブ/ロードを跨ぐ）', () => {
+  const custom = {
+    menu: {
+      items: [
+        ...DEFAULT_FIELD_MENU_ITEMS.filter((d) => d.id !== 'config'),
+        {
+          id: 'config',
+          label: 'せってい',
+          content: { options: [{ key: 'myOpt', label: '独自', choices: ['a', 'b', 'c'] }] },
+        },
+      ],
+      transition: { ...DEFAULT_MENU_TRANSITION },
+    },
+  }
+  it('独自キーの値は保持され、saveState に載り、復元でも残る', () => {
+    const { rt } = setup(custom)
+    rt.setSetting('myOpt', 2)
+    expect(rt.currentSettings).toEqual({ myOpt: 2 })
+    expect(rt.saveState()).toEqual({ settings: { myOpt: 2 } })
+    const { rt: loaded } = setup(custom, rt.saveState())
+    expect(loaded.currentSettings).toEqual({ myOpt: 2 })
+  })
+  it('独自 options の選択肢数の範囲外・既定項目のキー（その定義に無い）は捨てる', () => {
+    const { rt } = setup(custom)
+    rt.setSetting('myOpt', 3)
+    rt.setSetting('battleMode', 1)
+    expect(rt.currentSettings).toEqual({})
+  })
+})
