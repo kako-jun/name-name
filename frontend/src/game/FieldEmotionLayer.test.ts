@@ -168,6 +168,21 @@ describe('FieldEmotionLayer', () => {
     expect(sp.scale.x).toBeCloseTo(2)
   })
 
+  it('fade は表示時間の終わりに向けて薄くなる。人物の不透明度とも掛け合わさる (#943)', () => {
+    const l = setup(
+      { '!': sh({ motion: 'fade', durationMs: 1000 }) },
+      new Map([['a.png', sheetTexture(1)]])
+    )
+    l.show('player', '!')
+    l.tick(0, heads)
+    const sp = l.children[0] as unknown as { alpha: number }
+    expect(sp.alpha).toBe(1)
+    l.tick(850, heads) // 薄くなり始めは 700ms、850ms で半分
+    expect(sp.alpha).toBeCloseTo(0.5)
+    l.tick(0, { player: { x: 1, y: 1, alpha: 0.5 }, companion: null })
+    expect(sp.alpha).toBeCloseTo(0.25)
+  })
+
   it('clear で全部消える', () => {
     const l = setup({ '!': sh() }, new Map([['a.png', sheetTexture(1)]]))
     l.show('player', '!')
