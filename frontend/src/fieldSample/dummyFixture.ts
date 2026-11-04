@@ -255,7 +255,7 @@ function poses(prefix: string, w: number, h: number, colors: Record<string, stri
 
 /** 設定 JSON のオブジェクトを作る */
 export function buildDummyFixture(
-  opts: { spriteStyle?: 'acrylic'; tiltShift?: 'on' } = {}
+  opts: { spriteStyle?: 'acrylic'; tiltShift?: 'on'; menu?: boolean } = {}
 ): Record<string, unknown> {
   const W = 640
   const H = 400
@@ -280,6 +280,8 @@ export function buildDummyFixture(
     ...(opts.spriteStyle === 'acrylic' ? { spriteStyle: 'acrylic' } : {}),
     // チルトシフト (#885): `?fixture=dummy&tiltShift=on`。未指定はキーを出さない
     ...(opts.tiltShift === 'on' ? { tiltShift: 'on' } : {}),
+    // 全画面メニュー (#880): `?fixture=dummy&menu=on`。既定の9項目。未指定はキーを出さない
+    ...(opts.menu ? { menu: true } : {}),
     startScene: 'meadow',
     start: { x: 320, y: 300 },
     speed: 260,

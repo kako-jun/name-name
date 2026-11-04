@@ -228,6 +228,81 @@
       "sprite": "http://localhost:8765/assets/images/enemies/M151.webp"
     }
   },
+  "menu": {
+    "items": [
+      {
+        "id": "item",
+        "label": "どうぐ",
+        "content": {
+          "tabs": [
+            {
+              "label": "つかう",
+              "entries": [
+                { "label": "きずぐすり", "detail": "x 3", "description": "HP を少し回復する" },
+                {
+                  "label": "けむりだま",
+                  "detail": "x 1",
+                  "enabled": false,
+                  "description": "フィールドでは使えない"
+                }
+              ]
+            },
+            { "label": "せいとん", "entries": [] },
+            {
+              "label": "たいせつなもの",
+              "entries": [{ "label": "おまもり", "description": "だれかにもらったもの" }]
+            }
+          ]
+        }
+      },
+      {
+        "id": "magic",
+        "label": "まほう",
+        "content": {
+          "entries": [
+            { "label": "ヒール", "detail": "MP 3", "description": "味方 1 人の HP を回復する" }
+          ]
+        }
+      },
+      { "id": "equip", "label": "そうび" },
+      {
+        "id": "appstore",
+        "label": "アプリストア",
+        "content": {
+          "tabs": [
+            {
+              "label": "刀",
+              "entries": [
+                { "label": "はがねの刀", "detail": "1,200 円" },
+                { "label": "ほそ身の刀", "detail": "800 円" }
+              ]
+            },
+            { "label": "防具", "entries": [{ "label": "かわの胴当て", "detail": "600 円" }] }
+          ]
+        }
+      },
+      {
+        "id": "magicite",
+        "label": "まいし",
+        "enabled": false,
+        "disabledReason": "まだ解放されていません"
+      },
+      {
+        "id": "job",
+        "label": "ジョブ",
+        "enabled": false,
+        "disabledReason": "まだ解放されていません"
+      },
+      { "id": "status", "label": "ステータス" },
+      {
+        "id": "save",
+        "label": "セーブ",
+        "blockedWhileTimed": true,
+        "timedReason": "時間制限中はセーブできません"
+      },
+      { "id": "config", "label": "せってい" }
+    ]
+  },
   "party": [
     {
       "name": "ナム",

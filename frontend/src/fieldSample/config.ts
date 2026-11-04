@@ -26,6 +26,7 @@ import { pickWeaponKeys } from '../game/battleWeapon'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
 import { WARP_DEFAULTS, type WarpEffectKind, type WarpTiming } from '../game/fieldWarp'
 import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
+import { parseFieldMenuConfig, type FieldMenuConfig } from '../game/fieldMenu'
 import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
@@ -249,6 +250,11 @@ export interface FieldSampleConfig {
    * 未指定・`"off"` は undefined＝従来の描画（キーが出ない）。不正な値は警告して無視。会話窓・フェード・戦闘画面はぼかさない
    */
   tiltShift?: 'on'
+  /**
+   * 全画面メニュー (#880)。`menu`: `true` / `{}` = 既定の9項目、`{ items: [{ id, label, enabled?, disabledReason?, blockedWhileTimed?, timedReason? }] }` で項目を増減できる。
+   * 未指定・`false` は undefined＝メニュー無し（従来どおり。≡ ボタンも出ない）
+   */
+  menu?: FieldMenuConfig
   /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
   dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
@@ -892,6 +898,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         `spriteStyle は "none" か "acrylic" のみ指定できます: ${JSON.stringify(raw.spriteStyle)}（無視します）`
       )
   }
+  const menuParsed = parseFieldMenuConfig(raw.menu)
+  warnings.push(...menuParsed.warnings)
   let tiltShift: 'on' | undefined
   if (raw.tiltShift !== undefined) {
     if (raw.tiltShift === 'on') tiltShift = 'on'
@@ -999,6 +1007,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(dialogStyle ? { dialogStyle } : {}),
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(tiltShift ? { tiltShift } : {}),
+      ...(menuParsed.value ? { menu: menuParsed.value } : {}),
       ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
