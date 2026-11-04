@@ -1,8 +1,7 @@
-/** 設定 JSON の `menu` (#880) が parseConfig / 同梱サンプル / ダミー fixture でどう扱われるか */
+/** 設定 JSON の `menu` (#880) が parseConfig / ダミー fixture でどう扱われるか */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { parseConfig, parseConfigText } from './config'
+import { parseConfig } from './config'
 import { buildDummyFixture } from './__fixtures__/dummyFixture'
-import { expandedTeramachiText } from './teramachiExpanded'
 
 const BASE = 'https://example.com/field/config.json'
 
@@ -73,12 +72,36 @@ describe('parseConfig の menu (#880)', () => {
   })
 })
 
-describe('寺町サンプルの menu (#880)', () => {
-  it('同梱 teramachi.sample.json は menu の警告なしでパースでき、9項目を持つ', () => {
-    const r = parseConfigText(
-      expandedTeramachiText(),
-      'http://localhost:8780/teramachi.sample.json'
-    )
+describe('9 項目の menu 宣言 (#880)', () => {
+  const nineItems = () => [
+    {
+      id: 'item',
+      label: 'どうぐ',
+      content: {
+        tabs: [
+          { label: 'つかう', entries: [{ label: 'きずぐすり', detail: 'x 3' }] },
+          { label: 'せいとん', entries: [] },
+          { label: 'たいせつなもの', entries: [{ label: 'おまもり' }] },
+        ],
+      },
+    },
+    { id: 'magic', label: 'まほう' },
+    { id: 'equip', label: 'そうび' },
+    { id: 'appstore', label: 'アプリストア' },
+    { id: 'magicite', label: 'ませき', enabled: false, disabledReason: 'まだ解放されていません' },
+    { id: 'job', label: 'ジョブ', enabled: false, disabledReason: 'まだ解放されていません' },
+    { id: 'status', label: 'ステータス' },
+    {
+      id: 'save',
+      label: 'セーブ',
+      blockedWhileTimed: true,
+      timedReason: '時間制限中はセーブできません',
+    },
+    { id: 'config', label: 'せってい' },
+  ]
+
+  it('menu の警告なしでパースでき、9項目を持つ', () => {
+    const r = parseConfig(fixture({ menu: { items: nineItems() } }), BASE)
     if (!r.ok) throw new Error(r.error)
     expect((r.value.warnings ?? []).filter((w) => w.includes('menu'))).toEqual([])
     expect(r.value.menu?.items.map((i) => i.id)).toEqual([
@@ -94,11 +117,8 @@ describe('寺町サンプルの menu (#880)', () => {
     ])
   })
 
-  it('サンプルの灰色項目・時間制限中セーブ禁止の宣言が取り込まれている', () => {
-    const r = parseConfigText(
-      expandedTeramachiText(),
-      'http://localhost:8780/teramachi.sample.json'
-    )
+  it('灰色項目・時間制限中セーブ禁止の宣言が取り込まれている', () => {
+    const r = parseConfig(fixture({ menu: { items: nineItems() } }), BASE)
     if (!r.ok) throw new Error(r.error)
     const by = Object.fromEntries((r.value.menu?.items ?? []).map((i) => [i.id, i]))
     expect(by.magicite.enabled).toBe(false)

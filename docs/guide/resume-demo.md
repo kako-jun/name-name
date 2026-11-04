@@ -2,7 +2,7 @@
 
 任意の局面（パーティ・所持品・装備・所持金・フィールドの現在地・戦闘中の状態）を**セーブデータとして先に用意し、そこから再開して起動する**ための手順。デモ・不具合の再現・見た目の確認は、すべてこの一通りで行う（専用のサンプルマップや状態の作り方は持たない。#1021）。
 
-- デモはマップ以外 sit-by-me の実ゲームと同じ内容。台帳に定義が無い機能はデモを作らず、自動テスト（ハーネス・vitest）で確認する。確認手順は「実際の寺町設定＋実際のセーブ（`teramachi-bathhouse-battle.save.json`）をロードする 1 本」だけ
+- デモはマップ以外 sit-by-me の実ゲームと同じ内容。台帳に定義が無い機能はデモを作らず、自動テスト（ハーネス・vitest）で確認する。確認は、`?config=<URL>` で世界設定を指定し、実際のセーブ（`teramachi-bathhouse-battle.save.json`）をロードする 1 本だけ。**ただし寺町セーブの読み込み先の世界設定は未解決（本編のデータが sit-by-me に無い。同梱の設定は #1066 で削除した）**
 - 従来のデモの入口（`?fixture=dummy`）は無い
 - 状態の与え方は **localStorage のセーブ（JSON）を先に作ってから、`?resume=` で開く** の一通り
 - セーブ形式が正（`frontend/src/game/rpgSave.ts` の `RpgSaveState`）。`startFrom({ rpg })` も同じ形式を受ける（[デバッガガイド](./debugger.md) / [ADR 0002 §6](../adr/0002-deterministic-state-and-debuggability.md)）
@@ -17,8 +17,8 @@
    localStorage.setItem('name-name-save-field-sample-0', JSON.stringify(/* セーブ JSON */))
    ```
 
-   自動操作（playwright など）ならページを開く前に同じオリジンの任意のページで `localStorage.setItem` してから `field-sample.html?resume=0` へ移動する
-3. `field-sample.html?resume=0`（`?config=<URL>` で世界の設定を差し替えるのは従来どおり。設定は「世界」、セーブは「状態」で別物）を開く
+   自動操作（playwright など）ならページを開く前に同じオリジンの任意のページで `localStorage.setItem` してから `field-sample.html?resume=0&config=<URL>` へ移動する
+3. `field-sample.html?resume=0&config=<世界設定のURL>`（`?config=` は必須で、同梱の既定設定は無い。設定は「世界」、セーブは「状態」で別物）を開く
 4. 画面下の表示（`scene=… foot=… facing=… gold=… party=…`）と、`window.fieldSample.rpg()`（今の局面をセーブ形式で返す）で復元を確かめる。`window.fieldSample.saveRpg(1)` で今の局面をスロットに書け、同じ形式で読み戻せる
 5. 失敗したとき（スロットが空・`rpg` が無い・検証に落ちた）は理由を画面に出し、設定の開始位置から始める。パーティが設定に 1 人もいないセーブも同じ扱い
 
@@ -57,7 +57,7 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 }
 ```
 
-- 敵の `id` は設定の `monsters` のキー。寺町の同梱設定では sit-by-me の台帳の敵（`M108` 蓋の開いたマンホール・`M148` 凍った水たまり＝用水の合流、`M145` 割れた酒瓶・`M147` 扇風機の羽根・`M149` 石油ストーブ・`M150` ライター・`M151` 古いたこ足配線＝銭湯）
+- 敵の `id` は設定の `monsters` のキー。寺町セーブの敵は sit-by-me の台帳の敵（`M108` 蓋の開いたマンホール・`M148` 凍った水たまり＝用水の合流、`M145` 割れた酒瓶・`M147` 扇風機の羽根・`M149` 石油ストーブ・`M150` ライター・`M151` 古いたこ足配線＝銭湯）
 - 状態異常は `status`（名前 → 残ターン）、強化・弱体は `buffs`。味方も敵も `BattleEntity` のキーをそのまま書ける
 - ATB のゲージは戦闘が起きている間の「安定した状態」だけを持つ（ダメージ数字・モーションなど演出の中間状態は持たない。ADR 0002）。戦闘開始のログ（「…があらわれた！」）は再開時にも出る
 - 戦闘中に復元したセーブは遷移の演出（暗転・ズーム）を挟まず戦闘画面を開く
@@ -76,31 +76,31 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 - 所持品の残数・所持金（勝利時の獲得分）・味方の HP / MP / 状態異常は戦闘のあとも持ち越す（以前の「戦闘のたびに設定へ戻る」ことはしない）
 - 敗北のときだけ味方を戦闘前（その戦闘を始めた時点。戦闘中のセーブから再開した戦闘ではセーブ時点）に戻す（全滅のまま次へ進めなくなるのを防ぐ）。所持品・所持金は戻さない
 
-## 刀の確認（寺町サンプルの味方の刀。#1035）
+## 刀の確認（味方の刀。#1035）
 
-寺町サンプルの味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順:
+味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順。**寺町セーブの読み込み先の世界設定が無い（本編のデータが sit-by-me に無い）ので、現状この手順は成り立たない**。設定が用意できたときの流れ:
 
-1. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する（寺町の設定の URL は `http://localhost:8765/...`。別ポートで配信するときは設定 JSON（`teramachi.sample.json`）をコピーして `8765` を置き換え、`?config=<そのURL>` で渡す。さらに感情吹き出しの `teramachi-emotions.json`（`8765` が 3 箇所。設定の `emotionsUrl` は相対なので、ビルド出力の `field-sample/teramachi-emotions.json` を置換する）も置き換える。感情 JSON を置換しないと、別ポート配信時に感情吹き出しの画像で CORS の console error と警告が出る（刀とは無関係で非致命）。セーブの `battle.background` の URL も同様）
+1. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する
 2. `cd frontend && npx vite build --outDir <出力先>` の本番ビルドを静的配信する（`field-sample.html`）
-3. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れて `field-sample.html?resume=0` を開く。味方の並びは party1=ナム C002（車椅子）・party2=オットン C001・party3=シャー C003・party4=ペー子 C004（HP 0 なので、確かめるときはセーブの `party4` の `hp` を上げ、`battle.atb.partyGauge` を確かめたい者だけ 1000・`queue` をその添字にする）
+3. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=<世界設定のURL>` を開く。味方の並びは party1=ナム C002（車椅子）・party2=オットン C001・party3=シャー C003・party4=ペー子 C004（HP 0 なので、確かめるときはセーブの `party4` の `hp` を上げ、`battle.atb.partyGauge` を確かめたい者だけ 1000・`queue` をその添字にする）
 4. **「たたかう」をクリックする前に**仮想時計（`requestAnimationFrame` / `performance.now` の差し替え。playwright なら `addInitScript` で入れ、ページ読み込み後に仮想へ切り替えてからクリックする）を入れる。クリック時点でターゲットが自動決定され攻撃が即始まるので、後から時計を差し替えると最初のコマで既にヒット後になる。「たたかう」を選ぶ（攻撃は数百 ms で終わるので、目視では追えない。playwright なら `requestAnimationFrame` / `performance.now` を差し替えた仮想時計で 30 ms ずつ進めてコマ撮りする）。5 段で、手元に刀が付き、ready の構え・windup の振りかぶり・slash の突き出し・followthrough の振り抜きに追従すること
 
-実測（2026-11-04、本番ビルド・chromium + swiftshader のコマ撮り）: C001〜C004 の 4 人とも 5 段で刀が手元に付き、読み込み警告なし。C001 の swing も巨大表示にならない（#165 解消後）。被弾の傾き・死亡の回転への追従はこの手順では確かめていない（同じ container の子なので追従する設計。#1027 で確認済み）。刀の位置・見た目の最終判断は人の実機で行う。
+実測（2026-11-04、寺町の同梱設定があった当時、本番ビルド・chromium + swiftshader のコマ撮り）: C001〜C004 の 4 人とも 5 段で刀が手元に付き、読み込み警告なし。C001 の swing も巨大表示にならない（#165 解消後）。被弾の傾き・死亡の回転への追従はこの手順では確かめていない（同じ container の子なので追従する設計。#1027 で確認済み）。刀の位置・見た目の最終判断は人の実機で行う。
 
 ## 勝利リザルトの確認（ff。#1039）
 
 ff の勝利で、固定の「しょうり！」ではなく結果のメッセージが 1 件ずつ出ることを確かめる手順。デモ専用の仕組みは無く、「刀の確認」と同じ既存の手順（戦闘中セーブ再開）を流用する。
 
-1. 「刀の確認」の手順 1〜3 と同じく（`?config=` の差し替えなど、そこに書かれた追加操作も同じ）、`~/repos/private/sit-by-me` のルートを CORS 付きで配信し、本番ビルドを静的配信して、[`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ `field-sample.html?resume=0` を開く（設定が `battle_presentation: ff` であること）
+1. 「刀の確認」の手順 1〜3 と同じく（世界設定が無いので現状は成り立たない）、`~/repos/private/sit-by-me` のルートを CORS 付きで配信し、本番ビルドを静的配信して、[`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ `field-sample.html?resume=0&config=<世界設定のURL>` を開く（設定が `battle_presentation: ff` であること）
 2. 勝ちやすいよう、セーブの敵の `hp` を 1 にして敵を倒す。最後の敵を倒したあと、最後の演出（のけぞり・倒れ・数字）が終わってから窓に結果が順に出る
-3. 出るもの: 「○○ギル てにいれた」→「○○ けいけんち かくとく」→（この戦闘で新しく覚えた呪文があれば）「○○をおぼえた！」→（戦利品があれば最後に）「○○を てにいれた」。0 のものは出ない。1 件約 1 秒の自動送り。**field-sample の設定では敵が戦利品を持てないので、実機で見られるのはギルと経験値の2行まで**（呪文・戦利品の行は vitest の `BattleScreenResultMessages.test.ts` で担保）。生き残りの味方は通常と victory を約 0.4 秒ごとに交互に繰り返す
+3. 出るもの: 「○○ギル てにいれた」→「○○ けいけんち かくとく」→（この戦闘で新しく覚えた呪文があれば）「○○をおぼえた！」→（戦利品があれば最後に）「○○を てにいれた」。0 のものは出ない。1 件約 1 秒の自動送り。**field-sample の設定では敵が戦利品を持てないので、見られるのはギルと経験値の2行まで**（呪文・戦利品の行は vitest の `BattleScreenResultMessages.test.ts` で担保）。生き残りの味方は通常と victory を約 0.4 秒ごとに交互に繰り返す
 4. 窓に出ている間に Enter か画面タップをすると、残りを飛ばして戦闘画面が閉じる（待機の開始直後の約 0.25 秒は受け付けない）。dq 式・全滅・逃走は従来どおり
 
 **暫定の確認点（#1039）**: 自動送りの間隔・キャラ名なし・数字の桁区切りなし・通貨単位「ギル」は仮の値で、sit-by-me の決定台帳（U-2929）が未決。確定の正本は `sit-by-me` リポの docs/systems.md「戦闘後のリザルト(FF5 式)」。見た目の最終判断は KJ の実機で行う。
 
-## 実際の設定＋実際のセーブでの確認（#1051）
+## 実際の設定＋実際のセーブでの確認（#1051。世界設定は未解決）
 
-確認は「寺町の同梱設定（`?config=` を付けない既定）＋ [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)」をロードする 1 本だけ。手順は「刀の確認」の 1〜3 と同じ（`field-sample.html?resume=0`）。味方は実際の 4 人、敵は台帳の敵（M149・M147）、背景は BG001。書式は [デバッガガイド](./debugger.md)。
+確認は「`?config=<URL>` で指定する世界設定 ＋ [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)」をロードする 1 本だけ。手順は「刀の確認」の 1〜3 と同じ（`field-sample.html?resume=0&config=<URL>`）。寺町セーブの読み込み先の世界設定は未解決のため、現状は成り立たない。味方は実際の 4 人、敵は台帳の敵（M149・M147）、背景は BG001。書式は [デバッガガイド](./debugger.md)。
 
 - 見えるもの: `battle.motion: "snappy"` の横スライド登場・キビキビした踏み出し、`battle.effects` の `cast` / `magic`・`slash` / `impact`、`battle.enemyList: "window"` の敵名窓（コマンド窓の右隣に敵名が縦に並び、同名はまとまる。台帳の決定）
 - 操作可能までは snappy の登場で約 4〜5 秒（それ以前の入力は効かない）。`cross` が有効なので矢印キーが効く
