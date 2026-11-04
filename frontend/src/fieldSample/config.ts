@@ -29,8 +29,8 @@ import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
 import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
-import type { BattleEntity } from '../game/spellDsl'
-import type { BattleLayoutMode } from '../game/battleLayout'
+import { MAX_LEVEL, type BattleEntity } from '../game/spellDsl'
+import { normalizeBattleRow, type BattleLayoutMode } from '../game/battleLayout'
 import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
 import {
@@ -182,6 +182,8 @@ export interface FieldBattleConfig {
   commands?: CommandId[]
   /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
   atb?: BattleAtbConfig
+  /** 敵の前列・後列 (#896)。`battle.enemyRow: "on"` のときだけ true。`layout: "side"` のときだけ効く。未指定・"off" は undefined＝従来どおり */
+  enemyRow?: true
   /** 戦闘のエフェクト重ね (#936)。`battle.effects`（戦闘サンプルの `effects` と同じ書式）。不正な種類は警告して無視。`presentation: "ff"` のときだけ効く。未指定は undefined＝エフェクトなし */
   effects?: BattleEffects
   /** 戦闘の開始・終了の画面遷移 (sit-by-me#55)。`battle.transition`: `none` / `ff` / `ff-mosaic`（エンジンの `battle_transition` と同じ）。未指定は undefined＝`none`（従来どおり演出なしで即切替） */
@@ -725,6 +727,9 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(e.value.poses ? { poses: e.value.poses } : {}),
         ...(size.value ? { size: size.value } : {}),
         ...(scale.value !== undefined ? { scale: scale.value } : {}),
+        // 敵の隊列・レベル (#896 / #898)。parseEntity が "front"/"back"・1〜99 にそろえ済み。未指定はキー自体を出さない
+        ...(e.value.formationRow ? { row: e.value.formationRow } : {}),
+        ...(e.value.level !== undefined ? { level: e.value.level } : {}),
       }
     }
   }
@@ -817,7 +822,12 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
     return fail(`battle.atbMode は "wait" か "active": ${JSON.stringify(b.atbMode)}`)
   // front では効かない設定の組（静かに無視されるので警告する。読み込みは成功のまま）
+  if (b.enemyRow !== undefined && b.enemyRow !== 'on' && b.enemyRow !== 'off')
+    return fail(`battle.enemyRow は "on" か "off": ${JSON.stringify(b.enemyRow)}`)
+
   const warnings: string[] = []
+  if (b.layout === 'front' && b.enemyRow === 'on')
+    warnings.push('battle.enemyRow は layout "side" のときだけ効きます（"front" では無視されます）')
   if (b.layout === 'front') {
     if (b.presentation === 'ff')
       warnings.push(
@@ -1030,6 +1040,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
+        ...(b.enemyRow === 'on' ? { enemyRow: true as const } : {}),
         ...(hasBattleEffects(fx.effects) ? { effects: fx.effects } : {}),
       },
       ...(groupErrors ? { groupErrors } : {}),
@@ -1282,6 +1293,24 @@ function parseEntity(
     // ポーズ（正規化済み）と、武器レイヤー (#1027) の予約キー（生）を同じ poses に持ち回る。解釈は戦闘への組み立て時（posesField）
     const merged = { ...(normalizePoses(rec.value) ?? {}), ...pickWeaponKeys(rec.value) }
     if (Object.keys(merged).length > 0) e.poses = merged
+  }
+  if (raw.formationRow !== undefined) {
+    // 敵の隊列の宣言 (#896)。battleSample と同じ検証。敵（monsters）だけに書ける
+    if (path.startsWith('party[')) {
+      return fail(`${path}.formationRow: 隊列の宣言は敵だけに書けます（味方は row）`)
+    }
+    if (typeof raw.formationRow !== 'string' || raw.formationRow.trim() === '') {
+      return fail(`${path}.formationRow は "front" か "back": ${JSON.stringify(raw.formationRow)}`)
+    }
+    e.formationRow = normalizeBattleRow(raw.formationRow)
+  }
+  if (raw.level !== undefined) {
+    // 敵のレベル (#898)。整数。1〜99 に丸める
+    if (path.startsWith('party[')) return fail(`${path}.level: レベルは敵だけに書けます`)
+    if (typeof raw.level !== 'number' || !Number.isInteger(raw.level)) {
+      return fail(`${path}.level は整数: ${JSON.stringify(raw.level)}`)
+    }
+    e.level = Math.min(MAX_LEVEL, Math.max(1, raw.level))
   }
   return { ok: true, value: e }
 }

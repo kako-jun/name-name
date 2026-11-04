@@ -125,6 +125,16 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(buildBattleEngineOptions({})).toEqual({})
   })
 
+  it('#1043 同梱の寺町設定は enemyRow を持たず、モンスターに隊列・レベルも無い（本編相当は既定のまま）', () => {
+    const c = load()
+    expect(c.battle.enemyRow).toBeUndefined()
+    expect(buildBattleEngineOptions(c.battle).enemyRow).toBeUndefined()
+    for (const m of Object.values(c.monsters)) {
+      expect('row' in m).toBe(false)
+      expect('level' in m).toBe(false)
+    }
+  })
+
   it('buildBattleScreenOptions: 未指定のキーは出さない（従来の既定）', () => {
     const o = buildBattleScreenOptions(
       { layout: 'side', spriteStyle: 'none', width: 800, height: 450 },

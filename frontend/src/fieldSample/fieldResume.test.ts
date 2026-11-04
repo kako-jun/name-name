@@ -3,6 +3,7 @@
  * `?resume=` で読み、設定に重ねた状態になること・不正なときに理由を返すことを固定する。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
+import { buildBattleEngineOptions } from './battleOptions'
 import { SaveManager } from '../game/SaveManager'
 import { buildRpgSaveSlot, type RpgSaveState } from '../game/rpgSave'
 import type { BattleEntity } from '../game/spellDsl'
@@ -262,5 +263,45 @@ describe('savedFormsFromResume', () => {
     const r = loadResume('?resume=0', config)
     expect(r.kind).toBe('ok')
     if (r.kind === 'ok') expect(r.resolved.party[0].form).toBe('uniform')
+  })
+})
+
+describe('敵の隊列・レベルの再開 (#1043)', () => {
+  const cfg = {
+    ...config,
+    monsters: {
+      boss: {
+        id: 'boss',
+        name: 'ボス',
+        hp: 50,
+        atk: 5,
+        def: 1,
+        agi: 3,
+        exp: 5,
+        gold: 3,
+        row: 'back',
+        level: 50,
+      },
+    },
+  } as unknown as Parameters<typeof loadResume>[1]
+
+  it('戦闘中セーブから再開した敵がマスターの row / level を保つ', () => {
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+      0,
+      buildRpgSaveSlot(rpg({ battle: { enemies: [{ id: 'boss', hp: 7 }] } }))
+    )
+    const r = loadResume('?resume=0', cfg)
+    expect(r.kind === 'ok' && r.resolved.battle?.enemies[0]).toMatchObject({
+      id: 'boss',
+      hp: 7,
+      formationRow: 'back',
+      level: 50,
+    })
+  })
+
+  it('resumeBattleEngineOptions は enemyRow を保つ', () => {
+    const base = buildBattleEngineOptions({ enemyRow: true, layout: 'side' })
+    const o = resumeBattleEngineOptions(base, { enemies: [] })
+    expect(o.enemyRow).toEqual({})
   })
 })
