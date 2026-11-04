@@ -1403,13 +1403,17 @@ async function main(): Promise<void> {
     stats = advancePlayTime(stats, dt)
     timeLimitMs = advanceTimeLimit(timeLimitMs, dt, menuStopped)
     // 制限時間のレイヤー: どの画面でも同じ位置・最前面。メニュー中は停止の見た目
-    const face = faceOf()
-    timeLimitLayer.update(
-      { remainingMs: timeLimitMs, paused: menuStopped },
-      face.w,
-      face.h,
-      face.cssScale
-    )
+    // getBoundingClientRect は制限時間があるときだけ呼ぶ（メニューも制限時間も無いゲームは従来と同じ負荷）
+    if (timeLimitMs !== null) {
+      const face = faceOf()
+      timeLimitLayer.update(
+        { remainingMs: timeLimitMs, paused: menuStopped },
+        face.w,
+        face.h,
+        face.cssScale
+      )
+    } else if (timeLimitLayer.visible)
+      timeLimitLayer.update({ remainingMs: null, paused: false }, 0, 0)
     if (menuHost?.tick(dt)) {
       // メニュー中: フィールドの時間（移動・エンカウント・歩数）は全部止める。メニュー画面だけ進む
       $('info').textContent = `メニュー中  scene=${sceneId}`

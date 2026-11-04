@@ -598,7 +598,8 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
   const primary: Rect = { x: X(rightX), y: Y(listTop), w: rightW * W, h: (bottom - listTop) * H }
   const party: Rect[] = []
   if (hasParty) {
-    const top = i.reserveTimer ? 0.09 : 0.12
+    // 説明バー（2〜10%H）の下（12%H〜）。reserveTimer の有無で変えない（9% 始まりだと x 16%W 以降で説明バーと重なっていた）
+    const top = 0.12
     const gap = 0.006 * H
     const n = Math.max(1, Math.min(i.partyCount, MAX_PARTY_SLOTS))
     const colH = (bottom - top) * H

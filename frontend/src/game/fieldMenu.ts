@@ -518,11 +518,11 @@ export function computeMenuLayout(
   const partyTop = reserveTimer ? (TIME_LIMIT_AREA.y + TIME_LIMIT_AREA.h + 0.01) * H : colTop
   const partyH = L.columnBottom * H - partyTop
   const n = Math.max(1, Math.floor(partyCount))
-  const slots = Math.max(1, Math.min(n, 4))
+  const slots = Math.max(1, Math.min(n, MAX_PARTY_SLOTS))
   const gap = L.party.gap * H
   const slotH = Math.min(L.party.slotH * H, (partyH - gap * (slots - 1)) / slots)
   const partySlots: Rect[] = []
-  for (let i = 0; i < Math.min(n, 4); i++)
+  for (let i = 0; i < Math.min(n, MAX_PARTY_SLOTS); i++)
     partySlots.push({
       x: base.x + L.party.x * W,
       y: base.y + partyTop + i * (slotH + gap),

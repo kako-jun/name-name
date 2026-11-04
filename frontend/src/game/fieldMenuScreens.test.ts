@@ -3,6 +3,7 @@
  * 観点: 中身の既定とパース、戻りの階層、確認窓、select の受理条件、スクロール、窓の配置。
  */
 import { describe, expect, it } from 'vitest'
+import { timeLimitRect } from './fieldTimeLimit'
 import {
   SAVE_SLOT_COUNT,
   baseFocus,
@@ -17,6 +18,7 @@ import {
   screenDescription,
   stepScreen,
   type FieldMenuContentDef,
+  type Rect,
   type ScreenCtx,
   type ScreenKind,
   type ScreenLayoutInput,
@@ -507,13 +509,37 @@ describe('computeScreenLayout', () => {
     const l = computeScreenLayout(input({ kind: 'status' }))
     expect(l.statusNav?.prev.x).toBeLessThan(l.statusNav!.next.x)
   })
-  it('reserveTimer: 説明バーが予約領域の右へ、人物枠が下へずれる', () => {
+  it('reserveTimer: 説明バーが予約領域の右へずれる。人物枠は説明バーの下端以下で、有無とも同じ', () => {
     const a = computeScreenLayout(input())
     const b = computeScreenLayout(input({ reserveTimer: true }))
     expect(b.desc.x).toBeGreaterThan(a.desc.x)
     expect(b.desc.x).toBeGreaterThanOrEqual(base.x + 0.14 * base.w)
-    expect(b.party[0].y).toBeLessThan(a.party[0].y) // 予約時は 9% から（タイマーは 2〜8%H の左端 14%W 内）
+    expect(b.party[0].y).toBe(a.party[0].y)
   })
+  const overlap = (p: Rect, q: Rect): boolean =>
+    p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h
+  it.each([true, false])(
+    '人物選択のある画面で、説明バー・人物枠・タブ・一覧・予約領域が重ならない（reserveTimer=%s）',
+    (reserveTimer) => {
+      for (const kind of ['item', 'party-list'] as const) {
+        for (const partyCount of [1, 4]) {
+          const l = computeScreenLayout(input({ kind, partyCount, reserveTimer }))
+          const timer = timeLimitRect(base.w, base.h)
+          const timerRect = { x: base.x + timer.x, y: base.y + timer.y, w: timer.w, h: timer.h }
+          const others = [...l.party, ...l.tabs, l.primary]
+          for (const r of others) {
+            expect(overlap(l.desc, r)).toBe(false)
+            if (reserveTimer) expect(overlap(timerRect, r)).toBe(false)
+          }
+          if (reserveTimer) expect(overlap(timerRect, l.desc)).toBe(false)
+          l.party.forEach((p, i) =>
+            l.party.slice(i + 1).forEach((q) => expect(overlap(p, q)).toBe(false))
+          )
+          for (const p of l.party) expect(overlap(p, l.primary)).toBe(false)
+        }
+      }
+    }
+  )
   it('確認窓は confirmOpen のときだけ。中央にあり選択肢が2つ', () => {
     const l = computeScreenLayout(input({ confirmOpen: true }))
     expect(l.confirm?.options).toHaveLength(2)

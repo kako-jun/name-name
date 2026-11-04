@@ -274,3 +274,52 @@ describe('開いている間の情報帯（プレイ時間は進む）', () => {
     expect(t.screen.infos[t.screen.infos.length - 1]?.playMs).toBe(5000)
   })
 })
+
+describe('open の失敗と pointer 記録の使い切り', () => {
+  it('prepare が reject しても握り、busy を解く（キー経由でも unhandled にならない）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = setup({ prepare: () => Promise.reject(new Error('boom')) })
+    expect(await t.host.open()).toBe(false)
+    expect(t.host.busy).toBe(false)
+    t.host.onKeyDown(key('KeyX'), false)
+    await flush()
+    expect(t.host.busy).toBe(false)
+    expect(t.log).toEqual([])
+    warn.mockRestore()
+  })
+  it('prepare が同期 throw しても握る', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = setup({
+      prepare: () => {
+        throw new Error('sync')
+      },
+    })
+    expect(await t.host.open()).toBe(false)
+    expect(t.host.busy).toBe(false)
+    warn.mockRestore()
+  })
+  it('enterView 後に screen.open が throw したら leaveView で戻す', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = setup()
+    t.screen.open = () => {
+      throw new Error('x')
+    }
+    void t.host.open()
+    t.release()
+    await flush()
+    expect(t.log).toEqual(['prepare', 'enter', 'leave'])
+    expect(t.host.busy).toBe(false)
+    warn.mockRestore()
+  })
+  it('contextmenu で一度使ったら記録を解除する（その後の右クリックは通る）', async () => {
+    const t = setup()
+    void t.host.open()
+    t.release()
+    await flush()
+    t.host.beginPointer()
+    t.screen.closeByPointer()
+    expect(t.host.onContextMenu()).toBe(true)
+    expect(t.host.isMenuBlocked).toBe(false)
+    expect(t.host.onContextMenu()).toBe(false)
+  })
+})

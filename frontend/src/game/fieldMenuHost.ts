@@ -106,6 +106,7 @@ export class FieldMenuHost {
   async open(): Promise<boolean> {
     if (!this.canOpenNow()) return false
     this.opening = true
+    let entered = false
     try {
       const prepared = await this.d.prepare()
       // 読み込み中に会話・戦闘などが始まったら開かない
@@ -115,6 +116,7 @@ export class FieldMenuHost {
       this.d.screen.setTimed(this.d.timed())
       this.d.drawButton(null)
       this.d.enterView(face)
+      entered = true
       this.d.screen.open({
         items: this.d.config.items,
         party: prepared.party,
@@ -123,6 +125,11 @@ export class FieldMenuHost {
         settings: this.settings,
       })
       return true
+    } catch (e) {
+      // 準備・表示の失敗は握る（unhandled rejection にしない）。開き始めを取り消し、フィールドの表示へ戻す
+      console.warn('[field-menu] メニューを開けませんでした', e)
+      if (entered) this.d.leaveView()
+      return false
     } finally {
       this.opening = false
     }
@@ -178,7 +185,10 @@ export class FieldMenuHost {
 
   /** contextmenu。メニューが塞いでいる間・閉じた同じ操作では、ブラウザの右クリックメニューを出さない。true なら preventDefault */
   onContextMenu(): boolean {
-    return this.isMenuBlocked
+    const blocked = this.isMenuBlocked
+    // 閉じた同じ操作の分は使い切り。以降の（メニューと無関係な）右クリックのメニューは通常どおり出す
+    this.pointerBlocked = false
+    return blocked
   }
 
   /** ≡ ボタンの表示・位置の更新（毎フレーム）。表示と当たりは同じ `face()` を使う */
