@@ -616,11 +616,21 @@ export function sampleTarget(
       vanish: 0,
     }
   }
-  if (sinceHit < timing.recoilMs) return { recoil, pose: 'hurt', downProgress: 0, tilt, vanish: 0 }
+  // 倒れる者は、被弾の傾きが戻らず（ピークで保ち）そこから連続して倒れる
+  if (sinceHit < timing.recoilMs) {
+    const lean = timing.hurtTiltDeg * easeOutQuad(recoilU)
+    return { recoil, pose: 'hurt', downProgress: 0, tilt: lean, vanish: 0 }
+  }
   const downProgress = easeOutQuad((sinceHit - timing.recoilMs) / timing.downMs)
   const sinceDown = sinceHit - timing.recoilMs - timing.downMs
   const vanish = timing.vanishMs > 0 ? clamp01(sinceDown / timing.vanishMs) : sinceDown >= 0 ? 1 : 0
-  return { recoil: 0, pose: 'down', downProgress, tilt: timing.fallDeg * downProgress, vanish }
+  return {
+    recoil: 0,
+    pose: 'down',
+    downProgress,
+    tilt: timing.hurtTiltDeg + (timing.fallDeg - timing.hurtTiltDeg) * downProgress,
+    vanish,
+  }
 }
 
 /** 何も再生していないときの姿: 戦闘に勝って生きている味方は victory、倒れていれば down、それ以外は idle */

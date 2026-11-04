@@ -3535,6 +3535,52 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
       void sp
     })
 
+    it('傾きの支点はスプライト下端中央で、影も同じ角度で回り足元から動かない', async () => {
+      const { s, engine, v } = await mk({})
+      engine.selectAttack()
+      s.redraw(800, 450)
+      const ev = v.enemyViews[0] as RV & {
+        acrylicShadow: Sprite | null
+        shadowBaseX: number
+        shadowBaseY: number
+      }
+      let checked = 0
+      for (let t = 0; t < 420; t += 4) {
+        s.tick(4)
+        if (Math.abs(ev.container.rotation) < 0.05) continue
+        checked++
+        expect(ev.container.pivot.x).toBeCloseTo(ev.sprite.x + ev.sprite.width / 2, 6)
+        expect(ev.container.pivot.y).toBeCloseTo(ev.sprite.y + ev.sprite.height, 6)
+        expect(ev.acrylicShadow!.rotation).toBeCloseTo(ev.container.rotation, 6)
+        expect(ev.acrylicShadow!.y).toBeCloseTo(ev.shadowBaseY, 6)
+      }
+      expect(checked).toBeGreaterThan(5)
+      expect(ev.acrylicShadow!.rotation).toBeCloseTo(0, 6)
+    })
+
+    it('従来表示（非アクスタ）は敵が死んでも消滅ぶん行動が延びない（extraDownMsFor=0）', async () => {
+      const dying = {
+        seq: 0,
+        actor: { side: 'party', index: 0 },
+        kind: 'attack',
+        hits: [
+          {
+            target: { side: 'enemy', index: 0 },
+            kind: 'damage',
+            amount: 9,
+            hpBefore: 1,
+            hpAfter: 0,
+          },
+        ],
+      }
+      const f = (x: BattleScreen) =>
+        (x as unknown as { extraDownMsFor(e: unknown): number }).extraDownMsFor(dying)
+      const none = await mk({ spriteStyle: 'none', enemyHp: 1 })
+      expect(f(none.s)).toBe(0)
+      const acr = await mk({ enemyHp: 1 })
+      expect(f(acr.s)).toBeGreaterThan(0)
+    })
+
     it('味方の被弾: 傾いて戻る・モザイクなし・向きは敵と反対', async () => {
       const { s, v } = await mk({})
       v.partyViews[0].container.rotation = 0

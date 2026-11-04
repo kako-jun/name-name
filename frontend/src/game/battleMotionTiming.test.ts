@@ -321,4 +321,15 @@ describe('アクスタの被弾の傾き・倒れ・消滅 (#953)', () => {
     const base = m.eventTimeline(ev, m.SNAPPY_MOTION_TIMING).duration
     expect(m.eventTimeline(ev, m.SNAPPY_MOTION_TIMING, 100).duration).toBe(base + 100)
   })
+  it('死亡: 被弾の傾きは戻らず、ピークから連続して単調に倒れる', async () => {
+    const m = await import('./battleMotion')
+    const T = m.SNAPPY_MOTION_TIMING
+    let prev = 0
+    for (let t = 0; t <= T.recoilMs + T.downMs; t += 2) {
+      const tilt = m.sampleTarget('damage', t, true, T).tilt
+      expect(tilt).toBeGreaterThanOrEqual(prev - 1e-9)
+      prev = tilt
+    }
+    expect(m.sampleTarget('damage', T.recoilMs, true, T).tilt).toBeCloseTo(T.hurtTiltDeg, 6)
+  })
 })

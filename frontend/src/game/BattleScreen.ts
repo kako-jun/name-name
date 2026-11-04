@@ -3148,6 +3148,8 @@ export class BattleScreen extends Container {
         const sh = view.acrylicShadow
         if (sh) {
           sh.position.set(view.shadowBaseX + dx, view.shadowBaseY)
+          // アクスタの傾き (#953): 影の pivot は足元なので、絵と同じ角度で回せば同じ足元を支点に絵と一緒に傾く
+          sh.rotation = view.container.rotation
           sh.alpha = view.container.alpha
         }
         // モザイクは敵の攻撃の通知（自己モザイク）だけ。味方の被弾は hurt ポーズ絵 + のけぞりで表す

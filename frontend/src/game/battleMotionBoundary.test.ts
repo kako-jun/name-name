@@ -168,7 +168,7 @@ describe('sampleTarget: 境界と非有限', () => {
       recoil: 0,
       pose: 'down',
       downProgress: 0,
-      tilt: 0,
+      tilt: 18, // 被弾の傾きのピークで保ち、そこから連続して倒れる (#953)
       vanish: 0,
     })
     expect(sampleTarget('damage', RECOIL_MS + DOWN_MS + 10000, true).downProgress).toBe(1)
