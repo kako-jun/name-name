@@ -90,6 +90,8 @@ export interface FieldBattleSettings {
   enemyGrid: EnemyGridSize | undefined
   /** `battle_enemy_window_overlap` (#839)。undefined = 既定（0.25） */
   enemyWindowOverlap: number | undefined
+  /** `battle_enemy_row` (#896)。true = 後列の敵への通常攻撃のダメージを半分にする。side のときだけ効く。undefined = 無効（既定） */
+  enemyRow: true | undefined
   /** `battle_command_layout` (#204) */
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
@@ -118,6 +120,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   atb: undefined,
   enemyGrid: undefined,
   enemyWindowOverlap: undefined,
+  enemyRow: undefined,
   commandLayout: 'grid',
   commandLabels: undefined,
   commands: undefined,
@@ -144,6 +147,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     atb: gameData.battleAtb,
     enemyGrid: gameData.battleEnemyGrid,
     enemyWindowOverlap: gameData.battleEnemyWindowOverlap,
+    enemyRow: gameData.battleEnemyRow,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
     commands: gameData.battleCommands,
@@ -525,6 +529,10 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   const engine = new BattleEngine(party, battleEnemies, {
     ...(scripted ? { script: scripted.script } : {}),
     ...(settings.atb ? { atb: settings.atb } : {}),
+    // 敵の前列・後列 (#896)。side のときだけ（front は敵の列を描かない）。グリッドは BattleScreen と同じものを渡す
+    ...(settings.enemyRow && settings.layout === 'side'
+      ? { enemyRow: { grid: settings.enemyGrid } }
+      : {}),
     ...(roster.skills ? { skills: toSkillExecutions(roster.skills) } : {}),
     ...(roster.statuses ? { statuses: roster.statuses } : {}),
     ...(itemNamesOf(roster.items) ? { itemNames: itemNamesOf(roster.items) } : {}),

@@ -207,6 +207,7 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
             .and_then(|v| v.into_iter().next()),
         size: collect_size(entries),
         scale: collect_scale(entries),
+        row: collect_monster_row(entries),
         affinity: collect_affinity(entries),
         loot: collect_loot(entries),
     })
@@ -362,6 +363,34 @@ pub(crate) fn to_halfwidth(raw: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+/// モンスターの `隊列` / `row` (#896)。`前衛`/`後衛`/`前列`/`後列`/`front`/`back`（大小無視）だけ受け、生文字列で持つ。
+/// 空は未指定、それ以外の値は警告して None（＝グリッドから導出）。同じキーが複数あれば最初の 1 行が勝つ。
+fn collect_monster_row(entries: &[(String, String)]) -> Option<String> {
+    let (row, warning) = interpret_monster_row(lookup_master_value(entries, &["隊列", "row"]));
+    if let Some(w) = warning {
+        emit_warning(&format!("[name-name-parser] warning: {w}"));
+    }
+    row
+}
+
+/// `隊列:` の値の解釈（副作用なし）。戻りは (隊列, 警告文)。
+fn interpret_monster_row(raw: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else {
+        return (None, None);
+    };
+    match raw.to_lowercase().as_str() {
+        "前衛" | "後衛" | "前列" | "後列" | "front" | "back" => {
+            (Some(raw.to_string()), None)
+        }
+        _ => (
+            None,
+            Some(format!(
+                "invalid monster row '{raw}', ignoring. Expected 前衛 / 後衛 (or front / back)"
+            )),
+        ),
+    }
 }
 
 /// `倍率` / `scale` を 0.25〜1 に丸めた表示倍率にする (#839)。書かない場合は None。
@@ -1003,6 +1032,22 @@ fn build_status_def(id: String, entries: &[(String, String)]) -> Option<StatusDe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monster_row_accepts_known_values_and_warns_on_invalid() {
+        for ok in ["前衛", "後衛", "前列", "後列", "front", "Back", " 後衛 "] {
+            let (r, w) = interpret_monster_row(Some(ok));
+            assert_eq!(r.as_deref(), Some(ok.trim()), "{ok}");
+            assert_eq!(w, None);
+        }
+        for bad in ["中衛", "left", "on"] {
+            let (r, w) = interpret_monster_row(Some(bad));
+            assert_eq!(r, None, "{bad}");
+            assert!(w.unwrap().contains("invalid monster row"), "{bad}");
+        }
+        assert_eq!(interpret_monster_row(None), (None, None));
+        assert_eq!(interpret_monster_row(Some("  ")), (None, None));
+    }
 
     #[test]
     fn invalid_size_returns_warning_and_none() {

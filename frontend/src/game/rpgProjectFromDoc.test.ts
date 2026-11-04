@@ -2136,3 +2136,37 @@ describe('rpgProjectFromDoc: battle_enemy_list (#954)', () => {
     }
   })
 })
+
+describe('rpgProjectFromDoc: battle_enemy_row (#896)', () => {
+  it.each([
+    ['on', true],
+    [' On ', true],
+    ['off', undefined],
+    [null, undefined],
+    ['', undefined],
+    ['maybe', undefined],
+  ])('battle_enemy_row %j → battleEnemyRow %s（不正値は side のとき警告）', (raw, expected) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const doc = { ...makeDoc(), battle_layout: 'side', battle_enemy_row: raw }
+      expect(rpgProjectFromDoc(doc)!.battleEnemyRow).toBe(expected)
+      expect(warn).toHaveBeenCalledTimes(raw === 'maybe' ? 1 : 0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('未指定ならキー自体が付かない（従来のキー集合）', () => {
+    expect('battleEnemyRow' in rpgProjectFromDoc(makeDoc())!).toBe(false)
+  })
+
+  it('front では不正値でも警告しない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      rpgProjectFromDoc({ ...makeDoc(), battle_enemy_row: 'maybe' })
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

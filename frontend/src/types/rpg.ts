@@ -258,6 +258,8 @@ export interface RPGProject {
   battleEnemyGrid?: { cols: number; rows: number }
   /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap:`（0〜0.5 に丸める）由来。不正値・未指定は undefined＝既定 0.25 */
   battleEnemyWindowOverlap?: number
+  /** 敵の前列・後列 (#896)。frontmatter `battle_enemy_row: on` 由来。`true` のときだけ付く（未指定・off・不正値は undefined＝従来どおり）。`side` のときだけ効く */
+  battleEnemyRow?: true
   /**
    * 敵グリッドに収まらないため無効化したエンカウント群 (#839 段5)。`battle_enemy_grid` が有効なゲームを読み込んだときだけ、
    * 全マップ（全シーン）の群を検証した結果が入る。無ければ（全部収まる・グリッド無効）undefined。
