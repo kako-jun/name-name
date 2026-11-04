@@ -2,6 +2,7 @@
   "_generated": "frontend/scripts/gen_sit_character_forms.py が sit-by-me の人物素材から生成。手で編集しない（#1020）",
   "characters": {
     "C001": {
+      "plainBaked": true,
       "forms": {
         "adult-wheelchair": {
           "poses": {
@@ -11,14 +12,12 @@
         },
         "elementary": {
           "poses": {
-            "plain": ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"],
             "character": ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"]
           },
           "walk": true
         },
         "elementary-wheelchair": {
           "poses": {
-            "plain": ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"],
             "character": ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"]
           },
           "walk": true
@@ -43,7 +42,6 @@
         },
         "uniform": {
           "poses": {
-            "plain": ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"],
             "character": ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"]
           },
           "walk": false

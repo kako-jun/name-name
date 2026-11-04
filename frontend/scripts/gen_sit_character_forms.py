@@ -18,6 +18,9 @@ from pathlib import Path
 POSES = ["idle", "ready", "step", "slash", "cast", "hurt", "down", "victory"]
 DIRS = ["up", "down", "left", "right", "upleft", "upright", "downleft", "downright"]
 CHARACTERS = ["C001", "C002", "C003", "C004"]
+# plain（-character でない版）に、刀・斬撃の軌跡を絵へ焼き込んだ版が混じり得る人物。目録に plainBaked: true を付け、
+# name-name は人物単体版が揃った形態だけ使う（C001。sit-by-me の旧一体版削除 PR #223 の後も、adult/teen/midlife-wheelchair に plain が残る）
+PLAIN_BAKED = {"C001"}
 
 
 def main() -> None:
@@ -51,7 +54,7 @@ def main() -> None:
         for entry in forms.values():
             for variant in list(entry["poses"]):
                 entry["poses"][variant].sort(key=POSES.index)
-        characters[cid] = {"forms": dict(sorted(forms.items()))}
+        characters[cid] = {**({"plainBaked": True} if cid in PLAIN_BAKED else {}), "forms": dict(sorted(forms.items()))}
     doc = {
         "_generated": "frontend/scripts/gen_sit_character_forms.py が sit-by-me の人物素材から生成。手で編集しない（#1020）",
         "characters": characters,

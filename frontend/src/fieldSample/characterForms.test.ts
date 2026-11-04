@@ -4,6 +4,7 @@ import manifestText from '../../public/field-sample/sit-character-forms.json?raw
 import {
   DERIVED_POSES,
   deriveWalkSprites,
+  explainNoPoses,
   derivePoses,
   expandCharacterForms,
   parseCharacterFormsManifest,
@@ -19,6 +20,15 @@ const ALL = [...DERIVED_POSES]
 /** 小さな合成の目録: a=人物単体版が揃う、b=plain だけ、c=人物単体版が欠ける（plain が揃う）、d=character の方が多いが不完全 */
 const manifest: CharacterFormsManifest = {
   characters: {
+    // 焼き込み版の plain が混じり得る人物（C001 相当）
+    CB: {
+      plainBaked: true,
+      forms: {
+        full: { poses: { plain: ALL, character: ALL }, walk: true },
+        partial: { poses: { plain: ALL, character: ['idle', 'ready'] }, walk: true },
+        onlyPlain: { poses: { plain: ALL }, walk: true },
+      },
+    },
     C9: {
       forms: {
         a: { poses: { plain: ALL, character: ALL }, walk: true },
@@ -42,6 +52,46 @@ describe('pickPoseVariant（人物単体版の優先ルール）', () => {
     expect(pickPoseVariant(manifest.characters.C9.forms.d)).toBe('character'))
   it('絵が 1 枚も無ければ undefined', () =>
     expect(pickPoseVariant({ poses: {}, walk: false })).toBeUndefined())
+})
+
+describe('plainBaked（焼き込み版が混じり得る人物は plain へ降格しない）', () => {
+  const forms = manifest.characters.CB.forms
+  it('8 ポーズ揃った character は使う', () =>
+    expect(pickPoseVariant(forms.full, { plainBaked: true })).toBe('character'))
+  it('character が不完全・無いなら、plain が揃っていても導出しない', () => {
+    expect(pickPoseVariant(forms.partial, { plainBaked: true })).toBeUndefined()
+    expect(pickPoseVariant(forms.onlyPlain, { plainBaked: true })).toBeUndefined()
+    expect(derivePoses(manifest, ROOT, 'CB', 'partial')).toBeUndefined()
+    expect(derivePoses(manifest, ROOT, 'CB', 'onlyPlain')).toBeUndefined()
+    expect(derivePoses(manifest, ROOT, 'CB', 'full')!.idle).toMatch(/CB-full-character-idle/)
+  })
+  it('plainBaked でない人物（C9）は従来どおり plain に降格する', () =>
+    expect(derivePoses(manifest, ROOT, 'C9', 'c')!.idle).toMatch(/C9-c-idle\.webp$/))
+  it('導けない理由を返す（焼き込み / 絵なし / 導ける・目録に無いは null）', () => {
+    expect(explainNoPoses(manifest, 'CB', 'partial')).toMatch(/焼き込み版/)
+    expect(explainNoPoses(manifest, 'C9', 'a')).toBeNull()
+    expect(explainNoPoses(manifest, 'C9', 'zz')).toBeNull()
+  })
+  it('展開すると警告し、その味方は導出しない（手書きのまま）', () => {
+    const r = expandCharacterForms(
+      {
+        characterForms: { root: ROOT, manifestUrl: 'm.json' },
+        party: [{ name: 'B', character: 'CB', form: 'onlyPlain', sprite: 'old.png' }],
+      },
+      manifest
+    )
+    expect(r.warnings.join('\n')).toMatch(/CB\/onlyPlain.*焼き込み版/)
+    expect((r.raw as { party: Record<string, unknown>[] }).party[0]).toEqual({
+      name: 'B',
+      character: 'CB',
+      form: 'onlyPlain',
+      sprite: 'old.png',
+    })
+  })
+  it('目録の plainBaked が真偽値でなければ失敗', () =>
+    expect(
+      parseCharacterFormsManifest({ characters: { X: { plainBaked: 'y', forms: {} } } }).ok
+    ).toBe(false))
 })
 
 describe('derivePoses / deriveWalkSprites（命名規則）', () => {
@@ -108,7 +158,13 @@ describe('目録 JSON の検証', () => {
       expect(derivePoses(r.value, ROOT, c, f)).toBeDefined()
       expect(e.walk).toBe(true)
     }
+    expect(r.value.characters.C001.plainBaked).toBe(true)
     expect(pickPoseVariant(r.value.characters.C001.forms.elementary)).toBe('character')
+    // C001 の teen-wheelchair は plain だけ（焼き込み版かもしれない）なので導出しない。C002 の plain は人物のみなので導出する
+    expect(derivePoses(r.value, ROOT, 'C001', 'teen-wheelchair')).toBeUndefined()
+    expect(derivePoses(r.value, ROOT, 'C002', 'teen-wheelchair')).toBeDefined()
+    // C001 の kindergarten / uniform は歩行絵が無い（walk: false）ので、主人公にすると警告
+    expect(deriveWalkSprites(r.value, ROOT, 'C001', 'uniform')).toBeUndefined()
     expect(pickPoseVariant(r.value.characters.C002.forms['elementary-wheelchair'])).toBe('plain')
   })
   it('不正な形は理由つきで失敗', () => {

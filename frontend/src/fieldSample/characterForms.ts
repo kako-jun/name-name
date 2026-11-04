@@ -30,7 +30,17 @@ export interface FormEntry {
 }
 
 export interface CharacterFormsManifest {
-  characters: Record<string, { forms: Record<string, FormEntry> }>
+  characters: Record<
+    string,
+    {
+      /**
+       * plain（`-character` でない版）に、刀・斬撃の軌跡を絵へ焼き込んだ版が混じり得る人物（C001）。
+       * true の人物は plain を使わない（人物単体版が 8 ポーズ揃った形態だけ導出する）。無い・false は plain も使える
+       */
+      plainBaked?: boolean
+      forms: Record<string, FormEntry>
+    }
+  >
 }
 
 /** 歩行の向き（設定のキー）→ ファイル名の向き */
@@ -79,7 +89,9 @@ export function parseCharacterFormsManifest(
       }
       forms[fid] = { poses, walk: f.walk }
     }
-    characters[cid] = { forms }
+    if (c.plainBaked !== undefined && typeof c.plainBaked !== 'boolean')
+      return { ok: false, error: `characters.${cid}.plainBaked は真偽値が必要です` }
+    characters[cid] = { ...(c.plainBaked ? { plainBaked: true } : {}), forms }
   }
   return { ok: true, value: { characters } }
 }
@@ -87,16 +99,35 @@ export function parseCharacterFormsManifest(
 /**
  * 人物単体版（character）か plain かを、形態ごとに丸ごと 1 つ選ぶ。
  * 優先: 8 ポーズが揃った character → 8 ポーズが揃った plain → 実在ポーズの多い方（同数は plain）。
- * 版を混ぜない（同じ戦闘で味方の絵の方式が揃わなくなるため）。無ければ undefined
+ * 版を混ぜない（同じ戦闘で味方の絵の方式が揃わなくなるため）。無ければ undefined。
+ * `plainBaked`（plain に刀・軌跡の焼き込み版が混じり得る人物）は、plain へ降格しない: 8 ポーズ揃った character だけ、無ければ undefined
  */
-export function pickPoseVariant(entry: FormEntry): PoseVariant | undefined {
+export function pickPoseVariant(
+  entry: FormEntry,
+  opts: { plainBaked?: boolean } = {}
+): PoseVariant | undefined {
   const c = entry.poses.character ?? []
   const p = entry.poses.plain ?? []
   const all = DERIVED_POSES.length
   if (c.length === all) return 'character'
+  if (opts.plainBaked) return undefined
   if (p.length === all) return 'plain'
   if (c.length === 0 && p.length === 0) return undefined
   return c.length > p.length ? 'character' : 'plain'
+}
+
+/** 形態が目録に載っているのに poses を導けない理由（警告文用）。導ける・載っていないときは null */
+export function explainNoPoses(
+  manifest: CharacterFormsManifest,
+  character: string,
+  form: string
+): string | null {
+  const entry = lookupForm(manifest, character, form)
+  if (!entry) return null
+  const baked = !!manifest.characters[character].plainBaked
+  if (baked && pickPoseVariant(entry, { plainBaked: true }) === undefined)
+    return '人物単体版（-character）が 8 ポーズ揃っておらず、焼き込み版（plain）は使いません'
+  return pickPoseVariant(entry) === undefined ? '戦闘ポーズの絵がありません' : null
 }
 
 const trimSlash = (s: string) => s.replace(/\/+$/, '')
@@ -110,7 +141,9 @@ export function derivePoses(
 ): Partial<Record<BattlePose, string>> | undefined {
   const entry = lookupForm(manifest, character, form)
   if (!entry) return undefined
-  const variant = pickPoseVariant(entry)
+  const variant = pickPoseVariant(entry, {
+    plainBaked: !!manifest.characters[character].plainBaked,
+  })
   if (!variant) return undefined
   const infix = variant === 'character' ? '-character' : ''
   const out: Partial<Record<BattlePose, string>> = {}
@@ -207,7 +240,9 @@ export function expandCharacterForms(
         return m
       }
       if (!tryForm(form)) {
-        warnings.push(`party[${i}] (${id}) の形態 ${m.character}/${form} は目録にありません`)
+        warnings.push(
+          `party[${i}] (${id}) の形態 ${m.character}/${form} の絵を導けません（${explainNoPoses(manifest, m.character as string, form) ?? '目録にありません'}）`
+        )
         // セーブの指定が不正なら設定の既定の形態に戻す。既定も導出できなければ手書きのまま
         if (saved === undefined || !tryForm(declared)) return m
         form = declared as string
@@ -229,7 +264,10 @@ export function expandCharacterForms(
       )
     } else {
       const sprites = deriveWalkSprites(manifest, root, character, form)
-      if (!sprites) warnings.push(`player の歩行絵 ${character}/${form} は目録にありません`)
+      if (!sprites)
+        warnings.push(
+          `player の歩行絵 ${character}/${form} がありません（目録に無い、または 8 方向×3 コマが揃っていません）`
+        )
       else
         out.player = {
           ...rawConfig.player,
