@@ -74,4 +74,13 @@ describe('sampleDigitPopup (#955)', () => {
     expect(popupDigitPitch(40)).toBeCloseTo(22.28)
     expect(popupDigitPitch(0)).toBeGreaterThan(0)
   })
+
+  it('popupDigitPitch は測った送り幅があればそれを使い、測れない値は 0.557em に倒す', () => {
+    expect(popupDigitPitch(40, 28)).toBe(28)
+    expect(popupDigitPitch(40, 0)).toBeCloseTo(22.28)
+    expect(popupDigitPitch(40, -3)).toBeCloseTo(22.28)
+    expect(popupDigitPitch(40, NaN)).toBeCloseTo(22.28)
+    expect(popupDigitPitch(40, Infinity)).toBeCloseTo(22.28)
+    expect(popupDigitPitch(40, undefined)).toBeCloseTo(22.28)
+  })
 })

@@ -242,8 +242,11 @@ describe('clampMotionDx（画面端での頭打ち）', () => {
 })
 
 describe('cast / special ポーズ (#745)', () => {
-  it('cast は受け付け、special は必殺技の配線時まで受け付けない', () => {
-    expect(normalizePoses({ cast: 'c.png', special: 's.png' })).toEqual({ cast: 'c.png' })
+  it('cast は受け付け、special も受け付ける (#1026)', () => {
+    expect(normalizePoses({ cast: 'c.png', special: 's.png' })).toEqual({
+      cast: 'c.png',
+      special: 's.png',
+    })
   })
   it('cast は ready → idle に落ちる', () => {
     expect(resolvePose('cast', { ready: 1, idle: 2 })).toEqual({ pose: 'ready', value: 1 })

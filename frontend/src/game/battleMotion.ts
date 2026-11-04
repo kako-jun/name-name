@@ -31,13 +31,17 @@ export function normalizeBattlePresentation(raw: string | null | undefined): Bat
 // ポーズ（差し替え用スプライトの組）
 // ---------------------------------------------------------------------------
 
-// special（必殺技）は必殺技の配線時に足す。今はポーズ名として受け付けない
+// swing-windup / swing-followthrough は通常攻撃の 5 段 (ready → swing-windup → slash → swing-followthrough → ready) の振りかぶり・振り抜き (#1026)。
+// special は特技・わざ・召喚獣（ActionKind 'skill'）の構え。呪文（spell）は cast のまま
 export const BATTLE_POSES = [
   'idle',
   'ready',
   'step',
+  'swing-windup',
   'slash',
+  'swing-followthrough',
   'cast',
+  'special',
   'hurt',
   'down',
   'victory',
@@ -78,8 +82,12 @@ const POSE_FALLBACK: Record<BattlePose, readonly BattlePose[]> = {
   idle: ['idle'],
   ready: ['ready', 'idle'],
   step: ['step', 'ready', 'idle'],
+  'swing-windup': ['swing-windup', 'ready', 'idle'],
   slash: ['slash', 'step', 'ready', 'idle'],
+  'swing-followthrough': ['swing-followthrough', 'slash', 'step', 'ready', 'idle'],
   cast: ['cast', 'ready', 'idle'],
+  // special が無ければ従来の特技の構え（cast）に落ちる（既存挙動不変）
+  special: ['special', 'cast', 'ready', 'idle'],
   hurt: ['hurt', 'idle'],
   down: ['down'],
   victory: ['victory', 'idle'],
@@ -116,6 +124,12 @@ export interface MotionTiming {
   attackReturnMs: number
   /** 戻りのイージング（default は easeInOutQuad、snappy は easeOutQuad で出だしを速く） */
   attackReturnEase: 'inOutQuad' | 'outQuad'
+  /**
+   * 通常攻撃の 5 段 (#1026): 踏み出しの終わりの swing-windup（振りかぶり）の長さと、戻りの始めの swing-followthrough（振り抜き）の長さ（ms）。
+   * それぞれの絵を持つ者だけに効き、踏み出し・戻りの時間の内側で切り替える（行動の長さ・命中時刻は変わらない）。絵が無ければ従来のポーズ
+   */
+  attackWindupMs: number
+  attackFollowthroughMs: number
   /** 斬りの開始から、命中（対象がのけぞり・数字が出る）までの ms */
   attackSlashHitMs: number
   /** 踏み出しの距離 */
@@ -167,6 +181,8 @@ export interface MotionTiming {
   vanishMs: number
   /** 消えるときのモザイクの最大の粗さ（PixelateFilter.size） */
   vanishMosaicMaxSize: number
+  /** 候補窓（呪文・アイテム一覧）の開閉アニメーションの長さ（ms。開くときも閉じるときも同じ）。0 は即座に開閉（従来） (#745) */
+  menuMs: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -175,6 +191,8 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   attackSlashMs: 180,
   attackReturnMs: 220,
   attackReturnEase: 'inOutQuad',
+  attackWindupMs: 110,
+  attackFollowthroughMs: 110,
   attackSlashHitMs: 70,
   attackStepDistance: 0.7,
   castMs: 560,
@@ -208,6 +226,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   fallDeg: 90,
   vanishMs: 320,
   vanishMosaicMaxSize: 24,
+  menuMs: 0,
 }
 
 /**
@@ -218,6 +237,7 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
  * - のけぞり・倒れ・ダメージ数字・呪文・複数ヒットは default の約 0.75 倍の長さに揃える（動きだけ速く数字が遅いと間延びするため）
  * - ダメージ・回復の数字は 1 桁ずつ 50ms 差で跳ねさせる (#955)。FF の「ぱらぱらと着地する」リズムを出すため（桁数が多くても合計 150ms まで）
  * - 敵の通常攻撃では、攻撃した敵自身にも同じ 260ms・最大 16 の自己モザイクを出し、敵は踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)
+ * - 候補窓（呪文・アイテム一覧）は 120ms の短い scale / alpha で開閉する (#745)。default は 0（即座に開閉）
  * - 攻撃する敵の自己モザイク 260ms (sit-by-me #64)。山の長さは `min(260ms, 行動の長さ)`。最大 16 は絵の切り替えモザイク（24）より控えめ（キャラが読めなくならないよう。等倍(1)→最大→等倍の山でスワップなし）。default は 0（出さない）
  */
 export const SNAPPY_MOTION_TIMING: MotionTiming = {
@@ -225,6 +245,8 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   attackSlashMs: 120,
   attackReturnMs: 130,
   attackReturnEase: 'outQuad',
+  attackWindupMs: 65,
+  attackFollowthroughMs: 65,
   attackSlashHitMs: 50,
   attackStepDistance: 0.55,
   castMs: 420,
@@ -256,6 +278,7 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   fallDeg: 90,
   vanishMs: 240,
   vanishMosaicMaxSize: 24,
+  menuMs: 120,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'
@@ -267,13 +290,17 @@ export const BATTLE_MOTION_PRESETS: Readonly<Record<BattleMotionPreset, MotionTi
 
 /**
  * frontmatter `battle_motion` の値を正規化する。未指定・空は `default`（黙って）。`default` / `snappy`（大小・前後空白は無視）以外は
- * 警告して `default` にフォールバックする。
+ * 警告して `default` にフォールバックする。`warn=false` は警告だけ止める（効かない組み合わせ＝演出が dq のときの不正値。値は同じく `default`）。
  */
-export function normalizeBattleMotion(raw: string | null | undefined): BattleMotionPreset {
+export function normalizeBattleMotion(
+  raw: string | null | undefined,
+  warn = true
+): BattleMotionPreset {
   if (typeof raw !== 'string' || raw.trim() === '') return 'default'
   const v = raw.trim().toLowerCase()
   if (v === 'default' || v === 'snappy') return v
-  console.warn(`battle_motion '${raw}' は default / snappy のどちらでもないため default にした`)
+  if (warn)
+    console.warn(`battle_motion '${raw}' は default / snappy のどちらでもないため default にした`)
   return 'default'
 }
 
@@ -533,20 +560,40 @@ export interface ActorSample {
 export function sampleActor(
   kind: ActionKind,
   t: number,
-  timing: MotionTiming = DEFAULT_MOTION_TIMING
+  timing: MotionTiming = DEFAULT_MOTION_TIMING,
+  /** 行動する者が持つポーズの絵（キーだけ見る）。swing-windup / swing-followthrough があるときだけ通常攻撃が 5 段になる (#1026)。省略は従来 */
+  available: Readonly<Partial<Record<BattlePose, unknown>>> = {}
 ): ActorSample {
   const T = timing
   const time = Number.isFinite(t) ? Math.max(0, t) : 0
   if (kind === 'notice' || kind === 'status') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
-    // 呪文の構えは cast、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
+    // 呪文の構えは cast、特技・わざ・召喚獣は special（無ければ cast に落ちる）、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
     return {
       forward: 0,
-      pose: time < T.castMs ? (kind === 'spell' || kind === 'skill' ? 'cast' : 'ready') : 'idle',
+      pose:
+        time < T.castMs
+          ? kind === 'spell'
+            ? 'cast'
+            : kind === 'skill'
+              ? 'special'
+              : 'ready'
+          : 'idle',
     }
   }
+  const windup = available['swing-windup'] !== undefined
+  const followthrough = available['swing-followthrough'] !== undefined
   if (time < T.attackStepMs) {
-    return { forward: T.attackStepDistance * easeOutQuad(time / T.attackStepMs), pose: 'step' }
+    // 5 段 (#1026): 踏み出しの前半は ready、終わりの attackWindupMs が swing-windup
+    // 前半は ready（無ければ step、さらに idle に落ちる。ready の絵が無い者が idle に退行しないように）
+    const pose: BattlePose = !windup
+      ? 'step'
+      : time >= T.attackStepMs - T.attackWindupMs
+        ? 'swing-windup'
+        : available.ready !== undefined || available.step === undefined
+          ? 'ready'
+          : 'step'
+    return { forward: T.attackStepDistance * easeOutQuad(time / T.attackStepMs), pose }
   }
   const afterStep = time - T.attackStepMs
   if (afterStep < T.attackSlashMs) {
@@ -555,9 +602,15 @@ export function sampleActor(
   const afterSlash = afterStep - T.attackSlashMs
   if (afterSlash < T.attackReturnMs) {
     const ease = T.attackReturnEase === 'outQuad' ? easeOutQuad : easeInOutQuad
+    // 5 段 (#1026): 戻りの始めの attackFollowthroughMs が swing-followthrough、残りは ready（絵が無ければ従来の step）
+    const pose: BattlePose = !followthrough
+      ? 'step'
+      : afterSlash < T.attackFollowthroughMs
+        ? 'swing-followthrough'
+        : 'ready'
     return {
       forward: T.attackStepDistance * (1 - ease(afterSlash / T.attackReturnMs)),
-      pose: 'step',
+      pose,
     }
   }
   return { forward: 0, pose: 'idle' }
@@ -674,6 +727,50 @@ export function enqueueEvents(
   events: readonly BattleActionEvent[]
 ): PlaybackState {
   return events.length === 0 ? pb : { queue: [...pb.queue, ...events], active: pb.active }
+}
+
+/** 候補窓の開閉アニメーションで、最小まで縮む倍率（開くとき 0.92 → 1、閉じるとき 1 → 0.92。alpha は 0 ↔ 1） */
+export const MENU_TRANSITION_MIN_SCALE = 0.92
+
+export interface MenuTransitionSample {
+  alpha: number
+  scale: number
+  /** 終わった（開き切った・閉じ切った） */
+  done: boolean
+}
+
+/**
+ * 候補窓の開閉 (#745)。開く = alpha 0 → 1・scale 0.92 → 1、閉じる = その逆。イージングは easeOutQuad（出だしが速く、
+ * 開くときは素早く現れ、閉じるときは素早く薄れる）。`menuMs` が 0 以下・非有限なら即座に終わる（開いた状態 / 閉じた状態）。
+ * 負・非有限の elapsed は 0 として扱う
+ */
+export function sampleMenuTransition(
+  kind: 'open' | 'close',
+  elapsed: number,
+  timing: MotionTiming = DEFAULT_MOTION_TIMING
+): MenuTransitionSample {
+  const ms = timing.menuMs
+  const t = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
+  const p = !Number.isFinite(ms) || ms <= 0 ? 1 : Math.min(1, t / ms)
+  const e = 1 - (1 - p) * (1 - p)
+  const k = kind === 'open' ? e : 1 - e
+  return {
+    alpha: k,
+    scale: MENU_TRANSITION_MIN_SCALE + (1 - MENU_TRANSITION_MIN_SCALE) * k,
+    done: p >= 1,
+  }
+}
+
+/**
+ * ATB active で演出の再生待ちの行動がこの数に達したら、再生が追いつくまで ATB の時間（ゲージ・敵の行動）を止める (#745)。
+ * エンジンは行動を即時に確定し表示だけが演出キューで遅れて追うので、敵が高速・多数だと待ちが伸び続けるのを防ぐ。
+ * 暫定値（1 行動 0.5〜1 秒として、最大で数秒ぶんの遅れに収める。KJ の実機判定で調整）
+ */
+export const ATB_PLAYBACK_QUEUE_MAX = 6
+
+/** 演出の再生待ち（再生中を除く）が `ATB_PLAYBACK_QUEUE_MAX` に達しているか */
+export function isPlaybackBackedUp(pb: PlaybackState): boolean {
+  return pb.queue.length >= ATB_PLAYBACK_QUEUE_MAX
 }
 
 /** 再生すべきものが残っているか（演出が終わるまで次の行動・入力を待たせる判定に使う） */
@@ -831,10 +928,13 @@ export function sampleDigitPopup(
 }
 
 /**
- * 1 桁ぶんの幅（固定ピッチ・px）。Noto Sans JP Bold の数字の送り幅（約 0.557em。数字は等幅）に合わせ、
- * 1 個の Text で出したときと同じ幅で並べる。
+ * 1 桁ぶんの幅（固定ピッチ・px）。`digitAdvance`（実フォントで '0' を測った送り幅・px。数字は等幅として扱う）が
+ * 渡されたらそれを使い、数字幅の広いフォント（代替フォント）でも桁が重ならないようにする。測れないとき（未指定・
+ * 非有限・0 以下）は Noto Sans JP Bold の数字の送り幅（約 0.557em）に倒す。
  */
-export function popupDigitPitch(fontSize: number): number {
+export function popupDigitPitch(fontSize: number, digitAdvance?: number): number {
+  if (typeof digitAdvance === 'number' && Number.isFinite(digitAdvance) && digitAdvance > 0)
+    return Math.max(1, digitAdvance)
   return Math.max(1, fontSize) * 0.557
 }
 

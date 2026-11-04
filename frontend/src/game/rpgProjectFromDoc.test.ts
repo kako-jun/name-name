@@ -1910,11 +1910,50 @@ describe('rpgProjectFromDoc: battle_motion (#956)', () => {
     [null, 'default'],
     ['', 'default'],
     ['ff5', 'default'],
-  ])('battle_motion %j → battleMotion %s（不正値は警告して default）', (raw, expected) => {
+  ])('battle_motion %j → battleMotion %s（ff で不正値は警告して default）', (raw, expected) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      expect(rpgProjectFromDoc({ ...makeDoc(), battle_motion: raw })!.battleMotion).toBe(expected)
+      expect(
+        rpgProjectFromDoc({ ...makeDoc(), battle_presentation: 'ff', battle_motion: raw })!
+          .battleMotion
+      ).toBe(expected)
       expect(warn).toHaveBeenCalledTimes(raw === 'ff5' ? 1 : 0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('dq（効かない組み合わせ）では不正値でも警告せず default にする', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (const pres of [undefined, 'dq']) {
+        const doc = { ...makeDoc(), battle_presentation: pres, battle_motion: 'ff5' }
+        expect(rpgProjectFromDoc(doc)!.battleMotion).toBe('default')
+      }
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('battle_enemy_list の不正値は ff かつ side のときだけ警告する（それ以外は黙って off）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const mk = (pres: string, layout: string) => ({
+        ...makeDoc(),
+        battle_presentation: pres,
+        battle_layout: layout,
+        battle_enemy_list: 'bogus',
+      })
+      for (const [pres, layout] of [
+        ['dq', 'side'],
+        ['ff', 'front'],
+      ] as const) {
+        expect(rpgProjectFromDoc(mk(pres, layout))!.battleEnemyList).toBe('off')
+      }
+      expect(warn).not.toHaveBeenCalled()
+      expect(rpgProjectFromDoc(mk('ff', 'side'))!.battleEnemyList).toBe('off')
+      expect(warn).toHaveBeenCalledTimes(1)
     } finally {
       warn.mockRestore()
     }
@@ -2084,9 +2123,13 @@ describe('rpgProjectFromDoc: battle_enemy_list (#954)', () => {
   ])('battle_enemy_list %j → battleEnemyList %s（不正値は警告して無効）', (raw, expected) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      expect(rpgProjectFromDoc({ ...makeDoc(), battle_enemy_list: raw })!.battleEnemyList).toBe(
-        expected
-      )
+      const doc = {
+        ...makeDoc(),
+        battle_presentation: 'ff',
+        battle_layout: 'side',
+        battle_enemy_list: raw,
+      }
+      expect(rpgProjectFromDoc(doc)!.battleEnemyList).toBe(expected)
       expect(warn).toHaveBeenCalledTimes(raw === 'list' ? 1 : 0)
     } finally {
       warn.mockRestore()

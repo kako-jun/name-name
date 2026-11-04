@@ -167,7 +167,7 @@ const SIDE_COMMAND_CROSS_ROWS = 3
 export const SIDE_COMMAND_CROSS_MIN_CELL_HEIGHT = 28
 /** 味方 1 人ぶんの status 行の標準高さ */
 export const SIDE_STATUS_ROW_HEIGHT = 26
-const SIDE_STATUS_VERTICAL_PADDING = 12
+export const SIDE_STATUS_VERTICAL_PADDING = 12
 /** status 幅がこれ未満なら MP を省略（compact） */
 export const SIDE_STATUS_COMPACT_WIDTH = 260
 /**

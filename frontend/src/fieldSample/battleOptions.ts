@@ -19,6 +19,7 @@ export function buildBattleScreenOptions(
     ...(b.presentation ? { presentation: b.presentation } : {}),
     ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
     ...(b.motion ? { motion: b.motion } : {}),
+    ...(b.enemyList ? { enemyList: b.enemyList } : {}),
     ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
     ...(b.commands ? { commands: b.commands } : {}),
     ...(b.effects ? { effects: b.effects } : {}),

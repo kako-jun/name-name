@@ -1245,8 +1245,10 @@ describe('grid でも候補窓が使える・操作の案内 (#806)', () => {
   const commandHit = (s: BattleScreen, i: number) =>
     (s as unknown as { commands: Array<{ hit: Container }> }).commands[i].hit
   const hintText = (s: BattleScreen): string[] => {
-    const layer = I(s).menuLayer as unknown as { body: Container }
-    return layer.body.children.flatMap((c) => ('text' in c ? [(c as { text: string }).text] : []))
+    const layer = I(s).menuLayer as unknown as { hintBox: Container }
+    return layer.hintBox.children.flatMap((c) =>
+      'text' in c ? [(c as { text: string }).text] : []
+    )
   }
 
   it('grid: コマンドのタップで一覧が開き、矢印キー・Enter・Escape が窓の操作になる。矢印キーでコマンドは決まらない', () => {
@@ -1356,5 +1358,108 @@ describe('grid でも候補窓が使える・操作の案内 (#806)', () => {
     ;(engine.getState() as { phase: string }).phase = 'victory'
     s.redraw(800, 450)
     expect(hintText(s)).toEqual([])
+  })
+})
+
+describe('候補窓の開閉アニメーション (#745)', () => {
+  const body = (s: BattleScreen) =>
+    (I(s).menuLayer as unknown as { body: Container }).body as Container & {
+      alpha: number
+      scale: { x: number }
+    }
+  const advance = (s: BattleScreen, ms: number) => {
+    for (let left = ms; left > 0; left -= 10) s.tick(Math.min(10, left))
+  }
+
+  it('default: 開閉は即座（alpha 1・scale 1 のまま。閉じれば中身は即座に消える）', () => {
+    const { s } = build({ presentation: 'ff' })
+    const n0 = body(s).children.length // 窓が無いときは案内の文字だけ
+    press('ArrowLeft')
+    expect(body(s).alpha).toBe(1)
+    expect(body(s).scale.x).toBe(1)
+    expect(body(s).children.length).toBeGreaterThan(n0)
+    press('Escape')
+    expect(body(s).children).toHaveLength(n0)
+  })
+
+  it('snappy + ff: 開くと alpha 0 から 120ms で 1 へ、閉じると中身を残したまま 120ms で薄れて消える', () => {
+    const { s } = build({ presentation: 'ff', motion: 'snappy' })
+    const n0 = body(s).children.length
+    press('ArrowLeft')
+    expect(body(s).alpha).toBe(0)
+    expect(body(s).scale.x).toBeCloseTo(0.92)
+    advance(s, 60)
+    expect(body(s).alpha).toBeGreaterThan(0.5)
+    expect(body(s).alpha).toBeLessThan(1)
+    advance(s, 80)
+    expect(body(s).alpha).toBe(1)
+    expect(body(s).scale.x).toBe(1)
+    // 閉じる: 中身は残り、窓の外のタップ受けは外れる
+    press('Escape')
+    expect(types(s)).toEqual([])
+    expect(body(s).children.length).toBeGreaterThan(n0)
+    expect(body(s).interactiveChildren).toBe(false)
+    expect(I(s).menuLayer!.visible).toBe(true)
+    advance(s, 60)
+    expect(body(s).alpha).toBeLessThan(1)
+    expect(body(s).alpha).toBeGreaterThan(0)
+    advance(s, 80)
+    expect(body(s).children).toHaveLength(n0)
+  })
+
+  it('snappy: 閉じている最中にもう一度開くと、今の alpha から続けて開き直す（飛ばない。窓は残る）', () => {
+    const { s } = build({ presentation: 'ff', motion: 'snappy' })
+    press('ArrowLeft')
+    advance(s, 200)
+    press('Escape')
+    advance(s, 40)
+    const mid = body(s).alpha
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(1)
+    press('ArrowLeft')
+    expect(types(s)).toEqual(['list'])
+    expect(body(s).alpha).toBeCloseTo(mid, 5) // 0 や 1 へ飛ばず、今の値から
+    expect(body(s).interactiveChildren).toBe(true)
+    advance(s, 10)
+    expect(body(s).alpha).toBeGreaterThan(mid) // 開く向きへ進む
+    advance(s, 200)
+    expect(body(s).alpha).toBe(1)
+    expect(body(s).children.length).toBeGreaterThan(0)
+  })
+
+  it('snappy: 開く途中で閉じると、今の alpha から薄れ始める（1 へ飛ばない）', () => {
+    const { s } = build({ presentation: 'ff', motion: 'snappy' })
+    press('ArrowLeft')
+    advance(s, 40)
+    const mid = body(s).alpha
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(1)
+    press('Escape')
+    expect(body(s).alpha).toBeCloseTo(mid, 5)
+    advance(s, 10)
+    expect(body(s).alpha).toBeLessThan(mid)
+  })
+
+  it('snappy: 閉じ始めた瞬間に案内を差し替える（窓の動きが終わるのを待たない）', () => {
+    const { s } = build({ presentation: 'ff', motion: 'snappy' })
+    const layer = I(s).menuLayer as unknown as { hintBox: Container }
+    press('ArrowLeft')
+    advance(s, 200)
+    const listHint = layer.hintBox.children.map((c) => (c as unknown as { text: string }).text)
+    press('Escape')
+    // 動きの最中（中身はまだ残っている）なのに、案内はもうコマンド選択中のもの
+    expect(body(s).children.length).toBeGreaterThan(0)
+    const nowHint = layer.hintBox.children.map((c) => (c as unknown as { text: string }).text)
+    expect(nowHint).toHaveLength(1)
+    expect(nowHint).not.toEqual(listHint)
+  })
+
+  it('dq では snappy でもアニメーションしない（tick が回らず途中で止まらない）', () => {
+    const { s } = build({ presentation: 'dq', motion: 'snappy' })
+    const n0 = body(s).children.length
+    press('ArrowLeft')
+    expect(body(s).alpha).toBe(1)
+    press('Escape')
+    expect(body(s).children).toHaveLength(n0)
   })
 })

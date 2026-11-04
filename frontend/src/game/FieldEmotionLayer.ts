@@ -107,11 +107,11 @@ export class FieldEmotionLayer extends Container {
         this.sprites[target] = sprite
       }
       const at = emotionAnchor(head, sheet)
-      const s = emotionView(a, sheet).scale
+      const view = emotionView(a, sheet)
       sprite.texture = tex
-      sprite.scale.set(s)
+      sprite.scale.set(view.scale)
       sprite.position.set(at.x, at.y)
-      sprite.alpha = head.alpha ?? 1
+      sprite.alpha = (head.alpha ?? 1) * view.alpha
       sprite.visible = true
     }
   }

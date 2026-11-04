@@ -43,6 +43,7 @@ import {
   Rectangle,
   Sprite,
   Text as PixiText,
+  CanvasTextMetrics,
   TextStyle,
   Texture,
   Ticker,
@@ -110,6 +111,7 @@ import {
   ENEMY_LIST_PADDING,
   fitEnemyListFont,
   enemyListLines,
+  enemyListTextTop,
   type BattleEnemyListMode,
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
@@ -137,6 +139,7 @@ import {
   enqueueEvents,
   fitPopupFontSize,
   groupHitsByRound,
+  isPlaybackBackedUp,
   isPlaybackBusy,
   messageWindowText,
   popupCenterOffset,
@@ -636,6 +639,8 @@ export class BattleScreen extends Container {
   /** いま再生中の行動（通し番号）のエフェクトの予定のうち、まだ出していないもの */
   private effectPlanSeq = -1
   private effectPending: EffectPlan[] = []
+  /** 画像の読み込み中に出す時刻になったエフェクト（読み込みが終わったら、待った時間ぶん進めて出す。終わる長さを過ぎたら捨てる） (#941) */
+  private effectDeferred: { plan: EffectPlan; sinceStart: number }[] = []
   /** FF 式メッセージ窓の言葉と、窓（ログ帯）の矩形。layoutSide が更新 */
   private messageText: PixiText | null = null
   private messageRect = { x: 0, y: 0, w: 0, h: 0 }
@@ -856,6 +861,7 @@ export class BattleScreen extends Container {
     this.disposeLogTicker()
     this.popups = []
     this.effectInstances = []
+    this.effectDeferred = []
     for (const frames of this.effectFrames.values()) for (const t of frames) t.destroy(false)
     this.effectFrames.clear()
     this.playback = emptyPlayback()
@@ -1385,9 +1391,11 @@ export class BattleScreen extends Container {
     }
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
     if (ff) this.advancePresentation(deltaMS)
+    this.menuLayer?.tick(deltaMS)
     if (atb) {
-      // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される
-      this.engine.tick(deltaMS)
+      // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される。
+      // ただし再生待ちが溜まりすぎたら、追いつくまで時間を止める（キューが伸び続けない。#745）
+      if (!(ff && isPlaybackBackedUp(this.playback))) this.engine.tick(deltaMS)
       const sig = this.computeAtbSignature()
       if (sig !== this.atbSignature) this.refresh()
       else this.drawAtbBars()
@@ -2092,10 +2100,16 @@ export class BattleScreen extends Container {
     }
     const s = this.engine.getState()
     const rows = aggregateEnemyList(
-      s.enemies.map((e, i) => ({ name: e.name, hp: this.shownHp('enemy', i, e.hp) }))
+      s.enemies.map((e, i) => ({
+        name: e.name,
+        hp: this.shownHp('enemy', i, e.hp),
+        status: this.statusLabelsOf('enemy', i, e),
+      }))
     )
     const fit = fitEnemyListFont(rows.length, rect.h, { rows, windowWidth: rect.w })
     const lines = enemyListLines(rows, fit, rect.w)
+    // 1 行目の文字の高さを status 窓の 1 行目にそろえる（#954 後続）
+    const top = enemyListTextTop(rect.h, fit)
     while (this.enemyListTexts.length < fit.visibleRows) {
       const t = new PixiText({
         text: '',
@@ -2122,7 +2136,7 @@ export class BattleScreen extends Container {
       if (t.style.fontSize !== fit.fontSize) t.style.fontSize = fit.fontSize
       t.text = lines[i]
       t.x = rect.x + ENEMY_LIST_PADDING
-      t.y = rect.y + ENEMY_LIST_PADDING + i * fit.lineHeight + (fit.lineHeight - fit.fontSize) / 2
+      t.y = rect.y + top + i * fit.lineHeight + (fit.lineHeight - fit.fontSize) / 2
     })
   }
 
@@ -2381,6 +2395,8 @@ export class BattleScreen extends Container {
       },
       onCancelTap: () => this.cancelMenu(),
     })
+    // 開閉アニメーションは ff のときだけ（tick が回らない dq では途中で止まるので使わない）
+    this.menuLayer.setTransitionMs(this.presentation === 'ff' ? this.motionTiming.menuMs : 0)
     this.addChild(this.menuLayer)
     this.engine.setAtbWaitScope('menu')
   }
@@ -2640,7 +2656,13 @@ export class BattleScreen extends Container {
    */
   private advancePresentation(dt: number): void {
     const wasBusy = isPlaybackBusy(this.playback)
-    if (!wasBusy && this.popups.length === 0 && this.effectInstances.length === 0) return
+    if (
+      !wasBusy &&
+      this.popups.length === 0 &&
+      this.effectInstances.length === 0 &&
+      this.effectDeferred.length === 0
+    )
+      return
     const r = advancePlayback(this.playback, dt, this.motionTiming, (e) => this.extraDownMsFor(e))
     this.playback = r.state
     let changed = false
@@ -2852,6 +2874,7 @@ export class BattleScreen extends Container {
       }
       this.effectPending = rest
     }
+    this.flushDeferredEffects(dt)
     for (const fire of fires) {
       const plans = planHitEffects(fire.event, fire.hits, this.opts.effects, this.motionTiming)
       for (const p of plans) this.spawnEffect(p, fire.sinceHit)
@@ -2865,6 +2888,25 @@ export class BattleScreen extends Container {
     })
   }
 
+  /**
+   * 読み込み待ちのエフェクトを進める (#941)。読めたら待った時間ぶん進めて出し、読めなかった・終わる長さを過ぎたものは捨てる。
+   * まだ読み込み中なら次の tick まで持ち越す（戦闘は止めない）
+   */
+  private flushDeferredEffects(dt: number): void {
+    if (this.effectDeferred.length === 0) return
+    const keep: { plan: EffectPlan; sinceStart: number }[] = []
+    for (const d of this.effectDeferred) {
+      const sheet = this.opts.effects?.[d.plan.kind]
+      if (!sheet) continue
+      d.sinceStart += dt
+      if (effectFrameAt(sheet, d.sinceStart) === null) continue // 待つうちに終わった
+      if (!this.effectTextures.has(sheet.image))
+        keep.push(d) // まだ読み込み中
+      else this.spawnEffect(d.plan, d.sinceStart) // 読めた（null＝読めなかった画像は spawnEffect が省く）
+    }
+    this.effectDeferred = keep
+  }
+
   private spawnEffect(plan: EffectPlan, sinceStart: number): void {
     const layer = this.effectLayer
     const sheet = this.opts.effects?.[plan.kind]
@@ -2872,8 +2914,13 @@ export class BattleScreen extends Container {
     if (!this.effectTextures.has(sheet.image)) void this.loadEffectTexture(sheet.image)
     const frame = effectFrameAt(sheet, sinceStart)
     if (frame === null) return // もう終わっている長さ（大きく遅れたとき）
+    // 読み込み中は後で出す（読み込みが終わった時点で、待った時間ぶん進めて出す）。読めなかった（null）画像は省く
+    if (!this.effectTextures.has(sheet.image)) {
+      this.effectDeferred.push({ plan, sinceStart })
+      return
+    }
     const tex = this.effectFrameTexture(sheet, frame)
-    if (!tex) return // 読み込み中・読めなかった画像は省く
+    if (!tex) return
     const sprite = new Sprite(tex)
     sprite.anchor.set(0.5)
     layer.addChild(sprite)
@@ -2923,17 +2970,16 @@ export class BattleScreen extends Container {
     if (!view || !this.popupLayer) return
     const label = popupText(hit)
     const fontSize = fitPopupFontSize(label, popupFontSize(view.unit))
-    const makeText = (str: string) => {
-      const t = new PixiText({
-        text: str,
-        style: new TextStyle({
-          fontFamily: "'Noto Sans JP', sans-serif",
-          fontSize,
-          fontWeight: 'bold',
-          fill: POPUP_COLORS[hit.kind],
-          stroke: { color: 0x000000, width: 4 },
-        }),
+    const makeStyle = () =>
+      new TextStyle({
+        fontFamily: "'Noto Sans JP', sans-serif",
+        fontSize,
+        fontWeight: 'bold',
+        fill: POPUP_COLORS[hit.kind],
+        stroke: { color: 0x000000, width: 4 },
       })
+    const makeText = (str: string) => {
+      const t = new PixiText({ text: str, style: makeStyle() })
       t.anchor.set(0.5, 1)
       return t
     }
@@ -2945,7 +2991,14 @@ export class BattleScreen extends Container {
     let digits: PixiText[] | undefined
     if (perDigit) {
       const box = new Container()
-      const pitch = popupDigitPitch(fontSize)
+      // 桁ピッチは実フォントで '0' を測った送り幅（縁取りを含まない）。測れない環境は 0.557em に倒す (#955)
+      let advance: number | undefined
+      try {
+        advance = CanvasTextMetrics.measureText('0', makeStyle()).maxLineWidth
+      } catch {
+        advance = undefined
+      }
+      const pitch = popupDigitPitch(fontSize, advance)
       digits = chars.map((ch, i) => {
         const d = makeText(ch)
         d.position.set((i - (chars.length - 1) / 2) * pitch, 0)
@@ -3049,7 +3102,12 @@ export class BattleScreen extends Container {
     if (!active) return out
     const ev = active.event
     if (ev.actor.side === side && ev.actor.index === index) {
-      const a = sampleActor(ev.kind, active.elapsed, this.motionTiming)
+      const a = sampleActor(
+        ev.kind,
+        active.elapsed,
+        this.motionTiming,
+        (side === 'party' ? this.partyViews : this.enemyViews)[index]?.poseVisuals
+      )
       // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
       const downed = out.downProgress > 0
       // 自己モザイクが有効な敵の通常攻撃は、踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。

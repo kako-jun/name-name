@@ -79,6 +79,7 @@ describe('buildSweep: 族 summon', () => {
       'loot',
       'script',
       'random-script',
+      'script-force',
       'equipment',
       'job',
     ] as const
