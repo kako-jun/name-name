@@ -33,6 +33,7 @@ import {
 } from './backgroundPreload'
 import { AudioManager } from './AudioManager'
 import { GameState, NovelGameState, StartFromOptions, Step, entryFromState } from './GameState'
+import { parseRpgSave, type RpgSaveState } from './rpgSave'
 import { VideoLayer } from './VideoLayer'
 import { WallLayer } from './WallLayer'
 import { StageFrontLayer } from './StageFrontLayer'
@@ -280,6 +281,8 @@ export class NovelRenderer {
    * そのまま反映する（フェード演出は再生しない＝宣言的な瞬時反映）。
    */
   private storyEnded = false
+  /** RPG 状態 (#1021)。ノベル側は解釈せず、セーブ/ロード/startFrom で持ち回すだけ（消費するのは一枚絵フィールド等） */
+  private rpgState: RpgSaveState | null = null
   /** storyEnded 変化を DOM 側（NovelPlayer）に伝える hook (#386)。postMessage 通知・React state
    *  同期（DOM ボタンの disabled 制御・デバッグ HUD 等）用。"to be continued..." 表示自体は
    *  この callback とは独立に `endingOverlay`（PixiJS 内部描画、#630）が担う。 */
@@ -3130,6 +3133,8 @@ export class NovelRenderer {
       storyEnded: this.storyEnded,
       // 入場時 flags (#799)。元列に `[条件:]` が無い脚本では何も足さない（JSON は従来のまま）。末尾に足して既存のキー順を保つ。
       ...this.cursor.snapshotEntry(),
+      // RPG 状態 (#1021)。持っているときだけ末尾に足す（持たないゲームのキー順・JSON は従来のまま）。
+      ...(this.rpgState ? { rpg: this.rpgState } : {}),
     }
   }
 
@@ -3449,6 +3454,8 @@ export class NovelRenderer {
     // restoreToScene 経由では列の展開より前に同じ復元が行われるが、
     // 冪等な fromJSON なので二重適用に副作用はない（詳細は restoreToScene のコメント #256）。
     this.gameState.fromJSON(state.flags)
+    // RPG 状態 (#1021)。ノベル側は解釈せず、復元した状態のものを持ち回す（無ければ持たない）。
+    this.rpgState = state.rpg ? structuredClone(state.rpg) : null
 
     // 展開後の列は訪問の入場時 flags で決まり、訪問中は固定する (#799)。goBack/seekTo は flags だけを過去の値に
     // 戻すが列は変わらないので、ここでは再展開せず位置だけを復元する（シーンをまたぐ復元は restoreToScene が
@@ -4639,7 +4646,21 @@ export class NovelRenderer {
    * - playScript 実行中の呼び出しは想定外（デバッグ API 同士の同時使用は非対応）。
    */
   startFrom(opts: StartFromOptions = {}): Promise<SceneEntryResult> {
-    return this.entry.startFrom(opts)
+    // RPG 状態 (#1021): 入場が確定したときだけ置き換える（失敗では状態を一切変えない）。省略は持ち越さない。
+    // 渡された rpg はセーブと同じ検証（parseRpgSave）を通す。通らなければ状態を変えず failed
+    let rpg: RpgSaveState | null = null
+    if (opts.rpg) {
+      const parsed = parseRpgSave(opts.rpg)
+      if (!parsed.ok) {
+        console.warn(`[name-name] startFrom: ${parsed.error}`)
+        return Promise.resolve({ status: 'failed', reason: 'invalid-rpg' })
+      }
+      rpg = parsed.value
+    }
+    return this.entry.startFrom(opts).then((r) => {
+      if (r.status === 'entered') this.rpgState = rpg
+      return r
+    })
   }
 
   /**

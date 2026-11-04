@@ -17,6 +17,7 @@ import {
 } from '../types'
 import { safeAssign } from './ownProperty'
 import type { PaperDollOutlineConfig } from './outlineFilter'
+import type { RpgSaveState } from './rpgSave'
 
 /**
  * 背景画像の端フェードマスク設定 (#250)。
@@ -303,6 +304,12 @@ export interface NovelGameState {
   entryResumeIndex?: number
   /** 線形ストリームの途中のシーンから始めた訪問の、元列での開始位置 (#799)。0 のときは出力しない。 */
   entryRawIndex?: number
+  /**
+   * RPG 状態 (#1021)。パーティ・所持品・装備・所持金・フィールド現在地・戦闘中状態（`rpgSave.ts`）。
+   * ノベル側は中身を解釈せず、セーブ/ロード/startFrom で持ち回すだけ（消費するのは一枚絵フィールド等）。
+   * 後方互換: 古いセーブ/スナップショットには無い → 持たない（キーを出さない）。
+   */
+  rpg?: RpgSaveState
 }
 
 /**
@@ -327,6 +334,11 @@ export type Step =
  * NovelGameState とは別に定義する。
  */
 export interface StartFromOptions {
+  /**
+   * RPG 状態 (#1021)。セーブ形式（`SaveSlotData.rpg`）と同じ形を受ける。入場が確定したあと `getSnapshot().rpg` で読める。
+   * 省略は RPG 状態なし（持ち越さない）。
+   */
+  rpg?: RpgSaveState
   /** 開始するシーン ID。省略するとエントリ文書の線形ストリームの先頭から始める */
   sceneId?: string
   /** 設定するフラグ（置換セマンティクス。省略時は空でクリア） */

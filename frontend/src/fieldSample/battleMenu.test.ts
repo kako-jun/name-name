@@ -60,7 +60,7 @@ describe('buildBattleMenu (#890)', () => {
     expect(items[0].count).toBe(2)
     const m2 = buildBattleMenu(cfg)!
     expect(m2.items).not.toBe(m1.items)
-    expect(m2.items![0].count).toBe(2) // 次の戦闘は設定の所持数から始まる
+    expect(m2.items![0].count).toBe(2) // 渡した設定そのものは書き換えない（持ち越しは呼び出し側の責務）
   })
 })
 

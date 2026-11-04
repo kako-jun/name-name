@@ -109,7 +109,7 @@ type SceneEntryRequest =
 type SceneEntryResult =
   | { status: 'entered'; sceneId: string | null }
   | { status: 'ended' }        // 進行のみ: confinement の圏外で終劇した
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' }  // out-of-range: 復元位置が範囲外 (#789)。apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
+  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' | 'invalid-rpg' }  // invalid-rpg: startFrom の rpg が検証に通らない (#1021。状態は変えない。呼び出し側は戻り値で知る)。out-of-range: 復元位置が範囲外 (#789)。apply-error: 適用中の例外（実装・データの不具合）。一時的な通信失敗（resolver-error）と区別する
   | { status: 'superseded' }   // 待っている間に、より新しい入場要求が来た
 ```
 

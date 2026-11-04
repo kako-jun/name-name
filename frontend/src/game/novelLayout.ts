@@ -1038,6 +1038,7 @@ export function getIndicatorImageUrls(baseUrl: string, kind: IndicatorKind): str
  *   cameraZoom        = data.cameraZoom ?? null  // 古いセーブには無い → 全景 (#702)
  *   paperDollOutline  = data.paperDollOutline ?? null  // 古いセーブには無い (#699)
  *   entryFlags / entryResumeIndex / entryRawIndex = data の値（無ければ付けない）  // 入場時 flags (#799)。無い → 保存位置までを静的展開、後ろを逐次評価
+ *   rpg            = data.rpg（無ければ付けない）  // RPG 状態 (#1021)。ノベル側は解釈せず持ち回す
  *   storyEnded     = false  // SaveSlotData 未対応 (#386)。セーブ/ロードは常に「終劇していない」扱い
  *
  * `backgroundFade` の正規化（`normalizeBackgroundFade` / `edgeFadeMask`）は PixiJS を間接
@@ -1114,6 +1115,8 @@ export function saveSlotToGameState(
     ...(data.entryFlags !== undefined ? { entryFlags: data.entryFlags } : {}),
     ...(data.entryResumeIndex !== undefined ? { entryResumeIndex: data.entryResumeIndex } : {}),
     ...(data.entryRawIndex !== undefined ? { entryRawIndex: data.entryRawIndex } : {}),
+    // RPG 状態 (#1021)。古いセーブには無い → キー自体を付けない。ノベル側は解釈せず持ち回す。
+    ...(data.rpg !== undefined ? { rpg: data.rpg } : {}),
   }
 }
 
@@ -1170,6 +1173,8 @@ export function gameStateToSaveSlot(snapshot: NovelGameState, meta: SaveSlotMeta
       ? { entryResumeIndex: snapshot.entryResumeIndex }
       : {}),
     ...(snapshot.entryRawIndex !== undefined ? { entryRawIndex: snapshot.entryRawIndex } : {}),
+    // RPG 状態 (#1021)。スナップショットが持つときだけ書く（RPG 状態の無いゲームの JSON は従来のまま）。
+    ...(snapshot.rpg !== undefined ? { rpg: snapshot.rpg } : {}),
     savedAt: meta.savedAt,
     sceneName: meta.sceneName,
   }

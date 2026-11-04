@@ -60,9 +60,13 @@ export type SceneEntryResult =
    * not-found: 遷移先が無い / resolver-error: 遅延ロードの通信失敗など（一時的）/
    * apply-error: 適用中の例外（実装・データの不具合。一時的な通信失敗とは区別する）/
    * out-of-range: 位置（eventIndex / textIndex）が解決したイベント列の範囲外 (#789)。文書が編集されて
-   * セーブの位置が指す先が無くなった。不在（not-found）と同じく再試行しても直らないので区別して持つ
+   * セーブの位置が指す先が無くなった。不在（not-found）と同じく再試行しても直らないので区別して持つ /
+   * invalid-rpg: `startFrom({ rpg })` の RPG 状態が `parseRpgSave` の検証に通らない (#1021)。状態は一切変えない
    */
-  | { status: 'failed'; reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' }
+  | {
+      status: 'failed'
+      reason: 'not-found' | 'resolver-error' | 'apply-error' | 'out-of-range' | 'invalid-rpg'
+    }
   /** 待っている間に、より新しい入場要求が来た（後始末は新しい側が担う）。 */
   | { status: 'superseded' }
 

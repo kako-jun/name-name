@@ -298,6 +298,19 @@ export interface BattleEngineOptions {
    * エンジンはマスター参照を持たないので、途中参戦できる味方（`joiners`）も呼び出し側が渡す
    */
   script?: BattleScriptOptions
+  /**
+   * 戦闘の途中から再開する (#1021)。セーブ形式（`RpgBattleState`）の進行状態を戻す。味方・敵の HP / MP / 状態異常は
+   * コンストラクタに渡す `party` / `enemies` 自体が持つので、ここには載せない。ATB ゲージは `atb.initialGauges`。
+   * 無いキーは新規戦闘と同じ初期値。戻した状態は ADR 0002 の「安定した状態」だけ（演出の中間状態は戻さない）
+   */
+  restore?: {
+    /** ATB のコマンド待ちの順（party index。溜まった順）。生きていてゲージ満タンの者だけ採用し、残りの満タンは index 順で後ろに足す */
+    atbQueue?: number[]
+    /** 脚本制御の戦闘の進行（`script` オプションを渡した戦闘にだけ効く） */
+    script?: Omit<ScriptState, 'id'>
+    /** 敵ごとの記憶（`enemies` と同じ index。`行動:` を持つ敵がいる戦闘にだけ効く） */
+    enemyMemory?: EnemyMemory[]
+  }
 }
 
 /** 脚本制御の戦闘の入力 (#741)。`rules` は `BattleScriptDef.rules`（`キー: 値` の生の行）をそのまま渡す */
@@ -399,10 +412,17 @@ export class BattleEngine {
       }
     }
     const memory = createEnemyMemory(enemies)
-    if (memory) this.state.enemyMemory = memory
+    if (memory) {
+      this.state.enemyMemory = memory
+      // 途中再開 (#1021): 行動回数などの記憶を戻す（enemies と同じ index・同じ数のときだけ）
+      const saved = opts.restore?.enemyMemory
+      if (Array.isArray(saved) && saved.length === memory.length)
+        this.state.enemyMemory = JSON.parse(JSON.stringify(saved)) as EnemyMemory[]
+    }
     if (opts.atb) {
       this.initAtb(opts.atb)
       this.atbWaitScope = opts.atb.waitScope === 'menu' ? 'menu' : 'command'
+      this.restoreAtbQueue(opts.restore?.atbQueue)
     }
     if (opts.script) {
       const parsed = parseBattleScript(opts.script.rules)
@@ -413,6 +433,16 @@ export class BattleEngine {
         fired: [],
         joined: [],
         fled: [],
+      }
+      const savedScript = opts.restore?.script
+      if (savedScript) {
+        this.state.script = {
+          id: opts.script.id,
+          turn: Math.max(0, Math.floor(savedScript.turn)),
+          fired: [...savedScript.fired],
+          joined: [...savedScript.joined],
+          fled: [...savedScript.fled],
+        }
       }
       for (const [id, member] of Object.entries(opts.script.joiners ?? {})) {
         safeAssign(this.joiners, id, JSON.parse(JSON.stringify(member)) as BattleEntity)
@@ -966,6 +996,20 @@ export class BattleEngine {
     })
     this.state.atb = atb
     this.state.phase = atb.queue.length > 0 ? 'party-input' : 'atb-running'
+  }
+
+  /**
+   * 途中再開 (#1021): コマンド待ちの順を保存どおりに戻す。`initAtb` が満タンの者を index 順に積んだ後で呼ぶ。
+   * 保存の順のうち、いま満タン待ちの者（キューにいる者）だけを先頭に並べ、残りは元の順で後ろに足す
+   */
+  private restoreAtbQueue(saved: number[] | undefined): void {
+    const atb = this.state.atb
+    if (!atb || !Array.isArray(saved) || atb.queue.length === 0) return
+    const waiting = new Set(atb.queue)
+    const ordered: number[] = []
+    for (const i of saved) if (waiting.has(i) && !ordered.includes(i)) ordered.push(i)
+    for (const i of atb.queue) if (!ordered.includes(i)) ordered.push(i)
+    atb.queue = ordered
   }
 
   /** 今コマンドを出す味方の party index。ATB はキュー先頭の生存者、従来ターン制は先頭の生存者。いなければ -1 */

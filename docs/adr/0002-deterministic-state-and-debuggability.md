@@ -195,6 +195,10 @@ intermission.md`。プロジェクト opt-in）の有無で分岐するように
 そのまま——intermission タブローも一度きりの見た目でしかなく、セーブ/シーク対象にはしていない。
 詳細は `docs/architecture.md` の「confinement（在圏）+ 終劇」節を参照。
 
+### 6. RPG 状態もスナップショット（セーブ形式）で宣言し、そこから再開する（#1021）✅ 実装済み
+
+パーティ・所持品・装備・所持金・フィールド現在地（シーン・座標・向き）・戦闘中状態（敵・HP・状態異常・ATB ゲージとコマンド待ちの順・敵の記憶・脚本の進行）は `SaveSlotData.rpg`（`RpgSaveState`、`frontend/src/game/rpgSave.ts`）に宣言的な JSON で載せる。**セーブ形式が正で、`startFrom({ rpg })` は同じ形式を受ける**。味方・敵は設定のマスターとの差分（`id` ＋変えたキー）だけを書くので、絵のデータ URI などでセーブが太らない。ノベル側（`NovelRenderer` / `saveSlotToGameState` / `gameStateToSaveSlot`）は中身を解釈せず持ち回す。戦闘は `BattleEngineOptions.restore`（ATB のコマンド待ちの順・脚本の進行・敵の記憶）と既存の `atb.initialGauges` で途中局面から再開する。ダメージ数字などの演出の中間状態は持たない（上の原則のまま）。一枚絵フィールドは `battle.script`（脚本制御の戦闘・途中参戦）を渡さないので、セーブの `battle.script` は効かない。`startFrom({ rpg })` もセーブと同じ `parseRpgSave` の検証を通し、通らなければ `invalid-rpg` で状態を変えず失敗する。手順は [状態を用意して起動する](../guide/resume-demo.md)。
+
 ## Consequences（影響）
 
 ### 利点
