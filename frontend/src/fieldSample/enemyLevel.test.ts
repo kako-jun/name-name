@@ -4,9 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { parseConfig } from './config'
-import { buildBattleEngineOptions } from './battleOptions'
 import { buildEnemyEntities } from '../game/encounter'
-import { BattleEngine } from '../game/battleEngine'
 import { applyEffect, parseEffect, type BattleEntity } from '../game/spellDsl'
 
 const BASE = 'https://example.com/field/config.json'
