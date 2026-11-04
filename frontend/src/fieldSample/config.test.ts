@@ -2036,3 +2036,32 @@ describe('parseConfig statuses (#1051 段階3)', () => {
     }
   })
 })
+
+describe('実運用に近い一式の設定 (battle / menu / emotions / npcs / spells / items)', () => {
+  it('警告・群エラーなしで parse できる', () => {
+    const raw = withEncounter()
+    raw.scenes.a.npcs = [
+      { id: 'oba', name: 'おばあさん', x: 300, y: 400, sprite: 'oba.png', line: 'こんにちは。' },
+    ]
+    raw.emotions = { '!': { image: 'em/bang.png', durationMs: 800 } }
+    raw.menu = true
+    raw.spells = [{ id: 'fire', name: 'ほのお', mp: 3, target: '敵単体', effect: 'damage 8..14' }]
+    raw.items = [{ id: 'potion', name: 'ポーション', effect: 'heal 20..30', count: 3 }]
+    raw.party = [{ name: 'ゆうしゃ', hp: 40, mp: 6, atk: 9, def: 4, agi: 6 }]
+    raw.battle = {
+      layout: 'side',
+      atb: 'on',
+      presentation: 'ff',
+      windowStyle: 'ff-blue',
+      commandLayout: 'cross',
+      commands: ['attack', 'spell', 'item', 'escape'],
+      enemyGrid: '4x2',
+    }
+    const c = ok(raw)
+    expect(c.warnings).toBeUndefined()
+    expect(c.groupErrors).toBeUndefined()
+    expect(c.menu).toBeDefined()
+    expect(Object.keys(c.emotions ?? {})).toEqual(['!'])
+    expect(c.scenes.a.npcs).toHaveLength(1)
+  })
+})

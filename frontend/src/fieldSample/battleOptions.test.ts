@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildBattleEngineOptions } from './battleOptions'
+import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
+import { parseConfig } from './config'
+import { effectiveCommandLayout } from '../game/battleLayout'
+import { motionTimingFor } from '../game/battleMotion'
 import { BattleEngine } from '../game/battleEngine'
 import type { BattleEntity } from '../game/spellDsl'
 
@@ -41,5 +44,135 @@ describe('statuses が BattleEngine に渡り、付与の効果で状態が付�
       engine.getState().enemies[0].id
     )
     expect(engine.getState().enemies[0].status).toHaveProperty('poison')
+  })
+})
+
+// 旧 teramachiSample.test.ts のエンジン配線の検査 (#896 / #880 / #954 / sit-by-me#52 / #62)。
+// 入力は parseConfig で作る最小のインライン設定（特定の作品データには依存しない）
+describe('battle 設定がエンジン・BattleScreen のオプションへ渡る（配線）', () => {
+  const BASE = 'http://localhost/field/'
+  const load = (battle: Record<string, unknown>) => {
+    const r = parseConfig(
+      {
+        startScene: 'a',
+        start: { x: 10, y: 20 },
+        player: {
+          sprites: Object.fromEntries(
+            ['up', 'down', 'left', 'right'].map((d) => [d, [`${d}1.png`, `${d}2.png`, `${d}3.png`]])
+          ),
+        },
+        scenes: { a: { background: 'a.png', mask: 'a-mask.png' } },
+        battle,
+      },
+      BASE
+    )
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  const full = () =>
+    load({
+      layout: 'side',
+      atb: 'on',
+      presentation: 'ff',
+      windowStyle: 'ff-blue',
+      motion: 'snappy',
+      commandLayout: 'cross',
+      commands: ['skill', 'spell', 'item', 'escape'],
+      enemyGrid: '4x2',
+      logicalSize: '1920x1080',
+    }).battle
+
+  it('BattleScreen のオプションへ atb 以外の戦闘設定が漏れなく渡る', () => {
+    const b = full()
+    const o = buildBattleScreenOptions(b, { background: 'bg.webp' })
+    expect(o.motion).toBe('snappy')
+    expect(o.commandLayout).toBe('cross')
+    expect(o.commands).toEqual(b.commands)
+    expect(o.presentation).toBe('ff')
+    expect(o.windowStyle).toBe('ff-blue')
+    expect(o.enemyGrid).toEqual(b.enemyGrid)
+    expect(o.background).toBe('bg.webp')
+  })
+
+  it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
+    const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
+    expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')
+    expect('enemyList' in buildBattleScreenOptions(base, {})).toBe(false)
+  })
+
+  it('ATB の設定が BattleEngine のオプションへ渡る（未指定はターン制）。side + 敵グリッドは enemyRow (#896) も渡る', () => {
+    expect(buildBattleEngineOptions(full())).toEqual({
+      atb: { mode: 'wait' },
+      enemyRow: { grid: { cols: 4, rows: 2 } },
+    })
+    expect(buildBattleEngineOptions({ layout: 'side' })).toEqual({})
+    // front レイアウト・グリッド無しでは enemyRow を渡さない
+    const b = full()
+    expect(buildBattleEngineOptions({ ...b, layout: 'front' })).toEqual({ atb: { mode: 'wait' } })
+    expect(buildBattleEngineOptions({ ...b, enemyGrid: undefined })).toEqual({
+      atb: { mode: 'wait' },
+    })
+  })
+
+  it('buildBattleScreenOptions: 未指定のキーは出さない（従来の既定）', () => {
+    const o = buildBattleScreenOptions(
+      { layout: 'side', spriteStyle: 'none', width: 800, height: 450 },
+      {}
+    )
+    expect(Object.keys(o).sort()).toEqual(['layout', 'spriteStyle'])
+  })
+
+  it('十字コマンドが実効になる（cross かつコマンド 4 つ）', () => {
+    const b = full()
+    expect(b.commandLayout).toBe('cross')
+    expect(effectiveCommandLayout(b.commandLayout, b.commands?.length ?? 0)).toBe('cross')
+  })
+
+  it('motion プリセットは ff 演出で有効になり、桁バウンスが付く (sit-by-me#62)', () => {
+    const b = full()
+    expect(b.presentation).toBe('ff')
+    expect(b.motion).toBe('snappy')
+    expect(motionTimingFor(b.motion).digitStaggerMs).toBeGreaterThan(0)
+  })
+
+  it('1920x1080 論理サイズで UI スケール 2.4 と renderResolution が BattleScreen に渡る (sit-by-me#52)', () => {
+    const b = full()
+    expect(b.logicalSize).toBe('1920x1080')
+    expect([b.width, b.height]).toEqual([1920, 1080])
+    const o = buildBattleScreenOptions(b, { renderResolution: 2 })
+    expect(o.uiScale).toBe(2.4)
+    expect(o.renderResolution).toBe(2)
+  })
+
+  it('logicalSize 未指定は uiScale / renderResolution を出さない（従来） (sit-by-me#52)', () => {
+    const o = buildBattleScreenOptions(
+      { layout: 'side', spriteStyle: 'none', width: 800, height: 450 },
+      { renderResolution: 2 }
+    )
+    expect(o).not.toHaveProperty('uiScale')
+    expect(o).not.toHaveProperty('renderResolution')
+  })
+
+  it('せってい (#880): ATB の戦闘だけ mode と speed を上書きする。等倍の speed は渡さない', () => {
+    const b = full()
+    expect(buildBattleEngineOptions(b, undefined, { atbMode: 'active', atbSpeed: 2 }).atb).toEqual({
+      mode: 'active',
+      speed: 2,
+    })
+    expect(buildBattleEngineOptions(b, undefined, { atbSpeed: 1 }).atb).toEqual({ mode: 'wait' })
+    expect(buildBattleEngineOptions(b, undefined, undefined).atb).toEqual({ mode: 'wait' })
+  })
+
+  it('せってい (#880): ターン制（atb なし）には上書きを渡さない', () => {
+    expect(
+      buildBattleEngineOptions({ layout: 'side' }, undefined, { atbMode: 'active', atbSpeed: 2 })
+    ).toEqual({})
+  })
+
+  it('せってい (#880): cursorMemory は渡したときだけ BattleScreen のオプションへ', () => {
+    const b = full()
+    const mem = new Map<string, number>()
+    expect(buildBattleScreenOptions(b, { cursorMemory: mem }).cursorMemory).toBe(mem)
+    expect('cursorMemory' in buildBattleScreenOptions(b, {})).toBe(false)
   })
 })
