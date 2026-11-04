@@ -3581,6 +3581,42 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
       expect(f(acr.s)).toBeGreaterThan(0)
     })
 
+    it('down の絵がある敵: 死ぬ被弾でも傾けず絵の差し替えだけ（傾き→0 への跳びなし）。絵が無ければ傾く', async () => {
+      for (const withDown of [true, false]) {
+        const hero = entity('hero', { sprite: 'img/hero.webp', hp: 20, maxHp: 20, agi: 99 })
+        const slime = entity('slime', {
+          sprite: 'img/slime.webp',
+          poses: withDown ? { idle: 'img/slime.webp', down: 'img/down.webp' } : undefined,
+          atk: 1,
+          hp: 1,
+          maxHp: 1,
+          agi: 1,
+        })
+        const engine = new BattleEngine([hero], [slime], { rng: () => 0.5 })
+        const s = track(
+          new BattleScreen(engine, 800, 450, {
+            layout: 'side',
+            spriteStyle: 'acrylic',
+            presentation: 'ff',
+            motion: 'snappy',
+          })
+        )
+        await flushPromises()
+        await flushPromises()
+        await flushPromises()
+        engine.selectAttack()
+        s.redraw(800, 450)
+        const ev = (s as unknown as { enemyViews: RV[] }).enemyViews[0]
+        let maxRot = 0
+        for (let t = 0; t < 600; t += 4) {
+          s.tick(4)
+          maxRot = Math.max(maxRot, Math.abs(deg(ev.container)))
+        }
+        if (withDown) expect(maxRot).toBeLessThan(0.01)
+        else expect(maxRot).toBeGreaterThan(80)
+      }
+    })
+
     it('味方の被弾: 傾いて戻る・モザイクなし・向きは敵と反対', async () => {
       const { s, v } = await mk({})
       v.partyViews[0].container.rotation = 0

@@ -3110,11 +3110,11 @@ export class BattleScreen extends Container {
           this.screenWidth - MOTION_SCREEN_MARGIN
         )
         // アクスタ表示 (#953): 足元（スプライト下端中央）を支点に傾く。被弾は山形に倒れ気味、死亡は fallDeg まで倒れる。
-        // 向きはのけぞりと同じ（攻撃側と反対）。倒れた絵（down）がある者は絵の差し替えで倒れを表すので回転しない（被弾の傾きだけ）。
+        // 向きはのけぞりと同じ（攻撃側と反対）。倒れた絵（down）がある者は絵の差し替えで倒れを表すので、死ぬ被弾でも傾けない（生き残る被弾の傾きは付く）。
         // 倒れの絵が無い者は、従来の沈み込みでなく回転で倒れる
         const stand = this.isAcrylicStand() && !!view.acrylicBack
-        const downPose = m.downProgress > 0 || m.vanish > 0
-        const angleDeg = stand ? (hasDownVisual && downPose ? 0 : m.tilt) : 0
+        // down の絵で倒れを表す者（死ぬ被弾を含む）は、絵が切り替わる瞬間に傾きが 0 へ跳ばないよう、被弾からも傾けない
+        const angleDeg = stand ? (m.dying && view.poseVisuals.down ? 0 : m.tilt) : 0
         const dy = hasDownVisual || stand ? 0 : m.downProgress * SINK_DISTANCE * view.unit
         let mosaic: number | null = null
         if (stand && angleDeg !== 0 && view.sprite) {

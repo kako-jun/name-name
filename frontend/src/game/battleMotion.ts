@@ -569,8 +569,10 @@ export interface TargetSample {
   pose: BattlePose
   /** 倒れた進み具合（0=立っている〜1=倒れ切り）。1 のとき画面は down ポーズ、無ければ沈み込みで表す */
   downProgress: number
-  /** アクスタ表示用 (#953): 足元を支点にした傾き（度。正=のけぞりと同じ向き＝攻撃側と反対へ倒れる）。被弾で山形、死亡で 0→fallDeg */
+  /** アクスタ表示用 (#953): 足元を支点にした傾き（度。正=のけぞりと同じ向き＝攻撃側と反対へ倒れる）。被弾で山形、死亡は被弾の傾きのピーク→fallDeg */
   tilt: number
+  /** この姿が「倒れる被弾（HP 0）」か、倒れ済みか (#953)。down の絵で倒れを表す者は、被弾から傾けない（絵の差し替えと矛盾しないため） */
+  dying: boolean
   /** アクスタ表示の敵用 (#953): 倒れ切ったあとのモザイク消滅の進み具合（0=見えている〜1=消えた） */
   vanish: number
 }
@@ -582,6 +584,7 @@ export const STANDING: TargetSample = {
   downProgress: 0,
   tilt: 0,
   vanish: 0,
+  dying: false,
 }
 /** 倒れ切った状態（傾きは既定の fallDeg） */
 export const FALLEN: TargetSample = {
@@ -590,6 +593,7 @@ export const FALLEN: TargetSample = {
   downProgress: 1,
   tilt: DEFAULT_MOTION_TIMING.fallDeg,
   vanish: 1,
+  dying: true,
 }
 
 /**
@@ -614,12 +618,13 @@ export function sampleTarget(
       downProgress: 0,
       tilt,
       vanish: 0,
+      dying: false,
     }
   }
   // 倒れる者は、被弾の傾きが戻らず（ピークで保ち）そこから連続して倒れる
   if (sinceHit < timing.recoilMs) {
     const lean = timing.hurtTiltDeg * easeOutQuad(recoilU)
-    return { recoil, pose: 'hurt', downProgress: 0, tilt: lean, vanish: 0 }
+    return { recoil, pose: 'hurt', downProgress: 0, tilt: lean, vanish: 0, dying: true }
   }
   const downProgress = easeOutQuad((sinceHit - timing.recoilMs) / timing.downMs)
   const sinceDown = sinceHit - timing.recoilMs - timing.downMs
@@ -630,6 +635,7 @@ export function sampleTarget(
     downProgress,
     tilt: timing.hurtTiltDeg + (timing.fallDeg - timing.hurtTiltDeg) * downProgress,
     vanish,
+    dying: true,
   }
 }
 
