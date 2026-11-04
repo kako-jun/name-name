@@ -66,7 +66,7 @@ export const DEFAULT_FIELD_MENU_ITEMS: readonly FieldMenuItemDef[] = [
   { id: 'magic', label: 'まほう' },
   { id: 'equip', label: 'そうび' },
   { id: 'appstore', label: 'アプリストア' },
-  { id: 'magicite', label: 'まいし' },
+  { id: 'magicite', label: 'ませき' },
   { id: 'job', label: 'ジョブ' },
   { id: 'status', label: 'ステータス' },
   {

@@ -183,6 +183,22 @@ describe('parseFieldMenuConfig', () => {
   })
 })
 
+describe('既定項目のラベル', () => {
+  it('9項目のラベル列が固定されている（魔石は「ませき」）', () => {
+    expect(DEFAULT_FIELD_MENU_ITEMS.map((i) => i.label)).toEqual([
+      'どうぐ',
+      'まほう',
+      'そうび',
+      'アプリストア',
+      'ませき',
+      'ジョブ',
+      'ステータス',
+      'セーブ',
+      'せってい',
+    ])
+  })
+})
+
 describe('resolveMenuItems', () => {
   it('既定は全項目が有効（時間制限なし）', () => {
     const v = resolveMenuItems(DEFAULT_FIELD_MENU_ITEMS, { timeLimited: false })
