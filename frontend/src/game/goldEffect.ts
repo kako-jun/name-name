@@ -14,6 +14,19 @@
 /** 所持金の上限（仮）。`Number.MAX_SAFE_INTEGER` を超えて精度が落ちるのを防ぐ安全弁で、ゲームバランス上の上限ではない */
 export const MAX_GOLD = Number.MAX_SAFE_INTEGER
 
+/** 通貨名の既定（従来の勝利ログの表記）。sit-by-me は設定（`BattleEngineOptions.currencyName`）で「円」を指定する */
+export const DEFAULT_CURRENCY_NAME = 'ゴールド'
+
+/** 戦闘ログの「手に入れた」行。勝利ログと `gold` 効果のログが共通で使う（通貨名の表記を 1 か所に揃える） */
+export function gainedCurrencyLog(amount: number, currencyName: string): string {
+  return `${amount} ${currencyName}を てに いれた！`
+}
+
+/** 戦闘ログの「失った」行（`gold -N` の実際に減った額） */
+export function lostCurrencyLog(amount: number, currencyName: string): string {
+  return `${amount} ${currencyName}を うしなった！`
+}
+
 /** 所持金の変更。`add` の `amount` は符号つきの整数（負 = 減らす）、`all` = 全額消費 */
 export type GoldChange = { mode: 'add'; amount: number } | { mode: 'all' }
 

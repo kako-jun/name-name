@@ -46,7 +46,12 @@ import {
   spreadDamageBase,
   spreadSuccessRate,
 } from './battleLimits'
-import type { GoldChange } from './goldEffect'
+import {
+  DEFAULT_CURRENCY_NAME,
+  gainedCurrencyLog,
+  lostCurrencyLog,
+  type GoldChange,
+} from './goldEffect'
 import type { BattlePoseSprites } from './battleMotion'
 import type { BattleWeaponSpec } from './battleWeapon'
 import {
@@ -287,7 +292,7 @@ function parseEffectInner(input: string): ParsedEffect | null {
     const m = rest.length === 1 ? /^([+-])(\d+)$/.exec(rest[0]) : null
     if (!m || !Number.isSafeInteger(Number(m[2]))) return null
     const n = Number(m[2])
-    return { kind: 'gold', goldChange: { mode: 'add', amount: m[1] === '-' ? -n : n } }
+    return { kind: 'gold', goldChange: { mode: 'add', amount: m[1] === '-' && n !== 0 ? -n : n } }
   }
   if (verb === 'revive') {
     let hp: 'full' | 'half' = 'full'
@@ -563,6 +568,8 @@ export interface EffectContext {
    * 対象（`targets`）は見ない（パーティ共通）。無ければ「この場面では使えない」警告だけで何もしない
    */
   gold?: (change: GoldChange) => { delta: number }
+  /** `gold` 効果のログに出す通貨名（省略は既定の「ゴールド」。勝利ログと同じ表記を使う） */
+  currencyName?: string
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
@@ -1035,9 +1042,9 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
       if (change.mode === 'all') {
         log.push(delta < 0 ? 'おかねを ぜんぶ つかった！' : 'しかし おかねが なかった！')
       } else if (delta > 0) {
-        log.push(`${delta} 円を てにいれた！`)
+        log.push(gainedCurrencyLog(delta, ctx.currencyName ?? DEFAULT_CURRENCY_NAME))
       } else if (delta < 0) {
-        log.push(`${-delta} 円を うしなった！`)
+        log.push(lostCurrencyLog(-delta, ctx.currencyName ?? DEFAULT_CURRENCY_NAME))
       } else {
         log.push(
           change.amount < 0 ? 'しかし おかねが なかった！' : 'しかし おかねは ふえなかった！'

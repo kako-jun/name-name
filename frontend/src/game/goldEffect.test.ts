@@ -72,9 +72,18 @@ describe('parseEffect gold', () => {
       'gold +1 +2',
       'gold +9007199254740993',
       'gold_all 5',
+      'gold ＋１００',
+      'gold  ',
     ]) {
       expect(parseEffect(s), s).toBeNull()
     }
+  })
+  it('先頭ゼロ・空白の揺れ・gold -0', () => {
+    expect(parseEffect('gold +007')?.goldChange).toEqual({ mode: 'add', amount: 7 })
+    expect(parseEffect('  gold   +100  ')?.goldChange).toEqual({ mode: 'add', amount: 100 })
+    const z = parseEffect('gold -0')?.goldChange
+    expect(z).toEqual({ mode: 'add', amount: 0 })
+    expect(Object.is((z as { amount: number }).amount, 0)).toBe(true)
   })
   it('既存の式は変わらない', () => {
     expect(parseEffect('heal 15..25')).toEqual({ kind: 'heal', min: 15, max: 25 })
@@ -108,16 +117,31 @@ describe('applyEffect gold', () => {
     const r = run('gold +100', 20)
     expect(r.gold).toBe(120)
     expect(r.calls).toHaveLength(1)
-    expect(r.log).toEqual(['100 円を てにいれた！'])
+    expect(r.log).toEqual(['100 ゴールドを てに いれた！'])
   })
   it('減らす: 不足時は実際に減った額を出し、0 で止まる', () => {
-    expect(run('gold -30', 100)).toMatchObject({ gold: 70, log: ['30 円を うしなった！'] })
-    expect(run('gold -30', 10)).toMatchObject({ gold: 0, log: ['10 円を うしなった！'] })
+    expect(run('gold -30', 100)).toMatchObject({ gold: 70, log: ['30 ゴールドを うしなった！'] })
+    expect(run('gold -30', 10)).toMatchObject({ gold: 0, log: ['10 ゴールドを うしなった！'] })
     expect(run('gold -30', 0)).toMatchObject({ gold: 0, log: ['しかし おかねが なかった！'] })
   })
   it('全額消費', () => {
     expect(run('gold_all', 500)).toMatchObject({ gold: 0, log: ['おかねを ぜんぶ つかった！'] })
     expect(run('gold_all', 0)).toMatchObject({ gold: 0, log: ['しかし おかねが なかった！'] })
+  })
+  it('通貨名を差し替えられる（既定は ゴールド）', () => {
+    expect(run('gold +5', 0).log).toEqual(['5 ゴールドを てに いれた！'])
+    const ctx: EffectContext = {
+      caster: ent('a'),
+      targets: [ent('t')],
+      rng: () => 0,
+      currencyName: '円',
+      gold: (c) => ({ delta: applyGoldChange(10, c).delta }),
+    }
+    expect(applyEffect(parseEffect('gold +5')!, ctx)).toEqual(['5 円を てに いれた！'])
+    expect(applyEffect(parseEffect('gold -3')!, ctx)).toEqual(['3 円を うしなった！'])
+  })
+  it('gold -0 は増えなかった扱い', () => {
+    expect(run('gold -0', 5).log).toEqual(['しかし おかねは ふえなかった！'])
   })
   it('頭打ちで増えないとき', () => {
     expect(run(`gold +5`, MAX_GOLD).log).toEqual(['しかし おかねは ふえなかった！'])

@@ -37,6 +37,7 @@
  * - 敵の builtin: での挙動委譲
  */
 
+import { DEFAULT_CURRENCY_NAME, gainedCurrencyLog } from './goldEffect'
 import type { BattleEntity, BattleRow, EffectContext } from './spellDsl'
 import { applyEffect, isSpreadableSpell, parseEffect, rollRange } from './spellDsl'
 import type { StatusDef, SummonCue } from '../types'
@@ -314,6 +315,11 @@ export interface BattleEngineOptions {
    */
   itemNames?: Record<string, string>
   /**
+   * 通貨名 (#881)。勝利ログ（「N ゴールドを てに いれた！」）と効果 DSL `gold` のログが共通で使う。省略は従来の「ゴールド」（既存の挙動は不変）。
+   * sit-by-me は「円」を指定する。空文字は既定に落とす
+   */
+  currencyName?: string
+  /**
    * 脚本制御の戦闘 (#741 / #863)。`[戦闘 id]` の宣言。渡した戦闘だけ脚本が働く（無い・渡さない戦闘は従来どおり）。
    * エンジンはマスター参照を持たないので、途中参戦できる味方（`joiners`）も呼び出し側が渡す
    */
@@ -378,6 +384,7 @@ export class BattleEngine {
   /** 敵ごとに盗めた回数 (#831)。`ぬすむ回数` に達した敵は空になる */
   private stolenCounts = new Map<BattleEntity, number>()
   private itemNames: Record<string, string>
+  private currencyName: string
   /** ラーニング (#882)。パーティ共通の習得済み（初期値＋食らって覚えた順）。結果 `BattleResult.learnedSpells` に載る */
   private learned: string[] = []
   /** ドロップを抽選した印（勝利は 1 度だけ） */
@@ -412,6 +419,7 @@ export class BattleEngine {
       if (edges.size > 0) this.enemyRowRule = { edges, front: Math.max(...edges.values()) }
     }
     this.itemNames = opts.itemNames ?? {}
+    this.currencyName = opts.currencyName || DEFAULT_CURRENCY_NAME
     for (const id of opts.learnedSpells ?? []) if (!this.learned.includes(id)) this.learned.push(id)
     for (const e of enemies) {
       const spec = parseLootSpec(e.loot)
@@ -750,6 +758,7 @@ export class BattleEngine {
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
       onTouch: (t) => this.statusTouched.add(t),
       steal: this.stealHook(caster),
+      currencyName: this.currencyName,
       pool: this.poolOf(caster, targets),
       ...(spread ? { spreadDivisor: multiTargetDivisor(targets.length) } : {}),
       onAmount: (t, kind, amount, reversed) =>
@@ -853,6 +862,7 @@ export class BattleEngine {
       onStatus: (t, key, change) => this.noteStatus(user, t, key, change),
       onTouch: (t) => this.statusTouched.add(t),
       steal: this.stealHook(user),
+      currencyName: this.currencyName,
       pool: this.poolOf(user, targets),
       onAmount: (t, kind, amount, reversed) =>
         amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
@@ -942,6 +952,7 @@ export class BattleEngine {
       onStatus: (t, key, change) => this.noteStatus(caster, t, key, change),
       onTouch: (t) => this.statusTouched.add(t),
       steal: this.stealHook(caster),
+      currencyName: this.currencyName,
       pool: this.poolOf(caster, targets),
       onAmount: (t, kind, amount, reversed) =>
         amounts.set(t, { kind, amount, ...(reversed ? { reversed: true } : {}) }),
@@ -1442,7 +1453,7 @@ export class BattleEngine {
     this.state.earnedExp = exp
     this.state.earnedGold = gold
     this.appendLog(`けいけんち ${exp} を てに いれた！`)
-    this.appendLog(`${gold} ゴールドを てに いれた！`)
+    this.appendLog(gainedCurrencyLog(gold, this.currencyName))
     this.rollDropsOnVictory()
   }
 
