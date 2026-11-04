@@ -52,7 +52,7 @@ export function buildBattleScreenOptions(
  * side かつ敵グリッドがあるときは `enemyRow`（最前列でない敵への通常攻撃は半分 #896。設定は無い。BattleScreen に渡すグリッドと同じもの）も渡す
  */
 export function buildBattleEngineOptions(
-  b: Pick<FieldBattleConfig, 'atb' | 'layout' | 'enemyGrid'>,
+  b: Pick<FieldBattleConfig, 'atb' | 'layout' | 'enemyGrid' | 'currencyName'>,
   statuses?: Record<string, StatusDef>,
   /** 全画面メニュー「せってい」(#880) の上書き。ATB の戦闘だけに効く（ターン制では無視） */
   overrides?: { atbMode?: AtbMode; atbSpeed?: number }
@@ -71,6 +71,7 @@ export function buildBattleEngineOptions(
           },
         }
       : {}),
+    ...(b.currencyName ? { currencyName: b.currencyName } : {}),
     ...(b.layout === 'side' && b.enemyGrid ? { enemyRow: { grid: b.enemyGrid } } : {}),
   }
 }

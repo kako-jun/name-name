@@ -190,6 +190,8 @@ export interface FieldBattleConfig {
   effects?: BattleEffects
   /** 戦闘の開始・終了の画面遷移 (sit-by-me#55)。`battle.transition`: `none` / `ff` / `ff-mosaic`（エンジンの `battle_transition` と同じ）。未指定は undefined＝`none`（従来どおり演出なしで即切替） */
   transition?: BattleTransitionMode
+  /** 戦闘ログの通貨名 (#881)。`battle.currencyName`（空でない文字列。例 "円"）。空・非文字列は警告して無視。未指定は undefined＝エンジンの既定（ゴールド） */
+  currencyName?: string
 }
 
 export interface FieldSampleConfig {
@@ -838,6 +840,15 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     return fail(`battle.atbMode は "wait" か "active": ${JSON.stringify(b.atbMode)}`)
   // front では効かない設定の組（静かに無視されるので警告する。読み込みは成功のまま）
   const warnings: string[] = []
+  let currencyName: string | undefined
+  if (b.currencyName !== undefined) {
+    if (typeof b.currencyName === 'string' && b.currencyName.trim() !== '')
+      currencyName = b.currencyName.trim()
+    else
+      warnings.push(
+        `battle.currencyName は空でない文字列が必要です（無視して既定の「ゴールド」を使います）: ${JSON.stringify(b.currencyName)}`
+      )
+  }
   if (b.layout === 'front') {
     if (b.presentation === 'ff')
       warnings.push(
@@ -1054,6 +1065,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(b.motion ? { motion: b.motion } : {}),
         ...(b.enemyList ? { enemyList: b.enemyList } : {}),
         ...(b.transition ? { transition: b.transition } : {}),
+        ...(currencyName ? { currencyName } : {}),
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),

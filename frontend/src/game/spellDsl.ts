@@ -24,6 +24,8 @@
  *   cure {state|all}               # 状態の解除 (#870)
  *   steal [確率=P] [レア率=P] [枠=通常|レア|両方] [回数=N] [ぶんどる=min..max [type=...]]
  *                                  # 敵の戦利品のぬすむ枠から盗む (#831)。確率は 0〜100（省略は必中）。書式と抽選は `loot.ts`
+ *   gold +{n} / gold -{n}          # パーティの所持金を増やす / 減らす (#881)。足りない分は 0 で止める。対象は選ばない（パーティ共通）
+ *   gold_all                       # 所持金を全額使う（0 になる）(#881)
  *   escape_battle                  # 戦闘離脱
  *   escape_dungeon                 # ダンジョン脱出
  *
@@ -44,6 +46,12 @@ import {
   spreadDamageBase,
   spreadSuccessRate,
 } from './battleLimits'
+import {
+  DEFAULT_CURRENCY_NAME,
+  gainedCurrencyLog,
+  lostCurrencyLog,
+  type GoldChange,
+} from './goldEffect'
 import type { BattlePoseSprites } from './battleMotion'
 import type { BattleWeaponSpec } from './battleWeapon'
 import {
@@ -79,6 +87,7 @@ export type EffectKind =
   | 'escape_battle'
   | 'escape_dungeon'
   | 'level'
+  | 'gold'
 
 export type StatKey = 'hp' | 'mp' | 'atk' | 'def' | 'agi'
 
@@ -119,6 +128,8 @@ export interface ParsedEffect {
   levelMultiple?: number
   /** level（敵のレベル調整 #898）: `+N`（`add`）/ `-N`（`add` の負数）/ `=N`（`set`）。調整後は 1〜`MAX_LEVEL` に収める */
   levelAdjust?: { mode: 'add' | 'set'; value: number }
+  /** gold（パーティの所持金の増減・全額消費 #881）: `+N` / `-N`（`{ mode: 'add', amount }`）/ `gold_all`（`{ mode: 'all' }`） */
+  goldChange?: GoldChange
   /** steal のレア枠に回る割合（%、`レア率=P`）(#831)。無ければ枠ごとの既定（`loot.ts`） */
   rareRate?: number
   /** steal の狙う枠（`枠=`）。無ければ両方 */
@@ -218,6 +229,7 @@ function parseEffectInner(input: string): ParsedEffect | null {
     }
     return { kind: 'damage_full', ...(levelMultiple !== undefined ? { levelMultiple } : {}) }
   }
+  if (trimmed === 'gold_all') return { kind: 'gold', goldChange: { mode: 'all' } }
   if (trimmed === 'escape_battle') return { kind: 'escape_battle' }
   if (trimmed === 'escape_dungeon') return { kind: 'escape_dungeon' }
 
@@ -274,6 +286,13 @@ function parseEffectInner(input: string): ParsedEffect | null {
       levelAdjust:
         m[1] === '=' ? { mode: 'set', value: n } : { mode: 'add', value: m[1] === '-' ? -n : n },
     }
+  }
+  if (verb === 'gold') {
+    // `gold +100` / `gold -50` (#881)。符号つきの整数 1 つだけ（符号なし・小数・NaN・安全な整数を超える値は書式エラー）
+    const m = rest.length === 1 ? /^([+-])(\d+)$/.exec(rest[0]) : null
+    if (!m || !Number.isSafeInteger(Number(m[2]))) return null
+    const n = Number(m[2])
+    return { kind: 'gold', goldChange: { mode: 'add', amount: m[1] === '-' && n !== 0 ? -n : n } }
   }
   if (verb === 'revive') {
     let hp: 'full' | 'half' = 'full'
@@ -543,6 +562,14 @@ export interface EffectContext {
     target: BattleEntity,
     params: StealParams
   ) => { log: string[]; outcome: 'got' | 'miss' | 'empty' }
+  /**
+   * パーティの所持金を変える (#881。`gold` / `gold_all`)。所持金を持つ層（ホスト。エンジンは所持金を持たない）が渡す。
+   * 実装は `applyGoldChange` で新しい所持金を作って保存し、実際に動いた額（`delta`。増えたら正・減ったら負）を返す。
+   * 対象（`targets`）は見ない（パーティ共通）。無ければ「この場面では使えない」警告だけで何もしない
+   */
+  gold?: (change: GoldChange) => { delta: number }
+  /** `gold` 効果のログに出す通貨名（省略は既定の「ゴールド」。勝利ログと同じ表記を使う） */
+  currencyName?: string
 }
 
 /** 戦闘エンティティ（味方/敵共通の最小スキーマ） */
@@ -1002,6 +1029,29 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
             },
             ctx
           )
+        )
+      }
+      return log
+    }
+    case 'gold': {
+      // パーティの所持金の増減・全額消費 (#881)。対象は選ばず 1 回だけ適用する
+      const change = effect.goldChange
+      if (!change) return ['(警告: gold のパラメータ不正)']
+      if (!ctx.gold) return ['(警告: 所持金はこの場面では使えない)']
+      const { delta } = ctx.gold(change)
+      if (change.mode === 'all') {
+        log.push(delta < 0 ? 'おかねを ぜんぶ つかった！' : 'しかし おかねが なかった！')
+      } else if (delta > 0) {
+        log.push(gainedCurrencyLog(delta, ctx.currencyName || DEFAULT_CURRENCY_NAME))
+      } else if (delta < 0) {
+        log.push(lostCurrencyLog(-delta, ctx.currencyName || DEFAULT_CURRENCY_NAME))
+      } else {
+        log.push(
+          change.amount < 0
+            ? 'しかし おかねが なかった！'
+            : change.amount > 0
+              ? 'しかし おかねは ふえなかった！'
+              : 'しかし なにも おこらなかった！'
         )
       }
       return log

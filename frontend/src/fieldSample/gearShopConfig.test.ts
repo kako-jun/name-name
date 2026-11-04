@@ -1,6 +1,7 @@
 /** 設定 JSON の `gearShop` (#881) が parseConfig でどう扱われるか */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseConfig } from './config'
+import { buildBattleEngineOptions } from './battleOptions'
 import { buildDummyFixture } from './__fixtures__/dummyFixture'
 
 const BASE = 'https://example.com/field/config.json'
@@ -43,5 +44,29 @@ describe('parseConfig の gearShop (#881)', () => {
     if (!r.ok) throw new Error(r.error)
     expect('gearShop' in r.value).toBe(false)
     expect((r.value.warnings ?? []).some((w) => w.includes('gearShop'))).toBe(true)
+  })
+})
+
+describe('parseConfig の battle.currencyName (#881)', () => {
+  const withBattle = (currencyName: unknown) => {
+    const base = buildDummyFixture() as Record<string, unknown>
+    const battle = (base.battle ?? {}) as Record<string, unknown>
+    return { ...base, battle: { ...battle, currencyName } }
+  }
+  it('未指定はキーなし・警告なし、指定すると読まれてエンジンのオプションへ渡る', () => {
+    const none = parseConfig(buildDummyFixture(), BASE)
+    if (!none.ok) throw new Error(none.error)
+    expect('currencyName' in none.value.battle).toBe(false)
+    expect(buildBattleEngineOptions(none.value.battle)).not.toHaveProperty('currencyName')
+    const r = parseConfig(withBattle(' 円 '), BASE)
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.battle.currencyName).toBe('円')
+    expect(buildBattleEngineOptions(r.value.battle).currencyName).toBe('円')
+  })
+  it.each(['', '  ', 5, null, {}])('不正値 %j は警告して無視', (v) => {
+    const r = parseConfig(withBattle(v), BASE)
+    if (!r.ok) throw new Error(r.error)
+    expect('currencyName' in r.value.battle).toBe(false)
+    expect((r.value.warnings ?? []).some((w) => w.includes('battle.currencyName'))).toBe(true)
   })
 })
