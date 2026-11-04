@@ -39,6 +39,9 @@ function setup(opts: BattleScreenOptions = {}) {
   })
   const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
   created.push(s)
+  // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+  s.tick(1500)
+  s.tick(200)
   engine.selectAttack()
   ;(s as unknown as { refresh(): void }).refresh()
   return { s, engine, restX: I(s).partyViews[0].container.x }
@@ -128,6 +131,9 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
     )
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
+    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    s.tick(1500)
+    s.tick(200)
     engine.selectAttack()
     ;(s as unknown as { refresh(): void }).refresh()
     return { s, engine, restX: I(s).partyViews[0].container.x }
@@ -189,6 +195,9 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
       motion: 'snappy',
     })
     created.push(s)
+    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    s.tick(1500)
+    s.tick(200)
     ;(s as unknown as { playback: unknown }).playback = { queue: events, active: null }
     const v = s as unknown as {
       partyViews: { container: Container }[]
@@ -267,6 +276,9 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
       motion: 'snappy',
     })
     created.push(sc)
+    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    sc.tick(1500)
+    sc.tick(200)
     ;(sc as unknown as { playback: unknown }).playback = {
       queue: [ev('enemy', [hit({ target: { side: 'enemy', index: 1 } })])],
       active: null,
@@ -300,6 +312,9 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
       motion: 'snappy',
     })
     created.push(sc)
+    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    sc.tick(1500)
+    sc.tick(200)
     ;(sc as unknown as { playback: unknown }).playback = {
       queue: [ev('enemy', [hit()])],
       active: null,
@@ -405,6 +420,9 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
       motion: 'snappy',
     })
     created.push(s)
+    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    s.tick(1500)
+    s.tick(200)
     engine.selectAttack()
     ;(s as unknown as { refresh(): void }).refresh()
     const v = s as unknown as {
@@ -666,6 +684,66 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
     expect(e.label!.x).toBeCloseTo(e.labelBaseX, 6)
     expect(e.acrylicShadow!.x).toBeCloseTo(e.shadowBaseX, 6)
     expect(p.acrylicShadow!.x).toBeCloseTo(p.shadowBaseX, 6)
+  })
+
+  it('登場中は演出キューの再生（advancePresentation）を進めず、登場後に始まる。位置は毎フレーム更新される', async () => {
+    mockLoad('instant')
+    const spy = vi.spyOn(BattleScreen.prototype as never, 'advancePresentation')
+    const { s } = build()
+    const v = views(s)
+    await flush()
+    await flush()
+    s.tick(1)
+    const e = v.enemyViews[0]
+    const x1 = e.container.x
+    s.tick(total / 4)
+    expect(e.container.x).not.toBe(x1)
+    s.tick(total / 4)
+    expect(spy).not.toHaveBeenCalled()
+    s.tick(total) // 終了フレーム
+    expect(v.entranceActive).toBe(false)
+    s.tick(10)
+    expect(spy).toHaveBeenCalled()
+  })
+
+  it('編隊保持: 敵 2 体・味方 2 体で、全 tick で隣り合う x の差が最終位置と一致し、同時到着・始点は全員画面外', async () => {
+    mockLoad('instant')
+    const engine = new BattleEngine(
+      [entity('h1', { sprite: 'img/h.webp' }), entity('h2', { sprite: 'img/h.webp' })],
+      [
+        entity('b1', { atk: 0, sprite: 'img/b.webp' }),
+        entity('b2', { atk: 0, sprite: 'img/b.webp' }),
+      ],
+      { rng: () => 0.5, skills: {} }
+    )
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      motion: 'snappy',
+    })
+    created.push(s)
+    const v = views(s)
+    await flush()
+    await flush()
+    // 開始前（出発位置）: 全員が画面の外
+    const [e1, e2] = v.enemyViews
+    const [p1, p2] = v.partyViews
+    const w = (view: V) => view.container.width
+    expect(e1.container.x + w(e1)).toBeLessThanOrEqual(0.5)
+    expect(e2.container.x + w(e2)).toBeLessThanOrEqual(0.5)
+    expect(p1.container.x).toBeGreaterThanOrEqual(799.5)
+    expect(p2.container.x).toBeGreaterThanOrEqual(799.5)
+    for (let t = 0; t <= total + 20; t += 10) {
+      const finalDiffE = e2.baseX - e1.baseX
+      const finalDiffP = p2.baseX - p1.baseX
+      if (v.entranceActive) {
+        expect(e2.container.x - e1.container.x).toBeCloseTo(finalDiffE, 6)
+        expect(p2.container.x - p1.container.x).toBeCloseTo(finalDiffP, 6)
+      }
+      s.tick(10)
+    }
+    expect(v.entranceActive).toBe(false)
+    for (const view of [e1, e2, p1, p2]) expect(view.container.x).toBeCloseTo(view.baseX, 6)
   })
 
   describe('ATB と入力', () => {

@@ -3501,6 +3501,9 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
       await flushPromises()
       await flushPromises()
       await flushPromises()
+      // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+      s.tick(1500)
+      s.tick(200)
       return { s, engine, v: views(s) }
     }
     const deg = (c: Container) => (c.rotation * 180) / Math.PI
@@ -3604,6 +3607,9 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
         await flushPromises()
         await flushPromises()
         await flushPromises()
+        // snappy の登場スライド (#1037) を済ませる
+        s.tick(1500)
+        s.tick(200)
         engine.selectAttack()
         s.redraw(800, 450)
         const ev = (s as unknown as { enemyViews: RV[] }).enemyViews[0]

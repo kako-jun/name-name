@@ -1068,6 +1068,8 @@ export function entranceTotalMs(timing: MotionTiming = DEFAULT_MOTION_TIMING): n
  * 登場スライドの水平オフセット (#1037)。経過時間（登場の開始から）→ 本来の位置に足す dx（論理 px）。
  * 敵は枠の右端が画面左端 (x=0) の外（dx = -slotRight）、味方は枠の左端が画面右端の外（dx = screenWidth - slotLeft）から出発し、
  * イージングで 0 へ収束する。味方は entrancePartyDelayMs の間は開始位置のまま。
+ * 呼び出し側がグループの最右（敵の slotRight）／最左（味方の slotLeft）の枠を渡すと、グループ全体が同じ dx で動き編隊（間隔）が保たれる。
+ * 枠ごとに呼ぶと出発時に全員が同じ端へ重なるので、陣営で 1 つの値を使うこと。
  * entranceMs <= 0 は無効（{0, true}）。非有限の入力も {0, true}（画面外に置いたままにしない）。
  */
 export function sampleEntrance(

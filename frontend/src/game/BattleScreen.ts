@@ -1296,7 +1296,7 @@ export class BattleScreen extends Container {
           await this.loadPoseVisuals(view, entity.poses)
         if (this.presentation === 'ff' && entity.weapon) await this.loadWeapon(view, entity.weapon)
       })
-      void loading
+      // 登場中に作られるビュー（途中参戦）は entranceLoads を戻した後なので誰にも待たれない。動かない（枠が確定するまで出発位置に居ない）ので害はない
       if (this.entranceActive) this.entranceLoads.push(loading)
     }
     return view
@@ -1475,9 +1475,11 @@ export class BattleScreen extends Container {
       return
     }
     // ff: 演出（行動のモーション・ダメージ数字）を進める。従来ターン制でも時間が要る (#745)
-    if (ff) this.advancePresentation(deltaMS)
-    // 登場スライド (#1037): 終わるまでは位置だけ毎フレーム更新し、ATB の時間は進めない
+    // 登場スライド (#1037): 終わるまでは位置だけ毎フレーム更新し、ATB の時間も演出キューの再生も進めない
+    // （開始時に積まれたイベント＝scripted の開始台詞・従来ターン制の初手が、スライド中に流れない）。
+    // 終了フレームは advanceEntrance が entranceActive を落とすので、同じ tick から再生が始まる
     if (this.entranceActive) this.advanceEntrance(deltaMS)
+    if (ff && !this.entranceActive) this.advancePresentation(deltaMS)
     this.menuLayer?.tick(deltaMS)
     if (atb) {
       // ATB は演出の再生中も時間を進める（本家 FF5/6 と同じ）。敵の行動は events に積まれ、演出キューで順に再生される。
@@ -1512,14 +1514,25 @@ export class BattleScreen extends Container {
     this.applyMotionFrame()
   }
 
-  /** 登場スライドの、この枠の水平オフセット。無効・終了後は 0。開始待ちは出発位置（elapsed 0） */
-  private entranceDx(side: 'party' | 'enemy', slot: { x: number; width: number }): number {
+  /** 登場スライドの、陣営ごと（グループ共通）の水平オフセット。無効・終了後は 0。開始待ちは出発位置（elapsed 0） */
+  private entranceDx(side: 'party' | 'enemy'): number {
     if (!this.entranceActive) return 0
+    // 編隊を保つため、グループ共通のオフセットにする: 敵は全敵の枠の右端の最大、味方は全味方の枠の左端の最小を渡す。
+    // 毎回 views の slotRef から計算するので、再配置・途中参戦でも破綻しない
+    const views = side === 'enemy' ? this.enemyViews : this.partyViews
+    let left = Infinity
+    let right = -Infinity
+    for (const v of views) {
+      if (!v.slotRef) continue
+      left = Math.min(left, v.slotRef.x)
+      right = Math.max(right, v.slotRef.x + v.slotRef.width)
+    }
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return 0
     return sampleEntrance(
       this.entranceElapsed ?? 0,
       side,
-      slot.x,
-      slot.x + slot.width,
+      left,
+      right,
       this.screenWidth,
       this.motionTiming
     ).dx
@@ -3301,7 +3314,7 @@ export class BattleScreen extends Container {
             slot.x + slot.width + pad,
             MOTION_SCREEN_MARGIN,
             this.screenWidth - MOTION_SCREEN_MARGIN
-          ) + this.entranceDx(side, slot)
+          ) + this.entranceDx(side)
         // アクスタ表示 (#953): 足元（スプライト下端中央）を支点に傾く。被弾は山形に倒れ気味、死亡は fallDeg まで倒れる。
         // 向きはのけぞりと同じ（攻撃側と反対）。倒れた絵（down）がある者は絵の差し替えで倒れを表すので、死ぬ被弾でも傾けない（生き残る被弾の傾きは付く）。
         // 倒れの絵が無い者は、従来の沈み込みでなく回転で倒れる
