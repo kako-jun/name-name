@@ -14,6 +14,8 @@ import {
   RESULT_HOLD_DQ_MS,
   RESULT_HOLD_FF_MS,
   RESULT_SKIP_GUARD_MS,
+  RESULT_TEXT,
+  resultHoldMs,
   resultMessageText,
 } from './battleResult'
 
@@ -245,16 +247,16 @@ describe('勝敗を読ませてから閉じる: ff', () => {
     // 演出中はまだ勝利メッセージも出ない・閉じない
     run(s, 100)
     expect(closed).toEqual([])
-    expect(I(s).messageText!.text).not.toBe(resultMessageText('victory'))
+    expect(I(s).messageText!.text).not.toBe(RESULT_TEXT.gold(1))
     // 演出が終わるまで進める（まだ閉じない）
     let guard = 0
-    while (I(s).messageText!.text !== resultMessageText('victory') && guard++ < 400) run(s, 16)
+    while (I(s).messageText!.text !== RESULT_TEXT.gold(1) && guard++ < 400) run(s, 16)
     expect(closed).toEqual([])
     expect(I(s).messageText!.visible).toBe(true)
     expect(I(s).logPanel.visible).toBe(true)
     expect(I(s).sampleEntity('party', 0).pose).toBe('victory')
-    // 待機を過ぎたら閉じる
-    run(s, RESULT_HOLD_FF_MS)
+    // 待機（メッセージ 2 件ぶん）を過ぎたら閉じる
+    run(s, resultHoldMs('ff', 2))
     expect(closed).toEqual(['victory'])
   })
 
@@ -273,7 +275,7 @@ describe('勝敗を読ませてから閉じる: ff', () => {
     const { s, closed } = setup('victory', { presentation: 'ff' })
     tap(s, 'attack')
     let guard = 0
-    while (I(s).messageText!.text !== resultMessageText('victory') && guard++ < 400) run(s, 16)
+    while (I(s).messageText!.text !== RESULT_TEXT.gold(1) && guard++ < 400) run(s, 16)
     expect(closed).toEqual([])
     run(s, RESULT_SKIP_GUARD_MS)
     tapScreen(s)
@@ -319,9 +321,9 @@ describe('勝敗を読ませてから閉じる: ATB・ff 逃走', () => {
     created.push(s)
     tap(s, 'attack')
     let guard = 0
-    while (I(s).messageText!.text !== resultMessageText('victory') && guard++ < 400) run(s, 16)
+    while (I(s).messageText!.text !== RESULT_TEXT.gold(1) && guard++ < 400) run(s, 16)
     expect(closed).toEqual([])
-    run(s, RESULT_HOLD_FF_MS)
+    run(s, resultHoldMs('ff', 2))
     expect(closed).toEqual(['victory'])
   })
 

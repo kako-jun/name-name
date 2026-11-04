@@ -313,6 +313,8 @@ export interface BattleEngineOptions {
    * 無い id は id をそのまま表示する（戦利品の id はゲームが決める不透明な文字列で、アイテムマスターに無くてもよい）
    */
   itemNames?: Record<string, string>
+  /** 呪文の表示名 (#1039)。戦闘後リザルトの「〇〇を おぼえた！」に使う id → 名前（マスターの呪文定義から作る）。無い id は id のまま */
+  spellNames?: Record<string, string>
   /**
    * 脚本制御の戦闘 (#741 / #863)。`[戦闘 id]` の宣言。渡した戦闘だけ脚本が働く（無い・渡さない戦闘は従来どおり）。
    * エンジンはマスター参照を持たないので、途中参戦できる味方（`joiners`）も呼び出し側が渡す
@@ -378,6 +380,9 @@ export class BattleEngine {
   /** 敵ごとに盗めた回数 (#831)。`ぬすむ回数` に達した敵は空になる */
   private stolenCounts = new Map<BattleEntity, number>()
   private itemNames: Record<string, string>
+  private spellNames: Record<string, string>
+  /** ラーニング (#882) の初期値（この戦闘で新たに覚えた分を出すための基準。#1039） */
+  private initialLearned: string[] = []
   /** ラーニング (#882)。パーティ共通の習得済み（初期値＋食らって覚えた順）。結果 `BattleResult.learnedSpells` に載る */
   private learned: string[] = []
   /** ドロップを抽選した印（勝利は 1 度だけ） */
@@ -412,7 +417,9 @@ export class BattleEngine {
       if (edges.size > 0) this.enemyRowRule = { edges, front: Math.max(...edges.values()) }
     }
     this.itemNames = opts.itemNames ?? {}
+    this.spellNames = opts.spellNames ?? {}
     for (const id of opts.learnedSpells ?? []) if (!this.learned.includes(id)) this.learned.push(id)
+    this.initialLearned = [...this.learned]
     for (const e of enemies) {
       const spec = parseLootSpec(e.loot)
       if (!spec) continue
@@ -1470,6 +1477,18 @@ export class BattleEngine {
         this.appendLog(`${this.lootLabel(line.itemId, line.count)} を てに いれた！`)
       }
     }
+  }
+
+  /** 戦利品の表示名（個数なし。名前が分からない id は id のまま。戦闘後リザルト #1039） */
+  itemDisplayName(itemId: string): string {
+    return hasOwn(this.itemNames, itemId) ? this.itemNames[itemId] : itemId
+  }
+
+  /** この戦闘で新たに覚えた呪文の表示名（覚えた順。初期値は含まない。戦闘後リザルト #1039） */
+  newlyLearnedSpellNames(): string[] {
+    return this.learned
+      .filter((id) => !this.initialLearned.includes(id))
+      .map((id) => (hasOwn(this.spellNames, id) ? this.spellNames[id] : id))
   }
 
   /** 戦利品の表示名（`名前` または `名前 ×N`）。名前が分からない id は id のまま */
