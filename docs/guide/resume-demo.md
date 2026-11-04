@@ -91,9 +91,9 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 1. 本番ビルドして静的配信する。`cd frontend && npx vite build --outDir <出力先>` のあと、`<出力先>` を静的配信する（空きポートを使う。他のプロセスは止めない）
 2. 確認用の設定を `<出力先>` の直下（`field-sample.html` と同じ場所）にコピーする。設定内の相対 URL（`scriptUrl` など `field-sample/...`）は設定ファイル自身の位置から解決されるため、ここに置くと壊れない
-3. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する。設定の素材 URL は `http://localhost:8765/...` なので、別ポートで配信するときは、コピーした設定の `8765` を置き換える（「刀の確認」と同じ。セーブの `battle.background` の URL も同様）
-4. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=teramachi-enemy-row-level.config.json` を開く。敵は `M149`（前列・Lv50）と `M147`（後列・Lv3）の戦闘中で再開する
-5. 前列・後列: `M149` を倒さずに、通常攻撃で `M147`（後列）と `M149`（前列）を同じ味方で続けて殴り、`window.fieldSample.rpg().battle.enemies` の HP の減りを比べる。後列の `M147` への通常攻撃のダメージが、前列への約半分（防御差・乱数の幅はあるので、同じ攻撃力で複数回測って傾向を見る。軽減は半分ごとに切り捨て・最低 1）になる。`M149` を倒すと、`M147` が最前列になって等倍で通る。`battle.enemyRow` を `"off"` にした同じ設定では、どちらも等倍
+3. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する。設定の素材 URL は `http://localhost:8765/...` なので、別ポートで配信するときは、コピーした設定の `8765` を置き換える（「刀の確認」と同じ。セーブの `battle.background` の URL も同様）。感情吹き出しの `field-sample/teramachi-emotions.json`（`8765` が 3 箇所）も、「刀の確認」の手順1と同じく置き換える（置換しないと CORS の console error と警告が出る。非致命）
+4. [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-sample-0`）に入れ、`field-sample.html?resume=0&config=teramachi-enemy-row-level.config.json` を開く。敵は `M149`（前列・Lv50）と `M147`（後列・Lv3）の戦闘中で再開する。`ff-mosaic` の導入演出で、操作できるまで約 8〜12 秒かかる。操作は `cross` レイアウトで、矢印↑=たたかう・←=じゅもん、↑↓=ターゲット選択、Enter=決定（Enter だけ押しても何も起きない。先に↑でコマンドを選ぶ）
+5. 前列・後列: 通常攻撃は、ターゲット未指定だと最初の生存敵（`M149`）に当たる。まず `M149`（前列）を通常攻撃したときのダメージを `window.fieldSample.rpg().battle.enemies` の HP の減りで読み（実測の目安は約 9）、`M149` を倒したあとで `M147`（後列）を通常攻撃したときのダメージを読む（約 5〜7。前列の約半分。防御差・乱数の幅があるので複数回測る。軽減は半分ごとに切り捨て・最低 1）。`M147` は `back` と宣言してあるので、`M149` が倒れても後列のまま半減が続く（宣言した敵は固定。`formationRow` を書かない敵だけ、`enemyGrid` の列から導出されて前列が全滅すると繰り上がる）。`battle.enemyRow` を `"off"` にした同じ設定では `M147` も等倍（約 9）
 6. レベル条件の即死: 味方に「ほろび」（`damage_full レベル倍数=5`。MP 1）を使わせる。Lv50 の `M149`（50 は 5 の倍数）は倒れ、Lv3 の `M147`（5 の倍数でない）は `きかなかった` で HP が変わらない。レベルを持たない敵（この設定では `M145`。「今すぐエンカウント」の抽選に入っている）にも効かない。つまりレベル条件の即死は、レベルを持つ敵のうち倍数のものにだけ効く
 
 **見た目の最終判断（後列の敵の見え方・ダメージ表示の読みやすさ）は KJ の実機で行う**。この手順は値の確認までで、見た目の合格判定ではない。
