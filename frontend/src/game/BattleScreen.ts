@@ -593,7 +593,7 @@ const FULL_BOUNDS = { x: 0, y: 0, w: 1, h: 1 }
  * 人物の絵の不透明部分の範囲（比） (#1027)。武器の変換の座標は透過を切り詰めた人物の絵が基準なので、
  * 切り詰められていない絵（大きな一枚絵の swing 系など）も同じ基準にそろえる。画素が読めなければ全体（切り詰め済みとみなす）。
  */
-function opaqueBounds(tex: Texture): { x: number; y: number; w: number; h: number } {
+export function opaqueBounds(tex: Texture): { x: number; y: number; w: number; h: number } {
   const cached = opaqueBoundsCache.get(tex)
   if (cached) return cached
   let out = FULL_BOUNDS
@@ -3382,6 +3382,11 @@ export class BattleScreen extends Container {
       if (!image) {
         console.warn('[BattleScreen] weapon: 刀の絵が決まりません（刀なし）')
         return
+      }
+      if (spec.layers && layers === undefined) {
+        console.warn(
+          `[BattleScreen] weapon "${image}": layers JSON "${spec.layers}" が読めません（変換が無いので刀は出ません）`
+        )
       }
       spec = { ...spec, image }
       const tex = (await Assets.load(resolveRpgImagePath(this.opts.assetBaseUrl, image))) as Texture

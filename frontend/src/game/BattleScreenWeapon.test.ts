@@ -1,7 +1,7 @@
 /** BattleScreen の武器レイヤー (#1027): 人物の上に刀を重ね、ポーズごとの変換・アクスタの動きに追従する */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Assets, Texture, TextureSource, type Container, type Sprite } from 'pixi.js'
-import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { BattleScreen, opaqueBounds, type BattleScreenOptions } from './BattleScreen'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { DEFAULT_MOTION_TIMING as T } from './battleMotion'
@@ -253,6 +253,16 @@ describe('BattleScreen: 武器レイヤー (#1027)', () => {
     expect(warn).toHaveBeenCalled()
   })
 
+  it('layers JSON が 404（読めず undefined）のときは警告を出す（刀は出ない）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockImplementation(async (url: string) =>
+      url === 'l.json' ? { ok: false } : { ok: true, json: async () => DUMMY_CATALOG }
+    )
+    const { s } = await setup()
+    expect(pv(s).weapon!.sprite.visible).toBe(false)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('layers JSON "l.json"'))).toBe(true)
+  })
+
   it('JSON が読めなくても落ちない（変換が無いので刀は出ない）', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     fetchMock.mockRejectedValue(new Error('404'))
@@ -262,5 +272,41 @@ describe('BattleScreen: 武器レイヤー (#1027)', () => {
     s.redraw(800, 450)
     for (let t = 0; t < 400; t += 4) s.tick(4)
     expect(v.weapon!.sprite.visible).toBe(false)
+  })
+})
+
+describe('opaqueBounds の実画素経由 (#1027)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  /** jsdom には canvas の実装が無いので、2D コンテキストの getImageData に合成の RGBA を返させる */
+  function withPixels(w: number, h: number, opaque: (x: number, y: number) => boolean): Texture {
+    const data = new Uint8ClampedArray(w * h * 4)
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) data[(y * w + x) * 4 + 3] = opaque(x, y) ? 255 : 0
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((() => ({
+      drawImage: () => {},
+      getImageData: () => ({ data }),
+    })) as never)
+    const tex = sized(w, h)
+    ;(tex.source as unknown as { resource: unknown }).resource = {}
+    return tex
+  }
+
+  it('不透明部分だけの範囲（比）を返す', () => {
+    // 20x10 の絵の x 5..14・y 2..7 だけ不透明
+    const tex = withPixels(20, 10, (x, y) => x >= 5 && x <= 14 && y >= 2 && y <= 7)
+    expect(opaqueBounds(tex)).toEqual({ x: 5 / 20, y: 2 / 10, w: 10 / 20, h: 6 / 10 })
+  })
+
+  it('完全に透明なら全体（切り詰め済みとみなす）', () => {
+    expect(opaqueBounds(withPixels(8, 8, () => false))).toEqual({ x: 0, y: 0, w: 1, h: 1 })
+  })
+
+  it('画素が読めない（context なし・resource なし）なら全体', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((() => null) as never)
+    const t1 = sized(8, 8)
+    ;(t1.source as unknown as { resource: unknown }).resource = {}
+    expect(opaqueBounds(t1)).toEqual({ x: 0, y: 0, w: 1, h: 1 })
+    expect(opaqueBounds(sized(8, 8))).toEqual({ x: 0, y: 0, w: 1, h: 1 })
   })
 })

@@ -1,24 +1,24 @@
 /**
  * 戦闘の武器レイヤー (#1027)。立ち絵（人物だけの絵）の上に、刀の絵をポーズごとの変換で別レイヤーとして重ねる。
  *
- * このモジュールは純粋関数と型だけを持つ（PixiJS・DOM に触れない）。画面（`BattleScreen`）は読み込んだ JSON を
- * `buildWeaponRig` で 1 つの装備（rig）にまとめ、毎フレーム `resolveWeaponForPose` → `computeWeaponPlacement` で
- * 刀の置き場所を決めるだけ。キャラ・時期（年齢）は問わない: 変換は立位 / 車椅子の「構造」ごとに持つ。
+ * **これは実装メモで、契約の正本ではない。** 変換値の契約（座標系・適用順・回転符号・柄アンカー・レイヤー順・union 規則・
+ * ready の正本・swing の置き場所・刀なしポーズ・C001 の例外）の正本は sit-by-me の `docs/assets-policy.md`「戦闘人物と刀の合成」。
+ * 食い違ったら sit-by-me が正しい。ここには契約を再掲せず、どの関数がどの規則を実装しているかだけを書く。
  *
- * 指定口は `poses` と同じ（マスタの `ポーズ:` / 設定 JSON の `poses`）。予約キーで刀を足す:
- *   weapon=刀の絵 / weapon-structure=standing|wheelchair / weapon-anchor=柄の位置 "x y"（0〜1）/
- *   weapon-layers=layers JSON のパス / weapon-catalog=刀カタログ JSON のパス / weapon-overrides=刀ごとの変換の上書き JSON のパス（任意）
- * 座標はすべて「透過を切り詰めた人物の絵（刀は刀の絵）の左上を原点、x 右・y 下」の 0〜1 の比。
+ * 実装の対応（規則の中身は正本を見る）:
+ * - `normalizeWeaponSpec` / `pickWeaponKeys` / `weaponField`: `poses` の予約キー（weapon / weapon-structure / weapon-anchor /
+ *   weapon-layers / weapon-catalog / weapon-overrides）を読む。name-name 側の指定口で、sit-by-me の契約には無い。
+ * - `buildWeaponRig`: layers JSON（人物ごとの `battle-layers.json`）の `pose_layers` と `ready_weapon_transform` から構造ごとの
+ *   変換を組む。union 規則は `pick`（構造キーがあればその構造・無ければ全構造）、構造別サブオブジェクトは `readTransformEntry`、
+ *   ready は `ready_weapon_transform` を `pose_layers.ready` に重ねる。刀ごとの上書きは任意の overrides（C001 の
+ *   `*-blade-candidates.json` 向け。`shared_pose_transforms.poses.<pose>.candidate_overrides.<刀の絵>`）。catalog は柄アンカーと既定の刀だけ読む。
+ * - `resolveWeaponForPose`: 刀なしポーズ（layers に weapon が無い・`weapon: "none..."`）と、変換が無い構えのポーズの ready への倒し。
+ * - `computeWeaponPlacement`: 適用順（縮小 → 反転 → 回転 → 柄アンカーを handle_target へ）を Pixi の anchor / scale / rotation で表す。
+ *   回転の符号は Pixi が時計回り正なので反転する。
+ * - `alphaBoundsFraction`: 透過を切り詰めていない絵を、切り詰め済みの座標に合わせる（`BattleScreen.opaqueBounds` が使う）。
  *
- * JSON のスキーマ（項目名のみ。値の例はテストを参照）:
- * - layers（人物ごと）: `pose_layers.<pose>` = レイヤー順（`["character","weapon"]`）または
- *   `{ layers, weapon_height_ratio, rotation_deg, handle_target, flip_x }`、構造別は `{ standing: {...}, wheelchair: {...} }`。
- *   `ready_weapon_transform` は ready の変換
- * - catalog（刀ごと）: `weapons[].file` / `handle_center_normalized`（柄アンカー）だけ読む。変換（`shared_pose_transforms` 等）は読まない
- * 各変換の項目は 構造キー（standing / wheelchair）を持っていても、持たず全構造共通でもよい。
- * 変換の規約（実物の `transform_convention` と同じ）: 刀の高さ = 高さ比 × 人物の絵の高さ → flip_x なら先に左右反転 →
- * 回転（正 = 画面で反時計回り・中心まわり）→ 回した刀の柄アンカーを handle_target に合わせる。柄アンカーを支点に回して
- * 柄を handle_target へ置くのと同じ結果になる。
+ * 実データでの固定: `battleWeaponSitByMe.test.ts`（sit-by-me の C001〜C004 の抜粋を `__fixtures__` に複写）。
+ * この関数群は純粋（PixiJS・DOM に触れない）。画面（`BattleScreen`）が JSON を読み、毎フレーム置き場所を決める。
  */
 import type { BattlePose } from './battleMotion'
 
