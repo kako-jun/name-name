@@ -7,6 +7,7 @@ import {
   summonScenarios,
   multiTargetScenarios,
   enemyRowScenarios,
+  enemyLevelScenarios,
   jobScenarios,
   lootMatrix,
   effectMatrix,
@@ -58,6 +59,7 @@ export type SweepFamily =
   | 'script-force'
   | 'multi-target'
   | 'enemy-row'
+  | 'enemy-level'
 
 /** 族 `script-force` のランダム合成の件数（固定。決定論） */
 export const FORCE_RANDOM_COUNT = 400
@@ -105,6 +107,8 @@ export function buildSweep(cfg: SweepConfig = DEFAULT_SWEEP): Scenario[] {
     ...(skip.has('multi-target') ? [] : multiTargetScenarios()),
     // 敵の前列・後列 (#896)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
     ...(skip.has('enemy-row') ? [] : enemyRowScenarios()),
+    // 敵のレベル (#898)。さらに末尾に足すので、これより前の族の並び・出力は変わらない
+    ...(skip.has('enemy-level') ? [] : enemyLevelScenarios()),
   ]
 }
 

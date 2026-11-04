@@ -208,6 +208,7 @@ fn build_monster_def(id: String, entries: &[(String, String)]) -> Option<Monster
         size: collect_size(entries),
         scale: collect_scale(entries),
         row: collect_monster_row(entries),
+        level: collect_monster_level(entries),
         affinity: collect_affinity(entries),
         loot: collect_loot(entries),
     })
@@ -391,6 +392,36 @@ fn interpret_monster_row(raw: Option<&str>) -> (Option<String>, Option<String>) 
             )),
         ),
     }
+}
+
+/// モンスターの `レベル` / `level` / `Lv` (#898)。1〜99 に丸める。書かない・空は None、数字として読めない値は警告して None。
+/// 同じキーが複数あれば最初の 1 行が勝つ。
+fn collect_monster_level(entries: &[(String, String)]) -> Option<u32> {
+    let (level, warning) =
+        interpret_monster_level(lookup_master_value(entries, &["レベル", "level", "Lv"]));
+    if let Some(w) = warning {
+        emit_warning(&format!("[name-name-parser] warning: {w}"));
+    }
+    level
+}
+
+/// `レベル:` の値の解釈（副作用なし）。戻りは (レベル, 警告文)。非負の整数（全角数字可）だけ受け、0 は 1・100 以上は 99 に丸める。
+fn interpret_monster_level(raw: Option<&str>) -> (Option<u32>, Option<String>) {
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else {
+        return (None, None);
+    };
+    let t = to_halfwidth(raw);
+    if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+        // 桁あふれは 99 に丸める
+        let n = t.parse::<u32>().unwrap_or(u32::MAX);
+        return (Some(n.clamp(1, 99)), None);
+    }
+    (
+        None,
+        Some(format!(
+            "invalid monster level '{raw}', ignoring. Expected an integer between 1 and 99"
+        )),
+    )
 }
 
 /// `倍率` / `scale` を 0.25〜1 に丸めた表示倍率にする (#839)。書かない場合は None。
@@ -1032,6 +1063,32 @@ fn build_status_def(id: String, entries: &[(String, String)]) -> Option<StatusDe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monster_level_rounds_to_1_99_and_warns_on_invalid() {
+        for (raw, want) in [
+            ("5", 5),
+            ("０５", 5),
+            ("0", 1),
+            ("99", 99),
+            ("100", 99),
+            ("99999999999999", 99),
+            (" 7 ", 7),
+        ] {
+            assert_eq!(
+                interpret_monster_level(Some(raw)),
+                (Some(want), None),
+                "{raw}"
+            );
+        }
+        for bad in ["-3", "1.5", "abc", "5+", "+5"] {
+            let (l, w) = interpret_monster_level(Some(bad));
+            assert_eq!(l, None, "{bad}");
+            assert!(w.unwrap().contains("invalid monster level"), "{bad}");
+        }
+        assert_eq!(interpret_monster_level(None), (None, None));
+        assert_eq!(interpret_monster_level(Some("  ")), (None, None));
+    }
 
     #[test]
     fn monster_row_accepts_known_values_and_warns_on_invalid() {

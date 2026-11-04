@@ -12673,3 +12673,22 @@ fn test_monster_row_parse_and_roundtrip() {
     let out = emitter::emit(&parser::parse(src));
     assert!(out.contains("隊列: 後衛\n"), "{out}");
 }
+
+// ---- #898: モンスターの レベル ----
+
+#[test]
+fn test_monster_level_parse_and_roundtrip() {
+    assert_eq!(monster_with("").level, None);
+    assert_eq!(monster_with("レベル: 25\n").level, Some(25));
+    assert_eq!(monster_with("level: 5\n").level, Some(5));
+    assert_eq!(monster_with("Lv: ９\n").level, Some(9));
+    // 丸め・空・不正値
+    assert_eq!(monster_with("レベル: 0\n").level, Some(1));
+    assert_eq!(monster_with("レベル: 150\n").level, Some(99));
+    assert_eq!(monster_with("レベル:\n").level, None);
+    assert_eq!(monster_with("レベル: 高い\n").level, None);
+    // 味方の level とは別（敵だけの項目）。往復
+    let src = "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\nレベル: 15\n[/モンスター]\n";
+    let out = emitter::emit(&parser::parse(src));
+    assert!(out.contains("レベル: 15\n"), "{out}");
+}

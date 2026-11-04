@@ -1200,6 +1200,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(r) = &m.row {
                     out.push_str(&format!("隊列: {r}\n"));
                 }
+                if let Some(l) = m.level {
+                    out.push_str(&format!("レベル: {l}\n"));
+                }
                 if let Some(a) = &m.affinity {
                     for (label, ids) in [
                         ("弱点", &a.weak),
@@ -2290,6 +2293,7 @@ mod tests {
             size: Some(MonsterSize { w: 2, h: 1 }),
             scale: Some(0.5),
             row: Some("後衛".to_string()),
+            level: Some(25),
             affinity: Some(MonsterAffinity {
                 weak: vec!["ice".to_string(), "water".to_string()],
                 halve: vec![],
@@ -2308,7 +2312,7 @@ mod tests {
         assert!(out.contains("行動: 条件=初手 候補=こうげき\n行動: 候補=こうげき:3 | 墨:1\n"));
         assert!(out.contains("反撃: 条件=受けた=物理 候補=こうげき\n死亡時: 候補=自爆\n"));
         assert!(out.contains("ポーズ: hurt=monsters/slime-hurt.png"));
-        assert!(out.contains("サイズ: 2x1\n倍率: 0.5\n隊列: 後衛\n"));
+        assert!(out.contains("サイズ: 2x1\n倍率: 0.5\n隊列: 後衛\nレベル: 25\n"));
         assert!(out.contains("弱点: ice, water\n無効: wind\n吸収: thunder\n"));
         assert!(!out.contains("半減:"));
         assert!(out.contains("[モンスター slime]"));

@@ -177,6 +177,8 @@ export interface MonsterDef {
   scale?: number
   /** 敵の隊列 (#896)。`隊列: 前衛 | 後衛`（parser が前衛/後衛/前列/後列/front/back だけ通す生文字列。不正は警告して未指定）。`battle_enemy_row: on` のときだけ効く。無ければ `battle_enemy_grid` の列から導出（グリッドも無ければ前列）。解釈は `game/enemyRow.ts` */
   row?: string
+  /** 敵のレベル (#898)。`レベル: N`（別名 `level` / `Lv`。parser が 1〜99 に丸め済み。不正は警告して未指定）。無ければレベル無し。レベル条件の即死（`damage_full レベル倍数=N`）と調整（`level +N|-N|=N`）が使う */
+  level?: number
   /** 属性相性 (#872)。`弱点:` / `半減:` / `無効:` / `吸収:` の属性 id（parser が小文字・半角に正規化済み。優先順位 吸収 > 無効 > 半減 > 弱点で重複排除済み）。4 欄とも空なら無い。解釈・倍率は `game/affinity.ts` */
   affinity?: { weak?: string[]; halve?: string[]; nullify?: string[]; absorb?: string[] }
   /** 戦利品の宣言 (#831)。`ドロップ:` `ぬすむ:` `ぬすむレア:` `ぬすむ回数:` のどれかを書いたときだけある。生文字列で透過し、解釈は `game/loot.ts` */

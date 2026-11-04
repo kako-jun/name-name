@@ -312,6 +312,7 @@ describe('強制 (#741 段階 2): 不変条件と族 script-force', () => {
     const heavy = [
       'multi-target',
       'enemy-row',
+      'enemy-level',
       'effect-matrix',
       'enemy-skill',
       'stack-order',

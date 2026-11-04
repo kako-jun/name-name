@@ -23,14 +23,14 @@ describe('multiTargetScenarios', () => {
       randomCount: 0,
       randomStatusCount: 0,
       randomScriptCount: 0,
-      skip: ['enemy-row'],
+      skip: ['enemy-row', 'enemy-level'],
     })
     const without = buildSweep({
       randomSeed: 1,
       randomCount: 0,
       randomStatusCount: 0,
       randomScriptCount: 0,
-      skip: ['multi-target', 'enemy-row'],
+      skip: ['multi-target', 'enemy-row', 'enemy-level'],
     })
     expect(withIt.length - without.length).toBe(448)
     expect(withIt.slice(0, without.length).map((s) => s.id)).toEqual(without.map((s) => s.id))

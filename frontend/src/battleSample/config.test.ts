@@ -2139,3 +2139,30 @@ describe('設定 JSON: enemyGrid / enemyRow / enemies[].formationRow / at (#896)
     expect(r.ok).toBe(false)
   })
 })
+
+describe('設定 JSON: enemies[].level (#898)', () => {
+  it('敵のレベルは 1〜99 に丸める。書かなければ付かない', () => {
+    const r = parseConfig(
+      {
+        enemies: [
+          { id: 'a', level: 25 },
+          { id: 'b', level: 500 },
+          { id: 'c', level: 0 },
+          { id: 'd' },
+        ],
+      },
+      BASE
+    )
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.enemies.map((e) => e.level)).toEqual([25, 99, 1, undefined])
+    expect('level' in r.value.enemies[3]).toBe(false)
+  })
+  it.each([{ level: '5' }, { level: 1.5 }, { level: null }])('不正値 %j は読み込みエラー', (o) => {
+    const r = parseConfig({ enemies: [{ id: 'a', ...o }] }, BASE)
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toContain('level は整数')
+  })
+  it('味方に level は書けない', () => {
+    expect(parseConfig({ party: [{ id: 'p', level: 3 }] }, BASE).ok).toBe(false)
+  })
+})

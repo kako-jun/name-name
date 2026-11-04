@@ -2,7 +2,7 @@
  * 検証ハーネスの実行 (#877 段階 3)。シナリオ 1 件を決定論的に動かし、検出器で見て、結果（違反と指標）を返す。
  * 検出のみ。エンジンの挙動は変えない。
  */
-import type { BattleActionEvent, SpellExecution } from '../battleEngine'
+import type { BattleActionEvent, BattleState, SpellExecution } from '../battleEngine'
 import { isSpreadableSpell, parseEffect } from '../spellDsl'
 import { MAX_DAMAGE } from '../battleLimits'
 import {
@@ -224,6 +224,8 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
     // 魔法の全体化 (#895): 呪文の操作の前に、生きている敵を控えて、記録（ヒット）と割り算の規則を突き合わせる
     const spell = op.t === 'spell' ? scenario.spells[op.s] : undefined
     const aliveBefore = engine.getState().enemies.map((e) => e.hp > 0)
+    // 敵のレベル (#898): 操作前の HP とレベルを控える
+    const before = engine.getState().enemies.map((e) => ({ hp: e.hp, level: e.level }))
     alive = step(
       i,
       () => applyOp(engine, scenario, op),
@@ -233,7 +235,9 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
         ? (fresh) => checkMultiTarget(spell, op.scope, aliveBefore, fresh, i)
         : op.t === 'attack' && scenario.checkEnemyRow
           ? (fresh) => checkEnemyRow(scenario, aliveBefore, fresh, i)
-          : undefined
+          : spell && op.t === 'spell' && scenario.checkEnemyLevel
+            ? (fresh) => checkEnemyLevel(spell, op.target, before, engine.getState(), fresh, i)
+            : undefined
     )
     metrics.opsRun = i + 1
   }
@@ -371,6 +375,61 @@ function lootDeclarations(scenario: Scenario): Pick<DetectOptions, 'loot'> {
 
 function describe(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+}
+
+/**
+ * 敵のレベル (#898) の不変条件。呪文 1 回の記録（味方の `spell` イベントのうち `label` が呪文名のもの）が出た操作だけ見る
+ * （ATB で行動できず呪文が出なかった操作は見ない）。対象は `target`（敵の id）の敵 1 体で、敵は死の耐性・状態・HP の下限を持たない前提:
+ * - `damage_full レベル倍数=N`: 操作前に生きていてレベルが N の倍数なら倒れ、倍数でない・レベル無しなら HP もレベルも動かない
+ * - `level +N|-N|=N`: 操作前に生きていてレベルを持つなら、結果は式どおり 1〜99 に収めた値。レベル無し・倒れていた敵は動かない
+ * - どの呪文でも、全員のレベルは「無し」か 1〜99 の整数で、レベル無しの敵にレベルは付かない
+ */
+function checkEnemyLevel(
+  spell: SpellExecution,
+  targetId: string | undefined,
+  before: readonly { hp: number; level: number | undefined }[],
+  after: Readonly<BattleState>,
+  fresh: readonly BattleActionEvent[],
+  opIndex: number
+): Violation[] {
+  const out: Violation[] = []
+  const bad = (detail: string): void => {
+    out.push({ kind: 'enemy-level-invariant', detail, opIndex })
+  }
+  after.enemies.forEach((e, i) => {
+    if (e.level !== undefined && (!Number.isInteger(e.level) || e.level < 1 || e.level > 99)) {
+      bad(`敵 #${i} のレベル ${String(e.level)} が 1〜99 の整数でない`)
+    }
+    if (before[i].level === undefined && e.level !== undefined) {
+      bad(`レベルを持たない敵 #${i} にレベル ${e.level} が付いた`)
+    }
+  })
+  const acted = fresh.some(
+    (ev) => ev.kind === 'spell' && ev.actor.side === 'party' && ev.label === spell.name
+  )
+  const parsed = spell.effect ? parseEffect(spell.effect) : null
+  const idx = after.enemies.findIndex((e) => e.id === targetId)
+  if (!acted || !parsed || idx < 0) return out
+  const b = before[idx]
+  const a = after.enemies[idx]
+  const tag = `${spell.name}(${spell.effect}) → 敵 #${idx}（HP ${b.hp}・レベル ${String(b.level)}）`
+  if (parsed.kind === 'damage_full' && parsed.levelMultiple !== undefined && b.hp > 0) {
+    const hit = b.level !== undefined && b.level % parsed.levelMultiple === 0
+    if (hit && a.hp > 0) bad(`${tag}: レベルが ${parsed.levelMultiple} の倍数なのに倒れなかった`)
+    if (!hit && (a.hp !== b.hp || a.level !== b.level)) {
+      bad(`${tag}: レベルが ${parsed.levelMultiple} の倍数でないのに効いた（HP ${a.hp}）`)
+    }
+  }
+  if (parsed.kind === 'level' && parsed.levelAdjust) {
+    let want = b.level
+    if (b.level !== undefined && b.hp > 0) {
+      const adj = parsed.levelAdjust
+      want = Math.min(99, Math.max(1, adj.mode === 'set' ? adj.value : b.level + adj.value))
+    }
+    if (a.level !== want)
+      bad(`${tag}: 調整後のレベル ${String(a.level)} が式どおりの ${String(want)} でない`)
+  }
+  return out
 }
 
 /**
