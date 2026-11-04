@@ -27,6 +27,7 @@ import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/field
 import { WARP_DEFAULTS, type WarpEffectKind, type WarpTiming } from '../game/fieldWarp'
 import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
 import { parseFieldMenuConfig, type FieldMenuConfig } from '../game/fieldMenu'
+import { parseGearShopConfig, type GearShopConfig } from '../game/gearShop'
 import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
@@ -256,6 +257,11 @@ export interface FieldSampleConfig {
    * 未指定・`false` は undefined＝メニュー無し（従来どおり。≡ ボタンも出ない）
    */
   menu?: FieldMenuConfig
+  /**
+   * 刀・防具の売り物と値段 (#881)。`gearShop: { multiplier?, entries: [{ id, kind: "blade"|"armor", owner?, basePrice?, price?, unlockFlag? }] }`。
+   * 未指定・不正は undefined＝キーなし（従来どおり）。UI（アプリストア）は #881 段階2
+   */
+  gearShop?: GearShopConfig
   /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
   dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
@@ -909,6 +915,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   }
   const menuParsed = parseFieldMenuConfig(raw.menu)
   warnings.push(...menuParsed.warnings)
+  const gearShopParsed = parseGearShopConfig(raw.gearShop)
+  warnings.push(...gearShopParsed.warnings)
   let tiltShift: 'on' | undefined
   if (raw.tiltShift !== undefined) {
     if (raw.tiltShift === 'on') tiltShift = 'on'
@@ -1017,6 +1025,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(tiltShift ? { tiltShift } : {}),
       ...(menuParsed.value ? { menu: menuParsed.value } : {}),
+      ...(gearShopParsed.value ? { gearShop: gearShopParsed.value } : {}),
       ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
