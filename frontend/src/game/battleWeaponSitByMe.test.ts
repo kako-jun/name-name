@@ -104,6 +104,23 @@ describe('sit-by-me の実データ (#1027)', () => {
     expect(resolveWeaponForPose(wc, 'slash')!.transform.handleTarget).toEqual({ x: 0.5, y: 0.34 })
   })
 
+  it('C001 の swing は #165 でクロップし直した値（windup 110 度・followthrough は構造別の回転 175/165、高さ比 0.42）', () => {
+    const st = rig(LAYERS_C001, CATALOG_C001, ODENTA, 'standing')
+    const wc = rig(LAYERS_C001, CATALOG_C001, ODENTA, 'wheelchair')
+    const t = (r: WeaponRig, pose: 'swing-windup' | 'swing-followthrough') =>
+      resolveWeaponForPose(r, pose)!.transform
+    expect(t(st, 'swing-windup')).toMatchObject({
+      heightRatio: 0.42,
+      rotationDeg: 110,
+      flipX: false,
+    })
+    expect(t(st, 'swing-windup').handleTarget).toEqual({ x: 0.86, y: 0.19 })
+    expect(t(wc, 'swing-windup').handleTarget).toEqual({ x: 0.8, y: 0.22 })
+    expect(t(st, 'swing-followthrough')).toMatchObject({ heightRatio: 0.42, rotationDeg: 175 })
+    expect(t(wc, 'swing-followthrough')).toMatchObject({ heightRatio: 0.42, rotationDeg: 165 })
+    expect(t(st, 'swing-followthrough').handleTarget).toEqual({ x: 0.15, y: 0.51 })
+    expect(t(wc, 'swing-followthrough').handleTarget).toEqual({ x: 0.15, y: 0.43 })
+  })
   it('C001 の slash の刀別 override は blade-candidates.json を overrides に渡したときだけ効く（onimaru のみ）', () => {
     const none = rig(LAYERS_C001, CATALOG_C001, ONIMARU, 'standing')
     expect(resolveWeaponForPose(none, 'slash')!.transform.heightRatio).toBe(0.52)

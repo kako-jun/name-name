@@ -1,6 +1,6 @@
 /**
  * sit-by-me の実データの抜粋（#1027 の実データテスト用フィクスチャ。値は実物のまま、必要な項目だけ残した）。
- * 出典: https://github.com/kako-jun/sit-by-me  commit b0d6c12854677d29a8d55794ad625164eec819f4 (main, 2026-11-04)
+ * 出典: https://github.com/kako-jun/sit-by-me  commit 75b94303bb03ed4868ffd3a62d8b883834db906a (main, 2026-11-04)
  *   - assets/images/characters/C00{1..4}/battle-layers.json   → LAYERS_C00x（pose_layers の ready / step / slash / swing-* / special / cast と ready_weapon_transform）
  *   - assets/images/weapons/C00{1..4}/C00x-blade-candidates.json → CATALOG_C00x（weapons の file / handle_center_normalized）。C001 だけ shared_pose_transforms.poses.slash（候補刀別の上書き）も残す
  * 契約の正本は sit-by-me の docs/assets-policy.md「戦闘人物と刀の合成」。ここは値の複写で、正本ではない（sit-by-me 側が変わったら更新する）。
@@ -48,39 +48,27 @@ export const LAYERS_C001 = {
     },
     'swing-windup': {
       layers: ['character', 'weapon'],
-      weapon_height_ratio: 0.52,
-      rotation_deg: -90,
+      weapon_height_ratio: 0.42,
+      rotation_deg: 110,
       handle_target: {
-        standing: {
-          x: 0.76,
-          y: 0.25,
-        },
-        wheelchair: {
-          x: 0.8,
-          y: 0.26,
-        },
+        standing: { x: 0.86, y: 0.19 },
+        wheelchair: { x: 0.8, y: 0.22 },
       },
       flip_x: false,
       source:
-        'copied from assets/images/weapons/C001/C001-blade-candidates.json#shared_pose_transforms.poses (values identical)',
+        'Re-derived in #165 for the tight-cropped swing images (canvas = alpha bbox, same crop rule as C001 idle/ready/slash, normalized to that canvas); blade tips verified at least 2px inside all four edges for all 5 C001 candidate swords x all 7 sets.',
     },
     'swing-followthrough': {
       layers: ['character', 'weapon'],
-      weapon_height_ratio: 0.52,
-      rotation_deg: 90,
+      weapon_height_ratio: 0.42,
+      rotation_deg: { standing: 175, wheelchair: 165 },
       handle_target: {
-        standing: {
-          x: 0.22,
-          y: 0.64,
-        },
-        wheelchair: {
-          x: 0.28,
-          y: 0.43,
-        },
+        standing: { x: 0.15, y: 0.51 },
+        wheelchair: { x: 0.15, y: 0.43 },
       },
       flip_x: false,
       source:
-        'copied from assets/images/weapons/C001/C001-blade-candidates.json#shared_pose_transforms.poses (values identical)',
+        'Re-derived in #165 for the tight-cropped swing images (canvas = alpha bbox, same crop rule as C001 idle/ready/slash, normalized to that canvas); blade tips verified at least 2px inside all four edges for all 5 C001 candidate swords x all 7 sets.',
     },
     special: {
       layers: ['trail', 'character', 'weapon'],

@@ -1,0 +1,24 @@
+{
+  "layout": "side",
+  "presentation": "ff",
+  "enemyGrid": "3x2",
+  "enemyRow": "on",
+  "party": [
+    { "id": "hero", "name": "ゆうしゃ", "hp": 999, "mp": 40, "atk": 40, "def": 4, "agi": 50 }
+  ],
+  "enemies": [
+    { "id": "mid", "name": "なか", "hp": 60, "atk": 3, "def": 0, "agi": 1, "at": "B1" },
+    { "id": "front", "name": "まえ", "hp": 40, "atk": 3, "def": 0, "agi": 1, "at": "C1" },
+    { "id": "rear", "name": "うしろ", "hp": 300, "atk": 3, "def": 0, "agi": 1, "at": "A1" },
+    {
+      "id": "guard",
+      "name": "ばんけん",
+      "hp": 300,
+      "atk": 3,
+      "def": 0,
+      "agi": 1,
+      "at": "A2",
+      "formationRow": "front"
+    }
+  ]
+}

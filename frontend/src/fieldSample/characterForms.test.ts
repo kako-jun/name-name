@@ -7,6 +7,7 @@ import {
   deriveWalkSprites,
   explainNoPoses,
   derivePoses,
+  deriveWeaponKeys,
   expandCharacterForms,
   parseCharacterFormsManifest,
   pickPoseVariant,
@@ -275,5 +276,121 @@ describe('expandCharacterForms（設定 JSON への展開）', () => {
     expect(expandCharacterForms(c, manifest).warnings.join('\n')).toMatch(/form がありません/)
     const bad = { ...cfg(), characterForms: {} }
     expect(expandCharacterForms(bad, manifest).warnings.join('\n')).toMatch(/root/)
+  })
+})
+
+describe('刀の指定（#1035。目録から導く）', () => {
+  const WROOT = 'http://h/assets/images/weapons'
+  const wm: CharacterFormsManifest = {
+    characters: {
+      CW: {
+        weapon: {
+          default: 'CW-muramasa-candidate.webp',
+          images: ['CW-honebami-candidate.webp', 'CW-muramasa-candidate.webp'],
+        },
+        forms: {
+          a: { poses: { plain: ALL }, walk: true },
+          'a-wheelchair': { poses: { plain: ALL }, walk: true },
+        },
+      },
+      CN: { forms: { a: { poses: { plain: ALL }, walk: true } } },
+    },
+  }
+  const keys = (c: string, f: string, w?: string) => deriveWeaponKeys(wm, ROOT, WROOT, c, f, w)
+
+  it('既定の刀・layers・カタログ・構造を命名規則で導く（立位は standing）', () => {
+    expect(keys('CW', 'a')).toEqual({
+      weapon: 'http://h/assets/images/weapons/CW/CW-muramasa-candidate.webp',
+      'weapon-structure': 'standing',
+      'weapon-layers': 'http://h/assets/images/characters/CW/battle-layers.json',
+      'weapon-catalog': 'http://h/assets/images/weapons/CW/CW-blade-candidates.json',
+    })
+  })
+  it('車椅子の形態は wheelchair（step は layers 側で刀なし）', () => {
+    expect(keys('CW', 'a-wheelchair')?.['weapon-structure']).toBe('wheelchair')
+  })
+  it('刀を slug で選べる。候補に無ければ undefined', () => {
+    expect(keys('CW', 'a', 'honebami')?.weapon).toMatch(/CW-honebami-candidate\.webp$/)
+    expect(keys('CW', 'a', 'CW-honebami-candidate.webp')?.weapon).toMatch(/honebami/)
+    expect(keys('CW', 'a', 'nothing')).toBeUndefined()
+  })
+  it('刀の項目が無い人物（C001 相当）・未知の人物は刀なし（{}）', () => {
+    expect(keys('CN', 'a')).toEqual({})
+    expect(keys('ZZ', 'a')).toEqual({})
+    expect(keys('constructor', 'a')).toEqual({})
+  })
+  it('展開: weaponRoot があれば poses に刀の予約キーが入る。存在しない時期はエラーにならず導出しない', () => {
+    const cfg = {
+      characterForms: { root: ROOT, weaponRoot: WROOT, manifestUrl: 'm.json' },
+      party: [
+        { name: 'A', character: 'CW', form: 'a-wheelchair' },
+        { name: 'B', character: 'CW', form: 'a', weapon: 'honebami' },
+        { name: 'C', character: 'CN', form: 'a' },
+        { name: 'D', character: 'CW', form: 'midlife' },
+        { name: 'E', character: 'CW', form: 'a', weapon: 'bogus' },
+      ],
+    }
+    const r = expandCharacterForms(cfg, wm)
+    const party = (r.raw as { party: Record<string, unknown>[] }).party
+    const poses = (i: number) => party[i].poses as Record<string, string>
+    expect(poses(0)['weapon-structure']).toBe('wheelchair')
+    expect(poses(0).idle).toMatch(/CW-a-wheelchair-idle\.webp$/)
+    expect(poses(1).weapon).toMatch(/honebami/)
+    expect(party[1]).not.toHaveProperty('weapon')
+    expect(poses(2).weapon).toBeUndefined()
+    expect(party[3].poses).toBeUndefined() // 存在しない時期: 手書きのまま・刀も付けない
+    expect(poses(4).weapon).toMatch(/muramasa/) // 不明な刀は警告して既定へ
+    expect(r.warnings.join('\n')).toMatch(/midlife/)
+    expect(r.warnings.join('\n')).toMatch(/bogus/)
+  })
+  it('weaponRoot が無い設定は刀を導かない（従来どおり）', () => {
+    const cfg = {
+      characterForms: { root: ROOT, manifestUrl: 'm.json' },
+      party: [{ name: 'A', character: 'CW', form: 'a' }],
+    }
+    const poses = (
+      expandCharacterForms(cfg, wm).raw as { party: { poses: Record<string, string> }[] }
+    ).party[0].poses
+    expect(poses.weapon).toBeUndefined()
+  })
+  it('目録の weapon が不正（default が images に無い等）なら失敗', () => {
+    const bad = { characters: { C1: { weapon: { default: 'x', images: ['y'] }, forms: {} } } }
+    expect(parseCharacterFormsManifest(bad).ok).toBe(false)
+  })
+  it('目録の catalogOverrides の人物は weapon-overrides にカタログを指す', () => {
+    const m2: CharacterFormsManifest = {
+      characters: {
+        CW: {
+          ...wm.characters.CW,
+          weapon: { ...wm.characters.CW.weapon!, catalogOverrides: true },
+        },
+      },
+    }
+    expect(deriveWeaponKeys(m2, ROOT, WROOT, 'CW', 'a')?.['weapon-overrides']).toBe(
+      'http://h/assets/images/weapons/CW/CW-blade-candidates.json'
+    )
+    expect(keys('CW', 'a')).not.toHaveProperty('weapon-overrides')
+  })
+  it('同梱の目録: 既定の刀は C001=odenta-mitsuyo・C002=muramasa・C003=nagasone-kotetsu・C004=shichishito（C001 だけ overrides つき）。swing も全員導く（#165 解消後）', () => {
+    const r = parseCharacterFormsManifest(JSON.parse(manifestText))
+    if (!r.ok) throw new Error(r.error)
+    const m = r.value
+    const want = {
+      C001: 'odenta-mitsuyo',
+      C002: 'muramasa',
+      C003: 'nagasone-kotetsu',
+      C004: 'shichishito',
+    }
+    for (const [c, slug] of Object.entries(want)) {
+      const k = deriveWeaponKeys(m, ROOT, WROOT, c, 'elementary')
+      expect(k?.weapon).toContain(`-${slug}-`)
+      expect(k?.['weapon-layers']).toBe(`${ROOT.replace(/\/$/, '')}/${c}/battle-layers.json`)
+      expect(k !== undefined && 'weapon-overrides' in k).toBe(c === 'C001')
+    }
+    expect(
+      deriveWeaponKeys(m, ROOT, WROOT, 'C002', 'elementary-wheelchair')?.['weapon-structure']
+    ).toBe('wheelchair')
+    for (const c of ['C001', 'C002'])
+      expect(derivePoses(m, ROOT, c, 'elementary')).toHaveProperty('swing-windup')
   })
 })

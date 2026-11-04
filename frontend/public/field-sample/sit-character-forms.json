@@ -3,6 +3,17 @@
   "characters": {
     "C001": {
       "plainBaked": true,
+      "weapon": {
+        "default": "C001-odenta-mitsuyo-candidate.webp",
+        "images": [
+          "C001-juzumaru-tsunetsugu-candidate.webp",
+          "C001-mikazuki-munechika-candidate.webp",
+          "C001-odenta-mitsuyo-candidate.webp",
+          "C001-onimaru-kunitsuna-candidate.webp",
+          "C001-sohaya-no-tsuruki-candidate.webp"
+        ],
+        "catalogOverrides": true
+      },
       "forms": {
         "adult-wheelchair": {
           "poses": {
@@ -130,6 +141,16 @@
       }
     },
     "C002": {
+      "weapon": {
+        "default": "C002-muramasa-candidate.webp",
+        "images": [
+          "C002-heshikiri-hasebe-candidate.webp",
+          "C002-honebami-toshiro-candidate.webp",
+          "C002-muramasa-candidate.webp",
+          "C002-yamanbagiri-kunihiro-candidate.webp",
+          "C002-yoshimoto-samonji-candidate.webp"
+        ]
+      },
       "forms": {
         "adult": {
           "poses": {
@@ -296,6 +317,16 @@
       }
     },
     "C003": {
+      "weapon": {
+        "default": "C003-nagasone-kotetsu-candidate.webp",
+        "images": [
+          "C003-izuminokami-kanesada-candidate.webp",
+          "C003-kashu-kiyomitsu-candidate.webp",
+          "C003-minamoto-kiyomaro-candidate.webp",
+          "C003-nagasone-kotetsu-candidate.webp",
+          "C003-suishinshi-masahide-candidate.webp"
+        ]
+      },
       "forms": {
         "adult": {
           "poses": {
@@ -372,6 +403,16 @@
       }
     },
     "C004": {
+      "weapon": {
+        "default": "C004-shichishito-candidate.webp",
+        "images": [
+          "C004-chuuhei-mei-tetsutou-candidate.webp",
+          "C004-ginzougan-mei-tachi-candidate.webp",
+          "C004-kinsaku-mei-tetsuken-candidate.webp",
+          "C004-shichiseiken-candidate.webp",
+          "C004-shichishito-candidate.webp"
+        ]
+      },
       "forms": {
         "adult": {
           "poses": {
