@@ -211,4 +211,19 @@ describe('buildBattleMenu: 装備中の刀のアビリティ (#881 段階3)', ()
     const opened = openList(EMPTY_STACK, 'skill', ctx, 3) // 以前の刀では 4 行目を選んでいた
     expect(opened[0]).toMatchObject({ type: 'list', cursor: 0 })
   })
+  it('カーソル記憶: 記憶位置がグレーの行でも使わず、先頭の選べる行から始まる', () => {
+    const rows = [sk('x'), sk('y'), sk('z')]
+    const ctx: MenuContext = {
+      rows: buildMenuRows('skill', rows, party[0]).map((r, i) =>
+        i === 1 ? { ...r, disabled: true } : r
+      ),
+      maxRows: 4,
+      entries: rows,
+      party,
+      enemies: [],
+      actorIndex: 0,
+    }
+    expect(openList(EMPTY_STACK, 'skill', ctx, 1)[0]).toMatchObject({ type: 'list', cursor: 0 })
+    expect(openList(EMPTY_STACK, 'skill', ctx, 2)[0]).toMatchObject({ type: 'list', cursor: 2 })
+  })
 })

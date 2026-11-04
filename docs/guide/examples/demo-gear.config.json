@@ -114,7 +114,6 @@
         "kind": "blade",
         "owner": "party1",
         "basePrice": 100,
-        "image": "仮/bladeA.webp",
         "abilities": ["slashA"]
       },
       {
@@ -122,7 +121,6 @@
         "kind": "blade",
         "owner": "party1",
         "basePrice": 100,
-        "image": "仮/bladeB.webp",
         "abilities": ["slashB"]
       },
       {
@@ -130,7 +128,6 @@
         "kind": "blade",
         "owner": "party1",
         "basePrice": 100,
-        "image": "仮/bladeD.webp",
         "abilities": ["slashD"]
       },
       {
@@ -138,7 +135,6 @@
         "kind": "blade",
         "owner": "party2",
         "basePrice": 100,
-        "image": "仮/bladeC.webp",
         "abilities": ["slashC"]
       }
     ]
