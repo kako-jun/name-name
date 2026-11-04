@@ -3102,7 +3102,12 @@ export class BattleScreen extends Container {
     if (!active) return out
     const ev = active.event
     if (ev.actor.side === side && ev.actor.index === index) {
-      const a = sampleActor(ev.kind, active.elapsed, this.motionTiming)
+      const a = sampleActor(
+        ev.kind,
+        active.elapsed,
+        this.motionTiming,
+        (side === 'party' ? this.partyViews : this.enemyViews)[index]?.poseVisuals
+      )
       // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
       const downed = out.downProgress > 0
       // 自己モザイクが有効な敵の通常攻撃は、踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。
