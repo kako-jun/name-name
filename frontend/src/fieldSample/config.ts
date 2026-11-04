@@ -29,7 +29,7 @@ import { ASSIST_DEFAULTS, type AssistConfig } from '../game/fieldAssist'
 import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
-import type { BattleEntity } from '../game/spellDsl'
+import { MAX_LEVEL, type BattleEntity } from '../game/spellDsl'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
@@ -725,6 +725,8 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
         ...(e.value.poses ? { poses: e.value.poses } : {}),
         ...(size.value ? { size: size.value } : {}),
         ...(scale.value !== undefined ? { scale: scale.value } : {}),
+        // 敵のレベル (#898)。parseEntity が 1〜99 にそろえ済み。未指定はキー自体を出さない
+        ...(e.value.level !== undefined ? { level: e.value.level } : {}),
       }
     }
   }
@@ -1282,6 +1284,14 @@ function parseEntity(
     // ポーズ（正規化済み）と、武器レイヤー (#1027) の予約キー（生）を同じ poses に持ち回る。解釈は戦闘への組み立て時（posesField）
     const merged = { ...(normalizePoses(rec.value) ?? {}), ...pickWeaponKeys(rec.value) }
     if (Object.keys(merged).length > 0) e.poses = merged
+  }
+  if (raw.level !== undefined) {
+    // 敵のレベル (#898)。整数。1〜99 に丸める
+    if (path.startsWith('party[')) return fail(`${path}.level: レベルは敵だけに書けます`)
+    if (typeof raw.level !== 'number' || !Number.isInteger(raw.level)) {
+      return fail(`${path}.level は整数: ${JSON.stringify(raw.level)}`)
+    }
+    e.level = Math.min(MAX_LEVEL, Math.max(1, raw.level))
   }
   return { ok: true, value: e }
 }

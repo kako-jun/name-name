@@ -125,6 +125,12 @@ describe('寺町サンプルの戦闘設定（戦闘サンプルとの機能同�
     expect(buildBattleEngineOptions({})).toEqual({})
   })
 
+  it('#1043 同梱の寺町設定のモンスターに level は無い（本編相当は既定のまま）', () => {
+    for (const m of Object.values(load().monsters)) {
+      expect('level' in m).toBe(false)
+    }
+  })
+
   it('buildBattleScreenOptions: 未指定のキーは出さない（従来の既定）', () => {
     const o = buildBattleScreenOptions(
       { layout: 'side', spriteStyle: 'none', width: 800, height: 450 },

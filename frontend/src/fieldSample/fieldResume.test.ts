@@ -264,3 +264,35 @@ describe('savedFormsFromResume', () => {
     if (r.kind === 'ok') expect(r.resolved.party[0].form).toBe('uniform')
   })
 })
+
+describe('敵レベルの再開 (#1043)', () => {
+  const cfg = {
+    ...config,
+    monsters: {
+      boss: {
+        id: 'boss',
+        name: 'ボス',
+        hp: 50,
+        atk: 5,
+        def: 1,
+        agi: 3,
+        exp: 5,
+        gold: 3,
+        level: 50,
+      },
+    },
+  } as unknown as Parameters<typeof loadResume>[1]
+
+  it('戦闘中セーブから再開した敵がマスターの level を保つ', () => {
+    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+      0,
+      buildRpgSaveSlot(rpg({ battle: { enemies: [{ id: 'boss', hp: 7 }] } }))
+    )
+    const r = loadResume('?resume=0', cfg)
+    expect(r.kind === 'ok' && r.resolved.battle?.enemies[0]).toMatchObject({
+      id: 'boss',
+      hp: 7,
+      level: 50,
+    })
+  })
+})

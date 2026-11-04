@@ -1996,3 +1996,42 @@ describe('battle.logicalSize (sit-by-me#52)', () => {
     }
   })
 })
+
+describe('敵のレベル monsters.<id>.level (#1043)', () => {
+  const withMonster = (extra: Raw): Raw =>
+    mutated((c) => {
+      c.monsters = { slime: { name: 'スライム', hp: 10, ...extra } }
+    })
+  const err = (raw: Raw): string => {
+    const r = parseConfig(raw, BASE)
+    if (r.ok) throw new Error('失敗するはずが成功')
+    return r.error
+  }
+
+  it.each([
+    [1, 1],
+    [50, 50],
+    [99, 99],
+    [0, 1],
+    [-5, 1],
+    [150, 99],
+  ])('level %s は MonsterDef.level %s に丸められる', (v, lv) => {
+    expect(ok(withMonster({ level: v })).monsters.slime.level).toBe(lv)
+  })
+
+  it.each([1.5, '10', null, true])('level %j は読み込みエラー', (v) => {
+    expect(err(withMonster({ level: v }))).toContain('monsters.slime.level')
+  })
+
+  it('未指定ならキー自体が MonsterDef に現れない（後方互換）', () => {
+    const m = ok(withMonster({})).monsters.slime
+    expect('level' in m).toBe(false)
+  })
+
+  it('party に level を書くとエラー（味方には無い設定）', () => {
+    const raw = mutated((c) => {
+      c.party = [{ name: 'ゆうしゃ', hp: 30, level: 5 }]
+    })
+    expect(parseConfig(raw, BASE).ok).toBe(false)
+  })
+})
