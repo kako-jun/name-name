@@ -113,7 +113,7 @@ import {
   resolveNpcCommands,
   type FieldScriptEvents,
 } from '../game/fieldScript'
-import { hasOwn } from '../game/ownProperty'
+import { hasOwn, safeAssign } from '../game/ownProperty'
 import { resolveUrl } from '../battleSample/config'
 import {
   DIAGONAL_FACINGS,
@@ -154,7 +154,7 @@ import { applySettings } from '../game/fieldSettings'
 import { SAVE_SLOT_COUNT } from '../game/fieldMenuScreens'
 import { advanceTimeLimit } from '../game/fieldTimeLimit'
 import { advancePlayTime, advanceSteps, initialPlayStats } from '../game/fieldPlayStats'
-import { resolveGear } from '../game/gearShop'
+import { resolveGear, type GearState } from '../game/gearShop'
 import { expandCharacterForms, parseCharacterFormsManifest } from './characterForms'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import type { BattleItemEntry } from '../game/battleMenu'
@@ -698,7 +698,7 @@ async function main(): Promise<void> {
         .filter(Boolean)
         .join('\n')
     )
-  const gear = gearResolved?.state
+  let gear = gearResolved?.state
   const equipment: Record<string, string[]> = gearResolved?.equipment
     ? structuredClone(gearResolved.equipment)
     : resumed
@@ -1202,6 +1202,29 @@ async function main(): Promise<void> {
             inventory = inv
           },
           getEquipment: () => equipment,
+          // アプリストア・そうび (#881)。売り物の定義があるゲームだけ（購入・持ち替えの結果は gear・gold・equipment の正本へ戻す）
+          ...(config.gearShop && gear
+            ? {
+                gear: {
+                  cfg: config.gearShop,
+                  getState: () => gear as GearState,
+                  setState: (s: GearState) => {
+                    gear = s
+                  },
+                  getGold: () => gold,
+                  setGold: (g: number) => {
+                    gold = g
+                  },
+                  getFlags: () => flags,
+                  setEquipment: (member: string, list: string[]) => {
+                    safeAssign(equipment, member, list)
+                  },
+                  ...(config.battle.currencyName
+                    ? { currencyName: config.battle.currencyName }
+                    : {}),
+                },
+              }
+            : {}),
           onSettingsChanged: applyMenuSettings,
         },
         resumed?.menu
@@ -1265,8 +1288,16 @@ async function main(): Promise<void> {
               }))
             )
             const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
+            // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む
+            const images: Record<string, Texture | null> = {}
+            await Promise.all(
+              (config.gearShop?.entries ?? []).map(async (e) => {
+                if (e.image !== undefined) safeAssign(images, e.image, await partyTexture(e.image))
+              })
+            )
             return {
               party,
+              images,
               slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
                 slotSummary(saved[i] ?? null)
               ),

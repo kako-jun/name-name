@@ -13,6 +13,7 @@ import { invokeBuiltinItem, invokeBuiltinSpell } from './builtin'
 import type { FieldMenuItemDef } from './fieldMenu'
 import type { FieldMenuContentDef, MenuEntry, MenuTab, StatusRow } from './fieldMenuScreens'
 import { applyEffect, parseEffect, type BattleEntity, type EffectContext } from './spellDsl'
+import { buildAppStoreTabs, buildEquipContent, type GearMenuContext } from './gearMenu'
 import { hasOwn } from './ownProperty'
 
 /** 実行時の RPG 状態（メニューが読む分） */
@@ -28,6 +29,8 @@ export interface LiveRpg {
   skills: readonly BattleSkillEntry[]
   /** 人物 id → 装備のアイテム id */
   equipment: Readonly<Record<string, string[]>>
+  /** 刀・防具の売り物の状態 (#881)。`gearShop` を設定したゲームだけ（アプリストア・そうびの中身の元） */
+  gear?: GearMenuContext
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +445,8 @@ export interface LiveContentInput {
  * 設定のメニュー項目に、実状態から作った content を差し込む。定義側が content（に該当するキー）を書いている項目はそのまま。
  * - どうぐ（kind: item）: tabs が無いとき 3 タブを差し込む
  * - まほう（id: magic）: entries・entriesByParty が無いとき人物ごとの一覧を差し込む
+ * - アプリストア（kind: appstore）: tabs が無く売り物の定義（`rpg.gear`）があるとき、刀／防具のタブを人物ごとの一覧で差し込む
+ * - そうび（kind: equip）: entries・entriesByParty が無く売り物の定義があるとき、購入済みの一覧と 2 枠の見出しを差し込む
  * - ステータス（kind: status）: 実状態の行を足す（定義側の行が先）
  * - せってい（kind: config）: options が無いとき `configOptions` を差し込む
  */
@@ -457,6 +462,10 @@ export function applyLiveContent(
       return { ...d, content: { ...c, tabs: buildItemTabs(input.rpg) } }
     if (d.id === 'magic' && kind === 'party-list' && !c?.entries && !c?.entriesByParty)
       return { ...d, content: { ...c, entriesByParty: buildMagicByParty(input.rpg) } }
+    if (kind === 'appstore' && input.rpg.gear && !(c?.tabs && c.tabs.length > 0))
+      return { ...d, content: { ...c, tabs: buildAppStoreTabs(input.rpg.gear) } }
+    if (kind === 'equip' && input.rpg.gear && !c?.entries && !c?.entriesByParty)
+      return { ...d, content: { ...c, ...buildEquipContent(input.rpg.gear) } }
     if (kind === 'status')
       return {
         ...d,

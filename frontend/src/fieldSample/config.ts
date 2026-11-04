@@ -1042,7 +1042,19 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(tiltShift ? { tiltShift } : {}),
       ...(menuParsed.value ? { menu: menuParsed.value } : {}),
-      ...(gearShopParsed.value ? { gearShop: gearShopParsed.value } : {}),
+      ...(gearShopParsed.value
+        ? {
+            // 一覧の画像のパスは他の画像と同じ規則で URL にする（アプリストアの品。派生画像は未作成で、無ければ文字だけ）
+            gearShop: {
+              ...gearShopParsed.value,
+              entries: gearShopParsed.value.entries.map((e) =>
+                e.image !== undefined
+                  ? { ...e, image: resolveUrl(resolveRpgImagePath(assetBase, e.image), baseUrl) }
+                  : e
+              ),
+            },
+          }
+        : {}),
       ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,

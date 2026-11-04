@@ -117,6 +117,8 @@ export interface FieldMenuOpenData {
   slots: readonly (string | null)[]
   /** せっていの前回値（key → 選択肢 index） */
   settings?: Readonly<Record<string, number>>
+  /** 一覧に出す画像（`MenuEntry.image` の URL → 読み込んだ絵）。読めなかった・未読み込みは null か無し（文字だけで出す） */
+  images?: Readonly<Record<string, Texture | null>>
 }
 
 export interface FieldMenuScreenOptions {
@@ -443,6 +445,10 @@ export class FieldMenuScreen extends Container {
       reserveTimer: this.timed,
       confirmOpen: open && nav.focus === 'confirm',
       prevRowStart: this.scrolls.get(screen) ?? 0,
+      headerCount:
+        c.kind === 'equip'
+          ? (c.headerByParty[this.data?.party[nav.party]?.id ?? '']?.length ?? 0)
+          : 0,
     })
     this.scrolls.set(screen, layout.rowStart)
     return layout
@@ -578,7 +584,8 @@ export class FieldMenuScreen extends Container {
       const targeting = nav.focus === 'target'
       const emphasize = targeting
         ? i === nav.target
-        : i === nav.party && (nav.focus === 'party' || (k === 'party-list' && nav.focus === 'list'))
+        : i === nav.party &&
+          (nav.focus === 'party' || ((k === 'party-list' || k === 'equip') && nav.focus === 'list'))
       this.drawPartySlot(C, p, r, lay, emphasize, true, this.artDeep, targeting ? '対象' : '選択中')
       if (interactive)
         this.hit(C, r, (e) => {
@@ -607,7 +614,12 @@ export class FieldMenuScreen extends Container {
     })
     // 本体の窓の中身
     if (k === 'status') this.drawStatus(C, nav, sl, lay, interactive, content)
-    else this.drawList(C, nav, ctx, sl, interactive)
+    else {
+      if (k === 'appstore')
+        this.drawPersonNav(C, sl, lay, interactive, this.data?.party[nav.party]?.name ?? '')
+      if (k === 'equip') this.drawEquipHeader(C, nav, sl, content)
+      this.drawList(C, nav, ctx, sl, interactive)
+    }
     // 確認窓
     if (sl.confirm) {
       const cf = sl.confirm
@@ -615,7 +627,7 @@ export class FieldMenuScreen extends Container {
       const label =
         k === 'save'
           ? `スロット${nav.list + 1}に上書きしますか？`
-          : `「${listEntries(ctx, nav)[nav.list]?.label ?? ''}」を買いますか？`
+          : this.buyMessage(listEntries(ctx, nav)[nav.list])
       C.addChild(
         this.text(
           label,
@@ -680,7 +692,12 @@ export class FieldMenuScreen extends Container {
         enabled = e.enabled !== false
       }
       const color = enabled ? WHITE : GRAY
-      C.addChild(this.text(label, sl.fonts.row, color, r.x + r.h * 1.1, r.y + r.h / 2, 'left'))
+      // アプリストアの品の画像（あれば小さく。読めない・未指定は文字だけ）
+      const tex = k === 'appstore' ? this.imageOf(listEntries(ctx, nav)[i]?.image) : null
+      if (tex) this.placeThumb(C, tex, r.x + r.h * 0.85, r.y + r.h * 0.5, r.h * 0.86, !enabled)
+      C.addChild(
+        this.text(label, sl.fonts.row, color, r.x + r.h * (tex ? 1.9 : 1.1), r.y + r.h / 2, 'left')
+      )
       if (detail)
         C.addChild(
           this.text(detail, sl.fonts.row, color, r.x + r.w - r.h * 0.5, r.y + r.h / 2, 'right')
@@ -694,6 +711,85 @@ export class FieldMenuScreen extends Container {
     })
   }
 
+  /** 人物の前・次ボタン（ステータス・アプリストア）。`name` があれば中央に人物名の枠を出す */
+  private drawPersonNav(
+    C: Container,
+    sl: ScreenLayout,
+    lay: MenuLayout,
+    interactive: boolean,
+    name?: string
+  ): void {
+    if (!sl.statusNav) return
+    for (const [r, label, target] of [
+      [sl.statusNav.prev, '◀ 前', 'prev'],
+      [sl.statusNav.next, '次 ▶', 'next'],
+    ] as const) {
+      this.panel(C, r, lay)
+      C.addChild(this.text(label, sl.fonts.tab, WHITE, r.x + r.w / 2, r.y + r.h / 2, 'center'))
+      if (interactive)
+        this.hit(C, r, (e) => {
+          if (e.button !== 2) this.dispatch({ type: 'select', target, index: 0 })
+        })
+    }
+    if (name) {
+      const l = sl.statusNav.label
+      C.addChild(
+        this.text(name, sl.fonts.tab, NOTICE_COLOR, l.x + l.w / 2, l.y + l.h / 2, 'center')
+      )
+    }
+  }
+
+  /** そうび画面の見出し行（2 枠の現在の装備）。選んだ人物の分 */
+  private drawEquipHeader(
+    C: Container,
+    nav: ScreenNav,
+    sl: ScreenLayout,
+    content: ResolvedContent
+  ): void {
+    const pid = this.data?.party[nav.party]?.id
+    const rows = (pid !== undefined ? content.headerByParty[pid] : undefined) ?? []
+    sl.header.forEach((r, i) => {
+      const row = rows[i]
+      if (!row) return
+      C.addChild(
+        this.text(row.label, sl.fonts.row, NOTICE_COLOR, r.x + r.h * 0.5, r.y + r.h / 2, 'left')
+      )
+      C.addChild(
+        this.text(row.value, sl.fonts.row, WHITE, r.x + r.w - r.h * 0.5, r.y + r.h / 2, 'right')
+      )
+    })
+  }
+
+  /** 買う確認窓の文（値段つき）。値段は一覧の右端の文字（`detail`）と同じ */
+  private buyMessage(e: { label: string; detail?: string } | undefined): string {
+    if (!e) return '買いますか？'
+    return e.detail ? `「${e.label}」を ${e.detail}で買いますか？` : `「${e.label}」を買いますか？`
+  }
+
+  /** 一覧の画像の絵。URL が無い・読めなかったときは null（文字だけで出す） */
+  private imageOf(url: string | undefined): Texture | null {
+    if (!url) return null
+    return this.data?.images?.[url] ?? null
+  }
+
+  /** 小さな絵（中心 (cx, cy)・一辺 size に収める）。選べない行は暗く */
+  private placeThumb(
+    C: Container,
+    tex: Texture,
+    cx: number,
+    cy: number,
+    size: number,
+    dim: boolean
+  ): void {
+    const sp = new Sprite(tex)
+    sp.anchor.set(0.5)
+    sp.scale.set(size / Math.max(tex.width, tex.height, 1))
+    sp.position.set(cx, cy)
+    if (dim) sp.alpha = 0.45
+    sp.eventMode = 'none'
+    C.addChild(sp)
+  }
+
   private drawStatus(
     C: Container,
     nav: ScreenNav,
@@ -705,19 +801,7 @@ export class FieldMenuScreen extends Container {
     const p = this.data!.party[nav.party]
     const P = sl.primary
     const f = sl.fonts.row
-    if (sl.statusNav) {
-      for (const [r, label, target] of [
-        [sl.statusNav.prev, '◀ 前', 'prev'],
-        [sl.statusNav.next, '次 ▶', 'next'],
-      ] as const) {
-        this.panel(C, r, lay)
-        C.addChild(this.text(label, sl.fonts.tab, WHITE, r.x + r.w / 2, r.y + r.h / 2, 'center'))
-        if (interactive)
-          this.hit(C, r, (e) => {
-            if (e.button !== 2) this.dispatch({ type: 'select', target, index: 0 })
-          })
-      }
-    }
+    this.drawPersonNav(C, sl, lay, interactive)
     if (!p) {
       C.addChild(this.text(MENU_EMPTY_BODY, f, GRAY, P.x + P.w / 2, P.y + P.h / 2, 'center'))
       return

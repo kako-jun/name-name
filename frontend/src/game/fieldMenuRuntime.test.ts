@@ -4,6 +4,7 @@ import type { BattleItemEntry, BattleSpellEntry } from './battleMenu'
 import { DEFAULT_FIELD_MENU_ITEMS } from './fieldMenu'
 import { FieldMenuRuntime, type FieldMenuRuntimeDeps } from './fieldMenuRuntime'
 import { DEFAULT_MENU_TRANSITION } from './fieldMenuTransition'
+import { emptyGearState, type GearShopConfig, type GearState } from './gearShop'
 import type { BattleEntity } from './spellDsl'
 
 const ent = (id: string, over: Partial<BattleEntity> = {}): BattleEntity => ({
@@ -203,5 +204,107 @@ describe('定義側の独自 options の値（再オープン・セーブ/ロー
     rt.setSetting('myOpt', 3)
     rt.setSetting('battleMode', 1)
     expect(rt.currentSettings).toEqual({})
+  })
+})
+
+describe('アプリストア・そうび (#881 段階2)', () => {
+  // 値は「仮」
+  const cfg: GearShopConfig = {
+    multiplier: 2,
+    entries: [
+      { id: 'sw1', kind: 'blade', owner: 'a', basePrice: 100, equipBonus: 'atk+5' },
+      { id: 'sw2', kind: 'blade', owner: 'a', basePrice: 100, equipBonus: 'atk+9' },
+      { id: 'vest', kind: 'armor', price: 50, equipBonus: 'def+3' },
+    ],
+  }
+  function gearSetup(gold = 1000, flags: Record<string, boolean> = {}) {
+    const g = {
+      state: emptyGearState() as GearState,
+      gold,
+      equipment: {} as Record<string, string[]>,
+    }
+    const r = setup({
+      items: [...items, { id: 'sw1', name: '正宗', effect: '' } as BattleItemEntry],
+      getEquipment: () => g.equipment,
+      gear: {
+        cfg,
+        getState: () => g.state,
+        setState: (s) => (g.state = s),
+        getGold: () => g.gold,
+        setGold: (n) => (g.gold = n),
+        getFlags: () => flags,
+        setEquipment: (m, l) => (g.equipment[m] = l),
+      },
+    })
+    return { ...r, g }
+  }
+  const by = (rt: FieldMenuRuntime, id: string) => rt.items().find((d) => d.id === id)!
+
+  it('売り物の定義があると appstore・equip に中身が入る。無いゲームは従来どおり枠だけ', () => {
+    const { rt } = gearSetup()
+    expect(by(rt, 'appstore').content?.tabs?.map((t) => t.label)).toEqual(['刀', '防具'])
+    expect(Object.keys(by(rt, 'equip').content?.entriesByParty ?? {})).toEqual(['a', 'b'])
+    const none = setup().rt
+    expect(by(none, 'appstore').content).toBeUndefined()
+    expect(by(none, 'equip').content).toBeUndefined()
+  })
+  it('買うと所持金が減り、購入済みになり、装備はしない。結果の一覧が返る', () => {
+    const { rt, g } = gearSetup()
+    const out = rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })!
+    expect(out.ok).toBe(true)
+    expect(g.gold).toBe(900)
+    expect(g.state.owned.a).toEqual(['sw1'])
+    expect(g.equipment).toEqual({})
+    const tab = out.items!.find((d) => d.id === 'appstore')!.content!.tabs![0]
+    expect(tab.entriesByParty!.a[0].detail).toBe('購入済み')
+    expect(tab.entriesByParty!.a[1].detail).toBe('200円')
+  })
+  it('所持金が足りなければ何も変えず理由を返す。人物が分からない要求は null', () => {
+    const { rt, g } = gearSetup(50)
+    const out = rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })!
+    expect(out.ok).toBe(false)
+    expect(out.notice).toContain('所持金が足りません')
+    expect(g.gold).toBe(50)
+    expect(g.state.owned).toEqual({})
+    expect(rt.use({ screen: 'appstore', entryId: 'sw1' })).toBeNull()
+  })
+  it('他人の刀・解禁前は買えない（人物 b に a の刀）', () => {
+    const { rt, g } = gearSetup()
+    expect(rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'b' })!.ok).toBe(false)
+    expect(g.gold).toBe(1000)
+  })
+  it('持ち替えで装備列と gear.blade が更新され、そうびの見出しに出る。未購入は不可', () => {
+    const { rt, g } = gearSetup()
+    expect(rt.use({ screen: 'equip', entryId: 'sw1', casterId: 'a' })!.ok).toBe(false)
+    rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })
+    rt.use({ screen: 'appstore', entryId: 'sw2', casterId: 'a' })
+    const out = rt.use({ screen: 'equip', entryId: 'sw1', casterId: 'a' })!
+    expect(out.ok).toBe(true)
+    expect(g.equipment.a).toEqual(['sw1'])
+    expect(g.state.blade.a).toBe('sw1')
+    const swap = rt.use({ screen: 'equip', entryId: 'sw2', casterId: 'a' })!
+    expect(swap.ok).toBe(true)
+    expect(g.equipment.a).toEqual(['sw2'])
+    const head = swap.items!.find((d) => d.id === 'equip')!.content!.headerByParty!.a
+    expect(head[0].value).toBe('sw2')
+  })
+  it('防具は付け外しできる', () => {
+    const { rt, g } = gearSetup()
+    rt.use({ screen: 'appstore', entryId: 'vest', casterId: 'a' })
+    expect(g.gold).toBe(950)
+    rt.use({ screen: 'equip', entryId: 'vest', casterId: 'a' })
+    expect(g.equipment.a).toEqual(['vest'])
+    rt.use({ screen: 'equip', entryId: 'vest', casterId: 'a' })
+    expect(g.equipment.a).toEqual([])
+  })
+  it('売り物の定義がないゲームでは appstore・equip の使用要求は null（従来どおり）', () => {
+    const { rt } = setup()
+    expect(rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })).toBeNull()
+    expect(rt.use({ screen: 'equip', entryId: 'sw1', casterId: 'a' })).toBeNull()
+  })
+  it('どうぐ・まほうの使用は gear を渡しても従来どおり', () => {
+    const { rt, state } = gearSetup()
+    expect(rt.use({ screen: 'item', entryId: 'potion', targetId: 'a' })!.ok).toBe(true)
+    expect(state.inventory.potion).toBe(1)
   })
 })

@@ -11,6 +11,7 @@
  * 売り物の宣言が無いゲーム・メニューを使わないゲームは、この仕組みを通らず従来どおり（セーブにも `gear` キーを書かない）。
  */
 import { equipItem, unequipItem, type EquipmentRoster } from './equipment'
+import { parseStatBonus } from './magicite'
 import { hasOwn, safeAssign } from './ownProperty'
 import type { PartyMemberDef } from '../types'
 
@@ -34,6 +35,8 @@ export interface GearEntry {
   unlockFlag?: string
   /** 一覧に出す画像のパス（任意の文字列。sit-by-me の刀マスターから切り出した派生画像を指す想定だが、派生画像は未作成）。省略 = 画像なし（文字のみ）。読み込み・表示は段階2の UI */
   image?: string
+  /** 装備している間だけ能力値に足す分（`atk+5, def+2` 形式。魔石・アイテムの `装備時` と同じ書式）。そうび画面の変更前後の差分に使う。省略 = 能力値は変わらない（値は仮・未決） */
+  equipBonus?: string
 }
 
 export interface GearShopConfig {
@@ -349,7 +352,7 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /**
- * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image? }] }`。
+ * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, equipBonus? }] }`。
  * 不正な項目は警告して捨てる。`gearShop` が無い（undefined / false / null）はキーなし＝従来どおり。
  * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
  */
@@ -427,6 +430,16 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
     if (imageRaw !== undefined) {
       if (typeof imageRaw === 'string' && imageRaw.trim()) entry.image = imageRaw.trim()
       else warnings.push(`${where}.image は文字列のパスにしてください（画像なしにします）`)
+    }
+    if (it.equipBonus !== undefined) {
+      if (typeof it.equipBonus === 'string' && it.equipBonus.trim()) {
+        entry.equipBonus = it.equipBonus.trim()
+        for (const w of parseStatBonus(entry.equipBonus).warnings)
+          warnings.push(`${where}.equipBonus: ${w}`)
+      } else
+        warnings.push(
+          `${where}.equipBonus は文字列（例: atk+5）にしてください（能力値なしにします）`
+        )
     }
     seen.add(it.id)
     entries.push(entry)
