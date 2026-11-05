@@ -248,6 +248,12 @@ export interface PartyMemberDef {
   equipmentSlots?: string[]
   /** 就けるジョブ (#740)。`[ジョブ id]` の id（`ジョブ:` を書いた順。先頭が最初のジョブ）。現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。解決・検査は `game/job.ts` */
   jobs?: string[]
+  /** フィールドで歩く人物 (#1104。`人物:`)。台帳の人物 ID など。生文字列で透過し、解決は runtime */
+  character?: string
+  /** フィールドで歩くときの形態 (#1104。`形態:`)。生文字列で透過 */
+  form?: string
+  /** 持つ刀 (#1104。`刀:`)。生文字列で透過 */
+  weapon?: string
 }
 
 /**
@@ -466,6 +472,63 @@ export interface FieldWarpData {
   effect?: WarpEffect
   /** out / hold / in の ms。省略 = 演出ごとの既定 */
   timing_ms?: [number, number, number]
+}
+
+/** 補助通行の設定 (#1104)。`[補助通行 条件=a,b 除く=… 幽霊=… 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]`。条件以外は省略 = runtime の既定 */
+export interface FieldAssistData {
+  /** すべて真のとき橙のセルを通れる（`条件=`。1 個以上） */
+  conditions: string[]
+  /** 真の間は通れない（`除く=`） */
+  except?: string
+  /** 真の間は同行者が半透明で一人で通る（`幽霊=`） */
+  ghost?: string
+  /** 押されている間の速さの倍率（`速度倍率=`。> 0） */
+  speed_scale?: number
+  /** ghost のときの同行者の不透明度（`濃さ=`。0..=1） */
+  opacity?: number
+  /** 同行者が主人公の後ろに立つ距離（`後ろ=`。背景 px、> 0） */
+  behind_px?: number
+  /** 現れる・消えるのにかかる時間（`フェード=`。ms、≥ 0） */
+  fade_ms?: number
+}
+
+/** 端に触れたとみなす部位 (#1104)。`端の接触=身体` / `足元` */
+export type EdgeContact = 'Body' | 'Foot'
+
+/** フィールドの共通設定 (#1104)。`[フィールド設定 速度=260 端のしきい値=6 端の接触=身体 文字間隔=30 刀の倍率=2]`。全項目が省略可（省略 = runtime の既定） */
+export interface FieldSettingsData {
+  speed?: number
+  edge_threshold?: number
+  edge_contact?: EdgeContact
+  /** 会話窓の 1 文字あたり ms（0..=1000） */
+  ms_per_char?: number
+  /** 刀の倍率（≥ 1） */
+  weapon_scale?: number
+}
+
+/** 歩行絵の対象 (#1104)。`主人公` / `同行者` */
+export type WalkSpriteKind = 'Player' | 'Companion'
+
+/** 主人公・同行者の歩行絵の指定 (#1104)。`[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]` / `[歩行絵 同行者 … 名前=ミナ]` */
+export interface FieldWalkSpriteData {
+  kind: WalkSpriteKind
+  character?: string
+  form?: string
+  height?: number
+  frame_ms?: number
+  /** 歩行周期（0..=2 の整数を 1〜16 個） */
+  cycle?: number[]
+  /** 停止コマ（0..=2） */
+  idle_frame?: number
+  /** 同行者の名前（同行者のみ） */
+  name?: string
+}
+
+/** 人物の形態の宣言 (#1104)。`[人物の形態 目録=… 素材=… 刀素材=…]`。パスは中身を見ずに透過 */
+export interface CharacterFormsDecl {
+  catalog: string
+  assets: string
+  weapon_assets?: string
 }
 
 export type Event =
@@ -805,6 +868,14 @@ export type Event =
   | { FieldShake: { amplitude_y: number; period_ms?: number } }
   /** 一枚絵フィールドの窓の景色 (#1102)。`[窓の景色: path, 速度=60, y=0]`。speed は px/秒（負で左）、y 省略 = 0 */
   | { FieldScroll: { image: string; speed: number; y?: number } }
+  /** 補助通行の設定 (#1104)。`[補助通行 条件=a,b …]`（作品に1つ） */
+  | { FieldAssist: FieldAssistData }
+  /** フィールドの共通設定 (#1104)。`[フィールド設定 速度=260 …]`（作品に1つ） */
+  | { FieldSettings: FieldSettingsData }
+  /** 主人公・同行者の歩行絵の指定 (#1104)。`[歩行絵 主人公|同行者 …]` */
+  | { FieldWalkSprite: FieldWalkSpriteData }
+  /** 人物の形態の宣言 (#1104)。`[人物の形態 目録=… 素材=… 刀素材=…]`（作品に1つ） */
+  | { CharacterForms: CharacterFormsDecl }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
   | { Monster: MonsterDef }
