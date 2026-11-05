@@ -119,15 +119,6 @@ describe('ff 勝利: メッセージが順に出る (#1039)', () => {
     expect(I(s).messageText!.text).toBe(RESULT_TEXT.loot('ポーション'))
   })
 
-  it('「しょうり！」は出ない', () => {
-    const { s } = setup({ presentation: 'ff' })
-    toResult(s)
-    for (let i = 0; i < 30; i++) {
-      expect(I(s).messageText!.text).not.toBe('しょうり！')
-      run(s, 100)
-    }
-  })
-
   it('待機は件数ぶん伸び、その手前では閉じず、過ぎたら 1 回だけ閉じる', () => {
     const { s, closed } = setup({ presentation: 'ff' })
     toResult(s)

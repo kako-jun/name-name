@@ -33,7 +33,7 @@ export const RESULT_VICTORY_FLIP_MS = 400
  */
 export const RESULT_GOLD_UNIT = 'ギル'
 
-/** 勝利リザルトの文言（語の区切りは半角スペース。全角スペースは使わない） */
+/** 勝利リザルトの文言（語の区切りは半角スペース。全角スペースは使わない。victory は区切りを持たない定数で空白なし） */
 export const RESULT_TEXT = {
   /** 勝利の言葉（FF5 は戦闘終了時に出す。#1109。区切りの空白は入れない） */
   victory: '戦いに勝った！',

@@ -109,7 +109,7 @@ describe('勝利リザルトのメッセージ (#1039)', () => {
     expect(RESULT_TEXT.learned('ファイア')).toBe('ファイアをおぼえた！')
   })
 
-  it('勝利に固定の「しょうり！」は無い。全滅の「ぜんめつ…」は残る', () => {
+  it('勝利の固定表示（待機中の窓の言葉）は無く、勝利の言葉はメッセージ列の先頭で出す。全滅の「ぜんめつ…」は残る', () => {
     expect(resultMessageText('victory')).toBeNull()
     expect(resultMessageText('defeat')).toBe('ぜんめつ…')
     expect(windowWord(null, resultMessageText('victory'))).toBeNull()
