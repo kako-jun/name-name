@@ -11766,3 +11766,132 @@ mod field_menu_notation_tests {
         );
     }
 }
+
+/// #1111 S2e: アイテム・呪文のフィールドメニュー用キー（初期所持・説明・区分・フィールド使用・大切）。
+#[cfg(test)]
+mod master_menu_keys_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n## data: マスター\n\n";
+
+    fn item(extra: &str) -> ItemDef {
+        let doc = parse(&format!(
+            "{HEAD}[アイテム やくそう]\n名前: やくそう\n種別: 回復\n{extra}[/アイテム]\n"
+        ));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Item(it) => it.clone(),
+            other => panic!("expected Item, got {other:?}"),
+        }
+    }
+
+    fn spell(extra: &str) -> SpellDef {
+        let doc = parse(&format!(
+            "{HEAD}[呪文 ホイミ]\n名前: ホイミ\nMP: 3\n対象: 味方単体\n{extra}[/呪文]\n"
+        ));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Spell(sp) => sp.clone(),
+            other => panic!("expected Spell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unspecified_keys_leave_output_unchanged() {
+        let _ = take_test_warnings();
+        let body = "[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n[呪文 ホイミ]\n名前: ホイミ\nMP: 3\n対象: 味方単体\n効果: heal 15..25\n[/呪文]\n";
+        let doc = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc);
+        assert!(emitted.ends_with(body), "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        let json = serde_json::to_string(&doc).unwrap();
+        for k in ["count", "description", "category", "fieldUse", "\"key\""] {
+            assert!(!json.contains(k), "{k}: {json}");
+        }
+    }
+
+    #[test]
+    fn item_keys_parse_and_round_trip() {
+        let _ = take_test_warnings();
+        let body = "[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n初期所持: 3\n説明: HPを回復する。\n区分: 消耗品\nフィールド使用: 可\n大切: いいえ\n属性: fire\n[/アイテム]\n[アイテム かぎ]\n名前: かぎ\n種別: 鍵\n初期所持: 0\nフィールド使用: 不可\n大切: はい\n[/アイテム]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        assert!(emitted.ends_with(body), "{emitted}");
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2);
+        assert!(take_test_warnings().is_empty());
+        let it = item(
+            "初期所持: 3\n説明: せつめい: あり\n区分: なんでも\nフィールド使用: yes\n大切: はい\n",
+        );
+        assert_eq!(it.count, Some(3));
+        assert_eq!(it.description.as_deref(), Some("せつめい: あり"));
+        assert_eq!(it.category.as_deref(), Some("なんでも"));
+        assert_eq!(it.field_use, Some(true));
+        assert_eq!(it.key, Some(true));
+        let json = serde_json::to_string(&it).unwrap();
+        assert!(json.contains("\"fieldUse\":true") && json.contains("\"key\":true"));
+        // 別名
+        let it = item("count: 2\ndescription: d\ncategory: c\nfieldUse: false\nkey: false\n");
+        assert_eq!(
+            (it.count, it.field_use, it.key),
+            (Some(2), Some(false), Some(false))
+        );
+    }
+
+    #[test]
+    fn spell_keys_parse_and_round_trip() {
+        let _ = take_test_warnings();
+        let body = "[呪文 ホイミ]\n名前: ホイミ\nMP: 3\n対象: 味方単体\n効果: heal 15..25\n説明: HPを回復する。\nフィールド使用: 可\n[/呪文]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        assert!(emitted.ends_with(body), "{emitted}");
+        assert_eq!(doc1, parse(&emitted));
+        assert!(take_test_warnings().is_empty());
+        let sp = spell("説明: d\nフィールド使用: 不可\n");
+        assert_eq!(sp.description.as_deref(), Some("d"));
+        assert_eq!(sp.field_use, Some(false));
+    }
+
+    #[test]
+    fn empty_values_are_unspecified_without_warning() {
+        let _ = take_test_warnings();
+        let it = item("初期所持:\n説明:\n区分:\nフィールド使用:\n大切:\n");
+        assert_eq!(
+            (it.count, it.description, it.category, it.field_use, it.key),
+            (None, None, None, None, None)
+        );
+        let sp = spell("説明:\nフィールド使用:\n");
+        assert_eq!((sp.description, sp.field_use), (None, None));
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn invalid_values_warn_and_fall_back() {
+        let _ = take_test_warnings();
+        for bad in ["-1", "１２", "1.5", "abc"] {
+            assert_eq!(item(&format!("初期所持: {bad}\n")).count, None, "{bad}");
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 4, "{w:?}");
+        assert_eq!(
+            w[0],
+            "[name-name-parser] warning: [アイテム やくそう] の 初期所持 `-1` は読めないため 未指定 にした（0 以上の整数）"
+        );
+        let it = item("フィールド使用: ほげ\n大切: ふが\n");
+        assert_eq!((it.field_use, it.key), (None, Some(false)));
+        let w = take_test_warnings();
+        assert_eq!(
+            w,
+            vec![
+                "[name-name-parser] warning: [アイテム やくそう] の フィールド使用 `ほげ` は読めないため 未指定 にした（可 / 不可）".to_string(),
+                "[name-name-parser] warning: [アイテム やくそう] の 大切 `ふが` は読めないため いいえ にした（はい / いいえ）".to_string(),
+            ]
+        );
+        assert_eq!(spell("フィールド使用: ほげ\n").field_use, None);
+        let w = take_test_warnings();
+        assert_eq!(
+            w,
+            vec!["[name-name-parser] warning: [呪文 ホイミ] の フィールド使用 `ほげ` は読めないため 未指定 にした（可 / 不可）".to_string()]
+        );
+    }
+}

@@ -1550,6 +1550,24 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(b) = &it.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
+                if let Some(n) = it.count {
+                    out.push_str(&format!("初期所持: {n}\n"));
+                }
+                if let Some(d) = &it.description {
+                    out.push_str(&format!("説明: {d}\n"));
+                }
+                if let Some(c) = &it.category {
+                    out.push_str(&format!("区分: {c}\n"));
+                }
+                if let Some(f) = it.field_use {
+                    out.push_str(&format!(
+                        "フィールド使用: {}\n",
+                        if f { "可" } else { "不可" }
+                    ));
+                }
+                if let Some(k) = it.key {
+                    out.push_str(&format!("大切: {}\n", if k { "はい" } else { "いいえ" }));
+                }
                 if !it.elements.is_empty() {
                     out.push_str(&format!("属性: {}\n", it.elements.join(", ")));
                 }
@@ -1646,6 +1664,15 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(b) = &sp.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
+                }
+                if let Some(d) = &sp.description {
+                    out.push_str(&format!("説明: {d}\n"));
+                }
+                if let Some(f) = sp.field_use {
+                    out.push_str(&format!(
+                        "フィールド使用: {}\n",
+                        if f { "可" } else { "不可" }
+                    ));
                 }
                 if let Some(t) = &sp.tags {
                     out.push_str(&format!("タグ: {}\n", t.join(", ")));
@@ -2663,6 +2690,11 @@ mod tests {
             equippable_by: None,
             elements: vec![],
             abilities: None,
+            count: None,
+            description: None,
+            category: None,
+            field_use: None,
+            key: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[アイテム やくそう]"));
@@ -2686,6 +2718,11 @@ mod tests {
             equippable_by: Some(vec!["hero".to_string(), "ally".to_string()]),
             elements: vec!["fire".to_string(), "ice".to_string()],
             abilities: Some(vec!["slash".to_string(), "guard".to_string()]),
+            count: None,
+            description: None,
+            category: None,
+            field_use: None,
+            key: None,
         }));
         let out = emit(&doc);
         assert!(out.contains(
@@ -2705,6 +2742,8 @@ mod tests {
             school: None,
             multi_target: false,
             tags: None,
+            description: None,
+            field_use: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[呪文 ザラキ]"));
@@ -2726,6 +2765,8 @@ mod tests {
             school: None,
             multi_target: true,
             tags: Some(vec!["火".to_string(), "魔法".to_string()]),
+            description: None,
+            field_use: None,
         }));
         let out = emit(&doc);
         assert!(
