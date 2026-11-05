@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import 'pixi.js/events'
 import { EventBoundary, type Container, type Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
@@ -61,11 +62,13 @@ function setup(kind: Kind, opts: BattleScreenOptions = {}) {
           { rng: () => 0.5 }
         )
   const closed: string[] = []
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    onClose: (o) => closed.push(o),
-    ...opts,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      onClose: (o) => closed.push(o),
+      ...opts,
+    })
+  )
   created.push(s)
   return { s, engine, closed }
 }
@@ -116,10 +119,12 @@ describe('勝敗を読ませてから閉じる: dq', () => {
     const engine = new BattleEngine([entity('hero')], [entity('slime', { agi: 1 })], {
       rng: () => 0,
     })
-    const s = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      onClose: (o) => closed.push(o),
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        onClose: (o) => closed.push(o),
+      })
+    )
     created.push(s)
     tap(s, 'escape')
     expect(engine.getState().phase).toBe('escaped')
@@ -293,7 +298,9 @@ describe('勝敗を読ませてから閉じる: ATB・ff 逃走', () => {
       atbOpts
     )
     const closed: string[] = []
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', onClose: (o) => closed.push(o) })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', onClose: (o) => closed.push(o) })
+    )
     created.push(s)
     tap(s, 'attack')
     expect(engine.getState().phase).toBe('victory')
@@ -313,11 +320,13 @@ describe('勝敗を読ませてから閉じる: ATB・ff 逃走', () => {
       atbOpts
     )
     const closed: string[] = []
-    const s = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      presentation: 'ff',
-      onClose: (o) => closed.push(o),
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        onClose: (o) => closed.push(o),
+      })
+    )
     created.push(s)
     tap(s, 'attack')
     let guard = 0
@@ -332,11 +341,13 @@ describe('勝敗を読ませてから閉じる: ATB・ff 逃走', () => {
     const engine = new BattleEngine([entity('hero')], [entity('slime', { agi: 1 })], {
       rng: () => 0,
     })
-    const s = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      presentation: 'ff',
-      onClose: (o) => closed.push(o),
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        onClose: (o) => closed.push(o),
+      })
+    )
     created.push(s)
     tap(s, 'escape')
     run(s, 3000)
@@ -372,11 +383,13 @@ describe('コマンドボタンが実際のイベント境界のヒットテス�
       useAtb ? atbOpts : { rng: () => 0.5 }
     )
     const closed: string[] = []
-    const s = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      onClose: (o) => closed.push(o),
-      ...opts,
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        onClose: (o) => closed.push(o),
+        ...opts,
+      })
+    )
     created.push(s)
     expect(hitsButtons(s)).toBe(true)
     tap(s, 'attack')
@@ -391,7 +404,9 @@ describe('死亡時の行動の演出 (#837): ff', () => {
       [entity('imp', { hp: 1, maxHp: 1, atk: 5, onDeath: '候補=こうげき' })],
       { rng: () => 0.5 }
     )
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(s)
     tap(s, 'attack')
     const seen: number[] = []

@@ -15,6 +15,7 @@ import {
   type Container,
 } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import { buildMenuRows, type BattleMenuData, type MenuStack } from './battleMenu'
 import { estimateTextWidth } from './battleLayout'
@@ -64,14 +65,16 @@ function build(
   enemies: BattleEntity[] = [ent('s1'), ent('s2')]
 ): { s: BattleScreen; engine: BattleEngine } {
   const engine = new BattleEngine(party, enemies, engineOpts)
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    commandLayout: 'cross',
-    menu: structuredClone(MENU),
-    ...opts,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      commandLayout: 'cross',
+      menu: structuredClone(MENU),
+      ...opts,
+    })
+  )
   created.push(s)
-  // snappy の登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
+  // 登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
   if (opts.motion === 'snappy' && opts.presentation === 'ff') {
     s.tick(1500)
     s.tick(200)
@@ -352,17 +355,21 @@ describe('ATB の wait: 候補窓を開いている間だけ停止', () => {
 
   it('候補窓を使わない画面を同じエンジンに作り直しても、前の画面の menu 設定を持ち越さない', () => {
     const engine = new BattleEngine([ent('a')], [ent('s1'), ent('s2')], ATB)
-    const first = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      commandLayout: 'cross',
-      menu: structuredClone(MENU),
-    })
+    const first = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        commandLayout: 'cross',
+        menu: structuredClone(MENU),
+      })
+    )
     created.push(first)
     first.destroy({ children: true })
-    const grid = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      commandLayout: 'grid',
-    })
+    const grid = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        commandLayout: 'grid',
+      })
+    )
     created.push(grid)
     grid.tick(500)
     expect(engine.getState().atb!.enemyGauge[0]).toBe(0)
@@ -475,11 +482,13 @@ describe('タップによる一覧のスクロール', () => {
       },
     }
     const engine = new BattleEngine([ent('a')], [ent('s1')], { rng: () => 0 })
-    const s = new BattleScreen(engine, 320, 240, {
-      layout: 'side',
-      commandLayout: 'cross',
-      menu: many,
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 320, 240, {
+        layout: 'side',
+        commandLayout: 'cross',
+        menu: many,
+      })
+    )
     created.push(s)
     press('ArrowLeft')
     const strips = () => {
@@ -721,11 +730,13 @@ describe('窓の右端と味方ステータス欄の HP 列 (#204 レビュー)'
   it('BattleScreen は HP 列の左を avoidX として渡し、窓の右端がそれを越えない（360x640）', async () => {
     const { computeListWindowRect } = await import('./battleMenuLayout')
     const engine = new BattleEngine([ent('a')], [ent('s1')], { rng: () => 0 })
-    const s = new BattleScreen(engine, 360, 640, {
-      layout: 'side',
-      commandLayout: 'cross',
-      menu: structuredClone(MENU),
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 360, 640, {
+        layout: 'side',
+        commandLayout: 'cross',
+        menu: structuredClone(MENU),
+      })
+    )
     created.push(s)
     const geo = (s as unknown as { menuGeometry: import('./battleMenuLayout').MenuGeometry })
       .menuGeometry

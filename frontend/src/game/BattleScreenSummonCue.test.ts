@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Texture, type Container, type Graphics, type Sprite, type Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine, type SummonExecution } from './battleEngine'
 import type { SummonCue } from '../types'
 import type { BattleEntity } from './spellDsl'
@@ -53,7 +54,9 @@ function setup(opts: BattleScreenOptions = {}, enemyOver: Partial<BattleEntity> 
     rng: () => 0.5,
     skills: {},
   })
-  const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
+  )
   created.push(s)
   return { s, engine }
 }
@@ -166,7 +169,9 @@ describe('BattleScreen 召喚獣の登場', () => {
         },
       }
     )
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(s)
     I(s).summonTextures.set('a.webp', Texture.WHITE)
     engine.selectAttack()

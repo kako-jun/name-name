@@ -1,6 +1,7 @@
 /** 脚本制御の戦闘 (#741 / #863) の画面側: 途中参戦の絵・行の追加、開始の台詞の再生、中断・敗北の閉じ方 */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine, type BattleEngineOptions } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { BattleOutcome, BattleResult } from './loot'
@@ -54,11 +55,13 @@ function setup(
     }
   )
   const closed: { outcome: BattleOutcome; result: BattleResult }[] = []
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    onClose: (outcome, result) => closed.push({ outcome, result }),
-    ...opts.screen,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      onClose: (outcome, result) => closed.push({ outcome, result }),
+      ...opts.screen,
+    })
+  )
   created.push(s)
   return { s, engine, closed }
 }
@@ -133,7 +136,9 @@ describe('開始の台詞（ff）', () => {
     expect(I(s).messageText?.visible).toBe(true)
 
     const plain = new BattleEngine([entity('hero')], [entity('boss')], { rng: () => 0.5 })
-    const ps = new BattleScreen(plain, 800, 450, { layout: 'side', presentation: 'ff' })
+    const ps = skipEntrance(
+      new BattleScreen(plain, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(ps)
     expect(I(ps).playback.queue.length + (I(ps).playback.active ? 1 : 0)).toBe(0)
   })
@@ -145,7 +150,9 @@ describe('開始の台詞（ff）', () => {
       { rng: () => 0.5, script: { id: 'sc', rules: ['台詞: 条件=開始 文=はじまり'] } }
     )
     engine.selectAttack()
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(s)
     expect(I(s).seenEventTotal).toBe(engine.getState().eventTotal)
     expect(I(s).playback.queue.length + (I(s).playback.active ? 1 : 0)).toBe(0)

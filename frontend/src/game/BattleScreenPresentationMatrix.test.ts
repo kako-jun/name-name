@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
@@ -48,7 +49,9 @@ const I = (s: BattleScreen): Internals => s as unknown as Internals
 
 const created: BattleScreen[] = []
 function make(engine: BattleEngine, opts: BattleScreenOptions = {}) {
-  const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
+  )
   created.push(s)
   return s
 }

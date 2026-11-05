@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import 'pixi.js/events'
 import { Text as PixiText, type Container } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleMenuData, MenuStack, TargetWindow } from './battleMenu'
 import type { BattleEntity } from './spellDsl'
@@ -52,12 +53,14 @@ const I = (s: BattleScreen): Internals => s as unknown as Internals
 const created: BattleScreen[] = []
 function build(opts: BattleScreenOptions = {}) {
   const engine = new BattleEngine([ent('a')], [ent('s1'), ent('s2'), ent('s3')], { rng: () => 0 })
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    commandLayout: 'cross',
-    menu: structuredClone(MENU),
-    ...opts,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      commandLayout: 'cross',
+      menu: structuredClone(MENU),
+      ...opts,
+    })
+  )
   created.push(s)
   return { s, engine }
 }

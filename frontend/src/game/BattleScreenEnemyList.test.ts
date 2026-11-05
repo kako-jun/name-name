@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import { MULTI_HIT_INTERVAL_MS, eventTimeline } from './battleMotion'
 import type { BattleEntity } from './spellDsl'
@@ -46,7 +47,9 @@ function setup(opts: BattleScreenOptions = {}, width = 800) {
     entity('ika', { name: 'イカ', hp: 5, maxHp: 5, atk: 0 }),
   ]
   const engine = new BattleEngine([hero], enemies, { rng: () => 0.5, skills: {} })
-  const s = new BattleScreen(engine, width, 450, { layout: 'side', presentation: 'ff', ...opts })
+  const s = skipEntrance(
+    new BattleScreen(engine, width, 450, { layout: 'side', presentation: 'ff', ...opts })
+  )
   created.push(s)
   I(s).refresh()
   return { s, engine }
@@ -134,11 +137,13 @@ describe('BattleScreen: 敵名ウィンドウ (#954)', () => {
       ],
       { rng: () => 0.5 }
     )
-    const s = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      presentation: 'ff',
-      enemyList: 'window',
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        enemyList: 'window',
+      })
+    )
     created.push(s)
     engine.selectSpell({ name: 'れんぞく', mp: 1, target: '敵単体', effect: 'damage 10 回数=2' })
     I(s).refresh()
@@ -163,11 +168,13 @@ describe('BattleScreen: 敵名ウィンドウの後続 (#954)', () => {
       skills: {},
       statuses: STATUSES,
     })
-    const s = new BattleScreen(engine, width, 450, {
-      layout: 'side',
-      presentation: 'ff',
-      enemyList: 'window',
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, width, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        enemyList: 'window',
+      })
+    )
     created.push(s)
     I(s).refresh()
     return s

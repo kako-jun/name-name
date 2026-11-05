@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import 'pixi.js/events'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
@@ -77,11 +78,13 @@ function setup(opts: BattleScreenOptions = {}, enemy: Partial<BattleEntity> = {}
     { rng: () => 0.5, itemNames: { potion: 'ポーション' } }
   )
   const closed: string[] = []
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    onClose: (o) => closed.push(o),
-    ...opts,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      onClose: (o) => closed.push(o),
+      ...opts,
+    })
+  )
   created.push(s)
   return { s, engine, closed }
 }

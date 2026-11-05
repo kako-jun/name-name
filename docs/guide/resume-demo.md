@@ -102,8 +102,8 @@ ff の勝利で、先頭の「戦いに勝った！」に続けて結果のメ�
 
 確認は「`?config=<URL>` で指定する世界設定 ＋ [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)」をロードする 1 本だけ。手順は「刀の確認」の 1〜3 と同じ（`field.html?resume=0&config=<URL>`）。寺町セーブの読み込み先の世界設定は未解決のため、現状は成り立たない。味方は実際の 4 人、敵は台帳の敵（M149・M147）、背景は BG001。書式は [デバッガガイド](./debugger.md)。
 
-- 見えるもの: `battle.motion: "snappy"` の横スライド登場・キビキビした踏み出し、`battle.effects` の `cast` / `magic`・`slash` / `impact`、`battle.enemyList: "window"` の敵名窓（コマンド窓の右隣に敵名が縦に並び、同名はまとまる。台帳の決定）
-- 操作可能までは snappy の登場で約 4〜5 秒（それ以前の入力は効かない）。`cross` が有効なので矢印キーが効く
+- 見えるもの: 横スライド登場（`default` でも `snappy` でも出る）・`battle.motion: "snappy"` のキビキビした踏み出し、`battle.effects` の `cast` / `magic`・`slash` / `impact`、`battle.enemyList: "window"` の敵名窓（コマンド窓の右隣に敵名が縦に並び、同名はまとまる。台帳の決定）
+- 操作可能までは 登場で約 4〜5 秒（それ以前の入力は効かない）。`cross` が有効なので矢印キーが効く
 - 状態異常・敵レベル・装備・刀のアビリティなど、台帳に内容が無い機能はデモを作らず vitest で確認する（`battleOptions.test.ts`・`enemyLevel.test.ts`・`gearShop.test.ts` など）
 
 **見た目の最終判断は KJ の実機で行う**。
@@ -133,6 +133,6 @@ ff の勝利で、先頭の「戦いに勝った！」に続けて結果のメ�
 - **一枚絵フィールドは `battle.script`（脚本制御の戦闘）を扱わない**: 設定から脚本を渡さないので、セーブの `battle.script` は無視される（エンジンは `restore.script` で脚本の進行を戻せるが、`script` オプションを渡した戦闘にだけ効く）。途中参戦（joiners）も同じく未使用
 - **エンカウントの歩数（`encState`）は保存しない**: 再開直後は「戦闘後」と同じ初期状態（貯めた歩数 0・抑制あり）から数え直す
 - **ATB の `wait` でもゲージは進む**: コマンド待ちの味方がいても、設定の ATB 方式（`wait` の停止範囲）に従って他の者のゲージは進みうる。再開直後に `rpg()` を読むと、保存した値から時間分だけ進んでいる（完全一致は保存した瞬間の値だけ）
-- 戦闘中のセーブを `?resume=` で再開しても、`battle_motion` の登場スライドが有効（`snappy` など）なら戦闘画面を作り直すので、再開のたびに開始時のスライド登場をやり直す
+- 戦闘中のセーブを `?resume=` で再開しても、`battle_motion` の登場スライドが有効（`ff` ＋ `side` なら `default` でも有効）なら戦闘画面を作り直すので、再開のたびに開始時のスライド登場をやり直す
 - 戦闘中に保存して `?resume=` で再開した場合、敗北時に戻る「戦闘前」はそのセーブ時点（戦闘中の HP のまま始めた戦闘）の味方
 - ノベル本編の再生（`NovelPlayer`）はこの `rpg` を使って戦闘へ入らない（本編パイプラインへの統合は別の話）

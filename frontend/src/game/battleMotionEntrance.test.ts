@@ -15,9 +15,14 @@ const T: MotionTiming = {
 }
 
 describe('sampleEntrance (#1037)', () => {
-  it('default は無効（dx 0・done）', () => {
-    expect(sampleEntrance(0, 'enemy', 100, 200, 800)).toEqual({ dx: 0, done: true })
-    expect(entranceTotalMs(DEFAULT_MOTION_TIMING)).toBe(0)
+  it('default も有効（200ms・snappy と同じ暫定値。#1110）', () => {
+    expect(entranceTotalMs(DEFAULT_MOTION_TIMING)).toBe(200)
+    expect(sampleEntrance(0, 'enemy', 100, 200, 800)).toEqual({ dx: -200, done: false })
+  })
+  it('entranceMs 0 は無効（dx 0・done）', () => {
+    const off = { ...DEFAULT_MOTION_TIMING, entranceMs: 0 }
+    expect(sampleEntrance(0, 'enemy', 100, 200, 800, off)).toEqual({ dx: 0, done: true })
+    expect(entranceTotalMs(off)).toBe(0)
   })
   it('snappy は有効（200ms）', () => {
     expect(entranceTotalMs(SNAPPY_MOTION_TIMING)).toBe(200)

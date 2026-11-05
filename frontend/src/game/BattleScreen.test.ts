@@ -26,6 +26,7 @@ import {
   computeDofLevels,
 } from './depthOfField'
 import { BattleScreen, applyBattleTextureFilter, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
@@ -122,7 +123,7 @@ function make(
   w = 800,
   h = 450
 ): BattleScreen {
-  return new BattleScreen(new BattleEngine(party, enemies), w, h, opts)
+  return skipEntrance(new BattleScreen(new BattleEngine(party, enemies), w, h, opts))
 }
 
 /** dim が半透明黒を塗っているか（clear 済みなら bounds が空） */
@@ -169,7 +170,7 @@ describe('BattleScreen: front（従来）', () => {
       [entity('hero', { atk: 1 })],
       [entity('slime', { hp: 999, maxHp: 999 })]
     )
-    const s = track(new BattleScreen(engine, 800, 450))
+    const s = track(skipEntrance(new BattleScreen(engine, 800, 450)))
     const log = engine.getState().log
     const shown = internals(s).logLines.map((t) => t.text)
     expect(shown.filter((t) => t !== '')).toEqual(log.slice(-internals(s).logLines.length))
@@ -678,7 +679,7 @@ describe('BattleScreen: side', () => {
       const log = engine.getState().log as string[]
       log.length = 0
       for (let n = 0; n < count; n++) log.push(`line${n}`)
-      const s = track(new BattleScreen(engine, 800, 450, side))
+      const s = track(skipEntrance(new BattleScreen(engine, 800, 450, side)))
       const shown = internals(s)
         .logLines.map((t) => t.text)
         .filter((t) => t !== '')
@@ -787,7 +788,7 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
     const log = engine.getState().log as string[]
     log.length = 0
     for (let n = 0; n < 9; n++) log.push(`line${n}`)
-    const s = track(new BattleScreen(engine, 800, 720, sideOpts))
+    const s = track(skipEntrance(new BattleScreen(engine, 800, 720, sideOpts)))
     expect(internals(s).logLines.map((t) => t.text)).toEqual(log.slice(-4))
   })
 
@@ -3342,11 +3343,13 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
       }
     )
     const s = track(
-      new BattleScreen(engine, 800, 450, {
-        layout: 'side',
-        spriteStyle: 'acrylic',
-        presentation: 'ff',
-      })
+      skipEntrance(
+        new BattleScreen(engine, 800, 450, {
+          layout: 'side',
+          spriteStyle: 'acrylic',
+          presentation: 'ff',
+        })
+      )
     )
     await flushPromises()
     await flushPromises()
@@ -3492,17 +3495,19 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
       })
       const engine = new BattleEngine([hero], [slime], { rng: () => 0.5 })
       const s = track(
-        new BattleScreen(engine, 800, 450, {
-          layout: 'side',
-          spriteStyle: opts.spriteStyle ?? 'acrylic',
-          presentation: 'ff',
-          motion: opts.motion ?? 'snappy',
-        })
+        skipEntrance(
+          new BattleScreen(engine, 800, 450, {
+            layout: 'side',
+            spriteStyle: opts.spriteStyle ?? 'acrylic',
+            presentation: 'ff',
+            motion: opts.motion ?? 'snappy',
+          })
+        )
       )
       await flushPromises()
       await flushPromises()
       await flushPromises()
-      // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+      // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
       s.tick(1500)
       s.tick(200)
       return { s, engine, v: views(s) }
@@ -3598,17 +3603,19 @@ describe('BattleScreen: ff のポーズ差し替えと acrylic の板・影 (#74
         })
         const engine = new BattleEngine([hero], [slime], { rng: () => 0.5 })
         const s = track(
-          new BattleScreen(engine, 800, 450, {
-            layout: 'side',
-            spriteStyle: 'acrylic',
-            presentation: 'ff',
-            motion: 'snappy',
-          })
+          skipEntrance(
+            new BattleScreen(engine, 800, 450, {
+              layout: 'side',
+              spriteStyle: 'acrylic',
+              presentation: 'ff',
+              motion: 'snappy',
+            })
+          )
         )
         await flushPromises()
         await flushPromises()
         await flushPromises()
-        // snappy の登場スライド (#1037) を済ませる
+        // 登場スライド (#1037) を済ませる
         s.tick(1500)
         s.tick(200)
         engine.selectAttack()
@@ -3870,11 +3877,13 @@ describe('BattleScreen: ff の踏み出し・のけぞりと選択中の印 ▼ 
       { rng: () => 0.5 }
     )
     const s = track(
-      new BattleScreen(engine, 800, 450, {
-        layout: 'side',
-        spriteStyle: 'acrylic',
-        presentation: 'ff',
-      })
+      skipEntrance(
+        new BattleScreen(engine, 800, 450, {
+          layout: 'side',
+          spriteStyle: 'acrylic',
+          presentation: 'ff',
+        })
+      )
     )
     await flushPromises()
     await flushPromises()
