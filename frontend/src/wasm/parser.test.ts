@@ -3312,3 +3312,63 @@ describe('parseMarkdown: 一枚絵フィールドの記法 (#1100)', () => {
     expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// #1102 (S2b): 一枚絵フィールドの場面の中身（端・ワープ・揺れ・窓の景色）。tracked wasm が解釈することを縛る。
+describe('parseMarkdown: 一枚絵フィールドの場面の中身 (#1102)', () => {
+  const head = ['---', 'engine: name-name', 'chapter: 1', 'title: t', '---', '', '## f: 野原', '']
+  const md = [
+    ...head,
+    '[端 右 範囲=200..400 → 駅前]',
+    '[ワープ 改札 → 駅前 @100,200 向き=左 演出=フラッシュ 時間=250/150/500]',
+    '[ワープ 扉 → 家 @1,2]',
+    '[揺れ: 縦=6, 周期=600]',
+    '[窓の景色: sky.webp, 速度=-60, y=12.5]',
+    '[窓の景色: sky.webp, 速度=30]',
+    '',
+    '[イベント 改札口]',
+    '[ワープ: 改札]',
+    '[/イベント]',
+    '',
+  ].join('\n')
+
+  it('FieldEdge / FieldWarp / FieldShake / FieldScroll / Warp が EventDocument に届く', async () => {
+    const doc = await parseMarkdown(md)
+    const evs = doc.chapters[0].scenes[0].events.filter(
+      (e): e is Exclude<typeof e, string> => typeof e !== 'string'
+    )
+    expect(evs.find((e) => 'FieldEdge' in e)).toEqual({
+      FieldEdge: { direction: 'Right', range_from: 200, range_to: 400, target: '駅前' },
+    })
+    const warps = evs.filter((e) => 'FieldWarp' in e)
+    expect(warps[0]).toEqual({
+      FieldWarp: {
+        name: '改札',
+        target: '駅前',
+        x: 100,
+        y: 200,
+        direction: 'Left',
+        effect: 'Flash',
+        timing_ms: [250, 150, 500],
+      },
+    })
+    expect(warps[1]).toEqual({ FieldWarp: { name: '扉', target: '家', x: 1, y: 2 } })
+    expect(evs.find((e) => 'FieldShake' in e)).toEqual({
+      FieldShake: { amplitude_y: 6, period_ms: 600 },
+    })
+    const scrolls = evs.filter((e) => 'FieldScroll' in e)
+    expect(scrolls[0]).toEqual({ FieldScroll: { image: 'sky.webp', speed: -60, y: 12.5 } })
+    expect(scrolls[1]).toEqual({ FieldScroll: { image: 'sky.webp', speed: 30 } })
+    expect(evs.find((e) => 'RpgEvent' in e)).toEqual({
+      RpgEvent: { name: '改札口', commands: [{ type: 'Warp', id: '改札' }] },
+    })
+  })
+
+  it('emit → parse で同値', async () => {
+    const doc = await parseMarkdown(md)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[端 右 範囲=200..400 → 駅前]\n')
+    expect(emitted).toContain('[ワープ: 改札]\n')
+    const again = await parseMarkdown(emitted)
+    expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

@@ -445,6 +445,29 @@ export interface FieldMapData {
   encounter_groups?: string[]
 }
 
+/** ワープの演出 (#1102)。`演出=フェード` / `演出=フラッシュ` */
+export type WarpEffect = 'Fade' | 'Flash'
+
+/** 一枚絵フィールドの端の出口 (#1102)。`[端 右 範囲=200..400 → 場面ID]`。範囲は背景 px で range_from ≤ range_to */
+export interface FieldEdgeData {
+  direction: Direction
+  range_from: number
+  range_to: number
+  target: string
+}
+
+/** 一枚絵フィールドのワープ先の宣言 (#1102)。`[ワープ 名前 → 場面ID @x,y 向き=左 演出=フラッシュ 時間=250/150/500]`。置き場所は持たない */
+export interface FieldWarpData {
+  name: string
+  target: string
+  x: number
+  y: number
+  direction?: Direction
+  effect?: WarpEffect
+  /** out / hold / in の ms。省略 = 演出ごとの既定 */
+  timing_ms?: [number, number, number]
+}
+
 export type Event =
   | {
       Dialog: {
@@ -774,6 +797,14 @@ export type Event =
   | { FieldMap: FieldMapData }
   /** 一枚絵フィールドへ入る命令 (#1100)。`[フィールド: 場面ID @x,y 向き=左]`。現在行で待ち、終わったら次の行へ（スタックなし） */
   | { Field: { scene: string; x?: number; y?: number; direction?: Direction } }
+  /** 一枚絵フィールドの端の出口 (#1102)。`[端 右 範囲=200..400 → 場面ID]` */
+  | { FieldEdge: FieldEdgeData }
+  /** 一枚絵フィールドのワープ先の宣言 (#1102)。`[ワープ 名前 → 場面ID @x,y …]` */
+  | { FieldWarp: FieldWarpData }
+  /** 一枚絵フィールドの揺れ (#1102)。`[揺れ: 縦=6, 周期=600]`。period_ms 省略 = 600 */
+  | { FieldShake: { amplitude_y: number; period_ms?: number } }
+  /** 一枚絵フィールドの窓の景色 (#1102)。`[窓の景色: path, 速度=60, y=0]`。speed は px/秒（負で左）、y 省略 = 0 */
+  | { FieldScroll: { image: string; speed: number; y?: number } }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
   | { Monster: MonsterDef }
@@ -1264,3 +1295,5 @@ export type EventCommand =
   | { type: 'Emotion'; target: string; kind: string; duration_ms?: number }
   /** フィールドを終える (#1100)。`[フィールド終了]`。呼び出し位置へ戻らず、`[フィールド: …]` の次の行へ進むだけ */
   | { type: 'FieldEnd' }
+  /** ワープ先を呼ぶ (#1102)。`[ワープ: 名前]`（`[イベント]` 内専用）。`[ワープ 名前 → …]` の宣言を名前で指す */
+  | { type: 'Warp'; id: string }

@@ -10,7 +10,7 @@ interface EventDisplayProps {
  * EventCard 内の編集 UI と同じカードに差し替える形で使われる。
  *
  * Issue #234: 旧版は新 variant (Animate / Monster / Item / Spell / PartyMember /
- * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / PlayerStart / TitleShow /
+ * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / FieldEdge / FieldWarp / FieldShake / FieldScroll / PlayerStart / TitleShow /
  * DialogBorderless / Shake / Flash / Fade) を return null で握り潰していた。
  * data.md 等のマスター .md を読んだときにエディタ上で全部空に見える問題を解消する。
  */
@@ -503,6 +503,47 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
         フィールドへ: {f.scene}
         {f.x != null && f.y != null ? ` @${f.x},${f.y}` : ''}
         {f.direction ? ` 向き=${f.direction}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldEdge' in event) {
+    const e = event.FieldEdge
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        端の出口: {e.direction} 範囲={e.range_from}..{e.range_to} → {e.target}
+      </div>
+    )
+  }
+
+  if ('FieldWarp' in event) {
+    const w = event.FieldWarp
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        ワープ {w.name} → {w.target} @{w.x},{w.y}
+        {w.direction ? ` 向き=${w.direction}` : ''}
+        {w.effect ? ` 演出=${w.effect === 'Flash' ? 'フラッシュ' : 'フェード'}` : ''}
+        {w.timing_ms ? ` 時間=${w.timing_ms.join('/')}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldShake' in event) {
+    const s = event.FieldShake
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        揺れ: 縦={s.amplitude_y}
+        {s.period_ms != null ? ` 周期=${s.period_ms}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldScroll' in event) {
+    const s = event.FieldScroll
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        窓の景色: {s.image} 速度={s.speed}
+        {s.y != null ? ` y=${s.y}` : ''}
       </div>
     )
   }
