@@ -248,6 +248,45 @@ export interface PartyMemberDef {
      * 現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。定義の無い id・候補に無いジョブは runtime が警告して無視する。
      */
     jobs?: string[];
+    /**
+     * フィールドで歩く人物 (#1104。`人物:`)。台帳の人物 ID など。生文字列で透過し、解決は runtime 側。
+     */
+    character?: string;
+    /**
+     * フィールドで歩くときの形態 (#1104。`形態:`)。生文字列で透過。
+     */
+    form?: string;
+    /**
+     * 持つ刀 (#1104。`刀:`)。生文字列で透過。
+     */
+    weapon?: string;
+}
+
+/**
+ * フィールドの共通設定 (#1104)。`[フィールド設定 速度=260 端のしきい値=6 端の接触=身体 文字間隔=30 刀の倍率=2]`（作品に1つ）。
+ * 全項目が省略可（ただし1つは書く）。省略 = runtime の既定。
+ */
+export interface FieldSettingsData {
+    /**
+     * 歩く速さ（`速度=`。0 より大きい）
+     */
+    speed?: number;
+    /**
+     * 端の出口に反応する距離（`端のしきい値=`。0 より大きい）
+     */
+    edge_threshold?: number;
+    /**
+     * 端に触れたとみなす部位（`端の接触=`）
+     */
+    edge_contact?: EdgeContact;
+    /**
+     * 会話窓の 1 文字あたり ms（`文字間隔=`。0..=1000）
+     */
+    ms_per_char?: number;
+    /**
+     * 刀の倍率（`刀の倍率=`。1 以上）
+     */
+    weapon_scale?: number;
 }
 
 /**
@@ -400,6 +439,62 @@ export interface FieldEdgeData {
 }
 
 /**
+ * 主人公・同行者の歩行絵の指定 (#1104)。
+ * `[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]` /
+ * `[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]`。全項目が省略可（ただし1つは書く）。
+ */
+export interface FieldWalkSpriteData {
+    kind: WalkSpriteKind;
+    /**
+     * 人物（`人物=`。台帳の人物 ID など。生文字列で透過）
+     */
+    character?: string;
+    /**
+     * 形態（`形態=`。生文字列で透過）
+     */
+    form?: string;
+    /**
+     * 高さ（`高さ=`。背景 px、0 より大きい）
+     */
+    height?: number;
+    /**
+     * 1 コマの長さ（`コマ長=`。ms、0 より大きい）
+     */
+    frame_ms?: number;
+    /**
+     * 歩行周期（`周期=0,1,2,1`。0..=2 の整数を 1〜16 個）
+     */
+    cycle?: number[];
+    /**
+     * 停止コマ（`停止=`。0..=2）
+     */
+    idle_frame?: number;
+    /**
+     * 同行者の名前（`名前=`。`[感情:]` の対象名。同行者のみ）
+     */
+    name?: string;
+}
+
+/**
+ * 人物の形態の宣言 (#1104)。`[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]`（作品に1つ）。
+ * 目録は台帳生成物のパス参照（`field_emotions` と同じく中身は parser が読まず、パスを透過する）。
+ */
+export interface CharacterFormsDecl {
+    /**
+     * 目録の JSON パス（`目録=`）
+     */
+    catalog: string;
+    /**
+     * 人物の素材のルート（`素材=`）
+     */
+    assets: string;
+    /**
+     * 刀の素材のルート（`刀素材=`。任意）
+     */
+    weapon_assets?: string;
+}
+
+/**
  * 召喚獣定義 (#750)。`[召喚獣 <id>] ... [/召喚獣]` ブロックで書く。
  *
  * 魔石（`[魔石]`）の石そのものとは独立した「召喚獣の像」の宣言で、魔石や味方の「わざ」（特技）が `召喚獣id:` で参照する。敵は召喚獣を呼ばない。
@@ -524,6 +619,11 @@ export interface MonsterLoot {
 }
 
 /**
+ * 歩行絵の対象 (#1104)。`主人公` / `同行者`（NPC は `[NPC]` 側の規則で指定する）。
+ */
+export type WalkSpriteKind = "Player" | "Companion";
+
+/**
  * 特技定義 (#834、敵の行動パターン P0 / 親 #832)。
  *
  * 敵の技のためのマスターデータで、`[呪文]` とは別のブロック・別の語彙にする。MP は持たない
@@ -611,6 +711,11 @@ export interface StatusDef {
 }
 
 /**
+ * 端に触れたとみなす部位 (#1104)。`端の接触=身体` / `端の接触=足元`（`body` / `foot` も可）。
+ */
+export type EdgeContact = "Body" | "Foot";
+
+/**
  * 脚本制御の戦闘の定義 (#741、拡張 #863)。`[戦闘 <id>] ... [/戦闘]` ブロックで書く。
  *
  * 勝敗の固定・戦闘中の台詞・途中参戦・復活・逃走・中断・結果のフラグを**宣言**で書く。`enemies`（`敵:`、
@@ -647,6 +752,41 @@ export interface BattleScriptDef {
  * 瞬間表示/フェード、後方互換）。
  */
 export type StageDirection = "Kamite" | "Shimote";
+
+/**
+ * 補助通行の設定 (#1104)。`[補助通行 条件=a,b 除く=… 幽霊=… 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]`（作品に1つ）。
+ * 条件以外は省略可（省略 = runtime の既定）。フラグ名は生文字列のまま透過し、解決は runtime 側。
+ */
+export interface FieldAssistData {
+    /**
+     * すべて真のとき橙のセルを通れる（`条件=`。`,` 区切り、1個以上）
+     */
+    conditions: string[];
+    /**
+     * 真の間は条件が成り立っていても通れない（`除く=`）
+     */
+    except?: string;
+    /**
+     * 真の間は同行者が半透明で一人で通る（`幽霊=`）
+     */
+    ghost?: string;
+    /**
+     * 押されている間の速さの倍率（`速度倍率=`。0 より大きい）
+     */
+    speed_scale?: number;
+    /**
+     * ghost のときの同行者の不透明度（`濃さ=`。0..=1）
+     */
+    opacity?: number;
+    /**
+     * 同行者が主人公の後ろに立つ距離（`後ろ=`。背景 px、0 より大きい）
+     */
+    behind_px?: number;
+    /**
+     * 現れる・消えるのにかかる時間（`フェード=`。ms、0 以上）
+     */
+    fade_ms?: number;
+}
 
 /**
  * 魔石定義 (#889)。`[魔石 <id>] ... [/魔石]` ブロックで書く。
@@ -1242,7 +1382,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { Emotion: { target: string; kind: string; duration_ms?: number } } | { BackgroundBoard: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Prop: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Wall: { path: string; loop?: boolean; mute?: boolean } } | "WallExit" | { StageFront: { path: string } } | "StageFrontExit" | { Weather: { kind: WeatherKind; intensity?: number } } | "WeatherExit" | { Floor: { path: string; height?: number } } | "FloorExit" | { StageTurn: { duration_ms?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation; zoom?: string; zoom_strength?: number } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { FieldMap: FieldMapData } | { Field: { scene: string; x?: number; y?: number; direction?: Direction } } | { FieldEdge: FieldEdgeData } | { FieldWarp: FieldWarpData } | { FieldShake: { amplitude_y: number; period_ms?: number } } | { FieldScroll: { image: string; speed: number; y?: number } } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { BattleScript: BattleScriptDef } | { Magicite: MagiciteDef } | { Summon: SummonDef } | { Job: JobDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { Emotion: { target: string; kind: string; duration_ms?: number } } | { BackgroundBoard: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Prop: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Wall: { path: string; loop?: boolean; mute?: boolean } } | "WallExit" | { StageFront: { path: string } } | "StageFrontExit" | { Weather: { kind: WeatherKind; intensity?: number } } | "WeatherExit" | { Floor: { path: string; height?: number } } | "FloorExit" | { StageTurn: { duration_ms?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation; zoom?: string; zoom_strength?: number } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { FieldMap: FieldMapData } | { Field: { scene: string; x?: number; y?: number; direction?: Direction } } | { FieldEdge: FieldEdgeData } | { FieldWarp: FieldWarpData } | { FieldShake: { amplitude_y: number; period_ms?: number } } | { FieldScroll: { image: string; speed: number; y?: number } } | { FieldAssist: FieldAssistData } | { FieldSettings: FieldSettingsData } | { FieldWalkSprite: FieldWalkSpriteData } | { CharacterForms: CharacterFormsDecl } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { BattleScript: BattleScriptDef } | { Magicite: MagiciteDef } | { Summon: SummonDef } | { Job: JobDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
