@@ -591,6 +591,83 @@ pub struct CharacterFormsDecl {
     pub weapon_assets: Option<String>,
 }
 
+/// フィールドメニューの画面遷移の速さ (#1108)。`[メニュー: …, 文字消え=80, 枠=140, 文字出現=80]`。
+/// 全項目が省略可（省略 = runtime の既定）。値は ms の 0 以上の整数。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldMenuTransition {
+    /// 文字が消える時間（`文字消え=`。ms）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_out_ms: Option<u32>,
+    /// 枠が動く時間（`枠=`。ms）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slide_ms: Option<u32>,
+    /// 文字が現れる時間（`文字出現=`。ms）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_in_ms: Option<u32>,
+}
+
+/// フィールドメニューの項目の並びと遷移 (#1108)。`[メニュー: どうぐ, まほう, …, セーブ]` と、裸の `[メニュー]`（既定）。
+/// `items` が空 = 既定の項目（裸の `[メニュー]`、または遷移だけを書いた `[メニュー: 文字消え=80]`）。
+/// 項目 ID の重複・既定の項目名との突き合わせは parser では見ない（配線の段階）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldMenuData {
+    /// 項目 ID の列（空 = 既定の項目）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
+    /// 画面遷移の速さ（書かれたときだけ）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<FieldMenuTransition>,
+}
+
+/// メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… 無効=true 理由=… 時間制限=不可 時間制限の理由=… 中身=path.json]`。
+/// 上書きしたい項目だけ書く（`id` 以外は全部省略可。ただし1つは書く）。文字列は空白を含まない1語。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldMenuItemData {
+    /// 項目 ID
+    pub id: String,
+    /// 表示名（`ラベル=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// true = 選べない（`無効=true`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// 選べないときの理由（`理由=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// 時間制限中に選べるか（`時間制限=可` が true、`不可` が false）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_limit_allowed: Option<bool>,
+    /// 時間制限中に選んだときの理由（`時間制限の理由=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_limit_reason: Option<String>,
+    /// 項目画面の中身の JSON パス（`中身=`。中身は parser が読まず、パスを透過する。`field_emotions` と同じ流儀）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// 操作画像の指定 (#1108)。`[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]`（作品に1つ）。
+/// 全項目が省略可（ただし1つは書く）。パスは空白を含まない文字列で、中身は見ずに透過する。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct UiImagesData {
+    /// 手のカーソルの画像（`手=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<String>,
+    /// 選択マークの画像（`選択マーク=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select_mark: Option<String>,
+    /// 選択マークの倍率（`倍率=`。0 より大きい数）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+}
+
 /// モンスター定義 (#174)。
 ///
 /// 各章の `## data: マスター` シーン内に `[モンスター <id>] ... [/モンスター]` で書く。
@@ -758,6 +835,21 @@ pub struct ItemDef {
     /// 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abilities: Option<Vec<String>>,
+    /// 初期所持数 (#1111。`初期所持:` 0 以上の整数)。書かない・読めない値は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    /// 説明文 (#1111。`説明:`)。生文字列で透過する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// 区分 (#1111。`区分:`)。生文字列で透過し、未知の値の扱いはフロント側。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+    #[serde(default, rename = "fieldUse", skip_serializing_if = "Option::is_none")]
+    pub field_use: Option<bool>,
+    /// 大切なものか (#1111。`大切: はい|いいえ`)。書かないは None、読めない値は false。JSON / TS 側のキーは `key`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<bool>,
 }
 
 /// パーティメンバー定義 (#175)。
@@ -881,6 +973,12 @@ pub struct SpellDef {
     /// それ以外の意味は無い。カンマ区切り・複数行可・重複なし。書かない呪文は None（タグ無し＝従来どおり）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// 説明文 (#1111。`説明:`)。生文字列で透過する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+    #[serde(default, rename = "fieldUse", skip_serializing_if = "Option::is_none")]
+    pub field_use: Option<bool>,
 }
 
 /// 特技定義 (#834、敵の行動パターン P0 / 親 #832)。
@@ -1666,6 +1764,14 @@ pub enum Event {
     FieldWalkSprite(FieldWalkSpriteData),
     /// 人物の形態の宣言 (#1104)。`[人物の形態 目録=… 素材=… 刀素材=…]`（作品に1つ）。
     CharacterForms(CharacterFormsDecl),
+    /// フィールドメニューの項目の並びと遷移 (#1108)。`[メニュー: …]` / 裸の `[メニュー]`。
+    FieldMenu(FieldMenuData),
+    /// メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… …]`。
+    FieldMenuItem(FieldMenuItemData),
+    /// 操作画像の指定 (#1108)。`[操作画像 手=… 選択マーク=… 倍率=2]`（作品に1つ）。
+    UiImages(UiImagesData),
+    /// 通貨名 (#1108)。`[通貨名: 円]`。
+    Currency(String),
     PlayerStart(PlayerStartData),
     Npc(NpcData),
     /// モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックで書く。

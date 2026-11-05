@@ -10,7 +10,7 @@ interface EventDisplayProps {
  * EventCard 内の編集 UI と同じカードに差し替える形で使われる。
  *
  * Issue #234: 旧版は新 variant (Animate / Monster / Item / Spell / PartyMember /
- * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / FieldEdge / FieldWarp / FieldShake / FieldScroll / FieldAssist / FieldSettings / FieldWalkSprite / CharacterForms / PlayerStart / TitleShow /
+ * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / FieldEdge / FieldWarp / FieldShake / FieldScroll / FieldAssist / FieldSettings / FieldWalkSprite / CharacterForms / FieldMenu / FieldMenuItem / UiImages / Currency / PlayerStart / TitleShow /
  * DialogBorderless / Shake / Flash / Fade) を return null で握り潰していた。
  * data.md 等のマスター .md を読んだときにエディタ上で全部空に見える問題を解消する。
  */
@@ -604,6 +604,50 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
         {c.weapon_assets ? ` 刀素材=${c.weapon_assets}` : ''}
       </div>
     )
+  }
+
+  if ('FieldMenu' in event) {
+    const m = event.FieldMenu
+    const t = m.transition
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        メニュー{m.items && m.items.length > 0 ? `: ${m.items.join(', ')}` : '(既定の項目)'}
+        {t?.text_out_ms != null ? ` 文字消え=${t.text_out_ms}` : ''}
+        {t?.slide_ms != null ? ` 枠=${t.slide_ms}` : ''}
+        {t?.text_in_ms != null ? ` 文字出現=${t.text_in_ms}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldMenuItem' in event) {
+    const i = event.FieldMenuItem
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        メニュー項目 {i.id}
+        {i.label ? ` ラベル=${i.label}` : ''}
+        {i.disabled != null ? ` 無効=${i.disabled}` : ''}
+        {i.reason ? ` 理由=${i.reason}` : ''}
+        {i.time_limit_allowed != null ? ` 時間制限=${i.time_limit_allowed ? '可' : '不可'}` : ''}
+        {i.time_limit_reason ? ` 時間制限の理由=${i.time_limit_reason}` : ''}
+        {i.content ? ` 中身=${i.content}` : ''}
+      </div>
+    )
+  }
+
+  if ('UiImages' in event) {
+    const u = event.UiImages
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        操作画像
+        {u.hand ? ` 手=${u.hand}` : ''}
+        {u.select_mark ? ` 選択マーク=${u.select_mark}` : ''}
+        {u.scale != null ? ` 倍率=${u.scale}` : ''}
+      </div>
+    )
+  }
+
+  if ('Currency' in event) {
+    return <div className={`text-xs italic ml-2 ${meta}`}>通貨名: {event.Currency}</div>
   }
 
   if ('PlayerStart' in event) {

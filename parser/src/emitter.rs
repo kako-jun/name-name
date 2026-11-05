@@ -1290,6 +1290,81 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&line);
                 prev_was_dialog_or_text = false;
             }
+            Event::FieldMenu(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut parts: Vec<String> = d.items.clone();
+                if let Some(t) = &d.transition {
+                    if let Some(v) = t.text_out_ms {
+                        parts.push(format!("文字消え={v}"));
+                    }
+                    if let Some(v) = t.slide_ms {
+                        parts.push(format!("枠={v}"));
+                    }
+                    if let Some(v) = t.text_in_ms {
+                        parts.push(format!("文字出現={v}"));
+                    }
+                }
+                if parts.is_empty() {
+                    out.push_str("[メニュー]\n");
+                } else {
+                    out.push_str(&format!("[メニュー: {}]\n", parts.join(", ")));
+                }
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldMenuItem(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[メニュー項目 {}", d.id);
+                if let Some(v) = &d.label {
+                    line.push_str(&format!(" ラベル={v}"));
+                }
+                if let Some(v) = d.disabled {
+                    line.push_str(&format!(" 無効={v}"));
+                }
+                if let Some(v) = &d.reason {
+                    line.push_str(&format!(" 理由={v}"));
+                }
+                if let Some(v) = d.time_limit_allowed {
+                    line.push_str(&format!(" 時間制限={}", if v { "可" } else { "不可" }));
+                }
+                if let Some(v) = &d.time_limit_reason {
+                    line.push_str(&format!(" 時間制限の理由={v}"));
+                }
+                if let Some(v) = &d.content {
+                    line.push_str(&format!(" 中身={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::UiImages(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = String::from("[操作画像");
+                if let Some(v) = &d.hand {
+                    line.push_str(&format!(" 手={v}"));
+                }
+                if let Some(v) = &d.select_mark {
+                    line.push_str(&format!(" 選択マーク={v}"));
+                }
+                if let Some(v) = d.scale {
+                    line.push_str(&format!(" 倍率={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::Currency(name) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[通貨名: {name}]\n"));
+                prev_was_dialog_or_text = false;
+            }
             Event::PlayerStart(p) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1475,6 +1550,24 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(b) = &it.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
                 }
+                if let Some(n) = it.count {
+                    out.push_str(&format!("初期所持: {n}\n"));
+                }
+                if let Some(d) = &it.description {
+                    out.push_str(&format!("説明: {d}\n"));
+                }
+                if let Some(c) = &it.category {
+                    out.push_str(&format!("区分: {c}\n"));
+                }
+                if let Some(f) = it.field_use {
+                    out.push_str(&format!(
+                        "フィールド使用: {}\n",
+                        if f { "可" } else { "不可" }
+                    ));
+                }
+                if let Some(k) = it.key {
+                    out.push_str(&format!("大切: {}\n", if k { "はい" } else { "いいえ" }));
+                }
                 if !it.elements.is_empty() {
                     out.push_str(&format!("属性: {}\n", it.elements.join(", ")));
                 }
@@ -1571,6 +1664,15 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(b) = &sp.builtin {
                     out.push_str(&format!("builtin: {b}\n"));
+                }
+                if let Some(d) = &sp.description {
+                    out.push_str(&format!("説明: {d}\n"));
+                }
+                if let Some(f) = sp.field_use {
+                    out.push_str(&format!(
+                        "フィールド使用: {}\n",
+                        if f { "可" } else { "不可" }
+                    ));
                 }
                 if let Some(t) = &sp.tags {
                     out.push_str(&format!("タグ: {}\n", t.join(", ")));
@@ -2588,6 +2690,11 @@ mod tests {
             equippable_by: None,
             elements: vec![],
             abilities: None,
+            count: None,
+            description: None,
+            category: None,
+            field_use: None,
+            key: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[アイテム やくそう]"));
@@ -2611,6 +2718,11 @@ mod tests {
             equippable_by: Some(vec!["hero".to_string(), "ally".to_string()]),
             elements: vec!["fire".to_string(), "ice".to_string()],
             abilities: Some(vec!["slash".to_string(), "guard".to_string()]),
+            count: None,
+            description: None,
+            category: None,
+            field_use: None,
+            key: None,
         }));
         let out = emit(&doc);
         assert!(out.contains(
@@ -2630,6 +2742,8 @@ mod tests {
             school: None,
             multi_target: false,
             tags: None,
+            description: None,
+            field_use: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[呪文 ザラキ]"));
@@ -2651,6 +2765,8 @@ mod tests {
             school: None,
             multi_target: true,
             tags: Some(vec!["火".to_string(), "魔法".to_string()]),
+            description: None,
+            field_use: None,
         }));
         let out = emit(&doc);
         assert!(

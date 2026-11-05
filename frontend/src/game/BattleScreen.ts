@@ -3325,7 +3325,7 @@ export class BattleScreen extends Container {
     if (!m) return
     const resultOutcome =
       this.resultElapsed !== null ? resultOutcomeOf(this.engine.getState().phase) : null
-    // 勝利: メッセージ列の現在の 1 件（0 件なら窓なし）。全滅: 固定の言葉 (#1039)
+    // 勝利: メッセージ列の現在の 1 件（先頭は勝利の言葉。#1109）。全滅: 固定の言葉 (#1039)
     let resultWord: string | null = null
     if (resultOutcome === 'victory' && this.resultElapsed !== null) {
       const i = resultMessageIndex(this.resultElapsed, this.resultMessages.length)

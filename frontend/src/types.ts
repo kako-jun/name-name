@@ -217,6 +217,16 @@ export interface ItemDef {
   elements?: string[]
   /** 装備すると「わざ」に現れる `[特技 id]` の id (#207。`わざ:` の行を書いた順)。特技マスターへの解決は runtime */
   abilities?: string[]
+  /** 初期所持数 (#1111。`初期所持:` 0 以上の整数)。書かなければ無し */
+  count?: number
+  /** 説明文 (#1111。`説明:`) */
+  description?: string
+  /** 区分 (#1111。`区分:`)。生文字列で透過し、未知の値の扱いはフロント側 */
+  category?: string
+  /** フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は無し */
+  fieldUse?: boolean
+  /** 大切なものか (#1111。`大切: はい|いいえ`)。書かなければ無し、読めない値は false */
+  key?: boolean
 }
 
 /** パーティメンバー定義 (#175) */
@@ -329,6 +339,10 @@ export interface SpellDef {
   multiTarget?: boolean
   /** タグ (#876。`タグ: ぬすむ`)。ジョブの変換ルールが当てる目印。書かなければ無し */
   tags?: string[]
+  /** 説明文 (#1111。`説明:`) */
+  description?: string
+  /** フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は無し */
+  fieldUse?: boolean
 }
 
 /**
@@ -531,6 +545,40 @@ export interface CharacterFormsDecl {
   catalog: string
   assets: string
   weapon_assets?: string
+}
+
+/** フィールドメニューの画面遷移の速さ (#1108)。`[メニュー: …, 文字消え=80, 枠=140, 文字出現=80]`。ms の 0 以上の整数 */
+export interface FieldMenuTransition {
+  text_out_ms?: number
+  slide_ms?: number
+  text_in_ms?: number
+}
+
+/** フィールドメニューの項目の並びと遷移 (#1108)。`items` が空 = 既定の項目（裸の `[メニュー]`） */
+export interface FieldMenuData {
+  items?: string[]
+  transition?: FieldMenuTransition
+}
+
+/** メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… 無効=true 理由=… 時間制限=不可 時間制限の理由=… 中身=path.json]` */
+export interface FieldMenuItemData {
+  id: string
+  label?: string
+  disabled?: boolean
+  reason?: string
+  /** `時間制限=可` が true、`不可` が false */
+  time_limit_allowed?: boolean
+  time_limit_reason?: string
+  /** 項目画面の中身の JSON パス（中身は読まずに透過） */
+  content?: string
+}
+
+/** 操作画像の指定 (#1108)。`[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]` */
+export interface UiImagesData {
+  hand?: string
+  select_mark?: string
+  /** 選択マークの倍率（0 より大きい） */
+  scale?: number
 }
 
 export type Event =
@@ -878,6 +926,14 @@ export type Event =
   | { FieldWalkSprite: FieldWalkSpriteData }
   /** 人物の形態の宣言 (#1104)。`[人物の形態 目録=… 素材=… 刀素材=…]`（作品に1つ） */
   | { CharacterForms: CharacterFormsDecl }
+  /** フィールドメニューの項目の並びと遷移 (#1108)。`[メニュー: …]` / 裸の `[メニュー]` */
+  | { FieldMenu: FieldMenuData }
+  /** メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… …]` */
+  | { FieldMenuItem: FieldMenuItemData }
+  /** 操作画像の指定 (#1108)。`[操作画像 手=… 選択マーク=… 倍率=2]`（作品に1つ） */
+  | { UiImages: UiImagesData }
+  /** 通貨名 (#1108)。`[通貨名: 円]` */
+  | { Currency: string }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
   | { Monster: MonsterDef }

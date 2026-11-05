@@ -468,6 +468,7 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
     let kind =
         lookup_master_string(entries, &["種別", "kind"]).unwrap_or_else(|| "その他".to_string());
     let value = |keys: &[&str]| lookup_master_string(entries, keys).filter(|v| !v.is_empty());
+    let label = format!("アイテム {id}");
     ItemDef {
         elements: collect_elements(&format!("アイテム {id}"), entries),
         id,
@@ -480,6 +481,75 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
         equip_bonus: value(&["装備時", "equip"]),
         equippable_by: collect_id_list(entries, &["装備可", "equippable_by", "equippableBy"]),
         abilities: collect_values(entries, &["わざ", "abilities"]),
+        // フィールドメニューが読む項目 (#1111)。空の値は未指定
+        count: collect_initial_count(&label, entries),
+        description: value(&["説明", "description"]),
+        category: value(&["区分", "category"]),
+        field_use: collect_field_use(&label, entries),
+        key: collect_key_flag(&label, entries),
+    }
+}
+
+/// `初期所持:` を 0 以上の整数として読む (#1111)。空は未指定、読めない値（全角数字・負数・小数を含む）は警告して未指定。
+fn collect_initial_count(label: &str, entries: &[(String, String)]) -> Option<u32> {
+    let raw = lookup_master_value(entries, &["初期所持", "count"])?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.parse::<u32>() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [{label}] の 初期所持 `{raw}` は読めないため 未指定 にした（0 以上の整数）"
+            ));
+            None
+        }
+    }
+}
+
+/// `フィールド使用:` の真偽 (#1111)。語彙は `全体化:` と同じ。空は未指定、読めない値は警告して未指定。
+fn collect_field_use(label: &str, entries: &[(String, String)]) -> Option<bool> {
+    let raw = lookup_master_value(entries, &["フィールド使用", "field_use", "fieldUse"])?.trim();
+    match parse_flag_word(raw) {
+        FlagWord::Empty => None,
+        FlagWord::Value(b) => Some(b),
+        FlagWord::Unknown => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [{label}] の フィールド使用 `{raw}` は読めないため 未指定 にした（可 / 不可）"
+            ));
+            None
+        }
+    }
+}
+
+/// `大切:` の真偽 (#1111)。語彙は `全体化:` と同じ。空は未指定、読めない値は警告して偽（いいえ）。
+fn collect_key_flag(label: &str, entries: &[(String, String)]) -> Option<bool> {
+    let raw = lookup_master_value(entries, &["大切", "key"])?.trim();
+    match parse_flag_word(raw) {
+        FlagWord::Empty => None,
+        FlagWord::Value(b) => Some(b),
+        FlagWord::Unknown => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [{label}] の 大切 `{raw}` は読めないため いいえ にした（はい / いいえ）"
+            ));
+            Some(false)
+        }
+    }
+}
+
+enum FlagWord {
+    Empty,
+    Value(bool),
+    Unknown,
+}
+
+/// `parse_multi_target_flag` と同じ語彙で真偽語を読む (#1111)。
+fn parse_flag_word(raw: &str) -> FlagWord {
+    match raw.trim().to_lowercase().as_str() {
+        "可" | "はい" | "true" | "yes" | "on" | "1" | "有効" => FlagWord::Value(true),
+        "不可" | "いいえ" | "false" | "no" | "off" | "0" | "無効" => FlagWord::Value(false),
+        "" => FlagWord::Empty,
+        _ => FlagWord::Unknown,
     }
 }
 
@@ -800,6 +870,7 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
     let multi_target = lookup_master_value(entries, &["全体化", "multi_target", "multiTarget"])
         .map(|v| parse_multi_target_flag(&id, v))
         .unwrap_or(false);
+    let field_use = collect_field_use(&format!("呪文 {id}"), entries);
     Some(SpellDef {
         id,
         name,
@@ -810,6 +881,9 @@ fn build_spell_def(id: String, entries: &[(String, String)]) -> Option<SpellDef>
         school: lookup_master_string(entries, &["系統", "school"]),
         multi_target,
         tags: collect_id_list(entries, &["タグ", "tags", "tag"]),
+        description: lookup_master_string(entries, &["説明", "description"])
+            .filter(|v| !v.is_empty()),
+        field_use,
     })
 }
 

@@ -55,6 +55,26 @@ export interface ItemDef {
      * 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
      */
     abilities?: string[];
+    /**
+     * 初期所持数 (#1111。`初期所持:` 0 以上の整数)。書かない・読めない値は None。
+     */
+    count?: number;
+    /**
+     * 説明文 (#1111。`説明:`)。生文字列で透過する。
+     */
+    description?: string;
+    /**
+     * 区分 (#1111。`区分:`)。生文字列で透過し、未知の値の扱いはフロント側。
+     */
+    category?: string;
+    /**
+     * フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+     */
+    fieldUse?: boolean;
+    /**
+     * 大切なものか (#1111。`大切: はい|いいえ`)。書かないは None、読めない値は false。JSON / TS 側のキーは `key`。
+     */
+    key?: boolean;
 }
 
 /**
@@ -290,6 +310,41 @@ export interface FieldSettingsData {
 }
 
 /**
+ * フィールドメニューの画面遷移の速さ (#1108)。`[メニュー: …, 文字消え=80, 枠=140, 文字出現=80]`。
+ * 全項目が省略可（省略 = runtime の既定）。値は ms の 0 以上の整数。
+ */
+export interface FieldMenuTransition {
+    /**
+     * 文字が消える時間（`文字消え=`。ms）
+     */
+    text_out_ms?: number;
+    /**
+     * 枠が動く時間（`枠=`。ms）
+     */
+    slide_ms?: number;
+    /**
+     * 文字が現れる時間（`文字出現=`。ms）
+     */
+    text_in_ms?: number;
+}
+
+/**
+ * フィールドメニューの項目の並びと遷移 (#1108)。`[メニュー: どうぐ, まほう, …, セーブ]` と、裸の `[メニュー]`（既定）。
+ * `items` が空 = 既定の項目（裸の `[メニュー]`、または遷移だけを書いた `[メニュー: 文字消え=80]`）。
+ * 項目 ID の重複・既定の項目名との突き合わせは parser では見ない（配線の段階）。
+ */
+export interface FieldMenuData {
+    /**
+     * 項目 ID の列（空 = 既定の項目）
+     */
+    items?: string[];
+    /**
+     * 画面遷移の速さ（書かれたときだけ）
+     */
+    transition?: FieldMenuTransition;
+}
+
+/**
  * フラッシュのエリア限定矩形 (#693)。画面全体を基準にした `0.0`〜`1.0` の比率
  * （`x`/`y` は左上原点、`w`/`h` は幅・高さ）。範囲外・負値のクランプはここでは行わず、
  * フロント側の描画時変換（`computeFlashAreaRect`、frontend/src/game/screenEffects.ts）に
@@ -300,6 +355,41 @@ export interface FlashArea {
     y: number;
     w: number;
     h: number;
+}
+
+/**
+ * メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… 無効=true 理由=… 時間制限=不可 時間制限の理由=… 中身=path.json]`。
+ * 上書きしたい項目だけ書く（`id` 以外は全部省略可。ただし1つは書く）。文字列は空白を含まない1語。
+ */
+export interface FieldMenuItemData {
+    /**
+     * 項目 ID
+     */
+    id: string;
+    /**
+     * 表示名（`ラベル=`）
+     */
+    label?: string;
+    /**
+     * true = 選べない（`無効=true`）
+     */
+    disabled?: boolean;
+    /**
+     * 選べないときの理由（`理由=`）
+     */
+    reason?: string;
+    /**
+     * 時間制限中に選べるか（`時間制限=可` が true、`不可` が false）
+     */
+    time_limit_allowed?: boolean;
+    /**
+     * 時間制限中に選んだときの理由（`時間制限の理由=`）
+     */
+    time_limit_reason?: string;
+    /**
+     * 項目画面の中身の JSON パス（`中身=`。中身は parser が読まず、パスを透過する。`field_emotions` と同じ流儀）
+     */
+    content?: string;
 }
 
 /**
@@ -577,6 +667,14 @@ export interface SpellDef {
      * それ以外の意味は無い。カンマ区切り・複数行可・重複なし。書かない呪文は None（タグ無し＝従来どおり）。
      */
     tags?: string[];
+    /**
+     * 説明文 (#1111。`説明:`)。生文字列で透過する。
+     */
+    description?: string;
+    /**
+     * フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+     */
+    fieldUse?: boolean;
 }
 
 /**
@@ -584,6 +682,25 @@ export interface SpellDef {
  * 粒は物理演算せず、経過時間から決定論的に位置を出す（描画側の責務。保存状態は種類と強さだけ）。
  */
 export type WeatherKind = "Rain" | "Snow" | "Sakura";
+
+/**
+ * 操作画像の指定 (#1108)。`[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]`（作品に1つ）。
+ * 全項目が省略可（ただし1つは書く）。パスは空白を含まない文字列で、中身は見ずに透過する。
+ */
+export interface UiImagesData {
+    /**
+     * 手のカーソルの画像（`手=`）
+     */
+    hand?: string;
+    /**
+     * 選択マークの画像（`選択マーク=`）
+     */
+    select_mark?: string;
+    /**
+     * 選択マークの倍率（`倍率=`。0 より大きい数）
+     */
+    scale?: number;
+}
 
 /**
  * 敵のサイズ区分 (#839)。占有するセルの幅 x 高さ（どちらも 1 以上）。
@@ -1387,7 +1504,7 @@ export type Direction = "Up" | "Down" | "Left" | "Right";
 
 export type Easing = "Linear" | "EaseIn" | "EaseOut" | "EaseInOut" | "EaseOutBack";
 
-export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { Emotion: { target: string; kind: string; duration_ms?: number } } | { BackgroundBoard: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Prop: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Wall: { path: string; loop?: boolean; mute?: boolean } } | "WallExit" | { StageFront: { path: string } } | "StageFrontExit" | { Weather: { kind: WeatherKind; intensity?: number } } | "WeatherExit" | { Floor: { path: string; height?: number } } | "FloorExit" | { StageTurn: { duration_ms?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation; zoom?: string; zoom_strength?: number } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { FieldMap: FieldMapData } | { Field: { scene: string; x?: number; y?: number; direction?: Direction } } | { FieldEdge: FieldEdgeData } | { FieldWarp: FieldWarpData } | { FieldShake: { amplitude_y: number; period_ms?: number } } | { FieldScroll: { image: string; speed: number; y?: number } } | { FieldAssist: FieldAssistData } | { FieldSettings: FieldSettingsData } | { FieldWalkSprite: FieldWalkSpriteData } | { CharacterForms: CharacterFormsDecl } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { BattleScript: BattleScriptDef } | { Magicite: MagiciteDef } | { Summon: SummonDef } | { Job: JobDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
+export type Event = { Dialog: { character: string | undefined; expression: string | undefined; position: string | undefined; text: string[]; voice_path?: string; font_family?: string; bubble_style?: string; fit?: boolean; depth?: number } } | { Narration: { text: string[]; voice_path?: string; font_family?: string; bubble_style?: string } } | { Background: { path: string; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number; brightness?: number } } | { Emotion: { target: string; kind: string; duration_ms?: number } } | { BackgroundBoard: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Prop: { path: string; depth?: number; flip_from?: string; flip_ms?: number } } | { Wall: { path: string; loop?: boolean; mute?: boolean } } | "WallExit" | { StageFront: { path: string } } | "StageFrontExit" | { Weather: { kind: WeatherKind; intensity?: number } } | "WeatherExit" | { Floor: { path: string; height?: number } } | "FloorExit" | { StageTurn: { duration_ms?: number } } | { Video: { path: string; position?: string; scale?: number; loop?: boolean; mute?: boolean; fade_top?: number; fade_bottom?: number; fade_left?: number; fade_right?: number } } | "VideoExit" | { EventImage: { path: string; back?: EventImageBack; fade_ms?: number; transition?: EventImageTransition; effects?: AmbientEffects } } | { EventImageExit: { fade_ms?: number } } | { Telop: { text: string; position?: TelopPosition; seconds?: number; kind?: string } } | { BackgroundColor: { color: string } } | { Bgm: { path: string | undefined; action: BgmAction; fade_ms?: number } } | { Se: { paths: string[]; fade_ms?: number; count?: number; gap_min_ms?: number; gap_max_ms?: number } } | { Blackout: { action: BlackoutAction } } | { CameraMode: { mode: CameraMode; orientation?: CameraOrientation; elevation?: CameraElevation; zoom?: string; zoom_strength?: number } } | "SceneTransition" | "PageBreak" | { Exit: { character: string; fade_ms: number | undefined; exit_direction?: StageDirection } } | { Enter: { character: string; expression?: string; position?: string; fit?: boolean; enter_direction?: StageDirection; depth?: number } } | { Wait: { ms: number } } | "WaitDisplayComplete" | { Choice: { options: ChoiceOption[]; columns?: number } } | { Flag: { name: string; value: FlagValue } } | { Condition: { flag: string; events: Event[] } } | { Jump: { target: string } } | { ExpressionChange: { character: string; expression: string } } | { RpgMap: RpgMapData } | { FieldMap: FieldMapData } | { Field: { scene: string; x?: number; y?: number; direction?: Direction } } | { FieldEdge: FieldEdgeData } | { FieldWarp: FieldWarpData } | { FieldShake: { amplitude_y: number; period_ms?: number } } | { FieldScroll: { image: string; speed: number; y?: number } } | { FieldAssist: FieldAssistData } | { FieldSettings: FieldSettingsData } | { FieldWalkSprite: FieldWalkSpriteData } | { CharacterForms: CharacterFormsDecl } | { FieldMenu: FieldMenuData } | { FieldMenuItem: FieldMenuItemData } | { UiImages: UiImagesData } | { Currency: string } | { PlayerStart: PlayerStartData } | { Npc: NpcData } | { Monster: MonsterDef } | { Item: ItemDef } | { Spell: SpellDef } | { Skill: SkillDef } | { Status: StatusDef } | { BattleScript: BattleScriptDef } | { Magicite: MagiciteDef } | { Summon: SummonDef } | { Job: JobDef } | { PartyMember: PartyMemberDef } | { RpgEvent: { name: string; commands: EventCommand[] } } | { RpgTrigger: { x?: number; y?: number; auto?: boolean; scene: string; once?: boolean } } | { Animate: { target: string; dx?: string; dy?: string; rotation?: string; scale?: number; duration_ms: number; easing?: Easing } } | { TextEffect: { target: string; effect?: TextEffectPreset; stagger_ms?: number; ms_per_char?: number; dx?: string; dy?: string; rotation?: string; scale?: number; alpha?: number; duration_ms?: number; easing?: Easing; cursor?: boolean; blink_ms?: number; cursor_color?: string } } | { Underline: { target: string; color?: string; thickness?: number; duration_ms?: number; offset?: number; easing?: Easing } } | { TitleShow: { text: string; font_family?: string; position?: string; color?: string; size?: number; x?: number; y?: number } } | { Label: { text: string; color?: string; position?: string; size?: number; id?: string; font_family?: string; align?: string; after?: string; x?: number; y?: number } } | { Image: { path: string; position?: string; shape?: string; size?: number; id?: string; x?: number; y?: number; transition?: EventImageTransition; fade_ms?: number } } | { DialogBorderless: { borderless: boolean } } | { Shake: { intensity_px?: number; duration_ms?: number } } | { Flash: { color?: string; alpha?: number; duration_ms?: number; area?: FlashArea; strobe?: number; interval_ms?: number } } | { Fade: { target?: string; color?: string; from_alpha?: number; to_alpha?: number; duration_ms?: number } } | { Spotlight: { target?: string; color?: string; radius?: number } } | "SpotlightOff" | { PaperDollOutline: { enabled: boolean; color?: string; thickness?: number } } | { Curtain: { path: string; characters_in_front: boolean } } | "CurtainUp";
 
 export type FlagValue = { Bool: boolean } | { String: string } | { Number: number };
 
