@@ -925,7 +925,14 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                         // 上のどの分岐にも消費されなかった `[...]` 行は読み捨てる。頭が未知のものは
                         // トップレベルと同じく警告を出す (#1001)。既知の頭（イベント内では解釈しない
                         // [ジャンプ: …] など）は、記法名つきの別文言で警告する (#1081)。
-                        if is_known_directive_head(cmd_line) {
+                        if is_known_directive_head(cmd_line) && !cmd_line.ends_with(']') {
+                            // 閉じ `]` がなく、コマンドとして読めなかった行 (#1081)
+                            emit_warning(&format!(
+                                "[name-name-parser] warning: {} 行目は閉じ括弧 ] がないため読み捨てた: {}",
+                                pos as i64 + 1 + line_base,
+                                truncate_for_warning(cmd_line)
+                            ));
+                        } else if is_known_directive_head(cmd_line) {
                             // 既知の記法だがイベントでは未対応（[フラグ:] [条件:] [ジャンプ:] [選択] ほか）。
                             // 黙って捨てず、記法名つきで警告する (#1081)
                             emit_warning(&format!(
@@ -8935,6 +8942,40 @@ mod unknown_directive_warning_tests {
             }
             other => panic!("expected RpgEvent, got {other:?}"),
         }
+    }
+
+    /// #1081: 閉じ `]` のない行は「未対応の記法」でなく閉じ括弧がない旨の警告になる。
+    #[test]
+    fn unclosed_bracket_inside_event_warns_missing_close() {
+        let _ = take_test_warnings();
+        let _ = parse(&format!(
+            "{HEAD}[イベント e]\n[待機: 5\n[NPC移動: x → @1,2\n[/イベント]\n"
+        ));
+        let w = take_test_warnings();
+        let w: Vec<_> = w.iter().filter(|m| m.contains("閉じ括弧")).collect();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("10 行目") && w[0].contains("[待機: 5"),
+            "{w:?}"
+        );
+        assert!(w[1].contains("11 行目"), "{w:?}");
+        assert!(unsupported_warnings().is_empty());
+    }
+
+    /// #1081: CRLF 入力でも警告の行番号は元ファイルの行番号と一致する。
+    #[test]
+    fn warning_line_numbers_are_correct_with_crlf() {
+        let _ = take_test_warnings();
+        let input = format!("{HEAD}[イベント e]\n[フラグ: k=true]\n- はい → s2\n[/イベント]\n")
+            .replace('\n', "\r\n");
+        let _ = parse(&input);
+        let w = unsupported_warnings();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("10 行目") && w[0].contains("[フラグ]"),
+            "{w:?}"
+        );
+        assert!(w[1].contains("11 行目"), "{w:?}");
     }
 
     /// #1081: 正常な [イベント]（台詞・ナレーション・待機・NPC移動・戦闘・感情）は警告ゼロで不変。
