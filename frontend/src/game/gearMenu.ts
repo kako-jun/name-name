@@ -15,6 +15,9 @@ import { equipItem, unequipItem } from './equipment'
 import {
   buy,
   canBuy,
+  canSell,
+  ownedCount,
+  sell,
   equipBlade,
   equippedBlade,
   isOwned,
@@ -33,6 +36,12 @@ export const DEFAULT_CURRENCY_NAME = '円'
 
 /** アプリストアのタブの名前（定義の `kind` と対応） */
 export const APPSTORE_TAB_LABELS = { blade: '刀', armor: '防具' } as const
+
+/** アプリストアの「売る」タブの名前 */
+export const SELL_TAB_LABEL = '売る'
+
+/** 売れる品が 1 つも無いときの案内の行 */
+export const NOTHING_TO_SELL_TEXT = '売れるものがありません（余剰の刀・防具だけ売れます）'
 
 /** そうびの 2 枠の見出し（刀=スマホ／防具=タブレット） */
 export const EQUIP_SLOT_LABELS = { blade: 'スマホ（刀）', armor: 'タブレット（防具）' } as const
@@ -246,9 +255,54 @@ function appStoreEntry(ctx: GearMenuContext, member: string, e: GearEntry): Menu
   }
 }
 
-/** アプリストアのタブ「刀／防具」。人物ごとの一覧（`entriesByParty`）。刀は選んだ人物の刀だけ・防具は誰でも買える品 */
+/** 「売る」の 1 行（持っている品）。余剰（個数 2 以上）だけ売れる。最後の 1 つは暗く（`enabled: false`）して理由を説明バーに出す */
+function sellEntry(ctx: GearMenuContext, member: string, e: GearEntry): MenuEntry {
+  const currency = ctx.currencyName ?? DEFAULT_CURRENCY_NAME
+  const name = nameOf(ctx, e.id)
+  const n = ownedCount(ctx.state, member, e.id)
+  const check = canSell(ctx.cfg, ctx.state, member, e.id)
+  const entry: MenuEntry = {
+    id: e.id,
+    label: `${name} ×${n}`,
+    ...(e.image !== undefined ? { image: e.image } : {}),
+  }
+  if (check.ok)
+    return {
+      ...entry,
+      detail: formatPrice(check.price as number, currency),
+      enabled: true,
+      description: `${name}  余りの1つを ${formatPrice(check.price as number, currency)}で売れます（持っている数 ${n}）`,
+    }
+  return {
+    ...entry,
+    detail: '売れません',
+    enabled: false,
+    description: `${name}  ${check.message ?? 'いまは売れません'}`,
+  }
+}
+
+/** アプリストアの「売る」タブ。人物ごとに、持っている刀 → 防具（定義の順）。無ければ案内の行 1 つ */
+function buildSellTab(ctx: GearMenuContext): MenuTab {
+  const by: Record<string, MenuEntry[]> = {}
+  for (const m of ctx.members) {
+    const rows: MenuEntry[] = []
+    for (const kind of ['blade', 'armor'] as const)
+      for (const e of entriesOfKind(ctx.cfg, kind, m))
+        if (ownedCount(ctx.state, m, e.id) > 0) rows.push(sellEntry(ctx, m, e))
+    safeAssign(
+      by,
+      m,
+      rows.length > 0
+        ? rows
+        : [{ label: NOTHING_TO_SELL_TEXT, enabled: false, description: NOTHING_TO_SELL_TEXT }]
+    )
+  }
+  return { label: SELL_TAB_LABEL, entries: [], entriesByParty: by, action: 'sell' }
+}
+
+/** アプリストアのタブ「刀／防具／売る」。人物ごとの一覧（`entriesByParty`）。刀は選んだ人物の刀だけ・防具は誰でも買える品 */
 export function buildAppStoreTabs(ctx: GearMenuContext): MenuTab[] {
-  return (['blade', 'armor'] as const).map((kind) => {
+  const buyTabs = (['blade', 'armor'] as const).map((kind) => {
     const by: Record<string, MenuEntry[]> = {}
     for (const m of ctx.members)
       safeAssign(
@@ -258,6 +312,29 @@ export function buildAppStoreTabs(ctx: GearMenuContext): MenuTab[] {
       )
     return { label: APPSTORE_TAB_LABELS[kind], entries: [], entriesByParty: by }
   })
+  return [...buyTabs, buildSellTab(ctx)]
+}
+
+/** 売却の結果（メニューの通知と新しい状態） */
+export interface SaleOutcome {
+  ok: boolean
+  notice: string
+  state: GearState
+  gold: number
+}
+
+/** 売る。成功したら新しい状態と所持金。余剰だけ（最後の 1 つは売れない） */
+export function saleOf(ctx: GearMenuContext, member: string, id: string): SaleOutcome {
+  const currency = ctx.currencyName ?? DEFAULT_CURRENCY_NAME
+  const r = sell(ctx.cfg, ctx.state, member, id, ctx.gold)
+  if (!r.ok)
+    return { ok: false, notice: r.message ?? 'いまは売れません', state: r.state, gold: r.gold }
+  return {
+    ok: true,
+    notice: `${nameOf(ctx, id)} を ${formatPrice(r.price as number, currency)}で 売りました`,
+    state: r.state,
+    gold: r.gold,
+  }
 }
 
 /** 購入の結果（メニューの通知と新しい状態） */

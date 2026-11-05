@@ -90,7 +90,8 @@ export interface MenuEntry {
   target?: 'single' | 'all' | 'self'
 }
 /** タブの働き。`use` = 選んで使う / `sort` = 選ぶと並べ替える / `info` = 一覧と説明バーだけ（使用・整理不可）。未指定のどうぐは先頭を `use`、他は通知だけ */
-export type MenuTabAction = 'use' | 'sort' | 'info'
+/** `sell` はアプリストアの「売る」タブ（確認窓の文と選択肢が「売る」になる）*/
+export type MenuTabAction = 'use' | 'sort' | 'info' | 'sell'
 export interface MenuTab {
   label: string
   entries: MenuEntry[]

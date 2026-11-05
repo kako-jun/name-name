@@ -98,6 +98,8 @@ export interface FieldUseRequest {
   /** 項目の id（`item` / `magic` など） */
   screen: string
   entryId?: string
+  /** 選んだタブの働き（アプリストアの `sell` = 売る。無ければ買う） */
+  tabAction?: string
   /** まほうの使い手 */
   casterId?: string
   /** 対象の人物。全体・本人のときは undefined */
@@ -355,6 +357,9 @@ export class FieldMenuScreen extends Container {
       ? this.opts.onUse?.({
           screen: st.screen,
           ...(entry.id !== undefined ? { entryId: entry.id } : {}),
+          ...(content.tabs[use.tab]?.action !== undefined
+            ? { tabAction: content.tabs[use.tab].action }
+            : {}),
           ...(use.caster >= 0 && ids[use.caster] !== undefined
             ? { casterId: ids[use.caster] }
             : {}),
@@ -630,11 +635,12 @@ export class FieldMenuScreen extends Container {
     // 確認窓
     if (sl.confirm) {
       const cf = sl.confirm
+      const selling = k === 'appstore' && content.tabs[nav.tab]?.action === 'sell'
       this.panel(C, cf.frame, lay, true)
       const label =
         k === 'save'
           ? `スロット${nav.list + 1}に上書きしますか？`
-          : this.buyMessage(listEntries(ctx, nav)[nav.list])
+          : this.buyMessage(listEntries(ctx, nav)[nav.list], selling)
       C.addChild(
         this.text(
           label,
@@ -645,7 +651,7 @@ export class FieldMenuScreen extends Container {
           'center'
         )
       )
-      const names = k === 'save' ? ['はい', 'いいえ'] : ['買う', 'やめる']
+      const names = k === 'save' ? ['はい', 'いいえ'] : [selling ? '売る' : '買う', 'やめる']
       cf.options.forEach((r, i) => {
         C.addChild(this.text(names[i], sl.fonts.row, WHITE, r.x + r.w / 2, r.y + r.h / 2, 'center'))
         if (i === nav.confirm) C.addChild(this.hand(r.x + r.w * 0.3, r.y + r.h / 2, r.h * 0.6))
@@ -768,7 +774,13 @@ export class FieldMenuScreen extends Container {
   }
 
   /** 買う確認窓の文（値段つき）。値段は一覧の右端の文字（`detail`）と同じ */
-  private buyMessage(e: { label: string; detail?: string } | undefined): string {
+  private buyMessage(e: { label: string; detail?: string } | undefined, selling = false): string {
+    if (selling)
+      return e
+        ? e.detail
+          ? `「${e.label}」を ${e.detail}で 売りますか？`
+          : `「${e.label}」を 売りますか？`
+        : '売りますか？'
     if (!e) return '買いますか？'
     return e.detail ? `「${e.label}」を ${e.detail}で買いますか？` : `「${e.label}」を買いますか？`
   }

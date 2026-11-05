@@ -242,7 +242,7 @@ describe('アプリストア・そうび (#881 段階2)', () => {
 
   it('売り物の定義があると appstore・equip に中身が入る。無いゲームは従来どおり枠だけ', () => {
     const { rt } = gearSetup()
-    expect(by(rt, 'appstore').content?.tabs?.map((t) => t.label)).toEqual(['刀', '防具'])
+    expect(by(rt, 'appstore').content?.tabs?.map((t) => t.label)).toEqual(['刀', '防具', '売る'])
     expect(Object.keys(by(rt, 'equip').content?.entriesByParty ?? {})).toEqual(['a', 'b'])
     const none = setup().rt
     expect(by(none, 'appstore').content).toBeUndefined()
@@ -287,6 +287,20 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     expect(g.equipment.a).toEqual(['sw2'])
     const head = swap.items!.find((d) => d.id === 'equip')!.content!.headerByParty!.a
     expect(head[0].value).toBe('sw2')
+  })
+  it('売る（tabAction: sell）: 余剰だけ売れて所持金が増え、最後の1つは売れない。tabAction なしは買う', () => {
+    const { rt, g } = gearSetup()
+    rt.use({ screen: 'appstore', entryId: 'vest', casterId: 'a' })
+    expect(
+      rt.use({ screen: 'appstore', entryId: 'vest', tabAction: 'sell', casterId: 'a' })!.ok
+    ).toBe(false)
+    expect(g.state.owned.a).toEqual(['vest'])
+    const goldBefore = g.gold
+    g.state = { ...g.state, owned: { a: ['vest', 'vest'] } }
+    const out = rt.use({ screen: 'appstore', entryId: 'vest', tabAction: 'sell', casterId: 'a' })!
+    expect(out.ok).toBe(true)
+    expect(g.gold).toBeGreaterThan(goldBefore)
+    expect(g.state.owned.a).toEqual(['vest'])
   })
   it('防具は付け外しできる', () => {
     const { rt, g } = gearSetup()

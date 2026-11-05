@@ -4,8 +4,10 @@
  * - 定義 `GearShopConfig`（設定 JSON の `gearShop`）: 売り物の一覧 `entries`（品の `id` は `[アイテム]` の id）と倍率 `multiplier`（既定 2）。
  *   `kind: 'blade'`（刀。人物ごとに別。`owner` 必須。値段は買うごとに倍々）／`kind: 'armor'`（防具。固定価格 `price`。倍々にならない）。
  *   刀の値段 = `basePrice` × `multiplier`^(その人物の購入済みの刀の本数)。`basePrice` / `price` が無い品は購入不可（値段を創作しない）。
- * - 状態 `GearState`（`RpgSaveState.gear`）: `owned`（人物 id → 購入済みの品 id の集合）と `blade`（人物 id → 装備中の刀 id）。
- *   売却なし（購入済みは戻らない）。他人の刀（`owner` が別の人物）は買えず・装備できない。購入解禁は定義側のフラグ `unlockFlag`（解禁前は購入不可＋理由）。
+ * - 状態 `GearState`（`RpgSaveState.gear`）: `owned`（人物 id → 持っている品 id の列。**同じ id を重ねて書いた数が個数**＝多重集合。
+ *   旧セーブ（重複なしの配列）はそのまま個数 1 の品として読める＝セーブの形は変えない）と `blade`（人物 id → 装備中の刀 id）。
+ *   買う（`buy`）は未所持の種類だけ。宝箱・イベントの入手（`grant`）は個数を増やす。売る（`sell`、段階5）のは余剰（個数 2 以上）だけで、
+ *   最後の 1 つは売れない（一度手に入れた品は最低 1 つずつ持つ）。他人の刀（`owner` が別の人物）は買えず・装備できない。購入解禁は定義側のフラグ `unlockFlag`（解禁前は購入不可＋理由）。
  * - 装備列（`RpgSaveState.equipment`）の計算は `equipment.ts` の `equipItem` を再利用する（`equipBlade`）。ここで重複実装しない。
  * - 刀の `abilities`（段階3）: 装備中の刀の特技 id だけが戦闘の「わざ」に出る（`skillsForMember`。仕様上は 1 刀 1 アビリティで、配列は一般化）。
  *
@@ -54,7 +56,7 @@ export interface GearShopConfig {
 
 /** 人物ごとの所有と装備中の刀（セーブ対象） */
 export interface GearState {
-  /** 人物 id → 購入済みの品 id（買った順・重複なし） */
+  /** 人物 id → 持っている品 id の列（入手した順。同じ id が n 回あれば個数 n。旧セーブの重複なしの配列は個数 1 として読める） */
   owned: Record<string, string[]>
   /** 人物 id → 装備中の刀 id（無ければ刀を装備していない） */
   blade: Record<string, string>
@@ -73,7 +75,9 @@ export type GearBlockReason =
   | 'notBlade' // 刀ではない品（刀の持ち替えのみ）
   | 'locked' // 解禁前
   | 'notEnoughGold' // 所持金不足
-  | 'notOwned' // 未購入の品は装備できない（装備のみ）
+  | 'notOwned' // 未購入の品は装備できない（装備のみ）・売れない（売るのみ）
+  | 'last' // 最後の 1 つは売れない（売るのみ）
+  | 'badCount' // 個数が 1 以上の整数でない（入手のみ）
 
 /** 購入可否の判定結果 */
 export interface BuyCheck {
@@ -102,6 +106,8 @@ const MESSAGES: Record<GearBlockReason, string> = {
   locked: 'まだ買えません',
   notEnoughGold: '所持金が足りません',
   notOwned: 'まだ買っていません',
+  last: '最後の1つは売れません',
+  badCount: '個数が正しくありません',
 }
 
 const block = (reason: GearBlockReason, price?: number): BuyCheck => ({
@@ -124,18 +130,24 @@ export function findEntry(cfg: GearShopConfig, id: string): GearEntry | undefine
   return cfg.entries.find((e) => e.id === id)
 }
 
-/** 人物の購入済みの品 id */
+/** 人物の持っている品 id（種類。個数にかかわらず 1 回ずつ。入手した順） */
 export function ownedIds(state: GearState, member: string): readonly string[] {
-  return hasOwn(state.owned, member) ? state.owned[member] : []
+  return hasOwn(state.owned, member) ? [...new Set(state.owned[member])] : []
 }
 
-/** 購入済みか */
+/** 人物が持っている品の個数（持っていなければ 0） */
+export function ownedCount(state: GearState, member: string, id: string): number {
+  return hasOwn(state.owned, member) ? state.owned[member].filter((x) => x === id).length : 0
+}
+
+/** 持っているか（個数 1 以上） */
 export function isOwned(state: GearState, member: string, id: string): boolean {
-  return ownedIds(state, member).includes(id)
+  return ownedCount(state, member, id) > 0
 }
 
 /**
- * 人物の持っている刀の種類数（定義にある刀だけ、刀ごとの有無で数える。同じ刀の個数は関係しない。購入済み ID の集合は重複を持たない）
+ * 人物の持っている刀の**種類数**（定義にある刀だけ。個数 1 以上の刀の id の数。個数ではない：同じ刀を 2 本持っても 1 と数える）。
+ * 刀の値段の段階はこれで決まる（売っても減らない＝最後の 1 つは売れないので）
  */
 export function ownedBladeCount(cfg: GearShopConfig, state: GearState, member: string): number {
   return ownedIds(state, member).filter((id) => findEntry(cfg, id)?.kind === 'blade').length
@@ -233,6 +245,110 @@ export function buy(
   return { ...check, state: next, gold: gold - (check.price as number) }
 }
 
+/** 入手の結果 */
+export interface GrantResult {
+  ok: boolean
+  reason?: GearBlockReason
+  message?: string
+  /** 入手後の状態（失敗時は入力と同じ内容の複製） */
+  state: GearState
+}
+
+/**
+ * 買わない入手（宝箱・イベント。純関数。入力は変えない）。個数を `count`（既定 1）増やす。重複して持てる。
+ * 売り物にない id・他人の品（持ち主が別の刀・防具）・個数が 1 以上の整数でないときは拒否。値段・解禁フラグ・所持金は関係しない
+ */
+export function grant(
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string,
+  id: string,
+  count = 1
+): GrantResult {
+  const next = cloneState(state)
+  const fail = (reason: GearBlockReason): GrantResult => ({
+    ok: false,
+    reason,
+    message: MESSAGES[reason],
+    state: next,
+  })
+  const e = findEntry(cfg, id)
+  if (!e) return fail('unknown')
+  if (e.kind === 'blade' && e.owner !== member) return fail('otherOwner')
+  if (e.kind === 'armor' && e.owner !== undefined && e.owner !== member) return fail('otherOwner')
+  if (!Number.isSafeInteger(count) || count < 1 || count > 9999) return fail('badCount')
+  const list = hasOwn(next.owned, member) ? next.owned[member] : []
+  safeAssign(next.owned, member, [...list, ...Array<string>(count).fill(id)])
+  return { ok: true, state: next }
+}
+
+/** 売却可否の判定結果 */
+export interface SellCheck {
+  ok: boolean
+  /** 売値（円）。売れるときだけ */
+  price?: number
+  reason?: GearBlockReason
+  message?: string
+}
+
+export interface SellResult extends SellCheck {
+  /** 売却後の状態（失敗時は入力と同じ内容の複製） */
+  state: GearState
+  /** 売却後の所持金（失敗時は変わらない） */
+  gold: number
+}
+
+/**
+ * 売値（円）。刀は「いま買うとしたらの値段」の半額（= 持っている種類数 k 本目の値段）、防具は固定価格の半額（切り捨て）。
+ * 入手手段（買った・宝箱）は関係しない。値段が決まっていない・計算できないは undefined。
+ * 売っても種類数は減らない（最後の 1 つは売れない）ので、売値も次に買う値段も変わらない
+ */
+export function sellPriceOf(
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string,
+  id: string
+): number | undefined {
+  const p = computePrice(cfg, state, member, id)
+  return typeof p === 'number' ? Math.floor(p / 2) : undefined
+}
+
+/** 売れるか。理由の優先順: 売り物にない → 他人の品 → 未所持 → 最後の 1 つ → 値段未決 → 計算不能 */
+export function canSell(
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string,
+  id: string
+): SellCheck {
+  const e = findEntry(cfg, id)
+  if (!e) return block('unknown')
+  if (e.kind === 'blade' && e.owner !== member) return block('otherOwner')
+  if (e.kind === 'armor' && e.owner !== undefined && e.owner !== member) return block('otherOwner')
+  const n = ownedCount(state, member, id)
+  if (n === 0) return block('notOwned')
+  if (n === 1) return block('last')
+  const price = computePrice(cfg, state, member, id)
+  if (price === 'unset') return block('unbuyable')
+  if (price === 'overflow') return block('uncomputable')
+  return { ok: true, price: Math.floor(price / 2) }
+}
+
+/** 売る（純関数。入力は変えない）。余剰（個数 2 以上）を 1 つ減らし、売値を所持金に足す。最後の 1 つは売れない */
+export function sell(
+  cfg: GearShopConfig,
+  state: GearState,
+  member: string,
+  id: string,
+  gold: number
+): SellResult {
+  const check = canSell(cfg, state, member, id)
+  const next = cloneState(state)
+  if (!check.ok) return { ...check, state: next, gold }
+  const list = next.owned[member]
+  list.splice(list.lastIndexOf(id), 1)
+  return { ...check, state: next, gold: gold + (check.price as number) }
+}
+
 /** 刀の持ち替えの結果 */
 export interface EquipBladeResult {
   ok: boolean
@@ -298,7 +414,7 @@ export interface ResolvedGear {
 }
 
 /**
- * セーブから読んだ状態を定義と突き合わせる。定義にない品・他人の刀・重複は警告して捨て、
+ * セーブから読んだ状態を定義と突き合わせる。定義にない品・他人の刀は警告して捨て（重複は個数として残す）、
  * 未購入の刀を「装備中」にしているものは装備中を外す（警告）。
  * 装備列 `equipment`（`RpgSaveState.equipment`）を渡すと、外した刀（定義から消えた・持ち主が変わった・未購入）の id を
  * その人物の列からも除いた `equipment` を返す（入力は変えない）。刀以外の id は触らない
@@ -328,8 +444,7 @@ export function resolveGear(
       // 防御: パースは owner なしの刀を捨てるので通常は届かない（手で組んだ定義のため残す）
       else if (e.kind === 'blade' && e.owner === undefined)
         warnings.push(`gear.owned.${member} '${id}' は持ち主のない刀です（無視）`)
-      else if (kept.includes(id)) warnings.push(`gear.owned.${member} '${id}' が重複しています`)
-      else kept.push(id)
+      else kept.push(id) // 重複は個数として数える（旧仕様は警告して捨てていた）
     }
     safeAssign(state.owned, member, kept)
   }
@@ -525,7 +640,8 @@ export function parseGearShopConfig(raw: unknown): ParsedGearShop {
 /** セーブの `gear` の形の検査（定義との突き合わせは `resolveGear`）。不正なら理由、正常なら null */
 export function checkGearState(raw: unknown): string | null {
   if (!isObj(raw)) return 'gear はオブジェクトが必要です'
-  if (!isObj(raw.owned)) return 'gear.owned はオブジェクト（人物 id → 品 id の配列）が必要です'
+  if (!isObj(raw.owned))
+    return 'gear.owned はオブジェクト（人物 id → 品 id の配列。同じ id の数が個数）が必要です'
   for (const [k, v] of Object.entries(raw.owned))
     if (!Array.isArray(v) || !v.every((x) => typeof x === 'string'))
       return `gear.owned.${k} は文字列の配列が必要です`

@@ -7,7 +7,12 @@ import {
   emptyGearState,
   equipBlade,
   equippedBlade,
+  canSell,
+  grant,
   ownedBladeCount,
+  ownedCount,
+  sell,
+  sellPriceOf,
   parseGearShopConfig,
   priceOf,
   resolveGear,
@@ -306,14 +311,15 @@ describe('resolveGear（セーブと定義の突き合わせ）', () => {
     const saved: GearState = { owned: { p1: ['a1', 'vest'] }, blade: { p1: 'a1' } }
     expect(resolveGear(saved, cfg)).toEqual({ state: saved, warnings: [] })
   })
-  it('定義にない品・他人の刀・重複は捨て、未購入の装備中は外す', () => {
+  it('定義にない品・他人の刀は捨て（重複は個数として残す）、未購入の装備中は外す', () => {
     const r = resolveGear(
       { owned: { p1: ['a1', 'a1', 'zzz', 'b1'] }, blade: { p1: 'a2', p2: 'b1' } },
       cfg
     )
-    expect(r.state.owned.p1).toEqual(['a1'])
+    expect(r.state.owned.p1).toEqual(['a1', 'a1'])
+    expect(ownedCount(r.state, 'p1', 'a1')).toBe(2)
     expect(r.state.blade).toEqual({})
-    expect(r.warnings).toHaveLength(5)
+    expect(r.warnings).toHaveLength(4)
   })
 })
 
@@ -595,5 +601,154 @@ describe('セーブ往復（RpgSaveState.gear）', () => {
     const r = parseRpgSave(declared({ gear: { owned: { p1: [3] }, blade: {} } }))
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toMatch(/gear\.owned\.p1/)
+  })
+})
+
+// ---- 段階5: 宝箱の入手（grant）・売却（sell） ----
+
+const st = (owned: Record<string, string[]>): GearState => ({ owned, blade: {} })
+
+describe('grant（買わない入手）', () => {
+  it('個数が増える。重複して持てる。種類数は変わらない', () => {
+    let s = st({ p1: ['a1'] })
+    const r = grant(cfg, s, 'p1', 'a1')
+    expect(r.ok).toBe(true)
+    s = r.state
+    expect(ownedCount(s, 'p1', 'a1')).toBe(2)
+    expect(ownedBladeCount(cfg, s, 'p1')).toBe(1)
+    expect(priceOf(cfg, s, 'p1', 'a2')).toBe(200)
+  })
+  it('未所持の刀を入手すると種類数が増え次の値段が上がる。個数指定も可', () => {
+    const r = grant(cfg, st({}), 'p1', 'a1', 3)
+    expect(ownedCount(r.state, 'p1', 'a1')).toBe(3)
+    expect(ownedBladeCount(cfg, r.state, 'p1')).toBe(1)
+    const r2 = grant(cfg, r.state, 'p1', 'a2')
+    expect(priceOf(cfg, r2.state, 'p1', 'a3')).toBe(400)
+  })
+  it('防具も入手できる（持ち主なしの防具は誰でも）', () => {
+    expect(ownedCount(grant(cfg, st({}), 'p2', 'vest').state, 'p2', 'vest')).toBe(1)
+  })
+  it('異常: 定義にない・他人の刀・不正な個数は拒否し状態を変えない', () => {
+    const base = st({ p1: ['a1'] })
+    expect(grant(cfg, base, 'p1', 'zzz').reason).toBe('unknown')
+    expect(grant(cfg, base, 'p1', 'b1').reason).toBe('otherOwner')
+    for (const n of [0, -1, 1.5, NaN, 10000])
+      expect(grant(cfg, base, 'p1', 'a1', n).reason).toBe('badCount')
+    const r = grant(cfg, base, 'p1', 'b1')
+    expect(r.ok).toBe(false)
+    expect(r.state).toEqual(base)
+    expect(r.state).not.toBe(base)
+  })
+  it('入力は変えない', () => {
+    const base = st({ p1: ['a1'] })
+    grant(cfg, base, 'p1', 'a1')
+    expect(base.owned.p1).toEqual(['a1'])
+  })
+  it('買った刀を宝箱でかぶって売っても、買値以上が戻る', () => {
+    const b = buy(cfg, st({}), 'p1', 'a1', 1000)
+    expect(b.price).toBe(100)
+    const g = grant(cfg, b.state, 'p1', 'a1')
+    const s = sell(cfg, g.state, 'p1', 'a1', b.gold)
+    expect(s.ok).toBe(true)
+    expect(s.price).toBeGreaterThanOrEqual(b.price as number)
+    expect(s.price).toBe(100) // k=1 本目の値段 = 基準額
+  })
+})
+
+describe('sell（余剰の売却）', () => {
+  it('余剰は売れる。個数 -1・所持金 +売値。最後の1つは残る', () => {
+    const r = sell(cfg, st({ p1: ['a1', 'a1'] }), 'p1', 'a1', 50)
+    expect(r.ok).toBe(true)
+    expect(r.price).toBe(100)
+    expect(r.gold).toBe(150)
+    expect(ownedCount(r.state, 'p1', 'a1')).toBe(1)
+  })
+  it('最後の1つは売れない（reason last・日本語）。未所持は売れない', () => {
+    const base = st({ p1: ['a1'] })
+    const r = sell(cfg, base, 'p1', 'a1', 50)
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe('last')
+    expect(r.message).toBe('最後の1つは売れません')
+    expect(r.gold).toBe(50)
+    expect(r.state).toEqual(base)
+    expect(sell(cfg, base, 'p1', 'a2', 50).reason).toBe('notOwned')
+  })
+  it('異常: 定義にない・他人の刀・値段なし', () => {
+    const base = st({ p1: ['a1', 'a1', 'nobase', 'nobase'] })
+    expect(canSell(cfg, base, 'p1', 'zzz').reason).toBe('unknown')
+    expect(canSell(cfg, base, 'p1', 'b1').reason).toBe('otherOwner')
+    expect(canSell(cfg, base, 'p1', 'nobase').reason).toBe('unbuyable')
+    expect(sellPriceOf(cfg, base, 'p1', 'nobase')).toBeUndefined()
+  })
+  it('刀の売値 = 持っている種類数 k 本目の値段（k=1〜5 で 1 / 2 / 4 / 8 / 16 倍、基準額 10,000）', () => {
+    const big: GearShopConfig = {
+      multiplier: 2,
+      entries: ['a1', 'a2', 'a3', 'a4', 'a5'].map((id) => ({
+        id,
+        kind: 'blade' as const,
+        owner: 'p1',
+        basePrice: 10000,
+      })),
+    }
+    const ids = ['a1', 'a2', 'a3', 'a4', 'a5']
+    const expected = [10000, 20000, 40000, 80000, 160000]
+    ids.forEach((_, i) => {
+      const owned = ids.slice(0, i + 1)
+      const state = st({ p1: [...owned, owned[0]] })
+      expect(sell(big, state, 'p1', 'a1', 0).price).toBe(expected[i])
+    })
+  })
+  it('倍率 3 でも式は「いま買う値段の半額」から導く', () => {
+    const c3: GearShopConfig = { ...cfg, multiplier: 3 }
+    // k=2 → いま買う値段 100*9=900 → 450
+    expect(sellPriceOf(c3, st({ p1: ['a1', 'a1', 'a2'] }), 'p1', 'a1')).toBe(450)
+  })
+  it('防具は固定価格の半額（奇数は切り捨て）', () => {
+    const c: GearShopConfig = { multiplier: 2, entries: [{ id: 'v', kind: 'armor', price: 5001 }] }
+    expect(sell(c, st({ p1: ['v', 'v'] }), 'p1', 'v', 0).price).toBe(2500)
+    expect(sell(cfg, st({ p1: ['vest', 'vest'] }), 'p1', 'vest', 0).price).toBe(400)
+  })
+  it('売っても種類数・次に買う値段は変わらない', () => {
+    const s0 = st({ p1: ['a1', 'a1', 'a2'] })
+    const before = priceOf(cfg, s0, 'p1', 'a3')
+    const r = sell(cfg, s0, 'p1', 'a1', 0)
+    expect(ownedBladeCount(cfg, r.state, 'p1')).toBe(2)
+    expect(priceOf(cfg, r.state, 'p1', 'a3')).toBe(before)
+    // 続けて売っても最後の1つは売れない
+    expect(sell(cfg, r.state, 'p1', 'a1', 0).reason).toBe('last')
+  })
+  it('装備中の刀でも余剰は売れる。装備は外れない', () => {
+    const s0: GearState = { owned: { p1: ['a1', 'a1'] }, blade: { p1: 'a1' } }
+    const r = sell(cfg, s0, 'p1', 'a1', 0)
+    expect(r.ok).toBe(true)
+    expect(r.state.blade).toEqual({ p1: 'a1' })
+  })
+  it('入力は変えない', () => {
+    const s0 = st({ p1: ['a1', 'a1'] })
+    sell(cfg, s0, 'p1', 'a1', 0)
+    expect(s0.owned.p1).toEqual(['a1', 'a1'])
+  })
+})
+
+describe('個数のセーブ互換・往復', () => {
+  it('checkGearState: 重複ありも正常。旧セーブ（重複なし）は個数 1', () => {
+    expect(checkGearState({ owned: { p1: ['a1', 'a1'] }, blade: {} })).toBeNull()
+    const old = resolveGear({ owned: { p1: ['a1', 'vest'] }, blade: {} }, cfg)
+    expect(ownedCount(old.state, 'p1', 'a1')).toBe(1)
+    expect(ownedCount(old.state, 'p1', 'vest')).toBe(1)
+    expect(old.warnings).toEqual([])
+  })
+  it('resolveGear: 個数は往復で保たれ、他人の刀・定義にない品は捨てる', () => {
+    const saved = st({ p1: ['a1', 'a1', 'a1', 'vest', 'vest'] })
+    const r = resolveGear(JSON.parse(JSON.stringify(saved)), cfg)
+    expect(ownedCount(r.state, 'p1', 'a1')).toBe(3)
+    expect(ownedCount(r.state, 'p1', 'vest')).toBe(2)
+    expect(ownedBladeCount(cfg, r.state, 'p1')).toBe(1)
+    const bad = resolveGear(st({ p1: ['b1', 'b1', 'zzz', 'zzz'] }), cfg)
+    expect(bad.state.owned.p1).toEqual([])
+    expect(bad.warnings).toHaveLength(4)
+  })
+  it('gear キーなしのセーブは空', () => {
+    expect(resolveGear(undefined, cfg).state).toEqual(emptyGearState())
   })
 })

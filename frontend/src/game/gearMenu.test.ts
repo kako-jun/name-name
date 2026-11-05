@@ -10,6 +10,7 @@ import {
   formatPrice,
   gearRoster,
   purchase,
+  saleOf,
   type GearMenuContext,
 } from './gearMenu'
 import { emptyGearState, type GearShopConfig, type GearState } from './gearShop'
@@ -65,7 +66,7 @@ describe('formatPrice / 差分の文', () => {
 describe('buildAppStoreTabs（人物ごとの一覧）', () => {
   it('タブは刀・防具。刀は選んだ人物の刀だけ、防具は誰でも', () => {
     const tabs = buildAppStoreTabs(ctx())
-    expect(tabs.map((t) => t.label)).toEqual(['刀', '防具'])
+    expect(tabs.map((t) => t.label)).toEqual(['刀', '防具', '売る'])
     expect(tabs[0].entriesByParty!.p1.map((e) => e.id)).toEqual(['a1', 'a2', 'nobase'])
     expect(tabs[0].entriesByParty!.p2.map((e) => e.id)).toEqual(['b1', 'locked'])
     expect(tabs[1].entriesByParty!.p1.map((e) => e.id)).toEqual(['vest', 'vest2', 'vest0'])
@@ -386,5 +387,39 @@ describe('レビュー対応 (#881 段階2)', () => {
     const e = buildAppStoreTabs(ctx({ cfg: cfg2 }))[1].entriesByParty!.p1
     expect(e[0].description).toContain('香林坊で話を聞くと買えます')
     expect(e[1].description).toContain('まだ買えません')
+  })
+})
+
+describe('アプリストアの「売る」タブ（段階5）', () => {
+  const sellState = (): GearState => ({
+    owned: { p1: ['a1', 'a1', 'a2', 'vest', 'vest'], p2: [] },
+    blade: {},
+  })
+  it('タブは「売る」で action=sell。持っている品だけ並び、余剰は売値つき・最後の1つは灰色＋理由', () => {
+    const tab = buildAppStoreTabs(ctx({ state: sellState() }))[2]
+    expect(tab.label).toBe('売る')
+    expect(tab.action).toBe('sell')
+    const rows = tab.entriesByParty!.p1
+    expect(rows.map((e) => e.id)).toEqual(['a1', 'a2', 'vest'])
+    expect(rows[0]).toMatchObject({ enabled: true, label: '正宗 ×2', detail: '200円' })
+    expect(rows[1]).toMatchObject({ enabled: false, label: '村正 ×1', detail: '売れません' })
+    expect(rows[1].description).toContain('最後の1つは売れません')
+    expect(rows[2]).toMatchObject({ enabled: true, detail: '400円' })
+  })
+  it('何も持っていない人物には案内の行が 1 つ（選べない）', () => {
+    const rows = buildAppStoreTabs(ctx({ state: sellState() }))[2].entriesByParty!.p2
+    expect(rows).toHaveLength(1)
+    expect(rows[0].enabled).toBe(false)
+    expect(rows[0].description).toContain('余剰')
+  })
+  it('saleOf: 売ると所持金が増え個数が減る。最後の1つは拒否', () => {
+    const r = saleOf(ctx({ state: sellState(), gold: 10 }), 'p1', 'a1')
+    expect(r.ok).toBe(true)
+    expect(r.gold).toBe(210)
+    expect(r.notice).toContain('200円で 売りました')
+    const again = saleOf(ctx({ state: r.state, gold: r.gold }), 'p1', 'a1')
+    expect(again.ok).toBe(false)
+    expect(again.gold).toBe(210)
+    expect(again.notice).toBe('最後の1つは売れません')
   })
 })
