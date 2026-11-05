@@ -1188,6 +1188,108 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&line);
                 prev_was_dialog_or_text = false;
             }
+            Event::FieldAssist(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[補助通行 条件={}", d.conditions.join(","));
+                if let Some(v) = &d.except {
+                    line.push_str(&format!(" 除く={v}"));
+                }
+                if let Some(v) = &d.ghost {
+                    line.push_str(&format!(" 幽霊={v}"));
+                }
+                if let Some(v) = d.speed_scale {
+                    line.push_str(&format!(" 速度倍率={v}"));
+                }
+                if let Some(v) = d.opacity {
+                    line.push_str(&format!(" 濃さ={v}"));
+                }
+                if let Some(v) = d.behind_px {
+                    line.push_str(&format!(" 後ろ={v}"));
+                }
+                if let Some(v) = d.fade_ms {
+                    line.push_str(&format!(" フェード={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldSettings(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = String::from("[フィールド設定");
+                if let Some(v) = d.speed {
+                    line.push_str(&format!(" 速度={v}"));
+                }
+                if let Some(v) = d.edge_threshold {
+                    line.push_str(&format!(" 端のしきい値={v}"));
+                }
+                if let Some(c) = d.edge_contact {
+                    let name = match c {
+                        EdgeContact::Body => "身体",
+                        EdgeContact::Foot => "足元",
+                    };
+                    line.push_str(&format!(" 端の接触={name}"));
+                }
+                if let Some(v) = d.ms_per_char {
+                    line.push_str(&format!(" 文字間隔={v}"));
+                }
+                if let Some(v) = d.weapon_scale {
+                    line.push_str(&format!(" 刀の倍率={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldWalkSprite(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let kind = match d.kind {
+                    WalkSpriteKind::Player => "主人公",
+                    WalkSpriteKind::Companion => "同行者",
+                };
+                let mut line = format!("[歩行絵 {kind}");
+                if let Some(v) = &d.character {
+                    line.push_str(&format!(" 人物={v}"));
+                }
+                if let Some(v) = &d.form {
+                    line.push_str(&format!(" 形態={v}"));
+                }
+                if let Some(v) = d.height {
+                    line.push_str(&format!(" 高さ={v}"));
+                }
+                if let Some(v) = d.frame_ms {
+                    line.push_str(&format!(" コマ長={v}"));
+                }
+                if let Some(c) = &d.cycle {
+                    let list: Vec<String> = c.iter().map(u32::to_string).collect();
+                    line.push_str(&format!(" 周期={}", list.join(",")));
+                }
+                if let Some(v) = d.idle_frame {
+                    line.push_str(&format!(" 停止={v}"));
+                }
+                if let Some(v) = &d.name {
+                    line.push_str(&format!(" 名前={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::CharacterForms(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[人物の形態 目録={} 素材={}", d.catalog, d.assets);
+                if let Some(v) = &d.weapon_assets {
+                    line.push_str(&format!(" 刀素材={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
             Event::PlayerStart(p) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1432,6 +1534,15 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 }
                 if let Some(j) = &p.jobs {
                     out.push_str(&format!("ジョブ: {}\n", j.join(", ")));
+                }
+                if let Some(v) = &p.character {
+                    out.push_str(&format!("人物: {v}\n"));
+                }
+                if let Some(v) = &p.form {
+                    out.push_str(&format!("形態: {v}\n"));
+                }
+                if let Some(v) = &p.weapon {
+                    out.push_str(&format!("刀: {v}\n"));
                 }
                 out.push_str("[/パーティ]\n");
                 prev_was_dialog_or_text = false;

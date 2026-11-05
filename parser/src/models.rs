@@ -472,6 +472,121 @@ pub struct FieldWarpData {
     pub timing_ms: Option<[u32; 3]>,
 }
 
+/// 補助通行の設定 (#1104)。`[補助通行 条件=a,b 除く=… 幽霊=… 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]`（作品に1つ）。
+/// 条件以外は省略可（省略 = runtime の既定）。フラグ名は生文字列のまま透過し、解決は runtime 側。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldAssistData {
+    /// すべて真のとき橙のセルを通れる（`条件=`。`,` 区切り、1個以上）
+    pub conditions: Vec<String>,
+    /// 真の間は条件が成り立っていても通れない（`除く=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub except: Option<String>,
+    /// 真の間は同行者が半透明で一人で通る（`幽霊=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ghost: Option<String>,
+    /// 押されている間の速さの倍率（`速度倍率=`。0 より大きい）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_scale: Option<f64>,
+    /// ghost のときの同行者の不透明度（`濃さ=`。0..=1）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    /// 同行者が主人公の後ろに立つ距離（`後ろ=`。背景 px、0 より大きい）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind_px: Option<f64>,
+    /// 現れる・消えるのにかかる時間（`フェード=`。ms、0 以上）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_ms: Option<f64>,
+}
+
+/// 端に触れたとみなす部位 (#1104)。`端の接触=身体` / `端の接触=足元`（`body` / `foot` も可）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum EdgeContact {
+    Body,
+    Foot,
+}
+
+/// フィールドの共通設定 (#1104)。`[フィールド設定 速度=260 端のしきい値=6 端の接触=身体 文字間隔=30 刀の倍率=2]`（作品に1つ）。
+/// 全項目が省略可（ただし1つは書く）。省略 = runtime の既定。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldSettingsData {
+    /// 歩く速さ（`速度=`。0 より大きい）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
+    /// 端の出口に反応する距離（`端のしきい値=`。0 より大きい）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_threshold: Option<f64>,
+    /// 端に触れたとみなす部位（`端の接触=`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_contact: Option<EdgeContact>,
+    /// 会話窓の 1 文字あたり ms（`文字間隔=`。0..=1000）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms_per_char: Option<f64>,
+    /// 刀の倍率（`刀の倍率=`。1 以上）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapon_scale: Option<f64>,
+}
+
+/// 歩行絵の対象 (#1104)。`主人公` / `同行者`（NPC は `[NPC]` 側の規則で指定する）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum WalkSpriteKind {
+    Player,
+    Companion,
+}
+
+/// 主人公・同行者の歩行絵の指定 (#1104)。
+/// `[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]` /
+/// `[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]`。全項目が省略可（ただし1つは書く）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldWalkSpriteData {
+    pub kind: WalkSpriteKind,
+    /// 人物（`人物=`。台帳の人物 ID など。生文字列で透過）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<String>,
+    /// 形態（`形態=`。生文字列で透過）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<String>,
+    /// 高さ（`高さ=`。背景 px、0 より大きい）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    /// 1 コマの長さ（`コマ長=`。ms、0 より大きい）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_ms: Option<f64>,
+    /// 歩行周期（`周期=0,1,2,1`。0..=2 の整数を 1〜16 個）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<Vec<u32>>,
+    /// 停止コマ（`停止=`。0..=2）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_frame: Option<u32>,
+    /// 同行者の名前（`名前=`。`[感情:]` の対象名。同行者のみ）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// 人物の形態の宣言 (#1104)。`[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]`（作品に1つ）。
+/// 目録は台帳生成物のパス参照（`field_emotions` と同じく中身は parser が読まず、パスを透過する）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct CharacterFormsDecl {
+    /// 目録の JSON パス（`目録=`）
+    pub catalog: String,
+    /// 人物の素材のルート（`素材=`）
+    pub assets: String,
+    /// 刀の素材のルート（`刀素材=`。任意）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapon_assets: Option<String>,
+}
+
 /// モンスター定義 (#174)。
 ///
 /// 各章の `## data: マスター` シーン内に `[モンスター <id>] ... [/モンスター]` で書く。
@@ -707,6 +822,15 @@ pub struct PartyMemberDef {
     /// 現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。定義の無い id・候補に無いジョブは runtime が警告して無視する。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jobs: Option<Vec<String>>,
+    /// フィールドで歩く人物 (#1104。`人物:`)。台帳の人物 ID など。生文字列で透過し、解決は runtime 側。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<String>,
+    /// フィールドで歩くときの形態 (#1104。`形態:`)。生文字列で透過。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<String>,
+    /// 持つ刀 (#1104。`刀:`)。生文字列で透過。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapon: Option<String>,
 }
 
 /// パーティメンバーの呪文習得スロット (#175)
@@ -1530,6 +1654,14 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         y: Option<f64>,
     },
+    /// 補助通行の設定 (#1104)。`[補助通行 条件=a,b …]`（作品に1つ）。
+    FieldAssist(FieldAssistData),
+    /// フィールドの共通設定 (#1104)。`[フィールド設定 速度=260 …]`（作品に1つ）。
+    FieldSettings(FieldSettingsData),
+    /// 主人公・同行者の歩行絵の指定 (#1104)。`[歩行絵 主人公|同行者 …]`。
+    FieldWalkSprite(FieldWalkSpriteData),
+    /// 人物の形態の宣言 (#1104)。`[人物の形態 目録=… 素材=… 刀素材=…]`（作品に1つ）。
+    CharacterForms(CharacterFormsDecl),
     PlayerStart(PlayerStartData),
     Npc(NpcData),
     /// モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックで書く。
