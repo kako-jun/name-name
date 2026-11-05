@@ -59,7 +59,7 @@ describe('battleResult (#745 分割4)', () => {
 describe('勝利リザルトのメッセージ (#1039)', () => {
   const base = { gold: 0, exp: 0, learnedSpellNames: [], lootNames: [] }
 
-  it('順: お金 → 経験値 → 覚えた呪文 → 戦利品（最後）', () => {
+  it('順: 勝利の言葉 → お金 → 経験値 → 覚えた呪文 → 戦利品（最後）', () => {
     const m = buildResultMessages({
       gold: 12,
       exp: 34,
@@ -67,6 +67,7 @@ describe('勝利リザルトのメッセージ (#1039)', () => {
       lootNames: ['ポーション', 'エリクサー'],
     })
     expect(m).toEqual([
+      RESULT_TEXT.victory,
       RESULT_TEXT.gold(12),
       RESULT_TEXT.exp(34),
       RESULT_TEXT.learned('ファイア'),
@@ -77,10 +78,14 @@ describe('勝利リザルトのメッセージ (#1039)', () => {
     expect(m[m.length - 1]).toBe(RESULT_TEXT.loot('エリクサー'))
   })
 
-  it('0 の行は出さない。全部 0 なら空配列', () => {
-    expect(buildResultMessages(base)).toEqual([])
-    expect(buildResultMessages({ ...base, gold: 5 })).toEqual([RESULT_TEXT.gold(5)])
+  it('勝利の言葉は先頭に常に 1 件。お金・経験値などの 0 の行は出さない（全部 0 でも勝利の言葉は出る）', () => {
+    expect(buildResultMessages(base)).toEqual([RESULT_TEXT.victory])
+    expect(buildResultMessages({ ...base, gold: 5 })).toEqual([
+      RESULT_TEXT.victory,
+      RESULT_TEXT.gold(5),
+    ])
     expect(buildResultMessages({ ...base, exp: 5, lootNames: ['x'] })).toEqual([
+      RESULT_TEXT.victory,
       RESULT_TEXT.exp(5),
       RESULT_TEXT.loot('x'),
     ])
@@ -93,7 +98,11 @@ describe('勝利リザルトのメッセージ (#1039)', () => {
       learnedSpellNames: ['ファイア'],
       lootNames: ['ポーション'],
     })
-    for (const line of [...all, RESULT_TEXT.defeat]) expect(line).not.toContain('　')
+    for (const line of [...all, RESULT_TEXT.defeat, RESULT_TEXT.victory])
+      expect(line).not.toContain('　')
+    expect(RESULT_TEXT.victory).toBe('戦いに勝った！')
+    expect(all[0]).toBe('戦いに勝った！')
+    expect(RESULT_TEXT.victory).not.toMatch(/\s/)
     expect(RESULT_TEXT.gold(1)).toBe(`1${RESULT_GOLD_UNIT} てにいれた`)
     expect(RESULT_TEXT.exp(7)).toBe('7 けいけんち かくとく')
     expect(RESULT_TEXT.loot('ポーション')).toBe('ポーションを てにいれた')

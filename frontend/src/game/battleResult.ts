@@ -35,6 +35,8 @@ export const RESULT_GOLD_UNIT = 'ギル'
 
 /** 勝利リザルトの文言（語の区切りは半角スペース。全角スペースは使わない） */
 export const RESULT_TEXT = {
+  /** 勝利の言葉（FF5 は戦闘終了時に出す。#1109。区切りの空白は入れない） */
+  victory: '戦いに勝った！',
   gold: (gold: number): string => `${gold}${RESULT_GOLD_UNIT} てにいれた`,
   exp: (exp: number): string => `${exp} けいけんち かくとく`,
   learned: (name: string): string => `${name}をおぼえた！`,
@@ -53,11 +55,11 @@ export interface ResultMessageInput {
 }
 
 /**
- * 勝利リザルトのメッセージ配列 (#1039)。順: お金 → 経験値 → 覚えた呪文 → 戦利品（最後）。0 の行は出さない。
+ * 勝利リザルトのメッセージ配列 (#1039, #1109)。順: 勝利の言葉（常に出す。お金・経験値が 0 でも）→ お金 → 経験値 → 覚えた呪文 → 戦利品（最後）。お金・経験値・呪文・戦利品の 0 の行は出さない。
  * AP・レベルアップなどは本作に仕組みが無いので出さない（項目を足すときはここに順番どおり差し込む）。
  */
 export function buildResultMessages(input: ResultMessageInput): string[] {
-  const out: string[] = []
+  const out: string[] = [RESULT_TEXT.victory]
   if (input.gold > 0) out.push(RESULT_TEXT.gold(input.gold))
   if (input.exp > 0) out.push(RESULT_TEXT.exp(input.exp))
   for (const n of input.learnedSpellNames) out.push(RESULT_TEXT.learned(n))
@@ -84,7 +86,7 @@ export function resultHoldMs(presentation: BattlePresentation, messageCount = 0)
   return Math.max(RESULT_HOLD_FF_MS, messageCount * RESULT_MESSAGE_STEP_MS)
 }
 
-/** 全滅のときだけ出す固定の言葉（勝利は `buildResultMessages` のメッセージ列。固定の言葉は無い） */
+/** 全滅のときだけ出す固定の言葉（勝利の言葉『戦いに勝った！』は `buildResultMessages` のメッセージ列の先頭） */
 export function resultMessageText(outcome: ResultOutcome): string | null {
   return outcome === 'defeat' ? RESULT_TEXT.defeat : null
 }
