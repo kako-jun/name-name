@@ -1,7 +1,7 @@
 /**
  * frontmatter `battle_effects: <JSONパス>` (#941) の JSON を読み込んで検証する。
  *
- * - 中身は戦闘画面サンプルの設定の `effects` と同じ形（種類名 → シート宣言）。検証は `parseBattleEffects`
+ * - 中身は戦闘の設定 JSON の `effects` と同じ形（種類名 → シート宣言）。検証は `parseBattleEffects`
  * - JSON のパスは `assetBaseUrl`（プロジェクトのアセットのルート）からの相対（`{base}/{path}`）。絶対指定（`scheme://`・先頭 `/`・
  *   `data:`・`blob:`）はそのまま読む。シート画像のパスは従来どおり `images/` 配下（`resolveRpgImagePath`）
  * - 読めない・JSON として不正・形が違うときは警告して無視（`undefined`。戦闘は従来どおり）。宣言が空なら `undefined`

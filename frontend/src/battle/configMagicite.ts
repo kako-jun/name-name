@@ -1,5 +1,5 @@
 /**
- * 戦闘画面サンプル (#749) の設定 JSON の魔石 (#889)。純粋関数のみ（ブラウザ API に触れない）。
+ * 戦闘の設定 JSON (#749) の魔石 (#889)。純粋関数のみ（ブラウザ API に触れない）。
  *
  * - `magicites`: `[魔石 id]` と同じキーの配列（id / name / summon / summonId / elements / target / effect / builtin / message / mp / equipBonus / growth / equippableBy）
  * - `beasts`: `[召喚獣 id]` と同じキーの配列（id / name / elements / image / facing / se / imaginary / target / effect / builtin / message）(#750)。魔石・味方の「わざ」（特技）の `summonId` が引く
