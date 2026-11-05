@@ -10,6 +10,7 @@ import {
   formatPrice,
   gearRoster,
   purchase,
+  saleOf,
   type GearMenuContext,
 } from './gearMenu'
 import { emptyGearState, type GearShopConfig, type GearState } from './gearShop'
@@ -65,7 +66,7 @@ describe('formatPrice / 差分の文', () => {
 describe('buildAppStoreTabs（人物ごとの一覧）', () => {
   it('タブは刀・防具。刀は選んだ人物の刀だけ、防具は誰でも', () => {
     const tabs = buildAppStoreTabs(ctx())
-    expect(tabs.map((t) => t.label)).toEqual(['刀', '防具'])
+    expect(tabs.map((t) => t.label)).toEqual(['刀', '防具', '売る'])
     expect(tabs[0].entriesByParty!.p1.map((e) => e.id)).toEqual(['a1', 'a2', 'nobase'])
     expect(tabs[0].entriesByParty!.p2.map((e) => e.id)).toEqual(['b1', 'locked'])
     expect(tabs[1].entriesByParty!.p1.map((e) => e.id)).toEqual(['vest', 'vest2', 'vest0'])
@@ -91,11 +92,11 @@ describe('buildAppStoreTabs（人物ごとの一覧）', () => {
     expect(short.detail).toBe('100円')
     expect(short.description).toContain('所持金が足りません（あと 1円）')
   })
-  it('購入済みは印・選べない。次の刀の値段は倍になる', () => {
+  it('入手済みは印・選べない。次の刀の値段は倍になる', () => {
     const tabs = buildAppStoreTabs(ctx({ state: have(['a1']), gold: 150 }))
     const [a1, a2] = tabs[0].entriesByParty!.p1
-    expect(a1).toMatchObject({ detail: '購入済み', enabled: false })
-    expect(a1.description).toContain('購入済み')
+    expect(a1).toMatchObject({ detail: '入手済み', enabled: false })
+    expect(a1.description).toContain('入手済み')
     expect(a2).toMatchObject({ detail: '200円', enabled: false })
     expect(a2.description).toContain('あと 50円')
   })
@@ -112,7 +113,7 @@ describe('buildAppStoreTabs（人物ごとの一覧）', () => {
   })
   it('人物を切り替えると一覧が変わる（他人の刀は出ない・値段も人物ごと）', () => {
     const t = buildAppStoreTabs(ctx({ state: have(['a1', 'a2'], []) }))[0].entriesByParty!
-    expect(t.p1.map((e) => e.detail)).toEqual(['購入済み', '購入済み', '値段未定'])
+    expect(t.p1.map((e) => e.detail)).toEqual(['入手済み', '入手済み', '値段未定'])
     expect(t.p2[0].detail).toBe('300円')
   })
   it('定義にない id の名前は id のまま。人物が 0 人なら空', () => {
@@ -139,7 +140,7 @@ describe('purchase', () => {
   })
   it.each([
     ['不足', { gold: 99 }, 'p1', 'a1', '所持金が足りません（あと 1円）'],
-    ['購入済み', { state: have(['a1']) }, 'p1', 'a1', '購入済み'],
+    ['入手済み', { state: have(['a1']) }, 'p1', 'a1', '入手済み'],
     ['他人の刀', {}, 'p1', 'b1', '他の人の刀'],
     ['解禁前', {}, 'p2', 'locked', 'まだ買えません'],
     ['基準額なし', {}, 'p1', 'nobase', '値段が決まっていない'],
@@ -155,7 +156,7 @@ describe('purchase', () => {
 })
 
 describe('changeGear（持ち替え・差分）', () => {
-  it('刀: 購入済みを装備すると装備列と blade が更新され、前の刀は外れ、差分が出る', () => {
+  it('刀: 入手済みを装備すると装備列と blade が更新され、前の刀は外れ、差分が出る', () => {
     const c = ctx({
       state: have(['a1', 'a2'], [], { p1: 'a1' }),
       equipment: { p1: ['a1'] },
@@ -221,7 +222,7 @@ describe('changeGear（持ち替え・差分）', () => {
 })
 
 describe('buildEquipContent（そうび画面）', () => {
-  it('購入済みだけを刀 → 防具の順に出し、装備中の印と 2 枠の見出しを持つ', () => {
+  it('入手済みだけを刀 → 防具の順に出し、装備中の印と 2 枠の見出しを持つ', () => {
     const c = ctx({
       state: have(['a1', 'a2', 'vest'], ['b1'], { p1: 'a1' }),
       equipment: { p1: ['a1'] },
@@ -299,9 +300,9 @@ describe('購入・持ち替え後のセーブ往復', () => {
     expect(back.gold).toBe(900)
     expect(back.equipment).toEqual({ p1: ['a1'] })
     expect(back.gear).toEqual({ owned: { p1: ['a1'] }, blade: { p1: 'a1' } })
-    // 読み戻した状態からアプリストアは「購入済み」・そうびは装備中になる
+    // 読み戻した状態からアプリストアは「入手済み」・そうびは装備中になる
     const again = ctx({ state: back.gear!, gold: back.gold, equipment: back.equipment })
-    expect(buildAppStoreTabs(again)[0].entriesByParty!.p1[0].detail).toBe('購入済み')
+    expect(buildAppStoreTabs(again)[0].entriesByParty!.p1[0].detail).toBe('入手済み')
     expect(buildEquipContent(again).headerByParty.p1[0].value).toBe('正宗')
   })
   it('旧セーブ（gear なし）は従来どおり読め、gear キーが出ない', () => {
@@ -359,7 +360,7 @@ describe('レビュー対応 (#881 段階2)', () => {
       'a1',
     ])
   })
-  it('装備中の防具の判定は購入済みだけ（未購入の防具が装備列に居ても見出しに出さない）。複数枠は並べる', () => {
+  it('装備中の防具の判定は入手済みだけ（未購入の防具が装備列に居ても見出しに出さない）。複数枠は並べる', () => {
     const c = ctx({ state: have([], []), equipment: { p1: ['vest'] } })
     expect(buildEquipContent(c).headerByParty.p1[1].value).toBe('なし')
     const two = ctx({
@@ -386,5 +387,39 @@ describe('レビュー対応 (#881 段階2)', () => {
     const e = buildAppStoreTabs(ctx({ cfg: cfg2 }))[1].entriesByParty!.p1
     expect(e[0].description).toContain('香林坊で話を聞くと買えます')
     expect(e[1].description).toContain('まだ買えません')
+  })
+})
+
+describe('アプリストアの「売る」タブ（段階5）', () => {
+  const sellState = (): GearState => ({
+    owned: { p1: ['a1', 'a1', 'a2', 'vest', 'vest'], p2: [] },
+    blade: {},
+  })
+  it('タブは「売る」で action=sell。持っている品だけ並び、余剰は売値つき・最後の1つは灰色＋理由', () => {
+    const tab = buildAppStoreTabs(ctx({ state: sellState() }))[2]
+    expect(tab.label).toBe('売る')
+    expect(tab.action).toBe('sell')
+    const rows = tab.entriesByParty!.p1
+    expect(rows.map((e) => e.id)).toEqual(['a1', 'a2', 'vest'])
+    expect(rows[0]).toMatchObject({ enabled: true, label: '正宗 ×2', detail: '200円' })
+    expect(rows[1]).toMatchObject({ enabled: false, label: '村正 ×1', detail: '売れません' })
+    expect(rows[1].description).toContain('最後の1つは売れません')
+    expect(rows[2]).toMatchObject({ enabled: true, detail: '400円' })
+  })
+  it('何も持っていない人物には案内の行が 1 つ（選べない）', () => {
+    const rows = buildAppStoreTabs(ctx({ state: sellState() }))[2].entriesByParty!.p2
+    expect(rows).toHaveLength(1)
+    expect(rows[0].enabled).toBe(false)
+    expect(rows[0].description).toContain('余剰')
+  })
+  it('saleOf: 売ると所持金が増え個数が減る。最後の1つは拒否', () => {
+    const r = saleOf(ctx({ state: sellState(), gold: 10 }), 'p1', 'a1')
+    expect(r.ok).toBe(true)
+    expect(r.gold).toBe(210)
+    expect(r.notice).toContain('200円で 売りました')
+    const again = saleOf(ctx({ state: r.state, gold: r.gold }), 'p1', 'a1')
+    expect(again.ok).toBe(false)
+    expect(again.gold).toBe(210)
+    expect(again.notice).toBe('最後の1つは売れません')
   })
 })

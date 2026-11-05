@@ -446,7 +446,7 @@ export interface LiveContentInput {
  * - どうぐ（kind: item）: tabs が無いとき 3 タブを差し込む
  * - まほう（id: magic）: entries・entriesByParty が無いとき人物ごとの一覧を差し込む
  * - アプリストア（kind: appstore）: tabs が無く売り物の定義（`rpg.gear`）があるとき、刀／防具のタブを人物ごとの一覧で差し込む
- * - そうび（kind: equip）: entries・entriesByParty が無く売り物の定義があるとき、購入済みの一覧と 2 枠の見出しを差し込む
+ * - そうび（kind: equip）: entries・entriesByParty が無く売り物の定義があるとき、持っている品の一覧と 2 枠の見出しを差し込む
  * - ステータス（kind: status）: 実状態の行を足す（定義側の行が先）
  * - せってい（kind: config）: options が無いとき `configOptions` を差し込む
  */

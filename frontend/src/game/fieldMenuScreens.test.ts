@@ -8,6 +8,9 @@ import {
   SAVE_SLOT_COUNT,
   appstoreHasParty,
   baseFocus,
+  buyConfirmMessage,
+  confirmChoices,
+  isSellTab,
   clampNav,
   computeScreenLayout,
   defaultScreenKind,
@@ -1068,5 +1071,37 @@ describe('appstoreHasParty: 空オブジェクトは「無い」 (#881)', () => 
     const c = ctx('appstore', { tabs: [{ label: '刀', entries: [], entriesByParty: {} }] })
     expect(appstoreHasParty(c.content)).toBe(false)
     expect(c.content.description).toBe('アプリを選んでください')
+  })
+})
+
+describe('買う・売る確認窓の文・選択肢（段階5）', () => {
+  it('選択肢: 買う／売る／セーブははい・いいえ。2 番目は常に「やめる」系', () => {
+    expect(confirmChoices('appstore', false)).toEqual(['買う', 'やめる'])
+    expect(confirmChoices('appstore', true)).toEqual(['売る', 'やめる'])
+    expect(confirmChoices('save', false)).toEqual(['はい', 'いいえ'])
+  })
+  it('文: 値段つき・値段なし・行なし', () => {
+    expect(buyConfirmMessage({ label: '刀A', detail: '100円' })).toBe(
+      '「刀A」を 100円で買いますか？'
+    )
+    expect(buyConfirmMessage({ label: '刀A' })).toBe('「刀A」を買いますか？')
+    expect(buyConfirmMessage(undefined)).toBe('買いますか？')
+    expect(buyConfirmMessage({ label: '刀A ×2', detail: '20,000円' }, true)).toBe(
+      '「刀A ×2」を 20,000円で 売りますか？'
+    )
+    expect(buyConfirmMessage({ label: '刀A ×2' }, true)).toBe('「刀A ×2」を 売りますか？')
+    expect(buyConfirmMessage(undefined, true)).toBe('売りますか？')
+  })
+  it('isSellTab: アプリストアの action=sell のタブだけ。設定 JSON の action: sell は読まれない', () => {
+    const tabs = [
+      { label: '刀', entries: [] },
+      { label: '売る', entries: [], action: 'sell' as const },
+    ]
+    expect(isSellTab({ kind: 'appstore', tabs }, 1)).toBe(true)
+    expect(isSellTab({ kind: 'appstore', tabs }, 0)).toBe(false)
+    expect(isSellTab({ kind: 'item', tabs }, 1)).toBe(false)
+    const w: string[] = []
+    const parsed = parseContentDef({ tabs: [{ label: 'x', entries: [], action: 'sell' }] }, 'c', w)
+    expect(parsed?.tabs?.[0]?.action).toBeUndefined()
   })
 })

@@ -14,7 +14,7 @@ import { skillsForMember, type GearShopConfig, type GearState } from '../game/ge
 export function buildBattleMenu(
   config: Pick<FieldConfig, 'party' | 'spells' | 'items'> & {
     skills?: readonly BattleSkillEntry[]
-    /** 刀の売り物の定義と、持ち越した購入済み・装備中の刀 (#881 段階3)。あれば「わざ」は味方ごとに装備中の刀のアビリティで絞る。省略は従来どおり全員同じ */
+    /** 刀の売り物の定義と、持ち越した持っている品（買った分も宝箱などで手に入れた分も含む）・装備中の刀 (#881 段階3)。あれば「わざ」は味方ごとに装備中の刀のアビリティで絞る。省略は従来どおり全員同じ */
     gear?: { shop: GearShopConfig; state: GearState }
   }
 ): BattleMenuData | undefined {

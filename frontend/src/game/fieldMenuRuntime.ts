@@ -27,7 +27,7 @@ import { DEFAULT_CONFIG_OPTIONS, type MenuOption } from './fieldMenuScreens'
 import type { AtbMode } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { RpgMenuState } from './rpgSave'
-import { changeGear, purchase, type GearMenuContext, type MemberDefLike } from './gearMenu'
+import { changeGear, purchase, saleOf, type GearMenuContext, type MemberDefLike } from './gearMenu'
 import type { GearShopConfig, GearState } from './gearShop'
 
 /** 刀・防具の購入・持ち替えの接続 (#881)。`gearShop` を設定したゲームだけ渡す。正本（状態・所持金・装備列）は呼び出し側 */
@@ -182,7 +182,10 @@ export class FieldMenuRuntime {
       if (req.casterId === undefined) return null
       const ctx = this.gearCtx() as GearMenuContext
       if (kind === 'appstore') {
-        const r = purchase(ctx, req.casterId, req.entryId)
+        const r =
+          req.tabAction === 'sell'
+            ? saleOf(ctx, req.casterId, req.entryId)
+            : purchase(ctx, req.casterId, req.entryId)
         if (r.ok) {
           g.setState(r.state)
           g.setGold(r.gold)

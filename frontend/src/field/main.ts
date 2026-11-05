@@ -689,7 +689,7 @@ async function main(): Promise<void> {
   let inventory: Record<string, number> = resumed
     ? { ...resumed.inventory }
     : Object.fromEntries(config.items.map((it) => [it.id, it.count ?? 0]))
-  // 刀・防具の購入済み・装備中の刀 (#881)。売り物の定義 `gearShop` があるゲームだけ持ち、保存し直しでも書き戻す（無いゲームは従来どおり書かない）。
+  // 刀・防具の持っている品（買った分も宝箱などで手に入れた分も含む）・装備中の刀 (#881)。売り物の定義 `gearShop` があるゲームだけ持ち、保存し直しでも書き戻す（無いゲームは従来どおり書かない）。
   // 定義と合わない分（消えた刀・持ち主違い）は警告して捨て、装備列からも外す
   const gearResolved = config.gearShop
     ? resolveGear(resumed?.gear, config.gearShop, resumed?.equipment)
