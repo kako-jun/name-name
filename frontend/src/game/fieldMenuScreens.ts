@@ -90,7 +90,7 @@ export interface MenuEntry {
   target?: 'single' | 'all' | 'self'
 }
 /** タブの働き。`use` = 選んで使う / `sort` = 選ぶと並べ替える / `info` = 一覧と説明バーだけ（使用・整理不可）。未指定のどうぐは先頭を `use`、他は通知だけ */
-/** `sell` はアプリストアの「売る」タブ（確認窓の文と選択肢が「売る」になる）*/
+/** `sell` はアプリストアの「売る」タブ（確認窓の文と選択肢が「売る」になる）。アプリストア専用で、設定 JSON からは書けない（差し込みの中身だけが持つ） */
 export type MenuTabAction = 'use' | 'sort' | 'info' | 'sell'
 export interface MenuTab {
   label: string
@@ -493,6 +493,29 @@ export function optionValue(ctx: ScreenCtx, o: MenuOption): number {
 }
 
 const NOTHING = 'なにもありません'
+
+/** アプリストアの「売る」タブか（確認窓の文・選択肢が「売る」になる） */
+export function isSellTab(c: Pick<ResolvedContent, 'kind' | 'tabs'>, tab: number): boolean {
+  return c.kind === 'appstore' && c.tabs[tab]?.action === 'sell'
+}
+
+/** 確認窓の選択肢（0 = 実行・1 = やめる／いいえ。既定の位置は呼び出し側で「やめる」に置く） */
+export function confirmChoices(kind: ScreenKind, selling: boolean): [string, string] {
+  if (kind === 'save') return ['はい', 'いいえ']
+  return [selling ? '売る' : '買う', 'やめる']
+}
+
+/** 買う・売る確認窓の文（値段つき）。値段は一覧の右端の文字（`detail`）と同じ */
+export function buyConfirmMessage(
+  e: { label: string; detail?: string } | undefined,
+  selling = false
+): string {
+  const verb = selling ? '売りますか？' : '買いますか？'
+  if (!e) return verb
+  if (selling)
+    return e.detail ? `「${e.label}」を ${e.detail}で ${verb}` : `「${e.label}」を ${verb}`
+  return e.detail ? `「${e.label}」を ${e.detail}で買いますか？` : `「${e.label}」を買いますか？`
+}
 
 /** そのタブの働き。定義が `action` を書かなければ、どうぐの先頭タブだけ `use`（従来どおり）。それ以外は undefined */
 export function tabAction(c: ResolvedContent, tab: number): MenuTabAction | undefined {

@@ -3,9 +3,9 @@
  * 売り物の定義・状態・購入・持ち替えの本体は `gearShop.ts`、装備列の計算は `equipment.ts` の `equipItem`。ここはそれらを
  * メニューの一覧（`MenuEntry`）と差分の文に組み立て、「買う」「持ち替える」の結果を 1 か所で返す。
  *
- * - アプリストア: タブ「刀／防具」。人物ごとに一覧が分かれる（刀アプリは人物ごと独立）。値段（通貨名つき）・購入済み印、
+ * - アプリストア: タブ「刀／防具／売る」。人物ごとに一覧が分かれる（刀アプリは人物ごと独立）。値段（通貨名つき）・入手済み印、
  *   買えない行は暗く（`enabled: false`）して説明バーの文に理由を入れる。買っただけでは装備しない
- * - そうび: 人物ごとに、2 枠（刀=スマホ／防具=タブレット）の現在の装備（`headerByParty`）と購入済みの一覧。
+ * - そうび: 人物ごとに、2 枠（刀=スマホ／防具=タブレット）の現在の装備（`headerByParty`）と持っている品の一覧。
  *   選んだ品へ持ち替えたときの能力値の変化（変更前後の差分）を説明バーの文に入れる。防具は装備中の品を選ぶと外す
  * - 戦闘への反映（装備中の刀のアビリティを「わざ」に出す）は段階 3。ここでは装備列が正しく更新されるところまで
  */
@@ -16,7 +16,7 @@ import {
   buy,
   canBuy,
   canSell,
-  ownedCount,
+  ownedCounts,
   sell,
   equipBlade,
   equippedBlade,
@@ -236,7 +236,7 @@ function appStoreEntry(ctx: GearMenuContext, member: string, e: GearEntry): Menu
   const reason = blockText(check.reason, check.message, check.price, ctx.gold, currency)
   const detail =
     check.reason === 'owned'
-      ? '購入済み'
+      ? '入手済み'
       : check.price !== undefined
         ? formatPrice(check.price, currency)
         : check.reason === 'unbuyable'
@@ -249,18 +249,17 @@ function appStoreEntry(ctx: GearMenuContext, member: string, e: GearEntry): Menu
     description:
       check.reason === 'owned'
         ? base
-          ? `${base}（購入済み）`
-          : `${name}（購入済み）`
+          ? `${base}（入手済み）`
+          : `${name}（入手済み）`
         : `${name}  ${reason}`,
   }
 }
 
 /** 「売る」の 1 行（持っている品）。余剰（個数 2 以上）だけ売れる。最後の 1 つは暗く（`enabled: false`）して理由を説明バーに出す */
-function sellEntry(ctx: GearMenuContext, member: string, e: GearEntry): MenuEntry {
+function sellEntry(ctx: GearMenuContext, member: string, e: GearEntry, n: number): MenuEntry {
   const currency = ctx.currencyName ?? DEFAULT_CURRENCY_NAME
   const name = nameOf(ctx, e.id)
-  const n = ownedCount(ctx.state, member, e.id)
-  const check = canSell(ctx.cfg, ctx.state, member, e.id)
+  const check = canSell(ctx.cfg, ctx.state, member, e.id, n)
   const entry: MenuEntry = {
     id: e.id,
     label: `${name} ×${n}`,
@@ -286,9 +285,12 @@ function buildSellTab(ctx: GearMenuContext): MenuTab {
   const by: Record<string, MenuEntry[]> = {}
   for (const m of ctx.members) {
     const rows: MenuEntry[] = []
+    const counts = ownedCounts(ctx.state, m) // 人物ごとに 1 回の走査で集計
     for (const kind of ['blade', 'armor'] as const)
-      for (const e of entriesOfKind(ctx.cfg, kind, m))
-        if (ownedCount(ctx.state, m, e.id) > 0) rows.push(sellEntry(ctx, m, e))
+      for (const e of entriesOfKind(ctx.cfg, kind, m)) {
+        const n = counts.get(e.id) ?? 0
+        if (n > 0) rows.push(sellEntry(ctx, m, e, n))
+      }
     safeAssign(
       by,
       m,
@@ -382,8 +384,8 @@ export interface GearChange {
 }
 
 /**
- * 品へ持ち替える（純関数）。刀は `equipBlade`（購入済みの自分の刀だけ。すでに装備中なら変更なし）。
- * 防具は購入済みの品を `equipItem` で付け、すでに装備中の品を選ぶと外す。他人の品・未購入は不可
+ * 品へ持ち替える（純関数）。刀は `equipBlade`（持っている自分の刀だけ。すでに装備中なら変更なし）。
+ * 防具は持っている品を `equipItem` で付け、すでに装備中の品を選ぶと外す。他人の品・未購入は不可
  */
 export function changeGear(
   ctx: GearMenuContext,
@@ -402,7 +404,7 @@ export function changeGear(
   const name = nameOf(ctx, id)
   if (!e) return fail('売っていない品です')
   if (e.owner !== undefined && e.owner !== member) return fail('他の人の品は使えません')
-  if (!isOwned(ctx.state, member, id)) return fail('まだ買っていません')
+  if (!isOwned(ctx.state, member, id)) return fail('持っていません')
   const def = memberDef(member, ctx.defs)
   if (e.kind === 'blade') {
     if (equippedBlade(ctx.state, member) === id && before.includes(id))
@@ -439,7 +441,7 @@ export function changeGear(
   }
 }
 
-/** 装備中の店の品の id（その種類で、装備列にあり、その人が購入済みで使える品。枠が複数なら複数）。無ければ空 */
+/** 装備中の店の品の id（その種類で、装備列にあり、その人が持っていて使える品。枠が複数なら複数）。無ければ空 */
 function equippedOfKind(ctx: GearMenuContext, member: string, kind: GearEntry['kind']): string[] {
   const eq = hasOwn(ctx.equipment, member) ? ctx.equipment[member] : []
   if (kind === 'blade') {
@@ -458,7 +460,7 @@ function equippedOfKind(ctx: GearMenuContext, member: string, kind: GearEntry['k
 }
 
 /**
- * そうび画面の中身。人物ごとに、購入済みの品（定義の順。刀 → 防具）の一覧と、2 枠の現在の装備（見出し行）を返す。
+ * そうび画面の中身。人物ごとに、持っている品（定義の順。刀 → 防具）の一覧と、2 枠の現在の装備（見出し行）を返す。
  * 各行の説明は「その品へ持ち替えたとき」の能力値の変化（変更前後の差分）。装備中の刀は「すでに装備」、装備中の防具は「はずす」
  */
 export function buildEquipContent(ctx: GearMenuContext): {

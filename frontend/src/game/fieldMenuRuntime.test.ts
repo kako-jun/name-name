@@ -248,7 +248,7 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     expect(by(none, 'appstore').content).toBeUndefined()
     expect(by(none, 'equip').content).toBeUndefined()
   })
-  it('買うと所持金が減り、購入済みになり、装備はしない。結果の一覧が返る', () => {
+  it('買うと所持金が減り、入手済みになり、装備はしない。結果の一覧が返る', () => {
     const { rt, g } = gearSetup()
     const out = rt.use({ screen: 'appstore', entryId: 'sw1', casterId: 'a' })!
     expect(out.ok).toBe(true)
@@ -256,7 +256,7 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     expect(g.state.owned.a).toEqual(['sw1'])
     expect(g.equipment).toEqual({})
     const tab = out.items!.find((d) => d.id === 'appstore')!.content!.tabs![0]
-    expect(tab.entriesByParty!.a[0].detail).toBe('購入済み')
+    expect(tab.entriesByParty!.a[0].detail).toBe('入手済み')
     expect(tab.entriesByParty!.a[1].detail).toBe('200円')
   })
   it('所持金が足りなければ何も変えず理由を返す。人物が分からない要求は null', () => {
@@ -299,7 +299,7 @@ describe('アプリストア・そうび (#881 段階2)', () => {
     g.state = { ...g.state, owned: { a: ['vest', 'vest'] } }
     const out = rt.use({ screen: 'appstore', entryId: 'vest', tabAction: 'sell', casterId: 'a' })!
     expect(out.ok).toBe(true)
-    expect(g.gold).toBeGreaterThan(goldBefore)
+    expect(g.gold).toBe(goldBefore + 25) // 防具 50 円の半額
     expect(g.state.owned.a).toEqual(['vest'])
   })
   it('防具は付け外しできる', () => {

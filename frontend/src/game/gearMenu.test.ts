@@ -92,11 +92,11 @@ describe('buildAppStoreTabs（人物ごとの一覧）', () => {
     expect(short.detail).toBe('100円')
     expect(short.description).toContain('所持金が足りません（あと 1円）')
   })
-  it('購入済みは印・選べない。次の刀の値段は倍になる', () => {
+  it('入手済みは印・選べない。次の刀の値段は倍になる', () => {
     const tabs = buildAppStoreTabs(ctx({ state: have(['a1']), gold: 150 }))
     const [a1, a2] = tabs[0].entriesByParty!.p1
-    expect(a1).toMatchObject({ detail: '購入済み', enabled: false })
-    expect(a1.description).toContain('購入済み')
+    expect(a1).toMatchObject({ detail: '入手済み', enabled: false })
+    expect(a1.description).toContain('入手済み')
     expect(a2).toMatchObject({ detail: '200円', enabled: false })
     expect(a2.description).toContain('あと 50円')
   })
@@ -113,7 +113,7 @@ describe('buildAppStoreTabs（人物ごとの一覧）', () => {
   })
   it('人物を切り替えると一覧が変わる（他人の刀は出ない・値段も人物ごと）', () => {
     const t = buildAppStoreTabs(ctx({ state: have(['a1', 'a2'], []) }))[0].entriesByParty!
-    expect(t.p1.map((e) => e.detail)).toEqual(['購入済み', '購入済み', '値段未定'])
+    expect(t.p1.map((e) => e.detail)).toEqual(['入手済み', '入手済み', '値段未定'])
     expect(t.p2[0].detail).toBe('300円')
   })
   it('定義にない id の名前は id のまま。人物が 0 人なら空', () => {
@@ -140,7 +140,7 @@ describe('purchase', () => {
   })
   it.each([
     ['不足', { gold: 99 }, 'p1', 'a1', '所持金が足りません（あと 1円）'],
-    ['購入済み', { state: have(['a1']) }, 'p1', 'a1', '購入済み'],
+    ['入手済み', { state: have(['a1']) }, 'p1', 'a1', '入手済み'],
     ['他人の刀', {}, 'p1', 'b1', '他の人の刀'],
     ['解禁前', {}, 'p2', 'locked', 'まだ買えません'],
     ['基準額なし', {}, 'p1', 'nobase', '値段が決まっていない'],
@@ -156,7 +156,7 @@ describe('purchase', () => {
 })
 
 describe('changeGear（持ち替え・差分）', () => {
-  it('刀: 購入済みを装備すると装備列と blade が更新され、前の刀は外れ、差分が出る', () => {
+  it('刀: 入手済みを装備すると装備列と blade が更新され、前の刀は外れ、差分が出る', () => {
     const c = ctx({
       state: have(['a1', 'a2'], [], { p1: 'a1' }),
       equipment: { p1: ['a1'] },
@@ -222,7 +222,7 @@ describe('changeGear（持ち替え・差分）', () => {
 })
 
 describe('buildEquipContent（そうび画面）', () => {
-  it('購入済みだけを刀 → 防具の順に出し、装備中の印と 2 枠の見出しを持つ', () => {
+  it('入手済みだけを刀 → 防具の順に出し、装備中の印と 2 枠の見出しを持つ', () => {
     const c = ctx({
       state: have(['a1', 'a2', 'vest'], ['b1'], { p1: 'a1' }),
       equipment: { p1: ['a1'] },
@@ -300,9 +300,9 @@ describe('購入・持ち替え後のセーブ往復', () => {
     expect(back.gold).toBe(900)
     expect(back.equipment).toEqual({ p1: ['a1'] })
     expect(back.gear).toEqual({ owned: { p1: ['a1'] }, blade: { p1: 'a1' } })
-    // 読み戻した状態からアプリストアは「購入済み」・そうびは装備中になる
+    // 読み戻した状態からアプリストアは「入手済み」・そうびは装備中になる
     const again = ctx({ state: back.gear!, gold: back.gold, equipment: back.equipment })
-    expect(buildAppStoreTabs(again)[0].entriesByParty!.p1[0].detail).toBe('購入済み')
+    expect(buildAppStoreTabs(again)[0].entriesByParty!.p1[0].detail).toBe('入手済み')
     expect(buildEquipContent(again).headerByParty.p1[0].value).toBe('正宗')
   })
   it('旧セーブ（gear なし）は従来どおり読め、gear キーが出ない', () => {
@@ -360,7 +360,7 @@ describe('レビュー対応 (#881 段階2)', () => {
       'a1',
     ])
   })
-  it('装備中の防具の判定は購入済みだけ（未購入の防具が装備列に居ても見出しに出さない）。複数枠は並べる', () => {
+  it('装備中の防具の判定は入手済みだけ（未購入の防具が装備列に居ても見出しに出さない）。複数枠は並べる', () => {
     const c = ctx({ state: have([], []), equipment: { p1: ['vest'] } })
     expect(buildEquipContent(c).headerByParty.p1[1].value).toBe('なし')
     const two = ctx({

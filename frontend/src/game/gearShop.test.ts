@@ -9,6 +9,7 @@ import {
   equippedBlade,
   canSell,
   grant,
+  MAX_OWNED_PER_ITEM,
   ownedBladeCount,
   ownedCount,
   sell,
@@ -746,9 +747,51 @@ describe('個数のセーブ互換・往復', () => {
     expect(ownedBladeCount(cfg, r.state, 'p1')).toBe(1)
     const bad = resolveGear(st({ p1: ['b1', 'b1', 'zzz', 'zzz'] }), cfg)
     expect(bad.state.owned.p1).toEqual([])
-    expect(bad.warnings).toHaveLength(4)
+    expect(bad.warnings).toHaveLength(2) // 同じ警告は重ねない（b1 と zzz で 1 件ずつ）
   })
   it('gear キーなしのセーブは空', () => {
     expect(resolveGear(undefined, cfg).state).toEqual(emptyGearState())
+  })
+})
+
+describe('段階5 レビュー対応: 文言・所持金・個数の上限', () => {
+  it('理由文: 入手済み・持っていません・売るときの値段なし', () => {
+    expect(canBuy(cfg, st({ p1: ['a1'] }), 'p1', 'a1', 1000).message).toBe('入手済み')
+    expect(canSell(cfg, st({}), 'p1', 'a1').message).toBe('持っていません')
+    const r = canSell(cfg, st({ p1: ['nobase', 'nobase'] }), 'p1', 'nobase')
+    expect(r.reason).toBe('unbuyable')
+    expect(r.message).toBe('値段が決まっていないため売れません')
+  })
+  it('sell: 所持金は MAX_GOLD で頭打ち。不正な所持金は拒否', () => {
+    const s0 = st({ p1: ['a1', 'a1'] })
+    expect(sell(cfg, s0, 'p1', 'a1', Number.MAX_SAFE_INTEGER - 10).gold).toBe(
+      Number.MAX_SAFE_INTEGER
+    )
+    for (const g of [-1, NaN, Infinity]) {
+      const r = sell(cfg, s0, 'p1', 'a1', g)
+      expect(r.ok).toBe(false)
+      expect(r.reason).toBe('badGold')
+      expect(r.state).toEqual(s0)
+    }
+  })
+  it('grant: 合計が上限を超えるなら拒否。ちょうど上限は可', () => {
+    const full = grant(cfg, st({}), 'p1', 'a1', MAX_OWNED_PER_ITEM)
+    expect(full.ok).toBe(true)
+    expect(ownedCount(full.state, 'p1', 'a1')).toBe(MAX_OWNED_PER_ITEM)
+    const over = grant(cfg, full.state, 'p1', 'a1')
+    expect(over.ok).toBe(false)
+    expect(over.reason).toBe('tooMany')
+    expect(over.message).toContain('上限')
+    expect(grant(cfg, st({ p1: ['a1'] }), 'p1', 'a1', MAX_OWNED_PER_ITEM).reason).toBe('tooMany')
+  })
+  it('resolveGear: 改ざんセーブで同じ id を大量に重ねても切り詰め・警告は 1 件ずつ', () => {
+    const big = Array<string>(200000).fill('a1')
+    const bad = Array<string>(200000).fill('zzz')
+    const t0 = Date.now()
+    const r = resolveGear({ owned: { p1: [...big, ...bad] }, blade: {} }, cfg)
+    expect(Date.now() - t0).toBeLessThan(2000)
+    expect(ownedCount(r.state, 'p1', 'a1')).toBe(MAX_OWNED_PER_ITEM)
+    expect(r.warnings).toHaveLength(2) // 定義にない id 1 件 + 上限の切り詰め 1 件
+    expect(r.warnings.some((w) => w.includes('上限'))).toBe(true)
   })
 })
