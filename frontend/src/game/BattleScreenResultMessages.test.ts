@@ -98,10 +98,15 @@ afterEach(() => {
 })
 
 describe('ff 勝利: メッセージが順に出る (#1039)', () => {
-  it('お金 → 経験値 → 戦利品（最後）の順に 1 件ずつ出て、最後の件で止まる', () => {
+  it('勝利の言葉 → お金 → 経験値 → 戦利品（最後）の順に 1 件ずつ出て、最後の件で止まる', () => {
     const { s } = setup({ presentation: 'ff' })
     toResult(s)
-    const expected = [RESULT_TEXT.gold(3), RESULT_TEXT.exp(5), RESULT_TEXT.loot('ポーション')]
+    const expected = [
+      RESULT_TEXT.victory,
+      RESULT_TEXT.gold(3),
+      RESULT_TEXT.exp(5),
+      RESULT_TEXT.loot('ポーション'),
+    ]
     expect(I(s).resultMessages).toEqual(expected)
     const seen: string[] = []
     for (let i = 0; i < 40; i++) {
@@ -114,20 +119,11 @@ describe('ff 勝利: メッセージが順に出る (#1039)', () => {
     expect(I(s).messageText!.text).toBe(RESULT_TEXT.loot('ポーション'))
   })
 
-  it('「しょうり！」は出ない', () => {
-    const { s } = setup({ presentation: 'ff' })
-    toResult(s)
-    for (let i = 0; i < 30; i++) {
-      expect(I(s).messageText!.text).not.toBe('しょうり！')
-      run(s, 100)
-    }
-  })
-
   it('待機は件数ぶん伸び、その手前では閉じず、過ぎたら 1 回だけ閉じる', () => {
     const { s, closed } = setup({ presentation: 'ff' })
     toResult(s)
-    const hold = resultHoldMs('ff', 3)
-    expect(hold).toBe(3 * RESULT_MESSAGE_STEP_MS)
+    const hold = resultHoldMs('ff', 4)
+    expect(hold).toBe(4 * RESULT_MESSAGE_STEP_MS)
     const before = I(s).resultElapsed!
     run(s, hold - before - 32)
     expect(closed).toEqual([])
@@ -165,7 +161,7 @@ describe('ff 勝利: メッセージが順に出る (#1039)', () => {
     toResult(a.s)
     run(a.s, RESULT_SKIP_GUARD_MS)
     expect(a.closed).toEqual([])
-    expect(I(a.s).messageText!.text).toBe(RESULT_TEXT.gold(3)) // まだ最初の件
+    expect(I(a.s).messageText!.text).toBe(RESULT_TEXT.victory) // まだ最初の件
     tapScreen(a.s)
     expect(a.closed).toEqual(['victory'])
 
@@ -183,16 +179,15 @@ describe('ff 勝利: メッセージが順に出る (#1039)', () => {
     expect(closed).toEqual([])
   })
 
-  it('メッセージ 0 件（お金・経験値・戦利品なし）: 窓なしで ff の最低待機 1500ms で閉じる', () => {
+  it('お金・経験値・戦利品なし: 勝利の言葉 1 件だけを出し、ff の最低待機 1500ms で閉じる', () => {
     const { s, closed } = setup({ presentation: 'ff' }, { exp: 0, gold: 0, loot: undefined })
     toResult(s)
-    expect(I(s).resultMessages).toEqual([])
-    expect(I(s).logPanel.visible).toBe(false)
-    expect(I(s).messageText!.visible).toBe(false)
+    expect(I(s).resultMessages).toEqual([RESULT_TEXT.victory])
+    expect(I(s).messageText!.visible).toBe(true)
+    expect(I(s).messageText!.text).toBe(RESULT_TEXT.victory)
     const before = I(s).resultElapsed!
     run(s, RESULT_HOLD_FF_MS - before - 32)
     expect(closed).toEqual([])
-    expect(I(s).logPanel.visible).toBe(false)
     run(s, 64)
     expect(closed).toEqual(['victory'])
   })
