@@ -3372,3 +3372,90 @@ describe('parseMarkdown: 一枚絵フィールドの場面の中身 (#1102)', ()
     expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// #1104 (S2c): 一枚絵フィールドの作品設定（補助通行・フィールド設定・歩行絵・人物の形態）と [パーティ] のキー。
+// tracked wasm が解釈することを縛る。
+describe('parseMarkdown: 一枚絵フィールドの作品設定 (#1104)', () => {
+  const head = ['---', 'engine: name-name', 'chapter: 1', 'title: t', '---', '', '## f: 野原', '']
+  const md = [
+    ...head,
+    '[補助通行 条件=買った,説得済 除く=説得中 幽霊=幽霊中 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]',
+    '[フィールド設定 速度=260 端のしきい値=6 端の接触=足元 文字間隔=30 刀の倍率=2]',
+    '[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]',
+    '[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]',
+    '[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]',
+    '',
+    '[パーティ p1]',
+    '名前: ぼく',
+    'HP: 10',
+    'ATK: 1',
+    'DEF: 1',
+    'AGI: 1',
+    '人物: C001',
+    '形態: elementary',
+    '刀: blade_1',
+    '[/パーティ]',
+    '',
+  ].join('\n')
+
+  it('FieldAssist / FieldSettings / FieldWalkSprite / CharacterForms と パーティのキーが届く', async () => {
+    const doc = await parseMarkdown(md)
+    const evs = doc.chapters[0].scenes[0].events.filter(
+      (e): e is Exclude<typeof e, string> => typeof e !== 'string'
+    )
+    expect(evs.find((e) => 'FieldAssist' in e)).toEqual({
+      FieldAssist: {
+        conditions: ['買った', '説得済'],
+        except: '説得中',
+        ghost: '幽霊中',
+        speed_scale: 0.7,
+        opacity: 0.5,
+        behind_px: 40,
+        fade_ms: 200,
+      },
+    })
+    expect(evs.find((e) => 'FieldSettings' in e)).toEqual({
+      FieldSettings: {
+        speed: 260,
+        edge_threshold: 6,
+        edge_contact: 'Foot',
+        ms_per_char: 30,
+        weapon_scale: 2,
+      },
+    })
+    const walks = evs.filter((e) => 'FieldWalkSprite' in e)
+    expect(walks[0]).toEqual({
+      FieldWalkSprite: {
+        kind: 'Player',
+        character: 'C001',
+        form: 'elementary',
+        height: 96,
+        frame_ms: 140,
+        cycle: [0, 1, 2, 1],
+        idle_frame: 1,
+      },
+    })
+    expect(walks[1]).toEqual({
+      FieldWalkSprite: { kind: 'Companion', character: 'C002', form: 'adult', name: 'ミナ' },
+    })
+    expect(evs.find((e) => 'CharacterForms' in e)).toEqual({
+      CharacterForms: { catalog: 'field/forms.json', assets: 'chars/', weapon_assets: 'weapons/' },
+    })
+    const party = evs.find((e) => 'PartyMember' in e)
+    expect(party).toMatchObject({
+      PartyMember: { id: 'p1', character: 'C001', form: 'elementary', weapon: 'blade_1' },
+    })
+  })
+
+  it('emit → parse で同値（周期と停止と名前が往復で保たれる）', async () => {
+    const doc = await parseMarkdown(md)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain(
+      '[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]\n'
+    )
+    expect(emitted).toContain('[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]\n')
+    expect(emitted).toContain('人物: C001\n形態: elementary\n刀: blade_1\n')
+    const again = await parseMarkdown(emitted)
+    expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

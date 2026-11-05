@@ -520,6 +520,10 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         ),
         // 「ジョブ」キーはカンマ区切り・複数行可で、`[ジョブ id]` の id を書いた順に集める (#740)
         jobs: collect_id_list(entries, &["ジョブ", "jobs"]),
+        // フィールドの人物・形態・刀 (#1104)。空の値は未指定（emit で `人物: ` だけの行が出ないように）
+        character: lookup_master_string(entries, &["人物", "character"]).filter(|v| !v.is_empty()),
+        form: lookup_master_string(entries, &["形態", "form"]).filter(|v| !v.is_empty()),
+        weapon: lookup_master_string(entries, &["刀", "weapon"]).filter(|v| !v.is_empty()),
     })
 }
 

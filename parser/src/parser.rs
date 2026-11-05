@@ -704,6 +704,55 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             }
         }
 
+        // 一枚絵フィールドの作品設定 (#1104): N9 [補助通行 …] / N10 [フィールド設定 …] / N11 [歩行絵 主人公|同行者 …] / N12 [人物の形態 …]
+        // どれも型2（`[頭 キー=値 …]`）。不正・書式違い・閉じ `]` なしは行番号つき警告でその行だけ捨てる（後続の行は読む）。
+        {
+            let head = directive_head_name(trimmed);
+            let fmt = match head {
+                "補助通行" => Some("[補助通行 条件=a,b …]"),
+                "フィールド設定" => Some("[フィールド設定 速度=… …]"),
+                "歩行絵" => Some("[歩行絵 主人公|同行者 人物=… …]"),
+                "人物の形態" => Some("[人物の形態 目録=… 素材=… 刀素材=…]"),
+                _ => None,
+            };
+            if let Some(fmt) = fmt {
+                let line_no = pos as i64 + 1 + line_base;
+                let inner = trimmed
+                    .strip_prefix('[')
+                    .and_then(|r| r.strip_prefix(head))
+                    .filter(|r| r.starts_with(char::is_whitespace) && r.ends_with(']'))
+                    .map(|r| r.strip_suffix(']').unwrap_or(r));
+                match inner {
+                    Some(inner) => {
+                        let ev = match head {
+                            "補助通行" => parse_field_assist(inner, line_no, trimmed),
+                            "フィールド設定" => {
+                                parse_field_settings(inner, line_no, trimmed)
+                            }
+                            "歩行絵" => parse_field_walk_sprite(inner, line_no, trimmed),
+                            _ => parse_character_forms(inner, line_no, trimmed),
+                        };
+                        if let Some(ev) = ev {
+                            current_events.push(ev);
+                        }
+                    }
+                    None => {
+                        let why = if trimmed.ends_with(']') {
+                            format!("書式が違うため(書式: {fmt})")
+                        } else {
+                            "閉じ括弧 ] がないため".to_string()
+                        };
+                        emit_warning(&format!(
+                            "[name-name-parser] warning: {line_no} 行目は{why}読み捨てた: {}",
+                            truncate_for_warning(trimmed)
+                        ));
+                    }
+                }
+                pos += 1;
+                continue;
+            }
+        }
+
         // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
         // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
         // [エンカウント率: 0]（安全マップ：街・室内）
@@ -4175,6 +4224,11 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     "ワープ",
     "揺れ",
     "窓の景色",
+    // 一枚絵フィールドの作品設定 (#1104)
+    "補助通行",
+    "フィールド設定",
+    "歩行絵",
+    "人物の形態",
     // マスターデータブロック (master.rs)
     "モンスター",
     "アイテム",
@@ -4317,7 +4371,8 @@ fn scan_height_attr(header: &str, line_no: i64) -> Option<u32> {
 fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMapData> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [フィールドマップ] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [フィールドマップ] は{}ため読み捨てた: {}",
+            field_warn_why(why),
             truncate_for_warning(line)
         ));
     };
@@ -4331,7 +4386,7 @@ fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMa
             return None;
         };
         if val.is_empty() {
-            warn(&format!("{key}= の値が空"));
+            warn(&format!("{key}= の値が空の"));
             return None;
         }
         let slot = match key {
@@ -4340,7 +4395,7 @@ fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMa
             "前面" => &mut foreground,
             "戦闘背景" => &mut battle_background,
             _ => {
-                warn(&format!("未知の属性 {key}="));
+                warn(&format!("未知の属性 {key}= がある"));
                 return None;
             }
         };
@@ -4365,7 +4420,8 @@ fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMa
 fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [フィールド:] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [フィールド:] は{}ため読み捨てた: {}",
+            field_warn_why(why),
             truncate_for_warning(line)
         ));
     };
@@ -4401,7 +4457,7 @@ fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> 
                 }
             });
         } else {
-            warn(&format!("未知の指定 \"{tok}\""));
+            warn(&format!("未知の指定 \"{tok}\" がある"));
             return None;
         }
     }
@@ -4432,7 +4488,8 @@ fn parse_finite(s: &str) -> Option<f64> {
 fn parse_field_edge(inner: &str, line_no: i64, line: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [端] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [端] は{}ため読み捨てた: {}",
+            field_warn_why(why),
             truncate_for_warning(line)
         ));
     };
@@ -4442,7 +4499,7 @@ fn parse_field_edge(inner: &str, line_no: i64, line: &str) -> Option<Event> {
     };
     let target = after.trim();
     if target.is_empty() || target.contains(char::is_whitespace) || target.contains('=') {
-        warn(&format!("行き先の場面ID \"{target}\" が不正"));
+        warn(&format!("行き先の場面ID \"{target}\" が不正な"));
         return None;
     }
     let mut toks = before.split_whitespace();
@@ -4457,7 +4514,7 @@ fn parse_field_edge(inner: &str, line_no: i64, line: &str) -> Option<Event> {
     let mut range: Option<(u32, u32)> = None;
     for tok in toks {
         let Some(val) = tok.strip_prefix("範囲=") else {
-            warn(&format!("未知の指定 \"{tok}\""));
+            warn(&format!("未知の指定 \"{tok}\" がある"));
             return None;
         };
         let parsed = val
@@ -4490,7 +4547,8 @@ fn parse_field_edge(inner: &str, line_no: i64, line: &str) -> Option<Event> {
 fn parse_field_warp(inner: &str, line_no: i64, line: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [ワープ] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [ワープ] は{}ため読み捨てた: {}",
+            field_warn_why(why),
             truncate_for_warning(line)
         ));
     };
@@ -4504,7 +4562,7 @@ fn parse_field_warp(inner: &str, line_no: i64, line: &str) -> Option<Event> {
         || name.contains('=')
         || name.starts_with('@')
     {
-        warn("名前がない、または空白・= を含む");
+        warn("名前がないか、空白・= を含む");
         return None;
     }
     let mut toks = after.split_whitespace();
@@ -4553,7 +4611,7 @@ fn parse_field_warp(inner: &str, line_no: i64, line: &str) -> Option<Event> {
             }
             timing_ms = Some([nums[0], nums[1], nums[2]]);
         } else {
-            warn(&format!("未知の指定 \"{tok}\""));
+            warn(&format!("未知の指定 \"{tok}\" がある"));
             return None;
         }
     }
@@ -4576,7 +4634,8 @@ fn parse_field_warp(inner: &str, line_no: i64, line: &str) -> Option<Event> {
 fn parse_field_shake(inner: &str, line_no: i64, line: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [揺れ:] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [揺れ:] は{}ため読み捨てた: {}",
+            field_warn_why(why),
             truncate_for_warning(line)
         ));
     };
@@ -4595,7 +4654,7 @@ fn parse_field_shake(inner: &str, line_no: i64, line: &str) -> Option<Event> {
             "縦" => amplitude_y = Some(v),
             "周期" => period_ms = Some(v),
             _ => {
-                warn(&format!("未知の指定 {key}="));
+                warn(&format!("未知の指定 {key}= がある"));
                 return None;
             }
         }
@@ -4614,7 +4673,8 @@ fn parse_field_shake(inner: &str, line_no: i64, line: &str) -> Option<Event> {
 fn parse_field_scroll(inner: &str, line_no: i64, line: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [窓の景色:] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [窓の景色:] は{}ため読み捨てた: {}",
+            field_warn_why(why),
             truncate_for_warning(line)
         ));
     };
@@ -4639,7 +4699,7 @@ fn parse_field_scroll(inner: &str, line_no: i64, line: &str) -> Option<Event> {
             "速度" => speed = Some(v),
             "y" => y = Some(v),
             _ => {
-                warn(&format!("未知の指定 {key}="));
+                warn(&format!("未知の指定 {key}= がある"));
                 return None;
             }
         }
@@ -4653,6 +4713,313 @@ fn parse_field_scroll(inner: &str, line_no: i64, line: &str) -> Option<Event> {
         speed,
         y,
     })
+}
+
+/// 一枚絵フィールドの警告文 `…行目の [X] は{why}ため読み捨てた` に埋める why の先頭を整える (#1104)。
+/// why が半角英数字で始まるとき（`path がない` `y=abc が数でない` など）は、助詞「は」との間に空白を入れる。
+/// why の末尾は「ない」「でない」「…の」「…な」など「ため」に自然につながる形で書く。
+fn field_warn_why(why: &str) -> String {
+    if why.starts_with(|c: char| c.is_ascii()) {
+        format!(" {why}")
+    } else {
+        why.to_string()
+    }
+}
+
+/// 型2 の属性部（空白区切りの `キー=値`）を (キー, 値) の列にする (#1104)。
+/// `=` がない・値が空・キーの重複は警告して None。
+fn field_attr_pairs<'a>(inner: &'a str, warn: &dyn Fn(&str)) -> Option<Vec<(&'a str, &'a str)>> {
+    let mut out: Vec<(&str, &str)> = Vec::new();
+    for tok in inner.split_whitespace() {
+        let Some((key, val)) = tok.split_once('=').filter(|(k, _)| !k.is_empty()) else {
+            warn(&format!("属性 \"{tok}\" が キー=値 の形でない"));
+            return None;
+        };
+        if val.is_empty() {
+            warn(&format!("{key}= の値が空の"));
+            return None;
+        }
+        if out.iter().any(|(k, _)| *k == key) {
+            warn(&format!("{key}= が重複している"));
+            return None;
+        }
+        out.push((key, val));
+    }
+    Some(out)
+}
+
+/// フラグ名（`,` と空白を含まない1語）か (#1104)。
+fn is_flag_word(s: &str) -> bool {
+    !s.is_empty() && !s.contains(',') && !s.contains(char::is_whitespace)
+}
+
+/// `[補助通行 条件=a,b 除く=… 幽霊=… 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]` の `[補助通行` 以降（`]` なし）を
+/// パースする (#1104)。`条件=` は必須。不正なら警告して None。
+fn parse_field_assist(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [補助通行] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    let pairs = field_attr_pairs(inner, &warn)?;
+    let mut d = FieldAssistData {
+        conditions: Vec::new(),
+        except: None,
+        ghost: None,
+        speed_scale: None,
+        opacity: None,
+        behind_px: None,
+        fade_ms: None,
+    };
+    for (key, val) in pairs {
+        match key {
+            "条件" => {
+                let names: Vec<&str> = val.split(',').collect();
+                if !names.iter().all(|n| is_flag_word(n)) {
+                    warn(&format!("条件={val} が フラグ名を , で区切った形でない"));
+                    return None;
+                }
+                d.conditions = names.into_iter().map(str::to_string).collect();
+            }
+            "除く" | "幽霊" => {
+                if !is_flag_word(val) {
+                    warn(&format!("{key}={val} が 1つのフラグ名でない"));
+                    return None;
+                }
+                if key == "除く" {
+                    d.except = Some(val.to_string());
+                } else {
+                    d.ghost = Some(val.to_string());
+                }
+            }
+            "速度倍率" | "後ろ" => {
+                let Some(v) = parse_finite(val).filter(|v| *v > 0.0) else {
+                    warn(&format!("{key}={val} が 0 より大きい数でない"));
+                    return None;
+                };
+                if key == "速度倍率" {
+                    d.speed_scale = Some(v);
+                } else {
+                    d.behind_px = Some(v);
+                }
+            }
+            "濃さ" => {
+                let Some(v) = parse_finite(val).filter(|v| (0.0..=1.0).contains(v)) else {
+                    warn(&format!("濃さ={val} が 0〜1 の数でない"));
+                    return None;
+                };
+                d.opacity = Some(v);
+            }
+            "フェード" => {
+                let Some(v) = parse_finite(val).filter(|v| *v >= 0.0) else {
+                    warn(&format!("フェード={val} が 0 以上の数(ms)でない"));
+                    return None;
+                };
+                d.fade_ms = Some(v);
+            }
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        }
+    }
+    if d.conditions.is_empty() {
+        warn("必須の 条件= がない");
+        return None;
+    }
+    Some(Event::FieldAssist(d))
+}
+
+/// `[フィールド設定 速度=260 端のしきい値=6 端の接触=身体 文字間隔=30 刀の倍率=2]` の `[フィールド設定` 以降（`]` なし）を
+/// パースする (#1104)。全部任意だが1つは書く。不正なら警告して None。
+fn parse_field_settings(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [フィールド設定] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    let pairs = field_attr_pairs(inner, &warn)?;
+    if pairs.is_empty() {
+        warn("指定が1つもない");
+        return None;
+    }
+    let mut d = FieldSettingsData {
+        speed: None,
+        edge_threshold: None,
+        edge_contact: None,
+        ms_per_char: None,
+        weapon_scale: None,
+    };
+    for (key, val) in pairs {
+        match key {
+            "速度" | "端のしきい値" => {
+                let Some(v) = parse_finite(val).filter(|v| *v > 0.0) else {
+                    warn(&format!("{key}={val} が 0 より大きい数でない"));
+                    return None;
+                };
+                if key == "速度" {
+                    d.speed = Some(v);
+                } else {
+                    d.edge_threshold = Some(v);
+                }
+            }
+            "端の接触" => {
+                d.edge_contact = Some(match val {
+                    "身体" | "body" => EdgeContact::Body,
+                    "足元" | "foot" => EdgeContact::Foot,
+                    _ => {
+                        warn(&format!("端の接触={val} が 身体/足元 でない"));
+                        return None;
+                    }
+                });
+            }
+            "文字間隔" => {
+                let Some(v) = parse_finite(val).filter(|v| (0.0..=1000.0).contains(v)) else {
+                    warn(&format!("文字間隔={val} が 0〜1000 の数(ms)でない"));
+                    return None;
+                };
+                d.ms_per_char = Some(v);
+            }
+            "刀の倍率" => {
+                let Some(v) = parse_finite(val).filter(|v| *v >= 1.0) else {
+                    warn(&format!("刀の倍率={val} が 1 以上の数でない"));
+                    return None;
+                };
+                d.weapon_scale = Some(v);
+            }
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        }
+    }
+    Some(Event::FieldSettings(d))
+}
+
+/// `[歩行絵 主人公|同行者 人物=… 形態=… 高さ=… コマ長=… 周期=0,1,2,1 停止=1 名前=…]` の `[歩行絵` 以降（`]` なし）を
+/// パースする (#1104)。`名前=` は同行者だけ。NPC の歩行絵は `[NPC]` 側の規則で指定する。不正なら警告して None。
+fn parse_field_walk_sprite(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [歩行絵] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    let inner = inner.trim_start();
+    let (kind_tok, rest) = inner.split_once(char::is_whitespace).unwrap_or((inner, ""));
+    let kind = match kind_tok {
+        "主人公" => WalkSpriteKind::Player,
+        "同行者" => WalkSpriteKind::Companion,
+        _ => {
+            warn(&format!("対象 \"{kind_tok}\" が 主人公/同行者 でない"));
+            return None;
+        }
+    };
+    let pairs = field_attr_pairs(rest, &warn)?;
+    if pairs.is_empty() {
+        warn("指定が1つもない");
+        return None;
+    }
+    let mut d = FieldWalkSpriteData {
+        kind,
+        character: None,
+        form: None,
+        height: None,
+        frame_ms: None,
+        cycle: None,
+        idle_frame: None,
+        name: None,
+    };
+    for (key, val) in pairs {
+        match key {
+            "人物" => d.character = Some(val.to_string()),
+            "形態" => d.form = Some(val.to_string()),
+            "高さ" | "コマ長" => {
+                let Some(v) = parse_finite(val).filter(|v| *v > 0.0) else {
+                    warn(&format!("{key}={val} が 0 より大きい数でない"));
+                    return None;
+                };
+                if key == "高さ" {
+                    d.height = Some(v);
+                } else {
+                    d.frame_ms = Some(v);
+                }
+            }
+            "周期" => {
+                let parts: Vec<&str> = val.split(',').collect();
+                let nums: Vec<u32> = parts
+                    .iter()
+                    .filter_map(|p| p.parse::<u32>().ok())
+                    .filter(|n| *n <= 2)
+                    .collect();
+                if parts.len() > 16 || nums.len() != parts.len() {
+                    warn(&format!(
+                        "周期={val} が 0〜2 の整数を 1〜16 個 , で区切った形でない"
+                    ));
+                    return None;
+                }
+                d.cycle = Some(nums);
+            }
+            "停止" => {
+                let Some(n) = val.parse::<u32>().ok().filter(|n| *n <= 2) else {
+                    warn(&format!("停止={val} が 0〜2 の整数でない"));
+                    return None;
+                };
+                d.idle_frame = Some(n);
+            }
+            "名前" => {
+                if kind != WalkSpriteKind::Companion {
+                    warn("主人公に 名前= がある(同行者だけに書ける)");
+                    return None;
+                }
+                d.name = Some(val.to_string());
+            }
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        }
+    }
+    Some(Event::FieldWalkSprite(d))
+}
+
+/// `[人物の形態 目録=… 素材=… 刀素材=…]` の `[人物の形態` 以降（`]` なし）をパースする (#1104)。
+/// `目録=` `素材=` は必須、`刀素材=` は任意。パスは中身を見ずに透過する。不正なら警告して None。
+fn parse_character_forms(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [人物の形態] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    let pairs = field_attr_pairs(inner, &warn)?;
+    let (mut catalog, mut assets, mut weapon_assets) = (None, None, None);
+    for (key, val) in pairs {
+        match key {
+            "目録" => catalog = Some(val.to_string()),
+            "素材" => assets = Some(val.to_string()),
+            "刀素材" => weapon_assets = Some(val.to_string()),
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        }
+    }
+    let (Some(catalog), Some(assets)) = (catalog, assets) else {
+        warn("必須の 目録= と 素材= がそろっていない");
+        return None;
+    };
+    Some(Event::CharacterForms(CharacterFormsDecl {
+        catalog,
+        assets,
+        weapon_assets,
+    }))
 }
 
 /// `[エンカウント率: ...]` のボディを u32 にパースする。
@@ -10312,5 +10679,381 @@ mod field_scene_notation_tests {
             "{emitted}"
         );
         assert!(emitted.contains("[ワープ: 改札]\n"), "{emitted}");
+    }
+}
+
+/// 一枚絵フィールドの作品設定 N9〜N12 と、S2a・S2b の警告文の日本語 (#1104)。
+#[cfg(test)]
+mod field_settings_notation_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+
+    fn events_of(body: &str) -> Vec<Event> {
+        let _ = take_test_warnings();
+        parse(&format!("{HEAD}{body}")).chapters[0].scenes[0]
+            .events
+            .clone()
+    }
+
+    #[test]
+    fn parses_all_notations() {
+        let evs = events_of(
+            "[補助通行 条件=買った,説得済 除く=説得中 幽霊=幽霊中 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]\n[フィールド設定 速度=260 端のしきい値=6 端の接触=足元 文字間隔=30 刀の倍率=2]\n[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]\n[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]\n[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]\n",
+        );
+        assert_eq!(
+            evs,
+            vec![
+                Event::FieldAssist(FieldAssistData {
+                    conditions: vec!["買った".into(), "説得済".into()],
+                    except: Some("説得中".into()),
+                    ghost: Some("幽霊中".into()),
+                    speed_scale: Some(0.7),
+                    opacity: Some(0.5),
+                    behind_px: Some(40.0),
+                    fade_ms: Some(200.0),
+                }),
+                Event::FieldSettings(FieldSettingsData {
+                    speed: Some(260.0),
+                    edge_threshold: Some(6.0),
+                    edge_contact: Some(EdgeContact::Foot),
+                    ms_per_char: Some(30.0),
+                    weapon_scale: Some(2.0),
+                }),
+                Event::FieldWalkSprite(FieldWalkSpriteData {
+                    kind: WalkSpriteKind::Player,
+                    character: Some("C001".into()),
+                    form: Some("elementary".into()),
+                    height: Some(96.0),
+                    frame_ms: Some(140.0),
+                    cycle: Some(vec![0, 1, 2, 1]),
+                    idle_frame: Some(1),
+                    name: None,
+                }),
+                Event::FieldWalkSprite(FieldWalkSpriteData {
+                    kind: WalkSpriteKind::Companion,
+                    character: Some("C002".into()),
+                    form: Some("adult".into()),
+                    height: None,
+                    frame_ms: None,
+                    cycle: None,
+                    idle_frame: None,
+                    name: Some("ミナ".into()),
+                }),
+                Event::CharacterForms(CharacterFormsDecl {
+                    catalog: "field/forms.json".into(),
+                    assets: "chars/".into(),
+                    weapon_assets: Some("weapons/".into()),
+                }),
+            ]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn minimal_and_boundary_values_ok() {
+        let evs = events_of(
+            "[補助通行 条件=a]\n[補助通行 条件=a 濃さ=0 フェード=0]\n[補助通行 条件=a 濃さ=1]\n[フィールド設定 文字間隔=0]\n[フィールド設定 文字間隔=1000 刀の倍率=1 端の接触=body]\n[歩行絵 主人公 周期=2]\n[歩行絵 主人公 周期=0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0 停止=0]\n[人物の形態 目録=a.json 素材=c/]\n",
+        );
+        assert_eq!(evs.len(), 8, "{evs:?}");
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn invalid_values_warn_and_drop_only_that_line() {
+        for (line, why, tag) in [
+            ("[補助通行 除く=x]", "必須の 条件=", "[補助通行]"),
+            ("[補助通行 条件=a,,b]", "フラグ名を ,", "[補助通行]"),
+            ("[補助通行 条件=a, b]", "キー=値", "[補助通行]"),
+            ("[補助通行 条件=a 除く=x,y]", "1つのフラグ名", "[補助通行]"),
+            ("[補助通行 条件=a 速度倍率=0]", "0 より大きい", "[補助通行]"),
+            ("[補助通行 条件=a 速度倍率=x]", "0 より大きい", "[補助通行]"),
+            ("[補助通行 条件=a 濃さ=1.5]", "0〜1", "[補助通行]"),
+            ("[補助通行 条件=a 濃さ=-0.1]", "0〜1", "[補助通行]"),
+            ("[補助通行 条件=a 後ろ=0]", "0 より大きい", "[補助通行]"),
+            ("[補助通行 条件=a フェード=-1]", "0 以上", "[補助通行]"),
+            ("[補助通行 条件=a 条件=b]", "重複", "[補助通行]"),
+            ("[補助通行 条件=a 幅=2]", "未知の指定", "[補助通行]"),
+            ("[補助通行 条件=]", "値が空", "[補助通行]"),
+            (
+                "[フィールド設定 速度=0]",
+                "0 より大きい",
+                "[フィールド設定]",
+            ),
+            (
+                "[フィールド設定 端のしきい値=-1]",
+                "0 より大きい",
+                "[フィールド設定]",
+            ),
+            (
+                "[フィールド設定 端の接触=手]",
+                "身体/足元",
+                "[フィールド設定]",
+            ),
+            (
+                "[フィールド設定 文字間隔=1001]",
+                "0〜1000",
+                "[フィールド設定]",
+            ),
+            (
+                "[フィールド設定 文字間隔=-1]",
+                "0〜1000",
+                "[フィールド設定]",
+            ),
+            (
+                "[フィールド設定 刀の倍率=0.9]",
+                "1 以上",
+                "[フィールド設定]",
+            ),
+            (
+                "[フィールド設定 刀の倍率=inf]",
+                "1 以上",
+                "[フィールド設定]",
+            ),
+            ("[フィールド設定 幅=2]", "未知の指定", "[フィールド設定]"),
+            ("[フィールド設定 速度]", "キー=値", "[フィールド設定]"),
+            ("[歩行絵 NPC 人物=a]", "主人公/同行者", "[歩行絵]"),
+            ("[歩行絵 人物=a]", "主人公/同行者", "[歩行絵]"),
+            (
+                "[歩行絵 主人公 名前=ミナ]",
+                "同行者だけに書ける",
+                "[歩行絵]",
+            ),
+            ("[歩行絵 主人公 高さ=0]", "0 より大きい", "[歩行絵]"),
+            ("[歩行絵 主人公 コマ長=-5]", "0 より大きい", "[歩行絵]"),
+            (
+                "[歩行絵 主人公 周期=0,1,3]",
+                "0〜2 の整数を 1〜16 個",
+                "[歩行絵]",
+            ),
+            (
+                "[歩行絵 主人公 周期=0,,1]",
+                "0〜2 の整数を 1〜16 個",
+                "[歩行絵]",
+            ),
+            (
+                "[歩行絵 主人公 周期=a]",
+                "0〜2 の整数を 1〜16 個",
+                "[歩行絵]",
+            ),
+            (
+                "[歩行絵 主人公 周期=0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1]",
+                "0〜2 の整数を 1〜16 個",
+                "[歩行絵]",
+            ),
+            ("[歩行絵 主人公 停止=3]", "0〜2 の整数", "[歩行絵]"),
+            ("[歩行絵 主人公 停止=1.5]", "0〜2 の整数", "[歩行絵]"),
+            ("[歩行絵 同行者 絵=mina]", "未知の指定", "[歩行絵]"),
+            (
+                "[人物の形態 素材=c/]",
+                "必須の 目録= と 素材=",
+                "[人物の形態]",
+            ),
+            (
+                "[人物の形態 目録=a.json]",
+                "必須の 目録= と 素材=",
+                "[人物の形態]",
+            ),
+            (
+                "[人物の形態 目録=a.json 素材=c/ 幅=2]",
+                "未知の指定",
+                "[人物の形態]",
+            ),
+        ] {
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目の")
+                    && w[0].contains(tag)
+                    && w[0].contains(why)
+                    && w[0].contains(line)
+                    && w[0].contains("ため読み捨てた"),
+                "{line}: {w:?}"
+            );
+            assert!(
+                evs.iter().all(|e| !matches!(
+                    e,
+                    Event::FieldAssist(_)
+                        | Event::FieldSettings(_)
+                        | Event::FieldWalkSprite(_)
+                        | Event::CharacterForms(_)
+                )),
+                "{line}"
+            );
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_settings_and_sprite_warn() {
+        for (line, tag) in [
+            ("[フィールド設定 ]", "[フィールド設定]"),
+            ("[歩行絵 主人公 ]", "[歩行絵]"),
+            ("[歩行絵 主人公]", "[歩行絵]"),
+        ] {
+            let _ = events_of(&format!("{line}\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains(tag) && w[0].contains("指定が1つもないため"),
+                "{w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_lines_warn_instead_of_vanishing() {
+        for (line, want) in [
+            ("[補助通行]", "書式が違う"),
+            ("[補助通行: 条件=a]", "書式が違う"),
+            ("[フィールド設定]", "書式が違う"),
+            ("[フィールド設定: 速度=1]", "書式が違う"),
+            ("[歩行絵]", "書式が違う"),
+            ("[人物の形態]", "書式が違う"),
+            ("[人物の形態: 目録=a 素材=b]", "書式が違う"),
+            ("[補助通行 条件=a", "閉じ括弧 ] がない"),
+            ("[フィールド設定 速度=1", "閉じ括弧 ] がない"),
+            ("[歩行絵 主人公 周期=0,1", "閉じ括弧 ] がない"),
+            ("[人物の形態 目録=a 素材=b", "閉じ括弧 ] がない"),
+        ] {
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目") && w[0].contains(want) && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn notations_in_event_warn_as_unsupported() {
+        let evs = events_of(
+            "[イベント e]\n[補助通行 条件=a]\n[フィールド設定 速度=1]\n[歩行絵 主人公 人物=a]\n[人物の形態 目録=a 素材=b]\n[/イベント]\n",
+        );
+        match &evs[..] {
+            [Event::RpgEvent { commands, .. }] => assert!(commands.is_empty()),
+            other => panic!("{other:?}"),
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 4, "{w:?}");
+        for (m, (n, head)) in w.iter().zip([
+            (10, "補助通行"),
+            (11, "フィールド設定"),
+            (12, "歩行絵"),
+            (13, "人物の形態"),
+        ]) {
+            assert!(
+                m.contains(&format!("{n} 行目"))
+                    && m.contains(&format!("[イベント] 内では未対応の記法 [{head}]")),
+                "{w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn party_keys_parse_emit_round_trip_and_absent_keys_are_not_emitted() {
+        let body = "[パーティ p1]\n名前: ぼく\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n人物: C001\n形態: elementary\n刀: blade_1\n[/パーティ]\n[パーティ p2]\n名前: きみ\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n[/パーティ]\n";
+        let _ = take_test_warnings();
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        assert!(
+            emitted.contains("人物: C001\n形態: elementary\n刀: blade_1\n[/パーティ]\n"),
+            "{emitted}"
+        );
+        assert_eq!(emitted.matches("人物:").count(), 1, "{emitted}");
+        assert_eq!(emitted.matches("刀:").count(), 1, "{emitted}");
+        let members: Vec<&PartyMemberDef> = doc1.chapters[0].scenes[0]
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PartyMember(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(members[0].character.as_deref(), Some("C001"));
+        assert_eq!(members[0].form.as_deref(), Some("elementary"));
+        assert_eq!(members[0].weapon.as_deref(), Some("blade_1"));
+        assert_eq!(members[1].character, None);
+        assert_eq!(members[1].weapon, None);
+    }
+
+    #[test]
+    fn round_trip() {
+        let body = "[補助通行 条件=買った,説得済 除く=説得中 幽霊=幽霊中 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]\n[フィールド設定 速度=260 端のしきい値=6 端の接触=足元 文字間隔=30 刀の倍率=2]\n[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]\n[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]\n[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]\n[人物の形態 目録=a.json 素材=c/]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        let _ = take_test_warnings();
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        assert_eq!(emitted, emit(&doc2));
+        for want in [
+            "[補助通行 条件=買った,説得済 除く=説得中 幽霊=幽霊中 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]\n",
+            "[フィールド設定 速度=260 端のしきい値=6 端の接触=足元 文字間隔=30 刀の倍率=2]\n",
+            "[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]\n",
+            "[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]\n",
+            "[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]\n",
+            "[人物の形態 目録=a.json 素材=c/]\n",
+        ] {
+            assert!(emitted.contains(want), "{want}: {emitted}");
+        }
+    }
+
+    /// S2a・S2b で追加した警告の日本語 (#1104)。「…でないのため」「は path が」の空白欠けを直した。
+    #[test]
+    fn s2a_s2b_warning_grammar() {
+        for line in [
+            "[端 斜め 範囲=1..2 → a]",
+            "[端 右 → a]",
+            "[ワープ w → a @1,2 演出=ぼかし]",
+            "[ワープ w → a]",
+            "[揺れ: 縦=0]",
+            "[揺れ: 周期=600]",
+            "[窓の景色: s.webp]",
+            "[窓の景色: s.webp, 速度=1, y=z]",
+            "[窓の景色: ]",
+            "[フィールドマップ 背景=a.webp]",
+            "[フィールドマップ 背景=a.webp マスク=m.webp 幅=1]",
+            "[フィールドマップ 背景=]",
+            "[フィールド: ]",
+            "[フィールド: a 向き=斜め]",
+        ] {
+            let _ = events_of(&format!("{line}\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                !w[0].contains("ないのため") && !w[0].contains("でないのため"),
+                "{line}: {w:?}"
+            );
+            assert!(w[0].contains("ため読み捨てた"), "{line}: {w:?}");
+        }
+        let _ = events_of("[窓の景色: s.webp]\n");
+        let w = take_test_warnings();
+        assert!(
+            w[0].contains("は必須の 速度= がないため読み捨てた"),
+            "{w:?}"
+        );
+        let _ = events_of("[窓の景色: ]\n");
+        let w = take_test_warnings();
+        assert!(w[0].contains("は path がないため読み捨てた"), "{w:?}");
+        let _ = events_of("[窓の景色: s.webp, 速度=1, y=z]\n");
+        let w = take_test_warnings();
+        assert!(w[0].contains("は y=z が数でないため読み捨てた"), "{w:?}");
+        let _ = events_of("[フィールドマップ 背景=]\n");
+        let w = take_test_warnings();
+        assert!(w[0].contains("は背景= の値が空のため読み捨てた"), "{w:?}");
     }
 }

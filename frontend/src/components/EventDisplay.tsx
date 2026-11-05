@@ -10,7 +10,7 @@ interface EventDisplayProps {
  * EventCard 内の編集 UI と同じカードに差し替える形で使われる。
  *
  * Issue #234: 旧版は新 variant (Animate / Monster / Item / Spell / PartyMember /
- * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / FieldEdge / FieldWarp / FieldShake / FieldScroll / PlayerStart / TitleShow /
+ * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / FieldEdge / FieldWarp / FieldShake / FieldScroll / FieldAssist / FieldSettings / FieldWalkSprite / CharacterForms / PlayerStart / TitleShow /
  * DialogBorderless / Shake / Flash / Fade) を return null で握り潰していた。
  * data.md 等のマスター .md を読んだときにエディタ上で全部空に見える問題を解消する。
  */
@@ -449,6 +449,9 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
             ? ` 装備枠=${p.equipmentSlots.join(',')}`
             : ''}
           {p.jobs && p.jobs.length > 0 ? ` ジョブ=${p.jobs.join(',')}` : ''}
+          {p.character ? ` 人物=${p.character}` : ''}
+          {p.form ? ` 形態=${p.form}` : ''}
+          {p.weapon ? ` 刀=${p.weapon}` : ''}
         </div>
         {learns && <div className={`text-xs ml-4 ${meta}`}>習得: {learns}</div>}
       </div>
@@ -544,6 +547,61 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
       <div className={`text-xs italic ml-2 ${meta}`}>
         窓の景色: {s.image} 速度={s.speed}
         {s.y != null ? ` y=${s.y}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldAssist' in event) {
+    const a = event.FieldAssist
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        補助通行: 条件={a.conditions.join(',')}
+        {a.except ? ` 除く=${a.except}` : ''}
+        {a.ghost ? ` 幽霊=${a.ghost}` : ''}
+        {a.speed_scale != null ? ` 速度倍率=${a.speed_scale}` : ''}
+        {a.opacity != null ? ` 濃さ=${a.opacity}` : ''}
+        {a.behind_px != null ? ` 後ろ=${a.behind_px}` : ''}
+        {a.fade_ms != null ? ` フェード=${a.fade_ms}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldSettings' in event) {
+    const f = event.FieldSettings
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        フィールド設定:
+        {f.speed != null ? ` 速度=${f.speed}` : ''}
+        {f.edge_threshold != null ? ` 端のしきい値=${f.edge_threshold}` : ''}
+        {f.edge_contact ? ` 端の接触=${f.edge_contact === 'Foot' ? '足元' : '身体'}` : ''}
+        {f.ms_per_char != null ? ` 文字間隔=${f.ms_per_char}` : ''}
+        {f.weapon_scale != null ? ` 刀の倍率=${f.weapon_scale}` : ''}
+      </div>
+    )
+  }
+
+  if ('FieldWalkSprite' in event) {
+    const w = event.FieldWalkSprite
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        歩行絵 {w.kind === 'Companion' ? '同行者' : '主人公'}
+        {w.character ? ` 人物=${w.character}` : ''}
+        {w.form ? ` 形態=${w.form}` : ''}
+        {w.height != null ? ` 高さ=${w.height}` : ''}
+        {w.frame_ms != null ? ` コマ長=${w.frame_ms}` : ''}
+        {w.cycle ? ` 周期=${w.cycle.join(',')}` : ''}
+        {w.idle_frame != null ? ` 停止=${w.idle_frame}` : ''}
+        {w.name ? ` 名前=${w.name}` : ''}
+      </div>
+    )
+  }
+
+  if ('CharacterForms' in event) {
+    const c = event.CharacterForms
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        人物の形態: 目録={c.catalog} 素材={c.assets}
+        {c.weapon_assets ? ` 刀素材=${c.weapon_assets}` : ''}
       </div>
     )
   }
