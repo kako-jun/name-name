@@ -482,7 +482,7 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     const groups = m.encounter_groups?.join(', ')
     return (
       <div className="space-y-0.5">
-        <div className={`text-sm font-semibold ml-2 ${head}`}>🗺 フィールドマップ</div>
+        <div className={`text-sm font-semibold ml-2 ${head}`}>フィールドマップ</div>
         <div className={`text-xs ml-4 ${meta}`}>
           背景={m.background} マスク={m.mask}
           {m.foreground ? ` 前面=${m.foreground}` : ''}

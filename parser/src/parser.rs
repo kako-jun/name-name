@@ -619,6 +619,29 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             continue;
         }
 
+        // 一枚絵フィールドの頭を持つのに上の分岐で読めなかった行 (#1100)。黙って捨てず行番号つきで警告する。
+        // 閉じ `]` なし、または型の取り違え（`[フィールド]` `[フィールド 寺町]` `[フィールドマップ: x]` など）。
+        // 正しい `[フィールド終了]` は下の event_only_command が専用警告を出すので除く。
+        if trimmed != "[フィールド終了]"
+            && matches!(
+                directive_head_name(trimmed),
+                "フィールドマップ" | "フィールド" | "フィールド終了"
+            )
+        {
+            let why = if trimmed.ends_with(']') {
+                "書式が違うため(書式: [フィールドマップ 背景=… マスク=…] / [フィールド: 場面ID …] / [イベント] 内の [フィールド終了])"
+            } else {
+                "閉じ括弧 ] がないため"
+            };
+            emit_warning(&format!(
+                "[name-name-parser] warning: {} 行目は{why}読み捨てた: {}",
+                pos as i64 + 1 + line_base,
+                truncate_for_warning(trimmed)
+            ));
+            pos += 1;
+            continue;
+        }
+
         // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
         // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
         // [エンカウント率: 0]（安全マップ：街・室内）
@@ -4162,7 +4185,7 @@ fn encounter_precedes_field_map(events: &[Event], lines: &[&str], pos: usize) ->
         {
             continue;
         }
-        return t.starts_with("[フィールドマップ");
+        return t.starts_with("[フィールドマップ") && t.ends_with(']');
     }
     false
 }
@@ -9625,5 +9648,42 @@ mod field_notation_tests {
         assert!(take_test_warnings().is_empty());
         // 正準形は再 emit で不変
         assert_eq!(emitted, emit(&doc2));
+    }
+    #[test]
+    fn malformed_field_lines_warn_instead_of_vanishing() {
+        for (line, want) in [
+            ("[フィールド]", "書式が違う"),
+            ("[フィールド 寺町]", "書式が違う"),
+            ("[フィールドマップ: x]", "書式が違う"),
+            ("[フィールド終了: x]", "書式が違う"),
+            ("[フィールドマップ 背景=a マスク=m", "閉じ括弧 ] がない"),
+            ("[フィールド: x @1,2", "閉じ括弧 ] がない"),
+            ("[フィールド終了", "閉じ括弧 ] がない"),
+        ] {
+            let _ = take_test_warnings();
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目") && w[0].contains(want) && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(evs
+                .iter()
+                .all(|e| !matches!(e, Event::FieldMap(_) | Event::Field { .. })));
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn encounter_before_unclosed_field_map_is_not_held() {
+        let _ = take_test_warnings();
+        let evs = events_of("[エンカウント率: 1/16]\n[フィールドマップ 背景=a マスク=m\n");
+        assert!(evs.is_empty(), "{evs:?}");
+        let w = take_test_warnings();
+        assert!(w.iter().any(|m| m.contains("閉じ括弧 ] がない")), "{w:?}");
     }
 }
