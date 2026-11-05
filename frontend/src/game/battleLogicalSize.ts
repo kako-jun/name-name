@@ -6,7 +6,7 @@
  *
  * 既存の戦闘レイアウト（`battleLayout.ts` の `SIDE_*` px 定数・文字・窓）は高さ 450 基準の設計値なので、
  * 1920×1080 では BattleScreen の根に `uiScale = 1080 / 450 = 2.4` を掛けて同じ相対的な見た目にする（1920 / 2.4 = 800 なので 16:9 のまま割り切れる）。
- * `logicalSize` 未指定の呼び出し（戦闘サンプル・本編 RPG・従来の field-sample）は従来の可変レイアウトのまま。
+ * `logicalSize` 未指定の呼び出し（戦闘・本編 RPG・従来の field）は従来の可変レイアウトのまま。
  */
 
 export const BATTLE_LOGICAL_WIDTH = 1920

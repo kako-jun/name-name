@@ -614,7 +614,7 @@ export interface BattleEntity {
   buffs?: Partial<Record<StatKey, number>>
   /**
    * 人物の形態（時期・車椅子。例 `elementary-wheelchair`）(#1020)。味方だけ。戦闘エンジンは解釈しない。
-   * セーブ（`rpg.party[].form`）に書くと、一枚絵フィールドが再開時にその形態の戦闘ポーズ・歩行絵を選ぶ（`fieldSample/characterForms.ts`）
+   * セーブ（`rpg.party[].form`）に書くと、一枚絵フィールドが再開時にその形態の戦闘ポーズ・歩行絵を選ぶ（`field/characterForms.ts`）
    */
   form?: string
   /** 倒したときに得られる経験値（敵側のみ、味方は undefined） */

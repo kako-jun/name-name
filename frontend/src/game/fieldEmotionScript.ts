@@ -1,7 +1,7 @@
 /**
  * 脚本・frontmatter からフィールドの感情吹き出し (#937) を呼ぶための純粋関数群 (#943)。
  *
- * - frontmatter `field_emotions: <JSONパス>` の JSON は、フィールドサンプルの設定の `emotions`（種類名 → 絵の宣言）と同じ形。
+ * - frontmatter `field_emotions: <JSONパス>` の JSON は、一枚絵フィールドの設定の `emotions`（種類名 → 絵の宣言）と同じ形。
  *   読み込んだ中身は `parseEmotions` に通して同じ検証をする。JSON として読めない・形が違うときは警告して無視（吹き出しなし）。
  * - 脚本 `[感情: 対象, 種類, 持続=ms]`（`Event.Emotion`）は `resolveEmotion` で `showEmotion` に渡せる形へ解決する。
  *   対象は `主人公`（または frontmatter `protagonist` の名前）→ `player`、同行者の話者名 → `companion`、NPC の話者名 → `npc:<id>`。
@@ -141,11 +141,11 @@ export async function loadEmotionSheets(
       const res = await fetchFn(src.url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const parsed = parseFieldEmotionsText(await res.text(), src.resolveImage)
-      for (const w of parsed.warnings) warn(`[field-sample] emotionsUrl: ${w}`)
+      for (const w of parsed.warnings) warn(`[field] emotionsUrl: ${w}`)
       external = parsed.emotions
     } catch (e) {
       warn(
-        `[field-sample] emotionsUrl を読めません（無視します）: ${src.url} ${e instanceof Error ? e.message : String(e)}`
+        `[field] emotionsUrl を読めません（無視します）: ${src.url} ${e instanceof Error ? e.message : String(e)}`
       )
     }
   }

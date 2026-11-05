@@ -1,5 +1,5 @@
 /**
- * 一枚絵フィールドサンプルページ (#807) のブラウザ側エントリ。本編からはリンクしない開発用ページ。
+ * 一枚絵フィールドページ (#807) のブラウザ側エントリ。本編からはリンクしない開発用ページ。
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
@@ -114,7 +114,7 @@ import {
   type FieldScriptEvents,
 } from '../game/fieldScript'
 import { hasOwn, safeAssign } from '../game/ownProperty'
-import { resolveUrl } from '../battleSample/config'
+import { resolveUrl } from '../battle/config'
 import {
   DIAGONAL_FACINGS,
   FACINGS,
@@ -124,7 +124,7 @@ import {
   pickConfigSource,
   parseConfigText,
   type FieldNpc,
-  type FieldSampleConfig,
+  type FieldConfig,
   type FieldWarp,
 } from './config'
 import { buildBattleMenu } from './battleMenu'
@@ -243,7 +243,7 @@ interface LoadedScene {
   scroll: Texture | null
 }
 
-async function loadScene(config: FieldSampleConfig, id: string): Promise<LoadedScene> {
+async function loadScene(config: FieldConfig, id: string): Promise<LoadedScene> {
   const sc = config.scenes[id]
   const [bg, maskBmp, fgBmp, scrollBmp] = await Promise.all([
     loadBitmap(sc.background),
@@ -325,7 +325,7 @@ async function expandFormsInText(text: string, textBase: string): Promise<string
     const manifest = parseCharacterFormsManifest(await res.json())
     if (!manifest.ok) throw new Error(`${mu}: ${manifest.error}`)
     const out = expandCharacterForms(raw, manifest.value, savedFormsFromResume(location.search))
-    for (const w of out.warnings) console.warn(`[field-sample] characterForms: ${w}`)
+    for (const w of out.warnings) console.warn(`[field] characterForms: ${w}`)
     return JSON.stringify(out.raw)
   } catch (e) {
     showError(
@@ -336,7 +336,7 @@ async function expandFormsInText(text: string, textBase: string): Promise<string
 }
 
 /** 設定 JSON を読む。`?config=<URL>` が無い・読めない・不正のときはエラーを出して null（起動しない） */
-async function loadConfig(): Promise<FieldSampleConfig | null> {
+async function loadConfig(): Promise<FieldConfig | null> {
   const base = location.href
   const raw = pickConfigSource(location.search)
   const url = raw ? resolveUrl(raw, base) : null
@@ -371,7 +371,7 @@ async function loadConfig(): Promise<FieldSampleConfig | null> {
  * 橙からしか入れない白（start・リンクの帯・ワープの at のどれにも通じない白）を求める (#862, #928)。
  * 橙を通って入るしかないので、ラッチ中はその上でラッチを保つ（橙の途中で通れない状態になっても出られる）
  */
-function holdFor(config: FieldSampleConfig, id: string, mask: WalkMask): Uint8Array | undefined {
+function holdFor(config: FieldConfig, id: string, mask: WalkMask): Uint8Array | undefined {
   if (!mask.assist) return undefined
   const sc = config.scenes[id]
   const safe: Vec[] = []
@@ -390,7 +390,7 @@ function holdFor(config: FieldSampleConfig, id: string, mask: WalkMask): Uint8Ar
  * NPC の脚本 `.md` (`scriptUrl`、#841 段階2)。取得・パースの失敗は警告して無視（NPC は固定の `line` で話す）。
  * wasm パーサは scriptUrl があるときだけ遅延 import する（無い設定では wasm を読まない）
  */
-async function loadNpcScript(config: FieldSampleConfig): Promise<FieldScriptEvents | undefined> {
+async function loadNpcScript(config: FieldConfig): Promise<FieldScriptEvents | undefined> {
   const url = config.scriptUrl
   if (!url) return undefined
   return loadFieldScript(
@@ -412,7 +412,7 @@ async function main(): Promise<void> {
   const resumed = resume.kind === 'ok' ? resume.resolved : null
   if (resume.kind === 'error')
     setResumeNotice(`セーブから再開できません（設定の開始位置から始めます）\n${resume.message}`)
-  for (const w of resumed?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
+  for (const w of resumed?.warnings ?? []) console.warn(`[field] resume: ${w}`)
   // 解決時の警告（設定に無いシーン・敵・アイテム・味方）は画面にも出す（見落としてセーブが黙って欠けるのを防ぐ）
   if (resumed && resumed.warnings.length > 0)
     setResumeNotice(`セーブの一部を反映できませんでした\n${resumed.warnings.join('\n')}`)
@@ -475,7 +475,7 @@ async function main(): Promise<void> {
           list.push({ id: def.id, x: def.x, y: def.y, def, sprite, textures, facing: def.facing })
         } catch (e) {
           console.warn(
-            `[field-sample] NPC ${sid}/${def.id} の画像を読めません（この NPC は出しません）: ${e instanceof Error ? e.message : String(e)}`
+            `[field] NPC ${sid}/${def.id} の画像を読めません（この NPC は出しません）: ${e instanceof Error ? e.message : String(e)}`
           )
         }
       }
@@ -507,7 +507,7 @@ async function main(): Promise<void> {
           emotionTextures.set(image, Texture.from(await loadBitmap(image)))
         } catch (e) {
           console.warn(
-            `[field-sample] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
+            `[field] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
           )
           emotionTextures.set(image, null)
         }
@@ -637,7 +637,7 @@ async function main(): Promise<void> {
   const warnOrangeShifted = (what: string, s: LoadedScene, p: Vec, passable: boolean): void => {
     if (!passable && isAssistCell(s.mask, p.x, p.y))
       console.warn(
-        `[field-sample] ${what} (${p.x}, ${p.y}) は橙の上ですが、いまは通れない状態なので近い白へずらします。橙を避けた位置にしてください`
+        `[field] ${what} (${p.x}, ${p.y}) は橙の上ですが、いまは通れない状態なので近い白へずらします。橙を避けた位置にしてください`
       )
   }
   const startFlags = mergeFlags(config.flags, resumed?.field?.flags)
@@ -674,7 +674,7 @@ async function main(): Promise<void> {
   const flags = flagStore.flags
   const setFlag = (name: string, value: boolean): boolean => {
     const ok = flagStore.set(name, value)
-    if (!ok) console.warn(`[field-sample] 未宣言のフラグ: ${name}`)
+    if (!ok) console.warn(`[field] 未宣言のフラグ: ${name}`)
     return ok
   }
   let companionAlpha = 0
@@ -694,7 +694,7 @@ async function main(): Promise<void> {
   const gearResolved = config.gearShop
     ? resolveGear(resumed?.gear, config.gearShop, resumed?.equipment)
     : undefined
-  for (const w of gearResolved?.warnings ?? []) console.warn(`[field-sample] resume: ${w}`)
+  for (const w of gearResolved?.warnings ?? []) console.warn(`[field] resume: ${w}`)
   // 装備列から刀を外すのは見える変化なので、resume の他の警告と同じく画面にも出す（先の通知に続けて並べる）
   if (gearResolved && gearResolved.warnings.length > 0)
     setResumeNotice(
@@ -828,7 +828,7 @@ async function main(): Promise<void> {
     }
     return emotionLayer.show(target, kind, durationMs)
   }
-  // 会話の実行器 (#841 段階2)。NpcMove / Battle は fieldSample では未対応（警告して読み飛ばす）
+  // 会話の実行器 (#841 段階2)。NpcMove / Battle は field では未対応（警告して読み飛ばす）
   const conversation = new FieldConversation(
     dialogBox,
     new EventRunner(
@@ -1042,7 +1042,7 @@ async function main(): Promise<void> {
   const startWarp = (id: string): boolean => {
     if (!canStartWarp(talkState()) || menuBusy()) return false
     if (!hasOwn(config.warps, id)) {
-      console.warn(`[field-sample] 未知のワープ id: ${id}`)
+      console.warn(`[field] 未知のワープ id: ${id}`)
       return false
     }
     const warp = config.warps[id]
@@ -1148,7 +1148,7 @@ async function main(): Promise<void> {
     if (!npcChecked.has(s.id)) {
       npcChecked.add(s.id)
       for (const w of npcPlacementWarnings(s.mask, sceneNpcs.get(s.id) ?? [], s.id))
-        console.warn(`[field-sample] ${w}`)
+        console.warn(`[field] ${w}`)
     }
     for (const [sid, list] of sceneNpcs) for (const n of list) n.sprite.visible = sid === s.id
     // 白で塗って tint で色を切り替える（暗転=黒・ワープの flash=白）
@@ -1626,7 +1626,7 @@ async function main(): Promise<void> {
                 if (refused.reason) {
                   // 通れない状態で、橙の向こう側へ置くことになる移動を断った: 脚本へ 1 回だけ知らせる
                   window.dispatchEvent(
-                    new CustomEvent('fieldsample:assist-blocked', {
+                    new CustomEvent('field:assist-blocked', {
                       detail: { scene: sceneId, pos: { ...pos }, reason: refused.reason },
                     })
                   )
@@ -1705,7 +1705,7 @@ async function main(): Promise<void> {
         assistGate = ev.gate
         if (ev.emit)
           window.dispatchEvent(
-            new CustomEvent('fieldsample:assist-blocked', {
+            new CustomEvent('field:assist-blocked', {
               detail: { scene: sceneId, pos: { ...pos }, reason: ast.held ? 'held' : 'locked' },
             })
           )
@@ -1915,7 +1915,7 @@ async function main(): Promise<void> {
         }
         return true
       } catch (e) {
-        console.warn('[field-sample] セーブできません', e)
+        console.warn('[field] セーブできません', e)
         return false
       }
     },
@@ -1947,7 +1947,7 @@ async function main(): Promise<void> {
     /** 進行中の吹き出し（検証用の読み取り） */
     emotions: () => emotionLayer?.active() ?? {},
   }
-  ;(window as unknown as { fieldSample?: typeof api }).fieldSample = api
+  ;(window as unknown as { field?: typeof api }).field = api
   // フラグのチェック（開発用。脚本の代わりに手で切り替える）
   const flagBox = $('tb-flags')
   for (const name of Object.keys(config.flags)) {

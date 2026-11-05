@@ -1,6 +1,6 @@
 // #1020: 人物の形態（時期・車椅子）から poses・歩行絵を命名規則で導く純関数と、設定 JSON への展開。
 import { describe, expect, it } from 'vitest'
-import manifestText from '../../public/field-sample/sit-character-forms.json?raw'
+import manifestText from '../../public/field/sit-character-forms.json?raw'
 import {
   CORE_POSES,
   DERIVED_POSES,

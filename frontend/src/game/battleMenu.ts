@@ -535,7 +535,7 @@ export type MenuKeyAction =
 
 /**
  * `KeyboardEvent.key` → 候補窓の操作。矢印 = カーソル移動 / Enter・Z = 決定 / Escape・Backspace・X = キャンセル。
- * Space は使わない（かつて存在した戦闘サンプルのブリンク切替と衝突していた名残。サンプルは削除済み）。それ以外は undefined
+ * Space は使わない（かつて存在した戦闘のブリンク切替と衝突していた名残。サンプルは削除済み）。それ以外は undefined
  */
 export function menuKeyAction(key: string): MenuKeyAction | undefined {
   switch (key) {

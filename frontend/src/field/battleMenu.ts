@@ -1,8 +1,8 @@
 /**
- * フィールドサンプルの戦闘に渡す候補窓データの組み立て (#890)。DOM / PixiJS に依存しない純関数。
+ * 一枚絵フィールドの戦闘に渡す候補窓データの組み立て (#890)。DOM / PixiJS に依存しない純関数。
  */
 import type { BattleMenuData, BattleSkillEntry } from '../game/battleMenu'
-import type { FieldSampleConfig } from './config'
+import type { FieldConfig } from './config'
 import { skillsForMember, type GearShopConfig, type GearState } from '../game/gearShop'
 
 /**
@@ -12,7 +12,7 @@ import { skillsForMember, type GearShopConfig, type GearState } from '../game/ge
  * わざが空のときは `skills` キーを出さない（従来の形のまま）
  */
 export function buildBattleMenu(
-  config: Pick<FieldSampleConfig, 'party' | 'spells' | 'items'> & {
+  config: Pick<FieldConfig, 'party' | 'spells' | 'items'> & {
     skills?: readonly BattleSkillEntry[]
     /** 刀の売り物の定義と、持ち越した購入済み・装備中の刀 (#881 段階3)。あれば「わざ」は味方ごとに装備中の刀のアビリティで絞る。省略は従来どおり全員同じ */
     gear?: { shop: GearShopConfig; state: GearState }

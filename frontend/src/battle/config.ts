@@ -1,5 +1,5 @@
 /**
- * 戦闘設定 JSON（戦闘サンプルページは #1051 で削除済み）の検証・補完・URL 解決の純粋関数。一枚絵フィールドが parseMenuList / parsePosesRecord / resolveUrl / parseStatuses を共有する。
+ * 戦闘設定 JSON（戦闘ページは #1051 で削除済み）の検証・補完・URL 解決の純粋関数。一枚絵フィールドが parseMenuList / parsePosesRecord / resolveUrl / parseStatuses を共有する。
  * `parseConfig` / `buildBattleSetup` / `initialView` は、テスト用ハーネス（戦闘エンジン入力の組み立て）として config*.test.ts が使う。
  * ブラウザ API には触れない（URL 解決の基準 URL は引数で受ける）。
  */
@@ -87,7 +87,7 @@ export const MAX_PARTY = 4
 export const MAX_ENEMIES = 4
 
 /** 検証・補完・URL 解決済みの設定 */
-export interface BattleSampleConfig {
+export interface BattleConfig {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
   windowStyle: WindowStyle
@@ -165,7 +165,7 @@ export interface BattleSampleConfig {
 }
 
 /** 戦闘エンジン入力の組み立て用の表示状態（テスト用ハーネス。かつてのサンプルページのツールバー相当） */
-export interface BattleSampleView {
+export interface BattleView {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
   windowStyle: WindowStyle
@@ -255,7 +255,7 @@ export function defaultItems(): BattleItemEntry[] {
   ]
 }
 
-export function defaultConfig(): BattleSampleConfig {
+export function defaultConfig(): BattleConfig {
   return {
     layout: 'side',
     spriteStyle: 'none',
@@ -315,7 +315,7 @@ function num(v: unknown, fallback: number, min = 0): number {
 
 /**
  * 戦闘ポーズ別スプライト (#745) の設定 `{ "idle": "...", "step": "...", ... }` を検証して URL に解決する（部分指定可・値は URL 文字列）。
- * 戦闘サンプルとフィールドサンプル (#890) で共有する。URL の解決方法は `resolve` で呼び出し側が決める。
+ * 戦闘と一枚絵フィールド (#890) で共有する。URL の解決方法は `resolve` で呼び出し側が決める。
  * 未知のポーズ名は無視する（部分指定の typo で全体を落とさない）。1 つも残らなければ undefined
  */
 export function parsePoses(
@@ -774,7 +774,7 @@ function parseScript(raw: unknown, baseUrl: string): ParseResult<BattleScriptOpt
   }
 }
 
-export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSampleConfig> {
+export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleConfig> {
   if (!isRecord(raw))
     return { ok: false, error: '設定 JSON のルートはオブジェクトである必要があります' }
   const def = defaultConfig()
@@ -1064,7 +1064,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<BattleSa
 }
 
 /** JSON 文字列から設定を作る。JSON 構文エラーも ParseResult で返す */
-export function parseConfigText(text: string, baseUrl: string): ParseResult<BattleSampleConfig> {
+export function parseConfigText(text: string, baseUrl: string): ParseResult<BattleConfig> {
   let raw: unknown
   try {
     raw = JSON.parse(text)
@@ -1078,7 +1078,7 @@ export function parseConfigText(text: string, baseUrl: string): ParseResult<Batt
 }
 
 /** 設定から、初期表示状態を作る */
-export function initialView(config: BattleSampleConfig): BattleSampleView {
+export function initialView(config: BattleConfig): BattleView {
   return {
     layout: config.layout,
     spriteStyle: config.spriteStyle,
@@ -1108,7 +1108,7 @@ export function initialView(config: BattleSampleConfig): BattleSampleView {
  * 実際にエンジンへ渡す味方人数。front は本編（RaycastRenderer.startBattle）と同じく
  * hero 1 人だけを渡すので、view.partyCount に関わらず 1。side は選択どおり（1〜MAX_PARTY）。
  */
-export function effectivePartyCount(view: BattleSampleView): number {
+export function effectivePartyCount(view: BattleView): number {
   if (view.layout === 'front') return 1
   return Math.max(1, Math.min(view.partyCount, MAX_PARTY))
 }
@@ -1135,8 +1135,8 @@ export function applyFormation(party: BattleEntity[], mode: FormationMode): Batt
 
 /** 表示状態 + 設定から、BattleScreen に渡す素材一式を作る（人数は先頭から切り出す。足りなければ既定で補う） */
 export function buildBattleSetup(
-  config: BattleSampleConfig,
-  view: BattleSampleView
+  config: BattleConfig,
+  view: BattleView
 ): {
   party: BattleEntity[]
   enemies: BattleEntity[]

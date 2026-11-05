@@ -11,7 +11,7 @@ import { resolveEmotion, type EmotionResolveContext } from './fieldEmotionScript
 /** 脚本から集めた `[イベント <name>]`（名前 → コマンド列。同名は先勝ち） */
 export type FieldScriptEvents = Map<string, EventCommand[]>
 
-/** fieldSample が実行できるコマンド（台詞・ナレーション・待機・感情 #946）。NpcMove / Battle などは未対応 */
+/** field が実行できるコマンド（台詞・ナレーション・待機・感情 #946）。NpcMove / Battle などは未対応 */
 const SUPPORTED: readonly string[] = ['Dialog', 'Narration', 'Wait', 'Emotion']
 
 /** パース済みドキュメントから `[イベント]` を集める（全章・全シーン） */
@@ -43,14 +43,14 @@ export async function loadFieldScript(
     return collectFieldEvents(await parse(await fetchText(url)))
   } catch (e) {
     warn(
-      `[field-sample] scriptUrl を読めません（無視します）: ${url} ${e instanceof Error ? e.message : String(e)}`
+      `[field] scriptUrl を読めません（無視します）: ${url} ${e instanceof Error ? e.message : String(e)}`
     )
     return new Map()
   }
 }
 
 /**
- * fieldSample で実行できないコマンド（NpcMove / Battle など）を警告して取り除く。
+ * field で実行できないコマンド（NpcMove / Battle など）を警告して取り除く。
  * 台詞（Dialog / Narration）が 1 つも残らなければ undefined（呼び出し側は固定 `line` に戻る）
  */
 export function supportedCommands(
@@ -62,9 +62,7 @@ export function supportedCommands(
   for (const c of commands) {
     if (SUPPORTED.includes(c.type)) out.push(c)
     else
-      warn(
-        `[field-sample] [イベント ${name}] の ${c.type} はフィールドでは未対応です（読み飛ばします）`
-      )
+      warn(`[field] [イベント ${name}] の ${c.type} はフィールドでは未対応です（読み飛ばします）`)
   }
   // 台詞（Dialog / Narration）が 1 つも無いイベントは会話にならない（Wait だけで閉じてしまう）ので固定 line に戻す
   return out.some((c) => c.type === 'Dialog' || c.type === 'Narration') ? out : undefined
@@ -82,16 +80,12 @@ export function resolveNpcCommands(
   if (scene === undefined) return undefined
   const commands = events?.get(scene)
   if (!commands) {
-    warn(
-      `[field-sample] NPC の scene "${scene}" の [イベント] が見つかりません（固定の line で話します）`
-    )
+    warn(`[field] NPC の scene "${scene}" の [イベント] が見つかりません（固定の line で話します）`)
     return undefined
   }
   const ok = supportedCommands(scene, commands, warn)
   if (!ok)
-    warn(
-      `[field-sample] [イベント ${scene}] に実行できる台詞がありません（固定の line で話します）`
-    )
+    warn(`[field] [イベント ${scene}] に実行できる台詞がありません（固定の line で話します）`)
   return ok
 }
 
@@ -110,7 +104,7 @@ export function checkNpcScripts(
     if (n.scene === undefined) continue
     if (!events || events.size === 0) {
       out.push(
-        `[field-sample] ${n.where} の scene "${n.scene}" は脚本を読めていません（固定の line で話します）`
+        `[field] ${n.where} の scene "${n.scene}" は脚本を読めていません（固定の line で話します）`
       )
       continue
     }
@@ -127,7 +121,7 @@ export function createFieldNpcMover(
 ): NpcMover {
   return {
     moveNpcTo(npc) {
-      warn(`[field-sample] NpcMove(${npc}) はフィールドでは未対応です（読み飛ばします）`)
+      warn(`[field] NpcMove(${npc}) はフィールドでは未対応です（読み飛ばします）`)
       return Promise.resolve()
     },
   }
@@ -139,7 +133,7 @@ export function createFieldBattleHost(
 ): EventBattleHost {
   return {
     startBattle(id) {
-      warn(`[field-sample] Battle(${id}) はイベントからは未対応です（読み飛ばします）`)
+      warn(`[field] Battle(${id}) はイベントからは未対応です（読み飛ばします）`)
       return Promise.resolve(null)
     },
   }
@@ -154,7 +148,7 @@ export function createFieldEmotionHost(
   getContext: () => EmotionResolveContext,
   show: (target: string, kind: string, durationMs?: number) => boolean,
   warn: (msg: string) => void = (m) => console.warn(m),
-  tag = '[field-sample]'
+  tag = '[field]'
 ): EventEmotionHost {
   return {
     showEmotion(target, kind, durationMs) {

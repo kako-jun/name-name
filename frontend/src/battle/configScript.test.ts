@@ -6,7 +6,7 @@ import {
   initialView,
   parseConfig,
   parseConfigText,
-  type BattleSampleConfig,
+  type BattleConfig,
 } from './config'
 import loseEvent from './__fixtures__/scripted-lose-event.json?raw'
 import interrupt from './__fixtures__/scripted-interrupt.json?raw'
@@ -16,13 +16,13 @@ import force from './__fixtures__/scripted-force.json?raw'
 
 const BASE = 'https://example.com/battle/x.json'
 
-function parse(text: string): BattleSampleConfig {
+function parse(text: string): BattleConfig {
   const r = parseConfigText(text, BASE)
   if (!r.ok) throw new Error(r.error)
   return r.value
 }
 
-function engineOf(config: BattleSampleConfig, atb?: boolean): BattleEngine {
+function engineOf(config: BattleConfig, atb?: boolean): BattleEngine {
   const view = {
     ...initialView(config),
     ...(atb ? { atb: 'on' as const, atbMode: 'active' as const } : {}),

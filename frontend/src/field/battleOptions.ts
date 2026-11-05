@@ -1,5 +1,5 @@
 /**
- * フィールドサンプルの戦闘（BattleScreen）に渡すオプションの組み立て。DOM / PixiJS に依存しない純関数。
+ * 一枚絵フィールドの戦闘（BattleScreen）に渡すオプションの組み立て。DOM / PixiJS に依存しない純関数。
  * 設定の `battle` ブロックの値を、指定があるものだけ BattleScreen のオプションへ渡す（未指定のキーは出さない＝従来の既定）。
  */
 import type { BattleScreenOptions } from '../game/BattleScreen'
@@ -62,7 +62,7 @@ export function buildBattleEngineOptions(
   overrides?: { atbMode?: AtbMode; atbSpeed?: number }
 ): BattleEngineOptions {
   return {
-    // 状態の宣言 (#870)。空なら渡さない（戦闘サンプルと同じ条件）
+    // 状態の宣言 (#870)。空なら渡さない（戦闘と同じ条件）
     ...(statuses && Object.keys(statuses).length > 0 ? { statuses } : {}),
     ...(b.atb
       ? {
