@@ -120,7 +120,7 @@ describe('NovelRenderer 線形再生 (#284 M2)', () => {
   })
 
   it('単一 script（1 doc 内の多シーン）も線形に自動進行する（friday1930 相当の退行ガード）', () => {
-    // friday1930-sample.md のように 1 つの MD 内に複数シーンがある作品。
+    // friday-1930 本編のように 1 つの MD 内に複数シーンがある作品。
     // scenes=（setScenes）に切り替える前の従来挙動 = 全シーン線形自動進行を維持する。
     const scenes: EventScene[] = [
       scene('prologue', [narration('朝の光')]),

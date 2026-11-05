@@ -8,7 +8,7 @@ import {
   parseConfig,
   parseConfigText,
   pickConfigSource,
-  type FieldSampleConfig,
+  type FieldConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
 
@@ -51,7 +51,7 @@ function withEncounter(): Raw {
   return c
 }
 
-function ok(raw: unknown): FieldSampleConfig {
+function ok(raw: unknown): FieldConfig {
   const r = parseConfig(raw, BASE)
   if (!r.ok) throw new Error(`ok のはずが失敗: ${r.error}`)
   return r.value
@@ -709,7 +709,7 @@ describe('parseConfig プロトタイプキー (B2, Issue #807/#809)', () => {
 describe('findReturnLink (Issue #807)', () => {
   const toB: FieldLink = { edge: 'right', range: [0, 10], to: 'b' }
 
-  function configOf(scenes: Record<string, FieldLink[]>): FieldSampleConfig {
+  function configOf(scenes: Record<string, FieldLink[]>): FieldConfig {
     const raw = minimal()
     raw.scenes = {}
     for (const [id, links] of Object.entries(scenes)) {
@@ -2011,7 +2011,7 @@ describe('parseConfig statuses (#1051 段階3)', () => {
     expect(ok(minimal()).statuses).toEqual({})
   })
 
-  it('指定した statuses を戦闘サンプルと同じ書式で読む（name 省略は id、duration は数値でも可）', () => {
+  it('指定した statuses を戦闘と同じ書式で読む（name 省略は id、duration は数値でも可）', () => {
     const c = ok(
       mutated((r) => {
         r.statuses = [

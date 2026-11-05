@@ -64,7 +64,7 @@ export function messageMsPerChar(base: number, settings: MenuSettings): number {
   return base <= 0 ? 0 : Math.max(1, Math.round(base * factor))
 }
 
-/** せっていが実際の挙動に与える値（配線は `fieldSample/main.ts`。ここは計算だけ） */
+/** せっていが実際の挙動に与える値（配線は `field/main.ts`。ここは計算だけ） */
 export interface AppliedSettings {
   /** 会話窓の 1 文字あたり ms */
   dialogMsPerChar: number

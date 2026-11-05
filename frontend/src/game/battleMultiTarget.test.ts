@@ -8,7 +8,7 @@ import { BattleEngine, type SpellExecution } from './battleEngine'
 import { multiTargetDivisor, spreadDamageBase, spreadSuccessRate } from './battleLimits'
 import { isSpreadableSpell, type BattleEntity } from './spellDsl'
 import { buildBattleMenuData } from './fieldBattle'
-import { parseMenuList } from '../battleSample/config'
+import { parseMenuList } from '../battle/config'
 import {
   EMPTY_STACK,
   buildMenuRows,

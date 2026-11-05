@@ -1,7 +1,7 @@
 /**
  * アクリルスタンド風スタイル (#737・#760) の PixiJS 部品（台座・板・板の mask・地面の影）の生成と配置。
  *
- * 戦闘画面（BattleScreen）とフィールド（fieldSample）で同じ見た目を共有するため、BattleScreen から切り出した。
+ * 戦闘画面（BattleScreen）とフィールド（field）で同じ見た目を共有するため、BattleScreen から切り出した。
  * 幾何（どこに何を置くか）は純粋関数 `computeAcrylicGeometry`（spriteStyle.ts）が正本で、ここは結果を各パーツへ反映するだけ。
  * 部品の持ち主（戦闘の EntityView・フィールドの図形）は `AcrylicParts` のフィールドをそのまま持つ。
  */

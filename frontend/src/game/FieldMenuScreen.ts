@@ -7,7 +7,7 @@
  * 装備・購入・使用の実処理は持たない（選んだ結果は説明バーの通知）。
  */
 import { Container, Graphics, Rectangle, Sprite, Text as PixiText, type Texture } from 'pixi.js'
-import { FieldAcrylicFigure } from '../fieldSample/acrylicFigure'
+import { FieldAcrylicFigure } from '../field/acrylicFigure'
 import { createHandCursor } from './HandCursor'
 import {
   CLOSED_MENU,

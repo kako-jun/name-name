@@ -7,7 +7,7 @@ import { SaveManager } from '../game/SaveManager'
 import { buildRpgSaveSlot, type RpgSaveState } from '../game/rpgSave'
 import type { BattleEntity } from '../game/spellDsl'
 import {
-  FIELD_SAMPLE_DOC_KEY,
+  FIELD_DOC_KEY,
   baseConfigOf,
   loadResume,
   savedFormsFromResume,
@@ -60,7 +60,7 @@ describe('loadResume', () => {
   })
 
   it('スロットのセーブを設定に重ねて返す（ラウンドトリップ）', () => {
-    const saves = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+    const saves = new SaveManager(FIELD_DOC_KEY)
     saves.save(1, buildRpgSaveSlot(rpg(), { slot: 1 }))
     const r = loadResume('?resume=1', config)
     expect(r.kind).toBe('ok')
@@ -73,7 +73,7 @@ describe('loadResume', () => {
   })
 
   it('quick も読める', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).quickSave(buildRpgSaveSlot(rpg(), { slot: -1 }))
+    new SaveManager(FIELD_DOC_KEY).quickSave(buildRpgSaveSlot(rpg(), { slot: -1 }))
     expect(loadResume('?resume=quick', config).kind).toBe('ok')
   })
 
@@ -95,27 +95,24 @@ describe('loadResume', () => {
   it('rpg の無いセーブ（ノベルのセーブ）は error', () => {
     const slot = buildRpgSaveSlot(rpg())
     delete slot.rpg
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, slot)
+    new SaveManager(FIELD_DOC_KEY).save(0, slot)
     const r = loadResume('?resume=0', config)
     expect(r.kind === 'error' && r.message).toMatch(/rpg 状態がありません/)
   })
 
   it('検証に落ちるセーブは理由つき error', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, buildRpgSaveSlot(rpg({ gold: -5 })))
+    new SaveManager(FIELD_DOC_KEY).save(0, buildRpgSaveSlot(rpg({ gold: -5 })))
     const r = loadResume('?resume=0', config)
     expect(r.kind === 'error' && r.message).toMatch(/gold/)
   })
 
   it('パーティが設定に 1 人もいなければ error', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
-      0,
-      buildRpgSaveSlot(rpg({ party: [{ id: 'ghost' }] }))
-    )
+    new SaveManager(FIELD_DOC_KEY).save(0, buildRpgSaveSlot(rpg({ party: [{ id: 'ghost' }] })))
     expect(loadResume('?resume=0', config).kind).toBe('error')
   })
 
   it('設定に無いシーンの現在地は警告して捨てる（開始位置から）', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+    new SaveManager(FIELD_DOC_KEY).save(
       0,
       buildRpgSaveSlot(rpg({ field: { sceneId: 'nowhere', x: 1, y: 1, facing: 'up' } }))
     )
@@ -128,7 +125,7 @@ describe('loadResume', () => {
   })
 
   it('戦闘中状態の敵はモンスターのマスターから組み立てる', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+    new SaveManager(FIELD_DOC_KEY).save(
       0,
       buildRpgSaveSlot(rpg({ battle: { enemies: [{ id: 'slime', hp: 4 }] } }))
     )
@@ -253,12 +250,12 @@ describe('savedFormsFromResume', () => {
     const state = rpg({
       party: [{ id: 'party1', hp: 10, form: 'teen-wheelchair' }, { id: 'party2' }],
     })
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(1, buildRpgSaveSlot(state, { slot: 1 }))
+    new SaveManager(FIELD_DOC_KEY).save(1, buildRpgSaveSlot(state, { slot: 1 }))
     expect(savedFormsFromResume('?resume=1')).toEqual({ party1: 'teen-wheelchair' })
   })
   it('form を持つセーブは loadResume でも解決され、form が味方に残る（snapshot で書き戻せる）', () => {
     const state = rpg({ party: [{ id: 'party1', form: 'uniform' }] })
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(0, buildRpgSaveSlot(state))
+    new SaveManager(FIELD_DOC_KEY).save(0, buildRpgSaveSlot(state))
     const r = loadResume('?resume=0', config)
     expect(r.kind).toBe('ok')
     if (r.kind === 'ok') expect(r.resolved.party[0].form).toBe('uniform')
@@ -284,7 +281,7 @@ describe('敵レベルの再開 (#1043)', () => {
   } as unknown as Parameters<typeof loadResume>[1]
 
   it('戦闘中セーブから再開した敵がマスターの level を保つ', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+    new SaveManager(FIELD_DOC_KEY).save(
       0,
       buildRpgSaveSlot(rpg({ battle: { enemies: [{ id: 'boss', hp: 7 }] } }))
     )
@@ -299,7 +296,7 @@ describe('敵レベルの再開 (#1043)', () => {
 
 describe('状態異常の再開 (#1051)', () => {
   it('戦闘中セーブの敵の status（残ターン）が resolved.battle.enemies に解決される', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+    new SaveManager(FIELD_DOC_KEY).save(
       0,
       buildRpgSaveSlot(rpg({ battle: { enemies: [{ id: 'slime', hp: 4, status: { x: 2 } }] } }))
     )
@@ -308,7 +305,7 @@ describe('状態異常の再開 (#1051)', () => {
   })
 
   it('味方の status も解決される', () => {
-    new SaveManager(FIELD_SAMPLE_DOC_KEY).save(
+    new SaveManager(FIELD_DOC_KEY).save(
       0,
       buildRpgSaveSlot(rpg({ party: [{ id: 'party1', hp: 10, status: { x: 3 } }] }))
     )

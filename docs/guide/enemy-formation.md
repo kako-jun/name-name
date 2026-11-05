@@ -199,10 +199,10 @@ FF のように、**最前列でない敵への通常攻撃（近接物理）の
 - グリッドに収まらず置けなかった敵、グリッドが無い戦闘（`front` レイアウトを含む）は軽減しない
 - 軽減は半分ごとに切り捨て・最低 1。敵から味方への攻撃は変わらない
 - 戦闘中の配置変更は未対応（#887）
-- 確認用: 一枚絵フィールドサンプル（`field-sample.html`。[デバッグガイド](./debugger.md)）では、`battle.layout: "side"` で `battle.enemyGrid` を書けば同じルールが効く
+- 確認用: 一枚絵フィールド（`field.html`。[デバッグガイド](./debugger.md)）では、`battle.layout: "side"` で `battle.enemyGrid` を書けば同じルールが効く
 
-## 一枚絵フィールドサンプルでの指定
+## 一枚絵フィールドでの指定
 
-`field-sample.html`（[デバッグガイド](./debugger.md)）の設定 JSON でも、`monsters.<id>` の `size`（`"2x1"`）/ `scale` と `battle` の `enemyGrid`（`"6x2"`）/ `enemyWindowOverlap` で同じことができる。`enemyGrid` を書くと群の検証も走り、収まらない群は抽選から外れて、コンソールと画面のエラー表示に一覧が出る。詳しくはデバッグガイドの該当節を参照。
+`field.html`（[デバッグガイド](./debugger.md)）の設定 JSON でも、`monsters.<id>` の `size`（`"2x1"`）/ `scale` と `battle` の `enemyGrid`（`"6x2"`）/ `enemyWindowOverlap` で同じことができる。`enemyGrid` を書くと群の検証も走り、収まらない群は抽選から外れて、コンソールと画面のエラー表示に一覧が出る。詳しくはデバッグガイドの該当節を参照。
 
 同じ設定 JSON の `monsters.<id>.poses`（戦闘ポーズ別の画像）や `spells` / `items`（戦闘の候補窓）も、デバッグガイドの「戦闘の候補窓・ポーズの確認」にまとめてある。

@@ -1,5 +1,5 @@
 /**
- * 一枚絵フィールドサンプルページ (#807) の設定 JSON まわりの純粋関数。ブラウザ API には触れない。
+ * 一枚絵フィールドページ (#807) の設定 JSON まわりの純粋関数。ブラウザ API には触れない。
  * 画像は URL で指す（相対 URL は設定 JSON の URL を基準に解決。assetBaseUrl があれば RPG の画像と同じく
  * `${base}/images/...` に解決する (#746/#785)）。
  */
@@ -16,12 +16,7 @@ import {
   type EnemyGridSize,
 } from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
-import {
-  parseMenuList,
-  parsePosesRecord,
-  resolveUrl,
-  type ParseResult,
-} from '../battleSample/config'
+import { parseMenuList, parsePosesRecord, resolveUrl, type ParseResult } from '../battle/config'
 import { pickWeaponKeys } from '../game/battleWeapon'
 import { parseMarkScale, type UiImagesConfig } from '../game/uiImages'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
@@ -54,7 +49,7 @@ import {
   resolveBattleFrame,
   type BattleLogicalSize,
 } from '../game/battleLogicalSize'
-import { parseStatuses } from '../battleSample/config'
+import { parseStatuses } from '../battle/config'
 import type { StatusDef } from '../types'
 import type { BattleItemEntry, BattleSkillEntry, BattleSpellEntry } from '../game/battleMenu'
 
@@ -161,7 +156,7 @@ export interface FieldBattleConfig {
   spriteStyle: SpriteStyle
   /** 戦闘の既定の背景 URL（シーンの encounter.background で上書き可） */
   background?: string
-  /** 戦闘中の画面の大きさ（戦闘サンプルの 800x450 と同じ既定） */
+  /** 戦闘中の画面の大きさ（戦闘の 800x450 と同じ既定） */
   width: number
   height: number
   /**
@@ -187,7 +182,7 @@ export interface FieldBattleConfig {
   commands?: CommandId[]
   /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
   atb?: BattleAtbConfig
-  /** 戦闘のエフェクト重ね (#936)。`battle.effects`（戦闘サンプルの `effects` と同じ書式）。不正な種類は警告して無視。`presentation: "ff"` のときだけ効く。未指定は undefined＝エフェクトなし */
+  /** 戦闘のエフェクト重ね (#936)。`battle.effects`（戦闘の `effects` と同じ書式）。不正な種類は警告して無視。`presentation: "ff"` のときだけ効く。未指定は undefined＝エフェクトなし */
   effects?: BattleEffects
   /** 戦闘の開始・終了の画面遷移 (sit-by-me#55)。`battle.transition`: `none` / `ff` / `ff-mosaic`（エンジンの `battle_transition` と同じ）。未指定は undefined＝`none`（従来どおり演出なしで即切替） */
   transition?: BattleTransitionMode
@@ -195,7 +190,7 @@ export interface FieldBattleConfig {
   currencyName?: string
 }
 
-export interface FieldSampleConfig {
+export interface FieldConfig {
   startScene: string
   /** 開始シーンでの足元の初期位置（背景のピクセル座標） */
   start: Vec
@@ -226,7 +221,7 @@ export interface FieldSampleConfig {
   scenes: Record<string, FieldSceneConfig>
   /** ワープ先 (#864)。省略 = なし */
   warps: Record<string, FieldWarp>
-  /** 名前つきの真偽値 (#862)。脚本が `window.fieldSample.setFlag` で変える。値は初期値。省略 = なし */
+  /** 名前つきの真偽値 (#862)。脚本が `window.field.setFlag` で変える。値は初期値。省略 = なし */
   flags: Record<string, boolean>
   /** 条件付き通行 (#862)。歩行マスクの橙（#FF9D00）を、フラグが成り立つ間だけ通れるようにする。省略 = 橙も黒と同じ */
   assist: AssistConfig | null
@@ -284,7 +279,7 @@ export interface FieldSampleConfig {
   party: BattleEntity[]
   battle: FieldBattleConfig
   /**
-   * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘サンプルと同じ書式）。`items`: 試作用の所持品（`count` が所持数。
+   * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘と同じ書式）。`items`: 試作用の所持品（`count` が所持数。
    * 本編の inventory とは無関係。初期値は設定の値で、戦闘が終わると残数を持ち越す（#1021）。`?resume=` で再開したときはセーブの値から始まる）。どちらも `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。
    * 未指定は空＝じゅもん・どうぐの窓が開かない（従来どおり）
    */
@@ -292,7 +287,7 @@ export interface FieldSampleConfig {
   items: BattleItemEntry[]
   /** 「わざ」の候補 (#873)。味方全員共通（`id` / `name` / `target`〔特技の相対表現。既定 `相手単体`〕/ `effect` / `builtin`）。MP なし。`battle.commands` に `skill` があると `layout: "side"` の候補窓に出る（`commandLayout` は `grid` でも `cross` でも可）。未指定は空 */
   skills: BattleSkillEntry[]
-  /** 状態の宣言 (#870)。戦闘サンプルと同じ `statuses`（`[{ id, name?, duration?, tickDamage?, action?, reverse?, cure?, expire? }]`）。戦闘の BattleEngine へ渡る。未指定は空＝状態異常の処理は走らない（従来どおり） */
+  /** 状態の宣言 (#870)。戦闘と同じ `statuses`（`[{ id, name?, duration?, tickDamage?, action?, reverse?, cure?, expire? }]`）。戦闘の BattleEngine へ渡る。未指定は空＝状態異常の処理は走らない（従来どおり） */
   statuses: Record<string, StatusDef>
   /** 敵グリッドに収まらず無効化した群 (#839 段5)。`battle.enemyGrid` が有効で 1 件以上あるときだけ入る */
   groupErrors?: EncounterGroupError[]
@@ -354,7 +349,7 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error })
 
-export function parseConfigText(text: string, baseUrl: string): ParseResult<FieldSampleConfig> {
+export function parseConfigText(text: string, baseUrl: string): ParseResult<FieldConfig> {
   let raw: unknown
   try {
     raw = JSON.parse(text)
@@ -364,7 +359,7 @@ export function parseConfigText(text: string, baseUrl: string): ParseResult<Fiel
   return parseConfig(raw, baseUrl)
 }
 
-export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSampleConfig> {
+export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldConfig> {
   if (!isObj(raw)) return fail('設定はオブジェクトである必要があります')
   const assetBase =
     typeof raw.assetBaseUrl === 'string' && raw.assetBaseUrl.trim()
@@ -415,7 +410,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     }
     return { ok: true, value: urls as [string, string, string] }
   }
-  const sprites = {} as FieldSampleConfig['player']['sprites']
+  const sprites = {} as FieldConfig['player']['sprites']
   for (const f of FACINGS) {
     const r = parseFrames(raw.player.sprites[f], `player.sprites.${f}`)
     if (!r.ok) return r
@@ -428,7 +423,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     if (!r.ok) return r
     sprites[f] = r.value
   }
-  const mirrorOf: FieldSampleConfig['player']['mirrorOf'] = {}
+  const mirrorOf: FieldConfig['player']['mirrorOf'] = {}
   const mirrorRaw = raw.player.sprites.mirrorOf
   if (mirrorRaw !== undefined) {
     if (!isObj(mirrorRaw)) return fail('player.sprites.mirrorOf はオブジェクトが必要です')
@@ -797,7 +792,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
     })
   }
 
-  // 戦闘の候補窓 (#890)。戦闘サンプルと同じ parser（spells は味方全員共通）
+  // 戦闘の候補窓 (#890)。戦闘と同じ parser（spells は味方全員共通）
   const spells = parseMenuList<BattleSpellEntry>(raw.spells, [], 'spells')
   if (!spells.ok) return spells
   const items = parseMenuList<BattleItemEntry>(raw.items, [], 'items')
@@ -892,7 +887,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldSam
   )
   warnings.push(...em.warnings)
   // 外部 JSON (#946)。URL は他のアセットと同じ規則で解決する。不正な値・解決できない URL は警告して無視（読み込みは成功のまま）
-  let emotionsSource: FieldSampleConfig['emotionsSource']
+  let emotionsSource: FieldConfig['emotionsSource']
   if (raw.emotionsUrl !== undefined) {
     const eu =
       typeof raw.emotionsUrl === 'string' && raw.emotionsUrl.trim()
@@ -1404,7 +1399,7 @@ function parseEntity(
  * シーンに群があればそれ。群が空（最初から無い・全群が敵グリッドに収まらず無効化された）なら全モンスターを 1 体ずつの群として使うが、
  * 敵グリッドが有効なときは、1 体でも収まらない（サイズ超過など）モンスターは候補から外す (#839 段5)。
  */
-export function forceBattleCandidates(config: FieldSampleConfig, sceneId: string): string[] {
+export function forceBattleCandidates(config: FieldConfig, sceneId: string): string[] {
   const groups = hasOwn(config.scenes, sceneId)
     ? (config.scenes[sceneId].encounter?.groups ?? [])
     : []
@@ -1427,7 +1422,7 @@ export function forceBattleCandidates(config: FieldSampleConfig, sceneId: string
  * 遷移先に複数あれば、辺が反対側のものを優先し、なければ最初のもの。無ければ null。
  */
 export function findReturnLink(
-  config: FieldSampleConfig,
+  config: FieldConfig,
   srcId: string,
   link: FieldLink
 ): FieldLink | null {
@@ -1442,7 +1437,7 @@ export function findReturnLink(
 const OPPOSITE: Record<Edge, Edge> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }
 
 /** 読み込み成功時に画面へ出す通知（群エラーの一覧＋警告）。無ければ null。showError は置換なので 1 つにまとめる */
-export function configNotice(config: FieldSampleConfig): string | null {
+export function configNotice(config: FieldConfig): string | null {
   const parts: string[] = []
   if (config.groupErrors && config.groupErrors.length > 0)
     parts.push(formatEncounterGroupErrors(config.groupErrors))
