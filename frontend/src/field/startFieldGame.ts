@@ -116,6 +116,7 @@ import {
 } from '../game/fieldScript'
 import { hasOwn, safeAssign } from '../game/ownProperty'
 import { clearWindowField } from './windowField'
+import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 import {
   DIAGONAL_FACINGS,
   FACINGS,
@@ -356,7 +357,6 @@ async function loadNpcScript(config: FieldConfig): Promise<FieldScriptEvents | u
 
 export async function startFieldGame(opts: StartFieldGameOptions): Promise<() => void> {
   const { config, mount, hud, devToolbar, docKey, search } = opts
-  const scriptProvided = opts.scriptEvents !== undefined
   /** 通常のエラー表示（置換方式。後の呼び出しが前を消す）と、セーブ再開の通知（#1021。どの経路の showError でも消えない）を分けて持つ */
   let baseNotice: string | null = hud?.initialNotice ?? null
   let resumeNotice: string | null = null
@@ -458,7 +458,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionSheets = await loadEmotionSheets(config, (url) => fetch(url))
-  const scriptEvents = opts.scriptEvents ?? (await loadNpcScript(config))
+  const scriptEvents = await pickScriptEvents(opts.scriptEvents, () => loadNpcScript(config))
   // scene と脚本の照合は起動時に 1 回だけ（話しかけるたびに同じ警告を出さない）
   {
     const scriptWarnings = checkNpcScripts(
@@ -466,7 +466,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         (sc.npcs ?? []).map((n) => ({ where: `NPC ${sid}/${n.id}`, scene: n.scene }))
       ),
       scriptEvents
-    ).filter(() => scriptProvided || !!config.scriptUrl) // 脚本の供給元が無いときは config 段階で警告済み
+    ).filter(() => shouldCheckNpcScripts(opts.scriptEvents, config.scriptUrl)) // 供給元が無いときは config 段階で警告済み
     for (const w of scriptWarnings) console.warn(w)
     if (scriptWarnings.length > 0)
       showError([configNotice(config), ...scriptWarnings].filter(Boolean).join('\n'))

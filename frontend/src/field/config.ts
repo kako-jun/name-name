@@ -738,6 +738,7 @@ export function parseConfig(
     return fail(`encounter.minSteps は 0 以上の整数: ${JSON.stringify(minSteps)}`)
 
   const monsters: Record<string, MonsterDef> = {}
+  const monsterWarnings: string[] = []
   if (raw.monsters !== undefined) {
     if (!isObj(raw.monsters)) return fail('monsters はオブジェクトが必要です')
     for (const [mid, m] of Object.entries(raw.monsters)) {
@@ -763,7 +764,7 @@ export function parseConfig(
         ...(scale.value !== undefined ? { scale: scale.value } : {}),
         // 敵のレベル (#898)。parseEntity が 1〜99 にそろえ済み。未指定はキー自体を出さない
         ...(e.value.level !== undefined ? { level: e.value.level } : {}),
-        ...monsterPassthrough(m as Obj),
+        ...monsterPassthrough(m as Obj, `monsters.${mid}`, monsterWarnings),
       }
     }
   }
@@ -783,7 +784,11 @@ export function parseConfig(
   if (raw.party !== undefined) {
     if (!Array.isArray(raw.party)) return fail('party は配列が必要です')
     for (let i = 0; i < raw.party.length; i++) {
-      const e = parseEntity(raw.party[i], partyIdAt(raw.party[i], i), `party[${i}]`, url)
+      const pid = partyIdAt(raw.party[i], i)
+      // id はセーブ・人物の形態・刀の owner のキーなので、重複（明示 id 同士、または既定の party{N} との衝突）は読み込みエラー
+      const dup = party.findIndex((m) => m.id === pid)
+      if (dup >= 0) return fail(`party[${i}].id "${pid}" が party[${dup}] と重複しています`)
+      const e = parseEntity(raw.party[i], pid, `party[${i}]`, url)
       if (!e.ok) return e
       // 味方は BattleEntity そのもの: poses に同居する刀の予約キー (#1027) をここで刀の指定（weapon）へ分ける（残すと絵として読みに行く #1035）
       // 型の注意: parseEntity は poses を BattlePoseSprites 型で返すが、実体は絵のキー + 刀の予約キー（pickWeaponKeys で同居させた生の record）。
@@ -858,7 +863,7 @@ export function parseConfig(
   if (b.atbMode !== undefined && b.atbMode !== 'wait' && b.atbMode !== 'active')
     return fail(`battle.atbMode は "wait" か "active": ${JSON.stringify(b.atbMode)}`)
   // front では効かない設定の組（静かに無視されるので警告する。読み込みは成功のまま）
-  const warnings: string[] = []
+  const warnings: string[] = [...monsterWarnings]
   let currencyName: string | undefined
   if (b.currencyName !== undefined) {
     if (typeof b.currencyName === 'string' && b.currencyName.trim() !== '')
@@ -1351,28 +1356,57 @@ export function parseMonsterScale(raw: unknown, path: string): ParseResult<numbe
   return { ok: true, value: Math.min(1, Math.max(0.25, raw)) }
 }
 
-/** 味方・モンスターの 1 件分の検証（ステータスは数値、sprite は URL に解決） */
 /** 味方 `party[i]` の id。`id`（非空文字列）があればそれ、無ければ `party{i+1}`（`expandCharacterForms` と同じ規則） */
 function partyIdAt(m: unknown, i: number): string {
   return isObj(m) && typeof m.id === 'string' && m.id ? m.id : `party${i + 1}`
 }
 
 /**
- * `monsters.<id>` の `actions` / `counters` / `onDeath` / `affinity` / `loot` を、型だけ見てそのまま通す。
- * 解釈・検証は runtime 側（enemyAi.ts / affinity.ts / loot.ts）。型が合わない・無いキーは出さない
+ * `monsters.<id>` の `actions` / `counters` / `onDeath` / `affinity` / `loot` を、形を検査してそのまま通す。
+ * 文面の解釈は runtime 側（enemyAi.ts / affinity.ts / loot.ts）。型が合わないキーは警告して落とす（無いキーは出さない）
  */
-function monsterPassthrough(m: Obj): Partial<MonsterDef> {
+function monsterPassthrough(m: Obj, path: string, warnings: string[]): Partial<MonsterDef> {
   const out: Partial<MonsterDef> = {}
   const strs = (v: unknown): v is string[] =>
     Array.isArray(v) && v.every((x) => typeof x === 'string')
-  if (strs(m.actions)) out.actions = m.actions
-  if (strs(m.counters)) out.counters = m.counters
-  if (typeof m.onDeath === 'string') out.onDeath = m.onDeath
-  if (isObj(m.affinity)) out.affinity = m.affinity as NonNullable<MonsterDef['affinity']>
-  if (isObj(m.loot)) out.loot = m.loot as NonNullable<MonsterDef['loot']>
+  const bad = (key: string, need: string): void => {
+    warnings.push(`${path}.${key} は${need}である必要があります（無視します）`)
+  }
+  if (m.actions !== undefined) {
+    if (strs(m.actions)) out.actions = m.actions
+    else bad('actions', '文字列の配列')
+  }
+  if (m.counters !== undefined) {
+    if (strs(m.counters)) out.counters = m.counters
+    else bad('counters', '文字列の配列')
+  }
+  if (m.onDeath !== undefined) {
+    if (typeof m.onDeath === 'string') out.onDeath = m.onDeath
+    else bad('onDeath', '文字列')
+  }
+  if (m.affinity !== undefined) {
+    const a = m.affinity
+    if (
+      isObj(a) &&
+      ['weak', 'halve', 'nullify', 'absorb'].every((k) => a[k] === undefined || strs(a[k]))
+    )
+      out.affinity = a as NonNullable<MonsterDef['affinity']>
+    else bad('affinity', 'weak / halve / nullify / absorb が文字列の配列のオブジェクト')
+  }
+  if (m.loot !== undefined) {
+    const l = m.loot
+    if (
+      isObj(l) &&
+      ['drops', 'steal', 'stealRare'].every((k) => l[k] === undefined || strs(l[k])) &&
+      (l.stealLimit === undefined || typeof l.stealLimit === 'string')
+    )
+      out.loot = l as NonNullable<MonsterDef['loot']>
+    else bad('loot', 'drops / steal / stealRare が文字列の配列・stealLimit が文字列のオブジェクト')
+  }
   return out
 }
 
+/** 味方・モンスターの 1 件分の検証（ステータスは数値、sprite は URL に解決） */
 function parseEntity(
   raw: unknown,
   id: string,

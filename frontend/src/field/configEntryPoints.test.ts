@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseConfig, type FieldConfig } from './config'
 import { clearWindowField } from './windowField'
+import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 
 const BASE = 'https://example.com/field/config.json'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,6 +44,13 @@ describe('party[].id', () => {
       'party2',
       'gamma',
     ])
+  })
+  it('id の重複は読み込みエラー（明示同士・既定 party{N} との衝突）', () => {
+    const r1 = parseConfig(party([{ id: 'a' }, { id: 'a' }]), BASE)
+    expect(r1.ok).toBe(false)
+    if (!r1.ok) expect(r1.error).toContain('重複')
+    const r2 = parseConfig(party([{}, { id: 'party1' }]), BASE)
+    expect(r2.ok).toBe(false)
   })
   it('空文字・非文字列は無視して party{i+1}', () => {
     expect(ok(party([{ id: '' }, { id: 5 }])).party.map((p) => p.id)).toEqual(['party1', 'party2'])
@@ -137,5 +145,37 @@ describe('clearWindowField', () => {
     clearWindowField(mine)
     expect(w.field).toBe(other)
     delete w.field
+  })
+})
+
+describe('scriptSource', () => {
+  const provided = new Map([['e', []]]) as never
+  it('渡された脚本を優先し、取得は呼ばない', async () => {
+    let called = false
+    const r = await pickScriptEvents(provided, async () => {
+      called = true
+      return undefined
+    })
+    expect(r).toBe(provided)
+    expect(called).toBe(false)
+  })
+  it('渡されなければ従来どおり取得する', async () => {
+    const loaded = new Map() as never
+    expect(await pickScriptEvents(undefined, async () => loaded)).toBe(loaded)
+    expect(await pickScriptEvents(undefined, async () => undefined)).toBeUndefined()
+  })
+  it('scene 照合の警告は、供給元（渡された・scriptUrl）があるときだけ', () => {
+    expect(shouldCheckNpcScripts(provided, undefined)).toBe(true)
+    expect(shouldCheckNpcScripts(undefined, 'https://e/x.md')).toBe(true)
+    expect(shouldCheckNpcScripts(undefined, undefined)).toBe(false)
+    expect(shouldCheckNpcScripts(undefined, '')).toBe(false)
+  })
+  it('both 指定でも scriptEvents 優先（取得せず、照合は有効）', async () => {
+    let called = false
+    expect(await pickScriptEvents(provided, async () => ((called = true), undefined))).toBe(
+      provided
+    )
+    expect(called).toBe(false)
+    expect(shouldCheckNpcScripts(provided, 'https://e/x.md')).toBe(true)
   })
 })
