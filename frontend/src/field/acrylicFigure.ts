@@ -1,7 +1,7 @@
 /**
  * フィールドの歩行スプライト用アクスタ部品 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` のときだけ使う。
  *
- * 絵そのもの（Sprite）は従来どおり main.ts が足元（スプライト下端中心）基準で置く。ここは**その下**に敷く
+ * 絵そのもの（Sprite）は従来どおり startFieldGame.ts が足元（スプライト下端中心）基準で置く。ここは**その下**に敷く
  * 透明アクリルの板・台座・地面の影を、同じ足元に合わせて描く追加の層で、足元座標・歩行判定・移動速度には関与しない。
  * 部品の生成と配置は戦闘と共有（game/acrylicParts.ts）。幾何は computeAcrylicGeometry が正本。
  */
@@ -59,7 +59,7 @@ export function fitAcrylicGeometry(
 }
 
 /**
- * `spriteStyle` から、主人公・同行者のアクスタ部品を作る（main.ts の配線をテストできるよう取り出した）。
+ * `spriteStyle` から、主人公・同行者のアクスタ部品を作る（startFieldGame.ts の配線をテストできるよう取り出した）。
  * `"acrylic"` のときだけ作り、それ以外（未指定・`"none"`）は null＝従来描画。同行者は設定があるときだけ
  */
 export function createFieldStands(
@@ -140,7 +140,7 @@ export class FieldAcrylicFigure {
   }
 
   /**
-   * 足元 (x, y) にアクスタを置く。`tex` は今コマの絵、`height` は絵の表示高さ（画面 px。main.ts が絵に使う値と同じ）、
+   * 足元 (x, y) にアクスタを置く。`tex` は今コマの絵、`height` は絵の表示高さ（画面 px。startFieldGame.ts が絵に使う値と同じ）、
    * `flipped` は絵を左右反転して描くとき true（板・台座・影も同じ足元で反転する。影は光の向きのまま右へ倒れる）。
    */
   update(tex: Texture, height: number, flipped: boolean, x: number, y: number): void {
