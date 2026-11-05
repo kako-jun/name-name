@@ -28,15 +28,15 @@ export interface GearEntry {
   kind: GearKind
   /** 持ち主の人物 id。刀は必須（他人の刀は買えず装備できない）。防具は省略 = 誰でも（購入・所有は人物ごと） */
   owner?: string
-  /** 刀の 1 本目の値段（円）。無ければ購入不可（未決） */
+  /** 刀の 1 本目の値段（円）。無ければ購入不可。決定値は 10,000 円（4 人とも同額。`SIT.blade-base-price-10000`。sit-by-me の台帳の決定、2026-11-05 kako-jun） */
   basePrice?: number
-  /** 防具の固定価格（円）。無ければ購入不可（未決） */
+  /** 防具の固定価格（円）。無ければ購入不可。決定値は 5,000 円で固定（`SIT.blade-armor-price-same-fixed`。sit-by-me の台帳の決定、2026-11-05 kako-jun） */
   price?: number
   /** 購入解禁のフラグ名。省略 = 常に解禁。そのフラグが true になるまで購入不可（仕様では 2 本目以降は解禁制ではないので、刀には使わない前提。防具・将来用） */
   unlockFlag?: string
   /** 一覧に出す画像のパス（任意の文字列。sit-by-me の刀マスターから切り出した派生画像を指す想定だが、派生画像は未作成）。省略 = 画像なし（文字のみ）。読み込み・表示は段階2の UI */
   image?: string
-  /** 装備している間だけ能力値に足す分（`atk+5, def+2` 形式。魔石・アイテムの `装備時` と同じ書式）。そうび画面の変更前後の差分に使う。省略 = 能力値は変わらない（値は仮・未決） */
+  /** 装備している間だけ能力値に足す分（`atk+5, def+2` 形式。魔石・アイテムの `装備時` と同じ書式）。そうび画面の変更前後の差分に使う。省略 = 能力値は変わらない（値は仮・未決。刀の値段の決定とは別で、正本が未決） */
   equipBonus?: string
   /** 表示名（アプリストア・そうびの一覧）。省略は `[アイテム]` の name、それも無ければ id。売り物のためだけの品は `[アイテム]` に書かなくてよい（戦闘のアイテム窓に出ない） */
   name?: string
@@ -68,7 +68,7 @@ export type GearBlockReason =
   | 'unknown' // 売り物にない id
   | 'otherOwner' // 他人の刀
   | 'owned' // 購入済み
-  | 'unbuyable' // 値段が未決（基準額・価格なし）
+  | 'unbuyable' // 値段なし（基準額・価格が設定されていない）
   | 'uncomputable' // 値段を計算できない（桁あふれ）
   | 'notBlade' // 刀ではない品（刀の持ち替えのみ）
   | 'locked' // 解禁前
@@ -134,7 +134,9 @@ export function isOwned(state: GearState, member: string, id: string): boolean {
   return ownedIds(state, member).includes(id)
 }
 
-/** 人物の購入済みの刀の本数（定義にある刀だけ数える） */
+/**
+ * 人物の持っている刀の種類数（定義にある刀だけ、刀ごとの有無で数える。同じ刀の個数は関係しない。購入済み ID の集合は重複を持たない）
+ */
 export function ownedBladeCount(cfg: GearShopConfig, state: GearState, member: string): number {
   return ownedIds(state, member).filter((id) => findEntry(cfg, id)?.kind === 'blade').length
 }
@@ -146,8 +148,10 @@ export function equippedBlade(state: GearState, member: string): string | undefi
 
 /**
  * いま買うときの値段（円）。刀は `basePrice × multiplier^購入済みの刀の本数`（整数に切り捨て）、防具は固定の `price`。
- * 値段が未決（基準額・価格なし）・計算結果が有限の 0 以上の整数にならない（桁あふれ）は undefined。
- * 「何本目か」は所有数で数える（イベントでもらった刀も 1 本と数える。**仮。仕様では未決**）
+ * 基準額・価格が設定されていない・計算結果が有限の 0 以上の整数にならない（桁あふれ）は undefined。
+ * 「何本目か」は持っている刀の種類数（刀ごとの有無で数える。同じ刀の個数は関係しない。イベントでもらった刀も含む）で決まる。
+ * 決定済み: `SIT.blade-price-by-owned-count`（sit-by-me の台帳の決定、2026-11-05 kako-jun）。
+ * 決定値は、基準額 10,000 円・倍々（10,000/20,000/40,000/80,000/160,000 円）・4 人とも同額・買う順は自由・防具は 5,000 円固定
  */
 export function priceOf(
   cfg: GearShopConfig,
@@ -159,7 +163,7 @@ export function priceOf(
   return typeof p === 'number' ? p : undefined
 }
 
-/** 値段の計算。数なら値段、`'unset'` は基準額・価格なし（未決。売り物にない id も）、`'overflow'` は計算結果が使えない（桁あふれ） */
+/** 値段の計算。数なら値段、`'unset'` は基準額・価格なし（設定されていない。売り物にない id も）、`'overflow'` は計算結果が使えない（桁あふれ） */
 function computePrice(
   cfg: GearShopConfig,
   state: GearState,
@@ -393,7 +397,7 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 /**
  * 設定 JSON の `gearShop`。`{ multiplier?, entries: [{ id, kind, owner?, basePrice?, price?, unlockFlag?, image?, equipBonus?, name?, lockedMessage?, abilities? }] }`。
  * 不正な項目は警告して捨てる。`gearShop` が無い（undefined / false / null）はキーなし＝従来どおり。
- * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。値段の数値は kako-jun が決めるまで未決（基準額なし = 購入不可）。サンプルに書く値は「仮」
+ * 基準額は人物ごとに揃えるのが前提（食い違いは警告）。基準額なし = 購入不可。値段の決定値は基準額 10,000 円・防具 5,000 円（sit-by-me の台帳の決定、2026-11-05 kako-jun）。テスト・サンプルに書く値は動作確認用で、決定値とは別
  */
 export function parseGearShopConfig(raw: unknown): ParsedGearShop {
   const warnings: string[] = []
