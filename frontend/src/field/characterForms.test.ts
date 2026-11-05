@@ -279,6 +279,103 @@ describe('expandCharacterForms（設定 JSON への展開）', () => {
   })
 })
 
+describe('expandCharacterForms（同行者の歩行絵。#1119）', () => {
+  type Cfg = Record<string, unknown>
+  const base = (companion: Cfg, party: Cfg[] = []): Cfg => ({
+    characterForms: { root: ROOT, manifestUrl: 'm.json' },
+    player: { character: 'C9', form: 'a', height: 150 },
+    companion,
+    party,
+  })
+  const comp = (r: ReturnType<typeof expandCharacterForms>) =>
+    (r.raw as { companion: Record<string, unknown> }).companion
+  const up1 = (c: Record<string, unknown>) => (c.sprites as Record<string, string[]>).up[0]
+
+  it('companion.form から 8 方向×3 コマを導き、立位の歩行周期を入れる。入力は書き換えない', () => {
+    const input = base({ character: 'C9', form: 'c', name: 'Z', height: 140 })
+    const r = expandCharacterForms(input, manifest)
+    const c = comp(r)
+    expect(up1(c)).toMatch(/C9-c-walk-up-1\.webp$/)
+    expect(Object.keys(c.sprites as object)).toHaveLength(8)
+    expect(c.cycle).toEqual([0, 1, 2, 1])
+    expect(c.idleFrame).toBe(1)
+    expect(c.name).toBe('Z')
+    expect(c.height).toBe(140)
+    expect((input.companion as Cfg).sprites).toBeUndefined()
+    expect(r.warnings).toEqual([])
+  })
+  it('同じ人物の味方の形態が companion.form に優先する', () => {
+    const r = expandCharacterForms(
+      base({ character: 'C9', form: 'c' }, [{ name: 'A', character: 'C9', form: 'a' }]),
+      manifest
+    )
+    expect(up1(comp(r))).toMatch(/C9-a-walk-up-1\.webp$/)
+  })
+  it('セーブの形態も味方経由で効く', () => {
+    const r = expandCharacterForms(
+      base({ character: 'C9', form: 'a' }, [{ name: 'A', character: 'C9', form: 'a' }]),
+      manifest,
+      { party1: 'c' }
+    )
+    expect(up1(comp(r))).toMatch(/C9-c-walk-up-1\.webp$/)
+  })
+  it('車椅子の形態は既定の周期のまま（cycle・idleFrame を入れない）', () => {
+    const c = comp(expandCharacterForms(base({ character: 'C9', form: 'e-wheelchair' }), manifest))
+    expect(up1(c)).toMatch(/C9-e-wheelchair-walk-up-1\.webp$/)
+    expect(c.cycle).toBeUndefined()
+    expect(c.idleFrame).toBeUndefined()
+  })
+  it('cycle 指定は尊重する', () => {
+    const c = comp(
+      expandCharacterForms(base({ character: 'C9', form: 'a', cycle: [0, 2] }), manifest)
+    )
+    expect(c.cycle).toEqual([0, 2])
+    expect(c.idleFrame).toBeUndefined()
+    expect(up1(c)).toMatch(/walk-up-1/)
+  })
+  it('目録に無い人物・形態、歩行絵の無い形態、form 無しは警告して sprites を埋めない', () => {
+    for (const [companion, re] of [
+      [{ character: 'NOPE', form: 'a' }, /companion の歩行絵 NOPE\/a/],
+      [{ character: 'C9', form: 'nope' }, /companion の歩行絵 C9\/nope/],
+      [{ character: 'C9', form: 'b' }, /companion の歩行絵 C9\/b/],
+      [{ character: 'C9' }, /companion に form/],
+    ] as [Cfg, RegExp][]) {
+      const r = expandCharacterForms(base(companion), manifest)
+      expect(r.warnings.join('\n')).toMatch(re)
+      expect(comp(r).sprites).toBeUndefined()
+      expect(comp(r)).toEqual(companion)
+    }
+  })
+  it('人物の指定が無い同行者・手書きの sprites がある同行者は触らない', () => {
+    const noChar = { name: 'Z', height: 100 }
+    const r1 = expandCharacterForms(base(noChar), manifest)
+    expect(comp(r1)).toBe(noChar)
+    expect(r1.warnings).toEqual([])
+    const hand = { character: 'C9', form: 'a', sprites: { up: ['x', 'y', 'z'] } }
+    const r2 = expandCharacterForms(base(hand), manifest)
+    expect(comp(r2)).toBe(hand)
+    expect(r2.warnings).toEqual([])
+  })
+  it('同行者が無い設定、characterForms が無い設定は従来どおり', () => {
+    const c = base({ character: 'C9', form: 'a' })
+    delete c.companion
+    expect('companion' in (expandCharacterForms(c, manifest).raw as object)).toBe(false)
+    const raw = { companion: { character: 'C9', form: 'a' } }
+    expect(expandCharacterForms(raw, manifest).raw).toBe(raw)
+  })
+  it('同行者の歩行絵 12 枚（4 方向×3 コマ）の URL', () => {
+    const c = comp(expandCharacterForms(base({ character: 'C9', form: 'a' }), manifest))
+    const s = c.sprites as Record<string, string[]>
+    const urls = ['up', 'down', 'left', 'right'].flatMap((d) => s[d])
+    expect(urls).toHaveLength(12)
+    expect(urls[0]).toBe(`${ROOT}C9/walk/C9-a-walk-up-1.webp`)
+    expect(urls).toContain(`${ROOT}C9/walk/C9-a-walk-down-2.webp`)
+    expect(urls).toContain(`${ROOT}C9/walk/C9-a-walk-left-1.webp`)
+    expect(urls[11]).toBe(`${ROOT}C9/walk/C9-a-walk-right-3.webp`)
+    expect(urls).toContain(`${ROOT}C9/walk/C9-a-walk-right-3.webp`)
+  })
+})
+
 describe('刀の指定（#1035。目録から導く）', () => {
   const WROOT = 'http://h/assets/images/weapons'
   const wm: CharacterFormsManifest = {
