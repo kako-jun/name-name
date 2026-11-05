@@ -1558,14 +1558,14 @@ depth 指定の実例（#694）:
 
 name-name の parser / emitter を壊すと下流ゲームが一斉に動かなくなるため、下流ゲーム本編の `script.md` を直接読み、構造を検証するスモークテストを置く（コピーは持たない）。
 
-| テスト | 読む本編 | 対象下流 | カバー |
-| --- | --- | --- | --- |
-| `friday1930_smoke_test.rs` | `$FRIDAY1930_SCRIPT`（未設定なら兄弟 `../friday-1930/script.md`） | [friday-1930](https://github.com/kako-jun/friday-1930) | ノベル（ナレーション/BGM/場面転換）+ RPG（RpgMap/PlayerStart/Npc/view=raycast）の混在 |
+| テスト                     | 読む本編                                                          | 対象下流                                               | カバー                                                                                                                                                       |
+| -------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `friday1930_smoke_test.rs` | `$FRIDAY1930_SCRIPT`（未設定なら兄弟 `../friday-1930/script.md`） | [friday-1930](https://github.com/kako-jun/friday-1930) | ノベル（ナレーター台詞/ナレーション/BGM/場面転換）+ マスター定義（パーティ/モンスター）+ エンカウント設定 + RPG（RpgMap/PlayerStart/Npc/view=raycast）の混在 |
 
 **運用ルール:**
 
 - 下流の本編 `script.md` を直接読む。fixture コピーは作らない（多重管理しない）。本編が変わったらテストの assert を本編の事実に合わせる
-- 本編が見つからない場合、`FRIDAY1930_SCRIPT` 未指定ならスキップ表示（eprintln）、指定済みなら panic。CI は friday-1930 を checkout して `FRIDAY1930_SCRIPT` を渡す（必須）
+- 本編が見つからない場合は常に panic する（スキップしない）。`FRIDAY1930_SCRIPT` で指定するか、兄弟に friday-1930 を clone する。CI は friday-1930 を checkout して `FRIDAY1930_SCRIPT` を渡す
 - view / RpgMap / NPC の抽出が期待通りかを assert する
 - スモークテストで扱うのは **ハッピーパスの構造検証のみ**。parser の異常系（空ファイル、不正値、ミスマッチ等）は `integration_test.rs` で担保する
 - 下流ごとにテストを1本追加していく（ogurasia 等、将来の通常 RPG 下流も同じ方式で展開する想定）
