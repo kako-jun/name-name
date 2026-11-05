@@ -896,6 +896,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                         expressions: parsed.expressions,
                         scene: parsed.scene,
                         height: scan_height_attr(header_inner, npc_line_no),
+                        walk_sprites: scan_walk_sprites_attr(header_inner, npc_line_no),
                     }));
                     continue;
                 }
@@ -4365,6 +4366,48 @@ fn scan_height_attr(header: &str, line_no: i64) -> Option<u32> {
             None
         }
     }
+}
+
+/// 属性トークン `絵=名前`（`@` より後ろの空白区切り）を取り出す (#1106)。NPC の歩行絵(4 方向 × 3 コマ)の
+/// 名前の規則 1 語。値が空・`]` や `=` を含む・画像の拡張子で終わる(規則が `-walk-<向き>-<コマ>.webp` を足すため)ときは
+/// その属性だけ無視し、行番号つきで警告する(NPC の行は読む)。2 つ目以降は無視して警告する。`line_no` は 1 始まり。
+fn scan_walk_sprites_attr(header: &str, line_no: i64) -> Option<String> {
+    let after = &header[header.find('@')? + 1..];
+    let mut found: Option<String> = None;
+    let mut seen = false;
+    for raw in after
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|t| t.strip_prefix("絵="))
+    {
+        if seen {
+            emit_warning(&format!(
+                "[name-name-parser] warning: {line_no} 行目の 絵={raw} は 絵= が重複しているため無視した"
+            ));
+            continue;
+        }
+        seen = true;
+        let lower = raw.to_ascii_lowercase();
+        let why = if raw.is_empty() {
+            Some("絵= の値が空のため無視した".to_string())
+        } else if raw.contains([']', '=']) {
+            Some(format!("絵={raw} は ] や = を含むため無視した"))
+        } else if [".webp", ".png", ".jpg", ".jpeg", ".gif"]
+            .iter()
+            .any(|e| lower.ends_with(e))
+        {
+            Some(format!(
+                "絵={raw} は 拡張子を含まない名前の規則 1 語でないため無視した(例: 絵=kid → kid-walk-up-1.webp …)"
+            ))
+        } else {
+            None
+        };
+        match why {
+            Some(w) => emit_warning(&format!("[name-name-parser] warning: {line_no} 行目の {w}")),
+            None => found = Some(raw.to_string()),
+        }
+    }
+    found
 }
 
 /// `[フィールドマップ …]` の属性部をパースする (#1100)。`背景=` `マスク=` は必須、`前面=` `戦闘背景=` は任意。
@@ -10341,6 +10384,74 @@ mod field_notation_tests {
         assert!(w[0].contains("9 行目") && w[0].contains("高さ=0"), "{w:?}");
         assert!(
             w[1].contains("10 行目") && w[1].contains("高さ=abc"),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn npc_walk_sprites_attribute_parses_and_round_trips() {
+        let _ = take_test_warnings();
+        let body = "[NPC 長老 @5,6 色=#ff0000 絵=npc/kid 高さ=80]\nやあ\n[/NPC]\n[NPC 村人 @1,1]\nよう\n[/NPC]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        match &doc1.chapters[0].scenes[0].events[..] {
+            [Event::Npc(a), Event::Npc(b)] => {
+                assert_eq!(a.walk_sprites.as_deref(), Some("npc/kid"));
+                assert_eq!(a.height, Some(80));
+                assert_eq!(a.message, vec!["やあ".to_string()]);
+                assert_eq!(b.walk_sprites, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(take_test_warnings().is_empty());
+        let emitted = emit(&doc1);
+        assert!(emitted.contains(" 絵=npc/kid 高さ=80]"), "{emitted}");
+        assert!(
+            !emitted.contains("[NPC 村人 @1,1 色=#ff6b6b 絵="),
+            "{emitted}"
+        );
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn invalid_npc_walk_sprites_is_ignored_with_line_number() {
+        let _ = take_test_warnings();
+        let evs = events_of(
+            "[NPC 空 @1,1 絵=]\nあ\n[/NPC]\n[NPC 拡張子 @2,2 絵=kid.webp]\nい\n[/NPC]\n[NPC 等号 @3,3 絵=a=b]\nう\n[/NPC]\n[NPC 重複 @4,4 絵=a 絵=b]\nえ\n[/NPC]\n",
+        );
+        let walk: Vec<(Option<String>, Vec<String>)> = evs
+            .iter()
+            .map(|e| match e {
+                Event::Npc(n) => (n.walk_sprites.clone(), n.message.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            walk,
+            vec![
+                (None, vec!["あ".to_string()]),
+                (None, vec!["い".to_string()]),
+                (None, vec!["う".to_string()]),
+                (Some("a".to_string()), vec!["え".to_string()]),
+            ]
+        );
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 4, "{w:?}");
+        assert!(
+            w[0].contains("9 行目の 絵= の値が空のため無視した"),
+            "{w:?}"
+        );
+        assert!(
+            w[1].contains("12 行目の 絵=kid.webp は 拡張子を含まない"),
+            "{w:?}"
+        );
+        assert!(
+            w[2].contains("15 行目の 絵=a=b は ] や = を含むため無視した"),
+            "{w:?}"
+        );
+        assert!(
+            w[3].contains("18 行目の 絵=b は 絵= が重複しているため無視した"),
             "{w:?}"
         );
     }

@@ -1322,6 +1322,10 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     Some(path) if !path.is_empty() => format!(" sprite={path}"),
                     _ => String::new(),
                 };
+                let walk_sprites_suffix = match &npc.walk_sprites {
+                    Some(name) if !name.is_empty() => format!(" 絵={name}"),
+                    _ => String::new(),
+                };
                 let frames_suffix = match npc.frames {
                     Some(n) => format!(" frames={n}"),
                     None => String::new(),
@@ -1358,13 +1362,14 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     None => String::new(),
                 };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}{}{}]\n",
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}{}{}{}]\n",
                     npc.name,
                     npc.x,
                     npc.y,
                     npc.color,
                     id_suffix,
                     sprite_suffix,
+                    walk_sprites_suffix,
                     frames_suffix,
                     direction_suffix,
                     portrait_suffix,
