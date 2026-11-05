@@ -1,5 +1,5 @@
 /**
- * 戦闘画面サンプル (#749) の設定 JSON の装備 (#207) と魔石 (#889) の味方への反映。純粋関数のみ（ブラウザ API に触れない）。
+ * 戦闘の設定 JSON (#749) の装備 (#207) と魔石 (#889) の味方への反映。純粋関数のみ（ブラウザ API に触れない）。
  *
  * - `gear`: `[アイテム id]` の装備品と同じキーの配列（id / name / kind / equipBonus / equippableBy / elements / abilities）。`kind` は 武器 / 防具 / 盾 / 兜
  * - `jobs`（#740）: `[ジョブ id]` と同じキーの配列（id / name / description / equipBonus / elements）。`party[].jobs`（就けるジョブの id の配列。先頭が最初のジョブ）と

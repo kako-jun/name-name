@@ -2,7 +2,7 @@
  * 一枚絵フィールドをセーブデータから途中再開する (#1021)。DOM / PixiJS に依存しない純関数。
  *
  * 状態の与え方は一通り: localStorage に `SaveSlotData`（`rpg` 付き）を先に作ってから、
- * `field-sample.html?resume=<0|1|2|quick>` で開く。セーブ形式は `game/rpgSave.ts` が正本で、
+ * `field.html?resume=<0|1|2|quick>` で開く。セーブ形式は `game/rpgSave.ts` が正本で、
  * このファイルは「設定（世界）にセーブ（状態）を重ねる」ことと「戦闘エンジンへ渡す形」だけを持つ。
  */
 import { SaveManager } from '../game/SaveManager'
@@ -17,15 +17,15 @@ import {
 import { buildEnemyEntities } from '../game/encounter'
 import { hasOwn } from '../game/ownProperty'
 import type { BattleEngineOptions } from '../game/battleEngine'
-import type { FieldBattleConfig, FieldSampleConfig } from './config'
+import type { FieldBattleConfig, FieldConfig } from './config'
 import { savedFormsOf } from './characterForms'
 
-/** セーブのキーの名前空間 (#578)。実キーは `name-name-save-field-sample-<slot>` / `…-quick` */
-export const FIELD_SAMPLE_DOC_KEY = 'field-sample'
+/** セーブのキーの名前空間 (#578)。実キーは `name-name-save-field-<slot>` / `…-quick` */
+export const FIELD_DOC_KEY = 'field'
 
 /** 設定（世界）から、セーブを重ねる土台を作る */
 export function baseConfigOf(
-  config: Pick<FieldSampleConfig, 'party' | 'items' | 'flags' | 'monsters'>
+  config: Pick<FieldConfig, 'party' | 'items' | 'flags' | 'monsters'>
 ): RpgBaseConfig {
   return {
     party: config.party,
@@ -48,8 +48,8 @@ export type ResumeLoad =
  */
 export function loadResume(
   search: string,
-  config: Pick<FieldSampleConfig, 'party' | 'items' | 'flags' | 'monsters' | 'scenes'>,
-  saves: SaveManager = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+  config: Pick<FieldConfig, 'party' | 'items' | 'flags' | 'monsters' | 'scenes'>,
+  saves: SaveManager = new SaveManager(FIELD_DOC_KEY)
 ): ResumeLoad {
   const raw = new URLSearchParams(search).get('resume')
   if (raw === null) return { kind: 'none' }
@@ -81,7 +81,7 @@ export function loadResume(
  */
 export function savedFormsFromResume(
   search: string,
-  saves: SaveManager = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+  saves: SaveManager = new SaveManager(FIELD_DOC_KEY)
 ): Record<string, string> {
   const raw = new URLSearchParams(search).get('resume')
   const slot = parseResumeParam(raw)

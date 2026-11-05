@@ -6,7 +6,7 @@ sit-by-me の素材が増えたら、このスクリプトを再実行して目�
 
 使い方（frontend/ で）:
     uv run python3 scripts/gen_sit_character_forms.py <sit-by-me のルート> [出力先]
-出力先の既定は public/field-sample/sit-character-forms.json
+出力先の既定は public/field/sit-character-forms.json
 """
 
 import json
@@ -71,7 +71,7 @@ def main() -> None:
     out = (
         Path(sys.argv[2])
         if len(sys.argv) > 2
-        else Path(__file__).resolve().parent.parent / "public/field-sample/sit-character-forms.json"
+        else Path(__file__).resolve().parent.parent / "public/field/sit-character-forms.json"
     )
     characters: dict[str, dict] = {}
     for cid in CHARACTERS:

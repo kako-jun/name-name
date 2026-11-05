@@ -12,7 +12,7 @@ import {
   DEFAULT_SIZE_ID,
   MAX_ENEMIES,
   MAX_PARTY,
-  SAMPLE_DEFAULT_PERSPECTIVE,
+  DEFAULT_PERSPECTIVE,
   SCREEN_SIZES,
   applyFormation,
   buildBattleSetup,
@@ -29,14 +29,14 @@ import {
   parsePoses,
   resolveSize,
   resolveUrl,
-  type BattleSampleConfig,
-  type BattleSampleView,
+  type BattleConfig,
+  type BattleView,
   type ScreenSizeId,
 } from './config'
 
 const BASE = 'https://example.com/dir/config.json'
 
-function view(over: Partial<BattleSampleView> = {}): BattleSampleView {
+function view(over: Partial<BattleView> = {}): BattleView {
   return {
     layout: 'side',
     spriteStyle: 'none',
@@ -70,7 +70,7 @@ function parseParty0(entity: Record<string, unknown>, base = BASE) {
   return r.value.party[0]
 }
 
-function parseOk(raw: unknown, base = BASE): BattleSampleConfig {
+function parseOk(raw: unknown, base = BASE): BattleConfig {
   const r = parseConfig(raw, base)
   if (!r.ok) throw new Error(r.error)
   return r.value
@@ -868,8 +868,8 @@ describe('parseConfig horizon / perspective (#747)', () => {
     expect(c.horizon).toBe(0.3)
     expect(c.perspective).toBe(0.8)
   })
-  it('SAMPLE_DEFAULT_PERSPECTIVE は 0.8', () => {
-    expect(SAMPLE_DEFAULT_PERSPECTIVE).toBe(0.8)
+  it('DEFAULT_PERSPECTIVE は 0.8', () => {
+    expect(DEFAULT_PERSPECTIVE).toBe(0.8)
   })
   it.each(['horizon', 'perspective'] as const)('%s: -0.001 はエラー', (key) => {
     expect(parseErr({ [key]: -0.001 })).toContain(`${key} は 0〜1 の数値`)
@@ -986,7 +986,7 @@ describe('applyFormation (#747)', () => {
 
 describe('buildBattleSetup: 奥行き・前景・隊列 (#747)', () => {
   const FG = 'https://example.com/fg.png'
-  const cfg = (over: Partial<BattleSampleConfig> = {}): BattleSampleConfig => ({
+  const cfg = (over: Partial<BattleConfig> = {}): BattleConfig => ({
     ...defaultConfig(),
     horizon: 0.25,
     perspective: 0.6,
@@ -1443,7 +1443,7 @@ describe('同梱の例 __fixtures__/enemy-affinity.json (#872)', () => {
   })
 })
 
-describe('parsePoses 単体（フィールドサンプルと共有 #890）', () => {
+describe('parsePoses 単体（一枚絵フィールドと共有 #890）', () => {
   const resolve = (u: string) => resolveUrl(u, BASE)
 
   it('URL を解決して返し、未知のポーズ名は捨てる', () => {

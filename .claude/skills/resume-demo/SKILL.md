@@ -1,6 +1,6 @@
 ---
 name: resume-demo
-description: 状態を用意して起動する。セーブ JSON を localStorage に入れ field-sample.html?resume=0&config=<世界設定のURL> で任意の局面（パーティ・所持品・現在地・戦闘中）から再開して確認する。デモ・不具合再現・機能の実機確認に使う
+description: 状態を用意して起動する。セーブ JSON を localStorage に入れ field.html?resume=0&config=<世界設定のURL> で任意の局面（パーティ・所持品・現在地・戦闘中）から再開して確認する。デモ・不具合再現・機能の実機確認に使う
 ---
 
 任意の局面をセーブ JSON として先に用意し、そこから再開して確認する。専用のサンプルマップや `?fixture=dummy` の入口は無い（#1051 で廃止）。
@@ -10,9 +10,9 @@ description: 状態を用意して起動する。セーブ JSON を localStorage
 ## 手順
 
 1. セーブ JSON を用意する（形式は `frontend/src/game/rpgSave.ts` の `RpgSaveState`。書き方と例は正本の「セーブの書き方」）
-2. localStorage のキー `name-name-save-field-sample-<slot>` に入れる
-3. `field-sample.html?resume=0&config=<世界設定のURL>`（slot 0。`1` / `2` / `quick` も可。`?config=` は必須で同梱の既定設定は無い）で開く
-4. `window.fieldSample.rpg()` で今の局面をセーブ形式で読み、意図どおりか確認する（`saveRpg(slot)` で書き戻せる）
+2. localStorage のキー `name-name-save-field-<slot>` に入れる
+3. `field.html?resume=0&config=<世界設定のURL>`（slot 0。`1` / `2` / `quick` も可。`?config=` は必須で同梱の既定設定は無い）で開く
+4. `window.field.rpg()` で今の局面をセーブ形式で読み、意図どおりか確認する（`saveRpg(slot)` で書き戻せる）
 
 ## 自動操作の注意
 

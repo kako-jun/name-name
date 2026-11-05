@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe('buildDummyFixture (#890)', () => {
   const parsed = () => {
-    const r = parseConfig(buildDummyFixture(), 'http://localhost/field-sample.html')
+    const r = parseConfig(buildDummyFixture(), 'http://localhost/field.html')
     if (!r.ok) throw new Error(r.error)
     return r.value
   }
@@ -60,7 +60,7 @@ describe('buildDummyFixture (#890)', () => {
     expect('spriteStyle' in parsed()).toBe(false)
     const r = parseConfig(
       buildDummyFixture({ spriteStyle: 'acrylic' }),
-      'http://localhost/field-sample.html'
+      'http://localhost/field.html'
     )
     if (!r.ok) throw new Error(r.error)
     expect(r.value.spriteStyle).toBe('acrylic')
@@ -71,7 +71,7 @@ describe('buildDummyFixture (#890)', () => {
     expect('tiltShift' in (buildDummyFixture() as object)).toBe(false)
     const r = parseConfig(
       buildDummyFixture({ tiltShift: 'on', spriteStyle: 'acrylic' }),
-      'http://localhost/field-sample.html'
+      'http://localhost/field.html'
     )
     if (!r.ok) throw new Error(r.error)
     expect(r.value.tiltShift).toBe('on')
