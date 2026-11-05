@@ -1290,6 +1290,81 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&line);
                 prev_was_dialog_or_text = false;
             }
+            Event::FieldMenu(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut parts: Vec<String> = d.items.clone();
+                if let Some(t) = &d.transition {
+                    if let Some(v) = t.text_out_ms {
+                        parts.push(format!("文字消え={v}"));
+                    }
+                    if let Some(v) = t.slide_ms {
+                        parts.push(format!("枠={v}"));
+                    }
+                    if let Some(v) = t.text_in_ms {
+                        parts.push(format!("文字出現={v}"));
+                    }
+                }
+                if parts.is_empty() {
+                    out.push_str("[メニュー]\n");
+                } else {
+                    out.push_str(&format!("[メニュー: {}]\n", parts.join(", ")));
+                }
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldMenuItem(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[メニュー項目 {}", d.id);
+                if let Some(v) = &d.label {
+                    line.push_str(&format!(" ラベル={v}"));
+                }
+                if let Some(v) = d.disabled {
+                    line.push_str(&format!(" 無効={v}"));
+                }
+                if let Some(v) = &d.reason {
+                    line.push_str(&format!(" 理由={v}"));
+                }
+                if let Some(v) = d.time_limit_allowed {
+                    line.push_str(&format!(" 時間制限={}", if v { "可" } else { "不可" }));
+                }
+                if let Some(v) = &d.time_limit_reason {
+                    line.push_str(&format!(" 時間制限の理由={v}"));
+                }
+                if let Some(v) = &d.content {
+                    line.push_str(&format!(" 中身={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::UiImages(d) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = String::from("[操作画像");
+                if let Some(v) = &d.hand {
+                    line.push_str(&format!(" 手={v}"));
+                }
+                if let Some(v) = &d.select_mark {
+                    line.push_str(&format!(" 選択マーク={v}"));
+                }
+                if let Some(v) = d.scale {
+                    line.push_str(&format!(" 倍率={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::Currency(name) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!("[通貨名: {name}]\n"));
+                prev_was_dialog_or_text = false;
+            }
             Event::PlayerStart(p) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
