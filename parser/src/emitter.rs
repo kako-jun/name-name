@@ -1126,6 +1126,68 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 out.push_str(&line);
                 prev_was_dialog_or_text = false;
             }
+            Event::FieldEdge(e) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "[端 {} 範囲={}..{} → {}]\n",
+                    direction_ja(e.direction),
+                    e.range_from,
+                    e.range_to,
+                    e.target
+                ));
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldWarp(w) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[ワープ {} → {} @{},{}", w.name, w.target, w.x, w.y);
+                if let Some(d) = w.direction {
+                    line.push_str(&format!(" 向き={}", direction_ja(d)));
+                }
+                if let Some(e) = w.effect {
+                    let name = match e {
+                        WarpEffect::Fade => "フェード",
+                        WarpEffect::Flash => "フラッシュ",
+                    };
+                    line.push_str(&format!(" 演出={name}"));
+                }
+                if let Some([a, b, c]) = w.timing_ms {
+                    line.push_str(&format!(" 時間={a}/{b}/{c}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldShake {
+                amplitude_y,
+                period_ms,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[揺れ: 縦={amplitude_y}");
+                if let Some(p) = period_ms {
+                    line.push_str(&format!(", 周期={p}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
+            Event::FieldScroll { image, speed, y } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[窓の景色: {image}, 速度={speed}");
+                if let Some(y) = y {
+                    line.push_str(&format!(", y={y}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
             Event::PlayerStart(p) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1632,6 +1694,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         }
                         EventCommand::FieldEnd => {
                             out.push_str("[フィールド終了]\n");
+                        }
+                        EventCommand::Warp { id } => {
+                            out.push_str(&format!("[ワープ: {id}]\n"));
                         }
                     }
                 }
