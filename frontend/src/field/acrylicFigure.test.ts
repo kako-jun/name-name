@@ -181,7 +181,7 @@ describe('FieldAcrylicFigure', () => {
   })
 })
 
-describe('createFieldStands（main.ts の配線）', () => {
+describe('createFieldStands（startFieldGame.ts の配線）', () => {
   it('未指定は何も作らない（従来描画）', () => {
     expect(createFieldStands(undefined, true)).toEqual({ player: null, companion: null })
   })

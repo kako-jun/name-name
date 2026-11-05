@@ -231,11 +231,11 @@ export interface FieldConfig {
   emotions?: EmotionSheets
   /**
    * 感情吹き出しの外部 JSON (#946)。`emotionsUrl`（`field_emotions` 相当）。解決済みの URL と、中の画像 URL を解決する関数（インライン `emotions` と同じ規則）。
-   * 読み込み（fetch）は main.ts の責務。未指定は undefined
+   * 読み込み（fetch）は startFieldGame.ts の責務。未指定は undefined
    */
   emotionsSource?: { url: string; resolveImage: (u: string) => string | null }
   /**
-   * NPC の会話を書いた脚本 `.md` の URL (#841 段階2)。`scriptUrl`。解決済みの URL。読み込み（fetch・パース）は main.ts の責務。未指定は undefined
+   * NPC の会話を書いた脚本 `.md` の URL (#841 段階2)。`scriptUrl`。解決済みの URL。読み込み（fetch・パース）は startFieldGame.ts の責務。未指定は undefined
    */
   scriptUrl?: string
   /**

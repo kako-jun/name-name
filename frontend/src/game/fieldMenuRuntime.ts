@@ -1,6 +1,6 @@
 /**
  * 全画面メニュー (#880) の実行時の配線（どうぐ・まほう・せいとん・せってい）。PixiJS / DOM に触れず、狭い依存 `FieldMenuRuntimeDeps` だけを受けるので単体テストできる
- * （`field/main.ts` が実物の RPG 状態を渡す）。計算そのものは `fieldMenuLive.ts`（中身・使う）と `fieldSettings.ts`（せってい）の純粋関数。
+ * （`field/startFieldGame.ts` が実物の RPG 状態を渡す）。計算そのものは `fieldMenuLive.ts`（中身・使う）と `fieldSettings.ts`（せってい）の純粋関数。
  *
  * 持ち物の正本は呼び出し側（パーティ・所持品。戦闘へも持ち越す）。ここが持つのは「せってい」の選択値とせいとんの並びだけで、
  * どちらもセーブ対象（`RpgSaveState.menu`）。

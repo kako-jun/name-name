@@ -2,7 +2,7 @@ import type { Container } from 'pixi.js'
 
 /**
  * world コンテナの描画順 (奥 → 手前)。順序を変えると前面レイヤー (#866) が主人公の手前に
- * 来なくなるため、main.ts はこの並びのまま addChild し、layers.test.ts で順序を固定する。
+ * 来なくなるため、startFieldGame.ts はこの並びのまま addChild し、layers.test.ts で順序を固定する。
  */
 export const WORLD_LAYER_ORDER = [
   'scroll',
@@ -68,7 +68,7 @@ export function emotionLayerHost(ffWindow: boolean, talking: boolean): 'world' |
 
 /**
  * 感情吹き出しの層を `emotionLayerHost` の置き先へ付け替え、stage 側の揺れ（y）を world に合わせる (#840)。
- * main.ts が毎フレーム呼ぶ。置き先（'world' | 'stage'）を返すので、検証用の `state()` はこれを出して配線を固定する。
+ * startFieldGame.ts が毎フレーム呼ぶ。置き先（'world' | 'stage'）を返すので、検証用の `state()` はこれを出して配線を固定する。
  */
 export function syncEmotionLayerHost(args: {
   ffWindow: boolean
