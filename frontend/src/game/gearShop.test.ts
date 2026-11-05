@@ -54,7 +54,7 @@ const own = (p1: string[], extra: Record<string, string[]> = {}): GearState => (
   blade: {},
 })
 
-describe('priceOf: 値段 = 基準額 × 倍率^購入済み本数', () => {
+describe('priceOf: 値段 = 基準額 × 倍率^持っている刀の種類数', () => {
   it('本数別（0〜4 本）で 1 / 2 / 4 / 8 / 16 倍', () => {
     const ids = ['a1', 'a2', 'a3', 'a4', 'a5']
     ids.forEach((id, n) => {
@@ -130,7 +130,7 @@ describe('canBuy / buy', () => {
     expect(paid).toEqual([100, 200, 400])
     expect(st.owned.p1).toEqual(['a1', 'a2', 'a3'])
   })
-  it('購入済みは再購入できない（owned）。装備はしない', () => {
+  it('入手済みは再購入できない（owned）。装備はしない', () => {
     const r = buy(cfg, own(['a1']), 'p1', 'a1', 9999)
     expect(r).toMatchObject({ ok: false, reason: 'owned', gold: 9999 })
     expect(buy(cfg, emptyGearState(), 'p1', 'a1', 9999).state.blade).toEqual({})
@@ -189,7 +189,7 @@ describe('equipBlade（equipItem を再利用）', () => {
   const def = { id: 'p1' }
   const st = own(['a1', 'a2'])
 
-  it('購入済みの刀を装備し、装備中の刀 id が状態に入る', () => {
+  it('持っている刀を装備し、装備中の刀 id が状態に入る', () => {
     const r = equipBlade(cfg, st, def, roster, [], 'a1')
     expect(r.ok).toBe(true)
     expect(r.equipment).toEqual(['a1'])
@@ -238,7 +238,7 @@ describe('equipBlade（equipItem を再利用）', () => {
 })
 
 describe('新しい挙動 (#881 レビュー)', () => {
-  it('購入済みには値段を付けない', () => {
+  it('入手済みには値段を付けない', () => {
     expect(canBuy(cfg, own(['a1']), 'p1', 'a1', 9999).price).toBeUndefined()
   })
   it('桁あふれは uncomputable（unbuyable と文言が違う）', () => {
@@ -297,7 +297,7 @@ describe('新しい挙動 (#881 レビュー)', () => {
     expect(equipment.p1).toEqual(['gone', 'vest', 'a1', 'x']) // 入力は変えない
     expect(r.warnings.some((w) => w.startsWith('equipment.p1'))).toBe(true)
   })
-  it('resolveGear: 購入済みで装備中の正常な刀は装備列に残り、equipment を渡さなければ返さない', () => {
+  it('resolveGear: 持っていて装備中の正常な刀は装備列に残り、equipment を渡さなければ返さない', () => {
     const saved: GearState = { owned: { p1: ['a1'] }, blade: { p1: 'a1' } }
     expect(resolveGear(saved, cfg, { p1: ['a1'] }).equipment).toEqual({ p1: ['a1'] })
     expect('equipment' in resolveGear(saved, cfg)).toBe(false)
@@ -494,7 +494,7 @@ describe('skillsForMember (#881 段階3)', () => {
   it('同じ特技が複数の刀に挙がっていても、各自が自分の刀を装備したときだけ出る', () => {
     const st: GearState = { owned: { p1: ['a1'], p2: ['b1'] }, blade: { p1: 'a1' } }
     expect(ids(st, 'p1')).toEqual(['fixed', 'X'])
-    expect(ids(st, 'p2')).toEqual(['fixed']) // 購入済みでも装備していない
+    expect(ids(st, 'p2')).toEqual(['fixed']) // 持っていても装備していない
     expect(ids({ ...st, blade: { p1: 'a1', p2: 'b1' } }, 'p2')).toEqual(['fixed', 'X'])
   })
   it('abilities: [] の刀を装備すると刀のわざは出ない（固定のわざだけ）', () => {

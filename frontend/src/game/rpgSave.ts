@@ -82,7 +82,7 @@ export interface RpgSaveState {
   steps?: number
   /** 全画面メニューの持ち越し (#880)。「せってい」の選択値（key → 選択肢 index。意味は `fieldSettings.ts`）と、せいとんで並べた所持品の順（アイテム id） */
   menu?: RpgMenuState
-  /** 刀・防具の購入済みと装備中の刀 (#881)。省略可（メニューの購入を使わないゲームは書かない・旧セーブは無し）。定義は `gearShop.ts` */
+  /** 刀・防具の持っている品（個数つき。買った分も宝箱などで手に入れた分も含む）と装備中の刀 (#881)。省略可（メニューの購入・売却を使わないゲームは書かない・旧セーブは無し）。定義は `gearShop.ts` */
   gear?: GearState
 }
 
@@ -272,7 +272,7 @@ export interface RpgResolved {
   steps?: number
   /** 全画面メニューの持ち越し (#880)。セーブに無ければ省略 */
   menu?: RpgMenuState
-  /** 刀・防具の購入済みと装備中の刀（セーブに無ければ省略）。定義との突き合わせは `resolveGear` */
+  /** 刀・防具の持っている品（個数つき）と装備中の刀（セーブに無ければ省略）。定義との突き合わせは `resolveGear` */
   gear?: GearState
   warnings: string[]
 }

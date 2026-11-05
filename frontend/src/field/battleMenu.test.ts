@@ -148,7 +148,7 @@ describe('buildBattleMenu: 装備中の刀のアビリティ (#881 段階3)', ()
   it('他人の刀・未購入の刀・装備していない刀は出ない（他人はそれぞれ自分の刀）', () => {
     const st: GearState = { owned: { p1: ['a1', 'a2'], p2: ['b1'] }, blade: { p1: 'a1', p2: 'b1' } }
     const m = menu(st)
-    expect(ids(m, 'p1')).toEqual(['common', 'A']) // 購入済みでも装備していない a2(B) は出ない
+    expect(ids(m, 'p1')).toEqual(['common', 'A']) // 持っていても装備していない a2(B) は出ない
     expect(ids(m, 'p2')).toEqual(['common', 'C']) // p1 の刀 A・B は p2 に出ない
     // 他人の刀を装備中と書かれても反映しない／未購入の刀を装備中と書かれても反映しない
     expect(ids(menu({ owned: { p1: [] }, blade: { p1: 'a1', p2: 'a1' } }), 'p1')).toEqual([
