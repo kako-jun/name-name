@@ -161,7 +161,10 @@ export function fieldConfigFromDocs(input: FieldConfigInput): FieldBuildResult {
 export interface FieldLoadDeps {
   /** 場面 ID を含む md を探してロードする(PlayerScreen の resolveMissingSceneAcrossDocs 相当)。見つからなければ null */
   resolveScene(sceneId: string): Promise<FieldSourceDoc[] | null>
-  /** hidden な md も含む全 md(data.md など作品全体の設定の置き場) */
+  /**
+   * hidden な md も含む全 md(data.md など作品全体の設定の置き場)。
+   * 取得の失敗は他の取得物と違い警告でなく error で止める(一覧が欠けたまま黙って進まないため。全 md の一覧取得の失敗だけ error)
+   */
   loadAllDocs(): Promise<FieldSourceDoc[]>
   /** JSON の取得(目録・battle_effects・メニューの中身) */
   fetchJson(url: string): Promise<unknown>

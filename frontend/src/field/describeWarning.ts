@@ -124,19 +124,22 @@ export function describeWarning(message: string, raw: unknown): string {
     '[人物の形態] の 素材= は URL 文字列が必要です'
   )
 
-  // 場面の NPC / 場面
-  s = s.replace(/scenes\.([^.\s[]+)\.npcs\[(\d+)\](?:\.(\w+))?/g, (_m, sid, n, key) => {
+  // 場面の NPC / 場面(場面 ID は `.` を含みうる(見出しの id をそのまま通す)ので、既知のキー名の手前までを ID とする)
+  s = s.replace(/scenes\.(.+?)\.npcs\[(\d+)\](?:\.(\w+))?/g, (_m, sid, n, key) => {
     const scenes = isObj(r.scenes) ? r.scenes : {}
     const sc = isObj(scenes[sid]) ? (scenes[sid] as Obj) : {}
     const name = at(sc.npcs, Number(n), 'name')
     const target = `場面 ${sid} の NPC${name !== undefined ? ` '${name}'` : ` ${Number(n) + 1} 人目`}`
     return key === undefined ? target : withKey(target, key, NPC_KEYS, '')
   })
-  s = s.replace(/scenes\.([^.\s[]+)\.npcs の (\S+)/g, "場面 $1 の NPC '$2'")
-  s = s.replace(/scenes\.([^.\s[]+)\.(\w+)(?:\.(\w+))?/g, (_m, sid, key, sub) => {
-    if (!Object.prototype.hasOwnProperty.call(SCENE_KEYS, key)) return `場面 ${sid} の ${key}`
-    return `場面 ${sid} の ${SCENE_KEYS[key]}${sub !== undefined ? `（${sub}）` : ''}`
-  })
+  s = s.replace(/scenes\.(.+?)\.npcs の (\S+)/g, "場面 $1 の NPC '$2'")
+  s = s.replace(
+    /scenes\.(.+?)\.(npcs|encounter|links|shake|scroll|background|mask|foreground|playerHeight)(?:\.(\w+))?/g,
+    (_m, sid, key, sub) => {
+      if (!Object.prototype.hasOwnProperty.call(SCENE_KEYS, key)) return `場面 ${sid} の ${key}`
+      return `場面 ${sid} の ${SCENE_KEYS[key]}${sub !== undefined ? `（${sub}）` : ''}`
+    }
+  )
 
   // メニュー
   s = s.replace(/menu\.items\[(\d+)\](?:\.(\w+))?/g, (_m, n, key) => {
@@ -148,6 +151,8 @@ export function describeWarning(message: string, raw: unknown): string {
   })
   s = s.replace(/menu\.placeNames\.(\S+)/g, '場面 $1 の見出し（[メニュー] の場所名）')
   s = s.replace(/menu\.placeNames/g, '[メニュー] の場所名')
+  s = s.replace(/menu\.items に有効な項目がありません/g, '[メニュー] に有効な項目がありません')
+  s = s.replace(/menu\.items は配列にしてください/g, '[メニュー] の項目は配列にしてください')
   s = s.replace(/menu\.(\w+)/g, (_m, key) => `[メニュー] の ${key}`)
 
   // 売り物

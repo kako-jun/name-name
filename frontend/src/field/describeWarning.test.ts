@@ -9,6 +9,12 @@ const raw = {
         { id: 'kid', name: '子' },
       ],
     },
+    'a.b-1': {
+      npcs: [
+        { id: 'elder', name: '長老' },
+        { id: 'kid', name: '子' },
+      ],
+    },
   },
   menu: { items: [{ id: 'item' }, { id: 'save' }] },
   gearShop: { entries: [{ id: 'blade1' }, { id: 'armor1' }] },
@@ -76,6 +82,11 @@ describe('describeWarning(JSON パス → 記法の言い方)', () => {
     ],
     ['assist.speedFactor は 0 より大きい数値', '[補助通行] の 速度倍率= は 0 より大きい数値'],
     ['battle.currencyName は空でない文字列が必要です', '[通貨名:] は空でない文字列が必要です'],
+    [
+      'menu.items に有効な項目がありません（既定の項目を使います）',
+      '[メニュー] に有効な項目がありません（既定の項目を使います）',
+    ],
+    ['scenes.a.b-1.npcs[1].facing は x', "場面 a.b-1 の NPC '子' の 向き= は x"],
     ['items[0].count は数値', '[アイテム potion] の count は数値'],
     [
       'scenes.scene-a.encounter.groups の "x": 不正',
