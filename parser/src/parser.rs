@@ -905,6 +905,17 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                             pos += 1;
                             continue;
                         }
+                        // 選択肢行（`- はい → s2`）は台詞に混ぜない。イベントは選択を実行できないので
+                        // 未対応として警告し、読み捨てる (#1081)
+                        if is_choice_option_line(cmd_line) {
+                            emit_warning(&format!(
+                                "[name-name-parser] warning: {} 行目は [イベント] 内では未対応の選択肢行のため読み捨てた: {}",
+                                pos as i64 + 1 + line_base,
+                                truncate_for_warning(cmd_line)
+                            ));
+                            pos += 1;
+                            continue;
+                        }
                         // plain text → dialog lines
                         if !cmd_line.starts_with('[') {
                             pending_dialog_lines.push(cmd_line.to_string());
@@ -912,9 +923,18 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                             continue;
                         }
                         // 上のどの分岐にも消費されなかった `[...]` 行は読み捨てる。頭が未知のものは
-                        // トップレベルと同じく警告を出す (#1001)。既知の頭（書式が不正な [待機: abc]、
-                        // イベント内では解釈しない [ジャンプ: …] など）は従来どおり黙って捨てる。
-                        if !is_known_directive_head(cmd_line) {
+                        // トップレベルと同じく警告を出す (#1001)。既知の頭（イベント内では解釈しない
+                        // [ジャンプ: …] など）は、記法名つきの別文言で警告する (#1081)。
+                        if is_known_directive_head(cmd_line) {
+                            // 既知の記法だがイベントでは未対応（[フラグ:] [条件:] [ジャンプ:] [選択] ほか）。
+                            // 黙って捨てず、記法名つきで警告する (#1081)
+                            emit_warning(&format!(
+                                "[name-name-parser] warning: {} 行目は [イベント] 内では未対応の記法 [{}] のため読み捨てた: {}",
+                                pos as i64 + 1 + line_base,
+                                directive_head_name(cmd_line),
+                                truncate_for_warning(cmd_line)
+                            ));
+                        } else {
                             emit_warning(&format!(
                                 "[name-name-parser] warning: {} 行目は未知のディレクティブのため読み捨てた: {}",
                                 pos as i64 + 1 + line_base,
@@ -3961,6 +3981,23 @@ fn event_only_command(line: &str) -> Option<&'static str> {
     ["NPC移動", "戦闘"]
         .into_iter()
         .find(|name| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
+}
+
+/// `[名前: …]` / `[/名前]` の名前部分（閉じタグは `/` 付きのまま）を返す。`[` 始まりでなければ空文字。
+fn directive_head_name(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix('[') else {
+        return "";
+    };
+    let end = rest
+        .find(|c: char| c == ':' || c == ']' || c.is_whitespace())
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// 選択肢行（`- はい → s2`）か。`[選択]` ブロックの選択肢行と同じ形（`- ` 始まりで `→` を含む）。
+fn is_choice_option_line(line: &str) -> bool {
+    line.strip_prefix("- ")
+        .is_some_and(|rest| rest.contains('→'))
 }
 
 fn is_known_directive_head(line: &str) -> bool {
@@ -8834,6 +8871,80 @@ mod unknown_directive_warning_tests {
             "{HEAD}[イベント e]\n[NPC移動: x → @1,2]\n[待機: 500]\n[戦闘: g]\n[感情: 主人公, ？]\n[ジャンプ: z]\n[ボイス: a.wav]\n[フォント: x]\n[待機: abc]\n[NPC移動: x\n> ナレ\n**カコ** (a, 左):\nやあ\n[/イベント]\n"
         ));
         assert!(unknown_warnings().is_empty());
+    }
+
+    fn unsupported_warnings() -> Vec<String> {
+        take_test_warnings()
+            .into_iter()
+            .filter(|m| m.contains("[イベント] 内では未対応"))
+            .collect()
+    }
+
+    /// #1081: [イベント] 内の未対応記法 4 種は、行番号と記法名つきで警告し、コマンドにはならない。
+    #[test]
+    fn unsupported_syntax_inside_event_warns_with_line_and_name() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!(
+            "{HEAD}[イベント e]\n[フラグ: k=true]\n[条件: k]\n[ジャンプ: 1-2]\n[選択]\n- はい → s2\n[/選択]\n[/イベント]\n"
+        ));
+        let w = unsupported_warnings();
+        assert_eq!(w.len(), 6, "{w:?}");
+        for (line, name) in [
+            ("10 行目", "[フラグ]"),
+            ("11 行目", "[条件]"),
+            ("12 行目", "[ジャンプ]"),
+            ("13 行目", "[選択]"),
+            ("14 行目", "選択肢行"),
+            ("15 行目", "[/選択]"),
+        ] {
+            assert!(
+                w.iter().any(|m| m.contains(line) && m.contains(name)),
+                "{line} {name} {w:?}"
+            );
+        }
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::RpgEvent { commands, .. } => assert!(commands.is_empty(), "{commands:?}"),
+            other => panic!("expected RpgEvent, got {other:?}"),
+        }
+    }
+
+    /// #1081: 選択肢行は直前の台詞本文に混ざらない。台詞はそのまま、選択肢行だけ警告で落ちる。
+    #[test]
+    fn choice_option_line_does_not_leak_into_dialog() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!(
+            "{HEAD}[イベント e]\n**カコ** (a, 左):\nどうする？\n- はい → s2\n- いいえ → s3\n[/イベント]\n"
+        ));
+        let w = unsupported_warnings();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("12 行目") && w[0].contains("- はい → s2"),
+            "{w:?}"
+        );
+        let events = &doc.chapters[0].scenes[0].events;
+        match &events[0] {
+            Event::RpgEvent { commands, .. } => {
+                assert_eq!(
+                    commands,
+                    &vec![EventCommand::Dialog {
+                        character: Some("カコ".to_string()),
+                        text: vec!["どうする？".to_string()],
+                    }]
+                );
+            }
+            other => panic!("expected RpgEvent, got {other:?}"),
+        }
+    }
+
+    /// #1081: 正常な [イベント]（台詞・ナレーション・待機・NPC移動・戦闘・感情）は警告ゼロで不変。
+    #[test]
+    fn supported_event_commands_emit_no_unsupported_warning() {
+        let _ = take_test_warnings();
+        let _ = parse(&format!(
+            "{HEAD}[イベント e]\n[NPC移動: x → @1,2]\n[待機: 500]\n[戦闘: g]\n[感情: 主人公, ？]\n> ナレ\n**カコ** (a, 左):\nやあ - ね\n[/イベント]\n"
+        ));
+        assert!(unsupported_warnings().is_empty());
     }
 
     /// 条件ブロック内のイベントブロックでも行番号は元ファイル基準。
