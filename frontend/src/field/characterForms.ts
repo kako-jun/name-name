@@ -297,7 +297,7 @@ export interface ExpandResult {
  * - `party[].character`（人物 ID）を持つ者に、`form`（既定）またはセーブの指定の形態の poses を入れる。手書きの `poses` / `sprite` は導出で置き換える
  * - `characterForms.weaponRoot`（刀の素材ディレクトリ URL）があり、目録の人物が刀を持つなら、poses に刀の予約キーも導く（#1035。`party[].weapon` で刀を選べる。無ければ既定の刀）
  * - `player.character` を持ち `player.sprites` が無いとき、同じ人物の味方の形態（無ければ `player.form`）で歩行絵を導く
- * - `companion.character` を持ち `companion.sprites` が無いとき、主人公と同じ優先順位・警告・walkGait で歩行絵を導く（#1119）
+ * - `companion.character` を持ち `companion.sprites` が無いとき、主人公と同じ優先順位・警告・walkGait で歩行絵を導く（#1119）。player は sprites の有無を見ない（同行者は手書きの sprites があれば導出しない）
  * - 目録に無い形態・絵の足りない形態は警告し、その者は導出しない（セーブの指定が不正なら既定の形態に戻す）
  */
 export function expandCharacterForms(

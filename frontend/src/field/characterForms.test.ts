@@ -368,7 +368,11 @@ describe('expandCharacterForms（同行者の歩行絵。#1119）', () => {
     const s = c.sprites as Record<string, string[]>
     const urls = ['up', 'down', 'left', 'right'].flatMap((d) => s[d])
     expect(urls).toHaveLength(12)
-    console.log(urls.join('\n'))
+    expect(urls[0]).toBe(`${ROOT}C9/walk/C9-a-walk-up-1.webp`)
+    expect(urls).toContain(`${ROOT}C9/walk/C9-a-walk-down-2.webp`)
+    expect(urls).toContain(`${ROOT}C9/walk/C9-a-walk-left-1.webp`)
+    expect(urls[11]).toBe(`${ROOT}C9/walk/C9-a-walk-right-3.webp`)
+    expect(urls).toContain(`${ROOT}C9/walk/C9-a-walk-right-3.webp`)
   })
 })
 
