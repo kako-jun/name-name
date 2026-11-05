@@ -297,6 +297,7 @@ export interface ExpandResult {
  * - `party[].character`（人物 ID）を持つ者に、`form`（既定）またはセーブの指定の形態の poses を入れる。手書きの `poses` / `sprite` は導出で置き換える
  * - `characterForms.weaponRoot`（刀の素材ディレクトリ URL）があり、目録の人物が刀を持つなら、poses に刀の予約キーも導く（#1035。`party[].weapon` で刀を選べる。無ければ既定の刀）
  * - `player.character` を持ち `player.sprites` が無いとき、同じ人物の味方の形態（無ければ `player.form`）で歩行絵を導く
+ * - `companion.character` を持ち `companion.sprites` が無いとき、主人公と同じ優先順位・警告・walkGait で歩行絵を導く（#1119）
  * - 目録に無い形態・絵の足りない形態は警告し、その者は導出しない（セーブの指定が不正なら既定の形態に戻す）
  */
 export function expandCharacterForms(
@@ -378,6 +379,34 @@ export function expandCharacterForms(
           ...rawConfig.player,
           sprites,
           ...(rawConfig.player.cycle === undefined ? (walkGait(form) ?? {}) : {}),
+        }
+    }
+  }
+  // 同行者の歩行絵（主人公と同じ優先順位・警告・walkGait。手書きの sprites があれば触らない）
+  if (
+    isObj(rawConfig.companion) &&
+    typeof rawConfig.companion.character === 'string' &&
+    rawConfig.companion.sprites === undefined
+  ) {
+    const character = rawConfig.companion.character
+    const declared =
+      typeof rawConfig.companion.form === 'string' ? rawConfig.companion.form : undefined
+    const form = effectiveForm[character] ?? declared
+    if (form === undefined) {
+      warnings.push(
+        'companion に form（または同じ人物の味方の form）がありません（歩行絵の導出をしません）'
+      )
+    } else {
+      const sprites = deriveWalkSprites(manifest, root, character, form)
+      if (!sprites)
+        warnings.push(
+          `companion の歩行絵 ${character}/${form} がありません（目録に無い、または 8 方向×3 コマが揃っていません）`
+        )
+      else
+        out.companion = {
+          ...rawConfig.companion,
+          sprites,
+          ...(rawConfig.companion.cycle === undefined ? (walkGait(form) ?? {}) : {}),
         }
     }
   }
