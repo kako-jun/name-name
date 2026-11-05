@@ -1,6 +1,6 @@
 /**
  * 一枚絵フィールドの全画面メニュー (#880) の計算部。DOM / PixiJS に触れない純粋関数だけを持つ。
- * 描画と入力の配線は `FieldMenuScreen.ts`、フィールド側の配線は `field/main.ts`。
+ * 描画と入力の配線は `FieldMenuScreen.ts`、フィールド側の配線は `field/startFieldGame.ts`。
  *
  * 仕様の正本は sit-by-me の docs/field-ui-wireframe.md（§2-B・§3-3・§3-4・§3-5・§3-6）。
  * ここは「入れ物」だけ（項目の一覧・開閉・各項目画面の共通枠）。装備・購入などの中身は別 Issue。

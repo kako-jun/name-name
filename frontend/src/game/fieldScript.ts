@@ -1,7 +1,7 @@
 /**
  * 一枚絵フィールドの NPC 会話を脚本 `.md` で書く (#841 段階2)。
  * 設定 JSON の `scriptUrl`（脚本）と NPC の `scene`（`[イベント <name>]` の名前）を結び付け、
- * 話しかけた NPC のイベントを `EventRunner` で実行する。ここは副作用の少ない純関数・薄い関数だけ（main.ts から呼ぶ）。
+ * 話しかけた NPC のイベントを `EventRunner` で実行する。ここは副作用の少ない純関数・薄い関数だけ（startFieldGame.ts から呼ぶ）。
  */
 import type { EventCommand, EventDocument } from '../types'
 import type { DialogBox } from './DialogBox'
