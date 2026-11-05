@@ -3255,3 +3255,60 @@ describe('[特技] の 覚える: (#882) が実 WASM パーサ経由で残る', 
     expect(again.skills.breath.learns).toBe('flame')
   })
 })
+
+// #1100 (S2a): 一枚絵フィールドの記法。tracked wasm（parser/pkg）が新記法を解釈することを縛る。
+// クリーン checkout（npm ci のみ・ローカル再ビルドなし）で通らなければ、コミット済み wasm が古い。
+describe('parseMarkdown: 一枚絵フィールドの記法 (#1100)', () => {
+  const head = ['---', 'engine: name-name', 'chapter: 1', 'title: t', '---', '', '## f: 野原', '']
+  const body = [
+    '[エンカウント率: 1/16]',
+    '[フィールドマップ 背景=bg.webp マスク=mask.webp 前面=fg.webp 戦闘背景=b.webp]',
+    '[プレイヤー @960,800 向き=下 高さ=96]',
+    '[NPC 長老 @500,700 色=#ff0000 高さ=80]',
+    'こんにちは。',
+    '[/NPC]',
+    '',
+    '[イベント 出口]',
+    '[フィールド終了]',
+    '[/イベント]',
+    '',
+    '[フィールド: 寺町 @960,800 向き=左]',
+    '',
+  ]
+  const md = [...head, ...body].join('\n')
+
+  it('FieldMap / Field / FieldEnd / 高さ が EventDocument に届く（直前のエンカウントも FieldMap に入る）', async () => {
+    const doc = await parseMarkdown(md)
+    // Event は "WallExit" などの文字列 variant を含むので、オブジェクトだけに絞ってから in で探す
+    const evs = doc.chapters[0].scenes[0].events.filter(
+      (e): e is Exclude<typeof e, string> => typeof e !== 'string'
+    )
+    const fm = evs.find((e) => 'FieldMap' in e)
+    expect(fm).toEqual({
+      FieldMap: {
+        background: 'bg.webp',
+        mask: 'mask.webp',
+        foreground: 'fg.webp',
+        battle_background: 'b.webp',
+        encounter_rate: 16,
+      },
+    })
+    const player = evs.find((e) => 'PlayerStart' in e)
+    expect(player).toMatchObject({ PlayerStart: { x: 960, y: 800, direction: 'Down', height: 96 } })
+    const npc = evs.find((e) => 'Npc' in e)
+    expect(npc).toMatchObject({ Npc: { name: '長老', height: 80 } })
+    const ev = evs.find((e) => 'RpgEvent' in e)
+    expect(ev).toEqual({ RpgEvent: { name: '出口', commands: [{ type: 'FieldEnd' }] } })
+    expect(evs.find((e) => 'Field' in e)).toEqual({
+      Field: { scene: '寺町', x: 960, y: 800, direction: 'Left' },
+    })
+  })
+
+  it('emit → parse で同値（エンカウントは FieldMap の直後が正準形）', async () => {
+    const doc = await parseMarkdown(md)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('戦闘背景=b.webp]\n[エンカウント率: 1/16]\n')
+    const again = await parseMarkdown(emitted)
+    expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

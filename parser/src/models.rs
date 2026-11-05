@@ -41,6 +41,9 @@ pub enum EventCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u32>,
     },
+    /// フィールドを終える (#1100)。`[フィールド終了]`（`[イベント]` 内専用）。
+    /// 呼び出し位置へ戻るのではなく、`[フィールド: …]` の次の行へ進むだけ。
+    FieldEnd,
 }
 
 fn default_npc_move_speed() -> u32 {
@@ -391,6 +394,9 @@ pub struct NpcData {
     /// 未指定の場合は従来通り `message` を DialogBox に表示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene: Option<String>,
+    /// 一枚絵フィールドでの表示の高さ(px)。`高さ=96` (#1100)。未指定は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -400,6 +406,28 @@ pub struct PlayerStartData {
     pub x: u32,
     pub y: u32,
     pub direction: Direction,
+    /// 一枚絵フィールドでの表示の高さ(px)。`[プレイヤー @x,y 高さ=96]` (#1100)。未指定は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+/// 一枚絵フィールドの地図宣言 (#1100)。`[フィールドマップ 背景=… マスク=… 前面=… 戦闘背景=…]` で書く（場面に1つ）。
+/// 画像は生のパス文字列で透過する（解決はレンダラー側）。`[エンカウント率: …]` `[エンカウント群: …]` は
+/// この行の直前・直後どちらでも `encounter_rate` / `encounter_groups` に入る。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldMapData {
+    pub background: String,
+    pub mask: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encounter_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encounter_groups: Option<Vec<String>>,
 }
 
 /// モンスター定義 (#174)。
@@ -1430,6 +1458,19 @@ pub enum Event {
         expression: String,
     },
     RpgMap(RpgMapData),
+    /// 一枚絵フィールドの地図 (#1100)。`[フィールドマップ 背景=… マスク=…]`。
+    FieldMap(FieldMapData),
+    /// 一枚絵フィールドへ入る命令 (#1100)。`[フィールド: 場面ID @x,y 向き=左]`。
+    /// 現在行で待ち、終わったら次の行へ進む（呼び出しスタックなし）。
+    Field {
+        scene: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<Direction>,
+    },
     PlayerStart(PlayerStartData),
     Npc(NpcData),
     /// モンスター定義 (#174)。`[モンスター <id>] ... [/モンスター]` ブロックで書く。

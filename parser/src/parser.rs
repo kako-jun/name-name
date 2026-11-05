@@ -425,6 +425,10 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut pending_font_family: Option<String> = None;
     // per-line bubble (#698): [吹き出し: 種別] で次の Dialog/Narration に注入する。
     let mut pending_bubble_style: Option<String> = None;
+    // `[フィールドマップ]` の**直前**に書かれた `[エンカウント率:]` `[エンカウント群:]` (#1100)。
+    // 次の行が `[フィールドマップ …]` のときだけここに溜め、その FieldMap に入れる。
+    let mut pending_field_encounter_rate: Option<u32> = None;
+    let mut pending_field_encounter_groups: Option<Vec<String>> = None;
 
     while pos < len {
         let line = lines[pos];
@@ -575,6 +579,69 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             }
         }
 
+        // 一枚絵フィールドの地図 (#1100): [フィールドマップ 背景=… マスク=… 前面=… 戦闘背景=…]
+        // 不正（必須欠落・値が空・未知の属性）は行番号つき警告でその行だけ捨てる。場面に1つ。
+        if let Some(rest) = trimmed.strip_prefix("[フィールドマップ") {
+            if rest.starts_with(|c: char| c.is_whitespace() || c == ']') && rest.ends_with(']') {
+                let line_no = pos as i64 + 1 + line_base;
+                let rate = pending_field_encounter_rate.take();
+                let groups = pending_field_encounter_groups.take();
+                if current_events
+                    .iter()
+                    .any(|e| matches!(e, Event::FieldMap(_)))
+                {
+                    emit_warning(&format!(
+                        "[name-name-parser] warning: {line_no} 行目の [フィールドマップ] は場面に1つのため読み捨てた: {}",
+                        truncate_for_warning(trimmed)
+                    ));
+                } else if let Some(mut fm) =
+                    parse_field_map_line(rest.trim_end_matches(']').trim(), line_no, trimmed)
+                {
+                    fm.encounter_rate = rate;
+                    fm.encounter_groups = groups;
+                    current_events.push(Event::FieldMap(fm));
+                }
+                pos += 1;
+                continue;
+            }
+        }
+
+        // 一枚絵フィールドへ入る命令 (#1100): [フィールド: 場面ID @x,y 向き=左]
+        // 不正は行番号つき警告でその行だけ捨てる（行番号が要るので parse_directive ではなくここで扱う）。
+        if let Some(rest) = trimmed
+            .strip_prefix("[フィールド:")
+            .and_then(|r| r.strip_suffix(']'))
+        {
+            if let Some(ev) = parse_field_directive(rest, pos as i64 + 1 + line_base, trimmed) {
+                current_events.push(ev);
+            }
+            pos += 1;
+            continue;
+        }
+
+        // 一枚絵フィールドの頭を持つのに上の分岐で読めなかった行 (#1100)。黙って捨てず行番号つきで警告する。
+        // 閉じ `]` なし、または型の取り違え（`[フィールド]` `[フィールド 寺町]` `[フィールドマップ: x]` など）。
+        // 正しい `[フィールド終了]` は下の event_only_command が専用警告を出すので除く。
+        if trimmed != "[フィールド終了]"
+            && matches!(
+                directive_head_name(trimmed),
+                "フィールドマップ" | "フィールド" | "フィールド終了"
+            )
+        {
+            let why = if trimmed.ends_with(']') {
+                "書式が違うため(書式: [フィールドマップ 背景=… マスク=…] / [フィールド: 場面ID …] / [イベント] 内の [フィールド終了])"
+            } else {
+                "閉じ括弧 ] がないため"
+            };
+            emit_warning(&format!(
+                "[name-name-parser] warning: {} 行目は{why}読み捨てた: {}",
+                pos as i64 + 1 + line_base,
+                truncate_for_warning(trimmed)
+            ));
+            pos += 1;
+            continue;
+        }
+
         // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
         // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
         // [エンカウント率: 0]（安全マップ：街・室内）
@@ -583,7 +650,11 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             .and_then(|s| s.strip_suffix(']'))
         {
             if let Some(rate) = parse_encounter_rate(content.trim()) {
-                inject_encounter_rate_into_last_map(&mut current_events, rate);
+                if encounter_precedes_field_map(&current_events, &lines, pos) {
+                    pending_field_encounter_rate = Some(rate);
+                } else {
+                    inject_encounter_rate_into_last_map(&mut current_events, rate);
+                }
             }
             pos += 1;
             continue;
@@ -600,7 +671,11 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 .filter(|s| !s.is_empty())
                 .collect();
             if !groups.is_empty() {
-                inject_encounter_groups_into_last_map(&mut current_events, groups);
+                if encounter_precedes_field_map(&current_events, &lines, pos) {
+                    pending_field_encounter_groups = Some(groups);
+                } else {
+                    inject_encounter_groups_into_last_map(&mut current_events, groups);
+                }
             }
             pos += 1;
             continue;
@@ -660,7 +735,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         // 誤読して [/NPC] まで飲み込むので、それより前で止める。
         if let Some(cmd) = event_only_command(trimmed) {
             emit_warning(&format!(
-                "[name-name-parser] warning: {} 行目は [イベント] ブロック内専用の [{cmd}:] のため読み捨てた: {}",
+                "[name-name-parser] warning: {} 行目は [イベント] ブロック内専用の {cmd} のため読み捨てた: {}",
                 pos as i64 + 1 + line_base,
                 truncate_for_warning(trimmed)
             ));
@@ -673,6 +748,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             if header.ends_with(']') {
                 let header_inner = header.trim_end_matches(']').trim();
                 if let Some(parsed) = parse_npc_header(header_inner) {
+                    let npc_line_no = pos as i64 + 1 + line_base;
                     pos += 1;
                     let mut message: Vec<String> = Vec::new();
                     while pos < len && lines[pos].trim() != "[/NPC]" {
@@ -708,6 +784,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                         portrait: parsed.portrait,
                         expressions: parsed.expressions,
                         scene: parsed.scene,
+                        height: scan_height_attr(header_inner, npc_line_no),
                     }));
                     continue;
                 }
@@ -726,6 +803,25 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                     let mut pending_dialog_lines: Vec<String> = Vec::new();
                     while pos < len && lines[pos].trim() != "[/イベント]" {
                         let cmd_line = lines[pos].trim();
+                        // [フィールド終了] (#1100)。値なし。呼び出し位置へ戻らず、`[フィールド: …]` の次の行へ進むだけ
+                        if cmd_line == "[フィールド終了]" {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            commands.push(EventCommand::FieldEnd);
+                            pos += 1;
+                            continue;
+                        }
                         // [NPC移動: <npc> → @x,y 速度=N 向き=<dir>]
                         if let Some(rest) = cmd_line.strip_prefix("[NPC移動:") {
                             if rest.ends_with(']') {
@@ -1002,7 +1098,8 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         if let Some(rest) = trimmed.strip_prefix("[プレイヤー") {
             if rest.ends_with(']') {
                 let inner = rest.trim_end_matches(']').trim();
-                if let Some(player) = parse_player_line(inner) {
+                if let Some(mut player) = parse_player_line(inner) {
+                    player.height = scan_height_attr(inner, pos as i64 + 1 + line_base);
                     current_events.push(Event::PlayerStart(player));
                     pos += 1;
                     continue;
@@ -3667,7 +3764,12 @@ fn parse_player_line(s: &str) -> Option<PlayerStartData> {
             direction = parse_direction(val.trim());
         }
     }
-    Some(PlayerStartData { x, y, direction })
+    Some(PlayerStartData {
+        x,
+        y,
+        direction,
+        height: None,
+    })
 }
 
 fn parse_direction(s: &str) -> Direction {
@@ -3969,6 +4071,10 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     "エンカウント率",
     "エンカウント群",
     "戦闘",
+    // 一枚絵フィールド (#1100)
+    "フィールドマップ",
+    "フィールド",
+    "フィールド終了",
     // マスターデータブロック (master.rs)
     "モンスター",
     "アイテム",
@@ -3985,9 +4091,14 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
 /// コロンなしの `[戦闘 id]`（マスターデータのブロック）や `[NPC …]`（NPC ブロック）は含まない。
 fn event_only_command(line: &str) -> Option<&'static str> {
     let rest = line.strip_prefix('[')?;
-    ["NPC移動", "戦闘"]
+    // 値なしの裸の命令（`[フィールド終了]`、#1100）
+    if line == "[フィールド終了]" {
+        return Some("[フィールド終了]");
+    }
+    [("NPC移動", "[NPC移動:]"), ("戦闘", "[戦闘:]")]
         .into_iter()
-        .find(|name| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
+        .find(|(name, _)| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
+        .map(|(_, label)| label)
 }
 
 /// `[名前: …]` / `[/名前]` の名前部分（閉じタグは `/` 付きのまま）を返す。`[` 始まりでなければ空文字。
@@ -4061,6 +4172,143 @@ pub(crate) fn emit_warning(msg: &str) {
     web_sys::console::warn_1(&msg.into());
 }
 
+/// `[エンカウント率:]` `[エンカウント群:]` の行 `pos` が、直前の Event に付けられず、かつ
+/// 続く行（空行・他のエンカウント行を飛ばした先）が `[フィールドマップ …]` かを返す (#1100)。
+/// 真のときだけ、その FieldMap の「直前」に書かれたものとして溜める（既存の警告挙動は変えない）。
+fn encounter_precedes_field_map(events: &[Event], lines: &[&str], pos: usize) -> bool {
+    if matches!(events.last(), Some(Event::RpgMap(_) | Event::FieldMap(_))) {
+        return false;
+    }
+    for l in lines.iter().skip(pos + 1) {
+        let t = l.trim();
+        if t.is_empty() || t.starts_with("[エンカウント率:") || t.starts_with("[エンカウント群:")
+        {
+            continue;
+        }
+        return t.starts_with("[フィールドマップ") && t.ends_with(']');
+    }
+    false
+}
+
+/// 属性トークン `高さ=N`（`@` より後ろの空白区切り）を取り出す (#1100)。N は 1 以上の整数。
+/// 値が不正ならその属性だけ無視し、行番号つきで警告する。`line_no` は 1 始まりの行番号。
+fn scan_height_attr(header: &str, line_no: i64) -> Option<u32> {
+    let after = &header[header.find('@')? + 1..];
+    let raw = after
+        .split_whitespace()
+        .skip(1)
+        .find_map(|t| t.strip_prefix("高さ="))?;
+    match raw.parse::<u32>() {
+        Ok(n) if n >= 1 => Some(n),
+        _ => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: {line_no} 行目の 高さ={raw} は 1 以上の整数でないため無視した"
+            ));
+            None
+        }
+    }
+}
+
+/// `[フィールドマップ …]` の属性部をパースする (#1100)。`背景=` `マスク=` は必須、`前面=` `戦闘背景=` は任意。
+fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMapData> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [フィールドマップ] は{why}のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+    };
+    let mut background: Option<String> = None;
+    let mut mask: Option<String> = None;
+    let mut foreground: Option<String> = None;
+    let mut battle_background: Option<String> = None;
+    for tok in inner.split_whitespace() {
+        let Some((key, val)) = tok.split_once('=') else {
+            warn(&format!("属性 \"{tok}\" が キー=値 の形でない"));
+            return None;
+        };
+        if val.is_empty() {
+            warn(&format!("{key}= の値が空"));
+            return None;
+        }
+        let slot = match key {
+            "背景" => &mut background,
+            "マスク" => &mut mask,
+            "前面" => &mut foreground,
+            "戦闘背景" => &mut battle_background,
+            _ => {
+                warn(&format!("未知の属性 {key}="));
+                return None;
+            }
+        };
+        *slot = Some(val.to_string());
+    }
+    let (Some(background), Some(mask)) = (background, mask) else {
+        warn("必須の 背景= と マスク= がそろっていない");
+        return None;
+    };
+    Some(FieldMapData {
+        background,
+        mask,
+        foreground,
+        battle_background,
+        encounter_rate: None,
+        encounter_groups: None,
+    })
+}
+
+/// `[フィールド: 場面ID @x,y 向き=左]` の `:` 以降をパースする (#1100)。
+/// 場面IDは必須。`@x,y`（u32 の対）と `向き=`（上下左右）は任意で順不同。不正なら警告して None（行を捨てる）。
+fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [フィールド:] は{why}のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+    };
+    let mut toks = rest.split_whitespace();
+    let scene = match toks.next() {
+        Some(t) if !t.starts_with('@') && !t.contains('=') => t.to_string(),
+        _ => {
+            warn("場面IDがない");
+            return None;
+        }
+    };
+    let (mut x, mut y, mut direction) = (None, None, None);
+    for tok in toks {
+        if let Some(coord) = tok.strip_prefix('@') {
+            let parsed = coord
+                .split_once(',')
+                .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)));
+            let Some((px, py)) = parsed else {
+                warn(&format!("座標 \"{tok}\" が @x,y（整数）でない"));
+                return None;
+            };
+            x = Some(px);
+            y = Some(py);
+        } else if let Some(val) = tok.strip_prefix("向き=") {
+            direction = Some(match val {
+                "上" | "up" | "Up" => Direction::Up,
+                "下" | "down" | "Down" => Direction::Down,
+                "左" | "left" | "Left" => Direction::Left,
+                "右" | "right" | "Right" => Direction::Right,
+                _ => {
+                    warn(&format!("向き={val} が 上/下/左/右 でない"));
+                    return None;
+                }
+            });
+        } else {
+            warn(&format!("未知の指定 \"{tok}\""));
+            return None;
+        }
+    }
+    Some(Event::Field {
+        scene,
+        x,
+        y,
+        direction,
+    })
+}
+
 /// `[エンカウント率: ...]` のボディを u32 にパースする。
 /// 受理形式:
 ///   "16"   → 16
@@ -4089,6 +4337,9 @@ fn inject_encounter_rate_into_last_map(events: &mut [Event], rate: u32) {
         Some(Event::RpgMap(map)) => {
             map.encounter_rate = Some(rate);
         }
+        Some(Event::FieldMap(map)) => {
+            map.encounter_rate = Some(rate);
+        }
         _ => {
             emit_encounter_warning(
                 "[エンカウント率] の直前が [マップ] ではありません。破棄しました",
@@ -4100,6 +4351,9 @@ fn inject_encounter_rate_into_last_map(events: &mut [Event], rate: u32) {
 fn inject_encounter_groups_into_last_map(events: &mut [Event], groups: Vec<String>) {
     match events.last_mut() {
         Some(Event::RpgMap(map)) => {
+            map.encounter_groups = Some(groups);
+        }
+        Some(Event::FieldMap(map)) => {
             map.encounter_groups = Some(groups);
         }
         _ => {
@@ -9125,5 +9379,311 @@ mod unknown_directive_warning_tests {
             "対象の脚本が少なすぎる（探索が壊れている）: {scripts}"
         );
         assert!(offenders.is_empty(), "{offenders:#?}");
+    }
+}
+
+/// 一枚絵フィールドの記法 N1〜N3 と `高さ=` (#1100)。
+#[cfg(test)]
+mod field_notation_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+
+    fn events_of(body: &str) -> Vec<Event> {
+        let _ = take_test_warnings();
+        parse(&format!("{HEAD}{body}")).chapters[0].scenes[0]
+            .events
+            .clone()
+    }
+
+    #[test]
+    fn field_map_parses_all_attributes() {
+        let evs = events_of(
+            "[フィールドマップ 背景=bg.webp マスク=mask.webp 前面=fg.webp 戦闘背景=b.webp]\n",
+        );
+        assert_eq!(
+            evs,
+            vec![Event::FieldMap(FieldMapData {
+                background: "bg.webp".into(),
+                mask: "mask.webp".into(),
+                foreground: Some("fg.webp".into()),
+                battle_background: Some("b.webp".into()),
+                encounter_rate: None,
+                encounter_groups: None,
+            })]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn encounter_after_field_map_is_injected() {
+        let evs = events_of(
+            "[フィールドマップ 背景=a.webp マスク=m.webp]\n[エンカウント率: 1/16]\n[エンカウント群: g1, g2]\n",
+        );
+        match &evs[..] {
+            [Event::FieldMap(fm)] => {
+                assert_eq!(fm.encounter_rate, Some(16));
+                assert_eq!(
+                    fm.encounter_groups,
+                    Some(vec!["g1".to_string(), "g2".to_string()])
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn encounter_before_field_map_is_injected() {
+        let evs = events_of(
+            "[エンカウント率: 1/16]\n[エンカウント群: g1]\n\n[フィールドマップ 背景=a.webp マスク=m.webp]\n",
+        );
+        match &evs[..] {
+            [Event::FieldMap(fm)] => {
+                assert_eq!(fm.encounter_rate, Some(16));
+                assert_eq!(fm.encounter_groups, Some(vec!["g1".to_string()]));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn encounter_without_map_still_warns_as_before() {
+        let evs = events_of("[エンカウント率: 1/16]\n");
+        assert!(evs.is_empty());
+        // 既存の警告は eprintln 経路（emit_encounter_warning）で、挙動は不変
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn field_map_invalid_lines_warn_with_line_number_and_are_dropped() {
+        for (line, why) in [
+            ("[フィールドマップ 背景=a.webp]", "必須"),
+            ("[フィールドマップ マスク=m.webp]", "必須"),
+            ("[フィールドマップ 背景= マスク=m.webp]", "値が空"),
+            ("[フィールドマップ 背景=a マスク=m 空=x]", "未知の属性"),
+            ("[フィールドマップ 背景=a マスク]", "キー=値"),
+            ("[フィールドマップ]", "必須"),
+        ] {
+            let _ = take_test_warnings();
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目") && w[0].contains(why) && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(
+                evs.iter().all(|e| !matches!(e, Event::FieldMap(_))),
+                "{line}"
+            );
+            // 後続の行は読む
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn second_field_map_in_scene_is_dropped_with_warning() {
+        let evs =
+            events_of("[フィールドマップ 背景=a マスク=m]\n[フィールドマップ 背景=b マスク=n]\n");
+        assert_eq!(evs.len(), 1);
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("10 行目") && w[0].contains("場面に1つ"),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn field_directive_parses_and_rejects_bad_values() {
+        let evs = events_of("[フィールド: 寺町 @960,800 向き=下]\n[フィールド: 駅]\n");
+        assert_eq!(
+            evs,
+            vec![
+                Event::Field {
+                    scene: "寺町".into(),
+                    x: Some(960),
+                    y: Some(800),
+                    direction: Some(Direction::Down),
+                },
+                Event::Field {
+                    scene: "駅".into(),
+                    x: None,
+                    y: None,
+                    direction: None,
+                },
+            ]
+        );
+        assert!(take_test_warnings().is_empty());
+        for line in [
+            "[フィールド: ]",
+            "[フィールド: @1,2]",
+            "[フィールド: 寺町 @1]",
+            "[フィールド: 寺町 @a,b]",
+            "[フィールド: 寺町 向き=斜め]",
+            "[フィールド: 寺町 速度=3]",
+        ] {
+            let _ = take_test_warnings();
+            let evs = events_of(&format!("{line}\n"));
+            assert!(evs.is_empty(), "{line}: {evs:?}");
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目の [フィールド:]") && w[0].contains(line),
+                "{w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn field_end_in_event_is_a_command() {
+        let evs = events_of(
+            "[イベント 出口]\n**カコ**:\nじゃあね\n[フィールド終了]\n[待機: 100]\n[/イベント]\n",
+        );
+        match &evs[..] {
+            [Event::RpgEvent { commands, .. }] => {
+                assert!(matches!(commands[0], EventCommand::Dialog { .. }));
+                assert_eq!(commands[1], EventCommand::FieldEnd);
+                assert_eq!(commands[2], EventCommand::Wait { ms: 100 });
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn field_end_at_scene_top_level_gets_dedicated_warning() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!("{HEAD}[フィールド終了]\n**カコ**:\nやあ\n"));
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("9 行目")
+                && w[0].contains("[イベント] ブロック内専用の [フィールド終了] のため読み捨てた")
+                && !w[0].contains("未知"),
+            "{w:?}"
+        );
+        let evs = &doc.chapters[0].scenes[0].events;
+        assert_eq!(evs.len(), 1, "{evs:?}");
+    }
+
+    #[test]
+    fn other_new_notations_in_event_warn_as_unsupported() {
+        let _ = take_test_warnings();
+        let evs = events_of(
+            "[イベント e]\n[フィールドマップ 背景=a マスク=m]\n[フィールド: 駅]\n[/イベント]\n",
+        );
+        match &evs[..] {
+            [Event::RpgEvent { commands, .. }] => assert!(commands.is_empty()),
+            other => panic!("{other:?}"),
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(
+            w[0].contains("10 行目")
+                && w[0].contains("[イベント] 内では未対応の記法 [フィールドマップ]"),
+            "{w:?}"
+        );
+        assert!(
+            w[1].contains("11 行目") && w[1].contains("未対応の記法 [フィールド]"),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn height_attribute_on_player_and_npc() {
+        let evs = events_of(
+            "[プレイヤー @100,200 向き=左 高さ=96]\n[NPC 長老 @5,6 色=#ff0000 高さ=80]\nやあ\n[/NPC]\n[プレイヤー @1,2]\n",
+        );
+        match &evs[..] {
+            [Event::PlayerStart(p), Event::Npc(n), Event::PlayerStart(q)] => {
+                assert_eq!(p.height, Some(96));
+                assert_eq!(n.height, Some(80));
+                assert_eq!(n.message, vec!["やあ".to_string()]);
+                assert_eq!(q.height, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn invalid_height_is_ignored_with_line_number() {
+        let evs = events_of("[プレイヤー @1,2 高さ=0]\n[NPC 長老 @5,6 高さ=abc]\nやあ\n[/NPC]\n");
+        match &evs[..] {
+            [Event::PlayerStart(p), Event::Npc(n)] => {
+                assert_eq!(p.height, None);
+                assert_eq!(n.height, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[0].contains("9 行目") && w[0].contains("高さ=0"), "{w:?}");
+        assert!(
+            w[1].contains("10 行目") && w[1].contains("高さ=abc"),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn round_trip_field_notations() {
+        let body = "[エンカウント率: 1/16]\n[フィールドマップ 背景=a.webp マスク=m.webp 前面=f.webp 戦闘背景=b.webp]\n[プレイヤー @100,200 向き=左 高さ=96]\n[NPC 長老 @5,6 色=#ff0000 高さ=80]\nやあ\n[/NPC]\n[イベント 出口]\n**カコ**:\nじゃあね\n[フィールド終了]\n[/イベント]\n\n**カコ**:\nいくよ\n[フィールド: 寺町 @960,800 向き=下]\n[フィールド: 駅]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        // 直前に書いたエンカウントは FieldMap の直後に出る（正準形）
+        assert!(
+            emitted.contains("前面=f.webp 戦闘背景=b.webp]\n[エンカウント率: 1/16]\n"),
+            "{emitted}"
+        );
+        let _ = take_test_warnings();
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        // 正準形は再 emit で不変
+        assert_eq!(emitted, emit(&doc2));
+    }
+    #[test]
+    fn malformed_field_lines_warn_instead_of_vanishing() {
+        for (line, want) in [
+            ("[フィールド]", "書式が違う"),
+            ("[フィールド 寺町]", "書式が違う"),
+            ("[フィールドマップ: x]", "書式が違う"),
+            ("[フィールド終了: x]", "書式が違う"),
+            ("[フィールドマップ 背景=a マスク=m", "閉じ括弧 ] がない"),
+            ("[フィールド: x @1,2", "閉じ括弧 ] がない"),
+            ("[フィールド終了", "閉じ括弧 ] がない"),
+        ] {
+            let _ = take_test_warnings();
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目") && w[0].contains(want) && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(evs
+                .iter()
+                .all(|e| !matches!(e, Event::FieldMap(_) | Event::Field { .. })));
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn encounter_before_unclosed_field_map_is_not_held() {
+        let _ = take_test_warnings();
+        let evs = events_of("[エンカウント率: 1/16]\n[フィールドマップ 背景=a マスク=m\n");
+        assert!(evs.is_empty(), "{evs:?}");
+        let w = take_test_warnings();
+        assert!(w.iter().any(|m| m.contains("閉じ括弧 ] がない")), "{w:?}");
     }
 }

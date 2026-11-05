@@ -314,6 +314,7 @@ mod tests {
                 portrait: None,
                 expressions: std::collections::HashMap::new(),
                 scene: None,
+                height: None,
             }),
         ];
         canonicalize_events(&mut events);

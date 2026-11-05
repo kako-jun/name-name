@@ -44,7 +44,7 @@ function variantLabel(event: Event): string {
  * - Dialog / Narration → 原稿用紙 (desk-genko)
  * - Choice / Flag / Condition / Jump → 青ペンの分岐メモ (desk-fusen-b)
  * - Monster / Item / Spell / Skill / Status / PartyMember → 資料の付箋 (desk-fusen-g)
- * - Npc / RpgMap / PlayerStart / RpgEvent / RpgTrigger → RPG メモ (desk-fusen-p)
+ * - Npc / RpgMap / FieldMap / Field / PlayerStart / RpgEvent / RpgTrigger → RPG メモ (desk-fusen-p)
  * - その他演出系 (Background, Bgm, Se, Wait, WaitDisplayComplete, Animate, TextEffect, Underline, Shake, Flash, Fade, ...) → 黄付箋
  */
 function variantToDeskClass(event: Event): string {
@@ -66,6 +66,8 @@ function variantToDeskClass(event: Event): string {
   if (
     'Npc' in event ||
     'RpgMap' in event ||
+    'FieldMap' in event ||
+    'Field' in event ||
     'PlayerStart' in event ||
     'RpgEvent' in event ||
     'RpgTrigger' in event

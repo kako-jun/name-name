@@ -127,6 +127,8 @@ export interface NpcData {
   message: string[]
   /** スプライトシートへの相対パス。未指定なら色付き四角で描画される */
   sprite?: string
+  /** 一枚絵フィールドでの表示の高さ(px)。`高さ=96` (#1100) */
+  height?: number
   /** 歩行アニメのフレーム数（方向あたり）。未指定ならレンダラーのデフォルト（2） */
   frames?: number
   /** NPC が向いている方向。未指定ならレンダラーのデフォルト（Down） */
@@ -425,6 +427,22 @@ export interface PlayerStartData {
   x: number
   y: number
   direction: Direction
+  /** 一枚絵フィールドでの表示の高さ(px)。`[プレイヤー @x,y 高さ=96]` (#1100)。未指定なら省略 */
+  height?: number
+}
+
+/**
+ * 一枚絵フィールドの地図宣言 (#1100)。`[フィールドマップ 背景=… マスク=… 前面=… 戦闘背景=…]`（場面に1つ）。
+ * 画像は生のパス文字列（解決はレンダラー側）。デコードのみで、フィールドを動かす配線は後続の段階。
+ */
+export interface FieldMapData {
+  background: string
+  mask: string
+  foreground?: string
+  battle_background?: string
+  /** `[エンカウント率: 1/N]` の N（FieldMap の直前・直後どちらに書かれても入る） */
+  encounter_rate?: number
+  encounter_groups?: string[]
 }
 
 export type Event =
@@ -752,6 +770,10 @@ export type Event =
   | { Jump: { target: string } }
   | { ExpressionChange: { character: string; expression: string } }
   | { RpgMap: RpgMapData }
+  /** 一枚絵フィールドの地図 (#1100)。`[フィールドマップ …]` */
+  | { FieldMap: FieldMapData }
+  /** 一枚絵フィールドへ入る命令 (#1100)。`[フィールド: 場面ID @x,y 向き=左]`。現在行で待ち、終わったら次の行へ（スタックなし） */
+  | { Field: { scene: string; x?: number; y?: number; direction?: Direction } }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
   | { Monster: MonsterDef }
@@ -1240,3 +1262,5 @@ export type EventCommand =
   | { type: 'Battle'; id: string }
   /** フィールドの感情吹き出し (#946)。`[感情: 対象, 種類(, 持続=ms)]`。表示後すぐ次へ進む（待たない） */
   | { type: 'Emotion'; target: string; kind: string; duration_ms?: number }
+  /** フィールドを終える (#1100)。`[フィールド終了]`。呼び出し位置へ戻らず、`[フィールド: …]` の次の行へ進むだけ */
+  | { type: 'FieldEnd' }

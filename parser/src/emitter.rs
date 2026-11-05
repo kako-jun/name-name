@@ -1075,15 +1075,71 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
 
                 prev_was_dialog_or_text = false;
             }
+            Event::FieldMap(fm) => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!(
+                    "[フィールドマップ 背景={} マスク={}",
+                    fm.background, fm.mask
+                );
+                if let Some(v) = &fm.foreground {
+                    line.push_str(&format!(" 前面={v}"));
+                }
+                if let Some(v) = &fm.battle_background {
+                    line.push_str(&format!(" 戦闘背景={v}"));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                // エンカウント設定は直後に出す（直前に書かれていても同じ正準形）
+                if let Some(rate) = fm.encounter_rate {
+                    if rate == 0 {
+                        out.push_str("[エンカウント率: 0]\n");
+                    } else {
+                        out.push_str(&format!("[エンカウント率: 1/{rate}]\n"));
+                    }
+                }
+                if let Some(groups) = &fm.encounter_groups {
+                    if !groups.is_empty() {
+                        out.push_str(&format!("[エンカウント群: {}]\n", groups.join(", ")));
+                    }
+                }
+                prev_was_dialog_or_text = false;
+            }
+            Event::Field {
+                scene,
+                x,
+                y,
+                direction,
+            } => {
+                if prev_was_dialog_or_text {
+                    out.push('\n');
+                }
+                let mut line = format!("[フィールド: {scene}");
+                if let (Some(x), Some(y)) = (x, y) {
+                    line.push_str(&format!(" @{x},{y}"));
+                }
+                if let Some(d) = direction {
+                    line.push_str(&format!(" 向き={}", direction_ja(*d)));
+                }
+                line.push_str("]\n");
+                out.push_str(&line);
+                prev_was_dialog_or_text = false;
+            }
             Event::PlayerStart(p) => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
                 }
+                let height_suffix = match p.height {
+                    Some(h) => format!(" 高さ={h}"),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
-                    "[プレイヤー @{},{} 向き={}]\n",
+                    "[プレイヤー @{},{} 向き={}{}]\n",
                     p.x,
                     p.y,
-                    direction_ja(p.direction)
+                    direction_ja(p.direction),
+                    height_suffix
                 ));
                 prev_was_dialog_or_text = false;
             }
@@ -1133,8 +1189,12 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     Some(s) if !s.is_empty() => format!(" scene={s}"),
                     _ => String::new(),
                 };
+                let height_suffix = match npc.height {
+                    Some(h) => format!(" 高さ={h}"),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
-                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}{}]\n",
+                    "[NPC {} @{},{} 色=#{:06x}{}{}{}{}{}{}{}{}]\n",
                     npc.name,
                     npc.x,
                     npc.y,
@@ -1145,7 +1205,8 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     direction_suffix,
                     portrait_suffix,
                     expressions_suffix,
-                    scene_suffix
+                    scene_suffix,
+                    height_suffix
                 ));
                 for line in &npc.message {
                     out.push_str(line);
@@ -1568,6 +1629,9 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                                 None => String::new(),
                             };
                             out.push_str(&format!("[感情: {target}, {kind}{kv}]\n"));
+                        }
+                        EventCommand::FieldEnd => {
+                            out.push_str("[フィールド終了]\n");
                         }
                     }
                 }
