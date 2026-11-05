@@ -606,6 +606,19 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             }
         }
 
+        // 一枚絵フィールドへ入る命令 (#1100): [フィールド: 場面ID @x,y 向き=左]
+        // 不正は行番号つき警告でその行だけ捨てる（行番号が要るので parse_directive ではなくここで扱う）。
+        if let Some(rest) = trimmed
+            .strip_prefix("[フィールド:")
+            .and_then(|r| r.strip_suffix(']'))
+        {
+            if let Some(ev) = parse_field_directive(rest, pos as i64 + 1 + line_base, trimmed) {
+                current_events.push(ev);
+            }
+            pos += 1;
+            continue;
+        }
+
         // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
         // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
         // [エンカウント率: 0]（安全マップ：街・室内）
@@ -1633,10 +1646,6 @@ fn parse_directive(line: &str, default_transition: EventImageTransition) -> Opti
                 target: target.to_string(),
             });
         }
-    }
-    // [フィールド: 場面ID @x,y 向き=左] (#1100)。一枚絵フィールドへ入る命令。不正は警告してその行を捨てる
-    if let Some(rest) = content.strip_prefix("フィールド:") {
-        return parse_field_directive(rest, line);
     }
     if let Some(rest) = content.strip_prefix("フラグ:") {
         if let Some(eq_pos) = rest.find('=') {
@@ -4226,10 +4235,10 @@ fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMa
 
 /// `[フィールド: 場面ID @x,y 向き=左]` の `:` 以降をパースする (#1100)。
 /// 場面IDは必須。`@x,y`（u32 の対）と `向き=`（上下左右）は任意で順不同。不正なら警告して None（行を捨てる）。
-fn parse_field_directive(rest: &str, line: &str) -> Option<Event> {
+fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: [フィールド:] は{why}のため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の [フィールド:] は{why}のため読み捨てた: {}",
             truncate_for_warning(line)
         ));
     };
@@ -9503,7 +9512,7 @@ mod field_notation_tests {
             let w = take_test_warnings();
             assert_eq!(w.len(), 1, "{line}: {w:?}");
             assert!(
-                w[0].contains("[フィールド:]") && w[0].contains(line),
+                w[0].contains("9 行目の [フィールド:]") && w[0].contains(line),
                 "{w:?}"
             );
         }
