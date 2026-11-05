@@ -533,6 +533,40 @@ export interface CharacterFormsDecl {
   weapon_assets?: string
 }
 
+/** フィールドメニューの画面遷移の速さ (#1108)。`[メニュー: …, 文字消え=80, 枠=140, 文字出現=80]`。ms の 0 以上の整数 */
+export interface FieldMenuTransition {
+  text_out_ms?: number
+  slide_ms?: number
+  text_in_ms?: number
+}
+
+/** フィールドメニューの項目の並びと遷移 (#1108)。`items` が空 = 既定の項目（裸の `[メニュー]`） */
+export interface FieldMenuData {
+  items?: string[]
+  transition?: FieldMenuTransition
+}
+
+/** メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… 無効=true 理由=… 時間制限=不可 時間制限の理由=… 中身=path.json]` */
+export interface FieldMenuItemData {
+  id: string
+  label?: string
+  disabled?: boolean
+  reason?: string
+  /** `時間制限=可` が true、`不可` が false */
+  time_limit_allowed?: boolean
+  time_limit_reason?: string
+  /** 項目画面の中身の JSON パス（中身は読まずに透過） */
+  content?: string
+}
+
+/** 操作画像の指定 (#1108)。`[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]` */
+export interface UiImagesData {
+  hand?: string
+  select_mark?: string
+  /** 選択マークの倍率（0 より大きい） */
+  scale?: number
+}
+
 export type Event =
   | {
       Dialog: {
@@ -878,6 +912,14 @@ export type Event =
   | { FieldWalkSprite: FieldWalkSpriteData }
   /** 人物の形態の宣言 (#1104)。`[人物の形態 目録=… 素材=… 刀素材=…]`（作品に1つ） */
   | { CharacterForms: CharacterFormsDecl }
+  /** フィールドメニューの項目の並びと遷移 (#1108)。`[メニュー: …]` / 裸の `[メニュー]` */
+  | { FieldMenu: FieldMenuData }
+  /** メニュー項目の上書き (#1108)。`[メニュー項目 id ラベル=… …]` */
+  | { FieldMenuItem: FieldMenuItemData }
+  /** 操作画像の指定 (#1108)。`[操作画像 手=… 選択マーク=… 倍率=2]`（作品に1つ） */
+  | { UiImages: UiImagesData }
+  /** 通貨名 (#1108)。`[通貨名: 円]` */
+  | { Currency: string }
   | { PlayerStart: PlayerStartData }
   | { Npc: NpcData }
   | { Monster: MonsterDef }

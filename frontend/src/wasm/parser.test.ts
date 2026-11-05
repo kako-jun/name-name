@@ -3495,3 +3495,72 @@ describe('parseMarkdown: NPC の歩行絵 絵= (#1106)', () => {
     expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// #1108 (S2d): 一枚絵フィールドのメニュー・メニュー項目・操作画像・通貨名。
+// tracked wasm が解釈することを縛る。
+describe('parseMarkdown: 一枚絵フィールドのメニュー・操作画像・通貨名 (#1108)', () => {
+  const head = ['---', 'engine: name-name', 'chapter: 1', 'title: t', '---', '', '## f: 野原', '']
+  const md = [
+    ...head,
+    '[メニュー]',
+    '[メニュー: どうぐ, まほう, セーブ, 文字消え=80, 枠=140, 文字出現=0]',
+    '[メニュー項目 save ラベル=きろく 無効=true 理由=いまは使えない 時間制限=不可 時間制限の理由=急げ 中身=menu/save.json]',
+    '[メニュー項目 item 時間制限=可]',
+    '[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]',
+    '[通貨名: 円]',
+    '',
+  ].join('\n')
+
+  it('FieldMenu / FieldMenuItem / UiImages / Currency の形が届く', async () => {
+    const doc = await parseMarkdown(md)
+    const evs = doc.chapters[0].scenes[0].events.filter(
+      (e): e is Exclude<typeof e, string> => typeof e !== 'string'
+    )
+    const menus = evs.filter((e) => 'FieldMenu' in e)
+    expect(menus[0]).toEqual({ FieldMenu: {} })
+    expect(menus[1]).toEqual({
+      FieldMenu: {
+        items: ['どうぐ', 'まほう', 'セーブ'],
+        transition: { text_out_ms: 80, slide_ms: 140, text_in_ms: 0 },
+      },
+    })
+    const items = evs.filter((e) => 'FieldMenuItem' in e)
+    expect(items[0]).toEqual({
+      FieldMenuItem: {
+        id: 'save',
+        label: 'きろく',
+        disabled: true,
+        reason: 'いまは使えない',
+        time_limit_allowed: false,
+        time_limit_reason: '急げ',
+        content: 'menu/save.json',
+      },
+    })
+    expect(items[1]).toEqual({ FieldMenuItem: { id: 'item', time_limit_allowed: true } })
+    expect(evs.find((e) => 'UiImages' in e)).toEqual({
+      UiImages: { hand: 'hand.webp', select_mark: 'cone.webp', scale: 2 },
+    })
+    expect(evs.find((e) => 'Currency' in e)).toEqual({ Currency: '円' })
+  })
+
+  it('emit → parse で同値（裸の [メニュー] と項目列が往復で保たれる）', async () => {
+    const doc = await parseMarkdown(md)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain('[メニュー]\n')
+    expect(emitted).toContain(
+      '[メニュー: どうぐ, まほう, セーブ, 文字消え=80, 枠=140, 文字出現=0]\n'
+    )
+    expect(emitted).toContain('[通貨名: 円]\n')
+    const again = await parseMarkdown(emitted)
+    expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+
+  it('値に ] が残る行は捨てられ、後続の行は読まれる', async () => {
+    const doc = await parseMarkdown([...head, '[メニュー: a]]', '[通貨名: 円]', ''].join('\n'))
+    const evs = doc.chapters[0].scenes[0].events.filter(
+      (e): e is Exclude<typeof e, string> => typeof e !== 'string'
+    )
+    expect(evs.some((e) => 'FieldMenu' in e)).toBe(false)
+    expect(evs.find((e) => 'Currency' in e)).toEqual({ Currency: '円' })
+  })
+})

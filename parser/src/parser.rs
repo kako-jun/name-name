@@ -753,6 +753,89 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             }
         }
 
+        // 一枚絵フィールドのメニュー・操作画像・通貨名 (#1108): N13 [メニュー] / [メニュー: …] / N14 [メニュー項目 id …] / N15 [操作画像 …] / N16 [通貨名: …]
+        // 不正・書式違い・閉じ `]` なしは行番号つき警告でその行だけ捨てる（後続の行は読む）。
+        {
+            let head = directive_head_name(trimmed);
+            let fmt = match head {
+                "メニュー" => Some(
+                    "[メニュー] / [メニュー: どうぐ, まほう, …, 文字消え=80, 枠=140, 文字出現=80]",
+                ),
+                "メニュー項目" => Some("[メニュー項目 id ラベル=… 無効=true …]"),
+                "操作画像" => Some("[操作画像 手=… 選択マーク=… 倍率=2]"),
+                "通貨名" => Some("[通貨名: 円]"),
+                _ => None,
+            };
+            if let Some(fmt) = fmt {
+                let line_no = pos as i64 + 1 + line_base;
+                let type2 = |h: &str| {
+                    trimmed
+                        .strip_prefix(h)
+                        .filter(|r| r.starts_with(char::is_whitespace) && r.ends_with(']'))
+                        .map(|r| r.strip_suffix(']').unwrap_or(r))
+                };
+                let type1 = |h: &str| trimmed.strip_prefix(h).and_then(|r| r.strip_suffix(']'));
+                // 値の中に `]` が残っている（`[メニュー: a]]` `[メニュー項目 a 理由=b]c]` など）行は捨てる
+                let tag = match head {
+                    "メニュー" => "[メニュー:]",
+                    "メニュー項目" => "[メニュー項目]",
+                    "操作画像" => "[操作画像]",
+                    _ => "[通貨名:]",
+                };
+                let guarded = |inner: &str, f: &dyn Fn(&str) -> Option<Event>| -> Option<Event> {
+                    if inner.contains(']') {
+                        emit_warning(&format!(
+                            "[name-name-parser] warning: {line_no} 行目の {tag} は値に ] を含むため読み捨てた: {}",
+                            truncate_for_warning(trimmed)
+                        ));
+                        return None;
+                    }
+                    f(inner)
+                };
+                let parsed: Option<Option<Event>> = match head {
+                    "メニュー" if trimmed == "[メニュー]" => {
+                        Some(Some(Event::FieldMenu(FieldMenuData {
+                            items: Vec::new(),
+                            transition: None,
+                        })))
+                    }
+                    "メニュー" => type1("[メニュー:")
+                        .map(|inner| guarded(inner, &|i| parse_field_menu(i, line_no, trimmed))),
+                    "メニュー項目" => type2("[メニュー項目").map(|inner| {
+                        guarded(inner, &|i| parse_field_menu_item(i, line_no, trimmed))
+                    }),
+                    "操作画像" => type2("[操作画像").map(|inner| {
+                        guarded(inner, &|i| parse_field_ui_images(i, line_no, trimmed))
+                    }),
+                    _ => type1("[通貨名:").map(|inner| {
+                        guarded(inner, &|i| parse_field_currency(i, line_no, trimmed))
+                    }),
+                };
+                match parsed {
+                    Some(ev) => {
+                        if let Some(ev) = ev {
+                            current_events.push(ev);
+                        }
+                    }
+                    None => {
+                        let why = if trimmed.ends_with(']') {
+                            format!("書式が違うため(書式: {fmt})")
+                        } else if trimmed.contains(']') {
+                            "行末が ] でないため".to_string()
+                        } else {
+                            "閉じ括弧 ] がないため".to_string()
+                        };
+                        emit_warning(&format!(
+                            "[name-name-parser] warning: {line_no} 行目は{why}読み捨てた: {}",
+                            truncate_for_warning(trimmed)
+                        ));
+                    }
+                }
+                pos += 1;
+                continue;
+            }
+        }
+
         // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
         // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
         // [エンカウント率: 0]（安全マップ：街・室内）
@@ -4230,6 +4313,11 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     "フィールド設定",
     "歩行絵",
     "人物の形態",
+    // 一枚絵フィールドのメニュー・操作画像・通貨名 (#1108)
+    "メニュー",
+    "メニュー項目",
+    "操作画像",
+    "通貨名",
     // マスターデータブロック (master.rs)
     "モンスター",
     "アイテム",
@@ -5063,6 +5151,193 @@ fn parse_character_forms(inner: &str, line_no: i64, line: &str) -> Option<Event>
         assets,
         weapon_assets,
     }))
+}
+
+/// `[メニュー: どうぐ, まほう, …, 文字消え=80, 枠=140, 文字出現=80]` の `:` 以降（`]` なし）をパースする (#1108)。
+/// `,` 区切りの語のうち `キー=値` でないものが項目 ID（空白を含まない1語）、`文字消え` `枠` `文字出現` が遷移の ms（0 以上の整数）。
+/// 項目も遷移も1つも書かれていなければ警告。項目 ID の重複・既定の項目名との突き合わせはしない。
+fn parse_field_menu(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [メニュー:] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    if inner.trim().is_empty() {
+        warn("項目も遷移の指定も書かれていない");
+        return None;
+    }
+    let mut items: Vec<String> = Vec::new();
+    let (mut text_out, mut slide, mut text_in): (Option<u32>, Option<u32>, Option<u32>) =
+        (None, None, None);
+    for tok in inner.split(',').map(str::trim) {
+        if tok.is_empty() {
+            warn("空の項目がある");
+            return None;
+        }
+        let Some((key, val)) = tok.split_once('=') else {
+            if tok.contains(char::is_whitespace) {
+                warn(&format!("項目 ID \"{tok}\" が空白を含む"));
+                return None;
+            }
+            items.push(tok.to_string());
+            continue;
+        };
+        let (key, val) = (key.trim(), val.trim());
+        let slot = match key {
+            "文字消え" => &mut text_out,
+            "枠" => &mut slide,
+            "文字出現" => &mut text_in,
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        };
+        if slot.is_some() {
+            warn(&format!("{key}= が重複している"));
+            return None;
+        }
+        let Some(v) = parse_ms_u32(val) else {
+            warn(&format!("{key}={val} が 0 以上の整数(ms)でない"));
+            return None;
+        };
+        *slot = Some(v);
+    }
+    let transition = (text_out.is_some() || slide.is_some() || text_in.is_some()).then_some(
+        FieldMenuTransition {
+            text_out_ms: text_out,
+            slide_ms: slide,
+            text_in_ms: text_in,
+        },
+    );
+    Some(Event::FieldMenu(FieldMenuData { items, transition }))
+}
+
+/// 数字だけの文字列を u32（ms）にする (#1108)。符号・小数・空は None。
+fn parse_ms_u32(s: &str) -> Option<u32> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse::<u32>().ok()
+}
+
+/// `[メニュー項目 id ラベル=… 無効=true 理由=… 時間制限=不可 時間制限の理由=… 中身=path.json]` の `[メニュー項目` 以降（`]` なし）を
+/// パースする (#1108)。最初の語が項目 ID（必須）。以降は全部任意だが1つは書く。`中身=` はパスを中身を見ずに透過する。不正なら警告して None。
+fn parse_field_menu_item(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [メニュー項目] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    let inner = inner.trim_start();
+    let (id, rest) = inner.split_once(char::is_whitespace).unwrap_or((inner, ""));
+    if id.is_empty() || id.contains('=') {
+        warn("項目 ID がない");
+        return None;
+    }
+    let pairs = field_attr_pairs(rest, &warn)?;
+    if pairs.is_empty() {
+        warn("指定が1つもない");
+        return None;
+    }
+    let mut d = FieldMenuItemData {
+        id: id.to_string(),
+        label: None,
+        disabled: None,
+        reason: None,
+        time_limit_allowed: None,
+        time_limit_reason: None,
+        content: None,
+    };
+    for (key, val) in pairs {
+        match key {
+            "ラベル" => d.label = Some(val.to_string()),
+            "理由" => d.reason = Some(val.to_string()),
+            "時間制限の理由" => d.time_limit_reason = Some(val.to_string()),
+            "中身" => d.content = Some(val.to_string()),
+            "無効" => {
+                d.disabled = Some(match val {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        warn(&format!("無効={val} が true/false でない"));
+                        return None;
+                    }
+                });
+            }
+            "時間制限" => {
+                d.time_limit_allowed = Some(match val {
+                    "可" => true,
+                    "不可" => false,
+                    _ => {
+                        warn(&format!("時間制限={val} が 可/不可 でない"));
+                        return None;
+                    }
+                });
+            }
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        }
+    }
+    Some(Event::FieldMenuItem(d))
+}
+
+/// `[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]` の `[操作画像` 以降（`]` なし）をパースする (#1108)。
+/// 全部任意だが1つは書く。パスは中身を見ずに透過し、倍率は 0 より大きい数。不正なら警告して None。
+fn parse_field_ui_images(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [操作画像] は{}ため読み捨てた: {}",
+            field_warn_why(why),
+            truncate_for_warning(line)
+        ));
+    };
+    let pairs = field_attr_pairs(inner, &warn)?;
+    if pairs.is_empty() {
+        warn("指定が1つもない");
+        return None;
+    }
+    let mut d = UiImagesData {
+        hand: None,
+        select_mark: None,
+        scale: None,
+    };
+    for (key, val) in pairs {
+        match key {
+            "手" => d.hand = Some(val.to_string()),
+            "選択マーク" => d.select_mark = Some(val.to_string()),
+            "倍率" => {
+                let Some(v) = parse_finite(val).filter(|v| *v > 0.0) else {
+                    warn(&format!("倍率={val} が 0 より大きい数でない"));
+                    return None;
+                };
+                d.scale = Some(v);
+            }
+            _ => {
+                warn(&format!("未知の指定 {key}= がある"));
+                return None;
+            }
+        }
+    }
+    Some(Event::UiImages(d))
+}
+
+/// `[通貨名: 円]` の `:` 以降（`]` なし）をパースする (#1108)。空でない文字列（前後の空白は除く）。空なら警告して None。
+fn parse_field_currency(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let name = inner.trim();
+    if name.is_empty() {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [通貨名:] は通貨名が空のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+        return None;
+    }
+    Some(Event::Currency(name.to_string()))
 }
 
 /// `[エンカウント率: ...]` のボディを u32 にパースする。
@@ -11166,5 +11441,328 @@ mod field_settings_notation_tests {
         let _ = events_of("[フィールドマップ 背景=]\n");
         let w = take_test_warnings();
         assert!(w[0].contains("は背景= の値が空のため読み捨てた"), "{w:?}");
+    }
+}
+
+/// 一枚絵フィールドのメニュー・操作画像・通貨名 N13〜N16 (#1108)。
+#[cfg(test)]
+mod field_menu_notation_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+
+    fn events_of(body: &str) -> Vec<Event> {
+        let _ = take_test_warnings();
+        parse(&format!("{HEAD}{body}")).chapters[0].scenes[0]
+            .events
+            .clone()
+    }
+
+    fn is_menu_event(e: &Event) -> bool {
+        matches!(
+            e,
+            Event::FieldMenu(_) | Event::FieldMenuItem(_) | Event::UiImages(_) | Event::Currency(_)
+        )
+    }
+
+    #[test]
+    fn parses_all_notations() {
+        let evs = events_of(
+            "[メニュー]\n[メニュー: どうぐ, まほう, セーブ, ロード, せってい]\n[メニュー: どうぐ, まほう, 文字消え=80, 枠=140, 文字出現=0]\n[メニュー: 枠=140]\n[メニュー項目 save ラベル=きろく 無効=true 理由=いまは使えない 時間制限=不可 時間制限の理由=急げ 中身=menu/save.json]\n[メニュー項目 item 時間制限=可]\n[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]\n[操作画像 倍率=0.5]\n[通貨名: 円]\n",
+        );
+        assert_eq!(
+            evs,
+            vec![
+                Event::FieldMenu(FieldMenuData {
+                    items: vec![],
+                    transition: None
+                }),
+                Event::FieldMenu(FieldMenuData {
+                    items: vec![
+                        "どうぐ".into(),
+                        "まほう".into(),
+                        "セーブ".into(),
+                        "ロード".into(),
+                        "せってい".into()
+                    ],
+                    transition: None
+                }),
+                Event::FieldMenu(FieldMenuData {
+                    items: vec!["どうぐ".into(), "まほう".into()],
+                    transition: Some(FieldMenuTransition {
+                        text_out_ms: Some(80),
+                        slide_ms: Some(140),
+                        text_in_ms: Some(0)
+                    })
+                }),
+                Event::FieldMenu(FieldMenuData {
+                    items: vec![],
+                    transition: Some(FieldMenuTransition {
+                        text_out_ms: None,
+                        slide_ms: Some(140),
+                        text_in_ms: None
+                    })
+                }),
+                Event::FieldMenuItem(FieldMenuItemData {
+                    id: "save".into(),
+                    label: Some("きろく".into()),
+                    disabled: Some(true),
+                    reason: Some("いまは使えない".into()),
+                    time_limit_allowed: Some(false),
+                    time_limit_reason: Some("急げ".into()),
+                    content: Some("menu/save.json".into()),
+                }),
+                Event::FieldMenuItem(FieldMenuItemData {
+                    id: "item".into(),
+                    label: None,
+                    disabled: None,
+                    reason: None,
+                    time_limit_allowed: Some(true),
+                    time_limit_reason: None,
+                    content: None,
+                }),
+                Event::UiImages(UiImagesData {
+                    hand: Some("hand.webp".into()),
+                    select_mark: Some("cone.webp".into()),
+                    scale: Some(2.0),
+                }),
+                Event::UiImages(UiImagesData {
+                    hand: None,
+                    select_mark: None,
+                    scale: Some(0.5),
+                }),
+                Event::Currency("円".into()),
+            ]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn invalid_values_warn_and_drop_only_that_line() {
+        for (line, why, tag) in [
+            (
+                "[メニュー: ]",
+                "項目も遷移の指定も書かれていない",
+                "[メニュー:]",
+            ),
+            ("[メニュー: a,,b]", "空の項目がある", "[メニュー:]"),
+            ("[メニュー: a,]", "空の項目がある", "[メニュー:]"),
+            ("[メニュー: a b]", "空白を含む", "[メニュー:]"),
+            ("[メニュー: a, 幅=1]", "未知の指定", "[メニュー:]"),
+            ("[メニュー: 枠=-1]", "0 以上の整数(ms)", "[メニュー:]"),
+            ("[メニュー: 枠=1.5]", "0 以上の整数(ms)", "[メニュー:]"),
+            ("[メニュー: 枠=abc]", "0 以上の整数(ms)", "[メニュー:]"),
+            ("[メニュー: 枠=]", "0 以上の整数(ms)", "[メニュー:]"),
+            ("[メニュー: 枠=1, 枠=2]", "重複", "[メニュー:]"),
+            ("[メニュー項目 =x]", "項目 ID がない", "[メニュー項目]"),
+            ("[メニュー項目 id]", "指定が1つもない", "[メニュー項目]"),
+            ("[メニュー項目 id ]", "指定が1つもない", "[メニュー項目]"),
+            ("[メニュー項目 id ラベル]", "キー=値", "[メニュー項目]"),
+            ("[メニュー項目 id ラベル=]", "値が空", "[メニュー項目]"),
+            (
+                "[メニュー項目 id ラベル=a ラベル=b]",
+                "重複",
+                "[メニュー項目]",
+            ),
+            ("[メニュー項目 id 無効=yes]", "true/false", "[メニュー項目]"),
+            (
+                "[メニュー項目 id 無効=True]",
+                "true/false",
+                "[メニュー項目]",
+            ),
+            (
+                "[メニュー項目 id 時間制限=true]",
+                "可/不可",
+                "[メニュー項目]",
+            ),
+            ("[メニュー項目 id 種類=x]", "未知の指定", "[メニュー項目]"),
+            ("[操作画像 倍率=0]", "0 より大きい", "[操作画像]"),
+            ("[操作画像 倍率=-1]", "0 より大きい", "[操作画像]"),
+            ("[操作画像 倍率=abc]", "0 より大きい", "[操作画像]"),
+            ("[操作画像 手=]", "値が空", "[操作画像]"),
+            ("[操作画像 色=x]", "未知の指定", "[操作画像]"),
+            ("[操作画像 ]", "指定が1つもない", "[操作画像]"),
+            ("[操作画像 手=a.webp 手=b.webp]", "重複", "[操作画像]"),
+            ("[通貨名: ]", "通貨名が空の", "[通貨名:]"),
+            ("[通貨名:]", "通貨名が空の", "[通貨名:]"),
+        ] {
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目の")
+                    && w[0].contains(tag)
+                    && w[0].contains(why)
+                    && w[0].contains(line)
+                    && w[0].contains("ため読み捨てた"),
+                "{line}: {w:?}"
+            );
+            assert!(
+                !w[0].contains("ないのため") && !w[0].contains("でないのため"),
+                "{line}: {w:?}"
+            );
+            assert!(evs.iter().all(|e| !is_menu_event(e)), "{line}");
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn stray_closing_bracket_in_value_warns_and_drops_line() {
+        for (line, tag) in [
+            ("[メニュー: a]]", "[メニュー:]"),
+            ("[メニュー: a, b]c]", "[メニュー:]"),
+            ("[メニュー項目 a 理由=b]c]", "[メニュー項目]"),
+            ("[操作画像 手=a]b.webp]", "[操作画像]"),
+            ("[通貨名: 円]]", "[通貨名:]"),
+        ] {
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(
+                w,
+                vec![format!(
+                    "[name-name-parser] warning: 9 行目の {tag} は値に ] を含むため読み捨てた: {line}"
+                )],
+                "{line}"
+            );
+            assert!(evs.iter().all(|e| !is_menu_event(e)), "{line}");
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn warning_text_is_fixed() {
+        let _ = events_of("[メニュー項目 id 無効=yes]\n");
+        let w = take_test_warnings();
+        assert_eq!(
+            w,
+            vec![
+                "[name-name-parser] warning: 9 行目の [メニュー項目] は無効=yes が true/false でないため読み捨てた: [メニュー項目 id 無効=yes]"
+                    .to_string()
+            ]
+        );
+        let _ = events_of("[通貨名: ]\n");
+        let w = take_test_warnings();
+        assert_eq!(
+            w,
+            vec![
+                "[name-name-parser] warning: 9 行目の [通貨名:] は通貨名が空のため読み捨てた: [通貨名: ]"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_lines_warn_instead_of_vanishing() {
+        for (line, want) in [
+            ("[メニュー ]", "書式が違う"),
+            ("[メニュー どうぐ]", "書式が違う"),
+            ("[メニュー項目]", "書式が違う"),
+            ("[メニュー項目: id 無効=true]", "書式が違う"),
+            ("[操作画像]", "書式が違う"),
+            ("[操作画像: 倍率=2]", "書式が違う"),
+            ("[通貨名]", "書式が違う"),
+            ("[通貨名 円]", "書式が違う"),
+            ("[メニュー] 余分", "行末が ] でない"),
+            ("[メニュー: a] // x", "行末が ] でない"),
+            ("[メニュー項目 id 無効=true] x", "行末が ] でない"),
+            ("[通貨名: 円] x", "行末が ] でない"),
+            ("[メニュー: どうぐ", "閉じ括弧 ] がない"),
+            ("[メニュー", "閉じ括弧 ] がない"),
+            ("[メニュー項目 id 無効=true", "閉じ括弧 ] がない"),
+            ("[操作画像 倍率=2", "閉じ括弧 ] がない"),
+            ("[通貨名: 円", "閉じ括弧 ] がない"),
+        ] {
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目") && w[0].contains(want) && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(evs.iter().all(|e| !is_menu_event(e)), "{line}");
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn notations_in_event_warn_as_unsupported() {
+        let evs = events_of(
+            "[イベント e]\n[メニュー]\n[メニュー: どうぐ]\n[メニュー項目 id 無効=true]\n[操作画像 倍率=2]\n[通貨名: 円]\n[/イベント]\n",
+        );
+        match &evs[..] {
+            [Event::RpgEvent { commands, .. }] => assert!(commands.is_empty()),
+            other => panic!("{other:?}"),
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 5, "{w:?}");
+        for (m, (n, head)) in w.iter().zip([
+            (10, "メニュー"),
+            (11, "メニュー"),
+            (12, "メニュー項目"),
+            (13, "操作画像"),
+            (14, "通貨名"),
+        ]) {
+            assert!(
+                m.contains(&format!("{n} 行目"))
+                    && m.contains(&format!("[イベント] 内では未対応の記法 [{head}]")),
+                "{w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn round_trip() {
+        let body = "[メニュー]\n[メニュー: どうぐ, まほう, セーブ]\n[メニュー: どうぐ, 文字消え=80, 枠=140, 文字出現=80]\n[メニュー: 枠=0]\n[メニュー項目 save ラベル=きろく 無効=true 理由=いまは使えない 時間制限=不可 時間制限の理由=急げ 中身=menu/save.json]\n[メニュー項目 item 時間制限=可]\n[メニュー項目 magic 無効=false]\n[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]\n[操作画像 倍率=0.5]\n[通貨名: 円]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        let _ = take_test_warnings();
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        assert_eq!(emitted, emit(&doc2));
+        for want in [
+            "[メニュー]\n",
+            "[メニュー: どうぐ, まほう, セーブ]\n",
+            "[メニュー: どうぐ, 文字消え=80, 枠=140, 文字出現=80]\n",
+            "[メニュー: 枠=0]\n",
+            "[メニュー項目 save ラベル=きろく 無効=true 理由=いまは使えない 時間制限=不可 時間制限の理由=急げ 中身=menu/save.json]\n",
+            "[メニュー項目 item 時間制限=可]\n",
+            "[メニュー項目 magic 無効=false]\n",
+            "[操作画像 手=hand.webp 選択マーク=cone.webp 倍率=2]\n",
+            "[操作画像 倍率=0.5]\n",
+            "[通貨名: 円]\n",
+        ] {
+            assert!(emitted.contains(want), "{want}: {emitted}");
+        }
+    }
+
+    #[test]
+    fn emit_normalizes_attribute_order() {
+        let doc = parse(&format!(
+            "{HEAD}[メニュー: 文字出現=3, 枠=2, 文字消え=1, a]\n[メニュー項目 x 中身=p.json 時間制限=可 ラベル=l]\n[操作画像 倍率=3 選択マーク=c.webp 手=h.webp]\n"
+        ));
+        let emitted = emit(&doc);
+        assert!(
+            emitted.contains("[メニュー: a, 文字消え=1, 枠=2, 文字出現=3]\n"),
+            "{emitted}"
+        );
+        assert!(
+            emitted.contains("[メニュー項目 x ラベル=l 時間制限=可 中身=p.json]\n"),
+            "{emitted}"
+        );
+        assert!(
+            emitted.contains("[操作画像 手=h.webp 選択マーク=c.webp 倍率=3]\n"),
+            "{emitted}"
+        );
     }
 }
