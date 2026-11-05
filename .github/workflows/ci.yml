@@ -44,7 +44,15 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # friday-1930 本編 script.md を直接読むスモークテスト用に取得する (#1091)
+      - uses: actions/checkout@v4
+        with:
+          repository: kako-jun/friday-1930
+          path: friday-1930
+
       - run: cargo test --workspace
+        env:
+          FRIDAY1930_SCRIPT: ${{ github.workspace }}/friday-1930/script.md
 
   frontend:
     name: Frontend (TypeScript)
