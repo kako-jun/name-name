@@ -77,6 +77,10 @@ export interface FieldSceneNotation {
 
 export type FieldMasterData = ReturnType<typeof mergeMasterDataFromDocs>
 
+/**
+ * 注意: `scenes[].map`・`npcs`・`npcEvents` の commands などは入力 docs の参照を共有する(コピーしない)。
+ * 後段(buildFieldRaw 等)は読み取りのみで、書き換えないこと。
+ */
 export interface FieldNotation {
   /** 整列後の先頭 doc(エントリ md があればそれ)。frontmatter(`battle_*` 等)の読み先 */
   entryDoc?: EventDocument
@@ -135,7 +139,9 @@ function sortDocs(
   entryPath: string,
   warnings: string[]
 ): FieldSourceDoc[] {
-  const keyed = docs.map((d) => ({ d, json: JSON.stringify(d.doc) }))
+  // 同 path が無ければ path だけで順序が決まる。同 path があるときだけ中身の文字列で決める(JSON.stringify は重いので避ける)
+  const pathsUnique = new Set(docs.map((d) => d.path)).size === docs.length
+  const keyed = docs.map((d) => ({ d, json: pathsUnique ? '' : JSON.stringify(d.doc) }))
   keyed.sort((a, b) => {
     const ae = a.d.path === entryPath ? 0 : 1
     const be = b.d.path === entryPath ? 0 : 1
@@ -175,9 +181,14 @@ function firstWins<T>(label: string, found: Found<T>[], warnings: string[]): T |
   return found[0].value
 }
 
+/** 重複の警告文。全部同じ md の中なら「同じ a.md の中で」、複数の md にまたがるなら path を並べる */
 function dupMessage(label: string, paths: string[]): string {
-  const rest = paths.slice(1)
-  return `${label} が複数あります（${paths.join(' / ')}）。先頭の ${paths[0]} のものを使い、${rest.join(' / ')} のものは無視します`
+  const unique = [...new Set(paths)]
+  if (unique.length === 1) {
+    return `同じ ${unique[0]} の中で ${label} が複数あります。先頭のものを使い、残りは無視します`
+  }
+  const rest = unique.slice(1)
+  return `${label} が複数あります（${unique.join(' / ')}）。先頭の ${unique[0]} のものを使い、${rest.join(' / ')} のものは無視します`
 }
 
 /** Event を文字列 variant を除いて走査する(Condition の中は走査しない) */
@@ -244,6 +255,10 @@ function reorder<T>(rec: Record<string, T>, order: readonly string[]): Record<st
  * マスターを「エントリ md が最優先」で束ねる。
  * 既存の `mergeMasterDataFromDocs` は後ろの doc が勝つので、優先順の逆で渡して先頭を勝たせ、
  * キー順・partyOrder は優先順に直す。別の md に同じ ID があれば警告する(1 つの md 内の重複は既存の挙動のまま)。
+ *
+ * 注意: `mergeMasterDataFromDocs`(と内部の `collectMasterData`)は同 ID の重複時に console.warn を出す既存の副作用を持つ。
+ * 文言は「後ろの宣言で上書きした」だが、本関数は逆順で渡すので実態(先頭の md が勝つ)と逆になり、自前の警告と二重にもなる。
+ * 既存コードは触らない。抑制は S3d 以降で検討する。
  */
 function collectMaster(sorted: readonly FieldSourceDoc[], warnings: string[]): FieldMasterData {
   const merged = mergeMasterDataFromDocs(sorted.map((s) => s.doc).reverse())
@@ -381,7 +396,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
     if (fields.length > 1) {
       warnings.push(
         dupMessage(
-          `場面 ID '${id}'`,
+          `場面 ${id}`,
           fields.map((f) => f.path)
         )
       )
@@ -415,7 +430,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
     .sort((a, b) => a.index - b.index)
   const warpFound = new Map<string, Found<FieldWarpData>[]>()
   for (const { path, scene } of closureRefs) {
-    const where = `場面 ${scene.id}（${path}）`
+    const where = `場面 ${scene.id}（${path}）の`
     const maps: FieldMapData[] = []
     const starts: PlayerStartData[] = []
     const shakes: { amplitude_y: number; period_ms?: number }[] = []
@@ -437,7 +452,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
     }
     const once = <T>(label: string, list: T[]): T | undefined => {
       if (list.length > 1) {
-        warnings.push(`${where} に ${label} が複数あります。先頭のものを使い、残りは無視します`)
+        warnings.push(`${where} ${label} が複数あります。先頭のものを使い、残りは無視します`)
       }
       return list[0]
     }

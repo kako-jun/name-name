@@ -118,7 +118,7 @@ describe('collectFieldNotation: 重複は先勝ち+警告', () => {
     expect(notation.scenes[0].map.background).toBe('a.webp')
     expect(notation.scenes[0].path).toBe('a.md')
     expect(warnings).toContain(
-      "場面 ID 's1' が複数あります（a.md / b.md）。先頭の a.md のものを使い、b.md のものは無視します"
+      '場面 s1 が複数あります（a.md / b.md）。先頭の a.md のものを使い、b.md のものは無視します'
     )
   })
 
@@ -159,8 +159,12 @@ describe('collectFieldNotation: 重複は先勝ち+警告', () => {
     expect(warnings).toContain(
       '[フィールド設定] が複数あります（script.md / data.md）。先頭の script.md のものを使い、data.md のものは無視します'
     )
-    expect(warnings.some((w) => w.startsWith('[通貨名:] が複数あります'))).toBe(true)
-    expect(warnings.some((w) => w.startsWith('[メニュー項目 save] が複数あります'))).toBe(true)
+    expect(warnings).toContain(
+      '[通貨名:] が複数あります（script.md / data.md）。先頭の script.md のものを使い、data.md のものは無視します'
+    )
+    expect(warnings).toContain(
+      '[メニュー項目 save] が複数あります（script.md / data.md）。先頭の script.md のものを使い、data.md のものは無視します'
+    )
   })
 
   it('場面ごとの重複(フィールドマップ・プレイヤー・揺れ・窓の景色)と、ワープ名の重複', () => {
@@ -199,19 +203,48 @@ describe('collectFieldNotation: 重複は先勝ち+警告', () => {
     expect(notation.scenes.map((x) => x.id)).toEqual(['s1', 's2', 's3'])
     for (const label of ['[フィールドマップ]', '[プレイヤー]', '[揺れ:]', '[窓の景色:]']) {
       expect(warnings).toContain(
-        `場面 s1（a.md） に ${label} が複数あります。先頭のものを使い、残りは無視します`
+        `場面 s1（a.md）の ${label} が複数あります。先頭のものを使い、残りは無視します`
       )
     }
-    expect(warnings.some((w) => w.startsWith('[ワープ w] が複数あります'))).toBe(true)
+    expect(warnings).toContain(
+      '同じ a.md の中で [ワープ w] が複数あります。先頭のものを使い、残りは無視します'
+    )
   })
 
   it('同じ path の md が重複して渡されたら 1 つだけ使って警告', () => {
-    const { warnings } = collectFieldNotation({
+    const { notation, warnings } = collectFieldNotation({
       docs: [src('a.md', scene('s1', map())), src('a.md', scene('s1', map()))],
       entryPath: 'a.md',
       entry: { sceneId: 's1' },
     })
     expect(warnings).toContain("md 'a.md' が複数渡されています。先頭のものを使い、残りは無視します")
+    expect(notation.scenes).toHaveLength(1)
+  })
+})
+
+describe('collectFieldNotation: 閉包外・エントリ欠落の警告', () => {
+  it('閉包に入らない場面の ID が重複していても警告する(場面 ID の索引は全 md)', () => {
+    const { notation, warnings } = collectFieldNotation({
+      docs: [
+        src('a.md', scene('s1', map()), scene('far', map('1.webp'))),
+        src('b.md', scene('far', map('2.webp'))),
+      ],
+      entryPath: 'a.md',
+      entry: { sceneId: 's1' },
+    })
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1'])
+    expect(warnings).toContain(
+      '場面 far が複数あります（a.md / b.md）。先頭の a.md のものを使い、b.md のものは無視します'
+    )
+  })
+
+  it('entryPath が docs に無ければ警告する', () => {
+    const { warnings } = collectFieldNotation({
+      docs: [src('a.md', scene('s1', map()))],
+      entryPath: 'missing.md',
+      entry: { sceneId: 's1' },
+    })
+    expect(warnings).toContain("エントリの md 'missing.md' が読み込まれていません")
   })
 })
 
