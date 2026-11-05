@@ -169,7 +169,7 @@ describe('閉じた同じ pointerdown をフィールドへ抜けさせない', 
     // canvas capture（Pixi）: 「◀戻る」の pointerdown で閉じる
     t.screen.closeByPointer()
     expect(t.host.busy).toBe(false)
-    // canvas bubble（main.ts の onPointerDown）: 閉じ済みでも、この操作は塞がれている
+    // canvas bubble（startFieldGame.ts の onPointerDown）: 閉じ済みでも、この操作は塞がれている
     expect(t.host.isMenuBlocked).toBe(true)
     // 同じ操作の contextmenu（右クリックで戻った場合）も止める
     expect(t.host.onContextMenu()).toBe(true)
