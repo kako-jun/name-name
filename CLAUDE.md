@@ -230,6 +230,8 @@ default_bgm: amehure.ogg
 >
 > 怠ると本番パーサは新しい frontmatter キーを未知として黙って捨て、その挙動がサイレントにフォールバックする（2026-07-03: `character_scale` #378 が落ち、立ち絵が原寸 scale=1 で「等倍」表示された事故）。
 
+**parser のテスト**: `cargo test --workspace` は friday-1930 本編 (`script.md`) を直接読む。ローカルでは兄弟ディレクトリに kako-jun/friday-1930 を clone するか、`FRIDAY1930_SCRIPT` で script.md のパスを指定する（無いと panic する）。
+
 ## よく使うコマンド
 
 ### バックエンド開発

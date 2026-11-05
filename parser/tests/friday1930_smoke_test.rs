@@ -1,119 +1,141 @@
-//! friday-1930 プロトタイプ最小マップのスモークテスト。
+//! friday-1930 本編 (`script.md`) のスモークテスト。
 //!
-//! `fixtures/friday1930-sample.md` は friday-1930 リポの `script.md` と
-//! 同じ形式のサンプル（raycast + NPC 構成を検証するための代表例）。
+//! friday-1930 リポの `script.md` を直接読む（コピーは持たない）。
 //! name-name parser 側の破壊的変更で friday-1930 が壊れないかをここで検出する。
 //!
-//! fixture を更新したいときは: friday-1930 で script.md を更新したあと、
-//! 同じ内容をここに同期する（ファイルコピー）。
+//! 読み込み先:
+//! - 環境変数 `FRIDAY1930_SCRIPT` があればそのパス（CI はこちらを必ず指定する）
+//! - 未設定なら name-name リポルートから見た兄弟 `../friday-1930/script.md`
+//!
+//! 見つからない場合は常に panic する（黙って緑にしない）。
 //!
 //! スコープ: **ハッピーパスの構造検証のみ**。parser の異常系（空ファイル、
 //! 不正な view 値、マップ寸法ミスマッチ等）は `integration_test.rs` 側で扱う。
 
-use name_name_parser::models::{Event, SceneView};
+use std::path::PathBuf;
+
+use name_name_parser::models::{Document, Event, SceneView};
 use name_name_parser::parser;
 
-const FRIDAY1930_SAMPLE: &str = include_str!("fixtures/friday1930-sample.md");
+const SCRIPT_ENV: &str = "FRIDAY1930_SCRIPT";
+
+/// friday-1930 本編 script.md を読んで parse する。見つからなければ panic。
+fn load_friday1930() -> Document {
+    let path = match std::env::var(SCRIPT_ENV) {
+        Ok(p) if !p.is_empty() => PathBuf::from(p),
+        _ => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../friday-1930/script.md"),
+    };
+    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "friday-1930 本編 ({}) を読めません: {e}。{SCRIPT_ENV} で script.md のパスを指定するか、\
+             name-name の兄弟ディレクトリに kako-jun/friday-1930 を clone してください",
+            path.display()
+        )
+    });
+    parser::parse(&src)
+}
 
 #[test]
-fn friday1930_sample_parses_three_scenes() {
-    let doc = parser::parse(FRIDAY1930_SAMPLE);
+fn friday1930_parses_main_scenes() {
+    let doc = load_friday1930();
     assert_eq!(doc.engine, "name-name");
     assert_eq!(doc.chapters.len(), 1);
     let chapter = &doc.chapters[0];
     assert_eq!(chapter.number, 1);
-    assert_eq!(chapter.scenes.len(), 3);
-    assert_eq!(chapter.scenes[0].id, "prologue-morning");
-    assert_eq!(chapter.scenes[1].id, "abel-village");
-    assert_eq!(chapter.scenes[2].id, "dungeon-north");
+    let ids: Vec<&str> = chapter.scenes.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, vec!["data", "opening", "abel-town", "ending"]);
 }
 
 #[test]
 fn friday1930_view_is_mixed() {
-    // プロローグはノベル（view 指定なし → TopDown デフォルト）、
-    // RPG 2シーンは Raycast。
-    let doc = parser::parse(FRIDAY1930_SAMPLE);
-    assert_eq!(doc.chapters[0].scenes[0].view, SceneView::TopDown);
-    assert_eq!(doc.chapters[0].scenes[1].view, SceneView::Raycast);
-    assert_eq!(doc.chapters[0].scenes[2].view, SceneView::Raycast);
+    // opening / ending はノベル（view 指定なし → TopDown デフォルト）、
+    // abel-town は Raycast。
+    let doc = load_friday1930();
+    let scenes = &doc.chapters[0].scenes;
+    let view = |id: &str| scenes.iter().find(|s| s.id == id).expect(id).view;
+    assert_eq!(view("opening"), SceneView::TopDown);
+    assert_eq!(view("abel-town"), SceneView::Raycast);
+    assert_eq!(view("ending"), SceneView::TopDown);
 }
 
 #[test]
-fn friday1930_prologue_has_novel_elements() {
-    // ノベル要素（ダイアログ・ナレーション・背景・BGM・暗転解除・SE・退場・場面転換）
-    // が parser を通って Event として抽出されることを担保する。
-    let doc = parser::parse(FRIDAY1930_SAMPLE);
-    let prologue = &doc.chapters[0].scenes[0];
-
-    let has_background = prologue
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::Background { .. }));
-    assert!(has_background, "prologue should contain Background event");
-
-    let has_bgm = prologue
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::Bgm { .. }));
-    assert!(has_bgm, "prologue should contain Bgm event");
-
-    let has_narration = prologue
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::Narration { .. }));
-    assert!(has_narration, "prologue should contain Narration event");
-
-    // プロローグにはデイジー×3 + アベル×2 のダイアログがある想定。
-    // 最小3件（話者が2人以上いて掛け合いが成立する）をスモークの契約とする。
-    let dialog_count = prologue
-        .events
-        .iter()
-        .filter(|e| matches!(e, Event::Dialog { .. }))
-        .count();
-    assert!(
-        dialog_count >= 3,
-        "prologue should have multiple Dialog events"
-    );
-
-    let has_se = prologue
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::Se { .. }));
-    assert!(has_se, "prologue should contain Se event");
-
-    let has_exit = prologue
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::Exit { .. }));
-    assert!(has_exit, "prologue should contain Exit event");
-
-    let has_scene_transition = prologue
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::SceneTransition));
-    assert!(
-        has_scene_transition,
-        "prologue should end with SceneTransition"
-    );
-}
-
-#[test]
-fn friday1930_village_has_four_npcs_and_map() {
-    let doc = parser::parse(FRIDAY1930_SAMPLE);
-    let village = doc.chapters[0]
+fn friday1930_opening_has_novel_elements() {
+    // ノベル要素（BGM・ナレーション・場面転換）が Event として抽出されることを担保する。
+    let doc = load_friday1930();
+    let opening = doc.chapters[0]
         .scenes
         .iter()
-        .find(|s| s.id == "abel-village")
-        .expect("abel-village scene exists");
+        .find(|s| s.id == "opening")
+        .expect("opening scene exists");
 
-    let map_count = village
+    assert!(
+        opening
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Bgm { .. })),
+        "opening should contain Bgm event"
+    );
+    let narrator_dialogs = opening
+        .events
+        .iter()
+        .filter(|e| matches!(e, Event::Dialog { character: Some(c), .. } if c == "ナレーター"))
+        .count();
+    assert_eq!(
+        narrator_dialogs, 2,
+        "opening should have 2 ナレーター dialogs"
+    );
+
+    assert!(
+        opening
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Narration { .. })),
+        "opening should contain Narration event"
+    );
+    assert!(
+        opening
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::SceneTransition)),
+        "opening should end with SceneTransition"
+    );
+}
+
+#[test]
+fn friday1930_town_has_two_npcs_and_map() {
+    let doc = load_friday1930();
+    let town = doc.chapters[0]
+        .scenes
+        .iter()
+        .find(|s| s.id == "abel-town")
+        .expect("abel-town scene exists");
+
+    let map_count = town
         .events
         .iter()
         .filter(|e| matches!(e, Event::RpgMap(_)))
         .count();
     assert_eq!(map_count, 1);
 
-    let player_count = village
+    let map = town
+        .events
+        .iter()
+        .find_map(|e| match e {
+            Event::RpgMap(m) => Some(m),
+            _ => None,
+        })
+        .expect("RpgMap exists");
+    assert_eq!(map.encounter_rate, Some(8));
+    assert_eq!(
+        map.encounter_groups,
+        Some(vec![
+            "slime".to_string(),
+            "ghost".to_string(),
+            "slime+ghost".to_string()
+        ])
+    );
+
+    let player_count = town
         .events
         .iter()
         .filter(|e| matches!(e, Event::PlayerStart(_)))
@@ -122,43 +144,49 @@ fn friday1930_village_has_four_npcs_and_map() {
 
     // NPC は Markdown 出現順で events に push される仕様（parser.rs）。
     // 順序が変わった場合は parser の変更意図とテスト期待を両方見直す。
-    let npc_names: Vec<String> = village
+    let npcs: Vec<(String, u32)> = town
         .events
         .iter()
         .filter_map(|e| match e {
-            Event::Npc(npc) => Some(npc.name.clone()),
+            Event::Npc(npc) => Some((npc.name.clone(), npc.color)),
             _ => None,
         })
         .collect();
     assert_eq!(
-        npc_names,
+        npcs,
         vec![
-            "デイジー".to_string(),
-            "キートン".to_string(),
-            "モコッチ".to_string(),
-            "ティアラ".to_string(),
+            ("ガイド".to_string(), 0x88ccff),
+            ("旅人".to_string(), 0xffcc88),
         ]
     );
 }
 
 #[test]
-fn friday1930_dungeon_has_jikido() {
-    let doc = parser::parse(FRIDAY1930_SAMPLE);
-    let dungeon = doc.chapters[0]
+fn friday1930_data_scene_has_master_definitions() {
+    let doc = load_friday1930();
+    let data = doc.chapters[0]
         .scenes
         .iter()
-        .find(|s| s.id == "dungeon-north")
-        .expect("dungeon-north scene exists");
+        .find(|s| s.id == "data")
+        .expect("data scene exists");
 
-    let jikido = dungeon
+    let party: Vec<&str> = data
         .events
         .iter()
-        .find_map(|e| match e {
-            Event::Npc(npc) if npc.name == "ジキド" => Some(npc),
+        .filter_map(|e| match e {
+            Event::PartyMember(p) => Some(p.id.as_str()),
             _ => None,
         })
-        .expect("ジキド NPC exists in dungeon-north");
+        .collect();
+    assert_eq!(party, vec!["hero"]);
 
-    assert_eq!(jikido.color, 0xcc3333); // fixture 側の `色=#cc3333` と対応
-    assert!(!jikido.message.is_empty());
+    let monsters: Vec<&str> = data
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Monster(m) => Some(m.id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(monsters, vec!["slime", "ghost"]);
 }
