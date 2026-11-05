@@ -269,6 +269,8 @@ export interface FieldConfig {
    * 不正な値は警告して無視（その画像は従来の描画）。読み込み失敗は実行時に警告して従来の描画へ
    */
   ui?: UiImagesConfig
+  /** 開始時の主人公の向き（`startFacing`。4 方向）。セーブ復帰が優先。不正な値は警告して無視。未指定は undefined＝下向き */
+  startFacing?: Facing
   /** 会話窓の 1 文字あたり ms (#840)。`dialogMsPerChar`（0 = 即時表示）。未指定は undefined＝窓の既定（ff は戦闘ログと同じ 30）。不正な値は警告して無視 */
   dialogMsPerChar?: number
   /** 歩数の刻みと連続エンカウント抑制 (#809) */
@@ -359,7 +361,20 @@ export function parseConfigText(text: string, baseUrl: string): ParseResult<Fiel
   return parseConfig(raw, baseUrl)
 }
 
-export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldConfig> {
+/** `parseConfig` の追加指定 */
+export interface ParseConfigOptions {
+  /**
+   * true = NPC の脚本（`scene` の行き先）を設定の外から渡す（`startFieldGame` の `scriptEvents`）。
+   * `scriptUrl` が無くても「scriptUrl がありません」の警告を出さない。既定 false
+   */
+  scriptProvided?: boolean
+}
+
+export function parseConfig(
+  raw: unknown,
+  baseUrl: string,
+  opts?: ParseConfigOptions
+): ParseResult<FieldConfig> {
   if (!isObj(raw)) return fail('設定はオブジェクトである必要があります')
   const assetBase =
     typeof raw.assetBaseUrl === 'string' && raw.assetBaseUrl.trim()
@@ -748,6 +763,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldCon
         ...(scale.value !== undefined ? { scale: scale.value } : {}),
         // 敵のレベル (#898)。parseEntity が 1〜99 にそろえ済み。未指定はキー自体を出さない
         ...(e.value.level !== undefined ? { level: e.value.level } : {}),
+        ...monsterPassthrough(m as Obj),
       }
     }
   }
@@ -767,7 +783,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldCon
   if (raw.party !== undefined) {
     if (!Array.isArray(raw.party)) return fail('party は配列が必要です')
     for (let i = 0; i < raw.party.length; i++) {
-      const e = parseEntity(raw.party[i], `party${i + 1}`, `party[${i}]`, url)
+      const e = parseEntity(raw.party[i], partyIdAt(raw.party[i], i), `party[${i}]`, url)
       if (!e.ok) return e
       // 味方は BattleEntity そのもの: poses に同居する刀の予約キー (#1027) をここで刀の指定（weapon）へ分ける（残すと絵として読みに行く #1035）
       // 型の注意: parseEntity は poses を BattlePoseSprites 型で返すが、実体は絵のキー + 刀の予約キー（pickWeaponKeys で同居させた生の record）。
@@ -993,13 +1009,22 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldCon
       )
   }
   // scriptUrl が無いのに scene を書いた NPC は、固定の line で話す（読み込み時に気づけるよう警告）
-  if (!scriptUrl)
+  if (!scriptUrl && !opts?.scriptProvided)
     for (const [sid, sc] of Object.entries(scenes))
       for (const n of sc.npcs ?? [])
         if (n.scene !== undefined)
           warnings.push(
             `scenes.${sid}.npcs の ${n.id} は scene "${n.scene}" を指していますが scriptUrl がありません（固定の line で話します）`
           )
+  let startFacing: Facing | undefined
+  if (raw.startFacing !== undefined) {
+    if (typeof raw.startFacing === 'string' && FACINGS.includes(raw.startFacing as Facing))
+      startFacing = raw.startFacing as Facing
+    else
+      warnings.push(
+        `startFacing は ${FACINGS.join(' / ')} のどれか: ${JSON.stringify(raw.startFacing)}（無視します）`
+      )
+  }
   let bw = positive(b.width, DEFAULTS.battleWidth, 'battle.width')
   if (!bw.ok) return bw
   let bh = positive(b.height, DEFAULTS.battleHeight, 'battle.height')
@@ -1105,6 +1130,7 @@ export function parseConfig(raw: unknown, baseUrl: string): ParseResult<FieldCon
           }
         : {}),
       ...(dialogMsPerChar !== undefined ? { dialogMsPerChar } : {}),
+      ...(startFacing ? { startFacing } : {}),
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,
@@ -1326,6 +1352,27 @@ export function parseMonsterScale(raw: unknown, path: string): ParseResult<numbe
 }
 
 /** 味方・モンスターの 1 件分の検証（ステータスは数値、sprite は URL に解決） */
+/** 味方 `party[i]` の id。`id`（非空文字列）があればそれ、無ければ `party{i+1}`（`expandCharacterForms` と同じ規則） */
+function partyIdAt(m: unknown, i: number): string {
+  return isObj(m) && typeof m.id === 'string' && m.id ? m.id : `party${i + 1}`
+}
+
+/**
+ * `monsters.<id>` の `actions` / `counters` / `onDeath` / `affinity` / `loot` を、型だけ見てそのまま通す。
+ * 解釈・検証は runtime 側（enemyAi.ts / affinity.ts / loot.ts）。型が合わない・無いキーは出さない
+ */
+function monsterPassthrough(m: Obj): Partial<MonsterDef> {
+  const out: Partial<MonsterDef> = {}
+  const strs = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((x) => typeof x === 'string')
+  if (strs(m.actions)) out.actions = m.actions
+  if (strs(m.counters)) out.counters = m.counters
+  if (typeof m.onDeath === 'string') out.onDeath = m.onDeath
+  if (isObj(m.affinity)) out.affinity = m.affinity as NonNullable<MonsterDef['affinity']>
+  if (isObj(m.loot)) out.loot = m.loot as NonNullable<MonsterDef['loot']>
+  return out
+}
+
 function parseEntity(
   raw: unknown,
   id: string,
