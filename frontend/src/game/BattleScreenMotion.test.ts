@@ -39,7 +39,7 @@ function setup(opts: BattleScreenOptions = {}) {
   })
   const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', ...opts })
   created.push(s)
-  // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+  // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
   s.tick(1500)
   s.tick(200)
   engine.selectAttack()
@@ -131,7 +131,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
     )
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
-    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
     s.tick(1500)
     s.tick(200)
     engine.selectAttack()
@@ -195,7 +195,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
       motion: 'snappy',
     })
     created.push(s)
-    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
     s.tick(1500)
     s.tick(200)
     ;(s as unknown as { playback: unknown }).playback = { queue: events, active: null }
@@ -276,7 +276,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
       motion: 'snappy',
     })
     created.push(sc)
-    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
     sc.tick(1500)
     sc.tick(200)
     ;(sc as unknown as { playback: unknown }).playback = {
@@ -312,7 +312,7 @@ describe('BattleScreen: 味方の被弾にモザイクは掛けない・敵の�
       motion: 'snappy',
     })
     created.push(sc)
-    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
     sc.tick(1500)
     sc.tick(200)
     ;(sc as unknown as { playback: unknown }).playback = {
@@ -346,7 +346,7 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
     })
     const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff', motion })
     created.push(s)
-    // snappy の登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
+    // 登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
     s.tick(1500)
     s.tick(200)
     const v = s as unknown as {
@@ -420,7 +420,7 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
       motion: 'snappy',
     })
     created.push(s)
-    // snappy の登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
+    // 登場スライド (#1037) を済ませる（登場中は演出キューが再生されない）
     s.tick(1500)
     s.tick(200)
     engine.selectAttack()
@@ -840,6 +840,28 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
     })
   })
 
+  describe('motion 未指定・不正値でも ff+side は登場する (#1110)', () => {
+    it.each([undefined, 'bogus'])(
+      'motion=%s: 開始時は画面外・入力は塞がり、登場後に基準位置へ',
+      async (motion) => {
+        mockLoad('instant')
+        const { s } = build({}, { motion: motion as BattleScreenOptions['motion'] })
+        const v = views(s)
+        await flush()
+        expect(v.entranceActive).toBe(true)
+        expect(blocked(s)).toBe(true)
+        expect(v.enemyViews[0].container.x).not.toBe(v.enemyViews[0].baseX)
+        s.tick(1)
+        s.tick(total)
+        expect(v.entranceActive).toBe(false)
+        expect(blocked(s)).toBe(false)
+        for (const view of [...v.enemyViews, ...v.partyViews]) {
+          expect(view.container.x).toBe(view.baseX)
+        }
+      }
+    )
+  })
+
   describe('登場しない構成', () => {
     it('dq・front（default でも）: 位置は従来どおり（基準位置と一致）、入力は塞がらず ATB も動く', async () => {
       mockLoad('instant')
@@ -847,11 +869,7 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
         atb: { mode: 'wait' as const, initialGauges: { party: [0], enemies: [0] } },
         rng: () => 0.5,
       }
-      const cases: BattleScreenOptions[] = [
-        { motion: 'default', presentation: 'dq' },
-        { presentation: 'dq' },
-        { layout: 'front' },
-      ]
+      const cases: BattleScreenOptions[] = [{ presentation: 'dq' }, { layout: 'front' }]
       for (const opts of cases) {
         const { s, engine } = build({}, opts, ATB)
         const v = views(s)

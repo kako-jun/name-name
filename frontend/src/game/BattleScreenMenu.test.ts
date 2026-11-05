@@ -74,7 +74,7 @@ function build(
     })
   )
   created.push(s)
-  // snappy の登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
+  // 登場スライド (#1037) を済ませる（読み込み待ちの見切り 1500ms + 登場 200ms）。登場中は入力が塞がるため
   if (opts.motion === 'snappy' && opts.presentation === 'ff') {
     s.tick(1500)
     s.tick(200)

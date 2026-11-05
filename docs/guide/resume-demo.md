@@ -103,7 +103,7 @@ ff の勝利で、先頭の「戦いに勝った！」に続けて結果のメ�
 確認は「`?config=<URL>` で指定する世界設定 ＋ [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)」をロードする 1 本だけ。手順は「刀の確認」の 1〜3 と同じ（`field.html?resume=0&config=<URL>`）。寺町セーブの読み込み先の世界設定は未解決のため、現状は成り立たない。味方は実際の 4 人、敵は台帳の敵（M149・M147）、背景は BG001。書式は [デバッガガイド](./debugger.md)。
 
 - 見えるもの: 横スライド登場（`default` でも `snappy` でも出る）・`battle.motion: "snappy"` のキビキビした踏み出し、`battle.effects` の `cast` / `magic`・`slash` / `impact`、`battle.enemyList: "window"` の敵名窓（コマンド窓の右隣に敵名が縦に並び、同名はまとまる。台帳の決定）
-- 操作可能までは snappy の登場で約 4〜5 秒（それ以前の入力は効かない）。`cross` が有効なので矢印キーが効く
+- 操作可能までは 登場で約 4〜5 秒（それ以前の入力は効かない）。`cross` が有効なので矢印キーが効く
 - 状態異常・敵レベル・装備・刀のアビリティなど、台帳に内容が無い機能はデモを作らず vitest で確認する（`battleOptions.test.ts`・`enemyLevel.test.ts`・`gearShop.test.ts` など）
 
 **見た目の最終判断は KJ の実機で行う**。
