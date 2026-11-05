@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Text } from 'pixi.js'
 import { BattleScreen } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import { isPlaybackBusy } from './battleMotion'
 import type { BattleEntity } from './spellDsl'
@@ -47,7 +48,7 @@ function make(
     rng: () => 0.5,
     ...(statuses ? { statuses } : {}),
   })
-  const s = new BattleScreen(engine, 800, 450, { layout })
+  const s = skipEntrance(new BattleScreen(engine, 800, 450, { layout }))
   created.push(s)
   return s
 }
@@ -136,7 +137,9 @@ describe('BattleScreen: FF 式は状態名も演出の再生位置で切り替�
       rng: () => 0.5,
       statuses: STATUSES,
     })
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(s)
     return { s, engine }
   }
@@ -174,7 +177,9 @@ describe('BattleScreen: FF 式は状態名も演出の再生位置で切り替�
       [entity('slime', { hp: 999, maxHp: 999, status: { nap: 5 } })],
       { rng: () => 0.5, statuses: NAP }
     )
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(s)
     const label = () => I(s).enemyViews[0].label?.text ?? ''
     const busy = () => isPlaybackBusy((s as unknown as { playback: never }).playback)

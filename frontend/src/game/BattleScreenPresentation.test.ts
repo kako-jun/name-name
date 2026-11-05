@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import { buildActionTimeline, POPUP_TOTAL_MS } from './battleMotion'
@@ -49,12 +50,14 @@ function setup(opts: BattleScreenOptions = {}, enemyHp = 999, closed: string[] =
     [entity('slime', { hp: enemyHp, maxHp: enemyHp, atk: 1 })],
     { rng: () => 0.5 }
   )
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    presentation: 'ff',
-    onClose: (o) => closed.push(o),
-    ...opts,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      onClose: (o) => closed.push(o),
+      ...opts,
+    })
+  )
   created.push(s)
   return { s, engine }
 }
@@ -190,7 +193,9 @@ describe('BattleScreen presentation', () => {
       rng: () => 0.5,
       atb: { mode: 'wait', initialGauges: { party: [1000] } },
     })
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+    )
     created.push(s)
     tap(s, 'attack')
     const g = engine.getState().atb!.partyGauge[0]

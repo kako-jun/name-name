@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { BufferImageSource, Texture, type Container, type Sprite } from 'pixi.js'
 import { BattleScreen, type BattleScreenOptions } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { BattleEffects, BattleEffectSheet } from './battleEffects'
@@ -65,12 +66,14 @@ function setup(effects: BattleEffects | undefined, opts: BattleScreenOptions = {
     rng: () => 0.5,
     skills: {},
   })
-  const s = new BattleScreen(engine, 800, 450, {
-    layout: 'side',
-    presentation: 'ff',
-    ...(effects ? { effects } : {}),
-    ...opts,
-  })
+  const s = skipEntrance(
+    new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      ...(effects ? { effects } : {}),
+      ...opts,
+    })
+  )
   created.push(s)
   return { s, engine }
 }
@@ -312,11 +315,13 @@ describe('BattleScreen エフェクト重ね', () => {
         [entity('boss', { atk: 4 }), entity('imp', { atk: 3 })],
         { rng: lcg(12345), skills: {} }
       )
-      const s = new BattleScreen(engine, 800, 450, {
-        layout: 'side',
-        presentation: 'ff',
-        ...(effects ? { effects } : {}),
-      })
+      const s = skipEntrance(
+        new BattleScreen(engine, 800, 450, {
+          layout: 'side',
+          presentation: 'ff',
+          ...(effects ? { effects } : {}),
+        })
+      )
       created.push(s)
       for (const f of ['sheet.png']) I(s).effectTextures.set(f, sheetTexture(4))
       return { s, engine }

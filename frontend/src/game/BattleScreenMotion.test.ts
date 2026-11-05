@@ -636,7 +636,8 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
 
   it('全員同時に着く（遅れ 0）: 終了の 1ms 前は敵も味方も途中、終了の tick で同時に元の位置', async () => {
     mockLoad('instant')
-    const rest = build({}, { motion: 'default' })
+    // 登場なしの基準位置は dq（default も ff+side では登場する #1110）
+    const rest = build({}, { presentation: 'dq' })
     await flush()
     const restE = views(rest.s).enemyViews[0].container.x
     const restP = views(rest.s).partyViews[0].container.x

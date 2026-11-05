@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Container, Text } from 'pixi.js'
 import { BattleScreen } from './BattleScreen'
+import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import {
@@ -42,7 +43,7 @@ const I = (s: BattleScreen): Internals => s as unknown as Internals
 const created: BattleScreen[] = []
 function setup(enemies: BattleEntity[], hero: Partial<BattleEntity> = {}) {
   const engine = new BattleEngine([entity('hero', hero)], enemies, { rng: () => 0.5 })
-  const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' })
+  const s = skipEntrance(new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'ff' }))
   created.push(s)
   return { s, engine }
 }
@@ -167,11 +168,13 @@ describe('FF 式 複数ヒットの順次再生', () => {
     const engine = new BattleEngine([entity('hero')], [entity('slime', { hp: 25, maxHp: 25 })], {
       rng: () => 0.5,
     })
-    const s = new BattleScreen(engine, 800, 450, {
-      layout: 'side',
-      presentation: 'ff',
-      onClose: (o) => closed.push(o),
-    })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        onClose: (o) => closed.push(o),
+      })
+    )
     created.push(s)
     engine.selectSpell({ name: 'れんぞく', mp: 1, target: '敵単体', effect: 'damage 10 回数=5' })
     s.redraw(800, 450)
