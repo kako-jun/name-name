@@ -75,6 +75,30 @@ export interface ItemDef {
      * 大切なものか (#1111。`大切: はい|いいえ`)。書かないは None、読めない値は false。JSON / TS 側のキーは `key`。
      */
     key?: boolean;
+    /**
+     * 売り物の区分 (#1115。`売り物: 刀|防具`)。値は `\"blade\"` / `\"armor\"` に正規化して透過する。書かない・読めない値は None。JSON / TS 側のキーは `shopKind`。
+     */
+    shopKind?: string;
+    /**
+     * 売り物の持ち主の人物 id (#1115。`持ち主:`)。空白・`,` を含まない 1 語。読めない値は None。
+     */
+    owner?: string;
+    /**
+     * 刀の 1 本目の値段・円 (#1115。`基準額:` 0 以上の整数)。書かない・読めない値は None。JSON / TS 側のキーは `basePrice`。
+     */
+    basePrice?: number;
+    /**
+     * 購入解禁のフラグ名 (#1115。`解禁:`)。空白・`,` を含まない 1 語。JSON / TS 側のキーは `unlockFlag`。
+     */
+    unlockFlag?: string;
+    /**
+     * 一覧に出す画像のパス (#1115。`画像:`)。空白と `]` を含まない 1 語。読めない値は None。
+     */
+    image?: string;
+    /**
+     * 解禁前に出す文 (#1115。`解禁前の文:`)。生文字列で透過する。JSON / TS 側のキーは `lockedMessage`。
+     */
+    lockedMessage?: string;
 }
 
 /**

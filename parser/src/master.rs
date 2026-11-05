@@ -487,7 +487,95 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
         category: value(&["区分", "category"]),
         field_use: collect_field_use(&label, entries),
         key: collect_key_flag(&label, entries),
+        // 売り物の項目 (#1115)。値の決定（持ち主・値段）はここに持たず、書かれた値を透過する
+        shop_kind: collect_shop_kind(&label, entries),
+        owner: collect_shop_word(&label, entries, "持ち主", &["持ち主", "owner"], true),
+        base_price: collect_base_price(&label, entries),
+        unlock_flag: collect_shop_word(
+            &label,
+            entries,
+            "解禁",
+            &["解禁", "unlock_flag", "unlockFlag"],
+            false,
+        ),
+        image: collect_shop_image(&label, entries),
+        locked_message: value(&["解禁前の文", "locked_message", "lockedMessage"]),
     }
+}
+
+/// `売り物:` を `blade` / `armor` に読む (#1115)。空は未指定、刀・防具以外は警告して未指定。
+fn collect_shop_kind(label: &str, entries: &[(String, String)]) -> Option<String> {
+    let raw = lookup_master_value(entries, &["売り物", "shop_kind", "shopKind"])?.trim();
+    match raw.to_lowercase().as_str() {
+        "" => None,
+        "刀" | "blade" => Some("blade".to_string()),
+        "防具" | "armor" => Some("armor".to_string()),
+        _ => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [{label}] の 売り物 `{raw}` は読めないため 未指定 にした（刀 / 防具）"
+            ));
+            None
+        }
+    }
+}
+
+/// `基準額:` を 0 以上の整数として読む (#1115)。空は未指定、読めない値は警告して未指定。
+fn collect_base_price(label: &str, entries: &[(String, String)]) -> Option<u32> {
+    let raw = lookup_master_value(entries, &["基準額", "base_price", "basePrice"])?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.parse::<u32>() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [{label}] の 基準額 `{raw}` は読めないため 未指定 にした（0 以上の整数）"
+            ));
+            None
+        }
+    }
+}
+
+/// `持ち主:` `解禁:` を空白・`,` を含まない 1 語として読む (#1115)。
+/// 空は未指定（`warn_empty` のとき警告する）、2 語以上は警告して未指定。
+fn collect_shop_word(
+    label: &str,
+    entries: &[(String, String)],
+    name: &str,
+    keys: &[&str],
+    warn_empty: bool,
+) -> Option<String> {
+    let raw = lookup_master_value(entries, keys)?.trim();
+    if raw.is_empty() {
+        if warn_empty {
+            emit_warning(&format!(
+                "[name-name-parser] warning: [{label}] の {name} が空のため 未指定 にした（空白を含まない 1 語）"
+            ));
+        }
+        return None;
+    }
+    if raw.contains(',') || raw.contains(char::is_whitespace) {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [{label}] の {name} `{raw}` は読めないため 未指定 にした（空白を含まない 1 語）"
+        ));
+        return None;
+    }
+    Some(raw.to_string())
+}
+
+/// `画像:` を空白と `]` を含まない 1 語として読む (#1115)。空は未指定、読めない値は警告して未指定。
+fn collect_shop_image(label: &str, entries: &[(String, String)]) -> Option<String> {
+    let raw = lookup_master_value(entries, &["画像", "image"])?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.contains(']') || raw.contains(char::is_whitespace) {
+        emit_warning(&format!(
+            "[name-name-parser] warning: [{label}] の 画像 `{raw}` は読めないため 未指定 にした（空白と ] を含まない 1 語）"
+        ));
+        return None;
+    }
+    Some(raw.to_string())
 }
 
 /// `初期所持:` を 0 以上の整数として読む (#1111)。空は未指定、読めない値（全角数字・負数・小数を含む）は警告して未指定。

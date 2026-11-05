@@ -3615,3 +3615,63 @@ describe('parseMarkdown: アイテム・呪文のメニュー用キー (#1111)',
     expect(again.chapters[0].scenes[0].events).toEqual(evs)
   })
 })
+
+// #1115 (S2f): [アイテム] の売り物のキー。tracked wasm が解釈し、決定値（10,000 円・5,000 円）の例が往復することを縛る。
+describe('parseMarkdown: アイテムの売り物のキー (#1115)', () => {
+  const md = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## data: マスター',
+    '',
+    '[アイテム kogarasu]',
+    '名前: 小烏丸',
+    '種別: 武器',
+    '売り物: 刀',
+    '持ち主: paco',
+    '基準額: 10000',
+    '画像: assets/blade/kogarasu.webp',
+    '装備時: atk+5',
+    'わざ: slash',
+    '[/アイテム]',
+    '[アイテム gi]',
+    '名前: 胴着',
+    '種別: 防具',
+    '価格: 5000',
+    '売り物: 防具',
+    '解禁: shop_open',
+    '解禁前の文: まだ買えません',
+    '[/アイテム]',
+    '',
+  ].join('\n')
+
+  it('ItemDef に shopKind・owner・basePrice・unlockFlag・image・lockedMessage が届き、往復で変わらない', async () => {
+    const doc = await parseMarkdown(md)
+    const evs = doc.chapters[0].scenes[0].events
+    expect(evs[0]).toMatchObject({
+      Item: {
+        id: 'kogarasu',
+        shopKind: 'blade',
+        owner: 'paco',
+        basePrice: 10000,
+        image: 'assets/blade/kogarasu.webp',
+        equipBonus: 'atk+5',
+        abilities: ['slash'],
+      },
+    })
+    expect(evs[1]).toMatchObject({
+      Item: {
+        id: 'gi',
+        price: 5000,
+        shopKind: 'armor',
+        unlockFlag: 'shop_open',
+        lockedMessage: 'まだ買えません',
+      },
+    })
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.chapters[0].scenes[0].events).toEqual(evs)
+  })
+})

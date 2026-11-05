@@ -11895,3 +11895,129 @@ mod master_menu_keys_tests {
         );
     }
 }
+
+/// #1115 S2f: `[アイテム]` の売り物のキー（売り物・持ち主・基準額・解禁・画像・解禁前の文）。
+#[cfg(test)]
+mod master_gear_keys_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str =
+        "---\nengine: name-name\nchapter: 1\ntitle: \"test\"\n---\n## data: マスター\n\n";
+
+    fn item(extra: &str) -> ItemDef {
+        let doc = parse(&format!(
+            "{HEAD}[アイテム katana]\n名前: 刀\n種別: 武器\n{extra}[/アイテム]\n"
+        ));
+        match &doc.chapters[0].scenes[0].events[0] {
+            Event::Item(it) => it.clone(),
+            other => panic!("expected Item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unspecified_keys_leave_output_unchanged() {
+        let _ = take_test_warnings();
+        let body = "[アイテム やくそう]\n名前: やくそう\n種別: 回復\n価格: 8\n効果: heal 30\n[/アイテム]\n";
+        let doc = parse(&format!("{HEAD}{body}"));
+        assert!(emit(&doc).ends_with(body));
+        assert!(take_test_warnings().is_empty());
+        let json = serde_json::to_string(&doc).unwrap();
+        for k in [
+            "shopKind",
+            "\"owner\"",
+            "basePrice",
+            "unlockFlag",
+            "\"image\"",
+            "lockedMessage",
+        ] {
+            assert!(!json.contains(k), "{k}: {json}");
+        }
+    }
+
+    /// 決定値（刀の基準額 10,000 円・防具の固定 5,000 円）を含む例が parse -> emit -> parse で往復する。値の検査はしない。
+    #[test]
+    fn gear_keys_parse_and_round_trip_with_decided_values() {
+        let _ = take_test_warnings();
+        let body = "[アイテム kogarasu]\n名前: 小烏丸\n種別: 武器\n売り物: 刀\n持ち主: paco\n基準額: 10000\n画像: assets/blade/kogarasu.webp\n装備時: atk+5\nわざ: slash\n[/アイテム]\n[アイテム gi]\n名前: 胴着\n種別: 防具\n価格: 5000\n売り物: 防具\n解禁: shop_open\n画像: assets/armor/gi.webp\n解禁前の文: まだ買えません: 店が閉まっている\n[/アイテム]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        assert!(emitted.ends_with(body), "{emitted}");
+        assert_eq!(doc1, parse(&emitted));
+        assert!(take_test_warnings().is_empty());
+        let it = item("売り物: 刀\n持ち主: paco\n基準額: 10000\n解禁: f1\n画像: a/b.webp\n解禁前の文: せつ: めい\n");
+        assert_eq!(it.shop_kind.as_deref(), Some("blade"));
+        assert_eq!(it.owner.as_deref(), Some("paco"));
+        assert_eq!(it.base_price, Some(10000));
+        assert_eq!(it.unlock_flag.as_deref(), Some("f1"));
+        assert_eq!(it.image.as_deref(), Some("a/b.webp"));
+        assert_eq!(it.locked_message.as_deref(), Some("せつ: めい"));
+        let json = serde_json::to_string(&it).unwrap();
+        for k in [
+            "\"shopKind\":\"blade\"",
+            "\"basePrice\":10000",
+            "\"unlockFlag\":\"f1\"",
+            "\"lockedMessage\"",
+        ] {
+            assert!(json.contains(k), "{k}: {json}");
+        }
+        // 別名・防具
+        let it = item("shop_kind: armor\nowner: o\nbase_price: 0\nunlock_flag: u\nimage: i\nlocked_message: m\n");
+        assert_eq!(it.shop_kind.as_deref(), Some("armor"));
+        assert_eq!(it.base_price, Some(0));
+    }
+
+    #[test]
+    fn empty_values_are_unspecified() {
+        let _ = take_test_warnings();
+        let it = item("売り物:\n基準額:\n解禁:\n画像:\n解禁前の文:\n");
+        assert_eq!(
+            (
+                it.shop_kind,
+                it.base_price,
+                it.unlock_flag,
+                it.image,
+                it.locked_message
+            ),
+            (None, None, None, None, None)
+        );
+        assert!(take_test_warnings().is_empty());
+        // 持ち主が空だけは警告する
+        assert_eq!(item("持ち主:\n").owner, None);
+        assert_eq!(
+            take_test_warnings(),
+            vec!["[name-name-parser] warning: [アイテム katana] の 持ち主 が空のため 未指定 にした（空白を含まない 1 語）".to_string()]
+        );
+    }
+
+    #[test]
+    fn invalid_values_warn_and_fall_back() {
+        let _ = take_test_warnings();
+        assert_eq!(item("売り物: 槍\n").shop_kind, None);
+        assert_eq!(
+            take_test_warnings(),
+            vec!["[name-name-parser] warning: [アイテム katana] の 売り物 `槍` は読めないため 未指定 にした（刀 / 防具）".to_string()]
+        );
+        for bad in ["-1", "１０００", "1.5", "abc", "99999999999"] {
+            assert_eq!(item(&format!("基準額: {bad}\n")).base_price, None, "{bad}");
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 5, "{w:?}");
+        assert_eq!(
+            w[0],
+            "[name-name-parser] warning: [アイテム katana] の 基準額 `-1` は読めないため 未指定 にした（0 以上の整数）"
+        );
+        let it = item("持ち主: a b\n解禁: x,y\n画像: a b.webp\n");
+        assert_eq!((it.owner, it.unlock_flag, it.image), (None, None, None));
+        assert_eq!(
+            take_test_warnings(),
+            vec![
+                "[name-name-parser] warning: [アイテム katana] の 持ち主 `a b` は読めないため 未指定 にした（空白を含まない 1 語）".to_string(),
+                "[name-name-parser] warning: [アイテム katana] の 解禁 `x,y` は読めないため 未指定 にした（空白を含まない 1 語）".to_string(),
+                "[name-name-parser] warning: [アイテム katana] の 画像 `a b.webp` は読めないため 未指定 にした（空白と ] を含まない 1 語）".to_string(),
+            ]
+        );
+        assert_eq!(item("画像: a]b\n").image, None);
+        let _ = take_test_warnings();
+    }
+}
