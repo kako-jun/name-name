@@ -26,7 +26,7 @@ import {
 } from './rpgSave'
 import type { BattleEntity } from './spellDsl'
 
-// 基準額・防具の価格は「仮」の値（本当の値は kako-jun が決める）
+// 基準額・防具の価格はテスト用の値（100 円など）。決定値（基準額 10,000 円・防具 5,000 円）とは別
 const cfg: GearShopConfig = {
   multiplier: 2,
   entries: [
@@ -55,6 +55,12 @@ describe('priceOf: 値段 = 基準額 × 倍率^購入済み本数', () => {
       const st = own(ids.slice(0, n))
       expect(priceOf(cfg, st, 'p1', id)).toBe(100 * 2 ** n)
     })
+  })
+  it('同じ刀の重複を保存から読んでも 1 本として数える（次の値段が変わらない）', () => {
+    const dup: GearState = { owned: { p1: ['a1', 'a1'] }, blade: {} }
+    const resolved = resolveGear(dup, cfg).state
+    expect(priceOf(cfg, resolved, 'p1', 'a2')).toBe(priceOf(cfg, own(['a1']), 'p1', 'a2'))
+    expect(priceOf(cfg, resolved, 'p1', 'a2')).toBe(200)
   })
   it('倍率を変えられる・端数は切り捨て', () => {
     const c: GearShopConfig = {
@@ -319,7 +325,7 @@ describe('parseGearShopConfig', () => {
   it('正常: 倍率の既定は 2', () => {
     const r = parseGearShopConfig({
       entries: [
-        { id: 'a1', kind: 'blade', owner: 'p1', basePrice: 100, unlockFlag: 'phone' }, // 仮の値
+        { id: 'a1', kind: 'blade', owner: 'p1', basePrice: 100, unlockFlag: 'phone' }, // テスト用の値
         { id: 'v', kind: 'armor', price: 800 },
       ],
     })
@@ -333,7 +339,7 @@ describe('parseGearShopConfig', () => {
       unlockFlag: 'phone',
     })
   })
-  it('equipBonus (#881 段階2): 文字列が読まれ、読めない項目・不正な型は警告する（能力値は仮）', () => {
+  it('equipBonus (#881 段階2): 文字列が読まれ、読めない項目・不正な型は警告する（能力値はテスト用の値）', () => {
     const r = parseGearShopConfig({
       entries: [
         { id: 'a', kind: 'blade', owner: 'p', equipBonus: ' atk+5, def-1 ' },
@@ -371,7 +377,7 @@ describe('parseGearShopConfig', () => {
   it('画像: image が読まれ、無ければキーなし・不正は警告して画像なし。別名 画像 は読まない', () => {
     const r = parseGearShopConfig({
       entries: [
-        { id: 'a', kind: 'blade', owner: 'p', image: 'dummy/blade-a.png' }, // 仮パス（マスターからの派生画像は未作成）
+        { id: 'a', kind: 'blade', owner: 'p', image: 'dummy/blade-a.png' }, // ダミーのパス（マスターからの派生画像は未作成）
         { id: 'b', kind: 'blade', owner: 'p', 画像: 'dummy/b.png' },
         { id: 'c', kind: 'blade', owner: 'p' },
         { id: 'd', kind: 'blade', owner: 'p', image: 3 },

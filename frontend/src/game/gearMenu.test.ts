@@ -1,4 +1,4 @@
-/** アプリストア・そうび画面の計算部 (#881 段階2 / gearMenu.ts) のテスト。値段・能力値の数値は「仮」 */
+/** アプリストア・そうび画面の計算部 (#881 段階2 / gearMenu.ts) のテスト。値段・能力値の数値はテスト用の値（決定値とは別） */
 import { describe, expect, it } from 'vitest'
 import {
   bonusDelta,

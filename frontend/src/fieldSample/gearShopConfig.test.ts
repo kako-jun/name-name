@@ -28,7 +28,7 @@ describe('parseConfig の gearShop (#881)', () => {
     expect((r.value.warnings ?? []).filter((w) => w.includes('gearShop'))).toEqual([])
   })
 
-  it('書くと読まれる（値は仮）', () => {
+  it('書くと読まれる（値はテスト用）', () => {
     const raw = {
       ...buildDummyFixture(),
       gearShop: { entries: [{ id: 'blade1', kind: 'blade', owner: 'party1', basePrice: 100 }] },
