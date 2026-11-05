@@ -775,23 +775,42 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                         .map(|r| r.strip_suffix(']').unwrap_or(r))
                 };
                 let type1 = |h: &str| trimmed.strip_prefix(h).and_then(|r| r.strip_suffix(']'));
-                let parsed: Option<Option<Event>> =
-                    match head {
-                        "メニュー" if trimmed == "[メニュー]" => {
-                            Some(Some(Event::FieldMenu(FieldMenuData {
-                                items: Vec::new(),
-                                transition: None,
-                            })))
-                        }
-                        "メニュー" => type1("[メニュー:")
-                            .map(|inner| parse_field_menu(inner, line_no, trimmed)),
-                        "メニュー項目" => type2("[メニュー項目")
-                            .map(|inner| parse_field_menu_item(inner, line_no, trimmed)),
-                        "操作画像" => type2("[操作画像")
-                            .map(|inner| parse_field_ui_images(inner, line_no, trimmed)),
-                        _ => type1("[通貨名:")
-                            .map(|inner| parse_field_currency(inner, line_no, trimmed)),
-                    };
+                // 値の中に `]` が残っている（`[メニュー: a]]` `[メニュー項目 a 理由=b]c]` など）行は捨てる
+                let tag = match head {
+                    "メニュー" => "[メニュー:]",
+                    "メニュー項目" => "[メニュー項目]",
+                    "操作画像" => "[操作画像]",
+                    _ => "[通貨名:]",
+                };
+                let guarded = |inner: &str, f: &dyn Fn(&str) -> Option<Event>| -> Option<Event> {
+                    if inner.contains(']') {
+                        emit_warning(&format!(
+                            "[name-name-parser] warning: {line_no} 行目の {tag} は値に ] を含むため読み捨てた: {}",
+                            truncate_for_warning(trimmed)
+                        ));
+                        return None;
+                    }
+                    f(inner)
+                };
+                let parsed: Option<Option<Event>> = match head {
+                    "メニュー" if trimmed == "[メニュー]" => {
+                        Some(Some(Event::FieldMenu(FieldMenuData {
+                            items: Vec::new(),
+                            transition: None,
+                        })))
+                    }
+                    "メニュー" => type1("[メニュー:")
+                        .map(|inner| guarded(inner, &|i| parse_field_menu(i, line_no, trimmed))),
+                    "メニュー項目" => type2("[メニュー項目").map(|inner| {
+                        guarded(inner, &|i| parse_field_menu_item(i, line_no, trimmed))
+                    }),
+                    "操作画像" => type2("[操作画像").map(|inner| {
+                        guarded(inner, &|i| parse_field_ui_images(i, line_no, trimmed))
+                    }),
+                    _ => type1("[通貨名:").map(|inner| {
+                        guarded(inner, &|i| parse_field_currency(i, line_no, trimmed))
+                    }),
+                };
                 match parsed {
                     Some(ev) => {
                         if let Some(ev) = ev {
@@ -801,6 +820,8 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                     None => {
                         let why = if trimmed.ends_with(']') {
                             format!("書式が違うため(書式: {fmt})")
+                        } else if trimmed.contains(']') {
+                            "行末が ] でないため".to_string()
                         } else {
                             "閉じ括弧 ] がないため".to_string()
                         };
@@ -11590,6 +11611,32 @@ mod field_menu_notation_tests {
     }
 
     #[test]
+    fn stray_closing_bracket_in_value_warns_and_drops_line() {
+        for (line, tag) in [
+            ("[メニュー: a]]", "[メニュー:]"),
+            ("[メニュー: a, b]c]", "[メニュー:]"),
+            ("[メニュー項目 a 理由=b]c]", "[メニュー項目]"),
+            ("[操作画像 手=a]b.webp]", "[操作画像]"),
+            ("[通貨名: 円]]", "[通貨名:]"),
+        ] {
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(
+                w,
+                vec![format!(
+                    "[name-name-parser] warning: 9 行目の {tag} は値に ] を含むため読み捨てた: {line}"
+                )],
+                "{line}"
+            );
+            assert!(evs.iter().all(|e| !is_menu_event(e)), "{line}");
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
     fn warning_text_is_fixed() {
         let _ = events_of("[メニュー項目 id 無効=yes]\n");
         let w = take_test_warnings();
@@ -11622,6 +11669,10 @@ mod field_menu_notation_tests {
             ("[操作画像: 倍率=2]", "書式が違う"),
             ("[通貨名]", "書式が違う"),
             ("[通貨名 円]", "書式が違う"),
+            ("[メニュー] 余分", "行末が ] でない"),
+            ("[メニュー: a] // x", "行末が ] でない"),
+            ("[メニュー項目 id 無効=true] x", "行末が ] でない"),
+            ("[通貨名: 円] x", "行末が ] でない"),
             ("[メニュー: どうぐ", "閉じ括弧 ] がない"),
             ("[メニュー", "閉じ括弧 ] がない"),
             ("[メニュー項目 id 無効=true", "閉じ括弧 ] がない"),

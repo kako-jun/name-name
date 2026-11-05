@@ -3554,4 +3554,13 @@ describe('parseMarkdown: 一枚絵フィールドのメニュー・操作画像�
     const again = await parseMarkdown(emitted)
     expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
+
+  it('値に ] が残る行は捨てられ、後続の行は読まれる', async () => {
+    const doc = await parseMarkdown([...head, '[メニュー: a]]', '[通貨名: 円]', ''].join('\n'))
+    const evs = doc.chapters[0].scenes[0].events.filter(
+      (e): e is Exclude<typeof e, string> => typeof e !== 'string'
+    )
+    expect(evs.some((e) => 'FieldMenu' in e)).toBe(false)
+    expect(evs.find((e) => 'Currency' in e)).toEqual({ Currency: '円' })
+  })
 })
