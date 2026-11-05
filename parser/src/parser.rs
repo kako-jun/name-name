@@ -642,6 +642,68 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
             continue;
         }
 
+        // 一枚絵フィールドの場面の中身 (#1102): N4 [端 …] / N5 [ワープ 名前 → …] / N7 [揺れ: …] / N8 [窓の景色: …]
+        // 不正は行番号つき警告でその行だけ捨てる（後続の行は読む）。
+        {
+            let line_no = pos as i64 + 1 + line_base;
+            let type2 = |head: &str| {
+                trimmed
+                    .strip_prefix(head)
+                    .filter(|r| r.starts_with(char::is_whitespace) && r.ends_with(']'))
+                    .map(|r| r.strip_suffix(']').unwrap_or(r))
+            };
+            let type1 = |head: &str| trimmed.strip_prefix(head).and_then(|r| r.strip_suffix(']'));
+            let parsed: Option<Option<Event>> = if let Some(inner) = type2("[端") {
+                Some(parse_field_edge(inner, line_no, trimmed))
+            } else if let Some(inner) = type2("[ワープ") {
+                Some(parse_field_warp(inner, line_no, trimmed))
+            } else if let Some(inner) = type1("[揺れ:") {
+                Some(parse_field_shake(inner, line_no, trimmed))
+            } else {
+                type1("[窓の景色:").map(|inner| parse_field_scroll(inner, line_no, trimmed))
+            };
+            if let Some(ev) = parsed {
+                if let Some(ev) = ev {
+                    current_events.push(ev);
+                }
+                pos += 1;
+                continue;
+            }
+        }
+
+        // N4/N5/N7/N8 の頭を持つのに上で読めなかった行 (#1102)。黙って捨てず行番号つきで警告する。
+        // 閉じ `]` なし、または型の取り違え（`[端: x]` `[揺れ 縦=6]` `[ワープ]` など）。
+        // 正しい `[ワープ: 名前]`（イベント専用）は下の event_only_command が専用警告を出すので除く。
+        {
+            let head = directive_head_name(trimmed);
+            let fmt = match head {
+                "端" => Some("[端 方向 範囲=a..b → 場面ID]"),
+                "ワープ" => {
+                    Some("[ワープ 名前 → 場面ID @x,y …] / [イベント] 内の [ワープ: 名前]")
+                }
+                "揺れ" => Some("[揺れ: 縦=…, 周期=…]"),
+                "窓の景色" => Some("[窓の景色: path, 速度=…, y=…]"),
+                _ => None,
+            };
+            if let Some(fmt) = fmt {
+                if !(head == "ワープ" && trimmed.starts_with("[ワープ:") && trimmed.ends_with(']'))
+                {
+                    let why = if trimmed.ends_with(']') {
+                        format!("書式が違うため(書式: {fmt})")
+                    } else {
+                        "閉じ括弧 ] がないため".to_string()
+                    };
+                    emit_warning(&format!(
+                        "[name-name-parser] warning: {} 行目は{why}読み捨てた: {}",
+                        pos as i64 + 1 + line_base,
+                        truncate_for_warning(trimmed)
+                    ));
+                    pos += 1;
+                    continue;
+                }
+            }
+        }
+
         // エンカウント率 (#172): 直前の RpgMap に注入する単行ディレクティブ
         // [エンカウント率: 16] / [エンカウント率: 1/16]（後者は分母 16 を抽出）/
         // [エンカウント率: 0]（安全マップ：街・室内）
@@ -819,6 +881,39 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                                 });
                             }
                             commands.push(EventCommand::FieldEnd);
+                            pos += 1;
+                            continue;
+                        }
+                        // [ワープ: 名前] (#1102)。`[ワープ 名前 → …]` の宣言を名前で呼ぶ。名前は空白を含まない1語
+                        if let Some(rest) = cmd_line
+                            .strip_prefix("[ワープ:")
+                            .and_then(|r| r.strip_suffix(']'))
+                        {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            let name = rest.trim();
+                            if name.is_empty() || name.contains(char::is_whitespace) {
+                                emit_warning(&format!(
+                                    "[name-name-parser] warning: {} 行目の [ワープ:] は名前が空か空白を含むため読み捨てた: {}",
+                                    pos as i64 + 1 + line_base,
+                                    truncate_for_warning(cmd_line)
+                                ));
+                            } else {
+                                commands.push(EventCommand::Warp {
+                                    id: name.to_string(),
+                                });
+                            }
                             pos += 1;
                             continue;
                         }
@@ -4075,6 +4170,11 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     "フィールドマップ",
     "フィールド",
     "フィールド終了",
+    // 一枚絵フィールドの場面の中身 (#1102)
+    "端",
+    "ワープ",
+    "揺れ",
+    "窓の景色",
     // マスターデータブロック (master.rs)
     "モンスター",
     "アイテム",
@@ -4095,10 +4195,14 @@ fn event_only_command(line: &str) -> Option<&'static str> {
     if line == "[フィールド終了]" {
         return Some("[フィールド終了]");
     }
-    [("NPC移動", "[NPC移動:]"), ("戦闘", "[戦闘:]")]
-        .into_iter()
-        .find(|(name, _)| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
-        .map(|(_, label)| label)
+    [
+        ("NPC移動", "[NPC移動:]"),
+        ("戦闘", "[戦闘:]"),
+        ("ワープ", "[ワープ:]"),
+    ]
+    .into_iter()
+    .find(|(name, _)| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
+    .map(|(_, label)| label)
 }
 
 /// `[名前: …]` / `[/名前]` の名前部分（閉じタグは `/` 付きのまま）を返す。`[` 始まりでなければ空文字。
@@ -4306,6 +4410,248 @@ fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> 
         x,
         y,
         direction,
+    })
+}
+
+fn parse_direction_word(s: &str) -> Option<Direction> {
+    match s {
+        "上" | "up" | "Up" => Some(Direction::Up),
+        "下" | "down" | "Down" => Some(Direction::Down),
+        "左" | "left" | "Left" => Some(Direction::Left),
+        "右" | "right" | "Right" => Some(Direction::Right),
+        _ => None,
+    }
+}
+
+/// 有限の数 (f64)。`inf` `nan` は不可 (#1102)。
+fn parse_finite(s: &str) -> Option<f64> {
+    s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// `[端 方向 範囲=a..b → 場面ID]` の `[端` 以降（`]` なし）をパースする (#1102)。不正なら警告して None。
+fn parse_field_edge(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [端] は{why}のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+    };
+    let Some((before, after)) = inner.split_once('→') else {
+        warn("行き先 → 場面ID がない");
+        return None;
+    };
+    let target = after.trim();
+    if target.is_empty() || target.contains(char::is_whitespace) || target.contains('=') {
+        warn(&format!("行き先の場面ID \"{target}\" が不正"));
+        return None;
+    }
+    let mut toks = before.split_whitespace();
+    let Some(dir_tok) = toks.next() else {
+        warn("方向がない");
+        return None;
+    };
+    let Some(direction) = parse_direction_word(dir_tok) else {
+        warn(&format!("方向 {dir_tok} が 上/下/左/右 でない"));
+        return None;
+    };
+    let mut range: Option<(u32, u32)> = None;
+    for tok in toks {
+        let Some(val) = tok.strip_prefix("範囲=") else {
+            warn(&format!("未知の指定 \"{tok}\""));
+            return None;
+        };
+        let parsed = val
+            .split_once("..")
+            .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)));
+        let Some((a, b)) = parsed else {
+            warn(&format!("範囲={val} が a..b（整数）でない"));
+            return None;
+        };
+        if a > b {
+            warn(&format!("範囲={val} が 小≤大 でない"));
+            return None;
+        }
+        range = Some((a, b));
+    }
+    let Some((range_from, range_to)) = range else {
+        warn("範囲= がない");
+        return None;
+    };
+    Some(Event::FieldEdge(FieldEdgeData {
+        direction,
+        range_from,
+        range_to,
+        target: target.to_string(),
+    }))
+}
+
+/// `[ワープ 名前 → 場面ID @x,y 向き=左 演出=フラッシュ 時間=250/150/500]` の `[ワープ` 以降（`]` なし）を
+/// パースする (#1102)。到着位置 `@x,y` は必須。不正なら警告して None。
+fn parse_field_warp(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [ワープ] は{why}のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+    };
+    let Some((before, after)) = inner.split_once('→') else {
+        warn("行き先 → 場面ID がない");
+        return None;
+    };
+    let name = before.trim();
+    if name.is_empty()
+        || name.contains(char::is_whitespace)
+        || name.contains('=')
+        || name.starts_with('@')
+    {
+        warn("名前がない、または空白・= を含む");
+        return None;
+    }
+    let mut toks = after.split_whitespace();
+    let target = match toks.next() {
+        Some(t) if !t.starts_with('@') && !t.contains('=') => t.to_string(),
+        _ => {
+            warn("行き先の場面IDがない");
+            return None;
+        }
+    };
+    let mut at: Option<(u32, u32)> = None;
+    let (mut direction, mut effect, mut timing_ms) = (None, None, None);
+    for tok in toks {
+        if let Some(coord) = tok.strip_prefix('@') {
+            let parsed = coord
+                .split_once(',')
+                .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)));
+            let Some(xy) = parsed else {
+                warn(&format!("座標 \"{tok}\" が @x,y（整数）でない"));
+                return None;
+            };
+            at = Some(xy);
+        } else if let Some(val) = tok.strip_prefix("向き=") {
+            let Some(d) = parse_direction_word(val) else {
+                warn(&format!("向き={val} が 上/下/左/右 でない"));
+                return None;
+            };
+            direction = Some(d);
+        } else if let Some(val) = tok.strip_prefix("演出=") {
+            effect = Some(match val {
+                "フェード" | "fade" => WarpEffect::Fade,
+                "フラッシュ" | "flash" => WarpEffect::Flash,
+                _ => {
+                    warn(&format!("演出={val} が フェード/フラッシュ でない"));
+                    return None;
+                }
+            });
+        } else if let Some(val) = tok.strip_prefix("時間=") {
+            let parts: Vec<&str> = val.split('/').collect();
+            let nums: Vec<u32> = parts.iter().filter_map(|p| p.parse::<u32>().ok()).collect();
+            if parts.len() != 3 || nums.len() != 3 {
+                warn(&format!(
+                    "時間={val} が out/hold/in の ms（整数）3つを / で区切った形でない"
+                ));
+                return None;
+            }
+            timing_ms = Some([nums[0], nums[1], nums[2]]);
+        } else {
+            warn(&format!("未知の指定 \"{tok}\""));
+            return None;
+        }
+    }
+    let Some((x, y)) = at else {
+        warn("到着位置 @x,y がない");
+        return None;
+    };
+    Some(Event::FieldWarp(FieldWarpData {
+        name: name.to_string(),
+        target,
+        x,
+        y,
+        direction,
+        effect,
+        timing_ms,
+    }))
+}
+
+/// `[揺れ: 縦=6, 周期=600]` の `:` 以降（`]` なし）をパースする (#1102)。縦=正の数（必須）、周期=ms の正の数（省略可）。
+fn parse_field_shake(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [揺れ:] は{why}のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+    };
+    let (mut amplitude_y, mut period_ms): (Option<f64>, Option<f64>) = (None, None);
+    for tok in inner.split(',').map(str::trim) {
+        let Some((key, val)) = tok.split_once('=') else {
+            warn(&format!("指定 \"{tok}\" が キー=値 の形でない"));
+            return None;
+        };
+        let key = key.trim();
+        let Some(v) = parse_finite(val).filter(|v| *v > 0.0) else {
+            warn(&format!("{key}={} が 0 より大きい数でない", val.trim()));
+            return None;
+        };
+        match key {
+            "縦" => amplitude_y = Some(v),
+            "周期" => period_ms = Some(v),
+            _ => {
+                warn(&format!("未知の指定 {key}="));
+                return None;
+            }
+        }
+    }
+    let Some(amplitude_y) = amplitude_y else {
+        warn("必須の 縦= がない");
+        return None;
+    };
+    Some(Event::FieldShake {
+        amplitude_y,
+        period_ms,
+    })
+}
+
+/// `[窓の景色: path, 速度=60, y=0]` の `:` 以降（`]` なし）をパースする (#1102)。path と 速度= は必須、y= は省略可。
+fn parse_field_scroll(inner: &str, line_no: i64, line: &str) -> Option<Event> {
+    let warn = |why: &str| {
+        emit_warning(&format!(
+            "[name-name-parser] warning: {line_no} 行目の [窓の景色:] は{why}のため読み捨てた: {}",
+            truncate_for_warning(line)
+        ));
+    };
+    let mut toks = inner.split(',').map(str::trim);
+    let image = toks.next().unwrap_or("");
+    if image.is_empty() || image.contains('=') {
+        warn("path がない");
+        return None;
+    }
+    let (mut speed, mut y): (Option<f64>, Option<f64>) = (None, None);
+    for tok in toks {
+        let Some((key, val)) = tok.split_once('=') else {
+            warn(&format!("指定 \"{tok}\" が キー=値 の形でない"));
+            return None;
+        };
+        let key = key.trim();
+        let Some(v) = parse_finite(val) else {
+            warn(&format!("{key}={} が数でない", val.trim()));
+            return None;
+        };
+        match key {
+            "速度" => speed = Some(v),
+            "y" => y = Some(v),
+            _ => {
+                warn(&format!("未知の指定 {key}="));
+                return None;
+            }
+        }
+    }
+    let Some(speed) = speed else {
+        warn("必須の 速度= がない");
+        return None;
+    };
+    Some(Event::FieldScroll {
+        image: image.to_string(),
+        speed,
+        y,
     })
 }
 
@@ -9685,5 +10031,286 @@ mod field_notation_tests {
         assert!(evs.is_empty(), "{evs:?}");
         let w = take_test_warnings();
         assert!(w.iter().any(|m| m.contains("閉じ括弧 ] がない")), "{w:?}");
+    }
+}
+
+/// 一枚絵フィールドの場面の中身 N4〜N8 (#1102)。
+#[cfg(test)]
+mod field_scene_notation_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+
+    fn events_of(body: &str) -> Vec<Event> {
+        let _ = take_test_warnings();
+        parse(&format!("{HEAD}{body}")).chapters[0].scenes[0]
+            .events
+            .clone()
+    }
+
+    #[test]
+    fn parses_all_notations() {
+        let evs = events_of(
+            "[端 右 範囲=200..400 → 寺町駅前]\n[ワープ 改札 → 駅 @100,200 向き=左 演出=フラッシュ 時間=250/150/500]\n[ワープ 扉 → 家 @1,2]\n[揺れ: 縦=6, 周期=600]\n[揺れ: 縦=2.5]\n[窓の景色: sky.webp, 速度=-60, y=12]\n[窓の景色: sky.webp, 速度=30]\n",
+        );
+        assert_eq!(
+            evs,
+            vec![
+                Event::FieldEdge(FieldEdgeData {
+                    direction: Direction::Right,
+                    range_from: 200,
+                    range_to: 400,
+                    target: "寺町駅前".into()
+                }),
+                Event::FieldWarp(FieldWarpData {
+                    name: "改札".into(),
+                    target: "駅".into(),
+                    x: 100,
+                    y: 200,
+                    direction: Some(Direction::Left),
+                    effect: Some(WarpEffect::Flash),
+                    timing_ms: Some([250, 150, 500]),
+                }),
+                Event::FieldWarp(FieldWarpData {
+                    name: "扉".into(),
+                    target: "家".into(),
+                    x: 1,
+                    y: 2,
+                    direction: None,
+                    effect: None,
+                    timing_ms: None,
+                }),
+                Event::FieldShake {
+                    amplitude_y: 6.0,
+                    period_ms: Some(600.0)
+                },
+                Event::FieldShake {
+                    amplitude_y: 2.5,
+                    period_ms: None
+                },
+                Event::FieldScroll {
+                    image: "sky.webp".into(),
+                    speed: -60.0,
+                    y: Some(12.0)
+                },
+                Event::FieldScroll {
+                    image: "sky.webp".into(),
+                    speed: 30.0,
+                    y: None
+                },
+            ]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn edge_range_equal_and_english_words_ok() {
+        let evs = events_of("[端 left 範囲=5..5 → a]\n[ワープ w → a @0,0 演出=fade]\n");
+        assert_eq!(evs.len(), 2, "{evs:?}");
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn invalid_values_warn_and_drop_only_that_line() {
+        for (line, why, tag) in [
+            ("[端 右 範囲=400..200 → a]", "小≤大", "[端]"),
+            ("[端 右 範囲=a..b → a]", "a..b", "[端]"),
+            ("[端 斜め 範囲=1..2 → a]", "上/下/左/右", "[端]"),
+            ("[端 右 → a]", "範囲= がない", "[端]"),
+            ("[端 右 範囲=1..2]", "→ 場面ID", "[端]"),
+            ("[端 右 範囲=1..2 →]", "場面ID", "[端]"),
+            ("[端 右 範囲=1..2 速度=3 → a]", "未知の指定", "[端]"),
+            ("[ワープ w → a @1,2 時間=1/2]", "3つ", "[ワープ]"),
+            ("[ワープ w → a @1,2 時間=1/2/3/4]", "3つ", "[ワープ]"),
+            ("[ワープ w → a @1,2 時間=1/x/3]", "3つ", "[ワープ]"),
+            (
+                "[ワープ w → a @1,2 演出=ぼかし]",
+                "フェード/フラッシュ",
+                "[ワープ]",
+            ),
+            ("[ワープ w → a @1,2 向き=斜め]", "上/下/左/右", "[ワープ]"),
+            ("[ワープ w → a]", "@x,y", "[ワープ]"),
+            ("[ワープ w → a @1]", "@x,y", "[ワープ]"),
+            ("[ワープ → a @1,2]", "名前", "[ワープ]"),
+            ("[ワープ w @1,2]", "→ 場面ID", "[ワープ]"),
+            ("[ワープ w → @1,2]", "場面ID", "[ワープ]"),
+            ("[ワープ w → a @1,2 置き場=3]", "未知の指定", "[ワープ]"),
+            ("[揺れ: 周期=600]", "縦=", "[揺れ:]"),
+            ("[揺れ: 縦=0]", "0 より大きい", "[揺れ:]"),
+            ("[揺れ: 縦=-3]", "0 より大きい", "[揺れ:]"),
+            ("[揺れ: 縦=abc]", "0 より大きい", "[揺れ:]"),
+            ("[揺れ: 縦=6, 周期=0]", "0 より大きい", "[揺れ:]"),
+            ("[揺れ: 縦=6, 幅=2]", "未知の指定", "[揺れ:]"),
+            ("[揺れ: 6]", "キー=値", "[揺れ:]"),
+            ("[揺れ: ]", "キー=値", "[揺れ:]"),
+            ("[窓の景色: 速度=60]", "path", "[窓の景色:]"),
+            ("[窓の景色: ]", "path", "[窓の景色:]"),
+            ("[窓の景色: s.webp]", "速度=", "[窓の景色:]"),
+            ("[窓の景色: s.webp, 速度=abc]", "数でない", "[窓の景色:]"),
+            ("[窓の景色: s.webp, 速度=inf]", "数でない", "[窓の景色:]"),
+            ("[窓の景色: s.webp, 速度=1, y=z]", "数でない", "[窓の景色:]"),
+            (
+                "[窓の景色: s.webp, 速度=1, 幅=2]",
+                "未知の指定",
+                "[窓の景色:]",
+            ),
+        ] {
+            let _ = take_test_warnings();
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目の")
+                    && w[0].contains(tag)
+                    && w[0].contains(why)
+                    && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(
+                evs.iter().all(|e| !matches!(
+                    e,
+                    Event::FieldEdge(_)
+                        | Event::FieldWarp(_)
+                        | Event::FieldShake { .. }
+                        | Event::FieldScroll { .. }
+                )),
+                "{line}"
+            );
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_lines_warn_instead_of_vanishing() {
+        for (line, want) in [
+            ("[端]", "書式が違う"),
+            ("[端: 右]", "書式が違う"),
+            ("[ワープ]", "書式が違う"),
+            ("[揺れ]", "書式が違う"),
+            ("[揺れ 縦=6]", "書式が違う"),
+            ("[窓の景色 s.webp]", "書式が違う"),
+            ("[端 右 範囲=1..2 → a", "閉じ括弧 ] がない"),
+            ("[ワープ w → a @1,2", "閉じ括弧 ] がない"),
+            ("[ワープ: w", "閉じ括弧 ] がない"),
+            ("[揺れ: 縦=6", "閉じ括弧 ] がない"),
+            ("[窓の景色: s.webp, 速度=1", "閉じ括弧 ] がない"),
+        ] {
+            let _ = take_test_warnings();
+            let evs = events_of(&format!("{line}\n**カコ**:\nこんにちは\n"));
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("9 行目") && w[0].contains(want) && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+            assert!(
+                evs.iter().any(|e| matches!(e, Event::Dialog { .. })),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn warp_call_in_event_is_a_command_without_warning() {
+        let evs = events_of(
+            "[イベント 改札]\n**カコ**:\nいってきます\n[ワープ: 改札]\n[待機: 100]\n[/イベント]\n",
+        );
+        match &evs[..] {
+            [Event::RpgEvent { commands, .. }] => {
+                assert!(matches!(commands[0], EventCommand::Dialog { .. }));
+                assert_eq!(
+                    commands[1],
+                    EventCommand::Warp {
+                        id: "改札".into()
+                    }
+                );
+                assert_eq!(commands[2], EventCommand::Wait { ms: 100 });
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn warp_call_with_bad_name_in_event_warns_and_is_dropped() {
+        for line in ["[ワープ: ]", "[ワープ: a b]"] {
+            let evs = events_of(&format!("[イベント e]\n{line}\n[待機: 100]\n[/イベント]\n"));
+            match &evs[..] {
+                [Event::RpgEvent { commands, .. }] => {
+                    assert_eq!(commands, &vec![EventCommand::Wait { ms: 100 }], "{line}")
+                }
+                other => panic!("{other:?}"),
+            }
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("10 行目の [ワープ:]") && w[0].contains(line),
+                "{w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn warp_call_at_scene_top_level_gets_dedicated_warning() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!("{HEAD}[ワープ: 改札]\n**カコ**:\nやあ\n"));
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("9 行目")
+                && w[0].contains("[イベント] ブロック内専用の [ワープ:] のため読み捨てた")
+                && !w[0].contains("未知"),
+            "{w:?}"
+        );
+        assert_eq!(doc.chapters[0].scenes[0].events.len(), 1);
+    }
+
+    #[test]
+    fn other_new_notations_in_event_warn_as_unsupported() {
+        let evs = events_of(
+            "[イベント e]\n[端 右 範囲=1..2 → a]\n[ワープ w → a @1,2]\n[揺れ: 縦=6]\n[窓の景色: s.webp, 速度=1]\n[/イベント]\n",
+        );
+        match &evs[..] {
+            [Event::RpgEvent { commands, .. }] => assert!(commands.is_empty()),
+            other => panic!("{other:?}"),
+        }
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 4, "{w:?}");
+        for (m, (n, head)) in
+            w.iter()
+                .zip([(10, "端"), (11, "ワープ"), (12, "揺れ"), (13, "窓の景色")])
+        {
+            assert!(
+                m.contains(&format!("{n} 行目"))
+                    && m.contains(&format!("[イベント] 内では未対応の記法 [{head}]")),
+                "{w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn round_trip() {
+        let body = "[フィールドマップ 背景=a.webp マスク=m.webp]\n[端 右 範囲=200..400 → 駅前]\n[端 上 範囲=0..100 → 北]\n[ワープ 改札 → 駅 @100,200 向き=左 演出=フラッシュ 時間=250/150/500]\n[ワープ 扉 → 家 @1,2 演出=フェード]\n[揺れ: 縦=6, 周期=600]\n[窓の景色: sky.webp, 速度=-60, y=12.5]\n[イベント 改札]\n**カコ**:\nいくよ\n[ワープ: 改札]\n[/イベント]\n";
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        let _ = take_test_warnings();
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        assert_eq!(emitted, emit(&doc2));
+        assert!(
+            emitted.contains("[端 右 範囲=200..400 → 駅前]\n"),
+            "{emitted}"
+        );
+        assert!(emitted.contains("[揺れ: 縦=6, 周期=600]\n"), "{emitted}");
+        assert!(
+            emitted.contains("[窓の景色: sky.webp, 速度=-60, y=12.5]\n"),
+            "{emitted}"
+        );
+        assert!(emitted.contains("[ワープ: 改札]\n"), "{emitted}");
     }
 }

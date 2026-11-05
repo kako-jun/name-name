@@ -44,6 +44,8 @@ pub enum EventCommand {
     /// フィールドを終える (#1100)。`[フィールド終了]`（`[イベント]` 内専用）。
     /// 呼び出し位置へ戻るのではなく、`[フィールド: …]` の次の行へ進むだけ。
     FieldEnd,
+    /// ワープ先を呼ぶ (#1102)。`[ワープ: 名前]`（`[イベント]` 内専用）。`[ワープ 名前 → …]` の宣言を名前で指す。
+    Warp { id: String },
 }
 
 fn default_npc_move_speed() -> u32 {
@@ -428,6 +430,46 @@ pub struct FieldMapData {
     pub encounter_rate: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encounter_groups: Option<Vec<String>>,
+}
+
+/// 一枚絵フィールドの端の出口 (#1102)。`[端 右 範囲=200..400 → 場面ID]`。
+/// `direction` の端の `range_from..=range_to`（u32、小≤大。背景 px）を越えたら `target` の場面へ。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldEdgeData {
+    pub direction: Direction,
+    pub range_from: u32,
+    pub range_to: u32,
+    pub target: String,
+}
+
+/// ワープの演出 (#1102)。`演出=フェード` / `演出=フラッシュ`（`fade` / `flash` も可）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub enum WarpEffect {
+    Fade,
+    Flash,
+}
+
+/// ワープ先の宣言 (#1102)。`[ワープ 名前 → 場面ID @x,y 向き=左 演出=フラッシュ 時間=250/150/500]`。
+/// 置き場所（踏んで発火）は持たない。`[イベント]` 内の `[ワープ: 名前]` から呼ぶ。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
+#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct FieldWarpData {
+    pub name: String,
+    pub target: String,
+    pub x: u32,
+    pub y: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<WarpEffect>,
+    /// out / hold / in の ms。省略 = 演出ごとの既定
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_ms: Option<[u32; 3]>,
 }
 
 /// モンスター定義 (#174)。
@@ -1470,6 +1512,23 @@ pub enum Event {
         y: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         direction: Option<Direction>,
+    },
+    /// 一枚絵フィールドの端の出口 (#1102)。`[端 右 範囲=200..400 → 場面ID]`。
+    FieldEdge(FieldEdgeData),
+    /// 一枚絵フィールドのワープ先の宣言 (#1102)。`[ワープ 名前 → 場面ID @x,y …]`。
+    FieldWarp(FieldWarpData),
+    /// 一枚絵フィールドの揺れ (#1102)。`[揺れ: 縦=6, 周期=600]`。`period_ms` 省略 = 600。
+    FieldShake {
+        amplitude_y: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        period_ms: Option<f64>,
+    },
+    /// 一枚絵フィールドの窓の景色 (#1102)。`[窓の景色: path, 速度=60, y=0]`。`speed` は px/秒（負で左）、`y` 省略 = 0。
+    FieldScroll {
+        image: String,
+        speed: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
     },
     PlayerStart(PlayerStartData),
     Npc(NpcData),
