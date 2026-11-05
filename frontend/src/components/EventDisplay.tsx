@@ -631,9 +631,10 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
             {n.message.join('\n')}
           </div>
         )}
-        {(n.sprite || n.portrait || n.direction || n.height != null) && (
+        {(n.sprite || n.walk_sprites || n.portrait || n.direction || n.height != null) && (
           <div className={`text-xs ml-4 ${meta}`}>
             {n.sprite ? `sprite=${n.sprite} ` : ''}
+            {n.walk_sprites ? `絵=${n.walk_sprites} ` : ''}
             {n.portrait ? `portrait=${n.portrait} ` : ''}
             {n.direction ? `向き=${n.direction} ` : ''}
             {n.height != null ? `高さ=${n.height}` : ''}

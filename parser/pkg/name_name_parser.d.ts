@@ -1313,6 +1313,11 @@ export interface NpcData {
      * 一枚絵フィールドでの表示の高さ(px)。`高さ=96` (#1100)。未指定は None。
      */
     height?: number;
+    /**
+     * 一枚絵フィールドの歩行絵(4 方向 × 3 コマ)の名前の規則 1 語。`絵=kid` (#1106)。
+     * 展開は `<値>-walk-<up|down|left|right>-<1|2|3>.webp` の 12 枚(展開は配線の段階)。未指定は None。
+     */
+    walk_sprites?: string;
 }
 
 export interface PlayerStartData {

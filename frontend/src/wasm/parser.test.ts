@@ -3459,3 +3459,39 @@ describe('parseMarkdown: 一枚絵フィールドの作品設定 (#1104)', () =>
     expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
   })
 })
+
+// #1106: NPC の歩行絵(名前の規則 1 語 `絵=`)。tracked wasm が解釈し、往復し、不正値はその属性だけ無視することを縛る。
+describe('parseMarkdown: NPC の歩行絵 絵= (#1106)', () => {
+  const head = ['---', 'engine: name-name', 'chapter: 1', 'title: t', '---', '', '## f: 野原', '']
+  const md = [
+    ...head,
+    '[NPC 長老 @1,1 色=#ff0000 絵=npc/kid 高さ=80]',
+    'やあ',
+    '[/NPC]',
+    '[NPC 村人 @2,2 絵=]',
+    'よう',
+    '[/NPC]',
+    '[NPC 子 @3,3 絵=kid.webp]',
+    'おう',
+    '[/NPC]',
+    '',
+  ].join('\n')
+
+  it('NPC に walk_sprites が入り、不正値は属性だけ無視され本文は台詞のまま', async () => {
+    const doc = await parseMarkdown(md)
+    const npcs = doc.chapters[0].scenes[0].events.flatMap((e) =>
+      typeof e === 'object' && 'Npc' in e ? [e.Npc] : []
+    )
+    expect(npcs.map((n) => n.walk_sprites)).toEqual(['npc/kid', undefined, undefined])
+    expect(npcs.map((n) => n.message)).toEqual([['やあ'], ['よう'], ['おう']])
+  })
+
+  it('emit → parse で同値（絵= が往復で保たれ、未指定は出ない）', async () => {
+    const doc = await parseMarkdown(md)
+    const emitted = await emitMarkdown(doc)
+    expect(emitted).toContain(' 絵=npc/kid 高さ=80]\n')
+    expect(emitted).not.toContain('絵=kid.webp')
+    const again = await parseMarkdown(emitted)
+    expect(again.chapters[0].scenes[0].events).toEqual(doc.chapters[0].scenes[0].events)
+  })
+})

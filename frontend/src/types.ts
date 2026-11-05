@@ -129,6 +129,8 @@ export interface NpcData {
   sprite?: string
   /** 一枚絵フィールドでの表示の高さ(px)。`高さ=96` (#1100) */
   height?: number
+  /** 歩行絵(4 方向 × 3 コマ)の名前の規則 1 語。`絵=kid` (#1106)。`kid-walk-<up|down|left|right>-<1|2|3>.webp` の 12 枚を指す */
+  walk_sprites?: string
   /** 歩行アニメのフレーム数（方向あたり）。未指定ならレンダラーのデフォルト（2） */
   frames?: number
   /** NPC が向いている方向。未指定ならレンダラーのデフォルト（Down） */
