@@ -2257,7 +2257,7 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_enemy_list: Option<String>,
     /// フィールドの感情吹き出しの設定 JSON のパス (#943)。assets 相対パスを生文字列で透過する（`battle_background` と
-    /// 同じ流儀）。読み込み・検証は frontend（フィールドサンプルの `emotions` と同じ検証。不正は警告して無視）。
+    /// 同じ流儀）。読み込み・検証は frontend（一枚絵フィールドの `emotions` と同じ検証。不正は警告して無視）。
     /// 未指定・空は None（従来どおり吹き出しなし）。GUI 専用（TUI は読まない）。frontmatter `field_emotions:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_emotions: Option<String>,

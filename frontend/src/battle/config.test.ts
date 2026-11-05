@@ -12,7 +12,7 @@ import {
   DEFAULT_SIZE_ID,
   MAX_ENEMIES,
   MAX_PARTY,
-  SAMPLE_DEFAULT_PERSPECTIVE,
+  DEFAULT_PERSPECTIVE,
   SCREEN_SIZES,
   applyFormation,
   buildBattleSetup,
@@ -868,8 +868,8 @@ describe('parseConfig horizon / perspective (#747)', () => {
     expect(c.horizon).toBe(0.3)
     expect(c.perspective).toBe(0.8)
   })
-  it('SAMPLE_DEFAULT_PERSPECTIVE は 0.8', () => {
-    expect(SAMPLE_DEFAULT_PERSPECTIVE).toBe(0.8)
+  it('DEFAULT_PERSPECTIVE は 0.8', () => {
+    expect(DEFAULT_PERSPECTIVE).toBe(0.8)
   })
   it.each(['horizon', 'perspective'] as const)('%s: -0.001 はエラー', (key) => {
     expect(parseErr({ [key]: -0.001 })).toContain(`${key} は 0〜1 の数値`)

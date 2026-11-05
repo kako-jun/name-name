@@ -79,8 +79,8 @@ export const DEFAULT_RESOLUTION_MODE: ResolutionMode = 'main'
 export const FORMATION_MODES = ['config', 'front', 'backHalf'] as const
 export type FormationMode = (typeof FORMATION_MODES)[number]
 
-/** 設定 JSON に horizon / perspective が無いときの奥行きオン時の既定（サンプル用の見やすい値） */
-export const SAMPLE_DEFAULT_PERSPECTIVE = 0.8
+/** 設定 JSON に horizon / perspective が無いときの奥行きオン時の既定（見やすい値） */
+export const DEFAULT_PERSPECTIVE = 0.8
 
 export const DEFAULT_SIZE_ID: ScreenSizeId = '800x450'
 export const MAX_PARTY = 4
@@ -124,7 +124,7 @@ export interface BattleConfig {
   background: string | null
   /** 奥行きの地平線の高さ（画面比 0〜1）(#747)。奥行きオン時に使う。既定 DEPTH_DEFAULT_HORIZON */
   horizon: number
-  /** 奥行きの遠近の強さ（0〜1）(#747)。奥行きオン時に使う。既定 SAMPLE_DEFAULT_PERSPECTIVE */
+  /** 奥行きの遠近の強さ（0〜1）(#747)。奥行きオン時に使う。既定 DEFAULT_PERSPECTIVE */
   perspective: number
   /** 前景レイヤー画像の絶対 URL (#747)。なしは null */
   foreground: string | null
@@ -276,7 +276,7 @@ export function defaultConfig(): BattleConfig {
     items: defaultItems(),
     background: null,
     horizon: DEPTH_DEFAULT_HORIZON,
-    perspective: SAMPLE_DEFAULT_PERSPECTIVE,
+    perspective: DEFAULT_PERSPECTIVE,
     foreground: null,
     skills: {},
     statuses: {},

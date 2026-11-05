@@ -132,7 +132,7 @@ import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
 import {
-  FIELD_SAMPLE_DOC_KEY,
+  FIELD_DOC_KEY,
   baseConfigOf,
   savedFormsFromResume,
   carryOverBattleResult,
@@ -1252,9 +1252,7 @@ async function main(): Promise<void> {
         onSetting: (key, value) => menuRuntime?.setSetting(key, value),
         onSave: (slot) => {
           const ok = api.saveRpg(slot)
-          return ok
-            ? slotSummary(new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()[slot] ?? null)
-            : null
+          return ok ? slotSummary(new SaveManager(FIELD_DOC_KEY).listSlots()[slot] ?? null) : null
         },
       })
     : null
@@ -1310,7 +1308,7 @@ async function main(): Promise<void> {
                 texture: await partyTexture(p.sprite),
               }))
             )
-            const saved = new SaveManager(FIELD_SAMPLE_DOC_KEY).listSlots()
+            const saved = new SaveManager(FIELD_DOC_KEY).listSlots()
             // アプリストアの品の画像（読めなければ null = 文字だけ）。同じ URL は 1 回だけ読む。
             // 手のカーソルの画像 (#1067。読めなければ null = 従来のドット手) も並列に待つ
             const images: Record<string, Texture | null> = {}
@@ -1901,7 +1899,7 @@ async function main(): Promise<void> {
      * 書けたら true（スロット範囲外・容量超過は false）
      */
     saveRpg: (slot: number | 'quick'): boolean => {
-      const saves = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+      const saves = new SaveManager(FIELD_DOC_KEY)
       const data = buildRpgSaveSlot(snapshotRpgNow(), {
         slot: slot === 'quick' ? -1 : slot,
         savedAt: new Date().toISOString(),

@@ -21,7 +21,7 @@ import type { FieldBattleConfig, FieldConfig } from './config'
 import { savedFormsOf } from './characterForms'
 
 /** セーブのキーの名前空間 (#578)。実キーは `name-name-save-field-<slot>` / `…-quick` */
-export const FIELD_SAMPLE_DOC_KEY = 'field'
+export const FIELD_DOC_KEY = 'field'
 
 /** 設定（世界）から、セーブを重ねる土台を作る */
 export function baseConfigOf(
@@ -49,7 +49,7 @@ export type ResumeLoad =
 export function loadResume(
   search: string,
   config: Pick<FieldConfig, 'party' | 'items' | 'flags' | 'monsters' | 'scenes'>,
-  saves: SaveManager = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+  saves: SaveManager = new SaveManager(FIELD_DOC_KEY)
 ): ResumeLoad {
   const raw = new URLSearchParams(search).get('resume')
   if (raw === null) return { kind: 'none' }
@@ -81,7 +81,7 @@ export function loadResume(
  */
 export function savedFormsFromResume(
   search: string,
-  saves: SaveManager = new SaveManager(FIELD_SAMPLE_DOC_KEY)
+  saves: SaveManager = new SaveManager(FIELD_DOC_KEY)
 ): Record<string, string> {
   const raw = new URLSearchParams(search).get('resume')
   const slot = parseResumeParam(raw)
