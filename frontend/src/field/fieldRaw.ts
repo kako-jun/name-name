@@ -158,7 +158,7 @@ export function buildFieldRaw(
   const implicitFlag = (name: string, where: string) => {
     if (hasOwn(flags, name)) return
     warnings.push(
-      `${where} '${name}' が どの [フラグ:] にもありません（綴りを確認。false として扱います）`
+      `${where} '${name}' がどの [フラグ:] にもありません（綴りを確認。false として扱います）`
     )
     safeAssign(flags, name, false)
   }
@@ -181,7 +181,7 @@ export function buildFieldRaw(
   const gear = gearEntriesRaw(master.items, partyDefs, warnings)
   for (const f of gear.unlockFlags) {
     if (!hasOwn(flags, f)) {
-      warnings.push(`売り物の 解禁 '${f}' が どの [フラグ:] にもありません（false として補います）`)
+      warnings.push(`売り物の 解禁 '${f}' がどの [フラグ:] にもありません（false として補います）`)
       safeAssign(flags, f, false)
     }
   }

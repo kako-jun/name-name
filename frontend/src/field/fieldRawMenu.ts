@@ -102,7 +102,7 @@ function applyOverride(
   }
   if (o.time_limit_reason !== undefined) item.timedReason = o.time_limit_reason
   if (o.content !== undefined) {
-    if (contents && hasOwn(contents, o.content)) item.content = contents[o.content]
+    if (contents && hasOwn(contents, o.content)) item.content = structuredClone(contents[o.content])
     else
       warnings.push(
         `[メニュー項目 ${o.id}] の 中身=${o.content} を読めていません（項目だけ残します）`

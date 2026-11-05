@@ -19,7 +19,9 @@ function enumOf(
 ): string | undefined {
   const v = doc[key]
   if (v === null || v === undefined) return undefined
-  if (typeof v === 'string' && allowed.includes(v)) return v
+  // RPG 側(battleLayout.ts など)と同じく前後の空白と大小を無視して読み、raw には正規化後の値を出す
+  const norm = typeof v === 'string' ? v.trim().toLowerCase() : undefined
+  if (norm !== undefined && allowed.includes(norm)) return norm
   warnings.push(
     `frontmatter の ${key} は ${allowed.map((a) => `"${a}"`).join(' / ')} のどれかにしてください: ${JSON.stringify(v)}（無視します）`
   )
@@ -78,10 +80,13 @@ export function frontmatterRaw(
     battle.spriteStyle = spriteStyle
   }
   if (doc.dialog_style !== null && doc.dialog_style !== undefined) {
-    if (doc.dialog_style === 'ff') top.dialogStyle = 'ff'
-    else
+    const ds =
+      typeof doc.dialog_style === 'string' ? doc.dialog_style.trim().toLowerCase() : undefined
+    if (ds === 'ff') top.dialogStyle = 'ff'
+    // adv / novel はノベル場面向けの正当な値なので黙る
+    else if (ds !== 'adv' && ds !== 'novel')
       warnings.push(
-        `frontmatter の dialog_style は "ff" のみ指定できます: ${JSON.stringify(doc.dialog_style)}（無視します）`
+        `frontmatter の dialog_style は "ff" / "adv" / "novel" のどれかにしてください: ${JSON.stringify(doc.dialog_style)}（無視します）`
       )
   }
   if (typeof doc.field_emotions === 'string' && doc.field_emotions !== '')
@@ -115,7 +120,7 @@ export function frontmatterRaw(
   }
 
   if (typeof doc.battle_effects === 'string' && doc.battle_effects !== '') {
-    if (battleEffects !== undefined) battle.effects = battleEffects
+    if (battleEffects !== undefined) battle.effects = structuredClone(battleEffects)
     else
       warnings.push(
         `frontmatter の battle_effects '${doc.battle_effects}' の中身を読めていません（戦闘のエフェクトは無効にします）`

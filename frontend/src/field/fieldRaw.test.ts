@@ -594,7 +594,7 @@ describe('buildFieldRaw: 売り物', () => {
     })
     expect(r.warnings).toEqual([
       "刀 'b3' の持ち主 'ghost' が [パーティ] にいません（この売り物は省きます）",
-      "売り物の 解禁 'door' が どの [フラグ:] にもありません（false として補います）",
+      "売り物の 解禁 'door' がどの [フラグ:] にもありません（false として補います）",
     ])
     expect(r.raw.gearShop).toEqual({
       multiplier: 3,
@@ -645,8 +645,8 @@ describe('buildFieldRaw: フラグ・補助通行・同行者', () => {
       input: { flags: { opened: true, ghosted: false, unknown: true } },
     })
     expect(r.warnings).toEqual([
-      "[補助通行] の 条件= 'typo' が どの [フラグ:] にもありません（綴りを確認。false として扱います）",
-      "[補助通行] の 除く= 'nope' が どの [フラグ:] にもありません（綴りを確認。false として扱います）",
+      "[補助通行] の 条件= 'typo' がどの [フラグ:] にもありません（綴りを確認。false として扱います）",
+      "[補助通行] の 除く= 'nope' がどの [フラグ:] にもありません（綴りを確認。false として扱います）",
     ])
     expect(r.raw.flags).toEqual({ opened: true, ghosted: false, typo: false, nope: false })
     expect(r.raw.assist).toEqual({
@@ -884,7 +884,7 @@ describe('buildFieldRaw: frontmatter', () => {
         battle_enemy_window_overlap: 'abc',
         battle_commands: 'attack, bogus, attack',
         battle_effects: 'fx.json',
-        dialog_style: 'novel',
+        dialog_style: 'weird',
         aspect_ratio: '9:16',
         battle_background_tone: 'on',
         battle_background_dof: 'on',
@@ -909,7 +909,7 @@ describe('buildFieldRaw: frontmatter', () => {
       q('battle_atb', 'x', '"on" / "off"'),
       q('battle_atb_mode', 'x', '"wait" / "active"'),
       q('sprite_style', 'x', '"none" / "acrylic"'),
-      'frontmatter の dialog_style は "ff" のみ指定できます: "novel"（無視します）',
+      'frontmatter の dialog_style は "ff" / "adv" / "novel" のどれかにしてください: "weird"（無視します）',
       "frontmatter の battle_commands の 'bogus' は未知のコマンドです（省きます）",
       "frontmatter の battle_commands の 'attack' は重複しています（省きます）",
       'frontmatter の battle_enemy_window_overlap は数値にしてください: "abc"（無視します）',
@@ -927,5 +927,53 @@ describe('buildFieldRaw: frontmatter', () => {
     expect(r.raw.battle).toEqual({ logicalSize: '1920x1080', commands: ['attack'] })
     expect(r.raw).not.toHaveProperty('spriteStyle')
     expect(r.raw).not.toHaveProperty('dialogStyle')
+  })
+})
+
+describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => {
+  it('列挙値は前後の空白と大小を無視して読み、raw には正規化後の値が出る', () => {
+    const r = ok({
+      frontmatter: {
+        battle_layout: ' Side ',
+        window_style: 'FF-Blue',
+        sprite_style: 'Acrylic',
+        battle_atb: 'ON',
+      },
+    })
+    expect(r.warnings).toEqual([])
+    expect(r.raw).toMatchObject({
+      spriteStyle: 'acrylic',
+      battle: { layout: 'side', windowStyle: 'ff-blue', spriteStyle: 'acrylic', atb: 'on' },
+    })
+  })
+
+  it('dialog_style: adv・novel は黙り、ff は渡し、未知の値だけ警告する', () => {
+    for (const v of ['adv', 'novel', 'Novel']) {
+      const r = ok({ frontmatter: { dialog_style: v } })
+      expect(r.warnings).toEqual([])
+      expect(r.raw).not.toHaveProperty('dialogStyle')
+    }
+    const ff = ok({ frontmatter: { dialog_style: 'FF' } })
+    expect(ff.warnings).toEqual([])
+    expect(ff.raw).toMatchObject({ dialogStyle: 'ff' })
+  })
+
+  it('aux の中身はコピーして raw に入れる(参照共有しない)', () => {
+    const effects = { hit: { image: 'h.webp' } }
+    const content = { description: 'd' }
+    const r = ok({
+      frontmatter: { battle_effects: 'fx.json' },
+      cfg: [
+        { FieldMenu: { items: ['status'] } } as Event,
+        { FieldMenuItem: { id: 'status', content: 'st.json' } } as Event,
+      ],
+      input: { aux: { battleEffects: effects, menuContents: { 'st.json': content } } },
+    })
+    const battle = r.raw.battle as { effects: unknown }
+    expect(battle.effects).toEqual(effects)
+    expect(battle.effects).not.toBe(effects)
+    const item = (r.raw.menu as { items: { content: unknown }[] }).items[0]
+    expect(item.content).toEqual(content)
+    expect(item.content).not.toBe(content)
   })
 })

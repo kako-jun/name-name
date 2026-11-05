@@ -13,8 +13,8 @@ import type { FieldMasterData } from './fieldNotation'
 
 type Raw = Record<string, unknown>
 
-/** 配列・オブジェクトを浅くコピーする(入力への参照共有を避ける) */
-const copy = <T>(v: T): T => (Array.isArray(v) ? ([...v] as T) : v)
+/** 入力への参照共有を避けるためコピーする */
+const copy = <T>(v: T): T => (v === undefined ? v : structuredClone(v))
 
 function put(out: Raw, key: string, v: unknown): void {
   if (v !== undefined) out[key] = v
