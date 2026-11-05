@@ -10,7 +10,7 @@ interface EventDisplayProps {
  * EventCard 内の編集 UI と同じカードに差し替える形で使われる。
  *
  * Issue #234: 旧版は新 variant (Animate / Monster / Item / Spell / PartyMember /
- * RpgEvent / RpgTrigger / Npc / RpgMap / PlayerStart / TitleShow /
+ * RpgEvent / RpgTrigger / Npc / RpgMap / FieldMap / Field / PlayerStart / TitleShow /
  * DialogBorderless / Shake / Flash / Fade) を return null で握り潰していた。
  * data.md 等のマスター .md を読んだときにエディタ上で全部空に見える問題を解消する。
  */
@@ -475,11 +475,44 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
     )
   }
 
+  if ('FieldMap' in event) {
+    const m = event.FieldMap
+    const enc =
+      m.encounter_rate != null ? `エンカウント率=1/${m.encounter_rate}` : 'エンカウントなし'
+    const groups = m.encounter_groups?.join(', ')
+    return (
+      <div className="space-y-0.5">
+        <div className={`text-sm font-semibold ml-2 ${head}`}>🗺 フィールドマップ</div>
+        <div className={`text-xs ml-4 ${meta}`}>
+          背景={m.background} マスク={m.mask}
+          {m.foreground ? ` 前面=${m.foreground}` : ''}
+          {m.battle_background ? ` 戦闘背景=${m.battle_background}` : ''}
+        </div>
+        <div className={`text-xs ml-4 ${meta}`}>
+          {enc}
+          {groups ? ` / 群: ${groups}` : ''}
+        </div>
+      </div>
+    )
+  }
+
+  if ('Field' in event) {
+    const f = event.Field
+    return (
+      <div className={`text-xs italic ml-2 ${meta}`}>
+        フィールドへ: {f.scene}
+        {f.x != null && f.y != null ? ` @${f.x},${f.y}` : ''}
+        {f.direction ? ` 向き=${f.direction}` : ''}
+      </div>
+    )
+  }
+
   if ('PlayerStart' in event) {
     const p = event.PlayerStart
     return (
       <div className={`text-xs italic ml-2 ${meta}`}>
         プレイヤー初期位置: @{p.x},{p.y} 向き={p.direction}
+        {p.height != null ? ` 高さ=${p.height}` : ''}
       </div>
     )
   }
@@ -499,11 +532,12 @@ function EventDisplay({ event, isDark }: EventDisplayProps) {
             {n.message.join('\n')}
           </div>
         )}
-        {(n.sprite || n.portrait || n.direction) && (
+        {(n.sprite || n.portrait || n.direction || n.height != null) && (
           <div className={`text-xs ml-4 ${meta}`}>
             {n.sprite ? `sprite=${n.sprite} ` : ''}
             {n.portrait ? `portrait=${n.portrait} ` : ''}
-            {n.direction ? `向き=${n.direction}` : ''}
+            {n.direction ? `向き=${n.direction} ` : ''}
+            {n.height != null ? `高さ=${n.height}` : ''}
           </div>
         )}
       </div>
