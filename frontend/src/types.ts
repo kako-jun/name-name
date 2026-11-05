@@ -217,6 +217,16 @@ export interface ItemDef {
   elements?: string[]
   /** 装備すると「わざ」に現れる `[特技 id]` の id (#207。`わざ:` の行を書いた順)。特技マスターへの解決は runtime */
   abilities?: string[]
+  /** 初期所持数 (#1111。`初期所持:` 0 以上の整数)。書かなければ無し */
+  count?: number
+  /** 説明文 (#1111。`説明:`) */
+  description?: string
+  /** 区分 (#1111。`区分:`)。生文字列で透過し、未知の値の扱いはフロント側 */
+  category?: string
+  /** フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は無し */
+  fieldUse?: boolean
+  /** 大切なものか (#1111。`大切: はい|いいえ`)。書かなければ無し、読めない値は false */
+  key?: boolean
 }
 
 /** パーティメンバー定義 (#175) */
@@ -329,6 +339,10 @@ export interface SpellDef {
   multiTarget?: boolean
   /** タグ (#876。`タグ: ぬすむ`)。ジョブの変換ルールが当てる目印。書かなければ無し */
   tags?: string[]
+  /** 説明文 (#1111。`説明:`) */
+  description?: string
+  /** フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は無し */
+  fieldUse?: boolean
 }
 
 /**

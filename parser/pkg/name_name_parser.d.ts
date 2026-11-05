@@ -55,6 +55,26 @@ export interface ItemDef {
      * 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
      */
     abilities?: string[];
+    /**
+     * 初期所持数 (#1111。`初期所持:` 0 以上の整数)。書かない・読めない値は None。
+     */
+    count?: number;
+    /**
+     * 説明文 (#1111。`説明:`)。生文字列で透過する。
+     */
+    description?: string;
+    /**
+     * 区分 (#1111。`区分:`)。生文字列で透過し、未知の値の扱いはフロント側。
+     */
+    category?: string;
+    /**
+     * フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+     */
+    fieldUse?: boolean;
+    /**
+     * 大切なものか (#1111。`大切: はい|いいえ`)。書かないは None、読めない値は false。JSON / TS 側のキーは `key`。
+     */
+    key?: boolean;
 }
 
 /**
@@ -647,6 +667,14 @@ export interface SpellDef {
      * それ以外の意味は無い。カンマ区切り・複数行可・重複なし。書かない呪文は None（タグ無し＝従来どおり）。
      */
     tags?: string[];
+    /**
+     * 説明文 (#1111。`説明:`)。生文字列で透過する。
+     */
+    description?: string;
+    /**
+     * フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+     */
+    fieldUse?: boolean;
 }
 
 /**

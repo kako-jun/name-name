@@ -3564,3 +3564,54 @@ describe('parseMarkdown: 一枚絵フィールドのメニュー・操作画像�
     expect(evs.find((e) => 'Currency' in e)).toEqual({ Currency: '円' })
   })
 })
+
+// #1111 (S2e): アイテム・呪文のフィールドメニュー用キー。tracked wasm が解釈することを縛る。
+describe('parseMarkdown: アイテム・呪文のメニュー用キー (#1111)', () => {
+  const md = [
+    '---',
+    'engine: name-name',
+    'chapter: 1',
+    'title: t',
+    '---',
+    '',
+    '## data: マスター',
+    '',
+    '[アイテム かぎ]',
+    '名前: かぎ',
+    '種別: 鍵',
+    '初期所持: 2',
+    '説明: 扉を開ける。',
+    '区分: 大切なもの',
+    'フィールド使用: 不可',
+    '大切: はい',
+    '[/アイテム]',
+    '[呪文 ホイミ]',
+    '名前: ホイミ',
+    'MP: 3',
+    '対象: 味方単体',
+    '説明: HPを回復する。',
+    'フィールド使用: 可',
+    '[/呪文]',
+    '',
+  ].join('\n')
+
+  it('ItemDef / SpellDef に count・description・category・fieldUse・key が届き、往復で変わらない', async () => {
+    const doc = await parseMarkdown(md)
+    const evs = doc.chapters[0].scenes[0].events
+    expect(evs[0]).toMatchObject({
+      Item: {
+        id: 'かぎ',
+        count: 2,
+        description: '扉を開ける。',
+        category: '大切なもの',
+        fieldUse: false,
+        key: true,
+      },
+    })
+    expect(evs[1]).toMatchObject({
+      Spell: { id: 'ホイミ', description: 'HPを回復する。', fieldUse: true },
+    })
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.chapters[0].scenes[0].events).toEqual(evs)
+  })
+})

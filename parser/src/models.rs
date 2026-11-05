@@ -835,6 +835,21 @@ pub struct ItemDef {
     /// 値は生文字列のまま透過し、特技マスターへの解決は runtime 側。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abilities: Option<Vec<String>>,
+    /// 初期所持数 (#1111。`初期所持:` 0 以上の整数)。書かない・読めない値は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    /// 説明文 (#1111。`説明:`)。生文字列で透過する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// 区分 (#1111。`区分:`)。生文字列で透過し、未知の値の扱いはフロント側。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+    #[serde(default, rename = "fieldUse", skip_serializing_if = "Option::is_none")]
+    pub field_use: Option<bool>,
+    /// 大切なものか (#1111。`大切: はい|いいえ`)。書かないは None、読めない値は false。JSON / TS 側のキーは `key`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<bool>,
 }
 
 /// パーティメンバー定義 (#175)。
@@ -958,6 +973,12 @@ pub struct SpellDef {
     /// それ以外の意味は無い。カンマ区切り・複数行可・重複なし。書かない呪文は None（タグ無し＝従来どおり）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// 説明文 (#1111。`説明:`)。生文字列で透過する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// フィールドメニューから使えるか (#1111。`フィールド使用: 可|不可`)。書かない・読めない値は None。JSON / TS 側のキーは `fieldUse`。
+    #[serde(default, rename = "fieldUse", skip_serializing_if = "Option::is_none")]
+    pub field_use: Option<bool>,
 }
 
 /// 特技定義 (#834、敵の行動パターン P0 / 親 #832)。
