@@ -115,6 +115,8 @@ import {
   type FieldScriptEvents,
 } from '../game/fieldScript'
 import { hasOwn, safeAssign } from '../game/ownProperty'
+import { clearWindowField } from './windowField'
+import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 import {
   DIAGONAL_FACINGS,
   FACINGS,
@@ -249,6 +251,11 @@ export interface StartFieldGameOptions {
   search: string
   /** 論理サイズ固定の戦闘が class を付ける要素（既定 document.body。field.html の CSS が body.battle-contain を見る） */
   containHost?: HTMLElement
+  /**
+   * NPC の脚本（`scene` の行き先）を呼び出し側が渡す。あれば `config.scriptUrl` の取得（`loadNpcScript`）は行わない。
+   * 起動時の scene 照合の警告もこの供給元に対して出す
+   */
+  scriptEvents?: FieldScriptEvents
 }
 
 async function loadScene(config: FieldConfig, id: string): Promise<LoadedScene> {
@@ -451,7 +458,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionSheets = await loadEmotionSheets(config, (url) => fetch(url))
-  const scriptEvents = await loadNpcScript(config)
+  const scriptEvents = await pickScriptEvents(opts.scriptEvents, () => loadNpcScript(config))
   // scene と脚本の照合は起動時に 1 回だけ（話しかけるたびに同じ警告を出さない）
   {
     const scriptWarnings = checkNpcScripts(
@@ -459,7 +466,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         (sc.npcs ?? []).map((n) => ({ where: `NPC ${sid}/${n.id}`, scene: n.scene }))
       ),
       scriptEvents
-    ).filter(() => !!config.scriptUrl) // scriptUrl 無しは config 段階で警告済み
+    ).filter(() => shouldCheckNpcScripts(opts.scriptEvents, config.scriptUrl)) // 供給元が無いときは config 段階で警告済み
     for (const w of scriptWarnings) console.warn(w)
     if (scriptWarnings.length > 0)
       showError([configNotice(config), ...scriptWarnings].filter(Boolean).join('\n'))
@@ -623,7 +630,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     ? (DIAGONAL_FACINGS as readonly string[]).includes(resumed.field.facing) && !diagonalWalk
       ? facing4(resumed.field.facing)
       : resumed.field.facing
-    : 'down'
+    : (config.startFacing ?? 'down')
   /** 指定シーンでの主人公の身体の範囲（端リンクの接触判定・着地の置き場所用。表示と同じ高さ・縦横比） */
   const playerBody = (id: string) =>
     bodyExtent(
@@ -1968,6 +1975,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     window.removeEventListener('keydown', onTalkKey)
     window.removeEventListener('blur', onBlur)
     window.removeEventListener('pagehide', onPageHide)
+    clearWindowField(api)
     canvas.removeEventListener('pointerdown', onPointerDown)
     canvas.removeEventListener('contextmenu', onMenuContext)
     canvas.removeEventListener('pointermove', onPointerMove)
