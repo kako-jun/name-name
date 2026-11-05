@@ -227,6 +227,18 @@ export interface ItemDef {
   fieldUse?: boolean
   /** 大切なものか (#1111。`大切: はい|いいえ`)。書かなければ無し、読めない値は false */
   key?: boolean
+  /** 売り物の区分 (#1115。`売り物: 刀|防具`)。`gearShop.entries[].kind` の行き先。書かない・読めない値は無し */
+  shopKind?: 'blade' | 'armor'
+  /** 売り物の持ち主の人物 id (#1115。`持ち主:`) */
+  owner?: string
+  /** 刀の 1 本目の値段・円 (#1115。`基準額:` 0 以上の整数)。定義側の数値 */
+  basePrice?: number
+  /** 購入解禁のフラグ名 (#1115。`解禁:`) */
+  unlockFlag?: string
+  /** 一覧に出す画像のパス (#1115。`画像:` 空白と `]` を含まない 1 語) */
+  image?: string
+  /** 解禁前に出す文 (#1115。`解禁前の文:`) */
+  lockedMessage?: string
 }
 
 /** パーティメンバー定義 (#175) */

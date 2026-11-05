@@ -850,6 +850,32 @@ pub struct ItemDef {
     /// 大切なものか (#1111。`大切: はい|いいえ`)。書かないは None、読めない値は false。JSON / TS 側のキーは `key`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<bool>,
+    /// 売り物の区分 (#1115。`売り物: 刀|防具`)。値は `"blade"` / `"armor"` に正規化して透過する。書かない・読めない値は None。JSON / TS 側のキーは `shopKind`。
+    #[serde(default, rename = "shopKind", skip_serializing_if = "Option::is_none")]
+    pub shop_kind: Option<String>,
+    /// 売り物の持ち主の人物 id (#1115。`持ち主:`)。空白・`,` を含まない 1 語。読めない値は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// 刀の 1 本目の値段・円 (#1115。`基準額:` 0 以上の整数)。書かない・読めない値は None。JSON / TS 側のキーは `basePrice`。
+    #[serde(default, rename = "basePrice", skip_serializing_if = "Option::is_none")]
+    pub base_price: Option<u32>,
+    /// 購入解禁のフラグ名 (#1115。`解禁:`)。空白・`,` を含まない 1 語。JSON / TS 側のキーは `unlockFlag`。
+    #[serde(
+        default,
+        rename = "unlockFlag",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub unlock_flag: Option<String>,
+    /// 一覧に出す画像のパス (#1115。`画像:`)。空白と `]` を含まない 1 語。読めない値は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// 解禁前に出す文 (#1115。`解禁前の文:`)。生文字列で透過する。JSON / TS 側のキーは `lockedMessage`。
+    #[serde(
+        default,
+        rename = "lockedMessage",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub locked_message: Option<String>,
 }
 
 /// パーティメンバー定義 (#175)。

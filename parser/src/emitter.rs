@@ -1568,6 +1568,27 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 if let Some(k) = it.key {
                     out.push_str(&format!("大切: {}\n", if k { "はい" } else { "いいえ" }));
                 }
+                if let Some(k) = &it.shop_kind {
+                    out.push_str(&format!(
+                        "売り物: {}\n",
+                        if k == "armor" { "防具" } else { "刀" }
+                    ));
+                }
+                if let Some(o) = &it.owner {
+                    out.push_str(&format!("持ち主: {o}\n"));
+                }
+                if let Some(n) = it.base_price {
+                    out.push_str(&format!("基準額: {n}\n"));
+                }
+                if let Some(f) = &it.unlock_flag {
+                    out.push_str(&format!("解禁: {f}\n"));
+                }
+                if let Some(i) = &it.image {
+                    out.push_str(&format!("画像: {i}\n"));
+                }
+                if let Some(m) = &it.locked_message {
+                    out.push_str(&format!("解禁前の文: {m}\n"));
+                }
                 if !it.elements.is_empty() {
                     out.push_str(&format!("属性: {}\n", it.elements.join(", ")));
                 }
@@ -2695,6 +2716,12 @@ mod tests {
             category: None,
             field_use: None,
             key: None,
+            shop_kind: None,
+            owner: None,
+            base_price: None,
+            unlock_flag: None,
+            image: None,
+            locked_message: None,
         }));
         let out = emit(&doc);
         assert!(out.contains("[アイテム やくそう]"));
@@ -2723,6 +2750,12 @@ mod tests {
             category: None,
             field_use: None,
             key: None,
+            shop_kind: None,
+            owner: None,
+            base_price: None,
+            unlock_flag: None,
+            image: None,
+            locked_message: None,
         }));
         let out = emit(&doc);
         assert!(out.contains(
