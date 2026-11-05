@@ -189,7 +189,7 @@ export interface MotionTiming {
   /** 候補窓（呪文・アイテム一覧）の開閉アニメーションの長さ（ms。開くときも閉じるときも同じ）。0 は即座に開閉（従来） (#745) */
   menuMs: number
   /**
-   * 登場スライド (#1037): 戦闘開始時に、敵は画面左端の外から、味方は画面右端の外から所定の位置へ滑り込む長さ（ms）。0 は無効（登場なし・従来）。
+   * 登場スライド (#1037): 戦闘開始時に、敵は画面左端の外から、味方は画面右端の外から所定の位置へ滑り込む長さ（ms）。0 は無効（登場なし）。default・snappy とも 200ms（暫定）。
    * ff かつ side のときだけ効く。登場中は入力を塞ぎ、ATB は時間を止める
    */
   entranceMs: number
@@ -241,7 +241,8 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   vanishMs: 320,
   vanishMosaicMaxSize: 24,
   menuMs: 0,
-  entranceMs: 0,
+  // 登場スライド (#1037/#1110): default でも有効（snappy と同じ暫定値。#803 の実作品の測定待ち）
+  entranceMs: 200,
   entranceEase: 'outQuad',
   entrancePartyDelayMs: 0,
 }

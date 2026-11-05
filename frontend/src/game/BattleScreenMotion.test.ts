@@ -441,12 +441,16 @@ describe('BattleScreen: 敵の攻撃は踏み出さず自己モザイク (sit-by
 })
 
 describe('BattleScreen: 登場スライド (#1037)', () => {
-  function entranceSetup(motion: 'snappy' | 'default', presentation: 'ff' | 'dq' = 'ff') {
+  function entranceSetup(
+    motion: 'snappy' | 'default',
+    presentation: 'ff' | 'dq' = 'ff',
+    layout: 'side' | 'front' = 'side'
+  ) {
     const engine = new BattleEngine([entity('hero')], [entity('boss', { atk: 0 })], {
       rng: () => 0.5,
       skills: {},
     })
-    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation, motion })
+    const s = new BattleScreen(engine, 800, 450, { layout, presentation, motion })
     created.push(s)
     return { s, engine }
   }
@@ -455,36 +459,42 @@ describe('BattleScreen: 登場スライド (#1037)', () => {
     enemy: I(s).enemyViews[0].container.x,
   })
 
-  it('snappy: 開始前は画面外、登場後に元の位置へ。入力は登場中ずっと塞がる', async () => {
-    const { s } = entranceSetup('snappy')
-    const rest = entranceSetup('default')
-    const restPos = dxOf(rest.s)
-    expect(dxOf(s).enemy).toBeLessThan(0)
-    expect(dxOf(s).party).toBeGreaterThanOrEqual(800)
-    expect(
-      (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
-    ).toBe(true)
-    await Promise.resolve()
-    await Promise.resolve()
-    s.tick(1) // 読み込み済みなので開始
-    s.tick(S.entranceMs / 2)
-    expect(dxOf(s).enemy).toBeLessThan(restPos.enemy)
-    s.tick(S.entranceMs)
-    expect(dxOf(s)).toEqual(restPos)
-    expect(
-      (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
-    ).toBe(false)
-  })
+  it.each(['snappy', 'default'] as const)(
+    '%s: 開始前は画面外、登場後に元の位置へ。入力は登場中ずっと塞がる',
+    async (motion) => {
+      const { s } = entranceSetup(motion)
+      const rest = entranceSetup(motion, 'dq') // 登場なしの基準位置（dq は登場しない）
+      const restPos = dxOf(rest.s)
+      expect(dxOf(s).enemy).toBeLessThan(0)
+      expect(dxOf(s).party).toBeGreaterThanOrEqual(800)
+      expect(
+        (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+      ).toBe(true)
+      await Promise.resolve()
+      await Promise.resolve()
+      s.tick(1) // 読み込み済みなので開始
+      s.tick(S.entranceMs / 2)
+      expect(dxOf(s).enemy).toBeLessThan(restPos.enemy)
+      s.tick(S.entranceMs)
+      expect(dxOf(s)).toEqual(restPos)
+      expect(
+        (s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
+      ).toBe(false)
+    }
+  )
 
-  it('default と dq では登場しない', () => {
-    const d = entranceSetup('default')
-    expect(
-      (d.s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
-    ).toBe(false)
-    const q = entranceSetup('snappy', 'dq')
-    expect(
-      (q.s as unknown as { isInputBlockedByPresentation(): boolean }).isInputBlockedByPresentation()
-    ).toBe(false)
+  it.each(['snappy', 'default'] as const)('%s でも dq・front では登場しない', (motion) => {
+    for (const [presentation, layout] of [
+      ['dq', 'side'],
+      ['ff', 'front'],
+    ] as const) {
+      const x = entranceSetup(motion, presentation, layout)
+      expect(
+        (
+          x.s as unknown as { isInputBlockedByPresentation(): boolean }
+        ).isInputBlockedByPresentation()
+      ).toBe(false)
+    }
   })
 })
 
@@ -830,14 +840,14 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
   })
 
   describe('登場しない構成', () => {
-    it('default・dq・front: 位置は従来どおり（基準位置と一致）、入力は塞がらず ATB も動く', async () => {
+    it('dq・front（default でも）: 位置は従来どおり（基準位置と一致）、入力は塞がらず ATB も動く', async () => {
       mockLoad('instant')
       const ATB = {
         atb: { mode: 'wait' as const, initialGauges: { party: [0], enemies: [0] } },
         rng: () => 0.5,
       }
       const cases: BattleScreenOptions[] = [
-        { motion: 'default' },
+        { motion: 'default', presentation: 'dq' },
         { presentation: 'dq' },
         { layout: 'front' },
       ]
