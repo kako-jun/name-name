@@ -11962,7 +11962,7 @@ mod master_gear_keys_tests {
             assert!(json.contains(k), "{k}: {json}");
         }
         // 別名・防具
-        let it = item("shop_kind: armor\nowner: o\nbase_price: 0\nunlock_flag: u\nimage: i\nlocked_message: m\n");
+        let it = item("shop_kind: 防具\nowner: o\nbase_price: 0\nunlock_flag: u\nimage: i\nlocked_message: m\n");
         assert_eq!(it.shop_kind.as_deref(), Some("armor"));
         assert_eq!(it.base_price, Some(0));
     }
@@ -11993,6 +11993,17 @@ mod master_gear_keys_tests {
     #[test]
     fn invalid_values_warn_and_fall_back() {
         let _ = take_test_warnings();
+        for bad in ["blade", "ARMOR"] {
+            assert_eq!(item(&format!("売り物: {bad}\n")).shop_kind, None);
+        }
+        let w = take_test_warnings();
+        assert_eq!(
+            w,
+            vec![
+                "[name-name-parser] warning: [アイテム katana] の 売り物 `blade` は読めないため 未指定 にした（刀 / 防具）".to_string(),
+                "[name-name-parser] warning: [アイテム katana] の 売り物 `ARMOR` は読めないため 未指定 にした（刀 / 防具）".to_string(),
+            ]
+        );
         assert_eq!(item("売り物: 槍\n").shop_kind, None);
         assert_eq!(
             take_test_warnings(),
@@ -12016,6 +12027,11 @@ mod master_gear_keys_tests {
                 "[name-name-parser] warning: [アイテム katana] の 解禁 `x,y` は読めないため 未指定 にした（空白を含まない 1 語）".to_string(),
                 "[name-name-parser] warning: [アイテム katana] の 画像 `a b.webp` は読めないため 未指定 にした（空白と ] を含まない 1 語）".to_string(),
             ]
+        );
+        assert_eq!(item("持ち主: a,b\n").owner, None);
+        assert_eq!(
+            take_test_warnings(),
+            vec!["[name-name-parser] warning: [アイテム katana] の 持ち主 `a,b` は読めないため 未指定 にした（空白を含まない 1 語）".to_string()]
         );
         assert_eq!(item("画像: a]b\n").image, None);
         let _ = take_test_warnings();

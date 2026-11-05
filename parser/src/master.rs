@@ -503,13 +503,13 @@ fn build_item_def(id: String, entries: &[(String, String)]) -> ItemDef {
     }
 }
 
-/// `売り物:` を `blade` / `armor` に読む (#1115)。空は未指定、刀・防具以外は警告して未指定。
+/// `売り物:` を `刀` / `防具` だけ受理し、`blade` / `armor` に正規化して返す (#1115)。空は未指定、それ以外（英語を含む）は警告して未指定。
 fn collect_shop_kind(label: &str, entries: &[(String, String)]) -> Option<String> {
     let raw = lookup_master_value(entries, &["売り物", "shop_kind", "shopKind"])?.trim();
-    match raw.to_lowercase().as_str() {
+    match raw {
         "" => None,
-        "刀" | "blade" => Some("blade".to_string()),
-        "防具" | "armor" => Some("armor".to_string()),
+        "刀" => Some("blade".to_string()),
+        "防具" => Some("armor".to_string()),
         _ => {
             emit_warning(&format!(
                 "[name-name-parser] warning: [{label}] の 売り物 `{raw}` は読めないため 未指定 にした（刀 / 防具）"
