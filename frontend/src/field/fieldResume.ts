@@ -5,7 +5,7 @@
  * `field.html?resume=<0|1|2|quick>` で開く。セーブ形式は `game/rpgSave.ts` が正本で、
  * このファイルは「設定（世界）にセーブ（状態）を重ねる」ことと「戦闘エンジンへ渡す形」だけを持つ。
  */
-import { SaveManager } from '../game/SaveManager'
+import { SaveManager, type SaveSlotData } from '../game/SaveManager'
 import {
   parseResumeParam,
   parseRpgSave,
@@ -57,6 +57,18 @@ export function loadResume(
   if (slot === null)
     return { kind: 'error', message: `?resume=${raw} は不正です（0 / 1 / 2 / quick のどれか）` }
   const data = slot === 'quick' ? saves.quickLoad() : saves.load(slot)
+  return resumeFromSlotData(data, slot, config)
+}
+
+/**
+ * セーブデータ 1 件を設定に重ねる。`loadResume`（`?resume=`）と、メニュー「ロード」の可否判定（`isLoadableSlot`）が共有する正本。
+ * データ無し・RPG 状態無し・検証失敗・パーティ 0 人 → error（理由つき）
+ */
+export function resumeFromSlotData(
+  data: SaveSlotData | null,
+  slot: number | 'quick',
+  config: Pick<FieldConfig, 'party' | 'items' | 'flags' | 'monsters' | 'scenes'>
+): ResumeLoad {
   if (!data) return { kind: 'error', message: `セーブ（${String(slot)}）がありません` }
   if (!data.rpg)
     return { kind: 'error', message: `セーブ（${String(slot)}）に rpg 状態がありません` }
@@ -73,6 +85,15 @@ export function loadResume(
     delete resolved.field
   }
   return { kind: 'ok', slot, resolved }
+}
+
+/** そのスロットが「ロード」できるか（`loadResume` と同じ条件）。ノベルのセーブ・壊れたセーブ・パーティが設定に居ないセーブは false */
+export function isLoadableSlot(
+  data: SaveSlotData | null,
+  slot: number,
+  config: Pick<FieldConfig, 'party' | 'items' | 'flags' | 'monsters' | 'scenes'>
+): boolean {
+  return resumeFromSlotData(data, slot, config).kind === 'ok'
 }
 
 /**
@@ -165,4 +186,11 @@ export function carryOverBattleResult<P>(input: {
       (input.outcome === 'defeat' ? input.before.party : input.partyAfter) as P[]
     ),
   }
+}
+
+/** `?resume=<slot>` を差し替えた search（`?config=` などは維持）。メニューの「ロード」が `?resume=` の既存の入口へそのまま乗るための組み立て */
+export function withResumeSlot(search: string, slot: number): string {
+  const q = new URLSearchParams(search)
+  q.set('resume', String(slot))
+  return `?${q.toString()}`
 }

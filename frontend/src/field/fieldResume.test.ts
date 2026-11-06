@@ -8,6 +8,8 @@ import { buildRpgSaveSlot, type RpgSaveState } from '../game/rpgSave'
 import type { BattleEntity } from '../game/spellDsl'
 import {
   FIELD_DOC_KEY,
+  withResumeSlot,
+  isLoadableSlot,
   baseConfigOf,
   loadResume,
   savedFormsFromResume,
@@ -311,5 +313,46 @@ describe('状態異常の再開 (#1051)', () => {
     )
     const r = loadResume('?resume=0', config)
     expect(r.kind === 'ok' && r.resolved.party[0].status).toEqual({ x: 3 })
+  })
+})
+
+describe('withResumeSlot（メニューの「ロード」が付ける ?resume=）', () => {
+  it('?config= を残して resume を付ける', () => {
+    expect(withResumeSlot('?config=a.json', 0)).toBe('?config=a.json&resume=0')
+  })
+  it('既存の ?resume= は差し替える（重複しない）', () => {
+    expect(withResumeSlot('?config=a.json&resume=2', 1)).toBe('?config=a.json&resume=1')
+  })
+  it('search が空でも組み立てる', () => {
+    expect(withResumeSlot('', 2)).toBe('?resume=2')
+  })
+})
+
+describe('isLoadableSlot（メニュー「ロード」の可否。loadResume と同じ条件）', () => {
+  const saves = () => new SaveManager(FIELD_DOC_KEY)
+  it('正常なセーブは true（loadResume も ok）', () => {
+    saves().save(0, buildRpgSaveSlot(rpg(), { slot: 0 }))
+    expect(isLoadableSlot(saves().load(0), 0, config)).toBe(true)
+    expect(loadResume('?resume=0', config).kind).toBe('ok')
+  })
+  it('空スロットは false', () => {
+    expect(isLoadableSlot(saves().load(0), 0, config)).toBe(false)
+  })
+  it('rpg の無いセーブ（ノベルのセーブ）は false', () => {
+    const slot = buildRpgSaveSlot(rpg())
+    delete slot.rpg
+    saves().save(0, slot)
+    expect(isLoadableSlot(saves().load(0), 0, config)).toBe(false)
+    expect(loadResume('?resume=0', config).kind).toBe('error')
+  })
+  it('検証に落ちる rpg・パーティが設定に居ない rpg は false', () => {
+    saves().save(0, buildRpgSaveSlot(rpg({ gold: -5 })))
+    saves().save(1, buildRpgSaveSlot(rpg({ party: [{ id: 'ghost' }] })))
+    expect(isLoadableSlot(saves().load(0), 0, config)).toBe(false)
+    expect(isLoadableSlot(saves().load(1), 1, config)).toBe(false)
+  })
+  it('壊れた JSON は load が null を返すので false', () => {
+    localStorage.setItem('name-name-save-field-0', '{broken')
+    expect(isLoadableSlot(saves().load(0), 0, config)).toBe(false)
   })
 })

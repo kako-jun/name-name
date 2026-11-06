@@ -55,7 +55,9 @@ export interface FieldMenuHostDeps {
     warp: boolean
   }
   /** 開き始めの準備（歩き入力の破棄など）と、パーティ・スロットの組み立て（テクスチャ待ちを含む） */
-  prepare(): Promise<Pick<FieldMenuOpenData, 'party' | 'slots' | 'images' | 'handTexture'>>
+  prepare(): Promise<
+    Pick<FieldMenuOpenData, 'party' | 'slots' | 'slotLoadable' | 'images' | 'handTexture'>
+  >
   info(): FieldMenuInfo
   /** 開くときの項目定義（実状態から作った content 込み）。省略は `config.items` のまま */
   items?(): readonly FieldMenuItemDef[]
@@ -126,6 +128,7 @@ export class FieldMenuHost {
         items: this.d.items ? this.d.items() : this.d.config.items,
         party: prepared.party,
         slots: prepared.slots,
+        ...(prepared.slotLoadable ? { slotLoadable: prepared.slotLoadable } : {}),
         ...(prepared.images ? { images: prepared.images } : {}),
         ...(prepared.handTexture ? { handTexture: prepared.handTexture } : {}),
         info: this.d.info(),

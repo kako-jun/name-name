@@ -37,10 +37,10 @@ describe('parseConfig の menu (#880)', () => {
     expect('menu' in r.value).toBe(false)
   })
 
-  it('menu: true は既定の9項目', () => {
+  it('menu: true は既定の10項目', () => {
     const r = parseConfig(fixture({ menu: true }), BASE)
     if (!r.ok) throw new Error(r.error)
-    expect(r.value.menu?.items).toHaveLength(9)
+    expect(r.value.menu?.items).toHaveLength(10)
   })
 
   it('dummy fixture の menu オプションで menu:true が入り、未指定はキーなし', () => {

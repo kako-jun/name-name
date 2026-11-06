@@ -24,6 +24,7 @@ export type ScreenKind =
   | 'appstore'
   | 'status'
   | 'save'
+  | 'load'
   | 'config'
   | 'empty'
 
@@ -34,9 +35,15 @@ export const SCREEN_KINDS: readonly ScreenKind[] = [
   'appstore',
   'status',
   'save',
+  'load',
   'config',
   'empty',
 ]
+
+/** セーブスロットの一覧を出す画面（セーブとロードは一覧・行の高さ・描画を共用する） */
+export function isSlotKind(k: ScreenKind): k is 'save' | 'load' {
+  return k === 'save' || k === 'load'
+}
 
 /** アプリストアのどれかのタブが人物別の一覧（`entriesByParty`。空オブジェクトは「無い」）を持つか。持つときだけ人物の切り替え（帯・上下キー・案内）を出す */
 export function appstoreHasParty(content: Pick<ResolvedContent, 'tabs'>): boolean {
@@ -60,6 +67,8 @@ export function defaultScreenKind(id: string): ScreenKind {
       return 'status'
     case 'save':
       return 'save'
+    case 'load':
+      return 'load'
     case 'config':
       return 'config'
     default:
@@ -168,6 +177,7 @@ const DEFAULT_DESCRIPTION: Record<ScreenKind, string> = {
   appstore: 'アプリを選んでください',
   status: '人物ごとの能力を見ます',
   save: 'セーブするスロットを選んでください',
+  load: 'ロードするスロットを選んでください',
   config: '設定を変えます',
   empty: '',
 }
@@ -421,6 +431,8 @@ export interface ScreenCtx {
   partyIds?: readonly string[]
   /** セーブスロットごとに既存のデータがあるか（上書き確認の判定） */
   slotFilled: readonly boolean[]
+  /** セーブスロットごとにロードできるか（ノベルのセーブ・壊れたセーブは false）。省略は「埋まっていればロードできる」 */
+  slotLoadable?: readonly boolean[]
   /** せっていの選択値（key → 選択肢 index）。無ければ initial */
   settings: Readonly<Record<string, number>>
 }
@@ -431,6 +443,7 @@ export type ScreenEffect =
   | 'back-to-top'
   | 'notice'
   | 'save'
+  | 'load'
   | 'setting'
   | 'use'
   | 'sort'
@@ -449,6 +462,7 @@ export interface ScreenStep {
   /** 説明バーの通知。undefined = 通知を消す */
   notice?: string
   save?: number
+  load?: number
   setting?: { key: string; value: number }
   use?: ScreenUse
 }
@@ -482,7 +496,7 @@ function entriesAt(
 
 export function listCount(ctx: ScreenCtx, nav: ScreenNav): number {
   const k = ctx.content.kind
-  if (k === 'save') return SAVE_SLOT_COUNT
+  if (isSlotKind(k)) return SAVE_SLOT_COUNT
   if (k === 'config') return ctx.content.options.length
   return listEntries(ctx, nav).length
 }
@@ -501,7 +515,7 @@ export function isSellTab(c: Pick<ResolvedContent, 'kind' | 'tabs'>, tab: number
 
 /** 確認窓の選択肢（0 = 実行・1 = やめる／いいえ。既定の位置は呼び出し側で「やめる」に置く） */
 export function confirmChoices(kind: ScreenKind, selling: boolean): [string, string] {
-  if (kind === 'save') return ['はい', 'いいえ']
+  if (isSlotKind(kind)) return ['はい', 'いいえ']
   return [selling ? '売る' : '買う', 'やめる']
 }
 
@@ -554,6 +568,15 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
       const value = wrap(optionValue(ctx, o) + 1, o.choices.length)
       return { nav: n, effect: 'setting', setting: { key: o.key, value } }
     }
+    if (k === 'load') {
+      // 空のスロットは読むものが無い。埋まっていれば確認（既定「いいえ」=誤タップで現在地を失わない）
+      if (!ctx.slotFilled[n.list])
+        return { nav: n, effect: 'notice', notice: `スロット${n.list + 1}は空です` }
+      // 埋まっていても読めないセーブ（ノベルのセーブ・壊れたセーブ）は確認窓を出さない（リロードで現在地を失うため）
+      if (ctx.slotLoadable?.[n.list] === false)
+        return { nav: n, effect: 'notice', notice: `スロット${n.list + 1}はロードできません` }
+      return { nav: { ...n, focus: 'confirm', confirm: 1 }, effect: 'moved' }
+    }
     if (k === 'save') {
       if (ctx.slotFilled[n.list])
         return { nav: { ...n, focus: 'confirm', confirm: 1 }, effect: 'moved' }
@@ -598,6 +621,7 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
   }
   // confirm（確認窓）
   if (n.confirm === 0) {
+    if (k === 'load') return { nav: { ...n, focus: 'list' }, effect: 'load', load: n.list }
     if (k === 'save')
       return {
         nav: { ...n, focus: 'list' },
@@ -757,7 +781,7 @@ export function screenDescription(nav: ScreenNav, ctx: ScreenCtx, notice: string
     const d = ctx.content.options[nav.list]?.description
     if (d) return d
   }
-  if (nav.focus === 'list' && k !== 'save' && k !== 'config') {
+  if (nav.focus === 'list' && !isSlotKind(k) && k !== 'config') {
     const e = listEntries(ctx, nav)[nav.list]
     if (e?.description) return e.description
   }
@@ -857,7 +881,7 @@ export function computeScreenLayout(i: ScreenLayoutInput): ScreenLayout {
     for (let p = 0; p < Math.min(i.partyCount, MAX_PARTY_SLOTS); p++)
       party.push({ x: X(0.02), y: Y(top) + p * (slotH + gap), w: 0.3 * W, h: slotH })
   }
-  const rowH = (kind === 'save' ? 0.16 : kind === 'config' ? 0.09 : 0.07) * H
+  const rowH = (isSlotKind(kind) ? 0.16 : kind === 'config' ? 0.09 : 0.07) * H
   const pad = 0.015 * H
   // 一覧の上に取る帯: アプリストアは人物の切り替え行、そうびは 2 枠の見出し行
   const headerN = kind === 'equip' ? Math.max(0, Math.floor(i.headerCount ?? 0)) : 0

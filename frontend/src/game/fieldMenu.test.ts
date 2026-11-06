@@ -60,11 +60,11 @@ describe('parseFieldMenuConfig', () => {
     }
   )
 
-  it.each([[true], [{}]])('%j は既定の9項目', (raw) => {
+  it.each([[true], [{}]])('%j は既定の10項目', (raw) => {
     const r = parseFieldMenuConfig(raw)
     expect(r.warnings).toEqual([])
     expect(r.value?.items.map((i) => i.id)).toEqual(DEFAULT_FIELD_MENU_ITEMS.map((i) => i.id))
-    expect(r.value?.items).toHaveLength(9)
+    expect(r.value?.items).toHaveLength(10)
     expect(r.value?.transition).toEqual({ textOutMs: 80, slideMs: 140, textInMs: 80 })
   })
 
@@ -106,7 +106,7 @@ describe('parseFieldMenuConfig', () => {
   it('items が配列でないと警告して既定へ', () => {
     const r = parseFieldMenuConfig({ items: 'x' })
     expect(r.warnings).toHaveLength(1)
-    expect(r.value?.items).toHaveLength(9)
+    expect(r.value?.items).toHaveLength(10)
   })
 
   it('不正な項目（id/label 欠落・空文字・非オブジェクト）は警告して省く', () => {
@@ -137,13 +137,13 @@ describe('parseFieldMenuConfig', () => {
 
   it('有効な項目が1つもなければ警告して既定へ戻す', () => {
     const r = parseFieldMenuConfig({ items: [{ id: 1 }] })
-    expect(r.value?.items).toHaveLength(9)
+    expect(r.value?.items).toHaveLength(10)
     expect(r.warnings.some((w) => w.includes('既定'))).toBe(true)
   })
 
   it('items: []（空配列）も既定へ戻す', () => {
     const r = parseFieldMenuConfig({ items: [] })
-    expect(r.value?.items).toHaveLength(9)
+    expect(r.value?.items).toHaveLength(10)
     expect(r.warnings.length).toBeGreaterThan(0)
   })
 
@@ -184,7 +184,7 @@ describe('parseFieldMenuConfig', () => {
 })
 
 describe('既定項目のラベル', () => {
-  it('9項目のラベル列が固定されている（魔石は「ませき」）', () => {
+  it('10項目のラベル列が固定されている（魔石は「ませき」）', () => {
     expect(DEFAULT_FIELD_MENU_ITEMS.map((i) => i.label)).toEqual([
       'どうぐ',
       'まほう',
@@ -194,6 +194,7 @@ describe('既定項目のラベル', () => {
       'ジョブ',
       'ステータス',
       'セーブ',
+      'ロード',
       'せってい',
     ])
   })
@@ -215,11 +216,12 @@ describe('resolveMenuItems', () => {
     expect(v[0]).toMatchObject({ enabled: false, reason: DEFAULT_DISABLED_REASON })
     expect(v[1]).toMatchObject({ enabled: false, reason: 'わけ' })
   })
-  it('時間制限中は blockedWhileTimed の項目だけ灰色（セーブ禁止）', () => {
+  it('時間制限中は blockedWhileTimed の項目だけ灰色（セーブ・ロード禁止）', () => {
     const v = resolveMenuItems(DEFAULT_FIELD_MENU_ITEMS, { timeLimited: true })
     const off = v.filter((x) => !x.enabled).map((x) => x.id)
-    expect(off).toEqual(['save'])
+    expect(off).toEqual(['save', 'load'])
     expect(v[itemIndex('save')].reason).toBe('時間制限中はセーブできません')
+    expect(v[itemIndex('load')].reason).toBe('時間制限中はロードできません')
   })
   it('timedReason 未指定は label から作る', () => {
     const v = resolveMenuItems([{ id: 'a', label: 'A', blockedWhileTimed: true }], {
@@ -285,8 +287,8 @@ describe('stepFieldMenu（最上位）', () => {
     const c = ctxFor()
     const up = stepFieldMenu(open(0), { type: 'move', dx: 0, dy: -1 }, c)
     expect(up.effect).toBe('moved')
-    expect((up.state as { cursor: number }).cursor).toBe(8)
-    const down = stepFieldMenu(open(8), { type: 'move', dx: 0, dy: 1 }, c)
+    expect((up.state as { cursor: number }).cursor).toBe(9)
+    const down = stepFieldMenu(open(9), { type: 'move', dx: 0, dy: 1 }, c)
     expect((down.state as { cursor: number }).cursor).toBe(0)
   })
 
@@ -351,7 +353,7 @@ describe('stepFieldMenu（最上位）', () => {
     expect((r2.state as { notice: string | null }).notice).toBeNull()
   })
 
-  it.each([[-1], [9], [1.5], [NaN]])('範囲外/非整数のタップ index（%s）は無視', (index) => {
+  it.each([[-1], [10], [1.5], [NaN]])('範囲外/非整数のタップ index（%s）は無視', (index) => {
     const r = stepFieldMenu(open(2), { type: 'tap', index }, ctxFor())
     expect(r.effect).toBe('none')
     expect((r.state as { cursor: number }).cursor).toBe(2)
@@ -667,7 +669,7 @@ describe('当たり判定', () => {
 })
 
 describe('画面種の既定', () => {
-  it('既定の9項目の画面種', () => {
+  it('既定の10項目の画面種', () => {
     expect(DEFAULT_FIELD_MENU_ITEMS.map((d) => screenKindOfItem(d))).toEqual([
       'item',
       'party-list',
@@ -677,8 +679,19 @@ describe('画面種の既定', () => {
       'party-list',
       'status',
       'save',
+      'load',
       'config',
     ])
+  })
+  it('load は save の隣・時間制限中は塞ぐ', () => {
+    const ids = DEFAULT_FIELD_MENU_ITEMS.map((d) => d.id)
+    expect(ids.indexOf('load')).toBe(ids.indexOf('save') + 1)
+    expect(DEFAULT_FIELD_MENU_ITEMS.find((d) => d.id === 'load')).toMatchObject({
+      label: 'ロード',
+      blockedWhileTimed: true,
+      timedReason: '時間制限中はロードできません',
+    })
+    expect(defaultScreenKind('load')).toBe('load')
   })
   it('kind 指定が id 既定に優先し、未知 id は empty', () => {
     expect(screenKindOfItem({ id: 'item', label: 'x', kind: 'status' })).toBe('status')

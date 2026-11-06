@@ -45,7 +45,7 @@ export interface FieldMenuItemDef {
   blockedWhileTimed?: boolean
   /** 時間制限中に選んだときの理由。未指定は `「{label}」は時間制限中は使えません` */
   timedReason?: string
-  /** 項目画面の種類。未指定は id から決まる（既定の9項目）。定義側が足した項目は未指定で `empty`（枠だけ） */
+  /** 項目画面の種類。未指定は id から決まる（既定の10項目）。定義側が足した項目は未指定で `empty`（枠だけ） */
   kind?: ScreenKind
   /** 項目画面の中身（一覧・タブ・設定項目・説明）。未指定は既定（空の一覧） */
   content?: FieldMenuContentDef
@@ -61,7 +61,7 @@ export interface FieldMenuConfig {
 
 export const DEFAULT_DISABLED_REASON = 'まだ使えません'
 
-/** 既定の9項目（wireframe §3-3 の順序）。設定の `menu.items` で差し替えられる */
+/** 既定の10項目（wireframe §3-3 の順序。セーブの隣にロード）。設定の `menu.items` で差し替えられる */
 export const DEFAULT_FIELD_MENU_ITEMS: readonly FieldMenuItemDef[] = [
   { id: 'item', label: 'どうぐ' },
   { id: 'magic', label: 'まほう' },
@@ -75,6 +75,12 @@ export const DEFAULT_FIELD_MENU_ITEMS: readonly FieldMenuItemDef[] = [
     label: 'セーブ',
     blockedWhileTimed: true,
     timedReason: '時間制限中はセーブできません',
+  },
+  {
+    id: 'load',
+    label: 'ロード',
+    blockedWhileTimed: true,
+    timedReason: '時間制限中はロードできません',
   },
   { id: 'config', label: 'せってい' },
 ]
@@ -111,8 +117,8 @@ export interface ParsedFieldMenu {
 
 /**
  * 設定の `menu` を検証する。未指定・`false` はメニュー無し（既存のゲームの挙動は不変）。
- * `true` / `{}` は既定の9項目。`items` を書くとその一覧に差し替わる（増減できる）。
- * 不正な項目は警告して落とす。落とした結果が空なら既定の9項目へ戻す。
+ * `true` / `{}` は既定の10項目。`items` を書くとその一覧に差し替わる（増減できる）。
+ * 不正な項目は警告して落とす。落とした結果が空なら既定の10項目へ戻す。
  */
 export function parseFieldMenuConfig(raw: unknown): ParsedFieldMenu {
   const warnings: string[] = []
@@ -283,6 +289,8 @@ export type FieldMenuEffect =
   | 'refused'
   | 'notice'
   | 'save'
+  /** セーブ済みのスロットを読み込む要求（呼び出し側がフィールドを作り直す） */
+  | 'load'
   | 'setting'
   /** どうぐ・まほうを使う要求（呼び出し側が実状態に適用する） */
   | 'use'
@@ -294,6 +302,8 @@ export interface FieldMenuStep {
   effect: FieldMenuEffect
   /** effect = 'save' のスロット index */
   save?: number
+  /** effect = 'load' のスロット index */
+  load?: number
   /** effect = 'setting' の変更 */
   setting?: { key: string; value: number }
   /** effect = 'use' / 'sort' の要求 */
@@ -309,6 +319,7 @@ export interface FieldMenuCtx {
   /** 人物の id（表示順）。省略は空 */
   partyIds?: readonly string[]
   slotFilled: readonly boolean[]
+  slotLoadable?: readonly boolean[]
 }
 
 /** 項目定義 → 画面の種類 */
@@ -341,6 +352,7 @@ export function stepFieldMenu(
       partyCount: Math.min(ctx.partyCount, MAX_PARTY_SLOTS),
       partyIds: ctx.partyIds,
       slotFilled: ctx.slotFilled,
+      ...(ctx.slotLoadable ? { slotLoadable: ctx.slotLoadable } : {}),
       settings: state.settings,
     }
     const sev =
@@ -361,6 +373,7 @@ export function stepFieldMenu(
       effect: r.effect === 'notice' ? 'notice' : r.effect,
     }
     if (r.save !== undefined) out.save = r.save
+    if (r.load !== undefined) out.load = r.load
     if (r.setting) out.setting = r.setting
     if (r.use) out.use = r.use
     return out

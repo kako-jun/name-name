@@ -38,6 +38,7 @@ import {
   buyConfirmMessage,
   confirmChoices,
   isSellTab,
+  isSlotKind,
   clampNav,
   computeScreenLayout,
   entryForUse,
@@ -121,12 +122,20 @@ export interface FieldMenuOpenData {
   info: FieldMenuInfo
   /** セーブスロットごとの表示（既存データの要約。空きは null）。長さ `SAVE_SLOT_COUNT` */
   slots: readonly (string | null)[]
+  /** スロットごとにロードできるか（`slots` と同じ長さ。省略は「埋まっていればロードできる」） */
+  slotLoadable?: readonly boolean[]
   /** せっていの前回値（key → 選択肢 index） */
   settings?: Readonly<Record<string, number>>
   /** 一覧に出す画像（`MenuEntry.image` の URL → 読み込んだ絵）。読めなかった・未読み込みは null か無し（文字だけで出す） */
   images?: Readonly<Record<string, Texture | null>>
   /** 手のカーソルの画像 (#1067)。未指定・読めなかったは null か無し（従来のドット手） */
   handTexture?: Texture | null
+}
+
+/** セーブ成功の結果。書いた内容の要約と、そのスロットがいまロードできるか（`isLoadableSlot`。呼び出し側が保存した内容で判定する） */
+export interface FieldSaveResult {
+  label: string
+  loadable: boolean
 }
 
 export interface FieldMenuScreenOptions {
@@ -142,7 +151,9 @@ export interface FieldMenuScreenOptions {
   /** 項目画面を開いた（id） */
   onOpenScreen?(id: string): void
   /** セーブスロットが決定された。保存できたら新しい要約、失敗は null */
-  onSave?(slot: number): string | null
+  onSave?(slot: number): FieldSaveResult | null
+  /** ロードするスロットが確認された（はい）。呼び出し側がフィールドを作り直す。成功の通知は出さない（画面ごと作り直されるため） */
+  onLoad?(slot: number): void
   /** せっていが変わった */
   onSetting?(key: string, value: number): void
   /** どうぐ・まほうを使う。null（または未指定）= 使う処理が無い（説明バーに「まだありません」） */
@@ -174,6 +185,7 @@ export class FieldMenuScreen extends Container {
   private data: FieldMenuOpenData | null = null
   private contents: Record<string, ResolvedContent> = {}
   private slots: (string | null)[] = []
+  private slotLoadable: readonly boolean[] | undefined
   private timed = false
   private dirty = false
   private trans: Transition | null = null
@@ -230,6 +242,7 @@ export class FieldMenuScreen extends Container {
       partyCount: this.partyCount(),
       partyIds: this.data?.party.map((p) => p.id) ?? [],
       slotFilled: this.slots.map((s) => s !== null),
+      ...(this.slotLoadable ? { slotLoadable: this.slotLoadable } : {}),
     }
   }
 
@@ -255,6 +268,7 @@ export class FieldMenuScreen extends Container {
   open(data: FieldMenuOpenData): void {
     this.data = data
     this.slots = [...data.slots]
+    this.slotLoadable = data.slotLoadable
     this.contents = {}
     for (const d of data.items) {
       const kind = screenKindOfItem(d)
@@ -328,10 +342,19 @@ export class FieldMenuScreen extends Container {
         break
       case 'save':
         if (step.save !== undefined) {
-          const label = this.opts.onSave?.(step.save) ?? null
-          if (label !== null) this.slots[step.save] = label
-          else if (this.state.open) this.state = { ...this.state, notice: 'セーブできませんでした' }
+          const saved = this.opts.onSave?.(step.save) ?? null
+          if (saved !== null) {
+            this.slots[step.save] = saved.label
+            // 開くときに作った slotLoadable も、書いたスロット分を更新する（同じメニューでそのままロードできる）
+            const loadable = [...(this.slotLoadable ?? this.slots.map((s) => s !== null))]
+            loadable[step.save] = saved.loadable
+            this.slotLoadable = loadable
+          } else if (this.state.open)
+            this.state = { ...this.state, notice: 'セーブできませんでした' }
         }
+        break
+      case 'load':
+        if (step.load !== undefined) this.opts.onLoad?.(step.load)
         break
       case 'setting':
         if (step.setting) this.opts.onSetting?.(step.setting.key, step.setting.value)
@@ -434,6 +457,7 @@ export class FieldMenuScreen extends Container {
       partyCount: this.partyCount(),
       partyIds: this.data?.party.map((p) => p.id) ?? [],
       slotFilled: this.slots.map((s) => s !== null),
+      ...(this.slotLoadable ? { slotLoadable: this.slotLoadable } : {}),
       settings: this.state.open ? this.state.settings : {},
     }
   }
@@ -643,7 +667,9 @@ export class FieldMenuScreen extends Container {
       const label =
         k === 'save'
           ? `スロット${nav.list + 1}に上書きしますか？`
-          : buyConfirmMessage(listEntries(ctx, nav)[nav.list], selling)
+          : k === 'load'
+            ? `スロット${nav.list + 1}をロードしますか？`
+            : buyConfirmMessage(listEntries(ctx, nav)[nav.list], selling)
       C.addChild(
         this.text(
           label,
@@ -693,7 +719,7 @@ export class FieldMenuScreen extends Container {
       let label = ''
       let detail = ''
       let enabled = true
-      if (k === 'save') {
+      if (isSlotKind(k)) {
         label = `スロット${i + 1}`
         detail = this.slots[i] ?? 'あき'
         enabled = true
