@@ -295,9 +295,10 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
     let m;
 
-    m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/);
+    // `contents/`(末尾スラッシュ)と `contents`(パスなし)はリポ直下の一覧(GitHub と同じ。scriptsDir なしの作品の列挙に使う)
+    m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/contents(?:\/(.*))?$/);
     if (m) {
-      const [, owner, repo, rawRelPath] = m;
+      const [, owner, repo, rawRelPath = ""] = m;
       // Octokit は path テンプレートを URL エンコードするため `/` が `%2F` に
       // なりうる。GitHub 側はどちらも受けるので、こちらでも decode してから扱う。
       const relPath = decodeURIComponent(rawRelPath);
