@@ -177,6 +177,57 @@ describe('FieldPlayer', () => {
     expect(d).toHaveBeenCalledTimes(1)
   })
 
+  it('古い世代の onLoadRequest は何もしない', async () => {
+    render(element)
+    await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(1))
+    const first = startFieldGameMock.mock.calls[0][0] as StartFieldGameOptions
+    await act(async () => {
+      first.onLoadRequest?.(1)
+    })
+    await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(2))
+    await act(async () => {
+      first.onLoadRequest?.(2)
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(startFieldGameMock).toHaveBeenCalledTimes(2)
+    expect(loadFieldConfigMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('読み込み中は案内を出し、起動完了・エラーで消える。ロードの作り直し中にも出る', async () => {
+    let resolveStart: (d: () => void) => void = () => {}
+    startFieldGameMock.mockImplementationOnce(
+      () => new Promise<() => void>((r) => (resolveStart = r))
+    )
+    render(element)
+    expect(screen.getByRole('status')).toHaveTextContent('読み込み中')
+    await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      resolveStart(vi.fn())
+    })
+    expect(screen.queryByRole('status')).toBeNull()
+    // ロード(作り直し)中
+    let resolve2: (d: () => void) => void = () => {}
+    startFieldGameMock.mockImplementationOnce(() => new Promise<() => void>((r) => (resolve2 = r)))
+    const first = startFieldGameMock.mock.calls[0][0] as StartFieldGameOptions
+    await act(async () => {
+      first.onLoadRequest?.(0)
+    })
+    await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    await act(async () => {
+      resolve2(vi.fn())
+    })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('エラー時も読み込み中の案内は消える', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    loadFieldConfigMock.mockResolvedValue({ ok: false, error: 'x', warnings: [] })
+    render(element)
+    await screen.findByRole('alert')
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('onLoadRequest で前回を dispose して ?resume=<slot> の復元経路で作り直す(URL は書き換えない)', async () => {
     render(element)
     await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(1))

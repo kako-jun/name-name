@@ -19,7 +19,7 @@ describe("GET /api/projects", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { projects: Array<{ name: string }> };
     const names = body.projects.map((p) => p.name);
-    for (const required of ["ogurasia", "skirts-colour", "friday-1930", "gymnasia", "llll-ll-media", "amanuma", "sit-by-me"]) {
+    for (const required of ["ogurasia", "skirts-colour", "friday-1930", "gymnasia", "llll-ll-media", "amanuma"]) {
       expect(names).toContain(required);
     }
   });

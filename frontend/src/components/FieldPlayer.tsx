@@ -49,6 +49,8 @@ function FieldPlayer({
   const depsRef = useRef({ loadAllDocs, resolveScene })
   depsRef.current = { loadAllDocs, resolveScene }
   const [error, setError] = useState<string | null>(null)
+  // 設定の読み込み〜起動(ロードでの作り直しを含む)が終わるまで案内を出す
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const stage = stageRef.current
@@ -64,6 +66,7 @@ function FieldPlayer({
       stop?.()
       stop = null
       setError(null)
+      setLoading(true)
       try {
         const result = await loadFieldConfig(
           {
@@ -84,6 +87,7 @@ function FieldPlayer({
           console.error(`[field] ${result.error}`)
           for (const w of result.warnings) console.warn(`[field] ${w}`)
           setError(result.error)
+          setLoading(false)
           return
         }
         for (const w of result.warnings) console.warn(`[field] ${w}`)
@@ -97,7 +101,8 @@ function FieldPlayer({
           containHost: stage,
           scriptEvents: result.value.npcEvents,
           onLoadRequest: (slot) => {
-            if (disposed) return
+            // 古い世代(作り直し済み・破棄済み)の要求は無視する
+            if (disposed || gen !== generation) return
             void run(withResumeSlot('', slot))
           },
         })
@@ -107,10 +112,12 @@ function FieldPlayer({
           return
         }
         stop = dispose
+        setLoading(false)
       } catch (e) {
         if (disposed || gen !== generation) return
         console.error('[field] 起動に失敗しました', e)
         setError(`起動に失敗しました\n${errText(e)}`)
+        setLoading(false)
       }
     }
 
@@ -126,6 +133,11 @@ function FieldPlayer({
   return (
     <div className="field-play">
       <div ref={stageRef} className="field-play-stage" />
+      {loading && (
+        <p role="status" className="field-play-loading">
+          読み込み中...
+        </p>
+      )}
       {error !== null && (
         <p role="alert" className="field-play-error">
           {error}

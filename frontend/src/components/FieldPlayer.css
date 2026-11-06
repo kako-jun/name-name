@@ -43,6 +43,18 @@
   height: auto !important;
 }
 
+.field-play-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: #9ca3af;
+  pointer-events: none;
+}
+
 .field-play-error {
   position: absolute;
   left: 0;
