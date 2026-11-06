@@ -738,6 +738,7 @@ describe('buildFieldRaw: メニュー', () => {
       'job',
       'status',
       'save',
+      'load',
       'config',
     ])
     expect(m.items[7]).toEqual({
@@ -758,7 +759,7 @@ describe('buildFieldRaw: メニュー', () => {
   it('項目名は ID → ラベル → 宣言した新 ID の順で解決し、解決できない名・重複は警告', () => {
     const r = ok({
       cfg: [
-        menu(['どうぐ', 'save', 'extra', 'ロード', 'item', 'noname', 'config'], {
+        menu(['どうぐ', 'save', 'extra', 'しゅうり', 'item', 'noname', 'config'], {
           text_out_ms: 80,
           slide_ms: 140,
         }),
@@ -776,7 +777,7 @@ describe('buildFieldRaw: メニュー', () => {
       input: { aux: { menuContents: { 'cfg.json': { description: 'せってい' } } } },
     })
     expect(r.warnings).toEqual([
-      "[メニュー] の項目 'ロード' はメニューにありません（この項目は省きます）",
+      "[メニュー] の項目 'しゅうり' はメニューにありません（この項目は省きます）",
       "[メニュー] の項目 'item' は既に並んでいます（2 つ目は省きます）",
       '[メニュー項目 noname] に ラベル= がありません（この項目は省きます）',
       '[メニュー項目 orphan] は [メニュー] の並びにありません（使われません）',

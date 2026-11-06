@@ -256,6 +256,11 @@ export interface StartFieldGameOptions {
    * 起動時の scene 照合の警告もこの供給元に対して出す
    */
   scriptEvents?: FieldScriptEvents
+  /**
+   * メニューの「ロード」でスロットが確認された。呼び出し側がフィールドを作り直す（`?resume=<slot>` と同じ復元経路に乗せる）。
+   * 未指定ならロードは何も起こさない（項目は出る）。field.html は明示的に渡す
+   */
+  onLoadRequest?: (slot: number) => void
 }
 
 async function loadScene(config: FieldConfig, id: string): Promise<LoadedScene> {
@@ -1222,6 +1227,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         onUse: (req) => menuRuntime?.use(req) ?? null,
         onSort: () => menuRuntime?.sort() ?? null,
         onSetting: (key, value) => menuRuntime?.setSetting(key, value),
+        onLoad: (slot) => opts.onLoadRequest?.(slot),
         onSave: (slot) => {
           const ok = api.saveRpg(slot)
           return ok ? slotSummary(new SaveManager(docKey).listSlots()[slot] ?? null) : null

@@ -166,3 +166,10 @@ export function carryOverBattleResult<P>(input: {
     ),
   }
 }
+
+/** `?resume=<slot>` を差し替えた search（`?config=` などは維持）。メニューの「ロード」が `?resume=` の既存の入口へそのまま乗るための組み立て */
+export function withResumeSlot(search: string, slot: number): string {
+  const q = new URLSearchParams(search)
+  q.set('resume', String(slot))
+  return `?${q.toString()}`
+}

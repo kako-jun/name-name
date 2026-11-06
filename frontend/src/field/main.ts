@@ -5,7 +5,7 @@
 import { resolveUrl } from '../battle/config'
 import { configNotice, parseConfigText, pickConfigSource, type FieldConfig } from './config'
 import { parseCharacterFormsManifest, expandCharacterForms } from './characterForms'
-import { FIELD_DOC_KEY, savedFormsFromResume } from './fieldResume'
+import { FIELD_DOC_KEY, savedFormsFromResume, withResumeSlot } from './fieldResume'
 import { startFieldGame } from './startFieldGame'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
@@ -100,6 +100,9 @@ async function main(): Promise<void> {
     docKey: FIELD_DOC_KEY,
     search: location.search,
     containHost: document.body,
+    onLoadRequest: (slot) => {
+      location.search = withResumeSlot(location.search, slot)
+    },
   })
 }
 

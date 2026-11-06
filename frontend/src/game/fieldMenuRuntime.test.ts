@@ -58,7 +58,7 @@ function setup(
 }
 
 describe('items()', () => {
-  it('既定9項目のうち どうぐ・まほう・ステータス・せってい に中身が入り、他は定義のまま', () => {
+  it('既定10項目のうち どうぐ・まほう・ステータス・せってい に中身が入り、他は定義のまま', () => {
     const { rt } = setup()
     const out = rt.items()
     const by = Object.fromEntries(out.map((d) => [d.id, d]))
@@ -66,7 +66,7 @@ describe('items()', () => {
     expect(Object.keys(by.magic.content?.entriesByParty ?? {})).toEqual(['a', 'b'])
     expect(by.status.content?.statusByParty).toBeDefined()
     expect(by.config.content?.options?.length).toBe(7)
-    for (const id of ['equip', 'appstore', 'magicite', 'job', 'save'])
+    for (const id of ['equip', 'appstore', 'magicite', 'job', 'save', 'load'])
       expect(by[id].content).toBeUndefined()
   })
   it('使うたびに最新の所持数・HP が反映される', () => {

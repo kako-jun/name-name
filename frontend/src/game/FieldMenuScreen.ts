@@ -38,6 +38,7 @@ import {
   buyConfirmMessage,
   confirmChoices,
   isSellTab,
+  isSlotKind,
   clampNav,
   computeScreenLayout,
   entryForUse,
@@ -143,6 +144,8 @@ export interface FieldMenuScreenOptions {
   onOpenScreen?(id: string): void
   /** セーブスロットが決定された。保存できたら新しい要約、失敗は null */
   onSave?(slot: number): string | null
+  /** ロードするスロットが確認された（はい）。呼び出し側がフィールドを作り直す。成功の通知は出さない（画面ごと作り直されるため） */
+  onLoad?(slot: number): void
   /** せっていが変わった */
   onSetting?(key: string, value: number): void
   /** どうぐ・まほうを使う。null（または未指定）= 使う処理が無い（説明バーに「まだありません」） */
@@ -332,6 +335,9 @@ export class FieldMenuScreen extends Container {
           if (label !== null) this.slots[step.save] = label
           else if (this.state.open) this.state = { ...this.state, notice: 'セーブできませんでした' }
         }
+        break
+      case 'load':
+        if (step.load !== undefined) this.opts.onLoad?.(step.load)
         break
       case 'setting':
         if (step.setting) this.opts.onSetting?.(step.setting.key, step.setting.value)
@@ -643,7 +649,9 @@ export class FieldMenuScreen extends Container {
       const label =
         k === 'save'
           ? `スロット${nav.list + 1}に上書きしますか？`
-          : buyConfirmMessage(listEntries(ctx, nav)[nav.list], selling)
+          : k === 'load'
+            ? `スロット${nav.list + 1}をロードしますか？`
+            : buyConfirmMessage(listEntries(ctx, nav)[nav.list], selling)
       C.addChild(
         this.text(
           label,
@@ -693,7 +701,7 @@ export class FieldMenuScreen extends Container {
       let label = ''
       let detail = ''
       let enabled = true
-      if (k === 'save') {
+      if (isSlotKind(k)) {
         label = `スロット${i + 1}`
         detail = this.slots[i] ?? 'あき'
         enabled = true

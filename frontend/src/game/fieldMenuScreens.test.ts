@@ -11,6 +11,7 @@ import {
   buyConfirmMessage,
   confirmChoices,
   isSellTab,
+  isSlotKind,
   clampNav,
   computeScreenLayout,
   defaultScreenKind,
@@ -360,6 +361,7 @@ describe('baseFocus / initialNav', () => {
     ['party-list', 'party'],
     ['status', 'party'],
     ['save', 'list'],
+    ['load', 'list'],
     ['config', 'list'],
     ['empty', 'list'],
   ] as const)('%s の最初のフォーカスは %s', (k, f) => {
@@ -560,6 +562,49 @@ describe('stepScreen: 決定', () => {
     const yes = stepScreen({ ...r.nav, confirm: 0 }, { type: 'confirm' }, c)
     expect(yes).toMatchObject({ effect: 'save', save: 0, notice: 'スロット1に上書きしました' })
     expect(yes.nav.focus).toBe('list')
+  })
+  it('load: 一覧は save と同じ SAVE_SLOT_COUNT 件・スロット述語を共用', () => {
+    expect(listCount(ctx('load'), nav('load'))).toBe(SAVE_SLOT_COUNT)
+    expect(isSlotKind('load')).toBe(true)
+    expect(isSlotKind('save')).toBe(true)
+    expect(isSlotKind('config')).toBe(false)
+    expect(resolveContent('x', 'load', undefined).description).toContain('ロード')
+  })
+  it('load: 空スロットは通知だけ（確認窓も load も出ない）', () => {
+    const r = stepScreen(nav('load', { list: 1 }), { type: 'confirm' }, ctx('load'))
+    expect(r).toMatchObject({ effect: 'notice', notice: 'スロット2は空です' })
+    expect(r.nav.focus).toBe('list')
+    expect(r.load).toBeUndefined()
+  })
+  it('load: 埋まっていれば確認窓（既定は「いいえ」）。いいえでは load しない', () => {
+    const c = ctx('load', undefined, { slotFilled: [true, false, false] })
+    const r = stepScreen(nav('load'), { type: 'confirm' }, c)
+    expect(r.effect).toBe('moved')
+    expect(r.nav).toMatchObject({ focus: 'confirm', confirm: 1 })
+    const no = stepScreen(r.nav, { type: 'confirm' }, c)
+    expect(no.effect).toBe('moved')
+    expect(no.load).toBeUndefined()
+    expect(no.nav.focus).toBe('list')
+  })
+  it('load: はいで effect=load・スロット index を返す（通知は出さない）', () => {
+    const c = ctx('load', undefined, { slotFilled: [false, false, true] })
+    const r = stepScreen(nav('load', { list: 2 }), { type: 'confirm' }, c)
+    const yes = stepScreen({ ...r.nav, confirm: 0 }, { type: 'confirm' }, c)
+    expect(yes).toMatchObject({ effect: 'load', load: 2 })
+    expect(yes.notice).toBeUndefined()
+  })
+  it('load: 1タップ決定（select list）も同じ経路で確認窓へ', () => {
+    const c = ctx('load', undefined, { slotFilled: [false, true, false] })
+    expect(
+      stepScreen(nav('load'), { type: 'select', target: 'list', index: 1 }, c).nav
+    ).toMatchObject({
+      focus: 'confirm',
+      confirm: 1,
+      list: 1,
+    })
+    expect(stepScreen(nav('load'), { type: 'select', target: 'list', index: 0 }, c).effect).toBe(
+      'notice'
+    )
   })
   it('config: 決定で次の選択肢（末尾で先頭へ）', () => {
     const c = ctx('config', undefined, { settings: { battleMode: 1 } })
@@ -1079,6 +1124,7 @@ describe('買う・売る確認窓の文・選択肢（段階5）', () => {
     expect(confirmChoices('appstore', false)).toEqual(['買う', 'やめる'])
     expect(confirmChoices('appstore', true)).toEqual(['売る', 'やめる'])
     expect(confirmChoices('save', false)).toEqual(['はい', 'いいえ'])
+    expect(confirmChoices('load', false)).toEqual(['はい', 'いいえ'])
   })
   it('文: 値段つき・値段なし・行なし', () => {
     expect(buyConfirmMessage({ label: '刀A', detail: '100円' })).toBe(

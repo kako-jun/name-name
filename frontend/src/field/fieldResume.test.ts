@@ -8,6 +8,7 @@ import { buildRpgSaveSlot, type RpgSaveState } from '../game/rpgSave'
 import type { BattleEntity } from '../game/spellDsl'
 import {
   FIELD_DOC_KEY,
+  withResumeSlot,
   baseConfigOf,
   loadResume,
   savedFormsFromResume,
@@ -311,5 +312,17 @@ describe('状態異常の再開 (#1051)', () => {
     )
     const r = loadResume('?resume=0', config)
     expect(r.kind === 'ok' && r.resolved.party[0].status).toEqual({ x: 3 })
+  })
+})
+
+describe('withResumeSlot（メニューの「ロード」が付ける ?resume=）', () => {
+  it('?config= を残して resume を付ける', () => {
+    expect(withResumeSlot('?config=a.json', 0)).toBe('?config=a.json&resume=0')
+  })
+  it('既存の ?resume= は差し替える（重複しない）', () => {
+    expect(withResumeSlot('?config=a.json&resume=2', 1)).toBe('?config=a.json&resume=1')
+  })
+  it('search が空でも組み立てる', () => {
+    expect(withResumeSlot('', 2)).toBe('?resume=2')
   })
 })
