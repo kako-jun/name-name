@@ -21,6 +21,30 @@ describe('fieldEntryOfDoc: 実 parseMarkdown の md', () => {
     expect(fieldEntryOfDoc(doc)).toEqual({ sceneId: 'a', x: 120, y: 340, facing: 'left' })
   })
 
+  it('先頭に [フラグ:] が並んでから [フィールド:] でも入口と判定される', async () => {
+    const doc = await parseMarkdown(
+      [head, '## start:', '', '[フラグ: visited = true]', '[フィールド: a]', ''].join('\n')
+    )
+    expect(fieldEntryOfDoc(doc)).toEqual({ sceneId: 'a' })
+  })
+
+  it('[フラグ:] の後ろに台詞があれば null', async () => {
+    const doc = await parseMarkdown(
+      [
+        head,
+        '## start:',
+        '',
+        '[フラグ: visited = true]',
+        '**A**:',
+        'こんにちは',
+        '',
+        '[フィールド: a]',
+        '',
+      ].join('\n')
+    )
+    expect(fieldEntryOfDoc(doc)).toBeNull()
+  })
+
   it('先頭が台詞のノベルで後ろに Field があっても null', async () => {
     const doc = await parseMarkdown(
       [head, '## start:', '', '**A**:', 'こんにちは', '', '[フィールド: a]', ''].join('\n')

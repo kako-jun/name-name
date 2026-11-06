@@ -34,5 +34,11 @@ describe('parseDebugTiltOff', () => {
     expect(parseDebugTiltOff('?debug_tilt=on')).toBe(false)
     expect(parseDebugTiltOff('?debug_tilt=')).toBe(false)
     expect(parseDebugTiltOff('?debug_tilt=OFF')).toBe(false)
+    // 前後の空白は許さない(完全一致のみ)。`+` は URLSearchParams で空白になる
+    expect(parseDebugTiltOff('?debug_tilt=+off')).toBe(false)
+    expect(parseDebugTiltOff('?debug_tilt=off%20')).toBe(false)
+    // 同名キーが複数あるときは最初の値が効く
+    expect(parseDebugTiltOff('?debug_tilt=on&debug_tilt=off')).toBe(false)
+    expect(parseDebugTiltOff('?debug_tilt=off&debug_tilt=on')).toBe(true)
   })
 })

@@ -86,18 +86,25 @@ describe('fieldEntryOfDoc', () => {
     expect(fieldEntryOfDoc(docOf([]))).toBeNull()
     expect(fieldEntryOfDoc({ engine: 'name-name' } as unknown as EventDocument)).toBeNull()
   })
-  it('文字列イベント(PageBreak)・演出・フロー制御は再生イベント', () => {
-    expect(fieldEntryOfDoc(docOf(['PageBreak', field({ scene: 'a' })]))).toBeNull()
-    expect(
-      fieldEntryOfDoc(
-        docOf([{ Flag: { name: 'x', value: { Bool: true } } }, field({ scene: 'a' })])
-      )
-    ).toBeNull()
+  it('演出は再生イベント', () => {
     expect(
       fieldEntryOfDoc(
         docOf([{ Background: { path: 'x' } } as unknown as Event, field({ scene: 'a' })])
       )
     ).toBeNull()
+  })
+  it('先頭の Flag・PageBreak の後に Field が来ても判定される', () => {
+    const flag: Event = { Flag: { name: 'x', value: { Bool: true } } }
+    expect(fieldEntryOfDoc(docOf([flag, field({ scene: 'a' })]))).toEqual({ sceneId: 'a' })
+    expect(fieldEntryOfDoc(docOf(['PageBreak', field({ scene: 'a' })]))).toEqual({ sceneId: 'a' })
+    expect(fieldEntryOfDoc(docOf([flag, 'PageBreak', settings, field({ scene: 'a' })]))).toEqual({
+      sceneId: 'a',
+    })
+  })
+  it('Flag・PageBreak の後ろに台詞があれば null のまま', () => {
+    const flag: Event = { Flag: { name: 'x', value: { Bool: true } } }
+    expect(fieldEntryOfDoc(docOf([flag, dialog, field({ scene: 'a' })]))).toBeNull()
+    expect(fieldEntryOfDoc(docOf(['PageBreak', dialog, field({ scene: 'a' })]))).toBeNull()
   })
 })
 
@@ -118,6 +125,8 @@ describe('EVENT_ROLE の分類(固定)', () => {
         'CharacterForms',
         'Currency',
         'Emotion',
+        'Flag',
+        'PageBreak',
         'FieldAssist',
         'FieldEdge',
         'FieldMap',
@@ -150,10 +159,8 @@ describe('EVENT_ROLE の分類(固定)', () => {
     for (const k of [
       'Dialog',
       'Narration',
-      'PageBreak',
       'Choice',
       'Condition',
-      'Flag',
       'Jump',
       'Wait',
       'WaitDisplayComplete',

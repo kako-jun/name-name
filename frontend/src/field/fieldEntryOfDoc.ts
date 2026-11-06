@@ -20,9 +20,9 @@ export type { FieldEntry } from './fieldNotation'
  * - `field`: `Field`(フィールドへ入る命令)。最初の再生イベントがこれなら作品全体がフィールド
  *
  * 根拠(実コード): `NovelRenderer.processDirective` は `dispatchDirective`(directives/ の表にある演出)と
- * `WaitDisplayComplete` / `Emotion`(警告のみで何もしない) / `Flag` / `Choice` / `Jump` / `Wait` だけを処理し、
+ * `WaitDisplayComplete` / `Emotion`(警告のみで何もしない) / `Flag`(フラグを立てるだけ) / `Choice` / `Jump` / `Wait` だけを処理し、
  * それ以外のオブジェクトイベントは何もしない。そのうち「フィールド・RPG・マスターデータの記法」を `noop` にした。
- * `PageBreak` はノベルの本文の区切りなので `play`(`---` を書いた md はノベル)。
+ * `Flag`(状態の宣言)と `PageBreak`(区切り)は表示を伴わないので `noop`。後ろに台詞があればそこでノベルと判定される。
  */
 export type EventRole = 'play' | 'noop' | 'field'
 
@@ -43,11 +43,9 @@ export const EVENT_ROLE: Readonly<Record<EventKey, EventRole>> = {
   // 本文
   Dialog: 'play',
   Narration: 'play',
-  PageBreak: 'play',
   // フロー制御
   Choice: 'play',
   Condition: 'play',
-  Flag: 'play',
   Jump: 'play',
   Wait: 'play',
   WaitDisplayComplete: 'play',
@@ -97,6 +95,10 @@ export const EVENT_ROLE: Readonly<Record<EventKey, EventRole>> = {
   Field: 'field',
   // ノベルでは何もしない: フィールドの地図・設定・メニュー・人物の記法
   Emotion: 'noop', // 警告だけ(フィールドの吹き出し用)
+  // 入口 md の前置きに置かれる状態の宣言・区切り。先頭にあってもフィールド作品の判定を妨げない
+  // (台詞などの再生イベントが後ろにあれば、その時点でノベル=null。設計 §2-1 の「最初の再生イベント」に沿う)
+  Flag: 'noop',
+  PageBreak: 'noop',
   FieldAssist: 'noop',
   FieldEdge: 'noop',
   FieldMap: 'noop',
