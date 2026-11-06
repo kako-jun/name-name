@@ -122,6 +122,8 @@ export interface FieldMenuOpenData {
   info: FieldMenuInfo
   /** セーブスロットごとの表示（既存データの要約。空きは null）。長さ `SAVE_SLOT_COUNT` */
   slots: readonly (string | null)[]
+  /** スロットごとにロードできるか（`slots` と同じ長さ。省略は「埋まっていればロードできる」） */
+  slotLoadable?: readonly boolean[]
   /** せっていの前回値（key → 選択肢 index） */
   settings?: Readonly<Record<string, number>>
   /** 一覧に出す画像（`MenuEntry.image` の URL → 読み込んだ絵）。読めなかった・未読み込みは null か無し（文字だけで出す） */
@@ -177,6 +179,7 @@ export class FieldMenuScreen extends Container {
   private data: FieldMenuOpenData | null = null
   private contents: Record<string, ResolvedContent> = {}
   private slots: (string | null)[] = []
+  private slotLoadable: readonly boolean[] | undefined
   private timed = false
   private dirty = false
   private trans: Transition | null = null
@@ -233,6 +236,7 @@ export class FieldMenuScreen extends Container {
       partyCount: this.partyCount(),
       partyIds: this.data?.party.map((p) => p.id) ?? [],
       slotFilled: this.slots.map((s) => s !== null),
+      ...(this.slotLoadable ? { slotLoadable: this.slotLoadable } : {}),
     }
   }
 
@@ -258,6 +262,7 @@ export class FieldMenuScreen extends Container {
   open(data: FieldMenuOpenData): void {
     this.data = data
     this.slots = [...data.slots]
+    this.slotLoadable = data.slotLoadable
     this.contents = {}
     for (const d of data.items) {
       const kind = screenKindOfItem(d)
@@ -440,6 +445,7 @@ export class FieldMenuScreen extends Container {
       partyCount: this.partyCount(),
       partyIds: this.data?.party.map((p) => p.id) ?? [],
       slotFilled: this.slots.map((s) => s !== null),
+      ...(this.slotLoadable ? { slotLoadable: this.slotLoadable } : {}),
       settings: this.state.open ? this.state.settings : {},
     }
   }

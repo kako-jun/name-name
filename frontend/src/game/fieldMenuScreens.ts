@@ -431,6 +431,8 @@ export interface ScreenCtx {
   partyIds?: readonly string[]
   /** セーブスロットごとに既存のデータがあるか（上書き確認の判定） */
   slotFilled: readonly boolean[]
+  /** セーブスロットごとにロードできるか（ノベルのセーブ・壊れたセーブは false）。省略は「埋まっていればロードできる」 */
+  slotLoadable?: readonly boolean[]
   /** せっていの選択値（key → 選択肢 index）。無ければ initial */
   settings: Readonly<Record<string, number>>
 }
@@ -570,6 +572,9 @@ function decideConfirm(ctx: ScreenCtx, nav: ScreenNav): ScreenStep {
       // 空のスロットは読むものが無い。埋まっていれば確認（既定「いいえ」=誤タップで現在地を失わない）
       if (!ctx.slotFilled[n.list])
         return { nav: n, effect: 'notice', notice: `スロット${n.list + 1}は空です` }
+      // 埋まっていても読めないセーブ（ノベルのセーブ・壊れたセーブ）は確認窓を出さない（リロードで現在地を失うため）
+      if (ctx.slotLoadable?.[n.list] === false)
+        return { nav: n, effect: 'notice', notice: `スロット${n.list + 1}はロードできません` }
       return { nav: { ...n, focus: 'confirm', confirm: 1 }, effect: 'moved' }
     }
     if (k === 'save') {

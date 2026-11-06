@@ -319,6 +319,7 @@ export interface FieldMenuCtx {
   /** 人物の id（表示順）。省略は空 */
   partyIds?: readonly string[]
   slotFilled: readonly boolean[]
+  slotLoadable?: readonly boolean[]
 }
 
 /** 項目定義 → 画面の種類 */
@@ -351,6 +352,7 @@ export function stepFieldMenu(
       partyCount: Math.min(ctx.partyCount, MAX_PARTY_SLOTS),
       partyIds: ctx.partyIds,
       slotFilled: ctx.slotFilled,
+      ...(ctx.slotLoadable ? { slotLoadable: ctx.slotLoadable } : {}),
       settings: state.settings,
     }
     const sev =

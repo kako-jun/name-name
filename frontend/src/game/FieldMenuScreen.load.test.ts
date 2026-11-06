@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_FIELD_MENU_ITEMS } from './fieldMenu'
 import { FieldMenuScreen } from './FieldMenuScreen'
 
-function setup(slots: (string | null)[]) {
+function setup(slots: (string | null)[], slotLoadable?: boolean[]) {
   const onLoad = vi.fn()
   const onSave = vi.fn(() => 'x')
   const s = new FieldMenuScreen({
@@ -22,6 +22,7 @@ function setup(slots: (string | null)[]) {
     party: [],
     info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
     slots,
+    ...(slotLoadable ? { slotLoadable } : {}),
   })
   return { s, onLoad, onSave }
 }
@@ -48,6 +49,14 @@ describe('FieldMenuScreen: onLoad の配線', () => {
     s.dispatch({ type: 'select', target: 'list', index: 1 } as never)
     s.dispatch({ type: 'select', target: 'confirm', index: 1 } as never)
     s.dispatch({ type: 'select', target: 'list', index: 0 } as never)
+    expect(onLoad).not.toHaveBeenCalled()
+  })
+  it('ロードできないスロット(ノベルのセーブなど)は確認窓を出さず onLoad も呼ばない', () => {
+    const { s, onLoad } = setup(['要約', '要約', null], [false, true, false])
+    toLoadScreen(s)
+    s.dispatch({ type: 'select', target: 'list', index: 0 })
+    expect(s.current).toMatchObject({ open: true, notice: 'スロット1はロードできません' })
+    s.dispatch({ type: 'select', target: 'confirm', index: 0 })
     expect(onLoad).not.toHaveBeenCalled()
   })
   it('onLoad 未指定でも落ちない（項目は出る・何も起きない）', () => {

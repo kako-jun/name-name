@@ -586,6 +586,33 @@ describe('stepScreen: 決定', () => {
     expect(no.load).toBeUndefined()
     expect(no.nav.focus).toBe('list')
   })
+  it('load: 埋まっていてもロードできないスロットは通知だけ（確認窓も load も出ない）', () => {
+    const c = ctx('load', undefined, {
+      slotFilled: [true, true, false],
+      slotLoadable: [false, true, false],
+    })
+    const r = stepScreen(nav('load'), { type: 'confirm' }, c)
+    expect(r).toMatchObject({ effect: 'notice', notice: 'スロット1はロードできません' })
+    expect(r.nav.focus).toBe('list')
+    expect(r.load).toBeUndefined()
+    // 1タップ決定も同じ
+    expect(stepScreen(nav('load'), { type: 'select', target: 'list', index: 0 }, c).effect).toBe(
+      'notice'
+    )
+    // 正常なスロットは従来どおり確認窓
+    expect(stepScreen(nav('load', { list: 1 }), { type: 'confirm' }, c).nav).toMatchObject({
+      focus: 'confirm',
+      confirm: 1,
+    })
+    // 空スロットの通知は「空です」のまま
+    expect(stepScreen(nav('load', { list: 2 }), { type: 'confirm' }, c).notice).toBe(
+      'スロット3は空です'
+    )
+  })
+  it('load: slotLoadable 省略は「埋まっていればロードできる」', () => {
+    const c = ctx('load', undefined, { slotFilled: [true, false, false] })
+    expect(stepScreen(nav('load'), { type: 'confirm' }, c).nav.focus).toBe('confirm')
+  })
   it('load: はいで effect=load・スロット index を返す（通知は出さない）', () => {
     const c = ctx('load', undefined, { slotFilled: [false, false, true] })
     const r = stepScreen(nav('load', { list: 2 }), { type: 'confirm' }, c)

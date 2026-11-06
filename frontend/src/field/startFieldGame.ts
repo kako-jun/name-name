@@ -135,6 +135,7 @@ import {
   baseConfigOf,
   carryOverBattleResult,
   composeNotice,
+  isLoadableSlot,
   itemsWithCounts,
   loadResume,
   mergeFlags,
@@ -1310,6 +1311,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
               handTexture: hand.tex,
               slots: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
                 slotSummary(saved[i] ?? null)
+              ),
+              slotLoadable: Array.from({ length: SAVE_SLOT_COUNT }, (_, i) =>
+                isLoadableSlot(saved[i] ?? null, i, config)
               ),
             }
           },
