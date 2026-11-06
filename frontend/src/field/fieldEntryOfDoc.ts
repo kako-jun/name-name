@@ -79,6 +79,7 @@ export const EVENT_ROLE: Readonly<Record<EventKey, EventRole>> = {
   Se: 'play',
   Shake: 'play',
   Spotlight: 'play',
+  StageFront: 'play',
   SpotlightOff: 'play',
   StageFrontExit: 'play',
   StageTurn: 'play',

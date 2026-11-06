@@ -89,7 +89,9 @@ describe('fieldEntryOfDoc', () => {
   it('文字列イベント(PageBreak)・演出・フロー制御は再生イベント', () => {
     expect(fieldEntryOfDoc(docOf(['PageBreak', field({ scene: 'a' })]))).toBeNull()
     expect(
-      fieldEntryOfDoc(docOf([{ Flag: { name: 'x', value: true } }, field({ scene: 'a' })]))
+      fieldEntryOfDoc(
+        docOf([{ Flag: { name: 'x', value: { Bool: true } } }, field({ scene: 'a' })])
+      )
     ).toBeNull()
     expect(
       fieldEntryOfDoc(
