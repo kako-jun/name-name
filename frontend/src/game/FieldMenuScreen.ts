@@ -132,6 +132,12 @@ export interface FieldMenuOpenData {
   handTexture?: Texture | null
 }
 
+/** セーブ成功の結果。書いた内容の要約と、そのスロットがいまロードできるか（`isLoadableSlot`。呼び出し側が保存した内容で判定する） */
+export interface FieldSaveResult {
+  label: string
+  loadable: boolean
+}
+
 export interface FieldMenuScreenOptions {
   /** キャンバスの論理サイズ（画面全体。背景はここ全体に敷く） */
   width: number
@@ -145,7 +151,7 @@ export interface FieldMenuScreenOptions {
   /** 項目画面を開いた（id） */
   onOpenScreen?(id: string): void
   /** セーブスロットが決定された。保存できたら新しい要約、失敗は null */
-  onSave?(slot: number): string | null
+  onSave?(slot: number): FieldSaveResult | null
   /** ロードするスロットが確認された（はい）。呼び出し側がフィールドを作り直す。成功の通知は出さない（画面ごと作り直されるため） */
   onLoad?(slot: number): void
   /** せっていが変わった */
@@ -336,9 +342,15 @@ export class FieldMenuScreen extends Container {
         break
       case 'save':
         if (step.save !== undefined) {
-          const label = this.opts.onSave?.(step.save) ?? null
-          if (label !== null) this.slots[step.save] = label
-          else if (this.state.open) this.state = { ...this.state, notice: 'セーブできませんでした' }
+          const saved = this.opts.onSave?.(step.save) ?? null
+          if (saved !== null) {
+            this.slots[step.save] = saved.label
+            // 開くときに作った slotLoadable も、書いたスロット分を更新する（同じメニューでそのままロードできる）
+            const loadable = [...(this.slotLoadable ?? this.slots.map((s) => s !== null))]
+            loadable[step.save] = saved.loadable
+            this.slotLoadable = loadable
+          } else if (this.state.open)
+            this.state = { ...this.state, notice: 'セーブできませんでした' }
         }
         break
       case 'load':

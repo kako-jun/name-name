@@ -1231,7 +1231,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         onLoad: (slot) => opts.onLoadRequest?.(slot),
         onSave: (slot) => {
           const ok = api.saveRpg(slot)
-          return ok ? slotSummary(new SaveManager(docKey).listSlots()[slot] ?? null) : null
+          if (!ok) return null
+          const data = new SaveManager(docKey).listSlots()[slot] ?? null
+          const label = slotSummary(data)
+          return label === null ? null : { label, loadable: isLoadableSlot(data, slot, config) }
         },
       })
     : null
