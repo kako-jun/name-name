@@ -19,7 +19,7 @@ describe("GET /api/projects", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { projects: Array<{ name: string }> };
     const names = body.projects.map((p) => p.name);
-    for (const required of ["ogurasia", "skirts-colour", "friday-1930", "gymnasia", "llll-ll-media", "amanuma"]) {
+    for (const required of ["ogurasia", "skirts-colour", "friday-1930", "gymnasia", "llll-ll-media", "amanuma", "sit-by-me"]) {
       expect(names).toContain(required);
     }
   });
@@ -112,5 +112,18 @@ describe("splitRepo()", () => {
     expect(() =>
       splitRepo({ name: "x", title: "X", repo: "owner/" }),
     ).toThrowError(/invalid project\.repo/);
+  });
+});
+
+describe("sit-by-me の登録 (#1135)", () => {
+  it("title と repo が登録されている(直下列挙。scriptsDir なし)", async () => {
+    const req = new Request("https://name-name-api.workers.dev/api/projects");
+    const res = await worker.fetch(req, ENV, ctx);
+    const body = (await res.json()) as {
+      projects: Array<{ name: string; title: string; repo: string; scriptsDir?: string }>;
+    };
+    const p = body.projects.find((x) => x.name === "sit-by-me");
+    expect(p).toMatchObject({ title: "Sit by Me", repo: "kako-jun/sit-by-me" });
+    expect(p?.scriptsDir).toBeUndefined();
   });
 });

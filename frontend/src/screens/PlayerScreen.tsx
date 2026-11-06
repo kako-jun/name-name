@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import NovelPlayer, { type NovelPlayerHandle } from '../components/NovelPlayer'
 import RPGPlayer from '../components/RPGPlayer'
+import FieldPlayer from '../components/FieldPlayer'
 import type { Event, EventDocument, EventScene } from '../types'
 import type { RPGProject } from '../types/rpg'
 import { parseMarkdown } from '../wasm/parser'
 import { findRpgSceneIndex, rpgProjectFromDoc } from '../game/rpgProjectFromDoc'
+import { fieldEntryOfDoc } from '../field/fieldEntryOfDoc'
+import { docsOf } from '../field/fieldPlayDeps'
+import type { FieldSourceDoc } from '../field/fieldNotation'
 import { ApiError, createApiClient, type ProjectInfo, type ScriptInfo } from '../api/client'
 import { clearReadProgress, hasAnyReadProgress } from '../game/readProgress'
 import { parseSceneQuery } from '../game/sceneQuery'
@@ -191,6 +195,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
   )
   const sortedPlayablePathsRef = useRef<string[]>([])
   const scriptInfoByPathRef = useRef<Map<string, ScriptInfo>>(new Map())
+  // hidden を含む全 .md の一覧 (#1135)。フィールド作品の設定(data.md など hidden)を読むために持つ。
+  // sortedPlayablePathsRef(ノベルの遅延ロード候補)には混ぜない = ノベルの解決順を変えない
+  const allScriptsRef = useRef<ScriptInfo[]>([])
   const entryPathRef = useRef<string | null>(null)
   const loadedDocsRef = useRef<Map<string, EventDocument>>(new Map())
   const loadingDocsRef = useRef<Map<string, Promise<EventDocument | null>>>(new Map())
@@ -361,6 +368,7 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
       setConfinedSceneIds(null)
       sortedPlayablePathsRef.current = []
       scriptInfoByPathRef.current = new Map()
+      allScriptsRef.current = []
       entryPathRef.current = null
       loadedDocsRef.current = new Map()
       loadingDocsRef.current = new Map()
@@ -471,7 +479,9 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
         const sortedPaths = [...playablePaths].sort()
         const entryPath = sortedPaths.find((p) => basename(p) === SCRIPT_BASENAME) ?? sortedPaths[0]
         sortedPlayablePathsRef.current = sortedPaths
-        scriptInfoByPathRef.current = new Map(playableScripts.map((s) => [s.path, s]))
+        // hidden も入れる(sha つきの取得キャッシュのため)。ノベルの再生順・遅延ロード候補には影響しない
+        scriptInfoByPathRef.current = new Map(scripts.map((s) => [s.path, s]))
+        allScriptsRef.current = scripts
         entryPathRef.current = entryPath
 
         // 4. 初期表示は entry MD だけを取得・parse する (#314 Phase 1)。
@@ -572,6 +582,30 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
     const sceneId = doc.chapters[found.chapterIndex]?.scenes[found.sceneIndex]?.id ?? undefined
     return rpgProjectFromDoc(doc, sceneId, projectName)
   }, [doc, projectName])
+
+  // 一枚絵フィールド作品 (#1135): エントリ md の最初の再生イベントが `[フィールド: …]`。
+  // RPG(rpgProject)を先に評価する(RpgMap と Field が同居する md は RPG のまま。同居は #1070)
+  const fieldEntry = useMemo(
+    () => (doc && rpgProject === null ? fieldEntryOfDoc(doc) : null),
+    [doc, rpgProject]
+  )
+
+  // フィールド作品用: hidden を含む全 md を読んで返す(取得に失敗した md は警告して欠けたまま進む)
+  const loadAllFieldDocs = useCallback(async (): Promise<FieldSourceDoc[]> => {
+    const paths = allScriptsRef.current.map((s) => s.path)
+    const loaded = await Promise.all(paths.map(async (p) => [p, await loadScriptDoc(p)] as const))
+    for (const [p, d] of loaded) if (!d) console.warn(`field: md を読めません: ${p}`)
+    return docsOf(loadedDocsRef.current)
+  }, [loadScriptDoc])
+
+  // フィールド作品用: 場面 ID を含む md を探してロードし、ロード済みの全 md を返す。見つからなければ null
+  const resolveFieldScene = useCallback(
+    async (sceneId: string): Promise<FieldSourceDoc[] | null> => {
+      const scenes = await resolveMissingScene(sceneId)
+      return scenes ? docsOf(loadedDocsRef.current) : null
+    },
+    [resolveMissingScene]
+  )
 
   // assets のベース URL は Worker proxy 経由（private repo でも動作する）
   // /api/projects/:name/assets/raw/:path で GitHub Contents API を経由して取得する
@@ -770,12 +804,22 @@ function PlayerScreen({ projectName, apiBaseUrl, onBack }: PlayerScreenProps) {
           </div>
         ) : rpgProject !== null ? (
           // RPG シーンを含むプロジェクトは RPGPlayer を優先する。
-          // ノベル+RPG の遷移制御は #108 本統合で扱う。
+          // ノベル+RPG の遷移制御は #1070 で扱う。
           <RPGPlayer
             gameData={rpgProject}
             view={rpgProject.view}
             assetBaseUrl={assetBaseUrl}
             dialogStyle={doc?.dialog_style ?? null}
+          />
+        ) : fieldEntry !== null && entryPathRef.current !== null ? (
+          // エントリ md が `[フィールド: …]` で始まる作品は FieldPlayer (#1135)。
+          <FieldPlayer
+            entry={fieldEntry}
+            entryPath={entryPathRef.current}
+            docKey={projectName}
+            assetBaseUrl={assetBaseUrl}
+            loadAllDocs={loadAllFieldDocs}
+            resolveScene={resolveFieldScene}
           />
         ) : (
           <NovelPlayer

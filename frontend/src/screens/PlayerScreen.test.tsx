@@ -182,6 +182,15 @@ vi.mock('../components/RPGPlayer', () => ({
   },
 }))
 
+// FieldPlayer も PixiJS(startFieldGame)に依存するので props だけ確認できる擬似コンポーネントに差し替える (#1135)
+const fieldPlayerProps = vi.fn()
+vi.mock('../components/FieldPlayer', () => ({
+  default: (props: { entry: unknown }) => {
+    fieldPlayerProps(props)
+    return <div data-testid="field-player" />
+  },
+}))
+
 // #392: iframe 埋め込み検知 isEmbedded() を stub する。純粋関数なので true/false を
 // 切り替えるだけでヘッダ抑制ゲート（PlayerScreen: const embedded = isEmbedded() →
 // {!embedded && <header>...}）を分岐できる（window.top 差し替えより堅牢）。既定値は
@@ -273,6 +282,7 @@ beforeEach(() => {
   handleMocks.startFrom.mockClear()
   setNovelPlayerRefAttached(true)
   rpgPlayerProps.mockReset()
+  fieldPlayerProps.mockReset()
   isEmbeddedMock.mockReset()
   // 既定は standalone（非 iframe）。jsdom の本物 isEmbedded() も self===top で false を
   // 返すので後方互換。埋め込みを検証するテストだけ mockReturnValue(true) で上書きする。
@@ -1367,6 +1377,132 @@ describe('PlayerScreen', () => {
     expect(rpgPlayerProps).toHaveBeenLastCalledWith(
       expect.objectContaining({ assetBaseUrl: 'http://api.test/api/projects/demo/assets/raw' })
     )
+  })
+
+  describe('一枚絵フィールド作品の分岐 (#1135)', () => {
+    const docOf = (events: unknown[]) => ({
+      engine: 'name-name',
+      chapters: [
+        { id: 'c1', title: 'c', default_bgm: null, scenes: [{ id: 's1', title: 's', events }] },
+      ],
+    })
+    const fieldDoc = docOf([{ Field: { scene: 'scene-a', x: 10, y: 20, direction: 'Left' } }])
+    const rpgMap = {
+      RpgMap: {
+        width: 1,
+        height: 1,
+        tile_size: 16,
+        tiles: [[0]],
+        wall_heights: null,
+        floor_heights: null,
+        ceiling_heights: null,
+      },
+    }
+    const open = async () => {
+      listProjectsMock.mockResolvedValue([{ name: 'demo', title: 'demo', repo: 'kako-jun/demo' }])
+      render(<PlayerScreen projectName="demo" apiBaseUrl="http://api.test" onBack={() => {}} />)
+    }
+
+    it('先頭が [フィールド:] の作品は FieldPlayer(NovelPlayer・RPGPlayer は出さない)', async () => {
+      getContentsMock.mockResolvedValue({ path: 'script.md', sha: 'a', content: '# f' })
+      parseMarkdownMock.mockResolvedValue(fieldDoc)
+      await open()
+      expect(await screen.findByTestId('field-player')).toBeInTheDocument()
+      expect(screen.queryByTestId('novel-player')).toBeNull()
+      expect(screen.queryByTestId('rpg-player')).toBeNull()
+      expect(fieldPlayerProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          entry: { sceneId: 'scene-a', x: 10, y: 20, facing: 'left' },
+          entryPath: 'script.md',
+          docKey: 'demo',
+          assetBaseUrl: 'http://api.test/api/projects/demo/assets/raw',
+        })
+      )
+    })
+
+    it('ノベル作品は NovelPlayer のまま(台詞が先で Field が後ろでも)', async () => {
+      getContentsMock.mockResolvedValue({ path: 'script.md', sha: 'a', content: '# n' })
+      parseMarkdownMock.mockResolvedValue(
+        docOf([{ Narration: { text: 'こんにちは' } }, { Field: { scene: 'scene-a' } }])
+      )
+      await open()
+      expect(await screen.findByTestId('novel-player')).toBeInTheDocument()
+      expect(screen.queryByTestId('field-player')).toBeNull()
+    })
+
+    it('RpgMap と Field が同居する作品は RPGPlayer のまま', async () => {
+      getContentsMock.mockResolvedValue({ path: 'script.md', sha: 'a', content: '# r' })
+      parseMarkdownMock.mockResolvedValue(docOf([{ Field: { scene: 'scene-a' } }, rpgMap]))
+      await open()
+      expect(await screen.findByTestId('rpg-player')).toBeInTheDocument()
+      expect(screen.queryByTestId('field-player')).toBeNull()
+    })
+
+    it('loadAllDocs は hidden な md も読む。resolveScene は別 md の場面を見つけてロード済み全部を返す', async () => {
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'maps.md', sha: 's1', size: 1, title: null, hidden: false },
+        { path: 'data.md', sha: 's2', size: 1, title: null, hidden: true },
+      ])
+      const mapsDoc = docOf([{ Narration: { text: 'm' } }])
+      mapsDoc.chapters[0].scenes[0].id = 'scene-b'
+      getContentsMock.mockImplementation((_p: string, path: string) =>
+        Promise.resolve({ path, sha: 'x', content: `# ${path}` })
+      )
+      parseMarkdownMock.mockImplementation((md: string) =>
+        Promise.resolve(md === '# maps.md' ? mapsDoc : md === '# data.md' ? docOf([]) : fieldDoc)
+      )
+      await open()
+      await screen.findByTestId('field-player')
+      // 初期はエントリだけ
+      expect(getContentsMock).toHaveBeenCalledTimes(1)
+      const props = fieldPlayerProps.mock.calls[0][0] as {
+        loadAllDocs(): Promise<{ path: string }[]>
+        resolveScene(id: string): Promise<{ path: string }[] | null>
+      }
+      let all: { path: string }[] = []
+      await act(async () => {
+        all = await props.loadAllDocs()
+      })
+      expect(all.map((d) => d.path)).toEqual(['data.md', 'maps.md', 'script.md'])
+      expect(getContentsMock.mock.calls.map((c) => c[1]).sort()).toEqual([
+        'data.md',
+        'maps.md',
+        'script.md',
+      ])
+      let found: { path: string }[] | null = null
+      let missing: { path: string }[] | null = []
+      await act(async () => {
+        found = await props.resolveScene('scene-b')
+        missing = await props.resolveScene('nowhere')
+      })
+      expect((found as { path: string }[] | null)?.map((d) => d.path)).toEqual([
+        'data.md',
+        'maps.md',
+        'script.md',
+      ])
+      expect(missing).toBeNull()
+    })
+
+    it('ノベル作品では hidden な md を読まない(ノベルの遅延ロード候補に混ぜない)', async () => {
+      listScriptsMock.mockResolvedValue([
+        { path: 'script.md', sha: 's0', size: 1, title: null, hidden: false },
+        { path: 'data.md', sha: 's2', size: 1, title: null, hidden: true },
+      ])
+      getContentsMock.mockResolvedValue({ path: 'script.md', sha: 'a', content: '# n' })
+      parseMarkdownMock.mockResolvedValue(docOf([{ Narration: { text: 'x' } }]))
+      await open()
+      await screen.findByTestId('novel-player')
+      const props = novelPlayerProps.mock.calls[0][0] as {
+        onResolveMissingScene: (id: string) => Promise<unknown>
+      }
+      let result: unknown = 'unset'
+      await act(async () => {
+        result = await props.onResolveMissingScene('nowhere')
+      })
+      expect(result).toBeNull()
+      expect(getContentsMock.mock.calls.map((c) => c[1])).toEqual(['script.md'])
+    })
   })
 
   it('#840: frontmatter dialog_style: ff の RPG 作品は RPGPlayer に dialogStyle="ff" が渡る（未指定は null）', async () => {
