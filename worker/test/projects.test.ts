@@ -114,3 +114,16 @@ describe("splitRepo()", () => {
     ).toThrowError(/invalid project\.repo/);
   });
 });
+
+describe("sit-by-me の登録 (#1135)", () => {
+  it("title と repo が登録されている(直下列挙。scriptsDir なし)", async () => {
+    const req = new Request("https://name-name-api.workers.dev/api/projects");
+    const res = await worker.fetch(req, ENV, ctx);
+    const body = (await res.json()) as {
+      projects: Array<{ name: string; title: string; repo: string; scriptsDir?: string }>;
+    };
+    const p = body.projects.find((x) => x.name === "sit-by-me");
+    expect(p).toMatchObject({ title: "Sit by Me", repo: "kako-jun/sit-by-me" });
+    expect(p?.scriptsDir).toBeUndefined();
+  });
+});

@@ -527,6 +527,28 @@ test("HTTP: T4 URL に余分なセグメントがあると 500 にはならず�
   assert.equal(res.status, 404, "汎用 404 (endpoint not implemented) に落ちる");
 });
 
+test("HTTP: T28 GET contents/ (パスなし) はリポ直下の一覧を返す (scriptsDir なしの列挙用)", async (t) => {
+  const parent = await makeTmpDir("http-t28-parent-");
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const repoDir = path.join(parent, "repo1");
+  await mkdir(path.join(repoDir, "assets"), { recursive: true });
+  await writeFile(path.join(repoDir, "script.md"), "# a");
+
+  const { baseUrl } = await startProxy(t, { reposBase: parent });
+  for (const suffix of ["contents/", "contents"]) {
+    const res = await fetch(`${baseUrl}/repos/kako-jun/repo1/${suffix}?ref=main`);
+    assert.equal(res.status, 200, suffix);
+    const body = await res.json();
+    assert.ok(Array.isArray(body), suffix);
+    const names = body.map((e) => `${e.type}:${e.path}`).sort();
+    assert.deepEqual(names, ["dir:assets", "file:script.md"], suffix);
+  }
+  // 従来のパス指定は変わらない
+  const one = await fetch(`${baseUrl}/repos/kako-jun/repo1/contents/script.md`);
+  assert.equal(one.status, 200);
+  assert.equal((await one.json()).path, "script.md");
+});
+
 test("HTTP: T20 サーバ起動後に新規作成したファイルは即座に一覧へ反映される (キャッシュ無し)", async (t) => {
   const parent = await makeTmpDir("http-t20-parent-");
   t.after(() => rm(parent, { recursive: true, force: true }));

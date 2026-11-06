@@ -152,6 +152,7 @@ LOCAL_REPOS_BASE=~/repos/2025:~/repos/private \
 - `/play/<game>` も同じローカルツリーから読む
 - 動作 OK なら `git push` で本番反映、production CF Worker は GitHub から読む（経路は変わらない）
 - proxy モードと local-fs モードは排他、`--local` が優先
+- リポ直下の一覧（`GET /repos/:o/:r/contents/`、パスなし）にも対応（#1135）。`scriptsDir` を持たないプロジェクト（sit-by-me 等）の `listScripts` が使う。これが無いと `scriptsDir` なしの作品はローカル fs モードで `/play` できない
 - `scriptsDir` 指定プロジェクト（theo-hayami 等）は `git/trees` エミュレーションにも対応済み（#371）。`/play/<game>` `/edit/<game>` のファイル一覧取得もローカルツリーから正しく返る
 
 ## 4. トラブルシューティング

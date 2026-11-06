@@ -1,0 +1,69 @@
+/* 一枚絵フィールド作品の /play 用スタイル (#1135)。field.html の #stage / body.battle-contain の規則を、ステージ要素基準に写したもの */
+.field-play {
+  position: absolute;
+  inset: 0;
+  background: #000;
+}
+
+.field-play-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #000;
+}
+
+.field-play-stage canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;
+  user-select: none;
+}
+
+/* 歩行中: canvas の大きさは width/height 属性(論理サイズ)の比のまま、ステージへ等比 contain(Pixi が付ける px の style を上書きする。
+   上書きしないと max-height だけが効いて縦に潰れる。実機で 1280x900 のとき 1280x851 に歪んだ) */
+.field-play-stage:not(.battle-contain) canvas {
+  width: auto !important;
+  height: auto !important;
+}
+
+/* 論理サイズ固定の戦闘: 16:9 を viewport へ等比 contain(crop なし・余白は黒)。canvas の寸法は BattleContain が px で与える */
+.field-play-stage.battle-contain {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  padding: 0;
+  background: #000;
+}
+
+.field-play-stage.battle-contain canvas {
+  height: auto !important;
+}
+
+.field-play-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+.field-play-error {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 8px 12px;
+  background: #a22;
+  color: #fff;
+  white-space: pre-wrap;
+}
