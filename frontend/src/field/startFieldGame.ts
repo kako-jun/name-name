@@ -1171,7 +1171,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   /** セーブから再開した直後の最初の場面だけ、auto を起こさない（判定は triggerRuntime.autoTriggers） */
   let resumedStart = !!resumed
   const pumpTriggers = (): void => {
-    if (isTalking()) return
+    // conversation.active も見る: start() は active のとき黙って戻り、onEnd が呼ばれず eventRun が戻らなくなるため
+    if (isTalking() || conversation.active) return
     if (pendingAuto) {
       pendingAuto = false
       triggerQueue.push(
@@ -1196,7 +1197,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           eventRun = false
         })
       } catch (e) {
-        // 実行器が例外を投げても入力を止めたままにしない
+        // 実行器が例外を投げても入力を止めたままにしない。running が残らないよう実行器ごと捨てる
+        conversation.destroy()
         eventRun = false
         console.warn(`[field] トリガーの [イベント ${t.event}] で例外`, e)
       }
