@@ -1061,9 +1061,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   }
   /**
    * 脚本の `[戦闘: id]` (#1073)。`[戦闘 id]` の宣言から組んだ戦闘を始め、フィールドへ戻ったら戦闘の結果（`script` に結果フラグ・`次=`）で解決する。
-   * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）
+   * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）。
+   * dispose 後は結果で resolve しない（実行器が destroy で世代を進めるので、古い続きは動かない＝意図どおり）
    */
-  // dispose 後は結果で resolve しない（実行器が destroy で世代を進めるので、古い続きは動かない＝意図どおり）
   const startEventBattle = (id: string): Promise<BattleResult | null> => {
     const plan = planEventBattle({
       id,
