@@ -118,6 +118,7 @@ import {
 } from '../game/fieldScript'
 import { hasOwn, safeAssign } from '../game/ownProperty'
 import { clearWindowField } from './windowField'
+import { autoTriggers, stepTriggers, type FiredTrigger } from './triggerRuntime'
 import type { Direction } from '../types'
 import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 import {
@@ -1162,20 +1163,26 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   /** 場面に入った直後の auto を、歩行に戻ったところで 1 回起こす印（暗転が明けてから起こすため） */
   let pendingAuto = false
   /** これから走らせるトリガー（先頭から 1 つずつ）。key は once の記録用 */
-  const triggerQueue: { key: string; event: string; once: boolean }[] = []
+  const triggerQueue: FiredTrigger[] = []
   /** 足元がいま円の中にあるトリガー（いまの場面の `triggers` の添字）。入った瞬間の 1 回だけ起こすため */
-  const insideTriggers = new Set<number>()
+  let insideTriggers: Set<number> = new Set()
   /** once のトリガーを起こし済みか（`<場面>#<添字>`）。メモリ上だけで、セーブには入らない */
   const onceFired = new Set<string>()
+  /** セーブから再開した直後の最初の場面だけ、auto を起こさない（判定は triggerRuntime.autoTriggers） */
+  let resumedStart = !!resumed
   const pumpTriggers = (): void => {
     if (isTalking()) return
     if (pendingAuto) {
       pendingAuto = false
-      ;(config.scenes[sceneId].triggers ?? []).forEach((t, i) => {
-        const key = `${sceneId}#${i}`
-        if (t.auto && !(t.once && onceFired.has(key)))
-          triggerQueue.push({ key, event: t.event, once: t.once })
-      })
+      triggerQueue.push(
+        ...autoTriggers({
+          sceneId,
+          triggers: config.scenes[sceneId].triggers ?? [],
+          onceFired,
+          resumedStart,
+        })
+      )
+      resumedStart = false
     }
     while (triggerQueue.length > 0) {
       const t = triggerQueue.shift()!
@@ -1190,20 +1197,17 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       return
     }
   }
-  /** 足元が円に入ったトリガーを待ち行列へ入れる（出たら入り直しで再び起こせる） */
+  /** 足元が円に入ったトリガーを待ち行列へ入れる（判定は triggerRuntime.stepTriggers） */
   const detectStepTriggers = (): void => {
-    ;(config.scenes[sceneId].triggers ?? []).forEach((t, i) => {
-      if (t.auto) return
-      const inNow = Math.hypot(pos.x - t.x, pos.y - t.y) <= t.radius
-      if (!inNow) {
-        insideTriggers.delete(i)
-        return
-      }
-      if (insideTriggers.has(i)) return
-      insideTriggers.add(i)
-      const key = `${sceneId}#${i}`
-      if (!(t.once && onceFired.has(key))) triggerQueue.push({ key, event: t.event, once: t.once })
+    const r = stepTriggers({
+      sceneId,
+      pos,
+      triggers: config.scenes[sceneId].triggers ?? [],
+      inside: insideTriggers,
+      onceFired,
     })
+    insideTriggers = r.inside
+    triggerQueue.push(...r.fired)
   }
 
   /** NPC の置き場所を警告済みのシーン（入るたびに繰り返さない） */
@@ -1212,7 +1216,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     scene = s
     // 場面に入った: auto のトリガーを起こす印を立て、踏み込みの「円の中」を空にする (#1072)
     pendingAuto = true
-    insideTriggers.clear()
+    insideTriggers = new Set()
     triggerQueue.length = 0
     // 同行者の表示とラッチはシーンをまたいで持ち越さない（ワープ・端リンクの暗転明けに残さない）
     companionAlpha = 0
@@ -1247,8 +1251,6 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     fade.tint = 0x000000
   }
   applyScene(scene)
-  // セーブから再開したときは場面開始のトリガーを起こさない（始まりの演出を再生し直さない） (#1072)
-  if (resumed) pendingAuto = false
   fade.alpha = 0
 
   // ---- 入力 ----
