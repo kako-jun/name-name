@@ -4,7 +4,13 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_TRIGGER_RADIUS, type FieldTrigger } from './config'
-import { autoTriggers, isInsideCircle, stepTriggers, triggerKey } from './triggerRuntime'
+import {
+  autoTriggers,
+  initialInside,
+  isInsideCircle,
+  stepTriggers,
+  triggerKey,
+} from './triggerRuntime'
 
 const step = (x: number, y: number, radius = 48, event = 'e', once = false): FieldTrigger => ({
   auto: false,
@@ -207,5 +213,34 @@ describe('autoTriggers', () => {
     autoTriggers({ ...base, onceFired, triggers })
     expect([...onceFired]).toEqual(['s#0'])
     expect(triggers).toHaveLength(1)
+  })
+})
+
+describe('initialInside', () => {
+  it('足元がすでに円の中にある踏み込みだけが入る（円周上は内側・auto は対象外）', () => {
+    const r = initialInside({ x: 100, y: 100 }, [
+      step(100, 100, 10),
+      auto('a'),
+      step(110, 100, 10),
+      step(200, 200, 10),
+    ])
+    expect([...r]).toEqual([0, 2])
+  })
+
+  it('再開直後に使うと、円の中のままでは stepTriggers が発火しない', () => {
+    const triggers = [step(100, 100, 10)]
+    const inside = initialInside({ x: 100, y: 100 }, triggers)
+    const r = stepTriggers({
+      sceneId: 's',
+      pos: { x: 101, y: 100 },
+      triggers,
+      inside,
+      onceFired: none,
+    })
+    expect(r.fired).toEqual([])
+  })
+
+  it('トリガーが無ければ空', () => {
+    expect(initialInside({ x: 0, y: 0 }, []).size).toBe(0)
   })
 })

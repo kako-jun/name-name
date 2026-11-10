@@ -118,7 +118,7 @@ import {
 } from '../game/fieldScript'
 import { hasOwn, safeAssign } from '../game/ownProperty'
 import { clearWindowField } from './windowField'
-import { autoTriggers, stepTriggers, type FiredTrigger } from './triggerRuntime'
+import { autoTriggers, initialInside, stepTriggers, type FiredTrigger } from './triggerRuntime'
 import type { Direction } from '../types'
 import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 import {
@@ -1191,9 +1191,15 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       if (t.once) onceFired.add(t.key)
       releaseWalkInput()
       eventRun = true
-      conversation.start(t.event, '', commands, () => {
+      try {
+        conversation.start(t.event, '', commands, () => {
+          eventRun = false
+        })
+      } catch (e) {
+        // 実行器が例外を投げても入力を止めたままにしない
         eventRun = false
-      })
+        console.warn(`[field] トリガーの [イベント ${t.event}] で例外`, e)
+      }
       return
     }
   }
@@ -1251,6 +1257,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     fade.tint = 0x000000
   }
   applyScene(scene)
+  // セーブから再開した直後は、再開地点がすでに円の中でも踏み込みを起こさない（auto の抑止と揃える。出て入り直すと起こる） (#1072)
+  if (resumed) insideTriggers = initialInside(pos, config.scenes[sceneId].triggers ?? [])
   fade.alpha = 0
 
   // ---- 入力 ----

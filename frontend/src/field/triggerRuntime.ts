@@ -73,3 +73,18 @@ export function autoTriggers(input: {
   })
   return out
 }
+
+/**
+ * 踏み込みトリガー（`auto: false`）のうち、足元 `pos` がすでに円の中にあるものの添字の集合。
+ * セーブから再開した直後の `inside` の初期値に使う（再開地点がすでに円の中でも、踏み込みを起こさないため）。
+ */
+export function initialInside(
+  pos: { x: number; y: number },
+  triggers: readonly FieldTrigger[]
+): Set<number> {
+  const out = new Set<number>()
+  triggers.forEach((t, i) => {
+    if (!t.auto && isInsideCircle(pos, t, t.radius)) out.add(i)
+  })
+  return out
+}
