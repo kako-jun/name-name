@@ -724,3 +724,37 @@ export function buildFieldScriptedBattle(
   }
   return { enemies, party: initial, script: { id: def.id, rules: def.rules, joiners } }
 }
+
+/** `planEventBattle` の判定結果。`skip` の理由: 宣言なし / すでに戦闘中・演出中 / 敵が組めない / 味方が居ない */
+export type EventBattlePlan =
+  | { kind: 'start'; setup: FieldScriptedBattleSetup }
+  | { kind: 'skip'; reason: 'no-def' | 'busy' | 'no-enemies' | 'no-party' }
+
+/**
+ * 脚本の `[戦闘: id]` (#1073) を始められるかの判定と組み立て（startFieldGame の `startEventBattle` の判定部）。
+ * 宣言が無い（`__proto__` / `toString` など継承の名前も弾く）→ 警告 1 回で `no-def`。`busy`（戦闘中・遷移中）→ 警告なしで `busy`。
+ * 敵が 1 体も組めない → `no-enemies`（警告は `buildScriptedEnemies` が出す。一部が未知なら組めた敵だけで始める）。味方が居ない → 警告して `no-party`
+ */
+export function planEventBattle(args: {
+  id: string
+  battleScripts: Record<string, BattleScriptDef> | undefined
+  busy: boolean
+  monsters: Record<string, MonsterDef>
+  party: readonly BattleEntity[]
+  layout: BattleLayoutMode
+  rng: () => number
+}): EventBattlePlan {
+  const { id, battleScripts, busy, monsters, party, layout, rng } = args
+  const def = battleScripts && hasOwn(battleScripts, id) ? battleScripts[id] : undefined
+  if (!def) {
+    console.warn(`[field] 戦闘 '${id}' の宣言（[戦闘 ${id}]）が無い（読み飛ばします）`)
+    return { kind: 'skip', reason: 'no-def' }
+  }
+  if (busy) return { kind: 'skip', reason: 'busy' }
+  if (party.length === 0) {
+    console.warn(`[field] 戦闘 '${id}': 味方が居ない（読み飛ばします）`)
+    return { kind: 'skip', reason: 'no-party' }
+  }
+  const setup = buildFieldScriptedBattle(def, monsters, party, layout, rng)
+  return setup ? { kind: 'start', setup } : { kind: 'skip', reason: 'no-enemies' }
+}

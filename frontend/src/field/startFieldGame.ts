@@ -17,7 +17,9 @@ import {
 } from './layers'
 import { BattleEngine, type BattleScriptOptions } from '../game/battleEngine'
 import type { BattleResult } from '../game/loot'
-import { buildFieldScriptedBattle } from '../game/fieldBattle'
+import { planEventBattle } from '../game/fieldBattle'
+import { once } from '../game/once'
+import { createNpcMoveQueue, pickNpcByName, resolveNpcSpeed } from '../game/fieldNpcMove'
 import { BattleScreen } from '../game/BattleScreen'
 import {
   advanceEncounter,
@@ -99,7 +101,6 @@ import {
   decideTalkKey,
   dialogMetricsFor,
   facingToward,
-  stepNpcToward,
   npcAtPoint,
   npcPlacementWarnings,
   stepMoveAroundNpcs,
@@ -854,44 +855,21 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     return emotionLayer.show(target, kind, durationMs)
   }
   // ---- 脚本の [NPC移動:] (#1073) ----
-  /** 動いている最中の NPC 移動。毎フレーム tick で進め、着いたら resolve する（会話中でもメニュー中でも戦闘中でも持ち越さない＝tick が止まる間は止まる） */
-  const npcMoves: { npc: NpcRuntime; target: Vec; pxPerSec: number; done: () => void }[] = []
+  /** 動いている最中の NPC 移動。毎フレーム tick で進め、着いたら resolve する（tick が止まる間＝メニュー中・戦闘中は止まる）。場面が変わったら全部打ち切る */
+  const npcMoves = createNpcMoveQueue<NpcRuntime>()
   /**
    * 目標は背景ピクセル（`@x,y` と同じ）。速さ `speed` は「タイル/秒」だが一枚絵フィールドにタイルは無いので、
    * 1 歩の長さ `encounter.stepDistance`（歩数の刻み）を 1 タイルとして読む（既定 3 × 80px = 240px/秒で、歩行速度に近い）。
-   * いまの場面の NPC を `name`（なければ id）で探す。見つからなければ警告して即完了。マスク・他の人物は見ない（TopDown と同じ）
+   * 0 以下・非有限の速さは警告して既定（3）。いまの場面の NPC を `name`（なければ id）で探す。見つからなければ警告して即完了。
+   * マスク・他の人物は見ない（TopDown と同じ）
    */
   const moveNpcTo = (name: string, x: number, y: number, speed: number): Promise<void> => {
-    const npc =
-      currentNpcs().find((n) => n.def.name === name) ?? currentNpcs().find((n) => n.id === name)
+    const npc = pickNpcByName(currentNpcs(), name)
     if (!npc) {
       console.warn(`[field] [NPC移動: ${name}] いまの場面に NPC が居ません（読み飛ばします）`)
       return Promise.resolve()
     }
-    return new Promise((resolve) => {
-      // 同じ NPC の移動中に次が来たら、前のは打ち切って（着いた扱いで）新しい目標へ
-      const prev = npcMoves.findIndex((m) => m.npc === npc)
-      if (prev >= 0) npcMoves.splice(prev, 1)[0].done()
-      npcMoves.push({
-        npc,
-        target: { x, y },
-        pxPerSec: speed * config.encounter.stepDistance,
-        done: resolve,
-      })
-    })
-  }
-  const tickNpcMoves = (dt: number): void => {
-    for (let i = npcMoves.length - 1; i >= 0; i--) {
-      const m = npcMoves[i]
-      const r = stepNpcToward(m.npc, m.npc.facing, m.target, (m.pxPerSec * dt) / 1000)
-      m.npc.x = r.x
-      m.npc.y = r.y
-      m.npc.facing = r.facing
-      if (r.arrived) {
-        npcMoves.splice(i, 1)
-        m.done()
-      }
-    }
+    return npcMoves.start(npc, { x, y }, resolveNpcSpeed(speed) * config.encounter.stepDistance)
   }
   // 会話の実行器 (#841 段階2)。NpcMove (#1073)・Battle (#1073)・SceneMove (#1072) は下のホストが実行する
   const conversation = new FieldConversation(
@@ -1080,30 +1058,28 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
    * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）
    */
   const startEventBattle = (id: string): Promise<BattleResult | null> => {
-    const def = battleScripts && hasOwn(battleScripts, id) ? battleScripts[id] : undefined
-    if (!def) {
-      console.warn(`[field] 戦闘 '${id}' の宣言（[戦闘 ${id}]）が無い（読み飛ばします）`)
-      return Promise.resolve(null)
-    }
-    if (battle || battleRun || battleTransition.active) return Promise.resolve(null)
-    const setup = buildFieldScriptedBattle(
-      def,
-      config.monsters,
-      partyState,
-      config.battle.layout,
-      Math.random
-    )
-    if (!setup) return Promise.resolve(null)
+    const plan = planEventBattle({
+      id,
+      battleScripts,
+      busy: !!battle || !!battleRun || battleTransition.active,
+      monsters: config.monsters,
+      party: partyState,
+      layout: config.battle.layout,
+      rng: Math.random,
+    })
+    if (plan.kind === 'skip') return Promise.resolve(null)
     return new Promise((resolve) => {
+      // 正常終了の経路と例外の経路の両方から呼ばれうるので、必ず 1 回だけ
+      const done = once(resolve)
       try {
-        startBattle(setup.enemies, null, {
-          party: setup.party,
-          script: setup.script,
-          onResult: resolve,
+        startBattle(plan.setup.enemies, null, {
+          party: plan.setup.party,
+          script: plan.setup.script,
+          onResult: done,
         })
       } catch (e) {
         console.warn(`[field] 戦闘 '${id}' を始められない`, e)
-        resolve(null)
+        done(null)
       }
     })
   }
@@ -1340,6 +1316,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const npcChecked = new Set<string>()
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    // 場面が変わったら進行中の NPC 移動は打ち切る（resolve してイベントを止めたままにしない）
+    npcMoves.clear()
     // 場面に入った: auto のトリガーを起こす印を立て、踏み込みの「円の中」を空にする (#1072)
     pendingAuto = true
     insideTriggers = new Set()
@@ -1810,7 +1788,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const h = scene.mask.height
 
     clockMs += dt
-    tickNpcMoves(dt)
+    npcMoves.tick(dt)
     if (!warpRun && !transition) pumpTriggers()
     if (warpRun) {
       // ワープ中は入力・移動・エンカウントを止める（描画の時計だけ進む）

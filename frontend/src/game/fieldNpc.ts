@@ -365,6 +365,9 @@ export function stepNpcToward(
   const dx = target.x - from.x
   const dy = target.y - from.y
   const len = Math.hypot(dx, dy)
+  // 負・NaN・非有限の距離は動かさない（0 扱い）。向きも変えない
+  if (!Number.isFinite(distance) || distance < 0) distance = 0
+  if (distance === 0 && len > 0) return { x: from.x, y: from.y, facing, arrived: false }
   if (len <= distance)
     return {
       x: target.x,
