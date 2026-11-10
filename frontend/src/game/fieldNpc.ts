@@ -343,3 +343,43 @@ export function npcPlacementWarnings(
       )
   return out
 }
+
+/** `[NPC移動:]` の 1 コマ分の結果。`arrived` = 目標に着いた（このコマで着いた場合も含む） */
+export interface NpcMoveStep {
+  x: number
+  y: number
+  facing: 'up' | 'down' | 'left' | 'right'
+  arrived: boolean
+}
+
+/**
+ * NPC を目標へ直線で `distance`（背景ピクセル）だけ進める (#1073)。マスク・他の人物は見ない（TopDown の `[NPC移動:]` と同じ）。
+ * 向きは進む方向（`facingToward`）。すでに着いている／着くコマは目標ちょうどに置き、向きは動かなかったら現在のまま
+ */
+export function stepNpcToward(
+  from: Vec,
+  facing: 'up' | 'down' | 'left' | 'right',
+  target: Vec,
+  distance: number
+): NpcMoveStep {
+  const dx = target.x - from.x
+  const dy = target.y - from.y
+  const len = Math.hypot(dx, dy)
+  // 負・NaN・非有限の距離は動かさない（0 扱い）。向きも変えない
+  if (!Number.isFinite(distance) || distance < 0) distance = 0
+  if (distance === 0 && len > 0) return { x: from.x, y: from.y, facing, arrived: false }
+  if (len <= distance)
+    return {
+      x: target.x,
+      y: target.y,
+      facing: len > 0 ? facingToward(from, target) : facing,
+      arrived: true,
+    }
+  const k = distance / len
+  return {
+    x: from.x + dx * k,
+    y: from.y + dy * k,
+    facing: facingToward(from, target),
+    arrived: false,
+  }
+}

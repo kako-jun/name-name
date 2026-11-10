@@ -100,6 +100,7 @@ function FieldPlayer({
           search,
           containHost: stage,
           scriptEvents: result.value.npcEvents,
+          battleScripts: result.value.battleScripts,
           onLoadRequest: (slot) => {
             // 古い世代(作り直し済み・破棄済み)の要求は無視する
             if (disposed || gen !== generation) return

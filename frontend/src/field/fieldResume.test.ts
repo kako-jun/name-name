@@ -19,6 +19,8 @@ import {
   composeNotice,
   carryOverBattleResult,
   itemsWithCounts,
+  mergePartyById,
+  snapshotParty,
 } from './fieldResume'
 
 const hero = (id: string): BattleEntity => ({
@@ -354,5 +356,87 @@ describe('isLoadableSlot（メニュー「ロード」の可否。loadResume と
   it('壊れた JSON は load が null を返すので false', () => {
     localStorage.setItem('name-name-save-field-0', '{broken')
     expect(isLoadableSlot(saves().load(0), 0, config)).toBe(false)
+  })
+})
+
+describe('mergePartyById (#1073)', () => {
+  const m = (id: string, hp: number) => ({ id, hp })
+  it('全員 after にいれば全員 after の値', () => {
+    expect(mergePartyById([m('a', 10), m('b', 10)], [m('a', 3), m('b', 4)])).toEqual([
+      m('a', 3),
+      m('b', 4),
+    ])
+  })
+  it('一部だけ after にいれば、いる者は after・いない者は before', () => {
+    expect(mergePartyById([m('a', 10), m('b', 10)], [m('b', 4)])).toEqual([m('a', 10), m('b', 4)])
+  })
+  it('after が空なら before のまま', () => {
+    expect(mergePartyById([m('a', 10)], [])).toEqual([m('a', 10)])
+  })
+  it('before が空なら []', () => {
+    expect(mergePartyById([], [m('a', 1)])).toEqual([])
+  })
+  it('after にだけ居る id は入らない', () => {
+    expect(mergePartyById([m('a', 10)], [m('a', 5), m('z', 1)])).toEqual([m('a', 5)])
+  })
+  it('順序は before のまま', () => {
+    expect(mergePartyById([m('a', 1), m('b', 1), m('c', 1)], [m('c', 2), m('a', 2)])).toEqual([
+      m('a', 2),
+      m('b', 1),
+      m('c', 2),
+    ])
+  })
+  it('戻り値は複製で、元を書き換えない', () => {
+    const before = [m('a', 10), m('b', 10)]
+    const after = [m('a', 3)]
+    const out = mergePartyById(before, after)
+    expect(out[0]).not.toBe(after[0])
+    expect(out[1]).not.toBe(before[1])
+    out[0].hp = 99
+    out[1].hp = 99
+    expect(after[0].hp).toBe(3)
+    expect(before[1].hp).toBe(10)
+  })
+  it('after に重複 id があれば最初の一致', () => {
+    expect(mergePartyById([m('a', 10)], [m('a', 1), m('a', 2)])).toEqual([m('a', 1)])
+  })
+})
+
+describe('snapshotParty (#1073)', () => {
+  const m = (id: string, hp: number) => ({ id, hp })
+  it('戦闘中でなければ持ち越し中の味方そのまま（エンジンの値は見ない）', () => {
+    expect(snapshotParty([m('a', 10), m('b', 10)], [m('a', 1)], false)).toEqual([
+      m('a', 10),
+      m('b', 10),
+    ])
+  })
+  it('戦闘中は戦闘前の味方に戦闘中の値を重ねる（出なかった味方が残る・出た味方は戦闘中の値）', () => {
+    expect(snapshotParty([m('a', 10), m('b', 10), m('c', 10)], [m('b', 3)], true)).toEqual([
+      m('a', 10),
+      m('b', 3),
+      m('c', 10),
+    ])
+  })
+  it('順序は戦闘前のまま。途中参戦の並びが違っても崩れない・重複は先勝ち', () => {
+    expect(
+      snapshotParty([m('a', 10), m('b', 10)], [m('b', 2), m('a', 1), m('a', 9)], true)
+    ).toEqual([m('a', 1), m('b', 2)])
+  })
+  it('渡した配列を書き換えない', () => {
+    const before = [m('a', 10)]
+    const out = snapshotParty(before, [], false)
+    expect(out).not.toBe(before)
+    expect(before).toEqual([m('a', 10)])
+  })
+  it('保存して読み直すと、戦闘に出なかった味方も全員復元される', () => {
+    const saved = snapshotParty([m('party1', 40), m('party2', 40)], [m('party1', 7)], true)
+    new SaveManager(FIELD_DOC_KEY).save(0, buildRpgSaveSlot(rpg({ party: saved }), { slot: 0 }))
+    const r = loadResume('?resume=0', config)
+    expect(r.kind).toBe('ok')
+    if (r.kind !== 'ok') return
+    expect(r.resolved.party.map((p) => [p.id, p.hp])).toEqual([
+      ['party1', 7],
+      ['party2', 40],
+    ])
   })
 })

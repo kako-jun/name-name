@@ -15,7 +15,11 @@ import {
   orderedLayers,
   syncEmotionLayerHost,
 } from './layers'
-import { BattleEngine } from '../game/battleEngine'
+import { BattleEngine, type BattleScriptOptions } from '../game/battleEngine'
+import type { BattleResult } from '../game/loot'
+import { planEventBattle } from '../game/fieldBattle'
+import { once } from '../game/once'
+import { createNpcMoveQueue, pickNpcByName, resolveNpcSpeed } from '../game/fieldNpcMove'
 import { BattleScreen } from '../game/BattleScreen'
 import {
   advanceEncounter,
@@ -107,10 +111,9 @@ import { fieldDialogOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
-  createFieldBattleHost,
   createFieldEmotionHost,
-  createFieldNpcMover,
   checkNpcScripts,
+  collectFieldBattleScripts,
   loadFieldScript,
   resolveNpcCommands,
   resolveTriggerCommands,
@@ -119,7 +122,7 @@ import {
 import { hasOwn, safeAssign } from '../game/ownProperty'
 import { clearWindowField } from './windowField'
 import { autoTriggers, initialInside, stepTriggers, type FiredTrigger } from './triggerRuntime'
-import type { Direction } from '../types'
+import type { BattleScriptDef, Direction } from '../types'
 import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 import {
   DIAGONAL_FACINGS,
@@ -138,6 +141,8 @@ import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOpti
 import {
   baseConfigOf,
   carryOverBattleResult,
+  mergePartyById,
+  snapshotParty,
   composeNotice,
   isLoadableSlot,
   itemsWithCounts,
@@ -195,6 +200,16 @@ async function loadBitmap(url: string): Promise<ImageBitmap> {
   }
   if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`)
   return createImageBitmap(await res.blob())
+}
+
+/**
+ * 脚本制御の戦闘 (`[戦闘: id]`、#1073) の追加指定。`party` = 初期編成（持ち越し中の味方の複製）、`script` = エンジンの脚本、
+ * `onResult` = 戦闘を畳んだあと（フィールドへ戻ったあと）に結果で呼ぶ。始められなかったときも null で必ず 1 回呼ぶ
+ */
+interface EventBattle {
+  party: BattleEntity[]
+  script: BattleScriptOptions
+  onResult: (result: BattleResult | null) => void
 }
 
 /** 実行時の NPC (#841)。x / y は足元（背景ピクセル）。見た目は読み込めたものだけ（読めない NPC は警告して出さない） */
@@ -261,6 +276,11 @@ export interface StartFieldGameOptions {
    * 起動時の scene 照合の警告もこの供給元に対して出す
    */
   scriptEvents?: FieldScriptEvents
+  /**
+   * 脚本の `[戦闘 id]` の宣言（`[戦闘: id]` の行き先 #1073）。`scriptEvents` と同じく呼び出し側が渡す。
+   * あれば `config.scriptUrl` の脚本からは集めない
+   */
+  battleScripts?: Record<string, BattleScriptDef>
   /**
    * メニューの「ロード」でスロットが確認された。呼び出し側がフィールドを作り直す（`?resume=<slot>` と同じ復元経路に乗せる）。
    * 未指定ならロードは何も起こさない（項目は出る）。field.html は明示的に渡す
@@ -351,18 +371,28 @@ function holdFor(config: FieldConfig, id: string, mask: WalkMask): Uint8Array | 
  * NPC の脚本 `.md` (`scriptUrl`、#841 段階2)。取得・パースの失敗は警告して無視（NPC は固定の `line` で話す）。
  * wasm パーサは scriptUrl があるときだけ遅延 import する（無い設定では wasm を読まない）
  */
-async function loadNpcScript(config: FieldConfig): Promise<FieldScriptEvents | undefined> {
+async function loadNpcScript(
+  config: FieldConfig
+): Promise<
+  { events: FieldScriptEvents; battleScripts: Record<string, BattleScriptDef> } | undefined
+> {
   const url = config.scriptUrl
   if (!url) return undefined
-  return loadFieldScript(
+  let battleScripts: Record<string, BattleScriptDef> = {}
+  const events = await loadFieldScript(
     url,
     async (u) => {
       const res = await fetch(u)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       return res.text()
     },
-    async (md) => (await import('../wasm/parser')).parseMarkdown(md)
+    async (md) => {
+      const doc = await (await import('../wasm/parser')).parseMarkdown(md)
+      battleScripts = collectFieldBattleScripts(doc)
+      return doc
+    }
   )
+  return { events, battleScripts }
 }
 
 export async function startFieldGame(opts: StartFieldGameOptions): Promise<() => void> {
@@ -468,7 +498,12 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
   const emotionSheets = await loadEmotionSheets(config, (url) => fetch(url))
-  const scriptEvents = await pickScriptEvents(opts.scriptEvents, () => loadNpcScript(config))
+  let battleScripts: Record<string, BattleScriptDef> | undefined = opts.battleScripts
+  const scriptEvents = await pickScriptEvents(opts.scriptEvents, async () => {
+    const loaded = await loadNpcScript(config)
+    battleScripts ??= loaded?.battleScripts
+    return loaded?.events
+  })
   // scene と脚本の照合は起動時に 1 回だけ（話しかけるたびに同じ警告を出さない）
   {
     const scriptWarnings = checkNpcScripts(
@@ -758,7 +793,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const menuSave = menuRuntime?.saveState()
     return snapshotRpg(
       {
-        party: inBattle ? battleRun!.engine.getState().party : partyState,
+        // 戦闘に出ていない味方（脚本制御の戦闘）も落とさない
+        party: snapshotParty(partyState, battleRun?.engine.getState().party ?? [], inBattle),
         inventory: items,
         equipment,
         gold,
@@ -820,13 +856,31 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     }
     return emotionLayer.show(target, kind, durationMs)
   }
-  // 会話の実行器 (#841 段階2)。NpcMove / Battle は field では未対応（警告して読み飛ばす）
+  // ---- 脚本の [NPC移動:] (#1073) ----
+  /** 動いている最中の NPC 移動。毎フレーム tick で進め、着いたら resolve する（tick が止まる間＝メニュー中・戦闘中は止まる）。場面が変わったら全部打ち切る */
+  const npcMoves = createNpcMoveQueue<NpcRuntime>()
+  /**
+   * 目標は背景ピクセル（`@x,y` と同じ）。速さ `speed` は「タイル/秒」だが一枚絵フィールドにタイルは無いので、
+   * 1 歩の長さ `encounter.stepDistance`（歩数の刻み）を 1 タイルとして読む（既定 3 × 80px = 240px/秒で、歩行速度に近い）。
+   * 0 以下・非有限の速さは警告して既定（3）。いまの場面の NPC を `name`（なければ id）で探す。見つからなければ警告して即完了。
+   * マスク・他の人物は見ない（TopDown と同じ）
+   */
+  const moveNpcTo = (name: string, x: number, y: number, speed: number): Promise<void> => {
+    const npc = pickNpcByName(currentNpcs(), name)
+    if (!npc) {
+      console.warn(`[field] [NPC移動: ${name}] いまの場面に NPC が居ません（読み飛ばします）`)
+      return Promise.resolve()
+    }
+    return npcMoves.start(npc, { x, y }, resolveNpcSpeed(speed) * config.encounter.stepDistance)
+  }
+  // 会話の実行器 (#841 段階2)。NpcMove (#1073)・Battle (#1073)・SceneMove (#1072) は下のホストが実行する
   const conversation = new FieldConversation(
     dialogBox,
     new EventRunner(
       dialogBox,
-      createFieldNpcMover(),
-      createFieldBattleHost(),
+      { moveNpcTo },
+      // 戦闘の結果（BattleResult。`script` に結果フラグ・`次=`）は実行器が受け取る。`次=` への分岐とフラグは #1077 で findEvent を足して受ける
+      { startBattle: (id) => startEventBattle(id) },
       createFieldEmotionHost(
         () => ({
           emotions: emotionSheets ?? {},
@@ -871,7 +925,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   })
   const startBattle = (
     enemies: BattleEntity[],
-    savedBattle: RpgResolvedBattle | null = null
+    savedBattle: RpgResolvedBattle | null = null,
+    eventBattle?: EventBattle
   ): void => {
     // 演出中（開始・終了とも）の二重エンカウントは無視する
     if (battleTransition.active) return
@@ -893,25 +948,29 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     )
     const open = (): void => {
       const engine = new BattleEngine(
-        partyState.map((p) => structuredClone(p)),
+        (eventBattle ? eventBattle.party : partyState).map((p) => structuredClone(p)),
         enemies.map((e) => ({ ...e })),
-        resumeBattleEngineOptions(
-          buildBattleEngineOptions(
-            b,
-            config.statuses,
-            // せってい (#880): ATB の戦闘だけに バトルモード・バトルスピード が効く
-            menuRuntime
-              ? (() => {
-                  const a = applySettings(menuRuntime.currentSettings, {
-                    dialogMs: dialogDefaultMs,
-                    atbMode: b.atb?.mode,
-                  }).atb
-                  return a ? { atbMode: a.mode, atbSpeed: a.speed } : undefined
-                })()
-              : undefined
+        {
+          ...resumeBattleEngineOptions(
+            buildBattleEngineOptions(
+              b,
+              config.statuses,
+              // せってい (#880): ATB の戦闘だけに バトルモード・バトルスピード が効く
+              menuRuntime
+                ? (() => {
+                    const a = applySettings(menuRuntime.currentSettings, {
+                      dialogMs: dialogDefaultMs,
+                      atbMode: b.atb?.mode,
+                    }).atb
+                    return a ? { atbMode: a.mode, atbSpeed: a.speed } : undefined
+                  })()
+                : undefined
+            ),
+            savedBattle
           ),
-          savedBattle
-        )
+          // 脚本制御の戦闘 (#1073)。普通の戦闘は script を渡さない（従来どおり）
+          ...(eventBattle ? { script: eventBattle.script } : {}),
+        }
       )
       battleRun = { engine, menu, background: bg }
       world.visible = false
@@ -936,7 +995,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           }),
           onClose: (outcome, result) => {
             lastOutcome = outcome
-            carryOverBattle(outcome, result.gold)
+            carryOverBattle(outcome, result.gold, { partial: !!eventBattle })
             // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
             endBattleWithTransition({
               mode: b.transition,
@@ -944,7 +1003,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
               width: b.width,
               height: b.height,
               outcome,
-              close: endBattle,
+              close: () => {
+                endBattle()
+                // 脚本のイベントは、フィールドへ戻ってから続きを始める (#1073)
+                eventBattle?.onResult(result)
+              },
             })
           },
         })
@@ -953,6 +1016,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         battle = null
         battleRun = null
         contain.leave()
+        // 結果を待っているイベントを止めたままにしない
+        eventBattle?.onResult(null)
         throw e
       }
     }
@@ -975,7 +1040,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
    * 戦闘の結果を持ち越す (#1021)。所持品の残数・所持金・味方の HP/MP/状態異常を書き戻す。
    * 敗北では味方を戦闘前に戻す（全滅のまま次の戦闘へ進めなくなるのを防ぐ。所持品・所持金は戻さない）
    */
-  const carryOverBattle = (outcome: string, earnedGold: number): void => {
+  const carryOverBattle = (
+    outcome: string,
+    earnedGold: number,
+    { partial = false }: { partial?: boolean } = {}
+  ): void => {
     const run = battleRun
     if (!run) return
     const next = carryOverBattleResult({
@@ -987,7 +1056,39 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     })
     inventory = next.inventory
     gold = next.gold
-    partyState = next.party
+    // 脚本制御の戦闘は一部の味方だけが出る (#1073)。出なかった味方は戦闘前のまま残す
+    partyState = partial ? mergePartyById(partyState, next.party) : next.party
+  }
+  /**
+   * 脚本の `[戦闘: id]` (#1073)。`[戦闘 id]` の宣言から組んだ戦闘を始め、フィールドへ戻ったら戦闘の結果（`script` に結果フラグ・`次=`）で解決する。
+   * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）。
+   * dispose 後は結果で resolve しない（実行器が destroy で世代を進めるので、古い続きは動かない＝意図どおり）
+   */
+  const startEventBattle = (id: string): Promise<BattleResult | null> => {
+    const plan = planEventBattle({
+      id,
+      battleScripts,
+      busy: !!battle || !!battleRun || battleTransition.active,
+      monsters: config.monsters,
+      party: partyState,
+      layout: config.battle.layout,
+      rng: Math.random,
+    })
+    if (plan.kind === 'skip') return Promise.resolve(null)
+    return new Promise((resolve) => {
+      // 正常終了の経路と例外の経路の両方から呼ばれうるので、必ず 1 回だけ
+      const done = once(resolve)
+      try {
+        startBattle(plan.setup.enemies, null, {
+          party: plan.setup.party,
+          script: plan.setup.script,
+          onResult: done,
+        })
+      } catch (e) {
+        console.warn(`[field] 戦闘 '${id}' を始められない`, e)
+        done(null)
+      }
+    })
   }
   const endBattle = (): void => {
     battleRun = null
@@ -1222,6 +1323,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const npcChecked = new Set<string>()
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    // 場面が変わったら進行中の NPC 移動は打ち切る（resolve してイベントを止めたままにしない）
+    npcMoves.clear()
     // 場面に入った: auto のトリガーを起こす印を立て、踏み込みの「円の中」を空にする (#1072)
     pendingAuto = true
     insideTriggers = new Set()
@@ -1692,6 +1795,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const h = scene.mask.height
 
     clockMs += dt
+    npcMoves.tick(dt)
     if (!warpRun && !transition) pumpTriggers()
     if (warpRun) {
       // ワープ中は入力・移動・エンカウントを止める（描画の時計だけ進む）

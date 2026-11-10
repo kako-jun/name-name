@@ -442,6 +442,26 @@ export function parsePartyIds(lines: readonly string[] | undefined): string[] {
   return out
 }
 
+/** `[戦闘 id]` の `敵:` から敵を組み立てる。組み立てられなければ警告して null（TopDown の `buildScriptedBattle` と一枚絵フィールドが共有する） */
+export function buildScriptedEnemies(
+  def: BattleScriptDef,
+  masters: Record<string, MonsterDef>,
+  rng: () => number
+): BattleEntity[] | null {
+  if (!def.enemies || def.enemies.trim() === '') {
+    console.warn(`[name-name] 戦闘 '${def.id}': 敵: がありません（戦闘を始めない）`)
+    return null
+  }
+  const group = parseEncounterGroup(def.enemies.replace(/[,、，]/g, '+'))
+  for (const w of group.warnings) console.warn(`[name-name] 戦闘 '${def.id}' の敵: ${w}`)
+  const enemies = buildEnemyEntities(resolveEncounterGroup(group, rng), masters)
+  if (enemies.length === 0) {
+    console.warn(`[name-name] 戦闘 '${def.id}': 敵を 1 体も組み立てられない（戦闘を始めない）`)
+    return null
+  }
+  return enemies
+}
+
 /**
  * `[戦闘 id]` の宣言から、戦闘の敵・初期編成・脚本を組み立てる (#741 / #863)。純粋関数（乱数は敵グループの個数の抽選だけで、注入する）。
  * - 敵: `敵:`（敵グループと同じ書式。`+` 連結。カンマ区切りも受理）。1 体も組み立てられなければ null（戦闘を始めない）
@@ -455,17 +475,8 @@ export function buildScriptedBattle(
   layout: BattleLayoutMode,
   rng: () => number
 ): ScriptedBattleSetup | null {
-  if (!def.enemies || def.enemies.trim() === '') {
-    console.warn(`[name-name] 戦闘 '${def.id}': 敵: がありません（戦闘を始めない）`)
-    return null
-  }
-  const group = parseEncounterGroup(def.enemies.replace(/[,、，]/g, '+'))
-  for (const w of group.warnings) console.warn(`[name-name] 戦闘 '${def.id}' の敵: ${w}`)
-  const enemies = buildEnemyEntities(resolveEncounterGroup(group, rng), masters)
-  if (enemies.length === 0) {
-    console.warn(`[name-name] 戦闘 '${def.id}': 敵を 1 体も組み立てられない（戦闘を始めない）`)
-    return null
-  }
+  const enemies = buildScriptedEnemies(def, masters, rng)
+  if (!enemies) return null
   const partyIds: string[] = []
   for (const id of parsePartyIds(def.party)) {
     if (Object.prototype.hasOwnProperty.call(roster.party, id)) partyIds.push(id)
@@ -673,4 +684,77 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
   })
   stage.addChild(screen)
   return screen
+}
+
+/** 一枚絵フィールドの脚本制御の戦闘 (#1073) の組み立て結果。味方は持ち越し中の味方（HP 等）の複製 */
+export interface FieldScriptedBattleSetup {
+  enemies: BattleEntity[]
+  /** 初期編成（`味方:` の順。1 人も解決できなければ全員） */
+  party: BattleEntity[]
+  script: BattleScriptOptions
+}
+
+/**
+ * `[戦闘 id]` の宣言から、一枚絵フィールドの戦闘を組み立てる (#1073)。`buildScriptedBattle` との違いは味方の出どころだけで、
+ * 一枚絵フィールドは `[パーティ]` の定義でなく持ち越し中の味方（`BattleEntity`）を持つので、`味方:` の id をそこから選ぶ。
+ * 途中参戦できる味方は初期編成にいない味方全員（side レイアウトだけ。`buildScriptedBattle` と同じ）。渡した味方は書き換えない
+ */
+export function buildFieldScriptedBattle(
+  def: BattleScriptDef,
+  masters: Record<string, MonsterDef>,
+  party: readonly BattleEntity[],
+  layout: BattleLayoutMode,
+  rng: () => number
+): FieldScriptedBattleSetup | null {
+  const enemies = buildScriptedEnemies(def, masters, rng)
+  if (!enemies) return null
+  const picked: BattleEntity[] = []
+  for (const id of parsePartyIds(def.party)) {
+    const m = party.find((p) => p.id === id)
+    if (m) picked.push(structuredClone(m))
+    else console.warn(`[name-name] 戦闘 '${def.id}' の味方: '${id}' は味方に居ない（無視した）`)
+  }
+  const initial = picked.length > 0 ? picked : party.map((p) => structuredClone(p))
+  const joiners: Record<string, BattleEntity> = {}
+  if (layout === 'side') {
+    for (const p of party) {
+      if (initial.some((i) => i.id === p.id)) continue
+      joiners[p.id] = structuredClone(p)
+    }
+  }
+  return { enemies, party: initial, script: { id: def.id, rules: def.rules, joiners } }
+}
+
+/** `planEventBattle` の判定結果。`skip` の理由: 宣言なし / すでに戦闘中・演出中 / 敵が組めない / 味方が居ない */
+export type EventBattlePlan =
+  | { kind: 'start'; setup: FieldScriptedBattleSetup }
+  | { kind: 'skip'; reason: 'no-def' | 'busy' | 'no-enemies' | 'no-party' }
+
+/**
+ * 脚本の `[戦闘: id]` (#1073) を始められるかの判定と組み立て（startFieldGame の `startEventBattle` の判定部）。
+ * 宣言が無い（`__proto__` / `toString` など継承の名前も弾く）→ 警告 1 回で `no-def`。`busy`（戦闘中・遷移中）→ 警告なしで `busy`。
+ * 敵が 1 体も組めない → `no-enemies`（警告は `buildScriptedEnemies` が出す。一部が未知なら組めた敵だけで始める）。味方が居ない → 警告して `no-party`
+ */
+export function planEventBattle(args: {
+  id: string
+  battleScripts: Record<string, BattleScriptDef> | undefined
+  busy: boolean
+  monsters: Record<string, MonsterDef>
+  party: readonly BattleEntity[]
+  layout: BattleLayoutMode
+  rng: () => number
+}): EventBattlePlan {
+  const { id, battleScripts, busy, monsters, party, layout, rng } = args
+  const def = battleScripts && hasOwn(battleScripts, id) ? battleScripts[id] : undefined
+  if (!def) {
+    console.warn(`[field] 戦闘 '${id}' の宣言（[戦闘 ${id}]）が無い（読み飛ばします）`)
+    return { kind: 'skip', reason: 'no-def' }
+  }
+  if (busy) return { kind: 'skip', reason: 'busy' }
+  if (party.length === 0) {
+    console.warn(`[field] 戦闘 '${id}': 味方が居ない（読み飛ばします）`)
+    return { kind: 'skip', reason: 'no-party' }
+  }
+  const setup = buildFieldScriptedBattle(def, monsters, party, layout, rng)
+  return setup ? { kind: 'start', setup } : { kind: 'skip', reason: 'no-enemies' }
 }
