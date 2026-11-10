@@ -1050,6 +1050,45 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                             pos += 1;
                             continue;
                         }
+                        // [場面移動: 場面ID @x,y 向き=左] (#1072)。書式は `[フィールド:]` と同じ。別の場面へ移る
+                        if let Some(rest) = cmd_line
+                            .strip_prefix("[場面移動:")
+                            .and_then(|r| r.strip_suffix(']'))
+                        {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            if let Some(Event::Field {
+                                scene,
+                                x,
+                                y,
+                                direction,
+                            }) = parse_field_target(
+                                rest,
+                                pos as i64 + 1 + line_base,
+                                cmd_line,
+                                "[場面移動:]",
+                            ) {
+                                commands.push(EventCommand::SceneMove {
+                                    scene,
+                                    x,
+                                    y,
+                                    direction,
+                                });
+                            }
+                            pos += 1;
+                            continue;
+                        }
                         // [NPC移動: <npc> → @x,y 速度=N 向き=<dir>]
                         if let Some(rest) = cmd_line.strip_prefix("[NPC移動:") {
                             if rest.ends_with(']') {
@@ -4306,6 +4345,7 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     // 一枚絵フィールドの場面の中身 (#1102)
     "端",
     "ワープ",
+    "場面移動",
     "揺れ",
     "窓の景色",
     // 一枚絵フィールドの作品設定 (#1104)
@@ -4342,6 +4382,7 @@ fn event_only_command(line: &str) -> Option<&'static str> {
         ("NPC移動", "[NPC移動:]"),
         ("戦闘", "[戦闘:]"),
         ("ワープ", "[ワープ:]"),
+        ("場面移動", "[場面移動:]"),
     ]
     .into_iter()
     .find(|(name, _)| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
@@ -4549,9 +4590,14 @@ fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMa
 /// `[フィールド: 場面ID @x,y 向き=左]` の `:` 以降をパースする (#1100)。
 /// 場面IDは必須。`@x,y`（u32 の対）と `向き=`（上下左右）は任意で順不同。不正なら警告して None（行を捨てる）。
 fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> {
+    parse_field_target(rest, line_no, line, "[フィールド:]")
+}
+
+/// `[フィールド: …]` と `[場面移動: …]` に共通の「場面ID @x,y 向き=」の読み取り (#1072)。`label` は警告に出す記法名。
+fn parse_field_target(rest: &str, line_no: i64, line: &str, label: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [フィールド:] は{}ため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の {label} は{}ため読み捨てた: {}",
             field_warn_why(why),
             truncate_for_warning(line)
         ));
@@ -5445,7 +5491,7 @@ fn parse_npc_move_command(s: &str) -> Option<EventCommand> {
 }
 
 /// `[トリガー ...]` の内部をパースする。
-/// 座標トリガー: `@x,y scene=xxx [once=true]`
+/// 座標トリガー: `@x,y scene=xxx [半径=N] [once=true]`（`半径=` は一枚絵フィールド用 #1072）
 /// 自動トリガー: `auto scene=xxx [once=true]`
 fn parse_trigger_line(s: &str) -> Option<Event> {
     let mut x: Option<u32> = None;
@@ -5453,6 +5499,7 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
     let mut auto = false;
     let mut scene: Option<String> = None;
     let mut once = false;
+    let mut radius: Option<u32> = None;
 
     let mut parts = s.split_whitespace();
     let first = parts.next()?;
@@ -5473,6 +5520,9 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
             }
         } else if p == "once=true" {
             once = true;
+        } else if let Some(val) = p.strip_prefix("半径=") {
+            // 一枚絵フィールドの踏み込みの範囲 (#1072)。0 以上の整数でなければこの行は読まない
+            radius = Some(val.trim().parse().ok()?);
         }
     }
 
@@ -5483,6 +5533,7 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
         auto,
         scene,
         once,
+        radius,
     })
 }
 
@@ -7809,6 +7860,7 @@ title: "test"
                 auto,
                 scene,
                 once,
+                ..
             } => {
                 assert_eq!(*x, Some(5));
                 assert_eq!(*y, Some(5));
@@ -7841,6 +7893,7 @@ title: "test"
                 auto,
                 scene,
                 once,
+                ..
             } => {
                 assert_eq!(*x, None);
                 assert_eq!(*y, None);
