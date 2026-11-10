@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { EventCommand, EventDocument } from '../types'
-import { EventRunner } from './eventRunner'
+import { EventRunner, type EventBattleHost, type NpcMover } from './eventRunner'
 import {
   FieldConversation,
   checkNpcScripts,
   collectFieldEvents,
-  createFieldBattleHost,
   createFieldEmotionHost,
-  createFieldNpcMover,
   loadFieldScript,
   resolveNpcCommands,
   resolveTriggerCommands,
   supportedCommands,
 } from './fieldScript'
 import { parseMarkdown } from '../wasm/parser'
+
+/** 会話の単体テスト用: 動かさない NPC 移動・始めない戦闘（実体は startFieldGame が持つ） */
+const noopNpcMover: NpcMover = { moveNpcTo: () => Promise.resolve() }
+const noopBattleHost: EventBattleHost = { startBattle: () => Promise.resolve(null) }
 
 const dlg = (character: string | undefined, ...text: string[]): EventCommand => ({
   type: 'Dialog',
@@ -134,13 +136,15 @@ describe('supportedCommands / resolveNpcCommands', () => {
     expect(resolveNpcCommands('hi', events, warn)).toHaveLength(3)
     expect(warn).not.toHaveBeenCalled()
   })
-  it('NpcMove / Battle は警告して読み飛ばす', () => {
+  it('NpcMove / Battle もそのまま通す (#1073)。ワープ・フィールド終了は警告して読み飛ばす', () => {
     const warn = vi.fn()
-    const cmds = resolveNpcCommands('mixed', events, warn)
-    expect(cmds).toEqual([dlg('A', 'ok')])
-    expect(warn).toHaveBeenCalledTimes(2)
-    expect(warn.mock.calls[0][0]).toContain('NpcMove')
-    expect(warn.mock.calls[1][0]).toContain('Battle')
+    expect(resolveNpcCommands('mixed', events, warn)).toEqual(events.get('mixed'))
+    expect(warn).not.toHaveBeenCalled()
+    const w = vi.fn()
+    expect(supportedCommands('e', [dlg('A', 'x'), { type: 'FieldEnd' }], w)).toEqual([
+      dlg('A', 'x'),
+    ])
+    expect(w.mock.calls[0][0]).toContain('FieldEnd')
   })
   it('scene 未指定は undefined で警告なし', () => {
     const warn = vi.fn()
@@ -196,23 +200,10 @@ describe('checkNpcScripts（起動時に 1 回だけ照合）', () => {
   })
 })
 
-describe('no-op ホスト', () => {
-  it('NpcMover は警告して即完了、BattleHost は警告して null', async () => {
-    const warn = vi.fn()
-    await createFieldNpcMover(warn).moveNpcTo('x', 1, 2, 3)
-    expect(await createFieldBattleHost(warn).startBattle('b')).toBeNull()
-    expect(warn).toHaveBeenCalledTimes(2)
-  })
-})
-
 describe('FieldConversation', () => {
   const make = () => {
     const dialog = fakeDialog()
-    const runner = new EventRunner(
-      dialog as never,
-      createFieldNpcMover(() => {}),
-      createFieldBattleHost(() => {})
-    )
+    const runner = new EventRunner(dialog as never, noopNpcMover, noopBattleHost)
     const conv = new FieldConversation(dialog, runner)
     return { dialog, runner, conv }
   }
@@ -284,18 +275,12 @@ describe('FieldConversation', () => {
   it('destroy: 飛行中の SceneMove が destroy 後に resolve しても step を進めない（generation）', async () => {
     const dialog = fakeDialog()
     let resolveMove: () => void = () => {}
-    const runner = new EventRunner(
-      dialog as never,
-      createFieldNpcMover(() => {}),
-      createFieldBattleHost(() => {}),
-      undefined,
-      {
-        moveScene: () =>
-          new Promise<void>((r) => {
-            resolveMove = r
-          }),
-      }
-    )
+    const runner = new EventRunner(dialog as never, noopNpcMover, noopBattleHost, undefined, {
+      moveScene: () =>
+        new Promise<void>((r) => {
+          resolveMove = r
+        }),
+    })
     const conv = new FieldConversation(dialog, runner)
     const end = vi.fn()
     conv.start(
@@ -382,11 +367,7 @@ describe('実パーサ経路 (parseMarkdown)', () => {
     const dialog = fakeDialog()
     const conv = new FieldConversation(
       dialog,
-      new EventRunner(
-        dialog as never,
-        createFieldNpcMover(() => {}),
-        createFieldBattleHost(() => {})
-      )
+      new EventRunner(dialog as never, noopNpcMover, noopBattleHost)
     )
     conv.start('NPC', '固定', cmds, () => {})
     let guard = 0
@@ -499,8 +480,8 @@ describe('Emotion の対応 (#946)', () => {
       dialog,
       new EventRunner(
         dialog as never,
-        createFieldNpcMover(() => {}),
-        createFieldBattleHost(() => {}),
+        noopNpcMover,
+        noopBattleHost,
         createFieldEmotionHost(ctx, show, warn)
       )
     )
@@ -570,15 +551,17 @@ describe('SceneMove とトリガーの対応 (#1072)', () => {
     expect(resolveTriggerCommands('go', undefined, warn)).toBeUndefined()
     expect(warn).toHaveBeenCalledTimes(1)
   })
-  it('resolveTriggerCommands: 実行可能コマンドが 0 件（NpcMove だけ）なら警告 2 件で undefined', () => {
+  it('resolveTriggerCommands: NpcMove だけ・Battle だけのイベントも起こす (#1073)', () => {
     const warn = vi.fn()
+    const mv: EventCommand[] = [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }]
+    const bt: EventCommand[] = [{ type: 'Battle', id: 'b' }]
     const events = new Map<string, EventCommand[]>([
-      ['mv', [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }]],
+      ['mv', mv],
+      ['bt', bt],
     ])
-    expect(resolveTriggerCommands('mv', events, warn)).toBeUndefined()
-    expect(warn).toHaveBeenCalledTimes(2)
-    expect(warn.mock.calls[0][0]).toContain('NpcMove')
-    expect(warn.mock.calls[1][0]).toContain('実行できる台詞・場面移動がありません')
+    expect(resolveTriggerCommands('mv', events, warn)).toEqual(mv)
+    expect(resolveTriggerCommands('bt', events, warn)).toEqual(bt)
+    expect(warn).not.toHaveBeenCalled()
   })
   it('resolveTriggerCommands: Wait だけのイベントは警告 1 件で undefined', () => {
     const warn = vi.fn()

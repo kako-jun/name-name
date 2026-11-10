@@ -3,16 +3,42 @@
  * 設定 JSON の `scriptUrl`（脚本）と NPC の `scene`（`[イベント <name>]` の名前）を結び付け、
  * 話しかけた NPC のイベントを `EventRunner` で実行する。ここは副作用の少ない純関数・薄い関数だけ（startFieldGame.ts から呼ぶ）。
  */
-import type { EventCommand, EventDocument } from '../types'
+import type { BattleScriptDef, EventCommand, EventDocument } from '../types'
 import type { DialogBox } from './DialogBox'
-import type { EventBattleHost, EventEmotionHost, EventRunner, NpcMover } from './eventRunner'
+import type { EventEmotionHost, EventRunner } from './eventRunner'
 import { resolveEmotion, type EmotionResolveContext } from './fieldEmotionScript'
 
 /** 脚本から集めた `[イベント <name>]`（名前 → コマンド列。同名は先勝ち） */
 export type FieldScriptEvents = Map<string, EventCommand[]>
 
-/** field が実行できるコマンド（台詞・ナレーション・待機・感情 #946・場面移動 #1072）。NpcMove / Battle などは未対応 */
-const SUPPORTED: readonly string[] = ['Dialog', 'Narration', 'Wait', 'Emotion', 'SceneMove']
+/** field が実行できるコマンド（台詞・ナレーション・待機・感情 #946・場面移動 #1072・NPC 移動と戦闘 #1073） */
+const SUPPORTED: readonly string[] = [
+  'Dialog',
+  'Narration',
+  'Wait',
+  'Emotion',
+  'SceneMove',
+  'NpcMove',
+  'Battle',
+]
+/** NPC の会話として成り立つコマンド。どれも無いイベントは固定の `line` に戻す（`[待機:]` / `[感情:]` / `[NPC移動:]` だけでは会話にならない） */
+const NPC_MEANINGFUL: readonly string[] = ['Dialog', 'Narration', 'SceneMove', 'Battle']
+/** トリガーで起こす意味があるコマンド。NPC の会話と違い固定の `line` が無いので、`[NPC移動:]` だけの演出も起こす */
+const TRIGGER_MEANINGFUL: readonly string[] = [...NPC_MEANINGFUL, 'NpcMove']
+
+/** パース済みドキュメントから `[戦闘 id]` の宣言を集める (#1073。同 id は先勝ち)。`[戦闘: id]` の行き先 */
+export function collectFieldBattleScripts(doc: EventDocument): Record<string, BattleScriptDef> {
+  const out: Record<string, BattleScriptDef> = Object.create(null)
+  for (const chapter of doc.chapters ?? []) {
+    for (const scene of chapter.scenes ?? []) {
+      for (const ev of scene.events ?? []) {
+        if (typeof ev === 'string' || !('BattleScript' in ev)) continue
+        if (!(ev.BattleScript.id in out)) out[ev.BattleScript.id] = ev.BattleScript
+      }
+    }
+  }
+  return { ...out }
+}
 
 /** パース済みドキュメントから `[イベント]` を集める（全章・全シーン） */
 export function collectFieldEvents(doc: EventDocument): FieldScriptEvents {
@@ -50,13 +76,14 @@ export async function loadFieldScript(
 }
 
 /**
- * field で実行できないコマンド（NpcMove / Battle など）を警告して取り除く。
- * 台詞（Dialog / Narration）が 1 つも残らなければ undefined（呼び出し側は固定 `line` に戻る）
+ * field で実行できないコマンド（ワープ・フィールド終了など）を警告して取り除く。
+ * `meaningful` のコマンド（既定は NPC の会話として成り立つもの）が 1 つも残らなければ undefined（呼び出し側は固定 `line` に戻る）
  */
 export function supportedCommands(
   name: string,
   commands: readonly EventCommand[],
-  warn: (msg: string) => void = (m) => console.warn(m)
+  warn: (msg: string) => void = (m) => console.warn(m),
+  meaningful: readonly string[] = NPC_MEANINGFUL
 ): EventCommand[] | undefined {
   const out: EventCommand[] = []
   for (const c of commands) {
@@ -64,10 +91,8 @@ export function supportedCommands(
     else
       warn(`[field] [イベント ${name}] の ${c.type} はフィールドでは未対応です（読み飛ばします）`)
   }
-  // 台詞（Dialog / Narration）も場面移動も無いイベントは会話にならない（Wait だけで閉じてしまう）ので固定 line に戻す
-  return out.some((c) => c.type === 'Dialog' || c.type === 'Narration' || c.type === 'SceneMove')
-    ? out
-    : undefined
+  // 台詞・場面移動・戦闘の無いイベントは会話にならない（Wait だけで閉じてしまう）ので固定 line に戻す
+  return out.some((c) => meaningful.includes(c.type)) ? out : undefined
 }
 
 /**
@@ -84,9 +109,11 @@ export function resolveTriggerCommands(
     warn(`[field] トリガーの [イベント ${name}] が見つかりません（何も起こしません）`)
     return undefined
   }
-  const ok = supportedCommands(name, commands, warn)
+  const ok = supportedCommands(name, commands, warn, TRIGGER_MEANINGFUL)
   if (!ok)
-    warn(`[field] [イベント ${name}] に実行できる台詞・場面移動がありません（何も起こしません）`)
+    warn(
+      `[field] [イベント ${name}] に実行できる台詞・場面移動・戦闘・NPC移動がありません（何も起こしません）`
+    )
   return ok
 }
 
@@ -135,30 +162,6 @@ export function checkNpcScripts(
     resolveNpcCommands(n.scene, events, (m) => out.push(m))
   }
   return out
-}
-
-/** EventRunner が要求する NpcMover。フィールドでは動かさない（警告して即完了） */
-export function createFieldNpcMover(
-  warn: (msg: string) => void = (m) => console.warn(m)
-): NpcMover {
-  return {
-    moveNpcTo(npc) {
-      warn(`[field] NpcMove(${npc}) はフィールドでは未対応です（読み飛ばします）`)
-      return Promise.resolve()
-    },
-  }
-}
-
-/** EventRunner が要求する EventBattleHost。フィールドでは始めない（警告して null＝始められなかった） */
-export function createFieldBattleHost(
-  warn: (msg: string) => void = (m) => console.warn(m)
-): EventBattleHost {
-  return {
-    startBattle(id) {
-      warn(`[field] Battle(${id}) はイベントからは未対応です（読み飛ばします）`)
-      return Promise.resolve(null)
-    },
-  }
 }
 
 /**

@@ -194,3 +194,14 @@ export function withResumeSlot(search: string, slot: number): string {
   q.set('resume', String(slot))
   return `?${q.toString()}`
 }
+
+/**
+ * 脚本制御の戦闘 (#1073) の後の味方の持ち越し。戦闘に出たのは初期編成と途中参戦の味方だけなので、`after` に居る者は戦闘後の値、
+ * 居ない者（出なかった味方）は戦闘前のままにする。順序は `before`。渡した値は書き換えない
+ */
+export function mergePartyById<P extends { id: string }>(
+  before: readonly P[],
+  after: readonly P[]
+): P[] {
+  return before.map((b) => structuredClone(after.find((a) => a.id === b.id) ?? b))
+}
