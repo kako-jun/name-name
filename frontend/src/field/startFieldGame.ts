@@ -142,6 +142,7 @@ import {
   baseConfigOf,
   carryOverBattleResult,
   mergePartyById,
+  snapshotParty,
   composeNotice,
   isLoadableSlot,
   itemsWithCounts,
@@ -201,7 +202,6 @@ async function loadBitmap(url: string): Promise<ImageBitmap> {
   return createImageBitmap(await res.blob())
 }
 
-/** 実行時の NPC (#841)。x / y は足元（背景ピクセル）。見た目は読み込めたものだけ（読めない NPC は警告して出さない） */
 /**
  * 脚本制御の戦闘 (`[戦闘: id]`、#1073) の追加指定。`party` = 初期編成（持ち越し中の味方の複製）、`script` = エンジンの脚本、
  * `onResult` = 戦闘を畳んだあと（フィールドへ戻ったあと）に結果で呼ぶ。始められなかったときも null で必ず 1 回呼ぶ
@@ -212,6 +212,7 @@ interface EventBattle {
   onResult: (result: BattleResult | null) => void
 }
 
+/** 実行時の NPC (#841)。x / y は足元（背景ピクセル）。見た目は読み込めたものだけ（読めない NPC は警告して出さない） */
 interface NpcRuntime {
   id: string
   x: number
@@ -792,7 +793,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const menuSave = menuRuntime?.saveState()
     return snapshotRpg(
       {
-        party: inBattle ? battleRun!.engine.getState().party : partyState,
+        // 戦闘に出ていない味方（脚本制御の戦闘）も落とさない
+        party: snapshotParty(partyState, battleRun?.engine.getState().party ?? [], inBattle),
         inventory: items,
         equipment,
         gold,
@@ -993,7 +995,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           }),
           onClose: (outcome, result) => {
             lastOutcome = outcome
-            carryOverBattle(outcome, result.gold, !!eventBattle)
+            carryOverBattle(outcome, result.gold, { partial: !!eventBattle })
             // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
             endBattleWithTransition({
               mode: b.transition,
@@ -1038,7 +1040,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
    * 戦闘の結果を持ち越す (#1021)。所持品の残数・所持金・味方の HP/MP/状態異常を書き戻す。
    * 敗北では味方を戦闘前に戻す（全滅のまま次の戦闘へ進めなくなるのを防ぐ。所持品・所持金は戻さない）
    */
-  const carryOverBattle = (outcome: string, earnedGold: number, partial = false): void => {
+  const carryOverBattle = (
+    outcome: string,
+    earnedGold: number,
+    { partial = false }: { partial?: boolean } = {}
+  ): void => {
     const run = battleRun
     if (!run) return
     const next = carryOverBattleResult({
@@ -1057,6 +1063,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
    * 脚本の `[戦闘: id]` (#1073)。`[戦闘 id]` の宣言から組んだ戦闘を始め、フィールドへ戻ったら戦闘の結果（`script` に結果フラグ・`次=`）で解決する。
    * 始められなかった（宣言が無い・敵が組めない・すでに戦闘中や演出中）は警告して null で解決する（イベントは続きへ進む）
    */
+  // dispose 後は結果で resolve しない（実行器が destroy で世代を進めるので、古い続きは動かない＝意図どおり）
   const startEventBattle = (id: string): Promise<BattleResult | null> => {
     const plan = planEventBattle({
       id,
