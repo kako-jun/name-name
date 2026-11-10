@@ -147,4 +147,138 @@ describe('EventRunner', () => {
       warn.mockRestore()
     })
   })
+  describe('SceneMove (#1072)', () => {
+    const move = (
+      scene: string,
+      x?: number,
+      y?: number,
+      direction?: 'Up' | 'Down' | 'Left' | 'Right'
+    ): EventCommand =>
+      ({
+        type: 'SceneMove',
+        scene,
+        ...(x !== undefined ? { x } : {}),
+        ...(y !== undefined ? { y } : {}),
+        ...(direction !== undefined ? { direction } : {}),
+      }) as EventCommand
+    const narr = (t: string): EventCommand => ({ type: 'Narration', text: [t] })
+    /** resolve / reject を外から握れる moveScene */
+    function deferredHost() {
+      let resolve!: () => void
+      let reject!: (e: unknown) => void
+      const moveScene = vi.fn(
+        () =>
+          new Promise<void>((res, rej) => {
+            resolve = res
+            reject = rej
+          })
+      )
+      return { moveScene, resolve: () => resolve(), reject: (e: unknown) => reject(e) }
+    }
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+    }
+
+    it('ホストが無いときは警告ちょうど 1 件で次へ進む', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      runner.run([move('本堂', 1, 2), narr('次')])
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(dialogBox.show).toHaveBeenCalledWith('', '次', undefined)
+      warn.mockRestore()
+    })
+
+    it('moveScene が引数どおり (scene, x, y, direction) で呼ばれる', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const host = deferredHost()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, host)
+      r.run([move('本堂', 400, 700, 'Up')])
+      expect(host.moveScene).toHaveBeenCalledTimes(1)
+      expect(host.moveScene).toHaveBeenCalledWith('本堂', 400, 700, 'Up')
+      expect(warn).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('x,y・向きが無ければ undefined で渡る', () => {
+      const host = deferredHost()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, host)
+      r.run([move('本堂')])
+      expect(host.moveScene).toHaveBeenCalledWith('本堂', undefined, undefined, undefined)
+    })
+
+    it('resolve までキューが止まり、resolve 後に次が進む', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const host = deferredHost()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, host)
+      r.run([move('本堂', 1, 2), narr('次')])
+      await flush()
+      expect(dialogBox.show).not.toHaveBeenCalled()
+      expect(r.isRunning).toBe(true)
+      host.resolve()
+      await flush()
+      expect(dialogBox.show).toHaveBeenCalledWith('', '次', undefined)
+      expect(warn).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('reject でも警告ちょうど 1 件で次へ進む', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const host = deferredHost()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, host)
+      r.run([move('本堂', 1, 2), narr('次')])
+      host.reject(new Error('boom'))
+      await flush()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(dialogBox.show).toHaveBeenCalledWith('', '次', undefined)
+      warn.mockRestore()
+    })
+
+    it('待機中に destroy したら、後の resolve で step は走らない', async () => {
+      const host = deferredHost()
+      const onComplete = vi.fn()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, host)
+      r.run([move('本堂', 1, 2), narr('次')], onComplete)
+      r.destroy()
+      host.resolve()
+      await flush()
+      expect(dialogBox.show).not.toHaveBeenCalled()
+      expect(onComplete).not.toHaveBeenCalled()
+      expect(r.isRunning).toBe(false)
+    })
+
+    it('待機中に次の run が入ったら、古い resolve では新しい run が進まない', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const first = deferredHost()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, first)
+      r.run([move('本堂', 1, 2), narr('古い次')])
+      // 新しい run は Dialog で待つ
+      r.run([{ type: 'Dialog', character: 'A', text: ['新'] }])
+      expect(dialogBox.show).toHaveBeenCalledTimes(1)
+      first.resolve()
+      await flush()
+      expect(dialogBox.show).toHaveBeenCalledTimes(1)
+      expect(dialogBox.show).toHaveBeenCalledWith('A', '新', undefined)
+      expect(warn).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('Dialog → SceneMove → Dialog の順に進む', async () => {
+      const host = deferredHost()
+      const r = new EventRunner(dialogBox, npcMover, undefined, undefined, host)
+      r.run([
+        { type: 'Dialog', character: 'A', text: ['前'] },
+        move('本堂', 1, 2),
+        { type: 'Dialog', character: 'A', text: ['後'] },
+      ])
+      expect(dialogBox.show).toHaveBeenCalledTimes(1)
+      expect(host.moveScene).not.toHaveBeenCalled()
+      ;(dialogBox as unknown as { isShowing: boolean }).isShowing = true
+      r.advance()
+      expect(host.moveScene).toHaveBeenCalledTimes(1)
+      expect(dialogBox.show).toHaveBeenCalledTimes(1)
+      host.resolve()
+      await flush()
+      expect(dialogBox.show).toHaveBeenCalledTimes(2)
+      expect(dialogBox.show).toHaveBeenLastCalledWith('A', '後', undefined)
+    })
+  })
 })
