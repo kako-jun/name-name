@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   NPC_APPROACH_STOP,
   NPC_BLOCK_RADIUS,
@@ -20,6 +20,7 @@ import {
   npcAtPoint,
   npcPlacementWarnings,
   stepMoveAroundNpcs,
+  stepNpcToward,
 } from './fieldNpc'
 import { isWalkable, stepMove, type WalkMask } from './fieldWalk'
 
@@ -418,5 +419,99 @@ describe('nearestTalkableNpc: 円錐内を先に選ぶ (#841 段階2)', () => {
   it('円錐内どうしは近いほう', () => {
     const n = [npc('far', 380, 300), npc('near', 350, 300), npc('behind', 270, 300)]
     expect(nearestTalkableNpc(n, me, 'right')).toBe('near')
+  })
+})
+
+describe('stepNpcToward (#1073)', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const O = { x: 0, y: 0 }
+
+  it('遠い目標へは distance だけ進む（x 軸）', () => {
+    const r = stepNpcToward(O, 'down', { x: 100, y: 0 }, 7)
+    expect(r.x).toBeCloseTo(7)
+    expect(r).toMatchObject({ y: 0, facing: 'right', arrived: false })
+  })
+  it('遠い目標へは distance だけ進む（斜め 3-4-5）', () => {
+    const r = stepNpcToward(O, 'down', { x: 30, y: 40 }, 5)
+    expect(r.x).toBeCloseTo(3)
+    expect(r.y).toBeCloseTo(4)
+    expect(r.arrived).toBe(false)
+  })
+  it('len = distance + 0.001 はまだ着かない', () => {
+    const r = stepNpcToward(O, 'down', { x: 10.001, y: 0 }, 10)
+    expect(r.arrived).toBe(false)
+    expect(r.x).toBeCloseTo(10)
+  })
+  it('len = distance ちょうどで着く（目標ちょうど）', () => {
+    const r = stepNpcToward(O, 'down', { x: 10, y: 0 }, 10)
+    expect(r).toEqual({ x: 10, y: 0, facing: 'right', arrived: true })
+  })
+  it('len = distance - 0.001 で着き、行き過ぎない', () => {
+    const r = stepNpcToward(O, 'down', { x: 9.999, y: 0 }, 10)
+    expect(r.arrived).toBe(true)
+    expect(r.x).toBe(9.999)
+  })
+  it('すでに目標上（距離 0）なら着いた扱いで向きは現在のまま', () => {
+    const r = stepNpcToward({ x: 5, y: 5 }, 'left', { x: 5, y: 5 }, 3)
+    expect(r).toEqual({ x: 5, y: 5, facing: 'left', arrived: true })
+  })
+  it('distance = 0 で len > 0 は位置不変・arrived=false・向きは進行方向', () => {
+    const r = stepNpcToward(O, 'up', { x: 50, y: 0 }, 0)
+    expect(r).toEqual({ x: 0, y: 0, facing: 'up', arrived: false })
+  })
+  it('向き: dx 優勢は左右、dy 優勢は上下', () => {
+    expect(stepNpcToward(O, 'up', { x: -100, y: 10 }, 1).facing).toBe('left')
+    expect(stepNpcToward(O, 'up', { x: 100, y: -10 }, 1).facing).toBe('right')
+    expect(stepNpcToward(O, 'left', { x: 10, y: 100 }, 1).facing).toBe('down')
+    expect(stepNpcToward(O, 'left', { x: 10, y: -100 }, 1).facing).toBe('up')
+  })
+  it('向き: |dx| = |dy| は facingToward の決定と一致する', () => {
+    for (const t of [
+      { x: 10, y: 10 },
+      { x: -10, y: 10 },
+      { x: 10, y: -10 },
+      { x: -10, y: -10 },
+    ]) {
+      expect(stepNpcToward(O, 'up', t, 1).facing).toBe(facingToward(O, t))
+    }
+  })
+  it('着くコマでも向きは進行方向', () => {
+    expect(stepNpcToward(O, 'up', { x: 0, y: 5 }, 100).facing).toBe('down')
+    expect(stepNpcToward(O, 'up', { x: -5, y: 0 }, 100).facing).toBe('left')
+  })
+  it('入力（from / target）を書き換えない', () => {
+    const from = { x: 1, y: 2 }
+    const target = { x: 30, y: 40 }
+    stepNpcToward(from, 'down', target, 5)
+    expect(from).toEqual({ x: 1, y: 2 })
+    expect(target).toEqual({ x: 30, y: 40 })
+  })
+  it('1 コマ 7px で 100px は有限回で arrived し、行き過ぎない', () => {
+    let pos = { x: 0, y: 0 }
+    let arrived = false
+    let n = 0
+    while (!arrived && n < 100) {
+      const r = stepNpcToward(pos, 'down', { x: 100, y: 0 }, 7)
+      expect(r.x).toBeLessThanOrEqual(100)
+      pos = { x: r.x, y: r.y }
+      arrived = r.arrived
+      n++
+    }
+    expect(arrived).toBe(true)
+    expect(n).toBe(15)
+    expect(pos).toEqual({ x: 100, y: 0 })
+  })
+  it.each([-1, Number.NaN, Infinity, -Infinity])(
+    'distance=%s は移動しない（位置も向きも不変・arrived=false）',
+    (d) => {
+      const r = stepNpcToward({ x: 3, y: 4 }, 'left', { x: 100, y: 4 }, d)
+      expect(r).toEqual({ x: 3, y: 4, facing: 'left', arrived: false })
+    }
+  )
+  it('警告を出さない', () => {
+    const w = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stepNpcToward(O, 'up', { x: 10, y: 0 }, Number.NaN)
+    stepNpcToward(O, 'up', { x: 10, y: 0 }, 3)
+    expect(w).not.toHaveBeenCalled()
   })
 })
