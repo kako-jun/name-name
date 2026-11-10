@@ -167,7 +167,9 @@ describe('supportedCommands / resolveNpcCommands', () => {
     const warn = vi.fn()
     expect(resolveNpcCommands('onlyWait', events, warn)).toBeUndefined()
     expect(resolveNpcCommands('moveWait', events, warn)).toBeUndefined()
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('実行できる台詞がありません'))
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('実行できる台詞・場面移動・戦闘がありません')
+    )
   })
   it('Narration だけでも会話になる', () => {
     const only: EventCommand[] = [{ type: 'Narration', text: ['n'] }]

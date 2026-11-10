@@ -3,6 +3,7 @@
  * 設定 JSON の `scriptUrl`（脚本）と NPC の `scene`（`[イベント <name>]` の名前）を結び付け、
  * 話しかけた NPC のイベントを `EventRunner` で実行する。ここは副作用の少ない純関数・薄い関数だけ（startFieldGame.ts から呼ぶ）。
  */
+import { hasOwn, safeAssign } from './ownProperty'
 import type { BattleScriptDef, EventCommand, EventDocument } from '../types'
 import type { DialogBox } from './DialogBox'
 import type { EventEmotionHost, EventRunner } from './eventRunner'
@@ -28,16 +29,16 @@ const TRIGGER_MEANINGFUL: readonly string[] = [...NPC_MEANINGFUL, 'NpcMove']
 
 /** パース済みドキュメントから `[戦闘 id]` の宣言を集める (#1073。同 id は先勝ち)。`[戦闘: id]` の行き先 */
 export function collectFieldBattleScripts(doc: EventDocument): Record<string, BattleScriptDef> {
-  const out: Record<string, BattleScriptDef> = Object.create(null)
+  const out: Record<string, BattleScriptDef> = {}
   for (const chapter of doc.chapters ?? []) {
     for (const scene of chapter.scenes ?? []) {
       for (const ev of scene.events ?? []) {
         if (typeof ev === 'string' || !('BattleScript' in ev)) continue
-        if (!(ev.BattleScript.id in out)) out[ev.BattleScript.id] = ev.BattleScript
+        if (!hasOwn(out, ev.BattleScript.id)) safeAssign(out, ev.BattleScript.id, ev.BattleScript)
       }
     }
   }
-  return { ...out }
+  return out
 }
 
 /** パース済みドキュメントから `[イベント]` を集める（全章・全シーン） */
@@ -134,7 +135,9 @@ export function resolveNpcCommands(
   }
   const ok = supportedCommands(scene, commands, warn)
   if (!ok)
-    warn(`[field] [イベント ${scene}] に実行できる台詞がありません（固定の line で話します）`)
+    warn(
+      `[field] [イベント ${scene}] に実行できる台詞・場面移動・戦闘がありません（固定の line で話します）`
+    )
   return ok
 }
 
