@@ -978,3 +978,52 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     expect(item.content).not.toBe(content)
   })
 })
+
+describe('buildFieldRaw: トリガー (#1072)', () => {
+  const trig = (extra: Record<string, unknown>): Event =>
+    ({ RpgTrigger: { scene: 'ev', ...extra } }) as Event
+  const triggers = (r: ReturnType<typeof run>) =>
+    r.ok ? (r.raw.scenes as Record<string, { triggers?: unknown }>).s1.triggers : undefined
+
+  it('トリガーが無い場面は triggers キーを作らない', () => {
+    const r = ok()
+    expect(triggers(r)).toBeUndefined()
+    expect(r.raw.scenes as object).not.toHaveProperty('s1.triggers')
+  })
+  it('auto は { auto: true, event } だけ（once は無ければキー無し）', () => {
+    const r = ok({ s1: [trig({ auto: true })] })
+    expect(r.warnings).toEqual([])
+    expect(triggers(r)).toEqual([{ auto: true, event: 'ev' }])
+  })
+  it('auto + once=true は once: true が付く', () => {
+    const r = ok({ s1: [trig({ auto: true, once: true })] })
+    expect(triggers(r)).toEqual([{ auto: true, event: 'ev', once: true }])
+  })
+  it('踏み込みは { x, y, event, radius? }（半径省略なら radius キー無し）', () => {
+    const r = ok({ s1: [trig({ x: 100, y: 200 }), trig({ x: 1, y: 2, radius: 48, scene: 'e2' })] })
+    expect(r.warnings).toEqual([])
+    const t = triggers(r) as Record<string, unknown>[]
+    expect(t[0]).toEqual({ x: 100, y: 200, event: 'ev' })
+    expect(t[0]).not.toHaveProperty('radius')
+    expect(t[1]).toEqual({ x: 1, y: 2, event: 'e2', radius: 48 })
+  })
+  it('踏み込み + once=true は once: true が付く', () => {
+    const r = ok({ s1: [trig({ x: 1, y: 2, once: true })] })
+    expect(triggers(r)).toEqual([{ x: 1, y: 2, event: 'ev', once: true }])
+  })
+  it('書いた順に並ぶ', () => {
+    const r = ok({ s1: [trig({ scene: 'a', auto: true }), trig({ scene: 'b', x: 1, y: 2 })] })
+    expect((triggers(r) as { event: string }[]).map((t) => t.event)).toEqual(['a', 'b'])
+  })
+  it('x/y も auto も無いデータは警告 1 件で省き、有効分は残る', () => {
+    const r = ok({ s1: [trig({ scene: 'bad' }), trig({ scene: 'good', auto: true })] })
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toContain('[トリガー scene=bad]')
+    expect(triggers(r)).toEqual([{ auto: true, event: 'good' }])
+  })
+  it('x/y も auto も無いトリガーだけなら triggers キー自体が無い', () => {
+    const r = ok({ s1: [trig({ scene: 'bad' })] })
+    expect(r.warnings).toHaveLength(1)
+    expect(triggers(r)).toBeUndefined()
+  })
+})

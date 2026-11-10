@@ -460,3 +460,80 @@ describe('全部入りの世界(実 wasm → parseConfig の回帰)', () => {
     expect(c.tiltShift).toBe('on')
   })
 })
+
+// ---------------------------------------------------------------------------
+// [トリガー] (#1072): md → raw → FieldConfig が、JSON 設定直書きと同じになる
+// ---------------------------------------------------------------------------
+describe('トリガー (#1072) の同値性', () => {
+  const triggerLines = [
+    '[トリガー auto scene=始まり once=true]',
+    '[トリガー @300,400 scene=省略半径]',
+    '[トリガー @500,600 半径=48 scene=広め once=true]',
+  ]
+  const scriptWithTriggers = script.replace(
+    '[プレイヤー @100,200 向き=右]\n',
+    `[プレイヤー @100,200 向き=右]\n${triggerLines.join('\n')}\n`
+  )
+  const handTriggers = [
+    { auto: true, event: '始まり', once: true },
+    { x: 300, y: 400, event: '省略半径' },
+    { x: 500, y: 600, radius: 48, event: '広め', once: true },
+  ]
+
+  async function buildWithTriggers() {
+    expect(scriptWithTriggers).not.toBe(script)
+    const docs: FieldSourceDoc[] = [
+      { path: 'data.md', doc: await parseMarkdown(data) },
+      { path: 'script.md', doc: await parseMarkdown(scriptWithTriggers) },
+    ]
+    const { notation, warnings: collectWarnings } = collectFieldNotation({
+      docs,
+      entryPath: 'script.md',
+      entry: { sceneId: 'scene-a' },
+    })
+    const built = buildFieldRaw(notation, { assetBaseUrl: ASSET })
+    if (!built.ok) throw new Error(built.error)
+    const expanded = expandCharacterForms(built.raw, manifest)
+    const parsed = parseConfig(expanded.raw, BASE, { scriptProvided: true })
+    if (!parsed.ok) throw new Error(parsed.error)
+    return { collectWarnings, built, expanded, parsed }
+  }
+
+  it('raw の triggers が { auto/x,y, event, radius?, once? } で、警告は 0 件', async () => {
+    const { collectWarnings, built, expanded } = await buildWithTriggers()
+    expect(collectWarnings).toEqual([])
+    expect(built.warnings).toEqual([])
+    expect(expanded.warnings).toEqual([])
+    const scenes = built.raw.scenes as Record<string, { triggers?: unknown }>
+    expect(scenes['scene-a'].triggers).toEqual(handTriggers)
+    expect(scenes['scene-b']).not.toHaveProperty('triggers')
+  })
+
+  it('FieldConfig では半径省略が 32、once=true が保たれる', async () => {
+    const { parsed } = await buildWithTriggers()
+    expect(parsed.value.warnings).toBeUndefined()
+    expect(parsed.value.scenes['scene-a'].triggers).toEqual([
+      { auto: true, event: '始まり', once: true },
+      { auto: false, x: 300, y: 400, radius: 32, event: '省略半径', once: false },
+      { auto: false, x: 500, y: 600, radius: 48, event: '広め', once: true },
+    ])
+  })
+
+  it('手書き JSON から作った FieldConfig と同じ', async () => {
+    const { parsed } = await buildWithTriggers()
+    const hand = parseConfig(
+      {
+        ...handWritten,
+        scenes: {
+          ...handWritten.scenes,
+          'scene-a': { ...handWritten.scenes['scene-a'], triggers: handTriggers },
+        },
+      },
+      BASE,
+      { scriptProvided: true }
+    )
+    if (!hand.ok) throw new Error(hand.error)
+    expect(hand.value.warnings).toBeUndefined()
+    expect(parsed.value).toEqual(hand.value)
+  })
+})
