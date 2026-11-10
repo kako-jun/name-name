@@ -97,6 +97,21 @@ export function supportedCommands(
 }
 
 /**
+ * 戦闘結果の `次=<イベント名>` (#1077) の行き先のコマンド列を選ぶ（EventRunner の `EventBattleHost.findEvent`）。
+ * トリガーと同じく固定の `line` が無いので、イベントが無い・実行できるコマンドが残らないときは警告して undefined
+ * （実行器は「イベントが無い」と警告して残りを続ける）
+ */
+export function resolveBattleNextCommands(
+  name: string,
+  events: FieldScriptEvents | undefined,
+  warn: (msg: string) => void = (m) => console.warn(m)
+): EventCommand[] | undefined {
+  const commands = events?.get(name)
+  if (!commands) return undefined
+  return supportedCommands(name, commands, warn, TRIGGER_MEANINGFUL)
+}
+
+/**
  * トリガー (#1072) から実行するコマンド列を選ぶ。NPC と違い固定の `line` が無いので、実行できるコマンドが 1 つも残らない／
  * イベントが無いときは警告して undefined（そのトリガーは何も起こさない）
  */

@@ -758,3 +758,36 @@ export function planEventBattle(args: {
   const setup = buildFieldScriptedBattle(def, monsters, party, layout, rng)
   return setup ? { kind: 'start', setup } : { kind: 'skip', reason: 'no-enemies' }
 }
+
+/** `planBattleFlagUpdates` の結果。`set` は反映するフラグ（宣言済み・真偽値のもの）、`warnings` は反映しなかった理由 */
+export interface BattleFlagUpdates {
+  set: { name: string; value: boolean }[]
+  warnings: string[]
+}
+
+/**
+ * 戦闘結果の `フラグ=` (#1077) のうち、一枚絵フィールドのフラグへ反映できるものを選ぶ純粋関数。
+ * 一枚絵フィールドのフラグは設定 JSON の `flags` で宣言した真偽値だけなので、**未宣言の名前**と
+ * **真偽値でない値（数値・文字列）**は反映せず警告に回す（ノベルの `[フラグ:]` のような数値・文字列は持てない）。
+ * 宣言の判定は継承の名前（`__proto__` など）を弾く
+ */
+export function planBattleFlagUpdates(
+  declared: Readonly<Record<string, boolean>>,
+  resultFlags: Readonly<Record<string, boolean | number | string>> | undefined
+): BattleFlagUpdates {
+  const out: BattleFlagUpdates = { set: [], warnings: [] }
+  if (!resultFlags) return out
+  for (const name of Object.keys(resultFlags)) {
+    const value = resultFlags[name]
+    if (!hasOwn(declared, name)) {
+      out.warnings.push(`戦闘結果のフラグ '${name}' は flags に宣言が無い（反映しません）`)
+    } else if (typeof value !== 'boolean') {
+      out.warnings.push(
+        `戦闘結果のフラグ '${name}' の値 ${JSON.stringify(value)} は真偽値でない（一枚絵フィールドのフラグは true / false のみ。反映しません）`
+      )
+    } else {
+      out.set.push({ name, value })
+    }
+  }
+  return out
+}
