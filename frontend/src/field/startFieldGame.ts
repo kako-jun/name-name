@@ -80,6 +80,7 @@ import {
 import { loadEmotionSheets } from '../game/fieldEmotionScript'
 import {
   WARP_COLOR,
+  WARP_DEFAULTS,
   WARP_LOAD_TIMEOUT_MS,
   canStartBattleNow,
   sampleWarp,
@@ -112,10 +113,12 @@ import {
   checkNpcScripts,
   loadFieldScript,
   resolveNpcCommands,
+  resolveTriggerCommands,
   type FieldScriptEvents,
 } from '../game/fieldScript'
 import { hasOwn, safeAssign } from '../game/ownProperty'
 import { clearWindowField } from './windowField'
+import type { Direction } from '../types'
 import { pickScriptEvents, shouldCheckNpcScripts } from './scriptSource'
 import {
   DIAGONAL_FACINGS,
@@ -473,6 +476,13 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       ),
       scriptEvents
     ).filter(() => shouldCheckNpcScripts(opts.scriptEvents, config.scriptUrl)) // 供給元が無いときは config 段階で警告済み
+    // トリガーの [イベント] の照合 (#1072)。設定の段階では見ない（脚本は呼び出し側が渡す）ので、ここで 1 回だけ
+    for (const [sid, sc] of Object.entries(config.scenes))
+      for (const t of sc.triggers ?? [])
+        if (!scriptEvents?.has(t.event))
+          scriptWarnings.push(
+            `[field] 場面 ${sid} のトリガーの [イベント ${t.event}] が見つかりません（何も起こしません）`
+          )
     for (const w of scriptWarnings) console.warn(w)
     if (scriptWarnings.length > 0)
       showError([configNotice(config), ...scriptWarnings].filter(Boolean).join('\n'))
@@ -589,7 +599,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const syncEmotionHost = (): void => {
     syncEmotionLayerHost({
       ffWindow: config.dialogStyle === 'ff',
-      talking: !!talking,
+      talking: isTalking(),
       layer: emotionLayerBox,
       world,
       top: emotionTop,
@@ -769,13 +779,16 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // ---- NPC・会話 (#841) ----
   /** 会話中の NPC。会話中は歩行入力・ポインタ移動・エンカウント・ワープ・端リンクを止める */
   let talking: NpcRuntime | null = null
+  /** トリガー (#1072) や場面移動で動いている脚本のイベント中か（NPC に話しかけていなくても会話と同じに入力を止める） */
+  let eventRun = false
+  const isTalking = (): boolean => !!talking || eventRun
   /** クリックした NPC へ近づいている最中（着いたら話しかける。キー入力・別の場所のクリックで取り消す） */
   let approach: { id: string; stuckMs: number } | null = null
   const talkState = () =>
     buildTalkState({
       battle: !!battle,
       battleTransitionActive: battleTransition.active,
-      talking: !!talking,
+      talking: isTalking(),
       transition: !!transition,
       warping: !!warpRun,
     })
@@ -820,7 +833,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           npcs: currentNpcs().map((n) => ({ id: n.id, name: n.def.name })),
         }),
         showEmotion
-      )
+      ),
+      { moveScene: (to, x, y, dir) => moveSceneFromEvent(to, x, y, dir) }
     )
   )
   const startTalk = (npc: NpcRuntime): void => {
@@ -841,7 +855,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   }
   /** 会話の送り: 表示中なら全文表示、済んでいれば閉じて歩行へ戻る */
   const advanceTalk = (): void => {
-    if (!talking) return
+    if (!isTalking()) return
     conversation.advance()
   }
   /** 論理サイズ固定の戦闘 (sit-by-me#52): 16:9 を viewport へ等比 contain し、ツールバー等を隠す（終了・dispose・例外で必ず外す） */
@@ -1008,13 +1022,17 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     /** 読み込めたシーン（out が終わるまでに届いていなければ、届くまで out の終端で待つ） */
     ready: LoadedScene | null
     switched: boolean
+    /** ワープが終わった（到着して暗転が明けた、または中止した）とき。脚本の `[場面移動:]` (#1072) が待つ */
+    onEnd?: () => void
   }
   let warpRun: WarpRun | null = null
   /** ワープを中止して元のシーンへ戻す（覆いの色も黒に戻す。flash の白が端リンクのフェードに残らないように） */
   const abortWarp = (): void => {
+    const ended = warpRun
     warpRun = null
     fade.alpha = 0
     fade.tint = 0x000000
+    ended?.onEnd?.()
   }
   /** ワープを始める。始められたら true（戦闘・遷移・別のワープの最中と、未知の id は false） */
   const startWarp = (id: string): boolean => {
@@ -1023,7 +1041,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       console.warn(`[field] 未知のワープ id: ${id}`)
       return false
     }
-    const warp = config.warps[id]
+    beginWarpRun(config.warps[id])
+    return true
+  }
+  /** ワープの実行を始める（始められるかの判定は呼び出し側）。`startWarp` と脚本の `[場面移動:]` の共通部 */
+  const beginWarpRun = (warp: FieldWarp, onEnd?: () => void): void => {
     const run: WarpRun = {
       warp,
       t: 0,
@@ -1035,6 +1057,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       ),
       ready: null,
       switched: false,
+      onEnd,
     }
     run.next.then(
       (s) => {
@@ -1050,7 +1073,42 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     fade.tint = WARP_COLOR[warp.effect]
     releaseWalkInput()
     warpRun = run
-    return true
+  }
+  /**
+   * 脚本の `[場面移動: 場面ID @x,y 向き=]` (#1072)。ワープ（フェード）と同じ演出・同じ到着処理で別の場面へ移り、明けたら resolve する。
+   * 行き先の場面が無い・`@x,y` が無い・すでにワープ中は、警告して移動せず resolve（イベントは続く）
+   */
+  const moveSceneFromEvent = (
+    to: string,
+    x?: number,
+    y?: number,
+    dir?: Direction
+  ): Promise<void> => {
+    if (!hasOwn(config.scenes, to)) {
+      console.warn(`[field] [場面移動: ${to}] の場面がありません（移動しません）`)
+      return Promise.resolve()
+    }
+    if (x === undefined || y === undefined) {
+      console.warn(`[field] [場面移動: ${to}] に @x,y がありません（移動しません）`)
+      return Promise.resolve()
+    }
+    if (warpRun) {
+      console.warn(`[field] [場面移動: ${to}] はワープ中のため移動しません`)
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => {
+      beginWarpRun(
+        {
+          id: `場面移動:${to}`,
+          to,
+          at: { x, y },
+          ...(dir ? { facing: dir.toLowerCase() as Facing } : {}),
+          effect: 'fade',
+          timing: { ...WARP_DEFAULTS.fade },
+        },
+        resolve
+      )
+    })
   }
   const tickWarp = (dt: number): void => {
     const run = warpRun
@@ -1094,13 +1152,68 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       warpRun = null
       fade.alpha = 0
       fade.tint = 0x000000
+      run.onEnd?.()
     }
+  }
+
+  // ---- 脚本のトリガー (#1072) ----
+  // 場面に入ったとき（auto）と、足元が円に入ったとき（踏み込み）に、脚本の `[イベント]` を会話と同じ実行器で走らせる。
+  // 実行中は会話中と同じに歩行・エンカウント・端リンク・ワープを止める。複数が重なったら順に 1 つずつ走らせる
+  /** 場面に入った直後の auto を、歩行に戻ったところで 1 回起こす印（暗転が明けてから起こすため） */
+  let pendingAuto = false
+  /** これから走らせるトリガー（先頭から 1 つずつ）。key は once の記録用 */
+  const triggerQueue: { key: string; event: string; once: boolean }[] = []
+  /** 足元がいま円の中にあるトリガー（いまの場面の `triggers` の添字）。入った瞬間の 1 回だけ起こすため */
+  const insideTriggers = new Set<number>()
+  /** once のトリガーを起こし済みか（`<場面>#<添字>`）。メモリ上だけで、セーブには入らない */
+  const onceFired = new Set<string>()
+  const pumpTriggers = (): void => {
+    if (isTalking()) return
+    if (pendingAuto) {
+      pendingAuto = false
+      ;(config.scenes[sceneId].triggers ?? []).forEach((t, i) => {
+        const key = `${sceneId}#${i}`
+        if (t.auto && !(t.once && onceFired.has(key)))
+          triggerQueue.push({ key, event: t.event, once: t.once })
+      })
+    }
+    while (triggerQueue.length > 0) {
+      const t = triggerQueue.shift()!
+      const commands = resolveTriggerCommands(t.event, scriptEvents, (m) => console.warn(m))
+      if (!commands) continue
+      if (t.once) onceFired.add(t.key)
+      releaseWalkInput()
+      eventRun = true
+      conversation.start(t.event, '', commands, () => {
+        eventRun = false
+      })
+      return
+    }
+  }
+  /** 足元が円に入ったトリガーを待ち行列へ入れる（出たら入り直しで再び起こせる） */
+  const detectStepTriggers = (): void => {
+    ;(config.scenes[sceneId].triggers ?? []).forEach((t, i) => {
+      if (t.auto) return
+      const inNow = Math.hypot(pos.x - t.x, pos.y - t.y) <= t.radius
+      if (!inNow) {
+        insideTriggers.delete(i)
+        return
+      }
+      if (insideTriggers.has(i)) return
+      insideTriggers.add(i)
+      const key = `${sceneId}#${i}`
+      if (!(t.once && onceFired.has(key))) triggerQueue.push({ key, event: t.event, once: t.once })
+    })
   }
 
   /** NPC の置き場所を警告済みのシーン（入るたびに繰り返さない） */
   const npcChecked = new Set<string>()
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    // 場面に入った: auto のトリガーを起こす印を立て、踏み込みの「円の中」を空にする (#1072)
+    pendingAuto = true
+    insideTriggers.clear()
+    triggerQueue.length = 0
     // 同行者の表示とラッチはシーンをまたいで持ち越さない（ワープ・端リンクの暗転明けに残さない）
     companionAlpha = 0
     assistRt = INITIAL_ASSIST_RUNTIME
@@ -1134,6 +1247,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     fade.tint = 0x000000
   }
   applyScene(scene)
+  // セーブから再開したときは場面開始のトリガーを起こさない（始まりの演出を再生し直さない） (#1072)
+  if (resumed) pendingAuto = false
   fade.alpha = 0
 
   // ---- 入力 ----
@@ -1253,7 +1368,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           fieldState: () => ({
             battle: !!battle,
             battleTransition: battleTransition.active,
-            talking: !!talking,
+            talking: isTalking(),
             transition: !!transition,
             warp: !!warpRun,
           }),
@@ -1374,7 +1489,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     if (menuBusy()) return
     ev.preventDefault()
     // 会話中は歩きの入力を受けない（離すほうは受ける）
-    if (down && !acceptsWalkInput({ battle: false, talking: !!talking })) return
+    if (down && !acceptsWalkInput({ battle: false, talking: isTalking() })) return
     if (down) approach = null
     keys[k] = down
   }
@@ -1455,7 +1570,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     // メニュー中・閉じた同じ操作はメニュー（Pixi の当たり）が受ける。フィールドへ抜けさせない
     if (menuHost?.isMenuBlocked) return
     // 会話中のタップは会話を送る（開いた直後の同じ操作では閉じない）
-    if (talking) {
+    if (isTalking()) {
       if (!dialogBox.isJustShown(250)) advanceTalk()
       return
     }
@@ -1565,6 +1680,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const h = scene.mask.height
 
     clockMs += dt
+    if (!warpRun && !transition) pumpTriggers()
     if (warpRun) {
       // ワープ中は入力・移動・エンカウントを止める（描画の時計だけ進む）
       tickWarp(dt)
@@ -1646,7 +1762,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         fade.alpha = Math.max(0, 1 - transition.t / FADE_MS)
         if (transition.t >= FADE_MS) transition = null
       }
-    } else if (talking) {
+    } else if (isTalking()) {
       // 会話中は歩行・エンカウント・端リンクを止める（描画の時計だけ進む）
     } else {
       let vec = currentVector()
@@ -1734,7 +1850,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       }
       if (link) {
         transition = { phase: 'out', t: 0, link, next: ensureScene(link.to) }
-      }
+      } else detectStepTriggers()
     }
 
     // ---- 描画 ----
@@ -1847,6 +1963,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       flags: { ...flags },
       /** 会話中の NPC の id（会話していなければ null）と、このシーンの NPC の足元・向き（検証用） */
       talking: talking ? talking.id : null,
+      /** トリガーや場面移動の脚本のイベント中か（検証用） */
+      eventActive: eventRun,
       /** 会話窓（検証用）。会話外は showing / bgVisible とも false */
       dialog: {
         showing: dialogBox.isShowing,
