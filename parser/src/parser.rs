@@ -1345,6 +1345,16 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         if let Some(rest) = trimmed.strip_prefix("[トリガー ") {
             if rest.ends_with(']') {
                 let inner = rest.trim_end_matches(']').trim();
+                // 不正な `半径=` (#1072): 警告してこの行だけ読み捨てる
+                if let Some(bad) = invalid_trigger_radius(inner) {
+                    emit_warning(&format!(
+                        "[name-name-parser] warning: {} 行目の [トリガー] は 半径={bad} が不正（半径は 1 以上の整数）なため読み捨てた: {}",
+                        pos as i64 + 1 + line_base,
+                        truncate_for_warning(trimmed)
+                    ));
+                    pos += 1;
+                    continue;
+                }
                 if let Some(trigger) = parse_trigger_line(inner) {
                     current_events.push(trigger);
                     pos += 1;
@@ -5490,6 +5500,13 @@ fn parse_npc_move_command(s: &str) -> Option<EventCommand> {
     })
 }
 
+/// `[トリガー ...]` の `半径=` が 1 以上の整数でなければ、その値の文字列を返す (#1072)。
+fn invalid_trigger_radius(s: &str) -> Option<&str> {
+    s.split_whitespace()
+        .filter_map(|p| p.strip_prefix("半径="))
+        .find(|v| !v.parse::<u32>().is_ok_and(|r| r >= 1))
+}
+
 /// `[トリガー ...]` の内部をパースする。
 /// 座標トリガー: `@x,y scene=xxx [半径=N] [once=true]`（`半径=` は一枚絵フィールド用 #1072）
 /// 自動トリガー: `auto scene=xxx [once=true]`
@@ -5521,8 +5538,8 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
         } else if p == "once=true" {
             once = true;
         } else if let Some(val) = p.strip_prefix("半径=") {
-            // 一枚絵フィールドの踏み込みの範囲 (#1072)。0 以上の整数でなければこの行は読まない
-            radius = Some(val.trim().parse().ok()?);
+            // 一枚絵フィールドの踏み込みの範囲 (#1072)。1 以上の整数でなければこの行は読まない（警告は invalid_trigger_radius）
+            radius = Some(val.parse::<u32>().ok().filter(|r| *r >= 1)?);
         }
     }
 
