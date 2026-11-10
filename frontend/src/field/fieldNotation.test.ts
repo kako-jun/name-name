@@ -439,3 +439,157 @@ describe('collectFieldNotation: 実 wasm の parseMarkdown から', () => {
     expect(run([...docs].reverse())).toEqual({ notation, warnings })
   })
 })
+
+describe('collectFieldNotation: [トリガー]・[場面移動:] (#1072)', () => {
+  const trig = (scene: string, extra: Record<string, unknown> = {}): Event => ({
+    RpgTrigger: { scene, ...extra },
+  })
+  const rpgEvent = (name: string, ...targets: string[]): Event => ({
+    RpgEvent: {
+      name,
+      commands: targets.map((t) => ({ type: 'SceneMove' as const, scene: t })),
+    },
+  })
+  const npc = (id: string, sceneName?: string): Event => ({
+    Npc: { id, name: id, x: 1, y: 2, color: 0, message: ['hi'], scene: sceneName } as never,
+  })
+  const collect = (docs: FieldSourceDoc[]) =>
+    collectFieldNotation({ docs, entryPath: 'a.md', entry: { sceneId: 's1' } })
+
+  it('場面の [トリガー] が書いた順に triggers へ入る', () => {
+    const { notation, warnings } = collect([
+      src(
+        'a.md',
+        scene(
+          's1',
+          map(),
+          trig('first', { auto: true }),
+          trig('second', { x: 10, y: 20, radius: 48, once: true }),
+          trig('third', { x: 1, y: 2 })
+        ),
+        scene('s2', map())
+      ),
+    ])
+    expect(notation.scenes[0].triggers.map((t) => t.scene)).toEqual(['first', 'second', 'third'])
+    expect(notation.scenes[0].triggers[1]).toMatchObject({ x: 10, y: 20, radius: 48, once: true })
+    expect(warnings).toEqual([])
+  })
+
+  it('トリガーが無い場面は triggers が空', () => {
+    const { notation } = collect([src('a.md', scene('s1', map()))])
+    expect(notation.scenes[0].triggers).toEqual([])
+  })
+
+  it('トリガー経由の [場面移動:] の行き先が閉包に入る', () => {
+    const { notation, warnings } = collect([
+      src(
+        'a.md',
+        scene('s1', map(), trig('go', { auto: true }), rpgEvent('go', 's2')),
+        scene('s2', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
+    expect(warnings).toEqual([])
+  })
+
+  it('NPC の scene= 経由の [場面移動:] の行き先も閉包に入る', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene('s1', map(), npc('n1', 'talk'), rpgEvent('talk', 's2')),
+        scene('s2', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
+  })
+
+  it('別 doc に書かれたイベントの行き先も拾う', () => {
+    const { notation } = collect([
+      src('a.md', scene('s1', map(), trig('go', { auto: true }))),
+      src('b.md', scene('s2', map()), scene('holder', rpgEvent('go', 's2'))),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
+  })
+
+  it('行き先に [フィールドマップ] が無い場面は exits、docs に無ければ missingScenes', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene('s1', map(), trig('go', { auto: true }), rpgEvent('go', 'novel', 'ghost')),
+        scene('novel')
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1'])
+    expect(notation.exits).toEqual(['novel'])
+    expect(notation.missingScenes).toEqual(['ghost'])
+  })
+
+  it('存在しないイベント名を指していても閉包は壊れない', () => {
+    const { notation } = collect([
+      src('a.md', scene('s1', map(), trig('nope', { auto: true }), npc('n1', 'nope2'))),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1'])
+    expect(notation.missingScenes).toEqual([])
+  })
+
+  it('同名イベントは先勝ちで、後のイベントの行き先は拾わない', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene('s1', map(), trig('go', { auto: true }), rpgEvent('go', 's2'), rpgEvent('go', 's3')),
+        scene('s2', map()),
+        scene('s3', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
+  })
+
+  it('場面移動の循環 A→B→A で無限ループしない', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene('s1', map(), trig('toB', { auto: true }), rpgEvent('toB', 's2')),
+        scene('s2', map(), trig('toA', { auto: true }), rpgEvent('toA', 's1'))
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
+  })
+
+  it('実 wasm: [トリガー 半径=…] と [場面移動:] が閉包・triggers に反映される', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: 一',
+      '',
+      '[フィールドマップ 背景=a.webp マスク=am.webp]',
+      '[プレイヤー @1,2 向き=下]',
+      '[トリガー @100,200 半径=48 scene=行く once=true]',
+      '[トリガー auto scene=始まり]',
+      '',
+      '[イベント 行く]',
+      '[場面移動: s2 @5,6 向き=上]',
+      '[/イベント]',
+      '',
+      '[イベント 始まり]',
+      '> はじまり。',
+      '[/イベント]',
+      '',
+      '## s2: 二',
+      '',
+      '[フィールドマップ 背景=b.webp マスク=bm.webp]',
+      '[プレイヤー @3,4 向き=下]',
+      '',
+    ].join('\n')
+    const { notation, warnings } = collect([{ path: 'a.md', doc: await parseMarkdown(md) }])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
+    expect(notation.scenes[0].triggers).toMatchObject([
+      { x: 100, y: 200, radius: 48, scene: '行く', once: true },
+      { auto: true, scene: '始まり' },
+    ])
+    expect(warnings).toEqual([])
+  })
+})

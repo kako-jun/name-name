@@ -1937,6 +1937,22 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         EventCommand::Warp { id } => {
                             out.push_str(&format!("[ワープ: {id}]\n"));
                         }
+                        EventCommand::SceneMove {
+                            scene,
+                            x,
+                            y,
+                            direction,
+                        } => {
+                            let mut line = format!("[場面移動: {scene}");
+                            if let (Some(px), Some(py)) = (x, y) {
+                                line.push_str(&format!(" @{px},{py}"));
+                            }
+                            if let Some(d) = direction {
+                                line.push_str(&format!(" 向き={}", direction_ja(*d)));
+                            }
+                            line.push_str("]\n");
+                            out.push_str(&line);
+                        }
                     }
                 }
                 out.push_str("[/イベント]\n");
@@ -1948,6 +1964,7 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                 auto,
                 scene,
                 once,
+                radius,
             } => {
                 if prev_was_dialog_or_text {
                     out.push('\n');
@@ -1962,8 +1979,14 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                     );
                     "auto".to_string()
                 };
+                let radius_part = match radius {
+                    Some(r) => format!(" 半径={r}"),
+                    None => String::new(),
+                };
                 let once_part = if *once { " once=true" } else { "" };
-                out.push_str(&format!("[トリガー {pos_part} scene={scene}{once_part}]\n"));
+                out.push_str(&format!(
+                    "[トリガー {pos_part}{radius_part} scene={scene}{once_part}]\n"
+                ));
                 prev_was_dialog_or_text = false;
             }
             Event::Animate {

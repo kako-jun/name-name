@@ -46,6 +46,17 @@ pub enum EventCommand {
     FieldEnd,
     /// ワープ先を呼ぶ (#1102)。`[ワープ: 名前]`（`[イベント]` 内専用）。`[ワープ 名前 → …]` の宣言を名前で指す。
     Warp { id: String },
+    /// 一枚絵フィールドの別の場面へ移る (#1072)。`[場面移動: 場面ID @x,y 向き=左]`（`[イベント]` 内専用）。
+    /// 書式は `Event::Field`（`[フィールド:]`）と同じ。`向き=` 省略 = 向きを変えない。`@x,y` は parser では任意だが、フィールドの実行では必須（省略は警告して移動しない）。
+    SceneMove {
+        scene: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<Direction>,
+    },
 }
 
 fn default_npc_move_speed() -> u32 {
@@ -1845,6 +1856,10 @@ pub enum Event {
         /// true のとき初回のみ発火（SaveManager でフラグ管理）。
         #[serde(default)]
         once: bool,
+        /// 一枚絵フィールドの踏み込みの範囲 (#1072)。`半径=N`（背景 px）。`@x,y` を中心に、足元がこの円に入ったとき発火する。
+        /// タイルのマップ（TopDown）では使わない。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius: Option<u32>,
     },
     /// 立ち絵 / オブジェクトのアニメーション (#134)。
     ///

@@ -1050,6 +1050,45 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                             pos += 1;
                             continue;
                         }
+                        // [場面移動: 場面ID @x,y 向き=左] (#1072)。書式は `[フィールド:]` と同じ。別の場面へ移る
+                        if let Some(rest) = cmd_line
+                            .strip_prefix("[場面移動:")
+                            .and_then(|r| r.strip_suffix(']'))
+                        {
+                            if let Some(char) = pending_dialog_char.take() {
+                                if !pending_dialog_lines.is_empty() {
+                                    commands.push(EventCommand::Dialog {
+                                        character: Some(char),
+                                        text: std::mem::take(&mut pending_dialog_lines),
+                                    });
+                                }
+                            } else if !pending_dialog_lines.is_empty() {
+                                commands.push(EventCommand::Dialog {
+                                    character: None,
+                                    text: std::mem::take(&mut pending_dialog_lines),
+                                });
+                            }
+                            if let Some(Event::Field {
+                                scene,
+                                x,
+                                y,
+                                direction,
+                            }) = parse_field_target(
+                                rest,
+                                pos as i64 + 1 + line_base,
+                                cmd_line,
+                                "[場面移動:]",
+                            ) {
+                                commands.push(EventCommand::SceneMove {
+                                    scene,
+                                    x,
+                                    y,
+                                    direction,
+                                });
+                            }
+                            pos += 1;
+                            continue;
+                        }
                         // [NPC移動: <npc> → @x,y 速度=N 向き=<dir>]
                         if let Some(rest) = cmd_line.strip_prefix("[NPC移動:") {
                             if rest.ends_with(']') {
@@ -1306,6 +1345,16 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         if let Some(rest) = trimmed.strip_prefix("[トリガー ") {
             if rest.ends_with(']') {
                 let inner = rest.trim_end_matches(']').trim();
+                // 不正な `半径=` (#1072): 警告してこの行だけ読み捨てる
+                if let Some(bad) = invalid_trigger_radius(inner) {
+                    emit_warning(&format!(
+                        "[name-name-parser] warning: {} 行目の [トリガー] は 半径={bad} が不正（半径は 1 以上の整数）なため読み捨てた: {}",
+                        pos as i64 + 1 + line_base,
+                        truncate_for_warning(trimmed)
+                    ));
+                    pos += 1;
+                    continue;
+                }
                 if let Some(trigger) = parse_trigger_line(inner) {
                     current_events.push(trigger);
                     pos += 1;
@@ -4306,6 +4355,7 @@ const KNOWN_DIRECTIVE_HEADS: &[&str] = &[
     // 一枚絵フィールドの場面の中身 (#1102)
     "端",
     "ワープ",
+    "場面移動",
     "揺れ",
     "窓の景色",
     // 一枚絵フィールドの作品設定 (#1104)
@@ -4342,6 +4392,7 @@ fn event_only_command(line: &str) -> Option<&'static str> {
         ("NPC移動", "[NPC移動:]"),
         ("戦闘", "[戦闘:]"),
         ("ワープ", "[ワープ:]"),
+        ("場面移動", "[場面移動:]"),
     ]
     .into_iter()
     .find(|(name, _)| rest.strip_prefix(name).is_some_and(|r| r.starts_with(':')))
@@ -4549,9 +4600,14 @@ fn parse_field_map_line(inner: &str, line_no: i64, line: &str) -> Option<FieldMa
 /// `[フィールド: 場面ID @x,y 向き=左]` の `:` 以降をパースする (#1100)。
 /// 場面IDは必須。`@x,y`（u32 の対）と `向き=`（上下左右）は任意で順不同。不正なら警告して None（行を捨てる）。
 fn parse_field_directive(rest: &str, line_no: i64, line: &str) -> Option<Event> {
+    parse_field_target(rest, line_no, line, "[フィールド:]")
+}
+
+/// `[フィールド: …]` と `[場面移動: …]` に共通の「場面ID @x,y 向き=」の読み取り (#1072)。`label` は警告に出す記法名。
+fn parse_field_target(rest: &str, line_no: i64, line: &str, label: &str) -> Option<Event> {
     let warn = |why: &str| {
         emit_warning(&format!(
-            "[name-name-parser] warning: {line_no} 行目の [フィールド:] は{}ため読み捨てた: {}",
+            "[name-name-parser] warning: {line_no} 行目の {label} は{}ため読み捨てた: {}",
             field_warn_why(why),
             truncate_for_warning(line)
         ));
@@ -5444,8 +5500,15 @@ fn parse_npc_move_command(s: &str) -> Option<EventCommand> {
     })
 }
 
+/// `[トリガー ...]` の `半径=` が 1 以上の整数でなければ、その値の文字列を返す (#1072)。
+fn invalid_trigger_radius(s: &str) -> Option<&str> {
+    s.split_whitespace()
+        .filter_map(|p| p.strip_prefix("半径="))
+        .find(|v| !v.parse::<u32>().is_ok_and(|r| r >= 1))
+}
+
 /// `[トリガー ...]` の内部をパースする。
-/// 座標トリガー: `@x,y scene=xxx [once=true]`
+/// 座標トリガー: `@x,y scene=xxx [半径=N] [once=true]`（`半径=` は一枚絵フィールド用 #1072）
 /// 自動トリガー: `auto scene=xxx [once=true]`
 fn parse_trigger_line(s: &str) -> Option<Event> {
     let mut x: Option<u32> = None;
@@ -5453,6 +5516,7 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
     let mut auto = false;
     let mut scene: Option<String> = None;
     let mut once = false;
+    let mut radius: Option<u32> = None;
 
     let mut parts = s.split_whitespace();
     let first = parts.next()?;
@@ -5473,6 +5537,9 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
             }
         } else if p == "once=true" {
             once = true;
+        } else if let Some(val) = p.strip_prefix("半径=") {
+            // 一枚絵フィールドの踏み込みの範囲 (#1072)。1 以上の整数でなければこの行は読まない（警告は invalid_trigger_radius）
+            radius = Some(val.parse::<u32>().ok().filter(|r| *r >= 1)?);
         }
     }
 
@@ -5483,6 +5550,7 @@ fn parse_trigger_line(s: &str) -> Option<Event> {
         auto,
         scene,
         once,
+        radius,
     })
 }
 
@@ -7809,6 +7877,7 @@ title: "test"
                 auto,
                 scene,
                 once,
+                ..
             } => {
                 assert_eq!(*x, Some(5));
                 assert_eq!(*y, Some(5));
@@ -7841,6 +7910,7 @@ title: "test"
                 auto,
                 scene,
                 once,
+                ..
             } => {
                 assert_eq!(*x, None);
                 assert_eq!(*y, None);
@@ -12035,5 +12105,311 @@ mod master_gear_keys_tests {
         );
         assert_eq!(item("画像: a]b\n").image, None);
         let _ = take_test_warnings();
+    }
+}
+
+/// #1072: 一枚絵フィールドの `[トリガー … 半径=N …]` と、イベント内 `[場面移動: 場面ID @x,y 向き=]`。
+#[cfg(test)]
+mod field_trigger_scene_move_tests {
+    use super::*;
+    use crate::emitter::emit;
+
+    const HEAD: &str = "---\nengine: name-name\nchapter: 1\ntitle: t\n---\n\n## 1-1: s\n\n";
+
+    fn events_of(body: &str) -> Vec<Event> {
+        let _ = take_test_warnings();
+        parse(&format!("{HEAD}{body}")).chapters[0].scenes[0]
+            .events
+            .clone()
+    }
+
+    fn step_trigger(x: u32, y: u32, radius: Option<u32>, scene: &str, once: bool) -> Event {
+        Event::RpgTrigger {
+            x: Some(x),
+            y: Some(y),
+            auto: false,
+            scene: scene.into(),
+            once,
+            radius,
+        }
+    }
+
+    fn commands_of(body: &str) -> Vec<EventCommand> {
+        match &events_of(body)[..] {
+            [Event::RpgEvent { commands, .. }] => commands.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // ---- [トリガー] の 半径= ----
+
+    #[test]
+    fn trigger_radius_is_parsed() {
+        let evs = events_of("[トリガー @100,200 半径=48 scene=go]\n");
+        assert_eq!(evs, vec![step_trigger(100, 200, Some(48), "go", false)]);
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn trigger_radius_omitted_is_none() {
+        let evs = events_of("[トリガー @100,200 scene=go]\n");
+        assert_eq!(evs, vec![step_trigger(100, 200, None, "go", false)]);
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn trigger_radius_one_is_accepted() {
+        let evs = events_of("[トリガー @1,2 半径=1 scene=go]\n");
+        assert_eq!(evs, vec![step_trigger(1, 2, Some(1), "go", false)]);
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn trigger_bad_radius_warns_once_and_drops_the_line() {
+        for bad in ["0", "-5", "1.5", "", "abc"] {
+            let line = format!("[トリガー @1,2 半径={bad} scene=go]");
+            let evs = events_of(&format!("{line}\n[トリガー auto scene=next]\n"));
+            // 不正な行だけ落ち、次の行は読む
+            assert_eq!(
+                evs,
+                vec![Event::RpgTrigger {
+                    x: None,
+                    y: None,
+                    auto: true,
+                    scene: "next".into(),
+                    once: false,
+                    radius: None,
+                }],
+                "{bad:?}"
+            );
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{bad:?}: {w:?}");
+            assert!(
+                w[0].contains("9 行目")
+                    && w[0].contains("半径は 1 以上の整数")
+                    && w[0].contains(&line),
+                "{bad:?}: {w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trigger_radius_and_once_in_any_order() {
+        let a = events_of("[トリガー @5,6 半径=20 scene=e once=true]\n");
+        let b = events_of("[トリガー @5,6 once=true 半径=20 scene=e]\n");
+        let c = events_of("[トリガー @5,6 scene=e once=true 半径=20]\n");
+        let want = vec![step_trigger(5, 6, Some(20), "e", true)];
+        assert_eq!(a, want);
+        assert_eq!(b, want);
+        assert_eq!(c, want);
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn trigger_auto_with_radius_keeps_auto_and_radius() {
+        let evs = events_of("[トリガー auto 半径=30 scene=intro]\n");
+        assert_eq!(
+            evs,
+            vec![Event::RpgTrigger {
+                x: None,
+                y: None,
+                auto: true,
+                scene: "intro".into(),
+                once: false,
+                radius: Some(30),
+            }]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    // ---- [場面移動:] ----
+
+    #[test]
+    fn scene_move_with_position_and_direction() {
+        let cmds = commands_of("[イベント e]\n[場面移動: 本堂 @400,700 向き=上]\n[/イベント]\n");
+        assert_eq!(
+            cmds,
+            vec![EventCommand::SceneMove {
+                scene: "本堂".into(),
+                x: Some(400),
+                y: Some(700),
+                direction: Some(Direction::Up),
+            }]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn scene_move_scene_only() {
+        let cmds = commands_of("[イベント e]\n[場面移動: 本堂]\n[/イベント]\n");
+        assert_eq!(
+            cmds,
+            vec![EventCommand::SceneMove {
+                scene: "本堂".into(),
+                x: None,
+                y: None,
+                direction: None,
+            }]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn scene_move_direction_only() {
+        let cmds = commands_of("[イベント e]\n[場面移動: 本堂 向き=左]\n[/イベント]\n");
+        assert_eq!(
+            cmds,
+            vec![EventCommand::SceneMove {
+                scene: "本堂".into(),
+                x: None,
+                y: None,
+                direction: Some(Direction::Left),
+            }]
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn scene_move_bad_values_warn_once_drop_the_line_and_keep_reading() {
+        for line in [
+            "[場面移動: ]",
+            "[場面移動: @1,2]",
+            "[場面移動: 本堂 @1]",
+            "[場面移動: 本堂 @a,b]",
+            "[場面移動: 本堂 向き=斜め]",
+        ] {
+            let cmds = commands_of(&format!("[イベント e]\n{line}\n[待機: 100]\n[/イベント]\n"));
+            // 不正な行は捨て、後続の [待機:] は読む
+            assert_eq!(cmds, vec![EventCommand::Wait { ms: 100 }], "{line}");
+            let w = take_test_warnings();
+            assert_eq!(w.len(), 1, "{line}: {w:?}");
+            assert!(
+                w[0].contains("10 行目の [場面移動:]") && w[0].contains(line),
+                "{line}: {w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scene_move_outside_event_gets_dedicated_warning() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!("{HEAD}[場面移動: 本堂]\n**カコ**:\nやあ\n"));
+        let w = take_test_warnings();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("9 行目")
+                && w[0].contains("[イベント] ブロック内専用の [場面移動:] のため読み捨てた")
+                && !w[0].contains("未知"),
+            "{w:?}"
+        );
+        // 読み捨てても後続の会話は読む
+        assert!(doc.chapters[0].scenes[0]
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Dialog { .. })));
+    }
+
+    #[test]
+    fn dialog_before_scene_move_is_committed_first() {
+        let cmds = commands_of(
+            "[イベント e]\n**カコ**:\nいってきます\n[場面移動: 本堂]\n[待機: 100]\n[/イベント]\n",
+        );
+        assert_eq!(cmds.len(), 3, "{cmds:?}");
+        match &cmds[0] {
+            EventCommand::Dialog { character, text } => {
+                assert_eq!(character.as_deref(), Some("カコ"));
+                assert_eq!(text, &vec!["いってきます".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(cmds[1], EventCommand::SceneMove { .. }));
+        assert_eq!(cmds[2], EventCommand::Wait { ms: 100 });
+        assert!(take_test_warnings().is_empty());
+    }
+
+    #[test]
+    fn narration_before_scene_move_is_committed_first() {
+        let cmds = commands_of("[イベント e]\n> 夜になった。\n[場面移動: 本堂]\n[/イベント]\n");
+        assert!(
+            matches!(
+                cmds.as_slice(),
+                [
+                    EventCommand::Narration { .. },
+                    EventCommand::SceneMove { .. }
+                ]
+            ),
+            "{cmds:?}"
+        );
+        assert!(take_test_warnings().is_empty());
+    }
+
+    // ---- emit / parse 往復 ----
+
+    fn roundtrip_events(body: &str) -> (Vec<Event>, Vec<Event>) {
+        let _ = take_test_warnings();
+        let first = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&first);
+        let second = parse(&emitted);
+        (
+            first.chapters[0].scenes[0].events.clone(),
+            second.chapters[0].scenes[0].events.clone(),
+        )
+    }
+
+    #[test]
+    fn scene_move_roundtrips_for_every_optional_combination() {
+        for line in [
+            "[場面移動: 本堂 @400,700 向き=上]",
+            "[場面移動: 本堂 @400,700]",
+            "[場面移動: 本堂 向き=右]",
+            "[場面移動: 本堂]",
+        ] {
+            let (a, b) = roundtrip_events(&format!("[イベント e]\n{line}\n[/イベント]\n"));
+            assert_eq!(a, b, "{line}");
+            assert!(take_test_warnings().is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn scene_move_emit_writes_the_notation_back() {
+        let _ = take_test_warnings();
+        let doc = parse(&format!(
+            "{HEAD}[イベント e]\n[場面移動: 本堂 @400,700 向き=上]\n[/イベント]\n"
+        ));
+        assert!(emit(&doc).contains("[場面移動: 本堂 @400,700 向き=上]"));
+    }
+
+    #[test]
+    fn trigger_with_radius_roundtrips() {
+        for line in [
+            "[トリガー @100,200 半径=48 scene=go]",
+            "[トリガー @100,200 半径=48 scene=go once=true]",
+            "[トリガー @100,200 scene=go]",
+            "[トリガー auto scene=intro once=true]",
+            "[トリガー auto 半径=30 scene=intro]",
+        ] {
+            let (a, b) = roundtrip_events(&format!("{line}\n"));
+            assert_eq!(a.len(), 1, "{line}");
+            assert_eq!(a, b, "{line}");
+            assert!(take_test_warnings().is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn trigger_radius_is_written_by_emit_and_omitted_when_absent() {
+        let _ = take_test_warnings();
+        let with = emit(&parse(&format!(
+            "{HEAD}[トリガー @100,200 半径=48 scene=go]\n"
+        )));
+        assert!(
+            with.contains("[トリガー @100,200 半径=48 scene=go]"),
+            "{with}"
+        );
+        let without = emit(&parse(&format!("{HEAD}[トリガー @100,200 scene=go]\n")));
+        assert!(
+            without.contains("[トリガー @100,200 scene=go]"),
+            "{without}"
+        );
+        assert!(!without.contains("半径"), "{without}");
     }
 }

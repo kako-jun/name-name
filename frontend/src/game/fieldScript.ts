@@ -11,8 +11,8 @@ import { resolveEmotion, type EmotionResolveContext } from './fieldEmotionScript
 /** 脚本から集めた `[イベント <name>]`（名前 → コマンド列。同名は先勝ち） */
 export type FieldScriptEvents = Map<string, EventCommand[]>
 
-/** field が実行できるコマンド（台詞・ナレーション・待機・感情 #946）。NpcMove / Battle などは未対応 */
-const SUPPORTED: readonly string[] = ['Dialog', 'Narration', 'Wait', 'Emotion']
+/** field が実行できるコマンド（台詞・ナレーション・待機・感情 #946・場面移動 #1072）。NpcMove / Battle などは未対応 */
+const SUPPORTED: readonly string[] = ['Dialog', 'Narration', 'Wait', 'Emotion', 'SceneMove']
 
 /** パース済みドキュメントから `[イベント]` を集める（全章・全シーン） */
 export function collectFieldEvents(doc: EventDocument): FieldScriptEvents {
@@ -64,8 +64,30 @@ export function supportedCommands(
     else
       warn(`[field] [イベント ${name}] の ${c.type} はフィールドでは未対応です（読み飛ばします）`)
   }
-  // 台詞（Dialog / Narration）が 1 つも無いイベントは会話にならない（Wait だけで閉じてしまう）ので固定 line に戻す
-  return out.some((c) => c.type === 'Dialog' || c.type === 'Narration') ? out : undefined
+  // 台詞（Dialog / Narration）も場面移動も無いイベントは会話にならない（Wait だけで閉じてしまう）ので固定 line に戻す
+  return out.some((c) => c.type === 'Dialog' || c.type === 'Narration' || c.type === 'SceneMove')
+    ? out
+    : undefined
+}
+
+/**
+ * トリガー (#1072) から実行するコマンド列を選ぶ。NPC と違い固定の `line` が無いので、実行できるコマンドが 1 つも残らない／
+ * イベントが無いときは警告して undefined（そのトリガーは何も起こさない）
+ */
+export function resolveTriggerCommands(
+  name: string,
+  events: FieldScriptEvents | undefined,
+  warn: (msg: string) => void = (m) => console.warn(m)
+): EventCommand[] | undefined {
+  const commands = events?.get(name)
+  if (!commands) {
+    warn(`[field] トリガーの [イベント ${name}] が見つかりません（何も起こしません）`)
+    return undefined
+  }
+  const ok = supportedCommands(name, commands, warn)
+  if (!ok)
+    warn(`[field] [イベント ${name}] に実行できる台詞・場面移動がありません（何も起こしません）`)
+  return ok
 }
 
 /**

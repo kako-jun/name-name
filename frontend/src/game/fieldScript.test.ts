@@ -10,6 +10,7 @@ import {
   createFieldNpcMover,
   loadFieldScript,
   resolveNpcCommands,
+  resolveTriggerCommands,
   supportedCommands,
 } from './fieldScript'
 import { parseMarkdown } from '../wasm/parser'
@@ -252,6 +253,67 @@ describe('FieldConversation', () => {
       vi.useRealTimers()
     }
   })
+  it('destroy: 実行中の会話を捨てて active=false、onEnd は呼ばれず、次の start が実際に始まる', () => {
+    const { dialog, conv } = make()
+    const end1 = vi.fn()
+    conv.start('NPC', '固定', [dlg('A', '1行目'), dlg('A', '2行目')], end1)
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
+    expect(end1).not.toHaveBeenCalled()
+    const end2 = vi.fn()
+    conv.start('NPC', '固定', [dlg('B', '新しい台詞')], end2)
+    expect(conv.active).toBe(true)
+    expect(dialog.shown[dialog.shown.length - 1]).toEqual(['B', '新しい台詞'])
+    conv.advance()
+    conv.advance()
+    expect(conv.active).toBe(false)
+    expect(end2).toHaveBeenCalledTimes(1)
+    expect(end1).not.toHaveBeenCalled()
+  })
+  it('destroy: 固定 line の表示中も active=false に戻り、onEnd は呼ばれない', () => {
+    const { conv } = make()
+    const end = vi.fn()
+    conv.start('NPC', '固定', undefined, end)
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
+    conv.advance()
+    expect(end).not.toHaveBeenCalled()
+  })
+  it('destroy: 飛行中の SceneMove が destroy 後に resolve しても step を進めない（generation）', async () => {
+    const dialog = fakeDialog()
+    let resolveMove: () => void = () => {}
+    const runner = new EventRunner(
+      dialog as never,
+      createFieldNpcMover(() => {}),
+      createFieldBattleHost(() => {}),
+      undefined,
+      {
+        moveScene: () =>
+          new Promise<void>((r) => {
+            resolveMove = r
+          }),
+      }
+    )
+    const conv = new FieldConversation(dialog, runner)
+    const end = vi.fn()
+    conv.start(
+      'NPC',
+      '固定',
+      [{ type: 'SceneMove', scene: 'b', x: 1, y: 2 }, dlg('A', '移動後の台詞')],
+      end
+    )
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
+    resolveMove()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(dialog.shown).toEqual([])
+    expect(conv.active).toBe(false)
+    expect(end).not.toHaveBeenCalled()
+  })
   it('コマンドが無ければ固定 line（段階1と同じ。全文→閉じる）', () => {
     const { dialog, conv } = make()
     const end = vi.fn()
@@ -477,5 +539,84 @@ describe('Emotion の対応 (#946)', () => {
     expect(
       cmds?.filter((c) => c.type === 'Dialog').map((c) => (c as { character?: string }).character)
     ).toEqual(['近所の子', '近所の子'])
+  })
+})
+
+describe('SceneMove とトリガーの対応 (#1072)', () => {
+  const move: EventCommand = { type: 'SceneMove', scene: '本堂', x: 400, y: 700, direction: 'Up' }
+
+  it('supportedCommands: SceneMove のみのイベントは undefined にならず、警告も出ない', () => {
+    const warn = vi.fn()
+    expect(supportedCommands('e', [move], warn)).toEqual([move])
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('supportedCommands: Wait のみは従来どおり undefined', () => {
+    expect(supportedCommands('e', [{ type: 'Wait', ms: 100 }], () => {})).toBeUndefined()
+  })
+  it('resolveTriggerCommands: 台詞と SceneMove をそのまま通す（警告なし）', () => {
+    const warn = vi.fn()
+    const events = new Map<string, EventCommand[]>([['go', [dlg('A', 'さて'), move]]])
+    expect(resolveTriggerCommands('go', events, warn)).toEqual([dlg('A', 'さて'), move])
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('resolveTriggerCommands: イベントが無いと警告 1 件で undefined', () => {
+    const warn = vi.fn()
+    expect(resolveTriggerCommands('nope', new Map(), warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('nope')
+  })
+  it('resolveTriggerCommands: scriptEvents が undefined でも警告 1 件で undefined', () => {
+    const warn = vi.fn()
+    expect(resolveTriggerCommands('go', undefined, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+  it('resolveTriggerCommands: 実行可能コマンドが 0 件（NpcMove だけ）なら警告 2 件で undefined', () => {
+    const warn = vi.fn()
+    const events = new Map<string, EventCommand[]>([
+      ['mv', [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }]],
+    ])
+    expect(resolveTriggerCommands('mv', events, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls[0][0]).toContain('NpcMove')
+    expect(warn.mock.calls[1][0]).toContain('実行できる台詞・場面移動がありません')
+  })
+  it('resolveTriggerCommands: Wait だけのイベントは警告 1 件で undefined', () => {
+    const warn = vi.fn()
+    const events = new Map<string, EventCommand[]>([['w', [{ type: 'Wait', ms: 5 }]]])
+    expect(resolveTriggerCommands('w', events, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('実パーサ経路: [場面移動:] 付きイベントが collect → resolve まで繋がる', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント 出発]',
+      '**カコ**:',
+      'いってきます。',
+      '[場面移動: 本堂 @400,700 向き=上]',
+      '[/イベント]',
+      '',
+      '[イベント 即移動]',
+      '[場面移動: 本堂]',
+      '[/イベント]',
+      '',
+    ].join('\n')
+    const events = collectFieldEvents(await parseMarkdown(md))
+    const warn = vi.fn()
+    expect(resolveTriggerCommands('出発', events, warn)).toEqual([
+      dlg('カコ', 'いってきます。'),
+      { type: 'SceneMove', scene: '本堂', x: 400, y: 700, direction: 'Up' },
+    ])
+    expect(resolveTriggerCommands('即移動', events, warn)).toEqual([
+      { type: 'SceneMove', scene: '本堂' },
+    ])
+    expect(warn).not.toHaveBeenCalled()
   })
 })

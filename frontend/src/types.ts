@@ -966,6 +966,8 @@ export type Event =
         auto?: boolean
         scene: string
         once?: boolean
+        /** 一枚絵フィールドの踏み込みの範囲 (#1072)。`@x,y` を中心にした円の半径（背景 px） */
+        radius?: number
       }
     }
   | {
@@ -1438,3 +1440,5 @@ export type EventCommand =
   | { type: 'FieldEnd' }
   /** ワープ先を呼ぶ (#1102)。`[ワープ: 名前]`（`[イベント]` 内専用）。`[ワープ 名前 → …]` の宣言を名前で指す */
   | { type: 'Warp'; id: string }
+  /** 一枚絵フィールドの別の場面へ移る (#1072)。`[場面移動: 場面ID @x,y 向き=左]`（`[イベント]` 内専用）。x,y は parser では任意だが、フィールドの実行では必須（x か y が無ければ警告して移動しない） */
+  | { type: 'SceneMove'; scene: string; x?: number; y?: number; direction?: Direction }

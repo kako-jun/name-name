@@ -5,7 +5,7 @@
  * DialogBox への委譲・NPC 移動・Wait を担当。
  * TopDownRenderer から呼ばれ、実行中は inputLocked = true を維持する。
  */
-import type { EventCommand } from '../types'
+import type { Direction, EventCommand } from '../types'
 import type { DialogBox } from './DialogBox'
 import type { BattleResult } from './loot'
 
@@ -32,6 +32,14 @@ export interface EventEmotionHost {
   showEmotion(target: string, kind: string, durationMs?: number): void
 }
 
+/**
+ * 脚本の `[場面移動: 場面ID @x,y 向き=]` (#1072) を実行するためのホスト側の口。渡さないときの `SceneMove` は警告して次へ進む。
+ * 移動（暗転・読み込み・到着）が終わったら resolve する。ランナーはそれまでキューを止める
+ */
+export interface EventSceneHost {
+  moveScene(scene: string, x?: number, y?: number, direction?: Direction): Promise<void>
+}
+
 /** `次=` の分岐の連鎖の上限（イベント → 戦闘 → 次のイベント → 戦闘 … が際限なく続くのを止める安全弁） */
 export const MAX_BATTLE_BRANCH_DEPTH = 32
 
@@ -43,6 +51,7 @@ export class EventRunner {
   private onComplete: (() => void) | undefined
   private battleHost: EventBattleHost | undefined
   private emotionHost: EventEmotionHost | undefined
+  private sceneHost: EventSceneHost | undefined
   /** `run` ごとに進める世代。戦闘の待ちの間に `destroy` / 次の `run` があったら、古い待ちの続きを捨てる */
   private generation = 0
   private branchDepth = 0
@@ -51,12 +60,14 @@ export class EventRunner {
     dialogBox: DialogBox,
     npcMover: NpcMover,
     battleHost?: EventBattleHost,
-    emotionHost?: EventEmotionHost
+    emotionHost?: EventEmotionHost,
+    sceneHost?: EventSceneHost
   ) {
     this.dialogBox = dialogBox
     this.npcMover = npcMover
     this.battleHost = battleHost
     this.emotionHost = emotionHost
+    this.sceneHost = sceneHost
   }
 
   get isRunning(): boolean {
@@ -141,8 +152,35 @@ export class EventRunner {
       return
     }
 
+    if (cmd.type === 'SceneMove') {
+      this.runSceneMove(cmd)
+      return
+    }
+
     // 未知のコマンドはスキップ
     this.step()
+  }
+
+  /** `[場面移動:]` (#1072)。移動が終わるまでキューを止める。ホストが無い・例外は警告して次へ進む */
+  private runSceneMove(cmd: Extract<EventCommand, { type: 'SceneMove' }>): void {
+    const host = this.sceneHost
+    if (!host) {
+      console.warn(
+        `[EventRunner] 場面移動 '${cmd.scene}' をできない（ホストが場面移動に対応していない）`
+      )
+      this.step()
+      return
+    }
+    const gen = this.generation
+    host.moveScene(cmd.scene, cmd.x, cmd.y, cmd.direction).then(
+      () => {
+        if (gen === this.generation && this.running) this.step()
+      },
+      (e: unknown) => {
+        console.warn(`[EventRunner] 場面移動 '${cmd.scene}' で例外`, e)
+        if (gen === this.generation && this.running) this.step()
+      }
+    )
   }
 
   /**

@@ -35,6 +35,12 @@ import { collectFieldEvents, type FieldScriptEvents } from '../game/fieldScript'
 import { mergeMasterDataFromDocs } from '../game/rpgProjectFromDoc'
 import { safeAssign } from '../game/ownProperty'
 
+/** `[トリガー]` 1 行分 (#1072)。`Event::RpgTrigger` の中身 */
+export type FieldTriggerData = Extract<
+  Exclude<Event, string>,
+  { RpgTrigger: unknown }
+>['RpgTrigger']
+
 /** 1 つの md。path は決定的な順序づけと警告文に使う */
 export interface FieldSourceDoc {
   path: string
@@ -73,6 +79,8 @@ export interface FieldSceneNotation {
   scroll?: { image: string; speed: number; y?: number }
   /** `[NPC]`(書いた順) */
   npcs: NpcData[]
+  /** `[トリガー]`(書いた順。#1072) */
+  triggers: FieldTriggerData[]
 }
 
 export type FieldMasterData = ReturnType<typeof mergeMasterDataFromDocs>
@@ -407,6 +415,23 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
   const closure = new Set<string>()
   const exits = new Set<string>()
   const missing = new Set<string>()
+  // イベント名 → コマンド列(先勝ち)。`[場面移動:]` の行き先を閉包に入れるために先に集める(警告は後段の収集が出す)
+  const earlyEvents: FieldScriptEvents = new Map()
+  for (const { doc } of sorted)
+    for (const [name, commands] of collectFieldEvents(doc))
+      if (!earlyEvents.has(name)) earlyEvents.set(name, commands)
+  /** 場面の NPC・トリガーが呼ぶイベントの `[場面移動:]` の行き先 (#1072) */
+  const sceneMoveTargets = (scene: EventScene): string[] => {
+    const names: string[] = []
+    for (const ev of objectEvents(scene)) {
+      if ('RpgTrigger' in ev) names.push(ev.RpgTrigger.scene)
+      else if ('Npc' in ev && ev.Npc.scene) names.push(ev.Npc.scene)
+    }
+    const out: string[] = []
+    for (const n of names)
+      for (const c of earlyEvents.get(n) ?? []) if (c.type === 'SceneMove') out.push(c.scene)
+    return out
+  }
   const queue: string[] = [input.entry.sceneId]
   while (queue.length > 0) {
     const id = queue.shift()!
@@ -418,6 +443,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
         if ('FieldEdge' in ev) queue.push(ev.FieldEdge.target)
         else if ('FieldWarp' in ev) queue.push(ev.FieldWarp.target)
       }
+      queue.push(...sceneMoveTargets(ref.scene))
     } else if (byId.has(id)) exits.add(id)
     else missing.add(id)
   }
@@ -437,6 +463,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
     const scrolls: { image: string; speed: number; y?: number }[] = []
     const edges: FieldEdgeData[] = []
     const npcs: NpcData[] = []
+    const triggers: FieldTriggerData[] = []
     for (const ev of objectEvents(scene)) {
       if ('FieldMap' in ev) maps.push(ev.FieldMap)
       else if ('PlayerStart' in ev) starts.push(ev.PlayerStart)
@@ -444,6 +471,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
       else if ('FieldScroll' in ev) scrolls.push(ev.FieldScroll)
       else if ('FieldEdge' in ev) edges.push(ev.FieldEdge)
       else if ('Npc' in ev) npcs.push(ev.Npc)
+      else if ('RpgTrigger' in ev) triggers.push(ev.RpgTrigger)
       else if ('FieldWarp' in ev) {
         const list = warpFound.get(ev.FieldWarp.name) ?? []
         list.push({ path, value: ev.FieldWarp })
@@ -466,6 +494,7 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
       shake: once('[揺れ:]', shakes),
       scroll: once('[窓の景色:]', scrolls),
       npcs,
+      triggers,
     })
   }
   for (const [name, found] of warpFound) {

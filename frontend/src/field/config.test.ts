@@ -2114,3 +2114,112 @@ describe('ui 手のカーソル・選択中の印の画像 (#1067・#1087)', () 
     }
   })
 })
+
+describe('scenes.<id>.triggers (#1072)', () => {
+  const withTriggers = (triggers: unknown): Raw =>
+    mutated((c) => {
+      c.scenes.a.triggers = triggers
+    })
+  const stepT = (extra: Raw = {}): Raw => ({ x: 100, y: 200, event: 'go', ...extra })
+
+  /** 警告が 1 件で、そのトリガーだけ落ちている（triggers キー自体が無い）ことを見る */
+  function expectDropped(raw: unknown, ...hints: string[]): void {
+    const c = ok(withTriggers([raw]))
+    expect('triggers' in c.scenes.a).toBe(false)
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scenes.a.triggers[0]')
+    for (const h of hints) expect(c.warnings?.[0]).toContain(h)
+  }
+
+  it('未指定は triggers キーも警告も無し', () => {
+    const c = ok(minimal())
+    expect('triggers' in c.scenes.a).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('空配列も triggers キーを作らない', () => {
+    const c = ok(withTriggers([]))
+    expect('triggers' in c.scenes.a).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('auto と踏み込みが書いた順のまま入る', () => {
+    const c = ok(
+      withTriggers([
+        stepT({ event: 'one' }),
+        { auto: true, event: 'two', once: true },
+        stepT({ x: 1, y: 2, event: 'three', radius: 48 }),
+      ])
+    )
+    expect(c.scenes.a.triggers).toEqual([
+      { auto: false, x: 100, y: 200, radius: 32, event: 'one', once: false },
+      { auto: true, event: 'two', once: true },
+      { auto: false, x: 1, y: 2, radius: 48, event: 'three', once: false },
+    ])
+    expect(c.warnings).toBeUndefined()
+  })
+  it('radius 省略は既定の 32', () => {
+    const c = ok(withTriggers([stepT()]))
+    expect(c.scenes.a.triggers).toEqual([
+      { auto: false, x: 100, y: 200, radius: 32, event: 'go', once: false },
+    ])
+  })
+  it('radius 1 は通る（境界）', () => {
+    const c = ok(withTriggers([stepT({ radius: 1 })]))
+    expect(c.scenes.a.triggers?.[0]).toMatchObject({ radius: 1 })
+    expect(c.warnings).toBeUndefined()
+  })
+  it.each([0, -1, '48', Number.NaN, 1.5, -5, null])(
+    'radius が %j なら警告 1 件でそのトリガーを読み飛ばす',
+    (radius) => {
+      expectDropped(stepT({ radius }), '.radius は 1 以上の整数')
+    }
+  )
+  it.each([
+    ['空文字', ''],
+    ['空白のみ', '   '],
+    ['数値', 5],
+    ['欠落', undefined],
+  ])('event が%sなら警告 1 件で読み飛ばす', (_label, event) => {
+    const t = stepT()
+    if (event === undefined) delete t.event
+    else t.event = event
+    expectDropped(t, '.event')
+  })
+  it('event の前後空白はトリムされる', () => {
+    const c = ok(withTriggers([stepT({ event: '  go  ' }), { auto: true, event: ' a ' }]))
+    expect(c.scenes.a.triggers?.map((t) => t.event)).toEqual(['go', 'a'])
+  })
+  it('once 省略は false、true は true', () => {
+    const c = ok(withTriggers([stepT(), stepT({ once: true })]))
+    expect(c.scenes.a.triggers?.map((t) => t.once)).toEqual([false, true])
+  })
+  it.each(['true', 1, null])('once が %j（boolean 以外）なら警告 1 件で読み飛ばす', (once) => {
+    expectDropped(stepT({ once }), '.once')
+  })
+  it.each([
+    ['x が文字列', { x: '1' }],
+    ['y が文字列', { y: '1' }],
+    ['x が NaN', { x: Number.NaN }],
+  ])('%sなら警告に .auto: true のヒントが出て読み飛ばす', (_label, extra) => {
+    expectDropped(stepT(extra), '.x / .y は数値', '.auto: true')
+  })
+  it.each(['x', 'y'])('%s の欠落も警告 1 件で読み飛ばす（auto も無い）', (key) => {
+    const t = stepT()
+    delete t[key]
+    expectDropped(t, '.auto: true')
+  })
+  it('triggers が配列でなければ警告 1 件で無視（読み込みは成功）', () => {
+    const c = ok(withTriggers({ x: 1, y: 2, event: 'go' }))
+    expect('triggers' in c.scenes.a).toBe(false)
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scenes.a.triggers は配列')
+  })
+  it('要素がオブジェクトでなければ警告 1 件で読み飛ばす', () => {
+    expectDropped('go', 'オブジェクトが必要')
+  })
+  it('不正が混じっても有効分は残る', () => {
+    const c = ok(withTriggers([stepT({ event: 'a' }), stepT({ radius: 0 }), stepT({ event: 'c' })]))
+    expect(c.scenes.a.triggers?.map((t) => t.event)).toEqual(['a', 'c'])
+    expect(c.warnings).toHaveLength(1)
+    expect(c.warnings?.[0]).toContain('scenes.a.triggers[1]')
+  })
+})

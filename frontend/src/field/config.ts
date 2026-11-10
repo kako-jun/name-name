@@ -142,6 +142,8 @@ export interface FieldSceneConfig {
   /** 窓の外の流れる景色 (#864)。背景の透明な部分（窓）から見える。省略 = なし */
   scroll?: SceneScrollConfig
   links: FieldLink[]
+  /** 脚本のトリガー (#1072)。`scenes.<id>.triggers`。省略 = なし */
+  triggers?: FieldTrigger[]
   /** NPC (#841)。省略 = NPC なし（従来どおり） */
   npcs?: FieldNpc[]
   /** このシーンでの主人公の表示高さ（背景ピクセル）。省略 = 全体の `player.height` (#810) */
@@ -149,6 +151,17 @@ export interface FieldSceneConfig {
   /** ランダムエンカウント (#809)。省略 = エンカウントなし */
   encounter: (SceneEncounter & { background?: string }) | null
 }
+
+/** 踏み込みトリガーの半径の既定（背景ピクセル）。`半径=` / `radius` を省略したとき */
+export const DEFAULT_TRIGGER_RADIUS = 32
+
+/**
+ * 脚本のトリガー (#1072)。`[トリガー auto scene=…]`（場面に入ったとき）と `[トリガー @x,y 半径=N scene=…]`（足元がその円に入ったとき）。
+ * `event` は脚本の `[イベント <name>]` の名前（TopDown の `scene=` と同じ）。
+ */
+export type FieldTrigger =
+  | { auto: true; event: string; once: boolean }
+  | { auto: false; x: number; y: number; radius: number; event: string; once: boolean }
 
 /** 戦闘画面の設定 (#809) */
 export interface FieldBattleConfig {
@@ -568,11 +581,13 @@ export function parseConfig(
       encounter = { rate: e.rate, groups: e.groups as string[], ...(bg ? { background: bg } : {}) }
     }
     const npcs = parseNpcs(sc.npcs, `scenes.${id}.npcs`, url, parseFrames, npcWarnings)
+    const triggers = parseTriggers(sc.triggers, `scenes.${id}.triggers`, npcWarnings)
     scenes[id] = {
       id,
       background: background.value,
       mask: mask.value,
       ...(npcs.length > 0 ? { npcs } : {}),
+      ...(triggers.length > 0 ? { triggers } : {}),
       ...(foreground !== undefined ? { foreground } : {}),
       ...(shake ? { shake } : {}),
       ...(scroll ? { scroll } : {}),
@@ -1182,6 +1197,59 @@ const NPC_KEYS: readonly string[] = [
   'line',
   'scene',
 ]
+
+/**
+ * `scenes.<id>.triggers` を解釈する (#1072)。配列でなければ警告して無視、1 件ずつ不正なら警告してそのトリガーだけ読み飛ばす
+ * （フィールドは止めない）。`{ auto: true, event }` か `{ x, y, radius?, event }`。`once` 省略 = false
+ */
+function parseTriggers(raw: unknown, path: string, warnings: string[]): FieldTrigger[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    warnings.push(`${path} は配列が必要です（無視します）: ${JSON.stringify(raw)}`)
+    return []
+  }
+  const out: FieldTrigger[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const p = `${path}[${i}]`
+    const skip = (why: string): void => {
+      warnings.push(`${p} ${why}（このトリガーは無視します）`)
+    }
+    const t: unknown = raw[i]
+    if (!isObj(t)) {
+      skip('はオブジェクトが必要です')
+      continue
+    }
+    if (typeof t.event !== 'string' || !t.event.trim()) {
+      skip('.event（脚本の [イベント] の名前）は空でない文字列が必要です')
+      continue
+    }
+    if (t.once !== undefined && typeof t.once !== 'boolean') {
+      skip(`.once は true / false: ${JSON.stringify(t.once)}`)
+      continue
+    }
+    const event = t.event.trim()
+    const once = t.once === true
+    if (t.auto === true) {
+      out.push({ auto: true, event, once })
+      continue
+    }
+    const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+    if (!num(t.x) || !num(t.y)) {
+      skip('.x / .y は数値が必要です（場面に入ったときに起こすなら .auto: true）')
+      continue
+    }
+    let radius = DEFAULT_TRIGGER_RADIUS
+    if (t.radius !== undefined) {
+      if (!num(t.radius) || !Number.isInteger(t.radius) || t.radius < 1) {
+        skip(`.radius は 1 以上の整数: ${JSON.stringify(t.radius)}`)
+        continue
+      }
+      radius = t.radius
+    }
+    out.push({ auto: false, x: t.x, y: t.y, radius, event, once })
+  }
+  return out
+}
 
 /**
  * `scenes.<id>.npcs` を解釈する (#841)。配列でなければ警告して無視、1 件ずつ不正なら警告してその NPC だけ読み飛ばす
