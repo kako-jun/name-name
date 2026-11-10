@@ -9,7 +9,11 @@ import {
   FieldInputGate,
   buildBattleMenuData,
   buildHeroBattleEntity,
+  buildFieldScriptedBattle,
   buildPartyBattleEntities,
+  buildScriptedBattle,
+  buildScriptedEnemies,
+  planEventBattle,
   closeFieldBattle,
   openFieldBattle,
   orderedPartyKeys,
@@ -17,7 +21,7 @@ import {
   readFieldBattleSettings,
   type FieldBattleSettings,
 } from './fieldBattle'
-import type { PartyMemberDef } from '../types'
+import type { BattleScriptDef, MonsterDef, PartyMemberDef } from '../types'
 import type { RPGProject } from '../types/rpg'
 import type { BattleEntity } from './spellDsl'
 import type { BattleEffects } from './battleEffects'
@@ -794,5 +798,226 @@ describe('readFieldBattleSettings: battleCommands (#873)', () => {
       readFieldBattleSettings(minimalProject({ battleCommands: ['skill', 'escape'] })).commands
     ).toEqual(['skill', 'escape'])
     expect(DEFAULT_FIELD_BATTLE_SETTINGS.commands).toBeUndefined()
+  })
+})
+
+describe('一枚絵フィールドの脚本制御の戦闘 (#1073)', () => {
+  const mon = (id: string): MonsterDef => ({
+    id,
+    name: id.toUpperCase(),
+    hp: 10,
+    atk: 2,
+    def: 1,
+    agi: 1,
+    exp: 1,
+    gold: 1,
+  })
+  const monsters: Record<string, MonsterDef> = { slime: mon('slime'), bat: mon('bat') }
+  const ally = (id: string, hp = 20): BattleEntity => enemy({ id, name: id, hp, maxHp: 20 })
+  const def = (over: Partial<BattleScriptDef> = {}): BattleScriptDef => ({
+    id: 'b1',
+    enemies: 'slime',
+    rules: [],
+    ...over,
+  })
+  const party = [ally('a'), ally('b'), ally('c')]
+  const rng = () => 0
+  const warnSpy = () => vi.spyOn(console, 'warn').mockImplementation(() => {})
+  afterEach(() => vi.restoreAllMocks())
+
+  describe('buildScriptedEnemies', () => {
+    it('正常系は敵を返し警告 0 件', () => {
+      const w = warnSpy()
+      expect(
+        buildScriptedEnemies(def({ enemies: 'slime+bat' }), monsters, rng)?.map((e) => e.id)
+      ).toEqual(['slime', 'bat'])
+      expect(w).not.toHaveBeenCalled()
+    })
+    it.each([undefined, '', '   '])('敵: が %j なら null と警告 1 件', (enemies) => {
+      const w = warnSpy()
+      expect(buildScriptedEnemies(def({ enemies }), monsters, rng)).toBeNull()
+      expect(w).toHaveBeenCalledTimes(1)
+    })
+    it('未知モンスターだけなら null と警告（未知 1 + 組めない 1）', () => {
+      const w = warnSpy()
+      expect(buildScriptedEnemies(def({ enemies: 'ghost' }), monsters, rng)).toBeNull()
+      expect(w).toHaveBeenCalledTimes(2)
+    })
+    it('一部が未知なら組めた敵だけ返し、未知ごとに警告 1 回', () => {
+      const w = warnSpy()
+      const r = buildScriptedEnemies(def({ enemies: 'slime+ghost1+ghost2' }), monsters, rng)
+      expect(r?.map((e) => e.id)).toEqual(['slime'])
+      expect(w).toHaveBeenCalledTimes(2)
+    })
+    it('固定 rng で個数ランダムの体数が決定的', () => {
+      const d = def({ enemies: 'slime*1..3' })
+      expect(buildScriptedEnemies(d, monsters, () => 0)).toHaveLength(1)
+      expect(buildScriptedEnemies(d, monsters, () => 0.99)).toHaveLength(3)
+      expect(buildScriptedEnemies(d, monsters, () => 0.5)).toHaveLength(2)
+    })
+    it('buildScriptedBattle は共有後も同じ敵・同じ警告を出す', () => {
+      const w = warnSpy()
+      const d = def({ enemies: 'slime+ghost' })
+      const direct = buildScriptedEnemies(d, monsters, rng)
+      const nWarnDirect = w.mock.calls.length
+      w.mockClear()
+      const viaBattle = buildScriptedBattle(d, monsters, roster(['a']), 'side', rng)
+      expect(viaBattle?.enemies).toEqual(direct)
+      expect(w).toHaveBeenCalledTimes(nWarnDirect)
+    })
+  })
+
+  describe('buildFieldScriptedBattle', () => {
+    it('味方: 未指定は全員が初期編成（side / front とも）・joiners 空・警告 0', () => {
+      const w = warnSpy()
+      for (const layout of ['side', 'front'] as const) {
+        const r = buildFieldScriptedBattle(def(), monsters, party, layout, rng)
+        expect(r?.party.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+        expect(r?.script.joiners).toEqual({})
+      }
+      expect(w).not.toHaveBeenCalled()
+    })
+    it('既知 1 人（side）は残りが joiners', () => {
+      const r = buildFieldScriptedBattle(def({ party: ['b'] }), monsters, party, 'side', rng)
+      expect(r?.party.map((p) => p.id)).toEqual(['b'])
+      expect(Object.keys(r?.script.joiners ?? {})).toEqual(['a', 'c'])
+    })
+    it('既知 1 人（front）は joiners 空', () => {
+      const r = buildFieldScriptedBattle(def({ party: ['b'] }), monsters, party, 'front', rng)
+      expect(r?.party.map((p) => p.id)).toEqual(['b'])
+      expect(r?.script.joiners).toEqual({})
+    })
+    it('既知 + 未知: 未知は警告 1 件で飛ばす', () => {
+      const w = warnSpy()
+      const r = buildFieldScriptedBattle(def({ party: ['a', 'zz'] }), monsters, party, 'side', rng)
+      expect(r?.party.map((p) => p.id)).toEqual(['a'])
+      expect(w).toHaveBeenCalledTimes(1)
+    })
+    it('全部未知なら全員にフォールバックし、未知ごとに警告', () => {
+      const w = warnSpy()
+      const r = buildFieldScriptedBattle(def({ party: ['x', 'y'] }), monsters, party, 'side', rng)
+      expect(r?.party.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+      expect(r?.script.joiners).toEqual({})
+      expect(w).toHaveBeenCalledTimes(2)
+    })
+    it('全員指名なら joiners 空・指名順', () => {
+      const r = buildFieldScriptedBattle(
+        def({ party: ['c', 'a', 'b'] }),
+        monsters,
+        party,
+        'side',
+        rng
+      )
+      expect(r?.party.map((p) => p.id)).toEqual(['c', 'a', 'b'])
+      expect(r?.script.joiners).toEqual({})
+    })
+    it('味方: の重複 id は先勝ちで重複除去（警告なし）', () => {
+      const w = warnSpy()
+      const r = buildFieldScriptedBattle(
+        def({ party: ['b', 'b', 'a'] }),
+        monsters,
+        party,
+        'side',
+        rng
+      )
+      expect(r?.party.map((p) => p.id)).toEqual(['b', 'a'])
+      expect(w).not.toHaveBeenCalled()
+    })
+    it('HP 0 の味方も指名どおり初期編成に入る', () => {
+      const r = buildFieldScriptedBattle(
+        def({ party: ['a'] }),
+        monsters,
+        [ally('a', 0), ally('b')],
+        'side',
+        rng
+      )
+      expect(r?.party.map((p) => [p.id, p.hp])).toEqual([['a', 0]])
+    })
+    it('party=[] は全員フォールバック', () => {
+      const r = buildFieldScriptedBattle(def({ party: [] }), monsters, party, 'side', rng)
+      expect(r?.party).toHaveLength(3)
+    })
+    it('敵が組めなければ null', () => {
+      warnSpy()
+      expect(
+        buildFieldScriptedBattle(def({ enemies: '' }), monsters, party, 'side', rng)
+      ).toBeNull()
+    })
+    it('入力を書き換えず、戻り値の味方は複製', () => {
+      const src = [ally('a'), ally('b')]
+      const snapshot = structuredClone(src)
+      const r = buildFieldScriptedBattle(def({ party: ['a'] }), monsters, src, 'side', rng)
+      expect(r?.party[0]).not.toBe(src[0])
+      expect(r?.script.joiners?.b).not.toBe(src[1])
+      if (r) r.party[0].hp = 1
+      if (r?.script.joiners) r.script.joiners.b.hp = 1
+      expect(src).toEqual(snapshot)
+    })
+    it('script.id と rules が渡る', () => {
+      const r = buildFieldScriptedBattle(
+        def({ id: 'boss', rules: ['にげる: 不可'] }),
+        monsters,
+        party,
+        'side',
+        rng
+      )
+      expect(r?.script.id).toBe('boss')
+      expect(r?.script.rules).toEqual(['にげる: 不可'])
+    })
+  })
+
+  describe('planEventBattle', () => {
+    const base = (over: Partial<Parameters<typeof planEventBattle>[0]> = {}) => ({
+      id: 'b1',
+      battleScripts: { b1: def() },
+      busy: false,
+      monsters,
+      party,
+      layout: 'side' as const,
+      rng,
+      ...over,
+    })
+    it('宣言なしは skip no-def と警告 1 回', () => {
+      const w = warnSpy()
+      expect(planEventBattle(base({ id: 'nope' }))).toEqual({ kind: 'skip', reason: 'no-def' })
+      expect(w).toHaveBeenCalledTimes(1)
+    })
+    it('battleScripts が undefined でも no-def', () => {
+      warnSpy()
+      expect(planEventBattle(base({ battleScripts: undefined }))).toEqual({
+        kind: 'skip',
+        reason: 'no-def',
+      })
+    })
+    it.each(['__proto__', 'toString', 'constructor'])('継承名 %s は no-def', (id) => {
+      const w = warnSpy()
+      expect(planEventBattle(base({ id }))).toEqual({ kind: 'skip', reason: 'no-def' })
+      expect(w).toHaveBeenCalledTimes(1)
+    })
+    it('busy は skip busy で警告なし', () => {
+      const w = warnSpy()
+      expect(planEventBattle(base({ busy: true }))).toEqual({ kind: 'skip', reason: 'busy' })
+      expect(w).not.toHaveBeenCalled()
+    })
+    it('敵が組めなければ no-enemies', () => {
+      warnSpy()
+      const r = planEventBattle(base({ battleScripts: { b1: def({ enemies: 'ghost' }) } }))
+      expect(r).toEqual({ kind: 'skip', reason: 'no-enemies' })
+    })
+    it('味方が空なら no-party と警告 1 回', () => {
+      const w = warnSpy()
+      expect(planEventBattle(base({ party: [] }))).toEqual({ kind: 'skip', reason: 'no-party' })
+      expect(w).toHaveBeenCalledTimes(1)
+    })
+    it('正常は start・警告 0', () => {
+      const w = warnSpy()
+      const r = planEventBattle(base())
+      expect(r.kind).toBe('start')
+      if (r.kind === 'start') {
+        expect(r.setup.enemies.map((e) => e.id)).toEqual(['slime'])
+        expect(r.setup.party).toHaveLength(3)
+      }
+      expect(w).not.toHaveBeenCalled()
+    })
   })
 })
