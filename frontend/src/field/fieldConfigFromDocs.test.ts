@@ -434,3 +434,31 @@ describe('同値性(全部入りの世界。手書き JSON と md 由来が同�
     expect(JSON.parse(JSON.stringify(r.value.raw))).toEqual(r.value.raw)
   })
 })
+
+describe('battleScripts (#1073)', () => {
+  const battleMd = (title: string, id: string, enemies: string) =>
+    [...head(title), '## s: 場面', '', `[戦闘 ${id}]`, `敵: ${enemies}`, '[/戦闘]', ''].join('\n')
+  const run = async (...extra: [string, string][]) => {
+    const docs = await docsOf(
+      ['data.md', dataMd],
+      ['other.md', otherMd],
+      ['script.md', scriptMd],
+      ...extra
+    )
+    const r = fieldConfigFromDocs({ ...common, docs, aux: { characterForms: manifest } })
+    if (!r.ok) throw new Error(r.error)
+    return r.value
+  }
+  it('宣言ゼロでも {}（undefined でない）', async () => {
+    expect((await run()).battleScripts).toEqual({})
+  })
+  it('複数 md にまたがる [戦闘 id] が集まる（同 id は path 昇順で先勝ち）', async () => {
+    const out = await run(
+      ['x1.md', battleMd('x1', 'b1', 'slime')],
+      ['x2.md', battleMd('x2', 'b2', 'bat')],
+      ['x3.md', battleMd('x3', 'b1', 'ghost')]
+    )
+    expect(Object.keys(out.battleScripts).sort()).toEqual(['b1', 'b2'])
+    expect(out.battleScripts.b1.enemies).toBe('slime')
+  })
+})
