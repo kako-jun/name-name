@@ -13,6 +13,7 @@ import {
   buildPartyBattleEntities,
   buildScriptedBattle,
   buildScriptedEnemies,
+  planBattleFlagUpdates,
   planEventBattle,
   closeFieldBattle,
   openFieldBattle,
@@ -1019,5 +1020,61 @@ describe('一枚絵フィールドの脚本制御の戦闘 (#1073)', () => {
       }
       expect(w).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('planBattleFlagUpdates: 戦闘結果の フラグ= の選別 (#1077)', () => {
+  const declared = { 勝利: false, 逃走: false }
+
+  it('宣言済みの真偽値は set に入り、警告は無い', () => {
+    expect(planBattleFlagUpdates(declared, { 勝利: true })).toEqual({
+      set: [{ name: '勝利', value: true }],
+      warnings: [],
+    })
+  })
+  it('false も反映する（宣言済みを false へ戻せる）', () => {
+    expect(planBattleFlagUpdates({ 勝利: true }, { 勝利: false }).set).toEqual([
+      { name: '勝利', value: false },
+    ])
+  })
+  it('結果フラグが undefined / 空なら何も起きない', () => {
+    expect(planBattleFlagUpdates(declared, undefined)).toEqual({ set: [], warnings: [] })
+    expect(planBattleFlagUpdates(declared, {})).toEqual({ set: [], warnings: [] })
+  })
+  it('未宣言の名前は警告 1 件で反映しない（名前を含む）', () => {
+    const r = planBattleFlagUpdates(declared, { 未宣言: true })
+    expect(r.set).toEqual([])
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toContain('未宣言')
+  })
+  it('宣言済みでも数値・文字列は警告して反映しない', () => {
+    const r = planBattleFlagUpdates(declared, { 勝利: 1, 逃走: 'yes' })
+    expect(r.set).toEqual([])
+    expect(r.warnings).toHaveLength(2)
+    expect(r.warnings[0]).toContain('1')
+    expect(r.warnings[1]).toContain('"yes"')
+  })
+  it('数値 0 / 空文字も真偽値ではないので反映しない', () => {
+    const r = planBattleFlagUpdates(declared, { 勝利: 0, 逃走: '' })
+    expect(r.set).toEqual([])
+    expect(r.warnings).toHaveLength(2)
+  })
+  it('継承の名前（__proto__ / toString / constructor）は未宣言扱い', () => {
+    const resultFlags = JSON.parse('{"__proto__": true, "toString": true, "constructor": true}')
+    const r = planBattleFlagUpdates(declared, resultFlags)
+    expect(r.set).toEqual([])
+    expect(r.warnings).toHaveLength(3)
+  })
+  it('混在: 宣言済み真偽値だけ set、他は警告。順序は結果フラグの並び', () => {
+    const r = planBattleFlagUpdates(declared, { 勝利: true, 未宣言: true, 逃走: 3 })
+    expect(r.set).toEqual([{ name: '勝利', value: true }])
+    expect(r.warnings).toHaveLength(2)
+    expect(r.warnings[0]).toContain('未宣言')
+    expect(r.warnings[1]).toContain('逃走')
+  })
+  it('declared を書き換えない', () => {
+    const d = { 勝利: false }
+    planBattleFlagUpdates(d, { 勝利: true })
+    expect(d).toEqual({ 勝利: false })
   })
 })
