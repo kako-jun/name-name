@@ -12,6 +12,7 @@
  */
 import { resolveRpgDataPath } from '../game/battleEffectsLoader'
 import type { FieldScriptEvents } from '../game/fieldScript'
+import type { BattleScriptDef } from '../types'
 import {
   expandCharacterForms,
   parseCharacterFormsManifest,
@@ -78,6 +79,8 @@ export interface FieldBuildOutput {
   raw: unknown
   /** 全 md の `[イベント]`(先勝ち)。startFieldGame の `scriptEvents` に渡す */
   npcEvents: FieldScriptEvents
+  /** 全 md の `[戦闘 id]` の宣言(先勝ち)。startFieldGame の `battleScripts` に渡す (#1073) */
+  battleScripts: Record<string, BattleScriptDef>
   /** 不足している取得物 */
   needs: FieldAuxNeeds
   /** 端/ワープの行き先で docs に無かった場面 ID(loadFieldConfig が追加ロードして再実行する) */
@@ -151,6 +154,7 @@ export function fieldConfigFromDocs(input: FieldConfigInput): FieldBuildResult {
       config,
       raw: built.raw,
       npcEvents: plan.notation.npcEvents,
+      battleScripts: plan.notation.master.battleScripts,
       needs: plan.needs,
       missingScenes: plan.missingScenes,
     },
