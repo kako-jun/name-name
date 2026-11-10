@@ -253,6 +253,67 @@ describe('FieldConversation', () => {
       vi.useRealTimers()
     }
   })
+  it('destroy: 実行中の会話を捨てて active=false、onEnd は呼ばれず、次の start が実際に始まる', () => {
+    const { dialog, conv } = make()
+    const end1 = vi.fn()
+    conv.start('NPC', '固定', [dlg('A', '1行目'), dlg('A', '2行目')], end1)
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
+    expect(end1).not.toHaveBeenCalled()
+    const end2 = vi.fn()
+    conv.start('NPC', '固定', [dlg('B', '新しい台詞')], end2)
+    expect(conv.active).toBe(true)
+    expect(dialog.shown[dialog.shown.length - 1]).toEqual(['B', '新しい台詞'])
+    conv.advance()
+    conv.advance()
+    expect(conv.active).toBe(false)
+    expect(end2).toHaveBeenCalledTimes(1)
+    expect(end1).not.toHaveBeenCalled()
+  })
+  it('destroy: 固定 line の表示中も active=false に戻り、onEnd は呼ばれない', () => {
+    const { conv } = make()
+    const end = vi.fn()
+    conv.start('NPC', '固定', undefined, end)
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
+    conv.advance()
+    expect(end).not.toHaveBeenCalled()
+  })
+  it('destroy: 飛行中の SceneMove が destroy 後に resolve しても step を進めない（generation）', async () => {
+    const dialog = fakeDialog()
+    let resolveMove: () => void = () => {}
+    const runner = new EventRunner(
+      dialog as never,
+      createFieldNpcMover(() => {}),
+      createFieldBattleHost(() => {}),
+      undefined,
+      {
+        moveScene: () =>
+          new Promise<void>((r) => {
+            resolveMove = r
+          }),
+      }
+    )
+    const conv = new FieldConversation(dialog, runner)
+    const end = vi.fn()
+    conv.start(
+      'NPC',
+      '固定',
+      [{ type: 'SceneMove', scene: 'b', x: 1, y: 2 }, dlg('A', '移動後の台詞')],
+      end
+    )
+    expect(conv.active).toBe(true)
+    conv.destroy()
+    expect(conv.active).toBe(false)
+    resolveMove()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(dialog.shown).toEqual([])
+    expect(conv.active).toBe(false)
+    expect(end).not.toHaveBeenCalled()
+  })
   it('コマンドが無ければ固定 line（段階1と同じ。全文→閉じる）', () => {
     const { dialog, conv } = make()
     const end = vi.fn()
