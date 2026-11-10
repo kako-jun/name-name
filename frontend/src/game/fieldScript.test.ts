@@ -10,6 +10,7 @@ import {
   createFieldNpcMover,
   loadFieldScript,
   resolveNpcCommands,
+  resolveTriggerCommands,
   supportedCommands,
 } from './fieldScript'
 import { parseMarkdown } from '../wasm/parser'
@@ -477,5 +478,84 @@ describe('Emotion の対応 (#946)', () => {
     expect(
       cmds?.filter((c) => c.type === 'Dialog').map((c) => (c as { character?: string }).character)
     ).toEqual(['近所の子', '近所の子'])
+  })
+})
+
+describe('SceneMove とトリガーの対応 (#1072)', () => {
+  const move: EventCommand = { type: 'SceneMove', scene: '本堂', x: 400, y: 700, direction: 'Up' }
+
+  it('supportedCommands: SceneMove のみのイベントは undefined にならず、警告も出ない', () => {
+    const warn = vi.fn()
+    expect(supportedCommands('e', [move], warn)).toEqual([move])
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('supportedCommands: Wait のみは従来どおり undefined', () => {
+    expect(supportedCommands('e', [{ type: 'Wait', ms: 100 }], () => {})).toBeUndefined()
+  })
+  it('resolveTriggerCommands: 台詞と SceneMove をそのまま通す（警告なし）', () => {
+    const warn = vi.fn()
+    const events = new Map<string, EventCommand[]>([['go', [dlg('A', 'さて'), move]]])
+    expect(resolveTriggerCommands('go', events, warn)).toEqual([dlg('A', 'さて'), move])
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('resolveTriggerCommands: イベントが無いと警告 1 件で undefined', () => {
+    const warn = vi.fn()
+    expect(resolveTriggerCommands('nope', new Map(), warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('nope')
+  })
+  it('resolveTriggerCommands: scriptEvents が undefined でも警告 1 件で undefined', () => {
+    const warn = vi.fn()
+    expect(resolveTriggerCommands('go', undefined, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+  it('resolveTriggerCommands: 実行可能コマンドが 0 件（NpcMove だけ）なら警告 2 件で undefined', () => {
+    const warn = vi.fn()
+    const events = new Map<string, EventCommand[]>([
+      ['mv', [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }]],
+    ])
+    expect(resolveTriggerCommands('mv', events, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls[0][0]).toContain('NpcMove')
+    expect(warn.mock.calls[1][0]).toContain('実行できる台詞・場面移動がありません')
+  })
+  it('resolveTriggerCommands: Wait だけのイベントは警告 1 件で undefined', () => {
+    const warn = vi.fn()
+    const events = new Map<string, EventCommand[]>([['w', [{ type: 'Wait', ms: 5 }]]])
+    expect(resolveTriggerCommands('w', events, warn)).toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('実パーサ経路: [場面移動:] 付きイベントが collect → resolve まで繋がる', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s:',
+      '',
+      '[イベント 出発]',
+      '**カコ**:',
+      'いってきます。',
+      '[場面移動: 本堂 @400,700 向き=上]',
+      '[/イベント]',
+      '',
+      '[イベント 即移動]',
+      '[場面移動: 本堂]',
+      '[/イベント]',
+      '',
+    ].join('\n')
+    const events = collectFieldEvents(await parseMarkdown(md))
+    const warn = vi.fn()
+    expect(resolveTriggerCommands('出発', events, warn)).toEqual([
+      dlg('カコ', 'いってきます。'),
+      { type: 'SceneMove', scene: '本堂', x: 400, y: 700, direction: 'Up' },
+    ])
+    expect(resolveTriggerCommands('即移動', events, warn)).toEqual([
+      { type: 'SceneMove', scene: '本堂' },
+    ])
+    expect(warn).not.toHaveBeenCalled()
   })
 })
