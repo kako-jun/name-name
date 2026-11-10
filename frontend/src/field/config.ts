@@ -1240,8 +1240,8 @@ function parseTriggers(raw: unknown, path: string, warnings: string[]): FieldTri
     }
     let radius = DEFAULT_TRIGGER_RADIUS
     if (t.radius !== undefined) {
-      if (!num(t.radius) || t.radius <= 0) {
-        skip(`.radius は 0 より大きい数値: ${JSON.stringify(t.radius)}`)
+      if (!num(t.radius) || !Number.isInteger(t.radius) || t.radius < 1) {
+        skip(`.radius は 1 以上の整数: ${JSON.stringify(t.radius)}`)
         continue
       }
       radius = t.radius
