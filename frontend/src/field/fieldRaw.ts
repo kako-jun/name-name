@@ -31,7 +31,7 @@ import {
   statusesRaw,
 } from './fieldRawMaster'
 import { buildMenuRaw } from './fieldRawMenu'
-import type { FieldNotation, FieldSceneNotation } from './fieldNotation'
+import type { FieldNotation, FieldSceneNotation, FieldTriggerData } from './fieldNotation'
 
 type Raw = Record<string, unknown>
 
@@ -332,7 +332,28 @@ function sceneRaw(
   if (encounter) r.encounter = encounter
   const npcs = s.npcs.flatMap((n) => npcRaw(n, where, warnings))
   if (npcs.length > 0) r.npcs = npcs
+  const triggers = s.triggers.flatMap((t) => triggerRaw(t, where, warnings))
+  if (triggers.length > 0) r.triggers = triggers
   return r
+}
+
+/** `[トリガー]` 1 行 → raw (#1072)。座標つき(`@x,y`)も `auto` も持たない行は parser が作らないが、念のため警告して落とす */
+function triggerRaw(t: FieldTriggerData, where: string, warnings: string[]): Raw[] {
+  if (t.auto) {
+    const r: Raw = { auto: true, event: t.scene }
+    if (t.once) r.once = true
+    return [r]
+  }
+  if (t.x === undefined || t.y === undefined) {
+    warnings.push(
+      `${where} [トリガー scene=${t.scene}] に auto も @x,y もありません（このトリガーは省きます）`
+    )
+    return []
+  }
+  const r: Raw = { x: t.x, y: t.y, event: t.scene }
+  put(r, 'radius', t.radius)
+  if (t.once) r.once = true
+  return [r]
 }
 
 function linkRaw(
