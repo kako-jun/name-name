@@ -180,7 +180,11 @@ export interface DialogBoxConfig {
    * novel / split_layout / 2窓モードとは併用しない（それらが優先される）。
    */
   ffWindow?: boolean
-  /** ffWindow の配色 (#1147)。`dark` = 戦闘窓と同じ黒単色（グラデーションなし・文字の影なし）/ `ff-blue` = 青い帯状グラデーション。既定 `ff-blue`（未指定の直接利用は従来どおり） */
+  /**
+   * 窓の配色 (#1147)。`dark` = 戦闘窓と同じ黒単色（PANEL_*・グラデーションなし・文字の影なし）/ `ff-blue` = ffWindow なら青い帯状グラデーション、
+   * 非 ffWindow なら従来の `bgColor` の窓。既定 `ff-blue`（未指定の直接利用・ノベル・adv・RPG 経路は従来どおり）。
+   * 一枚絵フィールドが `window_style` を渡す。非 ffWindow の `dark` は窓と名札の塗り・枠だけが変わる（寸法・名前の位置・色は不変）
+   */
   ffWindowStyle?: WindowStyle
 }
 
@@ -1945,8 +1949,8 @@ export class DialogBox extends Container {
   }
 
   private drawBackground(): void {
-    if (this.ffWindow && this.ffWindowStyle === 'dark') {
-      // 戦闘窓 (#1147) と同じ dark: 黒の単色（グラデーションなし）＋白枠。色は windowStyle.ts の PANEL_* が正本
+    if (this.ffWindowStyle === 'dark') {
+      // 戦闘窓 (#1147) と同じ dark（ff でも既定の窓でも）: 黒の単色（グラデーションなし）＋白枠。色は windowStyle.ts の PANEL_* が正本
       this.bg
         .clear()
         .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
@@ -1987,9 +1991,16 @@ export class DialogBox extends Container {
 
     this.nameBox.clear()
     this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
-    this.nameBox.fill({ color: this.bgColor, alpha: 0.92 })
-    this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
-    this.nameBox.stroke({ color: 0xf1faee, width: 2, alpha: 1 })
+    if (this.ffWindowStyle === 'dark') {
+      // 窓本体と同じ戦闘窓の黒（#1147）
+      this.nameBox.fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+      this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
+      this.nameBox.stroke({ color: PANEL_STROKE, width: 2 })
+    } else {
+      this.nameBox.fill({ color: this.bgColor, alpha: 0.92 })
+      this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
+      this.nameBox.stroke({ color: 0xf1faee, width: 2, alpha: 1 })
+    }
 
     this.nameText.x = nameBoxX + this.padding
     this.nameText.y = nameBoxY + (nameBoxH - this.fontSize + 2) / 2

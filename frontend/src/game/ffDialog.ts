@@ -75,7 +75,7 @@ export function normalizeMsPerChar(raw: unknown): number | undefined {
 
 /**
  * 設定（`dialogStyle` / `dialogMsPerChar`）から DialogBox に渡す追加オプションを作る。
- * 未指定なら空（キーが無い＝従来の窓・既定の速さ）。ff なら ffWindow と既定速度。
+ * 未指定なら空（キーが無い＝従来の窓・既定の速さ）。ff なら ffWindow と既定速度。`windowStyle` は ff かどうかに関わらず ffWindowStyle として渡す（既定の窓も dark なら黒単色になる）。
  * `dialogMsPerChar` は指定があれば ff の既定より優先し、0 は即時表示。
  */
 export function fieldDialogOptions(c: {
@@ -90,7 +90,7 @@ export function fieldDialogOptions(c: {
 } {
   return {
     ...(c.dialogStyle === 'ff' ? { ffWindow: true as const } : {}),
-    ...(c.dialogStyle === 'ff' && c.windowStyle ? { ffWindowStyle: c.windowStyle } : {}),
+    ...(c.windowStyle ? { ffWindowStyle: c.windowStyle } : {}),
     ...(c.dialogMsPerChar !== undefined
       ? { msPerChar: c.dialogMsPerChar }
       : c.dialogStyle === 'ff'

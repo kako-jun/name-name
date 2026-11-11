@@ -147,12 +147,13 @@ describe('fieldDialogOptions (#840)', () => {
 })
 
 describe('fieldDialogOptions の windowStyle (#1147)', () => {
-  it('dialogStyle なしなら windowStyle を渡しても ffWindowStyle は出ない（従来の窓）', () => {
+  it('dialogStyle なし（既定の窓）でも windowStyle を渡せば ffWindowStyle が出る（ffWindow は出ない）', () => {
     for (const w of ['dark', 'ff-blue'] as const) {
-      const o = fieldDialogOptions({ windowStyle: w })
-      expect(o).toEqual({})
-      expect('ffWindowStyle' in o).toBe(false)
+      expect(fieldDialogOptions({ windowStyle: w })).toEqual({ ffWindowStyle: w })
     }
+  })
+  it('dialogStyle なしで windowStyle も未指定なら空（従来の窓）', () => {
+    expect(fieldDialogOptions({})).toEqual({})
   })
   it('ff + windowStyle 指定なら ffWindowStyle がそのまま出る', () => {
     expect(fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'dark' })).toEqual({
