@@ -8,11 +8,14 @@ import {
   collectFieldEvents,
   createFieldEmotionHost,
   loadFieldScript,
+  resolveBattleNextCommands,
   resolveNpcCommands,
   resolveTriggerCommands,
   supportedCommands,
 } from './fieldScript'
 import { parseMarkdown } from '../wasm/parser'
+import { createFieldBattleHost } from './fieldBattle'
+import type { BattleResult } from './loot'
 
 /** 会話の単体テスト用: 動かさない NPC 移動・始めない戦闘（実体は startFieldGame が持つ） */
 const noopNpcMover: NpcMover = { moveNpcTo: () => Promise.resolve() }
@@ -846,5 +849,142 @@ describe('FieldConversation と戦闘・NPC 移動 (#1073)', () => {
     await flush()
     expect(dialog.shown).toEqual([])
     expect(end).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveBattleNextCommands: 戦闘結果の 次= の行き先 (#1077)', () => {
+  const ev = (entries: Record<string, EventCommand[]>) => new Map(Object.entries(entries))
+
+  it('イベントが無い・events が undefined なら undefined（警告は実行器側）', () => {
+    const warn = vi.fn()
+    expect(resolveBattleNextCommands('nope', ev({}), warn)).toBeUndefined()
+    expect(resolveBattleNextCommands('nope', undefined, warn)).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('台詞入りのイベントはそのまま返る（警告なし）', () => {
+    const warn = vi.fn()
+    const cmds = [dlg('A', '終わった')]
+    expect(resolveBattleNextCommands('after', ev({ after: cmds }), warn)).toEqual(cmds)
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('NpcMove だけのイベントも返る', () => {
+    const cmds: EventCommand[] = [{ type: 'NpcMove', npc: 'x', x: 1, y: 2 }]
+    expect(resolveBattleNextCommands('mv', ev({ mv: cmds }), vi.fn())).toEqual(cmds)
+  })
+  it('Wait / Emotion だけのイベントは undefined（警告は出さない。実行器が「イベントが無い」と警告する）', () => {
+    const warn = vi.fn()
+    const events = ev({
+      w: [{ type: 'Wait', ms: 5 }],
+      e: [{ type: 'Emotion', target: 'x', kind: 'surprise' } as EventCommand],
+    })
+    expect(resolveBattleNextCommands('w', events, warn)).toBeUndefined()
+    expect(resolveBattleNextCommands('e', events, warn)).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('未対応コマンドは警告して除去し、残りを返す', () => {
+    const warn = vi.fn()
+    const unsupported = { type: 'Warp', map: 'x' } as unknown as EventCommand
+    const events = ev({ mix: [unsupported, dlg('A', 'こんにちは')] })
+    expect(resolveBattleNextCommands('mix', events, warn)).toEqual([dlg('A', 'こんにちは')])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('Warp')
+  })
+})
+
+describe('戦闘結果のフラグ反映と 次= の分岐の結線 (#1077。startFieldGame と同じ組み立て)', () => {
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0))
+  const result = (
+    flags: Record<string, boolean | number | string>,
+    next?: string
+  ): BattleResult => ({
+    outcome: 'victory',
+    exp: 0,
+    gold: 0,
+    loot: [],
+    items: [],
+    script: { id: 'b', flags, ...(next !== undefined ? { next } : {}) },
+  })
+
+  /** startFieldGame と同じ createFieldBattleHost（find の呼び出し順だけログに足す） */
+  function wire(
+    battleResult: BattleResult | null,
+    events: Map<string, EventCommand[]>,
+    declared: Record<string, boolean>
+  ) {
+    const flags: Record<string, boolean> = { ...declared }
+    const log: string[] = []
+    const warns: string[] = []
+    const host: EventBattleHost = createFieldBattleHost({
+      start: () => Promise.resolve(battleResult),
+      flags,
+      setFlag: (name, value) => {
+        flags[name] = value
+        log.push(`set:${name}=${value}`)
+      },
+      events,
+      warn: (m) => warns.push(m),
+    })
+    const baseFind = host.findEvent!
+    host.findEvent = (n) => {
+      log.push(`find:${n}`)
+      return baseFind(n)
+    }
+    const dialog = fakeDialog()
+    const conv = new FieldConversation(dialog, new EventRunner(dialog as never, noopNpcMover, host))
+    return { conv, dialog, flags, log, warns }
+  }
+  const shownOf = (w: { dialog: { shown: Array<[string, string]> } }) =>
+    w.dialog.shown.map((s) => s[1])
+
+  it('結果フラグは 次= の検索より先に反映され、分岐先の台詞が出て残りは捨てられる', async () => {
+    const events = new Map<string, EventCommand[]>([['after', [dlg('A', '分岐先')]]])
+    const w = wire(result({ 勝利: true }, 'after'), events, { 勝利: false })
+    w.conv.start('N', '固定', [{ type: 'Battle', id: 'b' }, dlg('A', '残り')], () => {})
+    await flush()
+    expect(w.log).toEqual(['set:勝利=true', 'find:after'])
+    expect(w.flags.勝利).toBe(true)
+    expect(shownOf(w)).toEqual(['分岐先'])
+  })
+  it('中断の結果でも 次= のイベントが実行される', async () => {
+    const events = new Map<string, EventCommand[]>([['evacuation_after_play', [dlg('A', '撤退')]]])
+    const w = wire(result({}, 'evacuation_after_play'), events, {})
+    w.conv.start('N', '固定', [{ type: 'Battle', id: 'b' }, dlg('A', '残り')], () => {})
+    await flush()
+    expect(shownOf(w)).toEqual(['撤退'])
+  })
+  it('結果 null（戦闘が始まらなかった）は何も起きず、残りを続ける', async () => {
+    const w = wire(null, new Map(), { 勝利: false })
+    w.conv.start('N', '固定', [{ type: 'Battle', id: 'b' }, dlg('A', '残り')], () => {})
+    await flush()
+    expect(w.log).toEqual([])
+    expect(w.flags.勝利).toBe(false)
+    expect(shownOf(w)).toEqual(['残り'])
+  })
+  it('次= のイベントが無ければ警告して残りを続ける（フラグは反映済み）', async () => {
+    const w = wire(result({ 勝利: true }, 'ghost'), new Map(), { 勝利: false })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    w.conv.start('N', '固定', [{ type: 'Battle', id: 'b' }, dlg('A', '残り')], () => {})
+    await flush()
+    expect(w.flags.勝利).toBe(true)
+    expect(warn).toHaveBeenCalled()
+    expect(shownOf(w)).toEqual(['残り'])
+    warn.mockRestore()
+  })
+  it('未宣言・非真偽のフラグは反映されず警告に回る', async () => {
+    const w = wire(result({ 未宣言: true, 勝利: 1 }), new Map(), { 勝利: false })
+    w.conv.start('N', '固定', [{ type: 'Battle', id: 'b' }], () => {})
+    await flush()
+    expect(w.flags).toEqual({ 勝利: false })
+    expect(w.warns).toHaveLength(2)
+  })
+  it('次= が自分自身へ戻る連鎖は上限で止まる（無限ループしない）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const events = new Map<string, EventCommand[]>([['loop', [{ type: 'Battle', id: 'b' }]]])
+    const w = wire(result({}, 'loop'), events, {})
+    w.conv.start('N', '固定', [{ type: 'Battle', id: 'b' }], () => {})
+    for (let i = 0; i < 80; i++) await flush()
+    expect(w.log.filter((l) => l === 'find:loop').length).toBeLessThanOrEqual(33)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('32'))).toBe(true)
+    warn.mockRestore()
   })
 })

@@ -17,7 +17,7 @@ import {
 } from './layers'
 import { BattleEngine, type BattleScriptOptions } from '../game/battleEngine'
 import type { BattleResult } from '../game/loot'
-import { planEventBattle } from '../game/fieldBattle'
+import { createFieldBattleHost, planEventBattle } from '../game/fieldBattle'
 import { once } from '../game/once'
 import { createNpcMoveQueue, pickNpcByName, resolveNpcSpeed } from '../game/fieldNpcMove'
 import { BattleScreen } from '../game/BattleScreen'
@@ -879,8 +879,13 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     new EventRunner(
       dialogBox,
       { moveNpcTo },
-      // 戦闘の結果（BattleResult。`script` に結果フラグ・`次=`）は実行器が受け取る。`次=` への分岐とフラグは #1077 で findEvent を足して受ける
-      { startBattle: (id) => startEventBattle(id) },
+      // 戦闘の結果（`script` の結果フラグ・`次=`）: フラグの反映と `次=` の行き先選びは createFieldBattleHost (#1077)
+      createFieldBattleHost({
+        start: (id) => startEventBattle(id),
+        flags,
+        setFlag,
+        events: scriptEvents,
+      }),
       createFieldEmotionHost(
         () => ({
           emotions: emotionSheets ?? {},
