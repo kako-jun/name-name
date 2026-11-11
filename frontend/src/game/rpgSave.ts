@@ -36,6 +36,11 @@ export interface RpgFieldState {
   facing: RpgFacing
   /** 名前つきの真偽値（フィールドのフラグ）。設定で宣言済みの名前だけ効く。省略は設定の初期値 */
   flags?: Record<string, boolean>
+  /**
+   * 再開直後に、この場面の `[トリガー auto]` を起こす (#1155)。省略・false は従来どおり起こさない（始まりの演出を再生し直さない）。
+   * 任意の場面から始めたい再開用セーブ（デモ・検証）が付ける。ゲーム内のセーブは書かない（次の通常ロードは不変）
+   */
+  fireAuto?: boolean
 }
 
 /** 者の差分。`id` で設定のマスター（味方なら設定のパーティ、敵ならモンスターのマスター）と突き合わせ、書いたキーだけ上書きする */
@@ -191,6 +196,8 @@ export function parseRpgSave(raw: unknown): RpgParseResult {
       for (const [k, v] of Object.entries(f.flags))
         if (typeof v !== 'boolean') return fail(`field.flags.${k} は真偽値が必要です`)
     }
+    if (f.fireAuto !== undefined && typeof f.fireAuto !== 'boolean')
+      return fail('field.fireAuto は真偽値が必要です')
   }
   if (raw.battle !== undefined) {
     const b = raw.battle

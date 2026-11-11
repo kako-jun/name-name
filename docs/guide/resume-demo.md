@@ -15,10 +15,14 @@
 2. 開く URL と同じオリジンで、ブラウザの開発者ツールのコンソールから localStorage に書く（キーは `name-name-save-field-<スロット>`。スロットは `0`〜`2`、クイックは `quick`）
 
    ```js
-   localStorage.setItem('name-name-save-field-0', JSON.stringify(/* セーブ JSON */))
+   localStorage.setItem(
+     "name-name-save-field-0",
+     JSON.stringify(/* セーブ JSON */),
+   );
    ```
 
    自動操作（playwright など）ならページを開く前に同じオリジンの任意のページで `localStorage.setItem` してから `field.html?resume=0&config=<URL>` へ移動する
+
 3. `field.html?resume=0&config=<世界設定のURL>`（`?config=` は必須で、同梱の既定設定は無い。設定は「世界」、セーブは「状態」で別物）を開く
 4. 画面下の表示（`scene=… foot=… facing=… gold=… party=…`）と、`window.field.rpg()`（今の局面をセーブ形式で返す）で復元を確かめる。`window.field.saveRpg(1)` で今の局面をスロットに書け、同じ形式で読み戻せる
 5. 失敗したとき（スロットが空・`rpg` が無い・検証に落ちた）は理由を画面に出し、設定の開始位置から始める。パーティが設定に 1 人もいないセーブも同じ扱い
@@ -29,32 +33,56 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 ```jsonc
 {
-  "slot": 0, "sceneId": null, "eventIndex": 0, "textIndex": 0, "flags": {},
-  "backgroundPath": null, "isBlackout": false, "characters": [], "currentBgmPath": null,
-  "savedAt": "2026-11-04T00:00:00.000Z", "sceneName": "bathhouse",
+  "slot": 0,
+  "sceneId": null,
+  "eventIndex": 0,
+  "textIndex": 0,
+  "flags": {},
+  "backgroundPath": null,
+  "isBlackout": false,
+  "characters": [],
+  "currentBgmPath": null,
+  "savedAt": "2026-11-04T00:00:00.000Z",
+  "sceneName": "bathhouse",
   "rpg": {
     "version": 1,
     // パーティ: 設定のパーティの id（無指定の id は party1, party2, …）。書いたキーだけ設定に上書きする。書いた順が並び順、書かなかった者は離脱
     // form（任意）: 人物の形態＝時期＋車椅子（例 "elementary-wheelchair"）。設定の既定を上書きし、その形態の戦闘ポーズ・歩行絵を使う（下の「人物の形態」）
-    "party": [{ "id": "party1", "hp": 22, "mp": 4, "form": "elementary-wheelchair" }, { "id": "party4", "hp": 0 }],
+    "party": [
+      { "id": "party1", "hp": 22, "mp": 4, "form": "elementary-wheelchair" },
+      { "id": "party4", "hp": 0 },
+    ],
     // 所持品: 設定の items の id → 個数（寺町の例は空）。書かなかった id は 0 個
     "items": { "<アイテム id>": 1 },
     // 装備: メンバー id → アイテム id の配列。保存・復元・読み出しはするが、能力値への反映はしない（下の「未対応」）
     "equipment": { "<メンバー id>": ["<装備品 id>"] },
     "gold": 120,
     // フィールドの現在地（省略は設定の開始位置）。x / y は足元（背景ピクセル）。facing は 8 方向
-    "field": { "sceneId": "bathhouse", "x": 768, "y": 716, "facing": "up", "flags": {} },
+    "field": {
+      "sceneId": "bathhouse",
+      "x": 768,
+      "y": 716,
+      "facing": "up",
+      "flags": {},
+    },
     // 戦闘中（省略はフィールドを歩いている局面）
     "battle": {
       // 敵: モンスターのマスター id（同じ id が複数いてよい）＋マスターと違うキー。hp <= 0 は倒れた状態で残す
-      "enemies": [{ "id": "M149", "hp": 21 }, { "id": "M147", "hp": 20, "status": { "<状態 id>": 2 } }],
+      "enemies": [
+        { "id": "M149", "hp": 21 },
+        { "id": "M147", "hp": 20, "status": { "<状態 id>": 2 } },
+      ],
       // ATB（ターン制の設定なら省略）: ゲージは 0〜1000、queue はコマンド待ちの味方の並び順（party の添字。溜まった順）
-      "atb": { "partyGauge": [1000, 620, 300, 0], "enemyGauge": [400, 150], "queue": [0] },
+      "atb": {
+        "partyGauge": [1000, 620, 300, 0],
+        "enemyGauge": [400, 150],
+        "queue": [0],
+      },
       // 敵の記憶: `行動:` を持つ敵がいる戦闘にだけ効く（無い戦闘では書いても無視される。寺町の例の敵は持たないので書いていない）
       "enemyMemory": [{ "acted": 2 }, { "acted": 0 }],
-      "background": "…戦闘背景の URL（省略は設定の背景）"
-    }
-  }
+      "background": "…戦闘背景の URL（省略は設定の背景）",
+    },
+  },
 }
 ```
 
@@ -113,17 +141,30 @@ ff の勝利で、先頭の「戦いに勝った！」に続けて結果のメ�
 
 実測（`frontend/src` の型どおりに組んだ JSON の文字数。localStorage の上限は 1 オリジン 5 MiB ≒ UTF-16 で約 262 万文字を安全側に採用）:
 
-| 項目 | 文字数 | 上限に対する割合 |
-|---|---|---|
-| 現行のノベルのセーブ 1 件（フラグ 40・入場時フラグ 40・立ち絵 4・背景/BGM あり） | 約 4,400 | 0.17 % |
-| 寺町の例の RPG 状態（4 人・敵 2 体・戦闘中 ATB 込み） | 563 | 0.02 % |
-| RPG 状態の最大級（6 人全項目・所持品 60・敵 8 体・ATB・敵の記憶） | 約 4,900 | 0.19 % |
-| 1 スロット最大（ノベル 4,400 + RPG 4,900） | 約 9,300 | 0.36 % |
-| 全セーブ最大（3 スロット + クイック = 4 件） | 約 37,000 | **1.4 %** |
+| 項目                                                                             | 文字数    | 上限に対する割合 |
+| -------------------------------------------------------------------------------- | --------- | ---------------- |
+| 現行のノベルのセーブ 1 件（フラグ 40・入場時フラグ 40・立ち絵 4・背景/BGM あり） | 約 4,400  | 0.17 %           |
+| 寺町の例の RPG 状態（4 人・敵 2 体・戦闘中 ATB 込み）                            | 563       | 0.02 %           |
+| RPG 状態の最大級（6 人全項目・所持品 60・敵 8 体・ATB・敵の記憶）                | 約 4,900  | 0.19 %           |
+| 1 スロット最大（ノベル 4,400 + RPG 4,900）                                       | 約 9,300  | 0.36 %           |
+| 全セーブ最大（3 スロット + クイック = 4 件）                                     | 約 37,000 | **1.4 %**        |
 
 - 余裕は 70 倍以上（上限の 1/4 以下という基準を大きく下回る）。`scriptContentCache` はすでに IndexedDB（localStorage ではない）。同じオリジンの localStorage を使う他の項目（設定・既読・エディタの下書き）を数百 KB 見込んでも、セーブが占めるのは 1 割に届かない
 - 味方・敵はマスターとの差分だけを書くため、絵のデータ URI などでセーブが太らない（絵まで全部埋めると 1 エンティティ数 KB に膨らむ。差分方式にした理由）
 - `SaveManager` は同期 API 前提で、IndexedDB へ移すと呼び出し箇所すべてが非同期になる。余裕が十分なので移さない（旧セーブの移行も不要）。上限が問題になったら、そのとき移す（セーブ形式 `RpgSaveState` は保存先に依存しない）
+
+## 再開直後に場面開始トリガーを起こす (#1155)
+
+通常、再開した直後の最初の場面では `[トリガー auto]` を起こさない（始まりの演出を再生し直さないため）。任意の場面のイベント（会話・戦闘）から始めたい再開用セーブは、`field` に `"fireAuto": true` を足す。
+
+```json
+"field": { "sceneId": "bathhouse", "x": 768, "y": 716, "facing": "up", "fireAuto": true }
+```
+
+- 再開直後にその場面の `auto: true` のトリガーが、書いた順に起こる。`once` の記録はセーブに入らず再開直後は空なので、`once` の auto もまだ起こしていない扱いで起こる
+- 省略・`false` は従来どおり起こさない。ゲーム内のセーブ（メニューの「セーブ」・`saveRpg`）は `fireAuto` を書かないので、そこから読み戻す通常のロードは不変
+- 踏み込みトリガー（`auto: false`）は影響しない（再開地点が円の中でも起こさない）
+- 戦闘中のセーブ（`battle`）と併用すると、戦闘が先に開き、戦闘中はトリガー処理が止まるので auto は戦闘が終わってから起こる（同時には走らない）
 
 ## 未対応・注意
 

@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { SaveManager } from '../game/SaveManager'
-import { buildRpgSaveSlot, type RpgSaveState } from '../game/rpgSave'
+import { buildRpgSaveSlot, snapshotRpg, type RpgSaveState } from '../game/rpgSave'
 import type { BattleEntity } from '../game/spellDsl'
 import {
   FIELD_DOC_KEY,
@@ -21,7 +21,11 @@ import {
   itemsWithCounts,
   mergePartyById,
   snapshotParty,
+  resumeFromSlotData,
 } from './fieldResume'
+import { autoTriggers, triggerKey } from './triggerRuntime'
+import type { FieldTrigger } from './config'
+import startFieldGameSrc from './startFieldGame.ts?raw'
 
 const hero = (id: string): BattleEntity => ({
   id,
@@ -438,5 +442,85 @@ describe('snapshotParty (#1073)', () => {
       ['party1', 7],
       ['party2', 40],
     ])
+  })
+})
+
+describe('field.fireAuto と resumedStart（#1155）', () => {
+  // startFieldGame の `resumedStart = !!resumed && !resumed.field?.fireAuto` を、resumeFromSlotData の結果に当てた判定
+  const resumedStartOf = (r: ReturnType<typeof resumeFromSlotData>): boolean => {
+    const resumed = r.kind === 'ok' ? r.resolved : null
+    return !!resumed && !resumed.field?.fireAuto
+  }
+  const slotOf = (field: NonNullable<RpgSaveState['field']>) =>
+    buildRpgSaveSlot(rpg({ field }), { slot: 0 })
+  const base = { sceneId: 'temple', x: 1, y: 2, facing: 'left' as const }
+
+  it('fireAuto なしの再開は resumedStart=true（従来どおり auto を起こさない）', () => {
+    expect(resumedStartOf(resumeFromSlotData(slotOf(base), 0, config))).toBe(true)
+  })
+  it('fireAuto=false の再開も resumedStart=true', () => {
+    expect(
+      resumedStartOf(resumeFromSlotData(slotOf({ ...base, fireAuto: false }), 0, config))
+    ).toBe(true)
+  })
+  it('fireAuto=true の再開は resumedStart=false（auto を起こす）', () => {
+    const r = resumeFromSlotData(slotOf({ ...base, fireAuto: true }), 0, config)
+    expect(r.kind === 'ok' && r.resolved.field?.fireAuto).toBe(true)
+    expect(resumedStartOf(r)).toBe(false)
+  })
+  it('通常起動（再開なし・読めないセーブ）は resumedStart=false', () => {
+    expect(resumedStartOf(resumeFromSlotData(null, 0, config))).toBe(false)
+  })
+  it('fireAuto=true でも場面が設定に無く field が捨てられたら resumedStart=true（従来どおり）', () => {
+    const r = resumeFromSlotData(slotOf({ ...base, sceneId: 'nowhere', fireAuto: true }), 0, config)
+    expect(r.kind === 'ok' && r.resolved.field).toBeUndefined()
+    expect(resumedStartOf(r)).toBe(true)
+  })
+  it('fireAuto=true は auto を起こし、once は onceFired に記録され、場面を戻っても再発火しない', () => {
+    const triggers = [
+      { auto: true, event: 'opening', once: true },
+      { auto: true, event: 'every', once: false },
+    ] as unknown as readonly FieldTrigger[]
+    const r = resumeFromSlotData(slotOf({ ...base, fireAuto: true }), 0, config)
+    const onceFired = new Set<string>()
+    const first = autoTriggers({
+      sceneId: 'temple',
+      triggers,
+      onceFired,
+      resumedStart: resumedStartOf(r),
+    })
+    expect(first.map((f) => f.event)).toEqual(['opening', 'every'])
+    for (const t of first) if (t.once) onceFired.add(t.key) // startFieldGame の記録と同じ
+    expect([...onceFired]).toEqual([triggerKey('temple', 0)])
+    // 別場面へ行って戻ると（resumedStart は初回で false に戻っている）once だけ除外される
+    const again = autoTriggers({ sceneId: 'temple', triggers, onceFired, resumedStart: false })
+    expect(again.map((f) => f.event)).toEqual(['every'])
+  })
+  it('メニューのセーブ→ロードでは fireAuto が消え、次の再開は auto を起こさない', () => {
+    // ゲーム内セーブ（startFieldGame の snapshotRpgNow）は field を fireAuto なしで組み立てる
+    const saved = snapshotRpg(
+      {
+        party: [hero('party1')],
+        inventory: { potion: 1 },
+        equipment: {},
+        gold: 0,
+        field: { sceneId: 'temple', x: 1, y: 2, facing: 'left', flags: {} },
+      },
+      baseConfigOf(config)
+    )
+    const slot = buildRpgSaveSlot(saved, { slot: 0 })
+    const r = resumeFromSlotData(slot, 0, config)
+    expect(r.kind === 'ok' && r.resolved.field).not.toHaveProperty('fireAuto')
+    expect(resumedStartOf(r)).toBe(true)
+  })
+  it('配線の固定: startFieldGame の判定式とセーブ組み立てが fireAuto を扱う（静的検査）', () => {
+    // startFieldGame は PixiJS 依存で結合できないため、判定式の原文だけを固定する（式を変えたらここも直す）
+    expect(startFieldGameSrc).toContain('let resumedStart = !!resumed && !resumed.field?.fireAuto')
+    // メニューセーブの field オブジェクト（flags の `}` を越えて閉じ `}` まで）に fireAuto が入らない
+    const m = startFieldGameSrc.match(
+      /field: \{ sceneId, x: pos\.x, y: pos\.y, facing, flags: \{[^}]*\} \}/
+    )
+    expect(m).not.toBeNull()
+    expect(m![0]).not.toContain('fireAuto')
   })
 })
