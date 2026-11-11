@@ -1,5 +1,5 @@
 /**
- * フィールドの歩行スプライト用アクスタ部品 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` のときだけ使う。
+ * フィールドの歩行スプライト用アクスタ部品 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` のときだけ使う（主人公・同行者・NPC）。
  *
  * 絵そのもの（Sprite）は従来どおり startFieldGame.ts が足元（スプライト下端中心）基準で置く。ここは**その下**に敷く
  * 透明アクリルの板・台座・地面の影を、同じ足元に合わせて描く追加の層で、足元座標・歩行判定・移動速度には関与しない。
@@ -71,6 +71,11 @@ export function createFieldStands(
     player: new FieldAcrylicFigure(),
     companion: hasCompanion ? new FieldAcrylicFigure() : null,
   }
+}
+
+/** NPC 1 人ぶんのアクスタ部品。`spriteStyle` が `"acrylic"` のときだけ作り、それ以外は null＝従来描画（#861） */
+export function createNpcStand(style: 'acrylic' | undefined): FieldAcrylicFigure | null {
+  return style === 'acrylic' ? new FieldAcrylicFigure() : null
 }
 
 export interface FieldAcrylicFigureOptions {

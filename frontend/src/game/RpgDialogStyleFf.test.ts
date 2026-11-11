@@ -222,6 +222,33 @@ describe.each([
       expect(box.getBoxRect().y).toBe(computeFfDialogRect(screen.w, screen.h).y)
       box.dispose()
     })
+    it("'ff' の窓は ff-blue のまま（一枚絵フィールドの window_style 連動 #1147 の影響を受けない）", async () => {
+      const box = await initWith('ff')
+      const i = box as unknown as {
+        ffBands: { context: { instructions: unknown[] } }
+        dialogText: { style: { dropShadow: unknown } }
+      }
+      expect(i.ffBands.context.instructions.length).toBeGreaterThan(0) // 青い帯が描かれている
+      expect(i.dialogText.style.dropShadow).toBeTruthy() // 文字の影あり
+      box.dispose()
+    })
+    it("RPG 経路は ffWindowStyle を渡さない: 'adv' の窓は dark（黒単色）にならず従来の枠 f1faee (#1147)", async () => {
+      for (const v of ['adv', null, undefined]) {
+        const box = await initWith(v)
+        const ins = (
+          box as unknown as {
+            bg: {
+              context: {
+                instructions: Array<{ action: string; data: { style?: { color?: number } } }>
+              }
+            }
+          }
+        ).bg.context.instructions
+        expect(ins.find((x) => x.action === 'stroke')?.data.style?.color).toBe(0xf1faee)
+        expect(ins.find((x) => x.action === 'fill')?.data.style?.color).not.toBe(0x000000)
+        box.dispose()
+      }
+    })
     it("'adv'・'novel'・未知値・null・未指定は従来の窓（ff にならない）", async () => {
       for (const v of ['adv', 'novel', 'toheart', null, undefined]) {
         const box = await initWith(v)
@@ -248,5 +275,24 @@ describe('NovelRenderer は dialog_style: ff を adv 相当として扱う (#840
     expect(i.dialogBox.getPageInfo()).toEqual({ page: 0, pages: 0 })
     i.dialogBox.show('', TEN_TEXT)
     expect(i.dialogBox.isAwaitingPage()).toBe(false) // ff 窓の改ページは働かない
+  })
+})
+
+describe('NovelRenderer の会話窓は ffWindowStyle を渡さず従来のまま (#1147)', () => {
+  it('ノベル窓は dark（黒単色）にならない', () => {
+    const r = new NovelRenderer()
+    const bg = (
+      r as unknown as {
+        dialogBox: {
+          bg: {
+            context: {
+              instructions: Array<{ action: string; data: { style?: { color?: number } } }>
+            }
+          }
+        }
+      }
+    ).dialogBox.bg
+    const stroke = bg.context.instructions.find((x) => x.action === 'stroke')
+    expect(stroke?.data.style?.color).not.toBe(0xffffff)
   })
 })

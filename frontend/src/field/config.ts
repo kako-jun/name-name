@@ -256,8 +256,8 @@ export interface FieldConfig {
    */
   dialogStyle?: DialogStyle
   /**
-   * 主人公・同行者の歩行スプライトの見せ方 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` = 足元に透明アクリルの板・台座・影を付ける（戦闘の `battle.spriteStyle` と同じ見た目。戦闘側の設定とは独立）。
-   * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC には効かない
+   * 主人公・同行者・NPC の歩行スプライトの見せ方 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` = 足元に透明アクリルの板・台座・影を付ける（戦闘の `battle.spriteStyle` と同じ見た目。戦闘側の設定とは独立）。
+   * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC にも効く（#861）
    */
   spriteStyle?: 'acrylic'
   /**
