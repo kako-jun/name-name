@@ -289,18 +289,43 @@ describe('startFieldGame.ts の NPC アクスタ配線（?raw の静的検査）
       'if (n.stand) { n.stand.display.zIndex = n.sprite.zIndex n.stand.update(ntex, ntex.height * ns, false, n.x, n.y) }'
     )
     // 絵の scale も同じ ns・位置も同じ (n.x, n.y)
-    expect(src).toContain('n.sprite.scale.set(ns, ns)')
-    expect(src).toContain('n.sprite.position.set(n.x, n.y)')
+    const upd = src.indexOf('n.stand.update(ntex, ntex.height * ns, false, n.x, n.y)')
+    const sc = src.indexOf('n.sprite.scale.set(ns, ns)')
+    const ps = src.indexOf('n.sprite.position.set(n.x, n.y)')
+    expect(upd).toBeGreaterThan(-1)
+    expect(sc).toBeGreaterThan(-1)
+    expect(ps).toBeGreaterThan(-1)
+    // 同じ更新ブロック内（近接）にある
+    expect(Math.abs(upd - sc)).toBeLessThan(600)
+    expect(Math.abs(upd - ps)).toBeLessThan(600)
   })
   it('applyScene で、別場面の NPC の stand を隠す', () => {
     expect(src).toContain('n.sprite.visible = sid === s.id')
     expect(src).toContain('if (n.stand && sid !== s.id) n.stand.display.visible = false')
   })
-  it('stand の操作は必ず if (n.stand) の中（spriteStyle 未指定＝stand なしで従来描画）', () => {
-    const uses = src.match(/n\.stand\.\w+/g) ?? []
+  it('stand の操作は必ず if (n.stand) の条件の中（spriteStyle 未指定＝stand なしで従来描画）', () => {
+    const uses = [...src.matchAll(/n\.stand\.\w+/g)]
     expect(uses.length).toBeGreaterThan(0)
-    // n.stand. の直前は必ず `if (n.stand` の条件か、その if ブロック内
+    for (const m of uses) {
+      const before = src.slice(Math.max(0, m.index! - 120), m.index!)
+      expect(before).toMatch(/if \(n\.stand[^)]*\)/)
+    }
     expect(src.match(/n\.stand\.update/g)).toHaveLength(1)
-    expect(src.match(/if \(n\.stand/g)!.length).toBeGreaterThanOrEqual(3)
+  })
+  it('隠す行は applyScene の本体の中にある', () => {
+    const start = src.indexOf('const applyScene = (s: LoadedScene): void => {')
+    expect(start).toBeGreaterThan(-1)
+    const hide = src.indexOf('if (n.stand && sid !== s.id) n.stand.display.visible = false')
+    expect(hide).toBeGreaterThan(start)
+    expect(hide).toBeLessThan(src.indexOf('applyScene(scene)', start))
+  })
+  it('dispose で全シーンの全 NPC の stand を破棄する', () => {
+    const d = src.indexOf('const dispose = (): void => {')
+    expect(d).toBeGreaterThan(-1)
+    const body = src.slice(d, d + 600)
+    expect(body).toContain('playerStand?.destroy()')
+    expect(body).toContain(
+      'for (const list of sceneNpcs.values()) for (const n of list) n.stand?.destroy()'
+    )
   })
 })

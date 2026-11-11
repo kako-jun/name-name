@@ -2243,6 +2243,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     battleTransition.cancel()
     playerStand?.destroy()
     companionStand?.destroy()
+    for (const list of sceneNpcs.values()) for (const n of list) n.stand?.destroy()
     window.removeEventListener('keydown', onMenuKey)
     window.removeEventListener('pointerdown', onPointerBegin, true)
     window.removeEventListener('keydown', onKeyDown)
