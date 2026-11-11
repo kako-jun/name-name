@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { Texture, TextureSource } from 'pixi.js'
-import { FieldAcrylicFigure, createFieldStands, fitAcrylicGeometry } from './acrylicFigure'
+import {
+  FieldAcrylicFigure,
+  createFieldStands,
+  createNpcStand,
+  fitAcrylicGeometry,
+} from './acrylicFigure'
 import { resolveAcrylicParams } from '../game/spriteStyle'
+import { playerScale } from '../game/fieldWalk'
+import startFieldGameSource from './startFieldGame.ts?raw'
 
 const sized = (w: number, h: number): Texture =>
   new Texture({ source: new TextureSource({ width: w, height: h }) })
@@ -190,5 +197,110 @@ describe('createFieldStands（startFieldGame.ts の配線）', () => {
     expect(a.player).toBeInstanceOf(FieldAcrylicFigure)
     expect(a.companion).toBeNull()
     expect(createFieldStands('acrylic', true).companion).toBeInstanceOf(FieldAcrylicFigure)
+  })
+})
+
+describe('createNpcStand（NPC のアクスタ配線, #861）', () => {
+  it('acrylic だけ FieldAcrylicFigure を作る', () => {
+    expect(createNpcStand('acrylic')).toBeInstanceOf(FieldAcrylicFigure)
+  })
+  it('未指定・acrylic 以外の値は null＝従来描画', () => {
+    expect(createNpcStand(undefined)).toBeNull()
+    expect(createNpcStand('none' as never)).toBeNull()
+    expect(createNpcStand('' as never)).toBeNull()
+    expect(createNpcStand('Acrylic' as never)).toBeNull()
+  })
+  it('NPC ごとに別の部品を作る（共有しない）', () => {
+    expect(createNpcStand('acrylic')).not.toBe(createNpcStand('acrylic'))
+  })
+})
+
+describe('FieldAcrylicFigure の NPC 用の使い方（高さ・位置・向き）', () => {
+  it('NPC の表示高さ（絵の高さ×playerScale）を渡すと、足元 (x, y) に同じ高さで立つ', () => {
+    for (const [texH, npcHeight] of [
+      [48, 64],
+      [192, 96],
+      [300, 150],
+    ]) {
+      const tex = sized(Math.round(texH * 0.6), texH)
+      const ns = playerScale(npcHeight, tex.height)
+      const h = tex.height * ns
+      // 渡す高さは NPC 定義の高さそのもの
+      expect(h).toBeCloseTo(npcHeight, 10)
+      const f = make()
+      f.update(tex, h, false, 123, 456)
+      const g = fitAcrylicGeometry(tex.width, tex.height, h, resolveAcrylicParams())!.geometry
+      expect(f.display.position.x).toBe(123)
+      expect(f.display.position.y).toBe(456)
+      // 板の絵の表示高さ = 倍率 × 配置された絵の高さ ≒ NPC の高さ
+      expect(f.display.scale.y * g.sprite.height).toBeCloseTo(h, 8)
+      expect(f.display.visible).toBe(true)
+    }
+  })
+  it('NPC は反転しない（flipped=false）。影は表示され、台座は絵の下端より下', () => {
+    const f = make()
+    f.update(sized(32, 48), 64, false, 10, 20)
+    expect(f.display.scale.x).toBeGreaterThan(0)
+    expect(f.layers.acrylicShadow!.visible).toBe(true)
+    const base = f.layers.acrylicBase!
+    expect(base.y + base.height).toBeGreaterThan(f.display.pivot.y)
+  })
+  it('向きで立ち絵が変わると板が差し変わり、NPC が動いても足元に追従する', () => {
+    const f = make()
+    f.update(sized(32, 48), 64, false, 100, 100)
+    const plate = f.layers.acrylicPlate!.texture
+    f.update(sized(28, 48), 64, false, 140, 90)
+    expect(f.display.position.x).toBe(140)
+    expect(f.display.position.y).toBe(90)
+    expect(f.layers.acrylicPlate!.texture).not.toBe(plate)
+  })
+  it('複数 NPC のアクスタは互いに独立している', () => {
+    const a = make()
+    const b = make()
+    a.update(sized(32, 48), 64, false, 10, 10)
+    b.update(sized(32, 48), 128, false, 200, 220)
+    expect(a.display.position.x).toBe(10)
+    expect(b.display.position.x).toBe(200)
+    expect(a.display.scale.y).not.toBe(b.display.scale.y)
+  })
+  it('更新前は非表示（別場面の NPC の stand が最初から見えない）', () => {
+    expect(make().display.visible).toBe(false)
+    expect(createNpcStand('acrylic')!.display.visible).toBe(false)
+  })
+})
+
+/**
+ * startFieldGame.ts は PixiJS の Application に依存し単体で呼べないため、NPC のアクスタ配線は
+ * ソースの静的検査（?raw）で固定する。空白・改行の差には耐えるが、変数名・式の変更では落ちる＝配線が動いたことに
+ * 気づくための検査（脆い）。見た目・実描画の確認は dev サーバーで行う。
+ */
+describe('startFieldGame.ts の NPC アクスタ配線（?raw の静的検査）', () => {
+  const src = startFieldGameSource.replace(/\s+/g, ' ')
+  it('NPC 生成時に spriteStyle から stand を作る', () => {
+    expect(src).toContain('stand: createNpcStand(config.spriteStyle)')
+  })
+  it('stand は絵の直前（奥）に world へ足す', () => {
+    expect(src).toMatch(
+      /if \(n\.stand\) world\.addChild\(n\.stand\.display\)[^;]*? world\.addChild\(n\.sprite\)/
+    )
+  })
+  it('毎フレーム、絵と同じ zIndex・表示高さ（ntex.height*ns）・足元 (n.x, n.y)・非反転で update する', () => {
+    expect(src).toContain(
+      'if (n.stand) { n.stand.display.zIndex = n.sprite.zIndex n.stand.update(ntex, ntex.height * ns, false, n.x, n.y) }'
+    )
+    // 絵の scale も同じ ns・位置も同じ (n.x, n.y)
+    expect(src).toContain('n.sprite.scale.set(ns, ns)')
+    expect(src).toContain('n.sprite.position.set(n.x, n.y)')
+  })
+  it('applyScene で、別場面の NPC の stand を隠す', () => {
+    expect(src).toContain('n.sprite.visible = sid === s.id')
+    expect(src).toContain('if (n.stand && sid !== s.id) n.stand.display.visible = false')
+  })
+  it('stand の操作は必ず if (n.stand) の中（spriteStyle 未指定＝stand なしで従来描画）', () => {
+    const uses = src.match(/n\.stand\.\w+/g) ?? []
+    expect(uses.length).toBeGreaterThan(0)
+    // n.stand. の直前は必ず `if (n.stand` の条件か、その if ブロック内
+    expect(src.match(/n\.stand\.update/g)).toHaveLength(1)
+    expect(src.match(/if \(n\.stand/g)!.length).toBeGreaterThanOrEqual(3)
   })
 })
