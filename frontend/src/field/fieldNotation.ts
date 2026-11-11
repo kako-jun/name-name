@@ -31,7 +31,12 @@ import type {
   UiImagesData,
   Direction,
 } from '../types'
-import { collectFieldEvents, type FieldScriptEvents } from '../game/fieldScript'
+import {
+  collectFieldBattleScripts,
+  collectFieldEvents,
+  type FieldScriptEvents,
+} from '../game/fieldScript'
+import { parseBattleScript } from '../game/battleScript'
 import { mergeMasterDataFromDocs } from '../game/rpgProjectFromDoc'
 import { safeAssign } from '../game/ownProperty'
 
@@ -420,17 +425,22 @@ export function collectFieldNotation(input: CollectFieldNotationInput): CollectF
   for (const { doc } of sorted)
     for (const [name, commands] of collectFieldEvents(doc))
       if (!earlyEvents.has(name)) earlyEvents.set(name, commands)
-  /** 場面の NPC・トリガーが呼ぶイベントの `[場面移動:]` の行き先 (#1072) */
+  // `[戦闘 id]` の宣言(同 id は先勝ち)。イベント内 `[戦闘: id]` の 次= の行き先を辿るのに使う (#1143)
+  const earlyBattles = new Map<string, readonly string[]>()
+  for (const { doc } of sorted)
+    for (const [id, def] of Object.entries(collectFieldBattleScripts(doc)))
+      if (!earlyBattles.has(id)) earlyBattles.set(id, def.rules)
+  /**
+   * 場面の NPC・トリガーが呼ぶイベントの `[場面移動:]` の行き先 (#1072)。
+   * イベント内 `[戦闘: id]` の宣言の 次=<イベント>(勝利時/敗北時/中断時/逃走時)が指すイベントも辿る (#1143)
+   */
   const sceneMoveTargets = (scene: EventScene): string[] => {
     const names: string[] = []
     for (const ev of objectEvents(scene)) {
       if ('RpgTrigger' in ev) names.push(ev.RpgTrigger.scene)
       else if ('Npc' in ev && ev.Npc.scene) names.push(ev.Npc.scene)
     }
-    const out: string[] = []
-    for (const n of names)
-      for (const c of earlyEvents.get(n) ?? []) if (c.type === 'SceneMove') out.push(c.scene)
-    return out
+    return collectSceneMoveTargets(names, earlyEvents, earlyBattles)
   }
   const queue: string[] = [input.entry.sceneId]
   while (queue.length > 0) {
@@ -526,4 +536,33 @@ function objectEventsHave(scene: EventScene, key: string): boolean {
     if (key in ev) return true
   }
   return false
+}
+
+/**
+ * 起点のイベント名から、`[場面移動:]` の行き先を集める (#1072)。イベント内 `[戦闘: id]` の宣言の
+ * 次=<イベント> が指すイベントも辿る (#1143)。訪問済みのイベントは再訪しない(循環しても止まる)。純関数。
+ */
+export function collectSceneMoveTargets(
+  startNames: readonly string[],
+  events: FieldScriptEvents,
+  battleRules: ReadonlyMap<string, readonly string[]>
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const queue = [...startNames]
+  while (queue.length > 0) {
+    const name = queue.shift()!
+    if (seen.has(name)) continue
+    seen.add(name)
+    for (const c of events.get(name) ?? []) {
+      if (c.type === 'SceneMove') out.push(c.scene)
+      else if (c.type === 'Battle') {
+        const rules = battleRules.get(c.id)
+        if (!rules) continue
+        for (const r of Object.values(parseBattleScript(rules).results))
+          if (r?.next) queue.push(r.next)
+      }
+    }
+  }
+  return out
 }
