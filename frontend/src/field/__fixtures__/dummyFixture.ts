@@ -276,7 +276,7 @@ export function buildDummyFixture(
     mirrorOf: { upLeft: 'upRight', downLeft: 'downRight' },
   }
   return {
-    // アクスタ (sit-by-me#58): 主人公・同行者の足元に板・台座・影を付ける。未指定はキーを出さない
+    // アクスタ (sit-by-me#58): 主人公・同行者・NPC の足元に板・台座・影を付ける。未指定はキーを出さない
     ...(opts.spriteStyle === 'acrylic' ? { spriteStyle: 'acrylic' } : {}),
     // チルトシフト (#885): 未指定はキーを出さない
     ...(opts.tiltShift === 'on' ? { tiltShift: 'on' } : {}),

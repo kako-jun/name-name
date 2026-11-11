@@ -5,7 +5,7 @@
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { buildFieldComposite } from './fieldComposite'
-import { createFieldStands } from './acrylicFigure'
+import { createFieldStands, createNpcStand, type FieldAcrylicFigure } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
 import {
   WORLD_Z,
@@ -219,6 +219,8 @@ interface NpcRuntime {
   y: number
   def: FieldNpc
   sprite: Sprite
+  /** アクスタの板・台座・影 (#861)。`spriteStyle: "acrylic"` のときだけ。無ければ null */
+  stand: FieldAcrylicFigure | null
   /** 向きごとの立ち絵。`sprite` 単一画像のときは全向き同じ 1 枚 */
   textures: Record<Facing, Texture>
   facing: Facing
@@ -484,7 +486,16 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           const sprite = new Sprite(textures[def.facing])
           sprite.anchor.set(0.5, 1)
           sprite.visible = false
-          list.push({ id: def.id, x: def.x, y: def.y, def, sprite, textures, facing: def.facing })
+          list.push({
+            id: def.id,
+            x: def.x,
+            y: def.y,
+            def,
+            sprite,
+            stand: createNpcStand(config.spriteStyle),
+            textures,
+            facing: def.facing,
+          })
         } catch (e) {
           console.warn(
             `[field] NPC ${sid}/${def.id} の画像を読めません（この NPC は出しません）: ${e instanceof Error ? e.message : String(e)}`
@@ -604,7 +615,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   foregroundSprite.zIndex = WORLD_Z.foreground
   emotionLayerBox.zIndex = WORLD_Z.emotion
   marker.zIndex = WORLD_Z.marker
-  for (const list of sceneNpcs.values()) for (const n of list) world.addChild(n.sprite)
+  for (const list of sceneNpcs.values())
+    for (const n of list) {
+      if (n.stand) world.addChild(n.stand.display) // 絵の直前（同じ zIndex なら奥）
+      world.addChild(n.sprite)
+    }
   // 会話窓 (#841)。TopDown と同じ DialogBox。画面の大きさに合わせた箱と文字（シーンの大きさが変わると redraw で追従）
   /** window_style を書いた作品 = 設計どおりの会話窓（上下の配置・窓内の名前・感情吹き出しを隠す）(#1153) */
   const designedDialog = config.battle.windowStyle !== undefined
@@ -1384,7 +1399,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       for (const w of npcPlacementWarnings(s.mask, sceneNpcs.get(s.id) ?? [], s.id))
         console.warn(`[field] ${w}`)
     }
-    for (const [sid, list] of sceneNpcs) for (const n of list) n.sprite.visible = sid === s.id
+    for (const [sid, list] of sceneNpcs)
+      for (const n of list) {
+        n.sprite.visible = sid === s.id
+        if (n.stand && sid !== s.id) n.stand.display.visible = false
+      }
     // 白で塗って tint で色を切り替える（暗転=黒・ワープの flash=白）
     fade.clear().rect(0, 0, s.mask.width, s.mask.height).fill(0xffffff)
     fade.tint = 0x000000
@@ -2036,6 +2055,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       n.sprite.scale.set(ns, ns)
       n.sprite.position.set(n.x, n.y)
       n.sprite.zIndex = npcZ(n.y, pos.y, h)
+      if (n.stand) {
+        n.stand.display.zIndex = n.sprite.zIndex
+        n.stand.update(ntex, ntex.height * ns, false, n.x, n.y)
+      }
     }
     // 感情吹き出し (#937) の置き場所: 人物の表示上端の中央（人物が出ていなければ null）
     const heads: EmotionHeads = { player: { x: pos.x, y: pos.y - tex.height * s }, companion: null }
@@ -2243,6 +2266,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     battleTransition.cancel()
     playerStand?.destroy()
     companionStand?.destroy()
+    for (const list of sceneNpcs.values()) for (const n of list) n.stand?.destroy()
     window.removeEventListener('keydown', onMenuKey)
     window.removeEventListener('pointerdown', onPointerBegin, true)
     window.removeEventListener('keydown', onKeyDown)
