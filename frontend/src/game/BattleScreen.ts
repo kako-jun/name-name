@@ -314,6 +314,8 @@ export const SIDE_LABEL_STROKE_COLOR = 0x000000
 const NAME_FONT_SIZE = 18
 const COMMAND_FONT_SIZE = 18
 const LOG_FONT_SIZE = 16
+/** FF 式メッセージ窓（updateMessageWindow）専用の文字サイズ。1 行のまま大きくする (#1148)。ログ行（LOG_FONT_SIZE）は変えない。最小の窓（2 行分 = 56px）に収まる上限の目安は約 30 */
+export const MESSAGE_WINDOW_FONT_SIZE = 22
 const HP_FONT_SIZE = 16
 
 const TEXT_STYLE_NAME = new TextStyle({
@@ -331,6 +333,11 @@ const TEXT_STYLE_COMMAND = new TextStyle({
 const TEXT_STYLE_LOG = new TextStyle({
   fontFamily: "'Noto Sans JP', sans-serif",
   fontSize: LOG_FONT_SIZE,
+  fill: TEXT_COLOR,
+})
+const TEXT_STYLE_MESSAGE = new TextStyle({
+  fontFamily: "'Noto Sans JP', sans-serif",
+  fontSize: MESSAGE_WINDOW_FONT_SIZE,
   fill: TEXT_COLOR,
 })
 const TEXT_STYLE_HP = new TextStyle({
@@ -1222,7 +1229,7 @@ export class BattleScreen extends Container {
     for (let i = 0; i < s.party.length; i++) this.addStatusRow()
     if (this.presentation === 'ff') {
       // FF 式メッセージ窓の言葉 (#745)。ログ帯の上に中央寄せで置く。ログ行は ff では使わない
-      const m = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_LOG) })
+      const m = new PixiText({ text: '', style: this.themedStyle(TEXT_STYLE_MESSAGE) })
       m.anchor.set(0.5, 0.5)
       m.visible = false
       this.messageText = m
@@ -3339,7 +3346,7 @@ export class BattleScreen extends Container {
     m.visible = word !== null
     if (word === null) return
     const r = this.messageRect
-    m.text = fitLabel(word, Math.max(0, r.w - 24), LOG_FONT_SIZE)
+    m.text = fitLabel(word, Math.max(0, r.w - 24), MESSAGE_WINDOW_FONT_SIZE)
     m.position.set(r.x + r.w / 2, r.y + r.h / 2)
   }
 
