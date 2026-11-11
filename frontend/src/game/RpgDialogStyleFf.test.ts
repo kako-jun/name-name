@@ -222,6 +222,16 @@ describe.each([
       expect(box.getBoxRect().y).toBe(computeFfDialogRect(screen.w, screen.h).y)
       box.dispose()
     })
+    it("'ff' の窓は ff-blue のまま（一枚絵フィールドの window_style 連動 #1147 の影響を受けない）", async () => {
+      const box = await initWith('ff')
+      const i = box as unknown as {
+        ffBands: { context: { instructions: unknown[] } }
+        dialogText: { style: { dropShadow: unknown } }
+      }
+      expect(i.ffBands.context.instructions.length).toBeGreaterThan(0) // 青い帯が描かれている
+      expect(i.dialogText.style.dropShadow).toBeTruthy() // 文字の影あり
+      box.dispose()
+    })
     it("'adv'・'novel'・未知値・null・未指定は従来の窓（ff にならない）", async () => {
       for (const v of ['adv', 'novel', 'toheart', null, undefined]) {
         const box = await initWith(v)

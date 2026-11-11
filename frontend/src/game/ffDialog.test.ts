@@ -146,6 +146,35 @@ describe('fieldDialogOptions (#840)', () => {
   })
 })
 
+describe('fieldDialogOptions の windowStyle (#1147)', () => {
+  it('dialogStyle なしなら windowStyle を渡しても ffWindowStyle は出ない（従来の窓）', () => {
+    for (const w of ['dark', 'ff-blue'] as const) {
+      const o = fieldDialogOptions({ windowStyle: w })
+      expect(o).toEqual({})
+      expect('ffWindowStyle' in o).toBe(false)
+    }
+  })
+  it('ff + windowStyle 指定なら ffWindowStyle がそのまま出る', () => {
+    expect(fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'dark' })).toEqual({
+      ffWindow: true,
+      ffWindowStyle: 'dark',
+      msPerChar: 30,
+    })
+    expect(fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'ff-blue' }).ffWindowStyle).toBe(
+      'ff-blue'
+    )
+  })
+  it('ff で windowStyle 未指定なら ffWindowStyle のキーが無い（DialogBox 既定の ff-blue）', () => {
+    const o = fieldDialogOptions({ dialogStyle: 'ff' })
+    expect('ffWindowStyle' in o).toBe(false)
+  })
+  it('windowStyle は dialogMsPerChar と独立（速さは windowStyle で変わらない）', () => {
+    expect(
+      fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'dark', dialogMsPerChar: 0 })
+    ).toEqual({ ffWindow: true, ffWindowStyle: 'dark', msPerChar: 0 })
+  })
+})
+
 const chars = (n: number) => (p: string) => {
   // 1 行 n 文字で折り返す単純な wrap（半角も全角も 1 文字 = 1 幅）
   const out: string[] = []

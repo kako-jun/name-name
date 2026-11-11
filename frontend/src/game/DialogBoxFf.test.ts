@@ -14,7 +14,7 @@ vi.mock('./FontLoader', () => ({
 import { DialogBox } from './DialogBox'
 import { FF_DIALOG_MS_PER_CHAR, computeFfDialogRect } from './ffDialog'
 import { FieldConversation } from './fieldScript'
-import { FF_BLUE_TEXT_SHADOW } from './windowStyle'
+import { FF_BLUE_TEXT_SHADOW, PANEL_BG, PANEL_BG_ALPHA, PANEL_STROKE } from './windowStyle'
 
 interface Internals {
   ticker: Ticker
@@ -228,6 +228,84 @@ describe('DialogBox 非 ff は従来どおり (#840)', () => {
     expect(internals(box).ffBands).toBeNull() // 非 ff は帯・mask を作らない（従来の子構成のまま）
     box.redraw(1280, 720)
     expect(box.getBoxRect().y).toBe(720 - Math.round(600 * 0.22) - 20)
+    box.dispose()
+  })
+})
+
+// 一枚絵フィールドの会話窓は window_style に連動する (#1147)。
+// dark = 戦闘窓と同じ黒単色＋白枠（帯・マスクなし・文字と▼の影なし）/ ff-blue = 従来の青い帯
+interface GraphicsInstr {
+  action: string
+  data: { style?: { color?: number; alpha?: number; width?: number } }
+}
+interface StyleInternals extends Internals {
+  bg: { visible: boolean; context: { instructions: GraphicsInstr[] } }
+  ffBands: { visible: boolean; context: { instructions: GraphicsInstr[] } } | null
+  ffMask: { context: { instructions: GraphicsInstr[] } } | null
+  ffCursor: { style: { dropShadow: unknown } } | null
+}
+const styleInternals = (b: DialogBox): StyleInternals => b as unknown as StyleInternals
+
+function makeStyled(ffWindowStyle?: 'dark' | 'ff-blue'): DialogBox {
+  const box = new DialogBox({
+    screenWidth: 800,
+    screenHeight: 600,
+    boxHeight: 132,
+    fontSize: 24,
+    bgColor: 0x000033,
+    nameSeparateBox: false,
+    ffWindow: true,
+    ...(ffWindowStyle ? { ffWindowStyle } : {}),
+  })
+  box.hide()
+  styleInternals(box).ticker.stop()
+  box.show('', 'テキスト')
+  return box
+}
+
+describe('DialogBox ffWindowStyle (#1147)', () => {
+  it('dark: 帯とマスクに描画がなく、bg が PANEL_BG・alpha 0.85 の塗りと白 2px 枠だけ', () => {
+    const box = makeStyled('dark')
+    const i = styleInternals(box)
+    expect(i.ffBands?.context.instructions).toHaveLength(0)
+    expect(i.ffMask?.context.instructions).toHaveLength(0)
+    const ins = i.bg.context.instructions
+    const fill = ins.find((x) => x.action === 'fill')
+    const stroke = ins.find((x) => x.action === 'stroke')
+    expect(fill?.data.style).toMatchObject({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+    expect(PANEL_BG_ALPHA).toBe(0.85)
+    expect(stroke?.data.style).toMatchObject({ color: PANEL_STROKE, width: 2 })
+    expect(box.isBackgroundVisible).toBe(true)
+    box.dispose()
+  })
+  it('dark: 本文にも ▼ にも文字の影がない', () => {
+    const box = makeStyled('dark')
+    expect(internals(box).dialogText.style.dropShadow).toBeFalsy()
+    expect(styleInternals(box).ffCursor?.style.dropShadow).toBeFalsy()
+    box.dispose()
+  })
+  it('ff-blue: 帯とマスクが描かれ、本文と ▼ に黒い影がある', () => {
+    const box = makeStyled('ff-blue')
+    const i = styleInternals(box)
+    expect(i.ffBands?.context.instructions.length).toBeGreaterThan(0)
+    expect(i.ffMask?.context.instructions.length).toBeGreaterThan(0)
+    expect(i.dialogText.style.dropShadow).toMatchObject({ color: FF_BLUE_TEXT_SHADOW.color })
+    expect(i.ffCursor?.style.dropShadow).toMatchObject({ color: FF_BLUE_TEXT_SHADOW.color })
+    box.dispose()
+  })
+  it('既定（ffWindowStyle 未指定）は ff-blue で、明示 ff-blue と同じ見た目', () => {
+    const def = styleInternals(makeStyled())
+    const blue = styleInternals(makeStyled('ff-blue'))
+    expect(def.ffBands?.context.instructions.length).toBeGreaterThan(0)
+    expect(def.ffBands?.context.instructions.length).toBe(blue.ffBands?.context.instructions.length)
+    expect(def.dialogText.style.dropShadow).toMatchObject({ color: FF_BLUE_TEXT_SHADOW.color })
+  })
+  it('dark でも hide で背景が隠れ、show で戻る', () => {
+    const box = makeStyled('dark')
+    box.hide()
+    expect(box.isBackgroundVisible).toBe(false)
+    box.show('', 'テキスト')
+    expect(box.isBackgroundVisible).toBe(true)
     box.dispose()
   })
 })
