@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Event, EventDocument, EventScene } from '../types'
 import { parseMarkdown } from '../wasm/parser'
-import { collectFieldNotation, type FieldSourceDoc } from './fieldNotation'
+import { collectFieldNotation, collectSceneMoveTargets, type FieldSourceDoc } from './fieldNotation'
+import type { FieldScriptEvents } from '../game/fieldScript'
 
 const map = (bg = 'bg.webp'): Event => ({ FieldMap: { background: bg, mask: 'm.webp' } })
 const edge = (target: string): Event => ({
@@ -591,5 +592,250 @@ describe('collectFieldNotation: [トリガー]・[場面移動:] (#1072)', () =>
       { auto: true, scene: '始まり' },
     ])
     expect(warnings).toEqual([])
+  })
+})
+
+describe('collectSceneMoveTargets: 戦闘の 次= を辿る (#1143)', () => {
+  type Cmd = FieldScriptEvents extends Map<string, infer V> ? V[number] : never
+  const move = (s: string): Cmd => ({ type: 'SceneMove', scene: s }) as Cmd
+  const battle = (id: string): Cmd => ({ type: 'Battle', id }) as Cmd
+  const evs = (o: Record<string, Cmd[]>): FieldScriptEvents => new Map(Object.entries(o))
+  const rules = (o: Record<string, string[]>) => new Map(Object.entries(o))
+
+  it('場面移動だけのイベントは従来どおり行き先を返す', () => {
+    expect(collectSceneMoveTargets(['a'], evs({ a: [move('B')] }), rules({}))).toEqual(['B'])
+  })
+
+  it.each([
+    ['勝利時', '勝利時: 次=after'],
+    ['敗北時', '敗北時: 次=after'],
+    ['中断時', '中断時: 次=after'],
+    ['逃走時', '逃走時: 次=after'],
+  ])('%s の 次= が指すイベントの場面移動を拾う', (_n, line) => {
+    const r = collectSceneMoveTargets(
+      ['a'],
+      evs({ a: [battle('b')], after: [move('B')] }),
+      rules({ b: ['敵: x', line] })
+    )
+    expect(r).toEqual(['B'])
+  })
+
+  it('4 つの終わり方がそれぞれ別イベントを指すとき全部拾う', () => {
+    const r = collectSceneMoveTargets(
+      ['a'],
+      evs({ a: [battle('b')], w: [move('W')], l: [move('L')], i: [move('I')], e: [move('E')] }),
+      rules({ b: ['勝利時: 次=w', '敗北時: 次=l', '中断時: 次=i', '逃走時: 次=e'] })
+    )
+    expect([...r].sort()).toEqual(['E', 'I', 'L', 'W'])
+  })
+
+  it('次= が無い戦闘宣言は何も足さない', () => {
+    const r = collectSceneMoveTargets(
+      ['a'],
+      evs({ a: [battle('b'), move('B')] }),
+      rules({ b: ['勝利時: フラグ=f=true'] })
+    )
+    expect(r).toEqual(['B'])
+  })
+
+  it('連鎖 イベント→戦闘→イベント→戦闘→場面移動 を辿る', () => {
+    const r = collectSceneMoveTargets(
+      ['a'],
+      evs({ a: [battle('b1')], mid: [battle('b2')], end: [move('Z')] }),
+      rules({ b1: ['勝利時: 次=mid'], b2: ['中断時: 次=end'] })
+    )
+    expect(r).toEqual(['Z'])
+  })
+
+  it('互いに指す循環(イベント↔戦闘)で止まる', () => {
+    const r = collectSceneMoveTargets(
+      ['a'],
+      evs({ a: [battle('b1'), move('A')], c: [battle('b2'), move('C')] }),
+      rules({ b1: ['勝利時: 次=c'], b2: ['勝利時: 次=a'] })
+    )
+    expect([...r].sort()).toEqual(['A', 'C'])
+  })
+
+  it('自分自身を指す 次= でも止まる', () => {
+    const r = collectSceneMoveTargets(
+      ['a'],
+      evs({ a: [battle('b')] }),
+      rules({ b: ['敗北時: 次=a'] })
+    )
+    expect(r).toEqual([])
+  })
+
+  it('戦闘宣言が無い・次= の先のイベントが無いときは落ちずに無視する', () => {
+    expect(
+      collectSceneMoveTargets(['a'], evs({ a: [battle('none'), move('B')] }), rules({}))
+    ).toEqual(['B'])
+    expect(
+      collectSceneMoveTargets(['a'], evs({ a: [battle('b')] }), rules({ b: ['勝利時: 次=ghost'] }))
+    ).toEqual([])
+    expect(collectSceneMoveTargets(['nope'], evs({}), rules({}))).toEqual([])
+  })
+
+  it('壊れた rules 行があっても落ちない', () => {
+    expect(
+      collectSceneMoveTargets(
+        ['a'],
+        evs({ a: [battle('b')] }),
+        rules({ b: ['???', '勝利時: 次=', 'キー: 値'] })
+      )
+    ).toEqual([])
+  })
+})
+
+describe('collectFieldNotation: 戦闘の 次= 経由の [場面移動:] (#1143)', () => {
+  const rpgEvent = (name: string, ...cmds: Array<{ type: string; [k: string]: unknown }>): Event =>
+    ({ RpgEvent: { name, commands: cmds } }) as unknown as Event
+  const battleDef = (id: string, ...rules: string[]): Event =>
+    ({ BattleScript: { id, rules } }) as unknown as Event
+  const trig = (sceneName: string): Event => ({ RpgTrigger: { scene: sceneName, auto: true } })
+  const npc = (id: string, sceneName: string): Event =>
+    ({
+      Npc: { id, name: id, x: 1, y: 2, color: 0, message: ['hi'], scene: sceneName },
+    }) as never
+  const mv = (s: string) => ({ type: 'SceneMove', scene: s })
+  const bt = (id: string) => ({ type: 'Battle', id })
+  const collect = (docs: FieldSourceDoc[]) =>
+    collectFieldNotation({ docs, entryPath: 'a.md', entry: { sceneId: 's1' } })
+
+  it('auto トリガー→戦闘→中断時 次= のイベントの [場面移動:] で B が scenes に入る', () => {
+    const { notation, warnings } = collect([
+      src(
+        'a.md',
+        scene(
+          's1',
+          map(),
+          trig('start'),
+          rpgEvent('start', bt('b')),
+          battleDef('b', '敵: x', '中断時: 次=after'),
+          rpgEvent('after', mv('B'))
+        ),
+        scene('B', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 'B'])
+    expect(warnings).toEqual([])
+  })
+
+  it('NPC の scene= 経由でも同じ連鎖を辿る', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene(
+          's1',
+          map(),
+          npc('n1', 'talk'),
+          rpgEvent('talk', bt('b')),
+          battleDef('b', '勝利時: 次=after'),
+          rpgEvent('after', mv('B'))
+        ),
+        scene('B', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 'B'])
+  })
+
+  it('戦闘宣言・次= の先のイベントが別 md にあっても拾う', () => {
+    const { notation } = collect([
+      src('a.md', scene('s1', map(), trig('start'), rpgEvent('start', bt('b')))),
+      src('b.md', scene('h1', battleDef('b', '敗北時: 次=after'))),
+      src('c.md', scene('h2', rpgEvent('after', mv('B'))), scene('B', map())),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 'B'])
+  })
+
+  it('同 id の戦闘宣言は先勝ち(後の宣言の 次= は拾わない)', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene(
+          's1',
+          map(),
+          trig('start'),
+          rpgEvent('start', bt('b')),
+          battleDef('b', '勝利時: 次=e1'),
+          battleDef('b', '勝利時: 次=e2'),
+          rpgEvent('e1', mv('B')),
+          rpgEvent('e2', mv('C'))
+        ),
+        scene('B', map()),
+        scene('C', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 'B'])
+  })
+
+  it('戦闘宣言が無い [戦闘: id] でも閉包は壊れない', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene('s1', map(), trig('start'), rpgEvent('start', bt('none'), mv('B'))),
+        scene('B', map())
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 'B'])
+  })
+
+  it('行き先が閉包外のとき exits / missingScenes に入る', () => {
+    const { notation } = collect([
+      src(
+        'a.md',
+        scene(
+          's1',
+          map(),
+          trig('start'),
+          rpgEvent('start', bt('b')),
+          battleDef('b', '勝利時: 次=e1', '敗北時: 次=e2'),
+          rpgEvent('e1', mv('novel')),
+          rpgEvent('e2', mv('ghost'))
+        ),
+        scene('novel')
+      ),
+    ])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1'])
+    expect(notation.exits).toEqual(['novel'])
+    expect(notation.missingScenes).toEqual(['ghost'])
+  })
+
+  it('実 wasm: [戦闘] の 中断時: 次=after → [場面移動:] の行き先が scenes に入る', async () => {
+    const md = [
+      '---',
+      'engine: name-name',
+      'chapter: 1',
+      'title: t',
+      '---',
+      '',
+      '## s1: 一',
+      '',
+      '[フィールドマップ 背景=a.webp マスク=am.webp]',
+      '[プレイヤー @1,2 向き=下]',
+      '[トリガー auto scene=始まり]',
+      '',
+      '[戦闘 b]',
+      '名前: 試合',
+      '敵: x',
+      '中断時: 次=後日談',
+      '[/戦闘]',
+      '',
+      '[イベント 始まり]',
+      '> 勝負。',
+      '[戦闘: b]',
+      '[/イベント]',
+      '',
+      '[イベント 後日談]',
+      '[場面移動: s2 @5,6 向き=上]',
+      '[/イベント]',
+      '',
+      '## s2: 二',
+      '',
+      '[フィールドマップ 背景=b.webp マスク=bm.webp]',
+      '[プレイヤー @3,4 向き=下]',
+      '',
+    ].join('\n')
+    const { notation } = collect([{ path: 'a.md', doc: await parseMarkdown(md) }])
+    expect(notation.scenes.map((s) => s.id)).toEqual(['s1', 's2'])
   })
 })
