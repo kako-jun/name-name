@@ -1274,8 +1274,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   let insideTriggers: Set<number> = new Set()
   /** once のトリガーを起こし済みか（`<場面>#<添字>`）。メモリ上だけで、セーブには入らない */
   const onceFired = new Set<string>()
-  /** セーブから再開した直後の最初の場面だけ、auto を起こさない（判定は triggerRuntime.autoTriggers） */
-  let resumedStart = !!resumed
+  /** セーブから再開した直後の最初の場面だけ、auto を起こさない（判定は triggerRuntime.autoTriggers）。セーブの `field.fireAuto` があれば起こす (#1155) */
+  let resumedStart = !!resumed && !resumed.field?.fireAuto
   const pumpTriggers = (): void => {
     // conversation.active も見る: start() は active のとき黙って戻り、onEnd が呼ばれず eventRun が戻らなくなるため
     if (isTalking() || conversation.active) return
