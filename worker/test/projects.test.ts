@@ -115,8 +115,8 @@ describe("splitRepo()", () => {
   });
 });
 
-describe("sit-by-me の登録 (#1135)", () => {
-  it("title・repo・scriptsDir(play)が登録されている(#1144)", async () => {
+describe("sit-by-me の登録 (#1135, scriptsDir は #1144)", () => {
+  it("title・repo・scriptsDir(play)が登録されている", async () => {
     const req = new Request("https://name-name-api.workers.dev/api/projects");
     const res = await worker.fetch(req, ENV, ctx);
     const body = (await res.json()) as {
