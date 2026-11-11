@@ -98,8 +98,8 @@ export function supportedCommands(
 
 /**
  * 戦闘結果の `次=<イベント名>` (#1077) の行き先のコマンド列を選ぶ（EventRunner の `EventBattleHost.findEvent`）。
- * トリガーと同じく固定の `line` が無いので、イベントが無い・実行できるコマンドが残らないときは警告して undefined
- * （実行器は「イベントが無い」と警告して残りを続ける）
+ * 未対応のコマンドは警告して取り除く。台詞・場面移動・戦闘・NPC移動が 1 つも残らないとき、およびイベントが無いときは undefined
+ * （この関数は「イベントが無い」警告を出さない。実行器が「次= のイベントが無い」として警告し、現在のイベントの残りを続ける）
  */
 export function resolveBattleNextCommands(
   name: string,
@@ -112,8 +112,9 @@ export function resolveBattleNextCommands(
 }
 
 /**
- * トリガー (#1072) から実行するコマンド列を選ぶ。NPC と違い固定の `line` が無いので、実行できるコマンドが 1 つも残らない／
- * イベントが無いときは警告して undefined（そのトリガーは何も起こさない）
+ * トリガー (#1072) から実行するコマンド列を選ぶ。NPC と違い固定の `line` が無いので、実行できるコマンド（台詞・ナレーション・
+ * 場面移動・戦闘・NPC移動）が 1 つも残らない／イベントが無いときは警告して undefined（そのトリガーは何も起こさない）。
+ * 未対応のコマンドは警告して取り除く
  */
 export function resolveTriggerCommands(
   name: string,
