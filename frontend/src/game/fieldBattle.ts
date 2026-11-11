@@ -28,6 +28,8 @@ import { parseEncounterGroup, resolveEncounterGroup } from './enemyGroup'
 import { toSkillExecutions } from './enemyAi'
 import { parseBattleScript } from './battleScript'
 import { hasOwn } from './ownProperty'
+import type { EventBattleHost } from './eventRunner'
+import { resolveBattleNextCommands, type FieldScriptEvents } from './fieldScript'
 import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
 import { normalizeBattleRow } from './battleLayout'
@@ -769,17 +771,17 @@ export interface BattleFlagUpdates {
  * 戦闘結果の `フラグ=` (#1077) のうち、一枚絵フィールドのフラグへ反映できるものを選ぶ純粋関数。
  * 一枚絵フィールドのフラグは設定 JSON の `flags` で宣言した真偽値だけなので、**未宣言の名前**と
  * **真偽値でない値（数値・文字列）**は反映せず警告に回す（ノベルの `[フラグ:]` のような数値・文字列は持てない）。
- * 宣言の判定は継承の名前（`__proto__` など）を弾く
+ * `currentFlags` は実行時のフラグ（宣言済みの名前がキーで揃っている。値は見ない）。宣言の判定は継承の名前（`__proto__` など）を弾く
  */
 export function planBattleFlagUpdates(
-  declared: Readonly<Record<string, boolean>>,
+  currentFlags: Readonly<Record<string, boolean>>,
   resultFlags: Readonly<Record<string, boolean | number | string>> | undefined
 ): BattleFlagUpdates {
   const out: BattleFlagUpdates = { set: [], warnings: [] }
   if (!resultFlags) return out
   for (const name of Object.keys(resultFlags)) {
     const value = resultFlags[name]
-    if (!hasOwn(declared, name)) {
+    if (!hasOwn(currentFlags, name)) {
       out.warnings.push(`戦闘結果のフラグ '${name}' は flags に宣言が無い（反映しません）`)
     } else if (typeof value !== 'boolean') {
       out.warnings.push(
@@ -790,4 +792,29 @@ export function planBattleFlagUpdates(
     }
   }
   return out
+}
+
+/**
+ * 一枚絵フィールドの `EventBattleHost` (#1077)。戦闘を始める `start` の結果が返ったら、`次=` の検索より前に
+ * 結果の `フラグ=` を `setFlag` へ反映し（選別は `planBattleFlagUpdates`。反映しない理由は `warn`）、
+ * `次=` の行き先は `resolveBattleNextCommands` で選ぶ。startFieldGame の配線とテストが同じ関数を踏む
+ */
+export function createFieldBattleHost(args: {
+  start: (id: string) => Promise<BattleResult | null>
+  flags: Readonly<Record<string, boolean>>
+  setFlag: (name: string, value: boolean) => unknown
+  events: FieldScriptEvents | undefined
+  warn?: (msg: string) => void
+}): EventBattleHost {
+  const { start, flags, setFlag, events, warn = (m) => console.warn(m) } = args
+  return {
+    startBattle: (id) =>
+      start(id).then((result) => {
+        const plan = planBattleFlagUpdates(flags, result?.script?.flags)
+        for (const w of plan.warnings) warn(`[field] ${w}`)
+        for (const { name, value } of plan.set) setFlag(name, value)
+        return result
+      }),
+    findEvent: (name) => resolveBattleNextCommands(name, events, warn),
+  }
 }

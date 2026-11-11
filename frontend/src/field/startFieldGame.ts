@@ -17,7 +17,7 @@ import {
 } from './layers'
 import { BattleEngine, type BattleScriptOptions } from '../game/battleEngine'
 import type { BattleResult } from '../game/loot'
-import { planBattleFlagUpdates, planEventBattle } from '../game/fieldBattle'
+import { createFieldBattleHost, planEventBattle } from '../game/fieldBattle'
 import { once } from '../game/once'
 import { createNpcMoveQueue, pickNpcByName, resolveNpcSpeed } from '../game/fieldNpcMove'
 import { BattleScreen } from '../game/BattleScreen'
@@ -116,7 +116,6 @@ import {
   collectFieldBattleScripts,
   loadFieldScript,
   resolveNpcCommands,
-  resolveBattleNextCommands,
   resolveTriggerCommands,
   type FieldScriptEvents,
 } from '../game/fieldScript'
@@ -874,27 +873,19 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     }
     return npcMoves.start(npc, { x, y }, resolveNpcSpeed(speed) * config.encounter.stepDistance)
   }
-  /** 戦闘結果の `フラグ=` を一枚絵フィールドのフラグへ反映する (#1077。選別は fieldBattle.planBattleFlagUpdates) */
-  const applyBattleResultFlags = (result: BattleResult | null): void => {
-    const plan = planBattleFlagUpdates(flags, result?.script?.flags)
-    for (const w of plan.warnings) console.warn(`[field] ${w}`)
-    for (const { name, value } of plan.set) setFlag(name, value)
-  }
   // 会話の実行器 (#841 段階2)。NpcMove (#1073)・Battle (#1073)・SceneMove (#1072) は下のホストが実行する
   const conversation = new FieldConversation(
     dialogBox,
     new EventRunner(
       dialogBox,
       { moveNpcTo },
-      // 戦闘の結果（BattleResult。`script` に結果フラグ・`次=`）: フラグはここで反映し、`次=` への分岐は実行器が findEvent で行う (#1077)
-      {
-        startBattle: (id) =>
-          startEventBattle(id).then((result) => {
-            applyBattleResultFlags(result)
-            return result
-          }),
-        findEvent: (name) => resolveBattleNextCommands(name, scriptEvents),
-      },
+      // 戦闘の結果（`script` の結果フラグ・`次=`）: フラグの反映と `次=` の行き先選びは createFieldBattleHost (#1077)
+      createFieldBattleHost({
+        start: (id) => startEventBattle(id),
+        flags,
+        setFlag,
+        events: scriptEvents,
+      }),
       createFieldEmotionHost(
         () => ({
           emotions: emotionSheets ?? {},
