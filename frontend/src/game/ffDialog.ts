@@ -81,7 +81,7 @@ export function normalizeMsPerChar(raw: unknown): number | undefined {
 export function fieldDialogOptions(c: {
   dialogStyle?: DialogStyle
   dialogMsPerChar?: number
-  /** 窓の配色 (#1147)。一枚絵フィールドが `window_style`（戦闘窓と同じ値）を渡す。未指定は DialogBox の既定（ff-blue） */
+  /** 窓の配色 (#1147)。一枚絵フィールドが `window_style`（戦闘窓と同じ値）を渡す。未指定は DialogBox の既定（ff-blue）のまま。一枚絵フィールドの dark 既定は呼び出し側（startFieldGame）が `?? 'dark'` で与える意図的な二段構えで、DialogBox 直接利用・RPG 経路（TopDown / Raycast）は従来どおり ff-blue */
   windowStyle?: WindowStyle
 }): {
   ffWindow?: true
