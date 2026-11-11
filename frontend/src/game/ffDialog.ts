@@ -5,6 +5,7 @@
  * (`windowStyle.ts`, #744) をそのまま使う。見た目は実機でライブ調整するので、調整対象の定数はここに集める。
  */
 import { BATTLE_LOG_MS_PER_CHAR } from './battleLogTypewriter'
+import type { WindowStyle } from './windowStyle'
 
 /** 会話窓のスタイル。`ff` = 画面上部固定・ff-blue・1 文字ずつ。未指定（undefined）は従来の下部の窓 */
 export type DialogStyle = 'ff'
@@ -56,6 +57,78 @@ export function computeFfDialogRect(screenWidth: number, screenHeight: number): 
   }
 }
 
+// ---------------------------------------------------------------------------
+// 一枚絵フィールドの会話窓の配置 (#1153)。設計の決定: 幅 94%W・高さ 28%H・画面端から 3%H。
+// 主人公の足元 y が H/2 より下なら上側、それ以外（ちょうど中央を含む）は下側。アクスタと重なる側は避ける
+// ---------------------------------------------------------------------------
+
+export const FIELD_DIALOG_WIDTH_RATIO = 0.94
+export const FIELD_DIALOG_HEIGHT_RATIO = 0.28
+export const FIELD_DIALOG_EDGE_RATIO = 0.03
+/** 窓内の上下左右の余白（画面高さ比）。名前行＋本文3行が 28%H に収まる値 */
+export const FIELD_DIALOG_PADDING_RATIO = 0.02
+/** 本文・名前の文字サイズ（画面高さ比）。(名前1行+本文3行)×行高1.6＋上下余白が 28%H 以下になる値 */
+export const FIELD_DIALOG_FONT_RATIO = 0.034
+/** 上下の切り替えスライドの長さ(ms) */
+export const FIELD_DIALOG_SLIDE_MS = 150
+/** 残り時間表示（左上 0〜14%W）と重ならないよう、上側表示＋時間制限中に名前を始める x（画面幅比） */
+export const FIELD_DIALOG_TIMED_NAME_X_RATIO = 0.16
+
+export type DialogSide = 'top' | 'bottom'
+export interface DialogRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export function fieldDialogFontSize(screenHeight: number): number {
+  const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : 0
+  return Math.max(14, Math.round(sh * FIELD_DIALOG_FONT_RATIO))
+}
+
+/** 指定の側の窓の矩形。不変条件: 画面内に収まる。非有限・負の入力は 0 扱い */
+export function computeFieldDialogRect(
+  screenWidth: number,
+  screenHeight: number,
+  side: DialogSide
+): FfDialogRect {
+  const sw = Number.isFinite(screenWidth) && screenWidth > 0 ? screenWidth : 0
+  const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : 0
+  const width = Math.round(sw * FIELD_DIALOG_WIDTH_RATIO)
+  const height = Math.round(sh * FIELD_DIALOG_HEIGHT_RATIO)
+  const edge = Math.round(sh * FIELD_DIALOG_EDGE_RATIO)
+  return {
+    x: Math.round((sw - width) / 2),
+    y: side === 'top' ? edge : sh - edge - height,
+    width,
+    height,
+    padding: Math.max(4, Math.round(sh * FIELD_DIALOG_PADDING_RATIO)),
+  }
+}
+
+function rectsOverlap(a: DialogRect, b: DialogRect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+/**
+ * 足元 y（接地点）と画面の大きさから窓を出す側を決める。足元が H/2 より下なら上側、それ以外（ちょうど中央も）は下側。
+ * 選んだ側の窓が `avatar`（主人公の表示矩形）と重なり、反対側が重ならないなら反対側。両方重なるなら上下判定のまま。
+ */
+export function pickDialogSide(
+  footY: number,
+  screenWidth: number,
+  screenHeight: number,
+  avatar: DialogRect | null
+): DialogSide {
+  const preferred: DialogSide = footY > screenHeight / 2 ? 'top' : 'bottom'
+  if (!avatar) return preferred
+  const other: DialogSide = preferred === 'top' ? 'bottom' : 'top'
+  const hit = (side: DialogSide) =>
+    rectsOverlap(computeFieldDialogRect(screenWidth, screenHeight, side), avatar)
+  return hit(preferred) && !hit(other) ? other : preferred
+}
+
 /** `dialogMsPerChar` の上限(ms)。これを超える値は誤記とみなす（1 文字に 1 秒以上かかる窓は使えない） */
 export const FF_DIALOG_MS_PER_CHAR_MAX = 1000
 
@@ -74,18 +147,29 @@ export function normalizeMsPerChar(raw: unknown): number | undefined {
 
 /**
  * 設定（`dialogStyle` / `dialogMsPerChar`）から DialogBox に渡す追加オプションを作る。
- * 未指定なら空（キーが無い＝従来の窓・既定の速さ）。ff なら ffWindow と既定速度。
+ * 未指定なら空（キーが無い＝従来の窓・既定の速さ）。ff なら ffWindow と既定速度。`windowStyle` が渡されたら（設計どおりの窓の指定）ff の窓にして ffWindowStyle も渡す。
  * `dialogMsPerChar` は指定があれば ff の既定より優先し、0 は即時表示。
  */
-export function fieldDialogOptions(c: { dialogStyle?: DialogStyle; dialogMsPerChar?: number }): {
+export function fieldDialogOptions(c: {
+  dialogStyle?: DialogStyle
+  dialogMsPerChar?: number
+  /**
+   * 窓の配色 (#1147・#1153)。一枚絵フィールドが `window_style` を渡したとき（= 設計どおりの窓にする指定）だけ入れる。
+   * 入っていれば ff の窓（ffWindow・1 文字ずつ）にして配色を渡す。配置（上下・名前）は呼び出し側が ffPlacement を足して有効にする。
+   * 未指定は従来どおり（ff の指定がなければ従来の窓・ff なら上部固定の ff-blue）
+   */
+  windowStyle?: WindowStyle
+}): {
   ffWindow?: true
+  ffWindowStyle?: WindowStyle
   msPerChar?: number
 } {
   return {
-    ...(c.dialogStyle === 'ff' ? { ffWindow: true as const } : {}),
+    ...(c.dialogStyle === 'ff' || c.windowStyle ? { ffWindow: true as const } : {}),
+    ...(c.windowStyle ? { ffWindowStyle: c.windowStyle } : {}),
     ...(c.dialogMsPerChar !== undefined
       ? { msPerChar: c.dialogMsPerChar }
-      : c.dialogStyle === 'ff'
+      : c.dialogStyle === 'ff' || c.windowStyle
         ? { msPerChar: FF_DIALOG_MS_PER_CHAR }
         : {}),
   }
