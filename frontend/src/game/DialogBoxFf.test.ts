@@ -309,3 +309,89 @@ describe('DialogBox ffWindowStyle (#1147)', () => {
     box.dispose()
   })
 })
+
+// 非 ffWindow（一枚絵フィールドの既定の窓）も ffWindowStyle で連動する (#1147)。
+// dark は窓本体と名札の塗り・枠だけが戦闘窓の黒に変わり、寸法・位置・文字の影は従来どおり
+interface PlainInternals extends Internals {
+  bg: { visible: boolean; context: { instructions: GraphicsInstr[] } }
+  nameBox: { visible: boolean; context: { instructions: GraphicsInstr[] } }
+}
+const plainInternals = (b: DialogBox): PlainInternals => b as unknown as PlainInternals
+
+const PLAIN_BG = 0x000033
+function makePlain(ffWindowStyle?: 'dark' | 'ff-blue'): DialogBox {
+  const box = new DialogBox({
+    screenWidth: 800,
+    screenHeight: 600,
+    boxHeight: 132,
+    fontSize: 24,
+    bgColor: PLAIN_BG,
+    nameColor: 0xffe066,
+    ...(ffWindowStyle ? { ffWindowStyle } : {}),
+  })
+  box.hide()
+  plainInternals(box).ticker.stop()
+  box.show('', 'テキスト')
+  // 名札の測定は jsdom の canvas が null で落ちるので、幅を直接渡して名札の描画だけを走らせる
+  ;(box as unknown as { drawNameBox(w: number): void }).drawNameBox(80)
+  return box
+}
+const styleOf = (ins: GraphicsInstr[], action: string) =>
+  ins.find((x) => x.action === action)?.data.style
+
+describe('DialogBox 非 ffWindow の ffWindowStyle (#1147)', () => {
+  it('dark: 窓本体が PANEL_BG・alpha 0.85 の塗りと白 2px 枠、名札も同じ黒・白枠', () => {
+    const box = makePlain('dark')
+    const i = plainInternals(box)
+    expect(styleOf(i.bg.context.instructions, 'fill')).toMatchObject({
+      color: PANEL_BG,
+      alpha: PANEL_BG_ALPHA,
+    })
+    expect(styleOf(i.bg.context.instructions, 'stroke')).toMatchObject({
+      color: PANEL_STROKE,
+      width: 2,
+    })
+    expect(styleOf(i.nameBox.context.instructions, 'fill')).toMatchObject({
+      color: PANEL_BG,
+      alpha: PANEL_BG_ALPHA,
+    })
+    expect(styleOf(i.nameBox.context.instructions, 'stroke')).toMatchObject({
+      color: PANEL_STROKE,
+      width: 2,
+    })
+    box.dispose()
+  })
+  it.each([['ff-blue' as const], [undefined]])(
+    '%s: 従来の紺窓（bgColor・alpha 0.92・枠 f1faee）で名札も同じ',
+    (style) => {
+      const box = makePlain(style)
+      const i = plainInternals(box)
+      for (const g of [i.bg, i.nameBox]) {
+        expect(styleOf(g.context.instructions, 'fill')).toMatchObject({
+          color: PLAIN_BG,
+          alpha: 0.92,
+        })
+        expect(styleOf(g.context.instructions, 'stroke')).toMatchObject({
+          color: 0xf1faee,
+          width: 2,
+        })
+      }
+      box.dispose()
+    }
+  )
+  it.each([['dark' as const], ['ff-blue' as const], [undefined]])(
+    '%s: 窓の位置・大きさと文字の影（なし）は従来と同じ',
+    (style) => {
+      const base = makePlain()
+      const box = makePlain(style)
+      expect(box.getBoxRect()).toEqual(base.getBoxRect())
+      expect(box.getBoxRect().y).toBe(600 - 132 - 20)
+      expect(internals(box).dialogText.style.dropShadow).toBeFalsy()
+      expect(internals(box).dialogText.x).toBe(internals(base).dialogText.x)
+      expect(internals(box).dialogText.y).toBe(internals(base).dialogText.y)
+      expect(internals(box).ffBands).toBeNull() // 非 ff は帯・mask を作らない
+      base.dispose()
+      box.dispose()
+    }
+  )
+})

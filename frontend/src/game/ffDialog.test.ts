@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import startFieldGameSrc from '../field/startFieldGame.ts?raw'
 import {
   FF_CURSOR_BLINK_MS,
   FF_DIALOG_HEIGHT_RATIO,
@@ -292,5 +293,15 @@ describe('ffCursorVisible / ffCursorReserve (#840)', () => {
     expect(ffCursorReserve(0)).toBe(0)
     expect(ffCursorReserve(NaN)).toBe(0)
     expect(ffCursorReserve(-4)).toBe(0)
+  })
+})
+
+describe('一枚絵フィールドの dark 既定の配線 (#1147)', () => {
+  // startFieldGame は PixiJS の Application 起動に依存し単体で呼べないため、ソースの配線を静的に固定する
+  // （実挙動は fieldDialogOptions と DialogBox のテストで押さえている）
+  it("startFieldGame は fieldDialogOptions に `battle.windowStyle ?? 'dark'` を渡す", () => {
+    expect(startFieldGameSrc).toMatch(
+      /fieldDialogOptions\(\{\s*\.\.\.config,\s*windowStyle:\s*config\.battle\.windowStyle \?\? 'dark'\s*\}\)/
+    )
   })
 })
