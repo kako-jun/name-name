@@ -1,6 +1,6 @@
 // #1120 (S3c): collectFieldNotation の単体テスト。手組みの EventDocument と、実 wasm 経由の parseMarkdown の両方で見る。
 import { describe, expect, it } from 'vitest'
-import type { Event, EventDocument, EventScene } from '../types'
+import type { Event, EventCommand, EventDocument, EventScene } from '../types'
 import { parseMarkdown } from '../wasm/parser'
 import { collectFieldNotation, collectSceneMoveTargets, type FieldSourceDoc } from './fieldNotation'
 import type { FieldScriptEvents } from '../game/fieldScript'
@@ -596,10 +596,9 @@ describe('collectFieldNotation: [トリガー]・[場面移動:] (#1072)', () =>
 })
 
 describe('collectSceneMoveTargets: 戦闘の 次= を辿る (#1143)', () => {
-  type Cmd = FieldScriptEvents extends Map<string, infer V> ? V[number] : never
-  const move = (s: string): Cmd => ({ type: 'SceneMove', scene: s }) as Cmd
-  const battle = (id: string): Cmd => ({ type: 'Battle', id }) as Cmd
-  const evs = (o: Record<string, Cmd[]>): FieldScriptEvents => new Map(Object.entries(o))
+  const move = (s: string): EventCommand => ({ type: 'SceneMove', scene: s }) as EventCommand
+  const battle = (id: string): EventCommand => ({ type: 'Battle', id }) as EventCommand
+  const evs = (o: Record<string, EventCommand[]>): FieldScriptEvents => new Map(Object.entries(o))
   const rules = (o: Record<string, string[]>) => new Map(Object.entries(o))
 
   it('場面移動だけのイベントは従来どおり行き先を返す', () => {
