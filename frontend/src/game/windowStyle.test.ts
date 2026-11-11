@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import battleScreenSrc from './BattleScreen.ts?raw'
+import dialogBoxSrc from './DialogBox.ts?raw'
 import {
   FF_BLUE_BAND_COUNT,
   FF_BLUE_BOTTOM_COLOR,
   FF_BLUE_TOP_COLOR,
+  PANEL_BG,
+  PANEL_BG_ALPHA,
+  PANEL_STROKE,
   computeBands,
   lerpColor,
   normalizeWindowStyle,
@@ -206,5 +211,27 @@ describe('computeBands', () => {
   })
   it('二重実行で同値（純粋）', () => {
     expect(computeBands(77)).toEqual(computeBands(77))
+  })
+})
+
+describe('dark パネル定数 (#1147)', () => {
+  it('戦闘窓の dark と同じ値: 黒・不透明度 0.85・白枠', () => {
+    expect(PANEL_BG).toBe(0x000000)
+    expect(PANEL_BG_ALPHA).toBe(0.85)
+    expect(PANEL_STROKE).toBe(0xffffff)
+  })
+})
+
+describe('dark パネル定数の共有 (#1147)', () => {
+  // 値の二重定義を防ぐ: 戦闘窓と会話窓は windowStyle.ts の定数を参照し、自前で定義し直さない
+  it.each([
+    ['BattleScreen', battleScreenSrc],
+    ['DialogBox', dialogBoxSrc],
+  ])('%s は PANEL_* を windowStyle から import し、ローカルで再定義しない', (_n, src) => {
+    for (const name of ['PANEL_BG', 'PANEL_BG_ALPHA', 'PANEL_STROKE']) {
+      const imports = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'\.\/windowStyle'/g)]
+      expect(imports.some((m) => new RegExp(`\\b${name}\\b`).test(m[1]))).toBe(true)
+      expect(src).not.toMatch(new RegExp(`const ${name}\\b`))
+    }
   })
 })

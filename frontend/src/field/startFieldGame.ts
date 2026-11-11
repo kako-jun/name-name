@@ -107,7 +107,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
-import { fieldDialogOptions } from '../game/ffDialog'
+import { fieldDialogFontSize, fieldDialogOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -621,15 +621,35 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       world.addChild(n.sprite)
     }
   // 会話窓 (#841)。TopDown と同じ DialogBox。画面の大きさに合わせた箱と文字（シーンの大きさが変わると redraw で追従）
+  /** window_style を書いた作品 = 設計どおりの会話窓（上下の配置・窓内の名前・感情吹き出しを隠す）(#1153) */
+  const designedDialog = config.battle.windowStyle !== undefined
   const dialogBox = new DialogBox({
     screenWidth: scene.mask.width,
     screenHeight: scene.mask.height,
     ...dialogMetricsFor(scene.mask.height),
+    ...(config.battle.windowStyle ? { fontSize: fieldDialogFontSize(scene.mask.height) } : {}),
     bgColor: 0x000033,
     nameColor: 0xffe066,
     nameSeparateBox: false,
     // FF 風の窓 (#840)。未指定は従来の下部の窓（msPerChar も DialogBox の既定のまま）
-    ...fieldDialogOptions(config),
+    // window_style を書いた作品だけ、設計どおりの窓（戦闘窓と同じ色・名前は窓内・主人公の足元で上下) (#1147・#1153)。未指定の作品は従来の見た目のまま
+    ...fieldDialogOptions({ ...config, windowStyle: config.battle.windowStyle }),
+    ...(config.battle.windowStyle
+      ? {
+          ffPlacement: () => ({
+            footY: pos.y,
+            avatar: player.visible
+              ? {
+                  x: pos.x - Math.abs(player.width) / 2,
+                  y: pos.y - player.height,
+                  width: Math.abs(player.width),
+                  height: player.height,
+                }
+              : null,
+            timed: timeLimitMs !== null,
+          }),
+        }
+      : {}),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()
@@ -648,6 +668,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const timeLimitLayer = new TimeLimitLayer()
   app.stage.addChild(timeLimitLayer)
   const syncEmotionHost = (): void => {
+    // 設計どおりの窓 (#1153): 会話窓の表示中は感情吹き出しを出さない（時間は進む。窓が閉じれば残りが出る）
+    emotionLayerBox.visible = !(designedDialog && dialogBox.isShowing)
     syncEmotionLayerHost({
       ffWindow: config.dialogStyle === 'ff',
       talking: isTalking(),
@@ -660,7 +682,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const applyDialogMetrics = (width: number, height: number): void => {
     const m = dialogMetricsFor(height)
     dialogBox.setBoxHeight(m.boxHeight)
-    dialogBox.setFontSize(m.fontSize)
+    // 設計どおりの窓は 28%H に名前＋3 行が入る文字サイズ。箱の寸法は DialogBox が画面から決める
+    dialogBox.setFontSize(designedDialog ? fieldDialogFontSize(height) : m.fontSize)
     dialogBox.redraw(width, height)
   }
 

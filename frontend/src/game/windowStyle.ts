@@ -17,6 +17,11 @@ export function normalizeWindowStyle(raw: string | null | undefined): WindowStyl
   return typeof raw === 'string' && raw.trim().toLowerCase() === 'ff-blue' ? 'ff-blue' : 'dark'
 }
 
+/** dark パネルの塗り色・不透明度・枠色 (#1147)。戦闘窓（BattleScreen）と一枚絵フィールドの会話窓（DialogBox）が共有する正本 */
+export const PANEL_BG = 0x000000
+export const PANEL_BG_ALPHA = 0.85
+export const PANEL_STROKE = 0xffffff
+
 /** ff-blue の帯の数（上から下へ段差を付けて塗り分ける横縞の本数） */
 export const FF_BLUE_BAND_COUNT = 9
 /** ff-blue グラデーションの上端の色（明るい青） */

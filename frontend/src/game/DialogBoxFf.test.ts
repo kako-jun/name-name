@@ -14,7 +14,7 @@ vi.mock('./FontLoader', () => ({
 import { DialogBox } from './DialogBox'
 import { FF_DIALOG_MS_PER_CHAR, computeFfDialogRect } from './ffDialog'
 import { FieldConversation } from './fieldScript'
-import { FF_BLUE_TEXT_SHADOW } from './windowStyle'
+import { FF_BLUE_TEXT_SHADOW, PANEL_BG, PANEL_BG_ALPHA, PANEL_STROKE } from './windowStyle'
 
 interface Internals {
   ticker: Ticker
@@ -230,4 +230,168 @@ describe('DialogBox 非 ff は従来どおり (#840)', () => {
     expect(box.getBoxRect().y).toBe(720 - Math.round(600 * 0.22) - 20)
     box.dispose()
   })
+})
+
+// 一枚絵フィールドの会話窓は window_style に連動する (#1147)。
+// dark = 戦闘窓と同じ黒単色＋白枠（帯・マスクなし・文字と▼の影なし）/ ff-blue = 従来の青い帯
+interface GraphicsInstr {
+  action: string
+  data: { style?: { color?: number; alpha?: number; width?: number } }
+}
+interface StyleInternals extends Internals {
+  bg: { visible: boolean; context: { instructions: GraphicsInstr[] } }
+  ffBands: { visible: boolean; context: { instructions: GraphicsInstr[] } } | null
+  ffMask: { context: { instructions: GraphicsInstr[] } } | null
+  ffCursor: { style: { dropShadow: unknown } } | null
+}
+const styleInternals = (b: DialogBox): StyleInternals => b as unknown as StyleInternals
+
+function makeStyled(ffWindowStyle?: 'dark' | 'ff-blue'): DialogBox {
+  const box = new DialogBox({
+    screenWidth: 800,
+    screenHeight: 600,
+    boxHeight: 132,
+    fontSize: 24,
+    bgColor: 0x000033,
+    nameSeparateBox: false,
+    ffWindow: true,
+    ...(ffWindowStyle ? { ffWindowStyle } : {}),
+  })
+  box.hide()
+  styleInternals(box).ticker.stop()
+  box.show('', 'テキスト')
+  return box
+}
+
+describe('DialogBox ffWindowStyle (#1147)', () => {
+  it('dark: 帯とマスクに描画がなく、bg が PANEL_BG・alpha 0.85 の塗りと白 2px 枠だけ', () => {
+    const box = makeStyled('dark')
+    const i = styleInternals(box)
+    expect(i.ffBands?.context.instructions).toHaveLength(0)
+    expect(i.ffMask?.context.instructions).toHaveLength(0)
+    const ins = i.bg.context.instructions
+    const fill = ins.find((x) => x.action === 'fill')
+    const stroke = ins.find((x) => x.action === 'stroke')
+    expect(fill?.data.style).toMatchObject({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+    expect(PANEL_BG_ALPHA).toBe(0.85)
+    expect(stroke?.data.style).toMatchObject({ color: PANEL_STROKE, width: 2 })
+    expect(box.isBackgroundVisible).toBe(true)
+    box.dispose()
+  })
+  it('dark: 本文にも ▼ にも文字の影がない', () => {
+    const box = makeStyled('dark')
+    expect(internals(box).dialogText.style.dropShadow).toBeFalsy()
+    expect(styleInternals(box).ffCursor?.style.dropShadow).toBeFalsy()
+    box.dispose()
+  })
+  it('ff-blue: 帯とマスクが描かれ、本文と ▼ に黒い影がある', () => {
+    const box = makeStyled('ff-blue')
+    const i = styleInternals(box)
+    expect(i.ffBands?.context.instructions.length).toBeGreaterThan(0)
+    expect(i.ffMask?.context.instructions.length).toBeGreaterThan(0)
+    expect(i.dialogText.style.dropShadow).toMatchObject({ color: FF_BLUE_TEXT_SHADOW.color })
+    expect(i.ffCursor?.style.dropShadow).toMatchObject({ color: FF_BLUE_TEXT_SHADOW.color })
+    box.dispose()
+  })
+  it('既定（ffWindowStyle 未指定）は ff-blue で、明示 ff-blue と同じ見た目', () => {
+    const def = styleInternals(makeStyled())
+    const blue = styleInternals(makeStyled('ff-blue'))
+    expect(def.ffBands?.context.instructions.length).toBeGreaterThan(0)
+    expect(def.ffBands?.context.instructions.length).toBe(blue.ffBands?.context.instructions.length)
+    expect(def.dialogText.style.dropShadow).toMatchObject({ color: FF_BLUE_TEXT_SHADOW.color })
+  })
+  it('dark でも hide で背景が隠れ、show で戻る', () => {
+    const box = makeStyled('dark')
+    box.hide()
+    expect(box.isBackgroundVisible).toBe(false)
+    box.show('', 'テキスト')
+    expect(box.isBackgroundVisible).toBe(true)
+    box.dispose()
+  })
+})
+
+// 非 ffWindow（一枚絵フィールドの既定の窓）も ffWindowStyle で連動する (#1147)。
+// dark は窓本体と名札の塗り・枠だけが戦闘窓の黒に変わり、寸法・位置・文字の影は従来どおり
+interface PlainInternals extends Internals {
+  bg: { visible: boolean; context: { instructions: GraphicsInstr[] } }
+  nameBox: { visible: boolean; context: { instructions: GraphicsInstr[] } }
+}
+const plainInternals = (b: DialogBox): PlainInternals => b as unknown as PlainInternals
+
+const PLAIN_BG = 0x000033
+function makePlain(ffWindowStyle?: 'dark' | 'ff-blue'): DialogBox {
+  const box = new DialogBox({
+    screenWidth: 800,
+    screenHeight: 600,
+    boxHeight: 132,
+    fontSize: 24,
+    bgColor: PLAIN_BG,
+    nameColor: 0xffe066,
+    ...(ffWindowStyle ? { ffWindowStyle } : {}),
+  })
+  box.hide()
+  plainInternals(box).ticker.stop()
+  box.show('', 'テキスト')
+  // 名札の測定は jsdom の canvas が null で落ちるので、幅を直接渡して名札の描画だけを走らせる
+  ;(box as unknown as { drawNameBox(w: number): void }).drawNameBox(80)
+  return box
+}
+const styleOf = (ins: GraphicsInstr[], action: string) =>
+  ins.find((x) => x.action === action)?.data.style
+
+describe('DialogBox 非 ffWindow の ffWindowStyle (#1147)', () => {
+  it('dark: 窓本体が PANEL_BG・alpha 0.85 の塗りと白 2px 枠、名札も同じ黒・白枠', () => {
+    const box = makePlain('dark')
+    const i = plainInternals(box)
+    expect(styleOf(i.bg.context.instructions, 'fill')).toMatchObject({
+      color: PANEL_BG,
+      alpha: PANEL_BG_ALPHA,
+    })
+    expect(styleOf(i.bg.context.instructions, 'stroke')).toMatchObject({
+      color: PANEL_STROKE,
+      width: 2,
+    })
+    expect(styleOf(i.nameBox.context.instructions, 'fill')).toMatchObject({
+      color: PANEL_BG,
+      alpha: PANEL_BG_ALPHA,
+    })
+    expect(styleOf(i.nameBox.context.instructions, 'stroke')).toMatchObject({
+      color: PANEL_STROKE,
+      width: 2,
+    })
+    box.dispose()
+  })
+  it.each([['ff-blue' as const], [undefined]])(
+    '%s: 従来の紺窓（bgColor・alpha 0.92・枠 f1faee）で名札も同じ',
+    (style) => {
+      const box = makePlain(style)
+      const i = plainInternals(box)
+      for (const g of [i.bg, i.nameBox]) {
+        expect(styleOf(g.context.instructions, 'fill')).toMatchObject({
+          color: PLAIN_BG,
+          alpha: 0.92,
+        })
+        expect(styleOf(g.context.instructions, 'stroke')).toMatchObject({
+          color: 0xf1faee,
+          width: 2,
+        })
+      }
+      box.dispose()
+    }
+  )
+  it.each([['dark' as const], ['ff-blue' as const], [undefined]])(
+    '%s: 窓の位置・大きさと文字の影（なし）は従来と同じ',
+    (style) => {
+      const base = makePlain()
+      const box = makePlain(style)
+      expect(box.getBoxRect()).toEqual(base.getBoxRect())
+      expect(box.getBoxRect().y).toBe(600 - 132 - 20)
+      expect(internals(box).dialogText.style.dropShadow).toBeFalsy()
+      expect(internals(box).dialogText.x).toBe(internals(base).dialogText.x)
+      expect(internals(box).dialogText.y).toBe(internals(base).dialogText.y)
+      expect(internals(box).ffBands).toBeNull() // 非 ff は帯・mask を作らない
+      base.dispose()
+      box.dispose()
+    }
+  )
 })
