@@ -242,6 +242,9 @@ import {
   computeBands,
   FF_BLUE_PANEL_ALPHA,
   FF_BLUE_TEXT_SHADOW,
+  PANEL_BG,
+  PANEL_BG_ALPHA,
+  PANEL_STROKE,
   type WindowStyle,
 } from './windowStyle'
 import {
@@ -275,9 +278,6 @@ import {
 /** 登場スライド (#1037): 絵の読み込みが終わらなくても、tick の積算がこの ms に達したら見切って開始する */
 const ENTRANCE_LOAD_TIMEOUT_MS = 1500
 const BG_DIM_ALPHA = 0.55
-const PANEL_BG = 0x000000
-const PANEL_BG_ALPHA = 0.85
-const PANEL_STROKE = 0xffffff
 /** パネルの角丸半径（dark / ff-blue 共通） */
 const PANEL_RADIUS = 6
 const TEXT_COLOR = 0xffffff

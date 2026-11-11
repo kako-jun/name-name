@@ -497,3 +497,68 @@ describe('menu と gear の併存（#880 / #881）', () => {
     expect('gear' in snap).toBe(false)
   })
 })
+
+describe('field.fireAuto（#1155 再開直後に場面開始トリガーを起こす）', () => {
+  const withField = (fireAuto?: unknown): Record<string, unknown> => ({
+    ...declared(),
+    field: {
+      sceneId: 'shrine-street',
+      x: 1,
+      y: 2,
+      facing: 'down',
+      ...(fireAuto === undefined ? {} : { fireAuto }),
+    },
+  })
+
+  it.each([true, false])('fireAuto=%s は受理され、値が保たれる', (v) => {
+    const r = parseRpgSave(withField(v))
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.field?.fireAuto).toBe(v)
+  })
+
+  it('省略は受理され、キーも増えない', () => {
+    const r = parseRpgSave(withField())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.field).not.toHaveProperty('fireAuto')
+  })
+
+  it.each([['yes'], [1], [0], [null], [{}]])('fireAuto=%j は真偽値でないので拒否する', (v) => {
+    const r = parseRpgSave(withField(v))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toBe('rpg: field.fireAuto は真偽値が必要です')
+  })
+
+  it('戦闘中セーブ（battle）と併用しても検証を通り、両方保たれる', () => {
+    const raw = { ...declared(), field: { ...declared().field!, fireAuto: true } }
+    const r = parseRpgSave(raw)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.battle?.enemies).toHaveLength(2)
+    expect(r.value.field?.fireAuto).toBe(true)
+    expect(resolveRpg(r.value, base).battle).toBeDefined()
+  })
+
+  it('resolveRpg は fireAuto を保って返す（省略・false はそのまま）', () => {
+    const mk = (fireAuto?: boolean): RpgSaveState => ({
+      ...declared(),
+      field: { ...declared().field!, ...(fireAuto === undefined ? {} : { fireAuto }) },
+    })
+    expect(resolveRpg(mk(true), base).field?.fireAuto).toBe(true)
+    expect(resolveRpg(mk(false), base).field?.fireAuto).toBe(false)
+    expect(resolveRpg(mk(), base).field).not.toHaveProperty('fireAuto')
+  })
+
+  it('ゲーム内のセーブ（snapshotRpg に fireAuto なしの field）では fireAuto が出ない', () => {
+    const snap = snapshotRpg(
+      {
+        party: base.party,
+        inventory: { potion: 3, ether: 0 },
+        equipment: {},
+        gold: 0,
+        field: { sceneId: 's', x: 1, y: 2, facing: 'down', flags: { door: true } },
+      },
+      base
+    )
+    expect(snap.field).not.toHaveProperty('fireAuto')
+  })
+})

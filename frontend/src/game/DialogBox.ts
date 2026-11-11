@@ -31,7 +31,13 @@ import { wordwrap } from './wordwrap'
 import {
   FF_CURSOR_SIZE_RATIO,
   FF_DIALOG_LINE_HEIGHT_RATIO,
+  FIELD_DIALOG_SLIDE_MS,
+  FIELD_DIALOG_TIMED_NAME_X_RATIO,
   computeFfDialogRect,
+  computeFieldDialogRect,
+  pickDialogSide,
+  type DialogRect,
+  type DialogSide,
   ffCursorReserve,
   ffCursorVisible,
   ffLinesPerPage,
@@ -40,7 +46,15 @@ import {
   paginateLines,
   wrapParagraphs,
 } from './ffDialog'
-import { FF_BLUE_PANEL_ALPHA, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
+import {
+  FF_BLUE_PANEL_ALPHA,
+  FF_BLUE_TEXT_SHADOW,
+  PANEL_BG,
+  PANEL_BG_ALPHA,
+  PANEL_STROKE,
+  computeBands,
+  type WindowStyle,
+} from './windowStyle'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
 import { ensureFontLoaded } from './FontLoader'
@@ -172,6 +186,26 @@ export interface DialogBoxConfig {
    * novel / split_layout / 2窓モードとは併用しない（それらが優先される）。
    */
   ffWindow?: boolean
+  /**
+   * 窓の配色 (#1147)。`dark` = 戦闘窓と同じ黒単色（PANEL_*・グラデーションなし・文字の影なし）/ `ff-blue` = ffWindow なら青い帯状グラデーション、
+   * 非 ffWindow なら従来の `bgColor` の窓。既定 `ff-blue`（未指定の直接利用・ノベル・adv・RPG 経路は従来どおり）。
+   * 一枚絵フィールドが `window_style` を渡す。非 ffWindow の `dark` は窓と名札の塗り・枠だけが変わる（寸法・名前の位置・色は不変）
+   */
+  ffWindowStyle?: WindowStyle
+  /**
+   * 一枚絵フィールドの設計どおりの窓 (#1153)。ffWindow と併用。渡すと窓は幅 94%W・高さ 28%H・端から 3%H の矩形になり、
+   * 会話の開始時と主人公が動いたあとの台詞送りで返り値の足元 y から上下を決め（動いたら 0.15 秒でスライド）、
+   * 話者名を窓内の左上に 1 行出す。`timed` が true で上側のときは名前を 16%W 以降から始める（左上の残り時間を避ける）。
+   * 未指定の ffWindow は従来どおり画面上部固定・名前なし
+   */
+  ffPlacement?: () => FfPlacement
+}
+
+/** ffPlacement が返す、窓の置き場所を決めるための主人公の状態（画面の座標） */
+export interface FfPlacement {
+  footY: number
+  avatar: DialogRect | null
+  timed?: boolean
 }
 
 /** typewriter のデフォルト速度（ms/char） */
@@ -345,6 +379,17 @@ export class DialogBox extends Container {
   private nameColor: number
   private nameSeparateBox: boolean
   private readonly ffWindow: boolean
+  private readonly ffWindowStyle: WindowStyle
+  /** 設計どおりの窓の置き場所 (#1153)。未指定なら従来の ffWindow（上部固定） */
+  private readonly ffPlacement: (() => FfPlacement) | undefined
+  /** 置き場所の状態: いまの側・最後に判定したときの足元 y・時間制限中か・会話中か・スライド中の経過 */
+  private placedSide: DialogSide = 'bottom'
+  private placedFootY: number | null = null
+  private placedTimed = false
+  private placedActive = false
+  private slide: { from: number; to: number; elapsed: number } | null = null
+  /** 話者名を窓内左上に出している（その分、本文は 1 行下から・1 ページの行数は 1 行減る） */
+  private ffNameLine = false
   /**
    * 本文テキスト色 (#305)。既定は純白 0xffffff。NovelRenderer が話者ごと（主人公=暖アイボリー /
    * 住人=白）に `setBodyTextColor` で切り替える。本文 (`dialogText`) とルビ (`rubyEntries`) の両方に当てる。
@@ -439,6 +484,8 @@ export class DialogBox extends Container {
       nameColor = 0xffffff,
       nameSeparateBox = true,
       ffWindow = false,
+      ffWindowStyle = 'ff-blue',
+      ffPlacement,
     } = config
 
     this.padding = padding
@@ -450,6 +497,8 @@ export class DialogBox extends Container {
     this.nameColor = nameColor
     this.nameSeparateBox = nameSeparateBox
     this.ffWindow = ffWindow
+    this.ffWindowStyle = ffWindowStyle
+    this.ffPlacement = ffWindow ? ffPlacement : undefined
     this.marginX = marginX
     this.marginBottom = marginBottom
     this.screenWidth = screenWidth
@@ -589,6 +638,7 @@ export class DialogBox extends Container {
       }
 
       this.tickFfCursor(this.ticker.deltaMS)
+      this.tickSlide(this.ticker.deltaMS)
       this.applyIndicatorContainerVisibility()
     })
     this.ticker.start()
@@ -640,6 +690,8 @@ export class DialogBox extends Container {
     this.ffPages = []
     this.ffPageIndex = 0
     this.ffCursorElapsed = 0
+    this.placedActive = false
+    this.ffNameLine = false
     if (this.ffCursor) this.ffCursor.visible = false
   }
 
@@ -649,7 +701,65 @@ export class DialogBox extends Container {
 
   /** 窓の矩形（検証用の読み取り） */
   getBoxRect(): { x: number; y: number; width: number; height: number } {
-    return { x: this.boxX, y: this.boxY, width: this.boxW, height: this.boxH }
+    return { x: this.boxX, y: this.boxY + this.y, width: this.boxW, height: this.boxH }
+  }
+
+  /** 設計どおりの窓の、いまの側（検証用の読み取り。置き場所を使わない窓は常に bottom） */
+  getPlacedSide(): DialogSide {
+    return this.placedSide
+  }
+
+  /**
+   * 設計どおりの窓の上下を決める (#1153)。会話の開始時は即その位置に置き、会話中は主人公の足元 y が前回の判定から
+   * 動いたときだけ再判定して 0.15 秒でスライドする（動かなければ窓は固定）。置き場所を使わない窓では何もしない
+   */
+  private placeWindow(): void {
+    if (!this.ffPlacement) return
+    const p = this.ffPlacement()
+    const timed = !!p.timed
+    if (this.placedActive && this.placedFootY === p.footY && this.placedTimed === timed) return
+    const side = pickDialogSide(p.footY, this.screenWidth, this.screenHeight, p.avatar)
+    const first = !this.placedActive
+    this.placedActive = true
+    this.placedFootY = p.footY
+    this.placedTimed = timed
+    const changed = side !== this.placedSide
+    this.placedSide = side
+    const to = this.placedOffsetY()
+    if (first) {
+      this.slide = null
+      this.y = to
+    } else if (changed) {
+      this.slide = { from: this.y, to, elapsed: 0 }
+    }
+    this.positionPlacedName()
+  }
+
+  /** 窓の基準位置（下側）からの、いまの側へのずれ（下側 = 0・上側 = 負） */
+  private placedOffsetY(): number {
+    if (this.placedSide === 'bottom') return 0
+    const top = computeFieldDialogRect(this.screenWidth, this.screenHeight, 'top').y
+    const bottom = computeFieldDialogRect(this.screenWidth, this.screenHeight, 'bottom').y
+    return top - bottom
+  }
+
+  private tickSlide(deltaMs: number): void {
+    if (!this.slide) return
+    this.slide.elapsed += deltaMs
+    const t = Math.min(1, this.slide.elapsed / FIELD_DIALOG_SLIDE_MS)
+    this.y = this.slide.from + (this.slide.to - this.slide.from) * t
+    if (t >= 1) this.slide = null
+  }
+
+  /** 話者名（窓内の左上 1 行）の位置。窓の基準位置（下側）に対する座標で、側のずれは Container の y が担う */
+  private positionPlacedName(): void {
+    if (!this.ffPlacement) return
+    const inset =
+      this.placedTimed && this.placedSide === 'top'
+        ? Math.max(0, Math.round(this.screenWidth * FIELD_DIALOG_TIMED_NAME_X_RATIO) - this.boxX)
+        : 0
+    this.nameText.x = this.boxX + Math.max(this.padding, inset)
+    this.nameText.y = this.boxY + this.padding
   }
 
   private setBackgroundVisible(visible: boolean): void {
@@ -912,6 +1022,10 @@ export class DialogBox extends Container {
       this.inlineNameText.y = this.boxY + this.padding
     }
 
+    this.positionPlacedName()
+    if (this.ffPlacement) this.y = this.slide ? this.slide.to : this.placedOffsetY()
+    if (this.ffPlacement) this.slide = null
+
     // portrait 枠位置
     if (this.portraitFrame) {
       const portraitY = this.boxY + PORTRAIT_Y_OFFSET
@@ -962,8 +1076,13 @@ export class DialogBox extends Container {
     this.showing = true
     this.setBackgroundVisible(!this.effectiveBorderless())
 
-    // 話者名
+    // 話者名（置き場所を使う窓は、先に上下を決める）
+    this.placeWindow()
     this.updateNameDisplay(name)
+    if (this.ffPlacement) {
+      this.dialogText.y = this.textStartY()
+      this.rubyContainer.y = this.dialogText.y
+    }
 
     // テキスト
     this.dialogText.visible = true
@@ -1128,6 +1247,7 @@ export class DialogBox extends Container {
     this.ffPageIndex += 1
     this.ffCursorElapsed = 0
     this.ffShowPage(0)
+    this.placeWindow() // イベントで主人公が動いていたら、ページ送りで上下を取り直す
     return true
   }
 
@@ -1136,7 +1256,9 @@ export class DialogBox extends Container {
     const font = `${this.fontSize}px ${this.fontFamily}`
     const width = Math.max(1, this.maxTextWidth() - ffCursorReserve(this.fontSize))
     const lines = wrapParagraphs(plainText, (p) => wordwrap(p, width, font))
-    return paginateLines(lines, ffLinesPerPage(this.boxH, this.padding, this.lineHeight()))
+    // 名前を窓内に出しているときは、その 1 行ぶん本文の行数が減る
+    const usable = this.boxH - (this.ffNameLine ? this.lineHeight() : 0)
+    return paginateLines(lines, ffLinesPerPage(usable, this.padding, this.lineHeight()))
   }
 
   /** 現在のページを先頭から（`fromCount` 文字は出した状態で）出し直す */
@@ -1170,7 +1292,7 @@ export class DialogBox extends Container {
       fontFamily: this.fontFamily,
       fontSize: Math.max(8, Math.round(this.fontSize * FF_CURSOR_SIZE_RATIO)),
       fill: 0xffffff,
-      dropShadow: { ...FF_BLUE_TEXT_SHADOW },
+      ...(this.ffWindowStyle === 'ff-blue' ? { dropShadow: { ...FF_BLUE_TEXT_SHADOW } } : {}),
     })
   }
 
@@ -1886,6 +2008,7 @@ export class DialogBox extends Container {
       // インライン名の下
       return this.boxY + this.padding + (this.fontSize - 4) + 4
     }
+    if (this.ffNameLine) return this.boxY + this.padding + this.lineHeight()
     return this.boxY + this.padding
   }
 
@@ -1897,7 +2020,22 @@ export class DialogBox extends Container {
   }
 
   private updateNameDisplay(name: string | null): void {
-    // FF 風の窓は発話者名を出さない（渡されても無視。名前分の余白も取らない）(#840)
+    this.ffNameLine = false
+    if (this.ffPlacement && name && !this.effectiveBorderless()) {
+      // 設計どおりの窓 (#1153): 話者名は窓内の左上に 1 行（外側タブにしない）。白文字・本文と同じ影。本文はその 1 行下から
+      this.ffNameLine = true
+      this.nameText.text = name
+      this.nameText.style.fill = 0xffffff
+      this.nameText.style.fontSize = this.fontSize
+      this.nameText.style.dropShadow =
+        this.ffWindowStyle === 'ff-blue' ? { ...FF_BLUE_TEXT_SHADOW } : false
+      this.nameBox.visible = false
+      this.nameText.visible = true
+      if (this.inlineNameText) this.inlineNameText.visible = false
+      this.positionPlacedName()
+      return
+    }
+    // FF 風の窓（上部固定）は発話者名を出さない（渡されても無視。名前分の余白も取らない）(#840)
     if (this.ffWindow || this.effectiveBorderless() || !name) {
       this.nameBox.visible = false
       this.nameText.visible = false
@@ -1923,7 +2061,10 @@ export class DialogBox extends Container {
 
   /** ffWindow の窓の矩形・余白を画面サイズから決める (#840)。文字・箱は画面（シーン）サイズに追従する */
   private applyFfGeometry(): void {
-    const r = computeFfDialogRect(this.screenWidth, this.screenHeight)
+    // 設計どおりの窓 (#1153): 基準は下側の矩形。上側は Container の y（placedOffsetY）で持ち上げる
+    const r = this.ffPlacement
+      ? computeFieldDialogRect(this.screenWidth, this.screenHeight, 'bottom')
+      : computeFfDialogRect(this.screenWidth, this.screenHeight)
     this.boxX = r.x
     this.boxY = r.y
     this.boxW = r.width
@@ -1932,6 +2073,15 @@ export class DialogBox extends Container {
   }
 
   private drawBackground(): void {
+    if (this.ffWindowStyle === 'dark') {
+      // 戦闘窓 (#1147) と同じ dark（ff でも既定の窓でも）: 黒の単色（グラデーションなし）＋白枠。色は windowStyle.ts の PANEL_* が正本
+      this.bg
+        .clear()
+        .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
+        .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+        .stroke({ color: PANEL_STROKE, width: 2 })
+      return
+    }
     if (this.ffWindow && this.ffBands && this.ffMask) {
       // 戦闘窓 (#744) と同じ ff-blue: 帯状グラデーションを角丸で切り抜き、その上に白枠
       this.ffMask
@@ -1965,9 +2115,16 @@ export class DialogBox extends Container {
 
     this.nameBox.clear()
     this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
-    this.nameBox.fill({ color: this.bgColor, alpha: 0.92 })
-    this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
-    this.nameBox.stroke({ color: 0xf1faee, width: 2, alpha: 1 })
+    if (this.ffWindowStyle === 'dark') {
+      // 窓本体と同じ戦闘窓の黒（#1147）
+      this.nameBox.fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+      this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
+      this.nameBox.stroke({ color: PANEL_STROKE, width: 2 })
+    } else {
+      this.nameBox.fill({ color: this.bgColor, alpha: 0.92 })
+      this.nameBox.roundRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH, 6)
+      this.nameBox.stroke({ color: 0xf1faee, width: 2, alpha: 1 })
+    }
 
     this.nameText.x = nameBoxX + this.padding
     this.nameText.y = nameBoxY + (nameBoxH - this.fontSize + 2) / 2
@@ -1982,7 +2139,7 @@ export class DialogBox extends Container {
       lineHeight: this.lineHeight(),
       dropShadow: this.effectiveBorderless()
         ? BORDERLESS_DROP_SHADOW
-        : this.ffWindow
+        : this.ffWindow && this.ffWindowStyle === 'ff-blue'
           ? { ...FF_BLUE_TEXT_SHADOW }
           : false,
     })

@@ -56,7 +56,7 @@ describe('buildDummyFixture (#890)', () => {
     expect(Object.keys(c.flags)).toContain(c.assist!.requires[0])
   })
 
-  it('spriteStyle (sit-by-me#58): 既定はキーが出ない。acrylic を指定すると主人公・同行者のアクスタ化が有効になる', () => {
+  it('spriteStyle (sit-by-me#58): 既定はキーが出ない。acrylic を指定すると主人公・同行者・NPC のアクスタ化が有効になる', () => {
     expect('spriteStyle' in parsed()).toBe(false)
     const r = parseConfig(
       buildDummyFixture({ spriteStyle: 'acrylic' }),

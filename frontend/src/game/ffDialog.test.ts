@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import startFieldGameSrc from '../field/startFieldGame.ts?raw'
 import {
   FF_CURSOR_BLINK_MS,
   FF_DIALOG_HEIGHT_RATIO,
@@ -14,6 +15,10 @@ import {
   FF_DIALOG_MS_PER_CHAR,
   FF_DIALOG_TOP_RATIO,
   computeFfDialogRect,
+  computeFieldDialogRect,
+  fieldDialogFontSize,
+  pickDialogSide,
+  FF_DIALOG_LINE_HEIGHT_RATIO,
   normalizeDialogStyle,
   normalizeMsPerChar,
 } from './ffDialog'
@@ -146,6 +151,40 @@ describe('fieldDialogOptions (#840)', () => {
   })
 })
 
+describe('fieldDialogOptions の windowStyle (#1147)', () => {
+  it('dialogStyle なしでも windowStyle を渡せば ff の窓（ffWindow・既定速度）と ffWindowStyle が出る (#1153)', () => {
+    for (const w of ['dark', 'ff-blue'] as const) {
+      expect(fieldDialogOptions({ windowStyle: w })).toEqual({
+        ffWindow: true,
+        ffWindowStyle: w,
+        msPerChar: FF_DIALOG_MS_PER_CHAR,
+      })
+    }
+  })
+  it('dialogStyle なしで windowStyle も未指定なら空（従来の窓）', () => {
+    expect(fieldDialogOptions({})).toEqual({})
+  })
+  it('ff + windowStyle 指定なら ffWindowStyle がそのまま出る', () => {
+    expect(fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'dark' })).toEqual({
+      ffWindow: true,
+      ffWindowStyle: 'dark',
+      msPerChar: 30,
+    })
+    expect(fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'ff-blue' }).ffWindowStyle).toBe(
+      'ff-blue'
+    )
+  })
+  it('ff で windowStyle 未指定なら ffWindowStyle のキーが無い（DialogBox 既定の ff-blue）', () => {
+    const o = fieldDialogOptions({ dialogStyle: 'ff' })
+    expect('ffWindowStyle' in o).toBe(false)
+  })
+  it('windowStyle は dialogMsPerChar と独立（速さは windowStyle で変わらない）', () => {
+    expect(
+      fieldDialogOptions({ dialogStyle: 'ff', windowStyle: 'dark', dialogMsPerChar: 0 })
+    ).toEqual({ ffWindow: true, ffWindowStyle: 'dark', msPerChar: 0 })
+  })
+})
+
 const chars = (n: number) => (p: string) => {
   // 1 行 n 文字で折り返す単純な wrap（半角も全角も 1 文字 = 1 幅）
   const out: string[] = []
@@ -262,5 +301,44 @@ describe('ffCursorVisible / ffCursorReserve (#840)', () => {
     expect(ffCursorReserve(0)).toBe(0)
     expect(ffCursorReserve(NaN)).toBe(0)
     expect(ffCursorReserve(-4)).toBe(0)
+  })
+})
+
+describe('一枚絵フィールドの設計どおりの窓の配置 (#1153)', () => {
+  const W = 1000
+  const H = 600
+  it('矩形は幅 94%W・高さ 28%H・端から 3%H・左右中央', () => {
+    const b = computeFieldDialogRect(W, H, 'bottom')
+    const t = computeFieldDialogRect(W, H, 'top')
+    expect([b.width, b.height, b.x]).toEqual([940, 168, 30])
+    expect(t.y).toBe(18)
+    expect(b.y + b.height).toBe(H - 18)
+  })
+  it('足元が H/2 より下なら上側・上なら下側・ちょうど中央は下側', () => {
+    expect(pickDialogSide(H / 2 + 1, W, H, null)).toBe('top')
+    expect(pickDialogSide(H / 2 - 1, W, H, null)).toBe('bottom')
+    expect(pickDialogSide(H / 2, W, H, null)).toBe('bottom')
+  })
+  it('選んだ側がアクスタと重なるなら反対側・両方重なるなら上下判定のまま', () => {
+    const lowAvatar = { x: 400, y: 400, width: 100, height: 150 } // 下側の窓と重なる
+    expect(pickDialogSide(300, W, H, lowAvatar)).toBe('top')
+    const tall = { x: 400, y: 0, width: 100, height: H }
+    expect(pickDialogSide(300, W, H, tall)).toBe('bottom')
+  })
+  it('文字サイズ: 名前1行＋本文3行（行高1.6）と上下余白が窓に収まる', () => {
+    const r = computeFieldDialogRect(W, H, 'bottom')
+    expect(
+      fieldDialogFontSize(H) * FF_DIALOG_LINE_HEIGHT_RATIO * 4 + r.padding * 2
+    ).toBeLessThanOrEqual(r.height)
+  })
+})
+
+describe('一枚絵フィールドの会話窓の配線 (#1153)', () => {
+  // startFieldGame は PixiJS の Application 起動に依存し単体で呼べないため、ソースの配線を静的に固定する
+  // （実挙動は fieldDialogOptions と DialogBox のテストで押さえている）
+  it('startFieldGame は fieldDialogOptions に battle.windowStyle をそのまま渡す（未指定は従来のまま・既定を dark にしない）', () => {
+    expect(startFieldGameSrc).toMatch(
+      /fieldDialogOptions\(\{\s*\.\.\.config,\s*windowStyle:\s*config\.battle\.windowStyle\s*\}\)/
+    )
   })
 })
