@@ -14,7 +14,7 @@ import {
   supportedCommands,
 } from './fieldScript'
 import { parseMarkdown } from '../wasm/parser'
-import { planBattleFlagUpdates } from './fieldBattle'
+import { createFieldBattleHost } from './fieldBattle'
 import type { BattleResult } from './loot'
 
 /** 会話の単体テスト用: 動かさない NPC 移動・始めない戦闘（実体は startFieldGame が持つ） */
@@ -905,7 +905,7 @@ describe('戦闘結果のフラグ反映と 次= の分岐の結線 (#1077。sta
     script: { id: 'b', flags, ...(next !== undefined ? { next } : {}) },
   })
 
-  /** startFieldGame の applyBattleResultFlags + findEvent と同じ結線 */
+  /** startFieldGame と同じ createFieldBattleHost（find の呼び出し順だけログに足す） */
   function wire(
     battleResult: BattleResult | null,
     events: Map<string, EventCommand[]>,
@@ -914,21 +914,20 @@ describe('戦闘結果のフラグ反映と 次= の分岐の結線 (#1077。sta
     const flags: Record<string, boolean> = { ...declared }
     const log: string[] = []
     const warns: string[] = []
-    const host: EventBattleHost = {
-      startBattle: () =>
-        Promise.resolve(battleResult).then((r) => {
-          const plan = planBattleFlagUpdates(flags, r?.script?.flags)
-          warns.push(...plan.warnings)
-          for (const { name, value } of plan.set) {
-            flags[name] = value
-            log.push(`set:${name}=${value}`)
-          }
-          return r
-        }),
-      findEvent: (n) => {
-        log.push(`find:${n}`)
-        return resolveBattleNextCommands(n, events, (m) => warns.push(m))
+    const host: EventBattleHost = createFieldBattleHost({
+      start: () => Promise.resolve(battleResult),
+      flags,
+      setFlag: (name, value) => {
+        flags[name] = value
+        log.push(`set:${name}=${value}`)
       },
+      events,
+      warn: (m) => warns.push(m),
+    })
+    const baseFind = host.findEvent!
+    host.findEvent = (n) => {
+      log.push(`find:${n}`)
+      return baseFind(n)
     }
     const dialog = fakeDialog()
     const conv = new FieldConversation(dialog, new EventRunner(dialog as never, noopNpcMover, host))
