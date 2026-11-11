@@ -614,7 +614,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     nameColor: 0xffe066,
     nameSeparateBox: false,
     // FF 風の窓 (#840)。未指定は従来の下部の窓（msPerChar も DialogBox の既定のまま）
-    ...fieldDialogOptions(config),
+    // 窓の色は戦闘窓と同じ window_style（未指定は dark = 戦闘窓の既定）(#1147)
+    ...fieldDialogOptions({ ...config, windowStyle: config.battle.windowStyle ?? 'dark' }),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()

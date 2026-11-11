@@ -40,7 +40,15 @@ import {
   paginateLines,
   wrapParagraphs,
 } from './ffDialog'
-import { FF_BLUE_PANEL_ALPHA, FF_BLUE_TEXT_SHADOW, computeBands } from './windowStyle'
+import {
+  FF_BLUE_PANEL_ALPHA,
+  FF_BLUE_TEXT_SHADOW,
+  PANEL_BG,
+  PANEL_BG_ALPHA,
+  PANEL_STROKE,
+  computeBands,
+  type WindowStyle,
+} from './windowStyle'
 import { parseRubyText, stripRubyMarkup } from './ruby'
 import { type RubyPlacement, computeRubyPlacements } from './rubyLayout'
 import { ensureFontLoaded } from './FontLoader'
@@ -172,6 +180,8 @@ export interface DialogBoxConfig {
    * novel / split_layout / 2窓モードとは併用しない（それらが優先される）。
    */
   ffWindow?: boolean
+  /** ffWindow の配色 (#1147)。`dark` = 戦闘窓と同じ黒単色（グラデーションなし・文字の影なし）/ `ff-blue` = 青い帯状グラデーション。既定 `ff-blue`（未指定の直接利用は従来どおり） */
+  ffWindowStyle?: WindowStyle
 }
 
 /** typewriter のデフォルト速度（ms/char） */
@@ -345,6 +355,7 @@ export class DialogBox extends Container {
   private nameColor: number
   private nameSeparateBox: boolean
   private readonly ffWindow: boolean
+  private readonly ffWindowStyle: WindowStyle
   /**
    * 本文テキスト色 (#305)。既定は純白 0xffffff。NovelRenderer が話者ごと（主人公=暖アイボリー /
    * 住人=白）に `setBodyTextColor` で切り替える。本文 (`dialogText`) とルビ (`rubyEntries`) の両方に当てる。
@@ -439,6 +450,7 @@ export class DialogBox extends Container {
       nameColor = 0xffffff,
       nameSeparateBox = true,
       ffWindow = false,
+      ffWindowStyle = 'ff-blue',
     } = config
 
     this.padding = padding
@@ -450,6 +462,7 @@ export class DialogBox extends Container {
     this.nameColor = nameColor
     this.nameSeparateBox = nameSeparateBox
     this.ffWindow = ffWindow
+    this.ffWindowStyle = ffWindowStyle
     this.marginX = marginX
     this.marginBottom = marginBottom
     this.screenWidth = screenWidth
@@ -1170,7 +1183,7 @@ export class DialogBox extends Container {
       fontFamily: this.fontFamily,
       fontSize: Math.max(8, Math.round(this.fontSize * FF_CURSOR_SIZE_RATIO)),
       fill: 0xffffff,
-      dropShadow: { ...FF_BLUE_TEXT_SHADOW },
+      ...(this.ffWindowStyle === 'ff-blue' ? { dropShadow: { ...FF_BLUE_TEXT_SHADOW } } : {}),
     })
   }
 
@@ -1932,6 +1945,15 @@ export class DialogBox extends Container {
   }
 
   private drawBackground(): void {
+    if (this.ffWindow && this.ffWindowStyle === 'dark') {
+      // 戦闘窓 (#1147) と同じ dark: 黒の単色（グラデーションなし）＋白枠。色は windowStyle.ts の PANEL_* が正本
+      this.bg
+        .clear()
+        .roundRect(this.boxX, this.boxY, this.boxW, this.boxH, 6)
+        .fill({ color: PANEL_BG, alpha: PANEL_BG_ALPHA })
+        .stroke({ color: PANEL_STROKE, width: 2 })
+      return
+    }
     if (this.ffWindow && this.ffBands && this.ffMask) {
       // 戦闘窓 (#744) と同じ ff-blue: 帯状グラデーションを角丸で切り抜き、その上に白枠
       this.ffMask
@@ -1982,7 +2004,7 @@ export class DialogBox extends Container {
       lineHeight: this.lineHeight(),
       dropShadow: this.effectiveBorderless()
         ? BORDERLESS_DROP_SHADOW
-        : this.ffWindow
+        : this.ffWindow && this.ffWindowStyle === 'ff-blue'
           ? { ...FF_BLUE_TEXT_SHADOW }
           : false,
     })

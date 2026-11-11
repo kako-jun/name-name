@@ -5,6 +5,7 @@
  * (`windowStyle.ts`, #744) をそのまま使う。見た目は実機でライブ調整するので、調整対象の定数はここに集める。
  */
 import { BATTLE_LOG_MS_PER_CHAR } from './battleLogTypewriter'
+import type { WindowStyle } from './windowStyle'
 
 /** 会話窓のスタイル。`ff` = 画面上部固定・ff-blue・1 文字ずつ。未指定（undefined）は従来の下部の窓 */
 export type DialogStyle = 'ff'
@@ -77,12 +78,19 @@ export function normalizeMsPerChar(raw: unknown): number | undefined {
  * 未指定なら空（キーが無い＝従来の窓・既定の速さ）。ff なら ffWindow と既定速度。
  * `dialogMsPerChar` は指定があれば ff の既定より優先し、0 は即時表示。
  */
-export function fieldDialogOptions(c: { dialogStyle?: DialogStyle; dialogMsPerChar?: number }): {
+export function fieldDialogOptions(c: {
+  dialogStyle?: DialogStyle
+  dialogMsPerChar?: number
+  /** 窓の配色 (#1147)。一枚絵フィールドが `window_style`（戦闘窓と同じ値）を渡す。未指定は DialogBox の既定（ff-blue） */
+  windowStyle?: WindowStyle
+}): {
   ffWindow?: true
+  ffWindowStyle?: WindowStyle
   msPerChar?: number
 } {
   return {
     ...(c.dialogStyle === 'ff' ? { ffWindow: true as const } : {}),
+    ...(c.dialogStyle === 'ff' && c.windowStyle ? { ffWindowStyle: c.windowStyle } : {}),
     ...(c.dialogMsPerChar !== undefined
       ? { msPerChar: c.dialogMsPerChar }
       : c.dialogStyle === 'ff'
