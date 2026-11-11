@@ -516,6 +516,11 @@ describe('field.fireAuto と resumedStart（#1155）', () => {
   it('配線の固定: startFieldGame の判定式とセーブ組み立てが fireAuto を扱う（静的検査）', () => {
     // startFieldGame は PixiJS 依存で結合できないため、判定式の原文だけを固定する（式を変えたらここも直す）
     expect(startFieldGameSrc).toContain('let resumedStart = !!resumed && !resumed.field?.fireAuto')
-    expect(startFieldGameSrc).not.toMatch(/field: \{ sceneId, x: pos\.x[^}]*fireAuto/)
+    // メニューセーブの field オブジェクト（flags の `}` を越えて閉じ `}` まで）に fireAuto が入らない
+    const m = startFieldGameSrc.match(
+      /field: \{ sceneId, x: pos\.x, y: pos\.y, facing, flags: \{[^}]*\} \}/
+    )
+    expect(m).not.toBeNull()
+    expect(m![0]).not.toContain('fireAuto')
   })
 })
