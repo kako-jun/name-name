@@ -16,7 +16,13 @@ import {
   type EnemyGridSize,
 } from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
-import { parseMenuList, parsePosesRecord, resolveUrl, type ParseResult } from '../battle/config'
+import {
+  parseCommandLabelsConfig,
+  parseMenuList,
+  parsePosesRecord,
+  resolveUrl,
+  type ParseResult,
+} from '../battle/config'
 import { pickWeaponKeys } from '../game/battleWeapon'
 import { parseMarkScale, type UiImagesConfig } from '../game/uiImages'
 import type { DiagonalFacing, Edge, FieldLink, Facing, Vec } from '../game/fieldWalk'
@@ -42,7 +48,12 @@ import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../gam
 import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
 import type { WindowStyle } from '../game/windowStyle'
 import { normalizeDialogStyle, normalizeMsPerChar, type DialogStyle } from '../game/ffDialog'
-import { parseCommandIds, type CommandId, type CommandLayout } from '../game/battleCommands'
+import {
+  parseCommandIds,
+  type CommandId,
+  type CommandLabels,
+  type CommandLayout,
+} from '../game/battleCommands'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import {
   parseBattleLogicalSize,
@@ -193,6 +204,8 @@ export interface FieldBattleConfig {
   commandLayout?: CommandLayout
   /** コマンドの構成と順序 (#873)。`battle.commands`: `["skill", "spell", "item", "escape"]`。未指定は undefined＝既定（attack / spell / item / escape） */
   commands?: CommandId[]
+  /** コマンドの表示名の上書き (#1154)。`battle.commandLabels`: `{ "spell": "まほう" }`（id は attack / skill / summon / spell / item / escape。値は空でない文字列）。未指定は undefined＝既定の日本語 */
+  commandLabels?: CommandLabels
   /** ATB (#883)。`battle.atb: "on"` のとき `{ mode: battle.atbMode ?? "wait" }`。未指定・"off" は undefined＝ターン制 */
   atb?: BattleAtbConfig
   /** 戦闘のエフェクト重ね (#936)。`battle.effects`（戦闘の `effects` と同じ書式）。不正な種類は警告して無視。`presentation: "ff"` のときだけ効く。未指定は undefined＝エフェクトなし */
@@ -860,6 +873,12 @@ export function parseConfig(
         `battle.commands は attack / skill / summon / spell / item / escape を重複なく並べてください: ${JSON.stringify(b.commands)}`
       )
   }
+  let commandLabels: CommandLabels | undefined
+  if (b.commandLabels !== undefined) {
+    const r = parseCommandLabelsConfig(b.commandLabels)
+    if (!r.ok) return fail(`battle.${r.error}`)
+    if (Object.keys(r.value).length > 0) commandLabels = r.value
+  }
   if (b.motion !== undefined && b.motion !== 'default' && b.motion !== 'snappy')
     return fail(`battle.motion は "default" か "snappy": ${JSON.stringify(b.motion)}`)
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
@@ -1175,6 +1194,7 @@ export function parseConfig(
         ...(currencyName ? { currencyName } : {}),
         ...(b.commandLayout ? { commandLayout: b.commandLayout } : {}),
         ...(commands ? { commands } : {}),
+        ...(commandLabels ? { commandLabels } : {}),
         ...(b.atb === 'on' ? { atb: { mode: b.atbMode ?? 'wait' } } : {}),
         ...(hasBattleEffects(fx.effects) ? { effects: fx.effects } : {}),
       },

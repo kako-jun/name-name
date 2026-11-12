@@ -528,7 +528,7 @@ function parseEntities(
 }
 
 /** 設定 JSON の commandLabels (#204) を検証する。`{ attack?, skill?, summon?, spell?, item?, escape? }`（値は空でない文字列） */
-function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
+export function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
   if (raw === undefined) return { ok: true, value: {} }
   if (!isRecord(raw))
     return { ok: false, error: 'commandLabels はオブジェクトである必要があります' }

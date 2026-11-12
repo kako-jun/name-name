@@ -4,6 +4,8 @@ import { parseConfig } from './config'
 import { effectiveCommandLayout } from '../game/battleLayout'
 import { motionTimingFor } from '../game/battleMotion'
 import { BattleEngine } from '../game/battleEngine'
+import { frontmatterRaw } from './fieldRawBattle'
+import type { EventDocument } from '../types'
 import type { BattleEntity } from '../game/spellDsl'
 
 const b = { layout: 'side' as const }
@@ -78,6 +80,7 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
       motion: 'snappy',
       commandLayout: 'cross',
       commands: ['skill', 'spell', 'item', 'escape'],
+      commandLabels: { spell: 'まほう' },
       enemyGrid: '4x2',
       logicalSize: '1920x1080',
     }).battle
@@ -88,10 +91,26 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect(o.motion).toBe('snappy')
     expect(o.commandLayout).toBe('cross')
     expect(o.commands).toEqual(b.commands)
+    expect(o.commandLabels).toEqual({ spell: 'まほう' })
     expect(o.presentation).toBe('ff')
     expect(o.windowStyle).toBe('ff-blue')
     expect(o.enemyGrid).toEqual(b.enemyGrid)
     expect(o.background).toBe('bg.webp')
+  })
+
+  it('frontmatter battle_command_labels が parseConfig を経て BattleScreen のオプションに出る。未指定は出ない (#1154)', () => {
+    const warnings: string[] = []
+    const fm = frontmatterRaw(
+      { battle_command_labels: 'spell=まほう, bogus=x' } as unknown as EventDocument,
+      'http://localhost/a',
+      undefined,
+      warnings
+    )
+    expect(warnings).toEqual([])
+    const o = buildBattleScreenOptions(load(fm.battle).battle, {})
+    expect(o.commandLabels).toEqual({ spell: 'まほう' })
+    const none = frontmatterRaw({} as unknown as EventDocument, 'http://localhost/a', undefined, [])
+    expect('commandLabels' in buildBattleScreenOptions(load(none.battle).battle, {})).toBe(false)
   })
 
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
