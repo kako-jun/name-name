@@ -1110,6 +1110,13 @@ describe('commandLayout / commandLabels (#204)', () => {
     expect(parseOk({ commandLabels: { attack: '斬る' } }).commandLabels).toEqual({ attack: '斬る' })
   })
 
+  it('commandLabels は skill / summon の表示名も通る(frontmatter の 6 id と同じ)', () => {
+    expect(
+      parseOk({ commandLabels: { skill: 'わざ', summon: 'ひきよせ', spell: 'まほう' } })
+        .commandLabels
+    ).toEqual({ skill: 'わざ', summon: 'ひきよせ', spell: 'まほう' })
+  })
+
   it.each([[['attack']], ['attack=x'], [null]])(
     'commandLabels がオブジェクトでない(%j)と ok:false',
     (v) => {

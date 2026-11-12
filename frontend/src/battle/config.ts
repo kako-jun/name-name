@@ -43,7 +43,7 @@ import { normalizeEnemyGrid, parseCellRef, type EnemyGridSize } from '../game/en
 import type { AtbMode, BattleScriptOptions, SkillExecution } from '../game/battleEngine'
 import type { BattleAtbConfig } from '../game/battleAtb'
 import {
-  COMMAND_DEFAULTS,
+  COMMAND_DEFAULT_LABELS,
   parseCommandIds,
   type CommandId,
   type CommandLabels,
@@ -527,12 +527,12 @@ function parseEntities(
   return { ok: true, value: out }
 }
 
-/** 設定 JSON の commandLabels (#204) を検証する。`{ attack?, spell?, item?, escape? }`（値は空でない文字列） */
+/** 設定 JSON の commandLabels (#204) を検証する。`{ attack?, skill?, summon?, spell?, item?, escape? }`（値は空でない文字列） */
 function parseCommandLabelsConfig(raw: unknown): ParseResult<CommandLabels> {
   if (raw === undefined) return { ok: true, value: {} }
   if (!isRecord(raw))
     return { ok: false, error: 'commandLabels はオブジェクトである必要があります' }
-  const ids: readonly string[] = COMMAND_DEFAULTS.map((c) => c.id)
+  const ids: readonly string[] = Object.keys(COMMAND_DEFAULT_LABELS)
   const out: CommandLabels = {}
   for (const [k, v] of Object.entries(raw)) {
     if (!ids.includes(k)) {

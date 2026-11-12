@@ -836,6 +836,7 @@ describe('buildFieldRaw: frontmatter', () => {
         battle_enemy_window_overlap: '0.3',
         battle_background: 'bg-battle.webp',
         battle_commands: 'skill, spell, item, escape',
+        battle_command_labels: 'spell=まほう, skill＝わざ, bogus=x, item=',
         battle_effects: 'fx.json',
         field_emotions: 'emo.json',
         dialog_style: 'ff',
@@ -856,6 +857,7 @@ describe('buildFieldRaw: frontmatter', () => {
         motion: 'snappy',
         enemyList: 'window',
         commandLayout: 'cross',
+        commandLabels: { spell: 'まほう', skill: 'わざ' },
         transition: 'ff-mosaic',
         atb: 'on',
         atbMode: 'active',
@@ -922,10 +924,13 @@ describe('buildFieldRaw: frontmatter', () => {
       'frontmatter の battle_horizon は一枚絵フィールドでは効きません（無視します）',
       'frontmatter の battle_perspective は一枚絵フィールドでは効きません（無視します）',
       'frontmatter の battle_foreground は一枚絵フィールドでは効きません（無視します）',
-      'frontmatter の battle_command_labels は一枚絵フィールドでは効きません（無視します）',
       'frontmatter の pixel_art は一枚絵フィールドでは効きません（無視します）',
     ])
-    expect(r.raw.battle).toEqual({ logicalSize: '1920x1080', commands: ['attack'] })
+    expect(r.raw.battle).toEqual({
+      logicalSize: '1920x1080',
+      commands: ['attack'],
+      commandLabels: { attack: 'x' },
+    })
     expect(r.raw).not.toHaveProperty('spriteStyle')
     expect(r.raw).not.toHaveProperty('dialogStyle')
   })

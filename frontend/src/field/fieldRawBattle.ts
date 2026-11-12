@@ -4,7 +4,7 @@
  * `parseConfig` は `battle.*` の不正値を致命にするが、frontmatter は寛容に既定へ倒す文化なので、
  * ここで先に値域を検査して「不正 → 警告して出さない」にする。FieldBattleConfig に受け口が無いキーは「効きません」と警告する。
  */
-import { parseCommandIds } from '../game/battleCommands'
+import { parseCommandIds, parseCommandLabels } from '../game/battleCommands'
 import { resolveRpgDataPath } from '../game/battleEffectsLoader'
 import type { EventDocument } from '../types'
 
@@ -36,7 +36,6 @@ const UNSUPPORTED_KEYS = [
   'battle_horizon',
   'battle_perspective',
   'battle_foreground',
-  'battle_command_labels',
 ] as const
 
 export interface FrontmatterRaw {
@@ -107,6 +106,12 @@ export function frontmatterRaw(
     }
     if (ids.length > 0) battle.commands = ids
   }
+
+  // 戦闘のコマンド表示名の上書き(`attack=斬る, spell=魔石`)。RPG 経路と同じ解釈。未知 id・空の表示名は無視、有効な指定が無ければ出さない
+  const commandLabels = parseCommandLabels(
+    typeof doc.battle_command_labels === 'string' ? doc.battle_command_labels : undefined
+  )
+  if (commandLabels) battle.commandLabels = commandLabels
 
   // 数値で渡す(parseConfig は number だけ受ける)
   if (typeof doc.battle_enemy_window_overlap === 'string') {
