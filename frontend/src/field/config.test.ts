@@ -902,6 +902,21 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(d.skills).toEqual([])
   })
 
+  it('battle.commandLabels を保持する。未指定・空は commandLabels キーなし、不正はエラー (#1154)', () => {
+    const c = withEncounter()
+    c.battle = { commandLabels: { spell: 'まほう', skill: 'わざ' } }
+    expect(ok(c).battle.commandLabels).toEqual({ spell: 'まほう', skill: 'わざ' })
+    expect('commandLabels' in ok(withEncounter()).battle).toBe(false)
+    const e = withEncounter()
+    e.battle = { commandLabels: {} }
+    expect('commandLabels' in ok(e).battle).toBe(false)
+    for (const bad of [{ foo: 'x' }, { spell: '' }, { spell: 1 }, 'spell=x', ['spell'], null]) {
+      const b = withEncounter()
+      b.battle = { commandLabels: bad }
+      expect(parseConfig(b, BASE).ok, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
   it('battle.commands は配列・既知 id・重複なしでなければエラー (#873)', () => {
     for (const bad of ['skill', ['skill', 'foo'], ['skill', 'skill'], [1], []]) {
       const c = withEncounter()
