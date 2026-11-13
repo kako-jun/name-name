@@ -1071,3 +1071,81 @@ describe('buildFieldRaw: 味方のレベルアップ levelUp (#206)', () => {
     expect(lu.learns).toEqual([{ level: 2, spell: 'zzz' }])
   })
 })
+
+describe('buildFieldRaw: 呪文一覧 spells と経験値表 (#1161)', () => {
+  const spell = (id: string): Event =>
+    ({ Spell: { id, name: id, mp: 1, target: '敵単体' } }) as Event
+  const spellIds = (cfg: Event[]) =>
+    (ok({ cfg }).raw.spells as Array<{ id: string }>).map((s) => s.id)
+
+  it('経験値表のある味方の高 Lv 習得は、Lv 不問で spells に入る（定義順）', () => {
+    expect(
+      spellIds([
+        member('p1', {
+          expTable: [10, 30],
+          learns: [
+            { level: 1, spell: 'fire' },
+            { level: 3, spell: 'bolt' },
+          ],
+        }),
+        spell('bolt'),
+        spell('fire'),
+      ])
+    ).toEqual(['bolt', 'fire'])
+  })
+
+  it('経験値表の無い味方は従来どおり初期 Lv（既定 1）で絞る', () => {
+    expect(
+      spellIds([
+        member('p1', {
+          learns: [
+            { level: 1, spell: 'fire' },
+            { level: 3, spell: 'bolt' },
+          ],
+        }),
+        spell('fire'),
+        spell('bolt'),
+      ])
+    ).toEqual(['fire'])
+    expect(
+      spellIds([
+        member('p1', {
+          level: 3,
+          learns: [
+            { level: 1, spell: 'fire' },
+            { level: 3, spell: 'bolt' },
+            { level: 4, spell: 'ice' },
+          ],
+        }),
+        spell('fire'),
+        spell('bolt'),
+        spell('ice'),
+      ])
+    ).toEqual(['fire', 'bolt'])
+  })
+
+  it('表のある味方と無い味方が混在: 表のある味方の高 Lv 習得だけが追加される', () => {
+    expect(
+      spellIds([
+        member('p1', { expTable: [10], learns: [{ level: 2, spell: 'bolt' }] }),
+        member('p2', {
+          learns: [
+            { level: 2, spell: 'ice' },
+            { level: 1, spell: 'fire' },
+          ],
+        }),
+        spell('fire'),
+        spell('bolt'),
+        spell('ice'),
+      ])
+    ).toEqual(['fire', 'bolt'])
+  })
+
+  it('経験値表のある味方でも [呪文] に無い習得は警告して省く', () => {
+    const r = ok({
+      cfg: [member('p1', { expTable: [10], learns: [{ level: 2, spell: 'zzz' }] })],
+    })
+    expect(r.raw.spells).toEqual([])
+    expect(r.warnings.some((w) => w.includes('zzz'))).toBe(true)
+  })
+})

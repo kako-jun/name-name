@@ -17,6 +17,7 @@ import {
   type LiveRpg,
 } from './fieldMenuLive'
 import type { BattleEntity } from './spellDsl'
+import type { LevelUpDef } from './levelUp'
 
 const ent = (id: string, over: Partial<BattleEntity> = {}): BattleEntity => ({
   id,
@@ -403,5 +404,70 @@ describe('applyLiveContent', () => {
   it('configOptions が無ければ config は触らない', () => {
     const out = applyLiveContent([defs[3]], kindOf, { rpg: rpg(), configOptions: undefined })
     expect(out[0]).toBe(defs[3])
+  })
+})
+
+describe('buildMagicByParty: 味方ごとの習得 (#1161)', () => {
+  const levelUp: Record<string, LevelUpDef> = {
+    a: {
+      level: 1,
+      expTable: [10, 30],
+      learns: [
+        { level: 1, spell: 'pray' },
+        { level: 3, spell: 'cure' },
+      ],
+    },
+    b: { level: 1, expTable: [10, 30], learns: [{ level: 2, spell: 'curaga' }] },
+  }
+  const ids = (l: Array<{ id: string }>) => l.map((x) => x.id)
+
+  it('人物ごとに自分の習得（保存した Lv 以下）と習得に載らない魔法だけが並ぶ', () => {
+    const by = buildMagicByParty(
+      rpg({ levelUp, party: [ent('a', { level: 3 }), ent('b', { level: 1 })] })
+    )
+    expect(ids(by.a)).toEqual(['fire', 'cure', 'pray', 'raise'])
+    expect(ids(by.b)).toEqual(['fire', 'raise'])
+  })
+
+  it('Lv 未設定は初期 Lv で絞る', () => {
+    const by = buildMagicByParty(rpg({ levelUp }))
+    expect(ids(by.a)).toEqual(['fire', 'pray', 'raise'])
+    expect(ids(by.b)).toEqual(['fire', 'raise'])
+  })
+
+  it('MP 不足・倒れた人・対象なしの暗転理由は従来どおり', () => {
+    const by = buildMagicByParty(
+      rpg({
+        levelUp,
+        party: [ent('a', { level: 3, mp: 1 }), ent('b', { level: 2, hp: 0 }), ent('c')],
+      })
+    )
+    expect(by.a.find((e) => e.id === 'cure')?.description).toContain('MPが')
+    expect(by.a.find((e) => e.id === 'pray')?.enabled).toBe(true)
+    expect(by.a.find((e) => e.id === 'fire')?.description).toContain('フィールドでは')
+    // b は Lv2 で curaga が並ぶが、倒れているので全部暗い
+    expect(ids(by.b)).toContain('curaga')
+    expect(by.b.every((e) => e.enabled === false)).toBe(true)
+    expect(by.b.find((e) => e.id === 'curaga')?.description).toContain('たおれています')
+    // 習得の定義に居ない c は初期 Lv の和集合（pray）と習得に載らない魔法
+    expect(ids(by.c)).toEqual(['fire', 'pray', 'raise'])
+  })
+
+  it('levelUp 省略は従来どおり全員に全魔法', () => {
+    const by = buildMagicByParty(rpg({ party: [ent('a', { level: 9 }), ent('b')] }))
+    expect(ids(by.a)).toEqual(['fire', 'cure', 'curaga', 'pray', 'raise'])
+    expect(ids(by.b)).toEqual(['fire', 'cure', 'curaga', 'pray', 'raise'])
+  })
+
+  it('保存した Lv が上がった後に次に開いたメニューで新しい魔法が並ぶ', () => {
+    const before = rpg({ levelUp, party: [ent('a', { level: 2 }), ent('b', { level: 1 })] })
+    expect(ids(buildMagicByParty(before).a)).not.toContain('cure')
+    expect(ids(buildMagicByParty(before).b)).not.toContain('curaga')
+    const after = rpg({ levelUp, party: [ent('a', { level: 3 }), ent('b', { level: 2 })] })
+    expect(ids(buildMagicByParty(after).a)).toContain('cure')
+    expect(ids(buildMagicByParty(after).b)).toContain('curaga')
+    // 並んだ魔法はそのまま使える
+    const r = useFieldSpell(after, 'cure', 'a', 'a', () => 0)
+    expect(r.ok).toBe(true)
   })
 })

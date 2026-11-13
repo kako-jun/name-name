@@ -6,6 +6,9 @@ import { equipBlade, resolveGear, type GearShopConfig, type GearState } from '..
 import type { EquipmentRoster } from '../game/equipment'
 import type { ItemDef } from '../types'
 import { parseRpgSave, snapshotRpg } from '../game/rpgSave'
+import { growPartyByExp, type LevelUpDef } from '../game/levelUp'
+import { carryOverBattleResult } from './fieldResume'
+import { buildMagicByParty } from '../game/fieldMenuLive'
 import { EMPTY_STACK, buildMenuRows, openList, type MenuContext } from '../game/battleMenu'
 
 const member = (id: string): BattleEntity => ({
@@ -225,5 +228,135 @@ describe('buildBattleMenu: 装備中の刀のアビリティ (#881 段階3)', ()
     }
     expect(openList(EMPTY_STACK, 'skill', ctx, 1)[0]).toMatchObject({ type: 'list', cursor: 0 })
     expect(openList(EMPTY_STACK, 'skill', ctx, 2)[0]).toMatchObject({ type: 'list', cursor: 2 })
+  })
+})
+
+describe('buildBattleMenu: 味方ごとの呪文一覧 (#1161)', () => {
+  const spells = [spell('fire'), spell('cure'), spell('bolt'), spell('free')]
+  const levelUp: Record<string, LevelUpDef> = {
+    a: {
+      level: 1,
+      expTable: [10, 30],
+      learns: [
+        { level: 1, spell: 'fire' },
+        { level: 3, spell: 'bolt' },
+      ],
+    },
+    b: { level: 1, expTable: [10, 30], learns: [{ level: 2, spell: 'cure' }] },
+  }
+  const ids = (l: BattleSpellEntry[]) => l.map((x) => x.id)
+  const lv = (id: string, level?: number): BattleEntity => ({
+    ...member(id),
+    ...(level !== undefined ? { level } : {}),
+  })
+
+  it('levelUp を渡すと味方ごとに保存した Lv で絞る（Lv 未設定は初期 Lv）', () => {
+    const m = buildBattleMenu({
+      party: [lv('a', 3), lv('b')],
+      spells,
+      items: [],
+      levelUp,
+    })!
+    expect(ids(m.spells!.a)).toEqual(['fire', 'bolt', 'free'])
+    expect(ids(m.spells!.b)).toEqual(['free'])
+  })
+
+  it('levelUp 省略は従来どおり全員に config.spells 全部', () => {
+    const m = buildBattleMenu({ party: [lv('a', 3), lv('b', 1)], spells, items: [] })!
+    expect(ids(m.spells!.a)).toEqual(['fire', 'cure', 'bolt', 'free'])
+    expect(ids(m.spells!.b)).toEqual(['fire', 'cure', 'bolt', 'free'])
+  })
+
+  it('levelUp ありでも要素は味方ごとに別インスタンス（複製）', () => {
+    const m = buildBattleMenu({ party: [lv('a', 3), lv('b', 2)], spells, items: [], levelUp })!
+    expect(m.spells!.a.find((x) => x.id === 'free')).not.toBe(spells[3])
+    expect(m.spells!.a.find((x) => x.id === 'free')).not.toBe(
+      m.spells!.b.find((x) => x.id === 'free')
+    )
+  })
+})
+
+describe('勝利のレベルアップ直後に新しい呪文が並ぶ (#1161)', () => {
+  const spells = [spell('fire'), spell('cure'), spell('bolt')]
+  const levelUp: Record<string, LevelUpDef> = {
+    a: {
+      level: 1,
+      expTable: [10, 30],
+      learns: [
+        { level: 1, spell: 'fire' },
+        { level: 3, spell: 'bolt' },
+      ],
+    },
+    b: { level: 1, expTable: [10, 30], learns: [{ level: 2, spell: 'cure' }] },
+  }
+  const ids = (l: Array<{ id: string }>) => l.map((x) => x.id)
+  const levelUpDefs = levelUp
+
+  function afterVictory(exp: number, partyAfter: BattleEntity[]) {
+    return carryOverBattleResult({
+      outcome: 'victory',
+      earnedGold: 0,
+      menuItems: [],
+      partyAfter,
+      before: { inventory: {}, gold: 0, party: [member('a'), member('b')] },
+      exp,
+      grow: growPartyByExp(levelUpDefs),
+    }).party
+  }
+
+  it('exp 60 を 2 人で分けると各 30: a は Lv3（bolt 習得）、b は Lv3（cure 習得）。候補窓に並ぶ', () => {
+    const before = buildBattleMenu({
+      party: [member('a'), member('b')],
+      spells,
+      items: [],
+      levelUp,
+    })!
+    expect(ids(before.spells!.a)).toEqual(['fire'])
+    expect(ids(before.spells!.b)).toEqual([])
+    const party = afterVictory(60, [member('a'), member('b')])
+    expect(party.map((p) => p.level)).toEqual([3, 3])
+    const m = buildBattleMenu({ party, spells, items: [], levelUp })!
+    expect(ids(m.spells!.a)).toEqual(['fire', 'bolt'])
+    expect(ids(m.spells!.b)).toEqual(['cure'])
+  })
+
+  it('同じ party をメニューの一覧にも渡すと、候補窓と同じ呪文が並ぶ', () => {
+    const party = afterVictory(20, [member('a'), member('b')]) // 各 10: ともに Lv2
+    const menu = buildBattleMenu({ party, spells, items: [], levelUp })!
+    const magic = buildMagicByParty({
+      party,
+      items: [],
+      inventory: {},
+      itemOrder: [],
+      spells: spells.map((s) => ({ ...s, effect: 'heal 5..5', target: '自分' })),
+      levelUp,
+      skills: [],
+      equipment: {},
+    })
+    expect(ids(magic.a)).toEqual(ids(menu.spells!.a))
+    expect(ids(magic.b)).toEqual(ids(menu.spells!.b))
+    expect(ids(magic.b)).toEqual(['cure'])
+    expect(ids(magic.a)).toEqual(['fire'])
+  })
+
+  it('倒れた味方は経験値が入らず、呪文も増えない／敗北では増えない', () => {
+    const dead = { ...member('b'), hp: 0 }
+    const p1 = afterVictory(60, [member('a'), dead])
+    expect(p1.map((p) => p.level)).toEqual([3, undefined])
+    const m1 = buildBattleMenu({ party: p1, spells, items: [], levelUp })!
+    expect(ids(m1.spells!.a)).toEqual(['fire', 'bolt'])
+    expect(ids(m1.spells!.b)).toEqual([])
+    const lost = carryOverBattleResult({
+      outcome: 'defeat',
+      earnedGold: 0,
+      menuItems: [],
+      partyAfter: [member('a'), member('b')],
+      before: { inventory: {}, gold: 0, party: [member('a'), member('b')] },
+      exp: 999,
+      grow: growPartyByExp(levelUpDefs),
+    }).party
+    expect(ids(buildBattleMenu({ party: lost, spells, items: [], levelUp })!.spells!.a)).toEqual([
+      'fire',
+    ])
   })
 })
