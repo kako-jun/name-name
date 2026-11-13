@@ -562,3 +562,77 @@ describe('field.fireAuto（#1155 再開直後に場面開始トリガーを起�
     expect(snap.field).not.toHaveProperty('fireAuto')
   })
 })
+
+describe('party[].level / exp（#206 レベルアップの持ち越し）', () => {
+  const withParty = (patch: Record<string, unknown>) => ({
+    version: 1,
+    party: [{ id: 'party1', ...patch }],
+    items: {},
+    equipment: {},
+    gold: 0,
+  })
+
+  it('旧セーブ（level / exp のキー無し）は通り、解決後も level / exp が付かない', () => {
+    const r = parseRpgSave(withParty({ hp: 3 }))
+    expect(r.ok).toBe(true)
+    const resolved = resolveRpg(withParty({ hp: 3 }) as RpgSaveState, base)
+    expect(resolved.party[0].level).toBeUndefined()
+    expect(resolved.party[0].exp).toBeUndefined()
+  })
+
+  it('正常な level / exp は通る（exp は 0・小数も可）', () => {
+    expect(parseRpgSave(withParty({ level: 1, exp: 0 })).ok).toBe(true)
+    expect(parseRpgSave(withParty({ level: 99, exp: 123456 })).ok).toBe(true)
+    expect(parseRpgSave(withParty({ exp: 3.5 })).ok).toBe(true)
+  })
+
+  it.each([
+    ['level 0', { level: 0 }],
+    ['level 負数', { level: -1 }],
+    ['level 小数', { level: 2.5 }],
+    ['level 文字列', { level: '3' }],
+    ['level null', { level: null }],
+    ['level NaN', { level: NaN }],
+    ['level Infinity', { level: Infinity }],
+    ['exp 負数', { exp: -1 }],
+    ['exp 文字列', { exp: '10' }],
+    ['exp NaN', { exp: NaN }],
+    ['exp null', { exp: null }],
+  ])('不正値は拒否する: %s', (_n, patch) => {
+    const r = parseRpgSave(withParty(patch))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(/party\[0\]\.(level|exp)/)
+  })
+
+  it('保存 → 再開: レベルアップした味方の level / exp が差分に残り、解決で戻る', () => {
+    const grown = { ...hero('party1'), level: 4, exp: 99, maxHp: 55, hp: 55, atk: 12 }
+    const snap = snapshotRpg(
+      { party: [grown, base.party[1]], inventory: {}, equipment: {}, gold: 0 },
+      base
+    )
+    expect(snap.party[0]).toMatchObject({ id: 'party1', level: 4, exp: 99, maxHp: 55, atk: 12 })
+    // 変わっていない味方には level / exp が出ない
+    expect(snap.party[1]).toEqual({ id: 'party2' })
+    const reparsed = parseRpgSave(JSON.parse(JSON.stringify(snap)))
+    expect(reparsed.ok).toBe(true)
+    const back = resolveRpg(snap, base)
+    expect(back.party[0]).toMatchObject({ level: 4, exp: 99, maxHp: 55, atk: 12 })
+    expect(back.party[1].level).toBeUndefined()
+    // 二周目も不変
+    expect(snapshotRpg(back, base).party).toEqual(snap.party)
+  })
+
+  it('設定の初期値が exp:0 の味方が exp を得ても差分として残る。0 のままなら出ない', () => {
+    const b: RpgBaseConfig = { ...base, party: [hero('party1', { exp: 0 })] }
+    const still = snapshotRpg(
+      { party: [hero('party1', { exp: 0 })], inventory: {}, equipment: {}, gold: 0 },
+      b
+    )
+    expect(still.party).toEqual([{ id: 'party1' }])
+    const gained = snapshotRpg(
+      { party: [hero('party1', { exp: 7, level: 1 })], inventory: {}, equipment: {}, gold: 0 },
+      b
+    )
+    expect(gained.party).toEqual([{ id: 'party1', exp: 7, level: 1 }])
+  })
+})

@@ -2238,3 +2238,96 @@ describe('scenes.<id>.triggers (#1072)', () => {
     expect(c.warnings?.[0]).toContain('scenes.a.triggers[1]')
   })
 })
+
+describe('parseConfig party[].levelUp (#206)', () => {
+  const parse = (lu: unknown, extra: Raw = {}) =>
+    parseConfig(
+      mutated((c) => (c.party = [{ id: 'hero', name: 'ゆうしゃ', hp: 20, levelUp: lu, ...extra }])),
+      BASE
+    )
+
+  it('levelUp を書かなければ config.levelUp は空', () => {
+    expect(ok(minimal()).levelUp).toEqual({})
+    expect(ok(mutated((c) => (c.party = [{ name: 'a', hp: 10 }]))).levelUp).toEqual({})
+  })
+
+  it('正常: 経験値表・成長・初期 Lv・習得が味方 id で入る。初期 Lv は 1〜99 にそろえる', () => {
+    const r = parse({
+      level: 120,
+      expTable: [10, 30],
+      growth: 'hp+5',
+      learns: [{ level: 2, spell: 'fire', name: 'ほのお' }],
+    })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.levelUp).toEqual({
+      hero: {
+        level: 99,
+        expTable: [10, 30],
+        growth: 'hp+5',
+        learns: [{ level: 2, spell: 'fire', name: 'ほのお' }],
+      },
+    })
+    const low = parse({ level: -3, expTable: [1] })
+    if (!low.ok) throw new Error(low.error)
+    expect(low.value.levelUp.hero.level).toBe(1)
+  })
+
+  it('id が無い味方は party{N} で入る（expandCharacterForms と同じ規則）', () => {
+    const r = parseConfig(
+      mutated(
+        (c) =>
+          (c.party = [
+            { name: 'a', hp: 10 },
+            { name: 'b', hp: 10, levelUp: { expTable: [5] } },
+          ])
+      ),
+      BASE
+    )
+    if (!r.ok) throw new Error(r.error)
+    expect(Object.keys(r.value.levelUp)).toEqual(['party2'])
+  })
+
+  it('空の経験値表は無効扱い（エラーでなく、その味方は経験値で何も起きない）', () => {
+    const r = parse({ expTable: [], growth: 'hp+5' })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.levelUp).toEqual({})
+  })
+
+  it('growth だけ（経験値表なし）は読み込みエラー', () => {
+    const r = parse({ growth: 'hp+5' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('party[0].levelUp.expTable')
+  })
+
+  it.each([
+    ['expTable 非整数', { expTable: [10, 1.5] }, 'expTable'],
+    ['expTable 負数', { expTable: [-1] }, 'expTable'],
+    ['expTable 文字列要素', { expTable: [10, '20'] }, 'expTable'],
+    ['expTable 配列でない', { expTable: 10 }, 'expTable'],
+    ['expTable NaN', { expTable: [NaN] }, 'expTable'],
+    ['growth 非文字列', { expTable: [1], growth: 5 }, 'growth'],
+    ['level 小数', { expTable: [1], level: 1.5 }, 'level'],
+    ['level 文字列', { expTable: [1], level: '2' }, 'level'],
+    ['learns 配列でない', { expTable: [1], learns: {} }, 'learns'],
+    ['learns の spell が空', { expTable: [1], learns: [{ level: 2, spell: '' }] }, 'learns'],
+    ['learns の level が小数', { expTable: [1], learns: [{ level: 1.5, spell: 'a' }] }, 'learns'],
+  ])('不正: %s はパスつきの読み込みエラー', (_n, lu, key) => {
+    const r = parse(lu)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain(`party[0].levelUp.${key}`)
+  })
+
+  it('levelUp がオブジェクトでない（null・配列・数）は読み込みエラー', () => {
+    for (const bad of [null, 5, 'x', [1]]) {
+      const r = parse(bad)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toContain('party[0].levelUp')
+    }
+  })
+
+  it('降順・重複の経験値表はそのまま通す（並びは検査しない）', () => {
+    const r = parse({ expTable: [30, 10, 10, 0] })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.value.levelUp.hero.expTable).toEqual([30, 10, 10, 0])
+  })
+})

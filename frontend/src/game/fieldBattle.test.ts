@@ -1078,3 +1078,38 @@ describe('planBattleFlagUpdates: 戦闘結果の フラグ= の選別 (#1077)', 
     expect(d).toEqual({ 勝利: false })
   })
 })
+
+describe('buildBattleMenuData: 習得候補は保存した Lv を優先 (#206)', () => {
+  const spells = {
+    fire: { id: 'fire', name: 'ほのお', mp: 3, target: '敵単体' },
+    ice: { id: 'ice', name: 'こおり', mp: 3, target: '敵単体' },
+  }
+  const learns = [
+    { level: 1, spell: 'fire' },
+    { level: 4, spell: 'ice' },
+  ]
+  const ids = (r: ReturnType<typeof roster> & { spells: typeof spells }, level?: number) => {
+    const party = buildPartyBattleEntities(r, 'side').map((m) =>
+      level === undefined ? m : { ...m, level }
+    )
+    return buildBattleMenuData(r, party)?.spells?.a?.map((e) => e.id)
+  }
+
+  it('味方の level（レベルアップ後）が定義の初期 Lv より優先される', () => {
+    const r = { ...roster(['a'], { a: { level: 1, learns } }), spells }
+    expect(ids(r)).toEqual(['fire'])
+    expect(ids(r, 4)).toEqual(['fire', 'ice'])
+  })
+
+  it('保存した level の方が低ければ、定義の初期 Lv ではなく保存側に従う', () => {
+    const r = { ...roster(['a'], { a: { level: 5, learns } }), spells }
+    expect(ids(r, 2)).toEqual(['fire'])
+  })
+
+  it('味方に level が無ければ定義の初期 Lv、それも無ければ 1', () => {
+    const hi = { ...roster(['a'], { a: { level: 4, learns } }), spells }
+    expect(ids(hi)).toEqual(['fire', 'ice'])
+    const none = { ...roster(['a'], { a: { learns } }), spells }
+    expect(ids(none)).toEqual(['fire'])
+  })
+})

@@ -217,3 +217,38 @@ describe('dq / front は従来どおり (#1039)', () => {
     expect(closed).toEqual(['victory'])
   })
 })
+
+describe('ff 勝利: レベルアップの行 (#206)', () => {
+  const defs = {
+    hero: { expTable: [3], learns: [{ level: 2, spell: 'heal', name: 'ホイミ' }] },
+    mage: { expTable: [1000] },
+  }
+  // 生存 2 人（hero / mage）に exp 8 → 各 4。hero は表 [3] に届いて Lv2、mage は [1000] に届かない
+  it('levelUp を渡すと exp 行の直後にレベルアップと習得が出て、戦利品が最後。持ち越しと同じ関数の結果と一致', () => {
+    const { s } = setup({ presentation: 'ff', levelUp: defs }, { exp: 8 })
+    toResult(s)
+    expect(I(s).resultMessages).toEqual([
+      RESULT_TEXT.victory,
+      RESULT_TEXT.gold(3),
+      RESULT_TEXT.exp(8),
+      RESULT_TEXT.levelUp,
+      RESULT_TEXT.learned('ホイミ'),
+      RESULT_TEXT.loot('ポーション'),
+    ])
+  })
+
+  it('levelUp を渡さない・届かないときは従来どおり（行が増えない）', () => {
+    const plain = setup({ presentation: 'ff' }, { exp: 8 })
+    toResult(plain.s)
+    expect(I(plain.s).resultMessages).not.toContain(RESULT_TEXT.levelUp)
+    const short = setup({ presentation: 'ff', levelUp: defs }, { exp: 2 })
+    toResult(short.s)
+    expect(I(short.s).resultMessages).not.toContain(RESULT_TEXT.levelUp)
+  })
+
+  it('dq 表示ではレベルアップの行を出さない', () => {
+    const { s } = setup({ presentation: 'dq', levelUp: defs }, { exp: 8 })
+    toResult(s)
+    expect(I(s).resultMessages ?? []).not.toContain(RESULT_TEXT.levelUp)
+  })
+})
