@@ -281,7 +281,8 @@ export function cursorMemoryKey(actorId: string, kind: MenuKind): string {
 }
 
 /**
- * 一覧窓を開く。候補がない・すでに窓が開いているときは今のまま。カーソルは最初に選べる行。
+ * 一覧窓を開く。すでに窓が開いているときは今のまま。候補が 0 件でも（FF 風に）中身が空の窓を開く (#1171)。
+ * カーソルは最初に選べる行（0 件なら 0）。
  * `preferred`（カーソル記憶 #880）が範囲内で選べる行なら、そこから始める（範囲外・グレーの行なら記憶は使わない）
  */
 export function openList(
@@ -290,7 +291,7 @@ export function openList(
   ctx: MenuContext,
   preferred?: number
 ): MenuStack {
-  if (stack.length > 0 || ctx.rows.length === 0) return stack
+  if (stack.length > 0) return stack
   const first = ctx.rows.findIndex((r) => !r.disabled)
   const usable =
     typeof preferred === 'number' &&
@@ -465,6 +466,8 @@ export function confirm(stack: MenuStack, ctx: MenuContext): MenuResult {
   const w = stack[stack.length - 1]
   if (!w) return { stack }
   if (w.type === 'list') {
+    // 候補 0 件の空窓 (#1171): 決定しても何も起きない（窓は開いたまま・メッセージも出さない）
+    if (ctx.rows.length === 0) return { stack }
     const row = ctx.rows[w.cursor]
     const entry = ctx.entries[w.cursor]
     if (!row || !entry) return { stack, blocked: 'empty' }

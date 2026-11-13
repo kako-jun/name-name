@@ -1423,7 +1423,7 @@ export class BattleScreen extends Container {
       case 'spell':
       case 'item':
         // 候補窓 (#204, #806): 呪文・わざ・召喚 (#889)・アイテムが渡されている side なら（grid でも cross でも）一覧の窓を開く。
-        // それ以外は従来どおり識別ログのみ（戦闘エンジン側の log には積まない）
+        // 候補が 0 件でも中身が空の窓を開く (#1171)。候補窓機能が無効なゲーム（メニュー用データが無い）は従来どおり識別ログのみ（戦闘エンジン側の log には積まない）
         if (this.openMenu(id)) return
         console.info(`[BattleScreen] command '${id}' は #175 で実装`)
         break
@@ -2704,7 +2704,7 @@ export class BattleScreen extends Container {
     }
   }
 
-  /** 「わざ」「じゅもん」「どうぐ」で一覧の窓を開く。開けたら true（候補がない・窓を出せないときは false） */
+  /** 「わざ」「じゅもん」「どうぐ」で一覧の窓を開く。開けたら true（候補 0 件でも空の窓を開く #1171。窓を出せないときは false） */
   private openMenu(kind: MenuKind): boolean {
     if (this.menuStack.length > 0) return true
     const ctx = this.menuContext(kind)

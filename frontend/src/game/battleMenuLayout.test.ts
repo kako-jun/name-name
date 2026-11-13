@@ -489,3 +489,37 @@ describe('アイテム窓でも 7 文字の名前は省略されない（×1・�
     }
   }
 })
+
+describe('候補 0 件の空窓 (#1171)', () => {
+  it('どの画面サイズでも例外なく、行・手・スクロール帯なしで画面内に収まる', () => {
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 4, 3)
+      const members = [ent('a')]
+      const ctx: MenuContext = {
+        rows: [],
+        maxRows: listMaxRows(g),
+        entries: [],
+        party: members,
+        enemies: [ent('e')],
+        actorIndex: 0,
+      }
+      const st = openList(EMPTY_STACK, 'spell', ctx)
+      const view = buildMenuView(st, ctx, g)
+      expect(view).toHaveLength(1)
+      const v = view[0]
+      if (v.type !== 'list') throw new Error()
+      expect(v.rows).toEqual([])
+      expect(v.hand).toBeNull()
+      expect([v.moreAbove, v.moreBelow, v.scrollUp, v.scrollDown]).toEqual([
+        false,
+        false,
+        null,
+        null,
+      ])
+      expect(v.rect.h).toBeGreaterThan(0)
+      expect(v.rect.w).toBeGreaterThan(0)
+      expect(Number.isFinite(v.rect.x + v.rect.y + v.rect.w + v.rect.h)).toBe(true)
+      expect(v.rect.y).toBeGreaterThanOrEqual(0)
+    }
+  })
+})

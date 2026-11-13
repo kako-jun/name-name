@@ -122,10 +122,31 @@ describe('窓のスタックとキャンセル', () => {
     expect(cancel(st)).toEqual([])
   })
 
-  it('候補がなければ開かない・すでに開いていれば今のまま', () => {
-    expect(openList(EMPTY_STACK, 'spell', ctxOf({ rows: [], entries: [] }))).toEqual([])
+  it('候補が 0 件でも空の窓を開く (#1171)・すでに開いていれば今のまま', () => {
+    expect(openList(EMPTY_STACK, 'spell', ctxOf({ rows: [], entries: [] }))).toEqual([
+      { type: 'list', kind: 'spell', cursor: 0, top: 0 },
+    ])
     const st = openList(EMPTY_STACK, 'spell', ctxOf())
     expect(openList(st, 'item', ctxOf())).toBe(st)
+  })
+
+  it('空の窓の操作はすべて安全（カーソル・決定・タップ・スクロール・描画）(#1171)', () => {
+    const empty = ctxOf({ rows: [], entries: [] })
+    const st = openList(EMPTY_STACK, 'item', empty, 3)
+    expect(st).toEqual([{ type: 'list', kind: 'item', cursor: 0, top: 0 }])
+    for (const d of ['up', 'down', 'left', 'right'] as const) {
+      expect(moveCursor(st, d, empty)).toEqual(st)
+    }
+    expect(setListCursor(st, 0, empty)).toEqual(st)
+    expect(setListCursor(st, -1, empty)).toEqual(st)
+    expect(scrollList(st, 1, empty)).toEqual(st)
+    expect(scrollList(st, -5, empty)).toEqual(st)
+    expect(refitList(st, empty)).toEqual(st)
+    expect(scrollTopFor(0, 0, 0, empty.maxRows)).toBe(0)
+    // 決定: 何も起きない（action も blocked も無く、窓は開いたまま）
+    expect(confirm(st, empty)).toEqual({ stack: st })
+    // キャンセルで戻れる
+    expect(cancel(st)).toEqual([])
   })
 
   it('開いたときのカーソルは最初に選べる行', () => {
