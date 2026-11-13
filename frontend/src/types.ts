@@ -272,6 +272,10 @@ export interface PartyMemberDef {
   equipmentSlots?: string[]
   /** 就けるジョブ (#740)。`[ジョブ id]` の id（`ジョブ:` を書いた順。先頭が最初のジョブ）。現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。解決・検査は `game/job.ts` */
   jobs?: string[]
+  /** レベルアップに必要な累計経験値の表 (#206。`経験値表:`)。Lv1→2 から順。表の長さ + 1 が上限 Lv。解釈は `game/levelUp.ts` */
+  expTable?: number[]
+  /** レベルが 1 上がるごとに足す能力値 (#206。`成長:`)。魔石の `成長` と同じ書式の生文字列。解釈は `parseStatBonus` */
+  growth?: string
   /** フィールドで歩く人物 (#1104。`人物:`)。台帳の人物 ID など。生文字列で透過し、解決は runtime */
   character?: string
   /** フィールドで歩くときの形態 (#1104。`形態:`)。生文字列で透過 */

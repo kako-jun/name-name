@@ -617,7 +617,10 @@ export interface BattleEntity {
    * セーブ（`rpg.party[].form`）に書くと、一枚絵フィールドが再開時にその形態の戦闘ポーズ・歩行絵を選ぶ（`field/characterForms.ts`）
    */
   form?: string
-  /** 倒したときに得られる経験値（敵側のみ、味方は undefined） */
+  /**
+   * 敵: 倒したときに得られる経験値。味方: これまでの累計経験値 (#206。一枚絵フィールドで勝つと足され、セーブされる。
+   * 経験値表を持たない味方は付かない)。Lv は `level`
+   */
   exp?: number
   /** 倒したときに落とすゴールド（敵側のみ） */
   gold?: number
@@ -652,6 +655,7 @@ export interface BattleEntity {
   row?: BattleRow
   /**
    * 敵のレベル (#898)。`MonsterDef.level`（`レベル:`）を戦闘への組み立て時に写す。無い敵は付かない（従来どおりキーも増えない）。
+   * 味方: レベルアップで上がった今の Lv (#206。一枚絵フィールドの経験値で付き、セーブされる。付かない味方は定義の初期 Lv)。
    * `damage_full レベル倍数=N` の条件と、効果 `level +N|-N|=N` の調整が使う（1〜`MAX_LEVEL`）。通常攻撃・ダメージ計算は読まない
    */
   level?: number
