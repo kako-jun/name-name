@@ -142,6 +142,8 @@ export interface SideBattleLayout {
 
 export const SIDE_PADDING = 16
 export const SIDE_GAP = 6
+/** 敵名窓でラベル帯を取らないとき (#1176)、敵グリッドの右端と味方領域の左端のあいだに必ず空ける隙間（設計座標） */
+export const SIDE_ENEMY_PARTY_MIN_GAP = 1
 /** ログ帯の行数の下限・上限 */
 export const SIDE_LOG_MIN_LINES = 2
 export const SIDE_LOG_MAX_LINES = 4
@@ -989,10 +991,16 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   let enemies: SpriteSlot[]
   if (input.enemyGrid) {
     // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
+    // 足元ラベル帯は、敵名窓 (#954) が置けて足元ラベルを出さないとき（enemyList あり）だけ予約しない (#1176)
+    const gridLabel = enemyList === null
+    // 帯を取らない分セルが幅で決まり、グリッドの右端が味方領域の左端に接する。そのとき味方の枠に触れないよう最小の隙間を空ける
+    const gridRegion: Rect = gridLabel
+      ? enemyRegion
+      : { ...enemyRegion, w: Math.max(0, enemyRegion.w - SIDE_ENEMY_PARTY_MIN_GAP) }
     const overlap = clampEnemyWindowOverlap(
-      enemyRegion,
+      gridRegion,
       input.enemyGrid,
-      true,
+      gridLabel,
       input.enemyWindowOverlap,
       log.h
     )
@@ -1006,11 +1014,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
         footprints.push(fp)
       }
     }
-    const gl = computeEnemyGridLayout(enemyRegion, input.enemyGrid, footprints, {
-      withLabel: true,
+    const gl = computeEnemyGridLayout(gridRegion, input.enemyGrid, footprints, {
+      withLabel: gridLabel,
       windowOverlap: overlap,
     })
-    const band = gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+    const band = gridLabel && gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
     gridFrontFloor = gl.grid.y + gl.grid.h - band
     const slots: EnemyGridSlot[] = Array.from({ length: enemyCount }, () =>
       emptyEnemyGridSlot(gl.grid.x, gridFrontFloor as number)

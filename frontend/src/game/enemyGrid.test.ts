@@ -244,6 +244,38 @@ describe('computeEnemyGridLayout', () => {
     expect(noLabel.cell).toBeCloseTo(150, 6)
   })
 
+  it('ラベル帯なしは帯ぶん高さを使える。高さで決まるうちは列数を変えても cell が変わらない (#1176)', () => {
+    const r: Rect = { x: 0, y: 0, w: 2000, h: 304 }
+    const opt = { windowOverlap: 0.5 }
+    const withBand = computeEnemyGridLayout(r, { cols: 6, rows: 2 }, [], {
+      ...opt,
+      withLabel: true,
+    })
+    const noBand = computeEnemyGridLayout(r, { cols: 6, rows: 2 }, [], { ...opt, withLabel: false })
+    expect(withBand.cell).toBeCloseTo((304 - 2 * LABEL_BAND) / 1.5, 6)
+    expect(noBand.cell).toBeCloseTo(304 / 1.5, 6)
+    expect(noBand.cell).toBeGreaterThan(withBand.cell)
+    for (const cols of [2, 4, 6, 8]) {
+      for (const withLabel of [true, false]) {
+        const l = computeEnemyGridLayout(r, { cols, rows: 2 }, [], { ...opt, withLabel })
+        const ref = withLabel ? withBand.cell : noBand.cell
+        expect(l.cell, `${cols} ${withLabel}`).toBeCloseTo(ref, 6)
+      }
+    }
+    // 幅で決まるときは領域幅/列数が上限
+    const narrow = computeEnemyGridLayout(
+      { x: 0, y: 0, w: 860, h: 304 },
+      { cols: 6, rows: 2 },
+      [],
+      {
+        ...opt,
+        withLabel: false,
+      }
+    )
+    expect(narrow.cell).toBeCloseTo(860 / 6, 6)
+    expect(narrow.grid.h).toBeCloseTo(narrow.cell * 2, 6)
+  })
+
   const wideRegion: Rect = { ...region, w: 1200 }
 
   it('グリッドは横中央・下端。最上行は overlap*cell だけ領域の上へ延びる', () => {

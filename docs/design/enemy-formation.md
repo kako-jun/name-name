@@ -92,11 +92,12 @@ battle_enemy_grid: 6x2
 `computeSideBattleLayout` が、グリッド有効時は `enemyRegion` から**セル一辺 `cell`** を求める。入力は領域・列数 C・行数 R・ラベル帯だけで、**敵の体数・種類・縦横比は一切入らない**（#813 と同じ）。
 
 ```
-labelBand = SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT          // 行ごとの足元ラベルの予約
+labelBand = SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT          // 行ごとの足元ラベルの予約。敵名窓 (`battle_enemy_list: window`) が置けて足元ラベルを出さないときは 0（#1176）
 cell      = min( regionW / C,  (regionH - R*labelBand) / (R - ov) )   // 正方形セル（0 以下なら 0）。ov = battle_enemy_window_overlap（窓の下へ延ばす上端ぶん ov*cell を領域に足した閉形式。ov=0 なら regionH/R - labelBand）
 gridW     = cell * C,  gridH = (cell + labelBand) * R   // cell = 0（置けないほど狭い）のときはラベル帯も 0 で、グリッド全体が 0
 ```
 
+- **敵名窓のときはラベル帯を予約しない (#1176)**: `battle_enemy_list: window` が実際に置けた（`enemyList` が null でない）ときだけ `labelBand = 0`。置けない狭い画面・未指定・`dq`・`front` は従来どおり予約する。セルは高さでなく幅（`regionW / C`）で決まりやすくなり、1280x720・全員前衛で 6x2 のセルは約 143px（ラベル帯あり 115px）。幅で決まるとグリッド右端が味方領域の左端に接してしまうため、この場合だけ領域の幅から `SIDE_ENEMY_PARTY_MIN_GAP`（設計座標 1px）を引いてから `cell` を求め、味方の枠との間に必ず隙間を空ける（水平方向の重なりは出ない。800x450 で全員前衛・4 人のとき、右端と味方の左端の距離は 1px、後衛ありでも 1px 以上）（上の窓へ少し重なるのは `battle_enemy_window_overlap` の仕様どおり）。
 - セルを**正方形**にする理由: サイズ区分の縦横比（2x1 = 2:1, 1x2 = 1:2）が台帳の割り当て規則（縦横比 1.8 / 0.55）と一致し、占有領域の contain が直感どおりになる。
 - グリッド全体は `enemyRegion` 内に、**横は中央・縦は下端（足元側）**に置く。余りは捨てるので、体数で重心は動かない（現行の「領域の中央に寄せる」はやめる）。縦長 stage の下寄せ (#760) の考え方（領域を下げて味方の頭とぶつけない）は、領域 `enemyRegion` の決め方として**そのまま再利用**する。
 - ラベルは行ごとに足元へ置く。占有が複数行の敵のラベルは**占有領域の最下行の足元**。行の `labelBand` はセルの外側（下）に取るので、行内の絵はセル全体を使える。ラベルが読めない幅（`isLabelWidthReadable`）の敵はラベルだけ省く（現行ルールを流用）。
