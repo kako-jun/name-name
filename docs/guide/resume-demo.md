@@ -115,7 +115,7 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 ## 刀の確認（味方の刀。#1035）
 
-味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順。**旧経路（`field.html?config=`）の手順で、寺町セーブの読み込み先の世界設定が現在無い（#1066 で同梱の設定を削除）ので、そのままでは成り立たない**。現行の `/play/sit-by-me` では、再開点のセーブ（`play/README.md`）で同じ戦闘中の再開ができる。旧経路で設定が用意できたときの流れ:
+味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順。**旧経路（`field.html?config=`）の手順で、寺町セーブの読み込み先の世界設定が現在無い（#1066 で同梱の設定を削除）ので、そのままでは成り立たない**。現行の `/play/sit-by-me` では、再開点のセーブ（`play/README.md`）で戦闘中の再開ができる（劇戦闘など、旧セーブとは別の戦闘）。旧経路で設定が用意できたときの流れ:
 
 1. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する
 2. `cd frontend && npx vite build --outDir <出力先>` の本番ビルドを静的配信する（`field.html`）
