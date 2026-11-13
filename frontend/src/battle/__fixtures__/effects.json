@@ -5,7 +5,7 @@
   "commands": ["attack", "summon", "spell", "escape"],
   "atb": "on",
   "atbMode": "wait",
-  "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp",
+  "background": "http://localhost:8765/assets/images/battle-backgrounds/BG011.webp",
   "effects": {
     "cast": {
       "image": "http://localhost:8765/assets/images/effects/candidates/cast-magic-v1.png",

@@ -2,7 +2,9 @@
  * 一枚絵フィールドをセーブデータから途中再開する (#1021)。DOM / PixiJS に依存しない純関数。
  *
  * 状態の与え方は一通り: localStorage に `SaveSlotData`（`rpg` 付き）を先に作ってから、
- * `field.html?resume=<0|1|2|quick>` で開く。セーブ形式は `game/rpgSave.ts` が正本で、
+ * `/play/sit-by-me?resume=<0|1|2|quick>` で開く（現行の経路。`FieldPlayer.tsx`）。
+ * 開発ページ `field.html?config=<URL>&resume=<…>` は旧経路で、同じ仕組み（このファイル）に乗る。
+ * セーブ形式は `game/rpgSave.ts` が正本で、
  * このファイルは「設定（世界）にセーブ（状態）を重ねる」ことと「戦闘エンジンへ渡す形」だけを持つ。
  */
 import { SaveManager, type SaveSlotData } from '../game/SaveManager'
