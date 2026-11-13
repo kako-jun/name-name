@@ -501,6 +501,11 @@ export interface EffectContext {
   targets: BattleEntity[]
   rng: () => number
   /**
+   * その者が味方か (#206)。味方は経験値のレベルアップで `level` を持つが、`level +N|-N|=N` と `damage_full レベル倍数` は敵のレベルのための仕組み
+   * （spec: 味方には効かない）なので、味方は「レベルを持たない者」として扱う。エンジンが渡す。未指定は従来どおり（`level` の有無だけで決まる）
+   */
+  isAlly?: (e: BattleEntity) => boolean
+  /**
    * 全体化 (#895) の割る数（`multiTargetDivisor`）。2 以上のとき、`damage` の基礎値と `damage_full` / `status` の成功率をこの数で割る
    * （`spreadDamageBase` / `spreadSuccessRate`）。未指定・1 以下は従来どおり（rng 消費も変わらない）。エンジンが全体化した呪文だけに渡す
    */
@@ -753,7 +758,9 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
         if (
           effect.kind === 'damage_full' &&
           effect.levelMultiple !== undefined &&
-          (t.level === undefined || t.level % effect.levelMultiple !== 0)
+          (ctx.isAlly?.(t) === true ||
+            t.level === undefined ||
+            t.level % effect.levelMultiple !== 0)
         ) {
           log.push(`${t.name} には きかなかった！`)
           return
@@ -902,7 +909,7 @@ function applyEffectBody(effect: ParsedEffect, ctx: EffectContext): string[] {
       const adj = effect.levelAdjust
       if (!adj) return ['(警告: level のパラメータ不正)']
       for (const t of ctx.targets) {
-        if (t.level === undefined || t.hp <= 0) {
+        if (ctx.isAlly?.(t) === true || t.level === undefined || t.hp <= 0) {
           log.push(`${t.name} には きかなかった！`)
           continue
         }

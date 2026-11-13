@@ -1027,7 +1027,7 @@ export class BattleEngine {
   private evalEffectDsl(effectStr: string, ctx: EffectContext): string[] {
     const parsed = parseEffect(effectStr)
     if (!parsed) return [`(効果 DSL が解釈できない: '${effectStr}')`]
-    return applyEffect(parsed, ctx)
+    return applyEffect(parsed, { ...ctx, isAlly: (e) => this.state.party.includes(e) })
   }
 
   private advanceAfterPartyAction(react?: PartyReaction): void {
