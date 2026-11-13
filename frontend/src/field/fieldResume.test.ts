@@ -245,6 +245,102 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
     expect(r.party).toEqual([{ id: 'a', hp: 20 }])
     expect(r.inventory.potion).toBe(0)
   })
+
+  describe('戦利品 loot (#1126)', () => {
+    const base = { earnedGold: 0, partyAfter: after, before }
+
+    it('既存 id には加算する（候補窓に無い所持品も）', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [{ itemId: 'ether', count: 2 }],
+      })
+      expect(r.inventory).toEqual({ potion: 3, ether: 3 })
+    })
+
+    it('未定義 id は新規エントリになる', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [{ itemId: 'rare-gem', count: 1 }],
+      })
+      expect(r.inventory['rare-gem']).toBe(1)
+    })
+
+    it('同じ id が複数行あれば合算する', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [
+          { itemId: 'potion', count: 1 },
+          { itemId: 'potion', count: 2 },
+          { itemId: 'gem', count: 1 },
+          { itemId: 'gem', count: 1 },
+        ],
+      })
+      expect(r.inventory).toEqual({ potion: 6, ether: 1, gem: 2 })
+    })
+
+    it('候補窓で消費した後の残数に戦利品を足す', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [{ id: 'potion', count: 1 }],
+        loot: [{ itemId: 'potion', count: 2 }],
+      })
+      expect(r.inventory.potion).toBe(3)
+    })
+
+    it.each(['defeat', 'escaped'])('%s でも戦利品は入る', (outcome) => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome,
+        menuItems: [{ id: 'potion', count: 0 }],
+        loot: [{ itemId: 'potion', count: 1 }],
+      })
+      expect(r.inventory.potion).toBe(1)
+    })
+
+    it('loot 省略・空配列は従来と同じ', () => {
+      const args = { ...base, outcome: 'victory', menuItems: [{ id: 'potion', count: 1 }] }
+      const omitted = carryOverBattleResult(args)
+      expect(omitted.inventory).toEqual({ potion: 1, ether: 1 })
+      expect(carryOverBattleResult({ ...args, loot: [] })).toEqual(omitted)
+    })
+
+    it('count 0 は所持数を変えない（未定義 id は 0 のエントリ）', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [
+          { itemId: 'potion', count: 0 },
+          { itemId: 'none', count: 0 },
+        ],
+      })
+      expect(r.inventory.potion).toBe(3)
+      expect(r.inventory.none).toBe(0)
+    })
+
+    it('渡した before.inventory・loot は書き換えない', () => {
+      const loot = [{ itemId: 'potion', count: 5 }]
+      carryOverBattleResult({ ...base, outcome: 'victory', menuItems: [], loot })
+      expect(before.inventory.potion).toBe(3)
+      expect(loot).toEqual([{ itemId: 'potion', count: 5 }])
+    })
+
+    it('配線の固定: startFieldGame が result.items を渡し itemNames を BattleEngine に配線する（静的検査）', () => {
+      // startFieldGame は PixiJS 依存で結合できないため、原文だけを固定する（式を変えたらここも直す）
+      expect(startFieldGameSrc).toContain('carryOverBattle(outcome, result.gold, result.items,')
+      expect(startFieldGameSrc).toContain(
+        'itemNames: Object.fromEntries(config.items.map((it) => [it.id, it.name]))'
+      )
+      expect(startFieldGameSrc).toMatch(/carryOverBattleResult\(\{[^}]*loot,/s)
+    })
+  })
 })
 
 // #1020: 設定を読む前に、セーブの form（時期・車椅子）だけを先に読む
