@@ -12,6 +12,7 @@ import {
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
   sideStatusLeftPadding,
+  sideStatusSlashWidth,
   SIDE_STATUS_MARKER_GUTTER_MAX,
   SIDE_STATUS_MARKER_GUTTER_MIN,
   type StatusColumnsInput,
@@ -85,7 +86,10 @@ describe('computeStatusColumns: maxHp の桁数 (#745)', () => {
   it('HP 列の幅は「HP 最大/最大」の概算幅そのもの（定数の直書きなし）', () => {
     for (const m of [99, 100, 999, 1000]) {
       const c = computeStatusColumns({ ...base, maxHp: m })
-      expect(c.hp.w).toBeCloseTo(estimateTextWidth(`HP${m}/${m}`, F) + SIDE_STATUS_COLUMN_GAP, 6)
+      expect(c.hp.w).toBeCloseTo(
+        estimateTextWidth(`HP${m}${m}`, F) + sideStatusSlashWidth(F) + SIDE_STATUS_COLUMN_GAP,
+        6
+      )
     }
   })
 
@@ -93,7 +97,10 @@ describe('computeStatusColumns: maxHp の桁数 (#745)', () => {
     const c0 = computeStatusColumns({ ...base, maxMp: 0 })
     const c1000 = computeStatusColumns({ ...base, maxMp: 1000 })
     expect(c0.mp).not.toBeNull()
-    expect(c0.mp!.w).toBeCloseTo(estimateTextWidth('MP0/0', F) + SIDE_STATUS_COLUMN_GAP, 6)
+    expect(c0.mp!.w).toBeCloseTo(
+      estimateTextWidth('MP00', F) + sideStatusSlashWidth(F) + SIDE_STATUS_COLUMN_GAP,
+      6
+    )
     expect(c1000.mp!.w).toBeGreaterThan(c0.mp!.w)
   })
 

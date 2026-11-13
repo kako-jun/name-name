@@ -201,7 +201,7 @@ import {
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_HEIGHT,
   SIDE_STATUS_MARKER_FONT_SIZE,
-  SIDE_STATUS_TAG_ROOM_CHARS,
+  statusTagRoomWidth,
   frontStatsLeftPadding,
   effectiveCommandLayout,
   SELECT_MARK_LOG_GAP,
@@ -289,7 +289,7 @@ const ACTOR_COLOR = 0xffee66
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
-/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
+/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は名前・HP/MP の列を除いた行の残り幅いっぱいに置く (#1173, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
 /** 想像の層 (#750) のかぶせの色（暗い寒色）と、最も濃いときの不透明度 */
 const SUMMON_VEIL_COLOR = 0x0a1230
@@ -785,7 +785,7 @@ export class BattleScreen extends Container {
   } | null = null
   /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
-  /** HP・MP は「見出し | 現在値 | /最大値」の 3 つの Text。`*Texts` が現在値（右寄せ）、`*Labels` が見出し（左寄せ）、`*Maxes` が「/最大値」（「/」の x で左寄せ）。見出しと「/」の x が全員そろう */
+  /** HP・MP は「見出し | 現在値 | / | 最大値」の 4 つの Text (#1173)。`*Labels` が見出し（左寄せ）、`*Texts` が現在値（右寄せ）、`*Slashes` が「/」（現在値の右端から左寄せ）、`*Maxes` が最大値（列の右端に右寄せ）。見出し・「/」の x と数字の一の位が全員そろう */
   private statusHpTexts: PixiText[] = []
   private statusMpTexts: PixiText[] = []
   private statusHpLabels: PixiText[] = []
@@ -2085,10 +2085,10 @@ export class BattleScreen extends Container {
       maxMp: party.reduce((m, p) => Math.max(m, p.maxMp), 0),
       compact: L.statusCompact,
       atb: this.atbBars.length > 0,
-      // 名前列は、いちばん長い名前＋状態名の余裕。ATB のゲージは残り幅いっぱい (#1173)
+      // 名前列は、いちばん長い名前＋宣言された状態名の最悪ぶん。ATB のゲージは残り幅いっぱい (#1173)
       nameWidth:
         party.reduce((m, p) => Math.max(m, estimateTextWidth(p.name, SIDE_STATUS_FONT_SIZE)), 0) +
-        SIDE_STATUS_TAG_ROOM_CHARS * SIDE_STATUS_FONT_SIZE,
+        statusTagRoomWidth(Object.values(this.engine.getStatusRules()).map((r) => r.name)),
     })
     this.sideStatusColumns = cols
     // 候補窓の右端は HP 列の左で止める（HP の数字を途中で切らない）
@@ -2128,7 +2128,7 @@ export class BattleScreen extends Container {
       )
     }
     if (this.atbBars.length > 0 && cols.gauge) {
-      // ATB ゲージは行の右端に短く置く（数文字ぶんの幅）。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
+      // ATB ゲージは名前・HP/MP の列を除いた行の残り幅いっぱいに置く (#1173)。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
       const g = cols.gauge
       this.atbBarRects = L.statusRows.map((row) => ({
         x: g.x,

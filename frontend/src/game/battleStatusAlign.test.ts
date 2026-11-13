@@ -14,8 +14,12 @@ import {
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_MIN_WIDTH,
   SIDE_STATUS_GAUGE_WIDTH,
+  SIDE_STATUS_MARKER_GUTTER_MAX,
+  SIDE_STATUS_MARKER_GUTTER_MIN,
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
+  sideStatusSlashWidth,
+  statusTagRoomWidth,
   type StatusColumnsInput,
 } from './battleLayout'
 import type { BattleEntity } from './spellDsl'
@@ -59,8 +63,14 @@ describe('computeStatusColumns: 値の列は現在値・最大値とも右寄せ
       // 現在値の右端 + 「/」+ 最大値の最大桁 = 列の右端
       expect(col.maxRight - col.curRight).toBeGreaterThan(0)
     }
-    expect(c.hp.maxRight - c.hp.curRight).toBeCloseTo(estimateTextWidth('/9999', F), 6)
-    expect(c.mp!.maxRight - c.mp!.curRight).toBeCloseTo(estimateTextWidth('/999', F), 6)
+    expect(c.hp.maxRight - c.hp.curRight).toBeCloseTo(
+      sideStatusSlashWidth(F) + estimateTextWidth('9999', F),
+      6
+    )
+    expect(c.mp!.maxRight - c.mp!.curRight).toBeCloseTo(
+      sideStatusSlashWidth(F) + estimateTextWidth('999', F),
+      6
+    )
   })
 })
 
@@ -118,11 +128,17 @@ describe('computeStatusColumns: ATB ゲージは名前・HP/MP の列を除い�
     expect(c.gauge!.w).toBe(SIDE_STATUS_GAUGE_MIN_WIDTH)
   })
 
-  it('nameWidth 省略は最低文字数ぶん（後方互換）で、ゲージは残りを取る', () => {
+  it('nameWidth 省略は最低文字数ぶん（＋▶の余白）で、ゲージは残りを取る', () => {
     const { nameWidth: _omit, ...rest } = base
     void _omit
     const c = computeStatusColumns(rest)
-    expect(c.name.w).toBeCloseTo(SIDE_STATUS_MIN_NAME_CHARS * F, 6)
+    // 最低文字数 + ▶ の余白を最大まで広げるぶん
+    expect(c.name.w).toBeCloseTo(
+      SIDE_STATUS_MIN_NAME_CHARS * F +
+        SIDE_STATUS_MARKER_GUTTER_MAX -
+        SIDE_STATUS_MARKER_GUTTER_MIN,
+      6
+    )
     expect(c.gauge!.x + c.gauge!.w).toBeCloseTo(base.x + base.width - SIDE_STATUS_TEXT_PADDING, 6)
   })
 
@@ -269,4 +285,49 @@ describe('BattleScreen: ATB ゲージは名前・HP/MP の列を除いた行の�
       expect(t.x + estimateTextWidth(t.text, F)).toBeLessThanOrEqual(i.statusHpLabels[0].x + 1e-6)
     })
   })
+})
+
+describe('名前列は宣言された状態名の最悪ぶんを見込む (#1173)', () => {
+  it('statusTagRoomWidth: 宣言なしは 0、あれば「[」+ 広い順に最大 3 つ + 「・」+「] 」', () => {
+    expect(statusTagRoomWidth([])).toBe(0)
+    const two = statusTagRoomWidth(['どく', 'くらやみ'])
+    expect(two).toBeCloseTo(estimateTextWidth('[どくくらやみ・] ', F) + 2, 6)
+    // 4 つ宣言されても、同時に付くのは幅の広い 3 つまで見込む
+    const four = statusTagRoomWidth(['どく', 'くらやみ', 'ねむり', 'こんらん'])
+    expect(four).toBeCloseTo(estimateTextWidth('[くらやみこんらんねむり・・] ', F) + 2, 6)
+  })
+
+  it.each([
+    ['ff', 1280, 720],
+    ['dq', 800, 450],
+  ] as const)(
+    '%s %dx%d ATB on: 状態名 2 つ付きの長い名前（[どく・くらやみ] キャロライン）が切れない',
+    (pres, w, h) => {
+      const party = [
+        { ...ent(0, 5, 0, 'キャロライン'), status: { poison: 2, blind: 2 } },
+        ent(1, 1000, 9, 'ボブ'),
+        ent(2, 123, 99, 'アリス'),
+        ent(3, 9999, 999, 'デイブ'),
+      ]
+      const engine = new BattleEngine(party, [ent(9, 50, 0, 'スライム')], {
+        atb: { mode: 'wait' },
+        rng: () => 0,
+        statuses: {
+          poison: { id: 'poison', name: 'どく', tickDamage: '1' },
+          blind: { id: 'blind', name: 'くらやみ' },
+        },
+      })
+      const s = new BattleScreen(engine, w, h, { layout: 'side', presentation: pres })
+      created.push(s)
+      const x = s as unknown as { entranceActive: boolean; refresh(): void }
+      x.entranceActive = false
+      x.refresh()
+      const i = I(s)
+      expect(i.statusTexts[0].text).toBe('[どく・くらやみ] キャロライン')
+      // 名前の右端（概算）は HP 見出しの左端に収まる
+      expect(estimateTextWidth(i.statusTexts[0].text, F)).toBeLessThanOrEqual(
+        i.statusHpLabels[0].x - i.statusTexts[0].x + 1e-6
+      )
+    }
+  )
 })

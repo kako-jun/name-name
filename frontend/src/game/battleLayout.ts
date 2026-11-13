@@ -1230,8 +1230,38 @@ export const SIDE_STATUS_MIN_NAME_CHARS = 3
 export const SIDE_STATUS_GAUGE_WIDTH = Math.round(estimateTextWidth('0000', SIDE_STATUS_FONT_SIZE))
 /** ATB ゲージの高さ */
 export const SIDE_STATUS_GAUGE_HEIGHT = 3
-/** 名前の前に付く状態名（「[毒・暗闇] 」）のために名前列へ足す余裕（全角文字数）。状態が変わっても列がずれないよう、固定で見込む */
-export const SIDE_STATUS_TAG_ROOM_CHARS = 6
+/** 名前の前に同時に付くと見込む状態名の数（「[どく・くらやみ・ねむり] 」まで）。状態が変わっても列がずれないよう、宣言された状態名から固定で見込む */
+export const SIDE_STATUS_TAG_MAX_COUNT = 3
+/** 「/」の幅の概算（フォントサイズに対する比）。実フォントの「/」は半角数字（0.6）より狭く、概算を数字並みにすると最大値が列いっぱいのとき「/」の後ろにだけ隙間があく */
+export const SIDE_STATUS_SLASH_WIDTH_RATIO = 0.43
+export function sideStatusSlashWidth(fontPx: number): number {
+  return fontPx * SIDE_STATUS_SLASH_WIDTH_RATIO
+}
+
+/**
+ * 名前の前に付く状態名（「[どく・くらやみ] 」）のために名前列へ足す幅 (px)。
+ * 宣言された状態名のうち幅の広い順に `SIDE_STATUS_TAG_MAX_COUNT` 個までが同時に付く最悪のぶんを見込む。宣言が無ければ 0
+ */
+/** 状態名の幅の概算の誤差（浮動小数・実フォントの差）で名前が 1 文字切れないための余裕 (px) */
+const STATUS_TAG_ROOM_SLACK = 2
+export function statusTagRoomWidth(
+  names: readonly string[],
+  fontPx: number = SIDE_STATUS_FONT_SIZE
+): number {
+  const widths = names
+    .filter((n) => n.length > 0)
+    .map((n) => estimateTextWidth(n, fontPx))
+    .sort((a, b) => b - a)
+    .slice(0, SIDE_STATUS_TAG_MAX_COUNT)
+  if (widths.length === 0) return 0
+  return (
+    estimateTextWidth('[', fontPx) +
+    widths.reduce((a, b) => a + b, 0) +
+    (widths.length - 1) * estimateTextWidth('・', fontPx) +
+    estimateTextWidth('] ', fontPx) +
+    STATUS_TAG_ROOM_SLACK
+  )
+}
 
 export interface StatusColumn {
   /** 列の左端（画面絶対） */
@@ -1295,7 +1325,10 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const leftBase = input.x + sideStatusLeftPadding(input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
-  const wantName = Math.max(minName, input.nameWidth ?? 0)
+  // ATB: ▶ の余白を最大まで広げられるぶん（最大 − 最小）も、名前列の「ほしい幅」に含める
+  const wantName =
+    Math.max(minName, input.nameWidth ?? 0) +
+    (input.atb ? SIDE_STATUS_MARKER_GUTTER_MAX - SIDE_STATUS_MARKER_GUTTER_MIN : 0)
   const gap = SIDE_STATUS_COLUMN_GAP
   // 値の列: 見出し（「MP 」） + 現在値の最大桁 + 「/」 + 最大値の最大桁。MP の最大値は常に出す。
   // 現在値と最大値は同じ桁数ぶんの幅を取り、どちらも右寄せなので桁の位が全員そろう (#1173)
@@ -1303,7 +1336,7 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
     // 見出しと数字がくっつかないよう、見出しの後ろに列間と同じすき間（実フォントの「MP」は概算より広いので、これで実際に隙間が残る）を空ける
     const label = labels ? estimateTextWidth('MP', font) + gap : 0
     const digits = estimateTextWidth(`${maxValue}`, font)
-    const maxPart = showMax ? estimateTextWidth('/', font) + digits : 0
+    const maxPart = showMax ? sideStatusSlashWidth(font) + digits : 0
     return { w: label + digits + maxPart, maxPart, labelPlusCur: label + digits }
   }
   const valueAt = (x: number, widths: ReturnType<typeof valueWidths>): StatusValueColumn => ({

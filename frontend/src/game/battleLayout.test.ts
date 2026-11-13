@@ -65,6 +65,7 @@ import {
   type Rect,
   type SideBattleLayout,
   type SpriteSlot,
+  sideStatusSlashWidth,
 } from './battleLayout'
 import { DEFAULT_ACRYLIC_PARAMS, computeAcrylicGeometry, type AcrylicParams } from './spriteStyle'
 import { isEnemyGridSlot, placeEnemies, type EnemyFootprint, type EnemyGridSize } from './enemyGrid'
@@ -1908,16 +1909,24 @@ describe('computeStatusColumns: 見出し・現在値・/最大値の 3 分割 (
   it('現在値の右端（「/」の直前）は列の右端から「/最大値」の幅だけ左で、最大値は列の右端', () => {
     const c = computeStatusColumns(base)
     expect(c.hp.curRight).toBeCloseTo(
-      c.hp.x + c.hp.w - estimateTextWidth('/120', SIDE_STATUS_FONT_SIZE),
+      c.hp.x +
+        c.hp.w -
+        estimateTextWidth('120', SIDE_STATUS_FONT_SIZE) -
+        sideStatusSlashWidth(SIDE_STATUS_FONT_SIZE),
       6
     )
     expect(c.mp!.curRight).toBeCloseTo(
-      c.mp!.x + c.mp!.w - estimateTextWidth('/99', SIDE_STATUS_FONT_SIZE),
+      c.mp!.x +
+        c.mp!.w -
+        estimateTextWidth('99', SIDE_STATUS_FONT_SIZE) -
+        sideStatusSlashWidth(SIDE_STATUS_FONT_SIZE),
       6
     )
     // 見出し + 見出しと数字のすき間（列間と同じ） + 現在値の最大桁 + /最大値
     expect(c.hp.w).toBeCloseTo(
-      estimateTextWidth('HP120/120', SIDE_STATUS_FONT_SIZE) + SIDE_STATUS_COLUMN_GAP,
+      estimateTextWidth('HP120120', SIDE_STATUS_FONT_SIZE) +
+        sideStatusSlashWidth(SIDE_STATUS_FONT_SIZE) +
+        SIDE_STATUS_COLUMN_GAP,
       6
     )
   })
