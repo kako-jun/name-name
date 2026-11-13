@@ -176,7 +176,7 @@ export function itemNamesFromConfig(
 }
 
 /**
- * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数に戦利品を足し、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換える
+ * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数に戦利品を足し、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換え、勝利なら経験値を生存者へ配る (#206)
  * （敗北では戦闘前のまま。全滅のまま次へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。渡した値は書き換えない
  */
 export function carryOverBattleResult<P>(input: {
@@ -187,6 +187,10 @@ export function carryOverBattleResult<P>(input: {
   loot?: ReadonlyArray<{ itemId: string; count: number }>
   partyAfter: readonly P[]
   before: { inventory: Readonly<Record<string, number>>; gold: number; party: readonly P[] }
+  /** 勝利の経験値 (#206。`BattleResult.exp`)。`grow` があり、勝利のときだけ味方へ配る。省略は 0 */
+  exp?: number
+  /** 経験値の配り方 (#206)。生存者への等分とレベルアップ（`applyVictoryExp`）。リザルトの表示と同じ関数を渡す */
+  grow?: (party: P[], exp: number) => P[]
 }): { inventory: Record<string, number>; gold: number; party: P[] } {
   const inventory = { ...input.before.inventory }
   for (const it of input.menuItems) inventory[it.id] = it.count ?? inventory[it.id] ?? 0
@@ -195,12 +199,17 @@ export function carryOverBattleResult<P>(input: {
     if (!Number.isFinite(l.count) || l.count <= 0) continue
     inventory[l.itemId] = (inventory[l.itemId] ?? 0) + l.count
   }
+  const party = structuredClone(
+    (input.outcome === 'defeat' ? input.before.party : input.partyAfter) as P[]
+  )
   return {
     inventory,
     gold: input.before.gold + input.earnedGold,
-    party: structuredClone(
-      (input.outcome === 'defeat' ? input.before.party : input.partyAfter) as P[]
-    ),
+    // 経験値は勝利のときだけ。敗北・逃走は変わらない
+    party:
+      input.outcome === 'victory' && input.grow && (input.exp ?? 0) > 0
+        ? input.grow(party, input.exp ?? 0)
+        : party,
   }
 }
 

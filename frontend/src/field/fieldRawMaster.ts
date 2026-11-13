@@ -68,7 +68,9 @@ const UNUSED_PARTY_KEYS: ReadonlyArray<[string, (m: PartyMemberDef) => boolean]>
 export function partyRaw(
   party: Readonly<Record<string, PartyMemberDef>>,
   order: readonly string[],
-  warnings: string[]
+  warnings: string[],
+  /** 呪文のマスター（`習得` の呪文の表示名を引く）。省略は id のまま */
+  spells: Readonly<Record<string, { name: string }>> = {}
 ): Raw[] {
   const out: Raw[] = []
   for (const id of order) {
@@ -84,6 +86,20 @@ export function partyRaw(
     put(r, 'character', m.character)
     put(r, 'form', m.form)
     put(r, 'weapon', m.weapon)
+    // レベルアップ (#206): 経験値表があるときだけ（成長・初期 Lv・習得は表と一緒に渡す。表が無ければ経験値で何も起きない）
+    if (m.expTable !== undefined) {
+      const lu: Raw = {}
+      put(lu, 'level', m.level)
+      put(lu, 'expTable', m.expTable ? [...m.expTable] : undefined)
+      put(lu, 'growth', m.growth)
+      if (m.learns && m.learns.length > 0)
+        lu.learns = m.learns.map((l) => ({
+          level: l.level,
+          spell: l.spell,
+          ...(hasOwn(spells, l.spell) ? { name: spells[l.spell].name } : {}),
+        }))
+      r.levelUp = lu
+    }
     out.push(r)
     for (const [label, has] of UNUSED_PARTY_KEYS) {
       if (has(m))
