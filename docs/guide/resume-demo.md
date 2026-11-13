@@ -87,7 +87,7 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
       },
       // 敵の記憶: `行動:` を持つ敵がいる戦闘にだけ効く（無い戦闘では書いても無視される。寺町の例の敵は持たないので書いていない）
       "enemyMemory": [{ "acted": 2 }, { "acted": 0 }],
-      "background": "…戦闘背景の URL（省略は設定の背景）",
+      "background": "…戦闘背景の URL（省略は場面の battleBackground → encounter.background → 設定の battle.background の順）",
     },
   },
 }

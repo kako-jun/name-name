@@ -277,7 +277,8 @@ describe('buildFieldRaw: 場面・端・ワープ・エンカウント', () => {
       battle_background: 'bb.webp',
     })
     expect(good.ok && good.warnings).toEqual([])
-    expect(scene1(good)?.encounter).toEqual({ rate: 5, groups: ['slime*2'], background: 'bb.webp' })
+    expect(scene1(good)?.encounter).toEqual({ rate: 5, groups: ['slime*2'] })
+    expect(scene1(good)?.battleBackground).toBe('bb.webp')
 
     const onlyRate = w({ encounter_rate: 5 })
     expect(onlyRate.warnings).toEqual([

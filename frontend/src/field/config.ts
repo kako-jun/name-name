@@ -162,6 +162,18 @@ export interface FieldSceneConfig {
   playerHeight?: number
   /** ランダムエンカウント (#809)。省略 = エンカウントなし */
   encounter: (SceneEncounter & { background?: string }) | null
+  /** この場面の戦闘背景 URL（エンカウントの有無に依存しない。劇戦闘でも使う）(#1168)。`scenes.<id>.battleBackground` */
+  battleBackground?: string
+}
+
+/**
+ * 戦闘背景の解決順 (#1168): `scenes.<id>.battleBackground` → `scenes.<id>.encounter.background`（手書き JSON 互換）→ 全体の `battle.background`
+ */
+export function resolveBattleBackground(
+  scene: Pick<FieldSceneConfig, 'battleBackground' | 'encounter'>,
+  battleDefault: string | undefined
+): string | undefined {
+  return scene.battleBackground ?? scene.encounter?.background ?? battleDefault
 }
 
 /** 踏み込みトリガーの半径の既定（背景ピクセル）。`半径=` / `radius` を省略したとき */
@@ -516,6 +528,12 @@ export function parseConfig(
     if (!background.ok) return background
     const mask = url(sc.mask, `scenes.${id}.mask`)
     if (!mask.ok) return mask
+    let battleBackground: string | undefined
+    if (sc.battleBackground !== undefined) {
+      const u = url(sc.battleBackground, `scenes.${id}.battleBackground`)
+      if (!u.ok) return u
+      battleBackground = u.value
+    }
     const links: FieldLink[] = []
     if (sc.links !== undefined) {
       if (!Array.isArray(sc.links)) return fail(`scenes.${id}.links は配列が必要です`)
@@ -610,6 +628,7 @@ export function parseConfig(
       links,
       ...(playerHeight !== undefined ? { playerHeight } : {}),
       encounter,
+      ...(battleBackground ? { battleBackground } : {}),
     }
   }
 

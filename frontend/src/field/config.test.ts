@@ -8,6 +8,7 @@ import {
   parseConfig,
   parseConfigText,
   pickConfigSource,
+  resolveBattleBackground,
   type FieldConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
@@ -487,6 +488,25 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
       })
     )
     expect(c.scenes.a.links[0]).toEqual({ edge: 'right', range: [100, 100], to: 'b' })
+  })
+
+  it('scenes.<id>.battleBackground は URL に解決され、encounter 無しでも読める (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.scenes.a.battleBackground = 'sb.png'
+        r.scenes.a.encounter = undefined
+      })
+    )
+    expect(c.scenes.a.battleBackground).toBe('https://example.com/field/sb.png')
+    expect(c.scenes.a.encounter).toBeNull()
+  })
+
+  it('戦闘背景の解決順は battleBackground → encounter.background → battle.background (#1168)', () => {
+    const enc = { rate: 0, groups: [], background: 'e' }
+    expect(resolveBattleBackground({ battleBackground: 's', encounter: enc }, 'b')).toBe('s')
+    expect(resolveBattleBackground({ encounter: enc }, 'b')).toBe('e')
+    expect(resolveBattleBackground({ encounter: null }, 'b')).toBe('b')
+    expect(resolveBattleBackground({ encounter: null }, undefined)).toBeUndefined()
   })
 
   it('encounter.background と battle.background は URL に解決される', () => {

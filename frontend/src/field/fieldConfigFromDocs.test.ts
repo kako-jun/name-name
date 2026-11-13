@@ -111,7 +111,8 @@ const handWritten = {
       background: 'bg-a.webp',
       mask: 'm-a.webp',
       links: [{ edge: 'right', range: [200, 400], to: 'scene-b' }],
-      encounter: { rate: 5, groups: ['slime*2'], background: 'bb-a.webp' },
+      encounter: { rate: 5, groups: ['slime*2'] },
+      battleBackground: 'bb-a.webp',
       npcs: [
         {
           id: 'elder',

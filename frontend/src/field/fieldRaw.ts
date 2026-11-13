@@ -315,6 +315,8 @@ function sceneRaw(
   const where = `場面 ${s.id}（${s.path}）の`
   const r: Raw = { background: s.map.background, mask: s.map.mask }
   put(r, 'foreground', s.map.foreground)
+  // 戦闘背景はエンカウントの有無に依存しない（劇戦闘でも使う）(#1168)
+  put(r, 'battleBackground', s.map.battle_background)
   put(r, 'playerHeight', s.playerStart?.height)
   if (s.shake) {
     const shake: Raw = { amplitudeY: s.shake.amplitude_y }
@@ -407,9 +409,7 @@ function encounterRaw(
     }
     groups.push(g)
   }
-  const r: Raw = { rate, groups }
-  put(r, 'background', s.map.battle_background)
-  return r
+  return { rate, groups }
 }
 
 /** NPC 1 人 → raw。描けない・話せない NPC は警告して落とす(空配列) */
