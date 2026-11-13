@@ -235,10 +235,10 @@ describe('設定で有効化するまで従来どおり', () => {
     expect(engine.getState().party[0].mp).toBe(5)
   })
 
-  it('呪文を覚えていない味方では じゅもん は何も起きない', () => {
+  it('呪文を覚えていない味方でも じゅもん は空の窓が開く (#1171)', () => {
     const { s } = build({}, { rng: () => 0 }, [ent('z')])
     press('ArrowLeft')
-    expect(types(s)).toEqual([])
+    expect(types(s)).toEqual(['list'])
   })
 
   it('destroy 後はキーに反応しない', () => {
@@ -282,6 +282,83 @@ describe('タップ操作', () => {
     targets[1].emit('pointertap', {} as never)
     expect(types(s)).toEqual([])
     expect(engine.getState().party[0].mp).toBe(2)
+  })
+})
+
+describe('候補 0 件でも空の候補窓が開く (#1171)', () => {
+  const ATB = {
+    atb: { mode: 'wait' as const, initialGauges: { party: [1000], enemies: [0, 0] } },
+    rng: () => 0,
+  }
+
+  it('決定キーでは何も起きず窓は開いたまま・上下も安全・Escape で閉じ、その後は通常どおり進む', () => {
+    const { s, engine } = build({}, { rng: () => 0 }, [ent('z')])
+    const logLen = engine.getState().log.length
+    press('ArrowLeft')
+    expect(types(s)).toEqual(['list'])
+    for (const k of ['Enter', 'z', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter']) {
+      press(k)
+      expect(types(s)).toEqual(['list'])
+    }
+    expect(I(s).menuStack[0]).toMatchObject({ cursor: 0, top: 0 })
+    expect(engine.getState().log).toHaveLength(logLen)
+    expect(engine.getState().party[0].mp).toBe(5)
+    press('Escape')
+    expect(types(s)).toEqual([])
+    // 進行不能にならない: 攻撃が通る
+    press('ArrowUp')
+    expect(engine.getState().log.length).toBeGreaterThan(logLen)
+  })
+
+  it('どうぐが 0 個でも（呪文だけ渡されたゲームで）空の窓が開き、Escape で戻れる', () => {
+    const { s } = build({ menu: { spells: MENU.spells } })
+    press('ArrowRight')
+    expect(types(s)).toEqual(['list'])
+    press('Enter')
+    expect(types(s)).toEqual(['list'])
+    press('Escape')
+    expect(types(s)).toEqual([])
+  })
+
+  it('タップ: 窓の中の空白は何も起こさず、窓の外(背景)のタップで閉じる', () => {
+    const { s, engine } = build({}, { rng: () => 0 }, [ent('z')])
+    press('ArrowLeft')
+    const hits: Container[] = []
+    const walk = (c: Container) => {
+      for (const ch of c.children as Container[]) {
+        if (ch.eventMode === 'static' && ch.hitArea) hits.push(ch)
+        walk(ch)
+      }
+    }
+    walk(I(s).menuLayer as Container)
+    // 行もスクロール帯も無い（背景だけ）
+    expect(hits.filter((c) => c.cursor === 'pointer')).toHaveLength(0)
+    expect(hits.length).toBeGreaterThanOrEqual(1)
+    hits[0].emit('pointertap', {} as never)
+    expect(types(s)).toEqual([])
+    expect(engine.getState().party[0].mp).toBe(5)
+  })
+
+  it('ATB の wait: 空窓を開いている間は時間が止まり、閉じるとまた進む', () => {
+    const { s, engine } = build({}, ATB, [ent('z')])
+    const gauge = () => engine.getState().atb!.enemyGauge[0]
+    s.tick(500)
+    const g1 = gauge()
+    press('ArrowLeft')
+    s.tick(500)
+    expect(gauge()).toBe(g1)
+    press('Escape')
+    s.tick(100)
+    expect(gauge()).toBeGreaterThan(g1)
+  })
+
+  it('空窓を開いたまま番が変わると自動で閉じる', () => {
+    const { s, engine } = build({}, ATB, [ent('z')])
+    press('ArrowLeft')
+    expect(types(s)).toEqual(['list'])
+    engine.selectAttack()
+    I(s).refresh()
+    expect(types(s)).toEqual([])
   })
 })
 
@@ -1196,10 +1273,10 @@ describe('コマンド構成 battle_commands と「わざ」(#873)', () => {
     expect(engine.getState().party[0].mp).toBe(2) // ほのお 3
   })
 
-  it('わざの候補が無い味方は、わざを選んでも何も起きない（従来のじゅもん・どうぐと同じ）', () => {
+  it('わざの候補が無い味方でも、わざを選ぶと空の窓が開く (#1171。エンジンのログは増えない)', () => {
     const { s, engine } = buildSkill({ menu: structuredClone(MENU) })
     press('ArrowUp')
-    expect(types(s)).toEqual([])
+    expect(types(s)).toEqual(['list'])
     expect(engine.getState().log).toHaveLength(1)
   })
 

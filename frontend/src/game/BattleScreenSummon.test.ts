@@ -154,13 +154,13 @@ describe('コマンド「しょうかん」(#889)', () => {
     expect(st.party[0].summoned).toBeUndefined()
   })
 
-  it('召喚の候補が無い味方は、しょうかんを選んでも何も起きない', () => {
+  it('召喚の候補が無い味方でも、しょうかんを選ぶと空の窓が開く (#1171。エンジンのログは増えない)', () => {
     const { s, engine } = build(
       { commands: ['summon', 'attack', 'spell', 'item'], menu: structuredClone(MENU) },
       [ent('z')]
     )
     press('ArrowUp')
-    expect(types(s)).toEqual([])
+    expect(types(s)).toEqual(['list'])
     expect(engine.getState().log).toHaveLength(1)
   })
 
