@@ -253,7 +253,8 @@ export function buildBattleMenuData(
     }
     // 習得済み（`roster.learnedSpells`、#882）があるときは、`learns` の無い味方にも全員共通の習得済みを出す
     if (!def || (!def.learns && !roster.learnedSpells)) continue
-    const level = def.level ?? 1
+    // 保存した Lv (#206。レベルアップで上がった今の Lv) を優先し、無ければ定義の初期 Lv
+    const level = member.level ?? def.level ?? 1
     const list: BattleSpellEntry[] = []
     for (const l of def.learns ?? []) {
       const sp = Object.prototype.hasOwnProperty.call(master, l.spell) ? master[l.spell] : undefined

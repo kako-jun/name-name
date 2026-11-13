@@ -955,6 +955,13 @@ pub struct PartyMemberDef {
     /// 現在のジョブは runtime の入力（`currentJobs`）で、無ければ先頭。定義の無い id・候補に無いジョブは runtime が警告して無視する。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jobs: Option<Vec<String>>,
+    /// レベルアップに必要な累計経験値の表 (#206。`経験値表:`)。Lv1→2 に要る累計 exp から順にカンマ区切りで書く（例 `10, 30, 70`）。
+    /// 表の長さ + 1 がレベルの上限。キャラごとに持つ。JSON / TS 側のキーは `expTable`。
+    #[serde(default, rename = "expTable", skip_serializing_if = "Option::is_none")]
+    pub exp_table: Option<Vec<u32>>,
+    /// レベルが 1 上がるたびに能力値へ足すボーナス (#206。`成長:`)。魔石の `成長` と同じ書式（`hp+5, atk+1`）を生文字列で透過し、解釈は runtime 側（`parseStatBonus`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub growth: Option<String>,
     /// フィールドで歩く人物 (#1104。`人物:`)。台帳の人物 ID など。生文字列で透過し、解決は runtime 側。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character: Option<String>,

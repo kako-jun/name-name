@@ -195,3 +195,49 @@ describe('BattleEngine: レベル調整で即死を通す (#898)', () => {
     expect(e.hp).toBe(0)
   })
 })
+
+describe('味方には level 効果もレベル倍数の即死も効かない (#206)', () => {
+  const ally = (over: Partial<BattleEntity> = {}) => hero({ level: 5, ...over })
+  it('applyEffect: isAlly の者は level 調整が効かず、level も変わらない', () => {
+    const a = ally()
+    const log = applyEffect(parseEffect('level +3')!, {
+      caster: hero(),
+      targets: [a],
+      rng: () => 0.5,
+      isAlly: (e) => e === a,
+    })
+    expect(log).toEqual(['ゆうしゃ には きかなかった！'])
+    expect(a.level).toBe(5)
+  })
+  it('applyEffect: isAlly の者は damage_full レベル倍数 が level の有無に関わらず効かない（HP 不変）', () => {
+    const a = ally()
+    const log = applyEffect(parseEffect('damage_full レベル倍数=5')!, {
+      caster: foe('x'),
+      targets: [a],
+      rng: () => 0,
+      isAlly: (e) => e === a,
+    })
+    expect(log).toEqual(['ゆうしゃ には きかなかった！'])
+    expect(a.hp).toBe(999)
+  })
+  it('isAlly を渡さない・敵は従来どおり level を持てば効く', () => {
+    const e = foe('a', { level: 10 })
+    applyEffect(parseEffect('level +1')!, { caster: hero(), targets: [e], rng: () => 0.5 })
+    expect(e.level).toBe(11)
+    const t = foe('b', { level: 5 })
+    applyEffect(parseEffect('damage_full レベル倍数=5')!, {
+      caster: hero(),
+      targets: [t],
+      rng: () => 0,
+      isAlly: () => false,
+    })
+    expect(t.hp).toBe(0)
+  })
+  it('実エンジン: 味方単体への level 調整は効かず、保存される level は変わらない', () => {
+    const a = ally()
+    const eng = new BattleEngine([a], [foe('e')], { rng: () => 0.5 })
+    eng.selectSpell({ name: 'レベルアップ', mp: 1, target: '味方単体', effect: 'level +1' }, 'hero')
+    expect(eng.getState().party[0].level).toBe(5)
+    expect(eng.getState().log.some((l) => l.includes('ゆうしゃ には きかなかった'))).toBe(true)
+  })
+})

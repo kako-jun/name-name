@@ -34,6 +34,7 @@ import type { ShakeConfig } from '../game/fieldMotion'
 import type { EncounterStepConfig, SceneEncounter } from '../game/fieldEncounter'
 import type { MonsterDef } from '../types'
 import { MAX_LEVEL, type BattleEntity } from '../game/spellDsl'
+import type { LevelUpDef } from '../game/levelUp'
 import type { BattleLayoutMode } from '../game/battleLayout'
 import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
@@ -305,6 +306,8 @@ export interface FieldConfig {
   monsters: Record<string, MonsterDef>
   /** 戦闘に出す味方 (#809)。主人公のポーズ画像を sprite に指す */
   party: BattleEntity[]
+  /** 味方ごとのレベルアップの定義 (#206。`party[].levelUp`)。味方 id → 経験値表・成長・初期 Lv・習得。経験値表を持つ味方だけが入る。無ければ空＝経験値は何も起きない */
+  levelUp: Record<string, LevelUpDef>
   battle: FieldBattleConfig
   /**
    * 戦闘の候補窓 (#890)。`spells`: 味方全員が使える呪文（戦闘と同じ書式）。`items`: 試作用の所持品（`count` が所持数。
@@ -827,6 +830,16 @@ export function parseConfig(
       )
     }
   }
+  const levelUp: Record<string, LevelUpDef> = {}
+  if (Array.isArray(raw.party)) {
+    for (let i = 0; i < raw.party.length; i++) {
+      const m = raw.party[i]
+      if (!isObj(m) || m.levelUp === undefined) continue
+      const lu = parseLevelUp(m.levelUp, `party[${i}].levelUp`)
+      if (!lu.ok) return lu
+      if (lu.value) levelUp[partyIdAt(m, i)] = lu.value
+    }
+  }
   if (party.length === 0) {
     party.push({
       id: 'hero',
@@ -1173,6 +1186,7 @@ export function parseConfig(
       encounter: { stepDistance: stepDistance.value, minSteps },
       monsters,
       party,
+      levelUp,
       spells: spells.value,
       items: items.value,
       skills: skills.value,
@@ -1442,6 +1456,53 @@ export function parseMonsterScale(raw: unknown, path: string): ParseResult<numbe
   if (typeof raw !== 'number' || !Number.isFinite(raw))
     return fail(`${path} は数値（0.25〜1 に丸めます）: ${JSON.stringify(raw)}`)
   return { ok: true, value: Math.min(1, Math.max(0.25, raw)) }
+}
+
+/**
+ * 味方のレベルアップの定義 (#206)。`{ level?, expTable, growth?, learns? }`。経験値表が空・無いときは undefined（その味方は経験値で何も起きない）。
+ * 経験値表は 0 以上の整数の配列。成長は魔石の `成長` と同じ書式の文字列（読めない項目は戦闘時に無視される）
+ */
+function parseLevelUp(raw: unknown, path: string): ParseResult<LevelUpDef | undefined> {
+  if (!isObj(raw)) return fail(`${path} はオブジェクトが必要です`)
+  const table = raw.expTable
+  if (
+    !Array.isArray(table) ||
+    table.some((n) => typeof n !== 'number' || !Number.isInteger(n) || n < 0)
+  )
+    return fail(`${path}.expTable は 0 以上の整数の配列が必要です`)
+  if (raw.growth !== undefined && typeof raw.growth !== 'string')
+    return fail(`${path}.growth は文字列が必要です`)
+  if (raw.level !== undefined && (typeof raw.level !== 'number' || !Number.isInteger(raw.level)))
+    return fail(`${path}.level は整数が必要です`)
+  const learns: NonNullable<LevelUpDef['learns']>[number][] = []
+  if (raw.learns !== undefined) {
+    if (!Array.isArray(raw.learns)) return fail(`${path}.learns は配列が必要です`)
+    for (const l of raw.learns) {
+      if (
+        !isObj(l) ||
+        typeof l.level !== 'number' ||
+        !Number.isInteger(l.level) ||
+        typeof l.spell !== 'string' ||
+        l.spell === ''
+      )
+        return fail(`${path}.learns は { level, spell } の配列が必要です`)
+      learns.push({
+        level: l.level,
+        spell: l.spell,
+        ...(typeof l.name === 'string' ? { name: l.name } : {}),
+      })
+    }
+  }
+  if (table.length === 0) return { ok: true, value: undefined }
+  return {
+    ok: true,
+    value: {
+      ...(raw.level !== undefined ? { level: Math.min(MAX_LEVEL, Math.max(1, raw.level)) } : {}),
+      expTable: [...table],
+      ...(raw.growth !== undefined ? { growth: raw.growth } : {}),
+      ...(learns.length > 0 ? { learns } : {}),
+    },
+  }
 }
 
 /** 味方 `party[i]` の id。`id`（非空文字列）があればそれ、無ければ `party{i+1}`（`expandCharacterForms` と同じ規則） */

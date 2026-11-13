@@ -173,6 +173,7 @@ import { ensureFontLoaded } from '../game/FontLoader'
 import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
+import { growPartyByExp } from '../game/levelUp'
 import type { BattleItemEntry } from '../game/battleMenu'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
 import {
@@ -1028,6 +1029,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       try {
         battle = new BattleScreen(engine, b.width, b.height, {
           // 候補窓 (#890) は戦闘ごとに複製して渡す（BattleScreen がアイテムの count を書き換えるため）
+          // 勝利リザルトのレベルアップ表示 (#206)。経験値表を持つ味方がいるときだけ
+          ...(Object.keys(config.levelUp).length > 0 ? { levelUp: config.levelUp } : {}),
           ...buildBattleScreenOptions(b, {
             background: bg,
             menu,
@@ -1041,7 +1044,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           }),
           onClose: (outcome, result) => {
             lastOutcome = outcome
-            carryOverBattle(outcome, result.gold, result.items, { partial: !!eventBattle })
+            carryOverBattle(outcome, result.gold, result.items, result.exp, {
+              partial: !!eventBattle,
+            })
             // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
             endBattleWithTransition({
               mode: b.transition,
@@ -1084,12 +1089,14 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   }
   /**
    * 戦闘の結果を持ち越す (#1021)。所持品の残数・所持金・味方の HP/MP/状態異常を書き戻す。
-   * 敗北では味方を戦闘前に戻す（全滅のまま次の戦闘へ進めなくなるのを防ぐ。所持品・所持金は戻さない）
+   * 敗北では味方を戦闘前に戻す（全滅のまま次の戦闘へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。
+   * 勝利では経験値を生存者へ等分し、レベルアップを反映する (#206)
    */
   const carryOverBattle = (
     outcome: string,
     earnedGold: number,
     loot: ReadonlyArray<{ itemId: string; count: number }>,
+    exp: number,
     { partial = false }: { partial?: boolean } = {}
   ): void => {
     const run = battleRun
@@ -1101,6 +1108,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       loot,
       partyAfter: run.engine.getState().party,
       before: { inventory, gold, party: partyState },
+      // 勝利の経験値は生存者へ等分してレベルアップ (#206)。リザルトの表示と同じ関数
+      exp,
+      grow: growPartyByExp(config.levelUp),
     })
     inventory = next.inventory
     gold = next.gold

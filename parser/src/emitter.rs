@@ -1634,6 +1634,13 @@ fn emit_events(out: &mut String, events: &[Event], default_transition: EventImag
                         out.push_str(&format!("習得: Lv{} {}\n", l.level, l.spell));
                     }
                 }
+                if let Some(t) = &p.exp_table {
+                    let t: Vec<String> = t.iter().map(|n| n.to_string()).collect();
+                    out.push_str(&format!("経験値表: {}\n", t.join(", ")));
+                }
+                if let Some(g) = &p.growth {
+                    out.push_str(&format!("成長: {g}\n"));
+                }
                 if let Some(abilities) = &p.abilities {
                     for a in abilities {
                         out.push_str(&format!("わざ: {a}\n"));

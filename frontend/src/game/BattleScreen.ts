@@ -247,6 +247,7 @@ import {
   PANEL_STROKE,
   type WindowStyle,
 } from './windowStyle'
+import { applyVictoryExp, type LevelUpDef } from './levelUp'
 import {
   BACKGROUND_TONE_BRIGHTNESS,
   BACKGROUND_TONE_SATURATION,
@@ -387,6 +388,11 @@ export function applyBattleTextureFilter(tex: Texture, pixelArt: boolean): void 
 }
 
 export interface BattleScreenOptions {
+  /**
+   * 勝利リザルトにレベルアップ・習得を出す入力 (#206。味方 id → 経験値表など)。持ち越し側（`carryOverBattleResult`）と同じ `applyVictoryExp` で
+   * 求めるので、表示と確定は一致する。省略は何も出さない（従来どおり）
+   */
+  levelUp?: Readonly<Record<string, LevelUpDef>>
   /**
    * バトル終了（victory / defeat / escaped）時に呼ばれる。victory / defeat は決着後に読ませる待機（battleResult.ts）を置いてから (#745)。
    * 第 2 引数 `result` は戦闘の結果（経験値・ゴールド・獲得した戦利品、#831）。ホストが所持品への反映や戦利品の画面に使う
@@ -1480,9 +1486,14 @@ export class BattleScreen extends Container {
     if (this.presentation !== 'ff' || this.engine.getState().phase !== 'victory') return []
     const r = this.engine.getResult()
     if (!r) return []
+    // レベルアップ (#206)。表示だけなので結果は捨てる（確定は持ち越し側が同じ関数でやる）
+    const lv = this.opts.levelUp
+      ? applyVictoryExp(this.engine.getState().party, this.opts.levelUp, r.exp)
+      : undefined
     return buildResultMessages({
       gold: r.gold,
       exp: r.exp,
+      ...(lv ? { levelUps: lv.levelUps, levelLearnedSpellNames: lv.learnedNames } : {}),
       learnedSpellNames: this.engine.newlyLearnedSpellNames(),
       lootNames: r.items.map((i) => this.engine.itemDisplayName(i.itemId)),
     })

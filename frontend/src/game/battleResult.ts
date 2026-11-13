@@ -39,6 +39,8 @@ export const RESULT_TEXT = {
   victory: '戦いに勝った！',
   gold: (gold: number): string => `${gold}${RESULT_GOLD_UNIT} てにいれた`,
   exp: (exp: number): string => `${exp} けいけんち かくとく`,
+  /** レベルアップ (#206)。FF5 の文言どおり名前は付けない */
+  levelUp: 'レベルアップ',
   learned: (name: string): string => `${name}をおぼえた！`,
   loot: (name: string): string => `${name}を てにいれた`,
   defeat: 'ぜんめつ…',
@@ -48,6 +50,10 @@ export const RESULT_TEXT = {
 export interface ResultMessageInput {
   gold: number
   exp: number
+  /** レベルが上がった味方の人数 (#206。1 人につき『レベルアップ』を 1 行)。省略は 0 */
+  levelUps?: number
+  /** レベルアップで覚えた呪文の名前 (#206)。ラーニングで覚えたものより先に出す。省略は無し */
+  levelLearnedSpellNames?: readonly string[]
   /** この戦闘で新たに覚えた呪文の名前（覚えた順） */
   learnedSpellNames: readonly string[]
   /** 戦利品の名前（獲得順、個数は出さない） */
@@ -55,13 +61,15 @@ export interface ResultMessageInput {
 }
 
 /**
- * 勝利リザルトのメッセージ配列 (#1039, #1109)。順: 勝利の言葉（常に出す。お金・経験値が 0 でも）→ お金 → 経験値 → 覚えた呪文 → 戦利品（最後）。お金・経験値・呪文・戦利品の 0 の行は出さない。
- * AP・レベルアップなどは本作に仕組みが無いので出さない（項目を足すときはここに順番どおり差し込む）。
+ * 勝利リザルトのメッセージ配列 (#1039, #1109)。順: 勝利の言葉（常に出す。お金・経験値が 0 でも）→ お金 → 経験値 → レベルアップ (#206) → 覚えた呪文（レベルで覚えた分 → ラーニング）→ 戦利品（最後）。お金・経験値・呪文・戦利品の 0 の行は出さない。
+ * AP などは本作に仕組みが無いので出さない（項目を足すときはここに順番どおり差し込む）。
  */
 export function buildResultMessages(input: ResultMessageInput): string[] {
   const out: string[] = [RESULT_TEXT.victory]
   if (input.gold > 0) out.push(RESULT_TEXT.gold(input.gold))
   if (input.exp > 0) out.push(RESULT_TEXT.exp(input.exp))
+  for (let i = 0; i < (input.levelUps ?? 0); i++) out.push(RESULT_TEXT.levelUp)
+  for (const n of input.levelLearnedSpellNames ?? []) out.push(RESULT_TEXT.learned(n))
   for (const n of input.learnedSpellNames) out.push(RESULT_TEXT.learned(n))
   for (const n of input.lootNames) out.push(RESULT_TEXT.loot(n))
   return out

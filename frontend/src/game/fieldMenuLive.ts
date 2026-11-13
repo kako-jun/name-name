@@ -131,7 +131,8 @@ function runEffect(
   rng: () => number
 ): EffectRun {
   const before = fingerprint(targets)
-  const ctx: EffectContext = { caster, targets, rng }
+  // 対象は味方だけ。味方にはレベル調整・レベル倍数の即死は効かない (#206)
+  const ctx: EffectContext = { caster, targets, rng, isAlly: () => true }
   let log: string[]
   if (e.builtin) {
     log = kind === 'item' ? invokeBuiltinItem(e.builtin, ctx) : invokeBuiltinSpell(e.builtin, ctx)

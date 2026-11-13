@@ -1032,3 +1032,42 @@ describe('buildFieldRaw: トリガー (#1072)', () => {
     expect(triggers(r)).toBeUndefined()
   })
 })
+
+describe('buildFieldRaw: 味方のレベルアップ levelUp (#206)', () => {
+  const spell = (id: string, name: string): Event =>
+    ({ Spell: { id, name, mp: 1, target: '敵単体' } }) as Event
+  const partyOf = (cfg: Event[]) => ok({ cfg }).raw.party as Array<Record<string, unknown>>
+
+  it('経験値表・成長・初期 Lv・習得（呪文の表示名つき）が levelUp に入る', () => {
+    const [p] = partyOf([
+      member('p1', {
+        level: 2,
+        expTable: [10, 30],
+        growth: 'hp+5',
+        learns: [{ level: 3, spell: 'fire' }],
+      }),
+      spell('fire', 'ファイア'),
+    ])
+    expect(p.levelUp).toEqual({
+      level: 2,
+      expTable: [10, 30],
+      growth: 'hp+5',
+      learns: [{ level: 3, spell: 'fire', name: 'ファイア' }],
+    })
+  })
+
+  it('経験値表が無い味方（成長だけ書いた場合を含む）には levelUp を出さない', () => {
+    const [a, b] = partyOf([member('a'), member('b', { growth: 'hp+5', level: 3 })])
+    expect('levelUp' in a).toBe(false)
+    expect('levelUp' in b).toBe(false)
+  })
+
+  it('経験値表のコピーで元を共有しない・マスターに無い呪文は name 無しで id のまま', () => {
+    const table = [5, 6]
+    const [p] = partyOf([member('p1', { expTable: table, learns: [{ level: 2, spell: 'zzz' }] })])
+    const lu = p.levelUp as { expTable: number[]; learns: Array<Record<string, unknown>> }
+    expect(lu.expTable).toEqual([5, 6])
+    expect(lu.expTable).not.toBe(table)
+    expect(lu.learns).toEqual([{ level: 2, spell: 'zzz' }])
+  })
+})

@@ -293,6 +293,15 @@ export interface PartyMemberDef {
      */
     jobs?: string[];
     /**
+     * レベルアップに必要な累計経験値の表 (#206。`経験値表:`)。Lv1→2 に要る累計 exp から順にカンマ区切りで書く（例 `10, 30, 70`）。
+     * 表の長さ + 1 がレベルの上限。キャラごとに持つ。JSON / TS 側のキーは `expTable`。
+     */
+    expTable?: number[];
+    /**
+     * レベルが 1 上がるたびに能力値へ足すボーナス (#206。`成長:`)。魔石の `成長` と同じ書式（`hp+5, atk+1`）を生文字列で透過し、解釈は runtime 側（`parseStatBonus`）。
+     */
+    growth?: string;
+    /**
      * フィールドで歩く人物 (#1104。`人物:`)。台帳の人物 ID など。生文字列で透過し、解決は runtime 側。
      */
     character?: string;

@@ -125,7 +125,7 @@ export function buildFieldRaw(
   const partyDefs: PartyMemberDef[] = master.partyOrder
     .filter((id) => hasOwn(master.party, id))
     .map((id) => master.party[id])
-  const partyList = partyRaw(master.party, master.partyOrder, warnings)
+  const partyList = partyRaw(master.party, master.partyOrder, warnings, master.spells)
   if (partyList.length > 0) raw.party = partyList
 
   // ---- 主人公・同行者・人物の形態 ----

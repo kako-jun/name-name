@@ -678,11 +678,42 @@ fn build_party_member_def(id: String, entries: &[(String, String)]) -> Option<Pa
         ),
         // 「ジョブ」キーはカンマ区切り・複数行可で、`[ジョブ id]` の id を書いた順に集める (#740)
         jobs: collect_id_list(entries, &["ジョブ", "jobs"]),
+        // 経験値表と成長 (#206)。空の値は未指定
+        exp_table: collect_exp_table(entries),
+        growth: lookup_master_string(entries, &["成長", "growth"]).filter(|v| !v.trim().is_empty()),
         // フィールドの人物・形態・刀 (#1104)。空の値は未指定（emit で `人物: ` だけの行が出ないように）
         character: lookup_master_string(entries, &["人物", "character"]).filter(|v| !v.is_empty()),
         form: lookup_master_string(entries, &["形態", "form"]).filter(|v| !v.is_empty()),
         weapon: lookup_master_string(entries, &["刀", "weapon"]).filter(|v| !v.is_empty()),
     })
+}
+
+/// `経験値表` / `exp_table` を非負整数の列にする (#206)。カンマ（`,` `，` `、`）区切り・複数行は連結。
+/// 整数でない要素は警告して捨て、残りで表を作る。並びは検査しない（runtime が累計と比べるだけ）。1 つも無ければ None
+fn collect_exp_table(entries: &[(String, String)]) -> Option<Vec<u32>> {
+    let mut out: Vec<u32> = Vec::new();
+    for (k, v) in entries {
+        if k != "経験値表" && k != "exp_table" && k != "expTable" {
+            continue;
+        }
+        for part in v.split([',', '，', '、']) {
+            let t = part.trim();
+            if t.is_empty() {
+                continue;
+            }
+            match t.parse::<u32>() {
+                Ok(n) => out.push(n),
+                Err(_) => emit_warning(&format!(
+                    "[name-name-parser] warning: [パーティ] の 経験値表 の `{t}` は 0 以上の整数でないため捨てた"
+                )),
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// 指定したキーの値をカンマ（`,` `，` `、`）で区切って id の列にする (#889)。複数行は書いた順に連結し、重複は最初のものだけ残す。

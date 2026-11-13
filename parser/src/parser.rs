@@ -11447,6 +11447,122 @@ mod field_settings_notation_tests {
     }
 
     #[test]
+    fn party_exp_table_and_growth_parse_and_round_trip() {
+        let body = "[パーティ p1]\n名前: ぼく\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n経験値表: 10, 30，70\n成長: hp+5, atk+1\n[/パーティ]\n[パーティ p2]\n名前: きみ\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n[/パーティ]\n";
+        let _ = take_test_warnings();
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        assert_eq!(emitted.matches("経験値表:").count(), 1, "{emitted}");
+        assert_eq!(emitted.matches("成長:").count(), 1, "{emitted}");
+        let members: Vec<&PartyMemberDef> = doc1.chapters[0].scenes[0]
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PartyMember(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(members[0].exp_table, Some(vec![10, 30, 70]));
+        assert_eq!(members[0].growth.as_deref(), Some("hp+5, atk+1"));
+        assert_eq!(members[1].exp_table, None);
+        assert_eq!(members[1].growth, None);
+    }
+
+    /// [パーティ] を 1 人だけ書いた本文から、その人の定義と警告を取り出す (#206)
+    fn exp_party(extra: &str) -> (PartyMemberDef, Vec<String>, String) {
+        let body = format!(
+            "[パーティ p1]\n名前: ぼく\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n{extra}[/パーティ]\n"
+        );
+        let _ = take_test_warnings();
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let warnings = take_test_warnings();
+        let emitted = emit(&doc1);
+        let _ = take_test_warnings();
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "往復で変わった: {emitted}");
+        let _ = take_test_warnings();
+        let member = doc1.chapters[0].scenes[0]
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::PartyMember(p) => Some(p.clone()),
+                _ => None,
+            })
+            .expect("PartyMember");
+        (member, warnings, emitted)
+    }
+
+    #[test]
+    fn party_exp_table_drops_invalid_elements_with_warning() {
+        // 非数・負数・小数・空要素: 整数でないものだけ警告して捨て、残りで表を作る（空要素は黙って捨てる）
+        let (m, w, _) = exp_party("経験値表: 10, abc, -5, 1.5, , 30\n");
+        assert_eq!(m.exp_table, Some(vec![10, 30]));
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert!(w.iter().all(|x| x.contains("経験値表")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("abc")));
+        assert!(w.iter().any(|x| x.contains("-5")));
+        assert!(w.iter().any(|x| x.contains("1.5")));
+    }
+
+    #[test]
+    fn party_exp_table_all_invalid_or_empty_is_none() {
+        let (m, w, emitted) = exp_party("経験値表: x, y\n");
+        assert_eq!(m.exp_table, None);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(!emitted.contains("経験値表:"), "{emitted}");
+        let (m, w, emitted) = exp_party("経験値表: \n");
+        assert_eq!(m.exp_table, None);
+        assert!(w.is_empty(), "{w:?}");
+        assert!(!emitted.contains("経験値表:"), "{emitted}");
+    }
+
+    #[test]
+    fn party_exp_table_keeps_descending_order_and_all_separators() {
+        // 降順でも検査せずそのまま保つ（警告なし）。全角カンマ・読点・半角カンマ混在
+        let (m, w, emitted) = exp_party("経験値表: 30，10、20, 5\n");
+        assert_eq!(m.exp_table, Some(vec![30, 10, 20, 5]));
+        assert!(w.is_empty(), "{w:?}");
+        assert!(emitted.contains("経験値表: 30, 10, 20, 5"), "{emitted}");
+    }
+
+    #[test]
+    fn party_exp_table_alias_and_multiline_concat() {
+        let (m, w, _) = exp_party("経験値表: 10, 20\nexp_table: 30\n");
+        assert_eq!(m.exp_table, Some(vec![10, 20, 30]));
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    #[test]
+    fn party_exp_table_only_and_growth_only_round_trip() {
+        let (m, w, emitted) = exp_party("経験値表: 10, 30\n");
+        assert_eq!(m.exp_table, Some(vec![10, 30]));
+        assert_eq!(m.growth, None);
+        assert!(w.is_empty(), "{w:?}");
+        assert!(!emitted.contains("成長:"), "{emitted}");
+        let (m, w, emitted) = exp_party("成長: hp+5\n");
+        assert_eq!(m.exp_table, None);
+        assert_eq!(m.growth.as_deref(), Some("hp+5"));
+        assert!(w.is_empty(), "{w:?}");
+        assert!(!emitted.contains("経験値表:"), "{emitted}");
+        assert_eq!(emitted.matches("成長: hp+5").count(), 1, "{emitted}");
+        // 空の成長は未指定
+        let (m, _, emitted) = exp_party("成長: \n");
+        assert_eq!(m.growth, None);
+        assert!(!emitted.contains("成長:"), "{emitted}");
+    }
+
+    #[test]
+    fn party_exp_table_huge_number_is_dropped_not_wrapped() {
+        // u32 を超える値は捨てる（巻き戻って小さい値にならない）
+        let (m, w, _) = exp_party("経験値表: 10, 99999999999\n");
+        assert_eq!(m.exp_table, Some(vec![10]));
+        assert_eq!(w.len(), 1, "{w:?}");
+    }
+
+    #[test]
     fn round_trip() {
         let body = "[補助通行 条件=買った,説得済 除く=説得中 幽霊=幽霊中 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]\n[フィールド設定 速度=260 端のしきい値=6 端の接触=足元 文字間隔=30 刀の倍率=2]\n[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]\n[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]\n[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]\n[人物の形態 目録=a.json 素材=c/]\n";
         let doc1 = parse(&format!("{HEAD}{body}"));
