@@ -25,7 +25,7 @@ import {
   resumeFromSlotData,
 } from './fieldResume'
 import { autoTriggers, triggerKey } from './triggerRuntime'
-import type { FieldTrigger } from './config'
+import { resolveBattleBackground, type FieldTrigger } from './config'
 import startFieldGameSrc from './startFieldGame.ts?raw'
 
 const hero = (id: string): BattleEntity => ({
@@ -173,6 +173,12 @@ describe('補助関数', () => {
       initialGauges: { party: [1000], enemies: [5] },
     })
     expect(o.restore).toEqual({ atbQueue: [0] })
+  })
+
+  it('resumeBackground は場面の戦闘背景(エンカウント無し)を既定に使い、保存済みが優先 (#1168)', () => {
+    const fallback = resolveBattleBackground({ battleBackground: 's', encounter: null }, 'b')
+    expect(resumeBackground({ enemies: [] }, fallback)).toBe('s')
+    expect(resumeBackground({ enemies: [], background: 'saved' }, fallback)).toBe('saved')
   })
 
   it('resumeBackground は保存された背景を優先', () => {

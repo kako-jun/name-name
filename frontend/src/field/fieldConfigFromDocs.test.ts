@@ -111,7 +111,8 @@ const handWritten = {
       background: 'bg-a.webp',
       mask: 'm-a.webp',
       links: [{ edge: 'right', range: [200, 400], to: 'scene-b' }],
-      encounter: { rate: 5, groups: ['slime*2'], background: 'bb-a.webp' },
+      encounter: { rate: 5, groups: ['slime*2'] },
+      battleBackground: 'bb-a.webp',
       npcs: [
         {
           id: 'elder',
@@ -183,6 +184,24 @@ describe('fieldConfigFromDocs(同期)', () => {
       menuContents: [],
     })
     expect(JSON.parse(JSON.stringify(r.value.raw))).toEqual(r.value.raw)
+  })
+
+  it('エンカウント宣言の無い場面の 戦闘背景= も battleBackground に出る (#1168)', async () => {
+    const other2 = otherMd.replace('マスク=m-b.webp]', 'マスク=m-b.webp 戦闘背景=bb-b.webp]')
+    const docs = await docsOf(['data.md', dataMd], ['other.md', other2], ['script.md', scriptMd])
+    const r = fieldConfigFromDocs({ ...common, docs, aux: { characterForms: manifest } })
+    if (!r.ok) throw new Error(r.error)
+    const hand = parseConfig(handWritten, BASE, { scriptProvided: true })
+    if (!hand.ok) throw new Error(hand.error)
+    const a = hand.value.scenes['scene-a'].battleBackground
+    const b = r.value.config.scenes['scene-b']
+    expect(b.encounter).toBeNull()
+    expect(b.battleBackground).toBe(a?.replace('bb-a', 'bb-b'))
+    // 書かなかった場面は従来どおり(キー無し)
+    const noBg = await docsOf(['data.md', dataMd], ['other.md', otherMd], ['script.md', scriptMd])
+    const r2 = fieldConfigFromDocs({ ...common, docs: noBg, aux: { characterForms: manifest } })
+    if (!r2.ok) throw new Error(r2.error)
+    expect('battleBackground' in r2.value.config.scenes['scene-b']).toBe(false)
   })
 
   it('docs の与え順を入れ替えても同じ', async () => {

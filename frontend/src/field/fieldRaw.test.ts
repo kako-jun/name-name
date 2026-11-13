@@ -277,7 +277,18 @@ describe('buildFieldRaw: 場面・端・ワープ・エンカウント', () => {
       battle_background: 'bb.webp',
     })
     expect(good.ok && good.warnings).toEqual([])
-    expect(scene1(good)?.encounter).toEqual({ rate: 5, groups: ['slime*2'], background: 'bb.webp' })
+    expect(scene1(good)?.encounter).toEqual({ rate: 5, groups: ['slime*2'] })
+    expect(scene1(good)?.battleBackground).toBe('bb.webp')
+
+    // 戦闘背景だけ(エンカウント宣言なし)でも battleBackground は出て、encounter は出ない (#1168)
+    const bgOnly = w({ battle_background: 'bb.webp' })
+    expect(bgOnly.ok && bgOnly.warnings).toEqual([])
+    expect(scene1(bgOnly)?.battleBackground).toBe('bb.webp')
+    expect(scene1(bgOnly)).not.toHaveProperty('encounter')
+    // 書かなければキー自体が無い
+    expect(scene1(w({ encounter_rate: 5, encounter_groups: ['slime'] }))).not.toHaveProperty(
+      'battleBackground'
+    )
 
     const onlyRate = w({ encounter_rate: 5 })
     expect(onlyRate.warnings).toEqual([

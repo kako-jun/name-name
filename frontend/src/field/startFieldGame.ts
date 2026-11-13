@@ -130,6 +130,7 @@ import {
   configNotice,
   findReturnLink,
   forceBattleCandidates,
+  resolveBattleBackground,
   type FieldNpc,
   type FieldConfig,
   type FieldWarp,
@@ -989,7 +990,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     })
     const bg = resumeBackground(
       savedBattle,
-      config.scenes[sceneId].encounter?.background ?? b.background
+      resolveBattleBackground(config.scenes[sceneId], b.background)
     )
     const open = (): void => {
       const engine = new BattleEngine(

@@ -8,6 +8,7 @@ import {
   parseConfig,
   parseConfigText,
   pickConfigSource,
+  resolveBattleBackground,
   type FieldConfig,
 } from './config'
 import type { FieldLink } from '../game/fieldWalk'
@@ -487,6 +488,81 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
       })
     )
     expect(c.scenes.a.links[0]).toEqual({ edge: 'right', range: [100, 100], to: 'b' })
+  })
+
+  it('scenes.<id>.battleBackground は URL に解決され、encounter 無しでも読める (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.scenes.a.battleBackground = 'sb.png'
+        r.scenes.a.encounter = undefined
+      })
+    )
+    expect(c.scenes.a.battleBackground).toBe('https://example.com/field/sb.png')
+    expect(c.scenes.a.encounter).toBeNull()
+  })
+
+  it('戦闘背景の解決順は battleBackground → encounter.background → battle.background (#1168)', () => {
+    const enc = { rate: 0, groups: [], background: 'e' }
+    expect(resolveBattleBackground({ battleBackground: 's', encounter: enc }, 'b')).toBe('s')
+    expect(resolveBattleBackground({ encounter: enc }, 'b')).toBe('e')
+    expect(resolveBattleBackground({ encounter: null }, 'b')).toBe('b')
+    expect(resolveBattleBackground({ encounter: null }, undefined)).toBeUndefined()
+  })
+
+  it('battleBackground と encounter.background が両方あれば battleBackground が勝つ (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.monsters = { slime: { name: 'スライム', hp: 10 } }
+        r.scenes.a.encounter = { rate: 5, groups: ['slime'], background: 'old.png' }
+        r.scenes.a.battleBackground = 'new.png'
+        r.battle = { background: 'def.png' }
+      })
+    )
+    expect(resolveBattleBackground(c.scenes.a, c.battle.background)).toBe(
+      'https://example.com/field/new.png'
+    )
+  })
+
+  it('encounter.background のみ（battleBackground なし）でも resolveBattleBackground が返す (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.monsters = { slime: { name: 'スライム', hp: 10 } }
+        r.scenes.a.encounter = { rate: 5, groups: ['slime'], background: 'enc.png' }
+        r.battle = { background: 'def.png' }
+      })
+    )
+    expect(resolveBattleBackground(c.scenes.a, c.battle.background)).toBe(
+      'https://example.com/field/enc.png'
+    )
+  })
+
+  it('戦闘背景を書かない場面は battle.background にフォールバックし、キーも出ない (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.battle = { background: 'def.png' }
+      })
+    )
+    expect('battleBackground' in c.scenes.a).toBe(false)
+    expect(resolveBattleBackground(c.scenes.a, c.battle.background)).toBe(
+      'https://example.com/field/def.png'
+    )
+  })
+
+  it.each([
+    ['空文字', ''],
+    ['空白のみ', '  '],
+    ['数値', 3],
+    ['null', null],
+    ['オブジェクト', {}],
+  ])('battleBackground が %s なら parseConfig は失敗し場面 ID を言う (#1168)', (_n, v) => {
+    const r = parseConfig(
+      mutated((c) => {
+        c.scenes.a.battleBackground = v
+      }),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('scenes.a.battleBackground')
   })
 
   it('encounter.background と battle.background は URL に解決される', () => {

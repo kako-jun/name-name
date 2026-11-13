@@ -216,7 +216,8 @@ export function handWrittenFullWorld(assetBaseUrl: string) {
         background: 'bg-a.webp',
         mask: 'm-a.webp',
         links: [{ edge: 'right', range: [500, 900], to: 'scene-b' }],
-        encounter: { rate: 2, groups: ['slime*2'], background: 'bb-a.webp' },
+        encounter: { rate: 2, groups: ['slime*2'] },
+        battleBackground: 'bb-a.webp',
         npcs: [
           {
             id: 'elder',
