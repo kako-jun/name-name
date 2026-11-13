@@ -146,6 +146,7 @@ import {
   composeNotice,
   isLoadableSlot,
   itemsWithCounts,
+  itemNamesFromConfig,
   loadResume,
   mergeFlags,
   resumeBackground,
@@ -995,7 +996,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         enemies.map((e) => ({ ...e })),
         {
           // 戦利品のログに id でなく表示名を出す (#1126)
-          itemNames: Object.fromEntries(config.items.map((it) => [it.id, it.name])),
+          itemNames: itemNamesFromConfig(config.items),
           ...resumeBattleEngineOptions(
             buildBattleEngineOptions(
               b,

@@ -18,6 +18,7 @@ import {
   resumeBattleEngineOptions,
   composeNotice,
   carryOverBattleResult,
+  itemNamesFromConfig,
   itemsWithCounts,
   mergePartyById,
   snapshotParty,
@@ -311,7 +312,7 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
       expect(carryOverBattleResult({ ...args, loot: [] })).toEqual(omitted)
     })
 
-    it('count 0 は所持数を変えない（未定義 id は 0 のエントリ）', () => {
+    it('count 0 は所持数を変えない（未定義 id もエントリを作らない）', () => {
       const r = carryOverBattleResult({
         ...base,
         outcome: 'victory',
@@ -322,7 +323,7 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
         ],
       })
       expect(r.inventory.potion).toBe(3)
-      expect(r.inventory.none).toBe(0)
+      expect(r.inventory.none).toBeUndefined()
     })
 
     it('渡した before.inventory・loot は書き換えない', () => {
@@ -332,13 +333,45 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
       expect(loot).toEqual([{ itemId: 'potion', count: 5 }])
     })
 
-    it('配線の固定: startFieldGame が result.items を渡し itemNames を BattleEngine に配線する（静的検査）', () => {
-      // startFieldGame は PixiJS 依存で結合できないため、原文だけを固定する（式を変えたらここも直す）
-      expect(startFieldGameSrc).toContain('carryOverBattle(outcome, result.gold, result.items,')
-      expect(startFieldGameSrc).toContain(
-        'itemNames: Object.fromEntries(config.items.map((it) => [it.id, it.name]))'
-      )
-      expect(startFieldGameSrc).toMatch(/carryOverBattleResult\(\{[^}]*loot,/s)
+    it('count が負数・NaN・Infinity・0 の戦利品は加算しない（正の有限数のみ）', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [
+          { itemId: 'potion', count: -2 },
+          { itemId: 'potion', count: Number.NaN },
+          { itemId: 'potion', count: Number.POSITIVE_INFINITY },
+          { itemId: 'potion', count: 0 },
+          { itemId: 'elixir', count: -1 },
+          { itemId: 'potion', count: 2 },
+        ],
+      })
+      expect(r.inventory.potion).toBe(5)
+      expect(r.inventory.elixir).toBeUndefined()
+    })
+
+    it('配線: startFieldGame は itemNamesFromConfig を呼ぶ（静的検査）', () => {
+      expect(startFieldGameSrc).toContain('itemNamesFromConfig(')
+    })
+  })
+
+  describe('itemNamesFromConfig (#1126)', () => {
+    it('id → 名前の表にする', () => {
+      expect(
+        itemNamesFromConfig([
+          { id: 'potion', name: 'ポーション' },
+          { id: 'ether', name: 'エーテル' },
+        ])
+      ).toEqual({ potion: 'ポーション', ether: 'エーテル' })
+    })
+
+    it('空名は除外する（表示側で id のまま出る）', () => {
+      expect(itemNamesFromConfig([{ id: 'potion', name: '' }])).toEqual({})
+    })
+
+    it('items が空なら空の表', () => {
+      expect(itemNamesFromConfig([])).toEqual({})
     })
   })
 })
