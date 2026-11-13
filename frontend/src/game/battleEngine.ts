@@ -404,6 +404,8 @@ export class BattleEngine {
   private stolenCounts = new Map<BattleEntity, number>()
   private itemNames: Record<string, string>
   private currencyName: string
+  /** 設定で指定された通貨名（未指定・空は undefined）。リザルトが自前の既定を使うために分けて持つ (#1164) */
+  private configuredCurrencyName: string | undefined
   private spellNames: Record<string, string>
   /** ラーニング (#882) の初期値（この戦闘で新たに覚えた分を出すための基準。#1039） */
   private initialLearned: string[] = []
@@ -442,6 +444,7 @@ export class BattleEngine {
     }
     this.itemNames = opts.itemNames ?? {}
     this.currencyName = opts.currencyName || DEFAULT_CURRENCY_NAME
+    this.configuredCurrencyName = opts.currencyName?.trim() || undefined
     this.spellNames = opts.spellNames ?? {}
     for (const id of opts.learnedSpells ?? []) if (!this.learned.includes(id)) this.learned.push(id)
     this.initialLearned = [...this.learned]
@@ -1574,6 +1577,11 @@ export class BattleEngine {
         outcome: 'got',
       }
     }
+  }
+
+  /** 設定された通貨名。未指定・空なら undefined（内部既定『ゴールド』は返さない。リザルトの既定は別 #1164） */
+  getConfiguredCurrencyName(): string | undefined {
+    return this.configuredCurrencyName
   }
 
   /**

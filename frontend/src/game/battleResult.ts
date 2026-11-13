@@ -28,16 +28,17 @@ export const RESULT_MESSAGE_STEP_MS = 1000
 export const RESULT_VICTORY_FLIP_MS = 400
 
 /**
- * お金の単位（暫定、#1039）。FF5 は『ギル』。sit-by-me の通貨名が未決（U-2929）なので仮に『ギル』を置く。
- * 決まったらここ 1 か所だけ差し替える。
+ * リザルトのお金の単位の既定（#1164）。通貨名が設定（`battle.currencyName` / `[通貨名:]`）で渡されないときだけ使う。
+ * FF5 は『ギル』。sit-by-me の通貨名が未決（U-2929）なので既定は仮に『ギル』。engine 内部の既定（『ゴールド』）とは別。
  */
-export const RESULT_GOLD_UNIT = 'ギル'
+export const DEFAULT_RESULT_CURRENCY_NAME = 'ギル'
 
 /** 勝利リザルトの文言（語の区切りは半角スペース。全角スペースは使わない。victory は区切りを持たない定数で空白なし） */
 export const RESULT_TEXT = {
   /** 勝利の言葉（FF5 は戦闘終了時に出す。#1109。区切りの空白は入れない） */
   victory: '戦いに勝った！',
-  gold: (gold: number): string => `${gold}${RESULT_GOLD_UNIT} てにいれた`,
+  gold: (gold: number, currencyName?: string): string =>
+    `${gold}${currencyName?.trim() || DEFAULT_RESULT_CURRENCY_NAME} てにいれた`,
   exp: (exp: number): string => `${exp} けいけんち かくとく`,
   /** レベルアップ (#206)。FF5 の文言どおり名前は付けない */
   levelUp: 'レベルアップ',
@@ -49,6 +50,8 @@ export const RESULT_TEXT = {
 /** 勝利リザルトの材料（名前は呼び出し側が解決済み） */
 export interface ResultMessageInput {
   gold: number
+  /** お金の単位（設定の通貨名）。省略・空白だけは既定『ギル』 (#1164) */
+  currencyName?: string
   exp: number
   /** レベルが上がった味方の人数 (#206。1 人につき『レベルアップ』を 1 行)。省略は 0 */
   levelUps?: number
@@ -66,7 +69,7 @@ export interface ResultMessageInput {
  */
 export function buildResultMessages(input: ResultMessageInput): string[] {
   const out: string[] = [RESULT_TEXT.victory]
-  if (input.gold > 0) out.push(RESULT_TEXT.gold(input.gold))
+  if (input.gold > 0) out.push(RESULT_TEXT.gold(input.gold, input.currencyName))
   if (input.exp > 0) out.push(RESULT_TEXT.exp(input.exp))
   for (let i = 0; i < (input.levelUps ?? 0); i++) out.push(RESULT_TEXT.levelUp)
   for (const n of input.levelLearnedSpellNames ?? []) out.push(RESULT_TEXT.learned(n))

@@ -1490,8 +1490,10 @@ export class BattleScreen extends Container {
     const lv = this.opts.levelUp
       ? applyVictoryExp(this.engine.getState().party, this.opts.levelUp, r.exp)
       : undefined
+    const currencyName = this.engine.getConfiguredCurrencyName()
     return buildResultMessages({
       gold: r.gold,
+      ...(currencyName ? { currencyName } : {}),
       exp: r.exp,
       ...(lv ? { levelUps: lv.levelUps, levelLearnedSpellNames: lv.learnedNames } : {}),
       learnedSpellNames: this.engine.newlyLearnedSpellNames(),

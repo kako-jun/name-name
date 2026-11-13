@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   RESULT_HOLD_DQ_MS,
   RESULT_HOLD_FF_MS,
-  RESULT_GOLD_UNIT,
+  DEFAULT_RESULT_CURRENCY_NAME,
   RESULT_MESSAGE_STEP_MS,
   RESULT_SKIP_GUARD_MS,
   RESULT_TEXT,
@@ -103,7 +103,20 @@ describe('勝利リザルトのメッセージ (#1039)', () => {
     expect(RESULT_TEXT.victory).toBe('戦いに勝った！')
     expect(all[0]).toBe('戦いに勝った！')
     expect(RESULT_TEXT.victory).not.toMatch(/\s/)
-    expect(RESULT_TEXT.gold(1)).toBe(`1${RESULT_GOLD_UNIT} てにいれた`)
+    expect(RESULT_TEXT.gold(1)).toBe('1ギル てにいれた')
+    expect(DEFAULT_RESULT_CURRENCY_NAME).toBe('ギル')
+    expect(RESULT_TEXT.gold(30, '円')).toBe('30円 てにいれた')
+    expect(RESULT_TEXT.gold(30, '')).toBe('30ギル てにいれた')
+    expect(RESULT_TEXT.gold(30, '  ')).toBe('30ギル てにいれた')
+    expect(
+      buildResultMessages({
+        gold: 5,
+        exp: 0,
+        currencyName: '円',
+        learnedSpellNames: [],
+        lootNames: [],
+      })
+    ).toEqual(['戦いに勝った！', '5円 てにいれた'])
     expect(RESULT_TEXT.exp(7)).toBe('7 けいけんち かくとく')
     expect(RESULT_TEXT.loot('ポーション')).toBe('ポーションを てにいれた')
     expect(RESULT_TEXT.learned('ファイア')).toBe('ファイアをおぼえた！')
