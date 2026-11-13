@@ -5,6 +5,7 @@
  * 持ち物の正本は呼び出し側（パーティ・所持品。戦闘へも持ち越す）。ここが持つのは「せってい」の選択値とせいとんの並びだけで、
  * どちらもセーブ対象（`RpgSaveState.menu`）。
  */
+import type { LevelUpDef } from './levelUp'
 import type { BattleItemEntry, BattleSkillEntry, BattleSpellEntry } from './battleMenu'
 import { screenKindOfItem, type FieldMenuConfig } from './fieldMenu'
 import type {
@@ -53,6 +54,8 @@ export interface FieldMenuRuntimeDeps {
   menu: FieldMenuConfig
   items: readonly BattleItemEntry[]
   spells: readonly BattleSpellEntry[]
+  /** 味方ごとのレベルアップの定義 (#1161)。魔法の一覧を保存した Lv で味方ごとに絞る */
+  levelUp?: Readonly<Record<string, LevelUpDef>>
   skills: readonly BattleSkillEntry[]
   /** 戦闘が ATB のときのバトルモードの既定。無ければターン制（バトルモード・スピードは効かない） */
   atb?: { mode?: AtbMode }
@@ -131,6 +134,7 @@ export class FieldMenuRuntime {
       inventory: this.d.getInventory(),
       itemOrder: this.itemOrder,
       spells: this.d.spells,
+      ...(this.d.levelUp ? { levelUp: this.d.levelUp } : {}),
       skills: this.d.skills,
       equipment: this.d.getEquipment(),
     }

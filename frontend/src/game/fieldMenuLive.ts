@@ -15,6 +15,7 @@ import type { FieldMenuContentDef, MenuEntry, MenuTab, StatusRow } from './field
 import { applyEffect, parseEffect, type BattleEntity, type EffectContext } from './spellDsl'
 import { buildAppStoreTabs, buildEquipContent, type GearMenuContext } from './gearMenu'
 import { hasOwn } from './ownProperty'
+import { spellsForMember, type LevelUpDef } from './levelUp'
 
 /** 実行時の RPG 状態（メニューが読む分） */
 export interface LiveRpg {
@@ -26,6 +27,8 @@ export interface LiveRpg {
   /** せいとんで並べ替えた順（id）。載っていないアイテムは定義順で後ろ */
   itemOrder: readonly string[]
   spells: readonly BattleSpellEntry[]
+  /** 味方ごとのレベルアップの定義 (#1161)。あれば魔法の一覧は保存した Lv で味方ごとに絞る */
+  levelUp?: Readonly<Record<string, LevelUpDef>>
   skills: readonly BattleSkillEntry[]
   /** 人物 id → 装備のアイテム id */
   equipment: Readonly<Record<string, string[]>>
@@ -382,29 +385,31 @@ export function buildItemTabs(rpg: LiveRpg): MenuTab[] {
 export function buildMagicByParty(rpg: LiveRpg): Record<string, MenuEntry[]> {
   const out: Record<string, MenuEntry[]> = {}
   for (const caster of rpg.party) {
-    out[caster.id] = rpg.spells.map((sp) => {
-      const spec = spellTarget(sp)
-      const usable = !!spec && isFieldUsableEntry(sp)
-      let reason = ''
-      if (!usable) reason = 'フィールドでは つかえません'
-      else if (!alive(caster)) reason = 'たおれています'
-      else if (caster.mp < sp.mp) reason = 'MPが たりません'
-      else if (
-        spec &&
-        !(spec.scope === 'self'
-          ? wouldWork(sp, 'spell', spec.revive, caster, caster)
-          : anyTargetWorks(sp, 'spell', spec.revive, caster, rpg.party))
-      )
-        reason = '対象がいません'
-      return {
-        id: sp.id,
-        label: sp.name,
-        detail: usable ? `MP ${sp.mp}` : '',
-        enabled: reason === '',
-        description: reason === '' ? (sp.description ?? '') : withReason(sp.description, reason),
-        target: spec?.scope ?? 'single',
+    out[caster.id] = spellsForMember(rpg.spells, rpg.levelUp ?? {}, caster.id, caster.level).map(
+      (sp) => {
+        const spec = spellTarget(sp)
+        const usable = !!spec && isFieldUsableEntry(sp)
+        let reason = ''
+        if (!usable) reason = 'フィールドでは つかえません'
+        else if (!alive(caster)) reason = 'たおれています'
+        else if (caster.mp < sp.mp) reason = 'MPが たりません'
+        else if (
+          spec &&
+          !(spec.scope === 'self'
+            ? wouldWork(sp, 'spell', spec.revive, caster, caster)
+            : anyTargetWorks(sp, 'spell', spec.revive, caster, rpg.party))
+        )
+          reason = '対象がいません'
+        return {
+          id: sp.id,
+          label: sp.name,
+          detail: usable ? `MP ${sp.mp}` : '',
+          enabled: reason === '',
+          description: reason === '' ? (sp.description ?? '') : withReason(sp.description, reason),
+          target: spec?.scope ?? 'single',
+        }
       }
-    })
+    )
   }
   return out
 }

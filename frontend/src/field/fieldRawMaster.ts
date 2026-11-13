@@ -3,7 +3,7 @@
  * 入力の `FieldMasterData` は読み取りのみ(コピーして raw に入れる)。
  *
  * 呪文・特技・どうぐを入れる範囲(設計 §2-B-8。sit の「最初から使える魔法はない」「魔法はパーティ共通」「刀のアビリティは人物ごと」に合わせる):
- * - spells = いずれかの `[パーティ]` の `覚える` のうち、その味方のレベル(既定 1)以下のものの和集合(`[呪文]` の定義順)
+ * - spells = いずれかの `[パーティ]` の `覚える` のうち、その味方のレベル(既定 1)以下のものの和集合（経験値表のある味方は Lv 不問で全部。味方ごとの絞り込みは `spellsForMember`）(`[呪文]` の定義順)
  * - skills = いずれかの `[パーティ]` の `わざ` と、売り物の刀の `わざ` の和集合(`[特技]` の定義順)
  * - items  = `売り物:` を持たない全 `[アイテム]`(定義順)
  */
@@ -122,7 +122,8 @@ export function spellsRaw(
   for (const m of party) {
     const level = m.level ?? 1
     for (const l of m.learns ?? []) {
-      if (l.level > level) continue
+      // 経験値表のある味方は、レベルアップで覚える (#1161) ので Lv に関係なく全部入れる（味方ごとの絞り込みは spellsForMember）
+      if (l.level > level && m.expTable === undefined) continue
       if (!hasOwn(master.spells, l.spell)) {
         warnings.push(
           `[パーティ ${m.id}] の 覚える '${l.spell}' が [呪文] にありません（省きます）`

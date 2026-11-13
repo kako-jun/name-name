@@ -8,6 +8,7 @@ import {
   levelCap,
   levelForExp,
   splitExp,
+  spellsForMember,
   type LevelUpDef,
 } from './levelUp'
 import { buildResultMessages, RESULT_TEXT } from './battleResult'
@@ -465,5 +466,33 @@ describe('levelUp: リザルト文言の順序 (#206)', () => {
       'ホイミをおぼえた！',
       'fireをおぼえた！',
     ])
+  })
+})
+
+describe('spellsForMember (#1161)', () => {
+  const spells = [{ id: 'fire' }, { id: 'cure' }, { id: 'bolt' }, { id: 'free' }]
+  const defs: Record<string, LevelUpDef> = {
+    a: {
+      level: 1,
+      expTable: [10],
+      learns: [
+        { level: 1, spell: 'fire' },
+        { level: 3, spell: 'bolt' },
+      ],
+    },
+    b: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'cure' }] },
+  }
+  const ids = (l: { id: string }[]) => l.map((x) => x.id)
+  it('習得 Lv 未満では並ばず、保存した Lv に達すると並ぶ', () => {
+    expect(ids(spellsForMember(spells, defs, 'a', 1))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, defs, 'a', 3))).toEqual(['fire', 'bolt', 'free'])
+  })
+  it('味方ごとに自分の習得だけ。Lv 未設定は初期 Lv', () => {
+    expect(ids(spellsForMember(spells, defs, 'b', undefined))).toEqual(['free'])
+    expect(ids(spellsForMember(spells, defs, 'b', 2))).toEqual(['cure', 'free'])
+  })
+  it('経験値表の無い味方は従来どおり初期 Lv の和集合、定義が無ければ全部', () => {
+    expect(ids(spellsForMember(spells, defs, 'z', 9))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, {}, 'a', 1))).toEqual(['fire', 'cure', 'bolt', 'free'])
   })
 })
