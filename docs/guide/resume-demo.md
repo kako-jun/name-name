@@ -2,14 +2,21 @@
 
 任意の局面（パーティ・所持品・装備・所持金・フィールドの現在地・戦闘中の状態）を**セーブデータとして先に用意し、そこから再開して起動する**ための手順。デモ・不具合の再現・見た目の確認は、すべてこの一通りで行う（専用のサンプルマップや状態の作り方は持たない。#1021）。
 
-- デモはマップ以外 sit-by-me の実ゲームと同じ内容。台帳に定義が無い機能はデモを作らず、自動テスト（ハーネス・vitest）で確認する。確認は、`?config=<URL>` で世界設定を指定し、実際のセーブ（`teramachi-bathhouse-battle.save.json`）をロードする 1 本だけ。**ただし寺町セーブの読み込み先の世界設定は未解決（本編のデータが sit-by-me に無い。同梱の設定は #1066 で削除した）**
+- デモはマップ以外 sit-by-me の実ゲームと同じ内容。台帳に定義が無い機能はデモを作らず、自動テスト（ハーネス・vitest）で確認する。確認は、sit-by-me の `/play/sit-by-me`（#1144。name-name の worker が sit-by-me の `play/` を読む）に、再開点のセーブを入れて `?resume=` で開く 1 本が現行の経路。入口は sit-by-me の [`play/README.md`](https://github.com/kako-jun/sit-by-me/blob/main/play/README.md)（台帳から生成。再開点の一覧と手順の正本）、サンプルのマップ（`sample_field`）の仕様の入口は sit-by-me の [`docs/demo/README.md`](https://github.com/kako-jun/sit-by-me/blob/main/docs/demo/README.md)。本ガイドの `field.html?resume=0&config=<URL>` と `teramachi-bathhouse-battle.save.json` は**旧経路**（`?config=` で世界設定を渡す形。同梱の設定は #1066 で削除済みで、寺町の世界設定は現在どこにも無いので、そのままでは動かない）。セーブの書式・持ち越しの規則・未対応事項は、どちらの経路でも同じ
 - フィールドメニューの「ロード」（セーブの隣。#1131）は、内部で同じ `?resume=<スロット>` の入口に乗る（field.html はその付いた URL にリロードする）。`?resume=` は開発者向けの裏技のまま残る。メニューの「セーブ」で書いたスロットを「ロード」で読み戻す往復が、手で確かめる一番短い手順（`window.field.rpg()` で保存位置に戻ったことを見る）
 - 従来のデモの入口（`?fixture=dummy`）は無い
 - 状態の与え方は **localStorage のセーブ（JSON）を先に作ってから、`?resume=` で開く** の一通り
 - セーブ形式が正（`frontend/src/game/rpgSave.ts` の `RpgSaveState`）。`startFrom({ rpg })` も同じ形式を受ける（[デバッガガイド](./debugger.md) / [ADR 0002 §6](../adr/0002-deterministic-state-and-debuggability.md)）
 - 再開できるのは一枚絵フィールド（`field.html`）。ノベル側（`NovelRenderer`）は `rpg` を解釈せず持ち回すだけ
 
-## 手順
+## 手順（`/play/sit-by-me`。現行）
+
+1. sit-by-me の `play/saves/<再開点ID>.save.json`（一覧は `play/README.md`）を選ぶ
+2. `/play/sit-by-me` を開くのと同じオリジンのコンソールで、キー `name-name-save-sit-by-me-0`（`name-name-save-<プロジェクト名>-<スロット>`。`PlayerScreen` が `docKey` にプロジェクト名を渡す）に `localStorage.setItem` する
+3. `/play/sit-by-me?resume=0` を開く（スロットは `0`〜`2`・`quick`）。再開の仕組みは下の旧経路と同じ（`fieldResume.ts`）
+4. `window.field.rpg()` などでの確認、失敗時の扱いは旧経路の 4・5 と同じ
+
+## 手順（旧経路。`field.html?resume=0&config=`）
 
 1. セーブ JSON を用意する（下の「セーブの書き方」。寺町の例: [`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)）
 2. 開く URL と同じオリジンで、ブラウザの開発者ツールのコンソールから localStorage に書く（キーは `name-name-save-field-<スロット>`。スロットは `0`〜`2`、クイックは `quick`）
@@ -23,7 +30,7 @@
 
    自動操作（playwright など）ならページを開く前に同じオリジンの任意のページで `localStorage.setItem` してから `field.html?resume=0&config=<URL>` へ移動する
 
-3. `field.html?resume=0&config=<世界設定のURL>`（`?config=` は必須で、同梱の既定設定は無い。設定は「世界」、セーブは「状態」で別物）を開く
+3. `field.html?resume=0&config=<世界設定のURL>`（旧経路。`?config=` は必須で、同梱の既定設定は無い。設定は「世界」、セーブは「状態」で別物）を開く
 4. 画面下の表示（`scene=… foot=… facing=… gold=… party=…`）と、`window.field.rpg()`（今の局面をセーブ形式で返す）で復元を確かめる。`window.field.saveRpg(1)` で今の局面をスロットに書け、同じ形式で読み戻せる
 5. 失敗したとき（スロットが空・`rpg` が無い・検証に落ちた）は理由を画面に出し、設定の開始位置から始める。パーティが設定に 1 人もいないセーブも同じ扱い
 
@@ -108,7 +115,7 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 ## 刀の確認（味方の刀。#1035）
 
-味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順。**寺町セーブの読み込み先の世界設定が無い（本編のデータが sit-by-me に無い）ので、現状この手順は成り立たない**。設定が用意できたときの流れ:
+味方（C001〜C004）は、目録から導いた刀を手元に持つ（導き方は [デバッガガイド](./debugger.md) の「刀の指定を目録から導く」）。戦闘中セーブ再開で、通常攻撃の ready → windup → slash → followthrough → ready の 5 段に刀が付くことを確かめる手順。**旧経路（`field.html?config=`）の手順で、寺町セーブの読み込み先の世界設定が現在無い（#1066 で同梱の設定を削除）ので、そのままでは成り立たない**。現行の `/play/sit-by-me` では、再開点のセーブ（`play/README.md`）で同じ戦闘中の再開ができる。旧経路で設定が用意できたときの流れ:
 
 1. sit-by-me のルートを CORS（`Access-Control-Allow-Origin: *`）付きで配信する
 2. `cd frontend && npx vite build --outDir <出力先>` の本番ビルドを静的配信する（`field.html`）
@@ -121,16 +128,16 @@ localStorage に入れるのは通常のセーブ（`SaveSlotData`）で、RPG �
 
 ff の勝利で、先頭の「戦いに勝った！」に続けて結果のメッセージが 1 件ずつ出ることを確かめる手順。デモ専用の仕組みは無く、「刀の確認」と同じ既存の手順（戦闘中セーブ再開）を流用する。
 
-1. 「刀の確認」の手順 1〜3 と同じく（世界設定が無いので現状は成り立たない）、`~/repos/private/sit-by-me` のルートを CORS 付きで配信し、本番ビルドを静的配信して、[`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-0`）に入れ `field.html?resume=0&config=<世界設定のURL>` を開く（設定が `battle_presentation: ff` であること）
+1. 「刀の確認」の手順 1〜3 と同じく（旧経路の手順で、世界設定が現在無いのでそのままでは成り立たない。現行は `/play/sit-by-me` の再開点）、`~/repos/private/sit-by-me` のルートを CORS 付きで配信し、本番ビルドを静的配信して、[`examples/teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json) を localStorage（`name-name-save-field-0`）に入れ `field.html?resume=0&config=<世界設定のURL>` を開く（設定が `battle_presentation: ff` であること）
 2. 勝ちやすいよう、セーブの敵の `hp` を 1 にして敵を倒す。最後の敵を倒したあと、最後の演出（のけぞり・倒れ・数字）が終わってから窓に結果が順に出る
 3. 出るもの: 「戦いに勝った！」（常に先頭。お金・経験値が 0 でも出る）→「○○（通貨名） てにいれた」（通貨名は `battle.currencyName` / `[通貨名:]`、省略時は『ギル』）→「○○ けいけんち かくとく」→（フィールドで `[パーティ]` に `経験値表:` を書いた味方が上がったときだけ、1 人につき 1 行）「レベルアップ」→（レベルで覚えた呪文、続いてこの戦闘で新しく覚えた呪文〔ラーニング〕があれば）「○○をおぼえた！」→（戦利品があれば最後に）「○○を てにいれた」。0 のものは出ない。1 件約 1 秒の自動送り。**field の設定では敵の `loot`（#1118）を書けば戦利品の行も出る**。戦利品は戦闘後にフィールドの所持品へ加算され（定義に無い id も新規に持つ）、ログ・結果には id でなく `items` の `name` が出る (#1126)（呪文の行は vitest の `BattleScreenResultMessages.test.ts` で担保）。生き残りの味方は通常と victory を約 0.4 秒ごとに交互に繰り返す
 4. 窓に出ている間に Enter か画面タップをすると、残りを飛ばして戦闘画面が閉じる（待機の開始直後の約 0.25 秒は受け付けない）。dq 式・全滅・逃走は従来どおり
 
 **暫定の確認点（#1039）**: 自動送りの間隔・キャラ名なし・数字の桁区切りなし・省略時の既定の通貨単位「ギル」は仮の値（通貨名は設定で差し替えられる）で、sit-by-me の決定台帳（U-2929）が未決。確定の正本は `sit-by-me` リポの docs/systems.md「戦闘後のリザルト(FF5 式)」。見た目の最終判断は KJ の実機で行う。
 
-## 実際の設定＋実際のセーブでの確認（#1051。世界設定は未解決）
+## 実際の設定＋実際のセーブでの確認（#1051。旧経路）
 
-確認は「`?config=<URL>` で指定する世界設定 ＋ [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)」をロードする 1 本だけ。手順は「刀の確認」の 1〜3 と同じ（`field.html?resume=0&config=<URL>`）。寺町セーブの読み込み先の世界設定は未解決のため、現状は成り立たない。味方は実際の 4 人、敵は台帳の敵（M149・M147）、背景は BG001。書式は [デバッガガイド](./debugger.md)。
+確認は「`?config=<URL>` で指定する世界設定 ＋ [`teramachi-bathhouse-battle.save.json`](./examples/teramachi-bathhouse-battle.save.json)」をロードする 1 本だけ。手順は「刀の確認」の 1〜3 と同じ（`field.html?resume=0&config=<URL>`。旧経路）。寺町セーブの読み込み先の世界設定は現在無いため、そのままでは成り立たない（現行は `/play/sit-by-me` の再開点）。味方は実際の 4 人、敵は台帳の敵（M149・M147）、背景は BG011（sit-by-me の戦闘背景台帳。BG001 は退役済みで、BG012 は薄雪の道。例の save.json は BG011 を指す）。書式は [デバッガガイド](./debugger.md)。
 
 - 見えるもの: 横スライド登場（`default` でも `snappy` でも出る）・`battle.motion: "snappy"` のキビキビした踏み出し、`battle.effects` の `cast` / `magic`・`slash` / `impact`、`battle.enemyList: "window"` の敵名窓（コマンド窓の右隣に敵名が縦に並び、同名はまとまる。台帳の決定）
 - 操作可能までは 登場で約 4〜5 秒（それ以前の入力は効かない）。`cross` が有効なので矢印キーが効く

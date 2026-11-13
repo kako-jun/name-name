@@ -32,7 +32,7 @@
         "enemyGauge": [400, 150],
         "queue": [0]
       },
-      "background": "http://localhost:8765/assets/images/battle-backgrounds/BG001.webp"
+      "background": "http://localhost:8765/assets/images/battle-backgrounds/BG011.webp"
     }
   }
 }
