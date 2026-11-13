@@ -523,6 +523,19 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     )
   })
 
+  it('encounter.background のみ（battleBackground なし）でも resolveBattleBackground が返す (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.monsters = { slime: { name: 'スライム', hp: 10 } }
+        r.scenes.a.encounter = { rate: 5, groups: ['slime'], background: 'enc.png' }
+        r.battle = { background: 'def.png' }
+      })
+    )
+    expect(resolveBattleBackground(c.scenes.a, c.battle.background)).toBe(
+      'https://example.com/field/enc.png'
+    )
+  })
+
   it('戦闘背景を書かない場面は battle.background にフォールバックし、キーも出ない (#1168)', () => {
     const c = ok(
       mutated((r) => {

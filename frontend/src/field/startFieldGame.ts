@@ -131,6 +131,7 @@ import {
   findReturnLink,
   forceBattleCandidates,
   resolveBattleBackground,
+  type FieldNpc,
   type FieldConfig,
   type FieldWarp,
 } from './config'

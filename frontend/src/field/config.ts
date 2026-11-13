@@ -160,7 +160,7 @@ export interface FieldSceneConfig {
   npcs?: FieldNpc[]
   /** このシーンでの主人公の表示高さ（背景ピクセル）。省略 = 全体の `player.height` (#810) */
   playerHeight?: number
-  /** ランダムエンカウント (#809)。省略 = エンカウントなし */
+  /** ランダムエンカウント (#809)。省略 = エンカウントなし。`background` は手書き JSON 互換の戦闘背景（`battleBackground` があればそちらが優先、#1168） */
   encounter: (SceneEncounter & { background?: string }) | null
   /** この場面の戦闘背景 URL（エンカウントの有無に依存しない。劇戦闘でも使う）(#1168)。`scenes.<id>.battleBackground` */
   battleBackground?: string
@@ -191,7 +191,7 @@ export type FieldTrigger =
 export interface FieldBattleConfig {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
-  /** 戦闘の既定の背景 URL（シーンの encounter.background で上書き可） */
+  /** 戦闘の既定の背景 URL（場面の `battleBackground` → `encounter.background` の順で上書き可、#1168） */
   background?: string
   /** 戦闘中の画面の大きさ（戦闘の 800x450 と同じ既定） */
   width: number
