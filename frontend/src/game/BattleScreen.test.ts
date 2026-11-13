@@ -96,6 +96,8 @@ interface Internals {
   statusHpLabels: Text[]
   statusMpLabels: Text[]
   statusHpMaxes: Text[]
+  statusHpSlashes: Text[]
+  statusMpSlashes: Text[]
   statusMpMaxes: Text[]
   logLines: Text[]
   backgroundSprite: Sprite | null
@@ -648,7 +650,12 @@ describe('BattleScreen: side', () => {
     const row = (s: BattleScreen, k: 'Hp' | 'Mp'): string => {
       const i = internals(s)
       const g = (key: string) => (i as unknown as Record<string, Text[]>)[key][0]
-      return [g(`status${k}Labels`), g(`status${k}Texts`), g(`status${k}Maxes`)]
+      return [
+        g(`status${k}Labels`),
+        g(`status${k}Texts`),
+        g(`status${k}Slashes`),
+        g(`status${k}Maxes`),
+      ]
         .map((t) => t.text)
         .join('')
     }
@@ -855,12 +862,14 @@ describe('BattleScreen: side のレビュー指摘対応 (#736)', () => {
       const nameT = internals(s).statusTexts[0]
       const i = internals(s)
       const [lab, cur, max] = [i.statusHpLabels[0], i.statusHpTexts[0], i.statusHpMaxes[0]]
-      expect(`${cur.text}${max.text}`.endsWith(`${hp}/${hp}`)).toBe(true)
+      expect(`${cur.text}${i.statusHpSlashes[0].text}${max.text}`.endsWith(`${hp}/${hp}`)).toBe(
+        true
+      )
       expect(nameT.text.length).toBeGreaterThan(0)
       expect(nameT.text.startsWith(name.slice(0, 1))).toBe(true)
       // 名前の右端 <= HP 列の左端、HP 列の右端 <= パネル内側の右端
       const hpLeft = lab.text ? lab.x : cur.x - estimateTextWidth(cur.text, 14)
-      const hpRight = max.text ? max.x : cur.x
+      const hpRight = max.text ? max.x : cur.x // 最大値は右寄せの基準 x が右端 (#1173)
       expect(nameT.x + estimateTextWidth(nameT.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
       expect(hpRight).toBeLessThanOrEqual(L.status.x + L.status.w - 12 + 0.001)
       expect(nameT.x).toBeGreaterThanOrEqual(L.status.x)
@@ -3212,20 +3221,27 @@ describe('BattleScreen: side のステータス欄は HP がばらばらでも�
     const i = internals(s)
     const same = (xs: number[]): void => xs.forEach((x) => expect(x).toBeCloseTo(xs[0], 6))
     same(i.statusHpLabels.map((t) => t.x))
+    same(i.statusHpSlashes.map((t) => t.x))
     same(i.statusHpMaxes.map((t) => t.x))
     same(i.statusHpTexts.map((t) => t.x))
     same(i.statusMpLabels.map((t) => t.x))
     same(i.statusMpMaxes.map((t) => t.x))
     expect(i.statusHpLabels[0].text).toBe('HP')
     expect(i.statusHpTexts.map((t) => t.text)).toEqual(['5', '50', '120', '0'])
-    // 「/最大値」は現在値の右端に接して続く（「/」の x = 現在値の右寄せ基準）
-    expect(i.statusHpMaxes[0].x).toBeCloseTo(i.statusHpTexts[0].x, 6)
+    // 「/」は現在値の右端に接して続く（「/」の x = 現在値の右寄せ基準）。最大値は列の右端に右寄せ (#1173)
+    expect(i.statusHpSlashes[0].x).toBeCloseTo(i.statusHpTexts[0].x, 6)
+    expect(i.statusHpMaxes[0].x).toBeGreaterThan(i.statusHpSlashes[0].x)
   })
 
-  it('MP 列がない狭い画面では MP の 3 つの Text が非表示で空', () => {
+  it('MP 列がない狭い画面では MP の 4 つの Text が非表示で空', () => {
     const s = track(make([entity('a')], [entity('slime')], { layout: 'side' }, 360, 640))
     const i = internals(s)
-    for (const t of [i.statusMpLabels[0], i.statusMpTexts[0], i.statusMpMaxes[0]]) {
+    for (const t of [
+      i.statusMpLabels[0],
+      i.statusMpTexts[0],
+      i.statusMpSlashes[0],
+      i.statusMpMaxes[0],
+    ]) {
       expect(t.visible).toBe(false)
       expect(t.text).toBe('')
     }

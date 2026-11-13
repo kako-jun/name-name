@@ -35,7 +35,8 @@ const base: StatusColumnsInput = {
  * 境界では余裕がなく余白は広がらないので、広がったぶん（c.name.x と基本の余白の差）を名前幅へ戻して逆算する (#805)
  */
 function exactMinNameWidth(input: StatusColumnsInput): number {
-  const c = computeStatusColumns({ ...input, width: 600 })
+  // ATB は名前列を「ほしい幅」から取るので、残り幅いっぱいを取らせて境界を逆算する (#1173)
+  const c = computeStatusColumns({ ...input, width: 600, nameWidth: 1e6 })
   const widened = c.name.x - (input.x + sideStatusLeftPadding(input.atb))
   // 浮動小数の丸めで境界ちょうどが 1 ulp 下回らないよう、ごく小さく上げる
   return 600 - (c.name.w + widened - MIN_NAME) + 1e-9
@@ -142,9 +143,10 @@ describe('computeStatusColumns: 省略段階のデシジョンテーブル (#745
     expect(c.showMaxHp).toBe(true)
   })
 
-  it('ゲージは極端に狭いときだけ最小幅まで縮み、それ以外は固定幅', () => {
+  it('ゲージは広いと残り幅いっぱい、狭いと下限（半角 4 文字）、極端に狭いときだけ最小幅まで縮む (#1173)', () => {
     const wide = computeStatusColumns({ ...base, atb: true, width: 600 })
-    expect(wide.gauge!.w).toBe(SIDE_STATUS_GAUGE_WIDTH)
+    expect(wide.gauge!.w).toBeGreaterThan(SIDE_STATUS_GAUGE_WIDTH)
+    expect(wide.gauge!.x + wide.gauge!.w).toBeCloseTo(600 - SIDE_STATUS_TEXT_PADDING, 6)
     const tiny = computeStatusColumns({ ...base, maxHp: 9999, atb: true, width: 60 })
     expect(tiny.gauge!.w).toBe(SIDE_STATUS_GAUGE_MIN_WIDTH)
     expect(SIDE_STATUS_GAUGE_MIN_WIDTH).toBeLessThan(SIDE_STATUS_GAUGE_WIDTH)

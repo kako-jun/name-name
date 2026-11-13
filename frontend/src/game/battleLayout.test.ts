@@ -1826,7 +1826,8 @@ describe('computeStatusColumns (#745)', () => {
   const base = { x: 100, width: 400, maxHp: 120, maxMp: 99, compact: false, atb: false }
 
   it('列は左から 名前 < HP < MP < ゲージ の順で重ならず、パネルの内側に収まる', () => {
-    const c = computeStatusColumns({ ...base, atb: true })
+    // 名前列は「ほしい幅」を十分大きく取り、▶ の余白が最大まで広がる状態で見る (#1173)
+    const c = computeStatusColumns({ ...base, atb: true, nameWidth: 1e6 })
     const inner = {
       l: base.x + sideStatusLeftPadding(true) + 4,
       r: base.x + base.width - SIDE_STATUS_TEXT_PADDING,
@@ -1836,7 +1837,8 @@ describe('computeStatusColumns (#745)', () => {
     expect(c.hp.x + c.hp.w).toBeLessThanOrEqual(c.mp!.x)
     expect(c.mp!.x + c.mp!.w).toBeLessThanOrEqual(c.gauge!.x)
     expect(c.gauge!.x + c.gauge!.w).toBeCloseTo(inner.r, 6)
-    expect(c.gauge!.w).toBe(SIDE_STATUS_GAUGE_WIDTH)
+    // ゲージは残り幅いっぱい（下限を割らない）(#1173)
+    expect(c.gauge!.w).toBeGreaterThanOrEqual(SIDE_STATUS_GAUGE_WIDTH - 1e-9)
     expect(c.mp!.x - (c.hp.x + c.hp.w)).toBeGreaterThanOrEqual(SIDE_STATUS_COLUMN_GAP - 1e-9)
   })
 
@@ -2219,7 +2221,7 @@ describe('ATB の番の印 ▶ と選択印 ▼ の幾何 (#805)', () => {
     const base = { x: 0, maxHp: 120, maxMp: 99, compact: false, atb: true }
     const minName = SIDE_STATUS_MIN_NAME_CHARS * SIDE_STATUS_FONT_SIZE
     const padding = (width: number) => {
-      const c = computeStatusColumns({ ...base, width })
+      const c = computeStatusColumns({ ...base, width, nameWidth: 1e6 })
       expect(c.name.w).toBeGreaterThanOrEqual(minName - 1e-9)
       return c.name.x
     }

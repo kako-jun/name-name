@@ -1223,10 +1223,15 @@ export function computeSelectMarkTriangle(
 export const SIDE_STATUS_COLUMN_GAP = 8
 /** 名前列に最低限確保する全角文字数。これに届かないときは MP → 見出し → HP の最大値 → ゲージ幅の順に削る */
 export const SIDE_STATUS_MIN_NAME_CHARS = 3
-/** ATB ゲージ（行の右端に置く短い棒）の幅。半角 4 文字ぶん */
+/**
+ * ATB ゲージの幅の「これ未満にしない」下限（半角 4 文字ぶん）。ゲージ幅そのものは固定でなく、
+ * 名前・HP・MP の列を除いた行の残り幅いっぱい (#1173)。残りがこの幅に届かないときは MP → 見出し → … の順に列を削る
+ */
 export const SIDE_STATUS_GAUGE_WIDTH = Math.round(estimateTextWidth('0000', SIDE_STATUS_FONT_SIZE))
 /** ATB ゲージの高さ */
 export const SIDE_STATUS_GAUGE_HEIGHT = 3
+/** 名前の前に付く状態名（「[毒・暗闇] 」）のために名前列へ足す余裕（全角文字数）。状態が変わっても列がずれないよう、固定で見込む */
+export const SIDE_STATUS_TAG_ROOM_CHARS = 6
 
 export interface StatusColumn {
   /** 列の左端（画面絶対） */
@@ -1235,14 +1240,16 @@ export interface StatusColumn {
 }
 
 /**
- * HP / MP の列。内部は「見出し | 現在値 | /最大値」の 3 つに分かれ、見出しは `x` に左寄せ、
- * 現在値は `curRight`（「/」の直前）に右寄せ、「/最大値」は `curRight` から左寄せで続ける（列の右端は `x + w`）。
- * 現在値の桁数が行ごとに違っても、見出しと「/」の x が全員そろう（FF5/6 と同じ）。
+ * HP / MP の列。内部は「見出し | 現在値 | / | 最大値」の 4 つに分かれ、見出しは `x` に左寄せ、
+ * 現在値は `curRight`（「/」の直前）に右寄せ、「/」は `curRight` から左寄せ、最大値は列の右端 `x + w` に右寄せする (#1173)。
+ * 現在値も最大値も桁の位（一の位）が全員そろい、見出しと「/」の x もそろう（FF5/6 と同じ）。
  * 最大値を省く段階（`showMaxHp` が false）では現在値が `x + w` に右寄せされる。
  */
 export interface StatusValueColumn extends StatusColumn {
-  /** 現在値テキストの右端（右寄せの基準 x） */
+  /** 現在値テキストの右端（右寄せの基準 x）。「/」はここから左寄せで始まる */
   curRight: number
+  /** 最大値テキストの右端（右寄せの基準 x）。`x + w` と同じ。最大値を出さない段階では使わない */
+  maxRight: number
 }
 
 export interface StatusColumns {
@@ -1267,6 +1274,11 @@ export interface StatusColumnsInput {
   compact: boolean
   /** ATB ゲージの列を付けるか */
   atb: boolean
+  /**
+   * 名前列に取りたい幅 (px。味方のいちばん長い名前＋状態名の余裕)。ATB のときだけ使う: 名前 → HP → MP を左から詰め、
+   * ゲージが残り幅いっぱいを取る (#1173)。省略は最低文字数ぶん。ATB でなければ名前列が残り幅を取る（従来どおり）
+   */
+  nameWidth?: number
   fontPx?: number
 }
 
@@ -1283,43 +1295,83 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
   const leftBase = input.x + sideStatusLeftPadding(input.atb)
   const right = input.x + input.width - SIDE_STATUS_TEXT_PADDING
   const minName = SIDE_STATUS_MIN_NAME_CHARS * font
-  const build = (
+  const wantName = Math.max(minName, input.nameWidth ?? 0)
+  const gap = SIDE_STATUS_COLUMN_GAP
+  // 値の列: 見出し（「MP 」） + 現在値の最大桁 + 「/」 + 最大値の最大桁。MP の最大値は常に出す。
+  // 現在値と最大値は同じ桁数ぶんの幅を取り、どちらも右寄せなので桁の位が全員そろう (#1173)
+  const valueWidths = (maxValue: number, showMax: boolean, labels: boolean) => {
+    // 見出しと数字がくっつかないよう、見出しの後ろに列間と同じすき間（実フォントの「MP」は概算より広いので、これで実際に隙間が残る）を空ける
+    const label = labels ? estimateTextWidth('MP', font) + gap : 0
+    const digits = estimateTextWidth(`${maxValue}`, font)
+    const maxPart = showMax ? estimateTextWidth('/', font) + digits : 0
+    return { w: label + digits + maxPart, maxPart, labelPlusCur: label + digits }
+  }
+  const valueAt = (x: number, widths: ReturnType<typeof valueWidths>): StatusValueColumn => ({
+    x,
+    w: widths.w,
+    curRight: x + widths.w - widths.maxPart,
+    maxRight: x + widths.w,
+  })
+  // ATB: 名前 → HP → MP を左から詰め、ゲージが残り幅いっぱいを取る。名前列は「ほしい幅」から、ゲージの下限を割らない範囲まで縮む (#1173)
+  const packed = (
     withMp: boolean,
     labels: boolean,
     maxHpShown: boolean,
-    gaugeW: number,
     extraLeft = 0
-  ): StatusColumns => {
+  ): StatusColumns | null => {
     const left = leftBase + extraLeft
+    const hpW = valueWidths(input.maxHp, maxHpShown, labels)
+    const mpW = withMp ? valueWidths(input.maxMp, true, labels) : null
+    const fixed = hpW.w + (mpW ? gap + mpW.w : 0) + gap + SIDE_STATUS_GAUGE_WIDTH
+    const nameW = Math.min(wantName, right - left - gap - fixed)
+    if (nameW < minName) return null
+    const hp = valueAt(left + nameW + gap, hpW)
+    let edge = hp.x + hp.w + gap
+    let mp: StatusValueColumn | null = null
+    if (mpW) {
+      mp = valueAt(edge, mpW)
+      edge = mp.x + mp.w + gap
+    }
+    return {
+      name: { x: left, w: nameW },
+      hp,
+      mp,
+      gauge: { x: edge, w: right - edge },
+      showLabels: labels,
+      showMaxHp: maxHpShown,
+    }
+  }
+  // ATB でない / 極端に狭い: 右端からゲージ → MP → HP と詰め、残りがすべて名前列
+  const anchored = (
+    withMp: boolean,
+    labels: boolean,
+    maxHpShown: boolean,
+    gaugeW: number
+  ): StatusColumns => {
+    const left = leftBase
     let edge = right
     let gauge: StatusColumn | null = null
     if (input.atb) {
       gauge = { x: edge - gaugeW, w: gaugeW }
-      edge = gauge.x - SIDE_STATUS_COLUMN_GAP
-    }
-    // 値の列: 見出し（「MP 」） + 現在値の最大桁 + 「/最大値」。MP の最大値は常に出す
-    const valueColumn = (maxValue: number, showMax: boolean, rightEdge: number) => {
-      // 見出しと数字がくっつかないよう、見出しの後ろに列間と同じすき間（実フォントの「MP」は概算より広いので、これで実際に隙間が残る）を空ける
-      const label = labels ? estimateTextWidth('MP', font) + SIDE_STATUS_COLUMN_GAP : 0
-      const maxPart = showMax ? estimateTextWidth(`/${maxValue}`, font) : 0
-      const curW = estimateTextWidth(`${maxValue}`, font)
-      const w = label + curW + maxPart
-      return { x: rightEdge - w, w, curRight: rightEdge - maxPart, labelPlusCur: label + curW }
+      edge = gauge.x - gap
     }
     let mp: StatusValueColumn | null = null
     if (withMp) {
-      mp = valueColumn(input.maxMp, true, edge)
-      edge = mp.x - SIDE_STATUS_COLUMN_GAP
+      const w = valueWidths(input.maxMp, true, labels)
+      mp = valueAt(edge - w.w, w)
+      edge = mp.x - gap
     }
-    const { labelPlusCur: hpLabelCur, ...hp } = valueColumn(input.maxHp, maxHpShown, edge)
+    const hpW = valueWidths(input.maxHp, maxHpShown, labels)
+    const hp = valueAt(edge - hpW.w, hpW)
     // 極端に狭いときも、HP 列が名前の左端（パネルの左余白）より左へ出ない。
     // 現在値の右端は、見出しと現在値の最大桁が重ならない位置までは右へ押し出す
     if (hp.x < left) {
       hp.w = Math.max(0, hp.x + hp.w - left)
       hp.x = left
-      hp.curRight = Math.max(hp.curRight, left + hpLabelCur)
+      hp.curRight = Math.max(hp.curRight, left + hpW.labelPlusCur)
+      hp.maxRight = hp.x + hp.w
     }
-    const nameW = Math.max(0, hp.x - SIDE_STATUS_COLUMN_GAP - left)
+    const nameW = Math.max(0, hp.x - gap - left)
     return {
       name: { x: left, w: nameW },
       hp,
@@ -1329,16 +1381,17 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
       showMaxHp: maxHpShown,
     }
   }
-  const G = SIDE_STATUS_GAUGE_WIDTH
-  const tries: Array<[boolean, boolean, boolean, number]> = [
-    ...(input.compact ? [] : [[true, true, true, G] as [boolean, boolean, boolean, number]]),
-    [false, true, true, G],
-    [false, false, true, G],
-    [false, false, false, G],
+  const tries: Array<[boolean, boolean, boolean]> = [
+    ...(input.compact ? [] : [[true, true, true] as [boolean, boolean, boolean]]),
+    [false, true, true],
+    [false, false, true],
+    [false, false, false],
   ]
-  for (const [withMp, labels, maxHpShown, gaugeW] of tries) {
-    const c = build(withMp, labels, maxHpShown, gaugeW)
-    if (c.name.w >= minName) {
+  for (const [withMp, labels, maxHpShown] of tries) {
+    const c = input.atb
+      ? packed(withMp, labels, maxHpShown)
+      : anchored(withMp, labels, maxHpShown, SIDE_STATUS_GAUGE_WIDTH)
+    if (c && c.name.w >= minName) {
       // ATB: 名前列に余裕があるぶん（最小名前幅を割らない範囲）だけ、▶ の余白を MAX まで広げる。段階（省略）は変えない
       const extra = input.atb
         ? Math.min(
@@ -1346,8 +1399,8 @@ export function computeStatusColumns(input: StatusColumnsInput): StatusColumns {
             c.name.w - minName
           )
         : 0
-      return extra > 0 ? build(withMp, labels, maxHpShown, gaugeW, extra) : c
+      return (extra > 0 ? packed(withMp, labels, maxHpShown, extra) : null) ?? c
     }
   }
-  return build(false, false, false, SIDE_STATUS_GAUGE_MIN_WIDTH)
+  return anchored(false, false, false, SIDE_STATUS_GAUGE_MIN_WIDTH)
 }
