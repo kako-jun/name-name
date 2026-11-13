@@ -62,7 +62,11 @@ const tapScreen = (s: BattleScreen) => s.emit('pointertap', {} as never)
 const press = (key: string) => globalThis.dispatchEvent(new KeyboardEvent('keydown', { key }))
 
 /** gold 3 / exp 5 / 戦利品 potion。味方は生存 2 人 + 倒れた 1 人 */
-function setup(opts: BattleScreenOptions = {}, enemy: Partial<BattleEntity> = {}) {
+function setup(
+  opts: BattleScreenOptions = {},
+  enemy: Partial<BattleEntity> = {},
+  currencyName?: string
+) {
   const engine = new BattleEngine(
     [entity('hero', { atk: 999 }), entity('mage'), entity('dead', { hp: 0 })],
     [
@@ -75,7 +79,11 @@ function setup(opts: BattleScreenOptions = {}, enemy: Partial<BattleEntity> = {}
         ...enemy,
       }),
     ],
-    { rng: () => 0.5, itemNames: { potion: 'ポーション' } }
+    {
+      rng: () => 0.5,
+      itemNames: { potion: 'ポーション' },
+      ...(currencyName !== undefined ? { currencyName } : {}),
+    }
   )
   const closed: string[] = []
   const s = skipEntrance(
@@ -98,6 +106,21 @@ function toResult(s: BattleScreen) {
 
 afterEach(() => {
   for (const s of created.splice(0)) s.destroy({ children: true })
+})
+
+describe('ff 勝利: お金の単位は設定の通貨名 (#1164)', () => {
+  it('通貨名「円」なら「3円 てにいれた」', () => {
+    const { s } = setup({ presentation: 'ff' }, {}, '円')
+    toResult(s)
+    expect(I(s).resultMessages).toContain('3円 てにいれた')
+  })
+  it('未指定・空文字は既定の「3ギル てにいれた」', () => {
+    for (const c of [undefined, '']) {
+      const { s } = setup({ presentation: 'ff' }, {}, c)
+      toResult(s)
+      expect(I(s).resultMessages).toContain('3ギル てにいれた')
+    }
+  })
 })
 
 describe('ff 勝利: メッセージが順に出る (#1039)', () => {

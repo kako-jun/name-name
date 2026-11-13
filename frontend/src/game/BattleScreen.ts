@@ -1492,6 +1492,9 @@ export class BattleScreen extends Container {
       : undefined
     return buildResultMessages({
       gold: r.gold,
+      ...(this.engine.getConfiguredCurrencyName()
+        ? { currencyName: this.engine.getConfiguredCurrencyName() }
+        : {}),
       exp: r.exp,
       ...(lv ? { levelUps: lv.levelUps, levelLearnedSpellNames: lv.learnedNames } : {}),
       learnedSpellNames: this.engine.newlyLearnedSpellNames(),
