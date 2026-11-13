@@ -419,7 +419,7 @@ describe('buildMagicByParty: 味方ごとの習得 (#1161)', () => {
     },
     b: { level: 1, expTable: [10, 30], learns: [{ level: 2, spell: 'curaga' }] },
   }
-  const ids = (l: Array<{ id: string }>) => l.map((x) => x.id)
+  const ids = (l: readonly { id?: string }[]) => l.map((x) => x.id)
 
   it('人物ごとに自分の習得（保存した Lv 以下）と習得に載らない魔法だけが並ぶ', () => {
     const by = buildMagicByParty(

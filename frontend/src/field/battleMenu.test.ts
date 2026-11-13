@@ -244,7 +244,7 @@ describe('buildBattleMenu: 味方ごとの呪文一覧 (#1161)', () => {
     },
     b: { level: 1, expTable: [10, 30], learns: [{ level: 2, spell: 'cure' }] },
   }
-  const ids = (l: BattleSpellEntry[]) => l.map((x) => x.id)
+  const ids = (l: readonly { id?: string }[]) => l.map((x) => x.id)
   const lv = (id: string, level?: number): BattleEntity => ({
     ...member(id),
     ...(level !== undefined ? { level } : {}),
@@ -289,7 +289,7 @@ describe('勝利のレベルアップ直後に新しい呪文が並ぶ (#1161)',
     },
     b: { level: 1, expTable: [10, 30], learns: [{ level: 2, spell: 'cure' }] },
   }
-  const ids = (l: Array<{ id: string }>) => l.map((x) => x.id)
+  const ids = (l: readonly { id?: string }[]) => l.map((x) => x.id)
   const levelUpDefs = levelUp
 
   function afterVictory(exp: number, partyAfter: BattleEntity[]) {
