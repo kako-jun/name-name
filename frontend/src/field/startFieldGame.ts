@@ -173,7 +173,7 @@ import { ensureFontLoaded } from '../game/FontLoader'
 import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
-import { applyVictoryExp } from '../game/levelUp'
+import { growPartyByExp } from '../game/levelUp'
 import type { BattleItemEntry } from '../game/battleMenu'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
 import {
@@ -1110,7 +1110,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       before: { inventory, gold, party: partyState },
       // 勝利の経験値は生存者へ等分してレベルアップ (#206)。リザルトの表示と同じ関数
       exp,
-      grow: (p, e) => applyVictoryExp(p, config.levelUp, e).party,
+      grow: growPartyByExp(config.levelUp),
     })
     inventory = next.inventory
     gold = next.gold

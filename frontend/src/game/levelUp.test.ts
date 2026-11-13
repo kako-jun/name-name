@@ -4,6 +4,7 @@ import {
   applyVictoryExp,
   currentExp,
   currentLevel,
+  growPartyByExp,
   levelCap,
   levelForExp,
   splitExp,
@@ -91,7 +92,7 @@ describe('levelUp', () => {
         partyAfter: [hero()],
         before: { inventory: {}, gold: 0, party: [hero()] },
         exp: 12,
-        grow: (p, e) => applyVictoryExp(p, { hero: def }, e).party,
+        grow: growPartyByExp({ hero: def }),
       }).party[0]
     expect(run('victory').level).toBe(2)
     expect(run('defeat').level).toBeUndefined()
@@ -367,7 +368,7 @@ describe('levelUp: 戦闘ごとの動作 (#206)', () => {
       partyAfter: [hero({ level: 4, exp: 999 })],
       before: { inventory: {}, gold: 0, party: [lv2] },
       exp: 999,
-      grow: (p, e) => applyVictoryExp(p, { hero: def }, e).party,
+      grow: growPartyByExp({ hero: def }),
     })
     expect(r.party[0]).toEqual(lv2)
   })

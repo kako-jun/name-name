@@ -143,3 +143,13 @@ export function applyVictoryExp(
   }
   return { party: out, levelUps, learnedNames }
 }
+
+/**
+ * `carryOverBattleResult` の `grow` に渡す関数 (#206)。設定の `levelUp` を束ねて、勝利の経験値を生存者へ配る。
+ * `startFieldGame` の配線はこれ 1 つだけなので、結線の検査はこの関数を `carryOverBattleResult` に渡して行う
+ */
+export function growPartyByExp(
+  defs: Readonly<Record<string, LevelUpDef>>
+): (party: BattleEntity[], exp: number) => BattleEntity[] {
+  return (party, exp) => applyVictoryExp(party, defs, exp).party
+}
