@@ -154,6 +154,26 @@ export function growPartyByExp(
   return (party, exp) => applyVictoryExp(party, defs, exp).party
 }
 
+/** 習得に載っている呪文の集合と、初期 Lv で覚えている呪文の集合。読み込み後に変わらない defs オブジェクト単位で一度だけ作る */
+const learnSetsCache = new WeakMap<
+  object,
+  { gated: ReadonlySet<string>; atStart: ReadonlySet<string> }
+>()
+function learnSets(levelUpDefs: Readonly<Record<string, LevelUpDef>>) {
+  const hit = learnSetsCache.get(levelUpDefs)
+  if (hit) return hit
+  const gated = new Set<string>()
+  const atStart = new Set<string>()
+  for (const d of Object.values(levelUpDefs))
+    for (const l of d.learns ?? []) {
+      gated.add(l.spell)
+      if (l.level <= (d.level ?? 1)) atStart.add(l.spell)
+    }
+  const r = { gated, atStart }
+  learnSetsCache.set(levelUpDefs, r)
+  return r
+}
+
 /**
  * 味方 1 人が今使える呪文の一覧 (#1161)。一枚絵フィールドの候補窓（`buildBattleMenu`）とフィールドメニューのまほう（`buildMagicByParty`）が
  * 同じこの関数を使う。`spells` は設定の呪文（定義順。経験値表のある味方の `習得` は Lv に関係なく全部入っている）。
@@ -167,14 +187,7 @@ export function spellsForMember<T extends { id: string }>(
   memberId: string,
   level: number | undefined
 ): T[] {
-  const defs = Object.values(levelUpDefs)
-  const gated = new Set<string>()
-  const atStart = new Set<string>()
-  for (const d of defs)
-    for (const l of d.learns ?? []) {
-      gated.add(l.spell)
-      if (l.level <= (d.level ?? 1)) atStart.add(l.spell)
-    }
+  const { gated, atStart } = learnSets(levelUpDefs)
   if (gated.size === 0) return [...spells]
   const own = hasOwn(levelUpDefs, memberId) ? levelUpDefs[memberId] : undefined
   if (!own) return spells.filter((s) => !gated.has(s.id) || atStart.has(s.id))

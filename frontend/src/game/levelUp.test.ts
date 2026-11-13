@@ -529,6 +529,22 @@ describe('spellsForMember (#1161)', () => {
     expect(ids(spellsForMember(spells, defs, 'a', 2.9))).toEqual(['fire', 'free'])
     expect(ids(spellsForMember(spells, defs, 'a', 3))).toEqual(['fire', 'bolt', 'free'])
   })
+  it('同じ defs では同じ結果、別の defs オブジェクトでは別の結果（キャッシュが古い値を返さない）', () => {
+    const d1: Record<string, LevelUpDef> = {
+      a: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'fire' }] },
+    }
+    const d2: Record<string, LevelUpDef> = {
+      a: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'cure' }] },
+    }
+    const all = ['fire', 'cure', 'bolt', 'free']
+    expect(ids(spellsForMember(spells, d1, 'a', 2))).toEqual(all)
+    expect(ids(spellsForMember(spells, d1, 'a', 2))).toEqual(all)
+    expect(ids(spellsForMember(spells, d1, 'a', 1))).toEqual(['cure', 'bolt', 'free'])
+    expect(ids(spellsForMember(spells, d2, 'a', 1))).toEqual(['fire', 'bolt', 'free'])
+    expect(ids(spellsForMember(spells, d2, 'a', 2))).toEqual(all)
+    // 呼び出しの順を入れ替えても、それぞれの defs の結果のまま
+    expect(ids(spellsForMember(spells, d1, 'a', 1))).toEqual(['cure', 'bolt', 'free'])
+  })
   it('空の spells は空・入力は書き換えない', () => {
     expect(spellsForMember([], defs, 'a', 9)).toEqual([])
     const before = JSON.stringify(spells)
