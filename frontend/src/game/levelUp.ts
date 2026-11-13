@@ -153,3 +153,45 @@ export function growPartyByExp(
 ): (party: BattleEntity[], exp: number) => BattleEntity[] {
   return (party, exp) => applyVictoryExp(party, defs, exp).party
 }
+
+/** 習得に載っている呪文の集合と、初期 Lv で覚えている呪文の集合。読み込み後に変わらない defs オブジェクト単位で一度だけ作る */
+const learnSetsCache = new WeakMap<
+  object,
+  { gated: ReadonlySet<string>; atStart: ReadonlySet<string> }
+>()
+function learnSets(levelUpDefs: Readonly<Record<string, LevelUpDef>>) {
+  const hit = learnSetsCache.get(levelUpDefs)
+  if (hit) return hit
+  const gated = new Set<string>()
+  const atStart = new Set<string>()
+  for (const d of Object.values(levelUpDefs))
+    for (const l of d.learns ?? []) {
+      gated.add(l.spell)
+      if (l.level <= (d.level ?? 1)) atStart.add(l.spell)
+    }
+  const r = { gated, atStart }
+  learnSetsCache.set(levelUpDefs, r)
+  return r
+}
+
+/**
+ * 味方 1 人が今使える呪文の一覧 (#1161)。一枚絵フィールドの候補窓（`buildBattleMenu`）とフィールドメニューのまほう（`buildMagicByParty`）が
+ * 同じこの関数を使う。`spells` は設定の呪文（定義順。経験値表のある味方の `習得` は Lv に関係なく全部入っている）。
+ * - 習得の定義（`levelUp.learns`）に載っていない呪文は、従来どおり全員に出る。
+ * - 習得の定義に載っている呪文は、その定義を持つ味方が **保存した Lv（`level`。無ければ初期 Lv）以下で覚えるものだけ**自分の一覧に並ぶ。
+ * - 経験値表の無い味方（`levelUpDefs` に居ない）は、従来どおり初期 Lv で覚える呪文（誰かの習得の Lv が初期 Lv 以下のもの）を全員共通で見る。
+ */
+export function spellsForMember<T extends { id: string }>(
+  spells: readonly T[],
+  levelUpDefs: Readonly<Record<string, LevelUpDef>>,
+  memberId: string,
+  level: number | undefined
+): T[] {
+  const { gated, atStart } = learnSets(levelUpDefs)
+  if (gated.size === 0) return [...spells]
+  const own = hasOwn(levelUpDefs, memberId) ? levelUpDefs[memberId] : undefined
+  if (!own) return spells.filter((s) => !gated.has(s.id) || atStart.has(s.id))
+  const lv = level ?? own.level ?? 1
+  const learned = new Set((own.learns ?? []).filter((l) => l.level <= lv).map((l) => l.spell))
+  return spells.filter((s) => !gated.has(s.id) || learned.has(s.id))
+}

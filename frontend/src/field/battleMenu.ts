@@ -3,6 +3,7 @@
  */
 import type { BattleMenuData, BattleSkillEntry } from '../game/battleMenu'
 import type { FieldConfig } from './config'
+import { spellsForMember, type LevelUpDef } from '../game/levelUp'
 import { skillsForMember, type GearShopConfig, type GearState } from '../game/gearShop'
 
 /**
@@ -13,6 +14,8 @@ import { skillsForMember, type GearShopConfig, type GearState } from '../game/ge
  */
 export function buildBattleMenu(
   config: Pick<FieldConfig, 'party' | 'spells' | 'items'> & {
+    /** 味方ごとのレベルアップの定義 (#1161)。あれば呪文の一覧は保存した Lv で味方ごとに絞る（省略は全員共通） */
+    levelUp?: Readonly<Record<string, LevelUpDef>>
     skills?: readonly BattleSkillEntry[]
     /** 刀の売り物の定義と、持ち越した持っている品（買った分も宝箱などで手に入れた分も含む）・装備中の刀 (#881 段階3)。あれば「わざ」は味方ごとに装備中の刀のアビリティで絞る。省略は従来どおり全員同じ */
     gear?: { shop: GearShopConfig; state: GearState }
@@ -29,7 +32,10 @@ export function buildBattleMenu(
   if (config.spells.length === 0 && items.length === 0 && skillRows.length === 0) return undefined
   return {
     spells: Object.fromEntries(
-      config.party.map((p) => [p.id, config.spells.map((x) => ({ ...x }))])
+      config.party.map((p) => [
+        p.id,
+        spellsForMember(config.spells, config.levelUp ?? {}, p.id, p.level).map((x) => ({ ...x })),
+      ])
     ),
     ...(skillRows.length > 0 ? { skills: Object.fromEntries(skillRows) } : {}),
     items: items.map((x) => ({ ...x })),

@@ -1469,6 +1469,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           menu: menuCfg,
           items: config.items,
           spells: config.spells,
+          levelUp: config.levelUp,
           skills: config.skills,
           ...(config.battle.atb ? { atb: config.battle.atb } : {}),
           audio: false,

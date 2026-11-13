@@ -8,6 +8,7 @@ import {
   levelCap,
   levelForExp,
   splitExp,
+  spellsForMember,
   type LevelUpDef,
 } from './levelUp'
 import { buildResultMessages, RESULT_TEXT } from './battleResult'
@@ -465,5 +466,93 @@ describe('levelUp: リザルト文言の順序 (#206)', () => {
       'ホイミをおぼえた！',
       'fireをおぼえた！',
     ])
+  })
+})
+
+describe('spellsForMember (#1161)', () => {
+  const spells = [{ id: 'fire' }, { id: 'cure' }, { id: 'bolt' }, { id: 'free' }]
+  const defs: Record<string, LevelUpDef> = {
+    a: {
+      level: 1,
+      expTable: [10],
+      learns: [
+        { level: 1, spell: 'fire' },
+        { level: 3, spell: 'bolt' },
+      ],
+    },
+    b: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'cure' }] },
+  }
+  const ids = (l: { id: string }[]) => l.map((x) => x.id)
+  it('習得 Lv 未満では並ばず、保存した Lv に達すると並ぶ', () => {
+    expect(ids(spellsForMember(spells, defs, 'a', 1))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, defs, 'a', 3))).toEqual(['fire', 'bolt', 'free'])
+  })
+  it('味方ごとに自分の習得だけ。Lv 未設定は初期 Lv', () => {
+    expect(ids(spellsForMember(spells, defs, 'b', undefined))).toEqual(['free'])
+    expect(ids(spellsForMember(spells, defs, 'b', 2))).toEqual(['cure', 'free'])
+  })
+  it('経験値表の無い味方は従来どおり初期 Lv の和集合、定義が無ければ全部', () => {
+    expect(ids(spellsForMember(spells, defs, 'z', 9))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, {}, 'a', 1))).toEqual(['fire', 'cure', 'bolt', 'free'])
+  })
+  it('他の味方の高 Lv 習得は出ない（b は Lv 9 でも a の bolt は覚えない）', () => {
+    expect(ids(spellsForMember(spells, defs, 'b', 9))).toEqual(['cure', 'free'])
+  })
+  it('習得に載らない呪文は、どの味方・どの Lv でも出る', () => {
+    expect(ids(spellsForMember(spells, defs, 'a', 1))).toContain('free')
+    expect(ids(spellsForMember(spells, defs, 'b', 1))).toContain('free')
+    expect(ids(spellsForMember(spells, defs, 'z', 1))).toContain('free')
+  })
+  it('複数 Lv が同時に上がったあとは、越えた分がまとめて並ぶ', () => {
+    expect(ids(spellsForMember(spells, defs, 'a', 1))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, defs, 'a', 5))).toEqual(['fire', 'bolt', 'free'])
+  })
+  it('習得の定義がどの味方にも無いゲームは config.spells 全部（従来と同一・別配列）', () => {
+    const noLearns: Record<string, LevelUpDef> = { a: { level: 1, expTable: [10] } }
+    const r = spellsForMember(spells, noLearns, 'a', 1)
+    expect(ids(r)).toEqual(['fire', 'cure', 'bolt', 'free'])
+    expect(r).not.toBe(spells)
+    expect(r[0]).toBe(spells[0])
+  })
+  it('同じ呪文を複数の味方が別 Lv で習得する: 各自の Lv で並ぶ', () => {
+    const shared: Record<string, LevelUpDef> = {
+      a: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'fire' }] },
+      b: { level: 1, expTable: [10], learns: [{ level: 5, spell: 'fire' }] },
+    }
+    expect(ids(spellsForMember(spells, shared, 'a', 2))).toEqual(['fire', 'cure', 'bolt', 'free'])
+    expect(ids(spellsForMember(spells, shared, 'b', 2))).toEqual(['cure', 'bolt', 'free'])
+    expect(ids(spellsForMember(spells, shared, 'b', 5))).toEqual(['fire', 'cure', 'bolt', 'free'])
+  })
+  it('不正な level: 負数・NaN は gated を出さず、小数はそのまま比較', () => {
+    expect(ids(spellsForMember(spells, defs, 'a', -3))).toEqual(['free'])
+    expect(ids(spellsForMember(spells, defs, 'a', Number.NaN))).toEqual(['free'])
+    expect(ids(spellsForMember(spells, defs, 'a', 2.9))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, defs, 'a', 3))).toEqual(['fire', 'bolt', 'free'])
+  })
+  it('同じ defs では同じ結果、別の defs オブジェクトでは別の結果（キャッシュが古い値を返さない）', () => {
+    const d1: Record<string, LevelUpDef> = {
+      a: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'fire' }] },
+    }
+    const d2: Record<string, LevelUpDef> = {
+      a: { level: 1, expTable: [10], learns: [{ level: 2, spell: 'cure' }] },
+    }
+    const all = ['fire', 'cure', 'bolt', 'free']
+    expect(ids(spellsForMember(spells, d1, 'a', 2))).toEqual(all)
+    expect(ids(spellsForMember(spells, d1, 'a', 2))).toEqual(all)
+    expect(ids(spellsForMember(spells, d1, 'a', 1))).toEqual(['cure', 'bolt', 'free'])
+    expect(ids(spellsForMember(spells, d2, 'a', 1))).toEqual(['fire', 'bolt', 'free'])
+    expect(ids(spellsForMember(spells, d2, 'a', 2))).toEqual(all)
+    // 呼び出しの順を入れ替えても、それぞれの defs の結果のまま
+    expect(ids(spellsForMember(spells, d1, 'a', 1))).toEqual(['cure', 'bolt', 'free'])
+  })
+  it('空の spells は空・入力は書き換えない', () => {
+    expect(spellsForMember([], defs, 'a', 9)).toEqual([])
+    const before = JSON.stringify(spells)
+    spellsForMember(spells, defs, 'a', 9)
+    expect(JSON.stringify(spells)).toBe(before)
+  })
+  it('Object.prototype の名前の味方 id でも経験値表なし扱いで落ちない', () => {
+    expect(ids(spellsForMember(spells, defs, 'toString', 9))).toEqual(['fire', 'free'])
+    expect(ids(spellsForMember(spells, defs, '__proto__', 9))).toEqual(['fire', 'free'])
   })
 })
