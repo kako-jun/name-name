@@ -134,7 +134,7 @@ export class FieldMenuRuntime {
       inventory: this.d.getInventory(),
       itemOrder: this.itemOrder,
       spells: this.d.spells,
-      ...(this.d.levelUp ? { levelUp: this.d.levelUp } : {}),
+      levelUp: this.d.levelUp,
       skills: this.d.skills,
       equipment: this.d.getEquipment(),
     }
