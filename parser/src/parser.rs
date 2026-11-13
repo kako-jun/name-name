@@ -11447,6 +11447,31 @@ mod field_settings_notation_tests {
     }
 
     #[test]
+    fn party_exp_table_and_growth_parse_and_round_trip() {
+        let body = "[パーティ p1]\n名前: ぼく\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n経験値表: 10, 30，70\n成長: hp+5, atk+1\n[/パーティ]\n[パーティ p2]\n名前: きみ\nHP: 10\nATK: 1\nDEF: 1\nAGI: 1\n[/パーティ]\n";
+        let _ = take_test_warnings();
+        let doc1 = parse(&format!("{HEAD}{body}"));
+        let emitted = emit(&doc1);
+        let doc2 = parse(&emitted);
+        assert_eq!(doc1, doc2, "{emitted}");
+        assert!(take_test_warnings().is_empty());
+        assert_eq!(emitted.matches("経験値表:").count(), 1, "{emitted}");
+        assert_eq!(emitted.matches("成長:").count(), 1, "{emitted}");
+        let members: Vec<&PartyMemberDef> = doc1.chapters[0].scenes[0]
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PartyMember(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(members[0].exp_table, Some(vec![10, 30, 70]));
+        assert_eq!(members[0].growth.as_deref(), Some("hp+5, atk+1"));
+        assert_eq!(members[1].exp_table, None);
+        assert_eq!(members[1].growth, None);
+    }
+
+    #[test]
     fn round_trip() {
         let body = "[補助通行 条件=買った,説得済 除く=説得中 幽霊=幽霊中 速度倍率=0.7 濃さ=0.5 後ろ=40 フェード=200]\n[フィールド設定 速度=260 端のしきい値=6 端の接触=足元 文字間隔=30 刀の倍率=2]\n[歩行絵 主人公 人物=C001 形態=elementary 高さ=96 コマ長=140 周期=0,1,2,1 停止=1]\n[歩行絵 同行者 人物=C002 形態=adult 名前=ミナ]\n[人物の形態 目録=field/forms.json 素材=chars/ 刀素材=weapons/]\n[人物の形態 目録=a.json 素材=c/]\n";
         let doc1 = parse(&format!("{HEAD}{body}"));
