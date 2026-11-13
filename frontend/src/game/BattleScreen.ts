@@ -201,6 +201,7 @@ import {
   SIDE_STATUS_FONT_SIZE,
   SIDE_STATUS_GAUGE_HEIGHT,
   SIDE_STATUS_MARKER_FONT_SIZE,
+  statusTagRoomWidth,
   frontStatsLeftPadding,
   effectiveCommandLayout,
   SELECT_MARK_LOG_GAP,
@@ -288,7 +289,7 @@ const ACTOR_COLOR = 0xffee66
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
-/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は列の右端に短く置く (#745, SIDE_STATUS_GAUGE_HEIGHT) */
+/** front の ATB ゲージ（パネル下端に引く細い横棒）の高さ (#205)。side は名前・HP/MP の列を除いた行の残り幅いっぱいに置く (#1173, SIDE_STATUS_GAUGE_HEIGHT) */
 const ATB_BAR_HEIGHT = 3
 /** 想像の層 (#750) のかぶせの色（暗い寒色）と、最も濃いときの不透明度 */
 const SUMMON_VEIL_COLOR = 0x0a1230
@@ -784,13 +785,17 @@ export class BattleScreen extends Container {
   } | null = null
   /** side の status 行 (#745): 名前 / HP / MP を列ごとの Text に分け、列の左端（数値は右端）を味方全員でそろえる。同じ index が同じ味方 */
   private statusTexts: PixiText[] = []
-  /** HP・MP は「見出し | 現在値 | /最大値」の 3 つの Text。`*Texts` が現在値（右寄せ）、`*Labels` が見出し（左寄せ）、`*Maxes` が「/最大値」（「/」の x で左寄せ）。見出しと「/」の x が全員そろう */
+  /** HP・MP は「見出し | 現在値 | / | 最大値」の 4 つの Text (#1173)。`*Labels` が見出し（左寄せ）、`*Texts` が現在値（右寄せ）、`*Slashes` が「/」（現在値の右端から左寄せ）、`*Maxes` が最大値（列の右端に右寄せ）。見出し・「/」の x と数字の一の位が全員そろう */
   private statusHpTexts: PixiText[] = []
   private statusMpTexts: PixiText[] = []
   private statusHpLabels: PixiText[] = []
   private statusMpLabels: PixiText[] = []
+  /** 最大値の数字（「/」は含まない。列の右端に右寄せ）(#1173) */
   private statusHpMaxes: PixiText[] = []
   private statusMpMaxes: PixiText[] = []
+  /** 現在値と最大値の間の「/」（現在値の右端から左寄せ）(#1173) */
+  private statusHpSlashes: PixiText[] = []
+  private statusMpSlashes: PixiText[] = []
   /** ATB ゲージの棒 (#205)。味方ごとに 1 本（side は statusTexts と同じ index、front は 1 本）。ATB でなければ空 */
   private atbBars: Graphics[] = []
   /** 番の味方の印 ▶ (#205, #805)。名前の文字列には混ぜず、行の左余白に別の Text で置く（枠から離す）。bars と同じ index */
@@ -1261,10 +1266,12 @@ export class BattleScreen extends Container {
     const parts: Array<[PixiText[], boolean]> = [
       [this.statusHpLabels, false],
       [this.statusHpTexts, true],
-      [this.statusHpMaxes, false],
+      [this.statusHpSlashes, false],
+      [this.statusHpMaxes, true],
       [this.statusMpLabels, false],
       [this.statusMpTexts, true],
-      [this.statusMpMaxes, false],
+      [this.statusMpSlashes, false],
+      [this.statusMpMaxes, true],
     ]
     for (const [list, alignRight] of parts) {
       const n = new PixiText({
@@ -1277,7 +1284,7 @@ export class BattleScreen extends Container {
           })
         ),
       })
-      // 数値は列の基準 x に右寄せ（桁数が違っても右端がそろう）。見出しと「/最大値」は左寄せ
+      // 数値（現在値・最大値）は列の基準 x に右寄せ（桁数が違っても一の位がそろう）。見出しと「/」は左寄せ
       n.anchor.set(alignRight ? 1 : 0, 0)
       list.push(n)
       this.addChild(n)
@@ -2078,6 +2085,10 @@ export class BattleScreen extends Container {
       maxMp: party.reduce((m, p) => Math.max(m, p.maxMp), 0),
       compact: L.statusCompact,
       atb: this.atbBars.length > 0,
+      // 名前列は、いちばん長い名前＋宣言された状態名の最悪ぶん。ATB のゲージは残り幅いっぱい (#1173)
+      nameWidth:
+        party.reduce((m, p) => Math.max(m, estimateTextWidth(p.name, SIDE_STATUS_FONT_SIZE)), 0) +
+        statusTagRoomWidth(Object.values(this.engine.getStatusRules()).map((r) => r.name)),
     })
     this.sideStatusColumns = cols
     // 候補窓の右端は HP 列の左で止める（HP の数字を途中で切らない）
@@ -2091,19 +2102,33 @@ export class BattleScreen extends Container {
         col: typeof cols.hp | null,
         label: PixiText,
         cur: PixiText,
+        slash: PixiText,
         max: PixiText
       ): void => {
         label.x = col?.x ?? 0
         cur.x = col?.curRight ?? 0
-        // 「/最大値」は「/」を現在値の右端に接して左寄せ（実フォントの桁幅の誤差で隙間があかない）
-        max.x = col?.curRight ?? 0
-        label.y = cur.y = max.y = y
+        // 「/」は現在値の右端に接して左寄せ（実フォントの桁幅の誤差で隙間があかない）。最大値は列の右端に右寄せ (#1173)
+        slash.x = col?.curRight ?? 0
+        max.x = col?.maxRight ?? 0
+        label.y = cur.y = slash.y = max.y = y
       }
-      place(cols.hp, this.statusHpLabels[i], this.statusHpTexts[i], this.statusHpMaxes[i])
-      place(cols.mp, this.statusMpLabels[i], this.statusMpTexts[i], this.statusMpMaxes[i])
+      place(
+        cols.hp,
+        this.statusHpLabels[i],
+        this.statusHpTexts[i],
+        this.statusHpSlashes[i],
+        this.statusHpMaxes[i]
+      )
+      place(
+        cols.mp,
+        this.statusMpLabels[i],
+        this.statusMpTexts[i],
+        this.statusMpSlashes[i],
+        this.statusMpMaxes[i]
+      )
     }
     if (this.atbBars.length > 0 && cols.gauge) {
-      // ATB ゲージは行の右端に短く置く（数文字ぶんの幅）。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
+      // ATB ゲージは名前・HP/MP の列を除いた行の残り幅いっぱいに置く (#1173)。文字の列は ATB off と同じ処理で、ゲージのぶんだけ名前列が狭くなる
       const g = cols.gauge
       this.atbBarRects = L.statusRows.map((row) => ({
         x: g.x,
@@ -2448,16 +2473,21 @@ export class BattleScreen extends Container {
       const showMaxHp = cols?.showMaxHp ?? true
       this.statusHpLabels[i].text = lbl ? 'HP' : ''
       hpT.text = `${p.hp}`
-      this.statusHpMaxes[i].text = showMaxHp ? `/${p.maxHp}` : ''
+      this.statusHpSlashes[i].text = showMaxHp ? '/' : ''
+      this.statusHpMaxes[i].text = showMaxHp ? `${p.maxHp}` : ''
       // MP 列がない（狭い画面）ときは 3 つとも空にして隠す
       const hasMp = !!cols?.mp
       this.statusMpLabels[i].text = hasMp && lbl ? 'MP' : ''
       mpT.text = hasMp ? `${p.mp}` : ''
-      this.statusMpMaxes[i].text = hasMp ? `/${p.maxMp}` : ''
-      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.visible = hasMp
+      this.statusMpSlashes[i].text = hasMp ? '/' : ''
+      this.statusMpMaxes[i].text = hasMp ? `${p.maxMp}` : ''
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpSlashes[i], this.statusMpMaxes[i]])
+        n.visible = hasMp
       const fill = p.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
-      for (const n of [this.statusHpLabels[i], hpT, this.statusHpMaxes[i]]) n.style.fill = fill
-      for (const n of [this.statusMpLabels[i], mpT, this.statusMpMaxes[i]]) n.style.fill = fill
+      for (const n of [this.statusHpLabels[i], hpT, this.statusHpSlashes[i], this.statusHpMaxes[i]])
+        n.style.fill = fill
+      for (const n of [this.statusMpLabels[i], mpT, this.statusMpSlashes[i], this.statusMpMaxes[i]])
+        n.style.fill = fill
       t.style.fill = fill
     }
   }

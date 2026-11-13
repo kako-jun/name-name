@@ -9,7 +9,11 @@ import { BattleScreen, STAGE_PADDING, type BattleScreenOptions } from './BattleS
 import { BattleEngine } from './battleEngine'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
 import { ATB_PLAYBACK_QUEUE_MAX } from './battleMotion'
-import { computeSideBattleLayout, estimateTextWidth } from './battleLayout'
+import {
+  computeSideBattleLayout,
+  estimateTextWidth,
+  SIDE_STATUS_GAUGE_MIN_WIDTH,
+} from './battleLayout'
 
 import type { BattleEntity } from './spellDsl'
 
@@ -38,6 +42,7 @@ interface Internals {
   statusMpTexts: Text[]
   statusHpLabels: Text[]
   statusHpMaxes: Text[]
+  statusHpSlashes: Text[]
   heroStatsText: Text
   commands: Array<{ id: string; hit: Container; text: Text }>
   destroyed: boolean
@@ -351,7 +356,8 @@ describe('BattleScreen ATB: 再描画の節約（署名）', () => {
     s.tick(2500)
     expect(spy).toHaveBeenCalledTimes(1)
     expect(I(s).statusHpTexts[0].text).toBe('90')
-    expect(I(s).statusHpMaxes[0].text).toBe('/100')
+    expect(I(s).statusHpSlashes[0].text).toBe('/')
+    expect(I(s).statusHpMaxes[0].text).toBe('100')
   })
 })
 
@@ -380,17 +386,17 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
       const hpL = I(s).statusHpLabels[i]
       const hpC = I(s).statusHpTexts[i]
       const hpLeft = hpL.text ? hpL.x : hpC.x - estimateTextWidth(hpC.text, 14)
-      // ゲージは行の中に収まり、数文字ぶんの短さ（行幅いっぱいではない）
+      // ゲージは行の中に収まる（幅は名前・HP/MP の列を除いた残り幅いっぱい。狭い画面では下限まで縮む）(#1173)
       expect(r.y).toBeGreaterThanOrEqual(L.statusRows[i].y - 0.001)
       expect(r.y + r.h).toBeLessThanOrEqual(L.statusRows[i].y + L.statusRows[i].h + 0.001)
       expect(r.x + r.w).toBeLessThanOrEqual(L.status.x + L.status.w + 0.001)
-      expect(r.w).toBeLessThan(L.status.w / 3)
+      expect(r.w).toBeGreaterThanOrEqual(SIDE_STATUS_GAUGE_MIN_WIDTH)
       expect(r.h).toBeLessThanOrEqual(3)
       // 文字の右端 <= HP の左端 <= HP の右端 <= ゲージの左端
       expect(t.x + estimateTextWidth(t.text, 14)).toBeLessThanOrEqual(hpLeft + 0.001)
-      // HP 列の右端: 「/最大値」があれば「/」の x + その概算幅、なければ現在値の右端
+      // HP 列の右端: 最大値があればその右寄せの基準 x、なければ現在値の右端
       const hpMax = I(s).statusHpMaxes[i]
-      const hpRight = hpMax.text === '' ? hpC.x : hpMax.x + estimateTextWidth(hpMax.text, 14)
+      const hpRight = hpMax.text === '' ? hpC.x : hpMax.x
       expect(hpRight).toBeLessThanOrEqual(r.x + 0.001)
       // 名前が消えない
       expect(t.text.length).toBeGreaterThan(1)
@@ -413,7 +419,11 @@ describe('BattleScreen ATB: モバイル幅（360x640）でゲージは行の右
     on.s.tick(0)
     I(on.s).statusTexts.forEach((t, i) => {
       expect(t.text.startsWith('ゆ')).toBe(true)
-      expect(I(on.s).statusHpTexts[i].text + I(on.s).statusHpMaxes[i].text).toContain('120/120')
+      expect(
+        I(on.s).statusHpTexts[i].text +
+          I(on.s).statusHpSlashes[i].text +
+          I(on.s).statusHpMaxes[i].text
+      ).toContain('120/120')
     })
     const m = I(on.s).atbMarkers[0]
     expect(m.visible).toBe(true)

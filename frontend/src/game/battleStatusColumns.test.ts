@@ -12,6 +12,7 @@ import {
   SIDE_STATUS_MIN_NAME_CHARS,
   SIDE_STATUS_TEXT_PADDING,
   sideStatusLeftPadding,
+  sideStatusSlashWidth,
   SIDE_STATUS_MARKER_GUTTER_MAX,
   SIDE_STATUS_MARKER_GUTTER_MIN,
   type StatusColumnsInput,
@@ -35,7 +36,8 @@ const base: StatusColumnsInput = {
  * 境界では余裕がなく余白は広がらないので、広がったぶん（c.name.x と基本の余白の差）を名前幅へ戻して逆算する (#805)
  */
 function exactMinNameWidth(input: StatusColumnsInput): number {
-  const c = computeStatusColumns({ ...input, width: 600 })
+  // ATB は名前列を「ほしい幅」から取るので、残り幅いっぱいを取らせて境界を逆算する (#1173)
+  const c = computeStatusColumns({ ...input, width: 600, nameWidth: 1e6 })
   const widened = c.name.x - (input.x + sideStatusLeftPadding(input.atb))
   // 浮動小数の丸めで境界ちょうどが 1 ulp 下回らないよう、ごく小さく上げる
   return 600 - (c.name.w + widened - MIN_NAME) + 1e-9
@@ -84,7 +86,10 @@ describe('computeStatusColumns: maxHp の桁数 (#745)', () => {
   it('HP 列の幅は「HP 最大/最大」の概算幅そのもの（定数の直書きなし）', () => {
     for (const m of [99, 100, 999, 1000]) {
       const c = computeStatusColumns({ ...base, maxHp: m })
-      expect(c.hp.w).toBeCloseTo(estimateTextWidth(`HP${m}/${m}`, F) + SIDE_STATUS_COLUMN_GAP, 6)
+      expect(c.hp.w).toBeCloseTo(
+        estimateTextWidth(`HP${m}${m}`, F) + sideStatusSlashWidth(F) + SIDE_STATUS_COLUMN_GAP,
+        6
+      )
     }
   })
 
@@ -92,7 +97,10 @@ describe('computeStatusColumns: maxHp の桁数 (#745)', () => {
     const c0 = computeStatusColumns({ ...base, maxMp: 0 })
     const c1000 = computeStatusColumns({ ...base, maxMp: 1000 })
     expect(c0.mp).not.toBeNull()
-    expect(c0.mp!.w).toBeCloseTo(estimateTextWidth('MP0/0', F) + SIDE_STATUS_COLUMN_GAP, 6)
+    expect(c0.mp!.w).toBeCloseTo(
+      estimateTextWidth('MP00', F) + sideStatusSlashWidth(F) + SIDE_STATUS_COLUMN_GAP,
+      6
+    )
     expect(c1000.mp!.w).toBeGreaterThan(c0.mp!.w)
   })
 
@@ -142,9 +150,10 @@ describe('computeStatusColumns: 省略段階のデシジョンテーブル (#745
     expect(c.showMaxHp).toBe(true)
   })
 
-  it('ゲージは極端に狭いときだけ最小幅まで縮み、それ以外は固定幅', () => {
+  it('ゲージは広いと残り幅いっぱい、狭いと下限（半角 4 文字）、極端に狭いときだけ最小幅まで縮む (#1173)', () => {
     const wide = computeStatusColumns({ ...base, atb: true, width: 600 })
-    expect(wide.gauge!.w).toBe(SIDE_STATUS_GAUGE_WIDTH)
+    expect(wide.gauge!.w).toBeGreaterThan(SIDE_STATUS_GAUGE_WIDTH)
+    expect(wide.gauge!.x + wide.gauge!.w).toBeCloseTo(600 - SIDE_STATUS_TEXT_PADDING, 6)
     const tiny = computeStatusColumns({ ...base, maxHp: 9999, atb: true, width: 60 })
     expect(tiny.gauge!.w).toBe(SIDE_STATUS_GAUGE_MIN_WIDTH)
     expect(SIDE_STATUS_GAUGE_MIN_WIDTH).toBeLessThan(SIDE_STATUS_GAUGE_WIDTH)
