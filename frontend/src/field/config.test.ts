@@ -509,6 +509,49 @@ describe('parseConfig 正常系 (Issue #807/#809)', () => {
     expect(resolveBattleBackground({ encounter: null }, undefined)).toBeUndefined()
   })
 
+  it('battleBackground と encounter.background が両方あれば battleBackground が勝つ (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.monsters = { slime: { name: 'スライム', hp: 10 } }
+        r.scenes.a.encounter = { rate: 5, groups: ['slime'], background: 'old.png' }
+        r.scenes.a.battleBackground = 'new.png'
+        r.battle = { background: 'def.png' }
+      })
+    )
+    expect(resolveBattleBackground(c.scenes.a, c.battle.background)).toBe(
+      'https://example.com/field/new.png'
+    )
+  })
+
+  it('戦闘背景を書かない場面は battle.background にフォールバックし、キーも出ない (#1168)', () => {
+    const c = ok(
+      mutated((r) => {
+        r.battle = { background: 'def.png' }
+      })
+    )
+    expect('battleBackground' in c.scenes.a).toBe(false)
+    expect(resolveBattleBackground(c.scenes.a, c.battle.background)).toBe(
+      'https://example.com/field/def.png'
+    )
+  })
+
+  it.each([
+    ['空文字', ''],
+    ['空白のみ', '  '],
+    ['数値', 3],
+    ['null', null],
+    ['オブジェクト', {}],
+  ])('battleBackground が %s なら parseConfig は失敗し場面 ID を言う (#1168)', (_n, v) => {
+    const r = parseConfig(
+      mutated((c) => {
+        c.scenes.a.battleBackground = v
+      }),
+      BASE
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('scenes.a.battleBackground')
+  })
+
   it('encounter.background と battle.background は URL に解決される', () => {
     const c = ok(
       mutated((r) => {
