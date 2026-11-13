@@ -166,19 +166,35 @@ export function itemsWithCounts<T extends { id: string; count?: number }>(
   return items.map((it) => ({ ...it, count: inventory[it.id] ?? 0 }))
 }
 
+/** 設定の `items` から戦利品ログ用の表示名表（id → 名前）を作る。名前が空の品は除き、id のまま出す (#1126) */
+export function itemNamesFromConfig(
+  items: ReadonlyArray<{ id: string; name: string }>
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const it of items) if (it.name !== '') out[it.id] = it.name
+  return out
+}
+
 /**
- * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換える
+ * 戦闘の結果の持ち越し (#1021)。所持品は候補窓に残った数に戦利品を足し、所持金は獲得分を足し、味方は敗北以外なら戦闘後の HP/MP/状態異常に置き換える
  * （敗北では戦闘前のまま。全滅のまま次へ進めなくなるのを防ぐ。所持品・所持金は戻さない）。渡した値は書き換えない
  */
 export function carryOverBattleResult<P>(input: {
   outcome: string
   earnedGold: number
   menuItems: ReadonlyArray<{ id: string; count?: number }>
+  /** 戦利品（ドロップ・ぬすむ。`BattleResult.items`）。所持品へ加算する。省略は無し */
+  loot?: ReadonlyArray<{ itemId: string; count: number }>
   partyAfter: readonly P[]
   before: { inventory: Readonly<Record<string, number>>; gold: number; party: readonly P[] }
 }): { inventory: Record<string, number>; gold: number; party: P[] } {
   const inventory = { ...input.before.inventory }
   for (const it of input.menuItems) inventory[it.id] = it.count ?? inventory[it.id] ?? 0
+  // 戦利品は候補窓の残数に足す（定義に無い id も新規エントリとして持つ）。敗北・逃走でも盗めた品は失わない
+  for (const l of input.loot ?? []) {
+    if (!Number.isFinite(l.count) || l.count <= 0) continue
+    inventory[l.itemId] = (inventory[l.itemId] ?? 0) + l.count
+  }
   return {
     inventory,
     gold: input.before.gold + input.earnedGold,

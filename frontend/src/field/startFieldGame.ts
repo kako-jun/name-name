@@ -146,6 +146,7 @@ import {
   composeNotice,
   isLoadableSlot,
   itemsWithCounts,
+  itemNamesFromConfig,
   loadResume,
   mergeFlags,
   resumeBackground,
@@ -994,6 +995,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         (eventBattle ? eventBattle.party : partyState).map((p) => structuredClone(p)),
         enemies.map((e) => ({ ...e })),
         {
+          // 戦利品のログに id でなく表示名を出す (#1126)
+          itemNames: itemNamesFromConfig(config.items),
           ...resumeBattleEngineOptions(
             buildBattleEngineOptions(
               b,
@@ -1038,7 +1041,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           }),
           onClose: (outcome, result) => {
             lastOutcome = outcome
-            carryOverBattle(outcome, result.gold, { partial: !!eventBattle })
+            carryOverBattle(outcome, result.gold, result.items, { partial: !!eventBattle })
             // 終了も黒を経由して戻る（none なら即 endBattle）。演出中は battle を tick しない
             endBattleWithTransition({
               mode: b.transition,
@@ -1086,6 +1089,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const carryOverBattle = (
     outcome: string,
     earnedGold: number,
+    loot: ReadonlyArray<{ itemId: string; count: number }>,
     { partial = false }: { partial?: boolean } = {}
   ): void => {
     const run = battleRun
@@ -1094,6 +1098,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       outcome,
       earnedGold,
       menuItems: run.menu?.items ?? [],
+      loot,
       partyAfter: run.engine.getState().party,
       before: { inventory, gold, party: partyState },
     })

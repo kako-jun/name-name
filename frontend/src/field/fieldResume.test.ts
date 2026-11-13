@@ -18,6 +18,7 @@ import {
   resumeBattleEngineOptions,
   composeNotice,
   carryOverBattleResult,
+  itemNamesFromConfig,
   itemsWithCounts,
   mergePartyById,
   snapshotParty,
@@ -244,6 +245,134 @@ describe('戦闘後の持ち越し（呼び出し側の規則）', () => {
     })
     expect(r.party).toEqual([{ id: 'a', hp: 20 }])
     expect(r.inventory.potion).toBe(0)
+  })
+
+  describe('戦利品 loot (#1126)', () => {
+    const base = { earnedGold: 0, partyAfter: after, before }
+
+    it('既存 id には加算する（候補窓に無い所持品も）', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [{ itemId: 'ether', count: 2 }],
+      })
+      expect(r.inventory).toEqual({ potion: 3, ether: 3 })
+    })
+
+    it('未定義 id は新規エントリになる', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [{ itemId: 'rare-gem', count: 1 }],
+      })
+      expect(r.inventory['rare-gem']).toBe(1)
+    })
+
+    it('同じ id が複数行あれば合算する', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [
+          { itemId: 'potion', count: 1 },
+          { itemId: 'potion', count: 2 },
+          { itemId: 'gem', count: 1 },
+          { itemId: 'gem', count: 1 },
+        ],
+      })
+      expect(r.inventory).toEqual({ potion: 6, ether: 1, gem: 2 })
+    })
+
+    it('候補窓で消費した後の残数に戦利品を足す', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [{ id: 'potion', count: 1 }],
+        loot: [{ itemId: 'potion', count: 2 }],
+      })
+      expect(r.inventory.potion).toBe(3)
+    })
+
+    it.each(['defeat', 'escaped'])('%s でも戦利品は入る', (outcome) => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome,
+        menuItems: [{ id: 'potion', count: 0 }],
+        loot: [{ itemId: 'potion', count: 1 }],
+      })
+      expect(r.inventory.potion).toBe(1)
+    })
+
+    it('loot 省略・空配列は従来と同じ', () => {
+      const args = { ...base, outcome: 'victory', menuItems: [{ id: 'potion', count: 1 }] }
+      const omitted = carryOverBattleResult(args)
+      expect(omitted.inventory).toEqual({ potion: 1, ether: 1 })
+      expect(carryOverBattleResult({ ...args, loot: [] })).toEqual(omitted)
+    })
+
+    it('count 0 は所持数を変えない（未定義 id もエントリを作らない）', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [
+          { itemId: 'potion', count: 0 },
+          { itemId: 'none', count: 0 },
+        ],
+      })
+      expect(r.inventory.potion).toBe(3)
+      expect(r.inventory.none).toBeUndefined()
+    })
+
+    it('渡した before.inventory・loot は書き換えない', () => {
+      const loot = [{ itemId: 'potion', count: 5 }]
+      carryOverBattleResult({ ...base, outcome: 'victory', menuItems: [], loot })
+      expect(before.inventory.potion).toBe(3)
+      expect(loot).toEqual([{ itemId: 'potion', count: 5 }])
+    })
+
+    it('count が負数・NaN・Infinity・0 の戦利品は加算しない（正の有限数のみ）', () => {
+      const r = carryOverBattleResult({
+        ...base,
+        outcome: 'victory',
+        menuItems: [],
+        loot: [
+          { itemId: 'potion', count: -2 },
+          { itemId: 'potion', count: Number.NaN },
+          { itemId: 'potion', count: Number.POSITIVE_INFINITY },
+          { itemId: 'potion', count: 0 },
+          { itemId: 'elixir', count: -1 },
+          { itemId: 'potion', count: 2 },
+        ],
+      })
+      expect(r.inventory.potion).toBe(5)
+      expect(r.inventory.elixir).toBeUndefined()
+    })
+
+    it('配線: startFieldGame は itemNamesFromConfig を呼ぶ（静的検査）', () => {
+      expect(startFieldGameSrc).toContain('itemNamesFromConfig(')
+    })
+  })
+
+  describe('itemNamesFromConfig (#1126)', () => {
+    it('id → 名前の表にする', () => {
+      expect(
+        itemNamesFromConfig([
+          { id: 'potion', name: 'ポーション' },
+          { id: 'ether', name: 'エーテル' },
+        ])
+      ).toEqual({ potion: 'ポーション', ether: 'エーテル' })
+    })
+
+    it('空名は除外する（表示側で id のまま出る）', () => {
+      expect(itemNamesFromConfig([{ id: 'potion', name: '' }])).toEqual({})
+    })
+
+    it('items が空なら空の表', () => {
+      expect(itemNamesFromConfig([])).toEqual({})
+    })
   })
 })
 
