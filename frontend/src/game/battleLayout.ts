@@ -4,7 +4,7 @@
  * `BattleScreen` の `layout: 'side'`（FF 系サイドビュー）で使う座標を、画面サイズ・味方数・敵数から返す。
  *
  *   +------------------------------------------+
- *   | [ログ帯: 直近 logLines 行（敵の数で可変）]  |  ← log
+ *   | [ログ帯: 直近 logLines 行（ff は 1 行・他は敵の数で可変）] |  ← log
  *   |                                          |
  *   |  [敵]                  [味方]             |  ← enemies（左・2 行以上なら千鳥）/ party（右・左上→右下の斜め一列 #760）
  *   |  名前/HP                                  |  ← 敵だけ各スプライトの下にラベル（SpriteSlot.label）
@@ -116,12 +116,22 @@ export interface SideBattleLayoutInput {
    * 画面が狭く command / status の最小幅を保てないときは窓を置かず `enemyList: null`（従来の 2 枚構成）。未指定・false は従来どおり
    */
   enemyList?: boolean
+  /**
+   * メッセージ窓（ログ帯）の行数を固定する (#1178)。未指定は従来どおり敵の数で可変（`desiredSideLogLines`）。
+   * FF 式（`battle_presentation: ff`）は言葉 1 件だけを出すので 1 を渡す。敵のグリッドの有無・列数・行数は窓の行数に影響しない
+   */
+  messageLines?: number
+  /**
+   * 敵ごとの表示倍率（0.25〜1・敵の index 順・#1178）。グリッドなしの配置にも効かせる（足元中央基準で縮める）。
+   * 未指定・足りない分は 1。グリッドあり（`enemyFootprints` の `scale`）では使わない
+   */
+  enemyScales?: readonly (number | undefined)[]
 }
 
 export interface SideBattleLayout {
   /** 画面上部のログ帯 */
   log: Rect
-  /** ログ帯に出す行数（敵の数で可変・SIDE_LOG_MIN_LINES〜SIDE_LOG_MAX_LINES） */
+  /** ログ帯に出す行数（`messageLines` 指定ならその行数、なければ敵の数で可変・SIDE_LOG_MIN_LINES〜SIDE_LOG_MAX_LINES） */
   logLines: number
   /** 敵・味方スプライトを置くステージ領域（ログ帯と下パネルの間） */
   stage: Rect
@@ -863,6 +873,22 @@ export function partyDrawOverhang(
   return max
 }
 
+/** 枠を足元中央基準で `scale`（0.25〜1。未指定・不正は 1）倍に縮める。ラベルは動かさない (#1178) */
+function scaleSlotAroundFoot(slot: SpriteSlot, scale: number | undefined): SpriteSlot {
+  if (scale === undefined || !Number.isFinite(scale)) return slot
+  const s = Math.min(1, Math.max(0.25, scale))
+  if (s === 1) return slot
+  const size = slot.size * s
+  const width = slot.width * s
+  return {
+    ...slot,
+    x: slot.x + (slot.width - width) / 2,
+    y: slot.floor - size,
+    size,
+    width,
+  }
+}
+
 /**
  * サイドビュー戦闘画面の全座標を算出する。
  *
@@ -880,6 +906,12 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const slotCount = partyCount > 0 ? Math.max(SIDE_PARTY_MIN_SLOTS, partyCount) : 0
   const depth = input.depth && input.depth.perspective > 0 ? input.depth : null
   const innerW = Math.max(0, W - SIDE_PADDING * 2)
+  // メッセージ窓の行数 (#1178): 固定（`messageLines`）か、敵の数で可変。グリッドの値は一切入れない（設定同士は直交）
+  const fixedLogLines =
+    input.messageLines !== undefined && Number.isFinite(input.messageLines)
+      ? Math.min(SIDE_LOG_MAX_LINES, Math.max(1, Math.floor(input.messageLines)))
+      : null
+  const minLogLines = fixedLogLines ?? SIDE_LOG_MIN_LINES
 
   // 下: コマンド（左）+ status（右）
   const commandLayout = effectiveCommandLayout(input.commandLayout, commandCount)
@@ -892,7 +924,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       H -
       SIDE_PADDING * 2 -
       SIDE_GAP * 2 -
-      computeSideLogHeight(SIDE_LOG_MIN_LINES) -
+      computeSideLogHeight(minLogLines) -
       SIDE_MIN_STAGE_HEIGHT
     commandCellH = Math.min(
       SIDE_COMMAND_CELL_HEIGHT,
@@ -947,15 +979,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     })
   }
 
-  // 上: ログ帯。行数は敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
+  // 上: ログ帯。行数は固定（ff）か敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
   const stageBottom = bottomY - SIDE_GAP
-  // グリッド有効時 (#839 段4) は希望行数をグリッド容量（cols*rows）で決める。体数で行数が変わると stage 高さ→cell が
-  // 体数で変わり、設計書 §3.8「体数不変」に反するため。グリッドなしは従来どおり敵の数で決める
-  let logLines = desiredSideLogLines(
-    input.enemyGrid ? input.enemyGrid.cols * input.enemyGrid.rows : enemyCount
-  )
+  let logLines = fixedLogLines ?? desiredSideLogLines(enemyCount)
   while (
-    logLines > SIDE_LOG_MIN_LINES &&
+    logLines > minLogLines &&
     stageBottom - (SIDE_PADDING + computeSideLogHeight(logLines) + SIDE_GAP) < SIDE_MIN_STAGE_HEIGHT
   ) {
     logLines--
@@ -1015,11 +1043,19 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   let gridFrontFloor: number | null = null
   let gridOverlap = 0
   const formEnemies = (region: Rect): SpriteSlot[] =>
-    computeFormation(region, enemyCount, 'enemy', true, undefined, input.enemyAspects, {
-      maxSize: SIDE_ENEMY_MAX_SIZE,
-      minSize: partyHeight,
-      plateParams: enemyPlate,
-    })
+    computeFormation(
+      region,
+      enemyCount,
+      'enemy',
+      enemyList === null,
+      undefined,
+      input.enemyAspects,
+      {
+        maxSize: SIDE_ENEMY_MAX_SIZE,
+        minSize: partyHeight,
+        plateParams: enemyPlate,
+      }
+    )
   let enemies: SpriteSlot[]
   if (input.enemyGrid) {
     // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
@@ -1090,6 +1126,10 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       enemyRegion.y += hi
       enemyRegion.h -= hi
     }
+  }
+  // 敵の表示倍率 (#1178): グリッドなしの配置にも効かせる。足元中央を保って枠を縮める（窓フィットは縮める前の枠で済んでいる＝縮めて重なりが増えることはない）
+  if (!input.enemyGrid && input.enemyScales) {
+    enemies = enemies.map((sl, i) => scaleSlotAroundFoot(sl, input.enemyScales?.[i]))
   }
   if (depth) {
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める

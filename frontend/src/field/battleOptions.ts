@@ -46,9 +46,7 @@ export function buildBattleScreenOptions(
         }
       : {}),
     ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
-    ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
-      ? { enemyWindowOverlap: b.enemyWindowOverlap }
-      : {}),
+    ...(b.enemyWindowOverlap !== undefined ? { enemyWindowOverlap: b.enemyWindowOverlap } : {}),
   }
 }
 

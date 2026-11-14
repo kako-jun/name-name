@@ -1985,12 +1985,13 @@ export class BattleScreen extends Container {
       partyAcrylic: this.acrylicParams,
       // 敵グリッド (#839 段4): 有効なときだけグリッド配置（enemyAspects / enemyAcrylic の窓フィットは使われない）
       ...(this.opts.enemyGrid && this.enemyFootprints
-        ? {
-            enemyGrid: this.opts.enemyGrid,
-            enemyFootprints: this.enemyFootprints,
-            enemyWindowOverlap: this.opts.enemyWindowOverlap,
-          }
+        ? { enemyGrid: this.opts.enemyGrid, enemyFootprints: this.enemyFootprints }
         : {}),
+      // 窓との重なり許容量・敵の表示倍率は、グリッドの有無と無関係に効く (#1178。設定同士は直交)
+      enemyWindowOverlap: this.opts.enemyWindowOverlap,
+      enemyScales: s.enemies.map((e) => e.layout?.scale),
+      // メッセージ窓の行数は演出方式だけで決まる (#1178): ff は言葉 1 件だけなので 1 行。dq は敵の数で可変（グリッドは無関係）
+      ...(this.presentation === 'ff' ? { messageLines: 1 } : {}),
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)
