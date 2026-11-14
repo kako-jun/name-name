@@ -1003,9 +1003,28 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     w: innerW,
     h: Math.max(0, stageBottom - stageY),
   }
+  // 味方の大きさ (#1178): メッセージ窓の行数を固定するとき（ff）は、窓の高さと独立に決める。窓を 1 行にして舞台が高くなっても
+  // 味方は大きくならない（窓が最大行数のときの舞台の高さ＝従来の見た目で求め、下端は舞台の下端にそろえる）。
+  // 固定しないとき（dq）は従来どおり実際の舞台で求める（窓が敵の数で可変＝味方もその分だけ変わる従来の挙動）
+  let partyRefLines = logLines
+  if (fixedLogLines !== null) {
+    partyRefLines = SIDE_LOG_MAX_LINES
+    while (
+      partyRefLines > SIDE_LOG_MIN_LINES &&
+      stageBottom - (SIDE_PADDING + computeSideLogHeight(partyRefLines) + SIDE_GAP) <
+        SIDE_MIN_STAGE_HEIGHT
+    ) {
+      partyRefLines--
+    }
+  }
+  const partyStageH = Math.min(
+    stage.h,
+    Math.max(0, stageBottom - (SIDE_PADDING + computeSideLogHeight(partyRefLines) + SIDE_GAP))
+  )
+  const partyStage: Rect = { ...stage, y: stage.y + stage.h - partyStageH, h: partyStageH }
   // 味方 (#760): 大きさは従来どおり右半分を使うものとして決め、その斜め一列に必要な幅だけ右端に取る。残りはすべて敵へ回す
   const half = stage.w / 2
-  const partyHalf: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
+  const partyHalf: Rect = { x: stage.x + half, y: partyStage.y, w: half, h: partyStage.h }
   // #813: 4 人のときの斜め一列の枠で求め、味方は上の枠から順に入れる。空き枠は何も描かない（最後に切り捨てる）
   // 枠の縦横比は固定の基準縦横比。空き枠の隊列は前衛。誰がいるか・各自の縦横比で枠が変わらないように
   const partyRows = input.partyRows?.slice(0, partyCount)
@@ -1015,7 +1034,12 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const anyBack =
     !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')
   const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack)
-  const partyRegion: Rect = { x: stage.x + stage.w - partyW, y: stage.y, w: partyW, h: stage.h }
+  const partyRegion: Rect = {
+    x: stage.x + stage.w - partyW,
+    y: partyStage.y,
+    w: partyW,
+    h: partyStage.h,
+  }
   const enemyRegion: Rect = { x: stage.x, y: stage.y, w: stage.w - partyW, h: stage.h }
   // 縦長の stage (#760): 敵のかたまりを下寄せにし、1 人目（左上）の頭・板とぶつかりにくくする。
   // 領域の下端は固定したまま上端を下げ、領域の縦中心を味方 party[1]〜party[2] の足元の中ほどに合わせる
@@ -1042,20 +1066,28 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
   let gridFrontFloor: number | null = null
   let gridOverlap = 0
-  const formEnemies = (region: Rect): SpriteSlot[] =>
-    computeFormation(
-      region,
-      enemyCount,
-      'enemy',
-      enemyList === null,
-      undefined,
-      input.enemyAspects,
-      {
-        maxSize: SIDE_ENEMY_MAX_SIZE,
-        minSize: partyHeight,
-        plateParams: enemyPlate,
-      }
-    )
+  // 足元ラベル帯を取らない（敵名窓あり）と敵の領域の右端が味方領域の左端に接する。グリッドの有無によらず、
+  // 味方の描画範囲（枠より左へ広がる台座・影）との間に最小の隙間を空ける (#1177 / #1178)
+  const labelless = enemyList !== null
+  const partyOverhang = labelless ? partyDrawOverhang(party, input.partyAcrylic) : 0
+  const narrowForParty = (region: Rect, extra = 0): Rect =>
+    labelless
+      ? { ...region, w: Math.max(0, region.w - SIDE_ENEMY_PARTY_MIN_GAP - partyOverhang - extra) }
+      : region
+  const formOnce = (region: Rect): SpriteSlot[] =>
+    computeFormation(region, enemyCount, 'enemy', !labelless, undefined, input.enemyAspects, {
+      maxSize: SIDE_ENEMY_MAX_SIZE,
+      minSize: partyHeight,
+      plateParams: enemyPlate,
+    })
+  const formEnemies = (region: Rect): SpriteSlot[] => {
+    const first = formOnce(narrowForParty(region))
+    if (!labelless || !enemyPlate) return first
+    // アクスタの台座・影は枠より横へ広がる（`max(size, width)` の箱）。その広がり（縮めると小さくなるので 1 回見積もれば安全側）も
+    // 味方の描画範囲に触れないよう、領域をそのぶん狭めて作り直す
+    const overhang = partyDrawOverhang(first, enemyPlate)
+    return overhang > 0 ? formOnce(narrowForParty(region, overhang)) : first
+  }
   let enemies: SpriteSlot[]
   if (input.enemyGrid) {
     // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
@@ -1063,13 +1095,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     const gridLabel = enemyList === null
     // 帯を取らない分セルが幅で決まり、グリッドの右端が味方領域の左端に接する。そのとき味方の枠に触れないよう最小の隙間を空ける
     // 味方の描画は枠より左へ広がる(台座・影)ので、隙間は枠でなく描画範囲の左端から取る
-    const partyOverhang = partyDrawOverhang(party, input.partyAcrylic)
-    const gridRegion: Rect = gridLabel
-      ? enemyRegion
-      : {
-          ...enemyRegion,
-          w: Math.max(0, enemyRegion.w - SIDE_ENEMY_PARTY_MIN_GAP - partyOverhang),
-        }
+    const gridRegion: Rect = gridLabel ? enemyRegion : narrowForParty(enemyRegion)
     const overlap = clampEnemyWindowOverlap(
       gridRegion,
       input.enemyGrid,

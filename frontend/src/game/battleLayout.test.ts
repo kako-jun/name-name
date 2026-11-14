@@ -3013,3 +3013,133 @@ describe('computeSideBattleLayout: 敵名窓のとき敵グリッドは足元ラ
     expect(pedestalLeft(frameOnly) - rightFrame).toBeLessThan(0)
   })
 })
+
+describe('味方の大きさはメッセージ窓の行数と独立 (#1178)', () => {
+  const base = { width: 1280, height: 720, partyCount: 4, enemyCount: 1 }
+  const grid = {
+    enemyGrid: { cols: 6, rows: 2 },
+    enemyFootprints: [{ col: 2, row: 0, w: 2, h: 2 }],
+  }
+
+  it('ff（窓 1 行）の味方は、窓が最大行数のときの味方と同じ位置・大きさ（窓を低くしても大きくならない）', () => {
+    const one = computeSideBattleLayout({ ...base, messageLines: 1 })
+    const four = computeSideBattleLayout({ ...base, messageLines: 4 })
+    expect(one.stage.h).toBeGreaterThan(four.stage.h)
+    expect(one.party).toEqual(four.party)
+    // グリッドの有無・敵の数でも変わらない
+    for (const extra of [grid, { enemyCount: 5 }]) {
+      expect(computeSideBattleLayout({ ...base, ...extra, messageLines: 1 }).party).toEqual(
+        one.party
+      )
+    }
+  })
+
+  it('ff の味方は 1280x720・味方 4 人で従来（窓 4 行）の大きさ 242px、味方領域の左端 707、敵領域の幅は 691', () => {
+    const L = computeSideBattleLayout({ ...base, ...grid, messageLines: 1, commandLayout: 'cross' })
+    expect(L.party[0].size).toBeCloseTo(242, 0)
+    const partyMinX = Math.min(...L.party.map((p) => p.x))
+    expect(partyMinX).toBeCloseTo(707, 0)
+    // 敵領域の幅（舞台の左端〜味方領域の左端）は 691。窓 1 行で 624 に狭まっていた
+    expect(partyMinX - L.stage.x).toBeCloseTo(691, 0)
+    // 中央 2x2 の M001 は従来の幅（約 230px）のまま
+    expect(L.enemies[0].width).toBeCloseTo(230, 0)
+    const main = computeSideBattleLayout({
+      ...base,
+      ...grid,
+      messageLines: 4,
+      commandLayout: 'cross',
+    })
+    expect(L.party).toEqual(main.party)
+  })
+
+  it('ff の味方の下端は従来どおり舞台の下端にそろう', () => {
+    const L = computeSideBattleLayout({ ...base, messageLines: 1 })
+    const four = computeSideBattleLayout({ ...base, messageLines: 4 })
+    expect(L.stage.y + L.stage.h).toBeCloseTo(four.stage.y + four.stage.h)
+    for (let i = 0; i < 4; i++) expect(L.party[i].floor).toBeCloseTo(four.party[i].floor)
+  })
+
+  it('dq（窓が敵の数で可変）の味方は従来どおり実際の舞台で決まる', () => {
+    const a = computeSideBattleLayout({ ...base, enemyCount: 1 })
+    const b = computeSideBattleLayout({ ...base, enemyCount: 5 })
+    expect(a.log.h).toBeLessThan(b.log.h)
+    expect(a.party[0].size).toBeGreaterThan(b.party[0].size)
+  })
+})
+
+describe('cross の 1 段の高さは実際の窓の最小行数で縮む (#1178 C)', () => {
+  it('ff の 1 行は dq の 2 行以上より窓が低いぶん、低い画面で cross の 1 段が縮まない（縮みすぎない）', () => {
+    let strict = false
+    for (let h = 230; h <= 420; h += 5) {
+      const input = {
+        width: 800,
+        height: h,
+        partyCount: 4,
+        enemyCount: 1,
+        commandLayout: 'cross' as const,
+      }
+      const ff = computeSideBattleLayout({ ...input, messageLines: 1 })
+      const dq = computeSideBattleLayout(input)
+      expect(ff.commandCells[0].h, `h${h}`).toBeGreaterThanOrEqual(dq.commandCells[0].h - EPS)
+      if (ff.commandCells[0].h > dq.commandCells[0].h + EPS) strict = true
+    }
+    expect(strict).toBe(true)
+  })
+})
+
+describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画範囲に重ならない (#1178 S3)', () => {
+  const half = (slot: SpriteSlot): number => {
+    const box = Math.max(slot.size, slot.width)
+    const g = computeAcrylicGeometry(1, 1, box, DEFAULT_ACRYLIC_PARAMS)
+    return Math.max(g.shadow?.rx ?? 0, g.base?.rx ?? 0)
+  }
+  it('描画範囲どうしの隙間が 0 より大きい（画面16種 × 味方1〜4人 × 隊列 × 敵数 × 重なり × コマンド数 × ff/dq）', () => {
+    let checked = 0
+    let minGap = Infinity
+    for (const [w, h] of [...SWEEP_SIZES, [1600, 1080] as [number, number]]) {
+      for (const partyCount of [1, 2, 3, 4]) {
+        for (const back of [false, true]) {
+          for (const enemyCount of [1, 3, 6]) {
+            for (const aspect of [0.6, 1.6]) {
+              for (const messageLines of [undefined, 1]) {
+                for (const ov of [0, 0.25, 0.5]) {
+                  for (const commandCount of [2, 4]) {
+                    const L = computeSideBattleLayout({
+                      width: w,
+                      height: h,
+                      partyCount,
+                      enemyCount,
+                      enemyList: true,
+                      commandCount,
+                      enemyWindowOverlap: ov,
+                      partyRows: Array.from({ length: partyCount }, (_, i) =>
+                        back && i % 2 === 1 ? 'back' : 'front'
+                      ),
+                      enemyAspects: Array(enemyCount).fill(aspect),
+                      enemyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+                      partyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+                      ...(messageLines ? { messageLines } : {}),
+                    })
+                    if (!L.enemyList) continue
+                    const enemyRight = Math.max(
+                      ...L.enemies.map((e) => e.x + e.width / 2 + half(e))
+                    )
+                    const partyLeft = Math.min(...L.party.map((p) => p.x + p.width / 2 - half(p)))
+                    expect(
+                      partyLeft - enemyRight,
+                      `${w}x${h} p${partyCount} e${enemyCount}`
+                    ).toBeGreaterThan(0)
+                    minGap = Math.min(minGap, partyLeft - enemyRight)
+                    checked++
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100)
+    expect(minGap).toBeGreaterThan(0)
+  })
+})

@@ -509,7 +509,7 @@ export interface BattleScreenOptions {
    * 指定があるとき、敵は戦闘開始時に `placeEnemies` で 1 回配置し（`enemyFootprints`）、`computeSideBattleLayout` のグリッド配置で描く（#839 段4で配線済み）
    */
   enemyGrid?: { cols: number; rows: number }
-  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッド時だけ効く */
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッドの有無と無関係に効く (#1178)。グリッドなしではアクスタの窓フィットが読む */
   enemyWindowOverlap?: number
   /**
    * 候補窓に出す呪文・わざ・アイテム (#204 / #873)。`side` のとき（かつ 1 件以上あるとき）だけ有効で（配置は `grid` でも `cross` でもよい。#806）、
