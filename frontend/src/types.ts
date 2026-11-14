@@ -1397,6 +1397,8 @@ export interface EventDocument {
   battle_enemy_grid?: string | null
   /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5 の数値文字列。frontmatter `battle_enemy_window_overlap:` から流す。不正値・未指定は既定 0.25。GUI 専用。 */
   battle_enemy_window_overlap?: string | null
+  /** 敵グリッドの縦位置 (#1178)。`"center"`（領域の縦中央）/ `"bottom"`（下端そろえ・既定）。frontmatter `battle_enemy_grid_align:` から流す。不正値・未指定は bottom。`battle_enemy_grid` が有効なときだけ効く。GUI 専用。 */
+  battle_enemy_grid_align?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（一枚絵フィールドの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */

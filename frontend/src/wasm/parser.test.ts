@@ -2643,6 +2643,20 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(empty.battle_enemy_window_overlap).toBeNull()
   })
 
+  it('battle_enemy_grid_align が doc に残り（grid と取り違えない）、省略・空値は null (#1178)', async () => {
+    const doc = await parseMarkdown(
+      docWith(['battle_enemy_grid: 6x2', 'battle_enemy_grid_align: center'])
+    )
+    expect(doc.battle_enemy_grid).toBe('6x2')
+    expect(doc.battle_enemy_grid_align).toBe('center')
+    expect((await parseMarkdown(docWith([]))).battle_enemy_grid_align).toBeNull()
+    expect(
+      (await parseMarkdown(docWith(['battle_enemy_grid_align:']))).battle_enemy_grid_align
+    ).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.battle_enemy_grid_align).toBe('center')
+  })
+
   it('emit → parse の往復で frontmatter が保たれる', async () => {
     const doc = await parseMarkdown(
       docWith(['battle_enemy_grid: 6x2', 'battle_enemy_window_overlap: 0.3'])

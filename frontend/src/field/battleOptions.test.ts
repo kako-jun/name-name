@@ -119,6 +119,15 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect(buildBattleScreenOptions(b, {}).enemyWindowOverlap).toBe(0.3)
   })
 
+  it('enemyGridAlign はグリッドの有無と無関係に渡り、未指定は渡さない (#1178)', () => {
+    const b = load({ layout: 'side', enemyGridAlign: 'center' }).battle
+    expect(b.enemyGrid).toBeUndefined()
+    expect(buildBattleScreenOptions(b, {}).enemyGridAlign).toBe('center')
+    expect('enemyGridAlign' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(
+      false
+    )
+  })
+
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
     const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
     expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')

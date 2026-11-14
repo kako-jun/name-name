@@ -69,6 +69,7 @@ export function frontmatterRaw(
   set('atb', enumOf(doc, 'battle_atb', ['on', 'off'], warnings))
   set('atbMode', enumOf(doc, 'battle_atb_mode', ['wait', 'active'], warnings))
   if (typeof doc.battle_enemy_grid === 'string') battle.enemyGrid = doc.battle_enemy_grid
+  set('enemyGridAlign', enumOf(doc, 'battle_enemy_grid_align', ['center', 'bottom'], warnings))
   if (typeof doc.battle_background === 'string' && doc.battle_background !== '')
     battle.background = doc.battle_background
 

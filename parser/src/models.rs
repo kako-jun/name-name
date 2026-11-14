@@ -2665,6 +2665,10 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側で丸める（不正は既定）。GUI 専用。frontmatter `battle_enemy_window_overlap:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_enemy_window_overlap: Option<String>,
+    /// 敵グリッドの縦位置 (#1178)。`center`（領域の縦中央）/ `bottom`（下端そろえ・既定）。
+    /// 値は生文字列で透過し、runtime 側（`normalizeEnemyGridAlign`）で不正値を警告して bottom にする。GUI 専用。frontmatter `battle_enemy_grid_align:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_enemy_grid_align: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

@@ -205,6 +205,8 @@ export interface FieldBattleConfig {
   enemyGrid?: EnemyGridSize
   /** 敵の絵と窓の重なり許容量 (#838/#839)。`battle.enemyWindowOverlap`（0〜0.5 に丸める）。未指定は既定 */
   enemyWindowOverlap?: number
+  /** 敵グリッドの縦位置 (#1178)。`battle.enemyGridAlign`: `bottom`（既定）/ `center`。未指定は undefined＝bottom。グリッドがあるときだけ効く */
+  enemyGridAlign?: 'center' | 'bottom'
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
   /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
@@ -913,6 +915,14 @@ export function parseConfig(
   }
   if (b.motion !== undefined && b.motion !== 'default' && b.motion !== 'snappy')
     return fail(`battle.motion は "default" か "snappy": ${JSON.stringify(b.motion)}`)
+  if (
+    b.enemyGridAlign !== undefined &&
+    b.enemyGridAlign !== 'center' &&
+    b.enemyGridAlign !== 'bottom'
+  )
+    return fail(
+      `battle.enemyGridAlign は "center" か "bottom": ${JSON.stringify(b.enemyGridAlign)}`
+    )
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
     return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
@@ -1219,6 +1229,7 @@ export function parseConfig(
         ...(logicalSize ? { logicalSize } : {}),
         ...(enemyGrid ? { enemyGrid } : {}),
         ...(enemyWindowOverlap !== undefined ? { enemyWindowOverlap } : {}),
+        ...(b.enemyGridAlign ? { enemyGridAlign: b.enemyGridAlign } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),

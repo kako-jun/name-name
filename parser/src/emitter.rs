@@ -249,6 +249,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_enemy_window_overlap: \"{sanitized}\"\n"));
         }
+        // battle_enemy_grid_align (#1178)。同じ流儀
+        if let Some(ref v) = doc.battle_enemy_grid_align {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_enemy_grid_align: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -2638,6 +2643,7 @@ mod tests {
             battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
+            battle_enemy_grid_align: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -3163,6 +3169,7 @@ mod tests {
             battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
+            battle_enemy_grid_align: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

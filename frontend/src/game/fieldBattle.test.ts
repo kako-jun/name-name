@@ -118,6 +118,13 @@ describe('readFieldBattleSettings', () => {
     expect(d.enemyWindowOverlap).toBeUndefined()
   })
 
+  it('敵グリッドの縦位置 (#1178) は RPGProject の値が入り、未指定は bottom', () => {
+    expect(
+      readFieldBattleSettings(minimalProject({ battleEnemyGridAlign: 'center' })).enemyGridAlign
+    ).toBe('center')
+    expect(readFieldBattleSettings(minimalProject()).enemyGridAlign).toBe('bottom')
+  })
+
   it('ATB 未指定は undefined（従来ターン制）', () => {
     expect(readFieldBattleSettings(minimalProject()).atb).toBeUndefined()
   })
@@ -391,6 +398,12 @@ describe('openFieldBattle', () => {
     expect('enemyWindowOverlap' in d.opts).toBe(false)
   })
 
+  it('enemyGridAlign は center のときだけ BattleScreen の opts に転送される (#1178)', () => {
+    const { s } = open({ settings: { layout: 'side', enemyGridAlign: 'center' } })
+    expect(s.opts.enemyGridAlign).toBe('center')
+    expect('enemyGridAlign' in open().s.opts).toBe(false)
+  })
+
   it('commands / commandLabels は BattleScreen の opts に転送される (#873)', () => {
     const { s } = open({
       settings: {
@@ -480,6 +493,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       presentation: 'dq',
       motion: 'default',
       enemyList: 'off',
+      enemyGridAlign: 'bottom',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -521,6 +535,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       presentation: 'ff',
       motion: 'snappy',
       enemyList: 'window',
+      enemyGridAlign: 'bottom',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,
