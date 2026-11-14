@@ -509,7 +509,7 @@ export interface BattleScreenOptions {
    * 指定があるとき、敵は戦闘開始時に `placeEnemies` で 1 回配置し（`enemyFootprints`）、`computeSideBattleLayout` のグリッド配置で描く（#839 段4で配線済み）
    */
   enemyGrid?: { cols: number; rows: number }
-  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッド時だけ効く */
+  /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。frontmatter `battle_enemy_window_overlap` 由来。undefined = 既定（0.25）。グリッドの有無と無関係に効く (#1178)。グリッドなしではアクスタの窓フィットが読む */
   enemyWindowOverlap?: number
   /**
    * 候補窓に出す呪文・わざ・アイテム (#204 / #873)。`side` のとき（かつ 1 件以上あるとき）だけ有効で（配置は `grid` でも `cross` でもよい。#806）、
@@ -1985,12 +1985,13 @@ export class BattleScreen extends Container {
       partyAcrylic: this.acrylicParams,
       // 敵グリッド (#839 段4): 有効なときだけグリッド配置（enemyAspects / enemyAcrylic の窓フィットは使われない）
       ...(this.opts.enemyGrid && this.enemyFootprints
-        ? {
-            enemyGrid: this.opts.enemyGrid,
-            enemyFootprints: this.enemyFootprints,
-            enemyWindowOverlap: this.opts.enemyWindowOverlap,
-          }
+        ? { enemyGrid: this.opts.enemyGrid, enemyFootprints: this.enemyFootprints }
         : {}),
+      // 窓との重なり許容量・敵の表示倍率は、グリッドの有無と無関係に効く (#1178。設定同士は直交)
+      enemyWindowOverlap: this.opts.enemyWindowOverlap,
+      enemyScales: s.enemies.map((e) => e.layout?.scale),
+      // メッセージ窓の行数は演出方式だけで決まる (#1178): ff は言葉 1 件だけなので 1 行。dq は敵の数で可変（グリッドは無関係）
+      ...(this.presentation === 'ff' ? { messageLines: 1 } : {}),
     })
     const panel = (r: { x: number; y: number; w: number; h: number }, g: Container) =>
       this.drawPanel(g, r.x, r.y, r.w, r.h)

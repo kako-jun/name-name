@@ -25,8 +25,8 @@ function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 }
 
 interface Internals {
-  partyViews: { container: Container }[]
-  enemyViews: { container: Container }[]
+  partyViews: { container: Container; baseX: number }[]
+  enemyViews: { container: Container; baseX: number }[]
   playback: { active: { event: { seq: number }; elapsed: number } | null }
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
@@ -463,8 +463,11 @@ describe('BattleScreen: 登場スライド (#1037)', () => {
     '%s: 開始前は画面外、登場後に元の位置へ。入力は登場中ずっと塞がる',
     async (motion) => {
       const { s } = entranceSetup(motion)
-      const rest = entranceSetup(motion, 'dq') // 登場なしの基準位置（dq は登場しない）
-      const restPos = dxOf(rest.s)
+      // 登場なしの基準位置: 同じ ff の画面の配置（baseX）。dq の画面とは窓の高さ＝舞台の高さが違うので比べない (#1178)
+      const restPos = {
+        party: I(s).partyViews[0].baseX,
+        enemy: I(s).enemyViews[0].baseX,
+      }
       expect(dxOf(s).enemy).toBeLessThan(0)
       expect(dxOf(s).party).toBeGreaterThanOrEqual(800)
       expect(
@@ -636,14 +639,13 @@ describe('BattleScreen: 登場スライドの詳細 (#1037)', () => {
 
   it('全員同時に着く（遅れ 0）: 終了の 1ms 前は敵も味方も途中、終了の tick で同時に元の位置', async () => {
     mockLoad('instant')
-    // 登場なしの基準位置は dq（default も ff+side では登場する #1110）
-    const rest = build({}, { presentation: 'dq' })
-    await flush()
-    const restE = views(rest.s).enemyViews[0].container.x
-    const restP = views(rest.s).partyViews[0].container.x
+    // 登場なしの基準位置は同じ ff の画面の配置（baseX。default も ff+side では登場する #1110）。
+    // dq の画面とは窓の高さ＝舞台の高さが違うので比べない (#1178)
     const { s } = build()
     const v = views(s)
     await flush()
+    const restE = v.enemyViews[0].baseX
+    const restP = v.partyViews[0].baseX
     s.tick(1)
     s.tick(total - 1)
     expect(v.enemyViews[0].container.x).not.toBe(restE)
