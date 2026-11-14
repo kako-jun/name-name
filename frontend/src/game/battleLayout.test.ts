@@ -3264,12 +3264,10 @@ describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#11
                       // 敵: 同じ行は同じ量だけ縦にずれる（大きさ・x・幅は同じ）。深度ありでも味方は変わらない（上の toEqual）
                       const dys = c.enemies.map((e, i) => e.floor - b.enemies[i].floor)
                       c.enemies.forEach((e, i) => {
-                        // 奥行きありは縦位置（遠近）で縮尺が変わるのでサイズ・x の比較は奥行きなしだけ
-                        if (!depth) {
-                          expect(e.x, ctx).toBe(b.enemies[i].x)
-                          expect(e.width, ctx).toBeCloseTo(b.enemies[i].width, 6)
-                          expect(e.size, ctx).toBeCloseTo(b.enemies[i].size, 6)
-                        }
+                        // 奥行きありでも、縦位置の設定は敵の大きさ・x を変えない（縮尺の基準は下端そろえの足元で固定）
+                        expect(e.x, ctx).toBeCloseTo(b.enemies[i].x, 6)
+                        expect(e.width, ctx).toBeCloseTo(b.enemies[i].width, 6)
+                        expect(e.size, ctx).toBeCloseTo(b.enemies[i].size, 6)
                         expect(dys[i], ctx).toBeLessThanOrEqual(EPS)
                       })
                       if (!depth) {
@@ -3326,6 +3324,45 @@ describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#11
               checked++
             }
     expect(checked).toBeGreaterThan(100)
+  })
+
+  it('奥行き(perspective・horizon)ありでも、縦位置の設定で敵の大きさ・縮尺は変わらない（総当たり）', () => {
+    let checked = 0
+    for (const [w, h] of [...SWEEP_SIZES, [1600, 1080] as [number, number]])
+      for (const grid of [
+        { cols: 6, rows: 2 },
+        { cols: 4, rows: 2 },
+        { cols: 12, rows: 4 },
+      ])
+        for (const perspective of [0, 0.5, 1])
+          for (const horizon of [0, 0.3, 0.6])
+            for (const list of [false, true]) {
+              const mk = (align: 'center' | 'bottom') =>
+                computeSideBattleLayout({
+                  width: w,
+                  height: h,
+                  partyCount: 4,
+                  enemyCount: FOOTS.length,
+                  commandCount: 8,
+                  enemyGrid: grid,
+                  enemyFootprints: FOOTS,
+                  enemyList: list,
+                  messageLines: 1,
+                  depth: { horizon, perspective },
+                  enemyGridAlign: align,
+                })
+              const b = mk('bottom')
+              const c = mk('center')
+              const ctx = JSON.stringify([w, h, grid, perspective, horizon, list])
+              expect(c.party, ctx).toEqual(b.party)
+              c.enemies.forEach((e, i) => {
+                expect(e.size, ctx).toBeCloseTo(b.enemies[i].size, 6)
+                expect(e.width, ctx).toBeCloseTo(b.enemies[i].width, 6)
+                expect(e.scale, ctx).toBeCloseTo(b.enemies[i].scale, 9)
+              })
+              checked++
+            }
+    expect(checked).toBe(8 * 3 * 3 * 3 * 2)
   })
 
   it('グリッドなしでは無関係（enemyGridAlign を渡しても配置は変わらない）', () => {

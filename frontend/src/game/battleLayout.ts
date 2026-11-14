@@ -1070,6 +1070,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
   let gridFrontFloor: number | null = null
   let gridOverlap = 0
+  // 縦位置の設定（enemyGridAlign）で動いた量。奥行きの縮尺は下端そろえの足元で決め、縦位置が敵の大きさを変えないようにする (#1178)
+  let gridAlignShift = 0
   // 足元ラベル帯を取らない（敵名窓あり）と敵の領域の右端が味方領域の左端に接する。グリッドの有無によらず、
   // 味方の描画範囲（枠より左へ広がる台座・影）との間に最小の隙間を空ける (#1177 / #1178)
   const labelless = enemyList !== null
@@ -1122,6 +1124,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       windowOverlap: overlap,
       align: input.enemyGridAlign,
     })
+    gridAlignShift = gl.alignShift
     const band = gridLabel && gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
     // 奥行きの縮尺の基準は縦位置の設定（下端 / 中央）に依らず、領域の下端にそろえた最下行の下端（直交）
     gridFrontFloor = gridRegion.y + gridRegion.h - band
@@ -1182,7 +1185,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
             {
               bottom: log.y + log.h,
               overlap: gridOverlap,
-            }
+            },
+            gridAlignShift
           )
         : applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
       party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)

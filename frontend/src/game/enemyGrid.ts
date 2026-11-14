@@ -277,6 +277,8 @@ export interface EnemyGridLayout {
   cell: number
   /** グリッド全体の矩形（ラベル帯込み。上端は窓重なり許容ぶん `region.y` より上へ延びうる） */
   grid: Rect
+  /** 縦位置の設定（`align`）で下端そろえから動いた量（`center` で上へ動くと負。`bottom` は 0）。奥行きの縮尺の基準を固定するのに使う (#1178) */
+  alignShift: number
   /** `footprints` と同じ並び */
   slots: EnemyGridSlot[]
 }
@@ -293,7 +295,7 @@ function clampScale(raw: number | undefined): number {
  * labelBand = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
  * cell      = min(regionW / cols, (regionH - rows*labelBand) / (rows - overlap))
  * ```
- * グリッドは領域の横中央・縦は下端に置き、最上行は `overlap * cell` だけ領域の上へ延びる（窓の下へ入ってよい量）。
+ * グリッドは領域の横中央に置く。縦は `align`（既定 `bottom` = 領域の下端、`center` = 領域の縦中央。#1178）。下端そろえのとき最上行は `overlap * cell` だけ領域の上へ延びる（窓の下へ入ってよい量）。
  * 占有矩形は幅 `w*cell`・高さ `h*cell`、最下行の `cell` の下端に揃える（同じ行の 1x1 と足元が合う）。
  * `floor` は占有矩形の下端、ラベルはその直下（占有幅まで）。
  */
@@ -318,12 +320,11 @@ export function computeEnemyGridLayout(
   const band = cell > 0 ? labelBand : 0
   const gridW = gridValid ? cell * cols : 0
   const gridH = gridValid ? (cell + band) * rows : 0
+  const bottomY = region.y + region.h - gridH
   const gridRect: Rect = {
     x: region.x + (region.w - gridW) / 2,
     y:
-      options.align === 'center' && gridH <= region.h
-        ? region.y + (region.h - gridH) / 2
-        : region.y + region.h - gridH,
+      options.align === 'center' && gridH <= region.h ? region.y + (region.h - gridH) / 2 : bottomY,
     w: gridW,
     h: gridH,
   }
@@ -359,7 +360,7 @@ export function computeEnemyGridLayout(
     return slot
   })
 
-  return { cell, grid: gridRect, slots }
+  return { cell, grid: gridRect, alignShift: gridRect.y - bottomY, slots }
 }
 
 /** 描画順（奥 → 手前）の添字並び。`floor` 昇順、同じ `floor` は列の昇順（左 = 奥が先）。元の並びは変えない */
@@ -406,6 +407,7 @@ export function clampEnemyWindowOverlap(
 /**
  * 奥行き (#747) をグリッド由来の敵スロットに適用する。`applyDepthToSlots` と同じ規則（元の占有矩形の上端・水平中央を保って縮尺 `s` で縮める）を、
  * `occupied` / `box` にも同じ変換で適用し、ラベルも追従させる。`floor` は元の値のまま（描画順の基準）。
+ * `floorShift` (#1178) は縮尺を求めるときだけ `floor` に足す量（縦位置の設定で動いた分を戻し、下端そろえの足元で縮尺を決める）。
  * `window` を渡すと、縮めたあとの窓との重なりが `overlap * 縮んだ高さ` を超えないよう、元の占有矩形の内側で下へずらす。
  */
 export function applyDepthToGridSlots(
@@ -413,10 +415,11 @@ export function applyDepthToGridSlots(
   frontFloor: number,
   horizonY: number,
   perspective: number,
-  window?: { bottom: number; overlap: number }
+  window?: { bottom: number; overlap: number },
+  floorShift = 0
 ): EnemyGridSlot[] {
   return slots.map((slot) => {
-    const s = computeDepthScale(slot.floor, frontFloor, horizonY, perspective)
+    const s = computeDepthScale(slot.floor - floorShift, frontFloor, horizonY, perspective)
     if (s >= 1) return slot
     const cx = slot.x + slot.width / 2
     const top = slot.y
