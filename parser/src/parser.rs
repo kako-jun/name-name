@@ -73,6 +73,9 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut battle_enemy_grid: Option<String> = None;
     let mut battle_enemy_window_overlap: Option<String> = None;
     let mut battle_enemy_grid_align: Option<String> = None;
+    let mut battle_enemy_grid_extent: Option<String> = None;
+    let mut battle_enemy_window_overlap_bottom: Option<String> = None;
+    let mut battle_party_layout: Option<String> = None;
 
     if pos < len && lines[pos].trim() == "---" {
         pos += 1;
@@ -368,6 +371,24 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_enemy_window_overlap = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_enemy_grid_extent:") {
+                // (#1178) 値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_enemy_grid_extent = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_enemy_window_overlap_bottom:") {
+                // (#1178) 値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_enemy_window_overlap_bottom = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_party_layout:") {
+                // (#1178) 値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_party_layout = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_enemy_grid_align:") {
                 // 敵グリッドの縦位置 (#1178)。center / bottom。値は生文字列で透過し、runtime 側で検証する。
@@ -1758,6 +1779,9 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         battle_enemy_grid,
         battle_enemy_window_overlap,
         battle_enemy_grid_align,
+        battle_enemy_grid_extent,
+        battle_enemy_window_overlap_bottom,
+        battle_party_layout,
         chapters: vec![Chapter {
             number: chapter_number,
             title: chapter_title,

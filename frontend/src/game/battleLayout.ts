@@ -19,15 +19,18 @@
  */
 
 import type { BattleRow } from './spellDsl'
+import { DEFAULT_MOTION_TIMING, SNAPPY_MOTION_TIMING } from './battleMotion'
 import type { CommandLayout } from './battleCommands'
 import { computeAcrylicGeometry, resolveAcrylicParams, type AcrylicParams } from './spriteStyle'
 import {
   applyDepthToGridSlots,
   clampEnemyWindowOverlap,
+  clampEnemyWindowOverlapBottom,
   computeEnemyGridLayout,
   emptyEnemyGridSlot,
   type EnemyFootprint,
   type EnemyGridAlign,
+  type EnemyGridExtent,
   type EnemyGridSize,
   type EnemyGridSlot,
 } from './enemyGrid'
@@ -107,6 +110,18 @@ export interface SideBattleLayoutInput {
    * セルの大きさ・行数・窓との重なり・味方との距離・奥行きの縮尺の基準は変えない（縦位置だけ）。グリッドなしでは無関係
    */
   enemyGridAlign?: EnemyGridAlign
+  /**
+   * グリッドの水平の広がり (#1178)。`wide` なら敵領域の左端を画面の左端（x=0）へ、右端を「味方の描画範囲の左端 − 攻撃の踏み出し量 − 最小の隙間」へ広げる。
+   * 未指定は `normal`（従来）。縦位置・味方の並び・窓との重なりとは独立（敵と味方が触れない不変条件だけを共有する）。グリッドなしでは無関係
+   */
+  enemyGridExtent?: EnemyGridExtent
+  /**
+   * 足元が下のパネル（コマンド・敵名・status）に隠れてよい量 (#1178)。各敵の枠の高さに対する比、0〜0.5、未指定は 0（従来・隠れない）。
+   * 延長ぶんが足元から画面の下端までを超えない範囲に絞る。上の `enemyWindowOverlap` とは独立のキー。グリッドなしでは無関係
+   */
+  enemyWindowOverlapBottom?: number
+  /** 味方の斜め一列の並び (#1178)。`default`（従来）/ `tall`（x 送り 0.2h・列を舞台の縦いっぱいへ）。味方の大きさ・グリッド・窓とは独立 */
+  partyLayout?: PartyLayout
   /**
    * グリッド時の敵ごとの占有（`placeEnemies` の結果 + サイズ区分 + 倍率）。敵の index 順。
    * null・足りない分は置けなかった敵＝大きさ 0 のスロット（後段が描かない）
@@ -235,6 +250,45 @@ export const SIDE_PARTY_MIN_PITCH_RATIO = 0.3
 export const SIDE_PARTY_MAX_PITCH_RATIO = 0.6
 /** 敵へ領域を回すとき、味方の斜めのずらしをここまで詰める（高さに対する比。上限 0.75・下限 0.3 の間） */
 export const SIDE_PARTY_COMFORT_SHIFT_RATIO = 0.5
+
+/** 味方の斜め一列の並び (#1178)。名前付きのプリセット。`tall` は x 送りを小さく・y 送りを舞台の縦いっぱいまで広げる */
+export type PartyLayout = 'default' | 'tall'
+/** 並びのプリセットごとの定数。大きさ h は preset に依らず default の式で決める（味方の大きさを新キーと直交にする） */
+interface PartyLayoutParams {
+  maxPitchRatio: number
+  minShiftRatio: number
+  maxShiftRatio: number
+  comfortShiftRatio: number
+}
+export const PARTY_LAYOUT_PARAMS: Readonly<Record<PartyLayout, PartyLayoutParams>> = {
+  default: {
+    maxPitchRatio: SIDE_PARTY_MAX_PITCH_RATIO,
+    minShiftRatio: SIDE_DIAGONAL_MIN_SHIFT_RATIO,
+    maxShiftRatio: SIDE_DIAGONAL_MAX_SHIFT_RATIO,
+    comfortShiftRatio: SIDE_PARTY_COMFORT_SHIFT_RATIO,
+  },
+  // x 送りは常に 0.2h（下限=上限）。詰め量も 0.2h。y 送りは舞台の高さで決まる（上限は実質なし。下限 0.3h は default と共通）
+  tall: { maxPitchRatio: 10, minShiftRatio: 0.2, maxShiftRatio: 0.2, comfortShiftRatio: 0.2 },
+}
+
+/** 味方が攻撃で前（左）へ踏み出す最大量の、味方の高さ h に対する比 (#1178)。モーション preset の最大（default 0.7 / snappy 0.55）。`applyMotionFrame` の `forward * view.unit`（味方は unit=h） */
+export const SIDE_PARTY_STEP_MAX_RATIO = Math.max(
+  DEFAULT_MOTION_TIMING.attackStepDistance,
+  SNAPPY_MOTION_TIMING.attackStepDistance
+)
+
+/** 敵グリッド `wide` の右端と、踏み出した味方の描画範囲の左端のあいだの最小の隙間 (px) */
+export const SIDE_WIDE_GRID_PARTY_GAP = 2
+
+export function normalizePartyLayout(raw: string | null | undefined, warn = true): PartyLayout {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'default'
+  const v = raw.trim().toLowerCase()
+  if (v === 'tall') return 'tall'
+  if (v === 'default') return 'default'
+  if (warn)
+    console.warn(`battle_party_layout '${raw}' は default / tall ではないため default にした`)
+  return 'default'
+}
 /** 味方の立ち絵の高さの上限 */
 export const SIDE_PARTY_MAX_HEIGHT = 320
 /** 立ち絵の縦横比（幅/高さ）の既定（未読み込み・色四角）と丸め範囲 */
@@ -511,8 +565,9 @@ export function computePartyDiagonal(
   count: number,
   rows?: readonly (BattleRow | undefined)[],
   aspects?: readonly (number | undefined)[],
-  opts?: { height?: number }
+  opts?: { height?: number; layout?: PartyLayout }
 ): SpriteSlot[] {
+  const lp = PARTY_LAYOUT_PARAMS[opts?.layout ?? 'default']
   if (count <= 0) return []
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
@@ -538,13 +593,13 @@ export function computePartyDiagonal(
             regionW / (maxAspect * (1 + backShift) + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
           )
         )
-  const pitch = steps > 0 ? Math.min((regionH - h) / steps, h * SIDE_PARTY_MAX_PITCH_RATIO) : 0
+  const pitch = steps > 0 ? Math.min((regionH - h) / steps, h * lp.maxPitchRatio) : 0
   const maxW = h * maxAspect
   const dx =
     steps > 0 && h > 0
       ? Math.min(
-          SIDE_DIAGONAL_MAX_SHIFT_RATIO,
-          Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (regionW - maxW * (1 + backShift)) / steps / h)
+          lp.maxShiftRatio,
+          Math.max(lp.minShiftRatio, (regionW - maxW * (1 + backShift)) / steps / h)
         ) * h
       : 0
   const totalH = h + steps * pitch
@@ -784,8 +839,10 @@ export function applyDepthToSlots(
 export function partyRegionWidth(
   slots: readonly SpriteSlot[],
   halfWidth: number,
-  anyBack = false
+  anyBack = false,
+  layout: PartyLayout = 'default'
 ): number {
+  const lp = PARTY_LAYOUT_PARAMS[layout]
   if (slots.length === 0) return 0
   const h = slots[0].size
   const maxW = Math.max(...slots.map((s) => s.width))
@@ -794,11 +851,8 @@ export function partyRegionWidth(
   if (steps === 0 || !(h > 0)) return Math.min(halfWidth, base)
   // 右半分での斜めのずらし（computePartyDiagonal の dx と同じ式）
   const dxHalf =
-    Math.min(
-      SIDE_DIAGONAL_MAX_SHIFT_RATIO,
-      Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (halfWidth - base) / steps / h)
-    ) * h
-  const wanted = base + steps * Math.min(dxHalf, h * SIDE_PARTY_COMFORT_SHIFT_RATIO)
+    Math.min(lp.maxShiftRatio, Math.max(lp.minShiftRatio, (halfWidth - base) / steps / h)) * h
+  const wanted = base + steps * Math.min(dxHalf, h * lp.comfortShiftRatio)
   return Math.min(halfWidth, Math.max(0, wanted))
 }
 
@@ -1037,12 +1091,16 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const halfSlots = computeFormation(partyHalf, slotCount, 'party', false, partyRows, partyAspects)
   const anyBack =
     !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')
-  const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack)
+  const partyLayout = input.partyLayout ?? 'default'
+  const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack, partyLayout)
+  // tall (#1178): 大きさ h は default の式（上の halfSlots）で決めたまま、列は実際の舞台の縦いっぱい（窓の下〜舞台の下端）に伸ばす。
+  // default は大きさの基準にした舞台（窓が最大行数のとき）のまま
+  const partyRegionY = partyLayout === 'tall' ? stage.y : partyStage.y
   const partyRegion: Rect = {
     x: stage.x + stage.w - partyW,
-    y: partyStage.y,
+    y: partyRegionY,
     w: partyW,
-    h: partyStage.h,
+    h: stage.y + stage.h - partyRegionY,
   }
   const enemyRegion: Rect = { x: stage.x, y: stage.y, w: stage.w - partyW, h: stage.h }
   // 縦長の stage (#760): 敵のかたまりを下寄せにし、1 人目（左上）の頭・板とぶつかりにくくする。
@@ -1064,6 +1122,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // （敵名窓のグリッドが味方の描画範囲を知る必要があるので、敵より先に求める。入力は敵に依らない）
   let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
     height: partyHeight,
+    layout: partyLayout,
   })
 
   const enemyPlate = input.enemyAcrylic ?? null
@@ -1101,13 +1160,33 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     const gridLabel = enemyList === null
     // 帯を取らない分セルが幅で決まり、グリッドの右端が味方領域の左端に接する。そのとき味方の枠に触れないよう最小の隙間を空ける
     // 味方の描画は枠より左へ広がる(台座・影)ので、隙間は枠でなく描画範囲の左端から取る
-    const gridRegion: Rect = gridLabel ? enemyRegion : narrowForParty(enemyRegion)
+    let gridRegion: Rect = gridLabel ? enemyRegion : narrowForParty(enemyRegion)
+    if (input.enemyGridExtent === 'wide') {
+      // 広がり (#1178): 左端は画面の左端（x=0）。右端は、味方の描画範囲（枠より左へ広がる台座・影）の左端から、攻撃で一歩踏み出す最大量
+      // （モーション preset の最大 × 味方の高さ。踏み出しは味方全員が起こりうるので全枠の左端の最小で見積もる）と最小の隙間を引いた所
+      const partyLeft =
+        Math.min(...party.map((sl) => sl.x)) - partyDrawOverhang(party, input.partyAcrylic)
+      const right = partyLeft - SIDE_PARTY_STEP_MAX_RATIO * partyHeight - SIDE_WIDE_GRID_PARTY_GAP
+      gridRegion = { ...enemyRegion, x: 0, w: Math.max(0, right) }
+    }
+    // 下のパネルへ隠れてよい量 (#1178): 足元から画面の下端（ラベルを出すときはその帯の分を除く）までを超えない範囲に絞る
+    const bottomRoom =
+      H - (gridRegion.y + gridRegion.h) - (gridLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0)
     const overlap = clampEnemyWindowOverlap(
       gridRegion,
       input.enemyGrid,
       gridLabel,
       input.enemyWindowOverlap,
-      log.h
+      log.h,
+      input.enemyWindowOverlapBottom
+    )
+    const overlapBottom = clampEnemyWindowOverlapBottom(
+      gridRegion,
+      input.enemyGrid,
+      gridLabel,
+      overlap,
+      input.enemyWindowOverlapBottom,
+      bottomRoom
     )
     gridOverlap = overlap
     const placedIdx: number[] = []
@@ -1122,6 +1201,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     const gl = computeEnemyGridLayout(gridRegion, input.enemyGrid, footprints, {
       withLabel: gridLabel,
       windowOverlap: overlap,
+      windowOverlapBottom: overlapBottom,
       align: input.enemyGridAlign,
     })
     gridAlignShift = gl.alignShift

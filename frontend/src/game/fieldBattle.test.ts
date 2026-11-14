@@ -125,6 +125,27 @@ describe('readFieldBattleSettings', () => {
     expect(readFieldBattleSettings(minimalProject()).enemyGridAlign).toBe('bottom')
   })
 
+  it('広がり・下の重なり・味方の並び (#1178) は RPGProject の値が入り、未指定は normal / undefined / default', () => {
+    const s = readFieldBattleSettings(
+      minimalProject({
+        battleEnemyGridExtent: 'wide',
+        battleEnemyWindowOverlapBottom: 0.4,
+        battlePartyLayout: 'tall',
+      })
+    )
+    expect([s.enemyGridExtent, s.enemyWindowOverlapBottom, s.partyLayout]).toEqual([
+      'wide',
+      0.4,
+      'tall',
+    ])
+    const d = readFieldBattleSettings(minimalProject())
+    expect([d.enemyGridExtent, d.enemyWindowOverlapBottom, d.partyLayout]).toEqual([
+      'normal',
+      undefined,
+      'default',
+    ])
+  })
+
   it('ATB 未指定は undefined（従来ターン制）', () => {
     expect(readFieldBattleSettings(minimalProject()).atb).toBeUndefined()
   })
@@ -404,6 +425,23 @@ describe('openFieldBattle', () => {
     expect('enemyGridAlign' in open().s.opts).toBe(false)
   })
 
+  it('enemyGridExtent・enemyWindowOverlapBottom・partyLayout は既定以外のときだけ opts に転送される (#1178)', () => {
+    const { s } = open({
+      settings: {
+        layout: 'side',
+        enemyGridExtent: 'wide',
+        enemyWindowOverlapBottom: 0.4,
+        partyLayout: 'tall',
+      },
+    })
+    expect(s.opts.enemyGridExtent).toBe('wide')
+    expect(s.opts.enemyWindowOverlapBottom).toBe(0.4)
+    expect(s.opts.partyLayout).toBe('tall')
+    const d = open().s.opts
+    for (const k of ['enemyGridExtent', 'enemyWindowOverlapBottom', 'partyLayout'])
+      expect(k in d).toBe(false)
+  })
+
   it('commands / commandLabels は BattleScreen の opts に転送される (#873)', () => {
     const { s } = open({
       settings: {
@@ -494,6 +532,8 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       motion: 'default',
       enemyList: 'off',
       enemyGridAlign: 'bottom',
+      enemyGridExtent: 'normal',
+      partyLayout: 'default',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -536,6 +576,8 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       motion: 'snappy',
       enemyList: 'window',
       enemyGridAlign: 'bottom',
+      enemyGridExtent: 'normal',
+      partyLayout: 'default',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,

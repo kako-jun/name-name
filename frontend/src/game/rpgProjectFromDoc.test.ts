@@ -2012,6 +2012,36 @@ describe('rpgProjectFromDoc: battle_enemy_grid_align (#1178)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: battle_enemy_grid_extent / battle_party_layout / battle_enemy_window_overlap_bottom (#1178)', () => {
+  const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
+  it('wide / tall はそのまま、未指定・空・不正は既定（不正は警告）。グリッドの有無とは独立', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = proj({ battle_enemy_grid_extent: 'wide', battle_party_layout: 'tall' })
+    expect([p.battleEnemyGridExtent, p.battlePartyLayout]).toEqual(['wide', 'tall'])
+    for (const v of [undefined, null, '']) {
+      const q = proj({ battle_enemy_grid_extent: v, battle_party_layout: v })
+      expect([q.battleEnemyGridExtent, q.battlePartyLayout]).toEqual(['normal', 'default'])
+    }
+    expect(spy).not.toHaveBeenCalled()
+    const r = proj({ battle_enemy_grid_extent: 'huge', battle_party_layout: 'wide' })
+    expect([r.battleEnemyGridExtent, r.battlePartyLayout]).toEqual(['normal', 'default'])
+    expect(spy).toHaveBeenCalledTimes(2)
+    spy.mockRestore()
+  })
+  it('battle_enemy_window_overlap_bottom は 0〜0.5 に丸め、不正・未指定は undefined', () => {
+    expect(proj({ battle_enemy_window_overlap_bottom: '0.3' }).battleEnemyWindowOverlapBottom).toBe(
+      0.3
+    )
+    expect(proj({ battle_enemy_window_overlap_bottom: '2' }).battleEnemyWindowOverlapBottom).toBe(
+      0.5
+    )
+    expect(
+      proj({ battle_enemy_window_overlap_bottom: 'x' }).battleEnemyWindowOverlapBottom
+    ).toBeUndefined()
+    expect(proj({}).battleEnemyWindowOverlapBottom).toBeUndefined()
+  })
+})
+
 describe('rpgProjectFromDoc エンカウント群の検証 (#839 段5)', () => {
   const mon = (id: string, size?: { w: number; h: number }) => ({
     Monster: {

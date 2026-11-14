@@ -1073,6 +1073,28 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle.enemyGridExtent / partyLayout / enemyWindowOverlapBottom を読み、不正値は読み込みエラー（下の重なりは丸める）(#1178)', () => {
+    const c = withGrid('6x2', ['bit'])
+    const b0 = ok(c).battle
+    expect(b0.enemyGridExtent).toBeUndefined()
+    expect(b0.partyLayout).toBeUndefined()
+    expect(b0.enemyWindowOverlapBottom).toBeUndefined()
+    c.battle = {
+      ...(c.battle as object),
+      enemyGridExtent: 'wide',
+      partyLayout: 'tall',
+      enemyWindowOverlapBottom: 9,
+    }
+    const b1 = ok(c).battle
+    expect(b1.enemyGridExtent).toBe('wide')
+    expect(b1.partyLayout).toBe('tall')
+    expect(b1.enemyWindowOverlapBottom).toBe(0.5)
+    c.battle = { ...(c.battle as object), enemyGridExtent: 'huge' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+    c.battle = { ...(c.battle as object), enemyGridExtent: 'wide', partyLayout: 'wide' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
   it('enemyGrid が不正ならエラーにせず無効（検証もしない）', () => {
     for (const bad of ['abc', '0x2', 6, null]) {
       const c = ok(withGrid(bad, ['boss*9']))

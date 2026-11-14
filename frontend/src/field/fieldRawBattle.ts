@@ -70,6 +70,8 @@ export function frontmatterRaw(
   set('atbMode', enumOf(doc, 'battle_atb_mode', ['wait', 'active'], warnings))
   if (typeof doc.battle_enemy_grid === 'string') battle.enemyGrid = doc.battle_enemy_grid
   set('enemyGridAlign', enumOf(doc, 'battle_enemy_grid_align', ['center', 'bottom'], warnings))
+  set('enemyGridExtent', enumOf(doc, 'battle_enemy_grid_extent', ['normal', 'wide'], warnings))
+  set('partyLayout', enumOf(doc, 'battle_party_layout', ['default', 'tall'], warnings))
   if (typeof doc.battle_background === 'string' && doc.battle_background !== '')
     battle.background = doc.battle_background
 
@@ -115,6 +117,15 @@ export function frontmatterRaw(
   if (commandLabels) battle.commandLabels = commandLabels
 
   // 数値で渡す(parseConfig は number だけ受ける)
+  if (typeof doc.battle_enemy_window_overlap_bottom === 'string') {
+    const s = doc.battle_enemy_window_overlap_bottom.trim()
+    const n = Number(s)
+    if (s !== '' && Number.isFinite(n)) battle.enemyWindowOverlapBottom = n
+    else
+      warnings.push(
+        `frontmatter の battle_enemy_window_overlap_bottom は数値にしてください: ${JSON.stringify(doc.battle_enemy_window_overlap_bottom)}（無視します）`
+      )
+  }
   if (typeof doc.battle_enemy_window_overlap === 'string') {
     const s = doc.battle_enemy_window_overlap.trim()
     const n = Number(s)

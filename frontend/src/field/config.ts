@@ -13,6 +13,7 @@ import {
 import {
   normalizeEnemyGrid,
   normalizeEnemyWindowOverlapSetting,
+  normalizeEnemyWindowOverlapBottomSetting,
   type EnemyGridSize,
 } from '../game/enemyGrid'
 import { resolveRpgImagePath } from '../game/novelLayout'
@@ -207,6 +208,12 @@ export interface FieldBattleConfig {
   enemyWindowOverlap?: number
   /** 敵グリッドの縦位置 (#1178)。`battle.enemyGridAlign`: `bottom`（既定）/ `center`。未指定は undefined＝bottom。グリッドがあるときだけ効く */
   enemyGridAlign?: 'center' | 'bottom'
+  /** 敵グリッドの水平の広がり (#1178)。`battle.enemyGridExtent`: `normal`（既定）/ `wide`。未指定は undefined＝normal。グリッドがあるときだけ効く */
+  enemyGridExtent?: 'normal' | 'wide'
+  /** 足元が下のパネルに隠れてよい量 (#1178)。`battle.enemyWindowOverlapBottom`（0〜0.5 に丸める）。未指定は 0 */
+  enemyWindowOverlapBottom?: number
+  /** 味方の斜め一列の並び (#1178)。`battle.partyLayout`: `default`（既定）/ `tall`。未指定は undefined＝default */
+  partyLayout?: 'default' | 'tall'
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
   /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
@@ -923,6 +930,16 @@ export function parseConfig(
     return fail(
       `battle.enemyGridAlign は "center" か "bottom": ${JSON.stringify(b.enemyGridAlign)}`
     )
+  if (
+    b.enemyGridExtent !== undefined &&
+    b.enemyGridExtent !== 'normal' &&
+    b.enemyGridExtent !== 'wide'
+  )
+    return fail(
+      `battle.enemyGridExtent は "normal" か "wide": ${JSON.stringify(b.enemyGridExtent)}`
+    )
+  if (b.partyLayout !== undefined && b.partyLayout !== 'default' && b.partyLayout !== 'tall')
+    return fail(`battle.partyLayout は "default" か "tall": ${JSON.stringify(b.partyLayout)}`)
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
     return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
@@ -1138,6 +1155,10 @@ export function parseConfig(
     typeof b.enemyWindowOverlap === 'number' && Number.isFinite(b.enemyWindowOverlap)
       ? normalizeEnemyWindowOverlapSetting(String(b.enemyWindowOverlap))
       : undefined
+  const enemyWindowOverlapBottom =
+    typeof b.enemyWindowOverlapBottom === 'number' && Number.isFinite(b.enemyWindowOverlapBottom)
+      ? normalizeEnemyWindowOverlapBottomSetting(String(b.enemyWindowOverlapBottom))
+      : undefined
 
   // 収まらない群の検証 (#839 段5)。グリッドが有効なときだけ全シーンの群を検証し、収まらない群を除外する
   let groupErrors: EncounterGroupError[] | undefined
@@ -1230,6 +1251,9 @@ export function parseConfig(
         ...(enemyGrid ? { enemyGrid } : {}),
         ...(enemyWindowOverlap !== undefined ? { enemyWindowOverlap } : {}),
         ...(b.enemyGridAlign ? { enemyGridAlign: b.enemyGridAlign } : {}),
+        ...(b.enemyGridExtent ? { enemyGridExtent: b.enemyGridExtent } : {}),
+        ...(enemyWindowOverlapBottom !== undefined ? { enemyWindowOverlapBottom } : {}),
+        ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),

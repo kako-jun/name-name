@@ -128,6 +128,22 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     )
   })
 
+  it('enemyGridExtent・enemyWindowOverlapBottom・partyLayout はグリッドの有無と無関係に渡り、未指定は渡さない (#1178)', () => {
+    const b = load({
+      layout: 'side',
+      enemyGridExtent: 'wide',
+      enemyWindowOverlapBottom: 0.3,
+      partyLayout: 'tall',
+    }).battle
+    const o = buildBattleScreenOptions(b, {})
+    expect(o.enemyGridExtent).toBe('wide')
+    expect(o.enemyWindowOverlapBottom).toBe(0.3)
+    expect(o.partyLayout).toBe('tall')
+    const none = buildBattleScreenOptions(load({ layout: 'side' }).battle, {})
+    for (const k of ['enemyGridExtent', 'enemyWindowOverlapBottom', 'partyLayout'])
+      expect(k in none).toBe(false)
+  })
+
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
     const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
     expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')

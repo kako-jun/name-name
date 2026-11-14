@@ -513,6 +513,12 @@ export interface BattleScreenOptions {
   enemyWindowOverlap?: number
   /** 敵グリッドの縦位置 (#1178)。frontmatter `battle_enemy_grid_align` 由来。undefined = `bottom`（領域の下端そろえ）。`center` は縦中央。グリッドがあるときだけ効き、他の設定とは独立 */
   enemyGridAlign?: 'center' | 'bottom'
+  /** 敵グリッドの水平の広がり (#1178)。frontmatter `battle_enemy_grid_extent` 由来。undefined = `normal`。`wide` は左端を画面の左端・右端を味方の踏み出しの手前まで。グリッドがあるときだけ効き、他の設定とは独立 */
+  enemyGridExtent?: 'normal' | 'wide'
+  /** 足元が下のパネルに隠れてよい量 (#1178)。frontmatter `battle_enemy_window_overlap_bottom` 由来（0〜0.5）。undefined = 0（従来）。グリッドがあるときだけ効く */
+  enemyWindowOverlapBottom?: number
+  /** 味方の斜め一列の並び (#1178)。frontmatter `battle_party_layout` 由来。undefined = `default`。味方の大きさは変えない */
+  partyLayout?: 'default' | 'tall'
   /**
    * 候補窓に出す呪文・わざ・アイテム (#204 / #873)。`side` のとき（かつ 1 件以上あるとき）だけ有効で（配置は `grid` でも `cross` でもよい。#806）、
    * 「わざ」「じゅもん」「どうぐ」を選ぶと一覧の窓が重なって開く（FF5/6 風の窓の階層。わざは #873）。MP が足りない呪文はグレー。
@@ -1992,6 +1998,11 @@ export class BattleScreen extends Container {
       // 窓との重なり許容量・敵の表示倍率は、グリッドの有無と無関係に効く (#1178。設定同士は直交)
       enemyWindowOverlap: this.opts.enemyWindowOverlap,
       ...(this.opts.enemyGridAlign ? { enemyGridAlign: this.opts.enemyGridAlign } : {}),
+      ...(this.opts.enemyGridExtent ? { enemyGridExtent: this.opts.enemyGridExtent } : {}),
+      ...(this.opts.enemyWindowOverlapBottom !== undefined
+        ? { enemyWindowOverlapBottom: this.opts.enemyWindowOverlapBottom }
+        : {}),
+      ...(this.opts.partyLayout ? { partyLayout: this.opts.partyLayout } : {}),
       enemyScales: s.enemies.map((e) => e.layout?.scale),
       // メッセージ窓の行数は演出方式だけで決まる (#1178): ff は言葉 1 件だけなので 1 行。dq は敵の数で可変（グリッドは無関係）
       ...(this.presentation === 'ff' ? { messageLines: 1 } : {}),

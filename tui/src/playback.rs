@@ -2377,6 +2377,9 @@ mod tests {
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
             battle_enemy_grid_align: None,
+            battle_enemy_grid_extent: None,
+            battle_enemy_window_overlap_bottom: None,
+            battle_party_layout: None,
             chapters,
         }
     }

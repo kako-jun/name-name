@@ -2669,6 +2669,18 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側（`normalizeEnemyGridAlign`）で不正値を警告して bottom にする。GUI 専用。frontmatter `battle_enemy_grid_align:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_enemy_grid_align: Option<String>,
+    /// 敵グリッドの水平の広がり (#1178)。`normal`（既定）/ `wide`。値は生文字列で透過し、runtime 側（`normalizeEnemyGridExtent`）で不正値を警告して normal にする。GUI 専用。
+    /// frontmatter `battle_enemy_grid_extent:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_enemy_grid_extent: Option<String>,
+    /// 足元が下のパネルに隠れてよい量 (#1178)。0〜0.5 の数値（各敵の枠の高さに対する比）。値は生文字列で透過し、runtime 側で丸める（不正は 0＝従来）。GUI 専用。
+    /// frontmatter `battle_enemy_window_overlap_bottom:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_enemy_window_overlap_bottom: Option<String>,
+    /// 味方の斜め一列の並び (#1178)。`default`（既定）/ `tall`。値は生文字列で透過し、runtime 側（`normalizePartyLayout`）で不正値を警告して default にする。GUI 専用。
+    /// frontmatter `battle_party_layout:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battle_party_layout: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 

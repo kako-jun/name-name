@@ -24,7 +24,7 @@ import type {
   UiRpgTrigger,
 } from '../types/rpg'
 import { safeAssign, safeAssignAll } from './ownProperty'
-import { normalizeBattleDepth, normalizeBattleLayout } from './battleLayout'
+import { normalizeBattleDepth, normalizeBattleLayout, normalizePartyLayout } from './battleLayout'
 import { normalizeSpriteStyle } from './spriteStyle'
 import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
@@ -37,6 +37,8 @@ import { normalizeBattleAtb } from './battleAtb'
 import {
   normalizeEnemyGrid,
   normalizeEnemyGridAlign,
+  normalizeEnemyGridExtent,
+  normalizeEnemyWindowOverlapBottomSetting,
   normalizeEnemyWindowOverlapSetting,
 } from './enemyGrid'
 import {
@@ -428,6 +430,11 @@ export function rpgProjectFromDoc(
     battleEnemyGrid,
     battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
     battleEnemyGridAlign: normalizeEnemyGridAlign(doc.battle_enemy_grid_align),
+    battleEnemyGridExtent: normalizeEnemyGridExtent(doc.battle_enemy_grid_extent),
+    battleEnemyWindowOverlapBottom: normalizeEnemyWindowOverlapBottomSetting(
+      doc.battle_enemy_window_overlap_bottom
+    ),
+    battlePartyLayout: normalizePartyLayout(doc.battle_party_layout),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),
