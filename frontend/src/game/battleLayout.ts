@@ -911,6 +911,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     input.messageLines !== undefined && Number.isFinite(input.messageLines)
       ? Math.min(SIDE_LOG_MAX_LINES, Math.max(1, Math.floor(input.messageLines)))
       : null
+  // 窓の行数の下限（ステージが潰れるときに減らす先）。cross の 1 段の縮み量には使わない（味方の大きさを窓の行数と独立に保つため。下記）
   const minLogLines = fixedLogLines ?? SIDE_LOG_MIN_LINES
 
   // 下: コマンド（左）+ status（右）
@@ -924,7 +925,7 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       H -
       SIDE_PADDING * 2 -
       SIDE_GAP * 2 -
-      computeSideLogHeight(minLogLines) -
+      computeSideLogHeight(SIDE_LOG_MIN_LINES) -
       SIDE_MIN_STAGE_HEIGHT
     commandCellH = Math.min(
       SIDE_COMMAND_CELL_HEIGHT,
@@ -1003,19 +1004,16 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     w: innerW,
     h: Math.max(0, stageBottom - stageY),
   }
-  // 味方の大きさ (#1178): メッセージ窓の行数を固定するとき（ff）は、窓の高さと独立に決める。窓を 1 行にして舞台が高くなっても
-  // 味方は大きくならない（窓が最大行数のときの舞台の高さ＝従来の見た目で求め、下端は舞台の下端にそろえる）。
-  // 固定しないとき（dq）は従来どおり実際の舞台で求める（窓が敵の数で可変＝味方もその分だけ変わる従来の挙動）
-  let partyRefLines = logLines
-  if (fixedLogLines !== null) {
-    partyRefLines = SIDE_LOG_MAX_LINES
-    while (
-      partyRefLines > SIDE_LOG_MIN_LINES &&
-      stageBottom - (SIDE_PADDING + computeSideLogHeight(partyRefLines) + SIDE_GAP) <
-        SIDE_MIN_STAGE_HEIGHT
-    ) {
-      partyRefLines--
-    }
+  // 味方の大きさ (#1178): メッセージ窓の行数（ff の固定 1 行・dq の敵の数による可変）と完全に独立に決める。
+  // 窓が最大行数のときの舞台の高さで求め（足りない画面だけ最小行数まで減らす）、下端は実際の舞台の下端にそろえる。
+  // cross の 1 段の縮み量も窓の行数に依らない（上の commandCellH は常にログ最小 2 行で計算）ので、下パネルの高さ＝舞台の下端が同じになる
+  let partyRefLines = SIDE_LOG_MAX_LINES
+  while (
+    partyRefLines > SIDE_LOG_MIN_LINES &&
+    stageBottom - (SIDE_PADDING + computeSideLogHeight(partyRefLines) + SIDE_GAP) <
+      SIDE_MIN_STAGE_HEIGHT
+  ) {
+    partyRefLines--
   }
   const partyStageH = Math.min(
     stage.h,
