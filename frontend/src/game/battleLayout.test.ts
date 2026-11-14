@@ -55,6 +55,8 @@ import {
   SELECT_MARK_MIN_GAP,
   SIDE_STATUS_MARKER_FONT_SIZE,
   desiredSideLogLines,
+  SIDE_ENEMY_PARTY_MIN_GAP,
+  partyDrawOverhang,
   effectiveCommandLayout,
   fitCommandFontSize,
   fitHpLabel,
@@ -2838,5 +2840,100 @@ describe('enemyList: status の compact 境界 (#954)', () => {
     const off = computeSideBattleLayout(size)
     expect(off.statusCompact).toBe(true)
     expect(computeSideBattleLayout({ ...size, enemyList: true }).enemyList).toBeNull()
+  })
+})
+
+describe('computeSideBattleLayout: 敵名窓のとき敵グリッドは足元ラベル帯を取らない (#1176)', () => {
+  const grid = { cols: 6, rows: 2 }
+  const base = (w: number, h: number, n: number, back: boolean, list: boolean, acrylic = true) =>
+    computeSideBattleLayout({
+      width: w,
+      height: h,
+      partyCount: n,
+      enemyCount: 2,
+      commandCount: 8,
+      partyRows: Array.from({ length: n }, (_, i) => (back && i % 2 === 1 ? 'back' : 'front')),
+      enemyGrid: grid,
+      enemyFootprints: [
+        { col: 2, row: 0, w: 2, h: 2 },
+        { col: 5, row: 1, w: 1, h: 1 },
+      ],
+      enemyWindowOverlap: 0.5,
+      enemyList: list,
+      partyAcrylic: acrylic ? DEFAULT_ACRYLIC_PARAMS : null,
+    })
+  const cellOf = (L: SideBattleLayout) => L.enemies[0].width / 2
+
+  it('敵名窓が置けるとき、置かないときよりセルが大きく、足元ラベルは返らない', () => {
+    for (const [w, h] of [
+      [800, 450],
+      [1280, 720],
+    ]) {
+      const off = base(w, h, 4, false, false)
+      const on = base(w, h, 4, false, true)
+      expect(on.enemyList).not.toBeNull()
+      // 高さで決まる画面（800x450）では大きくなる。幅で決まる画面では、隙間と味方の台座のはみ出しぶん（列数で割った量）を除いて縮まない
+      if (w === 800) expect(cellOf(on)).toBeGreaterThan(cellOf(off))
+      expect(cellOf(on)).toBeGreaterThanOrEqual(
+        cellOf(off) -
+          (SIDE_ENEMY_PARTY_MIN_GAP + partyDrawOverhang(on.party, DEFAULT_ACRYLIC_PARAMS)) /
+            grid.cols -
+          EPS
+      )
+      for (const s of on.enemies) expect((s as { label?: Rect }).label).toBeUndefined()
+      expect((off.enemies[0] as { label?: Rect }).label).toBeDefined()
+    }
+  })
+
+  it('敵名窓を指定しても置けない狭い画面は、従来どおりラベル帯を予約する（指定なしと同じ）', () => {
+    const on = base(200, 120, 4, false, true)
+    expect(on.enemyList).toBeNull()
+    expect(on.enemies).toEqual(base(200, 120, 4, false, false).enemies)
+  })
+
+  it('グリッドの右端は味方の枠の左端を超えない（全員前衛・後衛あり・3/4 人・複数の画面）', () => {
+    for (const [w, h] of [
+      [800, 450],
+      [1280, 720],
+      [640, 360],
+    ])
+      for (const n of [3, 4])
+        for (const back of [false, true]) {
+          const L = base(w, h, n, back, true)
+          const right = Math.max(...L.enemies.map((s) => s.x + s.width))
+          const rightCol = L.enemies[1].x + L.enemies[1].width
+          const partyLeft = Math.min(...L.party.map((p) => p.x))
+          const ctx = `${w}x${h} n${n} back${back}`
+          expect(right, ctx).toBeLessThan(partyLeft)
+          expect(partyLeft - rightCol, ctx).toBeGreaterThanOrEqual(SIDE_ENEMY_PARTY_MIN_GAP - EPS)
+        }
+  })
+
+  it('味方の描画範囲(台座・影)の左端までも隙間が空く。味方の描画範囲を渡さないと枠基準で、台座に 0 を割る', () => {
+    const pedestalLeft = (L: SideBattleLayout) =>
+      Math.min(
+        ...L.party.map((p) => {
+          const g = computeAcrylicGeometry(1, 1, Math.max(p.size, p.width), DEFAULT_ACRYLIC_PARAMS)
+          return p.x + p.width / 2 - (g.shadow as { rx: number }).rx
+        })
+      )
+    for (const [w, h] of [
+      [800, 450],
+      [1280, 720],
+      [640, 360],
+    ])
+      for (const n of [3, 4])
+        for (const back of [false, true]) {
+          const ctx = `${w}x${h} n${n} back${back}`
+          const L = base(w, h, n, back, true)
+          const right = L.enemies[1].x + L.enemies[1].width
+          expect(pedestalLeft(L) - right, ctx).toBeGreaterThanOrEqual(
+            SIDE_ENEMY_PARTY_MIN_GAP - EPS
+          )
+        }
+    // 再現: 描画範囲を渡さない(枠基準)と、800x450・4 人では台座が枠より左へ出ている分だけ食い込む
+    const frameOnly = base(800, 450, 4, false, true, false)
+    const rightFrame = frameOnly.enemies[1].x + frameOnly.enemies[1].width
+    expect(pedestalLeft(frameOnly) - rightFrame).toBeLessThan(0)
   })
 })

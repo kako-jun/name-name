@@ -1982,6 +1982,7 @@ export class BattleScreen extends Container {
       enemyList: this.enemyListEnabled,
       // アクスタの板（枠の外へ広がる）を含めて、隣の板と重ならない列ピッチ・窓との重なりが許容量以内になるよう配置する (#838)
       enemyAcrylic: this.acrylicParams,
+      partyAcrylic: this.acrylicParams,
       // 敵グリッド (#839 段4): 有効なときだけグリッド配置（enemyAspects / enemyAcrylic の窓フィットは使われない）
       ...(this.opts.enemyGrid && this.enemyFootprints
         ? {

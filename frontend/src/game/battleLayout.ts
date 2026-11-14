@@ -107,6 +107,11 @@ export interface SideBattleLayoutInput {
    */
   enemyFootprints?: readonly (EnemyFootprint | null | undefined)[]
   /**
+   * 味方がアクスタ (#737) で描かれるときのパラメータ (#1176)。渡すと、敵名窓でラベル帯を取らない敵グリッド(幅で決まる)の右端と、
+   * 味方の**描画範囲**(枠でなく、枠より左へ広がる台座・影)の左端のあいだに隙間を空ける。未指定・null は味方の描画が枠の内側(従来)
+   */
+  partyAcrylic?: AcrylicParams | null
+  /**
    * 敵名ウィンドウ (#954)。true なら下段を command | 敵名窓 | status の 3 枚に分ける。
    * 画面が狭く command / status の最小幅を保てないときは窓を置かず `enemyList: null`（従来の 2 枚構成）。未指定・false は従来どおり
    */
@@ -142,6 +147,8 @@ export interface SideBattleLayout {
 
 export const SIDE_PADDING = 16
 export const SIDE_GAP = 6
+/** 敵名窓でラベル帯を取らないとき (#1176)、敵グリッドの右端と味方領域の左端のあいだに必ず空ける隙間（設計座標） */
+export const SIDE_ENEMY_PARTY_MIN_GAP = 1
 /** ログ帯の行数の下限・上限 */
 export const SIDE_LOG_MIN_LINES = 2
 export const SIDE_LOG_MAX_LINES = 4
@@ -835,6 +842,28 @@ export function computeCommandCells(
 }
 
 /**
+ * 味方の実際の描画が、枠(`slot.x`)より左へ広がる量の最大 (#1176)。アクスタの台座・影は枠の中央を中心に、
+ * 正方形の箱(一辺 `max(size, width)`)の中で広がるので、その半幅が枠の半幅を超えたぶんが左へはみ出す。
+ * 箱は絵の縦横比で縮みうるが、縮むと台座・影も同じ比率で縮むので、`max(size, width)` で見積もれば安全側。
+ * アクスタでない(`params` なし)ときは絵が枠の内側に収まるので 0。
+ */
+export function partyDrawOverhang(
+  party: readonly Pick<SpriteSlot, 'size' | 'width'>[],
+  params: AcrylicParams | null | undefined
+): number {
+  if (!params) return 0
+  let max = 0
+  for (const sl of party) {
+    if (!(sl.size > 0) || !(sl.width > 0)) continue
+    const box = Math.max(sl.size, sl.width)
+    const g = computeAcrylicGeometry(1, 1, box, params)
+    const half = Math.max(g.shadow?.rx ?? 0, g.base?.rx ?? 0)
+    max = Math.max(max, half - sl.width / 2)
+  }
+  return max
+}
+
+/**
  * サイドビュー戦闘画面の全座標を算出する。
  *
  * 下パネルの高さは「コマンド 2x2 の高さ」と「status 行（最低 4 行ぶん）」の大きい方。
@@ -975,6 +1004,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     enemyRegion.h = Math.max(0, bottom - top)
   }
   const partyHeight = halfSlots[0]?.size ?? 0
+  // 大きさは右半分で決めたもの（halfSlots[0].size）に固定する。狭めた領域で計算し直すと幅の制約で縮むため
+  // （敵名窓のグリッドが味方の描画範囲を知る必要があるので、敵より先に求める。入力は敵に依らない）
+  let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
+    height: partyHeight,
+  })
 
   const enemyPlate = input.enemyAcrylic ?? null
   // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
@@ -989,10 +1023,21 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   let enemies: SpriteSlot[]
   if (input.enemyGrid) {
     // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
+    // 足元ラベル帯は、敵名窓 (#954) が置けて足元ラベルを出さないとき（enemyList あり）だけ予約しない (#1176)
+    const gridLabel = enemyList === null
+    // 帯を取らない分セルが幅で決まり、グリッドの右端が味方領域の左端に接する。そのとき味方の枠に触れないよう最小の隙間を空ける
+    // 味方の描画は枠より左へ広がる(台座・影)ので、隙間は枠でなく描画範囲の左端から取る
+    const partyOverhang = partyDrawOverhang(party, input.partyAcrylic)
+    const gridRegion: Rect = gridLabel
+      ? enemyRegion
+      : {
+          ...enemyRegion,
+          w: Math.max(0, enemyRegion.w - SIDE_ENEMY_PARTY_MIN_GAP - partyOverhang),
+        }
     const overlap = clampEnemyWindowOverlap(
-      enemyRegion,
+      gridRegion,
       input.enemyGrid,
-      true,
+      gridLabel,
       input.enemyWindowOverlap,
       log.h
     )
@@ -1006,11 +1051,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
         footprints.push(fp)
       }
     }
-    const gl = computeEnemyGridLayout(enemyRegion, input.enemyGrid, footprints, {
-      withLabel: true,
+    const gl = computeEnemyGridLayout(gridRegion, input.enemyGrid, footprints, {
+      withLabel: gridLabel,
       windowOverlap: overlap,
     })
-    const band = gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+    const band = gridLabel && gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
     gridFrontFloor = gl.grid.y + gl.grid.h - band
     const slots: EnemyGridSlot[] = Array.from({ length: enemyCount }, () =>
       emptyEnemyGridSlot(gl.grid.x, gridFrontFloor as number)
@@ -1046,10 +1091,6 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       enemyRegion.h -= hi
     }
   }
-  // 大きさは右半分で決めたもの（halfSlots[0].size）に固定する。狭めた領域で計算し直すと幅の制約で縮むため
-  let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
-    height: partyHeight,
-  })
   if (depth) {
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
     // 空き枠も最前列の基準に含める（人数で縮尺が変わらないように）
