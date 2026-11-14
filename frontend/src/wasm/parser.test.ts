@@ -2643,6 +2643,26 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(empty.battle_enemy_window_overlap).toBeNull()
   })
 
+  it('battle_enemy_grid_extent / battle_enemy_window_overlap_bottom / battle_party_layout が doc に残り、省略・空値は null (#1178)', async () => {
+    const doc = await parseMarkdown(
+      docWith([
+        'battle_enemy_window_overlap: 0.5',
+        'battle_enemy_window_overlap_bottom: 0.4',
+        'battle_enemy_grid_extent: wide',
+        'battle_party_layout: tall',
+      ])
+    )
+    expect(doc.battle_enemy_window_overlap).toBe('0.5')
+    expect(doc.battle_enemy_window_overlap_bottom).toBe('0.4')
+    expect(doc.battle_enemy_grid_extent).toBe('wide')
+    expect(doc.battle_party_layout).toBe('tall')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.battle_enemy_grid_extent).toBeNull()
+    expect(none.battle_enemy_window_overlap_bottom).toBeNull()
+    expect(none.battle_party_layout).toBeNull()
+    expect((await parseMarkdown(docWith(['battle_party_layout:']))).battle_party_layout).toBeNull()
+  })
+
   it('battle_enemy_grid_align が doc に残り（grid と取り違えない）、省略・空値は null (#1178)', async () => {
     const doc = await parseMarkdown(
       docWith(['battle_enemy_grid: 6x2', 'battle_enemy_grid_align: center'])

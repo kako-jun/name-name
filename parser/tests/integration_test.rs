@@ -5350,6 +5350,9 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         battle_enemy_grid_align: None,
+        battle_enemy_grid_extent: None,
+        battle_enemy_window_overlap_bottom: None,
+        battle_party_layout: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10544,6 +10547,9 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         battle_enemy_grid_align: None,
+        battle_enemy_grid_extent: None,
+        battle_enemy_window_overlap_bottom: None,
+        battle_party_layout: None,
         chapters: vec![],
     }
 }
@@ -12781,5 +12787,43 @@ fn test_skill_learns_parse_and_roundtrip() {
     assert_eq!(
         parser::parse(&out).chapters[0].scenes[0].events,
         doc.chapters[0].scenes[0].events
+    );
+}
+
+#[test]
+fn test_battle_party_layout_and_grid_extent_and_overlap_bottom_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_enemy_grid: 6x2\nbattle_enemy_grid_extent: wide\nbattle_enemy_window_overlap: 0.5\nbattle_enemy_window_overlap_bottom: 0.4\nbattle_party_layout: tall\n",
+    ));
+    // 前方一致で取り違えない（`battle_enemy_window_overlap:` と `_bottom:` は別キー）
+    assert_eq!(doc.battle_enemy_grid_extent.as_deref(), Some("wide"));
+    assert_eq!(doc.battle_enemy_window_overlap.as_deref(), Some("0.5"));
+    assert_eq!(
+        doc.battle_enemy_window_overlap_bottom.as_deref(),
+        Some("0.4")
+    );
+    assert_eq!(doc.battle_party_layout.as_deref(), Some("tall"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_enemy_grid_extent, None);
+    assert_eq!(none.battle_enemy_window_overlap_bottom, None);
+    assert_eq!(none.battle_party_layout, None);
+    let empty = parser::parse(&battle_doc("battle_party_layout:\n"));
+    assert_eq!(empty.battle_party_layout, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_party_layout: \"tall\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("battle_enemy_window_overlap_bottom: \"0.4\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_enemy_grid_extent, doc.battle_enemy_grid_extent);
+    assert_eq!(re.battle_party_layout, doc.battle_party_layout);
+    assert_eq!(
+        re.battle_enemy_window_overlap_bottom,
+        doc.battle_enemy_window_overlap_bottom
     );
 }
