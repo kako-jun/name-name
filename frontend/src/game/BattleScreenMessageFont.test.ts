@@ -177,13 +177,15 @@ describe('メッセージ窓の高さと配線 (#1178)', () => {
       expect(rectH(build({ presentation: 'ff' }, enemyCount))).toBe(h1)
       expect(
         rectH(
-          build({ presentation: 'ff', enemyGrid: grid }, enemyCount, { layout: { w: 1, h: 1 } })
+          build({ presentation: 'ff', enemyGrid: grid }, enemyCount, {
+            layout: { w: 1, h: 1, scale: 1 },
+          })
         )
       ).toBe(h1)
       expect(
         rectH(
           build({ presentation: 'ff', enemyGrid: { cols: 12, rows: 4 } }, enemyCount, {
-            layout: { w: 1, h: 1 },
+            layout: { w: 1, h: 1, scale: 1 },
           })
         )
       ).toBe(h1)
@@ -195,7 +197,7 @@ describe('メッセージ窓の高さと配線 (#1178)', () => {
     expect(noGrid[0]).toBe(computeSideLogHeight(2))
     expect(noGrid[1]).toBe(computeSideLogHeight(4))
     const withGrid = [1, 3].map((n) =>
-      rectH(build({ presentation: 'dq', enemyGrid: grid }, n, { layout: { w: 1, h: 1 } }))
+      rectH(build({ presentation: 'dq', enemyGrid: grid }, n, { layout: { w: 1, h: 1, scale: 1 } }))
     )
     expect(withGrid).toEqual(noGrid)
   })
@@ -216,7 +218,7 @@ describe('メッセージ窓の高さと配線 (#1178)', () => {
     expect(lastInput().enemyWindowOverlap).toBe(0.3)
     expect(lastInput().enemyScales).toEqual([0.5])
     expect(lastInput().messageLines).toBe(1)
-    build({ presentation: 'dq', enemyGrid: grid }, 1, { layout: { w: 1, h: 1 } })
+    build({ presentation: 'dq', enemyGrid: grid }, 1, { layout: { w: 1, h: 1, scale: 1 } })
     expect(lastInput().enemyGrid).toEqual(grid)
     expect(lastInput().messageLines).toBeUndefined()
   })
