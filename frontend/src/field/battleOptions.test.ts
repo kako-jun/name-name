@@ -113,6 +113,12 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect('commandLabels' in buildBattleScreenOptions(load(none.battle).battle, {})).toBe(false)
   })
 
+  it('enemyWindowOverlap はグリッドの有無と無関係に渡る (#1178)', () => {
+    const b = load({ layout: 'side', enemyWindowOverlap: 0.3 }).battle
+    expect(b.enemyGrid).toBeUndefined()
+    expect(buildBattleScreenOptions(b, {}).enemyWindowOverlap).toBe(0.3)
+  })
+
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
     const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
     expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')

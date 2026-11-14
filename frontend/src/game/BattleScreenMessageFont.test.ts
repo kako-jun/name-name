@@ -2,16 +2,24 @@
  * FF 式メッセージ窓の文字サイズ (#1148)。窓の言葉だけ大きくし（1 行のまま）、dq のログ行は変えない。
  * 観点: 定数関係 / 最小の窓に収まる / ff の style / dq のログ行 / fitLabel の幅と「…」 / 勝利列・台詞（notice）でも同じ
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as layoutModule from './battleLayout'
 import type { Text } from 'pixi.js'
 import { BattleScreen, MESSAGE_WINDOW_FONT_SIZE, type BattleScreenOptions } from './BattleScreen'
 import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
-import { SIDE_LOG_MIN_LINES, computeSideLogHeight, estimateTextWidth } from './battleLayout'
+import { computeSideLogHeight, estimateTextWidth } from './battleLayout'
 
 /** BattleScreen の LOG_FONT_SIZE は非公開なので、dq のログ行の実 style で確かめる前提値（変えたらここも直す） */
 const LOG_FONT_SIZE_EXPECTED = 16
+
+// 配線の確認用に computeSideBattleLayout の入力を記録する（中身は本物のまま）
+vi.mock('./battleLayout', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./battleLayout')>()
+  return { ...orig, computeSideBattleLayout: vi.fn(orig.computeSideBattleLayout) }
+})
+const layoutSpy = vi.mocked(layoutModule.computeSideBattleLayout)
 
 function entity(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
   return {
@@ -66,10 +74,8 @@ describe('メッセージ窓の文字サイズ (#1148)', () => {
     expect(MESSAGE_WINDOW_FONT_SIZE).toBeGreaterThan(LOG_FONT_SIZE_EXPECTED)
   })
 
-  it('最小の窓（SIDE_LOG_MIN_LINES 行分）に、行ボックスの目安（×1.5）が収まる', () => {
-    expect(MESSAGE_WINDOW_FONT_SIZE * 1.5).toBeLessThanOrEqual(
-      computeSideLogHeight(SIDE_LOG_MIN_LINES)
-    )
+  it('ff の窓（1 行 = 36px）に、行ボックスの目安（×1.5）が収まる (#1178)', () => {
+    expect(MESSAGE_WINDOW_FONT_SIZE * 1.5).toBeLessThanOrEqual(computeSideLogHeight(1))
   })
 
   it('ff: messageText の style が MESSAGE_WINDOW_FONT_SIZE', () => {
@@ -137,5 +143,83 @@ describe('メッセージ窓の文字サイズ (#1148)', () => {
     expect(I(s).messageText!.text).toBe('ボス「かかってこい」')
     expect(I(s).messageText!.visible).toBe(true)
     expect(style(I(s).messageText!)).toBe(MESSAGE_WINDOW_FONT_SIZE)
+  })
+})
+
+describe('メッセージ窓の高さと配線 (#1178)', () => {
+  function build(
+    opts: BattleScreenOptions,
+    enemyCount = 1,
+    enemy: Partial<BattleEntity> = {},
+    w = 1280,
+    h = 720
+  ) {
+    const engine = new BattleEngine(
+      [entity('hero')],
+      Array.from({ length: enemyCount }, (_, i) =>
+        entity(`slime${i}`, { hp: 30, maxHp: 30, atk: 1, ...enemy })
+      ),
+      { rng: () => 0.5 }
+    )
+    const s = skipEntrance(new BattleScreen(engine, w, h, { layout: 'side', ...opts }))
+    created.push(s)
+    return s
+  }
+  const grid = { cols: 6, rows: 2 }
+  const rectH = (s: BattleScreen) => I(s).messageRect.h
+  const slotOf = (s: BattleScreen) =>
+    (s as unknown as { enemyViews: { slotRef: { y: number; size: number; width: number } }[] })
+      .enemyViews[0].slotRef
+
+  it('ff: 窓は 1 行ぶんの高さ。敵の数・グリッドの有無・列数・行数で変わらない', () => {
+    const h1 = computeSideLogHeight(1)
+    for (const enemyCount of [1, 3, 6]) {
+      expect(rectH(build({ presentation: 'ff' }, enemyCount))).toBe(h1)
+      expect(
+        rectH(
+          build({ presentation: 'ff', enemyGrid: grid }, enemyCount, {
+            layout: { w: 1, h: 1, scale: 1 },
+          })
+        )
+      ).toBe(h1)
+      expect(
+        rectH(
+          build({ presentation: 'ff', enemyGrid: { cols: 12, rows: 4 } }, enemyCount, {
+            layout: { w: 1, h: 1, scale: 1 },
+          })
+        )
+      ).toBe(h1)
+    }
+  })
+
+  it('dq: 窓は敵の数で可変（従来どおり）で、グリッドの有無で変わらない', () => {
+    const noGrid = [1, 3].map((n) => rectH(build({ presentation: 'dq' }, n)))
+    expect(noGrid[0]).toBe(computeSideLogHeight(2))
+    expect(noGrid[1]).toBe(computeSideLogHeight(4))
+    const withGrid = [1, 3].map((n) =>
+      rectH(build({ presentation: 'dq', enemyGrid: grid }, n, { layout: { w: 1, h: 1, scale: 1 } }))
+    )
+    expect(withGrid).toEqual(noGrid)
+  })
+
+  it('グリッドなしでも、敵の表示倍率が配置に届く', () => {
+    const full = slotOf(build({ presentation: 'ff' }))
+    const half = slotOf(build({ presentation: 'ff' }, 1, { layout: { w: 1, h: 1, scale: 0.5 } }))
+    expect(half.size).toBeCloseTo(full.size * 0.5)
+    expect(half.width).toBeCloseTo(full.width * 0.5)
+  })
+
+  it('グリッドなしでも、battle_enemy_window_overlap と倍率が computeSideBattleLayout の入力に届く。messageLines は ff だけ', () => {
+    const lastInput = () => layoutSpy.mock.calls[layoutSpy.mock.calls.length - 1][0]
+    build({ presentation: 'ff', enemyWindowOverlap: 0.3 }, 1, {
+      layout: { w: 1, h: 1, scale: 0.5 },
+    })
+    expect(lastInput().enemyGrid).toBeUndefined()
+    expect(lastInput().enemyWindowOverlap).toBe(0.3)
+    expect(lastInput().enemyScales).toEqual([0.5])
+    expect(lastInput().messageLines).toBe(1)
+    build({ presentation: 'dq', enemyGrid: grid }, 1, { layout: { w: 1, h: 1, scale: 1 } })
+    expect(lastInput().enemyGrid).toEqual(grid)
+    expect(lastInput().messageLines).toBeUndefined()
   })
 })
