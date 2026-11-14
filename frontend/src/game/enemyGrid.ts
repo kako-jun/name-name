@@ -367,10 +367,12 @@ export function computeEnemyGridLayout(
   const bottomY = region.y + region.h - gridH
   // 領域より高いぶん（窓・パネルへの延長）は、許容量の比で上と下へ振り分ける（下の許容量 0 なら全部上＝従来の下端そろえ）
   const ext = Math.max(0, gridH - region.h)
+  // 下の許容量が 0（既定）のときは従来どおり（0/0 の NaN を避けるため、振り分けは下の許容量があるときだけ）
+  const centered = options.align === 'center' && gridH <= region.h
   const gridY =
-    ext > 0
+    overlapBottom > 0 && ext > 0
       ? region.y - (ext * overlap) / (overlap + overlapBottom)
-      : options.align === 'center'
+      : centered
         ? region.y + (region.h - gridH) / 2
         : bottomY
   const gridRect: Rect = {

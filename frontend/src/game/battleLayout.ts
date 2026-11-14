@@ -1161,36 +1161,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     // 帯を取らない分セルが幅で決まり、グリッドの右端が味方領域の左端に接する。そのとき味方の枠に触れないよう最小の隙間を空ける
     // 味方の描画は枠より左へ広がる(台座・影)ので、隙間は枠でなく描画範囲の左端から取る
     let gridRegion: Rect = gridLabel ? enemyRegion : narrowForParty(enemyRegion)
-    if (input.enemyGridExtent === 'wide') {
-      // 広がり (#1178): 左端は画面の左端（x=0）。右端は、味方の描画範囲（枠より左へ広がる台座・影）の左端から、攻撃で一歩踏み出す最大量
-      // （モーション preset の最大 × 味方の高さ。踏み出しは味方全員が起こりうるので全枠の左端の最小で見積もる）と最小の隙間を引いた所
-      const partyLeft =
-        Math.min(...party.map((sl) => sl.x)) - partyDrawOverhang(party, input.partyAcrylic)
-      const right = partyLeft - SIDE_PARTY_STEP_MAX_RATIO * partyHeight - SIDE_WIDE_GRID_PARTY_GAP
-      gridRegion = { ...enemyRegion, x: 0, w: Math.max(0, right) }
-    }
-    // 下のパネルへ隠れてよい量 (#1178): 足元から画面の下端（ラベルを出すときはその帯の分を除く）までを超えない範囲に絞る
-    const bottomRoom =
-      H - (gridRegion.y + gridRegion.h) - (gridLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0)
-    const overlap = clampEnemyWindowOverlap(
-      gridRegion,
-      input.enemyGrid,
-      gridLabel,
-      input.enemyWindowOverlap,
-      log.h,
-      input.enemyWindowOverlapBottom
-    )
-    const overlapBottom = clampEnemyWindowOverlapBottom(
-      gridRegion,
-      input.enemyGrid,
-      gridLabel,
-      overlap,
-      input.enemyWindowOverlapBottom,
-      bottomRoom
-    )
-    gridOverlap = overlap
     const placedIdx: number[] = []
-    const footprints: EnemyFootprint[] = []
+    let footprints: EnemyFootprint[] = []
     for (let i = 0; i < enemyCount; i++) {
       const fp = input.enemyFootprints?.[i]
       if (fp) {
@@ -1198,7 +1170,44 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
         footprints.push(fp)
       }
     }
-    const gl = computeEnemyGridLayout(gridRegion, input.enemyGrid, footprints, {
+    let gridDef = input.enemyGrid
+    if (input.enemyGridExtent === 'wide' && footprints.length > 0) {
+      // 広がり (#1178): 『実際に敵が占めるセルの外接範囲』（最左の占有セルの左端〜最右の占有セルの右端。空の列は数えない）を、
+      // 画面の左端（x=0）〜味方の踏み出しの手前に置く。セルの大きさ = min(その幅 ÷ 占有列数, 高さ側の上限)。
+      // 外接範囲の左の空の列は画面の外・右の空の列は味方の裏にあってよい（描かない）ので、占有列だけの小さなグリッドに詰めて解く
+      // （@C1 などの座標の意味は変えない。置く場所とセルの大きさだけが変わる＝敵の数・配置で戦闘ごとにセルの大きさが変わる）。
+      // 右端は、味方の描画範囲（枠より左へ広がる台座・影）の左端から、攻撃で一歩踏み出す最大量（モーション preset の最大 × 味方の高さ。
+      // 踏み出しは味方全員が起こりうるので全枠の左端の最小で見積もる）と最小の隙間を引いた所
+      const minCol = Math.min(...footprints.map((f) => f.col))
+      const maxCol = Math.max(...footprints.map((f) => f.col + f.w - 1))
+      gridDef = { cols: maxCol - minCol + 1, rows: input.enemyGrid.rows }
+      footprints = footprints.map((f) => ({ ...f, col: f.col - minCol }))
+      const partyLeft =
+        Math.min(...party.map((sl) => sl.x)) - partyDrawOverhang(party, input.partyAcrylic)
+      const right = partyLeft - SIDE_PARTY_STEP_MAX_RATIO * partyHeight - SIDE_WIDE_GRID_PARTY_GAP
+      gridRegion = { ...enemyRegion, x: 0, w: Math.max(0, right) }
+    }
+    // 下のパネルへ隠れてよい量 (#1178): 足元から画面の下端までを超えない範囲に絞る。足元ラベルを出すとき（敵名窓なし）は、
+    // ラベルの帯（領域の下端〜パネルの上端の隙間に収まる）がパネルの裏に入らないよう 0（ラベルが隠れない）
+    const bottomRoom = gridLabel ? 0 : H - (gridRegion.y + gridRegion.h)
+    const overlap = clampEnemyWindowOverlap(
+      gridRegion,
+      gridDef,
+      gridLabel,
+      input.enemyWindowOverlap,
+      log.h,
+      input.enemyWindowOverlapBottom
+    )
+    const overlapBottom = clampEnemyWindowOverlapBottom(
+      gridRegion,
+      gridDef,
+      gridLabel,
+      overlap,
+      input.enemyWindowOverlapBottom,
+      bottomRoom
+    )
+    gridOverlap = overlap
+    const gl = computeEnemyGridLayout(gridRegion, gridDef, footprints, {
       withLabel: gridLabel,
       windowOverlap: overlap,
       windowOverlapBottom: overlapBottom,
