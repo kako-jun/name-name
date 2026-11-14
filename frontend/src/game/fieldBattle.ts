@@ -96,6 +96,8 @@ export interface FieldBattleSettings {
   enemyGrid: EnemyGridSize | undefined
   /** `battle_enemy_window_overlap` (#839)。undefined = 既定（0.25） */
   enemyWindowOverlap: number | undefined
+  /** `battle_enemy_grid_align` (#1178)。`bottom`（既定）/ `center`。グリッドがあるときだけ効く */
+  enemyGridAlign: 'center' | 'bottom'
   /** `battle_command_layout` (#204) */
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
@@ -124,6 +126,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   atb: undefined,
   enemyGrid: undefined,
   enemyWindowOverlap: undefined,
+  enemyGridAlign: 'bottom',
   commandLayout: 'grid',
   commandLabels: undefined,
   commands: undefined,
@@ -150,6 +153,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     atb: gameData.battleAtb,
     enemyGrid: gameData.battleEnemyGrid,
     enemyWindowOverlap: gameData.battleEnemyWindowOverlap,
+    enemyGridAlign: gameData.battleEnemyGridAlign ?? d.enemyGridAlign,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
     commands: gameData.battleCommands,
@@ -650,6 +654,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     ...(settings.enemyWindowOverlap !== undefined
       ? { enemyWindowOverlap: settings.enemyWindowOverlap }
       : {}),
+    ...(settings.enemyGridAlign !== 'bottom' ? { enemyGridAlign: settings.enemyGridAlign } : {}),
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
     commands: settings.commands,

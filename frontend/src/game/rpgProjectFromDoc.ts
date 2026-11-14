@@ -34,7 +34,11 @@ import { normalizeBattleMotion, normalizeBattlePresentation } from './battleMoti
 import { normalizeBattleEnemyList } from './battleEnemyList'
 import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb } from './battleAtb'
-import { normalizeEnemyGrid, normalizeEnemyWindowOverlapSetting } from './enemyGrid'
+import {
+  normalizeEnemyGrid,
+  normalizeEnemyGridAlign,
+  normalizeEnemyWindowOverlapSetting,
+} from './enemyGrid'
 import {
   formatEncounterGroupErrors,
   validateEncounterGroups,
@@ -423,6 +427,7 @@ export function rpgProjectFromDoc(
     battleAtb: normalizeBattleAtb(doc.battle_atb, doc.battle_atb_mode),
     battleEnemyGrid,
     battleEnemyWindowOverlap: normalizeEnemyWindowOverlapSetting(doc.battle_enemy_window_overlap),
+    battleEnemyGridAlign: normalizeEnemyGridAlign(doc.battle_enemy_grid_align),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),

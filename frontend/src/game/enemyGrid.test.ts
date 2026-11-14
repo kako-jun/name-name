@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   computeEnemyGridLayout,
   enemyDrawOrder,
   normalizeEnemyGrid,
+  normalizeEnemyGridAlign,
   normalizeEnemyWindowOverlapSetting,
   parseCellRef,
   parseEnemyGrid,
@@ -698,5 +699,92 @@ describe('normalizeEnemyWindowOverlapSetting (#839)', () => {
     }
     expect(normalizeEnemyWindowOverlapSetting(undefined)).toBeUndefined()
     expect(normalizeEnemyWindowOverlapSetting(null)).toBeUndefined()
+  })
+})
+
+describe('normalizeEnemyGridAlign (#1178)', () => {
+  it('center / bottom（大小・前後空白無視）。未指定・空は bottom で警告しない', () => {
+    expect(normalizeEnemyGridAlign('center')).toBe('center')
+    expect(normalizeEnemyGridAlign(' Center ')).toBe('center')
+    expect(normalizeEnemyGridAlign('bottom')).toBe('bottom')
+    for (const v of [undefined, null, '', '  ']) expect(normalizeEnemyGridAlign(v)).toBe('bottom')
+  })
+  it('不正値は警告して bottom（warn=false なら警告しない）', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(normalizeEnemyGridAlign('middle')).toBe('bottom')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(normalizeEnemyGridAlign('top', false)).toBe('bottom')
+    expect(spy).toHaveBeenCalledTimes(1)
+    spy.mockRestore()
+  })
+})
+
+describe('computeEnemyGridLayout: align (#1178)', () => {
+  const grid: EnemyGridSize = { cols: 6, rows: 2 }
+  const fps: EnemyFootprint[] = [
+    { col: 2, row: 0, w: 2, h: 2 },
+    { col: 5, row: 1, w: 1, h: 1 },
+  ]
+  it('center: 幅で決まる（グリッドが領域より低い）とき、グリッド全体の縦中心が領域の縦中心に一致する', () => {
+    for (const withLabel of [false, true]) {
+      const region: Rect = { x: 10, y: 100, w: 300, h: 400 }
+      const c = computeEnemyGridLayout(region, grid, fps, {
+        withLabel,
+        windowOverlap: 0.25,
+        align: 'center',
+      })
+      expect(c.grid.h).toBeLessThan(region.h)
+      expect(c.grid.y + c.grid.h / 2).toBeCloseTo(region.y + region.h / 2, 6)
+    }
+  })
+  it('center でも cell・横位置・グリッドの大きさ・敵どうしの相対位置は bottom と同じで、縦に一様にずれるだけ', () => {
+    const region: Rect = { x: 10, y: 100, w: 300, h: 400 }
+    const b = computeEnemyGridLayout(region, grid, fps, { withLabel: true, windowOverlap: 0.25 })
+    const c = computeEnemyGridLayout(region, grid, fps, {
+      withLabel: true,
+      windowOverlap: 0.25,
+      align: 'center',
+    })
+    expect(c.cell).toBe(b.cell)
+    expect(c.grid.x).toBe(b.grid.x)
+    expect(c.grid.w).toBe(b.grid.w)
+    expect(c.grid.h).toBe(b.grid.h)
+    const dy = c.grid.y - b.grid.y
+    expect(dy).toBeLessThan(0)
+    c.slots.forEach((s, i) => {
+      expect(s.x).toBe(b.slots[i].x)
+      expect(s.size).toBe(b.slots[i].size)
+      expect(s.floor - b.slots[i].floor).toBeCloseTo(dy, 6)
+      expect(s.box.y - b.slots[i].box.y).toBeCloseTo(dy, 6)
+      expect(s.label!.y - b.slots[i].label!.y).toBeCloseTo(dy, 6)
+    })
+  })
+  it('既定（省略）と bottom は同じ。高さで決まる（窓との重なりで領域より高い）ときは center でも下端そろえのまま', () => {
+    const tall: Rect = { x: 0, y: 0, w: 2000, h: 300 }
+    const opt = { withLabel: false, windowOverlap: 0.5 }
+    const d = computeEnemyGridLayout(tall, grid, fps, opt)
+    expect(computeEnemyGridLayout(tall, grid, fps, { ...opt, align: 'bottom' })).toEqual(d)
+    const c = computeEnemyGridLayout(tall, grid, fps, { ...opt, align: 'center' })
+    expect(c).toEqual(d)
+    expect(c.grid.y + c.grid.h).toBeCloseTo(tall.y + tall.h, 6)
+  })
+  it('center は上へ動くだけで、領域の下端を越えず、領域の上端・bottom の上端より上へ行かない（総当たり）', () => {
+    for (const w of [200, 400, 900, 2000])
+      for (const h of [120, 300, 600])
+        for (const rows of [1, 2, 4])
+          for (const withLabel of [false, true])
+            for (const ov of [0, 0.25, 0.5]) {
+              const region: Rect = { x: 5, y: 50, w, h }
+              const g = { cols: 6, rows }
+              const o = { withLabel, windowOverlap: ov }
+              const b = computeEnemyGridLayout(region, g, [], o)
+              const c = computeEnemyGridLayout(region, g, [], { ...o, align: 'center' })
+              const ctx = `${w}x${h} r${rows} l${withLabel} o${ov}`
+              expect(c.cell, ctx).toBe(b.cell)
+              expect(c.grid.y + c.grid.h, ctx).toBeLessThanOrEqual(region.y + region.h + EPS)
+              // 上へ動くだけ（下がらない）で、領域の上端か bottom の上端より上へは行かない（窓の外へ出ない）
+              expect(c.grid.y, ctx).toBeLessThanOrEqual(b.grid.y + EPS)
+              expect(c.grid.y, ctx).toBeGreaterThanOrEqual(Math.min(b.grid.y, region.y) - EPS)
+            }
   })
 })

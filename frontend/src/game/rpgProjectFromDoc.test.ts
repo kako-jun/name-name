@@ -1996,6 +1996,22 @@ describe('rpgProjectFromDoc: battle_enemy_grid / battle_enemy_window_overlap (#8
   })
 })
 
+describe('rpgProjectFromDoc: battle_enemy_grid_align (#1178)', () => {
+  const al = (v: string | null | undefined, extra: Partial<EventDocument> = {}) =>
+    rpgProjectFromDoc({ ...makeDoc(), battle_enemy_grid_align: v, ...extra })!.battleEnemyGridAlign
+  it('center / bottom はそのまま。未指定・空・不正は bottom（不正は警告）。グリッドの有無とは独立', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(al('center')).toBe('center')
+    expect(al('center', { battle_enemy_grid: '6x2' })).toBe('center')
+    expect(al('bottom')).toBe('bottom')
+    for (const v of [undefined, null, '']) expect(al(v)).toBe('bottom')
+    expect(spy).not.toHaveBeenCalled()
+    expect(al('middle')).toBe('bottom')
+    expect(spy).toHaveBeenCalledTimes(1)
+    spy.mockRestore()
+  })
+})
+
 describe('rpgProjectFromDoc エンカウント群の検証 (#839 段5)', () => {
   const mon = (id: string, size?: { w: number; h: number }) => ({
     Monster: {

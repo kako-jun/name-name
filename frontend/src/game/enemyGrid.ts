@@ -67,6 +67,26 @@ export function normalizeEnemyGrid(raw: string | null | undefined): EnemyGridSiz
   return parseEnemyGrid(raw) ?? undefined
 }
 
+/** 敵グリッドの縦位置 (#1178)。`bottom` = 領域の下端そろえ（既定・従来）、`center` = 領域の縦中央 */
+export type EnemyGridAlign = 'center' | 'bottom'
+
+/**
+ * frontmatter `battle_enemy_grid_align` / 設定 JSON `enemyGridAlign` の正規化 (#1178)。
+ * 未指定・空は `bottom`。`center` / `bottom` 以外は警告して `bottom`（`warn=false` は警告だけ止める）
+ */
+export function normalizeEnemyGridAlign(
+  raw: string | null | undefined,
+  warn = true
+): EnemyGridAlign {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'bottom'
+  const v = raw.trim().toLowerCase()
+  if (v === 'center') return 'center'
+  if (v === 'bottom') return 'bottom'
+  if (warn)
+    console.warn(`battle_enemy_grid_align '${raw}' は center / bottom ではないため bottom にした`)
+  return 'bottom'
+}
+
 const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/
 
 /**
@@ -229,6 +249,11 @@ export interface EnemyGridLayoutOptions {
   withLabel: boolean
   /** 窓との重なり許容量 (#838。`normalizeEnemyWindowOverlap` で丸める。省略 = 既定) */
   windowOverlap?: number | null
+  /**
+   * グリッドの縦位置 (#1178)。`bottom`（省略時）は領域の下端そろえ、`center` は行数ぶんの高さのグリッドを領域の縦中央に置く
+   * （グリッドが領域より高い＝窓との重なりで延ばしたぶんは、窓の外へ出ないよう下端そろえのまま）。セルの大きさ・横位置は変えない
+   */
+  align?: EnemyGridAlign
 }
 
 export const ENEMY_SCALE_MIN = 0.25
@@ -295,7 +320,10 @@ export function computeEnemyGridLayout(
   const gridH = gridValid ? (cell + band) * rows : 0
   const gridRect: Rect = {
     x: region.x + (region.w - gridW) / 2,
-    y: region.y + region.h - gridH,
+    y:
+      options.align === 'center' && gridH <= region.h
+        ? region.y + (region.h - gridH) / 2
+        : region.y + region.h - gridH,
     w: gridW,
     h: gridH,
   }

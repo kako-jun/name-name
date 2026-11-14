@@ -27,6 +27,7 @@ import {
   computeEnemyGridLayout,
   emptyEnemyGridSlot,
   type EnemyFootprint,
+  type EnemyGridAlign,
   type EnemyGridSize,
   type EnemyGridSlot,
 } from './enemyGrid'
@@ -101,6 +102,11 @@ export interface SideBattleLayoutInput {
    * このとき `enemyAspects` / `enemyAcrylic` の窓フィットは使わず、窓との重なりは `enemyWindowOverlap`（窓の高さまでに絞る）で扱う
    */
   enemyGrid?: EnemyGridSize
+  /**
+   * グリッドの縦位置 (#1178)。`center` なら行数ぶんの高さのグリッドを敵の領域の縦中央に置く。未指定は `bottom`（領域の下端そろえ・従来）。
+   * セルの大きさ・行数・窓との重なり・味方との距離・奥行きの縮尺の基準は変えない（縦位置だけ）。グリッドなしでは無関係
+   */
+  enemyGridAlign?: EnemyGridAlign
   /**
    * グリッド時の敵ごとの占有（`placeEnemies` の結果 + サイズ区分 + 倍率）。敵の index 順。
    * null・足りない分は置けなかった敵＝大きさ 0 のスロット（後段が描かない）
@@ -1114,9 +1120,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     const gl = computeEnemyGridLayout(gridRegion, input.enemyGrid, footprints, {
       withLabel: gridLabel,
       windowOverlap: overlap,
+      align: input.enemyGridAlign,
     })
     const band = gridLabel && gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
-    gridFrontFloor = gl.grid.y + gl.grid.h - band
+    // 奥行きの縮尺の基準は縦位置の設定（下端 / 中央）に依らず、領域の下端にそろえた最下行の下端（直交）
+    gridFrontFloor = gridRegion.y + gridRegion.h - band
     const slots: EnemyGridSlot[] = Array.from({ length: enemyCount }, () =>
       emptyEnemyGridSlot(gl.grid.x, gridFrontFloor as number)
     )

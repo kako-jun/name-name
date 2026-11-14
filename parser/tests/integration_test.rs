@@ -5349,6 +5349,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_effects: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
+        battle_enemy_grid_align: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10542,6 +10543,7 @@ fn telop_test_doc_base() -> Document {
         battle_effects: None,
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
+        battle_enemy_grid_align: None,
         chapters: vec![],
     }
 }
@@ -12109,6 +12111,33 @@ fn test_battle_enemy_grid_and_window_overlap_parse_default_none_and_roundtrip() 
         re.battle_enemy_window_overlap,
         doc.battle_enemy_window_overlap
     );
+    let none_out = emitter::emit(&none);
+    assert!(!none_out.contains("battle_enemy"), "{none_out}");
+}
+
+#[test]
+fn test_battle_enemy_grid_align_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "battle_enemy_grid: 6x2\nbattle_enemy_grid_align: center\n",
+    ));
+    // `battle_enemy_grid:` と前方一致で取り違えない。値は検証せず生文字列で透過する
+    assert_eq!(doc.battle_enemy_grid.as_deref(), Some("6x2"));
+    assert_eq!(doc.battle_enemy_grid_align.as_deref(), Some("center"));
+    let weird = parser::parse(&battle_doc("battle_enemy_grid_align: \"middle\"\n"));
+    assert_eq!(weird.battle_enemy_grid_align.as_deref(), Some("middle"));
+    assert_eq!(weird.battle_enemy_grid, None);
+    let empty = parser::parse(&battle_doc("battle_enemy_grid_align:\n"));
+    assert_eq!(empty.battle_enemy_grid_align, None);
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_enemy_grid_align, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_enemy_grid_align: \"center\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_enemy_grid_align, doc.battle_enemy_grid_align);
     let none_out = emitter::emit(&none);
     assert!(!none_out.contains("battle_enemy"), "{none_out}");
 }

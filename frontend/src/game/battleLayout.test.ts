@@ -3187,3 +3187,160 @@ describe('グリッドなし + 敵名窓: 敵の描画範囲は味方の描画�
     expect(minGap).toBeGreaterThan(0)
   })
 })
+
+describe('敵グリッドの縦位置 enemyGridAlign: 他の設定と直交 (#1178)', () => {
+  const FOOTS = [
+    { col: 2, row: 0, w: 2, h: 2 },
+    { col: 5, row: 1, w: 1, h: 1 },
+    { col: 0, row: 0, w: 1, h: 1 },
+  ]
+  const build = (
+    w: number,
+    h: number,
+    o: {
+      align?: 'center' | 'bottom'
+      grid?: { cols: number; rows: number }
+      party?: number
+      back?: boolean
+      messageLines?: number
+      list?: boolean
+      overlap?: number
+      depth?: boolean
+      cross?: boolean
+    } = {}
+  ) =>
+    computeSideBattleLayout({
+      width: w,
+      height: h,
+      partyCount: o.party ?? 4,
+      enemyCount: FOOTS.length,
+      commandCount: 8,
+      partyRows: Array.from({ length: o.party ?? 4 }, (_, i) =>
+        o.back && i % 2 === 1 ? 'back' : 'front'
+      ),
+      enemyGrid: o.grid ?? { cols: 6, rows: 2 },
+      enemyFootprints: FOOTS,
+      enemyWindowOverlap: o.overlap ?? 0.25,
+      enemyList: o.list ?? false,
+      partyAcrylic: DEFAULT_ACRYLIC_PARAMS,
+      ...(o.messageLines ? { messageLines: o.messageLines } : {}),
+      ...(o.depth ? { depth: { horizon: 0.3, perspective: 0.5 } } : {}),
+      ...(o.cross ? { commandLayout: 'cross' as const } : {}),
+      ...(o.align ? { enemyGridAlign: o.align } : {}),
+    })
+
+  it('未指定は bottom と完全に同じ（既定は従来の下端そろえ）', () => {
+    for (const [w, h] of SWEEP_SIZES)
+      expect(build(w, h, { align: 'bottom' }), `${w}x${h}`).toEqual(build(w, h))
+  })
+
+  it('center は敵の縦位置だけを変える: 窓・舞台・味方・コマンド・ステータスは同じで、敵の x・大きさも同じ。縦は一様に上へ', () => {
+    let moved = 0
+    for (const [w, h] of [...SWEEP_SIZES, [1600, 1080] as [number, number]])
+      for (const party of [1, 4])
+        for (const back of [false, true])
+          for (const messageLines of [undefined, 1])
+            for (const list of [false, true])
+              for (const overlap of [0, 0.25, 0.5])
+                for (const depth of [false, true])
+                  for (const cross of [false, true])
+                    for (const grid of [
+                      { cols: 6, rows: 2 },
+                      { cols: 4, rows: 2 },
+                      { cols: 12, rows: 4 },
+                    ]) {
+                      const o = { party, back, messageLines, list, overlap, depth, cross, grid }
+                      const b = build(w, h, o)
+                      const c = build(w, h, { ...o, align: 'center' })
+                      const ctx = JSON.stringify([w, h, o])
+                      expect(c.log, ctx).toEqual(b.log)
+                      expect(c.logLines, ctx).toBe(b.logLines)
+                      expect(c.stage, ctx).toEqual(b.stage)
+                      expect(c.party, ctx).toEqual(b.party)
+                      expect(c.command, ctx).toEqual(b.command)
+                      expect(c.status, ctx).toEqual(b.status)
+                      expect(c.enemyList, ctx).toEqual(b.enemyList)
+                      expect(c.enemies.length, ctx).toBe(b.enemies.length)
+                      // 敵: 同じ行は同じ量だけ縦にずれる（大きさ・x・幅は同じ）。深度ありでも味方は変わらない（上の toEqual）
+                      const dys = c.enemies.map((e, i) => e.floor - b.enemies[i].floor)
+                      c.enemies.forEach((e, i) => {
+                        // 奥行きありは縦位置（遠近）で縮尺が変わるのでサイズ・x の比較は奥行きなしだけ
+                        if (!depth) {
+                          expect(e.x, ctx).toBe(b.enemies[i].x)
+                          expect(e.width, ctx).toBeCloseTo(b.enemies[i].width, 6)
+                          expect(e.size, ctx).toBeCloseTo(b.enemies[i].size, 6)
+                        }
+                        expect(dys[i], ctx).toBeLessThanOrEqual(EPS)
+                      })
+                      if (!depth) {
+                        for (const dy of dys) expect(dy, ctx).toBeCloseTo(dys[0], 6)
+                        if (dys[0] < -1) moved++
+                      }
+                    }
+    expect(moved).toBeGreaterThan(50)
+  })
+
+  it('center + 深度なし: 行数ぶんのグリッドの縦中心が、敵の領域（舞台）の縦中心に一致する（幅で決まる 6x2 / 4x2、1280x720・味方4人・ff）', () => {
+    for (const grid of [
+      { cols: 6, rows: 2 },
+      { cols: 4, rows: 2 },
+    ]) {
+      const c = build(1280, 720, {
+        grid,
+        messageLines: 1,
+        list: true,
+        align: 'center',
+        overlap: 0.25,
+      })
+      const slot2x2 = c.enemies[0]
+      // 最下段の足元とグリッド上端（2x2 の枠の上端）から、グリッド全体（行数 2）の縦中心を求める
+      const cell = slot2x2.width / 2
+      const gridTop = slot2x2.floor - 2 * cell
+      const gridBottom = slot2x2.floor
+      const centerY = (gridTop + gridBottom) / 2
+      expect(centerY, JSON.stringify(grid)).toBeCloseTo(c.stage.y + c.stage.h / 2, 3)
+    }
+  })
+
+  it('味方との最小距離は bottom と同じ（#1176 の隙間の保証は変わらない）。窓への食い込みは bottom 以下', () => {
+    let checked = 0
+    for (const [w, h] of [...SWEEP_SIZES, [1600, 1080] as [number, number]])
+      for (const party of [3, 4])
+        for (const messageLines of [undefined, 1])
+          for (const list of [false, true])
+            for (const overlap of [0, 0.25, 0.5]) {
+              const o = { party, messageLines, list, overlap }
+              const b = build(w, h, o)
+              const c = build(w, h, { ...o, align: 'center' })
+              const ctx = JSON.stringify([w, h, o])
+              const minGap = (L: SideBattleLayout) =>
+                Math.min(...L.party.map((p) => p.x)) -
+                Math.max(...L.enemies.map((e) => e.x + e.width))
+              expect(minGap(c), ctx).toBeCloseTo(minGap(b), 6)
+              // 窓（ログ帯）の下端への敵の絵の上端の食い込み（正の分）は bottom 以下
+              const intrude = (L: SideBattleLayout) =>
+                Math.max(...L.enemies.map((e) => L.log.y + L.log.h - e.y))
+              expect(Math.max(0, intrude(c)), ctx).toBeLessThanOrEqual(
+                Math.max(0, intrude(b)) + EPS
+              )
+              checked++
+            }
+    expect(checked).toBeGreaterThan(100)
+  })
+
+  it('グリッドなしでは無関係（enemyGridAlign を渡しても配置は変わらない）', () => {
+    for (const [w, h] of SWEEP_SIZES) {
+      const base = {
+        width: w,
+        height: h,
+        partyCount: 4,
+        enemyCount: 3,
+        commandCount: 4,
+        enemyAspects: [1, 1, 1],
+      }
+      expect(computeSideBattleLayout({ ...base, enemyGridAlign: 'center' }), `${w}x${h}`).toEqual(
+        computeSideBattleLayout(base)
+      )
+    }
+  })
+})

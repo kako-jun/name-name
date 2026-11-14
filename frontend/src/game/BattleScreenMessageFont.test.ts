@@ -222,4 +222,13 @@ describe('メッセージ窓の高さと配線 (#1178)', () => {
     expect(lastInput().enemyGrid).toEqual(grid)
     expect(lastInput().messageLines).toBeUndefined()
   })
+
+  it('enemyGridAlign は computeSideBattleLayout の入力に届く。未指定は載らない（bottom） (#1178)', () => {
+    const lastInput = () => layoutSpy.mock.calls[layoutSpy.mock.calls.length - 1][0]
+    const o = { layout: { w: 1, h: 1, scale: 1 } }
+    build({ presentation: 'ff', enemyGrid: grid, enemyGridAlign: 'center' }, 1, o)
+    expect(lastInput().enemyGridAlign).toBe('center')
+    build({ presentation: 'ff', enemyGrid: grid }, 1, o)
+    expect(lastInput().enemyGridAlign).toBeUndefined()
+  })
 })
