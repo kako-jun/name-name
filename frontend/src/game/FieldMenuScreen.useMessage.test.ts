@@ -24,7 +24,12 @@ const ITEMS: FieldMenuItemDef[] = [
   {
     id: 'appstore',
     label: 'アプリストア',
-    content: { tabs: [{ label: 'かう', entries: [E('アプリ')] }] },
+    content: {
+      tabs: [
+        { label: 'かう', entries: [E('アプリ')] },
+        { label: 'うる', action: 'sell', entries: [E('アプリ')] },
+      ],
+    },
   },
 ]
 
@@ -37,7 +42,6 @@ const FLOWS: Record<string, Step[]> = {
   item: [
     { type: 'select', target: 'tab', index: 0 },
     { type: 'select', target: 'list', index: 0 },
-    { type: 'select', target: 'target', index: 0 },
     { type: 'confirm' },
   ],
   equip: [
@@ -49,9 +53,19 @@ const FLOWS: Record<string, Step[]> = {
     { type: 'select', target: 'list', index: 0 },
     { type: 'select', target: 'confirm', index: 0 },
   ],
+  appstoreSell: [
+    { type: 'select', target: 'tab', index: 1 },
+    { type: 'select', target: 'list', index: 0 },
+    { type: 'select', target: 'confirm', index: 0 },
+  ],
 }
 
-function setup(screen: string, useMessage: boolean | undefined, outcome: FieldUseOutcome) {
+function setup(
+  screen: string,
+  useMessage: boolean | undefined,
+  outcome: FieldUseOutcome,
+  flow = screen
+) {
   const onUse = vi.fn(() => outcome)
   const s = new FieldMenuScreen({
     width: 1600,
@@ -63,13 +77,13 @@ function setup(screen: string, useMessage: boolean | undefined, outcome: FieldUs
   })
   s.open({
     items: ITEMS,
-    party: [{ id: 'a', name: 'A', hp: 10, maxHp: 30, mp: 5, maxMp: 5 }],
+    party: [{ id: 'a', name: 'A', hp: 10, maxHp: 30, mp: 5, maxMp: 5, texture: null }],
     info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
     slots: [null, null, null],
   })
   s.dispatch({ type: 'tap', index: ITEMS.findIndex((i) => i.id === screen) })
   s.tick(10_000)
-  for (const st of FLOWS[screen]) s.dispatch(st)
+  for (const st of FLOWS[flow]) s.dispatch(st)
   return { s, onUse }
 }
 
@@ -126,10 +140,14 @@ describe('FieldMenuScreen: 使用成功の文 (#1185)', () => {
     expect(hpOf(s)).toBe(10)
   })
   it('useMessage: false でも、そうび・アプリストアの成功の文は出す', () => {
-    for (const screen of ['equip', 'appstore']) {
-      const { s, onUse } = setup(screen, false, { ok: true, notice: `${screen} ok` })
+    for (const [screen, flow] of [
+      ['equip', 'equip'],
+      ['appstore', 'appstore'],
+      ['appstore', 'appstoreSell'],
+    ]) {
+      const { s, onUse } = setup(screen, false, { ok: true, notice: `${flow} ok` }, flow)
       expect(onUse).toHaveBeenCalledTimes(1)
-      expect(s.current).toMatchObject({ notice: `${screen} ok` })
+      expect(s.current).toMatchObject({ notice: `${flow} ok` })
     }
   })
 })
