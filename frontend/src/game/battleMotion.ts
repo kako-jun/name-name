@@ -201,8 +201,10 @@ export interface MotionTiming {
    * 戦闘の窓で入り切らない文字の横スクロール (#1183。`battle_text_overflow: scroll` のときだけ使う): 流れる速さ (px/秒)。default 30（ゆっくり）・snappy 48（暫定値）
    */
   marqueeSpeed: number
-  /** 横スクロールが先頭・末尾で止まる時間 (ms)。default 1000・snappy 600（暫定値） */
-  marqueeHoldMs: number
+  /** 横スクロールで表示直後（と先頭へ戻ったあと）に先頭が見える状態で待つ時間 (ms)。default 2000・snappy 1500（暫定値） */
+  marqueeStartHoldMs: number
+  /** 横スクロールが末尾（最後の文字が見えたところ）で止まる時間 (ms)。default 1000・snappy 600（暫定値） */
+  marqueeEndHoldMs: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -252,7 +254,8 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   entranceEase: 'outQuad',
   entrancePartyDelayMs: 0,
   marqueeSpeed: 30,
-  marqueeHoldMs: 1000,
+  marqueeStartHoldMs: 2000,
+  marqueeEndHoldMs: 1000,
 }
 
 /**
@@ -310,7 +313,8 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   entranceEase: 'outQuad',
   entrancePartyDelayMs: 0,
   marqueeSpeed: 48,
-  marqueeHoldMs: 600,
+  marqueeStartHoldMs: 1500,
+  marqueeEndHoldMs: 600,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'

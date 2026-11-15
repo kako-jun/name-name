@@ -4,7 +4,7 @@
  *
  * - 設定 `battle_text_overflow: ellipsis|scroll`（既定 ellipsis＝従来の省略）。窓の大きさ・文字サイズ・グリッド・味方の並びなど
  *   他のキーとは直交（このキーは「入り切らない文字をどう見せるか」だけを決め、窓の寸法は変えない）
- * - 動き: 先頭で止まる → 左へ流れる → 末尾で止まる → 同じ速さで戻る → 先頭で止まる（往復）。速度は px/秒、停止は ms
+ * - 動き: 先頭で待つ → 左へ流れる → 末尾で止まる → 先頭へ切り替え → 繰り返し（片道ループ。戻り方は MARQUEE_RETURN）。速度は px/秒、停止は ms
  * - 時計はゲームのティックと独立した表示専用。呼び出し側が `advance(deltaMS)` で積む（時刻の注入。ヘッドレスで再現できる）
  */
 
@@ -40,15 +40,35 @@ export function effectiveTextOverflow(
 export interface MarqueeTiming {
   /** 流れる速さ (px/秒)。0 以下・非有限なら動かさない（先頭のまま） */
   speed: number
-  /** 先頭・末尾で止まる時間 (ms) */
-  holdMs: number
+  /** 表示直後（と先頭へ戻ったあと）、先頭が見える状態で待つ時間 (ms) */
+  startHoldMs: number
+  /** 最後の文字が見えたところで止まる時間 (ms) */
+  endHoldMs: number
 }
 
-/** motion preset の表（`MotionTiming.marqueeSpeed` / `marqueeHoldMs`）から取り出す */
+/**
+ * 末尾まで流れたあとの戻り方。`jump` = 先頭へ切り替える（片道ループ。既定）、`reverse` = 同じ速さで逆スクロールして戻る。
+ * kako-jun の判断待ちのため、この定数 1 つで差し替えられる (#1183)
+ */
+export const MARQUEE_RETURN: 'jump' | 'reverse' = 'jump'
+
+/** motion preset の表（`MotionTiming.marqueeSpeed` / `marqueeStartHoldMs` / `marqueeEndHoldMs`）から取り出す */
 export function marqueeTimingOf(
-  t: Pick<MotionTiming, 'marqueeSpeed' | 'marqueeHoldMs'>
+  t: Pick<MotionTiming, 'marqueeSpeed' | 'marqueeStartHoldMs' | 'marqueeEndHoldMs'>
 ): MarqueeTiming {
-  return { speed: t.marqueeSpeed, holdMs: t.marqueeHoldMs }
+  return { speed: t.marqueeSpeed, startHoldMs: t.marqueeStartHoldMs, endHoldMs: t.marqueeEndHoldMs }
+}
+
+/**
+ * スクロールの対象（どの窓の文字を流すか）。ここ 1 箇所で管理する (#1183)。ステータス窓の味方名（`status`）を足すときは、
+ * この配列に加え BattleScreen の呼び出し側を戻すだけ
+ */
+export const MARQUEE_TARGETS = ['menu', 'enemyList'] as const
+export type MarqueeTarget = (typeof MARQUEE_TARGETS)[number]
+
+/** この対象をスクロールさせるか（設定が scroll で、対象の一覧に載っているとき） */
+export function marqueeAppliesTo(setting: BattleTextOverflow, target: string): boolean {
+  return setting === 'scroll' && (MARQUEE_TARGETS as readonly string[]).includes(target)
 }
 
 /** 末尾を窓の縁にぴったり付けず、最後の文字が読めるように足す余白 (px) */
@@ -60,28 +80,36 @@ export function marqueeOverflowPx(contentW: number, clipW: number): number {
   return contentW > clipW + 0.01 ? contentW - clipW + MARQUEE_END_PAD : 0
 }
 
-/** 1 往復の長さ (ms)。動かない（overflow が 0・速度が 0 以下）なら 0 */
+function holdOf(v: number): number {
+  return Math.max(0, Number.isFinite(v) ? v : 0)
+}
+
+/** 1 周の長さ (ms)。動かない（overflow が 0・速度が 0 以下）なら 0 */
 export function marqueeCycleMs(overflow: number, timing: MarqueeTiming): number {
   if (!(overflow > 0) || !(timing.speed > 0) || !Number.isFinite(timing.speed)) return 0
-  const hold = Math.max(0, Number.isFinite(timing.holdMs) ? timing.holdMs : 0)
   const travel = (overflow / timing.speed) * 1000
-  return hold + travel + hold + travel
+  const start = holdOf(timing.startHoldMs)
+  const end = holdOf(timing.endHoldMs)
+  return MARQUEE_RETURN === 'reverse' ? start + travel + end + travel : start + travel + end
 }
 
 /**
- * 経過 `elapsedMs` のときの左方向のずれ (px。0 = 先頭、`overflow` = 末尾)。往復の周期で繰り返す。
+ * 経過 `elapsedMs` のときの左方向のずれ (px。0 = 先頭、`overflow` = 末尾)。
+ * 先頭で待つ → 左へ流れる → 末尾で止まる → 先頭へ戻る（`MARQUEE_RETURN`）→ 繰り返し。
  * 動かさない条件・負や非有限の経過は 0
  */
 export function sampleMarquee(elapsedMs: number, overflow: number, timing: MarqueeTiming): number {
   const cycle = marqueeCycleMs(overflow, timing)
   if (cycle <= 0 || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0
-  const hold = Math.max(0, Number.isFinite(timing.holdMs) ? timing.holdMs : 0)
+  const start = holdOf(timing.startHoldMs)
+  const end = holdOf(timing.endHoldMs)
   const travel = (overflow / timing.speed) * 1000
   const t = elapsedMs % cycle
-  if (t < hold) return 0
-  if (t < hold + travel) return ((t - hold) / travel) * overflow
-  if (t < hold + travel + hold) return overflow
-  return overflow - ((t - hold - travel - hold) / travel) * overflow
+  if (t < start) return 0
+  if (t < start + travel) return ((t - start) / travel) * overflow
+  if (t < start + travel + end) return overflow
+  // 以降は reverse のときだけ（jump は周期が終わって先頭へ切り替わる）
+  return overflow - ((t - start - travel - end) / travel) * overflow
 }
 
 /**

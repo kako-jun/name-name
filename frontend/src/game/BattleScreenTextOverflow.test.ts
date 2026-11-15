@@ -10,7 +10,12 @@ import { skipEntrance } from './battleScreenTestUtil'
 import { BattleEngine } from './battleEngine'
 import type { BattleMenuData } from './battleMenu'
 import { DEFAULT_MOTION_TIMING, SNAPPY_MOTION_TIMING } from './battleMotion'
-import { marqueeOverflowPx, sampleMarquee } from './battleMarquee'
+import {
+  MARQUEE_TARGETS,
+  marqueeAppliesTo,
+  marqueeOverflowPx,
+  sampleMarquee,
+} from './battleMarquee'
 import { estimateTextWidth } from './battleLayout'
 import type { BattleEntity } from './spellDsl'
 
@@ -119,21 +124,30 @@ describe('候補窓の名前 (#1183)', () => {
     const short = collectTexts(I(s).menuLayer!.body as never).filter((t) => t === 'ほのお')
     expect(short).toHaveLength(1)
     const t = DEFAULT_MOTION_TIMING
-    const timing = { speed: t.marqueeSpeed, holdMs: t.marqueeHoldMs }
+    const timing = {
+      speed: t.marqueeSpeed,
+      startHoldMs: t.marqueeStartHoldMs,
+      endHoldMs: t.marqueeEndHoldMs,
+    }
     // 先頭の停止の間は動かない
-    s.tick(timing.holdMs - 1)
+    s.tick(timing.startHoldMs - 1)
     expect(row!.text.x).toBe(row!.left)
     // 停止を過ぎると速度(px/秒)どおりに左へ流れる
     s.tick(1 + 1000)
     expect(row!.text.x).toBeCloseTo(
-      row!.left - sampleMarquee(timing.holdMs + 1000, row!.overflow, timing),
+      row!.left - sampleMarquee(timing.startHoldMs + 1000, row!.overflow, timing),
       6
     )
     expect(row!.text.x).toBeLessThan(row!.left)
     expect(row!.left - row!.text.x).toBeCloseTo(timing.speed, 3)
     // 末尾まで流れ切ると全文が見える位置で止まる
-    s.tick((row!.overflow / timing.speed) * 1000)
+    s.tick((row!.overflow / timing.speed) * 1000 - 1000 + 100)
     expect(row!.left - row!.text.x).toBeCloseTo(row!.overflow, 3)
+    // 末尾で少し止まったあと、先頭（最初の文字が見える位置）へ切り替わる
+    s.tick(timing.endHoldMs - 200)
+    expect(row!.left - row!.text.x).toBeCloseTo(row!.overflow, 3)
+    s.tick(200)
+    expect(row!.text.x).toBe(row!.left)
   })
 
   it('カーソルを動かして窓を描き直しても、流れは先頭に戻らない', () => {
@@ -199,9 +213,9 @@ describe('敵名窓 (#1183)', () => {
     expect(t.mask).not.toBeNull()
     expect(m.overflow).toBeGreaterThan(0)
     const x0 = t.x
-    s.tick(DEFAULT_MOTION_TIMING.marqueeHoldMs - 1)
+    s.tick(DEFAULT_MOTION_TIMING.marqueeStartHoldMs - 1)
     expect(t.x).toBe(x0)
-    s.tick(2001)
+    s.tick(1 + 1500)
     expect(t.x).toBeLessThan(x0)
   })
 
@@ -221,24 +235,28 @@ describe('敵名窓 (#1183)', () => {
   })
 })
 
-describe('ステータス窓の味方名 (#1183)', () => {
-  it('狭い画面で入り切らない名前: 既定は省略、scroll は全文でクリップ', () => {
+describe('対象外の窓（ステータス窓の味方名・メッセージ窓）は scroll でも省略のまま (#1183)', () => {
+  it('狭い画面で入り切らない味方名は、既定でも scroll でも同じ「…」の省略で、スクロールもマスクもしない', () => {
     const name = 'ものすごくながいなまえのゆうしゃ'
     const d = build({}, [ent('a', { name })], [ent('e')], 300)
-    expect(I(d).statusTexts[0].text).not.toBe(name)
-    expect(I(d).statusTexts[0].text.endsWith('…')).toBe(true)
     const s = build({ textOverflow: 'scroll' }, [ent('a', { name })], [ent('e')], 300)
-    const t = I(s).statusTexts[0]
-    expect(t.text).toBe(name)
-    const m = I(s).marquees.get(t)
-    expect(m).toBeDefined()
-    const x0 = t.x
-    s.tick(DEFAULT_MOTION_TIMING.marqueeHoldMs + 1500)
-    expect(t.x).toBeLessThan(x0)
-  })
-  it('入る名前は scroll でも動かさない', () => {
-    const s = build({ textOverflow: 'scroll' })
+    expect(I(d).statusTexts[0].text.endsWith('…')).toBe(true)
+    expect(I(s).statusTexts[0].text).toBe(I(d).statusTexts[0].text)
+    expect(I(s).statusTexts[0].mask).toBeFalsy()
     expect(I(s).marquees.has(I(s).statusTexts[0])).toBe(false)
+    s.tick(10000)
+    expect(I(s).statusTexts[0].x).toBe(I(d).statusTexts[0].x)
+  })
+})
+
+describe('スクロールの対象は MARQUEE_TARGETS の1箇所で決まる (#1183)', () => {
+  it('下のウィンドウの名前（候補窓・敵名窓）だけ。ステータス窓・メッセージ窓は含まない', () => {
+    expect([...MARQUEE_TARGETS]).toEqual(['menu', 'enemyList'])
+    expect(marqueeAppliesTo('scroll', 'menu')).toBe(true)
+    expect(marqueeAppliesTo('scroll', 'enemyList')).toBe(true)
+    expect(marqueeAppliesTo('scroll', 'status')).toBe(false)
+    expect(marqueeAppliesTo('scroll', 'message')).toBe(false)
+    expect(marqueeAppliesTo('ellipsis', 'menu')).toBe(false)
   })
 })
 

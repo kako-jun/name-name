@@ -181,6 +181,7 @@ import {
   MarqueeClock,
   effectiveTextOverflow,
   marqueeOverflowPx,
+  marqueeAppliesTo,
   marqueeTimingOf,
   normalizeBattleTextOverflow,
   sampleMarquee,
@@ -531,7 +532,7 @@ export interface BattleScreenOptions {
   partyLayout?: 'default' | 'tall'
   /**
    * 戦闘の窓で入り切らない文字の扱い (#1183)。frontmatter `battle_text_overflow` 由来。undefined = `ellipsis`（末尾を「…」で省略＝従来）。
-   * `scroll` は省略せず、窓の幅でクリップしてゆっくり横スクロール（`side` の候補窓の名前・敵名窓・ステータス窓の味方名・メッセージ窓）。窓の寸法は変えない
+   * `scroll` は省略せず、窓の幅でクリップしてゆっくり横スクロール（`side` の候補窓の名前・敵名窓。対象は battleMarquee.ts の MARQUEE_TARGETS）。窓の寸法は変えない
    */
   textOverflow?: 'ellipsis' | 'scroll'
   /** 動きを減らす設定 (prefers-reduced-motion) か。undefined = ブラウザの設定を読む。true だと `scroll` でもスクロールせず省略にする (#1183) */
@@ -739,7 +740,6 @@ export class BattleScreen extends Container {
       key: string
       left: number
       overflow: number
-      centered: boolean
     }
   >()
   /** 敵名ウィンドウ (#954) を使う設定か（ff かつ side のときだけ true）。実際に置けたかは enemyListRect */
@@ -2060,7 +2060,7 @@ export class BattleScreen extends Container {
       ),
       partySlots: L.party.map(slotRect),
       // 入り切らない名前の扱い (#1183)。ellipsis（既定）のときは足さず、従来と同じ形のまま
-      ...(this.textOverflow === 'scroll' ? { textOverflow: 'scroll' as const } : {}),
+      ...(marqueeAppliesTo(this.textOverflow, 'menu') ? { textOverflow: 'scroll' as const } : {}),
     }
 
     // ログ帯（上）
@@ -2442,7 +2442,6 @@ export class BattleScreen extends Container {
     t.mask = null
     prev.mask.destroy()
     this.marquees.delete(t)
-    if (prev.centered) t.anchor.x = 0.5
   }
 
   private applyMarquees(): void {
@@ -2465,21 +2464,18 @@ export class BattleScreen extends Container {
   /**
    * Text を `clip` の幅でクリップして横スクロールさせる、または解除する (#1183)。`textOverflow` が scroll で、文字が `clip.w` に
    * 入り切らないときだけスクロールし、入るなら（または scroll でなければ）マスクを外して動かさない。
-   * `centered` は中央寄せ（anchor.x=0.5）の Text: スクロール中だけ左端起点にし、入るときは中央へ戻す。
    * `id` は持ち主を決める（文字列が変わると先頭から流れ直す）
    */
   private setTextMarquee(
     t: PixiText,
     id: string,
-    clip: { x: number; y: number; w: number; h: number },
-    centered = false
+    clip: { x: number; y: number; w: number; h: number }
   ): void {
     const prev = this.marquees.get(t)
-    if (this.textOverflow !== 'scroll') {
+    if (!marqueeAppliesTo(this.textOverflow, id.split(':')[0])) {
       this.dropTextMarquee(t)
       return
     }
-    if (prev?.centered) t.anchor.x = 0.5 // 中央寄せを一旦戻して、実測を anchor に依らない幅で取る
     const overflow = marqueeOverflowPx(this.measuredTextWidth(t), clip.w)
     if (overflow <= 0) {
       this.dropTextMarquee(t)
@@ -2494,9 +2490,8 @@ export class BattleScreen extends Container {
       ;(t.parent ?? this).addChild(mask)
       t.mask = mask
     }
-    if (centered) t.anchor.x = 0
     const key = `${id}|${t.text}`
-    this.marquees.set(t, { text: t, mask, key, left: clip.x, overflow, centered })
+    this.marquees.set(t, { text: t, mask, key, left: clip.x, overflow })
     this.marqueeClock.elapsedOf(key)
     this.applyMarquees()
   }
@@ -2520,7 +2515,12 @@ export class BattleScreen extends Container {
       }))
     )
     const fit = fitEnemyListFont(rows.length, rect.h, { rows, windowWidth: rect.w })
-    const lines = enemyListLines(rows, fit, rect.w, this.textOverflow)
+    const lines = enemyListLines(
+      rows,
+      fit,
+      rect.w,
+      marqueeAppliesTo(this.textOverflow, 'enemyList') ? 'scroll' : 'ellipsis'
+    )
     // 1 行目の文字の高さを status 窓の 1 行目にそろえる（#954 後続）
     const top = enemyListTextTop(rect.h, fit)
     while (this.enemyListTexts.length < fit.visibleRows) {
@@ -2552,7 +2552,7 @@ export class BattleScreen extends Container {
       t.x = rect.x + ENEMY_LIST_PADDING
       t.y = rect.y + top + i * fit.lineHeight + (fit.lineHeight - fit.fontSize) / 2
       // scroll (#1183): 行が窓の幅に入り切らないときだけ、窓の幅でクリップして流す
-      this.setTextMarquee(t, `enemylist:${i}`, {
+      this.setTextMarquee(t, `enemyList:${i}`, {
         x: rect.x + ENEMY_LIST_PADDING,
         y: rect.y + top + i * fit.lineHeight,
         w: Math.max(0, rect.w - ENEMY_LIST_PADDING * 2),
@@ -2660,18 +2660,6 @@ export class BattleScreen extends Container {
    */
   private fitStatusName(t: PixiText, name: string, maxWidth: number): void {
     let budget = maxWidth
-    if (this.textOverflow === 'scroll' && Number.isFinite(maxWidth)) {
-      // scroll (#1183): 省略せず全文を置き、名前の列でクリップして流す（入り切るときは動かさない）
-      t.text = name
-      const shadowW = this.windowStyle === 'ff-blue' ? FF_BLUE_TEXT_SHADOW.distance : 0
-      this.setTextMarquee(t, `status:${this.statusTexts.indexOf(t)}`, {
-        x: t.x,
-        y: t.y - SIDE_STATUS_FONT_SIZE * 0.25,
-        w: Math.max(0, maxWidth - shadowW),
-        h: SIDE_STATUS_FONT_SIZE * 1.6,
-      })
-      return
-    }
     t.text = fitLabel(name, budget, SIDE_STATUS_FONT_SIZE)
     if (!Number.isFinite(maxWidth)) return
     // ff-blue の文字影（右下へずれる）ぶんも列に食い込ませない
@@ -3541,18 +3529,6 @@ export class BattleScreen extends Container {
     m.visible = word !== null
     if (word === null) return
     const r = this.messageRect
-    if (this.textOverflow === 'scroll') {
-      // scroll (#1183): 省略せず全文。入り切るときは従来どおり中央、入り切らないときだけ左端起点で窓の幅に流す
-      m.text = word
-      m.position.set(r.x + r.w / 2, r.y + r.h / 2)
-      this.setTextMarquee(
-        m,
-        'message',
-        { x: r.x + 12, y: r.y, w: Math.max(0, r.w - 24), h: r.h },
-        true
-      )
-      return
-    }
     m.text = fitLabel(word, Math.max(0, r.w - 24), MESSAGE_WINDOW_FONT_SIZE)
     m.position.set(r.x + r.w / 2, r.y + r.h / 2)
   }

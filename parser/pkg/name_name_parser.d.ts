@@ -1428,6 +1428,11 @@ export interface Document {
      * frontmatter `battle_party_layout:` から流す。
      */
     battle_party_layout?: string;
+    /**
+     * 戦闘の窓で入り切らない文字の扱い (#1183)。`ellipsis`（既定・末尾を「…」で省略）/ `scroll`（窓の幅でクリップしてゆっくり横スクロール）。
+     * 値は生文字列で透過し、runtime 側（`normalizeBattleTextOverflow`）で不正値を警告して ellipsis にする。GUI 専用。frontmatter `battle_text_overflow:` から流す。
+     */
+    battle_text_overflow?: string;
     chapters: Chapter[];
 }
 

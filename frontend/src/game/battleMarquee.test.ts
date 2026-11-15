@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MARQUEE_END_PAD,
+  MARQUEE_RETURN,
   MarqueeClock,
   effectiveTextOverflow,
   marqueeCycleMs,
@@ -14,7 +15,7 @@ import { DEFAULT_MOTION_TIMING, SNAPPY_MOTION_TIMING, motionTimingFor } from './
 
 afterEach(() => vi.restoreAllMocks())
 
-const T = { speed: 50, holdMs: 500 }
+const T = { speed: 50, startHoldMs: 500, endHoldMs: 300 }
 
 describe('normalizeBattleTextOverflow', () => {
   it('scroll / ellipsis はそのまま（大小・前後の空白は無視）', () => {
@@ -58,41 +59,44 @@ describe('marqueeOverflowPx', () => {
   })
 })
 
-describe('sampleMarquee: 先頭で止まる → 流れる → 末尾で止まる → 戻る', () => {
+describe('sampleMarquee: 先頭で待つ → 流れる → 末尾で止まる → 先頭へ切り替え', () => {
   const overflow = 100 // 100px / 50px/秒 = 2000ms
-  it('周期は 停止 + 往路 + 停止 + 復路', () => {
-    expect(marqueeCycleMs(overflow, T)).toBe(500 + 2000 + 500 + 2000)
+  it('戻り方は既定で先頭への切り替え（片道ループ）', () => {
+    expect(MARQUEE_RETURN).toBe('jump')
   })
-  it('先頭の停止の間は 0、流れ出すと直線的に増える', () => {
+  it('周期は 先頭の待ち + 流れる + 末尾の停止', () => {
+    expect(marqueeCycleMs(overflow, T)).toBe(500 + 2000 + 300)
+  })
+  it('先頭の待ちの間は 0、流れ出すと直線的に増える', () => {
     expect(sampleMarquee(0, overflow, T)).toBe(0)
     expect(sampleMarquee(499, overflow, T)).toBe(0)
     expect(sampleMarquee(500 + 1000, overflow, T)).toBeCloseTo(50, 6)
   })
-  it('末尾で止まり（overflow のまま）、同じ速さで戻る', () => {
+  it('末尾（最後の文字が見える位置）で止まり、周期の終わりで先頭へ切り替わる', () => {
     expect(sampleMarquee(500 + 2000, overflow, T)).toBeCloseTo(100, 6)
-    expect(sampleMarquee(500 + 2000 + 499, overflow, T)).toBeCloseTo(100, 6)
-    expect(sampleMarquee(500 + 2000 + 500 + 1000, overflow, T)).toBeCloseTo(50, 6)
-    expect(sampleMarquee(500 + 2000 + 500 + 2000, overflow, T)).toBe(0) // 1 周して先頭
+    expect(sampleMarquee(500 + 2000 + 299, overflow, T)).toBeCloseTo(100, 6)
+    expect(sampleMarquee(500 + 2000 + 300, overflow, T)).toBe(0)
+    expect(sampleMarquee(500 + 2000 + 300 + 499, overflow, T)).toBe(0) // 戻ったあとも先頭で待つ
   })
   it('周期で繰り返す', () => {
     const c = marqueeCycleMs(overflow, T)
-    for (const t of [123, 1500, 3200, 4900])
+    for (const t of [123, 1500, 2600, 2790])
       expect(sampleMarquee(t + c * 3, overflow, T)).toBeCloseTo(sampleMarquee(t, overflow, T), 6)
   })
-  it('常に 0..overflow の範囲で、速さは速度（px/秒）を越えない', () => {
+  it('常に 0..overflow の範囲で、流れる速さは速度（px/秒）を越えない（切り替えの瞬間を除く）', () => {
     let prev = sampleMarquee(0, overflow, T)
     for (let t = 1; t < 20000; t += 7) {
       const v = sampleMarquee(t, overflow, T)
       expect(v).toBeGreaterThanOrEqual(0)
       expect(v).toBeLessThanOrEqual(overflow + 1e-9)
-      expect(Math.abs(v - prev)).toBeLessThanOrEqual((T.speed * 7) / 1000 + 1e-9)
+      if (v >= prev) expect(v - prev).toBeLessThanOrEqual((T.speed * 7) / 1000 + 1e-9)
       prev = v
     }
   })
   it('動かさない条件（overflow 0・速度 0 以下・非有限・負の経過）は 0', () => {
     expect(sampleMarquee(1000, 0, T)).toBe(0)
-    expect(sampleMarquee(1000, overflow, { speed: 0, holdMs: 500 })).toBe(0)
-    expect(sampleMarquee(1000, overflow, { speed: NaN, holdMs: 500 })).toBe(0)
+    expect(sampleMarquee(1000, overflow, { ...T, speed: 0 })).toBe(0)
+    expect(sampleMarquee(1000, overflow, { ...T, speed: NaN })).toBe(0)
     expect(sampleMarquee(-5, overflow, T)).toBe(0)
     expect(sampleMarquee(NaN, overflow, T)).toBe(0)
     expect(marqueeCycleMs(0, T)).toBe(0)
@@ -101,8 +105,16 @@ describe('sampleMarquee: 先頭で止まる → 流れる → 末尾で止まる
 
 describe('motion preset の表', () => {
   it('default はゆっくり長め・snappy は少し速く短め。表から取り出せる', () => {
-    expect(marqueeTimingOf(DEFAULT_MOTION_TIMING)).toEqual({ speed: 30, holdMs: 1000 })
-    expect(marqueeTimingOf(SNAPPY_MOTION_TIMING)).toEqual({ speed: 48, holdMs: 600 })
+    expect(marqueeTimingOf(DEFAULT_MOTION_TIMING)).toEqual({
+      speed: 30,
+      startHoldMs: 2000,
+      endHoldMs: 1000,
+    })
+    expect(marqueeTimingOf(SNAPPY_MOTION_TIMING)).toEqual({
+      speed: 48,
+      startHoldMs: 1500,
+      endHoldMs: 600,
+    })
     expect(marqueeTimingOf(motionTimingFor('snappy')).speed).toBeGreaterThan(
       marqueeTimingOf(motionTimingFor('default')).speed
     )
