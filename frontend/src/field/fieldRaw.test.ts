@@ -997,6 +997,37 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     expect(ok({}).raw).not.toHaveProperty('menuUseMessage')
   })
 
+  it('dialog_font_size / dialog_window_height / dialog_name_style を raw の最上位に渡し、不正は警告して出さない (#1184)', () => {
+    const r = ok({
+      frontmatter: {
+        dialog_font_size: ' Battle ',
+        dialog_window_height: '0.36',
+        dialog_name_style: 'PLATE',
+      },
+    })
+    expect(r.warnings).toEqual([])
+    expect(r.raw).toMatchObject({
+      dialogFontSize: 'battle',
+      dialogWindowHeight: 0.36,
+      dialogNameStyle: 'plate',
+    })
+    const none = ok({ frontmatter: {} })
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle'])
+      expect(none.raw).not.toHaveProperty(k)
+    const bad = ok({
+      frontmatter: {
+        dialog_font_size: 'huge',
+        dialog_window_height: '0.9',
+        dialog_name_style: 'x',
+      },
+    })
+    expect(bad.warnings).toHaveLength(3)
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle'])
+      expect(bad.raw).not.toHaveProperty(k)
+    // 数値でない・空は警告
+    expect(ok({ frontmatter: { dialog_window_height: 'abc' } }).warnings).toHaveLength(1)
+  })
+
   it('aux の中身はコピーして raw に入れる(参照共有しない)', () => {
     const effects = { hit: { image: 'h.webp' } }
     const content = { description: 'd' }

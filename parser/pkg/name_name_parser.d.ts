@@ -1433,6 +1433,21 @@ export interface Document {
      * frontmatter `battle_party_layout:` から流す。
      */
     battle_party_layout?: string;
+    /**
+     * 一枚絵フィールドの会話窓の文字サイズ (#1184)。`normal`（既定＝従来）/ `battle`（戦闘のメッセージ窓と同じ大きさ）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+     * frontmatter `dialog_font_size:` から流す。
+     */
+    dialog_font_size?: string;
+    /**
+     * 一枚絵フィールドの会話窓（`window_style` を書いた作品の窓）の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28＝従来）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+     * frontmatter `dialog_window_height:` から流す。
+     */
+    dialog_window_height?: string;
+    /**
+     * 一枚絵フィールドの会話窓（`window_style` を書いた作品の窓）の話者名の見せ方 (#1184)。`inline`（既定＝従来）/ `large` / `plate`。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+     * frontmatter `dialog_name_style:` から流す。
+     */
+    dialog_name_style?: string;
     chapters: Chapter[];
 }
 

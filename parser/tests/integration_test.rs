@@ -5354,6 +5354,9 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
+        dialog_font_size: None,
+        dialog_window_height: None,
+        dialog_name_style: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10552,6 +10555,9 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
+        dialog_font_size: None,
+        dialog_window_height: None,
+        dialog_name_style: None,
         chapters: vec![],
     }
 }
@@ -12852,4 +12858,41 @@ fn test_battle_party_layout_and_grid_extent_and_overlap_bottom_roundtrip() {
         re.battle_enemy_window_overlap_bottom,
         doc.battle_enemy_window_overlap_bottom
     );
+}
+
+#[test]
+fn test_dialog_font_size_window_height_name_style_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "dialog_style: ff\ndialog_font_size: battle\ndialog_window_height: 0.36\ndialog_name_style: plate\n",
+    ));
+    // 前方一致で取り違えない（`dialog_style:` と `dialog_*` は別キー）
+    assert_eq!(doc.dialog_style.as_deref(), Some("ff"));
+    assert_eq!(doc.dialog_font_size.as_deref(), Some("battle"));
+    assert_eq!(doc.dialog_window_height.as_deref(), Some("0.36"));
+    assert_eq!(doc.dialog_name_style.as_deref(), Some("plate"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.dialog_font_size, None);
+    assert_eq!(none.dialog_window_height, None);
+    assert_eq!(none.dialog_name_style, None);
+    let empty = parser::parse(&battle_doc("dialog_name_style:\n"));
+    assert_eq!(empty.dialog_name_style, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("dialog_font_size: \"battle\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("dialog_window_height: \"0.36\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("dialog_name_style: \"plate\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.dialog_font_size, doc.dialog_font_size);
+    assert_eq!(re.dialog_window_height, doc.dialog_window_height);
+    assert_eq!(re.dialog_name_style, doc.dialog_name_style);
+    assert_eq!(re.dialog_style, doc.dialog_style);
 }

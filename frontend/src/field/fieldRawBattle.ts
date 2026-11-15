@@ -6,6 +6,7 @@
  */
 import { parseCommandIds, parseCommandLabels } from '../game/battleCommands'
 import { resolveRpgDataPath } from '../game/battleEffectsLoader'
+import { fieldDialogMinHeightRatio, normalizeDialogWindowHeight } from '../game/ffDialog'
 import type { EventDocument } from '../types'
 
 type Raw = Record<string, unknown>
@@ -94,6 +95,26 @@ export function frontmatterRaw(
   // フィールドメニューの使用成功の文 (#1185)。on / off。他のキーとは結合しない
   const menuUseMessage = enumOf(doc, 'field_menu_use_message', ['on', 'off'], warnings)
   if (menuUseMessage !== undefined) top.menuUseMessage = menuUseMessage
+  // 一枚絵フィールドの会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。互いに独立。不正は警告して無視
+  const dialogFontSize = enumOf(doc, 'dialog_font_size', ['normal', 'battle'], warnings)
+  if (dialogFontSize !== undefined) top.dialogFontSize = dialogFontSize
+  const dialogNameStyle = enumOf(doc, 'dialog_name_style', ['inline', 'large', 'plate'], warnings)
+  if (dialogNameStyle !== undefined) top.dialogNameStyle = dialogNameStyle
+  if (doc.dialog_window_height !== null && doc.dialog_window_height !== undefined) {
+    const h =
+      typeof doc.dialog_window_height === 'string' && doc.dialog_window_height.trim() !== ''
+        ? Number(doc.dialog_window_height.trim())
+        : NaN
+    if (
+      normalizeDialogWindowHeight(h, dialogFontSize === 'battle' ? 'battle' : 'normal') !==
+      undefined
+    )
+      top.dialogWindowHeight = h
+    else
+      warnings.push(
+        `frontmatter の dialog_window_height は ${fieldDialogMinHeightRatio(dialogFontSize === 'battle' ? 'battle' : 'normal')}〜0.6 の数値にしてください（下限は dialog_font_size で変わります）: ${JSON.stringify(doc.dialog_window_height)}（無視します）`
+      )
+  }
   if (typeof doc.field_emotions === 'string' && doc.field_emotions !== '')
     top.emotionsUrl = resolveRpgDataPath(assetBaseUrl, doc.field_emotions)
 

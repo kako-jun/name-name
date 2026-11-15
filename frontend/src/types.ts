@@ -1405,6 +1405,12 @@ export interface EventDocument {
   battle_enemy_window_overlap_bottom?: string | null
   /** 味方の斜め一列の並び (#1178)。`"default"`（既定）/ `"tall"`。frontmatter `battle_party_layout:` から流す。不正値・未指定は default。GUI 専用。 */
   battle_party_layout?: string | null
+  /** 一枚絵フィールドの会話窓の文字サイズ (#1184)。`"normal"`（既定＝従来）/ `"battle"`（戦闘のメッセージ窓と同じ大きさ）。frontmatter `dialog_font_size:` から流す。`window_style` を書いた作品の窓だけに効く。GUI 専用。 */
+  dialog_font_size?: string | null
+  /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */
+  dialog_window_height?: string | null
+  /** 一枚絵フィールドの会話窓の話者名の見せ方 (#1184)。`"inline"`（既定＝従来）/ `"large"` / `"plate"`。frontmatter `dialog_name_style:` から流す。GUI 専用。 */
+  dialog_name_style?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
   /** フィールドメニューでどうぐ・まほうを使って成功したときの文 (#1185)。`"on"`（既定）/ `"off"`。frontmatter `field_menu_use_message:` から流す。失敗の文は対象外。GUI 専用（一枚絵フィールド）。 */
