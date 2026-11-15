@@ -122,11 +122,29 @@ export function normalizeDialogWindowHeight(
 }
 
 /**
- * `dialog_window_height` の下限（画面高さ比）。話者名 1 行 + 本文 1 行（行の高さ = 文字サイズ × 1.6）と上下の余白（2%H ずつ）が必ず入る高さ。
- * 文字サイズに依存するので `dialog_font_size` ごとに違う（normal ≒ 0.154・battle ≒ 0.201）。px の丸めの余裕に 0.005 足して小数 3 桁へ切り上げる。
+ * 話者名 1 行 + 本文 1 行（行の高さ = 文字サイズ(px) × 1.6）と上下の余白が窓に収まる最小の高さ（画面高さ比。丸めなしの正確な値）。
+ * 画面高さが非有限・0 以下なら 0。DialogBox が実際の文字サイズ(px)から窓の高さを持ち上げるのに使う
+ */
+export function minHeightRatioForFont(screenHeight: number, fontPx: number): number {
+  if (!(Number.isFinite(screenHeight) && screenHeight > 0)) return 0
+  const pad = Math.max(4, Math.round(screenHeight * FIELD_DIALOG_PADDING_RATIO))
+  return (pad * 2 + FF_DIALOG_LINE_HEIGHT_RATIO * fontPx * 2) / screenHeight
+}
+
+/**
+ * `dialog_window_height` の下限（画面高さ比）。`minHeightRatioForFont` に px の丸めの余裕 0.005 を足して小数 3 桁へ切り上げた値。
+ * 文字サイズに依存するので `dialog_font_size` ごとに違う（normal ≒ 0.154・battle ≒ 0.202）。
+ * `screenHeight` を渡すと、実際に使う文字サイズ（`fieldDialogFontSize`。最小 14px を含む）から出す。省略は画面比だけの値（設定の検証用。小さい画面では DialogBox が実際の文字サイズで窓を持ち上げる）。
  * これ未満だと本文が窓の外へはみ出す（1 ページの行数は最低 1 に保たれるため）
  */
-export function fieldDialogMinHeightRatio(size: DialogFontSize = 'normal'): number {
+export function fieldDialogMinHeightRatio(
+  size: DialogFontSize = 'normal',
+  screenHeight?: number
+): number {
+  if (screenHeight !== undefined && Number.isFinite(screenHeight) && screenHeight > 0) {
+    const raw = minHeightRatioForFont(screenHeight, fieldDialogFontSize(screenHeight, size)) + 0.005
+    return Math.ceil(raw * 1000) / 1000
+  }
   const font = size === 'battle' ? FIELD_DIALOG_BATTLE_FONT_RATIO : FIELD_DIALOG_FONT_RATIO
   const raw = FIELD_DIALOG_PADDING_RATIO * 2 + FF_DIALOG_LINE_HEIGHT_RATIO * font * 2 + 0.005
   return Math.ceil(raw * 1000) / 1000

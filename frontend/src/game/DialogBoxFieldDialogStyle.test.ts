@@ -29,6 +29,7 @@ import {
   normalizeDialogFontSize,
   normalizeDialogNameStyle,
   fieldDialogMinHeightRatio,
+  minHeightRatioForFont,
   fieldDialogStyleOptions,
   normalizeDialogWindowHeight,
   FF_DIALOG_LINE_HEIGHT_RATIO,
@@ -108,7 +109,7 @@ describe('dialog_font_size: battle は戦闘のメッセージ窓と同じ大き
 })
 
 describe('dialog_window_height (#1184)', () => {
-  it('正規化: 0.1〜0.6 の有限数だけ', () => {
+  it('正規化: 文字サイズごとの下限〜0.6 の有限数だけ', () => {
     expect(normalizeDialogWindowHeight(0.36)).toBe(0.36)
     const min = fieldDialogMinHeightRatio('normal')
     expect(normalizeDialogWindowHeight(min)).toBe(min)
@@ -244,6 +245,57 @@ describe('dialog_window_height の下限は文字サイズで決まる (#1184)',
     const box = make({ fontSize: 'battle', height: b })
     box.show('ペー子', 'あ\nい\nう')
     expect(box.getPageInfo().pages).toBe(3)
+    box.dispose()
+  })
+})
+
+describe('下限は最小文字サイズ 14px も含めて計算する (#1184)', () => {
+  it('小さい画面（文字が 14px の下限に張り付く）では画面比だけの下限より高くなる', () => {
+    expect(fieldDialogFontSize(300, 'normal')).toBe(14)
+    expect(fieldDialogMinHeightRatio('normal', 300)).toBeGreaterThan(
+      fieldDialogMinHeightRatio('normal')
+    )
+    expect(fieldDialogMinHeightRatio('battle', 200)).toBeGreaterThan(
+      fieldDialogMinHeightRatio('battle')
+    )
+    // 大きい画面では画面比だけの下限と（切り上げの範囲で）同じ
+    expect(
+      Math.abs(fieldDialogMinHeightRatio('battle', 1080) - fieldDialogMinHeightRatio('battle'))
+    ).toBeLessThan(0.002)
+  })
+  it('その下限の高さで、実際の文字サイズ(14px 下限込み)の名前 1 行 + 本文 1 行が窓に収まる', () => {
+    for (const [size, h] of [
+      ['normal', 300],
+      ['normal', 400],
+      ['battle', 200],
+      ['battle', 280],
+    ] as const) {
+      const r = computeFieldDialogRect(
+        h * (16 / 9),
+        h,
+        'bottom',
+        fieldDialogMinHeightRatio(size, h)
+      )
+      const fs = fieldDialogFontSize(h, size)
+      expect(r.padding * 2 + fs * FF_DIALOG_LINE_HEIGHT_RATIO * 2).toBeLessThanOrEqual(r.height)
+    }
+  })
+  it('DialogBox は窓の高さを実際の文字サイズの最小の高さまで持ち上げる（指定が低すぎても本文が出る）', () => {
+    const box = new DialogBox({
+      screenWidth: 533,
+      screenHeight: 300,
+      boxHeight: 66,
+      fontSize: fieldDialogFontSize(300, 'normal'),
+      nameColor: 0xffe066,
+      nameSeparateBox: false,
+      ...fieldDialogOptions({ windowStyle: 'ff-blue' }),
+      ffPlacement: () => ({ footY: 100, avatar: null }),
+      ffWindowHeightRatio: 0.1,
+    })
+    box.hide()
+    expect(box.getBoxRect().height).toBeGreaterThanOrEqual(
+      Math.floor(300 * minHeightRatioForFont(300, 14))
+    )
     box.dispose()
   })
 })

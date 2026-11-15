@@ -36,6 +36,7 @@ import {
   FIELD_DIALOG_TIMED_NAME_X_RATIO,
   computeFfDialogRect,
   computeFieldDialogRect,
+  minHeightRatioForFont,
   pickDialogSide,
   type DialogRect,
   type DialogSide,
@@ -725,6 +726,14 @@ export class DialogBox extends Container {
     return { x: this.boxX, y: this.boxY + this.y, width: this.boxW, height: this.boxH }
   }
 
+  /**
+   * 設計どおりの窓の高さ（画面高さ比）。指定（既定 0.28）と、実際の文字サイズで名前 1 行 + 本文 1 行が入る最小の高さの大きいほう。
+   * 小さい画面では文字サイズの最小 14px のため比だけの下限では足りないので、ここで持ち上げる (#1184)
+   */
+  private effectiveHeightRatio(): number {
+    return Math.max(this.ffHeightRatio, minHeightRatioForFont(this.screenHeight, this.fontSize))
+  }
+
   /** 設計どおりの窓の、いまの側（検証用の読み取り。置き場所を使わない窓は常に bottom） */
   getPlacedSide(): DialogSide {
     return this.placedSide
@@ -744,7 +753,7 @@ export class DialogBox extends Container {
       this.screenWidth,
       this.screenHeight,
       p.avatar,
-      this.ffHeightRatio
+      this.effectiveHeightRatio()
     )
     const first = !this.placedActive
     this.placedActive = true
@@ -769,13 +778,13 @@ export class DialogBox extends Container {
       this.screenWidth,
       this.screenHeight,
       'top',
-      this.ffHeightRatio
+      this.effectiveHeightRatio()
     ).y
     const bottom = computeFieldDialogRect(
       this.screenWidth,
       this.screenHeight,
       'bottom',
-      this.ffHeightRatio
+      this.effectiveHeightRatio()
     ).y
     return top - bottom
   }
@@ -2125,7 +2134,12 @@ export class DialogBox extends Container {
   private applyFfGeometry(): void {
     // 設計どおりの窓 (#1153): 基準は下側の矩形。上側は Container の y（placedOffsetY）で持ち上げる
     const r = this.ffPlacement
-      ? computeFieldDialogRect(this.screenWidth, this.screenHeight, 'bottom', this.ffHeightRatio)
+      ? computeFieldDialogRect(
+          this.screenWidth,
+          this.screenHeight,
+          'bottom',
+          this.effectiveHeightRatio()
+        )
       : computeFfDialogRect(this.screenWidth, this.screenHeight)
     this.boxX = r.x
     this.boxY = r.y
