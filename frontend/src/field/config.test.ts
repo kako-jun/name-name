@@ -1890,6 +1890,52 @@ describe('dialogStyle / dialogMsPerChar (#840)', () => {
   })
 })
 
+describe('dialogFontSize / dialogWindowHeight / dialogNameStyle (#1184)', () => {
+  it('未指定はどのキーも警告も無し（従来と同一）。normal・inline の明示も従来と同じ（キーを出さない）', () => {
+    const c = ok(mutated(() => {}))
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle'])
+      expect(k in c).toBe(false)
+    const d = ok(
+      mutated((c) => {
+        c.dialogFontSize = 'normal'
+        c.dialogNameStyle = 'inline'
+      })
+    )
+    expect('dialogFontSize' in d).toBe(false)
+    expect('dialogNameStyle' in d).toBe(false)
+    expect(d.warnings).toBeUndefined()
+  })
+  it('指定を読む（互いに独立）', () => {
+    const c = ok(
+      mutated((c) => {
+        c.dialogFontSize = 'battle'
+        c.dialogWindowHeight = 0.36
+        c.dialogNameStyle = 'large'
+      })
+    )
+    expect(c.dialogFontSize).toBe('battle')
+    expect(c.dialogWindowHeight).toBe(0.36)
+    expect(c.dialogNameStyle).toBe('large')
+    expect('dialogStyle' in c).toBe(false)
+    expect('dialogMsPerChar' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（読み込みは成功・従来の見た目）', () => {
+    const c = ok(
+      mutated((c) => {
+        c.dialogFontSize = 'huge'
+        c.dialogWindowHeight = 0.9
+        c.dialogNameStyle = 3
+      })
+    )
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle']) {
+      expect(k in c).toBe(false)
+      expect(c.warnings?.some((w) => w.includes(k))).toBe(true)
+    }
+    expect(c.warnings).toHaveLength(3)
+  })
+})
+
 describe('player.cycle / idleFrame (sit-by-me#59)', () => {
   const parse = (player: Raw) => {
     const raw = minimal()

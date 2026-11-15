@@ -2663,6 +2663,26 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect((await parseMarkdown(docWith(['battle_party_layout:']))).battle_party_layout).toBeNull()
   })
 
+  it('dialog_font_size / dialog_window_height / dialog_name_style が doc に残り（dialog_style と取り違えない）、省略・空値は null (#1184)', async () => {
+    const doc = await parseMarkdown(
+      docWith([
+        'dialog_style: ff',
+        'dialog_font_size: battle',
+        'dialog_window_height: 0.36',
+        'dialog_name_style: plate',
+      ])
+    )
+    expect(doc.dialog_style).toBe('ff')
+    expect(doc.dialog_font_size).toBe('battle')
+    expect(doc.dialog_window_height).toBe('0.36')
+    expect(doc.dialog_name_style).toBe('plate')
+    const none = await parseMarkdown(docWith([]))
+    expect(none.dialog_font_size).toBeNull()
+    expect(none.dialog_window_height).toBeNull()
+    expect(none.dialog_name_style).toBeNull()
+    expect((await parseMarkdown(docWith(['dialog_name_style:']))).dialog_name_style).toBeNull()
+  })
+
   it('battle_enemy_grid_align が doc に残り（grid と取り違えない）、省略・空値は null (#1178)', async () => {
     const doc = await parseMarkdown(
       docWith(['battle_enemy_grid: 6x2', 'battle_enemy_grid_align: center'])

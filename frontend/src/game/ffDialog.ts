@@ -82,21 +82,59 @@ export interface DialogRect {
   height: number
 }
 
-export function fieldDialogFontSize(screenHeight: number): number {
+/**
+ * 戦闘のメッセージ窓と同じ文字サイズ（画面高さ比）(#1184)。戦闘側は設計高さ 450 に対して `MESSAGE_WINDOW_FONT_SIZE`(22) px
+ * （BattleScreen.ts。フィールド作品は 1920x1080 固定なので uiScale = 1080/450 倍され、実画面では高さの 22/450）。
+ * 戦闘側の定数と一致することは ffDialog.test.ts で固定する
+ */
+export const FIELD_DIALOG_BATTLE_FONT_RATIO = 22 / 450
+
+/** 会話窓の文字サイズ (#1184)。`normal` = 従来（既定）/ `battle` = 戦闘のメッセージ窓と同じ */
+export type DialogFontSize = 'normal' | 'battle'
+/** 会話窓の話者名の見せ方 (#1184)。`inline` = 従来（既定）/ `large` = 大きめ・太字・金色 / `plate` = 金の名札 */
+export type DialogNameStyle = 'inline' | 'large' | 'plate'
+export const DIALOG_FONT_SIZES: readonly DialogFontSize[] = ['normal', 'battle']
+export const DIALOG_NAME_STYLES: readonly DialogNameStyle[] = ['inline', 'large', 'plate']
+/** `dialog_window_height` の範囲（画面高さ比）と既定 */
+export const FIELD_DIALOG_HEIGHT_MIN = 0.1
+export const FIELD_DIALOG_HEIGHT_MAX = 0.6
+
+/** 設定値の正規化（前後の空白・大小を無視）。未指定・未知値は undefined（呼び出し側が警告する） */
+export function normalizeDialogFontSize(raw: unknown): DialogFontSize | undefined {
+  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return (DIALOG_FONT_SIZES as readonly string[]).includes(v) ? (v as DialogFontSize) : undefined
+}
+export function normalizeDialogNameStyle(raw: unknown): DialogNameStyle | undefined {
+  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return (DIALOG_NAME_STYLES as readonly string[]).includes(v) ? (v as DialogNameStyle) : undefined
+}
+/** 窓の高さ（画面高さ比）。有限で 0.1〜0.6 の数値だけ通す。範囲外・非数は undefined */
+export function normalizeDialogWindowHeight(raw: unknown): number | undefined {
+  return typeof raw === 'number' &&
+    Number.isFinite(raw) &&
+    raw >= FIELD_DIALOG_HEIGHT_MIN &&
+    raw <= FIELD_DIALOG_HEIGHT_MAX
+    ? raw
+    : undefined
+}
+
+export function fieldDialogFontSize(screenHeight: number, size: DialogFontSize = 'normal'): number {
   const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : 0
-  return Math.max(14, Math.round(sh * FIELD_DIALOG_FONT_RATIO))
+  const ratio = size === 'battle' ? FIELD_DIALOG_BATTLE_FONT_RATIO : FIELD_DIALOG_FONT_RATIO
+  return Math.max(14, Math.round(sh * ratio))
 }
 
 /** 指定の側の窓の矩形。不変条件: 画面内に収まる。非有限・負の入力は 0 扱い */
 export function computeFieldDialogRect(
   screenWidth: number,
   screenHeight: number,
-  side: DialogSide
+  side: DialogSide,
+  heightRatio: number = FIELD_DIALOG_HEIGHT_RATIO
 ): FfDialogRect {
   const sw = Number.isFinite(screenWidth) && screenWidth > 0 ? screenWidth : 0
   const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : 0
   const width = Math.round(sw * FIELD_DIALOG_WIDTH_RATIO)
-  const height = Math.round(sh * FIELD_DIALOG_HEIGHT_RATIO)
+  const height = Math.round(sh * heightRatio)
   const edge = Math.round(sh * FIELD_DIALOG_EDGE_RATIO)
   return {
     x: Math.round((sw - width) / 2),
@@ -119,13 +157,14 @@ export function pickDialogSide(
   footY: number,
   screenWidth: number,
   screenHeight: number,
-  avatar: DialogRect | null
+  avatar: DialogRect | null,
+  heightRatio: number = FIELD_DIALOG_HEIGHT_RATIO
 ): DialogSide {
   const preferred: DialogSide = footY > screenHeight / 2 ? 'top' : 'bottom'
   if (!avatar) return preferred
   const other: DialogSide = preferred === 'top' ? 'bottom' : 'top'
   const hit = (side: DialogSide) =>
-    rectsOverlap(computeFieldDialogRect(screenWidth, screenHeight, side), avatar)
+    rectsOverlap(computeFieldDialogRect(screenWidth, screenHeight, side, heightRatio), avatar)
   return hit(preferred) && !hit(other) ? other : preferred
 }
 

@@ -49,7 +49,16 @@ import type { BattleEnemyListMode } from '../game/battleEnemyList'
 import { hasBattleEffects, parseBattleEffects, type BattleEffects } from '../game/battleEffects'
 import { hasEmotions, parseEmotions, type EmotionSheets } from '../game/fieldEmotion'
 import type { WindowStyle } from '../game/windowStyle'
-import { normalizeDialogStyle, normalizeMsPerChar, type DialogStyle } from '../game/ffDialog'
+import {
+  normalizeDialogFontSize,
+  normalizeDialogNameStyle,
+  normalizeDialogStyle,
+  normalizeDialogWindowHeight,
+  normalizeMsPerChar,
+  type DialogFontSize,
+  type DialogNameStyle,
+  type DialogStyle,
+} from '../game/ffDialog'
 import {
   parseCommandIds,
   type CommandId,
@@ -290,6 +299,15 @@ export interface FieldConfig {
    * 会話窓のスタイル (#840)。`dialogStyle`: `ff` = 画面上部に固定・ff-blue・1 文字ずつ。未指定は undefined＝従来の下部の窓。不正な値は警告して無視
    */
   dialogStyle?: DialogStyle
+  /**
+   * 会話窓の文字サイズ (#1184)。`dialogFontSize`: `battle` = 戦闘のメッセージ窓と同じ大きさ。未指定・`normal` は undefined＝従来（キーが出ない）。不正な値は警告して無視。
+   * `battle.windowStyle` を書いた作品の窓だけに効く。窓の高さ・話者名の見せ方とは独立
+   */
+  dialogFontSize?: DialogFontSize
+  /** 会話窓の高さ (#1184)。`dialogWindowHeight`: 画面高さに対する比 0.1〜0.6。未指定は undefined＝従来の 0.28。不正な値は警告して無視。`battle.windowStyle` を書いた作品の窓だけに効く */
+  dialogWindowHeight?: number
+  /** 会話窓の話者名の見せ方 (#1184)。`dialogNameStyle`: `large` / `plate`。未指定・`inline` は undefined＝従来。不正な値は警告して無視。`battle.windowStyle` を書いた作品の窓だけに効く */
+  dialogNameStyle?: DialogNameStyle
   /**
    * 主人公・同行者・NPC の歩行スプライトの見せ方 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` = 足元に透明アクリルの板・台座・影を付ける（戦闘の `battle.spriteStyle` と同じ見た目。戦闘側の設定とは独立）。
    * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC にも効く（#861）
@@ -1039,6 +1057,33 @@ export function parseConfig(
         `dialogStyle は "ff" のみ指定できます: ${JSON.stringify(raw.dialogStyle)}（無視します）`
       )
   }
+  // 会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。互いに独立。不正は警告して無視（従来の見た目）
+  let dialogFontSize: DialogFontSize | undefined
+  if (raw.dialogFontSize !== undefined) {
+    const v = normalizeDialogFontSize(raw.dialogFontSize)
+    if (v === undefined)
+      warnings.push(
+        `dialogFontSize は "normal" か "battle": ${JSON.stringify(raw.dialogFontSize)}（無視します）`
+      )
+    else if (v === 'battle') dialogFontSize = v
+  }
+  let dialogWindowHeight: number | undefined
+  if (raw.dialogWindowHeight !== undefined) {
+    dialogWindowHeight = normalizeDialogWindowHeight(raw.dialogWindowHeight)
+    if (dialogWindowHeight === undefined)
+      warnings.push(
+        `dialogWindowHeight は 0.1 以上 0.6 以下の数値（画面高さ比）である必要があります: ${JSON.stringify(raw.dialogWindowHeight)}（無視します）`
+      )
+  }
+  let dialogNameStyle: DialogNameStyle | undefined
+  if (raw.dialogNameStyle !== undefined) {
+    const v = normalizeDialogNameStyle(raw.dialogNameStyle)
+    if (v === undefined)
+      warnings.push(
+        `dialogNameStyle は "inline" / "large" / "plate" のどれか: ${JSON.stringify(raw.dialogNameStyle)}（無視します）`
+      )
+    else if (v !== 'inline') dialogNameStyle = v
+  }
   let fieldSpriteStyle: 'acrylic' | undefined
   if (raw.spriteStyle !== undefined) {
     if (raw.spriteStyle === 'acrylic') fieldSpriteStyle = 'acrylic'
@@ -1208,6 +1253,9 @@ export function parseConfig(
       ...(emotionsSource ? { emotionsSource } : {}),
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
+      ...(dialogFontSize ? { dialogFontSize } : {}),
+      ...(dialogWindowHeight !== undefined ? { dialogWindowHeight } : {}),
+      ...(dialogNameStyle ? { dialogNameStyle } : {}),
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(tiltShift ? { tiltShift } : {}),
       ...(ui ? { ui } : {}),

@@ -264,6 +264,18 @@ pub fn emit(doc: &Document) -> String {
                 "battle_enemy_window_overlap_bottom: \"{sanitized}\"\n"
             ));
         }
+        if let Some(ref v) = doc.dialog_font_size {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("dialog_font_size: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.dialog_window_height {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("dialog_window_height: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.dialog_name_style {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("dialog_name_style: \"{sanitized}\"\n"));
+        }
         if let Some(ref v) = doc.battle_party_layout {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_party_layout: \"{sanitized}\"\n"));
@@ -2661,6 +2673,9 @@ mod tests {
             battle_enemy_grid_extent: None,
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
+            dialog_font_size: None,
+            dialog_window_height: None,
+            dialog_name_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -3190,6 +3205,9 @@ mod tests {
             battle_enemy_grid_extent: None,
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
+            dialog_font_size: None,
+            dialog_window_height: None,
+            dialog_name_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),
