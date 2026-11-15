@@ -41,7 +41,7 @@ const UNSUPPORTED_KEYS = [
 export interface FrontmatterRaw {
   /** `raw.battle` に入れる分(`logicalSize` を含む) */
   battle: Raw
-  /** `raw` の最上位に入れる分(`dialogStyle` `spriteStyle` `emotionsUrl`) */
+  /** `raw` の最上位に入れる分(`dialogStyle` `spriteStyle` `emotionsUrl` `menuUseMessage`) */
   top: Raw
 }
 
@@ -91,6 +91,9 @@ export function frontmatterRaw(
         `frontmatter の dialog_style は "ff" / "adv" / "novel" のどれかにしてください: ${JSON.stringify(doc.dialog_style)}（無視します）`
       )
   }
+  // フィールドメニューの使用成功の文 (#1185)。on / off。他のキーとは結合しない
+  const menuUseMessage = enumOf(doc, 'field_menu_use_message', ['on', 'off'], warnings)
+  if (menuUseMessage !== undefined) top.menuUseMessage = menuUseMessage
   if (typeof doc.field_emotions === 'string' && doc.field_emotions !== '')
     top.emotionsUrl = resolveRpgDataPath(assetBaseUrl, doc.field_emotions)
 

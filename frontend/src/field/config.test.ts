@@ -1836,6 +1836,41 @@ describe('scriptUrl と npcs.scene (#841 段階2)', () => {
   })
 })
 
+describe('menuUseMessage (#1185)', () => {
+  it('未指定・"on" は従来どおり（キーなし・警告なし）', () => {
+    const none = ok(mutated(() => {}))
+    expect('menuUseMessageOff' in none).toBe(false)
+    const on = ok(
+      mutated((c) => {
+        c.menuUseMessage = 'on'
+      })
+    )
+    expect('menuUseMessageOff' in on).toBe(false)
+    expect(on.warnings).toBeUndefined()
+  })
+  it('"off" は menuUseMessageOff: true', () => {
+    const c = ok(
+      mutated((c) => {
+        c.menuUseMessage = 'off'
+      })
+    )
+    expect(c.menuUseMessageOff).toBe(true)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（従来どおり出す）', () => {
+    for (const bad of ['maybe', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.menuUseMessage = bad
+        })
+      )
+      expect('menuUseMessageOff' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('menuUseMessage')
+    }
+  })
+})
+
 describe('dialogStyle / dialogMsPerChar (#840)', () => {
   it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
     const c = ok(mutated(() => {}))

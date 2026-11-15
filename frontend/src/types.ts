@@ -1407,6 +1407,8 @@ export interface EventDocument {
   battle_party_layout?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
+  /** フィールドメニューでどうぐ・まほうを使って成功したときの文 (#1185)。`"on"`（既定）/ `"off"`。frontmatter `field_menu_use_message:` から流す。失敗の文は対象外。GUI 専用（一枚絵フィールド）。 */
+  field_menu_use_message?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（一枚絵フィールドの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */
   field_emotions?: string | null
   /** 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。frontmatter `battle_effects:` から流す。中身は種類名 → シート宣言（戦闘の設定 JSON の `effects` と同じ検証）。不正は警告して無視、未指定はエフェクトなし。GUI 専用。 */

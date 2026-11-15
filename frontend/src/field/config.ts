@@ -291,6 +291,11 @@ export interface FieldConfig {
    */
   dialogStyle?: DialogStyle
   /**
+   * フィールドメニューでどうぐ・まほうを使って成功したときの文を出さない (#1185)。`menuUseMessage: "off"` のとき true。未指定・`"on"` は undefined＝従来どおり出す。
+   * 失敗の文（MP 不足など）と HP/MP の数字更新・所持数の減少には影響しない。不正な値は警告して無視
+   */
+  menuUseMessageOff?: true
+  /**
    * 主人公・同行者・NPC の歩行スプライトの見せ方 (sit-by-me#58 / #861)。`spriteStyle: "acrylic"` = 足元に透明アクリルの板・台座・影を付ける（戦闘の `battle.spriteStyle` と同じ見た目。戦闘側の設定とは独立）。
    * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC にも効く（#861）
    */
@@ -1039,6 +1044,14 @@ export function parseConfig(
         `dialogStyle は "ff" のみ指定できます: ${JSON.stringify(raw.dialogStyle)}（無視します）`
       )
   }
+  let menuUseMessageOff: true | undefined
+  if (raw.menuUseMessage !== undefined) {
+    if (raw.menuUseMessage === 'off') menuUseMessageOff = true
+    else if (raw.menuUseMessage !== 'on')
+      warnings.push(
+        `menuUseMessage は "on" か "off": ${JSON.stringify(raw.menuUseMessage)}（無視します）`
+      )
+  }
   let fieldSpriteStyle: 'acrylic' | undefined
   if (raw.spriteStyle !== undefined) {
     if (raw.spriteStyle === 'acrylic') fieldSpriteStyle = 'acrylic'
@@ -1208,6 +1221,7 @@ export function parseConfig(
       ...(emotionsSource ? { emotionsSource } : {}),
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
+      ...(menuUseMessageOff ? { menuUseMessageOff } : {}),
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
       ...(tiltShift ? { tiltShift } : {}),
       ...(ui ? { ui } : {}),

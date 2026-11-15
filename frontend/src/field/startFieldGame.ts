@@ -1517,6 +1517,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         width: app.screen.width,
         height: app.screen.height,
         acrylic: config.spriteStyle === 'acrylic',
+        useMessage: !config.menuUseMessageOff,
         transition: menuCfg.transition,
         onClose: () => menuHost?.onScreenClosed(),
         onUse: (req) => menuRuntime?.use(req) ?? null,
