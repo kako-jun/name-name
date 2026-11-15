@@ -2012,6 +2012,21 @@ describe('rpgProjectFromDoc: battle_enemy_grid_align (#1178)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: battle_text_overflow (#1183)', () => {
+  const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
+  it('scroll / ellipsis はそのまま、未指定・空は ellipsis（警告なし）、不正は警告して ellipsis', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(proj({ battle_text_overflow: 'scroll' }).battleTextOverflow).toBe('scroll')
+    expect(proj({ battle_text_overflow: 'ellipsis' }).battleTextOverflow).toBe('ellipsis')
+    for (const v of [undefined, null, ''])
+      expect(proj({ battle_text_overflow: v }).battleTextOverflow).toBe('ellipsis')
+    expect(spy).not.toHaveBeenCalled()
+    expect(proj({ battle_text_overflow: 'marquee' }).battleTextOverflow).toBe('ellipsis')
+    expect(spy).toHaveBeenCalledTimes(1)
+    spy.mockRestore()
+  })
+})
+
 describe('rpgProjectFromDoc: battle_enemy_grid_extent / battle_party_layout / battle_enemy_window_overlap_bottom (#1178)', () => {
   const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
   it('wide / tall はそのまま、未指定・空・不正は既定（不正は警告）。グリッドの有無とは独立', () => {

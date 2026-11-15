@@ -25,6 +25,13 @@ import {
 import type { TargetSide } from './battleMenu'
 import { estimateTextWidth } from './battleLayout'
 import { sampleMenuTransition, DEFAULT_MOTION_TIMING } from './battleMotion'
+import {
+  MarqueeClock,
+  marqueeOverflowPx,
+  marqueeTimingOf,
+  sampleMarquee,
+  type MarqueeTiming,
+} from './battleMarquee'
 
 /** BattleScreen が提供する、見た目の共通部品と入力の通知先 */
 export interface BattleMenuHost {
@@ -118,8 +125,20 @@ export function placeHint(
   return candidates.find((c) => inScreen(c.cx, c.bottom) && !hits(c.cx, c.bottom)) ?? null
 }
 
+/** 横スクロール中の名前 1 つ (#1183)。`left` は文字の左端（クリップ窓の左端）、`overflow` は流れる量 */
+interface MenuMarquee {
+  key: string
+  text: PixiText
+  left: number
+  overflow: number
+}
+
 export class BattleMenuLayer extends Container {
   private host: BattleMenuHost
+  /** 入り切らない名前の横スクロール (#1183)。表示専用の時計（ゲームのティックと独立。`tickMarquee` で積む） */
+  private marqueeClock = new MarqueeClock()
+  private marqueeTiming: MarqueeTiming = marqueeTimingOf(DEFAULT_MOTION_TIMING)
+  private marquees: MenuMarquee[] = []
   private backdrop = new Graphics()
   private body = new Container()
   /** 操作の案内の置き場。窓（body）の開閉の動きには連動させず、窓が閉じ始めたらすぐ差し替える */
@@ -147,6 +166,25 @@ export class BattleMenuLayer extends Container {
   setTransitionMs(ms: number): void {
     this.transitionMs = Number.isFinite(ms) && ms > 0 ? ms : 0
     if (this.transitionMs === 0) this.settleOpen()
+  }
+
+  /** 横スクロールの速さ・停止 (#1183)。motion preset の表から BattleScreen が渡す */
+  setMarqueeTiming(timing: MarqueeTiming): void {
+    this.marqueeTiming = timing
+    this.applyMarquees()
+  }
+
+  /** 横スクロールの時計を `dt` ms 進めて文字を動かす (#1183)。窓の開閉・ATB など他の時間とは独立 */
+  tickMarquee(dt: number): void {
+    this.marqueeClock.advance(dt)
+    this.applyMarquees()
+  }
+
+  private applyMarquees(): void {
+    for (const m of this.marquees) {
+      const off = sampleMarquee(this.marqueeClock.elapsedOf(m.key), m.overflow, this.marqueeTiming)
+      m.text.x = m.left - off
+    }
   }
 
   /** 開閉の進み。`dt` ms 進め、閉じ切ったら窓の中身を片付けて案内だけ描く */
@@ -219,6 +257,8 @@ export class BattleMenuLayer extends Container {
       if (v.type === 'list') this.drawList(v)
       else this.drawTarget(v)
     }
+    this.marqueeClock.retain(new Set(this.marquees.map((m) => m.key)))
+    this.applyMarquees()
     this.drawHint(
       hint,
       width,
@@ -249,6 +289,7 @@ export class BattleMenuLayer extends Container {
   }
 
   private clearBody(): void {
+    this.marquees = []
     for (const c of this.body.removeChildren()) c.destroy({ children: true })
     this.clearHint()
   }
@@ -343,6 +384,23 @@ export class BattleMenuLayer extends Container {
       label.x = row.rect.x
       label.y = row.rect.y + row.rect.h / 2
       win.addChild(label)
+      if (row.labelClipW !== undefined) {
+        // 入り切らない名前 (#1183): 名前の領域でクリップし、ゆっくり横に流す（消費の上には出ない）
+        const overflow = marqueeOverflowPx(this.measuredWidth(label, row.label), row.labelClipW)
+        if (overflow > 0) {
+          const mask = new Graphics()
+          mask.rect(row.rect.x, row.rect.y, row.labelClipW, row.rect.h).fill(0xffffff)
+          mask.eventMode = 'none'
+          win.addChild(mask)
+          label.mask = mask
+          this.marquees.push({
+            key: `${v.kind}|${row.index}|${row.label}`,
+            text: label,
+            left: row.rect.x,
+            overflow,
+          })
+        }
+      }
       if (row.cost) {
         const cost = new PixiText({ text: row.cost, style: this.styled(color) })
         cost.anchor.set(1, 0.5)
@@ -381,6 +439,17 @@ export class BattleMenuLayer extends Container {
     }
     if (v.hand) win.addChild(this.hand(v.hand))
     this.body.addChild(win)
+  }
+
+  /** 文字の幅。概算と実測（取れる環境だけ）の大きい方 (#1183。末尾が切れないように) */
+  private measuredWidth(t: PixiText, s: string): number {
+    const est = estimateTextWidth(s, MENU_FONT_SIZE)
+    try {
+      const w = t.width
+      return Number.isFinite(w) ? Math.max(est, w) : est
+    } catch {
+      return est
+    }
   }
 
   private drawTarget(v: MenuTargetView): void {

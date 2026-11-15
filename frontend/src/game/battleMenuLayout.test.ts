@@ -523,3 +523,76 @@ describe('候補 0 件の空窓 (#1171)', () => {
     }
   })
 })
+
+describe('buildMenuView: battle_text_overflow (#1183)', () => {
+  const NAMES = [
+    'ほのお',
+    'ファイアボール',
+    'ファイアボール１２',
+    'とてもながいなまえのじゅもんです',
+    'ABCDEFGHIJKLMNOPQRST',
+    'メテオストライク',
+  ]
+  function viewOf(g: MenuGeometry, names: string[], costs: string[] = []) {
+    const spells: BattleSpellEntry[] = names.map((name, i) => ({
+      id: `s${i}`,
+      name,
+      mp: costs[i] === undefined ? 3 : Number(costs[i]),
+      target: '敵単体',
+    }))
+    const caster = ent('a')
+    const ctx: MenuContext = {
+      rows: buildMenuRows('spell', spells, caster),
+      maxRows: listMaxRows(g),
+      entries: spells,
+      party: [caster],
+      enemies: [ent('e')],
+      actorIndex: 0,
+    }
+    const stack = openList(EMPTY_STACK, 'spell', ctx)
+    return buildMenuView(stack, ctx, g)[0] as Extract<
+      ReturnType<typeof buildMenuView>[number],
+      { type: 'list' }
+    >
+  }
+
+  it('既定(未指定)と ellipsis は完全に同じ。画面サイズ総当たりで、窓の寸法・行の矩形も scroll と同じ', () => {
+    for (const [w, h] of SIZES) {
+      const g = geometry(w, h, 2, 3)
+      const base = viewOf(g, NAMES)
+      const ell = viewOf({ ...g, textOverflow: 'ellipsis' }, NAMES)
+      expect(ell).toEqual(base)
+      const scr = viewOf({ ...g, textOverflow: 'scroll' }, NAMES)
+      // 直交: scroll にしても窓・行の位置と大きさは変わらない
+      expect(scr.rect).toEqual(base.rect)
+      expect(scr.rows.map((r) => r.rect)).toEqual(base.rows.map((r) => r.rect))
+      expect(scr.hand).toEqual(base.hand)
+      expect(scr.rows.map((r) => r.cost)).toEqual(base.rows.map((r) => r.cost))
+    }
+  })
+
+  it('既定は従来どおり省略（8文字以上は 6文字+…）で、labelClipW は付かない', () => {
+    const g = geometry(800, 450, 2, 3)
+    const v = viewOf(g, NAMES)
+    expect(v.rows.some((r) => r.label.endsWith('…'))).toBe(true)
+    for (const r of v.rows) expect('labelClipW' in r).toBe(false)
+  })
+
+  it('scroll: 入り切らない名前だけ全文のまま labelClipW（名前の領域の幅）が付き、入る名前は何も変わらない', () => {
+    const g = geometry(800, 450, 2, 3)
+    const base = viewOf(g, NAMES)
+    const scr = viewOf({ ...g, textOverflow: 'scroll' }, NAMES)
+    scr.rows.forEach((r, i) => {
+      const was = base.rows[i]
+      if (was.label.endsWith('…') && was.label !== NAMES[r.index]) {
+        expect(r.label).toBe(NAMES[r.index])
+        expect(r.labelClipW).toBeGreaterThan(0)
+        expect(r.labelClipW).toBeLessThan(r.rect.w)
+      } else {
+        expect(r.label).toBe(was.label)
+        expect('labelClipW' in r).toBe(false)
+      }
+    })
+    expect(scr.rows.some((r) => r.labelClipW !== undefined)).toBe(true)
+  })
+})

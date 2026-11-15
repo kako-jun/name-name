@@ -214,6 +214,8 @@ export interface FieldBattleConfig {
   enemyWindowOverlapBottom?: number
   /** 味方の斜め一列の並び (#1178)。`battle.partyLayout`: `default`（既定）/ `tall`。未指定は undefined＝default */
   partyLayout?: 'default' | 'tall'
+  /** 戦闘の窓で入り切らない文字の扱い (#1183)。`battle.textOverflow`: `ellipsis`（既定）/ `scroll`。未指定は undefined＝ellipsis */
+  textOverflow?: 'ellipsis' | 'scroll'
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
   /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
@@ -940,6 +942,8 @@ export function parseConfig(
     )
   if (b.partyLayout !== undefined && b.partyLayout !== 'default' && b.partyLayout !== 'tall')
     return fail(`battle.partyLayout は "default" か "tall": ${JSON.stringify(b.partyLayout)}`)
+  if (b.textOverflow !== undefined && b.textOverflow !== 'ellipsis' && b.textOverflow !== 'scroll')
+    return fail(`battle.textOverflow は "ellipsis" か "scroll": ${JSON.stringify(b.textOverflow)}`)
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
     return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
@@ -1254,6 +1258,7 @@ export function parseConfig(
         ...(b.enemyGridExtent ? { enemyGridExtent: b.enemyGridExtent } : {}),
         ...(enemyWindowOverlapBottom !== undefined ? { enemyWindowOverlapBottom } : {}),
         ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
+        ...(b.textOverflow ? { textOverflow: b.textOverflow } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),

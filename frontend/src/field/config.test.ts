@@ -1095,6 +1095,17 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle.textOverflow は ellipsis / scroll を読み、未指定は undefined、不正値は読み込みエラー (#1183)', () => {
+    const c = withGrid('6x2', ['bit'])
+    expect(ok(c).battle.textOverflow).toBeUndefined()
+    c.battle = { ...(c.battle as object), textOverflow: 'scroll' }
+    expect(ok(c).battle.textOverflow).toBe('scroll')
+    c.battle = { ...(c.battle as object), textOverflow: 'ellipsis' }
+    expect(ok(c).battle.textOverflow).toBe('ellipsis')
+    c.battle = { ...(c.battle as object), textOverflow: 'marquee' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
   it('enemyGrid が不正ならエラーにせず無効（検証もしない）', () => {
     for (const bad of ['abc', '0x2', 6, null]) {
       const c = ok(withGrid(bad, ['boss*9']))

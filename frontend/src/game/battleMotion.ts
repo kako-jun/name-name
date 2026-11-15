@@ -197,6 +197,12 @@ export interface MotionTiming {
   entranceEase: 'inOutQuad' | 'outQuad'
   /** 味方の登場の開始遅れ（ms）。0 は敵と同時。entranceMs が 0 のときは無視 */
   entrancePartyDelayMs: number
+  /**
+   * 戦闘の窓で入り切らない文字の横スクロール (#1183。`battle_text_overflow: scroll` のときだけ使う): 流れる速さ (px/秒)。default 30（ゆっくり）・snappy 48（暫定値）
+   */
+  marqueeSpeed: number
+  /** 横スクロールが先頭・末尾で止まる時間 (ms)。default 1000・snappy 600（暫定値） */
+  marqueeHoldMs: number
 }
 
 /** 現行の値（挙動不変の基準）。既存テストはこれで全通しする */
@@ -245,6 +251,8 @@ export const DEFAULT_MOTION_TIMING: MotionTiming = {
   entranceMs: 200,
   entranceEase: 'outQuad',
   entrancePartyDelayMs: 0,
+  marqueeSpeed: 30,
+  marqueeHoldMs: 1000,
 }
 
 /**
@@ -301,6 +309,8 @@ export const SNAPPY_MOTION_TIMING: MotionTiming = {
   entranceMs: 200,
   entranceEase: 'outQuad',
   entrancePartyDelayMs: 0,
+  marqueeSpeed: 48,
+  marqueeHoldMs: 600,
 }
 
 export type BattleMotionPreset = 'default' | 'snappy'

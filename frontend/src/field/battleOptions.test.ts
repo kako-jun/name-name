@@ -144,6 +144,18 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
       expect(k in none).toBe(false)
   })
 
+  it('textOverflow は scroll のときだけでなく指定があれば渡り、未指定は渡さない (#1183)', () => {
+    const o = buildBattleScreenOptions(load({ layout: 'side', textOverflow: 'scroll' }).battle, {})
+    expect(o.textOverflow).toBe('scroll')
+    expect(
+      buildBattleScreenOptions(load({ layout: 'side', textOverflow: 'ellipsis' }).battle, {})
+        .textOverflow
+    ).toBe('ellipsis')
+    expect('textOverflow' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(
+      false
+    )
+  })
+
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
     const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
     expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')

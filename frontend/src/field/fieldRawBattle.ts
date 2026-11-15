@@ -72,6 +72,7 @@ export function frontmatterRaw(
   set('enemyGridAlign', enumOf(doc, 'battle_enemy_grid_align', ['center', 'bottom'], warnings))
   set('enemyGridExtent', enumOf(doc, 'battle_enemy_grid_extent', ['normal', 'wide'], warnings))
   set('partyLayout', enumOf(doc, 'battle_party_layout', ['default', 'tall'], warnings))
+  set('textOverflow', enumOf(doc, 'battle_text_overflow', ['ellipsis', 'scroll'], warnings))
   if (typeof doc.battle_background === 'string' && doc.battle_background !== '')
     battle.background = doc.battle_background
 

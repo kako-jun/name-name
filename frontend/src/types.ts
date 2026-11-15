@@ -1405,6 +1405,8 @@ export interface EventDocument {
   battle_enemy_window_overlap_bottom?: string | null
   /** 味方の斜め一列の並び (#1178)。`"default"`（既定）/ `"tall"`。frontmatter `battle_party_layout:` から流す。不正値・未指定は default。GUI 専用。 */
   battle_party_layout?: string | null
+  /** 戦闘の窓で入り切らない文字の扱い (#1183)。`"ellipsis"`（既定・末尾を「…」で省略）/ `"scroll"`（窓の幅でクリップしてゆっくり横スクロール）。frontmatter `battle_text_overflow:` から流す。不正値・未指定は ellipsis。GUI 専用。 */
+  battle_text_overflow?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（一枚絵フィールドの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */
