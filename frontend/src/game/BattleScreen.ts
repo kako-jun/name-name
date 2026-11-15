@@ -132,7 +132,7 @@ import {
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
 import { computeSelectMarkImageRect, loadUiTexture, type UiImagesConfig } from './uiImages'
-import { normalizeUiScale } from './battleLogicalSize'
+import { MESSAGE_WINDOW_FONT_SIZE, normalizeUiScale } from './battleLogicalSize'
 import { syncTextResolution } from './textResolution'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
@@ -316,8 +316,8 @@ export const SIDE_LABEL_STROKE_COLOR = 0x000000
 const NAME_FONT_SIZE = 18
 const COMMAND_FONT_SIZE = 18
 const LOG_FONT_SIZE = 16
-/** FF 式メッセージ窓（updateMessageWindow）専用の文字サイズ。1 行のまま大きくする (#1148)。ログ行（LOG_FONT_SIZE）は変えない。最小の窓（2 行分 = 56px）に収まる上限の目安は約 30 */
-export const MESSAGE_WINDOW_FONT_SIZE = 22
+// FF 式メッセージ窓の文字サイズ (#1148) は battleLogicalSize.ts に置く（フィールドの会話窓 #1184 も参照するため）
+export { MESSAGE_WINDOW_FONT_SIZE }
 const HP_FONT_SIZE = 16
 
 const TEXT_STYLE_NAME = new TextStyle({

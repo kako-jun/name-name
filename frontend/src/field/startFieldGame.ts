@@ -107,7 +107,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
-import { fieldDialogFontSize, fieldDialogOptions } from '../game/ffDialog'
+import { fieldDialogFontSize, fieldDialogOptions, fieldDialogStyleOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -630,7 +630,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     screenWidth: scene.mask.width,
     screenHeight: scene.mask.height,
     ...dialogMetricsFor(scene.mask.height),
-    ...(config.battle.windowStyle ? { fontSize: fieldDialogFontSize(scene.mask.height) } : {}),
+    ...(config.battle.windowStyle
+      ? { fontSize: fieldDialogFontSize(scene.mask.height, config.dialogFontSize) }
+      : {}),
     bgColor: 0x000033,
     nameColor: 0xffe066,
     nameSeparateBox: false,
@@ -653,6 +655,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           }),
         }
       : {}),
+    // 窓の高さ・話者名の見せ方 (#1184)。未指定は従来（28%H・inline）。設計どおりの窓（ffPlacement 付き）だけに効く
+    ...fieldDialogStyleOptions({ ...config, windowStyle: config.battle.windowStyle }),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()
@@ -686,7 +690,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const m = dialogMetricsFor(height)
     dialogBox.setBoxHeight(m.boxHeight)
     // 設計どおりの窓は 28%H に名前＋3 行が入る文字サイズ。箱の寸法は DialogBox が画面から決める
-    dialogBox.setFontSize(designedDialog ? fieldDialogFontSize(height) : m.fontSize)
+    dialogBox.setFontSize(
+      designedDialog ? fieldDialogFontSize(height, config.dialogFontSize) : m.fontSize
+    )
     dialogBox.redraw(width, height)
   }
 
