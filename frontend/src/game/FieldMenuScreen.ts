@@ -405,7 +405,12 @@ export class FieldMenuScreen extends Container {
     }
     this.applyRefresh(out)
     if (this.state.open) {
-      const silent = out.ok && this.opts.useMessage === false
+      // 抑止はどうぐ・まほうの成功だけ（runtime の振り分けと同じ判定）。そうび・アプリストアの文は off でも出す
+      const def = this.data?.items.find((i) => i.id === st.screen)
+      const kind = def ? screenKindOfItem(def) : undefined
+      const isItemOrMagic =
+        kind !== 'appstore' && kind !== 'equip' && (kind === 'item' || def?.id === 'magic')
+      const silent = out.ok && this.opts.useMessage === false && isItemOrMagic
       this.state = { ...this.state, notice: silent ? null : out.notice }
     }
   }
