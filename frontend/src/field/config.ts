@@ -301,6 +301,11 @@ export interface FieldConfig {
    */
   dialogStyle?: DialogStyle
   /**
+   * フィールドメニューでどうぐ・まほうを使って成功したときの文を出さない (#1185)。`menuUseMessage: "off"` のとき true。未指定・`"on"` は undefined＝従来どおり出す。
+   * 失敗の文（MP 不足など）と HP/MP の数字更新・所持数の減少には影響しない。不正な値は警告して無視
+   */
+  menuUseMessageOff?: true
+  /**
    * 会話窓の文字サイズ (#1184)。`dialogFontSize`: `battle` = 戦闘のメッセージ窓と同じ大きさ。未指定・`normal` は undefined＝従来（キーが出ない）。不正な値は警告して無視。
    * `battle.windowStyle` を書いた作品の窓だけに効く。窓の高さ・話者名の見せ方とは独立
    */
@@ -1058,6 +1063,14 @@ export function parseConfig(
         `dialogStyle は "ff" のみ指定できます: ${JSON.stringify(raw.dialogStyle)}（無視します）`
       )
   }
+  let menuUseMessageOff: true | undefined
+  if (raw.menuUseMessage !== undefined) {
+    if (raw.menuUseMessage === 'off') menuUseMessageOff = true
+    else if (raw.menuUseMessage !== 'on')
+      warnings.push(
+        `menuUseMessage は "on" か "off": ${JSON.stringify(raw.menuUseMessage)}（無視します）`
+      )
+  }
   // 会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。互いに独立。不正は警告して無視（従来の見た目）
   let dialogFontSize: DialogFontSize | undefined
   if (raw.dialogFontSize !== undefined) {
@@ -1254,6 +1267,7 @@ export function parseConfig(
       ...(emotionsSource ? { emotionsSource } : {}),
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
+      ...(menuUseMessageOff ? { menuUseMessageOff } : {}),
       ...(dialogFontSize ? { dialogFontSize } : {}),
       ...(dialogWindowHeight !== undefined ? { dialogWindowHeight } : {}),
       ...(dialogNameStyle ? { dialogNameStyle } : {}),

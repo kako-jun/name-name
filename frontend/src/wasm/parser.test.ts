@@ -2697,6 +2697,17 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(again.battle_enemy_grid_align).toBe('center')
   })
 
+  it('field_menu_use_message が doc に残り、省略・空値は null、往復で保たれる (#1185)', async () => {
+    const doc = await parseMarkdown(docWith(['field_menu_use_message: off']))
+    expect(doc.field_menu_use_message).toBe('off')
+    expect((await parseMarkdown(docWith([]))).field_menu_use_message).toBeNull()
+    expect(
+      (await parseMarkdown(docWith(['field_menu_use_message:']))).field_menu_use_message
+    ).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.field_menu_use_message).toBe('off')
+  })
+
   it('emit → parse の往復で frontmatter が保たれる', async () => {
     const doc = await parseMarkdown(
       docWith(['battle_enemy_grid: 6x2', 'battle_enemy_window_overlap: 0.3'])
