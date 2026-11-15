@@ -6,7 +6,7 @@
  */
 import { parseCommandIds, parseCommandLabels } from '../game/battleCommands'
 import { resolveRpgDataPath } from '../game/battleEffectsLoader'
-import { normalizeDialogWindowHeight } from '../game/ffDialog'
+import { fieldDialogMinHeightRatio, normalizeDialogWindowHeight } from '../game/ffDialog'
 import type { EventDocument } from '../types'
 
 type Raw = Record<string, unknown>
@@ -102,10 +102,14 @@ export function frontmatterRaw(
       typeof doc.dialog_window_height === 'string' && doc.dialog_window_height.trim() !== ''
         ? Number(doc.dialog_window_height.trim())
         : NaN
-    if (normalizeDialogWindowHeight(h) !== undefined) top.dialogWindowHeight = h
+    if (
+      normalizeDialogWindowHeight(h, dialogFontSize === 'battle' ? 'battle' : 'normal') !==
+      undefined
+    )
+      top.dialogWindowHeight = h
     else
       warnings.push(
-        `frontmatter の dialog_window_height は 0.1〜0.6 の数値にしてください: ${JSON.stringify(doc.dialog_window_height)}（無視します）`
+        `frontmatter の dialog_window_height は ${fieldDialogMinHeightRatio(dialogFontSize === 'battle' ? 'battle' : 'normal')}〜0.6 の数値にしてください（下限は dialog_font_size で変わります）: ${JSON.stringify(doc.dialog_window_height)}（無視します）`
       )
   }
   if (typeof doc.field_emotions === 'string' && doc.field_emotions !== '')

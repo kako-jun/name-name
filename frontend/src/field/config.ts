@@ -53,6 +53,7 @@ import {
   normalizeDialogFontSize,
   normalizeDialogNameStyle,
   normalizeDialogStyle,
+  fieldDialogMinHeightRatio,
   normalizeDialogWindowHeight,
   normalizeMsPerChar,
   type DialogFontSize,
@@ -304,7 +305,7 @@ export interface FieldConfig {
    * `battle.windowStyle` を書いた作品の窓だけに効く。窓の高さ・話者名の見せ方とは独立
    */
   dialogFontSize?: DialogFontSize
-  /** 会話窓の高さ (#1184)。`dialogWindowHeight`: 画面高さに対する比 0.1〜0.6。未指定は undefined＝従来の 0.28。不正な値は警告して無視。`battle.windowStyle` を書いた作品の窓だけに効く */
+  /** 会話窓の高さ (#1184)。`dialogWindowHeight`: 画面高さに対する比（上限 0.6・下限は文字サイズで決まる）。未指定は undefined＝従来の 0.28。不正な値は警告して無視。`battle.windowStyle` を書いた作品の窓だけに効く */
   dialogWindowHeight?: number
   /** 会話窓の話者名の見せ方 (#1184)。`dialogNameStyle`: `large` / `plate`。未指定・`inline` は undefined＝従来。不正な値は警告して無視。`battle.windowStyle` を書いた作品の窓だけに効く */
   dialogNameStyle?: DialogNameStyle
@@ -1069,10 +1070,10 @@ export function parseConfig(
   }
   let dialogWindowHeight: number | undefined
   if (raw.dialogWindowHeight !== undefined) {
-    dialogWindowHeight = normalizeDialogWindowHeight(raw.dialogWindowHeight)
+    dialogWindowHeight = normalizeDialogWindowHeight(raw.dialogWindowHeight, dialogFontSize)
     if (dialogWindowHeight === undefined)
       warnings.push(
-        `dialogWindowHeight は 0.1 以上 0.6 以下の数値（画面高さ比）である必要があります: ${JSON.stringify(raw.dialogWindowHeight)}（無視します）`
+        `dialogWindowHeight は ${fieldDialogMinHeightRatio(dialogFontSize)} 以上 0.6 以下の数値（画面高さ比。文字サイズで下限が変わります）である必要があります: ${JSON.stringify(raw.dialogWindowHeight)}（無視します）`
       )
   }
   let dialogNameStyle: DialogNameStyle | undefined

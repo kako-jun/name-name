@@ -1434,7 +1434,7 @@ export interface Document {
      */
     dialog_font_size?: string;
     /**
-     * 一枚絵フィールドの会話窓（`window_style` を書いた作品の窓）の高さ (#1184)。画面高さに対する比 0.1〜0.6（既定 0.28＝従来）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+     * 一枚絵フィールドの会話窓（`window_style` を書いた作品の窓）の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28＝従来）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
      * frontmatter `dialog_window_height:` から流す。
      */
     dialog_window_height?: string;

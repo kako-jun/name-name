@@ -1407,7 +1407,7 @@ export interface EventDocument {
   battle_party_layout?: string | null
   /** 一枚絵フィールドの会話窓の文字サイズ (#1184)。`"normal"`（既定＝従来）/ `"battle"`（戦闘のメッセージ窓と同じ大きさ）。frontmatter `dialog_font_size:` から流す。`window_style` を書いた作品の窓だけに効く。GUI 専用。 */
   dialog_font_size?: string | null
-  /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比 0.1〜0.6（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */
+  /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */
   dialog_window_height?: string | null
   /** 一枚絵フィールドの会話窓の話者名の見せ方 (#1184)。`"inline"`（既定＝従来）/ `"large"` / `"plate"`。frontmatter `dialog_name_style:` から流す。GUI 専用。 */
   dialog_name_style?: string | null

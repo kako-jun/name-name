@@ -5,6 +5,7 @@
  * (`windowStyle.ts`, #744) をそのまま使う。見た目は実機でライブ調整するので、調整対象の定数はここに集める。
  */
 import { BATTLE_LOG_MS_PER_CHAR } from './battleLogTypewriter'
+import { BATTLE_UI_BASE_HEIGHT, MESSAGE_WINDOW_FONT_SIZE } from './battleLogicalSize'
 import type { WindowStyle } from './windowStyle'
 
 /** 会話窓のスタイル。`ff` = 画面上部固定・ff-blue・1 文字ずつ。未指定（undefined）は従来の下部の窓 */
@@ -83,11 +84,11 @@ export interface DialogRect {
 }
 
 /**
- * 戦闘のメッセージ窓と同じ文字サイズ（画面高さ比）(#1184)。戦闘側は設計高さ 450 に対して `MESSAGE_WINDOW_FONT_SIZE`(22) px
+ * 戦闘のメッセージ窓と同じ文字サイズ（画面高さ比）(#1184)。戦闘側は設計高さ `BATTLE_UI_BASE_HEIGHT` に対して `MESSAGE_WINDOW_FONT_SIZE` px
  * （BattleScreen.ts。フィールド作品は 1920x1080 固定なので uiScale = 1080/450 倍され、実画面では高さの 22/450）。
  * 戦闘側の定数と一致することは ffDialog.test.ts で固定する
  */
-export const FIELD_DIALOG_BATTLE_FONT_RATIO = 22 / 450
+export const FIELD_DIALOG_BATTLE_FONT_RATIO = MESSAGE_WINDOW_FONT_SIZE / BATTLE_UI_BASE_HEIGHT
 
 /** 会話窓の文字サイズ (#1184)。`normal` = 従来（既定）/ `battle` = 戦闘のメッセージ窓と同じ */
 export type DialogFontSize = 'normal' | 'battle'
@@ -96,7 +97,6 @@ export type DialogNameStyle = 'inline' | 'large' | 'plate'
 export const DIALOG_FONT_SIZES: readonly DialogFontSize[] = ['normal', 'battle']
 export const DIALOG_NAME_STYLES: readonly DialogNameStyle[] = ['inline', 'large', 'plate']
 /** `dialog_window_height` の範囲（画面高さ比）と既定 */
-export const FIELD_DIALOG_HEIGHT_MIN = 0.1
 export const FIELD_DIALOG_HEIGHT_MAX = 0.6
 
 /** 設定値の正規化（前後の空白・大小を無視）。未指定・未知値は undefined（呼び出し側が警告する） */
@@ -108,14 +108,28 @@ export function normalizeDialogNameStyle(raw: unknown): DialogNameStyle | undefi
   const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
   return (DIALOG_NAME_STYLES as readonly string[]).includes(v) ? (v as DialogNameStyle) : undefined
 }
-/** 窓の高さ（画面高さ比）。有限で 0.1〜0.6 の数値だけ通す。範囲外・非数は undefined */
-export function normalizeDialogWindowHeight(raw: unknown): number | undefined {
+/** 窓の高さ（画面高さ比）。有限で下限（fieldDialogMinHeightRatio）〜0.6 の数値だけ通す。範囲外・非数は undefined */
+export function normalizeDialogWindowHeight(
+  raw: unknown,
+  size: DialogFontSize = 'normal'
+): number | undefined {
   return typeof raw === 'number' &&
     Number.isFinite(raw) &&
-    raw >= FIELD_DIALOG_HEIGHT_MIN &&
+    raw >= fieldDialogMinHeightRatio(size) &&
     raw <= FIELD_DIALOG_HEIGHT_MAX
     ? raw
     : undefined
+}
+
+/**
+ * `dialog_window_height` の下限（画面高さ比）。話者名 1 行 + 本文 1 行（行の高さ = 文字サイズ × 1.6）と上下の余白（2%H ずつ）が必ず入る高さ。
+ * 文字サイズに依存するので `dialog_font_size` ごとに違う（normal ≒ 0.154・battle ≒ 0.201）。px の丸めの余裕に 0.005 足して小数 3 桁へ切り上げる。
+ * これ未満だと本文が窓の外へはみ出す（1 ページの行数は最低 1 に保たれるため）
+ */
+export function fieldDialogMinHeightRatio(size: DialogFontSize = 'normal'): number {
+  const font = size === 'battle' ? FIELD_DIALOG_BATTLE_FONT_RATIO : FIELD_DIALOG_FONT_RATIO
+  const raw = FIELD_DIALOG_PADDING_RATIO * 2 + FF_DIALOG_LINE_HEIGHT_RATIO * font * 2 + 0.005
+  return Math.ceil(raw * 1000) / 1000
 }
 
 export function fieldDialogFontSize(screenHeight: number, size: DialogFontSize = 'normal'): number {
@@ -211,6 +225,23 @@ export function fieldDialogOptions(c: {
       : c.dialogStyle === 'ff' || c.windowStyle
         ? { msPerChar: FF_DIALOG_MS_PER_CHAR }
         : {}),
+  }
+}
+
+/**
+ * 設計どおりの窓（`window_style` を書いた作品）だけに効く #1184 の三つの設定を、DialogBox のオプションにする。
+ * `windowStyle` が無い（従来の窓）ときは三つとも無視して空（従来の見た目のまま）。未指定のキーも出さない
+ */
+export function fieldDialogStyleOptions(c: {
+  windowStyle?: WindowStyle
+  dialogFontSize?: DialogFontSize
+  dialogWindowHeight?: number
+  dialogNameStyle?: DialogNameStyle
+}): { ffWindowHeightRatio?: number; ffNameStyle?: DialogNameStyle } {
+  if (!c.windowStyle) return {}
+  return {
+    ...(c.dialogWindowHeight !== undefined ? { ffWindowHeightRatio: c.dialogWindowHeight } : {}),
+    ...(c.dialogNameStyle ? { ffNameStyle: c.dialogNameStyle } : {}),
   }
 }
 

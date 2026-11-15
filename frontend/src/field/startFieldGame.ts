@@ -107,7 +107,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
-import { fieldDialogFontSize, fieldDialogOptions } from '../game/ffDialog'
+import { fieldDialogFontSize, fieldDialogOptions, fieldDialogStyleOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -656,12 +656,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         }
       : {}),
     // 窓の高さ・話者名の見せ方 (#1184)。未指定は従来（28%H・inline）。設計どおりの窓（ffPlacement 付き）だけに効く
-    ...(config.battle.windowStyle && config.dialogWindowHeight !== undefined
-      ? { ffWindowHeightRatio: config.dialogWindowHeight }
-      : {}),
-    ...(config.battle.windowStyle && config.dialogNameStyle
-      ? { ffNameStyle: config.dialogNameStyle }
-      : {}),
+    ...fieldDialogStyleOptions({ ...config, windowStyle: config.battle.windowStyle }),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()

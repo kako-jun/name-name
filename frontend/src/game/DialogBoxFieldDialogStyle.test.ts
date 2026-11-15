@@ -28,12 +28,14 @@ import {
   fieldDialogOptions,
   normalizeDialogFontSize,
   normalizeDialogNameStyle,
+  fieldDialogMinHeightRatio,
+  fieldDialogStyleOptions,
   normalizeDialogWindowHeight,
+  FF_DIALOG_LINE_HEIGHT_RATIO,
   pickDialogSide,
   type DialogNameStyle,
 } from './ffDialog'
-import { MESSAGE_WINDOW_FONT_SIZE } from './BattleScreen'
-import { BATTLE_UI_BASE_HEIGHT } from './battleLogicalSize'
+import { BATTLE_UI_BASE_HEIGHT, MESSAGE_WINDOW_FONT_SIZE } from './battleLogicalSize'
 import startFieldGameSrc from '../field/startFieldGame.ts?raw'
 
 interface Internals {
@@ -108,9 +110,11 @@ describe('dialog_font_size: battle は戦闘のメッセージ窓と同じ大き
 describe('dialog_window_height (#1184)', () => {
   it('正規化: 0.1〜0.6 の有限数だけ', () => {
     expect(normalizeDialogWindowHeight(0.36)).toBe(0.36)
-    expect(normalizeDialogWindowHeight(0.1)).toBe(0.1)
+    const min = fieldDialogMinHeightRatio('normal')
+    expect(normalizeDialogWindowHeight(min)).toBe(min)
+    expect(normalizeDialogWindowHeight(min - 0.001)).toBeUndefined()
     expect(normalizeDialogWindowHeight(0.6)).toBe(0.6)
-    for (const bad of [0.09, 0.61, Number.NaN, Infinity, '0.3', null, undefined])
+    for (const bad of [0.05, 0.61, Number.NaN, Infinity, '0.3', null, undefined])
       expect(normalizeDialogWindowHeight(bad)).toBeUndefined()
   })
   it('矩形の高さが変わり、上下の余白（端 3%H）は変わらない。省略は従来の 28%H', () => {
@@ -207,13 +211,103 @@ describe('dialog_name_style (#1184)', () => {
   })
 })
 
+describe('dialog_window_height の下限は文字サイズで決まる (#1184)', () => {
+  it('下限は話者名 1 行 + 本文 1 行と余白が入る高さ。battle は normal より高い', () => {
+    const n = fieldDialogMinHeightRatio('normal')
+    const b = fieldDialogMinHeightRatio('battle')
+    expect(b).toBeGreaterThan(n)
+    expect(n).toBeGreaterThanOrEqual(0.04 + 2 * FF_DIALOG_LINE_HEIGHT_RATIO * 0.034)
+    expect(b).toBeGreaterThanOrEqual(
+      0.04 + 2 * FF_DIALOG_LINE_HEIGHT_RATIO * FIELD_DIALOG_BATTLE_FONT_RATIO
+    )
+    expect(normalizeDialogWindowHeight(b - 0.001, 'battle')).toBeUndefined()
+    expect(normalizeDialogWindowHeight(b, 'battle')).toBe(b)
+    // normal では通る高さでも battle では下限未満のことがある（文字が大きいと要る高さも増える）
+    expect(normalizeDialogWindowHeight(n, 'normal')).toBe(n)
+    expect(normalizeDialogWindowHeight(n, 'battle')).toBeUndefined()
+  })
+  it('下限の高さで、話者名 + 本文 1 行が窓の外にはみ出さない（1080・battle / normal・複数の画面高さ）', () => {
+    for (const [size, h] of [
+      ['battle', 1080],
+      ['normal', 1080],
+      ['battle', 720],
+      ['battle', 481],
+    ] as const) {
+      const ratio = fieldDialogMinHeightRatio(size)
+      const fs = fieldDialogFontSize(h, size)
+      const r = computeFieldDialogRect(h * (16 / 9), h, 'bottom', ratio)
+      expect(r.padding * 2 + fs * FF_DIALOG_LINE_HEIGHT_RATIO * 2).toBeLessThanOrEqual(r.height)
+    }
+  })
+  it('下限の高さの窓でも本文 1 行が入り、1 ページ 1 行になる', () => {
+    const b = fieldDialogMinHeightRatio('battle')
+    const box = make({ fontSize: 'battle', height: b })
+    box.show('ペー子', 'あ\nい\nう')
+    expect(box.getPageInfo().pages).toBe(3)
+    box.dispose()
+  })
+})
+
+describe('window_style が無い作品では三つのキーは無視される (#1184)', () => {
+  const all = {
+    dialogFontSize: 'battle' as const,
+    dialogWindowHeight: 0.4,
+    dialogNameStyle: 'plate' as const,
+  }
+  it('windowStyle 未指定は空（従来の見た目のまま）', () => {
+    expect(fieldDialogStyleOptions({ ...all })).toEqual({})
+    expect(fieldDialogStyleOptions({ ...all, windowStyle: undefined })).toEqual({})
+  })
+  it('windowStyle ありは指定したキーだけを渡す（未指定のキーは出さない）', () => {
+    expect(fieldDialogStyleOptions({ ...all, windowStyle: 'dark' })).toEqual({
+      ffWindowHeightRatio: 0.4,
+      ffNameStyle: 'plate',
+    })
+    expect(fieldDialogStyleOptions({ windowStyle: 'ff-blue' })).toEqual({})
+    expect(fieldDialogStyleOptions({ windowStyle: 'ff-blue', dialogNameStyle: 'large' })).toEqual({
+      ffNameStyle: 'large',
+    })
+  })
+})
+
+describe('リサイズ・フォント変更後も名前スタイルが保たれる (#1184)', () => {
+  it('setFontSize → redraw で large は新しい本文サイズの 1.2 倍・金色のまま', () => {
+    const box = make({ nameStyle: 'large' })
+    box.show('ペー子', 'テキスト')
+    box.setFontSize(40)
+    box.redraw(W, H)
+    const n = internals(box).nameText
+    expect(n.style.fontSize).toBe(48)
+    expect(n.style.fill).toBe(0xffe066)
+    box.dispose()
+  })
+  it('setFontSize → redraw で plate は名札と暗色の文字のまま、inline は白・本文と同じ大きさ', () => {
+    const p = make({ nameStyle: 'plate' })
+    p.show('ペー子', 'テキスト')
+    p.setFontSize(40)
+    p.redraw(W, H)
+    expect(internals(p).nameBox.visible).toBe(true)
+    expect(internals(p).nameText.style.fill).toBe(0x1a1a2e)
+    const i = make()
+    i.show('ペー子', 'テキスト')
+    i.setFontSize(40)
+    i.redraw(W, H)
+    expect(internals(i).nameText.style.fill).toBe(0xffffff)
+    expect(internals(i).nameText.style.fontSize).toBe(40)
+    expect(internals(i).nameBox.visible).toBe(false)
+    p.dispose()
+    i.dispose()
+  })
+})
+
 describe('配線 (#1184)', () => {
-  it('startFieldGame は三つの設定を窓に渡す。未指定のときはキーを足さない', () => {
+  it('startFieldGame は文字サイズを設定から渡し、高さ・名前の見せ方は windowStyle で絞る純関数 fieldDialogStyleOptions 経由で渡す', () => {
     expect(startFieldGameSrc).toMatch(
       /fieldDialogFontSize\(scene\.mask\.height, config\.dialogFontSize\)/
     )
     expect(startFieldGameSrc).toMatch(/fieldDialogFontSize\(height, config\.dialogFontSize\)/)
-    expect(startFieldGameSrc).toMatch(/ffWindowHeightRatio: config\.dialogWindowHeight/)
-    expect(startFieldGameSrc).toMatch(/ffNameStyle: config\.dialogNameStyle/)
+    expect(startFieldGameSrc).toMatch(
+      /fieldDialogStyleOptions\(\{\s*\.\.\.config,\s*windowStyle:\s*config\.battle\.windowStyle\s*\}\)/
+    )
   })
 })
