@@ -5,6 +5,7 @@
  * (`windowStyle.ts`, #744) をそのまま使う。見た目は実機でライブ調整するので、調整対象の定数はここに集める。
  */
 import { BATTLE_LOG_MS_PER_CHAR } from './battleLogTypewriter'
+import { BATTLE_UI_BASE_HEIGHT, MESSAGE_WINDOW_FONT_SIZE } from './battleLogicalSize'
 import type { WindowStyle } from './windowStyle'
 
 /** 会話窓のスタイル。`ff` = 画面上部固定・ff-blue・1 文字ずつ。未指定（undefined）は従来の下部の窓 */
@@ -82,21 +83,90 @@ export interface DialogRect {
   height: number
 }
 
-export function fieldDialogFontSize(screenHeight: number): number {
+/**
+ * 戦闘のメッセージ窓と同じ文字サイズ（画面高さ比）(#1184)。戦闘側は設計高さ `BATTLE_UI_BASE_HEIGHT` に対して `MESSAGE_WINDOW_FONT_SIZE` px
+ * （BattleScreen.ts。フィールド作品は 1920x1080 固定なので uiScale = 1080/450 倍され、実画面では高さの 22/450）。
+ * 戦闘側の定数と一致することは ffDialog.test.ts で固定する
+ */
+export const FIELD_DIALOG_BATTLE_FONT_RATIO = MESSAGE_WINDOW_FONT_SIZE / BATTLE_UI_BASE_HEIGHT
+
+/** 会話窓の文字サイズ (#1184)。`normal` = 従来（既定）/ `battle` = 戦闘のメッセージ窓と同じ */
+export type DialogFontSize = 'normal' | 'battle'
+/** 会話窓の話者名の見せ方 (#1184)。`inline` = 従来（既定）/ `large` = 大きめ・太字・金色 / `plate` = 金の名札 */
+export type DialogNameStyle = 'inline' | 'large' | 'plate'
+export const DIALOG_FONT_SIZES: readonly DialogFontSize[] = ['normal', 'battle']
+export const DIALOG_NAME_STYLES: readonly DialogNameStyle[] = ['inline', 'large', 'plate']
+/** `dialog_window_height` の範囲（画面高さ比）と既定 */
+export const FIELD_DIALOG_HEIGHT_MAX = 0.6
+
+/** 設定値の正規化（前後の空白・大小を無視）。未指定・未知値は undefined（呼び出し側が警告する） */
+export function normalizeDialogFontSize(raw: unknown): DialogFontSize | undefined {
+  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return (DIALOG_FONT_SIZES as readonly string[]).includes(v) ? (v as DialogFontSize) : undefined
+}
+export function normalizeDialogNameStyle(raw: unknown): DialogNameStyle | undefined {
+  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  return (DIALOG_NAME_STYLES as readonly string[]).includes(v) ? (v as DialogNameStyle) : undefined
+}
+/** 窓の高さ（画面高さ比）。有限で下限（fieldDialogMinHeightRatio）〜0.6 の数値だけ通す。範囲外・非数は undefined */
+export function normalizeDialogWindowHeight(
+  raw: unknown,
+  size: DialogFontSize = 'normal'
+): number | undefined {
+  return typeof raw === 'number' &&
+    Number.isFinite(raw) &&
+    raw >= fieldDialogMinHeightRatio(size) &&
+    raw <= FIELD_DIALOG_HEIGHT_MAX
+    ? raw
+    : undefined
+}
+
+/**
+ * 話者名 1 行 + 本文 1 行（行の高さ = 文字サイズ(px) × 1.6）と上下の余白が窓に収まる最小の高さ（画面高さ比。丸めなしの正確な値）。
+ * 画面高さが非有限・0 以下なら 0。DialogBox が実際の文字サイズ(px)から窓の高さを持ち上げるのに使う
+ */
+export function minHeightRatioForFont(screenHeight: number, fontPx: number): number {
+  if (!(Number.isFinite(screenHeight) && screenHeight > 0)) return 0
+  const pad = Math.max(4, Math.round(screenHeight * FIELD_DIALOG_PADDING_RATIO))
+  return (pad * 2 + FF_DIALOG_LINE_HEIGHT_RATIO * fontPx * 2) / screenHeight
+}
+
+/**
+ * `dialog_window_height` の下限（画面高さ比）。`minHeightRatioForFont` に px の丸めの余裕 0.005 を足して小数 3 桁へ切り上げた値。
+ * 文字サイズに依存するので `dialog_font_size` ごとに違う（normal ≒ 0.154・battle ≒ 0.202）。
+ * `screenHeight` を渡すと、実際に使う文字サイズ（`fieldDialogFontSize`。最小 14px を含む）から出す。省略は画面比だけの値（設定の検証用。小さい画面では DialogBox が実際の文字サイズで窓を持ち上げる）。
+ * これ未満だと本文が窓の外へはみ出す（1 ページの行数は最低 1 に保たれるため）
+ */
+export function fieldDialogMinHeightRatio(
+  size: DialogFontSize = 'normal',
+  screenHeight?: number
+): number {
+  if (screenHeight !== undefined && Number.isFinite(screenHeight) && screenHeight > 0) {
+    const raw = minHeightRatioForFont(screenHeight, fieldDialogFontSize(screenHeight, size)) + 0.005
+    return Math.ceil(raw * 1000) / 1000
+  }
+  const font = size === 'battle' ? FIELD_DIALOG_BATTLE_FONT_RATIO : FIELD_DIALOG_FONT_RATIO
+  const raw = FIELD_DIALOG_PADDING_RATIO * 2 + FF_DIALOG_LINE_HEIGHT_RATIO * font * 2 + 0.005
+  return Math.ceil(raw * 1000) / 1000
+}
+
+export function fieldDialogFontSize(screenHeight: number, size: DialogFontSize = 'normal'): number {
   const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : 0
-  return Math.max(14, Math.round(sh * FIELD_DIALOG_FONT_RATIO))
+  const ratio = size === 'battle' ? FIELD_DIALOG_BATTLE_FONT_RATIO : FIELD_DIALOG_FONT_RATIO
+  return Math.max(14, Math.round(sh * ratio))
 }
 
 /** 指定の側の窓の矩形。不変条件: 画面内に収まる。非有限・負の入力は 0 扱い */
 export function computeFieldDialogRect(
   screenWidth: number,
   screenHeight: number,
-  side: DialogSide
+  side: DialogSide,
+  heightRatio: number = FIELD_DIALOG_HEIGHT_RATIO
 ): FfDialogRect {
   const sw = Number.isFinite(screenWidth) && screenWidth > 0 ? screenWidth : 0
   const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : 0
   const width = Math.round(sw * FIELD_DIALOG_WIDTH_RATIO)
-  const height = Math.round(sh * FIELD_DIALOG_HEIGHT_RATIO)
+  const height = Math.round(sh * heightRatio)
   const edge = Math.round(sh * FIELD_DIALOG_EDGE_RATIO)
   return {
     x: Math.round((sw - width) / 2),
@@ -119,13 +189,14 @@ export function pickDialogSide(
   footY: number,
   screenWidth: number,
   screenHeight: number,
-  avatar: DialogRect | null
+  avatar: DialogRect | null,
+  heightRatio: number = FIELD_DIALOG_HEIGHT_RATIO
 ): DialogSide {
   const preferred: DialogSide = footY > screenHeight / 2 ? 'top' : 'bottom'
   if (!avatar) return preferred
   const other: DialogSide = preferred === 'top' ? 'bottom' : 'top'
   const hit = (side: DialogSide) =>
-    rectsOverlap(computeFieldDialogRect(screenWidth, screenHeight, side), avatar)
+    rectsOverlap(computeFieldDialogRect(screenWidth, screenHeight, side, heightRatio), avatar)
   return hit(preferred) && !hit(other) ? other : preferred
 }
 
@@ -172,6 +243,23 @@ export function fieldDialogOptions(c: {
       : c.dialogStyle === 'ff' || c.windowStyle
         ? { msPerChar: FF_DIALOG_MS_PER_CHAR }
         : {}),
+  }
+}
+
+/**
+ * 設計どおりの窓（`window_style` を書いた作品）だけに効く #1184 の三つの設定を、DialogBox のオプションにする。
+ * `windowStyle` が無い（従来の窓）ときは三つとも無視して空（従来の見た目のまま）。未指定のキーも出さない
+ */
+export function fieldDialogStyleOptions(c: {
+  windowStyle?: WindowStyle
+  dialogFontSize?: DialogFontSize
+  dialogWindowHeight?: number
+  dialogNameStyle?: DialogNameStyle
+}): { ffWindowHeightRatio?: number; ffNameStyle?: DialogNameStyle } {
+  if (!c.windowStyle) return {}
+  return {
+    ...(c.dialogWindowHeight !== undefined ? { ffWindowHeightRatio: c.dialogWindowHeight } : {}),
+    ...(c.dialogNameStyle ? { ffNameStyle: c.dialogNameStyle } : {}),
   }
 }
 

@@ -46,9 +46,13 @@ export function buildBattleScreenOptions(
         }
       : {}),
     ...(b.enemyGrid ? { enemyGrid: b.enemyGrid } : {}),
-    ...(b.enemyGrid && b.enemyWindowOverlap !== undefined
-      ? { enemyWindowOverlap: b.enemyWindowOverlap }
+    ...(b.enemyWindowOverlap !== undefined ? { enemyWindowOverlap: b.enemyWindowOverlap } : {}),
+    ...(b.enemyGridAlign ? { enemyGridAlign: b.enemyGridAlign } : {}),
+    ...(b.enemyGridExtent ? { enemyGridExtent: b.enemyGridExtent } : {}),
+    ...(b.enemyWindowOverlapBottom !== undefined
+      ? { enemyWindowOverlapBottom: b.enemyWindowOverlapBottom }
       : {}),
+    ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
   }
 }
 

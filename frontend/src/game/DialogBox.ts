@@ -31,10 +31,12 @@ import { wordwrap } from './wordwrap'
 import {
   FF_CURSOR_SIZE_RATIO,
   FF_DIALOG_LINE_HEIGHT_RATIO,
+  FIELD_DIALOG_HEIGHT_RATIO,
   FIELD_DIALOG_SLIDE_MS,
   FIELD_DIALOG_TIMED_NAME_X_RATIO,
   computeFfDialogRect,
   computeFieldDialogRect,
+  minHeightRatioForFont,
   pickDialogSide,
   type DialogRect,
   type DialogSide,
@@ -46,6 +48,7 @@ import {
   paginateLines,
   wrapParagraphs,
 } from './ffDialog'
+import type { DialogNameStyle } from './ffDialog'
 import {
   FF_BLUE_PANEL_ALPHA,
   FF_BLUE_TEXT_SHADOW,
@@ -199,6 +202,15 @@ export interface DialogBoxConfig {
    * 未指定の ffWindow は従来どおり画面上部固定・名前なし
    */
   ffPlacement?: () => FfPlacement
+  /**
+   * 設計どおりの窓（ffPlacement 付き）の高さ（画面高さ比。既定 0.28）(#1184)。ffPlacement が無いときは無視する。窓の位置・文字サイズ・話者名の見せ方とは独立
+   */
+  ffWindowHeightRatio?: number
+  /**
+   * 設計どおりの窓（ffPlacement 付き）の話者名の見せ方 (#1184)。`inline`（既定＝従来: 本文と同じ大きさの白）/ `large`（1.2 倍・金色 = nameColor）/
+   * `plate`（金の名札: nameColor の角丸の塗り＋暗い文字）。名前は常に窓内の 1 行で、窓の位置・本文の位置・行数は変わらない。ffPlacement が無いときは無視する
+   */
+  ffNameStyle?: DialogNameStyle
 }
 
 /** ffPlacement が返す、窓の置き場所を決めるための主人公の状態（画面の座標） */
@@ -207,6 +219,9 @@ export interface FfPlacement {
   avatar: DialogRect | null
   timed?: boolean
 }
+
+/** plate の名札の上の文字色（金の塗りの上で読める暗い紺）(#1184) */
+const PLATE_TEXT_COLOR = 0x1a1a2e
 
 /** typewriter のデフォルト速度（ms/char） */
 const DEFAULT_MS_PER_CHAR = 30
@@ -382,6 +397,9 @@ export class DialogBox extends Container {
   private readonly ffWindowStyle: WindowStyle
   /** 設計どおりの窓の置き場所 (#1153)。未指定なら従来の ffWindow（上部固定） */
   private readonly ffPlacement: (() => FfPlacement) | undefined
+  /** 設計どおりの窓の高さ（画面高さ比）と話者名の見せ方 (#1184) */
+  private readonly ffHeightRatio: number
+  private readonly ffNameStyle: DialogNameStyle
   /** 置き場所の状態: いまの側・最後に判定したときの足元 y・時間制限中か・会話中か・スライド中の経過 */
   private placedSide: DialogSide = 'bottom'
   private placedFootY: number | null = null
@@ -486,6 +504,8 @@ export class DialogBox extends Container {
       ffWindow = false,
       ffWindowStyle = 'ff-blue',
       ffPlacement,
+      ffWindowHeightRatio = FIELD_DIALOG_HEIGHT_RATIO,
+      ffNameStyle = 'inline',
     } = config
 
     this.padding = padding
@@ -499,6 +519,8 @@ export class DialogBox extends Container {
     this.ffWindow = ffWindow
     this.ffWindowStyle = ffWindowStyle
     this.ffPlacement = ffWindow ? ffPlacement : undefined
+    this.ffHeightRatio = ffWindowHeightRatio
+    this.ffNameStyle = ffNameStyle
     this.marginX = marginX
     this.marginBottom = marginBottom
     this.screenWidth = screenWidth
@@ -704,6 +726,14 @@ export class DialogBox extends Container {
     return { x: this.boxX, y: this.boxY + this.y, width: this.boxW, height: this.boxH }
   }
 
+  /**
+   * 設計どおりの窓の高さ（画面高さ比）。指定（既定 0.28）と、実際の文字サイズで名前 1 行 + 本文 1 行が入る最小の高さの大きいほう。
+   * 小さい画面では文字サイズの最小 14px のため比だけの下限では足りないので、ここで持ち上げる (#1184)
+   */
+  private effectiveHeightRatio(): number {
+    return Math.max(this.ffHeightRatio, minHeightRatioForFont(this.screenHeight, this.fontSize))
+  }
+
   /** 設計どおりの窓の、いまの側（検証用の読み取り。置き場所を使わない窓は常に bottom） */
   getPlacedSide(): DialogSide {
     return this.placedSide
@@ -718,7 +748,13 @@ export class DialogBox extends Container {
     const p = this.ffPlacement()
     const timed = !!p.timed
     if (this.placedActive && this.placedFootY === p.footY && this.placedTimed === timed) return
-    const side = pickDialogSide(p.footY, this.screenWidth, this.screenHeight, p.avatar)
+    const side = pickDialogSide(
+      p.footY,
+      this.screenWidth,
+      this.screenHeight,
+      p.avatar,
+      this.effectiveHeightRatio()
+    )
     const first = !this.placedActive
     this.placedActive = true
     this.placedFootY = p.footY
@@ -738,8 +774,18 @@ export class DialogBox extends Container {
   /** 窓の基準位置（下側）からの、いまの側へのずれ（下側 = 0・上側 = 負） */
   private placedOffsetY(): number {
     if (this.placedSide === 'bottom') return 0
-    const top = computeFieldDialogRect(this.screenWidth, this.screenHeight, 'top').y
-    const bottom = computeFieldDialogRect(this.screenWidth, this.screenHeight, 'bottom').y
+    const top = computeFieldDialogRect(
+      this.screenWidth,
+      this.screenHeight,
+      'top',
+      this.effectiveHeightRatio()
+    ).y
+    const bottom = computeFieldDialogRect(
+      this.screenWidth,
+      this.screenHeight,
+      'bottom',
+      this.effectiveHeightRatio()
+    ).y
     return top - bottom
   }
 
@@ -760,6 +806,36 @@ export class DialogBox extends Container {
         : 0
     this.nameText.x = this.boxX + Math.max(this.padding, inset)
     this.nameText.y = this.boxY + this.padding
+    if (this.ffNameLine) this.stylePlacedName()
+  }
+
+  /**
+   * 窓内の話者名の見せ方 (#1184)。文字の大きさ・色・影と、plate の名札の塗りを `ffNameStyle` で決める。位置は呼び出し元（positionPlacedName）が
+   * 決めた nameText.x/y（行の左上）を基準にする。inline は従来どおり（本文と同じ大きさの白）
+   */
+  private stylePlacedName(): void {
+    const fs = this.fontSize
+    const style = this.ffNameStyle
+    this.nameText.style.fontSize = style === 'large' ? Math.round(fs * 1.2) : fs
+    this.nameText.style.fill =
+      style === 'large' ? this.nameColor : style === 'plate' ? PLATE_TEXT_COLOR : 0xffffff
+    this.nameText.style.dropShadow =
+      style !== 'plate' && this.ffWindowStyle === 'ff-blue' ? { ...FF_BLUE_TEXT_SHADOW } : false
+    this.nameBox.clear()
+    if (style !== 'plate') {
+      this.nameBox.visible = false
+      return
+    }
+    // 名札: 名前の行（行の高さ 1.6 倍のうち 1.5 倍）に収まる角丸の塗り。左端は窓の余白にそろえ、文字は内側へ
+    const padX = Math.round(fs * 0.4)
+    const h = Math.round(fs * 1.5)
+    const x = this.nameText.x
+    const y = this.nameText.y
+    const w = Math.ceil(this.nameText.width) + padX * 2
+    this.nameBox.roundRect(x, y, w, h, Math.round(h / 4)).fill({ color: this.nameColor })
+    this.nameText.x = x + padX
+    this.nameText.y = y + Math.round((h - this.nameText.height) / 2)
+    this.nameBox.visible = true
   }
 
   private setBackgroundVisible(visible: boolean): void {
@@ -2025,11 +2101,6 @@ export class DialogBox extends Container {
       // 設計どおりの窓 (#1153): 話者名は窓内の左上に 1 行（外側タブにしない）。白文字・本文と同じ影。本文はその 1 行下から
       this.ffNameLine = true
       this.nameText.text = name
-      this.nameText.style.fill = 0xffffff
-      this.nameText.style.fontSize = this.fontSize
-      this.nameText.style.dropShadow =
-        this.ffWindowStyle === 'ff-blue' ? { ...FF_BLUE_TEXT_SHADOW } : false
-      this.nameBox.visible = false
       this.nameText.visible = true
       if (this.inlineNameText) this.inlineNameText.visible = false
       this.positionPlacedName()
@@ -2063,7 +2134,12 @@ export class DialogBox extends Container {
   private applyFfGeometry(): void {
     // 設計どおりの窓 (#1153): 基準は下側の矩形。上側は Container の y（placedOffsetY）で持ち上げる
     const r = this.ffPlacement
-      ? computeFieldDialogRect(this.screenWidth, this.screenHeight, 'bottom')
+      ? computeFieldDialogRect(
+          this.screenWidth,
+          this.screenHeight,
+          'bottom',
+          this.effectiveHeightRatio()
+        )
       : computeFfDialogRect(this.screenWidth, this.screenHeight)
     this.boxX = r.x
     this.boxY = r.y

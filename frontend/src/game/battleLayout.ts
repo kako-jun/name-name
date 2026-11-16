@@ -4,7 +4,7 @@
  * `BattleScreen` の `layout: 'side'`（FF 系サイドビュー）で使う座標を、画面サイズ・味方数・敵数から返す。
  *
  *   +------------------------------------------+
- *   | [ログ帯: 直近 logLines 行（敵の数で可変）]  |  ← log
+ *   | [ログ帯: 直近 logLines 行（ff は 1 行・他は敵の数で可変）] |  ← log
  *   |                                          |
  *   |  [敵]                  [味方]             |  ← enemies（左・2 行以上なら千鳥）/ party（右・左上→右下の斜め一列 #760）
  *   |  名前/HP                                  |  ← 敵だけ各スプライトの下にラベル（SpriteSlot.label）
@@ -19,14 +19,18 @@
  */
 
 import type { BattleRow } from './spellDsl'
+import { DEFAULT_MOTION_TIMING, SNAPPY_MOTION_TIMING } from './battleMotion'
 import type { CommandLayout } from './battleCommands'
 import { computeAcrylicGeometry, resolveAcrylicParams, type AcrylicParams } from './spriteStyle'
 import {
   applyDepthToGridSlots,
   clampEnemyWindowOverlap,
+  clampEnemyWindowOverlapBottom,
   computeEnemyGridLayout,
   emptyEnemyGridSlot,
   type EnemyFootprint,
+  type EnemyGridAlign,
+  type EnemyGridExtent,
   type EnemyGridSize,
   type EnemyGridSlot,
 } from './enemyGrid'
@@ -102,6 +106,23 @@ export interface SideBattleLayoutInput {
    */
   enemyGrid?: EnemyGridSize
   /**
+   * グリッドの縦位置 (#1178)。`center` なら行数ぶんの高さのグリッドを敵の領域の縦中央に置く。未指定は `bottom`（領域の下端そろえ・従来）。
+   * セルの大きさ・行数・窓との重なり・味方との距離・奥行きの縮尺の基準は変えない（縦位置だけ）。グリッドなしでは無関係
+   */
+  enemyGridAlign?: EnemyGridAlign
+  /**
+   * グリッドの水平の広がり (#1178)。`wide` なら敵領域の左端を画面の左端（x=0）へ、右端を「味方の描画範囲の左端 − 攻撃の踏み出し量 − 最小の隙間」へ広げる。
+   * 未指定は `normal`（従来）。縦位置・味方の並び・窓との重なりとは独立（敵と味方が触れない不変条件だけを共有する）。グリッドなしでは無関係
+   */
+  enemyGridExtent?: EnemyGridExtent
+  /**
+   * 足元が下のパネル（コマンド・敵名・status）に隠れてよい量 (#1178)。各敵の枠の高さに対する比、0〜0.5、未指定は 0（従来・隠れない）。
+   * 延長ぶんが足元から画面の下端までを超えない範囲に絞る。上の `enemyWindowOverlap` とは独立のキー。グリッドなしでは無関係
+   */
+  enemyWindowOverlapBottom?: number
+  /** 味方の斜め一列の並び (#1178)。`default`（従来）/ `tall`（x 送り 0.2h・列を舞台の縦いっぱいへ）。味方の大きさ・グリッド・窓とは独立 */
+  partyLayout?: PartyLayout
+  /**
    * グリッド時の敵ごとの占有（`placeEnemies` の結果 + サイズ区分 + 倍率）。敵の index 順。
    * null・足りない分は置けなかった敵＝大きさ 0 のスロット（後段が描かない）
    */
@@ -116,12 +137,22 @@ export interface SideBattleLayoutInput {
    * 画面が狭く command / status の最小幅を保てないときは窓を置かず `enemyList: null`（従来の 2 枚構成）。未指定・false は従来どおり
    */
   enemyList?: boolean
+  /**
+   * メッセージ窓（ログ帯）の行数を固定する (#1178)。未指定は従来どおり敵の数で可変（`desiredSideLogLines`）。
+   * FF 式（`battle_presentation: ff`）は言葉 1 件だけを出すので 1 を渡す。敵のグリッドの有無・列数・行数は窓の行数に影響しない
+   */
+  messageLines?: number
+  /**
+   * 敵ごとの表示倍率（0.25〜1・敵の index 順・#1178）。グリッドなしの配置にも効かせる（足元中央基準で縮める）。
+   * 未指定・足りない分は 1。グリッドあり（`enemyFootprints` の `scale`）では使わない
+   */
+  enemyScales?: readonly (number | undefined)[]
 }
 
 export interface SideBattleLayout {
   /** 画面上部のログ帯 */
   log: Rect
-  /** ログ帯に出す行数（敵の数で可変・SIDE_LOG_MIN_LINES〜SIDE_LOG_MAX_LINES） */
+  /** ログ帯に出す行数（`messageLines` 指定ならその行数、なければ敵の数で可変・SIDE_LOG_MIN_LINES〜SIDE_LOG_MAX_LINES） */
   logLines: number
   /** 敵・味方スプライトを置くステージ領域（ログ帯と下パネルの間） */
   stage: Rect
@@ -219,6 +250,45 @@ export const SIDE_PARTY_MIN_PITCH_RATIO = 0.3
 export const SIDE_PARTY_MAX_PITCH_RATIO = 0.6
 /** 敵へ領域を回すとき、味方の斜めのずらしをここまで詰める（高さに対する比。上限 0.75・下限 0.3 の間） */
 export const SIDE_PARTY_COMFORT_SHIFT_RATIO = 0.5
+
+/** 味方の斜め一列の並び (#1178)。名前付きのプリセット。`tall` は x 送りを小さく・y 送りを舞台の縦いっぱいまで広げる */
+export type PartyLayout = 'default' | 'tall'
+/** 並びのプリセットごとの定数。大きさ h は preset に依らず default の式で決める（味方の大きさを新キーと直交にする） */
+interface PartyLayoutParams {
+  maxPitchRatio: number
+  minShiftRatio: number
+  maxShiftRatio: number
+  comfortShiftRatio: number
+}
+export const PARTY_LAYOUT_PARAMS: Readonly<Record<PartyLayout, PartyLayoutParams>> = {
+  default: {
+    maxPitchRatio: SIDE_PARTY_MAX_PITCH_RATIO,
+    minShiftRatio: SIDE_DIAGONAL_MIN_SHIFT_RATIO,
+    maxShiftRatio: SIDE_DIAGONAL_MAX_SHIFT_RATIO,
+    comfortShiftRatio: SIDE_PARTY_COMFORT_SHIFT_RATIO,
+  },
+  // x 送りは常に 0.2h（下限=上限）。詰め量も 0.2h。y 送りは舞台の高さで決まる（上限は実質なし。下限 0.3h は default と共通）
+  tall: { maxPitchRatio: 10, minShiftRatio: 0.2, maxShiftRatio: 0.2, comfortShiftRatio: 0.2 },
+}
+
+/** 味方が攻撃で前（左）へ踏み出す最大量の、味方の高さ h に対する比 (#1178)。モーション preset の最大（default 0.7 / snappy 0.55）。`applyMotionFrame` の `forward * view.unit`（味方は unit=h） */
+export const SIDE_PARTY_STEP_MAX_RATIO = Math.max(
+  DEFAULT_MOTION_TIMING.attackStepDistance,
+  SNAPPY_MOTION_TIMING.attackStepDistance
+)
+
+/** 敵グリッド `wide` の右端と、踏み出した味方の描画範囲の左端のあいだの最小の隙間 (px) */
+export const SIDE_WIDE_GRID_PARTY_GAP = 2
+
+export function normalizePartyLayout(raw: string | null | undefined, warn = true): PartyLayout {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'default'
+  const v = raw.trim().toLowerCase()
+  if (v === 'tall') return 'tall'
+  if (v === 'default') return 'default'
+  if (warn)
+    console.warn(`battle_party_layout '${raw}' は default / tall ではないため default にした`)
+  return 'default'
+}
 /** 味方の立ち絵の高さの上限 */
 export const SIDE_PARTY_MAX_HEIGHT = 320
 /** 立ち絵の縦横比（幅/高さ）の既定（未読み込み・色四角）と丸め範囲 */
@@ -495,8 +565,9 @@ export function computePartyDiagonal(
   count: number,
   rows?: readonly (BattleRow | undefined)[],
   aspects?: readonly (number | undefined)[],
-  opts?: { height?: number }
+  opts?: { height?: number; layout?: PartyLayout }
 ): SpriteSlot[] {
+  const lp = PARTY_LAYOUT_PARAMS[opts?.layout ?? 'default']
   if (count <= 0) return []
   const regionW = Math.max(0, region.w)
   const regionH = Math.max(0, region.h)
@@ -522,13 +593,13 @@ export function computePartyDiagonal(
             regionW / (maxAspect * (1 + backShift) + steps * SIDE_DIAGONAL_MIN_SHIFT_RATIO)
           )
         )
-  const pitch = steps > 0 ? Math.min((regionH - h) / steps, h * SIDE_PARTY_MAX_PITCH_RATIO) : 0
+  const pitch = steps > 0 ? Math.min((regionH - h) / steps, h * lp.maxPitchRatio) : 0
   const maxW = h * maxAspect
   const dx =
     steps > 0 && h > 0
       ? Math.min(
-          SIDE_DIAGONAL_MAX_SHIFT_RATIO,
-          Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (regionW - maxW * (1 + backShift)) / steps / h)
+          lp.maxShiftRatio,
+          Math.max(lp.minShiftRatio, (regionW - maxW * (1 + backShift)) / steps / h)
         ) * h
       : 0
   const totalH = h + steps * pitch
@@ -768,8 +839,10 @@ export function applyDepthToSlots(
 export function partyRegionWidth(
   slots: readonly SpriteSlot[],
   halfWidth: number,
-  anyBack = false
+  anyBack = false,
+  layout: PartyLayout = 'default'
 ): number {
+  const lp = PARTY_LAYOUT_PARAMS[layout]
   if (slots.length === 0) return 0
   const h = slots[0].size
   const maxW = Math.max(...slots.map((s) => s.width))
@@ -778,11 +851,8 @@ export function partyRegionWidth(
   if (steps === 0 || !(h > 0)) return Math.min(halfWidth, base)
   // 右半分での斜めのずらし（computePartyDiagonal の dx と同じ式）
   const dxHalf =
-    Math.min(
-      SIDE_DIAGONAL_MAX_SHIFT_RATIO,
-      Math.max(SIDE_DIAGONAL_MIN_SHIFT_RATIO, (halfWidth - base) / steps / h)
-    ) * h
-  const wanted = base + steps * Math.min(dxHalf, h * SIDE_PARTY_COMFORT_SHIFT_RATIO)
+    Math.min(lp.maxShiftRatio, Math.max(lp.minShiftRatio, (halfWidth - base) / steps / h)) * h
+  const wanted = base + steps * Math.min(dxHalf, h * lp.comfortShiftRatio)
   return Math.min(halfWidth, Math.max(0, wanted))
 }
 
@@ -863,6 +933,22 @@ export function partyDrawOverhang(
   return max
 }
 
+/** 枠を足元中央基準で `scale`（0.25〜1。未指定・不正は 1）倍に縮める。ラベルは動かさない (#1178) */
+function scaleSlotAroundFoot(slot: SpriteSlot, scale: number | undefined): SpriteSlot {
+  if (scale === undefined || !Number.isFinite(scale)) return slot
+  const s = Math.min(1, Math.max(0.25, scale))
+  if (s === 1) return slot
+  const size = slot.size * s
+  const width = slot.width * s
+  return {
+    ...slot,
+    x: slot.x + (slot.width - width) / 2,
+    y: slot.floor - size,
+    size,
+    width,
+  }
+}
+
 /**
  * サイドビュー戦闘画面の全座標を算出する。
  *
@@ -880,6 +966,13 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const slotCount = partyCount > 0 ? Math.max(SIDE_PARTY_MIN_SLOTS, partyCount) : 0
   const depth = input.depth && input.depth.perspective > 0 ? input.depth : null
   const innerW = Math.max(0, W - SIDE_PADDING * 2)
+  // メッセージ窓の行数 (#1178): 固定（`messageLines`）か、敵の数で可変。グリッドの値は一切入れない（設定同士は直交）
+  const fixedLogLines =
+    input.messageLines !== undefined && Number.isFinite(input.messageLines)
+      ? Math.min(SIDE_LOG_MAX_LINES, Math.max(1, Math.floor(input.messageLines)))
+      : null
+  // 窓の行数の下限（ステージが潰れるときに減らす先）。cross の 1 段の縮み量には使わない（味方の大きさを窓の行数と独立に保つため。下記）
+  const minLogLines = fixedLogLines ?? SIDE_LOG_MIN_LINES
 
   // 下: コマンド（左）+ status（右）
   const commandLayout = effectiveCommandLayout(input.commandLayout, commandCount)
@@ -947,15 +1040,11 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     })
   }
 
-  // 上: ログ帯。行数は敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
+  // 上: ログ帯。行数は固定（ff）か敵の数で決め、ステージが潰れるときは最小高さを優先して減らす
   const stageBottom = bottomY - SIDE_GAP
-  // グリッド有効時 (#839 段4) は希望行数をグリッド容量（cols*rows）で決める。体数で行数が変わると stage 高さ→cell が
-  // 体数で変わり、設計書 §3.8「体数不変」に反するため。グリッドなしは従来どおり敵の数で決める
-  let logLines = desiredSideLogLines(
-    input.enemyGrid ? input.enemyGrid.cols * input.enemyGrid.rows : enemyCount
-  )
+  let logLines = fixedLogLines ?? desiredSideLogLines(enemyCount)
   while (
-    logLines > SIDE_LOG_MIN_LINES &&
+    logLines > minLogLines &&
     stageBottom - (SIDE_PADDING + computeSideLogHeight(logLines) + SIDE_GAP) < SIDE_MIN_STAGE_HEIGHT
   ) {
     logLines--
@@ -975,9 +1064,25 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     w: innerW,
     h: Math.max(0, stageBottom - stageY),
   }
+  // 味方の大きさ (#1178): メッセージ窓の行数（ff の固定 1 行・dq の敵の数による可変）と完全に独立に決める。
+  // 窓が最大行数のときの舞台の高さで求め（足りない画面だけ最小行数まで減らす）、下端は実際の舞台の下端にそろえる。
+  // cross の 1 段の縮み量も窓の行数に依らない（上の commandCellH は常にログ最小 2 行で計算）ので、下パネルの高さ＝舞台の下端が同じになる
+  let partyRefLines = SIDE_LOG_MAX_LINES
+  while (
+    partyRefLines > SIDE_LOG_MIN_LINES &&
+    stageBottom - (SIDE_PADDING + computeSideLogHeight(partyRefLines) + SIDE_GAP) <
+      SIDE_MIN_STAGE_HEIGHT
+  ) {
+    partyRefLines--
+  }
+  const partyStageH = Math.min(
+    stage.h,
+    Math.max(0, stageBottom - (SIDE_PADDING + computeSideLogHeight(partyRefLines) + SIDE_GAP))
+  )
+  const partyStage: Rect = { ...stage, y: stage.y + stage.h - partyStageH, h: partyStageH }
   // 味方 (#760): 大きさは従来どおり右半分を使うものとして決め、その斜め一列に必要な幅だけ右端に取る。残りはすべて敵へ回す
   const half = stage.w / 2
-  const partyHalf: Rect = { x: stage.x + half, y: stage.y, w: half, h: stage.h }
+  const partyHalf: Rect = { x: stage.x + half, y: partyStage.y, w: half, h: partyStage.h }
   // #813: 4 人のときの斜め一列の枠で求め、味方は上の枠から順に入れる。空き枠は何も描かない（最後に切り捨てる）
   // 枠の縦横比は固定の基準縦横比。空き枠の隊列は前衛。誰がいるか・各自の縦横比で枠が変わらないように
   const partyRows = input.partyRows?.slice(0, partyCount)
@@ -986,8 +1091,17 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   const halfSlots = computeFormation(partyHalf, slotCount, 'party', false, partyRows, partyAspects)
   const anyBack =
     !!input.partyRows && input.partyRows.slice(0, partyCount).some((r) => r === 'back')
-  const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack)
-  const partyRegion: Rect = { x: stage.x + stage.w - partyW, y: stage.y, w: partyW, h: stage.h }
+  const partyLayout = input.partyLayout ?? 'default'
+  const partyW = partyRegionWidth(halfSlots, partyHalf.w, anyBack, partyLayout)
+  // tall (#1178): 大きさ h は default の式（上の halfSlots）で決めたまま、列は実際の舞台の縦いっぱい（窓の下〜舞台の下端）に伸ばす。
+  // default は大きさの基準にした舞台（窓が最大行数のとき）のまま
+  const partyRegionY = partyLayout === 'tall' ? stage.y : partyStage.y
+  const partyRegion: Rect = {
+    x: stage.x + stage.w - partyW,
+    y: partyRegionY,
+    w: partyW,
+    h: stage.y + stage.h - partyRegionY,
+  }
   const enemyRegion: Rect = { x: stage.x, y: stage.y, w: stage.w - partyW, h: stage.h }
   // 縦長の stage (#760): 敵のかたまりを下寄せにし、1 人目（左上）の頭・板とぶつかりにくくする。
   // 領域の下端は固定したまま上端を下げ、領域の縦中心を味方 party[1]〜party[2] の足元の中ほどに合わせる
@@ -1008,18 +1122,37 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
   // （敵名窓のグリッドが味方の描画範囲を知る必要があるので、敵より先に求める。入力は敵に依らない）
   let party = computePartyDiagonal(partyRegion, slotCount, partyRows, partyAspects, {
     height: partyHeight,
+    layout: partyLayout,
   })
 
   const enemyPlate = input.enemyAcrylic ?? null
   // グリッド時 (#839 段4): 奥行きの縮尺の基準（グリッド最下行の下端。体数・空きに依らない）
   let gridFrontFloor: number | null = null
   let gridOverlap = 0
-  const formEnemies = (region: Rect): SpriteSlot[] =>
-    computeFormation(region, enemyCount, 'enemy', true, undefined, input.enemyAspects, {
+  // 縦位置の設定（enemyGridAlign）で動いた量。奥行きの縮尺は下端そろえの足元で決め、縦位置が敵の大きさを変えないようにする (#1178)
+  let gridAlignShift = 0
+  // 足元ラベル帯を取らない（敵名窓あり）と敵の領域の右端が味方領域の左端に接する。グリッドの有無によらず、
+  // 味方の描画範囲（枠より左へ広がる台座・影）との間に最小の隙間を空ける (#1177 / #1178)
+  const labelless = enemyList !== null
+  const partyOverhang = labelless ? partyDrawOverhang(party, input.partyAcrylic) : 0
+  const narrowForParty = (region: Rect, extra = 0): Rect =>
+    labelless
+      ? { ...region, w: Math.max(0, region.w - SIDE_ENEMY_PARTY_MIN_GAP - partyOverhang - extra) }
+      : region
+  const formOnce = (region: Rect): SpriteSlot[] =>
+    computeFormation(region, enemyCount, 'enemy', !labelless, undefined, input.enemyAspects, {
       maxSize: SIDE_ENEMY_MAX_SIZE,
       minSize: partyHeight,
       plateParams: enemyPlate,
     })
+  const formEnemies = (region: Rect): SpriteSlot[] => {
+    const first = formOnce(narrowForParty(region))
+    if (!labelless || !enemyPlate) return first
+    // アクスタの台座・影は枠より横へ広がる（`max(size, width)` の箱）。その広がり（縮めると小さくなるので 1 回見積もれば安全側）も
+    // 味方の描画範囲に触れないよう、領域をそのぶん狭めて作り直す
+    const overhang = partyDrawOverhang(first, enemyPlate)
+    return overhang > 0 ? formOnce(narrowForParty(region, overhang)) : first
+  }
   let enemies: SpriteSlot[]
   if (input.enemyGrid) {
     // 窓との重なり許容量は、延長ぶん（overlap * cell）が窓の高さを超えない範囲に絞る（cell が overlap に依るので閉形式で解く）
@@ -1027,23 +1160,9 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
     const gridLabel = enemyList === null
     // 帯を取らない分セルが幅で決まり、グリッドの右端が味方領域の左端に接する。そのとき味方の枠に触れないよう最小の隙間を空ける
     // 味方の描画は枠より左へ広がる(台座・影)ので、隙間は枠でなく描画範囲の左端から取る
-    const partyOverhang = partyDrawOverhang(party, input.partyAcrylic)
-    const gridRegion: Rect = gridLabel
-      ? enemyRegion
-      : {
-          ...enemyRegion,
-          w: Math.max(0, enemyRegion.w - SIDE_ENEMY_PARTY_MIN_GAP - partyOverhang),
-        }
-    const overlap = clampEnemyWindowOverlap(
-      gridRegion,
-      input.enemyGrid,
-      gridLabel,
-      input.enemyWindowOverlap,
-      log.h
-    )
-    gridOverlap = overlap
+    let gridRegion: Rect = gridLabel ? enemyRegion : narrowForParty(enemyRegion)
     const placedIdx: number[] = []
-    const footprints: EnemyFootprint[] = []
+    let footprints: EnemyFootprint[] = []
     for (let i = 0; i < enemyCount; i++) {
       const fp = input.enemyFootprints?.[i]
       if (fp) {
@@ -1051,12 +1170,53 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
         footprints.push(fp)
       }
     }
-    const gl = computeEnemyGridLayout(gridRegion, input.enemyGrid, footprints, {
+    let gridDef = input.enemyGrid
+    if (input.enemyGridExtent === 'wide' && footprints.length > 0) {
+      // 広がり (#1178): 『実際に敵が占めるセルの外接範囲』（最左の占有セルの左端〜最右の占有セルの右端。空の列は数えない）を、
+      // 画面の左端（x=0）〜味方の踏み出しの手前に置く。セルの大きさ = min(その幅 ÷ 占有列数, 高さ側の上限)。
+      // 外接範囲の左の空の列は画面の外・右の空の列は味方の裏にあってよい（描かない）ので、占有列だけの小さなグリッドに詰めて解く
+      // （@C1 などの座標の意味は変えない。置く場所とセルの大きさだけが変わる＝敵の数・配置で戦闘ごとにセルの大きさが変わる）。
+      // 右端は、味方の描画範囲（枠より左へ広がる台座・影）の左端から、攻撃で一歩踏み出す最大量（モーション preset の最大 × 味方の高さ。
+      // 踏み出しは味方全員が起こりうるので全枠の左端の最小で見積もる）と最小の隙間を引いた所
+      const minCol = Math.min(...footprints.map((f) => f.col))
+      const maxCol = Math.max(...footprints.map((f) => f.col + f.w - 1))
+      gridDef = { cols: maxCol - minCol + 1, rows: input.enemyGrid.rows }
+      footprints = footprints.map((f) => ({ ...f, col: f.col - minCol }))
+      const partyLeft =
+        Math.min(...party.map((sl) => sl.x)) - partyDrawOverhang(party, input.partyAcrylic)
+      const right = partyLeft - SIDE_PARTY_STEP_MAX_RATIO * partyHeight - SIDE_WIDE_GRID_PARTY_GAP
+      gridRegion = { ...enemyRegion, x: 0, w: Math.max(0, right) }
+    }
+    // 下のパネルへ隠れてよい量 (#1178): 足元から画面の下端までを超えない範囲に絞る。足元ラベルを出すとき（敵名窓なし）は、
+    // ラベルの帯（領域の下端〜パネルの上端の隙間に収まる）がパネルの裏に入らないよう 0（ラベルが隠れない）
+    const bottomRoom = gridLabel ? 0 : H - (gridRegion.y + gridRegion.h)
+    const overlap = clampEnemyWindowOverlap(
+      gridRegion,
+      gridDef,
+      gridLabel,
+      input.enemyWindowOverlap,
+      log.h,
+      input.enemyWindowOverlapBottom
+    )
+    const overlapBottom = clampEnemyWindowOverlapBottom(
+      gridRegion,
+      gridDef,
+      gridLabel,
+      overlap,
+      input.enemyWindowOverlapBottom,
+      bottomRoom
+    )
+    gridOverlap = overlap
+    const gl = computeEnemyGridLayout(gridRegion, gridDef, footprints, {
       withLabel: gridLabel,
       windowOverlap: overlap,
+      windowOverlapBottom: overlapBottom,
+      align: input.enemyGridAlign,
     })
+    gridAlignShift = gl.alignShift
     const band = gridLabel && gl.cell > 0 ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
-    gridFrontFloor = gl.grid.y + gl.grid.h - band
+    // 奥行きの縮尺の基準は縦位置の設定（下端 / 中央）に依らず、領域の下端にそろえた最下行の下端（直交）
+    gridFrontFloor = gridRegion.y + gridRegion.h - band
     const slots: EnemyGridSlot[] = Array.from({ length: enemyCount }, () =>
       emptyEnemyGridSlot(gl.grid.x, gridFrontFloor as number)
     )
@@ -1091,6 +1251,10 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
       enemyRegion.h -= hi
     }
   }
+  // 敵の表示倍率 (#1178): グリッドなしの配置にも効かせる。足元中央を保って枠を縮める（窓フィットは縮める前の枠で済んでいる＝縮めて重なりが増えることはない）
+  if (!input.enemyGrid && input.enemyScales) {
+    enemies = enemies.map((sl, i) => scaleSlotAroundFoot(sl, input.enemyScales?.[i]))
+  }
   if (depth) {
     // 奥行き (#747): 敵・味方で共通の地平線と、最前列（最も手前の floor）を基準に縮尺を求める
     // 空き枠も最前列の基準に含める（人数で縮尺が変わらないように）
@@ -1110,7 +1274,8 @@ export function computeSideBattleLayout(input: SideBattleLayoutInput): SideBattl
             {
               bottom: log.y + log.h,
               overlap: gridOverlap,
-            }
+            },
+            gridAlignShift
           )
         : applyDepthToSlots(enemies, frontFloor, horizonY, depth.perspective)
       party = applyDepthToSlots(party, frontFloor, horizonY, depth.perspective)

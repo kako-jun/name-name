@@ -14,6 +14,13 @@ export const BATTLE_LOGICAL_HEIGHT = 1080
 /** `SIDE_*` の px 定数が前提にしている設計上の高さ（サンプルの 800×450） */
 export const BATTLE_UI_BASE_HEIGHT = 450
 
+/**
+ * FF 式メッセージ窓（BattleScreen の updateMessageWindow）専用の文字サイズ(設計 px)。1 行のまま大きくする (#1148)。ログ行（LOG_FONT_SIZE）は変えない。
+ * 最小の窓（2 行分 = 56px）に収まる上限の目安は約 30。フィールドの会話窓の `dialog_font_size: battle` (#1184) はこの値から比を導く
+ * （BattleScreen を import すると重いので、ここに置く）
+ */
+export const MESSAGE_WINDOW_FONT_SIZE = 22
+
 export type BattleLogicalSize = '1920x1080'
 
 export interface BattleFrame {

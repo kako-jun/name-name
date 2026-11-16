@@ -96,6 +96,14 @@ export interface FieldBattleSettings {
   enemyGrid: EnemyGridSize | undefined
   /** `battle_enemy_window_overlap` (#839)。undefined = 既定（0.25） */
   enemyWindowOverlap: number | undefined
+  /** `battle_enemy_grid_align` (#1178)。`bottom`（既定）/ `center`。グリッドがあるときだけ効く */
+  enemyGridAlign: 'center' | 'bottom'
+  /** `battle_enemy_grid_extent` (#1178)。`normal`（既定）/ `wide` */
+  enemyGridExtent: 'normal' | 'wide'
+  /** `battle_enemy_window_overlap_bottom` (#1178)。undefined = 0 */
+  enemyWindowOverlapBottom: number | undefined
+  /** `battle_party_layout` (#1178)。`default`（既定）/ `tall` */
+  partyLayout: 'default' | 'tall'
   /** `battle_command_layout` (#204) */
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
@@ -124,6 +132,10 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   atb: undefined,
   enemyGrid: undefined,
   enemyWindowOverlap: undefined,
+  enemyGridAlign: 'bottom',
+  enemyGridExtent: 'normal',
+  enemyWindowOverlapBottom: undefined,
+  partyLayout: 'default',
   commandLayout: 'grid',
   commandLabels: undefined,
   commands: undefined,
@@ -150,6 +162,10 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     atb: gameData.battleAtb,
     enemyGrid: gameData.battleEnemyGrid,
     enemyWindowOverlap: gameData.battleEnemyWindowOverlap,
+    enemyGridAlign: gameData.battleEnemyGridAlign ?? d.enemyGridAlign,
+    enemyGridExtent: gameData.battleEnemyGridExtent ?? d.enemyGridExtent,
+    enemyWindowOverlapBottom: gameData.battleEnemyWindowOverlapBottom,
+    partyLayout: gameData.battlePartyLayout ?? d.partyLayout,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
     commands: gameData.battleCommands,
@@ -650,6 +666,12 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     ...(settings.enemyWindowOverlap !== undefined
       ? { enemyWindowOverlap: settings.enemyWindowOverlap }
       : {}),
+    ...(settings.enemyGridAlign !== 'bottom' ? { enemyGridAlign: settings.enemyGridAlign } : {}),
+    ...(settings.enemyGridExtent !== 'normal' ? { enemyGridExtent: settings.enemyGridExtent } : {}),
+    ...(settings.enemyWindowOverlapBottom !== undefined
+      ? { enemyWindowOverlapBottom: settings.enemyWindowOverlapBottom }
+      : {}),
+    ...(settings.partyLayout !== 'default' ? { partyLayout: settings.partyLayout } : {}),
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
     commands: settings.commands,

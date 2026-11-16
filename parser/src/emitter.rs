@@ -249,6 +249,42 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_enemy_window_overlap: \"{sanitized}\"\n"));
         }
+        // field_menu_use_message (#1185)。同じ流儀
+        if let Some(ref v) = doc.field_menu_use_message {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("field_menu_use_message: \"{sanitized}\"\n"));
+        }
+        // battle_enemy_grid_align (#1178)。同じ流儀
+        if let Some(ref v) = doc.battle_enemy_grid_align {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_enemy_grid_align: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_enemy_grid_extent {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_enemy_grid_extent: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_enemy_window_overlap_bottom {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!(
+                "battle_enemy_window_overlap_bottom: \"{sanitized}\"\n"
+            ));
+        }
+        if let Some(ref v) = doc.dialog_font_size {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("dialog_font_size: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.dialog_window_height {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("dialog_window_height: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.dialog_name_style {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("dialog_name_style: \"{sanitized}\"\n"));
+        }
+        if let Some(ref v) = doc.battle_party_layout {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_party_layout: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -2638,6 +2674,14 @@ mod tests {
             battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
+            battle_enemy_grid_align: None,
+            field_menu_use_message: None,
+            battle_enemy_grid_extent: None,
+            battle_enemy_window_overlap_bottom: None,
+            battle_party_layout: None,
+            dialog_font_size: None,
+            dialog_window_height: None,
+            dialog_name_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "テスト".to_string(),
@@ -3163,6 +3207,14 @@ mod tests {
             battle_effects: None,
             battle_enemy_grid: None,
             battle_enemy_window_overlap: None,
+            battle_enemy_grid_align: None,
+            field_menu_use_message: None,
+            battle_enemy_grid_extent: None,
+            battle_enemy_window_overlap_bottom: None,
+            battle_party_layout: None,
+            dialog_font_size: None,
+            dialog_window_height: None,
+            dialog_name_style: None,
             chapters: vec![Chapter {
                 number: 1,
                 title: "test".to_string(),

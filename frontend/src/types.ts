@@ -1397,8 +1397,24 @@ export interface EventDocument {
   battle_enemy_grid?: string | null
   /** 敵の絵とメッセージ窓の重なり許容量 (#838 / #839)。0〜0.5 の数値文字列。frontmatter `battle_enemy_window_overlap:` から流す。不正値・未指定は既定 0.25。GUI 専用。 */
   battle_enemy_window_overlap?: string | null
+  /** 敵グリッドの縦位置 (#1178)。`"center"`（領域の縦中央）/ `"bottom"`（下端そろえ・既定）。frontmatter `battle_enemy_grid_align:` から流す。不正値・未指定は bottom。`battle_enemy_grid` が有効なときだけ効く。GUI 専用。 */
+  battle_enemy_grid_align?: string | null
+  /** 敵グリッドの水平の広がり (#1178)。`"normal"`（既定）/ `"wide"`。frontmatter `battle_enemy_grid_extent:` から流す。不正値・未指定は normal。GUI 専用。 */
+  battle_enemy_grid_extent?: string | null
+  /** 足元が下のパネルに隠れてよい量 (#1178)。0〜0.5 の数値文字列。frontmatter `battle_enemy_window_overlap_bottom:` から流す。不正値・未指定は 0。GUI 専用。 */
+  battle_enemy_window_overlap_bottom?: string | null
+  /** 味方の斜め一列の並び (#1178)。`"default"`（既定）/ `"tall"`。frontmatter `battle_party_layout:` から流す。不正値・未指定は default。GUI 専用。 */
+  battle_party_layout?: string | null
+  /** 一枚絵フィールドの会話窓の文字サイズ (#1184)。`"normal"`（既定＝従来）/ `"battle"`（戦闘のメッセージ窓と同じ大きさ）。frontmatter `dialog_font_size:` から流す。`window_style` を書いた作品の窓だけに効く。GUI 専用。 */
+  dialog_font_size?: string | null
+  /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */
+  dialog_window_height?: string | null
+  /** 一枚絵フィールドの会話窓の話者名の見せ方 (#1184)。`"inline"`（既定＝従来）/ `"large"` / `"plate"`。frontmatter `dialog_name_style:` から流す。GUI 専用。 */
+  dialog_name_style?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
+  /** フィールドメニューでどうぐ・まほうを使って成功したときの文 (#1185)。`"on"`（既定）/ `"off"`。frontmatter `field_menu_use_message:` から流す。失敗の文は対象外。GUI 専用（一枚絵フィールド）。 */
+  field_menu_use_message?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（一枚絵フィールドの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */
   field_emotions?: string | null
   /** 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。frontmatter `battle_effects:` から流す。中身は種類名 → シート宣言（戦闘の設定 JSON の `effects` と同じ検証）。不正は警告して無視、未指定はエフェクトなし。GUI 専用。 */

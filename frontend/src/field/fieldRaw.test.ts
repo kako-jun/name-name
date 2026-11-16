@@ -845,11 +845,16 @@ describe('buildFieldRaw: frontmatter', () => {
         battle_atb_mode: 'active',
         battle_enemy_grid: '6x2',
         battle_enemy_window_overlap: '0.3',
+        battle_enemy_grid_align: 'center',
+        battle_enemy_grid_extent: 'wide',
+        battle_enemy_window_overlap_bottom: '0.4',
+        battle_party_layout: 'tall',
         battle_background: 'bg-battle.webp',
         battle_commands: 'skill, spell, item, escape',
         battle_command_labels: 'spell=まほう, skill＝わざ, bogus=x, item=',
         battle_effects: 'fx.json',
         field_emotions: 'emo.json',
+        field_menu_use_message: 'OFF',
         dialog_style: 'ff',
         aspect_ratio: '16:9',
       },
@@ -859,6 +864,7 @@ describe('buildFieldRaw: frontmatter', () => {
     expect(r.raw).toMatchObject({
       spriteStyle: 'acrylic',
       dialogStyle: 'ff',
+      menuUseMessage: 'off',
       emotionsUrl: `${ASSET}/emo.json`,
       battle: {
         layout: 'side',
@@ -874,6 +880,10 @@ describe('buildFieldRaw: frontmatter', () => {
         atbMode: 'active',
         enemyGrid: '6x2',
         enemyWindowOverlap: 0.3,
+        enemyGridAlign: 'center',
+        enemyGridExtent: 'wide',
+        enemyWindowOverlapBottom: 0.4,
+        partyLayout: 'tall',
         background: 'bg-battle.webp',
         commands: ['skill', 'spell', 'item', 'escape'],
         effects: { hit: { image: 'h.webp' } },
@@ -973,6 +983,49 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     const ff = ok({ frontmatter: { dialog_style: 'FF' } })
     expect(ff.warnings).toEqual([])
     expect(ff.raw).toMatchObject({ dialogStyle: 'ff' })
+  })
+
+  it('field_menu_use_message (#1185): on / off を渡し、不正は警告して無視する', () => {
+    const on = ok({ frontmatter: { field_menu_use_message: ' On ' } })
+    expect(on.warnings).toEqual([])
+    expect(on.raw).toMatchObject({ menuUseMessage: 'on' })
+    const bad = ok({ frontmatter: { field_menu_use_message: 'maybe' } })
+    expect(bad.warnings).toEqual([
+      'frontmatter の field_menu_use_message は "on" / "off" のどれかにしてください: "maybe"（無視します）',
+    ])
+    expect(bad.raw).not.toHaveProperty('menuUseMessage')
+    expect(ok({}).raw).not.toHaveProperty('menuUseMessage')
+  })
+
+  it('dialog_font_size / dialog_window_height / dialog_name_style を raw の最上位に渡し、不正は警告して出さない (#1184)', () => {
+    const r = ok({
+      frontmatter: {
+        dialog_font_size: ' Battle ',
+        dialog_window_height: '0.36',
+        dialog_name_style: 'PLATE',
+      },
+    })
+    expect(r.warnings).toEqual([])
+    expect(r.raw).toMatchObject({
+      dialogFontSize: 'battle',
+      dialogWindowHeight: 0.36,
+      dialogNameStyle: 'plate',
+    })
+    const none = ok({ frontmatter: {} })
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle'])
+      expect(none.raw).not.toHaveProperty(k)
+    const bad = ok({
+      frontmatter: {
+        dialog_font_size: 'huge',
+        dialog_window_height: '0.9',
+        dialog_name_style: 'x',
+      },
+    })
+    expect(bad.warnings).toHaveLength(3)
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle'])
+      expect(bad.raw).not.toHaveProperty(k)
+    // 数値でない・空は警告
+    expect(ok({ frontmatter: { dialog_window_height: 'abc' } }).warnings).toHaveLength(1)
   })
 
   it('aux の中身はコピーして raw に入れる(参照共有しない)', () => {

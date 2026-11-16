@@ -144,6 +144,8 @@ export interface FieldMenuScreenOptions {
   height: number
   /** true = 左のパーティにアクスタの板・台座・影を付ける（フィールドの `spriteStyle: "acrylic"` と同じ） */
   acrylic: boolean
+  /** false = 使用が成功したとき（ok=true）の文を説明バー・案内帯に出さない (#1185)。失敗の文は常に出す。HP/MP の数字更新は変えない。既定 true */
+  useMessage?: boolean
   /** 画面遷移の速さ（既定 `DEFAULT_MENU_TRANSITION`） */
   transition?: MenuTransitionTiming
   /** メニューが閉じた（最上位で戻った）。呼び出し側がフィールドへ戻す */
@@ -402,7 +404,15 @@ export class FieldMenuScreen extends Container {
       return
     }
     this.applyRefresh(out)
-    if (this.state.open) this.state = { ...this.state, notice: out.notice }
+    if (this.state.open) {
+      // 抑止はどうぐ・まほうの成功だけ（runtime の振り分けと同じ判定）。そうび・アプリストアの文は off でも出す
+      const def = this.data?.items.find((i) => i.id === st.screen)
+      const kind = def ? screenKindOfItem(def) : undefined
+      const isItemOrMagic =
+        kind !== 'appstore' && kind !== 'equip' && (kind === 'item' || def?.id === 'magic')
+      const silent = out.ok && this.opts.useMessage === false && isItemOrMagic
+      this.state = { ...this.state, notice: silent ? null : out.notice }
+    }
   }
 
   private runSort(): void {

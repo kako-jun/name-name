@@ -12,6 +12,7 @@ import {
   computeDepthScale,
   SIDE_LABEL_HEIGHT,
   isLabelWidthReadable,
+  SIDE_ENEMY_WINDOW_OVERLAP_MAX,
   normalizeEnemyWindowOverlap,
   type Rect,
   type SpriteSlot,
@@ -67,6 +68,43 @@ export function normalizeEnemyGrid(raw: string | null | undefined): EnemyGridSiz
   return parseEnemyGrid(raw) ?? undefined
 }
 
+/** 敵グリッドの縦位置 (#1178)。`bottom` = 領域の下端そろえ（既定・従来）、`center` = 領域の縦中央 */
+export type EnemyGridAlign = 'center' | 'bottom'
+
+/**
+ * frontmatter `battle_enemy_grid_align` / 設定 JSON `enemyGridAlign` の正規化 (#1178)。
+ * 未指定・空は `bottom`。`center` / `bottom` 以外は警告して `bottom`（`warn=false` は警告だけ止める）
+ */
+export function normalizeEnemyGridAlign(
+  raw: string | null | undefined,
+  warn = true
+): EnemyGridAlign {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'bottom'
+  const v = raw.trim().toLowerCase()
+  if (v === 'center') return 'center'
+  if (v === 'bottom') return 'bottom'
+  if (warn)
+    console.warn(`battle_enemy_grid_align '${raw}' は center / bottom ではないため bottom にした`)
+  return 'bottom'
+}
+
+/** 敵グリッドの水平の広がり (#1178)。`normal` = 従来（左の余白あり・右は味方の領域まで）、`wide` = 左端を画面の左端へ・右端を味方の踏み出しの手前まで */
+export type EnemyGridExtent = 'normal' | 'wide'
+
+/** frontmatter `battle_enemy_grid_extent` / 設定 JSON `enemyGridExtent` の正規化 (#1178)。未指定・空は `normal`。それ以外は警告して `normal` */
+export function normalizeEnemyGridExtent(
+  raw: string | null | undefined,
+  warn = true
+): EnemyGridExtent {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'normal'
+  const v = raw.trim().toLowerCase()
+  if (v === 'wide') return 'wide'
+  if (v === 'normal') return 'normal'
+  if (warn)
+    console.warn(`battle_enemy_grid_extent '${raw}' は normal / wide ではないため normal にした`)
+  return 'normal'
+}
+
 const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/
 
 /**
@@ -81,6 +119,25 @@ export function normalizeEnemyWindowOverlapSetting(
   const t = raw.normalize('NFKC').trim()
   if (!PLAIN_NUMBER.test(t)) return undefined
   return normalizeEnemyWindowOverlap(Number(t))
+}
+
+/**
+ * frontmatter `battle_enemy_window_overlap_bottom` の値を正規化する (#1178)。足元が下のパネルに隠れてよい量。0〜0.5 に丸める。
+ * 未指定・数値でない値は undefined＝既定 0（`normalizeEnemyWindowOverlapBottom`）。素直な十進数だけを受ける
+ */
+export function normalizeEnemyWindowOverlapBottomSetting(
+  raw: string | null | undefined
+): number | undefined {
+  if (typeof raw !== 'string') return undefined
+  const t = raw.normalize('NFKC').trim()
+  if (!PLAIN_NUMBER.test(t)) return undefined
+  return normalizeEnemyWindowOverlapBottom(Number(t))
+}
+
+/** 下のパネルへの重なり許容量 (#1178) を 0〜`SIDE_ENEMY_WINDOW_OVERLAP_MAX` に丸める。未指定・非有限は 0（隠れない・従来） */
+export function normalizeEnemyWindowOverlapBottom(raw: number | undefined | null): number {
+  if (raw === undefined || raw === null || !Number.isFinite(raw)) return 0
+  return Math.min(SIDE_ENEMY_WINDOW_OVERLAP_MAX, Math.max(0, raw))
 }
 
 /** 配置指定 `C1`（列 = 英字、行 = 1 始まりの数字。大小無視）を 0 始まりのセルへ。不正は null */
@@ -229,6 +286,17 @@ export interface EnemyGridLayoutOptions {
   withLabel: boolean
   /** 窓との重なり許容量 (#838。`normalizeEnemyWindowOverlap` で丸める。省略 = 既定) */
   windowOverlap?: number | null
+  /**
+   * グリッドの縦位置 (#1178)。`bottom`（省略時）は領域の下端そろえ、`center` は行数ぶんの高さのグリッドを領域の縦中央に置く
+   * （グリッドが領域より高い＝窓との重なりで延ばしたぶんは、窓の外へ出ないよう下端そろえのまま）。セルの大きさ・横位置は変えない
+   */
+  align?: EnemyGridAlign
+  /**
+   * 足元が下のパネルに隠れてよい量 (#1178。各敵の枠の高さに対する比・0〜0.5。省略 = 0＝従来)。
+   * セルの高さ側の上限を `rows - overlap - overlapBottom` で求め、高さで決まるグリッドの延長ぶんを上（窓）と下（パネル）へ
+   * 許容量の比で振り分ける。0 のときは従来と同じ
+   */
+  windowOverlapBottom?: number | null
 }
 
 export const ENEMY_SCALE_MIN = 0.25
@@ -252,6 +320,8 @@ export interface EnemyGridLayout {
   cell: number
   /** グリッド全体の矩形（ラベル帯込み。上端は窓重なり許容ぶん `region.y` より上へ延びうる） */
   grid: Rect
+  /** 縦位置の設定（`align`）で下端そろえから動いた量（`center` で上へ動くと負。`bottom` は 0）。奥行きの縮尺の基準を固定するのに使う (#1178) */
+  alignShift: number
   /** `footprints` と同じ並び */
   slots: EnemyGridSlot[]
 }
@@ -268,7 +338,7 @@ function clampScale(raw: number | undefined): number {
  * labelBand = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
  * cell      = min(regionW / cols, (regionH - rows*labelBand) / (rows - overlap))
  * ```
- * グリッドは領域の横中央・縦は下端に置き、最上行は `overlap * cell` だけ領域の上へ延びる（窓の下へ入ってよい量）。
+ * グリッドは領域の横中央に置く。縦は `align`（既定 `bottom` = 領域の下端、`center` = 領域の縦中央。#1178）。下端そろえのとき最上行は `overlap * cell` だけ領域の上へ延びる（窓の下へ入ってよい量）。
  * 占有矩形は幅 `w*cell`・高さ `h*cell`、最下行の `cell` の下端に揃える（同じ行の 1x1 と足元が合う）。
  * `floor` は占有矩形の下端、ラベルはその直下（占有幅まで）。
  */
@@ -282,10 +352,11 @@ export function computeEnemyGridLayout(
   // 前提: 列数・行数は 1 以上の整数。不正なら cell 0（何も置かない）
   const gridValid = isValidDim(cols) && isValidDim(rows)
   const overlap = normalizeEnemyWindowOverlap(options.windowOverlap)
+  const overlapBottom = normalizeEnemyWindowOverlapBottom(options.windowOverlapBottom)
   const labelBand = options.withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
 
   const byWidth = region.w / cols
-  const byHeight = (region.h - rows * labelBand) / (rows - overlap)
+  const byHeight = (region.h - rows * labelBand) / (rows - overlap - overlapBottom)
   const raw = gridValid ? Math.min(byWidth, byHeight) : 0
   const cell = Number.isFinite(raw) && raw > 0 ? raw : 0
 
@@ -293,9 +364,20 @@ export function computeEnemyGridLayout(
   const band = cell > 0 ? labelBand : 0
   const gridW = gridValid ? cell * cols : 0
   const gridH = gridValid ? (cell + band) * rows : 0
+  const bottomY = region.y + region.h - gridH
+  // 領域より高いぶん（窓・パネルへの延長）は、許容量の比で上と下へ振り分ける（下の許容量 0 なら全部上＝従来の下端そろえ）
+  const ext = Math.max(0, gridH - region.h)
+  // 下の許容量が 0（既定）のときは従来どおり（0/0 の NaN を避けるため、振り分けは下の許容量があるときだけ）
+  const centered = options.align === 'center' && gridH <= region.h
+  const gridY =
+    overlapBottom > 0 && ext > 0
+      ? region.y - (ext * overlap) / (overlap + overlapBottom)
+      : centered
+        ? region.y + (region.h - gridH) / 2
+        : bottomY
   const gridRect: Rect = {
     x: region.x + (region.w - gridW) / 2,
-    y: region.y + region.h - gridH,
+    y: gridY,
     w: gridW,
     h: gridH,
   }
@@ -331,7 +413,7 @@ export function computeEnemyGridLayout(
     return slot
   })
 
-  return { cell, grid: gridRect, slots }
+  return { cell, grid: gridRect, alignShift: gridRect.y - bottomY, slots }
 }
 
 /** 描画順（奥 → 手前）の添字並び。`floor` 昇順、同じ `floor` は列の昇順（左 = 奥が先）。元の並びは変えない */
@@ -361,23 +443,52 @@ export function clampEnemyWindowOverlap(
   grid: EnemyGridSize,
   withLabel: boolean,
   overlap: number | null | undefined,
-  windowHeight: number
+  windowHeight: number,
+  bottomOverlap: number | null | undefined = 0
 ): number {
   const o = normalizeEnemyWindowOverlap(overlap)
+  // 下の許容量ぶんセルが大きくなるので、上の延長が窓の高さを超えないよう、行数から下の許容量を引いて見積もる (#1178)
   const { cols, rows } = grid
   if (!isValidDim(cols) || !isValidDim(rows) || !(windowHeight > 0)) return 0
+  const effRows = rows - normalizeEnemyWindowOverlapBottom(bottomOverlap)
   const labelBand = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
   const cw = region.w / cols
   const hn = region.h - rows * labelBand
   if (!(cw > 0) || !(hn > 0)) return 0
   const L = windowHeight
-  const limit = Math.max(L / cw, (L * rows) / (hn + L))
+  const limit = Math.max(L / cw, (L * effRows) / (hn + L))
   return Math.max(0, Math.min(o, limit))
+}
+
+/**
+ * 下のパネルへの重なり許容量 (#1178) を、延長ぶん `bottomOverlap * cell` が `panelHeight`（足元から画面の下端まで）を超えない範囲に絞る。
+ * `clampEnemyWindowOverlap` と同じ閉形式（行数から上の許容量 `topOverlap`（絞り済み）を引いて解く）。置けないときは 0
+ */
+export function clampEnemyWindowOverlapBottom(
+  region: Pick<Rect, 'w' | 'h'>,
+  grid: EnemyGridSize,
+  withLabel: boolean,
+  topOverlap: number,
+  bottomOverlap: number | null | undefined,
+  panelHeight: number
+): number {
+  const b = normalizeEnemyWindowOverlapBottom(bottomOverlap)
+  const { cols } = grid
+  const effRows = grid.rows - topOverlap
+  if (!isValidDim(cols) || !isValidDim(grid.rows) || !(panelHeight > 0) || !(b > 0)) return 0
+  const labelBand = withLabel ? SIDE_LABEL_GAP + SIDE_LABEL_HEIGHT : 0
+  const cw = region.w / cols
+  const hn = region.h - grid.rows * labelBand
+  if (!(cw > 0) || !(hn > 0)) return 0
+  const L = panelHeight
+  const limit = Math.max(L / cw, (L * effRows) / (hn + L))
+  return Math.max(0, Math.min(b, limit))
 }
 
 /**
  * 奥行き (#747) をグリッド由来の敵スロットに適用する。`applyDepthToSlots` と同じ規則（元の占有矩形の上端・水平中央を保って縮尺 `s` で縮める）を、
  * `occupied` / `box` にも同じ変換で適用し、ラベルも追従させる。`floor` は元の値のまま（描画順の基準）。
+ * `floorShift` (#1178) は縮尺を求めるときだけ `floor` に足す量（縦位置の設定で動いた分を戻し、下端そろえの足元で縮尺を決める）。
  * `window` を渡すと、縮めたあとの窓との重なりが `overlap * 縮んだ高さ` を超えないよう、元の占有矩形の内側で下へずらす。
  */
 export function applyDepthToGridSlots(
@@ -385,10 +496,11 @@ export function applyDepthToGridSlots(
   frontFloor: number,
   horizonY: number,
   perspective: number,
-  window?: { bottom: number; overlap: number }
+  window?: { bottom: number; overlap: number },
+  floorShift = 0
 ): EnemyGridSlot[] {
   return slots.map((slot) => {
-    const s = computeDepthScale(slot.floor, frontFloor, horizonY, perspective)
+    const s = computeDepthScale(slot.floor - floorShift, frontFloor, horizonY, perspective)
     if (s >= 1) return slot
     const cx = slot.x + slot.width / 2
     const top = slot.y
