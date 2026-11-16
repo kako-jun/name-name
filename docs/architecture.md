@@ -1580,3 +1580,7 @@ name-name の parser / emitter を壊すと下流ゲームが一斉に動かな�
 `frontend/tsconfig.json` は references 構成（`files: []`）。
 ルート直下に `tsc --noEmit` を走らせてもノーチェックになるため、`npm run type-check` は `tsc -b --noEmit` を使う。
 CI でも同じコマンドで app + node 両方の tsconfig が検証される。
+
+### 一枚絵フィールドの仮SE（#1198）
+
+作品の `assets/sounds/se/manifest.json` に `cursor` / `confirm` / `cancel` / `error` / `encounter` / `attack` / `damage` / `heal` のキーと ogg ファイル名を指定すると、フィールドの戦闘開始・戦闘操作・ヒットのタイミングで再生する。manifest はゲームの起動を待たずに読み込み、5秒を超えるか画面が破棄されたら中止する。manifest が無い場合や再生できない場合は無音で進む。DQ の戦闘は行動を表示する時点、FF は命中演出の時点で鳴らす。 設定の SE 音量を反映する。`mosaic` は登録可能だが現在は再生契機が無い。音色・レイテンシとブラウザでの可聴性は未検証。

@@ -13,7 +13,7 @@
  * - バトルモード・バトルスピード: 戦闘の ATB（`BattleEngine` の `atb.mode` / `atb.speed`）。ターン制の戦闘には効かない
  * - メッセージスピード: 会話窓の 1 文字あたり ms（`DialogBox.setMsPerChar`）。戦闘ログの文字送りは dq 表示だけで速度の口が無いので未接続
  * - カーソル: 戦闘の候補窓（じゅもん・どうぐ・わざ）を開くとき前回選んだ行から始める（`BattleScreen` の `cursorMemory`）
- * - BGM / SE 音量: 一枚絵フィールド・戦闘に音の再生が無いので未接続（値は保存する）
+ * - BGM 音量は未接続。SE 音量は作品が SE を用意した場合にフィールド・戦闘に効く
  * - キー割当（PC）: メニュー内の決定/戻る（`fieldMenu.ts` の `menuKeyEvent`）だけ。会話送り・戦闘は未接続
  */
 import type { AtbMode } from './battleEngine'
@@ -132,8 +132,9 @@ export function normalizeSettings(
 export interface SettingsConnection {
   /** 戦闘が ATB か（ターン制なら バトルモード・スピードは効かない） */
   atb: boolean
-  /** BGM・SE の再生があるか */
-  audio: boolean
+  /** BGM と SE がそれぞれ接続されているか */
+  bgm: boolean
+  se: boolean
 }
 
 /**
@@ -151,8 +152,8 @@ export function buildConfigOptions(conn: SettingsConnection, atbMode: AtbMode): 
     messageSpeed: '会話窓の文字が出る速さ（1 遅い〜5 速い）。戦闘のメッセージにはまだ効きません',
     cursor:
       'メモリ = 戦闘の じゅもん・どうぐ・わざ の窓で前回選んだ行から始める（セーブはしません）/ リセット = 毎回先頭から',
-    bgm: conn.audio ? 'BGM の音量' : noAudio,
-    se: conn.audio ? 'SE の音量' : noAudio,
+    bgm: conn.bgm ? 'BGM の音量' : noAudio,
+    se: conn.se ? 'SE の音量' : noAudio,
     keys: 'メニュー内の 決定 / 戻る の Z・X を入れ替える。会話送り・戦闘にはまだ効きません',
   }
   return DEFAULT_CONFIG_OPTIONS.map((o) => ({

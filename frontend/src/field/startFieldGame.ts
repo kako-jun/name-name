@@ -1,3 +1,4 @@
+import { createFieldSoundPlayer, type FieldSound } from './fieldSounds'
 /**
  * 一枚絵フィールド (#807) の本体 `startFieldGame(opts)` (#1097)。
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
@@ -259,6 +260,7 @@ export interface FieldDevToolbar {
 }
 
 export interface StartFieldGameOptions {
+  sounds?: Partial<Record<FieldSound, string>>
   config: FieldConfig
   /** canvas を入れる要素 */
   mount: HTMLElement
@@ -975,6 +977,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       return () => window.removeEventListener('resize', cb)
     },
   })
+  const soundPlayer = createFieldSoundPlayer(
+    opts.sounds ?? {},
+    () => menuRuntime?.currentSettings.se
+  )
   const startBattle = (
     enemies: BattleEntity[],
     savedBattle: RpgResolvedBattle | null = null,
@@ -1049,6 +1055,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
               ? { cursorMemory: battleCursorMemory }
               : {}),
           }),
+          onSound: soundPlayer.play,
           onClose: (outcome, result) => {
             lastOutcome = outcome
             carryOverBattle(outcome, result.gold, result.items, result.exp, {
@@ -1079,7 +1086,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         throw e
       }
     }
-    // 保存された戦闘中から再開するときは、遷移の演出を挟まず戦闘画面を直接開く
+    // 保存された戦闘中から再開するときは開始音も遷移も省く
+    soundPlayer.battleStart(!!savedBattle)
     if (savedBattle) {
       open()
       return
@@ -1479,7 +1487,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           levelUp: config.levelUp,
           skills: config.skills,
           ...(config.battle.atb ? { atb: config.battle.atb } : {}),
-          audio: false,
+          bgm: false,
+          se: () => Object.keys(opts.sounds ?? {}).length > 0,
           getParty: () => partyState,
           setParty: (p) => {
             partyState = p
