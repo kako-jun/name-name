@@ -18,6 +18,11 @@ vi.mock('../field/startFieldGame', () => ({
   startFieldGame: (o: StartFieldGameOptions) => startFieldGameMock(o),
 }))
 
+const loadFieldSoundsMock = vi.fn()
+vi.mock('../field/fieldSounds', () => ({
+  loadFieldSounds: (...a: unknown[]) => loadFieldSoundsMock(...a),
+}))
+
 import FieldPlayer from './FieldPlayer'
 
 const npcEvents = { 'talk-1': [] }
@@ -54,6 +59,8 @@ beforeEach(() => {
   disposers = []
   loadFieldConfigMock.mockReset()
   loadFieldConfigMock.mockResolvedValue(okResult())
+  loadFieldSoundsMock.mockReset()
+  loadFieldSoundsMock.mockResolvedValue({})
   startFieldGameMock.mockReset()
   startFieldGameMock.mockImplementation(() => {
     const d = vi.fn()
@@ -67,6 +74,41 @@ afterEach(() => {
 })
 
 describe('FieldPlayer', () => {
+  it('makes sounds available to the running game when the manifest arrives later', async () => {
+    let resolveSounds: (sounds: { cursor: string }) => void = () => {}
+    loadFieldSoundsMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSounds = resolve
+        })
+    )
+    render(element)
+    await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(1))
+    const sounds = (startFieldGameMock.mock.calls[0][0] as StartFieldGameOptions).sounds
+    expect(sounds).toEqual({})
+    await act(async () => {
+      resolveSounds({ cursor: '/cursor.ogg' })
+    })
+    expect(sounds).toEqual({ cursor: '/cursor.ogg' })
+  })
+  it('does not delay startup for a slow optional sound manifest and ignores it after unmount', async () => {
+    let resolveSounds: (sounds: { cursor: string }) => void = () => {}
+    loadFieldSoundsMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSounds = resolve
+        })
+    )
+    const { unmount } = render(element)
+    await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(1))
+    const sounds = (startFieldGameMock.mock.calls[0][0] as StartFieldGameOptions).sounds
+    expect(sounds).toEqual({})
+    unmount()
+    await act(async () => {
+      resolveSounds({ cursor: '/cursor.ogg' })
+    })
+    expect(sounds).toEqual({})
+  })
   it('loadFieldConfig に entry・assetBase・deps を渡し、startFieldGame にステージ(mount=containHost)・scriptEvents・onLoadRequest を渡す', async () => {
     const { container } = render(element)
     await waitFor(() => expect(startFieldGameMock).toHaveBeenCalledTimes(1))

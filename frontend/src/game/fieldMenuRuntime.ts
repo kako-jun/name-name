@@ -59,8 +59,9 @@ export interface FieldMenuRuntimeDeps {
   skills: readonly BattleSkillEntry[]
   /** 戦闘が ATB のときのバトルモードの既定。無ければターン制（バトルモード・スピードは効かない） */
   atb?: { mode?: AtbMode }
-  /** BGM・SE を再生する面があるか（いまは一枚絵フィールド・戦闘とも無い） */
-  audio: boolean
+  /** BGM と SE がそれぞれ接続されているか */
+  bgm: boolean
+  se: boolean | (() => boolean)
   getParty(): BattleEntity[]
   setParty(party: BattleEntity[]): void
   getInventory(): Record<string, number>
@@ -145,7 +146,11 @@ export class FieldMenuRuntime {
     return applyLiveContent(this.d.menu.items, (d) => screenKindOfItem(d), {
       rpg: this.rpg(),
       configOptions: buildConfigOptions(
-        { atb: !!this.d.atb, audio: this.d.audio },
+        {
+          atb: !!this.d.atb,
+          bgm: this.d.bgm,
+          se: typeof this.d.se === 'function' ? this.d.se() : this.d.se,
+        },
         this.d.atb?.mode ?? 'wait'
       ),
     })

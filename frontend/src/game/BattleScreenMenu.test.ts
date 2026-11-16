@@ -97,6 +97,39 @@ afterEach(() => {
 const types = (s: BattleScreen) => I(s).menuStack.map((w) => w.type)
 
 describe('窓のスタックとキャンセル', () => {
+  it.each(['dq', 'ff'] as const)(
+    '%s plays an attack sound on damage and a heal sound on recovery',
+    (presentation) => {
+      const onSound = vi.fn()
+      const { s } = build({ onSound, presentation }, { rng: () => 0 }, [ent('a', { hp: 50 })])
+      press('ArrowLeft')
+      press('Enter')
+      press('Enter')
+      for (let i = 0; i < 40; i++) s.tick(250)
+      expect(onSound).toHaveBeenCalledWith('attack')
+      s.destroy({ children: true })
+
+      onSound.mockClear()
+      const next = build({ onSound, presentation }, { rng: () => 0 }, [ent('a', { hp: 50 })]).s
+      press('ArrowLeft')
+      press('ArrowDown')
+      press('ArrowDown')
+      press('Enter')
+      press('Enter')
+      for (let i = 0; i < 40; i++) next.tick(250)
+      expect(onSound).toHaveBeenCalledWith('heal')
+    }
+  )
+  it('一覧から対象選択へ進む中間決定でも音が鳴る', () => {
+    const onSound = vi.fn()
+    const { s } = build({ onSound })
+    press('ArrowLeft')
+    onSound.mockClear()
+    press('Enter')
+    expect(types(s)).toEqual(['list', 'target'])
+    expect(onSound).toHaveBeenCalledExactlyOnceWith('confirm')
+  })
+
   it('←(じゅもん)で一覧が開き、Escape でコマンド窓に戻る。キーの既定動作は止める', () => {
     const { s, engine } = build()
     const e = press('ArrowLeft')
