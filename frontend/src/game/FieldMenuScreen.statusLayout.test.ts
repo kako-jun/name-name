@@ -2,7 +2,7 @@
  * フィールドメニューのステータス画面の配置 (#1191)。`statusLayout: 'ff'` のときだけ領域配置になり、
  * 未指定・'line' は従来の 1 列のまま。他の画面（どうぐ等）・人物の切り替えは配置に依らず同じ。
  */
-import { Container, Text, Texture } from 'pixi.js'
+import { Container, Sprite, Text, Texture } from 'pixi.js'
 import { describe, expect, it } from 'vitest'
 import { FieldMenuScreen } from './FieldMenuScreen'
 import type { StatusLayoutKind } from './fieldMenuStatus'
@@ -147,5 +147,41 @@ describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
       expect(b.y + b.height).toBeLessThan(720 * 0.9)
       expect(clip.children.length).toBeGreaterThan(1)
     }
+  })
+
+  it('アクスタ表示では絵がアクスタなしより小さく、板・台座まで含めて人物の枠に収まる', () => {
+    const heights: Record<string, number> = {}
+    for (const acrylic of [false, true]) {
+      const s = new FieldMenuScreen({
+        width: 1280,
+        height: 720,
+        acrylic,
+        statusLayout: 'ff',
+        onClose: () => {},
+      })
+      s.open({
+        items: ITEMS,
+        party: [{ ...PARTY[0], texture: Texture.WHITE }],
+        info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+        slots: [null, null, null],
+      })
+      s.dispatch({ type: 'tap', index: 0 })
+      s.tick(10_000)
+      const clip = (s as unknown as { portraitClip: Container }).portraitClip
+      const sp = clip.children.find((c) => c instanceof Sprite) as Sprite
+      const box = (clip.mask as Container).getLocalBounds()
+      // 絵の上端〜足元は枠の中
+      expect(sp.y).toBeLessThanOrEqual(box.y + box.height)
+      expect(sp.y - sp.height).toBeGreaterThanOrEqual(box.y - 1e-6)
+      heights[String(acrylic)] = sp.height
+      if (acrylic) {
+        // 板・台座を含む外枠（正方形）が収まる高さ以下
+        const fig = clip.children.find((c) => c !== sp && c !== clip.mask) as Container
+        expect(fig.visible).toBe(true)
+        const fb = fig.getLocalBounds()
+        expect(fb.width * fig.scale.x).toBeLessThanOrEqual(box.width + 1e-6)
+      }
+    }
+    expect(heights.true).toBeLessThan(heights.false)
   })
 })

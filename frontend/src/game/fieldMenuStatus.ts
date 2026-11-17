@@ -116,6 +116,33 @@ export function fitSize(
   return need * size <= width ? size : Math.max(min, Math.floor(width / need))
 }
 
+/** 項目名と値の最低の隙間（文字の大きさに対する比） */
+export const STATUS_MIN_GAP_RATIO = 0.5
+
+/**
+ * 項目名と値を 1 つの枠に収める大きさ。まず共通の大きさ（`fitSize`、下限 `min`）で収め、下限でも入らないときは
+ * 値を下限に止めたまま項目名を詰めて、最低の隙間（`STATUS_MIN_GAP_RATIO`）を残す。項目名を詰めても入らなければ、
+ * 下限の 0.75 倍まで値も詰める。
+ */
+export function fitPair(
+  size: number,
+  width: number,
+  label: string,
+  value: string,
+  min: number
+): { labelSize: number; valueSize: number } {
+  const s = fitSize(size, width, label, value, min)
+  const lw = emWidth(label)
+  const vw = emWidth(value)
+  if ((lw + vw + 1) * s <= width) return { labelSize: s, valueSize: s }
+  const hard = min * 0.75
+  const gap = s * STATUS_MIN_GAP_RATIO
+  const labelSize = Math.max(hard, Math.min(s, (width - gap - vw * s) / Math.max(lw, 1e-6)))
+  if (lw * labelSize + vw * s + gap <= width + 1e-6) return { labelSize, valueSize: s }
+  const valueSize = Math.max(hard, (width - gap - lw * labelSize) / Math.max(vw, 1e-6))
+  return { labelSize, valueSize: Math.min(s, valueSize) }
+}
+
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
 
 /** 人物の絵の置き場所。足元 (x, y) と絵の高さ。`frame` はアクスタの板・台座まで含めた外枠（アクスタ表示のときだけ） */
@@ -340,12 +367,13 @@ function gridCells(
     const valueRight = near
       ? Math.min(cell.x + cell.w, cell.x + labelW + size * 0.8 + valueW)
       : undefined
+    const fit = fitPair(size, cell.w, r.label, r.value, minSize)
     return {
       label: r.label,
       value: r.value,
       rect: cell,
-      labelSize: size,
-      valueSize: fitSize(size, cell.w, r.label, r.value, minSize),
+      labelSize: fit.labelSize,
+      valueSize: fit.valueSize,
       tone: 'label',
       ...(valueRight !== undefined ? { valueRight } : {}),
     }

@@ -6,6 +6,8 @@ import type { Rect } from './fieldMenu'
 import {
   STATUS_MIN_FONT_RATIO,
   computeStatusLayout,
+  STATUS_MIN_GAP_RATIO,
+  fitPair,
   fitPortrait,
   fitSize,
   statusArea,
@@ -264,5 +266,64 @@ describe('fitPortrait（人物の絵が枠に収まる）', () => {
         expect((f.height / th) * tw).toBeLessThanOrEqual(R.w * 0.9 + 1e-6)
         expect(f.y).toBeLessThanOrEqual(R.y + R.h)
       }
+  })
+})
+
+describe('行の高さの下限・列の切り替え・隙間', () => {
+  const FONT = 0.04 * 720
+  const rowsOf = (n: number) =>
+    Array.from({ length: n }, (_, k) => ({ label: `項目${k}`, value: `${k}` }))
+  const colsOf = (cells: { rect: Rect }[]): number =>
+    new Set(cells.map((c) => Math.round(c.rect.x))).size
+
+  it('どの項目も、行の高さが文字の大きさ ÷ 0.72 以上（行どうしが重ならない）', () => {
+    for (const [extra, band] of [
+      [6, 2],
+      [12, 4],
+      [20, 2],
+    ] as const) {
+      const rs = computeStatusLayout(input({ extraRows: rowsOf(extra), bandRows: rowsOf(band) }))
+      for (const r of ['stats', 'extras', 'band'] as const)
+        for (const c of rs.find((x) => x.id === r)!.cells) {
+          expect(c.rect.h, `${extra}+${band} ${r}/${c.label}`).toBeGreaterThanOrEqual(
+            Math.max(c.labelSize, c.valueSize) * 0.72 - 1e-6
+          )
+        }
+    }
+  })
+
+  it('追加行 8 + 帯 2 は 2 列、2 列で入らない追加行 20 + 帯 2 は 3 列で収まる', () => {
+    const two = computeStatusLayout(input({ extraRows: rowsOf(8), bandRows: rowsOf(2) }))
+    expect(colsOf(two.find((r) => r.id === 'extras')!.cells)).toBe(2)
+    const three = computeStatusLayout(input({ extraRows: rowsOf(20), bandRows: rowsOf(2) }))
+    expect(colsOf(three.find((r) => r.id === 'extras')!.cells)).toBe(3)
+    checkSane(three, input().area)
+  })
+
+  it('3 列で長めの項目名・値でも、項目名と値の間に最低の隙間が残る', () => {
+    const rows = [
+      ...rowsOf(18),
+      { label: 'アクセサリ2', value: 'ほしのかけら' },
+      { label: 'ぼうぐ・うで', value: 'ミスリルのこて' },
+    ]
+    const rs = computeStatusLayout(input({ extraRows: rows, bandRows: rowsOf(2) }))
+    const ex = rs.find((r) => r.id === 'extras')!
+    expect(colsOf(ex.cells)).toBe(3)
+    for (const c of ex.cells) {
+      const lw = [...c.label].reduce((a, ch) => a + (ch.charCodeAt(0) < 0x100 ? 0.55 : 1), 0)
+      const vw = [...c.value].reduce((a, ch) => a + (ch.charCodeAt(0) < 0x100 ? 0.55 : 1), 0)
+      const free = c.rect.w - lw * c.labelSize - vw * c.valueSize
+      expect(free, c.label).toBeGreaterThanOrEqual(
+        Math.min(c.labelSize, c.valueSize) * STATUS_MIN_GAP_RATIO - 1e-6
+      )
+    }
+  })
+
+  it('fitPair: 収まるなら共通の大きさ、下限で入らないときは項目名を詰めて隙間を残す', () => {
+    expect(fitPair(20, 400, 'そうび', 'かたな', 14)).toEqual({ labelSize: 20, valueSize: 20 })
+    const f = fitPair(20, 150, 'アクセサリ2', 'ほしのかけら', 14)
+    expect(f.labelSize).toBeLessThan(14)
+    expect(f.valueSize).toBeGreaterThanOrEqual(14 * 0.75)
+    void FONT
   })
 })
