@@ -1,3 +1,4 @@
+import { loadFieldSounds, type FieldSound } from '../field/fieldSounds'
 import { useEffect, useRef, useState } from 'react'
 import { loadFieldConfig, type FieldEntry, type FieldSourceDoc } from '../field/fieldConfigFromDocs'
 import { savedFormsFromResume, withResumeSlot } from '../field/fieldResume'
@@ -58,11 +59,13 @@ function FieldPlayer({
     let disposed = false
     let generation = 0
     let stop: (() => void) | null = null
+    let soundAbort: AbortController | null = null
     const debugTiltOff = parseDebugTiltOff(window.location.search)
 
     const run = async (search: string): Promise<void> => {
       const gen = ++generation
       // 作り直しの前に必ず前回を止める
+      soundAbort?.abort()
       stop?.()
       stop = null
       setError(null)
@@ -93,7 +96,20 @@ function FieldPlayer({
         for (const w of result.warnings) console.warn(`[field] ${w}`)
         const config = { ...result.value.config }
         if (debugTiltOff) delete config.tiltShift
+        // Optional sounds must never delay field startup. The object is shared with
+        // the running game, and only the current generation may populate it.
+        const sounds: Partial<Record<FieldSound, string>> = {}
+        const controller = new AbortController()
+        soundAbort = controller
+        const timeout = setTimeout(() => controller.abort(), 5000)
+        void loadFieldSounds(assetBaseUrl, controller.signal)
+          .then((loaded) => {
+            if (!disposed && gen === generation && !controller.signal.aborted)
+              Object.assign(sounds, loaded)
+          })
+          .finally(() => clearTimeout(timeout))
         const dispose = await startFieldGame({
+          sounds,
           config,
           mount: stage,
           docKey,
@@ -126,6 +142,7 @@ function FieldPlayer({
     return () => {
       disposed = true
       generation++
+      soundAbort?.abort()
       stop?.()
       stop = null
     }

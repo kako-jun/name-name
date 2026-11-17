@@ -1,3 +1,4 @@
+import { createFieldSoundPlayer, type FieldSound } from './fieldSounds'
 /**
  * 一枚絵フィールド (#807) の本体 `startFieldGame(opts)` (#1097)。
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
@@ -107,7 +108,7 @@ import {
   type NpcRect,
 } from '../game/fieldNpc'
 import { DialogBox } from '../game/DialogBox'
-import { fieldDialogFontSize, fieldDialogOptions } from '../game/ffDialog'
+import { fieldDialogFontSize, fieldDialogOptions, fieldDialogStyleOptions } from '../game/ffDialog'
 import { EventRunner } from '../game/eventRunner'
 import {
   FieldConversation,
@@ -259,6 +260,7 @@ export interface FieldDevToolbar {
 }
 
 export interface StartFieldGameOptions {
+  sounds?: Partial<Record<FieldSound, string>>
   config: FieldConfig
   /** canvas を入れる要素 */
   mount: HTMLElement
@@ -630,7 +632,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     screenWidth: scene.mask.width,
     screenHeight: scene.mask.height,
     ...dialogMetricsFor(scene.mask.height),
-    ...(config.battle.windowStyle ? { fontSize: fieldDialogFontSize(scene.mask.height) } : {}),
+    ...(config.battle.windowStyle
+      ? { fontSize: fieldDialogFontSize(scene.mask.height, config.dialogFontSize) }
+      : {}),
     bgColor: 0x000033,
     nameColor: 0xffe066,
     nameSeparateBox: false,
@@ -653,6 +657,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           }),
         }
       : {}),
+    // 窓の高さ・話者名の見せ方 (#1184)。未指定は従来（28%H・inline）。設計どおりの窓（ffPlacement 付き）だけに効く
+    ...fieldDialogStyleOptions({ ...config, windowStyle: config.battle.windowStyle }),
   })
   // コンストラクタ直後は背景が可視なので、会話外では隠しておく（show() で出る・hide() で戻る）
   dialogBox.hide()
@@ -686,7 +692,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const m = dialogMetricsFor(height)
     dialogBox.setBoxHeight(m.boxHeight)
     // 設計どおりの窓は 28%H に名前＋3 行が入る文字サイズ。箱の寸法は DialogBox が画面から決める
-    dialogBox.setFontSize(designedDialog ? fieldDialogFontSize(height) : m.fontSize)
+    dialogBox.setFontSize(
+      designedDialog ? fieldDialogFontSize(height, config.dialogFontSize) : m.fontSize
+    )
     dialogBox.redraw(width, height)
   }
 
@@ -969,6 +977,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       return () => window.removeEventListener('resize', cb)
     },
   })
+  const soundPlayer = createFieldSoundPlayer(
+    opts.sounds ?? {},
+    () => menuRuntime?.currentSettings.se
+  )
   const startBattle = (
     enemies: BattleEntity[],
     savedBattle: RpgResolvedBattle | null = null,
@@ -1043,6 +1055,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
               ? { cursorMemory: battleCursorMemory }
               : {}),
           }),
+          onSound: soundPlayer.play,
           onClose: (outcome, result) => {
             lastOutcome = outcome
             carryOverBattle(outcome, result.gold, result.items, result.exp, {
@@ -1073,7 +1086,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         throw e
       }
     }
-    // 保存された戦闘中から再開するときは、遷移の演出を挟まず戦闘画面を直接開く
+    // 保存された戦闘中から再開するときは開始音も遷移も省く
+    soundPlayer.battleStart(!!savedBattle)
     if (savedBattle) {
       open()
       return
@@ -1473,7 +1487,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           levelUp: config.levelUp,
           skills: config.skills,
           ...(config.battle.atb ? { atb: config.battle.atb } : {}),
-          audio: false,
+          bgm: false,
+          se: () => Object.keys(opts.sounds ?? {}).length > 0,
           getParty: () => partyState,
           setParty: (p) => {
             partyState = p
@@ -1517,6 +1532,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         width: app.screen.width,
         height: app.screen.height,
         acrylic: config.spriteStyle === 'acrylic',
+        useMessage: !config.menuUseMessageOff,
         transition: menuCfg.transition,
         onClose: () => menuHost?.onScreenClosed(),
         onUse: (req) => menuRuntime?.use(req) ?? null,

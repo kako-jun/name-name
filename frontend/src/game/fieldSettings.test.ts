@@ -143,33 +143,38 @@ describe('normalizeSettings: 定義側の独自 options', () => {
 
 describe('buildConfigOptions', () => {
   it('既定と同じキー・順序で、すべてに説明が付く', () => {
-    const o = buildConfigOptions({ atb: true, audio: false }, 'wait')
+    const o = buildConfigOptions({ atb: true, bgm: false, se: false }, 'wait')
     expect(o.map((x) => x.key)).toEqual(DEFAULT_CONFIG_OPTIONS.map((x) => x.key))
     for (const x of o) expect(x.description).toBeTruthy()
   })
   it('ターン制では バトルモード・スピードに「効きません」、ATB では効く旨', () => {
-    const turn = buildConfigOptions({ atb: false, audio: false }, 'wait')
+    const turn = buildConfigOptions({ atb: false, bgm: false, se: false }, 'wait')
     expect(turn.find((x) => x.key === 'battleMode')?.description).toContain('ターン制')
     expect(turn.find((x) => x.key === 'battleSpeed')?.description).toContain('ターン制')
-    const atb = buildConfigOptions({ atb: true, audio: false }, 'wait')
+    const atb = buildConfigOptions({ atb: true, bgm: false, se: false }, 'wait')
     expect(atb.find((x) => x.key === 'battleMode')?.description).not.toContain('効きません')
   })
   it('音の再生が無いと BGM / SE に「効きません」。あれば出さない', () => {
-    const no = buildConfigOptions({ atb: true, audio: false }, 'wait')
+    const no = buildConfigOptions({ atb: true, bgm: false, se: false }, 'wait')
     expect(no.find((x) => x.key === 'bgm')?.description).toContain('効きません')
-    const yes = buildConfigOptions({ atb: true, audio: true }, 'wait')
+    const yes = buildConfigOptions({ atb: true, bgm: true, se: true }, 'wait')
     expect(yes.find((x) => x.key === 'bgm')?.description).not.toContain('効きません')
+    const onlySe = buildConfigOptions({ atb: true, bgm: false, se: true }, 'wait')
+    expect(onlySe.find((x) => x.key === 'bgm')?.description).toContain('効きません')
+    expect(onlySe.find((x) => x.key === 'se')?.description).not.toContain('効きません')
   })
   it('バトルモードの初期位置はゲーム設定の ATB に合わせる。既定の定数は汚さない', () => {
     expect(
-      buildConfigOptions({ atb: true, audio: false }, 'active').find((x) => x.key === 'battleMode')
-        ?.initial
+      buildConfigOptions({ atb: true, bgm: false, se: false }, 'active').find(
+        (x) => x.key === 'battleMode'
+      )?.initial
     ).toBe(1)
     expect(
-      buildConfigOptions({ atb: true, audio: false }, 'wait').find((x) => x.key === 'battleMode')
-        ?.initial
+      buildConfigOptions({ atb: true, bgm: false, se: false }, 'wait').find(
+        (x) => x.key === 'battleMode'
+      )?.initial
     ).toBe(0)
-    const o = buildConfigOptions({ atb: true, audio: false }, 'wait')
+    const o = buildConfigOptions({ atb: true, bgm: false, se: false }, 'wait')
     o[0].choices.push('Z')
     expect(DEFAULT_CONFIG_OPTIONS[0].choices).toHaveLength(2)
   })

@@ -1,3 +1,4 @@
+import type { FieldSound } from '../field/fieldSounds'
 /**
  * RPG 戦闘画面 (#173)。
  *
@@ -132,7 +133,7 @@ import {
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
 import { computeSelectMarkImageRect, loadUiTexture, type UiImagesConfig } from './uiImages'
-import { normalizeUiScale } from './battleLogicalSize'
+import { MESSAGE_WINDOW_FONT_SIZE, normalizeUiScale } from './battleLogicalSize'
 import { syncTextResolution } from './textResolution'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
 import {
@@ -327,8 +328,8 @@ export const SIDE_LABEL_STROKE_COLOR = 0x000000
 const NAME_FONT_SIZE = 18
 const COMMAND_FONT_SIZE = 18
 const LOG_FONT_SIZE = 16
-/** FF 式メッセージ窓（updateMessageWindow）専用の文字サイズ。1 行のまま大きくする (#1148)。ログ行（LOG_FONT_SIZE）は変えない。最小の窓（2 行分 = 56px）に収まる上限の目安は約 30 */
-export const MESSAGE_WINDOW_FONT_SIZE = 22
+// FF 式メッセージ窓の文字サイズ (#1148) は battleLogicalSize.ts に置く（フィールドの会話窓 #1184 も参照するため）
+export { MESSAGE_WINDOW_FONT_SIZE }
 const HP_FONT_SIZE = 16
 
 const TEXT_STYLE_NAME = new TextStyle({
@@ -549,6 +550,8 @@ export interface BattleScreenOptions {
    * 未指定は従来どおり（毎回最初に選べる行から）
    */
   cursorMemory?: Map<string, number>
+  /** 戦闘操作・命中の効果音をホストに通知する。未指定なら無音。 */
+  onSound?: (name: FieldSound) => void
   /**
    * 召喚獣の登場 (#750) が始まるたびに 1 回呼ぶ（効果音を鳴らすのはホストの領分。画面は音を鳴らさない）。`ff` の演出のときだけ。
    * 未指定は何もしない
@@ -1463,6 +1466,7 @@ export class BattleScreen extends Container {
     // ATB (#205) ではコマンドのタップを skip に使わない（時間が流れていて空振りさせない）。全文表示はログ帯のタップだけ
     if (!this.engine.getState().atb && this.skipLogTyping()) return
     if (this.engine.isOver()) return
+    this.opts.onSound?.('confirm')
     switch (id) {
       case 'attack':
         this.engine.selectAttack()
@@ -2749,6 +2753,7 @@ export class BattleScreen extends Container {
     const s = this.engine.getState()
     this.syncPartyViews()
     if (this.presentation === 'ff') this.syncPresentation()
+    else this.syncDqSounds()
     if (this.layoutMode === 'side') this.refreshSide()
     this.updateSelectMarks()
     const aliveEnemy: BattleEntity | undefined = s.enemies.find((e) => e.hp > 0) ?? s.enemies[0]
@@ -2904,6 +2909,7 @@ export class BattleScreen extends Container {
   }
 
   private cancelMenu(): void {
+    this.opts.onSound?.('cancel')
     this.setMenuStack(cancelMenuWindow(this.menuStack))
   }
 
@@ -2913,7 +2919,10 @@ export class BattleScreen extends Container {
     e.preventDefault()
     if (act.type === 'move') {
       const ctx = this.menuContext()
-      if (ctx) this.setMenuStack(moveMenuCursor(this.menuStack, act.dir, ctx))
+      if (ctx) {
+        this.setMenuStack(moveMenuCursor(this.menuStack, act.dir, ctx))
+        this.opts.onSound?.('cursor')
+      }
       return
     }
     if (e.repeat) return
@@ -2927,11 +2936,13 @@ export class BattleScreen extends Container {
     if (!ctx) return
     const r = confirmMenuWindow(this.menuStack, ctx)
     if (r.action) {
+      this.opts.onSound?.('confirm')
       this.setMenuStack(r.stack)
       this.executeMenuAction(r.action, ctx)
       return
     }
     if (r.blocked === 'disabled') {
+      this.opts.onSound?.('error')
       // グレーの行は選べない。MP 不足の呪文はエンジンの「MPが たりない！」（ログと吹き出し）で知らせる。窓は閉じない
       const w = this.menuStack[this.menuStack.length - 1]
       const entry = w?.type === 'list' ? ctx.entries[w.cursor] : undefined
@@ -2954,10 +2965,12 @@ export class BattleScreen extends Container {
       return
     }
     if (r.blocked === 'empty') {
+      this.opts.onSound?.('error')
       this.engine.notifyBlocked('たいしょうがいない！')
       this.refresh()
       return
     }
+    this.opts.onSound?.('confirm')
     this.setMenuStack(r.stack)
   }
 
@@ -3081,6 +3094,24 @@ export class BattleScreen extends Container {
     this.playback = enqueueEvents(this.playback, fresh)
   }
 
+  /** DQ has no hit timeline: play each newly applied action as it is shown. */
+  private syncDqSounds(): void {
+    const state = this.engine.getState()
+    const added = state.eventTotal - this.seenEventTotal
+    if (added <= 0) return
+    this.seenEventTotal = state.eventTotal
+    for (const event of state.events.slice(Math.max(0, state.events.length - added)))
+      this.playHitSound(event.hits)
+  }
+
+  private playHitSound(hits: readonly BattleHit[]): void {
+    const hit = hits.find((h) => h.kind === 'heal' || h.kind === 'damage')
+    if (hit)
+      this.opts.onSound?.(
+        hit.kind === 'heal' ? 'heal' : hit.target.side === 'enemy' ? 'attack' : 'damage'
+      )
+  }
+
   /** 演出が追いつくまで、直近に出した状態名（無ければ今の値）を見せ続ける (#870) */
   private holdStatusLabels(party: readonly unknown[], enemies: readonly unknown[]): void {
     const s = this.engine.getState()
@@ -3115,6 +3146,7 @@ export class BattleScreen extends Container {
     this.playback = r.state
     let changed = false
     for (const fire of r.fires) {
+      this.playHitSound(fire.hits)
       // 複数ヒット (#879): round ごとの発火。その round の hits だけを出す（単発は全 hits で従来どおり）
       for (const hit of fire.hits) {
         this.hpOverride.set(this.entityKey(hit.target.side, hit.target.index), hit.hpAfter)

@@ -43,7 +43,7 @@ async function ensureInit(): Promise<void> {
  * 空文字を null に丸める。WASM が誤って `Some("")` を返した場合の防御 (#147 R1 N5)。
  *
  * 適用範囲: ランタイム側で「指定なし」と「明示的に空文字を指定」を区別する必要がない
- * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_enemy_grid`, `battle_enemy_window_overlap`, `battle_enemy_grid_align`, `battle_enemy_grid_extent`, `battle_enemy_window_overlap_bottom`, `battle_party_layout`, `battle_text_overflow`, `battle_command_layout`, `battle_command_labels`, `battle_transition`, `battle_motion`, `battle_enemy_list`, `field_emotions`, `battle_effects`)。
+ * オプショナルな string field 限定 (`voice_path`, `font_family`, `choice_style`, `default_bgm`, `dialog_style`, `protagonist`, `header`, `battle_layout`, `battle_background`, `sprite_style`, `window_style`, `battle_background_tone`, `battle_background_dof`, `battle_log_typewriter`, `battle_presentation`, `battle_horizon`, `battle_perspective`, `battle_foreground`, `battle_atb`, `battle_atb_mode`, `battle_enemy_grid`, `battle_enemy_window_overlap`, `battle_enemy_grid_align`, `battle_enemy_grid_extent`, `battle_enemy_window_overlap_bottom`, `battle_party_layout`, `battle_text_overflow`, `dialog_font_size`, `dialog_window_height`, `dialog_name_style`, `battle_command_layout`, `battle_command_labels`, `battle_transition`, `battle_motion`, `battle_enemy_list`, `field_emotions`, `field_menu_use_message`, `battle_effects`)。
  * 必須テキスト系（`character`, `text`, `path`）には適用しない — それらは空文字も意味のある値。
  */
 function nullIfEmpty(s: string | null | undefined): string | null {
@@ -471,6 +471,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     battle_presentation: nullIfEmpty(doc.battle_presentation),
     // フィールドの感情吹き出し設定 JSON のパス (#943)。同上。ここの列挙漏れで wasm 経由だけ undefined になる事故に注意。
     field_emotions: nullIfEmpty(doc.field_emotions),
+    // フィールドメニューの使用成功の文 (#1185)。同上。
+    field_menu_use_message: nullIfEmpty(doc.field_menu_use_message),
     // 戦闘のエフェクト重ね設定 JSON のパス (#941)。同上。
     battle_effects: nullIfEmpty(doc.battle_effects),
     // 戦闘の奥行き (#747)。同上。ここの列挙漏れで wasm 経由だけ undefined になる事故に注意。
@@ -488,6 +490,10 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     battle_enemy_window_overlap_bottom: nullIfEmpty(doc.battle_enemy_window_overlap_bottom),
     battle_party_layout: nullIfEmpty(doc.battle_party_layout),
     battle_text_overflow: nullIfEmpty(doc.battle_text_overflow),
+    // 一枚絵フィールドの会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。同上。
+    dialog_font_size: nullIfEmpty(doc.dialog_font_size),
+    dialog_window_height: nullIfEmpty(doc.dialog_window_height),
+    dialog_name_style: nullIfEmpty(doc.dialog_name_style),
     // 戦闘コマンド窓の配置と表示名 (#204)。同上。
     battle_command_layout: nullIfEmpty(doc.battle_command_layout),
     battle_command_labels: nullIfEmpty(doc.battle_command_labels),

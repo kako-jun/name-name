@@ -1847,6 +1847,41 @@ describe('scriptUrl と npcs.scene (#841 段階2)', () => {
   })
 })
 
+describe('menuUseMessage (#1185)', () => {
+  it('未指定・"on" は従来どおり（キーなし・警告なし）', () => {
+    const none = ok(mutated(() => {}))
+    expect('menuUseMessageOff' in none).toBe(false)
+    const on = ok(
+      mutated((c) => {
+        c.menuUseMessage = 'on'
+      })
+    )
+    expect('menuUseMessageOff' in on).toBe(false)
+    expect(on.warnings).toBeUndefined()
+  })
+  it('"off" は menuUseMessageOff: true', () => {
+    const c = ok(
+      mutated((c) => {
+        c.menuUseMessage = 'off'
+      })
+    )
+    expect(c.menuUseMessageOff).toBe(true)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（従来どおり出す）', () => {
+    for (const bad of ['maybe', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.menuUseMessage = bad
+        })
+      )
+      expect('menuUseMessageOff' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('menuUseMessage')
+    }
+  })
+})
+
 describe('dialogStyle / dialogMsPerChar (#840)', () => {
   it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
     const c = ok(mutated(() => {}))
@@ -1898,6 +1933,52 @@ describe('dialogStyle / dialogMsPerChar (#840)', () => {
       expect(c.warnings?.[0]).toContain('dialogMsPerChar')
       expect(c.warnings?.[0]).toContain('1000') // 上限を明記
     }
+  })
+})
+
+describe('dialogFontSize / dialogWindowHeight / dialogNameStyle (#1184)', () => {
+  it('未指定はどのキーも警告も無し（従来と同一）。normal・inline の明示も従来と同じ（キーを出さない）', () => {
+    const c = ok(mutated(() => {}))
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle'])
+      expect(k in c).toBe(false)
+    const d = ok(
+      mutated((c) => {
+        c.dialogFontSize = 'normal'
+        c.dialogNameStyle = 'inline'
+      })
+    )
+    expect('dialogFontSize' in d).toBe(false)
+    expect('dialogNameStyle' in d).toBe(false)
+    expect(d.warnings).toBeUndefined()
+  })
+  it('指定を読む（互いに独立）', () => {
+    const c = ok(
+      mutated((c) => {
+        c.dialogFontSize = 'battle'
+        c.dialogWindowHeight = 0.36
+        c.dialogNameStyle = 'large'
+      })
+    )
+    expect(c.dialogFontSize).toBe('battle')
+    expect(c.dialogWindowHeight).toBe(0.36)
+    expect(c.dialogNameStyle).toBe('large')
+    expect('dialogStyle' in c).toBe(false)
+    expect('dialogMsPerChar' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（読み込みは成功・従来の見た目）', () => {
+    const c = ok(
+      mutated((c) => {
+        c.dialogFontSize = 'huge'
+        c.dialogWindowHeight = 0.9
+        c.dialogNameStyle = 3
+      })
+    )
+    for (const k of ['dialogFontSize', 'dialogWindowHeight', 'dialogNameStyle']) {
+      expect(k in c).toBe(false)
+      expect(c.warnings?.some((w) => w.includes(k))).toBe(true)
+    }
+    expect(c.warnings).toHaveLength(3)
   })
 })
 

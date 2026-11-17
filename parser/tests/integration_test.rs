@@ -5350,10 +5350,14 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         battle_enemy_grid_align: None,
+        field_menu_use_message: None,
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
         battle_text_overflow: None,
+        dialog_font_size: None,
+        dialog_window_height: None,
+        dialog_name_style: None,
         chapters: vec![Chapter {
             number: 1,
             title: "tmp".to_string(),
@@ -10548,10 +10552,14 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_grid: None,
         battle_enemy_window_overlap: None,
         battle_enemy_grid_align: None,
+        field_menu_use_message: None,
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
         battle_text_overflow: None,
+        dialog_font_size: None,
+        dialog_window_height: None,
+        dialog_name_style: None,
         chapters: vec![],
     }
 }
@@ -12150,6 +12158,30 @@ fn test_battle_enemy_grid_align_parse_default_none_and_roundtrip() {
     assert!(!none_out.contains("battle_enemy"), "{none_out}");
 }
 
+#[test]
+fn test_field_menu_use_message_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc("field_menu_use_message: off\n"));
+    assert_eq!(doc.field_menu_use_message.as_deref(), Some("off"));
+    // 値は検証せず生文字列で透過する。空は None
+    let weird = parser::parse(&battle_doc("field_menu_use_message: \"maybe\"\n"));
+    assert_eq!(weird.field_menu_use_message.as_deref(), Some("maybe"));
+    let empty = parser::parse(&battle_doc("field_menu_use_message:\n"));
+    assert_eq!(empty.field_menu_use_message, None);
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.field_menu_use_message, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("field_menu_use_message: \"off\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.field_menu_use_message, doc.field_menu_use_message);
+    // 未指定ならキーを出さない（従来の出力と同一）
+    let none_out = emitter::emit(&none);
+    assert!(!none_out.contains("field_menu_use_message"), "{none_out}");
+}
+
 fn monster_with(extra_body: &str) -> name_name_parser::models::MonsterDef {
     let src = format!(
         "---\nengine: name-name\nchapter: 1\ntitle: \"t\"\n---\n## data: マスター\n\n[モンスター m]\n名前: M\nHP: 5\n{extra_body}[/モンスター]\n"
@@ -12848,4 +12880,41 @@ fn test_battle_text_overflow_roundtrip() {
     assert_eq!(re.battle_text_overflow, doc.battle_text_overflow);
     // 未指定のときは emit しない（既定の出力を変えない）
     assert!(!emitter::emit(&none).contains("battle_text_overflow"));
+}
+
+#[test]
+fn test_dialog_font_size_window_height_name_style_roundtrip() {
+    let doc = parser::parse(&battle_doc(
+        "dialog_style: ff\ndialog_font_size: battle\ndialog_window_height: 0.36\ndialog_name_style: plate\n",
+    ));
+    // 前方一致で取り違えない（`dialog_style:` と `dialog_*` は別キー）
+    assert_eq!(doc.dialog_style.as_deref(), Some("ff"));
+    assert_eq!(doc.dialog_font_size.as_deref(), Some("battle"));
+    assert_eq!(doc.dialog_window_height.as_deref(), Some("0.36"));
+    assert_eq!(doc.dialog_name_style.as_deref(), Some("plate"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.dialog_font_size, None);
+    assert_eq!(none.dialog_window_height, None);
+    assert_eq!(none.dialog_name_style, None);
+    let empty = parser::parse(&battle_doc("dialog_name_style:\n"));
+    assert_eq!(empty.dialog_name_style, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("dialog_font_size: \"battle\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("dialog_window_height: \"0.36\"\n"),
+        "{emitted}"
+    );
+    assert!(
+        emitted.contains("dialog_name_style: \"plate\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.dialog_font_size, doc.dialog_font_size);
+    assert_eq!(re.dialog_window_height, doc.dialog_window_height);
+    assert_eq!(re.dialog_name_style, doc.dialog_name_style);
+    assert_eq!(re.dialog_style, doc.dialog_style);
 }

@@ -1407,8 +1407,16 @@ export interface EventDocument {
   battle_party_layout?: string | null
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。`"ellipsis"`（既定・末尾を「…」で省略）/ `"scroll"`（窓の幅でクリップしてゆっくり横スクロール）。frontmatter `battle_text_overflow:` から流す。不正値・未指定は ellipsis。GUI 専用。 */
   battle_text_overflow?: string | null
+  /** 一枚絵フィールドの会話窓の文字サイズ (#1184)。`"normal"`（既定＝従来）/ `"battle"`（戦闘のメッセージ窓と同じ大きさ）。frontmatter `dialog_font_size:` から流す。`window_style` を書いた作品の窓だけに効く。GUI 専用。 */
+  dialog_font_size?: string | null
+  /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */
+  dialog_window_height?: string | null
+  /** 一枚絵フィールドの会話窓の話者名の見せ方 (#1184)。`"inline"`（既定＝従来）/ `"large"` / `"plate"`。frontmatter `dialog_name_style:` から流す。GUI 専用。 */
+  dialog_name_style?: string | null
   /** RPG 戦闘の演出方式 (#745)。`"dq"`（既定・現行の見た目と挙動）/ `"ff"`（FF 式: 攻撃モーション・ダメージ数字・技名だけのメッセージ窓）。frontmatter `battle_presentation:` から流す。GUI 専用（TUI は読まない）。 */
   battle_presentation?: string | null
+  /** フィールドメニューでどうぐ・まほうを使って成功したときの文 (#1185)。`"on"`（既定）/ `"off"`。frontmatter `field_menu_use_message:` から流す。失敗の文は対象外。GUI 専用（一枚絵フィールド）。 */
+  field_menu_use_message?: string | null
   /** フィールドの感情吹き出しの設定 JSON のパス (#943)。frontmatter `field_emotions:` から流す。中身は種類名 → 絵の宣言（一枚絵フィールドの `emotions` と同じ検証）。不正は警告して無視、未指定は吹き出しなし。GUI 専用。 */
   field_emotions?: string | null
   /** 戦闘のエフェクト重ね (#936) の設定 JSON のパス (#941)。frontmatter `battle_effects:` から流す。中身は種類名 → シート宣言（戦闘の設定 JSON の `effects` と同じ検証）。不正は警告して無視、未指定はエフェクトなし。GUI 専用。 */

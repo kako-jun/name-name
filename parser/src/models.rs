@@ -2665,6 +2665,10 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側で丸める（不正は既定）。GUI 専用。frontmatter `battle_enemy_window_overlap:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_enemy_window_overlap: Option<String>,
+    /// フィールドメニューでどうぐ・まほうを使って成功したときの文 (#1185)。`on`（既定）/ `off`（文を出さず HP の数字などの変化だけで見せる）。
+    /// 値は生文字列で透過し、runtime 側で不正値を警告して on にする。失敗の文（MP 不足など）は対象外。GUI 専用（一枚絵フィールド）。frontmatter `field_menu_use_message:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_menu_use_message: Option<String>,
     /// 敵グリッドの縦位置 (#1178)。`center`（領域の縦中央）/ `bottom`（下端そろえ・既定）。
     /// 値は生文字列で透過し、runtime 側（`normalizeEnemyGridAlign`）で不正値を警告して bottom にする。GUI 専用。frontmatter `battle_enemy_grid_align:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2685,6 +2689,18 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側（`normalizeBattleTextOverflow`）で不正値を警告して ellipsis にする。GUI 専用。frontmatter `battle_text_overflow:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battle_text_overflow: Option<String>,
+    /// 一枚絵フィールドの会話窓の文字サイズ (#1184)。`normal`（既定＝従来）/ `battle`（戦闘のメッセージ窓と同じ大きさ）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+    /// frontmatter `dialog_font_size:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_font_size: Option<String>,
+    /// 一枚絵フィールドの会話窓（`window_style` を書いた作品の窓）の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28＝従来）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+    /// frontmatter `dialog_window_height:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_window_height: Option<String>,
+    /// 一枚絵フィールドの会話窓（`window_style` を書いた作品の窓）の話者名の見せ方 (#1184)。`inline`（既定＝従来）/ `large` / `plate`。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+    /// frontmatter `dialog_name_style:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_name_style: Option<String>,
     pub chapters: Vec<Chapter>,
 }
 
