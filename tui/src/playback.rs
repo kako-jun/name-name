@@ -2381,6 +2381,7 @@ mod tests {
             battle_enemy_grid_extent: None,
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
+            battle_text_overflow: None,
             dialog_font_size: None,
             dialog_window_height: None,
             dialog_name_style: None,

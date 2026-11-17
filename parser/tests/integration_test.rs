@@ -5354,6 +5354,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
+        battle_text_overflow: None,
         dialog_font_size: None,
         dialog_window_height: None,
         dialog_name_style: None,
@@ -10555,6 +10556,7 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
+        battle_text_overflow: None,
         dialog_font_size: None,
         dialog_window_height: None,
         dialog_name_style: None,
@@ -12858,6 +12860,26 @@ fn test_battle_party_layout_and_grid_extent_and_overlap_bottom_roundtrip() {
         re.battle_enemy_window_overlap_bottom,
         doc.battle_enemy_window_overlap_bottom
     );
+}
+
+#[test]
+fn test_battle_text_overflow_roundtrip() {
+    let doc = parser::parse(&battle_doc("battle_text_overflow: scroll\n"));
+    assert_eq!(doc.battle_text_overflow.as_deref(), Some("scroll"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_text_overflow, None);
+    let empty = parser::parse(&battle_doc("battle_text_overflow:\n"));
+    assert_eq!(empty.battle_text_overflow, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_text_overflow: \"scroll\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_text_overflow, doc.battle_text_overflow);
+    // 未指定のときは emit しない（既定の出力を変えない）
+    assert!(!emitter::emit(&none).contains("battle_text_overflow"));
 }
 
 #[test]

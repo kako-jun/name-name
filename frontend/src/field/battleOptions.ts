@@ -53,6 +53,7 @@ export function buildBattleScreenOptions(
       ? { enemyWindowOverlapBottom: b.enemyWindowOverlapBottom }
       : {}),
     ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
+    ...(b.textOverflow ? { textOverflow: b.textOverflow } : {}),
   }
 }
 

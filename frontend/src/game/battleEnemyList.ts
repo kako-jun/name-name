@@ -136,11 +136,17 @@ export function enemyListTextTop(windowHeight: number, fit: EnemyListFit): numbe
 export function enemyListLines(
   rows: readonly EnemyListRow[],
   fit: EnemyListFit,
-  windowWidth: number
+  windowWidth: number,
+  overflow: 'ellipsis' | 'scroll' = 'ellipsis'
 ): string[] {
+  // scroll (#1183): 省略せず行の全文を返す（窓の幅でのクリップとスクロールは描画側）
   const lines = rows
     .slice(0, fit.visibleRows)
-    .map((r) => fitEnemyListRowText(r, windowWidth, fit.fontSize))
+    .map((r) =>
+      overflow === 'scroll'
+        ? enemyListRowText(r)
+        : fitEnemyListRowText(r, windowWidth, fit.fontSize)
+    )
   if (rows.length > fit.visibleRows && lines.length > 0) lines[lines.length - 1] = '…'
   return lines
 }

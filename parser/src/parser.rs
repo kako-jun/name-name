@@ -77,6 +77,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut battle_enemy_grid_extent: Option<String> = None;
     let mut battle_enemy_window_overlap_bottom: Option<String> = None;
     let mut battle_party_layout: Option<String> = None;
+    let mut battle_text_overflow: Option<String> = None;
     let mut dialog_font_size: Option<String> = None;
     let mut dialog_window_height: Option<String> = None;
     let mut dialog_name_style: Option<String> = None;
@@ -411,6 +412,12 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_party_layout = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_text_overflow:") {
+                // 戦闘の窓で入り切らない文字の扱い (#1183)。ellipsis / scroll。値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_text_overflow = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("field_menu_use_message:") {
                 // フィールドメニューの使用成功の文 (#1185)。on / off。値は生文字列で透過し、runtime 側で検証する。
@@ -1811,6 +1818,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         battle_enemy_grid_extent,
         battle_enemy_window_overlap_bottom,
         battle_party_layout,
+        battle_text_overflow,
         dialog_font_size,
         dialog_window_height,
         dialog_name_style,

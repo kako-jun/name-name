@@ -25,6 +25,7 @@ import type {
 } from '../types/rpg'
 import { safeAssign, safeAssignAll } from './ownProperty'
 import { normalizeBattleDepth, normalizeBattleLayout, normalizePartyLayout } from './battleLayout'
+import { normalizeBattleTextOverflow } from './battleMarquee'
 import { normalizeSpriteStyle } from './spriteStyle'
 import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
@@ -435,6 +436,7 @@ export function rpgProjectFromDoc(
       doc.battle_enemy_window_overlap_bottom
     ),
     battlePartyLayout: normalizePartyLayout(doc.battle_party_layout),
+    battleTextOverflow: normalizeBattleTextOverflow(doc.battle_text_overflow),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),

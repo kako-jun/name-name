@@ -104,6 +104,8 @@ export interface FieldBattleSettings {
   enemyWindowOverlapBottom: number | undefined
   /** `battle_party_layout` (#1178)。`default`（既定）/ `tall` */
   partyLayout: 'default' | 'tall'
+  /** `battle_text_overflow` (#1183)。`ellipsis`（既定）/ `scroll` */
+  textOverflow: 'ellipsis' | 'scroll'
   /** `battle_command_layout` (#204) */
   commandLayout: CommandLayout
   /** `battle_command_labels` (#204) */
@@ -136,6 +138,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   enemyGridExtent: 'normal',
   enemyWindowOverlapBottom: undefined,
   partyLayout: 'default',
+  textOverflow: 'ellipsis',
   commandLayout: 'grid',
   commandLabels: undefined,
   commands: undefined,
@@ -166,6 +169,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     enemyGridExtent: gameData.battleEnemyGridExtent ?? d.enemyGridExtent,
     enemyWindowOverlapBottom: gameData.battleEnemyWindowOverlapBottom,
     partyLayout: gameData.battlePartyLayout ?? d.partyLayout,
+    textOverflow: gameData.battleTextOverflow ?? d.textOverflow,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
     commands: gameData.battleCommands,
@@ -672,6 +676,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
       ? { enemyWindowOverlapBottom: settings.enemyWindowOverlapBottom }
       : {}),
     ...(settings.partyLayout !== 'default' ? { partyLayout: settings.partyLayout } : {}),
+    ...(settings.textOverflow !== 'ellipsis' ? { textOverflow: settings.textOverflow } : {}),
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,
     commands: settings.commands,

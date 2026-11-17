@@ -125,6 +125,13 @@ describe('readFieldBattleSettings', () => {
     expect(readFieldBattleSettings(minimalProject()).enemyGridAlign).toBe('bottom')
   })
 
+  it('入り切らない文字の扱い (#1183) は RPGProject の値が入り、未指定は ellipsis', () => {
+    expect(
+      readFieldBattleSettings(minimalProject({ battleTextOverflow: 'scroll' })).textOverflow
+    ).toBe('scroll')
+    expect(readFieldBattleSettings(minimalProject()).textOverflow).toBe('ellipsis')
+  })
+
   it('広がり・下の重なり・味方の並び (#1178) は RPGProject の値が入り、未指定は normal / undefined / default', () => {
     const s = readFieldBattleSettings(
       minimalProject({
@@ -442,6 +449,13 @@ describe('openFieldBattle', () => {
       expect(k in d).toBe(false)
   })
 
+  it('textOverflow は既定(ellipsis)以外のときだけ opts に転送される (#1183)', () => {
+    const { s } = open({ settings: { layout: 'side', textOverflow: 'scroll' } })
+    expect(s.opts.textOverflow).toBe('scroll')
+    expect('textOverflow' in open().s.opts).toBe(false)
+    expect('textOverflow' in open({ settings: { layout: 'side' } }).s.opts).toBe(false)
+  })
+
   it('commands / commandLabels は BattleScreen の opts に転送される (#873)', () => {
     const { s } = open({
       settings: {
@@ -534,6 +548,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       enemyGridAlign: 'bottom',
       enemyGridExtent: 'normal',
       partyLayout: 'default',
+      textOverflow: 'ellipsis',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -578,6 +593,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       enemyGridAlign: 'bottom',
       enemyGridExtent: 'normal',
       partyLayout: 'default',
+      textOverflow: 'ellipsis',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,

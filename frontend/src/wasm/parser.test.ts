@@ -2663,6 +2663,20 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect((await parseMarkdown(docWith(['battle_party_layout:']))).battle_party_layout).toBeNull()
   })
 
+  it('battle_text_overflow が doc に残り（他のキーと取り違えない）、省略・空値は null、emit→parse で往復する (#1183)', async () => {
+    const doc = await parseMarkdown(
+      docWith(['battle_enemy_grid_align: center', 'battle_text_overflow: scroll'])
+    )
+    expect(doc.battle_text_overflow).toBe('scroll')
+    expect(doc.battle_enemy_grid_align).toBe('center')
+    expect((await parseMarkdown(docWith([]))).battle_text_overflow).toBeNull()
+    expect(
+      (await parseMarkdown(docWith(['battle_text_overflow:']))).battle_text_overflow
+    ).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.battle_text_overflow).toBe('scroll')
+  })
+
   it('dialog_font_size / dialog_window_height / dialog_name_style が doc に残り（dialog_style と取り違えない）、省略・空値は null (#1184)', async () => {
     const doc = await parseMarkdown(
       docWith([

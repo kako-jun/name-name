@@ -237,3 +237,45 @@ describe('normalizeBattleEnemyList', () => {
     expect(warn).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('enemyListLines: battle_text_overflow (#1183)', () => {
+  const rows = [
+    { name: 'とてもとてもながいなまえのモンスター', count: 3, status: ['どく'] },
+    { name: 'スライム', count: 1 },
+    { name: 'ドラゴン', count: 2 },
+  ]
+  it('省略（既定）: 引数なし・ellipsis は従来と完全に同じ。窓の幅・文字サイズの総当たり', () => {
+    for (const windowWidth of [60, 90, 120, 160, 200, 320]) {
+      for (const [rowCount, h] of [
+        [1, 60],
+        [2, 90],
+        [3, 120],
+        [3, 60],
+      ] as const) {
+        const fit = fitEnemyListFont(rowCount, h, { rows: rows.slice(0, rowCount), windowWidth })
+        const base = enemyListLines(rows.slice(0, rowCount), fit, windowWidth)
+        expect(enemyListLines(rows.slice(0, rowCount), fit, windowWidth, 'ellipsis')).toEqual(base)
+        // 従来の式（行ごとに fitEnemyListRowText。収まらない行が消えるときは最後を「…」）と同じ
+        const expected = rows
+          .slice(0, rowCount)
+          .slice(0, fit.visibleRows)
+          .map((r) => fitEnemyListRowText(r, windowWidth, fit.fontSize))
+        if (rowCount > fit.visibleRows && expected.length > 0) expected[expected.length - 1] = '…'
+        expect(base).toEqual(expected)
+      }
+    }
+  })
+  it('scroll: 省略せず、状態の前置と ×N を含む行の全文を返す', () => {
+    const fit = fitEnemyListFont(3, 120, { rows, windowWidth: 90 })
+    const lines = enemyListLines(rows, fit, 90, 'scroll')
+    expect(lines).toEqual(rows.slice(0, fit.visibleRows).map(enemyListRowText))
+    expect(lines[0]).toBe('[どく] とてもとてもながいなまえのモンスター ×3')
+    expect(lines[0]).not.toContain('…')
+  })
+  it('scroll でも、行数あふれの最後の行は従来どおり「…」', () => {
+    const fit = fitEnemyListFont(3, 30, { rows, windowWidth: 200 })
+    expect(rows.length).toBeGreaterThan(fit.visibleRows)
+    const lines = enemyListLines(rows, fit, 200, 'scroll')
+    expect(lines[lines.length - 1]).toBe('…')
+  })
+})

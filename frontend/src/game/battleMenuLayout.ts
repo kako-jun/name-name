@@ -82,6 +82,11 @@ export interface MenuGeometry {
   /** 敵・味方スプライトの枠（state.enemies / state.party と同じ index） */
   enemySlots: readonly Rect[]
   partySlots: readonly Rect[]
+  /**
+   * 入り切らない名前の扱い (#1183)。未指定・`ellipsis` は従来どおり末尾を「…」で省略。`scroll` は省略せず全文を渡し、
+   * 窓（`labelClipW`）でクリップしてゆっくり横スクロールさせる。窓の寸法は変えない（直交）
+   */
+  textOverflow?: 'ellipsis' | 'scroll'
 }
 
 /** 一覧窓に同時に見える行数（最低 1） */
@@ -154,7 +159,15 @@ export interface MenuListView {
   kind: MenuKind
   rect: Rect
   /** 見えている行（index は候補全体での位置） */
-  rows: Array<MenuRow & { index: number; rect: Rect; selected: boolean }>
+  rows: Array<
+    MenuRow & {
+      index: number
+      rect: Rect
+      selected: boolean
+      /** `scroll` で名前が窓に入り切らないときだけ付く。label は全文で、この幅（名前の領域）でクリップして流す (#1183) */
+      labelClipW?: number
+    }
+  >
   /** 選択中の行の左の手。選択中の行がスクロールで見えていなければ null */
   hand: HandPlacement | null
   moreAbove: boolean
@@ -204,9 +217,14 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
         if (!row) break
         const rowW = Math.max(0, rect.w - MENU_PADDING_X * 2 - MENU_HAND_SLOT)
         const costW = row.cost ? MENU_COST_GAP + estimateTextWidth(row.cost, MENU_FONT_SIZE) : 0
+        const labelW = Math.max(0, rowW - costW)
+        const scrolls =
+          g.textOverflow === 'scroll' &&
+          estimateTextWidth(row.label, MENU_FONT_SIZE) > labelW + LABEL_FIT_EPS
         rows.push({
           ...row,
-          label: fitLabel(row.label, Math.max(0, rowW - costW) + LABEL_FIT_EPS, MENU_FONT_SIZE),
+          label: scrolls ? row.label : fitLabel(row.label, labelW + LABEL_FIT_EPS, MENU_FONT_SIZE),
+          ...(scrolls ? { labelClipW: labelW } : {}),
           index,
           selected: index === w.cursor,
           rect: {
