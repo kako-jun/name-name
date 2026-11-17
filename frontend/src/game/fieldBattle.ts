@@ -20,6 +20,7 @@ import type {
   StatusDef,
 } from '../types'
 import type { RPGProject } from '../types/rpg'
+import { traceRec } from '../trace/trace'
 import { BattleScreen } from './BattleScreen'
 import { itemNamesOf, type BattleOutcome, type BattleResult } from './loot'
 import { BattleEngine, type BattleScriptOptions } from './battleEngine'
@@ -697,6 +698,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
         suppressNextTouchTap(DIALOG_JUST_SHOWN_GUARD_MS)
         gate.armReleaseGate()
         closeFieldBattle(stage, screen)
+        traceRec('f.battle', { open: 0, out: outcome })
         onClosed(outcome, result)
       }
       if (isBattleTransitionEnabled(settings.transition) && transition) {
@@ -712,6 +714,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
       finishClose()
     },
   })
+  traceRec('f.battle', { open: 1, enemies: battleEnemies.length, scripted: !!scripted })
   stage.addChild(screen)
   return screen
 }

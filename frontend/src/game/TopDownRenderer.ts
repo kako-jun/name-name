@@ -43,6 +43,7 @@ import {
   type FieldBattleSettings,
   type ScriptedBattleSetup,
 } from './fieldBattle'
+import { configureTrace } from '../trace/trace'
 import type { BattleEffects } from './battleEffects'
 import { loadBattleEffects } from './battleEffectsLoader'
 import { FieldEmotionLayer } from './FieldEmotionLayer'
@@ -363,6 +364,8 @@ export class TopDownRenderer {
     this.masterJobs = gameData.jobs
     this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
+    // 内部トレースログ (#1197)。frontmatter `trace: on` のときだけ（既定 off）
+    configureTrace(gameData.trace === 'on')
     // エフェクト重ね (#941)。JSON は非同期に読む（読み終わる前に始まった戦闘はエフェクトなし）
     this.battleEffects = undefined
     const effectsToken = ++this.battleEffectsToken

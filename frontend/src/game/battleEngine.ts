@@ -105,6 +105,8 @@ import {
   type LootSpec,
   type StealParams,
 } from './loot'
+import { traceNewSeed, traceOn } from '../trace/trace'
+import { seededRng } from '../trace/seededRng'
 
 export type BattlePhase =
   | 'party-input' // 味方の入力待ち（ATB では「ゲージが溜まった味方がコマンドを待っている」）
@@ -284,6 +286,8 @@ export interface AtbState {
 export interface BattleEngineOptions {
   /** 0..1 の一様乱数を返す関数。テストで決定論的に差し替え可能 */
   rng?: () => number
+  /** 乱数の種 (#1197)。`rng` を渡さないときだけ効き、種付きの乱数にする（トレースの再現用。省略はトレースが on のときだけ自動で作る） */
+  seed?: number
   /**
    * ATB 方式にする (#205)。未指定は従来ターン制。
    * `initialGauges` は任意局面から始めるための初期ゲージ（範囲外・非有限値は 0〜最大に丸める。省略は 0）。
@@ -373,6 +377,8 @@ const warnedScriptDefs = new Set<string>()
 export class BattleEngine {
   private state: BattleState
   private rng: () => number
+  /** 種付きの乱数にしたときの種 (#1197)。Math.random のまま（トレース off）なら undefined */
+  private rngSeed: number | undefined
   /** wait / menu のとき、表示側が候補窓を開いている間 true（画面の一時的な状態なので BattleState には持たない） */
   private atbHold = false
   private atbWaitScope: AtbWaitScope = 'command'
@@ -435,7 +441,14 @@ export class BattleEngine {
       earnedExp: 0,
       earnedGold: 0,
     }
-    this.rng = opts.rng ?? Math.random
+    // 乱数 (#1197): 渡されなければ、トレースが on（または再現用に seed を渡された）ときだけ種付きの乱数にして種を控える。off は従来どおり Math.random
+    if (opts.rng) {
+      this.rng = opts.rng
+    } else {
+      const seed = opts.seed ?? (traceOn() ? traceNewSeed() : undefined)
+      this.rngSeed = seed
+      this.rng = seed === undefined ? Math.random : seededRng(seed)
+    }
     this.skills = opts.skills ?? {}
     if (opts.enemyRow) {
       const edges = enemyRightEdges(opts.enemyRow.grid, enemies)
@@ -541,6 +554,11 @@ export class BattleEngine {
 
   getState(): Readonly<BattleState> {
     return this.state
+  }
+
+  /** 乱数の種 (#1197)。種付きの乱数でなければ undefined（トレースの記録・再現が読む） */
+  getRngSeed(): number | undefined {
+    return this.rngSeed
   }
 
   /**

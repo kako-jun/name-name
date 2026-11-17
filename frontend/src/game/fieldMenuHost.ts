@@ -20,6 +20,7 @@ import {
   type Rect,
 } from './fieldMenu'
 import type { FieldMenuOpenData } from './FieldMenuScreen'
+import { traceRec } from '../trace/trace'
 
 /** ホストが使うメニュー画面の面（`FieldMenuScreen` が満たす） */
 export interface FieldMenuScreenLike {
@@ -134,6 +135,7 @@ export class FieldMenuHost {
         info: this.d.info(),
         settings: this.d.settings ? this.d.settings() : this.settings,
       })
+      traceRec('f.menu', { open: 1 })
       return true
     } catch (e) {
       // 準備・表示の失敗は握る（unhandled rejection にしない）。開き始めを取り消し、フィールドの表示へ戻す
@@ -150,6 +152,7 @@ export class FieldMenuHost {
   /** メニュー画面が閉じた（最上位で戻った）とき */
   onScreenClosed(): void {
     this.settings = this.d.screen.settings
+    traceRec('f.menu', { open: 0 })
     this.d.leaveView()
   }
 
