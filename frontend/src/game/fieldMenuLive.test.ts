@@ -341,6 +341,14 @@ describe('buildStatusRows', () => {
     ])
     expect(some.b).toEqual([{ label: 'わざ', value: 'きる' }])
   })
+
+  it('gearShop の刀・防具は売り物の定義の名前で出す（定義が無い id は [アイテム] の名前 → id）(#1186)', () => {
+    const gear = {
+      cfg: { entries: [{ id: 'sit_blade', name: 'おおてんた', kind: 'blade' }] },
+    } as unknown as NonNullable<LiveRpg['gear']>
+    const rows = buildStatusRows(rpg({ equipment: { a: ['sit_blade', 'potion', 'zzz'] }, gear }))
+    expect(rows.a[0]).toEqual({ label: 'そうび', value: 'おおてんた、ポーション、zzz' })
+  })
 })
 
 describe('applyLiveContent', () => {

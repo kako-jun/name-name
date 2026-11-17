@@ -417,7 +417,11 @@ export function buildMagicByParty(rpg: LiveRpg): Record<string, MenuEntry[]> {
 /** ステータス画面に足す行。データのある項目だけ（そうび・わざ）。固有素質・想像の刃は人物ごとなので、定義側の `statusByParty` に書かれたものを足す */
 export function buildStatusRows(rpg: LiveRpg): Record<string, StatusRow[]> {
   const out: Record<string, StatusRow[]> = {}
-  const nameOf = (id: string): string => rpg.items.find((i) => i.id === id)?.name ?? id
+  // 品の表示名は gearShop の定義の `name` → `[アイテム]` の名前 → id の順（アプリストア・そうびと同じ。刀・防具は売り物の定義にだけ名前がある）
+  const nameOf = (id: string): string =>
+    rpg.gear?.cfg.entries.find((e) => e.id === id)?.name ??
+    rpg.items.find((i) => i.id === id)?.name ??
+    id
   for (const m of rpg.party) {
     const rows: StatusRow[] = []
     const eq = hasOwn(rpg.equipment, m.id) ? rpg.equipment[m.id] : []
