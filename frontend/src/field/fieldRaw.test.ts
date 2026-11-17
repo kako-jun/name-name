@@ -851,6 +851,7 @@ describe('buildFieldRaw: frontmatter', () => {
         battle_party_layout: 'tall',
         battle_text_overflow: 'scroll',
         battle_atb_switch: 'on',
+        battle_weak_threshold: '0.25',
         battle_background: 'bg-battle.webp',
         battle_commands: 'skill, spell, item, escape',
         battle_command_labels: 'spell=まほう, skill＝わざ, bogus=x, item=',
@@ -888,12 +889,28 @@ describe('buildFieldRaw: frontmatter', () => {
         partyLayout: 'tall',
         textOverflow: 'scroll',
         atbSwitch: 'on',
+        weakThreshold: 0.25,
         background: 'bg-battle.webp',
         commands: ['skill', 'spell', 'item', 'escape'],
         effects: { hit: { image: 'h.webp' } },
         logicalSize: '1920x1080',
       },
     })
+  })
+
+  it('battle_weak_threshold の不正値（0 以下・数値でない）は警告して出さない。正しい値は警告なしで渡す (#1194)', () => {
+    for (const v of ['-0.5', '0', 'abc', '25%']) {
+      const r = ok({ frontmatter: { battle_weak_threshold: v } })
+      expect(r.warnings).toEqual([
+        `frontmatter の battle_weak_threshold は 0 より大きい数値にしてください: ${JSON.stringify(v)}（無視します）`,
+      ])
+      expect(
+        (r.raw.battle as { weakThreshold?: number } | undefined)?.weakThreshold
+      ).toBeUndefined()
+    }
+    const good = ok({ frontmatter: { battle_weak_threshold: '0.25' } })
+    expect(good.warnings).toEqual([])
+    expect((good.raw.battle as { weakThreshold?: number } | undefined)?.weakThreshold).toBe(0.25)
   })
 
   it('不正な値・効かないキー・16:9 以外は警告して出さない', () => {

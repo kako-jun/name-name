@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BATTLE_POSES,
   DEFAULT_MOTION_TIMING,
   SNAPPY_MOTION_TIMING,
+  isWeakHp,
   normalizePoses,
+  normalizeWeakThreshold,
   resolvePose,
   sampleActor,
   type BattlePose,
@@ -136,5 +138,48 @@ describe('新ポーズ special / swing-windup / swing-followthrough (#1026)', ()
     expect(sampleActor('spell', 10, T).pose).toBe('cast')
     expect(sampleActor('item', 10, T).pose).toBe('ready')
     expect(sampleActor('skill', T.castMs + 1, T).pose).toBe('idle')
+  })
+})
+
+describe('瀕死ポーズ weak (#1194)', () => {
+  it('ポーズ名として受け付け、代替は idle（絵が無ければ待機のまま）', () => {
+    expect(BATTLE_POSES).toContain('weak')
+    expect(normalizePoses({ Weak: ' w.png ', idle: 'i.png' })).toEqual({
+      weak: 'w.png',
+      idle: 'i.png',
+    })
+    expect(resolvePose('weak', { idle: 'i', weak: 'w' })?.pose).toBe('weak')
+    expect(resolvePose('weak', { idle: 'i' })?.pose).toBe('idle')
+    expect(resolvePose('weak', {})).toBeNull()
+  })
+
+  it('normalizeWeakThreshold: 0 超〜1 の数値だけ。1 超は 1、他は出さない', () => {
+    expect(normalizeWeakThreshold('0.25')).toBe(0.25)
+    expect(normalizeWeakThreshold(' ０.５ ')).toBe(0.5)
+    expect(normalizeWeakThreshold('.3')).toBe(0.3)
+    expect(normalizeWeakThreshold(0.25)).toBe(0.25)
+    expect(normalizeWeakThreshold('1')).toBe(1)
+    expect(normalizeWeakThreshold('2')).toBe(1)
+    for (const v of ['0', '-0.5', '', '  ', 'abc', '25%', 'NaN', 'Infinity', null, undefined]) {
+      expect(normalizeWeakThreshold(v)).toBeUndefined()
+    }
+    expect(normalizeWeakThreshold(NaN)).toBeUndefined()
+    expect(normalizeWeakThreshold(-1)).toBeUndefined()
+    // warn=false なら不正値でも console.warn しない
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    normalizeWeakThreshold('abc', false)
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('isWeakHp: 閾値未満の生存者だけ。閾値なし・HP0 以下・最大 HP 0 は false', () => {
+    expect(isWeakHp(4, 20, 0.25)).toBe(true)
+    expect(isWeakHp(5, 20, 0.25)).toBe(false)
+    expect(isWeakHp(19, 20, 1)).toBe(true)
+    expect(isWeakHp(20, 20, 1)).toBe(false)
+    expect(isWeakHp(1, 20, undefined)).toBe(false)
+    expect(isWeakHp(0, 20, 0.25)).toBe(false)
+    expect(isWeakHp(-3, 20, 0.25)).toBe(false)
+    expect(isWeakHp(1, 0, 0.25)).toBe(false)
   })
 })

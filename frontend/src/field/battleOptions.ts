@@ -55,6 +55,7 @@ export function buildBattleScreenOptions(
     ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
     ...(b.textOverflow ? { textOverflow: b.textOverflow } : {}),
     ...(b.atbSwitch === 'on' ? { atbSwitch: true } : {}),
+    ...(b.weakThreshold !== undefined ? { weakThreshold: b.weakThreshold } : {}),
   }
 }
 

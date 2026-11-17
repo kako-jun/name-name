@@ -34,6 +34,7 @@ export function normalizeBattlePresentation(raw: string | null | undefined): Bat
 
 // swing-windup / swing-followthrough は通常攻撃の 5 段 (ready → swing-windup → slash → swing-followthrough → ready) の振りかぶり・振り抜き (#1026)。
 // special は特技・わざ・召喚獣（ActionKind 'skill'）の構え。呪文（spell）は cast のまま
+// weak は瀕死（HP 割合が `battle_weak_threshold` 未満）の味方の待機姿（しゃがみ・膝つき。FF 風。#1194）。絵が無ければ idle のまま
 export const BATTLE_POSES = [
   'idle',
   'ready',
@@ -46,6 +47,7 @@ export const BATTLE_POSES = [
   'hurt',
   'down',
   'victory',
+  'weak',
 ] as const
 export type BattlePose = (typeof BATTLE_POSES)[number]
 
@@ -96,6 +98,43 @@ const POSE_FALLBACK: Record<BattlePose, readonly BattlePose[]> = {
   hurt: ['hurt', 'idle'],
   down: ['down'],
   victory: ['victory', 'idle'],
+  // 絵が無いキャラは従来の待機のまま (#1194)
+  weak: ['weak', 'idle'],
+}
+
+/**
+ * frontmatter `battle_weak_threshold` (#1194) の値を正規化する。0〜1 の数値（HP 割合がこの値**未満**のとき weak）。
+ * 1 超は 1 に丸める。未指定・空・数値でない・0 以下・非有限は undefined＝出さない（従来）。
+ */
+export function normalizeWeakThreshold(
+  raw: string | number | null | undefined,
+  warn = true
+): number | undefined {
+  const bad = (): undefined => {
+    // 指定があるのに使えない値だけ警告する（未指定・空は黙って「出さない」）。呼び出し側が自分で警告するときは warn=false
+    if (warn)
+      console.warn(
+        `battle_weak_threshold '${raw}' は 0 より大きい数値ではないため無視した（出さない）`
+      )
+    return undefined
+  }
+  if (raw === null || raw === undefined) return undefined
+  let n: number
+  if (typeof raw === 'number') n = raw
+  else {
+    const t = raw.normalize('NFKC').trim()
+    if (t === '') return undefined
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return bad()
+    n = Number(t)
+  }
+  if (!Number.isFinite(n) || n <= 0) return bad()
+  return Math.min(1, n)
+}
+
+/** HP が閾値未満の瀕死か (#1194)。閾値が undefined・最大 HP が 0 以下・HP 0 以下（倒れは down の担当）は false */
+export function isWeakHp(hp: number, maxHp: number, threshold: number | undefined): boolean {
+  if (threshold === undefined || !(maxHp > 0) || !(hp > 0)) return false
+  return hp / maxHp < threshold
 }
 
 /**

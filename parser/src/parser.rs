@@ -79,6 +79,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut battle_party_layout: Option<String> = None;
     let mut battle_text_overflow: Option<String> = None;
     let mut battle_atb_switch: Option<String> = None;
+    let mut battle_weak_threshold: Option<String> = None;
     let mut dialog_font_size: Option<String> = None;
     let mut dialog_window_height: Option<String> = None;
     let mut dialog_name_style: Option<String> = None;
@@ -425,6 +426,12 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_atb_switch = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("battle_weak_threshold:") {
+                // 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。0〜1 の数値。値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    battle_weak_threshold = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("field_menu_use_message:") {
                 // フィールドメニューの使用成功の文 (#1185)。on / off。値は生文字列で透過し、runtime 側で検証する。
@@ -1827,6 +1834,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         battle_party_layout,
         battle_text_overflow,
         battle_atb_switch,
+        battle_weak_threshold,
         dialog_font_size,
         dialog_window_height,
         dialog_name_style,

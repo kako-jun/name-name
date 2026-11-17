@@ -2383,6 +2383,7 @@ mod tests {
             battle_party_layout: None,
             battle_text_overflow: None,
             battle_atb_switch: None,
+            battle_weak_threshold: None,
             dialog_font_size: None,
             dialog_window_height: None,
             dialog_name_style: None,
