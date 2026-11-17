@@ -5355,6 +5355,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
         battle_text_overflow: None,
+        trace: None,
         dialog_font_size: None,
         dialog_window_height: None,
         dialog_name_style: None,
@@ -10557,6 +10558,7 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
         battle_text_overflow: None,
+        trace: None,
         dialog_font_size: None,
         dialog_window_height: None,
         dialog_name_style: None,
@@ -12880,6 +12882,23 @@ fn test_battle_text_overflow_roundtrip() {
     assert_eq!(re.battle_text_overflow, doc.battle_text_overflow);
     // 未指定のときは emit しない（既定の出力を変えない）
     assert!(!emitter::emit(&none).contains("battle_text_overflow"));
+}
+
+#[test]
+fn test_trace_roundtrip() {
+    let doc = parser::parse(&battle_doc("trace: on\n"));
+    assert_eq!(doc.trace.as_deref(), Some("on"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.trace, None);
+    let empty = parser::parse(&battle_doc("trace:\n"));
+    assert_eq!(empty.trace, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("trace: \"on\"\n"), "{emitted}");
+    let re = parser::parse(&emitted);
+    assert_eq!(re.trace, doc.trace);
+    // 未指定のときは emit しない（既定の出力を変えない）
+    assert!(!emitter::emit(&none).contains("trace"));
 }
 
 #[test]

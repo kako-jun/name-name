@@ -290,6 +290,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_text_overflow: \"{sanitized}\"\n"));
         }
+        // trace (#1197)。同じ流儀
+        if let Some(ref v) = doc.trace {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("trace: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -2685,6 +2690,7 @@ mod tests {
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
             battle_text_overflow: None,
+            trace: None,
             dialog_font_size: None,
             dialog_window_height: None,
             dialog_name_style: None,
@@ -3219,6 +3225,7 @@ mod tests {
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
             battle_text_overflow: None,
+            trace: None,
             dialog_font_size: None,
             dialog_window_height: None,
             dialog_name_style: None,

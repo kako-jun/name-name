@@ -1439,6 +1439,11 @@ export interface Document {
      */
     battle_text_overflow?: string;
     /**
+     * 内部トレースログ (#1197)。`on`（端末の中だけに直近の出来事を記録する）/ `off`（既定・何も記録しない）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
+     * frontmatter `trace:` から流す。
+     */
+    trace?: string;
+    /**
      * 一枚絵フィールドの会話窓の文字サイズ (#1184)。`normal`（既定＝従来）/ `battle`（戦闘のメッセージ窓と同じ大きさ）。値は生文字列で透過し、runtime 側で検証する。GUI 専用。
      * frontmatter `dialog_font_size:` から流す。
      */
