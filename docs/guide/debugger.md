@@ -397,7 +397,7 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 | `b.phase` / `b.actor` | フェーズの変化 / コマンド入力権の移動（`cur` = 今コマンドを出す味方、`q` = ATB の待ちキュー） |
 | `b.fire` | 演出の発火。命中の瞬間に**表示 HP（hpOverride）が確定値へ進む**こと（`hits` と、その時点の `ov`、`since` = 命中から何 ms 経ったか）。`clear` = 演出が追いつき控えを捨てた |
 | `b.pose` | 絵のポーズの解決。`req`（要求したポーズ）→ `res`（実際に使ったポーズ）・`img`（画像パス）・`look`（倒れの絵が無い者の見せ方。`sink` = 沈み込み / `tilt` = 傾き）。変わったときだけ。dq 方式は絵の差し替えが無いので idle / down（HP 0）だけ |
-| `b.switch` | 番の入れ替え（コマンド入力権を別の味方へ移す入力。#1201 のマージ後に配線。再実行は `ReplayResolvers.switchActor`） |
+| `b.switch` | 番の入れ替え（`battle_atb_switch` の `switchAtbActor`。`from` → `to`）。**切り替えが効いたときだけ**記録（ターン制・コマンド待ちでない・対象が不適格の呼び出しは出ない）。再実行は `switchAtbActor(to)` を呼ぶ（`ReplayResolvers.switchActor` で差し替え可） |
 | `b.load` | ポーズ絵（`base` は 1 枚絵）の読み込みの成否（`ok`、`img`） |
 | `b.win` | 候補窓の開閉（`open`/`close`/`move`、`stack`） |
 | `b.in` | 画面が受けた入力（`src`: key/tap/cmd、`v`）。ブロックされたコマンドは `v` が `<id>:blocked` |
