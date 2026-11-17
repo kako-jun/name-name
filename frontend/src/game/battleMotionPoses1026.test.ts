@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BATTLE_POSES,
   DEFAULT_MOTION_TIMING,
@@ -165,6 +165,11 @@ describe('瀕死ポーズ weak (#1194)', () => {
     }
     expect(normalizeWeakThreshold(NaN)).toBeUndefined()
     expect(normalizeWeakThreshold(-1)).toBeUndefined()
+    // warn=false なら不正値でも console.warn しない
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    normalizeWeakThreshold('abc', false)
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 
   it('isWeakHp: 閾値未満の生存者だけ。閾値なし・HP0 以下・最大 HP 0 は false', () => {

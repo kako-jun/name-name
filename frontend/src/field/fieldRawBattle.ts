@@ -144,7 +144,7 @@ export function frontmatterRaw(
 
   // 数値で渡す(parseConfig は number だけ受ける)。不正値は警告して無視＝出さない (#1194)
   if (typeof doc.battle_weak_threshold === 'string') {
-    const n = normalizeWeakThreshold(doc.battle_weak_threshold)
+    const n = normalizeWeakThreshold(doc.battle_weak_threshold, false)
     if (n !== undefined) battle.weakThreshold = n
     else
       warnings.push(

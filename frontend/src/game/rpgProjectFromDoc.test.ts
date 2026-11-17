@@ -2035,6 +2035,18 @@ describe('rpgProjectFromDoc: battle_weak_threshold (#1194)', () => {
     for (const v of [undefined, null, '', '0', '-1', 'abc', '25%'])
       expect(proj({ battle_weak_threshold: v }).battleWeakThreshold).toBeUndefined()
   })
+  it('未指定・空は警告なし、不正値（0 以下・数値でない）は警告して無視する', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const v of [undefined, null, '', '  ', '0.25', '2']) proj({ battle_weak_threshold: v })
+    expect(spy).not.toHaveBeenCalled()
+    for (const v of ['0', '-1', 'abc', '25%']) {
+      spy.mockClear()
+      expect(proj({ battle_weak_threshold: v }).battleWeakThreshold).toBeUndefined()
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(String(spy.mock.calls[0][0])).toContain('battle_weak_threshold')
+    }
+    spy.mockRestore()
+  })
 })
 
 describe('rpgProjectFromDoc: battle_enemy_grid_extent / battle_party_layout / battle_enemy_window_overlap_bottom (#1178)', () => {

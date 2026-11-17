@@ -937,7 +937,7 @@ export class BattleScreen extends Container {
       normalizeBattleTextOverflow(opts.textOverflow, false),
       opts.reducedMotion ?? prefersReducedMotion()
     )
-    this.weakThreshold = normalizeWeakThreshold(opts.weakThreshold)
+    this.weakThreshold = normalizeWeakThreshold(opts.weakThreshold, false)
     this.entranceActive = this.presentation === 'ff' && entranceTotalMs(this.motionTiming) > 0
     this.enemyListEnabled =
       opts.enemyList === 'window' && this.presentation === 'ff' && this.layoutMode === 'side'

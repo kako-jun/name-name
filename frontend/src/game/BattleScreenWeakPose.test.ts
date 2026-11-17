@@ -171,7 +171,13 @@ describe('BattleScreen: 瀕死ポーズ weak (#1194)', () => {
     expect(priv(s).partyViews[1].shownPose).toBe('weak')
     // 演出が終わったら勝ちポーズ側（weak ではない）
     for (let i = 0; i < 400; i++) s.tick(20)
-    expect(priv(s).partyViews[1].shownPose).not.toBe('weak')
+    // 勝利の待機は通常（idle）と victory の交互表示。どのコマに当たっても weak にならないよう、交互表示の周期より長く 50ms ごとに確かめる
+    const seen = new Set<string>()
+    for (let i = 0; i < 60; i++) {
+      s.tick(50)
+      seen.add(priv(s).partyViews[1].shownPose)
+    }
+    expect(seen.has('weak')).toBe(false)
   })
 
   it('瀕死でも、行動中のポーズ（ready / step / slash）は weak に勝つ。のけぞり（hurt）も weak より先', async () => {

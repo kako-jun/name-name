@@ -1222,7 +1222,7 @@ export function parseConfig(
       ? normalizeEnemyWindowOverlapSetting(String(b.enemyWindowOverlap))
       : undefined
   const weakThreshold =
-    typeof b.weakThreshold === 'number' ? normalizeWeakThreshold(b.weakThreshold) : undefined
+    typeof b.weakThreshold === 'number' ? normalizeWeakThreshold(b.weakThreshold, false) : undefined
   // 指定があるのに使えない値（数値でない・0 以下・非有限）は警告して無視＝出さない (#1194)
   if (b.weakThreshold !== undefined && weakThreshold === undefined)
     warnings.push(

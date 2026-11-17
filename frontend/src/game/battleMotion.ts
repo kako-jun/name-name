@@ -107,16 +107,27 @@ const POSE_FALLBACK: Record<BattlePose, readonly BattlePose[]> = {
  * 1 超は 1 に丸める。未指定・空・数値でない・0 以下・非有限は undefined＝出さない（従来）。
  */
 export function normalizeWeakThreshold(
-  raw: string | number | null | undefined
+  raw: string | number | null | undefined,
+  warn = true
 ): number | undefined {
+  const bad = (): undefined => {
+    // 指定があるのに使えない値だけ警告する（未指定・空は黙って「出さない」）。呼び出し側が自分で警告するときは warn=false
+    if (warn)
+      console.warn(
+        `battle_weak_threshold '${raw}' は 0 より大きい数値ではないため無視した（出さない）`
+      )
+    return undefined
+  }
+  if (raw === null || raw === undefined) return undefined
   let n: number
   if (typeof raw === 'number') n = raw
-  else if (typeof raw === 'string') {
+  else {
     const t = raw.normalize('NFKC').trim()
-    if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return undefined
+    if (t === '') return undefined
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return bad()
     n = Number(t)
-  } else return undefined
-  if (!Number.isFinite(n) || n <= 0) return undefined
+  }
+  if (!Number.isFinite(n) || n <= 0) return bad()
   return Math.min(1, n)
 }
 
