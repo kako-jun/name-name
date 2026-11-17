@@ -974,7 +974,8 @@ export class FieldMenuScreen extends Container {
     const exp = this.opts.exp ? p.exp : undefined
     if (exp) {
       const next = nextValue(exp)
-      const expSize = fitSize(size * 0.85, right - tx, NEXT_LABEL, next, size * 0.5)
+      // 人物ごとに大きさが揺れないよう、値の幅は 5 桁（MAX も入る）で見積もる
+      const expSize = fitSize(size * 0.85, right - tx, NEXT_LABEL, '99999', size * 0.5)
       const yAt = (f: number): number => r.y + r.h * f
       // 狭い枠: 名前 / Lv（と選択中）/ HP / 次のレベルまで の 4 段。通常の枠: 名前と Lv / HP（と選択中）/ 次のレベルまで の 3 段
       const yExp = yAt(compact ? 0.83 : 0.8)
