@@ -580,6 +580,32 @@ export class BattleEngine {
     return this.currentActorIndex()
   }
 
+  /**
+   * ATB の入力キャラ切り替え (#1195)。満タンで待機中（キューにいる）生存者の `partyIndex` を、今の番（キュー先頭の生存者）にする。
+   * 元の番の人はキューに残る（満タンのまま、新しい番の次）。残りの相対順は保つ。ゲージ・ログ・乱数・フェーズには触れない。
+   * 切り替えたら true。ATB でない・終了後・コマンド待ちでない・対象が倒れている/キューにいない（ゲージ未満タン）・すでに番、は何もせず false
+   */
+  switchAtbActor(partyIndex: number): boolean {
+    const atb = this.state.atb
+    if (!atb || this.isOver() || this.state.phase !== 'party-input') return false
+    if (!Number.isInteger(partyIndex)) return false
+    const target = this.state.party[partyIndex]
+    if (!target || target.hp <= 0 || !atb.queue.includes(partyIndex)) return false
+    if (this.currentActorIndex() === partyIndex) return false
+    atb.queue = [partyIndex, ...atb.queue.filter((i) => i !== partyIndex)]
+    return true
+  }
+
+  /** 今コマンドを出す番ではないが、満タンで待機中の生存者か (#1195)。タップで番を移せる者の表示用 */
+  isAtbSwitchable(partyIndex: number): boolean {
+    const atb = this.state.atb
+    if (!atb || this.isOver() || this.state.phase !== 'party-input') return false
+    const m = this.state.party[partyIndex]
+    return (
+      !!m && m.hp > 0 && atb.queue.includes(partyIndex) && this.currentActorIndex() !== partyIndex
+    )
+  }
+
   isOver(): boolean {
     return (
       this.state.phase === 'victory' ||

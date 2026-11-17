@@ -226,9 +226,72 @@ describe('battleTrace (#1197)', () => {
     expect(firstMismatch(b.expected, r.produced)).toBeNull()
   })
 
-  it('番の入れ替え（b.switch）は再実行の受け口 switchActor に渡る（配線は #1201 のマージ後）', () => {
+  it('再現: 満タン 3 人で番を連続して入れ替えても、行動順が記録どおりに再現される', () => {
     configureTrace(true, { storage: null })
-    const e = new BattleEngine([ent('p0')], [ent('e0')], { atb: {} })
+    const e = new BattleEngine(
+      [
+        ent('p0', { hp: 300, maxHp: 300 }),
+        ent('p1', { hp: 300, maxHp: 300 }),
+        ent('p2', { hp: 300, maxHp: 300 }),
+      ],
+      [ent('e0', { hp: 400, maxHp: 400, atk: 3, agi: 1 })],
+      { atb: { initialGauges: { party: [1000, 1000, 1000] } } }
+    )
+    attachBattleTrace(e)
+    e.tick(1) // 満タンの 3 人がコマンド待ちに並ぶ
+    expect(e.getCurrentActorIndex()).toBe(0)
+    expect(e.switchAtbActor(2)).toBe(true)
+    expect(e.switchAtbActor(1)).toBe(true)
+    expect(e.switchAtbActor(1)).toBe(false) // すでに番
+    e.selectAttack() // 1 番が行動（次の番は 2）
+    expect(e.switchAtbActor(0)).toBe(true)
+    e.selectAttack() // 0 番が行動
+    e.selectAttack() // 2 番が行動
+    const entries = traceDump().session.entries
+    const sw = entries
+      .filter((x) => x.k === 'b.switch')
+      .map((x) => x.d as { from: number; to: number })
+    expect(sw.map((x) => [x.from, x.to])).toEqual([
+      [0, 2],
+      [2, 1],
+      [2, 0],
+    ])
+    const actors = entries
+      .filter((x) => x.k === 'b.act' && (x.d as { a: number[] }).a[0] === 0)
+      .map((x) => (x.d as { a: number[] }).a[1])
+    expect(actors).toEqual([1, 0, 2])
+    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const r = replayBattle(b)
+    expect(firstMismatch(b.expected, r.produced)).toBeNull()
+    expect(
+      r.produced
+        .filter((x) => x.k === 'b.act' && (x.d as { a: number[] }).a[0] === 0)
+        .map((x) => (x.d as { a: number[] }).a[1])
+    ).toEqual([1, 0, 2])
+  })
+
+  it('切り替えが効かない場面（ターン制・コマンド待ちでない・ゲージ未満タン・倒れた味方）では b.switch を記録しない', () => {
+    configureTrace(true, { storage: null })
+    // ターン制（ATB でない）
+    const t = new BattleEngine([ent('p0'), ent('p1')], [ent('e0')], {})
+    attachBattleTrace(t)
+    expect(t.switchAtbActor(1)).toBe(false)
+    // ATB: コマンド待ちでない（誰も満タンでない）・未満タン・倒れた味方
+    const a = new BattleEngine([ent('p0'), ent('p1', { hp: 0 }), ent('p2')], [ent('e0')], {
+      atb: { initialGauges: { party: [1000, 1000, 100] } },
+    })
+    attachBattleTrace(a)
+    expect(a.switchAtbActor(2)).toBe(false)
+    expect(a.switchAtbActor(1)).toBe(false)
+    expect(a.switchAtbActor(9)).toBe(false)
+    expect(traceDump().session.entries.filter((x) => x.k === 'b.switch')).toEqual([])
+  })
+
+  it('switchActor の差し替え口が使える', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine([ent('p0'), ent('p1')], [ent('e0')], {
+      atb: { initialGauges: { party: [1000, 1000] } },
+    })
     const t = attachBattleTrace(e)!
     t.switched({ from: 0, to: 1 })
     const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]

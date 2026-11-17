@@ -144,6 +144,14 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
       expect(k in none).toBe(false)
   })
 
+  it('weakThreshold は指定があれば渡り、未指定は渡さない (#1194)', () => {
+    const o = buildBattleScreenOptions(load({ layout: 'side', weakThreshold: 0.25 }).battle, {})
+    expect(o.weakThreshold).toBe(0.25)
+    expect('weakThreshold' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(
+      false
+    )
+  })
+
   it('textOverflow は scroll のときだけでなく指定があれば渡り、未指定は渡さない (#1183)', () => {
     const o = buildBattleScreenOptions(load({ layout: 'side', textOverflow: 'scroll' }).battle, {})
     expect(o.textOverflow).toBe('scroll')
@@ -154,6 +162,16 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect('textOverflow' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(
       false
     )
+  })
+
+  it('atbSwitch は on のときだけ true で渡り、off・未指定は渡さない (#1195)', () => {
+    expect(
+      buildBattleScreenOptions(load({ layout: 'side', atbSwitch: 'on' }).battle, {}).atbSwitch
+    ).toBe(true)
+    expect(
+      'atbSwitch' in buildBattleScreenOptions(load({ layout: 'side', atbSwitch: 'off' }).battle, {})
+    ).toBe(false)
+    expect('atbSwitch' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(false)
   })
 
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {

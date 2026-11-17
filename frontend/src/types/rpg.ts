@@ -270,6 +270,10 @@ export interface RPGProject {
   battleTextOverflow?: 'ellipsis' | 'scroll'
   /** 内部トレースログ (#1197)。frontmatter `trace:` 由来。`'on'` のときだけ端末の中に直近の出来事を記録する。未指定・不正値は `'off'`（何も記録しない）。他のキーとは独立 */
   trace?: 'on' | 'off'
+  /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。frontmatter `battle_atb_switch:` 由来。未指定・不正値は `'off'`（従来）、`'on'` は切り替え可。`battle_atb: on` のときだけ効く */
+  battleAtbSwitch?: 'on' | 'off'
+  /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。frontmatter `battle_weak_threshold:` 由来（0〜1）。未指定・不正値は undefined＝出さない（従来）。推奨は FF の 1/4 未満＝0.25 */
+  battleWeakThreshold?: number
   /**
    * 敵グリッドに収まらないため無効化したエンカウント群 (#839 段5)。`battle_enemy_grid` が有効なゲームを読み込んだときだけ、
    * 全マップ（全シーン）の群を検証した結果が入る。無ければ（全部収まる・グリッド無効）undefined。

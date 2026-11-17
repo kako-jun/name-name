@@ -5356,6 +5356,8 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_party_layout: None,
         battle_text_overflow: None,
         trace: None,
+        battle_atb_switch: None,
+        battle_weak_threshold: None,
         dialog_font_size: None,
         dialog_window_height: None,
         dialog_name_style: None,
@@ -10559,6 +10561,8 @@ fn telop_test_doc_base() -> Document {
         battle_party_layout: None,
         battle_text_overflow: None,
         trace: None,
+        battle_atb_switch: None,
+        battle_weak_threshold: None,
         dialog_font_size: None,
         dialog_window_height: None,
         dialog_name_style: None,
@@ -12899,6 +12903,43 @@ fn test_trace_roundtrip() {
     assert_eq!(re.trace, doc.trace);
     // 未指定のときは emit しない（既定の出力を変えない）
     assert!(!emitter::emit(&none).contains("trace"));
+}
+
+#[test]
+fn test_battle_atb_switch_roundtrip() {
+    let doc = parser::parse(&battle_doc("battle_atb_switch: on\n"));
+    assert_eq!(doc.battle_atb_switch.as_deref(), Some("on"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_atb_switch, None);
+    let empty = parser::parse(&battle_doc("battle_atb_switch:\n"));
+    assert_eq!(empty.battle_atb_switch, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("battle_atb_switch: \"on\"\n"), "{emitted}");
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_atb_switch, doc.battle_atb_switch);
+    // 未指定のときは emit しない（既定の出力を変えない）
+    assert!(!emitter::emit(&none).contains("battle_atb_switch"));
+}
+
+#[test]
+fn test_battle_weak_threshold_roundtrip() {
+    let doc = parser::parse(&battle_doc("battle_weak_threshold: 0.25\n"));
+    assert_eq!(doc.battle_weak_threshold.as_deref(), Some("0.25"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_weak_threshold, None);
+    let empty = parser::parse(&battle_doc("battle_weak_threshold:\n"));
+    assert_eq!(empty.battle_weak_threshold, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_weak_threshold: \"0.25\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_weak_threshold, doc.battle_weak_threshold);
+    // 未指定のときは emit しない（既定の出力を変えない）
+    assert!(!emitter::emit(&none).contains("battle_weak_threshold"));
 }
 
 #[test]

@@ -161,7 +161,9 @@ import {
   groupHitsByRound,
   isPlaybackBackedUp,
   isPlaybackBusy,
+  isWeakHp,
   messageWindowText,
+  normalizeWeakThreshold,
   popupCenterOffset,
   popupFontSize,
   popupText,
@@ -300,6 +302,8 @@ const TEXT_COLOR = 0xffffff
 const HP_COLOR = 0x88ee88
 /** ATB (#205): 行動する番の味方の名前色 / ゲージの色（溜まり中・満タン）/ ゲージの下地 */
 const ACTOR_COLOR = 0xffee66
+/** タップで番を移せる味方の ▷ の色 (#1195)。番の ▶（黄）と区別でき、暗い窓の上で読める明るい水色 */
+const SWITCHABLE_MARK_COLOR = 0x8ee8ff
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
@@ -538,6 +542,18 @@ export interface BattleScreenOptions {
    * `scroll` は省略せず、窓の幅でクリップしてゆっくり横スクロール（`side` の候補窓の名前・敵名窓。対象は battleMarquee.ts の MARQUEE_TARGETS）。窓の寸法は変えない
    */
   textOverflow?: 'ellipsis' | 'scroll'
+  /**
+   * ATB で満タンの味方が複数のとき、味方（アクスタ・ステータス行の名前・ゲージ）のタップで入力キャラを切り替える (#1195)。
+   * frontmatter `battle_atb_switch: on` 由来。undefined/false = 切り替えなし（従来）。ATB でない戦闘では何もしない。
+   * 切り替えると開いている窓は閉じ（選択途中は捨てる）、元の番の人は満タンのまま待機の順に残る
+   */
+  atbSwitch?: boolean
+  /**
+   * 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。frontmatter `battle_weak_threshold` 由来（0〜1）。
+   * 味方の表示上の HP 割合がこの値未満で、待機（idle）の姿のときだけ weak の絵にする（weak の絵が無ければ idle のまま）。
+   * undefined = 出さない（従来）。`presentation: 'ff'` かつ `layout: 'side'` のときだけ効く
+   */
+  weakThreshold?: number
   /** 動きを減らす設定 (prefers-reduced-motion) か。undefined = ブラウザの設定を読む。true だと `scroll` でもスクロールせず省略にする (#1183) */
   reducedMotion?: boolean
   /**
@@ -736,6 +752,8 @@ export class BattleScreen extends Container {
   private motionTiming: MotionTiming
   /** 入り切らない文字の扱い (#1183)。`scroll` 指定でも reduced-motion のときは `ellipsis` */
   private textOverflow: BattleTextOverflow
+  /** 瀕死ポーズ（weak）の閾値 (#1194)。undefined = 出さない */
+  private weakThreshold: number | undefined
   /** 横スクロールの表示専用の時計 (#1183)。ゲームのティック（ATB・演出）と独立に tick の経過を積む */
   private marqueeClock = new MarqueeClock()
   /** 横スクロール中の Text（候補窓の名前は BattleMenuLayer が持つ）。マスクは Text と同じ親の子 */
@@ -935,6 +953,7 @@ export class BattleScreen extends Container {
       normalizeBattleTextOverflow(opts.textOverflow, false),
       opts.reducedMotion ?? prefersReducedMotion()
     )
+    this.weakThreshold = normalizeWeakThreshold(opts.weakThreshold, false)
     this.entranceActive = this.presentation === 'ff' && entranceTotalMs(this.motionTiming) > 0
     this.enemyListEnabled =
       opts.enemyList === 'window' && this.presentation === 'ff' && this.layoutMode === 'side'
@@ -1292,6 +1311,7 @@ export class BattleScreen extends Container {
       const view = this.createEntityView(p, FALLBACK_PARTY_COLOR, false)
       stage.addChild(view.container)
       this.partyViews.push(view)
+      this.makeSwitchTarget(view.container, this.partyViews.length - 1)
     }
     for (let i = 0; i < s.party.length; i++) this.addStatusRow()
     if (this.presentation === 'ff') {
@@ -1319,6 +1339,7 @@ export class BattleScreen extends Container {
     })
     this.statusTexts.push(t)
     this.addChild(t)
+    this.makeSwitchTarget(t, this.statusTexts.length - 1)
     const parts: Array<[PixiText[], boolean]> = [
       [this.statusHpLabels, false],
       [this.statusHpTexts, true],
@@ -1730,6 +1751,7 @@ export class BattleScreen extends Container {
     const g = new Graphics()
     this.atbBars.push(g)
     this.addChild(g)
+    this.makeSwitchTarget(g, this.atbBars.length - 1)
     const m = new PixiText({
       text: '▶',
       style: this.themedStyle(
@@ -1743,6 +1765,49 @@ export class BattleScreen extends Container {
     m.visible = false
     this.atbMarkers.push(m)
     this.addChild(m)
+  }
+
+  /**
+   * 入力キャラ切り替えのタップ受け口 (#1195)。`atbSwitch` が有効な ATB の side のときだけ、味方 `index` の絵・名前・ゲージにつける。
+   * 無効なら eventMode を変えない（従来と完全に同じ）。受けたタップは tapParty へ
+   */
+  private makeSwitchTarget(obj: Container, index: number): void {
+    if (!this.opts.atbSwitch || this.layoutMode !== 'side' || !this.engine.getState().atb) return
+    obj.eventMode = 'static'
+    // cursor は切り替えできる味方の上だけ pointer（refreshSide が出し入れ）
+    obj.on('pointertap', () => this.tapParty(index))
+  }
+
+  /** 対象選択の窓が開いているか (#1195)。この間は味方のタップで番を切り替えない */
+  private isTargetWindowOpen(): boolean {
+    return this.menuStack[this.menuStack.length - 1]?.type === 'target'
+  }
+
+  /** 画面座標 (x, y) にある、タップで番を移せる味方の index（アクスタ・名前・ゲージ棒の上）。無ければ -1 (#1195) */
+  private switchTargetAt(x: number, y: number): number {
+    if (!this.opts.atbSwitch || this.isTargetWindowOpen()) return -1
+    for (let i = 0; i < this.partyViews.length; i++) {
+      if (!this.engine.isAtbSwitchable(i)) continue
+      const parts: Array<Container | undefined> = [
+        this.partyViews[i].container,
+        this.statusTexts[i],
+        this.atbBars[i],
+      ]
+      for (const o of parts) if (o && o.getBounds().containsPoint(x, y)) return i
+    }
+    return -1
+  }
+
+  /** 味方 `index` のタップ (#1195)。満タンで待機中の別の味方なら番を移す。それ以外（番の本人・ゲージ未満タン・倒れた）は何もしない */
+  private tapParty(index: number): void {
+    if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
+    // 対象選択の窓の間は、味方のタップは対象選択の操作で、番は切り替えない（同じ味方でも名前と絵で結果が変わるのを避ける）
+    if (this.isTargetWindowOpen()) return
+    if (!this.engine.switchAtbActor(index)) return
+    this.opts.onSound?.('confirm')
+    // 窓は refresh 末尾の syncMenu が「番が変わった」として閉じる（選択途中のコマンドは捨てる）
+    this.refresh()
+    this.closeIfOver()
   }
 
   /** ゲージ棒を描く。満タン（コマンド待ち）は色を変える。倒れた味方は空 */
@@ -2638,7 +2703,22 @@ export class BattleScreen extends Container {
       const mpT = this.statusMpTexts[i]
       // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない）。アクスタ頭上の ▼ は updateSelectMarks (#205, #805)
       const isActor = p.hp > 0 && i === this.actorIndex()
-      if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
+      // タップで番を移せる者(満タンで待機中の別の味方)には、番の ▶ とは別の薄い ▷ を出す (#1195)
+      const switchable = !!this.opts.atbSwitch && this.engine.isAtbSwitchable(i)
+      const marker = this.atbMarkers[i]
+      if (marker) {
+        marker.visible = isActor || switchable
+        marker.text = isActor ? '▶' : '▷'
+        // ▷ は小さい文字なので、薄くせず色と太さで ▶ と区別する（実画面で alpha 0.7 はほぼ見えなかった）
+        marker.style.fill = isActor ? ACTOR_COLOR : SWITCHABLE_MARK_COLOR
+        marker.style.fontWeight = isActor ? 'normal' : 'bold'
+      }
+      // タップできる味方の上だけ指のカーソルにする (#1195)
+      if (this.opts.atbSwitch) {
+        const cursor = switchable ? 'pointer' : 'auto'
+        for (const o of [this.partyViews[i]?.container, t, this.atbBars[i]])
+          if (o) o.cursor = cursor
+      }
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
       this.fitStatusName(t, this.withStatusTags(p.name, p0, 'party', i), cols?.name.w ?? Infinity)
       const lbl = cols?.showLabels ?? true
@@ -2765,6 +2845,7 @@ export class BattleScreen extends Container {
       const view = this.createEntityView(s.party[i], FALLBACK_PARTY_COLOR, false)
       this.sideStage.addChild(view.container)
       this.partyViews.push(view)
+      this.makeSwitchTarget(view.container, this.partyViews.length - 1)
       this.addStatusRow()
       if (s.atb) this.addAtbBar()
     }
@@ -2897,7 +2978,12 @@ export class BattleScreen extends Container {
         const ctx = this.menuContext()
         if (ctx) this.setMenuStack(scrollList(this.menuStack, delta, ctx))
       },
-      onCancelTap: () => this.cancelMenu(),
+      onCancelTap: (x, y) => {
+        // 窓の外のタップが切り替え可能な味方の上なら、キャンセルでなく番の切り替え (#1195)
+        const i = this.switchTargetAt(x, y)
+        if (i !== -1) this.tapParty(i)
+        else this.cancelMenu()
+      },
     })
     // 開閉アニメーションは ff のときだけ（tick が回らない dq では途中で止まるので使わない）
     this.menuLayer.setTransitionMs(this.presentation === 'ff' ? this.motionTiming.menuMs : 0)
@@ -3676,7 +3762,7 @@ export class BattleScreen extends Container {
       forward: 0,
     }
     const active = this.playback.active
-    if (!active) return out
+    if (!active) return this.withWeakPose(side, ent, hp, out)
     const ev = active.event
     if (ev.actor.side === side && ev.actor.index === index) {
       const a = sampleActor(
@@ -3713,7 +3799,24 @@ export class BattleScreen extends Container {
         vanish: t.vanish,
       }
     }
-    return out
+    return this.withWeakPose(side, ent, hp, out)
+  }
+
+  /**
+   * 瀕死ポーズ (#1194)。味方の（演出に合わせた表示上の）HP 割合が閾値未満で、いま待機（idle）の姿のときだけ weak にする。
+   * down・のけぞり・行動中のポーズ・勝利は idle ではないので優先される（down > hurt/行動 > weak > idle）。
+   * 勝利の待機中（決着の演出が終わってから）は勝ちポーズの交互表示に使う idle のコマも weak にしない。敵は対象外
+   */
+  private withWeakPose(
+    side: 'party' | 'enemy',
+    ent: { maxHp: number } | undefined,
+    hp: number,
+    sample: TargetSample & { forward: number }
+  ): TargetSample & { forward: number } {
+    if (side !== 'party' || sample.pose !== 'idle' || !ent) return sample
+    // 勝利ポーズ側（restingSample の won）と同じく、決着の行動の演出が終わるまでは weak のまま
+    if (this.engine.getState().phase === 'victory' && !isPlaybackBusy(this.playback)) return sample
+    return isWeakHp(hp, ent.maxHp, this.weakThreshold) ? { ...sample, pose: 'weak' } : sample
   }
 
   /**

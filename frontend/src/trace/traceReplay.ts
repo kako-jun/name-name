@@ -77,7 +77,7 @@ export interface ReplayResolvers {
   skill?: (ref: string | null) => SkillExecution | undefined
   item?: (ref: string | null) => ItemExecution | undefined
   summon?: (ref: string | null) => SummonExecution | undefined
-  /** 番の入れ替え（`b.switch`、#1201 のマージ後に配線）。記録の要点を受けてエンジンを動かす。未指定なら無視する */
+  /** 番の入れ替え（`b.switch`）の差し替え。未指定は記録した `to` で `engine.switchAtbActor` を呼ぶ */
   switchActor?: (engine: BattleEngine, data: Record<string, unknown>) => void
 }
 
@@ -155,7 +155,8 @@ export function replayBattle(
         applyCommand(engine, d, resolvers)
         break
       case 'b.switch':
-        resolvers.switchActor?.(engine, d)
+        if (resolvers.switchActor) resolvers.switchActor(engine, d)
+        else if (typeof d.to === 'number') engine.switchAtbActor(d.to)
         break
     }
   }

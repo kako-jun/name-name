@@ -41,6 +41,7 @@ import type { BattleTransitionMode } from '../game/battleTransition'
 import type { SpriteStyle } from '../game/spriteStyle'
 import {
   normalizePoses,
+  normalizeWeakThreshold,
   posesField,
   type BattleMotionPreset,
   type BattlePresentation,
@@ -226,6 +227,10 @@ export interface FieldBattleConfig {
   partyLayout?: 'default' | 'tall'
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。`battle.textOverflow`: `ellipsis`（既定）/ `scroll`。未指定は undefined＝ellipsis */
   textOverflow?: 'ellipsis' | 'scroll'
+  /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。`battle.atbSwitch`: `off`（既定）/ `on`。未指定は undefined＝off */
+  atbSwitch?: 'on' | 'off'
+  /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。`battle.weakThreshold`（0〜1 の数値。1 超は 1 に丸め、0 以下は出さない）。未指定は undefined＝出さない */
+  weakThreshold?: number
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
   /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
@@ -972,6 +977,8 @@ export function parseConfig(
     return fail(`battle.partyLayout は "default" か "tall": ${JSON.stringify(b.partyLayout)}`)
   if (b.textOverflow !== undefined && b.textOverflow !== 'ellipsis' && b.textOverflow !== 'scroll')
     return fail(`battle.textOverflow は "ellipsis" か "scroll": ${JSON.stringify(b.textOverflow)}`)
+  if (b.atbSwitch !== undefined && b.atbSwitch !== 'on' && b.atbSwitch !== 'off')
+    return fail(`battle.atbSwitch は "on" か "off": ${JSON.stringify(b.atbSwitch)}`)
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
     return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
@@ -1228,6 +1235,13 @@ export function parseConfig(
     typeof b.enemyWindowOverlap === 'number' && Number.isFinite(b.enemyWindowOverlap)
       ? normalizeEnemyWindowOverlapSetting(String(b.enemyWindowOverlap))
       : undefined
+  const weakThreshold =
+    typeof b.weakThreshold === 'number' ? normalizeWeakThreshold(b.weakThreshold, false) : undefined
+  // 指定があるのに使えない値（数値でない・0 以下・非有限）は警告して無視＝出さない (#1194)
+  if (b.weakThreshold !== undefined && weakThreshold === undefined)
+    warnings.push(
+      `battle.weakThreshold は 0 より大きい数値にしてください: ${JSON.stringify(b.weakThreshold)}（無視します）`
+    )
   const enemyWindowOverlapBottom =
     typeof b.enemyWindowOverlapBottom === 'number' && Number.isFinite(b.enemyWindowOverlapBottom)
       ? normalizeEnemyWindowOverlapBottomSetting(String(b.enemyWindowOverlapBottom))
@@ -1333,6 +1347,8 @@ export function parseConfig(
         ...(enemyWindowOverlapBottom !== undefined ? { enemyWindowOverlapBottom } : {}),
         ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
         ...(b.textOverflow ? { textOverflow: b.textOverflow } : {}),
+        ...(b.atbSwitch ? { atbSwitch: b.atbSwitch } : {}),
+        ...(weakThreshold !== undefined ? { weakThreshold } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),

@@ -238,6 +238,7 @@ const POSE_KEYS: readonly BattlePose[] = [
   'hurt',
   'down',
   'victory',
+  'weak',
 ]
 
 /**

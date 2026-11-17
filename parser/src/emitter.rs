@@ -295,6 +295,16 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("trace: \"{sanitized}\"\n"));
         }
+        // battle_atb_switch (#1195)。同じ流儀
+        if let Some(ref v) = doc.battle_atb_switch {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_atb_switch: \"{sanitized}\"\n"));
+        }
+        // battle_weak_threshold (#1194)。同じ流儀
+        if let Some(ref v) = doc.battle_weak_threshold {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_weak_threshold: \"{sanitized}\"\n"));
+        }
         out.push_str(&format!("chapter: {}\n", chapter.number));
         out.push_str(&format!("title: \"{}\"\n", chapter.title));
         // Emit `hidden` only when true; it's a boolean flag and the default (false) is silent.
@@ -2691,6 +2701,8 @@ mod tests {
             battle_party_layout: None,
             battle_text_overflow: None,
             trace: None,
+            battle_atb_switch: None,
+            battle_weak_threshold: None,
             dialog_font_size: None,
             dialog_window_height: None,
             dialog_name_style: None,
@@ -3226,6 +3238,8 @@ mod tests {
             battle_party_layout: None,
             battle_text_overflow: None,
             trace: None,
+            battle_atb_switch: None,
+            battle_weak_threshold: None,
             dialog_font_size: None,
             dialog_window_height: None,
             dialog_name_style: None,

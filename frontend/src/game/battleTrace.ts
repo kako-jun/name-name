@@ -122,8 +122,9 @@ export class BattleTracer {
   }
 
   /**
-   * 番の入れ替え（#1201 の `switchAtbActor` など、コマンド入力権を別の味方へ移す入力）。#1201 のマージ後にエンジンの包みから呼ぶ。
-   * 再実行側の受け口は `ReplayResolvers.switchActor`（`b.switch` を入力として扱う）
+   * 番の入れ替え（`switchAtbActor`。コマンド入力権を別の味方へ移す入力）。**切り替えが効いたときだけ**エンジンの包みから呼ぶ
+   * （dq・コマンド待ちでない・対象が不適格で false の呼び出しは記録しない）。再実行は `b.switch` を入力として `switchAtbActor(to)` を呼ぶ
+   * （`ReplayResolvers.switchActor` で差し替え可）
    */
   switched(data: Record<string, unknown>): void {
     this.flushAdv()
@@ -449,6 +450,22 @@ export function attachBattleTrace(
       const r = origTick(ms)
       tracer.after()
       return r
+    } finally {
+      tracer.depth--
+    }
+  }
+  const origSwitch = e.switchAtbActor.bind(engine)
+  e.switchAtbActor = (index: unknown): unknown => {
+    if (tracer.depth > 0) return origSwitch(index)
+    tracer.depth++
+    try {
+      const from = engine.getCurrentActorIndex()
+      const ok = origSwitch(index)
+      if (ok) {
+        tracer.switched({ from, to: index as number })
+        tracer.after()
+      }
+      return ok
     } finally {
       tracer.depth--
     }
