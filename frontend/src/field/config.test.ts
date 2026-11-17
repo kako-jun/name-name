@@ -1945,6 +1945,42 @@ describe('trace (#1197)', () => {
   })
 })
 
+describe('menuStatusLayout (#1191)', () => {
+  it('未指定・"line" は従来どおり（キーなし・警告なし）', () => {
+    const none = ok(mutated(() => {}))
+    expect('menuStatusLayout' in none).toBe(false)
+    const line = ok(
+      mutated((c) => {
+        c.menuStatusLayout = 'line'
+      })
+    )
+    expect('menuStatusLayout' in line).toBe(false)
+    expect(line.warnings).toBeUndefined()
+  })
+  it('"ff" は menuStatusLayout: "ff"。menuUseMessage とは独立', () => {
+    const c = ok(
+      mutated((c) => {
+        c.menuStatusLayout = 'ff'
+      })
+    )
+    expect(c.menuStatusLayout).toBe('ff')
+    expect('menuUseMessageOff' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（従来の 1 列）', () => {
+    for (const bad of ['grid', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.menuStatusLayout = bad
+        })
+      )
+      expect('menuStatusLayout' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('menuStatusLayout')
+    }
+  })
+})
+
 describe('dialogStyle / dialogMsPerChar (#840)', () => {
   it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
     const c = ok(mutated(() => {}))

@@ -1034,6 +1034,19 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     expect(ok({}).raw).not.toHaveProperty('menuUseMessage')
   })
 
+  it('field_menu_status_layout (#1191): line / ff を渡し、不正は警告して無視する。use_message とは独立', () => {
+    const ff = ok({ frontmatter: { field_menu_status_layout: ' FF ' } })
+    expect(ff.warnings).toEqual([])
+    expect(ff.raw).toMatchObject({ menuStatusLayout: 'ff' })
+    expect(ff.raw).not.toHaveProperty('menuUseMessage')
+    const bad = ok({ frontmatter: { field_menu_status_layout: 'grid' } })
+    expect(bad.warnings).toEqual([
+      'frontmatter の field_menu_status_layout は "line" / "ff" のどれかにしてください: "grid"（無視します）',
+    ])
+    expect(bad.raw).not.toHaveProperty('menuStatusLayout')
+    expect(ok({}).raw).not.toHaveProperty('menuStatusLayout')
+  })
+
   it('dialog_font_size / dialog_window_height / dialog_name_style を raw の最上位に渡し、不正は警告して出さない (#1184)', () => {
     const r = ok({
       frontmatter: {

@@ -194,6 +194,7 @@ const fullHead = [
   'dialog_style: ff',
   'field_emotions: emo.json',
   'field_menu_use_message: off',
+  'field_menu_status_layout: ff',
   '---',
   '',
 ]
@@ -459,6 +460,7 @@ describe('全部入りの世界(実 wasm → parseConfig の回帰)', () => {
     expect(c.spriteStyle).toBe('acrylic')
     expect(c.dialogStyle).toBe('ff')
     expect(c.menuUseMessageOff).toBe(true)
+    expect(c.menuStatusLayout).toBe('ff')
     expect(c.emotionsSource?.url).toBe(`${ASSET}/emo.json`)
     expect(c.tiltShift).toBe('on')
   })
