@@ -2677,6 +2677,16 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(again.battle_text_overflow).toBe('scroll')
   })
 
+  it('trace が doc に残り（他のキーと取り違えない）、省略・空値は null、emit→parse で往復する (#1197)', async () => {
+    const doc = await parseMarkdown(docWith(['battle_text_overflow: scroll', 'trace: on']))
+    expect(doc.trace).toBe('on')
+    expect(doc.battle_text_overflow).toBe('scroll')
+    expect((await parseMarkdown(docWith([]))).trace).toBeNull()
+    expect((await parseMarkdown(docWith(['trace:']))).trace).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.trace).toBe('on')
+  })
+
   it('battle_atb_switch が doc に残り（battle_atb と取り違えない）、省略・空値は null、emit→parse で往復する (#1195)', async () => {
     const doc = await parseMarkdown(docWith(['battle_atb: on', 'battle_atb_switch: on']))
     expect(doc.battle_atb_switch).toBe('on')

@@ -1407,6 +1407,8 @@ export interface EventDocument {
   battle_party_layout?: string | null
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。`"ellipsis"`（既定・末尾を「…」で省略）/ `"scroll"`（窓の幅でクリップしてゆっくり横スクロール）。frontmatter `battle_text_overflow:` から流す。不正値・未指定は ellipsis。GUI 専用。 */
   battle_text_overflow?: string | null
+  /** 内部トレースログ (#1197)。`"on"`（端末の中だけに直近の出来事を記録する。取り出しはコンソール `window.nameNameTrace.dump()` か URL の `?trace`）/ `"off"`（既定・何も記録しない）。frontmatter `trace:` から流す。不正値・未指定は off。他のキーとは独立。GUI 専用。 */
+  trace?: string | null
   /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。`"off"`（既定）/ `"on"`。frontmatter `battle_atb_switch:` から流す。`battle_atb: on` のときだけ効く。不正値・未指定は off。GUI 専用。 */
   battle_atb_switch?: string | null
   /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。0〜1 の数値（生文字列。HP 割合がこの値未満のとき待機姿を weak に）。frontmatter `battle_weak_threshold:` から流す。不正値・未指定は出さない（従来）。GUI 専用。 */

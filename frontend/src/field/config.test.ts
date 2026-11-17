@@ -1909,6 +1909,42 @@ describe('menuUseMessage (#1185)', () => {
   })
 })
 
+describe('trace (#1197)', () => {
+  it('未指定・"off" は従来どおり（キーなし・警告なし）', () => {
+    const none = ok(mutated(() => {}))
+    expect('traceOn' in none).toBe(false)
+    const off = ok(
+      mutated((c) => {
+        c.trace = 'off'
+      })
+    )
+    expect('traceOn' in off).toBe(false)
+    expect(off.warnings).toBeUndefined()
+  })
+  it('"on" は traceOn: true。他のキー（menuUseMessage）には影響しない', () => {
+    const c = ok(
+      mutated((c) => {
+        c.trace = 'on'
+      })
+    )
+    expect(c.traceOn).toBe(true)
+    expect('menuUseMessageOff' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（記録しない）', () => {
+    for (const bad of ['maybe', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.trace = bad
+        })
+      )
+      expect('traceOn' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('trace')
+    }
+  })
+})
+
 describe('dialogStyle / dialogMsPerChar (#840)', () => {
   it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
     const c = ok(mutated(() => {}))

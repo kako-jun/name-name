@@ -363,3 +363,65 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 候補窓は `layout: "side"` のとき `battle.commandLayout` が `grid` でも `cross` でも出る（コマンドの矢印キー決定は `cross` のときだけ）。十字キーは並びの位置で決まる（既定の並びなら 上=たたかう・左=じゅもん・右=どうぐ・下=にげる）。未指定は空＝じゅもん・どうぐの窓は開かない（従来どおり）。MP 不足の呪文はグレーで、決定すると「MPが たりない！」。指せる対象がいない（敵が全員倒れている・手の指す敵が倒れている）ときは「たいしょうがいない！」と出て、窓は閉じず MP・所持数も減らない
 - セーブから再開する (#1021): `field.html?resume=<0|1|2|quick>`（旧経路。現行は `/play/sit-by-me?resume=<slot>` で、キーは `name-name-save-sit-by-me-<slot>`）。localStorage のセーブ（キー `name-name-save-field-<slot>`）の `rpg` を読み、パーティ・所持品・所持金・現在地（絵・座標・向き・フラグ）・戦闘中状態（敵・HP・状態異常・ATB ゲージ・コマンド待ちの順・敵の記憶）をその局面から再開する。書き方・例・実機の手順は [状態を用意して起動する](./resume-demo.md)。`window.field.rpg()` が今の局面をセーブ形式で返し、`saveRpg(slot)` が書き込む（同じ形式で読み戻せる）
 - 構成: 候補窓データの組み立ては `frontend/src/field/battleMenu.ts`（`buildBattleMenu`）。テスト用フィクスチャは `frontend/src/field/__fixtures__/dummyFixture.ts`（`?fixture=dummy` の入口は #1051 で廃止）
+
+## 内部トレースログ（`trace: on`、#1197）
+
+「実機で何が起きたか」を後から追うための、**ユーザーに見せない**記録の仕組み。#1182（HP 0 でも立ったまま）のように、再現手順が分からず合成データでも再現しない不具合を、実機の記録から調べるために作った。
+
+### 使い方
+
+- frontmatter に `trace: on` を書く（既定 `off`。未指定・不正値は `off` ＝ 何も記録せず、挙動は従来と完全に同じ）。他のキーとは独立で、`trace` を足しても他のキーの値や見た目は変わらない
+- 取り出し（どれも端末の中だけで完結。自動送信しない）
+  - URL に `?trace` を付けて開く: 前回（再読み込み前）と今回の記録を `name-name-trace-<id>.json` として保存する
+  - コンソール: `window.nameNameTrace.dump()`（JSON 文字列）/ `.json()`（オブジェクト）/ `.copy()`（クリップボード）/ `.download()`（ファイル）/ `.clear()`（記録を全部捨てる）
+- Issue に貼るときは JSON をそのまま（長いときはファイルを添付）
+
+### 記録の形式
+
+`{ version: 1, prev: Session | null, session: Session }`。`prev` は直前までのセッション（再読み込みしても直前の分が残る）、`session` はこのページ表示。`Session` は `{ id, game, startedAt, savedAt, total, entries[] }`。`entries` の 1 件は `{ n: 通し番号, t: 記録開始からの ms, k: 種別, d: 要点 }`。**固定長のリングバッファ**（直近 2000 件。溢れたら古い方から捨てる。`total` は捨てた分も含む総数）。
+
+自由文のキー（`name` `text` `label` `message` `password` `input` `line` `title` `email`）は値ごと落とす（名前入力・台詞・合言葉は記録しない）。文字列は 120 字で切る。画像パス・マスターの技名など、ゲームの資産側の識別子は記録する。
+
+### 記録点
+
+| 種別 | 内容 |
+| --- | --- |
+| `b.start` | 戦闘の開始。`bid`（戦闘の通し番号）・乱数の種 `seed`・味方/敵の数値（名前は除く）・ATB の方式と開始時のゲージ・コマンド待ちの順（セーブからの再開も再現できる） |
+| `b.cmd` | コマンド選択（エンジンへの入力）。`c`（selectAttack/selectSpell…）・`ref`（呪文・技・道具のマスター名）・`tg`（対象）・`actor`（入力した味方の index）・`ph`（その時のフェーズ） |
+| `b.adv` | 経過時間の合算（`ms`）。毎フレームは取らず、250ms ごと・入力の直前にまとめる |
+| `b.hold` / `b.scope` | 候補窓による ATB 停止、停止範囲 |
+| `b.act` | 行動 1 件。`a`（actor `[side,index]`）・`k`（attack/spell/…）・`ref`（呪文・道具・技のマスター名。脚本の台詞・知らせ〈notice〉の本文は入れない）・`hits`（`[side, index, d/h/m, 量, HP前, HP後, 旗(1=即死,2=反転), round]`） |
+| `b.hp` | HP が変わった全部（`s` 0=味方/1=敵、`i`、`from`、`to`）。行動以外の経路（脚本・復活）も拾う |
+| `b.ko` / `b.rev` | 倒れた（HP が 0 を割った）/ 復活した |
+| `b.st` | 状態異常の付け外し |
+| `b.phase` / `b.actor` | フェーズの変化 / コマンド入力権の移動（`cur` = 今コマンドを出す味方、`q` = ATB の待ちキュー） |
+| `b.fire` | 演出の発火。命中の瞬間に**表示 HP（hpOverride）が確定値へ進む**こと（`hits` と、その時点の `ov`、`since` = 命中から何 ms 経ったか）。`clear` = 演出が追いつき控えを捨てた |
+| `b.pose` | 絵のポーズの解決。`req`（要求したポーズ）→ `res`（実際に使ったポーズ）・`img`（画像パス）・`look`（倒れの絵が無い者の見せ方。`sink` = 沈み込み / `tilt` = 傾き）。変わったときだけ。dq 方式は絵の差し替えが無いので idle / down（HP 0）だけ |
+| `b.switch` | 番の入れ替え（`battle_atb_switch` の `switchAtbActor`。`from` → `to`）。**切り替えが効いたときだけ**記録（ターン制・コマンド待ちでない・対象が不適格の呼び出しは出ない）。再実行は `switchAtbActor(to)` を呼ぶ（`ReplayResolvers.switchActor` で差し替え可） |
+| `b.load` | ポーズ絵（`base` は 1 枚絵）の読み込みの成否（`ok`、`img`） |
+| `b.win` | 候補窓の開閉（`open`/`close`/`move`、`stack`） |
+| `b.in` | 画面が受けた入力（`src`: key/tap/cmd、`v`。味方のタップは `party:<index>`、座標は入れない）。ブロックされたコマンドは `v` が `<id>:blocked` |
+| `b.snap` | 全員の `[HP, 表示HP]`・ゲージ・キュー・窓の段数・演出中か。状態が変わったときと、戦闘中 1 秒ごと |
+| `b.end` | 戦闘の終了（結果、終了時の HP） |
+| `f.scene` / `f.move` / `f.warp` | 場面に入った / 32px のマスをまたいだ移動（毎フレームは取らない）/ ワープ |
+| `f.talk` / `f.event` | 会話・イベントの開始（`open: 1`）と終了（`open: 0`）。台詞の本文は記録しない |
+| `f.menu` / `f.save` / `f.load` / `f.battle` | メニューの開閉、セーブ、ロード要求、戦闘の入退場 |
+| `err` | window の `error` / `unhandledrejection`（直後に同期で保存） |
+
+### 保存
+
+メモリのリングバッファに積み、変更があれば 3 秒ごとに IndexedDB へ、ページを離れる（`pagehide` / 非表示）・例外のときは localStorage にも同期で書く。起動時に前回分を `prev` として読み戻す（読み戻しが済むまで保存は保留し、保存済みの前回分を潰さない）。起動のたびに必ず出る記録（`trace.on` `f.scene` `f.move`、場面の auto トリガーが起こすイベント＝`f.event` の `auto: 1`）だけのセッションは「前回」とみなさず、操作由来の記録（戦闘・会話・メニュー・セーブ/ロードなど）が 1 件以上あるセッションだけを `prev` に残す（戦闘 → 再読み込み → 再読み込み → 取り出し でも戦闘が残る）。別のゲームの記録は混ぜない（セッションに `game` の識別を持つ）。同じページで on のゲームから off（または別のゲーム）に替えると、コンソール API とイベント受け口を外す。例外起因の同期保存は 2 秒に 1 回まで。前回分の JSON は 1 回だけ文字列化して保存のたびに継ぎ足す。
+
+### 性能（常時 on でも軽い）
+
+固定長・小さな記録・フレームごとに取らない、で抑える。`trace: on` のときだけ、戦闘の乱数が `Math.random` から種付きの乱数（種を `b.start` に記録）に替わる。`off` では何も付かない。計測値は #1197 のコメントを参照。
+
+### トレースから戦闘を再実行する（再現テストの足場）
+
+`frontend/src/trace/traceReplay.ts`。取り出した JSON から `extractBattles(dump)` で戦闘ごとに開始・入力・結果を取り出し、`replayBattle(battle, resolvers, engineOptions)` が `b.start`（編成・種・開始ゲージ）と `b.cmd` / `b.adv` / `b.hold` / `b.scope` / `b.switch` から `BattleEngine` を再実行する。`firstMismatch(battle.expected, result.produced)` が記録した結果（`b.act` `b.hp` `b.ko` `b.rev` `b.phase` `b.actor` `b.st` `b.join`）との最初のずれを返す（一致なら null）。実画面なしで「実機で起きたこと」を再現するのに使う。使用例は `src/game/battleTrace.test.ts`。
+
+- 呪文・技・道具の中身（効果式）は記録しない。`resolvers` に `ref`（マスター名）から実行内容を返す関数を渡す。`[状態]` や敵 AI の技、脚本などのエンジンオプションも呼び出し側が渡す
+- 画面側の演出（hpOverride・ポーズ解決）は再実行しない。エンジンの結果が対象。画面側は `b.fire` / `b.pose` / `b.snap` の記録を直接読む
+- 開始時の編成はエンジン構築後の値。構築時に乱数を使う戦闘（脚本の開始など）では乱数列が 1 つずれうる
+- `rng` を注入した戦闘（テスト）は種が無いので再実行できない（明示して失敗する）
+

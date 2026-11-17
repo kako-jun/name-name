@@ -78,6 +78,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut battle_enemy_window_overlap_bottom: Option<String> = None;
     let mut battle_party_layout: Option<String> = None;
     let mut battle_text_overflow: Option<String> = None;
+    let mut trace: Option<String> = None;
     let mut battle_atb_switch: Option<String> = None;
     let mut battle_weak_threshold: Option<String> = None;
     let mut dialog_font_size: Option<String> = None;
@@ -420,6 +421,12 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     battle_text_overflow = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("trace:") {
+                // 内部トレースログ (#1197)。on / off。値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    trace = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("battle_atb_switch:") {
                 // ATB で満タンの味方が複数いるとき、タップで入力キャラを切り替える (#1195)。on / off。値は生文字列で透過し、runtime 側で検証する。
@@ -1833,6 +1840,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         battle_enemy_window_overlap_bottom,
         battle_party_layout,
         battle_text_overflow,
+        trace,
         battle_atb_switch,
         battle_weak_threshold,
         dialog_font_size,

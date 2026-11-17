@@ -98,6 +98,9 @@ export function frontmatterRaw(
   // フィールドメニューの使用成功の文 (#1185)。on / off。他のキーとは結合しない
   const menuUseMessage = enumOf(doc, 'field_menu_use_message', ['on', 'off'], warnings)
   if (menuUseMessage !== undefined) top.menuUseMessage = menuUseMessage
+  // 内部トレースログ (#1197)。on / off。他のキーとは結合しない
+  const traceSetting = enumOf(doc, 'trace', ['on', 'off'], warnings)
+  if (traceSetting !== undefined) top.trace = traceSetting
   // 一枚絵フィールドの会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。互いに独立。不正は警告して無視
   const dialogFontSize = enumOf(doc, 'dialog_font_size', ['normal', 'battle'], warnings)
   if (dialogFontSize !== undefined) top.dialogFontSize = dialogFontSize

@@ -2382,6 +2382,7 @@ mod tests {
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
             battle_text_overflow: None,
+            trace: None,
             battle_atb_switch: None,
             battle_weak_threshold: None,
             dialog_font_size: None,

@@ -8,6 +8,7 @@ import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 
 import { buildFieldComposite } from './fieldComposite'
 import { createFieldStands, createNpcStand, type FieldAcrylicFigure } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
+import { configureTrace, traceOn, traceRec } from '../trace/trace'
 import {
   WORLD_Z,
   companionZ,
@@ -404,6 +405,8 @@ async function loadNpcScript(
 
 export async function startFieldGame(opts: StartFieldGameOptions): Promise<() => void> {
   const { config, mount, hud, devToolbar, docKey, search } = opts
+  // 内部トレースログ (#1197)。frontmatter `trace: on` のときだけ働く（既定 off）
+  configureTrace(!!config.traceOn, { game: docKey })
   /** 通常のエラー表示（置換方式。後の呼び出しが前を消す）と、セーブ再開の通知（#1021。どの経路の showError でも消えない）を分けて持つ */
   let baseNotice: string | null = hud?.initialNotice ?? null
   let resumeNotice: string | null = null
@@ -756,6 +759,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // ---- ランダムエンカウント・戦闘 (#809) ----
   let encState: EncounterWalkState = initialEncounterState(config.encounter)
   let battle: BattleScreen | null = null
+  /** 内部トレース (#1197): 最後に記録した足元のマス */
+  let traceCell = { x: -1, y: -1 }
   // ---- RPG 状態 (#1021)。セーブ形式（game/rpgSave.ts）と同じ中身を実行時に持つ。戦闘のたびに設定へ戻さず、持ち越す ----
   const rpgBase = baseConfigOf(config)
   let partyState = resumed ? resumed.party : config.party.map((p) => structuredClone(p))
@@ -953,12 +958,14 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     facing = facingFromVector({ x: npc.x - pos.x, y: npc.y - pos.y }, facing, diagonalWalk)
     npc.facing = facingToward(npc, pos)
     talking = npc
+    traceRec('f.talk', { npc: npc.def.id, open: 1 })
     conversation.start(
       npc.def.name,
       npc.def.line,
       resolveNpcCommands(npc.def.scene, scriptEvents, () => {}),
       () => {
         talking = null
+        traceRec('f.talk', { npc: npc.def.id, open: 0 })
       }
     )
   }
@@ -988,6 +995,12 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   ): void => {
     // 演出中（開始・終了とも）の二重エンカウントは無視する
     if (battleTransition.active) return
+    traceRec('f.battle', {
+      open: 1,
+      scene: sceneId,
+      enemies: enemies.length,
+      resume: !!savedBattle,
+    })
     // 歩きの入力を捨てる（戦闘側は戦闘画面が自前で入力を受ける）
     releaseWalkInput()
     emotionLayer?.clear()
@@ -1165,6 +1178,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   }
   const endBattle = (): void => {
     battleRun = null
+    if (battle) traceRec('f.battle', { open: 0, scene: sceneId })
     if (!battle) return
     app.stage.removeChild(battle)
     battle.destroy({ children: true })
@@ -1216,6 +1230,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       console.warn(`[field] 未知のワープ id: ${id}`)
       return false
     }
+    traceRec('f.warp', { id })
     beginWarpRun(config.warps[id])
     return true
   }
@@ -1366,9 +1381,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       if (t.once) onceFired.add(t.key)
       releaseWalkInput()
       eventRun = true
+      traceRec('f.event', { id: t.event, open: 1, ...(t.auto ? { auto: 1 } : {}) })
       try {
         conversation.start(t.event, '', commands, () => {
           eventRun = false
+          traceRec('f.event', { id: t.event, open: 0, ...(t.auto ? { auto: 1 } : {}) })
         })
       } catch (e) {
         // 実行器が例外を投げても入力を止めたままにしない。running が残らないよう実行器ごと捨てる
@@ -1396,6 +1413,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const npcChecked = new Set<string>()
   const applyScene = (s: LoadedScene): void => {
     scene = s
+    traceRec('f.scene', { id: s.id, x: Math.round(pos.x), y: Math.round(pos.y) })
     // 場面が変わったら進行中の NPC 移動は打ち切る（resolve してイベントを止めたままにしない）
     npcMoves.clear()
     // 場面に入った: auto のトリガーを起こす印を立て、踏み込みの「円の中」を空にする (#1072)
@@ -1538,7 +1556,10 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         onUse: (req) => menuRuntime?.use(req) ?? null,
         onSort: () => menuRuntime?.sort() ?? null,
         onSetting: (key, value) => menuRuntime?.setSetting(key, value),
-        onLoad: (slot) => opts.onLoadRequest?.(slot),
+        onLoad: (slot) => {
+          traceRec('f.load', { slot })
+          opts.onLoadRequest?.(slot)
+        },
         onSave: (slot) => {
           const ok = api.saveRpg(slot)
           if (!ok) return null
@@ -2012,6 +2033,20 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       )
       const r = stepMoveAroundNpcs(walkMask, pos, vec, speed, dt, currentNpcs())
       pos = r.pos
+      // 移動は 32px 四方のマスをまたいだときだけ（毎フレームは取らない）
+      if (traceOn()) {
+        const cx = Math.floor(pos.x / 32)
+        const cy = Math.floor(pos.y / 32)
+        if (cx !== traceCell.x || cy !== traceCell.y) {
+          traceCell = { x: cx, y: cy }
+          traceRec('f.move', {
+            scene: sceneId,
+            x: Math.round(pos.x),
+            y: Math.round(pos.y),
+            f: facing,
+          })
+        }
+      }
       // 近づく途中で動けない（NPC や壁に阻まれた）なら、届く距離ならそのまま話しかけ、届かなければ諦める
       if (approach && appNpc) {
         const post = approachAfterMove(approach, appNpc, pos, r.distance, dt)
@@ -2214,6 +2249,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
           if (slot < 0 || slot > 2) return false
           saves.save(slot, data)
         }
+        traceRec('f.save', { slot, scene: sceneId })
         return true
       } catch (e) {
         console.warn('[field] セーブできません', e)

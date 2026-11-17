@@ -422,3 +422,29 @@ describe('手のカーソルの画像を開くデータへ渡す (#1067)', () =>
     expect('handTexture' in (b.screen.opened[0] as object)).toBe(false)
   })
 })
+
+describe('内部トレース: メニューの開閉 (#1197)', () => {
+  it('trace が on のとき、開いた・閉じたが f.menu として記録される。off なら何も記録しない', async () => {
+    const { configureTrace, resetTraceForTest, traceDump } = await import('../trace/trace')
+    try {
+      const off = setup()
+      void off.host.open()
+      off.release()
+      await flush()
+      expect(traceDump().session.entries).toEqual([])
+
+      configureTrace(true, { storage: null })
+      const t = setup()
+      void t.host.open()
+      t.release()
+      await flush()
+      t.screen.onClose?.()
+      const menu = traceDump()
+        .session.entries.filter((e) => e.k === 'f.menu')
+        .map((e) => (e.d as { open: number }).open)
+      expect(menu).toEqual([1, 0])
+    } finally {
+      resetTraceForTest()
+    }
+  })
+})

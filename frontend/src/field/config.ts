@@ -313,6 +313,10 @@ export interface FieldConfig {
    */
   menuUseMessageOff?: true
   /**
+   * 内部トレースログ (#1197)。`trace: "on"` のとき true。未指定・`"off"` は undefined＝何も記録しない（従来どおり）。不正な値は警告して無視。他のキーとは独立
+   */
+  traceOn?: true
+  /**
    * 会話窓の文字サイズ (#1184)。`dialogFontSize`: `battle` = 戦闘のメッセージ窓と同じ大きさ。未指定・`normal` は undefined＝従来（キーが出ない）。不正な値は警告して無視。
    * `battle.windowStyle` を書いた作品の窓だけに効く。窓の高さ・話者名の見せ方とは独立
    */
@@ -1082,6 +1086,12 @@ export function parseConfig(
         `menuUseMessage は "on" か "off": ${JSON.stringify(raw.menuUseMessage)}（無視します）`
       )
   }
+  let traceOn: true | undefined
+  if (raw.trace !== undefined) {
+    if (raw.trace === 'on') traceOn = true
+    else if (raw.trace !== 'off')
+      warnings.push(`trace は "on" か "off": ${JSON.stringify(raw.trace)}（無視します）`)
+  }
   // 会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。互いに独立。不正は警告して無視（従来の見た目）
   let dialogFontSize: DialogFontSize | undefined
   if (raw.dialogFontSize !== undefined) {
@@ -1286,6 +1296,7 @@ export function parseConfig(
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
       ...(menuUseMessageOff ? { menuUseMessageOff } : {}),
+      ...(traceOn ? { traceOn } : {}),
       ...(dialogFontSize ? { dialogFontSize } : {}),
       ...(dialogWindowHeight !== undefined ? { dialogWindowHeight } : {}),
       ...(dialogNameStyle ? { dialogNameStyle } : {}),

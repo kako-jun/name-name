@@ -9,6 +9,8 @@ export interface FiredTrigger {
   key: string
   event: string
   once: boolean
+  /** 場面に入ったときの `auto` トリガーが起こした（プレイヤー操作ではない）。内部トレース (#1197) が起動由来の記録と見分けるための印で、実行には使わない */
+  auto?: true
 }
 
 /** once の記録用キー。場面 ID と、その場面の `triggers` の添字 */
@@ -69,7 +71,7 @@ export function autoTriggers(input: {
     if (!t.auto) return
     const key = triggerKey(input.sceneId, i)
     if (t.once && input.onceFired.has(key)) return
-    out.push({ key, event: t.event, once: t.once })
+    out.push({ key, event: t.event, once: t.once, auto: true })
   })
   return out
 }

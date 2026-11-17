@@ -290,6 +290,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_text_overflow: \"{sanitized}\"\n"));
         }
+        // trace (#1197)。同じ流儀
+        if let Some(ref v) = doc.trace {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("trace: \"{sanitized}\"\n"));
+        }
         // battle_atb_switch (#1195)。同じ流儀
         if let Some(ref v) = doc.battle_atb_switch {
             let sanitized = v.replace('"', "");
@@ -2695,6 +2700,7 @@ mod tests {
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
             battle_text_overflow: None,
+            trace: None,
             battle_atb_switch: None,
             battle_weak_threshold: None,
             dialog_font_size: None,
@@ -3231,6 +3237,7 @@ mod tests {
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
             battle_text_overflow: None,
+            trace: None,
             battle_atb_switch: None,
             battle_weak_threshold: None,
             dialog_font_size: None,

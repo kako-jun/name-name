@@ -1006,6 +1006,22 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     expect(ff.raw).toMatchObject({ dialogStyle: 'ff' })
   })
 
+  it('trace (#1197): on / off を渡し、不正は警告して無視する。他のキーを変えない', () => {
+    const on = ok({ frontmatter: { trace: ' On ' } })
+    expect(on.warnings).toEqual([])
+    expect(on.raw).toMatchObject({ trace: 'on' })
+    const bad = ok({ frontmatter: { trace: 'maybe' } })
+    expect(bad.warnings).toEqual([
+      'frontmatter の trace は "on" / "off" のどれかにしてください: "maybe"（無視します）',
+    ])
+    expect(bad.raw).not.toHaveProperty('trace')
+    expect(ok({}).raw).not.toHaveProperty('trace')
+    // trace を足しても、他のキーの raw は変わらない
+    const base = ok({ frontmatter: { field_menu_use_message: 'off' } }).raw
+    const both = ok({ frontmatter: { field_menu_use_message: 'off', trace: 'on' } }).raw
+    expect({ ...both, trace: undefined }).toEqual({ ...base, trace: undefined })
+  })
+
   it('field_menu_use_message (#1185): on / off を渡し、不正は警告して無視する', () => {
     const on = ok({ frontmatter: { field_menu_use_message: ' On ' } })
     expect(on.warnings).toEqual([])

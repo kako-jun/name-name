@@ -2027,6 +2027,23 @@ describe('rpgProjectFromDoc: battle_text_overflow (#1183)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: trace (#1197)', () => {
+  const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
+  it('on / off はそのまま、未指定・空は off（警告なし）、不正は警告して off。他のキーとは独立', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(proj({ trace: 'on' }).trace).toBe('on')
+    expect(proj({ trace: 'off' }).trace).toBe('off')
+    for (const v of [undefined, null, '']) expect(proj({ trace: v }).trace).toBe('off')
+    expect(spy).not.toHaveBeenCalled()
+    expect(proj({ trace: 'yes' }).trace).toBe('off')
+    expect(spy).toHaveBeenCalledTimes(1)
+    // trace は他のキーを変えない（battle_text_overflow は既定のまま）
+    const p = proj({ trace: 'on' })
+    expect(p.battleTextOverflow).toBe('ellipsis')
+    spy.mockRestore()
+  })
+})
+
 describe('rpgProjectFromDoc: battle_atb_switch (#1195)', () => {
   const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
   it('on（大小無視）だけ on、未指定・空・不正は off', () => {

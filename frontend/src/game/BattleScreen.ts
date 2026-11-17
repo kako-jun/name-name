@@ -190,6 +190,8 @@ import {
   sampleMarquee,
   type BattleTextOverflow,
 } from './battleMarquee'
+import { attachBattleTrace, type BattleTracer } from './battleTrace'
+import { traceOn } from '../trace/trace'
 import { prefersReducedMotion } from './boardFaceFlip'
 import { samplePixelatePulse } from './pixelateTransition'
 import { PixelateFilter } from 'pixi-filters'
@@ -647,6 +649,8 @@ interface EffectInstance {
 interface PoseVisual {
   texture: Texture
   plate: AcrylicPlate | null
+  /** 読み込んだ絵のパス（指定されたまま）。内部トレース (#1197) が「どの絵に解決されたか」を書くための印で、描画には使わない */
+  path?: string
 }
 
 /** 浮いているダメージ数字 1 つ (#745)。画面が持つ演出の途中状態（GameState には持たない） */
@@ -775,6 +779,8 @@ export class BattleScreen extends Container {
   private seenEventTotal = 0
   /** 再生が追いつくまで画面に出す HP（key=`party:0` 等）。命中の瞬間に確定値へ進める。再生が空になれば捨てる */
   private hpOverride = new Map<string, number>()
+  /** 内部トレース (#1197)。`trace: on` のときだけ持つ（off は null で、記録点は何もしない） */
+  private bt: BattleTracer | null = null
   /** 演出が追いつくまで画面に出す状態名 (#870)。HP（hpOverride）と同じく、再生位置で切り替える。再生が空になったら捨てる */
   private statusOverride = new Map<string, string[]>()
   /** 直近に画面へ出した状態名。演出の取り込み時に「変わる前の表示」として使う */
@@ -940,6 +946,8 @@ export class BattleScreen extends Container {
     this.backgroundTone = opts.backgroundTone === 'off' ? 'off' : 'on'
     this.backgroundDof = opts.backgroundDof === 'on' ? 'on' : 'off'
     this.presentation = opts.presentation === 'ff' && this.layoutMode === 'side' ? 'ff' : 'dq'
+    if (traceOn())
+      this.bt = attachBattleTrace(engine, { layout: this.layoutMode, pres: this.presentation })
     this.motionTiming = motionTimingFor(normalizeBattleMotion(opts.motion))
     this.textOverflow = effectiveTextOverflow(
       normalizeBattleTextOverflow(opts.textOverflow, false),
@@ -1455,16 +1463,18 @@ export class BattleScreen extends Container {
         const basePlate = att.plate
         view.container.addChildAt(sprite, idx)
         view.acrylicBack.visible = true
-        view.baseVisual = { texture: tex, plate: basePlate }
+        view.baseVisual = { texture: tex, plate: basePlate, path }
       } else {
         view.container.addChildAt(sprite, 1)
-        view.baseVisual = { texture: tex, plate: null }
+        view.baseVisual = { texture: tex, plate: null, path }
       }
       view.shownVisual = view.baseVisual
+      this.traceLoad(view, 'base', true, path)
       this.layout()
       this.refresh()
     } catch (e) {
       // 失敗時は色四角のまま
+      this.traceLoad(view, 'base', false, path)
       console.warn(`[BattleScreen] failed to load sprite "${path}":`, e)
     }
   }
@@ -1482,11 +1492,15 @@ export class BattleScreen extends Container {
   private handleCommand(id: CommandId): void {
     // ff（従来ターン制）: 演出が終わるまで次のコマンドは受けない。ATB は時間が流れ続けるので、演出中でも入力でき、
     // 入力した行動は演出キューの末尾に積まれる (#745)
-    if (this.isInputBlockedByPresentation()) return
+    if (this.isInputBlockedByPresentation()) {
+      this.bt?.screenInput('cmd', `${id}:blocked`)
+      return
+    }
     // タイプ中の 1 タップ目は全文表示だけ（コマンドは実行しない）(#755)。
     // ATB (#205) ではコマンドのタップを skip に使わない（時間が流れていて空振りさせない）。全文表示はログ帯のタップだけ
     if (!this.engine.getState().atb && this.skipLogTyping()) return
     if (this.engine.isOver()) return
+    this.bt?.screenInput('cmd', id)
     this.opts.onSound?.('confirm')
     switch (id) {
       case 'attack':
@@ -1517,6 +1531,7 @@ export class BattleScreen extends Container {
     if (this.closedFlag || this.resultElapsed === null || !canSkipResultHold(this.resultElapsed))
       return
     if (this.opts.isInputSuspended?.()) return
+    this.bt?.screenInput('tap', 'skip')
     this.resultElapsed = resultHoldMs(this.presentation, this.resultMessages.length)
     this.closeIfOver()
   }
@@ -1616,7 +1631,10 @@ export class BattleScreen extends Container {
     this.detachResultSkip()
     // isOver がガードしているので、結果は必ずある（outcome は victory / defeat / escaped のいずれか）
     const result = this.engine.getResult()
-    if (result) this.opts.onClose?.(result.outcome, result)
+    if (result) {
+      this.bt?.end(result.outcome)
+      this.opts.onClose?.(result.outcome, result)
+    }
   }
 
   /**
@@ -1628,6 +1646,10 @@ export class BattleScreen extends Container {
    */
   tick(deltaMS: number): void {
     this.tickInner(deltaMS)
+    if (this.bt) {
+      this.bt.clockTick(deltaMS)
+      this.traceSnap(true)
+    }
     // 拡大中は文字の resolution を揃える。tick の中で作られた Text（ダメージ数字など）も描画前に同じ密度にする
     if (this.uiScale !== 1 && !this.destroyedFlag)
       syncTextResolution(this, (this.opts.renderResolution ?? 1) * this.uiScale)
@@ -1779,6 +1801,7 @@ export class BattleScreen extends Container {
   /** 味方 `index` のタップ (#1195)。満タンで待機中の別の味方なら番を移す。それ以外（番の本人・ゲージ未満タン・倒れた）は何もしない */
   private tapParty(index: number): void {
     if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
+    this.bt?.screenInput('tap', `party:${index}`)
     // 対象選択の窓の間は、味方のタップは対象選択の操作で、番は切り替えない（同じ味方でも名前と絵で結果が変わるのを避ける）
     if (this.isTargetWindowOpen()) return
     if (!this.engine.switchAtbActor(index)) return
@@ -1856,6 +1879,7 @@ export class BattleScreen extends Container {
       if (this.opts.isInputSuspended?.()) return
       // 候補窓が開いている間は、キーを窓の操作に使う（コマンドの決定には使わない）
       if (this.menuStack.length > 0) {
+        this.bt?.screenInput('key', e.key)
         this.handleMenuKey(e)
         return
       }
@@ -1863,6 +1887,7 @@ export class BattleScreen extends Container {
       if (this.commandLayout !== 'cross') return
       const id = crossKeyToCommandId(e.key, this.opts.commands)
       if (!id) return
+      this.bt?.screenInput('key', e.key)
       // cross が有効な間は、コマンドを選べない局面でもページのスクロールを止める
       e.preventDefault()
       if (e.repeat) return
@@ -2878,6 +2903,48 @@ export class BattleScreen extends Container {
       this.applyMotionFrame()
     }
     this.syncMenu()
+    if (this.bt) {
+      if (this.presentation !== 'ff') this.traceDqPoses()
+      this.traceSnap(false)
+    }
+  }
+
+  /** 内部トレース (#1197): dq 方式（絵の差し替えなし）の姿。生きていれば idle、HP 0 なら down（絵は 1 枚のまま） */
+  private traceDqPoses(): void {
+    const s = this.engine.getState()
+    const each = (side: 'party' | 'enemy', views: EntityView[], list: readonly BattleEntity[]) => {
+      views.forEach((v, i) => {
+        const down = (list[i]?.hp ?? 1) <= 0
+        this.bt?.pose(
+          side,
+          i,
+          down ? 'down' : 'idle',
+          null,
+          v.baseVisual?.path ?? null,
+          down ? 'sink' : null
+        )
+      })
+    }
+    each('party', this.partyViews, s.party)
+    each('enemy', this.enemyViews, s.enemies)
+  }
+
+  /** 内部トレース (#1197): 状態の全体像を書く。periodic = 戦闘の時計で 1 秒ごと、そうでなければ変わったときだけ */
+  private traceSnap(periodic: boolean): void {
+    this.bt?.snap(
+      (side, i, cur) => this.shownHp(side, i, cur),
+      this.isPresenting(),
+      this.menuStack.length,
+      periodic
+    )
+  }
+
+  /** 内部トレース (#1197): ポーズ絵の読み込みの成否。ビューが味方・敵のどれかは、ビュー配列から引く（トレース off では呼ばれても何もしない） */
+  private traceLoad(view: EntityView, pose: string, ok: boolean, path: string): void {
+    if (!this.bt) return
+    const pi = this.partyViews.indexOf(view)
+    const side = pi >= 0 ? 'party' : 'enemy'
+    this.bt.load(side, pi >= 0 ? pi : this.enemyViews.indexOf(view), pose, ok, path)
   }
 
   // ===== 候補窓 (#204) =====
@@ -2989,6 +3056,7 @@ export class BattleScreen extends Container {
 
   private setMenuStack(stack: MenuStack): void {
     this.menuStack = stack
+    this.bt?.windows(stack)
     // ATB の wait: 候補窓を開いている間だけ時間を止める（本家 FF5/6 どおり）
     this.engine.setAtbHold(stack.length > 0)
     this.updateMenuLayer()
@@ -3234,6 +3302,13 @@ export class BattleScreen extends Container {
     for (const fire of r.fires) {
       this.playHitSound(fire.hits)
       // 複数ヒット (#879): round ごとの発火。その round の hits だけを出す（単発は全 hits で従来どおり）
+      this.bt?.fire(
+        fire.event.seq,
+        fire.sinceHit,
+        fire.round,
+        fire.hits.map((h) => ({ s: h.target.side, i: h.target.index, after: h.hpAfter })),
+        this.hpOverride
+      )
       for (const hit of fire.hits) {
         this.hpOverride.set(this.entityKey(hit.target.side, hit.target.index), hit.hpAfter)
         this.spawnPopup(hit, fire.sinceHit, popupStackIndex(fire.event.hits, hit))
@@ -3251,7 +3326,10 @@ export class BattleScreen extends Container {
     this.updateSummonCue()
     this.updateEffects(dt, r.fires)
     if (!isPlaybackBusy(this.playback)) {
-      if (this.hpOverride.size > 0) this.hpOverride.clear()
+      if (this.hpOverride.size > 0) {
+        this.hpOverride.clear()
+        this.bt?.overrideCleared()
+      }
       if (this.statusOverride.size > 0) this.statusOverride.clear()
       if (wasBusy) changed = true // コマンドの有効・無効、生死の見た目を確定値で整え直す
     }
@@ -3756,6 +3834,20 @@ export class BattleScreen extends Container {
         const resolved = resolvePose(m.pose, view.poseVisuals)
         const vis = resolved?.value ?? view.baseVisual
         view.shownPose = resolved?.pose ?? 'idle'
+        if (this.bt)
+          this.bt.pose(
+            side,
+            index,
+            m.pose,
+            resolved?.pose ?? null,
+            (resolved?.value ?? view.baseVisual)?.path ?? null,
+            // 倒れの絵が無い者は、沈み込み（sink）か傾き（tilt）で倒れを表す
+            m.pose === 'down' && resolved?.pose !== 'down'
+              ? this.isAcrylicStand() && view.acrylicBack
+                ? 'tilt'
+                : 'sink'
+              : null
+          )
         const hasDownVisual = m.pose === 'down' && resolved?.pose === 'down'
         if (vis && vis !== view.shownVisual) this.showVisual(view, vis)
         // 武器レイヤー (#1027): 絵が変わらない間（placeEntityView が呼ばれない）も、ポーズの変換を当て直す
@@ -4022,8 +4114,10 @@ export class BattleScreen extends Container {
           const plate = view.acrylicBack
             ? this.getAcrylicPlate(tex, view.baseVisual?.texture)
             : null
-          view.poseVisuals[key] = { texture: tex, plate }
+          view.poseVisuals[key] = { texture: tex, plate, path }
+          this.traceLoad(view, key, true, path)
         } catch (e) {
+          this.traceLoad(view, key, false, path)
           console.warn(`[BattleScreen] failed to load pose "${key}" "${path}":`, e)
         }
       })
