@@ -165,7 +165,7 @@ export interface MonsterDef {
   exp: number
   gold: number
   sprite?: string
-  /** 戦闘ポーズ別スプライト (#745)。キー idle / ready / step / slash / hurt / down / victory（部分指定可）、値は画像パス。生で透過し、解釈は `normalizePoses` */
+  /** 戦闘ポーズ別スプライト (#745)。キー idle / ready / step / slash / hurt / down / victory / weak（部分指定可。weak は瀕死の待機姿 #1194）、値は画像パス。生で透過し、解釈は `normalizePoses` */
   poses?: Record<string, string>
   /** 専用関数 ID。指定時はランタイム実装に委譲（汎用 + 専用 builtin の二層設計、#176） */
   builtin?: string
@@ -1407,6 +1407,8 @@ export interface EventDocument {
   battle_party_layout?: string | null
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。`"ellipsis"`（既定・末尾を「…」で省略）/ `"scroll"`（窓の幅でクリップしてゆっくり横スクロール）。frontmatter `battle_text_overflow:` から流す。不正値・未指定は ellipsis。GUI 専用。 */
   battle_text_overflow?: string | null
+  /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。0〜1 の数値（生文字列。HP 割合がこの値未満のとき待機姿を weak に）。frontmatter `battle_weak_threshold:` から流す。不正値・未指定は出さない（従来）。GUI 専用。 */
+  battle_weak_threshold?: string | null
   /** 一枚絵フィールドの会話窓の文字サイズ (#1184)。`"normal"`（既定＝従来）/ `"battle"`（戦闘のメッセージ窓と同じ大きさ）。frontmatter `dialog_font_size:` から流す。`window_style` を書いた作品の窓だけに効く。GUI 専用。 */
   dialog_font_size?: string | null
   /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */

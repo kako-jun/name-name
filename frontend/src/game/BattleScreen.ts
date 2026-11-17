@@ -161,7 +161,9 @@ import {
   groupHitsByRound,
   isPlaybackBackedUp,
   isPlaybackBusy,
+  isWeakHp,
   messageWindowText,
+  normalizeWeakThreshold,
   popupCenterOffset,
   popupFontSize,
   popupText,
@@ -536,6 +538,12 @@ export interface BattleScreenOptions {
    * `scroll` は省略せず、窓の幅でクリップしてゆっくり横スクロール（`side` の候補窓の名前・敵名窓。対象は battleMarquee.ts の MARQUEE_TARGETS）。窓の寸法は変えない
    */
   textOverflow?: 'ellipsis' | 'scroll'
+  /**
+   * 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。frontmatter `battle_weak_threshold` 由来（0〜1）。
+   * 味方の表示上の HP 割合がこの値未満で、待機（idle）の姿のときだけ weak の絵にする（weak の絵が無ければ idle のまま）。
+   * undefined = 出さない（従来）。`presentation: 'ff'` かつ `layout: 'side'` のときだけ効く
+   */
+  weakThreshold?: number
   /** 動きを減らす設定 (prefers-reduced-motion) か。undefined = ブラウザの設定を読む。true だと `scroll` でもスクロールせず省略にする (#1183) */
   reducedMotion?: boolean
   /**
@@ -732,6 +740,8 @@ export class BattleScreen extends Container {
   private motionTiming: MotionTiming
   /** 入り切らない文字の扱い (#1183)。`scroll` 指定でも reduced-motion のときは `ellipsis` */
   private textOverflow: BattleTextOverflow
+  /** 瀕死ポーズ（weak）の閾値 (#1194)。undefined = 出さない */
+  private weakThreshold: number | undefined
   /** 横スクロールの表示専用の時計 (#1183)。ゲームのティック（ATB・演出）と独立に tick の経過を積む */
   private marqueeClock = new MarqueeClock()
   /** 横スクロール中の Text（候補窓の名前は BattleMenuLayer が持つ）。マスクは Text と同じ親の子 */
@@ -927,6 +937,7 @@ export class BattleScreen extends Container {
       normalizeBattleTextOverflow(opts.textOverflow, false),
       opts.reducedMotion ?? prefersReducedMotion()
     )
+    this.weakThreshold = normalizeWeakThreshold(opts.weakThreshold)
     this.entranceActive = this.presentation === 'ff' && entranceTotalMs(this.motionTiming) > 0
     this.enemyListEnabled =
       opts.enemyList === 'window' && this.presentation === 'ff' && this.layoutMode === 'side'
@@ -3599,7 +3610,7 @@ export class BattleScreen extends Container {
       forward: 0,
     }
     const active = this.playback.active
-    if (!active) return out
+    if (!active) return this.withWeakPose(side, ent, hp, out)
     const ev = active.event
     if (ev.actor.side === side && ev.actor.index === index) {
       const a = sampleActor(
@@ -3636,7 +3647,23 @@ export class BattleScreen extends Container {
         vanish: t.vanish,
       }
     }
-    return out
+    return this.withWeakPose(side, ent, hp, out)
+  }
+
+  /**
+   * 瀕死ポーズ (#1194)。味方の（演出に合わせた表示上の）HP 割合が閾値未満で、いま待機（idle）の姿のときだけ weak にする。
+   * down・のけぞり・行動中のポーズ・勝利は idle ではないので優先される（down > hurt/行動 > weak > idle）。
+   * 勝利の待機中は勝ちポーズの交互表示に使う idle のコマも weak にしない。敵は対象外
+   */
+  private withWeakPose(
+    side: 'party' | 'enemy',
+    ent: { maxHp: number } | undefined,
+    hp: number,
+    sample: TargetSample & { forward: number }
+  ): TargetSample & { forward: number } {
+    if (side !== 'party' || sample.pose !== 'idle' || !ent) return sample
+    if (this.engine.getState().phase === 'victory') return sample
+    return isWeakHp(hp, ent.maxHp, this.weakThreshold) ? { ...sample, pose: 'weak' } : sample
   }
 
   /**

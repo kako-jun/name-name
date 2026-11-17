@@ -2027,6 +2027,16 @@ describe('rpgProjectFromDoc: battle_text_overflow (#1183)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: battle_weak_threshold (#1194)', () => {
+  const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
+  it('0 超〜1 の数値は通し、1 超は 1 に丸め、未指定・空・不正は undefined（出さない）', () => {
+    expect(proj({ battle_weak_threshold: '0.25' }).battleWeakThreshold).toBe(0.25)
+    expect(proj({ battle_weak_threshold: '2' }).battleWeakThreshold).toBe(1)
+    for (const v of [undefined, null, '', '0', '-1', 'abc', '25%'])
+      expect(proj({ battle_weak_threshold: v }).battleWeakThreshold).toBeUndefined()
+  })
+})
+
 describe('rpgProjectFromDoc: battle_enemy_grid_extent / battle_party_layout / battle_enemy_window_overlap_bottom (#1178)', () => {
   const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
   it('wide / tall はそのまま、未指定・空・不正は既定（不正は警告）。グリッドの有無とは独立', () => {
