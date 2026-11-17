@@ -32,9 +32,11 @@ import {
   type MenuLayout,
   type Rect,
 } from './fieldMenu'
+import { EXP_LABEL, NEXT_LABEL, expStatusRows, nextValue, type MenuExp } from './fieldMenuExp'
 import {
   computeStatusLayout,
   fitPortrait,
+  fitSize,
   statusArea,
   type StatusLayoutKind,
 } from './fieldMenuStatus'
@@ -89,6 +91,8 @@ export interface FieldMenuPartyView {
   agi?: number
   /** アクスタ姿の絵。読めなかった・無いときは null（絵なしで枠だけ） */
   texture: Texture | null
+  /** 経験値の表示値 (#1186)。`field_menu_exp: on` のときだけ呼び出し側が渡す（経験値表を持たない人物は無し）。無ければ何も出さない */
+  exp?: MenuExp
 }
 
 /** 表示だけ更新する人物の数値（使ったあとの HP・MP など）。id で突き合わせて `FieldMenuPartyView` に重ねる */
@@ -154,6 +158,8 @@ export interface FieldMenuScreenOptions {
   useMessage?: boolean
   /** ステータス画面の配置 (#1191)。`ff` = 領域に分けた FF5・FF6 風、`line` / 未指定 = 従来の 1 列。他のキーとは結合しない */
   statusLayout?: StatusLayoutKind
+  /** true = 経験値を出す (#1186)。左のパーティ枠の各人に「次のレベルまで」を常に、ステータス画面に「けいけんち」「次のレベルまで」。値は `FieldMenuPartyView.exp`（無い人物は出さない）。既定 false＝従来。他のキーとは結合しない */
+  exp?: boolean
   /** 画面遷移の速さ（既定 `DEFAULT_MENU_TRANSITION`） */
   transition?: MenuTransitionTiming
   /** メニューが閉じた（最上位で戻った）。呼び出し側がフィールドへ戻す */
@@ -875,6 +881,9 @@ export class FieldMenuScreen extends Container {
     line(`HP  ${p.hp} / ${p.maxHp}`)
     if (p.mp !== undefined) line(`MP  ${p.mp} / ${p.maxMp ?? p.mp}`)
     line(`ちから ${p.atk ?? '--'} まもり ${p.def ?? '--'} すばやさ ${p.agi ?? '--'}`)
+    // 経験値 (#1186)。1 行にまとめる（行数が増えて下の追加行を押し出さない）
+    const exp = this.opts.exp ? p.exp : undefined
+    if (exp) line(`${EXP_LABEL} ${exp.exp}  ${NEXT_LABEL} ${nextValue(exp)}`)
     // 定義側・実状態にある項目だけ出す（無い項目は出さない）
     for (const row of content.statusByParty[p.id] ?? []) line(`${row.label}  ${row.value}`)
     this.placeArt(this.artDeep, p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
@@ -894,6 +903,8 @@ export class FieldMenuScreen extends Container {
       person: p,
       // 定義側・実状態にある項目だけ出す（無い項目は出さない）
       extraRows: content.statusByParty[p.id] ?? [],
+      // 経験値 (#1186) は最下段の全幅の帯（2 列）
+      bandRows: expStatusRows(this.opts.exp ? p.exp : undefined),
     })
     for (const r of regions) {
       this.panel(C, r.rect, lay)
@@ -959,6 +970,28 @@ export class FieldMenuScreen extends Container {
     const hp = `HP  ${p.hp} / ${p.maxHp}`
     // 「いま選択中」の表示（矢印でなくアクスタ側に出す。戦闘と同じ見方）
     const mark = emphasize ? markLabel : null
+    // 経験値 (#1186): 「次のレベルまで N」を最下段に 1 行足す。段が増えるので行の位置を詰め直す
+    const exp = this.opts.exp ? p.exp : undefined
+    if (exp) {
+      const next = nextValue(exp)
+      const expSize = fitSize(size * 0.85, right - tx, NEXT_LABEL, next, size * 0.5)
+      const yAt = (f: number): number => r.y + r.h * f
+      // 狭い枠: 名前 / Lv（と選択中）/ HP / 次のレベルまで の 4 段。通常の枠: 名前と Lv / HP（と選択中）/ 次のレベルまで の 3 段
+      const yExp = yAt(compact ? 0.83 : 0.8)
+      C.addChild(this.text(p.name, size, WHITE, tx, yAt(compact ? 0.17 : 0.2), 'left'))
+      if (compact) {
+        C.addChild(this.text(lv, size, WHITE, tx, yAt(0.39), 'left'))
+        if (mark) C.addChild(this.text(mark, size * 0.85, NOTICE_COLOR, right, yAt(0.39), 'right'))
+        C.addChild(this.text(hp, size, WHITE, tx, yAt(0.61), 'left'))
+      } else {
+        C.addChild(this.text(lv, size, WHITE, right, yAt(0.2), 'right'))
+        C.addChild(this.text(hp, size, WHITE, tx, yAt(0.5), 'left'))
+        if (mark) C.addChild(this.text(mark, size * 0.8, NOTICE_COLOR, right, yAt(0.5), 'right'))
+      }
+      C.addChild(this.text(NEXT_LABEL, expSize, NOTICE_COLOR, tx, yExp, 'left'))
+      C.addChild(this.text(next, expSize, WHITE, right, yExp, 'right'))
+      return
+    }
     if (compact) {
       // 狭い枠: 名前 / Lv（と選択中）/ HP の3段
       C.addChild(this.text(p.name, size, WHITE, tx, r.y + r.h * 0.22, 'left'))

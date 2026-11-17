@@ -177,6 +177,7 @@ import { loadUiTexture } from '../game/uiImages'
 import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import { growPartyByExp } from '../game/levelUp'
+import { menuExpField } from '../game/fieldMenuExp'
 import type { BattleItemEntry } from '../game/battleMenu'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
 import {
@@ -1552,6 +1553,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         acrylic: config.spriteStyle === 'acrylic',
         useMessage: !config.menuUseMessageOff,
         ...(config.menuStatusLayout ? { statusLayout: config.menuStatusLayout } : {}),
+        ...(config.menuExp ? { exp: true } : {}),
         transition: menuCfg.transition,
         onClose: () => menuHost?.onScreenClosed(),
         onUse: (req) => menuRuntime?.use(req) ?? null,
@@ -1619,6 +1621,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
                 def: p.def,
                 agi: p.agi,
                 ...(p.level !== undefined ? { level: p.level } : {}),
+                // 経験値の表示 (#1186)。キーが on で、経験値表を持つ人物だけ
+                ...(config.menuExp ? menuExpField(p, config.levelUp[p.id]) : {}),
                 texture: await partyTexture(p.sprite),
               }))
             )
