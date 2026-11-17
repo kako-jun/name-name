@@ -5355,6 +5355,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
         battle_text_overflow: None,
+        battle_atb_switch: None,
         battle_weak_threshold: None,
         dialog_font_size: None,
         dialog_window_height: None,
@@ -10558,6 +10559,7 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
         battle_text_overflow: None,
+        battle_atb_switch: None,
         battle_weak_threshold: None,
         dialog_font_size: None,
         dialog_window_height: None,
@@ -12882,6 +12884,23 @@ fn test_battle_text_overflow_roundtrip() {
     assert_eq!(re.battle_text_overflow, doc.battle_text_overflow);
     // 未指定のときは emit しない（既定の出力を変えない）
     assert!(!emitter::emit(&none).contains("battle_text_overflow"));
+}
+
+#[test]
+fn test_battle_atb_switch_roundtrip() {
+    let doc = parser::parse(&battle_doc("battle_atb_switch: on\n"));
+    assert_eq!(doc.battle_atb_switch.as_deref(), Some("on"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_atb_switch, None);
+    let empty = parser::parse(&battle_doc("battle_atb_switch:\n"));
+    assert_eq!(empty.battle_atb_switch, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(emitted.contains("battle_atb_switch: \"on\"\n"), "{emitted}");
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_atb_switch, doc.battle_atb_switch);
+    // 未指定のときは emit しない（既定の出力を変えない）
+    assert!(!emitter::emit(&none).contains("battle_atb_switch"));
 }
 
 #[test]

@@ -50,7 +50,8 @@ export interface BattleMenuHost {
   /** 全体化の たんたい / ぜんたい の行がタップされた (#895。`all` = ぜんたい) */
   onScopeTap(all: boolean): void
   /** 窓の外（背景）がタップされた = キャンセル */
-  onCancelTap(): void
+  /** 窓の外のタップ。`x` `y` はそのタップの画面座標（グローバル）。味方の入力キャラ切り替え (#1195) の判定に使う */
+  onCancelTap(x: number, y: number): void
 }
 
 const ROW_COLOR = 0xffffff
@@ -155,7 +156,9 @@ export class BattleMenuLayer extends Container {
     this.visible = false
     this.eventMode = 'passive'
     this.backdrop.eventMode = 'static'
-    this.backdrop.on('pointertap', () => this.host.onCancelTap())
+    this.backdrop.on('pointertap', (e) =>
+      this.host.onCancelTap(e?.global?.x ?? NaN, e?.global?.y ?? NaN)
+    )
     this.addChild(this.backdrop, this.body, this.hintBox)
   }
 

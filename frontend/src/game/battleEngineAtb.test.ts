@@ -892,3 +892,80 @@ describe('ATB: 速さの倍率 speed（#880 バトルスピード）', () => {
     expect(atbOf(e).queue).toEqual([0])
   })
 })
+
+describe('switchAtbActor: 入力キャラ切り替え (#1195)', () => {
+  const full = { initialGauges: { party: [1000, 1000, 1000] } }
+  const trio = () => [hero('a'), hero('b'), hero('c')]
+
+  it('満タンで待機中の別の味方を先頭へ移し、元の番は満タンのまま次に残る（残りの相対順は保つ）', () => {
+    const eng = mk(trio(), [foe('s')], full)
+    expect(atbOf(eng).queue).toEqual([0, 1, 2])
+    expect(eng.getCurrentActorIndex()).toBe(0)
+    expect(eng.switchAtbActor(2)).toBe(true)
+    expect(atbOf(eng).queue).toEqual([2, 0, 1])
+    expect(eng.getCurrentActorIndex()).toBe(2)
+    expect(atbOf(eng).partyGauge).toEqual([1000, 1000, 1000])
+    expect(eng.getState().phase).toBe('party-input')
+  })
+
+  it('ゲージ・ログ・乱数は変わらない', () => {
+    const calls: number[] = []
+    const eng = mk(trio(), [foe('s')], full, () => (calls.push(1), 0))
+    const before = JSON.stringify({ g: atbOf(eng).partyGauge, e: atbOf(eng).enemyGauge })
+    const logs = eng.getState().logTotal
+    eng.switchAtbActor(1)
+    expect(JSON.stringify({ g: atbOf(eng).partyGauge, e: atbOf(eng).enemyGauge })).toBe(before)
+    expect(eng.getState().logTotal).toBe(logs)
+    expect(calls).toEqual([])
+  })
+
+  it('切り替えた人が行動すると、元の番の人が次の番になる', () => {
+    const eng = mk(trio(), [foe('s')], full)
+    eng.switchAtbActor(1)
+    eng.selectAttack()
+    expect(eng.getCurrentActorIndex()).toBe(0)
+    expect(atbOf(eng).queue).toEqual([0, 2])
+    expect(atbOf(eng).partyGauge[1]).toBe(0)
+  })
+
+  it('何もしない(false): 今の番の本人・ゲージ未満タン・倒れた・範囲外・小数', () => {
+    const eng = mk(trio(), [foe('s')], { initialGauges: { party: [1000, 1000, 500] } })
+    const before = JSON.stringify(eng.getState())
+    expect(eng.switchAtbActor(0)).toBe(false) // すでに番
+    expect(eng.switchAtbActor(2)).toBe(false) // ゲージ未満タン
+    expect(eng.switchAtbActor(-1)).toBe(false)
+    expect(eng.switchAtbActor(9)).toBe(false)
+    expect(eng.switchAtbActor(0.5)).toBe(false)
+    expect(JSON.stringify(eng.getState())).toBe(before)
+    const dead = mk([hero('a'), hero('b', { hp: 0 })], [foe('s')], {
+      initialGauges: { party: [1000, 1000] },
+    })
+    expect(dead.switchAtbActor(1)).toBe(false)
+  })
+
+  it('ATB でない・終了後は false', () => {
+    const turn = new BattleEngine(trio(), [foe('s')], { rng: () => 0 })
+    expect(turn.switchAtbActor(1)).toBe(false)
+    const win = mk([hero('a'), hero('b')], [foe('s', { hp: 1 })], {
+      initialGauges: { party: [1000, 1000] },
+    })
+    win.selectAttack()
+    expect(win.getState().phase).toBe('victory')
+    expect(win.switchAtbActor(1)).toBe(false)
+  })
+
+  it('ATB は進み続ける: 切り替え後も時間が流れて敵のゲージが溜まる (active)', () => {
+    const eng = mk(trio(), [foe('s', { agi: 5 })], { mode: 'active', ...full })
+    eng.switchAtbActor(1)
+    const g0 = atbOf(eng).enemyGauge[0]
+    eng.tick(1000)
+    expect(atbOf(eng).enemyGauge[0]).toBeGreaterThan(g0)
+  })
+
+  it('isAtbSwitchable: 番でない満タン待機の生存者だけ true', () => {
+    const eng = mk(trio(), [foe('s')], { initialGauges: { party: [1000, 1000, 500] } })
+    expect([0, 1, 2].map((i) => eng.isAtbSwitchable(i))).toEqual([false, true, false])
+    eng.switchAtbActor(1)
+    expect([0, 1, 2].map((i) => eng.isAtbSwitchable(i))).toEqual([true, false, false])
+  })
+})

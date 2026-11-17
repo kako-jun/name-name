@@ -1439,6 +1439,11 @@ export interface Document {
      */
     battle_text_overflow?: string;
     /**
+     * ATB で満タンの味方が複数いるとき、味方のタップで入力キャラを切り替える (#1195)。`off`（既定・従来）/ `on`。
+     * 値は生文字列で透過し、runtime 側（`normalizeBattleAtbSwitch`）で `on` 以外を `off` にする。ターン制（ATB でない戦闘）では何もしない。GUI 専用。frontmatter `battle_atb_switch:` から流す。
+     */
+    battle_atb_switch?: string;
+    /**
      * 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。0〜1 の数値の生文字列（HP 割合がこの値**未満**のとき待機姿を weak にする）。未指定は出さない（従来）。
      * 値は生文字列で透過し、runtime 側（`normalizeWeakThreshold`）で検証する。GUI 専用。frontmatter `battle_weak_threshold:` から流す。
      */

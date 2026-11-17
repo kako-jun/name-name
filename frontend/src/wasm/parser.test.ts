@@ -2677,6 +2677,16 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(again.battle_text_overflow).toBe('scroll')
   })
 
+  it('battle_atb_switch が doc に残り（battle_atb と取り違えない）、省略・空値は null、emit→parse で往復する (#1195)', async () => {
+    const doc = await parseMarkdown(docWith(['battle_atb: on', 'battle_atb_switch: on']))
+    expect(doc.battle_atb_switch).toBe('on')
+    expect(doc.battle_atb).toBe('on')
+    expect((await parseMarkdown(docWith(['battle_atb: on']))).battle_atb_switch).toBeNull()
+    expect((await parseMarkdown(docWith(['battle_atb_switch:']))).battle_atb_switch).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.battle_atb_switch).toBe('on')
+  })
+
   it('battle_weak_threshold が doc に残り、省略・空値は null、emit→parse で往復する (#1194)', async () => {
     const doc = await parseMarkdown(docWith(['battle_weak_threshold: 0.25']))
     expect(doc.battle_weak_threshold).toBe('0.25')

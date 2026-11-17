@@ -164,6 +164,16 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     )
   })
 
+  it('atbSwitch は on のときだけ true で渡り、off・未指定は渡さない (#1195)', () => {
+    expect(
+      buildBattleScreenOptions(load({ layout: 'side', atbSwitch: 'on' }).battle, {}).atbSwitch
+    ).toBe(true)
+    expect(
+      'atbSwitch' in buildBattleScreenOptions(load({ layout: 'side', atbSwitch: 'off' }).battle, {})
+    ).toBe(false)
+    expect('atbSwitch' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(false)
+  })
+
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
     const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
     expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')
