@@ -268,6 +268,8 @@ export interface RPGProject {
   battlePartyLayout?: 'default' | 'tall'
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。frontmatter `battle_text_overflow:` 由来。未指定・不正値は `'ellipsis'`（末尾を「…」で省略）、`'scroll'` は窓の幅でクリップしてゆっくり横スクロール */
   battleTextOverflow?: 'ellipsis' | 'scroll'
+  /** 内部トレースログ (#1197)。frontmatter `trace:` 由来。`'on'` のときだけ端末の中に直近の出来事を記録する。未指定・不正値は `'off'`（何も記録しない）。他のキーとは独立 */
+  trace?: 'on' | 'off'
   /**
    * 敵グリッドに収まらないため無効化したエンカウント群 (#839 段5)。`battle_enemy_grid` が有効なゲームを読み込んだときだけ、
    * 全マップ（全シーン）の群を検証した結果が入る。無ければ（全部収まる・グリッド無効）undefined。
