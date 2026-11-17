@@ -35,7 +35,7 @@ const MENU: BattleMenuData = {
 
 interface Internals {
   destroyed: boolean
-  menuStack: unknown[]
+  menuStack: Array<{ type: string }>
   partyViews: Array<{ container: Container }>
   statusTexts: Text[]
   atbBars: Container[]
@@ -139,6 +139,70 @@ describe('atbSwitch: タップで入力キャラを切り替える', () => {
     expect(engine.getCurrentActorIndex()).toBe(1)
   })
 
+  it('on: 対象選択の窓が開いている間は、味方のタップで番を切り替えない（窓の外のタップは従来どおりキャンセル）', () => {
+    const { s, engine } = build({ atbSwitch: true })
+    tap(I(s).commands.find((c) => c.id === 'spell')!.hit)
+    globalThis.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(I(s).menuStack[I(s).menuStack.length - 1].type).toBe('target')
+    const q = [...engine.getState().atb!.queue]
+    tap(I(s).statusTexts[1])
+    tap(I(s).partyViews[1].container)
+    tap(I(s).atbBars[1])
+    expect(engine.getState().atb!.queue).toEqual(q)
+    expect(I(s).menuStack[I(s).menuStack.length - 1].type).toBe('target')
+    // 窓の外（backdrop）のタップは、切り替え可能な味方の上でもキャンセル（番は変わらない）
+    const rect = { containsPoint: () => true }
+    for (const o of [I(s).partyViews[1].container, I(s).statusTexts[1], I(s).atbBars[1]])
+      (o as unknown as { getBounds: () => unknown }).getBounds = () => rect
+    I(s).menuLayer!.backdrop.emit('pointertap', { global: { x: 1, y: 1 } } as never)
+    expect(I(s).menuStack.length).toBe(1)
+    expect(engine.getCurrentActorIndex()).toBe(0)
+  })
+
+  it('on: 満タン3人で続けて切り替えると待ち行列は [0,1,2]→[2,0,1]→[1,2,0]', () => {
+    const { s, engine } = build({ atbSwitch: true }, [1000, 1000, 1000])
+    expect(engine.getState().atb!.queue).toEqual([0, 1, 2])
+    tap(I(s).statusTexts[2])
+    expect(engine.getState().atb!.queue).toEqual([2, 0, 1])
+    tap(I(s).statusTexts[1])
+    expect(engine.getState().atb!.queue).toEqual([1, 2, 0])
+    expect(engine.getCurrentActorIndex()).toBe(1)
+  })
+
+  it('on: wait で候補窓を開いている間は時間が止まり、切り替えで窓が閉じると時間が再び進む', () => {
+    const { s, engine } = build({ atbSwitch: true }, [1000, 1000, 500])
+    tap(I(s).commands.find((c) => c.id === 'spell')!.hit)
+    const g = engine.getState().atb!.partyGauge[2]
+    for (let i = 0; i < 5; i++) s.tick(100)
+    expect(engine.getState().atb!.partyGauge[2]).toBe(g) // 窓を開いている間は止まる
+    tap(I(s).statusTexts[1])
+    expect(I(s).menuStack.length).toBe(0)
+    // 候補窓が閉じて hold が解けると、待機中でも「コマンド窓だけ」の間は時間が進む
+    for (let i = 0; i < 5; i++) s.tick(100)
+    expect(engine.getState().atb!.partyGauge[2]).toBeGreaterThan(g)
+  })
+
+  it('front（前列並び）では受け口を作らない', () => {
+    const engine = new BattleEngine([ent('a'), ent('b')], [ent('s')], {
+      rng: () => 0,
+      atb: { initialGauges: { party: [1000, 1000] } },
+    })
+    const s = skipEntrance(new BattleScreen(engine, 800, 450, { layout: 'front', atbSwitch: true }))
+    created.push(s)
+    expect(I(s).partyViews.length).toBe(0)
+    expect(I(s).statusTexts.length).toBe(0)
+    expect(I(s).atbBars.every((b) => b.eventMode !== 'static')).toBe(true)
+  })
+
+  it('on: カーソルは切り替えできる味方の上だけ pointer、▷ は薄くせず色で区別する', () => {
+    const { s } = build({ atbSwitch: true })
+    expect(I(s).statusTexts[1].cursor).toBe('pointer')
+    expect(I(s).statusTexts[0].cursor).toBe('auto') // 番の本人
+    expect(I(s).statusTexts[2].cursor).toBe('auto') // ゲージ未満タン
+    expect(I(s).atbMarkers[1].alpha).toBe(1)
+    expect(I(s).atbMarkers[1].style.fill).not.toBe(I(s).atbMarkers[0].style.fill)
+  })
+
   it('on: 番の本人・ゲージ未満タンの味方・倒れた味方のタップは何も起こさない', () => {
     const { s, engine } = build({ atbSwitch: true })
     const q = [...engine.getState().atb!.queue]
@@ -156,11 +220,11 @@ describe('atbSwitch: タップで入力キャラを切り替える', () => {
     expect(dead.getCurrentActorIndex()).toBe(0)
   })
 
-  it('on: タップできる味方には ▷（薄い）、番には ▶ が出る', () => {
+  it('on: タップできる味方には ▷（色と太さで区別）、番には ▶ が出る', () => {
     const { s, engine } = build({ atbSwitch: true })
     const m = I(s).atbMarkers
     expect([m[0].visible, m[0].text]).toEqual([true, '▶'])
-    expect([m[1].visible, m[1].text, m[1].alpha]).toEqual([true, '▷', 0.7])
+    expect([m[1].visible, m[1].text, m[1].alpha]).toEqual([true, '▷', 1])
     expect(m[2].visible).toBe(false) // ゲージ未満タン
     tap(I(s).statusTexts[1])
     expect([m[0].text, m[1].text]).toEqual(['▷', '▶'])

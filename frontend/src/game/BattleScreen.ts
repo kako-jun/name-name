@@ -298,6 +298,8 @@ const TEXT_COLOR = 0xffffff
 const HP_COLOR = 0x88ee88
 /** ATB (#205): 行動する番の味方の名前色 / ゲージの色（溜まり中・満タン）/ ゲージの下地 */
 const ACTOR_COLOR = 0xffee66
+/** タップで番を移せる味方の ▷ の色 (#1195)。番の ▶（黄）と区別でき、暗い窓の上で読める明るい水色 */
+const SWITCHABLE_MARK_COLOR = 0x8ee8ff
 const ATB_BAR_FILLING_COLOR = 0x66aaff
 const ATB_BAR_READY_COLOR = 0xffdd55
 const ATB_BAR_BG_COLOR = 0x000000
@@ -1739,13 +1741,18 @@ export class BattleScreen extends Container {
   private makeSwitchTarget(obj: Container, index: number): void {
     if (!this.opts.atbSwitch || this.layoutMode !== 'side' || !this.engine.getState().atb) return
     obj.eventMode = 'static'
-    obj.cursor = 'pointer'
+    // cursor は切り替えできる味方の上だけ pointer（refreshSide が出し入れ）
     obj.on('pointertap', () => this.tapParty(index))
+  }
+
+  /** 対象選択の窓が開いているか (#1195)。この間は味方のタップで番を切り替えない */
+  private isTargetWindowOpen(): boolean {
+    return this.menuStack[this.menuStack.length - 1]?.type === 'target'
   }
 
   /** 画面座標 (x, y) にある、タップで番を移せる味方の index（アクスタ・名前・ゲージ棒の上）。無ければ -1 (#1195) */
   private switchTargetAt(x: number, y: number): number {
-    if (!this.opts.atbSwitch) return -1
+    if (!this.opts.atbSwitch || this.isTargetWindowOpen()) return -1
     for (let i = 0; i < this.partyViews.length; i++) {
       if (!this.engine.isAtbSwitchable(i)) continue
       const parts: Array<Container | undefined> = [
@@ -1761,6 +1768,8 @@ export class BattleScreen extends Container {
   /** 味方 `index` のタップ (#1195)。満タンで待機中の別の味方なら番を移す。それ以外（番の本人・ゲージ未満タン・倒れた）は何もしない */
   private tapParty(index: number): void {
     if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
+    // 対象選択の窓の間は、味方のタップは対象選択の操作で、番は切り替えない（同じ味方でも名前と絵で結果が変わるのを避ける）
+    if (this.isTargetWindowOpen()) return
     if (!this.engine.switchAtbActor(index)) return
     this.opts.onSound?.('confirm')
     // 窓は refresh 末尾の syncMenu が「番が変わった」として閉じる（選択途中のコマンドは捨てる）
@@ -2665,7 +2674,15 @@ export class BattleScreen extends Container {
       if (marker) {
         marker.visible = isActor || switchable
         marker.text = isActor ? '▶' : '▷'
-        marker.alpha = isActor ? 1 : 0.7
+        // ▷ は小さい文字なので、薄くせず色と太さで ▶ と区別する（実画面で alpha 0.7 はほぼ見えなかった）
+        marker.style.fill = isActor ? ACTOR_COLOR : SWITCHABLE_MARK_COLOR
+        marker.style.fontWeight = isActor ? 'normal' : 'bold'
+      }
+      // タップできる味方の上だけ指のカーソルにする (#1195)
+      if (this.opts.atbSwitch) {
+        const cursor = switchable ? 'pointer' : 'auto'
+        for (const o of [this.partyViews[i]?.container, t, this.atbBars[i]])
+          if (o) o.cursor = cursor
       }
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
       this.fitStatusName(t, this.withStatusTags(p.name, p0, 'party', i), cols?.name.w ?? Infinity)
