@@ -3653,7 +3653,7 @@ export class BattleScreen extends Container {
   /**
    * 瀕死ポーズ (#1194)。味方の（演出に合わせた表示上の）HP 割合が閾値未満で、いま待機（idle）の姿のときだけ weak にする。
    * down・のけぞり・行動中のポーズ・勝利は idle ではないので優先される（down > hurt/行動 > weak > idle）。
-   * 勝利の待機中は勝ちポーズの交互表示に使う idle のコマも weak にしない。敵は対象外
+   * 勝利の待機中（決着の演出が終わってから）は勝ちポーズの交互表示に使う idle のコマも weak にしない。敵は対象外
    */
   private withWeakPose(
     side: 'party' | 'enemy',
@@ -3662,7 +3662,8 @@ export class BattleScreen extends Container {
     sample: TargetSample & { forward: number }
   ): TargetSample & { forward: number } {
     if (side !== 'party' || sample.pose !== 'idle' || !ent) return sample
-    if (this.engine.getState().phase === 'victory') return sample
+    // 勝利ポーズ側（restingSample の won）と同じく、決着の行動の演出が終わるまでは weak のまま
+    if (this.engine.getState().phase === 'victory' && !isPlaybackBusy(this.playback)) return sample
     return isWeakHp(hp, ent.maxHp, this.weakThreshold) ? { ...sample, pose: 'weak' } : sample
   }
 

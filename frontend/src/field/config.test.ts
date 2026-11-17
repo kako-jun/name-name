@@ -1116,7 +1116,10 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     for (const bad of [0, -0.5, '0.25', null]) {
       c.battle = { ...(c.battle as object), weakThreshold: bad }
       expect(ok(c).battle.weakThreshold).toBeUndefined()
+      expect(ok(c).warnings?.some((w) => w.includes('battle.weakThreshold'))).toBe(true)
     }
+    c.battle = { ...(c.battle as object), weakThreshold: 0.25 }
+    expect(ok(c).warnings?.some((w) => w.includes('weakThreshold')) ?? false).toBe(false)
   })
 
   it('enemyGrid が不正ならエラーにせず無効（検証もしない）', () => {

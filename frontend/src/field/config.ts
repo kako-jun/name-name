@@ -1223,6 +1223,11 @@ export function parseConfig(
       : undefined
   const weakThreshold =
     typeof b.weakThreshold === 'number' ? normalizeWeakThreshold(b.weakThreshold) : undefined
+  // 指定があるのに使えない値（数値でない・0 以下・非有限）は警告して無視＝出さない (#1194)
+  if (b.weakThreshold !== undefined && weakThreshold === undefined)
+    warnings.push(
+      `battle.weakThreshold は 0 より大きい数値にしてください: ${JSON.stringify(b.weakThreshold)}（無視します）`
+    )
   const enemyWindowOverlapBottom =
     typeof b.enemyWindowOverlapBottom === 'number' && Number.isFinite(b.enemyWindowOverlapBottom)
       ? normalizeEnemyWindowOverlapBottomSetting(String(b.enemyWindowOverlapBottom))
