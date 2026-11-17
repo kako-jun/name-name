@@ -79,7 +79,7 @@ export class BattleTracer {
       atb: s.atb
         ? {
             mode: s.atb.mode,
-            g: [s.atb.partyGauge.map(Math.round), s.atb.enemyGauge.map(Math.round)],
+            g: [s.atb.partyGauge.map(r3), s.atb.enemyGauge.map(r3)],
             q: [...s.atb.queue],
           }
         : null,
@@ -357,6 +357,9 @@ interface PoseMemo {
   path: string | null
   look: string | null
 }
+
+/** 小数 3 桁まで（開始ゲージは丸めない。再実行で満タンの時刻がずれないように） */
+const r3 = (n: number): number => Math.round(n * 1000) / 1000
 
 function statusSig(e: BattleEntity): string {
   const st = e.status

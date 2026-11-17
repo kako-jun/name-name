@@ -299,4 +299,23 @@ describe('battleTrace (#1197)', () => {
     replayBattle(b, { switchActor: (_e, d) => seen.push([d.from, d.to]) })
     expect(seen).toEqual([[0, 1]])
   })
+
+  it('再現: セーブの小数ゲージ（700.4 / 1000 / 399.6）を丸めずに記録し、再実行が一致する', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine(
+      [ent('p0', { agi: 5, hp: 200, maxHp: 200 }), ent('p1', { agi: 5, hp: 200, maxHp: 200 })],
+      [ent('e0', { hp: 150, maxHp: 150, agi: 6 })],
+      { atb: { mode: 'active', initialGauges: { party: [700.4, 1000], enemies: [399.6] } } }
+    )
+    attachBattleTrace(e)
+    let guard = 0
+    while (!e.isOver() && guard++ < 4000) {
+      e.tick(16.7)
+      if (e.getCurrentActorIndex() >= 0) e.selectAttack()
+    }
+    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    expect((b.start.d as { atb: { g: number[][] } }).atb.g).toEqual([[700.4, 1000], [399.6]])
+    const r = replayBattle(b)
+    expect(firstMismatch(b.expected, r.produced)).toBeNull()
+  })
 })

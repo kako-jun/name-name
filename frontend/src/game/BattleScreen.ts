@@ -1801,6 +1801,7 @@ export class BattleScreen extends Container {
   /** 味方 `index` のタップ (#1195)。満タンで待機中の別の味方なら番を移す。それ以外（番の本人・ゲージ未満タン・倒れた）は何もしない */
   private tapParty(index: number): void {
     if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
+    this.bt?.screenInput('tap', `party:${index}`)
     // 対象選択の窓の間は、味方のタップは対象選択の操作で、番は切り替えない（同じ味方でも名前と絵で結果が変わるのを避ける）
     if (this.isTargetWindowOpen()) return
     if (!this.engine.switchAtbActor(index)) return

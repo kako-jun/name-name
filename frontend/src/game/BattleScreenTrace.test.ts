@@ -261,4 +261,29 @@ describe('BattleScreen: 内部トレース (#1197)', () => {
     expect(poses[0]).toBe('idle')
     expect(poses[poses.length - 1]).toBe('down')
   })
+
+  it('味方のタップ（tapParty）が b.in に出る（座標は入れず対象 index のみ）', async () => {
+    configureTrace(true, { storage: null })
+    vi.spyOn(Assets, 'load').mockImplementation(
+      ((): Promise<Texture> =>
+        Promise.resolve(
+          new Texture({ source: new TextureSource({ width: 40, height: 80 }) })
+        )) as never
+    )
+    const engine = new BattleEngine([entity('a'), entity('b')], [entity('e')], {
+      atb: { initialGauges: { party: [1000, 1000] } },
+    })
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      atbSwitch: true,
+    } as never)
+    created.push(s)
+    skipEntrance(s)
+    engine.tick(1)
+    ;(s as unknown as { tapParty(i: number): void }).tapParty(1)
+    const taps = ofKind('b.in').map((e) => (e.d as { v: string }).v)
+    expect(taps).toContain('party:1')
+    expect(JSON.stringify(ofKind('b.in'))).not.toMatch(/"x"|"y"/)
+  })
 })

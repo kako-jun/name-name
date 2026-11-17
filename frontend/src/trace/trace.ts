@@ -7,7 +7,7 @@
  * - 取り出し: コンソール `window.nameNameTrace.dump()`、URL に `?trace`（前回＋今回を JSON ファイルにして保存）
  * - プライバシー: 自由文のキー（名前・台詞・合言葉など）は記録しない。外へは送らない
  */
-import { TRACE_CAPACITY, TraceRing, sanitizeTraceValue } from './traceRing'
+import { TRACE_CAPACITY, TraceRing, sanitizeTraceValue, type TraceEntry } from './traceRing'
 import {
   createBrowserTraceStorage,
   parsePersisted,
@@ -17,10 +17,18 @@ import {
 
 export type { TraceEntry, TraceValue } from './traceRing'
 
-/** 取り出す JSON の形。version は将来の形式変更用 */
 /** 起動のたびに必ず出る記録。これだけのセッションは「中身のある前回」とみなさない（#1197 レビュー） */
 const STARTUP_KINDS = new Set(['trace.on', 'f.scene', 'f.move'])
 
+/** 起動時の記録か。場面の auto トリガーが起こすイベント（`f.event` の `auto: 1`）も、操作由来ではないので起動の記録に数える */
+function isStartupEntry(e: TraceEntry): boolean {
+  if (STARTUP_KINDS.has(e.k)) return true
+  return (
+    e.k === 'f.event' && !!e.d && typeof e.d === 'object' && (e.d as { auto?: number }).auto === 1
+  )
+}
+
+/** 取り出す JSON の形。version は将来の形式変更用 */
 export interface TraceDump {
   version: 1
   /** 直前までのセッション（再読み込み前の分）。無ければ null */
@@ -69,6 +77,8 @@ function flushAfterError(): void {
   traceFlush(true)
 }
 let pendingLoad: Promise<void> = Promise.resolve()
+/** 前回分の読み戻しが済んだか。済む前に保存すると、読み戻す前の prev（null）で保存済みの前回分を潰すので保留する */
+let loaded = true
 
 const nowMs = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -116,7 +126,7 @@ export function traceDumpJson(space?: number): string {
 
 /** いまの記録を保存先へ書く。sync = ページを離れる・例外のとき（localStorage にも同期で書く） */
 export function traceFlush(sync = false): void {
-  if (!enabled || !storage || !ring) return
+  if (!enabled || !storage || !ring || !loaded) return
   if (!dirty && !sync) return
   dirty = false
   // 前回分は不変なので、文字列化済みのものをそのまま継ぎ足す（今回分だけ都度文字列化する）
@@ -242,22 +252,30 @@ export function configureTrace(
   installConsoleApi()
   attachListeners()
   if (storage) {
+    loaded = false
     pendingLoad = storage.load().then((json) => {
       const old = parsePersisted(json)
       if (old) {
         // 前回のセッションに「起動の印以外」の記録があれば、それを prev にする。無ければ（空の再読み込みの連続）前の prev を残す
         // 起動のたびに必ず出る記録（起動・場面・最初の移動）だけのセッションは前回とみなさない（戦闘 → 再読み込み 2 回でも戦闘が残る）。
         // 別のゲームの記録は混ぜない
-        const meaningful = old.session.entries.some((e) => !STARTUP_KINDS.has(e.k))
+        const meaningful = old.session.entries.some((e) => !isStartupEntry(e))
         const cand = meaningful ? old.session : old.prev
         prev = cand && (cand.game ?? '') === gameId ? cand : null
         prevJson = JSON.stringify(prev)
       }
       const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '')
       if (wantsTraceDownload(search)) traceDownload()
+      loaded = true
       dirty = true
       traceFlush()
     })
+    // 読み戻しが失敗しても、保存は再開する（前回分は無いものとして）
+    pendingLoad = pendingLoad
+      .catch(() => {})
+      .finally(() => {
+        loaded = true
+      })
     timer = setInterval(() => traceFlush(), FLUSH_INTERVAL_MS)
     ;(timer as { unref?: () => void }).unref?.()
   }
@@ -277,4 +295,5 @@ export function resetTraceForTest(): void {
   storage = null
   dirty = false
   pendingLoad = Promise.resolve()
+  loaded = true
 }

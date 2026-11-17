@@ -126,6 +126,58 @@ describe('trace: 前回分・ゲーム識別・解除・例外 (#1197 レビュ�
     expect(d.prev?.entries.some((e) => e.k === 'b.end')).toBe(true)
   })
 
+  it('開幕の auto イベント（f.event の auto: 1）があっても、戦闘が prev から消えない', async () => {
+    const st = createMemoryTraceStorage()
+    const autoBoot = (): void => {
+      boot()
+      traceRec('f.event', { id: 'intro', open: 1, auto: 1 })
+      traceRec('f.event', { id: 'intro', open: 0, auto: 1 })
+    }
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    autoBoot()
+    traceRec('b.end', { out: 'defeat' })
+    traceFlush(true)
+    for (let i = 0; i < 3; i++) {
+      resetTraceForTest()
+      configureTrace(true, { storage: st, search: '', game: 'g' })
+      await traceReady()
+      autoBoot()
+      traceFlush(true)
+    }
+    expect(traceDump().prev?.entries.some((e) => e.k === 'b.end')).toBe(true)
+  })
+
+  it('プレイヤーが起こしたイベント（auto なし）は操作由来として前回に残る', async () => {
+    const st = createMemoryTraceStorage()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    boot()
+    traceRec('f.event', { id: 'talk', open: 1 })
+    traceFlush(true)
+    const id = traceDump().session.id
+    resetTraceForTest()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    expect(traceDump().prev?.id).toBe(id)
+  })
+
+  it('前回分の読み戻しが済む前の離脱保存では、保存済みの前回分を潰さない', async () => {
+    const st = createMemoryTraceStorage()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    traceRec('b.end', { out: 'victory' })
+    traceFlush(true)
+    const savedBefore = st.value
+    resetTraceForTest()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    // 読み戻し中（await していない）にページ離脱
+    traceFlush(true)
+    expect(st.value).toBe(savedBefore)
+    await traceReady()
+    expect(traceDump().prev?.entries.some((e) => e.k === 'b.end')).toBe(true)
+  })
+
   it('別のゲームの記録は前回分に混ぜない', async () => {
     const st = createMemoryTraceStorage()
     configureTrace(true, { storage: st, search: '', game: 'a' })

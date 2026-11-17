@@ -1381,11 +1381,11 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
       if (t.once) onceFired.add(t.key)
       releaseWalkInput()
       eventRun = true
-      traceRec('f.event', { id: t.event, open: 1 })
+      traceRec('f.event', { id: t.event, open: 1, ...(t.auto ? { auto: 1 } : {}) })
       try {
         conversation.start(t.event, '', commands, () => {
           eventRun = false
-          traceRec('f.event', { id: t.event, open: 0 })
+          traceRec('f.event', { id: t.event, open: 0, ...(t.auto ? { auto: 1 } : {}) })
         })
       } catch (e) {
         // 実行器が例外を投げても入力を止めたままにしない。running が残らないよう実行器ごと捨てる

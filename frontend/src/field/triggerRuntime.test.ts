@@ -185,8 +185,8 @@ describe('autoTriggers', () => {
   it('auto だけを書いた順に返す（踏み込みは除く）', () => {
     const r = autoTriggers({ ...base, triggers: [auto('a'), step(1, 1), auto('b')] })
     expect(r).toEqual([
-      { key: 's#0', event: 'a', once: false },
-      { key: 's#2', event: 'b', once: false },
+      { key: 's#0', event: 'a', once: false, auto: true },
+      { key: 's#2', event: 'b', once: false, auto: true },
     ])
   })
 
@@ -242,5 +242,26 @@ describe('initialInside', () => {
 
   it('トリガーが無ければ空', () => {
     expect(initialInside({ x: 0, y: 0 }, []).size).toBe(0)
+  })
+})
+
+describe('auto の印（内部トレース #1197）', () => {
+  it('auto トリガーだけ auto: true が付き、踏み込みトリガーには付かない', () => {
+    const a = autoTriggers({
+      sceneId: 's',
+      onceFired: new Set<string>(),
+      resumedStart: false,
+      triggers: [auto('a')],
+    })
+    expect(a[0].auto).toBe(true)
+    const step1 = stepTriggers({
+      sceneId: 's',
+      pos: { x: 0, y: 0 },
+      triggers: [step(0, 0)],
+      inside: new Set<number>(),
+      onceFired: new Set<string>(),
+    })
+    expect(step1.fired[0]).toBeDefined()
+    expect('auto' in step1.fired[0]).toBe(false)
   })
 })
