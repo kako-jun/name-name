@@ -1106,6 +1106,22 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle.weakThreshold は 0 超〜1 の数値を読み（1 超は 1）、未指定・0 以下・数値でない値は undefined (#1194)', () => {
+    const c = withGrid('6x2', ['bit'])
+    expect(ok(c).battle.weakThreshold).toBeUndefined()
+    c.battle = { ...(c.battle as object), weakThreshold: 0.25 }
+    expect(ok(c).battle.weakThreshold).toBe(0.25)
+    c.battle = { ...(c.battle as object), weakThreshold: 3 }
+    expect(ok(c).battle.weakThreshold).toBe(1)
+    for (const bad of [0, -0.5, '0.25', null]) {
+      c.battle = { ...(c.battle as object), weakThreshold: bad }
+      expect(ok(c).battle.weakThreshold).toBeUndefined()
+      expect(ok(c).warnings?.some((w) => w.includes('battle.weakThreshold'))).toBe(true)
+    }
+    c.battle = { ...(c.battle as object), weakThreshold: 0.25 }
+    expect(ok(c).warnings?.some((w) => w.includes('weakThreshold')) ?? false).toBe(false)
+  })
+
   it('enemyGrid が不正ならエラーにせず無効（検証もしない）', () => {
     for (const bad of ['abc', '0x2', 6, null]) {
       const c = ok(withGrid(bad, ['boss*9']))

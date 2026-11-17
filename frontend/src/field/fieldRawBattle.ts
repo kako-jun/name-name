@@ -5,6 +5,7 @@
  * ここで先に値域を検査して「不正 → 警告して出さない」にする。FieldBattleConfig に受け口が無いキーは「効きません」と警告する。
  */
 import { parseCommandIds, parseCommandLabels } from '../game/battleCommands'
+import { normalizeWeakThreshold } from '../game/battleMotion'
 import { resolveRpgDataPath } from '../game/battleEffectsLoader'
 import { fieldDialogMinHeightRatio, normalizeDialogWindowHeight } from '../game/ffDialog'
 import type { EventDocument } from '../types'
@@ -141,7 +142,15 @@ export function frontmatterRaw(
   )
   if (commandLabels) battle.commandLabels = commandLabels
 
-  // 数値で渡す(parseConfig は number だけ受ける)
+  // 数値で渡す(parseConfig は number だけ受ける)。不正値は警告して無視＝出さない (#1194)
+  if (typeof doc.battle_weak_threshold === 'string') {
+    const n = normalizeWeakThreshold(doc.battle_weak_threshold, false)
+    if (n !== undefined) battle.weakThreshold = n
+    else
+      warnings.push(
+        `frontmatter の battle_weak_threshold は 0 より大きい数値にしてください: ${JSON.stringify(doc.battle_weak_threshold)}（無視します）`
+      )
+  }
   if (typeof doc.battle_enemy_window_overlap_bottom === 'string') {
     const s = doc.battle_enemy_window_overlap_bottom.trim()
     const n = Number(s)

@@ -490,6 +490,7 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     battle_enemy_window_overlap_bottom: nullIfEmpty(doc.battle_enemy_window_overlap_bottom),
     battle_party_layout: nullIfEmpty(doc.battle_party_layout),
     battle_text_overflow: nullIfEmpty(doc.battle_text_overflow),
+    battle_weak_threshold: nullIfEmpty(doc.battle_weak_threshold),
     // 一枚絵フィールドの会話窓の文字サイズ・高さ・話者名の見せ方 (#1184)。同上。
     dialog_font_size: nullIfEmpty(doc.dialog_font_size),
     dialog_window_height: nullIfEmpty(doc.dialog_window_height),

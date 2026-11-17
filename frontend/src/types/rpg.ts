@@ -268,6 +268,8 @@ export interface RPGProject {
   battlePartyLayout?: 'default' | 'tall'
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。frontmatter `battle_text_overflow:` 由来。未指定・不正値は `'ellipsis'`（末尾を「…」で省略）、`'scroll'` は窓の幅でクリップしてゆっくり横スクロール */
   battleTextOverflow?: 'ellipsis' | 'scroll'
+  /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。frontmatter `battle_weak_threshold:` 由来（0〜1）。未指定・不正値は undefined＝出さない（従来）。推奨は FF の 1/4 未満＝0.25 */
+  battleWeakThreshold?: number
   /**
    * 敵グリッドに収まらないため無効化したエンカウント群 (#839 段5)。`battle_enemy_grid` が有効なゲームを読み込んだときだけ、
    * 全マップ（全シーン）の群を検証した結果が入る。無ければ（全部収まる・グリッド無効）undefined。
