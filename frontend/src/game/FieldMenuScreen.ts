@@ -32,7 +32,12 @@ import {
   type MenuLayout,
   type Rect,
 } from './fieldMenu'
-import { computeStatusLayout, statusArea, type StatusLayoutKind } from './fieldMenuStatus'
+import {
+  computeStatusLayout,
+  fitPortrait,
+  statusArea,
+  type StatusLayoutKind,
+} from './fieldMenuStatus'
 import {
   MAX_PARTY_SLOTS,
   appstoreHasParty,
@@ -892,26 +897,44 @@ export class FieldMenuScreen extends Container {
     })
     for (const r of regions) {
       this.panel(C, r.rect, lay)
-      if (r.id === 'portrait') {
-        const R = r.rect
-        const tex = p.texture
-        const byWidth = tex ? ((R.w * 0.9) / tex.width) * tex.height : 0
-        this.placeArt(
-          this.artDeep,
-          tex,
-          Math.min(R.h * 0.88, byWidth),
-          R.x + R.w / 2,
-          R.y + R.h * 0.95
-        )
-      }
+      if (r.id === 'portrait') this.placePortrait(p, r.rect)
       for (const c of r.cells) {
         const cy = c.rect.y + c.rect.h / 2
         const left = c.tone === 'name' ? WHITE : NOTICE_COLOR
         C.addChild(this.text(c.label, c.labelSize, left, c.rect.x, cy, 'left'))
-        C.addChild(this.text(c.value, c.valueSize, WHITE, c.rect.x + c.rect.w, cy, 'right'))
+        if (c.pair) {
+          // 現在値・「/」・最大値を別々の位置に右揃え（HP と MP で桁がそろう）
+          const q = c.pair
+          C.addChild(this.text(q.cur, c.valueSize, WHITE, q.curRight, cy, 'right'))
+          C.addChild(this.text('/', c.valueSize, WHITE, q.slashX, cy, 'center'))
+          C.addChild(this.text(q.max, c.valueSize, WHITE, q.maxRight, cy, 'right'))
+        } else
+          C.addChild(
+            this.text(c.value, c.valueSize, WHITE, c.valueRight ?? c.rect.x + c.rect.w, cy, 'right')
+          )
       }
     }
   }
+
+  /**
+   * ステータスの人物の絵の枠に絵を置く。絵の層は他の領域の文字より上にあるので、枠の矩形で切り抜く
+   * （アクスタの台座・斜めに落ちる影が、枠の外の領域・下の「戻る」にかからないように）
+   */
+  private placePortrait(p: FieldMenuPartyView, R: Rect): void {
+    const clip = this.portraitClip
+    clip.removeChildren()
+    this.portraitMask.clear().rect(R.x, R.y, R.w, R.h).fill({ color: WHITE })
+    clip.addChild(this.portraitMask)
+    clip.mask = this.portraitMask
+    this.artDeep.addChild(clip)
+    const tex = p.texture
+    if (!tex) return
+    const fit = fitPortrait(R, tex.width, tex.height, this.useAcrylic)
+    this.placeArt(clip, tex, fit.height, fit.x, fit.y)
+  }
+
+  private readonly portraitClip = new Container()
+  private readonly portraitMask = new Graphics()
 
   private artIndex = 0
 

@@ -2,7 +2,7 @@
  * フィールドメニューのステータス画面の配置 (#1191)。`statusLayout: 'ff'` のときだけ領域配置になり、
  * 未指定・'line' は従来の 1 列のまま。他の画面（どうぐ等）・人物の切り替えは配置に依らず同じ。
  */
-import { Container, Text } from 'pixi.js'
+import { Container, Text, Texture } from 'pixi.js'
 import { describe, expect, it } from 'vitest'
 import { FieldMenuScreen } from './FieldMenuScreen'
 import type { StatusLayoutKind } from './fieldMenuStatus'
@@ -84,9 +84,11 @@ describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
       'アスカ',
       'Lv 12',
       'HP',
-      '148 / 230',
+      '148',
+      '230',
       'MP',
-      '31 / 56',
+      '31',
+      '56',
       'ちから',
       '24',
       'まもり',
@@ -115,5 +117,35 @@ describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
 
   it('ff はステータス以外の画面（どうぐ）の描画を変えない', () => {
     expect(texts(open('ff', 1))).toEqual(texts(open('line', 1)))
+  })
+
+  it('絵（アクスタ表示でも）は人物の枠の矩形で切り抜かれ、台座・影が枠の外へ出ない', () => {
+    for (const acrylic of [false, true]) {
+      const s = new FieldMenuScreen({
+        width: 1280,
+        height: 720,
+        acrylic,
+        statusLayout: 'ff',
+        onClose: () => {},
+      })
+      s.open({
+        items: ITEMS,
+        party: [{ ...PARTY[0], texture: Texture.WHITE }],
+        info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+        slots: [null, null, null],
+      })
+      s.dispatch({ type: 'tap', index: 0 })
+      s.tick(10_000)
+      const clip = (s as unknown as { portraitClip: Container }).portraitClip
+      const deep = (s as unknown as { artDeep: Container }).artDeep
+      expect(deep.children).toContain(clip)
+      expect(clip.mask).toBeTruthy()
+      // 切り抜きの矩形 = 左の人物の枠（右の領域・下の「戻る」にかからない幅と高さ）
+      const b = (clip.mask as Container).getLocalBounds()
+      expect(b.width).toBeLessThan(1280 * 0.3)
+      expect(b.x).toBeGreaterThan(0)
+      expect(b.y + b.height).toBeLessThan(720 * 0.9)
+      expect(clip.children.length).toBeGreaterThan(1)
+    }
   })
 })
