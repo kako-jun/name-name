@@ -226,6 +226,8 @@ export interface FieldBattleConfig {
   partyLayout?: 'default' | 'tall'
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。`battle.textOverflow`: `ellipsis`（既定）/ `scroll`。未指定は undefined＝ellipsis */
   textOverflow?: 'ellipsis' | 'scroll'
+  /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。`battle.atbSwitch`: `off`（既定）/ `on`。未指定は undefined＝off */
+  atbSwitch?: 'on' | 'off'
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
   presentation?: BattlePresentation
   /** 戦闘モーションのプリセット (#956 / sit-by-me#62)。`battle.motion`: `default` / `snappy`。`presentation: "ff"` かつ `layout: "side"` のときだけ効く。未指定は undefined＝BattleScreen の既定（default＝桁バウンスなし） */
@@ -968,6 +970,8 @@ export function parseConfig(
     return fail(`battle.partyLayout は "default" か "tall": ${JSON.stringify(b.partyLayout)}`)
   if (b.textOverflow !== undefined && b.textOverflow !== 'ellipsis' && b.textOverflow !== 'scroll')
     return fail(`battle.textOverflow は "ellipsis" か "scroll": ${JSON.stringify(b.textOverflow)}`)
+  if (b.atbSwitch !== undefined && b.atbSwitch !== 'on' && b.atbSwitch !== 'off')
+    return fail(`battle.atbSwitch は "on" か "off": ${JSON.stringify(b.atbSwitch)}`)
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
     return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
@@ -1322,6 +1326,7 @@ export function parseConfig(
         ...(enemyWindowOverlapBottom !== undefined ? { enemyWindowOverlapBottom } : {}),
         ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
         ...(b.textOverflow ? { textOverflow: b.textOverflow } : {}),
+        ...(b.atbSwitch ? { atbSwitch: b.atbSwitch } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
         ...(b.motion ? { motion: b.motion } : {}),

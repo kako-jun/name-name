@@ -1407,6 +1407,8 @@ export interface EventDocument {
   battle_party_layout?: string | null
   /** 戦闘の窓で入り切らない文字の扱い (#1183)。`"ellipsis"`（既定・末尾を「…」で省略）/ `"scroll"`（窓の幅でクリップしてゆっくり横スクロール）。frontmatter `battle_text_overflow:` から流す。不正値・未指定は ellipsis。GUI 専用。 */
   battle_text_overflow?: string | null
+  /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。`"off"`（既定）/ `"on"`。frontmatter `battle_atb_switch:` から流す。`battle_atb: on` のときだけ効く。不正値・未指定は off。GUI 専用。 */
+  battle_atb_switch?: string | null
   /** 一枚絵フィールドの会話窓の文字サイズ (#1184)。`"normal"`（既定＝従来）/ `"battle"`（戦闘のメッセージ窓と同じ大きさ）。frontmatter `dialog_font_size:` から流す。`window_style` を書いた作品の窓だけに効く。GUI 専用。 */
   dialog_font_size?: string | null
   /** 一枚絵フィールドの会話窓の高さ (#1184)。画面高さに対する比（上限 0.6・下限は文字サイズで決まる）（既定 0.28）。frontmatter `dialog_window_height:` から流す。GUI 専用。 */

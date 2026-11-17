@@ -34,7 +34,7 @@ import { normalizeBattleLogTypewriter } from './battleLogTypewriter'
 import { normalizeBattleMotion, normalizeBattlePresentation } from './battleMotion'
 import { normalizeBattleEnemyList } from './battleEnemyList'
 import { normalizeBattleTransition } from './battleTransition'
-import { normalizeBattleAtb } from './battleAtb'
+import { normalizeBattleAtb, normalizeBattleAtbSwitch } from './battleAtb'
 import {
   normalizeEnemyGrid,
   normalizeEnemyGridAlign,
@@ -437,6 +437,7 @@ export function rpgProjectFromDoc(
     ),
     battlePartyLayout: normalizePartyLayout(doc.battle_party_layout),
     battleTextOverflow: normalizeBattleTextOverflow(doc.battle_text_overflow),
+    battleAtbSwitch: normalizeBattleAtbSwitch(doc.battle_atb_switch),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
     battleCommands: parseCommandIds(doc.battle_commands),

@@ -1106,6 +1106,17 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle.atbSwitch は on / off を読み、未指定は undefined、不正値は読み込みエラー (#1195)', () => {
+    const c = withGrid('6x2', ['bit'])
+    expect(ok(c).battle.atbSwitch).toBeUndefined()
+    c.battle = { ...(c.battle as object), atbSwitch: 'on' }
+    expect(ok(c).battle.atbSwitch).toBe('on')
+    c.battle = { ...(c.battle as object), atbSwitch: 'off' }
+    expect(ok(c).battle.atbSwitch).toBe('off')
+    c.battle = { ...(c.battle as object), atbSwitch: 'yes' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
   it('enemyGrid が不正ならエラーにせず無効（検証もしない）', () => {
     for (const bad of ['abc', '0x2', 6, null]) {
       const c = ok(withGrid(bad, ['boss*9']))

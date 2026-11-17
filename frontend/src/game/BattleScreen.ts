@@ -536,6 +536,12 @@ export interface BattleScreenOptions {
    * `scroll` は省略せず、窓の幅でクリップしてゆっくり横スクロール（`side` の候補窓の名前・敵名窓。対象は battleMarquee.ts の MARQUEE_TARGETS）。窓の寸法は変えない
    */
   textOverflow?: 'ellipsis' | 'scroll'
+  /**
+   * ATB で満タンの味方が複数のとき、味方（アクスタ・ステータス行の名前・ゲージ）のタップで入力キャラを切り替える (#1195)。
+   * frontmatter `battle_atb_switch: on` 由来。undefined/false = 切り替えなし（従来）。ATB でない戦闘では何もしない。
+   * 切り替えると開いている窓は閉じ（選択途中は捨てる）、元の番の人は満タンのまま待機の順に残る
+   */
+  atbSwitch?: boolean
   /** 動きを減らす設定 (prefers-reduced-motion) か。undefined = ブラウザの設定を読む。true だと `scroll` でもスクロールせず省略にする (#1183) */
   reducedMotion?: boolean
   /**
@@ -1284,6 +1290,7 @@ export class BattleScreen extends Container {
       const view = this.createEntityView(p, FALLBACK_PARTY_COLOR, false)
       stage.addChild(view.container)
       this.partyViews.push(view)
+      this.makeSwitchTarget(view.container, this.partyViews.length - 1)
     }
     for (let i = 0; i < s.party.length; i++) this.addStatusRow()
     if (this.presentation === 'ff') {
@@ -1311,6 +1318,7 @@ export class BattleScreen extends Container {
     })
     this.statusTexts.push(t)
     this.addChild(t)
+    this.makeSwitchTarget(t, this.statusTexts.length - 1)
     const parts: Array<[PixiText[], boolean]> = [
       [this.statusHpLabels, false],
       [this.statusHpTexts, true],
@@ -1708,6 +1716,7 @@ export class BattleScreen extends Container {
     const g = new Graphics()
     this.atbBars.push(g)
     this.addChild(g)
+    this.makeSwitchTarget(g, this.atbBars.length - 1)
     const m = new PixiText({
       text: '▶',
       style: this.themedStyle(
@@ -1721,6 +1730,27 @@ export class BattleScreen extends Container {
     m.visible = false
     this.atbMarkers.push(m)
     this.addChild(m)
+  }
+
+  /**
+   * 入力キャラ切り替えのタップ受け口 (#1195)。`atbSwitch` が有効な ATB の side のときだけ、味方 `index` の絵・名前・ゲージにつける。
+   * 無効なら eventMode を変えない（従来と完全に同じ）。受けたタップは tapParty へ
+   */
+  private makeSwitchTarget(obj: Container, index: number): void {
+    if (!this.opts.atbSwitch || this.layoutMode !== 'side' || !this.engine.getState().atb) return
+    obj.eventMode = 'static'
+    obj.cursor = 'pointer'
+    obj.on('pointertap', () => this.tapParty(index))
+  }
+
+  /** 味方 `index` のタップ (#1195)。満タンで待機中の別の味方なら番を移す。それ以外（番の本人・ゲージ未満タン・倒れた）は何もしない */
+  private tapParty(index: number): void {
+    if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
+    if (!this.engine.switchAtbActor(index)) return
+    this.opts.onSound?.('confirm')
+    // 窓は refresh 末尾の syncMenu が「番が変わった」として閉じる（選択途中のコマンドは捨てる）
+    this.refresh()
+    this.closeIfOver()
   }
 
   /** ゲージ棒を描く。満タン（コマンド待ち）は色を変える。倒れた味方は空 */
@@ -2614,7 +2644,14 @@ export class BattleScreen extends Container {
       const mpT = this.statusMpTexts[i]
       // ATB: 今コマンドを出す番の味方は色を変え、左余白に別 Text の ▶ を出す（名前の文字列には混ぜない）。アクスタ頭上の ▼ は updateSelectMarks (#205, #805)
       const isActor = p.hp > 0 && i === this.actorIndex()
-      if (this.atbMarkers[i]) this.atbMarkers[i].visible = isActor
+      // タップで番を移せる者(満タンで待機中の別の味方)には、番の ▶ とは別の薄い ▷ を出す (#1195)
+      const switchable = !!this.opts.atbSwitch && this.engine.isAtbSwitchable(i)
+      const marker = this.atbMarkers[i]
+      if (marker) {
+        marker.visible = isActor || switchable
+        marker.text = isActor ? '▶' : '▷'
+        marker.alpha = isActor ? 1 : 0.7
+      }
       // 名前だけ省略して HP/MP は必ず見せる（列幅は layoutSide が最長の数値から決める）
       this.fitStatusName(t, this.withStatusTags(p.name, p0, 'party', i), cols?.name.w ?? Infinity)
       const lbl = cols?.showLabels ?? true
@@ -2741,6 +2778,7 @@ export class BattleScreen extends Container {
       const view = this.createEntityView(s.party[i], FALLBACK_PARTY_COLOR, false)
       this.sideStage.addChild(view.container)
       this.partyViews.push(view)
+      this.makeSwitchTarget(view.container, this.partyViews.length - 1)
       this.addStatusRow()
       if (s.atb) this.addAtbBar()
     }

@@ -2027,6 +2027,16 @@ describe('rpgProjectFromDoc: battle_text_overflow (#1183)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: battle_atb_switch (#1195)', () => {
+  const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
+  it('on（大小無視）だけ on、未指定・空・不正は off', () => {
+    expect(proj({ battle_atb_switch: 'on' }).battleAtbSwitch).toBe('on')
+    expect(proj({ battle_atb_switch: 'ON' }).battleAtbSwitch).toBe('on')
+    for (const v of [undefined, null, '', 'off', 'yes'])
+      expect(proj({ battle_atb_switch: v }).battleAtbSwitch).toBe('off')
+  })
+})
+
 describe('rpgProjectFromDoc: battle_enemy_grid_extent / battle_party_layout / battle_enemy_window_overlap_bottom (#1178)', () => {
   const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
   it('wide / tall はそのまま、未指定・空・不正は既定（不正は警告）。グリッドの有無とは独立', () => {

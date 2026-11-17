@@ -27,3 +27,8 @@ export function normalizeBattleAtb(
   if (typeof atbRaw !== 'string' || atbRaw.trim().toLowerCase() !== 'on') return undefined
   return { mode: normalizeAtbMode(modeRaw) }
 }
+
+/** frontmatter `battle_atb_switch` (#1195) を正規化する。`on`（大小無視）以外（未指定・空・未知値含む）は `off`＝切り替えなし */
+export function normalizeBattleAtbSwitch(raw: string | null | undefined): 'on' | 'off' {
+  return typeof raw === 'string' && raw.trim().toLowerCase() === 'on' ? 'on' : 'off'
+}

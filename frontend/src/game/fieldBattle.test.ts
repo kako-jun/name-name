@@ -132,6 +132,11 @@ describe('readFieldBattleSettings', () => {
     expect(readFieldBattleSettings(minimalProject()).textOverflow).toBe('ellipsis')
   })
 
+  it('ATB の入力キャラ切り替え (#1195) は RPGProject の値が入り、未指定は off', () => {
+    expect(readFieldBattleSettings(minimalProject({ battleAtbSwitch: 'on' })).atbSwitch).toBe('on')
+    expect(readFieldBattleSettings(minimalProject()).atbSwitch).toBe('off')
+  })
+
   it('広がり・下の重なり・味方の並び (#1178) は RPGProject の値が入り、未指定は normal / undefined / default', () => {
     const s = readFieldBattleSettings(
       minimalProject({
@@ -456,6 +461,15 @@ describe('openFieldBattle', () => {
     expect('textOverflow' in open({ settings: { layout: 'side' } }).s.opts).toBe(false)
   })
 
+  it('atbSwitch は on のときだけ opts に true で転送される (#1195)', () => {
+    const { s } = open({ settings: { layout: 'side', atbSwitch: 'on' } })
+    expect(s.opts.atbSwitch).toBe(true)
+    expect('atbSwitch' in open().s.opts).toBe(false)
+    expect('atbSwitch' in open({ settings: { layout: 'side', atbSwitch: 'off' } }).s.opts).toBe(
+      false
+    )
+  })
+
   it('commands / commandLabels は BattleScreen の opts に転送される (#873)', () => {
     const { s } = open({
       settings: {
@@ -549,6 +563,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       enemyGridExtent: 'normal',
       partyLayout: 'default',
       textOverflow: 'ellipsis',
+      atbSwitch: 'off',
       depth: null,
       foreground: undefined,
       pixelArt: false,
@@ -594,6 +609,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       enemyGridExtent: 'normal',
       partyLayout: 'default',
       textOverflow: 'ellipsis',
+      atbSwitch: 'off',
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',
       pixelArt: true,
