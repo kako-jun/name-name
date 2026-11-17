@@ -1,0 +1,119 @@
+/**
+ * フィールドメニューのステータス画面の配置 (#1191)。`statusLayout: 'ff'` のときだけ領域配置になり、
+ * 未指定・'line' は従来の 1 列のまま。他の画面（どうぐ等）・人物の切り替えは配置に依らず同じ。
+ */
+import { Container, Text } from 'pixi.js'
+import { describe, expect, it } from 'vitest'
+import { FieldMenuScreen } from './FieldMenuScreen'
+import type { StatusLayoutKind } from './fieldMenuStatus'
+import type { FieldMenuItemDef } from './fieldMenu'
+
+const ITEMS: FieldMenuItemDef[] = [
+  {
+    id: 'status',
+    label: 'ステータス',
+    content: { statusByParty: { a: [{ label: '固有素質', value: 'つよいきもち' }] } },
+  },
+  {
+    id: 'item',
+    label: 'どうぐ',
+    content: {
+      tabs: [{ label: 'つかう', action: 'use', entries: [{ label: 'ポーション', id: 'p' }] }],
+    },
+  },
+]
+const PARTY = [
+  {
+    id: 'a',
+    name: 'アスカ',
+    level: 12,
+    hp: 148,
+    maxHp: 230,
+    mp: 31,
+    maxMp: 56,
+    atk: 24,
+    def: 18,
+    agi: 15,
+    texture: null,
+  },
+  { id: 'b', name: 'ボブ', level: 9, hp: 80, maxHp: 120, atk: 20, def: 12, agi: 9, texture: null },
+]
+
+function texts(c: Container): string[] {
+  const out: string[] = []
+  const walk = (n: Container): void => {
+    if (n instanceof Text) out.push(n.text)
+    for (const ch of n.children) walk(ch as Container)
+  }
+  walk(c)
+  return out
+}
+
+function open(layout: StatusLayoutKind | undefined, index: number): FieldMenuScreen {
+  const s = new FieldMenuScreen({
+    width: 1280,
+    height: 720,
+    acrylic: false,
+    onClose: () => {},
+    ...(layout !== undefined ? { statusLayout: layout } : {}),
+  })
+  s.open({
+    items: ITEMS,
+    party: PARTY,
+    info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+    slots: [null, null, null],
+  })
+  s.dispatch({ type: 'tap', index })
+  s.tick(10_000)
+  return s
+}
+
+describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
+  it('未指定と line は従来の 1 列（能力値 3 つが 1 行）で、同じ描画になる', () => {
+    const none = texts(open(undefined, 0))
+    const line = texts(open('line', 0))
+    expect(line).toEqual(none)
+    expect(line).toContain('ちから 24 まもり 18 すばやさ 15')
+    expect(line).toContain('HP  148 / 230')
+  })
+
+  it('ff は能力値を行にまとめず、項目名と数字を別に出す（領域配置）。追加行も出る', () => {
+    const t = texts(open('ff', 0))
+    expect(t).not.toContain('ちから 24 まもり 18 すばやさ 15')
+    for (const s of [
+      'アスカ',
+      'Lv 12',
+      'HP',
+      '148 / 230',
+      'MP',
+      '31 / 56',
+      'ちから',
+      '24',
+      'まもり',
+      'すばやさ',
+      '固有素質',
+      'つよいきもち',
+    ])
+      expect(t).toContain(s)
+    // 前・次ボタンは従来どおり
+    expect(t).toContain('◀ 前')
+    expect(t).toContain('次 ▶')
+  })
+
+  it('ff でも左右の矢印（次・前）で人物が切り替わる', () => {
+    const s = open('ff', 0)
+    s.dispatch({ type: 'select', target: 'next', index: 0 })
+    s.tick(10_000)
+    const t = texts(s)
+    expect(t).toContain('ボブ')
+    expect(t).toContain('Lv 9')
+    expect(t).not.toContain('アスカ')
+    s.dispatch({ type: 'move', dx: -1, dy: 0 })
+    s.tick(10_000)
+    expect(texts(s)).toContain('アスカ')
+  })
+
+  it('ff はステータス以外の画面（どうぐ）の描画を変えない', () => {
+    expect(texts(open('ff', 1))).toEqual(texts(open('line', 1)))
+  })
+})

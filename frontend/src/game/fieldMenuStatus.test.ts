@@ -1,0 +1,149 @@
+/**
+ * ステータス画面の領域配置 (#1191)。領域が基準面に収まり、重ならず、項目を足しても崩れないことを確かめる。
+ */
+import { describe, expect, it } from 'vitest'
+import type { Rect } from './fieldMenu'
+import {
+  computeStatusLayout,
+  fitSize,
+  statusArea,
+  type StatusLayoutInput,
+  type StatusRegion,
+} from './fieldMenuStatus'
+
+const PRIMARY: Rect = { x: 25.6, y: 86.4, w: 1228.8, h: 561.6 }
+const PERSON = {
+  name: 'アスカ',
+  level: 12,
+  hp: 148,
+  maxHp: 230,
+  mp: 31,
+  maxMp: 56,
+  atk: 24,
+  def: 18,
+  agi: 15,
+}
+
+function input(over: Partial<StatusLayoutInput> = {}, base = 720): StatusLayoutInput {
+  return {
+    area: statusArea(PRIMARY, base),
+    font: 0.04 * base,
+    person: PERSON,
+    ...over,
+  }
+}
+
+const within = (r: Rect, A: Rect): boolean =>
+  r.x >= A.x - 1e-6 &&
+  r.y >= A.y - 1e-6 &&
+  r.x + r.w <= A.x + A.w + 1e-6 &&
+  r.y + r.h <= A.y + A.h + 1e-6
+const overlap = (a: Rect, b: Rect): boolean =>
+  a.x < b.x + b.w - 1e-6 &&
+  b.x < a.x + a.w - 1e-6 &&
+  a.y < b.y + b.h - 1e-6 &&
+  b.y < a.y + a.h - 1e-6
+const ids = (rs: StatusRegion[]): string[] => rs.map((r) => r.id)
+
+function checkSane(rs: StatusRegion[], A: Rect): void {
+  for (const r of rs) {
+    expect(within(r.rect, A), `${r.id} が領域の外`).toBe(true)
+    for (const c of r.cells) expect(within(c.rect, r.rect), `${r.id} の項目が領域の外`).toBe(true)
+  }
+  for (let i = 0; i < rs.length; i++)
+    for (let j = i + 1; j < rs.length; j++)
+      expect(overlap(rs[i].rect, rs[j].rect), `${rs[i].id} と ${rs[j].id} が重なる`).toBe(false)
+}
+
+describe('computeStatusLayout', () => {
+  it('追加行・帯が無いときは portrait / identity / vitals / stats だけ（空の枠を出さない）', () => {
+    const rs = computeStatusLayout(input())
+    expect(ids(rs)).toEqual(['portrait', 'identity', 'vitals', 'stats'])
+    checkSane(rs, input().area)
+    // 絵の枠は左の縦長（幅は領域の半分未満）、残りの領域はその右に縦に積む
+    const at = (id: string) => rs.find((r) => r.id === id)!.rect
+    expect(at('portrait').w).toBeLessThan(input().area.w / 2)
+    expect(at('portrait').h).toBeGreaterThan(at('portrait').w)
+    for (const id of ['identity', 'vitals', 'stats'])
+      expect(at(id).x).toBeGreaterThanOrEqual(at('portrait').x + at('portrait').w)
+    expect(at('identity').y).toBeLessThan(at('vitals').y)
+    expect(at('vitals').y).toBeLessThan(at('stats').y)
+  })
+
+  it('値の中身: 名前と Lv、HP・MP の現在/最大、能力値（未定義は --）', () => {
+    const rs = computeStatusLayout(input())
+    const cell = (id: string, k = 0) => rs.find((r) => r.id === id)!.cells[k]
+    expect(cell('identity')).toMatchObject({ label: 'アスカ', value: 'Lv 12' })
+    expect(cell('vitals', 0)).toMatchObject({ label: 'HP', value: '148 / 230' })
+    expect(cell('vitals', 1)).toMatchObject({ label: 'MP', value: '31 / 56' })
+    expect(rs.find((r) => r.id === 'stats')!.cells.map((c) => [c.label, c.value])).toEqual([
+      ['ちから', '24'],
+      ['まもり', '18'],
+      ['すばやさ', '15'],
+    ])
+    const bare = computeStatusLayout(input({ person: { name: 'B', hp: 1, maxHp: 2 } }))
+    expect(bare.find((r) => r.id === 'vitals')!.cells).toHaveLength(1)
+    expect(bare.find((r) => r.id === 'identity')!.cells[0].value).toBe('Lv --')
+    expect(bare.find((r) => r.id === 'stats')!.cells.map((c) => c.value)).toEqual([
+      '--',
+      '--',
+      '--',
+    ])
+  })
+
+  it('追加行を足すと extras 領域ができ、帯の行を足すと band 領域ができる（領域の追加が 1 か所で済む）', () => {
+    const rows = [
+      { label: '固有素質', value: 'つよいきもち' },
+      { label: 'そうび', value: 'かたな' },
+    ]
+    const withExtras = computeStatusLayout(input({ extraRows: rows }))
+    expect(ids(withExtras)).toContain('extras')
+    expect(withExtras.find((r) => r.id === 'extras')!.cells).toHaveLength(2)
+    checkSane(withExtras, input().area)
+    const full = computeStatusLayout(
+      input({
+        extraRows: rows,
+        bandRows: [
+          { label: '経験値', value: '1200' },
+          { label: '次のレベルまで', value: '80' },
+        ],
+      })
+    )
+    expect(ids(full)).toEqual(['band', 'portrait', 'identity', 'vitals', 'stats', 'extras'])
+    checkSane(full, input().area)
+    // 帯は最下段・全幅。絵の枠は帯の上で止まる
+    const band = full.find((r) => r.id === 'band')!.rect
+    const A = input().area
+    expect(band.w).toBeCloseTo(A.w)
+    expect(band.y + band.h).toBeCloseTo(A.y + A.h)
+    expect(
+      full.find((r) => r.id === 'portrait')!.rect.y + full.find((r) => r.id === 'portrait')!.rect.h
+    ).toBeLessThan(band.y)
+  })
+
+  it('行が多くても全領域が基準面に収まる（行の高さを詰める）', () => {
+    const many = Array.from({ length: 9 }, (_, k) => ({ label: `項目${k}`, value: String(k) }))
+    const rs = computeStatusLayout(input({ extraRows: many, bandRows: many.slice(0, 3) }))
+    checkSane(rs, input().area)
+  })
+
+  it('1280x720 と 390x219（スマホの縮小表示）の比率で同じ構成になる', () => {
+    const small: Rect = { x: 7.8, y: 26.28, w: 374.4, h: 170.82 }
+    const a = computeStatusLayout({
+      area: statusArea(small, 219),
+      font: 0.04 * 219,
+      person: PERSON,
+      extraRows: [{ label: 'そうび', value: 'かたな' }],
+    })
+    const b = computeStatusLayout(input({ extraRows: [{ label: 'そうび', value: 'かたな' }] }))
+    expect(ids(a)).toEqual(ids(b))
+    checkSane(a, statusArea(small, 219))
+  })
+})
+
+describe('fitSize', () => {
+  it('収まるならそのまま、長いと縮める', () => {
+    expect(fitSize(20, 400, 'そうび', 'かたな')).toBe(20)
+    expect(fitSize(20, 100, '固有素質', 'つよいきもちのこころ')).toBeLessThan(20)
+  })
+})

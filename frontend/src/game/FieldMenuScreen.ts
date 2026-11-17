@@ -32,6 +32,7 @@ import {
   type MenuLayout,
   type Rect,
 } from './fieldMenu'
+import { computeStatusLayout, statusArea, type StatusLayoutKind } from './fieldMenuStatus'
 import {
   MAX_PARTY_SLOTS,
   appstoreHasParty,
@@ -146,6 +147,8 @@ export interface FieldMenuScreenOptions {
   acrylic: boolean
   /** false = 使用が成功したとき（ok=true）の文を説明バー・案内帯に出さない (#1185)。失敗の文は常に出す。HP/MP の数字更新は変えない。既定 true */
   useMessage?: boolean
+  /** ステータス画面の配置 (#1191)。`ff` = 領域に分けた FF5・FF6 風、`line` / 未指定 = 従来の 1 列。他のキーとは結合しない */
+  statusLayout?: StatusLayoutKind
   /** 画面遷移の速さ（既定 `DEFAULT_MENU_TRANSITION`） */
   transition?: MenuTransitionTiming
   /** メニューが閉じた（最上位で戻った）。呼び出し側がフィールドへ戻す */
@@ -852,6 +855,10 @@ export class FieldMenuScreen extends Container {
       C.addChild(this.text(MENU_EMPTY_BODY, f, GRAY, P.x + P.w / 2, P.y + P.h / 2, 'center'))
       return
     }
+    if (this.opts.statusLayout === 'ff') {
+      this.drawStatusFf(C, p, sl, lay, content)
+      return
+    }
     const x0 = P.x + P.w * 0.08
     const lh = P.h * 0.1
     let y = P.y + P.h * 0.2
@@ -866,6 +873,44 @@ export class FieldMenuScreen extends Container {
     // 定義側・実状態にある項目だけ出す（無い項目は出さない）
     for (const row of content.statusByParty[p.id] ?? []) line(`${row.label}  ${row.value}`)
     this.placeArt(this.artDeep, p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
+  }
+
+  /** FF5・FF6 風の領域配置 (#1191)。領域と中の項目は `computeStatusLayout` が決め、ここは順に描くだけ */
+  private drawStatusFf(
+    C: Container,
+    p: FieldMenuPartyView,
+    sl: ScreenLayout,
+    lay: MenuLayout,
+    content: ResolvedContent
+  ): void {
+    const regions = computeStatusLayout({
+      area: statusArea(sl.primary, lay.base.h),
+      font: sl.fonts.row,
+      person: p,
+      // 定義側・実状態にある項目だけ出す（無い項目は出さない）
+      extraRows: content.statusByParty[p.id] ?? [],
+    })
+    for (const r of regions) {
+      this.panel(C, r.rect, lay)
+      if (r.id === 'portrait') {
+        const R = r.rect
+        const tex = p.texture
+        const byWidth = tex ? ((R.w * 0.9) / tex.width) * tex.height : 0
+        this.placeArt(
+          this.artDeep,
+          tex,
+          Math.min(R.h * 0.88, byWidth),
+          R.x + R.w / 2,
+          R.y + R.h * 0.95
+        )
+      }
+      for (const c of r.cells) {
+        const cy = c.rect.y + c.rect.h / 2
+        const left = c.tone === 'name' ? WHITE : NOTICE_COLOR
+        C.addChild(this.text(c.label, c.labelSize, left, c.rect.x, cy, 'left'))
+        C.addChild(this.text(c.value, c.valueSize, WHITE, c.rect.x + c.rect.w, cy, 'right'))
+      }
+    }
   }
 
   private artIndex = 0
