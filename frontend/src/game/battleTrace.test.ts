@@ -160,4 +160,80 @@ describe('battleTrace (#1197)', () => {
     const e0 = traceDump().session.entries.filter((x) => x.k === 'b.start')
     expect(e0).toHaveLength(1)
   })
+
+  it('脚本の台詞・知らせの本文は記録しない（行動の ref は呪文・道具などのマスター名だけ）', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine([ent('p0', { mp: 1 })], [ent('e0')], { atb: {} })
+    attachBattleTrace(e)
+    // MP 不足の知らせ（notice）。label は文言
+    while (e.getCurrentActorIndex() < 0) e.tick(100)
+    e.selectSpell(SPELL, 'e0')
+    const acts = traceDump()
+      .session.entries.filter((x) => x.k === 'b.act')
+      .map((x) => x.d as { k: string; ref: string | null })
+    expect(acts.some((a) => a.k === 'notice')).toBe(true)
+    for (const a of acts.filter((a) => a.k === 'notice')) expect(a.ref).toBeNull()
+    expect(JSON.stringify(traceDump())).not.toContain('MPが')
+  })
+
+  it('再現: notifyBlocked（入力できない知らせ）も記録と再実行で一致する', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+    attachBattleTrace(e)
+    while (e.getCurrentActorIndex() < 0) e.tick(100)
+    e.notifyBlocked('つかえない')
+    e.selectAttack()
+    for (let i = 0; i < 300 && !e.isOver(); i++) e.tick(100)
+    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    expect(b.steps.some((s) => (s.d as { c?: string }).c === 'notifyBlocked')).toBe(true)
+    const r = replayBattle(b)
+    expect(firstMismatch(b.expected, r.produced)).toBeNull()
+  })
+
+  it('再現: セーブから再開した戦闘（初期ゲージ・待ちの順あり）がずれない', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine(
+      [ent('p0', { agi: 3 }), ent('p1', { agi: 9 })],
+      [ent('e0', { hp: 120, maxHp: 120, agi: 6 })],
+      { atb: { initialGauges: { party: [700, 1000], enemies: [400] } }, restore: { atbQueue: [1] } }
+    )
+    attachBattleTrace(e)
+    playOut(e)
+    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const atb = (b.start.d as { atb: { g: number[][]; q: number[] } }).atb
+    expect(atb.g).toEqual([[700, 1000], [400]])
+    expect(atb.q).toEqual([1])
+    const r = replayBattle(b, { spell: () => SPELL })
+    expect(firstMismatch(b.expected, r.produced)).toBeNull()
+  })
+
+  it('再現: active 方式で 2 人が同時に満タン（同じ AGI）でも、まとめた経過時間で行動順がずれない', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine(
+      [ent('p0', { agi: 7, hp: 400, maxHp: 400 }), ent('p1', { agi: 7, hp: 400, maxHp: 400 })],
+      [ent('e0', { agi: 7, hp: 400, maxHp: 400 }), ent('e1', { agi: 7, hp: 400, maxHp: 400 })],
+      { atb: { mode: 'active' } }
+    )
+    attachBattleTrace(e)
+    let guard = 0
+    while (!e.isOver() && guard++ < 4000) {
+      e.tick(16.7)
+      if (e.getCurrentActorIndex() >= 0) e.selectAttack()
+    }
+    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    expect(b.expected.filter((x) => x.k === 'b.act').length).toBeGreaterThan(8)
+    const r = replayBattle(b)
+    expect(firstMismatch(b.expected, r.produced)).toBeNull()
+  })
+
+  it('番の入れ替え（b.switch）は再実行の受け口 switchActor に渡る（配線は #1201 のマージ後）', () => {
+    configureTrace(true, { storage: null })
+    const e = new BattleEngine([ent('p0')], [ent('e0')], { atb: {} })
+    const t = attachBattleTrace(e)!
+    t.switched({ from: 0, to: 1 })
+    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const seen: unknown[] = []
+    replayBattle(b, { switchActor: (_e, d) => seen.push([d.from, d.to]) })
+    expect(seen).toEqual([[0, 1]])
+  })
 })

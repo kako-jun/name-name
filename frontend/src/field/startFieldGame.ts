@@ -406,7 +406,7 @@ async function loadNpcScript(
 export async function startFieldGame(opts: StartFieldGameOptions): Promise<() => void> {
   const { config, mount, hud, devToolbar, docKey, search } = opts
   // 内部トレースログ (#1197)。frontmatter `trace: on` のときだけ働く（既定 off）
-  configureTrace(!!config.traceOn)
+  configureTrace(!!config.traceOn, { game: docKey })
   /** 通常のエラー表示（置換方式。後の呼び出しが前を消す）と、セーブ再開の通知（#1021。どの経路の showError でも消えない）を分けて持つ */
   let baseNotice: string | null = hud?.initialNotice ?? null
   let resumeNotice: string | null = null

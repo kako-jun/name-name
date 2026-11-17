@@ -11,7 +11,6 @@ import { TRACE_CAPACITY, TraceRing, sanitizeTraceValue } from './traceRing'
 import {
   createBrowserTraceStorage,
   parsePersisted,
-  type TracePersisted,
   type TraceSession,
   type TraceStorage,
 } from './traceStorage'
@@ -19,6 +18,9 @@ import {
 export type { TraceEntry, TraceValue } from './traceRing'
 
 /** 取り出す JSON の形。version は将来の形式変更用 */
+/** 起動のたびに必ず出る記録。これだけのセッションは「中身のある前回」とみなさない（#1197 レビュー） */
+const STARTUP_KINDS = new Set(['trace.on', 'f.scene', 'f.move'])
+
 export interface TraceDump {
   version: 1
   /** 直前までのセッション（再読み込み前の分）。無ければ null */
@@ -39,6 +41,33 @@ let dirty = false
 let storage: TraceStorage | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 let listenersAttached = false
+/** このゲームの識別。別のゲームの記録を前回分に混ぜない */
+let gameId = ''
+/** 前回分の JSON（不変なので 1 回だけ文字列化して持つ。保存のたびに文字列化し直さない） */
+let prevJson = 'null'
+/** 例外起因の同期保存の最終時刻。毎フレーム例外でも書き込みを間引く */
+let lastErrFlushAt = -Infinity
+const ERR_FLUSH_MIN_MS = 2000
+const onPageHide = (): void => traceFlush(true)
+const onVisibility = (): void => {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') traceFlush(true)
+}
+const onError = (e: Event): void => {
+  const ev = e as ErrorEvent
+  traceRec('err', { msg: String(ev.message ?? ''), at: `${ev.lineno ?? 0}:${ev.colno ?? 0}` })
+  flushAfterError()
+}
+const onRejection = (e: Event): void => {
+  const r = (e as PromiseRejectionEvent).reason
+  traceRec('err', { msg: String(r instanceof Error ? r.message : r), promise: true })
+  flushAfterError()
+}
+function flushAfterError(): void {
+  const now = nowMs()
+  if (now - lastErrFlushAt < ERR_FLUSH_MIN_MS) return
+  lastErrFlushAt = now
+  traceFlush(true)
+}
 let pendingLoad: Promise<void> = Promise.resolve()
 
 const nowMs = (): number =>
@@ -67,6 +96,7 @@ export function traceNewSeed(): number {
 function currentSession(): TraceSession {
   return {
     id: sessionId,
+    game: gameId,
     startedAt,
     savedAt: Date.now(),
     total: ring?.total ?? 0,
@@ -89,8 +119,8 @@ export function traceFlush(sync = false): void {
   if (!enabled || !storage || !ring) return
   if (!dirty && !sync) return
   dirty = false
-  const p: TracePersisted = { v: 1, session: currentSession(), prev }
-  const json = JSON.stringify(p)
+  // 前回分は不変なので、文字列化済みのものをそのまま継ぎ足す（今回分だけ都度文字列化する）
+  const json = `{"v":1,"session":${JSON.stringify(currentSession())},"prev":${prevJson}}`
   if (sync) storage.saveSync(json)
   void storage.saveAsync(json)
 }
@@ -103,21 +133,20 @@ export function traceReady(): Promise<void> {
 function attachListeners(): void {
   if (listenersAttached || typeof globalThis.addEventListener !== 'function') return
   listenersAttached = true
-  globalThis.addEventListener('pagehide', () => traceFlush(true))
-  globalThis.addEventListener('visibilitychange', () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') traceFlush(true)
-  })
-  // 例外は記録して、すぐ保存する（落ちたあとに追えるよう）
-  globalThis.addEventListener('error', (e: Event) => {
-    const ev = e as ErrorEvent
-    traceRec('err', { msg: String(ev.message ?? ''), at: `${ev.lineno ?? 0}:${ev.colno ?? 0}` })
-    traceFlush(true)
-  })
-  globalThis.addEventListener('unhandledrejection', (e: Event) => {
-    const r = (e as PromiseRejectionEvent).reason
-    traceRec('err', { msg: String(r instanceof Error ? r.message : r), promise: true })
-    traceFlush(true)
-  })
+  globalThis.addEventListener('pagehide', onPageHide)
+  globalThis.addEventListener('visibilitychange', onVisibility)
+  // 例外は記録して、すぐ保存する（落ちたあとに追えるよう。毎フレーム例外でも 2 秒に 1 回まで）
+  globalThis.addEventListener('error', onError)
+  globalThis.addEventListener('unhandledrejection', onRejection)
+}
+
+function detachListeners(): void {
+  if (!listenersAttached) return
+  listenersAttached = false
+  globalThis.removeEventListener('pagehide', onPageHide)
+  globalThis.removeEventListener('visibilitychange', onVisibility)
+  globalThis.removeEventListener('error', onError)
+  globalThis.removeEventListener('unhandledrejection', onRejection)
 }
 
 /** 取り出しの隠し操作をコンソールに生やす */
@@ -162,6 +191,7 @@ export function traceDownload(): boolean {
 export function traceClear(): void {
   ring?.clear()
   prev = null
+  prevJson = 'null'
   dirty = true
   traceFlush(true)
 }
@@ -181,16 +211,22 @@ export function wantsTraceDownload(search: string): boolean {
  */
 export function configureTrace(
   on: boolean,
-  opts: { storage?: TraceStorage | null; capacity?: number; search?: string } = {}
+  opts: { storage?: TraceStorage | null; capacity?: number; search?: string; game?: string } = {}
 ): void {
-  if (!on) {
+  const game = opts.game ?? ''
+  if (!on || (enabled && game !== gameId)) {
+    // off に替わった・別のゲームに替わった: 記録を止め、コンソール API とイベント受け口を外す（保存済みには触らない）
+    traceFlush(true)
     enabled = false
     if (timer) clearInterval(timer)
     timer = null
-    return
+    detachListeners()
+    delete (globalThis as { nameNameTrace?: unknown }).nameNameTrace
+    if (!on) return
   }
   if (enabled) return
   enabled = true
+  gameId = game
   ring = new TraceRing(opts.capacity ?? TRACE_CAPACITY)
   sessionId = Math.floor(Math.random() * 0xffffffff)
     .toString(16)
@@ -198,7 +234,9 @@ export function configureTrace(
   startedAt = Date.now()
   t0 = nowMs()
   prev = null
+  prevJson = 'null'
   dirty = false
+  lastErrFlushAt = -Infinity
   storage = opts.storage === undefined ? createBrowserTraceStorage() : opts.storage
   traceRec('trace.on', { v: 1, cap: ring.capacity })
   installConsoleApi()
@@ -208,8 +246,12 @@ export function configureTrace(
       const old = parsePersisted(json)
       if (old) {
         // 前回のセッションに「起動の印以外」の記録があれば、それを prev にする。無ければ（空の再読み込みの連続）前の prev を残す
-        const meaningful = old.session.entries.some((e) => e.k !== 'trace.on')
-        prev = meaningful ? old.session : old.prev
+        // 起動のたびに必ず出る記録（起動・場面・最初の移動）だけのセッションは前回とみなさない（戦闘 → 再読み込み 2 回でも戦闘が残る）。
+        // 別のゲームの記録は混ぜない
+        const meaningful = old.session.entries.some((e) => !STARTUP_KINDS.has(e.k))
+        const cand = meaningful ? old.session : old.prev
+        prev = cand && (cand.game ?? '') === gameId ? cand : null
+        prevJson = JSON.stringify(prev)
       }
       const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '')
       if (wantsTraceDownload(search)) traceDownload()
@@ -228,6 +270,10 @@ export function resetTraceForTest(): void {
   timer = null
   ring = null
   prev = null
+  prevJson = 'null'
+  gameId = ''
+  detachListeners()
+  delete (globalThis as { nameNameTrace?: unknown }).nameNameTrace
   storage = null
   dirty = false
   pendingLoad = Promise.resolve()

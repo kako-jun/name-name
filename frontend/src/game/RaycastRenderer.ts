@@ -435,7 +435,7 @@ export class RaycastRenderer {
     this.masterItems = gameData.items
     this.battleSettings = readFieldBattleSettings(gameData)
     // 内部トレースログ (#1197)。frontmatter `trace: on` のときだけ（既定 off）
-    configureTrace(gameData.trace === 'on')
+    configureTrace(gameData.trace === 'on', { game: gameData.name })
     // エフェクト重ね (#941)。JSON は非同期に読む（読み終わる前に始まった戦闘はエフェクトなし）
     this.battleEffects = undefined
     const effectsToken = ++this.battleEffectsToken

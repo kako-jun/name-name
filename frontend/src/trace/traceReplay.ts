@@ -31,7 +31,7 @@ export interface RecordedBattle {
   expected: TraceEntry[]
 }
 
-const STEP_KINDS = new Set(['b.cmd', 'b.adv', 'b.hold', 'b.scope'])
+const STEP_KINDS = new Set(['b.cmd', 'b.adv', 'b.hold', 'b.scope', 'b.switch'])
 export const COMPARED_KINDS = new Set([
   'b.act',
   'b.hp',
@@ -77,6 +77,8 @@ export interface ReplayResolvers {
   skill?: (ref: string | null) => SkillExecution | undefined
   item?: (ref: string | null) => ItemExecution | undefined
   summon?: (ref: string | null) => SummonExecution | undefined
+  /** 番の入れ替え（`b.switch`、#1201 のマージ後に配線）。記録の要点を受けてエンジンを動かす。未指定なら無視する */
+  switchActor?: (engine: BattleEngine, data: Record<string, unknown>) => void
 }
 
 export interface ReplayResult {
@@ -100,10 +102,23 @@ export function replayBattle(
     throw new Error('この戦闘は乱数の種が無く再実行できません（トレース on で始めた戦闘のみ対象）')
   const party = (sd.party as unknown as BattleEntity[]).map((e) => structuredClone(e))
   const enemies = (sd.enemies as unknown as BattleEntity[]).map((e) => structuredClone(e))
-  const atb = sd.atb as { mode?: 'wait' | 'active' } | null
+  const atb = sd.atb as {
+    mode?: 'wait' | 'active'
+    g?: number[][]
+    q?: number[]
+  } | null
   const engine = new BattleEngine(party, enemies, {
     seed,
-    ...(atb ? { atb: { mode: atb.mode ?? 'wait' } } : {}),
+    ...(atb
+      ? {
+          atb: {
+            mode: atb.mode ?? 'wait',
+            // セーブからの再開は途中のゲージ・待ちの順から始まる
+            ...(atb.g ? { initialGauges: { party: atb.g[0], enemies: atb.g[1] } } : {}),
+          },
+          ...(atb.q && atb.q.length > 0 ? { restore: { atbQueue: atb.q } } : {}),
+        }
+      : {}),
     ...engineOptions,
   })
   const produced: TraceEntry[] = []
@@ -138,6 +153,9 @@ export function replayBattle(
         break
       case 'b.cmd':
         applyCommand(engine, d, resolvers)
+        break
+      case 'b.switch':
+        resolvers.switchActor?.(engine, d)
         break
     }
   }
@@ -175,7 +193,7 @@ function applyCommand(engine: BattleEngine, d: Rec, r: ReplayResolvers): void {
       break
     }
     case 'notifyBlocked':
-      engine.notifyBlocked(ref ?? '')
+      engine.notifyBlocked(target ?? ref ?? '')
       break
   }
 }

@@ -197,4 +197,68 @@ describe('BattleScreen: 内部トレース (#1197)', () => {
     // 窓を開いている間は ATB の時間を止める指示も出る（ATB の戦闘のみ。ここは従来ターン制なので出ない）
     expect(ofKind('b.hold')).toEqual([])
   })
+
+  it('倒れの絵が無い者は、沈み込み（sink）で倒れを表したことが記録に出る', async () => {
+    configureTrace(true, { storage: null })
+    vi.spyOn(Assets, 'load').mockImplementation(
+      ((): Promise<Texture> =>
+        Promise.resolve(
+          new Texture({ source: new TextureSource({ width: 40, height: 80 }) })
+        )) as never
+    )
+    const engine = new BattleEngine(
+      [
+        entity('hero', {
+          sprite: 'img/h.webp',
+          poses: { idle: 'img/h-idle.webp' },
+          hp: 1,
+          maxHp: 30,
+        }),
+      ],
+      [entity('boss', { atk: 5, hp: 500, maxHp: 500, sprite: 'img/b.webp' })],
+      { rng: () => 0.5, skills: {} }
+    )
+    const s = new BattleScreen(engine, 800, 450, {
+      layout: 'side',
+      presentation: 'ff',
+      motion: 'snappy',
+    })
+    created.push(s)
+    await flush()
+    s.tick(1500)
+    s.tick(200)
+    engine.selectAttack()
+    for (let i = 0; i < 300 && !engine.isOver(); i++) s.tick(50)
+    for (let i = 0; i < 40; i++) s.tick(50)
+    const down = ofKind('b.pose')
+      .map((e) => e.d as { s: number; req: string; look?: string })
+      .find((p) => p.s === 0 && p.req === 'down')
+    expect(down?.look).toBe('sink')
+  })
+
+  it('dq 方式でも、姿（idle → down）が記録される', async () => {
+    configureTrace(true, { storage: null })
+    vi.spyOn(Assets, 'load').mockImplementation(
+      ((): Promise<Texture> =>
+        Promise.resolve(
+          new Texture({ source: new TextureSource({ width: 40, height: 80 }) })
+        )) as never
+    )
+    const engine = new BattleEngine(
+      [entity('hero', { sprite: 'img/h.webp', hp: 1, maxHp: 30 })],
+      [entity('boss', { atk: 5, hp: 500, maxHp: 500, sprite: 'img/b.webp' })],
+      { rng: () => 0.5, skills: {} }
+    )
+    const s = new BattleScreen(engine, 800, 450, { layout: 'side', presentation: 'dq' })
+    created.push(s)
+    await flush()
+    engine.selectAttack()
+    ;(s as unknown as { refresh(): void }).refresh()
+    const poses = ofKind('b.pose')
+      .map((e) => e.d as { s: number; req: string })
+      .filter((p) => p.s === 0)
+      .map((p) => p.req)
+    expect(poses[0]).toBe('idle')
+    expect(poses[poses.length - 1]).toBe('down')
+  })
 })

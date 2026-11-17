@@ -56,7 +56,8 @@ export class BattleTracer {
   private lastStatus: { party: string[]; enemy: string[] } = { party: [], enemy: [] }
   private lastSnap = ''
   private lastWin = ''
-  private readonly lastPose = new Map<string, string>()
+  /** ポーズ比較用の控え（陣営ごとに index 引き。毎フレーム文字列を作らない） */
+  private readonly lastPose: { party: PoseMemo[]; enemy: PoseMemo[] } = { party: [], enemy: [] }
 
   constructor(
     private readonly engine: BattleEngine,
@@ -74,7 +75,14 @@ export class BattleTracer {
       seed: engine.getRngSeed() ?? null,
       party: s.party.map(ent),
       enemies: s.enemies.map(ent),
-      atb: s.atb ? { mode: s.atb.mode } : null,
+      // ATB の方式と、開始時のゲージ・コマンド待ちの順（セーブからの再開は途中のゲージから始まる）
+      atb: s.atb
+        ? {
+            mode: s.atb.mode,
+            g: [s.atb.partyGauge.map(Math.round), s.atb.enemyGauge.map(Math.round)],
+            q: [...s.atb.queue],
+          }
+        : null,
       ...info,
     })
     this.syncBaseline()
@@ -111,6 +119,15 @@ export class BattleTracer {
       ph: s.phase,
       ...(extra === undefined ? {} : { x: extra }),
     })
+  }
+
+  /**
+   * 番の入れ替え（#1201 の `switchAtbActor` など、コマンド入力権を別の味方へ移す入力）。#1201 のマージ後にエンジンの包みから呼ぶ。
+   * 再実行側の受け口は `ReplayResolvers.switchActor`（`b.switch` を入力として扱う）
+   */
+  switched(data: Record<string, unknown>): void {
+    this.flushAdv()
+    this.sink('b.switch', { bid: this.bid, ...data })
   }
 
   /** 候補窓による ATB 停止の切り替え */
@@ -232,12 +249,13 @@ export class BattleTracer {
     index: number,
     requested: string,
     resolved: string | null,
-    path: string | null
+    path: string | null,
+    look: string | null = null
   ): void {
-    const key = `${side}:${index}`
-    const sig = `${requested}|${resolved ?? ''}|${path ?? ''}`
-    if (this.lastPose.get(key) === sig) return
-    this.lastPose.set(key, sig)
+    const list = this.lastPose[side]
+    const m = list[index]
+    if (m && m.req === requested && m.res === resolved && m.path === path && m.look === look) return
+    list[index] = { req: requested, res: resolved, path, look }
     this.sink('b.pose', {
       bid: this.bid,
       s: SIDE[side],
@@ -245,6 +263,8 @@ export class BattleTracer {
       req: requested,
       res: resolved,
       img: path,
+      // 倒れの絵が無い者の見せ方（`sink` = 沈み込み / `tilt` = 傾き）。絵で表す者は null
+      ...(look ? { look } : {}),
     })
   }
 
@@ -330,6 +350,13 @@ export class BattleTracer {
   }
 }
 
+interface PoseMemo {
+  req: string
+  res: string | null
+  path: string | null
+  look: string | null
+}
+
 function statusSig(e: BattleEntity): string {
   const st = e.status
   if (!st) return ''
@@ -344,7 +371,8 @@ function actData(bid: number, ev: BattleActionEvent): TraceValue {
     seq: ev.seq,
     a: [SIDE[ev.actor.side], ev.actor.index],
     k: ev.kind,
-    ref: ev.label ?? null,
+    // 脚本の台詞・知らせ（notice）の label は本文なので記録しない。呪文・道具などマスター名だけ残す
+    ref: ev.line || ev.kind === 'notice' ? null : (ev.label ?? null),
     hits: ev.hits.map((h) => [
       SIDE[h.target.side],
       h.target.index,

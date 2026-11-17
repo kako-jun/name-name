@@ -2821,7 +2821,30 @@ export class BattleScreen extends Container {
       this.applyMotionFrame()
     }
     this.syncMenu()
-    if (this.bt) this.traceSnap(false)
+    if (this.bt) {
+      if (this.presentation !== 'ff') this.traceDqPoses()
+      this.traceSnap(false)
+    }
+  }
+
+  /** 内部トレース (#1197): dq 方式（絵の差し替えなし）の姿。生きていれば idle、HP 0 なら down（絵は 1 枚のまま） */
+  private traceDqPoses(): void {
+    const s = this.engine.getState()
+    const each = (side: 'party' | 'enemy', views: EntityView[], list: readonly BattleEntity[]) => {
+      views.forEach((v, i) => {
+        const down = (list[i]?.hp ?? 1) <= 0
+        this.bt?.pose(
+          side,
+          i,
+          down ? 'down' : 'idle',
+          null,
+          v.baseVisual?.path ?? null,
+          down ? 'sink' : null
+        )
+      })
+    }
+    each('party', this.partyViews, s.party)
+    each('enemy', this.enemyViews, s.enemies)
   }
 
   /** 内部トレース (#1197): 状態の全体像を書く。periodic = 戦闘の時計で 1 秒ごと、そうでなければ変わったときだけ */
@@ -3713,7 +3736,13 @@ export class BattleScreen extends Container {
             index,
             m.pose,
             resolved?.pose ?? null,
-            (resolved?.value ?? view.baseVisual)?.path ?? null
+            (resolved?.value ?? view.baseVisual)?.path ?? null,
+            // 倒れの絵が無い者は、沈み込み（sink）か傾き（tilt）で倒れを表す
+            m.pose === 'down' && resolved?.pose !== 'down'
+              ? this.isAcrylicStand() && view.acrylicBack
+                ? 'tilt'
+                : 'sink'
+              : null
           )
         const hasDownVisual = m.pose === 'down' && resolved?.pose === 'down'
         if (vis && vis !== view.shownVisual) this.showVisual(view, vis)

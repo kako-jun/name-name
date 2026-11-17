@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   configureTrace,
   resetTraceForTest,
@@ -10,7 +10,7 @@ import {
   traceRec,
   wantsTraceDownload,
 } from './trace'
-import { createMemoryTraceStorage } from './traceStorage'
+import { createBrowserTraceStorage, createMemoryTraceStorage } from './traceStorage'
 import { normalizeTrace } from './traceOption'
 
 afterEach(() => {
@@ -49,7 +49,7 @@ describe('trace (#1197)', () => {
     const st = createMemoryTraceStorage()
     configureTrace(true, { storage: st, search: '' })
     await traceReady()
-    traceRec('f.scene', { id: 'a' })
+    traceRec('f.talk', { npc: 'a', open: 1 })
     traceFlush(true)
     const firstId = traceDump().session.id
 
@@ -59,7 +59,7 @@ describe('trace (#1197)', () => {
     const d = traceDump()
     expect(d.session.id).not.toBe(firstId)
     expect(d.prev?.id).toBe(firstId)
-    expect(d.prev?.entries.map((e) => e.k)).toEqual(['trace.on', 'f.scene'])
+    expect(d.prev?.entries.map((e) => e.k)).toEqual(['trace.on', 'f.talk'])
   })
 
   it('何も起きなかった再読み込みは、古い prev を潰さない', async () => {
@@ -96,6 +96,113 @@ describe('trace (#1197)', () => {
     expect(traceDump().session.entries).toEqual([])
     expect(traceDump().prev).toBeNull()
     expect(JSON.parse(st.value as string).session.entries).toEqual([])
+  })
+})
+
+describe('trace: 前回分・ゲーム識別・解除・例外 (#1197 レビュー)', () => {
+  /** 一枚絵フィールドの起動で必ず出る記録 */
+  const boot = (): void => {
+    traceRec('f.scene', { id: 'a' })
+    traceRec('f.move', { x: 1, y: 2 })
+  }
+
+  it('戦闘 → 再読み込み → 再読み込み → 取り出し でも戦闘の記録が残る', async () => {
+    const st = createMemoryTraceStorage()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    boot()
+    traceRec('b.end', { out: 'defeat' })
+    traceFlush(true)
+    const battleSession = traceDump().session.id
+    for (let i = 0; i < 3; i++) {
+      resetTraceForTest()
+      configureTrace(true, { storage: st, search: '', game: 'g' })
+      await traceReady()
+      boot()
+      traceFlush(true)
+    }
+    const d = traceDump()
+    expect(d.prev?.id).toBe(battleSession)
+    expect(d.prev?.entries.some((e) => e.k === 'b.end')).toBe(true)
+  })
+
+  it('別のゲームの記録は前回分に混ぜない', async () => {
+    const st = createMemoryTraceStorage()
+    configureTrace(true, { storage: st, search: '', game: 'a' })
+    await traceReady()
+    traceRec('b.end')
+    traceFlush(true)
+    resetTraceForTest()
+    configureTrace(true, { storage: st, search: '', game: 'b' })
+    await traceReady()
+    expect(traceDump().prev).toBeNull()
+  })
+
+  it('同じページで別のゲームに替えると、前のゲームの記録は引き継がず作り直す', () => {
+    configureTrace(true, { storage: null, game: 'a' })
+    traceRec('x')
+    configureTrace(true, { storage: null, game: 'b' })
+    expect(traceDump().session.entries.map((e) => e.k)).toEqual(['trace.on'])
+  })
+
+  it('off に替えると、コンソール API とイベント受け口が外れる', () => {
+    configureTrace(true, { storage: null })
+    expect((globalThis as { nameNameTrace?: unknown }).nameNameTrace).toBeDefined()
+    configureTrace(false)
+    expect((globalThis as { nameNameTrace?: unknown }).nameNameTrace).toBeUndefined()
+    globalThis.dispatchEvent(new ErrorEvent('error', { message: 'late' }))
+    expect(traceDump().session.entries.some((e) => e.k === 'err')).toBe(false)
+  })
+
+  it('例外を記録し、毎フレーム例外でも同期保存は間引く', async () => {
+    const st = createMemoryTraceStorage()
+    let syncWrites = 0
+    const origSync = st.saveSync
+    st.saveSync = (j: string) => {
+      syncWrites++
+      origSync(j)
+    }
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    for (let i = 0; i < 50; i++)
+      globalThis.dispatchEvent(new ErrorEvent('error', { message: 'boom', lineno: 3 }))
+    const errs = traceDump().session.entries.filter((e) => e.k === 'err')
+    expect(errs).toHaveLength(50)
+    expect(errs[0].d).toMatchObject({ msg: 'boom', at: '3:0' })
+    expect(syncWrites).toBe(1)
+  })
+
+  it('保存先が使えない環境（localStorage が例外・IndexedDB 無し）でも本編を止めない', async () => {
+    const ls = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    configureTrace(true, { storage: createBrowserTraceStorage(), search: '', game: 'g' })
+    await traceReady()
+    traceRec('b.end')
+    expect(() => traceFlush(true)).not.toThrow()
+    expect(traceDump().session.entries.map((e) => e.k)).toContain('b.end')
+    ls.mockRestore()
+    vi.restoreAllMocks()
+  })
+
+  it('保存される JSON は取り出しと同じ形（前回分はキャッシュした文字列を継ぎ足す）', async () => {
+    const st = createMemoryTraceStorage()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    traceRec('b.end', { out: 'victory' })
+    traceFlush(true)
+    resetTraceForTest()
+    configureTrace(true, { storage: st, search: '', game: 'g' })
+    await traceReady()
+    traceRec('b.start', { bid: 9 })
+    traceFlush(true)
+    const saved = JSON.parse(st.value as string)
+    expect(saved.v).toBe(1)
+    expect(saved.prev.entries.map((e: { k: string }) => e.k)).toContain('b.end')
+    expect(saved.session.entries.map((e: { k: string }) => e.k)).toContain('b.start')
   })
 })
 

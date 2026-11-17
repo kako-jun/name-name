@@ -9,6 +9,8 @@ import type { TraceEntry } from './traceRing'
 export interface TraceSession {
   /** セッションの識別（乱数。個人を表さない） */
   id: string
+  /** ゲームの識別（別のゲームの記録を前回分に混ぜないため）。古い保存には無い */
+  game?: string
   /** 開始時刻（epoch ms）。複数セッションを並べるための目安 */
   startedAt: number
   /** 最後に保存した時刻（epoch ms）。読み戻しで新しい方を選ぶのに使う */
