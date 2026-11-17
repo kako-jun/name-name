@@ -313,6 +313,11 @@ export interface FieldConfig {
    */
   menuUseMessageOff?: true
   /**
+   * フィールドメニューのステータス画面の配置 (#1191)。`menuStatusLayout: "ff"` のとき `'ff'`（FF5・FF6 風に領域へ分ける）。未指定・`"line"` は undefined＝従来の 1 列。
+   * 他のキーとは独立（メニューの他の画面・戦闘の見た目は変えない）。不正な値は警告して無視
+   */
+  menuStatusLayout?: 'ff'
+  /**
    * 内部トレースログ (#1197)。`trace: "on"` のとき true。未指定・`"off"` は undefined＝何も記録しない（従来どおり）。不正な値は警告して無視。他のキーとは独立
    */
   traceOn?: true
@@ -1086,6 +1091,14 @@ export function parseConfig(
         `menuUseMessage は "on" か "off": ${JSON.stringify(raw.menuUseMessage)}（無視します）`
       )
   }
+  let menuStatusLayout: 'ff' | undefined
+  if (raw.menuStatusLayout !== undefined) {
+    if (raw.menuStatusLayout === 'ff') menuStatusLayout = 'ff'
+    else if (raw.menuStatusLayout !== 'line')
+      warnings.push(
+        `menuStatusLayout は "line" か "ff": ${JSON.stringify(raw.menuStatusLayout)}（無視します）`
+      )
+  }
   let traceOn: true | undefined
   if (raw.trace !== undefined) {
     if (raw.trace === 'on') traceOn = true
@@ -1296,6 +1309,7 @@ export function parseConfig(
       ...(scriptUrl ? { scriptUrl } : {}),
       ...(dialogStyle ? { dialogStyle } : {}),
       ...(menuUseMessageOff ? { menuUseMessageOff } : {}),
+      ...(menuStatusLayout ? { menuStatusLayout } : {}),
       ...(traceOn ? { traceOn } : {}),
       ...(dialogFontSize ? { dialogFontSize } : {}),
       ...(dialogWindowHeight !== undefined ? { dialogWindowHeight } : {}),

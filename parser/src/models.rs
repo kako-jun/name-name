@@ -2669,6 +2669,10 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側で不正値を警告して on にする。失敗の文（MP 不足など）は対象外。GUI 専用（一枚絵フィールド）。frontmatter `field_menu_use_message:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_menu_use_message: Option<String>,
+    /// フィールドメニューのステータス画面の配置 (#1191)。`line`（既定・従来の 1 列）/ `ff`（FF5・FF6 風に領域へ分けて並べる）。
+    /// 値は生文字列で透過し、runtime 側で不正値を警告して line にする。他のキーとは結合しない。GUI 専用（一枚絵フィールド）。frontmatter `field_menu_status_layout:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_menu_status_layout: Option<String>,
     /// 敵グリッドの縦位置 (#1178)。`center`（領域の縦中央）/ `bottom`（下端そろえ・既定）。
     /// 値は生文字列で透過し、runtime 側（`normalizeEnemyGridAlign`）で不正値を警告して bottom にする。GUI 専用。frontmatter `battle_enemy_grid_align:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]

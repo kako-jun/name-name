@@ -33,6 +33,12 @@ import {
   type Rect,
 } from './fieldMenu'
 import {
+  computeStatusLayout,
+  fitPortrait,
+  statusArea,
+  type StatusLayoutKind,
+} from './fieldMenuStatus'
+import {
   MAX_PARTY_SLOTS,
   appstoreHasParty,
   buyConfirmMessage,
@@ -146,6 +152,8 @@ export interface FieldMenuScreenOptions {
   acrylic: boolean
   /** false = 使用が成功したとき（ok=true）の文を説明バー・案内帯に出さない (#1185)。失敗の文は常に出す。HP/MP の数字更新は変えない。既定 true */
   useMessage?: boolean
+  /** ステータス画面の配置 (#1191)。`ff` = 領域に分けた FF5・FF6 風、`line` / 未指定 = 従来の 1 列。他のキーとは結合しない */
+  statusLayout?: StatusLayoutKind
   /** 画面遷移の速さ（既定 `DEFAULT_MENU_TRANSITION`） */
   transition?: MenuTransitionTiming
   /** メニューが閉じた（最上位で戻った）。呼び出し側がフィールドへ戻す */
@@ -852,6 +860,10 @@ export class FieldMenuScreen extends Container {
       C.addChild(this.text(MENU_EMPTY_BODY, f, GRAY, P.x + P.w / 2, P.y + P.h / 2, 'center'))
       return
     }
+    if (this.opts.statusLayout === 'ff') {
+      this.drawStatusFf(C, p, sl, lay, content)
+      return
+    }
     const x0 = P.x + P.w * 0.08
     const lh = P.h * 0.1
     let y = P.y + P.h * 0.2
@@ -867,6 +879,62 @@ export class FieldMenuScreen extends Container {
     for (const row of content.statusByParty[p.id] ?? []) line(`${row.label}  ${row.value}`)
     this.placeArt(this.artDeep, p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
   }
+
+  /** FF5・FF6 風の領域配置 (#1191)。領域と中の項目は `computeStatusLayout` が決め、ここは順に描くだけ */
+  private drawStatusFf(
+    C: Container,
+    p: FieldMenuPartyView,
+    sl: ScreenLayout,
+    lay: MenuLayout,
+    content: ResolvedContent
+  ): void {
+    const regions = computeStatusLayout({
+      area: statusArea(sl.primary, lay.base.h),
+      font: sl.fonts.row,
+      person: p,
+      // 定義側・実状態にある項目だけ出す（無い項目は出さない）
+      extraRows: content.statusByParty[p.id] ?? [],
+    })
+    for (const r of regions) {
+      this.panel(C, r.rect, lay)
+      if (r.id === 'portrait') this.placePortrait(p, r.rect)
+      for (const c of r.cells) {
+        const cy = c.rect.y + c.rect.h / 2
+        const left = c.tone === 'name' ? WHITE : NOTICE_COLOR
+        C.addChild(this.text(c.label, c.labelSize, left, c.rect.x, cy, 'left'))
+        if (c.pair) {
+          // 現在値・「/」・最大値を別々の位置に右揃え（HP と MP で桁がそろう）
+          const q = c.pair
+          C.addChild(this.text(q.cur, c.valueSize, WHITE, q.curRight, cy, 'right'))
+          C.addChild(this.text('/', c.valueSize, WHITE, q.slashX, cy, 'center'))
+          C.addChild(this.text(q.max, c.valueSize, WHITE, q.maxRight, cy, 'right'))
+        } else
+          C.addChild(
+            this.text(c.value, c.valueSize, WHITE, c.valueRight ?? c.rect.x + c.rect.w, cy, 'right')
+          )
+      }
+    }
+  }
+
+  /**
+   * ステータスの人物の絵の枠に絵を置く。絵の層は他の領域の文字より上にあるので、枠の矩形で切り抜く
+   * （アクスタの台座・斜めに落ちる影が、枠の外の領域・下の「戻る」にかからないように）
+   */
+  private placePortrait(p: FieldMenuPartyView, R: Rect): void {
+    const clip = this.portraitClip
+    clip.removeChildren()
+    this.portraitMask.clear().rect(R.x, R.y, R.w, R.h).fill({ color: WHITE })
+    clip.addChild(this.portraitMask)
+    clip.mask = this.portraitMask
+    this.artDeep.addChild(clip)
+    const tex = p.texture
+    if (!tex) return
+    const fit = fitPortrait(R, tex.width, tex.height, this.useAcrylic)
+    this.placeArt(clip, tex, fit.height, fit.x, fit.y)
+  }
+
+  private readonly portraitClip = new Container()
+  private readonly portraitMask = new Graphics()
 
   private artIndex = 0
 

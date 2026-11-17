@@ -5351,6 +5351,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_enemy_window_overlap: None,
         battle_enemy_grid_align: None,
         field_menu_use_message: None,
+        field_menu_status_layout: None,
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
@@ -10556,6 +10557,7 @@ fn telop_test_doc_base() -> Document {
         battle_enemy_window_overlap: None,
         battle_enemy_grid_align: None,
         field_menu_use_message: None,
+        field_menu_status_layout: None,
         battle_enemy_grid_extent: None,
         battle_enemy_window_overlap_bottom: None,
         battle_party_layout: None,
@@ -12186,6 +12188,30 @@ fn test_field_menu_use_message_parse_default_none_and_roundtrip() {
     // 未指定ならキーを出さない（従来の出力と同一）
     let none_out = emitter::emit(&none);
     assert!(!none_out.contains("field_menu_use_message"), "{none_out}");
+}
+
+#[test]
+fn test_field_menu_status_layout_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc("field_menu_status_layout: ff\n"));
+    assert_eq!(doc.field_menu_status_layout.as_deref(), Some("ff"));
+    // 値は検証せず生文字列で透過する。空は None
+    let weird = parser::parse(&battle_doc("field_menu_status_layout: \"grid\"\n"));
+    assert_eq!(weird.field_menu_status_layout.as_deref(), Some("grid"));
+    let empty = parser::parse(&battle_doc("field_menu_status_layout:\n"));
+    assert_eq!(empty.field_menu_status_layout, None);
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.field_menu_status_layout, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("field_menu_status_layout: \"ff\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.field_menu_status_layout, doc.field_menu_status_layout);
+    // 未指定ならキーを出さない（従来の出力と同一）
+    let none_out = emitter::emit(&none);
+    assert!(!none_out.contains("field_menu_status_layout"), "{none_out}");
 }
 
 fn monster_with(extra_body: &str) -> name_name_parser::models::MonsterDef {
