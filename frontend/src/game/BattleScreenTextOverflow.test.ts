@@ -260,8 +260,8 @@ describe('スクロールの対象は MARQUEE_TARGETS の1箇所で決まる (#1
   })
 })
 
-describe('既定(ellipsis)は main と同じ見た目 (#1183)', () => {
-  it('未指定と ellipsis は、全 Text の文字列・位置が一致する（長い名前の入った構成）', () => {
+describe('未指定と ellipsis は同じ見た目 (#1183。main との同値は buildMenuView・enemyListLines の同値テストが担保)', () => {
+  it('全 Text の文字列・位置が一致する（長い名前の入った構成）', () => {
     const snap = (opts: BattleScreenOptions) => {
       const s = build(
         { enemyList: 'window', ...opts },
@@ -294,3 +294,67 @@ function collectTexts(root: { children?: unknown[]; text?: unknown }): string[] 
   walk(root)
   return out
 }
+
+describe('候補窓の開閉と横スクロール (#1183)', () => {
+  it('snappy（開閉の動きあり）+ scroll: 開く→閉じる→tick を重ねても例外なく、時計が進み続ける', () => {
+    const s = build({ textOverflow: 'scroll', motion: 'snappy' })
+    press('ArrowLeft')
+    s.tick(3000)
+    press('Escape')
+    // 閉じる動きの途中と、閉じ切ったあとの両方で tick しても、破棄済みの Text を触らない
+    for (let i = 0; i < 40; i++) expect(() => s.tick(50)).not.toThrow()
+    expect(I(s).menuLayer!.marquees).toEqual([])
+    expect(() => s.tick(500)).not.toThrow()
+  })
+
+  it('閉じて再度開くと、スクロールは先頭から待ち直す（途中から再開しない）', () => {
+    const s = build({ textOverflow: 'scroll', motion: 'snappy' })
+    press('ArrowLeft')
+    s.tick(3000) // snappy: 先頭待ち 1500ms を過ぎて流れている
+    const flowing = I(s).menuLayer!.marquees.find((m) => m.text.text === LONG_SPELL)!
+    expect(flowing.left - flowing.text.x).toBeGreaterThan(0)
+    press('Escape')
+    s.tick(1000)
+    press('ArrowLeft')
+    const again = I(s).menuLayer!.marquees.find((m) => m.text.text === LONG_SPELL)!
+    expect(again.text.x).toBe(again.left)
+    s.tick(SNAPPY_MOTION_TIMING.marqueeStartHoldMs - 1)
+    expect(again.text.x).toBe(again.left)
+    s.tick(1 + 500)
+    expect(again.text.x).toBeLessThan(again.left)
+  })
+
+  it('開閉の動きがない（default）でも、閉じて再度開くと先頭から待つ', () => {
+    const s = build({ textOverflow: 'scroll' })
+    press('ArrowLeft')
+    s.tick(3000)
+    press('Escape')
+    press('ArrowLeft')
+    const again = I(s).menuLayer!.marquees.find((m) => m.text.text === LONG_SPELL)!
+    expect(again.text.x).toBe(again.left)
+  })
+})
+
+describe('敵名窓の幅の計測はマスクに切られない (#1183)', () => {
+  it('マスク付きの行を再計測するとき、width を読む間だけマスクを外し、読んだあと元に戻す', () => {
+    const s = build(
+      { enemyList: 'window', textOverflow: 'scroll' },
+      [ent('a')],
+      [ent('e', { name: LONG_ENEMY })]
+    )
+    const t = I(s).enemyListTexts.find((x) => x.visible)!
+    expect(t.mask).toBeTruthy()
+    const mask = t.mask
+    let maskAtRead: unknown = 'unset'
+    Object.defineProperty(t, 'width', {
+      configurable: true,
+      get: () => {
+        maskAtRead = t.mask
+        return 10000
+      },
+    })
+    ;(s as unknown as { refresh(): void }).refresh()
+    expect(maskAtRead).toBeFalsy()
+    expect(t.mask).toBe(mask)
+  })
+})

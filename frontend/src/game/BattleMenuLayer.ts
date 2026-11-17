@@ -180,6 +180,12 @@ export class BattleMenuLayer extends Container {
     this.applyMarquees()
   }
 
+  /** 横スクロール中の名前と時計のキーをすべて忘れる（窓を閉じたとき。次に開いたら先頭から待つ） (#1183) */
+  private forgetMarquees(): void {
+    this.marquees = []
+    this.marqueeClock.retain(new Set())
+  }
+
   private applyMarquees(): void {
     for (const m of this.marquees) {
       const off = sampleMarquee(this.marqueeClock.elapsedOf(m.key), m.overflow, this.marqueeTiming)
@@ -206,6 +212,7 @@ export class BattleMenuLayer extends Container {
     // 閉じ切った: 窓の中身を捨て、閉じている間に来た案内（あれば）を描く
     const pending = this.pendingClosed
     this.pendingClosed = null
+    this.forgetMarquees() // 破棄する Text を触らない・再び開いたら先頭から待つ (#1183)
     for (const c of this.body.removeChildren()) c.destroy({ children: true }) // 案内は閉じ始めに描き済みなので残す
     this.settleOpen()
     this.opened = false
@@ -238,6 +245,7 @@ export class BattleMenuLayer extends Container {
       return
     }
     this.clearBody()
+    if (!open) this.forgetMarquees()
     this.visible = open || hint !== ''
     this.backdrop.clear()
     if (!open) {

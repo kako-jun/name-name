@@ -2435,7 +2435,7 @@ export class BattleScreen extends Container {
     this.applyMarquees()
   }
 
-  /** Text の横スクロールを解除する（マスクを外して壊す。中央寄せだった Text は中央へ戻す） (#1183) */
+  /** Text の横スクロールを解除する（マスクを外して壊す） (#1183) */
   private dropTextMarquee(t: PixiText): void {
     const prev = this.marquees.get(t)
     if (!prev) return
@@ -2453,11 +2453,16 @@ export class BattleScreen extends Container {
 
   private measuredTextWidth(t: PixiText): number {
     const est = estimateTextWidth(t.text, Number(t.style.fontSize) || SIDE_STATUS_FONT_SIZE)
+    // マスク付きの Text は width がマスクで切られる（Pixi 8）ので、測る間だけ外す
+    const mask = t.mask
+    t.mask = null
     try {
       const w = t.width
       return Number.isFinite(w) ? Math.max(est, w) : est
     } catch {
       return est
+    } finally {
+      t.mask = mask
     }
   }
 
