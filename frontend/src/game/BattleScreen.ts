@@ -1743,6 +1743,21 @@ export class BattleScreen extends Container {
     obj.on('pointertap', () => this.tapParty(index))
   }
 
+  /** 画面座標 (x, y) にある、タップで番を移せる味方の index（アクスタ・名前・ゲージ棒の上）。無ければ -1 (#1195) */
+  private switchTargetAt(x: number, y: number): number {
+    if (!this.opts.atbSwitch) return -1
+    for (let i = 0; i < this.partyViews.length; i++) {
+      if (!this.engine.isAtbSwitchable(i)) continue
+      const parts: Array<Container | undefined> = [
+        this.partyViews[i].container,
+        this.statusTexts[i],
+        this.atbBars[i],
+      ]
+      for (const o of parts) if (o && o.getBounds().containsPoint(x, y)) return i
+    }
+    return -1
+  }
+
   /** 味方 `index` のタップ (#1195)。満タンで待機中の別の味方なら番を移す。それ以外（番の本人・ゲージ未満タン・倒れた）は何もしない */
   private tapParty(index: number): void {
     if (this.isInputBlockedByPresentation() || this.engine.isOver()) return
@@ -2869,7 +2884,12 @@ export class BattleScreen extends Container {
         const ctx = this.menuContext()
         if (ctx) this.setMenuStack(scrollList(this.menuStack, delta, ctx))
       },
-      onCancelTap: () => this.cancelMenu(),
+      onCancelTap: (x, y) => {
+        // 窓の外のタップが切り替え可能な味方の上なら、キャンセルでなく番の切り替え (#1195)
+        const i = this.switchTargetAt(x, y)
+        if (i !== -1) this.tapParty(i)
+        else this.cancelMenu()
+      },
     })
     // 開閉アニメーションは ff のときだけ（tick が回らない dq では途中で止まるので使わない）
     this.menuLayer.setTransitionMs(this.presentation === 'ff' ? this.motionTiming.menuMs : 0)

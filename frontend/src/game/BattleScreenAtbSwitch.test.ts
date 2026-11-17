@@ -41,6 +41,7 @@ interface Internals {
   atbBars: Container[]
   atbMarkers: Text[]
   commands: Array<{ id: string; hit: Container }>
+  menuLayer: { backdrop: Container } | null
 }
 const I = (s: BattleScreen): Internals => s as unknown as Internals
 
@@ -109,6 +110,33 @@ describe('atbSwitch: タップで入力キャラを切り替える', () => {
     // 行動したのは B。A は満タンのまま次の番
     expect(engine.getState().atb!.partyGauge[1]).toBe(0)
     expect(engine.getCurrentActorIndex()).toBe(0)
+  })
+
+  it('on: 窓の外（backdrop）へのタップが切り替え可能な味方の上なら、キャンセルでなく番の切り替え。それ以外はキャンセル', () => {
+    const { s, engine } = build({ atbSwitch: true })
+    const open = () => tap(I(s).commands.find((c) => c.id === 'spell')!.hit)
+    const backdropTap = (x: number, y: number) =>
+      I(s).menuLayer!.backdrop.emit('pointertap', { global: { x, y } } as never)
+    // jsdom では Text の実測ができないので、各部品の当たり判定を固定の矩形に差し替える（味方 i は x = 100*i 〜 +50）
+    const rect = (i: number) => ({ containsPoint: (x: number) => x >= i * 100 && x < i * 100 + 50 })
+    const parts = (i: number) => [
+      I(s).partyViews[i].container,
+      I(s).statusTexts[i],
+      I(s).atbBars[i],
+    ]
+    for (let i = 0; i < 3; i++)
+      for (const o of parts(i))
+        (o as unknown as { getBounds: () => unknown }).getBounds = () => rect(i)
+    open()
+    expect(I(s).menuStack.length).toBeGreaterThan(0)
+    // ゲージ未満タンの味方(C)の上: 切り替えず、通常のキャンセル
+    backdropTap(210, 0)
+    expect(I(s).menuStack.length).toBe(0)
+    expect(engine.getCurrentActorIndex()).toBe(0)
+    open()
+    backdropTap(110, 0)
+    expect(I(s).menuStack.length).toBe(0)
+    expect(engine.getCurrentActorIndex()).toBe(1)
   })
 
   it('on: 番の本人・ゲージ未満タンの味方・倒れた味方のタップは何も起こさない', () => {
