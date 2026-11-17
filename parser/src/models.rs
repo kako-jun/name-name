@@ -2673,6 +2673,10 @@ pub struct Document {
     /// 値は生文字列で透過し、runtime 側で不正値を警告して line にする。他のキーとは結合しない。GUI 専用（一枚絵フィールド）。frontmatter `field_menu_status_layout:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_menu_status_layout: Option<String>,
+    /// フィールドメニューの経験値の表示 (#1186)。`off`（既定・従来）/ `on`（左のパーティ枠の各キャラに「次のレベルまで」を常に、ステータス画面に「けいけんち」「次のレベルまで」を出す）。
+    /// 値は生文字列で透過し、runtime 側で不正値を警告して off にする。経験値表（`経験値表:`）を持たないキャラには出さない。他のキーとは結合しない。GUI 専用（一枚絵フィールド）。frontmatter `field_menu_exp:` から流す。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_menu_exp: Option<String>,
     /// 敵グリッドの縦位置 (#1178)。`center`（領域の縦中央）/ `bottom`（下端そろえ・既定）。
     /// 値は生文字列で透過し、runtime 側（`normalizeEnemyGridAlign`）で不正値を警告して bottom にする。GUI 専用。frontmatter `battle_enemy_grid_align:` から流す。
     #[serde(default, skip_serializing_if = "Option::is_none")]

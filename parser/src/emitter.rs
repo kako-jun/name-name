@@ -259,6 +259,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("field_menu_status_layout: \"{sanitized}\"\n"));
         }
+        // field_menu_exp (#1186)。同じ流儀
+        if let Some(ref v) = doc.field_menu_exp {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("field_menu_exp: \"{sanitized}\"\n"));
+        }
         // battle_enemy_grid_align (#1178)。同じ流儀
         if let Some(ref v) = doc.battle_enemy_grid_align {
             let sanitized = v.replace('"', "");
@@ -2702,6 +2707,7 @@ mod tests {
             battle_enemy_grid_align: None,
             field_menu_use_message: None,
             field_menu_status_layout: None,
+            field_menu_exp: None,
             battle_enemy_grid_extent: None,
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
@@ -3240,6 +3246,7 @@ mod tests {
             battle_enemy_grid_align: None,
             field_menu_use_message: None,
             field_menu_status_layout: None,
+            field_menu_exp: None,
             battle_enemy_grid_extent: None,
             battle_enemy_window_overlap_bottom: None,
             battle_party_layout: None,
