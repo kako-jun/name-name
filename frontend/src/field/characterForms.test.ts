@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { menuPortraitUrl } from '../game/fieldMenuStatus'
 import manifestText from '../../public/field/sit-character-forms.json?raw'
+import genScript from '../../scripts/gen_sit_character_forms.py?raw'
 import {
   CORE_POSES,
   DERIVED_POSES,
@@ -158,6 +159,64 @@ describe('derivePoses / deriveWalkSprites（命名規則）', () => {
 })
 
 describe('目録 JSON の検証', () => {
+  it('#1206: 同梱の目録で weak を持つ形態は期待の 24 件と全件一致し、poses へ weak が展開される（C001 は character 版、他は plain 版）', () => {
+    const r = parseCharacterFormsManifest(JSON.parse(manifestText))
+    if (!r.ok) throw new Error(r.error)
+    const m = r.value
+    // 期待: 人物 → 形態 → weak を持つ版（幼稚園の通常形態は目録の対象外）
+    const want: Record<string, Record<string, 'character' | 'plain'>> = {
+      C001: {
+        kindergarten: 'character',
+        uniform: 'character',
+        elementary: 'character',
+        'elementary-wheelchair': 'character',
+        'teen-wheelchair': 'plain',
+        'adult-wheelchair': 'plain',
+        'midlife-wheelchair': 'plain',
+      },
+      C002: Object.fromEntries(
+        [
+          'uniform',
+          'elementary',
+          'teen',
+          'adult',
+          'midlife',
+          'elementary-wheelchair',
+          'teen-wheelchair',
+          'adult-wheelchair',
+          'midlife-wheelchair',
+        ].map((f) => [f, 'plain' as const])
+      ),
+      C003: Object.fromEntries(
+        ['uniform', 'elementary', 'teen', 'adult'].map((f) => [f, 'plain' as const])
+      ),
+      C004: Object.fromEntries(
+        ['uniform', 'elementary', 'teen', 'adult'].map((f) => [f, 'plain' as const])
+      ),
+    }
+    const got: Record<string, Record<string, string>> = {}
+    for (const [c, ch] of Object.entries(m.characters))
+      for (const [f, form] of Object.entries(ch.forms))
+        for (const [v, list] of Object.entries(form.poses))
+          if (list.includes('weak')) (got[c] ??= {})[f] = v
+    expect(got).toEqual(want)
+    // C001 の車椅子（teen・adult・midlife）は plain 命名の weak だけで焼き込み版の疑いがあるため派生しない。他は poses に weak が入る
+    for (const [c, forms] of Object.entries(want))
+      for (const f of Object.keys(forms)) {
+        if (c === 'C001' && f.endsWith('-wheelchair') && f !== 'elementary-wheelchair') continue
+        expect(derivePoses(m, ROOT, c, f)?.weak).toMatch(/-weak\.webp$/)
+      }
+    // C001 の車椅子（teen・adult・midlife）は plain 命名の weak だけで、焼き込み版の疑いがあるため派生しない（plainBaked。従来どおり）
+    expect(m.characters.C001.forms['teen-wheelchair'].poses.plain).toContain('weak')
+    expect(derivePoses(m, ROOT, 'C001', 'teen-wheelchair')).toBeUndefined()
+  })
+  it('#1206: 目録の生成スクリプトの POSES は BATTLE_POSES と同じ並び（weak を含む）', () => {
+    const m = /^POSES = \[([^\]]*)\]/m.exec(genScript)
+    if (!m) throw new Error('POSES が見つからない')
+    const poses = [...m[1].matchAll(/"([a-z-]+)"/g)].map((x) => x[1])
+    expect(poses).toEqual([...DERIVED_POSES])
+    expect(poses).toContain('weak')
+  })
   it('同梱の目録が通り、C001〜C004 を持つ', () => {
     const r = parseCharacterFormsManifest(JSON.parse(manifestText))
     expect(r.ok).toBe(true)

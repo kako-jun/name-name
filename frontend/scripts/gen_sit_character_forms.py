@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-# エンジンが受理するポーズ（frontend/src/game/battleMotion.ts の BATTLE_POSES と同じ並び。#1026 で special・swing を追加）
+# エンジンが受理するポーズ（frontend/src/game/battleMotion.ts の BATTLE_POSES と同じ並び。#1026 で special・swing、#1206 で weak を追加。sit-by-me の scripts/field_md.py の poses_order と同じ並び）
 POSES = [
     "idle",
     "ready",
@@ -27,6 +27,7 @@ POSES = [
     "hurt",
     "down",
     "victory",
+    "weak",
 ]
 DIRS = ["up", "down", "left", "right", "upleft", "upright", "downleft", "downright"]
 CHARACTERS = ["C001", "C002", "C003", "C004"]
@@ -109,7 +110,7 @@ def main() -> None:
     }
     text = json.dumps(doc, ensure_ascii=False, indent=2)
     # 文字列だけの配列は 1 行にまとめる（prettier の整形と同じ見た目で、差分が読みやすい）
-    text = re.sub(r"\[\s*((?:\"[a-z]+\",?\s*)+)\]", lambda m: "[" + " ".join(m.group(1).split()).rstrip(",") + "]", text)
+    text = re.sub(r"\[\s*((?:\"[a-z-]+\",?\s*)+)\]", lambda m: "[" + " ".join(m.group(1).split()).rstrip(",") + "]", text)
     out.write_text(text + "\n", encoding="utf-8")
     print(f"wrote {out} ({sum(len(c['forms']) for c in characters.values())} forms)")
 
