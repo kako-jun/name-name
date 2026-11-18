@@ -9,7 +9,7 @@
 import type { BattleEngine, BattleActionEvent, BattlePhase } from './battleEngine'
 import type { BattleEntity } from './spellDsl'
 import type { MenuStack } from './battleMenu'
-import { traceOn, traceRec, type TraceValue } from '../trace/trace'
+import { traceOn, traceOnPreFlush, traceRec, type TraceValue } from '../trace/trace'
 
 /** 記録の出力先。既定は共通のリングバッファ。再現テストが差し替える */
 export type TraceSink = (kind: string, data?: unknown) => void
@@ -48,6 +48,10 @@ export class BattleTracer {
   /** エンジンの公開メソッドの入れ子の深さ。内側の呼び出し（select 同士）を二重に記録しない */
   depth = 0
   private lastHold = false
+  /** 保存前の端数書き出しの解除（end / detach で外す）。既定の出力先のときだけ付く (#1215) */
+  private unhook: (() => void) | null = null
+  /** 既定の出力先で作られ、まだ end されていない（detach 後に画面が作り直されたら付け直す） */
+  private hookWanted = false
   private seenEvents: number
   private lastPhase: BattlePhase
   private lastHead = -2
@@ -149,6 +153,24 @@ export class BattleTracer {
     if (!(ms > 0) || !Number.isFinite(ms)) return
     this.advMs += ms
     if (this.advMs >= ADV_FLUSH_MS) this.flushAdv()
+  }
+
+  /** ページを離れる・例外・取り出しの直前に、未書き出しの経過時間の端数を記録へ書く (#1215) */
+  flushPending(): void {
+    this.flushAdv()
+  }
+
+  /** end を伴わずに外す（画面の破棄）。端数を書いてから保存前フックを解除する */
+  detach(): void {
+    this.flushAdv()
+    this.unhook?.()
+    this.unhook = null
+  }
+
+  /** 保存前の端数書き出しに登録する（end / detach で解除。画面の作り直しでは attachBattleTrace が付け直す） */
+  hookPreFlush(): void {
+    this.hookWanted = true
+    this.unhook ??= traceOnPreFlush(() => this.flushAdv())
   }
 
   private flushAdv(): void {
@@ -334,6 +356,9 @@ export class BattleTracer {
 
   /** 戦闘が閉じた */
   end(outcome: string): void {
+    this.hookWanted = false
+    this.unhook?.()
+    this.unhook = null
     this.flushAdv()
     const s = this.engine.getState()
     this.sink('b.end', {
@@ -344,8 +369,9 @@ export class BattleTracer {
     })
   }
 
-  /** 画面の作り直しなどで、エンジンの現在値を基準にし直す */
+  /** 画面の作り直しなどで、エンジンの現在値を基準にし直す。detach 済みの既定出力先のトレーサは保存前フックも付け直す (#1215) */
   resync(): void {
+    if (this.hookWanted) this.hookPreFlush()
     this.seenEvents = this.engine.getState().eventTotal
     this.syncBaseline()
   }
@@ -413,6 +439,7 @@ export function attachBattleTrace(
   }
   const tracer = new BattleTracer(engine, opts.sink ?? traceRec, info)
   tracers.set(engine, tracer)
+  if (!opts.sink) tracer.hookPreFlush()
   const e = engine as unknown as Record<string, (...a: unknown[]) => unknown>
   const wrapCmd = (name: CmdName): void => {
     const orig = e[name].bind(engine)

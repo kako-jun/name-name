@@ -57,6 +57,8 @@ let prevJson = 'null'
 let lastErrFlushAt = -Infinity
 const ERR_FLUSH_MIN_MS = 2000
 const onPageHide = (): void => traceFlush(true)
+/** 保存・取り出しの直前に呼ぶ関数（未書き出しの端数を記録へ吐く。戦闘のトレーサが使う #1215） */
+const preFlushHooks = new Set<() => void>()
 const onVisibility = (): void => {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') traceFlush(true)
 }
@@ -114,8 +116,30 @@ function currentSession(): TraceSession {
   }
 }
 
+/**
+ * 保存・取り出しの直前に呼ばれる関数を登録する（戻り値で解除）。戦闘のトレーサが「まだ書いていない経過時間の端数」を
+ * 記録へ吐くのに使う。これが無いと、end の前に落ちたときの保存に最後の端数が載らない (#1215)
+ */
+export function traceOnPreFlush(fn: () => void): () => void {
+  preFlushHooks.add(fn)
+  return () => {
+    preFlushHooks.delete(fn)
+  }
+}
+
+function runPreFlush(): void {
+  for (const fn of [...preFlushHooks]) {
+    try {
+      fn()
+    } catch {
+      // 記録の補助で本編を止めない
+    }
+  }
+}
+
 /** 取り出し用の全体 */
 export function traceDump(): TraceDump {
+  if (enabled) runPreFlush()
   return { version: 1, prev, session: currentSession() }
 }
 
@@ -127,6 +151,7 @@ export function traceDumpJson(space?: number): string {
 /** いまの記録を保存先へ書く。sync = ページを離れる・例外のとき（localStorage にも同期で書く） */
 export function traceFlush(sync = false): void {
   if (!enabled || !storage || !ring || !loaded) return
+  runPreFlush()
   if (!dirty && !sync) return
   dirty = false
   // 前回分は不変なので、文字列化済みのものをそのまま継ぎ足す（今回分だけ都度文字列化する）
@@ -227,6 +252,7 @@ export function configureTrace(
   if (!on || (enabled && game !== gameId)) {
     // off に替わった・別のゲームに替わった: 記録を止め、コンソール API とイベント受け口を外す（保存済みには触らない）
     traceFlush(true)
+    preFlushHooks.clear()
     enabled = false
     if (timer) clearInterval(timer)
     timer = null
@@ -294,6 +320,7 @@ export function resetTraceForTest(): void {
   delete (globalThis as { nameNameTrace?: unknown }).nameNameTrace
   storage = null
   dirty = false
+  preFlushHooks.clear()
   pendingLoad = Promise.resolve()
   loaded = true
 }

@@ -5,7 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BattleEngine } from './battleEngine'
 import { attachBattleTrace, type BattleTracer } from './battleTrace'
 import type { BattleEntity } from './spellDsl'
-import { configureTrace, resetTraceForTest, traceDump, type TraceEntry } from '../trace/trace'
+import {
+  configureTrace,
+  resetTraceForTest,
+  traceDump,
+  traceFlush,
+  traceReady,
+  type TraceEntry,
+} from '../trace/trace'
+import type { TraceStorage } from '../trace/traceStorage'
 import { extractBattles, firstMismatch, replayBattle } from '../trace/traceReplay'
 
 function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
@@ -43,9 +51,9 @@ function attachTraced(e: BattleEngine): BattleTracer {
 }
 
 /**
- * 控えたトレーサの戦闘を閉じて（`end` が溜まった経過時間を書き出す）、記録から戦闘を取り出す。
- * 閉じないと、最後の行動より後の端数（ADV_FLUSH_MS 未満）の経過時間が記録に載らず、再実行が最後の行動の手前で
- * 止まってずれる。どの乱数の種で最後の行動が端数のうちに起きるかで落ち方が変わっていた（#1203）。実機では戦闘の終了時に end が呼ばれる。
+ * 控えたトレーサの戦闘を `end` で閉じてから、記録を JSON 経由で戦闘ごとに取り出す。
+ * 実機では戦闘の終了時に `end` が呼ばれるので、既存の再現テストもそれに合わせる。
+ * `end` しない場合の挙動（保存・取り出しの直前に端数が書かれる）は、下の「end 前の端数 (#1215)」で確かめる。
  */
 function closedBattles(): ReturnType<typeof extractBattles> {
   for (const t of attached) t.end('test')
@@ -391,5 +399,165 @@ describe('battleTrace (#1197)', () => {
         ).toBeNull()
       }
     }
+  })
+})
+
+/** end せずに落ちたときの記録（#1215）。保存・取り出しの直前に経過時間の端数が書かれる */
+describe('battleTrace: end 前の端数 (#1215)', () => {
+  const advSum = (es: readonly TraceEntry[]): number =>
+    es.filter((e) => e.k === 'b.adv').reduce((a, e) => a + (e.d as { ms: number }).ms, 0)
+
+  function fresh(): BattleEngine {
+    const e = new BattleEngine(
+      [ent('p0', { hp: 60, maxHp: 60 })],
+      [ent('e0', { hp: 90, maxHp: 90, atk: 14, agi: 6 })],
+      { atb: {} }
+    )
+    // end させない（attached に入れない）
+    attachBattleTrace(e)
+    return e
+  }
+
+  function memStorage(): TraceStorage & { sync: string[] } {
+    const sync: string[] = []
+    return {
+      sync,
+      load: async () => null,
+      saveAsync: async () => {},
+      saveSync: (j) => void sync.push(j),
+    }
+  }
+
+  const replayMatches = (dump: unknown): void => {
+    const b = extractBattles(JSON.parse(JSON.stringify(dump)))[0]
+    const r = replayBattle(b, { spell: () => SPELL })
+    expect(firstMismatch(b.expected, r.produced)).toBeNull()
+    expect(compared(b.expected).length).toBeGreaterThan(0)
+  }
+
+  // 端数 0 / 閾値(250)の直前 / ちょうど / 直後 / 小さな端数
+  it.each([
+    ['端数 0（250 ちょうどで区切る）', 250],
+    ['249.9（閾値の直前）', 249.9],
+    ['250.1（閾値の直後）', 250.1],
+    ['16.7（毎フレーム）', 16.7],
+    ['1（極小）', 1],
+  ])('end せずに取り出しても、経過時間の合計が欠けず再実行が一致する: %s', (_n, step) => {
+    configureTrace(true, { storage: null })
+    const e = fresh()
+    let ticked = 0
+    let guard = 0
+    while (!e.isOver() && guard++ < 20000) {
+      if (e.getCurrentActorIndex() >= 0) e.selectAttack()
+      else {
+        e.tick(step)
+        ticked += step
+      }
+    }
+    expect(e.isOver()).toBe(true)
+    expect(advSum(traceDump().session.entries)).toBeCloseTo(ticked, 2)
+    replayMatches(traceDump())
+  })
+
+  it('戦闘の途中で取り出しても、いまの端数が入り、取り出しを繰り返しても二重にならない', () => {
+    configureTrace(true, { storage: null })
+    const e = fresh()
+    e.tick(100)
+    expect(advSum(traceDump().session.entries)).toBeCloseTo(100, 3)
+    // 二度取り出しても足されない
+    expect(advSum(traceDump().session.entries)).toBeCloseTo(100, 3)
+    e.tick(30)
+    expect(advSum(traceDump().session.entries)).toBeCloseTo(130, 3)
+  })
+
+  it('同期保存の JSON にも端数が載り、そこから再実行が最後の行動まで一致する（pagehide / visibilitychange / error / unhandledrejection / traceFlush(true)）', async () => {
+    const triggers: Array<[string, () => void]> = [
+      ['pagehide', () => globalThis.dispatchEvent(new Event('pagehide'))],
+      [
+        'visibilitychange(hidden)',
+        () => {
+          vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+          document.dispatchEvent(new Event('visibilitychange', { bubbles: true }))
+        },
+      ],
+      ['error', () => globalThis.dispatchEvent(new Event('error'))],
+      ['unhandledrejection', () => globalThis.dispatchEvent(new Event('unhandledrejection'))],
+      ['traceFlush(true)', () => traceFlush(true)],
+    ]
+    for (const [name, fire] of triggers) {
+      resetTraceForTest()
+      attached.length = 0
+      const st = memStorage()
+      configureTrace(true, { storage: st })
+      await traceReady()
+      const e = fresh()
+      let guard = 0
+      while (!e.isOver() && guard++ < 20000) {
+        if (e.getCurrentActorIndex() >= 0) e.selectAttack()
+        else e.tick(16.7)
+      }
+      fire()
+      expect(st.sync.length, name).toBeGreaterThan(0)
+      replayMatches(JSON.parse(st.sync[st.sync.length - 1]))
+    }
+  })
+
+  /** 保存された JSON の b.adv の合計（traceDump は取り出し側でも端数を書くので、保存側の JSON で確かめる） */
+  const savedAdv = (st: { sync: string[] }): number =>
+    advSum(
+      (JSON.parse(st.sync[st.sync.length - 1]) as { session: { entries: TraceEntry[] } }).session
+        .entries
+    )
+
+  it('end した戦闘は、その後に端数が溜まっても保存で書き足さない（フックが解除される）', async () => {
+    const st = memStorage()
+    configureTrace(true, { storage: st })
+    await traceReady()
+    const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+    const t = attachBattleTrace(e)!
+    e.tick(40)
+    t.end('test')
+    e.tick(40) // end の後に 250 未満の端数を作る
+    traceFlush(true)
+    expect(savedAdv(st)).toBeCloseTo(40, 3)
+  })
+
+  it('勝敗が決まらず破棄された戦闘（detach）は、端数を書いてからフックが外れ、以後は書き足さない', async () => {
+    const st = memStorage()
+    configureTrace(true, { storage: st })
+    await traceReady()
+    const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+    const t = attachBattleTrace(e)!
+    e.tick(40)
+    t.detach()
+    e.tick(40)
+    traceFlush(true)
+    expect(savedAdv(st)).toBeCloseTo(40, 3)
+  })
+
+  it('detach 後に同じエンジンへ付け直す（画面の作り直し）と、保存前の端数書き出しが復活する', async () => {
+    const st = memStorage()
+    configureTrace(true, { storage: st })
+    await traceReady()
+    const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+    const t = attachBattleTrace(e)!
+    e.tick(40)
+    t.detach()
+    expect(attachBattleTrace(e)).toBe(t)
+    e.tick(40)
+    traceFlush(true)
+    expect(savedAdv(st)).toBeCloseTo(80, 3)
+  })
+
+  it('トレースを切る・別のゲームに替えると、残っていたフックは捨てられる', async () => {
+    configureTrace(true, { storage: null, game: 'a' })
+    const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+    attachBattleTrace(e)
+    const st = memStorage()
+    configureTrace(true, { storage: st, game: 'b' })
+    await traceReady()
+    e.tick(40)
+    traceFlush(true)
+    expect(savedAdv(st)).toBe(0)
   })
 })
