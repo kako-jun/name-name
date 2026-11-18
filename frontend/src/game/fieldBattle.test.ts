@@ -2,7 +2,7 @@
  * fieldBattle.ts（フィールド共通の戦闘起動・終了・キー入力状態）の単体テスト (#784)。
  * RaycastRenderer / TopDownRenderer 経由の結合は各 *.battle.test.ts が担当し、ここは共通部品を直接検証する。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Container } from 'pixi.js'
 import {
   DEFAULT_FIELD_BATTLE_SETTINGS,
@@ -27,7 +27,11 @@ import type { RPGProject } from '../types/rpg'
 import type { BattleEntity } from './spellDsl'
 import type { BattleEffects } from './battleEffects'
 import { RESULT_HOLD_DQ_MS } from './battleResult'
-import { DIALOG_JUST_SHOWN_GUARD_MS, attachTouchInput } from './touchInput'
+import {
+  DIALOG_JUST_SHOWN_GUARD_MS,
+  attachTouchInput,
+  resetTouchTapSuppressionForTest,
+} from './touchInput'
 
 function member(id: string, over: Partial<PartyMemberDef> = {}): PartyMemberDef {
   return { id, name: id.toUpperCase(), hp: 20, mp: 5, atk: 4, def: 2, agi: 3, ...over }
@@ -64,6 +68,9 @@ const enemy = (over: Partial<BattleEntity> = {}): BattleEntity => ({
   agi: 1,
   ...over,
 })
+
+// tap 抑止の期限はモジュール単位の変数に残る（先のテストが実時計で入れた値が、偽時計のテストを超えうる・#1203）。
+beforeEach(() => resetTouchTapSuppressionForTest())
 
 describe('readFieldBattleSettings', () => {
   it('戦闘設定がすべて未指定なら既定値に倒れる', () => {
