@@ -244,7 +244,7 @@ export function runScenario(scenario: Scenario, options: RunOptions = {}): Scena
       spell && op.t === 'spell' && scenario.checkSpread
         ? (fresh) => checkMultiTarget(spell, op.scope, aliveBefore, fresh, i)
         : op.t === 'attack' && scenario.checkEnemyRow
-          ? (fresh) => checkEnemyRow(scenario, fresh, i)
+          ? (fresh) => checkEnemyRow(scenario, fresh, i, aliveBefore)
           : spell && op.t === 'spell' && scenario.checkEnemyLevel
             ? (fresh) => checkEnemyLevel(spell, op.target, before, engine.getState(), fresh, i)
             : op.t === 'ability' && scenario.checkJobConversion
@@ -532,13 +532,14 @@ function checkEnemyLevel(
 /**
  * 敵の最前列 (#896) の不変条件。味方の通常攻撃（`attack` イベント）が敵に与えた量が、その敵の列に応じた範囲に収まる。
  * 範囲は DQ 式の通常攻撃（`base = max(1, atk - floor(def/2))`、`base` 〜 `base + floor(atk/4)`）で、最前列でない敵なら 1 回半分（切り捨て・最低 1）。
- * 最前列はエンジンと別に求める: `enemyRow` とグリッドがあるとき、占有セルの右端の列が最も右の列（戦闘開始時の配置で決まる。倒れても変わらない）。
+ * 最前列はエンジンと別に求める: `enemyRow` とグリッドがあるとき、操作前に生きていた敵のうち、占有セルの右端の列が最も右の列（動的。倒れたら繰り上がる）。
  * グリッドの位置が無い敵・`enemyRow` の無いシナリオは（`row: back` を除き）軽減しない。味方は 1 人・敵は耐性・相性・状態を持たない前提
  */
 function checkEnemyRow(
   scenario: Scenario,
   fresh: readonly BattleActionEvent[],
-  opIndex: number
+  opIndex: number,
+  aliveBefore: readonly boolean[]
 ): Violation[] {
   const out: Violation[] = []
   const grid = scenario.enemyRow?.grid
@@ -556,7 +557,7 @@ function checkEnemyRow(
       if (c) edges.set(i, c.col + (scenario.enemies[i].layout?.w ?? 1) - 1)
     })
   }
-  const front = Math.max(-1, ...edges.values())
+  const front = Math.max(-1, ...[...edges].filter(([i]) => aliveBefore[i]).map(([, c]) => c))
   const hero = scenario.party[0]
   for (const ev of fresh) {
     if (ev.kind !== 'attack' || ev.actor.side !== 'party') continue

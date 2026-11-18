@@ -3,7 +3,7 @@ import { BattleEngine, computeRowAttackDamage } from './battleEngine'
 import type { BattleEntity, EnemyLayout } from './spellDsl'
 import type { EnemyGridSize } from './enemyGrid'
 
-/** 敵の最前列 (#896)。最前列（グリッドの右端の列）にいない敵への通常攻撃は半分。atk 20 vs def 4・rng 0 の通常攻撃は 18（最前列）/ 9（それ以外）。 */
+/** 敵の最前列 (#896)。最前列（その時点で生きている敵のうち、占有セルの右端の列が最も右の敵）でない敵への通常攻撃は半分。atk 20 vs def 4・rng 0 の通常攻撃は 18（最前列）/ 9（それ以外）。 */
 const FULL = 18
 const HALF = 9
 
@@ -94,7 +94,7 @@ describe('敵の最前列: enemyRow を渡さなければ何も変わらない (
   })
 })
 
-describe('敵の最前列: グリッドの右端の列 (#896)', () => {
+describe('敵の最前列: 占有セルの右端の列が最も右の敵 (#896)', () => {
   const es = () => [foe('a', at(2)), foe('b', at(1)), foe('c', at(0))]
   it('最も右の列が最前列、他は半分', () => {
     const opt = { enemyRow: { grid: GRID } }
@@ -135,16 +135,60 @@ describe('敵の最前列: グリッドの右端の列 (#896)', () => {
   })
 })
 
-describe('敵の最前列: 静的（倒れても最前列は変わらない） (#896)', () => {
-  it('最前列の敵が倒れても、後ろの敵は半分のまま', () => {
+describe('敵の最前列: 動的（倒れたら繰り上がる） (#896 / #1175)', () => {
+  const kill = (eng: BattleEngine, e: BattleEntity) => {
+    eng.selectAttack(e.id)
+    expect(e.hp).toBe(0)
+  }
+  it('最前列の敵が倒れると、次に右の敵が最前列になり半分にならない', () => {
     const a = foe('a', { ...at(2), hp: 18 })
     const b = foe('b', at(1))
-    const eng = new BattleEngine([hero()], [a, b], { rng: () => 0, enemyRow: { grid: GRID } })
-    eng.selectAttack('a')
-    expect(a.hp).toBe(0)
-    const before = b.hp
+    const c = foe('c', at(0))
+    const eng = new BattleEngine([hero()], [a, b, c], { rng: () => 0, enemyRow: { grid: GRID } })
+    kill(eng, a)
+    const bb = b.hp
     eng.selectAttack('b')
-    expect(before - b.hp).toBe(HALF)
+    expect(bb - b.hp).toBe(FULL)
+    const cb = c.hp
+    eng.selectAttack('c')
+    expect(cb - c.hp).toBe(HALF)
+  })
+  it('前から倒していくと、左端の敵も最前列になって半分にならない', () => {
+    const a = foe('a', { ...at(2), hp: 18 })
+    const b = foe('b', { ...at(1), hp: 18 })
+    const c = foe('c', at(0))
+    const eng = new BattleEngine([hero()], [a, b, c], { rng: () => 0, enemyRow: { grid: GRID } })
+    kill(eng, a)
+    kill(eng, b)
+    const cb = c.hp
+    eng.selectAttack('c')
+    expect(cb - c.hp).toBe(FULL)
+  })
+  it('生きている敵が 1 体なら常に最前列（半分にならない。旧定義でも通る境界）', () => {
+    const a = foe('a', at(0))
+    const eng = new BattleEngine([hero()], [a], { rng: () => 0, enemyRow: { grid: GRID } })
+    eng.selectAttack('a')
+    expect(100 - a.hp).toBe(FULL)
+  })
+  it('幅 2 の敵: 右の敵が倒れたあとは、幅 2 の敵（右端 1）が最前列になる', () => {
+    const wide = foe('w', { layout: { w: 2, h: 1, scale: 1, at: { col: 0, row: 0 } } })
+    const s = foe('s', { ...at(2, 1), hp: 18 })
+    const eng = new BattleEngine([hero()], [wide, s], { rng: () => 0, enemyRow: { grid: GRID } })
+    kill(eng, s)
+    eng.selectAttack('w')
+    expect(100 - wide.hp).toBe(FULL)
+  })
+  it('置けなかった敵は最前列の計算に含めず、その敵は軽減もされない。倒れた敵のあとでも変わらない', () => {
+    const a = foe('a', { ...at(2), hp: 18 })
+    const b = foe('b', at(1))
+    const off = foe('off', at(9))
+    const eng = new BattleEngine([hero()], [a, b, off], { rng: () => 0, enemyRow: { grid: GRID } })
+    eng.selectAttack('off')
+    expect(100 - off.hp).toBe(FULL)
+    kill(eng, a)
+    const bb = b.hp
+    eng.selectAttack('b')
+    expect(bb - b.hp).toBe(FULL)
   })
 })
 
@@ -172,7 +216,7 @@ describe('敵の最前列: 魔法・特技は影響しない / 味方側は不�
 })
 
 describe('敵の最前列: ATB でも同じ (#896)', () => {
-  it('ATB の通常攻撃でも最前列でない敵は半分・倒れても最前列は変わらない', () => {
+  it('ATB の通常攻撃でも最前列でない敵は半分・最前列が倒れたら繰り上がる', () => {
     const a = foe('a', { ...at(1), hp: 18 })
     const b = foe('b', at(0))
     const eng = new BattleEngine([hero()], [a, b], {
@@ -193,6 +237,6 @@ describe('敵の最前列: ATB でも同じ (#896)', () => {
     ready()
     const before = b.hp
     eng.selectAttack('b')
-    expect(before - b.hp).toBe(HALF)
+    expect(before - b.hp).toBe(FULL)
   })
 })

@@ -1359,7 +1359,7 @@ function at(col: number, row: number): Partial<BattleEntity> {
 }
 
 /**
- * 敵の最前列でない敵への通常攻撃の半減 (#896)。配置の変種 × 防御力（端数・最低 1 を見る）× ターン制/ATB。
+ * 敵の最前列でない敵への通常攻撃の半減 (#896)。配置の変種 × 防御力（端数・最低 1 を見る）× HP（倒れて最前列が繰り上がる場合を含む）× ターン制/ATB。
  * 味方 1 人が敵を順に通常攻撃し、不変条件は `enemy-row-invariant`（`run.ts` の `checkEnemyRow`）。
  */
 export function enemyRowScenarios(): Scenario[] {
@@ -1367,19 +1367,24 @@ export function enemyRowScenarios(): Scenario[] {
   const tick: Op = { t: 'tick', ms: 3000 }
   for (const atb of [false, true]) {
     for (const lay of ENEMY_ROW_LAYOUTS) {
-      for (const def of [0, 7, 100]) {
+      // 防御力 × HP: HP 500 は倒れない（位置だけを見る）、HP 45 は防御 0 のとき 1〜2 回で倒れる（倒れたら最前列が繰り上がる）
+      for (const [def, hp] of [
+        [0, 500],
+        [7, 500],
+        [100, 500],
+        [0, 45],
+      ] as const) {
         const attacks: Op[] = []
         for (const target of ['s0', 's1', 's2', 's0', 's1', 's2', 's0']) {
           if (atb) attacks.push(tick)
           attacks.push({ t: 'attack', target })
         }
         out.push({
-          id: `enemy-row/${atb ? 'atb' : 'turn'}/${lay.name}/def${def}`,
+          id: `enemy-row/${atb ? 'atb' : 'turn'}/${lay.name}/def${def}${hp === 500 ? '' : `-hp${hp}`}`,
+          // 位置依存の番号: シナリオを足すと既存のシードがずれる（コミット済みのベースラインには依存しない）
           seed: 130_000 + out.length,
           party: [entity('a', { hp: 9999, maxHp: 9999, atk: 40, def: 50 })],
-          enemies: lay.enemies.map((o, i) =>
-            foe(`s${i}`, { atk: 1, def, hp: 500, maxHp: 500, ...o })
-          ),
+          enemies: lay.enemies.map((o, i) => foe(`s${i}`, { atk: 1, def, hp, maxHp: hp, ...o })),
           atb: atb ? { mode: 'active' } : undefined,
           spells: [],
           items: [],
