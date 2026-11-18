@@ -179,6 +179,7 @@ import { MENU_IMAGE_TIMEOUT_MS, loadMenuFont, waitUpTo } from '../game/menuFont'
 import { buildRpgSaveSlot, snapshotRpg, type RpgResolvedBattle } from '../game/rpgSave'
 import { growPartyByExp } from '../game/levelUp'
 import { menuExpField } from '../game/fieldMenuExp'
+import { menuPortraitUrl } from '../game/fieldMenuStatus'
 import type { BattleItemEntry } from '../game/battleMenu'
 import { FieldBattleTransition } from '../game/fieldBattleTransition'
 import {
@@ -1627,7 +1628,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
                 ...(p.level !== undefined ? { level: p.level } : {}),
                 // 経験値の表示 (#1186)。キーが on で、経験値表を持つ人物だけ
                 ...(config.menuExp ? menuExpField(p, config.levelUp[p.id]) : {}),
-                texture: await partyTexture(p.sprite),
+                texture: await partyTexture(menuPortraitUrl(p)),
               }))
             )
             const saved = new SaveManager(docKey).listSlots()

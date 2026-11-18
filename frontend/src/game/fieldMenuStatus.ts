@@ -154,6 +154,18 @@ export interface PortraitFit {
 }
 
 /**
+ * メニュー（パーティ枠・ステータス画面）の人物の絵の URL (#1211)。`sprite` を優先し、無ければ戦闘の待機ポーズ `poses.idle`、
+ * どちらも無ければ undefined（絵なしで枠だけ）。`人物:`/`形態:` で定義された人物は、形態から導いた `poses` だけを持ち
+ * `sprite` は持たない（手書きの絵を導出で置き換えるため）ので、`poses.idle` が絵になる。空文字は無いものとして扱う。
+ */
+export function menuPortraitUrl(m: {
+  sprite?: string
+  poses?: { idle?: string }
+}): string | undefined {
+  return m.sprite || m.poses?.idle || undefined
+}
+
+/**
  * 人物の絵（テクスチャ寸法 texW x texH）を枠 R に収める。
  * 通常は枠の高さの 88%・幅の 90% 以内。アクスタ表示（`acrylic`）では板・台座を含む外枠（正方形）が枠に収まるよう、
  * 絵の高さを `fitAcrylicGeometry` の比率で縮める（台座が枠の下端や隣の領域にはみ出さない。斜めの影は描画側のクリップで止める）。

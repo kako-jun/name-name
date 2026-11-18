@@ -10,6 +10,7 @@ import {
   fitPair,
   fitPortrait,
   fitSize,
+  menuPortraitUrl,
   statusArea,
   type StatusLayoutInput,
   type StatusRegion,
@@ -233,6 +234,21 @@ describe('名前と Lv は独立', () => {
     expect(long.labelSize).toBeLessThan(short.labelSize)
     expect(long.valueSize).toBe(short.valueSize)
     expect(long.labelSize).toBeGreaterThanOrEqual(f * STATUS_MIN_FONT_RATIO - 1e-6)
+  })
+})
+
+describe('menuPortraitUrl（メニューの人物の絵の出どころ #1211）', () => {
+  it('sprite があればそれを優先する（poses.idle があっても）', () => {
+    expect(menuPortraitUrl({ sprite: 'a.png', poses: { idle: 'idle.png' } })).toBe('a.png')
+  })
+  it('sprite が無ければ poses.idle にフォールバックする', () => {
+    expect(menuPortraitUrl({ poses: { idle: 'idle.png' } })).toBe('idle.png')
+    expect(menuPortraitUrl({ sprite: '', poses: { idle: 'idle.png' } })).toBe('idle.png')
+  })
+  it('どちらも無ければ undefined（枠だけ）。idle の無い poses も同じ', () => {
+    expect(menuPortraitUrl({})).toBeUndefined()
+    expect(menuPortraitUrl({ poses: {} })).toBeUndefined()
+    expect(menuPortraitUrl({ sprite: '', poses: { idle: '' } })).toBeUndefined()
   })
 })
 

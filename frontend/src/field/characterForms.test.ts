@@ -1,5 +1,6 @@
 // #1020: 人物の形態（時期・車椅子）から poses・歩行絵を命名規則で導く純関数と、設定 JSON への展開。
 import { describe, expect, it } from 'vitest'
+import { menuPortraitUrl } from '../game/fieldMenuStatus'
 import manifestText from '../../public/field/sit-character-forms.json?raw'
 import {
   CORE_POSES,
@@ -244,6 +245,16 @@ describe('expandCharacterForms（設定 JSON への展開）', () => {
     expect(r.party[2]).toEqual({ name: 'No', hp: 1 })
     expect(input.party[0].sprite).toBe('old.png')
     expect((input.player as Record<string, unknown>).sprites).toBeUndefined()
+  })
+  it('展開後は sprite が無く poses.idle が残るので、メニューの絵は poses.idle になる (#1211)。character の無い者は枠だけ', () => {
+    const r = parts(expandCharacterForms(cfg(), manifest))
+    expect(menuPortraitUrl(r.party[0] as { sprite?: string; poses?: { idle?: string } })).toMatch(
+      /C9-a-character-idle\.webp$/
+    )
+    expect(menuPortraitUrl(r.party[1] as { sprite?: string; poses?: { idle?: string } })).toMatch(
+      /C9-b-idle\.webp$/
+    )
+    expect(menuPortraitUrl(r.party[2] as { sprite?: string })).toBeUndefined()
   })
   it('主人公の歩行絵は同じ人物の味方（先頭）の形態から導く', () => {
     const r = parts(expandCharacterForms(cfg(), manifest))
