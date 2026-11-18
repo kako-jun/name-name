@@ -1117,6 +1117,17 @@ describe('parseConfig 敵グリッド・サイズ・群の検証 (#839)', () => 
     expect(parseConfig(c, BASE).ok).toBe(false)
   })
 
+  it('battle.targetCursor は off / ff を読み、未指定は undefined、不正値は読み込みエラー (#1189)', () => {
+    const c = withGrid('6x2', ['bit'])
+    expect(ok(c).battle.targetCursor).toBeUndefined()
+    c.battle = { ...(c.battle as object), targetCursor: 'ff' }
+    expect(ok(c).battle.targetCursor).toBe('ff')
+    c.battle = { ...(c.battle as object), targetCursor: 'off' }
+    expect(ok(c).battle.targetCursor).toBe('off')
+    c.battle = { ...(c.battle as object), targetCursor: 'hand' }
+    expect(parseConfig(c, BASE).ok).toBe(false)
+  })
+
   it('battle.weakThreshold は 0 超〜1 の数値を読み（1 超は 1）、未指定・0 以下・数値でない値は undefined (#1194)', () => {
     const c = withGrid('6x2', ['bit'])
     expect(ok(c).battle.weakThreshold).toBeUndefined()

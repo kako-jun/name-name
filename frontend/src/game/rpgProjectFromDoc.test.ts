@@ -2073,6 +2073,18 @@ describe('rpgProjectFromDoc: battle_atb_switch (#1195)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: battle_target_cursor (#1189)', () => {
+  const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
+  it('ff（大小無視）だけ ff、未指定・空・off・不正は off', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(proj({ battle_target_cursor: 'ff' }).battleTargetCursor).toBe('ff')
+    expect(proj({ battle_target_cursor: 'FF' }).battleTargetCursor).toBe('ff')
+    for (const v of [undefined, null, '', 'off', 'hand'])
+      expect(proj({ battle_target_cursor: v }).battleTargetCursor).toBe('off')
+    spy.mockRestore()
+  })
+})
+
 describe('rpgProjectFromDoc: battle_weak_threshold (#1194)', () => {
   const proj = (extra: Partial<EventDocument>) => rpgProjectFromDoc({ ...makeDoc(), ...extra })!
   it('0 超〜1 の数値は通し、1 超は 1 に丸め、未指定・空・不正は undefined（出さない）', () => {
