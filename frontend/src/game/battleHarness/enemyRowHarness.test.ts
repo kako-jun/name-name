@@ -12,7 +12,7 @@ describe('enemyRowScenarios', () => {
   const all = enemyRowScenarios()
 
   it('決定的で、id は一意・`enemy-row/` で始まり、JSON にそのまま書き出せる。件数は 2×5×3', () => {
-    expect(all.length).toBe(30)
+    expect(all.length).toBe(40)
     expect(enemyRowScenarios().map((s) => s.id)).toEqual(all.map((s) => s.id))
     expect(new Set(all.map((s) => s.id)).size).toBe(all.length)
     expect(all.every((s) => s.id.startsWith('enemy-row/'))).toBe(true)
@@ -28,7 +28,7 @@ describe('enemyRowScenarios', () => {
       ...NO_RANDOM,
       skip: ['enemy-row', 'enemy-level', 'script-grant', 'job-conversion', 'learning'],
     })
-    expect(withIt.length - without.length).toBe(30)
+    expect(withIt.length - without.length).toBe(40)
     expect(withIt.slice(0, without.length).map((s) => s.id)).toEqual(without.map((s) => s.id))
     expect(withIt.slice(without.length).map((s) => s.id)).toEqual(all.map((s) => s.id))
   })

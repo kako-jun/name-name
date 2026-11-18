@@ -112,7 +112,7 @@ export interface BattleConfig {
   /** コマンド窓の配置 (#204)。既定 grid（2x2）。cross は side のとき十字配置＋矢印キー */
   commandLayout: CommandLayout
   /** 敵の見えないグリッド (#839)。設定 JSON の `enemyGrid`（`"6x2"` 形式）。敵の `at`（`"C1"`）で位置を固定できる。既定は無し（従来の配置）。side のときだけ効く。
-   * グリッドがあると、最前列でない敵への通常攻撃のダメージが半分になる (#896。最前列 = 右端の列。設定は無い) */
+   * グリッドがあると、最前列でない敵への通常攻撃のダメージが半分になる (#896。最前列 = その時点で生きている敵のうち占有セルの右端の列が最も右の敵。倒れたら繰り上がる。設定は無い) */
   enemyGrid: EnemyGridSize | undefined
   /** コマンドの表示名の上書き (#204)。部分指定可（省略は既定の日本語）。id は変わらない */
   commandLabels: CommandLabels

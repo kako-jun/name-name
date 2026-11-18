@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { enemyRightEdges } from './enemyRow'
+import { enemyRightEdges, frontColumn } from './enemyRow'
 import type { BattleEntity } from './spellDsl'
 
 const e = (id: string, over: Partial<BattleEntity> = {}): BattleEntity => ({
@@ -33,5 +33,29 @@ describe('enemyRightEdges (#896)', () => {
     const w = e('w', { layout: { w: 2, h: 1, scale: 1, at: { col: 0, row: 0 } } })
     const edges = enemyRightEdges({ cols: 3, rows: 2 }, [w])
     expect(edges.get(w)).toBe(1)
+  })
+})
+
+describe('frontColumn (#1175)', () => {
+  it('倒す→繰り上がる→生き返らせる→最前列が元に戻る（毎回求め直す）', () => {
+    const a = e('a', at(2))
+    const b = e('b', at(1))
+    const c = e('c', at(0))
+    const edges = enemyRightEdges({ cols: 3, rows: 1 }, [a, b, c])
+    const alive = (x: BattleEntity) => x.hp > 0
+    expect(frontColumn(edges, alive)).toBe(2)
+    a.hp = 0
+    expect(frontColumn(edges, alive)).toBe(1)
+    b.hp = 0
+    expect(frontColumn(edges, alive)).toBe(0)
+    a.hp = 10
+    expect(frontColumn(edges, alive)).toBe(2)
+    b.hp = 10
+    a.hp = 0
+    expect(frontColumn(edges, alive)).toBe(1)
+  })
+  it('生きている敵がいなければ -1', () => {
+    const a = e('a', { ...at(0), hp: 0 })
+    expect(frontColumn(enemyRightEdges({ cols: 3, rows: 1 }, [a]), (x) => x.hp > 0)).toBe(-1)
   })
 })
