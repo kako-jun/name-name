@@ -197,6 +197,19 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect('atbSwitch' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(false)
   })
 
+  it('targetCursor は ff のときだけ渡り、off・未指定は渡さない (#1189)', () => {
+    expect(
+      buildBattleScreenOptions(load({ layout: 'side', targetCursor: 'ff' }).battle, {}).targetCursor
+    ).toBe('ff')
+    expect(
+      'targetCursor' in
+        buildBattleScreenOptions(load({ layout: 'side', targetCursor: 'off' }).battle, {})
+    ).toBe(false)
+    expect('targetCursor' in buildBattleScreenOptions(load({ layout: 'side' }).battle, {})).toBe(
+      false
+    )
+  })
+
   it('enemyList の指定は BattleScreen のオプションへ渡り、未指定は渡さない (#954)', () => {
     const base = { layout: 'side', spriteStyle: 'none', width: 800, height: 450 } as const
     expect(buildBattleScreenOptions({ ...base, enemyList: 'window' }, {}).enemyList).toBe('window')

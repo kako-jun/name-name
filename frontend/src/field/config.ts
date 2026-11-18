@@ -231,6 +231,8 @@ export interface FieldBattleConfig {
   textOverflow?: 'ellipsis' | 'scroll'
   /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。`battle.atbSwitch`: `off`（既定）/ `on`。未指定は undefined＝off */
   atbSwitch?: 'on' | 'off'
+  /** 戦闘の対象選択・番の印の出し方 (#1189)。`battle.targetCursor`: `off`（既定）/ `ff`。未指定は undefined＝off */
+  targetCursor?: 'off' | 'ff'
   /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。`battle.weakThreshold`（0〜1 の数値。1 超は 1 に丸め、0 以下は出さない）。未指定は undefined＝出さない */
   weakThreshold?: number
   /** 演出方式 (#883)。`battle.presentation`: `dq` / `ff`。未指定は undefined＝BattleScreen の既定（dq） */
@@ -1004,6 +1006,8 @@ export function parseConfig(
     return fail(`battle.textOverflow は "ellipsis" か "scroll": ${JSON.stringify(b.textOverflow)}`)
   if (b.atbSwitch !== undefined && b.atbSwitch !== 'on' && b.atbSwitch !== 'off')
     return fail(`battle.atbSwitch は "on" か "off": ${JSON.stringify(b.atbSwitch)}`)
+  if (b.targetCursor !== undefined && b.targetCursor !== 'off' && b.targetCursor !== 'ff')
+    return fail(`battle.targetCursor は "off" か "ff": ${JSON.stringify(b.targetCursor)}`)
   if (b.enemyList !== undefined && b.enemyList !== 'off' && b.enemyList !== 'window')
     return fail(`battle.enemyList は "off" か "window": ${JSON.stringify(b.enemyList)}`)
   if (
@@ -1399,6 +1403,7 @@ export function parseConfig(
         ...(b.partyLayout ? { partyLayout: b.partyLayout } : {}),
         ...(b.textOverflow ? { textOverflow: b.textOverflow } : {}),
         ...(b.atbSwitch ? { atbSwitch: b.atbSwitch } : {}),
+        ...(b.targetCursor ? { targetCursor: b.targetCursor } : {}),
         ...(weakThreshold !== undefined ? { weakThreshold } : {}),
         ...(b.presentation ? { presentation: b.presentation } : {}),
         ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),

@@ -144,6 +144,13 @@ describe('readFieldBattleSettings', () => {
     expect(readFieldBattleSettings(minimalProject()).atbSwitch).toBe('off')
   })
 
+  it('対象選択・番の印の出し方 (#1189) は RPGProject の値が入り、未指定は off', () => {
+    expect(readFieldBattleSettings(minimalProject({ battleTargetCursor: 'ff' })).targetCursor).toBe(
+      'ff'
+    )
+    expect(readFieldBattleSettings(minimalProject()).targetCursor).toBe('off')
+  })
+
   it('瀕死ポーズの閾値 (#1194) は RPGProject の値が入り、未指定は undefined（出さない）', () => {
     expect(
       readFieldBattleSettings(minimalProject({ battleWeakThreshold: 0.25 })).weakThreshold
@@ -484,6 +491,16 @@ describe('openFieldBattle', () => {
     )
   })
 
+  it('targetCursor は ff のときだけ opts に転送される (#1189)', () => {
+    expect(open({ settings: { layout: 'side', targetCursor: 'ff' } }).s.opts.targetCursor).toBe(
+      'ff'
+    )
+    expect('targetCursor' in open().s.opts).toBe(false)
+    expect(
+      'targetCursor' in open({ settings: { layout: 'side', targetCursor: 'off' } }).s.opts
+    ).toBe(false)
+  })
+
   it('weakThreshold は指定があるときだけ opts に転送される (#1194)', () => {
     const { s } = open({ settings: { layout: 'side', weakThreshold: 0.25 } })
     expect(s.opts.weakThreshold).toBe(0.25)
@@ -585,6 +602,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       partyLayout: 'default',
       textOverflow: 'ellipsis',
       atbSwitch: 'off',
+      targetCursor: 'off',
       weakThreshold: undefined,
       depth: null,
       foreground: undefined,
@@ -634,6 +652,7 @@ describe('readFieldBattleSettings: 旧実装（Raycast の個別フィールド�
       partyLayout: 'default',
       textOverflow: 'ellipsis',
       atbSwitch: 'off',
+      targetCursor: 'off',
       weakThreshold: undefined,
       depth: { horizon: 0.3, perspective: 0.8 },
       foreground: 'fg/a.png',

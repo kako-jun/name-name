@@ -31,6 +31,11 @@ export interface EnemyListRow {
   count: number
   /** 状態異常の表示名（`[どく]` など）。無ければ空・省略 */
   status?: readonly string[]
+  /**
+   * その行に入る生きている敵の index（入力の並び）(#1189)。`aggregateEnemyList` が必ず付ける（`count` と同じ個数）。
+   * 対象選択で行と敵を対応させる（`battle_target_cursor: ff` の行の強調・行のタップ）のに使う。手で作る行は省略してよい
+   */
+  members?: number[]
 }
 
 /** 行の頭に付ける状態異常の表示（`[どく・ねむり] `）。無ければ空文字。省略は末尾から削られるので状態名は先頭に置いて見える側に残す */
@@ -39,25 +44,28 @@ export function enemyListStatusPrefix(row: EnemyListRow): string {
 }
 
 /**
- * 名前（と状態異常）ごとの生存数。最初に現れた順。生存 0 の行は含めない。
+ * 名前（と状態異常）ごとの生存数と、その行に入る生きている敵の index（`members`）。最初に現れた順。生存 0 の行は含めない。
  * 同名でも状態異常が違う敵は別の行にする（「[どく] スライム」と「スライム ×2」。状態が付く・治ると行が変わる）
  */
 export function aggregateEnemyList(
   enemies: readonly { name: string; hp: number; status?: readonly string[] }[]
 ): EnemyListRow[] {
   const order: string[] = []
-  const rows = new Map<string, EnemyListRow>()
-  for (const e of enemies) {
+  const rows = new Map<string, EnemyListRow & { members: number[] }>()
+  enemies.forEach((e, i) => {
     const status = e.status ?? []
     const key = `${e.name}\u0000${status.join('\u0001')}`
     let row = rows.get(key)
     if (!row) {
-      row = { name: e.name, count: 0, ...(status.length > 0 ? { status } : {}) }
+      row = { name: e.name, count: 0, ...(status.length > 0 ? { status } : {}), members: [] }
       rows.set(key, row)
       order.push(key)
     }
-    if (e.hp > 0) row.count += 1
-  }
+    if (e.hp > 0) {
+      row.count += 1
+      row.members.push(i)
+    }
+  })
   return order.map((k) => rows.get(k) as EnemyListRow).filter((r) => r.count > 0)
 }
 

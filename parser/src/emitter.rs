@@ -315,6 +315,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("battle_atb_switch: \"{sanitized}\"\n"));
         }
+        // battle_target_cursor (#1189)。同じ流儀
+        if let Some(ref v) = doc.battle_target_cursor {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("battle_target_cursor: \"{sanitized}\"\n"));
+        }
         // battle_weak_threshold (#1194)。同じ流儀
         if let Some(ref v) = doc.battle_weak_threshold {
             let sanitized = v.replace('"', "");
@@ -2720,6 +2725,7 @@ mod tests {
             battle_text_overflow: None,
             trace: None,
             battle_atb_switch: None,
+            battle_target_cursor: None,
             battle_weak_threshold: None,
             dialog_font_size: None,
             dialog_window_height: None,
@@ -3260,6 +3266,7 @@ mod tests {
             battle_text_overflow: None,
             trace: None,
             battle_atb_switch: None,
+            battle_target_cursor: None,
             battle_weak_threshold: None,
             dialog_font_size: None,
             dialog_window_height: None,

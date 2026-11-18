@@ -2697,6 +2697,17 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(again.battle_atb_switch).toBe('on')
   })
 
+  it('battle_target_cursor が doc に残り、省略・空値は null、emit→parse で往復する (#1189)', async () => {
+    const doc = await parseMarkdown(docWith(['battle_target_cursor: ff']))
+    expect(doc.battle_target_cursor).toBe('ff')
+    expect((await parseMarkdown(docWith(['battle_atb: on']))).battle_target_cursor).toBeNull()
+    expect(
+      (await parseMarkdown(docWith(['battle_target_cursor:']))).battle_target_cursor
+    ).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.battle_target_cursor).toBe('ff')
+  })
+
   it('battle_weak_threshold が doc に残り、省略・空値は null、emit→parse で往復する (#1194)', async () => {
     const doc = await parseMarkdown(docWith(['battle_weak_threshold: 0.25']))
     expect(doc.battle_weak_threshold).toBe('0.25')

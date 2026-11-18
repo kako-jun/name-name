@@ -133,6 +133,11 @@ import {
 } from './battleEnemyList'
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
 import { computeSelectMarkImageRect, loadUiTexture, type UiImagesConfig } from './uiImages'
+import {
+  showsStatusTurnMarker,
+  showsTargetSelectMark,
+  type BattleTargetCursorMode,
+} from './battleTargetCursor'
 import { MESSAGE_WINDOW_FONT_SIZE, normalizeUiScale } from './battleLogicalSize'
 import { syncTextResolution } from './textResolution'
 import { BattleMenuLayer, HINT_FONT_SIZE, HINT_LINE_HEIGHT, placeHint } from './BattleMenuLayer'
@@ -549,6 +554,13 @@ export interface BattleScreenOptions {
    */
   atbSwitch?: boolean
   /**
+   * 対象選択・番の印の出し方 (#1189)。frontmatter `battle_target_cursor` 由来。undefined / `off` = 従来（対象に手と ▼、番の味方に ▼ と名前の左の ▶）。
+   * `ff` = 対象は手のカーソルだけで指し（▼ を出さない。手は敵の左から右向き）、敵名ウィンドウ（#954）の対象の行は明るい帯で強調する（行に手は出さない）。
+   * 番の味方は頭上の ▼ だけ（対象選択の間も出したまま。▶・▷ は出さない）。ff の敵の絵のタップ範囲は、マスでなく見えている絵の矩形（`targetGeometry`）。
+   * 窓の寸法・配置は変えない（他の設定と直交）
+   */
+  targetCursor?: BattleTargetCursorMode
+  /**
    * 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。frontmatter `battle_weak_threshold` 由来（0〜1）。
    * 味方の表示上の HP 割合がこの値未満で、待機（idle）の姿のときだけ weak の絵にする（weak の絵が無ければ idle のまま）。
    * undefined = 出さない（従来）。`presentation: 'ff'` かつ `layout: 'side'` のときだけ効く
@@ -769,6 +781,8 @@ export class BattleScreen extends Container {
   >()
   /** 敵名ウィンドウ (#954) を使う設定か（ff かつ side のときだけ true）。実際に置けたかは enemyListRect */
   private enemyListEnabled: boolean
+  /** 対象選択・番の印の出し方 (#1189)。`off`（既定）/ `ff` */
+  private targetCursor: BattleTargetCursorMode
   private enemyListPanel: Container
   /** 行の Text。必要な数だけ作り、余りは visible=false で残す（破棄は Container.destroy に任せる） */
   private enemyListTexts: PixiText[] = []
@@ -957,6 +971,7 @@ export class BattleScreen extends Container {
     this.entranceActive = this.presentation === 'ff' && entranceTotalMs(this.motionTiming) > 0
     this.enemyListEnabled =
       opts.enemyList === 'window' && this.presentation === 'ff' && this.layoutMode === 'side'
+    this.targetCursor = opts.targetCursor === 'ff' ? 'ff' : 'off'
     // FF 式の窓は一度に全文を出す。1 文字ずつ表示 (#755) は DQ 式のログ用で、ff では使わない
     this.logTypewriter = opts.logTypewriter === 'on' && this.presentation === 'dq' ? 'on' : 'off'
     // 描画（battleLayout の effectiveCommandLayout）と同じ判定にそろえる: cross は side かつ 4 コマンドのときだけ
@@ -2155,6 +2170,8 @@ export class BattleScreen extends Container {
         isEnemyGridSlot(sl) ? { x: sl.box.x, y: sl.box.y, w: sl.box.w, h: sl.box.h } : slotRect(sl)
       ),
       partySlots: L.party.map(slotRect),
+      // 対象選択の出し方 (#1189)。ff は敵の手も左から右向き
+      ...(this.targetCursor === 'ff' ? { targetCursor: 'ff' as const } : {}),
       // 入り切らない名前の扱い (#1183)。ellipsis（既定）のときは足さず、従来と同じ形のまま
       ...(marqueeAppliesTo(this.textOverflow, 'menu') ? { textOverflow: 'scroll' as const } : {}),
     }
@@ -2468,12 +2485,16 @@ export class BattleScreen extends Container {
     const s = this.engine.getState()
     const w = this.menuStack[this.menuStack.length - 1]
     const ctx = w?.type === 'target' ? this.menuContext() : null
-    const marks = selectMarkTargets(
-      s.party,
-      s.enemies,
-      ctx ? ctx.actorIndex : this.actorIndex(),
-      ctx ? w : undefined
-    )
+    // ff (#1189): 対象は手だけで指し（対象に ▼ を出さない）、番の味方の ▼ は対象選択の間も出したまま（FF ピクセルリマスターと同じ）
+    const marks =
+      ctx && !showsTargetSelectMark(this.targetCursor)
+        ? selectMarkTargets(s.party, s.enemies, this.actorIndex(), undefined)
+        : selectMarkTargets(
+            s.party,
+            s.enemies,
+            ctx ? ctx.actorIndex : this.actorIndex(),
+            ctx ? w : undefined
+          )
     const show = (v: EntityView, on: boolean): void => {
       v.selectMark.visible = on
       if (v.selectMarkImage) v.selectMarkImage.visible = on
@@ -2603,6 +2624,7 @@ export class BattleScreen extends Container {
    */
   private refreshEnemyList(): void {
     const rect = this.enemyListRect
+    if (this.menuGeometry) delete this.menuGeometry.enemyListRows
     if (!rect) {
       for (const t of this.enemyListTexts) t.visible = false
       return
@@ -2660,6 +2682,22 @@ export class BattleScreen extends Container {
         h: fit.lineHeight,
       })
     })
+    // 対象選択で敵名ウィンドウの対象の行を強調する (#1189)。行の帯とその行の敵を候補窓の座標へ渡す（見えている行だけ。
+    // 溢れて「…」になった最後の行は名前が出ないので含めない）
+    if (this.targetCursor === 'ff' && this.menuGeometry) {
+      const shown = rows.length > fit.visibleRows ? Math.max(0, fit.visibleRows - 1) : rows.length
+      // 帯は窓の枠の内側（左右の余白の半分まで）に収める
+      const inset = ENEMY_LIST_PADDING / 2
+      this.menuGeometry.enemyListRows = rows.slice(0, shown).map((row, i) => ({
+        rect: {
+          x: rect.x + inset,
+          y: rect.y + top + i * fit.lineHeight,
+          w: Math.max(0, rect.w - inset * 2),
+          h: fit.lineHeight,
+        },
+        members: row.members ?? [],
+      }))
+    }
   }
 
   /** サイドビューのテキスト・生死表示を更新する (#736) */
@@ -2710,7 +2748,8 @@ export class BattleScreen extends Container {
       const switchable = !!this.opts.atbSwitch && this.engine.isAtbSwitchable(i)
       const marker = this.atbMarkers[i]
       if (marker) {
-        marker.visible = isActor || switchable
+        // ff (#1189): 番は頭上の ▼ だけで示す（FF に横向きの三角の印は無い）
+        marker.visible = (isActor || switchable) && showsStatusTurnMarker(this.targetCursor)
         marker.text = isActor ? '▶' : '▷'
         // ▷ は小さい文字なので、薄くせず色と太さで ▶ と区別する（実画面で alpha 0.7 はほぼ見えなかった）
         marker.style.fill = isActor ? ACTOR_COLOR : SWITCHABLE_MARK_COLOR
@@ -2873,7 +2912,8 @@ export class BattleScreen extends Container {
     const hero: BattleEntity | undefined = s.party[0]
     if (hero) {
       const isActor = hero.hp > 0 && this.actorIndex() === 0
-      if (this.layoutMode === 'front' && this.atbMarkers[0]) this.atbMarkers[0].visible = isActor
+      if (this.layoutMode === 'front' && this.atbMarkers[0])
+        this.atbMarkers[0].visible = isActor && showsStatusTurnMarker(this.targetCursor)
       this.heroStatsText.text = `${this.withStatusTags(hero.name, hero, 'party', 0)}  HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}`
       this.heroStatsText.style.fill = hero.hp <= 0 ? 0x888888 : isActor ? ACTOR_COLOR : TEXT_COLOR
     }
@@ -3181,13 +3221,35 @@ export class BattleScreen extends Container {
     this.updateMenuLayer()
   }
 
+  /**
+   * 対象選択の座標に使う敵の枠 (#1189)。ff は、敵の手を敵の左に出すので、いま見えている敵の絵の矩形を使う
+   * （敵グリッドのマスは絵より広く、左端の列のマスは画面の左端に接するため、マス基準では手が絵から離れる・画面外に出る）。
+   * 対象選択で敵の絵をタップする範囲（当たり判定）も同じ矩形になり、マスより狭まる（手が指す絵そのものをタップする）。
+   * 絵がまだ無い（大きさ 0）の敵はマスのまま。off（既定）は従来どおりマスの矩形
+   */
+  private targetGeometry(g: MenuGeometry): MenuGeometry {
+    if (this.targetCursor !== 'ff') return g
+    const enemySlots = g.enemySlots.map((slot, i) => {
+      const v = this.enemyViews[i]
+      if (!v) return slot
+      // 敵の絵そのもの（sprite）。板のテクスチャは絵の周りに余白〔acrylicPlatePad〕を足してあるので使わない。絵の画像そのものに
+      // 透明な余白がある敵（sit-by-me の自転車など）は、そのぶん手と見えている絵の間が空く。絵が無いときは container（従来の四角）
+      const b = (v.sprite && v.sprite.visible ? v.sprite : v.container).getBounds()
+      if (!(b.width > 0 && b.height > 0)) return slot
+      const tl = this.toLocal({ x: b.x, y: b.y })
+      const br = this.toLocal({ x: b.x + b.width, y: b.y + b.height })
+      return { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y }
+    })
+    return { ...g, enemySlots }
+  }
+
   private updateMenuLayer(): void {
     if (!this.menuLayer) return
     const ctx = this.menuStack.length > 0 ? this.menuContext() : null
     // 画面サイズ変更で見える行数が変わったら、先頭行・カーソルを窓に収め直す
     if (ctx) this.menuStack = refitList(this.menuStack, ctx)
-    const view =
-      ctx && this.menuGeometry ? buildMenuView(this.menuStack, ctx, this.menuGeometry) : []
+    const geo = this.menuGeometry ? this.targetGeometry(this.menuGeometry) : null
+    const view = ctx && geo ? buildMenuView(this.menuStack, ctx, geo) : []
     // 操作の案内 (#806)。窓が開いていなければ、コマンドを選べる局面（入力待ち）だけ出す
     const rects = view.flatMap((v) => (v.type === 'list' ? [v.rect] : []))
     const top = this.menuStack[this.menuStack.length - 1]

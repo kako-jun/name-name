@@ -40,6 +40,7 @@ import {
 import { normalizeBattleEnemyList } from './battleEnemyList'
 import { normalizeBattleTransition } from './battleTransition'
 import { normalizeBattleAtb, normalizeBattleAtbSwitch } from './battleAtb'
+import { normalizeBattleTargetCursor } from './battleTargetCursor'
 import {
   normalizeEnemyGrid,
   normalizeEnemyGridAlign,
@@ -445,6 +446,7 @@ export function rpgProjectFromDoc(
     battleTextOverflow: normalizeBattleTextOverflow(doc.battle_text_overflow),
     trace: normalizeTrace(doc.trace),
     battleAtbSwitch: normalizeBattleAtbSwitch(doc.battle_atb_switch),
+    battleTargetCursor: normalizeBattleTargetCursor(doc.battle_target_cursor),
     battleWeakThreshold: normalizeWeakThreshold(doc.battle_weak_threshold),
     battleCommandLayout: normalizeCommandLayout(doc.battle_command_layout),
     battleCommandLabels: parseCommandLabels(doc.battle_command_labels),
