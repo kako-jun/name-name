@@ -5360,6 +5360,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_text_overflow: None,
         trace: None,
         battle_atb_switch: None,
+        battle_target_cursor: None,
         battle_weak_threshold: None,
         dialog_font_size: None,
         dialog_window_height: None,
@@ -10568,6 +10569,7 @@ fn telop_test_doc_base() -> Document {
         battle_text_overflow: None,
         trace: None,
         battle_atb_switch: None,
+        battle_target_cursor: None,
         battle_weak_threshold: None,
         dialog_font_size: None,
         dialog_window_height: None,
@@ -12989,6 +12991,26 @@ fn test_trace_roundtrip() {
     assert_eq!(re.trace, doc.trace);
     // 未指定のときは emit しない（既定の出力を変えない）
     assert!(!emitter::emit(&none).contains("trace"));
+}
+
+#[test]
+fn test_battle_target_cursor_roundtrip() {
+    let doc = parser::parse(&battle_doc("battle_target_cursor: ff\n"));
+    assert_eq!(doc.battle_target_cursor.as_deref(), Some("ff"));
+    let none = parser::parse(&battle_doc(""));
+    assert_eq!(none.battle_target_cursor, None);
+    let empty = parser::parse(&battle_doc("battle_target_cursor:\n"));
+    assert_eq!(empty.battle_target_cursor, None);
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("battle_target_cursor: \"ff\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(re.battle_target_cursor, doc.battle_target_cursor);
+    // 未指定のときは emit しない（既定の出力を変えない）
+    assert!(!emitter::emit(&none).contains("battle_target_cursor"));
 }
 
 #[test]

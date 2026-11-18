@@ -2387,6 +2387,7 @@ mod tests {
             battle_text_overflow: None,
             trace: None,
             battle_atb_switch: None,
+            battle_target_cursor: None,
             battle_weak_threshold: None,
             dialog_font_size: None,
             dialog_window_height: None,
