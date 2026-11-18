@@ -8,7 +8,7 @@
  */
 import type { MenuRow, MenuStack, MenuContext, MenuKind, TargetSide } from './battleMenu'
 import { targetHands, targetScopeOf } from './battleMenu'
-import { enemyForListRow, enemyListCursorRows } from './battleTargetCursor'
+import { enemyForListRow, enemyListHighlightRows } from './battleTargetCursor'
 import { estimateTextWidth, fitLabel, SIDE_GAP, SIDE_PADDING, type Rect } from './battleLayout'
 
 export const MENU_ROW_HEIGHT = 28
@@ -315,7 +315,7 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
       const targets = targetHands(w, ctx.party, ctx.enemies, ctx.actorIndex)
         .filter((h) => h.side === 'enemy')
         .map((h) => h.index)
-      for (const row of enemyListCursorRows(
+      for (const row of enemyListHighlightRows(
         listRows.map((r) => r.members),
         targets
       ))

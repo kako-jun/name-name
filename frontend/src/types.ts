@@ -1413,7 +1413,7 @@ export interface EventDocument {
   trace?: string | null
   /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。`"off"`（既定）/ `"on"`。frontmatter `battle_atb_switch:` から流す。`battle_atb: on` のときだけ効く。不正値・未指定は off。GUI 専用。 */
   battle_atb_switch?: string | null
-  /** 戦闘の対象選択・番の印の出し方 (#1189)。`"off"`（既定＝従来）/ `"ff"`（対象は手だけで指し、敵名窓の行にも手。番は頭上の ▼ だけ）。frontmatter `battle_target_cursor:` から流す。不正値・未指定は off。GUI 専用。 */
+  /** 戦闘の対象選択・番の印の出し方 (#1189)。`"off"`（既定＝従来）/ `"ff"`（対象は手だけで指し〔手は敵の左から右向き〕、敵名窓の対象の行は明るい帯で強調して手は出さない。番は頭上の ▼ だけ）。frontmatter `battle_target_cursor:` から流す。不正値・未指定は off。GUI 専用。 */
   battle_target_cursor?: string | null
   /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。0〜1 の数値（生文字列。HP 割合がこの値未満のとき待機姿を weak に）。frontmatter `battle_weak_threshold:` から流す。不正値・未指定は出さない（従来）。GUI 専用。 */
   battle_weak_threshold?: string | null

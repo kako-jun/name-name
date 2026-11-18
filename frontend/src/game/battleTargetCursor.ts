@@ -33,29 +33,10 @@ export function showsStatusTurnMarker(mode: BattleTargetCursorMode): boolean {
 }
 
 /**
- * 敵名ウィンドウの行ごとの、その行に入る敵の index（`state.enemies` の並び）。行の作り方は `aggregateEnemyList` と同じ
- * （名前＋状態の組で、最初に現れた順。倒れた敵は含めない。生存 0 の組は行にならない）。`aggregateEnemyList` と同じ入力を渡すこと
+ * 敵名ウィンドウで明るい帯で強調する行（`targets` の敵が入る行。重複なし・行の順）。行に手は出さない（FF ピクセルリマスターと同じ）。
+ * `rowMembers` は行ごとの生きている敵の index（`aggregateEnemyList` の `members`）。呼び出し側が渡した行（見えている行）だけを見る
  */
-export function enemyListRowMembers(
-  enemies: readonly { name: string; hp: number; status?: readonly string[] }[]
-): number[][] {
-  const order: string[] = []
-  const members = new Map<string, number[]>()
-  enemies.forEach((e, i) => {
-    const key = `${e.name}\u0000${(e.status ?? []).join('\u0001')}`
-    let m = members.get(key)
-    if (!m) {
-      m = []
-      members.set(key, m)
-      order.push(key)
-    }
-    if (e.hp > 0) m.push(i)
-  })
-  return order.map((k) => members.get(k) as number[]).filter((m) => m.length > 0)
-}
-
-/** 敵名ウィンドウで手を出す行（`targets` の敵が入る行。重複なし・行の順）。窓に見えていない行も含む（呼び出し側が見える行で絞る） */
-export function enemyListCursorRows(
+export function enemyListHighlightRows(
   rowMembers: readonly (readonly number[])[],
   targets: readonly number[]
 ): number[] {

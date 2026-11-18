@@ -134,7 +134,6 @@ import {
 import { buildMenuView, listMaxRows, type MenuGeometry } from './battleMenuLayout'
 import { computeSelectMarkImageRect, loadUiTexture, type UiImagesConfig } from './uiImages'
 import {
-  enemyListRowMembers,
   showsStatusTurnMarker,
   showsTargetSelectMark,
   type BattleTargetCursorMode,
@@ -556,7 +555,8 @@ export interface BattleScreenOptions {
   atbSwitch?: boolean
   /**
    * 対象選択・番の印の出し方 (#1189)。frontmatter `battle_target_cursor` 由来。undefined / `off` = 従来（対象に手と ▼、番の味方に ▼ と名前の左の ▶）。
-   * `ff` = 対象は手のカーソルだけで指し（▼ を出さない）、敵名ウィンドウ（#954）の対象の行にも手を出す。番の味方は頭上の ▼ だけ（▶・▷ は出さない）。
+   * `ff` = 対象は手のカーソルだけで指し（▼ を出さない。手は敵の左から右向き）、敵名ウィンドウ（#954）の対象の行は明るい帯で強調する（行に手は出さない）。
+   * 番の味方は頭上の ▼ だけ（対象選択の間も出したまま。▶・▷ は出さない）。ff の敵の絵のタップ範囲は、マスでなく見えている絵の矩形（`targetGeometry`）。
    * 窓の寸法・配置は変えない（他の設定と直交）
    */
   targetCursor?: BattleTargetCursorMode
@@ -2628,12 +2628,13 @@ export class BattleScreen extends Container {
       return
     }
     const s = this.engine.getState()
-    const input = s.enemies.map((e, i) => ({
-      name: e.name,
-      hp: this.shownHp('enemy', i, e.hp),
-      status: this.statusLabelsOf('enemy', i, e),
-    }))
-    const rows = aggregateEnemyList(input)
+    const rows = aggregateEnemyList(
+      s.enemies.map((e, i) => ({
+        name: e.name,
+        hp: this.shownHp('enemy', i, e.hp),
+        status: this.statusLabelsOf('enemy', i, e),
+      }))
+    )
     const fit = fitEnemyListFont(rows.length, rect.h, { rows, windowWidth: rect.w })
     const lines = enemyListLines(
       rows,
@@ -2682,18 +2683,17 @@ export class BattleScreen extends Container {
     // 対象選択で敵名ウィンドウの対象の行を強調する (#1189)。行の帯とその行の敵を候補窓の座標へ渡す（見えている行だけ。
     // 溢れて「…」になった最後の行は名前が出ないので含めない）
     if (this.targetCursor === 'ff' && this.menuGeometry) {
-      const members = enemyListRowMembers(input)
       const shown = rows.length > fit.visibleRows ? Math.max(0, fit.visibleRows - 1) : rows.length
       // 帯は窓の枠の内側（左右の余白の半分まで）に収める
       const inset = ENEMY_LIST_PADDING / 2
-      this.menuGeometry.enemyListRows = members.slice(0, shown).map((m, i) => ({
+      this.menuGeometry.enemyListRows = rows.slice(0, shown).map((row, i) => ({
         rect: {
           x: rect.x + inset,
           y: rect.y + top + i * fit.lineHeight,
           w: Math.max(0, rect.w - inset * 2),
           h: fit.lineHeight,
         },
-        members: m,
+        members: row.members ?? [],
       }))
     }
   }
@@ -3222,6 +3222,7 @@ export class BattleScreen extends Container {
   /**
    * 対象選択の座標に使う敵の枠 (#1189)。ff は、敵の手を敵の左に出すので、いま見えている敵の絵の矩形を使う
    * （敵グリッドのマスは絵より広く、左端の列のマスは画面の左端に接するため、マス基準では手が絵から離れる・画面外に出る）。
+   * 対象選択で敵の絵をタップする範囲（当たり判定）も同じ矩形になり、マスより狭まる（手が指す絵そのものをタップする）。
    * 絵がまだ無い（大きさ 0）の敵はマスのまま。off（既定）は従来どおりマスの矩形
    */
   private targetGeometry(g: MenuGeometry): MenuGeometry {
@@ -3229,7 +3230,8 @@ export class BattleScreen extends Container {
     const enemySlots = g.enemySlots.map((slot, i) => {
       const v = this.enemyViews[i]
       if (!v) return slot
-      // 敵の絵そのもの（板のテクスチャは周りに透明の余白を持つので使わない）。絵が無いときは container（従来の四角）
+      // 敵の絵そのもの（sprite）。板のテクスチャは絵の周りに余白〔acrylicPlatePad〕を足してあるので使わない。絵の画像そのものに
+      // 透明な余白がある敵（sit-by-me の自転車など）は、そのぶん手と見えている絵の間が空く。絵が無いときは container（従来の四角）
       const b = (v.sprite && v.sprite.visible ? v.sprite : v.container).getBounds()
       if (!(b.width > 0 && b.height > 0)) return slot
       const tl = this.toLocal({ x: b.x, y: b.y })
