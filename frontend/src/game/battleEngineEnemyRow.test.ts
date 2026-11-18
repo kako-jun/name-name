@@ -164,7 +164,7 @@ describe('敵の最前列: 動的（倒れたら繰り上がる） (#896 / #1175
     eng.selectAttack('c')
     expect(cb - c.hp).toBe(FULL)
   })
-  it('生きている敵が 1 体なら常に最前列（半分にならない）', () => {
+  it('生きている敵が 1 体なら常に最前列（半分にならない。旧定義でも通る境界）', () => {
     const a = foe('a', at(0))
     const eng = new BattleEngine([hero()], [a], { rng: () => 0, enemyRow: { grid: GRID } })
     eng.selectAttack('a')

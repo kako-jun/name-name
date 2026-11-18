@@ -1381,6 +1381,7 @@ export function enemyRowScenarios(): Scenario[] {
         }
         out.push({
           id: `enemy-row/${atb ? 'atb' : 'turn'}/${lay.name}/def${def}${hp === 500 ? '' : `-hp${hp}`}`,
+          // 位置依存の番号: シナリオを足すと既存のシードがずれる（コミット済みのベースラインには依存しない）
           seed: 130_000 + out.length,
           party: [entity('a', { hp: 9999, maxHp: 9999, atk: 40, def: 50 })],
           enemies: lay.enemies.map((o, i) => foe(`s${i}`, { atk: 1, def, hp, maxHp: hp, ...o })),

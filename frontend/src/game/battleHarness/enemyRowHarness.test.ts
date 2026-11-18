@@ -11,7 +11,7 @@ const NO_RANDOM = { randomSeed: 1, randomCount: 0, randomStatusCount: 0, randomS
 describe('enemyRowScenarios', () => {
   const all = enemyRowScenarios()
 
-  it('決定的で、id は一意・`enemy-row/` で始まり、JSON にそのまま書き出せる。件数は 2×5×3', () => {
+  it('決定的で、id は一意・`enemy-row/` で始まり、JSON にそのまま書き出せる。件数は 2×5×4=40', () => {
     expect(all.length).toBe(40)
     expect(enemyRowScenarios().map((s) => s.id)).toEqual(all.map((s) => s.id))
     expect(new Set(all.map((s) => s.id)).size).toBe(all.length)
