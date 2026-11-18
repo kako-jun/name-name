@@ -1047,6 +1047,8 @@ export class BattleScreen extends Container {
     this.detachCrossKeys()
     this.engine.setAtbHold(false)
     if (this.menuEnabled) this.engine.setAtbWaitScope('command')
+    // 勝敗が決まらず破棄された戦闘のトレースフックを外す（end を伴わない。端数は書いてから外す #1215）
+    this.bt?.detach()
     this.detachResultSkip()
     for (const v of [...this.enemyViews, ...this.partyViews]) {
       this.clearSelfMosaic(v)

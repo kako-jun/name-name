@@ -427,5 +427,5 @@ cargo run -p name-name-tui -- --debug-scene 1-2 --debug-unlock-all
 - 画面側の演出（hpOverride・ポーズ解決）は再実行しない。エンジンの結果が対象。画面側は `b.fire` / `b.pose` / `b.snap` の記録を直接読む
 - 開始時の編成はエンジン構築後の値。構築時に乱数を使う戦闘（脚本の開始など）では乱数列が 1 つずれうる
 - `rng` を注入した戦闘（テスト）は種が無いので再実行できない（明示して失敗する）
-- 戦闘が `end` されないまま取り出した記録（詰まり・クラッシュ・ページ離脱・戦闘中の `nameNameTrace.dump()`）でも、最後の 250ms 未満の経過時間（端数）は載る。保存（3 秒ごと・`pagehide` / `beforeunload` / `visibilitychange` / 例外）と取り出し（`dump()` など）の直前に、未書き出しの端数を `b.adv` として書き足すため（`traceOnPreFlush`。`end` で解除される）。端数が 0 のときは何も足さない。これを入れる前は再実行が最後の行動の手前で止まった（Issue #1215）。新しい設定キーは無い
+- 戦闘が `end` されないまま取り出した記録（詰まり・クラッシュ・ページ離脱・戦闘中の `nameNameTrace.dump()`）でも、最後の 250ms 未満の経過時間（端数）は載る。保存（3 秒ごと・`pagehide` / `visibilitychange` / 例外。`beforeunload` は pagehide で足りる上、Firefox の bfcache を妨げ二重保存になるので使わない）と取り出し（`dump()` など）の直前に、未書き出しの端数を `b.adv` として書き足すため（`traceOnPreFlush`。`end` または画面の破棄で解除される）。端数が 0 のときは何も足さない。`tick` の途中で例外が出ても経過時間は先に足されるので、落ちた tick の分も丸ごと `b.adv` に載る。これを入れる前は再実行が最後の行動の手前で止まった（Issue #1215）。新しい設定キーは無い
 

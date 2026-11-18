@@ -59,7 +59,6 @@ const ERR_FLUSH_MIN_MS = 2000
 const onPageHide = (): void => traceFlush(true)
 /** 保存・取り出しの直前に呼ぶ関数（未書き出しの端数を記録へ吐く。戦闘のトレーサが使う #1215） */
 const preFlushHooks = new Set<() => void>()
-const onBeforeUnload = (): void => traceFlush(true)
 const onVisibility = (): void => {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') traceFlush(true)
 }
@@ -170,7 +169,6 @@ function attachListeners(): void {
   if (listenersAttached || typeof globalThis.addEventListener !== 'function') return
   listenersAttached = true
   globalThis.addEventListener('pagehide', onPageHide)
-  globalThis.addEventListener('beforeunload', onBeforeUnload)
   globalThis.addEventListener('visibilitychange', onVisibility)
   // 例外は記録して、すぐ保存する（落ちたあとに追えるよう。毎フレーム例外でも 2 秒に 1 回まで）
   globalThis.addEventListener('error', onError)
@@ -181,7 +179,6 @@ function detachListeners(): void {
   if (!listenersAttached) return
   listenersAttached = false
   globalThis.removeEventListener('pagehide', onPageHide)
-  globalThis.removeEventListener('beforeunload', onBeforeUnload)
   globalThis.removeEventListener('visibilitychange', onVisibility)
   globalThis.removeEventListener('error', onError)
   globalThis.removeEventListener('unhandledrejection', onRejection)
@@ -255,6 +252,7 @@ export function configureTrace(
   if (!on || (enabled && game !== gameId)) {
     // off に替わった・別のゲームに替わった: 記録を止め、コンソール API とイベント受け口を外す（保存済みには触らない）
     traceFlush(true)
+    preFlushHooks.clear()
     enabled = false
     if (timer) clearInterval(timer)
     timer = null

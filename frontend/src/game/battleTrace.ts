@@ -158,6 +158,13 @@ export class BattleTracer {
     this.flushAdv()
   }
 
+  /** end を伴わずに外す（画面の破棄）。端数を書いてから保存前フックを解除する */
+  detach(): void {
+    this.flushAdv()
+    this.unhook?.()
+    this.unhook = null
+  }
+
   /** 保存前の端数書き出しに登録する（end で自動解除） */
   hookPreFlush(): void {
     this.unhook ??= traceOnPreFlush(() => this.flushAdv())
