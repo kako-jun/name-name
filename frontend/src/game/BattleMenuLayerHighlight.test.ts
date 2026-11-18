@@ -6,6 +6,16 @@ import { Container, EventBoundary, Graphics, TextStyle } from 'pixi.js'
 import { BattleMenuLayer, type BattleMenuHost } from './BattleMenuLayer'
 import type { MenuTargetView } from './battleMenuLayout'
 
+/** 木の中の、タップを受けない（eventMode none の）Graphics を集める */
+function passiveGraphics(c: Container): Graphics[] {
+  const out: Graphics[] = []
+  for (const ch of c.children) {
+    if (ch instanceof Graphics && ch.eventMode === 'none') out.push(ch)
+    out.push(...passiveGraphics(ch as Container))
+  }
+  return out
+}
+
 function host(onTargetTap: BattleMenuHost['onTargetTap']): BattleMenuHost {
   return {
     makePanel: () => new Container(),
@@ -32,15 +42,7 @@ describe('BattleMenuLayer: 敵名ウィンドウの行の帯 (#1189)', () => {
     const tap = vi.fn()
     const layer = new BattleMenuLayer(host(tap))
     layer.update([view], 800, 450)
-    const bands: Graphics[] = []
-    const walk = (c: Container): void => {
-      for (const ch of c.children) {
-        if (ch instanceof Graphics && ch.eventMode === 'none') bands.push(ch)
-        walk(ch as Container)
-      }
-    }
-    walk(layer)
-    expect(bands.length).toBeGreaterThan(0)
+    expect(passiveGraphics(layer).length).toBeGreaterThan(0)
     const x = row.x + row.w / 2
     const y = row.y + row.h / 2
     const hit = new EventBoundary(layer).hitTest(x, y)
@@ -53,18 +55,8 @@ describe('BattleMenuLayer: 敵名ウィンドウの行の帯 (#1189)', () => {
 
   it('帯が無い view（off）では帯を描かない', () => {
     const layer = new BattleMenuLayer(host(() => {}))
-    const { highlights: _omit, ...plain } = view
-    void _omit
-    layer.update([plain], 800, 450)
-    const found: Graphics[] = []
-    const walk = (c: Container): void => {
-      for (const ch of c.children) {
-        if (ch instanceof Graphics && ch.eventMode === 'none') found.push(ch)
-        walk(ch as Container)
-      }
-    }
-    walk(layer)
-    expect(found).toHaveLength(0)
+    layer.update([{ type: 'target', hands: [], hits: view.hits }], 800, 450)
+    expect(passiveGraphics(layer)).toHaveLength(0)
     layer.destroy({ children: true })
   })
 })

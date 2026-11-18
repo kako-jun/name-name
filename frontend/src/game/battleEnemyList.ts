@@ -51,7 +51,7 @@ export function aggregateEnemyList(
   enemies: readonly { name: string; hp: number; status?: readonly string[] }[]
 ): EnemyListRow[] {
   const order: string[] = []
-  const rows = new Map<string, EnemyListRow>()
+  const rows = new Map<string, EnemyListRow & { members: number[] }>()
   enemies.forEach((e, i) => {
     const status = e.status ?? []
     const key = `${e.name}\u0000${status.join('\u0001')}`
@@ -63,7 +63,7 @@ export function aggregateEnemyList(
     }
     if (e.hp > 0) {
       row.count += 1
-      row.members?.push(i)
+      row.members.push(i)
     }
   })
   return order.map((k) => rows.get(k) as EnemyListRow).filter((r) => r.count > 0)
