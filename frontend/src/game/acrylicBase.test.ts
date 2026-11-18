@@ -3,6 +3,7 @@ import {
   BASE_TEXTURE_WIDTH,
   SLIT_CENTER_RATIO,
   computeBaseLayout,
+  backEdgeFactor,
   computeSlitY,
   renderAcrylicBase,
 } from './acrylicBase'
@@ -232,5 +233,53 @@ describe('renderAcrylicBase: パラメータの反映 (#760)', () => {
     expect(computeSlitY(100, 0)).toBe(100)
     expect(computeSlitY(100, 40)).toBeLessThan(computeSlitY(100, 20))
     expect(computeSlitY(100, 50)).toBeCloseTo(86, 9)
+  })
+})
+
+describe('台座の奥側の縁を薄くする (#1187)', () => {
+  it('backEdgeFactor: 倍率 1 は常に 1。奥ほど倍率に近づき、手前側・横の端は 1', () => {
+    for (const ny of [-1, -0.5, 0, 0.5, 1]) expect(backEdgeFactor(ny, 1)).toBe(1)
+    expect(backEdgeFactor(1, 0.2)).toBe(1)
+    expect(backEdgeFactor(0, 0.2)).toBe(1)
+    expect(backEdgeFactor(-1, 0.2)).toBeCloseTo(0.2, 9)
+    // 奥へ向かって単調に薄くなる（連続）
+    let prev = 1
+    for (let ny = 0; ny >= -1; ny -= 0.05) {
+      const f = backEdgeFactor(ny, 0.2)
+      expect(f).toBeLessThanOrEqual(prev + 1e-12)
+      prev = f
+    }
+  })
+  const ring = (back: number) =>
+    renderAcrylicBase(BASE_TEXTURE_WIDTH, { ...P, shadowAlpha: 0, baseBackEdgeAlpha: back })
+  const at = (r: ReturnType<typeof ring>, x: number, y: number): number =>
+    r.rgba[(Math.floor(y) * r.width + Math.floor(x)) * 4 + 3]
+  it('既定（1）は未指定とバイト一致（他のゲームの見た目を変えない）', () => {
+    const a = renderAcrylicBase(BASE_TEXTURE_WIDTH, P)
+    const b = renderAcrylicBase(BASE_TEXTURE_WIDTH, { ...P, baseBackEdgeAlpha: 1 })
+    expect(b.rgba.length).toBe(a.rgba.length)
+    expect(b.rgba.every((v, i) => v === a.rgba[i])).toBe(true)
+  })
+  it('thin は奥側の縁だけ薄くなり、手前側の縁・形は変わらない', () => {
+    const same = ring(1)
+    const thin = ring(0.2)
+    const { cx, cyTop, rx, ry } = same
+    // 真奥の縁（上端）は薄くなる
+    const backY = cyTop - ry * 0.97
+    expect(at(thin, cx, backY)).toBeLessThan(at(same, cx, backY))
+    // 真手前の縁（下端）は同じ
+    const frontY = cyTop + ry * 0.97
+    expect(at(thin, cx, frontY)).toBe(at(same, cx, frontY))
+    // 左右の端（中心線上）も同じ
+    expect(at(thin, cx - rx * 0.97, cyTop)).toBe(at(same, cx - rx * 0.97, cyTop))
+    // 寸法（位置・大きさ）は変わらない
+    expect([thin.width, thin.height, thin.cx, thin.cyTop, thin.rx, thin.ry]).toEqual([
+      same.width,
+      same.height,
+      same.cx,
+      same.cyTop,
+      same.rx,
+      same.ry,
+    ])
   })
 })

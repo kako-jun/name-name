@@ -21,6 +21,22 @@ export function normalizeSpriteStyle(raw: string | null | undefined): SpriteStyl
   return raw?.trim().toLowerCase() === 'acrylic' ? 'acrylic' : 'none'
 }
 
+/** 台座の奥側の縁の見せ方 (#1187)。`same` は手前と同じ濃さ（既定・従来どおり）、`thin` は奥側を薄くして透けて見える表現にする */
+export type BaseBackEdge = 'same' | 'thin'
+
+/** `thin` のときの奥側の縁の濃さ（手前に対する倍率）。実画面で比べて決めた値 (#1187) */
+export const THIN_BASE_BACK_EDGE_ALPHA = 0.2
+
+/** frontmatter `sprite_style_base_back_edge` の値を正規化する。`'thin'` 以外（未指定・空・未知値含む）は `'same'` */
+export function normalizeBaseBackEdge(raw: string | null | undefined): BaseBackEdge {
+  return raw?.trim().toLowerCase() === 'thin' ? 'thin' : 'same'
+}
+
+/** 台座の奥側の縁の見せ方から、`AcrylicParams` の上書き分を返す。`same` は空（既定のまま） */
+export function baseBackEdgeParams(mode: BaseBackEdge | undefined): Partial<AcrylicParams> {
+  return mode === 'thin' ? { baseBackEdgeAlpha: THIN_BASE_BACK_EDGE_ALPHA } : {}
+}
+
 /** アクリルスタンド風スタイルのパラメータ。長さはすべてスプライト枠一辺に対する比率 */
 export interface AcrylicParams {
   /** 透明な余白の幅（スプライトの輪郭を外へ広げる幅。白で塗らず透明のまま）。枠一辺に対する比率 */
@@ -53,6 +69,8 @@ export interface AcrylicParams {
   baseSideAlpha: number
   /** 台座の板の差し込み口（スリット）の暗さ（0〜1）(#760) */
   slitAlpha: number
+  /** 台座の上面の縁の線のうち、奥側の弧の濃さ（手前の弧に対する倍率。0〜1）(#1187)。1 = 手前と同じ（既定・従来どおり）、小さいほど透明な台座の向こう側が透けて見える薄い線になる */
+  baseBackEdgeAlpha: number
   /** 地面に落とすアクスタ本体の影の不透明度（0〜1）(#760) */
   castAlpha: number
   /** 影を縦につぶす率（0.1〜1。小さいほど地面に寝る）(#760) */
@@ -99,6 +117,7 @@ export const DEFAULT_ACRYLIC_PARAMS: AcrylicParams = {
   baseFillAlpha: 0.14,
   baseSideAlpha: 0.26,
   slitAlpha: 0.3,
+  baseBackEdgeAlpha: 1,
   castAlpha: 0.55,
   castSquash: 0.35,
   castShear: 1.4,
@@ -144,6 +163,7 @@ export function resolveAcrylicParams(overrides?: Partial<AcrylicParams>): Acryli
     baseFillAlpha: clamp(finiteOr(o.baseFillAlpha, d.baseFillAlpha), 0, 1),
     baseSideAlpha: clamp(finiteOr(o.baseSideAlpha, d.baseSideAlpha), 0, 1),
     slitAlpha: clamp(finiteOr(o.slitAlpha, d.slitAlpha), 0, 1),
+    baseBackEdgeAlpha: clamp(finiteOr(o.baseBackEdgeAlpha, d.baseBackEdgeAlpha), 0, 1),
     castAlpha: clamp(finiteOr(o.castAlpha, d.castAlpha), 0, 1),
     castSquash: clamp(finiteOr(o.castSquash, d.castSquash), 0.1, 1),
     castShear: clamp(finiteOr(o.castShear, d.castShear), -2, 2),

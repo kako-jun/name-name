@@ -5,7 +5,8 @@
  * 構成（光は板と同じく左上から）:
  *   - 接地の柔らかい影: 台座の足元の楕円を、縁へ向けてぼかして落とす
  *   - 側面の厚み: 上面の楕円を下へ `baseThicknessRatio * ry` だけ押し出した帯。上面より少し濃い透明で、下端に明るい縁
- *   - 上面: ごく薄い白〜水色の透明面（背景がうっすら透ける）。縁に細いハイライト（左上を強く・右下を弱く）
+ *   - 上面: ごく薄い白〜水色の透明面（背景がうっすら透ける）。縁に細いハイライト（左上を強く・右下を弱く）。
+ *     奥側の弧は `baseBackEdgeAlpha` 倍の薄い線にできる（透明な台座の向こう側が透けて見える。既定 1 = 手前と同じ）(#1187)
  *   - 板の差し込み口: 上面の奥側に細いスリット（暗い透明＋手前側の縁に明るい線）
  *
  * 座標系は上面の楕円の中心 (cx, cyTop) 基準。出力は RGBA 非プリマルチ。影は上面ではなく足元（cyTop + 厚み）中心。
@@ -36,6 +37,7 @@ type BaseParams = Pick<
   | 'baseFillAlpha'
   | 'baseSideAlpha'
   | 'slitAlpha'
+  | 'baseBackEdgeAlpha'
   | 'lineColor'
   | 'lineAlpha'
 >
@@ -83,6 +85,16 @@ export function computeBaseLayout(
     shadowRx,
     thickness,
   }
+}
+
+/**
+ * 上面の縁の線に掛ける、奥側の弧の濃さの倍率 (#1187)。`ny` は縁上の点の縦位置（楕円の中心から、半径で割った値。
+ * 上＝奥が負、-1 が真奥・+1 が真手前）。奥側（負）ほど `backAlpha` に近づき、手前側（0 以上）は 1。
+ * 横の端（ny = 0 付近）で手前の線とつながるよう、なめらかに補間する。`backAlpha` が 1 なら常に 1（従来どおり）。
+ */
+export function backEdgeFactor(ny: number, backAlpha: number): number {
+  const back = smooth(0, 0.3, -ny)
+  return 1 - (1 - backAlpha) * back
 }
 
 export function renderAcrylicBase(texW: number, params: BaseParams): BaseRaster {
@@ -143,7 +155,13 @@ export function renderAcrylicBase(texW: number, params: BaseParams): BaseRaster 
         const nl = Math.hypot(nx, ny) || 1
         const lit = clamp01(((nx / nl) * lx + (ny / nl) * ly) * 0.5 + 0.5)
         const ring = smooth(0.9, 0.99, qTop) * coverTop
-        over(rimC, params.lineAlpha * ring * (0.25 + 0.75 * lit * lit))
+        over(
+          rimC,
+          params.lineAlpha *
+            ring *
+            (0.25 + 0.75 * lit * lit) *
+            backEdgeFactor(ny / nl, params.baseBackEdgeAlpha)
+        )
         // 4) 板の差し込み口: 奥側の細いスリット（暗い透明 + 手前側の縁に明るい線）
         const sy = computeSlitY(cyTop, ry)
         const qSlit = Math.hypot(dx / (rx * 0.5), (py - sy) / (ry * 0.075))

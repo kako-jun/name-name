@@ -36,6 +36,19 @@ const uniqueParams = (over: Parameters<typeof resolveAcrylicParams>[0] = {}) =>
 const canvasCount = (): number =>
   createCanvas.mock.calls.filter((c: unknown[]) => c[0] === 'canvas').length
 
+describe('getAcrylicBaseTexture 奥側の縁 (#1187)', () => {
+  it('奥側の縁が違えば別のテクスチャ（キャッシュの鍵に入っている）', () => {
+    const a = getAcrylicBaseTexture(uniqueParams())
+    const same = getAcrylicBaseTexture({ ...uniqueParams(), baseBackEdgeAlpha: 1 })
+    expect(a).not.toBeNull()
+    expect(same).not.toBeNull()
+    const p = uniqueParams()
+    const x = getAcrylicBaseTexture(p)
+    const y = getAcrylicBaseTexture({ ...p, baseBackEdgeAlpha: 0.35 })
+    expect(y).not.toBe(x)
+  })
+})
+
 describe('getAcrylicBaseTexture (#760)', () => {
   it('同じパラメータなら同じインスタンス（全 view で共有・canvas は 1 回だけ作る）', () => {
     const p = uniqueParams()

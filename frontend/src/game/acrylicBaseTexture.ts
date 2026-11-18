@@ -22,6 +22,7 @@ export function getAcrylicBaseTexture(params: AcrylicParams): AcrylicBaseTexture
     params.baseFillAlpha,
     params.baseSideAlpha,
     params.slitAlpha,
+    params.baseBackEdgeAlpha,
     params.lineColor,
     params.lineAlpha,
   ].join('|')
