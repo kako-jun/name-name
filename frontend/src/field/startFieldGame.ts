@@ -142,6 +142,7 @@ import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
+import { settleStartup } from './startupSettle'
 import { collectBattlePreloadUrls, firstAutoBattleId, preloadBattleImages } from './battlePreload'
 import {
   baseConfigOf,
@@ -446,7 +447,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     setResumeNotice(`セーブの一部を反映できませんでした\n${resumed.warnings.join('\n')}`)
   /** 再開の開始シーン・位置・向き（セーブに現在地が無ければ設定の開始位置） */
   const startSceneId = resumed?.field?.sceneId ?? config.startScene
-  /** セーブから再開した直後の最初の場面だけ、auto を起こさない（セーブの `field.fireAuto` があれば起こす #1155）。冒頭の戦闘の先読み (#1219) 用。下の `resumedStart` の初期値と同じ式（static test が原文を固定しているので、片方を変えたら両方直す） */
+  /** セーブから再開した直後の最初の場面だけ、auto を起こさない（セーブの `field.fireAuto` があれば起こす #1155）。`resumedStart` の初期値と冒頭の戦闘の先読み (#1219) が共有する */
   const resumedAutoSuppressed = !!resumed && !resumed.field?.fireAuto
   const startPoint = resumed?.field ? { x: resumed.field.x, y: resumed.field.y } : config.start
   const cache = new Map<string, Promise<LoadedScene>>()
@@ -471,7 +472,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // 失敗の扱いは従来と同じ: 下の `allSettled` のあと、**従来の読み込み順で最初に失敗したもの**を投げる（NPC・感情吹き出しの絵は従来どおり警告して省く）
   const pWalk = (async () => {
     const tex = {} as Partial<Record<Facing8, Texture[]>>
-    await Promise.all([
+    // 向きの順（従来の読み込み順）に結果を見て、最初の失敗を投げる（複数失敗しても時間順にならない）
+    const jobs = [
       ...FACINGS.map(async (f) => {
         tex[f] = await loadFrames(config.player.sprites[f])
       }),
@@ -479,7 +481,9 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         const own = config.player.sprites[f]
         if (own) tex[f] = await loadFrames(own)
       }),
-    ])
+    ]
+    const bad = (await Promise.allSettled(jobs)).find((r) => r.status === 'rejected')
+    if (bad) throw (bad as PromiseRejectedResult).reason
     return tex
   })()
   // 条件付き通行の同行者 (#862)。歩行絵のスプライトで出す（`spriteStyle: "acrylic"` のときは足元にアクスタの部品を付ける）
@@ -606,12 +610,13 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     pScene,
     pApp,
   ])
-  for (const r of [rWalk, rCompanion, rEmotion, rScript, rScene, rApp]) {
-    if (r.status === 'rejected') {
-      // 先に作った描画器を残さない（canvas は未接続）
-      if (rApp.status === 'fulfilled') app.destroy(true, { children: true })
-      throw r.reason
-    }
+  // 従来の読み込み順（歩行絵 → 同行者 → 感情吹き出し → 脚本 → 開始場面 → 描画器）で最初の失敗を投げる。
+  // 失敗しても、すでに始めた他の読み込みと戦闘の先読みは止めない（結果は捨てるだけ。起動のやり直しは再読み込み）
+  const settled = settleStartup([rWalk, rCompanion, rEmotion, rScript, rScene], rApp)
+  if (settled.failed) {
+    // 先に作った描画器を残さない（canvas は未接続）
+    if (settled.destroyApp) app.destroy(true, { children: true })
+    throw settled.reason
   }
   const walkTex = (rWalk as PromiseFulfilledResult<Partial<Record<Facing8, Texture[]>>>).value
   const companionTex = (rCompanion as PromiseFulfilledResult<Partial<Record<Facing, Texture[]>>>)
@@ -1445,7 +1450,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   /** once のトリガーを起こし済みか（`<場面>#<添字>`）。メモリ上だけで、セーブには入らない */
   const onceFired = new Set<string>()
   /** セーブから再開した直後の最初の場面だけ、auto を起こさない（判定は triggerRuntime.autoTriggers）。セーブの `field.fireAuto` があれば起こす (#1155) */
-  let resumedStart = !!resumed && !resumed.field?.fireAuto
+  let resumedStart = resumedAutoSuppressed
   const pumpTriggers = (): void => {
     // conversation.active も見る: start() は active のとき黙って戻り、onEnd が呼ばれず eventRun が戻らなくなるため
     if (isTalking() || conversation.active) return
