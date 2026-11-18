@@ -25,26 +25,26 @@ const e = (name: string, hp = 10) => ({ name, hp })
 describe('aggregateEnemyList (#954)', () => {
   it('同名はまとめて個数にし、最初に現れた順に並べる', () => {
     expect(aggregateEnemyList([e('スライム'), e('イカ'), e('スライム'), e('タコ')])).toEqual([
-      { name: 'スライム', count: 2 },
-      { name: 'イカ', count: 1 },
-      { name: 'タコ', count: 1 },
+      { name: 'スライム', count: 2, members: [0, 2] },
+      { name: 'イカ', count: 1, members: [1] },
+      { name: 'タコ', count: 1, members: [3] },
     ])
   })
   it('倒れた（HP 0）敵は個数から引く', () => {
     expect(aggregateEnemyList([e('スライム'), e('スライム', 0), e('スライム')])).toEqual([
-      { name: 'スライム', count: 2 },
+      { name: 'スライム', count: 2, members: [0, 2] },
     ])
   })
   it('全滅した名前は行ごと消え、残りの順序は変わらない', () => {
     expect(aggregateEnemyList([e('A', 0), e('B'), e('A', 0), e('C')])).toEqual([
-      { name: 'B', count: 1 },
-      { name: 'C', count: 1 },
+      { name: 'B', count: 1, members: [1] },
+      { name: 'C', count: 1, members: [3] },
     ])
   })
   it('先頭が倒れて後ろの同名が生きていても、元の最初の位置で並ぶ', () => {
     expect(aggregateEnemyList([e('A', 0), e('B'), e('A')])).toEqual([
-      { name: 'A', count: 1 },
-      { name: 'B', count: 1 },
+      { name: 'A', count: 1, members: [2] },
+      { name: 'B', count: 1, members: [1] },
     ])
   })
   it('空・全滅は空配列', () => {

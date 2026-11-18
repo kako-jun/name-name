@@ -2,8 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   enemyForListRow,
-  enemyListCursorRows,
-  enemyListRowMembers,
+  enemyListHighlightRows,
   normalizeBattleTargetCursor,
   showsStatusTurnMarker,
   showsTargetSelectMark,
@@ -52,7 +51,7 @@ describe('印の出し分け', () => {
   })
 })
 
-describe('enemyListRowMembers', () => {
+describe('敵名ウィンドウの行と敵の対応 (aggregateEnemyList の members)', () => {
   const enemies = [
     { name: 'スライム', hp: 5 },
     { name: 'イカ', hp: 5 },
@@ -61,24 +60,23 @@ describe('enemyListRowMembers', () => {
     { name: 'スライム', hp: 5, status: ['どく'] },
     { name: 'コウモリ', hp: 0 },
   ]
-  it('行は aggregateEnemyList と同じ順・同じ個数で、倒れた敵は入らない', () => {
-    const members = enemyListRowMembers(enemies)
-    expect(members).toEqual([[0, 3], [1], [4]])
+  const members = () => aggregateEnemyList(enemies).map((r) => r.members ?? [])
+  it('行ごとの生きている敵の index は行の順で、倒れた敵は入らず、個数は count と同じ', () => {
+    expect(members()).toEqual([[0, 3], [1], [4]])
     const rows = aggregateEnemyList(enemies)
-    expect(rows.map((r) => r.count)).toEqual(members.map((m) => m.length))
+    expect(rows.map((r) => r.count)).toEqual(members().map((m) => m.length))
   })
-  it('enemyListCursorRows: 指されている敵が入る行だけ（重複なし・行の順）', () => {
-    const members = enemyListRowMembers(enemies)
-    expect(enemyListCursorRows(members, [3])).toEqual([0])
-    expect(enemyListCursorRows(members, [4, 0, 3])).toEqual([0, 2])
-    expect(enemyListCursorRows(members, [2])).toEqual([])
+  it('enemyListHighlightRows: 指されている敵が入る行だけ（重複なし・行の順）', () => {
+    expect(enemyListHighlightRows(members(), [3])).toEqual([0])
+    expect(enemyListHighlightRows(members(), [4, 0, 3])).toEqual([0, 2])
+    expect(enemyListHighlightRows(members(), [2])).toEqual([])
   })
   it('enemyForListRow: いま指している敵がその行にいれば動かさず、いなければ行の先頭。行が無ければ -1', () => {
-    const members = enemyListRowMembers(enemies)
-    expect(enemyForListRow(members, 0, 3)).toBe(3)
-    expect(enemyForListRow(members, 0, 1)).toBe(0)
-    expect(enemyForListRow(members, 1, 0)).toBe(1)
-    expect(enemyForListRow(members, 9, 0)).toBe(-1)
+    const m = members()
+    expect(enemyForListRow(m, 0, 3)).toBe(3)
+    expect(enemyForListRow(m, 0, 1)).toBe(0)
+    expect(enemyForListRow(m, 1, 0)).toBe(1)
+    expect(enemyForListRow(m, 9, 0)).toBe(-1)
   })
 })
 

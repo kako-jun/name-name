@@ -186,3 +186,32 @@ describe('battle_target_cursor: 敵の手の基準の矩形 (#1189)', () => {
     })
   })
 })
+
+describe('battle_target_cursor: 敵名ウィンドウが溢れたとき (#1189)', () => {
+  it('行が窓に入り切らず最後に見える行が「…」のときは、その行を除いた行だけ渡す（名前の出ない行は強調しない）', () => {
+    const party = [ent('a')]
+    const enemies = Array.from({ length: 12 }, (_, i) => ent(`e${i}`, { name: `てき${i}` }))
+    const engine = new BattleEngine(party, enemies, { rng: () => 0 })
+    const s = skipEntrance(
+      new BattleScreen(engine, 800, 450, {
+        layout: 'side',
+        presentation: 'ff',
+        commandLayout: 'cross',
+        enemyList: 'window',
+        menu: structuredClone(MENU),
+        targetCursor: 'ff',
+      })
+    )
+    created.push(s)
+    I(s).refresh()
+    const shown = I(s).enemyListTexts.filter((t) => t.visible)
+    // 前提: 溢れていて、最後に見える行が「…」
+    expect(shown.length).toBeLessThan(enemies.length)
+    expect(shown[shown.length - 1].text).toBe('…')
+    const rows = I(s).menuGeometry?.enemyListRows ?? []
+    expect(rows).toHaveLength(shown.length - 1)
+    expect(rows.map((r) => r.members)).toEqual(
+      Array.from({ length: shown.length - 1 }, (_, i) => [i])
+    )
+  })
+})
