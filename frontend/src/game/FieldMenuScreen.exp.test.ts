@@ -195,15 +195,26 @@ describe('FieldMenuScreen: line の追加行があふれない (#1186)', () => {
     expect(maxY(openWith(true, 4))).toBeLessThan(720 * 0.88)
     expect(maxY(openWith(true, 6))).toBeLessThan(720 * 0.88)
   })
-  it('8 行までは従来と同じ行間（経験値なしの追加 4 行は 0.1 刻みのまま）', () => {
-    const ys: number[] = []
-    const s = openWith(false, 4)
-    const walk = (n: Container): void => {
-      if (n instanceof Text && n.text.startsWith('行')) ys.push(n.y)
-      for (const ch of n.children) walk(ch as Container)
+  it('8 行以下は従来と同じ（行間は枠の高さの 0.1 の絶対値、字は基準の大きさのまま）。4 行と 8 行の 2 点', () => {
+    const W = 1280
+    const H = 720
+    const x0 = 0.02 * W + 0.96 * W * 0.08 // 本体の窓の左 + 幅の 8%
+    const lh = (0.9 - 0.12) * H * 0.1 // 本体の窓の高さの 0.1
+    const rowFont = 0.04 * H
+    for (const n of [0, 4]) {
+      // 能力値の 4 行（名前・HP・MP・ちから…）+ 追加 n 行 = 4 行 / 8 行
+      const found: Text[] = []
+      const walk = (c: Container): void => {
+        if (c instanceof Text && Math.abs(c.x - x0) < 0.5) found.push(c)
+        for (const ch of c.children) walk(ch as Container)
+      }
+      walk(openWith(false, n) as unknown as Container)
+      found.sort((p, q) => p.y - q.y)
+      expect(found).toHaveLength(4 + n)
+      found.forEach((t, i) => {
+        expect(t.y - found[0].y).toBeCloseTo(i * lh, 5)
+        expect(t.style.fontSize).toBe(rowFont)
+      })
     }
-    walk(s as unknown as Container)
-    ys.sort((a, b) => a - b)
-    expect(ys[1] - ys[0]).toBeCloseTo(ys[2] - ys[1], 5)
   })
 })
