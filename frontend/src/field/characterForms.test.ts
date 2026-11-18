@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { menuPortraitUrl } from '../game/fieldMenuStatus'
 import manifestText from '../../public/field/sit-character-forms.json?raw'
+import genScript from '../../scripts/gen_sit_character_forms.py?raw'
 import {
   CORE_POSES,
   DERIVED_POSES,
@@ -158,6 +159,33 @@ describe('derivePoses / deriveWalkSprites（命名規則）', () => {
 })
 
 describe('目録 JSON の検証', () => {
+  it('#1206: 同梱の目録は weak を載せ、メニュー・戦闘の poses へ展開される（C001 は character 版、他は plain 版）', () => {
+    const r = parseCharacterFormsManifest(JSON.parse(manifestText))
+    if (!r.ok) throw new Error(r.error)
+    const m = r.value
+    expect(m.characters.C001.forms.elementary.poses.character).toContain('weak')
+    expect(m.characters.C002.forms.elementary.poses.plain).toContain('weak')
+    for (const [c, f] of [
+      ['C001', 'elementary'],
+      ['C001', 'uniform'],
+      ['C002', 'elementary-wheelchair'],
+      ['C003', 'teen'],
+      ['C004', 'adult'],
+    ]) {
+      expect(derivePoses(m, ROOT, c, f)).toHaveProperty('weak')
+      expect(derivePoses(m, ROOT, c, f)?.weak).toMatch(/-weak\.webp$/)
+    }
+    // C001 の車椅子（teen・adult・midlife）は plain 命名の weak だけで、焼き込み版の疑いがあるため派生しない（plainBaked。従来どおり）
+    expect(m.characters.C001.forms['teen-wheelchair'].poses.plain).toContain('weak')
+    expect(derivePoses(m, ROOT, 'C001', 'teen-wheelchair')).toBeUndefined()
+  })
+  it('#1206: 目録の生成スクリプトの POSES は BATTLE_POSES と同じ並び（weak を含む）', () => {
+    const m = /^POSES = \[([^\]]*)\]/m.exec(genScript)
+    if (!m) throw new Error('POSES が見つからない')
+    const poses = [...m[1].matchAll(/"([a-z-]+)"/g)].map((x) => x[1])
+    expect(poses).toEqual([...DERIVED_POSES])
+    expect(poses).toContain('weak')
+  })
   it('同梱の目録が通り、C001〜C004 を持つ', () => {
     const r = parseCharacterFormsManifest(JSON.parse(manifestText))
     expect(r.ok).toBe(true)
