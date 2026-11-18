@@ -136,7 +136,7 @@ describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
       })
       s.dispatch({ type: 'tap', index: 0 })
       s.tick(10_000)
-      const clip = (s as unknown as { portraitClip: Container }).portraitClip
+      const clip = (s as unknown as { clips: { clip: Container }[] }).clips[0].clip
       const deep = (s as unknown as { artDeep: Container }).artDeep
       expect(deep.children).toContain(clip)
       expect(clip.mask).toBeTruthy()
@@ -167,7 +167,7 @@ describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
       })
       s.dispatch({ type: 'tap', index: 0 })
       s.tick(10_000)
-      const clip = (s as unknown as { portraitClip: Container }).portraitClip
+      const clip = (s as unknown as { clips: { clip: Container }[] }).clips[0].clip
       const sp = clip.children.find((c) => c instanceof Sprite) as Sprite
       const box = (clip.mask as Container).getLocalBounds()
       // 絵の上端〜足元は枠の中
@@ -183,5 +183,36 @@ describe('FieldMenuScreen: ステータスの配置 (#1191)', () => {
       }
     }
     expect(heights.true).toBeLessThan(heights.false)
+  })
+})
+
+/** パーティ枠（メニュー左・どうぐ画面の狭い枠）の人物の絵 (#1211)。絵のある者だけ、枠の矩形で切り抜いて収める */
+describe('FieldMenuScreen: パーティ枠の人物の絵 (#1211)', () => {
+  it('絵のある者は枠ごとの切り抜きの中に置かれ、アクスタの外枠まで枠に収まる。絵の無い者は絵を置かない', () => {
+    for (const acrylic of [false, true]) {
+      const s = new FieldMenuScreen({ width: 1280, height: 720, acrylic, onClose: () => {} })
+      s.open({
+        items: ITEMS,
+        party: [{ ...PARTY[0], texture: Texture.WHITE }, { ...PARTY[1] }],
+        info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+        slots: [null, null, null],
+      })
+      s.tick(10_000)
+      const clips = (s as unknown as { clips: { clip: Container }[] }).clips
+      const [withArt, without] = [clips[0].clip, clips[1].clip]
+      expect(withArt.mask).toBeTruthy()
+      const box = (withArt.mask as Container).getLocalBounds()
+      const sp = withArt.children.find((c) => c instanceof Sprite) as Sprite
+      expect(sp).toBeTruthy()
+      expect(sp.y).toBeLessThanOrEqual(box.y + box.height + 1e-6)
+      expect(sp.y - sp.height).toBeGreaterThanOrEqual(box.y - 1e-6)
+      if (acrylic) {
+        const fig = withArt.children.find((c) => c !== sp && c !== withArt.mask) as Container
+        expect(fig.visible).toBe(true)
+        expect(fig.getLocalBounds().width * fig.scale.x).toBeLessThanOrEqual(box.width + 1e-6)
+      }
+      // 絵の無い者は従来どおり枠だけ（切り抜きの中に絵を置かない）
+      expect(without.children.some((c) => c instanceof Sprite)).toBe(false)
+    }
   })
 })

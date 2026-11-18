@@ -91,7 +91,7 @@ export interface FieldMenuPartyView {
   atk?: number
   def?: number
   agi?: number
-  /** アクスタ姿の絵。読めなかった・無いときは null（絵なしで枠だけ） */
+  /** アクスタ姿の絵（sprite、無ければ poses.idle。#1211）。読めなかった・どちらも無いときは null（絵なしで枠だけ） */
   texture: Texture | null
   /** 経験値の表示値 (#1186)。`field_menu_exp: on` のときだけ呼び出し側が渡す（経験値表を持たない人物は無し）。無ければ何も出さない */
   exp?: MenuExp
@@ -531,6 +531,7 @@ export class FieldMenuScreen extends Container {
     this.artDeep.removeChildren()
     for (const f of this.figures) f.display.visible = false
     this.artIndex = 0
+    this.clipIndex = 0
     const S = this.staticLayer
     const items = this.itemViews()
     const lay = computeMenuLayout(this.w, this.h, items.length, data.party.length, this.timed)
@@ -944,20 +945,33 @@ export class FieldMenuScreen extends Container {
    * （アクスタの台座・斜めに落ちる影が、枠の外の領域・下の「戻る」にかからないように）
    */
   private placePortrait(p: FieldMenuPartyView, R: Rect): void {
-    const clip = this.portraitClip
+    this.placeFitted(this.artDeep, p.texture, R)
+  }
+
+  /**
+   * 絵を枠 R に収めて置く (#1211)。大きさ・足元は `fitPortrait`、枠の外へ出るアクスタの台座・斜めの影は枠の矩形で切り抜く
+   * （絵の層は他の領域の文字より上にあるので、隣の枠・下の「戻る」にかからないように）。切り抜きは絵ごとに 1 組を使い回す。
+   */
+  private placeFitted(layer: Container, tex: Texture | null, R: Rect): void {
+    const idx = this.clipIndex++
+    let slot = this.clips[idx]
+    if (!slot) {
+      slot = { clip: new Container(), mask: new Graphics() }
+      this.clips[idx] = slot
+    }
+    const { clip, mask } = slot
     clip.removeChildren()
-    this.portraitMask.clear().rect(R.x, R.y, R.w, R.h).fill({ color: WHITE })
-    clip.addChild(this.portraitMask)
-    clip.mask = this.portraitMask
-    this.artDeep.addChild(clip)
-    const tex = p.texture
+    mask.clear().rect(R.x, R.y, R.w, R.h).fill({ color: WHITE })
+    clip.addChild(mask)
+    clip.mask = mask
+    layer.addChild(clip)
     if (!tex) return
     const fit = fitPortrait(R, tex.width, tex.height, this.useAcrylic)
     this.placeArt(clip, tex, fit.height, fit.x, fit.y)
   }
 
-  private readonly portraitClip = new Container()
-  private readonly portraitMask = new Graphics()
+  private readonly clips: { clip: Container; mask: Graphics }[] = []
+  private clipIndex = 0
 
   private artIndex = 0
 
@@ -974,7 +988,8 @@ export class FieldMenuScreen extends Container {
     this.panel(C, r, lay, emphasize)
     if (emphasize)
       C.addChild(new Graphics().rect(r.x, r.y, r.w, r.h).fill({ color: WHITE, alpha: 0.16 }))
-    this.placeArt(art, p.texture, r.h * 0.86, r.x + r.h * 0.65, r.y + r.h * 0.94)
+    // 絵は左端の正方形に収める (#1211)。台座・影が隣の枠にはみ出さない
+    this.placeFitted(art, p.texture, { x: r.x + r.h * 0.05, y: r.y, w: r.h * 1.2, h: r.h })
     const tx = r.x + r.h * 1.4
     const size = compact ? lay.fonts.party * 0.8 : lay.fonts.party
     const right = r.x + r.w - r.h * 0.3
