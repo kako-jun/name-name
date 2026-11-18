@@ -154,6 +154,11 @@ pub fn emit(doc: &Document) -> String {
             let sanitized = v.replace('"', "");
             out.push_str(&format!("sprite_style: \"{sanitized}\"\n"));
         }
+        // sprite_style_base_back_edge (#1187)。同じ流儀
+        if let Some(ref v) = doc.sprite_style_base_back_edge {
+            let sanitized = v.replace('"', "");
+            out.push_str(&format!("sprite_style_base_back_edge: \"{sanitized}\"\n"));
+        }
         // window_style (#744)。sprite_style と同じ流儀
         if let Some(ref v) = doc.window_style {
             let sanitized = v.replace('"', "");
@@ -2684,6 +2689,7 @@ mod tests {
             battle_layout: None,
             battle_background: None,
             sprite_style: None,
+            sprite_style_base_back_edge: None,
             window_style: None,
             battle_background_tone: None,
             battle_background_dof: None,
@@ -3223,6 +3229,7 @@ mod tests {
             battle_layout: None,
             battle_background: None,
             sprite_style: None,
+            sprite_style_base_back_edge: None,
             window_style: None,
             battle_background_tone: None,
             battle_background_dof: None,

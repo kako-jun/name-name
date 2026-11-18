@@ -1286,6 +1286,12 @@ export interface Document {
      */
     sprite_style?: string;
     /**
+     * アクスタ（`sprite_style: acrylic`）の台座の丸の、奥側の縁の見せ方 (#1187)。`\"same\"`（既定・手前と同じ濃さ＝従来どおり）/
+     * `\"thin\"`（奥側を薄い線にして、透明な台座の向こう側が透けて見える表現にする）の2択。値は生文字列で透過し、runtime 側で
+     * 不正値を `same` にする。`sprite_style` とは直交（アクスタの有無はそちら、本キーは台座の縁だけ）。GUI 専用。frontmatter `sprite_style_base_back_edge:` から流す。
+     */
+    sprite_style_base_back_edge?: string;
+    /**
      * RPG 戦闘画面のウィンドウ配色テーマ (#744)。`\"dark\"`（既定・後方互換＝現行の半透明黒）/ `\"ff-blue\"`
      * （FF 風の青い帯状グラデーション＋白文字に黒い影）の2択。値は parser でバリデーションせず生文字列で
      * 透過する（`sprite_style` と同じ流儀）。未知値・空文字は None 扱いとし、runtime 側で `\"dark\"` に
