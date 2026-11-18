@@ -27,7 +27,7 @@ import { safeAssign, safeAssignAll } from './ownProperty'
 import { normalizeBattleDepth, normalizeBattleLayout, normalizePartyLayout } from './battleLayout'
 import { normalizeBattleTextOverflow } from './battleMarquee'
 import { normalizeTrace } from '../trace/traceOption'
-import { normalizeSpriteStyle } from './spriteStyle'
+import { normalizeBaseBackEdge, normalizeSpriteStyle } from './spriteStyle'
 import { normalizeWindowStyle } from './windowStyle'
 import { normalizeBackgroundTone } from './backgroundTone'
 import { normalizeBackgroundDof } from './depthOfField'
@@ -421,6 +421,7 @@ export function rpgProjectFromDoc(
     battleLayout,
     battleBackground: doc.battle_background ?? undefined,
     spriteStyle: normalizeSpriteStyle(doc.sprite_style),
+    spriteBaseBackEdge: normalizeBaseBackEdge(doc.sprite_style_base_back_edge),
     windowStyle: normalizeWindowStyle(doc.window_style),
     battleBackgroundTone: normalizeBackgroundTone(doc.battle_background_tone),
     battleBackgroundDof: normalizeBackgroundDof(doc.battle_background_dof),

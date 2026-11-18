@@ -218,6 +218,8 @@ export interface RPGProject {
   battleBackground?: string
   /** 戦闘スプライトの表示スタイル (#737)。frontmatter `sprite_style:` 由来。未指定は `'none'`（素材そのまま・後方互換） */
   spriteStyle?: 'none' | 'acrylic'
+  /** アクスタの台座の丸の奥側の縁 (#1187)。frontmatter `sprite_style_base_back_edge:` 由来。未指定は `'same'`（手前と同じ濃さ・従来どおり） */
+  spriteBaseBackEdge?: 'same' | 'thin'
   /** 戦闘ウィンドウの配色テーマ (#744)。frontmatter `window_style:` 由来。未指定は `'dark'`（現行の半透明黒・後方互換） */
   windowStyle?: 'dark' | 'ff-blue'
   /** 戦闘背景の彩度・明度を落とすか (#753)。frontmatter `battle_background_tone:` 由来。未指定は `'on'`（背景ありなら落とす） */

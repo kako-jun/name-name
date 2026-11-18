@@ -203,6 +203,8 @@ export type FieldTrigger =
 export interface FieldBattleConfig {
   layout: BattleLayoutMode
   spriteStyle: SpriteStyle
+  /** 戦闘のアクスタの台座の丸の奥側の縁 (#1187)。`"thin"` のとき奥側を薄い線にする。未指定・`"same"` は undefined＝従来 */
+  spriteBaseBackEdge?: 'thin'
   /** 戦闘の既定の背景 URL（場面の `battleBackground` → `encounter.background` の順で上書き可、#1168） */
   background?: string
   /** 戦闘中の画面の大きさ（戦闘の 800x450 と同じ既定） */
@@ -340,6 +342,11 @@ export interface FieldConfig {
    * 未指定・`"none"` は undefined＝従来の歩行絵そのまま（キーが出ない）。不正な値は警告して無視。NPC にも効く（#861）
    */
   spriteStyle?: 'acrylic'
+  /**
+   * アクスタの台座の丸の奥側の縁 (#1187)。`spriteBaseBackEdge: "thin"` = 奥側の弧を手前より薄い線にして、透明な台座の向こう側が透けて見える表現にする。
+   * 未指定・`"same"` は undefined＝手前と同じ濃さ（従来）。`spriteStyle` とは直交（台座の縁にだけ効く）。不正な値は警告して無視。歩行・NPC・フィールドメニューに効く（戦闘は `battle.spriteBaseBackEdge`）
+   */
+  spriteBaseBackEdge?: 'thin'
   /**
    * 最終合成（背景・キャラ・前景・感情吹き出しを描いた world）への上下チルトシフト (#885)。`tiltShift: "on"` = 画面中央は鮮明のまま、上端・下端ほど強くぼかす。
    * 未指定・`"off"` は undefined＝従来の描画（キーが出ない）。不正な値は警告して無視。会話窓・フェード・戦闘画面はぼかさない
@@ -943,6 +950,14 @@ export function parseConfig(
     return fail(`battle.layout は "front" か "side": ${JSON.stringify(b.layout)}`)
   if (b.spriteStyle !== undefined && b.spriteStyle !== 'none' && b.spriteStyle !== 'acrylic')
     return fail(`battle.spriteStyle は "none" か "acrylic": ${JSON.stringify(b.spriteStyle)}`)
+  if (
+    b.spriteBaseBackEdge !== undefined &&
+    b.spriteBaseBackEdge !== 'same' &&
+    b.spriteBaseBackEdge !== 'thin'
+  )
+    return fail(
+      `battle.spriteBaseBackEdge は "same" か "thin": ${JSON.stringify(b.spriteBaseBackEdge)}`
+    )
   if (b.presentation !== undefined && b.presentation !== 'dq' && b.presentation !== 'ff')
     return fail(`battle.presentation は "dq" か "ff": ${JSON.stringify(b.presentation)}`)
   if (b.windowStyle !== undefined && b.windowStyle !== 'dark' && b.windowStyle !== 'ff-blue')
@@ -1151,6 +1166,14 @@ export function parseConfig(
         `spriteStyle は "none" か "acrylic" のみ指定できます: ${JSON.stringify(raw.spriteStyle)}（無視します）`
       )
   }
+  let fieldSpriteBaseBackEdge: 'thin' | undefined
+  if (raw.spriteBaseBackEdge !== undefined) {
+    if (raw.spriteBaseBackEdge === 'thin') fieldSpriteBaseBackEdge = 'thin'
+    else if (raw.spriteBaseBackEdge !== 'same')
+      warnings.push(
+        `spriteBaseBackEdge は "same" か "thin" のみ指定できます: ${JSON.stringify(raw.spriteBaseBackEdge)}（無視します）`
+      )
+  }
   let ui: UiImagesConfig | undefined
   if (raw.ui !== undefined) {
     if (!isObj(raw.ui)) warnings.push(`ui はオブジェクトである必要があります（無視します）`)
@@ -1327,6 +1350,7 @@ export function parseConfig(
       ...(dialogWindowHeight !== undefined ? { dialogWindowHeight } : {}),
       ...(dialogNameStyle ? { dialogNameStyle } : {}),
       ...(fieldSpriteStyle ? { spriteStyle: fieldSpriteStyle } : {}),
+      ...(fieldSpriteBaseBackEdge ? { spriteBaseBackEdge: fieldSpriteBaseBackEdge } : {}),
       ...(tiltShift ? { tiltShift } : {}),
       ...(ui ? { ui } : {}),
       ...(menuParsed.value ? { menu: menuParsed.value } : {}),
@@ -1362,6 +1386,7 @@ export function parseConfig(
       battle: {
         layout: b.layout ?? 'side',
         spriteStyle: b.spriteStyle ?? 'none',
+        ...(b.spriteBaseBackEdge === 'thin' ? { spriteBaseBackEdge: 'thin' as const } : {}),
         ...(battleBg ? { background: battleBg } : {}),
         width: bw.value,
         height: bh.value,

@@ -9,6 +9,7 @@ import type { StatusDef } from '../types'
 import type { UiImagesConfig } from '../game/uiImages'
 import type { FieldBattleConfig } from './config'
 import { resolveBattleFrame } from '../game/battleLogicalSize'
+import { baseBackEdgeParams } from '../game/spriteStyle'
 
 export function buildBattleScreenOptions(
   b: FieldBattleConfig,
@@ -26,6 +27,9 @@ export function buildBattleScreenOptions(
   return {
     layout: b.layout,
     spriteStyle: b.spriteStyle,
+    ...(b.spriteBaseBackEdge
+      ? { spriteStyleParams: baseBackEdgeParams(b.spriteBaseBackEdge) }
+      : {}),
     ...(b.presentation ? { presentation: b.presentation } : {}),
     ...(b.windowStyle ? { windowStyle: b.windowStyle } : {}),
     ...(b.motion ? { motion: b.motion } : {}),

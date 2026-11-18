@@ -35,7 +35,8 @@ import type { BattleEntity } from './spellDsl'
 import type { BattleDepth, BattleLayoutMode } from './battleLayout'
 import { normalizeBattleRow } from './battleLayout'
 import { DIALOG_JUST_SHOWN_GUARD_MS, suppressNextTouchTap } from './touchInput'
-import type { SpriteStyle } from './spriteStyle'
+import type { BaseBackEdge, SpriteStyle } from './spriteStyle'
+import { baseBackEdgeParams } from './spriteStyle'
 import type { WindowStyle } from './windowStyle'
 import type { BackgroundTone } from './backgroundTone'
 import type { BackgroundDof } from './depthOfField'
@@ -71,6 +72,8 @@ export interface FieldBattleSettings {
   background: string | undefined
   /** `sprite_style` (#737) */
   spriteStyle: SpriteStyle
+  /** `sprite_style_base_back_edge` (#1187) */
+  spriteBaseBackEdge: BaseBackEdge
   /** `window_style` (#744) */
   windowStyle: WindowStyle
   /** `battle_background_tone` (#753) */
@@ -126,6 +129,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   layout: 'front',
   background: undefined,
   spriteStyle: 'none',
+  spriteBaseBackEdge: 'same',
   windowStyle: 'dark',
   backgroundTone: 'on',
   backgroundDof: 'off',
@@ -159,6 +163,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     layout: gameData.battleLayout ?? d.layout,
     background: gameData.battleBackground,
     spriteStyle: gameData.spriteStyle ?? d.spriteStyle,
+    spriteBaseBackEdge: gameData.spriteBaseBackEdge ?? d.spriteBaseBackEdge,
     windowStyle: gameData.windowStyle ?? d.windowStyle,
     backgroundTone: gameData.battleBackgroundTone ?? d.backgroundTone,
     backgroundDof: gameData.battleBackgroundDof ?? d.backgroundDof,
@@ -664,6 +669,9 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     background: settings.background,
     assetBaseUrl,
     spriteStyle: settings.spriteStyle,
+    ...(settings.spriteBaseBackEdge === 'thin'
+      ? { spriteStyleParams: baseBackEdgeParams(settings.spriteBaseBackEdge) }
+      : {}),
     windowStyle: settings.windowStyle,
     backgroundTone: settings.backgroundTone,
     backgroundDof: settings.backgroundDof,

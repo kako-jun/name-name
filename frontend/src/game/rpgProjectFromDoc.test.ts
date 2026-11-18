@@ -1489,6 +1489,25 @@ describe('partyOrder: パーティの定義順 (#736)', () => {
   })
 })
 
+describe('rpgProjectFromDoc: sprite_style_base_back_edge (#1187)', () => {
+  const withEdge = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
+  it('thin / same と、未指定・未知値は same（従来）。sprite_style とは独立', () => {
+    expect(
+      rpgProjectFromDoc(withEdge({ sprite_style_base_back_edge: ' Thin ' }))!.spriteBaseBackEdge
+    ).toBe('thin')
+    expect(
+      rpgProjectFromDoc(withEdge({ sprite_style_base_back_edge: 'same' }))!.spriteBaseBackEdge
+    ).toBe('same')
+    expect(rpgProjectFromDoc(makeDoc())!.spriteBaseBackEdge).toBe('same')
+    expect(
+      rpgProjectFromDoc(withEdge({ sprite_style_base_back_edge: 'faint' }))!.spriteBaseBackEdge
+    ).toBe('same')
+    expect(rpgProjectFromDoc(withEdge({ sprite_style_base_back_edge: 'thin' }))!.spriteStyle).toBe(
+      'none'
+    )
+  })
+})
+
 describe('rpgProjectFromDoc: sprite_style (#737)', () => {
   const withStyle = (extra: Partial<EventDocument>): EventDocument => ({ ...makeDoc(), ...extra })
 

@@ -113,6 +113,29 @@ describe('battle 設定がエンジン・BattleScreen のオプションへ渡�
     expect('commandLabels' in buildBattleScreenOptions(load(none.battle).battle, {})).toBe(false)
   })
 
+  it('frontmatter sprite_style_base_back_edge: thin が spriteStyleParams になる。未指定・same は出ない (#1187)', () => {
+    const fm = frontmatterRaw(
+      { sprite_style: 'acrylic', sprite_style_base_back_edge: 'thin' } as unknown as EventDocument,
+      'http://localhost/a',
+      undefined,
+      []
+    )
+    const o = buildBattleScreenOptions(load(fm.battle).battle, {})
+    expect(o.spriteStyle).toBe('acrylic')
+    expect(o.spriteStyleParams).toEqual({ baseBackEdgeAlpha: 0.2 })
+    for (const doc of [{ sprite_style: 'acrylic' }, { sprite_style_base_back_edge: 'same' }]) {
+      const none = frontmatterRaw(
+        doc as unknown as EventDocument,
+        'http://localhost/a',
+        undefined,
+        []
+      )
+      expect('spriteStyleParams' in buildBattleScreenOptions(load(none.battle).battle, {})).toBe(
+        false
+      )
+    }
+  })
+
   it('enemyWindowOverlap はグリッドの有無と無関係に渡る (#1178)', () => {
     const b = load({ layout: 'side', enemyWindowOverlap: 0.3 }).battle
     expect(b.enemyGrid).toBeUndefined()

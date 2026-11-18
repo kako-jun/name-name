@@ -43,7 +43,7 @@ const UNSUPPORTED_KEYS = [
 export interface FrontmatterRaw {
   /** `raw.battle` に入れる分(`logicalSize` を含む) */
   battle: Raw
-  /** `raw` の最上位に入れる分(`dialogStyle` `spriteStyle` `emotionsUrl` `menuUseMessage` `menuStatusLayout` `menuExp`) */
+  /** `raw` の最上位に入れる分(`dialogStyle` `spriteStyle` `emotionsUrl` `menuUseMessage` `menuStatusLayout` `menuExp` `spriteBaseBackEdge`) */
   top: Raw
 }
 
@@ -84,6 +84,11 @@ export function frontmatterRaw(
   if (spriteStyle !== undefined) {
     top.spriteStyle = spriteStyle
     battle.spriteStyle = spriteStyle
+  }
+  // アクスタの台座の丸の奥側の縁 (#1187)。same / thin。`sprite_style` とは別のキー（直交）。歩行・メニューと戦闘で共用し、同じ値を両方に出す。same は既定なのでキーを出さない
+  if (enumOf(doc, 'sprite_style_base_back_edge', ['same', 'thin'], warnings) === 'thin') {
+    top.spriteBaseBackEdge = 'thin'
+    battle.spriteBaseBackEdge = 'thin'
   }
   if (doc.dialog_style !== null && doc.dialog_style !== undefined) {
     const ds =

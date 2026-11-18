@@ -1060,6 +1060,25 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     expect(ok({}).raw).not.toHaveProperty('menuExp')
   })
 
+  it('sprite_style_base_back_edge (#1187): thin だけ歩行・戦闘の両方へ渡し、same・未指定は出さず、不正は警告して無視する。sprite_style とは独立', () => {
+    const thin = ok({ frontmatter: { sprite_style_base_back_edge: ' Thin ' } })
+    expect(thin.warnings).toEqual([])
+    expect(thin.raw).toMatchObject({
+      spriteBaseBackEdge: 'thin',
+      battle: { spriteBaseBackEdge: 'thin' },
+    })
+    expect(thin.raw).not.toHaveProperty('spriteStyle')
+    const same = ok({ frontmatter: { sprite_style_base_back_edge: 'same' } })
+    expect(same.warnings).toEqual([])
+    expect(same.raw).not.toHaveProperty('spriteBaseBackEdge')
+    const bad = ok({ frontmatter: { sprite_style_base_back_edge: 'faint' } })
+    expect(bad.warnings).toEqual([
+      'frontmatter の sprite_style_base_back_edge は "same" / "thin" のどれかにしてください: "faint"（無視します）',
+    ])
+    expect(bad.raw).not.toHaveProperty('spriteBaseBackEdge')
+    expect(ok({}).raw).not.toHaveProperty('spriteBaseBackEdge')
+  })
+
   it('dialog_font_size / dialog_window_height / dialog_name_style を raw の最上位に渡し、不正は警告して出さない (#1184)', () => {
     const r = ok({
       frontmatter: {

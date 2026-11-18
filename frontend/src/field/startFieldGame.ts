@@ -6,6 +6,7 @@ import { createFieldSoundPlayer, type FieldSound } from './fieldSounds'
  */
 import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { buildFieldComposite } from './fieldComposite'
+import { baseBackEdgeParams } from '../game/spriteStyle'
 import { createFieldStands, createNpcStand, type FieldAcrylicFigure } from './acrylicFigure'
 import { createFlagStore } from './flagStore'
 import { configureTrace, traceOn, traceRec } from '../trace/trace'
@@ -406,6 +407,8 @@ async function loadNpcScript(
 
 export async function startFieldGame(opts: StartFieldGameOptions): Promise<() => void> {
   const { config, mount, hud, devToolbar, docKey, search } = opts
+  // アクスタの見た目の上書き (#1187。台座の奥側の縁)。未指定は空＝既定のまま。歩行・NPC・フィールドメニューで共用
+  const acrylicParams = baseBackEdgeParams(config.spriteBaseBackEdge)
   // 内部トレースログ (#1197)。frontmatter `trace: on` のときだけ働く（既定 off）
   configureTrace(!!config.traceOn, { game: docKey })
   /** 通常のエラー表示（置換方式。後の呼び出しが前を消す）と、セーブ再開の通知（#1021。どの経路の showError でも消えない）を分けて持つ */
@@ -501,7 +504,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
             y: def.y,
             def,
             sprite,
-            stand: createNpcStand(config.spriteStyle),
+            stand: createNpcStand(config.spriteStyle, acrylicParams),
             textures,
             facing: def.facing,
           })
@@ -612,7 +615,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // 同行者は主人公の後ろ（y が大きければ手前）に並べ替える。前面・マーカーは常に上
   world.sortableChildren = true
   // アクスタ (sit-by-me#58): `spriteStyle: "acrylic"` のときだけ、絵の直前（同じ zIndex なら奥）に板・台座・影の層を挿す。未指定は何も足さない（従来の描画）
-  const stands = createFieldStands(config.spriteStyle, !!config.companion)
+  const stands = createFieldStands(config.spriteStyle, !!config.companion, acrylicParams)
   const playerStand = stands.player
   const companionStand = stands.companion
   if (playerStand) world.addChildAt(playerStand.display, world.getChildIndex(player))
@@ -1551,6 +1554,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         width: app.screen.width,
         height: app.screen.height,
         acrylic: config.spriteStyle === 'acrylic',
+        acrylicParams,
         useMessage: !config.menuUseMessageOff,
         ...(config.menuStatusLayout ? { statusLayout: config.menuStatusLayout } : {}),
         ...(config.menuExp ? { exp: true } : {}),

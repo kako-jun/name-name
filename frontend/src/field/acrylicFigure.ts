@@ -64,18 +64,22 @@ export function fitAcrylicGeometry(
  */
 export function createFieldStands(
   style: 'acrylic' | undefined,
-  hasCompanion: boolean
+  hasCompanion: boolean,
+  params?: Partial<AcrylicParams>
 ): { player: FieldAcrylicFigure | null; companion: FieldAcrylicFigure | null } {
   if (style !== 'acrylic') return { player: null, companion: null }
   return {
-    player: new FieldAcrylicFigure(),
-    companion: hasCompanion ? new FieldAcrylicFigure() : null,
+    player: new FieldAcrylicFigure(params),
+    companion: hasCompanion ? new FieldAcrylicFigure(params) : null,
   }
 }
 
 /** NPC 1 人ぶんのアクスタ部品。`spriteStyle` が `"acrylic"` のときだけ作り、それ以外は null＝従来描画（#861） */
-export function createNpcStand(style: 'acrylic' | undefined): FieldAcrylicFigure | null {
-  return style === 'acrylic' ? new FieldAcrylicFigure() : null
+export function createNpcStand(
+  style: 'acrylic' | undefined,
+  params?: Partial<AcrylicParams>
+): FieldAcrylicFigure | null {
+  return style === 'acrylic' ? new FieldAcrylicFigure(params) : null
 }
 
 export interface FieldAcrylicFigureOptions {
