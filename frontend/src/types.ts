@@ -1365,6 +1365,8 @@ export interface EventDocument {
    *  null/undefined・未知値は `"none"` にフォールバック。GUI 専用（TUI は読まない）。
    *  frontmatter `sprite_style:` から流す。 */
   sprite_style?: string | null
+  /** アクスタの台座の丸の奥側の縁 (#1187)。`"same"`（既定・手前と同じ濃さ）/ `"thin"`（奥側を薄い線にして透けて見せる）。frontmatter `sprite_style_base_back_edge:` から流す。GUI 専用。 */
+  sprite_style_base_back_edge?: string | null
   /** RPG 戦闘画面のウィンドウ配色テーマ (#744)。`"dark"`（既定・現行の半透明黒）/ `"ff-blue"`（FF 風の青い帯状グラデーション＋白文字に黒い影）。
    *  null/undefined・未知値は `"dark"` にフォールバック。GUI 専用（TUI は読まない）。
    *  frontmatter `window_style:` から流す。 */

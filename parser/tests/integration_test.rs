@@ -5329,6 +5329,7 @@ fn test_font_family_emit_strips_inner_quotes_to_protect_round_trip() {
         battle_layout: None,
         battle_background: None,
         sprite_style: None,
+        sprite_style_base_back_edge: None,
         window_style: None,
         battle_background_tone: None,
         battle_background_dof: None,
@@ -10536,6 +10537,7 @@ fn telop_test_doc_base() -> Document {
         battle_layout: None,
         battle_background: None,
         sprite_style: None,
+        sprite_style_base_back_edge: None,
         window_style: None,
         battle_background_tone: None,
         battle_background_dof: None,
@@ -10897,6 +10899,41 @@ fn test_sprite_style_survives_emit_with_multiple_chapters() {
     assert_eq!(doc2.sprite_style.as_deref(), Some("acrylic"));
     let doc3 = parser::parse(&emitter::emit(&doc2));
     assert_eq!(doc3.sprite_style.as_deref(), Some("acrylic"));
+}
+
+// ---- #1187: sprite_style_base_back_edge (frontmatter 透過。sprite_style と同じ流儀) ----
+
+#[test]
+fn test_sprite_style_base_back_edge_parse_default_none_and_roundtrip() {
+    let doc = parser::parse(&battle_doc("sprite_style_base_back_edge: thin\n"));
+    assert_eq!(doc.sprite_style_base_back_edge.as_deref(), Some("thin"));
+    // sprite_style とは別キー（互いに漏れない）
+    assert_eq!(doc.sprite_style, None);
+    // 値は検証せず生文字列で透過する。空は None
+    let weird = parser::parse(&battle_doc("sprite_style_base_back_edge: \"faint\"\n"));
+    assert_eq!(weird.sprite_style_base_back_edge.as_deref(), Some("faint"));
+    let empty = parser::parse(&battle_doc("sprite_style_base_back_edge:\n"));
+    assert_eq!(empty.sprite_style_base_back_edge, None);
+    let none = parser::parse(&battle_doc("sprite_style: acrylic\n"));
+    assert_eq!(none.sprite_style_base_back_edge, None);
+    assert_eq!(none.sprite_style.as_deref(), Some("acrylic"));
+
+    let emitted = emitter::emit(&doc);
+    assert!(
+        emitted.contains("sprite_style_base_back_edge: \"thin\"\n"),
+        "{emitted}"
+    );
+    let re = parser::parse(&emitted);
+    assert_eq!(
+        re.sprite_style_base_back_edge,
+        doc.sprite_style_base_back_edge
+    );
+    // 未指定ならキーを出さない（従来の出力と同一）
+    let none_out = emitter::emit(&none);
+    assert!(
+        !none_out.contains("sprite_style_base_back_edge"),
+        "{none_out}"
+    );
 }
 
 // ---- #744: window_style (frontmatter 透過。sprite_style と同じ流儀) ----

@@ -52,6 +52,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
     let mut battle_layout: Option<String> = None;
     let mut battle_background: Option<String> = None;
     let mut sprite_style: Option<String> = None;
+    let mut sprite_style_base_back_edge: Option<String> = None;
     let mut window_style: Option<String> = None;
     let mut battle_background_tone: Option<String> = None;
     let mut battle_background_dof: Option<String> = None;
@@ -276,6 +277,12 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
                 let v = unquote(val.trim());
                 if !v.is_empty() {
                     sprite_style = Some(v);
+                }
+            } else if let Some(val) = line.strip_prefix("sprite_style_base_back_edge:") {
+                // アクスタの台座の丸の奥側の縁 (#1187)。`same` / `thin`。値は生文字列で透過し、runtime 側で検証する。
+                let v = unquote(val.trim());
+                if !v.is_empty() {
+                    sprite_style_base_back_edge = Some(v);
                 }
             } else if let Some(val) = line.strip_prefix("window_style:") {
                 // RPG 戦闘画面のウィンドウ配色テーマ (#744)。`dark` / `ff-blue` の2択想定だが、値は parser では
@@ -1828,6 +1835,7 @@ fn parse_with_line_base(input: &str, line_base: i64) -> Document {
         battle_layout,
         battle_background,
         sprite_style,
+        sprite_style_base_back_edge,
         window_style,
         battle_background_tone,
         battle_background_dof,

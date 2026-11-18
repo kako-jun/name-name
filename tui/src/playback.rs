@@ -2356,6 +2356,7 @@ mod tests {
             battle_layout: None,
             battle_background: None,
             sprite_style: None,
+            sprite_style_base_back_edge: None,
             window_style: None,
             battle_background_tone: None,
             battle_background_dof: None,

@@ -9,6 +9,7 @@
 import { Container, Graphics, Rectangle, Sprite, Text as PixiText, type Texture } from 'pixi.js'
 import { FieldAcrylicFigure } from '../field/acrylicFigure'
 import { handTopForFingerAt } from './battleMenuLayout'
+import type { AcrylicParams } from './spriteStyle'
 import { createHandCursor } from './HandCursor'
 import {
   CLOSED_MENU,
@@ -155,6 +156,8 @@ export interface FieldMenuScreenOptions {
   height: number
   /** true = 左のパーティにアクスタの板・台座・影を付ける（フィールドの `spriteStyle: "acrylic"` と同じ） */
   acrylic: boolean
+  /** アクスタの見た目の上書き (#1187。台座の奥側の縁など)。未指定は既定 */
+  acrylicParams?: Partial<AcrylicParams>
   /** false = 使用が成功したとき（ok=true）の文を説明バー・案内帯に出さない (#1185)。失敗の文は常に出す。HP/MP の数字更新は変えない。既定 true */
   useMessage?: boolean
   /** ステータス画面の配置 (#1191)。`ff` = 領域に分けた FF5・FF6 風、`line` / 未指定 = 従来の 1 列。他のキーとは結合しない */
@@ -1036,7 +1039,7 @@ export class FieldMenuScreen extends Container {
     if (this.useAcrylic) {
       let fig = this.figures[idx]
       if (!fig) {
-        fig = new FieldAcrylicFigure()
+        fig = new FieldAcrylicFigure(this.opts.acrylicParams)
         this.figures[idx] = fig
       }
       fig.update(tex, height, false, x, y)

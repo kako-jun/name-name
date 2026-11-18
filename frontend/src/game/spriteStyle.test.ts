@@ -10,6 +10,8 @@ import {
   EDGE_MAX_MARGIN_PX,
   DEFAULT_ACRYLIC_PARAMS,
   computeAcrylicGeometry,
+  baseBackEdgeParams,
+  normalizeBaseBackEdge,
   normalizeSpriteStyle,
   resolveAcrylicParams,
   type AcrylicParams,
@@ -51,6 +53,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       baseFillAlpha: 0.14,
       baseSideAlpha: 0.26,
       slitAlpha: 0.3,
+      baseBackEdgeAlpha: 1,
       castAlpha: 0.55,
       castSquash: 0.35,
       castShear: 1.4,
@@ -85,6 +88,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
       baseFillAlpha: 0.14,
       baseSideAlpha: 0.26,
       slitAlpha: 0.3,
+      baseBackEdgeAlpha: 1,
       castAlpha: 0.55,
       castSquash: 0.35,
       castShear: 1.4,
@@ -147,6 +151,7 @@ describe('DEFAULT_ACRYLIC_PARAMS / resolveAcrylicParams', () => {
         baseFillAlpha: 0.14,
         baseSideAlpha: 0.26,
         slitAlpha: 0.3,
+        baseBackEdgeAlpha: 1,
         castAlpha: 0.55,
         castSquash: 0.35,
         castShear: 1.4,
@@ -556,6 +561,7 @@ describe('resolveAcrylicParams: #760 の新パラメータ', () => {
     ['baseFillAlpha', 0, 1],
     ['baseSideAlpha', 0, 1],
     ['slitAlpha', 0, 1],
+    ['baseBackEdgeAlpha', 0, 1],
     ['castAlpha', 0, 1],
     ['castSquash', 0.1, 1],
     ['castShear', -2, 2],
@@ -772,5 +778,37 @@ describe('#1086 余白の拡大（B）', () => {
   it('余白の境界: size=166 は比率（9.96）、size=167 以上は上限 10', () => {
     expect(computeAcrylicGeometry(100, 100, 166).marginPx).toBeCloseTo(9.96, 9)
     expect(computeAcrylicGeometry(100, 100, 167).marginPx).toBe(10)
+  })
+})
+
+describe('台座の奥側の縁 (#1187)', () => {
+  it.each([
+    ['thin', 'thin'],
+    [' THIN ', 'thin'],
+    ['same', 'same'],
+    ['', 'same'],
+    ['faint', 'same'],
+    [null, 'same'],
+    [undefined, 'same'],
+  ])('normalizeBaseBackEdge(%j) = %s', (raw, want) => {
+    expect(normalizeBaseBackEdge(raw as string | null | undefined)).toBe(want)
+  })
+  it('baseBackEdgeParams: same・未指定は空（既定のまま）、thin は奥側の倍率だけを上書きする', () => {
+    expect(baseBackEdgeParams('same')).toEqual({})
+    expect(baseBackEdgeParams(undefined)).toEqual({})
+    expect(baseBackEdgeParams('thin')).toEqual({ baseBackEdgeAlpha: 0.2 })
+  })
+  it('既定は 1（手前と同じ＝従来どおり）。0〜1 に丸め、非数は既定', () => {
+    expect(DEFAULT_ACRYLIC_PARAMS.baseBackEdgeAlpha).toBe(1)
+    expect(resolveAcrylicParams().baseBackEdgeAlpha).toBe(1)
+    expect(resolveAcrylicParams({ baseBackEdgeAlpha: 0.4 }).baseBackEdgeAlpha).toBe(0.4)
+    expect(resolveAcrylicParams({ baseBackEdgeAlpha: -1 }).baseBackEdgeAlpha).toBe(0)
+    expect(resolveAcrylicParams({ baseBackEdgeAlpha: 9 }).baseBackEdgeAlpha).toBe(1)
+    expect(resolveAcrylicParams({ baseBackEdgeAlpha: NaN }).baseBackEdgeAlpha).toBe(1)
+  })
+  it('直交: 奥側の縁の指定は他のパラメータを変えない', () => {
+    const base = resolveAcrylicParams()
+    const thin = resolveAcrylicParams(baseBackEdgeParams('thin'))
+    expect({ ...thin, baseBackEdgeAlpha: 1 }).toEqual(base)
   })
 })

@@ -277,7 +277,7 @@ describe('FieldAcrylicFigure の NPC 用の使い方（高さ・位置・向き�
 describe('startFieldGame.ts の NPC アクスタ配線（?raw の静的検査）', () => {
   const src = startFieldGameSource.replace(/\s+/g, ' ')
   it('NPC 生成時に spriteStyle から stand を作る', () => {
-    expect(src).toContain('stand: createNpcStand(config.spriteStyle)')
+    expect(src).toContain('stand: createNpcStand(config.spriteStyle, acrylicParams)')
   })
   it('stand は絵の直前（奥）に world へ足す', () => {
     expect(src).toMatch(
@@ -327,5 +327,15 @@ describe('startFieldGame.ts の NPC アクスタ配線（?raw の静的検査）
     expect(body).toContain(
       'for (const list of sceneNpcs.values()) for (const n of list) n.stand?.destroy()'
     )
+  })
+})
+
+describe('createFieldStands / createNpcStand: 台座の奥側の縁 (#1187)', () => {
+  it('params を渡せる（未指定は従来どおり）', () => {
+    const t = createFieldStands('acrylic', true, { baseBackEdgeAlpha: 0.2 })
+    expect(t.player).toBeInstanceOf(FieldAcrylicFigure)
+    expect(t.companion).toBeInstanceOf(FieldAcrylicFigure)
+    expect(createNpcStand('acrylic', { baseBackEdgeAlpha: 0.2 })).toBeInstanceOf(FieldAcrylicFigure)
+    expect(createNpcStand(undefined, { baseBackEdgeAlpha: 0.2 })).toBeNull()
   })
 })

@@ -2017,6 +2017,63 @@ describe('menuExp (#1186)', () => {
   })
 })
 
+describe('spriteBaseBackEdge (#1187)', () => {
+  it('未指定・"same" は従来どおり（キーなし・警告なし）', () => {
+    expect('spriteBaseBackEdge' in ok(mutated(() => {}))).toBe(false)
+    const same = ok(
+      mutated((c) => {
+        c.spriteBaseBackEdge = 'same'
+      })
+    )
+    expect('spriteBaseBackEdge' in same).toBe(false)
+    expect(same.warnings).toBeUndefined()
+  })
+  it('"thin" は spriteBaseBackEdge: "thin"。spriteStyle とは独立', () => {
+    const c = ok(
+      mutated((c) => {
+        c.spriteBaseBackEdge = 'thin'
+      })
+    )
+    expect(c.spriteBaseBackEdge).toBe('thin')
+    expect('spriteStyle' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視', () => {
+    for (const bad of ['faint', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.spriteBaseBackEdge = bad
+        })
+      )
+      expect('spriteBaseBackEdge' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('spriteBaseBackEdge')
+    }
+  })
+  it('battle.spriteBaseBackEdge: thin だけ battle に残る。不正は設定エラー', () => {
+    const t = ok(
+      mutated((c) => {
+        c.battle = { spriteBaseBackEdge: 'thin' }
+      })
+    )
+    expect(t.battle.spriteBaseBackEdge).toBe('thin')
+    const s = ok(
+      mutated((c) => {
+        c.battle = { spriteBaseBackEdge: 'same' }
+      })
+    )
+    expect('spriteBaseBackEdge' in s.battle).toBe(false)
+    expect(
+      parseConfig(
+        mutated((c) => {
+          c.battle = { spriteBaseBackEdge: 'faint' }
+        }),
+        BASE
+      ).ok
+    ).toBe(false)
+  })
+})
+
 describe('dialogStyle / dialogMsPerChar (#840)', () => {
   it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
     const c = ok(mutated(() => {}))
