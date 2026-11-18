@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-# エンジンが受理するポーズ（frontend/src/game/battleMotion.ts の BATTLE_POSES と同じ並び。#1026 で special・swing を追加）
+# エンジンが受理するポーズ（frontend/src/game/battleMotion.ts の BATTLE_POSES と同じ並び。#1026 で special・swing、#1206 で weak を追加。sit-by-me の scripts/field_md.py の poses_order と同じ並び）
 POSES = [
     "idle",
     "ready",
@@ -27,6 +27,7 @@ POSES = [
     "hurt",
     "down",
     "victory",
+    "weak",
 ]
 DIRS = ["up", "down", "left", "right", "upleft", "upright", "downleft", "downright"]
 CHARACTERS = ["C001", "C002", "C003", "C004"]
