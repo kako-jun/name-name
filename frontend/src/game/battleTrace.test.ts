@@ -349,8 +349,8 @@ describe('battleTrace (#1197)', () => {
     expect(firstMismatch(b.expected, r.produced)).toBeNull()
   })
 
-  it('再現: 乱数の種を変えても（notifyBlocked / セーブ再開 / 通常の戦い）、記録と再実行が一致する（#1203）', () => {
-    const scenarios: Array<(spell: typeof SPELL) => BattleEngine> = [
+  it('再現: 乱数の種を変えても（notifyBlocked / セーブ再開）、記録と再実行が一致する（#1203）', () => {
+    const scenarios: Array<() => BattleEngine> = [
       () => {
         const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
         attachTraced(e)
@@ -382,7 +382,7 @@ describe('battleTrace (#1197)', () => {
         attached.length = 0
         configureTrace(true, { storage: null })
         vi.mocked(Math.random).mockReturnValue(r)
-        make(SPELL)
+        make()
         const b = closedBattles()[0]
         const res = replayBattle(b, { spell: () => SPELL })
         expect(
