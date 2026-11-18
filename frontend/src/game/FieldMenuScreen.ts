@@ -91,7 +91,7 @@ export interface FieldMenuPartyView {
   atk?: number
   def?: number
   agi?: number
-  /** アクスタ姿の絵（sprite、無ければ poses.idle。#1211）。読めなかった・どちらも無いときは null（絵なしで枠だけ） */
+  /** アクスタ姿の絵（sprite、無ければ poses.idle。#1211）。sprite が読めなかった・どちらも無いときは null（絵なしで枠だけ） */
   texture: Texture | null
   /** 経験値の表示値 (#1186)。`field_menu_exp: on` のときだけ呼び出し側が渡す（経験値表を持たない人物は無し）。無ければ何も出さない */
   exp?: MenuExp

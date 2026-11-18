@@ -210,6 +210,8 @@ describe('FieldMenuScreen: パーティ枠の人物の絵 (#1211)', () => {
         const fig = withArt.children.find((c) => c !== sp && c !== withArt.mask) as Container
         expect(fig.visible).toBe(true)
         expect(fig.getLocalBounds().width * fig.scale.x).toBeLessThanOrEqual(box.width + 1e-6)
+        // 縦: 台座の下端も枠の下端以内（隣の枠にはみ出さない）
+        expect(fig.getBounds().maxY).toBeLessThanOrEqual(box.y + box.height + 1e-6)
       }
       // 絵の無い者は従来どおり枠だけ（切り抜きの中に絵を置かない）
       expect(without.children.some((c) => c instanceof Sprite)).toBe(false)
