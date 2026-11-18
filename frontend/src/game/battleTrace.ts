@@ -48,8 +48,10 @@ export class BattleTracer {
   /** エンジンの公開メソッドの入れ子の深さ。内側の呼び出し（select 同士）を二重に記録しない */
   depth = 0
   private lastHold = false
-  /** 保存前の端数書き出しの解除（end で外す）。既定の出力先のときだけ付く (#1215) */
+  /** 保存前の端数書き出しの解除（end / detach で外す）。既定の出力先のときだけ付く (#1215) */
   private unhook: (() => void) | null = null
+  /** 既定の出力先で作られ、まだ end されていない（detach 後に画面が作り直されたら付け直す） */
+  private hookWanted = false
   private seenEvents: number
   private lastPhase: BattlePhase
   private lastHead = -2
@@ -165,8 +167,9 @@ export class BattleTracer {
     this.unhook = null
   }
 
-  /** 保存前の端数書き出しに登録する（end で自動解除） */
+  /** 保存前の端数書き出しに登録する（end / detach で解除。画面の作り直しでは attachBattleTrace が付け直す） */
   hookPreFlush(): void {
+    this.hookWanted = true
     this.unhook ??= traceOnPreFlush(() => this.flushAdv())
   }
 
@@ -353,6 +356,7 @@ export class BattleTracer {
 
   /** 戦闘が閉じた */
   end(outcome: string): void {
+    this.hookWanted = false
     this.unhook?.()
     this.unhook = null
     this.flushAdv()
@@ -365,8 +369,9 @@ export class BattleTracer {
     })
   }
 
-  /** 画面の作り直しなどで、エンジンの現在値を基準にし直す */
+  /** 画面の作り直しなどで、エンジンの現在値を基準にし直す。detach 済みの既定出力先のトレーサは保存前フックも付け直す (#1215) */
   resync(): void {
+    if (this.hookWanted) this.hookPreFlush()
     this.seenEvents = this.engine.getState().eventTotal
     this.syncBaseline()
   }

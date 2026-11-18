@@ -535,6 +535,20 @@ describe('battleTrace: end 前の端数 (#1215)', () => {
     expect(savedAdv(st)).toBeCloseTo(40, 3)
   })
 
+  it('detach 後に同じエンジンへ付け直す（画面の作り直し）と、保存前の端数書き出しが復活する', async () => {
+    const st = memStorage()
+    configureTrace(true, { storage: st })
+    await traceReady()
+    const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+    const t = attachBattleTrace(e)!
+    e.tick(40)
+    t.detach()
+    expect(attachBattleTrace(e)).toBe(t)
+    e.tick(40)
+    traceFlush(true)
+    expect(savedAdv(st)).toBeCloseTo(80, 3)
+  })
+
   it('トレースを切る・別のゲームに替えると、残っていたフックは捨てられる', async () => {
     configureTrace(true, { storage: null, game: 'a' })
     const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
