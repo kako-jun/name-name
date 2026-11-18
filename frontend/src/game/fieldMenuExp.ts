@@ -53,11 +53,16 @@ export function expStatusRows(e: MenuExp | undefined): StatusRow[] {
   ]
 }
 
-/** `FieldMenuPartyView` に展開する欄。表示値が無ければ空オブジェクト（`exp: undefined` を作らない） */
+/**
+ * `FieldMenuPartyView` に展開する欄。表示値が無ければ空オブジェクト（`exp: undefined` を作らない）。
+ * Lv が未保存（`member.level` が無い）の人物は、経験値の数え方（初期 Lv → 無ければ Lv1）と同じ Lv も返す。
+ * 「Lv --」の横に Lv 相当の経験値が並ぶ食い違いを避けるため（`field_menu_exp: on` のときだけ呼ぶので、既定の表示は変わらない）
+ */
 export function menuExpField(
   member: Pick<BattleEntity, 'exp' | 'level'>,
   def: LevelUpDef | undefined
-): { exp?: MenuExp } {
+): { exp?: MenuExp; level?: number } {
   const e = menuExpOf(member, def)
-  return e ? { exp: e } : {}
+  if (!e || !def) return {}
+  return member.level === undefined ? { exp: e, level: currentLevel(member, def) } : { exp: e }
 }

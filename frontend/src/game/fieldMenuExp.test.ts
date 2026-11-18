@@ -54,5 +54,11 @@ describe('表示用の整形', () => {
   it('menuExpField: 無ければ空オブジェクト（exp: undefined を作らない）', () => {
     expect('exp' in menuExpField({}, undefined)).toBe(false)
     expect(menuExpField({ level: 1, exp: 5 }, DEF)).toEqual({ exp: { exp: 5, toNext: 3 } })
+    // Lv 未保存は、経験値の数え方と同じ Lv（Lv1、初期 Lv があればそれ）も返す
+    expect(menuExpField({}, DEF)).toEqual({ exp: { exp: 0, toNext: 8 }, level: 1 })
+    expect(menuExpField({}, { ...DEF, level: 3 })).toEqual({
+      exp: { exp: 20, toNext: 20 },
+      level: 3,
+    })
   })
 })

@@ -871,21 +871,29 @@ export class FieldMenuScreen extends Container {
       return
     }
     const x0 = P.x + P.w * 0.08
-    const lh = P.h * 0.1
-    let y = P.y + P.h * 0.2
-    const line = (s: string, color = WHITE): void => {
-      C.addChild(this.text(s, f, color, x0, y, 'left'))
-      y += lh
-    }
-    line(`${p.name} ${p.level === undefined ? 'Lv --' : `Lv ${p.level}`}`)
-    line(`HP  ${p.hp} / ${p.maxHp}`)
-    if (p.mp !== undefined) line(`MP  ${p.mp} / ${p.maxMp ?? p.mp}`)
-    line(`ちから ${p.atk ?? '--'} まもり ${p.def ?? '--'} すばやさ ${p.agi ?? '--'}`)
-    // 経験値 (#1186)。1 行にまとめる（行数が増えて下の追加行を押し出さない）
+    // 経験値 (#1186)。1 行にまとめる
     const exp = this.opts.exp ? p.exp : undefined
-    if (exp) line(`${EXP_LABEL} ${exp.exp}  ${NEXT_LABEL} ${nextValue(exp)}`)
     // 定義側・実状態にある項目だけ出す（無い項目は出さない）
-    for (const row of content.statusByParty[p.id] ?? []) line(`${row.label}  ${row.value}`)
+    const extras = content.statusByParty[p.id] ?? []
+    const lines: string[] = [
+      `${p.name} ${p.level === undefined ? 'Lv --' : `Lv ${p.level}`}`,
+      `HP  ${p.hp} / ${p.maxHp}`,
+      ...(p.mp !== undefined ? [`MP  ${p.mp} / ${p.maxMp ?? p.mp}`] : []),
+      `ちから ${p.atk ?? '--'} まもり ${p.def ?? '--'} すばやさ ${p.agi ?? '--'}`,
+      ...(exp ? [`${EXP_LABEL} ${exp.exp}  ${NEXT_LABEL} ${nextValue(exp)}`] : []),
+      ...extras.map((row) => `${row.label}  ${row.value}`),
+    ]
+    // 行数が 8 行を超えるときだけ、最後の行が枠の下端に収まるよう行間と字を詰める（8 行までは従来と同じ 0.1 刻み）
+    const FIT_LINES = 8
+    let lh = P.h * 0.1
+    let size = f
+    if (lines.length > FIT_LINES) {
+      lh = (P.h * 0.1 * (FIT_LINES - 1)) / (lines.length - 1)
+      size = Math.min(f, Math.max(f * 0.6, lh / 1.4))
+    }
+    lines.forEach((s, i) => {
+      C.addChild(this.text(s, size, WHITE, x0, P.y + P.h * 0.2 + i * lh, 'left'))
+    })
     this.placeArt(this.artDeep, p.texture, P.h * 0.5, P.x + P.w * 0.8, P.y + P.h * 0.9)
   }
 
@@ -975,7 +983,11 @@ export class FieldMenuScreen extends Container {
     if (exp) {
       const next = nextValue(exp)
       // 人物ごとに大きさが揺れないよう、値の幅は 3 桁（MAX と同じ幅）を下限に見積もる（それ以上の桁は枠からはみ出さない大きさまで縮める）
-      const fit = (v: string): number => fitSize(size * 0.85, right - tx, NEXT_LABEL, v, size * 0.5)
+      // 狭い枠は文字の置き場が足りないので、この 1 行だけ左右を少し広く使う（左はアクスタの足元の外、右は枠の端の近く）
+      const ex = compact ? r.x + r.h * 1.2 : tx
+      const eRight = compact ? r.x + r.w - r.h * 0.12 : right
+      const fit = (v: string): number =>
+        fitSize(size * 0.85, eRight - ex, NEXT_LABEL, v, size * 0.5)
       const expSize = Math.min(fit('999'), fit(next))
       const yAt = (f: number): number => r.y + r.h * f
       // 狭い枠: 名前 / Lv（と選択中）/ HP / 次のレベルまで の 4 段。通常の枠: 名前と Lv / HP（と選択中）/ 次のレベルまで の 3 段
@@ -990,8 +1002,8 @@ export class FieldMenuScreen extends Container {
         C.addChild(this.text(hp, size, WHITE, tx, yAt(0.5), 'left'))
         if (mark) C.addChild(this.text(mark, size * 0.8, NOTICE_COLOR, right, yAt(0.5), 'right'))
       }
-      C.addChild(this.text(NEXT_LABEL, expSize, NOTICE_COLOR, tx, yExp, 'left'))
-      C.addChild(this.text(next, expSize, WHITE, right, yExp, 'right'))
+      C.addChild(this.text(NEXT_LABEL, expSize, NOTICE_COLOR, ex, yExp, 'left'))
+      C.addChild(this.text(next, expSize, WHITE, eRight, yExp, 'right'))
       return
     }
     if (compact) {

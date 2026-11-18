@@ -160,3 +160,50 @@ describe('FieldMenuScreen: 経験値の表示 (#1186)', () => {
     )
   })
 })
+
+describe('FieldMenuScreen: line の追加行があふれない (#1186)', () => {
+  const rows = (n: number): { label: string; value: string }[] =>
+    Array.from({ length: n }, (_, i) => ({ label: `行${i}`, value: 'v' }))
+  const maxY = (c: Container): number => {
+    let m = 0
+    const walk = (n: Container): void => {
+      if (n instanceof Text && n.text.startsWith('行')) m = Math.max(m, n.y)
+      for (const ch of n.children) walk(ch as Container)
+    }
+    walk(c)
+    return m
+  }
+  function openWith(exp: boolean, n: number): FieldMenuScreen {
+    const s = new FieldMenuScreen({
+      width: 1280,
+      height: 720,
+      acrylic: false,
+      onClose: () => {},
+      ...(exp ? { exp: true } : {}),
+    })
+    s.open({
+      items: [{ id: 'status', label: 'ステータス', content: { statusByParty: { a: rows(n) } } }],
+      party: [PARTY[0]],
+      info: { place: 'p', gold: 0, playMs: 0, steps: 0 },
+      slots: [null, null, null],
+    })
+    s.dispatch({ type: 'tap', index: 0 })
+    s.tick(10_000)
+    return s
+  }
+  it('経験値の行 + 追加 4 行（計 9 行以上）でも最後の行が枠の下端（戻る帯の上）に収まる', () => {
+    expect(maxY(openWith(true, 4))).toBeLessThan(720 * 0.88)
+    expect(maxY(openWith(true, 6))).toBeLessThan(720 * 0.88)
+  })
+  it('8 行までは従来と同じ行間（経験値なしの追加 4 行は 0.1 刻みのまま）', () => {
+    const ys: number[] = []
+    const s = openWith(false, 4)
+    const walk = (n: Container): void => {
+      if (n instanceof Text && n.text.startsWith('行')) ys.push(n.y)
+      for (const ch of n.children) walk(ch as Container)
+    }
+    walk(s as unknown as Container)
+    ys.sort((a, b) => a - b)
+    expect(ys[1] - ys[0]).toBeCloseTo(ys[2] - ys[1], 5)
+  })
+})
