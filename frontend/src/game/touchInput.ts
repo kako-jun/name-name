@@ -53,6 +53,15 @@ export function suppressNextTouchTap(durationMs = 250): void {
 }
 
 /**
+ * tap 抑止の期限を捨てる（テスト専用）。`suppressTapUntilMs` はモジュール単位で最大値を保つため、先に走ったテストが
+ * 実時計（`performance.now()`）で入れた値が、後のテストの偽時計より先に残る。高負荷で worker の稼働が長いとき、
+ * 偽時計のテストの tap が握りつぶされて落ちる（#1203）。本番では呼ばない。
+ */
+export function resetTouchTapSuppressionForTest(): void {
+  suppressTapUntilMs = 0
+}
+
+/**
  * ダイアログを開いた直後の handleTap close 系操作を弾くガード幅 (ms)。
  * - `DialogBox.isJustShown(guardMs)` 経由で時刻ベースの二次保険として使う
  * - `handleMenuSelect` 入口で `suppressNextTouchTap(guardMs)` の duration としても使う（一次防御）
