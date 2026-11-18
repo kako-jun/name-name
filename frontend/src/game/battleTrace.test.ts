@@ -1,9 +1,9 @@
 /**
  * 戦闘の内部トレース (#1197): 記録点・再現（トレースから BattleEngine を再実行して結果が一致する）・off の無害さ。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BattleEngine } from './battleEngine'
-import { attachBattleTrace } from './battleTrace'
+import { attachBattleTrace, type BattleTracer } from './battleTrace'
 import type { BattleEntity } from './spellDsl'
 import { configureTrace, resetTraceForTest, traceDump, type TraceEntry } from '../trace/trace'
 import { extractBattles, firstMismatch, replayBattle } from '../trace/traceReplay'
@@ -25,7 +25,38 @@ function ent(id: string, over: Partial<BattleEntity> = {}): BattleEntity {
 
 const SPELL = { name: 'ファイア', mp: 2, target: '敵単体', effect: 'damage 20' }
 
-afterEach(() => resetTraceForTest())
+/**
+ * 乱数の種は `Math.random` から作られる（trace.ts の traceNewSeed）。テストごとに固定して、実行のたびに
+ * 違う戦闘になる（#1203）ことを防ぐ。種を変えて確かめたいときは、下の「種を変えても再現が一致する」で個別に差す。
+ */
+beforeEach(() => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.123456789)
+})
+
+const attached: BattleTracer[] = []
+
+/** 再現テスト用: 付けたトレーサを控える（`closedBattles` で戦闘を閉じる） */
+function attachTraced(e: BattleEngine): BattleTracer {
+  const t = attachBattleTrace(e)!
+  attached.push(t)
+  return t
+}
+
+/**
+ * 控えたトレーサの戦闘を閉じて（`end` が溜まった経過時間を書き出す）、記録から戦闘を取り出す。
+ * 閉じないと、最後の行動より後の端数（ADV_FLUSH_MS 未満）の経過時間が記録に載らず、再実行が最後の行動の手前で
+ * 止まってずれる。どの乱数の種で最後の行動が端数のうちに起きるかで落ち方が変わっていた（#1203）。実機では戦闘の終了時に end が呼ばれる。
+ */
+function closedBattles(): ReturnType<typeof extractBattles> {
+  for (const t of attached) t.end('test')
+  return extractBattles(JSON.parse(JSON.stringify(traceDump())))
+}
+
+afterEach(() => {
+  attached.length = 0
+  vi.restoreAllMocks()
+  resetTraceForTest()
+})
 
 /** ATB の戦闘を、細かい tick と入力で最後まで進める */
 function playOut(engine: BattleEngine): void {
@@ -108,13 +139,12 @@ describe('battleTrace (#1197)', () => {
       [ent('e0', { hp: 90, maxHp: 90, atk: 14, agi: 6 })],
       { atb: {} }
     )
-    attachBattleTrace(e)
+    attachTraced(e)
     playOut(e)
     expect(e.isOver()).toBe(true)
 
     // JSON を経由する（実機から取り出した想定）
-    const dump = JSON.parse(JSON.stringify(traceDump()))
-    const battles = extractBattles(dump)
+    const battles = closedBattles()
     expect(battles).toHaveLength(1)
     const r = replayBattle(battles[0], { spell: (ref) => (ref === SPELL.name ? SPELL : undefined) })
     expect(firstMismatch(battles[0].expected, r.produced)).toBeNull()
@@ -132,9 +162,9 @@ describe('battleTrace (#1197)', () => {
         atb: {},
       }
     )
-    attachBattleTrace(e)
+    attachTraced(e)
     playOut(e)
-    const battles = extractBattles(JSON.parse(JSON.stringify(traceDump())))
+    const battles = closedBattles()
     const b = battles[0]
     const i = b.steps.findIndex((s) => s.k === 'b.cmd')
     b.steps.splice(i, 1)
@@ -179,12 +209,12 @@ describe('battleTrace (#1197)', () => {
   it('再現: notifyBlocked（入力できない知らせ）も記録と再実行で一致する', () => {
     configureTrace(true, { storage: null })
     const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
-    attachBattleTrace(e)
+    attachTraced(e)
     while (e.getCurrentActorIndex() < 0) e.tick(100)
     e.notifyBlocked('つかえない')
     e.selectAttack()
     for (let i = 0; i < 300 && !e.isOver(); i++) e.tick(100)
-    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const b = closedBattles()[0]
     expect(b.steps.some((s) => (s.d as { c?: string }).c === 'notifyBlocked')).toBe(true)
     const r = replayBattle(b)
     expect(firstMismatch(b.expected, r.produced)).toBeNull()
@@ -197,9 +227,9 @@ describe('battleTrace (#1197)', () => {
       [ent('e0', { hp: 120, maxHp: 120, agi: 6 })],
       { atb: { initialGauges: { party: [700, 1000], enemies: [400] } }, restore: { atbQueue: [1] } }
     )
-    attachBattleTrace(e)
+    attachTraced(e)
     playOut(e)
-    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const b = closedBattles()[0]
     const atb = (b.start.d as { atb: { g: number[][]; q: number[] } }).atb
     expect(atb.g).toEqual([[700, 1000], [400]])
     expect(atb.q).toEqual([1])
@@ -214,13 +244,13 @@ describe('battleTrace (#1197)', () => {
       [ent('e0', { agi: 7, hp: 400, maxHp: 400 }), ent('e1', { agi: 7, hp: 400, maxHp: 400 })],
       { atb: { mode: 'active' } }
     )
-    attachBattleTrace(e)
+    attachTraced(e)
     let guard = 0
     while (!e.isOver() && guard++ < 4000) {
       e.tick(16.7)
       if (e.getCurrentActorIndex() >= 0) e.selectAttack()
     }
-    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const b = closedBattles()[0]
     expect(b.expected.filter((x) => x.k === 'b.act').length).toBeGreaterThan(8)
     const r = replayBattle(b)
     expect(firstMismatch(b.expected, r.produced)).toBeNull()
@@ -237,7 +267,7 @@ describe('battleTrace (#1197)', () => {
       [ent('e0', { hp: 400, maxHp: 400, atk: 3, agi: 1 })],
       { atb: { initialGauges: { party: [1000, 1000, 1000] } } }
     )
-    attachBattleTrace(e)
+    attachTraced(e)
     e.tick(1) // 満タンの 3 人がコマンド待ちに並ぶ
     expect(e.getCurrentActorIndex()).toBe(0)
     expect(e.switchAtbActor(2)).toBe(true)
@@ -260,7 +290,7 @@ describe('battleTrace (#1197)', () => {
       .filter((x) => x.k === 'b.act' && (x.d as { a: number[] }).a[0] === 0)
       .map((x) => (x.d as { a: number[] }).a[1])
     expect(actors).toEqual([1, 0, 2])
-    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const b = closedBattles()[0]
     const r = replayBattle(b)
     expect(firstMismatch(b.expected, r.produced)).toBeNull()
     expect(
@@ -294,7 +324,7 @@ describe('battleTrace (#1197)', () => {
     })
     const t = attachBattleTrace(e)!
     t.switched({ from: 0, to: 1 })
-    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const b = closedBattles()[0]
     const seen: unknown[] = []
     replayBattle(b, { switchActor: (_e, d) => seen.push([d.from, d.to]) })
     expect(seen).toEqual([[0, 1]])
@@ -307,15 +337,59 @@ describe('battleTrace (#1197)', () => {
       [ent('e0', { hp: 150, maxHp: 150, agi: 6 })],
       { atb: { mode: 'active', initialGauges: { party: [700.4, 1000], enemies: [399.6] } } }
     )
-    attachBattleTrace(e)
+    attachTraced(e)
     let guard = 0
     while (!e.isOver() && guard++ < 4000) {
       e.tick(16.7)
       if (e.getCurrentActorIndex() >= 0) e.selectAttack()
     }
-    const b = extractBattles(JSON.parse(JSON.stringify(traceDump())))[0]
+    const b = closedBattles()[0]
     expect((b.start.d as { atb: { g: number[][] } }).atb.g).toEqual([[700.4, 1000], [399.6]])
     const r = replayBattle(b)
     expect(firstMismatch(b.expected, r.produced)).toBeNull()
+  })
+
+  it('再現: 乱数の種を変えても（notifyBlocked / セーブ再開 / 通常の戦い）、記録と再実行が一致する（#1203）', () => {
+    const scenarios: Array<(spell: typeof SPELL) => BattleEngine> = [
+      () => {
+        const e = new BattleEngine([ent('p0')], [ent('e0', { hp: 90, maxHp: 90 })], { atb: {} })
+        attachTraced(e)
+        while (e.getCurrentActorIndex() < 0) e.tick(100)
+        e.notifyBlocked('つかえない')
+        e.selectAttack()
+        for (let i = 0; i < 300 && !e.isOver(); i++) e.tick(100)
+        return e
+      },
+      () => {
+        const e = new BattleEngine(
+          [ent('p0', { agi: 3 }), ent('p1', { agi: 9 })],
+          [ent('e0', { hp: 120, maxHp: 120, agi: 6 })],
+          {
+            atb: { initialGauges: { party: [700, 1000], enemies: [400] } },
+            restore: { atbQueue: [1] },
+          }
+        )
+        attachTraced(e)
+        playOut(e)
+        return e
+      },
+    ]
+    for (let n = 1; n <= 60; n++) {
+      // 種ごとに乱数列が変わる（種は Math.random から作られる）
+      const r = (Math.imul(n, 2654435761) >>> 0) / 4294967296
+      for (const make of scenarios) {
+        resetTraceForTest()
+        attached.length = 0
+        configureTrace(true, { storage: null })
+        vi.mocked(Math.random).mockReturnValue(r)
+        make(SPELL)
+        const b = closedBattles()[0]
+        const res = replayBattle(b, { spell: () => SPELL })
+        expect(
+          firstMismatch(b.expected, res.produced),
+          `n=${n} seed=${(b.start.d as { seed: number }).seed}`
+        ).toBeNull()
+      }
+    }
   })
 })
