@@ -4,7 +4,7 @@ import { createFieldSoundPlayer, type FieldSound } from './fieldSounds'
  * 計算は game/fieldWalk.ts と ./config.ts の純粋関数に任せ、ここは DOM と PixiJS の配線だけを持つ。
  * DOM・URL・セーブ名は全て `opts` で受ける（開発ページの起動は ./main.ts）。
  */
-import { Application, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
+import { Application, Assets, Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { buildFieldComposite } from './fieldComposite'
 import { baseBackEdgeParams } from '../game/spriteStyle'
 import { createFieldStands, createNpcStand, type FieldAcrylicFigure } from './acrylicFigure'
@@ -142,6 +142,7 @@ import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
+import { collectBattlePreloadUrls, firstAutoBattleId, preloadBattleImages } from './battlePreload'
 import {
   baseConfigOf,
   carryOverBattleResult,
@@ -445,6 +446,8 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     setResumeNotice(`セーブの一部を反映できませんでした\n${resumed.warnings.join('\n')}`)
   /** 再開の開始シーン・位置・向き（セーブに現在地が無ければ設定の開始位置） */
   const startSceneId = resumed?.field?.sceneId ?? config.startScene
+  /** セーブから再開した直後の最初の場面だけ、auto を起こさない（セーブの `field.fireAuto` があれば起こす #1155）。冒頭の戦闘の先読み (#1219) 用。下の `resumedStart` の初期値と同じ式（static test が原文を固定しているので、片方を変えたら両方直す） */
+  const resumedAutoSuppressed = !!resumed && !resumed.field?.fireAuto
   const startPoint = resumed?.field ? { x: resumed.field.x, y: resumed.field.y } : config.start
   const cache = new Map<string, Promise<LoadedScene>>()
   const ensureScene = (id: string): Promise<LoadedScene> => {
@@ -461,30 +464,40 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   // 歩行スプライト（向き×3コマ）。斜め 4 方向 (#811) は、自前の画像か mirrorOf で 4 つ揃ったときだけ使う
   const loadFrames = async (urls: readonly string[]) =>
     Promise.all(urls.map(async (u) => Texture.from(await loadBitmap(u))))
-  const walkTex = {} as Partial<Record<Facing8, Texture[]>>
-  for (const f of FACINGS) walkTex[f] = await loadFrames(config.player.sprites[f])
-  for (const f of DIAGONAL_FACINGS) {
-    const own = config.player.sprites[f]
-    if (own) walkTex[f] = await loadFrames(own)
-  }
-  /** 左右反転して描く向き (#811)。反転元の画像を共有する */
-  const flipped = new Set<Facing8>()
-  for (const f of DIAGONAL_FACINGS) {
-    const src = config.player.mirrorOf[f]
-    if (src) {
-      walkTex[f] = walkTex[src]
-      flipped.add(f)
-    }
-  }
-  const diagonalWalk = DIAGONAL_FACINGS.every((f) => walkTex[f])
+
+  // ---- 起動時の素材読み込み (#1219) ----
+  // 互いに依存しない素材（歩行絵・同行者・NPC・感情吹き出し・脚本・開始場面・描画モジュール）は同時に読み始める
+  // （前は 1 つずつ待っていて、本番では「読み込み中...」が約 9 秒続いた）。
+  // 失敗の扱いは従来と同じ: 下の `allSettled` のあと、**従来の読み込み順で最初に失敗したもの**を投げる（NPC・感情吹き出しの絵は従来どおり警告して省く）
+  const pWalk = (async () => {
+    const tex = {} as Partial<Record<Facing8, Texture[]>>
+    await Promise.all([
+      ...FACINGS.map(async (f) => {
+        tex[f] = await loadFrames(config.player.sprites[f])
+      }),
+      ...DIAGONAL_FACINGS.map(async (f) => {
+        const own = config.player.sprites[f]
+        if (own) tex[f] = await loadFrames(own)
+      }),
+    ])
+    return tex
+  })()
   // 条件付き通行の同行者 (#862)。歩行絵のスプライトで出す（`spriteStyle: "acrylic"` のときは足元にアクスタの部品を付ける）
-  const companionTex = {} as Partial<Record<Facing, Texture[]>>
-  if (config.companion)
-    for (const f of FACINGS) companionTex[f] = await loadFrames(config.companion.sprites[f])
+  const pCompanion = (async () => {
+    const tex = {} as Partial<Record<Facing, Texture[]>>
+    const comp = config.companion
+    if (comp)
+      await Promise.all(
+        FACINGS.map(async (f) => {
+          tex[f] = await loadFrames(comp.sprites[f])
+        })
+      )
+    return tex
+  })()
 
   // NPC (#841)。シーンごとに立ち絵を先に読む。読めない NPC は警告して省く（フィールドは止めない）
   const sceneNpcs = new Map<string, NpcRuntime[]>()
-  await Promise.all(
+  const pNpcs = Promise.all(
     Object.entries(config.scenes).map(async ([sid, sc]) => {
       const list: NpcRuntime[] = []
       for (const def of sc.npcs ?? []) {
@@ -521,13 +534,100 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
   const currentNpcs = (): NpcRuntime[] => sceneNpcs.get(sceneId) ?? []
 
   // 感情吹き出し (#937)。宣言した絵を先に読む。読めない種類は警告して省く（フィールドは止めない）
-  const emotionSheets = await loadEmotionSheets(config, (url) => fetch(url))
+  const emotionTextures = new Map<string, Texture | null>()
+  const pEmotion = (async () => {
+    const sheets = await loadEmotionSheets(config, (url) => fetch(url))
+    await Promise.all(
+      [...new Set(Object.values(sheets ?? {}).map((sheet) => sheet.image))].map(async (image) => {
+        try {
+          emotionTextures.set(image, Texture.from(await loadBitmap(image)))
+        } catch (e) {
+          console.warn(
+            `[field] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
+          )
+          emotionTextures.set(image, null)
+        }
+      })
+    )
+    return sheets
+  })()
   let battleScripts: Record<string, BattleScriptDef> | undefined = opts.battleScripts
-  const scriptEvents = await pickScriptEvents(opts.scriptEvents, async () => {
+  const pScript = pickScriptEvents(opts.scriptEvents, async () => {
     const loaded = await loadNpcScript(config)
     battleScripts ??= loaded?.battleScripts
     return loaded?.events
   })
+  // 開始場面（背景・当たり判定）
+  const pScene = ensureScene(startSceneId)
+  // 描画モジュール（PixiJS の WebGLRenderer ほか）の取得は、開始場面の大きさが分かる前から始める。
+  // 最初は仮の大きさで作り、素材がそろったあと下で本来の大きさ・解像度へ `resize` する（canvas はまだ DOM に付けない）
+  const app = new Application()
+  const pApp = app.init({
+    width: 1,
+    height: 1,
+    background: 0x000000,
+    antialias: false,
+    autoDensity: true,
+  })
+  // 冒頭の戦闘の素材の先読み (#1219)。脚本が読めたら、開始場面に入ってすぐ戦闘になる作品だけ、
+  // フィールドを見せている間に戦闘の背景・敵・味方の絵を読んでおく（失敗しても何も起きない。戦闘が自分で読み直す）
+  void pScript
+    .then((events) => {
+      const id = firstAutoBattleId({
+        sceneId: startSceneId,
+        triggers: config.scenes[startSceneId].triggers ?? [],
+        events,
+        resumedStart: resumedAutoSuppressed,
+      })
+      const def =
+        id !== undefined && battleScripts && hasOwn(battleScripts, id)
+          ? battleScripts[id]
+          : undefined
+      if (!def) return
+      const urls = collectBattlePreloadUrls({
+        def,
+        monsters: config.monsters,
+        party: resumed ? resumed.party : config.party,
+        background: resolveBattleBackground(config.scenes[startSceneId], config.battle.background),
+        effectImages: Object.values(config.battle.effects ?? {}).flatMap((e) =>
+          e ? [e.image] : []
+        ),
+        uiImages: [config.ui?.handImage, config.ui?.selectMarkImage],
+      })
+      return preloadBattleImages(urls, (u) => Assets.load(u))
+    })
+    .catch(() => {}) // 先読みは最適化だけ。脚本の失敗は下の join が本来どおり扱う
+  const [rWalk, rCompanion, , rEmotion, rScript, rScene, rApp] = await Promise.allSettled([
+    pWalk,
+    pCompanion,
+    pNpcs,
+    pEmotion,
+    pScript,
+    pScene,
+    pApp,
+  ])
+  for (const r of [rWalk, rCompanion, rEmotion, rScript, rScene, rApp]) {
+    if (r.status === 'rejected') {
+      // 先に作った描画器を残さない（canvas は未接続）
+      if (rApp.status === 'fulfilled') app.destroy(true, { children: true })
+      throw r.reason
+    }
+  }
+  const walkTex = (rWalk as PromiseFulfilledResult<Partial<Record<Facing8, Texture[]>>>).value
+  const companionTex = (rCompanion as PromiseFulfilledResult<Partial<Record<Facing, Texture[]>>>)
+    .value
+  const emotionSheets = (rEmotion as PromiseFulfilledResult<Awaited<typeof pEmotion>>).value
+  const scriptEvents = (rScript as PromiseFulfilledResult<Awaited<typeof pScript>>).value
+  /** 左右反転して描く向き (#811)。反転元の画像を共有する */
+  const flipped = new Set<Facing8>()
+  for (const f of DIAGONAL_FACINGS) {
+    const src = config.player.mirrorOf[f]
+    if (src) {
+      walkTex[f] = walkTex[src]
+      flipped.add(f)
+    }
+  }
+  const diagonalWalk = DIAGONAL_FACINGS.every((f) => walkTex[f])
   // scene と脚本の照合は起動時に 1 回だけ（話しかけるたびに同じ警告を出さない）
   {
     const scriptWarnings = checkNpcScripts(
@@ -547,36 +647,18 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     if (scriptWarnings.length > 0)
       showError([configNotice(config), ...scriptWarnings].filter(Boolean).join('\n'))
   }
-  const emotionTextures = new Map<string, Texture | null>()
-  await Promise.all(
-    [...new Set(Object.values(emotionSheets ?? {}).map((sheet) => sheet.image))].map(
-      async (image) => {
-        try {
-          emotionTextures.set(image, Texture.from(await loadBitmap(image)))
-        } catch (e) {
-          console.warn(
-            `[field] 感情吹き出しの画像を読めません（その種類は出しません）: ${e instanceof Error ? e.message : String(e)}`
-          )
-          emotionTextures.set(image, null)
-        }
-      }
-    )
-  )
   const emotionLayer = emotionSheets ? new FieldEmotionLayer(emotionSheets, emotionTextures) : null
 
-  let scene = await ensureScene(startSceneId)
+  let scene = (rScene as PromiseFulfilledResult<LoadedScene>).value
   let sceneId = startSceneId
 
-  const app = new Application()
-  await app.init({
-    width: scene.mask.width,
-    height: scene.mask.height,
-    background: 0x000000,
-    antialias: false,
-    // #53: 高 DPR で canvas が CSS 拡大されてぼやけないよう、描画解像度を表示密度に合わせる（上限あり。起動時の DPR・起動シーンの大きさで固定）
-    resolution: fieldRenderResolution(window.devicePixelRatio, scene.mask.width, scene.mask.height),
-    autoDensity: true,
-  })
+  // 仮の大きさで作った描画器を、開始場面の大きさ・表示密度に合わせる
+  // #53: 高 DPR で canvas が CSS 拡大されてぼやけないよう、描画解像度を表示密度に合わせる（上限あり。起動時の DPR・起動シーンの大きさで固定）
+  app.renderer.resize(
+    scene.mask.width,
+    scene.mask.height,
+    fieldRenderResolution(window.devicePixelRatio, scene.mask.width, scene.mask.height)
+  )
   mount.appendChild(app.canvas as HTMLCanvasElement)
 
   // 窓の外の流れる景色 (#864): 背景より奥。背景の透明な部分から見える
