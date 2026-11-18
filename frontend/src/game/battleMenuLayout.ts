@@ -44,6 +44,25 @@ export const HAND_PIXEL = 2
 export const HAND_WIDTH = HAND_BITMAP[0].length * HAND_PIXEL
 export const HAND_HEIGHT = HAND_BITMAP.length * HAND_PIXEL
 
+/**
+ * 指の先（右向きの手で最も右へ伸びる行）の縦の中心を、手の高さに対する割合で表す（0〜1）。
+ * ビットマップの形から導く（右端の列に塗りがある行の中央。現行の絵では 2〜3 行目＝0.25）。
+ * 手の枠の中心（0.5）より上にあるため、枠の中心を文字の縦中心に置くと指が文字より上に見える (#1188)
+ */
+export const HAND_FINGER_Y_RATIO: number = (() => {
+  const w = Math.max(...HAND_BITMAP.map((r) => r.lastIndexOf('X')))
+  const rows = HAND_BITMAP.map((r, i) => (r.lastIndexOf('X') === w ? i : -1)).filter((i) => i >= 0)
+  return (rows[0] + rows[rows.length - 1] + 1) / 2 / HAND_BITMAP.length
+})()
+
+/**
+ * 指の先が `textCenterY`（文字の縦中心）の真横に来る手の枠の上端 y。
+ * ずらし量 = `height * (0.5 - HAND_FINGER_Y_RATIO)`（枠の中心合わせより下へ。手の高さ＝文字の大きさに追従する）
+ */
+export function handTopForFingerAt(textCenterY: number, height: number): number {
+  return textCenterY - height * HAND_FINGER_Y_RATIO
+}
+
 export type HandFacing = 'left' | 'right'
 
 /** 手の左上と向き。幅・高さは `HAND_WIDTH` / `HAND_HEIGHT` */

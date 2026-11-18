@@ -20,6 +20,8 @@ import {
 import {
   HAND_BITMAP,
   HAND_HEIGHT,
+  HAND_FINGER_Y_RATIO,
+  handTopForFingerAt,
   HAND_PIXEL,
   HAND_WIDTH,
   MENU_COMMAND_OVERHANG,
@@ -117,6 +119,27 @@ describe('手のドット絵', () => {
       expect(c.x).toBeGreaterThanOrEqual(0)
       expect(c.x + HAND_PIXEL).toBeLessThanOrEqual(HAND_WIDTH)
       expect(c.y + HAND_PIXEL).toBeLessThanOrEqual(HAND_HEIGHT)
+    }
+  })
+})
+
+describe('手の指の縦位置 (#1188)', () => {
+  it('指の先の行は、ビットマップの最も右へ伸びる行の中央（枠の中心より上）', () => {
+    const tip = handCells('right').filter((c) => c.x === (HAND_BITMAP[0].length - 1) * HAND_PIXEL)
+    const mid =
+      (Math.min(...tip.map((c) => c.y)) + Math.max(...tip.map((c) => c.y)) + HAND_PIXEL) / 2
+    expect(HAND_FINGER_Y_RATIO).toBeCloseTo(mid / HAND_HEIGHT, 10)
+    expect(HAND_FINGER_Y_RATIO).toBeLessThan(0.5)
+  })
+
+  it('指の先の縦位置が文字の縦中心と一致する（手の高さに比例してずれ、拡縮に追従）', () => {
+    for (const h of [10, 16, 24, 48.5, 100]) {
+      for (const cy of [0, 12, 300.25]) {
+        const top = handTopForFingerAt(cy, h)
+        expect(top + h * HAND_FINGER_Y_RATIO).toBeCloseTo(cy, 10)
+        // 枠の中心合わせ（従来）より、ちょうど h * (0.5 - ratio) だけ下
+        expect(top - (cy - h / 2)).toBeCloseTo(h * (0.5 - HAND_FINGER_Y_RATIO), 10)
+      }
     }
   })
 })

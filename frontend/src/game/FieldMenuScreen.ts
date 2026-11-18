@@ -8,6 +8,7 @@
  */
 import { Container, Graphics, Rectangle, Sprite, Text as PixiText, type Texture } from 'pixi.js'
 import { FieldAcrylicFigure } from '../field/acrylicFigure'
+import { handTopForFingerAt } from './battleMenuLayout'
 import { createHandCursor } from './HandCursor'
 import {
   CLOSED_MENU,
@@ -1098,9 +1099,15 @@ export class FieldMenuScreen extends Container {
     return t
   }
 
-  /** 手の形カーソル (#744・#1067)。戦闘の手と同じ共通部品（右向き）を行の高さに合わせて拡大する。画像があれば画像、無ければドット絵 */
+  /** 手の形カーソル (#744・#1067)。戦闘の手と同じ共通部品（右向き）を行の高さに合わせて拡大する。画像があれば画像、無ければドット絵。`cy` は文字の縦中心で、指の先をそこへ合わせる (#1188) */
   private hand(x: number, cy: number, height: number): Container {
-    return createHandCursor(x, cy - height / 2, height, 'right', this.data?.handTexture ?? null)
+    return createHandCursor(
+      x,
+      handTopForFingerAt(cy, height),
+      height,
+      'right',
+      this.data?.handTexture ?? null
+    )
   }
 
   override destroy(options?: Parameters<Container['destroy']>[0]): void {
