@@ -21,3 +21,11 @@ export function settleStartup(
   }
   return { failed: false }
 }
+
+/**
+ * 並べた順（従来の直列の読み込み順）で最初の失敗の理由を投げる。失敗が無ければ何もしない。
+ * 同じ種類の素材を向きごとなどに並列で読むとき、複数失敗しても時間順でなく並べた順で報告するために使う
+ */
+export function firstRejection(results: readonly PromiseSettledResult<unknown>[]): void {
+  for (const r of results) if (r.status === 'rejected') throw r.reason
+}

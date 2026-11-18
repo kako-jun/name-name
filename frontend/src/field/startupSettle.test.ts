@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { settleStartup } from './startupSettle'
+import { firstRejection, settleStartup } from './startupSettle'
 
 const ok = (value: unknown = 1): PromiseSettledResult<unknown> => ({ status: 'fulfilled', value })
 const ng = (reason: unknown): PromiseSettledResult<unknown> => ({ status: 'rejected', reason })
@@ -27,5 +27,17 @@ describe('settleStartup: 並列読み込みの失敗の扱い', () => {
       reason: 'asset',
       destroyApp: false,
     })
+  })
+})
+
+describe('firstRejection: 向きごとなどの並列読み込みの失敗', () => {
+  it('失敗が無ければ何も投げない', () => {
+    expect(() => firstRejection([ok(), ok()])).not.toThrow()
+  })
+  it('複数失敗しても、並べた順で最初の失敗を投げる（先に失敗した方ではない）', () => {
+    const up = new Error('up')
+    const down = new Error('down')
+    // 時間順なら down が先に失敗したが、向きの順では up が先
+    expect(() => firstRejection([ng(up), ok(), ng(down)])).toThrow(up)
   })
 })

@@ -142,7 +142,7 @@ import { buildBattleMenu } from './battleMenu'
 import { fieldRenderResolution } from './renderResolution'
 import { BattleContain } from './battleContain'
 import { buildBattleEngineOptions, buildBattleScreenOptions } from './battleOptions'
-import { settleStartup } from './startupSettle'
+import { firstRejection, settleStartup } from './startupSettle'
 import { collectBattlePreloadUrls, firstAutoBattleId, preloadBattleImages } from './battlePreload'
 import {
   baseConfigOf,
@@ -482,8 +482,7 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
         if (own) tex[f] = await loadFrames(own)
       }),
     ]
-    const bad = (await Promise.allSettled(jobs)).find((r) => r.status === 'rejected')
-    if (bad) throw (bad as PromiseRejectedResult).reason
+    firstRejection(await Promise.allSettled(jobs))
     return tex
   })()
   // 条件付き通行の同行者 (#862)。歩行絵のスプライトで出す（`spriteStyle: "acrylic"` のときは足元にアクスタの部品を付ける）
@@ -491,10 +490,12 @@ export async function startFieldGame(opts: StartFieldGameOptions): Promise<() =>
     const tex = {} as Partial<Record<Facing, Texture[]>>
     const comp = config.companion
     if (comp)
-      await Promise.all(
-        FACINGS.map(async (f) => {
-          tex[f] = await loadFrames(comp.sprites[f])
-        })
+      firstRejection(
+        await Promise.allSettled(
+          FACINGS.map(async (f) => {
+            tex[f] = await loadFrames(comp.sprites[f])
+          })
+        )
       )
     return tex
   })()
