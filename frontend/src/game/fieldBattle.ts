@@ -112,6 +112,8 @@ export interface FieldBattleSettings {
   textOverflow: 'ellipsis' | 'scroll'
   /** `battle_atb_switch` (#1195)。`off`（既定）/ `on` */
   atbSwitch: 'on' | 'off'
+  /** `battle_target_cursor` (#1189)。`off`（既定）/ `ff` */
+  targetCursor: 'off' | 'ff'
   /** `battle_weak_threshold` (#1194)。undefined = 瀕死ポーズを出さない（従来） */
   weakThreshold: number | undefined
   /** `battle_command_layout` (#204) */
@@ -149,6 +151,7 @@ export const DEFAULT_FIELD_BATTLE_SETTINGS: Readonly<FieldBattleSettings> = {
   partyLayout: 'default',
   textOverflow: 'ellipsis',
   atbSwitch: 'off',
+  targetCursor: 'off',
   weakThreshold: undefined,
   commandLayout: 'grid',
   commandLabels: undefined,
@@ -183,6 +186,7 @@ export function readFieldBattleSettings(gameData: RPGProject): FieldBattleSettin
     partyLayout: gameData.battlePartyLayout ?? d.partyLayout,
     textOverflow: gameData.battleTextOverflow ?? d.textOverflow,
     atbSwitch: gameData.battleAtbSwitch ?? d.atbSwitch,
+    targetCursor: gameData.battleTargetCursor ?? d.targetCursor,
     weakThreshold: gameData.battleWeakThreshold,
     commandLayout: gameData.battleCommandLayout ?? d.commandLayout,
     commandLabels: gameData.battleCommandLabels,
@@ -695,6 +699,7 @@ export function openFieldBattle(args: OpenFieldBattleArgs): BattleScreen {
     ...(settings.partyLayout !== 'default' ? { partyLayout: settings.partyLayout } : {}),
     ...(settings.textOverflow !== 'ellipsis' ? { textOverflow: settings.textOverflow } : {}),
     ...(settings.atbSwitch === 'on' ? { atbSwitch: true } : {}),
+    ...(settings.targetCursor === 'ff' ? { targetCursor: 'ff' as const } : {}),
     ...(settings.weakThreshold !== undefined ? { weakThreshold: settings.weakThreshold } : {}),
     commandLayout: settings.commandLayout,
     commandLabels: settings.commandLabels,

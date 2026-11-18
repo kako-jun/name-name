@@ -134,6 +134,10 @@ interface MenuMarquee {
   overflow: number
 }
 
+/** 敵名ウィンドウの対象の行の帯の色・濃さ (#1189)。文字が読める薄さの白 */
+export const TARGET_ROW_HIGHLIGHT = 0xffffff
+export const TARGET_ROW_HIGHLIGHT_ALPHA = 0.22
+
 export class BattleMenuLayer extends Container {
   private host: BattleMenuHost
   /** 入り切らない名前の横スクロール (#1183)。表示専用の時計（ゲームのティックと独立。`tickMarquee` で積む） */
@@ -465,6 +469,16 @@ export class BattleMenuLayer extends Container {
 
   private drawTarget(v: MenuTargetView): void {
     const layer = new Container()
+    // 敵名ウィンドウの対象の行の明るい帯 (#1189。FF ピクセルリマスターと同じ強調。タップは受けない)
+    if (v.highlights && v.highlights.length > 0) {
+      const band = new Graphics()
+      band.eventMode = 'none'
+      for (const r of v.highlights)
+        band
+          .rect(r.x, r.y, r.w, r.h)
+          .fill({ color: TARGET_ROW_HIGHLIGHT, alpha: TARGET_ROW_HIGHLIGHT_ALPHA })
+      layer.addChild(band)
+    }
     for (const h of v.hits) {
       const hit = new Container()
       hit.eventMode = 'static'

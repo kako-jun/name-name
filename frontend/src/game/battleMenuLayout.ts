@@ -8,6 +8,7 @@
  */
 import type { MenuRow, MenuStack, MenuContext, MenuKind, TargetSide } from './battleMenu'
 import { targetHands, targetScopeOf } from './battleMenu'
+import { enemyForListRow, enemyListCursorRows } from './battleTargetCursor'
 import { estimateTextWidth, fitLabel, SIDE_GAP, SIDE_PADDING, type Rect } from './battleLayout'
 
 export const MENU_ROW_HEIGHT = 28
@@ -106,6 +107,17 @@ export interface MenuGeometry {
    * 窓（`labelClipW`）でクリップしてゆっくり横スクロールさせる。窓の寸法は変えない（直交）
    */
   textOverflow?: 'ellipsis' | 'scroll'
+  /**
+   * 対象選択の出し方 (#1189)。`ff` は敵を指す手を敵の左から右向きに出す（FF4/5 SNES・ピクセルリマスターと同じ。味方は従来から左から右向き）。
+   * 未指定は従来どおり敵の右から左向き
+   */
+  targetCursor?: 'ff'
+  /**
+   * 敵名ウィンドウ（#954）の見えている行 (#1189)。`battle_target_cursor: ff` で窓が出ているときだけ BattleScreen が渡す。
+   * 敵を指す対象選択の間、指されている敵が入る行を明るい帯で強調し（FF ピクセルリマスターと同じ。行に手は出さない）、
+   * 行のタップでその行の敵を指す（敵の絵の手と同じ敵）。`rect` は行の帯、`members` はその行に入る生きている敵の index（`state.enemies` の並び）
+   */
+  enemyListRows?: ReadonlyArray<{ rect: Rect; members: readonly number[] }>
 }
 
 /** 一覧窓に同時に見える行数（最低 1） */
@@ -156,15 +168,20 @@ export function computeListWindowRect(g: MenuGeometry, rows: readonly MenuRow[])
   }
 }
 
-/** 手を `r` の隣に置く。敵は右側から左向き、味方は左側から右向き。画面内に収める */
+/**
+ * 手を `r` の隣に置く。敵は右側から左向き、味方は左側から右向き。画面内に収める。
+ * `fromLeft`（`battle_target_cursor: ff`。#1189）なら敵も左側から右向き（FF と同じく、手は常に右を指す）
+ */
 export function computeTargetHand(
   side: TargetSide,
   r: Rect,
   width: number,
-  height: number
+  height: number,
+  fromLeft = false
 ): HandPlacement {
-  const facing: HandFacing = side === 'enemy' ? 'left' : 'right'
-  const rawX = side === 'enemy' ? r.x + r.w + 2 : r.x - HAND_WIDTH - 2
+  const right = side === 'enemy' && !fromLeft
+  const facing: HandFacing = right ? 'left' : 'right'
+  const rawX = right ? r.x + r.w + 2 : r.x - HAND_WIDTH - 2
   const rawY = r.y + r.h / 2 - HAND_HEIGHT / 2
   return {
     x: Math.max(0, Math.min(rawX, width - HAND_WIDTH)),
@@ -211,6 +228,8 @@ export interface MenuTargetView {
   hands: HandPlacement[]
   /** タップで対象を選ぶ当たり判定 */
   hits: Array<{ side: TargetSide; index: number; rect: Rect }>
+  /** 敵名ウィンドウで強調する行の帯 (#1189。`battle_target_cursor: ff` のときだけ付く) */
+  highlights?: Rect[]
   /** 全体化できる呪文のときだけ付く (#895)。たんたい / ぜんたい の切り替え窓 */
   toggle?: MenuScopeToggleView
 }
@@ -283,9 +302,33 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
     const hands: HandPlacement[] = []
     for (const h of targetHands(w, ctx.party, ctx.enemies, ctx.actorIndex)) {
       const r = slotOf(h.side, h.index)
-      if (r) hands.push(computeTargetHand(h.side, r, g.width, g.height))
+      if (r) hands.push(computeTargetHand(h.side, r, g.width, g.height, g.targetCursor === 'ff'))
     }
     const hits: MenuTargetView['hits'] = []
+    // 敵名ウィンドウの行 (#1189): 指されている敵が入る行を強調し、行のタップでその行の敵を指す（絵の手と同じ敵）
+    const highlights: Rect[] = []
+    const listRows = g.enemyListRows
+    const enemySideScope =
+      (targetScopeOf(w) === 'single' && w.side === 'enemy' && !w.spec.revive) ||
+      (targetScopeOf(w) === 'all' && w.spec.side === 'enemy')
+    if (listRows && enemySideScope) {
+      const targets = targetHands(w, ctx.party, ctx.enemies, ctx.actorIndex)
+        .filter((h) => h.side === 'enemy')
+        .map((h) => h.index)
+      for (const row of enemyListCursorRows(
+        listRows.map((r) => r.members),
+        targets
+      ))
+        highlights.push(listRows[row].rect)
+      listRows.forEach((r, row) => {
+        const index = enemyForListRow(
+          listRows.map((x) => x.members),
+          row,
+          w.cursor
+        )
+        if (index >= 0) hits.push({ side: 'enemy', index, rect: r.rect })
+      })
+    }
     const candidates = (side: TargetSide, list: readonly { hp: number }[]) => {
       list.forEach((e, index) => {
         const r = slotOf(side, index)
@@ -305,7 +348,12 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
     }
     candidates('enemy', ctx.enemies)
     candidates('party', ctx.party)
-    const view: MenuTargetView = { type: 'target', hands, hits }
+    const view: MenuTargetView = {
+      type: 'target',
+      hands,
+      hits,
+      ...(highlights.length > 0 ? { highlights } : {}),
+    }
     if (w.spec.multiAllowed) {
       // 全体化の切り替え窓 (#895)。隠れた一覧窓と同じ位置・幅（行は 2 つ）に出し、手が今の状態の行を指す
       const labels = [

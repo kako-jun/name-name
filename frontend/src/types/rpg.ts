@@ -274,6 +274,8 @@ export interface RPGProject {
   trace?: 'on' | 'off'
   /** ATB で満タンの味方が複数のとき、味方のタップで入力キャラを切り替える (#1195)。frontmatter `battle_atb_switch:` 由来。未指定・不正値は `'off'`（従来）、`'on'` は切り替え可。`battle_atb: on` のときだけ効く */
   battleAtbSwitch?: 'on' | 'off'
+  /** 戦闘の対象選択・番の印の出し方 (#1189)。frontmatter `battle_target_cursor:` 由来。未指定・不正値は `'off'`（従来）、`'ff'` は FF の出し方 */
+  battleTargetCursor?: 'off' | 'ff'
   /** 味方の瀕死ポーズ（weak）に切り替える HP 割合の閾値 (#1194)。frontmatter `battle_weak_threshold:` 由来（0〜1）。未指定・不正値は undefined＝出さない（従来）。推奨は FF の 1/4 未満＝0.25 */
   battleWeakThreshold?: number
   /**
