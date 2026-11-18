@@ -318,6 +318,11 @@ export interface FieldConfig {
    */
   menuStatusLayout?: 'ff'
   /**
+   * フィールドメニューの経験値の表示 (#1186)。`menuExp: "on"` のとき true（左のパーティ枠に「次のレベルまで」を常に、ステータス画面に「けいけんち」「次のレベルまで」）。
+   * 未指定・`"off"` は undefined＝従来どおり何も足さない。経験値表を持たないキャラには出さない。他のキーとは独立。不正な値は警告して無視
+   */
+  menuExp?: true
+  /**
    * 内部トレースログ (#1197)。`trace: "on"` のとき true。未指定・`"off"` は undefined＝何も記録しない（従来どおり）。不正な値は警告して無視。他のキーとは独立
    */
   traceOn?: true
@@ -1099,6 +1104,12 @@ export function parseConfig(
         `menuStatusLayout は "line" か "ff": ${JSON.stringify(raw.menuStatusLayout)}（無視します）`
       )
   }
+  let menuExp: true | undefined
+  if (raw.menuExp !== undefined) {
+    if (raw.menuExp === 'on') menuExp = true
+    else if (raw.menuExp !== 'off')
+      warnings.push(`menuExp は "on" か "off": ${JSON.stringify(raw.menuExp)}（無視します）`)
+  }
   let traceOn: true | undefined
   if (raw.trace !== undefined) {
     if (raw.trace === 'on') traceOn = true
@@ -1310,6 +1321,7 @@ export function parseConfig(
       ...(dialogStyle ? { dialogStyle } : {}),
       ...(menuUseMessageOff ? { menuUseMessageOff } : {}),
       ...(menuStatusLayout ? { menuStatusLayout } : {}),
+      ...(menuExp ? { menuExp } : {}),
       ...(traceOn ? { traceOn } : {}),
       ...(dialogFontSize ? { dialogFontSize } : {}),
       ...(dialogWindowHeight !== undefined ? { dialogWindowHeight } : {}),

@@ -1047,6 +1047,19 @@ describe('buildFieldRaw: frontmatter の大小・空白と dialog_style', () => 
     expect(ok({}).raw).not.toHaveProperty('menuStatusLayout')
   })
 
+  it('field_menu_exp (#1186): on / off を渡し、不正は警告して無視する。status_layout とは独立', () => {
+    const on = ok({ frontmatter: { field_menu_exp: ' ON ' } })
+    expect(on.warnings).toEqual([])
+    expect(on.raw).toMatchObject({ menuExp: 'on' })
+    expect(on.raw).not.toHaveProperty('menuStatusLayout')
+    const bad = ok({ frontmatter: { field_menu_exp: 'yes' } })
+    expect(bad.warnings).toEqual([
+      'frontmatter の field_menu_exp は "on" / "off" のどれかにしてください: "yes"（無視します）',
+    ])
+    expect(bad.raw).not.toHaveProperty('menuExp')
+    expect(ok({}).raw).not.toHaveProperty('menuExp')
+  })
+
   it('dialog_font_size / dialog_window_height / dialog_name_style を raw の最上位に渡し、不正は警告して出さない (#1184)', () => {
     const r = ok({
       frontmatter: {

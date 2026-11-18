@@ -79,7 +79,7 @@ export type MemberDefLike = Pick<
 >
 
 /** 品の表示名: 定義の `name` → `[アイテム]` の名前 → id の順 */
-function displayName(
+export function displayName(
   cfg: GearShopConfig,
   names: Readonly<Record<string, string>>,
   id: string

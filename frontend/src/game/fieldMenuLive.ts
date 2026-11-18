@@ -13,8 +13,8 @@ import { invokeBuiltinItem, invokeBuiltinSpell } from './builtin'
 import type { FieldMenuItemDef } from './fieldMenu'
 import type { FieldMenuContentDef, MenuEntry, MenuTab, StatusRow } from './fieldMenuScreens'
 import { applyEffect, parseEffect, type BattleEntity, type EffectContext } from './spellDsl'
-import { buildAppStoreTabs, buildEquipContent, type GearMenuContext } from './gearMenu'
-import { hasOwn } from './ownProperty'
+import { buildAppStoreTabs, buildEquipContent, displayName, type GearMenuContext } from './gearMenu'
+import { hasOwn, safeAssign } from './ownProperty'
 import { spellsForMember, type LevelUpDef } from './levelUp'
 
 /** 実行時の RPG 状態（メニューが読む分） */
@@ -417,7 +417,13 @@ export function buildMagicByParty(rpg: LiveRpg): Record<string, MenuEntry[]> {
 /** ステータス画面に足す行。データのある項目だけ（そうび・わざ）。固有素質・想像の刃は人物ごとなので、定義側の `statusByParty` に書かれたものを足す */
 export function buildStatusRows(rpg: LiveRpg): Record<string, StatusRow[]> {
   const out: Record<string, StatusRow[]> = {}
-  const nameOf = (id: string): string => rpg.items.find((i) => i.id === id)?.name ?? id
+  // 品の表示名は gearShop の定義の `name` → `[アイテム]` の名前 → id の順（アプリストア・そうびと同じ。刀・防具は売り物の定義にだけ名前がある）
+  const itemNames: Record<string, string> = {}
+  for (const it of rpg.items) safeAssign(itemNames, it.id, it.name)
+  const nameOf = (id: string): string =>
+    rpg.gear
+      ? displayName(rpg.gear.cfg, itemNames, id)
+      : (rpg.items.find((i) => i.id === id)?.name ?? id)
   for (const m of rpg.party) {
     const rows: StatusRow[] = []
     const eq = hasOwn(rpg.equipment, m.id) ? rpg.equipment[m.id] : []

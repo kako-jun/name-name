@@ -1981,6 +1981,42 @@ describe('menuStatusLayout (#1191)', () => {
   })
 })
 
+describe('menuExp (#1186)', () => {
+  it('未指定・"off" は従来どおり（キーなし・警告なし）', () => {
+    const none = ok(mutated(() => {}))
+    expect('menuExp' in none).toBe(false)
+    const off = ok(
+      mutated((c) => {
+        c.menuExp = 'off'
+      })
+    )
+    expect('menuExp' in off).toBe(false)
+    expect(off.warnings).toBeUndefined()
+  })
+  it('"on" は menuExp: true。menuStatusLayout とは独立', () => {
+    const c = ok(
+      mutated((c) => {
+        c.menuExp = 'on'
+      })
+    )
+    expect(c.menuExp).toBe(true)
+    expect('menuStatusLayout' in c).toBe(false)
+    expect(c.warnings).toBeUndefined()
+  })
+  it('不正は警告して無視（従来どおり出さない）', () => {
+    for (const bad of ['yes', '', 1, null, true]) {
+      const c = ok(
+        mutated((c) => {
+          c.menuExp = bad
+        })
+      )
+      expect('menuExp' in c).toBe(false)
+      expect(c.warnings).toHaveLength(1)
+      expect(c.warnings?.[0]).toContain('menuExp')
+    }
+  })
+})
+
 describe('dialogStyle / dialogMsPerChar (#840)', () => {
   it('未指定はどちらのキーも警告も無し（従来と同一）', () => {
     const c = ok(mutated(() => {}))

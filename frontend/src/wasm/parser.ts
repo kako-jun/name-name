@@ -475,6 +475,8 @@ function normalizeDocument(doc: EventDocument): EventDocument {
     field_menu_use_message: nullIfEmpty(doc.field_menu_use_message),
     // フィールドメニューのステータス画面の配置 (#1191)。同上。
     field_menu_status_layout: nullIfEmpty(doc.field_menu_status_layout),
+    // フィールドメニューの経験値の表示 (#1186)。同上。
+    field_menu_exp: nullIfEmpty(doc.field_menu_exp),
     // 戦闘のエフェクト重ね設定 JSON のパス (#941)。同上。
     battle_effects: nullIfEmpty(doc.battle_effects),
     // 戦闘の奥行き (#747)。同上。ここの列挙漏れで wasm 経由だけ undefined になる事故に注意。

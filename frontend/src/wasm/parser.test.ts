@@ -2753,6 +2753,15 @@ describe('parseMarkdown + normalizeDocument: 敵のグリッド・サイズ・�
     expect(again.field_menu_status_layout).toBe('ff')
   })
 
+  it('field_menu_exp が doc に残り、省略・空値は null、往復で保たれる (#1186)', async () => {
+    const doc = await parseMarkdown(docWith(['field_menu_exp: on']))
+    expect(doc.field_menu_exp).toBe('on')
+    expect((await parseMarkdown(docWith([]))).field_menu_exp).toBeNull()
+    expect((await parseMarkdown(docWith(['field_menu_exp:']))).field_menu_exp).toBeNull()
+    const again = await parseMarkdown(await emitMarkdown(doc))
+    expect(again.field_menu_exp).toBe('on')
+  })
+
   it('field_menu_use_message が doc に残り、省略・空値は null、往復で保たれる (#1185)', async () => {
     const doc = await parseMarkdown(docWith(['field_menu_use_message: off']))
     expect(doc.field_menu_use_message).toBe('off')

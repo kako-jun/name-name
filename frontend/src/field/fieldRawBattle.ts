@@ -43,7 +43,7 @@ const UNSUPPORTED_KEYS = [
 export interface FrontmatterRaw {
   /** `raw.battle` に入れる分(`logicalSize` を含む) */
   battle: Raw
-  /** `raw` の最上位に入れる分(`dialogStyle` `spriteStyle` `emotionsUrl` `menuUseMessage` `menuStatusLayout`) */
+  /** `raw` の最上位に入れる分(`dialogStyle` `spriteStyle` `emotionsUrl` `menuUseMessage` `menuStatusLayout` `menuExp`) */
   top: Raw
 }
 
@@ -101,6 +101,9 @@ export function frontmatterRaw(
   // フィールドメニューのステータス画面の配置 (#1191)。line / ff。他のキーとは結合しない
   const menuStatusLayout = enumOf(doc, 'field_menu_status_layout', ['line', 'ff'], warnings)
   if (menuStatusLayout !== undefined) top.menuStatusLayout = menuStatusLayout
+  // フィールドメニューの経験値の表示 (#1186)。on / off。他のキーとは結合しない
+  const menuExp = enumOf(doc, 'field_menu_exp', ['on', 'off'], warnings)
+  if (menuExp !== undefined) top.menuExp = menuExp
   // 内部トレースログ (#1197)。on / off。他のキーとは結合しない
   const traceSetting = enumOf(doc, 'trace', ['on', 'off'], warnings)
   if (traceSetting !== undefined) top.trace = traceSetting
