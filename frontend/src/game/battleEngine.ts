@@ -56,7 +56,7 @@ import {
   resolveAffinityMulti,
 } from './affinity'
 import { invokeBuiltinSpell, invokeBuiltinItem } from './builtin'
-import { enemyRightEdges } from './enemyRow'
+import { enemyRightEdges, frontColumn } from './enemyRow'
 import type { EnemyGridSize } from './enemyGrid'
 import { isReviveEntry } from './battleMenu'
 import {
@@ -309,7 +309,7 @@ export interface BattleEngineOptions {
   }
   /**
    * 敵の最前列 (#896)。ユーザー向けの設定ではなく、エンジン内部のオプション。渡したときだけ、最前列でない敵への通常攻撃（近接物理）のダメージが半分になる（味方の後衛と同じ係数）。
-   * 最前列 = `grid` 上で占有セルの右端の列が最も右の列（戦闘開始時の配置で決まる。倒れても変わらない）。グリッドの位置が無い敵は軽減しない（`enemyRow.ts`）。
+   * 最前列 = その時点で生きている敵のうち、`grid` 上で占有セルの右端の列が最も右の列（動的。敵が倒れる・逃げると繰り上がる。配置は戦闘開始時に 1 回だけ引く）。グリッドの位置が無い敵は軽減しない（`enemyRow.ts`）。
    * `grid` は `BattleScreen` に渡すものと同じ（敵の `layout` から同じ配置を引く）。渡さない戦闘は従来どおり（乱数の消費順も変わらない）
    */
   enemyRow?: { grid?: EnemyGridSize }
@@ -385,8 +385,8 @@ export class BattleEngine {
   /** ATB ゲージの速さの倍率 (#880)。1 = 従来どおり */
   private atbSpeed = 1
   private skills: Record<string, SkillExecution>
-  /** 敵の最前列 (#896)。有効なときだけ Some。`edges` は敵ごとの占有セルの右端の列、`front` はその最大（戦闘開始時に 1 回配置して決める） */
-  private enemyRowRule: { edges: Map<BattleEntity, number>; front: number } | null = null
+  /** 敵の最前列 (#896)。有効なときだけ Some。`edges` は敵ごとの占有セルの右端の列（戦闘開始時に 1 回配置して決める）。最前列の列は動的で、ダメージ計算のたびに生きている敵から求める */
+  private enemyRowRule: { edges: Map<BattleEntity, number> } | null = null
   /** 見つからない特技 id の警告を出した印（1 戦闘に 1 度だけ） */
   private warnedSkills = new Set<string>()
   /** 状態の規則 (#870)。`statuses` を解釈したもの。空なら状態異常の処理は一切走らない（従来どおり） */
@@ -453,7 +453,7 @@ export class BattleEngine {
     if (opts.enemyRow) {
       const edges = enemyRightEdges(opts.enemyRow.grid, enemies)
       // 置けた敵が 0 体なら最前列が決まらず、軽減は効かない
-      if (edges.size > 0) this.enemyRowRule = { edges, front: Math.max(...edges.values()) }
+      if (edges.size > 0) this.enemyRowRule = { edges }
     }
     this.itemNames = opts.itemNames ?? {}
     this.currencyName = opts.currencyName || DEFAULT_CURRENCY_NAME
@@ -2572,7 +2572,9 @@ export class BattleEngine {
     const rule = this.enemyRowRule
     if (rule && this.state.enemies.includes(defender)) {
       const edge = rule.edges.get(defender)
-      const row = edge !== undefined && edge < rule.front ? 'back' : defender.row
+      // 最前列は動的: その時点で生きている（倒れても逃げてもいない）敵のうち、占有セルの右端の列が最も右の列。倒れたら繰り上がる
+      const front = frontColumn(rule.edges, (e) => e.hp > 0 && !this.isFledEnemy(e))
+      const row = edge !== undefined && edge < front ? 'back' : defender.row
       return computeRowAttackDamage(attacker, defender, this.rng, row)
     }
     return computeRowAttackDamage(attacker, defender, this.rng)
