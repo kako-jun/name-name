@@ -191,6 +191,7 @@ const fullHead = [
   'battle_presentation: ff',
   'window_style: ff-blue',
   'sprite_style: acrylic',
+  'sprite_style_base_back_edge: thin',
   'dialog_style: ff',
   'field_emotions: emo.json',
   'field_menu_use_message: off',
@@ -459,6 +460,8 @@ describe('全部入りの世界(実 wasm → parseConfig の回帰)', () => {
       spriteStyle: 'acrylic',
     })
     expect(c.spriteStyle).toBe('acrylic')
+    expect(c.spriteBaseBackEdge).toBe('thin')
+    expect(c.battle.spriteBaseBackEdge).toBe('thin')
     expect(c.dialogStyle).toBe('ff')
     expect(c.menuUseMessageOff).toBe(true)
     expect(c.menuStatusLayout).toBe('ff')

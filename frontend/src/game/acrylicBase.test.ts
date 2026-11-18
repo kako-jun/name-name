@@ -250,6 +250,17 @@ describe('台座の奥側の縁を薄くする (#1187)', () => {
       prev = f
     }
   })
+  it('backEdgeFactor: 最小値に達する位置（中心線から奥へ半径の 0.3）と、その手前の中間値を固定する', () => {
+    const a = 0.25
+    // 0.3 で最小値（倍率そのもの）に達し、それより奥でも同じ
+    expect(backEdgeFactor(-0.3, a)).toBeCloseTo(a, 9)
+    expect(backEdgeFactor(-0.6, a)).toBeCloseTo(a, 9)
+    // 中間は倍率と 1 の間に入る（smoothstep の中点は半分）
+    const mid = backEdgeFactor(-0.15, a)
+    expect(mid).toBeGreaterThan(a)
+    expect(mid).toBeLessThan(1)
+    expect(mid).toBeCloseTo((1 + a) / 2, 9)
+  })
   const ring = (back: number) =>
     renderAcrylicBase(BASE_TEXTURE_WIDTH, { ...P, shadowAlpha: 0, baseBackEdgeAlpha: back })
   const at = (r: ReturnType<typeof ring>, x: number, y: number): number =>
