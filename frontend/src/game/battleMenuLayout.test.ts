@@ -294,7 +294,7 @@ describe('computeListWindowRect', () => {
         if (v.type !== 'list') throw new Error()
         return v
       }
-      const NAME = 'なまえななもじだよ'
+      const NAME = 'なまえななもじ'
       const mk = (count: number): BattleItemEntry[] => [
         { id: 'i', name: NAME, effect: 'heal 5..5', count },
       ]
