@@ -3838,11 +3838,12 @@ export class BattleScreen extends Container {
       )
       // 倒れて薄くなった使い手（死亡時の行動 #837）は前へ踏み出さない
       const downed = out.downProgress > 0
-      // 自己モザイクが有効な敵の通常攻撃は、踏み出さず攻撃ポーズにも替えない (sit-by-me #63/#64)。
-      // 通知は自己モザイク (enemyAttackMosaicSize) が担う。無効（default）なら従来どおり踏み出して攻撃ポーズ
-      const selfMosaic = side === 'enemy' && ev.kind === 'attack' && this.enemySelfMosaicEnabled()
-      const forward = downed || selfMosaic ? 0 : a.forward
-      out = { ...out, forward, pose: downed || selfMosaic ? out.pose : a.pose }
+      // 自己モザイクが有効な敵は踏み出さない（通常攻撃もわざ・呪文・アイテムも）。通常攻撃は攻撃ポーズにも替えない (sit-by-me #63/#64)。
+      // 通知は自己モザイク (enemyAttackMosaicSize) が担う。無効（default）なら従来どおり踏み出す (#1222)
+      const mosaicEnemy = side === 'enemy' && this.enemySelfMosaicEnabled()
+      const poseKept = mosaicEnemy && ev.kind === 'attack'
+      const forward = downed || mosaicEnemy ? 0 : a.forward
+      out = { ...out, forward, pose: downed || poseKept ? out.pose : a.pose }
     }
     // のけぞりは、すでに命中した最後の damage ヒットから測る（複数ヒット #879 はヒットごとに再トリガされる）
     const tl = this.timelineOf(ev)

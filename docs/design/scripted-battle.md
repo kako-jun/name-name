@@ -42,7 +42,7 @@
 ## 4. 実装の要点（保守向けの記録）
 
 - `battleScript.ts`: `parseBattleScript`（解釈・警告・`固定` の展開）/ `nextScriptAction`（宣言順に未発動で成立する 1 つ）/ `computeFloors`（条件が真の `下限` から者ごとの下限）/ `resultFor`。
-- `battleEngine.ts`: `scriptForce`（強制。対象の生存を見て HP/MP/状態を書き換え、HP0 なら `resolveDeaths` と `pruneDownedParty` に流す）。`scriptStep` は `checkEnd`（ATB の判定・非 ATB の味方の行動後）と `runEnemyTurn` の終わり（ターン計上のあと）、コンストラクタ（脚本のある戦闘だけ開始時の判定）で呼ぶ。`hpFloor` は `applyDamageToHp` / `knockOutHp`（即死・builtin・状態の満了の共通口）/ 負の回復が尊重する。ATB の tick で、並べる前にゲージが満タンのままかを見る（同時に満タンになった味方を先に敵が倒し脚本が復活させたとき、ゲージ 0 のままコマンド待ちに並ぶのを防ぐ。復活が無い戦闘は従来と同一）。
+- `battleEngine.ts`: `scriptForce`（強制。対象の生存を見て HP/MP/状態を書き換え、HP0 なら `resolveDeaths` と `pruneDownedParty` に流す）。`scriptStep` は `checkEnd`（ATB の判定・非 ATB の味方の行動後）と `runEnemyTurn` の終わり（ターン計上のあと）、コンストラクタ（脚本のある戦闘だけ開始時の判定）で呼ぶ。`hpFloor` は `applyDamageToHp` / `knockOutHp`（即死・builtin・状態の満了の共通口）/ 負の回復が尊重する。`hpFloor` は戦闘中だけの状態で、`carryOverBattleResult` が持ち越す味方から外す（残すと次の通常戦闘でも HP が下限から下がらない #1222）。ATB の tick で、並べる前にゲージが満タンのままかを見る（同時に満タンになった味方を先に敵が倒し脚本が復活させたとき、ゲージ 0 のままコマンド待ちに並ぶのを防ぐ。復活が無い戦闘は従来と同一）。
 - `fieldBattle.ts`: `buildScriptedBattle`（宣言から敵・初期編成・脚本・参戦者を組み立てる純粋関数）/ `openFieldBattle` の `scripted`。`TopDownRenderer.startScriptedBattle` は結果で解決する Promise を返し、`EventRunner` の `Battle` コマンドが待つ。`load()` / `destroy()` の強制終了では解決せずイベントごと捨てる。
 - 敵の組み立ては `encounter.ts` の `buildEnemyEntities`（`rollEncounter` と共有）。
 

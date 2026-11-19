@@ -644,17 +644,26 @@ export function sampleActor(
   if (kind === 'notice' || kind === 'status') return { forward: 0, pose: 'idle' }
   if (kind !== 'attack') {
     // 呪文の構えは cast、特技・わざ・召喚獣は special（無ければ cast に落ちる）、アイテムは ready（cast が無ければ ready、さらに idle に落ちる）
-    return {
-      forward: 0,
-      pose:
-        time < T.castMs
-          ? kind === 'spell'
-            ? 'cast'
-            : kind === 'skill'
-              ? 'special'
-              : 'ready'
-          : 'idle',
+    const pose: BattlePose =
+      time < T.castMs
+        ? kind === 'spell'
+          ? 'cast'
+          : kind === 'skill'
+            ? 'special'
+            : 'ready'
+        : 'idle'
+    // FF 式: 前へ踏み出し → 構える → 効果が着く間（castHitMs）まで前に出たまま → castMs までに戻る (#1222)。
+    // 行動の長さ・命中の時刻は変えない（踏み出しは castHitMs までに収める）
+    let forward = 0
+    if (time < T.castHitMs) {
+      const stepMs = Math.min(T.attackStepMs, T.castHitMs)
+      forward =
+        time < stepMs ? T.attackStepDistance * easeOutQuad(time / stepMs) : T.attackStepDistance
+    } else if (time < T.castMs) {
+      const ease = T.attackReturnEase === 'outQuad' ? easeOutQuad : easeInOutQuad
+      forward = T.attackStepDistance * (1 - ease((time - T.castHitMs) / (T.castMs - T.castHitMs)))
     }
+    return { forward, pose }
   }
   const windup = available['swing-windup'] !== undefined
   const followthrough = available['swing-followthrough'] !== undefined
