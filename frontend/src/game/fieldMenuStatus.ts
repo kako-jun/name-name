@@ -98,7 +98,7 @@ export function statusArea(primary: Rect, baseH: number): Rect {
 const num = (v: number | undefined): string => (v === undefined ? '--' : String(v))
 
 /** 文字数から見積もる幅（全角 = 1 em、半角 = 0.55 em） */
-function emWidth(s: string): number {
+export function emWidth(s: string): number {
   let w = 0
   for (const ch of s) w += ch.charCodeAt(0) < 0x100 ? 0.55 : 1
   return w
