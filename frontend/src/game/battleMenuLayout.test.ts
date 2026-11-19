@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   computeSideBattleLayout,
   computeStatusColumns,
+  estimateTextWidth,
   type Rect,
   type SpriteSlot,
 } from './battleLayout'
@@ -26,6 +27,8 @@ import {
   HAND_PIXEL,
   HAND_WIDTH,
   MENU_COMMAND_OVERHANG,
+  MENU_COST_GAP,
+  MENU_FONT_SIZE,
   MENU_MAX_ROWS,
   MENU_PADDING_Y,
   MENU_SCROLL_STRIP,
@@ -291,17 +294,31 @@ describe('computeListWindowRect', () => {
         if (v.type !== 'list') throw new Error()
         return v
       }
+      const NAME = 'なまえななもじだよ'
       const mk = (count: number): BattleItemEntry[] => [
-        { id: 'i', name: 'ながいなまえのどうぐ', effect: 'heal 5..5', count },
+        { id: 'i', name: NAME, effect: 'heal 5..5', count },
       ]
       const small = view(buildMenuRows('item', mk(1), ent('a')))
       const big = view(buildMenuRows('item', mk(9999), ent('a')))
       expect(big.rect).toEqual(base)
       expect(small.rect).toEqual(base)
-      const r = big.rows[0]
-      expect(r.label.length).toBeLessThanOrEqual(small.rows[0].label.length)
-      // 名前（と消費）は窓の中に収まる
-      expect(r.rect.x + r.rect.w).toBeLessThanOrEqual(base.x + base.w + EPS)
+      const row = (v: typeof big) => v.rows[0]
+      const fits = (v: typeof big) =>
+        estimateTextWidth(row(v).label, MENU_FONT_SIZE) +
+        MENU_COST_GAP +
+        estimateTextWidth(row(v).cost, MENU_FONT_SIZE)
+      // 名前と消費は行の幅に収まる（×9999 でも窓から溢れない）
+      expect(fits(big)).toBeLessThanOrEqual(row(big).rect.w + EPS)
+      expect(fits(small)).toBeLessThanOrEqual(row(small).rect.w + EPS)
+      // ×1 では全文が見え、×9999 だと全文が入らない画面では名前だけが短くなる
+      expect(row(small).label).toBe(NAME)
+      const fullBig =
+        estimateTextWidth(NAME, MENU_FONT_SIZE) +
+        MENU_COST_GAP +
+        estimateTextWidth(row(big).cost, MENU_FONT_SIZE)
+      if (fullBig > row(big).rect.w + EPS) {
+        expect(row(big).label.length).toBeLessThan(row(small).label.length)
+      }
     }
   })
 

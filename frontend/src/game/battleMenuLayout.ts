@@ -227,7 +227,7 @@ export interface MenuListView {
   active: boolean
 }
 
-/** 全体化の切り替え窓 (#895)。「たんたい」「ぜんたい」の 2 行。対象窓のあいだ、隠れた一覧窓の位置に常に出す */
+/** 全体化の切り替え窓 (#895)。「たんたい」「ぜんたい」の 2 行。対象窓のあいだ、隠れた一覧窓と同じ位置・大きさで 2 行（残りは空行）を常に出す */
 export interface MenuScopeToggleView {
   rect: Rect
   rows: Array<{ label: string; all: boolean; selected: boolean; rect: Rect }>
@@ -367,7 +367,7 @@ export function buildMenuView(stack: MenuStack, ctx: MenuContext, g: MenuGeometr
       ...(highlights.length > 0 ? { highlights } : {}),
     }
     if (w.spec.multiAllowed) {
-      // 全体化の切り替え窓 (#895)。隠れた一覧窓と同じ位置・幅（行は 2 つ）に出し、手が今の状態の行を指す
+      // 全体化の切り替え窓 (#895)。隠れた一覧窓と同じ位置・大きさ（行は 2 つ、残りは空行）に出し、手が今の状態の行を指す
       const labels = [
         { label: SCOPE_TOGGLE_LABELS.single, all: false },
         { label: SCOPE_TOGGLE_LABELS.all, all: true },
