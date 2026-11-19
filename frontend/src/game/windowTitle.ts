@@ -7,9 +7,9 @@ import { estimateTextWidth } from './battleLayout'
 /** 窓の角丸の半径 (px)。BattleScreen のパネルと題名の切れ目の計算で共有 */
 export const PANEL_CORNER_RADIUS = 6
 /** 題名の左端を、窓の左端から離す距離 (px)。角丸の半径より大きくして、切れ目が角にかからないようにする */
-export const WINDOW_TITLE_LEFT = 14
+export const WINDOW_TITLE_LEFT = 16
 /** 題名の文字の左右に空ける線の切れ目の余白 (px) */
-export const WINDOW_TITLE_PAD = 4
+export const WINDOW_TITLE_PAD = 6
 /** 題名の文字の大きさ。一覧の行と同じ大きさにそろえる */
 export const WINDOW_TITLE_FONT_SIZE = 12
 
